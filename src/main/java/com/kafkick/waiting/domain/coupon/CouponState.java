@@ -1,0 +1,71 @@
+package com.kafkick.waiting.domain.coupon;
+
+/**
+ * 판정에 쓰는 쿠폰 하나의 상태. 스냅샷에서 읽어 온 값이다.
+ *
+ * <p><b>불변식을 문서가 아니라 생성자가 지킨다.</b> 픽스처가 존재할 수 없는 상태를
+ * 만들 수 있으면 테스트가 버그를 증명하지 못한다. 도달 가능한 상태만 만들려면
+ * {@code CouponStates} 팩토리를 쓴다.
+ *
+ * @param mode           운영자가 정한 대기열 정책
+ * @param runtime        기계가 관측한 현재 상태
+ * @param credit         이 쿠폰에 배분된 초당 통과 몫
+ * @param remainingStock 남은 재고. <b>발급 계층이 소유</b>하고 게이트웨이는 읽기만 한다
+ * @param waiting        줄 서 있는 사람 수
+ * @param pollScale      폴링 간격 배수. 예산이 빠듯하면 커진다
+ */
+public record CouponState(
+        QueueMode mode,
+        RuntimeState runtime,
+        long credit,
+        long remainingStock,
+        long waiting,
+        double pollScale) {
+
+    public CouponState {
+        if (mode == null || runtime == null) {
+            throw new IllegalArgumentException("mode 와 runtime 은 필수다");
+        }
+        if (credit < 0 || remainingStock < 0 || waiting < 0) {
+            throw new IllegalArgumentException(
+                    "음수가 될 수 없다: credit=%d, remainingStock=%d, waiting=%d"
+                            .formatted(credit, remainingStock, waiting));
+        }
+
+        // I1 — IDLE 은 배분을 못 받았다는 뜻이다. 이 둘은 독립 값이 아니라
+        // 같은 원인에서 나온다. 갈라지면 "한산한 쿠폰일수록 큐로 간다"는
+        // 역전이 생기고, 그게 이전 구현의 핵심 버그였다.
+        if (runtime == RuntimeState.IDLE && credit != 0) {
+            throw new IllegalArgumentException(
+                    "IDLE 이면 credit 이 0 이어야 한다: credit=%d".formatted(credit));
+        }
+
+        // I2 — 재고가 남았는데 종결됐다면 그건 종결이 아니다.
+        if (runtime == RuntimeState.CLOSED && remainingStock != 0) {
+            throw new IllegalArgumentException(
+                    "CLOSED 면 remainingStock 이 0 이어야 한다: remainingStock=%d"
+                            .formatted(remainingStock));
+        }
+
+        // I3 — DRAINING 은 "이번 틱에 남은 대기자를 다 뺄 수 있다"는 뜻이다.
+        // 몫이 대기자보다 적으면 그건 아직 QUEUEING 이다.
+        if (runtime == RuntimeState.DRAINING && credit < waiting) {
+            throw new IllegalArgumentException(
+                    "DRAINING 이면 credit >= waiting 이어야 한다: credit=%d, waiting=%d"
+                            .formatted(credit, waiting));
+        }
+
+        // I4 — 줄이 비었는데 큐 상태라는 것은 유령이다. 판정 사다리 9번이
+        // IDLE 쿠폰만 받는다는 논증이 이 불변식의 대우에 걸려 있다.
+        if (waiting == 0
+                && runtime != RuntimeState.IDLE
+                && runtime != RuntimeState.CLOSED) {
+            throw new IllegalArgumentException(
+                    "waiting 이 0 이면 IDLE 또는 CLOSED 여야 한다: runtime=%s".formatted(runtime));
+        }
+
+        // I6 — 거부가 아니라 정규화다. 1 미만은 폴링을 더 자주 하라는 뜻이
+        // 되는데 그건 예산을 늘리는 방향이라 의미가 없다.
+        pollScale = Math.max(1.0, pollScale);
+    }
+}

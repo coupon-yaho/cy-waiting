@@ -1,0 +1,119 @@
+name: _load-test
+
+# k6 부하 시나리오 하나를 돈다. 시나리오 정의는 plan/06-protection.md 6.6절.
+#
+# PR 에서는 smoke 만 — 20,000 스파이크를 PR 마다 돌리면 아무도 PR 을 안 연다.
+# 무거운 것은 main·nightly 에서.
+
+on:
+  workflow_call:
+    inputs:
+      scenario:
+        description: smoke | idle-coupon | open-spike | mixed | abandonment
+        type: string
+        required: true
+      timeout-minutes:
+        type: number
+        required: false
+        default: 30
+    outputs:
+      passed:
+        value: ${{ jobs.load.outputs.passed }}
+      summary:
+        value: ${{ jobs.load.outputs.summary }}
+
+permissions:
+  contents: read
+
+jobs:
+  load:
+    name: k6 ${{ inputs.scenario }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    outputs:
+      passed: ${{ steps.evaluate.outputs.passed }}
+      summary: ${{ steps.evaluate.outputs.summary }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # 시나리오와 compose 를 **둘 다** 본다. 하나만 있으면 절반쯤 돌다
+      # 알아보기 어려운 오류로 죽는다.
+      - name: 게이트 기준 대조
+        id: probe
+        run: |
+          set -uo pipefail
+          missing=()
+          [[ -f "test/load/${{ inputs.scenario }}.js" ]] || missing+=("test/load/${{ inputs.scenario }}.js")
+          [[ -f "test/load/compose.yml" ]]               || missing+=("test/load/compose.yml")
+
+          if ((${#missing[@]} == 0)); then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=부하 시험 건너뜀::없음 — ${missing[*]} (Phase 6 6.6절 미완료)"
+          fi
+
+      # 백엔드 스텁 + Redis + 게이트웨이를 띄운다 (6.6.1).
+      # setup-gradle 은 두지 않는다 — 여기서 gradlew 를 쓰지 않는다.
+      - name: compose 기동 (게이트웨이 · Redis · 스텁)
+        if: steps.probe.outputs.ready == 'true'
+        run: docker compose -f test/load/compose.yml up -d --wait
+
+      - if: steps.probe.outputs.ready == 'true'
+        uses: grafana/setup-k6-action@v1
+
+      - name: k6 실행
+        id: run
+        if: steps.probe.outputs.ready == 'true'
+        continue-on-error: true
+        run: |
+          k6 run --summary-export=k6-summary.json \
+            "test/load/${{ inputs.scenario }}.js"
+
+      # 게이트 판정은 k6 threshold 가 아니라 계획서 기준으로 한다 (6.6.6)
+      - name: 게이트 기준 대조
+        id: evaluate
+        if: always()
+        run: |
+          set -uo pipefail
+          if [[ "${{ steps.probe.outputs.ready }}" != "true" ]]; then
+            echo "passed=skipped" >> "$GITHUB_OUTPUT"
+            echo "summary=시나리오 미구현" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ -x test/load/evaluate-gate.sh ]]; then
+            # if 안에서 실행한다 — 기본 셸이 `bash -eo pipefail` 이라
+            # 그냥 부르면 미달인 순간 죽어서 판정값이 안 남는다.
+            if test/load/evaluate-gate.sh "${{ inputs.scenario }}" k6-summary.json \
+                 | tee /tmp/gate.txt; then
+              passed=true
+            else
+              passed=false
+            fi
+            echo "passed=$passed" >> "$GITHUB_OUTPUT"
+            echo "summary=$(head -c 400 /tmp/gate.txt | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
+          else
+            echo "passed=${{ steps.run.outcome == 'success' }}" >> "$GITHUB_OUTPUT"
+            echo "summary=k6 outcome: ${{ steps.run.outcome }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # k6 에 continue-on-error 가 걸려 있어 스텝만으로는 잡이 안 죽는다.
+      # 여기서 닫지 않으면 부하가 깨져도 잡이 초록이다.
+      - name: 판정 반영
+        if: steps.evaluate.outputs.passed == 'false'
+        run: |
+          echo "::error title=부하 시험::${{ inputs.scenario }} 기준 미달 — ${{ steps.evaluate.outputs.summary }}"
+          exit 1
+
+      - name: compose 로그 수집
+        if: always() && steps.probe.outputs.ready == 'true'
+        run: docker compose -f test/load/compose.yml logs --tail=200 || true
+
+      - if: always() && hashFiles('k6-summary.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: load-${{ inputs.scenario }}
+          path: k6-summary.json
+          retention-days: 7      # 수 KB JSON. 추세는 Confluence 리포트에 남는다

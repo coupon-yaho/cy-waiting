@@ -1,0 +1,193 @@
+name: Main
+
+# main 병합 시. PR 에서 한 것에 더해 **비싸지만 놓치면 안 되는 것**을 돈다.
+#   - 뮤테이션 테스트 (PR 마다 돌리기엔 느리다)
+#   - 전체 CVE 스캔 (MEDIUM 까지)
+#   - R1 검증 부하 시나리오
+#   - Confluence 리포트 + Jira Done 전이
+#
+# PR 과 갈라지는 지점을 한눈에 보려면 .github/README.md 3절 표.
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: main
+  cancel-in-progress: false   # main 은 취소하지 않는다 — 리포트가 유실된다
+
+permissions:
+  contents: read
+
+jobs:
+  context:
+    name: 컨텍스트
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      jira-key: ${{ steps.jira.outputs.key }}
+      version: ${{ steps.meta.outputs.version }}
+      subject-html: ${{ steps.jira.outputs.subject_html }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      # 병합 커밋 메시지에서 키를 뽑는다. 문자열 검사에 외부 액션을 쓰지 않는다 —
+      # 그 저장소가 깨지면 CI 가 여기서 막힌다.
+      - name: 이슈 키 추출 · 커밋 제목 이스케이프
+        id: jira
+        env:
+          MSG: ${{ github.event.head_commit.message }}
+        run: |
+          set -uo pipefail
+          key=$(grep -oE '(^|[^A-Za-z0-9_])CY-[0-9]+' <<<"$MSG" | grep -oE 'CY-[0-9]+' | head -1 || true)
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+          # Confluence 본문은 XHTML 이다. '<' 나 '&' 하나에 문서가 깨지고
+          # 그 실패는 경고로 낮아져 조용히 사라진다. 제목 줄만 이스케이프해 쓴다.
+          subject_html=$(head -1 <<<"$MSG" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')
+          echo "subject_html=$subject_html" >> "$GITHUB_OUTPUT"
+          if [[ -n "$key" ]]; then
+            echo "::notice title=Jira::$key"
+          else
+            echo "::notice::병합 커밋에서 Jira 키를 찾지 못했다 — 연동을 건너뛴다"
+          fi
+
+      - name: 버전 산출
+        id: meta
+        run: |
+          echo "version=$(git describe --tags --always)" >> "$GITHUB_OUTPUT"
+
+  conventions:
+    name: 규범
+    uses: ./.github/workflows/_verify-conventions.yml
+    with:
+      check-commits: false     # 병합 커밋은 규약 대상이 아니다
+      require-journal: false
+
+  build:
+    name: 빌드
+    uses: ./.github/workflows/_build.yml
+    with:
+      upload-artifact: true
+
+  test-unit:
+    needs: build
+    uses: ./.github/workflows/_test.yml
+    with: { layer: unit, timeout-minutes: 15 }
+
+  test-integration:
+    needs: build
+    uses: ./.github/workflows/_test.yml
+    with: { layer: integration, timeout-minutes: 25 }
+
+  test-context:
+    needs: build
+    uses: ./.github/workflows/_test.yml
+    with: { layer: context, timeout-minutes: 15 }
+
+  test-chaos:
+    needs: build
+    uses: ./.github/workflows/_test.yml
+    with: { layer: chaos, timeout-minutes: 45 }
+
+  # PR 에서는 안 돌린다 — 느리고, 도메인이 안 바뀌면 결과도 안 바뀐다
+  test-mutation:
+    needs: build
+    uses: ./.github/workflows/_test.yml
+    with: { layer: mutation, timeout-minutes: 40 }
+
+  security:
+    name: 보안
+    uses: ./.github/workflows/_security.yml
+    with:
+      mode: full
+      severity: 'CRITICAL,HIGH,MEDIUM'   # main 은 MEDIUM 까지 본다
+    permissions:
+      contents: read
+      security-events: write
+      # 재사용 워크플로의 잡이 요구하는 권한은 호출부가 먼저 줘야 한다.
+      # dependency-review 는 PR 에서만 돌지만(if), GitHub 은 if 평가보다
+      # 권한 검증을 먼저 해서 안 도는 잡 때문에 워크플로 전체가 죽는다.
+      pull-requests: write
+
+  load-idle:
+    needs: build
+    uses: ./.github/workflows/_load-test.yml
+    with: { scenario: idle-coupon, timeout-minutes: 25 }
+
+  # 취소를 통과로 세지 않기 위해 별도 잡으로 뺐다. 규칙은 verdict 액션에 있다.
+  verdict:
+    name: 판정
+    needs: [context, conventions, build, test-unit, test-integration, test-context, test-chaos, test-mutation, security, load-idle]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      status: ${{ steps.v.outputs.status }}
+      ok: ${{ steps.v.outputs.ok }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - id: v
+        uses: ./.github/actions/verdict
+        with:
+          results: ${{ join(needs.*.result, ' ') }}
+
+  report:
+    name: 리포트
+    needs: [context, conventions, build, test-unit, test-integration, test-context,
+            test-chaos, test-mutation, security, load-idle, verdict]
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/_report.yml
+    with:
+      status: ${{ needs.verdict.outputs.status || 'failure' }}
+      title: >-
+        main ${{ needs.verdict.outputs.ok == 'true' && '통과' || '실패' }} —
+        ${{ needs.context.outputs.version }}
+      summary: |
+        `${{ github.sha }}`
+        ${{ github.event.head_commit.message }}
+      fields: |
+        단위=${{ needs.test-unit.result }}
+        통합=${{ needs.test-integration.result }}
+        카오스=${{ needs.test-chaos.result }}
+        뮤테이션=${{ needs.test-mutation.result }}
+        보안=${{ needs.security.result }}
+        부하(R1)=${{ needs.load-idle.result }}
+      link-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      jira-key: ${{ needs.context.outputs.jira-key }}
+      jira-transition: ${{ needs.verdict.outputs.ok == 'true' && '완료' || '' }}
+      jira-comment: >-
+        main 병합 완료 — ${{ needs.context.outputs.version }}
+        (${{ github.sha }})
+      confluence-title: >-
+        CI 리포트 — main ${{ needs.context.outputs.version }}
+      confluence-body: |
+        <h2>빌드 결과</h2>
+        <table>
+          <tr><th>항목</th><th>결과</th></tr>
+          <tr><td>규범</td><td>${{ needs.conventions.result }}</td></tr>
+          <tr><td>단위 테스트</td><td>${{ needs.test-unit.result }}</td></tr>
+          <tr><td>통합 테스트</td><td>${{ needs.test-integration.result }}</td></tr>
+          <tr><td>컨텍스트 테스트</td><td>${{ needs.test-context.result }}</td></tr>
+          <tr><td>카오스 테스트</td><td>${{ needs.test-chaos.result }}</td></tr>
+          <tr><td>뮤테이션 테스트</td><td>${{ needs.test-mutation.result }}</td></tr>
+          <tr><td>보안 스캔</td><td>${{ needs.security.result }}</td></tr>
+          <tr><td>부하 (R1 검증)</td><td>${{ needs.load-idle.result }}</td></tr>
+        </table>
+        <h2>커밋</h2>
+        <p><code>${{ github.sha }}</code></p>
+        <p>${{ needs.context.outputs.subject-html }}</p>
+        <h2>링크</h2>
+        <p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">워크플로 실행</a></p>
+    secrets:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      ATLASSIAN_BASE_URL: ${{ secrets.ATLASSIAN_BASE_URL }}
+      ATLASSIAN_USER_EMAIL: ${{ secrets.ATLASSIAN_USER_EMAIL }}
+      ATLASSIAN_API_TOKEN: ${{ secrets.ATLASSIAN_API_TOKEN }}
+      CONFLUENCE_SPACE_KEY: ${{ secrets.CONFLUENCE_SPACE_KEY }}
+      CONFLUENCE_PARENT_ID: ${{ secrets.CONFLUENCE_PARENT_ID }}

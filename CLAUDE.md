@@ -64,7 +64,7 @@ waiting-gateway/
 | 저장소 | 무엇 | 손대는 때 |
 |---|---|---|
 | `waiting` | 게이트웨이 코드·계획·규범 | 대부분 |
-| [`ci-actions`](../ci-actions/README.md) | Jira·Confluence 액션 (TypeScript) | CI 연동을 고칠 때 |
+| [`ci-actions`](https://github.com/coupon-yaho/cy-ci-actions) | Jira·Confluence 액션 (TypeScript) | CI 연동을 고칠 때 |
 | `waiting-legacy` | 설계 논거 참조 | 읽기만. **수정 금지 (WF-5)** |
 
 ### 이 저장소

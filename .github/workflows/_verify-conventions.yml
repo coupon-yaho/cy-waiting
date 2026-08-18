@@ -1,0 +1,277 @@
+name: _verify-conventions
+
+# 규범이 실제로 지켜지는지 검사한다. ai/rules/ 의 MUST 중 기계적으로 판정 가능한 것.
+# 코드가 없어도 항상 돈다 — 규범은 Phase 1 이전부터 적용된다.
+
+on:
+  workflow_call:
+    inputs:
+      check-commits:
+        description: PR 커밋 메시지 규약을 검사할 것인가
+        type: boolean
+        required: false
+        default: true
+      require-journal:
+        description: 코드 변경 시 journal 엔트리를 요구할 것인가
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  hooks:
+    name: 훅·문서 규범 검증
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # 훅이 위반을 잡지 못하면 모든 코드를 통과시킨다 (TS-9)
+      - name: 훅 자기검증
+        run: |
+          chmod +x .claude/hooks/*.sh
+          .claude/hooks/self-test.sh
+
+      # 존재하지 않는 태스크를 가리키는 게이트는 판정할 수 없다. ID 가 겹치면
+      # 두 작업이 한 번호를 쓴다. 번호를 바꿀 때 조용히 깨진다.
+      - name: 게이트·태스크 ID 중복
+        run: |
+          python3 - <<'EOF'
+          import pathlib, re, sys
+          bad = 0
+          for f in sorted(pathlib.Path('plan').glob('[01][0-9]-*.md')):
+              t = f.read_text()
+              for label, pat in (('태스크', r'^\|\s*\*{0,2}(\d+\.\d+\.\d+)\*{0,2}\s*\|'),
+                                 ('게이트', r'^\|\s*\*{0,2}(G\d+\.\d+)\*{0,2}\s*\|')):
+                  ids = re.findall(pat, t, re.M)
+                  for d in sorted({i for i in ids if ids.count(i) > 1}):
+                      print(f'::error title={label} ID 중복::{f.name} {d}')
+                      bad += 1
+          sys.exit(1 if bad else 0)
+          EOF
+
+      - name: 게이트가 가리키는 태스크가 실재하는가
+        run: |
+          python3 - <<'EOF'
+          import pathlib, re, sys
+          GATE = re.compile(r'^\|\s*\*{0,2}(G\d+\.\d+)\*{0,2}\s*\|.*\|\s*([^|]+?)\s*\|\s*$', re.M)
+          bad = 0
+          docs = sorted(pathlib.Path('plan').glob('[01][0-9]-*.md'))
+          allt = set()
+          for f in docs:
+              t = f.read_text()
+              allt |= set(re.findall(r'^\|\s*\*{0,2}(\d+\.\d+\.\d+)\*{0,2}\s*\|', t, re.M))
+              allt |= set(re.findall(r'^####\s+\*{0,2}T(\d+\.\d+\.\d+)', t, re.M))
+          for f in docs:
+              for m in GATE.finditer(f.read_text()):
+                  for ref in re.findall(r'\b\d+\.\d+\.\d+\b', m.group(2)):
+                      if ref not in allt:
+                          print(f'::error title=끊긴 게이트 참조::{f.name} {m.group(1)} -> {ref}')
+                          bad += 1
+          sys.exit(1 if bad else 0)
+          EOF
+
+      # 문서의 커밋 예시가 훅을 통과하지 못하면 규칙과 강제가 갈라진 것이다.
+      # 지키지 못할 예시를 보고 따라 쓰면 훅에 막힌다.
+      - name: 문서의 커밋 예시가 훅을 통과하는가
+        run: |
+          set -uo pipefail
+          fail=0
+          while read -r subject; do
+            [[ -z "$subject" ]] && continue
+            jq -nc --arg c "git commit -m '$subject'" '{tool_input:{command:$c}}' \
+              | .claude/hooks/check-commit-msg.sh >/dev/null 2>&1 && continue
+            echo "::error title=커밋 예시 위반::$subject"
+            fail=1
+          done < <(grep -rhoE '(feat|fix|test|refactor|perf|docs|build|ci|chore)(\([a-z0-9-]+\))?: [^"`|$.]+' \
+                     ai/rules/60-workflow.md .claude/hooks/check-commit-msg.sh \
+                     .claude/commands/ plan/ CLAUDE.md \
+                   | sed 's/ *\[red\]//; s/ *(선택)//; s/ *$//' | sort -u)
+          exit $fail
+
+      # 엔트리 형식과 색인 동기화 (plan/01-foundation.md T1.3.4)
+      - name: 작업 로그 형식·색인 동기화
+        run: |
+          set -uo pipefail
+          fail=0
+          shopt -s nullglob
+          for f in ai/journal/*/*/AIJ-*.md; do
+            for k in id date kind confidence; do
+              grep -qE "^$k:" "$f" || { echo "::error::$f 에 '$k:' 없음"; fail=1; }
+            done
+            # `|| true` 가 없으면 id 줄이 빠진 파일에서 스크립트가 죽는다 —
+            # 그걸 지적해야 할 검사가 먼저 멎고 뒤 파일도 검사되지 않는다.
+            # 빈 id 로 grep 하면 무엇이든 매치해서 색인 검사가 무력화된다.
+            id=$(grep -oE '^id: AIJ-[0-9]+' "$f" | awk '{print $2}' || true)
+            if [[ -z "$id" ]]; then
+              echo "::error::$f 에서 id 를 읽을 수 없다"; fail=1; continue
+            fi
+            grep -q "$id" ai/journal/index.md \
+              || { echo "::error::$id 가 index.md 에 없다 — 색인에서 빠진 엔트리는 없는 것과 같다"; fail=1; }
+          done
+          exit $fail
+
+  pr-conventions:
+    name: PR 규약
+    # 커밋 규약과 작업 로그는 같은 것을 본다 — PR 의 커밋 목록과 변경 파일.
+    # 잡을 나누면 전 이력 클론을 두 번 한다.
+    if: >-
+      github.event_name == 'pull_request' &&
+      (inputs.check-commits || inputs.require-journal)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: 커밋 메시지 규약
+        if: inputs.check-commits
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -uo pipefail
+          types='feat|fix|test|refactor|perf|docs|build|ci|chore'
+          fail=0
+
+          while IFS= read -r sha; do
+            [[ -z "$sha" ]] && continue
+            subject=$(git log -1 --format=%s "$sha")
+            body=$(git log -1 --format=%b "$sha")
+
+            # 병합 커밋은 규약 대상이 아니다
+            [[ $(git rev-list --parents -n1 "$sha" | wc -w) -gt 2 ]] && continue
+
+            if ! grep -qE "^($types)(\([a-z0-9-]+\))?: .+" <<<"$subject"; then
+              echo "::error::[$sha] 형식 위반: $subject"; fail=1; continue
+            fi
+            # 표시 폭으로 센다. 한글은 두 칸이라 글자 수로 재면 줄바꿈된다
+            # `|| true` 가 없으면 **영문 제목 하나가 검사 전체를 죽인다.**
+            # grep 이 0건이면 1 을 내고 pipefail+(-e) 가 스크립트를 끝내, 그 커밋의
+            # 위반도 뒤따르는 커밋도 검사되지 않는다. 훅은 -e 가 없어 멀쩡하다.
+            chars=$(printf '%s' "$subject" | wc -m)
+            wide=$(printf '%s' "$subject" | grep -oP '[\x{AC00}-\x{D7A3}]' | wc -l || true)
+            if (( chars + wide > 50 )); then
+              echo "::error::[$sha] 제목 $((chars + wide))칸 (한글은 두 칸). 50칸 이내: $subject"; fail=1
+            fi
+            if grep -qE '\.$' <<<"$subject"; then
+              echo "::error::[$sha] 제목 끝 마침표: $subject"; fail=1
+            fi
+            # 제목은 요약이지 문장이 아니다. 명사형은 '다' 로 끝나지 않는다.
+            if grep -qP '다$' <<<"$subject"; then
+              echo "::error::[$sha] 제목을 명사형으로 끝낸다 ('~했다/한다' 는 문장): $subject"; fail=1
+            fi
+            if grep -qE '\bCY-[0-9]+' <<<"$subject"; then
+              echo "::error::[$sha] Jira 키는 'Refs:' 푸터에 둔다: $subject"; fail=1
+            fi
+            # 제목은 한글. type·scope 만 영문이다
+            if ! grep -qP '[\x{AC00}-\x{D7A3}]' <<<"$subject"; then
+              echo "::error::[$sha] 제목을 한글로 쓴다: $subject"; fail=1
+            fi
+            # RED 커밋은 테스트만 있어야 한다
+            if grep -q '\[red\]' <<<"$body" && ! grep -qE '^test' <<<"$subject"; then
+              echo "::error::[$sha] [red] 마커는 test: 커밋에만: $subject"; fail=1
+            fi
+          done < <(git rev-list "$BASE..$HEAD")
+
+          exit $fail
+
+      - name: 작업 로그
+        # 봇 PR 은 제외한다 — 의존성 범프에 근거 문서를 요구할 수는 없다
+        if: >-
+          inputs.require-journal &&
+          !endsWith(github.event.pull_request.user.login, '[bot]')
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -uo pipefail
+          changed=$(git diff --name-only "$BASE..$HEAD")
+
+          # 근거를 남겨야 하는 변경:
+          #   - src/ · *.lua · 빌드 스크립트  (동작을 바꾼다)
+          #   - .github/workflows · .github/actions  (파이프라인 동작을 바꾼다)
+          # 제외: 문서, 규칙, 계획, PR 템플릿 — 그 자체가 근거 문서다
+          # 제외 목록은 .claude/hooks/remind-journal.sh 와 같아야 한다.
+          # 어긋나면 훅은 조용한데 CI 가 PR 을 막는다.
+          # `|| true` 가 없으면 **문서만 바꾼 PR 이 조용히 죽는다.** 전부 걸러지면
+          # grep 이 1 을 내고, 러너 기본 셸의 -e 가 메시지도 없이 잡을 실패시킨다.
+          # 훅(remind-journal.sh)은 -e 가 없어 같은 파이프라인이 멀쩡하다.
+          code=$(grep -vE '^(plan|ai|\.claude)/' <<<"$changed" \
+               | grep -vE '^\.github/(README\.md|CODEOWNERS|PULL_REQUEST_TEMPLATE\.md|ISSUE_TEMPLATE/)' \
+               | grep -vE '\.md$' \
+               | grep -vE '^\.git(ignore|attributes)$' | head -1 || true)
+
+          if [[ -z "$code" ]]; then
+            echo "::notice::근거 문서가 필요한 변경이 없어 건너뛴다"; exit 0
+          fi
+          if grep -qE '^ai/journal/' <<<"$changed"; then
+            echo "::notice::작업 로그 확인됨"
+          else
+            echo "::error title=WF-6::동작을 바꿨는데 ai/journal/ 엔트리가 없다 (예: $code)"
+            echo "::error::ai/journal/TEMPLATE.md 를 복사한다. '왜'와 '고려했으나 택하지 않은 것'을 비우지 말 것"
+            exit 1
+          fi
+
+  links:
+    name: 문서 링크
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: 문서 링크 검사
+        run: |
+          set -uo pipefail
+          fail=0
+          while IFS= read -r f; do
+            d=$(dirname "$f")
+            while IFS= read -r l; do
+              [[ -z "$l" || "$l" == http* || "$l" == '#'* ]] && continue
+              [[ -e "$d/$l" ]] || { echo "::error file=$f::깨진 링크 — $l"; fail=1; }
+            done < <(
+              # 코드를 먼저 걷어내고 링크를 뽑는다. 오탐이 잦은 검사는
+              # 곧 무시되고, 무시되는 검사는 없는 것과 같다.
+              #   - 펜스 블록: 예제 YAML 의 표현식 구문이 링크로 잡힌다
+              #   - 인라인 코드: 문법 설명의 `[텍스트](url)` 이 링크로 잡힌다
+              awk '/^[[:space:]]*```/ { fence = !fence; next } !fence' "$f" \
+                | sed -E 's/`[^`]*`//g' \
+                | grep -oE '\]\(([^)#]+)(#[^)]*)?\)' 2>/dev/null \
+                | sed -E 's/^\]\(//; s/\)$//; s/#.*//'
+            )
+          done < <(find . -name '*.md' -not -path './.git/*' -not -path './node_modules/*')
+          exit $fail
+
+      # 파일만 확인하면 `](other.md#anchor)` 의 앵커가 사라져도 통과한다.
+      # 링크는 열리는데 엉뚱한 위치로 가므로 읽는 사람만 손해다.
+      - name: 문서 앵커 검사
+        run: |
+          python3 - <<'EOF'
+          import pathlib, re, sys
+          root = pathlib.Path('.').resolve()
+          md = [f for f in pathlib.Path('.').rglob('*.md') if '.git' not in f.parts]
+          anchors = {f: set(re.findall(r'<a id="([^"]+)"', f.read_text())) for f in md}
+          bad = 0
+          for f in md:
+              body = re.sub(r'(?ms)^```.*?^```', '', f.read_text())
+              body = re.sub(r'`[^`]*`', '', body)
+              for m in re.finditer(r'\]\(([^)#]*)#([^)\s]+)\)', body):
+                  tgt, anc = m.group(1), m.group(2)
+                  if tgt.startswith(('http', 'mailto')):
+                      continue
+                  t = f if not tgt else (f.parent / tgt)
+                  try:
+                      t = pathlib.Path(t.resolve().relative_to(root))
+                  except ValueError:
+                      continue
+                  if t in anchors and anc not in anchors[t]:
+                      print(f'::error file={f}::없는 앵커 — {tgt or "(자기)"}#{anc}')
+                      bad += 1
+          sys.exit(1 if bad else 0)
+          EOF

@@ -1,0 +1,43 @@
+name: _build
+
+# 최소 단위 재사용 워크플로. 직접 트리거하지 않는다.
+# 호출: pr.yml / main.yml / nightly.yml
+
+on:
+  workflow_call:
+    inputs:
+      upload-artifact:
+        description: 빌드 산출물을 업로드할 것인가
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # 캐시를 갱신하는 유일한 잡. 테스트 잡들은 이걸 읽어 증분 컴파일만 한다.
+      - id: setup
+        uses: ./.github/actions/setup-gradle
+        with:
+          cache-write: 'true'
+
+      # testClasses 까지 — assemble 만 하면 테스트 컴파일을 잡마다 다시 한다.
+      - name: 컴파일 (assemble + testClasses)
+        if: steps.setup.outputs.buildable == 'true'
+        run: ./gradlew --no-daemon assemble testClasses
+
+      - if: inputs.upload-artifact && steps.setup.outputs.buildable == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-libs
+          path: build/libs/
+          retention-days: 2      # 무료 한도

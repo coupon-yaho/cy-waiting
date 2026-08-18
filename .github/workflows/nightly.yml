@@ -1,0 +1,142 @@
+name: Nightly
+
+# 야간 전체 검증. PR·main 에서 돌리기엔 너무 비싼 것들.
+#   - 20,000 동시 스파이크 (Phase 10 착수 게이트의 입력)
+#   - 이탈·혼합 시나리오
+#   - CVE 전체 (LOW 까지, 차단하지 않고 관측만)
+#
+# 실패해도 무엇이 실패했는지 전부 보여야 하므로 fail-fast 를 끈다.
+
+on:
+  schedule:
+    - cron: '0 18 * * 1-5'   # UTC 18:00 = KST 03:00, 평일
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: 특정 시나리오만 실행 (비우면 전체)
+        type: string
+        required: false
+        default: ''
+
+concurrency:
+  group: nightly
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # workflow_dispatch 로 시나리오 하나만 지정할 수 있게 한다.
+  # 입력을 선언만 하고 쓰지 않으면, 지정해도 조용히 전체가 돌아
+  # "왜 30분이 걸리지" 를 디버깅하게 된다.
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      scenarios: ${{ steps.pick.outputs.scenarios }}
+    steps:
+      - name: 실행할 시나리오 선택
+        id: pick
+        env:
+          ONLY: ${{ github.event.inputs.scenario }}
+        run: |
+          set -uo pipefail
+          all='["idle-coupon","open-spike","mixed","abandonment"]'
+          if [[ -n "$ONLY" ]]; then
+            echo "scenarios=[\"$ONLY\"]" >> "$GITHUB_OUTPUT"
+            echo "::notice::시나리오 '$ONLY' 만 실행"
+          else
+            echo "scenarios=$all" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    uses: ./.github/workflows/_build.yml
+
+  # 전 계층을 한 번에. fail-fast: false 라 하나가 깨져도 나머지가 끝까지 돈다.
+  # continue-on-error 는 쓰지 않는다 — 잡이 success 가 되어 report 가 늘 통과로 본다.
+  test:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        layer: [unit, integration, context, chaos, mutation]
+    uses: ./.github/workflows/_test.yml
+    with:
+      layer: ${{ matrix.layer }}
+      timeout-minutes: 60
+
+  load:
+    needs: [plan, build]
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: ${{ fromJSON(needs.plan.outputs.scenarios) }}
+    uses: ./.github/workflows/_load-test.yml
+    with:
+      scenario: ${{ matrix.scenario }}
+      timeout-minutes: 45
+
+  security:
+    uses: ./.github/workflows/_security.yml
+    with:
+      mode: full
+      severity: 'CRITICAL,HIGH,MEDIUM,LOW'   # 스캔은 LOW 까지
+      block-severity: 'CRITICAL,HIGH'        # 차단은 여기까지 — 헤더의 '관측만' 이 그 뜻이다
+    permissions:
+      contents: read
+      security-events: write
+      # 재사용 워크플로의 잡이 요구하는 권한은 호출부가 먼저 줘야 한다.
+      # dependency-review 는 PR 에서만 돌지만(if), GitHub 은 if 평가보다
+      # 권한 검증을 먼저 해서 안 도는 잡 때문에 워크플로 전체가 죽는다.
+      pull-requests: write
+
+  # 취소를 통과로 세지 않기 위해 별도 잡으로 뺐다. 규칙은 verdict 액션에 있다.
+  verdict:
+    name: 판정
+    needs: [test, load, security]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      status: ${{ steps.v.outputs.status }}
+      ok: ${{ steps.v.outputs.ok }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - id: v
+        uses: ./.github/actions/verdict
+        with:
+          results: ${{ join(needs.*.result, ' ') }}
+
+  report:
+    needs: [test, load, security, verdict]
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/_report.yml
+    with:
+      status: ${{ needs.verdict.outputs.ok == 'true' && 'success' || 'warning' }}
+      title: 야간 검증 — ${{ needs.verdict.outputs.ok == 'true' && '이상 없음' || '주의 필요' }}
+      summary: |
+        전 계층 테스트 · 4개 부하 시나리오 · CVE 전체 스캔
+      fields: |
+        테스트=${{ needs.test.result }}
+        부하=${{ needs.load.result }}
+        보안=${{ needs.security.result }}
+      link-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      confluence-title: 야간 검증 리포트
+      confluence-body: |
+        <p>최근 실행: <code>${{ github.sha }}</code></p>
+        <table>
+          <tr><th>항목</th><th>결과</th></tr>
+          <tr><td>테스트 (전 계층)</td><td>${{ needs.test.result }}</td></tr>
+          <tr><td>부하 (4 시나리오)</td><td>${{ needs.load.result }}</td></tr>
+          <tr><td>보안 (LOW 포함)</td><td>${{ needs.security.result }}</td></tr>
+        </table>
+        <p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">상세</a></p>
+    secrets:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      ATLASSIAN_BASE_URL: ${{ secrets.ATLASSIAN_BASE_URL }}
+      ATLASSIAN_USER_EMAIL: ${{ secrets.ATLASSIAN_USER_EMAIL }}
+      ATLASSIAN_API_TOKEN: ${{ secrets.ATLASSIAN_API_TOKEN }}
+      CONFLUENCE_SPACE_KEY: ${{ secrets.CONFLUENCE_SPACE_KEY }}
+      CONFLUENCE_PARENT_ID: ${{ secrets.CONFLUENCE_PARENT_ID }}

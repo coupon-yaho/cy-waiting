@@ -1,0 +1,129 @@
+name: CodeRabbit Relay
+
+# CodeRabbit 리뷰 결과를 Slack 과 Jira 로 중계한다.
+#
+# 주의: issue_comment/pull_request_review 는 기본 브랜치의 워크플로 파일로 실행된다.
+# 이 파일을 고쳐도 main 에 병합되기 전까지는 반영되지 않는다.
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+
+concurrency:
+  group: coderabbit-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  relay:
+    # CodeRabbit 이 남긴 것만. skip-review 가 붙었으면 중계하지 않는다.
+    #
+    # 두 라벨 배열을 `||` 로 합치지 않는다 — 빈 배열이 truthy 라 PR 라벨을
+    # 영영 못 본다. 없는 쪽의 contains 는 false 이므로 따로 건다.
+    if: >-
+      !contains(github.event.issue.labels.*.name, 'skip-review') &&
+      !contains(github.event.pull_request.labels.*.name, 'skip-review') &&
+      (
+        (github.event_name == 'issue_comment' &&
+         github.event.issue.pull_request != null &&
+         github.event.comment.user.login == 'coderabbitai[bot]') ||
+        (github.event_name == 'pull_request_review' &&
+         github.event.review.user.login == 'coderabbitai[bot]')
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: 이슈 키 추출
+        id: parse
+        env:
+          BODY: ${{ github.event.comment.body || github.event.review.body }}
+          PR_NUM: ${{ github.event.issue.number || github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.issue.title || github.event.pull_request.title }}
+          PR_URL: ${{ github.event.issue.html_url || github.event.pull_request.html_url }}
+          STATE: ${{ github.event.review.state }}
+        run: |
+          set -uo pipefail
+
+          # 요약 코멘트만 중계한다. 인라인 잡담까지 보내면 노이즈가 된다.
+          if ! grep -qiE 'walkthrough|summary|actionable comments|review' <<<"$BODY"; then
+            echo "relay=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::요약이 아닌 코멘트 — 건너뛴다"
+            exit 0
+          fi
+          echo "relay=true" >> "$GITHUB_OUTPUT"
+
+          # "Actionable comments posted: N" 에서 지적 수를 뽑는다
+          count=$(grep -oiE 'actionable comments posted:[[:space:]]*[0-9]+' <<<"$BODY" \
+                  | grep -oE '[0-9]+' | head -1 || true)
+          count=${count:-0}
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+
+          case "$STATE" in
+            changes_requested) status=warning; verdict="변경 요청" ;;
+            approved)          status=success; verdict="승인" ;;
+            *) if (( count > 0 )); then status=warning; verdict="지적 ${count}건"
+               else status=success; verdict="지적 없음"; fi ;;
+          esac
+          echo "status=$status"   >> "$GITHUB_OUTPUT"
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+
+          # 본문은 Slack 에서 읽을 만큼만 자른다
+          excerpt=$(printf '%s' "$BODY" | sed -E 's/<[^>]*>//g' | head -c 600 | tr '\n' ' ')
+          {
+            echo "excerpt<<EOF"
+            echo "$excerpt"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      # 키 추출은 인라인으로. 외부 액션은 API 를 부르는 곳에서만 쓴다.
+      - name: 이슈 키 추출
+        id: jira
+        if: steps.parse.outputs.relay == 'true'
+        env:
+          TITLE: ${{ github.event.issue.title || github.event.pull_request.title }}
+        run: |
+          set -uo pipefail
+          key=$(grep -oE '(^|[^A-Za-z0-9_])CY-[0-9]+' <<<"$TITLE" | grep -oE 'CY-[0-9]+' | head -1 || true)
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - if: steps.parse.outputs.relay == 'true'
+        uses: ./.github/actions/slack-notify
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          status: ${{ steps.parse.outputs.status }}
+          title: >-
+            CodeRabbit — ${{ steps.parse.outputs.verdict }}
+            (PR #${{ github.event.issue.number || github.event.pull_request.number }})
+          text: |
+            *${{ github.event.issue.title || github.event.pull_request.title }}*
+            ${{ steps.parse.outputs.excerpt }}
+          fields: |
+            지적=${{ steps.parse.outputs.count }}건
+            Jira=${{ steps.jira.outputs.key || '없음' }}
+          link-url: ${{ github.event.issue.html_url || github.event.pull_request.html_url }}
+          link-text: PR 열기
+
+      # 지적이 있을 때만. 키가 비면 부르지 않는다 — 빈 키로 부르면 실패가
+      # 경고로 낮아져 조용히 사라진다.
+      - if: >-
+          steps.parse.outputs.relay == 'true' &&
+          steps.parse.outputs.count != '0' &&
+          steps.jira.outputs.key != ''
+        uses: coupon-yaho/cy-ci-actions/actions/jira@v1
+        with:
+          issue-key: ${{ steps.jira.outputs.key }}
+          comment: >-
+            CodeRabbit 리뷰: ${{ steps.parse.outputs.verdict }} —
+            [PR #${{ github.event.issue.number || github.event.pull_request.number }}](${{ github.event.issue.html_url || github.event.pull_request.html_url }})
+          base-url: ${{ secrets.ATLASSIAN_BASE_URL }}
+          email: ${{ secrets.ATLASSIAN_USER_EMAIL }}
+          token: ${{ secrets.ATLASSIAN_API_TOKEN }}

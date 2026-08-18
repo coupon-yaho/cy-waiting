@@ -1,0 +1,54 @@
+name: CodeRabbit Control
+
+# skip-review 라벨로 CodeRabbit 리뷰를 껐다 켠다 (부착 → pause, 제거 → resume).
+# CodeRabbit 설정에는 "이 라벨이면 건너뛴다"가 없어(`auto_review.labels` 는
+# 허용 목록) 채팅 명령을 워크플로가 대신 친다.
+
+on:
+  pull_request:
+    types: [labeled, unlabeled]
+
+concurrency:
+  group: coderabbit-control-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+permissions:
+  pull-requests: write
+
+jobs:
+  toggle:
+    # 포크 PR 은 GITHUB_TOKEN 이 읽기 전용이라 코멘트를 달 수 없다 (공개 저장소).
+    # 조건을 안 걸면 라벨을 붙일 때마다 빨간불이 뜬다 — 라벨은 유지되고 알림만 못 간다.
+    if: >-
+      github.event.label.name == 'skip-review' &&
+      github.event.pull_request.head.repo.fork != true
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 리뷰 중지
+        if: github.event.action == 'labeled'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          # 본문을 여러 줄로 쓰면 블록 스칼라 들여쓰기가 코멘트에 그대로 들어가
+          # 마크다운 코드블록이 된다. printf 로 조립해 그 문제를 없앤다.
+          body=$(printf '%s\n\n%s' \
+            '@coderabbitai pause' \
+            '`skip-review` 라벨로 리뷰를 중지했다. 라벨을 떼면 재개된다.')
+          gh pr comment "$PR" --repo "$REPO" --body "$body"
+          echo "::notice title=CodeRabbit::PR #$PR 리뷰 중지"
+
+      - name: 리뷰 재개
+        if: github.event.action == 'unlabeled'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          body=$(printf '%s\n\n%s' \
+            '@coderabbitai resume' \
+            '`skip-review` 라벨이 제거되어 리뷰를 재개한다.')
+          gh pr comment "$PR" --repo "$REPO" --body "$body"
+          echo "::notice title=CodeRabbit::PR #$PR 리뷰 재개"

@@ -54,7 +54,7 @@ jobs:
       # 이미지 빌드 전이라 fs 모드. 차단과 업로드에 SARIF 하나를 같이 쓴다 —
       # 나누면 같은 스캔이 두 번 돈다 (DB 내려받기까지).
       - name: Trivy
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: .

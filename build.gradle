@@ -1,0 +1,47 @@
+plugins {
+    id 'java'
+    // 픽스처를 src/test 에 두면 다른 소스셋에서 못 쓰고,
+    // 프로덕션에 두면 도달 불가 상태를 만드는 생성자가 운영 코드에 노출된다 (TS-3).
+    id 'java-test-fixtures'
+    id 'org.springframework.boot' version '4.1.0'
+    id 'io.spring.dependency-management' version '1.1.7'
+}
+
+group = 'com.kafkick'
+version = '0.0.1-SNAPSHOT'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+ext {
+    springCloudVersion = '2025.1.2'
+}
+
+dependencyManagement {
+    imports {
+        mavenBom "org.springframework.cloud:spring-cloud-dependencies:${springCloudVersion}"
+    }
+}
+
+// 해당 페이즈에 도달하기 전에는 넣지 않는다.
+// Redis·resilience4j·loadbalancer 를 미리 넣으면 쓰지 않는 의존성이 빌드를 무겁게 하고,
+// 어느 페이즈가 무엇을 요구하는지가 흐려진다.
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-webflux'
+    implementation 'org.springframework.cloud:spring-cloud-starter-gateway-server-webflux'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}

@@ -68,4 +68,39 @@ public record CouponState(
         // 되는데 그건 예산을 늘리는 방향이라 의미가 없다.
         pollScale = Math.max(1.0, pollScale);
     }
+
+    /** 아무도 줄을 서지 않았다. 배분을 못 받았으므로 credit 은 0 이다. */
+    public static CouponState idle(long remainingStock) {
+        return new CouponState(QueueMode.ADAPTIVE, RuntimeState.IDLE, 0, remainingStock, 0, 1.0);
+    }
+
+    /** 줄이 생겼다. 상한을 넘은 초과분이 큐로 들어가면서 이 상태가 된다. */
+    public static CouponState queueing(long credit, long remainingStock, long waiting) {
+        return new CouponState(
+                QueueMode.ADAPTIVE, RuntimeState.QUEUEING, credit, remainingStock, waiting, 1.0);
+    }
+
+    /** 이번 틱에 남은 대기자를 다 빼줄 수 있다. 배분이 대기자를 따라잡으면 여기로 온다. */
+    public static CouponState draining(long credit, long remainingStock, long waiting) {
+        return new CouponState(
+                QueueMode.ADAPTIVE, RuntimeState.DRAINING, credit, remainingStock, waiting, 1.0);
+    }
+
+    /** 재고가 소진됐는데 대기자가 남았다. 스케줄러가 이 전이를 만든다. */
+    public static CouponState closed(long waiting) {
+        return new CouponState(QueueMode.ADAPTIVE, RuntimeState.CLOSED, 0, 0, waiting, 1.0);
+    }
+
+    /** 운영자가 대기열을 껐다. 붐비든 말든 줄을 세우지 않는다. */
+    public static CouponState off(long remainingStock) {
+        return new CouponState(QueueMode.OFF, RuntimeState.IDLE, 0, remainingStock, 0, 1.0);
+    }
+
+    /**
+     * 스냅샷에 없는 쿠폰. 판정이 {@code null} 을 다루지 않게 하려는 것이지
+     * 통과시키려는 게 아니다 — 미지 쿠폰은 요청 경로에서 404 로 끊는다.
+     */
+    public static CouponState unknown() {
+        return new CouponState(QueueMode.ADAPTIVE, RuntimeState.CLOSED, 0, 0, 0, 1.0);
+    }
 }

@@ -34,7 +34,7 @@ jobs:
       passed: ${{ steps.evaluate.outputs.passed }}
       summary: ${{ steps.evaluate.outputs.summary }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 

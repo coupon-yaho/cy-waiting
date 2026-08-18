@@ -27,7 +27,7 @@ jobs:
       jira-key: ${{ steps.jira.outputs.key }}
       code: ${{ steps.changes.outputs.code }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -157,7 +157,7 @@ jobs:
       status: ${{ steps.v.outputs.status }}
       ok: ${{ steps.v.outputs.ok }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - id: v

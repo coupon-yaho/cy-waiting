@@ -78,7 +78,7 @@ jobs:
       HAS_CONFLUENCE: ${{ secrets.CONFLUENCE_SPACE_KEY != '' && secrets.ATLASSIAN_BASE_URL != '' }}
       HAS_JIRA: ${{ secrets.ATLASSIAN_BASE_URL != '' && secrets.ATLASSIAN_API_TOKEN != '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 

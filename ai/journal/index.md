@@ -8,6 +8,7 @@
 
 | ID | 날짜 | 종류 | 제목 | 확신 | 승격 |
 |---|---|---|---|---|---|
+| [AIJ-0009](2026/08/AIJ-0009-build-foundation-and-quality-gates.md) | 2026-08-18 | implement | 빌드 기반과 품질 임계 · CI 첫 실행 결함 4건 | high | — |
 | [AIJ-0008](2026/08/AIJ-0008-header-identity-and-front-lb.md) | 2026-08-18 | decision | 인증을 헤더 식별자로 · 락 소유권 · 앞단 LB 부재 | medium | D-A1 |
 | [AIJ-0007](2026/08/AIJ-0007-queue-order-by-timestamp.md) | 2026-08-14 | decision | 큐 순서를 timestamp 로 · 차단 5건 해소 | medium | 90-decisions 2.7·2.8 |
 | [AIJ-0006](2026/08/AIJ-0006-repository-layout.md) | 2026-08-14 | decide | 저장소 배치 — cy-be 와 분리, 게이트웨이는 하나로 | high | O-1~O-3 |
@@ -43,6 +44,8 @@
 | AIJ-0008 | 앞단 LB 한 대가 1GbE 에서 목표 RPS 를 감당한다 (PPS 가 먼저 막힐 수 있다) | 10.7.5 기준선 측정 |
 | AIJ-0008 | `queueToken` 을 게이트웨이가 발급한다는 데 발급 계층이 동의한다 | 계약표(00-req 8절)에 항목 없음. 협의 필요 |
 | AIJ-0008 | IP 리미터가 시험 환경(NAT·출발지 IP 8개)에서 부하 생성기를 막지 않는다 | 시험 프로파일 상한 별도 지정 |
+| AIJ-0009 | PIT 임계 90%(생존 ≤10%)가 타당하다 | Phase 2 실제 도메인에서 실측 |
+| AIJ-0009 | JaCoCo PACKAGE 규칙이 빈 패키지에서 조용히 통과하지 않는다 | Phase 2 첫 도메인 클래스에서 확인 |
 | AIJ-0007 | `everysec` 유실 1초가 재등록으로 덮인다 | Phase 6 부하 하네스 (6.6) |
 | AIJ-0007 | `TIME` 을 쓰는 Lua 가 복제에서 안전하다 | Phase 3 |
 | AIJ-0007 | 폴링마다 붙는 `ZCOUNT` 부하가 감당된다 | Phase 3 |

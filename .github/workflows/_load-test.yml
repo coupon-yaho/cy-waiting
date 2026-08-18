@@ -112,7 +112,7 @@ jobs:
         run: docker compose -f test/load/compose.yml logs --tail=200 || true
 
       - if: always() && hashFiles('k6-summary.json') != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: load-${{ inputs.scenario }}
           path: k6-summary.json

@@ -1,0 +1,133 @@
+# CodeRabbit 설정 — https://docs.coderabbit.ai/guides/configure-coderabbit
+#
+# 이 저장소의 규칙은 ai/rules/ 에 있다. CodeRabbit 이 그것을 읽고 리뷰하도록
+# path_instructions 로 연결한다. 규칙을 여기에 복사하지 않는다 — 사본이 갈라진다.
+
+language: ko-KR
+early_access: false
+
+reviews:
+  profile: assertive          # 이 프로젝트는 정합성 요구가 강하다
+  request_changes_workflow: true
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+
+  auto_review:
+    enabled: true
+    drafts: false          # 초안은 아직 리뷰할 상태가 아니다
+    base_branches:
+      - develop
+      - main
+
+    # 제목에 이 단어가 있으면 자동 리뷰를 건너뛴다.
+    # 라벨(skip-review)로도 끌 수 있다 — .github/workflows/coderabbit-control.yml
+    ignore_title_keywords:
+      - '[skip-review]'
+      - '[wip]'
+      - 'wip:'
+      - 'docs:'            # 문서만 바꾸는 PR — path_filters 로도 걸리지만 이중으로
+      - 'docs('
+      - 'chore(deps)'      # dependabot PR 은 dependency-review 가 본다
+
+  path_filters:
+    # 문서는 리뷰하지 않는다.
+    #
+    # CodeRabbit 이 한글 산문에 대해 내놓는 것은 오탈자·문체 지적이지 설계 비평이
+    # 아니다. 그런 지적이 쌓이면 **코드에 대한 진짜 지적이 그 안에 묻힌다**.
+    # plan/ 의 설계 검토는 사람과 .claude/agents/ 의 역할이다.
+    - '!**/*.md'
+    - '!**/*.mdx'
+
+    # 생성물
+    - '!**/build/**'
+    - '!**/.gradle/**'
+    - '!**/dist/**'
+    - '!**/*.lock'
+    - '!**/package-lock.json'
+
+    - '!waiting-legacy/**'    # 참조 전용. 리뷰 대상이 아니다 (WF-5)
+
+  path_instructions:
+    - path: 'src/main/java/**/domain/**'
+      instructions: |
+        이 계층은 순수해야 한다 (ai/rules/20-design.md DS-1).
+        Spring·Reactor·Redis import, Instant.now(), Math.random() 이 있으면 지적하라.
+
+        불변식을 확인하라 (plan/02-domain-core.md 3.6절):
+        - I1 runtime==IDLE 이면 credit==0. 두 값은 독립이 아니라 waiting==0 에서 함께 나온다
+        - 이 불변식을 잊고 credit 으로 통과 상한을 계산하면 한산한 쿠폰이 전부 큐로 간다
+          (이전 구현의 핵심 버그)
+
+        도달 불가능한 상태를 만들 수 있는 public 생성자가 있으면 지적하라 (DS-2, JS-12).
+
+    - path: 'src/main/java/**/admission/**'
+      instructions: |
+        판정 순서가 곧 우선순위다 (plan/02-domain-core.md 3.5절).
+        순서를 바꾸는 변경이면 계획서 3.5절 표도 함께 고쳤는지 확인하라 (PK-A4).
+
+        특히:
+        - 매진(stock<=0) 판정이 dataStale 보다 앞에 있는가 (B-3)
+        - dataStale + waiting>0 에서 큐로 보내는가 — 줄 선 사람을 추월시키면 안 된다 (F1)
+        - 상한 계산에 max(1, ...) 을 쓰지 않는가 (B-2, 크레딧 초과 배분)
+        - 새 판정값을 추가했다면 isPass()/isEnqueue() 양쪽 다 갱신했는가 (PK-A3)
+
+    - path: '**/*.lua'
+      instructions: |
+        KEYS[] 에 선언되지 않은 키를 만지면 Redis Cluster 에서 거부된다 (RD-1).
+        문자열로 키를 조립하거나 변수에 담아 우회하는 형태를 지적하라.
+        한 스크립트가 두 슬롯을 만지지 않는지 확인하라 (RD-2).
+        상단에 KEYS/ARGV 계약 주석이 있는지 확인하라 (RD-10).
+
+    - path: 'src/main/java/**'
+      instructions: |
+        ai/rules/10-java-style.md 를 따른다:
+        - FQDN 금지, import 해서 쓴다 (JS-1)
+        - 불변 데이터는 record, @Data 금지 (JS-3, JS-9)
+        - Javadoc 은 최대 5줄. "무엇"이 아니라 "왜" (JS-6)
+        - 생성자 대신 정적 팩토리 (JS-12)
+        - private static 메서드 금지 — 인스턴스 메서드로 두거나 밖으로 꺼낸다 (JS-13)
+        - 중첩 클래스는 static (JS-14)
+
+        리액티브 (ai/rules/30-reactive.md):
+        - 블로킹 호출 금지. 예외는 @PreDestroy 뿐이고 타임아웃 필수 (RX-1)
+        - 주기 루프는 repeatWhen. Flux.interval 은 회복 시 몰아서 터진다 (RX-2)
+        - 배경 루프에 스케줄러를 명시했는가 (RX-3)
+
+        로깅 (ai/rules/80-logging.md):
+        - 요청당 로그 금지. 세는 것은 메트릭이다 (LG-1)
+        - 상태 전이는 진입·해제를 쌍으로. 해제 로그에 지속 시간을 담는다 (LG-2)
+
+        예외 (ai/rules/90-errors.md):
+        - 정상 실패(매진·큐 상한)를 예외로 만들지 않는다. 판정값이다 (EX-1)
+        - BusinessException 은 스택트레이스를 채우지 않는다 (EX-3)
+
+    - path: 'src/testFixtures/java/**'
+      instructions: |
+        픽스처가 **도달 불가능한 상태를 만들 수 있으면 지적하라** (TS-3).
+        이전 구현에서 (IDLE, credit=1000) 이라는 존재할 수 없는 상태를 픽스처가
+        만들 수 있었고, 그래서 핵심 버그가 3개월 살아남았다.
+
+        - 자유형 생성자를 노출하지 않는가. 팩토리마다 **도달 가능한 상태 하나**만
+        - 새 팩토리에 **그 상태가 어떻게 생기는지** Javadoc 한 줄이 있는가
+        - 프로덕션 코드가 이 소스셋을 참조하지 않는가 (testFixtures 는 테스트 전용)
+
+    - path: 'src/test/java/**'
+      instructions: |
+        ai/rules/40-testing.md:
+        - 픽스처가 도달 불가능한 상태를 만들 수 있으면 지적하라 (TS-3).
+          이전 구현에서 (IDLE, credit=1000) 이라는 존재할 수 없는 상태를 픽스처가
+          만들 수 있었고, 그래서 핵심 버그가 3개월 살아남았다.
+        - 단언이 약하면(isNotEmpty, isNotNull) 지적하라 (TS-11)
+        - 실제 시간에 의존하면 지적하라. Clock 을 주입한다 (TS-4)
+        - @Disabled·재시도로 불안정 테스트를 덮었으면 지적하라 (TS-7)
+
+    - path: '.github/**'
+      instructions: |
+        서드파티 액션은 SHA 로 핀 고정하는 것이 원칙이다.
+        시크릿이 로그로 새는 경로가 없는지 확인하라.
+        permissions 가 최소 권한인지 확인하라.
+
+chat:
+  auto_reply: true

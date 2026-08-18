@@ -1,0 +1,55 @@
+name: Setup Gradle
+description: JDK 21 + Gradle 캐시를 준비하고, 빌드 대상이 존재하는지 알려준다
+
+inputs:
+  java-version:
+    description: JDK 버전
+    required: false
+    default: '21'
+  cache-write:
+    description: |
+      Gradle 캐시를 갱신할 것인가. **빌드 잡 하나만 true 로 둔다.**
+      전부 읽기 전용이면 뒤따르는 테스트 잡이 매번 처음부터 컴파일한다 —
+      잡마다 러너가 달라 build/ 가 넘어가지 않으므로 캐시가 유일한 통로다.
+    required: false
+    default: 'false'
+
+outputs:
+  buildable:
+    description: gradlew 가 존재하는가 (Phase 1 T1.2.1 이전에는 'false')
+    value: ${{ steps.probe.outputs.buildable }}
+
+runs:
+  using: composite
+  steps:
+    # Phase 1 T1.2.1 이전에는 Gradle 프로젝트가 없다.
+    # 그때 빌드 잡을 실패시키면 CI 가 상시 빨간 상태가 되어 아무도 보지 않게 된다.
+    # 프로젝트가 생기는 순간 자동으로 켜진다.
+    - name: 빌드 대상 존재 확인
+      id: probe
+      shell: bash
+      run: |
+        if [[ -f gradlew ]]; then
+          echo "buildable=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "buildable=false" >> "$GITHUB_OUTPUT"
+          echo "::notice title=빌드 건너뜀::gradlew 가 아직 없다 (Phase 1 T1.2.1 미완료)"
+        fi
+
+    - if: steps.probe.outputs.buildable == 'true'
+      uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: ${{ inputs.java-version }}
+
+    # 브랜치가 아니라 역할로 가른다. PR 의 ref 는 refs/pull/N/merge 라
+    # 브랜치로 가르면 PR 에서는 아무도 캐시를 못 쓴다.
+    - if: steps.probe.outputs.buildable == 'true'
+      uses: gradle/actions/setup-gradle@v4
+      with:
+        cache-read-only: ${{ inputs.cache-write != 'true' }}
+
+    - name: gradlew 실행 권한
+      if: steps.probe.outputs.buildable == 'true'
+      shell: bash
+      run: chmod +x ./gradlew

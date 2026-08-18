@@ -1,0 +1,53 @@
+version: 2
+
+updates:
+  # 서드파티 액션은 SHA 로 핀 고정하는 것이 원칙이다.
+  # 손으로 고정하면 갱신이 멈추므로 dependabot 이 SHA 를 올려 준다.
+  #
+  # `/` 는 .github/workflows 만 본다. composite action 안에도 서드파티 액션이
+  # 있어서(setup-gradle 의 setup-java·gradle/actions) 경로를 따로 넣지 않으면
+  # 그것들만 고정된 채 영영 안 올라간다.
+  - package-ecosystem: github-actions
+    directories:
+      - /
+      - /.github/actions/*
+    schedule:
+      interval: weekly
+      day: monday
+      time: '02:00'
+      timezone: Asia/Seoul
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: ci
+    labels:
+      - dependencies
+      - ci
+
+  - package-ecosystem: gradle
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '02:00'
+      timezone: Asia/Seoul
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: build
+    labels:
+      - dependencies
+    groups:
+      # 스프링 계열은 함께 올려야 호환이 맞는다. 하나씩 올리면 PR 이 서로 깨진다
+      spring:
+        patterns:
+          - 'org.springframework*'
+          - 'io.spring*'
+      test:
+        patterns:
+          - 'org.junit*'
+          - 'org.assertj*'
+          - 'org.testcontainers*'
+          - 'org.mockito*'
+    ignore:
+      # 메이저 업그레이드는 사람이 판단한다 — 상위 PRD 와의 버전 정합(D-X2)이 걸려 있다
+      - dependency-name: 'org.springframework.boot*'
+        update-types: [version-update:semver-major]

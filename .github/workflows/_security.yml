@@ -1,0 +1,166 @@
+name: _security
+
+# CVE·시크릿·의존성 검사. 각각 실패 조건이 다르므로 잡을 나눈다.
+#
+# PR: 새로 들어온 것만 차단 (기존 부채로 개발을 멈추지 않는다)
+# main/nightly: 전체 스캔 + SARIF 업로드
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: pr | full
+        type: string
+        required: false
+        default: pr
+      severity:
+        description: |
+          **스캔할** 심각도. 여기 포함된 것만 SARIF 에 올라가고 Security 탭에 보인다.
+        type: string
+        required: false
+        default: 'CRITICAL,HIGH'
+      block-severity:
+        description: |
+          **차단할** 심각도. 비우면 `severity` 와 같다.
+          넓게 스캔하고 좁게 차단하려면 이걸 따로 준다 — nightly 가 LOW 까지 보면서도
+          LOW 하나에 빨간불이 되지 않게 하는 용도다. **상시 빨간 CI 는 아무도 안 본다.**
+        type: string
+        required: false
+        default: ''
+      cve:
+        description: |
+          CVE 스캔을 돌릴 것인가. 문서만 바뀐 PR 에서는 끈다 —
+          의존성이 안 바뀌었으면 결과도 안 바뀐다.
+          **시크릿 검사는 이 값과 무관하게 항상 돈다** (문서에도 토큰을 넣을 수 있다).
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  cve:
+    name: CVE (Trivy)
+    if: inputs.cve
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+  
+      # 이미지 빌드 전이라 fs 모드. 차단과 업로드에 SARIF 하나를 같이 쓴다 —
+      # 나누면 같은 스캔이 두 번 돈다 (DB 내려받기까지).
+      - name: Trivy
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: ${{ inputs.severity }}
+          ignore-unfixed: true
+          exit-code: '0'
+          format: sarif
+          output: trivy.sarif
+          scanners: vuln,secret,misconfig
+
+      # 판정보다 업로드가 먼저다 — 차단당한 뒤 무엇이 걸렸는지 볼 곳이 있어야 한다.
+      # 포크 PR 에는 security-events: write 가 부여되지 않는다. 조건을 안 걸면
+      # 외부 기여 PR 이 업로드 단계에서 무조건 빨간불이 된다 — 차단 판정은
+      # 아래 '판정' 스텝이 하므로 업로드만 건너뛴다.
+      - if: >-
+          always() && hashFiles('trivy.sarif') != '' &&
+          github.event.pull_request.head.repo.fork != true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy.sarif
+          category: trivy-fs
+
+      # severity 를 스캔에 넘겼으므로 SARIF 에 남은 것은 전부 차단 대상이다.
+      # if 를 걸지 않는다 — 스킵되면 '검사 안 함'이 '이상 없음'이 된다.
+      - name: 판정
+        env:
+          SEVERITY: ${{ inputs.severity }}
+          BLOCK: ${{ inputs.block-severity || inputs.severity }}
+        run: |
+          set -uo pipefail
+          if [[ ! -s trivy.sarif ]]; then
+            echo "::error title=Trivy::스캔 결과 파일이 없다 — 검사가 실제로 돌았는지 확인한다"
+            exit 1
+          fi
+          # SARIF 의 security-severity(0~10) 를 등급으로 되돌려 차단 대상만 센다.
+          # 스캔은 넓게(LOW 까지) 하고 차단은 좁게 한다 — 관측과 차단은 다른 결정이다.
+          n=$(BLOCK="$BLOCK" jq -r '
+                def grade: if . >= 9 then "CRITICAL" elif . >= 7 then "HIGH"
+                           elif . >= 4 then "MEDIUM" else "LOW" end;
+                ($ENV.BLOCK | split(",") | map(ascii_upcase|ltrimstr(" ")|rtrimstr(" "))) as $b
+                | [ .runs[].results[]?
+                    | ((.properties["security-severity"] // "0") | tonumber | grade)
+                    | select(IN($b[])) ] | length' trivy.sarif) || {
+            echo "::error title=Trivy::SARIF 를 읽을 수 없다"; exit 1; }
+          if [[ "${n:-0}" -gt 0 ]]; then
+            jq -r '.runs[].results[]? |
+              "  \(.ruleId // "?")  \(.locations[0].physicalLocation.artifactLocation.uri // "?")"' \
+              trivy.sarif
+            echo "::error title=Trivy::${BLOCK} 등급 ${n}건 — Security 탭에 상세"
+            exit 1
+          fi
+          echo "::notice title=Trivy::차단 대상(${BLOCK}) 0건 · 스캔 범위 ${SEVERITY}"
+
+  secrets:
+    name: 시크릿 유출
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0   # 이력 전체를 봐야 과거 커밋의 유출을 잡는다
+
+      # 액션이 아니라 CLI 를 쓴다. `gitleaks-action@v2` 는 **조직 소유 저장소에
+      # GITLEAKS_LICENSE 를 요구**한다 — 도구 자체는 MIT 인데 액션만 유료다.
+      # 라이선스가 없으면 첫 실행부터 이 잡이 실패한다.
+      - name: gitleaks
+        env:
+          VERSION: 8.21.2
+        run: |
+          set -euo pipefail
+          curl -sSLo /tmp/gitleaks.tgz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz"
+          tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
+          # PR 이면 그 커밋만, 그 밖에는 이력 전체
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            /tmp/gitleaks detect --source . --redact --no-banner \
+              --log-opts="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+          else
+            /tmp/gitleaks detect --source . --redact --no-banner
+          fi
+
+      # 규칙으로도 한 번 더 — LG-6 (토큰·시크릿 로깅 금지) 는 정적 검사로 못 잡는
+      # 커밋된 값 자체를 노린다
+      - name: 시크릿 리터럴 검사
+        run: |
+          set -uo pipefail
+          if grep -rInE '(ENTRY_TOKEN_SECRET|JIRA_API_TOKEN|SLACK_WEBHOOK)[[:space:]]*=[[:space:]]*[^$"'"'"'[:space:]]' \
+             --include='*.yml' --include='*.yaml' --include='*.properties' --include='*.java' . ; then
+            echo "::error title=시크릿::리터럴 값이 커밋되었다. 환경변수로 주입한다"
+            exit 1
+          fi
+
+  dependency-review:
+    name: 의존성 리뷰
+    # 포크 PR 은 pull-requests 쓰기가 없어 코멘트를 못 단다.
+    # 검사 자체는 돌지만 comment-summary 가 실패하므로 요약을 끄고 돌린다.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      # 체크아웃하지 않는다 — 이 액션은 GitHub API 로 의존성 변화를 읽는다
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: ${{ github.event.pull_request.head.repo.fork && 'never' || 'on-failure' }}

@@ -1,0 +1,9 @@
+// 툴체인 자동 provisioning.
+// toolchain 만 선언하고 이 resolver 를 빼면 JDK 21 이 없는 기기에서
+// "No matching toolchain" 으로 빌드가 죽는다 — 러너는 setup-java 가 깔아주지만
+// 개발 기기는 아무도 안 깔아준다.
+plugins {
+    id 'org.gradle.toolchains.foojay-resolver-convention' version '0.9.0'
+}
+
+rootProject.name = 'waiting'

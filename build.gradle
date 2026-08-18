@@ -1,5 +1,9 @@
 plugins {
     id 'java'
+    id 'jacoco'
+    // 도메인 한정. 어댑터까지 돌리면 시간이 폭발하고, 정작 지켜야 할 곳의
+    // 신호가 묻힌다 (Phase 2 Goal — 생존 ≤ 10%)
+    id 'info.solidsoft.pitest' version '1.15.0'
     // 픽스처를 src/test 에 두면 다른 소스셋에서 못 쓰고,
     // 프로덕션에 두면 도달 불가 상태를 만드는 생성자가 운영 코드에 노출된다 (TS-3).
     id 'java-test-fixtures'
@@ -44,4 +48,59 @@ dependencies {
 
 tasks.named('test') {
     useJUnitPlatform()
+    finalizedBy jacocoTestReport
+}
+
+// ── 품질 임계 ────────────────────────────────────────────────────────────────
+// 임계 미달이면 build 가 실패한다. "확인했다" 는 통과가 아니다.
+
+jacoco {
+    toolVersion = '0.8.12'
+}
+
+tasks.named('jacocoTestReport') {
+    dependsOn test
+    reports {
+        xml.required = true
+        html.required = true
+    }
+    // 픽스처는 커버리지 대상이 아니다. 테스트를 돕는 코드라
+    // 포함시키면 본 코드의 미달을 픽스처가 덮는다.
+    classDirectories.setFrom(sourceSets.main.output)
+}
+
+tasks.named('jacocoTestCoverageVerification') {
+    dependsOn test
+    classDirectories.setFrom(sourceSets.main.output)
+    violationRules {
+        // 도메인은 순수해서 100% 가 가능하다. 못 채운다는 것은
+        // 도달 불가 분기가 있다는 뜻이고, 그건 설계 문제다.
+        rule {
+            element = 'PACKAGE'
+            includes = ['com.kafkick.waiting.domain.*']
+            limit {
+                counter = 'BRANCH'
+                minimum = 1.00
+            }
+        }
+        rule {
+            element = 'BUNDLE'
+            limit {
+                counter = 'BRANCH'
+                minimum = 0.80
+            }
+        }
+    }
+}
+
+tasks.named('check') {
+    dependsOn jacocoTestCoverageVerification
+}
+
+pitest {
+    targetClasses = ['com.kafkick.waiting.domain.*']
+    excludedClasses = ['com.kafkick.waiting.*Application*']
+    mutationThreshold = 90          // 생존 ≤ 10%
+    timestampedReports = false
+    junit5PluginVersion = '1.2.1'
 }

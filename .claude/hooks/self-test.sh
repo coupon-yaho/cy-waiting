@@ -8,6 +8,7 @@
 set -uo pipefail
 
 HOOKS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$HOOKS/../.." && pwd)"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
@@ -213,6 +214,45 @@ bash_case check-commit-msg.sh "git commit -m 'feat(admission): 전역 크레딧�
 bash_case check-commit-msg.sh "git commit --amend --no-edit" allow '--amend --no-edit'
 bash_case check-commit-msg.sh "git status" allow 'commit 아닌 명령'
 bash_case check-commit-msg.sh "echo 'nothing to do with version control'" allow '무관한 명령'
+
+# ── git commit-msg 훅 ────────────────────────────────────────────────────────
+# 도구 훅만 검증하면 터미널 직접 커밋 경로가 비어 있다.
+echo
+echo ".githooks/commit-msg"
+
+# git 훅은 0 통과 / 1 차단이다. Claude 훅의 exit 2 규약과 달라서
+# verdict 를 그대로 쓰면 차단을 전부 통과로 읽는다.
+git_case() {   # 메시지 기대 설명
+    local msg=$1 expect=$2 label=$3
+    local f; f=$(mktemp)
+    printf '%s\n' "$msg" > "$f"
+    "$ROOT/.githooks/commit-msg" "$f" >/dev/null 2>&1
+    local rc=$?
+    rm -f "$f"
+    local actual=allow
+    ((rc != 0)) && actual=block
+    if [[ "$actual" == "$expect" ]]; then
+        printf '  ok   %s\n' "$label"; pass=$((pass + 1))
+    else
+        printf '  FAIL %s (기대 %s, 실제 %s)\n' "$label" "$expect" "$actual"; fail=$((fail + 1))
+    fi
+}
+
+git_case 'feat(app): 진입점 추가
+Refs: CY-18' allow '정상'
+git_case '진입점 추가
+Refs: CY-18' block '형식 위반'
+git_case 'feat(app): add entrypoint
+Refs: CY-18' block '영문 제목'
+git_case 'feat(app): 진입점을 추가했다
+Refs: CY-18' block '종결어미'
+git_case 'feat(app): 진입점 추가' block 'Refs 푸터 없음'
+git_case 'feat(app): 진입점 추가
+Refs: CY-18
+Plan: 1.2.1' block '계획서 ID (커밋에 남기지 않는다)'
+git_case 'feat(app): CY-18 진입점 추가
+Refs: CY-18' block '제목에 Jira 키'
+git_case 'Merge branch develop' allow '병합 커밋은 대상 아님'
 
 echo
 printf '통과 %d · 실패 %d\n' "$pass" "$fail"

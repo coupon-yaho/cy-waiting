@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# git commit-msg 훅 — 터미널에서 직접 커밋해도 규약이 걸린다.
+#
+# Claude Code 의 PreToolUse 훅만 두면 `git commit` 을 손으로 치는 순간
+# 검사가 통째로 우회된다. 실제로 초기 커밋 전부가 그렇게 빠져나갔다.
+#
+# 설치: .githooks/install.sh  (core.hooksPath 를 이 디렉터리로 잡는다)
+set -uo pipefail
+
+msg_file="$1"
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=lib/commit-subject-rules.sh
+source "$here/lib/commit-subject-rules.sh"
+
+# 주석과 빈 줄을 걷어낸 첫 줄이 제목이다.
+subject=$(grep -vE '^[[:space:]]*#' "$msg_file" | grep -vE '^[[:space:]]*$' | head -1)
+
+# 병합·리버트 커밋은 git 이 문구를 정하므로 규약 대상이 아니다.
+case "$subject" in
+    Merge\ *|Revert\ *|fixup!\ *|squash!\ *) exit 0 ;;
+esac
+
+[[ -z "$subject" ]] && exit 0   # 빈 메시지는 git 이 알아서 막는다
+
+if ! violations=$(check_commit_subject "$subject"); then
+    {
+        echo "커밋 메시지 규약 위반"
+        echo "  제목: $subject"
+        echo
+        echo "$violations"
+        commit_rule_help
+    } >&2
+    exit 1
+fi
+
+# 푸터 — Jira 키는 여기 하나로만 추적한다.
+if ! grep -qE '^Refs: CY-[0-9]+' "$msg_file"; then
+    echo "[WF-1] 푸터에 'Refs: CY-###' 를 남긴다." >&2
+    exit 1
+fi
+
+# 계획서 ID 는 커밋에 남기지 않는다. 문서를 개편하면 바뀌는데 커밋 이력은
+# 못 고쳐서, 박아두면 죽은 참조만 남는다 (60-workflow.md 3절).
+if grep -qE '^Plan:' "$msg_file"; then
+    echo "[WF-1] 계획서 ID 를 커밋에 남기지 않는다. 추적은 'Refs:' 하나로." >&2
+    exit 1
+fi
+
+exit 0

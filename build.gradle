@@ -46,9 +46,35 @@ dependencies {
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
+// ── 테스트 계층 ──────────────────────────────────────────────────────────────
+// CI 가 계층별로 나눠 돌린다 (_test.yml). 한 태스크에 다 넣으면 어느 계층이
+// 왜 느린지·왜 깨졌는지가 안 보이고, 페이즈별로 켜고 끌 수도 없다.
+//
+// 태그로 가른다. 태그가 없는 테스트는 unit 으로 본다 — 새 테스트를 쓰면서
+// 태그를 잊어도 어딘가에서는 돈다.
+
 tasks.named('test') {
-    useJUnitPlatform()
+    useJUnitPlatform {
+        excludeTags 'integration', 'context', 'chaos'
+    }
     finalizedBy jacocoTestReport
+}
+
+['integration', 'context', 'chaos'].each { layer ->
+    tasks.register("${layer}Test", Test) {
+        description = "${layer} 계층 테스트"
+        group = 'verification'
+        testClassesDirs = sourceSets.test.output.classesDirs
+        classpath = sourceSets.test.runtimeClasspath
+        useJUnitPlatform {
+            includeTags layer
+        }
+        // 해당 태그가 하나도 없어도 실패하지 않는다. 계층은 페이즈가
+        // 진행되며 채워지고, 빈 계층 때문에 파이프라인이 막히면 안 된다.
+        filter {
+            failOnNoMatchingTests = false
+        }
+    }
 }
 
 // ── 품질 임계 ────────────────────────────────────────────────────────────────
@@ -117,6 +143,9 @@ tasks.named('check') {
 
 pitest {
     targetClasses = ['com.kafkick.waiting.domain.*']
+    // domain 은 Phase 2 에서 채워진다. 그전까지 대상이 0건인데, 이걸 실패로
+    // 두면 파이프라인이 페이즈 진행을 막는다. 클래스가 들어오면 임계가 문다.
+    failWhenNoMutations = false
     excludedClasses = ['com.kafkick.waiting.*Application*']
     mutationThreshold = 90          // 생존 ≤ 10%
     timestampedReports = false

@@ -97,6 +97,24 @@ tasks.named('check') {
     dependsOn jacocoTestCoverageVerification
 }
 
+// 픽스처가 프로덕션 아티팩트에 새면 도달 불가 상태를 만드는 생성자가
+// 운영 코드에 노출된다 (TS-3). 사람 눈으로 보지 않고 빌드가 잡는다.
+tasks.register('verifyFixturesExcluded') {
+    dependsOn tasks.named('bootJar')
+    doLast {
+        def jar = tasks.named('bootJar').get().archiveFile.get().asFile
+        def leaked = new java.util.zip.ZipFile(jar).entries().toList()
+                .findAll { it.name.contains('testFixtures') || it.name.endsWith('Fixtures.class') }
+        if (leaked) {
+            throw new GradleException("픽스처가 프로덕션 JAR 에 포함됐다: ${leaked*.name}")
+        }
+    }
+}
+
+tasks.named('check') {
+    dependsOn 'verifyFixturesExcluded'
+}
+
 pitest {
     targetClasses = ['com.kafkick.waiting.domain.*']
     excludedClasses = ['com.kafkick.waiting.*Application*']

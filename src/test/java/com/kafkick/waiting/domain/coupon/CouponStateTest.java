@@ -116,6 +116,27 @@ class CouponStateTest {
     // RULE-EXCEPTION(JS-14): @Nested 는 JUnit 5 가 비-static 을 요구한다.
     // 규칙의 근거는 바깥 인스턴스 누수인데, 테스트 인스턴스는 실행 후 버려져 해당 없다.
     @Nested
+    @DisplayName("필수 값")
+    class 필수값 {
+
+        @Test
+        @DisplayName("mode가_null이면_생성에_실패한다")
+        void mode가_null이면_생성에_실패한다() {
+            assertThatThrownBy(() -> new CouponState(null, RuntimeState.IDLE, 0, 500, 0, 1.0))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        @DisplayName("runtime이_null이면_생성에_실패한다")
+        void runtime이_null이면_생성에_실패한다() {
+            assertThatThrownBy(() -> new CouponState(QueueMode.ADAPTIVE, null, 0, 500, 0, 1.0))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    // RULE-EXCEPTION(JS-14): @Nested 는 JUnit 5 가 비-static 을 요구한다.
+    // 규칙의 근거는 바깥 인스턴스 누수인데, 테스트 인스턴스는 실행 후 버려져 해당 없다.
+    @Nested
     @DisplayName("음수 방어")
     class 음수 {
 

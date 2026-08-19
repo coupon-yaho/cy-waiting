@@ -1,6 +1,6 @@
 package com.kafkick.waiting.adapter.redis;
 
-import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Duration;
@@ -29,8 +29,8 @@ class RedisBudgetGuardTest {
         RedisConfig config =
                 new RedisConfig(props(Duration.ofMillis(500), Duration.ofSeconds(1)));
 
-        assertThat(config).isNotNull();
-        config.시간_예산을_확인한다();
+        // 예외가 안 나는 것이 단언이다. 경계 바로 안쪽 값을 쓴다.
+        assertThatCode(config::시간_예산을_확인한다).doesNotThrowAnyException();
     }
 
     @Test

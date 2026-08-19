@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.connection.ReactiveRedisConnectionFactory;
+import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 
 /**
  * 제어 평면이 레디스를 칠 수 있는지 본다.
@@ -22,9 +23,14 @@ class RedisWiringTest {
     private ReactiveRedisConnectionFactory connectionFactory;
 
     @Test
-    @DisplayName("리액티브_커넥션_팩토리가_뜬다")
-    void 리액티브_커넥션_팩토리가_뜬다() {
-        assertThat(connectionFactory).isNotNull();
+    @DisplayName("리액티브_커넥션_팩토리가_설정된_주소를_갖는다")
+    void 리액티브_커넥션_팩토리가_설정된_주소를_갖는다() {
+        // 빈이 있다는 것만으로는 부족하다. 주소가 안 잡히면 첫 명령에서야 터진다.
+        assertThat(connectionFactory).isInstanceOf(LettuceConnectionFactory.class);
+
+        LettuceConnectionFactory lettuce = (LettuceConnectionFactory) connectionFactory;
+        assertThat(lettuce.getHostName()).isNotBlank();
+        assertThat(lettuce.getPort()).isPositive();
     }
 
     @Test
@@ -32,7 +38,7 @@ class RedisWiringTest {
     void 드라이버는_Lettuce다() {
         // Jedis 는 블로킹이라 이 프로젝트에서 쓸 수 없다 (RX-1).
         // 실수로 바뀌면 요청 경로가 아니라 스케줄러가 먼저 멎는다.
-        assertThat(RedisClient.class).isNotNull();
         assertThat(connectionFactory.getClass().getName()).contains("Lettuce");
+        assertThat(RedisClient.class.getPackageName()).isEqualTo("io.lettuce.core");
     }
 }

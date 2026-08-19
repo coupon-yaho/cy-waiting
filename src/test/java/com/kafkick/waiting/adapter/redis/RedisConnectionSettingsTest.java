@@ -22,6 +22,9 @@ class RedisConnectionSettingsTest {
     /** 스케줄러 틱. 명령 타임아웃은 이보다 짧아야 한다. */
     private static final Duration TICK = Duration.ofSeconds(1);
 
+    /** 리더 리스. 연결 타임아웃은 이보다 짧아야 한다. */
+    private static final Duration LEASE = Duration.ofSeconds(2);
+
     @Autowired
     private DataRedisProperties properties;
 
@@ -36,23 +39,20 @@ class RedisConnectionSettingsTest {
     }
 
     @Test
-    @DisplayName("명령_타임아웃이_설정되어_있다")
-    void 명령_타임아웃이_설정되어_있다() {
-        // 기본값은 무한이다. 무한 대기는 스케줄러를 멎게 한다.
-        assertThat(properties.getTimeout()).isNotNull();
-    }
-
-    @Test
     @DisplayName("명령_타임아웃이_틱보다_짧다")
     void 명령_타임아웃이_틱보다_짧다() {
-        assertThat(properties.getTimeout()).isLessThan(TICK);
+        // 기본값은 무한이다. 무한 대기는 스케줄러를 멎게 한다.
+        assertThat(properties.getTimeout())
+                .isPositive()
+                .isLessThan(TICK);
     }
 
     @Test
     @DisplayName("연결_타임아웃이_리스보다_짧다")
     void 연결_타임아웃이_리스보다_짧다() {
         // 연결이 리스(2초)보다 오래 걸리면 그 사이 리더십을 잃는다.
-        assertThat(properties.getConnectTimeout()).isNotNull();
-        assertThat(properties.getConnectTimeout()).isLessThan(Duration.ofSeconds(2));
+        assertThat(properties.getConnectTimeout())
+                .isPositive()
+                .isLessThan(LEASE);
     }
 }

@@ -37,6 +37,8 @@ class ConcurrentEnqueueTest extends RedisContainerSupport {
     private static final String COUPON = "c1";
     private static final String QUEUE = RedisKeys.queue(COUPON, 1, 0);
     private static final String MAX_SCORE = RedisKeys.maxScore(COUPON, 1, 0);
+    private static final String ALIVE_TTL = "30";
+    private static final String NO_CAP = "0";
 
     @Autowired
     private ReactiveStringRedisTemplate redis;
@@ -49,8 +51,13 @@ class ConcurrentEnqueueTest extends RedisContainerSupport {
         redis.delete(QUEUE, MAX_SCORE).block(WAIT);
     }
 
+    private String alive(String memberId) {
+        return RedisKeys.alive(COUPON, 1, 0, memberId);
+    }
+
     private void enqueue(String memberId) {
-        redis.execute(script, List.of(QUEUE, MAX_SCORE), List.of(memberId, String.valueOf(TTL_SECONDS)))
+        redis.execute(script, List.of(QUEUE, MAX_SCORE, alive(memberId)),
+                        List.of(memberId, String.valueOf(TTL_SECONDS), ALIVE_TTL, NO_CAP))
                 .blockFirst(WAIT);
     }
 

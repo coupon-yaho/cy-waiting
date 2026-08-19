@@ -31,6 +31,8 @@ class ClockMonotonicTest extends RedisContainerSupport {
     private static final String COUPON = "c1";
     private static final String QUEUE = RedisKeys.queue(COUPON, 1, 0);
     private static final String MAX_SCORE = RedisKeys.maxScore(COUPON, 1, 0);
+    private static final String ALIVE_TTL = "30";
+    private static final String NO_CAP = "0";
 
     @Autowired
     private ReactiveStringRedisTemplate redis;
@@ -47,9 +49,13 @@ class ClockMonotonicTest extends RedisContainerSupport {
     private List<Object> enqueue(String memberId) {
         return (List<Object>) redis.execute(
                         script,
-                        List.of(QUEUE, MAX_SCORE),
-                        List.of(memberId, String.valueOf(TTL_SECONDS)))
+                        List.of(QUEUE, MAX_SCORE, alive(memberId)),
+                        List.of(memberId, String.valueOf(TTL_SECONDS), ALIVE_TTL, NO_CAP))
                 .blockFirst(WAIT);
+    }
+
+    private String alive(String memberId) {
+        return RedisKeys.alive(COUPON, 1, 0, memberId);
     }
 
     private long scoreOf(String memberId) {
@@ -172,7 +178,8 @@ class ClockMonotonicTest extends RedisContainerSupport {
         // Lua 는 중간 오류를 되돌리지 않는다. 쓰기 전에 막지 않으면
         // maxscore 없는 ZSET 이 남아 "같이 남거나 같이 사라진다" 가 깨진다.
         org.assertj.core.api.Assertions.assertThatThrownBy(() ->
-                redis.execute(script, List.of(QUEUE, MAX_SCORE), List.of("m1", "0"))
+                redis.execute(script, List.of(QUEUE, MAX_SCORE, alive("m1")),
+                                List.of("m1", "0", ALIVE_TTL, NO_CAP))
                         .blockFirst(WAIT))
                 .rootCause()
                 .hasMessageContaining("TTL");

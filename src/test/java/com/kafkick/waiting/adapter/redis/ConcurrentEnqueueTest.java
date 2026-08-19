@@ -10,6 +10,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.function.IntConsumer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -17,6 +18,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.data.domain.Range;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
 
@@ -62,7 +64,7 @@ class ConcurrentEnqueueTest extends RedisContainerSupport {
     }
 
     /** 스레드를 동시에 풀어 실제 경합을 만든다. 순차 반복은 이 결함을 못 잡는다. */
-    private void 동시에(int threads, java.util.function.IntConsumer body) throws InterruptedException {
+    private void 동시에(int threads, IntConsumer body) throws InterruptedException {
         CountDownLatch start = new CountDownLatch(1);
         CountDownLatch done = new CountDownLatch(threads);
         try (ExecutorService pool = Executors.newFixedThreadPool(threads)) {
@@ -101,7 +103,7 @@ class ConcurrentEnqueueTest extends RedisContainerSupport {
         동시에(people, i -> enqueue("m" + i));
 
         Set<Double> scores = ConcurrentHashMap.newKeySet();
-        redis.opsForZSet().rangeWithScores(QUEUE, org.springframework.data.domain.Range.closed(0L, (long) people))
+        redis.opsForZSet().rangeWithScores(QUEUE, Range.closed(0L, (long) people))
                 .doOnNext(tuple -> scores.add(tuple.getScore()))
                 .blockLast(WAIT);
 

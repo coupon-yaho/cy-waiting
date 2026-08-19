@@ -12,6 +12,7 @@
 #        .claude/hooks/review-branch.sh --self-test 검사가 실제로 무는지 확인
 
 set -uo pipefail
+ROOT_SCRIPT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
 HOOKS=".claude/hooks"
@@ -194,6 +195,27 @@ self_test() {
         printf '  ✓ 테스트를 프로덕션 규칙으로 검사하지 않는다\n'
     fi
 
+    # **티켓 혼입 회귀.** `git add -A` 가 브랜치를 옮겨도 따라온 미추적 파일을
+    # 쓸어 담아 다른 티켓의 코드가 섞였고 CI 가 깨졌다. 검사가 실제로 무는지 본다.
+    local repo; repo="$tmp/mixed"
+    mkdir -p "$repo" && (
+        cd "$repo" || exit 1
+        git init -q . && git config user.email t@t && git config user.name t
+        : > seed.txt && git add seed.txt && git commit -q -m 'chore: 씨앗'
+        git branch -q base
+        : > a.txt && git add a.txt
+        git commit -q -m 'feat(a): 하나' -m 'Refs: CY-1'
+        : > b.txt && git add b.txt
+        git commit -q -m 'feat(b): 둘' -m 'Refs: CY-2'
+    ) >/dev/null 2>&1
+    local mixed
+    mixed=$(cd "$repo" && "$ROOT_SCRIPT" base 2>&1 || true)
+    if printf '%s' "$mixed" | grep -q '티켓이 둘 이상'; then
+        printf '  ✓ 티켓이 섞이면 알린다\n'
+    else
+        printf '  ✗ 티켓이 섞였는데 통과시켰다\n'; fail=1
+    fi
+
     rm -rf "$tmp"
     findings=0
     return $fail
@@ -231,6 +253,22 @@ head2 "$BASE 대비 변경 ${#CHANGED[@]}건 (작업 트리 포함)"
 printf '  %s\n' "${CHANGED[@]}"
 
 review_files "${CHANGED[@]}"
+
+# ── 브랜치에 섞여 든 파일 ────────────────────────────────────────────────────
+# `git add -A` 는 **브랜치를 옮겨도 따라온 미추적 파일**까지 쓸어 담는다.
+# 실제로 다른 티켓의 Lua 와 테스트가 워크플로 브랜치에 딸려 가 CI 가 깨졌다.
+# 커밋 푸터의 티켓과 변경 경로가 어긋나면 알린다.
+tickets=$(git log --format=%B "$BASE"..HEAD 2>/dev/null \
+          | grep -oE 'Refs: CY-[0-9]+' | sort -u | wc -l)
+if ((tickets > 1)); then
+    head2 "브랜치에 티켓이 둘 이상 섞였다"
+    git log --format='  %h %s%n     %(trailers:key=Refs,valueonly)' "$BASE"..HEAD 2>/dev/null \
+        | grep -v '^[[:space:]]*$'
+    say ""
+    say "  브랜치 하나에 티켓 하나다 (WF-3). CI 는 브랜치명에서 키를 뽑으므로"
+    say "  섞이면 엉뚱한 티켓으로 전이된다. 쪼개거나 잘못 담긴 커밋을 뺀다."
+    findings=$((findings + 1))
+fi
 
 head2 "사람·에이전트가 볼 것"
 say "  기계 검사는 형태만 본다. 판정 순서의 타당성, 불변식이 실제로 지켜지는지,"

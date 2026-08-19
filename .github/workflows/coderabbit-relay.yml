@@ -12,11 +12,6 @@ on:
   pull_request_review:
     types: [submitted]
 
-# 리뷰가 연달아 오면 마지막 것만 의미가 있다. 앞선 실행을 취소해 중복 통지를 막는다.
-concurrency:
-  group: coderabbit-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
-
 permissions:
   contents: read
   pull-requests: read
@@ -39,6 +34,17 @@ jobs:
       )
     runs-on: ubuntu-latest
     timeout-minutes: 10
+
+    # **워크플로 수준에 두지 않는다.** 그쪽은 `if` 보다 먼저 평가되므로,
+    # 걸러질 실행(사람 리뷰·요약 없는 리뷰)이 **진행 중인 진짜 중계를 취소**한다.
+    # 취소는 이미 나간 Slack·Jira 전송을 되돌리지도 못해 중간 상태만 남는다.
+    #
+    # 그룹에 리뷰 ID 를 넣어 **같은 리뷰의 재실행만** 겹치게 한다. 서로 다른
+    # 리뷰는 각각 중계돼야 한다 — 뒤엣것이 앞엣것을 지우면 지적이 사라진다.
+    concurrency:
+      group: coderabbit-${{ github.event.pull_request.number }}-${{ github.event.review.id }}
+      cancel-in-progress: true
+
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:

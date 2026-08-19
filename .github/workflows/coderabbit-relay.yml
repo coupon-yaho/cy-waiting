@@ -2,18 +2,20 @@ name: CodeRabbit Relay
 
 # CodeRabbit 리뷰 결과를 Slack 과 Jira 로 중계한다.
 #
-# 주의: issue_comment/pull_request_review 는 기본 브랜치의 워크플로 파일로 실행된다.
+# 주의: pull_request_review 는 **기본 브랜치의 워크플로 파일**로 실행된다.
 # 이 파일을 고쳐도 main 에 병합되기 전까지는 반영되지 않는다.
 
+# **코멘트 트리거를 쓰지 않는다.** 코멘트 하나마다 실행이 생기는데, 한 PR 에서
+# 60회가 돌았고 그중 22회는 봇이 아닌 사람의 코멘트가 띄운 것이라 아무 일도
+# 하지 않고 끝났다. 요약은 코멘트가 아니라 **리뷰 본문**에 실린다.
 on:
-  issue_comment:
-    types: [created]
   pull_request_review:
     types: [submitted]
 
+# 리뷰가 연달아 오면 마지막 것만 의미가 있다. 앞선 실행을 취소해 중복 통지를 막는다.
 concurrency:
-  group: coderabbit-${{ github.event.issue.number || github.event.pull_request.number }}
-  cancel-in-progress: false
+  group: coderabbit-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -23,17 +25,17 @@ jobs:
   relay:
     # CodeRabbit 이 남긴 것만. skip-review 가 붙었으면 중계하지 않는다.
     #
-    # 두 라벨 배열을 `||` 로 합치지 않는다 — 빈 배열이 truthy 라 PR 라벨을
-    # 영영 못 본다. 없는 쪽의 contains 는 false 이므로 따로 건다.
+    # **판단을 체크아웃 앞에 둔다.** 리뷰 봇은 인라인 지적 묶음마다 리뷰를
+    # 하나씩 남기는데, 요약이 없는 것까지 잡을 이유가 없다. 여기서 걸러야
+    # 저장소를 받아오지도 않고 끝난다.
     if: >-
-      !contains(github.event.issue.labels.*.name, 'skip-review') &&
       !contains(github.event.pull_request.labels.*.name, 'skip-review') &&
+      github.event.review.user.login == 'coderabbitai[bot]' &&
       (
-        (github.event_name == 'issue_comment' &&
-         github.event.issue.pull_request != null &&
-         github.event.comment.user.login == 'coderabbitai[bot]') ||
-        (github.event_name == 'pull_request_review' &&
-         github.event.review.user.login == 'coderabbitai[bot]')
+        contains(github.event.review.body, 'Actionable comments posted') ||
+        contains(github.event.review.body, 'Walkthrough') ||
+        github.event.review.state == 'changes_requested' ||
+        github.event.review.state == 'approved'
       )
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -45,18 +47,21 @@ jobs:
       - name: 이슈 키 추출
         id: parse
         env:
-          BODY: ${{ github.event.comment.body || github.event.review.body }}
-          PR_NUM: ${{ github.event.issue.number || github.event.pull_request.number }}
-          PR_TITLE: ${{ github.event.issue.title || github.event.pull_request.title }}
-          PR_URL: ${{ github.event.issue.html_url || github.event.pull_request.html_url }}
+          BODY: ${{ github.event.review.body }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
           STATE: ${{ github.event.review.state }}
         run: |
           set -uo pipefail
 
-          # 요약 코멘트만 중계한다. 인라인 잡담까지 보내면 노이즈가 된다.
-          if ! grep -qiE 'walkthrough|summary|actionable comments|review' <<<"$BODY"; then
+          # **요약을 담은 리뷰에만 반응한다.** 이전 조건의 `review` 는 거의 모든
+          # 본문에 들어 있어 사실상 필터가 아니었다 — 리뷰 16건 중 3건만 요약이다.
+          # 승인·변경요청은 본문이 없어도 결론이라 함께 중계한다.
+          if ! grep -qiE 'actionable comments posted|walkthrough' <<<"$BODY" \
+             && [[ "$STATE" != "changes_requested" && "$STATE" != "approved" ]]; then
             echo "relay=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::요약이 아닌 코멘트 — 건너뛴다"
+            echo "::notice::요약이 아닌 리뷰 — 건너뛴다"
             exit 0
           fi
           echo "relay=true" >> "$GITHUB_OUTPUT"
@@ -89,7 +94,7 @@ jobs:
         id: jira
         if: steps.parse.outputs.relay == 'true'
         env:
-          TITLE: ${{ github.event.issue.title || github.event.pull_request.title }}
+          TITLE: ${{ github.event.pull_request.title }}
         run: |
           set -uo pipefail
           key=$(grep -oE '(^|[^A-Za-z0-9_])CY-[0-9]+' <<<"$TITLE" | grep -oE 'CY-[0-9]+' | head -1 || true)
@@ -102,14 +107,14 @@ jobs:
           status: ${{ steps.parse.outputs.status }}
           title: >-
             CodeRabbit — ${{ steps.parse.outputs.verdict }}
-            (PR #${{ github.event.issue.number || github.event.pull_request.number }})
+            (PR #${{ github.event.pull_request.number }})
           text: |
-            *${{ github.event.issue.title || github.event.pull_request.title }}*
+            *${{ github.event.pull_request.title }}*
             ${{ steps.parse.outputs.excerpt }}
           fields: |
             지적=${{ steps.parse.outputs.count }}건
             Jira=${{ steps.jira.outputs.key || '없음' }}
-          link-url: ${{ github.event.issue.html_url || github.event.pull_request.html_url }}
+          link-url: ${{ github.event.pull_request.html_url }}
           link-text: PR 열기
 
       # 지적이 있을 때만. 키가 비면 부르지 않는다 — 빈 키로 부르면 실패가
@@ -118,12 +123,12 @@ jobs:
           steps.parse.outputs.relay == 'true' &&
           steps.parse.outputs.count != '0' &&
           steps.jira.outputs.key != ''
-        uses: coupon-yaho/cy-ci-actions/actions/jira@v1
+        uses: coupon-yaho/cy-ci-actions/actions/jira@c5d6391379ae34d56894538027ff3631ea4923a2  # v1
         with:
           issue-key: ${{ steps.jira.outputs.key }}
           comment: >-
             CodeRabbit 리뷰: ${{ steps.parse.outputs.verdict }} —
-            [PR #${{ github.event.issue.number || github.event.pull_request.number }}](${{ github.event.issue.html_url || github.event.pull_request.html_url }})
+            [PR #${{ github.event.pull_request.number }}](${{ github.event.pull_request.html_url }})
           base-url: ${{ secrets.ATLASSIAN_BASE_URL }}
           email: ${{ secrets.ATLASSIAN_USER_EMAIL }}
           token: ${{ secrets.ATLASSIAN_API_TOKEN }}

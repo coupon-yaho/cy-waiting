@@ -43,6 +43,8 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    // 도메인 순수성은 리뷰로 못 지킨다. 한 번 깨지면 조용히 번진다.
+    testImplementation 'com.tngtech.archunit:archunit-junit5:1.3.0'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
@@ -149,5 +151,7 @@ pitest {
     excludedClasses = ['com.kafkick.waiting.*Application*']
     mutationThreshold = 90          // 생존 ≤ 10%
     timestampedReports = false
+    // XML 이 있어야 생존 뮤턴트를 기계로 짚는다. HTML 만 두면 사람이 눈으로 센다.
+    outputFormats = ['HTML', 'XML']
     junit5PluginVersion = '1.2.1'
 }

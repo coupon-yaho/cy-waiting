@@ -20,8 +20,8 @@ Spring WebFlux 기반 **적응형 대기열 게이트웨이**. 뒷단은 쿠폰 
 | R4 | 피크 100K / 동시 대기 20,000 |
 | R5 | **장애 진입·유지·회복 전 구간에서 정합성과 공정성 유지** |
 
-**현재 상태**: 제로베이스 재작성 중. **Phase 1(Foundation) 착수.**
-브랜치는 `feature/CY-18-foundation` (에픽 단위 — WF-3 예외).
+**현재 상태**: 제로베이스 재작성 중. **Phase 2(Domain Core) 종료 판정.**
+Phase 1 은 닫혔다. 브랜치는 태스크 단위로 딴다 (WF-3).
 진행 상황은 [plan/README.md](plan/README.md) 2절, 저장소 소개는 [README.md](README.md).
 
 ---
@@ -88,7 +88,7 @@ waiting/
 │   ├── workflows/_*.yml               ← 재사용 워크플로 (잡 단위)
 │   └── workflows/{pr,main,nightly}.yml ← 진입점
 ├── .coderabbit.yaml                   ← PR 리뷰 규칙 (ai/rules/ 를 참조)
-└── src/                               ← (Phase 1에서 생성)
+└── src/                               ← 순수 도메인 (Phase 2)
 ```
 
 **`ai/` 와 `.claude/` 의 분담**

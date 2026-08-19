@@ -8,6 +8,8 @@
 
 | ID | 날짜 | 종류 | 제목 | 확신 | 승격 |
 |---|---|---|---|---|---|
+| [AIJ-0019](2026/08/AIJ-0019-library-first.md) | 2026-08-19 | decision | 라이브러리를 먼저 본다 — 안 쓴 이유를 남긴다 | medium | DS-8 |
+| [AIJ-0018](2026/08/AIJ-0018-enqueue.md) | 2026-08-19 | implement | 큐 등록 — 순서가 곧 정책이다 | high | — |
 | [AIJ-0017](2026/08/AIJ-0017-clock-monotonic.md) | 2026-08-19 | implement | 시계가 뒤로 가도 추월시키지 않는다 | high | — |
 | [AIJ-0016](2026/08/AIJ-0016-workflow-hygiene.md) | 2026-08-19 | implement | 리뷰 중계가 코멘트마다 돌던 것 | high | — |
 | [AIJ-0015](2026/08/AIJ-0015-key-scheme-and-shard-hash.md) | 2026-08-19 | implement | 키 스킴 — 한 번 정하면 못 바꾸는 것 | high | — |

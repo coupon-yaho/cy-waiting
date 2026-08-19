@@ -1,12 +1,15 @@
 -- 큐 등록. 조회와 등록을 나누면 새로고침 연타에 항목이 둘 생긴다.
 --
--- KEYS[1]  queue:{cid}      ZSET. score = Redis TIME 의 마이크로초
--- KEYS[2]  maxscore:{cid}   시계 역행 방어용 바닥값
+-- KEYS[1]  queue:{cid}          ZSET. score = Redis TIME 의 마이크로초
+-- KEYS[2]  maxscore:{cid}       시계 역행 방어용 바닥값
+-- KEYS[3]  alive:{cid}:{member} 생존 신호. 폴링이 곧 하트비트다
 -- ARGV[1]  memberId
 -- ARGV[2]  maxscore TTL(초). 양의 정수
+-- ARGV[3]  alive TTL(초). 양의 정수. 폴링 간격에서 나온 값이라 주입받는다
+-- ARGV[4]  큐 길이 상한. 0 이면 상한 없음
 --
 -- 반환  {score, floorApplied, alreadyQueued}
---   score          이 사람의 순번
+--   score          이 사람의 순번. 거부되면 '-1'
 --   floorApplied   바닥값이 적용됐는가. 1 이면 시계가 뒤로 갔다는 뜻이다
 --   alreadyQueued  이미 줄에 있었는가. 1 이면 순번을 그대로 돌려준 것이다
 --
@@ -19,16 +22,40 @@
 -- **쓰기 전에 인자를 검증한다.** Lua 는 중간 오류를 되돌리지 않는다 —
 -- ZADD 뒤에서 SET 이 터지면 "같이 남거나 같이 사라진다" 는 계약이 깨지고
 -- maxscore 없는 ZSET 이 남는다.
-local ttl = tonumber(ARGV[2])
-if ttl == nil or ttl < 1 or ttl ~= math.floor(ttl) then
-    return redis.error_reply('TTL 은 양의 정수여야 한다: ' .. tostring(ARGV[2]))
+local function positive_int(value, name)
+    local n = tonumber(value)
+    if n == nil or n < 1 or n ~= math.floor(n) then
+        return nil, name .. ' 은 양의 정수여야 한다: ' .. tostring(value)
+    end
+    return n
+end
+
+local scoreTtl, err = positive_int(ARGV[2], 'maxscore TTL')
+if not scoreTtl then return redis.error_reply(err) end
+
+local aliveTtl
+aliveTtl, err = positive_int(ARGV[3], 'alive TTL')
+if not aliveTtl then return redis.error_reply(err) end
+
+local maxLen = tonumber(ARGV[4])
+if maxLen == nil or maxLen < 0 or maxLen ~= math.floor(maxLen) then
+    return redis.error_reply('큐 길이 상한은 0 이상 정수여야 한다: ' .. tostring(ARGV[4]))
 end
 
 -- **이미 줄에 있으면 그 순번을 지킨다.** 덮어쓰면 새로고침 연타가 자기
 -- 자신을 뒤로 민다 — 사용자는 기다릴수록 손해라고 배운다.
+--
+-- 상한 검사보다 앞이다. 이미 선 사람을 상한 때문에 쫓아내면, 줄이 길어진
+-- 것이 그 사람 잘못이 아닌데 그가 자리를 잃는다.
 local existing = redis.call('ZSCORE', KEYS[1], ARGV[1])
 if existing then
+    redis.call('SET', KEYS[3], '1', 'EX', aliveTtl)
     return {existing, 0, 1}
+end
+
+-- 2차 방어다. 1차는 도메인이 낡은 스냅샷으로 판정하므로 여기서 한 번 더 본다.
+if maxLen > 0 and redis.call('ZCARD', KEYS[1]) >= maxLen then
+    return {'-1', 0, 0}
 end
 
 local now   = redis.call('TIME')
@@ -41,9 +68,16 @@ if floor >= score then
     applied = 1
 end
 
--- 여기서부터는 둘 다 성공한다. Lua 는 효과 기반 복제라 ZADD 와 SET 이
--- 같이 남거나 같이 사라진다 — maxscore 가 ZSET 보다 뒤처지지 않는다.
+-- **복제 단위로는 함께 움직인다.** Lua 는 효과 기반 복제라 이 스크립트가
+-- 남긴 쓰기는 복제본과 AOF 에 통째로 가거나 통째로 안 간다 — maxscore 가
+-- ZSET 보다 뒤처진 채 복제되는 상태는 없다.
+--
+-- **다만 스크립트 안의 롤백은 없다.** 아래 세 명령 중 하나가 런타임 오류를
+-- 내면 앞의 것은 그대로 남는다. 그래서 실패할 수 있는 것(인자 검증)을 전부
+-- 위로 올려 뒀다 — 여기 도달하면 남는 실패 경로는 메모리 부족뿐이고,
+-- 그건 maxmemory 로 막는다.
 redis.call('ZADD', KEYS[1], score, ARGV[1])
-redis.call('SET', KEYS[2], score, 'EX', ttl)
+redis.call('SET', KEYS[2], score, 'EX', scoreTtl)
+redis.call('SET', KEYS[3], '1', 'EX', aliveTtl)
 
 return {tostring(score), applied, 0}

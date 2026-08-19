@@ -178,4 +178,22 @@ class AdmissionDeciderTest {
         assertThat(passed).isEqualTo(70);
         assertThat(d.decide(request(idle))).isEqualTo(AdmissionDecision.ENQUEUE_RATE_COUPON);
     }
+
+    @Test
+    @DisplayName("줄_길이가_큐_상한과_정확히_같으면_거절한다")
+    void 줄_길이가_큐_상한과_정확히_같으면_거절한다() {
+        // credit 100 · maxEta 100 → 용량 10000. 딱 그만큼 서 있다.
+        // 경계를 초과로만 잡으면 상한을 한 명씩 넘긴다.
+        AdmissionRequest req = request(CouponStates.queueing(100, 500, 10_000));
+
+        assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.REJECT_QUEUE_FULL);
+    }
+
+    @Test
+    @DisplayName("줄_길이가_큐_상한보다_하나_적으면_받는다")
+    void 줄_길이가_큐_상한보다_하나_적으면_받는다() {
+        AdmissionRequest req = request(CouponStates.queueing(100, 500, 9_999));
+
+        assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.ENQUEUE_BACKLOG);
+    }
 }

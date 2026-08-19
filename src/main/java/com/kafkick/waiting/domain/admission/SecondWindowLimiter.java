@@ -64,10 +64,23 @@ public class SecondWindowLimiter {
 
         rollWindow(epochSecond);
 
+        // 두 키가 같으면 예산도 하나다. 따로 차감하면 요청 하나가 2 를 소비해
+        // 상한의 절반만 통과시킨다.
+        if (couponKey.equals(globalKey)) {
+            long cap = Math.min(couponCap, globalCap);
+            if (!hasRoom(couponKey, cap, used.containsKey(couponKey) ? 0 : 1)) {
+                return couponCap <= globalCap
+                        ? AcquireResult.COUPON_EXHAUSTED
+                        : AcquireResult.GLOBAL_EXHAUSTED;
+            }
+            used.merge(couponKey, 1L, Long::sum);
+            return AcquireResult.ACQUIRED;
+        }
+
         // 신규 키가 몇 개 들어오는지 먼저 센다. 하나씩 검사하면 마지막 슬롯
         // 하나를 두 키가 함께 차지해 상한을 넘긴다.
         int incoming = (used.containsKey(couponKey) ? 0 : 1)
-                + (used.containsKey(globalKey) || globalKey.equals(couponKey) ? 0 : 1);
+                + (used.containsKey(globalKey) ? 0 : 1);
 
         if (!hasRoom(couponKey, couponCap, incoming)) {
             return AcquireResult.COUPON_EXHAUSTED;

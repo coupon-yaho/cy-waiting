@@ -86,6 +86,34 @@ class AtomicAcquireTest {
     }
 
     @Test
+    @DisplayName("같은_키를_두_번_차감하지_않는다")
+    void 같은_키를_두_번_차감하지_않는다() {
+        // 요청 하나가 2 를 소비하면 상한 2 에서 한 건만 통과한다.
+        // 반환값만 보면 안 드러난다 — 몇 건이 통과하는지로 잰다.
+        SecondWindowLimiter limiter = SecondWindowLimiter.withMaxKeys(10);
+
+        int passed = 0;
+        for (int i = 0; i < 5; i++) {
+            if (limiter.tryAcquireAll("same", 2, "same", 2, 10) == AcquireResult.ACQUIRED) {
+                passed++;
+            }
+        }
+
+        assertThat(passed).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("같은_키면_두_상한_중_작은_쪽을_쓴다")
+    void 같은_키면_두_상한_중_작은_쪽을_쓴다() {
+        SecondWindowLimiter limiter = SecondWindowLimiter.withMaxKeys(10);
+
+        assertThat(limiter.tryAcquireAll("same", 5, "same", 1, 10))
+                .isEqualTo(AcquireResult.ACQUIRED);
+        assertThat(limiter.tryAcquireAll("same", 5, "same", 1, 10))
+                .isEqualTo(AcquireResult.GLOBAL_EXHAUSTED);
+    }
+
+    @Test
     @DisplayName("맵이_가득_차면_새_키를_받지_않는다")
     void 맵이_가득_차면_새_키를_받지_않는다() {
         SecondWindowLimiter limiter = new SecondWindowLimiter(2);

@@ -37,7 +37,14 @@ public final class RedisTimeBudget {
     }
 
     private void require(Duration actual, Duration budget, String key, String what) {
-        if (actual == null || actual.compareTo(budget) >= 0) {
+        // 0 이나 음수는 예산 안에 들어오지만 값으로는 성립하지 않는다.
+        // 0 은 즉시 실패, 음수는 드라이버에 따라 무한 대기가 된다 — 둘 다
+        // "타임아웃을 설정했다" 는 착각만 남기고 아무것도 안 막는다.
+        if (actual == null || actual.isZero() || actual.isNegative()) {
+            throw new IllegalStateException(
+                    "spring.data.redis.%s 는 양수여야 한다: %s".formatted(key, actual));
+        }
+        if (actual.compareTo(budget) >= 0) {
             throw new IllegalStateException(
                     "spring.data.redis.%s 는 %s(%s)보다 짧아야 한다: %s"
                             .formatted(key, what, budget, actual));

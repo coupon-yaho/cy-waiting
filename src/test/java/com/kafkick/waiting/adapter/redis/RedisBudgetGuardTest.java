@@ -62,4 +62,39 @@ class RedisBudgetGuardTest {
         assertThatThrownBy(() -> RedisTimeBudget.of(props(null, null)).verify())
                 .isInstanceOf(IllegalStateException.class);
     }
+
+    @Test
+    @DisplayName("타임아웃이_0이면_안_뜬다")
+    void 타임아웃이_0이면_안_뜬다() {
+        // 0 은 예산 안이지만 즉시 실패라 아무것도 못 한다.
+        assertThatThrownBy(() -> RedisTimeBudget.of(props(Duration.ZERO, Duration.ofSeconds(1))).verify())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("양수");
+        assertThatThrownBy(() -> RedisTimeBudget.of(props(Duration.ofMillis(500), Duration.ZERO)).verify())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("양수");
+    }
+
+    @Test
+    @DisplayName("타임아웃이_음수면_안_뜬다")
+    void 타임아웃이_음수면_안_뜬다() {
+        // 음수는 드라이버에 따라 무한 대기가 된다 — 막으려던 것이 그대로 난다.
+        assertThatThrownBy(() ->
+                RedisTimeBudget.of(props(Duration.ofMillis(-1), Duration.ofSeconds(1))).verify())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("양수");
+        assertThatThrownBy(() ->
+                RedisTimeBudget.of(props(Duration.ofMillis(500), Duration.ofMillis(-1))).verify())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("양수");
+    }
+
+    @Test
+    @DisplayName("예산_경계_바로_아래는_뜬다")
+    void 예산_경계_바로_아래는_뜬다() {
+        // 경계를 초과로만 잡으면 딱 틱만큼 걸리는 명령이 통과한다.
+        assertThatCode(() -> RedisTimeBudget.of(
+                props(Duration.ofMillis(999), Duration.ofMillis(1999))).verify())
+                .doesNotThrowAnyException();
+    }
 }

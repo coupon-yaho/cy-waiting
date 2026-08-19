@@ -4,6 +4,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.utility.DockerImageName;
+import org.testcontainers.utility.MountableFile;
 
 /**
  * 통합 시험용 레디스. <b>JVM 당 하나만 띄운다.</b>
@@ -21,8 +22,16 @@ public abstract class RedisContainerSupport {
      */
     static final DockerImageName IMAGE = DockerImageName.parse("redis:7.4-alpine");
 
+    /**
+     * <b>운영과 같은 설정으로 띄운다.</b> 기본 설정으로 띄우면 파일만 검사하는
+     * 테스트가 되고, 실제로 도는 레디스의 정책은 아무도 안 본다.
+     */
     @SuppressWarnings("resource")   // JVM 종료까지 살려 둔다 — 재사용이 목적이다
-    static final GenericContainer<?> REDIS = new GenericContainer<>(IMAGE).withExposedPorts(6379);
+    static final GenericContainer<?> REDIS = new GenericContainer<>(IMAGE)
+            .withExposedPorts(6379)
+            .withCopyFileToContainer(
+                    MountableFile.forHostPath("docker/redis.conf"), "/etc/redis/redis.conf")
+            .withCommand("redis-server", "/etc/redis/redis.conf");
 
     static {
         REDIS.start();

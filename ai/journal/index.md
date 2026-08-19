@@ -8,6 +8,7 @@
 
 | ID | 날짜 | 종류 | 제목 | 확신 | 승격 |
 |---|---|---|---|---|---|
+| [AIJ-0017](2026/08/AIJ-0017-clock-monotonic.md) | 2026-08-19 | implement | 시계가 뒤로 가도 추월시키지 않는다 | high | — |
 | [AIJ-0016](2026/08/AIJ-0016-workflow-hygiene.md) | 2026-08-19 | implement | 리뷰 중계가 코멘트마다 돌던 것 | high | — |
 | [AIJ-0015](2026/08/AIJ-0015-key-scheme-and-shard-hash.md) | 2026-08-19 | implement | 키 스킴 — 한 번 정하면 못 바꾸는 것 | high | — |
 | [AIJ-0014](2026/08/AIJ-0014-redis-wiring.md) | 2026-08-19 | implement | 레디스 배선 — 시간 예산을 시동으로 지킨다 | high | — |

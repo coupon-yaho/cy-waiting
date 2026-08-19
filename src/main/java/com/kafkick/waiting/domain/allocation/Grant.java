@@ -1,10 +1,10 @@
 package com.kafkick.waiting.domain.allocation;
 
 /**
- * 배분 결과. 이 쿠폰이 이번 틱에 통과시켜도 되는 양이다.
+ * 배분 결과.
  *
- * @param couponId 배분 단위
- * @param credit   초당 통과 허용량
+ * <p><b>인원이 아니라 초당 속도다.</b> 인원으로 주면 노드가 그것을 언제 쓸지
+ * 각자 정하게 되고, 같은 초에 몰리면 뒷단이 받는 순간 부하가 배분과 무관해진다.
  */
 public record Grant(String couponId, long credit) {
 

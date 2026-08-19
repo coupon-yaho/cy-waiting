@@ -18,7 +18,7 @@ class ShardSplitterTest {
     @Test
     @DisplayName("샤드가_하나면_전량을_그_샤드에_배정한다")
     void 샤드가_하나면_전량을_그_샤드에_배정한다() {
-        ShardSplitter splitter = new SingleShardSplitter();
+        ShardSplitter splitter = SingleShardSplitter.create();
 
         assertThat(splitter.split(new Grant("c1", 500)))
                 .containsExactly(new ShardGrant("c1", 0, 500));
@@ -28,14 +28,14 @@ class ShardSplitterTest {
     @DisplayName("몫이_0이어도_샤드_하나를_돌려준다")
     void 몫이_0이어도_샤드_하나를_돌려준다() {
         // 빈 목록을 주면 호출부가 "이 쿠폰은 없다" 와 구분하지 못한다.
-        assertThat(new SingleShardSplitter().split(new Grant("c1", 0)))
+        assertThat(SingleShardSplitter.create().split(new Grant("c1", 0)))
                 .containsExactly(new ShardGrant("c1", 0, 0));
     }
 
     @Test
     @DisplayName("여러_배분도_각각_한_샤드로_간다")
     void 여러_배분도_각각_한_샤드로_간다() {
-        List<ShardGrant> split = new SingleShardSplitter()
+        List<ShardGrant> split = SingleShardSplitter.create()
                 .splitAll(List.of(new Grant("a", 10), new Grant("b", 20)));
 
         assertThat(split).containsExactly(

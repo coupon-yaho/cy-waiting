@@ -130,9 +130,11 @@ class FairShareAllocatorTest {
     }
 
     @Test
-    @DisplayName("음수_크레딧은_거부한다")
-    void 음수_크레딧은_거부한다() {
-        assertThat(allocate(0, new CouponDemand("a", 1, 1))).containsEntry("a", 0L);
+    @DisplayName("음수_크레딧은_0으로_본다")
+    void 음수_크레딧은_0으로_본다() {
+        // 배분은 틱마다 도는 배경 작업이다. 여기서 예외를 던지면 스케줄러가
+        // 멎고 전 쿠폰의 크레딧이 낡는다 — 잘못된 입력 하나가 전체를 세운다.
+        assertThat(allocate(-100, new CouponDemand("a", 1, 1))).containsEntry("a", 0L);
     }
 
     @Test

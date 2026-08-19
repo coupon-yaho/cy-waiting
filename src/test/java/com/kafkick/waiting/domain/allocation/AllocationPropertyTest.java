@@ -87,8 +87,8 @@ class AllocationPropertyTest {
                     .filter(g -> g.credit() < wantOf(demands, g.couponId()))
                     .count();
 
-            // 나머지는 남길 수 있다. 굶주린 수보다 많이 남으면 배분이 샌 것이다.
-            if (stillHungry > 0 && credit - total >= stillHungry * 2L) {
+            // 굶주린 쿠폰 수만큼 남았다면 각자 1 씩 더 줄 수 있었다는 뜻이다.
+            if (stillHungry > 0 && credit - total >= stillHungry) {
                 wasted++;
             }
         }

@@ -39,7 +39,6 @@ public class PollIntervalPolicy {
         return new PollIntervalPolicy(jitterRatio);
     }
 
-    /** 배수 없이 이 사람의 폴링 간격. */
     public long intervalSec(double etaSec, DoubleSupplier random) {
         return intervalSec(etaSec, random, 1.0);
     }
@@ -70,7 +69,7 @@ public class PollIntervalPolicy {
     }
 
     /** ETA 를 모르면 가장 먼 밴드다 — 모를수록 자주 묻게 하면 안 된다. */
-    private static long bandInterval(double etaSec) {
+    private long bandInterval(double etaSec) {
         if (Double.isNaN(etaSec)) {
             return BAND_INTERVALS[BAND_INTERVALS.length - 1];
         }

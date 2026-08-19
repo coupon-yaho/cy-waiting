@@ -10,10 +10,9 @@ import java.util.List;
  */
 public interface ShardSplitter {
 
-    /** 이 쿠폰의 몫을 샤드별로 쪼갠다. 빈 목록은 돌려주지 않는다. */
+    /** 빈 목록을 돌려주지 않는다 — 호출부가 "이 쿠폰은 없다" 와 구분하지 못한다. */
     List<ShardGrant> split(Grant grant);
 
-    /** 여러 쿠폰의 몫을 한꺼번에 쪼갠다. */
     default List<ShardGrant> splitAll(List<Grant> grants) {
         return grants.stream().flatMap(g -> split(g).stream()).toList();
     }

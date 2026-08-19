@@ -12,6 +12,13 @@ public class SingleShardSplitter implements ShardSplitter {
 
     private static final int ONLY_SHARD = 0;
 
+    private SingleShardSplitter() {
+    }
+
+    public static SingleShardSplitter create() {
+        return new SingleShardSplitter();
+    }
+
     @Override
     public List<ShardGrant> split(Grant grant) {
         return List.of(new ShardGrant(grant.couponId(), ONLY_SHARD, grant.credit()));

@@ -23,8 +23,12 @@ public class QueueingHysteresis {
 
     /** 해제 임계가 진입 임계보다 크면 히스테리시스가 아니라 진동 증폭기가 된다. */
     public static QueueingHysteresis of(double enterRatio, double exitRatio, int minHoldTicks) {
-        if (!Double.isFinite(enterRatio) || !Double.isFinite(exitRatio)) {
-            throw new IllegalArgumentException("임계는 유한값이어야 한다");
+        if (!Double.isFinite(enterRatio) || enterRatio < 0
+                || !Double.isFinite(exitRatio) || exitRatio < 0) {
+            // 음수를 허용하면 수요가 0 이어도 load(0) >= enterRatio 가 참이라
+            // 아무도 안 왔는데 대기열이 켜진다.
+            throw new IllegalArgumentException(
+                    "임계는 0 이상 유한값이어야 한다: %s / %s".formatted(enterRatio, exitRatio));
         }
         if (exitRatio > enterRatio) {
             throw new IllegalArgumentException(
@@ -62,7 +66,7 @@ public class QueueingHysteresis {
     }
 
     /** 배수할 수 없는데(용량 0) 수요가 있으면 줄이 맞다. 없으면 부하도 0 이다. */
-    private static double load(long demand, long capacity) {
+    private double load(long demand, long capacity) {
         if (capacity <= 0) {
             return demand > 0 ? Double.POSITIVE_INFINITY : 0;
         }

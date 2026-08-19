@@ -24,12 +24,12 @@ public record CouponDemand(String couponId, long waiting, long stock) {
         }
     }
 
-    /** 이번 틱에 받아도 쓸 수 있는 양. */
+    /** 재고를 넘겨 주면 그 몫은 뒷단이 거절하고, 다른 쿠폰이 못 쓴 채 사라진다. */
     public long want() {
         return Math.min(waiting, stock);
     }
 
-    /** 배분 대상인가. 요구량이 0 이면 줘도 버려진다. */
+    /** 여기가 {@code IDLE ⟹ credit == 0}(I1)의 출처다 — 요구량이 0 이면 못 받는다. */
     public boolean isActive() {
         return want() > 0;
     }

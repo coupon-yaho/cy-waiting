@@ -34,13 +34,14 @@ public final class PollBudgetPlanner {
 
         double rps = 0;
         long placed = 0;
-        double previousEdge = 0;
         for (int i = 0; i < BAND_EDGES.length && placed < waiting; i++) {
-            long inBand = Math.min(
-                    waiting - placed, Math.round((BAND_EDGES[i] - previousEdge) * drainRate));
+            // 누적 상한을 올림으로 잡는다. 반올림하면 배수가 아주 느릴 때
+            // 맨 앞사람(ETA 0)이 첫 밴드에서 빠져 예산을 과소 추정하고,
+            // pollScale 이 안 올라 실제 부하가 예산을 넘는다.
+            long cumulative = Math.min(waiting, (long) Math.ceil(BAND_EDGES[i] * drainRate));
+            long inBand = Math.max(0, cumulative - placed);
             rps += inBand / BAND_INTERVALS[i];
             placed += inBand;
-            previousEdge = BAND_EDGES[i];
         }
         rps += (waiting - placed) / BAND_INTERVALS[BAND_INTERVALS.length - 1];
         return rps;

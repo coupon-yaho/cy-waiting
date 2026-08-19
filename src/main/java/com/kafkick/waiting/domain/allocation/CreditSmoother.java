@@ -64,6 +64,17 @@ public class CreditSmoother {
      */
     public record Snapshot(double value, boolean seeded) {
 
+        public Snapshot {
+            // 이월받은 값이 NaN 이면 그 순간부터 EWMA 가 영영 NaN 이고,
+            // 표시 ETA 도 함께 죽는다 — 리더가 바뀐 뒤에야 드러난다.
+            if (!Double.isFinite(value) || value < 0) {
+                throw new IllegalArgumentException("value 는 0 이상 유한값이어야 한다: " + value);
+            }
+            if (!seeded && value != 0) {
+                throw new IllegalArgumentException("관측 전 상태의 value 는 0 이어야 한다: " + value);
+            }
+        }
+
         public static Snapshot empty() {
             return new Snapshot(0, false);
         }

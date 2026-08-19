@@ -130,4 +130,32 @@ class QueueingHysteresisTest {
         assertThat(h.shouldQueue(100, 100)).isTrue();
         assertThat(h.shouldQueue(99, 100)).isFalse();
     }
+
+    @Test
+    @DisplayName("음수_임계는_거부한다")
+    void 음수_임계는_거부한다() {
+        // 음수를 허용하면 수요가 0 이어도 load(0) >= enterRatio 가 참이라
+        // 아무도 안 왔는데 대기열이 켜진다.
+        org.assertj.core.api.Assertions
+                .assertThatThrownBy(() -> QueueingHysteresis.of(-1, -1, 3))
+                .isInstanceOf(IllegalArgumentException.class);
+        org.assertj.core.api.Assertions
+                .assertThatThrownBy(() -> QueueingHysteresis.of(1.0, -0.1, 3))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("수요가_0이면_대기열을_켜지_않는다")
+    void 수요가_0이면_대기열을_켜지_않는다() {
+        assertThat(QueueingHysteresis.of(1.0, 0.7, 3).shouldQueue(0, 100)).isFalse();
+    }
+
+    @Test
+    @DisplayName("임계_0은_무조건_줄을_세우는_유효한_설정이다")
+    void 임계_0은_무조건_줄을_세우는_유효한_설정이다() {
+        // 운영자가 이 쿠폰만 항상 큐로 돌리는 값이다. 거부하면 그 조작이 막힌다.
+        QueueingHysteresis h = QueueingHysteresis.of(0.0, 0.0, 1);
+
+        assertThat(h.shouldQueue(0, 100)).isTrue();
+    }
 }

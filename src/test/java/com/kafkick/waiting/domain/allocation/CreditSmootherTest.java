@@ -108,4 +108,17 @@ class CreditSmootherTest {
         assertThatThrownBy(() -> CreditSmoother.of(0.2).observe(Double.POSITIVE_INFINITY))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    @DisplayName("깨진_스냅샷은_되살릴_수_없다")
+    void 깨진_스냅샷은_되살릴_수_없다() {
+        // 이월받은 값이 NaN 이면 그 순간부터 EWMA 가 영영 NaN 이고, 리더가
+        // 바뀐 뒤에야 표시 ETA 가 죽은 것으로 드러난다.
+        assertThatThrownBy(() -> new CreditSmoother.Snapshot(Double.NaN, true))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new CreditSmoother.Snapshot(-1, true))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new CreditSmoother.Snapshot(500, false))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
 }

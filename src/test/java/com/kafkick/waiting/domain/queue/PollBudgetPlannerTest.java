@@ -102,4 +102,12 @@ class PollBudgetPlannerTest {
         assertThat(PollBudgetPlanner.expectedPollRps(1000, 1))
                 .isCloseTo(51.67, within(0.1));
     }
+
+    @Test
+    @DisplayName("배수가_아주_느려도_맨_앞사람은_첫_밴드다")
+    void 배수가_아주_느려도_맨_앞사람은_첫_밴드다() {
+        // 반올림하면 이 사람이 먼 밴드로 밀려 예산을 과소 추정하고,
+        // pollScale 이 안 올라 실제 부하가 예산을 넘는다.
+        assertThat(PollBudgetPlanner.expectedPollRps(1, 0.02)).isCloseTo(1.0, within(0.001));
+    }
 }

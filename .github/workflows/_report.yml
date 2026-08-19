@@ -88,7 +88,7 @@ jobs:
       # "알림 실패가 빌드를 깨뜨리지 않는다" 는 전제가 무너진다.
       - id: confluence
         if: inputs.confluence-title != '' && env.HAS_CONFLUENCE == 'true'
-        uses: coupon-yaho/cy-ci-actions/actions/confluence@v1
+        uses: coupon-yaho/cy-ci-actions/actions/confluence@c5d6391379ae34d56894538027ff3631ea4923a2  # v1
         with:
           space-key: ${{ secrets.CONFLUENCE_SPACE_KEY }}
           parent-id: ${{ secrets.CONFLUENCE_PARENT_ID }}
@@ -100,7 +100,7 @@ jobs:
           token: ${{ secrets.ATLASSIAN_API_TOKEN }}
 
       - if: always() && inputs.jira-key != '' && env.HAS_JIRA == 'true'
-        uses: coupon-yaho/cy-ci-actions/actions/jira@v1
+        uses: coupon-yaho/cy-ci-actions/actions/jira@c5d6391379ae34d56894538027ff3631ea4923a2  # v1
         with:
           issue-key: ${{ inputs.jira-key }}
           comment: ${{ inputs.jira-comment }}

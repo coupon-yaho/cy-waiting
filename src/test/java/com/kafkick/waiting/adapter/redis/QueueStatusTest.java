@@ -102,10 +102,12 @@ class QueueStatusTest extends RedisContainerSupport {
     @Test
     @DisplayName("조회하면_생존_TTL이_연장된다")
     void 조회하면_생존_TTL이_연장된다() {
+        // **경계에 붙이지 않는다.** 2초로 줄여 두면 CI 지연 한 번에 키가
+        // 먼저 사라져 갱신이 아예 안 돌고, 그러면 이 시험이 불안정해진다.
         enqueue("m0");
-        redis.expire(alive("m0"), Duration.ofSeconds(2)).block(WAIT);
+        redis.expire(alive("m0"), Duration.ofSeconds(10)).block(WAIT);
 
-        status("m0");
+        assertThat(state(status("m0"))).isEqualTo("WAITING");
 
         assertThat(redis.getExpire(alive("m0")).block(WAIT))
                 .isGreaterThan(Duration.ofSeconds(20));
@@ -200,6 +202,10 @@ class QueueStatusTest extends RedisContainerSupport {
                 .rootCause()
                 .hasMessageContaining("alive TTL");
 
+        // 쓰기 대상 전부를 본다. 하나만 보면 ZREM 이나 HSET 이 먼저
+        // 일어난 회귀를 통과시킨다.
         assertThat(redis.hasKey(alive("m0")).block(WAIT)).isFalse();
+        assertThat(redis.opsForZSet().score(QUEUE, "m0").block(WAIT)).isNotNull();
+        assertThat(redis.opsForHash().hasKey(GRACE, "m0").block(WAIT)).isFalse();
     }
 }

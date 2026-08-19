@@ -87,8 +87,10 @@ class GraceReentryTest extends RedisContainerSupport {
 
         enqueue("leaver");
 
-        assertThat(rankOf("waiter1")).isLessThanOrEqualTo(before1);
-        assertThat(rankOf("waiter2")).isLessThanOrEqualTo(before2);
+        // 이 시퀀스에서는 아무도 빠지지 않으므로 순위는 **그대로**여야 한다.
+        // 이하로 두면 예기치 않은 삭제나 재정렬도 통과시킨다.
+        assertThat(rankOf("waiter1")).isEqualTo(before1);
+        assertThat(rankOf("waiter2")).isEqualTo(before2);
     }
 
     @Test

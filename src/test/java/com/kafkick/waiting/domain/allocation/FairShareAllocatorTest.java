@@ -17,8 +17,10 @@ import org.junit.jupiter.api.Test;
  */
 class FairShareAllocatorTest {
 
+    private final FairShareAllocator allocator = FairShareAllocator.create();
+
     private Map<String, Long> allocate(long globalCredit, CouponDemand... demands) {
-        return FairShareAllocator.allocate(globalCredit, List.of(demands)).stream()
+        return allocator.allocate(globalCredit, List.of(demands)).stream()
                 .collect(Collectors.toMap(Grant::couponId, Grant::credit));
     }
 
@@ -141,7 +143,7 @@ class FairShareAllocatorTest {
     @DisplayName("요구량이_같으면_모두_같은_몫을_받는다")
     void 요구량이_같으면_모두_같은_몫을_받는다() {
         // 앞쪽 쿠폰이 유리해지면 배분이 등록 순서에 좌우된다.
-        List<Grant> grants = FairShareAllocator.allocate(1000, List.of(
+        List<Grant> grants = allocator.allocate(1000, List.of(
                 new CouponDemand("a", 10_000, 10_000),
                 new CouponDemand("b", 10_000, 10_000)));
 
@@ -153,7 +155,7 @@ class FairShareAllocatorTest {
     @DisplayName("같은_입력은_항상_같은_결과를_낸다")
     void 같은_입력은_항상_같은_결과를_낸다() {
         // 노드마다 다른 답을 내면 총합이 전역 크레딧을 넘는다.
-        Function<Integer, List<Grant>> run = i -> FairShareAllocator.allocate(997, List.of(
+        Function<Integer, List<Grant>> run = i -> allocator.allocate(997, List.of(
                 new CouponDemand("a", 300, 300),
                 new CouponDemand("b", 700, 700),
                 new CouponDemand("c", 5, 5)));

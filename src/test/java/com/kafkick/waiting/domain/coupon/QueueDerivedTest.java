@@ -42,6 +42,22 @@ class QueueDerivedTest {
     }
 
     @Test
+    @DisplayName("곱셈이_넘치면_최대값으로_막는다")
+    void 곱셈이_넘치면_최대값으로_막는다() {
+        // 넘치면 음수가 되어 큐 상한이 사실상 0 — 전원 거절이 된다.
+        CouponState s = CouponState.queueing(Long.MAX_VALUE / 2, 500, 3000);
+
+        assertThat(s.queueCapacity(1000)).isEqualTo(Long.MAX_VALUE);
+    }
+
+    @Test
+    @DisplayName("허용_ETA가_0이하면_용량은_0이다")
+    void 허용_ETA가_0이하면_용량은_0이다() {
+        assertThat(CouponState.queueing(100, 500, 3000).queueCapacity(0)).isZero();
+        assertThat(CouponState.queueing(100, 500, 3000).queueCapacity(-1)).isZero();
+    }
+
+    @Test
     @DisplayName("credit이_0이면_큐_용량도_0이다")
     void credit이_0이면_큐_용량도_0이다() {
         // 배수할 수 없는데 줄을 받으면 갇힌 사람만 늘어난다.

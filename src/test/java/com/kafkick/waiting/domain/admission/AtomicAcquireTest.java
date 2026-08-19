@@ -76,6 +76,16 @@ class AtomicAcquireTest {
     }
 
     @Test
+    @DisplayName("쿠폰키와_전역키가_같아도_슬롯을_이중으로_세지_않는다")
+    void 쿠폰키와_전역키가_같아도_슬롯을_이중으로_세지_않는다() {
+        // 같은 키면 신규 슬롯은 하나다. 둘로 세면 자리가 있는데도 거부한다.
+        SecondWindowLimiter limiter = SecondWindowLimiter.withMaxKeys(1);
+
+        assertThat(limiter.tryAcquireAll("same", 10, "same", 10, 10))
+                .isEqualTo(AcquireResult.ACQUIRED);
+    }
+
+    @Test
     @DisplayName("맵이_가득_차면_새_키를_받지_않는다")
     void 맵이_가득_차면_새_키를_받지_않는다() {
         SecondWindowLimiter limiter = new SecondWindowLimiter(2);

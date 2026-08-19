@@ -3,8 +3,8 @@ package com.kafkick.waiting.domain.coupon;
 /**
  * 쿠폰이 <b>지금 실제로</b> 어떤 상태인가. 기계가 관측한 값이다.
  *
- * <p>운영자가 정한 정책({@link QueueMode})과 섞지 않는다. 섞으면 "붐빈다"와
- * "줄을 세우기로 했다"를 구분할 수 없다.
+ * <p>정책({@link QueueMode})과 섞지 않는다 — 섞으면 "붐빈다"와 "줄을 세우기로
+ * 했다"를 구분할 수 없다.
  */
 public enum RuntimeState {
 

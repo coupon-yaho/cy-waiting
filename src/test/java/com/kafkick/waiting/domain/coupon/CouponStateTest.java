@@ -33,8 +33,10 @@ class CouponStateTest {
         @Test
         @DisplayName("IDLE_이고_credit이_0이면_생성된다")
         void IDLE_이고_credit이_0이면_생성된다() {
-            assertThat(new CouponState(QueueMode.ADAPTIVE, RuntimeState.IDLE, 0, 500, 0, 1.0))
-                    .isNotNull();
+            CouponState s = new CouponState(QueueMode.ADAPTIVE, RuntimeState.IDLE, 0, 500, 0, 1.0);
+
+            assertThat(s.runtime()).isEqualTo(RuntimeState.IDLE);
+            assertThat(s.credit()).isZero();
         }
     }
 
@@ -85,8 +87,10 @@ class CouponStateTest {
         @Test
         @DisplayName("대기자가_0이고_CLOSED면_생성된다")
         void 대기자가_0이고_CLOSED면_생성된다() {
-            assertThat(new CouponState(QueueMode.ADAPTIVE, RuntimeState.CLOSED, 0, 0, 0, 1.0))
-                    .isNotNull();
+            CouponState s = new CouponState(QueueMode.ADAPTIVE, RuntimeState.CLOSED, 0, 0, 0, 1.0);
+
+            assertThat(s.runtime()).isEqualTo(RuntimeState.CLOSED);
+            assertThat(s.waiting()).isZero();
         }
     }
 
@@ -110,6 +114,41 @@ class CouponStateTest {
         void pollScale이_1이상이면_그대로_둔다() {
             assertThat(new CouponState(QueueMode.ADAPTIVE, RuntimeState.IDLE, 0, 500, 0, 2.5).pollScale())
                     .isEqualTo(2.5);
+        }
+    }
+
+    // RULE-EXCEPTION(JS-14): @Nested 는 JUnit 5 가 비-static 을 요구한다.
+    // 규칙의 근거는 바깥 인스턴스 누수인데, 테스트 인스턴스는 실행 후 버려져 해당 없다.
+    @Nested
+    @DisplayName("IDLE 은 줄이 없다")
+    class IDLE에줄이없다 {
+
+        @Test
+        @DisplayName("IDLE인데_대기자가_있으면_생성에_실패한다")
+        void IDLE인데_대기자가_있으면_생성에_실패한다() {
+            // I4 의 대우로는 이 조합이 안 막힌다. 그대로 두면 판정 8번이
+            // 통과시켜 줄 선 사람을 추월한다.
+            assertThatThrownBy(
+                            () -> new CouponState(QueueMode.ADAPTIVE, RuntimeState.IDLE, 0, 500, 5000, 1.0))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("waiting");
+        }
+    }
+
+    // RULE-EXCEPTION(JS-14): @Nested 는 JUnit 5 가 비-static 을 요구한다.
+    // 규칙의 근거는 바깥 인스턴스 누수인데, 테스트 인스턴스는 실행 후 버려져 해당 없다.
+    @Nested
+    @DisplayName("pollScale 유한값")
+    class pollScale유한값 {
+
+        @Test
+        @DisplayName("pollScale이_NaN이면_생성에_실패한다")
+        void pollScale이_NaN이면_생성에_실패한다() {
+            // NaN 은 비교가 전부 false 라 Math.max 를 그냥 통과한다.
+            assertThatThrownBy(
+                            () -> new CouponState(
+                                    QueueMode.ADAPTIVE, RuntimeState.IDLE, 0, 500, 0, Double.NaN))
+                    .isInstanceOf(IllegalArgumentException.class);
         }
     }
 

@@ -19,7 +19,7 @@ public final class CouponStates {
         return CouponState.queueing(credit, remainingStock, waiting);
     }
 
-    /** 배수 중인 쿠폰. */
+    /** 배수 중인 쿠폰. 배분이 대기자를 따라잡아 이번 틱에 다 뺄 수 있는 상태다. */
     public static CouponState draining(long credit, long remainingStock, long waiting) {
         return CouponState.draining(credit, remainingStock, waiting);
     }

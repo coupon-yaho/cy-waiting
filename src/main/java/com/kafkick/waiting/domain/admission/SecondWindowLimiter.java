@@ -6,9 +6,8 @@ import java.util.Map;
 /**
  * 초 단위 고정 윈도우 리미터.
  *
- * <p><b>경로별로 나누지 않는다.</b> 정상 경로와 fail-open 경로가 각자 카운터를 들면
- * 회복 전이 순간 같은 초에 두 상한이 동시에 열려 1.5× 버스트가 나간다(F4).
- * 리미터는 하나고 <b>상한만 인자로</b> 받는다.
+ * <p><b>경로별로 나누지 않는다.</b> 각자 카운터를 들면 회복 전이 순간 두 상한이
+ * 동시에 열려 1.5× 버스트가 나간다(F4). 리미터는 하나고 상한만 인자로 받는다.
  */
 public class SecondWindowLimiter {
 
@@ -18,7 +17,12 @@ public class SecondWindowLimiter {
     private final Map<String, Long> used = new HashMap<>();
     private long windowSecond = Long.MIN_VALUE;
 
-    public SecondWindowLimiter(int maxKeys) {
+    /** 키 상한을 정해 만든다. 0 이하는 1 로 올린다 — 상한이 없는 리미터는 없다. */
+    public static SecondWindowLimiter withMaxKeys(int maxKeys) {
+        return new SecondWindowLimiter(maxKeys);
+    }
+
+    SecondWindowLimiter(int maxKeys) {
         this.maxKeys = Math.max(1, maxKeys);
     }
 
@@ -29,7 +33,7 @@ public class SecondWindowLimiter {
      * @param cap          이번 판정에 적용할 상한. 경로마다 다른 값이 온다
      * @param epochSecond  주입받은 시각. 도메인은 시계를 부르지 않는다 (DS-1)
      */
-    public boolean tryAcquire(String key, long cap, long epochSecond) {
+    public synchronized boolean tryAcquire(String key, long cap, long epochSecond) {
         if (cap <= 0) {
             return false;
         }
@@ -55,15 +59,20 @@ public class SecondWindowLimiter {
      *
      * @return 획득 결과. 실패면 어느 쪽이 부족했는지 담는다
      */
-    public AcquireResult tryAcquireAll(
+    public synchronized AcquireResult tryAcquireAll(
             String couponKey, long couponCap, String globalKey, long globalCap, long epochSecond) {
 
         rollWindow(epochSecond);
 
-        if (!hasRoom(couponKey, couponCap)) {
+        // 신규 키가 몇 개 들어오는지 먼저 센다. 하나씩 검사하면 마지막 슬롯
+        // 하나를 두 키가 함께 차지해 상한을 넘긴다.
+        int incoming = (used.containsKey(couponKey) ? 0 : 1)
+                + (used.containsKey(globalKey) || globalKey.equals(couponKey) ? 0 : 1);
+
+        if (!hasRoom(couponKey, couponCap, incoming)) {
             return AcquireResult.COUPON_EXHAUSTED;
         }
-        if (!hasRoom(globalKey, globalCap)) {
+        if (!hasRoom(globalKey, globalCap, incoming)) {
             return AcquireResult.GLOBAL_EXHAUSTED;
         }
 
@@ -73,11 +82,11 @@ public class SecondWindowLimiter {
     }
 
     /** 지금 들고 있는 키 수. 상한이 지켜지는지 시험하려고 노출한다. */
-    public int size() {
+    public synchronized int size() {
         return used.size();
     }
 
-    private boolean hasRoom(String key, long cap) {
+    private boolean hasRoom(String key, long cap, int incomingKeys) {
         if (cap <= 0) {
             return false;
         }
@@ -85,7 +94,7 @@ public class SecondWindowLimiter {
         if (current >= cap) {
             return false;
         }
-        return current != 0 || used.size() < maxKeys;
+        return current != 0 || used.size() + incomingKeys <= maxKeys;
     }
 
     /**
@@ -95,7 +104,9 @@ public class SecondWindowLimiter {
      * 메모리다. 초 하나만 들고 바뀌면 전부 버리는 쪽이 싸다.
      */
     private void rollWindow(long epochSecond) {
-        if (epochSecond == windowSecond) {
+        // == 이 아니라 > 다. 노드 간 시계 스큐나 NTP 보정으로 과거 초가 들어오면
+        // == 비교로는 현재 윈도우를 통째로 날려 예산이 리셋된다. 뒤로 가지 않는다.
+        if (epochSecond <= windowSecond) {
             return;
         }
         windowSecond = epochSecond;

@@ -55,6 +55,13 @@ public record CouponState(
                             .formatted(credit, waiting));
         }
 
+        // I1' — IDLE 인데 줄이 서 있으면 판정 8번(runtime != IDLE)이 통과시켜
+        // 줄 선 사람을 추월한다. I4 의 대우로는 이 조합이 막히지 않는다.
+        if (runtime == RuntimeState.IDLE && waiting != 0) {
+            throw new IllegalArgumentException(
+                    "IDLE 이면 waiting 이 0 이어야 한다: waiting=%d".formatted(waiting));
+        }
+
         // I4 — 줄이 비었는데 큐 상태라는 것은 유령이다. 판정 사다리 9번이
         // IDLE 쿠폰만 받는다는 논증이 이 불변식의 대우에 걸려 있다.
         if (waiting == 0
@@ -62,6 +69,12 @@ public record CouponState(
                 && runtime != RuntimeState.CLOSED) {
             throw new IllegalArgumentException(
                     "waiting 이 0 이면 IDLE 또는 CLOSED 여야 한다: runtime=%s".formatted(runtime));
+        }
+
+        // NaN 은 비교가 전부 false 라 Math.max 를 그냥 통과한다. 그대로 두면
+        // 폴링 간격 계산이 조용히 NaN 이 되어 대기자가 폴링을 멈춘다.
+        if (Double.isNaN(pollScale)) {
+            throw new IllegalArgumentException("pollScale 이 NaN 이다");
         }
 
         // I6 — 거부가 아니라 정규화다. 1 미만은 폴링을 더 자주 하라는 뜻이
@@ -101,6 +114,10 @@ public record CouponState(
      * 노드 몫의 전역 크레딧으로 잰다.
      */
     public long idleCap(SnapshotMeta meta, double idleCreditRatio) {
+        if (!Double.isFinite(idleCreditRatio) || idleCreditRatio < 0) {
+            throw new IllegalArgumentException(
+                    "idleCreditRatio 는 0 이상 유한값이어야 한다: %s".formatted(idleCreditRatio));
+        }
         long perNode = meta.globalCredit() / meta.effectiveGatewayCount();
         return (long) (perNode * idleCreditRatio);
     }
@@ -124,7 +141,15 @@ public record CouponState(
      * <p>배수할 수 없는데(credit 0) 줄을 받으면 갇힌 사람만 늘어난다.
      */
     public long queueCapacity(long maxEtaSec) {
-        return credit * maxEtaSec;
+        if (maxEtaSec <= 0) {
+            return 0;
+        }
+        // 곱셈이 넘치면 음수가 되어 큐 상한이 사실상 0 이 된다 — 전원 거절이다.
+        try {
+            return Math.multiplyExact(credit, maxEtaSec);
+        } catch (ArithmeticException e) {
+            return Long.MAX_VALUE;
+        }
     }
 
     /** 아무도 줄을 서지 않았다. 배분을 못 받았으므로 credit 은 0 이다. */

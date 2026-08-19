@@ -1,6 +1,7 @@
 package com.kafkick.waiting.domain.coupon;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.DisplayName;
@@ -58,7 +59,24 @@ class AdmissionCapTest {
 
         long total = IntStream.range(0, 20).mapToLong(node -> s.contendedCap(20, node)).sum();
 
-        assertThat(total).isLessThanOrEqualTo(10);
+        assertThat(total).isEqualTo(10);
+        // 앞쪽 10개 노드가 1 씩, 나머지는 0
+        assertThat(s.contendedCap(20, 0)).isEqualTo(1);
+        assertThat(s.contendedCap(20, 9)).isEqualTo(1);
+        assertThat(s.contendedCap(20, 10)).isZero();
+        assertThat(s.contendedCap(20, 19)).isZero();
+    }
+
+    @Test
+    @DisplayName("유휴비율이_음수나_비유한값이면_거부한다")
+    void 유휴비율이_음수나_비유한값이면_거부한다() {
+        CouponState s = CouponState.idle(500);
+        SnapshotMeta meta = new SnapshotMeta(1000, 10);
+
+        assertThatThrownBy(() -> s.idleCap(meta, -0.1))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> s.idleCap(meta, Double.NaN))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test

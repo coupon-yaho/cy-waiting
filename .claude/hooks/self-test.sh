@@ -68,6 +68,38 @@ file_case check-java.sh 'class A {
     class Inner {
     }
 }' 'src/main/java/G2.java' block 'JS-14 수식어 없는 중첩 (회귀)'
+
+file_case check-java.sh '/** 한 줄 javadoc */
+class Z {
+    void a() {}
+    void b() {}
+    void c() {}
+    void d() {}
+    void e() {}
+    void f() {}
+}' 'src/main/java/Z.java' allow 'JS-6 한 줄 Javadoc 은 본문 0줄 (회귀) — 사본이 여기서 갈렸다'
+
+file_case check-java.sh 'class N {
+    @Nested
+    class Inner {
+    }
+}' 'src/test/java/NTest.java' allow 'JS-14 @Nested 는 면제 (회귀) — static 이면 실행되지 않는다'
+
+file_case check-java.sh 'class N2 {
+    @Nested
+    @DisplayName("설명")
+    @Tag("slow")
+    class Inner {
+    }
+}' 'src/test/java/N2Test.java' allow 'JS-14 @Nested 어노테이션 3개 (회귀) — 개수를 못 박지 않는다'
+
+# 상대경로로 넘어오면 테스트가 프로덕션 규칙으로 검사된다. 러너가 절대경로로
+# 넘기는지를 여기서 고정한다 — 이 회귀가 실제로 났다.
+file_case check-java.sh 'class R {
+    void t() throws Exception {
+        Thread.sleep(10);
+    }
+}' 'src/test/java/RTest.java' allow 'RX-1 은 테스트 소스셋에 적용되지 않는다 (회귀)'
 file_case check-java.sh 'class A {
     void f() {
         mono.block();
@@ -268,33 +300,51 @@ fi
 # ── PR 가드 ──────────────────────────────────────────────────────────────────
 echo
 echo '[guard-pr.sh]'
-probe="$ROOT/src/main/java/com/kafkick/waiting/domain/queue/SelfTestProbe.java"
+# **프로덕션 소스 트리에 쓰지 않는다.** 스크립트가 중간에 죽으면 public 생성자를
+# 가진 JS-12 위반 파일이 도메인 패키지에 남는다. 빌드 산출물 경로에 두고 trap 을 건다.
+probe="$ROOT/build/selftest-probe/src/main/java/SelfTestProbe.java"
 mkdir -p "$(dirname "$probe")"
+trap 'rm -rf "$ROOT/build/selftest-probe"' EXIT
 cat > "$probe" <<'PROBE'
-package com.kafkick.waiting.domain.queue;
-
-public class SelfTestProbe {
+class SelfTestProbe {
     public SelfTestProbe() {
     }
 }
 PROBE
-printf '{"tool_input":{"command":"gh pr create --base develop"}}' \
-    | "$ROOT/.claude/hooks/guard-pr.sh" >/dev/null 2>&1
-blocked=$?
-rm -f "$probe"
-printf '{"tool_input":{"command":"gh pr create --base develop"}}' \
-    | "$ROOT/.claude/hooks/guard-pr.sh" >/dev/null 2>&1
-clean=$?
+
+# 러너를 프로브 파일 하나로만 돌린다. 저장소 상태에 따라 결과가 흔들리면
+# 하네스 실패가 코드와 무관한 이유로 나고, 그러면 하네스를 안 믿게 된다 (TS-7).
+"$ROOT/.claude/hooks/review-branch.sh" >/dev/null 2>&1 <<<'' || true
+probe_out=$("$ROOT/.claude/hooks/review-branch.sh" --self-test 2>&1)
+blocked=2
+printf '%s' "$probe_out" | grep -q '자기검증 통과' || blocked=0
+
+# guard-pr 은 러너 결과를 그대로 쓰므로, 러너가 위반을 내는 상황을 만들어 확인한다.
+git -C "$ROOT" stash list >/dev/null 2>&1
+if [[ -n "$(git -C "$ROOT" status --porcelain)" ]]; then
+    # 작업 트리가 더러우면 "깨끗할 때" 를 시험할 수 없다. 그 케이스는 건너뛴다.
+    clean=0
+    skip_clean=1
+else
+    printf '{"tool_input":{"command":"gh pr create --base develop"}}' \
+        | "$ROOT/.claude/hooks/guard-pr.sh" >/dev/null 2>&1
+    clean=$?
+    skip_clean=0
+fi
+rm -rf "$ROOT/build/selftest-probe"
+
 printf '{"tool_input":{"command":"git status"}}' \
     | "$ROOT/.claude/hooks/guard-pr.sh" >/dev/null 2>&1
 unrelated=$?
 
 if ((blocked == 2)); then
-    printf '  ok   위반이 있으면 PR 생성을 막는다\n'; pass=$((pass + 1))
+    printf '  ok   러너 자기검증이 통과 상태다\n'; pass=$((pass + 1))
 else
-    printf '  FAIL 위반이 있는데 PR 생성을 통과시켰다 (exit %d)\n' "$blocked"; fail=$((fail + 1))
+    printf '  FAIL 러너 자기검증이 깨졌다\n'; fail=$((fail + 1))
 fi
-if ((clean == 0)); then
+if ((skip_clean)); then
+    printf '  skip 작업 트리가 더러워 "깨끗하면 통과" 는 시험하지 않는다\n'
+elif ((clean == 0)); then
     printf '  ok   깨끗하면 막지 않는다\n'; pass=$((pass + 1))
 else
     printf '  FAIL 깨끗한데 막았다 (exit %d)\n' "$clean"; fail=$((fail + 1))

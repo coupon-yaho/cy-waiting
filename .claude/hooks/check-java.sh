@@ -94,13 +94,18 @@ fi
 # **JUnit 5 의 @Nested 는 제외한다.** 그쪽은 static 이면 아예 실행되지 않는다 —
 # 규칙과 프레임워크가 충돌하는 자리라 규칙이 진다. 여기서 오탐을 내면 사람은
 # 훅을 고치는 대신 우회하고, 그러면 진짜 위반도 같이 지나간다.
-nested_lines=$(grep -nE "^[[:space:]]*@Nested" "$file" 2>/dev/null | cut -d: -f1)
+# @Nested 이후 **선언까지의 연속 어노테이션 줄**을 전부 건너뛴다. 개수를 못
+# 박으면 @Tag 하나 붙는 순간 오탐이 되고, 오탐이 나면 훅이 우회된다.
+nested_class_lines=$(awk '
+    /^[[:space:]]*@Nested([[:space:]]|\(|$)/ { pending=1; next }
+    pending && /^[[:space:]]*@/               { next }
+    pending                                   { print NR; pending=0 }
+' "$file")
 js14=$(scan 'JS-14' \
     '^[0-9]+:[[:space:]]+((public|protected|private|final|abstract)[[:space:]]+)*class[[:space:]]' \
     'static')
-for n in $nested_lines; do
-    # @Nested 바로 다음 줄(또는 @DisplayName 을 사이에 둔 다음 줄)의 선언을 뺀다
-    js14=$(printf '%s\n' "$js14" | grep -vE "^[[:space:]]*$((n + 1)):|^[[:space:]]*$((n + 2)):")
+for n in $nested_class_lines; do
+    js14=$(printf '%s\n' "$js14" | grep -vE "^[[:space:]]*$n:")
 done
 js14=$(printf '%s' "$js14" | grep -v '^[[:space:]]*$')
 report "JS-14" "중첩 클래스는 static — 바깥 인스턴스를 붙들어 누수를 만든다" "$js14"

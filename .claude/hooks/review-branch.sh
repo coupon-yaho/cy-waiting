@@ -23,7 +23,13 @@ head2() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 # 기존 훅을 그 훅의 입력 형식으로 호출한다.
 run_hook() {
     local hook=$1 file=$2 out
-    out=$(printf '{"tool_input":{"file_path":"%s"}}' "$file" | "$HOOKS/$hook" 2>&1)
+    # **절대경로로 넘긴다.** 훅은 `*/src/test/*` 로 테스트 여부를 가르는데
+    # git 은 선행 슬래시 없는 상대경로를 준다 — 그대로 넘기면 테스트가
+    # 프로덕션 규칙으로 검사되어 오탐이 나고, 동시에 테스트 전용 검사는
+    # 아예 안 돈다. 이미 절대경로면 그대로 둔다.
+    [[ "$file" != /* ]] && file="$PWD/$file"
+    out=$(jq -nc --arg f "$file" '{tool_input:{file_path:$f}}' \
+          | "$HOOKS/$hook" 2>&1)
     [[ -n "$out" ]] && { printf '%s\n' "$out"; return 1; }
     return 0
 }
@@ -41,22 +47,6 @@ check_js12() {
             grep -qE '^\s*public record ' "$file" && continue
             printf '  JS-12 %s:%s public 생성자 — 정적 팩토리를 쓴다\n' "$file" "$n"
           done
-}
-
-# JS-6 · Javadoc 본문 5줄 초과
-check_js6() {
-    local file=$1
-    awk -v f="$file" '
-        /\/\*\*/ { inb=1; n=0; start=NR; next }
-        inb && /\*\// {
-            if (n > 5) printf "  JS-6 %s:%d Javadoc 본문 %d줄 — 5줄 이내\n", f, start, n
-            inb=0; next
-        }
-        inb {
-            line=$0; sub(/^[[:space:]]*\*[[:space:]]?/, "", line)
-            if (line ~ /[^[:space:]]/ && line !~ /^@/) n++
-        }
-    ' "$file"
 }
 
 # TS-11 · 약한 단언
@@ -112,12 +102,11 @@ review_files() {
         local out=""
         for f in "${java[@]}"; do
             case "$f" in
-                */src/test/*|*/src/testFixtures/*)
+                src/test/*|src/testFixtures/*|*/src/test/*|*/src/testFixtures/*)
                     out+=$(check_ts11 "$f")$'\n'
                     out+=$(check_test_misc "$f")$'\n' ;;
                 *)
                     out+=$(check_js12 "$f")$'\n'
-                    out+=$(check_js6 "$f")$'\n'
                     out+=$(check_ex1 "$f")$'\n'
                     out+=$(check_rx2 "$f")$'\n' ;;
             esac
@@ -149,7 +138,7 @@ self_test() {
     }
     probe "public 생성자" "src/main/java/A.java" \
         $'class A {\n    public A(int x) {}\n}\n' "JS-12"
-    probe "Javadoc 6줄" "src/main/java/B.java" \
+    probe "Javadoc 6줄 (check-java.sh 위임)" "src/main/java/B.java" \
         $'/**\n * 1\n * 2\n * 3\n * 4\n * 5\n * 6\n */\nclass B {}\n' "JS-6"
     probe "약한 단언" "src/test/java/CTest.java" \
         $'class CTest { void t() { assertThat(x).isNotEmpty(); } }\n' "TS-11"
@@ -159,6 +148,30 @@ self_test() {
         $'class E { void f() { throw new SoldOutException(); } }\n' "EX-1"
     probe "Flux.interval" "src/main/java/F.java" \
         $'class F { void f() { Flux.interval(d).subscribe(); } }\n' "RX-2"
+    # **상대경로 회귀.** git 은 선행 슬래시 없는 경로를 준다. 절대경로로
+    # 안 바꾸면 테스트 전용 검사가 아예 안 돌고(미탐), 동시에 테스트가
+    # 프로덕션 규칙으로 검사된다(오탐). 둘 다 실제로 났다.
+    #
+    # 저장소 안의 빌드 경로에 둔다 — 러너가 git 루트에서 도는 것을 전제하므로
+    # 저장소 밖으로 나가면 재현이 안 된다.
+    local relprobe="build/review-selftest/src/test/java/RelTest.java"
+    mkdir -p "$(dirname "$relprobe")"
+    printf 'class RelTest {\n    void t() throws Exception {\n        Thread.sleep(10);\n    }\n}\n' \
+        > "$relprobe"
+    local rel; rel=$(review_files "$relprobe" 2>&1)
+    rm -rf build/review-selftest
+    if printf '%s' "$rel" | grep -q "TS-4"; then
+        printf '  ✓ 상대경로에서도 테스트 검사가 돈다\n'
+    else
+        printf '  ✗ 상대경로에서 테스트 검사가 안 돈다 (미탐)\n'; fail=1
+    fi
+    # 헤더 줄에도 규칙 ID 가 적혀 있다. 지적 형식([RX-1])으로만 본다.
+    if printf '%s' "$rel" | grep -q "\[RX-1\]"; then
+        printf '  ✗ 테스트를 프로덕션 규칙으로 검사한다 (오탐)\n'; fail=1
+    else
+        printf '  ✓ 테스트를 프로덕션 규칙으로 검사하지 않는다\n'
+    fi
+
     rm -rf "$tmp"
     findings=0
     return $fail
@@ -170,7 +183,18 @@ if [[ "${1:-}" == "--self-test" ]]; then
 fi
 
 BASE="${1:-origin/develop}"
-git rev-parse --verify "$BASE" >/dev/null 2>&1 || BASE=develop
+if ! git rev-parse --verify "$BASE" >/dev/null 2>&1; then
+    # 폴백을 조용히 타면 브랜치 커밋을 하나도 안 보고 "통과" 를 낸다.
+    # 게이트가 조용히 무력화되는 것이라, 못 찾으면 알리고 막는다.
+    if git rev-parse --verify develop >/dev/null 2>&1; then
+        say "기준 $BASE 을 못 찾아 develop 으로 본다"
+        BASE=develop
+    else
+        say "기준 브랜치를 못 찾았다: $BASE"
+        say "  fetch 하거나 기준을 인자로 준다 — 이 상태로는 무엇이 바뀌었는지 알 수 없다"
+        exit 1
+    fi
+fi
 
 # 커밋된 것만 보면 **아직 안 커밋한 위반을 놓친다.** 개발 중에 돌릴 때가
 # 오히려 더 중요하므로 작업 트리까지 합친다.
@@ -194,9 +218,15 @@ head2 "사람·에이전트가 볼 것"
 say "  기계 검사는 형태만 본다. 판정 순서의 타당성, 불변식이 실제로 지켜지는지,"
 say "  픽스처가 도달 불가능한 상태를 만들 수 있는지는 .claude/agents/ 가 본다."
 printf '\n'
-[[ " ${CHANGED[*]} " == *"/domain/"* ]]        && say "  → domain-guardian"
-[[ " ${CHANGED[*]} " == *".lua"* || " ${CHANGED[*]} " == *"/redis/"* ]] && say "  → redis-cluster-checker"
-[[ " ${CHANGED[*]} " == *"/src/test/"* || " ${CHANGED[*]} " == *"/src/testFixtures/"* ]] && say "  → test-quality-reviewer"
+# 경로 판정은 선행 슬래시를 요구하지 않는다 — git 이 주는 형식이 상대경로다.
+all=" ${CHANGED[*]} "
+[[ "$all" == *"/domain/"* ]]                          && say "  → domain-guardian"
+[[ "$all" == *".lua"* || "$all" == *"/redis/"* ]]     && say "  → redis-cluster-checker"
+[[ "$all" == *"src/test/"* || "$all" == *"src/testFixtures/"* ]] && say "  → test-quality-reviewer"
+# 장애·회복 경로는 파일명으로 안 드러난다. 이름에 단서가 있을 때만 권한다.
+[[ "$all" == *"esilience"* || "$all" == *"ircuit"* || "$all" == *"etry"* \
+   || "$all" == *"ailover"* || "$all" == *"eader"* || "$all" == *"haos"* ]] \
+    && say "  → resilience-auditor"
 say "  → style-enforcer (항상)"
 
 printf '\n'

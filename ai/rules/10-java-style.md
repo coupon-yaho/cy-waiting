@@ -298,6 +298,10 @@ private class Accumulator { }
 private static final class Accumulator { }
 ```
 
+**예외는 JUnit 5 의 `@Nested` 하나다.** 그쪽은 static 이면 아예 실행되지
+않는다 — 규칙과 프레임워크가 충돌하는 자리라 규칙이 진다. 훅도 면제하므로
+`RULE-EXCEPTION` 주석을 달 필요가 없다.
+
 non-static 내부 클래스는 바깥 인스턴스를 잡고 있어, 그 참조가 배경 루프나
 컬렉션에 실려 나가면 **바깥 객체 전체가 GC되지 않는다.** 리액티브 체인처럼
 객체가 스레드를 넘나드는 곳에서 특히 위험하다.

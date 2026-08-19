@@ -52,6 +52,7 @@ type·scope 를 영문으로 두는 이유는 Conventional Commits 도구가 그
 ```
 domain  admission  allocation  snapshot  queue  capacity  token
 redis   routing    config      health    chaos  plan      rules
+hooks   ci
 ```
 
 여러 패키지에 걸치면 생략한다.

@@ -23,7 +23,10 @@ RUNNER="$ROOT/.claude/hooks/review-branch.sh"
 # base 를 명령에서 뽑는다. 없으면 develop
 base=$(printf '%s' "$cmd" | grep -oE -e '--base[= ]+[A-Za-z0-9._/-]+' | head -1 \
        | sed -E 's/--base[= ]+//')
-base="origin/${base:-develop}"
+base="${base:-develop}"
+# 이미 접두가 붙어 있으면 겹치지 않게 둔다. origin/origin/develop 이 되면
+# 러너가 폴백을 타고, 폴백마저 없으면 브랜치 커밋을 하나도 안 보고 통과한다.
+[[ "$base" != origin/* ]] && base="origin/$base"
 
 out=$("$RUNNER" "$base" 2>&1)
 status=$?

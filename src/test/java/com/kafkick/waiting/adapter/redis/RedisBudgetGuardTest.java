@@ -26,20 +26,20 @@ class RedisBudgetGuardTest {
     @Test
     @DisplayName("예산_안이면_뜬다")
     void 예산_안이면_뜬다() {
-        RedisConfig config =
-                new RedisConfig(props(Duration.ofMillis(500), Duration.ofSeconds(1)));
+        RedisTimeBudget budget =
+                RedisTimeBudget.of(props(Duration.ofMillis(500), Duration.ofSeconds(1)));
 
         // 예외가 안 나는 것이 단언이다. 경계 바로 안쪽 값을 쓴다.
-        assertThatCode(config::시간_예산을_확인한다).doesNotThrowAnyException();
+        assertThatCode(budget::verify).doesNotThrowAnyException();
     }
 
     @Test
     @DisplayName("명령_타임아웃이_틱_이상이면_안_뜬다")
     void 명령_타임아웃이_틱_이상이면_안_뜬다() {
-        RedisConfig config =
-                new RedisConfig(props(Duration.ofSeconds(1), Duration.ofSeconds(1)));
+        RedisTimeBudget budget =
+                RedisTimeBudget.of(props(Duration.ofSeconds(1), Duration.ofSeconds(1)));
 
-        assertThatThrownBy(config::시간_예산을_확인한다)
+        assertThatThrownBy(budget::verify)
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("timeout");
     }
@@ -47,10 +47,10 @@ class RedisBudgetGuardTest {
     @Test
     @DisplayName("연결_타임아웃이_리스_이상이면_안_뜬다")
     void 연결_타임아웃이_리스_이상이면_안_뜬다() {
-        RedisConfig config =
-                new RedisConfig(props(Duration.ofMillis(500), Duration.ofSeconds(2)));
+        RedisTimeBudget budget =
+                RedisTimeBudget.of(props(Duration.ofMillis(500), Duration.ofSeconds(2)));
 
-        assertThatThrownBy(config::시간_예산을_확인한다)
+        assertThatThrownBy(budget::verify)
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("connect-timeout");
     }
@@ -59,7 +59,7 @@ class RedisBudgetGuardTest {
     @DisplayName("설정이_없으면_안_뜬다")
     void 설정이_없으면_안_뜬다() {
         // 기본값은 무한이다. 무한 대기는 스케줄러를 멎게 한다.
-        assertThatThrownBy(() -> new RedisConfig(props(null, null)).시간_예산을_확인한다())
+        assertThatThrownBy(() -> RedisTimeBudget.of(props(null, null)).verify())
                 .isInstanceOf(IllegalStateException.class);
     }
 }

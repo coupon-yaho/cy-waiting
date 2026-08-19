@@ -320,9 +320,15 @@ blocked=2
 printf '%s' "$probe_out" | grep -q '자기검증 통과' || blocked=0
 
 # guard-pr 은 러너 결과를 그대로 쓰므로, 러너가 위반을 내는 상황을 만들어 확인한다.
-git -C "$ROOT" stash list >/dev/null 2>&1
-if [[ -n "$(git -C "$ROOT" status --porcelain)" ]]; then
-    # 작업 트리가 더러우면 "깨끗할 때" 를 시험할 수 없다. 그 케이스는 건너뛴다.
+# 기준 브랜치가 없으면 러너가 "무엇이 바뀌었는지 알 수 없다" 로 차단한다.
+# 그게 맞는 동작이지만, **하네스가 저장소 ref 상태에 의존하면 안 된다** —
+# 얕은 체크아웃에서 하네스가 코드와 무관한 이유로 깨진다 (TS-7).
+base_ok=0
+git -C "$ROOT" rev-parse --verify origin/develop >/dev/null 2>&1 && base_ok=1
+git -C "$ROOT" rev-parse --verify develop >/dev/null 2>&1 && base_ok=1
+
+if [[ -n "$(git -C "$ROOT" status --porcelain)" || $base_ok -eq 0 ]]; then
+    # 작업 트리가 더럽거나 기준이 없으면 "깨끗할 때" 를 시험할 수 없다.
     clean=0
     skip_clean=1
 else
@@ -343,7 +349,7 @@ else
     printf '  FAIL 러너 자기검증이 깨졌다\n'; fail=$((fail + 1))
 fi
 if ((skip_clean)); then
-    printf '  skip 작업 트리가 더러워 "깨끗하면 통과" 는 시험하지 않는다\n'
+    printf '  skip 작업 트리가 더럽거나 기준 브랜치가 없어 "깨끗하면 통과" 는 건너뛴다\n'
 elif ((clean == 0)); then
     printf '  ok   깨끗하면 막지 않는다\n'; pass=$((pass + 1))
 else

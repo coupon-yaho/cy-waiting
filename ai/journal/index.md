@@ -8,6 +8,7 @@
 
 | ID | 날짜 | 종류 | 제목 | 확신 | 승격 |
 |---|---|---|---|---|---|
+| [AIJ-0015](2026/08/AIJ-0015-key-scheme-and-shard-hash.md) | 2026-08-19 | implement | 키 스킴 — 한 번 정하면 못 바꾸는 것 | high | — |
 | [AIJ-0014](2026/08/AIJ-0014-redis-wiring.md) | 2026-08-19 | implement | 레디스 배선 — 시간 예산을 시동으로 지킨다 | high | — |
 | [AIJ-0013](2026/08/AIJ-0013-local-review-before-pr.md) | 2026-08-19 | implement | 훅이 못 본 파일들 — PR 전 브랜치 전체 검사 | medium | — |
 | [AIJ-0012](2026/08/AIJ-0012-allocation-polling-smoothing.md) | 2026-08-19 | implement | 배분·폴링·평활화 — 계획서 예시와 완료 조건의 충돌 | high | — |
@@ -51,7 +52,7 @@
 | AIJ-0008 | IP 리미터가 시험 환경(NAT·출발지 IP 8개)에서 부하 생성기를 막지 않는다 | 시험 프로파일 상한 별도 지정 |
 | ~~AIJ-0009~~ | ~~PIT 임계 90%(생존 ≤10%)가 타당하다~~ | ✅ 도메인 125 뮤턴트에서 생존 2.4%. 임계가 느슨해 8% 도 통과했다 — **숫자보다 어디가 살았는지를 본다** (AIJ-0011) |
 | ~~AIJ-0009~~ | ~~JaCoCo PACKAGE 규칙이 빈 패키지에서 조용히 통과하지 않는다~~ | ✅ 도메인 분기 100% 미달 시 빌드 실패 확인 |
-| ~~AIJ-0010~~ | ~~`SecondWindowLimiter` 가 요청 경로의 동시성을 견딘다~~ | ✅ `synchronized` + `AtomicAcquireTest` |
+| AIJ-0010 | `SecondWindowLimiter` 가 요청 경로의 동시성을 견딘다 | ⚠️ `synchronized` 는 넣었으나 `AtomicAcquireTest` 는 **단일 스레드**다. 한 번 ✅ 로 닫았던 것을 되돌린다 (AIJ-0014) |
 | AIJ-0010 | 노드 번호(`nodeIndex`)가 틱마다 안정적이다 | Phase 4 하트비트 설계 시 확인. 바뀌면 배분이 출렁인다 |
 | AIJ-0011 | 남은 생존 뮤턴트 3건이 정말 등가다 | 논증으로만 확인했다. 도구가 보장하지 않는다 |
 | AIJ-0011 | 샤드 균등 분포 가정이 쏠린 순간에도 성립한다 | Phase 3 에서 실측 |

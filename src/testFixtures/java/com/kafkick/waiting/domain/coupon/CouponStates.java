@@ -29,6 +29,11 @@ public final class CouponStates {
         return CouponState.closed(waiting);
     }
 
+    /** 운영자가 무조건 줄을 세우기로 했다. 한산해도 대기열을 태운다. */
+    public static CouponState always(long remainingStock) {
+        return CouponState.always(remainingStock);
+    }
+
     /** 대기열이 꺼진 쿠폰. */
     public static CouponState off(long remainingStock) {
         return CouponState.off(remainingStock);

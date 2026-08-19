@@ -4,8 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.CouponStates;
-import com.kafkick.waiting.domain.coupon.QueueMode;
-import com.kafkick.waiting.domain.coupon.RuntimeState;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import java.util.EnumSet;
 import java.util.Set;
@@ -35,7 +33,7 @@ class DecisionReachabilityTest {
         seen.add(decide(CouponStates.idle(500), r -> r.withDataStale(true)));
         seen.add(decide(CouponStates.queueing(100, 500, 5000), r -> r.withDataStale(true)));
         seen.add(decide(CouponStates.queueing(100, 500, 20_000), r -> r));
-        seen.add(decide(always(), r -> r));
+        seen.add(decide(CouponStates.always(500), r -> r));
         seen.add(decide(CouponStates.queueing(100, 500, 3000), r -> r));
         seen.add(decide(CouponStates.idle(500), r -> r));
 
@@ -56,9 +54,6 @@ class DecisionReachabilityTest {
                 .containsExactlyInAnyOrder(AdmissionDecision.values());
     }
 
-    private CouponState always() {
-        return new CouponState(QueueMode.ALWAYS, RuntimeState.IDLE, 0, 500, 0, 1.0);
-    }
 
     private AdmissionDecision decide(
             CouponState state, UnaryOperator<AdmissionRequest> tweak) {

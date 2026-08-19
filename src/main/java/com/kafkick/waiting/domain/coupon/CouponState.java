@@ -174,6 +174,11 @@ public record CouponState(
         return new CouponState(QueueMode.ADAPTIVE, RuntimeState.CLOSED, 0, 0, waiting, 1.0);
     }
 
+    /** 운영자가 무조건 줄을 세우기로 했다. 한산해도 대기열을 태운다. */
+    public static CouponState always(long remainingStock) {
+        return new CouponState(QueueMode.ALWAYS, RuntimeState.IDLE, 0, remainingStock, 0, 1.0);
+    }
+
     /** 운영자가 대기열을 껐다. 붐비든 말든 줄을 세우지 않는다. */
     public static CouponState off(long remainingStock) {
         return new CouponState(QueueMode.OFF, RuntimeState.IDLE, 0, remainingStock, 0, 1.0);

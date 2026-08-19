@@ -97,9 +97,11 @@ fi
 # @Nested 이후 **선언까지의 연속 어노테이션 줄**을 전부 건너뛴다. 개수를 못
 # 박으면 @Tag 하나 붙는 순간 오탐이 되고, 오탐이 나면 훅이 우회된다.
 nested_class_lines=$(awk '
-    /^[[:space:]]*@Nested([[:space:]]|\(|$)/ { pending=1; next }
-    pending && /^[[:space:]]*@/               { next }
-    pending                                   { print NR; pending=0 }
+    /^[[:space:]]*@Nested([[:space:]]|\(|$)/  { pending=1; next }
+    # 어노테이션 인자가 여러 줄에 걸치면 이어지는 줄은 @ 로 시작하지 않는다.
+    # 개수나 형태를 못 박지 말고 **선언 줄을 만날 때까지** 건너뛴다.
+    pending && /class[[:space:]]/              { print NR; pending=0; next }
+    pending                                    { next }
 ' "$file")
 js14=$(scan 'JS-14' \
     '^[0-9]+:[[:space:]]+((public|protected|private|final|abstract)[[:space:]]+)*class[[:space:]]' \

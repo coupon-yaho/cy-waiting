@@ -43,8 +43,12 @@ check_js12() {
     grep -nE '^\s*public [A-Z][A-Za-z0-9_]*\(' "$file" 2>/dev/null \
         | grep -vE 'record|interface' \
         | while IFS=: read -r n rest; do
-            # 같은 파일이 record 면 정규 생성자라 막을 수 없다
-            grep -qE '^\s*public record ' "$file" && continue
+            # **파일 단위로 건너뛰지 않는다.** record 하나가 같은 파일에 있다고
+            # 다른 클래스의 public 생성자까지 면제하면 위반이 통째로 샌다.
+            # 그 생성자 이름의 타입이 record 로 선언됐는지만 본다.
+            local name
+            name=$(printf '%s' "$rest" | sed -E 's/^[[:space:]]*public[[:space:]]+([A-Za-z0-9_]+).*/\1/')
+            grep -qE "(^|[[:space:]])record[[:space:]]+$name([[:space:]]|\()" "$file" && continue
             printf '  JS-12 %s:%s public 생성자 — 정적 팩토리를 쓴다\n' "$file" "$n"
           done
 }
@@ -183,17 +187,13 @@ if [[ "${1:-}" == "--self-test" ]]; then
 fi
 
 BASE="${1:-origin/develop}"
-if ! git rev-parse --verify "$BASE" >/dev/null 2>&1; then
-    # 폴백을 조용히 타면 브랜치 커밋을 하나도 안 보고 "통과" 를 낸다.
-    # 게이트가 조용히 무력화되는 것이라, 못 찾으면 알리고 막는다.
-    if git rev-parse --verify develop >/dev/null 2>&1; then
-        say "기준 $BASE 을 못 찾아 develop 으로 본다"
-        BASE=develop
-    else
-        say "기준 브랜치를 못 찾았다: $BASE"
-        say "  fetch 하거나 기준을 인자로 준다 — 이 상태로는 무엇이 바뀌었는지 알 수 없다"
-        exit 1
-    fi
+# **다른 ref 로 대체하지 않는다.** 요청한 기준이 아닌 것을 보면 검사 결과가
+# 실제 PR 과 어긋나고, 어긋난 통과는 통과가 아니다.
+if ! git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1 \
+   || ! git merge-base "$BASE" HEAD >/dev/null 2>&1; then
+    say "기준을 해석할 수 없다: $BASE"
+    say "  git fetch 하거나 기준을 인자로 준다 — 이 상태로는 무엇이 바뀌었는지 알 수 없다"
+    exit 1
 fi
 
 # 커밋된 것만 보면 **아직 안 커밋한 위반을 놓친다.** 개발 중에 돌릴 때가

@@ -16,13 +16,24 @@ cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // empty')
 # PR 생성이 아니면 통과
 [[ "$cmd" != *"gh pr create"* ]] && exit 0
 
-ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+# **검사를 못 돌리면 막는다.** 통과시키면 게이트가 인프라 오류 한 번에
+# 조용히 사라진다 — 가드는 fail closed 여야 한다.
+if ! ROOT=$(git rev-parse --show-toplevel 2>/dev/null); then
+    echo "git 저장소가 아니라 로컬 리뷰를 돌릴 수 없다. PR 은 저장소 안에서 연다." >&2
+    exit 2
+fi
 RUNNER="$ROOT/.claude/hooks/review-branch.sh"
-[[ -x "$RUNNER" ]] || exit 0
+if [[ ! -x "$RUNNER" ]]; then
+    echo "로컬 리뷰 러너를 실행할 수 없다: $RUNNER" >&2
+    echo "  chmod +x .claude/hooks/*.sh" >&2
+    exit 2
+fi
 
 # base 를 명령에서 뽑는다. 없으면 develop
-base=$(printf '%s' "$cmd" | grep -oE -e '--base[= ]+[A-Za-z0-9._/-]+' | head -1 \
-       | sed -E 's/--base[= ]+//')
+# `gh pr create -B develop` 형식도 쓴다. 하나만 보면 엉뚱한 기준을 잡는다.
+base=$(printf '%s' "$cmd" \
+       | grep -oE -e '(--base|-B)[= ]+[A-Za-z0-9._/-]+' | head -1 \
+       | sed -E 's/(--base|-B)[= ]+//')
 base="${base:-develop}"
 # 이미 접두가 붙어 있으면 겹치지 않게 둔다. origin/origin/develop 이 되면
 # 러너가 폴백을 타고, 폴백마저 없으면 브랜치 커밋을 하나도 안 보고 통과한다.

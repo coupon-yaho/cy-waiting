@@ -301,34 +301,43 @@ fi
 echo
 echo '[guard-pr.sh]'
 # **프로덕션 소스 트리에 쓰지 않는다.** 스크립트가 중간에 죽으면 public 생성자를
-# 가진 JS-12 위반 파일이 도메인 패키지에 남는다. 빌드 산출물 경로에 두고 trap 을 건다.
-probe="$ROOT/build/selftest-probe/src/main/java/SelfTestProbe.java"
-mkdir -p "$(dirname "$probe")"
-trap 'rm -rf "$ROOT/build/selftest-probe"' EXIT
+# 가진 JS-12 위반 파일이 도메인 패키지에 남는다. 저장소 루트의 임시 디렉터리에
+# 두고 trap 을 건다 — gitignore 에 걸리면 러너의 변경 목록에 안 잡혀 무의미하다.
+probe_dir="$ROOT/.selftest-probe"
+probe="$probe_dir/Probe.java"
+mkdir -p "$probe_dir"
+# EXIT 트랩은 하나뿐이라 앞의 것을 덮는다. 둘 다 지우게 합친다.
+trap 'rm -rf "$tmp" "$probe_dir"' EXIT
 cat > "$probe" <<'PROBE'
-class SelfTestProbe {
-    public SelfTestProbe() {
+class Probe {
+    public Probe() {
     }
 }
 PROBE
 
-# 러너를 프로브 파일 하나로만 돌린다. 저장소 상태에 따라 결과가 흔들리면
-# 하네스 실패가 코드와 무관한 이유로 나고, 그러면 하네스를 안 믿게 된다 (TS-7).
-"$ROOT/.claude/hooks/review-branch.sh" >/dev/null 2>&1 <<<'' || true
-probe_out=$("$ROOT/.claude/hooks/review-branch.sh" --self-test 2>&1)
-blocked=2
-printf '%s' "$probe_out" | grep -q '자기검증 통과' || blocked=0
+# 러너가 이 파일을 실제로 본다는 것부터 확인한다. 안 보면 아래 차단 검증이
+# 통과해도 그건 다른 이유로 막힌 것이다.
+# 러너는 위반이 있으면 1 을 낸다. pipefail 아래서 파이프로 바로 받으면
+# grep 이 맞아도 파이프라인이 실패로 읽힌다 — 출력을 먼저 담는다.
+runner_out=$("$ROOT/.claude/hooks/review-branch.sh" 2>&1 || true)
+probe_seen=0
+printf '%s' "$runner_out" | grep -q '.selftest-probe/Probe.java' && probe_seen=1
 
-# guard-pr 은 러너 결과를 그대로 쓰므로, 러너가 위반을 내는 상황을 만들어 확인한다.
+printf '{"tool_input":{"command":"gh pr create --base develop"}}' \
+    | "$ROOT/.claude/hooks/guard-pr.sh" >/dev/null 2>&1
+blocked=$?
+
+rm -rf "$probe_dir"
+
 # 기준 브랜치가 없으면 러너가 "무엇이 바뀌었는지 알 수 없다" 로 차단한다.
-# 그게 맞는 동작이지만, **하네스가 저장소 ref 상태에 의존하면 안 된다** —
-# 얕은 체크아웃에서 하네스가 코드와 무관한 이유로 깨진다 (TS-7).
+# 그게 맞는 동작이지만 **하네스가 저장소 ref 상태에 의존하면 안 된다** (TS-7).
 base_ok=0
-git -C "$ROOT" rev-parse --verify origin/develop >/dev/null 2>&1 && base_ok=1
-git -C "$ROOT" rev-parse --verify develop >/dev/null 2>&1 && base_ok=1
+for ref in origin/develop develop; do
+    git -C "$ROOT" rev-parse --verify "$ref^{commit}" >/dev/null 2>&1 \
+        && git -C "$ROOT" merge-base "$ref" HEAD >/dev/null 2>&1 && base_ok=1 && break
+done
 
 if [[ -n "$(git -C "$ROOT" status --porcelain)" || $base_ok -eq 0 ]]; then
-    # 작업 트리가 더럽거나 기준이 없으면 "깨끗할 때" 를 시험할 수 없다.
     clean=0
     skip_clean=1
 else
@@ -337,16 +346,29 @@ else
     clean=$?
     skip_clean=0
 fi
-rm -rf "$ROOT/build/selftest-probe"
 
 printf '{"tool_input":{"command":"git status"}}' \
     | "$ROOT/.claude/hooks/guard-pr.sh" >/dev/null 2>&1
 unrelated=$?
 
-if ((blocked == 2)); then
-    printf '  ok   러너 자기검증이 통과 상태다\n'; pass=$((pass + 1))
+# 검사를 못 돌리는 상황에서 통과시키면 게이트가 조용히 사라진다 (fail closed)
+failclosed=$(cd /tmp && printf '{"tool_input":{"command":"gh pr create"}}' \
+    | "$ROOT/.claude/hooks/guard-pr.sh" >/dev/null 2>&1; echo $?)
+
+if ((probe_seen)); then
+    printf '  ok   러너가 변경된 프로브 파일을 본다\n'; pass=$((pass + 1))
 else
-    printf '  FAIL 러너 자기검증이 깨졌다\n'; fail=$((fail + 1))
+    printf '  FAIL 러너가 프로브를 못 본다 — 차단 검증이 무의미하다\n'; fail=$((fail + 1))
+fi
+if ((failclosed == 2)); then
+    printf '  ok   저장소 밖에서는 막는다 (fail closed)\n'; pass=$((pass + 1))
+else
+    printf '  FAIL 저장소 밖인데 통과시켰다 (exit %d)\n' "$failclosed"; fail=$((fail + 1))
+fi
+if ((blocked == 2)); then
+    printf '  ok   실제 위반에서 PR 생성을 막는다\n'; pass=$((pass + 1))
+else
+    printf '  FAIL 위반이 있는데 PR 생성을 통과시켰다 (exit %d)\n' "$blocked"; fail=$((fail + 1))
 fi
 if ((skip_clean)); then
     printf '  skip 작업 트리가 더럽거나 기준 브랜치가 없어 "깨끗하면 통과" 는 건너뛴다\n'

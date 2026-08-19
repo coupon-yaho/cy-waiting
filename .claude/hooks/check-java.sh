@@ -90,10 +90,20 @@ fi
 
 # ── JS-14 중첩 클래스는 static ────────────────────────────────────────────────
 # 들여쓰기된 class 선언 = 중첩. 수식어가 없는 경우도 잡는다.
-report "JS-14" "중첩 클래스는 static — 바깥 인스턴스를 붙들어 누수를 만든다" \
-    "$(scan 'JS-14' \
-        '^[0-9]+:[[:space:]]+((public|protected|private|final|abstract)[[:space:]]+)*class[[:space:]]' \
-        'static')"
+#
+# **JUnit 5 의 @Nested 는 제외한다.** 그쪽은 static 이면 아예 실행되지 않는다 —
+# 규칙과 프레임워크가 충돌하는 자리라 규칙이 진다. 여기서 오탐을 내면 사람은
+# 훅을 고치는 대신 우회하고, 그러면 진짜 위반도 같이 지나간다.
+nested_lines=$(grep -nE "^[[:space:]]*@Nested" "$file" 2>/dev/null | cut -d: -f1)
+js14=$(scan 'JS-14' \
+    '^[0-9]+:[[:space:]]+((public|protected|private|final|abstract)[[:space:]]+)*class[[:space:]]' \
+    'static')
+for n in $nested_lines; do
+    # @Nested 바로 다음 줄(또는 @DisplayName 을 사이에 둔 다음 줄)의 선언을 뺀다
+    js14=$(printf '%s\n' "$js14" | grep -vE "^[[:space:]]*$((n + 1)):|^[[:space:]]*$((n + 2)):")
+done
+js14=$(printf '%s' "$js14" | grep -v '^[[:space:]]*$')
+report "JS-14" "중첩 클래스는 static — 바깥 인스턴스를 붙들어 누수를 만든다" "$js14"
 
 # ── JS-6 Javadoc 5줄 초과 (원본에서 검사한다) ─────────────────────────────────
 hits=$(awk '

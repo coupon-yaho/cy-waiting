@@ -98,13 +98,13 @@ class AllocationPropertyTest {
                 .isZero();
     }
 
-    private static long wantOf(List<CouponDemand> demands, String couponId) {
+    private long wantOf(List<CouponDemand> demands, String couponId) {
         return demands.stream()
                 .filter(d -> d.couponId().equals(couponId))
                 .mapToLong(CouponDemand::want).findFirst().orElse(0);
     }
 
-    private static List<CouponDemand> randomDemands(Random rnd) {
+    private List<CouponDemand> randomDemands(Random rnd) {
         int n = rnd.nextInt(1, 40);
         List<CouponDemand> demands = new ArrayList<>(n);
         for (int i = 0; i < n; i++) {

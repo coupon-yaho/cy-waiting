@@ -254,6 +254,57 @@ git_case 'feat(app): CY-18 진입점 추가
 Refs: CY-18' block '제목에 Jira 키'
 git_case 'Merge branch develop' allow '병합 커밋은 대상 아님'
 
+# ── 브랜치 리뷰 러너 ─────────────────────────────────────────────────────────
+# 이 러너가 없으면 힙독·스크립트로 쓴 파일은 어떤 검사도 안 받는다.
+# 러너 자신의 자기검증을 여기서 함께 돌린다.
+echo
+echo '[review-branch.sh]'
+if "$ROOT/.claude/hooks/review-branch.sh" --self-test >/dev/null 2>&1; then
+    printf '  ok   러너 자기검증 (JS-12·JS-6·TS-11·TS-4·EX-1·RX-2)\n'; pass=$((pass + 1))
+else
+    printf '  FAIL 러너 자기검증 — 검사 중 하나가 위반을 못 잡는다\n'; fail=$((fail + 1))
+fi
+
+# ── PR 가드 ──────────────────────────────────────────────────────────────────
+echo
+echo '[guard-pr.sh]'
+probe="$ROOT/src/main/java/com/kafkick/waiting/domain/queue/SelfTestProbe.java"
+mkdir -p "$(dirname "$probe")"
+cat > "$probe" <<'PROBE'
+package com.kafkick.waiting.domain.queue;
+
+public class SelfTestProbe {
+    public SelfTestProbe() {
+    }
+}
+PROBE
+printf '{"tool_input":{"command":"gh pr create --base develop"}}' \
+    | "$ROOT/.claude/hooks/guard-pr.sh" >/dev/null 2>&1
+blocked=$?
+rm -f "$probe"
+printf '{"tool_input":{"command":"gh pr create --base develop"}}' \
+    | "$ROOT/.claude/hooks/guard-pr.sh" >/dev/null 2>&1
+clean=$?
+printf '{"tool_input":{"command":"git status"}}' \
+    | "$ROOT/.claude/hooks/guard-pr.sh" >/dev/null 2>&1
+unrelated=$?
+
+if ((blocked == 2)); then
+    printf '  ok   위반이 있으면 PR 생성을 막는다\n'; pass=$((pass + 1))
+else
+    printf '  FAIL 위반이 있는데 PR 생성을 통과시켰다 (exit %d)\n' "$blocked"; fail=$((fail + 1))
+fi
+if ((clean == 0)); then
+    printf '  ok   깨끗하면 막지 않는다\n'; pass=$((pass + 1))
+else
+    printf '  FAIL 깨끗한데 막았다 (exit %d)\n' "$clean"; fail=$((fail + 1))
+fi
+if ((unrelated == 0)); then
+    printf '  ok   PR 생성이 아닌 명령은 건드리지 않는다\n'; pass=$((pass + 1))
+else
+    printf '  FAIL 무관한 명령을 막았다 (exit %d)\n' "$unrelated"; fail=$((fail + 1))
+fi
+
 echo
 printf '통과 %d · 실패 %d\n' "$pass" "$fail"
 ((fail == 0))

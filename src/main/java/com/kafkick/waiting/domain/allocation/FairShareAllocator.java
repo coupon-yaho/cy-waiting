@@ -48,6 +48,8 @@ public final class FairShareAllocator {
      * 다음 패스에서 더 적은 수로 다시 나뉘고, 결국 굶주린 수보다 작아지면
      * 멎는다 — 그때는 균등하게 나눌 방법이 없어서 다음 틱 몫이 된다.
      */
+    // RULE-EXCEPTION(JS-13): 인스턴스가 없는 유틸리티 클래스(JS-14)라 인스턴스
+    // 메서드로 둘 수 없다. 밖으로 꺼내도 이 배분 말고는 쓸 데가 없다 (AIJ-0012).
     private static long distribute(List<CouponDemand> active, long[] granted, long pool) {
         // 호출부가 pool > 0 을 보장한다. 0 이면 애초에 돌 이유가 없다.
         int hungry = 0;

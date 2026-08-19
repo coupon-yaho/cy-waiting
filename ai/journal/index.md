@@ -8,6 +8,7 @@
 
 | ID | 날짜 | 종류 | 제목 | 확신 | 승격 |
 |---|---|---|---|---|---|
+| [AIJ-0010](2026/08/AIJ-0010-domain-state-and-limiter.md) | 2026-08-19 | implement | 순수 도메인 — 불변식·통과 상한·리미터 | high | — |
 | [AIJ-0009](2026/08/AIJ-0009-build-foundation-and-quality-gates.md) | 2026-08-18 | implement | 빌드 기반과 품질 임계 · CI 첫 실행 결함 4건 | high | — |
 | [AIJ-0008](2026/08/AIJ-0008-header-identity-and-front-lb.md) | 2026-08-18 | decision | 인증을 헤더 식별자로 · 락 소유권 · 앞단 LB 부재 | medium | D-A1 |
 | [AIJ-0007](2026/08/AIJ-0007-queue-order-by-timestamp.md) | 2026-08-14 | decision | 큐 순서를 timestamp 로 · 차단 5건 해소 | medium | 90-decisions 2.7·2.8 |
@@ -46,6 +47,8 @@
 | AIJ-0008 | IP 리미터가 시험 환경(NAT·출발지 IP 8개)에서 부하 생성기를 막지 않는다 | 시험 프로파일 상한 별도 지정 |
 | AIJ-0009 | PIT 임계 90%(생존 ≤10%)가 타당하다 | Phase 2 실제 도메인에서 실측 |
 | AIJ-0009 | JaCoCo PACKAGE 규칙이 빈 패키지에서 조용히 통과하지 않는다 | Phase 2 첫 도메인 클래스에서 확인 |
+| AIJ-0010 | `SecondWindowLimiter` 가 요청 경로의 동시성을 견딘다 | T2.2.4 에서 구현·검증 필요. 지금은 HashMap 무동기 |
+| AIJ-0010 | 노드 번호(`nodeIndex`)가 틱마다 안정적이다 | Phase 4 하트비트 설계 시 확인. 바뀌면 배분이 출렁인다 |
 | AIJ-0007 | `everysec` 유실 1초가 재등록으로 덮인다 | Phase 6 부하 하네스 (6.6) |
 | AIJ-0007 | `TIME` 을 쓰는 Lua 가 복제에서 안전하다 | Phase 3 |
 | AIJ-0007 | 폴링마다 붙는 `ZCOUNT` 부하가 감당된다 | Phase 3 |

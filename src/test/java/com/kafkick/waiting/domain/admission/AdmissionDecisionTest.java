@@ -37,15 +37,16 @@ class AdmissionDecisionTest {
     }
 
     @Test
-    @DisplayName("큐_판정은_다섯이다")
-    void 큐_판정은_다섯이다() {
+    @DisplayName("큐_판정은_여섯이다")
+    void 큐_판정은_여섯이다() {
         assertThat(Arrays.stream(AdmissionDecision.values()).filter(AdmissionDecision::isEnqueue))
                 .containsExactlyInAnyOrder(
                         AdmissionDecision.ENQUEUE_STALE,
                         AdmissionDecision.ENQUEUE_ALWAYS,
                         AdmissionDecision.ENQUEUE_BACKLOG,
                         AdmissionDecision.ENQUEUE_RATE_COUPON,
-                        AdmissionDecision.ENQUEUE_RATE_GLOBAL);
+                        AdmissionDecision.ENQUEUE_RATE_GLOBAL,
+                        AdmissionDecision.ENQUEUE_KEY_SATURATED);
     }
 
     @Test

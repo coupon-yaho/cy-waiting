@@ -61,4 +61,12 @@ class RankMonotonicityTest {
     void 샤드_수가_0이하면_1로_취급한다() {
         assertThat(RankEstimator.globalRank(100, 0)).isEqualTo(100);
     }
+
+    @Test
+    @DisplayName("곱셈이_넘치면_음수가_아니라_포화한다")
+    void 곱셈이_넘치면_음수가_아니라_포화한다() {
+        // 넘치면 음수가 되어 순위가 뒤로 간다 — 역행 0 을 스스로 깬다.
+        assertThat(RankEstimator.globalRank(Long.MAX_VALUE, 2)).isEqualTo(Long.MAX_VALUE);
+        assertThat(RankEstimator.globalRank(Long.MAX_VALUE / 2 + 1, 2)).isEqualTo(Long.MAX_VALUE);
+    }
 }

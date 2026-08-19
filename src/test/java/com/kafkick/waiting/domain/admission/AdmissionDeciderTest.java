@@ -1,6 +1,7 @@
 package com.kafkick.waiting.domain.admission;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.QueueMode;
@@ -22,7 +23,7 @@ class AdmissionDeciderTest {
     private static final double IDLE_RATIO = 0.7;
 
     private AdmissionDecider decider() {
-        return new AdmissionDecider(SecondWindowLimiter.withMaxKeys(1000), IDLE_RATIO);
+        return AdmissionDecider.of(SecondWindowLimiter.withMaxKeys(1000), IDLE_RATIO);
     }
 
     private AdmissionRequest request(CouponState state) {
@@ -150,7 +151,7 @@ class AdmissionDeciderTest {
     void 노드_예산이_먼저_마르면_전역_사유로_큐에_간다() {
         // 쿠폰 상한(70)보다 노드 상한이 작으면 전역이 먼저 마른다.
         // 대응이 다르다 — 이때는 노드를 늘려야 한다.
-        AdmissionDecider d = new AdmissionDecider(SecondWindowLimiter.withMaxKeys(1000), 5.0);
+        AdmissionDecider d = AdmissionDecider.of(SecondWindowLimiter.withMaxKeys(1000), 5.0);
         CouponState idle = CouponStates.idle(500);
 
         for (int i = 0; i < 100; i++) {
@@ -195,5 +196,72 @@ class AdmissionDeciderTest {
         AdmissionRequest req = request(CouponStates.queueing(100, 500, 9_999));
 
         assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.ENQUEUE_BACKLOG);
+    }
+
+    @Test
+    @DisplayName("잘못된_설정은_만들_때_막는다")
+    void 잘못된_설정은_만들_때_막는다() {
+        // 비율은 10번 줄에서만 쓰인다. 여기서 안 막으면 잘못된 설정으로도
+        // 토큰·bypass·fail-open 이 정상으로 돌아가다가, 한산한 쿠폰 요청
+        // 하나에서 원인과 먼 곳에서 터진다.
+        SecondWindowLimiter limiter = SecondWindowLimiter.withMaxKeys(10);
+
+        assertThatThrownBy(() -> AdmissionDecider.of(null, 0.7))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> AdmissionDecider.of(limiter, -0.1))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> AdmissionDecider.of(limiter, Double.NaN))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("쿠폰_키가_전역_키와_같아도_예산이_합쳐지지_않는다")
+    void 쿠폰_키가_전역_키와_같아도_예산이_합쳐지지_않는다() {
+        // 접두사가 없으면 쿠폰 ID 하나가 전역 키와 같아지는 순간 두 예산이
+        // 한 카운터로 합쳐져, 다른 쿠폰의 전역 트래픽이 이 쿠폰 몫을 먹는다.
+        AdmissionDecider d = decider();
+        CouponState idle = CouponStates.idle(500);
+        AdmissionRequest req =
+                new AdmissionRequest("node:", idle, META, false, false, false, 0, 100);
+
+        int passed = 0;
+        for (int i = 0; i < 200; i++) {
+            if (d.decide(req) == AdmissionDecision.PASS_UNDER_CAP) {
+                passed++;
+            }
+        }
+
+        // 합쳐졌다면 min(70, 100) = 70 이 아니라 절반인 35 만 통과한다
+        assertThat(passed).isEqualTo(70);
+    }
+
+    @Test
+    @DisplayName("한산_비율_0은_유효한_설정이다")
+    void 한산_비율_0은_유효한_설정이다() {
+        // 운영자가 한산 통과를 완전히 잠그는 값이다. 거부하면 그 조작이 막힌다.
+        AdmissionDecider d = AdmissionDecider.of(SecondWindowLimiter.withMaxKeys(10), 0.0);
+
+        assertThat(d.decide(request(CouponStates.idle(500))))
+                .isEqualTo(AdmissionDecision.ENQUEUE_RATE_COUPON);
+    }
+
+    @Test
+    @DisplayName("쿠폰이_다르면_유휴_예산도_따로다")
+    void 쿠폰이_다르면_유휴_예산도_따로다() {
+        // 키를 뭉개면 먼저 온 쿠폰이 전체 유휴 몫을 먹고 나머지가 굶는다.
+        AdmissionDecider d = decider();
+        CouponState idle = CouponStates.idle(500);
+        AdmissionRequest first =
+                new AdmissionRequest("c1", idle, META, false, false, false, 0, 100);
+        AdmissionRequest second =
+                new AdmissionRequest("c2", idle, META, false, false, false, 0, 100);
+
+        for (int i = 0; i < 70; i++) {
+            assertThat(d.decide(first)).isEqualTo(AdmissionDecision.PASS_UNDER_CAP);
+        }
+
+        // c1 이 자기 몫을 다 썼어도 c2 는 아직 자기 몫이 남아 있다
+        assertThat(d.decide(first)).isEqualTo(AdmissionDecision.ENQUEUE_RATE_COUPON);
+        assertThat(d.decide(second)).isEqualTo(AdmissionDecision.PASS_UNDER_CAP);
     }
 }

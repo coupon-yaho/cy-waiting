@@ -44,6 +44,10 @@ class DecisionReachabilityTest {
         seen.add(drain(CouponStates.idle(500), r -> r, 0.7));
         seen.add(drain(CouponStates.idle(500), r -> r, 5.0));
 
+        // 자리가 하나뿐이면 쿠폰·전역 두 키를 함께 못 넣는다
+        AdmissionDecider tight = AdmissionDecider.of(SecondWindowLimiter.withMaxKeys(1), 0.7);
+        seen.add(tight.decide(request(CouponStates.idle(500))));
+
         assertThat(seen)
                 .withFailMessage(
                         "도달 못 하는 판정: %s",
@@ -57,7 +61,7 @@ class DecisionReachabilityTest {
 
     private AdmissionDecision decide(
             CouponState state, java.util.function.UnaryOperator<AdmissionRequest> tweak) {
-        AdmissionDecider decider = new AdmissionDecider(SecondWindowLimiter.withMaxKeys(1000), 0.7);
+        AdmissionDecider decider = AdmissionDecider.of(SecondWindowLimiter.withMaxKeys(1000), 0.7);
         return decider.decide(tweak.apply(request(state)));
     }
 
@@ -67,7 +71,7 @@ class DecisionReachabilityTest {
             java.util.function.UnaryOperator<AdmissionRequest> tweak,
             double idleRatio) {
         AdmissionDecider decider =
-                new AdmissionDecider(SecondWindowLimiter.withMaxKeys(1000), idleRatio);
+                AdmissionDecider.of(SecondWindowLimiter.withMaxKeys(1000), idleRatio);
         AdmissionRequest req = tweak.apply(request(state));
         AdmissionDecision last = null;
         for (int i = 0; i < 200; i++) {

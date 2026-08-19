@@ -16,7 +16,13 @@ public final class RankEstimator {
      * 자기 앞의 절대값이라 정확해야 할 자리에서 정확하다.
      */
     public static long globalRank(long localRank, int shards) {
-        return localRank * Math.max(1, shards);
+        try {
+            return Math.multiplyExact(localRank, Math.max(1, shards));
+        } catch (ArithmeticException overflow) {
+            // 넘치면 음수가 되어 순위가 뒤로 간다. 포화가 거짓말이긴 해도
+            // "역행 0" 을 깨는 것보다는 낫다 — 그 크기의 줄은 이미 비정상이다.
+            return Long.MAX_VALUE;
+        }
     }
 
     private RankEstimator() {

@@ -68,10 +68,13 @@ public class SecondWindowLimiter {
         // 상한의 절반만 통과시킨다.
         if (couponKey.equals(globalKey)) {
             long cap = Math.min(couponCap, globalCap);
-            if (!hasRoom(couponKey, cap, used.containsKey(couponKey) ? 0 : 1)) {
+            if (!hasRoom(couponKey, cap)) {
                 return couponCap <= globalCap
                         ? AcquireResult.COUPON_EXHAUSTED
                         : AcquireResult.GLOBAL_EXHAUSTED;
+            }
+            if (!hasSlots(used.containsKey(couponKey) ? 0 : 1)) {
+                return AcquireResult.KEY_SATURATED;
             }
             used.merge(couponKey, 1L, Long::sum);
             return AcquireResult.ACQUIRED;
@@ -82,11 +85,16 @@ public class SecondWindowLimiter {
         int incoming = (used.containsKey(couponKey) ? 0 : 1)
                 + (used.containsKey(globalKey) ? 0 : 1);
 
-        if (!hasRoom(couponKey, couponCap, incoming)) {
+        // 예산을 먼저 본다. 예산이 마른 것과 자리가 없는 것은 대응이 다르고,
+        // 예산이 말랐으면 그 키는 이미 자리를 잡고 있어 자리 문제가 아니다.
+        if (!hasRoom(couponKey, couponCap)) {
             return AcquireResult.COUPON_EXHAUSTED;
         }
-        if (!hasRoom(globalKey, globalCap, incoming)) {
+        if (!hasRoom(globalKey, globalCap)) {
             return AcquireResult.GLOBAL_EXHAUSTED;
+        }
+        if (!hasSlots(incoming)) {
+            return AcquireResult.KEY_SATURATED;
         }
 
         used.merge(couponKey, 1L, Long::sum);
@@ -99,15 +107,13 @@ public class SecondWindowLimiter {
         return used.size();
     }
 
-    private boolean hasRoom(String key, long cap, int incomingKeys) {
-        if (cap <= 0) {
-            return false;
-        }
-        long current = used.getOrDefault(key, 0L);
-        if (current >= cap) {
-            return false;
-        }
-        return current != 0 || used.size() + incomingKeys <= maxKeys;
+    private boolean hasRoom(String key, long cap) {
+        return cap > 0 && used.getOrDefault(key, 0L) < cap;
+    }
+
+    /** 새로 들어올 키 {@code incomingKeys} 개를 받을 자리가 남았는가. */
+    private boolean hasSlots(int incomingKeys) {
+        return used.size() + incomingKeys <= maxKeys;
     }
 
     /**
@@ -133,7 +139,14 @@ public class SecondWindowLimiter {
         /** 그 쿠폰이 유휴 몫을 다 썼다. 그 쿠폰만 조이면 된다. */
         COUPON_EXHAUSTED,
         /** 이 노드가 초당 감당량을 다 썼다. 노드를 늘려야 한다. */
-        GLOBAL_EXHAUSTED
+        GLOBAL_EXHAUSTED,
+        /**
+         * 예산은 남았는데 키를 더 못 들고 있다.
+         *
+         * <p>예산 고갈로 뭉뚱그리면 운영자가 엉뚱한 데를 조인다. 여기를 보면
+         * 조일 것은 쿠폰도 노드도 아니고 {@code maxKeys} 다.
+         */
+        KEY_SATURATED
     }
 
 }

@@ -13,15 +13,40 @@ import com.kafkick.waiting.domain.coupon.RuntimeState;
  */
 public class AdmissionDecider {
 
-    /** 노드 전역 예산의 키. 쿠폰과 겹치지 않게 접두사를 둔다. */
-    private static final String GLOBAL_KEY = "__node__";
+    /**
+     * 노드 전역 예산의 키.
+     *
+     * <p>쿠폰 키에는 {@link #couponBudgetKey} 가 다른 접두사를 붙인다. 접두사가
+     * 없으면 쿠폰 ID 하나가 이 값과 같아지는 순간 두 예산이 한 카운터로 합쳐진다.
+     */
+    private static final String GLOBAL_KEY = "node:";
+
+    private static final String COUPON_KEY_PREFIX = "coupon:";
 
     private final SecondWindowLimiter limiter;
     private final double idleCreditRatio;
 
-    public AdmissionDecider(SecondWindowLimiter limiter, double idleCreditRatio) {
+    private AdmissionDecider(SecondWindowLimiter limiter, double idleCreditRatio) {
         this.limiter = limiter;
         this.idleCreditRatio = idleCreditRatio;
+    }
+
+    /**
+     * 설정을 검증하고 만든다.
+     *
+     * <p>비율은 10번 줄에서만 쓰이므로, 여기서 안 막으면 <b>잘못된 설정으로도
+     * 토큰·bypass·fail-open 판정이 정상으로 돌아간다.</b> 그러다 한산한 쿠폰
+     * 요청 하나가 들어오는 순간 터진다 — 원인에서 먼 곳에서.
+     */
+    public static AdmissionDecider of(SecondWindowLimiter limiter, double idleCreditRatio) {
+        if (limiter == null) {
+            throw new IllegalArgumentException("limiter 는 필수다");
+        }
+        if (!Double.isFinite(idleCreditRatio) || idleCreditRatio < 0) {
+            throw new IllegalArgumentException(
+                    "idleCreditRatio 는 0 이상 유한값이어야 한다: %s".formatted(idleCreditRatio));
+        }
+        return new AdmissionDecider(limiter, idleCreditRatio);
     }
 
     /** 판정 사다리 10줄. 위에서부터 처음 걸리는 줄이 답이다. */
@@ -83,7 +108,7 @@ public class AdmissionDecider {
 
         // 9 — 안 몰려도 무제한은 아니다. 두 예산을 함께 차감한다.
         AcquireResult acquired = limiter.tryAcquireAll(
-                req.couponKey(), s.idleCap(req.meta(), idleCreditRatio),
+                couponBudgetKey(req.couponKey()), s.idleCap(req.meta(), idleCreditRatio),
                 GLOBAL_KEY, globalCap(req), req.epochSecond());
 
         return switch (acquired) {
@@ -91,11 +116,17 @@ public class AdmissionDecider {
             case ACQUIRED -> AdmissionDecision.PASS_UNDER_CAP;
             case COUPON_EXHAUSTED -> AdmissionDecision.ENQUEUE_RATE_COUPON;
             case GLOBAL_EXHAUSTED -> AdmissionDecision.ENQUEUE_RATE_GLOBAL;
+            case KEY_SATURATED -> AdmissionDecision.ENQUEUE_KEY_SATURATED;
         };
     }
 
     /** 이 노드가 초당 감당할 양. 쿠폰과 무관한 노드 전체의 상한이다. */
     private long globalCap(AdmissionRequest req) {
         return req.meta().globalCredit() / req.meta().effectiveGatewayCount();
+    }
+
+    /** 접두사를 붙여 전역 키와 절대 겹치지 않게 한다. */
+    private String couponBudgetKey(String couponKey) {
+        return COUPON_KEY_PREFIX + couponKey;
     }
 }

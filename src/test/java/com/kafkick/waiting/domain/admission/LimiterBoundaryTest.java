@@ -61,7 +61,7 @@ class LimiterBoundaryTest {
         assertThat(limiter.tryAcquire("other2", 100, 0)).isTrue();
 
         assertThat(limiter.tryAcquireAll(COUPON, 100, GLOBAL, 100, 0))
-                .isEqualTo(AcquireResult.COUPON_EXHAUSTED);
+                .isEqualTo(AcquireResult.KEY_SATURATED);
         assertThat(limiter.size()).isEqualTo(2);
     }
 
@@ -136,7 +136,7 @@ class LimiterBoundaryTest {
         assertThat(limiter.tryAcquire("other", 100, 0)).isTrue();
 
         assertThat(limiter.tryAcquireAll(GLOBAL, 100, GLOBAL, 100, 0))
-                .isEqualTo(AcquireResult.COUPON_EXHAUSTED);
+                .isEqualTo(AcquireResult.KEY_SATURATED);
         assertThat(limiter.size()).isEqualTo(1);
     }
 }

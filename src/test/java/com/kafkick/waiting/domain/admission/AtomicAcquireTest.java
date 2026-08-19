@@ -120,8 +120,9 @@ class AtomicAcquireTest {
 
         assertThat(limiter.tryAcquireAll(COUPON, 10, GLOBAL, 100, 10))
                 .isEqualTo(AcquireResult.ACQUIRED);
-        // 자리가 없다. 통과시키면 상한이 무의미해진다.
+        // 자리가 없다. 통과시키면 상한이 무의미해진다. 예산 고갈과 구분해서
+        // 알려야 운영자가 쿠폰이 아니라 maxKeys 를 본다.
         assertThat(limiter.tryAcquireAll("coupon:2", 10, GLOBAL, 100, 10))
-                .isEqualTo(AcquireResult.COUPON_EXHAUSTED);
+                .isEqualTo(AcquireResult.KEY_SATURATED);
     }
 }

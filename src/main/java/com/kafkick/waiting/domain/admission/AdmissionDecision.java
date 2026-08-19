@@ -35,6 +35,14 @@ public enum AdmissionDecision {
     /** 이 노드가 초당 감당량을 다 썼다. <b>노드를 늘려야</b> 한다. */
     ENQUEUE_RATE_GLOBAL,
 
+    /**
+     * 예산은 남았는데 리미터가 키를 더 못 들고 있다.
+     *
+     * <p>상한 고갈과 같이 묶으면 운영자가 쿠폰이나 노드를 조인다 — 여기서
+     * 조일 것은 {@code maxKeys} 다.
+     */
+    ENQUEUE_KEY_SATURATED,
+
     /** 재고가 없다. Redis 도 뒷단도 치지 않고 여기서 끝낸다. */
     REJECT_SOLD_OUT,
 
@@ -66,7 +74,8 @@ public enum AdmissionDecision {
                 || this == ENQUEUE_ALWAYS
                 || this == ENQUEUE_BACKLOG
                 || this == ENQUEUE_RATE_COUPON
-                || this == ENQUEUE_RATE_GLOBAL;
+                || this == ENQUEUE_RATE_GLOBAL
+                || this == ENQUEUE_KEY_SATURATED;
     }
 
     /** 여기서 끝낸다. 줄도 뒷단도 없다. */

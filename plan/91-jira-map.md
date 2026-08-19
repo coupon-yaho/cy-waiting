@@ -57,7 +57,7 @@ Refs: CY-145     ← Jira
 |---|---|---|
 | 1 | 검증 기반 구축 | `CY-18` |
 | 2 | 입장 판정 도메인 | `CY-19` |
-| 3 | 레디스 키와 스크립트 | — |
+| 3 | 레디스 키와 스크립트 | [`CY-227`](https://shseol.atlassian.net/browse/CY-227) |
 | 4 | 배분 스케줄러와 스냅샷 | — |
 | 5 | 요청 경로 | `CY-22` |
 | 6 | 보호 장치와 실측 | — |
@@ -203,6 +203,7 @@ CI 가 브랜치명에서 CY-42 를 뽑아
 |---|---|
 | `phase-1` | [`CY-18`](https://shseol.atlassian.net/browse/CY-18) |
 | `phase-2` | [`CY-19`](https://shseol.atlassian.net/browse/CY-19) |
+| `phase-3` | [`CY-227`](https://shseol.atlassian.net/browse/CY-227) |
 | `phase-5` | [`CY-22`](https://shseol.atlassian.net/browse/CY-22) |
 | `phase-8` | [`CY-24`](https://shseol.atlassian.net/browse/CY-24) |
 | `phase-9` | [`CY-25`](https://shseol.atlassian.net/browse/CY-25) |
@@ -278,3 +279,13 @@ CI 가 브랜치명에서 CY-42 를 뽑아
 | `plan-8.0.5` | [`CY-118`](https://shseol.atlassian.net/browse/CY-118) |
 | `gate-1` | [`CY-39`](https://shseol.atlassian.net/browse/CY-39) |
 | `gate-2` | [`CY-48`](https://shseol.atlassian.net/browse/CY-48) |
+| `plan-3.1` | [`CY-228`](https://shseol.atlassian.net/browse/CY-228) |
+| `plan-3.2` | [`CY-229`](https://shseol.atlassian.net/browse/CY-229) |
+| `plan-3.3` | [`CY-230`](https://shseol.atlassian.net/browse/CY-230) |
+| `plan-3.4` | [`CY-231`](https://shseol.atlassian.net/browse/CY-231) |
+| `plan-3.5` | [`CY-232`](https://shseol.atlassian.net/browse/CY-232) |
+| `plan-3.6` | [`CY-233`](https://shseol.atlassian.net/browse/CY-233) |
+| `plan-3.7` | [`CY-234`](https://shseol.atlassian.net/browse/CY-234) |
+| `plan-3.8` | [`CY-235`](https://shseol.atlassian.net/browse/CY-235) |
+| `plan-3.9` | [`CY-236`](https://shseol.atlassian.net/browse/CY-236) |
+| `gate-3` | [`CY-237`](https://shseol.atlassian.net/browse/CY-237) |

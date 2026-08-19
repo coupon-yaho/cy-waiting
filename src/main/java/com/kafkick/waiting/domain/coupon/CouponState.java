@@ -69,6 +69,64 @@ public record CouponState(
         pollScale = Math.max(1.0, pollScale);
     }
 
+    /**
+     * 경합 쿠폰이 이 노드에서 쓸 수 있는 몫. 노드 번호를 모를 때 쓴다.
+     *
+     * <p>나머지를 버리므로 총합이 {@code credit} 을 넘지 않는다. 대신 나머지만큼
+     * 덜 나간다 — 초과는 장애고 미달은 지연이다.
+     */
+    public long contendedCap(int gatewayCount) {
+        return credit / Math.max(1, gatewayCount);
+    }
+
+    /**
+     * 경합 쿠폰이 이 노드에서 쓸 수 있는 몫. 나머지를 노드 번호로 나눠 갖는다.
+     *
+     * <p>{@code credit} 이 노드 수보다 작으면 정수 나눗셈으로 전 노드가 0 이 된다.
+     * 그렇다고 {@code max(1, …)} 로 올리면 노드 수만큼 나가 <b>초과 배분</b>이다 —
+     * credit 10 에 노드 20 이면 20 이 나간다. 앞쪽 노드에만 1 을 준다.
+     */
+    public long contendedCap(int gatewayCount, int nodeIndex) {
+        int n = Math.max(1, gatewayCount);
+        long base = credit / n;
+        long remainder = credit % n;
+        return base + (nodeIndex < remainder ? 1 : 0);
+    }
+
+    /**
+     * 한산한 쿠폰이 이 노드에서 쓸 수 있는 상한.
+     *
+     * <p><b>이 쿠폰의 credit 으로 재지 않는다.</b> IDLE 이면 credit 이 0 이라(I1)
+     * 한산한 쿠폰일수록 반드시 큐로 가는 역전이 생긴다 — 이전 구현의 핵심 버그다.
+     * 노드 몫의 전역 크레딧으로 잰다.
+     */
+    public long idleCap(SnapshotMeta meta, double idleCreditRatio) {
+        long perNode = meta.globalCredit() / meta.effectiveGatewayCount();
+        return (long) (perNode * idleCreditRatio);
+    }
+
+    /**
+     * 지금 줄이 빠지는 데 걸리는 시간(초).
+     *
+     * <p>{@code credit} 이 0 이면 영원히 안 빠진다 — 예외가 아니라 무한이 맞다.
+     * 한산한 쿠폰이 정확히 그 상태이므로(I1) 방어가 없으면 R1 경로가 터진다.
+     */
+    public double queueDepthSec() {
+        if (waiting == 0) {
+            return 0.0;
+        }
+        return credit == 0 ? Double.POSITIVE_INFINITY : (double) waiting / credit;
+    }
+
+    /**
+     * 받아도 되는 줄의 최대 길이.
+     *
+     * <p>배수할 수 없는데(credit 0) 줄을 받으면 갇힌 사람만 늘어난다.
+     */
+    public long queueCapacity(long maxEtaSec) {
+        return credit * maxEtaSec;
+    }
+
     /** 아무도 줄을 서지 않았다. 배분을 못 받았으므로 credit 은 0 이다. */
     public static CouponState idle(long remainingStock) {
         return new CouponState(QueueMode.ADAPTIVE, RuntimeState.IDLE, 0, remainingStock, 0, 1.0);

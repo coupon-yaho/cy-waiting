@@ -16,7 +16,6 @@ import org.junit.jupiter.api.Test;
  */
 class CouponStateTest {
 
-    // RULE-EXCEPTION(JS-14): @Nested 는 JUnit 5 가 비-static 을 요구한다.
     // 규칙의 근거는 바깥 인스턴스 누수인데, 테스트 인스턴스는 실행 후 버려져 해당 없다.
     @Nested
     @DisplayName("I1 — 한산한 쿠폰은 배분받은 몫이 없다")
@@ -40,7 +39,6 @@ class CouponStateTest {
         }
     }
 
-    // RULE-EXCEPTION(JS-14): @Nested 는 JUnit 5 가 비-static 을 요구한다.
     // 규칙의 근거는 바깥 인스턴스 누수인데, 테스트 인스턴스는 실행 후 버려져 해당 없다.
     @Nested
     @DisplayName("I2 — 종결된 쿠폰에는 재고가 없다")
@@ -55,7 +53,6 @@ class CouponStateTest {
         }
     }
 
-    // RULE-EXCEPTION(JS-14): @Nested 는 JUnit 5 가 비-static 을 요구한다.
     // 규칙의 근거는 바깥 인스턴스 누수인데, 테스트 인스턴스는 실행 후 버려져 해당 없다.
     @Nested
     @DisplayName("I3 — 배수 중이면 남은 대기자를 다 뺄 수 있다")
@@ -70,7 +67,6 @@ class CouponStateTest {
         }
     }
 
-    // RULE-EXCEPTION(JS-14): @Nested 는 JUnit 5 가 비-static 을 요구한다.
     // 규칙의 근거는 바깥 인스턴스 누수인데, 테스트 인스턴스는 실행 후 버려져 해당 없다.
     @Nested
     @DisplayName("I4 — 줄이 비었으면 큐 상태일 수 없다")
@@ -94,7 +90,6 @@ class CouponStateTest {
         }
     }
 
-    // RULE-EXCEPTION(JS-14): @Nested 는 JUnit 5 가 비-static 을 요구한다.
     // 규칙의 근거는 바깥 인스턴스 누수인데, 테스트 인스턴스는 실행 후 버려져 해당 없다.
     @Nested
     @DisplayName("I6 — 폴링 배수는 1 미만으로 내려가지 않는다")
@@ -117,7 +112,6 @@ class CouponStateTest {
         }
     }
 
-    // RULE-EXCEPTION(JS-14): @Nested 는 JUnit 5 가 비-static 을 요구한다.
     // 규칙의 근거는 바깥 인스턴스 누수인데, 테스트 인스턴스는 실행 후 버려져 해당 없다.
     @Nested
     @DisplayName("IDLE 은 줄이 없다")
@@ -135,7 +129,6 @@ class CouponStateTest {
         }
     }
 
-    // RULE-EXCEPTION(JS-14): @Nested 는 JUnit 5 가 비-static 을 요구한다.
     // 규칙의 근거는 바깥 인스턴스 누수인데, 테스트 인스턴스는 실행 후 버려져 해당 없다.
     @Nested
     @DisplayName("pollScale 유한값")
@@ -152,7 +145,6 @@ class CouponStateTest {
         }
     }
 
-    // RULE-EXCEPTION(JS-14): @Nested 는 JUnit 5 가 비-static 을 요구한다.
     // 규칙의 근거는 바깥 인스턴스 누수인데, 테스트 인스턴스는 실행 후 버려져 해당 없다.
     @Nested
     @DisplayName("필수 값")
@@ -173,7 +165,6 @@ class CouponStateTest {
         }
     }
 
-    // RULE-EXCEPTION(JS-14): @Nested 는 JUnit 5 가 비-static 을 요구한다.
     // 규칙의 근거는 바깥 인스턴스 누수인데, 테스트 인스턴스는 실행 후 버려져 해당 없다.
     @Nested
     @DisplayName("음수 방어")

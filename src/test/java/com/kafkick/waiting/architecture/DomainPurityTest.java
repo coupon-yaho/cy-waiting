@@ -1,6 +1,7 @@
 package com.kafkick.waiting.architecture;
 
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
+import static org.assertj.core.api.Assertions.assertThat;
 
 import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
@@ -87,5 +88,31 @@ class DomainPurityTest {
                 .should().dependOnClassesThat().resideInAnyPackage("reactor..")
                 .because("판정은 동기 계산이다. 리액티브 타입이 섞이면 시험이 어려워진다")
                 .check(classes);
+    }
+
+    @Test
+    @DisplayName("도메인은_바깥_계층을_참조하지_않는다")
+    void 도메인은_바깥_계층을_참조하지_않는다() {
+        // 의존은 안에서 밖으로 흐르지 않는다. 어댑터가 도메인을 알지,
+        // 도메인이 어댑터를 알면 판정을 시험하려고 웹 서버를 띄워야 한다.
+        noClasses()
+                .that().resideInAPackage(DOMAIN)
+                .should().dependOnClassesThat()
+                .resideInAnyPackage(
+                        "com.kafkick.waiting.adapter..",
+                        "com.kafkick.waiting.api..",
+                        "com.kafkick.waiting.config..")
+                .because("의존은 바깥에서 안으로만 흐른다 (DS-6)")
+                .check(classes);
+    }
+
+    @Test
+    @DisplayName("모든_클래스가_루트_패키지_아래에_있다")
+    void 모든_클래스가_루트_패키지_아래에_있다() {
+        // 루트 밖으로 새면 ArchUnit 도 JaCoCo 도 그 클래스를 안 본다.
+        // 검사에서 빠진 코드는 검사가 없는 것과 같다.
+        assertThat(classes)
+                .allSatisfy(c -> assertThat(c.getPackageName())
+                        .startsWith("com.kafkick.waiting"));
     }
 }

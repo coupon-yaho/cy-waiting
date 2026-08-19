@@ -264,4 +264,36 @@ class AdmissionDeciderTest {
         assertThat(d.decide(first)).isEqualTo(AdmissionDecision.ENQUEUE_RATE_COUPON);
         assertThat(d.decide(second)).isEqualTo(AdmissionDecision.PASS_UNDER_CAP);
     }
+
+    @Test
+    @DisplayName("래치는_풀리면_무대기_통과를_되돌려준다")
+    void 래치는_풀리면_무대기_통과를_되돌려준다() {
+        // G2.17 — 래치가 죽은 분기를 만들면 그 노드에서 R1 이 영영 죽는다.
+        // 같은 상태에서 래치만 내리면 통과가 복귀해야 한다.
+        AdmissionDecider d = decider();
+        AdmissionRequest latched = request(CouponStates.idle(500)).withJustEnqueued(true);
+
+        assertThat(d.decide(latched)).isEqualTo(AdmissionDecision.ENQUEUE_BACKLOG);
+        assertThat(d.decide(latched.withJustEnqueued(false)))
+                .isEqualTo(AdmissionDecision.PASS_UNDER_CAP);
+    }
+
+    @Test
+    @DisplayName("토큰_보유자는_쿠폰_상한이_말라도_통과한다")
+    void 토큰_보유자는_쿠폰_상한이_말라도_통과한다() {
+        // G2.14 — 배분 시점에 이미 크레딧을 썼다. 여기서 쿠폰 상한을 또 걸면
+        // 차례가 온 사람이 자기 몫을 못 쓰고 되돌려진다.
+        AdmissionDecider d = decider();
+        CouponState idle = CouponStates.idle(500);
+
+        // 이 쿠폰의 유휴 몫(70)을 먼저 말린다
+        for (int i = 0; i < 70; i++) {
+            assertThat(d.decide(request(idle))).isEqualTo(AdmissionDecision.PASS_UNDER_CAP);
+        }
+        assertThat(d.decide(request(idle))).isEqualTo(AdmissionDecision.ENQUEUE_RATE_COUPON);
+
+        // 토큰을 든 사람은 그것과 무관하게 통과한다
+        assertThat(d.decide(request(idle).withValidToken(true)))
+                .isEqualTo(AdmissionDecision.PASS_TOKEN);
+    }
 }

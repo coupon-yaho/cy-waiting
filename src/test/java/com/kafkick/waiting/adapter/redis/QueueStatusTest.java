@@ -193,6 +193,7 @@ class QueueStatusTest extends RedisContainerSupport {
     @DisplayName("잘못된_TTL은_아무것도_쓰지_않는다")
     void 잘못된_TTL은_아무것도_쓰지_않는다() {
         enqueue("m0");
+        double before = redis.opsForZSet().score(QUEUE, "m0").block(WAIT);
         redis.delete(alive("m0")).block(WAIT);
 
         assertThatThrownBy(() ->
@@ -203,9 +204,10 @@ class QueueStatusTest extends RedisContainerSupport {
                 .hasMessageContaining("alive TTL");
 
         // 쓰기 대상 전부를 본다. 하나만 보면 ZREM 이나 HSET 이 먼저
-        // 일어난 회귀를 통과시킨다.
+        // 일어난 회귀를 통과시킨다. 순번은 **그대로**여야 한다 —
+        // 있기만 하면 되는 게 아니라 값이 안 바뀌어야 한다.
         assertThat(redis.hasKey(alive("m0")).block(WAIT)).isFalse();
-        assertThat(redis.opsForZSet().score(QUEUE, "m0").block(WAIT)).isNotNull();
+        assertThat(redis.opsForZSet().score(QUEUE, "m0").block(WAIT)).isEqualTo(before);
         assertThat(redis.opsForHash().hasKey(GRACE, "m0").block(WAIT)).isFalse();
     }
 }

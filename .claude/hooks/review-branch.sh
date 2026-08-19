@@ -208,12 +208,13 @@ self_test() {
         : > b.txt && git add b.txt
         git commit -q -m 'feat(b): 둘' -m 'Refs: CY-2'
     ) >/dev/null 2>&1
-    local mixed
-    mixed=$(cd "$repo" && "$ROOT_SCRIPT" base 2>&1 || true)
-    if printf '%s' "$mixed" | grep -q '티켓이 둘 이상'; then
-        printf '  ✓ 티켓이 섞이면 알린다\n'
+    local mixed mixed_status
+    mixed=$(cd "$repo" && "$ROOT_SCRIPT" base 2>&1); mixed_status=$?
+    # 문구만 보면 findings 를 안 올리는 회귀를 놓친다. 종료 상태까지 본다.
+    if printf '%s' "$mixed" | grep -q '티켓이 둘 이상' && ((mixed_status != 0)); then
+        printf '  ✓ 티켓이 섞이면 알리고 실패로 끝난다\n'
     else
-        printf '  ✗ 티켓이 섞였는데 통과시켰다\n'; fail=1
+        printf '  ✗ 티켓이 섞였는데 통과시켰다 (exit %d)\n' "$mixed_status"; fail=1
     fi
 
     rm -rf "$tmp"
@@ -258,8 +259,13 @@ review_files "${CHANGED[@]}"
 # `git add -A` 는 **브랜치를 옮겨도 따라온 미추적 파일**까지 쓸어 담는다.
 # 실제로 다른 티켓의 Lua 와 테스트가 워크플로 브랜치에 딸려 가 CI 가 깨졌다.
 # 커밋 푸터의 티켓과 변경 경로가 어긋나면 알린다.
-tickets=$(git log --format=%B "$BASE"..HEAD 2>/dev/null \
-          | grep -oE 'Refs: CY-[0-9]+' | sort -u | wc -l)
+# 기준을 못 읽으면 0 이 나와 조용히 통과한다. 위에서 이미 막았지만
+# 여기서 다시 확인한다 — 이 검사만 따로 불릴 수도 있다.
+if ! git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1; then
+    head2 "기준을 해석할 수 없어 티켓 혼입을 못 본다: $BASE"
+    findings=$((findings + 1))
+fi
+tickets=$(git log --format=%B "$BASE"..HEAD | grep -oE 'Refs: CY-[0-9]+' | sort -u | wc -l)
 if ((tickets > 1)); then
     head2 "브랜치에 티켓이 둘 이상 섞였다"
     git log --format='  %h %s%n     %(trailers:key=Refs,valueonly)' "$BASE"..HEAD 2>/dev/null \

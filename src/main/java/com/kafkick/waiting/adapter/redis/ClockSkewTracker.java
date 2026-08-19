@@ -16,6 +16,13 @@ public class ClockSkewTracker {
     private final AtomicLong appliedCount = new AtomicLong();
     private final AtomicLong maxSkewMicros = new AtomicLong();
 
+    private ClockSkewTracker() {
+    }
+
+    public static ClockSkewTracker create() {
+        return new ClockSkewTracker();
+    }
+
     /**
      * 등록 결과를 기록한다.
      *

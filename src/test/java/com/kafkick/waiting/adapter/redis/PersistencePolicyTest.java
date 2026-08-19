@@ -51,6 +51,16 @@ class PersistencePolicyTest {
     }
 
     @Test
+    @DisplayName("메모리_상한이_설정되어_있다")
+    void 메모리_상한이_설정되어_있다() throws IOException {
+        // 상한이 없으면 noeviction 은 아무것도 안 막는다. 상한에 닿아야
+        // 쓰기를 거부하는데 기본값 0 은 무제한이라 그 지점이 안 온다 —
+        // 대신 호스트가 OOM 으로 죽는다. 거부는 복구할 수 있고 OOM 은 못 한다.
+        assertThat(config()).containsKey("maxmemory");
+        assertThat(config().get("maxmemory")).isNotEqualTo("0");
+    }
+
+    @Test
     @DisplayName("다시_쓰는_동안에도_동기화를_멈추지_않는다")
     void 다시_쓰는_동안에도_동기화를_멈추지_않는다() throws IOException {
         // 멈추면 그 구간의 지연이 튀고, 튄 지연은 명령 타임아웃을 넘겨

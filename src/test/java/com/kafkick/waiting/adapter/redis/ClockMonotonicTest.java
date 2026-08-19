@@ -60,13 +60,18 @@ class ClockMonotonicTest extends RedisContainerSupport {
         return Long.parseLong(String.valueOf(result.get(1)));
     }
 
+    private long alreadyQueued(List<Object> result) {
+        return Long.parseLong(String.valueOf(result.get(2)));
+    }
+
     @Test
     @DisplayName("정상_등록은_바닥값을_적용하지_않는다")
     void 정상_등록은_바닥값을_적용하지_않는다() {
         List<Object> result = enqueue("m1");
 
-        assertThat(result).hasSize(2);
+        assertThat(result).hasSize(3);
         assertThat(appliedFlag(result)).isZero();
+        assertThat(alreadyQueued(result)).isZero();
         assertThat(scoreOf("m1")).isPositive();
     }
 
@@ -131,5 +136,48 @@ class ClockMonotonicTest extends RedisContainerSupport {
 
         assertThat(redis.getExpire(MAX_SCORE).block(WAIT))
                 .isBetween(Duration.ofSeconds(TTL_SECONDS - 10), Duration.ofSeconds(TTL_SECONDS));
+    }
+
+    @Test
+    @DisplayName("이미_줄에_있으면_원래_순번을_지킨다")
+    void 이미_줄에_있으면_원래_순번을_지킨다() {
+        // 덮어쓰면 새로고침 연타가 자기 자신을 뒤로 민다 — 사용자는
+        // 기다릴수록 손해라고 배운다.
+        enqueue("m1");
+        long first = scoreOf("m1");
+
+        for (int i = 0; i < 10; i++) {
+            List<Object> again = enqueue("m1");
+            assertThat(alreadyQueued(again)).isOne();
+            assertThat(scoreOf("m1")).isEqualTo(first);
+        }
+    }
+
+    @Test
+    @DisplayName("재등록은_뒤에_선_사람을_밀어내지_않는다")
+    void 재등록은_뒤에_선_사람을_밀어내지_않는다() {
+        enqueue("A");
+        enqueue("B");
+        long scoreB = scoreOf("B");
+
+        enqueue("A");
+
+        assertThat(scoreOf("A")).isLessThan(scoreB);
+        assertThat(scoreOf("B")).isEqualTo(scoreB);
+    }
+
+    @Test
+    @DisplayName("TTL이_양의_정수가_아니면_아무것도_쓰지_않는다")
+    void TTL이_양의_정수가_아니면_아무것도_쓰지_않는다() {
+        // Lua 는 중간 오류를 되돌리지 않는다. 쓰기 전에 막지 않으면
+        // maxscore 없는 ZSET 이 남아 "같이 남거나 같이 사라진다" 가 깨진다.
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                redis.execute(script, List.of(QUEUE, MAX_SCORE), List.of("m1", "0"))
+                        .blockFirst(WAIT))
+                .rootCause()
+                .hasMessageContaining("TTL");
+
+        assertThat(redis.opsForZSet().size(QUEUE).block(WAIT)).isZero();
+        assertThat(redis.hasKey(MAX_SCORE).block(WAIT)).isFalse();
     }
 }

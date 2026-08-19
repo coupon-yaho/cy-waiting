@@ -8,6 +8,7 @@
 
 | ID | 날짜 | 종류 | 제목 | 확신 | 승격 |
 |---|---|---|---|---|---|
+| [AIJ-0015](2026/08/AIJ-0015-key-scheme-and-shard-hash.md) | 2026-08-19 | implement | 키 스킴 — 한 번 정하면 못 바꾸는 것 | high | — |
 | [AIJ-0014](2026/08/AIJ-0014-redis-wiring.md) | 2026-08-19 | implement | 레디스 배선 — 시간 예산을 시동으로 지킨다 | high | — |
 | [AIJ-0013](2026/08/AIJ-0013-local-review-before-pr.md) | 2026-08-19 | implement | 훅이 못 본 파일들 — PR 전 브랜치 전체 검사 | medium | — |
 | [AIJ-0012](2026/08/AIJ-0012-allocation-polling-smoothing.md) | 2026-08-19 | implement | 배분·폴링·평활화 — 계획서 예시와 완료 조건의 충돌 | high | — |

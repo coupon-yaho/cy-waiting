@@ -43,6 +43,10 @@ class ClockMonotonicTest extends RedisContainerSupport {
     void 준비() {
         script = RedisScript.of(new ClassPathResource("redis/enqueue.lua"), List.class);
         redis.delete(QUEUE, MAX_SCORE).block(WAIT);
+        for (int i = 0; i < 200; i++) {
+            redis.delete(alive("m" + i)).block(WAIT);
+        }
+        redis.delete(alive("m1"), alive("A"), alive("B")).block(WAIT);
     }
 
     @SuppressWarnings("unchecked")
@@ -186,5 +190,8 @@ class ClockMonotonicTest extends RedisContainerSupport {
 
         assertThat(redis.opsForZSet().size(QUEUE).block(WAIT)).isZero();
         assertThat(redis.hasKey(MAX_SCORE).block(WAIT)).isFalse();
+        // 셋 중 하나만 생기는 회귀를 잡는다 — 검증이 첫 쓰기 앞에 있어야
+        // 한다는 계약은 세 키 전부에 걸린다.
+        assertThat(redis.hasKey(alive("m1")).block(WAIT)).isFalse();
     }
 }

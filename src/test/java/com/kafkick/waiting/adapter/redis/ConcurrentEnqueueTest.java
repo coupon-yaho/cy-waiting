@@ -6,6 +6,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -63,10 +64,17 @@ class ConcurrentEnqueueTest extends RedisContainerSupport {
                 .blockFirst(WAIT);
     }
 
-    /** 스레드를 동시에 풀어 실제 경합을 만든다. 순차 반복은 이 결함을 못 잡는다. */
+    /**
+     * 스레드를 동시에 풀어 실제 경합을 만든다. 순차 반복은 이 결함을 못 잡는다.
+     *
+     * <p><b>워커의 예외를 삼키지 않는다.</b> executor 안에서 죽으면 테스트
+     * 스레드는 모르고, 요청 절반이 실패해도 통과한다.
+     */
     private void 동시에(int threads, IntConsumer body) throws InterruptedException {
         CountDownLatch start = new CountDownLatch(1);
         CountDownLatch done = new CountDownLatch(threads);
+        List<Throwable> failures = new CopyOnWriteArrayList<>();
+
         try (ExecutorService pool = Executors.newFixedThreadPool(threads)) {
             for (int i = 0; i < threads; i++) {
                 int index = i;
@@ -76,6 +84,9 @@ class ConcurrentEnqueueTest extends RedisContainerSupport {
                         body.accept(index);
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
+                        failures.add(e);
+                    } catch (RuntimeException e) {
+                        failures.add(e);
                     } finally {
                         done.countDown();
                     }
@@ -84,6 +95,10 @@ class ConcurrentEnqueueTest extends RedisContainerSupport {
             start.countDown();
             assertThat(done.await(60, TimeUnit.SECONDS)).isTrue();
         }
+
+        assertThat(failures)
+                .withFailMessage("워커 %d개가 실패했다: %s", failures.size(), failures)
+                .isEmpty();
     }
 
     @Test

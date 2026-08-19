@@ -133,5 +133,8 @@ class EnqueueGuardTest extends RedisContainerSupport {
 
         assertThat(redis.opsForZSet().size(QUEUE).block(WAIT)).isZero();
         assertThat(redis.hasKey(MAX_SCORE).block(WAIT)).isFalse();
+        // alive 만 생기는 회귀를 잡는다. 검증이 첫 쓰기 앞이라는 계약은
+        // 세 키 전부에 걸린다 — 하나라도 새면 계약이 아니다.
+        assertThat(redis.hasKey(RedisKeys.alive(COUPON, 1, 0, "m1")).block(WAIT)).isFalse();
     }
 }

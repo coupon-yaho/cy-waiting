@@ -68,8 +68,14 @@ if floor >= score then
     applied = 1
 end
 
--- 여기서부터는 셋 다 성공한다. Lua 는 효과 기반 복제라 같이 남거나
--- 같이 사라진다 — maxscore 가 ZSET 보다 뒤처지지 않는다.
+-- **복제 단위로는 함께 움직인다.** Lua 는 효과 기반 복제라 이 스크립트가
+-- 남긴 쓰기는 복제본과 AOF 에 통째로 가거나 통째로 안 간다 — maxscore 가
+-- ZSET 보다 뒤처진 채 복제되는 상태는 없다.
+--
+-- **다만 스크립트 안의 롤백은 없다.** 아래 세 명령 중 하나가 런타임 오류를
+-- 내면 앞의 것은 그대로 남는다. 그래서 실패할 수 있는 것(인자 검증)을 전부
+-- 위로 올려 뒀다 — 여기 도달하면 남는 실패 경로는 메모리 부족뿐이고,
+-- 그건 maxmemory 로 막는다.
 redis.call('ZADD', KEYS[1], score, ARGV[1])
 redis.call('SET', KEYS[2], score, 'EX', scoreTtl)
 redis.call('SET', KEYS[3], '1', 'EX', aliveTtl)

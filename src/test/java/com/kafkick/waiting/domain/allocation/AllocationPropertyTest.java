@@ -3,6 +3,9 @@ package com.kafkick.waiting.domain.allocation;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.List;
 import java.util.Random;
 import org.junit.jupiter.api.DisplayName;
@@ -15,6 +18,8 @@ import org.junit.jupiter.api.Test;
  * {@code (credit, 쿠폰 수, 요구량 분포)} 조합에서만 어긋난다.
  */
 class AllocationPropertyTest {
+
+    private final FairShareAllocator allocator = FairShareAllocator.create();
 
     private static final long SEED = 20260819L;
     private static final int TRIALS = 100_000;
@@ -29,7 +34,7 @@ class AllocationPropertyTest {
             long credit = rnd.nextLong(0, 200_000);
             List<CouponDemand> demands = randomDemands(rnd);
 
-            long total = FairShareAllocator.allocate(credit, demands).stream()
+            long total = allocator.allocate(credit, demands).stream()
                     .mapToLong(Grant::credit).sum();
 
             if (total > credit) {
@@ -53,7 +58,7 @@ class AllocationPropertyTest {
             long credit = rnd.nextLong(0, 200_000);
             List<CouponDemand> demands = randomDemands(rnd);
 
-            List<Grant> grants = FairShareAllocator.allocate(credit, demands);
+            List<Grant> grants = allocator.allocate(credit, demands);
             for (Grant g : grants) {
                 long want = demands.stream()
                         .filter(d -> d.couponId().equals(g.couponId()))
@@ -81,7 +86,7 @@ class AllocationPropertyTest {
             long credit = rnd.nextLong(0, 200_000);
             List<CouponDemand> demands = randomDemands(rnd);
 
-            List<Grant> grants = FairShareAllocator.allocate(credit, demands);
+            List<Grant> grants = allocator.allocate(credit, demands);
             long total = grants.stream().mapToLong(Grant::credit).sum();
             long stillHungry = grants.stream()
                     .filter(g -> g.credit() < wantOf(demands, g.couponId()))
@@ -112,5 +117,75 @@ class AllocationPropertyTest {
                     "c" + i, rnd.nextLong(0, 200_000), rnd.nextLong(0, 200_000)));
         }
         return demands;
+    }
+
+    @Test
+    @DisplayName("끝까지_굶주린_쿠폰들은_서로_같은_몫을_받는다")
+    void 끝까지_굶주린_쿠폰들은_서로_같은_몫을_받는다() {
+        // 다른 속성 테스트들은 구현의 종료 조건을 다른 말로 되뇐 것에 가깝다.
+        // 이건 다르다 — 배분이 **등록 순서에 좌우되지 않는가**를 본다.
+        // 몫을 다 못 채운 쿠폰끼리 받은 양이 다르면 앞쪽이 유리했다는 뜻이고,
+        // 그러면 노드마다 순서가 달라질 때 총합이 흔들린다.
+        Random rnd = new Random(SEED);
+        int unfair = 0;
+
+        for (int t = 0; t < TRIALS; t++) {
+            long credit = rnd.nextLong(0, 200_000);
+            List<CouponDemand> demands = randomDemands(rnd);
+
+            List<Grant> grants = allocator.allocate(credit, demands);
+            long min = Long.MAX_VALUE;
+            long max = Long.MIN_VALUE;
+            for (Grant g : grants) {
+                if (g.credit() >= wantOf(demands, g.couponId())) {
+                    continue;   // 요구량을 다 채운 쿠폰은 비교 대상이 아니다
+                }
+                min = Math.min(min, g.credit());
+                max = Math.max(max, g.credit());
+            }
+
+            if (min != Long.MAX_VALUE && max != min) {
+                unfair++;
+            }
+        }
+
+        assertThat(unfair)
+                .withFailMessage("굶주린 쿠폰끼리 몫이 다른 경우 %d 건 (시드 %d)", unfair, SEED)
+                .isZero();
+    }
+
+    @Test
+    @DisplayName("배분_결과가_입력_순서에_좌우되지_않는다")
+    void 배분_결과가_입력_순서에_좌우되지_않는다() {
+        // 노드마다 수요를 다른 순서로 모을 수 있다. 순서가 결과를 바꾸면
+        // 같은 틱에 노드들이 서로 다른 답을 내고 총합이 전역 크레딧을 넘는다.
+        Random rnd = new Random(SEED);
+        int mismatches = 0;
+
+        for (int t = 0; t < 20_000; t++) {
+            long credit = rnd.nextLong(0, 200_000);
+            List<CouponDemand> demands = randomDemands(rnd);
+            List<CouponDemand> shuffled = new ArrayList<>(demands);
+            Collections.shuffle(shuffled, rnd);
+
+            Map<String, Long> a = byCoupon(allocator.allocate(credit, demands));
+            Map<String, Long> b = byCoupon(allocator.allocate(credit, shuffled));
+
+            if (!a.equals(b)) {
+                mismatches++;
+            }
+        }
+
+        assertThat(mismatches)
+                .withFailMessage("순서에 따라 결과가 달라진 경우 %d 건 (시드 %d)", mismatches, SEED)
+                .isZero();
+    }
+
+    private Map<String, Long> byCoupon(List<Grant> grants) {
+        Map<String, Long> m = new HashMap<>();
+        for (Grant g : grants) {
+            m.put(g.couponId(), g.credit());
+        }
+        return m;
     }
 }

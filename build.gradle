@@ -26,13 +26,19 @@ repositories {
 
 ext {
     springCloudVersion = '2025.1.2'
+    testcontainersVersion = '1.21.3'
 }
 
 dependencyManagement {
     imports {
         mavenBom "org.springframework.cloud:spring-cloud-dependencies:${springCloudVersion}"
+        // 부트 BOM 은 testcontainers 판을 관리하지 않는다. 손으로 적으면
+        // 부트가 기대하는 판과 어긋나 런타임에야 드러난다.
+        mavenBom "org.testcontainers:testcontainers-bom:${testcontainersVersion}"
     }
 }
+
+// 버전을 손으로 적지 않는다 — 부트가 관리하는 판과 어긋나면 런타임에야 드러난다.
 
 // 해당 페이즈에 도달하기 전에는 넣지 않는다.
 // resilience4j·loadbalancer 를 미리 넣으면 쓰지 않는 의존성이 빌드를 무겁게 하고,
@@ -50,6 +56,10 @@ dependencies {
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     // 도메인 순수성은 리뷰로 못 지킨다. 한 번 깨지면 조용히 번진다.
     testImplementation 'com.tngtech.archunit:archunit-junit5:1.3.0'
+    // 인메모리 대역으로는 Lua 의 복제 동작도 시계도 확인할 수 없다 (TS-3).
+    // 이 페이즈가 지키려는 것이 정확히 그 둘이라 실물로 붙는다.
+    testImplementation 'org.testcontainers:junit-jupiter'
+    testImplementation 'org.springframework.boot:spring-boot-testcontainers'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
@@ -59,6 +69,15 @@ dependencies {
 //
 // 태그로 가른다. 태그가 없는 테스트는 unit 으로 본다 — 새 테스트를 쓰면서
 // 태그를 잊어도 어딘가에서는 돈다.
+
+// docker-java 는 API 1.32 로 협상하는데 최신 데몬은 1.40 이상만 받는다. 데몬을
+// 낮출 수는 없으니 클라이언트 판을 올려 준다. 이미 설정돼 있으면 그대로 둔다 —
+// 사람마다 데몬 판이 다르고, 우리가 그걸 다 알 수는 없다.
+tasks.withType(Test).configureEach {
+    def apiVersion = System.getenv('DOCKER_API_VERSION') ?: '1.43'
+    environment 'DOCKER_API_VERSION', apiVersion
+    systemProperty 'api.version', apiVersion
+}
 
 tasks.named('test') {
     useJUnitPlatform {

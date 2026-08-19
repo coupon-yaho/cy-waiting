@@ -4,11 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.CouponStates;
-import com.kafkick.waiting.domain.coupon.QueueMode;
-import com.kafkick.waiting.domain.coupon.RuntimeState;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import java.util.EnumSet;
 import java.util.Set;
+import java.util.function.UnaryOperator;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -34,7 +33,7 @@ class DecisionReachabilityTest {
         seen.add(decide(CouponStates.idle(500), r -> r.withDataStale(true)));
         seen.add(decide(CouponStates.queueing(100, 500, 5000), r -> r.withDataStale(true)));
         seen.add(decide(CouponStates.queueing(100, 500, 20_000), r -> r));
-        seen.add(decide(always(), r -> r));
+        seen.add(decide(CouponStates.always(500), r -> r));
         seen.add(decide(CouponStates.queueing(100, 500, 3000), r -> r));
         seen.add(decide(CouponStates.idle(500), r -> r));
 
@@ -55,12 +54,9 @@ class DecisionReachabilityTest {
                 .containsExactlyInAnyOrder(AdmissionDecision.values());
     }
 
-    private CouponState always() {
-        return new CouponState(QueueMode.ALWAYS, RuntimeState.IDLE, 0, 500, 0, 1.0);
-    }
 
     private AdmissionDecision decide(
-            CouponState state, java.util.function.UnaryOperator<AdmissionRequest> tweak) {
+            CouponState state, UnaryOperator<AdmissionRequest> tweak) {
         AdmissionDecider decider = AdmissionDecider.of(SecondWindowLimiter.withMaxKeys(1000), 0.7);
         return decider.decide(tweak.apply(request(state)));
     }
@@ -68,7 +64,7 @@ class DecisionReachabilityTest {
     /** 상한이 마를 때까지 두드리고 마지막 판정을 돌려준다. */
     private AdmissionDecision drain(
             CouponState state,
-            java.util.function.UnaryOperator<AdmissionRequest> tweak,
+            UnaryOperator<AdmissionRequest> tweak,
             double idleRatio) {
         AdmissionDecider decider =
                 AdmissionDecider.of(SecondWindowLimiter.withMaxKeys(1000), idleRatio);

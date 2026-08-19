@@ -9,7 +9,20 @@ import java.util.List;
  * <p>균등하게만 나누면 한산한 쿠폰이 못 쓰고 남긴 몫이 버려지고, 요구량 비례로만
  * 나누면 몰리는 쿠폰 하나가 전부 가져가 나머지가 굶는다 (C-1·C-3).
  */
-public final class FairShareAllocator {
+public class FairShareAllocator {
+
+    private FairShareAllocator() {
+    }
+
+    /**
+     * 배분기를 만든다.
+     *
+     * <p>상태가 없어 static 으로 둘 수도 있지만 <b>배분은 도메인 규칙이다</b>
+     * (JS-14). 두 번째 정책이 생길 때 호출부를 안 고치려면 인스턴스여야 한다.
+     */
+    public static FairShareAllocator create() {
+        return new FairShareAllocator();
+    }
 
     /**
      * 굶주린 쿠폰에게 균등하게 나누고, 못 쓴 몫을 다시 굶주린 쪽으로 돌린다.
@@ -18,7 +31,7 @@ public final class FairShareAllocator {
      * 이득이고, 노드마다 다른 쪽을 고르면 총합이 전역 크레딧을 넘는다. 남긴
      * 나머지는 다음 틱 배분에 다시 들어간다.
      */
-    public static List<Grant> allocate(long globalCredit, List<CouponDemand> demands) {
+    public List<Grant> allocate(long globalCredit, List<CouponDemand> demands) {
         List<CouponDemand> active = demands.stream().filter(CouponDemand::isActive).toList();
         if (active.isEmpty()) {
             return List.of();
@@ -48,7 +61,7 @@ public final class FairShareAllocator {
      * 다음 패스에서 더 적은 수로 다시 나뉘고, 결국 굶주린 수보다 작아지면
      * 멎는다 — 그때는 균등하게 나눌 방법이 없어서 다음 틱 몫이 된다.
      */
-    private static long distribute(List<CouponDemand> active, long[] granted, long pool) {
+    private long distribute(List<CouponDemand> active, long[] granted, long pool) {
         // 호출부가 pool > 0 을 보장한다. 0 이면 애초에 돌 이유가 없다.
         int hungry = 0;
         for (int i = 0; i < active.size(); i++) {
@@ -77,8 +90,5 @@ public final class FairShareAllocator {
             spent += give;
         }
         return pool - spent;
-    }
-
-    private FairShareAllocator() {
     }
 }

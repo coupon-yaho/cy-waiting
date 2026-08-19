@@ -4,8 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.kafkick.waiting.domain.coupon.CouponState;
-import com.kafkick.waiting.domain.coupon.QueueMode;
-import com.kafkick.waiting.domain.coupon.RuntimeState;
 import com.kafkick.waiting.domain.coupon.CouponStates;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import org.junit.jupiter.api.DisplayName;
@@ -84,10 +82,8 @@ class AdmissionDeciderTest {
     @Test
     @DisplayName("항상_큐_모드는_한산해도_줄을_세운다")
     void 항상_큐_모드는_한산해도_줄을_세운다() {
-        CouponState always =
-                new CouponState(QueueMode.ALWAYS, RuntimeState.IDLE, 0, 500, 0, 1.0);
-
-        assertThat(decider().decide(request(always))).isEqualTo(AdmissionDecision.ENQUEUE_ALWAYS);
+        assertThat(decider().decide(request(CouponStates.always(500))))
+                .isEqualTo(AdmissionDecision.ENQUEUE_ALWAYS);
     }
 
     @Test

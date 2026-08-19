@@ -131,7 +131,7 @@ waiting/
 4. GREEN — 최소 구현          커밋: feat(scope): ...
 5. REFACTOR (선택)            커밋: refactor(scope): ...
 6. 작업 로그 기록                       /journal  또는 ai/journal/
-7. 리뷰 에이전트 실행                   해당 영역 에이전트
+7. 로컬 리뷰                            /review  ← PR 전에 끝낸다
 8. PR → develop               squash 금지. TDD 사이클 커밋이 이력의 목적이다
 ```
 
@@ -153,9 +153,25 @@ waiting/
 
 ---
 
-## 8. 리뷰 에이전트
+## 8. 리뷰 — PR 을 올리기 전에 끝낸다
 
-코드를 쓴 뒤 해당 영역 에이전트를 돌린다. 사람 리뷰의 앞단이지 대체가 아니다.
+**`/review` 를 돌린다.** 원격에서 지적받고 고치는 왕복은 비싸고, 그 사이
+잘못된 코드가 브랜치에 남는다. 절차 전문: [.claude/commands/review.md](.claude/commands/review.md)
+
+```bash
+.claude/hooks/review-branch.sh          # 기계 검사 — CodeRabbit 이 볼 것을 먼저 본다
+./gradlew build jacocoTestCoverageVerification pitest
+```
+
+`gh pr create` 는 **기계 검사가 통과해야 실행된다** (`.claude/hooks/guard-pr.sh`).
+막히면 우회하지 말고 고친다.
+
+> **왜 브랜치 전체를 다시 보는가.** `check-java.sh`·`check-lua.sh` 는
+> `Write|Edit` 훅이라 **그 도구로 쓴 파일만** 본다. 힙독이나 스크립트로 만든
+> 파일은 통째로 지나가고, 실제로 그렇게 들어간 위반이 CodeRabbit 까지 갔다.
+
+기계가 통과했다고 끝이 아니다. 해당 영역 에이전트를 돌린다 — 사람 리뷰의
+앞단이지 대체가 아니다.
 
 | 에이전트 | 언제 |
 |---|---|

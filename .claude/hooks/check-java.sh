@@ -90,10 +90,30 @@ fi
 
 # ── JS-14 중첩 클래스는 static ────────────────────────────────────────────────
 # 들여쓰기된 class 선언 = 중첩. 수식어가 없는 경우도 잡는다.
-report "JS-14" "중첩 클래스는 static — 바깥 인스턴스를 붙들어 누수를 만든다" \
-    "$(scan 'JS-14' \
-        '^[0-9]+:[[:space:]]+((public|protected|private|final|abstract)[[:space:]]+)*class[[:space:]]' \
-        'static')"
+#
+# **JUnit 5 의 @Nested 는 제외한다.** 그쪽은 static 이면 아예 실행되지 않는다 —
+# 규칙과 프레임워크가 충돌하는 자리라 규칙이 진다. 여기서 오탐을 내면 사람은
+# 훅을 고치는 대신 우회하고, 그러면 진짜 위반도 같이 지나간다.
+# @Nested 이후 **선언까지의 연속 어노테이션 줄**을 전부 건너뛴다. 개수를 못
+# 박으면 @Tag 하나 붙는 순간 오탐이 되고, 오탐이 나면 훅이 우회된다.
+nested_class_lines=$(awk '
+    # `@Nested class Inner {` 처럼 한 줄에 같이 오면 그 줄이 곧 선언이다.
+    # pending 을 켠 채 넘어가면 **다음 중첩 클래스가 대신 면제된다.**
+    /^[[:space:]]*@Nested([[:space:]]|\(|$)/ && /class[[:space:]]/ { print NR; pending=0; next }
+    /^[[:space:]]*@Nested([[:space:]]|\(|$)/                       { pending=1; next }
+    # 어노테이션 인자가 여러 줄에 걸치면 이어지는 줄은 @ 로 시작하지 않는다.
+    # 개수나 형태를 못 박지 말고 **선언 줄을 만날 때까지** 건너뛴다.
+    pending && /class[[:space:]]/                                   { print NR; pending=0; next }
+    pending                                                         { next }
+' "$file")
+js14=$(scan 'JS-14' \
+    '^[0-9]+:[[:space:]]+((public|protected|private|final|abstract)[[:space:]]+)*class[[:space:]]' \
+    'static')
+for n in $nested_class_lines; do
+    js14=$(printf '%s\n' "$js14" | grep -vE "^[[:space:]]*$n:")
+done
+js14=$(printf '%s' "$js14" | grep -v '^[[:space:]]*$')
+report "JS-14" "중첩 클래스는 static — 바깥 인스턴스를 붙들어 누수를 만든다" "$js14"
 
 # ── JS-6 Javadoc 5줄 초과 (원본에서 검사한다) ─────────────────────────────────
 hits=$(awk '

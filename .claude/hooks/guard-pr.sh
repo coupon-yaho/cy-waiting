@@ -30,10 +30,22 @@ if [[ ! -x "$RUNNER" ]]; then
 fi
 
 # base 를 명령에서 뽑는다. 없으면 develop
-# `gh pr create -B develop` 형식도 쓴다. 하나만 보면 엉뚱한 기준을 잡는다.
-base=$(printf '%s' "$cmd" \
-       | grep -oE -e '(--base|-B)[= ]+[A-Za-z0-9._/-]+' | head -1 \
-       | sed -E 's/(--base|-B)[= ]+//')
+# **명령 문자열 전체를 훑지 않는다.** `--title "--base release"` 처럼 인용부호
+# 안에 들어간 값을 옵션으로 착각한다. 인자를 토큰으로 쪼갠 뒤 옵션 자리만 본다.
+#
+# 실행하지 않고 쪼갠다 — `xargs` 는 셸 인용 규칙을 그대로 따르면서 명령을
+# 부르지 않는다.
+base=""
+mapfile -t args < <(printf '%s' "$cmd" | xargs -n1 printf '%s\n' 2>/dev/null)
+for ((i = 0; i < ${#args[@]}; i++)); do
+    case "${args[i]}" in
+        --base=*) base="${args[i]#--base=}"; break ;;
+        -B=*)     base="${args[i]#-B=}";     break ;;
+        --base|-B)
+            base="${args[i + 1]:-}"
+            break ;;
+    esac
+done
 base="${base:-develop}"
 # 이미 접두가 붙어 있으면 겹치지 않게 둔다. origin/origin/develop 이 되면
 # 러너가 폴백을 타고, 폴백마저 없으면 브랜치 커밋을 하나도 안 보고 통과한다.

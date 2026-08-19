@@ -40,15 +40,27 @@ run_hook() {
 # JS-12 · 값/상태 객체의 public 생성자 (class 한정. record 는 언어 제약)
 check_js12() {
     local file=$1
-    grep -nE '^\s*public [A-Z][A-Za-z0-9_]*\(' "$file" 2>/dev/null \
-        | grep -vE 'record|interface' \
+    # **주석을 걷어낸 뒤 실제 선언만 본다.** 파일 전문을 훑으면 `// record Service(`
+    # 같은 주석 한 줄이 진짜 위반을 면제해 버린다.
+    local code
+    code=$(awk '{
+        line = $0
+        sub(/\/\/.*/, "", line)
+        if (line ~ /^[[:space:]]*\*/)  line = ""
+        if (line ~ /^[[:space:]]*\/\*/) line = ""
+        printf "%d:%s\n", NR, line
+    }' "$file")
+
+    printf '%s\n' "$code" \
+        | grep -E '^[0-9]+:[[:space:]]*public [A-Z][A-Za-z0-9_]*\(' \
         | while IFS=: read -r n rest; do
-            # **파일 단위로 건너뛰지 않는다.** record 하나가 같은 파일에 있다고
-            # 다른 클래스의 public 생성자까지 면제하면 위반이 통째로 샌다.
-            # 그 생성자 이름의 타입이 record 로 선언됐는지만 본다.
             local name
             name=$(printf '%s' "$rest" | sed -E 's/^[[:space:]]*public[[:space:]]+([A-Za-z0-9_]+).*/\1/')
-            grep -qE "(^|[[:space:]])record[[:space:]]+$name([[:space:]]|\()" "$file" && continue
+            # 그 이름의 타입이 record 로 선언됐으면 정규 생성자라 막을 수 없다
+            if printf '%s\n' "$code" \
+               | grep -qE "^[0-9]+:.*(^|[[:space:]])record[[:space:]]+$name([[:space:]]|\()"; then
+                continue
+            fi
             printf '  JS-12 %s:%s public 생성자 — 정적 팩토리를 쓴다\n' "$file" "$n"
           done
 }
@@ -152,6 +164,12 @@ self_test() {
         $'class E { void f() { throw new SoldOutException(); } }\n' "EX-1"
     probe "Flux.interval" "src/main/java/F.java" \
         $'class F { void f() { Flux.interval(d).subscribe(); } }\n' "RX-2"
+    # 주석 한 줄이 진짜 위반을 면제하던 회귀
+    probe "주석 속 record 는 면제가 아니다" "src/main/java/G.java" \
+        $'// record G(int x)\nclass G {\n    public G() {}\n}\n' "JS-12"
+    # record 와 클래스가 한 파일에 섞여도 클래스만 잡는다
+    probe "record 가 있어도 다른 클래스는 검사한다" "src/main/java/H.java" \
+        $'public record Marker(int x) {}\n\nclass H {\n    public H() {}\n}\n' "JS-12"
     # **상대경로 회귀.** git 은 선행 슬래시 없는 경로를 준다. 절대경로로
     # 안 바꾸면 테스트 전용 검사가 아예 안 돌고(미탐), 동시에 테스트가
     # 프로덕션 규칙으로 검사된다(오탐). 둘 다 실제로 났다.

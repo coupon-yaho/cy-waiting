@@ -93,6 +93,14 @@ file_case check-java.sh 'class N2 {
     }
 }' 'src/test/java/N2Test.java' allow 'JS-14 @Nested 어노테이션 3개 (회귀) — 개수를 못 박지 않는다'
 
+file_case check-java.sh 'class N3 {
+    @Nested class Inner {
+    }
+
+    class Leaked {
+    }
+}' 'src/test/java/N3Test.java' block 'JS-14 @Nested 가 같은 줄이면 다음 중첩이 새지 않는다 (회귀)'
+
 # 상대경로로 넘어오면 테스트가 프로덕션 규칙으로 검사된다. 러너가 절대경로로
 # 넘기는지를 여기서 고정한다 — 이 회귀가 실제로 났다.
 file_case check-java.sh 'class R {

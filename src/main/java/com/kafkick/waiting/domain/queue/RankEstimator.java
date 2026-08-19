@@ -16,6 +16,11 @@ public final class RankEstimator {
      * 자기 앞의 절대값이라 정확해야 할 자리에서 정확하다.
      */
     public static long globalRank(long localRank, int shards) {
+        if (localRank < 0) {
+            // ZCOUNT 는 음수를 못 낸다. 여기 음수가 오면 어댑터가 깨진 것이고,
+            // 조용히 통과시키면 음수 순위나 포화한 MAX_VALUE 로 둔갑한다.
+            throw new IllegalArgumentException("localRank 는 0 이상이어야 한다: " + localRank);
+        }
         try {
             return Math.multiplyExact(localRank, Math.max(1, shards));
         } catch (ArithmeticException overflow) {

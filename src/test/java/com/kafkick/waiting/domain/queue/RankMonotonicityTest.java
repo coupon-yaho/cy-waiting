@@ -1,6 +1,7 @@
 package com.kafkick.waiting.domain.queue;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.Random;
 import org.junit.jupiter.api.DisplayName;
@@ -68,5 +69,16 @@ class RankMonotonicityTest {
         // 넘치면 음수가 되어 순위가 뒤로 간다 — 역행 0 을 스스로 깬다.
         assertThat(RankEstimator.globalRank(Long.MAX_VALUE, 2)).isEqualTo(Long.MAX_VALUE);
         assertThat(RankEstimator.globalRank(Long.MAX_VALUE / 2 + 1, 2)).isEqualTo(Long.MAX_VALUE);
+    }
+
+    @Test
+    @DisplayName("음수_로컬_순위는_거부한다")
+    void 음수_로컬_순위는_거부한다() {
+        // 조용히 통과시키면 음수 순위나 포화한 MAX_VALUE 로 둔갑해,
+        // 어댑터의 결함이 표시 계층까지 내려간 뒤에야 드러난다.
+        assertThatThrownBy(() -> RankEstimator.globalRank(-1, 2))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> RankEstimator.globalRank(Long.MIN_VALUE, 2))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }

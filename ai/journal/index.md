@@ -8,6 +8,7 @@
 
 | ID | 날짜 | 종류 | 제목 | 확신 | 승격 |
 |---|---|---|---|---|---|
+| [AIJ-0014](2026/08/AIJ-0014-redis-wiring.md) | 2026-08-19 | implement | 레디스 배선 — 시간 예산을 시동으로 지킨다 | high | — |
 | [AIJ-0013](2026/08/AIJ-0013-local-review-before-pr.md) | 2026-08-19 | implement | 훅이 못 본 파일들 — PR 전 브랜치 전체 검사 | medium | — |
 | [AIJ-0012](2026/08/AIJ-0012-allocation-polling-smoothing.md) | 2026-08-19 | implement | 배분·폴링·평활화 — 계획서 예시와 완료 조건의 충돌 | high | — |
 | [AIJ-0011](2026/08/AIJ-0011-admission-ladder-and-mutation-gaps.md) | 2026-08-19 | implement | 판정 사다리 · 순위 추정 · 뮤테이션이 짚은 경계 | high | — |
@@ -54,6 +55,8 @@
 | AIJ-0010 | 노드 번호(`nodeIndex`)가 틱마다 안정적이다 | Phase 4 하트비트 설계 시 확인. 바뀌면 배분이 출렁인다 |
 | AIJ-0011 | 남은 생존 뮤턴트 3건이 정말 등가다 | 논증으로만 확인했다. 도구가 보장하지 않는다 |
 | AIJ-0011 | 샤드 균등 분포 가정이 쏠린 순간에도 성립한다 | Phase 3 에서 실측 |
+| AIJ-0014 | `DOCKER_API_VERSION` 1.43 이 팀 전원의 데몬과 맞는다 | 더 낮은 데몬을 쓰는 사람이 있으면 막힌다 |
+| AIJ-0014 | `timeout 500ms` 가 실제 부하에서 충분하다 | Phase 6 실측 |
 | AIJ-0013 | `guard-pr.sh` 의 base 추출이 모든 입력 형태를 다룬다 | `--base origin/develop` 같은 중복 접두 미처리 |
 | AIJ-0012 | 폴링 밴드 간격 1/3/10 초가 예산 4,000 RPS 와 맞는다 | 30 초만 계획서가 못 박았다. Phase 6 실측 |
 | AIJ-0012 | ETA 버킷 경계 30/90/450 초가 이탈 판단 구간과 맞는다 | 문구에서 역산했다. 실측 필요 |

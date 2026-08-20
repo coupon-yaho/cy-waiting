@@ -44,6 +44,19 @@ public final class CouponStates {
         return CouponState.unknown();
     }
 
+
+    /**
+     * 운영자가 껐는데 <b>줄이 아직 남아 있다.</b>
+     *
+     * <p>{@code mode} 는 사람이 고른 값이고 {@code waiting} 은 기계 관측이라
+     * 서로 독립이다 — 붐비는 쿠폰의 대기열을 끄면 이 상태가 된다. 배분은
+     * {@code mode} 를 안 보므로 남은 줄은 계속 빠진다.
+     */
+    public static CouponState offWithQueue(long credit, long remainingStock, long waiting) {
+        return new CouponState(QueueMode.OFF, RuntimeState.QUEUEING,
+                credit, remainingStock, waiting, 1.0);
+    }
+
     private CouponStates() {
     }
 }

@@ -117,8 +117,8 @@ redis.call('SET', KEYS[2], t, 'EX', 86400)
 ## 3. 키 스킴 — 샤딩까지 내다본 확정
 
 ```
-S >  1:   queue:{cid:s}   maxscore:{cid:s}   admitted:{cid:s}   grace:{cid:s}   alive:{cid:s}:{member}
-S == 1:   queue:{cid}     maxscore:{cid}     admitted:{cid}     grace:{cid}     alive:{cid}:{member}
+S >  1:   queue:{cid:s}   maxscore:{cid:s}   admitted:{cid:s}   grace:{cid:s}   alive:{cid:s}
+S == 1:   queue:{cid}     maxscore:{cid}     admitted:{cid}     grace:{cid}     alive:{cid}
 
 전역:     gw:snapshot      gw:instances      scheduler:leader    gw:tunables
           coupons:active   coupon:policy     capacity:coupon-svc:{version}
@@ -420,7 +420,7 @@ coupon:policy  JSON. `pcall(cjson.decode, …)` 로 읽고 실패는 기본값 (
 - **선행** T3.4.1
 
 1. **RED** `등록하면_생존_키가_TTL과_함께_생긴다`
-2. **GREEN** `SET alive:{cid}:{member} 1 EX <ttl>`
+2. **GREEN** `SET alive:{cid} 1 EX <ttl>`
 3. **완료** 생존 키가 주입된 TTL 로 생긴다 — 스크립트에 값을 박지 않는다
 
 #### T3.4.5 · 반환 형식

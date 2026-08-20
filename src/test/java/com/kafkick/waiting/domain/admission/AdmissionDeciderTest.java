@@ -47,8 +47,8 @@ class AdmissionDeciderTest {
     }
 
     @Test
-    @DisplayName("대기열이_꺼져_있으면_붐벼도_통과한다")
-    void 대기열이_꺼져_있으면_붐벼도_통과한다() {
+    @DisplayName("대기열이_꺼져_있고_줄이_비면_통과한다")
+    void 대기열이_꺼져_있고_줄이_비면_통과한다() {
         assertThat(decider().decide(request(CouponStates.off(500))))
                 .isEqualTo(AdmissionDecision.PASS_BYPASS);
     }

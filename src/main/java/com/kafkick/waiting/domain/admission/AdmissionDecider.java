@@ -67,12 +67,22 @@ public class AdmissionDecider {
                     : AdmissionDecision.RETRY_TOKEN;
         }
 
-        // 3 — 운영자가 껐다. 붐비든 말든 줄을 안 세운다.
-        if (s.mode() == QueueMode.OFF) {
+        // **줄의 존재는 정책보다 먼저 본다.** mode 는 사람이 고른 값이고
+        // waiting 은 기계가 관측한 값이라 서로 독립이다 — 어긋난 조합이
+        // 실제로 생긴다.
+        boolean hasQueue = s.waiting() > 0 || req.justEnqueued();
+
+        // 3 — 운영자가 껐다. **다만 줄이 비었을 때만이다.**
+        //
+        // 줄이 남아 있는데 우회시키면 신규 유입이 그 줄을 통째로 추월하고
+        // 재고까지 먼저 먹는다 — 6번이 낡은 스냅샷에서 막은 것을 여기서
+        // 그대로 뚫는 셈이다 (불변식 4).
+        //
+        // OFF 는 배분에 관여하지 않으므로 남은 줄은 정상적으로 빠지고,
+        // 비는 순간 이 줄이 다시 산다.
+        if (s.mode() == QueueMode.OFF && !hasQueue) {
             return AdmissionDecision.PASS_BYPASS;
         }
-
-        boolean hasQueue = s.waiting() > 0 || req.justEnqueued();
 
         // 4 — 낡았지만 줄이 비었다. 밀어낼 사람이 없으니 상한 안에서 통과.
         if (req.dataStale() && !hasQueue) {

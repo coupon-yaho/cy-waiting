@@ -172,10 +172,11 @@ tryAcquireAll(tier1, tier2):
 ```
  1. stock <= 0                        → REJECT_SOLD_OUT
  2. hasValidToken                     → tier2 통과 시 PASS_TOKEN, 초과 시 RETRY_TOKEN
- 3. mode == OFF                       → PASS_BYPASS
+ 3. mode == OFF && !hasQueue          → PASS_BYPASS
  4. dataStale && waiting == 0 && !justEnqueued
                                       → failOpen (상한 내 PASS, 초과 시 REJECT_OVERLOAD)
- 5. waiting >= queueCapacity          → REJECT_QUEUE_FULL    ← 큐로 가는 경로보다 앞
+ 5. waiting > 0 && waiting >= queueCapacity
+                                      → REJECT_QUEUE_FULL    ← 큐로 가는 경로보다 앞
  6. dataStale && (waiting > 0 || justEnqueued)
                                       → ENQUEUE_STALE        (F1)
  7. mode == ALWAYS                    → ENQUEUE_ALWAYS
@@ -185,6 +186,16 @@ tryAcquireAll(tier1, tier2):
                                           ENQUEUE_RATE_GLOBAL / ENQUEUE_KEY_SATURATED
 10.                                   → PASS_UNDER_CAP
 ```
+
+> **3번의 `!hasQueue` 가 불변식 4 다.** `mode` 는 사람이 고른 값이고 `waiting` 은
+> 기계가 관측한 값이라 서로 독립이다. 줄이 남아 있는데 우회시키면 신규 유입이
+> 그 줄을 통째로 추월하고 재고까지 먼저 먹는다 — 6번이 낡은 스냅샷에서 막은
+> 것을 여기서 뚫는 셈이다. `OFF` 는 배분에 관여하지 않으므로 남은 줄은
+> 정상적으로 빠지고, 비는 순간 이 줄이 다시 산다.
+
+> **5번의 `waiting > 0` 가 R1 이다.** 한산한 쿠폰은 `credit` 이 0 이라 용량도
+> 0 이고, 이 조건이 없으면 `0 >= 0` 이 참이 되어 전원이 `REJECT_QUEUE_FULL` 로
+> 간다 — 무대기 통과 경로가 통째로 막힌다.
 
 **9번은 원자 판정이고, 여기 도달하는 것은 IDLE 쿠폰뿐이다.** `I4` 의 대우로
 8번 시점에 남는 것은 IDLE 아니면 `waiting>0` 이고 후자는 전부 큐로 간다.

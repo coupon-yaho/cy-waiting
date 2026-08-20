@@ -1,9 +1,17 @@
-# AIJ-0023 · 클러스터 모드 — 무엇을 잡고 무엇을 못 잡나
+---
+id: AIJ-0023
+date: 2026-08-20
+kind: implement
+phase: 3
+plan: [3.8.3]
+jira: CY-235
+commits: [fcf07d5, ec485a8, a7a83bc]
+agent: claude-opus-5
+confidence: medium
+promoted-to:
+---
 
-- **날짜** 2026-08-20
-- **종류** implement
-- **확신** medium
-- **티켓** CY-235
+# 클러스터 모드 — 무엇을 잡고 무엇을 못 잡나
 
 ## 무엇을 했나
 

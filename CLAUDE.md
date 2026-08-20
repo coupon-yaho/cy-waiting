@@ -111,7 +111,7 @@ waiting/
 | **무엇을 왜 만드는지** | [plan/00-requirements.md](plan/00-requirements.md) — 요구사항·비목표·제약·가정 |
 | 무엇을 만들지 모를 때 | [plan/README.md](plan/README.md) → 해당 페이즈 문서 |
 | 코드를 쓰기 전 | 해당 패키지 규칙 ([ai/rules/70-packages.md](ai/rules/70-packages.md)) |
-| 왜 이렇게 됐는지 모를 때 | [plan/90-decisions.md](plan/90-decisions.md) → [ai/journal/index.md](ai/journal/index.md) |
+| 왜 이렇게 됐는지 모를 때 | [plan/90-decisions.md](plan/90-decisions.md) → [ai/journal/](ai/journal) — 색인은 `.github/scripts/journal-index.sh` 가 만든다 |
 | 착수가 막혔을 때 | [plan/README.md](plan/README.md) 0절 — 차단 중인 결정 |
 | 기존 구현이 궁금할 때 | `../waiting-legacy/` — **읽기 전용. 수정 금지** |
 
@@ -176,10 +176,16 @@ waiting/
 | 에이전트 | 언제 |
 |---|---|
 | `domain-guardian` | `domain` 패키지를 건드렸을 때 |
+| `admission-auditor` | 판정·배분·폴링 — **결과가 맞는지** |
 | `resilience-auditor` | 장애·회복 경로, fail-open, 서킷, 리트라이 |
-| `redis-cluster-checker` | Lua·키 스킴·샤딩 |
+| `redis-cluster-checker` | 키 스킴·샤딩 |
+| `lua-optimizer` | Lua 의 정확성과 비용 |
+| `security-reviewer` | 시크릿·CI 공급망·입력 검증 |
 | `test-quality-reviewer` | 테스트를 추가·수정했을 때 |
 | `style-enforcer` | 커밋 직전 (전 영역) |
+
+**릴리스 전에는 전부 돌린다.** 되돌릴 수 없는 병합이라 한 관점이라도 비면
+그만큼 못 본 채로 나간다.
 
 정의: `.claude/agents/`
 

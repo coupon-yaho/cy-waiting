@@ -12,7 +12,7 @@ plugins {
 }
 
 group = 'com.kafkick'
-version = '0.0.1-SNAPSHOT'
+version = '0.1.0'
 
 java {
     toolchain {
@@ -30,6 +30,14 @@ repositories {
 ext {
     springCloudVersion = '2025.1.2'
     testcontainersVersion = '2.0.5'
+
+    // **부트가 관리하는 판을 속성으로 덮는다.** 의존성을 따로 박으면 BOM 이
+    // 관리하는 나머지 netty 모듈과 판이 갈린다.
+    //
+    // 4.2.15 의 HTTP 코덱 계열에 HIGH 6건이 있다 (CVE-2026-55831·55833·56745·
+    // 56816·56819·59901). 취약점 스캔이 Java 를 하나도 안 보고 있어서
+    // 드러나지 않았다 (CY-293).
+    set('netty.version', '4.2.17.Final')
 }
 
 dependencyManagement {
@@ -66,7 +74,15 @@ dependencies {
     // 옛 이름으로 되돌리면 해석 자체가 안 된다.
     testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
     testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+    // 리액티브 흐름은 단언할 지점이 다르다 — 무엇이 몇 번 흘렀는지,
+    // 오류가 밖으로 샜는지. 판은 부트가 관리한다.
+    testImplementation 'io.projectreactor:reactor-test'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+
+    // 장애 주입 픽스처가 실물 컨테이너를 다룬다. **Phase 8 이 다시 만들지
+    // 않고 확장하도록** 픽스처 소스셋에 둔다 (04-control-plane 6.0).
+    testFixturesApi 'org.testcontainers:testcontainers'
+    testFixturesApi 'io.lettuce:lettuce-core'
 }
 
 // ── 테스트 계층 ──────────────────────────────────────────────────────────────

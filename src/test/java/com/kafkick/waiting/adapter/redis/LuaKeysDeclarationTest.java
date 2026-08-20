@@ -92,7 +92,9 @@ class LuaKeysDeclarationTest {
         Files.writeString(probe, "redis.call('ZCARD', 'queue:{c1}')\n", StandardCharsets.UTF_8);
 
         try {
-            assertThat(violationsIn(probe)).isNotEmpty();
+            // 무엇을 잡았는지까지 본다 — 엉뚱한 것을 잡아도 통과하면 안 된다.
+            assertThat(violationsIn(probe))
+                    .singleElement().asString().contains("'queue:{c1}'");
         } finally {
             Files.deleteIfExists(probe);
         }

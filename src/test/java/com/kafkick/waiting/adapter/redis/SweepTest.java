@@ -80,6 +80,7 @@ class SweepTest extends RedisContainerSupport {
         enqueue("m0");
         enqueue("m1");
         enqueue("m2");
+        double keptScore = redis.opsForZSet().score(QUEUE, "m2").block(WAIT);
         redis.opsForZSet().remove(ALIVE, "m0", "m1").block(WAIT);
 
         assertThat(swept(sweep("10"))).isEqualTo(2);
@@ -88,7 +89,7 @@ class SweepTest extends RedisContainerSupport {
         // 누가 남았는지를 직접 본다.
         assertThat(redis.opsForZSet().score(QUEUE, "m0").block(WAIT)).isNull();
         assertThat(redis.opsForZSet().score(QUEUE, "m1").block(WAIT)).isNull();
-        assertThat(redis.opsForZSet().score(QUEUE, "m2").block(WAIT)).isNotNull();
+        assertThat(redis.opsForZSet().score(QUEUE, "m2").block(WAIT)).isEqualTo(keptScore);
     }
 
     @Test
@@ -109,13 +110,16 @@ class SweepTest extends RedisContainerSupport {
             redis.opsForZSet().remove(ALIVE, "m" + i).block(WAIT);
         }
 
+        double kept2 = redis.opsForZSet().score(QUEUE, "m2").block(WAIT);
+        double kept4 = redis.opsForZSet().score(QUEUE, "m4").block(WAIT);
+
         assertThat(swept(sweep("2"))).isEqualTo(2);
 
-        // 앞 둘만 빠지고 범위 밖은 남는다
+        // 앞 둘만 빠지고 범위 밖은 **순번까지 그대로** 남는다
         assertThat(redis.opsForZSet().score(QUEUE, "m0").block(WAIT)).isNull();
         assertThat(redis.opsForZSet().score(QUEUE, "m1").block(WAIT)).isNull();
-        assertThat(redis.opsForZSet().score(QUEUE, "m2").block(WAIT)).isNotNull();
-        assertThat(redis.opsForZSet().score(QUEUE, "m4").block(WAIT)).isNotNull();
+        assertThat(redis.opsForZSet().score(QUEUE, "m2").block(WAIT)).isEqualTo(kept2);
+        assertThat(redis.opsForZSet().score(QUEUE, "m4").block(WAIT)).isEqualTo(kept4);
     }
 
     @Test

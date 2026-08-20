@@ -74,7 +74,8 @@ class HardcodedKeyTest {
                 "class Leak {\n    String key = \"queue:{c1}\";\n}\n", StandardCharsets.UTF_8);
 
         try {
-            assertThat(violationsIn(dir)).isNotEmpty();
+            // 무엇을 잡았는지까지 본다 — 엉뚱한 것을 잡아도 통과하면 안 된다.
+            assertThat(violationsIn(dir)).containsExactly("Leak.java:2");
         } finally {
             Files.deleteIfExists(probe);
             Files.deleteIfExists(dir);

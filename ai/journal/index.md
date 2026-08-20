@@ -8,6 +8,7 @@
 
 | ID | 날짜 | 종류 | 제목 | 확신 | 승격 |
 |---|---|---|---|---|---|
+| [AIJ-0026](2026/08/AIJ-0026-dependency-refresh.md) | 2026-08-20 | decision | 버전은 실측한다 — 검색 색인은 최신을 모른다 | high | — |
 | [AIJ-0023](2026/08/AIJ-0023-cluster-mode.md) | 2026-08-20 | implement | 클러스터 모드 — 무엇을 잡고 무엇을 못 잡나 | medium | — |
 | [AIJ-0022](2026/08/AIJ-0022-leader-election.md) | 2026-08-20 | implement | 리더는 한 대다 — 소유권을 값에 담는 이유 | high | — |
 | [AIJ-0021](2026/08/AIJ-0021-sweep.md) | 2026-08-20 | implement | 이탈자 청소 — 앞부분만 본다 | medium | — |

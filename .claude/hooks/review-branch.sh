@@ -348,6 +348,37 @@ if ((tickets > 1)); then
     findings=$((findings + 1))
 fi
 
+# ── CI 가 도는 규범 검사 ────────────────────────────────────────────────────
+# **CI 와 같은 스크립트를 부른다.** 규칙을 여기 다시 구현하면 사본이 생기고,
+# 사본은 갈라진다. 실제로 문서 링크와 훅 자기검증이 러너에 없어서, 파일을
+# 지우고 링크를 안 고친 PR 이 CI 에서야 걸린 일이 반복됐다.
+head2 "CI 규범 검사 — 같은 스크립트"
+# **self-test.sh 는 여기서 안 부른다.** 그것이 guard-pr.sh 를 부르고,
+# guard-pr.sh 가 이 러너를 부른다 — 넣었더니 무한 재귀로 멈췄다.
+# 훅 자기검증은 `--self-test` 로 따로 돌린다.
+for check in \
+    "문서 링크:.github/scripts/doc-links.sh" \
+    "작업 로그:.github/scripts/journal-index.sh --check"
+do
+    name="${check%%:*}"
+    cmd="${check#*:}"
+    # 스크립트가 없으면 통과시키지 않는다 — 없는 검사를 통과로 세면
+    # 게이트가 파일 하나 지우는 것으로 사라진다.
+    script="${cmd%% *}"
+    if [[ ! -x "$script" ]]; then
+        say "  $name — 실행할 수 없다: $script"
+        findings=$((findings + 1))
+        continue
+    fi
+    if out=$($cmd 2>&1); then
+        say "  $name 통과"
+    else
+        say "  $name 위반"
+        printf '%s\n' "$out" | sed 's|^::error[^:]*::|    |; s|^|    |' | head -20
+        findings=$((findings + 1))
+    fi
+done
+
 head2 "사람·에이전트가 볼 것"
 say "  기계 검사는 형태만 본다. 판정 순서의 타당성, 불변식이 실제로 지켜지는지,"
 say "  픽스처가 도달 불가능한 상태를 만들 수 있는지는 .claude/agents/ 가 본다."

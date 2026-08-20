@@ -342,7 +342,12 @@ rm -rf "$probe_dir"
 # 났다. stash 로 씻는 것도 답이 아니다. 스크립트가 중간에 죽으면 남의 작업이
 # stash 로 숨는다. **깨끗한 임시 저장소를 만들어 거기서 시험한다.**
 clean_repo="$tmp/clean"
-mkdir -p "$clean_repo/.claude/hooks"
+mkdir -p "$clean_repo/.claude/hooks" "$clean_repo/.github/scripts" \
+         "$clean_repo/ai/journal/2026/08"
+# 러너가 CI 규범 검사도 부른다. 스크립트가 없으면 "실행할 수 없다" 로 막는데
+# (fail closed, 옳다) 그러면 깨끗한 케이스가 그 이유로 막혀 시험이 헛돈다.
+cp "$ROOT/.github/scripts/"*.sh "$clean_repo/.github/scripts/" 2>/dev/null
+chmod +x "$clean_repo/.github/scripts/"*.sh 2>/dev/null
 cp "$HOOKS/review-branch.sh" "$HOOKS/check-java.sh" "$HOOKS/check-lua.sh" \
    "$clean_repo/.claude/hooks/" 2>/dev/null
 chmod +x "$clean_repo/.claude/hooks/"*.sh 2>/dev/null
@@ -366,6 +371,11 @@ chmod +x "$clean_repo/.claude/hooks/"*.sh 2>/dev/null
 
 cp "$HOOKS/guard-pr.sh" "$clean_repo/.claude/hooks/" && chmod +x "$clean_repo/.claude/hooks/guard-pr.sh"
 
+# 가드는 에이전트 리뷰 증거도 요구한다. 여기서 보는 것은 **기계 검사 경로**라
+# 증거를 만들어 두고 그 부분만 시험한다 — 증거 요구 자체는 아래에서 따로 본다.
+git -C "$clean_repo" rev-parse HEAD > "$clean_repo/.claude/.agents-reviewed" 2>/dev/null
+echo '돌린 에이전트: 자기검증' >> "$clean_repo/.claude/.agents-reviewed"
+
 # 원격이 없는 임시 저장소라 origin/develop 이 없다. 원격 이름을 붙여 두어
 # 가드가 실제와 같은 경로(origin/<base>)를 타게 한다.
 git -C "$clean_repo" remote add origin "$clean_repo" >/dev/null 2>&1
@@ -382,6 +392,14 @@ printf '{"tool_input":{"command":"git status"}}' \
     | "$ROOT/.claude/hooks/guard-pr.sh" >/dev/null 2>&1
 unrelated=$?
 
+# **증거가 없으면 막아야 한다.** 알리기만 하던 시절에 매 PR 마다 건너뛰었고,
+# 뒤늦게 돌렸더니 불변식 위반 하나와 치명 둘이 나왔다.
+rm -f "$clean_repo/.claude/.agents-reviewed"
+nostamp=$(cd "$clean_repo" && printf '{"tool_input":{"command":"gh pr create --base develop"}}' \
+    | "$clean_repo/.claude/hooks/guard-pr.sh" >/dev/null 2>&1; echo $?)
+git -C "$clean_repo" rev-parse HEAD > "$clean_repo/.claude/.agents-reviewed" 2>/dev/null
+echo '돌린 에이전트: 자기검증' >> "$clean_repo/.claude/.agents-reviewed"
+
 # 검사를 못 돌리는 상황에서 통과시키면 게이트가 조용히 사라진다 (fail closed)
 failclosed=$(cd /tmp && printf '{"tool_input":{"command":"gh pr create"}}' \
     | "$ROOT/.claude/hooks/guard-pr.sh" >/dev/null 2>&1; echo $?)
@@ -395,6 +413,11 @@ if ((failclosed == 2)); then
     printf '  ok   저장소 밖에서는 막는다 (fail closed)\n'; pass=$((pass + 1))
 else
     printf '  FAIL 저장소 밖인데 통과시켰다 (exit %d)\n' "$failclosed"; fail=$((fail + 1))
+fi
+if ((nostamp == 2)); then
+    printf '  ok   에이전트 리뷰 증거가 없으면 막는다\n'; pass=$((pass + 1))
+else
+    printf '  FAIL 증거가 없는데 통과시켰다 (exit %d)\n' "$nostamp"; fail=$((fail + 1))
 fi
 if ((blocked == 2)); then
     printf '  ok   실제 위반에서 PR 생성을 막는다\n'; pass=$((pass + 1))

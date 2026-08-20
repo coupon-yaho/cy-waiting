@@ -220,27 +220,10 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
           persist-credentials: false
+      # CI 와 로컬이 **같은 스크립트**를 쓴다. 인라인으로 두면 로컬에서 못
+      # 돌리고, 못 돌리면 파일을 지우고 링크를 안 고친 PR 이 여기서야 걸린다.
       - name: 문서 링크 검사
-        run: |
-          set -uo pipefail
-          fail=0
-          while IFS= read -r f; do
-            d=$(dirname "$f")
-            while IFS= read -r l; do
-              [[ -z "$l" || "$l" == http* || "$l" == '#'* ]] && continue
-              [[ -e "$d/$l" ]] || { echo "::error file=$f::깨진 링크 — $l"; fail=1; }
-            done < <(
-              # 코드를 먼저 걷어내고 링크를 뽑는다. 오탐이 잦은 검사는
-              # 곧 무시되고, 무시되는 검사는 없는 것과 같다.
-              #   - 펜스 블록: 예제 YAML 의 표현식 구문이 링크로 잡힌다
-              #   - 인라인 코드: 문법 설명의 `[텍스트](url)` 이 링크로 잡힌다
-              awk '/^[[:space:]]*```/ { fence = !fence; next } !fence' "$f" \
-                | sed -E 's/`[^`]*`//g' \
-                | grep -oE '\]\(([^)#]+)(#[^)]*)?\)' 2>/dev/null \
-                | sed -E 's/^\]\(//; s/\)$//; s/#.*//'
-            )
-          done < <(find . -name '*.md' -not -path './.git/*' -not -path './node_modules/*')
-          exit $fail
+        run: .github/scripts/doc-links.sh
 
       # 파일만 확인하면 `](other.md#anchor)` 의 앵커가 사라져도 통과한다.
       # 링크는 열리는데 엉뚱한 위치로 가므로 읽는 사람만 손해다.

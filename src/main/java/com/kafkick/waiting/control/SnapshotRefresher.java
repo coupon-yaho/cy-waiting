@@ -1,6 +1,7 @@
 package com.kafkick.waiting.control;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
@@ -71,13 +72,21 @@ public final class SnapshotRefresher {
                 // 발행 표시가 없으면 버리되 **조용히 버리지 않는다.** 필터는
                 // 오류가 아니라서 아무 흔적을 안 남기는데, 스케줄러 판이 그
                 // 필드를 아직 안 쓰면 전 노드가 영영 갱신을 못 한다.
-                .doOnNext(hash -> {
-                    if (!codec.발행된것인가(hash)) {
-                        log.warn("발행 표시가 없는 스냅샷 — 받아들이지 않는다");
+                .map(codec::decode)
+                // **받아들일 수 있는 것만 받는다.** 발행 표시가 없으면 스케줄러가
+                // 낸 것이 아니고, 쿠폰을 하나도 못 읽었으면 형식이 갈린 것이다 —
+                // 둘 다 그대로 받으면 홀더가 비고 전 쿠폰이 매진으로 보인다.
+                //
+                // 조용히 버리지 않는다. 필터는 오류가 아니라 흔적을 안 남기는데,
+                // 스케줄러 판이 갈리면 전 노드가 영영 갱신을 못 한다.
+                .doOnNext(snapshot -> {
+                    if (!받아들일_수_있나(snapshot)) {
+                        log.warn("받아들일 수 없는 스냅샷 — 발행={} 쿠폰={}",
+                                !snapshot.publishedAt().equals(Instant.EPOCH),
+                                snapshot.coupons().size());
                     }
                 })
-                .filter(codec::발행된것인가)
-                .map(codec::decode)
+                .filter(this::받아들일_수_있나)
                 .doOnNext(snapshot -> {
                     holder.replace(snapshot);
                     // LG-2 — 진입만 남기고 해제를 안 남기면 언제 걷혔는지 모른다.
@@ -108,6 +117,17 @@ public final class SnapshotRefresher {
         return Mono.defer(() -> 한번(scheduler))
                 .repeatWhen(done -> done.delayElements(interval, scheduler))
                 .subscribeOn(scheduler);
+    }
+
+    /**
+     * 발행 표시가 있고 쿠폰을 하나 이상 읽었는가.
+     *
+     * <p>빈 해시는 장애가 아니라 흔한 상태고(복제본 승격·키 만료·리더 재선출),
+     * 값 형식이 갈리면 발행 표시는 멀쩡한데 쿠폰만 전부 빠진다. 둘 다 정상
+     * 응답으로 오므로 오류 경로로는 못 막는다.
+     */
+    private boolean 받아들일_수_있나(GatewaySnapshot snapshot) {
+        return !snapshot.publishedAt().equals(Instant.EPOCH) && !snapshot.coupons().isEmpty();
     }
 
     /** 배경 루프 전용 스레드. 요청 경로와 섞이면 서로를 밀어낸다. */

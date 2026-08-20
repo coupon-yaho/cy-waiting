@@ -77,11 +77,18 @@ class SnapshotRefresherTest {
             return n == 1 ? Mono.error(new IllegalStateException("첫 판이 실패")) : Mono.just(정상);
         });
 
-        StepVerifier.create(refresher.한번()).verifyComplete();
-        StepVerifier.create(refresher.한번()).verifyComplete();
-
-        assertThat(호출).hasValue(2);
-        assertThat(holder.current().coupons()).containsOnlyKeys("c1");
+        // **루프로 본다.** 한번() 을 시험이 두 번 부르면 "두 번 불렸다" 는
+        // 시험 자신이 만든 사실이라, 실패가 루프를 끊는지 아무것도 못 본다.
+        VirtualTimeScheduler 가상 = VirtualTimeScheduler.create();
+        Disposable 구독 = refresher.루프(Duration.ofMillis(10), 가상).subscribe();
+        try {
+            assertThat(호출).hasValue(1);
+            가상.advanceTimeBy(Duration.ofMillis(10));
+            assertThat(호출).hasValue(2);
+            assertThat(holder.current().coupons()).containsOnlyKeys("c1");
+        } finally {
+            구독.dispose();
+        }
     }
 
     @Test
@@ -89,12 +96,19 @@ class SnapshotRefresherTest {
     void 실패해도_수신_시각을_새로_찍지_않는다() {
         // 실패를 갱신으로 세면 fetchStale 이 영영 안 뜬다 — 루프가 멎었는데
         // 이 노드는 멀쩡하다고 답하고, LB 가 안 빼 준다.
+        // **성공 한 번으로 기준점을 만든다.** 안 만들면 수신 시각이 EPOCH 라
+        // 시험 시작부터 낡음이고, 구현이 통째로 비어 있어도 통과한다.
         MutableClock clock = MutableClock.at(지금);
         SnapshotHolder holder = 홀더(clock);
+        AtomicInteger 호출 = new AtomicInteger();
         SnapshotRefresher refresher = SnapshotRefresher.of(holder,
-                () -> Mono.error(new IllegalStateException("계속 실패")));
+                () -> 호출.incrementAndGet() == 1
+                        ? Mono.just(정상)
+                        : Mono.error(new IllegalStateException("계속 실패")));
 
         StepVerifier.create(refresher.한번()).verifyComplete();
+        assertThat(holder.isFetchStale()).isFalse();
+
         clock.앞으로(Duration.ofSeconds(3));
         StepVerifier.create(refresher.한번()).verifyComplete();
 
@@ -120,6 +134,29 @@ class SnapshotRefresherTest {
         assertThat(holder.current().coupons()).containsOnlyKeys("c1");
     }
 
+
+    @Test
+    @DisplayName("쿠폰을_하나도_못_읽으면_받아들이지_않는다")
+    void 쿠폰을_하나도_못_읽으면_받아들이지_않는다() {
+        // **발행 표시만 보면 부족하다.** 스케줄러가 값에 필드를 하나 더
+        // 실으면 전 쿠폰이 파싱에 실패하는데 #published 는 멀쩡하다 —
+        // 그대로 받으면 홀더가 빈 맵으로 덮이고 전 쿠폰이 매진으로 보인다.
+        MutableClock clock = MutableClock.at(지금);
+        SnapshotHolder holder = 홀더(clock);
+        AtomicInteger 호출 = new AtomicInteger();
+        Map<String, String> 판이_다른_스냅샷 = Map.of(
+                "#credit", "1000", "#nodes", "2", "#published", "1787184000",
+                "c1", "ADAPTIVE:QUEUEING:100:500:2000:1.0:뒷판이_늘린_필드");
+        SnapshotRefresher refresher = SnapshotRefresher.of(holder,
+                () -> 호출.incrementAndGet() == 1 ? Mono.just(정상)
+                        : Mono.just(판이_다른_스냅샷));
+
+        StepVerifier.create(refresher.한번()).verifyComplete();
+        StepVerifier.create(refresher.한번()).verifyComplete();
+
+        assertThat(holder.current().coupons()).containsOnlyKeys("c1");
+    }
+
     @Test
     @DisplayName("루프는_판마다_새로_읽는다")
     void 루프는_판마다_새로_읽는다() {
@@ -127,6 +164,9 @@ class SnapshotRefresherTest {
         // 키·커넥션·설정을 매 판 다시 읽는 구현을 끼우면 그때 드러난다.
         //
         // 한번() 은 값을 안 흘리므로 방출 수로는 못 센다 — 호출 수를 본다.
+        // **가상 시계로 잰다.** 실제 대기로 "3회 이상" 만 보면 간격 없이
+        // 최고 속도로 도는 루프도 통과한다 — 회복 순간 몰아치기를 막겠다는
+        // 것이 이 설계의 목적인데 그 실패 모드가 검증되지 않는다.
         MutableClock clock = MutableClock.at(지금);
         SnapshotHolder holder = 홀더(clock);
         AtomicInteger 호출 = new AtomicInteger();
@@ -134,11 +174,16 @@ class SnapshotRefresherTest {
             호출.incrementAndGet();
             return Mono.just(정상);
         });
+        VirtualTimeScheduler 가상 = VirtualTimeScheduler.create();
 
-        Disposable 구독 = refresher.루프(Duration.ofMillis(10), Schedulers.single()).subscribe();
+        Disposable 구독 = refresher.루프(Duration.ofMillis(10), 가상).subscribe();
         try {
-            Awaitility.await().atMost(Duration.ofSeconds(5))
-                    .until(() -> 호출.get() >= 3);
+            // 시간을 안 돌리면 첫 판만 돈다.
+            assertThat(호출).hasValue(1);
+            가상.advanceTimeBy(Duration.ofMillis(10));
+            assertThat(호출).hasValue(2);
+            가상.advanceTimeBy(Duration.ofMillis(10));
+            assertThat(호출).hasValue(3);
         } finally {
             구독.dispose();
         }
@@ -152,28 +197,20 @@ class SnapshotRefresherTest {
         // 부하가 가장 높을 때 노드가 로테이션에서 빠진다 (RX-3).
         MutableClock clock = MutableClock.at(지금);
         SnapshotHolder holder = 홀더(clock);
-        SnapshotRefresher refresher = SnapshotRefresher.of(holder, Mono::never,
+        AtomicInteger 호출 = new AtomicInteger();
+        SnapshotRefresher refresher = SnapshotRefresher.of(holder,
+                () -> 호출.incrementAndGet() == 1 ? Mono.just(정상) : Mono.never(),
                 Duration.ofMillis(50));
-        VirtualTimeScheduler 가상 = VirtualTimeScheduler.create();
+        // 성공 한 번으로 채워 둔다 — 안 채우면 빈 것을 확인해도 아무 뜻이 없다.
+        refresher.한번().block(Duration.ofSeconds(5));
 
+        VirtualTimeScheduler 가상 = VirtualTimeScheduler.create();
         StepVerifier.create(refresher.한번(가상))
                 .then(() -> 가상.advanceTimeBy(Duration.ofMillis(60)))
                 .verifyComplete();
 
-        assertThat(holder.current().coupons()).isEmpty();
+        // 매달린 판을 포기하되 들고 있던 것은 남는다.
+        assertThat(holder.current().coupons()).containsOnlyKeys("c1");
     }
 
-    @Test
-    @DisplayName("정해진_시간을_넘으면_그_판을_포기한다")
-    void 정해진_시간을_넘으면_그_판을_포기한다() {
-        // 한 판이 매달리면 다음 판이 못 돈다. 포기가 곧 다음 기회다.
-        MutableClock clock = MutableClock.at(지금);
-        SnapshotHolder holder = 홀더(clock);
-        SnapshotRefresher refresher = SnapshotRefresher.of(holder, Mono::never,
-                Duration.ofMillis(50));
-
-        StepVerifier.create(refresher.한번()).verifyComplete();
-
-        assertThat(holder.current().coupons()).isEmpty();
-    }
 }

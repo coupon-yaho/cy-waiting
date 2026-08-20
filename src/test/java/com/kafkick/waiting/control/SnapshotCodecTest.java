@@ -2,6 +2,7 @@ package com.kafkick.waiting.control;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.QueueMode;
 import com.kafkick.waiting.domain.coupon.RuntimeState;
 import java.time.Instant;
@@ -36,14 +37,16 @@ class SnapshotCodecTest {
                 "#credit", "1000",
                 "#nodes", "3",
                 "#published", "1787184000",
-                "c1", "ADAPTIVE:QUEUEING:100:500:2000:1.0"));
+                "c1", "ADAPTIVE:QUEUEING:100:500:2000:2.5"));
 
         assertThat(s.meta().globalCredit()).isEqualTo(1000);
         assertThat(s.meta().gatewayCount()).isEqualTo(3);
         assertThat(s.publishedAt()).isEqualTo(발행시각);
+        // **레코드 전체를 본다.** 두 필드만 보면 credit·stock·pollScale 이
+        // 조용히 틀려도 초록이다 — 각각 배분 몫·매진 판정·폴링 예산이다.
         assertThat(s.coupons()).containsOnlyKeys("c1");
-        assertThat(s.coupons().get("c1").runtime()).isEqualTo(RuntimeState.QUEUEING);
-        assertThat(s.coupons().get("c1").waiting()).isEqualTo(2000);
+        assertThat(s.coupons().get("c1")).isEqualTo(new CouponState(
+                QueueMode.ADAPTIVE, RuntimeState.QUEUEING, 100, 500, 2000, 2.5));
     }
 
     @Test
@@ -53,6 +56,9 @@ class SnapshotCodecTest {
         // 만들어 내고, 그 쿠폰은 매진으로 보인다.
         GatewaySnapshot s = SnapshotCodec.create().decode(해시(
                 "#credit", "1000", "#nodes", "2", "#published", "1787184000",
+                // **값이 쿠폰 모양인 예약 필드**여야 가드를 가른다. 값이
+                // 안 읽히면 어차피 버려져서 가드를 지워도 통과한다.
+                "#기본값", "ADAPTIVE:IDLE:0:500:0:1.0",
                 "#뒷판이_추가한_필드", "무엇이든",
                 "c1", "ADAPTIVE:IDLE:0:500:0:1.0"));
 
@@ -67,6 +73,7 @@ class SnapshotCodecTest {
                 "#credit", "1000", "#nodes", "1", "#published", "1787184000",
                 "깨짐", "이건:숫자가:아니다",
                 "필드부족", "ADAPTIVE:IDLE",
+                "필드초과", "ADAPTIVE:IDLE:0:500:0:1.0:뒷판이_늘린_필드",
                 "모르는모드", "그런모드:IDLE:0:1:0:1.0",
                 "불변식위반", "ADAPTIVE:IDLE:999:500:0:1.0",
                 "c1", "ADAPTIVE:IDLE:0:500:0:1.0"));

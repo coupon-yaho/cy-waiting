@@ -9,6 +9,7 @@
 | ID | 날짜 | 종류 | 제목 | 확신 | 승격 |
 |---|---|---|---|---|---|
 | [AIJ-0027](2026/08/AIJ-0027-chaos-fixtures.md) | 2026-08-20 | implement | 장애 주입 픽스처 — 게이트는 선언한 페이즈에서 판정할 수 있어야 한다 | medium | — |
+| [AIJ-0028](2026/08/AIJ-0028-snapshot-holder.md) | 2026-08-20 | implement | 낡음이 두 종류인 이유 — 섞으면 100% 장애다 | high | — |
 | [AIJ-0026](2026/08/AIJ-0026-dependency-refresh.md) | 2026-08-20 | decision | 버전은 실측한다 — 검색 색인은 최신을 모른다 | high | — |
 | [AIJ-0025](2026/08/AIJ-0025-crash-and-promotion.md) | 2026-08-20 | implement | 강제 종료와 승격 — 계획의 전제가 두 군데 틀렸다 | medium | — |
 | [AIJ-0024](2026/08/AIJ-0024-adapter-coverage.md) | 2026-08-20 | decision | 어댑터 커버리지 — 통합 exec 만으로는 엉뚱한 것을 잰다 | medium | — |

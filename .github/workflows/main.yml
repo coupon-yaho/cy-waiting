@@ -123,6 +123,10 @@ jobs:
         with:
           persist-credentials: false
 
+      # **needs 는 러너를 공유하지 않는다.** 앞 잡이 빌드했다고 여기 JDK 가
+      # 있는 게 아니다 — 툴체인이 없으면 Gradle 이 못 돈다.
+      - uses: ./.github/actions/setup-gradle
+
       # setup-gradle 과 같은 SHA 다 — 판을 섞으면 캐시 형식이 어긋난다.
       - uses: gradle/actions/dependency-submission@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d  # v4
         with:

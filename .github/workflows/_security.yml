@@ -53,21 +53,18 @@ jobs:
   
       # **Trivy 가 Java 를 보게 하려면 락파일이 있어야 한다.** Gradle 은
       # build.gradle 을 파싱 대상으로 안 삼는다 — 그래서 이 검사가 오랫동안
-      # language-specific files num=0 으로 아무것도 안 보고 초록불을 냈다
-      # (CY-293). 커밋하면 갱신 부담이 계속 따라오므로 **스캔 직전에 만든다.**
-      - id: lockfile
-        if: hashFiles('gradle/wrapper/gradle-wrapper.properties') != ''
-        continue-on-error: true
+      # num=0 으로 아무것도 안 보고 초록불을 냈다 (CY-293, AIJ-0029).
+      #
+      # **실패를 삼키지 않는다.** 삼키면 락파일 없이 Trivy 가 돌고, 다시
+      # "볼 것이 없어서 0건" 이 된다 — 고치려던 바로 그 상태로 되돌아간다.
+      - name: 의존성 락파일
         run: |
-          set -uo pipefail
+          set -euo pipefail
           ./gradlew --no-daemon \
             -I .github/scripts/dependency-locking.init.gradle --write-locks \
-            dependencies --configuration runtimeClasspath >/dev/null 2>&1 || true
-          if [[ -f gradle.lockfile ]]; then
-            echo "::notice title=Trivy::락파일 생성 — $(grep -c '^[^#]' gradle.lockfile) 항목"
-          else
-            echo "::warning title=Trivy::락파일을 못 만들었다. Java 는 스캔되지 않는다"
-          fi
+            dependencies --configuration runtimeClasspath >/dev/null
+          test -s gradle.lockfile
+          echo "::notice title=Trivy::락파일 $(grep -c '^[^#]' gradle.lockfile) 항목"
 
       # 이미지 빌드 전이라 fs 모드. 차단과 업로드에 SARIF 하나를 같이 쓴다 —
       # 나누면 같은 스캔이 두 번 돈다 (DB 내려받기까지).

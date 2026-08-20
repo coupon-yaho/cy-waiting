@@ -52,9 +52,16 @@ public final class RedisKeys {
         return "grace:{" + tag(couponId, shards, shard) + "}";
     }
 
-    /** 생존 신호. 폴링이 곧 하트비트다. */
-    public static String alive(String couponId, int shards, int shard, String memberId) {
-        return "alive:{" + tag(couponId, shards, shard) + "}:" + validated(memberId, "memberId");
+    /**
+     * 생존 신호. 폴링이 곧 하트비트다.
+     *
+     * <p><b>사람마다 키를 만들지 않는다.</b> 그러면 청소 스크립트가 KEYS 에
+     * 선언되지 않은 키를 만지게 되고 클러스터가 거부한다 (RD-1). 쿠폰당 ZSET
+     * 하나에 <b>만료 시각을 score 로</b> 담는다 — 개별 TTL 은 잃지만 청소가
+     * 어차피 만료를 보므로 잃는 것이 없다.
+     */
+    public static String alive(String couponId, int shards, int shard) {
+        return "alive:{" + tag(couponId, shards, shard) + "}";
     }
 
     /**

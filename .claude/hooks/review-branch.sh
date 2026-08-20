@@ -102,10 +102,15 @@ check_rx2() {
 #
 # **색인 등록은 안 본다.** 색인이 생성물이라 저장소에 없다 (CY-303).
 check_journal() {
-    local out
+    local out status
     out=$(.github/scripts/journal-index.sh --check 2>&1 >/dev/null)
+    status=$?
     if [[ -n "$out" ]]; then
         printf '%s\n' "$out" | sed 's|^::error::|  JN-1 |'
+    elif ((status != 0)); then
+        # **종료 상태도 본다.** 출력 없이 실패하면 조용히 통과한다 —
+        # 검사가 죽은 것을 "이상 없음" 으로 세는 자리다.
+        printf '%s\n' "  JN-1 작업 로그 검사가 출력 없이 실패했다 (exit $status)"
     fi
 }
 
@@ -201,15 +206,25 @@ self_test() {
     # 것을 "잡았다" 로 세게 된다 — 실제로 그렇게 통과하던 프로브가 있었다.
     # **고정 경로를 쓰지 않는다.** 같은 이름의 작업 파일이 있으면 덮어쓰고
     # 지운다 — 자기검증이 사람의 작업을 없애면 안 된다.
-    local jprobe
-    jprobe=$(mktemp "ai/journal/2026/08/AIJ-9999-probe.XXXXXX.md")
-    printf '# 프론트매터 없음\n' > "$jprobe"
-    if .github/scripts/journal-index.sh --check >/dev/null 2>&1; then
-        printf '  ✗ 프론트매터 없는 저널을 통과시켰다\n'; fail=1
-    else
-        printf '  ✓ 프론트매터 없는 저널을 잡는다\n'
+    #
+    # 날짜 경로도 박지 않는다. 없는 달이면 만들다 실패하는데, 그때 프로브는
+    # 안 생기고 검사는 계속 돌아 **없는 프로브로 통과**한다.
+    local jdir jprobe
+    jdir=$(ls -d ai/journal/[0-9]*/[0-9]* 2>/dev/null | tail -1)
+    if [[ -z "$jdir" ]] || ! jprobe=$(mktemp "$jdir/AIJ-9999-probe.XXXXXX.md" 2>/dev/null); then
+        printf '  ✗ 저널 프로브를 못 만들었다 — 검사가 실제로 무는지 확인 못 함\n'
+        fail=1
+        jprobe=""
     fi
-    rm -f "$jprobe"
+    [[ -n "$jprobe" ]] && printf '# 프론트매터 없음\n' > "$jprobe"
+    if [[ -n "$jprobe" ]]; then
+        if .github/scripts/journal-index.sh --check >/dev/null 2>&1; then
+            printf '  ✗ 프론트매터 없는 저널을 통과시켰다\n'; fail=1
+        else
+            printf '  ✓ 프론트매터 없는 저널을 잡는다\n'
+        fi
+        rm -f "$jprobe"
+    fi
     # 지우고 나면 다시 통과해야 한다. 안 그러면 프로브가 아니라 고장이다.
     if .github/scripts/journal-index.sh --check >/dev/null 2>&1; then
         printf '  ✓ 프로브를 지우면 다시 통과한다\n'

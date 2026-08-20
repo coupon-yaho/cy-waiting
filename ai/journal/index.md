@@ -8,6 +8,7 @@
 
 | ID | 날짜 | 종류 | 제목 | 확신 | 승격 |
 |---|---|---|---|---|---|
+| [AIJ-0021](2026/08/AIJ-0021-sweep.md) | 2026-08-20 | implement | 이탈자 청소 — 앞부분만 본다 | medium | — |
 | [AIJ-0020](2026/08/AIJ-0020-queue-status.md) | 2026-08-19 | implement | 순번 조회 — 한 번에 끝나야 하는 이유 | high | — |
 | [AIJ-0019](2026/08/AIJ-0019-library-first.md) | 2026-08-19 | decision | 라이브러리를 먼저 본다 — 안 쓴 이유를 남긴다 | medium | DS-8 |
 | [AIJ-0018](2026/08/AIJ-0018-enqueue.md) | 2026-08-19 | implement | 큐 등록 — 순서가 곧 정책이다 | high | — |

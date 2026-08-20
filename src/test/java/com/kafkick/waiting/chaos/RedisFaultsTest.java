@@ -6,6 +6,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.kafkick.waiting.chaos.RedisFaults;
 import io.lettuce.core.RedisConnectionException;
 import io.lettuce.core.api.StatefulRedisConnection;
+import java.time.Duration;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -51,6 +53,25 @@ class RedisFaultsTest {
         try (StatefulRedisConnection<String, String> after = faults.연결한다()) {
             assertThat(after.sync().ping()).isEqualTo("PONG");
         }
+    }
+
+    @Test
+    @DisplayName("끊기_전에_맺은_연결이_스스로_돌아온다")
+    void 끊기_전에_맺은_연결이_스스로_돌아온다() {
+        // **주소가 유지되는 이유가 이것이다.** 새 연결을 다시 맺어 확인하면
+        // 재배선을 재는 것이지 회복을 재는 게 아니다. 장애 전에 맺어 둔
+        // 연결이 그대로 살아 돌아와야 회복 시험이 성립한다.
+        faults = RedisFaults.시작한다();
+        StatefulRedisConnection<String, String> 붙어있던연결 = faults.연결한다();
+        assertThat(붙어있던연결.sync().ping()).isEqualTo("PONG");
+
+        faults.끊는다();
+        faults.붙인다();
+
+        Awaitility.await().atMost(Duration.ofSeconds(20))
+                .pollInterval(Duration.ofMillis(200))
+                .untilAsserted(() ->
+                        assertThat(붙어있던연결.sync().ping()).isEqualTo("PONG"));
     }
 
     @Test

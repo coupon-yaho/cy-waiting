@@ -1,6 +1,7 @@
 package com.kafkick.waiting.chaos;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.lettuce.core.api.StatefulRedisConnection;
 import java.time.Duration;
@@ -83,16 +84,32 @@ class LeaderFaultsTest {
     }
 
     @Test
-    @DisplayName("lease_만료를_앞당길_수_있다")
-    void lease_만료를_앞당길_수_있다() {
+    @DisplayName("lease_만료는_지우는_것과_다르다")
+    void lease_만료는_지우는_것과_다르다() {
         // 승계 경로를 재려고 실제 lease 를 기다리면 시험이 그만큼 느려진다.
         // 다만 **지우는 것과는 다르다** — 만료 임박 구간이 남아야 한다.
-        leader.리더로_만든다("node-1", LEASE);
+        assertThat(leader.리더로_만든다("node-1", LEASE)).isTrue();
 
         leader.lease를_만료시킨다();
 
+        // **중간 상태를 본다.** 곧바로 사라졌는지만 보면 DEL 과 구분이 안 되고,
+        // 획득이 실패해도 소유자가 없으니 통과해 버린다.
+        assertThat(leader.현재_소유자()).isEqualTo("node-1");
+        assertThat(leader.남은_lease()).isBetween(Duration.ZERO, Duration.ofMillis(1));
+
         Awaitility.await().atMost(Duration.ofSeconds(5))
-                .pollInterval(Duration.ofMillis(50))
+                .pollInterval(Duration.ofMillis(20))
                 .until(() -> leader.현재_소유자() == null);
+    }
+
+    @Test
+    @DisplayName("빈_소유자로는_아무것도_못_한다")
+    void 빈_소유자로는_아무것도_못_한다() {
+        // 프로덕션이 빈 소유자를 거부하므로 픽스처도 그 상태를 만들면 안 된다.
+        assertThatThrownBy(() -> leader.리더로_만든다("", LEASE))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> leader.곱게_내린다(""))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(leader.현재_소유자()).isNull();
     }
 }

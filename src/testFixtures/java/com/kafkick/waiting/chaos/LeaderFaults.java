@@ -26,8 +26,21 @@ public final class LeaderFaults {
         this.redis = redis;
     }
 
+    /** 주어진 연결 위에서 리더 락의 수명과 소유권을 흔드는 픽스처를 만든다. */
     public static LeaderFaults of(StatefulRedisConnection<String, String> redis) {
         return new LeaderFaults(redis);
+    }
+
+    /**
+     * 프로덕션이 빈 소유자를 거부한다 — 픽스처가 그 상태를 만들면 안 된다 (TS-3).
+     *
+     * <p>빈 값으로 잡히면 해제 때 누구의 락인지 가릴 수 없어 남의 락을 지운다.
+     */
+    private static String 소유자로_쓸_수_있는가(String ownerId) {
+        if (ownerId == null || ownerId.isEmpty()) {
+            throw new IllegalArgumentException("ownerId 는 비면 안 된다");
+        }
+        return ownerId;
     }
 
     /**
@@ -40,13 +53,13 @@ public final class LeaderFaults {
      * @return 내가 잡았으면 {@code true}
      */
     public boolean 리더로_만든다(String ownerId, Duration lease) {
-        return "OK".equals(redis.sync().set(RedisKeys.LEADER, ownerId,
+        return "OK".equals(redis.sync().set(RedisKeys.LEADER, 소유자로_쓸_수_있는가(ownerId),
                 SetArgs.Builder.nx().px(lease.toMillis())));
     }
 
     /** 프로세스만 사라진다. 락은 그대로 남는다 — 해제 절차를 못 밟았기 때문이다. */
     public void 프로세스를_죽인다(String ownerId) {
-        if (!ownerId.equals(현재_소유자())) {
+        if (!소유자로_쓸_수_있는가(ownerId).equals(현재_소유자())) {
             throw new IllegalStateException("리더가 아니다: " + ownerId);
         }
         // 아무것도 안 한다. **그것이 죽음이다** — 남는 것은 만료를 기다리는 락뿐.
@@ -59,7 +72,7 @@ public final class LeaderFaults {
      */
     public boolean 곱게_내린다(String ownerId) {
         Long deleted = redis.sync().eval(RELEASE, ScriptOutputType.INTEGER,
-                new String[] {RedisKeys.LEADER}, ownerId);
+                new String[] {RedisKeys.LEADER}, 소유자로_쓸_수_있는가(ownerId));
         return deleted != null && deleted == 1L;
     }
 

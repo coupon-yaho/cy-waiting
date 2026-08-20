@@ -27,9 +27,31 @@ public final class RedisFaults implements AutoCloseable {
         this.container = container;
     }
 
-    /** 컨테이너를 띄운다. 호스트 포트를 고정해 끊었다 붙여도 주소가 유지된다. */
-    @SuppressWarnings("resource")   // close() 가 닫는다
+    /**
+     * 컨테이너를 띄운다. 호스트 포트를 고정해 끊었다 붙여도 주소가 유지된다.
+     *
+     * <p><b>동적 매핑으로는 안 된다.</b> 실측하면 같은 컨테이너를 다시 켤 때
+     * 동적 매핑은 포트가 바뀌고(33137→33138) 고정 바인딩만 유지된다. 주소가
+     * 바뀌면 붙어 있던 클라이언트가 재연결로 회복되지 못해, 회복 시험이
+     * 회복이 아니라 재배선을 재게 된다.
+     *
+     * <p>고른 포트를 도커가 잡기까지 사이가 비어 경합이 가능하다. 그 좁은
+     * 창을 없앨 수는 없으므로 <b>몇 번 다시 고른다.</b>
+     */
     public static RedisFaults 시작한다() {
+        IllegalStateException 마지막 = null;
+        for (int i = 0; i < 5; i++) {
+            try {
+                return 한번_띄운다();
+            } catch (RuntimeException e) {
+                마지막 = new IllegalStateException("포트를 뺏겼다. 다시 고른다", e);
+            }
+        }
+        throw 마지막;
+    }
+
+    @SuppressWarnings("resource")   // close() 가 닫는다
+    private static RedisFaults 한번_띄운다() {
         GenericContainer<?> container = new GenericContainer<>(IMAGE)
                 .withExposedPorts(6379)
                 .withCommand("redis-server", "--appendonly", "no");
@@ -38,12 +60,7 @@ public final class RedisFaults implements AutoCloseable {
         return new RedisFaults(container);
     }
 
-    /**
-     * 비어 있는 포트를 하나 고른다.
-     *
-     * <p>고른 뒤 도커가 잡기까지 사이가 비어 경합이 가능하다. 대안은 무작위
-     * 포트를 쓰는 것인데 그러면 주소가 바뀌어 이 클래스의 목적이 사라진다.
-     */
+    /** 비어 있는 포트를 하나 고른다. 잡히기까지의 경합은 위에서 재시도로 흡수한다. */
     private static int 자유포트() {
         try (ServerSocket socket = new ServerSocket(0)) {
             return socket.getLocalPort();

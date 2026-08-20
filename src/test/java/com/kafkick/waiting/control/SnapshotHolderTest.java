@@ -10,6 +10,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.HashMap;
 import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -101,11 +102,35 @@ class SnapshotHolderTest {
     @Test
     @DisplayName("스냅샷은_밖에서_못_바꾼다")
     void 스냅샷은_밖에서_못_바꾼다() {
+        // **가변 맵을 넣고 원본을 흔든다.** Map.of 를 넣으면 방어 복사를
+        // 지워도 이 시험이 통과한다 — 이미 불변인 것을 다시 확인할 뿐이다.
+        Map<String, CouponState> 원본 = new HashMap<>();
+        원본.put("c1", CouponState.always(100));
         SnapshotHolder holder = 홀더(지금);
-        holder.replace(스냅샷(지금));
+        holder.replace(new GatewaySnapshot(원본, new SnapshotMeta(1000, 3), 지금));
 
+        원본.put("c2", CouponState.always(50));
+        원본.remove("c1");
+
+        assertThat(holder.current().coupons()).containsOnlyKeys("c1");
         assertThatThrownBy(() -> holder.current().coupons().put("c2", null))
                 .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
+    @DisplayName("갱신_직후에는_fetchStale이_아니다")
+    void 갱신_직후에는_fetchStale이_아니다() {
+        // 스냅샷과 수신 시각을 따로 두면 읽는 쪽이 새 스냅샷과 옛 시각을
+        // 함께 본다. 방금 갱신했는데 503 이 나가는 경로다.
+        MutableClock clock = MutableClock.at(지금);
+        SnapshotHolder holder = SnapshotHolder.of(FETCH_STALE, DATA_STALE, clock);
+        holder.replace(스냅샷(지금.minusSeconds(60)));
+
+        clock.앞으로(Duration.ofSeconds(30));
+        holder.replace(스냅샷(지금.plusSeconds(30)));
+
+        assertThat(holder.isFetchStale()).isFalse();
+        assertThat(holder.fetchAge()).isEqualTo(Duration.ZERO);
     }
 
     @Test

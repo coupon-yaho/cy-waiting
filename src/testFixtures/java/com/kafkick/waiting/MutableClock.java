@@ -4,6 +4,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
+import java.util.Objects;
 
 /**
  * 시험이 앞으로 감는 시계 (TS-4).
@@ -18,10 +19,13 @@ public final class MutableClock extends Clock {
     private Instant now;
 
     private MutableClock(Instant now, ZoneId zone) {
-        this.now = now;
-        this.zone = zone;
+        // null 이 들어오면 instant()·getZone() 이 null 을 돌려주는 시계가 된다.
+        // 그건 Clock 이 아니고, 쓰는 쪽에서 엉뚱한 NPE 로 드러난다.
+        this.now = Objects.requireNonNull(now, "now");
+        this.zone = Objects.requireNonNull(zone, "zone");
     }
 
+    /** 주어진 시각에 멈춰 있는 UTC 시계. {@link #앞으로} 로만 움직인다. */
     public static MutableClock at(Instant now) {
         return new MutableClock(now, ZoneId.of("UTC"));
     }

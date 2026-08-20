@@ -145,6 +145,41 @@ tasks.named('jacocoTestCoverageVerification') {
     }
 }
 
+// 어댑터는 통합 시험이 실제로 레디스를 치며 도는 곳이라 단위 exec 로는
+// 잴 수 없다. 계층이 잡으로 갈려 exec 가 한자리에 안 모이므로, 통합 exec
+// 하나로 어댑터만 따로 잰다.
+tasks.register('adapterCoverageVerification', JacocoCoverageVerification) {
+    description = '어댑터 커버리지 임계 — 통합 시험 기준'
+    group = 'verification'
+    dependsOn test, integrationTest
+    executionData test, integrationTest
+    sourceDirectories.setFrom(sourceSets.main.java.sourceDirectories)
+    classDirectories.setFrom(sourceSets.main.output)
+    violationRules {
+        rule {
+            element = 'PACKAGE'
+            includes = ['com.kafkick.waiting.adapter.redis']
+            limit {
+                counter = 'BRANCH'
+                minimum = 0.80
+            }
+        }
+    }
+}
+
+tasks.register('adapterCoverageReport', JacocoReport) {
+    description = '어댑터 커버리지 보고 — 임계를 못 넘겼을 때 어디가 빈지 본다'
+    group = 'verification'
+    dependsOn test, integrationTest
+    executionData test, integrationTest
+    sourceDirectories.setFrom(sourceSets.main.java.sourceDirectories)
+    classDirectories.setFrom(sourceSets.main.output)
+    reports {
+        xml.required = true
+        html.required = true
+    }
+}
+
 tasks.named('check') {
     dependsOn jacocoTestCoverageVerification
 }

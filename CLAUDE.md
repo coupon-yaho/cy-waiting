@@ -111,7 +111,7 @@ waiting/
 | **무엇을 왜 만드는지** | [plan/00-requirements.md](plan/00-requirements.md) — 요구사항·비목표·제약·가정 |
 | 무엇을 만들지 모를 때 | [plan/README.md](plan/README.md) → 해당 페이즈 문서 |
 | 코드를 쓰기 전 | 해당 패키지 규칙 ([ai/rules/70-packages.md](ai/rules/70-packages.md)) |
-| 왜 이렇게 됐는지 모를 때 | [plan/90-decisions.md](plan/90-decisions.md) → [ai/journal/index.md](ai/journal/index.md) |
+| 왜 이렇게 됐는지 모를 때 | [plan/90-decisions.md](plan/90-decisions.md) → [ai/journal/](ai/journal/) — 색인은 `.github/scripts/journal-index.sh` |
 | 착수가 막혔을 때 | [plan/README.md](plan/README.md) 0절 — 차단 중인 결정 |
 | 기존 구현이 궁금할 때 | `../waiting-legacy/` — **읽기 전용. 수정 금지** |
 

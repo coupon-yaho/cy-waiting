@@ -124,6 +124,45 @@ jobs:
     with: { scenario: idle-coupon, timeout-minutes: 25 }
 
   # 취소를 통과로 세지 않기 위해 별도 잡으로 뺐다. 규칙은 verdict 액션에 있다.
+  # 작업 로그 색인은 생성물이라 저장소에 없다 (CY-303). PR 에서는 잡 요약으로
+  # 보고, main 에 들어갈 때 여기서 위키를 갱신한다 — 사람이 링크로 공유하는 자리다.
+  journal-index:
+    name: 작업 로그 색인
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # 실패해도 파이프라인을 막지 않는다. 판정이 아니라 가시성이다.
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+
+      - id: build
+        run: |
+          set -uo pipefail
+          {
+            echo 'body<<INDEX_EOF'
+            .github/scripts/journal-index.sh
+            echo 'INDEX_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      # 시크릿이 없으면 부르지 않는다 — 필수 입력이 비면 액션이 하드 실패한다.
+      - if: >-
+          secrets.CONFLUENCE_SPACE_KEY != '' && secrets.ATLASSIAN_BASE_URL != ''
+        uses: coupon-yaho/cy-ci-actions/actions/confluence@c5d6391379ae34d56894538027ff3631ea4923a2  # v1
+        with:
+          space-key: ${{ secrets.CONFLUENCE_SPACE_KEY }}
+          parent-id: ${{ secrets.CONFLUENCE_PARENT_ID }}
+          title: 작업 로그 색인
+          body: ${{ steps.build.outputs.body }}
+          mode: upsert
+          labels: ci
+          base-url: ${{ secrets.ATLASSIAN_BASE_URL }}
+          email: ${{ secrets.ATLASSIAN_USER_EMAIL }}
+          token: ${{ secrets.ATLASSIAN_API_TOKEN }}
+
   verdict:
     name: 판정
     needs: [context, conventions, build, test-unit, test-integration, test-context, test-chaos, test-coverage, test-mutation, security, load-idle]

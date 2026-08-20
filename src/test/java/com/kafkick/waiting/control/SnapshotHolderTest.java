@@ -99,6 +99,21 @@ class SnapshotHolderTest {
         assertThat(holder.isFetchStale()).isTrue();
     }
 
+
+    @Test
+    @DisplayName("발행_시각이_미래면_곧바로_낡음이다")
+    void 발행_시각이_미래면_곧바로_낡음이다() {
+        // 나이를 0 으로만 보정하면 갱신이 멎어도 임계가 지날 때까지 최신으로
+        // 취급된다 — 그동안 아무 노드도 fail-open 에 못 들어간다.
+        SnapshotHolder holder = 홀더(지금);
+
+        holder.replace(스냅샷(지금.plusSeconds(10)));
+
+        assertThat(holder.dataAge()).isEqualTo(Duration.ZERO);
+        assertThat(holder.시계가_앞섰나()).isTrue();
+        assertThat(holder.isDataStale()).isTrue();
+    }
+
     @Test
     @DisplayName("스냅샷은_밖에서_못_바꾼다")
     void 스냅샷은_밖에서_못_바꾼다() {

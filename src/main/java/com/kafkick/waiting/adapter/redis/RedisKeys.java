@@ -35,7 +35,9 @@ public final class RedisKeys {
     public static final String CAPACITY = "coupon:capacity:v1";
 
     /** 해시태그를 깨뜨리는 문자. 클라이언트 입력이 키에 들어가는 경로를 막는다. */
-    private static final String FORBIDDEN = "{}:";
+    // '#' 은 스냅샷 해시의 전역값 접두사다. 쿠폰 ID 에 들어가면 그 쿠폰이
+    // 전역값을 덮어써 — '#credit' 이름의 쿠폰 하나로 전 쿠폰의 몫이 0 이 된다.
+    private static final String FORBIDDEN = "{}:#";
 
     private RedisKeys() {
     }

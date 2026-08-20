@@ -108,9 +108,19 @@ check_journal() {
     local file=$1 index=${2:-ai/journal/index.md} out="" k id front
     # **프론트매터 안만 본다.** 파일 전체를 훑으면 본문에 'date:' 한 줄만
     # 있어도 프론트매터가 있는 것으로 쳐서 검사가 통과한다.
-    front=$(awk 'NR==1 && $0!="---" {exit} NR==1 {next} $0=="---" {exit} {print}' "$file")
-    if [[ -z "$front" ]]; then
-        printf '%s' "  JN-1 $file:1  ← 프론트매터가 없다"$'\n'
+    #
+    # **닫는 --- 까지 확인한다.** 여는 줄만 보고 끝까지 읽으면 닫히지 않은
+    # 파일에서 본문 전체가 프론트매터 행세를 해 같은 구멍이 다시 열린다.
+    local status
+    front=$(awk '
+        NR == 1 { if ($0 != "---") exit 1; next }
+        $0 == "---" { closed = 1; exit 0 }
+        { print }
+        END { if (!closed) exit 1 }
+    ' "$file")
+    status=$?
+    if ((status != 0)); then
+        printf '%s' "  JN-1 $file:1  ← 프론트매터가 없거나 --- 로 닫히지 않았다"$'\n'
         return
     fi
     for k in id date kind confidence; do
@@ -235,6 +245,9 @@ self_test() {
     # 끝 경계가 없어 'AIJ-9990-extra' 가 'AIJ-9990' 으로 잘리던 구멍
     probe "id 는 값 전체가 맞아야 한다" "ai/journal/2026/08/AIJ-9996-probe.md" \
         $'---\nid: AIJ-9990-extra\ndate: 2026-08-20\nkind: implement\nconfidence: high\n---\n' "JN-1"
+    # 여는 --- 만 있고 안 닫힌 파일이 본문까지 프론트매터로 치던 구멍
+    probe "닫는 구분자가 없으면 프론트매터가 아니다" "ai/journal/2026/08/AIJ-9995-probe.md" \
+        $'---\nid: AIJ-9990\ndate: 2026-08-20\nkind: implement\nconfidence: high\n\n# 제목\n' "JN-1"
     # 색인의 AIJ-9990 이 AIJ-999 를 통과시키던 구멍
     probe "색인 부분 일치는 등록이 아니다" "ai/journal/2026/08/AIJ-999-probe.md" \
         $'---\nid: AIJ-999\ndate: 2026-08-20\nkind: implement\nconfidence: high\n---\n' "JN-2"

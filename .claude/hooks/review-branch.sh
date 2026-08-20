@@ -97,14 +97,32 @@ check_rx2() {
         | sed "s|^|  RX-2 $file:|" | sed 's/$/  ← repeatWhen 을 쓴다. 회복 시 몰아서 터진다/'
 }
 
+# 작업 로그 형식·색인 동기화. CI(_verify-conventions.yml)와 **같은 것**을 본다.
+# 여기서 안 보면 프론트매터를 통째로 빠뜨린 글이 푸시된 뒤에야 드러난다.
+check_journal() {
+    local file=$1 out="" k id
+    for k in id date kind confidence; do
+        grep -qE "^$k:" "$file" \
+            || out+="  JN-1 $file:1  ← 프론트매터에 '$k:' 없음"$'\n'
+    done
+    id=$(grep -oE '^id: AIJ-[0-9]+' "$file" | awk '{print $2}')
+    if [[ -z "$id" ]]; then
+        out+="  JN-1 $file:1  ← id 를 읽을 수 없다"$'\n'
+    elif ! grep -q "$id" ai/journal/index.md 2>/dev/null; then
+        out+="  JN-2 $file:1  ← $id 가 index.md 에 없다 — 색인에서 빠지면 없는 것과 같다"$'\n'
+    fi
+    printf '%s' "$out"
+}
+
 review_files() {
     local -a files=("$@")
-    local java=() lua=()
+    local java=() lua=() journal=()
     for f in "${files[@]}"; do
         [[ -f "$f" ]] || continue
         case "$f" in
-            *.java) java+=("$f") ;;
-            *.lua)  lua+=("$f") ;;
+            *.java)                 java+=("$f") ;;
+            *.lua)                  lua+=("$f") ;;
+            */ai/journal/*/*/AIJ-*.md|ai/journal/*/*/AIJ-*.md) journal+=("$f") ;;
         esac
     done
 
@@ -137,6 +155,15 @@ review_files() {
         local clean=1
         for f in "${lua[@]}"; do run_hook check-lua.sh "$f" || clean=0; done
         ((clean)) && say "  위반 없음" || findings=$((findings + 1))
+    fi
+
+    if ((${#journal[@]})); then
+        head2 "작업 로그 — 프론트매터·색인"
+        local jout=""
+        for f in "${journal[@]}"; do jout+=$(check_journal "$f"); done
+        jout=$(printf '%s' "$jout" | grep -v '^[[:space:]]*$')
+        if [[ -n "$jout" ]]; then say "$jout"; findings=$((findings + 1))
+        else say "  위반 없음"; fi
     fi
 }
 
@@ -171,6 +198,12 @@ self_test() {
     # record 와 클래스가 한 파일에 섞여도 클래스만 잡는다
     probe "record 가 있어도 다른 클래스는 검사한다" "src/main/java/H.java" \
         $'public record Marker(int x) {}\n\nclass H {\n    public H() {}\n}\n' "JS-12"
+    # 프론트매터를 통째로 빠뜨린 글이 CI 까지 갔다. 검사가 실제로 무는지 본다.
+    probe "저널 프론트매터 누락" "ai/journal/2026/08/AIJ-9998-probe.md" \
+        $'# 제목\n\n- **날짜** 2026-08-20\n' "JN-1"
+    probe "저널이 색인에 없음" "ai/journal/2026/08/AIJ-9999-probe.md" \
+        $'---\nid: AIJ-9999\ndate: 2026-08-20\nkind: implement\nconfidence: high\n---\n\n# 제목\n' "JN-2"
+
     # **상대경로 회귀.** git 은 선행 슬래시 없는 경로를 준다. 절대경로로
     # 안 바꾸면 테스트 전용 검사가 아예 안 돌고(미탐), 동시에 테스트가
     # 프로덕션 규칙으로 검사된다(오탐). 둘 다 실제로 났다.

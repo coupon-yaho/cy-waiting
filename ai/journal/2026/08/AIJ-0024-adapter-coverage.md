@@ -1,9 +1,17 @@
-# AIJ-0024 · 어댑터 커버리지 — 통합 exec 만으로는 엉뚱한 것을 잰다
+---
+id: AIJ-0024
+date: 2026-08-20
+kind: decision
+phase: 3
+plan: [3.9.1]
+jira: CY-236
+commits: [64e1f18]
+agent: claude-opus-5
+confidence: medium
+promoted-to:
+---
 
-- **날짜** 2026-08-20
-- **종류** decision
-- **확신** medium
-- **티켓** CY-236
+# 어댑터 커버리지 — 통합 exec 만으로는 엉뚱한 것을 잰다
 
 ## 무엇을 했나
 

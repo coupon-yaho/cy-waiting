@@ -12,10 +12,15 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
+import org.awaitility.Awaitility;
+import org.awaitility.core.ConditionTimeoutException;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -44,22 +49,28 @@ class ClusterModeScriptTest {
                     .withCommand("redis-server", "--cluster-enabled", "yes",
                             "--cluster-require-full-coverage", "no", "--appendonly", "no");
 
-    private static final RedisClient CLIENT;
-    private static final StatefulRedisConnection<String, String> CONNECTION;
+    private static RedisClient client;
+    private static StatefulRedisConnection<String, String> connection;
 
-    static {
+    /**
+     * <b>정적 초기화 블록에 두지 않는다.</b> 아래 대기가 조건을 다른 스레드에서
+     * 평가하는데, 그 스레드가 초기화 중인 이 클래스를 건드리면 JVM 의 클래스
+     * 초기화 락에 걸려 영영 멈춘다 — 대기는 그저 시간 초과로만 보인다.
+     */
+    @BeforeAll
+    static void 클러스터를_세운다() {
         CLUSTER.start();
         슬롯을_전부_준다();
         클러스터가_설_때까지_기다린다();
-        CLIENT = RedisClient.create(
+        client = RedisClient.create(
                 "redis://%s:%d".formatted(CLUSTER.getHost(), CLUSTER.getMappedPort(6379)));
-        CONNECTION = CLIENT.connect();
+        connection = client.connect();
     }
 
     @AfterAll
     static void 닫는다() {
-        CONNECTION.close();
-        CLIENT.shutdown();
+        connection.close();
+        client.shutdown();
     }
 
     /**
@@ -80,20 +91,17 @@ class ClusterModeScriptTest {
      * 슬롯이 안 붙은 것인지 크론이 늦은 것인지 가릴 수 없다.
      */
     private static void 클러스터가_설_때까지_기다린다() {
-        String info = "";
-        for (int i = 0; i < 60; i++) {
-            info = 컨테이너에서("cluster", "info");
-            if (info.contains("cluster_state:ok")) {
-                return;
-            }
-            try {
-                Thread.sleep(500);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new IllegalStateException("대기 중 끊겼다", e);
-            }
+        AtomicReference<String> last = new AtomicReference<>("");
+        try {
+            Awaitility.await().atMost(Duration.ofSeconds(30))
+                    .pollInterval(Duration.ofMillis(500))
+                    .until(() -> {
+                        last.set(컨테이너에서("cluster", "info"));
+                        return last.get().contains("cluster_state:ok");
+                    });
+        } catch (ConditionTimeoutException e) {
+            throw new IllegalStateException("클러스터가 서지 않았다: " + last.get(), e);
         }
-        throw new IllegalStateException("클러스터가 서지 않았다: " + info);
     }
 
     private static String 컨테이너에서(String... args) {
@@ -152,7 +160,7 @@ class ClusterModeScriptTest {
     @Test
     @DisplayName("모든_스크립트가_클러스터_모드에서_오류_없이_실행된다")
     void 모든_스크립트가_클러스터_모드에서_오류_없이_실행된다() throws IOException {
-        RedisCommands<String, String> redis = CONNECTION.sync();
+        RedisCommands<String, String> redis = connection.sync();
         List<String> failures = new ArrayList<>();
 
         List<Path> scripts = 스크립트들();
@@ -185,7 +193,7 @@ class ClusterModeScriptTest {
         String rogue = "redis.call('SET', KEYS[1], '1') "
                 + "redis.call('SET', KEYS[2], '1') return 1";
 
-        assertThatThrownBy(() -> CONNECTION.sync().eval(rogue, ScriptOutputType.INTEGER,
+        assertThatThrownBy(() -> connection.sync().eval(rogue, ScriptOutputType.INTEGER,
                 new String[] {"{a}k", "{b}k"}, new String[0]))
                 .hasMessageContaining("CROSSSLOT");
     }
@@ -199,7 +207,7 @@ class ClusterModeScriptTest {
         // 여러 노드에서 통과한다는 뜻이 아니다.
         String undeclared = "redis.call('SET', 'literal:key', '1') return 1";
 
-        Object result = CONNECTION.sync().eval(undeclared, ScriptOutputType.INTEGER,
+        Object result = connection.sync().eval(undeclared, ScriptOutputType.INTEGER,
                 new String[] {"{a}k"}, new String[0]);
 
         assertThat(result).isEqualTo(1L);

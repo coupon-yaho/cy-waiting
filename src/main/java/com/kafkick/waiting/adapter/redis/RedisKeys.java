@@ -26,6 +26,14 @@ public final class RedisKeys {
     /** 쿠폰별 정책 JSON. 밖에서 쓰는 키라 파싱 실패를 전제한다 (E-12). */
     public static final String COUPON_POLICY = "coupon:policy";
 
+    /**
+     * 뒷단 인스턴스의 가용량 자기보고.
+     *
+     * <p><b>판을 키에 담는다.</b> 측정 방식을 바꿀 때 옛 보고가 섞이면 배분이
+     * 두 기준을 합산한다 — 그건 어느 쪽도 아닌 값이다 (4.4.7).
+     */
+    public static final String CAPACITY = "coupon:capacity:v1";
+
     /** 해시태그를 깨뜨리는 문자. 클라이언트 입력이 키에 들어가는 경로를 막는다. */
     private static final String FORBIDDEN = "{}:";
 

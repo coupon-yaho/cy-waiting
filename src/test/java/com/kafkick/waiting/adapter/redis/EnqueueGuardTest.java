@@ -67,9 +67,12 @@ class EnqueueGuardTest extends RedisContainerSupport {
         Double stored = redis.opsForZSet().score(QUEUE, "m1").block(WAIT);
 
         assertThat(returned).doesNotContain("e+");
-        assertThat(Long.parseLong(returned))
-                .withFailMessage("돌려준 score %s 가 ZSET 의 %.0f 와 다르다", returned, stored)
-                .isEqualTo(stored.longValue());
+        // **한 문장으로 단언한다.** null 검사를 따로 두면 약한 단언이 되고,
+        // 서식 인자에 stored 를 넣으면 미등록일 때 NPE 가 진짜 원인을 덮는다.
+        assertThat(stored)
+                .withFailMessage("돌려준 score 와 ZSET 의 값이 다르다 (미등록이면 null): "
+                        + returned)
+                .isEqualTo((double) Long.parseLong(returned));
     }
 
     @Test

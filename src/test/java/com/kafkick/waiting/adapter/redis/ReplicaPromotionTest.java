@@ -42,11 +42,22 @@ class ReplicaPromotionTest {
     private static final int AFTER = 50;
 
     private final List<GenericContainer<?>> 띄운것 = new ArrayList<>();
+    private final List<RedisClient> 클라이언트 = new ArrayList<>();
+    private final List<StatefulRedisConnection<String, String>> 연결 = new ArrayList<>();
     private Network network;
 
+    /**
+     * <b>연결 → 클라이언트 → 컨테이너 순으로 닫는다.</b> {@link RedisClient} 는
+     * 제 Netty 이벤트 루프를 만들어서, {@code shutdown()} 없이는 그 스레드가
+     * JVM 종료까지 남는다.
+     */
     @AfterEach
     void 정리() {
+        연결.forEach(StatefulRedisConnection::close);
+        클라이언트.forEach(RedisClient::shutdown);
         띄운것.forEach(GenericContainer::stop);
+        연결.clear();
+        클라이언트.clear();
         띄운것.clear();
         if (network != null) {
             network.close();
@@ -65,29 +76,29 @@ class ReplicaPromotionTest {
         return container;
     }
 
-    @SuppressWarnings("resource")   // 컨테이너와 함께 JVM 종료까지 산다
-    private static StatefulRedisConnection<String, String> 붙는다(GenericContainer<?> c) {
-        return RedisClient.create(
-                "redis://%s:%d".formatted(c.getHost(), c.getMappedPort(6379))).connect();
-    }
-
-    private static String 스크립트(String name) {
-        try {
-            return Files.readString(Path.of("src/main/resources/redis", name),
-                    StandardCharsets.UTF_8);
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        }
+    private StatefulRedisConnection<String, String> 붙는다(GenericContainer<?> c) {
+        RedisClient client = RedisClient.create(
+                "redis://%s:%d".formatted(c.getHost(), c.getMappedPort(6379)));
+        클라이언트.add(client);
+        StatefulRedisConnection<String, String> connection = client.connect();
+        연결.add(connection);
+        return connection;
     }
 
     /** {@code {score, floorApplied, alreadyQueued}}. score 는 문자열로 온다. */
     @SuppressWarnings("unchecked")
     private static List<Object> 등록한다(
             StatefulRedisConnection<String, String> redis, String member) {
-        return (List<Object>) redis.sync().eval(스크립트("enqueue.lua"),
+        return (List<Object>) redis.sync().eval(LuaScripts.of("enqueue.lua"),
                 ScriptOutputType.MULTI,
                 new String[] {QUEUE, MAX_SCORE, ALIVE},
                 member, "86400", "30", "0", String.valueOf(NOW));
+    }
+
+    /** 컨테이너의 시계. 호스트 시계를 못 돌리므로 여기서 기준을 얻는다. */
+    private static long 지금_마이크로초(StatefulRedisConnection<String, String> redis) {
+        List<String> time = redis.sync().time();
+        return Long.parseLong(time.get(0)) * 1_000_000L + Long.parseLong(time.get(1));
     }
 
     private static long score(List<Object> result) {
@@ -113,7 +124,11 @@ class ReplicaPromotionTest {
         // 돌린다. 하지만 승격된 복제본이 겪는 상태는 "제 시계가 뒤처졌다" 가
         // 아니라 관측 가능한 조건 하나다 — `TIME < maxscore`. 주가 앞선
         // 시계로 쌓은 큐를 물려받은 것과 같은 상태를 그대로 만든다.
-        long 미래 = (NOW + 3600) * 1_000_000L;
+        //
+        // **컨테이너의 TIME 에서 유도한다.** 고정 시각을 박으면 실제 시각이
+        // 그걸 지나는 날 바닥값이 안 걸리고, 시험은 조용히 아무것도 검증하지
+        // 않게 된다 — 실패도 그날에야 난다.
+        long 미래 = 지금_마이크로초(주) + 3600L * 1_000_000L;
         주.sync().set(MAX_SCORE, String.valueOf(미래));
 
         long 마지막 = 0;

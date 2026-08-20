@@ -58,16 +58,26 @@ class CrashRecoveryTest {
     private static final long NOW = 1_800_000_000L;
 
     private final List<GenericContainer<?>> 띄운것 = new ArrayList<>();
+    private final List<RedisClient> 클라이언트 = new ArrayList<>();
+    private final List<StatefulRedisConnection<String, String>> 연결 = new ArrayList<>();
     private Path dataDir;
 
+    /**
+     * <b>연결 → 클라이언트 → 컨테이너 순으로 닫는다.</b> {@link RedisClient} 는
+     * 제 Netty 이벤트 루프를 만들어서, {@code shutdown()} 없이는 그 스레드가
+     * JVM 종료까지 남는다. 같은 워커에서 여러 시험이 돌면 계속 쌓인다.
+     */
     @AfterEach
     void 정리() {
+        연결.forEach(StatefulRedisConnection::close);
+        클라이언트.forEach(RedisClient::shutdown);
         띄운것.forEach(GenericContainer::stop);
+        연결.clear();
+        클라이언트.clear();
         띄운것.clear();
     }
 
     /** 같은 데이터 디렉터리를 물린 레디스. 컨테이너가 바뀌어도 AOF 는 남는다. */
-    @SuppressWarnings("resource")   // 정리()가 닫는다
     private StatefulRedisConnection<String, String> 레디스를_띄운다() {
         GenericContainer<?> container = new GenericContainer<>(RedisContainerSupport.IMAGE)
                 .withExposedPorts(6379)
@@ -78,7 +88,10 @@ class CrashRecoveryTest {
         띄운것.add(container);
         RedisClient client = RedisClient.create(
                 "redis://%s:%d".formatted(container.getHost(), container.getMappedPort(6379)));
-        return client.connect();
+        클라이언트.add(client);
+        StatefulRedisConnection<String, String> connection = client.connect();
+        연결.add(connection);
+        return connection;
     }
 
     private void 강제종료한다(GenericContainer<?> container) {
@@ -103,7 +116,14 @@ class CrashRecoveryTest {
                 .withCreateContainerCmdModifier(cmd -> cmd.withUser("root"))
                 .withCommand("tail", "-f", "/dev/null")) {
             helper.start();
-            String path = 도구로(helper, "ls /data/appendonlydir/*.incr.aof").trim();
+            // AOF 재작성이 일어나면 incr 파일이 여럿이다. 그때 아래 명령들은
+            // 엉뚱한 파일을 대상으로 삼거나 조용히 실패한다.
+            List<String> files = 도구로(helper, "ls /data/appendonlydir/*.incr.aof")
+                    .lines().filter(line -> !line.isBlank()).toList();
+            assertThat(files)
+                    .withFailMessage("incr AOF 가 하나가 아니다: %s", files)
+                    .hasSize(1);
+            String path = files.get(0);
             long size = Long.parseLong(도구로(helper, "wc -c < " + path).trim());
             도구로(helper, "truncate -s %d %s".formatted((long) (size * 남길비율), path));
         }
@@ -122,15 +142,6 @@ class CrashRecoveryTest {
         }
     }
 
-    private static String 스크립트(String name) {
-        try {
-            return Files.readString(Path.of("src/main/resources/redis", name),
-                    StandardCharsets.UTF_8);
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        }
-    }
-
     /** score 는 문자열로 온다 — Lua 수는 2^53 위에서 정밀도를 잃는다. */
     private static long score(Object raw) {
         return Long.parseLong(raw.toString());
@@ -139,7 +150,7 @@ class CrashRecoveryTest {
     @SuppressWarnings("unchecked")
     private static List<Object> 등록한다(
             StatefulRedisConnection<String, String> redis, String member, long nowSec) {
-        return (List<Object>) redis.sync().eval(스크립트("enqueue.lua"), ScriptOutputType.MULTI,
+        return (List<Object>) redis.sync().eval(LuaScripts.of("enqueue.lua"), ScriptOutputType.MULTI,
                 new String[] {QUEUE, MAX_SCORE, ALIVE},
                 member, "86400", "30", "0", String.valueOf(nowSec));
     }
@@ -147,7 +158,7 @@ class CrashRecoveryTest {
     @SuppressWarnings("unchecked")
     private static List<Object> 조회한다(
             StatefulRedisConnection<String, String> redis, String member, long nowSec) {
-        return (List<Object>) redis.sync().eval(스크립트("queue_status.lua"),
+        return (List<Object>) redis.sync().eval(LuaScripts.of("queue_status.lua"),
                 ScriptOutputType.MULTI,
                 new String[] {QUEUE, ADMITTED, ALIVE, GRACE},
                 member, "30", String.valueOf(nowSec));
@@ -237,9 +248,15 @@ class CrashRecoveryTest {
                 .withFailMessage("남지도 잃지도 않은 항목 %d 건%n%s",
                         이상한결과.size(), String.join("\n", 이상한결과))
                 .isEmpty();
-        // 한 명도 안 잃었다면 이 시험은 NOT_QUEUED 경로를 한 번도 안 돈 것이다.
+        // **몇 명 잃었는지가 중요하다.** 550 명 중 하나만 잃어도 통과하면
+        // "꼬리 절단이 거의 안 먹혔다" 와 "의도대로 대량 유실됐다" 를 못 가린다.
+        // 정확한 수는 비결정적이므로 의미 있는 하한만 둔다.
         assertThat(잃음수)
-                .withFailMessage("아무도 잃지 않아 NOT_QUEUED 경로가 돌지 않았다")
-                .isPositive();
+                .withFailMessage("유실이 %d 명뿐이다 — 꼬리 절단이 의도한 구간에 안 닿았다", 잃음수)
+                .isGreaterThan(VOLATILE / 4);
+        // 앞쪽(fsync 된 구간)까지 잘렸다면 절단 지점이 너무 앞이다.
+        assertThat(잃음수)
+                .withFailMessage("유실이 %d 명이다 — 확실히 남겼어야 할 구간까지 잘렸다", 잃음수)
+                .isLessThanOrEqualTo(VOLATILE);
     }
 }

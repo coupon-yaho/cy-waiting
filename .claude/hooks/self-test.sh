@@ -337,23 +337,46 @@ blocked=$?
 
 rm -rf "$probe_dir"
 
-# 기준 브랜치가 없으면 러너가 "무엇이 바뀌었는지 알 수 없다" 로 차단한다.
-# 그게 맞는 동작이지만 **하네스가 저장소 ref 상태에 의존하면 안 된다** (TS-7).
-base_ok=0
-for ref in origin/develop develop; do
-    git -C "$ROOT" rev-parse --verify "$ref^{commit}" >/dev/null 2>&1 \
-        && git -C "$ROOT" merge-base "$ref" HEAD >/dev/null 2>&1 && base_ok=1 && break
-done
+# **저장소 상태에 기대지 않는다.** 개발자의 작업 트리가 더럽다고 이 케이스를
+# 건너뛰면 로컬에서만 조용히 통과하고 CI 에서 처음 드러난다 — 실제로 그렇게
+# 났다. stash 로 씻는 것도 답이 아니다. 스크립트가 중간에 죽으면 남의 작업이
+# stash 로 숨는다. **깨끗한 임시 저장소를 만들어 거기서 시험한다.**
+clean_repo="$tmp/clean"
+mkdir -p "$clean_repo/.claude/hooks"
+cp "$HOOKS/review-branch.sh" "$HOOKS/check-java.sh" "$HOOKS/check-lua.sh" \
+   "$clean_repo/.claude/hooks/" 2>/dev/null
+chmod +x "$clean_repo/.claude/hooks/"*.sh 2>/dev/null
+(
+    cd "$clean_repo" || exit 1
+    # **초기 브랜치를 develop 과 분리한다.** init.defaultBranch=develop 인
+    # 환경이면 `git branch develop` 이 실패하고, 그러면 기준과 HEAD 가 같아져
+    # 빈 diff 를 검사하고 조용히 통과한다.
+    git init -q -b selftest-base .
+    git config user.email t@t
+    git config user.name t
+    : > seed.txt
+    git add -A
+    git commit -q -m 'chore: 씨앗'
+    git branch -q develop
+    git switch -q -c selftest-work
+    printf 'class Ok {\n    private Ok() {\n    }\n}\n' > Ok.java
+    git add -A
+    git commit -q -m 'feat(a): 깨끗한 변경' -m 'Refs: CY-1'
+) >/dev/null 2>&1
 
-if [[ -n "$(git -C "$ROOT" status --porcelain)" || $base_ok -eq 0 ]]; then
-    clean=0
-    skip_clean=1
-else
-    printf '{"tool_input":{"command":"gh pr create --base develop"}}' \
-        | "$ROOT/.claude/hooks/guard-pr.sh" >/dev/null 2>&1
-    clean=$?
-    skip_clean=0
-fi
+cp "$HOOKS/guard-pr.sh" "$clean_repo/.claude/hooks/" && chmod +x "$clean_repo/.claude/hooks/guard-pr.sh"
+
+# 원격이 없는 임시 저장소라 origin/develop 이 없다. 원격 이름을 붙여 두어
+# 가드가 실제와 같은 경로(origin/<base>)를 타게 한다.
+git -C "$clean_repo" remote add origin "$clean_repo" >/dev/null 2>&1
+git -C "$clean_repo" update-ref refs/remotes/origin/develop refs/heads/develop
+
+# 기준과 HEAD 가 같으면 빈 diff 를 보는 것이라 시험이 무의미하다. 먼저 확인한다.
+diff_ok=0
+[[ -n "$(git -C "$clean_repo" diff --name-only origin/develop...HEAD 2>/dev/null)" ]] && diff_ok=1
+
+clean=$(cd "$clean_repo" && printf '{"tool_input":{"command":"gh pr create --base develop"}}' \
+    | "$clean_repo/.claude/hooks/guard-pr.sh" >/dev/null 2>&1; echo $?)
 
 printf '{"tool_input":{"command":"git status"}}' \
     | "$ROOT/.claude/hooks/guard-pr.sh" >/dev/null 2>&1
@@ -378,8 +401,8 @@ if ((blocked == 2)); then
 else
     printf '  FAIL 위반이 있는데 PR 생성을 통과시켰다 (exit %d)\n' "$blocked"; fail=$((fail + 1))
 fi
-if ((skip_clean)); then
-    printf '  skip 작업 트리가 더럽거나 기준 브랜치가 없어 "깨끗하면 통과" 는 건너뛴다\n'
+if ((diff_ok == 0)); then
+    printf '  FAIL 임시 저장소의 기준과 HEAD 가 같다 — 빈 diff 를 검사한다\n'; fail=$((fail + 1))
 elif ((clean == 0)); then
     printf '  ok   깨끗하면 막지 않는다\n'; pass=$((pass + 1))
 else

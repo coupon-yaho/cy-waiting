@@ -81,7 +81,12 @@ public final class SnapshotHolder {
         return fetchAge().compareTo(fetchStaleAfter) > 0;
     }
 
+    /**
+     * <b>시계가 갈리면 곧바로 낡음이다.</b> 나이를 0 으로만 보정하면 갱신이
+     * 멎어도 임계가 지날 때까지 최신으로 취급된다 — 그동안 아무 노드도
+     * fail-open 에 못 들어간다.
+     */
     public boolean isDataStale() {
-        return dataAge().compareTo(dataStaleAfter) > 0;
+        return 시계가_앞섰나() || dataAge().compareTo(dataStaleAfter) > 0;
     }
 }

@@ -376,6 +376,20 @@ cp "$HOOKS/guard-pr.sh" "$clean_repo/.claude/hooks/" && chmod +x "$clean_repo/.c
 git -C "$clean_repo" rev-parse HEAD > "$clean_repo/.claude/.agents-reviewed" 2>/dev/null
 echo '돌린 에이전트: 자기검증' >> "$clean_repo/.claude/.agents-reviewed"
 
+# 낡은 증거와 목록 없는 증거도 막아야 한다. 안 막으면 한 줄로 우회된다.
+printf '%s\n돌린 에이전트: 옛 커밋\n' 0000000000000000000000000000000000000000 \
+    > "$clean_repo/.claude/.agents-reviewed.stale"
+stale=$(cd "$clean_repo" \
+    && cp .claude/.agents-reviewed .claude/.agents-reviewed.bak \
+    && cp .claude/.agents-reviewed.stale .claude/.agents-reviewed \
+    && printf '{"tool_input":{"command":"gh pr create --base develop"}}' \
+    | ./.claude/hooks/guard-pr.sh >/dev/null 2>&1; echo $?)
+listless=$(cd "$clean_repo" \
+    && git rev-parse HEAD > .claude/.agents-reviewed \
+    && printf '{"tool_input":{"command":"gh pr create --base develop"}}' \
+    | ./.claude/hooks/guard-pr.sh >/dev/null 2>&1; echo $?)
+cp "$clean_repo/.claude/.agents-reviewed.bak" "$clean_repo/.claude/.agents-reviewed"
+
 # 원격이 없는 임시 저장소라 origin/develop 이 없다. 원격 이름을 붙여 두어
 # 가드가 실제와 같은 경로(origin/<base>)를 타게 한다.
 git -C "$clean_repo" remote add origin "$clean_repo" >/dev/null 2>&1
@@ -413,6 +427,16 @@ if ((failclosed == 2)); then
     printf '  ok   저장소 밖에서는 막는다 (fail closed)\n'; pass=$((pass + 1))
 else
     printf '  FAIL 저장소 밖인데 통과시켰다 (exit %d)\n' "$failclosed"; fail=$((fail + 1))
+fi
+if ((stale == 2)); then
+    printf '  ok   낡은 증거는 막는다\n'; pass=$((pass + 1))
+else
+    printf '  FAIL 낡은 증거인데 통과시켰다 (exit %d)\n' "$stale"; fail=$((fail + 1))
+fi
+if ((listless == 2)); then
+    printf '  ok   목록 없는 증거는 막는다\n'; pass=$((pass + 1))
+else
+    printf '  FAIL 목록이 없는데 통과시켰다 (exit %d)\n' "$listless"; fail=$((fail + 1))
 fi
 if ((nostamp == 2)); then
     printf '  ok   에이전트 리뷰 증거가 없으면 막는다\n'; pass=$((pass + 1))

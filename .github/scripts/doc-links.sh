@@ -10,7 +10,10 @@ fail=0
 while IFS= read -r f; do
     d=$(dirname "$f")
     while IFS= read -r l; do
-        [[ -z "$l" || "$l" == http* || "$l" == '#'* ]] && continue
+        # scheme 전체와 //-형식을 걸러낸다. http* 로 보면 http-guide.md 같은
+        # 로컬 파일을 건너뛰고, mailto: 는 로컬 파일로 찾아 오탐이 난다.
+        [[ -z "$l" || "$l" == '#'* || "$l" == //* ]] && continue
+        [[ "$l" =~ ^[A-Za-z][A-Za-z0-9+.-]*: ]] && continue
         [[ -e "$d/$l" ]] || { echo "::error file=$f::깨진 링크 — $l"; fail=1; }
     done < <(
         # 코드를 먼저 걷어내고 링크를 뽑는다. 오탐이 잦은 검사는 곧

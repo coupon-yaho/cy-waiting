@@ -3,7 +3,8 @@ package com.kafkick.waiting.control;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.time.Clock;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,17 +26,25 @@ public final class SnapshotRefresher {
     private static final Duration DEFAULT_TIMEOUT = Duration.ofMillis(400);
 
     private final SnapshotCodec codec = SnapshotCodec.create();
-    /** 진입과 해제를 쌍으로 남기려면 직전 상태를 알아야 한다 (LG-2). */
-    private final AtomicBoolean 실패중 = new AtomicBoolean();
+    /**
+     * 언제부터 못 받고 있나. 비어 있으면 정상이다.
+     *
+     * <p>진입과 해제를 쌍으로 남기고 해제에 지속 시간을 담는다 (LG-2). 매 판
+     * 찍으면 20노드 30초 단절에 수백 줄이 쏟아지고(LG-3), 걷힌 시점을 가리키는
+     * 줄은 하나도 없다 — 사후에 얼마나 영향받았는지 답할 수 없다.
+     */
+    private final AtomicReference<Instant> 못받는중 = new AtomicReference<>();
     private final SnapshotHolder holder;
     private final Supplier<Mono<Map<String, String>>> source;
     private final Duration timeout;
+    private final Clock clock;
 
     private SnapshotRefresher(SnapshotHolder holder,
             Supplier<Mono<Map<String, String>>> source, Duration timeout) {
         this.holder = holder;
         this.source = source;
         this.timeout = timeout;
+        this.clock = Clock.systemUTC();
     }
 
     public static SnapshotRefresher of(SnapshotHolder holder,
@@ -64,7 +73,9 @@ public final class SnapshotRefresher {
      * 나이가 임계를 넘는다 — 부하가 가장 높을 때 노드가 로테이션에서 빠진다.
      */
     public Mono<Void> 한번(Scheduler scheduler) {
-        return source.get()
+        // **defer 로 감싼다.** source.get() 이 조립 중에 던지면 아래 오류
+        // 처리가 못 받는다 — 루프를 만들기도 전에 터져 그 자리에서 멎는다.
+        return Mono.defer(source)
                 .timeout(timeout, scheduler)
                 // **발행된 것만 받는다.** 빈 해시는 장애가 아니라 흔한 상태라
                 // 성공 응답으로 온다 — 그대로 받으면 들고 있던 것이 지워지고
@@ -81,7 +92,7 @@ public final class SnapshotRefresher {
                 // 스케줄러 판이 갈리면 전 노드가 영영 갱신을 못 한다.
                 .doOnNext(snapshot -> {
                     if (!받아들일_수_있나(snapshot)) {
-                        log.warn("받아들일 수 없는 스냅샷 — 발행={} 쿠폰={}",
+                        진입("받아들일 수 없는 스냅샷 — 발행={} 쿠폰={}",
                                 !snapshot.publishedAt().equals(Instant.EPOCH),
                                 snapshot.coupons().size());
                     }
@@ -89,17 +100,10 @@ public final class SnapshotRefresher {
                 .filter(this::받아들일_수_있나)
                 .doOnNext(snapshot -> {
                     holder.replace(snapshot);
-                    // LG-2 — 진입만 남기고 해제를 안 남기면 언제 걷혔는지 모른다.
-                    if (실패중.compareAndSet(true, false)) {
-                        log.info("스냅샷 갱신 복귀");
-                    }
+                    해제();
                 })
-                .doOnError(e -> {
-                    // LG-3 — 매 판 스택을 찍으면 20노드 30초 단절에 수백 줄이다.
-                    if (실패중.compareAndSet(false, true)) {
-                        log.warn("스냅샷 갱신 실패 — 들고 있던 것을 유지한다", e);
-                    }
-                })
+                .doOnError(e -> 진입("스냅샷 갱신 실패 — 들고 있던 것을 유지한다: {}",
+                        e.toString()))
                 .onErrorResume(e -> Mono.empty())
                 .then();
     }
@@ -117,6 +121,22 @@ public final class SnapshotRefresher {
         return Mono.defer(() -> 한번(scheduler))
                 .repeatWhen(done -> done.delayElements(interval, scheduler))
                 .subscribeOn(scheduler);
+    }
+
+    /** 못 받기 시작한 순간에만 남긴다. 그 뒤로는 조용하다 (LG-3). */
+    private void 진입(String message, Object... args) {
+        if (못받는중.compareAndSet(null, clock.instant())) {
+            log.warn(message, args);
+        }
+    }
+
+    /** 걷힌 순간에 지속 시간과 함께 남긴다 (LG-2). */
+    private void 해제() {
+        Instant 시작 = 못받는중.getAndSet(null);
+        if (시작 != null) {
+            log.info("스냅샷 갱신 복귀 — {}초 만에", Duration.between(시작, clock.instant())
+                    .toSeconds());
+        }
     }
 
     /**

@@ -78,7 +78,12 @@ fi
 STAMP="$ROOT/.claude/.agents-reviewed"
 head=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null)
 
-if [[ ! -f "$STAMP" ]] || [[ "$(cat "$STAMP" 2>/dev/null | head -1)" != "$head" ]]; then
+# 첫 줄은 커밋, 그 뒤는 **무엇을 돌렸는지**다. 목록이 비면 증거가 아니다 —
+# 해시만 적고 넘어갈 수 있으면 이 게이트는 한 줄로 우회된다.
+stamp_head=$(head -1 "$STAMP" 2>/dev/null)
+stamp_list=$(tail -n +2 "$STAMP" 2>/dev/null | grep -c '[^[:space:]]')
+
+if [[ ! -f "$STAMP" ]] || [[ "$stamp_head" != "$head" ]] || ((stamp_list == 0)); then
     {
         echo "기계 검사는 통과했다. **에이전트 리뷰가 남았다.**"
         echo

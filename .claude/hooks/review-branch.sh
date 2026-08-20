@@ -16,8 +16,6 @@ ROOT_SCRIPT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOU
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
 HOOKS=".claude/hooks"
-# 자기검증이 갈아 끼운다 — 저장소의 진짜 색인 상태에 결과가 흔들리면 안 된다.
-JOURNAL_INDEX="ai/journal/index.md"
 findings=0
 
 say()  { printf '%s\n' "$*"; }
@@ -99,44 +97,21 @@ check_rx2() {
         | sed "s|^|  RX-2 $file:|" | sed 's/$/  ← repeatWhen 을 쓴다. 회복 시 몰아서 터진다/'
 }
 
-# 작업 로그 형식·색인 동기화. CI(_verify-conventions.yml)와 **같은 것**을 본다.
-# 여기서 안 보면 프론트매터를 통째로 빠뜨린 글이 푸시된 뒤에야 드러난다.
+# 작업 로그 프론트매터. CI(_verify-conventions.yml)와 **같은 스크립트**를 쓴다 —
+# 여기서 규칙을 다시 구현하면 사본이 생기고 둘이 갈라진다.
 #
-# 색인 경로를 인자로 받는다 — 자기검증이 저장소의 진짜 색인을 읽으면 누가
-# 그 ID 를 실제로 등록하는 순간 검사가 아니라 상태가 결과를 바꾼다.
+# **색인 등록은 안 본다.** 색인이 생성물이라 저장소에 없다 (CY-303).
 check_journal() {
-    local file=$1 index=${2:-ai/journal/index.md} out="" k id front
-    # **프론트매터 안만 본다.** 파일 전체를 훑으면 본문에 'date:' 한 줄만
-    # 있어도 프론트매터가 있는 것으로 쳐서 검사가 통과한다.
-    #
-    # **닫는 --- 까지 확인한다.** 여는 줄만 보고 끝까지 읽으면 닫히지 않은
-    # 파일에서 본문 전체가 프론트매터 행세를 해 같은 구멍이 다시 열린다.
-    local status
-    front=$(awk '
-        NR == 1 { if ($0 != "---") exit 1; next }
-        $0 == "---" { closed = 1; exit 0 }
-        { print }
-        END { if (!closed) exit 1 }
-    ' "$file")
+    local out status
+    out=$(.github/scripts/journal-index.sh --check 2>&1 >/dev/null)
     status=$?
-    if ((status != 0)); then
-        printf '%s' "  JN-1 $file:1  ← 프론트매터가 없거나 --- 로 닫히지 않았다"$'\n'
-        return
+    if [[ -n "$out" ]]; then
+        printf '%s\n' "$out" | sed 's|^::error::|  JN-1 |'
+    elif ((status != 0)); then
+        # **종료 상태도 본다.** 출력 없이 실패하면 조용히 통과한다 —
+        # 검사가 죽은 것을 "이상 없음" 으로 세는 자리다.
+        printf '%s\n' "  JN-1 작업 로그 검사가 출력 없이 실패했다 (exit $status)"
     fi
-    for k in id date kind confidence; do
-        printf '%s\n' "$front" | grep -qE "^$k:" \
-            || out+="  JN-1 $file:1  ← 프론트매터에 '$k:' 없음"$'\n'
-    done
-    # 값 **전체**가 AIJ-<숫자> 여야 한다. 끝 경계가 없으면 'AIJ-123-extra' 가
-    # 'AIJ-123' 으로 잘려 엉뚱한 ID 로 색인을 찾는다.
-    id=$(printf '%s\n' "$front" | sed -nE 's/^id:[[:space:]]*(AIJ-[0-9]+)[[:space:]]*$/\1/p')
-    if [[ -z "$id" ]]; then
-        out+="  JN-1 $file:1  ← id 가 'AIJ-<숫자>' 형식이 아니다"$'\n'
-    # 부분 일치를 막는다. 색인에 AIJ-1234 만 있어도 AIJ-123 이 통과했다.
-    elif ! grep -qE "(^|[^0-9A-Za-z-])$id([^0-9]|$)" "$index" 2>/dev/null; then
-        out+="  JN-2 $file:1  ← $id 가 색인에 없다 — 색인에서 빠지면 없는 것과 같다"$'\n'
-    fi
-    printf '%s' "$out"
 }
 
 review_files() {
@@ -184,13 +159,9 @@ review_files() {
 
     if ((${#journal[@]})); then
         head2 "작업 로그 — 프론트매터·색인"
-        local jout="" one
-        for f in "${journal[@]}"; do
-            # 명령 치환이 후행 줄바꿈을 먹는다. 그냥 이으면 앞 파일의 마지막
-            # 지적과 다음 파일의 첫 지적이 한 줄에 붙는다.
-            one=$(check_journal "$f" "$JOURNAL_INDEX")
-            [[ -n "$one" ]] && jout+="$one"$'\n'
-        done
+        # 스크립트가 저장소 전체를 한 번에 본다 — 파일마다 부를 필요가 없다.
+        local jout
+        jout=$(check_journal)
         jout=$(printf '%s' "$jout" | grep -v '^[[:space:]]*$')
         if [[ -n "$jout" ]]; then say "$jout"; findings=$((findings + 1))
         else say "  위반 없음"; fi
@@ -228,30 +199,49 @@ self_test() {
     # record 와 클래스가 한 파일에 섞여도 클래스만 잡는다
     probe "record 가 있어도 다른 클래스는 검사한다" "src/main/java/H.java" \
         $'public record Marker(int x) {}\n\nclass H {\n    public H() {}\n}\n' "JS-12"
-    # **색인을 갈아 끼운다.** 저장소의 진짜 색인을 읽으면 누가 이 ID 를
-    # 실제로 등록하는 순간 검사가 아니라 상태가 결과를 바꾼다.
-    JOURNAL_INDEX="$tmp/index.md"
-    printf '| [AIJ-9990](x.md) | 2026-08-20 | implement | 있음 | high | — |\n' \
-        > "$JOURNAL_INDEX"
-
-    # 프론트매터를 통째로 빠뜨린 글이 CI 까지 갔다. 검사가 실제로 무는지 본다.
-    probe "저널 프론트매터 누락" "ai/journal/2026/08/AIJ-9998-probe.md" \
-        $'# 제목\n\n- **날짜** 2026-08-20\n' "JN-1"
-    probe "저널이 색인에 없음" "ai/journal/2026/08/AIJ-9999-probe.md" \
-        $'---\nid: AIJ-9999\ndate: 2026-08-20\nkind: implement\nconfidence: high\n---\n\n# 제목\n' "JN-2"
-    # 본문의 'date:' 한 줄이 프론트매터 행세를 하던 구멍
-    probe "본문 키는 프론트매터가 아니다" "ai/journal/2026/08/AIJ-9997-probe.md" \
-        $'# 제목\n\nid: AIJ-9997\ndate: 2026-08-20\nkind: implement\nconfidence: high\n' "JN-1"
-    # 끝 경계가 없어 'AIJ-9990-extra' 가 'AIJ-9990' 으로 잘리던 구멍
-    probe "id 는 값 전체가 맞아야 한다" "ai/journal/2026/08/AIJ-9996-probe.md" \
-        $'---\nid: AIJ-9990-extra\ndate: 2026-08-20\nkind: implement\nconfidence: high\n---\n' "JN-1"
-    # 여는 --- 만 있고 안 닫힌 파일이 본문까지 프론트매터로 치던 구멍
-    probe "닫는 구분자가 없으면 프론트매터가 아니다" "ai/journal/2026/08/AIJ-9995-probe.md" \
-        $'---\nid: AIJ-9990\ndate: 2026-08-20\nkind: implement\nconfidence: high\n\n# 제목\n' "JN-1"
-    # 색인의 AIJ-9990 이 AIJ-999 를 통과시키던 구멍
-    probe "색인 부분 일치는 등록이 아니다" "ai/journal/2026/08/AIJ-999-probe.md" \
-        $'---\nid: AIJ-999\ndate: 2026-08-20\nkind: implement\nconfidence: high\n---\n' "JN-2"
-    JOURNAL_INDEX="ai/journal/index.md"
+    # 저널 검사는 생성 스크립트에 위임했다 — 여기서 다시 구현하면 사본이
+    # 생긴다. 그 스크립트가 실제로 무는지를 **저장소 안**에서 본다.
+    #
+    # **임시 저장소로 옮기지 않는다.** 스크립트를 복사해 가면 못 찾고 실패한
+    # 것을 "잡았다" 로 세게 된다 — 실제로 그렇게 통과하던 프로브가 있었다.
+    # **고정 경로를 쓰지 않는다.** 같은 이름의 작업 파일이 있으면 덮어쓰고
+    # 지운다 — 자기검증이 사람의 작업을 없애면 안 된다.
+    #
+    # 날짜 경로도 박지 않는다. 없는 달이면 만들다 실패하는데, 그때 프로브는
+    # 안 생기고 검사는 계속 돌아 **없는 프로브로 통과**한다.
+    # **템플릿은 X 로 끝나야 한다.** BSD/macOS mktemp 는 접미사가 붙은
+    # 템플릿을 거부한다 — 거기서는 프로브가 안 생기고 검사는 계속 돈다.
+    local jdir jtmp jprobe
+    jdir=$(ls -d ai/journal/[0-9]*/[0-9]* 2>/dev/null | tail -1)
+    #
+    # mv -n 은 대상이 이미 있으면 **성공을 내면서 원본을 남긴다.** 옮겨졌는지
+    # 원본이 사라진 것으로 확인한다 — 반환값만 믿으면 남은 원본이 저장소에
+    # 굴러다니고, 지우는 쪽은 있지도 않은 .md 를 지운다.
+    if [[ -z "$jdir" ]] \
+        || ! jtmp=$(mktemp "$jdir/AIJ-9999-probe.XXXXXX" 2>/dev/null) \
+        || { mv -n "$jtmp" "$jtmp.md" 2>/dev/null; [[ -e "$jtmp" ]]; }; then
+        [[ -n "${jtmp:-}" ]] && rm -f "$jtmp"
+        printf '  ✗ 저널 프로브를 못 만들었다 — 검사가 실제로 무는지 확인 못 함\n'
+        fail=1
+        jprobe=""
+    else
+        jprobe="$jtmp.md"
+    fi
+    [[ -n "$jprobe" ]] && printf '# 프론트매터 없음\n' > "$jprobe"
+    if [[ -n "$jprobe" ]]; then
+        if .github/scripts/journal-index.sh --check >/dev/null 2>&1; then
+            printf '  ✗ 프론트매터 없는 저널을 통과시켰다\n'; fail=1
+        else
+            printf '  ✓ 프론트매터 없는 저널을 잡는다\n'
+        fi
+        rm -f "$jprobe"
+    fi
+    # 지우고 나면 다시 통과해야 한다. 안 그러면 프로브가 아니라 고장이다.
+    if .github/scripts/journal-index.sh --check >/dev/null 2>&1; then
+        printf '  ✓ 프로브를 지우면 다시 통과한다\n'
+    else
+        printf '  ✗ 프로브를 지웠는데도 실패한다 — 검사가 고장났다\n'; fail=1
+    fi
 
     # **상대경로 회귀.** git 은 선행 슬래시 없는 경로를 준다. 절대경로로
     # 안 바꾸면 테스트 전용 검사가 아예 안 돌고(미탐), 동시에 테스트가

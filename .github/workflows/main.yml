@@ -153,6 +153,52 @@ jobs:
     with: { scenario: idle-coupon, timeout-minutes: 25 }
 
   # 취소를 통과로 세지 않기 위해 별도 잡으로 뺐다. 규칙은 verdict 액션에 있다.
+  # 작업 로그 색인은 생성물이라 저장소에 없다 (CY-303). PR 에서는 잡 요약으로
+  # 보고, main 에 들어갈 때 여기서 위키를 갱신한다 — 사람이 링크로 공유하는 자리다.
+  journal-index:
+    name: 작업 로그 색인
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # 실패해도 파이프라인을 막지 않는다. 판정이 아니라 가시성이다.
+    continue-on-error: true
+    permissions:
+      contents: read
+    env:
+      # 단계 수준 if 에서는 secrets 컨텍스트를 못 쓴다. 잡 수준에서 한 번
+      # 불리언으로 접어 둔다. parent-id 는 선택 입력이라 조건에 안 넣는다.
+      HAS_CONFLUENCE: >-
+        ${{ secrets.CONFLUENCE_SPACE_KEY != '' && secrets.ATLASSIAN_BASE_URL != ''
+            && secrets.ATLASSIAN_USER_EMAIL != '' && secrets.ATLASSIAN_API_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+
+      # **생성이 실패하면 게시하지 않는다.** 빈 본문으로 upsert 하면 위키의
+      # 기존 색인을 통째로 지운다 — 가시성을 얻으려다 있던 것을 없앤다.
+      - id: build
+        run: |
+          set -euo pipefail
+          index=$(.github/scripts/journal-index.sh)
+          {
+            echo 'body<<INDEX_EOF'
+            printf '%s\n' "$index"
+            echo 'INDEX_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - if: env.HAS_CONFLUENCE == 'true'
+        uses: coupon-yaho/cy-ci-actions/actions/confluence@c5d6391379ae34d56894538027ff3631ea4923a2  # v1
+        with:
+          space-key: ${{ secrets.CONFLUENCE_SPACE_KEY }}
+          parent-id: ${{ secrets.CONFLUENCE_PARENT_ID }}
+          title: 작업 로그 색인
+          body: ${{ steps.build.outputs.body }}
+          mode: upsert
+          labels: ci
+          base-url: ${{ secrets.ATLASSIAN_BASE_URL }}
+          email: ${{ secrets.ATLASSIAN_USER_EMAIL }}
+          token: ${{ secrets.ATLASSIAN_API_TOKEN }}
+
   verdict:
     name: 판정
     needs: [context, conventions, build, test-unit, test-integration, test-context, test-chaos, test-coverage, test-mutation, security, load-idle]

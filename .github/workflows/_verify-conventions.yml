@@ -95,27 +95,18 @@ jobs:
                    | sed 's/ *\[red\]//; s/ *(선택)//; s/ *$//' | sort -u)
           exit $fail
 
-      # 엔트리 형식과 색인 동기화 (plan/01-foundation.md T1.3.4)
-      - name: 작업 로그 형식·색인 동기화
-        run: |
-          set -uo pipefail
-          fail=0
-          shopt -s nullglob
-          for f in ai/journal/*/*/AIJ-*.md; do
-            for k in id date kind confidence; do
-              grep -qE "^$k:" "$f" || { echo "::error::$f 에 '$k:' 없음"; fail=1; }
-            done
-            # `|| true` 가 없으면 id 줄이 빠진 파일에서 스크립트가 죽는다 —
-            # 그걸 지적해야 할 검사가 먼저 멎고 뒤 파일도 검사되지 않는다.
-            # 빈 id 로 grep 하면 무엇이든 매치해서 색인 검사가 무력화된다.
-            id=$(grep -oE '^id: AIJ-[0-9]+' "$f" | awk '{print $2}' || true)
-            if [[ -z "$id" ]]; then
-              echo "::error::$f 에서 id 를 읽을 수 없다"; fail=1; continue
-            fi
-            grep -q "$id" ai/journal/index.md \
-              || { echo "::error::$id 가 index.md 에 없다 — 색인에서 빠진 엔트리는 없는 것과 같다"; fail=1; }
-          done
-          exit $fail
+      # 작업 로그 형식. **색인 동기화는 안 본다** — 색인이 생성물이라
+      # 저장소에 없다 (CY-303). 원래 지키려던 것은 "프론트매터가 유효한가"
+      # 였고, 색인 등록 검사는 손으로 유지하던 사본을 붙잡던 장치였다.
+      - name: 작업 로그 형식
+        run: .github/scripts/journal-index.sh --check
+
+      # 색인을 잡 요약에 찍는다. 저장소에 파일이 없으니 여기가 목록을 보는
+      # 자리다. 실패해도 파이프라인을 막지 않는다 — 판정이 아니라 가시성이다.
+      - name: 작업 로그 색인
+        if: always()
+        continue-on-error: true
+        run: .github/scripts/journal-index.sh >> "$GITHUB_STEP_SUMMARY"
 
   pr-conventions:
     name: PR 규약

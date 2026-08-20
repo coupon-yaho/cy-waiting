@@ -2,11 +2,12 @@
 --
 -- KEYS[1]  queue:{cid}          ZSET. score = Redis TIME 의 마이크로초
 -- KEYS[2]  maxscore:{cid}       시계 역행 방어용 바닥값
--- KEYS[3]  alive:{cid}:{member} 생존 신호. 폴링이 곧 하트비트다
+-- KEYS[3]  alive:{cid}       생존 신호 ZSET. score 는 만료 시각(초)
 -- ARGV[1]  memberId
 -- ARGV[2]  maxscore TTL(초). 양의 정수
 -- ARGV[3]  alive TTL(초). 양의 정수. 폴링 간격에서 나온 값이라 주입받는다
 -- ARGV[4]  큐 길이 상한. 0 이면 상한 없음
+-- ARGV[5]  지금 시각(초). 생존 신호의 만료 시각을 계산한다
 --
 -- 반환  {score, floorApplied, alreadyQueued}
 --   score          이 사람의 순번. 거부되면 '-1'
@@ -37,6 +38,11 @@ local aliveTtl
 aliveTtl, err = positive_int(ARGV[3], 'alive TTL')
 if not aliveTtl then return redis.error_reply(err) end
 
+local now = tonumber(ARGV[5])
+if now == nil or now < 0 then
+    return redis.error_reply('시각은 0 이상이어야 한다: ' .. tostring(ARGV[5]))
+end
+
 local maxLen = tonumber(ARGV[4])
 if maxLen == nil or maxLen < 0 or maxLen ~= math.floor(maxLen) then
     return redis.error_reply('큐 길이 상한은 0 이상 정수여야 한다: ' .. tostring(ARGV[4]))
@@ -49,7 +55,7 @@ end
 -- 것이 그 사람 잘못이 아닌데 그가 자리를 잃는다.
 local existing = redis.call('ZSCORE', KEYS[1], ARGV[1])
 if existing then
-    redis.call('SET', KEYS[3], '1', 'EX', aliveTtl)
+    redis.call('ZADD', KEYS[3], now + aliveTtl, ARGV[1])
     return {existing, 0, 1}
 end
 
@@ -58,8 +64,10 @@ if maxLen > 0 and redis.call('ZCARD', KEYS[1]) >= maxLen then
     return {'-1', 0, 0}
 end
 
-local now   = redis.call('TIME')
-local score = tonumber(now[1]) * 1000000 + tonumber(now[2])
+-- 이름을 now 와 겹치지 않게 둔다. 주입받은 시각(초)과 Redis 시계(μs)는
+-- 단위도 출처도 다른 값이라 한 이름을 쓰면 조용히 섞인다.
+local redisTime = redis.call('TIME')
+local score = tonumber(redisTime[1]) * 1000000 + tonumber(redisTime[2])
 
 local floor = tonumber(redis.call('GET', KEYS[2]) or 0)
 local applied = 0
@@ -78,6 +86,6 @@ end
 -- 그건 maxmemory 로 막는다.
 redis.call('ZADD', KEYS[1], score, ARGV[1])
 redis.call('SET', KEYS[2], score, 'EX', scoreTtl)
-redis.call('SET', KEYS[3], '1', 'EX', aliveTtl)
+redis.call('ZADD', KEYS[3], now + aliveTtl, ARGV[1])
 
 return {tostring(score), applied, 0}

@@ -35,7 +35,7 @@ class RedisKeysTest {
         assertThat(RedisKeys.maxScore("c1", 1, 0)).isEqualTo("maxscore:{c1}");
         assertThat(RedisKeys.admitted("c1", 1, 0)).isEqualTo("admitted:{c1}");
         assertThat(RedisKeys.grace("c1", 1, 0)).isEqualTo("grace:{c1}");
-        assertThat(RedisKeys.alive("c1", 1, 0, "m9")).isEqualTo("alive:{c1}:m9");
+        assertThat(RedisKeys.alive("c1", 1, 0)).isEqualTo("alive:{c1}");
     }
 
     @Test
@@ -43,7 +43,7 @@ class RedisKeysTest {
     void 샤드가_여럿이면_접미사가_붙는다() {
         assertThat(RedisKeys.queue("c1", 4, 3)).isEqualTo("queue:{c1:3}");
         assertThat(RedisKeys.maxScore("c1", 4, 3)).isEqualTo("maxscore:{c1:3}");
-        assertThat(RedisKeys.alive("c1", 4, 3, "m9")).isEqualTo("alive:{c1:3}:m9");
+        assertThat(RedisKeys.alive("c1", 4, 3)).isEqualTo("alive:{c1:3}");
     }
 
     @Test
@@ -55,7 +55,7 @@ class RedisKeysTest {
                 RedisKeys.maxScore("c1", 4, 3),
                 RedisKeys.admitted("c1", 4, 3),
                 RedisKeys.grace("c1", 4, 3),
-                RedisKeys.alive("c1", 4, 3, "m9"));
+                RedisKeys.alive("c1", 4, 3));
 
         assertThat(keys).allMatch(k -> RedisKeys.hashTagOf(k).equals("c1:3"));
     }
@@ -76,7 +76,7 @@ class RedisKeysTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> RedisKeys.queue("c:1", 1, 0))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> RedisKeys.alive("c1", 1, 0, "m{9}"))
+        assertThatThrownBy(() -> RedisKeys.alive("c1", 1, 0))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 

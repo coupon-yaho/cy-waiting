@@ -34,6 +34,8 @@ import org.springframework.data.redis.core.script.RedisScript;
 @SpringBootTest
 class ConcurrentEnqueueTest extends RedisContainerSupport {
 
+    private static final String NOW = "1800000000";
+
     private static final long TTL_SECONDS = 86_400;
     private static final Duration WAIT = Duration.ofSeconds(10);
 
@@ -55,12 +57,12 @@ class ConcurrentEnqueueTest extends RedisContainerSupport {
     }
 
     private String alive(String memberId) {
-        return RedisKeys.alive(COUPON, 1, 0, memberId);
+        return RedisKeys.alive(COUPON, 1, 0);
     }
 
     private void enqueue(String memberId) {
         redis.execute(script, List.of(QUEUE, MAX_SCORE, alive(memberId)),
-                        List.of(memberId, String.valueOf(TTL_SECONDS), ALIVE_TTL, NO_CAP))
+                        List.of(memberId, String.valueOf(TTL_SECONDS), ALIVE_TTL, NO_CAP, NOW))
                 .blockFirst(WAIT);
     }
 

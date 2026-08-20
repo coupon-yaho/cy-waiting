@@ -31,6 +31,8 @@ import org.springframework.data.redis.core.script.RedisScript;
 @SpringBootTest
 class RankMonotonicityIntegrationTest extends RedisContainerSupport {
 
+    private static final String NOW = "1800000000";
+
     private static final long SEED = 20260819L;
     private static final int OPERATIONS = 3_000;
     private static final int PEOPLE = 200;
@@ -53,8 +55,8 @@ class RankMonotonicityIntegrationTest extends RedisContainerSupport {
 
     private void enqueue(String memberId) {
         redis.execute(enqueueScript,
-                        List.of(QUEUE, MAX_SCORE, RedisKeys.alive(COUPON, 1, 0, memberId)),
-                        List.of(memberId, "86400", "30", "0"))
+                        List.of(QUEUE, MAX_SCORE, RedisKeys.alive(COUPON, 1, 0)),
+                        List.of(memberId, "86400", "30", "0", NOW))
                 .blockFirst(WAIT);
     }
 

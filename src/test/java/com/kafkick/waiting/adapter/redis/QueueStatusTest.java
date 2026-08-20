@@ -25,6 +25,8 @@ import org.springframework.data.redis.core.script.RedisScript;
 @SpringBootTest
 class QueueStatusTest extends RedisContainerSupport {
 
+    private static final String NOW = "1800000000";
+
     private static final Duration WAIT = Duration.ofSeconds(5);
     private static final String COUPON = "status";
     private static final String QUEUE = RedisKeys.queue(COUPON, 1, 0);
@@ -50,12 +52,12 @@ class QueueStatusTest extends RedisContainerSupport {
     }
 
     private String alive(String memberId) {
-        return RedisKeys.alive(COUPON, 1, 0, memberId);
+        return RedisKeys.alive(COUPON, 1, 0);
     }
 
     private void enqueue(String memberId) {
         redis.execute(enqueueScript, List.of(QUEUE, MAX_SCORE, alive(memberId)),
-                        List.of(memberId, "86400", ALIVE_TTL, "0"))
+                        List.of(memberId, "86400", ALIVE_TTL, "0", NOW))
                 .blockFirst(WAIT);
     }
 
@@ -64,7 +66,7 @@ class QueueStatusTest extends RedisContainerSupport {
         return (List<Object>) redis.execute(
                         statusScript,
                         List.of(QUEUE, ADMITTED, alive(memberId), GRACE),
-                        List.of(memberId, ALIVE_TTL))
+                        List.of(memberId, ALIVE_TTL, NOW))
                 .blockFirst(WAIT);
     }
 
@@ -105,12 +107,13 @@ class QueueStatusTest extends RedisContainerSupport {
         // **경계에 붙이지 않는다.** 2초로 줄여 두면 CI 지연 한 번에 키가
         // 먼저 사라져 갱신이 아예 안 돌고, 그러면 이 시험이 불안정해진다.
         enqueue("m0");
-        redis.expire(alive("m0"), Duration.ofSeconds(10)).block(WAIT);
+        redis.opsForZSet().add(alive("m0"), "m0", Long.parseLong(NOW) - 100).block(WAIT);
 
         assertThat(state(status("m0"))).isEqualTo("WAITING");
 
-        assertThat(redis.getExpire(alive("m0")).block(WAIT))
-                .isGreaterThan(Duration.ofSeconds(20));
+        // score 가 만료 시각이다. 조회 한 번에 미래로 밀려야 한다.
+        assertThat(redis.opsForZSet().score(alive("m0"), "m0").block(WAIT))
+                .isEqualTo(Long.parseLong(NOW) + 30);
     }
 
     @Test
@@ -198,7 +201,7 @@ class QueueStatusTest extends RedisContainerSupport {
 
         assertThatThrownBy(() ->
                 redis.execute(statusScript, List.of(QUEUE, ADMITTED, alive("m0"), GRACE),
-                                List.of("m0", "0"))
+                                List.of("m0", "0", NOW))
                         .blockFirst(WAIT))
                 .rootCause()
                 .hasMessageContaining("alive TTL");
@@ -206,7 +209,7 @@ class QueueStatusTest extends RedisContainerSupport {
         // 쓰기 대상 전부를 본다. 하나만 보면 ZREM 이나 HSET 이 먼저
         // 일어난 회귀를 통과시킨다. 순번은 **그대로**여야 한다 —
         // 있기만 하면 되는 게 아니라 값이 안 바뀌어야 한다.
-        assertThat(redis.hasKey(alive("m0")).block(WAIT)).isFalse();
+        assertThat(redis.opsForZSet().score(alive("m0"), "m0").block(WAIT)).isNull();
         assertThat(redis.opsForZSet().score(QUEUE, "m0").block(WAIT)).isEqualTo(before);
         assertThat(redis.opsForHash().hasKey(GRACE, "m0").block(WAIT)).isFalse();
     }

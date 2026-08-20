@@ -25,6 +25,8 @@ import org.springframework.data.redis.core.script.RedisScript;
 @SpringBootTest
 class ClockMonotonicTest extends RedisContainerSupport {
 
+    private static final String NOW = "1800000000";
+
     private static final long TTL_SECONDS = 86_400;
     private static final Duration WAIT = Duration.ofSeconds(5);
 
@@ -54,12 +56,12 @@ class ClockMonotonicTest extends RedisContainerSupport {
         return (List<Object>) redis.execute(
                         script,
                         List.of(QUEUE, MAX_SCORE, alive(memberId)),
-                        List.of(memberId, String.valueOf(TTL_SECONDS), ALIVE_TTL, NO_CAP))
+                        List.of(memberId, String.valueOf(TTL_SECONDS), ALIVE_TTL, NO_CAP, NOW))
                 .blockFirst(WAIT);
     }
 
     private String alive(String memberId) {
-        return RedisKeys.alive(COUPON, 1, 0, memberId);
+        return RedisKeys.alive(COUPON, 1, 0);
     }
 
     private long scoreOf(String memberId) {
@@ -183,7 +185,7 @@ class ClockMonotonicTest extends RedisContainerSupport {
         // maxscore 없는 ZSET 이 남아 "같이 남거나 같이 사라진다" 가 깨진다.
         org.assertj.core.api.Assertions.assertThatThrownBy(() ->
                 redis.execute(script, List.of(QUEUE, MAX_SCORE, alive("m1")),
-                                List.of("m1", "0", ALIVE_TTL, NO_CAP))
+                                List.of("m1", "0", ALIVE_TTL, NO_CAP, NOW))
                         .blockFirst(WAIT))
                 .rootCause()
                 .hasMessageContaining("TTL");

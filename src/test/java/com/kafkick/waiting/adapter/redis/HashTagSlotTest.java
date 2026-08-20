@@ -30,7 +30,7 @@ class HashTagSlotTest {
                 RedisKeys.maxScore("c1", 4, 3),
                 RedisKeys.admitted("c1", 4, 3),
                 RedisKeys.grace("c1", 4, 3),
-                RedisKeys.alive("c1", 4, 3, "m9"));
+                RedisKeys.alive("c1", 4, 3));
 
         assertThat(keys).extracting(this::slotOf).containsOnly(slotOf(keys.get(0)));
     }

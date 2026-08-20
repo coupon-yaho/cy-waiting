@@ -25,6 +25,8 @@ import org.springframework.data.redis.core.script.RedisScript;
 @SpringBootTest
 class GraceReentryTest extends RedisContainerSupport {
 
+    private static final String NOW = "1800000000";
+
     private static final Duration WAIT = Duration.ofSeconds(5);
     private static final String COUPON = "grace";
     private static final String QUEUE = RedisKeys.queue(COUPON, 1, 0);
@@ -44,8 +46,8 @@ class GraceReentryTest extends RedisContainerSupport {
 
     private void enqueue(String memberId) {
         redis.execute(enqueueScript,
-                        List.of(QUEUE, MAX_SCORE, RedisKeys.alive(COUPON, 1, 0, memberId)),
-                        List.of(memberId, "86400", "30", "0"))
+                        List.of(QUEUE, MAX_SCORE, RedisKeys.alive(COUPON, 1, 0)),
+                        List.of(memberId, "86400", "30", "0", NOW))
                 .blockFirst(WAIT);
     }
 

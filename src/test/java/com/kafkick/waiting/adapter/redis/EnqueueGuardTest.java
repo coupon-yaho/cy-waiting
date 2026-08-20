@@ -25,10 +25,13 @@ import org.springframework.data.redis.core.script.RedisScript;
 @SpringBootTest
 class EnqueueGuardTest extends RedisContainerSupport {
 
+    private static final String NOW = "1800000000";
+
     private static final Duration WAIT = Duration.ofSeconds(5);
     private static final String COUPON = "guard";
     private static final String QUEUE = RedisKeys.queue(COUPON, 1, 0);
     private static final String MAX_SCORE = RedisKeys.maxScore(COUPON, 1, 0);
+    private static final String ALIVE = RedisKeys.alive(COUPON, 1, 0);
 
     @Autowired
     private ReactiveStringRedisTemplate redis;
@@ -40,7 +43,7 @@ class EnqueueGuardTest extends RedisContainerSupport {
         script = RedisScript.of(new ClassPathResource("redis/enqueue.lua"), List.class);
         redis.delete(QUEUE, MAX_SCORE).block(WAIT);
         for (int i = 0; i < 10; i++) {
-            redis.delete(RedisKeys.alive(COUPON, 1, 0, "m" + i)).block(WAIT);
+            redis.delete(RedisKeys.alive(COUPON, 1, 0)).block(WAIT);
         }
     }
 
@@ -48,18 +51,20 @@ class EnqueueGuardTest extends RedisContainerSupport {
     private List<Object> enqueue(String memberId, String aliveTtl, String cap) {
         return (List<Object>) redis.execute(
                         script,
-                        List.of(QUEUE, MAX_SCORE, RedisKeys.alive(COUPON, 1, 0, memberId)),
-                        List.of(memberId, "86400", aliveTtl, cap))
+                        List.of(QUEUE, MAX_SCORE, RedisKeys.alive(COUPON, 1, 0)),
+                        List.of(memberId, "86400", aliveTtl, cap, NOW))
                 .blockFirst(WAIT);
     }
 
     @Test
-    @DisplayName("등록하면_생존_키가_TTL과_함께_생긴다")
-    void 등록하면_생존_키가_TTL과_함께_생긴다() {
+    @DisplayName("등록하면_생존_신호에_만료_시각이_찍힌다")
+    void 등록하면_생존_신호에_만료_시각이_찍힌다() {
+        // ZSET 의 score 가 만료 시각이다. 사람마다 키를 만들면 청소가
+        // KEYS 에 없는 키를 만지게 되고 클러스터가 거부한다 (RD-1).
         enqueue("m1", "30", "0");
 
-        assertThat(redis.getExpire(RedisKeys.alive(COUPON, 1, 0, "m1")).block(WAIT))
-                .isBetween(Duration.ofSeconds(25), Duration.ofSeconds(30));
+        assertThat(redis.opsForZSet().score(ALIVE, "m1").block(WAIT))
+                .isEqualTo(Long.parseLong(NOW) + 30);
     }
 
     @Test
@@ -68,8 +73,8 @@ class EnqueueGuardTest extends RedisContainerSupport {
         // 폴링 간격에서 나오는 값이라 스크립트에 박으면 둘이 갈라진다.
         enqueue("m2", "90", "0");
 
-        assertThat(redis.getExpire(RedisKeys.alive(COUPON, 1, 0, "m2")).block(WAIT))
-                .isBetween(Duration.ofSeconds(85), Duration.ofSeconds(90));
+        assertThat(redis.opsForZSet().score(ALIVE, "m2").block(WAIT))
+                .isEqualTo(Long.parseLong(NOW) + 90);
     }
 
     @Test
@@ -78,12 +83,12 @@ class EnqueueGuardTest extends RedisContainerSupport {
         // 순번은 그대로지만 살아 있다는 신호는 새로 찍혀야 한다.
         // 안 그러면 성실히 새로고침하는 사람이 이탈자로 지워진다.
         enqueue("m3", "30", "0");
-        redis.expire(RedisKeys.alive(COUPON, 1, 0, "m3"), Duration.ofSeconds(2)).block(WAIT);
+        redis.opsForZSet().add(ALIVE, "m3", Long.parseLong(NOW) - 100).block(WAIT);
 
         enqueue("m3", "30", "0");
 
-        assertThat(redis.getExpire(RedisKeys.alive(COUPON, 1, 0, "m3")).block(WAIT))
-                .isGreaterThan(Duration.ofSeconds(20));
+        assertThat(redis.opsForZSet().score(ALIVE, "m3").block(WAIT))
+                .isEqualTo(Long.parseLong(NOW) + 30);
     }
 
     @Test
@@ -135,6 +140,6 @@ class EnqueueGuardTest extends RedisContainerSupport {
         assertThat(redis.hasKey(MAX_SCORE).block(WAIT)).isFalse();
         // alive 만 생기는 회귀를 잡는다. 검증이 첫 쓰기 앞이라는 계약은
         // 세 키 전부에 걸린다 — 하나라도 새면 계약이 아니다.
-        assertThat(redis.hasKey(RedisKeys.alive(COUPON, 1, 0, "m1")).block(WAIT)).isFalse();
+        assertThat(redis.hasKey(RedisKeys.alive(COUPON, 1, 0)).block(WAIT)).isFalse();
     }
 }

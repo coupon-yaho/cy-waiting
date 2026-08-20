@@ -90,9 +90,17 @@ class SweepWriteOrderTest {
         assertThatThrownBy(() -> 청소한다(인원))
                 .hasMessageContaining("unpack");
 
-        assertThat(connection.sync().zcard(QUEUE))
-                .withFailMessage("실패했는데 큐에서 빠졌다 — 자리도 기록도 없이 증발했다")
-                .isEqualTo(인원);
+        // **수만 세면 다른 사람이 같은 수로 남아도 통과한다.** 자리는 순서가
+        // 곧 의미라, 누가 어느 순서로 남았는지까지 본다.
+        List<String> 남은사람 = connection.sync().zrange(QUEUE, 0, -1);
+        List<String> 원래순서 = new ArrayList<>();
+        for (int i = 0; i < 인원; i++) {
+            원래순서.add("m" + i);
+        }
+        assertThat(남은사람)
+                .withFailMessage("실패했는데 큐가 바뀌었다 — 자리도 기록도 없이 증발했다")
+                .containsExactlyElementsOf(원래순서);
+        assertThat(connection.sync().zscore(QUEUE, "m0")).isZero();
         assertThat(connection.sync().hlen(GRACE)).isZero();
     }
 

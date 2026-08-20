@@ -12,7 +12,7 @@ plugins {
 }
 
 group = 'com.kafkick'
-version = '0.0.1-SNAPSHOT'
+version = '0.1.0'
 
 java {
     toolchain {
@@ -67,6 +67,11 @@ dependencies {
     testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
     testImplementation 'org.springframework.boot:spring-boot-testcontainers'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+
+    // 장애 주입 픽스처가 실물 컨테이너를 다룬다. **Phase 8 이 다시 만들지
+    // 않고 확장하도록** 픽스처 소스셋에 둔다 (04-control-plane 6.0).
+    testFixturesApi 'org.testcontainers:testcontainers'
+    testFixturesApi 'io.lettuce:lettuce-core'
 }
 
 // ── 테스트 계층 ──────────────────────────────────────────────────────────────

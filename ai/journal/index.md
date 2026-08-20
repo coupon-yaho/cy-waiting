@@ -8,6 +8,7 @@
 
 | ID | 날짜 | 종류 | 제목 | 확신 | 승격 |
 |---|---|---|---|---|---|
+| [AIJ-0026](2026/08/AIJ-0026-dependency-refresh.md) | 2026-08-20 | decision | 버전은 실측한다 — 검색 색인은 최신을 모른다 | high | — |
 | [AIJ-0025](2026/08/AIJ-0025-crash-and-promotion.md) | 2026-08-20 | implement | 강제 종료와 승격 — 계획의 전제가 두 군데 틀렸다 | medium | — |
 | [AIJ-0024](2026/08/AIJ-0024-adapter-coverage.md) | 2026-08-20 | decision | 어댑터 커버리지 — 통합 exec 만으로는 엉뚱한 것을 잰다 | medium | — |
 | [AIJ-0023](2026/08/AIJ-0023-cluster-mode.md) | 2026-08-20 | implement | 클러스터 모드 — 무엇을 잡고 무엇을 못 잡나 | medium | — |

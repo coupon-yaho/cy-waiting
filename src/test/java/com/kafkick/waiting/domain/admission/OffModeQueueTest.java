@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.CouponStates;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
+import java.util.EnumMap;
+import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -59,24 +61,26 @@ class OffModeQueueTest {
     @Test
     @DisplayName("낡은_구간에서는_꺼진_쿠폰도_상한_안에서만_통과한다")
     void 낡은_구간에서는_꺼진_쿠폰도_상한_안에서만_통과한다() {
-        // **fail-open 상한을 우회하면 안 된다.** 스케줄러가 멎은 구간은
-        // 상태를 모르는 구간이고, 그래서 상한이 있다. 꺼진 쿠폰만 무제한으로
-        // 뒷단에 꽂히면 그 상한이 있으나 마나다.
+        // **fail-open 상한을 우회하면 안 된다.** 낡은 구간은 상태를 모르는
+        // 구간이고 그래서 상한이 있다. 꺼진 쿠폰만 무제한으로 뒷단에 꽂히면
+        // 그 상한이 있으나 마나다.
+        //
+        // 상한 이하만 세면 전부 거절돼도 통과한다 — 정확한 수로 고정한다.
         AdmissionDecider decider = 판정기();
         CouponState 줄이빈꺼짐 = CouponStates.off(10_000);
+        long 상한 = 1_000;   // globalCredit 1000 / 노드 1
 
-        int 통과 = 0;
+        Map<AdmissionDecision, Long> 결과 = new EnumMap<>(AdmissionDecision.class);
         for (int i = 0; i < 5_000; i++) {
             AdmissionRequest 낡음 = new AdmissionRequest("c1", 줄이빈꺼짐,
                     new SnapshotMeta(1000, 1), true, false, false, NOW, 300);
-            if (decider.decide(낡음) != AdmissionDecision.REJECT_OVERLOAD) {
-                통과++;
-            }
+            결과.merge(decider.decide(낡음), 1L, Long::sum);
         }
 
-        assertThat(통과)
-                .withFailMessage("낡은 구간에서 %d 건이 나갔다 — 상한을 우회했다", 통과)
-                .isLessThanOrEqualTo(1_000);
+        assertThat(결과).containsOnlyKeys(
+                AdmissionDecision.PASS_FAIL_OPEN, AdmissionDecision.REJECT_OVERLOAD);
+        assertThat(결과.get(AdmissionDecision.PASS_FAIL_OPEN)).isEqualTo(상한);
+        assertThat(결과.get(AdmissionDecision.REJECT_OVERLOAD)).isEqualTo(5_000 - 상한);
     }
 
     @Test

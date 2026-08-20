@@ -176,10 +176,8 @@ public record CouponState(
 
     /** 운영자가 무조건 줄을 세우기로 했다. 한산해도 대기열을 태운다. */
     /**
-     * 운영자가 껐는데 <b>줄이 아직 남아 있다.</b>
-     *
-     * <p>{@code mode} 는 사람이 고른 값이고 {@code waiting} 은 기계 관측이라
-     * 서로 독립이다 — 붐비는 쿠폰의 대기열을 끄면 이 상태가 된다.
+     * 운영자가 껐는데 <b>줄이 아직 남아 있다.</b> 붐비는 쿠폰의 대기열을 끄면
+     * 이 상태가 된다 — {@code mode} 와 {@code waiting} 은 서로 독립이다.
      */
     public static CouponState offWithQueue(long credit, long remainingStock, long waiting) {
         return new CouponState(QueueMode.OFF, RuntimeState.QUEUEING,

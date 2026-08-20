@@ -31,6 +31,11 @@ field() {
     printf '%s\n' "$2" | sed -nE "s/^$1:[[:space:]]*(.*[^[:space:]])[[:space:]]*$/\1/p" | head -1
 }
 
+# 표 셀에 그대로 넣으면 값 안의 | 가 열 경계가 되어 색인이 어긋난다.
+cell() {
+    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/|/\\|/g'
+}
+
 rows=""
 for f in "${files[@]}"; do
     front=$(frontmatter "$f") || {
@@ -53,7 +58,7 @@ for f in "${files[@]}"; do
     # 제목은 첫 h1 이다. 본문이 곧 제목이라 프론트매터에 또 적지 않는다.
     title=$(grep -m1 '^# ' "$f" | sed 's/^# //')
     promoted=$(field 'promoted-to' "$front")
-    rows+="| [$id]($(printf '%s' "$f" | sed 's|^ai/journal/||')) | $(field date "$front") | $(field kind "$front") | ${title:-제목 없음} | $(field confidence "$front") | ${promoted:-—} |"$'\n'
+    rows+="| [$id]($(printf '%s' "$f" | sed 's|^ai/journal/||')) | $(cell "$(field date "$front")") | $(cell "$(field kind "$front")") | $(cell "${title:-제목 없음}") | $(cell "$(field confidence "$front")") | $(cell "${promoted:-—}") |"$'\n'
 done
 
 if [[ "${1:-}" == "--check" ]]; then

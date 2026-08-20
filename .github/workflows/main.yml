@@ -134,23 +134,30 @@ jobs:
     continue-on-error: true
     permissions:
       contents: read
+    env:
+      # 단계 수준 if 에서는 secrets 컨텍스트를 못 쓴다. 잡 수준에서 한 번
+      # 불리언으로 접어 둔다. parent-id 는 선택 입력이라 조건에 안 넣는다.
+      HAS_CONFLUENCE: >-
+        ${{ secrets.CONFLUENCE_SPACE_KEY != '' && secrets.ATLASSIAN_BASE_URL != ''
+            && secrets.ATLASSIAN_USER_EMAIL != '' && secrets.ATLASSIAN_API_TOKEN != '' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
           persist-credentials: false
 
+      # **생성이 실패하면 게시하지 않는다.** 빈 본문으로 upsert 하면 위키의
+      # 기존 색인을 통째로 지운다 — 가시성을 얻으려다 있던 것을 없앤다.
       - id: build
         run: |
-          set -uo pipefail
+          set -euo pipefail
+          index=$(.github/scripts/journal-index.sh)
           {
             echo 'body<<INDEX_EOF'
-            .github/scripts/journal-index.sh
+            printf '%s\n' "$index"
             echo 'INDEX_EOF'
           } >> "$GITHUB_OUTPUT"
 
-      # 시크릿이 없으면 부르지 않는다 — 필수 입력이 비면 액션이 하드 실패한다.
-      - if: >-
-          secrets.CONFLUENCE_SPACE_KEY != '' && secrets.ATLASSIAN_BASE_URL != ''
+      - if: env.HAS_CONFLUENCE == 'true'
         uses: coupon-yaho/cy-ci-actions/actions/confluence@c5d6391379ae34d56894538027ff3631ea4923a2  # v1
         with:
           space-key: ${{ secrets.CONFLUENCE_SPACE_KEY }}

@@ -199,7 +199,10 @@ self_test() {
     #
     # **임시 저장소로 옮기지 않는다.** 스크립트를 복사해 가면 못 찾고 실패한
     # 것을 "잡았다" 로 세게 된다 — 실제로 그렇게 통과하던 프로브가 있었다.
-    local jprobe="ai/journal/2026/08/AIJ-9999-probe.md"
+    # **고정 경로를 쓰지 않는다.** 같은 이름의 작업 파일이 있으면 덮어쓰고
+    # 지운다 — 자기검증이 사람의 작업을 없애면 안 된다.
+    local jprobe
+    jprobe=$(mktemp "ai/journal/2026/08/AIJ-9999-probe.XXXXXX.md")
     printf '# 프론트매터 없음\n' > "$jprobe"
     if .github/scripts/journal-index.sh --check >/dev/null 2>&1; then
         printf '  ✗ 프론트매터 없는 저널을 통과시켰다\n'; fail=1

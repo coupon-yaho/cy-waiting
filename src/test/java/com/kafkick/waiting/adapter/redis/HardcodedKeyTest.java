@@ -31,6 +31,9 @@ class HardcodedKeyTest {
             Path.of("src/main/java/com/kafkick/waiting/adapter/redis/RedisKeys.java");
 
     /** 이 저장소가 쓰는 키 접두사. 새 키를 만들면 여기도 함께 는다. */
+    /** 블록 주석과 Javadoc. 줄바꿈을 남기려고 따로 둔다. */
+    private static final Pattern COMMENT_BLOCK = Pattern.compile("(?s)/\\*.*?\\*/");
+
     private static final Pattern KEY_LITERAL = Pattern.compile(
             "\"(queue|maxscore|admitted|grace|alive|stock|gw|scheduler|coupons|coupon):");
 
@@ -43,8 +46,12 @@ class HardcodedKeyTest {
                 }
                 // 줄 주석뿐 아니라 블록 주석·Javadoc 안의 예시도 걷어낸다.
                 // 오탐이 나면 사람은 검사를 고치는 대신 우회한다.
-                String source = Files.readString(file, StandardCharsets.UTF_8)
-                        .replaceAll("(?s)/\\*.*?\\*/", "");
+                //
+                // **줄바꿈은 남긴다.** 통째로 지우면 뒤따르는 진짜 위반이
+                // 원본보다 작은 줄 번호로 보고돼 엉뚱한 곳을 보게 된다.
+                String source = COMMENT_BLOCK.matcher(
+                                Files.readString(file, StandardCharsets.UTF_8))
+                        .replaceAll(match -> match.group().replaceAll("[^\n]", " "));
                 String[] lines = source.split("\n", -1);
                 for (int i = 0; i < lines.length; i++) {
                     String line = lines[i].replaceAll("//.*", "");
@@ -128,5 +135,24 @@ class HardcodedKeyTest {
         // 예산을 가르는 값이지 레디스 키가 아니다 — 잡으면 오탐이다.
         assertThat(ADAPTER.toString()).endsWith("adapter");
         assertThat(violationsIn(ADAPTER)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("블록_주석_뒤의_위반은_원본_줄_번호로_보고된다")
+    void 블록_주석_뒤의_위반은_원본_줄_번호로_보고된다() throws IOException {
+        // 주석을 통째로 지우면 줄 번호가 앞으로 밀려 엉뚱한 곳을 보게 된다.
+        Path dir = Files.createTempDirectory("probe");
+        Path probe = dir.resolve("Shifted.java");
+        Files.writeString(probe,
+                "/**\n * 여러\n * 줄\n * 주석\n */\nclass Shifted {\n"
+                        + "    String key = \"queue:{c1}\";\n}\n",
+                StandardCharsets.UTF_8);
+
+        try {
+            assertThat(violationsIn(dir)).containsExactly("Shifted.java:7");
+        } finally {
+            Files.deleteIfExists(probe);
+            Files.deleteIfExists(dir);
+        }
     }
 }

@@ -88,4 +88,11 @@ redis.call('ZADD', KEYS[1], score, ARGV[1])
 redis.call('SET', KEYS[2], score, 'EX', scoreTtl)
 redis.call('ZADD', KEYS[3], now + aliveTtl, ARGV[1])
 
-return {tostring(score), applied, 0}
+-- **tostring 을 쓰지 않는다.** Lua 5.1 은 수를 %.14g 로 문자열화하는데
+-- 마이크로초 score 는 16자리라 과학 표기로 접히며 최대 100μs 가 반올림된다.
+-- ZSET 에는 정확한 값이 들어가므로 **돌려준 값과 실제 자리가 어긋난다** —
+-- 내림 쪽으로 접히면 앞사람보다 작은 score 를 쥐고 추월한다 (불변식 4).
+--
+-- %d 가 아니라 %.0f 다. %d 는 정수로 캐스팅해 32비트 런타임에서 넘친다.
+-- %.0f 는 배정밀도 그대로 찍으므로 2^53 아래에서 정확하고 지수도 안 붙는다.
+return {string.format('%.0f', score), applied, 0}

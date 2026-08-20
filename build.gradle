@@ -183,5 +183,9 @@ pitest {
     timestampedReports = false
     // XML 이 있어야 생존 뮤턴트를 기계로 짚는다. HTML 만 두면 사람이 눈으로 센다.
     outputFormats = ['HTML', 'XML']
+    // **코어와 플러그인을 함께 본다.** junit5-plugin 은 PIT 을 provided 로
+    // 잡아서, 코어가 뒤처져도 조용히 돌다가 엉뚱한 데서 깨진다.
+    // 1.25.9 는 1.15.0 보다 뮤턴트를 44개 더 만든다 (285 → 329, 실측).
+    pitestVersion = '1.25.9'
     junit5PluginVersion = '1.2.3'
 }

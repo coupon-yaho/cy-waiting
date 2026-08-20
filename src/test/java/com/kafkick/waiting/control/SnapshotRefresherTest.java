@@ -13,6 +13,7 @@ import org.awaitility.Awaitility;
 import reactor.core.Disposable;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
+import reactor.test.scheduler.VirtualTimeScheduler;
 import reactor.test.StepVerifier;
 
 /**
@@ -141,6 +142,25 @@ class SnapshotRefresherTest {
         } finally {
             구독.dispose();
         }
+    }
+
+
+    @Test
+    @DisplayName("타임아웃_타이머도_주어진_스케줄러에서_돈다")
+    void 타임아웃_타이머도_주어진_스케줄러에서_돈다() {
+        // 공용 풀에 두면 부하로 그 풀이 밀릴 때 포기 자체가 늦어진다 —
+        // 부하가 가장 높을 때 노드가 로테이션에서 빠진다 (RX-3).
+        MutableClock clock = MutableClock.at(지금);
+        SnapshotHolder holder = 홀더(clock);
+        SnapshotRefresher refresher = SnapshotRefresher.of(holder, Mono::never,
+                Duration.ofMillis(50));
+        VirtualTimeScheduler 가상 = VirtualTimeScheduler.create();
+
+        StepVerifier.create(refresher.한번(가상))
+                .then(() -> 가상.advanceTimeBy(Duration.ofMillis(60)))
+                .verifyComplete();
+
+        assertThat(holder.current().coupons()).isEmpty();
     }
 
     @Test

@@ -2,6 +2,7 @@ package com.kafkick.waiting.control;
 
 import java.time.Duration;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,6 +24,8 @@ public final class SnapshotRefresher {
     private static final Duration DEFAULT_TIMEOUT = Duration.ofMillis(400);
 
     private final SnapshotCodec codec = SnapshotCodec.create();
+    /** 진입과 해제를 쌍으로 남기려면 직전 상태를 알아야 한다 (LG-2). */
+    private final AtomicBoolean 실패중 = new AtomicBoolean();
     private final SnapshotHolder holder;
     private final Supplier<Mono<Map<String, String>>> source;
     private final Duration timeout;
@@ -50,15 +53,44 @@ public final class SnapshotRefresher {
      * 한 번 멎으면 영영 멎는다.
      */
     public Mono<Void> 한번() {
+        return 한번(Schedulers.parallel());
+    }
+
+    /**
+     * 한 판. <b>타임아웃 타이머도 주어진 스케줄러에서 돈다</b> (RX-3).
+     *
+     * <p>공용 풀에 두면 부하로 그 풀이 밀릴 때 <b>포기 자체가 늦어져</b>
+     * 나이가 임계를 넘는다 — 부하가 가장 높을 때 노드가 로테이션에서 빠진다.
+     */
+    public Mono<Void> 한번(Scheduler scheduler) {
         return source.get()
-                .timeout(timeout)
+                .timeout(timeout, scheduler)
                 // **발행된 것만 받는다.** 빈 해시는 장애가 아니라 흔한 상태라
                 // 성공 응답으로 온다 — 그대로 받으면 들고 있던 것이 지워지고
                 // 전 쿠폰이 매진으로 보인다.
+                // 발행 표시가 없으면 버리되 **조용히 버리지 않는다.** 필터는
+                // 오류가 아니라서 아무 흔적을 안 남기는데, 스케줄러 판이 그
+                // 필드를 아직 안 쓰면 전 노드가 영영 갱신을 못 한다.
+                .doOnNext(hash -> {
+                    if (!codec.발행된것인가(hash)) {
+                        log.warn("발행 표시가 없는 스냅샷 — 받아들이지 않는다");
+                    }
+                })
                 .filter(codec::발행된것인가)
                 .map(codec::decode)
-                .doOnNext(holder::replace)
-                .doOnError(e -> log.warn("스냅샷 갱신 실패 — 들고 있던 것을 유지한다", e))
+                .doOnNext(snapshot -> {
+                    holder.replace(snapshot);
+                    // LG-2 — 진입만 남기고 해제를 안 남기면 언제 걷혔는지 모른다.
+                    if (실패중.compareAndSet(true, false)) {
+                        log.info("스냅샷 갱신 복귀");
+                    }
+                })
+                .doOnError(e -> {
+                    // LG-3 — 매 판 스택을 찍으면 20노드 30초 단절에 수백 줄이다.
+                    if (실패중.compareAndSet(false, true)) {
+                        log.warn("스냅샷 갱신 실패 — 들고 있던 것을 유지한다", e);
+                    }
+                })
                 .onErrorResume(e -> Mono.empty())
                 .then();
     }
@@ -73,7 +105,7 @@ public final class SnapshotRefresher {
         // **defer 로 감싼다.** 안 감싸면 한번() 이 여기서 한 번만 평가되고,
         // repeatWhen 은 그렇게 만들어진 같은 Mono 를 다시 구독한다 — 매 판
         // 새로 읽으라는 Supplier 의 계약이 깨진다.
-        return Mono.defer(this::한번)
+        return Mono.defer(() -> 한번(scheduler))
                 .repeatWhen(done -> done.delayElements(interval, scheduler))
                 .subscribeOn(scheduler);
     }

@@ -58,9 +58,22 @@ public final class SnapshotHolder {
         return Duration.between(current.fetchedAt(), clock.instant());
     }
 
-    /** 스케줄러가 발행한 뒤 흐른 시간. 이 노드의 사정과 무관하다. */
+    /**
+     * 스케줄러가 발행한 뒤 흐른 시간. 이 노드의 사정과 무관하다.
+     *
+     * <p><b>음수는 0 으로 본다.</b> 리더 시계가 앞서면 발행 시각이 미래로 와서
+     * 나이가 음수가 되고, 그러면 {@code dataStale} 이 영영 거짓이 된다 —
+     * 스케줄러가 죽어도 아무 노드가 fail-open 에 못 들어간다. 조용히 보정하지
+     * 않고 {@link #시계가_앞섰나()} 로 드러낸다.
+     */
     public Duration dataAge() {
-        return Duration.between(current.snapshot().publishedAt(), clock.instant());
+        Duration age = Duration.between(current.snapshot().publishedAt(), clock.instant());
+        return age.isNegative() ? Duration.ZERO : age;
+    }
+
+    /** 발행 시각이 이 노드의 현재보다 미래인가 — 시계가 갈렸다는 신호다. */
+    public boolean 시계가_앞섰나() {
+        return Duration.between(current.snapshot().publishedAt(), clock.instant()).isNegative();
     }
 
     /** 임계와 같으면 아직 낡지 않았다 — 넘어야 낡음이다. */

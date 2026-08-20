@@ -1,4 +1,4 @@
--- 이탈자 청소. **앞부분만 훑고, 정리량에도 상한을 둔다.**
+-- 이탈자 청소. **한 번의 실행이 하는 일에 상한을 둔다.**
 --
 -- KEYS[1]  queue:{cid}   ZSET
 -- KEYS[2]  grace:{cid}   이탈 기록 해시
@@ -6,17 +6,17 @@
 -- ARGV[1]  검사 범위 K. 큐 앞에서 이만큼만 본다
 -- ARGV[2]  지금 시각(초). 도메인처럼 주입받는다
 -- ARGV[3]  유예 보관 기간(초)
--- ARGV[4]  유예 정리 예산. 한 번에 이만큼만 본다
+-- ARGV[4]  정리 예산. 만료 신호와 유예 기록을 각각 이만큼까지 지운다
 -- ARGV[5]  HSCAN 커서. 첫 호출은 '0'. 반환된 값을 다음에 넘긴다
 --
--- 반환  {swept, expired, nextCursor}
+-- 반환  {swept, expiredSignals, expiredGrace, nextCursor}
 --
 -- **키를 문자열로 조립하지 않는다.** 사람마다 alive 키를 만들면 KEYS 에
--- 선언되지 않은 키를 만지게 되고 클러스터가 거부한다 (RD-1). 쿠폰당 ZSET
--- 하나에 만료 시각을 score 로 담아 선언된 키만 만진다.
+-- 선언되지 않은 키를 만지게 되고 클러스터가 거부한다 (RD-1).
 --
--- **전체를 훑지 않는다.** 2만 명 큐에서 그건 청소 자체가 부하다. 뒤엣사람은
--- 아직 폴링할 차례가 안 왔을 뿐 죽은 것이 아니다.
+-- **모든 순회에 상한이 걸려 있어야 한다.** Lua 는 통째로 도는 동안 다른
+-- 요청을 전부 막는다. K 를 작게 줘도 어딘가에서 전체를 훑으면 그 K 는
+-- 아무 의미가 없다.
 
 local limit = tonumber(ARGV[1])
 if limit == nil or limit < 1 or limit ~= math.floor(limit) then
@@ -38,32 +38,31 @@ if budget == nil or budget < 1 or budget ~= math.floor(budget) then
     return redis.error_reply('정리 예산은 양의 정수여야 한다: ' .. tostring(ARGV[4]))
 end
 
--- 만료된 생존 신호를 걷는다. score 가 지금보다 작으면 폴링이 끊긴 것이다.
-redis.call('ZREMRANGEBYSCORE', KEYS[3], '-inf', '(' .. now)
+-- **커서도 쓰기 전에 본다.** 형식이 틀리면 HSCAN 이 오류를 내는데, 그때는
+-- 이미 앞의 쓰기가 끝나 있다. Lua 는 롤백하지 않는다.
+local cursor = ARGV[5]
+if cursor == nil or not string.match(cursor, '^%d+$') then
+    return redis.error_reply('커서는 숫자여야 한다: ' .. tostring(cursor))
+end
 
 -- 앞에서 K 명. 뒤는 아직 볼 때가 아니다.
 local front = redis.call('ZRANGE', KEYS[1], 0, limit - 1)
 local swept = 0
 
 if #front > 0 then
-    -- **사람마다 ZSCORE 를 부르지 않는다.** K 가 1000 이면 왕복이 아니라
-    -- 스크립트 안의 명령이 1000 번이고, 그동안 이벤트 루프가 잡힌다.
-    -- 살아 있는 쪽을 한 번에 받아 집합으로 만들고 차집합을 취한다.
-    local alive = redis.call('ZRANGEBYSCORE', KEYS[3], now, '+inf')
-    local living = {}
-    for i = 1, #alive do
-        living[alive[i]] = true
-    end
+    -- **앞부분의 score 만 묻는다.** ZRANGEBYSCORE 로 살아 있는 쪽을 다 받으면
+    -- K 를 1 로 줘도 alive 전체 크기에 비례해 이벤트 루프를 잡는다.
+    local scores = redis.call('ZMSCORE', KEYS[3], unpack(front))
 
-    -- 지울 것과 남길 기록을 모아 **한 번의 ZREM·HSET** 으로 끝낸다.
     local gone = {}
     local records = {}
     for i = 1, #front do
-        local member = front[i]
-        if not living[member] then
-            gone[#gone + 1] = member
+        -- score 가 없거나 이미 지난 것은 폴링이 끊긴 것이다
+        local at = tonumber(scores[i])
+        if at == nil or at < now then
+            gone[#gone + 1] = front[i]
             -- 자리는 안 보관한다. 재방문자로 식별만 한다 (D-11).
-            records[#records + 1] = member
+            records[#records + 1] = front[i]
             records[#records + 1] = now
         end
     end
@@ -75,27 +74,38 @@ if #front > 0 then
     end
 end
 
--- **정리에도 상한을 둔다** (RD-7). HGETALL 로 전체를 읽으면 기록이 쌓였을 때
--- 이 한 번의 실행이 이벤트 루프를 오래 잡는다. HSCAN 으로 한 묶음만 본다.
---
--- 커서를 끝까지 돌지 않는다. 다음 틱이 이어서 본다 — 한 번에 다 지우려 하면
--- 상한이 있으나 마나다.
-local expired = 0
-local cutoff = now - retention
-local scanned = redis.call('HSCAN', KEYS[2], ARGV[5], 'COUNT', budget)
+-- 만료된 생존 신호도 예산 안에서만 걷는다. ZREMRANGEBYSCORE 는 대상 수만큼
+-- 도므로 한 번에 다 지우려 하면 그 자체가 오래 걸린다.
+local staleSignals = redis.call('ZRANGE', KEYS[3], '-inf', '(' .. now,
+        'BYSCORE', 'LIMIT', 0, budget)
+local expiredSignals = 0
+if #staleSignals > 0 then
+    redis.call('ZREM', KEYS[3], unpack(staleSignals))
+    expiredSignals = #staleSignals
+end
+
+-- **COUNT 는 힌트지 상한이 아니다.** 해시가 조밀하게 인코딩돼 있으면 한 번에
+-- budget 보다 많이 돌아온다. 받은 것 중 예산만큼만 지우고 나머지는 다음
+-- 호출로 미룬다 — 커서만 넘기면 초과분을 막을 수 없다.
+local scanned = redis.call('HSCAN', KEYS[2], cursor, 'COUNT', budget)
 local fields = scanned[2]
+local cutoff = now - retention
 local doomed = {}
 for i = 1, #fields, 2 do
+    if #doomed >= budget then
+        break
+    end
     local at = tonumber(fields[i + 1])
     if at == nil or at < cutoff then
         doomed[#doomed + 1] = fields[i]
     end
 end
 
+local expiredGrace = 0
 if #doomed > 0 then
     redis.call('HDEL', KEYS[2], unpack(doomed))
-    expired = #doomed
+    expiredGrace = #doomed
 end
 
 -- 다음 커서를 돌려준다. 호출부가 이어서 넘긴다.
-return {swept, expired, scanned[1]}
+return {swept, expiredSignals, expiredGrace, scanned[1]}

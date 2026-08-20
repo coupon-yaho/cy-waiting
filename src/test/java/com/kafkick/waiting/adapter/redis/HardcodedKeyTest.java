@@ -41,9 +41,13 @@ class HardcodedKeyTest {
                 if (file.equals(KEYS_CLASS)) {
                     continue;   // 여기가 유일하게 허용되는 자리다
                 }
-                List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
-                for (int i = 0; i < lines.size(); i++) {
-                    String line = lines.get(i).replaceAll("//.*", "");
+                // 줄 주석뿐 아니라 블록 주석·Javadoc 안의 예시도 걷어낸다.
+                // 오탐이 나면 사람은 검사를 고치는 대신 우회한다.
+                String source = Files.readString(file, StandardCharsets.UTF_8)
+                        .replaceAll("(?s)/\\*.*?\\*/", "");
+                String[] lines = source.split("\n", -1);
+                for (int i = 0; i < lines.length; i++) {
+                    String line = lines[i].replaceAll("//.*", "");
                     if (KEY_LITERAL.matcher(line).find()) {
                         violations.add("%s:%d".formatted(file.getFileName(), i + 1));
                     }
@@ -76,6 +80,23 @@ class HardcodedKeyTest {
         try {
             // 무엇을 잡았는지까지 본다 — 엉뚱한 것을 잡아도 통과하면 안 된다.
             assertThat(violationsIn(dir)).containsExactly("Leak.java:2");
+        } finally {
+            Files.deleteIfExists(probe);
+            Files.deleteIfExists(dir);
+        }
+    }
+
+    @Test
+    @DisplayName("블록_주석_속_예시는_위반이_아니다")
+    void 블록_주석_속_예시는_위반이_아니다() throws IOException {
+        Path dir = Files.createTempDirectory("probe");
+        Path probe = dir.resolve("Doc.java");
+        Files.writeString(probe,
+                "/**\n * 예: \"queue:{c1}\" 처럼 쓰면 안 된다\n */\nclass Doc {\n}\n",
+                StandardCharsets.UTF_8);
+
+        try {
+            assertThat(violationsIn(dir)).isEmpty();
         } finally {
             Files.deleteIfExists(probe);
             Files.deleteIfExists(dir);

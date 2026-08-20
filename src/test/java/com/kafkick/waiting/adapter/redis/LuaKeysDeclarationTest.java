@@ -7,7 +7,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -41,16 +43,29 @@ class LuaKeysDeclarationTest {
                 .reduce("", (a, b) -> a + "\n" + b);
     }
 
+    /**
+     * {@code KEYS[n]} 에서 온 값만 키 자리에 올 수 있다.
+     *
+     * <p>지역 변수를 무조건 허용하면 {@code local rogue = 'queue:{c1}'} 를
+     * 거쳐 들어오는 것을 못 막는다 — 검사가 있는데 아무것도 안 보는 상태다.
+     */
     private List<String> violationsIn(Path script) throws IOException {
-        List<String> violations = new ArrayList<>();
-        Matcher matcher = KEY_ARGUMENT.matcher(codeOf(script));
+        String code = codeOf(script);
 
+        // KEYS[n] 이 대입된 지역 변수만 모은다. 문자열 조립은 안 받는다.
+        Set<String> derived = new HashSet<>();
+        Matcher assignment = Pattern
+                .compile("local\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*KEYS\\[")
+                .matcher(code);
+        while (assignment.find()) {
+            derived.add(assignment.group(1));
+        }
+
+        List<String> violations = new ArrayList<>();
+        Matcher matcher = KEY_ARGUMENT.matcher(code);
         while (matcher.find()) {
             String argument = matcher.group(1).strip();
-            // KEYS[n] 이거나 KEYS[n] 에서 파생된 지역 변수여야 한다.
-            boolean declared = argument.startsWith("KEYS[")
-                    || argument.matches("[A-Za-z_][A-Za-z0-9_]*")
-                    || argument.startsWith("prefix ..");
+            boolean declared = argument.startsWith("KEYS[") || derived.contains(argument);
             if (!declared) {
                 violations.add("%s: %s".formatted(script.getFileName(), argument));
             }
@@ -76,11 +91,60 @@ class LuaKeysDeclarationTest {
     @DisplayName("모든_Lua에_KEYS와_ARGV_계약_주석이_있다")
     void 모든_Lua에_KEYS와_ARGV_계약_주석이_있다() throws IOException {
         // 계약이 없으면 호출부가 인자 순서를 추측하게 된다 (RD-10).
+        // **상단 주석 블록만 본다** — 코드에서 KEYS[1] 을 쓰는 것과
+        // 계약을 적어 둔 것은 다르다.
         for (Path script : scripts()) {
-            String head = Files.readString(script, StandardCharsets.UTF_8);
-            assertThat(head)
-                    .withFailMessage("%s 에 KEYS 계약 주석이 없다", script.getFileName())
+            String header = headerOf(script);
+            assertThat(header)
+                    .withFailMessage("%s 상단에 KEYS 계약이 없다", script.getFileName())
                     .contains("KEYS[1]");
+            assertThat(header)
+                    .withFailMessage("%s 상단에 ARGV 계약이 없다", script.getFileName())
+                    .contains("ARGV[1]");
+        }
+    }
+
+    /** 첫 코드 줄 전까지의 주석 블록. */
+    private String headerOf(Path script) throws IOException {
+        StringBuilder header = new StringBuilder();
+        for (String line : Files.readAllLines(script, StandardCharsets.UTF_8)) {
+            String trimmed = line.strip();
+            if (!trimmed.isEmpty() && !trimmed.startsWith("--")) {
+                break;
+            }
+            header.append(line).append('\n');
+        }
+        return header.toString();
+    }
+
+    @Test
+    @DisplayName("문자열_조립으로_만든_키는_위반이다")
+    void 문자열_조립으로_만든_키는_위반이다() throws IOException {
+        // 지역 변수를 무조건 허용하면 이 경로로 다 새어 나간다.
+        Path probe = Files.createTempFile("probe", ".lua");
+        Files.writeString(probe,
+                "local rogue = 'queue:{c1}'\nredis.call('ZCARD', rogue)\n",
+                StandardCharsets.UTF_8);
+
+        try {
+            assertThat(violationsIn(probe)).singleElement().asString().contains("rogue");
+        } finally {
+            Files.deleteIfExists(probe);
+        }
+    }
+
+    @Test
+    @DisplayName("KEYS에서_온_지역_변수는_위반이_아니다")
+    void KEYS에서_온_지역_변수는_위반이_아니다() throws IOException {
+        Path probe = Files.createTempFile("probe", ".lua");
+        Files.writeString(probe,
+                "local queue = KEYS[1]\nredis.call('ZCARD', queue)\n",
+                StandardCharsets.UTF_8);
+
+        try {
+            assertThat(violationsIn(probe)).isEmpty();
+        } finally {
+            Files.deleteIfExists(probe);
         }
     }
 

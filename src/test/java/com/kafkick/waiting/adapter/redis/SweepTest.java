@@ -58,20 +58,29 @@ class SweepTest extends RedisContainerSupport {
     }
 
     @SuppressWarnings("unchecked")
-    private List<Object> sweep(String limit) {
+    private List<Object> sweep(String limit, String budget, String cursor) {
         return (List<Object>) redis.execute(
                         sweepScript,
                         List.of(QUEUE, GRACE, ALIVE),
-                        List.of(limit, String.valueOf(NOW), RETENTION, BUDGET, "0"))
+                        List.of(limit, String.valueOf(NOW), RETENTION, budget, cursor))
                 .blockFirst(WAIT);
+    }
+
+    private List<Object> sweep(String limit) {
+        return sweep(limit, BUDGET, "0");
+    }
+
+    private String nextCursor(List<Object> r) {
+        return String.valueOf(r.get(3));
     }
 
     private long swept(List<Object> r) {
         return Long.parseLong(String.valueOf(r.get(0)));
     }
 
+    /** 유예 기록 정리 수. 반환값 두 번째는 생존 신호 정리 수다. */
     private long expired(List<Object> r) {
-        return Long.parseLong(String.valueOf(r.get(1)));
+        return Long.parseLong(String.valueOf(r.get(2)));
     }
 
     @Test
@@ -194,5 +203,69 @@ class SweepTest extends RedisContainerSupport {
 
         assertThat(redis.opsForZSet().score(QUEUE, "m0").block(WAIT)).isEqualTo(before);
         assertThat(redis.opsForHash().size(GRACE).block(WAIT)).isZero();
+    }
+
+    @Test
+    @DisplayName("정리_예산이_한_번의_실행을_묶는다")
+    void 정리_예산이_한_번의_실행을_묶는다() {
+        // COUNT 는 힌트지 상한이 아니다. 받은 것 중 예산만큼만 지워야
+        // 한 번의 실행이 유계다.
+        for (int i = 0; i < 40; i++) {
+            redis.opsForHash().put(GRACE, "old" + i, String.valueOf(NOW - 1000)).block(WAIT);
+        }
+
+        assertThat(expired(sweep("10", "5", "0"))).isEqualTo(5);
+        assertThat(redis.opsForHash().size(GRACE).block(WAIT)).isEqualTo(35);
+    }
+
+    @Test
+    @DisplayName("커서를_이어_넘기면_전부_정리된다")
+    void 커서를_이어_넘기면_전부_정리된다() {
+        // 한 번에 다 안 지우는 대신 다음 틱이 이어받는다. 커서가 돌지
+        // 않으면 같은 앞부분만 계속 보고 뒤는 영영 안 지워진다.
+        for (int i = 0; i < 40; i++) {
+            redis.opsForHash().put(GRACE, "old" + i, String.valueOf(NOW - 1000)).block(WAIT);
+        }
+
+        String cursor = "0";
+        for (int round = 0; round < 20; round++) {
+            cursor = nextCursor(sweep("10", "5", cursor));
+            if (Boolean.TRUE.equals(redis.opsForHash().size(GRACE).block(WAIT) == 0L)) {
+                break;
+            }
+        }
+
+        assertThat(redis.opsForHash().size(GRACE).block(WAIT)).isZero();
+    }
+
+    @Test
+    @DisplayName("잘못된_커서는_아무것도_바꾸지_않는다")
+    void 잘못된_커서는_아무것도_바꾸지_않는다() {
+        // 커서 검증이 쓰기 뒤에 있으면 앞의 쓰기가 남는다 — Lua 는
+        // 롤백하지 않는다.
+        enqueue("m0");
+        double before = redis.opsForZSet().score(QUEUE, "m0").block(WAIT);
+        redis.opsForZSet().remove(ALIVE, "m0").block(WAIT);
+        redis.opsForHash().put(GRACE, "keep", String.valueOf(NOW)).block(WAIT);
+
+        assertThatThrownBy(() -> sweep("10", "5", "abc")).rootCause()
+                .hasMessageContaining("커서");
+
+        assertThat(redis.opsForZSet().score(QUEUE, "m0").block(WAIT)).isEqualTo(before);
+        assertThat(redis.opsForHash().hasKey(GRACE, "keep").block(WAIT)).isTrue();
+    }
+
+    @Test
+    @DisplayName("만료된_생존_신호도_예산_안에서_걷는다")
+    void 만료된_생존_신호도_예산_안에서_걷는다() {
+        // 한 번에 다 지우려 하면 그 자체가 오래 걸린다.
+        for (int i = 0; i < 20; i++) {
+            redis.opsForZSet().add(ALIVE, "gone" + i, NOW - 100).block(WAIT);
+        }
+
+        List<Object> result = sweep("1", "5", "0");
+
+        assertThat(Long.parseLong(String.valueOf(result.get(1)))).isEqualTo(5);
+        assertThat(redis.opsForZSet().size(ALIVE).block(WAIT)).isEqualTo(15);
     }
 }

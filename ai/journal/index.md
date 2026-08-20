@@ -8,6 +8,7 @@
 
 | ID | 날짜 | 종류 | 제목 | 확신 | 승격 |
 |---|---|---|---|---|---|
+| [AIJ-0030](2026/08/AIJ-0030-sweep-write-order.md) | 2026-08-20 | fix | 쓰기 순서가 계약이다 — 청소가 제거를 먼저 하고 있었다 | high | — |
 | [AIJ-0028](2026/08/AIJ-0028-snapshot-holder.md) | 2026-08-20 | implement | 낡음이 두 종류인 이유 — 섞으면 100% 장애다 | high | — |
 | [AIJ-0026](2026/08/AIJ-0026-dependency-refresh.md) | 2026-08-20 | decision | 버전은 실측한다 — 검색 색인은 최신을 모른다 | high | — |
 | [AIJ-0025](2026/08/AIJ-0025-crash-and-promotion.md) | 2026-08-20 | implement | 강제 종료와 승격 — 계획의 전제가 두 군데 틀렸다 | medium | — |

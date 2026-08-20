@@ -36,9 +36,10 @@ on:
         required: false
         default: true
 
+# **잡마다 필요한 것만 준다.** 워크플로 수준에 두면 SARIF 를 안 올리는 잡도
+# security-events: write 를 받는다.
 permissions:
   contents: read
-  security-events: write
 
 jobs:
   cve:
@@ -46,6 +47,10 @@ jobs:
     if: inputs.cve
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # SARIF 를 올리는 잡은 여기뿐이다.
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:

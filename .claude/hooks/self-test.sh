@@ -348,13 +348,17 @@ cp "$HOOKS/review-branch.sh" "$HOOKS/check-java.sh" "$HOOKS/check-lua.sh" \
 chmod +x "$clean_repo/.claude/hooks/"*.sh 2>/dev/null
 (
     cd "$clean_repo" || exit 1
-    git init -q .
+    # **초기 브랜치를 develop 과 분리한다.** init.defaultBranch=develop 인
+    # 환경이면 `git branch develop` 이 실패하고, 그러면 기준과 HEAD 가 같아져
+    # 빈 diff 를 검사하고 조용히 통과한다.
+    git init -q -b selftest-base .
     git config user.email t@t
     git config user.name t
     : > seed.txt
     git add -A
     git commit -q -m 'chore: 씨앗'
     git branch -q develop
+    git switch -q -c selftest-work
     printf 'class Ok {\n    private Ok() {\n    }\n}\n' > Ok.java
     git add -A
     git commit -q -m 'feat(a): 깨끗한 변경' -m 'Refs: CY-1'
@@ -366,6 +370,10 @@ cp "$HOOKS/guard-pr.sh" "$clean_repo/.claude/hooks/" && chmod +x "$clean_repo/.c
 # 가드가 실제와 같은 경로(origin/<base>)를 타게 한다.
 git -C "$clean_repo" remote add origin "$clean_repo" >/dev/null 2>&1
 git -C "$clean_repo" update-ref refs/remotes/origin/develop refs/heads/develop
+
+# 기준과 HEAD 가 같으면 빈 diff 를 보는 것이라 시험이 무의미하다. 먼저 확인한다.
+diff_ok=0
+[[ -n "$(git -C "$clean_repo" diff --name-only origin/develop...HEAD 2>/dev/null)" ]] && diff_ok=1
 
 clean=$(cd "$clean_repo" && printf '{"tool_input":{"command":"gh pr create --base develop"}}' \
     | "$clean_repo/.claude/hooks/guard-pr.sh" >/dev/null 2>&1; echo $?)
@@ -393,7 +401,9 @@ if ((blocked == 2)); then
 else
     printf '  FAIL 위반이 있는데 PR 생성을 통과시켰다 (exit %d)\n' "$blocked"; fail=$((fail + 1))
 fi
-if ((clean == 0)); then
+if ((diff_ok == 0)); then
+    printf '  FAIL 임시 저장소의 기준과 HEAD 가 같다 — 빈 diff 를 검사한다\n'; fail=$((fail + 1))
+elif ((clean == 0)); then
     printf '  ok   깨끗하면 막지 않는다\n'; pass=$((pass + 1))
 else
     printf '  FAIL 깨끗한데 막았다 (exit %d)\n' "$clean"; fail=$((fail + 1))

@@ -55,6 +55,42 @@ class OffModeQueueTest {
                 .isEqualTo(AdmissionDecision.ENQUEUE_BACKLOG);
     }
 
+
+    @Test
+    @DisplayName("낡은_구간에서는_꺼진_쿠폰도_상한_안에서만_통과한다")
+    void 낡은_구간에서는_꺼진_쿠폰도_상한_안에서만_통과한다() {
+        // **fail-open 상한을 우회하면 안 된다.** 스케줄러가 멎은 구간은
+        // 상태를 모르는 구간이고, 그래서 상한이 있다. 꺼진 쿠폰만 무제한으로
+        // 뒷단에 꽂히면 그 상한이 있으나 마나다.
+        AdmissionDecider decider = 판정기();
+        CouponState 줄이빈꺼짐 = CouponStates.off(10_000);
+
+        int 통과 = 0;
+        for (int i = 0; i < 5_000; i++) {
+            AdmissionRequest 낡음 = new AdmissionRequest("c1", 줄이빈꺼짐,
+                    new SnapshotMeta(1000, 1), true, false, false, NOW, 300);
+            if (decider.decide(낡음) != AdmissionDecision.REJECT_OVERLOAD) {
+                통과++;
+            }
+        }
+
+        assertThat(통과)
+                .withFailMessage("낡은 구간에서 %d 건이 나갔다 — 상한을 우회했다", 통과)
+                .isLessThanOrEqualTo(1_000);
+    }
+
+    @Test
+    @DisplayName("낡지_않았으면_꺼진_쿠폰은_상한과_무관하게_통과한다")
+    void 낡지_않았으면_꺼진_쿠폰은_상한과_무관하게_통과한다() {
+        // 이것이 OFF 의 본래 목적이다 — 상한을 걸면 기능이 사라진다.
+        AdmissionDecider decider = 판정기();
+
+        for (int i = 0; i < 5_000; i++) {
+            assertThat(decider.decide(신규유입(CouponStates.off(10_000))))
+                    .isEqualTo(AdmissionDecision.PASS_BYPASS);
+        }
+    }
+
     @Test
     @DisplayName("줄이_빠지면_우회가_다시_산다")
     void 줄이_빠지면_우회가_다시_산다() {

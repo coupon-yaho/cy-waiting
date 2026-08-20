@@ -53,8 +53,7 @@ public final class CouponStates {
      * {@code mode} 를 안 보므로 남은 줄은 계속 빠진다.
      */
     public static CouponState offWithQueue(long credit, long remainingStock, long waiting) {
-        return new CouponState(QueueMode.OFF, RuntimeState.QUEUEING,
-                credit, remainingStock, waiting, 1.0);
+        return CouponState.offWithQueue(credit, remainingStock, waiting);
     }
 
     private CouponStates() {

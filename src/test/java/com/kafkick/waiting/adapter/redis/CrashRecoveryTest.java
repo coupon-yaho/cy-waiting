@@ -25,13 +25,9 @@ import org.testcontainers.containers.GenericContainer;
  * 잃어도 <b>줄 선 사람을 추월시키지 않는다</b> (G3.3 · C12).
  *
  * <p><b>{@code kill -9} 만으로는 아무것도 안 잃는다.</b> {@code appendfsync} 는
- * {@code fsync} 주기를 정할 뿐이고, 이미 {@code write()} 된 내용은 호스트
- * 페이지 캐시에 남는다 — 프로세스를 죽여도 커널은 멀쩡하다. 계획 2.2절의
- * 전제와 다르다.
- *
- * <p>그래서 둘을 나눠 본다. 프로세스 강제 종료는 <b>유실이 없어야</b> 하고,
- * 전원 단절(아직 내려가지 않은 AOF 꼬리가 날아간 상태)은 <b>유실을 허용하되
- * 역행은 허용하지 않는다.</b>
+ * {@code fsync} 주기를 정할 뿐이라 잃으려면 커널이 죽어야 한다 — 계획 2.2절의
+ * 전제와 다르다. 그래서 강제 종료(유실 0)와 전원 단절(유실 허용, 역행 0)을
+ * 나눠 본다. 근거는 AIJ-0025.
  */
 @Tag("chaos")
 class CrashRecoveryTest {

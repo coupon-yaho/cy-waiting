@@ -110,6 +110,9 @@ class LeaderFaultsTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> leader.곱게_내린다(""))
                 .isInstanceOf(IllegalArgumentException.class);
+        // 이 경로의 검증이 지워져도 나머지 시험은 통과한다.
+        assertThatThrownBy(() -> leader.프로세스를_죽인다(""))
+                .isInstanceOf(IllegalArgumentException.class);
         assertThat(leader.현재_소유자()).isNull();
     }
 }

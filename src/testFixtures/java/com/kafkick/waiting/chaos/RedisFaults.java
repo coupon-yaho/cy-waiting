@@ -35,15 +35,34 @@ public final class RedisFaults implements AutoCloseable {
      * 잡기까지의 경합은 없앨 수 없어 몇 번 다시 고른다.
      */
     public static RedisFaults 시작한다() {
-        IllegalStateException 마지막 = null;
+        RuntimeException 마지막 = null;
         for (int i = 0; i < 5; i++) {
             try {
                 return 한번_띄운다();
             } catch (RuntimeException e) {
-                마지막 = new IllegalStateException("포트를 뺏겼다. 다시 고른다", e);
+                // **포트 충돌만 다시 고른다.** 전부 재시도하면 도커 부재나
+                // 이미지 실패까지 다섯 번 반복한 뒤 "포트를 뺏겼다" 로
+                // 보고돼, 진짜 원인이 그 문구 뒤에 묻힌다.
+                if (!포트_충돌인가(e)) {
+                    throw e;
+                }
+                마지막 = e;
             }
         }
-        throw 마지막;
+        throw new IllegalStateException("빈 포트를 다섯 번 놓쳤다", 마지막);
+    }
+
+    private static boolean 포트_충돌인가(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            String message = t.getMessage();
+            if (message != null && (message.contains("port is already allocated")
+                    || message.contains("address already in use")
+                    || message.contains("Address already in use")
+                    || message.contains("bind: address already in use"))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @SuppressWarnings("resource")   // close() 가 닫는다

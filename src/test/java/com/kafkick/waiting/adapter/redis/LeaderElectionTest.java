@@ -33,6 +33,14 @@ import org.springframework.data.redis.core.script.RedisScript;
 class LeaderElectionTest extends RedisContainerSupport {
 
     private static final Duration WAIT = Duration.ofSeconds(10);
+    /**
+     * 폴링 한 번의 상한. {@link #WAIT} 보다 짧아야 한다.
+     *
+     * <p>폴링 안에서 {@code WAIT} 를 쓰면 조건 한 번이 바깥 제한보다 오래 걸려
+     * <b>상한이 상한 노릇을 못 한다.</b> 그러면 늦어졌다는 사실이 시험 실패가
+     * 아니라 그냥 느린 시험으로 보인다.
+     */
+    private static final Duration POLL = Duration.ofSeconds(1);
     private static final String LEADER = RedisKeys.LEADER;
     private static final String LEASE = "2000";
 
@@ -176,7 +184,7 @@ class LeaderElectionTest extends RedisContainerSupport {
      */
     private void 리스_만료를_기다린다() {
         await().atMost(Duration.ofSeconds(5))
-                .until(() -> Boolean.FALSE.equals(redis.hasKey(LEADER).block(WAIT)));
+                .until(() -> Boolean.FALSE.equals(redis.hasKey(LEADER).block(POLL)));
     }
 
     @Test
@@ -188,6 +196,13 @@ class LeaderElectionTest extends RedisContainerSupport {
                 redis.execute(acquire, List.of(LEADER), List.of("node-2", "0")).blockFirst(WAIT))
                 .rootCause()
                 .hasMessageContaining("리스");
+
+        // 빈 ownerId 도 막는다. 빈 값으로 잡히면 해제 때 누구의 락인지
+        // 가릴 수 없어 남의 락을 지운다.
+        assertThatThrownBy(() ->
+                redis.execute(acquire, List.of(LEADER), List.of("", LEASE)).blockFirst(WAIT))
+                .rootCause()
+                .hasMessageContaining("ownerId");
 
         assertThat(redis.opsForValue().get(LEADER).block(WAIT)).isEqualTo("node-1");
     }

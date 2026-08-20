@@ -145,16 +145,42 @@ tasks.named('jacocoTestCoverageVerification') {
     }
 }
 
-// 어댑터는 통합 시험이 실제로 레디스를 치며 도는 곳이라 단위 exec 로는
-// 잴 수 없다. 계층이 잡으로 갈려 exec 가 한자리에 안 모이므로, 통합 exec
-// 하나로 어댑터만 따로 잰다.
-tasks.register('adapterCoverageVerification', JacocoCoverageVerification) {
-    description = '어댑터 커버리지 임계 — 통합 시험 기준'
+// 어댑터는 단위·통합 양쪽에서 덮인다. JaCoCo 는 Lua 를 못 보고 어댑터의
+// Java 는 대부분 단위 시험이 도는 순수 로직이라, 통합 exec 만 보면 엉뚱한
+// 것을 잰다 (AIJ-0024). 계층이 잡으로 갈려 exec 가 한자리에 안 모이므로
+// 두 exec 를 합쳐 어댑터만 따로 잰다.
+//
+// **보고 대상도 어댑터로 좁힌다.** main 전체를 넣으면 도메인과 부트 클래스가
+// 섞여 들어가 "어댑터 보고서" 라는 이름이 거짓이 된다.
+def 어댑터클래스 = { ->
+    sourceSets.main.output.classesDirs.asFileTree.matching {
+        include 'com/kafkick/waiting/adapter/redis/**'
+    }
+}
+
+tasks.register('adapterCoverageReport', JacocoReport) {
+    description = '어댑터 커버리지 보고 — 단위·통합 결합 기준'
     group = 'verification'
     dependsOn test, integrationTest
     executionData test, integrationTest
     sourceDirectories.setFrom(sourceSets.main.java.sourceDirectories)
-    classDirectories.setFrom(sourceSets.main.output)
+    classDirectories.setFrom(어댑터클래스())
+    reports {
+        xml.required = true
+        html.required = true
+    }
+}
+
+tasks.register('adapterCoverageVerification', JacocoCoverageVerification) {
+    description = '어댑터 커버리지 임계 — 단위·통합 결합 기준'
+    group = 'verification'
+    dependsOn test, integrationTest
+    executionData test, integrationTest
+    sourceDirectories.setFrom(sourceSets.main.java.sourceDirectories)
+    classDirectories.setFrom(어댑터클래스())
+    // **못 넘겼을 때가 보고서가 가장 필요한 때다.** finalizer 로 걸지 않으면
+    // 실패한 실행에서만 보고서가 없어 어디가 빈지 볼 수 없다.
+    finalizedBy 'adapterCoverageReport'
     violationRules {
         rule {
             element = 'PACKAGE'
@@ -164,19 +190,6 @@ tasks.register('adapterCoverageVerification', JacocoCoverageVerification) {
                 minimum = 0.80
             }
         }
-    }
-}
-
-tasks.register('adapterCoverageReport', JacocoReport) {
-    description = '어댑터 커버리지 보고 — 임계를 못 넘겼을 때 어디가 빈지 본다'
-    group = 'verification'
-    dependsOn test, integrationTest
-    executionData test, integrationTest
-    sourceDirectories.setFrom(sourceSets.main.java.sourceDirectories)
-    classDirectories.setFrom(sourceSets.main.output)
-    reports {
-        xml.required = true
-        html.required = true
     }
 }
 

@@ -76,7 +76,9 @@ class RedisKeysTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> RedisKeys.queue("c:1", 1, 0))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> RedisKeys.alive("c1", 1, 0))
+        assertThatThrownBy(() -> RedisKeys.alive("c{1}", 1, 0))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> RedisKeys.stock("c:1"))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 

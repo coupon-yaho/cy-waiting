@@ -94,6 +94,62 @@ class SnapshotCodecTest {
         assertThat(s.publishedAt()).isEqualTo(Instant.EPOCH);
     }
 
+
+    @Test
+    @DisplayName("전역값이_깨져도_스냅샷을_통째로_잃지_않는다")
+    void 전역값이_깨져도_스냅샷을_통째로_잃지_않는다() {
+        // **여기서 던지면 갱신이 영구히 멎는다.** 스케줄러가 그 필드를 고칠
+        // 때까지 매 틱 같은 자리에서 실패하고, 재시작한 노드는 빈 스냅샷에
+        // 갇혀 모든 쿠폰이 매진으로 보인다.
+        GatewaySnapshot 음수크레딧 = SnapshotCodec.create().decode(해시(
+                "#credit", "-1", "#nodes", "2", "#published", "1787184000",
+                "c1", "ADAPTIVE:IDLE:0:500:0:1.0"));
+        assertThat(음수크레딧.meta().globalCredit()).isZero();
+        assertThat(음수크레딧.coupons()).containsOnlyKeys("c1");
+
+        GatewaySnapshot 범위밖시각 = SnapshotCodec.create().decode(해시(
+                "#credit", "10", "#nodes", "1", "#published", "99999999999999999",
+                "c1", "ADAPTIVE:IDLE:0:500:0:1.0"));
+        assertThat(범위밖시각.publishedAt()).isEqualTo(Instant.EPOCH);
+        assertThat(범위밖시각.coupons()).containsOnlyKeys("c1");
+    }
+
+    @Test
+    @DisplayName("노드_수는_int_범위_밖이면_기본값이다")
+    void 노드_수는_int_범위_밖이면_기본값이다() {
+        // (int) 축소는 조용히 0 을 만든다 — 4294967296L 이 0 이 된다.
+        // 그러면 전 노드가 "내가 유일하다" 고 믿어 크레딧을 노드 수만큼
+        // 초과 배분한다.
+        GatewaySnapshot s = SnapshotCodec.create().decode(해시(
+                "#credit", "1000", "#nodes", "4294967296", "#published", "1787184000",
+                "c1", "ADAPTIVE:IDLE:0:500:0:1.0"));
+
+        assertThat(s.meta().gatewayCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("콜론이_많아도_전량_할당하지_않는다")
+    void 콜론이_많아도_전량_할당하지_않는다() {
+        // 길이 검사가 split 뒤면 100만 원소를 만들고 버린다. Redis 값 상한이
+        // 512MB 라 필드 하나로 갱신 스레드를 OOM 으로 몰 수 있다.
+        String 콜론폭탄 = ":".repeat(200_000);
+
+        assertThat(SnapshotCodec.create().decode(해시("c1", 콜론폭탄)).coupons()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("빈_해시는_발행된_것으로_보지_않는다")
+    void 빈_해시는_발행된_것으로_보지_않는다() {
+        // 빈 해시는 장애가 아니라 흔한 상태다 — 데이터 없는 복제본 승격,
+        // 키 만료, 리더 재선출 중 재작성. 그때 성공 응답으로 들고 있던 것을
+        // 덮으면 "빈 값으로 덮지 않는다" 가 실패 경로에서만 참이 된다.
+        assertThat(SnapshotCodec.create().발행된것인가(Map.of())).isFalse();
+        assertThat(SnapshotCodec.create().발행된것인가(해시("c1", "ADAPTIVE:IDLE:0:9:0:1.0")))
+                .isFalse();
+        assertThat(SnapshotCodec.create().발행된것인가(해시(
+                "#published", "1787184000", "c1", "ADAPTIVE:IDLE:0:9:0:1.0"))).isTrue();
+    }
+
     @Test
     @DisplayName("모드와_상태는_대소문자를_가리지_않는다")
     void 모드와_상태는_대소문자를_가리지_않는다() {

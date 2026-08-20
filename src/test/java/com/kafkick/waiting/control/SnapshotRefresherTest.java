@@ -9,7 +9,10 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.awaitility.Awaitility;
+import reactor.core.Disposable;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 import reactor.test.StepVerifier;
 
 /**
@@ -95,6 +98,49 @@ class SnapshotRefresherTest {
         StepVerifier.create(refresher.한번()).verifyComplete();
 
         assertThat(holder.isFetchStale()).isTrue();
+    }
+
+
+    @Test
+    @DisplayName("발행되지_않은_빈_응답은_받아들이지_않는다")
+    void 발행되지_않은_빈_응답은_받아들이지_않는다() {
+        // 빈 해시는 장애가 아니라 흔한 상태다 — 데이터 없는 복제본 승격,
+        // 키 만료, 리더 재선출 중 재작성. 성공 응답이라고 그대로 받으면
+        // "빈 값으로 덮지 않는다" 가 실패 경로에서만 참이 된다.
+        MutableClock clock = MutableClock.at(지금);
+        SnapshotHolder holder = 홀더(clock);
+        AtomicInteger 호출 = new AtomicInteger();
+        SnapshotRefresher refresher = SnapshotRefresher.of(holder,
+                () -> 호출.incrementAndGet() == 1 ? Mono.just(정상) : Mono.just(Map.of()));
+
+        StepVerifier.create(refresher.한번()).verifyComplete();
+        StepVerifier.create(refresher.한번()).verifyComplete();
+
+        assertThat(holder.current().coupons()).containsOnlyKeys("c1");
+    }
+
+    @Test
+    @DisplayName("루프는_판마다_새로_읽는다")
+    void 루프는_판마다_새로_읽는다() {
+        // Supplier 를 한 번만 부르면 프로세스 수명 내내 최초 것만 쓴다.
+        // 키·커넥션·설정을 매 판 다시 읽는 구현을 끼우면 그때 드러난다.
+        //
+        // 한번() 은 값을 안 흘리므로 방출 수로는 못 센다 — 호출 수를 본다.
+        MutableClock clock = MutableClock.at(지금);
+        SnapshotHolder holder = 홀더(clock);
+        AtomicInteger 호출 = new AtomicInteger();
+        SnapshotRefresher refresher = SnapshotRefresher.of(holder, () -> {
+            호출.incrementAndGet();
+            return Mono.just(정상);
+        });
+
+        Disposable 구독 = refresher.루프(Duration.ofMillis(10), Schedulers.single()).subscribe();
+        try {
+            Awaitility.await().atMost(Duration.ofSeconds(5))
+                    .until(() -> 호출.get() >= 3);
+        } finally {
+            구독.dispose();
+        }
     }
 
     @Test

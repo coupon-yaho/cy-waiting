@@ -52,7 +52,12 @@ public final class SnapshotRefresher {
     public Mono<Void> 한번() {
         return source.get()
                 .timeout(timeout)
-                .doOnNext(hash -> holder.replace(codec.decode(hash)))
+                // **발행된 것만 받는다.** 빈 해시는 장애가 아니라 흔한 상태라
+                // 성공 응답으로 온다 — 그대로 받으면 들고 있던 것이 지워지고
+                // 전 쿠폰이 매진으로 보인다.
+                .filter(codec::발행된것인가)
+                .map(codec::decode)
+                .doOnNext(holder::replace)
                 .doOnError(e -> log.warn("스냅샷 갱신 실패 — 들고 있던 것을 유지한다", e))
                 .onErrorResume(e -> Mono.empty())
                 .then();
@@ -65,7 +70,11 @@ public final class SnapshotRefresher {
      * <p>전용 스케줄러를 쓴다. 기본 풀에 얹으면 요청 처리 뒤에 줄을 선다.
      */
     public Flux<Void> 루프(Duration interval, Scheduler scheduler) {
-        return 한번().repeatWhen(done -> done.delayElements(interval, scheduler))
+        // **defer 로 감싼다.** 안 감싸면 한번() 이 여기서 한 번만 평가되고,
+        // repeatWhen 은 그렇게 만들어진 같은 Mono 를 다시 구독한다 — 매 판
+        // 새로 읽으라는 Supplier 의 계약이 깨진다.
+        return Mono.defer(this::한번)
+                .repeatWhen(done -> done.delayElements(interval, scheduler))
                 .subscribeOn(scheduler);
     }
 

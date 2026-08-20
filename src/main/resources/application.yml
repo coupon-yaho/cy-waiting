@@ -1,0 +1,27 @@
+spring:
+  application:
+    name: waiting
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      # 스케줄러 틱(1s)보다 짧아야 한다. 명령 하나가 틱을 넘겨 붙들면
+      # 그 틱의 배분이 통째로 밀린다.
+      timeout: 500ms
+      # 리더 리스(2s)보다 짧아야 한다. 연결에 그보다 오래 걸리면
+      # 그 사이 리더십을 잃는다.
+      connect-timeout: 1s
+      # 풀을 켜지 않는다. Lettuce 는 커넥션 하나를 멀티플렉싱하므로
+      # 풀을 얹어도 처리량은 안 늘고 커넥션 수만 예측 불가가 된다.
+      # commons-pool2 를 의존성에 넣지 않는 것이 실제 강제다.
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      probes:
+        enabled: true

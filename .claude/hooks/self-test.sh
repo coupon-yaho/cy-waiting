@@ -8,6 +8,7 @@
 set -uo pipefail
 
 HOOKS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$HOOKS/../.." && pwd)"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
@@ -67,6 +68,46 @@ file_case check-java.sh 'class A {
     class Inner {
     }
 }' 'src/main/java/G2.java' block 'JS-14 수식어 없는 중첩 (회귀)'
+
+file_case check-java.sh '/** 한 줄 javadoc */
+class Z {
+    void a() {}
+    void b() {}
+    void c() {}
+    void d() {}
+    void e() {}
+    void f() {}
+}' 'src/main/java/Z.java' allow 'JS-6 한 줄 Javadoc 은 본문 0줄 (회귀) — 사본이 여기서 갈렸다'
+
+file_case check-java.sh 'class N {
+    @Nested
+    class Inner {
+    }
+}' 'src/test/java/NTest.java' allow 'JS-14 @Nested 는 면제 (회귀) — static 이면 실행되지 않는다'
+
+file_case check-java.sh 'class N2 {
+    @Nested
+    @DisplayName("설명")
+    @Tag("slow")
+    class Inner {
+    }
+}' 'src/test/java/N2Test.java' allow 'JS-14 @Nested 어노테이션 3개 (회귀) — 개수를 못 박지 않는다'
+
+file_case check-java.sh 'class N3 {
+    @Nested class Inner {
+    }
+
+    class Leaked {
+    }
+}' 'src/test/java/N3Test.java' block 'JS-14 @Nested 가 같은 줄이면 다음 중첩이 새지 않는다 (회귀)'
+
+# 상대경로로 넘어오면 테스트가 프로덕션 규칙으로 검사된다. 러너가 절대경로로
+# 넘기는지를 여기서 고정한다 — 이 회귀가 실제로 났다.
+file_case check-java.sh 'class R {
+    void t() throws Exception {
+        Thread.sleep(10);
+    }
+}' 'src/test/java/RTest.java' allow 'RX-1 은 테스트 소스셋에 적용되지 않는다 (회귀)'
 file_case check-java.sh 'class A {
     void f() {
         mono.block();
@@ -213,6 +254,165 @@ bash_case check-commit-msg.sh "git commit -m 'feat(admission): 전역 크레딧�
 bash_case check-commit-msg.sh "git commit --amend --no-edit" allow '--amend --no-edit'
 bash_case check-commit-msg.sh "git status" allow 'commit 아닌 명령'
 bash_case check-commit-msg.sh "echo 'nothing to do with version control'" allow '무관한 명령'
+
+# ── git commit-msg 훅 ────────────────────────────────────────────────────────
+# 도구 훅만 검증하면 터미널 직접 커밋 경로가 비어 있다.
+echo
+echo ".githooks/commit-msg"
+
+# git 훅은 0 통과 / 1 차단이다. Claude 훅의 exit 2 규약과 달라서
+# verdict 를 그대로 쓰면 차단을 전부 통과로 읽는다.
+git_case() {   # 메시지 기대 설명
+    local msg=$1 expect=$2 label=$3
+    local f; f=$(mktemp)
+    printf '%s\n' "$msg" > "$f"
+    "$ROOT/.githooks/commit-msg" "$f" >/dev/null 2>&1
+    local rc=$?
+    rm -f "$f"
+    local actual=allow
+    ((rc != 0)) && actual=block
+    if [[ "$actual" == "$expect" ]]; then
+        printf '  ok   %s\n' "$label"; pass=$((pass + 1))
+    else
+        printf '  FAIL %s (기대 %s, 실제 %s)\n' "$label" "$expect" "$actual"; fail=$((fail + 1))
+    fi
+}
+
+git_case 'feat(app): 진입점 추가
+Refs: CY-18' allow '정상'
+git_case '진입점 추가
+Refs: CY-18' block '형식 위반'
+git_case 'feat(app): add entrypoint
+Refs: CY-18' block '영문 제목'
+git_case 'feat(app): 진입점을 추가했다
+Refs: CY-18' block '종결어미'
+git_case 'feat(app): 진입점 추가' block 'Refs 푸터 없음'
+git_case 'feat(app): 진입점 추가
+Refs: CY-18
+Plan: 1.2.1' block '계획서 ID (커밋에 남기지 않는다)'
+git_case 'feat(app): CY-18 진입점 추가
+Refs: CY-18' block '제목에 Jira 키'
+git_case 'Merge branch develop' allow '병합 커밋은 대상 아님'
+
+# ── 브랜치 리뷰 러너 ─────────────────────────────────────────────────────────
+# 이 러너가 없으면 힙독·스크립트로 쓴 파일은 어떤 검사도 안 받는다.
+# 러너 자신의 자기검증을 여기서 함께 돌린다.
+echo
+echo '[review-branch.sh]'
+if "$ROOT/.claude/hooks/review-branch.sh" --self-test >/dev/null 2>&1; then
+    printf '  ok   러너 자기검증 (JS-12·JS-6·TS-11·TS-4·EX-1·RX-2)\n'; pass=$((pass + 1))
+else
+    printf '  FAIL 러너 자기검증 — 검사 중 하나가 위반을 못 잡는다\n'; fail=$((fail + 1))
+fi
+
+# ── PR 가드 ──────────────────────────────────────────────────────────────────
+echo
+echo '[guard-pr.sh]'
+# **프로덕션 소스 트리에 쓰지 않는다.** 스크립트가 중간에 죽으면 public 생성자를
+# 가진 JS-12 위반 파일이 도메인 패키지에 남는다. 저장소 루트의 임시 디렉터리에
+# 두고 trap 을 건다 — gitignore 에 걸리면 러너의 변경 목록에 안 잡혀 무의미하다.
+probe_dir="$ROOT/.selftest-probe"
+probe="$probe_dir/Probe.java"
+mkdir -p "$probe_dir"
+# EXIT 트랩은 하나뿐이라 앞의 것을 덮는다. 둘 다 지우게 합친다.
+trap 'rm -rf "$tmp" "$probe_dir"' EXIT
+cat > "$probe" <<'PROBE'
+class Probe {
+    public Probe() {
+    }
+}
+PROBE
+
+# 러너가 이 파일을 실제로 본다는 것부터 확인한다. 안 보면 아래 차단 검증이
+# 통과해도 그건 다른 이유로 막힌 것이다.
+# 러너는 위반이 있으면 1 을 낸다. pipefail 아래서 파이프로 바로 받으면
+# grep 이 맞아도 파이프라인이 실패로 읽힌다 — 출력을 먼저 담는다.
+runner_out=$("$ROOT/.claude/hooks/review-branch.sh" 2>&1 || true)
+probe_seen=0
+printf '%s' "$runner_out" | grep -q '.selftest-probe/Probe.java' && probe_seen=1
+
+printf '{"tool_input":{"command":"gh pr create --base develop"}}' \
+    | "$ROOT/.claude/hooks/guard-pr.sh" >/dev/null 2>&1
+blocked=$?
+
+rm -rf "$probe_dir"
+
+# **저장소 상태에 기대지 않는다.** 개발자의 작업 트리가 더럽다고 이 케이스를
+# 건너뛰면 로컬에서만 조용히 통과하고 CI 에서 처음 드러난다 — 실제로 그렇게
+# 났다. stash 로 씻는 것도 답이 아니다. 스크립트가 중간에 죽으면 남의 작업이
+# stash 로 숨는다. **깨끗한 임시 저장소를 만들어 거기서 시험한다.**
+clean_repo="$tmp/clean"
+mkdir -p "$clean_repo/.claude/hooks"
+cp "$HOOKS/review-branch.sh" "$HOOKS/check-java.sh" "$HOOKS/check-lua.sh" \
+   "$clean_repo/.claude/hooks/" 2>/dev/null
+chmod +x "$clean_repo/.claude/hooks/"*.sh 2>/dev/null
+(
+    cd "$clean_repo" || exit 1
+    # **초기 브랜치를 develop 과 분리한다.** init.defaultBranch=develop 인
+    # 환경이면 `git branch develop` 이 실패하고, 그러면 기준과 HEAD 가 같아져
+    # 빈 diff 를 검사하고 조용히 통과한다.
+    git init -q -b selftest-base .
+    git config user.email t@t
+    git config user.name t
+    : > seed.txt
+    git add -A
+    git commit -q -m 'chore: 씨앗'
+    git branch -q develop
+    git switch -q -c selftest-work
+    printf 'class Ok {\n    private Ok() {\n    }\n}\n' > Ok.java
+    git add -A
+    git commit -q -m 'feat(a): 깨끗한 변경' -m 'Refs: CY-1'
+) >/dev/null 2>&1
+
+cp "$HOOKS/guard-pr.sh" "$clean_repo/.claude/hooks/" && chmod +x "$clean_repo/.claude/hooks/guard-pr.sh"
+
+# 원격이 없는 임시 저장소라 origin/develop 이 없다. 원격 이름을 붙여 두어
+# 가드가 실제와 같은 경로(origin/<base>)를 타게 한다.
+git -C "$clean_repo" remote add origin "$clean_repo" >/dev/null 2>&1
+git -C "$clean_repo" update-ref refs/remotes/origin/develop refs/heads/develop
+
+# 기준과 HEAD 가 같으면 빈 diff 를 보는 것이라 시험이 무의미하다. 먼저 확인한다.
+diff_ok=0
+[[ -n "$(git -C "$clean_repo" diff --name-only origin/develop...HEAD 2>/dev/null)" ]] && diff_ok=1
+
+clean=$(cd "$clean_repo" && printf '{"tool_input":{"command":"gh pr create --base develop"}}' \
+    | "$clean_repo/.claude/hooks/guard-pr.sh" >/dev/null 2>&1; echo $?)
+
+printf '{"tool_input":{"command":"git status"}}' \
+    | "$ROOT/.claude/hooks/guard-pr.sh" >/dev/null 2>&1
+unrelated=$?
+
+# 검사를 못 돌리는 상황에서 통과시키면 게이트가 조용히 사라진다 (fail closed)
+failclosed=$(cd /tmp && printf '{"tool_input":{"command":"gh pr create"}}' \
+    | "$ROOT/.claude/hooks/guard-pr.sh" >/dev/null 2>&1; echo $?)
+
+if ((probe_seen)); then
+    printf '  ok   러너가 변경된 프로브 파일을 본다\n'; pass=$((pass + 1))
+else
+    printf '  FAIL 러너가 프로브를 못 본다 — 차단 검증이 무의미하다\n'; fail=$((fail + 1))
+fi
+if ((failclosed == 2)); then
+    printf '  ok   저장소 밖에서는 막는다 (fail closed)\n'; pass=$((pass + 1))
+else
+    printf '  FAIL 저장소 밖인데 통과시켰다 (exit %d)\n' "$failclosed"; fail=$((fail + 1))
+fi
+if ((blocked == 2)); then
+    printf '  ok   실제 위반에서 PR 생성을 막는다\n'; pass=$((pass + 1))
+else
+    printf '  FAIL 위반이 있는데 PR 생성을 통과시켰다 (exit %d)\n' "$blocked"; fail=$((fail + 1))
+fi
+if ((diff_ok == 0)); then
+    printf '  FAIL 임시 저장소의 기준과 HEAD 가 같다 — 빈 diff 를 검사한다\n'; fail=$((fail + 1))
+elif ((clean == 0)); then
+    printf '  ok   깨끗하면 막지 않는다\n'; pass=$((pass + 1))
+else
+    printf '  FAIL 깨끗한데 막았다 (exit %d)\n' "$clean"; fail=$((fail + 1))
+fi
+if ((unrelated == 0)); then
+    printf '  ok   PR 생성이 아닌 명령은 건드리지 않는다\n'; pass=$((pass + 1))
+else
+    printf '  FAIL 무관한 명령을 막았다 (exit %d)\n' "$unrelated"; fail=$((fail + 1))
+fi
 
 echo
 printf '통과 %d · 실패 %d\n' "$pass" "$fail"

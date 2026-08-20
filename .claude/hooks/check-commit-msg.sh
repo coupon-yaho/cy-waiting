@@ -35,47 +35,19 @@ if [[ -z "$subject" ]]; then
     exit 2
 fi
 
-types='feat|fix|test|refactor|perf|docs|build|ci|chore'
-errors=()
+# 규칙은 .githooks/lib/ 하나에만 둔다. 여기에 복사하면 git 훅과 갈라지고,
+# 그때부터 어느 쪽이 맞는지 알 수 없다.
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=../../.githooks/lib/commit-subject-rules.sh
+source "$here/../../.githooks/lib/commit-subject-rules.sh"
 
-printf '%s' "$subject" | grep -qE "^($types)(\([a-z0-9-]+\))?: .+" \
-    || errors+=("형식이 맞지 않는다: '<type>(<scope>): <subject>' / 허용 type: $types")
-
-# 글자 수가 아니라 **표시 폭**으로 센다. 한글은 터미널에서 두 칸을 차지하므로
-# 50자로 재면 100칸이 되어 git log 가 줄바꿈된다. 50칸은 git 의 관례다.
-chars=$(printf '%s' "$subject" | wc -m)
-wide=$(printf '%s' "$subject" | grep -oP '[\x{AC00}-\x{D7A3}\x{3130}-\x{318F}]' | wc -l)
-width=$((chars + wide))
-((width > 50)) && errors+=("제목이 ${width}칸이다 (한글은 두 칸). 50칸 이내로 줄인다")
-
-printf '%s' "$subject" | grep -qE '\.$' \
-    && errors+=("제목 끝에 마침표를 쓰지 않는다")
-
-# 제목은 요약이지 문장이 아니다. 한글 종결어미로 끝나면 서술문이다 —
-# 명사형은 '다' 로 끝나지 않으므로 이 한 글자로 갈린다.
-printf '%s' "$subject" | grep -qP '다$' \
-    && errors+=("제목을 명사형으로 끝낸다. '~했다/한다' 는 요약이 아니라 문장이다")
-
-# 제목은 한글로 쓴다. type·scope 만 영문이다.
-printf '%s' "$subject" | grep -qP '[\x{AC00}-\x{D7A3}]' \
-    || errors+=("제목을 한글로 쓴다 (type·scope 는 영문)")
-
-printf '%s' "$subject" | grep -qE '\bCY-[0-9]+' \
-    && errors+=("Jira 키는 제목이 아니라 'Refs: CY-###' 푸터에 둔다")
-
-if ((${#errors[@]} > 0)); then
+if ! violations=$(check_commit_subject "$subject"); then
     {
         echo "커밋 메시지 규약 위반"
         echo "  제목: $subject"
         echo
-        printf '  - %s\n' "${errors[@]}"
-        echo
-        echo "예시:"
-        echo "  test(admission): 한산한 쿠폰의 무대기 통과 검증"
-        echo "  feat(admission): 전역 크레딧 기반 통과 상한 산출"
-        echo
-        echo "푸터에 'Refs: CY-###' 를 남긴다."
-        echo "규칙 전문: ai/rules/60-workflow.md"
+        echo "$violations"
+        commit_rule_help
     } >&2
     exit 2
 fi

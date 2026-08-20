@@ -20,8 +20,8 @@ Spring WebFlux 기반 **적응형 대기열 게이트웨이**. 뒷단은 쿠폰 
 | R4 | 피크 100K / 동시 대기 20,000 |
 | R5 | **장애 진입·유지·회복 전 구간에서 정합성과 공정성 유지** |
 
-**현재 상태**: 제로베이스 재작성 중. **Phase 1(Foundation) 착수.**
-브랜치는 `feature/CY-18-foundation` (에픽 단위 — WF-3 예외).
+**현재 상태**: 제로베이스 재작성 중. **Phase 4(Control Plane) 착수.**
+Phase 1·2·3 은 닫혔다. 브랜치는 태스크 단위로 딴다 (WF-3).
 진행 상황은 [plan/README.md](plan/README.md) 2절, 저장소 소개는 [README.md](README.md).
 
 ---
@@ -88,7 +88,7 @@ waiting/
 │   ├── workflows/_*.yml               ← 재사용 워크플로 (잡 단위)
 │   └── workflows/{pr,main,nightly}.yml ← 진입점
 ├── .coderabbit.yaml                   ← PR 리뷰 규칙 (ai/rules/ 를 참조)
-└── src/                               ← (Phase 1에서 생성)
+└── src/                               ← 순수 도메인 (Phase 2)
 ```
 
 **`ai/` 와 `.claude/` 의 분담**
@@ -131,7 +131,7 @@ waiting/
 4. GREEN — 최소 구현          커밋: feat(scope): ...
 5. REFACTOR (선택)            커밋: refactor(scope): ...
 6. 작업 로그 기록                       /journal  또는 ai/journal/
-7. 리뷰 에이전트 실행                   해당 영역 에이전트
+7. 로컬 리뷰                            /review  ← PR 전에 끝낸다
 8. PR → develop               squash 금지. TDD 사이클 커밋이 이력의 목적이다
 ```
 
@@ -153,17 +153,39 @@ waiting/
 
 ---
 
-## 8. 리뷰 에이전트
+## 8. 리뷰 — PR 을 올리기 전에 끝낸다
 
-코드를 쓴 뒤 해당 영역 에이전트를 돌린다. 사람 리뷰의 앞단이지 대체가 아니다.
+**`/review` 를 돌린다.** 원격에서 지적받고 고치는 왕복은 비싸고, 그 사이
+잘못된 코드가 브랜치에 남는다. 절차 전문: [.claude/commands/review.md](.claude/commands/review.md)
+
+```bash
+.claude/hooks/review-branch.sh          # 기계 검사 — CodeRabbit 이 볼 것을 먼저 본다
+./gradlew build jacocoTestCoverageVerification pitest
+```
+
+`gh pr create` 는 **기계 검사가 통과해야 실행된다** (`.claude/hooks/guard-pr.sh`).
+막히면 우회하지 말고 고친다.
+
+> **왜 브랜치 전체를 다시 보는가.** `check-java.sh`·`check-lua.sh` 는
+> `Write|Edit` 훅이라 **그 도구로 쓴 파일만** 본다. 힙독이나 스크립트로 만든
+> 파일은 통째로 지나가고, 실제로 그렇게 들어간 위반이 CodeRabbit 까지 갔다.
+
+기계가 통과했다고 끝이 아니다. 해당 영역 에이전트를 돌린다 — 사람 리뷰의
+앞단이지 대체가 아니다.
 
 | 에이전트 | 언제 |
 |---|---|
 | `domain-guardian` | `domain` 패키지를 건드렸을 때 |
+| `admission-auditor` | 판정·배분·폴링 — **결과가 맞는지** |
 | `resilience-auditor` | 장애·회복 경로, fail-open, 서킷, 리트라이 |
-| `redis-cluster-checker` | Lua·키 스킴·샤딩 |
+| `redis-cluster-checker` | 키 스킴·샤딩 |
+| `lua-optimizer` | Lua 의 정확성과 비용 |
+| `security-reviewer` | 시크릿·CI 공급망·입력 검증 |
 | `test-quality-reviewer` | 테스트를 추가·수정했을 때 |
 | `style-enforcer` | 커밋 직전 (전 영역) |
+
+**릴리스 전에는 전부 돌린다.** 되돌릴 수 없는 병합이라 한 관점이라도 비면
+그만큼 못 본 채로 나간다.
 
 정의: `.claude/agents/`
 

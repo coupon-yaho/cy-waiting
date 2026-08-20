@@ -30,6 +30,13 @@ reviews:
       - 'docs:'            # 문서만 바꾸는 PR — path_filters 로도 걸리지만 이중으로
       - 'docs('
       - 'chore(deps)'      # dependabot PR 은 dependency-review 가 본다
+      # **릴리스는 이미 리뷰가 끝난 커밋을 모은 것이다.** develop→main PR 을
+      # 다시 보면 누적 diff 전체를 재검토하게 되고, 지나간 지적으로
+      # request_changes 가 걸려 병합까지 막힌다.
+      #
+      # base_branches 에서 main 을 빼지는 않는다 — 핫픽스는 main 으로 바로
+      # 가는 **새 코드**라 리뷰가 필요하다. 제목으로 가른다.
+      - 'chore(release)'
 
   path_filters:
     # 문서는 리뷰하지 않는다.

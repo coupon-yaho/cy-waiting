@@ -1,0 +1,239 @@
+plugins {
+    id 'java'
+    id 'jacoco'
+    // 도메인 한정. 어댑터까지 돌리면 시간이 폭발하고, 정작 지켜야 할 곳의
+    // 신호가 묻힌다 (Phase 2 Goal — 생존 ≤ 10%)
+    id 'info.solidsoft.pitest' version '1.15.0'
+    // 픽스처를 src/test 에 두면 다른 소스셋에서 못 쓰고,
+    // 프로덕션에 두면 도달 불가 상태를 만드는 생성자가 운영 코드에 노출된다 (TS-3).
+    id 'java-test-fixtures'
+    id 'org.springframework.boot' version '4.1.0'
+    id 'io.spring.dependency-management' version '1.1.7'
+}
+
+group = 'com.kafkick'
+version = '0.0.1-SNAPSHOT'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+// **BOM 이 있으면 BOM 을 쓴다.** 손으로 박은 버전은 낡고, 낡았다는 사실이
+// 드러나지 않는다. 버전은 maven-metadata.xml 로 실측한다 —
+// search.maven.org 색인은 뒤처져 있어 최신을 못 알려준다.
+ext {
+    springCloudVersion = '2025.1.2'
+    testcontainersVersion = '2.0.5'
+}
+
+dependencyManagement {
+    imports {
+        mavenBom "org.springframework.cloud:spring-cloud-dependencies:${springCloudVersion}"
+        // 부트 BOM 은 testcontainers 판을 관리하지 않는다. 손으로 적으면
+        // 부트가 기대하는 판과 어긋나 런타임에야 드러난다.
+        mavenBom "org.testcontainers:testcontainers-bom:${testcontainersVersion}"
+    }
+}
+
+// 버전을 손으로 적지 않는다 — 부트가 관리하는 판과 어긋나면 런타임에야 드러난다.
+
+// 해당 페이즈에 도달하기 전에는 넣지 않는다.
+// resilience4j·loadbalancer 를 미리 넣으면 쓰지 않는 의존성이 빌드를 무겁게 하고,
+// 어느 페이즈가 무엇을 요구하는지가 흐려진다.
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-webflux'
+    implementation 'org.springframework.cloud:spring-cloud-starter-gateway-server-webflux'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+
+    // 요청 경로는 레디스를 치지 않는다 (RD-4). 그래도 제어 평면 — 스케줄러와
+    // 큐 — 은 쳐야 한다. reactive 쪽만 쓴다. Jedis 는 블로킹이라 배경 루프를
+    // 멎게 한다 (RX-1).
+    implementation 'org.springframework.boot:spring-boot-starter-data-redis-reactive'
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    // 도메인 순수성은 리뷰로 못 지킨다. 한 번 깨지면 조용히 번진다.
+    testImplementation 'com.tngtech.archunit:archunit-junit5:1.5.0'
+    // 인메모리 대역으로는 Lua 의 복제 동작도 시계도 확인할 수 없다 (TS-3).
+    // 이 페이즈가 지키려는 것이 정확히 그 둘이라 실물로 붙는다.
+    //
+    // 2.x 에서 junit-jupiter 가 testcontainers-junit-jupiter 로 바뀌었다.
+    // 옛 이름으로 되돌리면 해석 자체가 안 된다.
+    testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
+    testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+// ── 테스트 계층 ──────────────────────────────────────────────────────────────
+// CI 가 계층별로 나눠 돌린다 (_test.yml). 한 태스크에 다 넣으면 어느 계층이
+// 왜 느린지·왜 깨졌는지가 안 보이고, 페이즈별로 켜고 끌 수도 없다.
+//
+// 태그로 가른다. 태그가 없는 테스트는 unit 으로 본다 — 새 테스트를 쓰면서
+// 태그를 잊어도 어딘가에서는 돈다.
+
+// docker-java 는 API 1.32 로 협상하는데 최신 데몬은 1.40 이상만 받는다. 데몬을
+// 낮출 수는 없으니 클라이언트 판을 올려 준다. 이미 설정돼 있으면 그대로 둔다 —
+// 사람마다 데몬 판이 다르고, 우리가 그걸 다 알 수는 없다.
+tasks.withType(Test).configureEach {
+    def apiVersion = System.getenv('DOCKER_API_VERSION') ?: '1.43'
+    environment 'DOCKER_API_VERSION', apiVersion
+    systemProperty 'api.version', apiVersion
+}
+
+tasks.named('test') {
+    useJUnitPlatform {
+        excludeTags 'integration', 'context', 'chaos'
+    }
+    finalizedBy jacocoTestReport
+}
+
+['integration', 'context', 'chaos'].each { layer ->
+    tasks.register("${layer}Test", Test) {
+        description = "${layer} 계층 테스트"
+        group = 'verification'
+        testClassesDirs = sourceSets.test.output.classesDirs
+        classpath = sourceSets.test.runtimeClasspath
+        useJUnitPlatform {
+            includeTags layer
+        }
+        // 해당 태그가 하나도 없어도 실패하지 않는다. 계층은 페이즈가
+        // 진행되며 채워지고, 빈 계층 때문에 파이프라인이 막히면 안 된다.
+        filter {
+            failOnNoMatchingTests = false
+        }
+    }
+}
+
+// ── 품질 임계 ────────────────────────────────────────────────────────────────
+// 임계 미달이면 build 가 실패한다. "확인했다" 는 통과가 아니다.
+
+jacoco {
+    toolVersion = '0.8.15'
+}
+
+tasks.named('jacocoTestReport') {
+    dependsOn test
+    reports {
+        xml.required = true
+        html.required = true
+    }
+    // 픽스처는 커버리지 대상이 아니다. 테스트를 돕는 코드라
+    // 포함시키면 본 코드의 미달을 픽스처가 덮는다.
+    classDirectories.setFrom(sourceSets.main.output)
+}
+
+tasks.named('jacocoTestCoverageVerification') {
+    dependsOn test
+    classDirectories.setFrom(sourceSets.main.output)
+    violationRules {
+        // 도메인은 순수해서 100% 가 가능하다. 못 채운다는 것은
+        // 도달 불가 분기가 있다는 뜻이고, 그건 설계 문제다.
+        rule {
+            element = 'PACKAGE'
+            includes = ['com.kafkick.waiting.domain.*']
+            limit {
+                counter = 'BRANCH'
+                minimum = 1.00
+            }
+        }
+        rule {
+            element = 'BUNDLE'
+            limit {
+                counter = 'BRANCH'
+                minimum = 0.80
+            }
+        }
+    }
+}
+
+// 어댑터는 단위·통합 양쪽에서 덮인다. JaCoCo 는 Lua 를 못 보고 어댑터의
+// Java 는 대부분 단위 시험이 도는 순수 로직이라, 통합 exec 만 보면 엉뚱한
+// 것을 잰다 (AIJ-0024). 계층이 잡으로 갈려 exec 가 한자리에 안 모이므로
+// 두 exec 를 합쳐 어댑터만 따로 잰다.
+//
+// **보고 대상도 어댑터로 좁힌다.** main 전체를 넣으면 도메인과 부트 클래스가
+// 섞여 들어가 "어댑터 보고서" 라는 이름이 거짓이 된다.
+def 어댑터클래스 = { ->
+    sourceSets.main.output.classesDirs.asFileTree.matching {
+        include 'com/kafkick/waiting/adapter/redis/**'
+    }
+}
+
+tasks.register('adapterCoverageReport', JacocoReport) {
+    description = '어댑터 커버리지 보고 — 단위·통합 결합 기준'
+    group = 'verification'
+    dependsOn test, integrationTest
+    executionData test, integrationTest
+    sourceDirectories.setFrom(sourceSets.main.java.sourceDirectories)
+    classDirectories.setFrom(어댑터클래스())
+    reports {
+        xml.required = true
+        html.required = true
+    }
+}
+
+tasks.register('adapterCoverageVerification', JacocoCoverageVerification) {
+    description = '어댑터 커버리지 임계 — 단위·통합 결합 기준'
+    group = 'verification'
+    dependsOn test, integrationTest
+    executionData test, integrationTest
+    sourceDirectories.setFrom(sourceSets.main.java.sourceDirectories)
+    classDirectories.setFrom(어댑터클래스())
+    // **못 넘겼을 때가 보고서가 가장 필요한 때다.** finalizer 로 걸지 않으면
+    // 실패한 실행에서만 보고서가 없어 어디가 빈지 볼 수 없다.
+    finalizedBy 'adapterCoverageReport'
+    violationRules {
+        rule {
+            element = 'PACKAGE'
+            includes = ['com.kafkick.waiting.adapter.redis']
+            limit {
+                counter = 'BRANCH'
+                minimum = 0.80
+            }
+        }
+    }
+}
+
+tasks.named('check') {
+    dependsOn jacocoTestCoverageVerification
+}
+
+// 픽스처가 프로덕션 아티팩트에 새면 도달 불가 상태를 만드는 생성자가
+// 운영 코드에 노출된다 (TS-3). 사람 눈으로 보지 않고 빌드가 잡는다.
+tasks.register('verifyFixturesExcluded') {
+    dependsOn tasks.named('bootJar')
+    doLast {
+        def jar = tasks.named('bootJar').get().archiveFile.get().asFile
+        def leaked = new java.util.zip.ZipFile(jar).entries().toList()
+                .findAll { it.name.contains('testFixtures') || it.name.endsWith('Fixtures.class') }
+        if (leaked) {
+            throw new GradleException("픽스처가 프로덕션 JAR 에 포함됐다: ${leaked*.name}")
+        }
+    }
+}
+
+tasks.named('check') {
+    dependsOn 'verifyFixturesExcluded'
+}
+
+pitest {
+    targetClasses = ['com.kafkick.waiting.domain.*']
+    // domain 은 Phase 2 에서 채워진다. 그전까지 대상이 0건인데, 이걸 실패로
+    // 두면 파이프라인이 페이즈 진행을 막는다. 클래스가 들어오면 임계가 문다.
+    failWhenNoMutations = false
+    excludedClasses = ['com.kafkick.waiting.*Application*']
+    mutationThreshold = 90          // 생존 ≤ 10%
+    timestampedReports = false
+    // XML 이 있어야 생존 뮤턴트를 기계로 짚는다. HTML 만 두면 사람이 눈으로 센다.
+    outputFormats = ['HTML', 'XML']
+    // **코어와 플러그인을 함께 본다.** junit5-plugin 은 PIT 을 provided 로
+    // 잡아서, 코어가 뒤처져도 조용히 돌다가 엉뚱한 데서 깨진다.
+    // 1.25.9 는 1.15.0 보다 뮤턴트를 44개 더 만든다 (285 → 329, 실측).
+    pitestVersion = '1.25.9'
+    junit5PluginVersion = '1.2.3'
+}

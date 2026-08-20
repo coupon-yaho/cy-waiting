@@ -8,6 +8,24 @@
 
 | ID | 날짜 | 종류 | 제목 | 확신 | 승격 |
 |---|---|---|---|---|---|
+| [AIJ-0026](2026/08/AIJ-0026-dependency-refresh.md) | 2026-08-20 | decision | 버전은 실측한다 — 검색 색인은 최신을 모른다 | high | — |
+| [AIJ-0025](2026/08/AIJ-0025-crash-and-promotion.md) | 2026-08-20 | implement | 강제 종료와 승격 — 계획의 전제가 두 군데 틀렸다 | medium | — |
+| [AIJ-0024](2026/08/AIJ-0024-adapter-coverage.md) | 2026-08-20 | decision | 어댑터 커버리지 — 통합 exec 만으로는 엉뚱한 것을 잰다 | medium | — |
+| [AIJ-0023](2026/08/AIJ-0023-cluster-mode.md) | 2026-08-20 | implement | 클러스터 모드 — 무엇을 잡고 무엇을 못 잡나 | medium | — |
+| [AIJ-0022](2026/08/AIJ-0022-leader-election.md) | 2026-08-20 | implement | 리더는 한 대다 — 소유권을 값에 담는 이유 | high | — |
+| [AIJ-0021](2026/08/AIJ-0021-sweep.md) | 2026-08-20 | implement | 이탈자 청소 — 앞부분만 본다 | medium | — |
+| [AIJ-0020](2026/08/AIJ-0020-queue-status.md) | 2026-08-19 | implement | 순번 조회 — 한 번에 끝나야 하는 이유 | high | — |
+| [AIJ-0019](2026/08/AIJ-0019-library-first.md) | 2026-08-19 | decision | 라이브러리를 먼저 본다 — 안 쓴 이유를 남긴다 | medium | DS-8 |
+| [AIJ-0018](2026/08/AIJ-0018-enqueue.md) | 2026-08-19 | implement | 큐 등록 — 순서가 곧 정책이다 | high | — |
+| [AIJ-0017](2026/08/AIJ-0017-clock-monotonic.md) | 2026-08-19 | implement | 시계가 뒤로 가도 추월시키지 않는다 | high | — |
+| [AIJ-0016](2026/08/AIJ-0016-workflow-hygiene.md) | 2026-08-19 | implement | 리뷰 중계가 코멘트마다 돌던 것 | high | — |
+| [AIJ-0015](2026/08/AIJ-0015-key-scheme-and-shard-hash.md) | 2026-08-19 | implement | 키 스킴 — 한 번 정하면 못 바꾸는 것 | high | — |
+| [AIJ-0014](2026/08/AIJ-0014-redis-wiring.md) | 2026-08-19 | implement | 레디스 배선 — 시간 예산을 시동으로 지킨다 | high | — |
+| [AIJ-0013](2026/08/AIJ-0013-local-review-before-pr.md) | 2026-08-19 | implement | 훅이 못 본 파일들 — PR 전 브랜치 전체 검사 | medium | — |
+| [AIJ-0012](2026/08/AIJ-0012-allocation-polling-smoothing.md) | 2026-08-19 | implement | 배분·폴링·평활화 — 계획서 예시와 완료 조건의 충돌 | high | — |
+| [AIJ-0011](2026/08/AIJ-0011-admission-ladder-and-mutation-gaps.md) | 2026-08-19 | implement | 판정 사다리 · 순위 추정 · 뮤테이션이 짚은 경계 | high | — |
+| [AIJ-0010](2026/08/AIJ-0010-domain-state-and-limiter.md) | 2026-08-19 | implement | 순수 도메인 — 불변식·통과 상한·리미터 | high | — |
+| [AIJ-0009](2026/08/AIJ-0009-build-foundation-and-quality-gates.md) | 2026-08-18 | implement | 빌드 기반과 품질 임계 · CI 첫 실행 결함 4건 | high | — |
 | [AIJ-0008](2026/08/AIJ-0008-header-identity-and-front-lb.md) | 2026-08-18 | decision | 인증을 헤더 식별자로 · 락 소유권 · 앞단 LB 부재 | medium | D-A1 |
 | [AIJ-0007](2026/08/AIJ-0007-queue-order-by-timestamp.md) | 2026-08-14 | decision | 큐 순서를 timestamp 로 · 차단 5건 해소 | medium | 90-decisions 2.7·2.8 |
 | [AIJ-0006](2026/08/AIJ-0006-repository-layout.md) | 2026-08-14 | decide | 저장소 배치 — cy-be 와 분리, 게이트웨이는 하나로 | high | O-1~O-3 |
@@ -43,6 +61,18 @@
 | AIJ-0008 | 앞단 LB 한 대가 1GbE 에서 목표 RPS 를 감당한다 (PPS 가 먼저 막힐 수 있다) | 10.7.5 기준선 측정 |
 | AIJ-0008 | `queueToken` 을 게이트웨이가 발급한다는 데 발급 계층이 동의한다 | 계약표(00-req 8절)에 항목 없음. 협의 필요 |
 | AIJ-0008 | IP 리미터가 시험 환경(NAT·출발지 IP 8개)에서 부하 생성기를 막지 않는다 | 시험 프로파일 상한 별도 지정 |
+| ~~AIJ-0009~~ | ~~PIT 임계 90%(생존 ≤10%)가 타당하다~~ | ✅ 도메인 125 뮤턴트에서 생존 2.4%. 임계가 느슨해 8% 도 통과했다 — **숫자보다 어디가 살았는지를 본다** (AIJ-0011) |
+| ~~AIJ-0009~~ | ~~JaCoCo PACKAGE 규칙이 빈 패키지에서 조용히 통과하지 않는다~~ | ✅ 도메인 분기 100% 미달 시 빌드 실패 확인 |
+| AIJ-0010 | `SecondWindowLimiter` 가 요청 경로의 동시성을 견딘다 | ⚠️ `synchronized` 는 넣었으나 `AtomicAcquireTest` 는 **단일 스레드**다. 한 번 ✅ 로 닫았던 것을 되돌린다 (AIJ-0014) |
+| AIJ-0010 | 노드 번호(`nodeIndex`)가 틱마다 안정적이다 | Phase 4 하트비트 설계 시 확인. 바뀌면 배분이 출렁인다 |
+| AIJ-0011 | 남은 생존 뮤턴트 3건이 정말 등가다 | 논증으로만 확인했다. 도구가 보장하지 않는다 |
+| AIJ-0011 | 샤드 균등 분포 가정이 쏠린 순간에도 성립한다 | Phase 3 에서 실측 |
+| AIJ-0014 | `DOCKER_API_VERSION` 1.43 이 팀 전원의 데몬과 맞는다 | 더 낮은 데몬을 쓰는 사람이 있으면 막힌다 |
+| AIJ-0014 | `timeout 500ms` 가 실제 부하에서 충분하다 | Phase 6 실측 |
+| AIJ-0013 | `guard-pr.sh` 의 base 추출이 모든 입력 형태를 다룬다 | `--base origin/develop` 같은 중복 접두 미처리 |
+| AIJ-0012 | 폴링 밴드 간격 1/3/10 초가 예산 4,000 RPS 와 맞는다 | 30 초만 계획서가 못 박았다. Phase 6 실측 |
+| AIJ-0012 | ETA 버킷 경계 30/90/450 초가 이탈 판단 구간과 맞는다 | 문구에서 역산했다. 실측 필요 |
+| AIJ-0012 | 히스테리시스 최소 유지 3틱이 적절하다 | 계획서에 기본값이 없다 |
 | AIJ-0007 | `everysec` 유실 1초가 재등록으로 덮인다 | Phase 6 부하 하네스 (6.6) |
 | AIJ-0007 | `TIME` 을 쓰는 Lua 가 복제에서 안전하다 | Phase 3 |
 | AIJ-0007 | 폴링마다 붙는 `ZCOUNT` 부하가 감당된다 | Phase 3 |

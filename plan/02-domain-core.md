@@ -106,7 +106,12 @@ tryAcquireAll(tier1, tier2):
   둘 다 여유 있음  →  둘 다 차감, PASS_UNDER_CAP
   tier1 부족       →  아무것도 안 깎음, ENQUEUE_RATE_COUPON
   tier2 부족       →  아무것도 안 깎음, ENQUEUE_RATE_GLOBAL
+  키 자리 없음     →  아무것도 안 깎음, ENQUEUE_KEY_SATURATED
 ```
+
+**키 자리 부족은 예산 고갈과 다른 값이다.** 같이 묶으면 운영자가 쿠폰이나
+노드를 조이는데, 조여야 할 것은 리미터의 키 상한이다. 예산을 먼저 보고 자리를
+나중에 본다 — 예산이 말랐다면 그 키는 이미 자리를 잡고 있어 자리 문제가 아니다.
 
 전부-아니면-전무다. 부분 획득 뒤 반납하는 형태로 만들지 않는다 — 반납 누락이
 곧 예산 유실이고, 그건 조용히 통과량을 갉아먹는다.
@@ -176,8 +181,8 @@ tryAcquireAll(tier1, tier2):
  7. mode == ALWAYS                    → ENQUEUE_ALWAYS
  8. runtime != IDLE || justEnqueued    → ENQUEUE_BACKLOG      (새치기 방지)
 ───────────── 여기부터 한산한 쿠폰 ─────────────
- 9. tryAcquireAll(tier1, tier2)       → 부족한 쪽에 따라
-                                          ENQUEUE_RATE_COUPON / ENQUEUE_RATE_GLOBAL
+ 9. tryAcquireAll(tier1, tier2)       → 부족한 쪽에 따라 ENQUEUE_RATE_COUPON /
+                                          ENQUEUE_RATE_GLOBAL / ENQUEUE_KEY_SATURATED
 10.                                   → PASS_UNDER_CAP
 ```
 
@@ -192,6 +197,11 @@ tryAcquireAll(tier1, tier2):
 어느 쪽이 부족했는지는 판정값으로 구분한다 — `ENQUEUE_RATE_COUPON` 은 **그 한산한
 쿠폰이 유휴 몫을 다 쓴 것**이고, `ENQUEUE_RATE_GLOBAL` 은 **노드가 다 쓴 것**이라
 대응이 다르다. 전자는 그 쿠폰만 조이면 되고, 후자는 노드를 늘려야 한다.
+`ENQUEUE_KEY_SATURATED` 는 셋째다 — 예산은 남았는데 리미터가 키를 더 못 들고
+있는 것이라 조일 것은 쿠폰도 노드도 아니다.
+
+**두 예산의 키는 접두사로 갈라 둔다.** 쿠폰 ID 하나가 전역 키와 같아지는 순간
+두 예산이 한 카운터로 합쳐져, 다른 쿠폰의 전역 트래픽이 그 쿠폰 몫을 먹는다.
 
 <a id="latch"></a>
 **8번의 `justEnqueued` 가 전이 구멍을 막는다.** `runtime` 은 스냅샷 값이라 이 노드가
@@ -561,12 +571,16 @@ CouponStates.unknown()
 - **선행** T2.4.1
 
 1. **RED** `균등_배분_후_남은_몫을_재배분한다`
-   — globalCredit 1000, 핫 20만/콜드 40/콜드 3 → 956/40/3
-2. **GREEN** 1패스 균등 + 2패스 잔여
+   — globalCredit 1000, 핫 20만/콜드 40/콜드 3 → 957/40/3
+2. **GREEN** 굶주린 쿠폰에 균등 배분, 못 쓴 몫을 다시 굶주린 쪽으로.
+   **2패스는 하한이지 상한이 아니다** — 쿠폰이 많고 요구량이 들쭉날쭉하면
+   두 번으로 못 채우고, 남긴 만큼 대기자가 이유 없이 기다린다
 3. **RED** `핫에_20만이_밀려도_콜드는_첫_틱에_전부_빠진다`
 4. **GREEN** (1패스가 이미 보장)
 5. **RED** `정수_나눗셈_나머지는_다음_틱으로_넘긴다`
-6. **GREEN** 나머지를 배분하지 않는다
+6. **GREEN** 굶주린 수보다 적게 남으면 멎는다 — 균등하게 나눌 방법이 없다.
+   나머지를 누구에게 주면 그 쿠폰만 이득이고, 노드마다 다른 쪽을 고르면
+   총합이 전역 크레딧을 넘는다
 7. **완료** 기아 불가 + 유휴 낭비 0 이 동시에 성립
 
 #### T2.4.3 · 크레딧 초과 배분 속성 테스트 ★

@@ -1,5 +1,7 @@
-* text=auto eol=lf
-*.jar binary
-*.png binary
-gradlew text eol=lf
-gradlew.bat text eol=crlf
+# 작업 로그 색인은 **모두가 맨 위에 한 줄씩** 넣는다. 동시에 도는 브랜치가
+# 여럿이면 매번 같은 자리에서 충돌하고, 그 충돌을 풀자고 리베이스하면
+# 승인된 PR 위에 이력을 다시 쓰게 된다 (force push).
+#
+# union 은 양쪽 줄을 모두 살린다. 색인은 "빠진 엔트리가 없을 것" 만 검사하므로
+# (CI 규범 검사) 순서가 잠깐 어긋나도 규범이 깨지지 않는다.
+ai/journal/index.md merge=union

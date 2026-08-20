@@ -3,8 +3,12 @@ package com.kafkick.waiting.chaos;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.lettuce.core.api.StatefulRedisConnection;
+import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.Map;
+import java.util.OptionalLong;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -21,6 +25,8 @@ import org.junit.jupiter.api.Test;
 @Tag("chaos")
 class BackendReportsTest {
 
+    private static final Instant 지금 = Instant.parse("2026-08-20T00:00:00Z");
+
     private RedisFaults redis;
     private StatefulRedisConnection<String, String> connection;
     private BackendReports reports;
@@ -29,7 +35,10 @@ class BackendReportsTest {
     void 준비() {
         redis = RedisFaults.시작한다();
         connection = redis.연결한다();
-        reports = new BackendReports(connection, Duration.ofSeconds(10));
+        // 시각을 고정한다 (TS-4). 실제 시계를 쓰면 신선도 경계가 컨테이너
+        // 기동 지연에 노출돼 판정이 흔들린다.
+        reports = BackendReports.고정시계로(connection, Duration.ofSeconds(10),
+                Clock.fixed(지금, ZoneOffset.UTC));
     }
 
     @AfterEach
@@ -67,7 +76,25 @@ class BackendReportsTest {
         Map<String, Long> 관측 = reports.신선한_보고();
 
         assertThat(관측).containsEntry("i-1", 200L);
-        assertThat(reports.처음_관측된_시각("i-1")).isNotNegative();
+        assertThat(reports.처음_관측된_시각("i-1"))
+                .hasValue(지금.getEpochSecond());
+    }
+
+    @Test
+    @DisplayName("모든_심기_경로가_처음_관측_시각을_남긴다")
+    void 모든_심기_경로가_처음_관측_시각을_남긴다() {
+        // **신선한 보고가 있는데 처음 관측 시각이 없는 상태**는 프로덕션에
+        // 없다. 픽스처가 그걸 만들면 램프업 판정이 epoch 기준으로 경과를
+        // 재서 언제나 램프가 끝난 것처럼 보이고, 진짜 버그가 통과한다.
+        reports.보고한다("정상", 10);
+        reports.낡은_보고를_심는다("낡음", 10, Duration.ofSeconds(30));
+        reports.깨진_보고를_심는다("깨짐");
+
+        assertThat(reports.처음_관측된_시각("정상")).isPresent();
+        assertThat(reports.처음_관측된_시각("낡음")).isPresent();
+        assertThat(reports.처음_관측된_시각("깨짐")).isPresent();
+        // 관측된 적 없는 것은 0 이 아니라 빈 값이다.
+        assertThat(reports.처음_관측된_시각("본적없음")).isEqualTo(OptionalLong.empty());
     }
 
     @Test

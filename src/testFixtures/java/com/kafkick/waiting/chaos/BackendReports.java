@@ -6,6 +6,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.OptionalLong;
 
 /**
  * 백엔드 자기보고를 조작한다 (4.0.4) — 콜드 복귀와 낡은 보고를 만든다.
@@ -21,42 +22,65 @@ public final class BackendReports {
     private final StatefulRedisConnection<String, String> redis;
     private final Duration 신선도;
     private final Clock clock;
+
+    /**
+     * 인스턴스를 <b>처음 본 시각.</b> 게이트웨이 측 램프업(A-13)의 기준이다.
+     *
+     * <p>모든 심기 경로에서 채운다. 한 경로만 채우면 <b>신선한 보고가 있는데
+     * 처음 관측 시각이 없는 상태</b>가 생기고, 그건 프로덕션에 존재할 수 없다 —
+     * 보고가 관측됐다는 것이 곧 처음 본 시각이 있다는 뜻이기 때문이다 (TS-3).
+     */
     private final Map<String, Long> 처음_본_시각 = new LinkedHashMap<>();
 
-    public BackendReports(StatefulRedisConnection<String, String> redis, Duration 신선도) {
-        this(redis, 신선도, Clock.systemUTC());
-    }
-
-    /** 시계를 주입받는다 (TS-4). 기본은 실물 레디스와 같은 축의 실제 시계다. */
-    public BackendReports(StatefulRedisConnection<String, String> redis, Duration 신선도,
+    private BackendReports(StatefulRedisConnection<String, String> redis, Duration 신선도,
             Clock clock) {
         this.redis = redis;
         this.신선도 = 신선도;
         this.clock = clock;
     }
 
+    /** 실제 시계로 흔든다. 실물 레디스의 TTL·만료와 같은 축에 있어야 할 때. */
+    public static BackendReports 실시계로(StatefulRedisConnection<String, String> redis,
+            Duration 신선도) {
+        return new BackendReports(redis, 신선도, Clock.systemUTC());
+    }
+
+    /** 시각을 고정해 흔든다. 신선도 경계를 컨테이너 기동 지연에서 떼어 놓는다. */
+    public static BackendReports 고정시계로(StatefulRedisConnection<String, String> redis,
+            Duration 신선도, Clock clock) {
+        return new BackendReports(redis, 신선도, clock);
+    }
+
+    /** 방금 관측된 정상 보고. */
     public void 보고한다(String instanceId, long 가용량) {
         심는다(instanceId, 가용량, 지금());
     }
 
-    /** 항목은 신선한데 값만 크다 — 재기동 직후 과대 보고 (F6). */
+    /** 재기동 직후 인스턴스가 제 여유를 크게 부른 상태 (F6). */
     public void 콜드로_복귀한다(String instanceId, long 부풀린_가용량) {
-        처음_본_시각.put(instanceId, 지금());
         심는다(instanceId, 부풀린_가용량, 지금());
     }
 
+    /** 항목은 남아 있는데 보고 시각만 과거인 상태 — 죽었는데 흔적이 남았다. */
     public void 낡은_보고를_심는다(String instanceId, long 가용량, Duration 얼마나_전) {
         심는다(instanceId, 가용량, 지금() - 얼마나_전.toSeconds());
     }
 
     /** 형식이 깨진 값. 하나가 깨졌다고 나머지를 버리면 전면 차단이 된다. */
     public void 깨진_보고를_심는다(String instanceId) {
+        처음_본_시각.putIfAbsent(instanceId, 지금());
         redis.sync().hset(KEY, instanceId, "그건-숫자가-아니다");
     }
 
-    /** 처음 관측된 시각. 게이트웨이 측 램프업(A-13)의 기준이다. */
-    public long 처음_관측된_시각(String instanceId) {
-        return 처음_본_시각.getOrDefault(instanceId, 0L);
+    /**
+     * 처음 관측된 시각(초). 관측된 적이 없으면 빈 값이다.
+     *
+     * <p>0 을 돌려주면 램프업 판정이 epoch 기준으로 경과를 재서 <b>언제나 램프가
+     * 끝난 것처럼</b> 보인다 — 픽스처가 만든 값 때문에 진짜 버그가 통과한다.
+     */
+    public OptionalLong 처음_관측된_시각(String instanceId) {
+        Long at = 처음_본_시각.get(instanceId);
+        return at == null ? OptionalLong.empty() : OptionalLong.of(at);
     }
 
     public Map<String, Long> 신선한_보고() {
@@ -83,6 +107,8 @@ public final class BackendReports {
     }
 
     private void 심는다(String instanceId, long 가용량, long 시각) {
+        // 모든 경로가 여기를 지난다 — 처음 관측 시각을 여기서만 채운다.
+        처음_본_시각.putIfAbsent(instanceId, 시각);
         redis.sync().hset(KEY, instanceId, "%d:%d".formatted(가용량, 시각));
     }
 

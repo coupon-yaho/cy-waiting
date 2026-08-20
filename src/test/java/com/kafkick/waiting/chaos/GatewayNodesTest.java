@@ -3,7 +3,10 @@ package com.kafkick.waiting.chaos;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.lettuce.core.api.StatefulRedisConnection;
+import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -27,7 +30,10 @@ class GatewayNodesTest {
     void 준비() {
         redis = RedisFaults.시작한다();
         connection = redis.연결한다();
-        nodes = new GatewayNodes(connection, Duration.ofSeconds(10));
+        // 시각을 고정한다 (TS-4) — 신선도 경계가 컨테이너 기동 지연에
+        // 흔들리면 이 시험은 하트비트가 아니라 도커 속도를 잰다.
+        nodes = new GatewayNodes(connection, Duration.ofSeconds(10),
+                Clock.fixed(Instant.parse("2026-08-20T00:00:00Z"), ZoneOffset.UTC));
     }
 
     @AfterEach

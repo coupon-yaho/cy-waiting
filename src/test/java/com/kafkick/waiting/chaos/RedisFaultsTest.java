@@ -4,7 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.kafkick.waiting.chaos.RedisFaults;
-import io.lettuce.core.RedisClient;
+import io.lettuce.core.RedisConnectionException;
 import io.lettuce.core.api.StatefulRedisConnection;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -43,7 +43,9 @@ class RedisFaultsTest {
             try (StatefulRedisConnection<String, String> down = faults.연결한다()) {
                 down.sync().ping();
             }
-        }).isInstanceOf(RuntimeException.class);
+            // RuntimeException 으로 두면 픽스처 내부 오류도 통과한다 —
+            // "끊겼다" 가 아니라 "무언가 터졌다" 를 재게 된다.
+        }).isInstanceOf(RedisConnectionException.class);
 
         faults.붙인다();
         try (StatefulRedisConnection<String, String> after = faults.연결한다()) {

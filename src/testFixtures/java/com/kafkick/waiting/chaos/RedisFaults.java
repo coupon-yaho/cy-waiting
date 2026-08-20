@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.net.ServerSocket;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.utility.DockerImageName;
 
@@ -75,18 +76,39 @@ public final class RedisFaults implements AutoCloseable {
         준비될_때까지_기다린다();
     }
 
+    /**
+     * 다시 뜰 때까지 기다린다.
+     *
+     * <p>프로브는 <b>제 클라이언트를 매번 닫는다.</b> 목록에 쌓으면 실패한
+     * 시도마다 Netty 이벤트 루프가 남아, 회복을 기다리는 동안 스레드가 는다.
+     * 시도 사이에 대기도 둔다 — 연결 거부가 즉시 돌아오는 환경에서는 대기가
+     * 없으면 컨테이너가 뜨기 전에 횟수를 다 써 버린다.
+     */
     private void 준비될_때까지_기다린다() {
-        IllegalStateException 마지막 = null;
+        RuntimeException 마지막 = null;
         for (int i = 0; i < 60; i++) {
-            try (StatefulRedisConnection<String, String> probe = 연결한다()) {
-                if ("PONG".equals(probe.sync().ping())) {
+            RedisClient probe = RedisClient.create(주소());
+            try (StatefulRedisConnection<String, String> connection = probe.connect()) {
+                if ("PONG".equals(connection.sync().ping())) {
                     return;
                 }
             } catch (RuntimeException e) {
-                마지막 = new IllegalStateException("아직 안 떴다", e);
+                마지막 = e;
+            } finally {
+                probe.shutdown();
             }
+            잠깐_쉰다();
         }
-        throw 마지막 != null ? 마지막 : new IllegalStateException("레디스가 돌아오지 않았다");
+        throw new IllegalStateException("레디스가 돌아오지 않았다", 마지막);
+    }
+
+    private static void 잠깐_쉰다() {
+        try {
+            TimeUnit.MILLISECONDS.sleep(200);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("대기 중 끊겼다", e);
+        }
     }
 
     @Override

@@ -30,6 +30,14 @@ repositories {
 ext {
     springCloudVersion = '2025.1.2'
     testcontainersVersion = '2.0.5'
+
+    // **부트가 관리하는 판을 속성으로 덮는다.** 의존성을 따로 박으면 BOM 이
+    // 관리하는 나머지 netty 모듈과 판이 갈린다.
+    //
+    // 4.2.15 의 HTTP 코덱 계열에 HIGH 6건이 있다 (CVE-2026-55831·55833·56745·
+    // 56816·56819·59901). 취약점 스캔이 Java 를 하나도 안 보고 있어서
+    // 드러나지 않았다 (CY-293).
+    set('netty.version', '4.2.17.Final')
 }
 
 dependencyManagement {

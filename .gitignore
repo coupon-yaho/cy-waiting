@@ -25,3 +25,6 @@ Thumbs.db
 .env.*
 *.token
 
+# 락파일은 스캔 직전에 만든다 — Trivy 가 Gradle 을 이것으로만 읽어서지
+# 잠금 자체가 목적이 아니다. 커밋하면 갱신 부담이 계속 따라온다 (CY-293).
+gradle.lockfile

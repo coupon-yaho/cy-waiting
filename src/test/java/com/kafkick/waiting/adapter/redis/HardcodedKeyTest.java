@@ -31,9 +31,6 @@ class HardcodedKeyTest {
             Path.of("src/main/java/com/kafkick/waiting/adapter/redis/RedisKeys.java");
 
     /** 이 저장소가 쓰는 키 접두사. 새 키를 만들면 여기도 함께 는다. */
-    /** 블록 주석과 Javadoc. 줄바꿈을 남기려고 따로 둔다. */
-    private static final Pattern COMMENT_BLOCK = Pattern.compile("(?s)/\\*.*?\\*/");
-
     private static final Pattern KEY_LITERAL = Pattern.compile(
             "\"(queue|maxscore|admitted|grace|alive|stock|gw|scheduler|coupons|coupon):");
 
@@ -44,24 +41,71 @@ class HardcodedKeyTest {
                 if (file.equals(KEYS_CLASS)) {
                     continue;   // 여기가 유일하게 허용되는 자리다
                 }
-                // 줄 주석뿐 아니라 블록 주석·Javadoc 안의 예시도 걷어낸다.
-                // 오탐이 나면 사람은 검사를 고치는 대신 우회한다.
-                //
-                // **줄바꿈은 남긴다.** 통째로 지우면 뒤따르는 진짜 위반이
-                // 원본보다 작은 줄 번호로 보고돼 엉뚱한 곳을 보게 된다.
-                String source = COMMENT_BLOCK.matcher(
-                                Files.readString(file, StandardCharsets.UTF_8))
-                        .replaceAll(match -> match.group().replaceAll("[^\n]", " "));
+                // 주석 속 예시는 위반이 아니다. 오탐이 나면 사람은
+                // 검사를 고치는 대신 우회한다.
+                String source = 주석을_지운다(
+                        Files.readString(file, StandardCharsets.UTF_8));
                 String[] lines = source.split("\n", -1);
                 for (int i = 0; i < lines.length; i++) {
-                    String line = lines[i].replaceAll("//.*", "");
-                    if (KEY_LITERAL.matcher(line).find()) {
+                    if (KEY_LITERAL.matcher(lines[i]).find()) {
                         violations.add("%s:%d".formatted(file.getFileName(), i + 1));
                     }
                 }
             }
         }
         return violations;
+    }
+
+    /**
+     * 주석만 지우고 문자열은 남긴다.
+     *
+     * <p><b>정규식으로는 못 한다.</b> 문자열 리터럴에 담긴 주석 기호가 진짜
+     * 주석의 시작으로 잡히면 그 뒤가 통째로 주석 취급돼 <b>검사가 눈이
+     * 먼다</b> — 아무것도 못 잡는데 통과는 하니 검사가 없는 것보다 나쁘다.
+     *
+     * <p>그래서 문자열·문자·주석을 구분하며 한 글자씩 훑는다. 지울 자리는
+     * 공백으로 덮어 <b>줄바꿈과 줄 번호를 그대로 둔다</b> — 통째로 지우면
+     * 뒤따르는 진짜 위반이 엉뚱한 줄 번호로 보고돼 엉뚱한 곳을 보게 된다.
+     */
+    private static String 주석을_지운다(String source) {
+        char[] out = source.toCharArray();
+        int n = out.length;
+        int i = 0;
+        while (i < n) {
+            char c = out[i];
+            if (c == '/' && i + 1 < n && out[i + 1] == '/') {
+                while (i < n && out[i] != '\n') {
+                    out[i++] = ' ';
+                }
+            } else if (c == '/' && i + 1 < n && out[i + 1] == '*') {
+                out[i++] = ' ';
+                out[i++] = ' ';
+                // 닫히지 않은 주석은 파일 끝까지가 주석이다
+                while (i < n && !(out[i] == '*' && i + 1 < n && out[i + 1] == '/')) {
+                    if (out[i] != '\n') {
+                        out[i] = ' ';
+                    }
+                    i++;
+                }
+                i = Math.min(i + 2, n);
+            } else if (c == '"' && i + 2 < n && out[i + 1] == '"' && out[i + 2] == '"') {
+                i += 3;   // 텍스트 블록. 안의 주석 기호는 코드가 아니다
+                while (i < n && !(out[i] == '"' && i + 2 < n
+                        && out[i + 1] == '"' && out[i + 2] == '"')) {
+                    i += out[i] == '\\' ? 2 : 1;
+                }
+                i = Math.min(i + 3, n);
+            } else if (c == '"' || c == '\'') {
+                i++;   // 리터럴 안은 건드리지 않는다. 키를 찾는 곳이 여기다
+                while (i < n && out[i] != c && out[i] != '\n') {
+                    i += out[i] == '\\' ? 2 : 1;
+                }
+                i++;
+            } else {
+                i++;
+            }
+        }
+        return new String(out);
     }
 
     @Test
@@ -122,6 +166,51 @@ class HardcodedKeyTest {
 
         try {
             assertThat(violationsIn(dir)).isEmpty();
+        } finally {
+            Files.deleteIfExists(probe);
+            Files.deleteIfExists(dir);
+        }
+    }
+
+    @Test
+    @DisplayName("문자열_속_주석_기호가_검사를_눈멀게_하지_않는다")
+    void 문자열_속_주석_기호가_검사를_눈멀게_하지_않는다() throws IOException {
+        // 주석을 정규식으로 지우면 여기서 검사가 통째로 죽는다 — 리터럴
+        // 안의 "/*" 가 주석의 시작으로 잡혀 뒤따르는 진짜 위반이 주석
+        // 속으로 사라진다. **못 잡는데 통과하니 없는 것보다 나쁘다.**
+        Path dir = Files.createTempDirectory("probe");
+        Path probe = dir.resolve("Blind.java");
+        Files.writeString(probe,
+                "class Blind {\n"
+                        + "    String block = \"/*\";\n"
+                        + "    String line = \"//\";\n"
+                        + "    String key = \"queue:{c1}\";\n"
+                        + "    String close = \"*/\";\n}\n",
+                StandardCharsets.UTF_8);
+
+        try {
+            assertThat(violationsIn(dir)).containsExactly("Blind.java:4");
+        } finally {
+            Files.deleteIfExists(probe);
+            Files.deleteIfExists(dir);
+        }
+    }
+
+    @Test
+    @DisplayName("텍스트_블록_속_주석_기호도_코드가_아니다")
+    void 텍스트_블록_속_주석_기호도_코드가_아니다() throws IOException {
+        Path dir = Files.createTempDirectory("probe");
+        Path probe = dir.resolve("Doc.java");
+        Files.writeString(probe,
+                "class Doc {\n"
+                        + "    String sample = \"\"\"\n"
+                        + "        /* 여기는 문자열이다\n"
+                        + "        \"\"\";\n"
+                        + "    String key = \"queue:{c1}\";\n}\n",
+                StandardCharsets.UTF_8);
+
+        try {
+            assertThat(violationsIn(dir)).containsExactly("Doc.java:5");
         } finally {
             Files.deleteIfExists(probe);
             Files.deleteIfExists(dir);

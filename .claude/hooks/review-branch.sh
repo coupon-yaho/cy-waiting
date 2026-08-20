@@ -213,9 +213,13 @@ self_test() {
     # 템플릿을 거부한다 — 거기서는 프로브가 안 생기고 검사는 계속 돈다.
     local jdir jtmp jprobe
     jdir=$(ls -d ai/journal/[0-9]*/[0-9]* 2>/dev/null | tail -1)
+    #
+    # mv -n 은 대상이 이미 있으면 **성공을 내면서 원본을 남긴다.** 옮겨졌는지
+    # 원본이 사라진 것으로 확인한다 — 반환값만 믿으면 남은 원본이 저장소에
+    # 굴러다니고, 지우는 쪽은 있지도 않은 .md 를 지운다.
     if [[ -z "$jdir" ]] \
         || ! jtmp=$(mktemp "$jdir/AIJ-9999-probe.XXXXXX" 2>/dev/null) \
-        || ! mv -n "$jtmp" "$jtmp.md" 2>/dev/null; then
+        || { mv -n "$jtmp" "$jtmp.md" 2>/dev/null; [[ -e "$jtmp" ]]; }; then
         [[ -n "${jtmp:-}" ]] && rm -f "$jtmp"
         printf '  ✗ 저널 프로브를 못 만들었다 — 검사가 실제로 무는지 확인 못 함\n'
         fail=1

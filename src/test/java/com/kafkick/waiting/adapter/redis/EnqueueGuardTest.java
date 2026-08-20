@@ -57,6 +57,25 @@ class EnqueueGuardTest extends RedisContainerSupport {
     }
 
     @Test
+    @DisplayName("돌려준_score가_ZSET에_든_값과_정확히_같다")
+    void 돌려준_score가_ZSET에_든_값과_정확히_같다() {
+        // **tostring 은 못 쓴다.** Lua 5.1 은 수를 %.14g 로 접는데 마이크로초
+        // score 는 16자리다. 접히면 돌려준 값과 실제 자리가 어긋나고, 그 값을
+        // 토큰에 담아 요청 경로에서 비교하는 순간 앞사람을 추월한다.
+        String returned = enqueue("m1", "30", "0").get(0).toString();
+
+        Double stored = redis.opsForZSet().score(QUEUE, "m1").block(WAIT);
+
+        assertThat(returned).doesNotContain("e+");
+        // **한 문장으로 단언한다.** null 검사를 따로 두면 약한 단언이 되고,
+        // 서식 인자에 stored 를 넣으면 미등록일 때 NPE 가 진짜 원인을 덮는다.
+        assertThat(stored)
+                .withFailMessage("돌려준 score 와 ZSET 의 값이 다르다 (미등록이면 null): "
+                        + returned)
+                .isEqualTo((double) Long.parseLong(returned));
+    }
+
+    @Test
     @DisplayName("등록하면_생존_신호에_만료_시각이_찍힌다")
     void 등록하면_생존_신호에_만료_시각이_찍힌다() {
         // ZSET 의 score 가 만료 시각이다. 사람마다 키를 만들면 청소가

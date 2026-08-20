@@ -176,10 +176,16 @@ waiting/
 | 에이전트 | 언제 |
 |---|---|
 | `domain-guardian` | `domain` 패키지를 건드렸을 때 |
+| `admission-auditor` | 판정·배분·폴링 — **결과가 맞는지** |
 | `resilience-auditor` | 장애·회복 경로, fail-open, 서킷, 리트라이 |
-| `redis-cluster-checker` | Lua·키 스킴·샤딩 |
+| `redis-cluster-checker` | 키 스킴·샤딩 |
+| `lua-optimizer` | Lua 의 정확성과 비용 |
+| `security-reviewer` | 시크릿·CI 공급망·입력 검증 |
 | `test-quality-reviewer` | 테스트를 추가·수정했을 때 |
 | `style-enforcer` | 커밋 직전 (전 영역) |
+
+**릴리스 전에는 전부 돌린다.** 되돌릴 수 없는 병합이라 한 관점이라도 비면
+그만큼 못 본 채로 나간다.
 
 정의: `.claude/agents/`
 

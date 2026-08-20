@@ -68,8 +68,19 @@ if #front > 0 then
     end
 
     if #gone > 0 then
-        redis.call('ZREM', KEYS[1], unpack(gone))
+        -- **기록이 먼저다.** 제거를 먼저 하면 그 뒤가 터졌을 때 자리도 잃고
+        -- 재방문자로도 식별 안 되는 사람이 남는다 — 이 청소를 Lua 로 둔
+        -- 이유가 정확히 그것을 막는 것이다. 기록을 먼저 하면 실패 시 남는
+        -- 것이 "아직 안 빠진 사람" 이라 다음 틱에 다시 처리된다.
+        --
+        -- 인자가 쌍이라 records 가 gone 의 두 배다. unpack 한계에 이쪽이
+        -- 먼저 걸리므로, 걸리는 순간 큐는 아직 그대로다.
+        --
+        -- **메모리 상한에서도 이 순서가 산다.** HSET 은 거부 대상이라
+        -- 첫 쓰기에서 통째로 막히는데, ZREM 은 거부 대상이 아니라 먼저
+        -- 두면 아무도 하트비트를 못 하는 동안 큐만 계속 지운다.
         redis.call('HSET', KEYS[2], unpack(records))
+        redis.call('ZREM', KEYS[1], unpack(gone))
         swept = #gone
     end
 end

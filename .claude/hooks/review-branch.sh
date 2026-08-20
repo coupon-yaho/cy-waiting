@@ -209,12 +209,19 @@ self_test() {
     #
     # 날짜 경로도 박지 않는다. 없는 달이면 만들다 실패하는데, 그때 프로브는
     # 안 생기고 검사는 계속 돌아 **없는 프로브로 통과**한다.
-    local jdir jprobe
+    # **템플릿은 X 로 끝나야 한다.** BSD/macOS mktemp 는 접미사가 붙은
+    # 템플릿을 거부한다 — 거기서는 프로브가 안 생기고 검사는 계속 돈다.
+    local jdir jtmp jprobe
     jdir=$(ls -d ai/journal/[0-9]*/[0-9]* 2>/dev/null | tail -1)
-    if [[ -z "$jdir" ]] || ! jprobe=$(mktemp "$jdir/AIJ-9999-probe.XXXXXX.md" 2>/dev/null); then
+    if [[ -z "$jdir" ]] \
+        || ! jtmp=$(mktemp "$jdir/AIJ-9999-probe.XXXXXX" 2>/dev/null) \
+        || ! mv -n "$jtmp" "$jtmp.md" 2>/dev/null; then
+        [[ -n "${jtmp:-}" ]] && rm -f "$jtmp"
         printf '  ✗ 저널 프로브를 못 만들었다 — 검사가 실제로 무는지 확인 못 함\n'
         fail=1
         jprobe=""
+    else
+        jprobe="$jtmp.md"
     fi
     [[ -n "$jprobe" ]] && printf '# 프론트매터 없음\n' > "$jprobe"
     if [[ -n "$jprobe" ]]; then

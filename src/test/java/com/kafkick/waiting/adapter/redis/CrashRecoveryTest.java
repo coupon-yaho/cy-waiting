@@ -8,17 +8,18 @@ import io.lettuce.core.api.StatefulRedisConnection;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
-import org.testcontainers.containers.BindMode;
+import com.github.dockerjava.api.model.Bind;
+import com.github.dockerjava.api.model.Volume;
+import org.testcontainers.DockerClientFactory;
 import org.testcontainers.containers.GenericContainer;
 
 /**
@@ -60,7 +61,13 @@ class CrashRecoveryTest {
     private final List<GenericContainer<?>> 띄운것 = new ArrayList<>();
     private final List<RedisClient> 클라이언트 = new ArrayList<>();
     private final List<StatefulRedisConnection<String, String>> 연결 = new ArrayList<>();
-    private Path dataDir;
+    /**
+     * <b>호스트 바인드 마운트를 안 쓴다.</b> redis 엔트리포인트가 {@code /data} 를
+     * {@code chown} 해 버려서 호스트 사용자가 디렉터리를 열지도 못하게 된다 —
+     * 시험이 남긴 AOF 가 임시 저장소에 그대로 쌓인다. 이름 있는 볼륨은 도커가
+     * 지운다.
+     */
+    private String volume;
 
     /**
      * <b>연결 → 클라이언트 → 컨테이너 순으로 닫는다.</b> {@link RedisClient} 는
@@ -75,13 +82,19 @@ class CrashRecoveryTest {
         연결.clear();
         클라이언트.clear();
         띄운것.clear();
+        // 컨테이너를 내려도 볼륨은 남는다. 안 지우면 돌릴 때마다 쌓인다.
+        if (volume != null) {
+            DockerClientFactory.instance().client().removeVolumeCmd(volume).exec();
+            volume = null;
+        }
     }
 
     /** 같은 데이터 디렉터리를 물린 레디스. 컨테이너가 바뀌어도 AOF 는 남는다. */
     private StatefulRedisConnection<String, String> 레디스를_띄운다() {
         GenericContainer<?> container = new GenericContainer<>(RedisContainerSupport.IMAGE)
                 .withExposedPorts(6379)
-                .withFileSystemBind(dataDir.toString(), "/data", BindMode.READ_WRITE)
+                .withCreateContainerCmdModifier(cmd -> cmd.getHostConfig()
+                        .withBinds(new Bind(volume, new Volume("/data"))))
                 .withCommand("redis-server", "--appendonly", "yes",
                         "--appendfsync", "everysec", "--dir", "/data");
         container.start();
@@ -107,13 +120,15 @@ class CrashRecoveryTest {
     /**
      * 전원이 끊긴 상태를 재현한다 — 아직 {@code fsync} 안 된 AOF 꼬리가 날아간다.
      *
-     * <p>파일이 {@code redis} 소유 0700 이라 호스트에서 못 건드린다. 같은
-     * 디렉터리를 물린 컨테이너를 root 로 띄워 자른다.
+     * <p>파일이 {@code redis} 소유 0700 이라 밖에서 못 건드린다. 같은 볼륨을
+     * 물린 컨테이너를 root 로 띄워 자른다.
      */
     private void AOF_꼬리를_자른다(double 남길비율) {
         try (GenericContainer<?> helper = new GenericContainer<>(RedisContainerSupport.IMAGE)
-                .withFileSystemBind(dataDir.toString(), "/data", BindMode.READ_WRITE)
-                .withCreateContainerCmdModifier(cmd -> cmd.withUser("root"))
+                .withCreateContainerCmdModifier(cmd -> {
+                    cmd.withUser("root");
+                    cmd.getHostConfig().withBinds(new Bind(volume, new Volume("/data")));
+                })
                 .withCommand("tail", "-f", "/dev/null")) {
             helper.start();
             // AOF 재작성이 일어나면 incr 파일이 여럿이다. 그때 아래 명령들은
@@ -185,8 +200,9 @@ class CrashRecoveryTest {
 
     @Test
     @DisplayName("kill_9_후_재기동해도_순서가_역행하지_않는다")
-    void kill_9_후_재기동해도_순서가_역행하지_않는다() throws IOException {
-        dataDir = Files.createTempDirectory("crash");
+    void kill_9_후_재기동해도_순서가_역행하지_않는다() {
+        volume = "cy-crash-" + UUID.randomUUID();
+        DockerClientFactory.instance().client().createVolumeCmd().withName(volume).exec();
 
         var before = 레디스를_띄운다();
         등록한다(before);
@@ -215,8 +231,9 @@ class CrashRecoveryTest {
 
     @Test
     @DisplayName("전원이_끊겨_유실된_사람은_NOT_QUEUED를_받는다")
-    void 전원이_끊겨_유실된_사람은_NOT_QUEUED를_받는다() throws IOException {
-        dataDir = Files.createTempDirectory("crash");
+    void 전원이_끊겨_유실된_사람은_NOT_QUEUED를_받는다() {
+        volume = "cy-crash-" + UUID.randomUUID();
+        DockerClientFactory.instance().client().createVolumeCmd().withName(volume).exec();
 
         var before = 레디스를_띄운다();
         Map<String, Long> 등록한score = 등록한다(before);
@@ -254,9 +271,11 @@ class CrashRecoveryTest {
         assertThat(잃음수)
                 .withFailMessage("유실이 %d 명뿐이다 — 꼬리 절단이 의도한 구간에 안 닿았다", 잃음수)
                 .isGreaterThan(VOLATILE / 4);
-        // 앞쪽(fsync 된 구간)까지 잘렸다면 절단 지점이 너무 앞이다.
-        assertThat(잃음수)
-                .withFailMessage("유실이 %d 명이다 — 확실히 남겼어야 할 구간까지 잘렸다", 잃음수)
-                .isLessThanOrEqualTo(VOLATILE);
+        // **절단 지점이 의도한 구간인지 본다.** fsync 된 앞쪽까지 잘렸다면
+        // 유실 수만 보고는 "많이 잘렸다" 로 읽혀 구분이 안 된다.
+        assertThat(after.sync().zrange(QUEUE, 0, -1))
+                .withFailMessage("확실히 남겼어야 할 구간까지 잘렸다")
+                .contains("keep0", "keep" + (DURABLE - 1))
+                .hasSizeGreaterThanOrEqualTo(DURABLE);
     }
 }

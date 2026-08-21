@@ -1,6 +1,10 @@
 plugins {
     id 'java'
     id 'jacoco'
+    // 식별자가 ASCII 영문인지는 파서가 볼 일이다. 정규식으로 선언을 고르면
+    // 어노테이션·수식어·줄바꿈이 조금만 달라도 새거나 무관한 것을 문다.
+    id 'checkstyle'
+    id 'codenarc'
     // 도메인 한정. 어댑터까지 돌리면 시간이 폭발하고, 정작 지켜야 할 곳의
     // 신호가 묻힌다 (Phase 2 Goal — 생존 ≤ 10%)
     id 'info.solidsoft.pitest' version '1.15.0'
@@ -253,3 +257,39 @@ pitest {
     pitestVersion = '1.25.9'
     junit5PluginVersion = '1.2.3'
 }
+
+// ── 식별자 규칙 ────────────────────────────────────────────────────────────
+checkstyle {
+    toolVersion = '14.0.0'
+    // 위반이 있으면 빌드를 세운다. 보고만 하면 아무도 안 본다.
+    ignoreFailures = false
+    maxWarnings = 0
+}
+
+// 시험은 타입 이름만 본다. 시험 메서드 이름과 헬퍼는 한글 문장이라야 무엇을
+// 보장하는지 읽힌다 — 경계는 파일이 아니라 선언 종류다.
+tasks.named('checkstyleTest') {
+    configFile = file('config/checkstyle/checkstyle-test.xml')
+}
+tasks.named('checkstyleTestFixtures') {
+    configFile = file('config/checkstyle/checkstyle-test.xml')
+}
+
+codenarc {
+    toolVersion = '4.0.0'
+    configFile = file('config/codenarc/codenarc.groovy')
+    ignoreFailures = false
+}
+
+// **빌드 스크립트는 소스셋에 없다.** 그래서 따로 태스크를 만들어 태운다 —
+// 안 태우면 build.gradle 이 어떤 검사도 안 보는 상태로 남는다.
+tasks.register('codenarcBuildScripts', org.gradle.api.plugins.quality.CodeNarc) {
+    description = '빌드 스크립트 식별자 검사'
+    group = 'verification'
+    source = fileTree(projectDir) {
+        include '*.gradle'
+        include 'gradle/**/*.gradle'
+    }
+    compilationClasspath = files()
+}
+tasks.named('check') { dependsOn 'codenarcBuildScripts' }

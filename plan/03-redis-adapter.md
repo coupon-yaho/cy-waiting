@@ -117,8 +117,8 @@ redis.call('SET', KEYS[2], t, 'EX', 86400)
 ## 3. 키 스킴 — 샤딩까지 내다본 확정
 
 ```
-S >  1:   queue:{cid:s}   maxscore:{cid:s}   admitted:{cid:s}   grace:{cid:s}   alive:{cid:s}:{member}
-S == 1:   queue:{cid}     maxscore:{cid}     admitted:{cid}     grace:{cid}     alive:{cid}:{member}
+S >  1:   queue:{cid:s}   maxscore:{cid:s}   admitted:{cid:s}   grace:{cid:s}   alive:{cid:s}
+S == 1:   queue:{cid}     maxscore:{cid}     admitted:{cid}     grace:{cid}     alive:{cid}
 
 전역:     gw:snapshot      gw:instances      scheduler:leader    gw:tunables
           coupons:active   coupon:policy     capacity:coupon-svc:{version}
@@ -420,8 +420,10 @@ coupon:policy  JSON. `pcall(cjson.decode, …)` 로 읽고 실패는 기본값 (
 - **선행** T3.4.1
 
 1. **RED** `등록하면_생존_키가_TTL과_함께_생긴다`
-2. **GREEN** `SET alive:{cid}:{member} 1 EX <ttl>`
-3. **완료** 생존 키가 주입된 TTL 로 생긴다 — 스크립트에 값을 박지 않는다
+2. **GREEN** `ZADD alive:{cid} <만료시각> <member>` — 쿠폰당 ZSET 하나다.
+   문자열 키 하나로 두면 **한 사람의 폴링이 전원을 살리고 만료되면 전원이
+   한꺼번에 죽는다**
+3. **완료** 생존 신호의 score 가 주입된 TTL 로 찍힌다 — 스크립트에 값을 박지 않는다
 
 #### T3.4.5 · 반환 형식
 
@@ -557,7 +559,7 @@ coupon:policy  JSON. `pcall(cjson.decode, …)` 로 읽고 실패는 기본값 (
 - **선행** T3.4.4
 
 1. **RED** `생존_키가_없는_앞부분_항목이_제거된다`
-2. **GREEN** 앞에서 K 개를 훑어 `alive` 부재면 `ZREM`
+2. **GREEN** 앞에서 K 개를 훑어 `alive` 의 score 가 없거나 지났으면 `ZREM`
 3. **RED** `생존_키가_있으면_건드리지_않는다`
 4. **GREEN** 존재 확인
 5. **완료** 생존 키 없는 앞부분 K 개만 제거된다. 있는 항목은 그대로

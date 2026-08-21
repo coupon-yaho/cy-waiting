@@ -44,6 +44,12 @@ public final class CouponStates {
         return CouponState.unknown();
     }
 
+
+    /** 운영자가 껐는데 줄이 아직 남아 있다 — 붐비는 쿠폰을 끄면 생긴다. */
+    public static CouponState offWithQueue(long credit, long remainingStock, long waiting) {
+        return CouponState.offWithQueue(credit, remainingStock, waiting);
+    }
+
     private CouponStates() {
     }
 }

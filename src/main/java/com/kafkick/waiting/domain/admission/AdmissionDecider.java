@@ -67,18 +67,32 @@ public class AdmissionDecider {
                     : AdmissionDecision.RETRY_TOKEN;
         }
 
-        // 3 — 운영자가 껐다. 붐비든 말든 줄을 안 세운다.
-        if (s.mode() == QueueMode.OFF) {
-            return AdmissionDecision.PASS_BYPASS;
-        }
-
+        // **줄의 존재는 정책보다 먼저 본다.** mode 는 사람이 고른 값이고
+        // waiting 은 기계가 관측한 값이라 서로 독립이다 — 어긋난 조합이
+        // 실제로 생긴다.
         boolean hasQueue = s.waiting() > 0 || req.justEnqueued();
 
-        // 4 — 낡았지만 줄이 비었다. 밀어낼 사람이 없으니 상한 안에서 통과.
+        // 3 — 낡았지만 줄이 비었다. 밀어낼 사람이 없으니 상한 안에서 통과.
+        //
+        // **꺼진 쿠폰보다 앞이다.** 낡은 구간은 상태를 모르는 구간이고 그래서
+        // 상한이 있다. 뒤에 두면 꺼진 쿠폰만 무제한으로 뒷단에 꽂혀 그 상한이
+        // 있으나 마나가 된다.
         if (req.dataStale() && !hasQueue) {
             return limiter.tryAcquire(GLOBAL_KEY, globalCap(req), req.epochSecond())
                     ? AdmissionDecision.PASS_FAIL_OPEN
                     : AdmissionDecision.REJECT_OVERLOAD;
+        }
+
+        // 4 — 운영자가 껐다. **다만 줄이 비었을 때만이다.**
+        //
+        // 줄이 남아 있는데 우회시키면 신규 유입이 그 줄을 통째로 추월하고
+        // 재고까지 먼저 먹는다 — 6번이 낡은 스냅샷에서 막은 것을 여기서
+        // 그대로 뚫는 셈이다 (불변식 4).
+        //
+        // `justEnqueued` 를 포함한다. waiting 이 아직 0 인데 이 요청이 방금
+        // 줄에 들어갔으면, 우회시킬 때 자기가 방금 선 줄을 자기가 추월한다.
+        if (s.mode() == QueueMode.OFF && !hasQueue) {
+            return AdmissionDecision.PASS_BYPASS;
         }
 
         // 5 — 줄 자체가 꽉 찼다. 큐로 보내는 모든 줄보다 앞에 있어야 한다.

@@ -174,12 +174,21 @@ public record CouponState(
         return new CouponState(QueueMode.ADAPTIVE, RuntimeState.CLOSED, 0, 0, waiting, 1.0);
     }
 
+    /**
+     * 운영자가 껐는데 <b>줄이 아직 남아 있다.</b> 붐비는 쿠폰의 대기열을 끄면
+     * 이 상태가 된다 — {@code mode} 와 {@code waiting} 은 서로 독립이다.
+     */
+    public static CouponState offWithQueue(long credit, long remainingStock, long waiting) {
+        return new CouponState(QueueMode.OFF, RuntimeState.QUEUEING,
+                credit, remainingStock, waiting, 1.0);
+    }
+
     /** 운영자가 무조건 줄을 세우기로 했다. 한산해도 대기열을 태운다. */
     public static CouponState always(long remainingStock) {
         return new CouponState(QueueMode.ALWAYS, RuntimeState.IDLE, 0, remainingStock, 0, 1.0);
     }
 
-    /** 운영자가 대기열을 껐다. 붐비든 말든 줄을 세우지 않는다. */
+    /** 운영자가 대기열을 껐다. 줄이 비어 있는 동안 줄을 세우지 않는다. */
     public static CouponState off(long remainingStock) {
         return new CouponState(QueueMode.OFF, RuntimeState.IDLE, 0, remainingStock, 0, 1.0);
     }

@@ -105,7 +105,15 @@ public final class SnapshotRefresher {
                 .doOnError(e -> 진입("스냅샷 갱신 실패 — 들고 있던 것을 유지한다: {}",
                         e.toString()))
                 .onErrorResume(e -> Mono.empty())
-                .then();
+                .then()
+                // **한 바퀴 돈 것은 성패와 무관하다.** 성공했을 때만 찍으면
+                // fetchStale 이 다시 "받아왔는가" 가 되고, 레디스가 모두에게
+                // 느린 순간 전 노드가 동시에 liveness 실패로 재기동한다.
+                //
+                // 오류는 바로 위에서 이미 완료로 바뀌었고, 버려진 스냅샷도
+                // 완료로 온다 — 그래서 여기 한 자리면 세 경로를 다 덮는다.
+                // 취소는 루프가 뜯긴 것이지 돈 것이 아니라, 신호가 안 온다.
+                .doOnSuccess(ignored -> holder.루프가_돌았다());
     }
 
     /**

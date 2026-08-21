@@ -233,17 +233,22 @@ class GatewayHeartbeatLoopTest {
     }
 
     @Test
-    @DisplayName("두_번_시작해도_스레드를_새로_안_만든다")
-    void 두_번_시작해도_스레드를_새로_안_만든다() {
-        // 스케줄러를 먼저 만들면 두 번째 호출이 새 스레드를 만들고 참조를
-        // 덮어쓴 뒤 반환해, 원래 스레드가 영영 산다.
+    @DisplayName("두_번_시작해도_구독은_하나다")
+    void 두_번_시작해도_구독은_하나다() {
+        // **isRunning 만 보면 구독이 하나 더 생겨도 통과한다.** 스케줄러를 재진입
+        // 검사보다 먼저 만들면 두 번째 호출이 스레드를 하나 더 만들고 참조를
+        // 덮어써, 원래 스레드가 영영 산다. 구독 수를 직접 센다.
+        AtomicInteger 구독 = new AtomicInteger();
         VirtualTimeScheduler 가상 = VirtualTimeScheduler.create();
         GatewayHeartbeatLoop loop = GatewayHeartbeatLoop.of(
-                () -> Mono.just(1), () -> Mono.empty(), n -> { }, INTERVAL, LEAVE_TIMEOUT);
+                () -> Mono.just(1).doOnSubscribe(sub -> 구독.incrementAndGet()),
+                () -> Mono.empty(), n -> { }, INTERVAL, LEAVE_TIMEOUT);
 
         loop.start(가상);
         loop.start(가상);
 
+        // 한 판만 돌렸으니 구독도 하나여야 한다. 둘이면 루프가 두 개다.
+        assertThat(구독.get()).isEqualTo(1);
         assertThat(loop.isRunning()).isTrue();
         loop.stop();
         assertThat(loop.isRunning()).isFalse();

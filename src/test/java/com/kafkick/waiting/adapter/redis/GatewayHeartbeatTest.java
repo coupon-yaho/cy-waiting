@@ -165,15 +165,31 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
         // **1970년 값을 넣으면 임계가 30이든 30억이든 결과가 같다.** 그러면
         // 이 시험은 "나이 판정이 있는가" 까지만 재고 임계 자체는 못 잰다.
         // 서버 시각을 받아 경계 양쪽을 박는다.
-        // **기준 시각을 마지막에 받는다.** 먼저 받아 두면 그 뒤 왕복 사이에
-        // 서버 초가 넘어가 경계에 걸친 항목의 나이가 한 칸 밀린다. 임계를 넉넉히
-        // 잡아 왕복 지연을 흡수한다 — 재는 것은 경계지 지연이 아니다.
-        String reapAfter = "60";
-        long now = stamped(beat("a"));
-        redis.<String, String>opsForHash().put(INSTANCES, "edge", String.valueOf(now - 60)).block(WAIT);
-        redis.<String, String>opsForHash().put(INSTANCES, "over", String.valueOf(now - 61)).block(WAIT);
+        // **왕복 사이에 서버 초가 넘어가면 경계가 한 칸 밀린다.** 그러면 나이
+        // 60 으로 심은 항목이 61 이 되어 죽고, 시험이 간헐적으로 깨진다.
+        // 넘어가지 않은 판만 골라서 잰다 — 재는 것은 경계지 왕복 지연이 아니다.
+        long reapAfter = 60;
+        long alive = 0;
+        boolean measured = false;
+        for (int attempt = 0; attempt < 20; attempt++) {
+            redis.delete(INSTANCES).block(WAIT);
+            long anchor = stamped(beat("a"));
+            redis.<String, String>opsForHash()
+                    .put(INSTANCES, "edge", String.valueOf(anchor - reapAfter)).block(WAIT);
+            redis.<String, String>opsForHash()
+                    .put(INSTANCES, "over", String.valueOf(anchor - reapAfter - 1)).block(WAIT);
 
-        assertThat(alive(beat("a", reapAfter))).isEqualTo(2);
+            List<Object> r = beat("a", String.valueOf(reapAfter));
+            if (stamped(r) == anchor) {
+                alive = alive(r);
+                measured = true;
+                break;
+            }
+        }
+        assertThat(measured).withFailMessage("초 경계를 안 넘긴 판이 없었다").isTrue();
+
+        // 나이가 임계와 같으면 살고, 한 칸 넘으면 죽는다.
+        assertThat(alive).isEqualTo(2);
         assertThat(redis.<String, String>opsForHash().hasKey(INSTANCES, "edge").block(WAIT)).isTrue();
         assertThat(redis.<String, String>opsForHash().hasKey(INSTANCES, "over").block(WAIT)).isFalse();
     }

@@ -101,12 +101,14 @@ while IFS= read -r -d '' file; do
             }
             # **제네릭 타입 인자도 타입 이름이다.** register<한글타입>("x") 처럼
             # 소비만 하면 그 자리로 샌다.
+            # **안쪽을 지우고 다시 훑는다.** 뒤로 건너뛰면 바깥 타입이 통째로
+            # 빠진다 — register<한글바깥<Inner>> 의 바깥이 그렇게 샜다.
             line = out
             while (match(line, /<[^<>]*>/)) {
                 arg = substr(line, RSTART + 1, RLENGTH - 2)
                 m = split(arg, parts, /[^A-Za-z0-9_$\200-\377]+/)
                 for (t = 1; t <= m; t++) if (parts[t] != "") report(parts[t])
-                line = substr(line, RSTART + RLENGTH)
+                line = substr(line, 1, RSTART - 1) " " substr(line, RSTART + RLENGTH)
             }
 
             # 타입 있는 선언 — Groovy 는 def 없이도 된다. 줄 맨 앞만 본다

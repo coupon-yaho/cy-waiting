@@ -134,6 +134,7 @@ class ClusterModeScriptTest {
                     RedisKeys.grace("c1", 1, 0),
                     RedisKeys.alive("c1", 1, 0));
             case "leader_acquire.lua", "leader_release.lua" -> List.of(RedisKeys.LEADER);
+            case "gateway_heartbeat.lua", "gateway_leave.lua" -> List.of(RedisKeys.INSTANCES);
             default -> throw new IllegalStateException("인자를 안 정한 스크립트: " + script);
         };
     }
@@ -145,6 +146,8 @@ class ClusterModeScriptTest {
             case "sweep.lua" -> List.of("10", "1000", "300", "50", "0");
             case "leader_acquire.lua" -> List.of("node-1", "2000");
             case "leader_release.lua" -> List.of("node-1");
+            case "gateway_heartbeat.lua" -> List.of("node-1", "30");
+            case "gateway_leave.lua" -> List.of("node-1");
             default -> throw new IllegalStateException("인자를 안 정한 스크립트: " + script);
         };
     }

@@ -41,8 +41,10 @@ EXCEPTION_LOOKBACK=3
 scan() {
     local rule=$1 pattern=$2 exclude=${3:-}
     local matches
-    matches=$(printf '%s\n' "$code" | grep -E "$pattern" || true)
-    [[ -n "$exclude" ]] && matches=$(printf '%s\n' "$matches" | grep -vE "$exclude" || true)
+    # **LC_ALL=C 로 고정한다.** 대괄호 범위는 콜레이션 순서를 따르므로 로케일마다
+    # 다르게 문다. 실제로 [가-힣] 이 ko_KR.UTF-8 에서만 먹어 CI 에서만 샜다.
+    matches=$(printf '%s\n' "$code" | LC_ALL=C grep -E "$pattern" || true)
+    [[ -n "$exclude" ]] && matches=$(printf '%s\n' "$matches" | LC_ALL=C grep -vE "$exclude" || true)
 
     local out="" m n from context
     while IFS= read -r m; do
@@ -89,14 +91,18 @@ if [[ "$is_test" == false ]]; then
 fi
 
 # ── JS-11 운영 코드 식별자는 영문 ─────────────────────────────────────────────
-# 주석·문자열을 지운 뒤 한글이 남으면 그건 식별자다. 로그 메시지는 LG-9 가 한글을
-# 요구하고 주석은 JS-11 자신이 한글을 요구하므로, 둘 다 지우고 봐야 한다.
+# 주석·문자열을 지운 뒤 ASCII 밖 글자가 남으면 그건 식별자다. 로그 메시지는 LG-9 가
+# 한글을 요구하고 주석은 JS-11 자신이 한글을 요구하므로, 둘 다 지우고 봐야 한다.
 # 테스트는 TS-2 가 한글 이름을 요구하므로 제외한다.
+#
+# **한글 범위를 쓰지 않는다.** [가-힣] 은 콜레이션 의존이라 ko_KR.UTF-8 에서만
+# 물었고 C.UTF-8 인 CI 에서는 통째로 샜다. LC_ALL=C 에서 0x80~0xFF 는 인쇄 가능
+# ASCII 도 제어문자도 아니므로, 아래 한 줄이 한글뿐 아니라 모든 비 ASCII 를 잡는다.
 if [[ "$is_test" == false ]]; then
     saved_code=$code
     code=$(printf '%s\n' "$code" | sed 's/"\(\\.\|[^"\\]\)*"/""/g')
-    report "JS-11" "운영 코드 식별자는 영문 — 한글은 주석·Javadoc·로그 메시지에만" \
-        "$(scan 'JS-11' '^[0-9]+:.*[가-힣]')"
+    report "JS-11" "운영 코드 식별자는 ASCII 영문 — 한글은 주석·Javadoc·로그 메시지에만" \
+        "$(scan 'JS-11' '^[0-9]+:.*[^[:cntrl:] -~]')"
     code=$saved_code
 fi
 

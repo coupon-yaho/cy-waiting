@@ -15,6 +15,14 @@ trap 'rm -rf "$tmp"' EXIT
 pass=0
 fail=0
 
+# **로케일을 바꿔 같은 검사를 다시 돌린다.** 대괄호 범위는 콜레이션 순서를 따라서
+# 개발자 로케일(ko_KR.UTF-8)에서만 물고 CI(C.UTF-8)에서는 조용히 새는 일이 실제로
+# 있었다. 로케일에 기대는 판정은 로컬 통과가 아무 뜻이 없다.
+locale_case() {   # 로케일 hook 내용 파일명 기대 설명
+    local loc=$1; shift
+    LC_ALL="$loc" file_case "$@"
+}
+
 file_case() {   # hook 내용 파일명 기대(block|allow) 설명
     local hook=$1 content=$2 name=$3 expect=$4 label=$5
     local path="$tmp/$name"
@@ -75,6 +83,22 @@ file_case check-java.sh 'class A {
         System.out.println("한글 로그 메시지");
     }
 }' 'src/main/java/H3.java' allow 'JS-11 주석·문자열은 오탐 아님'
+locale_case C.UTF-8 check-java.sh 'class A {
+    boolean 낡았나() {
+        return true;
+    }
+}' 'src/main/java/H4.java' block 'JS-11 로케일이 달라도 문다 (회귀)'
+locale_case en_US.UTF-8 check-java.sh 'class A {
+    private record 상태(int x) {
+    }
+}' 'src/main/java/H5.java' block 'JS-11 영어 로케일에서도 문다 (회귀)'
+locale_case C.UTF-8 check-java.sh 'class A {
+    // 한글 주석
+    void log() {
+        System.out.println("한글 로그");
+    }
+}' 'src/main/java/H6.java' allow 'JS-11 로케일 바뀌어도 주석·문자열은 오탐 아님'
+
 file_case check-java.sh 'class A {
     private class Inner {
     }

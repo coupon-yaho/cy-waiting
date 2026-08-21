@@ -45,9 +45,12 @@ class QueueDerivedTest {
     @DisplayName("곱셈이_넘치면_최대값으로_막는다")
     void 곱셈이_넘치면_최대값으로_막는다() {
         // 넘치면 음수가 되어 큐 상한이 사실상 0 — 전원 거절이 된다.
-        CouponState s = CouponState.queueing(Long.MAX_VALUE / 2, 500, 3000);
+        // **오버플로를 credit 이 아니라 maxEtaSec 으로 낸다.** 곱이
+        // credit * maxEtaSec 이라 같은 분기를 치면서, 쿠폰 상태 자체는
+        // 도달 가능한 값으로 남는다 (TS-3). 극단값은 상태가 아니라 인자에 둔다.
+        CouponState s = CouponState.queueing(3000, 500, 4000);
 
-        assertThat(s.queueCapacity(1000)).isEqualTo(Long.MAX_VALUE);
+        assertThat(s.queueCapacity(Long.MAX_VALUE)).isEqualTo(Long.MAX_VALUE);
     }
 
     @Test

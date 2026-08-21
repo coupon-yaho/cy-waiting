@@ -47,7 +47,9 @@ void 스케줄러가_멎어도_줄_선_사람을_추월시키지_않는다() { }
 private static CouponState state(QueueMode mode, RuntimeState runtime,
                                  int credit, long stock, long waiting, double scale)
 
-// 올바름 — 각 팩토리가 하나의 도달 가능한 상태만 만든다
+// 올바름 — 각 팩토리가 도달 가능한 상황 하나씩만 만든다
+//          (런타임을 유도하는 팩토리는 상태가 둘일 수 있다. 그때는 경계를
+//           팩토리에 대고 잰다 — 생성자 단언은 동어반복이다)
 CouponStates.idle(long stock)
 CouponStates.queueing(int credit, long stock, long waiting)
 CouponStates.draining(int credit, long stock, long waiting)

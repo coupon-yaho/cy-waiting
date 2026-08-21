@@ -11,20 +11,17 @@ tools: Read, Grep, Glob, Bash
 
 - `ai/rules/20-design.md` — 순수성(DS-1), 도달 불가 상태 금지(DS-2)
 - `ai/rules/70-packages.md` — PK·domain, PK·admission, PK·allocation
-- `plan/02-domain-core.md` — 불변식 I1~I6(3.6절), 판정 순서(3.5절)
+- `plan/02-domain-core.md` — 불변식 표(3.6절, I1·I1'·I2·I3·I3'·I4·I5·I6), 판정 순서(3.5절)
 
 ## 반드시 확인할 것
 
 ### 1. 불변식이 타입으로 강제되는가
 
-| ID | 불변식 |
-|---|---|
-| I1 | `runtime == IDLE ⟹ credit == 0` |
-| I2 | `runtime == CLOSED ⟹ remainingStock == 0` |
-| I3 | `runtime == DRAINING ⟹ credit >= waiting` |
-| I4 | `waiting == 0 ⟹ runtime ∈ {IDLE, CLOSED}` |
-| I5 | 표시 순위는 단조 비증가 |
-| I6 | `pollScale >= 1.0` |
+목록은 **`plan/02-domain-core.md` 3.6** 하나에 있다. 여기 옮겨 적지 않는다.
+
+사본을 들고 있으면 **이 에이전트가 낡은 표로 검토한다.** 실제로 `I1'` 이 코드에만
+있고 사본과 원본 **양쪽 모두에 없던** 전례가 있다 — 사본끼리는 맞아떨어져서 아무도
+못 알아챘다. 사본이 하나 줄면 코드와 대조할 곳도 하나로 준다.
 
 **I1이 이 프로젝트에서 가장 중요하다.** `IDLE`과 `credit==0`은 독립 값이 아니라
 같은 원인(`waiting == 0`)에서 나온다. 이걸 잊고 `credit`으로 통과 상한을 계산하면

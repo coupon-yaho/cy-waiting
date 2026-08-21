@@ -33,12 +33,12 @@ class CouponStateBoundaryTest {
     @Test
     @DisplayName("최대_대기_시간이_0이면_큐_상한도_0이다")
     void 최대_대기_시간이_0이면_큐_상한도_0이다() {
-        assertThat(CouponStates.queueing(100, 500, 10).queueCapacity(0)).isZero();
+        assertThat(CouponStates.queueing(100, 500, 1000).queueCapacity(0)).isZero();
     }
 
     @Test
     @DisplayName("최대_대기_시간이_1이면_credit_만큼_받는다")
     void 최대_대기_시간이_1이면_credit_만큼_받는다() {
-        assertThat(CouponStates.queueing(100, 500, 10).queueCapacity(1)).isEqualTo(100);
+        assertThat(CouponStates.queueing(100, 500, 1000).queueCapacity(1)).isEqualTo(100);
     }
 }

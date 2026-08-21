@@ -43,7 +43,7 @@ class SnapshotRefresherTest {
         SnapshotHolder holder = 홀더(clock);
         SnapshotRefresher refresher = SnapshotRefresher.of(holder, () -> Mono.just(정상));
 
-        StepVerifier.create(refresher.한번()).verifyComplete();
+        StepVerifier.create(refresher.once()).verifyComplete();
 
         assertThat(holder.current().coupons()).containsOnlyKeys("c1");
         assertThat(holder.isFetchStale()).isFalse();
@@ -60,8 +60,8 @@ class SnapshotRefresherTest {
                         ? Mono.just(정상)
                         : Mono.error(new IllegalStateException("레디스가 끊겼다")));
 
-        StepVerifier.create(refresher.한번()).verifyComplete();
-        StepVerifier.create(refresher.한번()).verifyComplete();
+        StepVerifier.create(refresher.once()).verifyComplete();
+        StepVerifier.create(refresher.once()).verifyComplete();
 
         // 판정 재료는 그대로다. 낡았을 뿐이다 — 그건 홀더가 알린다.
         assertThat(holder.current().coupons()).containsOnlyKeys("c1");
@@ -82,7 +82,7 @@ class SnapshotRefresherTest {
         // **루프로 본다.** 한번() 을 시험이 두 번 부르면 "두 번 불렸다" 는
         // 시험 자신이 만든 사실이라, 실패가 루프를 끊는지 아무것도 못 본다.
         VirtualTimeScheduler 가상 = VirtualTimeScheduler.create();
-        Disposable 구독 = refresher.루프(Duration.ofMillis(10), 가상).subscribe();
+        Disposable 구독 = refresher.loop(Duration.ofMillis(10), 가상).subscribe();
         try {
             assertThat(호출).hasValue(1);
             가상.advanceTimeBy(Duration.ofMillis(10));
@@ -108,11 +108,11 @@ class SnapshotRefresherTest {
                         ? Mono.just(정상)
                         : Mono.error(new IllegalStateException("계속 실패")));
 
-        StepVerifier.create(refresher.한번()).verifyComplete();
+        StepVerifier.create(refresher.once()).verifyComplete();
         assertThat(holder.isFetchStale()).isFalse();
 
         clock.앞으로(Duration.ofSeconds(3));
-        StepVerifier.create(refresher.한번()).verifyComplete();
+        StepVerifier.create(refresher.once()).verifyComplete();
 
         assertThat(holder.isFetchStale()).isFalse();
     }
@@ -130,11 +130,11 @@ class SnapshotRefresherTest {
                         ? Mono.just(정상)
                         : Mono.error(new IllegalStateException("계속 실패")));
 
-        StepVerifier.create(refresher.한번()).verifyComplete();
+        StepVerifier.create(refresher.once()).verifyComplete();
         assertThat(holder.isDataStale()).isFalse();
 
         clock.앞으로(Duration.ofSeconds(6));
-        StepVerifier.create(refresher.한번()).verifyComplete();
+        StepVerifier.create(refresher.once()).verifyComplete();
 
         assertThat(holder.isDataStale()).isTrue();
     }
@@ -157,10 +157,10 @@ class SnapshotRefresherTest {
         SnapshotRefresher refresher = SnapshotRefresher.of(holder,
                 () -> Mono.just(호출.incrementAndGet() == 1 ? 정상 : 판이_갈린_스냅샷));
 
-        StepVerifier.create(refresher.한번()).verifyComplete();
+        StepVerifier.create(refresher.once()).verifyComplete();
 
         clock.앞으로(Duration.ofSeconds(3));
-        StepVerifier.create(refresher.한번()).verifyComplete();
+        StepVerifier.create(refresher.once()).verifyComplete();
 
         assertThat(holder.isFetchStale()).isFalse();
     }
@@ -178,8 +178,8 @@ class SnapshotRefresherTest {
         SnapshotRefresher refresher = SnapshotRefresher.of(holder,
                 () -> 호출.incrementAndGet() == 1 ? Mono.just(정상) : Mono.just(Map.of()));
 
-        StepVerifier.create(refresher.한번()).verifyComplete();
-        StepVerifier.create(refresher.한번()).verifyComplete();
+        StepVerifier.create(refresher.once()).verifyComplete();
+        StepVerifier.create(refresher.once()).verifyComplete();
 
         assertThat(holder.current().coupons()).containsOnlyKeys("c1");
     }
@@ -201,8 +201,8 @@ class SnapshotRefresherTest {
                 () -> 호출.incrementAndGet() == 1 ? Mono.just(정상)
                         : Mono.just(판이_다른_스냅샷));
 
-        StepVerifier.create(refresher.한번()).verifyComplete();
-        StepVerifier.create(refresher.한번()).verifyComplete();
+        StepVerifier.create(refresher.once()).verifyComplete();
+        StepVerifier.create(refresher.once()).verifyComplete();
 
         assertThat(holder.current().coupons()).containsOnlyKeys("c1");
     }
@@ -226,7 +226,7 @@ class SnapshotRefresherTest {
         });
         VirtualTimeScheduler 가상 = VirtualTimeScheduler.create();
 
-        Disposable 구독 = refresher.루프(Duration.ofMillis(10), 가상).subscribe();
+        Disposable 구독 = refresher.loop(Duration.ofMillis(10), 가상).subscribe();
         try {
             // 시간을 안 돌리면 첫 판만 돈다.
             assertThat(호출).hasValue(1);
@@ -252,7 +252,7 @@ class SnapshotRefresherTest {
                 () -> 호출.incrementAndGet() == 1 ? Mono.just(정상) : Mono.never(),
                 Duration.ofMillis(50));
         // 성공 한 번으로 채워 둔다 — 안 채우면 빈 것을 확인해도 아무 뜻이 없다.
-        refresher.한번().block(Duration.ofSeconds(5));
+        refresher.once().block(Duration.ofSeconds(5));
 
         // **먼저 낡혀 둔다.** 안 그러면 타임아웃 뒤의 단언이 첫 성공 덕에
         // 통과해 버려, 하트비트를 지워도 시험이 안 깨진다.
@@ -260,7 +260,7 @@ class SnapshotRefresherTest {
         assertThat(holder.isFetchStale()).isTrue();
 
         VirtualTimeScheduler 가상 = VirtualTimeScheduler.create();
-        StepVerifier.create(refresher.한번(가상))
+        StepVerifier.create(refresher.once(가상))
                 .then(() -> 가상.advanceTimeBy(Duration.ofMillis(60)))
                 .verifyComplete();
 
@@ -291,7 +291,7 @@ class SnapshotRefresherTest {
                 Duration.ofSeconds(30));   // 매달린 판이 스스로 포기하지 않게
 
         VirtualTimeScheduler 가상 = VirtualTimeScheduler.create();
-        Disposable 구독 = refresher.루프(Duration.ofMillis(100), 가상).subscribe();
+        Disposable 구독 = refresher.loop(Duration.ofMillis(100), 가상).subscribe();
         try {
             가상.advanceTimeBy(Duration.ofMillis(250));   // 1판 성공, 2판은 매달린다
             assertThat(holder.isFetchStale()).isFalse();

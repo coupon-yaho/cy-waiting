@@ -61,6 +61,21 @@ file_case check-java.sh 'class A {
     }
 }' 'src/main/java/E.java' block 'JS-13 private static 메서드'
 file_case check-java.sh 'class A {
+    boolean 낡았나() {
+        return true;
+    }
+}' 'src/main/java/H.java' block 'JS-11 한글 메서드명'
+file_case check-java.sh 'class A {
+    private record 상태(int x) {
+    }
+}' 'src/main/java/H2.java' block 'JS-11 한글 레코드명'
+file_case check-java.sh 'class A {
+    // 한글 주석은 통과해야 한다
+    void log() {
+        System.out.println("한글 로그 메시지");
+    }
+}' 'src/main/java/H3.java' allow 'JS-11 주석·문자열은 오탐 아님'
+file_case check-java.sh 'class A {
     private class Inner {
     }
 }' 'src/main/java/G.java' block 'JS-14 non-static 중첩'

@@ -19,7 +19,7 @@ import org.junit.jupiter.api.Test;
  */
 class SnapshotCodecTest {
 
-    private static final Instant 발행시각 = Instant.parse("2026-08-20T00:00:00Z");
+    private static final Instant publishedAtOf = Instant.parse("2026-08-20T00:00:00Z");
 
     /** 쿠폰 하나: {@code mode:runtime:credit:stock:waiting:pollScale} */
     private static Map<String, String> 해시(String... pairs) {
@@ -41,7 +41,7 @@ class SnapshotCodecTest {
 
         assertThat(s.meta().globalCredit()).isEqualTo(1000);
         assertThat(s.meta().gatewayCount()).isEqualTo(3);
-        assertThat(s.publishedAt()).isEqualTo(발행시각);
+        assertThat(s.publishedAt()).isEqualTo(publishedAtOf);
         // **레코드 전체를 본다.** 두 필드만 보면 credit·stock·pollScale 이
         // 조용히 틀려도 초록이다 — 각각 배분 몫·매진 판정·폴링 예산이다.
         assertThat(s.coupons()).containsOnlyKeys("c1");
@@ -150,10 +150,10 @@ class SnapshotCodecTest {
         // 빈 해시는 장애가 아니라 흔한 상태다 — 데이터 없는 복제본 승격,
         // 키 만료, 리더 재선출 중 재작성. 그때 성공 응답으로 들고 있던 것을
         // 덮으면 "빈 값으로 덮지 않는다" 가 실패 경로에서만 참이 된다.
-        assertThat(SnapshotCodec.create().발행된것인가(Map.of())).isFalse();
-        assertThat(SnapshotCodec.create().발행된것인가(해시("c1", "ADAPTIVE:IDLE:0:9:0:1.0")))
+        assertThat(SnapshotCodec.create().isPublished(Map.of())).isFalse();
+        assertThat(SnapshotCodec.create().isPublished(해시("c1", "ADAPTIVE:IDLE:0:9:0:1.0")))
                 .isFalse();
-        assertThat(SnapshotCodec.create().발행된것인가(해시(
+        assertThat(SnapshotCodec.create().isPublished(해시(
                 "#published", "1787184000", "c1", "ADAPTIVE:IDLE:0:9:0:1.0"))).isTrue();
     }
 

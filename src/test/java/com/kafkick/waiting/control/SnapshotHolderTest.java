@@ -110,7 +110,7 @@ class SnapshotHolderTest {
         holder.replace(스냅샷(지금.plusSeconds(10)));
 
         assertThat(holder.dataAge()).isEqualTo(Duration.ZERO);
-        assertThat(holder.시계가_앞섰나()).isTrue();
+        assertThat(holder.isClockAhead()).isTrue();
         assertThat(holder.isDataStale()).isTrue();
     }
 
@@ -126,7 +126,7 @@ class SnapshotHolderTest {
         holder.replace(스냅샷(지금));
 
         clock.앞으로(Duration.ofSeconds(30));
-        holder.루프가_돌았다();   // 시도는 했다. 못 받았을 뿐이다
+        holder.loopTicked();   // 시도는 했다. 못 받았을 뿐이다
 
         assertThat(holder.isFetchStale()).isFalse();
     }
@@ -140,7 +140,7 @@ class SnapshotHolderTest {
         MutableClock clock = MutableClock.at(지금);
         SnapshotHolder holder = SnapshotHolder.of(FETCH_STALE, DATA_STALE, clock);
         holder.replace(스냅샷(지금));
-        holder.루프가_돌았다();
+        holder.loopTicked();
 
         clock.앞으로(FETCH_STALE.plusMillis(1));
 
@@ -157,13 +157,13 @@ class SnapshotHolderTest {
         SnapshotHolder holder = SnapshotHolder.of(FETCH_STALE, DATA_STALE, clock);
 
         assertThat(holder.isFetchStale()).isTrue();
-        assertThat(holder.첫_회전_전인가()).isTrue();
+        assertThat(holder.isBeforeFirstTick()).isTrue();
 
-        holder.루프가_돌았다();
+        holder.loopTicked();
         clock.앞으로(FETCH_STALE.plusSeconds(1));
 
         assertThat(holder.isFetchStale()).isTrue();
-        assertThat(holder.첫_회전_전인가()).isFalse();
+        assertThat(holder.isBeforeFirstTick()).isFalse();
     }
 
     @Test
@@ -176,7 +176,7 @@ class SnapshotHolderTest {
         holder.replace(스냅샷(지금));
 
         clock.앞으로(Duration.ofSeconds(30));
-        holder.루프가_돌았다();
+        holder.loopTicked();
 
         assertThat(holder.tickAge()).isZero();
         assertThat(holder.fetchAge()).isEqualTo(Duration.ofSeconds(30));

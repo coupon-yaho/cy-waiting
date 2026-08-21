@@ -27,15 +27,15 @@ public final class SnapshotHolder {
      * <p>따로 두면 읽는 쪽이 새 스냅샷과 옛 시각을 짝지어 본다. 그러면 방금
      * 갱신했는데도 낡음이 되고, 그 값이 노드를 빼는 경로에 물려 있다.
      */
-    private record 상태(GatewaySnapshot snapshot, Instant fetchedAt, Instant lastTick) {
+    private record Held(GatewaySnapshot snapshot, Instant fetchedAt, Instant lastTick) {
     }
 
     /**
      * <b>락을 쓰지 않는다.</b> 읽는 쪽이 요청 경로라, 여기서 잠그면 판정마다
      * 경합이 생긴다. 참조 교체는 원자적이고 담긴 것이 전부 불변이라 족하다.
      */
-    private final AtomicReference<상태> current =
-            new AtomicReference<>(new 상태(GatewaySnapshot.EMPTY, Instant.EPOCH, null));
+    private final AtomicReference<Held> current =
+            new AtomicReference<>(new Held(GatewaySnapshot.EMPTY, Instant.EPOCH, null));
 
     public static SnapshotHolder of(Duration fetchStaleAfter, Duration dataStaleAfter,
             Clock clock) {
@@ -59,7 +59,7 @@ public final class SnapshotHolder {
      */
     public void replace(GatewaySnapshot snapshot) {
         Instant now = clock.instant();
-        current.set(new 상태(snapshot, now, now));
+        current.set(new Held(snapshot, now, now));
     }
 
     /**
@@ -69,9 +69,9 @@ public final class SnapshotHolder {
      * 장애가 전 노드 동시 이탈이 된다. 스냅샷은 앞 값을 그대로 이어야 하므로
      * 읽고 쓰는 사이에 갱신이 끼지 않게 CAS 로 돌린다.
      */
-    public void 루프가_돌았다() {
+    public void loopTicked() {
         Instant now = clock.instant();
-        current.updateAndGet(s -> new 상태(s.snapshot(), s.fetchedAt(), now));
+        current.updateAndGet(s -> new Held(s.snapshot(), s.fetchedAt(), now));
     }
 
     /**
@@ -80,7 +80,7 @@ public final class SnapshotHolder {
      * <p><b>돌다 멎은 것과 갈라 두려고 노출한다.</b> 재기동 신호로 쓰면 첫 판을
      * 못 돈 파드가 죽고 다시 떠서 또 죽는다 — 크래시 루프다.
      */
-    public boolean 첫_회전_전인가() {
+    public boolean isBeforeFirstTick() {
         return current.get().lastTick() == null;
     }
 
@@ -111,7 +111,7 @@ public final class SnapshotHolder {
      * <p><b>음수는 0 으로 본다.</b> 리더 시계가 앞서면 발행 시각이 미래로 와서
      * 나이가 음수가 되고, 그러면 {@code dataStale} 이 영영 거짓이 된다 —
      * 스케줄러가 죽어도 아무 노드가 fail-open 에 못 들어간다. 조용히 보정하지
-     * 않고 {@link #시계가_앞섰나()} 로 드러낸다.
+     * 않고 {@link #isClockAhead()} 로 드러낸다.
      */
     public Duration dataAge() {
         Duration age = Duration.between(current.get().snapshot().publishedAt(), clock.instant());
@@ -119,7 +119,7 @@ public final class SnapshotHolder {
     }
 
     /** 발행 시각이 이 노드의 현재보다 미래인가 — 시계가 갈렸다는 신호다. */
-    public boolean 시계가_앞섰나() {
+    public boolean isClockAhead() {
         return Duration.between(current.get().snapshot().publishedAt(), clock.instant()).isNegative();
     }
 
@@ -134,6 +134,6 @@ public final class SnapshotHolder {
      * fail-open 에 못 들어간다.
      */
     public boolean isDataStale() {
-        return 시계가_앞섰나() || dataAge().compareTo(dataStaleAfter) > 0;
+        return isClockAhead() || dataAge().compareTo(dataStaleAfter) > 0;
     }
 }

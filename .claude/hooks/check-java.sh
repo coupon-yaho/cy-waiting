@@ -88,6 +88,18 @@ if [[ "$is_test" == false ]]; then
             'private[[:space:]]+static[[:space:]]+(final[[:space:]]+)?(class|record|enum|interface)([[:space:]]|$)')"
 fi
 
+# ── JS-11 운영 코드 식별자는 영문 ─────────────────────────────────────────────
+# 주석·문자열을 지운 뒤 한글이 남으면 그건 식별자다. 로그 메시지는 LG-9 가 한글을
+# 요구하고 주석은 JS-11 자신이 한글을 요구하므로, 둘 다 지우고 봐야 한다.
+# 테스트는 TS-2 가 한글 이름을 요구하므로 제외한다.
+if [[ "$is_test" == false ]]; then
+    saved_code=$code
+    code=$(printf '%s\n' "$code" | sed 's/"\(\\.\|[^"\\]\)*"/""/g')
+    report "JS-11" "운영 코드 식별자는 영문 — 한글은 주석·Javadoc·로그 메시지에만" \
+        "$(scan 'JS-11' '^[0-9]+:.*[가-힣]')"
+    code=$saved_code
+fi
+
 # ── JS-14 중첩 클래스는 static ────────────────────────────────────────────────
 # 들여쓰기된 class 선언 = 중첩. 수식어가 없는 경우도 잡는다.
 #

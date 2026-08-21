@@ -112,6 +112,9 @@ if [[ "$is_test" == false ]]; then
                 two = substr($0, i, 2)
                 three = substr($0, i, 3)
                 if (txt) {                        # 텍스트 블록 안 — 줄을 넘어 이어진다
+                    # 역슬래시를 **먼저** 소비한다. 안 그러면 \""" 의 뒤 세 글자를
+                    # 종료로 보고, 남은 본문이 코드로 새어 한글이 식별자가 된다.
+                    if (c == "\\") { i += 2; continue }
                     if (three == "\"\"\"") { txt = 0; i += 3 } else { i++ }
                     continue
                 }

@@ -85,6 +85,14 @@ file_case check-java.sh 'class A {
 }' 'src/main/java/H3.java' allow 'JS-11 주석·문자열은 오탐 아님'
 file_case check-java.sh 'class A {
     String s = """
+        따옴표 셋을 이스케이프한다 \"""
+        그 뒤의 한글은 아직 문자열 안이다
+        """;
+    void ok5() {
+    }
+}' 'src/main/java/HE.java' allow 'JS-11 텍스트 블록 안 이스케이프 따옴표 (회귀)'
+file_case check-java.sh 'class A {
+    String s = """
         여러 줄에 걸친 한글 텍스트 블록
         // 주석처럼 보이는 것도 안에 있다
         """;

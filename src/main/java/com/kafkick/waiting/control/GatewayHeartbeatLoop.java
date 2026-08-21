@@ -25,11 +25,22 @@ public final class GatewayHeartbeatLoop implements SmartLifecycle {
 
     private static final Logger log = LoggerFactory.getLogger(GatewayHeartbeatLoop.class);
 
+    /** 바깥 방어가 안쪽 타임아웃보다 이만큼 길다. 비슷하면 둘을 못 가른다. */
+    private static final int LAST_RESORT_FACTOR = 10;
+
     private final Supplier<Mono<Integer>> beat;
     private final Supplier<Mono<Void>> leave;
     private final IntConsumer observed;
     private final Duration interval;
     private final Duration leaveTimeout;
+
+    /**
+     * 종료 경로 타임아웃이 도는 곳.
+     *
+     * <p>기본 공용 풀을 쓰면 시험이 이 구간만 가상 시간으로 못 당긴다 — 실제
+     * 경과 시간을 재게 되고, 느린 러너에서 흔들린다.
+     */
+    private final Scheduler leaveTimer;
 
     private final AtomicBoolean running = new AtomicBoolean();
 
@@ -45,17 +56,24 @@ public final class GatewayHeartbeatLoop implements SmartLifecycle {
     private volatile Scheduler owned;
 
     private GatewayHeartbeatLoop(Supplier<Mono<Integer>> beat, Supplier<Mono<Void>> leave,
-            IntConsumer observed, Duration interval, Duration leaveTimeout) {
+            IntConsumer observed, Duration interval, Duration leaveTimeout, Scheduler leaveTimer) {
         this.beat = beat;
         this.leave = leave;
         this.observed = observed;
         this.interval = interval;
         this.leaveTimeout = leaveTimeout;
+        this.leaveTimer = leaveTimer;
     }
 
     public static GatewayHeartbeatLoop of(Supplier<Mono<Integer>> beat, Supplier<Mono<Void>> leave,
             IntConsumer observed, Duration interval, Duration leaveTimeout) {
-        return new GatewayHeartbeatLoop(beat, leave, observed, interval, leaveTimeout);
+        return of(beat, leave, observed, interval, leaveTimeout, Schedulers.parallel());
+    }
+
+    /** 종료 경로 타임아웃 스케줄러를 밖에서 준다 — 시험이 결정적으로 재려면 필요하다. */
+    public static GatewayHeartbeatLoop of(Supplier<Mono<Integer>> beat, Supplier<Mono<Void>> leave,
+            IntConsumer observed, Duration interval, Duration leaveTimeout, Scheduler leaveTimer) {
+        return new GatewayHeartbeatLoop(beat, leave, observed, interval, leaveTimeout, leaveTimer);
     }
 
     @Override
@@ -111,14 +129,15 @@ public final class GatewayHeartbeatLoop implements SmartLifecycle {
         // 중인 요청까지 함께 끊긴다.
         try {
             Mono.defer(leave)
-                    .timeout(leaveTimeout)
+                    .timeout(leaveTimeout, leaveTimer)
                     .doOnError(e -> log.warn("등록 해제 실패 — 임계가 지나면 빠진다: {}", e.toString()))
                     .onErrorResume(e -> Mono.empty())
-                    // 안쪽 timeout 이 먼저 끊는다. 이 값은 그것도 안 들을 때의
-                    // 마지막 방어다.
+                    // **안쪽보다 뚜렷하게 크게 둔다.** 비슷하면 어느 쪽이 끊었는지
+                    // 구분할 수 없고, 시험도 둘을 못 가른다. 이 값은 안쪽이
+                    // 안 들을 때만 도는 마지막 방어다.
                     // RULE-EXCEPTION(RX-1): 종료 경로이고 stop 이 동기 규약이라,
                     // 안 기다리면 컨테이너가 다음 단계로 넘어가 해제가 유실된다.
-                    .block(leaveTimeout.multipliedBy(2));
+                    .block(leaveTimeout.multipliedBy(LAST_RESORT_FACTOR));
         } catch (RuntimeException e) {
             log.warn("등록 해제를 기다리지 않는다: {}", e.toString());
         }

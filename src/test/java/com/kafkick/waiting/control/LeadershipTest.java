@@ -14,6 +14,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -111,6 +112,8 @@ class LeadershipTest {
 
         assertThat(leadership.isLeader()).isFalse();
         assertThat(로그_메시지(Level.INFO)).anyMatch(m -> m.contains("node-2"));
+        // 남이 쥔 것은 **정상 응답**이다. 실패로 찍으면 진짜 장애와 섞인다.
+        assertThat(로그_메시지(Level.WARN)).noneMatch(m -> m.contains("리더 확인 실패"));
     }
 
     @Test
@@ -146,7 +149,7 @@ class LeadershipTest {
         Leadership leadership = 리더가_된다(() -> Mono.error(new IllegalStateException("끊겼다")));
 
         시간을_흘린다(LEASE.plusSeconds(4));
-        leadership.renew().block(BLOCK);
+        assertThat(leadership.isLeader()).isFalse();
 
         assertThat(로그_메시지(Level.WARN))
                 .anyMatch(m -> m.contains("리스가 지나") && m.contains("6초"));
@@ -158,13 +161,13 @@ class LeadershipTest {
         Leadership leadership = 리더가_된다(() -> Mono.error(new IllegalStateException("끊겼다")));
 
         시간을_흘린다(LEASE.minusNanos(1));
-        leadership.renew().block(BLOCK);
+        assertThat(leadership.isLeader()).isTrue();
         assertThat(로그_메시지(Level.WARN)).noneMatch(m -> m.contains("리스가 지나"));
 
         // 경계는 판정과 같은 자리여야 한다. 갈리면 리더가 아닌데 기록은 안 남는
         // 구간이 생긴다.
         시간을_흘린다(Duration.ofNanos(1));
-        leadership.renew().block(BLOCK);
+        assertThat(leadership.isLeader()).isFalse();
         assertThat(로그_메시지(Level.WARN)).anyMatch(m -> m.contains("리스가 지나"));
     }
 
@@ -266,15 +269,93 @@ class LeadershipTest {
     }
 
     @Test
-    @DisplayName("리더가_아니면_해제를_안_부른다")
-    void 리더가_아니면_해제를_안_부른다() {
+    @DisplayName("리스가_지나_내려온_뒤에도_해제를_부른다")
+    void 리스가_지나_내려온_뒤에도_해제를_부른다() {
+        // **로컬 상태로 거르면 안 된다.** 리더가 아니라는 것은 "남의 락" 과
+        // "리스가 지나 내려왔지만 서버 락은 아직 내 것" 을 둘 다 뜻한다.
+        // 뒤엣것에서 안 지우면 정상 종료인데도 다음 리더가 리스 만료를 기다린다.
         AtomicInteger 해제 = new AtomicInteger();
         Leadership leadership = leadership(LeadershipTest::내_락,
                 () -> Mono.fromRunnable(해제::incrementAndGet));
+        leadership.renew().block(BLOCK);
+        시간을_흘린다(LEASE);
+        assertThat(leadership.isLeader()).isFalse();
 
         leadership.release().block(BLOCK);
 
-        assertThat(해제).hasValue(0);
+        assertThat(해제).hasValue(1);
+    }
+
+    @Test
+    @DisplayName("해제를_두_번_불러도_한_번만_지운다")
+    void 해제를_두_번_불러도_한_번만_지운다() {
+        AtomicInteger 해제 = new AtomicInteger();
+        Leadership leadership = leadership(LeadershipTest::내_락,
+                () -> Mono.fromRunnable(해제::incrementAndGet));
+        leadership.renew().block(BLOCK);
+
+        leadership.release().block(BLOCK);
+        leadership.release().block(BLOCK);
+
+        assertThat(해제).hasValue(1);
+    }
+
+    @Test
+    @DisplayName("종료_표시보다_먼저_출발한_획득은_다시_지운다")
+    void 종료_표시보다_먼저_출발한_획득은_다시_지운다() {
+        // 종료 표시는 이미 출발한 명령을 못 되돌린다. 그대로 두면 **죽는 노드가
+        // 락을 쥔 채 나가고** 다음 리더가 리스 만료를 기다린다.
+        AtomicInteger 해제 = new AtomicInteger();
+        AtomicReference<Leadership> 자기 = new AtomicReference<>();
+        // 획득이 나가 있는 동안 종료가 끼어든 모양이다. 조립 시점 검사로는 못 막는다.
+        Leadership leadership = leadership(() -> {
+            자기.get().release().block(BLOCK);
+            return 내_락();
+        }, () -> Mono.fromRunnable(해제::incrementAndGet));
+        자기.set(leadership);
+
+        leadership.renew().block(BLOCK);
+
+        assertThat(leadership.isLeader()).isFalse();
+        assertThat(해제).hasValue(2);
+        assertThat(로그_메시지(Level.WARN)).anyMatch(m -> m.contains("종료 뒤에 락을 잡았다"));
+    }
+
+    @Test
+    @DisplayName("늦게_도착한_옛_판이_확인_시각을_되돌리지_않는다")
+    void 늦게_도착한_옛_판이_확인_시각을_되돌리지_않는다() {
+        // 겹친 두 판 중 옛 판이 뒤에 도착하면 확인 시각이 뒤로 밀린다. 그러면
+        // 멀쩡한 리더가 헛강등되고 거짓 경고가 찍힌다.
+        AtomicInteger 호출 = new AtomicInteger();
+        Leadership leadership = leadership(() -> {
+            if (호출.incrementAndGet() == 2) {
+                // 두 번째 판이 첫 판보다 **오래된** 시각을 들고 도착한 셈이다.
+                시간을_흘린다(LEASE.negated());
+            }
+            return 내_락();
+        });
+
+        leadership.renew().block(BLOCK);
+        시간을_흘린다(LEASE.dividedBy(2));
+        leadership.renew().block(BLOCK);
+        시간을_흘린다(LEASE.dividedBy(2));
+
+        assertThat(leadership.isLeader()).isTrue();
+        assertThat(로그_메시지(Level.WARN)).noneMatch(m -> m.contains("리스가 지나"));
+    }
+
+    @Test
+    @DisplayName("리더로_있던_시간이_기동_시각부터_세지_않는다")
+    void 리더로_있던_시간이_기동_시각부터_세지_않는다() {
+        // 상태를 먼저 공개하고 시각을 나중에 쓰면, 그 사이에 읽는 쪽이 0 을 봐서
+        // 부팅 이후 전체를 리더로 있던 시간으로 찍는다.
+        Leadership leadership = leadership(LeadershipTest::내_락);
+        leadership.renew().block(BLOCK);
+        시간을_흘린다(Duration.ofSeconds(2));
+
+        leadership.release().block(BLOCK);
+
+        assertThat(로그_메시지(Level.INFO)).anyMatch(m -> m.contains("2초 동안 리더였다"));
     }
 
     @Test
@@ -342,6 +423,19 @@ class LeadershipTest {
         leadership.renew().block(BLOCK);
 
         assertThat(로그_메시지(Level.INFO)).filteredOn(m -> m.contains("리더가 됐다")).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("성공한_판은_실패로_안_찍힌다")
+    void 성공한_판은_실패로_안_찍힌다() {
+        // 오류를 전부 삼켜 루프를 살리는 구조라, 성공 경로에 버그가 생겨도
+        // "리더 확인 실패" 한 줄로 조용히 지나간다. 그 한 줄이 유일한 구별점이다.
+        Leadership leadership = leadership(LeadershipTest::내_락);
+
+        leadership.renew().block(BLOCK);
+
+        assertThat(leadership.isLeader()).isTrue();
+        assertThat(로그_메시지(Level.WARN)).noneMatch(m -> m.contains("리더 확인 실패"));
     }
 
     @Test

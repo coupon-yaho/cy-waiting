@@ -87,7 +87,7 @@ class AdmissionCapTest {
             for (int nodes : new int[] {1, 3, 7, 20, 100}) {
                 CouponState s = credit == 0
                         ? CouponState.idle(500)
-                        : CouponState.queueing(credit, 500, 3000);
+                        : CouponState.queueing(credit, 500, credit + 1);
                 long total = IntStream.range(0, nodes)
                         .mapToLong(node -> s.contendedCap(nodes, node))
                         .sum();

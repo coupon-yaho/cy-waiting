@@ -37,13 +37,13 @@ public record CouponState(
         // 역전이 생기고, 그게 이전 구현의 핵심 버그였다.
         if (runtime == RuntimeState.IDLE && credit != 0) {
             throw new IllegalArgumentException(
-                    "IDLE 이면 credit 이 0 이어야 한다: credit=%d".formatted(credit));
+                    "[I1] IDLE 이면 credit 이 0 이어야 한다: credit=%d".formatted(credit));
         }
 
         // I2 — 재고가 남았는데 종결됐다면 그건 종결이 아니다.
         if (runtime == RuntimeState.CLOSED && remainingStock != 0) {
             throw new IllegalArgumentException(
-                    "CLOSED 면 remainingStock 이 0 이어야 한다: remainingStock=%d"
+                    "[I2] CLOSED 면 remainingStock 이 0 이어야 한다: remainingStock=%d"
                             .formatted(remainingStock));
         }
 
@@ -51,7 +51,7 @@ public record CouponState(
         // 몫이 대기자보다 적으면 그건 아직 QUEUEING 이다.
         if (runtime == RuntimeState.DRAINING && credit < waiting) {
             throw new IllegalArgumentException(
-                    "DRAINING 이면 credit >= waiting 이어야 한다: credit=%d, waiting=%d"
+                    "[I3] DRAINING 이면 credit >= waiting 이어야 한다: credit=%d, waiting=%d"
                             .formatted(credit, waiting));
         }
 
@@ -59,7 +59,7 @@ public record CouponState(
         // 줄 선 사람을 추월한다. I4 의 대우로는 이 조합이 막히지 않는다.
         if (runtime == RuntimeState.IDLE && waiting != 0) {
             throw new IllegalArgumentException(
-                    "IDLE 이면 waiting 이 0 이어야 한다: waiting=%d".formatted(waiting));
+                    "[I1'] IDLE 이면 waiting 이 0 이어야 한다: waiting=%d".formatted(waiting));
         }
 
         // I4 — 줄이 비었는데 큐 상태라는 것은 유령이다. 판정 사다리 9번이
@@ -68,7 +68,24 @@ public record CouponState(
                 && runtime != RuntimeState.IDLE
                 && runtime != RuntimeState.CLOSED) {
             throw new IllegalArgumentException(
-                    "waiting 이 0 이면 IDLE 또는 CLOSED 여야 한다: runtime=%s".formatted(runtime));
+                    "[I4] waiting 이 0 이면 IDLE 또는 CLOSED 여야 한다: runtime=%s".formatted(runtime));
+        }
+
+        // I3' — **반대 방향도 막는다.** 한쪽만 보면 같은 (credit, waiting) 이
+        // 두 상태를 다 가질 수 있다. 그러면 상태가 사실을 안 말하고, 두 발행자가
+        // 같은 사실을 다른 이름으로 적는다.
+        //
+        // **판정은 이걸로 달라지지 않는다.** 사다리는 runtime 을 `!= IDLE` 로만
+        // 보므로 DRAINING 과 QUEUEING 이 같은 칸이다. 줄이 있으면 뒤에 세우는
+        // 것이 맞고(불변식 4), 다 뺄 수 있다고 통과시키면 그게 추월이다.
+        // 여기서 얻는 것은 **표현의 유일성**이지 판정의 변화가 아니다.
+        //
+        // **I4 뒤에 둔다.** 앞에 두면 줄이 빈 QUEUEING 이 여기서 먼저 걸려
+        // "줄이 비었다" 대신 "다 뺄 수 있다" 고 답한다 — 원인을 잘못 말한다.
+        if (runtime == RuntimeState.QUEUEING && credit >= waiting) {
+            throw new IllegalArgumentException(
+                    "[I3'] QUEUEING 이면 credit < waiting 이어야 한다: credit=%d, waiting=%d"
+                            .formatted(credit, waiting));
         }
 
         // NaN 은 비교가 전부 false 라 Math.max 를 그냥 통과한다. 그대로 두면
@@ -175,12 +192,25 @@ public record CouponState(
     }
 
     /**
-     * 운영자가 껐는데 <b>줄이 아직 남아 있다.</b> 붐비는 쿠폰의 대기열을 끄면
-     * 이 상태가 된다 — {@code mode} 와 {@code waiting} 은 서로 독립이다.
+     * 운영자가 껐는데 <b>줄이 아직 남아 있다.</b> {@code mode} 와 {@code waiting}
+     * 은 서로 독립이다.
+     *
+     * <p>런타임은 <b>못 박지 않고 유도한다.</b> 못 박으면 다 뺄 수 있는 줄까지
+     * {@code QUEUEING} 이 되어 I3' 에 막힌다 (계획서 2절 3.7).
      */
     public static CouponState offWithQueue(long credit, long remainingStock, long waiting) {
-        return new CouponState(QueueMode.OFF, RuntimeState.QUEUEING,
-                credit, remainingStock, waiting, 1.0);
+        if (waiting <= 0) {
+            throw new IllegalArgumentException(
+                    "offWithQueue 는 줄이 남아 있을 때만이다. 비었으면 off 를 쓴다: waiting=%d"
+                            .formatted(waiting));
+        }
+        // 이번 틱에 다 뺄 수 있으면 배수 중, 아니면 아직 줄 서는 중이다.
+        // **I3 의 경계와 같은 자리**를 쓴다 — 갈리면 이 팩토리가 생성자에
+        // 막히는 조합을 만든다.
+        RuntimeState runtime = credit >= waiting
+                ? RuntimeState.DRAINING
+                : RuntimeState.QUEUEING;
+        return new CouponState(QueueMode.OFF, runtime, credit, remainingStock, waiting, 1.0);
     }
 
     /** 운영자가 무조건 줄을 세우기로 했다. 한산해도 대기열을 태운다. */

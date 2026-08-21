@@ -277,6 +277,35 @@ class CapacityCollectorTest {
     }
 
     @Test
+    @DisplayName("창이_너무_길면_기동에_실패한다")
+    void 창이_너무_길면_기동에_실패한다() {
+        // **램프 나머지항이 창의 제곱으로 커진다.** 창을 하루로 묶으면 어떤
+        // 보고값이 와도 넘칠 수 없다 — 곱셈을 감싸는 것보다 근본적이다.
+        assertThatThrownBy(() -> CapacityCollector.of(
+                Duration.ofDays(2), FRESHNESS, FLOOR, CAP))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("이하여야 한다");
+    }
+
+    @Test
+    @DisplayName("창이_상한이어도_넘치지_않는다")
+    void 창이_상한이어도_넘치지_않는다() {
+        // 상한과 최대 보고값을 함께 줘도 계산이 성립해야 한다.
+        Duration window = Duration.ofDays(1);
+        CapacityCollector collector = CapacityCollector.of(
+                window, FRESHNESS, FLOOR, Long.MAX_VALUE);
+        long half = window.toSeconds() / 2;
+        for (long t = NOW; t <= NOW + half; t += FRESHNESS.toSeconds()) {
+            collector.collect(List.of(report("a", Long.MAX_VALUE, t)), t);
+        }
+
+        long credit = collector.collect(
+                List.of(report("a", Long.MAX_VALUE, NOW + half)), NOW + half);
+
+        assertThat(credit).isEqualTo(Long.MAX_VALUE / 2);
+    }
+
+    @Test
     @DisplayName("같은_인스턴스가_두_번_와도_한_번_센다")
     void 같은_인스턴스가_두_번_와도_한_번_센다() {
         // 버전별 키를 함께 읽으면 같은 인스턴스가 두 번 온다. 세면 두 배다.

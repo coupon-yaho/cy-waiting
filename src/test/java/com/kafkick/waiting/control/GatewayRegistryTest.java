@@ -3,6 +3,10 @@ package com.kafkick.waiting.control;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -111,6 +115,47 @@ class GatewayRegistryTest {
         registry.observed(-1);
 
         assertThat(registry.count()).isEqualTo(INITIAL);
+    }
+
+    @Test
+    @DisplayName("동시에_늘어나면_가장_큰_값이_남는다")
+    void 동시에_늘어나면_가장_큰_값이_남는다() throws InterruptedException {
+        // **분모와 연속 횟수를 따로 두면 읽고·비교하고·쓰는 사이에 다른 관측이
+        // 낀다.** 그러면 큰 값이 작은 값에 덮이고, 분모가 낮아지는 방향은
+        // 초과 발급이다.
+        //
+        // **램프다운이 못 일어나게 임계를 스레드 수보다 크게 둔다.** 안 그러면
+        // 큰 값이 먼저 들어온 뒤 작은 값이 연달아 와서 감소가 정당하게 확정되고,
+        // 무엇이 원자성 때문이고 무엇이 정책 때문인지 갈리지 않는다.
+        // 경합은 한 번으로는 잘 안 나므로 라운드를 반복한다.
+        int threads = 16;
+        int rounds = 300;
+        try (ExecutorService pool = Executors.newFixedThreadPool(threads)) {
+            for (int round = 0; round < rounds; round++) {
+                GatewayRegistry registry = GatewayRegistry.of(threads + 1, 1);
+                CountDownLatch 출발 = new CountDownLatch(1);
+                CountDownLatch 도착 = new CountDownLatch(threads);
+                for (int i = 1; i <= threads; i++) {
+                    int observed = i;
+                    pool.execute(() -> {
+                        try {
+                            출발.await();
+                            registry.observed(observed);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        } finally {
+                            도착.countDown();
+                        }
+                    });
+                }
+                출발.countDown();
+                assertThat(도착.await(10, TimeUnit.SECONDS)).isTrue();
+
+                assertThat(registry.count())
+                        .withFailMessage("%d 회차에서 분모가 %d 로 덮였다", round, registry.count())
+                        .isEqualTo(threads);
+            }
+        }
     }
 
     @Test

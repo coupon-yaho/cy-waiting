@@ -84,6 +84,21 @@ file_case check-java.sh 'class A {
     }
 }' 'src/main/java/H3.java' allow 'JS-11 주석·문자열은 오탐 아님'
 file_case check-java.sh 'class A {
+    String s = """
+        여러 줄에 걸친 한글 텍스트 블록
+        // 주석처럼 보이는 것도 안에 있다
+        """;
+    void ok4() {
+    }
+}' 'src/main/java/HC.java' allow 'JS-11 텍스트 블록은 줄을 넘어도 문자열이다 (회귀)'
+file_case check-java.sh 'class A {
+    String s = """
+        한글 텍스트 블록
+        """;
+    void 안녕하세요() {
+    }
+}' 'src/main/java/HD.java' block 'JS-11 텍스트 블록 뒤 한글 식별자를 놓치지 않는다 (회귀)'
+file_case check-java.sh 'class A {
     void log() {
         System.out.println("한글 // 메시지");
     }

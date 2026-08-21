@@ -104,17 +104,23 @@ fi
 if [[ "$is_test" == false ]]; then
     saved_code=$code
     code=$(LC_ALL=C awk '
-        BEGIN { blk = 0 }
+        BEGIN { blk = 0; txt = 0 }
         {
             out = ""; i = 1; n = length($0)
             while (i <= n) {
                 c = substr($0, i, 1)
                 two = substr($0, i, 2)
+                three = substr($0, i, 3)
+                if (txt) {                        # 텍스트 블록 안 — 줄을 넘어 이어진다
+                    if (three == "\"\"\"") { txt = 0; i += 3 } else { i++ }
+                    continue
+                }
                 if (blk) {                        # 블록 주석 안 — */ 만 찾는다
                     if (two == "*/") { blk = 0; i += 2 } else { i++ }
                     continue
                 }
                 if (two == "/*") { blk = 1; i += 2; continue }
+                if (three == "\"\"\"") { txt = 1; i += 3; continue }
                 if (two == "//") { break }        # 줄 끝까지 주석
                 if (c == "\"" || c == "'"'"'") {  # 문자열·문자 리터럴을 통째로 지운다
                     q = c; i++

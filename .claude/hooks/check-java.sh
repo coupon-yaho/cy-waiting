@@ -135,11 +135,19 @@ if [[ "$is_test" == false ]]; then
                     }
                     continue
                 }
+                # **\uXXXX 도 식별자가 될 수 있다.** 자바는 렉싱 **전에** 이걸
+                # 풀어서 int \uD55C\uAE00 이 한글 식별자가 된다. 운영 코드에
+                # 유니코드 이스케이프를 쓸 정당한 이유가 없으므로 통째로 막는다.
+                if (c == "\\" && substr($0, i + 1, 1) == "u") { esc = 1 }
                 out = out c; i++
             }
             mark = ""
-            for (k = 1; k <= length(out); k++) {
-                if (substr(out, k, 1) > "\177") { mark = "NONASCII"; break }
+            if (esc) { mark = "NONASCII"; esc = 0 }
+            # 줄바꿈 이스케이프는 주석 경계 자체를 옮긴다 — // \u000A int 한글;
+            # 이러면 주석이 거기서 끝나고 뒤가 코드가 된다. 마스킹 밖에서 잡는다.
+            if ($0 ~ /\\u+000[aAdD]/) mark = "NONASCII"
+            for (k = 1; k <= length(out) && mark == ""; k++) {
+                if (substr(out, k, 1) > "\177") { mark = "NONASCII" }
             }
             printf "%d:%s\n", NR, mark
         }' "$file")

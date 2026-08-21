@@ -96,6 +96,12 @@ file_case check-java.sh 'class A {
     }
 }' 'src/main/java/H3.java' allow 'JS-11 주석·문자열은 오탐 아님'
 file_case check-java.sh 'class A {
+    /* \u002a/ void 한글() {}
+}' 'src/main/java/HI.java' block 'JS-11 이스케이프가 블록 주석을 닫는다 (회귀)'
+file_case check-java.sh 'class A {
+    String s = "\u0041";
+}' 'src/main/java/HJ.java' block 'JS-11 문자열 안 유니코드 이스케이프도 막는다'
+file_case check-java.sh 'class A {
     int \uD55C\uAE00 = 0;
 }' 'src/main/java/HF.java' block 'JS-11 유니코드 이스케이프 식별자 (회귀)'
 file_case check-java.sh 'class A {
@@ -105,7 +111,7 @@ file_case check-java.sh 'class A {
     String s = "\\uD55C";
     void ok6() {
     }
-}' 'src/main/java/HH.java' allow 'JS-11 문자열 안 이스케이프는 오탐 아님'
+}' 'src/main/java/HH.java' allow 'JS-11 역슬래시가 짝수면 이스케이프가 아니다 (회귀)'
 file_case check-java.sh 'class A {
     String s = """
         따옴표 셋을 이스케이프한다 \"""

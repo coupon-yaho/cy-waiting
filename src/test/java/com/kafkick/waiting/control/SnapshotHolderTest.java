@@ -19,7 +19,7 @@ import org.junit.jupiter.api.Test;
  * 낡음을 <b>두 종류로</b> 구분한다 (4.1).
  *
  * <p>섞으면 스케줄러 장애가 전 게이트웨이 동시 이탈로 번져 100% 장애가 된다.
- * 로컬 수신 시각만 쓰면 스케줄러가 죽어도 게이트웨이는 같은 해시를 계속 받아
+ * 로컬 수신 시각으로 재면 스케줄러가 죽어도 게이트웨이는 같은 해시를 계속 받아
  * <b>"방금 갱신했다" 고 스스로를 속인다.</b>
  */
 class SnapshotHolderTest {
@@ -55,7 +55,7 @@ class SnapshotHolderTest {
 
         holder.replace(스냅샷(지금));
 
-        assertThat(holder.fetchAge()).isEqualTo(Duration.ZERO);
+        assertThat(holder.tickAge()).isEqualTo(Duration.ZERO);
         assertThat(holder.dataAge()).isEqualTo(Duration.ZERO);
     }
 
@@ -114,6 +114,74 @@ class SnapshotHolderTest {
         assertThat(holder.isDataStale()).isTrue();
     }
 
+
+    @Test
+    @DisplayName("루프가_도는_동안은_못_받아도_낡지_않았다")
+    void 루프가_도는_동안은_못_받아도_낡지_않았다() {
+        // **공유 원인을 노드별 신호로 흘리면 전 노드가 동시에 빠진다.**
+        // 레디스가 모두에게 느리면 아무도 못 받는데, 그걸 이 노드의 문제로
+        // 세면 로테이션에 남는 노드가 없다 — 100% 장애다.
+        MutableClock clock = MutableClock.at(지금);
+        SnapshotHolder holder = SnapshotHolder.of(FETCH_STALE, DATA_STALE, clock);
+        holder.replace(스냅샷(지금));
+
+        clock.앞으로(Duration.ofSeconds(30));
+        holder.루프가_돌았다();   // 시도는 했다. 못 받았을 뿐이다
+
+        assertThat(holder.isFetchStale()).isFalse();
+    }
+
+    @Test
+    @DisplayName("하트비트는_찍힌_그_시각으로_늙는다")
+    void 하트비트는_찍힌_그_시각으로_늙는다() {
+        // 루프가 멎으면 낡음이 되어야 하는데, 그러려면 하트비트가 **찍힌 시각**
+        // 이어야 한다. 미래를 찍거나 상수를 찍으면 영영 안 늙어 멎은 노드가
+        // 멀쩡하다고 답한다 — 재기동 신호가 통째로 죽는다.
+        MutableClock clock = MutableClock.at(지금);
+        SnapshotHolder holder = SnapshotHolder.of(FETCH_STALE, DATA_STALE, clock);
+        holder.replace(스냅샷(지금));
+        holder.루프가_돌았다();
+
+        clock.앞으로(FETCH_STALE.plusMillis(1));
+
+        assertThat(holder.isFetchStale()).isTrue();
+    }
+
+    @Test
+    @DisplayName("아직_안_돈_것과_돌다_멎은_것은_갈라진다")
+    void 아직_안_돈_것과_돌다_멎은_것은_갈라진다() {
+        // 둘 다 tickAge 로는 낡음이다. **그런데 대응이 반대다** — 아직 안 돈
+        // 것을 재기동 신호로 쓰면 첫 판을 못 돈 파드가 죽고, 다시 떠도 또 첫 판
+        // 전이라 또 죽는다. 크래시 루프다. 그래서 갈라 볼 수단이 있어야 한다.
+        MutableClock clock = MutableClock.at(지금);
+        SnapshotHolder holder = SnapshotHolder.of(FETCH_STALE, DATA_STALE, clock);
+
+        assertThat(holder.isFetchStale()).isTrue();
+        assertThat(holder.첫_회전_전인가()).isTrue();
+
+        holder.루프가_돌았다();
+        clock.앞으로(FETCH_STALE.plusSeconds(1));
+
+        assertThat(holder.isFetchStale()).isTrue();
+        assertThat(holder.첫_회전_전인가()).isFalse();
+    }
+
+    @Test
+    @DisplayName("실패한_갱신은_수신_시각을_안_움직인다")
+    void 실패한_갱신은_수신_시각을_안_움직인다() {
+        // fetchAge 는 판정에서 빠졌지만 헬스 detail 에 남는다. 하트비트와 같이
+        // 움직이면 사람이 "루프가 도는데 왜 못 받나" 를 가릴 수단을 잃는다.
+        MutableClock clock = MutableClock.at(지금);
+        SnapshotHolder holder = SnapshotHolder.of(FETCH_STALE, DATA_STALE, clock);
+        holder.replace(스냅샷(지금));
+
+        clock.앞으로(Duration.ofSeconds(30));
+        holder.루프가_돌았다();
+
+        assertThat(holder.tickAge()).isZero();
+        assertThat(holder.fetchAge()).isEqualTo(Duration.ofSeconds(30));
+    }
+
     @Test
     @DisplayName("스냅샷은_밖에서_못_바꾼다")
     void 스냅샷은_밖에서_못_바꾼다() {
@@ -145,7 +213,7 @@ class SnapshotHolderTest {
         holder.replace(스냅샷(지금.plusSeconds(30)));
 
         assertThat(holder.isFetchStale()).isFalse();
-        assertThat(holder.fetchAge()).isEqualTo(Duration.ZERO);
+        assertThat(holder.tickAge()).isEqualTo(Duration.ZERO);
     }
 
     @Test

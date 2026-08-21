@@ -3,6 +3,8 @@ package com.kafkick.waiting.control;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.Duration;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.awaitility.Awaitility;
@@ -83,22 +85,32 @@ class GatewayHeartbeatLoopTest {
     }
 
     @Test
-    @DisplayName("등록_해제가_매달려도_종료가_끝난다")
-    void 등록_해제가_매달려도_종료가_끝난다() {
+    @DisplayName("등록_해제가_매달려도_안쪽_타임아웃이_끊는다")
+    void 등록_해제가_매달려도_안쪽_타임아웃이_끊는다() {
         // 여기서 붙들리면 오케스트레이터가 강제 종료하고, 그때는 진행 중인
         // 요청까지 함께 끊긴다. 못 지운 항목은 임계가 지나면 알아서 빠진다.
+        //
+        // **벽시계로 재지 않는다.** 타임아웃 스케줄러를 주입해 가상 시간으로
+        // 당기면, 안쪽이 끊는지를 느린 러너와 무관하게 확인할 수 있다.
         VirtualTimeScheduler 가상 = VirtualTimeScheduler.create();
+        VirtualTimeScheduler 해제타이머 = VirtualTimeScheduler.create();
+        AtomicBoolean 취소됨 = new AtomicBoolean();
         GatewayHeartbeatLoop loop = GatewayHeartbeatLoop.of(
-                () -> Mono.just(1), Mono::never, n -> { }, INTERVAL, LEAVE_TIMEOUT);
+                () -> Mono.just(1),
+                () -> Mono.<Void>never().doOnCancel(() -> 취소됨.set(true)),
+                n -> { }, INTERVAL, LEAVE_TIMEOUT, 해제타이머);
         loop.start(가상);
 
-        long 잰시간 = System.nanoTime();
-        loop.stop();
-        Duration 걸린시간 = Duration.ofNanos(System.nanoTime() - 잰시간);
+        Thread 종료 = new Thread(loop::stop);
+        종료.start();
+        Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> 해제타이머.now(TimeUnit.MILLISECONDS) >= 0);
+        해제타이머.advanceTimeBy(LEAVE_TIMEOUT.plusMillis(1));
 
-        // **여유를 크게 주면 안쪽 타임아웃을 지워도 통과한다.** 바깥 block 이
-        // 대신 끝내 주기 때문이다. 안쪽이 먼저 끊는 것을 재려면 그 차이만큼만 준다.
-        assertThat(걸린시간).isLessThan(LEAVE_TIMEOUT.plusMillis(150));
+        // **안쪽이 끊었는지를 가른다.** 바깥 방어는 안쪽의 열 배라, 안쪽이
+        // 없으면 이 시간 안에 안 끝난다. 가상 시간을 당긴 직후이므로 안쪽이
+        // 살아 있으면 사실상 즉시 끝난다.
+        Awaitility.await().atMost(LEAVE_TIMEOUT.multipliedBy(3)).until(() -> !종료.isAlive());
+        assertThat(취소됨).isTrue();
         assertThat(loop.isRunning()).isFalse();
     }
 

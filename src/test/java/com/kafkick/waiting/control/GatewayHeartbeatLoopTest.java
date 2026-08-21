@@ -3,6 +3,7 @@ package com.kafkick.waiting.control;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.Duration;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -86,32 +87,56 @@ class GatewayHeartbeatLoopTest {
 
     @Test
     @DisplayName("등록_해제가_매달려도_안쪽_타임아웃이_끊는다")
-    void 등록_해제가_매달려도_안쪽_타임아웃이_끊는다() {
-        // 여기서 붙들리면 오케스트레이터가 강제 종료하고, 그때는 진행 중인
-        // 요청까지 함께 끊긴다. 못 지운 항목은 임계가 지나면 알아서 빠진다.
+    void 등록_해제가_매달려도_안쪽_타임아웃이_끊는다() throws InterruptedException {
+        // 여기서 붙들리면 컨테이너가 다음 단계로 못 넘어가고, 오케스트레이터가
+        // 강제 종료하면 진행 중인 요청까지 함께 끊긴다. 못 지운 항목은 임계가
+        // 지나면 알아서 빠진다.
         //
-        // **벽시계로 재지 않는다.** 타임아웃 스케줄러를 주입해 가상 시간으로
-        // 당기면, 안쪽이 끊는지를 느린 러너와 무관하게 확인할 수 있다.
+        // **벽시계로 재지 않는다.** 구독이 실제로 걸린 것을 래치로 확인한 뒤에야
+        // 가상 시간을 당긴다 — 당기는 순간 아직 구독 전이면 타임아웃이 안 걸려
+        // 시험이 흔들린다.
         VirtualTimeScheduler 가상 = VirtualTimeScheduler.create();
         VirtualTimeScheduler 해제타이머 = VirtualTimeScheduler.create();
+        CountDownLatch 구독됨 = new CountDownLatch(1);
+        CountDownLatch 끝남 = new CountDownLatch(1);
         AtomicBoolean 취소됨 = new AtomicBoolean();
         GatewayHeartbeatLoop loop = GatewayHeartbeatLoop.of(
                 () -> Mono.just(1),
-                () -> Mono.<Void>never().doOnCancel(() -> 취소됨.set(true)),
+                () -> Mono.<Void>never()
+                        .doOnSubscribe(sub -> 구독됨.countDown())
+                        .doOnCancel(() -> 취소됨.set(true)),
                 n -> { }, INTERVAL, LEAVE_TIMEOUT, 해제타이머);
         loop.start(가상);
 
-        Thread 종료 = new Thread(loop::stop);
-        종료.start();
-        Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> 해제타이머.now(TimeUnit.MILLISECONDS) >= 0);
+        loop.stop(끝남::countDown);
+        assertThat(구독됨.await(5, TimeUnit.SECONDS)).isTrue();
         해제타이머.advanceTimeBy(LEAVE_TIMEOUT.plusMillis(1));
 
-        // **안쪽이 끊었는지를 가른다.** 바깥 방어는 안쪽의 열 배라, 안쪽이
-        // 없으면 이 시간 안에 안 끝난다. 가상 시간을 당긴 직후이므로 안쪽이
-        // 살아 있으면 사실상 즉시 끝난다.
-        Awaitility.await().atMost(LEAVE_TIMEOUT.multipliedBy(3)).until(() -> !종료.isAlive());
+        assertThat(끝남.await(5, TimeUnit.SECONDS)).isTrue();
         assertThat(취소됨).isTrue();
         assertThat(loop.isRunning()).isFalse();
+    }
+
+    @Test
+    @DisplayName("이미_멈춘_뒤에도_콜백은_온다")
+    void 이미_멈춘_뒤에도_콜백은_온다() {
+        // **콜백을 안 부르면 컨테이너가 종료 타임아웃까지 기다린다.** 재진입
+        // 가드에 걸려 일찍 반환할 때가 정확히 그 자리다.
+        VirtualTimeScheduler 가상 = VirtualTimeScheduler.create();
+        AtomicInteger 콜백 = new AtomicInteger();
+        GatewayHeartbeatLoop loop = GatewayHeartbeatLoop.of(
+                () -> Mono.just(1), () -> Mono.empty(), n -> { },
+                INTERVAL, LEAVE_TIMEOUT, 해제타이머());
+        loop.start(가상);
+
+        loop.stop(콜백::incrementAndGet);
+        loop.stop(콜백::incrementAndGet);
+
+        assertThat(콜백.get()).isEqualTo(2);
+    }
+
+    private static VirtualTimeScheduler 해제타이머() {
+        return VirtualTimeScheduler.create();
     }
 
     @Test

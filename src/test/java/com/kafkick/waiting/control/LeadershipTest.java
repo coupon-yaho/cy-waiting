@@ -7,6 +7,8 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -23,6 +25,7 @@ import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 import reactor.core.Disposable;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 import reactor.test.StepVerifier;
 
 /**
@@ -36,7 +39,7 @@ import reactor.test.StepVerifier;
 class LeadershipTest {
 
     private static final Duration LEASE = Duration.ofSeconds(2);
-    private static final Duration ATTEMPT = Duration.ofMillis(500);
+    private static final Duration ATTEMPT = Duration.ofMillis(400);
 
     /** 시험이 기다리는 상한. 리스와 무관하다 — 겸하면 리스를 줄일 때 같이 불안정해진다. */
     private static final Duration BLOCK = Duration.ofSeconds(5);
@@ -64,10 +67,22 @@ class LeadershipTest {
         ticker.addAndGet(만큼.toNanos());
     }
 
+    /**
+     * <b>포맷 전 패턴</b>을 본다. 포맷하면 값과 문구가 뭉개져, {@code "7초"} 를
+     * 찾는 단언이 {@code "17초"} 에도 통과한다. 문구를 다듬어도 안 깨진다.
+     */
     private List<String> 로그_메시지(Level 수준) {
         return 로그.list.stream()
                 .filter(e -> e.getLevel() == 수준)
-                .map(ILoggingEvent::getFormattedMessage)
+                .map(ILoggingEvent::getMessage)
+                .toList();
+    }
+
+    /** 값은 문자열에서 찾지 말고 인자에서 직접 잰다. */
+    private List<Object[]> 로그_인자(Level 수준, String 패턴조각) {
+        return 로그.list.stream()
+                .filter(e -> e.getLevel() == 수준 && e.getMessage().contains(패턴조각))
+                .map(ILoggingEvent::getArgumentArray)
                 .toList();
     }
 
@@ -111,7 +126,8 @@ class LeadershipTest {
         leadership.renew().block(BLOCK);
 
         assertThat(leadership.isLeader()).isFalse();
-        assertThat(로그_메시지(Level.INFO)).anyMatch(m -> m.contains("node-2"));
+        assertThat(로그_인자(Level.INFO, "리더를 잃었다")).singleElement()
+                .satisfies(인자 -> assertThat(인자[1]).isEqualTo("node-2"));
         // 남이 쥔 것은 **정상 응답**이다. 실패로 찍으면 진짜 장애와 섞인다.
         assertThat(로그_메시지(Level.WARN)).noneMatch(m -> m.contains("리더 확인 실패"));
     }
@@ -151,8 +167,8 @@ class LeadershipTest {
         시간을_흘린다(LEASE.plusSeconds(4));
         assertThat(leadership.isLeader()).isFalse();
 
-        assertThat(로그_메시지(Level.WARN))
-                .anyMatch(m -> m.contains("리스가 지나") && m.contains("6초"));
+        assertThat(로그_인자(Level.WARN, "리스가 지나")).singleElement()
+                .satisfies(인자 -> assertThat(인자[0]).isEqualTo(6L));
     }
 
     @Test
@@ -324,24 +340,24 @@ class LeadershipTest {
     @Test
     @DisplayName("늦게_도착한_옛_판이_확인_시각을_되돌리지_않는다")
     void 늦게_도착한_옛_판이_확인_시각을_되돌리지_않는다() {
-        // 겹친 두 판 중 옛 판이 뒤에 도착하면 확인 시각이 뒤로 밀린다. 그러면
-        // 멀쩡한 리더가 헛강등되고 거짓 경고가 찍힌다.
+        // **두 판이 겹쳐야 이걸 잰다.** 한 판씩 순서대로 돌리면 옛 판이라는 것이
+        // 성립하지 않아, 되돌려도 안 죽는 시험이 된다.
+        Duration 긴_리스 = Duration.ofMinutes(10);
+        Duration 절반 = Duration.ofMinutes(5);
+        Sinks.One<LeaderLock> 옛_판 = Sinks.one();
         AtomicInteger 호출 = new AtomicInteger();
-        Leadership leadership = leadership(() -> {
-            if (호출.incrementAndGet() == 2) {
-                // 두 번째 판이 첫 판보다 **오래된** 시각을 들고 도착한 셈이다.
-                시간을_흘린다(LEASE.negated());
-            }
-            return 내_락();
-        });
+        Leadership leadership = Leadership.of("node-1", 긴_리스, Duration.ofMinutes(2),
+                () -> 호출.incrementAndGet() == 1 ? 옛_판.asMono() : 내_락(),
+                Mono::empty, ticker::get);
 
+        leadership.renew().subscribe();
+        시간을_흘린다(절반);
         leadership.renew().block(BLOCK);
-        시간을_흘린다(LEASE.dividedBy(2));
-        leadership.renew().block(BLOCK);
-        시간을_흘린다(LEASE.dividedBy(2));
+        옛_판.tryEmitValue(LeaderLock.mine("node-1", 긴_리스.toMillis()));
+
+        시간을_흘린다(절반);
 
         assertThat(leadership.isLeader()).isTrue();
-        assertThat(로그_메시지(Level.WARN)).noneMatch(m -> m.contains("리스가 지나"));
     }
 
     @Test
@@ -355,7 +371,8 @@ class LeadershipTest {
 
         leadership.release().block(BLOCK);
 
-        assertThat(로그_메시지(Level.INFO)).anyMatch(m -> m.contains("2초 동안 리더였다"));
+        assertThat(로그_인자(Level.INFO, "리더에서 내려왔다")).singleElement()
+                .satisfies(인자 -> assertThat(인자[0]).isEqualTo(2L));
     }
 
     @Test
@@ -410,7 +427,8 @@ class LeadershipTest {
 
         leadership.release().block(BLOCK);
 
-        assertThat(로그_메시지(Level.INFO)).anyMatch(m -> m.contains("7초"));
+        assertThat(로그_인자(Level.INFO, "리더에서 내려왔다")).singleElement()
+                .satisfies(인자 -> assertThat(인자[0]).isEqualTo(7L));
     }
 
     @Test
@@ -455,17 +473,31 @@ class LeadershipTest {
     @Test
     @DisplayName("실패가_걷히면_복구를_찍고_다시_경고할_수_있다")
     void 실패가_걷히면_복구를_찍고_다시_경고할_수_있다() {
+        // **두 판 이상 실패해야 판 수를 잴 수 있다.** 한 판이면 어떤 값을 찍어도
+        // 1 이라 세는 것과 안 세는 것이 같아 보인다.
+        // **두 판 이상 실패해야 판 수를 잴 수 있다.** 한 판이면 어떤 값을 찍어도
+        // 1 이라 세는 것과 안 세는 것이 같아 보인다. 그리고 **두 번 회복해야**
+        // 세고 나서 초기화하는지를 잰다 — 안 지우면 다음 번에 누적치를 찍는다.
         AtomicInteger 호출 = new AtomicInteger();
-        Leadership leadership = leadership(() -> 호출.incrementAndGet() == 2
-                ? 내_락()
-                : Mono.error(new IllegalStateException("끊겼다")));
+        Leadership leadership = leadership(() -> {
+            int n = 호출.incrementAndGet();
+            return n == 3 || n == 5 ? 내_락() : Mono.error(new IllegalStateException("끊겼다"));
+        });
 
+        leadership.renew().block(BLOCK);
         leadership.renew().block(BLOCK);
         시간을_흘린다(Duration.ofSeconds(3));
         leadership.renew().block(BLOCK);
         leadership.renew().block(BLOCK);
+        시간을_흘린다(Duration.ofSeconds(1));
+        leadership.renew().block(BLOCK);
 
-        assertThat(로그_메시지(Level.INFO)).anyMatch(m -> m.contains("리더 확인 복구") && m.contains("3초"));
+        // 지속 시간만 남기면 한 판이 실패한 것인지 수백 판인지 사후에 못 가린다.
+        assertThat(로그_인자(Level.INFO, "리더 확인 복구")).hasSize(2)
+                .satisfies(목록 -> {
+                    assertThat(목록.get(0)).containsExactly(3L, 2, "node-1");
+                    assertThat(목록.get(1)).containsExactly(1L, 1, "node-1");
+                });
         assertThat(로그_메시지(Level.WARN)).filteredOn(m -> m.contains("리더 확인 실패")).hasSize(2);
     }
 
@@ -477,15 +509,18 @@ class LeadershipTest {
         Leadership leadership = leadership(LeadershipTest::내_락);
         CountDownLatch 출발 = new CountDownLatch(1);
         CountDownLatch 도착 = new CountDownLatch(스레드);
+        List<Throwable> 터진것 = Collections.synchronizedList(new ArrayList<>());
         ExecutorService 풀 = Executors.newFixedThreadPool(스레드);
         try {
             for (int i = 0; i < 스레드; i++) {
                 풀.execute(() -> {
+                    // **삼키면 안 된다.** 16개 중 15개가 터져도 카운트는 내려가고
+                    // 로그는 한 줄이라, 통과한 것처럼 보인다.
                     try {
                         출발.await();
                         leadership.renew().block(BLOCK);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
+                    } catch (Throwable t) {
+                        터진것.add(t);
                     } finally {
                         도착.countDown();
                     }
@@ -497,7 +532,87 @@ class LeadershipTest {
             풀.shutdownNow();
         }
 
+        assertThat(터진것).isEmpty();
         assertThat(로그_메시지(Level.INFO)).filteredOn(m -> m.contains("리더가 됐다")).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("종료_뒤에는_레디스를_더_치지_않는다")
+    void 종료_뒤에는_레디스를_더_치지_않는다() {
+        // 종료 검사를 빼도 뒤처리가 정합성은 살린다. 대신 매 판 레디스를 치고
+        // 경고가 폭포가 된다 — 죽은 노드가 남기는 소음이 진짜 장애를 가린다.
+        AtomicInteger 획득 = new AtomicInteger();
+        Leadership leadership = leadership(() -> {
+            획득.incrementAndGet();
+            return 내_락();
+        });
+        leadership.renew().block(BLOCK);
+        leadership.release().block(BLOCK);
+
+        leadership.renew().block(BLOCK);
+        leadership.renew().block(BLOCK);
+
+        assertThat(획득).hasValue(1);
+    }
+
+    @Test
+    @DisplayName("리더였던_적_없으면_해제해도_내려왔다고_안_찍는다")
+    void 리더였던_적_없으면_해제해도_내려왔다고_안_찍는다() {
+        // 리더 시작 시각이 0 인 채로 찍으면 기동 이후 전체를 리더로 있던 시간으로
+        // 보고한다. 사후 조사에서 그 값이 거짓이면 owner 를 남긴 뜻이 없다.
+        Leadership leadership = leadership(LeadershipTest::내_락);
+
+        leadership.release().block(BLOCK);
+
+        assertThat(로그_메시지(Level.INFO)).noneMatch(m -> m.contains("리더에서 내려왔다"));
+    }
+
+    @Test
+    @DisplayName("리더였던_적_없으면_남이_쥐어도_잃었다고_안_찍는다")
+    void 리더였던_적_없으면_남이_쥐어도_잃었다고_안_찍는다() {
+        // 팔로워는 매 판 이 응답을 받는다. 무조건 찍으면 노드마다 분당 수백 줄이다.
+        Leadership leadership = leadership(() -> Mono.just(LeaderLock.heldBy("node-2", 1_500)));
+
+        leadership.renew().block(BLOCK);
+        leadership.renew().block(BLOCK);
+
+        assertThat(leadership.isLeader()).isFalse();
+        assertThat(로그_메시지(Level.INFO)).noneMatch(m -> m.contains("리더를 잃었다"));
+    }
+
+    @Test
+    @DisplayName("종료_뒤_남이_쥐었다는_응답이_종료를_지우지_않는다")
+    void 종료_뒤_남이_쥐었다는_응답이_종료를_지우지_않는다() {
+        // 종료와 겹친 판이 "남이 쥐었다" 로 돌아올 때 상태를 통째로 덮으면
+        // **종료 표시가 지워진다.** 그 뒤 연장이 죽는 노드를 다시 리더로 만든다.
+        AtomicReference<Leadership> 자기 = new AtomicReference<>();
+        AtomicInteger 호출 = new AtomicInteger();
+        Leadership leadership = leadership(() -> {
+            if (호출.incrementAndGet() == 1) {
+                자기.get().release().block(BLOCK);
+                return Mono.just(LeaderLock.heldBy("node-2", 1_500));
+            }
+            return 내_락();
+        });
+        자기.set(leadership);
+
+        leadership.renew().block(BLOCK);
+        leadership.renew().block(BLOCK);
+
+        assertThat(leadership.isLeader()).isFalse();
+    }
+
+    @Test
+    @DisplayName("소유자를_모르는_응답도_읽을_수_있게_찍는다")
+    void 소유자를_모르는_응답도_읽을_수_있게_찍는다() {
+        // 경합에서 진 뒤 다시 읽는 찰나에 락이 풀리면 스크립트가 빈 소유자와
+        // 음수 TTL 을 돌려준다. 빈 값을 그대로 찍으면 문장에 구멍이 생긴다.
+        Leadership leadership = 리더가_된다(() -> Mono.just(LeaderLock.heldBy("", -2)));
+
+        leadership.renew().block(BLOCK);
+
+        assertThat(로그_인자(Level.INFO, "리더를 잃었다")).singleElement()
+                .satisfies(인자 -> assertThat(인자[1]).isEqualTo("(그 사이 풀렸다)"));
     }
 
     @Test
@@ -511,30 +626,38 @@ class LeadershipTest {
     @Test
     @DisplayName("설정이_잘못되면_안_뜬다")
     void 설정이_잘못되면_안_뜬다() {
+        // **어느 가드가 던졌는지까지 본다.** 메시지를 안 보면 리스 검사를 통째로
+        // 지워도 비율 검사가 대신 던져서 통과한다.
+        assertThatThrownBy(() -> Leadership.of(null, LEASE, ATTEMPT, LeadershipTest::내_락, Mono::empty))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageStartingWith("ownerId");
         assertThatThrownBy(() -> Leadership.of(" ", LEASE, ATTEMPT, LeadershipTest::내_락, Mono::empty))
-                .isInstanceOf(IllegalArgumentException.class);
+                .isInstanceOf(IllegalArgumentException.class).hasMessageStartingWith("ownerId");
         assertThatThrownBy(() -> Leadership.of("node-1", Duration.ZERO, ATTEMPT,
                 LeadershipTest::내_락, Mono::empty))
-                .isInstanceOf(IllegalArgumentException.class);
+                .isInstanceOf(IllegalArgumentException.class).hasMessageStartingWith("lease");
         assertThatThrownBy(() -> Leadership.of("node-1", LEASE.negated(), ATTEMPT,
                 LeadershipTest::내_락, Mono::empty))
-                .isInstanceOf(IllegalArgumentException.class);
+                .isInstanceOf(IllegalArgumentException.class).hasMessageStartingWith("lease");
         assertThatThrownBy(() -> Leadership.of("node-1", LEASE, Duration.ZERO,
                 LeadershipTest::내_락, Mono::empty))
-                .isInstanceOf(IllegalArgumentException.class);
+                .isInstanceOf(IllegalArgumentException.class).hasMessageStartingWith("attemptTimeout");
         assertThatThrownBy(() -> Leadership.of("node-1", LEASE, ATTEMPT.negated(),
                 LeadershipTest::내_락, Mono::empty))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> Leadership.of("node-1", LEASE, null, null, null))
-                .isInstanceOf(RuntimeException.class);
+                .isInstanceOf(IllegalArgumentException.class).hasMessageStartingWith("attemptTimeout");
+        assertThatThrownBy(() -> Leadership.of("node-1", LEASE, ATTEMPT, null, Mono::empty))
+                .isInstanceOf(NullPointerException.class).hasMessageContaining("acquire");
+        assertThatThrownBy(() -> Leadership.of("node-1", LEASE, ATTEMPT, LeadershipTest::내_락, null))
+                .isInstanceOf(NullPointerException.class).hasMessageContaining("release");
     }
 
     @Test
-    @DisplayName("한_판이_리스의_사분의_일을_넘으면_안_뜬다")
-    void 한_판이_리스의_사분의_일을_넘으면_안_뜬다() {
+    @DisplayName("한_판이_리스의_오분의_일을_넘으면_안_뜬다")
+    void 한_판이_리스의_오분의_일을_넘으면_안_뜬다() {
         // 명령 타임아웃이 리스보다 길면 성공해도 도착할 때 이미 만료다. 아무도
         // 리더가 못 되고, 예외도 로그도 안 난다.
-        Duration 딱_맞음 = LEASE.dividedBy(4);
+        // 회복하는 판까지 넣으면 시도는 다섯 번 들어간다. 넷으로 세면 계획서가
+        // 깨진다고 못박은 값을 생성자가 통과시킨다.
+        Duration 딱_맞음 = LEASE.dividedBy(5);
         assertThat(Leadership.of("node-1", LEASE, 딱_맞음, LeadershipTest::내_락, Mono::empty)
                 .ownerId()).isEqualTo("node-1");
 

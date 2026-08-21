@@ -76,6 +76,12 @@ class SnapshotCodecTest {
                 "필드초과", "ADAPTIVE:IDLE:0:500:0:1.0:뒷판이_늘린_필드",
                 "모르는모드", "그런모드:IDLE:0:1:0:1.0",
                 "불변식위반", "ADAPTIVE:IDLE:999:500:0:1.0",
+                // **배분기가 두 값을 다른 시점에 재면 이 조합이 나온다.**
+                // credit 을 잰 뒤 waiting 을 재는 사이에 사람이 빠지면
+                // QUEUEING 인데 credit >= waiting 이 된다. 떨어지는 것이
+                // 맞지만, 떨어진 쿠폰은 판정에서 없는 쿠폰이 되므로
+                // 배분기가 한 쌍에서 유도해야 한다 (계획서 4.6.10).
+                "런타임모순", "ADAPTIVE:QUEUEING:500:10000:100:1.0",
                 "c1", "ADAPTIVE:IDLE:0:500:0:1.0"));
 
         assertThat(s.coupons()).containsOnlyKeys("c1");

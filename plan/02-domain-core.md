@@ -270,14 +270,30 @@ t=0.6s  B 도착 → 스냅샷은 아직 IDLE → 8번 통과 → 버킷 리필�
 | ID | 불변식 | 강제 |
 |---|---|---|
 | I1 | `runtime == IDLE ⟹ credit == 0` | 컴팩트 생성자 |
+| I1' | `runtime == IDLE ⟹ waiting == 0` | 컴팩트 생성자 |
 | I2 | `runtime == CLOSED ⟹ remainingStock == 0` | 컴팩트 생성자 |
 | I3 | `runtime == DRAINING ⟹ credit >= waiting` | 컴팩트 생성자 |
+| I3' | `runtime == QUEUEING ⟹ credit < waiting` (**I4 뒤에 검사**) | 컴팩트 생성자 |
 | I4 | `waiting == 0 ⟹ runtime ∈ {IDLE, CLOSED}` | 컴팩트 생성자 |
 | I5 | 표시 순위는 단조 비증가 | 속성 테스트 |
 | I6 | `pollScale >= 1.0` | 생성자 정규화 |
 
 **I1이 가장 중요하다.** `IDLE`과 `credit==0`은 독립 값이 아니라 같은 원인
 (`waiting == 0`)에서 나온다.
+
+**I3 와 I3' 은 짝이다.** 한쪽만 두면 같은 `(credit, waiting)` 이 두 런타임을 다
+가질 수 있고, 두 발행자가 같은 사실을 다른 이름으로 적는다. 경계는 양쪽이 같은
+자리여야 한다 — `credit == waiting` 은 다 뺄 수 있으므로 `DRAINING` 한쪽에만
+속한다. 그래서 `waiting > 0` 구간에서 두 상태가 credit 축을 정확히 이분한다.
+
+**단, `stock > 0` 일 때만이다.** I2 는 `CLOSED ⟹ stock == 0` 만 걸고 역방향이
+없어서, `stock == 0` 이면 `CLOSED` 와 `DRAINING`(또는 `QUEUEING`)이 같은 값
+조합을 공유한다. 유일성은 거기서 깨진다. 사다리 1번이 `stock <= 0` 을 먼저
+걷어내 판정에는 해가 없고, 불변식을 더 넣으면 코덱이 떨구는 축만 는다 — 그래서
+지금은 한계를 적어 두는 쪽을 골랐다 (CY-323).
+
+**판정은 이걸로 달라지지 않는다.** 사다리는 `runtime` 을 `!= IDLE` 로만 보므로
+둘이 같은 칸이다. 얻는 것은 **표현의 유일성**이다.
 
 ### 3.7 픽스처 설계 — 이 페이즈에서 가장 중요한 규칙
 
@@ -287,7 +303,7 @@ t=0.6s  B 도착 → 스냅샷은 아직 IDLE → 8번 통과 → 버킷 리필�
 // 금지 — 불변식을 어긴 조합을 만들 수 있다
 new CouponState(mode, runtime, credit, stock, waiting, scale)
 
-// 허용 — 각 팩토리가 하나의 도달 가능한 상태만 만든다
+// 허용 — 각 팩토리가 도달 가능한 상황 하나씩만 만든다
 CouponStates.idle(stock)
 CouponStates.queueing(credit, stock, waiting)
 CouponStates.draining(credit, stock, waiting)
@@ -332,7 +348,7 @@ CouponStates.unknown()
 
 #### T2.1.3 · 정적 팩토리 ★
 
-- **산출물** `CouponState.java` (팩토리 6종)
+- **산출물** `CouponState.java` (팩토리 8종 — `always`·`offWithQueue` 포함)
 - **근거** 3.7절 · JS-12 · DS-2
 - **선행** T2.1.2
 
@@ -340,7 +356,13 @@ CouponStates.unknown()
 2. **GREEN** `idle(stock)`
 3. **RED** 나머지 5종 각각 (`queueing`/`draining`/`closed`/`off`/`unknown`)
 4. **GREEN** 팩토리 추가. 각각 **이 상태가 실제로 어떻게 생기는지** Javadoc 한 줄
-5. **완료** 6개 팩토리가 전부 도달 가능한 상태만 만든다
+5. **완료** 8개 팩토리가 전부 도달 가능한 상황만 만든다
+
+> **`offWithQueue` 는 상태가 둘이다.** 런타임을 못 박지 않고 `(credit, waiting)`
+> 에서 유도하기 때문이다 — 못 박으면 다 뺄 수 있는 줄까지 `QUEUEING` 이 되어
+> I3' 에 막힌다. "하나의 상태" 가 아니라 **"하나의 상황"** 이 계약이다.
+> 유도하는 팩토리는 그 경계가 생성자와 같은 자리인지를 **팩토리에 대고** 재야
+> 한다. 생성자 단언은 런타임을 인자로 받아 동어반복이다.
 
 #### T2.1.4 · 테스트 픽스처 `CouponStates` ★
 

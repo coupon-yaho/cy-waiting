@@ -15,6 +15,9 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public final class CapacityCollector {
 
+    /** 창의 제곱이 {@code long} 안에 들어오게 묶는다 — 아래 {@code require} 참조. */
+    private static final Duration MAX_WINDOW = Duration.ofDays(1);
+
     private final Duration rampUp;
     private final Duration freshness;
     private final long floor;
@@ -54,12 +57,9 @@ public final class CapacityCollector {
     }
 
     /**
-     * @param rampUp         처음 본 인스턴스가 제 몫을 다 받기까지 걸리는 시간
-     * @param freshness      이보다 낡은 보고는 안 센다. <b>램프와 별개 노브다</b> —
-     *                       하나로 묶으면 한 값이 반대 방향 두 사고를 함께
-     *                       조종한다. 값은 R-2 가 정한다 (보고 주기 1초·임계 3초)
-     * @param floor          <b>신선한 보고가 하나도 없을 때</b> 쓸 값. 0 은 전면 차단이다
-     * @param perInstanceCap 한 인스턴스가 보고할 수 있는 상한. 단위 착오를 막는다
+     * <p><b>램프와 신선도는 별개 노브다.</b> 하나로 묶으면 한 값이 반대 방향 두
+     * 사고를 함께 조종한다 — 크게 잡으면 죽은 인스턴스가 오래 세어지고, 작게
+     * 잡으면 틱 한 번 밀려도 전면 억제다. 신선도 값은 R-2 가 정한다.
      */
     public static CapacityCollector of(Duration rampUp, Duration freshness,
             long floor, long perInstanceCap) {
@@ -74,8 +74,16 @@ public final class CapacityCollector {
         if (value.isZero() || value.isNegative()) {
             throw new IllegalArgumentException("%s 은 양수여야 한다: %s".formatted(name, value));
         }
+        // 초 단위로 재는데 500ms 를 주면 조용히 0 이 되어 나눗셈이 터진다.
         if (value.toNanosPart() != 0) {
             throw new IllegalArgumentException("%s 은 초 단위여야 한다: %s".formatted(name, value));
+        }
+        // **상한을 두어 넘침을 아예 없앤다.** 램프 나머지항이 창의 제곱으로
+        // 커지므로, 창을 하루로 묶으면 어떤 보고값이 와도 넘칠 수 없다.
+        // 곱셈을 감싸는 것보다 근본적이고, 하루짜리 램프는 설정 실수다.
+        if (value.compareTo(MAX_WINDOW) > 0) {
+            throw new IllegalArgumentException(
+                    "%s 은 %s 이하여야 한다: %s".formatted(name, MAX_WINDOW, value));
         }
     }
 
@@ -100,11 +108,9 @@ public final class CapacityCollector {
      * 신선한 보고를 모아 전역 크레딧을 낸다.
      *
      * <p><b>처음 보는 인스턴스는 여기서 등록한다.</b> 등록을 따로 부르게 하면
-     * 빠뜨렸을 때 조용히 영원히 0 을 내고, 그 상태는 운영에 존재할 수 없다 —
-     * 보고가 관측됐다는 것이 곧 처음 본 시각이 있다는 뜻이다.
+     * 빠뜨렸을 때 조용히 영원히 0 을 내고, 그 상태는 운영에 존재할 수 없다.
      *
-     * @param reports 이번에 읽은 보고들
-     * @param now     읽은 시각(초). {@code reportedAt} 과 <b>같은 시계</b>여야 한다
+     * @param now 읽은 시각(초). {@code reportedAt} 과 <b>같은 시계</b>여야 한다
      */
     public long collect(Collection<CapacityReport> reports, long now) {
         Map<String, CapacityReport> latest = new HashMap<>();

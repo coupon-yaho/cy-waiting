@@ -4,6 +4,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * 판정 재료를 들고 있고 <b>낡음을 두 종류로</b> 구분한다.
@@ -20,31 +21,21 @@ public final class SnapshotHolder {
     private final Clock clock;
 
     /**
-     * 스냅샷과 수신 시각을 <b>한 덩어리로</b> 든다.
+     * 판정에 쓰는 셋을 <b>한 덩어리로</b> 든다. {@code lastTick} 이 {@code null}
+     * 이면 루프가 아직 한 바퀴도 못 돈 것이다.
      *
-     * <p>둘을 따로 두면 갱신 도중 읽는 쪽이 새 스냅샷과 옛 수신 시각을 함께
-     * 본다. 그러면 방금 갱신했는데도 {@code fetchStale} 이 참이 되고, 그 값이
-     * 503 경로에 물려 있어 <b>정상 노드가 빠진다.</b>
+     * <p>따로 두면 읽는 쪽이 새 스냅샷과 옛 시각을 짝지어 본다. 그러면 방금
+     * 갱신했는데도 낡음이 되고, 그 값이 노드를 빼는 경로에 물려 있다.
      */
-    private record 상태(GatewaySnapshot snapshot, Instant fetchedAt) {
+    private record 상태(GatewaySnapshot snapshot, Instant fetchedAt, Instant lastTick) {
     }
 
     /**
      * <b>락을 쓰지 않는다.</b> 읽는 쪽이 요청 경로라, 여기서 잠그면 판정마다
      * 경합이 생긴다. 참조 교체는 원자적이고 담긴 것이 전부 불변이라 족하다.
      */
-    private volatile 상태 current = new 상태(GatewaySnapshot.EMPTY, Instant.EPOCH);
-
-    /**
-     * 갱신 루프가 마지막으로 한 바퀴 돈 시각. <b>성패와 무관하다.</b>
-     *
-     * <p>{@code null} 은 루프가 아직 한 번도 못 돈 것이다 — 기동 직후이거나
-     * 루프를 띄우지 못했다는 뜻이라 판정 재료가 없다. 이때는 낡음으로 본다.
-     *
-     * <p>{@code 상태} 와 달리 따로 둔다. 스냅샷과 짝지어 읽을 필요가 없고,
-     * 실패한 갱신도 이것만 갱신하기 때문이다.
-     */
-    private volatile Instant lastTick;
+    private final AtomicReference<상태> current =
+            new AtomicReference<>(new 상태(GatewaySnapshot.EMPTY, Instant.EPOCH, null));
 
     public static SnapshotHolder of(Duration fetchStaleAfter, Duration dataStaleAfter,
             Clock clock) {
@@ -58,45 +49,49 @@ public final class SnapshotHolder {
     }
 
     public GatewaySnapshot current() {
-        return current.snapshot();
+        return current.get().snapshot();
     }
 
-    /** 통째로 갈아 끼운다. 실패한 갱신은 이걸 부르지 않는다 — 옛 값이 남는다. */
+    /**
+     * 통째로 갈아 끼운다. 실패한 갱신은 이걸 부르지 않는다 — 옛 값이 남는다.
+     *
+     * <p>성공한 판은 셋을 다 정한다. 앞 값을 볼 것이 없어 CAS 가 필요 없다.
+     */
     public void replace(GatewaySnapshot snapshot) {
         Instant now = clock.instant();
-        this.current = new 상태(snapshot, now);
-        this.lastTick = now;
+        current.set(new 상태(snapshot, now, now));
     }
 
     /**
      * 루프가 한 바퀴 돌았다고 알린다. <b>받아오기에 실패해도 부른다.</b>
      *
-     * <p>이걸 성공했을 때만 부르면 {@code fetchStale} 이 다시 "받아왔는가" 로
-     * 돌아가고, 공유 원인 장애가 전 노드 동시 이탈이 된다.
+     * <p>성공했을 때만 부르면 낡음이 다시 "받아왔는가" 가 되고, 공유 원인
+     * 장애가 전 노드 동시 이탈이 된다. 스냅샷은 앞 값을 그대로 이어야 하므로
+     * 읽고 쓰는 사이에 갱신이 끼지 않게 CAS 로 돌린다.
      */
     public void 루프가_돌았다() {
-        this.lastTick = clock.instant();
+        Instant now = clock.instant();
+        current.updateAndGet(s -> new 상태(s.snapshot(), s.fetchedAt(), now));
     }
 
     /**
      * 루프가 아직 한 번도 안 돌았나 — 기동 직후 구간이다.
      *
-     * <p><b>돌다 멎은 것과 갈라 두려고 노출한다.</b> {@link #tickAge()} 로는 둘이
-     * 같은 값인데, 앞엣것을 재기동 신호로 쓰면 첫 판을 못 돈 파드가 죽고 다시
-     * 떠서 또 죽는다 — 크래시 루프다. liveness 는 이것이 거짓일 때만 본다.
+     * <p><b>돌다 멎은 것과 갈라 두려고 노출한다.</b> 재기동 신호로 쓰면 첫 판을
+     * 못 돈 파드가 죽고 다시 떠서 또 죽는다 — 크래시 루프다.
      */
     public boolean 첫_회전_전인가() {
-        return lastTick == null;
+        return current.get().lastTick() == null;
     }
 
     /**
      * 마지막으로 <b>받아 온</b> 뒤 흐른 시간. 실패한 갱신은 이걸 안 움직인다.
      *
-     * <p>판정에는 안 쓴다 — 그것이 이 클래스 주석의 요지다. 헬스 응답 detail 에
-     * {@link #dataAge()} 와 나란히 실어 사람이 원인을 가리게 하는 값이다.
+     * <p>판정에는 안 쓴다. 헬스 detail 에 {@link #dataAge()} 와 나란히 실어
+     * 사람이 원인을 가리게 하는 값이다.
      */
     public Duration fetchAge() {
-        return Duration.between(current.fetchedAt(), clock.instant());
+        return Duration.between(current.get().fetchedAt(), clock.instant());
     }
 
     /**
@@ -105,7 +100,7 @@ public final class SnapshotHolder {
      * <p>이 노드가 마지막으로 <i>받아 온</i> 뒤가 아니다 — 위 클래스 주석 참조.
      */
     public Duration tickAge() {
-        Instant tick = lastTick;
+        Instant tick = current.get().lastTick();
         return tick == null ? ChronoUnit.FOREVER.getDuration()
                 : Duration.between(tick, clock.instant());
     }
@@ -119,13 +114,13 @@ public final class SnapshotHolder {
      * 않고 {@link #시계가_앞섰나()} 로 드러낸다.
      */
     public Duration dataAge() {
-        Duration age = Duration.between(current.snapshot().publishedAt(), clock.instant());
+        Duration age = Duration.between(current.get().snapshot().publishedAt(), clock.instant());
         return age.isNegative() ? Duration.ZERO : age;
     }
 
     /** 발행 시각이 이 노드의 현재보다 미래인가 — 시계가 갈렸다는 신호다. */
     public boolean 시계가_앞섰나() {
-        return Duration.between(current.snapshot().publishedAt(), clock.instant()).isNegative();
+        return Duration.between(current.get().snapshot().publishedAt(), clock.instant()).isNegative();
     }
 
     /** 임계와 같으면 아직 낡지 않았다 — 넘어야 낡음이다. */

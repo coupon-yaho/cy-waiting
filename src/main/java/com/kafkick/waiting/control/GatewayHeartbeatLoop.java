@@ -25,9 +25,6 @@ public final class GatewayHeartbeatLoop implements SmartLifecycle {
 
     private static final Logger log = LoggerFactory.getLogger(GatewayHeartbeatLoop.class);
 
-    /** 바깥 방어가 안쪽 타임아웃보다 이만큼 길다. 비슷하면 둘을 못 가른다. */
-    private static final int LAST_RESORT_FACTOR = 10;
-
     private final Supplier<Mono<Integer>> beat;
     private final Supplier<Mono<Void>> leave;
     private final IntConsumer observed;
@@ -115,9 +112,16 @@ public final class GatewayHeartbeatLoop implements SmartLifecycle {
                 .subscribeOn(scheduler);
     }
 
+    /**
+     * <b>비동기 종료다.</b> 컨테이너는 {@code SmartLifecycle} 을 구현한 빈에
+     * 이쪽만 부르고, 콜백이 올 때까지 다음 단계로 안 넘어간다.
+     *
+     * <p>그래서 블로킹이 필요 없다 — 기다림은 컨테이너가 한다.
+     */
     @Override
-    public void stop() {
+    public void stop(Runnable callback) {
         if (!running.compareAndSet(true, false)) {
+            callback.run();
             return;
         }
         Disposable current = subscription;
@@ -127,20 +131,26 @@ public final class GatewayHeartbeatLoop implements SmartLifecycle {
         // **등록 해제가 종료를 붙들면 안 된다.** 못 지워도 임계가 지나면 알아서
         // 빠진다. 반대로 붙들면 오케스트레이터가 강제 종료하고, 그때는 진행
         // 중인 요청까지 함께 끊긴다.
-        try {
-            Mono.defer(leave)
-                    .timeout(leaveTimeout, leaveTimer)
-                    .doOnError(e -> log.warn("등록 해제 실패 — 임계가 지나면 빠진다: {}", e.toString()))
-                    .onErrorResume(e -> Mono.empty())
-                    // **안쪽보다 뚜렷하게 크게 둔다.** 비슷하면 어느 쪽이 끊었는지
-                    // 구분할 수 없고, 시험도 둘을 못 가른다. 이 값은 안쪽이
-                    // 안 들을 때만 도는 마지막 방어다.
-                    // RULE-EXCEPTION(RX-1): 종료 경로이고 stop 이 동기 규약이라,
-                    // 안 기다리면 컨테이너가 다음 단계로 넘어가 해제가 유실된다.
-                    .block(leaveTimeout.multipliedBy(LAST_RESORT_FACTOR));
-        } catch (RuntimeException e) {
-            log.warn("등록 해제를 기다리지 않는다: {}", e.toString());
-        }
+        Mono.defer(leave)
+                .timeout(leaveTimeout, leaveTimer)
+                .doOnError(e -> log.warn("등록 해제 실패 — 임계가 지나면 빠진다: {}", e.toString()))
+                .onErrorResume(e -> Mono.empty())
+                .doFinally(signal -> {
+                    releaseScheduler();
+                    callback.run();
+                })
+                .subscribe();
+    }
+
+    /**
+     * 컨테이너는 이쪽을 안 부른다. 손으로 부르는 경우를 위해 같은 경로를 탄다.
+     */
+    @Override
+    public void stop() {
+        stop(() -> { });
+    }
+
+    private void releaseScheduler() {
         Scheduler mine = owned;
         if (mine != null) {
             mine.dispose();

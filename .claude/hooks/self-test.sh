@@ -95,6 +95,11 @@ def okName = "한글 문자열"' allow '빌드 주석·문자열은 오탐 아�
 gradle_case "tasks.register('adapterReport') {
     description = '어댑터 커버리지 보고'
 }" allow '빌드 정상 태스크에 한글 설명'
+gradle_case 'ext { 한글 = 1 }' block '빌드 한 줄 ext (회귀)'
+gradle_case 'int 한글 = 1' block '빌드 원시 타입 선언 (회귀)'
+gradle_case '// tasks.register("한글") 는 예시다' allow '빌드 주석 속 태스크 이름은 오탐 아님 (회귀)'
+gradle_case 'def s = "tasks.register(\\"한글\\")"' allow '빌드 문자열 속 태스크 이름은 오탐 아님 (회귀)'
+gradle_case 'tasks.register<한글타입>("asciiTask") { }' block '빌드 제네릭 타입 인자 (회귀)' '.gradle.kts'
 gradle_case 'val 한글 = 1' block '빌드 kts val' '.gradle.kts'
 gradle_case 'fun 한글함수() { }' block '빌드 kts fun' '.gradle.kts'
 gradle_case 'tasks.register<Copy>("한글태스크") { }' block '빌드 kts register 타입인자' '.gradle.kts'

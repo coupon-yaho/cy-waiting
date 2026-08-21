@@ -15,6 +15,26 @@ trap 'rm -rf "$tmp"' EXIT
 pass=0
 fail=0
 
+# **로케일을 바꿔 같은 검사를 다시 돌린다.** 대괄호 범위는 콜레이션 순서를 따라서
+# 개발자 로케일(ko_KR.UTF-8)에서만 물고 CI(C.UTF-8)에서는 조용히 새는 일이 실제로
+# 있었다. 로케일에 기대는 판정은 로컬 통과가 아무 뜻이 없다.
+locale_case() {   # 로케일 hook 내용 파일명 기대 설명
+    local loc=$1; shift
+    local label=${!#}
+
+    # **로케일이 설치돼 있는지 확인한다.** 없는 로케일을 요청하면 도구가 조용히
+    # 기본값으로 돌고, 그러면 프로브가 "다른 로케일에서도 문다" 를 증명한 척만
+    # 한다. `locale` 은 없는 값도 그대로 되읊으므로 `locale -a` 를 봐야 한다 —
+    # 표기가 en_US.utf8 / en_US.UTF-8 로 갈리니 소문자로 눕히고 하이픈을 뗀다.
+    if ! locale -a 2>/dev/null | tr 'A-Z' 'a-z' | tr -d '-' \
+            | grep -qx "$(printf '%s' "$loc" | tr 'A-Z' 'a-z' | tr -d '-')"; then
+        printf '  FAIL %s (로케일 %s 을 못 쓴다 — 프로브가 헛돈다)\n' "$label" "$loc"
+        fail=$((fail + 1))
+        return
+    fi
+    LC_ALL="$loc" file_case "$@"
+}
+
 file_case() {   # hook 내용 파일명 기대(block|allow) 설명
     local hook=$1 content=$2 name=$3 expect=$4 label=$5
     local path="$tmp/$name"
@@ -60,6 +80,104 @@ file_case check-java.sh 'class A {
         return a;
     }
 }' 'src/main/java/E.java' block 'JS-13 private static 메서드'
+file_case check-java.sh 'class A {
+    boolean 낡았나() {
+        return true;
+    }
+}' 'src/main/java/H.java' block 'JS-11 한글 메서드명'
+file_case check-java.sh 'class A {
+    private record 상태(int x) {
+    }
+}' 'src/main/java/H2.java' block 'JS-11 한글 레코드명'
+file_case check-java.sh 'class A {
+    // 한글 주석은 통과해야 한다
+    void log() {
+        System.out.println("한글 로그 메시지");
+    }
+}' 'src/main/java/H3.java' allow 'JS-11 주석·문자열은 오탐 아님'
+file_case check-java.sh 'class A {
+    /* \u002a/ void 한글() {}
+}' 'src/main/java/HI.java' block 'JS-11 이스케이프가 블록 주석을 닫는다 (회귀)'
+file_case check-java.sh 'class A {
+    String s = "\u0041";
+}' 'src/main/java/HJ.java' block 'JS-11 문자열 안 유니코드 이스케이프도 막는다'
+file_case check-java.sh 'class A {
+    int \uD55C\uAE00 = 0;
+}' 'src/main/java/HF.java' block 'JS-11 유니코드 이스케이프 식별자 (회귀)'
+file_case check-java.sh 'class A {
+    // \u000A int x = 0;
+}' 'src/main/java/HG.java' block 'JS-11 줄바꿈 이스케이프가 주석 경계를 옮긴다 (회귀)'
+file_case check-java.sh 'class A {
+    String s = "\\uD55C";
+    void ok6() {
+    }
+}' 'src/main/java/HH.java' allow 'JS-11 역슬래시가 짝수면 이스케이프가 아니다 (회귀)'
+file_case check-java.sh 'class A {
+    String s = """
+        따옴표 셋을 이스케이프한다 \"""
+        그 뒤의 한글은 아직 문자열 안이다
+        """;
+    void ok5() {
+    }
+}' 'src/main/java/HE.java' allow 'JS-11 텍스트 블록 안 이스케이프 따옴표 (회귀)'
+file_case check-java.sh 'class A {
+    String s = """
+        여러 줄에 걸친 한글 텍스트 블록
+        // 주석처럼 보이는 것도 안에 있다
+        """;
+    void ok4() {
+    }
+}' 'src/main/java/HC.java' allow 'JS-11 텍스트 블록은 줄을 넘어도 문자열이다 (회귀)'
+file_case check-java.sh 'class A {
+    String s = """
+        한글 텍스트 블록
+        """;
+    void 안녕하세요() {
+    }
+}' 'src/main/java/HD.java' block 'JS-11 텍스트 블록 뒤 한글 식별자를 놓치지 않는다 (회귀)'
+file_case check-java.sh 'class A {
+    void log() {
+        System.out.println("한글 // 메시지");
+    }
+}' 'src/main/java/H7.java' allow 'JS-11 문자열 안의 // 가 마스킹을 안 깬다 (회귀)'
+file_case check-java.sh 'class A {
+    // 그는 "말했다
+    void ok() {
+    }
+}' 'src/main/java/H8.java' allow 'JS-11 주석 안의 따옴표가 마스킹을 안 깬다 (회귀)'
+file_case check-java.sh 'class A {
+    char c = '"'"'가'"'"';
+    void 안녕() {
+    }
+}' 'src/main/java/H9.java' block 'JS-11 문자열 뒤의 한글 식별자를 놓치지 않는다 (회귀)'
+file_case check-java.sh 'class A {
+    /* 한글 블록 주석 */ void ok2() {
+    }
+}' 'src/main/java/HA.java' allow 'JS-11 같은 줄 블록 주석 (회귀)'
+file_case check-java.sh 'class A {
+    /*
+     * 여러 줄 한글 주석
+     */
+    void ok3() {
+    }
+}' 'src/main/java/HB.java' allow 'JS-11 여러 줄 블록 주석 (회귀)'
+
+locale_case C.UTF-8 check-java.sh 'class A {
+    boolean 낡았나() {
+        return true;
+    }
+}' 'src/main/java/H4.java' block 'JS-11 로케일이 달라도 문다 (회귀)'
+locale_case en_US.UTF-8 check-java.sh 'class A {
+    private record 상태(int x) {
+    }
+}' 'src/main/java/H5.java' block 'JS-11 영어 로케일에서도 문다 (회귀)'
+locale_case C.UTF-8 check-java.sh 'class A {
+    // 한글 주석
+    void log() {
+        System.out.println("한글 로그");
+    }
+}' 'src/main/java/H6.java' allow 'JS-11 로케일 바뀌어도 주석·문자열은 오탐 아님'
+
 file_case check-java.sh 'class A {
     private class Inner {
     }

@@ -88,6 +88,84 @@ if [[ "$is_test" == false ]]; then
             'private[[:space:]]+static[[:space:]]+(final[[:space:]]+)?(class|record|enum|interface)([[:space:]]|$)')"
 fi
 
+# ── JS-11 운영 코드 식별자는 영문 ─────────────────────────────────────────────
+# 주석·문자열·문자 리터럴을 지운 뒤 ASCII 밖 바이트가 남으면 그건 식별자다.
+# 로그 메시지는 LG-9 가 한글을 요구하고 주석은 JS-11 자신이 한글을 요구하므로,
+# 셋 다 지우고 봐야 한다. 테스트는 TS-2 가 한글 이름을 요구하므로 제외한다.
+#
+# **한 글자씩 상태를 들고 훑는다.** 정규식으로 따로따로 지우면 순서에 걸린다 —
+# 주석을 먼저 지우면 "한글 // 메시지" 가 따옴표를 잃어 문자열로 안 보이고,
+# 문자열을 먼저 지우면 // 그는 "말했다 의 따옴표가 문자열 시작으로 보인다.
+#
+# **판정까지 awk 안에서 끝내고 밖으로는 ASCII 표시만 내보낸다.** 대괄호 범위는
+# 콜레이션 순서를 따라서 로케일마다 다르게 문다 — [가-힣] 은 ko_KR 에서만 물었고,
+# [^[:cntrl:] -~] 는 en_US 에서 멀쩡한 코드까지 물었다. LC_ALL=C 로 고정해 바이트로
+# 재고, scan 에 넘기는 패턴에서는 범위를 아예 없앤다.
+if [[ "$is_test" == false ]]; then
+    saved_code=$code
+    code=$(LC_ALL=C awk '
+        BEGIN { blk = 0; txt = 0 }
+        {
+            out = ""; i = 1; n = length($0)
+            while (i <= n) {
+                c = substr($0, i, 1)
+                two = substr($0, i, 2)
+                three = substr($0, i, 3)
+                if (txt) {                        # 텍스트 블록 안 — 줄을 넘어 이어진다
+                    # 역슬래시를 **먼저** 소비한다. 안 그러면 \""" 의 뒤 세 글자를
+                    # 종료로 보고, 남은 본문이 코드로 새어 한글이 식별자가 된다.
+                    if (c == "\\") { i += 2; continue }
+                    if (three == "\"\"\"") { txt = 0; i += 3 } else { i++ }
+                    continue
+                }
+                if (blk) {                        # 블록 주석 안 — */ 만 찾는다
+                    if (two == "*/") { blk = 0; i += 2 } else { i++ }
+                    continue
+                }
+                if (two == "/*") { blk = 1; i += 2; continue }
+                if (three == "\"\"\"") { txt = 1; i += 3; continue }
+                if (two == "//") { break }        # 줄 끝까지 주석
+                if (c == "\"" || c == "'"'"'") {  # 문자열·문자 리터럴을 통째로 지운다
+                    q = c; i++
+                    while (i <= n) {
+                        d = substr($0, i, 1)
+                        if (d == "\\") { i += 2; continue }
+                        i++
+                        if (d == q) break
+                    }
+                    continue
+                }
+                out = out c; i++
+            }
+            mark = ""
+            # **유니코드 이스케이프는 상태 기계보다 먼저 온다.** 자바는 렉싱
+            # **전에** 이걸 푼다. 그래서 \uD55C\uAE00 은 한글 식별자가 되고,
+            # /* \u002a/ 는 주석을 닫고, // \u000A 는 주석을 끊는다 — 마스킹을
+            # 아무리 정확히 해도 이 경로는 전부 새어 나간다.
+            #
+            # 경계를 바꾸는 것만 골라내려 들면 목록이 끝없이 늘어난다.
+            # **운영 코드에는 아예 쓰지 않는다** 로 못박고 한 줄로 막는다.
+            # 한글이 필요하면 문자열에 그대로 적으면 된다 (LG-9).
+            #
+            # 역슬래시가 짝수면 이스케이프가 아니다 — "\\uD55C" 는 역슬래시
+            # 한 글자에 이어진 평범한 u 다. 홀수일 때만 잡는다.
+            bs = 0
+            for (k = 1; k <= n; k++) {
+                ch = substr($0, k, 1)
+                if (ch == "\\") { bs++; continue }
+                if (ch == "u" && bs % 2 == 1) { mark = "NONASCII"; break }
+                bs = 0
+            }
+            for (k = 1; k <= length(out) && mark == ""; k++) {
+                if (substr(out, k, 1) > "\177") { mark = "NONASCII" }
+            }
+            printf "%d:%s\n", NR, mark
+        }' "$file")
+    report "JS-11" "운영 코드 식별자는 ASCII 영문 — 한글은 주석·Javadoc·로그 메시지에만" \
+        "$(scan 'JS-11' '^[0-9]+:NONASCII$')"
+    code=$saved_code
+fi
+
 # ── JS-14 중첩 클래스는 static ────────────────────────────────────────────────
 # 들여쓰기된 class 선언 = 중첩. 수식어가 없는 경우도 잡는다.
 #

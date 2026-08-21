@@ -127,7 +127,7 @@ review_files() {
     done
 
     if ((${#java[@]})); then
-        head2 "Java — 기존 훅 (JS-1·2·4·6·9·13·14 · DS-1 · RX-1 · LG-5·6)"
+        head2 "Java — 기존 훅 (JS-1·2·4·6·9·11·13·14 · DS-1 · RX-1 · LG-5·6)"
         local clean=1
         for f in "${java[@]}"; do run_hook check-java.sh "$f" || clean=0; done
         ((clean)) && say "  위반 없음"

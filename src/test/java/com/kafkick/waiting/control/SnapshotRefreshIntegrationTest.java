@@ -74,7 +74,7 @@ class SnapshotRefreshIntegrationTest {
 
         SnapshotHolder holder = 홀더();
         SnapshotRefresher refresher = 붙인다(holder, redis);
-        refresher.한번().block(Duration.ofSeconds(10));
+        refresher.once().block(Duration.ofSeconds(10));
         assertThat(holder.current().coupons()).containsOnlyKeys("c1");
 
         // **끊기지 않았다면 보일 것을 심어 둔다.** 안 심으면 "장애를 견뎠다"
@@ -82,7 +82,7 @@ class SnapshotRefreshIntegrationTest {
         redis.sync().hset(KEY, Map.of("c2", "ALWAYS:IDLE:0:9:0:1.0"));
 
         faults.끊는다();
-        refresher.한번().block(Duration.ofSeconds(10));
+        refresher.once().block(Duration.ofSeconds(10));
 
         // **레디스가 죽었는데 판정은 계속된다.** 이것이 이 게이트웨이의 전제다.
         // c2 가 안 보이는 것이 곧 장애가 실제로 주입됐다는 증거다.
@@ -98,10 +98,10 @@ class SnapshotRefreshIntegrationTest {
 
         SnapshotHolder holder = 홀더();
         SnapshotRefresher refresher = 붙인다(holder, redis);
-        refresher.한번().block(Duration.ofSeconds(10));
+        refresher.once().block(Duration.ofSeconds(10));
 
         faults.끊는다();
-        refresher.한번().block(Duration.ofSeconds(10));
+        refresher.once().block(Duration.ofSeconds(10));
         faults.붙인다();
 
         // **끊긴 사이 들고 있던 c1 은 회복 뒤 사라지는 것이 맞다** — 컨테이너와
@@ -114,7 +114,7 @@ class SnapshotRefreshIntegrationTest {
         Awaitility.await().atMost(Duration.ofSeconds(20))
                 .pollInterval(Duration.ofMillis(300))
                 .untilAsserted(() -> {
-                    회복.한번().block(Duration.ofSeconds(5));
+                    회복.once().block(Duration.ofSeconds(5));
                     assertThat(holder.current().coupons()).containsOnlyKeys("c2");
                 });
         다시.close();

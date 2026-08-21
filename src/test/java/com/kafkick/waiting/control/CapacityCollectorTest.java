@@ -229,7 +229,51 @@ class CapacityCollectorTest {
         long credit = collector.collect(
                 List.of(report("huge", Long.MAX_VALUE, NOW + 30)), NOW + 30);
 
-        assertThat(credit).isPositive().isLessThan(Long.MAX_VALUE);
+        // **양수인지만 보면 아무 값이나 통과한다.** 30초는 창의 절반이므로
+        // 정확히 절반이어야 한다 — 넘침을 막느라 값이 틀어지면 그것도 결함이다.
+        assertThat(credit).isEqualTo(Long.MAX_VALUE / 2);
+    }
+
+    @Test
+    @DisplayName("음수만_보고되면_하한을_쓴다")
+    void 음수만_보고되면_하한을_쓴다() {
+        // **음수를 관측으로 세면 안 된다.** 세면 "신선한 보고가 있다" 가 되어
+        // 하한이 안 걸리고 전역 크레딧이 0 이 된다 — 전면 차단이다.
+        CapacityCollector collector = collector();
+
+        assertThat(collector.collect(List.of(report("broken", -5, NOW)), NOW))
+                .isEqualTo(FLOOR);
+    }
+
+    @Test
+    @DisplayName("합이_넘쳐도_음수가_안_된다")
+    void 합이_넘쳐도_음수가_안_된다() {
+        // 인스턴스가 많고 각자 상한에 가까우면 합이 넘친다. 넘치면 음수가 되어
+        // 전역 크레딧이 0 이 된다.
+        CapacityCollector collector = CapacityCollector.of(
+                RAMP_UP, FRESHNESS, FLOOR, Long.MAX_VALUE);
+        long warmed = NOW + RAMP_UP.toSeconds();
+        for (long t = NOW; t <= warmed; t += FRESHNESS.toSeconds()) {
+            collector.collect(
+                    List.of(report("a", Long.MAX_VALUE, t), report("b", Long.MAX_VALUE, t)), t);
+        }
+
+        assertThat(collector.collect(
+                List.of(report("a", Long.MAX_VALUE, warmed), report("b", Long.MAX_VALUE, warmed)),
+                warmed)).isEqualTo(Long.MAX_VALUE);
+    }
+
+    @Test
+    @DisplayName("초_미만_설정은_기동에_실패한다")
+    void 초_미만_설정은_기동에_실패한다() {
+        // 초 단위로 재는데 500ms 를 주면 조용히 0 이 되어 나눗셈이 터지거나
+        // 임계가 사라진다.
+        assertThatThrownBy(() -> CapacityCollector.of(Duration.ofMillis(500), FRESHNESS, FLOOR, CAP))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("초 단위");
+        assertThatThrownBy(() -> CapacityCollector.of(RAMP_UP, Duration.ofMillis(1500), FLOOR, CAP))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("초 단위");
     }
 
     @Test

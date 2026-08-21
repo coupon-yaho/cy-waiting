@@ -4,12 +4,12 @@ package com.kafkick.waiting.control;
  * 락을 물었을 때 돌아온 <b>사실</b>.
  *
  * <p>참·거짓 하나로 접으면 "내가 못 잡았다" 와 "누가 잡고 있다" 가 같은 값이 된다.
- * 스플릿 브레인을 사후에 조사할 때 필요한 것이 정확히 뒤엣것이라, 소유자를 버리면
- * <b>"그럼 누가 리더였나" 에 답할 수 없다.</b>
+ * 스플릿 브레인을 사후에 조사할 때 필요한 것이 뒤엣것이다.
  *
  * @param acquired  참이면 내가 리더다 — 새로 잡았거나 연장했다
- * @param owner     지금 락을 쥔 노드
- * @param ttlMillis 남은 리스
+ * @param owner     지금 락을 쥔 노드. <b>그 사이 풀렸으면 빈 문자열</b>이다 —
+ *                  경합에서 진 뒤 다시 읽는 찰나에 스크립트가 그렇게 돌려준다
+ * @param ttlMillis 남은 리스. 키가 없으면 음수다
  */
 public record LeaderLock(boolean acquired, String owner, long ttlMillis) {
 
@@ -25,5 +25,10 @@ public record LeaderLock(boolean acquired, String owner, long ttlMillis) {
 
     public static LeaderLock heldBy(String owner, long ttlMillis) {
         return new LeaderLock(false, owner, ttlMillis);
+    }
+
+    /** 로그에 쓸 소유자. 빈 값을 그대로 찍으면 문장에 구멍이 생겨 원인을 오해한다. */
+    public String describeOwner() {
+        return owner.isBlank() ? "(그 사이 풀렸다)" : owner;
     }
 }

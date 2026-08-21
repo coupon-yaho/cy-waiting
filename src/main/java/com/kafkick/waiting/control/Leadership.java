@@ -5,6 +5,7 @@ import static java.util.concurrent.TimeUnit.NANOSECONDS;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
@@ -25,8 +26,14 @@ public final class Leadership {
 
     private static final Logger log = LoggerFactory.getLogger(Leadership.class);
 
-    /** 계획서의 {@code renew = lease / 4}. 한 판이 이보다 길면 세 번 놓치기 전에 리스가 끝난다. */
-    private static final int ATTEMPTS_PER_LEASE = 4;
+    /**
+     * 마지막 성공부터 회복하는 판이 끝날 때까지 들어가는 <b>시도의 수</b>.
+     *
+     * <p>실제 예산은 {@code 4 × (시도 + 지연) + 시도 ≤ lease} 인데 지연은 여기서
+     * 모른다. 지연이 0 이상이므로 <b>{@code 5 × 시도 ≤ lease} 는 반드시 필요하다</b> —
+     * 이것만으로 예산을 닫지는 못하지만, 넘으면 확실히 깨진다.
+     */
+    private static final int ATTEMPTS_PER_LEASE = 5;
 
     /** {@code CLOSED} 는 종단이다. 되살아나면 다음 리더와 겹친다. */
     private enum State { FOLLOWER, LEADER, CLOSED }
@@ -64,6 +71,9 @@ public final class Leadership {
             new AtomicReference<>(new Standing(State.FOLLOWER, 0, 0));
     private final AtomicReference<Long> failingSince = new AtomicReference<>();
 
+    /** 억제하는 동안 삼킨 판의 수. 지속 시간만으로는 심각도를 모른다. */
+    private final AtomicInteger suppressed = new AtomicInteger();
+
     private Leadership(String ownerId, Duration lease, Duration attemptTimeout,
             Supplier<Mono<LeaderLock>> acquire, Supplier<Mono<Void>> release, LongSupplier ticker) {
         if (ownerId == null || ownerId.isBlank()) {
@@ -80,7 +90,7 @@ public final class Leadership {
         // 배분이 멎는 사고로 배운다.
         if (attemptTimeout.multipliedBy(ATTEMPTS_PER_LEASE).compareTo(lease) > 0) {
             throw new IllegalArgumentException(
-                    "한 판이 리스의 1/%d 을 넘으면 연장을 놓치기 전에 리스가 끝난다: attemptTimeout=%s lease=%s"
+                    "attemptTimeout 이 리스의 1/%d 을 넘으면 회복하는 판 전에 리스가 끝난다: attemptTimeout=%s lease=%s"
                             .formatted(ATTEMPTS_PER_LEASE, attemptTimeout, lease));
         }
         this.ownerId = ownerId;
@@ -213,8 +223,8 @@ public final class Leadership {
                     ? new Standing(State.FOLLOWER, s.confirmedAt(), s.leaderSince())
                     : s);
             if (before.state() == State.LEADER) {
-                log.info("리더를 잃었다 — {}초 동안 리더였다, 지금 소유자는 {} (남은 리스 {}ms), owner={}",
-                        heldSeconds(before), lock.owner(), lock.ttlMillis(), ownerId);
+                log.info("리더를 잃었다 — {}초 동안 리더였다, 지금 소유자는 {}, 남은 리스 {}ms, owner={}",
+                        heldSeconds(before), lock.describeOwner(), lock.ttlMillis(), ownerId);
             }
             return Mono.empty();
         }
@@ -247,21 +257,25 @@ public final class Leadership {
     /**
      * 실패가 이어지는 동안 경고는 한 번만 찍는다.
      *
-     * <p>연장은 리스의 1/4 마다 돈다. 매 판 찍으면 5분 단절에 노드마다 수백 줄이고,
-     * 여러 노드가 동시에 겪는 일이라 그만큼 곱해진다.
+     * <p>연장은 리스보다 훨씬 자주 돈다. 매 판 찍으면 몇 분짜리 단절에 노드마다
+     * 수백 줄이고, 여러 노드가 동시에 겪는 일이라 그만큼 곱해진다.
+     *
+     * <p><b>대신 몇 판을 삼켰는지 센다.</b> 지속 시간만 남기면 그동안 한 판이
+     * 실패한 것인지 수백 판이 실패한 것인지 사후에 못 가린다.
      */
     private void enterFailing(Throwable cause) {
+        suppressed.incrementAndGet();
         if (failingSince.compareAndSet(null, ticker.getAsLong())) {
-            log.warn("리더 확인 실패 — 리스가 남은 동안은 리더로 둔다, owner={}: {}",
-                    ownerId, cause.toString());
+            log.warn("리더 확인 실패 — 리스가 남은 동안은 리더로 둔다, owner={}", ownerId, cause);
         }
     }
 
     private void exitFailing() {
         Long since = failingSince.getAndSet(null);
-        if (since != null) {
-            log.info("리더 확인 복구 — {}초 만에, owner={}",
-                    NANOSECONDS.toSeconds(ticker.getAsLong() - since), ownerId);
+        if (since == null) {
+            return;
         }
+        log.info("리더 확인 복구 — {}초 만에, 그동안 {}판 실패, owner={}",
+                NANOSECONDS.toSeconds(ticker.getAsLong() - since), suppressed.getAndSet(0), ownerId);
     }
 }

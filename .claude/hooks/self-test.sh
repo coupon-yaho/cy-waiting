@@ -20,6 +20,18 @@ fail=0
 # 있었다. 로케일에 기대는 판정은 로컬 통과가 아무 뜻이 없다.
 locale_case() {   # 로케일 hook 내용 파일명 기대 설명
     local loc=$1; shift
+    local label=${!#}
+
+    # **로케일이 설치돼 있는지 확인한다.** 없는 로케일을 요청하면 도구가 조용히
+    # 기본값으로 돌고, 그러면 프로브가 "다른 로케일에서도 문다" 를 증명한 척만
+    # 한다. `locale` 은 없는 값도 그대로 되읊으므로 `locale -a` 를 봐야 한다 —
+    # 표기가 en_US.utf8 / en_US.UTF-8 로 갈리니 소문자로 눕히고 하이픈을 뗀다.
+    if ! locale -a 2>/dev/null | tr 'A-Z' 'a-z' | tr -d '-' \
+            | grep -qx "$(printf '%s' "$loc" | tr 'A-Z' 'a-z' | tr -d '-')"; then
+        printf '  FAIL %s (로케일 %s 을 못 쓴다 — 프로브가 헛돈다)\n' "$label" "$loc"
+        fail=$((fail + 1))
+        return
+    fi
     LC_ALL="$loc" file_case "$@"
 }
 

@@ -140,7 +140,7 @@ class CouponStateTest {
     // 규칙의 근거는 바깥 인스턴스 누수인데, 테스트 인스턴스는 실행 후 버려져 해당 없다.
     @Nested
     @DisplayName("IDLE 은 줄이 없다")
-    class IDLE에줄이없다 {
+    class IdleHasNoQueue {
 
         @Test
         @DisplayName("IDLE인데_대기자가_있으면_생성에_실패한다")
@@ -157,7 +157,7 @@ class CouponStateTest {
     // 규칙의 근거는 바깥 인스턴스 누수인데, 테스트 인스턴스는 실행 후 버려져 해당 없다.
     @Nested
     @DisplayName("pollScale 유한값")
-    class pollScale유한값 {
+    class PollScaleFinite {
 
         @Test
         @DisplayName("pollScale이_NaN이면_생성에_실패한다")
@@ -173,7 +173,7 @@ class CouponStateTest {
     // 규칙의 근거는 바깥 인스턴스 누수인데, 테스트 인스턴스는 실행 후 버려져 해당 없다.
     @Nested
     @DisplayName("필수 값")
-    class 필수값 {
+    class RequiredFields {
 
         @Test
         @DisplayName("mode가_null이면_생성에_실패한다")
@@ -193,7 +193,7 @@ class CouponStateTest {
     // 규칙의 근거는 바깥 인스턴스 누수인데, 테스트 인스턴스는 실행 후 버려져 해당 없다.
     @Nested
     @DisplayName("음수 방어")
-    class 음수 {
+    class NegativeValues {
 
         @Test
         @DisplayName("재고가_음수면_생성에_실패한다")

@@ -91,7 +91,10 @@ fi
 # ── JS-11 운영 코드 식별자는 영문 ─────────────────────────────────────────────
 # 주석·문자열·문자 리터럴을 지운 뒤 ASCII 밖 바이트가 남으면 그건 식별자다.
 # 로그 메시지는 LG-9 가 한글을 요구하고 주석은 JS-11 자신이 한글을 요구하므로,
-# 셋 다 지우고 봐야 한다. 테스트는 TS-2 가 한글 이름을 요구하므로 제외한다.
+# 셋 다 지우고 봐야 한다.
+#
+# **테스트는 타입 선언만 본다.** TS-2 가 허용하는 것은 시험 "이름" 과 헬퍼이지
+# 클래스·레코드명이 아니다. 파일 단위로 제외하면 최상위든 @Nested 든 다 샌다.
 #
 # **한 글자씩 상태를 들고 훑는다.** 정규식으로 따로따로 지우면 순서에 걸린다 —
 # 주석을 먼저 지우면 "한글 // 메시지" 가 따옴표를 잃어 문자열로 안 보이고,
@@ -101,10 +104,14 @@ fi
 # 콜레이션 순서를 따라서 로케일마다 다르게 문다 — [가-힣] 은 ko_KR 에서만 물었고,
 # [^[:cntrl:] -~] 는 en_US 에서 멀쩡한 코드까지 물었다. LC_ALL=C 로 고정해 바이트로
 # 재고, scan 에 넘기는 패턴에서는 범위를 아예 없앤다.
-if [[ "$is_test" == false ]]; then
+{
     saved_code=$code
-    code=$(LC_ALL=C awk '
-        BEGIN { blk = 0; txt = 0 }
+    code=$(LC_ALL=C awk -v is_test="$is_test" '
+        function nonascii(w,   z) {
+            for (z = 1; z <= length(w); z++) if (substr(w, z, 1) > "\177") return 1
+            return 0
+        }
+        BEGIN { blk = 0; txt = 0; state = 0 }
         {
             out = ""; i = 1; n = length($0)
             while (i <= n) {
@@ -156,15 +163,47 @@ if [[ "$is_test" == false ]]; then
                 if (ch == "u" && bs % 2 == 1) { mark = "NONASCII"; break }
                 bs = 0
             }
-            for (k = 1; k <= length(out) && mark == ""; k++) {
-                if (substr(out, k, 1) > "\177") { mark = "NONASCII" }
+            if (is_test == "false") {
+                for (k = 1; k <= length(out) && mark == ""; k++)
+                    if (substr(out, k, 1) > "\177") mark = "NONASCII"
+            } else {
+                # 시험에서는 **타입 이름만** 본다 — TS-2 가 시험 이름과 헬퍼를
+                # 한글로 요구하기 때문이다.
+                #
+                # **줄이 아니라 토큰으로 판정한다.** 줄 단위로 "선언처럼 생긴 줄"
+                # 을 고르면 양쪽으로 샌다 — 어노테이션에 괄호가 붙거나
+                # (@DisplayName("x") class 한글) 선언이 줄 맨 앞이 아니면
+                # (void t() { class 한글 {} }) 못 잡고, 반대로 선언 줄에 얹힌
+                # 다른 한글(class Ok { int 한글필드; })까지 문다.
+                #
+                # class·record·interface·enum 바로 뒤 토큰과 그 뒤 제네릭 인자만
+                # 본다. 수식어·어노테이션·줄바꿈·중첩 깊이에 무관하다.
+                tok = ""
+                for (k = 1; k <= length(out) + 1; k++) {
+                    c2 = (k <= length(out)) ? substr(out, k, 1) : " "
+                    if (c2 ~ /[A-Za-z0-9_$]/ || c2 > "\177") { tok = tok c2; continue }
+                    if (tok != "") {
+                        if (state == 1) { if (nonascii(tok)) mark = "NONASCII"; state = 0 }
+                        else if (state == 2) { if (nonascii(tok)) mark = "NONASCII" }
+                        else if (tok == "class" || tok == "record" \
+                              || tok == "interface" || tok == "enum") state = 1
+                        tok = ""
+                    }
+                    if (c2 == "<" && state == 0) state = 2
+                    else if (c2 == ">" && state == 2) state = 0
+                }
             }
             printf "%d:%s\n", NR, mark
         }' "$file")
-    report "JS-11" "운영 코드 식별자는 ASCII 영문 — 한글은 주석·Javadoc·로그 메시지에만" \
-        "$(scan 'JS-11' '^[0-9]+:NONASCII$')"
+    if [[ "$is_test" == false ]]; then
+        report "JS-11" "운영 코드 식별자는 ASCII 영문 — 한글은 주석·Javadoc·로그 메시지에만" \
+            "$(scan 'JS-11' '^[0-9]+:NONASCII$')"
+    else
+        report "JS-11" "시험도 타입 이름은 영문 — 한글은 시험 이름·헬퍼·주석에만 (TS-2)" \
+            "$(scan 'JS-11' '^[0-9]+:NONASCII$')"
+    fi
     code=$saved_code
-fi
+}
 
 # ── JS-14 중첩 클래스는 static ────────────────────────────────────────────────
 # 들여쓰기된 class 선언 = 중첩. 수식어가 없는 경우도 잡는다.

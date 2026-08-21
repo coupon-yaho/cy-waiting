@@ -20,11 +20,11 @@ fail=0
 # 있었다. 로케일에 기대는 판정은 로컬 통과가 아무 뜻이 없다.
 # 빌드 스크립트 검사는 훅이 아니라 디렉터리를 받는 CI 스크립트다. 그래서
 # file_case 를 못 쓴다. **그렇다고 안 재면 이 게이트는 영원히 초록이다** (TS-9).
-gradle_case() {   # 내용 기대(block|allow) 설명
-    local content=$1 expect=$2 label=$3
+gradle_case() {   # 내용 기대(block|allow) 설명 [확장자]
+    local content=$1 expect=$2 label=$3 ext=${4:-.gradle}
     local dir="$tmp/gradle-$RANDOM"
     mkdir -p "$dir"
-    printf '%s\n' "$content" > "$dir/build.gradle"
+    printf '%s\n' "$content" > "$dir/build$ext"
     "$ROOT/.github/scripts/build-script-identifiers.sh" "$dir" >/dev/null 2>&1
     local code=$?
     local actual=allow
@@ -95,6 +95,12 @@ def okName = "한글 문자열"' allow '빌드 주석·문자열은 오탐 아�
 gradle_case "tasks.register('adapterReport') {
     description = '어댑터 커버리지 보고'
 }" allow '빌드 정상 태스크에 한글 설명'
+gradle_case 'val 한글 = 1' block '빌드 kts val' '.gradle.kts'
+gradle_case 'fun 한글함수() { }' block '빌드 kts fun' '.gradle.kts'
+gradle_case 'tasks.register<Copy>("한글태스크") { }' block '빌드 kts register 타입인자' '.gradle.kts'
+gradle_case '// 한글 주석
+val okName = "한글 문자열"
+tasks.register<Copy>("adapterReport") { }' allow '빌드 kts 정상' '.gradle.kts'
 
 echo "check-java.sh — 위반 검출"
 file_case check-java.sh 'class A {

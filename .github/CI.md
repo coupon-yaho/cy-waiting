@@ -17,7 +17,7 @@
 ├── workflows/
 │   ├── _build.yml                밑줄로 시작하면 잡 단위 재사용
 │   ├── _test.yml                    테스트 계층 하나를 돈다
-│   ├── _verify-conventions.yml      훅, 커밋 메시지, 작업 로그, 문서 링크
+│   ├── _verify-conventions.yml      훅, 커밋 메시지, 작업 로그, 문서 링크, 빌드 스크립트 식별자
 │   ├── _security.yml                Trivy, gitleaks(CLI), dependency-review
 │   ├── _load-test.yml               k6 시나리오 하나
 │   ├── _report.yml                  Slack + Jira + Confluence

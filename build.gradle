@@ -174,7 +174,7 @@ tasks.named('jacocoTestCoverageVerification') {
 //
 // **보고 대상도 어댑터로 좁힌다.** main 전체를 넣으면 도메인과 부트 클래스가
 // 섞여 들어가 "어댑터 보고서" 라는 이름이 거짓이 된다.
-def 어댑터클래스 = { ->
+def adapterClasses = { ->
     sourceSets.main.output.classesDirs.asFileTree.matching {
         include 'com/kafkick/waiting/adapter/redis/**'
     }
@@ -186,7 +186,7 @@ tasks.register('adapterCoverageReport', JacocoReport) {
     dependsOn test, integrationTest
     executionData test, integrationTest
     sourceDirectories.setFrom(sourceSets.main.java.sourceDirectories)
-    classDirectories.setFrom(어댑터클래스())
+    classDirectories.setFrom(adapterClasses())
     reports {
         xml.required = true
         html.required = true
@@ -199,7 +199,7 @@ tasks.register('adapterCoverageVerification', JacocoCoverageVerification) {
     dependsOn test, integrationTest
     executionData test, integrationTest
     sourceDirectories.setFrom(sourceSets.main.java.sourceDirectories)
-    classDirectories.setFrom(어댑터클래스())
+    classDirectories.setFrom(adapterClasses())
     // **못 넘겼을 때가 보고서가 가장 필요한 때다.** finalizer 로 걸지 않으면
     // 실패한 실행에서만 보고서가 없어 어디가 빈지 볼 수 없다.
     finalizedBy 'adapterCoverageReport'

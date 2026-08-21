@@ -31,6 +31,23 @@ public final class Leadership {
     /** {@code CLOSED} 는 종단이다. 되살아나면 다음 리더와 겹친다. */
     private enum State { FOLLOWER, LEADER, CLOSED }
 
+    /**
+     * 셋을 <b>한 덩어리로</b> 든다.
+     *
+     * <p>따로 두면 상태를 공개한 뒤에 시각을 쓰게 되어, 그 사이에 읽는 쪽이
+     * 직전 항이나 0 을 본다 — "3600초 동안 리더였다" 같은 값이 그렇게 나온다.
+     *
+     * @param confirmedAt 락이 내 것이라고 확인된 시각. 응답이 아니라 <b>물으러 간</b>
+     *                    시각이다. 서버가 리스를 다시 건 것은 왕복 중 어느 시점이라,
+     *                    응답으로 재면 남은 리스를 과대평가한다
+     */
+    private record Standing(State state, long confirmedAt, long leaderSince) {
+
+        Standing closed() {
+            return new Standing(State.CLOSED, confirmedAt, leaderSince);
+        }
+    }
+
     private final String ownerId;
     private final Duration lease;
     private final Duration attemptTimeout;
@@ -43,19 +60,9 @@ public final class Leadership {
      */
     private final LongSupplier ticker;
 
-    private final AtomicReference<State> state = new AtomicReference<>(State.FOLLOWER);
+    private final AtomicReference<Standing> standing =
+            new AtomicReference<>(new Standing(State.FOLLOWER, 0, 0));
     private final AtomicReference<Long> failingSince = new AtomicReference<>();
-
-    /**
-     * 마지막으로 락이 내 것이라고 <b>확인된</b> 시각.
-     *
-     * <p>응답이 온 시각이 아니라 <b>물으러 간 시각</b>을 담는다. 서버가 리스를 다시
-     * 건 것은 왕복 중 어느 시점이라, 응답 시각으로 재면 왕복 시간만큼 남은 리스를
-     * 과대평가한다. 짧게 보는 쪽이 안전한 방향이다.
-     */
-    private volatile long confirmedAt;
-
-    private volatile long leaderSince;
 
     private Leadership(String ownerId, Duration lease, Duration attemptTimeout,
             Supplier<Mono<LeaderLock>> acquire, Supplier<Mono<Void>> release, LongSupplier ticker) {
@@ -116,7 +123,25 @@ public final class Leadership {
      * 전부 한 자리에서 접힌다.
      */
     public boolean isLeader() {
-        return state.get() == State.LEADER && ticker.getAsLong() - confirmedAt < lease.toNanos();
+        Standing now = standing.get();
+        if (now.state() != State.LEADER) {
+            return false;
+        }
+        if (!expired(now)) {
+            return true;
+        }
+        // **강등을 여기서 한다.** 연장 루프의 끝에 달면 루프가 멎었을 때 안 돌고,
+        // 하필 그때가 이 기록이 유일한 신호인 순간이다. 배분 틱은 매초 묻는다.
+        if (standing.compareAndSet(now, new Standing(State.FOLLOWER,
+                now.confirmedAt(), now.leaderSince()))) {
+            log.warn("확인 없이 리스가 지나 리더에서 내려왔다 — {}초 동안 리더였다, owner={}",
+                    heldSeconds(now), ownerId);
+        }
+        return false;
+    }
+
+    private boolean expired(Standing now) {
+        return ticker.getAsLong() - now.confirmedAt() >= lease.toNanos();
     }
 
     /**
@@ -128,18 +153,18 @@ public final class Leadership {
     // "즉시 버린다" 도 아니다 — 리스가 그 유계다.
     public Mono<Void> renew() {
         return Mono.defer(() -> {
-            if (state.get() == State.CLOSED) {
-                return Mono.<LeaderLock>empty();
+            if (standing.get().state() == State.CLOSED) {
+                return Mono.<Void>empty();
             }
             long startedAt = ticker.getAsLong();
             return acquire.get()
                     // 멈춤은 오류가 아니라서 오류 처리에 안 걸린다. 이게 없으면
-                    // 루프가 조용히 멎고 leader 가 참으로 얼어붙는다.
+                    // 루프가 조용히 멎고 참으로 얼어붙는다.
                     .timeout(attemptTimeout)
-                    .doOnNext(lock -> observed(lock, startedAt))
+                    .flatMap(lock -> observed(lock, startedAt))
                     .doOnError(this::enterFailing)
                     .onErrorResume(e -> Mono.empty());
-        }).doFinally(signal -> demoteIfExpired()).then();
+        }).then();
     }
 
     /**
@@ -151,51 +176,72 @@ public final class Leadership {
      */
     public Mono<Void> release() {
         return Mono.defer(() -> {
-            if (state.getAndSet(State.CLOSED) != State.LEADER) {
+            Standing before = standing.getAndUpdate(Standing::closed);
+            if (before.state() == State.CLOSED) {
                 return Mono.<Void>empty();
             }
-            long heldFor = ticker.getAsLong() - leaderSince;
-            return release.get()
-                    .timeout(attemptTimeout)
-                    .doOnError(e -> log.warn("리더 해제 실패 — 리스 만료로 풀린다: {}", e.toString()))
-                    .onErrorResume(e -> Mono.empty())
+            // **로컬 상태로 거르지 않는다.** FOLLOWER 는 "락이 남의 것" 과 "리스가
+            // 지나 내려왔지만 서버 락은 아직 내 것" 을 둘 다 뜻한다. 뒤엣것에서
+            // 안 지우면 정상 종료인데도 다음 리더가 리스 만료를 기다린다.
+            // 지우는 쪽이 안전한 것은 스크립트가 소유자를 확인하기 때문이다.
+            long heldFor = ticker.getAsLong() - before.leaderSince();
+            boolean wasLeader = before.state() == State.LEADER;
+            return releaseLock()
                     // 취소돼도 내려온다. 완료 신호에만 기대면 종료 중에 리더로
                     // 남아, 다음 리더와 겹치는 구간이 리스가 아니라 영영이 된다.
-                    .doFinally(signal -> log.info("리더에서 내려왔다 — {}초 동안 리더였다, owner={}",
-                            NANOSECONDS.toSeconds(heldFor), ownerId));
+                    .doFinally(signal -> {
+                        if (wasLeader) {
+                            log.info("리더에서 내려왔다 — {}초 동안 리더였다, owner={}",
+                                    NANOSECONDS.toSeconds(heldFor), ownerId);
+                        }
+                    });
         }).then();
     }
 
-    private void observed(LeaderLock lock, long startedAt) {
+    private Mono<Void> releaseLock() {
+        return release.get()
+                .timeout(attemptTimeout)
+                .doOnError(e -> log.warn("리더 해제 실패 — 리스 만료로 풀린다: {}", e.toString()))
+                .onErrorResume(e -> Mono.empty());
+    }
+
+    private Mono<Void> observed(LeaderLock lock, long startedAt) {
         exitFailing();
-        if (lock.acquired()) {
-            confirmedAt = startedAt;
-            if (state.compareAndSet(State.FOLLOWER, State.LEADER)) {
-                leaderSince = startedAt;
-                log.info("리더가 됐다 — owner={}, lease={}초", ownerId, lease.toSeconds());
+        if (!lock.acquired()) {
+            // 사실을 알았다 — 리스를 기다릴 이유가 없다.
+            Standing before = standing.getAndUpdate(s -> s.state() == State.LEADER
+                    ? new Standing(State.FOLLOWER, s.confirmedAt(), s.leaderSince())
+                    : s);
+            if (before.state() == State.LEADER) {
+                log.info("리더를 잃었다 — {}초 동안 리더였다, 지금 소유자는 {} (남은 리스 {}ms), owner={}",
+                        heldSeconds(before), lock.owner(), lock.ttlMillis(), ownerId);
             }
-            return;
+            return Mono.empty();
         }
-        // 사실을 알았다 — 리스를 기다릴 이유가 없다.
-        if (state.compareAndSet(State.LEADER, State.FOLLOWER)) {
-            log.info("리더를 잃었다 — {}초 동안 리더였다, 지금 소유자는 {}, owner={}",
-                    heldSeconds(), lock.owner(), ownerId);
+
+        Standing before = standing.getAndUpdate(s -> switch (s.state()) {
+            case CLOSED -> s;
+            // **뒤로 밀지 않는다.** 겹친 두 판 중 늦게 도착한 옛 판이 확인 시각을
+            // 되돌리면, 멀쩡한 리더가 헛강등되고 거짓 경고가 찍힌다.
+            case LEADER -> new Standing(State.LEADER,
+                    Math.max(s.confirmedAt(), startedAt), s.leaderSince());
+            case FOLLOWER -> new Standing(State.LEADER, startedAt, startedAt);
+        });
+
+        if (before.state() == State.CLOSED) {
+            // 종료 표시보다 먼저 출발한 획득이 뒤늦게 성공했다. 그대로 두면
+            // **죽는 노드가 락을 쥔 채 나가고** 다음 리더가 리스 만료를 기다린다.
+            log.warn("종료 뒤에 락을 잡았다 — 곧바로 다시 지운다, owner={}", ownerId);
+            return releaseLock();
         }
+        if (before.state() == State.FOLLOWER) {
+            log.info("리더가 됐다 — owner={}, lease={}초", ownerId, lease.toSeconds());
+        }
+        return Mono.empty();
     }
 
-    /** 확인 없이 리스가 지났다. {@link #isLeader()} 가 이미 거짓이고, 여기서는 그걸 기록한다. */
-    private void demoteIfExpired() {
-        if (state.get() != State.LEADER || ticker.getAsLong() - confirmedAt < lease.toNanos()) {
-            return;
-        }
-        if (state.compareAndSet(State.LEADER, State.FOLLOWER)) {
-            log.warn("확인 없이 리스가 지나 리더에서 내려왔다 — {}초 동안 리더였다, owner={}",
-                    heldSeconds(), ownerId);
-        }
-    }
-
-    private long heldSeconds() {
-        return NANOSECONDS.toSeconds(ticker.getAsLong() - leaderSince);
+    private long heldSeconds(Standing since) {
+        return NANOSECONDS.toSeconds(ticker.getAsLong() - since.leaderSince());
     }
 
     /**

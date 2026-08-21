@@ -83,6 +83,33 @@ file_case check-java.sh 'class A {
         System.out.println("한글 로그 메시지");
     }
 }' 'src/main/java/H3.java' allow 'JS-11 주석·문자열은 오탐 아님'
+file_case check-java.sh 'class A {
+    void log() {
+        System.out.println("한글 // 메시지");
+    }
+}' 'src/main/java/H7.java' allow 'JS-11 문자열 안의 // 가 마스킹을 안 깬다 (회귀)'
+file_case check-java.sh 'class A {
+    // 그는 "말했다
+    void ok() {
+    }
+}' 'src/main/java/H8.java' allow 'JS-11 주석 안의 따옴표가 마스킹을 안 깬다 (회귀)'
+file_case check-java.sh 'class A {
+    char c = '"'"'가'"'"';
+    void 안녕() {
+    }
+}' 'src/main/java/H9.java' block 'JS-11 문자열 뒤의 한글 식별자를 놓치지 않는다 (회귀)'
+file_case check-java.sh 'class A {
+    /* 한글 블록 주석 */ void ok2() {
+    }
+}' 'src/main/java/HA.java' allow 'JS-11 같은 줄 블록 주석 (회귀)'
+file_case check-java.sh 'class A {
+    /*
+     * 여러 줄 한글 주석
+     */
+    void ok3() {
+    }
+}' 'src/main/java/HB.java' allow 'JS-11 여러 줄 블록 주석 (회귀)'
+
 locale_case C.UTF-8 check-java.sh 'class A {
     boolean 낡았나() {
         return true;

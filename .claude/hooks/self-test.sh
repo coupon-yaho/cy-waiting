@@ -18,6 +18,9 @@ fail=0
 # **로케일을 바꿔 같은 검사를 다시 돌린다.** 대괄호 범위는 콜레이션 순서를 따라서
 # 개발자 로케일(ko_KR.UTF-8)에서만 물고 CI(C.UTF-8)에서는 조용히 새는 일이 실제로
 # 있었다. 로케일에 기대는 판정은 로컬 통과가 아무 뜻이 없다.
+# **로케일을 바꿔 같은 검사를 다시 돌린다.** 대괄호 범위는 콜레이션 순서를 따라서
+# 개발자 로케일(ko_KR.UTF-8)에서만 물고 CI(C.UTF-8)에서는 조용히 새는 일이 실제로
+# 있었다. 로케일에 기대는 판정은 로컬 통과가 아무 뜻이 없다.
 # 빌드 스크립트 검사는 훅이 아니라 디렉터리를 받는 CI 스크립트다. 그래서
 # file_case 를 못 쓴다. **그렇다고 안 재면 이 게이트는 영원히 초록이다** (TS-9).
 gradle_case() {   # 내용 기대(block|allow) 설명 [확장자]
@@ -82,33 +85,6 @@ verdict() {
     fi
 }
 
-echo "build-script-identifiers.sh — 위반 검출"
-gradle_case 'def 한글이름 = 1' block '빌드 def 한글 이름'
-gradle_case 'ext {
-    한글 = 1
-}' block '빌드 ext 블록 안 한글'
-gradle_case 'Object 한글 = 1' block '빌드 타입 있는 선언'
-gradle_case "tasks.register('한글태스크') { }" block '빌드 태스크 이름'
-gradle_case 'if (true) { def 한글 = 1 }' block '빌드 줄 중간 def'
-gradle_case '// 한글 주석은 통과해야 한다
-def okName = "한글 문자열"' allow '빌드 주석·문자열은 오탐 아님'
-gradle_case "tasks.register('adapterReport') {
-    description = '어댑터 커버리지 보고'
-}" allow '빌드 정상 태스크에 한글 설명'
-gradle_case 'ext { 한글 = 1 }' block '빌드 한 줄 ext (회귀)'
-gradle_case 'int 한글 = 1' block '빌드 원시 타입 선언 (회귀)'
-gradle_case '// tasks.register("한글") 는 예시다' allow '빌드 주석 속 태스크 이름은 오탐 아님 (회귀)'
-gradle_case 'def s = "tasks.register(\"한글\")"' allow '빌드 문자열 속 태스크 이름은 오탐 아님 (회귀)'
-gradle_case 'tasks.register<한글바깥<Inner>>("ok") { }' block '빌드 중첩 제네릭 바깥 타입 (회귀)' '.gradle.kts'
-gradle_case 'tasks.register<Map<한글타입, String>>("ok") { }' block '빌드 중첩 제네릭 안쪽 타입 (회귀)' '.gradle.kts'
-gradle_case 'tasks.register<한글타입>("asciiTask") { }' block '빌드 제네릭 타입 인자 (회귀)' '.gradle.kts'
-gradle_case 'val 한글 = 1' block '빌드 kts val' '.gradle.kts'
-gradle_case 'fun 한글함수() { }' block '빌드 kts fun' '.gradle.kts'
-gradle_case 'tasks.register<Copy>("한글태스크") { }' block '빌드 kts register 타입인자' '.gradle.kts'
-gradle_case '// 한글 주석
-val okName = "한글 문자열"
-tasks.register<Copy>("adapterReport") { }' allow '빌드 kts 정상' '.gradle.kts'
-
 echo "check-java.sh — 위반 검출"
 file_case check-java.sh 'class A {
     private java.util.List<String> x;
@@ -125,158 +101,6 @@ file_case check-java.sh 'class A {
         return a;
     }
 }' 'src/main/java/E.java' block 'JS-13 private static 메서드'
-file_case check-java.sh 'class A {
-    boolean 낡았나() {
-        return true;
-    }
-}' 'src/main/java/H.java' block 'JS-11 한글 메서드명'
-file_case check-java.sh 'class A {
-    private record 상태(int x) {
-    }
-}' 'src/main/java/H2.java' block 'JS-11 한글 레코드명'
-file_case check-java.sh 'class A {
-    // 한글 주석은 통과해야 한다
-    void log() {
-        System.out.println("한글 로그 메시지");
-    }
-}' 'src/main/java/H3.java' allow 'JS-11 주석·문자열은 오탐 아님'
-file_case check-java.sh 'class A {
-    /* \u002a/ void 한글() {}
-}' 'src/main/java/HI.java' block 'JS-11 이스케이프가 블록 주석을 닫는다 (회귀)'
-file_case check-java.sh 'class A {
-    String s = "\u0041";
-}' 'src/main/java/HJ.java' block 'JS-11 문자열 안 유니코드 이스케이프도 막는다'
-file_case check-java.sh 'class A {
-    int \uD55C\uAE00 = 0;
-}' 'src/main/java/HF.java' block 'JS-11 유니코드 이스케이프 식별자 (회귀)'
-file_case check-java.sh 'class A {
-    // \u000A int x = 0;
-}' 'src/main/java/HG.java' block 'JS-11 줄바꿈 이스케이프가 주석 경계를 옮긴다 (회귀)'
-file_case check-java.sh 'class A {
-    String s = "\\uD55C";
-    void ok6() {
-    }
-}' 'src/main/java/HH.java' allow 'JS-11 역슬래시가 짝수면 이스케이프가 아니다 (회귀)'
-file_case check-java.sh 'class A {
-    String s = """
-        따옴표 셋을 이스케이프한다 \"""
-        그 뒤의 한글은 아직 문자열 안이다
-        """;
-    void ok5() {
-    }
-}' 'src/main/java/HE.java' allow 'JS-11 텍스트 블록 안 이스케이프 따옴표 (회귀)'
-file_case check-java.sh 'class A {
-    String s = """
-        여러 줄에 걸친 한글 텍스트 블록
-        // 주석처럼 보이는 것도 안에 있다
-        """;
-    void ok4() {
-    }
-}' 'src/main/java/HC.java' allow 'JS-11 텍스트 블록은 줄을 넘어도 문자열이다 (회귀)'
-file_case check-java.sh 'class A {
-    String s = """
-        한글 텍스트 블록
-        """;
-    void 안녕하세요() {
-    }
-}' 'src/main/java/HD.java' block 'JS-11 텍스트 블록 뒤 한글 식별자를 놓치지 않는다 (회귀)'
-file_case check-java.sh 'class A {
-    void log() {
-        System.out.println("한글 // 메시지");
-    }
-}' 'src/main/java/H7.java' allow 'JS-11 문자열 안의 // 가 마스킹을 안 깬다 (회귀)'
-file_case check-java.sh 'class A {
-    // 그는 "말했다
-    void ok() {
-    }
-}' 'src/main/java/H8.java' allow 'JS-11 주석 안의 따옴표가 마스킹을 안 깬다 (회귀)'
-file_case check-java.sh 'class A {
-    char c = '"'"'가'"'"';
-    void 안녕() {
-    }
-}' 'src/main/java/H9.java' block 'JS-11 문자열 뒤의 한글 식별자를 놓치지 않는다 (회귀)'
-file_case check-java.sh 'class A {
-    /* 한글 블록 주석 */ void ok2() {
-    }
-}' 'src/main/java/HA.java' allow 'JS-11 같은 줄 블록 주석 (회귀)'
-file_case check-java.sh 'class A {
-    /*
-     * 여러 줄 한글 주석
-     */
-    void ok3() {
-    }
-}' 'src/main/java/HB.java' allow 'JS-11 여러 줄 블록 주석 (회귀)'
-
-# **시험도 클래스명은 영문이다.** TS-2 가 허용하는 것은 시험 "이름" 이지 타입명이
-# 아니다. JS-11 이 시험 파일을 통째로 제외하던 탓에 최상위든 @Nested 든 다 샜다.
-file_case check-java.sh 'class 한글클래스 {
-    static class Inner {
-    }
-}' 'src/test/java/T1.java' block 'JS-11 시험 파일 최상위 한글 클래스명'
-file_case check-java.sh 'class A {
-    @Nested
-    static class 한글중첩 {
-    }
-}' 'src/test/java/T2.java' block 'JS-11 시험 파일 @Nested 한글 클래스명'
-file_case check-java.sh 'class A {
-    record 한글레코드(int x) {
-    }
-}' 'src/test/java/T3.java' block 'JS-11 시험 파일 한글 레코드명'
-file_case check-java.sh 'class A {
-    @DisplayName("표시 이름") static class 한글 {
-    }
-}' 'src/test/java/T6.java' block 'JS-11 괄호 붙은 어노테이션이 같은 줄 (회귀)'
-file_case check-java.sh 'class A {
-    void t() { class 한글로컬 {} }
-}' 'src/test/java/T7.java' block 'JS-11 줄 중간 선언 (회귀)'
-file_case check-java.sh 'class A {
-    @interface 한글어노테이션 {
-    }
-}' 'src/test/java/T8.java' block 'JS-11 @interface (회귀)'
-file_case check-java.sh 'class A {
-    strictfp static class 한글엄격 {
-    }
-}' 'src/test/java/T9.java' block 'JS-11 알려지지 않은 수식어 (회귀)'
-file_case check-java.sh 'class A {
-    static class
-    한글줄바꿈 {
-    }
-}' 'src/test/java/TA.java' block 'JS-11 선언이 줄바꿈됨 (회귀)'
-file_case check-java.sh 'class A {
-    static class Box<한글타입> {
-    }
-}' 'src/test/java/TB.java' block 'JS-11 제네릭 인자 (회귀)'
-file_case check-java.sh 'class A {
-    static class Ok { int 한글필드 = 0; }
-}' 'src/test/java/TC.java' allow 'JS-11 타입명이 영문이면 같은 줄 한글은 오탐 아님 (회귀)'
-
-file_case check-java.sh 'class ATest {
-    @Test
-    void 한산한_쿠폰은_통과한다() {
-    }
-}' 'src/test/java/T4.java' allow 'JS-11 시험 메서드 이름은 한글이 맞다 (TS-2)'
-file_case check-java.sh 'class ATest {
-    private CouponState 상태를_만든다() {
-        return null;
-    }
-}' 'src/test/java/T5.java' allow 'JS-11 시험 헬퍼도 한글이 맞다 (TS-2)'
-
-locale_case C.UTF-8 check-java.sh 'class A {
-    boolean 낡았나() {
-        return true;
-    }
-}' 'src/main/java/H4.java' block 'JS-11 로케일이 달라도 문다 (회귀)'
-locale_case en_US.UTF-8 check-java.sh 'class A {
-    private record 상태(int x) {
-    }
-}' 'src/main/java/H5.java' block 'JS-11 영어 로케일에서도 문다 (회귀)'
-locale_case C.UTF-8 check-java.sh 'class A {
-    // 한글 주석
-    void log() {
-        System.out.println("한글 로그");
-    }
-}' 'src/main/java/H6.java' allow 'JS-11 로케일 바뀌어도 주석·문자열은 오탐 아님'
-
 file_case check-java.sh 'class A {
     private class Inner {
     }

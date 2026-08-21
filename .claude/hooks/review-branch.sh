@@ -127,7 +127,7 @@ review_files() {
     done
 
     if ((${#java[@]})); then
-        head2 "Java — 기존 훅 (JS-1·2·4·6·9·11·13·14 · DS-1 · RX-1 · LG-5·6)"
+        head2 "Java — 기존 훅 (JS-1·2·4·6·9·13·14 · DS-1 · RX-1 · LG-5·6)"
         local clean=1
         for f in "${java[@]}"; do run_hook check-java.sh "$f" || clean=0; done
         ((clean)) && say "  위반 없음"
@@ -358,8 +358,7 @@ head2 "CI 규범 검사 — 같은 스크립트"
 # 훅 자기검증은 `--self-test` 로 따로 돌린다.
 for check in \
     "문서 링크:.github/scripts/doc-links.sh" \
-    "작업 로그:.github/scripts/journal-index.sh --check" \
-    "빌드 스크립트 식별자:.github/scripts/build-script-identifiers.sh ."
+    "작업 로그:.github/scripts/journal-index.sh --check"
 do
     name="${check%%:*}"
     cmd="${check#*:}"

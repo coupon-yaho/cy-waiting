@@ -139,6 +139,36 @@ class LeadershipTest {
     }
 
     @Test
+    @DisplayName("확인_없이_리스가_지나면_경고를_남긴다")
+    void 확인_없이_리스가_지나면_경고를_남긴다() {
+        // 이 노드가 조용히 리더를 잃은 것을 아는 유일한 신호다. 판정은 나이가
+        // 이미 하고 있으므로, 여기서 재는 것은 **기록이 남는가** 다.
+        Leadership leadership = 리더가_된다(() -> Mono.error(new IllegalStateException("끊겼다")));
+
+        시간을_흘린다(LEASE.plusSeconds(4));
+        leadership.renew().block(BLOCK);
+
+        assertThat(로그_메시지(Level.WARN))
+                .anyMatch(m -> m.contains("리스가 지나") && m.contains("6초"));
+    }
+
+    @Test
+    @DisplayName("리스가_남아_있으면_경고를_안_남긴다")
+    void 리스가_남아_있으면_경고를_안_남긴다() {
+        Leadership leadership = 리더가_된다(() -> Mono.error(new IllegalStateException("끊겼다")));
+
+        시간을_흘린다(LEASE.minusNanos(1));
+        leadership.renew().block(BLOCK);
+        assertThat(로그_메시지(Level.WARN)).noneMatch(m -> m.contains("리스가 지나"));
+
+        // 경계는 판정과 같은 자리여야 한다. 갈리면 리더가 아닌데 기록은 안 남는
+        // 구간이 생긴다.
+        시간을_흘린다(Duration.ofNanos(1));
+        leadership.renew().block(BLOCK);
+        assertThat(로그_메시지(Level.WARN)).anyMatch(m -> m.contains("리스가 지나"));
+    }
+
+    @Test
     @DisplayName("연장을_아예_안_불러도_리스가_지나면_리더가_아니다")
     void 연장을_아예_안_불러도_리스가_지나면_리더가_아니다() {
         // 주기 계약이 런타임에 자기집행된다. 주석은 이걸 못 막는다.
@@ -411,8 +441,8 @@ class LeadershipTest {
         // 명령 타임아웃이 리스보다 길면 성공해도 도착할 때 이미 만료다. 아무도
         // 리더가 못 되고, 예외도 로그도 안 난다.
         Duration 딱_맞음 = LEASE.dividedBy(4);
-        assertThat(Leadership.of("node-1", LEASE, 딱_맞음, LeadershipTest::내_락, Mono::empty))
-                .isNotNull();
+        assertThat(Leadership.of("node-1", LEASE, 딱_맞음, LeadershipTest::내_락, Mono::empty)
+                .ownerId()).isEqualTo("node-1");
 
         assertThatThrownBy(() -> Leadership.of("node-1", LEASE, 딱_맞음.plusNanos(1),
                 LeadershipTest::내_락, Mono::empty))

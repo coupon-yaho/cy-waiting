@@ -242,7 +242,10 @@ tasks.named('check') {
 }
 
 pitest {
-    targetClasses = ['com.kafkick.waiting.domain.*']
+    // **control 도 넣는다.** 제어 평면의 순수 계산(분모·가용량)이 여기 있는데
+    // 범위 밖이라 생존 뮤턴트가 CI 에서 안 잡혔다. 어댑터는 여전히 뺀다 —
+    // 시간이 폭발하고 정작 지켜야 할 곳의 신호가 묻힌다.
+    targetClasses = ['com.kafkick.waiting.domain.*', 'com.kafkick.waiting.control.*']
     // domain 은 Phase 2 에서 채워진다. 그전까지 대상이 0건인데, 이걸 실패로
     // 두면 파이프라인이 페이즈 진행을 막는다. 클래스가 들어오면 임계가 문다.
     failWhenNoMutations = false

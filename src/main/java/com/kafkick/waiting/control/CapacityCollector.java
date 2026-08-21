@@ -66,9 +66,16 @@ public final class CapacityCollector {
         return new CapacityCollector(rampUp, freshness, floor, perInstanceCap);
     }
 
+    /**
+     * <b>초 단위로만 받는다.</b> 아래에서 {@code toSeconds()} 로 재는데, 500ms 를
+     * 주면 조용히 0 이 되어 나눗셈이 터지거나 임계가 사라진다.
+     */
     private void require(Duration value, String name) {
         if (value.isZero() || value.isNegative()) {
             throw new IllegalArgumentException("%s 은 양수여야 한다: %s".formatted(name, value));
+        }
+        if (value.toNanosPart() != 0) {
+            throw new IllegalArgumentException("%s 은 초 단위여야 한다: %s".formatted(name, value));
         }
     }
 
@@ -113,10 +120,17 @@ public final class CapacityCollector {
             if (!isFresh(report, now)) {
                 continue;
             }
+            // **음수는 관측이 아니다.** 세면 "신선한 보고가 있다" 가 되어 하한이
+            // 안 걸리고, 그 인스턴스가 램프 기록까지 얻는다.
+            if (report.credits() < 0) {
+                continue;
+            }
             fresh++;
             Seen was = seen.get(report.instanceId());
             seen.put(report.instanceId(), new Seen(was == null ? now : was.first(), now));
-            total += usable(report, now);
+            // 인스턴스가 많고 각자 상한에 가까우면 합이 넘친다. 넘치면 음수가
+            // 되어 전역 크레딧이 0 이 된다 — 전면 차단이다.
+            total = saturatedAdd(total, usable(report, now));
         }
         evictStale(now);
 
@@ -126,6 +140,11 @@ public final class CapacityCollector {
         long credit = fresh == 0 ? floor : total;
         lastKnown.set(credit);
         return credit;
+    }
+
+    private long saturatedAdd(long a, long b) {
+        long sum = a + b;
+        return ((a ^ sum) & (b ^ sum)) < 0 ? Long.MAX_VALUE : sum;
     }
 
     private boolean isFresh(CapacityReport report, long now) {
@@ -158,6 +177,10 @@ public final class CapacityCollector {
         }
         // **먼저 나눈다.** 곱하고 나누면 큰 보고에서 넘쳐 음수가 되고, 그러면
         // 다른 인스턴스 몫을 상쇄해 전역 크레딧이 하한으로 떨어진다.
+        //
+        // 앞항은 넘치지 않는다 — 여기 오는 warmed 는 창보다 작으므로
+        // credits/window × warmed < credits 다. 방어를 넣으면 죽은 코드가 되고,
+        // 죽은 방어는 방어처럼 보여서 더 나쁘다.
         return credits / window * warmed + credits % window * warmed / window;
     }
 }

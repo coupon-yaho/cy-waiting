@@ -18,6 +18,24 @@ fail=0
 # **로케일을 바꿔 같은 검사를 다시 돌린다.** 대괄호 범위는 콜레이션 순서를 따라서
 # 개발자 로케일(ko_KR.UTF-8)에서만 물고 CI(C.UTF-8)에서는 조용히 새는 일이 실제로
 # 있었다. 로케일에 기대는 판정은 로컬 통과가 아무 뜻이 없다.
+# 빌드 스크립트 검사는 훅이 아니라 디렉터리를 받는 CI 스크립트다. 그래서
+# file_case 를 못 쓴다. **그렇다고 안 재면 이 게이트는 영원히 초록이다** (TS-9).
+gradle_case() {   # 내용 기대(block|allow) 설명
+    local content=$1 expect=$2 label=$3
+    local dir="$tmp/gradle-$RANDOM"
+    mkdir -p "$dir"
+    printf '%s\n' "$content" > "$dir/build.gradle"
+    "$ROOT/.github/scripts/build-script-identifiers.sh" "$dir" >/dev/null 2>&1
+    local code=$?
+    local actual=allow
+    ((code != 0)) && actual=block
+    if [[ "$actual" == "$expect" ]]; then
+        printf '  ok   %s\n' "$label"; pass=$((pass + 1))
+    else
+        printf '  FAIL %s (기대 %s, 실제 %s)\n' "$label" "$expect" "$actual"; fail=$((fail + 1))
+    fi
+}
+
 locale_case() {   # 로케일 hook 내용 파일명 기대 설명
     local loc=$1; shift
     local label=${!#}
@@ -63,6 +81,20 @@ verdict() {
         printf '  FAIL %s (기대 %s, 실제 %s)\n' "$label" "$expect" "$actual"; fail=$((fail + 1))
     fi
 }
+
+echo "build-script-identifiers.sh — 위반 검출"
+gradle_case 'def 한글이름 = 1' block '빌드 def 한글 이름'
+gradle_case 'ext {
+    한글 = 1
+}' block '빌드 ext 블록 안 한글'
+gradle_case 'Object 한글 = 1' block '빌드 타입 있는 선언'
+gradle_case "tasks.register('한글태스크') { }" block '빌드 태스크 이름'
+gradle_case 'if (true) { def 한글 = 1 }' block '빌드 줄 중간 def'
+gradle_case '// 한글 주석은 통과해야 한다
+def okName = "한글 문자열"' allow '빌드 주석·문자열은 오탐 아님'
+gradle_case "tasks.register('adapterReport') {
+    description = '어댑터 커버리지 보고'
+}" allow '빌드 정상 태스크에 한글 설명'
 
 echo "check-java.sh — 위반 검출"
 file_case check-java.sh 'class A {
@@ -161,6 +193,60 @@ file_case check-java.sh 'class A {
     void ok3() {
     }
 }' 'src/main/java/HB.java' allow 'JS-11 여러 줄 블록 주석 (회귀)'
+
+# **시험도 클래스명은 영문이다.** TS-2 가 허용하는 것은 시험 "이름" 이지 타입명이
+# 아니다. JS-11 이 시험 파일을 통째로 제외하던 탓에 최상위든 @Nested 든 다 샜다.
+file_case check-java.sh 'class 한글클래스 {
+    static class Inner {
+    }
+}' 'src/test/java/T1.java' block 'JS-11 시험 파일 최상위 한글 클래스명'
+file_case check-java.sh 'class A {
+    @Nested
+    static class 한글중첩 {
+    }
+}' 'src/test/java/T2.java' block 'JS-11 시험 파일 @Nested 한글 클래스명'
+file_case check-java.sh 'class A {
+    record 한글레코드(int x) {
+    }
+}' 'src/test/java/T3.java' block 'JS-11 시험 파일 한글 레코드명'
+file_case check-java.sh 'class A {
+    @DisplayName("표시 이름") static class 한글 {
+    }
+}' 'src/test/java/T6.java' block 'JS-11 괄호 붙은 어노테이션이 같은 줄 (회귀)'
+file_case check-java.sh 'class A {
+    void t() { class 한글로컬 {} }
+}' 'src/test/java/T7.java' block 'JS-11 줄 중간 선언 (회귀)'
+file_case check-java.sh 'class A {
+    @interface 한글어노테이션 {
+    }
+}' 'src/test/java/T8.java' block 'JS-11 @interface (회귀)'
+file_case check-java.sh 'class A {
+    strictfp static class 한글엄격 {
+    }
+}' 'src/test/java/T9.java' block 'JS-11 알려지지 않은 수식어 (회귀)'
+file_case check-java.sh 'class A {
+    static class
+    한글줄바꿈 {
+    }
+}' 'src/test/java/TA.java' block 'JS-11 선언이 줄바꿈됨 (회귀)'
+file_case check-java.sh 'class A {
+    static class Box<한글타입> {
+    }
+}' 'src/test/java/TB.java' block 'JS-11 제네릭 인자 (회귀)'
+file_case check-java.sh 'class A {
+    static class Ok { int 한글필드 = 0; }
+}' 'src/test/java/TC.java' allow 'JS-11 타입명이 영문이면 같은 줄 한글은 오탐 아님 (회귀)'
+
+file_case check-java.sh 'class ATest {
+    @Test
+    void 한산한_쿠폰은_통과한다() {
+    }
+}' 'src/test/java/T4.java' allow 'JS-11 시험 메서드 이름은 한글이 맞다 (TS-2)'
+file_case check-java.sh 'class ATest {
+    private CouponState 상태를_만든다() {
+        return null;
+    }
+}' 'src/test/java/T5.java' allow 'JS-11 시험 헬퍼도 한글이 맞다 (TS-2)'
 
 locale_case C.UTF-8 check-java.sh 'class A {
     boolean 낡았나() {
@@ -484,6 +570,9 @@ chmod +x "$clean_repo/.claude/hooks/"*.sh 2>/dev/null
     git config user.email t@t
     git config user.name t
     : > seed.txt
+    # **빌드 스크립트를 하나 넣어 둔다.** 식별자 검사가 "볼 것이 하나도 없으면
+    # 실패" 로 fail-closed 라, 없으면 깨끗한 케이스가 그 이유로 막혀 헛돈다.
+    printf "plugins {\n    id 'java'\n}\n" > build.gradle
     git add -A
     git commit -q -m 'chore: 씨앗'
     git branch -q develop

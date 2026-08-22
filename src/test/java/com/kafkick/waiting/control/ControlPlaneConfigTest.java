@@ -36,6 +36,9 @@ class ControlPlaneConfigTest {
         assertThat(context.getBeansOfType(AllocationScheduler.class)).hasSize(1);
         assertThat(context.getBeansOfType(AllocationRound.class)).hasSize(1);
         assertThat(context.getBeansOfType(DemandCollector.class)).hasSize(1);
+        // 루프를 켜는 것이 없으면 조각이 다 있어도 아무것도 안 돈다.
+        assertThat(context.getBeansOfType(ControlPlaneLifecycle.class)).hasSize(1);
+        assertThat(context.getBeansOfType(LeadershipLoop.class)).hasSize(1);
     }
 
     @Test

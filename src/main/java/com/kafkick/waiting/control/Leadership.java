@@ -5,7 +5,6 @@ import static java.util.concurrent.TimeUnit.NANOSECONDS;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
@@ -65,10 +64,16 @@ public final class Leadership {
 
     private final AtomicReference<Standing> standing =
             new AtomicReference<>(new Standing(State.FOLLOWER, 0, 0));
-    private final AtomicReference<Long> failingSince = new AtomicReference<>();
+    /**
+     * 억제 구간. {@code null} 이면 지금은 실패 중이 아니다.
+     *
+     * <p>시작 시각과 삼킨 판 수를 따로 두면 비우는 것과 읽는 것 사이가 벌어져,
+     * 그때 들어온 실패가 이번 회복 로그에도 다음에도 안 들어간다.
+     */
+    private record Failing(long since, int swallowed) {
+    }
 
-    /** 억제하는 동안 삼킨 판의 수. 지속 시간만으로는 심각도를 모른다. */
-    private final AtomicInteger suppressed = new AtomicInteger();
+    private final AtomicReference<Failing> failing = new AtomicReference<>();
 
     private Leadership(String ownerId, Duration lease, Duration attemptTimeout,
             Supplier<Mono<LeaderLock>> acquire, Supplier<Mono<Void>> release, LongSupplier ticker) {
@@ -261,18 +266,21 @@ public final class Leadership {
      * 남기면 한 판이 실패한 것인지 수백 판인지 사후에 못 가린다.
      */
     private void enterFailing(Throwable cause) {
-        suppressed.incrementAndGet();
-        if (failingSince.compareAndSet(null, ticker.getAsLong())) {
+        long now = ticker.getAsLong();
+        Failing before = failing.getAndUpdate(f -> f == null
+                ? new Failing(now, 1)
+                : new Failing(f.since(), f.swallowed() + 1));
+        if (before == null) {
             log.warn("리더 확인 실패 — 리스가 남은 동안은 리더로 둔다, owner={}", ownerId, cause);
         }
     }
 
     private void exitFailing() {
-        Long since = failingSince.getAndSet(null);
-        if (since == null) {
+        Failing before = failing.getAndSet(null);
+        if (before == null) {
             return;
         }
         log.info("리더 확인 복구 — {}초 만에, 그동안 {}판 실패, owner={}",
-                NANOSECONDS.toSeconds(ticker.getAsLong() - since), suppressed.getAndSet(0), ownerId);
+                NANOSECONDS.toSeconds(ticker.getAsLong() - before.since()), before.swallowed(), ownerId);
     }
 }

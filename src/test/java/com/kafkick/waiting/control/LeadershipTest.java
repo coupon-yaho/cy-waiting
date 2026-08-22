@@ -44,7 +44,7 @@ class LeadershipTest {
     /** 시험이 기다리는 상한. 리스와 무관하다 — 겸하면 리스를 줄일 때 같이 불안정해진다. */
     private static final Duration BLOCK = Duration.ofSeconds(5);
 
-    private static final long ONE_SECOND = Duration.ofSeconds(1).toNanos();
+    private static final long ONE_SECOND_MILLIS = Duration.ofSeconds(1).toMillis();
 
     /** 벽시계를 안 탄다. 리스 경계가 실행 속도에 따라 갈리면 시험이 흔들린다. */
     private final AtomicLong ticker = new AtomicLong(1_000_000_000L);
@@ -474,10 +474,8 @@ class LeadershipTest {
     @DisplayName("실패가_걷히면_복구를_찍고_다시_경고할_수_있다")
     void 실패가_걷히면_복구를_찍고_다시_경고할_수_있다() {
         // **두 판 이상 실패해야 판 수를 잴 수 있다.** 한 판이면 어떤 값을 찍어도
-        // 1 이라 세는 것과 안 세는 것이 같아 보인다.
-        // **두 판 이상 실패해야 판 수를 잴 수 있다.** 한 판이면 어떤 값을 찍어도
         // 1 이라 세는 것과 안 세는 것이 같아 보인다. 그리고 **두 번 회복해야**
-        // 세고 나서 초기화하는지를 잰다 — 안 지우면 다음 번에 누적치를 찍는다.
+        // 세고 나서 비우는지를 잰다. 안 비우면 다음 번에 누적치를 찍는다.
         AtomicInteger 호출 = new AtomicInteger();
         Leadership leadership = leadership(() -> {
             int n = 호출.incrementAndGet();
@@ -675,7 +673,7 @@ class LeadershipTest {
     void 소유자를_모르는_락은_만들_수_없다() {
         // 못 잡았어도 누가 쥐었는지는 사실이다. 버리면 "그럼 누가 리더였나" 에
         // 답할 수 없다.
-        assertThatThrownBy(() -> new LeaderLock(false, null, ONE_SECOND))
+        assertThatThrownBy(() -> new LeaderLock(false, null, ONE_SECOND_MILLIS))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 }

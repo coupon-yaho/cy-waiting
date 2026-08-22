@@ -7,6 +7,7 @@ import com.kafkick.waiting.control.JudgingHealth;
 import com.kafkick.waiting.control.SnapshotHolder;
 import java.time.Duration;
 import java.util.Map;
+import java.util.Properties;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -45,14 +46,28 @@ class HealthWithoutRedisTest extends RedisContainerSupport {
         assertThat(judging.health().getStatus()).isEqualTo(Status.UP);
 
         // 실제로 못 쓰게 만든다. 설정만 보면 배선이 바뀌었을 때 안 드러난다.
-        redis.execute(connection -> connection.serverCommands()
-                .setConfig("maxmemory", "1")).blockLast(WAIT);
+        //
+        // **원래 값을 읽어서 되돌린다.** 컨테이너를 시험들이 나눠 쓰므로,
+        // 기본값으로 되돌리면 운영 설정을 재는 다른 시험이 깨진다.
+        String 원래 = 설정("maxmemory");
+        설정을_바꾼다("maxmemory", "1");
         try {
             assertThat(judging.health().getStatus()).isEqualTo(Status.UP);
         } finally {
-            redis.execute(connection -> connection.serverCommands()
-                    .setConfig("maxmemory", "0")).blockLast(WAIT);
+            설정을_바꾼다("maxmemory", 원래);
         }
+        assertThat(설정("maxmemory")).isEqualTo(원래);
+    }
+
+    private String 설정(String key) {
+        Properties 값 = redis.execute(connection ->
+                connection.serverCommands().getConfig(key)).blockLast(WAIT);
+        return 값 == null ? null : 값.getProperty(key);
+    }
+
+    private void 설정을_바꾼다(String key, String value) {
+        redis.execute(connection -> connection.serverCommands().setConfig(key, value))
+                .blockLast(WAIT);
     }
 
 }

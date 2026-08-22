@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.entry;
 import com.kafkick.waiting.domain.allocation.Grant;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -98,7 +99,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     @Test
     @DisplayName("발행한_것을_그대로_읽는다")
     void 발행한_것을_그대로_읽는다() {
-        port.publish(java.util.Map.of("c1", "OFF:QUEUEING:1:10:5:1.0", "#credit", "7")).block(WAIT);
+        port.publish(Map.of("c1", "OFF:QUEUEING:1:10:5:1.0", "#credit", "7")).block(WAIT);
 
         assertThat(port.load().block(WAIT))
                 .containsEntry("#credit", "7")
@@ -109,9 +110,9 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     @DisplayName("발행은_통째로_갈아_끼운다")
     void 발행은_통째로_갈아_끼운다() {
         // 남기면 끝난 쿠폰이 스냅샷에 영영 남아, 각 노드가 없는 쿠폰을 계속 판정한다.
-        port.publish(java.util.Map.of("c1", "a", "c2", "b")).block(WAIT);
+        port.publish(Map.of("c1", "a", "c2", "b")).block(WAIT);
 
-        port.publish(java.util.Map.of("c1", "c")).block(WAIT);
+        port.publish(Map.of("c1", "c")).block(WAIT);
 
         assertThat(port.load().block(WAIT)).containsOnlyKeys("c1");
     }

@@ -53,8 +53,8 @@ public record ControlPlaneProperties(Scheduler scheduler, Leader leader, Capacit
             int rampDownTicks, int expectedNodes) {
 
         public Capacity {
-            requirePositive(rampUp, "rampUp");
-            requirePositive(freshness, "freshness");
+            Durations.requirePositive(rampUp, "rampUp");
+            Durations.requirePositive(freshness, "freshness");
             if (floor < 0) {
                 throw new IllegalArgumentException("floor 는 0 이상이어야 한다: %d".formatted(floor));
             }
@@ -81,7 +81,7 @@ public record ControlPlaneProperties(Scheduler scheduler, Leader leader, Capacit
     public record Scheduler(Duration tick, Duration firstTickDelay, int shards) {
 
         public Scheduler {
-            requirePositive(tick, "tick");
+            Durations.requirePositive(tick, "tick");
             if (firstTickDelay == null || firstTickDelay.isNegative()) {
                 throw new IllegalArgumentException(
                         "firstTickDelay 는 음수일 수 없다: %s".formatted(firstTickDelay));
@@ -108,8 +108,8 @@ public record ControlPlaneProperties(Scheduler scheduler, Leader leader, Capacit
     public record Leader(Duration lease, Duration attempt, Duration renewDelay) {
 
         public Leader {
-            requirePositive(lease, "lease");
-            requirePositive(attempt, "attempt");
+            Durations.requirePositive(lease, "lease");
+            Durations.requirePositive(attempt, "attempt");
             if (renewDelay == null || renewDelay.isNegative()) {
                 throw new IllegalArgumentException(
                         "renewDelay 는 음수일 수 없다: %s".formatted(renewDelay));
@@ -123,9 +123,4 @@ public record ControlPlaneProperties(Scheduler scheduler, Leader leader, Capacit
         }
     }
 
-    private static void requirePositive(Duration value, String name) {
-        if (value == null || value.isZero() || value.isNegative()) {
-            throw new IllegalArgumentException("%s 는 양수여야 한다: %s".formatted(name, value));
-        }
-    }
 }

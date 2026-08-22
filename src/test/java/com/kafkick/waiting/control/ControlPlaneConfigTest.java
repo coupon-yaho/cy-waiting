@@ -30,10 +30,12 @@ class ControlPlaneConfigTest {
     @Test
     @DisplayName("제어_평면_빈이_다_뜬다")
     void 제어_평면_빈이_다_뜬다() {
-        assertThat(context.getBean(Leadership.class)).isNotNull();
-        assertThat(context.getBean(AllocationScheduler.class)).isNotNull();
-        assertThat(context.getBean(AllocationRound.class)).isNotNull();
-        assertThat(context.getBean(DemandCollector.class)).isNotNull();
+        // **뜬다는 것만으로 부족하다.** 배선이 서로 다른 설정을 보고 있으면
+        // 각자 멀쩡한데 함께 안 맞는다.
+        assertThat(context.getBean(Leadership.class).ownerId()).isNotBlank();
+        assertThat(context.getBeansOfType(AllocationScheduler.class)).hasSize(1);
+        assertThat(context.getBeansOfType(AllocationRound.class)).hasSize(1);
+        assertThat(context.getBeansOfType(DemandCollector.class)).hasSize(1);
     }
 
     @Test

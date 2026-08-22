@@ -8,6 +8,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.DisplayName;
 import org.assertj.core.groups.Tuple;
@@ -30,7 +31,7 @@ class DemandCollectorTest {
             Map<String, Long> 재고) {
         return DemandCollector.of(SHARDS,
                 () -> Mono.just(쿠폰),
-                ids -> Mono.just(ids.stream().collect(java.util.stream.Collectors.toMap(
+                ids -> Mono.just(ids.stream().collect(Collectors.toMap(
                         id -> id, id -> 큐.get(id).stream().mapToLong(Long::longValue).sum()))),
                 ids -> Mono.just(재고));
     }

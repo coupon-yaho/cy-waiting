@@ -644,6 +644,10 @@ class LeadershipTest {
         assertThatThrownBy(() -> Leadership.of("node-1", LEASE, ATTEMPT.negated(),
                 LeadershipTest::내_락, Mono::empty))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageStartingWith("attemptTimeout");
+        assertThatThrownBy(() -> Leadership.of("node-1", null, ATTEMPT, LeadershipTest::내_락, Mono::empty))
+                .isInstanceOf(NullPointerException.class).hasMessageStartingWith("lease");
+        assertThatThrownBy(() -> Leadership.of("node-1", LEASE, null, LeadershipTest::내_락, Mono::empty))
+                .isInstanceOf(NullPointerException.class).hasMessageStartingWith("attemptTimeout");
         assertThatThrownBy(() -> Leadership.of("node-1", LEASE, ATTEMPT, null, Mono::empty))
                 .isInstanceOf(NullPointerException.class).hasMessageContaining("acquire");
         assertThatThrownBy(() -> Leadership.of("node-1", LEASE, ATTEMPT, LeadershipTest::내_락, null))

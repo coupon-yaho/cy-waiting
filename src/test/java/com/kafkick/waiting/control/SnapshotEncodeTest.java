@@ -123,6 +123,44 @@ class SnapshotEncodeTest {
     }
 
     @Test
+    @DisplayName("노드_수_경계를_지킨다")
+    void 노드_수_경계를_지킨다() {
+        // long→int 축소가 조용히 0 을 만들면 전 노드가 "내가 유일하다" 고 믿어
+        // 크레딧을 노드 수만큼 초과 배분한다.
+        assertThat(codec.decode(Map.of("#nodes", "1")).meta().gatewayCount()).isEqualTo(1);
+        assertThat(codec.decode(Map.of("#nodes", "0")).meta().gatewayCount()).isEqualTo(1);
+        assertThat(codec.decode(Map.of("#nodes", String.valueOf(Integer.MAX_VALUE)))
+                .meta().gatewayCount()).isEqualTo(Integer.MAX_VALUE);
+        assertThat(codec.decode(Map.of("#nodes", String.valueOf(Integer.MAX_VALUE + 1L)))
+                .meta().gatewayCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("발행_시각_경계를_지킨다")
+    void 발행_시각_경계를_지킨다() {
+        // 0 이하나 표현 범위 밖이면 어떤 임계로도 낡음이어야 한다. 그래야
+        // 스케줄러가 멎은 것을 각 노드가 알아챈다.
+        assertThat(codec.decode(Map.of("#published", "1")).publishedAt())
+                .isEqualTo(Instant.ofEpochSecond(1));
+        assertThat(codec.decode(Map.of("#published", "0")).publishedAt()).isEqualTo(Instant.EPOCH);
+        assertThat(codec.decode(Map.of("#published", "-1")).publishedAt()).isEqualTo(Instant.EPOCH);
+        assertThat(codec.decode(Map.of("#published", String.valueOf(Instant.MAX.getEpochSecond())))
+                .publishedAt()).isEqualTo(Instant.ofEpochSecond(Instant.MAX.getEpochSecond()));
+        assertThat(codec.decode(Map.of("#published",
+                String.valueOf(Instant.MAX.getEpochSecond() + 1))).publishedAt())
+                .isEqualTo(Instant.EPOCH);
+    }
+
+    @Test
+    @DisplayName("못_읽는_수는_기본값으로_본다")
+    void 못_읽는_수는_기본값으로_본다() {
+        // 모르는데 크게 잡으면 초과 배분이다. 크레딧은 0, 노드 수는 1 이다.
+        assertThat(codec.decode(Map.of("#credit", " 12 ")).meta().globalCredit()).isEqualTo(12);
+        assertThat(codec.decode(Map.of("#credit", "열둘")).meta().globalCredit()).isZero();
+        assertThat(codec.decode(Map.of("#nodes", "열둘")).meta().gatewayCount()).isEqualTo(1);
+    }
+
+    @Test
     @DisplayName("모드와_상태를_그대로_싣는다")
     void 모드와_상태를_그대로_싣는다() {
         GatewaySnapshot 원본 = new GatewaySnapshot(

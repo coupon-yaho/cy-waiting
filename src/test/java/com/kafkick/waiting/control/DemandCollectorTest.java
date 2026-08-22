@@ -126,8 +126,11 @@ class DemandCollectorTest {
                 ids -> Mono.just(List.of(1L, 1L, 1L, 1L)),
                 ids -> Mono.just(List.of(10L, 10L)));
 
+        // 기대값이 없으면 어긋난 정도를 모른다. 샤드 수를 잘못 잡은 것인지
+        // 응답이 잘린 것인지 가리는 데 그 수가 필요하다.
         assertThatThrownBy(() -> collector.collect().block())
-                .isInstanceOf(IllegalStateException.class).hasMessageContaining("대기");
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("대기").hasMessageContaining("기대=8");
 
         // 재고 쪽도 따로 재야 한다. 대기만 어긋나게 하면 재고 검사를 지워도 통과한다.
         DemandCollector 재고가_짧다 = DemandCollector.of(SHARDS,
@@ -137,6 +140,19 @@ class DemandCollectorTest {
 
         assertThatThrownBy(() -> 재고가_짧다.collect().block())
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("재고");
+    }
+
+    @Test
+    @DisplayName("샤드가_하나여도_돈다")
+    void 샤드가_하나여도_돈다() {
+        // 지금 운영값이 이것이다. 경계를 한 칸 잘못 잡으면 기동부터 안 된다.
+        DemandCollector collector = DemandCollector.of(1,
+                () -> Mono.just(List.of("c1")),
+                ids -> Mono.just(List.of(7L)),
+                ids -> Mono.just(List.of(70L)));
+
+        assertThat(collector.collect().block()).singleElement()
+                .satisfies(d -> assertThat(d.waiting()).isEqualTo(7));
     }
 
     @Test

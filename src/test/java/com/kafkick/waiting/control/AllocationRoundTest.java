@@ -66,7 +66,7 @@ class AllocationRoundTest {
                 SnapshotCodec.create());
     }
 
-    private java.util.List<String> 로그_메시지() {
+    private List<String> 로그_메시지() {
         return 로그.list.stream().map(ILoggingEvent::getMessage).toList();
     }
 

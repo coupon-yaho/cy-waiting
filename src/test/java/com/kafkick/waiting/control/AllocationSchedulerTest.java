@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Mono;
@@ -33,7 +34,7 @@ class AllocationSchedulerTest {
         return scheduler(timer, () -> Mono.fromRunnable(배분::incrementAndGet));
     }
 
-    private AllocationScheduler scheduler(Scheduler timer, java.util.function.Supplier<Mono<Void>> 한_판) {
+    private AllocationScheduler scheduler(Scheduler timer, Supplier<Mono<Void>> 한_판) {
         return AllocationScheduler.of(TICK, FIRST, 리더::get, 한_판, 잰_지연::add, timer);
     }
 
@@ -46,8 +47,14 @@ class AllocationSchedulerTest {
         scheduler.start();
 
         timer.advanceTimeBy(FIRST.plus(TICK.multipliedBy(5)));
-
         assertThat(배분).hasValue(0);
+
+        // **루프가 살아 있어야 한다.** 리더가 아닌 판이 루프를 죽이면, 리더가
+        // 된 뒤에도 배분이 영영 안 돈다 — 그 노드는 조용히 아무것도 안 한다.
+        리더.set(true);
+        timer.advanceTimeBy(TICK.multipliedBy(2));
+
+        assertThat(배분).hasValueGreaterThanOrEqualTo(1);
         scheduler.stop(() -> { });
     }
 
@@ -144,15 +151,44 @@ class AllocationSchedulerTest {
     void 판마다_지연을_잰다() {
         // 이 값이 임계에 붙으면 스케줄러를 따로 떼야 한다는 신호다. 안 재면
         // 떼야 할 시점을 사고로 알게 된다.
+        // **값을 정확히 잰다.** 0 보다 크다는 것만 보면 두 시각을 더해도 통과한다.
         VirtualTimeScheduler timer = VirtualTimeScheduler.create();
+        Duration 한_판_길이 = Duration.ofMillis(300);
         AllocationScheduler scheduler = scheduler(timer,
-                () -> Mono.<Void>empty().delaySubscription(Duration.ofMillis(300), timer));
+                () -> Mono.<Void>empty().delaySubscription(한_판_길이, timer));
         scheduler.start();
 
         timer.advanceTimeBy(FIRST.plus(TICK));
 
-        assertThat(잰_지연).isNotEmpty().allSatisfy(잰 -> assertThat(잰).isGreaterThan(0L));
+        assertThat(잰_지연).isNotEmpty()
+                .allSatisfy(잰 -> assertThat(잰).isEqualTo(한_판_길이.toNanos()));
         scheduler.stop(() -> { });
+    }
+
+    @Test
+    @DisplayName("멈추면_콜백을_반드시_부른다")
+    void 멈추면_콜백을_반드시_부른다() {
+        // 컨테이너가 이걸 기다린다. 안 부르면 종료가 그 자리에서 멎고,
+        // 오케스트레이터가 강제로 끊을 때 진행 중인 요청도 함께 끊긴다.
+        VirtualTimeScheduler timer = VirtualTimeScheduler.create();
+        AllocationScheduler scheduler = scheduler(timer);
+        scheduler.start();
+        AtomicInteger 콜백 = new AtomicInteger();
+
+        scheduler.stop(콜백::incrementAndGet);
+        scheduler.stop(콜백::incrementAndGet);
+
+        assertThat(콜백).hasValue(2);
+    }
+
+    @Test
+    @DisplayName("시작한_적_없어도_콜백을_부른다")
+    void 시작한_적_없어도_콜백을_부른다() {
+        AtomicInteger 콜백 = new AtomicInteger();
+
+        scheduler(VirtualTimeScheduler.create()).stop(콜백::incrementAndGet);
+
+        assertThat(콜백).hasValue(1);
     }
 
     @Test

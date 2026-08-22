@@ -1,5 +1,7 @@
 package com.kafkick.waiting.control;
 
+import static java.util.concurrent.TimeUnit.NANOSECONDS;
+
 import java.time.Duration;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -64,8 +66,16 @@ public final class AllocationScheduler {
         subscription = loop().subscribe();
     }
 
+    /**
+     * <b>콜백을 반드시 부른다.</b> 컨테이너가 이걸 기다리므로, 안 부르면 종료가
+     * 그 자리에서 멎고 오케스트레이터가 강제로 끊는다 — 그때는 진행 중인 요청도
+     * 함께 끊긴다.
+     */
     public void stop(Runnable callback) {
-        running.set(false);
+        if (!running.compareAndSet(true, false)) {
+            callback.run();
+            return;
+        }
         Disposable current = subscription;
         if (current != null) {
             current.dispose();
@@ -91,7 +101,7 @@ public final class AllocationScheduler {
         if (!isLeader.getAsBoolean()) {
             return Mono.empty();
         }
-        long startedAt = timer.now(java.util.concurrent.TimeUnit.NANOSECONDS);
+        long startedAt = timer.now(NANOSECONDS);
         return allocate.get()
                 // 무응답은 오류가 아니라 오류 처리에 안 걸린다. 상한이 없으면
                 // 루프가 조용히 멎고, 멎었다는 신호조차 안 나온다.
@@ -99,6 +109,6 @@ public final class AllocationScheduler {
                 .doOnError(e -> log.warn("배분 실패 — 다음 판에 다시 시도한다", e))
                 .onErrorResume(e -> Mono.empty())
                 .doFinally(signal ->
-                        lagNanos.accept(timer.now(java.util.concurrent.TimeUnit.NANOSECONDS) - startedAt));
+                        lagNanos.accept(timer.now(NANOSECONDS) - startedAt));
     }
 }

@@ -83,7 +83,7 @@ public final class DemandCollector {
      * <p>재고를 모를 때 크게 잡으면 재고보다 많이 통과시킨다. 초과 발급은 되돌릴
      * 수 없으므로 모르는 쪽은 작게 본다.
      */
-    private static long orZero(Long value) {
+    private long orZero(Long value) {
         return value == null ? 0 : value;
     }
 }

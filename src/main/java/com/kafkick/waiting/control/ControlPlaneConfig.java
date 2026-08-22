@@ -92,6 +92,21 @@ public class ControlPlaneConfig {
     }
 
     @Bean
+    LeadershipLoop leadershipLoop(ControlPlaneProperties properties, Leadership leadership,
+            Scheduler allocationScheduler) {
+        return LeadershipLoop.of(properties.leader().renewDelay(), leadership::renew,
+                allocationScheduler);
+    }
+
+    @Bean
+    ControlPlaneLifecycle controlPlaneLifecycle(LeadershipLoop leadershipLoop,
+            AllocationScheduler allocationLoop, Leadership leadership,
+            ControlPlaneProperties properties, Scheduler allocationScheduler) {
+        return ControlPlaneLifecycle.of(leadershipLoop, allocationLoop, leadership::release,
+                properties.leader().attempt(), allocationScheduler);
+    }
+
+    @Bean
     AllocationScheduler allocationLoop(ControlPlaneProperties properties, Leadership leadership,
             AllocationRound round, Scheduler allocationScheduler) {
         return AllocationScheduler.of(properties.scheduler().tick(),

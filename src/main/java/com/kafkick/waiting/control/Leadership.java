@@ -39,14 +39,10 @@ public final class Leadership {
     private enum State { FOLLOWER, LEADER, CLOSED }
 
     /**
-     * 셋을 <b>한 덩어리로</b> 든다.
+     * 셋을 <b>한 덩어리로</b> 든다. 따로 두면 상태를 공개한 뒤에 시각을 쓰게 되어,
+     * 그 사이에 읽는 쪽이 0 을 본다 — "3600초 동안 리더였다" 가 그렇게 나온다.
      *
-     * <p>따로 두면 상태를 공개한 뒤에 시각을 쓰게 되어, 그 사이에 읽는 쪽이
-     * 직전 항이나 0 을 본다 — "3600초 동안 리더였다" 같은 값이 그렇게 나온다.
-     *
-     * @param confirmedAt 락이 내 것이라고 확인된 시각. 응답이 아니라 <b>물으러 간</b>
-     *                    시각이다. 서버가 리스를 다시 건 것은 왕복 중 어느 시점이라,
-     *                    응답으로 재면 남은 리스를 과대평가한다
+     * @param confirmedAt 확인된 시각. 응답이 아니라 <b>물으러 간</b> 시각이다
      */
     private record Standing(State state, long confirmedAt, long leaderSince) {
 
@@ -79,6 +75,10 @@ public final class Leadership {
         if (ownerId == null || ownerId.isBlank()) {
             throw new IllegalArgumentException("ownerId 는 비어 있을 수 없다");
         }
+        // 이게 없으면 아래에서 이름 없는 NPE 가 난다. 기동 실패의 원인을 읽는
+        // 난이도가 어느 인자를 빠뜨렸느냐에 따라 달라진다.
+        Objects.requireNonNull(lease, "lease 는 필수다");
+        Objects.requireNonNull(attemptTimeout, "attemptTimeout 은 필수다");
         if (lease.isZero() || lease.isNegative()) {
             throw new IllegalArgumentException("lease 는 양수여야 한다: %s".formatted(lease));
         }
@@ -255,13 +255,10 @@ public final class Leadership {
     }
 
     /**
-     * 실패가 이어지는 동안 경고는 한 번만 찍는다.
+     * 실패가 이어지는 동안 경고는 한 번만 찍고 <b>삼킨 판을 센다.</b>
      *
-     * <p>연장은 리스보다 훨씬 자주 돈다. 매 판 찍으면 몇 분짜리 단절에 노드마다
-     * 수백 줄이고, 여러 노드가 동시에 겪는 일이라 그만큼 곱해진다.
-     *
-     * <p><b>대신 몇 판을 삼켰는지 센다.</b> 지속 시간만 남기면 그동안 한 판이
-     * 실패한 것인지 수백 판이 실패한 것인지 사후에 못 가린다.
+     * <p>매 판 찍으면 몇 분짜리 단절에 노드마다 수백 줄이다. 그렇다고 지속 시간만
+     * 남기면 한 판이 실패한 것인지 수백 판인지 사후에 못 가린다.
      */
     private void enterFailing(Throwable cause) {
         suppressed.incrementAndGet();

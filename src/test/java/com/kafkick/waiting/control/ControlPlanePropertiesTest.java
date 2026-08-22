@@ -107,8 +107,24 @@ class ControlPlanePropertiesTest {
                 new ControlPlaneProperties.Scheduler(Duration.ofSeconds(1), Duration.ofSeconds(3), 1);
 
         assertThatThrownBy(() -> new ControlPlaneProperties(scheduler,
-                leader(Duration.ofMillis(900), Duration.ofMillis(100), Duration.ofMillis(50))))
+                leader(Duration.ofMillis(900), Duration.ofMillis(100), Duration.ofMillis(50)),
+                ControlPlaneProperties.defaults().capacity()))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("리스");
+    }
+
+    @Test
+    @DisplayName("신선도는_틱보다_길어야_한다")
+    void 신선도는_틱보다_길어야_한다() {
+        // 신선도가 틱보다 짧으면 한 틱만 밀려도 전 인스턴스가 낡음이 된다.
+        // 그러면 하한으로 떨어져 아무 문제 없는 쿠폰까지 줄을 세운다.
+        ControlPlaneProperties.Scheduler scheduler =
+                new ControlPlaneProperties.Scheduler(Duration.ofSeconds(1), Duration.ofSeconds(3), 1);
+
+        assertThatThrownBy(() -> new ControlPlaneProperties(scheduler,
+                ControlPlaneProperties.defaults().leader(),
+                new ControlPlaneProperties.Capacity(Duration.ofSeconds(60), Duration.ofSeconds(1),
+                        1, 10_000, 3, 1)))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("신선도");
     }
 
     @Test

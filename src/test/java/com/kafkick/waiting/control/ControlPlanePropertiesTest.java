@@ -128,6 +128,33 @@ class ControlPlanePropertiesTest {
     }
 
     @Test
+    @DisplayName("가용량_값이_잘못되면_안_뜬다")
+    void 가용량_값이_잘못되면_안_뜬다() {
+        assertThatThrownBy(() -> new ControlPlaneProperties.Capacity(Duration.ZERO,
+                Duration.ofSeconds(3), 1, 10_000, 3, 1))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageStartingWith("rampUp");
+        assertThatThrownBy(() -> new ControlPlaneProperties.Capacity(Duration.ofSeconds(60),
+                Duration.ZERO, 1, 10_000, 3, 1))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageStartingWith("freshness");
+        assertThatThrownBy(() -> new ControlPlaneProperties.Capacity(Duration.ofSeconds(60),
+                Duration.ofSeconds(3), -1, 10_000, 3, 1))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageStartingWith("floor");
+        // 상한이 0 이면 어떤 보고도 0 으로 잘려 크레딧이 영영 안 나간다.
+        assertThatThrownBy(() -> new ControlPlaneProperties.Capacity(Duration.ofSeconds(60),
+                Duration.ofSeconds(3), 1, 0, 3, 1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageStartingWith("perInstanceCap");
+        assertThatThrownBy(() -> new ControlPlaneProperties.Capacity(Duration.ofSeconds(60),
+                Duration.ofSeconds(3), 1, 10_000, 0, 1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageStartingWith("rampDownTicks");
+        assertThatThrownBy(() -> new ControlPlaneProperties.Capacity(Duration.ofSeconds(60),
+                Duration.ofSeconds(3), 1, 10_000, 3, 0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageStartingWith("expectedNodes");
+    }
+
+    @Test
     @DisplayName("기본값이_계획값과_같다")
     void 기본값이_계획값과_같다() {
         ControlPlaneProperties defaults = ControlPlaneProperties.defaults();

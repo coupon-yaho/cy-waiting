@@ -1,11 +1,14 @@
 package com.kafkick.waiting.adapter.redis;
 
+import com.kafkick.waiting.control.FailureWindow;
 import com.kafkick.waiting.domain.allocation.Grant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
@@ -36,8 +39,11 @@ public final class AllocationRedisPort {
      */
     private static final int MAX_PUBLISH_FIELDS = 3_000;
 
+    private static final Logger log = LoggerFactory.getLogger(AllocationRedisPort.class);
+
     private final ReactiveStringRedisTemplate redis;
     private final int shards;
+    private final FailureWindow rejected = FailureWindow.create();
 
     private AllocationRedisPort(ReactiveStringRedisTemplate redis, int shards) {
         if (shards < 1) {
@@ -51,9 +57,30 @@ public final class AllocationRedisPort {
         return new AllocationRedisPort(redis, shards);
     }
 
-    /** 목록에 없는 쿠폰은 보지 않는다. 끝난 쿠폰까지 보면 매 틱 왕복만 늘어난다. */
+    /**
+     * 목록에 없는 쿠폰은 보지 않는다. 끝난 쿠폰까지 보면 매 틱 왕복만 늘어난다.
+     *
+     * <p><b>밖에서 쓰는 키라 아무 값이나 들어온다.</b> 키에 못 쓰는 멤버 하나가
+     * 판을 죽이면 멀쩡한 쿠폰 전부의 배분이 멎는데, 사람이 목록을 고치기 전에는
+     * 안 풀린다. 그래서 걸러 내되 걸러 냈다는 사실을 남긴다.
+     */
     public Mono<List<String>> activeCoupons() {
-        return redis.opsForSet().members(RedisKeys.ACTIVE_COUPONS).sort().collectList();
+        return redis.opsForSet().members(RedisKeys.ACTIVE_COUPONS)
+                .filter(this::usable)
+                .sort()
+                .collectList();
+    }
+
+    private boolean usable(String couponId) {
+        try {
+            RedisKeys.queue(couponId, shards, 0);
+            return true;
+        } catch (IllegalArgumentException e) {
+            if (rejected.entered()) {
+                log.warn("배분 대상에 키로 못 쓰는 값이 있다 — 그것만 빼고 돈다: {}", e.getMessage());
+            }
+            return false;
+        }
     }
 
     /**
@@ -113,13 +140,8 @@ public final class AllocationRedisPort {
     /**
      * <b>통째로 갈아 끼우되 사이가 벌어지지 않게 한다.</b>
      *
-     * <p>지우고 쓰는 것을 나눠 치면 그 사이에 끊길 때 키가 없는 채로 남는다.
-     * 그래서 먼저 덮어쓰고 남은 것을 지운다 — 메모리가 찼을 때도 이 순서가 옳다.
-     * 그러면 전 노드가 판정 재료를 잃고, 낡음으로 넘어가 줄 없는 쿠폰이 통째로
-     * 통과한다. 리더가 스스로 공유 상태를 부수는 셈이다.
-     *
-     * <p>남기지 않는 것도 함께 지킨다 — 끝난 쿠폰이 남으면 각 노드가 없는
-     * 쿠폰을 영영 판정한다.
+     * <p>지우고 쓰는 것을 나눠 치면 그 사이에 끊길 때 키가 없는 채로 남고,
+     * 전 노드가 판정 재료를 잃는다. 근거는 스크립트 주석에 있다.
      */
     public Mono<Void> publish(Map<String, String> hash) {
         if (hash.isEmpty()) {

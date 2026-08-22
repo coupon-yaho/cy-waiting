@@ -3,6 +3,8 @@ package com.kafkick.waiting.control;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -11,6 +13,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
 import reactor.test.scheduler.VirtualTimeScheduler;
@@ -160,8 +163,36 @@ class AllocationSchedulerTest {
 
         timer.advanceTimeBy(FIRST.plus(TICK));
 
-        assertThat(잰_지연).isNotEmpty()
+        assertThat(잰_지연).hasSize(1)
                 .allSatisfy(잰 -> assertThat(잰).isEqualTo(한_판_길이.toNanos()));
+        scheduler.stop(() -> { });
+    }
+
+    @Test
+    @DisplayName("실패가_이어져도_경고는_한_번만_찍는다")
+    void 실패가_이어져도_경고는_한_번만_찍는다() {
+        // 초당 한 판이라 매번 찍으면 몇 분짜리 단절에 수백 줄이고, 정작 조사가
+        // 필요한 순간에 원인이 묻힌다.
+        ListAppender<ILoggingEvent> 로그 = new ListAppender<>();
+        로그.start();
+        ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger(AllocationScheduler.class))
+                .addAppender(로그);
+        VirtualTimeScheduler timer = VirtualTimeScheduler.create();
+        AtomicInteger 호출 = new AtomicInteger();
+        AllocationScheduler scheduler = scheduler(timer, () -> 호출.incrementAndGet() <= 3
+                ? Mono.error(new IllegalStateException("끊겼다"))
+                : Mono.fromRunnable(배분::incrementAndGet));
+        scheduler.start();
+
+        timer.advanceTimeBy(FIRST.plus(TICK.multipliedBy(5)));
+
+        assertThat(로그.list).filteredOn(e -> e.getMessage().contains("배분 실패")).hasSize(1);
+        // 지속 시간만 남기면 한 판이 실패한 것인지 수백 판인지 못 가린다.
+        assertThat(로그.list).filteredOn(e -> e.getMessage().contains("배분 복귀"))
+                .singleElement()
+                .satisfies(e -> assertThat(e.getArgumentArray()[1]).isEqualTo(3));
+        ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger(AllocationScheduler.class))
+                .detachAppender(로그);
         scheduler.stop(() -> { });
     }
 

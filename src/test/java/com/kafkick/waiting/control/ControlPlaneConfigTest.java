@@ -49,10 +49,14 @@ class ControlPlaneConfigTest {
     }
 
     @Test
-    @DisplayName("소유자_ID_는_인스턴스마다_다르다")
-    void 소유자_ID_는_인스턴스마다_다르다() {
+    @DisplayName("소유자_ID_는_기동마다_다르다")
+    void 소유자_ID_는_기동마다_다르다() {
         // 고정하면 재기동한 자신을 이전 소유자로 오인해, 죽기 전에 잡아 둔 락을
         // 새 프로세스가 자기 것으로 알고 연장한다.
-        assertThat(context.getBean(Leadership.class).ownerId()).isNotBlank();
+        //
+        // **한 인스턴스만 보면 이걸 못 잰다** — 상수로 바꿔도 비어 있지 않다.
+        assertThat(context.getBean(Leadership.class).ownerId())
+                .isNotEqualTo(Leadership.newOwnerId());
+        assertThat(Leadership.newOwnerId()).isNotEqualTo(Leadership.newOwnerId());
     }
 }

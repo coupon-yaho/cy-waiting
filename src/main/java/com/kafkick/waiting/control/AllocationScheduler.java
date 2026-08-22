@@ -34,6 +34,7 @@ public final class AllocationScheduler {
     private final Scheduler timer;
 
     private final AtomicBoolean running = new AtomicBoolean();
+    private final FailureWindow failures = FailureWindow.create();
     private volatile Disposable subscription;
 
     private AllocationScheduler(Duration tick, Duration firstTickDelay, BooleanSupplier isLeader,
@@ -97,6 +98,23 @@ public final class AllocationScheduler {
      * <p>판이 터지거나 멈춰도 루프는 돈다. 여기서 멎으면 크레딧이 영영 갱신되지
      * 않고, 전 노드가 낡은 값으로 판정하다 결국 fail-open 한다.
      */
+    /**
+     * 실패가 이어지는 동안 경고는 한 번만 찍는다.
+     *
+     * <p>초당 한 판이라 매번 찍으면 몇 분짜리 단절에 수백 줄이고, 정작 조사가
+     * 필요한 순간에 원인이 묻힌다.
+     */
+    private void failed(Throwable cause) {
+        if (failures.entered()) {
+            log.warn("배분 실패 — 다음 판에 다시 시도한다", cause);
+        }
+    }
+
+    private void recovered() {
+        failures.exited().ifPresent(recovered -> log.info("배분 복귀 — {}초 만에, 그동안 {}판 실패",
+                recovered.elapsedSeconds(), recovered.swallowed()));
+    }
+
     private Mono<Void> round() {
         if (!isLeader.getAsBoolean()) {
             return Mono.empty();
@@ -106,7 +124,8 @@ public final class AllocationScheduler {
                 // 무응답은 오류가 아니라 오류 처리에 안 걸린다. 상한이 없으면
                 // 루프가 조용히 멎고, 멎었다는 신호조차 안 나온다.
                 .timeout(tick, timer)
-                .doOnError(e -> log.warn("배분 실패 — 다음 판에 다시 시도한다", e))
+                .doOnSuccess(ignored -> recovered())
+                .doOnError(this::failed)
                 .onErrorResume(e -> Mono.empty())
                 .doFinally(signal ->
                         lagNanos.accept(timer.now(NANOSECONDS) - startedAt));

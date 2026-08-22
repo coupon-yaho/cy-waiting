@@ -18,27 +18,23 @@ import reactor.core.publisher.Mono;
  */
 public final class DemandCollector {
 
-    private final int shards;
     private final Supplier<Mono<List<String>>> activeCoupons;
     private final Function<List<String>, Mono<Map<String, Long>>> queueSizes;
     private final Function<List<String>, Mono<Map<String, Long>>> stocks;
 
-    private DemandCollector(int shards, Supplier<Mono<List<String>>> activeCoupons,
+    private DemandCollector(Supplier<Mono<List<String>>> activeCoupons,
             Function<List<String>, Mono<Map<String, Long>>> queueSizes,
             Function<List<String>, Mono<Map<String, Long>>> stocks) {
-        if (shards < 1) {
-            throw new IllegalArgumentException("shards 는 1 이상이어야 한다: %d".formatted(shards));
-        }
-        this.shards = shards;
         this.activeCoupons = Objects.requireNonNull(activeCoupons, "activeCoupons 는 필수다");
         this.queueSizes = Objects.requireNonNull(queueSizes, "queueSizes 는 필수다");
         this.stocks = Objects.requireNonNull(stocks, "stocks 는 필수다");
     }
 
-    public static DemandCollector of(int shards, Supplier<Mono<List<String>>> activeCoupons,
+    /** 샤드는 여기서 안 본다 — 합산은 명령을 내는 쪽이 한다. */
+    public static DemandCollector of(Supplier<Mono<List<String>>> activeCoupons,
             Function<List<String>, Mono<Map<String, Long>>> queueSizes,
             Function<List<String>, Mono<Map<String, Long>>> stocks) {
-        return new DemandCollector(shards, activeCoupons, queueSizes, stocks);
+        return new DemandCollector(activeCoupons, queueSizes, stocks);
     }
 
     public Mono<List<CouponDemand>> collect() {

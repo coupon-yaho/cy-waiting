@@ -25,11 +25,9 @@ import reactor.core.publisher.Mono;
  */
 class DemandCollectorTest {
 
-    private static final int SHARDS = 4;
-
     private DemandCollector collector(List<String> 쿠폰, Map<String, List<Long>> 큐,
             Map<String, Long> 재고) {
-        return DemandCollector.of(SHARDS,
+        return DemandCollector.of(
                 () -> Mono.just(쿠폰),
                 ids -> Mono.just(ids.stream().collect(Collectors.toMap(
                         id -> id, id -> 큐.get(id).stream().mapToLong(Long::longValue).sum()))),
@@ -37,8 +35,8 @@ class DemandCollectorTest {
     }
 
     @Test
-    @DisplayName("샤드를_합쳐_한_쿠폰의_대기를_만든다")
-    void 샤드를_합쳐_한_쿠폰의_대기를_만든다() {
+    @DisplayName("대기와_재고를_한_쿠폰으로_묶는다")
+    void 대기와_재고를_한_쿠폰으로_묶는다() {
         DemandCollector collector = collector(List.of("c1"),
                 Map.of("c1", List.of(3L, 5L, 0L, 2L)), Map.of("c1", 100L));
 
@@ -53,9 +51,9 @@ class DemandCollectorTest {
     }
 
     @Test
-    @DisplayName("쿠폰별로_샤드를_갈라_센다")
-    void 쿠폰별로_샤드를_갈라_센다() {
-        // 순서가 어긋나면 A 의 대기가 B 의 재고와 짝지어진다. 그 조합은 도메인이
+    @DisplayName("쿠폰마다_제_대기와_제_재고를_받는다")
+    void 쿠폰마다_제_대기와_제_재고를_받는다() {
+        // 짝이 어긋나면 A 의 대기가 B 의 재고와 붙는다. 그 조합은 도메인이
         // 막지 않으므로 조용히 틀린 배분이 나간다.
         DemandCollector collector = collector(List.of("c1", "c2"),
                 Map.of("c1", List.of(1L, 1L, 1L, 1L), "c2", List.of(10L, 0L, 0L, 0L)),
@@ -86,7 +84,7 @@ class DemandCollectorTest {
     @DisplayName("대기를_모르면_없는_것으로_본다")
     void 대기를_모르면_없는_것으로_본다() {
         // 값이 안 오는 것과 0 인 것은 같다. 모르는 쪽을 크게 잡으면 초과 배분이다.
-        DemandCollector collector = DemandCollector.of(SHARDS,
+        DemandCollector collector = DemandCollector.of(
                 () -> Mono.just(List.of("c1")),
                 ids -> Mono.just(Collections.singletonMap("c1", null)),
                 ids -> Mono.just(Map.of("c1", 100L)));
@@ -102,7 +100,7 @@ class DemandCollectorTest {
         // 대상이 없는데 빈 인자로 명령을 보내면 레디스가 오류를 낸다. 그 오류가
         // 판을 죽이면 대상이 생겨도 배분이 안 돈다.
         AtomicInteger 조회 = new AtomicInteger();
-        DemandCollector collector = DemandCollector.of(SHARDS,
+        DemandCollector collector = DemandCollector.of(
                 () -> Mono.just(List.of()),
                 ids -> {
                     조회.incrementAndGet();
@@ -126,7 +124,7 @@ class DemandCollectorTest {
         // 줄 선 사람이 통째로 멈추는데 아무 신호도 없다.
         //
         // 기대값이 없으면 어긋난 정도를 모른다.
-        DemandCollector collector = DemandCollector.of(SHARDS,
+        DemandCollector collector = DemandCollector.of(
                 () -> Mono.just(List.of("c1", "c2")),
                 ids -> Mono.just(Map.of("c1", 4L)),
                 ids -> Mono.just(Map.of("c1", 10L, "c2", 10L)));
@@ -136,24 +134,4 @@ class DemandCollectorTest {
                 .hasMessageContaining("대기").hasMessageContaining("기대=2");
     }
 
-    @Test
-    @DisplayName("샤드가_하나여도_돈다")
-    void 샤드가_하나여도_돈다() {
-        // 지금 운영값이 이것이다. 경계를 한 칸 잘못 잡으면 기동부터 안 된다.
-        DemandCollector collector = DemandCollector.of(1,
-                () -> Mono.just(List.of("c1")),
-                ids -> Mono.just(Map.of("c1", 7L)),
-                ids -> Mono.just(Map.of("c1", 70L)));
-
-        assertThat(collector.collect().block()).singleElement()
-                .satisfies(d -> assertThat(d.waiting()).isEqualTo(7));
-    }
-
-    @Test
-    @DisplayName("샤드_수가_잘못되면_안_뜬다")
-    void 샤드_수가_잘못되면_안_뜬다() {
-        assertThatThrownBy(() -> DemandCollector.of(0,
-                () -> Mono.just(List.of()), ids -> Mono.just(Map.of()), ids -> Mono.just(Map.of())))
-                .isInstanceOf(IllegalArgumentException.class).hasMessageStartingWith("shards");
-    }
 }

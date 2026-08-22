@@ -67,17 +67,26 @@ public class ControlPlaneConfig {
     }
 
     @Bean
-    DemandCollector demandCollector(AllocationRedisPort port, ControlPlaneProperties properties) {
-        return DemandCollector.of(properties.scheduler().shards(),
-                port::activeCoupons, port::queueSizes, port::stocks);
+    DemandCollector demandCollector(AllocationRedisPort port) {
+        return DemandCollector.of(port::activeCoupons, port::queueSizes, port::stocks);
     }
 
+    /**
+     * 평활화 상태를 <b>이월받아</b> 시작한다.
+     *
+     * <p>리더가 바뀔 때마다 0 에서 다시 시작하면 그 순간 표시 대기 시간이 튄다.
+     * 하필 회복 직후가 진동하기 가장 쉬운 구간이라, 안 이어받으면 가장 나쁠 때
+     * 흔들린다. 싣기만 하고 안 읽으면 이월이 반쪽이다.
+     */
     @Bean
     AllocationRound allocationRound(DemandCollector collector, AllocationRedisPort port,
-            GatewayRegistry registry, CapacityCollector capacity) {
-        return AllocationRound.of(collector::collect, capacity::lastKnown,
+            GatewayRegistry registry, CapacityCollector capacity, Leadership leadership) {
+        SnapshotCodec codec = SnapshotCodec.create();
+        return AllocationRound.of(leadership::isLeader, collector::collect, capacity::lastKnown,
                 registry::count, port::apply, port::publish, Instant::now,
-                CreditSmoother.of(SMOOTHING_ALPHA), SnapshotCodec.create());
+                () -> port.load().map(hash ->
+                        CreditSmoother.restore(SMOOTHING_ALPHA, codec.smoothing(hash))),
+                codec);
     }
 
     /**

@@ -103,11 +103,14 @@ class ControlPlanePropertiesTest {
     void 리스는_틱보다_길어야_한다() {
         // 리스가 한 틱도 못 버티면 판을 도는 도중에 리더십을 잃는다. 그 판의
         // 배분은 나갔는데 다음 리더도 같은 판을 돌아 두 배가 나간다.
+        //
+        // **등호가 이 검사의 이유다.** 엄격히 작은 값만 쓰면 경계를 한 칸
+        // 옮겨도 안 죽는다.
         ControlPlaneProperties.Scheduler scheduler =
                 new ControlPlaneProperties.Scheduler(Duration.ofSeconds(1), Duration.ofSeconds(3), 1);
 
         assertThatThrownBy(() -> new ControlPlaneProperties(scheduler,
-                leader(Duration.ofMillis(900), Duration.ofMillis(100), Duration.ofMillis(50)),
+                leader(Duration.ofSeconds(1), Duration.ofMillis(100), Duration.ofMillis(50)),
                 ControlPlaneProperties.defaults().capacity()))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("리스");
     }
@@ -148,6 +151,9 @@ class ControlPlanePropertiesTest {
                 Duration.ofSeconds(3), 1, 10_000, 0, 1))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageStartingWith("rampDownTicks");
+        // 하한을 아무도 안 써 보면 경계를 한 칸 옮겨도 안 죽는다.
+        assertThatCode(() -> new ControlPlaneProperties.Capacity(Duration.ofSeconds(60),
+                Duration.ofSeconds(3), 0, 1, 1, 1)).doesNotThrowAnyException();
         assertThatThrownBy(() -> new ControlPlaneProperties.Capacity(Duration.ofSeconds(60),
                 Duration.ofSeconds(3), 1, 10_000, 3, 0))
                 .isInstanceOf(IllegalArgumentException.class)

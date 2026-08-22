@@ -75,6 +75,36 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     }
 
     @Test
+    @DisplayName("키로_못_쓰는_대상은_그것만_뺀다")
+    void 키로_못_쓰는_대상은_그것만_뺀다() {
+        // 밖에서 쓰는 키다. 못 쓰는 멤버 하나가 판을 죽이면 멀쩡한 쿠폰 전부의
+        // 배분이 멎고, 사람이 목록을 고치기 전에는 안 풀린다.
+        redis.opsForSet().add(RedisKeys.ACTIVE_COUPONS, "c1", "#credit", "a:b", "{x}").block(WAIT);
+
+        assertThat(port.activeCoupons().block(WAIT)).containsExactly("c1");
+    }
+
+    @Test
+    @DisplayName("샤드가_여럿이면_합쳐_센다")
+    void 샤드가_여럿이면_합쳐_센다() {
+        // 합산은 명령을 내는 쪽이 한다. 샤드를 하나라도 빠뜨리면 그 줄만큼
+        // 크레딧이 덜 나가고, 줄 선 사람이 그만큼 오래 기다린다.
+        int 샤드_넷 = 4;
+        AllocationRedisPort 넷 = AllocationRedisPort.of(redis, 샤드_넷);
+        for (int shard = 0; shard < 샤드_넷; shard++) {
+            redis.opsForZSet().add(RedisKeys.queue("c1", 샤드_넷, shard), "m" + shard, shard)
+                    .block(WAIT);
+        }
+        try {
+            assertThat(넷.queueSizes(List.of("c1")).block(WAIT)).containsOnly(entry("c1", 4L));
+        } finally {
+            for (int shard = 0; shard < 샤드_넷; shard++) {
+                redis.delete(RedisKeys.queue("c1", 샤드_넷, shard)).block(WAIT);
+            }
+        }
+    }
+
+    @Test
     @DisplayName("재고를_따로_읽는다")
     void 재고를_따로_읽는다() {
         // 재고는 샤드 무관 키라 큐와 슬롯이 갈린다. 같은 스크립트에서 못 읽는다.

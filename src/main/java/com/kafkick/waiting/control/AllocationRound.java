@@ -11,6 +11,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.function.IntSupplier;
 import java.util.function.LongSupplier;
@@ -31,47 +33,97 @@ public final class AllocationRound {
 
     private static final Logger log = LoggerFactory.getLogger(AllocationRound.class);
 
+    /** 이월을 못 받았을 때의 계수. 이월받으면 그쪽 계수를 따른다. */
+    private static final double DEFAULT_ALPHA = 0.3;
+
+    private final BooleanSupplier stillLeader;
     private final Supplier<Mono<List<CouponDemand>>> demands;
     private final LongSupplier globalCredit;
     private final IntSupplier gatewayCount;
     private final Function<Grant, Mono<Long>> apply;
     private final Function<Map<String, String>, Mono<Void>> publish;
     private final Supplier<Instant> clock;
-    private final CreditSmoother smoother;
     private final SnapshotCodec codec;
-    private final FairShareAllocator allocator = FairShareAllocator.create();
 
-    private AllocationRound(Supplier<Mono<List<CouponDemand>>> demands, LongSupplier globalCredit,
+    /**
+     * 평활화 상태. <b>첫 판에서 이월받는다.</b>
+     *
+     * <p>빈을 만들 때 읽으면 레디스가 안 뜬 상태에서 앱이 통째로 안 뜬다.
+     * 이월은 있으면 좋은 것이지 기동의 전제가 아니다.
+     */
+    private final AtomicReference<CreditSmoother> smoother = new AtomicReference<>();
+    private final Supplier<Mono<CreditSmoother>> restore;
+    private final FairShareAllocator allocator = FairShareAllocator.create();
+    private final FailureWindow failures = FailureWindow.create();
+
+    private AllocationRound(BooleanSupplier stillLeader,
+            Supplier<Mono<List<CouponDemand>>> demands, LongSupplier globalCredit,
             IntSupplier gatewayCount, Function<Grant, Mono<Long>> apply,
             Function<Map<String, String>, Mono<Void>> publish, Supplier<Instant> clock,
-            CreditSmoother smoother, SnapshotCodec codec) {
+            Supplier<Mono<CreditSmoother>> restore, SnapshotCodec codec) {
+        this.stillLeader = Objects.requireNonNull(stillLeader, "stillLeader 는 필수다");
         this.demands = Objects.requireNonNull(demands, "demands 는 필수다");
         this.globalCredit = Objects.requireNonNull(globalCredit, "globalCredit 은 필수다");
         this.gatewayCount = Objects.requireNonNull(gatewayCount, "gatewayCount 는 필수다");
         this.apply = Objects.requireNonNull(apply, "apply 는 필수다");
         this.publish = Objects.requireNonNull(publish, "publish 는 필수다");
         this.clock = Objects.requireNonNull(clock, "clock 은 필수다");
-        this.smoother = Objects.requireNonNull(smoother, "smoother 는 필수다");
+        this.restore = Objects.requireNonNull(restore, "restore 는 필수다");
         this.codec = Objects.requireNonNull(codec, "codec 은 필수다");
     }
 
-    public static AllocationRound of(Supplier<Mono<List<CouponDemand>>> demands,
+    public static AllocationRound of(BooleanSupplier stillLeader,
+            Supplier<Mono<List<CouponDemand>>> demands,
             LongSupplier globalCredit, IntSupplier gatewayCount, Function<Grant, Mono<Long>> apply,
             Function<Map<String, String>, Mono<Void>> publish, Supplier<Instant> clock,
-            CreditSmoother smoother, SnapshotCodec codec) {
-        return new AllocationRound(demands, globalCredit, gatewayCount, apply, publish, clock,
-                smoother, codec);
+            Supplier<Mono<CreditSmoother>> restore, SnapshotCodec codec) {
+        return new AllocationRound(stillLeader, demands, globalCredit, gatewayCount, apply, publish,
+                clock, restore, codec);
     }
 
     public Mono<Void> run() {
-        return demands.get().flatMap(this::allocate);
+        return seeded().then(demands.get().flatMap(this::allocate));
+    }
+
+    /**
+     * 이월은 <b>한 번만</b> 받는다. 매 판 받으면 방금 쓴 값을 되읽어 평활화가
+     * 아무 일도 안 하게 된다. 못 받아도 판은 돈다.
+     */
+    private Mono<Void> seeded() {
+        if (smoother.get() != null) {
+            return Mono.empty();
+        }
+        return Mono.defer(restore)
+                .doOnError(e -> log.warn("평활화 이월 실패 — 0 에서 시작한다", e))
+                .onErrorResume(e -> Mono.empty())
+                .defaultIfEmpty(CreditSmoother.of(DEFAULT_ALPHA))
+                .doOnNext(restored -> smoother.compareAndSet(null, restored))
+                .then();
+    }
+
+    /**
+     * <b>쓰기 직전에 다시 묻는다.</b> 판 시작에서만 보면 리스가 10ms 남은 상태로
+     * 시작한 판이 한 틱을 꽉 채워 돌고, 그 사이 다음 리더가 자기 판을 돈다.
+     *
+     * <p>묻는 비용은 메모리 읽기 하나다 — 안 물어볼 이유가 없다.
+     */
+    private boolean lostLeadership() {
+        if (stillLeader.getAsBoolean()) {
+            return false;
+        }
+        log.warn("판 도중에 리더십을 잃었다 — 쓰지 않고 접는다");
+        return true;
     }
 
     private Mono<Void> allocate(List<CouponDemand> collected) {
-        long credit = Math.round(smoother.observe(Math.max(0, globalCredit.getAsLong())));
+        CreditSmoother current = smoother.get();
+        long credit = Math.round(current.observe(Math.max(0, globalCredit.getAsLong())));
         Map<String, Long> granted = new LinkedHashMap<>();
         allocator.allocate(credit, collected).forEach(g -> granted.put(g.couponId(), g.credit()));
 
+        if (lostLeadership()) {
+            return Mono.empty();
+        }
         return Flux.fromIterable(collected)
                 .concatMap(demand -> applyOne(demand, granted.getOrDefault(demand.couponId(), 0L)))
                 .reduce(0L, Long::sum)
@@ -80,8 +132,10 @@ public final class AllocationRound {
                 // 사후에 못 가린다.
                 .doOnNext(admitted -> log.info("배분 한 판 — 크레딧 {}, 들인 인원 {}, 쿠폰 {}개",
                         credit, admitted, collected.size()))
-                .then(Mono.defer(() -> publish.apply(
-                        codec.encode(snapshot(collected, granted, credit), smoother.snapshot()))));
+                .then(Mono.defer(() -> lostLeadership()
+                        ? Mono.<Void>empty()
+                        : publish.apply(codec.encode(snapshot(collected, granted, credit),
+                                current.snapshot()))));
     }
 
     /**
@@ -93,8 +147,16 @@ public final class AllocationRound {
             return Mono.just(0L);
         }
         return apply.apply(new Grant(demand.couponId(), credit))
-                .doOnError(e -> log.warn("배분 적용 실패 — 임계는 그대로다, couponId={}",
-                        demand.couponId(), e))
+                .doOnSuccess(ignored -> failures.exited().ifPresent(recovered ->
+                        log.info("배분 적용 복귀 — {}초 만에, 그동안 {}건 실패",
+                                recovered.elapsedSeconds(), recovered.swallowed())))
+                // 쿠폰마다 찍으면 단절 한 번에 쿠폰 수만큼 곱해진다.
+                .doOnError(e -> {
+                    if (failures.entered()) {
+                        log.warn("배분 적용 실패 — 임계는 그대로다, couponId={}",
+                                demand.couponId(), e);
+                    }
+                })
                 .onErrorReturn(0L);
     }
 

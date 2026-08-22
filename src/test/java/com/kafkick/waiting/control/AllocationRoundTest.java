@@ -13,6 +13,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -50,6 +52,7 @@ class AllocationRoundTest {
 
     private AllocationRound round(List<CouponDemand> 수요, long 전역_크레딧, int 노드_수) {
         return AllocationRound.of(
+                () -> true,
                 () -> Mono.just(수요),
                 () -> 전역_크레딧,
                 () -> 노드_수,
@@ -62,7 +65,7 @@ class AllocationRoundTest {
                     return Mono.empty();
                 },
                 () -> Instant.ofEpochSecond(1_700_000_000L),
-                CreditSmoother.of(1.0),
+                () -> Mono.just(CreditSmoother.of(1.0)),
                 SnapshotCodec.create());
     }
 
@@ -131,6 +134,7 @@ class AllocationRoundTest {
         // 빠지면 그 쿠폰은 판정에서 없는 쿠폰이 되어 매진으로 보인다. 적용이
         // 안 됐다는 것과 매진은 전혀 다른 상태다.
         AllocationRound round = AllocationRound.of(
+                () -> true,
                 () -> Mono.just(List.of(new CouponDemand("c1", 5, 100),
                         new CouponDemand("c2", 5, 100))),
                 () -> 10L, () -> 1,
@@ -142,7 +146,7 @@ class AllocationRoundTest {
                     return Mono.empty();
                 },
                 () -> Instant.ofEpochSecond(1_700_000_000L),
-                CreditSmoother.of(1.0),
+                () -> Mono.just(CreditSmoother.of(1.0)),
                 SnapshotCodec.create());
 
         round.run().block();
@@ -158,6 +162,7 @@ class AllocationRoundTest {
         CreditSmoother smoother = CreditSmoother.of(0.5);
         smoother.observe(100);
         AllocationRound round = AllocationRound.of(
+                () -> true,
                 () -> Mono.just(List.of(new CouponDemand("c1", 1_000, 10_000))),
                 () -> 20L, () -> 1,
                 grant -> Mono.just(grant.credit()),
@@ -166,7 +171,7 @@ class AllocationRoundTest {
                     return Mono.empty();
                 },
                 () -> Instant.ofEpochSecond(1_700_000_000L),
-                smoother,
+                () -> Mono.just(smoother),
                 SnapshotCodec.create());
 
         round.run().block();
@@ -175,6 +180,61 @@ class AllocationRoundTest {
         // 대기 시간을 몇 배로 만든다.
         assertThat(SnapshotCodec.create().decode(발행.get("last")).meta().globalCredit())
                 .isEqualTo(60);
+    }
+
+    @Test
+    @DisplayName("평활화를_한_번만_이월받는다")
+    void 평활화를_한_번만_이월받는다() {
+        // 매 판 받으면 이 리더가 다듬어 온 값을 자기가 방금 쓴 값으로 덮어,
+        // 평활화가 아무 일도 안 하게 된다.
+        AtomicInteger 이월 = new AtomicInteger();
+        AllocationRound round = AllocationRound.of(
+                () -> true,
+                () -> Mono.just(List.of(new CouponDemand("c1", 10, 100))),
+                () -> 8L, () -> 1,
+                grant -> Mono.just(grant.credit()),
+                hash -> {
+                    발행.put("last", hash);
+                    return Mono.empty();
+                },
+                () -> Instant.ofEpochSecond(1_700_000_000L),
+                () -> Mono.fromSupplier(() -> {
+                    이월.incrementAndGet();
+                    return CreditSmoother.of(1.0);
+                }),
+                SnapshotCodec.create());
+
+        round.run().block();
+        round.run().block();
+        round.run().block();
+
+        assertThat(이월).hasValue(1);
+    }
+
+    @Test
+    @DisplayName("이월을_못_받아도_판은_돈다")
+    void 이월을_못_받아도_판은_돈다() {
+        // 이월은 있으면 좋은 것이지 배분의 전제가 아니다. 여기서 멈추면
+        // 레디스가 흔들릴 때 배분이 통째로 안 시작한다.
+        AllocationRound round = AllocationRound.of(
+                () -> true,
+                () -> Mono.just(List.of(new CouponDemand("c1", 10, 100))),
+                () -> 8L, () -> 1,
+                grant -> {
+                    적용.add(grant.couponId());
+                    return Mono.just(grant.credit());
+                },
+                hash -> {
+                    발행.put("last", hash);
+                    return Mono.empty();
+                },
+                () -> Instant.ofEpochSecond(1_700_000_000L),
+                () -> Mono.error(new IllegalStateException("끊겼다")),
+                SnapshotCodec.create());
+
+        round.run().block();
+
+        assertThat(적용).containsExactly("c1");
     }
 
     @Test
@@ -207,6 +267,7 @@ class AllocationRoundTest {
         // 나눠 준 수와 실제로 들어온 수는 다르다. 큐가 몫보다 짧으면 남고,
         // 적용이 실패하면 0 이다. 안 남기면 크레딧이 어디서 새는지 못 가린다.
         AllocationRound round = AllocationRound.of(
+                () -> true,
                 () -> Mono.just(List.of(new CouponDemand("c1", 10, 100))),
                 () -> 8L, () -> 1,
                 grant -> Mono.just(3L),
@@ -215,13 +276,44 @@ class AllocationRoundTest {
                     return Mono.empty();
                 },
                 () -> Instant.ofEpochSecond(1_700_000_000L),
-                CreditSmoother.of(1.0),
+                () -> Mono.just(CreditSmoother.of(1.0)),
                 SnapshotCodec.create());
 
         round.run().block();
 
         assertThat(로그_메시지()).anyMatch(m -> m.contains("들인 인원"));
         assertThat(로그_인자("배분 한 판")).satisfies(인자 -> assertThat(인자[1]).isEqualTo(3L));
+    }
+
+    @Test
+    @DisplayName("판_도중에_리더십을_잃으면_안_쓴다")
+    void 판_도중에_리더십을_잃으면_안_쓴다() {
+        // 리스가 10ms 남은 상태로 시작한 판은 한 틱을 꽉 채워 돌고, 그 사이
+        // 다음 리더가 자기 판을 돈다. 판 시작에서만 보면 둘이 같은 키에 쓴다.
+        AtomicBoolean 리더 = new AtomicBoolean(true);
+        AllocationRound round = AllocationRound.of(
+                리더::get,
+                () -> Mono.fromSupplier(() -> {
+                    리더.set(false);
+                    return List.of(new CouponDemand("c1", 10, 100));
+                }),
+                () -> 8L, () -> 1,
+                grant -> {
+                    적용.add(grant.couponId());
+                    return Mono.just(grant.credit());
+                },
+                hash -> {
+                    발행.put("last", hash);
+                    return Mono.empty();
+                },
+                () -> Instant.ofEpochSecond(1_700_000_000L),
+                () -> Mono.just(CreditSmoother.of(1.0)),
+                SnapshotCodec.create());
+
+        round.run().block();
+
+        assertThat(적용).isEmpty();
+        assertThat(발행).isEmpty();
     }
 
     @Test

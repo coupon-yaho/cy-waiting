@@ -12,11 +12,18 @@ import java.time.Duration;
  * @param scheduler 배분 주기
  * @param leader    리더 리스와 연장
  */
-public record ControlPlaneProperties(Scheduler scheduler, Leader leader) {
+public record ControlPlaneProperties(Scheduler scheduler, Leader leader, Capacity capacity) {
 
     public ControlPlaneProperties {
-        if (scheduler == null || leader == null) {
-            throw new IllegalArgumentException("scheduler 와 leader 는 필수다");
+        if (scheduler == null || leader == null || capacity == null) {
+            throw new IllegalArgumentException("scheduler·leader·capacity 는 필수다");
+        }
+        // 신선도가 틱보다 짧으면 한 틱만 밀려도 전 인스턴스가 낡음이 된다.
+        // 그러면 하한으로 떨어져 아무 문제 없는 쿠폰까지 줄을 세운다.
+        if (capacity.freshness().compareTo(scheduler.tick()) <= 0) {
+            throw new IllegalArgumentException(
+                    "신선도는 틱보다 길어야 한다: freshness=%s tick=%s"
+                            .formatted(capacity.freshness(), scheduler.tick()));
         }
         // 리스가 한 틱도 못 버티면 판을 도는 도중에 리더십을 잃는다. 그 판의
         // 배분은 나갔는데 다음 리더도 같은 판을 돌아 두 배가 나간다.
@@ -30,7 +37,40 @@ public record ControlPlaneProperties(Scheduler scheduler, Leader leader) {
     public static ControlPlaneProperties defaults() {
         return new ControlPlaneProperties(
                 new Scheduler(Duration.ofSeconds(1), Duration.ofSeconds(3), 1),
-                new Leader(Duration.ofSeconds(2), Duration.ofMillis(300), Duration.ofMillis(100)));
+                new Leader(Duration.ofSeconds(2), Duration.ofMillis(300), Duration.ofMillis(100)),
+                new Capacity(Duration.ofSeconds(60), Duration.ofSeconds(3), 1, 10_000, 3, 1));
+    }
+
+    /**
+     * @param rampUp         찬 인스턴스가 제 몫을 내기까지의 시간
+     * @param freshness      이보다 오래된 보고는 안 센다
+     * @param floor          신선한 보고가 하나도 없을 때 쓸 값
+     * @param perInstanceCap 인스턴스 하나가 주장할 수 있는 상한
+     * @param rampDownTicks  노드 수 감소를 확정하기까지의 연속 관측 수
+     * @param expectedNodes  첫 관측 전에 쓸 분모
+     */
+    public record Capacity(Duration rampUp, Duration freshness, long floor, long perInstanceCap,
+            int rampDownTicks, int expectedNodes) {
+
+        public Capacity {
+            requirePositive(rampUp, "rampUp");
+            requirePositive(freshness, "freshness");
+            if (floor < 0) {
+                throw new IllegalArgumentException("floor 는 0 이상이어야 한다: %d".formatted(floor));
+            }
+            if (perInstanceCap < 1) {
+                throw new IllegalArgumentException(
+                        "perInstanceCap 은 1 이상이어야 한다: %d".formatted(perInstanceCap));
+            }
+            if (rampDownTicks < 1) {
+                throw new IllegalArgumentException(
+                        "rampDownTicks 는 1 이상이어야 한다: %d".formatted(rampDownTicks));
+            }
+            if (expectedNodes < 1) {
+                throw new IllegalArgumentException(
+                        "expectedNodes 는 1 이상이어야 한다: %d".formatted(expectedNodes));
+            }
+        }
     }
 
     /**

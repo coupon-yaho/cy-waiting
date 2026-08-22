@@ -8,6 +8,11 @@
 --   임계      새 입장 임계. 안 바뀌었으면 이전 값
 --   들인 인원  임계 위로 새로 들어온 사람 수
 --
+-- **수를 문자열로 만들 때 tostring 을 쓰지 않는다.** Lua 5.1 은 %.14g 로
+-- 찍는데 마이크로초 score 는 16자리라 과학 표기로 접히며 최대 100μs 가
+-- 반올림된다. 올림 쪽으로 접히면 그 사이 도착자가 줄을 안 서고 통과하고,
+-- 내림 쪽으로 접히면 이미 통과한 사람이 다시 대기가 된다. %.0f 를 쓴다.
+--
 -- **임계는 뒤로 안 간다.** 되돌리면 이미 통과한 사람이 다시 대기가 되고,
 -- 그건 순번 역행이다. 두 번 적용돼도 값이 같거나 커지므로 리더가 겹쳐도
 -- 안전하다 — 개수 기반이면 두 번 적용이 두 배 입장이 됐다 (A-7).
@@ -17,16 +22,18 @@ if admit == nil or admit ~= admit or admit < 0 or admit ~= math.floor(admit) the
     return redis.error_reply('들일 인원은 0 이상의 정수여야 한다: ' .. tostring(ARGV[1]))
 end
 
-local current = tonumber(redis.call('GET', KEYS[2]) or '-1')
+-- 깨진 값이 들어와도 판을 죽이지 않는다. nil 로 비교하면 그 쿠폰만 조용히
+-- 영원히 배분을 못 받는다.
+local current = tonumber(redis.call('GET', KEYS[2]) or '-1') or -1
 
 if admit == 0 then
     -- 크레딧이 없다. **임계를 낮추지 않는다** — 낮추면 통과한 사람이 되돌아온다.
-    return {tostring(current), 0}
+    return {string.format('%.0f', current), 0}
 end
 
 -- **이미 임계 아래인 사람은 세지 않는다.** 앞에서부터 세면 통과한 사람 자리에
 -- 크레딧을 낭비하고, 그만큼 실제로 들어오는 사람이 준다.
-local from = current >= 0 and '(' .. current or '-inf'
+local from = current >= 0 and '(' .. string.format('%.0f', current) or '-inf'
 local picked = redis.call('ZRANGEBYSCORE', KEYS[1], from, '+inf', 'WITHSCORES',
         'LIMIT', admit - 1, 1)
 
@@ -39,15 +46,16 @@ else
     local last = redis.call('ZRANGE', KEYS[1], -1, -1, 'WITHSCORES')
     if #last == 0 then
         -- 큐가 비었다. 들일 사람이 없으니 임계도 그대로다.
-        return {tostring(current), 0}
+        return {string.format('%.0f', current), 0}
     end
     threshold = tonumber(last[2])
 end
 
 if threshold <= current then
-    return {tostring(current), 0}
+    return {string.format('%.0f', current), 0}
 end
 
-local entering = redis.call('ZCOUNT', KEYS[1], from, threshold)
-redis.call('SET', KEYS[2], tostring(threshold))
-return {tostring(threshold), entering}
+local exact = string.format('%.0f', threshold)
+local entering = redis.call('ZCOUNT', KEYS[1], from, exact)
+redis.call('SET', KEYS[2], exact)
+return {exact, entering}

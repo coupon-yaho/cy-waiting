@@ -519,6 +519,40 @@ else
     printf '  FAIL 무관한 명령을 막았다 (exit %d)\n' "$unrelated"; fail=$((fail + 1))
 fi
 
+# ── 릴레이가 긴 본문에서 안 죽는다 ───────────────────────────────────────────
+#
+# **짧은 본문으로는 못 잡는다.** 파이프 버퍼(64KB)보다 작으면 앞 명령이 먼저
+# 끝나 SIGPIPE 가 안 난다 — 그래서 짧은 리뷰에서는 통과하고 긴 리뷰에서만
+# 실패했다. 실제로 그 상태로 배포돼 매 PR 마다 빨간 잡이 남았다.
+echo
+echo '릴레이 자르기'
+relay_body=$(printf 'x%.0s' $(seq 1 300000))
+relay_body="${relay_body} Actionable comments posted: 7"
+
+relay_rc=0
+(
+    set -uo pipefail
+    stripped=$(printf '%s' "$relay_body" | sed -E 's/<[^>]*>//g' | tr '\n' ' ')
+    excerpt=${stripped:0:600}
+    counts=$(grep -oiE 'actionable comments posted:[[:space:]]*[0-9]+' <<<"$relay_body" \
+            | grep -oE '[0-9]+' || true)
+    count=${counts%%$'\n'*}
+    [[ ${#excerpt} -eq 600 && "$count" == 7 ]]
+) || relay_rc=$?
+
+if ((relay_rc == 0)); then
+    printf '  ok   긴 본문에서도 자르기가 안 죽는다\n'; pass=$((pass + 1))
+else
+    printf '  FAIL 긴 본문에서 자르기가 죽었다 (exit %d)\n' "$relay_rc"; fail=$((fail + 1))
+fi
+
+# 워크플로에 파이프 자르기가 다시 들어오면 잡는다
+if grep -qE 'head -c|head -1' "$ROOT/.github/workflows/coderabbit-relay.yml"; then
+    printf '  FAIL 릴레이에 파이프 자르기가 다시 들어왔다\n'; fail=$((fail + 1))
+else
+    printf '  ok   릴레이에 파이프 자르기가 없다\n'; pass=$((pass + 1))
+fi
+
 echo
 printf '통과 %d · 실패 %d\n' "$pass" "$fail"
 ((fail == 0))

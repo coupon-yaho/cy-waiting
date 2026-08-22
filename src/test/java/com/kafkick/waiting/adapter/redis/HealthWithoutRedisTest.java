@@ -6,6 +6,7 @@ import com.kafkick.waiting.control.GatewaySnapshot;
 import com.kafkick.waiting.control.JudgingHealth;
 import com.kafkick.waiting.control.SnapshotHolder;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Map;
 import java.util.Properties;
 import org.junit.jupiter.api.DisplayName;
@@ -41,8 +42,10 @@ class HealthWithoutRedisTest extends RedisContainerSupport {
     @Test
     @DisplayName("레디스가_끊겨도_받는_것을_유지한다")
     void 레디스가_끊겨도_받는_것을_유지한다() {
+        // 시각은 아무 값이나 된다 — 이 시험이 보는 것은 레디스가 죽어도 판정이
+        // 유지되는가지, 나이가 아니다.
         holder.replace(new GatewaySnapshot(Map.of(), GatewaySnapshot.EMPTY.meta(),
-                java.time.Instant.now()));
+                Instant.ofEpochSecond(1_700_000_000L)));
         assertThat(judging.health().getStatus()).isEqualTo(Status.UP);
 
         // 실제로 못 쓰게 만든다. 설정만 보면 배선이 바뀌었을 때 안 드러난다.

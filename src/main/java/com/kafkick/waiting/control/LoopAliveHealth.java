@@ -32,18 +32,19 @@ public final class LoopAliveHealth implements HealthIndicator {
      */
     @Override
     public Health health() {
-        // **드레이닝 중에는 루프를 안 본다.** 종료하려고 내린 루프를 정지로 세면
-        // 진행 중인 요청을 든 파드가 그 자리에서 끊긴다.
+        // 종료하려고 내린 루프를 정지로 세면 진행 중인 요청을 든 파드가 그
+        // 자리에서 끊긴다.
         if (shutdown.isDraining()) {
             return Health.up().withDetail("draining", true).build();
         }
-        if (holder.isBeforeFirstTick()) {
+        SnapshotHolder.View view = holder.view();
+        if (view.isBeforeFirstTick()) {
             return Health.up().withDetail("firstTick", false).build();
         }
-        Health.Builder builder = holder.isFetchStale() ? Health.down() : Health.up();
+        Health.Builder builder = holder.isFetchStale(view) ? Health.down() : Health.up();
         return builder
                 .withDetail("firstTick", true)
-                .withDetail("tickAgeSec", holder.tickAge().toSeconds())
+                .withDetail("tickAgeSec", view.tickAge().toSeconds())
                 .build();
     }
 }

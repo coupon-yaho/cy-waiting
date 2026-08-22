@@ -27,17 +27,6 @@ public class ControlPlaneConfig {
     private static final double SMOOTHING_ALPHA = 0.3;
 
     @Bean
-    ControlPlaneProperties controlPlaneProperties() {
-        return ControlPlaneProperties.defaults();
-    }
-
-    /**
-     * 소유자 ID 는 <b>기동마다</b> 새로 만든다.
-     *
-     * <p>고정하면 재기동한 자신을 이전 소유자로 오인해, 죽기 전에 잡아 둔 락을
-     * 새 프로세스가 자기 것으로 알고 연장한다.
-     */
-    @Bean
     Leadership leadership(LeaderRedisPort port, ControlPlaneProperties properties) {
         String ownerId = Leadership.newOwnerId();
         return Leadership.of(ownerId, properties.leader().lease(), properties.leader().attempt(),

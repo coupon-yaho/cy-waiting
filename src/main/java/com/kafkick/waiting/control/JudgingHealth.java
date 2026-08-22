@@ -1,7 +1,5 @@
 package com.kafkick.waiting.control;
 
-import java.time.Duration;
-import java.time.Instant;
 import java.util.Objects;
 import org.springframework.boot.health.contributor.Health;
 import org.springframework.boot.health.contributor.HealthIndicator;
@@ -14,6 +12,9 @@ import org.springframework.boot.health.contributor.HealthIndicator;
  * 훨씬 나쁘다.
  */
 public final class JudgingHealth implements HealthIndicator {
+
+    /** 나이가 없다는 뜻. 문자열과 수를 오가면 이 값을 파싱하는 관제가 깨진다. */
+    private static final long UNKNOWN = -1;
 
     private final SnapshotHolder holder;
     private final ShutdownState shutdown;
@@ -35,48 +36,35 @@ public final class JudgingHealth implements HealthIndicator {
      */
     @Override
     public Health health() {
-        Health.Builder builder = detailed(shutdown.isDraining() || !hasSnapshot()
+        // **한 번만 읽는다.** 판정과 진단이 다른 순간에서 오면, 못 받는다면서
+        // 재료는 있다고 하는 응답이 나온다 — 첫 스냅샷이 도착하는 순간이다.
+        SnapshotHolder.View view = holder.view();
+        boolean hasSnapshot = hasSnapshot(view);
+        Health.Builder builder = shutdown.isDraining() || !hasSnapshot
                 ? Health.outOfService()
-                : Health.up());
-        return builder.build();
+                : Health.up();
+        return builder
+                .withDetail("coupons", view.snapshot().coupons().size())
+                .withDetail("hasSnapshot", hasSnapshot)
+                .withDetail("fetchAgeSec", hasSnapshot ? view.fetchAge().toSeconds() : UNKNOWN)
+                .withDetail("dataAgeSec", hasSnapshot ? view.dataAge().toSeconds() : UNKNOWN)
+                .withDetail("tickAgeSec",
+                        view.isBeforeFirstTick() ? UNKNOWN : view.tickAge().toSeconds())
+                .withDetail("fetchStale", holder.isFetchStale(view))
+                .withDetail("dataStale", holder.isDataStale(view))
+                .withDetail("clockAhead", view.clockAhead())
+                .withDetail("draining", shutdown.isDraining())
+                .build();
     }
 
     /**
      * 판정 재료가 있나. <b>루프가 돌았는가로 재면 안 된다.</b>
      *
      * <p>받아오기에 실패해도 루프는 돈다 — 그게 공유 장애를 노드별 신호로 안
-     * 흘리는 방법이다. 그걸로 재료 유무를 재면, 레디스가 죽은 채 뜬 노드가
-     * 빈 스냅샷으로 받기 시작해 전 쿠폰이 매진으로 보인다.
+     * 흘리는 방법이다. 그걸로 재면 레디스가 죽은 채 뜬 노드가 빈 스냅샷으로
+     * 받기 시작해 전 쿠폰이 매진으로 보인다.
      */
-    private boolean hasSnapshot() {
-        return !holder.current().publishedAt().equals(Instant.EPOCH);
-    }
-
-    private Health.Builder detailed(Health.Builder builder) {
-        return builder
-                .withDetail("coupons", holder.current().coupons().size())
-                .withDetail("fetchAgeSec", ageOrUnknown(holder.fetchAge()))
-                .withDetail("dataAgeSec", ageOrUnknown(holder.dataAge()))
-                .withDetail("tickAgeSec", tickAgeSeconds())
-                .withDetail("fetchStale", holder.isFetchStale())
-                .withDetail("dataStale", holder.isDataStale())
-                .withDetail("clockAhead", holder.isClockAhead())
-                .withDetail("hasSnapshot", hasSnapshot())
-                .withDetail("draining", shutdown.isDraining());
-    }
-
-    /**
-     * 한 번도 안 돌았으면 {@code -1} 이다.
-     *
-     * <p>문자열과 수를 오가면 이 값을 파싱하는 관제 도구가 깨진다. 나이가
-     * 음수일 수는 없으니 그 자리가 비었다는 뜻으로 쓴다.
-     */
-    private long tickAgeSeconds() {
-        return holder.isBeforeFirstTick() ? -1 : holder.tickAge().toSeconds();
-    }
-
-    /** 재료가 없으면 나이도 없다. 기동 직후에 56년이 찍히면 관제 축이 깨진다. */
-    private long ageOrUnknown(Duration age) {
-        return hasSnapshot() ? age.toSeconds() : -1;
+    private boolean hasSnapshot(SnapshotHolder.View view) {
+        return view.snapshot().isPublished();
     }
 }

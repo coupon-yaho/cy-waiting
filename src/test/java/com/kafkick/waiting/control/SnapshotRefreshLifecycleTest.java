@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.web.server.context.WebServerGracefulShutdownLifecycle;
 import reactor.core.publisher.Mono;
 
 /**
@@ -126,12 +127,13 @@ class SnapshotRefreshLifecycleTest {
     void 웹_서버보다_먼저_종료_신호를_받는다() {
         // 컨테이너는 단계가 큰 것부터 멈춘다. 웹 서버보다 커야 종료 신호를 먼저
         // 받아 부하 분산기가 뺄 시간을 번다. 상수가 아니라 그 관계를 못박는다.
-        // 웹 서버는 가장 큰 값 바로 아래에 선다.
-        int 웹_서버 = Integer.MAX_VALUE - 1;
+        // **상수를 손으로 적지 않는다.** 프레임워크가 값을 바꾸면 시험이 같이
+        // 움직여야 하고, 틀린 값을 적으면 다음 사람이 그걸 믿는다.
+        int 웹_서버_종료 = WebServerGracefulShutdownLifecycle.SMART_LIFECYCLE_PHASE;
         int 커넥션_팩토리 = 0;
 
         assertThat(lifecycle().getPhase())
-                .isGreaterThan(웹_서버)
+                .isGreaterThan(웹_서버_종료)
                 .isGreaterThan(커넥션_팩토리);
     }
 

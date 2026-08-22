@@ -26,4 +26,14 @@ public record GatewaySnapshot(Map<String, CouponState> coupons, SnapshotMeta met
     public GatewaySnapshot {
         coupons = Map.copyOf(coupons);
     }
+
+    /**
+     * 한 번이라도 발행된 것인가.
+     *
+     * <p>이 판정이 여러 곳에 흩어지면, 한쪽을 느슨하게 할 때 다른 쪽이 조용히
+     * 거짓말한다. 갱신 루프의 수용 판정과 헬스가 같은 것을 봐야 한다.
+     */
+    public boolean isPublished() {
+        return !publishedAt.equals(Instant.EPOCH);
+    }
 }

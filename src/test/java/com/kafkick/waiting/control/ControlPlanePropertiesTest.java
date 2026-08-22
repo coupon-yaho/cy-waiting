@@ -1,0 +1,124 @@
+package com.kafkick.waiting.control;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.time.Duration;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+/**
+ * 제어 평면의 시간 예산.
+ *
+ * <p><b>어긋나면 안 뜨게 한다.</b> 주석으로 적어 두면 값을 바꾸는 사람이 안 읽고,
+ * 배분이 멎는 사고로 배운다. 특히 리더 연장은 어긋나도 예외가 안 나고 조용히
+ * 리더가 없어진다.
+ */
+class ControlPlanePropertiesTest {
+
+    private static ControlPlaneProperties.Leader leader(Duration lease, Duration attempt,
+            Duration delay) {
+        return new ControlPlaneProperties.Leader(lease, attempt, delay);
+    }
+
+    @Test
+    @DisplayName("계획값은_예산_안에_있다")
+    void 계획값은_예산_안에_있다() {
+        assertThatCode(() -> leader(Duration.ofSeconds(2), Duration.ofMillis(300),
+                Duration.ofMillis(100))).doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("회복하는_판까지_리스_안에_들어와야_한다")
+    void 회복하는_판까지_리스_안에_들어와야_한다() {
+        // 주기가 완료 후 지연이라 실패한 판은 지연뿐 아니라 시도 상한만큼도 먹는다.
+        // 마지막 성공부터 회복하는 판이 끝날 때까지가 실제 예산이다.
+        //
+        //   4 × (시도 + 지연) + 시도 ≤ lease
+        Duration lease = Duration.ofSeconds(2);
+
+        // 4 × 400 + 300 = 1,900 — 들어온다
+        assertThatCode(() -> leader(lease, Duration.ofMillis(300), Duration.ofMillis(100)))
+                .doesNotThrowAnyException();
+
+        // 4 × 500 + 300 = 2,300 — 두 번 놓치면 리스가 끝난다
+        assertThatThrownBy(() -> leader(lease, Duration.ofMillis(300), Duration.ofMillis(200)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("연장 예산");
+    }
+
+    @Test
+    @DisplayName("경계에서_갈린다")
+    void 경계에서_갈린다() {
+        // 딱 맞는 값은 통과한다. 한 칸만 넘으면 안 뜬다.
+        Duration lease = Duration.ofMillis(1_900);
+        assertThatCode(() -> leader(lease, Duration.ofMillis(300), Duration.ofMillis(100)))
+                .doesNotThrowAnyException();
+
+        assertThatThrownBy(() -> leader(lease.minusMillis(1), Duration.ofMillis(300),
+                Duration.ofMillis(100)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("연장_시도가_리스보다_길면_안_뜬다")
+    void 연장_시도가_리스보다_길면_안_뜬다() {
+        // 성공해도 도착할 때 이미 만료다. 아무도 리더가 못 되는데 예외도 로그도 없다.
+        assertThatThrownBy(() -> leader(Duration.ofMillis(400), Duration.ofMillis(500),
+                Duration.ZERO))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("양수가_아닌_값은_안_뜬다")
+    void 양수가_아닌_값은_안_뜬다() {
+        assertThatThrownBy(() -> leader(Duration.ZERO, Duration.ofMillis(1), Duration.ofMillis(1)))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageStartingWith("lease");
+        assertThatThrownBy(() -> leader(Duration.ofSeconds(2), Duration.ZERO, Duration.ofMillis(1)))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageStartingWith("attempt");
+        assertThatThrownBy(() -> leader(Duration.ofSeconds(2), Duration.ofMillis(1),
+                Duration.ofMillis(-1)))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageStartingWith("renewDelay");
+    }
+
+    @Test
+    @DisplayName("스케줄러_값이_잘못되면_안_뜬다")
+    void 스케줄러_값이_잘못되면_안_뜬다() {
+        assertThatCode(() -> new ControlPlaneProperties.Scheduler(Duration.ofSeconds(1),
+                Duration.ofSeconds(3), 1)).doesNotThrowAnyException();
+        assertThatThrownBy(() -> new ControlPlaneProperties.Scheduler(Duration.ZERO,
+                Duration.ofSeconds(3), 1))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageStartingWith("tick");
+        assertThatThrownBy(() -> new ControlPlaneProperties.Scheduler(Duration.ofSeconds(1),
+                Duration.ofSeconds(-1), 1))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageStartingWith("firstTickDelay");
+        assertThatThrownBy(() -> new ControlPlaneProperties.Scheduler(Duration.ofSeconds(1),
+                Duration.ofSeconds(3), 0))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageStartingWith("shards");
+    }
+
+    @Test
+    @DisplayName("리스는_틱보다_길어야_한다")
+    void 리스는_틱보다_길어야_한다() {
+        // 리스가 한 틱도 못 버티면 판을 도는 도중에 리더십을 잃는다. 그 판의
+        // 배분은 나갔는데 다음 리더도 같은 판을 돌아 두 배가 나간다.
+        ControlPlaneProperties.Scheduler scheduler =
+                new ControlPlaneProperties.Scheduler(Duration.ofSeconds(1), Duration.ofSeconds(3), 1);
+
+        assertThatThrownBy(() -> new ControlPlaneProperties(scheduler,
+                leader(Duration.ofMillis(900), Duration.ofMillis(100), Duration.ofMillis(50))))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("리스");
+    }
+
+    @Test
+    @DisplayName("기본값이_계획값과_같다")
+    void 기본값이_계획값과_같다() {
+        ControlPlaneProperties defaults = ControlPlaneProperties.defaults();
+
+        assertThat(defaults.scheduler().tick()).isEqualTo(Duration.ofSeconds(1));
+        assertThat(defaults.leader().lease()).isEqualTo(Duration.ofSeconds(2));
+        assertThat(defaults.leader().attempt()).isEqualTo(Duration.ofMillis(300));
+        assertThat(defaults.leader().renewDelay()).isEqualTo(Duration.ofMillis(100));
+    }
+}

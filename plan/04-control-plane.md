@@ -369,7 +369,7 @@
 > 멎은 것은 `tickAge` 로는 같은 값이다. 그대로 liveness 에 물리면 첫 판을 못 돈
 > 파드가 죽고, 재기동해도 또 첫 판 전이라 또 죽는다. **liveness 는 "한 번이라도
 > 돈 뒤 임계 초과" 로 한정하고**, 첫 판 전 구간은 readiness 와 `startupProbe`
-> 가 맡는다. `SnapshotHolder.첫_회전_전인가()` 가 이 둘을 갈라 준다.
+> 가 맡는다. `SnapshotHolder.isBeforeFirstTick()` 이 이 둘을 갈라 준다.
 | 종료 신호 수신 | **503** | 드레이닝 시작. LB 가 먼저 빼야 5xx 가 안 샌다 |
 | `dataStale` — 판정 재료가 낡음 | **200 유지** | `G4.6` — 전 노드가 같은 값을 본다. 빼면 100% 장애 |
 | Redis 연결 끊김 | **200 유지** | 요청 경로에서 Redis 를 안 친다. 넣으면 Redis 장애 = 전면 장애 |

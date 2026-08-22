@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Duration;
 import java.util.List;
+import org.springframework.data.domain.Range;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -56,6 +57,14 @@ class AllocationApplyTest extends RedisContainerSupport {
     private long 임계() {
         return Long.parseLong(String.valueOf(배분(0).get(0)));
     }
+
+    /**
+     * 운영에서 실제로 나오는 자리.
+     *
+     * <p>score 는 레디스 시각의 마이크로초라 <b>16자리</b>다. 두 자리 수로만
+     * 재면 문자열로 만들 때 접히는 결함을 통째로 못 본다.
+     */
+    private static final long 마이크로초 = 1_700_000_000_123_456L;
 
     @Test
     @DisplayName("크레딧만큼의_사람이_임계_안에_들어온다")
@@ -148,6 +157,52 @@ class AllocationApplyTest extends RedisContainerSupport {
 
         assertThat(String.valueOf(결과.get(0))).isEqualTo("40");
         assertThat(Long.parseLong(String.valueOf(결과.get(1)))).isZero();
+    }
+
+    @Test
+    @DisplayName("마이크로초_자리가_접히지_않는다")
+    void 마이크로초_자리가_접히지_않는다() {
+        // Lua 는 수를 열넷째 자리까지만 찍는다. 마이크로초 score 는 열여섯 자리라
+        // 과학 표기로 접히며 최대 100μs 가 반올림된다.
+        //
+        // **올림 쪽으로 접히면** 그 사이 도착자가 줄을 안 서고 통과하고,
+        // **내림 쪽으로 접히면** 이미 통과한 사람이 다시 대기가 된다.
+        줄_세운다(마이크로초, 마이크로초 + 1, 마이크로초 + 2, 마이크로초 + 3);
+
+        List<Object> 결과 = 배분(2);
+
+        assertThat(String.valueOf(결과.get(0))).isEqualTo(String.valueOf(마이크로초 + 1));
+        assertThat(Long.parseLong(String.valueOf(결과.get(1)))).isEqualTo(2);
+        // 임계 아래에 정확히 둘만 있어야 한다. 접히면 넷이 다 들어온다.
+        assertThat(redis.opsForZSet().count(QUEUE,
+                Range.closed(Double.NEGATIVE_INFINITY, (double) (마이크로초 + 1))).block(WAIT))
+                .isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("마이크로초_자리에서도_이어서_들인다")
+    void 마이크로초_자리에서도_이어서_들인다() {
+        // 접힌 임계를 다시 읽으면 그 위에서부터 세는 기준도 함께 어긋난다.
+        줄_세운다(마이크로초, 마이크로초 + 1, 마이크로초 + 2, 마이크로초 + 3);
+        배분(2);
+
+        List<Object> 결과 = 배분(1);
+
+        assertThat(String.valueOf(결과.get(0))).isEqualTo(String.valueOf(마이크로초 + 2));
+        assertThat(Long.parseLong(String.valueOf(결과.get(1)))).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("임계가_깨져_있어도_판을_안_죽인다")
+    void 임계가_깨져_있어도_판을_안_죽인다() {
+        // 밖에서 쓰는 키다. 숫자가 아닌 값이 들어오면 비교가 터지는데, 그러면
+        // 그 쿠폰만 조용히 영원히 배분을 못 받는다.
+        줄_세운다(10, 20, 30);
+        redis.opsForValue().set(ADMITTED, "열").block(WAIT);
+
+        List<Object> 결과 = 배분(2);
+
+        assertThat(String.valueOf(결과.get(0))).isEqualTo("20");
     }
 
     @Test

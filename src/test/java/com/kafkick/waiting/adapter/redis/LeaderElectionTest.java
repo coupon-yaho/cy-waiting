@@ -59,7 +59,12 @@ class LeaderElectionTest extends RedisContainerSupport {
 
     @SuppressWarnings("unchecked")
     private List<Object> tryAcquire(String owner) {
-        return (List<Object>) redis.execute(acquire, List.of(LEADER), List.of(owner, LEASE))
+        return tryAcquire(owner, LEASE);
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Object> tryAcquire(String owner, String lease) {
+        return (List<Object>) redis.execute(acquire, List.of(LEADER), List.of(owner, lease))
                 .blockFirst(WAIT);
     }
 
@@ -112,6 +117,11 @@ class LeaderElectionTest extends RedisContainerSupport {
     @DisplayName("10노드가_동시에_시도하면_정확히_1대만_성공한다")
     void 노드_열이_동시에_시도하면_정확히_한_대만_성공한다() throws InterruptedException {
         // 둘이 동시에 배분하면 총합이 전역 크레딧을 넘는다.
+        //
+        // **리스를 길게 잡는다.** 운영값(2초)으로 재면 열 스레드의 경합이 그보다
+        // 오래 걸릴 때 락이 만료돼 다음 노드도 이긴다 — 그건 경합이 아니라
+        // 만료를 잰 것이고, 부하에 따라 결과가 갈린다.
+        String 넉넉한_리스 = String.valueOf(Duration.ofMinutes(10).toMillis());
         int nodes = 10;
         AtomicInteger winners = new AtomicInteger();
         List<Throwable> failures = new CopyOnWriteArrayList<>();
@@ -124,7 +134,7 @@ class LeaderElectionTest extends RedisContainerSupport {
                 pool.execute(() -> {
                     try {
                         start.await();
-                        if (acquired(tryAcquire(owner))) {
+                        if (acquired(tryAcquire(owner, 넉넉한_리스))) {
                             winners.incrementAndGet();
                         }
                     } catch (InterruptedException e) {

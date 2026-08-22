@@ -133,6 +133,10 @@ class ClusterModeScriptTest {
                     RedisKeys.queue("c1", 1, 0),
                     RedisKeys.grace("c1", 1, 0),
                     RedisKeys.alive("c1", 1, 0));
+            case "snapshot_publish.lua" -> List.of(RedisKeys.SNAPSHOT);
+            case "allocation_apply.lua" -> List.of(
+                    RedisKeys.queue("c1", 1, 0),
+                    RedisKeys.admitted("c1", 1, 0));
             case "leader_acquire.lua", "leader_release.lua" -> List.of(RedisKeys.LEADER);
             case "gateway_heartbeat.lua", "gateway_leave.lua" -> List.of(RedisKeys.INSTANCES);
             default -> throw new IllegalStateException("인자를 안 정한 스크립트: " + script);
@@ -144,6 +148,8 @@ class ClusterModeScriptTest {
             case "enqueue.lua" -> List.of("m1", "60", "30", "0", "1000");
             case "queue_status.lua" -> List.of("m1", "30", "1000");
             case "sweep.lua" -> List.of("10", "1000", "300", "50", "0");
+            case "allocation_apply.lua" -> List.of("1");
+            case "snapshot_publish.lua" -> List.of("#credit", "0");
             case "leader_acquire.lua" -> List.of("node-1", "2000");
             case "leader_release.lua" -> List.of("node-1");
             case "gateway_heartbeat.lua" -> List.of("node-1", "30");

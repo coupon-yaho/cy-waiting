@@ -37,7 +37,14 @@ end
 -- 폴링이 곧 생존 신호다. 조회한 김에 갱신한다 — 왕복을 늘리지 않는다.
 redis.call('ZADD', KEYS[3], now + ttl, ARGV[1])
 
-local admitted = tonumber(redis.call('GET', KEYS[2]) or -1)
+-- **깨진 임계로 비교하면 그 쿠폰의 폴링이 전부 실패한다.** 배분은 멀쩡히
+-- 도는데 대기자만 전원 5xx 를 받는다. 못 읽으면 아직 아무도 안 들어온 것으로
+-- 본다 — 늦어질 뿐이고, 앞질러 들이는 것보다 안전하다.
+local admittedRaw = redis.call('GET', KEYS[2])
+local admitted = admittedRaw and tonumber(admittedRaw) or -1
+if admitted ~= admitted or admitted == math.huge then
+    admitted = -1
+end
 if admitted >= 0 and tonumber(score) <= admitted then
     -- 차례가 왔다. 큐에서 빼지 않으면 대기 인원이 계속 부풀고 ETA 가 틀어진다.
     redis.call('ZREM', KEYS[1], ARGV[1])

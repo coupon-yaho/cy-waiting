@@ -30,8 +30,9 @@ class DemandCollectorTest {
             Map<String, Long> 재고) {
         return DemandCollector.of(SHARDS,
                 () -> Mono.just(쿠폰),
-                ids -> Mono.just(ids.stream().map(큐::get).flatMap(List::stream).toList()),
-                ids -> Mono.just(ids.stream().map(재고::get).toList()));
+                ids -> Mono.just(ids.stream().collect(java.util.stream.Collectors.toMap(
+                        id -> id, id -> 큐.get(id).stream().mapToLong(Long::longValue).sum()))),
+                ids -> Mono.just(재고));
     }
 
     @Test
@@ -83,14 +84,15 @@ class DemandCollectorTest {
     @Test
     @DisplayName("대기를_모르면_없는_것으로_본다")
     void 대기를_모르면_없는_것으로_본다() {
+        // 값이 안 오는 것과 0 인 것은 같다. 모르는 쪽을 크게 잡으면 초과 배분이다.
         DemandCollector collector = DemandCollector.of(SHARDS,
                 () -> Mono.just(List.of("c1")),
-                ids -> Mono.just(Arrays.asList(3L, null, 2L, null)),
-                ids -> Mono.just(List.of(100L)));
+                ids -> Mono.just(Collections.singletonMap("c1", null)),
+                ids -> Mono.just(Map.of("c1", 100L)));
 
         List<CouponDemand> 수요 = collector.collect().block();
 
-        assertThat(수요).singleElement().satisfies(d -> assertThat(d.waiting()).isEqualTo(5));
+        assertThat(수요).singleElement().satisfies(d -> assertThat(d.waiting()).isZero());
     }
 
     @Test
@@ -103,11 +105,11 @@ class DemandCollectorTest {
                 () -> Mono.just(List.of()),
                 ids -> {
                     조회.incrementAndGet();
-                    return Mono.just(List.of());
+                    return Mono.just(Map.of());
                 },
                 ids -> {
                     조회.incrementAndGet();
-                    return Mono.just(List.of());
+                    return Mono.just(Map.of());
                 });
 
         List<CouponDemand> 수요 = collector.collect().block();
@@ -119,27 +121,18 @@ class DemandCollectorTest {
     @Test
     @DisplayName("길이가_안_맞으면_판을_버린다")
     void 길이가_안_맞으면_판을_버린다() {
-        // 짧은 응답을 0 으로 채우면 대기가 0 인 쿠폰이 되어 크레딧이 안 나간다.
+        // 빠진 자리를 0 으로 채우면 대기가 0 인 쿠폰이 되어 크레딧이 안 나간다.
         // 줄 선 사람이 통째로 멈추는데 아무 신호도 없다.
+        //
+        // 기대값이 없으면 어긋난 정도를 모른다.
         DemandCollector collector = DemandCollector.of(SHARDS,
                 () -> Mono.just(List.of("c1", "c2")),
-                ids -> Mono.just(List.of(1L, 1L, 1L, 1L)),
-                ids -> Mono.just(List.of(10L, 10L)));
+                ids -> Mono.just(Map.of("c1", 4L)),
+                ids -> Mono.just(Map.of("c1", 10L, "c2", 10L)));
 
-        // 기대값이 없으면 어긋난 정도를 모른다. 샤드 수를 잘못 잡은 것인지
-        // 응답이 잘린 것인지 가리는 데 그 수가 필요하다.
         assertThatThrownBy(() -> collector.collect().block())
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("대기").hasMessageContaining("기대=8");
-
-        // 재고 쪽도 따로 재야 한다. 대기만 어긋나게 하면 재고 검사를 지워도 통과한다.
-        DemandCollector 재고가_짧다 = DemandCollector.of(SHARDS,
-                () -> Mono.just(List.of("c1", "c2")),
-                ids -> Mono.just(List.of(1L, 1L, 1L, 1L, 1L, 1L, 1L, 1L)),
-                ids -> Mono.just(List.of(10L)));
-
-        assertThatThrownBy(() -> 재고가_짧다.collect().block())
-                .isInstanceOf(IllegalStateException.class).hasMessageContaining("재고");
+                .hasMessageContaining("대기").hasMessageContaining("기대=2");
     }
 
     @Test
@@ -148,8 +141,8 @@ class DemandCollectorTest {
         // 지금 운영값이 이것이다. 경계를 한 칸 잘못 잡으면 기동부터 안 된다.
         DemandCollector collector = DemandCollector.of(1,
                 () -> Mono.just(List.of("c1")),
-                ids -> Mono.just(List.of(7L)),
-                ids -> Mono.just(List.of(70L)));
+                ids -> Mono.just(Map.of("c1", 7L)),
+                ids -> Mono.just(Map.of("c1", 70L)));
 
         assertThat(collector.collect().block()).singleElement()
                 .satisfies(d -> assertThat(d.waiting()).isEqualTo(7));
@@ -159,7 +152,7 @@ class DemandCollectorTest {
     @DisplayName("샤드_수가_잘못되면_안_뜬다")
     void 샤드_수가_잘못되면_안_뜬다() {
         assertThatThrownBy(() -> DemandCollector.of(0,
-                () -> Mono.just(List.of()), ids -> Mono.just(List.of()), ids -> Mono.just(List.of())))
+                () -> Mono.just(List.of()), ids -> Mono.just(Map.of()), ids -> Mono.just(Map.of())))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageStartingWith("shards");
     }
 }

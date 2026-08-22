@@ -7,6 +7,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.io.ClassPathResource;
@@ -65,17 +66,28 @@ public final class AllocationRedisPort {
      * 안 풀린다. 그래서 걸러 내되 걸러 냈다는 사실을 남긴다.
      */
     public Mono<List<String>> activeCoupons() {
+        AtomicBoolean dropped = new AtomicBoolean();
         return redis.opsForSet().members(RedisKeys.ACTIVE_COUPONS)
-                .filter(this::usable)
+                .filter(couponId -> usable(couponId, dropped))
                 .sort()
-                .collectList();
+                .collectList()
+                // 걸러 낼 것이 없어진 판에서 창을 닫는다. 안 닫으면 나중에 다른
+                // 오염이 들어와도 아무 신호가 안 나온다.
+                .doOnNext(coupons -> {
+                    if (!dropped.get()) {
+                        rejected.exited().ifPresent(recovered ->
+                                log.info("배분 대상이 다시 깨끗하다 — {}초 만에, 그동안 {}건 걸렀다",
+                                        recovered.elapsedSeconds(), recovered.swallowed()));
+                    }
+                });
     }
 
-    private boolean usable(String couponId) {
+    private boolean usable(String couponId, AtomicBoolean dropped) {
         try {
             RedisKeys.queue(couponId, shards, 0);
             return true;
         } catch (IllegalArgumentException e) {
+            dropped.set(true);
             if (rejected.entered()) {
                 log.warn("배분 대상에 키로 못 쓰는 값이 있다 — 그것만 빼고 돈다: {}", e.getMessage());
             }

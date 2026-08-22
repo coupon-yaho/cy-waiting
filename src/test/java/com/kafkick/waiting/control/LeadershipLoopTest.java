@@ -56,7 +56,7 @@ class LeadershipLoopTest {
         loop.start();
         timer.advanceTimeBy(DELAY.multipliedBy(3));
 
-        assertThat(연장).hasValueGreaterThanOrEqualTo(1);
+        assertThat(연장).hasValue(3);
         loop.stop();
     }
 

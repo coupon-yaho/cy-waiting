@@ -65,8 +65,8 @@ class ControlPlaneLifecycleTest {
         lifecycle.start();
         timer.advanceTimeBy(TICK);
 
-        assertThat(연장).hasValueGreaterThan(1);
-        assertThat(배분).hasValueGreaterThanOrEqualTo(1);
+        assertThat(연장).hasValue(11);
+        assertThat(배분).hasValue(2);
         assertThat(lifecycle.isRunning()).isTrue();
         lifecycle.stop(() -> { });
     }
@@ -97,10 +97,55 @@ class ControlPlaneLifecycleTest {
         lifecycle.start();
         int 멈추기_직전 = 연장.get();
 
+        int 배분_직전 = 배분.get();
         lifecycle.stop(() -> { });
-        timer.advanceTimeBy(DELAY.multipliedBy(5));
+        timer.advanceTimeBy(TICK.multipliedBy(5));
 
         assertThat(연장).hasValue(멈추기_직전);
+        // **배분도 같이 멎어야 한다.** 락은 놓았는데 루프가 계속 돌면 다음
+        // 리더와 같은 판을 겹쳐 쓴다.
+        assertThat(배분).hasValue(배분_직전);
+    }
+
+    @Test
+    @DisplayName("두_번_멈춰도_콜백을_부른다")
+    void 두_번_멈춰도_콜백을_부른다() {
+        // 컨테이너가 이걸 기다린다. 안 부르면 종료가 그 자리에서 멎는다.
+        VirtualTimeScheduler timer = VirtualTimeScheduler.create();
+        ControlPlaneLifecycle lifecycle = lifecycle(timer);
+        lifecycle.start();
+        AtomicInteger 콜백 = new AtomicInteger();
+
+        lifecycle.stop(콜백::incrementAndGet);
+        lifecycle.stop(콜백::incrementAndGet);
+
+        assertThat(콜백).hasValue(2);
+    }
+
+    @Test
+    @DisplayName("시작한_적_없어도_콜백을_부른다")
+    void 시작한_적_없어도_콜백을_부른다() {
+        AtomicInteger 콜백 = new AtomicInteger();
+
+        lifecycle(VirtualTimeScheduler.create()).stop(콜백::incrementAndGet);
+
+        assertThat(콜백).hasValue(1);
+    }
+
+    @Test
+    @DisplayName("인자_없는_정지도_같이_멎는다")
+    void 인자_없는_정지도_같이_멎는다() {
+        // 컨테이너가 이 쪽을 부를 수도 있다. 여기만 안 멈추면 종료 뒤에 계속 돈다.
+        VirtualTimeScheduler timer = VirtualTimeScheduler.create();
+        ControlPlaneLifecycle lifecycle = lifecycle(timer);
+        lifecycle.start();
+        int 배분_직전 = 배분.get();
+
+        lifecycle.stop();
+        timer.advanceTimeBy(TICK.multipliedBy(5));
+
+        assertThat(lifecycle.isRunning()).isFalse();
+        assertThat(배분).hasValue(배분_직전);
     }
 
     @Test
@@ -147,7 +192,13 @@ class ControlPlaneLifecycleTest {
     @DisplayName("커넥션이_닫히기_전에_멈춘다")
     void 커넥션이_닫히기_전에_멈춘다() {
         // 컨테이너는 단계가 큰 것부터 멈춘다. 커넥션 팩토리가 0 이므로 그보다
-        // 커야 락을 놓을 수 있다. 상수가 아니라 그 관계를 못박는다.
-        assertThat(lifecycle(VirtualTimeScheduler.create()).getPhase()).isPositive();
+        // 커야 락을 놓을 수 있고, 웹 서버보다는 작아야 요청이 먼저 빠진다.
+        // 상수가 아니라 그 관계를 못박는다.
+        int 커넥션_팩토리 = 0;
+        int 웹_서버 = Integer.MAX_VALUE;
+
+        assertThat(lifecycle(VirtualTimeScheduler.create()).getPhase())
+                .isGreaterThan(커넥션_팩토리)
+                .isLessThan(웹_서버);
     }
 }

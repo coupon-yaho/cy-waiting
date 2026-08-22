@@ -34,7 +34,7 @@ public final class AllocationScheduler {
     private final Scheduler timer;
 
     private final AtomicBoolean running = new AtomicBoolean();
-    private final FailureWindow failures = FailureWindow.create();
+    private final FailureWindow failures;
     private volatile Disposable subscription;
 
     private AllocationScheduler(Duration tick, Duration firstTickDelay, BooleanSupplier isLeader,
@@ -52,6 +52,9 @@ public final class AllocationScheduler {
         this.allocate = Objects.requireNonNull(allocate, "allocate 는 필수다");
         this.lagNanos = Objects.requireNonNull(lagNanos, "lagNanos 는 필수다");
         this.timer = Objects.requireNonNull(timer, "timer 는 필수다");
+        // 시계를 스케줄러에서 가져온다. 억제 로그의 지속 시간만 실시간을 타면
+        // 그 값을 시험이 못 잰다.
+        this.failures = FailureWindow.of(() -> timer.now(NANOSECONDS));
     }
 
     public static AllocationScheduler of(Duration tick, Duration firstTickDelay,

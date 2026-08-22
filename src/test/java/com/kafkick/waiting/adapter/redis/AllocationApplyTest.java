@@ -193,16 +193,40 @@ class AllocationApplyTest extends RedisContainerSupport {
     }
 
     @Test
-    @DisplayName("임계가_깨져_있어도_판을_안_죽인다")
-    void 임계가_깨져_있어도_판을_안_죽인다() {
-        // 밖에서 쓰는 키다. 숫자가 아닌 값이 들어오면 비교가 터지는데, 그러면
-        // 그 쿠폰만 조용히 영원히 배분을 못 받는다.
+    @DisplayName("깨진_임계는_낮추지_않고_거절한다")
+    void 깨진_임계는_낮추지_않고_거절한다() {
+        // **없는 것과 깨진 것은 다르다.** 둘 다 없는 것으로 접으면 큐 맨 앞부터
+        // 다시 세어 임계가 뒤로 가고, 이미 통과한 사람이 대기로 되돌아간다.
+        // 그건 순번 역행이라 타협할 수 없다.
+        //
+        // 그 쿠폰의 배분은 멎지만 소리를 내므로 고칠 수 있다. 조용히 역행하는
+        // 것보다 낫다.
         줄_세운다(10, 20, 30);
+        배분(2);
         redis.opsForValue().set(ADMITTED, "열").block(WAIT);
 
-        List<Object> 결과 = 배분(2);
+        assertThatThrownBy(() -> 배분(3)).rootCause().hasMessageContaining("임계가 수가 아니다");
+        assertThat(redis.opsForValue().get(ADMITTED).block(WAIT)).isEqualTo("열");
+    }
 
-        assertThat(String.valueOf(결과.get(0))).isEqualTo("20");
+    @Test
+    @DisplayName("무한대_임계는_거절한다")
+    void 무한대_임계는_거절한다() {
+        // 무한대는 비교를 통과하면서 임계를 영원히 못 올리게 만든다. 깨진
+        // 값보다 나쁘다 — 오류도 안 나고 그냥 멎는다.
+        줄_세운다(10, 20, 30);
+        redis.opsForValue().set(ADMITTED, "inf").block(WAIT);
+
+        assertThatThrownBy(() -> 배분(2)).rootCause().hasMessageContaining("임계가 수가 아니다");
+    }
+
+    @Test
+    @DisplayName("임계가_없으면_맨_앞부터_들인다")
+    void 임계가_없으면_맨_앞부터_들인다() {
+        // 새 쿠폰이다. 없는 것은 정상이라 거절하면 안 된다.
+        줄_세운다(10, 20, 30);
+
+        assertThat(String.valueOf(배분(2).get(0))).isEqualTo("20");
     }
 
     @Test
@@ -210,8 +234,12 @@ class AllocationApplyTest extends RedisContainerSupport {
     void 들일_인원이_잘못되면_거절한다() {
         줄_세운다(10);
 
-        assertThatThrownBy(() -> 배분(-1)).rootCause().hasMessageContaining("0 이상의 정수");
+        assertThatThrownBy(() -> 배분(-1)).rootCause().hasMessageContaining("이하의 정수");
         assertThatThrownBy(() -> redis.execute(apply, List.of(QUEUE, ADMITTED), List.of("1.5"))
-                .blockLast(WAIT)).rootCause().hasMessageContaining("0 이상의 정수");
+                .blockLast(WAIT)).rootCause().hasMessageContaining("이하의 정수");
+        // 무한대는 정수 검사만으로는 안 걸린다. 그 뒤 다른 곳에서 엉뚱한
+        // 메시지로 터져 원인을 못 찾는다.
+        assertThatThrownBy(() -> redis.execute(apply, List.of(QUEUE, ADMITTED), List.of("inf"))
+                .blockLast(WAIT)).rootCause().hasMessageContaining("이하의 정수");
     }
 }

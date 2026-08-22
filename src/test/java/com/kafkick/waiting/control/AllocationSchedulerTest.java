@@ -57,7 +57,7 @@ class AllocationSchedulerTest {
         리더.set(true);
         timer.advanceTimeBy(TICK.multipliedBy(2));
 
-        assertThat(배분).hasValueGreaterThanOrEqualTo(1);
+        assertThat(배분).hasValue(2);
         scheduler.stop(() -> { });
     }
 
@@ -112,7 +112,7 @@ class AllocationSchedulerTest {
 
         timer.advanceTimeBy(FIRST.plus(TICK.multipliedBy(2)));
 
-        assertThat(배분).hasValueGreaterThanOrEqualTo(1);
+        assertThat(배분).hasValue(2);
         scheduler.stop(() -> { });
     }
 
@@ -128,9 +128,10 @@ class AllocationSchedulerTest {
                 : Mono.fromRunnable(배분::incrementAndGet));
         scheduler.start();
 
+        // 첫 판이 상한에서 잘리고, 그 뒤로 매 틱 한 판씩 돈다.
         timer.advanceTimeBy(FIRST.plus(TICK.multipliedBy(4)));
 
-        assertThat(배분).hasValueGreaterThanOrEqualTo(1);
+        assertThat(배분).hasValue(3);
         scheduler.stop(() -> { });
     }
 
@@ -190,7 +191,11 @@ class AllocationSchedulerTest {
         // 지속 시간만 남기면 한 판이 실패한 것인지 수백 판인지 못 가린다.
         assertThat(로그.list).filteredOn(e -> e.getMessage().contains("배분 복귀"))
                 .singleElement()
-                .satisfies(e -> assertThat(e.getArgumentArray()[1]).isEqualTo(3));
+                .satisfies(e -> {
+                    // 지속 시간도 가상 시계를 타야 잰다. 실시간이면 0 만 나온다.
+                    assertThat(e.getArgumentArray()[0]).isEqualTo(3L);
+                    assertThat(e.getArgumentArray()[1]).isEqualTo(3);
+                });
         ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger(AllocationScheduler.class))
                 .detachAppender(로그);
         scheduler.stop(() -> { });

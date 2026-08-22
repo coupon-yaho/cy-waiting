@@ -28,14 +28,26 @@ end
 
 redis.call('HSET', KEYS[1], unpack(ARGV))
 
+-- **한 번에 다 넘기지 않는다.** unpack 은 개수 상한이 있는데, 지울 필드 수는
+-- 발행자가 아니라 이미 들어 있는 것이 정한다. 넘으면 HSET 만 성공한 채로
+-- 터져서, 발행 시각은 신선한데 끝난 쿠폰이 영원히 안 지워진다 — 실패인데
+-- 성공처럼 보인다. 지우기는 나눠 해도 결과가 같다.
+local CHUNK = 512
+
 local stale = {}
+local chunk = {}
 for _, field in ipairs(redis.call('HKEYS', KEYS[1])) do
     if not keep[field] then
         stale[#stale + 1] = field
+        chunk[#chunk + 1] = field
+        if #chunk == CHUNK then
+            redis.call('HDEL', KEYS[1], unpack(chunk))
+            chunk = {}
+        end
     end
 end
-if #stale > 0 then
-    redis.call('HDEL', KEYS[1], unpack(stale))
+if #chunk > 0 then
+    redis.call('HDEL', KEYS[1], unpack(chunk))
 end
 
 return {#ARGV / 2, #stale}

@@ -17,14 +17,31 @@
 -- 그건 순번 역행이다. 두 번 적용돼도 값이 같거나 커지므로 리더가 겹쳐도
 -- 안전하다 — 개수 기반이면 두 번 적용이 두 배 입장이 됐다 (A-7).
 
+-- 배정밀도가 정확한 정수 범위. 넘으면 세는 것 자체가 의미를 잃는다.
+local MAX_ADMIT = 9007199254740992
+
 local admit = tonumber(ARGV[1])
-if admit == nil or admit ~= admit or admit < 0 or admit ~= math.floor(admit) then
-    return redis.error_reply('들일 인원은 0 이상의 정수여야 한다: ' .. tostring(ARGV[1]))
+-- 무한대는 math.floor 를 통과한다. 상한을 안 두면 그 뒤 LIMIT 에서 엉뚱한
+-- 메시지로 터져 원인을 못 찾는다.
+if admit == nil or admit ~= admit or admit < 0 or admit ~= math.floor(admit)
+        or admit > MAX_ADMIT then
+    return redis.error_reply('들일 인원은 0 이상 ' .. MAX_ADMIT
+            .. ' 이하의 정수여야 한다: ' .. tostring(ARGV[1]))
 end
 
--- 깨진 값이 들어와도 판을 죽이지 않는다. nil 로 비교하면 그 쿠폰만 조용히
--- 영원히 배분을 못 받는다.
-local current = tonumber(redis.call('GET', KEYS[2]) or '-1') or -1
+-- **없는 것과 깨진 것을 가른다.** 둘 다 -1 로 접으면 큐 맨 앞부터 다시 세어
+-- 임계가 뒤로 가고, 그 판에서 이미 통과한 사람이 대기로 되돌아간다.
+-- 없는 것은 새 쿠폰이라 -1 이 맞지만, 깨진 것은 소리를 내야 한다.
+local raw = redis.call('GET', KEYS[2])
+local current = -1
+if raw then
+    current = tonumber(raw)
+    -- 무한대는 비교를 통과하면서 임계를 영원히 못 올리게 만든다. 조용히 멎는다.
+    if current == nil or current ~= current or current == math.huge
+            or current == -math.huge then
+        return redis.error_reply('임계가 수가 아니다 — 낮추지 않는다: ' .. tostring(raw))
+    end
+end
 
 if admit == 0 then
     -- 크레딧이 없다. **임계를 낮추지 않는다** — 낮추면 통과한 사람이 되돌아온다.

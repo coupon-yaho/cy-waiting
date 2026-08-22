@@ -154,6 +154,13 @@ class AllocationRoundTest {
         assertThat(발행.get("last")).containsKeys("c1", "c2");
         // 어느 쿠폰이 실패했는지 안 남기면, 임계가 안 움직인 이유를 사후에 못 찾는다.
         assertThat(로그_인자("배분 적용 실패")[0]).isEqualTo("c1");
+        // **한 쿠폰이 실패하고 다른 쿠폰이 성공한 판은 걷힌 것이 아니다.**
+        // 여기서 복귀를 찍으면 실패도 복귀도 아닌 두 줄이 매 판 반복된다.
+        assertThat(로그_메시지()).noneMatch(m -> m.contains("배분 적용 복귀"));
+        // 임계가 안 올라간 쿠폰에 몫을 실으면 노드들이 일어나지 않은 배수율로
+        // 대기 시간을 계산한다.
+        assertThat(발행된("c1").credit()).isZero();
+        assertThat(발행된("c2").credit()).isEqualTo(5);
     }
 
     @Test
@@ -180,6 +187,57 @@ class AllocationRoundTest {
         // 대기 시간을 몇 배로 만든다.
         assertThat(SnapshotCodec.create().decode(발행.get("last")).meta().globalCredit())
                 .isEqualTo(60);
+    }
+
+    @Test
+    @DisplayName("매진이면_종결로_발행한다")
+    void 매진이면_종결로_발행한다() {
+        // 이 전이를 안 만들면 매진 쿠폰이 줄 서는 중으로 남는다. 크레딧은 0 이라
+        // 줄이 영영 안 빠지고, 신규는 큐가 찼다는 이유로 거절당한다.
+        AllocationRound round = round(List.of(new CouponDemand("c1", 30, 0)), 10, 1);
+
+        round.run().block();
+
+        assertThat(발행된("c1").runtime()).isEqualTo(RuntimeState.CLOSED);
+    }
+
+    @Test
+    @DisplayName("매진에_줄도_없으면_한산이다")
+    void 매진에_줄도_없으면_한산이다() {
+        AllocationRound round = round(List.of(new CouponDemand("c1", 0, 0)), 10, 1);
+
+        round.run().block();
+
+        assertThat(발행된("c1").runtime()).isEqualTo(RuntimeState.IDLE);
+    }
+
+    @Test
+    @DisplayName("적용_뒤에_리더십을_잃으면_발행을_안_한다")
+    void 적용_뒤에_리더십을_잃으면_발행을_안_한다() {
+        // 적용 루프가 한 틱을 꽉 채우면 그 사이 다음 리더가 자기 판을 돈다.
+        // 판 시작에서만 보면 둘이 같은 키에 쓴다.
+        AtomicBoolean 리더 = new AtomicBoolean(true);
+        AllocationRound round = AllocationRound.of(
+                리더::get,
+                () -> Mono.just(List.of(new CouponDemand("c1", 10, 100))),
+                () -> 8L, () -> 1,
+                grant -> {
+                    적용.add(grant.couponId());
+                    리더.set(false);
+                    return Mono.just(grant.credit());
+                },
+                hash -> {
+                    발행.put("last", hash);
+                    return Mono.empty();
+                },
+                () -> Instant.ofEpochSecond(1_700_000_000L),
+                () -> Mono.just(CreditSmoother.of(1.0)),
+                SnapshotCodec.create());
+
+        round.run().block();
+
+        assertThat(적용).containsExactly("c1");
+        assertThat(발행).isEmpty();
     }
 
     @Test

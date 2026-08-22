@@ -16,7 +16,15 @@ spring:
       # 풀을 얹어도 처리량은 안 늘고 커넥션 수만 예측 불가가 된다.
       # commons-pool2 를 의존성에 넣지 않는 것이 실제 강제다.
 
+server:
+  port: 8080
+
 management:
+  # 관리 엔드포인트를 서비스 포트로 열지 않는다. 부하 분산기는 관리 포트로
+  # 확인하고 서비스 포트로 보낸다 — 한 포트로 묶으면 밖에서 진단 정보와
+  # 종료 조작이 닿는다.
+  server:
+    port: 8081
   endpoints:
     web:
       exposure:
@@ -25,3 +33,11 @@ management:
     health:
       probes:
         enabled: true
+      # **의존성 상태를 넣지 않는다.** 레디스가 흔들릴 때 전 노드가 한꺼번에
+      # 빠지면 그게 100% 장애다. 낡은 재료로 판정하는 것보다 훨씬 나쁘다.
+      group:
+        readiness:
+          include: judging
+        liveness:
+          include: loopAlive
+      show-details: always

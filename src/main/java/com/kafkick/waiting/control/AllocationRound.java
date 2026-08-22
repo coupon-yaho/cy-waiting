@@ -71,10 +71,12 @@ public final class AllocationRound {
         this.clock = Objects.requireNonNull(clock, "clock 은 필수다");
         this.restore = Objects.requireNonNull(restore, "restore 는 필수다");
         this.codec = Objects.requireNonNull(codec, "codec 은 필수다");
-        // 시계를 주입받은 것에서 가져온다. 억제 로그의 지속 시간만 실시간을
-        // 타면 그 값을 시험이 못 잰다.
-        this.failures = FailureWindow.of(() -> clock.get().getNano()
-                + clock.get().getEpochSecond() * 1_000_000_000L);
+        // **한 번만 읽는다.** 두 번 읽으면 그 사이에 초 경계를 넘을 수 있고,
+        // 나노와 초가 다른 순간에서 와 합이 뒤로 간다 — 지속 시간이 음수가 된다.
+        this.failures = FailureWindow.of(() -> {
+            Instant at = clock.get();
+            return at.getEpochSecond() * 1_000_000_000L + at.getNano();
+        });
     }
 
     public static AllocationRound of(BooleanSupplier stillLeader,
@@ -153,7 +155,9 @@ public final class AllocationRound {
                                 log.info("배분 적용 복귀 — {}초 만에, 그동안 {}건 실패",
                                         recovered.elapsedSeconds(), recovered.swallowed()));
                     }
-                    log.info("배분 한 판 — 크레딧 {}, 들인 인원 {}, 쿠폰 {}개",
+                    // 세는 값이라 지표 자리다. 초당 한 줄이면 진단이 필요한
+                    // 순간에 다른 로그가 여기 묻힌다.
+                    log.debug("배분 한 판 — 크레딧 {}, 들인 인원 {}, 쿠폰 {}개",
                             credit, admitted, collected.size());
                 })
                 .then(Mono.defer(() -> lostLeadership()
@@ -194,17 +198,10 @@ public final class AllocationRound {
     }
 
     /**
-     * 런타임을 <b>발행하는 그 쌍에서</b> 유도한다.
+     * 런타임을 <b>발행하는 그 쌍에서</b> 유도한다. 못 박으면 다 뺄 수 있는 줄까지
+     * 줄 서는 중이 되어 도메인이 막고, 그 쿠폰만 떨어져 매진으로 보인다.
      *
-     * <p>못 박으면 다 뺄 수 있는 줄까지 줄 서는 중이 되어 도메인이 막고, 그
-     * 쿠폰만 떨어져 매진으로 보인다. 경계는 도메인과 같은 자리여야 한다.
-     */
-    /**
-     * 재고가 소진됐으면 <b>매진</b>이다.
-     *
-     * <p>이 전이를 안 만들면 매진 쿠폰이 줄 서는 중으로 남는다. 크레딧은 0 이라
-     * 줄이 영영 안 빠지고, 신규는 큐가 찼다는 이유로 거절당한다 — 매진이라고
-     * 알려 주면 될 것을 게이트웨이가 종결하지 못한다.
+     * <p>재고가 소진됐으면 매진이다. 이 전이가 없으면 줄이 영영 안 빠진다.
      */
     private CouponState stateOf(CouponDemand demand, Map<String, Long> granted) {
         if (demand.stock() <= 0) {

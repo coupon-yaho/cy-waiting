@@ -2,6 +2,7 @@ package com.kafkick.waiting.control;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.kafkick.waiting.domain.allocation.CouponDemand;
@@ -33,19 +34,26 @@ class AllocationRoundTest {
 
     private final List<String> 적용 = new CopyOnWriteArrayList<>();
     private ListAppender<ILoggingEvent> 로그;
+    private Level 원래_수준;
 
     @BeforeEach
     void 로그를_받는다() {
         로그 = new ListAppender<>();
         로그.start();
-        ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger(AllocationRound.class))
-                .addAppender(로그);
+        ch.qos.logback.classic.Logger logger =
+                (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(AllocationRound.class);
+        // 판마다 세는 값은 지표 자리라 낮은 수준으로 찍는다. 시험은 그걸 봐야 한다.
+        원래_수준 = logger.getLevel();
+        logger.setLevel(Level.DEBUG);
+        logger.addAppender(로그);
     }
 
     @AfterEach
     void 로그를_뗀다() {
-        ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger(AllocationRound.class))
-                .detachAppender(로그);
+        ch.qos.logback.classic.Logger logger =
+                (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(AllocationRound.class);
+        logger.detachAppender(로그);
+        logger.setLevel(원래_수준);
     }
 
     private final Map<String, Map<String, String>> 발행 = new LinkedHashMap<>();

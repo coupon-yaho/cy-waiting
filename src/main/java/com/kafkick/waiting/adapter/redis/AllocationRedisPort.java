@@ -40,6 +40,9 @@ public final class AllocationRedisPort {
      */
     private static final int MAX_PUBLISH_FIELDS = 3_000;
 
+    /** 한 판이 동시에 낼 수 있는 읽기. 무제한이면 한 판이 커넥션을 독점한다. */
+    private static final int MAX_CONCURRENT_READS = 16;
+
     private static final Logger log = LoggerFactory.getLogger(AllocationRedisPort.class);
 
     private final ReactiveStringRedisTemplate redis;
@@ -103,9 +106,12 @@ public final class AllocationRedisPort {
      * <b>조용히 틀린 배분</b>이 나간다.
      */
     public Mono<Map<String, Long>> queueSizes(List<String> couponIds) {
+        // **쿠폰마다 순서대로 왕복하면 틱이 밀린다.** 결과를 쿠폰으로 짝지으므로
+        // 순서는 아무 뜻이 없다. 다만 무제한으로 풀면 한 판이 커넥션을 독점해
+        // 다른 명령이 뒤로 밀리므로 동시성에 상한을 둔다.
         return Flux.fromIterable(couponIds)
-                .concatMap(couponId -> shardSizes(couponId)
-                        .map(size -> Map.entry(couponId, size)))
+                .flatMap(couponId -> shardSizes(couponId)
+                        .map(size -> Map.entry(couponId, size)), MAX_CONCURRENT_READS)
                 .collectMap(Map.Entry::getKey, Map.Entry::getValue);
     }
 

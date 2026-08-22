@@ -4,6 +4,7 @@ import com.kafkick.waiting.adapter.redis.RedisKeys;
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.QueueMode;
 import com.kafkick.waiting.domain.coupon.RuntimeState;
+import com.kafkick.waiting.domain.allocation.CreditSmoother;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -30,6 +31,15 @@ public final class SnapshotCodec {
     private static final String NODES = "#nodes";
     private static final String PUBLISHED = "#published";
 
+    /**
+     * 평활화 상태. <b>리더만 읽고 쓴다.</b>
+     *
+     * <p>판정 재료가 아니라 다음 리더에게 넘기는 장부다. 도메인 메타에 넣으면
+     * 요청 경로가 안 쓰는 값을 들고 다니게 된다.
+     */
+    private static final String EWMA = "#ewma";
+    private static final String EWMA_SEEDED = "#ewmaSeeded";
+
     /** {@code mode:runtime:credit:stock:waiting:pollScale} */
     private static final int FIELDS = 6;
 
@@ -42,6 +52,52 @@ public final class SnapshotCodec {
     /** 상태가 없지만 인스턴스다 — 판이 늘면 여기 필드가 생긴다 (JS-13). */
     public static SnapshotCodec create() {
         return new SnapshotCodec();
+    }
+
+    /**
+     * 발행할 해시를 만든다.
+     *
+     * <p>평활화 상태를 같이 싣는다. 리더가 바뀔 때마다 0 에서 다시 시작하면 그
+     * 순간 표시 ETA 가 튀는데, <b>회복 직후가 진동하기 가장 쉬운 구간</b>이라
+     * 하필 그때 흔들린다 (F9).
+     */
+    public Map<String, String> encode(GatewaySnapshot snapshot, CreditSmoother.Snapshot smoothing) {
+        Map<String, String> hash = new LinkedHashMap<>();
+        snapshot.coupons().forEach((couponId, state) -> {
+            // 예약 접두사를 단 쿠폰 하나로 전 쿠폰의 몫이 0 이 된다.
+            if (!couponId.startsWith(RESERVED)) {
+                hash.put(couponId, encodeCoupon(state));
+            }
+        });
+        hash.put(CREDIT, Long.toString(snapshot.meta().globalCredit()));
+        hash.put(NODES, Integer.toString(snapshot.meta().gatewayCount()));
+        hash.put(PUBLISHED, Long.toString(snapshot.publishedAt().getEpochSecond()));
+        hash.put(EWMA, Double.toString(smoothing.value()));
+        hash.put(EWMA_SEEDED, smoothing.seeded() ? "1" : "0");
+        return hash;
+    }
+
+    private String encodeCoupon(CouponState state) {
+        return "%s:%s:%d:%d:%d:%s".formatted(state.mode(), state.runtime(), state.credit(),
+                state.remainingStock(), state.waiting(), Double.toString(state.pollScale()));
+    }
+
+    /**
+     * 이월받은 평활화 상태. <b>못 읽으면 안 받은 것으로 본다.</b>
+     *
+     * <p>여기서 던지면 리더가 바뀔 때마다 배분이 멎는다. 그리고 NaN 이나 음수를
+     * 그대로 받으면 그 순간부터 평활화가 영영 죽는데, 리더가 바뀐 뒤에야 드러난다.
+     */
+    public CreditSmoother.Snapshot smoothing(Map<String, String> hash) {
+        String raw = hash.get(EWMA);
+        if (raw == null || !"1".equals(hash.get(EWMA_SEEDED))) {
+            return CreditSmoother.Snapshot.empty();
+        }
+        try {
+            return new CreditSmoother.Snapshot(Double.parseDouble(raw), true);
+        } catch (IllegalArgumentException e) {
+            return CreditSmoother.Snapshot.empty();
+        }
     }
 
     public GatewaySnapshot decode(Map<String, String> hash) {

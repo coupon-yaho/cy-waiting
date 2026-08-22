@@ -103,6 +103,10 @@ tasks.withType(Test).configureEach {
     def apiVersion = System.getenv('DOCKER_API_VERSION') ?: '1.43'
     environment 'DOCKER_API_VERSION', apiVersion
     systemProperty 'api.version', apiVersion
+    // **배경 루프가 공유 레디스를 만지면 시험끼리 간섭한다.** 리더 락과
+    // 스냅샷을 직접 다루는 시험이 자기가 만든 상태를 잃고, 실패가 코드
+    // 결함인지 간섭인지 못 가리게 된다. 배선을 재는 시험만 다시 켠다.
+    systemProperty 'spring.profiles.active', 'test'
 }
 
 tasks.named('test') {

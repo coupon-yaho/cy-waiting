@@ -18,7 +18,7 @@ import org.springframework.context.ApplicationContext;
  * 가장 나쁘다.
  */
 @Tag("integration")
-@SpringBootTest
+@SpringBootTest(properties = "waiting.scheduler.enabled=true")
 class ControlPlaneConfigTest {
 
     @Autowired

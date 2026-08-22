@@ -17,7 +17,7 @@ import org.springframework.context.ApplicationContext;
  * 각자 초록인데 사이가 비어 있으면 배분이 영영 안 돈다 — 그 상태로 뜨는 것이
  * 가장 나쁘다.
  */
-@Tag("integration")
+@Tag("context")
 @SpringBootTest(properties = "waiting.scheduler.enabled=true")
 class ControlPlaneConfigTest {
 

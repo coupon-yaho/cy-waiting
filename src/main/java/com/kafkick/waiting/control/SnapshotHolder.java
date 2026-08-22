@@ -53,6 +53,55 @@ public final class SnapshotHolder {
     }
 
     /**
+     * 판정과 진단을 <b>같은 순간에서</b> 뽑는다.
+     *
+     * <p>따로 읽으면 그 사이에 갱신이 들어와, 못 받는다고 하면서 재료는 있다고
+     * 하는 응답이 나온다. 첫 스냅샷이 도착하는 순간에 정확히 걸린다.
+     */
+    public View view() {
+        Held held = current.get();
+        Instant now = clock.instant();
+        return new View(held.snapshot(), age(held.fetchedAt(), now),
+                held.lastTick() == null ? null : age(held.lastTick(), now),
+                dataAgeOf(held, now), isClockAheadOf(held, now));
+    }
+
+    private Duration age(Instant since, Instant now) {
+        return Duration.between(since, now);
+    }
+
+    private Duration dataAgeOf(Held held, Instant now) {
+        Duration age = Duration.between(held.snapshot().publishedAt(), now);
+        return age.isNegative() ? Duration.ZERO : age;
+    }
+
+    private boolean isClockAheadOf(Held held, Instant now) {
+        return Duration.between(held.snapshot().publishedAt(), now).isNegative();
+    }
+
+    /**
+     * 한 순간의 판정 재료.
+     *
+     * @param tickAge 루프가 한 번도 안 돌았으면 {@code null}
+     */
+    public record View(GatewaySnapshot snapshot, Duration fetchAge, Duration tickAge,
+            Duration dataAge, boolean clockAhead) {
+
+        public boolean isBeforeFirstTick() {
+            return tickAge == null;
+        }
+    }
+
+    /** 이 뷰가 낡았나 — 임계는 홀더가 안다. */
+    public boolean isFetchStale(View view) {
+        return view.tickAge() != null && view.tickAge().compareTo(fetchStaleAfter) > 0;
+    }
+
+    public boolean isDataStale(View view) {
+        return view.clockAhead() || view.dataAge().compareTo(dataStaleAfter) > 0;
+    }
+
+    /**
      * 통째로 갈아 끼운다. 실패한 갱신은 이걸 부르지 않는다 — 옛 값이 남는다.
      *
      * <p>성공한 판은 셋을 다 정한다. 앞 값을 볼 것이 없어 CAS 가 필요 없다.

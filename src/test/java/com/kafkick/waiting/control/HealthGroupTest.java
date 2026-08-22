@@ -15,7 +15,7 @@ import org.springframework.context.ApplicationContext;
  * <p><b>빈 그룹은 항상 통과한다.</b> 이름이 어긋나면 확인이 사라진 것을 아무도
  * 모르고, 판정 못 하는 노드가 계속 트래픽을 받는다.
  */
-@Tag("integration")
+@Tag("context")
 @SpringBootTest
 class HealthGroupTest {
 

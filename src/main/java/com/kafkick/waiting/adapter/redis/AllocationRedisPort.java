@@ -1,6 +1,7 @@
 package com.kafkick.waiting.adapter.redis;
 
 import com.kafkick.waiting.control.FailureWindow;
+import com.kafkick.waiting.control.SnapshotSource;
 import com.kafkick.waiting.domain.allocation.Grant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -22,7 +23,7 @@ import reactor.core.publisher.Mono;
  * <p>수요 수집은 <b>Lua 가 아니다.</b> 쿠폰마다 슬롯이 갈려 클러스터에서 못 돈다.
  * 재고도 샤드 무관 키라 같은 스크립트에서 못 읽는다. 잃는 것은 진단 편의뿐이다.
  */
-public final class AllocationRedisPort {
+public final class AllocationRedisPort implements SnapshotSource {
 
     @SuppressWarnings("rawtypes")
     private static final RedisScript<List> APPLY =
@@ -178,6 +179,7 @@ public final class AllocationRedisPort {
         return redis.execute(PUBLISH, List.of(RedisKeys.SNAPSHOT), args).next().then();
     }
 
+    @Override
     public Mono<Map<String, String>> load() {
         return redis.<String, String>opsForHash().entries(RedisKeys.SNAPSHOT)
                 .collectMap(Map.Entry::getKey, Map.Entry::getValue);

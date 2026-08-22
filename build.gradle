@@ -81,6 +81,12 @@ dependencies {
     // 리액티브 흐름은 단언할 지점이 다르다 — 무엇이 몇 번 흘렀는지,
     // 오류가 밖으로 샜는지. 판은 부트가 관리한다.
     testImplementation 'io.projectreactor:reactor-test'
+
+    // 카오스 주입은 **회선에서** 한다. 이 시스템의 장애는 지연 상승과 커넥션
+    // 단절이라 빈 단위 프록시로는 안 닿는다. 판은 테스트컨테이너 BOM 이 잡는다.
+    // 2.x 에서 모듈 이름에 접두사가 붙었다. BOM 이 판을 잡는다.
+    testImplementation 'org.testcontainers:testcontainers-toxiproxy'
+    testFixturesImplementation 'org.testcontainers:testcontainers-toxiproxy'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 
     // 장애 주입 픽스처가 실물 컨테이너를 다룬다. **Phase 8 이 다시 만들지
@@ -253,7 +259,17 @@ pitest {
     // domain 은 Phase 2 에서 채워진다. 그전까지 대상이 0건인데, 이걸 실패로
     // 두면 파이프라인이 페이즈 진행을 막는다. 클래스가 들어오면 임계가 문다.
     failWhenNoMutations = false
-    excludedClasses = ['com.kafkick.waiting.*Application*']
+    // **배선은 대상이 아니다.** 조립만 하는 코드라 뮤턴트가 대부분 등가이고,
+    // 실제로 지켜야 할 것(빈이 뜨는가·이름이 그룹과 맞는가)은 컨텍스트 시험이
+    // 본다. 여기 두면 숫자만 흐려진다.
+    //
+    // **한 줄로 모은다.** 나눠 쓰면 뒤엣것이 앞엣것을 덮어, 뺀 줄 알았던 것이
+    // 조용히 다시 들어온다.
+    excludedClasses = [
+            'com.kafkick.waiting.*Application*',
+            'com.kafkick.waiting.control.*Config',
+            'com.kafkick.waiting.adapter.*.*Config',
+    ]
     mutationThreshold = 90          // 생존 ≤ 10%
     timestampedReports = false
     // XML 이 있어야 생존 뮤턴트를 기계로 짚는다. HTML 만 두면 사람이 눈으로 센다.

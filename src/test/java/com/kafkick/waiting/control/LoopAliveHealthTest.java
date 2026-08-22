@@ -46,13 +46,14 @@ class LoopAliveHealthTest {
     };
 
     private final SnapshotHolder holder = SnapshotHolder.of(FETCH_STALE, DATA_STALE, clock);
+    private final ShutdownState shutdown = ShutdownState.create();
 
     private void 시간을_흘린다(Duration 만큼) {
         now.updateAndGet(t -> t.plus(만큼));
     }
 
     private Status 판정() {
-        return LoopAliveHealth.of(holder).health().getStatus();
+        return LoopAliveHealth.of(holder, shutdown).health().getStatus();
     }
 
     @Test
@@ -87,6 +88,20 @@ class LoopAliveHealthTest {
     void 임계와_같은_나이는_아직_산다() {
         holder.loopTicked();
         시간을_흘린다(FETCH_STALE);
+
+        assertThat(판정()).isEqualTo(Status.UP);
+    }
+
+    @Test
+    @DisplayName("드레이닝_중에는_루프를_안_본다")
+    void 드레이닝_중에는_루프를_안_본다() {
+        // 종료하려고 내린 루프를 정지로 세면, 진행 중인 요청을 든 파드가 그
+        // 자리에서 끊긴다. 우아한 종료에 쓸 시간이 사라진다.
+        holder.loopTicked();
+        시간을_흘린다(FETCH_STALE.plusSeconds(10));
+        assertThat(판정()).isEqualTo(Status.DOWN);
+
+        shutdown.draining();
 
         assertThat(판정()).isEqualTo(Status.UP);
     }

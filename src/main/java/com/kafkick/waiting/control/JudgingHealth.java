@@ -1,7 +1,8 @@
 package com.kafkick.waiting.control;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Objects;
-import java.util.concurrent.atomic.AtomicBoolean;
 import org.springframework.boot.health.contributor.Health;
 import org.springframework.boot.health.contributor.HealthIndicator;
 
@@ -15,20 +16,15 @@ import org.springframework.boot.health.contributor.HealthIndicator;
 public final class JudgingHealth implements HealthIndicator {
 
     private final SnapshotHolder holder;
+    private final ShutdownState shutdown;
 
-    /** 종료 신호를 받았나. LB 가 먼저 빼야 진행 중인 요청이 5xx 로 안 샌다. */
-    private final AtomicBoolean draining = new AtomicBoolean();
-
-    private JudgingHealth(SnapshotHolder holder) {
+    private JudgingHealth(SnapshotHolder holder, ShutdownState shutdown) {
         this.holder = Objects.requireNonNull(holder, "holder 는 필수다");
+        this.shutdown = Objects.requireNonNull(shutdown, "shutdown 은 필수다");
     }
 
-    public static JudgingHealth of(SnapshotHolder holder) {
-        return new JudgingHealth(holder);
-    }
-
-    public void draining() {
-        draining.set(true);
+    public static JudgingHealth of(SnapshotHolder holder, ShutdownState shutdown) {
+        return new JudgingHealth(holder, shutdown);
     }
 
     /**
@@ -39,26 +35,48 @@ public final class JudgingHealth implements HealthIndicator {
      */
     @Override
     public Health health() {
-        Health.Builder builder = detailed(draining.get() || holder.isBeforeFirstTick()
+        Health.Builder builder = detailed(shutdown.isDraining() || !hasSnapshot()
                 ? Health.outOfService()
                 : Health.up());
         return builder.build();
     }
 
+    /**
+     * 판정 재료가 있나. <b>루프가 돌았는가로 재면 안 된다.</b>
+     *
+     * <p>받아오기에 실패해도 루프는 돈다 — 그게 공유 장애를 노드별 신호로 안
+     * 흘리는 방법이다. 그걸로 재료 유무를 재면, 레디스가 죽은 채 뜬 노드가
+     * 빈 스냅샷으로 받기 시작해 전 쿠폰이 매진으로 보인다.
+     */
+    private boolean hasSnapshot() {
+        return !holder.current().publishedAt().equals(Instant.EPOCH);
+    }
+
     private Health.Builder detailed(Health.Builder builder) {
         return builder
                 .withDetail("coupons", holder.current().coupons().size())
-                .withDetail("fetchAgeSec", holder.fetchAge().toSeconds())
-                .withDetail("dataAgeSec", holder.dataAge().toSeconds())
+                .withDetail("fetchAgeSec", ageOrUnknown(holder.fetchAge()))
+                .withDetail("dataAgeSec", ageOrUnknown(holder.dataAge()))
                 .withDetail("tickAgeSec", tickAgeSeconds())
                 .withDetail("fetchStale", holder.isFetchStale())
                 .withDetail("dataStale", holder.isDataStale())
                 .withDetail("clockAhead", holder.isClockAhead())
-                .withDetail("draining", draining.get());
+                .withDetail("hasSnapshot", hasSnapshot())
+                .withDetail("draining", shutdown.isDraining());
     }
 
-    /** 한 번도 안 돌았으면 무한이라 초로 못 바꾼다. */
-    private Object tickAgeSeconds() {
-        return holder.isBeforeFirstTick() ? "없음" : holder.tickAge().toSeconds();
+    /**
+     * 한 번도 안 돌았으면 {@code -1} 이다.
+     *
+     * <p>문자열과 수를 오가면 이 값을 파싱하는 관제 도구가 깨진다. 나이가
+     * 음수일 수는 없으니 그 자리가 비었다는 뜻으로 쓴다.
+     */
+    private long tickAgeSeconds() {
+        return holder.isBeforeFirstTick() ? -1 : holder.tickAge().toSeconds();
+    }
+
+    /** 재료가 없으면 나이도 없다. 기동 직후에 56년이 찍히면 관제 축이 깨진다. */
+    private long ageOrUnknown(Duration age) {
+        return hasSnapshot() ? age.toSeconds() : -1;
     }
 }

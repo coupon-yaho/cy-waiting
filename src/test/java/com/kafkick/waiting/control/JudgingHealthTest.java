@@ -47,6 +47,7 @@ class JudgingHealthTest {
     };
 
     private final SnapshotHolder holder = SnapshotHolder.of(FETCH_STALE, DATA_STALE, clock);
+    private final ShutdownState shutdown = ShutdownState.create();
 
     private void 시간을_흘린다(Duration 만큼) {
         now.updateAndGet(t -> t.plus(만큼));
@@ -57,7 +58,7 @@ class JudgingHealthTest {
     }
 
     private Health 판정() {
-        return JudgingHealth.of(holder).health();
+        return JudgingHealth.of(holder, shutdown).health();
     }
 
     @Test
@@ -66,6 +67,28 @@ class JudgingHealthTest {
         // 판정 재료가 없으면 통과도 대기도 못 만든다. 그 상태로 트래픽을 받으면
         // 전 쿠폰이 매진으로 보인다.
         assertThat(판정().getStatus()).isEqualTo(Status.OUT_OF_SERVICE);
+    }
+
+    @Test
+    @DisplayName("루프만_돌고_못_받았으면_여전히_못_받는다")
+    void 루프만_돌고_못_받았으면_여전히_못_받는다() {
+        // **받아오기에 실패해도 루프는 돈다** — 그게 공유 장애를 노드별 신호로
+        // 안 흘리는 방법이다. 그걸로 재료 유무를 재면, 레디스가 죽은 채 뜬
+        // 노드가 빈 스냅샷으로 받기 시작해 전 쿠폰이 매진으로 보인다.
+        holder.loopTicked();
+
+        assertThat(판정().getStatus()).isEqualTo(Status.OUT_OF_SERVICE);
+        assertThat(판정().getDetails()).containsEntry("hasSnapshot", false);
+    }
+
+    @Test
+    @DisplayName("재료가_없으면_나이도_없다고_한다")
+    void 재료가_없으면_나이도_없다고_한다() {
+        // 초기값을 그대로 재면 56년이 찍힌다. 관제 축이 깨지고 임계는 영구 발화다.
+        assertThat(판정().getDetails())
+                .containsEntry("fetchAgeSec", -1L)
+                .containsEntry("dataAgeSec", -1L)
+                .containsEntry("tickAgeSec", -1L);
     }
 
     @Test
@@ -122,11 +145,10 @@ class JudgingHealthTest {
     void 종료_신호를_받으면_안_받는다() {
         // 드레이닝이다. LB 가 먼저 빼야 진행 중인 요청이 5xx 로 안 샌다.
         holder.replace(스냅샷());
-        JudgingHealth health = JudgingHealth.of(holder);
 
-        health.draining();
+        shutdown.draining();
 
-        assertThat(health.health().getStatus()).isEqualTo(Status.OUT_OF_SERVICE);
+        assertThat(판정().getStatus()).isEqualTo(Status.OUT_OF_SERVICE);
     }
 
     @Test

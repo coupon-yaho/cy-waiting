@@ -13,13 +13,15 @@ import org.springframework.boot.health.contributor.HealthIndicator;
 public final class LoopAliveHealth implements HealthIndicator {
 
     private final SnapshotHolder holder;
+    private final ShutdownState shutdown;
 
-    private LoopAliveHealth(SnapshotHolder holder) {
+    private LoopAliveHealth(SnapshotHolder holder, ShutdownState shutdown) {
         this.holder = Objects.requireNonNull(holder, "holder 는 필수다");
+        this.shutdown = Objects.requireNonNull(shutdown, "shutdown 은 필수다");
     }
 
-    public static LoopAliveHealth of(SnapshotHolder holder) {
-        return new LoopAliveHealth(holder);
+    public static LoopAliveHealth of(SnapshotHolder holder, ShutdownState shutdown) {
+        return new LoopAliveHealth(holder, shutdown);
     }
 
     /**
@@ -30,6 +32,11 @@ public final class LoopAliveHealth implements HealthIndicator {
      */
     @Override
     public Health health() {
+        // **드레이닝 중에는 루프를 안 본다.** 종료하려고 내린 루프를 정지로 세면
+        // 진행 중인 요청을 든 파드가 그 자리에서 끊긴다.
+        if (shutdown.isDraining()) {
+            return Health.up().withDetail("draining", true).build();
+        }
         if (holder.isBeforeFirstTick()) {
             return Health.up().withDetail("firstTick", false).build();
         }

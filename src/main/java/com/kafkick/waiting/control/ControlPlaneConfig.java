@@ -7,19 +7,16 @@ import java.time.Instant;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
 /**
  * 제어 평면 배선.
  *
- * <p>토글로 끌 수 있다. 배포 단위는 하나지만 <b>배분을 도는 무리와 요청만 받는
- * 무리를 나눌 수 있어야</b> 하고, 시험도 이 루프가 공유 키를 만지지 않기를 바란다.
+ * <p>조각이 다 있어도 <b>안 엮이면 아무것도 안 돈다.</b> 각자 초록인데 사이가
+ * 비어 있으면 배분이 영영 안 돌고, 그 상태로도 프로세스는 멀쩡히 뜬다.
  *
- * <p>조각이 다 있어도 <b>안 엮이면 아무것도 안 돈다.</b> 리더 판정과 배분 루프가
- * 각자 초록인데 사이가 비어 있으면 배분이 영영 안 돌고, 그 상태로도 프로세스는
- * 멀쩡히 뜬다.
+ * <p>토글로 끌 수 있다 — 배분을 도는 무리와 요청만 받는 무리를 나눈다.
  */
 @Configuration
 @ConditionalOnProperty(name = "waiting.scheduler.enabled", havingValue = "true",
@@ -32,18 +29,6 @@ public class ControlPlaneConfig {
     @Bean
     ControlPlaneProperties controlPlaneProperties() {
         return ControlPlaneProperties.defaults();
-    }
-
-    @Bean
-    AllocationRedisPort allocationRedisPort(ReactiveStringRedisTemplate redis,
-            ControlPlaneProperties properties) {
-        return AllocationRedisPort.of(redis, properties.scheduler().shards());
-    }
-
-    @Bean
-    LeaderRedisPort leaderRedisPort(ReactiveStringRedisTemplate redis,
-            ControlPlaneProperties properties) {
-        return LeaderRedisPort.of(redis, properties.leader().lease());
     }
 
     /**

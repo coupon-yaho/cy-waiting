@@ -24,6 +24,18 @@ public final class AllocationRedisPort {
     private static final RedisScript<List> APPLY =
             RedisScript.of(new ClassPathResource("redis/allocation_apply.lua"), List.class);
 
+    @SuppressWarnings("rawtypes")
+    private static final RedisScript<List> PUBLISH =
+            RedisScript.of(new ClassPathResource("redis/snapshot_publish.lua"), List.class);
+
+    /**
+     * 스크립트에 한 번에 넘기는 인자 상한.
+     *
+     * <p>루아 스택이 넘치면 그 판이 통째로 실패한다. 쿠폰이 그만큼 많아지면
+     * 나눠 실어야 하는데, 그러면 원자성이 깨지므로 <b>그때는 설계를 다시 본다.</b>
+     */
+    private static final int MAX_PUBLISH_FIELDS = 3_000;
+
     private final ReactiveStringRedisTemplate redis;
     private final int shards;
 
@@ -83,7 +95,12 @@ public final class AllocationRedisPort {
         });
     }
 
-    /** 들어온 인원을 돌려준다. 나눠 준 몫과 다르다 — 큐가 짧으면 남는다. */
+    /**
+     * 들어온 인원을 돌려준다. 나눠 준 몫과 다르다 — 큐가 짧으면 남는다.
+     *
+     * <p><b>샤드가 하나인 동안만 옳다.</b> 여럿이면 몫을 샤드에 나눠 각각
+     * 적용해야 하는데, 지금은 0번에만 나간다. 그래서 기동에서 하나로 막는다.
+     */
     public Mono<Long> apply(Grant grant) {
         return redis.execute(APPLY,
                         List.of(RedisKeys.queue(grant.couponId(), shards, 0),
@@ -94,13 +111,31 @@ public final class AllocationRedisPort {
     }
 
     /**
-     * <b>통째로 갈아 끼운다.</b> 남기면 끝난 쿠폰이 스냅샷에 영영 남아, 각 노드가
-     * 없는 쿠폰을 계속 판정한다.
+     * <b>통째로 갈아 끼우되 사이가 벌어지지 않게 한다.</b>
+     *
+     * <p>지우고 쓰는 것을 나눠 치면 그 사이에 끊길 때 키가 없는 채로 남는다.
+     * 그래서 먼저 덮어쓰고 남은 것을 지운다 — 메모리가 찼을 때도 이 순서가 옳다.
+     * 그러면 전 노드가 판정 재료를 잃고, 낡음으로 넘어가 줄 없는 쿠폰이 통째로
+     * 통과한다. 리더가 스스로 공유 상태를 부수는 셈이다.
+     *
+     * <p>남기지 않는 것도 함께 지킨다 — 끝난 쿠폰이 남으면 각 노드가 없는
+     * 쿠폰을 영영 판정한다.
      */
     public Mono<Void> publish(Map<String, String> hash) {
-        return redis.delete(RedisKeys.SNAPSHOT)
-                .then(redis.opsForHash().putAll(RedisKeys.SNAPSHOT, hash))
-                .then();
+        if (hash.isEmpty()) {
+            return Mono.error(new IllegalArgumentException("빈 스냅샷은 발행하지 않는다"));
+        }
+        if (hash.size() > MAX_PUBLISH_FIELDS) {
+            return Mono.error(new IllegalStateException(
+                    "한 번에 실을 수 있는 필드를 넘었다: %d > %d"
+                            .formatted(hash.size(), MAX_PUBLISH_FIELDS)));
+        }
+        List<String> args = new ArrayList<>(hash.size() * 2);
+        hash.forEach((field, value) -> {
+            args.add(field);
+            args.add(value);
+        });
+        return redis.execute(PUBLISH, List.of(RedisKeys.SNAPSHOT), args).next().then();
     }
 
     public Mono<Map<String, String>> load() {

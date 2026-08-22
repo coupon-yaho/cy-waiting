@@ -1,6 +1,7 @@
 package com.kafkick.waiting.adapter.redis;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.entry;
 
 import com.kafkick.waiting.domain.allocation.Grant;
@@ -104,6 +105,20 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         assertThat(port.load().block(WAIT))
                 .containsEntry("#credit", "7")
                 .containsEntry("c1", "OFF:QUEUEING:1:10:5:1.0");
+    }
+
+    @Test
+    @DisplayName("발행이_실패해도_옛_값이_남는다")
+    void 발행이_실패해도_옛_값이_남는다() {
+        // 지우고 쓰는 것을 나눠 치면 그 사이에 끊길 때 키가 없는 채로 남는다.
+        // 그러면 전 노드가 판정 재료를 잃고 낡음으로 넘어가, 줄 없는 쿠폰이
+        // 통째로 통과한다. 리더가 스스로 공유 상태를 부수는 셈이다.
+        port.publish(Map.of("c1", "a", "#credit", "7")).block(WAIT);
+
+        assertThatThrownBy(() -> port.publish(Map.of()).block(WAIT))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        assertThat(port.load().block(WAIT)).containsEntry("c1", "a");
     }
 
     @Test

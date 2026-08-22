@@ -86,8 +86,12 @@ public record ControlPlaneProperties(Scheduler scheduler, Leader leader, Capacit
                 throw new IllegalArgumentException(
                         "firstTickDelay 는 음수일 수 없다: %s".formatted(firstTickDelay));
             }
-            if (shards < 1) {
-                throw new IllegalArgumentException("shards 는 1 이상이어야 한다: %d".formatted(shards));
+            // **하나만 받는다.** 여럿이면 몫을 샤드에 나눠 각각 적용해야 하는데
+            // 지금 적용은 0번에만 나간다. 그러면 나머지 샤드의 줄은 영원히 안
+            // 빠지고 아무 오류도 안 난다 — 산문으로 지킬 일이 아니다.
+            if (shards != 1) {
+                throw new IllegalArgumentException(
+                        "shards 는 아직 1 만 지원한다 — 샤드별 적용이 없다: %d".formatted(shards));
             }
         }
     }

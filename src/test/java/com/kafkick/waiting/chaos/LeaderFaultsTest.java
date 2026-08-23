@@ -96,7 +96,8 @@ class LeaderFaultsTest {
         //
         // 리스에서 파생시킨다. 손으로 적으면 둘이 어긋날 수 있고, 창이 리스보다
         // 길면 만료가 아니라 원래 리스를 재게 된다.
-        Duration 관측_창 = LEASE.dividedBy(60);
+        // 서브초로 두면 레디스 왕복 한 번이 창보다 길어져 부하에 진다.
+        Duration 관측_창 = LEASE.dividedBy(15);
         leader.lease를_만료시킨다(관측_창);
 
         // **중간 상태를 본다.** 곧바로 사라졌는지만 보면 DEL 과 구분이 안 되고,

@@ -42,7 +42,11 @@ class LeaderElectionTest extends RedisContainerSupport {
      */
     private static final Duration POLL = Duration.ofSeconds(1);
     private static final String LEADER = RedisKeys.LEADER;
-    private static final String LEASE = "2000";
+    /**
+     * 스크립트에 넘기는 리스. <b>초 단위로 둔다</b> — 여기서 파생시키는 관측 창이
+     * 서브초가 되면 레디스 왕복 한 번이 창보다 길어져, 결함이 아니라 부하에 진다.
+     */
+    private static final String LEASE = "8000";
 
     @Autowired
     private ReactiveStringRedisTemplate redis;

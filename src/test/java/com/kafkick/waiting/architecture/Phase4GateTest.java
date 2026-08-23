@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -27,26 +28,51 @@ class Phase4GateTest {
     private static final Path PLAN = Path.of("plan/04-control-plane.md");
     private static final Path TESTS = Path.of("src/test/java");
 
-    /** 게이트 → 그것을 판정하는 시험 메서드. 이름이 바뀌면 여기가 먼저 깨진다. */
-    private static final Map<String, String> 판정하는_시험 = Map.ofEntries(
-            Map.entry("G4.1", "배분은_정확히_한_대만_돈다"),
-            Map.entry("G4.2", "리더가_죽으면_세_틱_안에_승계된다"),
-            Map.entry("G4.3", "틱_지연이_임계_안에_있다"),
-            Map.entry("G4.4", "끊긴_동안에도_판정_재료가_남는다"),
-            Map.entry("G4.5", "한_번이라도_돈_뒤_멎으면_죽는다"),
-            Map.entry("G4.6", "재료가_낡아도_계속_받는다"),
-            Map.entry("G4.7", "노드가_늘어도_총합이_전역_크레딧을_안_넘는다"),
-            Map.entry("G4.8", "콜드_복귀를_재현한다"),
-            Map.entry("G4.9", "리더가_바뀌어도_평활화가_이어진다"),
-            Map.entry("G4.10", "보고가_전부_낡으면_0이_나온다"),
-            Map.entry("G4.11", "남의_락은_내리지_못한다"),
-            Map.entry("G4.12", "회선이_끊겨도_받는_것을_유지한다"));
+    /**
+     * 게이트 → 그것을 판정하는 시험. <b>클래스까지 적는다.</b>
+     *
+     * <p>이름만 적으면 아무 파일에나 그 이름이 있어도 통과한다. 게이트 문장이
+     * 둘을 요구하면 둘 다 적는다 — 하나만 적으면 나머지를 지워도 판정됨으로 남는다.
+     */
+    // 한계: 문장을 몇 개로 쪼갤지는 사람이 정한다. 덜 적은 것은 기계가 못 잡고,
+    // 게이트 문장이 바뀔 때 이 표를 같이 읽는 것 말고 방법이 없다.
+    private static final Map<String, List<String>> 판정하는_시험 = Map.ofEntries(
+            Map.entry("G4.1", List.of(
+                    "ControlPlaneGateTest#배분은_정확히_한_대만_돈다")),
+            Map.entry("G4.2", List.of(
+                    "ControlPlaneGateTest#리더가_죽으면_세_틱_안에_승계된다")),
+            Map.entry("G4.3", List.of(
+                    "ControlPlaneGateTest#틱_지연이_임계_안에_있다")),
+            Map.entry("G4.4", List.of(
+                    "SnapshotRefreshIntegrationTest#끊긴_동안에도_판정_재료가_남는다")),
+            Map.entry("G4.5", List.of(
+                    "LoopAliveHealthTest#한_번이라도_돈_뒤_멎으면_죽는다",
+                    "LoopAliveHealthTest#받아오기만_실패하는_것은_죽음이_아니다")),
+            Map.entry("G4.6", List.of(
+                    "JudgingHealthTest#재료가_낡아도_계속_받는다")),
+            Map.entry("G4.7", List.of(
+                    "ControlPlaneGateTest#노드가_늘어도_총합이_전역_크레딧을_안_넘는다",
+                    "ControlPlaneGateTest#노드가_줄어도_총합이_전역_크레딧을_안_넘는다")),
+            Map.entry("G4.8", List.of(
+                    "CapacityCollectorTest#처음_본_인스턴스는_램프업_비율만_받는다",
+                    "CapacityCollectorTest#램프업이_끝나면_보고를_그대로_쓴다")),
+            Map.entry("G4.9", List.of(
+                    "ControlPlaneGateTest#리더가_바뀌어도_평활화가_이어진다",
+                    "ControlPlaneGateTest#리더가_바뀌어도_히스테리시스가_이어진다")),
+            Map.entry("G4.10", List.of(
+                    "CapacityCollectorTest#신선한_보고가_없으면_하한을_쓴다")),
+            Map.entry("G4.11", List.of(
+                    "LeaderFaultsTest#남의_락은_내리지_못한다",
+                    "LeaderFaultsTest#이미_잡힌_락은_뺏지_않는다")),
+            Map.entry("G4.12", List.of(
+                    "HealthUnderWireFaultsTest#회선이_끊겨도_받는_것을_유지한다")));
 
-    private static Stream<String> 시험_본문() throws IOException {
+    private static Map<String, String> 시험_파일() throws IOException {
         try (Stream<Path> files = Files.walk(TESTS)) {
             return files.filter(p -> p.toString().endsWith(".java"))
-                    .map(Phase4GateTest::읽는다)
-                    .toList().stream();
+                    .collect(Collectors.toMap(
+                            p -> p.getFileName().toString().replace(".java", ""),
+                            Phase4GateTest::읽는다, (a, b) -> a));
         }
     }
 
@@ -59,29 +85,35 @@ class Phase4GateTest {
     }
 
     @Test
-    @DisplayName("계획서의_게이트가_전부_판정된다")
-    void 계획서의_게이트가_전부_판정된다() throws IOException {
-        // **계획서가 진실이다.** 게이트를 추가하고 시험을 안 붙이면 여기서 걸린다.
-        Matcher matcher = Pattern.compile("\\|\\s*\\*{0,2}(G4\\.\\d+)\\*{0,2}\\s*\\|")
+    @DisplayName("계획서의_게이트와_표가_정확히_같다")
+    void 계획서의_게이트와_표가_정확히_같다() throws IOException {
+        // **양쪽으로 잠근다.** 한 방향만 보면 게이트를 지웠을 때 표에 죽은
+        // 항목이 남고, 그걸 아무도 모른다.
+        Matcher matcher = Pattern.compile("\\|\\s*\\*{0,2}(G4\\.\\d+)\\*{0,2}\\s*[|—]")
                 .matcher(Files.readString(PLAN));
         List<String> 계획서의_게이트 = matcher.results().map(r -> r.group(1)).distinct().toList();
 
-        assertThat(계획서의_게이트).isNotEmpty();
+        // 정규식이 안 물면 목록이 비고, 그러면 아래 비교가 공허하게 통과한다.
+        assertThat(계획서의_게이트).contains("G4.1", "G4.12");
         assertThat(판정하는_시험.keySet())
-                .as("게이트가 늘었는데 판정하는 시험을 안 이었다")
-                .containsAll(계획서의_게이트);
+                .as("계획서의 게이트와 표가 갈렸다")
+                .containsExactlyInAnyOrderElementsOf(계획서의_게이트);
     }
 
     @Test
-    @DisplayName("이어_둔_시험이_실제로_있다")
-    void 이어_둔_시험이_실제로_있다() throws IOException {
-        // 시험 이름을 바꾸면서 이 표를 안 고치면, 게이트가 판정된다고 적어 놓고
-        // 아무것도 안 도는 상태가 된다.
-        List<String> 본문 = 시험_본문().toList();
+    @DisplayName("이어_둔_시험이_그_파일에_실제로_있다")
+    void 이어_둔_시험이_그_파일에_실제로_있다() throws IOException {
+        // 이름만 보면 엉뚱한 시험에 이어 놓아도 안 걸린다. 클래스까지 본다.
+        Map<String, String> 파일 = 시험_파일();
 
-        assertThat(판정하는_시험).allSatisfy((gate, method) ->
-                assertThat(본문)
-                        .as("%s 를 판정하는 시험이 없다: %s", gate, method)
-                        .anyMatch(body -> body.contains("void " + method + "(")));
+        assertThat(판정하는_시험).allSatisfy((gate, 시험들) -> 시험들.forEach(짝 -> {
+            String 클래스 = 짝.substring(0, 짝.indexOf('#'));
+            String 메서드 = 짝.substring(짝.indexOf('#') + 1);
+
+            assertThat(파일).as("%s 의 짝인 %s 가 없다", gate, 클래스).containsKey(클래스);
+            assertThat(파일.get(클래스))
+                    .as("%s 를 판정한다는 %s 가 그 파일에 없다", gate, 짝)
+                    .contains("void " + 메서드 + "(");
+        }));
     }
 }

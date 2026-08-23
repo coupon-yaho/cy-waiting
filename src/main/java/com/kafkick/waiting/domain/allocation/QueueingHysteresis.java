@@ -22,6 +22,52 @@ public class QueueingHysteresis {
     }
 
     /** 해제 임계가 진입 임계보다 크면 히스테리시스가 아니라 진동 증폭기가 된다. */
+    /**
+     * 이월받은 상태로 시작한다.
+     *
+     * <p>리더가 바뀔 때마다 꺼진 채로 시작하면, 붙잡고 있던 대기열이 한 틱
+     * 꺼졌다 다시 켜진다 — 사람에게는 "대기 없음 → 500명" 이 반복해 보인다.
+     * 히스테리시스가 막으려던 진동이 리더 교체 때마다 나는 셈이다.
+     */
+    public static QueueingHysteresis restore(double enterRatio, double exitRatio,
+            int minHoldTicks, Snapshot snapshot) {
+        QueueingHysteresis restored = of(enterRatio, exitRatio, minHoldTicks);
+        restored.queueing = snapshot.queueing();
+        restored.belowExitTicks = snapshot.belowExitTicks();
+        return restored;
+    }
+
+    /** 다음 리더에게 넘길 상태. */
+    public Snapshot snapshot() {
+        return new Snapshot(queueing, belowExitTicks);
+    }
+
+    /**
+     * 이월 가능한 히스테리시스 상태.
+     *
+     * @param queueing        지금 줄을 세우고 있는가
+     * @param belowExitTicks  이탈 비율 아래로 연속 몇 틱인가
+     */
+    public record Snapshot(boolean queueing, int belowExitTicks) {
+
+        public Snapshot {
+            if (belowExitTicks < 0) {
+                throw new IllegalArgumentException(
+                        "belowExitTicks 는 0 이상이어야 한다: " + belowExitTicks);
+            }
+            // 안 붙잡고 있는데 유지 틱이 쌓여 있으면 말이 안 된다. 그대로 이월하면
+            // 다음 리더가 켜지자마자 곧바로 끄는 판단을 한다.
+            if (!queueing && belowExitTicks != 0) {
+                throw new IllegalArgumentException(
+                        "안 붙잡는 상태의 belowExitTicks 는 0 이어야 한다: " + belowExitTicks);
+            }
+        }
+
+        public static Snapshot empty() {
+            return new Snapshot(false, 0);
+        }
+    }
+
     public static QueueingHysteresis of(double enterRatio, double exitRatio, int minHoldTicks) {
         if (!Double.isFinite(enterRatio) || enterRatio < 0
                 || !Double.isFinite(exitRatio) || exitRatio < 0) {

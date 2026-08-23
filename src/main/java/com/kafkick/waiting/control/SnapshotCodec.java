@@ -5,6 +5,7 @@ import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.QueueMode;
 import com.kafkick.waiting.domain.coupon.RuntimeState;
 import com.kafkick.waiting.domain.allocation.CreditSmoother;
+import com.kafkick.waiting.domain.allocation.QueueingHysteresis;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -40,6 +41,14 @@ public final class SnapshotCodec {
     private static final String EWMA = "#ewma";
     private static final String EWMA_SEEDED = "#ewmaSeeded";
 
+    /**
+     * 히스테리시스 상태. <b>EWMA 만 실으면 이월이 반쪽이다.</b>
+     *
+     * <p>붙잡고 있던 대기열이 교체마다 한 틱 꺼졌다 켜지면 진동이 그대로 보인다.
+     */
+    private static final String QUEUEING = "#queueing";
+    private static final String BELOW_EXIT = "#belowExitTicks";
+
     /** {@code mode:runtime:credit:stock:waiting:pollScale} */
     private static final int FIELDS = 6;
 
@@ -62,6 +71,11 @@ public final class SnapshotCodec {
      * 하필 그때 흔들린다 (F9).
      */
     public Map<String, String> encode(GatewaySnapshot snapshot, CreditSmoother.Snapshot smoothing) {
+        return encode(snapshot, smoothing, QueueingHysteresis.Snapshot.empty());
+    }
+
+    public Map<String, String> encode(GatewaySnapshot snapshot, CreditSmoother.Snapshot smoothing,
+            QueueingHysteresis.Snapshot hysteresis) {
         Map<String, String> hash = new LinkedHashMap<>();
         snapshot.coupons().forEach((couponId, state) -> {
             // 예약 접두사를 단 쿠폰 하나로 전 쿠폰의 몫이 0 이 된다.
@@ -74,6 +88,8 @@ public final class SnapshotCodec {
         hash.put(PUBLISHED, Long.toString(snapshot.publishedAt().getEpochSecond()));
         hash.put(EWMA, Double.toString(smoothing.value()));
         hash.put(EWMA_SEEDED, smoothing.seeded() ? "1" : "0");
+        hash.put(QUEUEING, hysteresis.queueing() ? "1" : "0");
+        hash.put(BELOW_EXIT, Integer.toString(hysteresis.belowExitTicks()));
         return hash;
     }
 
@@ -97,6 +113,25 @@ public final class SnapshotCodec {
             return new CreditSmoother.Snapshot(Double.parseDouble(raw), true);
         } catch (IllegalArgumentException e) {
             return CreditSmoother.Snapshot.empty();
+        }
+    }
+
+    /**
+     * 이월받은 히스테리시스 상태. <b>못 읽으면 안 받은 것으로 본다.</b>
+     *
+     * <p>여기서 던지면 리더가 바뀔 때마다 배분이 멎는다. 모순된 조합을 그대로
+     * 받으면 새 리더가 켜지자마자 끄는 판단을 한다.
+     */
+    public QueueingHysteresis.Snapshot hysteresis(Map<String, String> hash) {
+        String raw = hash.get(BELOW_EXIT);
+        boolean queueing = "1".equals(hash.get(QUEUEING));
+        if (raw == null) {
+            return QueueingHysteresis.Snapshot.empty();
+        }
+        try {
+            return new QueueingHysteresis.Snapshot(queueing, Integer.parseInt(raw));
+        } catch (IllegalArgumentException e) {
+            return QueueingHysteresis.Snapshot.empty();
         }
     }
 

@@ -1,6 +1,7 @@
 package com.kafkick.waiting.domain.allocation;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -157,5 +158,47 @@ class QueueingHysteresisTest {
         QueueingHysteresis h = QueueingHysteresis.of(0.0, 0.0, 1);
 
         assertThat(h.shouldQueue(0, 100)).isTrue();
+    }
+
+    @Test
+    @DisplayName("이월받은_상태로_시작한다")
+    void 이월받은_상태로_시작한다() {
+        // 리더가 바뀔 때마다 꺼진 채로 시작하면, 붙잡고 있던 대기열이 한 틱
+        // 꺼졌다 다시 켜진다 — 막으려던 진동이 교체 때마다 난다.
+        QueueingHysteresis 이월받음 = QueueingHysteresis.restore(0.8, 0.5, 3,
+                new QueueingHysteresis.Snapshot(true, 1));
+
+        assertThat(이월받음.shouldQueue(40, 100)).isTrue();
+    }
+
+    @Test
+    @DisplayName("넘길_상태를_그대로_돌려준다")
+    void 넘길_상태를_그대로_돌려준다() {
+        QueueingHysteresis 앞선_리더 = QueueingHysteresis.of(0.8, 0.5, 3);
+        앞선_리더.shouldQueue(90, 100);
+        앞선_리더.shouldQueue(40, 100);
+
+        assertThat(앞선_리더.snapshot())
+                .isEqualTo(new QueueingHysteresis.Snapshot(true, 1));
+    }
+
+    @Test
+    @DisplayName("모순된_상태는_이월받지_않는다")
+    void 모순된_상태는_이월받지_않는다() {
+        // 안 붙잡는데 유지 틱이 쌓여 있으면 말이 안 된다. 그대로 이월하면
+        // 다음 리더가 켜지자마자 곧바로 끄는 판단을 한다.
+        assertThatThrownBy(() -> new QueueingHysteresis.Snapshot(false, 2))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("belowExitTicks");
+        assertThatThrownBy(() -> new QueueingHysteresis.Snapshot(true, -1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("belowExitTicks");
+    }
+
+    @Test
+    @DisplayName("빈_상태는_안_붙잡는_것이다")
+    void 빈_상태는_안_붙잡는_것이다() {
+        assertThat(QueueingHysteresis.Snapshot.empty())
+                .isEqualTo(new QueueingHysteresis.Snapshot(false, 0));
     }
 }

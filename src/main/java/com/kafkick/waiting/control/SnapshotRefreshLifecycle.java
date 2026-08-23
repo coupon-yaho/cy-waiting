@@ -5,29 +5,30 @@ import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationListener;
 import org.springframework.context.SmartLifecycle;
+import org.springframework.context.event.ContextClosedEvent;
 import reactor.core.Disposable;
 import reactor.core.scheduler.Scheduler;
 
 /**
  * 판정 재료 갱신 루프를 켜고 끈다.
  *
- * <p><b>멈추기 전에 드레이닝을 알린다.</b> 순서가 반대면 부하 분산기가 아직
+ * <p><b>루프가 멎기 전에 드레이닝을 알린다.</b> 순서가 반대면 부하 분산기가 아직
  * 보내는 동안 재료가 늙기 시작하고, 살아 있음 판정이 그걸 정지로 세어 진행 중인
  * 요청을 든 파드를 죽인다.
  */
-public final class SnapshotRefreshLifecycle implements SmartLifecycle {
+public final class SnapshotRefreshLifecycle
+        implements SmartLifecycle, ApplicationListener<ContextClosedEvent> {
 
     private static final Logger log = LoggerFactory.getLogger(SnapshotRefreshLifecycle.class);
 
     /**
-     * 웹 서버가 빠지기 <b>전에</b> 드레이닝을 알려야 한다.
+     * 갱신 루프가 웹 서버보다 <b>먼저</b> 멎어야 한다. 뒤면 이미 안 받는 상태에서
+     * 레디스를 계속 두드린다.
      *
-     * <p>컨테이너는 단계가 큰 것부터 멈춘다. 가장 크게 두면 <b>웹 서버보다 먼저</b>
-     * 종료 신호를 받는다.
-     *
-     * <p>다만 두 단계 사이에 지연은 없다 — 부하 분산기가 뺄 시간을 버는 것은
-     * 앞단의 제외 대기가 할 일이고, 여기서는 순서만 보장한다.
+     * <p>컨테이너는 단계가 큰 것부터 멈추므로 가장 크게 둔다. 드레이닝 자체는
+     * 닫힘 사건이 알리고, 그건 어떤 단계보다도 먼저 온다.
      */
     private static final int PHASE = Integer.MAX_VALUE;
 
@@ -71,13 +72,21 @@ public final class SnapshotRefreshLifecycle implements SmartLifecycle {
                         e -> log.error("갱신 루프가 끊겼다 — 재기동으로 복구된다", e));
     }
 
+    /**
+     * <b>여기서만 드레이닝을 알린다.</b> 정지는 컨테이너가 잠깐 멈출 때도 불려서,
+     * 거기서 알리면 다시 켤 수 없는 상태가 된다. 닫힘 사건은 생명주기 정지보다
+     * 먼저 오므로 순서도 그대로다.
+     */
+    @Override
+    public void onApplicationEvent(ContextClosedEvent event) {
+        shutdown.draining();
+    }
+
     @Override
     public void stop() {
         if (!running.compareAndSet(true, false)) {
             return;
         }
-        // 먼저 알린다. 뒤에 알리면 그 사이 재료가 늙어 정지로 보인다.
-        shutdown.draining();
         Disposable current = subscription;
         if (current != null) {
             current.dispose();

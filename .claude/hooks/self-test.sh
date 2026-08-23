@@ -334,6 +334,8 @@ Plan: 1.2.1' block '계획서 ID (커밋에 남기지 않는다)'
 git_case 'feat(app): CY-18 진입점 추가
 Refs: CY-18' block '제목에 Jira 키'
 git_case 'Merge branch develop' allow '병합 커밋은 대상 아님'
+git_case 'Revert "feat(app): 진입점 추가"' allow '되돌리기는 대상 아님'
+git_case 'feat: Revert 기능 되돌리기' block '되돌리기처럼 보이는 보통 제목'
 
 # ── 브랜치 리뷰 러너 ─────────────────────────────────────────────────────────
 # 이 러너가 없으면 힙독·스크립트로 쓴 파일은 어떤 검사도 안 받는다.

@@ -15,12 +15,10 @@ source "$here/lib/commit-subject-rules.sh"
 # 주석과 빈 줄을 걷어낸 첫 줄이 제목이다.
 subject=$(grep -vE '^[[:space:]]*#' "$msg_file" | grep -vE '^[[:space:]]*$' | head -1)
 
-# 병합·리버트 커밋은 git 이 문구를 정하므로 규약 대상이 아니다.
-case "$subject" in
-    Merge\ *|Revert\ *|fixup!\ *|squash!\ *) exit 0 ;;
-esac
-
 [[ -z "$subject" ]] && exit 0   # 빈 메시지는 git 이 알아서 막는다
+
+# 도구가 지은 제목이면 제목도 푸터도 안 본다. 판단은 라이브러리 한 곳에 있다.
+is_tool_authored_subject "$subject" && exit 0
 
 if ! violations=$(check_commit_subject "$subject"); then
     {

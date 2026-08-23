@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
+import reactor.core.publisher.Mono;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -15,9 +17,12 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.WebFilter;
+
+import com.kafkick.waiting.control.SnapshotSource;
 import org.springframework.boot.test.web.server.LocalManagementPort;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.HttpHeaders;
@@ -42,6 +47,16 @@ class IdentityChainTest {
     static class CapturingBackend {
 
         static final AtomicReference<HttpHeaders> 마지막 = new AtomicReference<>();
+
+        /**
+         * 재료를 늘 비워 둔다. 실물을 그대로 두면 로컬 레디스에 스냅샷이 남아
+         * 있을 때 준비 판정이 올라가, 이 시험이 장비 상태에 따라 갈린다.
+         */
+        @Bean
+        @Primary
+        SnapshotSource 빈_재료() {
+            return () -> Mono.just(Map.of());
+        }
 
         @Bean
         @Order(FilterOrder.IDENTITY + 1)
@@ -157,9 +172,10 @@ class IdentityChainTest {
                 .expectStatus().isEqualTo(HttpStatus.SERVICE_UNAVAILABLE)
                 .expectBody().returnResult().getResponseBody();
 
+        // 문자열 포함으로 보면 다른 데 섞인 같은 글자에도 통과한다.
         assertThat(new String(본문, StandardCharsets.UTF_8))
                 .doesNotContain(ApiError.INVALID_REQUEST)
-                .contains("status");
+                .contains("\"status\":\"OUT_OF_SERVICE\"");
     }
 
     @Test

@@ -80,11 +80,13 @@ public final class LeaderFaults {
      * lease 를 <b>거의</b> 만료시킨다 — 지우지 않는다.
      *
      * <p>{@code DEL} 로 모델링하면 해제와 구분이 없어지고, "만료 임박" 구간이
-     * 사라져 {@link #남은_lease()} 로 잴 대상이 없어진다. 승계가 만료를
-     * 기다리는 경로를 재려면 그 구간이 있어야 한다.
+     * 사라져 {@link #남은_lease()} 로 잴 대상이 없어진다.
+     *
+     * <p><b>남길 시간을 부르는 쪽이 정한다.</b> 여기서 정하면 그 값이 곧 관측
+     * 창인데, 재는 쪽은 그게 얼마인지 모른 채 곧바로 읽는다.
      */
-    public void lease를_만료시킨다() {
-        redis.sync().pexpire(RedisKeys.LEADER, 1L);
+    public void lease를_만료시킨다(Duration 남길_시간) {
+        redis.sync().pexpire(RedisKeys.LEADER, 남길_시간.toMillis());
     }
 
     public String 현재_소유자() {

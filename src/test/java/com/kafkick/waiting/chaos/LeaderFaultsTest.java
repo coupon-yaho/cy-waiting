@@ -90,16 +90,22 @@ class LeaderFaultsTest {
         // 다만 **지우는 것과는 다르다** — 만료 임박 구간이 남아야 한다.
         assertThat(leader.리더로_만든다("node-1", LEASE)).isTrue();
 
-        leader.lease를_만료시킨다();
+        // **관측 창을 여기서 정한다.** 1밀리초로 두면 읽기 전에 멈칫하는 것만으로
+        // 이미 지워져 있다 — 결함이 아니라 지연에 지는 시험이 된다.
+        Duration 관측_창 = Duration.ofMillis(500);
+        leader.lease를_만료시킨다(관측_창);
 
         // **중간 상태를 본다.** 곧바로 사라졌는지만 보면 DEL 과 구분이 안 되고,
         // 획득이 실패해도 소유자가 없으니 통과해 버린다.
         assertThat(leader.현재_소유자()).isEqualTo("node-1");
-        assertThat(leader.남은_lease()).isBetween(Duration.ZERO, Duration.ofMillis(1));
+        assertThat(leader.남은_lease()).isBetween(Duration.ZERO, 관측_창);
 
         Awaitility.await().atMost(Duration.ofSeconds(5))
                 .pollInterval(Duration.ofMillis(20))
                 .until(() -> leader.현재_소유자() == null);
+
+        // 창이 리스보다 짧아야 만료를 재는 것이 된다. 같거나 길면 원래 리스를 잰다.
+        assertThat(관측_창).isLessThan(LEASE);
     }
 
     @Test

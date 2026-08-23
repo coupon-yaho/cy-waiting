@@ -4,15 +4,19 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.List;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import java.util.concurrent.atomic.AtomicReference;
 import org.springframework.cloud.gateway.filter.GatewayFilter;
+import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.OrderedGatewayFilter;
 import org.springframework.cloud.gateway.route.Route;
 import org.springframework.cloud.gateway.route.RouteLocator;
 import org.springframework.cloud.gateway.route.builder.RouteLocatorBuilder;
 import org.springframework.boot.webflux.autoconfigure.WebFluxProperties;
+import org.springframework.cloud.gateway.filter.factory.RemoveRequestHeaderGatewayFilterFactory;
 import org.springframework.cloud.gateway.handler.predicate.MethodRoutePredicateFactory;
 import org.springframework.cloud.gateway.handler.predicate.PathRoutePredicateFactory;
 import org.springframework.context.support.GenericApplicationContext;
@@ -39,6 +43,7 @@ class GatewayRoutesTest {
     private static GenericApplicationContext 술어만_있는_컨텍스트() {
         GenericApplicationContext context = new GenericApplicationContext();
         context.registerBean(WebFluxProperties.class);
+        context.registerBean(RemoveRequestHeaderGatewayFilterFactory.class);
         context.registerBean(MethodRoutePredicateFactory.class);
         context.registerBean(PathRoutePredicateFactory.class);
         context.refresh();
@@ -49,7 +54,7 @@ class GatewayRoutesTest {
         return locator.getRoutes().collectList().block();
     }
 
-    private Route 잡는_라우트(org.springframework.http.HttpMethod method, String path) {
+    private Route 잡는_라우트(HttpMethod method, String path) {
         ServerWebExchange exchange = MockServerWebExchange.from(
                 MockServerHttpRequest.method(method, path).build());
         return 라우트().stream()
@@ -65,6 +70,12 @@ class GatewayRoutesTest {
         assertThatThrownBy(() -> new GatewayRoutes.Backend("  "))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new GatewayRoutes.Backend(null))
+                .isInstanceOf(IllegalArgumentException.class);
+        // 스킴이 빠진 값은 기동에 성공하고 모든 프록시가 실패한다.
+        assertThatThrownBy(() -> new GatewayRoutes.Backend("backend:8080"))
+                .isInstanceOf(IllegalArgumentException.class);
+        // 경로를 붙이면 그 경로만 조용히 버려진다.
+        assertThatThrownBy(() -> new GatewayRoutes.Backend("http://backend:8080/api"))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -149,6 +160,77 @@ class GatewayRoutesTest {
             assertThat(잡는_라우트(method, "/api/v1/coupons/c1/queue"))
                     .as("%s /api/v1/coupons/c1/queue", method).isNull();
         }
+    }
+
+    @Test
+    @DisplayName("쿠폰_식별자에_이상한_것이_들어오면_안_잡는다")
+    void 쿠폰_식별자에_이상한_것이_들어오면_안_잡는다() {
+        // **술어는 디코딩해 맞추고 전달은 원본을 그대로 보낸다.** 그래서 게이트웨이가
+        // 판정한 값과 뒷단이 받는 값이 갈린다. 그 값이 그대로 레디스 키가 되고
+        // 캐시·리미터의 키가 되므로, 여기서 좁히지 않으면 아래 전부가 헐거워진다.
+        assertThat(잡는_라우트(HttpMethod.POST, "/api/v1/coupons/a%2Fb/issue")).isNull();
+        assertThat(잡는_라우트(HttpMethod.POST, "/api/v1/coupons/c1;junk=1/issue")).isNull();
+        assertThat(잡는_라우트(HttpMethod.POST, "/api/v1/coupons/ /issue")).isNull();
+        assertThat(잡는_라우트(HttpMethod.POST,
+                "/api/v1/coupons/" + "c".repeat(65) + "/issue")).isNull();
+    }
+
+    @Test
+    @DisplayName("뒤에_슬래시가_붙으면_안_잡는다")
+    void 뒤에_슬래시가_붙으면_안_잡는다() {
+        // 같은 쿠폰을 다른 키로 만들 수 있으면 캐시와 리미터를 돌려 쓸 수 있다.
+        assertThat(잡는_라우트(HttpMethod.POST, "/api/v1/coupons/c1/issue/")).isNull();
+    }
+
+    @Test
+    @DisplayName("보통_식별자는_잡는다")
+    void 보통_식별자는_잡는다() {
+        // 좁히다 실제 쿠폰까지 막으면 서비스가 통째로 안 된다.
+        for (String id : List.of("c1", "COUPON-2026", "summer_sale", "a".repeat(64))) {
+            assertThat(잡는_라우트(HttpMethod.POST, "/api/v1/coupons/" + id + "/issue"))
+                    .as("쿠폰 %s", id).extracting(Route::getId).isEqualTo("issue");
+        }
+    }
+
+    @Test
+    @DisplayName("위조_가능한_클라이언트_IP_헤더를_지운다")
+    void 위조_가능한_클라이언트_IP_헤더를_지운다() {
+        // 프레임워크는 X-Forwarded-* 만 지운다. 관례로 쓰는 나머지가 그대로 가면
+        // 뒷단이 하나라도 믿는 순간 IP 단위 제한이 헤더 한 줄로 우회된다.
+        for (String route : List.of("/api/v1/coupons/c1/issue", "/api/v1/coupons/c1")) {
+            HttpMethod method = route.endsWith("/issue") ? HttpMethod.POST : HttpMethod.GET;
+            MockServerWebExchange exchange = MockServerWebExchange.from(
+                    MockServerHttpRequest.method(method, route)
+                            .header("X-Real-IP", "1.2.3.4")
+                            .header("True-Client-IP", "1.2.3.4")
+                            .header("X-Client-IP", "1.2.3.4")
+                            .header("CF-Connecting-IP", "1.2.3.4"));
+
+            HttpHeaders 받은_것 = 뒷단이_받는_헤더(잡는_라우트(method, route), exchange);
+
+            assertThat(받은_것.headerNames())
+                    .as("%s 로 간 요청", route)
+                    .doesNotContain("X-Real-IP", "True-Client-IP",
+                            "X-Client-IP", "CF-Connecting-IP");
+        }
+    }
+
+    /** 필터 사슬을 실제로 태워 본다. 어떤 필터가 붙었는지만 보면 도는지를 못 잰다. */
+    private static HttpHeaders 뒷단이_받는_헤더(Route route, MockServerWebExchange exchange) {
+        AtomicReference<HttpHeaders> 받은_것 = new AtomicReference<>();
+        GatewayFilterChain 끝 = e -> {
+            받은_것.set(e.getRequest().getHeaders());
+            return Mono.empty();
+        };
+        List<GatewayFilter> 필터 = route.getFilters();
+        GatewayFilterChain 사슬 = 끝;
+        for (int i = 필터.size() - 1; i >= 0; i--) {
+            GatewayFilter 하나 = 필터.get(i);
+            GatewayFilterChain 다음 = 사슬;
+            사슬 = e -> 하나.filter(e, 다음);
+        }
+        사슬.filter(exchange).block();
+        return 받은_것.get();
     }
 
     @Test

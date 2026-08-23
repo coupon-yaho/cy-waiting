@@ -20,7 +20,7 @@ import org.springframework.web.server.ServerWebExchange;
  */
 class CorsPolicyTest {
 
-    private final CorsPolicy policy = CorsPolicy.of(
+    private final CorsPolicy policy = new CorsPolicy(
             new CorsPolicy.Origins(List.of("https://front.example")));
 
     private CorsConfiguration 적용되는_설정(String path) {
@@ -59,6 +59,15 @@ class CorsPolicyTest {
     }
 
     @Test
+    @DisplayName("오류_메시지에_목록을_안_싣는다")
+    void 오류_메시지에_목록을_안_싣는다() {
+        // 기동 실패 로그가 그대로 흘러간다. 아직 안 알려진 내부 호스트명이 거기 있다.
+        assertThatThrownBy(() -> new CorsPolicy.Origins(List.of("https://internal.example", "*")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageNotContaining("internal.example");
+    }
+
+    @Test
     @DisplayName("허용_목록이_비면_기동을_막는다")
     void 허용_목록이_비면_기동을_막는다() {
         // 빈 목록으로 그대로 뜨면 프론트가 통째로 막히는데 기동은 성공한다.
@@ -77,6 +86,19 @@ class CorsPolicyTest {
         assertThatThrownBy(() -> new CorsPolicy.Origins(List.of("https://*.example")))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new CorsPolicy.Origins(List.of("https://front.example", " ")))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("주소가_아닌_값은_기동을_막는다")
+    void 주소가_아닌_값은_기동을_막는다() {
+        // "null" 은 와일드카드 검사를 지나면서 샌드박스 프레임에 그대로 맞는다.
+        assertThatThrownBy(() -> new CorsPolicy.Origins(List.of("null")))
+                .isInstanceOf(IllegalArgumentException.class);
+        // 스킴이 빠지면 기동은 되고 아무와도 안 맞는다 — 프론트가 조용히 막힌다.
+        assertThatThrownBy(() -> new CorsPolicy.Origins(List.of("localhost:5173")))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new CorsPolicy.Origins(List.of("htp://front.example")))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 

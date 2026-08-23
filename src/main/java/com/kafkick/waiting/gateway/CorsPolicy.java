@@ -1,5 +1,7 @@
 package com.kafkick.waiting.gateway;
 
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -33,21 +35,36 @@ public class CorsPolicy {
             if (allowed == null || allowed.isEmpty()) {
                 throw new IllegalArgumentException("waiting.cors.allowed 가 비어 있다");
             }
-            // 와일드카드나 빈 값이 섞이면 목록이 있다는 사실이 무의미해진다.
-            // 값 하나로 전부 열리므로 나머지가 맞아도 소용없다.
-            if (allowed.stream().anyMatch(o -> o == null || o.isBlank() || o.contains("*"))) {
-                throw new IllegalArgumentException("오리진에 빈 값이나 와일드카드를 쓸 수 없다: " + allowed);
+            // 값 하나가 어긋나면 목록이 있다는 사실이 무의미해지거나, 아무와도
+            // 안 맞아 프론트가 통째로 막힌다. 어긋난 항목만 짚는다 — 목록을
+            // 통째로 실으면 기동 실패 로그에 아직 안 알려진 호스트명이 흘러간다.
+            allowed.forEach(Origins::checked);
+        }
+
+        /** {@code "null"} 은 와일드카드 검사를 지나면서 와일드카드처럼 맞는다. */
+        // RULE-EXCEPTION(JS-13): 레코드의 압축 생성자는 인스턴스가 서기 전에
+        // 돈다. 인스턴스 메서드로 둘 수 없다.
+        private static void checked(String origin) {
+            if (origin == null || origin.isBlank() || origin.contains("*")
+                    || "null".equalsIgnoreCase(origin.trim())) {
+                throw new IllegalArgumentException("오리진에 쓸 수 없는 값이 있다");
+            }
+            URI parsed;
+            try {
+                parsed = new URI(origin);
+            } catch (URISyntaxException e) {
+                throw new IllegalArgumentException("오리진을 못 읽었다", e);
+            }
+            // 스킴이 빠지면 기동은 되고 아무와도 안 맞는다. 프론트가 조용히 막힌다.
+            if (!"http".equals(parsed.getScheme()) && !"https".equals(parsed.getScheme())
+                    || parsed.getHost() == null) {
+                throw new IllegalArgumentException("오리진은 http 나 https 로 시작하는 주소여야 한다");
             }
         }
     }
 
     CorsPolicy(Origins origins) {
         this.origins = origins;
-    }
-
-    /** 스프링이 아닌 곳에서 만들 때 쓴다. 생성자를 열면 우회 경로가 하나 더 생긴다. */
-    public static CorsPolicy of(Origins origins) {
-        return new CorsPolicy(origins);
     }
 
     /**

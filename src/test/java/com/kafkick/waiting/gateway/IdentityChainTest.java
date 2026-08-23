@@ -1,9 +1,12 @@
 package com.kafkick.waiting.gateway;
 
+import java.net.URI;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.HttpHeaders;
@@ -43,6 +46,31 @@ class IdentityChainTest {
     @DisplayName("헤더가_없으면_발급도_막힌다")
     void 헤더가_없으면_발급도_막힌다() {
         client.post().uri("/api/v1/coupons/c1/issue")
+                .exchange()
+                .expectStatus().isBadRequest();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"/%61pi/v1/coupons/c1/queue", "/ap%69/v1/coupons/c1/issue"})
+    @DisplayName("인코딩해_들어와도_막는다")
+    void 인코딩해_들어와도_막는다(String 인코딩된_경로) {
+        // **원본 경로를 문자열로 비교하면 여기가 뚫린다.** 필터에는 회원 API 로
+        // 안 보이는데 라우터는 그대로 잡는다 — 검증 없이 지나간다.
+        //
+        // 목 요청으로는 못 만든다. 그 하네스가 `%` 를 다시 인코딩한다.
+        client.get().uri(URI.create("http://localhost:" + port + 인코딩된_경로))
+                .exchange()
+                .expectStatus().isBadRequest();
+    }
+
+    @Test
+    @DisplayName("헤더가_두_줄이면_막힌다")
+    void 헤더가_두_줄이면_막힌다() {
+        // 판정은 첫 줄만 보는데 전달은 전부 그대로 간다.
+        client.get().uri("/api/v1/coupons/c1/queue")
+                .header("X-Member-Id", "1")
+                .header("X-Member-Id", "99999999999999999999")
+                .header("X-Member-Grade", "GOLD")
                 .exchange()
                 .expectStatus().isBadRequest();
     }

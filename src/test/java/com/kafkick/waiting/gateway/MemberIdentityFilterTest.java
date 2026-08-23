@@ -70,6 +70,16 @@ class MemberIdentityFilterTest {
     }
 
     @Test
+    @DisplayName("등급이_없으면_막는다")
+    void 등급이_없으면_막는다() {
+        // 식별자가 맞아 짧은 회로를 안 타는 경로다. 여기서 던지면 400 자리에 500 이 간다.
+        MockServerWebExchange exchange = 통과시킨다(발급_요청().header(ID, "1"));
+
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(뒷단이_본_것.get()).isNull();
+    }
+
+    @Test
     @DisplayName("식별자가_없으면_막는다")
     void 식별자가_없으면_막는다() {
         MockServerWebExchange exchange = 통과시킨다(발급_요청().header(GRADE, "GOLD"));
@@ -128,6 +138,65 @@ class MemberIdentityFilterTest {
     }
 
     @Test
+    @DisplayName("매트릭스_파라미터가_붙어도_막는다")
+    void 매트릭스_파라미터가_붙어도_막는다() {
+        // **핸들러와 같은 방식으로 맞춰야 한다.** 원본 경로를 문자열로 비교하면
+        // 여기서는 회원 API 가 아닌 것으로 보이는데 라우터는 그대로 잡는다.
+        //
+        // 퍼센트 인코딩은 여기서 못 만든다 — 이 하네스가 `%` 를 다시 인코딩한다.
+        // 그건 실서버로 재는 시험이 맡는다.
+        MockServerWebExchange exchange = 통과시킨다(
+                MockServerHttpRequest.method(HttpMethod.GET, "/api;x=1/v1/coupons/c1/issue"));
+
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(뒷단이_본_것.get()).isNull();
+    }
+
+    @Test
+    @DisplayName("헤더가_두_줄이면_막는다")
+    void 헤더가_두_줄이면_막는다() {
+        // **판정은 첫 줄만 보는데 전달은 전부 그대로 간다.** 뒷단이 마지막 값을
+        // 쓰면 판정한 값과 실제로 쓰이는 값이 달라진다.
+        MockServerWebExchange exchange = 통과시킨다(발급_요청()
+                .header(ID, "1", "99999999999999999999").header(GRADE, "GOLD"));
+
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(뒷단이_본_것.get()).isNull();
+    }
+
+    @Test
+    @DisplayName("등급이_두_줄이어도_막는다")
+    void 등급이_두_줄이어도_막는다() {
+        MockServerWebExchange exchange = 통과시킨다(발급_요청()
+                .header(ID, "1").header(GRADE, "GOLD", "VIP"));
+
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(뒷단이_본_것.get()).isNull();
+    }
+
+    @Test
+    @DisplayName("정수_폭을_넘는_식별자를_막는다")
+    void 정수_폭을_넘는_식별자를_막는다() {
+        // 자릿수만 보면 19자리가 통과해 뒷단 파싱에서 넘친다. 헤더 한 줄로 500 이다.
+        MockServerWebExchange exchange = 통과시킨다(
+                발급_요청().header(ID, "9999999999999999999").header(GRADE, "GOLD"));
+
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(뒷단이_본_것.get()).isNull();
+    }
+
+    @Test
+    @DisplayName("정수_폭_경계값은_통과한다")
+    void 정수_폭_경계값은_통과한다() {
+        // 좁히다 유효한 식별자를 막으면 그 사용자가 통째로 못 쓴다.
+        통과시킨다(발급_요청().header(ID, String.valueOf(Long.MAX_VALUE)).header(GRADE, "GOLD"));
+
+        assertThat(뒷단이_본_것.get())
+                .extracting(e -> e.getRequest().getHeaders().getFirst(ID))
+                .isEqualTo(String.valueOf(Long.MAX_VALUE));
+    }
+
+    @Test
     @DisplayName("막을_때_발급_계층과_같은_봉투를_쓴다")
     void 막을_때_발급_계층과_같은_봉투를_쓴다() {
         // 봉투가 다르면 클라이언트가 게이트웨이 응답과 뒷단 응답을 다르게 다뤄야 한다.
@@ -139,7 +208,7 @@ class MemberIdentityFilterTest {
         assertThat(본문)
                 .contains("\"success\":false")
                 .contains("\"data\":null")
-                .contains("\"code\":\"COMMON-001\"")
+                .contains("\"code\":\"%s\"".formatted(ApiError.INVALID_REQUEST))
                 .contains("\"status\":400");
     }
 

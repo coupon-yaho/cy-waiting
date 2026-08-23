@@ -5,6 +5,8 @@ import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationContext;
+import org.springframework.context.ApplicationContextAware;
 import org.springframework.context.ApplicationListener;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.context.event.ContextClosedEvent;
@@ -14,24 +16,21 @@ import reactor.core.Disposable;
 import reactor.core.scheduler.Scheduler;
 
 /**
- * 판정 재료 갱신 루프를 켜고 끈다.
- *
- * <p><b>루프가 멎기 전에 드레이닝을 알린다.</b> 순서가 반대면 부하 분산기가 아직
- * 보내는 동안 재료가 늙기 시작하고, 살아 있음 판정이 그걸 정지로 세어 진행 중인
- * 요청을 든 파드를 죽인다.
+ * <b>루프가 멎기 전에 드레이닝을 알린다.</b> 순서가 반대면 부하 분산기가 아직
+ * 보내는 동안 재료가 늙고, 살아 있음 판정이 그걸 정지로 세어 진행 중인 요청을
+ * 든 파드를 죽인다.
  */
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public final class SnapshotRefreshLifecycle
-        implements SmartLifecycle, ApplicationListener<ContextClosedEvent> {
+        implements SmartLifecycle, ApplicationContextAware,
+                ApplicationListener<ContextClosedEvent> {
 
     private static final Logger log = LoggerFactory.getLogger(SnapshotRefreshLifecycle.class);
 
     /**
-     * 컨테이너는 단계가 큰 것부터 멈춘다. 가장 크게 두면 웹 서버보다 먼저 멎는다.
-     *
-     * <p><b>이 값의 원래 근거는 드레이닝 순서였는데 그건 이제 닫힘 사건이 진다.</b>
-     * 판정이 요청 경로에 붙으면 우아한 종료 구간 내내 얼어붙은 재료로 판정하게
-     * 되므로 그때 다시 정한다 (CY-422).
+     * 컨테이너는 단계가 큰 것부터 멈추므로, 가장 크면 웹 서버보다 먼저 멎는다.
+     * <b>원래 근거였던 드레이닝 순서는 이제 닫힘 사건이 진다</b> — 판정이 요청
+     * 경로에 붙기 전에 다시 정한다 (CY-422).
      */
     private static final int PHASE = Integer.MAX_VALUE;
 
@@ -40,6 +39,7 @@ public final class SnapshotRefreshLifecycle
     private final Duration interval;
 
     private final AtomicBoolean running = new AtomicBoolean();
+    private volatile ApplicationContext owner;
     private volatile Scheduler scheduler;
     private volatile Disposable subscription;
 
@@ -76,15 +76,23 @@ public final class SnapshotRefreshLifecycle
     }
 
     /**
-     * <b>여기서만 드레이닝을 알린다.</b> 정지는 컨테이너가 잠깐 멈출 때도 불려서,
-     * 거기서 알리면 다시 켤 수 없는 상태가 된다.
-     *
-     * <p>맨 앞에 선다. 앞선 리스너가 터지면 컨테이너는 경고만 찍고 넘어가는데,
-     * 그러면 알림이 통째로 빠져 살아 있음 판정이 몇 초 뒤 파드를 죽인다.
+     * <b>여기서만 알린다.</b> 정지는 잠깐 멈출 때도 불려서, 거기서 알리면 다시
+     * 켤 수 없는 상태가 된다. 맨 앞에 서는 것은 앞선 리스너가 터지면 컨테이너가
+     * 경고만 찍고 넘어가서, 알림이 빠지면 살아 있음 판정이 파드를 죽이기 때문이다.
      */
     @Override
     public void onApplicationEvent(ContextClosedEvent event) {
+        // 하위 컨텍스트의 닫힘도 위로 전해진다. 관리 포트를 따로 열면 하위가
+        // 실제로 생기므로, 그게 닫혔다고 서비스가 종료하는 것은 아니다.
+        if (event.getApplicationContext() != owner) {
+            return;
+        }
         shutdown.draining();
+    }
+
+    @Override
+    public void setApplicationContext(ApplicationContext context) {
+        this.owner = context;
     }
 
     @Override

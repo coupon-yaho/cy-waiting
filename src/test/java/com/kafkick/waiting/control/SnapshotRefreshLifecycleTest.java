@@ -91,15 +91,39 @@ class SnapshotRefreshLifecycleTest {
     }
 
     @Test
-    @DisplayName("컨텍스트가_닫히면_드레이닝을_알린다")
-    void 컨텍스트가_닫히면_드레이닝을_알린다() {
+    @DisplayName("자기_컨텍스트가_닫히면_드레이닝을_알린다")
+    void 자기_컨텍스트가_닫히면_드레이닝을_알린다() {
         // 안 알리면 부하 분산기가 계속 보내고, 그 사이 도착한 요청이 끊긴다.
+        GenericApplicationContext 내_컨텍스트 = new GenericApplicationContext();
         SnapshotRefreshLifecycle lifecycle = lifecycle();
+        lifecycle.setApplicationContext(내_컨텍스트);
         lifecycle.start();
 
-        lifecycle.onApplicationEvent(new ContextClosedEvent(new GenericApplicationContext()));
+        try {
+            lifecycle.onApplicationEvent(new ContextClosedEvent(내_컨텍스트));
+        } finally {
+            lifecycle.stop();
+        }
 
         assertThat(shutdown.isDraining()).isTrue();
+    }
+
+    @Test
+    @DisplayName("남의_컨텍스트가_닫힌_것으로는_안_알린다")
+    void 남의_컨텍스트가_닫힌_것으로는_안_알린다() {
+        // **하위 컨텍스트의 닫힘도 위로 전해진다.** 관리 포트를 따로 열면 하위가
+        // 실제로 생기는데, 그게 닫혔다고 서비스가 종료하는 것은 아니다.
+        SnapshotRefreshLifecycle lifecycle = lifecycle();
+        lifecycle.setApplicationContext(new GenericApplicationContext());
+        lifecycle.start();
+
+        try {
+            lifecycle.onApplicationEvent(new ContextClosedEvent(new GenericApplicationContext()));
+        } finally {
+            lifecycle.stop();
+        }
+
+        assertThat(shutdown.isDraining()).isFalse();
     }
 
     @Test

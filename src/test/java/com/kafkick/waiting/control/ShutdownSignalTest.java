@@ -26,6 +26,24 @@ import reactor.core.publisher.Mono;
 @Tag("context")
 class ShutdownSignalTest {
 
+    @Configuration
+    static class PlainWiring {
+
+        @Bean
+        ShutdownState shutdownState() {
+            return ShutdownState.create();
+        }
+
+        @Bean
+        SnapshotRefreshLifecycle snapshotRefreshLifecycle(ShutdownState shutdown) {
+            SnapshotHolder holder = SnapshotHolder.of(
+                    Duration.ofSeconds(3), Duration.ofSeconds(10), Clock.systemUTC());
+            return SnapshotRefreshLifecycle.of(
+                    SnapshotRefresher.of(holder, () -> Mono.just(Map.of())),
+                    shutdown, Duration.ofMillis(50));
+        }
+    }
+
     /** 먼저 서서 터지는 리스너. 컨테이너는 경고만 찍고 다음으로 넘어간다. */
     @Configuration
     static class ThrowingListenerWiring {
@@ -60,6 +78,29 @@ class ShutdownSignalTest {
         @Override
         public void onApplicationEvent(ContextClosedEvent event) {
             throw new IllegalStateException("종료 중에 터진 리스너");
+        }
+    }
+
+    @Test
+    @DisplayName("하위_컨텍스트가_닫혀도_드레이닝을_안_알린다")
+    void 하위_컨텍스트가_닫혀도_드레이닝을_안_알린다() {
+        // **하위의 닫힘 사건은 상위로 전해진다.** 관리 포트를 따로 열면 하위가
+        // 실제로 생기는데, 그게 닫혔다고 서비스가 트래픽을 놓으면 안 된다.
+        // **터지는 리스너를 안 쓴다.** 그게 있으면 전파가 우리 리스너에 닿기도
+        // 전에 끊겨서, 확인을 지워도 통과하는 시험이 된다.
+        AnnotationConfigApplicationContext parent =
+                new AnnotationConfigApplicationContext(PlainWiring.class);
+        ShutdownState shutdown = parent.getBean(ShutdownState.class);
+        AnnotationConfigApplicationContext child = new AnnotationConfigApplicationContext();
+        child.setParent(parent);
+        child.refresh();
+
+        child.close();
+
+        try {
+            assertThat(shutdown.isDraining()).isFalse();
+        } finally {
+            parent.close();
         }
     }
 

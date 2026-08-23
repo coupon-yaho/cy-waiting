@@ -2,6 +2,7 @@ package com.kafkick.waiting.gateway;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -74,11 +75,33 @@ class CorsChainTest {
         client.options().uri("/api/v1/coupons/c1/issue")
                 .header(HttpHeaders.ORIGIN, ORIGIN)
                 .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "POST")
-                .header(HttpHeaders.ACCESS_CONTROL_REQUEST_HEADERS, "X-Member-Id,X-Member-Grade")
+                .header(HttpHeaders.ACCESS_CONTROL_REQUEST_HEADERS,
+                        "X-Member-Id,X-Member-Grade,Entry-Token,Idempotency-Key")
                 .exchange()
                 .expectHeader().valueEquals(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, ORIGIN)
                 .expectHeader().value(HttpHeaders.ACCESS_CONTROL_ALLOW_HEADERS,
-                        v -> assertThat(v).contains("X-Member-Id", "X-Member-Grade"));
+                        v -> assertThat(v).contains("X-Member-Id", "X-Member-Grade",
+                                "Entry-Token", "Idempotency-Key"));
+    }
+
+    @Test
+    @DisplayName("계약이_요구하는_헤더가_전부_열려_있다")
+    void 계약이_요구하는_헤더가_전부_열려_있다() {
+        // 발급은 `Entry-Token` 이, 사용·취소는 멱등키가 필수다. 하나라도 빠지면
+        // 브라우저가 본 요청을 아예 안 보내 그 엔드포인트가 통째로 안 된다.
+        for (String 헤더 : List.of("Content-Type", "X-Member-Id", "X-Member-Grade",
+                "Entry-Token", "Idempotency-Key", "X-Request-Id")) {
+            client.options().uri("/api/v1/coupons/c1/issue")
+                    .header(HttpHeaders.ORIGIN, ORIGIN)
+                    .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                    .header(HttpHeaders.ACCESS_CONTROL_REQUEST_HEADERS, 헤더)
+                    .exchange()
+                    // 403 이 아닌 것만 보면 400 이나 500 도 통과한다.
+                    .expectStatus().is2xxSuccessful()
+                    .expectHeader().valueEquals(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, ORIGIN)
+                    .expectHeader().value(HttpHeaders.ACCESS_CONTROL_ALLOW_HEADERS,
+                            v -> assertThat(v).as("헤더 %s", 헤더).contains(헤더));
+        }
     }
 
     @Test

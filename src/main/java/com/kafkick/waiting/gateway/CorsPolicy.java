@@ -5,6 +5,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpMethod;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.reactive.CorsConfigurationSource;
@@ -20,6 +21,7 @@ import org.springframework.web.cors.reactive.UrlBasedCorsConfigurationSource;
 public class CorsPolicy {
 
     private static final String API = "/api/**";
+
 
     private final Origins origins;
 
@@ -48,7 +50,13 @@ public class CorsPolicy {
      * 설정만 만들어 두면 아무 요청에도 안 걸린다. 웹플럭스는 그 빈을 스스로
      * 집어가지 않으므로 필터로 직접 잇는다.
      */
+
+    /**
+     * 설정만 만들어 두면 아무 요청에도 안 걸린다. 웹플럭스는 그 빈을 스스로
+     * 집어가지 않으므로 필터로 직접 잇는다. 앞뒤는 {@link FilterOrder} 가 정한다.
+     */
     @Bean
+    @Order(FilterOrder.CORS)
     public CorsWebFilter corsWebFilter(CorsConfigurationSource source) {
         return new CorsWebFilter(source);
     }
@@ -59,7 +67,10 @@ public class CorsPolicy {
         // 와일드카드를 안 쓴다. 열어 두면 허용 목록이 있다는 사실이 무의미해진다.
         config.setAllowedOrigins(List.copyOf(origins.allowed()));
         config.setAllowedMethods(List.of(HttpMethod.GET.name(), HttpMethod.POST.name()));
-        config.setAllowedHeaders(List.of("Content-Type", "X-Member-Id", "X-Member-Grade"));
+        // 뒷단이 요구하는 것을 다 넣는다. 하나라도 빠지면 브라우저가 사전 요청에서
+        // 막고 본 요청을 아예 안 보낸다 — 그 엔드포인트가 브라우저에서 통째로 안 된다.
+        config.setAllowedHeaders(List.of("Content-Type", "X-Member-Id", "X-Member-Grade",
+                "Entry-Token", "Idempotency-Key", "X-Request-Id"));
         config.setMaxAge(3_600L);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();

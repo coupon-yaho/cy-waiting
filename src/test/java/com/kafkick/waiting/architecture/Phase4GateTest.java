@@ -140,8 +140,8 @@ class Phase4GateTest {
             String 선언 = "void " + 메서드 + "(";
             assertThat(본문).as("%s 를 판정한다는 %s 가 그 파일에 없다", gate, 짝).contains(선언);
 
-            // **꺼 둔 시험은 있는 것이 아니다.** 선언만 보면 @Disabled 를 붙여
-            // 놓아도 통과한다 — 아무것도 안 도는데 게이트는 판정됨으로 남는다.
+            // **꺼 둔 시험은 있는 것이 아니다.** 선언만 보면 실행에서 빼 놓아도
+            // 통과한다 — 아무것도 안 도는데 게이트는 판정됨으로 남는다.
             String 앞 = 본문.substring(0, 본문.indexOf(선언));
             assertThat(앞.substring(앞.lastIndexOf("@Test")))
                     .as("%s 를 판정한다는 %s 가 꺼져 있다", gate, 짝)

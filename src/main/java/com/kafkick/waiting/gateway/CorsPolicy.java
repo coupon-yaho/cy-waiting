@@ -67,7 +67,10 @@ public class CorsPolicy {
         // 와일드카드를 안 쓴다. 열어 두면 허용 목록이 있다는 사실이 무의미해진다.
         config.setAllowedOrigins(List.copyOf(origins.allowed()));
         config.setAllowedMethods(List.of(HttpMethod.GET.name(), HttpMethod.POST.name()));
-        config.setAllowedHeaders(List.of("Content-Type", "X-Member-Id", "X-Member-Grade"));
+        // 뒷단이 요구하는 것을 다 넣는다. 하나라도 빠지면 브라우저가 사전 요청에서
+        // 막고 본 요청을 아예 안 보낸다 — 그 엔드포인트가 브라우저에서 통째로 안 된다.
+        config.setAllowedHeaders(List.of("Content-Type", "X-Member-Id", "X-Member-Grade",
+                "Entry-Token", "Idempotency-Key", "X-Request-Id"));
         config.setMaxAge(3_600L);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();

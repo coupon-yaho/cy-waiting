@@ -1,6 +1,10 @@
 package com.kafkick.waiting.gateway;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -8,6 +12,13 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.core.annotation.Order;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.WebFilter;
+import org.springframework.boot.test.web.server.LocalManagementPort;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.HttpHeaders;
 import org.springframework.test.web.reactive.server.WebTestClient;
@@ -20,10 +31,40 @@ import org.springframework.test.web.reactive.server.WebTestClient;
  */
 @Tag("context")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@Import(IdentityChainTest.CapturingBackend.class)
 class IdentityChainTest {
+
+    /**
+     * 형식 검증 뒤에 서서 <b>지나간 요청을 잡는다.</b> 실서버 시험이 거절만 재면
+     * 필터가 뜨는 것만 알 뿐, 제대로 된 요청이 살아남는지는 모른다.
+     */
+    @TestConfiguration
+    static class CapturingBackend {
+
+        static final AtomicReference<HttpHeaders> 마지막 = new AtomicReference<>();
+
+        @Bean
+        @Order(FilterOrder.IDENTITY + 1)
+        WebFilter capturing() {
+            return (exchange, chain) -> {
+                // 회원 API 만 가로챈다. 전부 잡으면 관리 경로 시험이 이 스텁을 잰다.
+                if (!exchange.getRequest().getPath().value().startsWith("/api/")) {
+                    return chain.filter(exchange);
+                }
+                마지막.set(exchange.getRequest().getHeaders());
+                exchange.getResponse().setStatusCode(HttpStatus.NO_CONTENT);
+                return exchange.getResponse().setComplete();
+            };
+        }
+    }
+
+    private static final String ORIGIN = "http://localhost:5173";
 
     @LocalServerPort
     private int port;
+
+    @LocalManagementPort
+    private int managementPort;
 
     private WebTestClient client;
 
@@ -47,7 +88,8 @@ class IdentityChainTest {
     void 헤더가_없으면_발급도_막힌다() {
         client.post().uri("/api/v1/coupons/c1/issue")
                 .exchange()
-                .expectStatus().isBadRequest();
+                .expectStatus().isBadRequest()
+                .expectBody().jsonPath("$.error.code").isEqualTo("COMMON-001");
     }
 
     @ParameterizedTest
@@ -76,12 +118,43 @@ class IdentityChainTest {
     }
 
     @Test
-    @DisplayName("관리_경로는_안_막힌다")
-    void 관리_경로는_안_막힌다() {
-        // 프로브가 막히면 살아 있는 노드가 통째로 빠진다.
-        client.get().uri("/actuator/health")
+    @DisplayName("제대로_된_요청은_헤더째_지나간다")
+    void 제대로_된_요청은_헤더째_지나간다() {
+        // 거절만 재면 필터가 뜨는 것만 알 뿐, 통과가 되는지는 모른다.
+        CapturingBackend.마지막.set(null);
+
+        client.get().uri("/api/v1/coupons/c1/queue")
+                .header("X-Member-Id", "12345")
+                .header("X-Member-Grade", "GOLD")
                 .exchange()
-                .expectStatus().isNotFound();
+                .expectStatus().isNoContent();
+
+        // 이름 집합을 정확히 못 박는다. 하나라도 늘거나 줄면 걸린다.
+        assertThat(CapturingBackend.마지막.get().headerNames())
+                .as("뒷단까지 닿아야 잡힌다")
+                .filteredOn(n -> n.startsWith("X-Member"))
+                .containsExactlyInAnyOrder("X-Member-Id", "X-Member-Grade");
+        assertThat(CapturingBackend.마지막.get().getFirst("X-Member-Id")).isEqualTo("12345");
+        assertThat(CapturingBackend.마지막.get().getFirst("X-Member-Grade")).isEqualTo("GOLD");
+    }
+
+    @Test
+    @DisplayName("프로브가_도는_포트에서_안_막힌다")
+    void 프로브가_도는_포트에서_안_막힌다() {
+        // **관리 포트로 재야 한다.** 서비스 포트의 404 는 필터가 허용해서가 아니라
+        // 거기 핸들러가 없어서다. 하위 컨텍스트도 이 필터를 물려받으므로,
+        // 막히면 살아 있는 노드가 통째로 빠진다.
+        WebTestClient 관리 = WebTestClient.bindToServer()
+                .baseUrl("http://localhost:" + managementPort).build();
+
+        // 상태 자체는 재료가 없어 503 이다. 여기서 볼 것은 **필터가 막았는가** 뿐이다.
+        byte[] 본문 = 관리.get().uri("/actuator/health")
+                .exchange()
+                .expectStatus().value(s -> assertThat(s).isNotEqualTo(400))
+                .expectBody().returnResult().getResponseBody();
+
+        assertThat(본문 == null ? "" : new String(본문, StandardCharsets.UTF_8))
+                .doesNotContain(ApiError.INVALID_REQUEST);
     }
 
     @Test
@@ -89,10 +162,15 @@ class IdentityChainTest {
     void 사전_요청은_회원_헤더_없이_통과한다() {
         // **브라우저는 사전 요청에 회원 헤더를 안 붙인다.** 여기서 막으면
         // 본 요청을 아예 안 보내고, 대기 화면이 통째로 안 돈다.
+        // **2xx 만으로는 성공이 아니다.** 허용 헤더가 안 실리면 브라우저는
+        // 사전 요청이 200 이어도 본 요청을 안 보낸다.
         client.options().uri("/api/v1/coupons/c1/queue")
-                .header(HttpHeaders.ORIGIN, "http://localhost:5173")
+                .header(HttpHeaders.ORIGIN, ORIGIN)
                 .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "GET")
                 .exchange()
-                .expectStatus().is2xxSuccessful();
+                .expectStatus().is2xxSuccessful()
+                .expectHeader().valueEquals(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, ORIGIN)
+                .expectHeader().value(HttpHeaders.ACCESS_CONTROL_ALLOW_METHODS,
+                        v -> assertThat(v).contains("GET"));
     }
 }

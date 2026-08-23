@@ -2,6 +2,7 @@ package com.kafkick.waiting.gateway;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.DisplayName;
@@ -55,10 +56,13 @@ class MemberIdentityFilterTest {
         HttpHeaders 받은_것 = 뒷단이_본_것.get().getRequest().getHeaders();
         assertThat(받은_것.getFirst(ID)).isEqualTo("12345");
         assertThat(받은_것.getFirst(GRADE)).isEqualTo("GOLD");
+        // **넣지도 않는다.** 정규화한 값을 넣으면 뒷단이 그걸 검증된 것으로 오해한다.
+        assertThat(받은_것.headerNames()).filteredOn(n -> n.startsWith("X-Member"))
+                .containsExactlyInAnyOrder(ID, GRADE);
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"", " ", "abc", "12.3", "-1", "0", "1e5", "١٢٣"})
+    @ValueSource(strings = {"", "abc", "12.3", "-1", "0", "1e5", "١٢٣"})
     @DisplayName("식별자가_수치가_아니면_막는다")
     void 식별자가_수치가_아니면_막는다(String 이상한_값) {
         // 깨진 값이 뒷단까지 가면 거기서 터진다. 회원 식별자는 양의 정수다.
@@ -89,7 +93,8 @@ class MemberIdentityFilterTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"", "gold", "PLATINUM", "GOLD "})
+    // 앞뒤 공백은 넷티가 다듬어 실물로는 못 만든다 (TS-3).
+    @ValueSource(strings = {"", "gold", "PLATINUM", "Gold"})
     @DisplayName("등급이_아는_값이_아니면_막는다")
     void 등급이_아는_값이_아니면_막는다(String 이상한_값) {
         // 게이트웨이는 등급으로 판정하지 않는다. 자격 대조는 발급 계층 몫이고,
@@ -223,7 +228,10 @@ class MemberIdentityFilterTest {
                 통과시킨다(발급_요청().header(ID, "1").header(GRADE, "PLATINUM"))
                         .getResponse().getBodyAsString().block());
 
-        assertThat(본문들).allSatisfy(본문 ->
-                assertThat(본문).doesNotContain("X-Member-Id", "X-Member-Grade", "PLATINUM"));
+        // **같은 본문인지 본다.** 안 담겼는지만 보면 사유마다 다른 문구를 써도
+        // 통과하는데, 그 차이가 곧 형식을 맞추는 데 쓰이는 신호다.
+        String 정본 = new String(ApiError.create().body(HttpStatus.BAD_REQUEST,
+                ApiError.INVALID_REQUEST, "요청 헤더가 올바르지 않습니다."), StandardCharsets.UTF_8);
+        assertThat(본문들).containsOnly(정본);
     }
 }

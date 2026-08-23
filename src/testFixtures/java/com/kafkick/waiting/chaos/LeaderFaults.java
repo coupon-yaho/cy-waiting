@@ -87,6 +87,11 @@ public final class LeaderFaults {
      * 창인데, 재는 쪽은 그게 얼마인지 모른 채 곧바로 읽는다.
      */
     public void lease를_만료시킨다(Duration 남길_시간) {
+        // 0 이하를 넘기면 지워 버린다 — 만료 임박이 아니라 해제를 만드는 것이고,
+        // 그건 이 픽스처가 안 만들기로 한 상태다.
+        if (남길_시간 == null || 남길_시간.toMillis() <= 0) {
+            throw new IllegalArgumentException("남길 시간은 1밀리초 이상이어야 한다: " + 남길_시간);
+        }
         redis.sync().pexpire(RedisKeys.LEADER, 남길_시간.toMillis());
     }
 

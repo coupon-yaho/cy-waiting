@@ -114,6 +114,20 @@ class LeaderFaultsTest {
     }
 
     @Test
+    @DisplayName("만료를_0_으로_걸_수_없다")
+    void 만료를_0_으로_걸_수_없다() {
+        // 0 이하는 키를 지워 버린다 — 만료 임박이 아니라 해제고, 그러면 이 픽스처를
+        // 쓰는 시험이 재려던 구별이 조용히 사라진다.
+        leader.리더로_만든다("node-1", LEASE);
+
+        assertThatThrownBy(() -> leader.lease를_만료시킨다(Duration.ZERO))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> leader.lease를_만료시킨다(Duration.ofMillis(-1)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(leader.현재_소유자()).as("거절했으면 락은 그대로다").isEqualTo("node-1");
+    }
+
+    @Test
     @DisplayName("빈_소유자로는_아무것도_못_한다")
     void 빈_소유자로는_아무것도_못_한다() {
         // 프로덕션이 빈 소유자를 거부하므로 픽스처도 그 상태를 만들면 안 된다.

@@ -60,7 +60,7 @@ public class GatewayRoutes {
         // 검증은 밖에 둔다. 압축 생성자에서 부를 수 있는 것은 정적뿐이라,
         // 안에 두면 그 자리에서만 쓰이는 정적 메서드가 생긴다.
         public Backend {
-            ConfigUris.backend(uri);
+            ConfigUris.create().backend(uri);
         }
     }
 

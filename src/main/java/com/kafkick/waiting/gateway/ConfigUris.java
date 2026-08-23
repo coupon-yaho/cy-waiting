@@ -15,20 +15,33 @@ final class ConfigUris {
     private ConfigUris() {
     }
 
+    /** 상태가 없지만 인스턴스다 — 검증이 늘면 여기 필드가 생긴다 (JS-13). */
+    static ConfigUris create() {
+        return new ConfigUris();
+    }
+
     /** 프록시가 스킴·호스트·포트만 가져가므로 나머지가 붙으면 조용히 버려진다. */
-    static void backend(String value) {
+    void backend(String value) {
         URI uri = parsed(value, "waiting.backend.uri");
         httpScheme(uri, "waiting.backend.uri");
-        if (uri.getPath() != null && !uri.getPath().isEmpty()) {
-            throw new IllegalArgumentException("waiting.backend.uri 에 경로를 붙일 수 없다");
+        if (hasExtra(uri)) {
+            throw new IllegalArgumentException(
+                    "waiting.backend.uri 에 경로·질의·조각·사용자 정보를 붙일 수 없다");
         }
+    }
+
+    private boolean hasExtra(URI uri) {
+        return (uri.getRawPath() != null && !uri.getRawPath().isEmpty())
+                || uri.getRawQuery() != null
+                || uri.getRawFragment() != null
+                || uri.getRawUserInfo() != null;
     }
 
     /**
      * 브라우저가 보내는 {@code Origin} 은 스킴·호스트·기본이 아닌 포트뿐이다.
      * 나머지가 붙은 값은 기동에 성공하고 아무와도 안 맞는다.
      */
-    static void origin(String value) {
+    void origin(String value) {
         // "null" 은 와일드카드 검사를 지나면서 샌드박스 프레임에 그대로 맞는다.
         if (value != null && "null".equalsIgnoreCase(value.trim())) {
             throw new IllegalArgumentException("오리진에 쓸 수 없는 값이 있다");
@@ -38,11 +51,7 @@ final class ConfigUris {
         }
         URI uri = parsed(value, "오리진");
         httpScheme(uri, "오리진");
-        boolean extra = (uri.getRawPath() != null && !uri.getRawPath().isEmpty())
-                || uri.getRawQuery() != null
-                || uri.getRawFragment() != null
-                || uri.getRawUserInfo() != null;
-        if (extra) {
+        if (hasExtra(uri)) {
             throw new IllegalArgumentException("오리진에 경로·질의·조각·사용자 정보를 붙일 수 없다");
         }
         // 기본 포트를 적으면 브라우저가 보내는 값과 안 맞는다.
@@ -52,9 +61,7 @@ final class ConfigUris {
         }
     }
 
-    // RULE-EXCEPTION(JS-13): 유틸리티 클래스라 인스턴스가 없다. 인스턴스
-    // 메서드로 둘 수 없고, 더 꺼내면 검증이 두 파일로 갈린다 (RedisKeys 선례).
-    private static URI parsed(String value, String what) {
+    private URI parsed(String value, String what) {
         if (value == null || value.isBlank()) {
             throw new IllegalArgumentException(what + " 가 비어 있다");
         }
@@ -65,8 +72,7 @@ final class ConfigUris {
         }
     }
 
-    // RULE-EXCEPTION(JS-13): 위와 같다.
-    private static void httpScheme(URI uri, String what) {
+    private void httpScheme(URI uri, String what) {
         if (!"http".equals(uri.getScheme()) && !"https".equals(uri.getScheme())
                 || uri.getHost() == null) {
             throw new IllegalArgumentException(what + " 는 http 나 https 로 시작하는 주소여야 한다");

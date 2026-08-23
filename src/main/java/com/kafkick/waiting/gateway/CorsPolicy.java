@@ -35,7 +35,8 @@ public class CorsPolicy {
             }
             // 값 하나가 어긋나면 목록이 있다는 사실이 무의미해지거나, 아무와도
             // 안 맞아 프론트가 통째로 막힌다. 검증은 밖에 둔다.
-            allowed.forEach(ConfigUris::origin);
+            ConfigUris uris = ConfigUris.create();
+            allowed.forEach(uris::origin);
         }
     }
 

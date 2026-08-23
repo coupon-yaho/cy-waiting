@@ -89,6 +89,13 @@ class GatewayRoutesTest {
         // 주소로 읽히지 않는 값.
         assertThatThrownBy(() -> new GatewayRoutes.Backend("http://back end"))
                 .isInstanceOf(IllegalArgumentException.class);
+        // 프록시는 스킴·호스트·포트만 가져간다. 나머지는 조용히 버려진다.
+        for (String 군더더기 : List.of("http://backend?trace=1", "http://u:p@backend",
+                "http://backend#x")) {
+            assertThatThrownBy(() -> new GatewayRoutes.Backend(군더더기))
+                    .as("뒷단 %s", 군더더기)
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
     }
 
     @Test

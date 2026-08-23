@@ -2,6 +2,7 @@ package com.kafkick.waiting.control;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.kafkick.waiting.domain.allocation.QueueingHysteresis;
 import com.kafkick.waiting.domain.allocation.CreditSmoother;
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.QueueMode;
@@ -35,7 +36,8 @@ class SnapshotEncodeTest {
                 new SnapshotMeta(50, 4),
                 Instant.ofEpochSecond(1_700_000_000L));
 
-        GatewaySnapshot 되읽음 = codec.decode(codec.encode(원본, CreditSmoother.Snapshot.empty()));
+        GatewaySnapshot 되읽음 = codec.decode(codec.encode(원본, CreditSmoother.Snapshot.empty(),
+                QueueingHysteresis.Snapshot.empty()));
 
         assertThat(되읽음.coupons()).containsOnlyKeys("c1");
         assertThat(되읽음.coupons().get("c1")).isEqualTo(원본.coupons().get("c1"));
@@ -52,7 +54,7 @@ class SnapshotEncodeTest {
 
         Map<String, String> 실린_것 = codec.encode(
                 new GatewaySnapshot(Map.of(), new SnapshotMeta(0, 1), Instant.EPOCH),
-                앞선_리더.snapshot());
+                앞선_리더.snapshot(), QueueingHysteresis.Snapshot.empty());
         CreditSmoother 새_리더 = CreditSmoother.restore(0.3, codec.smoothing(실린_것));
 
         // 이월받았으면 다음 관측이 평활화되고, 못 받았으면 그 값이 그대로 초기값이 된다.
@@ -81,13 +83,59 @@ class SnapshotEncodeTest {
     }
 
     @Test
+    @DisplayName("히스테리시스_상태가_배선을_왕복한다")
+    void 히스테리시스_상태가_배선을_왕복한다() {
+        // 배선 이름을 리터럴로 못 박는다. 인코더와 디코더가 같은 상수를 쓰므로
+        // 오타가 나도 왕복은 맞아떨어진다 — 옛 리더가 실은 것을 새 배포가
+        // 못 읽는 것은 그때 드러난다.
+        Map<String, String> 실린_것 = codec.encode(
+                new GatewaySnapshot(Map.of(), new SnapshotMeta(0, 1), Instant.EPOCH),
+                CreditSmoother.Snapshot.empty(),
+                new QueueingHysteresis.Snapshot(true, 2));
+
+        assertThat(실린_것).containsEntry("#queueing", "1").containsEntry("#belowExitTicks", "2");
+        assertThat(codec.hysteresis(실린_것))
+                .isEqualTo(new QueueingHysteresis.Snapshot(true, 2));
+    }
+
+    @Test
+    @DisplayName("히스테리시스_상태가_없으면_안_받은_것으로_본다")
+    void 히스테리시스_상태가_없으면_안_받은_것으로_본다() {
+        // 첫 리더이거나 옛 형식이다.
+        assertThat(codec.hysteresis(Map.of()))
+                .isEqualTo(QueueingHysteresis.Snapshot.empty());
+    }
+
+    @Test
+    @DisplayName("유지_틱만_깨졌으면_붙잡던_것은_유지한다")
+    void 유지_틱만_깨졌으면_붙잡던_것은_유지한다() {
+        // 유지 틱을 못 읽었다고 대기열까지 놓으면 그 순간 꺼졌다 켜진다 —
+        // 히스테리시스가 막으려던 진동이 리더 교체마다 난다.
+        assertThat(codec.hysteresis(Map.of("#queueing", "1", "#belowExitTicks", "여덟")))
+                .isEqualTo(new QueueingHysteresis.Snapshot(true, 0));
+        assertThat(codec.hysteresis(Map.of("#queueing", "1")))
+                .isEqualTo(new QueueingHysteresis.Snapshot(true, 0));
+        assertThat(codec.hysteresis(Map.of("#queueing", "1", "#belowExitTicks", "-1")))
+                .isEqualTo(new QueueingHysteresis.Snapshot(true, 0));
+    }
+
+    @Test
+    @DisplayName("모순된_조합은_안_받은_것으로_본다")
+    void 모순된_조합은_안_받은_것으로_본다() {
+        // 안 붙잡는데 유지 틱이 쌓여 있다. 그대로 받으면 도메인이 던지고,
+        // 던지면 리더가 바뀔 때마다 배분이 멎는다.
+        assertThat(codec.hysteresis(Map.of("#queueing", "0", "#belowExitTicks", "2")))
+                .isEqualTo(QueueingHysteresis.Snapshot.empty());
+    }
+
+    @Test
     @DisplayName("관측_전_상태는_값을_안_싣는다")
     void 관측_전_상태는_값을_안_싣는다() {
         // 관측 전인데 값이 0 이 아니면 도메인이 거부한다. 실을 때부터 안 맞으면
         // 다음 리더가 이월을 통째로 버린다.
         Map<String, String> 실린_것 = codec.encode(
                 new GatewaySnapshot(Map.of(), new SnapshotMeta(0, 1), Instant.EPOCH),
-                CreditSmoother.Snapshot.empty());
+                CreditSmoother.Snapshot.empty(), QueueingHysteresis.Snapshot.empty());
 
         assertThat(codec.smoothing(실린_것).seeded()).isFalse();
         assertThat(codec.smoothing(실린_것).value()).isZero();
@@ -105,7 +153,8 @@ class SnapshotEncodeTest {
                 new SnapshotMeta(50, 4),
                 Instant.ofEpochSecond(1_700_000_000L));
 
-        Map<String, String> 실린_것 = codec.encode(원본, CreditSmoother.Snapshot.empty());
+        Map<String, String> 실린_것 = codec.encode(원본, CreditSmoother.Snapshot.empty(),
+                QueueingHysteresis.Snapshot.empty());
 
         assertThat(codec.decode(실린_것).meta().globalCredit()).isEqualTo(50);
         assertThat(실린_것).doesNotContainKey("#훗날쓸값");
@@ -117,7 +166,7 @@ class SnapshotEncodeTest {
         Map<String, String> 실린_것 = codec.encode(
                 new GatewaySnapshot(Map.of(), new SnapshotMeta(0, 1),
                         Instant.ofEpochSecond(1_700_000_000L)),
-                CreditSmoother.Snapshot.empty());
+                CreditSmoother.Snapshot.empty(), QueueingHysteresis.Snapshot.empty());
 
         assertThat(codec.isPublished(실린_것)).isTrue();
     }
@@ -167,7 +216,8 @@ class SnapshotEncodeTest {
                 Map.of("c1", new CouponState(QueueMode.ALWAYS, RuntimeState.DRAINING, 9, 100, 5, 2.0)),
                 new SnapshotMeta(9, 1), Instant.ofEpochSecond(1_700_000_000L));
 
-        CouponState 되읽음 = codec.decode(codec.encode(원본, CreditSmoother.Snapshot.empty()))
+        CouponState 되읽음 = codec.decode(codec.encode(원본, CreditSmoother.Snapshot.empty(),
+                QueueingHysteresis.Snapshot.empty()))
                 .coupons().get("c1");
 
         assertThat(되읽음.mode()).isEqualTo(QueueMode.ALWAYS);

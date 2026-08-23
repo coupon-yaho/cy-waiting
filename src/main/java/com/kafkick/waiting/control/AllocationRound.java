@@ -1,5 +1,6 @@
 package com.kafkick.waiting.control;
 
+import com.kafkick.waiting.domain.allocation.QueueingHysteresis;
 import com.kafkick.waiting.domain.allocation.CouponDemand;
 import com.kafkick.waiting.domain.allocation.CreditSmoother;
 import com.kafkick.waiting.domain.allocation.FairShareAllocator;
@@ -162,8 +163,13 @@ public final class AllocationRound {
                 })
                 .then(Mono.defer(() -> lostLeadership()
                         ? Mono.<Void>empty()
+                        // **히스테리시스는 아직 빈 값을 싣는다.** 제품이 아직
+                        // 히스테리시스를 안 돌려서 실을 상태가 없다 (CY-324).
+                        // 돌리기 시작하면 여기가 매 틱 이월을 지우는 자리가
+                        // 되므로, 기본값에 숨기지 않고 눈에 보이게 둔다.
                         : publish.apply(codec.encode(snapshot(collected, granted, credit),
-                                current.snapshot()))));
+                                current.snapshot(),
+                                QueueingHysteresis.Snapshot.empty()))));
     }
 
     /**

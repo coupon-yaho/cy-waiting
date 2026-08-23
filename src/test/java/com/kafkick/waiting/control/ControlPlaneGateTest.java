@@ -164,7 +164,12 @@ class ControlPlaneGateTest {
             }
         }
 
-        assertThat(겹친_틱).as("두 노드가 함께 리더였던 틱").isZero();
+        // **승계가 났는지부터 본다.** 겹침만 보면 아무도 리더가 안 돼도 0 이라,
+        // 선출이 통째로 멎은 것과 깔끔하게 승계된 것이 구별되지 않는다.
+        assertThat(b.isLeader()).as("승계가 나야 겹침을 잰 것이 된다").isTrue();
+        // 게이트가 허용하는 상한이 한 틱이다. 지금 구현은 0 이지만 0 을 단언하면
+        // 게이트를 지키는 변경도 깨지고, 그때 이름이 이유를 잘못 말한다.
+        assertThat(겹친_틱).as("두 노드가 함께 리더였던 틱").isLessThanOrEqualTo(1);
     }
 
     @Test
@@ -200,7 +205,9 @@ class ControlPlaneGateTest {
         List<CouponDemand> 수요 = List.of(new CouponDemand("c1", 40, 1_000),
                 new CouponDemand("c2", 40, 1_000), new CouponDemand("c3", 40, 1_000));
 
-        for (int 노드_수 : new int[] {1, 2, 5, 10}) {
+        // **약수만 쓰면 잘림을 안 재게 된다.** 100 을 정확히 나누는 수만 넣으면
+        // 이 성질이 성립하는 진짜 이유(몫의 잘림)가 시험에서 빠진다.
+        for (int 노드_수 : new int[] {1, 2, 3, 7, 9, 10}) {
             registry.observed(노드_수);
             long 노드당 = 전역_크레딧 / registry.count();
             long 한_노드의_합 = allocator.allocate(노드당, 수요).stream()
@@ -217,7 +224,8 @@ class ControlPlaneGateTest {
     void 노드가_줄어도_총합이_전역_크레딧을_안_넘는다() {
         // 감소는 미룬다. 그동안 분모가 실제보다 커서 각 노드가 작은 몫을 쓴다 —
         // 지연이지 사고가 아니다. 반대로 즉시 줄이면 그 순간 총합이 넘는다.
-        GatewayRegistry registry = GatewayRegistry.of(3, 1);
+        int 감소_확정_틱 = 3;
+        GatewayRegistry registry = GatewayRegistry.of(감소_확정_틱, 1);
         FairShareAllocator allocator = FairShareAllocator.create();
         long 전역_크레딧 = 100;
         // 요구량이 몫보다 커야 몫이 그대로 나간다. 작으면 무엇을 곱해도 안 넘어
@@ -228,8 +236,13 @@ class ControlPlaneGateTest {
 
         // **확정 전까지는 실제 노드 수를 곱해도 안 넘어야 한다.** 관측이 헛디뎌
         // 분모가 먼저 줄면, 아직 살아 있는 노드들이 각자 큰 몫을 쓴다.
-        for (int 관측 = 1; 관측 < 3; 관측++) {
+        for (int 관측 = 1; 관측 < 감소_확정_틱; 관측++) {
             registry.observed(2);
+            // 확정 전에 분모가 내려가면 아래 곱셈이 넘는 것을 못 잡는다 —
+            // 상한을 설정에서 끌어와도 그 사이에 내려가면 시험이 공전한다.
+            assertThat(registry.count())
+                    .as("%d 번째 관측 — 확정 전이라 분모가 아직 안 내려가야 한다", 관측)
+                    .isEqualTo(실제_노드_수);
             long 노드당 = 전역_크레딧 / registry.count();
             long 한_노드의_합 = allocator.allocate(노드당, 수요).stream()
                     .mapToLong(Grant::credit).sum();
@@ -254,7 +267,7 @@ class ControlPlaneGateTest {
                 new GatewaySnapshot(Map.of(),
                         GatewaySnapshot.EMPTY.meta(),
                         Instant.ofEpochSecond(1_700_000_000L)),
-                앞선_리더.snapshot());
+                앞선_리더.snapshot(), QueueingHysteresis.Snapshot.empty());
 
         CreditSmoother 새_리더 = CreditSmoother.restore(0.3, codec.smoothing(실린_것));
         CreditSmoother 이월_없는_리더 = CreditSmoother.of(0.3);

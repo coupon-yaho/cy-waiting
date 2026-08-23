@@ -6,11 +6,19 @@ import java.util.List;
 import org.springframework.http.HttpMethod;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.cloud.gateway.filter.GatewayFilter;
+import org.springframework.cloud.gateway.filter.OrderedGatewayFilter;
 import org.springframework.cloud.gateway.route.Route;
 import org.springframework.cloud.gateway.route.RouteLocator;
+import org.springframework.cloud.gateway.route.builder.RouteLocatorBuilder;
+import org.springframework.boot.webflux.autoconfigure.WebFluxProperties;
+import org.springframework.cloud.gateway.handler.predicate.MethodRoutePredicateFactory;
+import org.springframework.cloud.gateway.handler.predicate.PathRoutePredicateFactory;
+import org.springframework.context.support.GenericApplicationContext;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
 import org.springframework.web.server.ServerWebExchange;
+import reactor.core.publisher.Mono;
 
 /**
  * 라우트가 <b>실제로 그 요청을 잡는가.</b>
@@ -21,8 +29,20 @@ import org.springframework.web.server.ServerWebExchange;
  */
 class GatewayRoutesTest {
 
+    // 라우트 정의가 술어 팩토리를 컨텍스트에서 꺼낸다. 필요한 것만 등록해
+    // 띄운다 — 애플리케이션을 통째로 세우면 라우트 하나 보려고 레디스까지 붙는다.
     private final RouteLocator locator = new GatewayRoutes().routes(
+            new RouteLocatorBuilder(술어만_있는_컨텍스트()),
             new GatewayRoutes.Backend("http://backend:8080"));
+
+    private static GenericApplicationContext 술어만_있는_컨텍스트() {
+        GenericApplicationContext context = new GenericApplicationContext();
+        context.registerBean(WebFluxProperties.class);
+        context.registerBean(MethodRoutePredicateFactory.class);
+        context.registerBean(PathRoutePredicateFactory.class);
+        context.refresh();
+        return context;
+    }
 
     private List<Route> 라우트() {
         return locator.getRoutes().collectList().block();
@@ -32,7 +52,8 @@ class GatewayRoutesTest {
         ServerWebExchange exchange = MockServerWebExchange.from(
                 MockServerHttpRequest.method(method, path).build());
         return 라우트().stream()
-                .filter(r -> Boolean.TRUE.equals(r.getPredicate().apply(exchange).block()))
+                .filter(r -> Boolean.TRUE.equals(
+                        Mono.from(r.getPredicate().apply(exchange)).block()))
                 .findFirst().orElse(null);
     }
 
@@ -43,6 +64,13 @@ class GatewayRoutesTest {
                 "/api/v1/coupons/c1/issue")).isNotNull();
     }
 
+    /** 빌더가 순서를 매기려고 한 겹 감싼다. 감싼 것을 벗겨야 무엇이 붙었는지 보인다. */
+    private static List<GatewayFilter> 벗긴_필터(Route route) {
+        return route.getFilters().stream()
+                .map(f -> f instanceof OrderedGatewayFilter o ? o.getDelegate() : f)
+                .toList();
+    }
+
     @Test
     @DisplayName("발급_라우트에_판정이_붙어_있다")
     void 발급_라우트에_판정이_붙어_있다() {
@@ -51,8 +79,7 @@ class GatewayRoutesTest {
         Route 발급 = 잡는_라우트(HttpMethod.POST,
                 "/api/v1/coupons/c1/issue");
 
-        assertThat(발급.getFilters()).anySatisfy(f ->
-                assertThat(f).isInstanceOf(AdmissionGatewayFilter.class));
+        assertThat(벗긴_필터(발급)).hasAtLeastOneElementOfType(AdmissionGatewayFilter.class);
     }
 
     @Test
@@ -62,8 +89,7 @@ class GatewayRoutesTest {
         Route 조회 = 잡는_라우트(HttpMethod.GET, "/api/v1/coupons/c1");
 
         assertThat(조회).isNotNull();
-        assertThat(조회.getFilters()).noneSatisfy(f ->
-                assertThat(f).isInstanceOf(AdmissionGatewayFilter.class));
+        assertThat(벗긴_필터(조회)).doesNotHaveAnyElementsOfTypes(AdmissionGatewayFilter.class);
     }
 
     @Test
@@ -92,6 +118,26 @@ class GatewayRoutesTest {
                 "/api/v2/coupons/c1/issue")).isNull();
         assertThat(잡는_라우트(HttpMethod.POST,
                 "/v1/coupons/c1/issue")).isNull();
+    }
+
+    @Test
+    @DisplayName("발급_옆의_다른_경로는_안_잡는다")
+    void 발급_옆의_다른_경로는_안_잡는다() {
+        // **경로를 넓히면 의도 안 한 것까지 프록시된다.** 뒷단에 새 엔드포인트가
+        // 생기는 순간, 아무도 정하지 않은 채로 판정을 타고 열린다.
+        assertThat(잡는_라우트(HttpMethod.POST, "/api/v1/coupons/c1/refund")).isNull();
+        assertThat(잡는_라우트(HttpMethod.POST, "/api/v1/coupons/c1/issue/extra")).isNull();
+    }
+
+    @Test
+    @DisplayName("순번_조회는_어떤_메서드로도_안_잡힌다")
+    void 순번_조회는_어떤_메서드로도_안_잡힌다() {
+        // 메서드를 바꿔 들어와도 백엔드로 새면 안 된다.
+        for (HttpMethod method : List.of(HttpMethod.GET, HttpMethod.POST,
+                HttpMethod.PUT, HttpMethod.DELETE)) {
+            assertThat(잡는_라우트(method, "/api/v1/coupons/c1/queue"))
+                    .as("%s /api/v1/coupons/c1/queue", method).isNull();
+        }
     }
 
     @Test

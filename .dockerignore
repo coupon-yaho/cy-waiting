@@ -1,0 +1,8 @@
+# 부하 하네스가 게이트웨이 이미지를 만들 때 쓴다.
+#
+# **실행 JAR 하나만 남긴다.** 여러 개를 한 이름으로 복사하면 무엇이 들어갈지
+# 순서에 달리고, 픽스처가 든 JAR 이 이미지에 실릴 수도 있다.
+*
+!build/libs/*.jar
+build/libs/*-plain.jar
+build/libs/*-test-fixtures.jar

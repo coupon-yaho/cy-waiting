@@ -1,0 +1,58 @@
+// 뒷단 쿠폰 서비스 대역.
+//
+// **용량을 흉내 내는 것이 존재 이유다.** 지연과 동시 한도를 환경변수로 받아
+// 인스턴스마다 다르게 띄울 수 있어야, 가용량 기반 라우팅을 검증할 수 있다.
+//
+// 응답 봉투는 발급 계층 명세를 따른다. 게이트웨이가 직접 내는 것과 구별되면
+// 그 차이로 게이트웨이의 존재와 상태를 알아낼 수 있다.
+import { createServer } from 'node:http';
+
+const PORT = Number(process.env.PORT ?? 8090);
+const LATENCY_MS = Number(process.env.LATENCY_MS ?? 0);
+// 0 은 무제한. 한도를 넘으면 503 을 내 — 뒷단이 못 받는 상태를 흉내 낸다.
+const MAX_INFLIGHT = Number(process.env.MAX_INFLIGHT ?? 0);
+
+let inflight = 0;
+let served = 0;
+let rejected = 0;
+
+function json(res, status, body) {
+  const payload = JSON.stringify(body);
+  res.writeHead(status, {
+    'Content-Type': 'application/json',
+    'Content-Length': Buffer.byteLength(payload),
+  });
+  res.end(payload);
+}
+
+function error(res, status, code, message) {
+  json(res, status, { success: false, data: null, error: { status, code, message } });
+}
+
+const server = createServer((req, res) => {
+  // 스텁 자신의 상태. compose 의 healthcheck 와 시나리오의 사후 확인이 쓴다.
+  if (req.url === '/stub/health') {
+    return json(res, 200, { status: 'UP', inflight, served, rejected });
+  }
+
+  if (MAX_INFLIGHT > 0 && inflight >= MAX_INFLIGHT) {
+    rejected += 1;
+    return error(res, 503, 'TEMPORARILY_UNAVAILABLE', '뒷단이 지금 못 받는다.');
+  }
+
+  inflight += 1;
+  setTimeout(() => {
+    inflight -= 1;
+    served += 1;
+    // 발급이든 조회든 형태만 맞으면 된다. 내용은 게이트웨이가 안 본다.
+    json(res, 200, {
+      success: true,
+      data: { path: req.url, method: req.method },
+      error: null,
+    });
+  }, LATENCY_MS);
+});
+
+server.listen(PORT, () => {
+  process.stdout.write(`stub up :${PORT} latency=${LATENCY_MS}ms maxInflight=${MAX_INFLIGHT}\n`);
+});

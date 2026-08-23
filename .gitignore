@@ -35,3 +35,6 @@ ai/journal/index.md
 
 # 에이전트 리뷰 증거는 로컬 상태다 — 커밋하면 남의 리뷰가 내 증거가 된다.
 .claude/.agents-reviewed
+
+# 부하 실행 산출물. 저장소에 두면 옛 결과를 새 판정에 쓴다.
+k6-summary.json

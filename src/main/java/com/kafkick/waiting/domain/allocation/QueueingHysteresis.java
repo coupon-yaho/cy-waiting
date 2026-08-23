@@ -21,7 +21,6 @@ public class QueueingHysteresis {
         this.minHoldTicks = minHoldTicks;
     }
 
-    /** 해제 임계가 진입 임계보다 크면 히스테리시스가 아니라 진동 증폭기가 된다. */
     /**
      * 이월받은 상태로 시작한다.
      *
@@ -33,7 +32,10 @@ public class QueueingHysteresis {
             int minHoldTicks, Snapshot snapshot) {
         QueueingHysteresis restored = of(enterRatio, exitRatio, minHoldTicks);
         restored.queueing = snapshot.queueing();
-        restored.belowExitTicks = snapshot.belowExitTicks();
+        // **유지 틱을 자른다.** 설정이 줄어든 뒤 옛 값이 실려 오면 이미 최소
+        // 유지를 넘어, 이월받자마자 첫 틱에 놓아 버린다 — 이월이 스스로를
+        // 무력화하고 표시가 한 번 더 튄다.
+        restored.belowExitTicks = Math.min(snapshot.belowExitTicks(), minHoldTicks - 1);
         return restored;
     }
 
@@ -68,6 +70,7 @@ public class QueueingHysteresis {
         }
     }
 
+    /** 해제 임계가 진입 임계보다 크면 히스테리시스가 아니라 진동 증폭기가 된다. */
     public static QueueingHysteresis of(double enterRatio, double exitRatio, int minHoldTicks) {
         if (!Double.isFinite(enterRatio) || enterRatio < 0
                 || !Double.isFinite(exitRatio) || exitRatio < 0) {

@@ -13,16 +13,13 @@ import com.kafkick.waiting.domain.allocation.Grant;
 import com.kafkick.waiting.domain.allocation.QueueingHysteresis;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Mono;
-import reactor.test.scheduler.VirtualTimeScheduler;
 
 /**
  * 제어 평면 게이트를 실행으로 판정한다.
@@ -126,6 +123,9 @@ class ControlPlaneGateTest {
         int 승계까지 = 0;
         for (int tick = 1; tick <= 3; tick++) {
             락.흘린다(TICK);
+            // **죽은 노드도 매 틱 시도한다.** 안 부르면 죽음이 무동작이어도
+            // 결과가 같다 — 호출부가 안 부르는 우연에 기댄 시험이 된다.
+            a.renew().block(Duration.ofSeconds(1));
             b.renew().block();
             if (b.isLeader()) {
                 승계까지 = tick;
@@ -141,12 +141,39 @@ class ControlPlaneGateTest {
     }
 
     @Test
+    @DisplayName("승계_구간의_크레딧_중복이_한_틱분을_안_넘는다")
+    void 승계_구간의_크레딧_중복이_한_틱분을_안_넘는다() {
+        // 승계 중에는 둘이 겹칠 수 있다. 그 겹침이 유계여야 펜싱을 안 쓴다 —
+        // 무한정이면 이미 나간 통과를 못 물린다.
+        SharedLock 락 = new SharedLock();
+        Leadership a = 노드(락, "node-a");
+        Leadership b = 노드(락, "node-b");
+        a.renew().block();
+        락.죽인다("node-a");
+
+        int 겹친_틱 = 0;
+        for (int tick = 1; tick <= 5; tick++) {
+            락.흘린다(TICK);
+            a.renew().block(Duration.ofSeconds(1));
+            b.renew().block();
+            if (a.isLeader() && b.isLeader()) {
+                겹친_틱++;
+            }
+        }
+
+        assertThat(겹친_틱).as("두 노드가 함께 리더였던 틱").isZero();
+    }
+
+    @Test
     @DisplayName("배분은_정확히_한_대만_돈다")
     void 배분은_정확히_한_대만_돈다() {
         // 둘이 동시에 돌면 총합이 전역 크레딧을 넘는다. 이미 나간 통과는 못 물린다.
         SharedLock 락 = new SharedLock();
-        List<Leadership> 노드들 = List.of(노드(락, "n1"), 노드(락, "n2"), 노드(락, "n3"),
-                노드(락, "n4"), 노드(락, "n5"));
+        // 계획서가 정한 규모다. 적게 세우면 경합이 덜 나 성질이 약하게 재진다.
+        List<Leadership> 노드들 = new ArrayList<>();
+        for (int i = 1; i <= 10; i++) {
+            노드들.add(노드(락, "n" + i));
+        }
 
         for (int tick = 0; tick < 5; tick++) {
             노드들.forEach(node -> node.renew().block());
@@ -190,16 +217,21 @@ class ControlPlaneGateTest {
         GatewayRegistry registry = GatewayRegistry.of(3, 1);
         FairShareAllocator allocator = FairShareAllocator.create();
         long 전역_크레딧 = 100;
-        List<CouponDemand> 수요 = List.of(new CouponDemand("c1", 40, 1_000));
-        registry.observed(10);
+        // 요구량이 몫보다 커야 몫이 그대로 나간다. 작으면 무엇을 곱해도 안 넘어
+        // 아무것도 못 잰다.
+        List<CouponDemand> 수요 = List.of(new CouponDemand("c1", 1_000, 10_000));
+        int 실제_노드_수 = 10;
+        registry.observed(실제_노드_수);
 
-        for (int 관측 = 1; 관측 <= 4; 관측++) {
+        // **확정 전까지는 실제 노드 수를 곱해도 안 넘어야 한다.** 관측이 헛디뎌
+        // 분모가 먼저 줄면, 아직 살아 있는 노드들이 각자 큰 몫을 쓴다.
+        for (int 관측 = 1; 관측 < 3; 관측++) {
             registry.observed(2);
             long 노드당 = 전역_크레딧 / registry.count();
             long 한_노드의_합 = allocator.allocate(노드당, 수요).stream()
                     .mapToLong(Grant::credit).sum();
 
-            assertThat(한_노드의_합 * 2)
+            assertThat(한_노드의_합 * 실제_노드_수)
                     .as("%d 번째 감소 관측", 관측)
                     .isLessThanOrEqualTo(전역_크레딧);
         }
@@ -279,12 +311,24 @@ class ControlPlaneGateTest {
                 () -> Mono.just(CreditSmoother.of(0.3)),
                 SnapshotCodec.create());
 
-        long 시작 = System.nanoTime();
-        round.run().block();
-        Duration 한_판 = Duration.ofNanos(System.nanoTime() - 시작);
+        // **예열한다.** 첫 판의 90% 는 클래스 로딩과 컴파일이라, 그걸 그대로
+        // 재면 임계가 뜻하는 것이 배분 비용이 아니라 기동 비용이 된다.
+        for (int i = 0; i < 5; i++) {
+            round.run().block();
+        }
 
-        assertThat(한_판)
-                .as("쿠폰 %d 개를 엮는 한 판", 쿠폰_수)
+        Duration 가장_느린_판 = Duration.ZERO;
+        for (int i = 0; i < 20; i++) {
+            long 시작 = System.nanoTime();
+            round.run().block();
+            Duration 한_판 = Duration.ofNanos(System.nanoTime() - 시작);
+            if (한_판.compareTo(가장_느린_판) > 0) {
+                가장_느린_판 = 한_판;
+            }
+        }
+
+        assertThat(가장_느린_판)
+                .as("쿠폰 %d 개를 엮는 판 스무 번 중 가장 느린 것", 쿠폰_수)
                 .isLessThan(임계);
     }
 

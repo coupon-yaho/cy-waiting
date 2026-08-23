@@ -123,15 +123,17 @@ public final class SnapshotCodec {
      * 받으면 새 리더가 켜지자마자 끄는 판단을 한다.
      */
     public QueueingHysteresis.Snapshot hysteresis(Map<String, String> hash) {
-        String raw = hash.get(BELOW_EXIT);
         boolean queueing = "1".equals(hash.get(QUEUEING));
+        String raw = hash.get(BELOW_EXIT);
         if (raw == null) {
-            return QueueingHysteresis.Snapshot.empty();
+            // **붙잡던 것은 유지한다.** 유지 틱만 못 읽었다고 놓아 버리면 그
+            // 순간 대기열이 꺼졌다 켜진다 — 막으려던 진동이 그대로 난다.
+            return new QueueingHysteresis.Snapshot(queueing, 0);
         }
         try {
             return new QueueingHysteresis.Snapshot(queueing, Integer.parseInt(raw));
         } catch (IllegalArgumentException e) {
-            return QueueingHysteresis.Snapshot.empty();
+            return new QueueingHysteresis.Snapshot(queueing, 0);
         }
     }
 

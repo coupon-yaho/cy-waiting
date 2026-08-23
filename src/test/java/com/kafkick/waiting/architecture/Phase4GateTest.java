@@ -40,7 +40,8 @@ class Phase4GateTest {
             Map.entry("G4.1", List.of(
                     "ControlPlaneGateTest#배분은_정확히_한_대만_돈다")),
             Map.entry("G4.2", List.of(
-                    "ControlPlaneGateTest#리더가_죽으면_세_틱_안에_승계된다")),
+                    "ControlPlaneGateTest#리더가_죽으면_세_틱_안에_승계된다",
+                    "ControlPlaneGateTest#승계_구간의_크레딧_중복이_한_틱분을_안_넘는다")),
             Map.entry("G4.3", List.of(
                     "ControlPlaneGateTest#틱_지연이_임계_안에_있다")),
             Map.entry("G4.4", List.of(
@@ -55,15 +56,20 @@ class Phase4GateTest {
                     "ControlPlaneGateTest#노드가_줄어도_총합이_전역_크레딧을_안_넘는다")),
             Map.entry("G4.8", List.of(
                     "CapacityCollectorTest#처음_본_인스턴스는_램프업_비율만_받는다",
-                    "CapacityCollectorTest#램프업이_끝나면_보고를_그대로_쓴다")),
+                    "CapacityCollectorTest#램프업이_끝나면_보고를_그대로_쓴다",
+                    "CapacityCollectorTest#사라진_인스턴스는_기록에서_지운다")),
+            // 히스테리시스 절반은 아직 미판정이다. 이월 그릇은 만들었지만
+            // 제품이 히스테리시스를 안 돌린다 — 어디서 돌릴지가 CY-324 다.
+            // 여기 적으면 "판정됨" 이 되어 이 표가 거짓말을 한다.
             Map.entry("G4.9", List.of(
-                    "ControlPlaneGateTest#리더가_바뀌어도_평활화가_이어진다",
-                    "ControlPlaneGateTest#리더가_바뀌어도_히스테리시스가_이어진다")),
+                    "ControlPlaneGateTest#리더가_바뀌어도_평활화가_이어진다")),
             Map.entry("G4.10", List.of(
                     "CapacityCollectorTest#신선한_보고가_없으면_하한을_쓴다")),
+            // **실물 스크립트를 도는 것으로 잇는다.** 사본을 도는 시험에 이으면
+            // 스크립트의 소유권 확인을 지워도 초록이다.
             Map.entry("G4.11", List.of(
-                    "LeaderFaultsTest#남의_락은_내리지_못한다",
-                    "LeaderFaultsTest#이미_잡힌_락은_뺏지_않는다")),
+                    "LeaderElectionTest#남이_잡고_있으면_획득하지_못한다",
+                    "LeaderElectionTest#자기_락만_지울_수_있다")),
             Map.entry("G4.12", List.of(
                     "HealthUnderWireFaultsTest#회선이_끊겨도_받는_것을_유지한다")));
 
@@ -94,7 +100,7 @@ class Phase4GateTest {
         List<String> 계획서의_게이트 = matcher.results().map(r -> r.group(1)).distinct().toList();
 
         // 정규식이 안 물면 목록이 비고, 그러면 아래 비교가 공허하게 통과한다.
-        assertThat(계획서의_게이트).contains("G4.1", "G4.12");
+        assertThat(계획서의_게이트).hasSizeGreaterThanOrEqualTo(12);
         assertThat(판정하는_시험.keySet())
                 .as("계획서의 게이트와 표가 갈렸다")
                 .containsExactlyInAnyOrderElementsOf(계획서의_게이트);

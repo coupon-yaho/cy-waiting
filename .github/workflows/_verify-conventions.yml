@@ -143,6 +143,73 @@ jobs:
           HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           set -uo pipefail
+          # **규칙을 여기 옮겨 적지 않는다.** 훅이 쓰는 것과 사본이 생기면 둘이
+          # 갈라지고, 그때부터 손으로 커밋한 것과 CI 가 다른 판단을 한다.
+          # shellcheck source=.githooks/lib/commit-subject-rules.sh
+          source .githooks/lib/commit-subject-rules.sh
+          fail=0
+
+          while IFS= read -r sha; do
+            [[ -z "$sha" ]] && continue
+            subject=$(git log -1 --format=%s "$sha")
+            body=$(git log -1 --format=%b "$sha")
+
+            # 병합 커밋은 규약 대상이 아니다. 부모 수로만 알 수 있어 여기서 본다.
+            [[ $(git rev-list --parents -n1 "$sha" | wc -w) -gt 2 ]] && continue
+
+            if ! violations=$(check_commit_subject "$subject"); then
+              echo "::error::[$sha] $subject"
+              while IFS= read -r line; do
+                [[ -n "$line" ]] && echo "::error::  $line"
+              done <<<"$violations"
+              fail=1
+            fi
+
+            # **본문 규칙이라 제목 예외를 안 받는다.** 도구가 지은 제목이어도
+            # 본문에 마커가 있으면 그건 사람이 넣은 것이다.
+            if grep -q '\[red\]' <<<"$body" && ! grep -qE '^test' <<<"$subject"; then
+              echo "::error::[$sha] [red] 마커는 test: 커밋에만: $subject"; fail=1
+            fi
+          done < <(git rev-list "$BASE..$HEAD")
+
+          exit $fail
+
+      - name: 작업 로그 형식
+        run: .github/scripts/journal-index.sh --check
+
+      # 색인을 잡 요약에 찍는다. 저장소에 파일이 없으니 여기가 목록을 보는
+      # 자리다. 실패해도 파이프라인을 막지 않는다 — 판정이 아니라 가시성이다.
+      - name: 작업 로그 색인
+        if: always()
+        continue-on-error: true
+        run: .github/scripts/journal-index.sh >> "$GITHUB_STEP_SUMMARY"
+
+  pr-conventions:
+    name: PR 규약
+    # 커밋 규약과 작업 로그는 같은 것을 본다 — PR 의 커밋 목록과 변경 파일.
+    # 잡을 나누면 전 이력 클론을 두 번 한다.
+    if: >-
+      github.event_name == 'pull_request' &&
+      (inputs.check-commits || inputs.require-journal)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: 커밋 메시지 규약
+        # 봇 PR 은 제외한다 — 한글 제목도 Jira 푸터도 봇이 쓸 수 있는 것이 아니다.
+        # 작업 로그 검사와 같은 기준을 쓴다. 기준이 둘이면 언젠가 갈라진다.
+        if: >-
+          inputs.check-commits &&
+          !endsWith(github.event.pull_request.user.login, '[bot]')
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -uo pipefail
           types='feat|fix|test|refactor|perf|docs|build|ci|chore'
           fail=0
 

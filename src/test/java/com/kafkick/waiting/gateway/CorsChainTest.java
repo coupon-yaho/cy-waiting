@@ -96,8 +96,11 @@ class CorsChainTest {
                     .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "POST")
                     .header(HttpHeaders.ACCESS_CONTROL_REQUEST_HEADERS, 헤더)
                     .exchange()
-                    .expectStatus().value(s -> assertThat(s)
-                            .as("헤더 %s", 헤더).isNotEqualTo(403));
+                    // 403 이 아닌 것만 보면 400 이나 500 도 통과한다.
+                    .expectStatus().is2xxSuccessful()
+                    .expectHeader().valueEquals(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, ORIGIN)
+                    .expectHeader().value(HttpHeaders.ACCESS_CONTROL_ALLOW_HEADERS,
+                            v -> assertThat(v).as("헤더 %s", 헤더).contains(헤더));
         }
     }
 

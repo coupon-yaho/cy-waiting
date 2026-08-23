@@ -147,14 +147,19 @@ class IdentityChainTest {
         WebTestClient 관리 = WebTestClient.bindToServer()
                 .baseUrl("http://localhost:" + managementPort).build();
 
-        // 상태 자체는 재료가 없어 503 이다. 여기서 볼 것은 **필터가 막았는가** 뿐이다.
+        // **판정까지 못 박는다.** 400 이 아닌 것만 보면 404 나 500 도 통과해서,
+        // 프로브가 다른 이유로 죽어도 이 시험은 초록이다.
+        //
+        // 여기서는 재료가 없어 준비 판정이 내려간다 — 그게 정상이고, 볼 것은
+        // 필터가 아니라 헬스가 답했다는 것이다.
         byte[] 본문 = 관리.get().uri("/actuator/health")
                 .exchange()
-                .expectStatus().value(s -> assertThat(s).isNotEqualTo(400))
+                .expectStatus().isEqualTo(HttpStatus.SERVICE_UNAVAILABLE)
                 .expectBody().returnResult().getResponseBody();
 
-        assertThat(본문 == null ? "" : new String(본문, StandardCharsets.UTF_8))
-                .doesNotContain(ApiError.INVALID_REQUEST);
+        assertThat(new String(본문, StandardCharsets.UTF_8))
+                .doesNotContain(ApiError.INVALID_REQUEST)
+                .contains("status");
     }
 
     @Test

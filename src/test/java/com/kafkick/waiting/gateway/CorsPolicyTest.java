@@ -1,6 +1,7 @@
 package com.kafkick.waiting.gateway;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
@@ -19,7 +20,7 @@ import org.springframework.web.server.ServerWebExchange;
  */
 class CorsPolicyTest {
 
-    private final CorsPolicy policy = new CorsPolicy(
+    private final CorsPolicy policy = CorsPolicy.of(
             new CorsPolicy.Origins(List.of("https://front.example")));
 
     private CorsConfiguration 적용되는_설정(String path) {
@@ -33,7 +34,7 @@ class CorsPolicyTest {
     void 허용_목록의_오리진만_통과한다() {
         CorsConfiguration 설정 = 적용되는_설정("/api/v1/coupons/c1/issue");
 
-        assertThat(설정.checkOrigin("https://front.example")).isNotNull();
+        assertThat(설정.checkOrigin("https://front.example")).isEqualTo("https://front.example");
         assertThat(설정.checkOrigin("https://evil.example")).isNull();
     }
 
@@ -43,8 +44,8 @@ class CorsPolicyTest {
         // 순번 조회는 게이트웨이 라우트를 안 탄다. 라우트에만 걸면 폴링이
         // 브라우저에서 통째로 막히고, 그건 대기 화면이 안 도는 것이다.
         assertThat(적용되는_설정("/api/v1/coupons/c1/queue"))
-                .isNotNull()
-                .satisfies(c -> assertThat(c.checkOrigin("https://front.example")).isNotNull());
+                .extracting(c -> c.checkOrigin("https://front.example"))
+                .isEqualTo("https://front.example");
     }
 
     @Test
@@ -55,6 +56,16 @@ class CorsPolicyTest {
 
         assertThat(설정.getAllowedOrigins()).doesNotContain("*");
         assertThat(설정.getAllowedOriginPatterns()).isNullOrEmpty();
+    }
+
+    @Test
+    @DisplayName("허용_목록이_비면_기동을_막는다")
+    void 허용_목록이_비면_기동을_막는다() {
+        // 빈 목록으로 그대로 뜨면 프론트가 통째로 막히는데 기동은 성공한다.
+        assertThatThrownBy(() -> new CorsPolicy.Origins(List.of()))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new CorsPolicy.Origins(null))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test

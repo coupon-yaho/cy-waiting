@@ -69,6 +69,18 @@ class CorsPolicyTest {
     }
 
     @Test
+    @DisplayName("와일드카드나_빈_값은_기동을_막는다")
+    void 와일드카드나_빈_값은_기동을_막는다() {
+        // 값 하나로 전부 열린다. 나머지가 맞아도 목록이 있다는 사실이 무의미해진다.
+        assertThatThrownBy(() -> new CorsPolicy.Origins(List.of("*")))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new CorsPolicy.Origins(List.of("https://*.example")))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new CorsPolicy.Origins(List.of("https://front.example", " ")))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     @DisplayName("관리_경로에는_안_걸린다")
     void 관리_경로에는_안_걸린다() {
         // 관리 포트는 브라우저가 부를 것이 아니다.

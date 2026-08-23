@@ -53,13 +53,12 @@ class GatewayWiringTest {
     }
 
     @Test
-    @DisplayName("허용_오리진이_비어_있지_않다")
-    void 허용_오리진이_비어_있지_않다() {
+    @DisplayName("설정에_적은_오리진이_그대로_올라온다")
+    void 설정에_적은_오리진이_그대로_올라온다() {
         // 설정 이름이 어긋나면 목록이 빈 채로 뜬다. 그러면 프론트가 통째로 막히는데
         // 기동은 성공한다.
         // 값까지 본다. 비지 않았는지만 보면 설정 파일의 오타가 그대로 통과한다.
-        assertThat(origins.allowed())
-                .isNotEmpty()
-                .allSatisfy(o -> assertThat(o).startsWith("http"));
+        // 값까지 못 박는다. 비지 않았는지만 보면 엉뚱한 오리진이 들어가도 통과한다.
+        assertThat(origins.allowed()).containsExactly("http://localhost:5173");
     }
 }

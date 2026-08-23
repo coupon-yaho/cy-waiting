@@ -9,10 +9,8 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
 
 /**
- * 프록시할 경로를 <b>명시적으로만</b> 적는다.
- *
- * <p>YAML 에 이름으로 적으면 필터가 안 풀려도 기동이 성공하고 판정만 사라진다.
- * 여기서는 필터 인스턴스를 직접 붙여 그 실패 자체를 없앤다.
+ * 프록시할 경로를 <b>명시적으로만</b> 적는다. 설정에 이름으로 적으면 필터가
+ * 안 풀려도 기동이 성공하고 판정만 사라진다 — 인스턴스를 직접 붙여 그 실패를 없앤다.
  */
 @Configuration
 @EnableConfigurationProperties(GatewayRoutes.Backend.class)

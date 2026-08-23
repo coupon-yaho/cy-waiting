@@ -8,13 +8,12 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.reactive.CorsConfigurationSource;
+import org.springframework.web.cors.reactive.CorsWebFilter;
 import org.springframework.web.cors.reactive.UrlBasedCorsConfigurationSource;
 
 /**
- * 브라우저가 대기열 API 를 부를 수 있게 한다.
- *
- * <p><b>필터 계층에 둔다.</b> 라우트에만 걸면 순번 조회가 빠진다 — 그 경로는
- * 게이트웨이 라우트를 안 타고 게이트웨이가 직접 답하기 때문이다.
+ * <b>필터 계층에 둔다.</b> 라우트에만 걸면 순번 조회가 빠진다 — 그 경로는
+ * 게이트웨이 라우트를 안 타고 게이트웨이가 직접 답한다.
  */
 @Configuration
 @EnableConfigurationProperties(CorsPolicy.Origins.class)
@@ -34,6 +33,11 @@ public class CorsPolicy {
             if (allowed == null || allowed.isEmpty()) {
                 throw new IllegalArgumentException("waiting.cors.allowed 가 비어 있다");
             }
+            // 와일드카드나 빈 값이 섞이면 목록이 있다는 사실이 무의미해진다.
+            // 값 하나로 전부 열리므로 나머지가 맞아도 소용없다.
+            if (allowed.stream().anyMatch(o -> o == null || o.isBlank() || o.contains("*"))) {
+                throw new IllegalArgumentException("오리진에 빈 값이나 와일드카드를 쓸 수 없다: " + allowed);
+            }
         }
     }
 
@@ -44,6 +48,15 @@ public class CorsPolicy {
     /** 스프링이 아닌 곳에서 만들 때 쓴다. 생성자를 열면 우회 경로가 하나 더 생긴다. */
     public static CorsPolicy of(Origins origins) {
         return new CorsPolicy(origins);
+    }
+
+    /**
+     * 설정만 만들어 두면 아무 요청에도 안 걸린다. 웹플럭스는 그 빈을 스스로
+     * 집어가지 않으므로 필터로 직접 잇는다.
+     */
+    @Bean
+    public CorsWebFilter corsWebFilter(CorsConfigurationSource source) {
+        return new CorsWebFilter(source);
     }
 
     @Bean

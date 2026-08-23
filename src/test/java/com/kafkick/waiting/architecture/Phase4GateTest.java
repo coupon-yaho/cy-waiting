@@ -37,7 +37,11 @@ class Phase4GateTest {
     // 한계: 문장을 몇 개로 쪼갤지는 사람이 정한다. 덜 적은 것은 기계가 못 잡고,
     // 게이트 문장이 바뀔 때 이 표를 같이 읽는 것 말고 방법이 없다.
     private static final Map<String, List<String>> 판정하는_시험 = Map.ofEntries(
+            // 사본을 도는 시험은 락 자체를 재지 못한다. 배타성은 실물 스크립트를
+            // 열 스레드로 두드리는 쪽이 재고, 그 위에서 배분이 하나로 좁혀지는
+            // 것은 노드를 세우는 쪽이 잰다 — 둘 다 있어야 문장이 덮인다.
             Map.entry("G4.1", List.of(
+                    "LeaderElectionTest#노드_열이_동시에_시도하면_정확히_한_대만_성공한다",
                     "ControlPlaneGateTest#배분은_정확히_한_대만_돈다")),
             Map.entry("G4.2", List.of(
                     "ControlPlaneGateTest#리더가_죽으면_세_틱_안에_승계된다",
@@ -69,8 +73,15 @@ class Phase4GateTest {
             // 스크립트의 소유권 확인을 지워도 초록이다.
             Map.entry("G4.11", List.of(
                     "LeaderElectionTest#남이_잡고_있으면_획득하지_못한다",
-                    "LeaderElectionTest#자기_락만_지울_수_있다")),
+                    // 자기 락이 지워지는 것만 보면 소유권 확인 없는 DEL 로도
+                    // 똑같이 통과한다. 남의 락이 안 지워지는 쪽이 이 문장이다.
+                    "LeaderElectionTest#남의_락은_지워지지_않는다")),
+            // 이 게이트가 막으려는 회귀는 "레디스를 보는 기여자가 준비 그룹에
+            // 섞이는 것" 이다. 지시자를 손으로 만들어 부르는 시험은 그 배선을
+            // 아예 안 지나므로, 기여자가 섞여도 초록으로 남는다.
             Map.entry("G4.12", List.of(
+                    "HealthGroupTest#의존성_헬스가_그룹에_안_섞인다",
+                    "HealthGroupTest#레디스_기여자가_아예_안_올라온다",
                     "HealthUnderWireFaultsTest#회선이_끊겨도_받는_것을_유지한다")));
 
     private static Map<String, String> 시험_파일() throws IOException {
@@ -125,9 +136,17 @@ class Phase4GateTest {
             String 메서드 = 짝.substring(짝.indexOf('#') + 1);
 
             assertThat(파일).as("%s 의 짝인 %s 가 없다", gate, 클래스).containsKey(클래스);
-            assertThat(파일.get(클래스))
-                    .as("%s 를 판정한다는 %s 가 그 파일에 없다", gate, 짝)
-                    .contains("void " + 메서드 + "(");
+            String 본문 = 파일.get(클래스);
+            String 선언 = "void " + 메서드 + "(";
+            assertThat(본문).as("%s 를 판정한다는 %s 가 그 파일에 없다", gate, 짝).contains(선언);
+
+            // **꺼 둔 시험은 있는 것이 아니다.** 선언만 보면 @Disabled 를 붙여
+            // 놓아도 통과한다 — 아무것도 안 도는데 게이트는 판정됨으로 남는다.
+            String 앞 = 본문.substring(0, 본문.indexOf(선언));
+            assertThat(앞.substring(앞.lastIndexOf("@Test")))
+                    .as("%s 를 판정한다는 %s 가 꺼져 있다", gate, 짝)
+                    // 애노테이션 이름만 본다. 정규화해 적어도 걸리게 하려는 것이다.
+                    .doesNotContain("Disabled");
         }));
     }
 }

@@ -37,8 +37,12 @@ public class QueueingHysteresis {
         // 무력화하고 표시가 한 번 더 튄다.
         // **하한도 건다.** 최소 유지가 0 이면 위 식이 -1 을 만들고, 그 값은
         // 스냅샷이 거부한다 — 히스테리시스를 끈 설정에서 리더가 발행을 못 한다.
+        //
+        // **인자가 아니라 보정된 필드로 자른다.** of() 가 음수를 0 으로 올리므로
+        // 인자를 그대로 쓰면 판단 근거가 둘이 된다. Integer.MIN_VALUE 는 -1 에서
+        // 넘쳐 상한이 Integer.MAX_VALUE 가 되고, 자르기가 통째로 사라진다.
         restored.belowExitTicks =
-                Math.max(0, Math.min(snapshot.belowExitTicks(), minHoldTicks - 1));
+                Math.max(0, Math.min(snapshot.belowExitTicks(), restored.minHoldTicks - 1));
         return restored;
     }
 

@@ -196,6 +196,18 @@ class QueueingHysteresisTest {
     }
 
     @Test
+    @DisplayName("최소_유지가_음수여도_이월값이_넘치지_않는다")
+    void 최소_유지가_음수여도_이월값이_넘치지_않는다() {
+        // 보정 전 인자로 상한을 세면 Integer.MIN_VALUE 가 -1 에서 넘쳐
+        // 상한이 Integer.MAX_VALUE 가 된다 — 자르기가 통째로 사라지고,
+        // 최소 유지가 0 인 객체가 도달할 수 없는 유지 틱을 들고 시작한다.
+        QueueingHysteresis 이월받음 = QueueingHysteresis.restore(0.8, 0.5,
+                Integer.MIN_VALUE, new QueueingHysteresis.Snapshot(true, 3));
+
+        assertThat(이월받음.snapshot().belowExitTicks()).isZero();
+    }
+
+    @Test
     @DisplayName("설정이_줄어도_이월값이_유지_범위_안에_든다")
     void 설정이_줄어도_이월값이_유지_범위_안에_든다() {
         // 배포 사이에 최소 유지가 줄면 옛 값이 그대로 실려 온다. 그 값은

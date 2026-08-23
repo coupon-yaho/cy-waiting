@@ -10,15 +10,17 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.event.ContextClosedEvent;
+import org.springframework.context.support.GenericApplicationContext;
 import org.springframework.boot.web.server.context.WebServerGracefulShutdownLifecycle;
 import reactor.core.publisher.Mono;
 
 /**
  * 판정 재료 갱신 루프를 켜고 끈다.
  *
- * <p><b>멈추기 전에 드레이닝을 알린다.</b> 순서가 반대면 부하 분산기가 아직
- * 보내는 동안 재료가 늙기 시작하고, 살아 있음 판정이 그걸 정지로 세어 진행 중인
- * 요청을 든 파드를 죽인다.
+ * <p><b>종료와 정지를 가른다.</b> 정지는 잠깐 멈출 때도 불리므로, 거기서 종료를
+ * 알리면 그 컨텍스트가 다시 못 살아난다. 반대로 종료에서 안 알리면 살아 있음
+ * 판정이 진행 중인 요청을 든 파드를 죽인다.
  */
 class SnapshotRefreshLifecycleTest {
 
@@ -89,15 +91,73 @@ class SnapshotRefreshLifecycleTest {
     }
 
     @Test
-    @DisplayName("멈추면_드레이닝을_알린다")
-    void 멈추면_드레이닝을_알린다() {
+    @DisplayName("자기_컨텍스트가_닫히면_드레이닝을_알린다")
+    void 자기_컨텍스트가_닫히면_드레이닝을_알린다() {
         // 안 알리면 부하 분산기가 계속 보내고, 그 사이 도착한 요청이 끊긴다.
+        GenericApplicationContext 내_컨텍스트 = new GenericApplicationContext();
+        SnapshotRefreshLifecycle lifecycle = lifecycle();
+        lifecycle.setApplicationContext(내_컨텍스트);
+        lifecycle.start();
+
+        try {
+            lifecycle.onApplicationEvent(new ContextClosedEvent(내_컨텍스트));
+        } finally {
+            lifecycle.stop();
+        }
+
+        assertThat(shutdown.isDraining()).isTrue();
+    }
+
+    @Test
+    @DisplayName("남의_컨텍스트가_닫힌_것으로는_안_알린다")
+    void 남의_컨텍스트가_닫힌_것으로는_안_알린다() {
+        // **하위 컨텍스트의 닫힘도 위로 전해진다.** 관리 포트를 따로 열면 하위가
+        // 실제로 생기는데, 그게 닫혔다고 서비스가 종료하는 것은 아니다.
+        SnapshotRefreshLifecycle lifecycle = lifecycle();
+        lifecycle.setApplicationContext(new GenericApplicationContext());
+        lifecycle.start();
+
+        try {
+            lifecycle.onApplicationEvent(new ContextClosedEvent(new GenericApplicationContext()));
+        } finally {
+            lifecycle.stop();
+        }
+
+        assertThat(shutdown.isDraining()).isFalse();
+    }
+
+    @Test
+    @DisplayName("잠깐_멈춘_것으로는_안_알린다")
+    void 잠깐_멈춘_것으로는_안_알린다() {
+        // **정지는 종료가 아니다.** 프레임워크가 안 쓰는 컨텍스트를 멈췄다 다시
+        // 켜는데, 정지에서 알리면 그 컨텍스트가 영영 못 살아난다.
         SnapshotRefreshLifecycle lifecycle = lifecycle();
         lifecycle.start();
 
         lifecycle.stop();
 
-        assertThat(shutdown.isDraining()).isTrue();
+        assertThat(shutdown.isDraining()).isFalse();
+    }
+
+    @Test
+    @DisplayName("멈췄다_다시_켜면_다시_받아_온다")
+    void 멈췄다_다시_켜면_다시_받아_온다() {
+        // **깃발이 아니라 받아오는 것을 본다.** 시작은 구독보다 먼저 깃발을
+        // 세우므로, 깃발만 보면 버린 스케줄러를 다시 써서 루프가 죽어도 초록이다.
+        SnapshotRefreshLifecycle lifecycle = lifecycle();
+        lifecycle.start();
+        await().atMost(WAIT).untilAsserted(() -> assertThat(받아옴).hasValueGreaterThan(1));
+        lifecycle.stop();
+        int 멈춘_뒤 = 받아옴.get();
+
+        lifecycle.start();
+
+        try {
+            await().atMost(WAIT)
+                    .untilAsserted(() -> assertThat(받아옴).hasValueGreaterThan(멈춘_뒤 + 1));
+        } finally {
+            lifecycle.stop();
+        }
     }
 
     @Test

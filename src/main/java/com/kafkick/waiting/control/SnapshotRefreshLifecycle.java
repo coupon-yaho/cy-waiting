@@ -5,29 +5,32 @@ import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationContext;
+import org.springframework.context.ApplicationContextAware;
+import org.springframework.context.ApplicationListener;
 import org.springframework.context.SmartLifecycle;
+import org.springframework.context.event.ContextClosedEvent;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import reactor.core.Disposable;
 import reactor.core.scheduler.Scheduler;
 
 /**
- * 판정 재료 갱신 루프를 켜고 끈다.
- *
- * <p><b>멈추기 전에 드레이닝을 알린다.</b> 순서가 반대면 부하 분산기가 아직
- * 보내는 동안 재료가 늙기 시작하고, 살아 있음 판정이 그걸 정지로 세어 진행 중인
- * 요청을 든 파드를 죽인다.
+ * <b>루프가 멎기 전에 드레이닝을 알린다.</b> 순서가 반대면 부하 분산기가 아직
+ * 보내는 동안 재료가 늙고, 살아 있음 판정이 그걸 정지로 세어 진행 중인 요청을
+ * 든 파드를 죽인다.
  */
-public final class SnapshotRefreshLifecycle implements SmartLifecycle {
+@Order(Ordered.HIGHEST_PRECEDENCE)
+public final class SnapshotRefreshLifecycle
+        implements SmartLifecycle, ApplicationContextAware,
+                ApplicationListener<ContextClosedEvent> {
 
     private static final Logger log = LoggerFactory.getLogger(SnapshotRefreshLifecycle.class);
 
     /**
-     * 웹 서버가 빠지기 <b>전에</b> 드레이닝을 알려야 한다.
-     *
-     * <p>컨테이너는 단계가 큰 것부터 멈춘다. 가장 크게 두면 <b>웹 서버보다 먼저</b>
-     * 종료 신호를 받는다.
-     *
-     * <p>다만 두 단계 사이에 지연은 없다 — 부하 분산기가 뺄 시간을 버는 것은
-     * 앞단의 제외 대기가 할 일이고, 여기서는 순서만 보장한다.
+     * 컨테이너는 단계가 큰 것부터 멈추므로, 가장 크면 웹 서버보다 먼저 멎는다.
+     * <b>원래 근거였던 드레이닝 순서는 이제 닫힘 사건이 진다</b> — 판정이 요청
+     * 경로에 붙기 전에 다시 정한다 (CY-422).
      */
     private static final int PHASE = Integer.MAX_VALUE;
 
@@ -36,6 +39,7 @@ public final class SnapshotRefreshLifecycle implements SmartLifecycle {
     private final Duration interval;
 
     private final AtomicBoolean running = new AtomicBoolean();
+    private volatile ApplicationContext owner;
     private volatile Scheduler scheduler;
     private volatile Disposable subscription;
 
@@ -71,13 +75,31 @@ public final class SnapshotRefreshLifecycle implements SmartLifecycle {
                         e -> log.error("갱신 루프가 끊겼다 — 재기동으로 복구된다", e));
     }
 
+    /**
+     * <b>여기서만 알린다.</b> 정지는 잠깐 멈출 때도 불려서, 거기서 알리면 다시
+     * 켤 수 없는 상태가 된다. 맨 앞에 서는 것은 앞선 리스너가 터지면 컨테이너가
+     * 경고만 찍고 넘어가서, 알림이 빠지면 살아 있음 판정이 파드를 죽이기 때문이다.
+     */
+    @Override
+    public void onApplicationEvent(ContextClosedEvent event) {
+        // 하위 컨텍스트의 닫힘도 위로 전해진다. 관리 포트를 따로 열면 하위가
+        // 실제로 생기므로, 그게 닫혔다고 서비스가 종료하는 것은 아니다.
+        if (event.getApplicationContext() != owner) {
+            return;
+        }
+        shutdown.draining();
+    }
+
+    @Override
+    public void setApplicationContext(ApplicationContext context) {
+        this.owner = context;
+    }
+
     @Override
     public void stop() {
         if (!running.compareAndSet(true, false)) {
             return;
         }
-        // 먼저 알린다. 뒤에 알리면 그 사이 재료가 늙어 정지로 보인다.
-        shutdown.draining();
         Disposable current = subscription;
         if (current != null) {
             current.dispose();
@@ -86,6 +108,8 @@ public final class SnapshotRefreshLifecycle implements SmartLifecycle {
         if (mine != null) {
             mine.dispose();
         }
+        // 드레이닝 로그와 갈라져서, 이게 없으면 루프가 언제 멎었는지 안 남는다.
+        log.info("갱신 루프 정지");
     }
 
     @Override

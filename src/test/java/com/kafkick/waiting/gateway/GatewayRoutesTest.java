@@ -4,6 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.List;
+import java.util.stream.Stream;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.junit.jupiter.api.DisplayName;
@@ -77,6 +81,14 @@ class GatewayRoutesTest {
         // 경로를 붙이면 그 경로만 조용히 버려진다.
         assertThatThrownBy(() -> new GatewayRoutes.Backend("http://backend:8080/api"))
                 .isInstanceOf(IllegalArgumentException.class);
+        // 호스트가 없으면 스킴만 맞고 프록시가 갈 곳이 없다.
+        assertThatThrownBy(() -> new GatewayRoutes.Backend("http://"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new GatewayRoutes.Backend("http://:8080"))
+                .isInstanceOf(IllegalArgumentException.class);
+        // 주소로 읽히지 않는 값.
+        assertThatThrownBy(() -> new GatewayRoutes.Backend("http://back end"))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
@@ -86,11 +98,20 @@ class GatewayRoutesTest {
                 .extracting(Route::getId).isEqualTo("issue");
     }
 
-    /** 빌더가 순서를 매기려고 한 겹 감싼다. 감싼 것을 벗겨야 무엇이 붙었는지 보인다. */
+    /**
+     * 빌더가 순서를 매기려고 감싼다. <b>끝까지 벗긴다</b> — 한 겹만 벗기면 두 번
+     * 감싼 판정이 안 보이고, 조회에 판정이 붙어도 없다고 읽힌다.
+     */
     private static List<GatewayFilter> 벗긴_필터(Route route) {
-        return route.getFilters().stream()
-                .map(f -> f instanceof OrderedGatewayFilter o ? o.getDelegate() : f)
-                .toList();
+        return route.getFilters().stream().map(GatewayRoutesTest::끝까지_벗긴다).toList();
+    }
+
+    private static GatewayFilter 끝까지_벗긴다(GatewayFilter filter) {
+        GatewayFilter 안쪽 = filter;
+        while (안쪽 instanceof OrderedGatewayFilter o) {
+            안쪽 = o.getDelegate();
+        }
+        return 안쪽;
     }
 
     @Test
@@ -101,7 +122,8 @@ class GatewayRoutesTest {
         Route 발급 = 잡는_라우트(HttpMethod.POST,
                 "/api/v1/coupons/c1/issue");
 
-        assertThat(벗긴_필터(발급)).hasAtLeastOneElementOfType(AdmissionGatewayFilter.class);
+        // 정확히 하나다. 여러 번 붙으면 판정이 그만큼 더 돌고, 그건 통과 수를 흔든다.
+        assertThat(벗긴_필터(발급)).filteredOn(AdmissionGatewayFilter.class::isInstance).hasSize(1);
     }
 
     @Test
@@ -160,6 +182,36 @@ class GatewayRoutesTest {
             assertThat(잡는_라우트(method, "/api/v1/coupons/c1/queue"))
                     .as("%s /api/v1/coupons/c1/queue", method).isNull();
         }
+    }
+
+    /** 발급과 조회는 같은 방어를 갖는다. 한쪽만 재면 나머지가 통째로 무방비다. */
+    private static Stream<Arguments> 두_라우트() {
+        return Stream.of(
+                Arguments.of(HttpMethod.POST, "/api/v1/coupons/%s/issue"),
+                Arguments.of(HttpMethod.GET, "/api/v1/coupons/%s"));
+    }
+
+    @ParameterizedTest(name = "{1}")
+    @MethodSource("두_라우트")
+    @DisplayName("두_라우트_모두_이상한_식별자를_안_잡는다")
+    void 두_라우트_모두_이상한_식별자를_안_잡는다(HttpMethod method, String 틀) {
+        for (String 이상한_것 : List.of("a%2Fb", "c1;junk=1", " ", "c".repeat(65))) {
+            assertThat(잡는_라우트(method, 틀.formatted(이상한_것)))
+                    .as("%s %s", method, 틀.formatted(이상한_것)).isNull();
+        }
+    }
+
+    @ParameterizedTest(name = "{1}")
+    @MethodSource("두_라우트")
+    @DisplayName("두_라우트_모두_정해진_메서드만_잡는다")
+    void 두_라우트_모두_정해진_메서드만_잡는다(HttpMethod method, String 틀) {
+        String path = 틀.formatted("c1");
+        for (HttpMethod 다른_것 : List.of(HttpMethod.PUT, HttpMethod.DELETE, HttpMethod.PATCH)) {
+            assertThat(잡는_라우트(다른_것, path)).as("%s %s", 다른_것, path).isNull();
+        }
+        // 좁히다 정작 쓰는 메서드까지 막으면 서비스가 통째로 안 된다.
+        assertThat(잡는_라우트(method, path)).as("%s %s", method, path)
+                .extracting(Route::getId).isIn("issue", "coupons");
     }
 
     @Test

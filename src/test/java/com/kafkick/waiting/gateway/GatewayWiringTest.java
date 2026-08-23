@@ -29,6 +29,9 @@ class GatewayWiringTest {
     private CorsPolicy.Origins origins;
 
     @Autowired
+    private GatewayRoutes.Backend backend;
+
+    @Autowired
     private RouterFunctionMapping routerFunctionMapping;
 
     @Autowired
@@ -45,11 +48,23 @@ class GatewayWiringTest {
     }
 
     @Test
-    @DisplayName("순번_조회_핸들러가_게이트웨이보다_먼저_잡는다")
-    void 순번_조회_핸들러가_게이트웨이보다_먼저_잡는다() {
-        // 게이트웨이가 먼저 잡으면 폴링이 통째로 백엔드로 간다. 순서는 기본값에
-        // 기대는 부분이라, 프레임워크가 바뀌면 조용히 뒤집힌다.
+    @DisplayName("라우터_함수가_게이트웨이보다_먼저_잡는다")
+    void 라우터_함수가_게이트웨이보다_먼저_잡는다() {
+        // **프레임워크가 정한 순서만 본다.** 우리 코드가 사이에 없으므로, 이건
+        // 순번 조회가 안 새는 것을 재는 게 아니라 그 전제가 아직 성립하는지만
+        // 본다. 안 새는 것은 라우트가 그 경로를 안 잡는 쪽이 잰다.
+        //
+        // 핸들러 자체는 아직 없다 — CY-402 가 붙일 때 이 순서 위에 선다.
         assertThat(routerFunctionMapping.getOrder()).isLessThan(gatewayMapping.getOrder());
+    }
+
+    @Test
+    @DisplayName("라우트가_설정한_뒷단으로_간다")
+    void 라우트가_설정한_뒷단으로_간다() {
+        // id 만 보면 어디로 보내는지는 아무도 안 본다. 주소가 어긋나도 초록이다.
+        assertThat(locator.getRoutes().collectList().block())
+                .allSatisfy(r -> assertThat(r.getUri().toString())
+                        .isEqualTo(backend.uri()));
     }
 
     @Test

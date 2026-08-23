@@ -7,8 +7,6 @@ import org.springframework.cloud.gateway.route.builder.GatewayFilterSpec;
 import org.springframework.cloud.gateway.route.builder.RouteLocatorBuilder;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.util.function.Predicate;
 import org.springframework.http.HttpMethod;
 import org.springframework.web.server.ServerWebExchange;
@@ -28,11 +26,6 @@ public class GatewayRoutes {
     private static final String COUPON_ID = "{couponId:[A-Za-z0-9_-]{1,64}}";
 
     /**
-     * 원본 경로도 같이 본다. 술어는 세그먼트를 디코딩하고 매트릭스 파라미터를
-     * 떼어 낸 값으로 맞추는데, 전달은 원본을 그대로 보낸다 — 그 둘이 갈리면
-     * 판정한 쿠폰과 뒷단이 받는 쿠폰이 달라진다.
-     */
-    /**
      * 관례로 쓰이는 클라이언트 IP 헤더. 프레임워크는 {@code X-Forwarded-*} 만
      * 지우므로 이것들은 그대로 넘어가고, 뒷단이 하나라도 믿으면 IP 단위 제한이
      * 헤더 한 줄로 우회된다.
@@ -48,6 +41,11 @@ public class GatewayRoutes {
         return stripped;
     }
 
+    /**
+     * 원본 경로도 같이 본다. 술어는 세그먼트를 디코딩하고 매트릭스 파라미터를
+     * 떼어 낸 값으로 맞추는데 전달은 원본을 보낸다 — 갈리면 판정한 쿠폰과 뒷단이
+     * 받는 쿠폰이 달라진다.
+     */
     private Predicate<ServerWebExchange> rawPathIsPlain() {
         return exchange -> {
             String raw = exchange.getRequest().getURI().getRawPath();
@@ -59,33 +57,10 @@ public class GatewayRoutes {
     @ConfigurationProperties("waiting.backend")
     public record Backend(String uri) {
 
-        // **형태까지 본다.** 스킴이 빠진 값은 기동에 성공하고 모든 프록시가
-        // 실패한다 — 없애려던 조용한 실패가 그대로 남는다. 경로가 붙은 값도
-        // 경로만 조용히 버려진다. 값은 안 싣는다. 자격 증명이 들어갈 수 있다.
+        // 검증은 밖에 둔다. 압축 생성자에서 부를 수 있는 것은 정적뿐이라,
+        // 안에 두면 그 자리에서만 쓰이는 정적 메서드가 생긴다.
         public Backend {
-            URI parsed = parsed(uri);
-            if (!"http".equals(parsed.getScheme()) && !"https".equals(parsed.getScheme())) {
-                throw new IllegalArgumentException("waiting.backend.uri 는 http 나 https 여야 한다");
-            }
-            if (parsed.getHost() == null) {
-                throw new IllegalArgumentException("waiting.backend.uri 에 호스트가 없다");
-            }
-            if (parsed.getPath() != null && !parsed.getPath().isEmpty()) {
-                throw new IllegalArgumentException("waiting.backend.uri 에 경로를 붙일 수 없다");
-            }
-        }
-
-        // RULE-EXCEPTION(JS-13): 레코드의 압축 생성자는 인스턴스가 서기 전에
-        // 돈다. 인스턴스 메서드로 둘 수 없다.
-        private static URI parsed(String uri) {
-            if (uri == null || uri.isBlank()) {
-                throw new IllegalArgumentException("waiting.backend.uri 가 비어 있다");
-            }
-            try {
-                return new URI(uri);
-            } catch (URISyntaxException e) {
-                throw new IllegalArgumentException("waiting.backend.uri 를 못 읽었다", e);
-            }
+            ConfigUris.backend(uri);
         }
     }
 
@@ -96,7 +71,7 @@ public class GatewayRoutes {
                         .method(HttpMethod.POST)
                         .and().path("/api/v1/coupons/" + COUPON_ID + "/issue")
                         .and().predicate(rawPathIsPlain())
-                        .filters(f -> stripSpoofableClientIp(f).filter(new AdmissionGatewayFilter()))
+                        .filters(f -> stripSpoofableClientIp(f).filter(AdmissionGatewayFilter.create()))
                         .uri(backend.uri()))
                 .route("coupons", r -> r
                         .method(HttpMethod.GET)

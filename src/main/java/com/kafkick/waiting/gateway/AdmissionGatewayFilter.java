@@ -11,7 +11,14 @@ import reactor.core.publisher.Mono;
  *
  * <p>판정 내용은 아직 없다. 붙는 것 자체가 조용히 사라질 수 있어 자리부터 세운다.
  */
-public class AdmissionGatewayFilter implements GatewayFilter {
+public final class AdmissionGatewayFilter implements GatewayFilter {
+
+    private AdmissionGatewayFilter() {
+    }
+
+    public static AdmissionGatewayFilter create() {
+        return new AdmissionGatewayFilter();
+    }
 
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {

@@ -1,6 +1,7 @@
 package com.kafkick.waiting.gateway;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.List;
@@ -100,6 +101,28 @@ class CorsPolicyTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new CorsPolicy.Origins(List.of("htp://front.example")))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("오리진이_아닌_것이_붙으면_기동을_막는다")
+    void 오리진이_아닌_것이_붙으면_기동을_막는다() {
+        // 브라우저가 보내는 값은 스킴·호스트·기본이 아닌 포트뿐이다. 나머지가
+        // 붙으면 기동은 되고 아무와도 안 맞아 프론트가 조용히 막힌다.
+        for (String 어긋난_값 : List.of("https://front.example/app", "https://front.example?a=1",
+                "https://front.example#x", "https://u:p@front.example",
+                "https://front.example:443", "http://front.example:80")) {
+            assertThatThrownBy(() -> new CorsPolicy.Origins(List.of(어긋난_값)))
+                    .as("오리진 %s", 어긋난_값)
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    @Test
+    @DisplayName("기본이_아닌_포트는_받는다")
+    void 기본이_아닌_포트는_받는다() {
+        // 좁히다 실제 프론트를 막으면 서비스가 통째로 안 된다.
+        assertThatCode(() -> new CorsPolicy.Origins(List.of("http://localhost:5173")))
+                .doesNotThrowAnyException();
     }
 
     @Test

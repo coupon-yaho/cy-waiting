@@ -50,7 +50,8 @@ class LeaderFaultsTest {
         // 해제가 아니라 죽음이다 — 락은 그대로 남아 있어야 한다.
         assertThat(leader.현재_소유자()).isEqualTo("node-1");
         // 양수인지만 보면 1ms 남은 것과 30초 남은 것이 같아진다.
-        assertThat(leader.남은_lease()).isBetween(LEASE.minusSeconds(5), LEASE);
+        assertThat(leader.남은_lease()).hasValueSatisfying(
+                남은 -> assertThat(남은).isBetween(LEASE.minusSeconds(5), LEASE));
     }
 
     @Test
@@ -92,20 +93,24 @@ class LeaderFaultsTest {
 
         // **관측 창을 여기서 정한다.** 1밀리초로 두면 읽기 전에 멈칫하는 것만으로
         // 이미 지워져 있다 — 결함이 아니라 지연에 지는 시험이 된다.
-        Duration 관측_창 = Duration.ofMillis(500);
+        //
+        // 리스에서 파생시킨다. 손으로 적으면 둘이 어긋날 수 있고, 창이 리스보다
+        // 길면 만료가 아니라 원래 리스를 재게 된다.
+        Duration 관측_창 = LEASE.dividedBy(60);
         leader.lease를_만료시킨다(관측_창);
 
         // **중간 상태를 본다.** 곧바로 사라졌는지만 보면 DEL 과 구분이 안 되고,
         // 획득이 실패해도 소유자가 없으니 통과해 버린다.
         assertThat(leader.현재_소유자()).isEqualTo("node-1");
-        assertThat(leader.남은_lease()).isBetween(Duration.ZERO, 관측_창);
+        // **하한도 건다.** 넓힌 창을 상한으로만 쓰면 그 안의 아무 값이나 통과해서,
+        // 픽스처가 부탁받은 만큼 남기는지를 아무도 안 본다.
+        assertThat(leader.남은_lease()).hasValueSatisfying(
+                남은 -> assertThat(남은).isBetween(관측_창.dividedBy(2), 관측_창));
 
-        Awaitility.await().atMost(Duration.ofSeconds(5))
+        // 상한도 창에서 파생시킨다. 따로 적으면 창만 늘렸을 때 여유가 조용히 준다.
+        Awaitility.await().atMost(관측_창.multipliedBy(10))
                 .pollInterval(Duration.ofMillis(20))
-                .until(() -> leader.현재_소유자() == null);
-
-        // 창이 리스보다 짧아야 만료를 재는 것이 된다. 같거나 길면 원래 리스를 잰다.
-        assertThat(관측_창).isLessThan(LEASE);
+                .until(() -> leader.남은_lease().isEmpty());
     }
 
     @Test

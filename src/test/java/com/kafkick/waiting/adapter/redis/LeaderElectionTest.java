@@ -94,7 +94,13 @@ class LeaderElectionTest extends RedisContainerSupport {
     @DisplayName("자기가_잡은_락은_연장된다")
     void 자기가_잡은_락은_연장된다() {
         tryAcquire("node-1");
-        redis.expire(LEADER, Duration.ofMillis(300)).block(WAIT);
+        redis.expire(LEADER, Duration.ofSeconds(3)).block(WAIT);
+
+        // **연장 경로를 탔는지부터 본다.** 그 사이 리스가 끝나면 두 번째 획득이
+        // 신규 분기를 타는데, 그쪽도 성공을 돌려주고 리스도 새로 걸어 준다 —
+        // 연장이 통째로 사라져도 시험은 조용히 초록이다.
+        assertThat(redis.opsForValue().get(LEADER).block(WAIT))
+                .as("연장하려면 아직 내 락이어야 한다").isEqualTo("node-1");
 
         assertThat(acquired(tryAcquire("node-1"))).isTrue();
         assertThat(redis.getExpire(LEADER).block(WAIT))
@@ -180,6 +186,8 @@ class LeaderElectionTest extends RedisContainerSupport {
     void 리스가_만료되면_다른_노드가_잡는다() {
         // 리더가 죽으면 이만큼 뒤 승계된다. 안 풀리면 배분이 영영 멎는다.
         redis.opsForValue().set(LEADER, "dead-node", Duration.ofMillis(200)).block(WAIT);
+        // 애초에 안 걸렸으면 "만료돼서 잡았다" 가 아니라 "원래 없었다" 를 재게 된다.
+        assertThat(redis.opsForValue().get(LEADER).block(WAIT)).isEqualTo("dead-node");
 
         리스_만료를_기다린다();
 

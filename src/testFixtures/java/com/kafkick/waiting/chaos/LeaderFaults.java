@@ -5,6 +5,7 @@ import io.lettuce.core.ScriptOutputType;
 import io.lettuce.core.SetArgs;
 import io.lettuce.core.api.StatefulRedisConnection;
 import java.time.Duration;
+import java.util.Optional;
 
 /**
  * 리더를 죽이거나 내린다 (4.0.1).
@@ -93,8 +94,14 @@ public final class LeaderFaults {
         return redis.sync().get(RedisKeys.LEADER);
     }
 
-    public Duration 남은_lease() {
+    /**
+     * 남은 리스. <b>키가 없거나 리스가 안 걸렸으면 빈 값이다.</b>
+     *
+     * <p>0 으로 뭉개면 "만료 임박" 과 "이미 사라짐" 이 같은 값이 된다 — 둘을
+     * 가르는 것이 이 픽스처가 존재하는 이유인데, 그 구별을 픽스처가 지운다.
+     */
+    public Optional<Duration> 남은_lease() {
         long millis = redis.sync().pttl(RedisKeys.LEADER);
-        return millis > 0 ? Duration.ofMillis(millis) : Duration.ZERO;
+        return millis > 0 ? Optional.of(Duration.ofMillis(millis)) : Optional.empty();
     }
 }

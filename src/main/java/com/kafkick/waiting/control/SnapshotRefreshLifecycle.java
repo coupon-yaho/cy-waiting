@@ -8,6 +8,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationListener;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.context.event.ContextClosedEvent;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import reactor.core.Disposable;
 import reactor.core.scheduler.Scheduler;
 
@@ -18,17 +20,18 @@ import reactor.core.scheduler.Scheduler;
  * 보내는 동안 재료가 늙기 시작하고, 살아 있음 판정이 그걸 정지로 세어 진행 중인
  * 요청을 든 파드를 죽인다.
  */
+@Order(Ordered.HIGHEST_PRECEDENCE)
 public final class SnapshotRefreshLifecycle
         implements SmartLifecycle, ApplicationListener<ContextClosedEvent> {
 
     private static final Logger log = LoggerFactory.getLogger(SnapshotRefreshLifecycle.class);
 
     /**
-     * 갱신 루프가 웹 서버보다 <b>먼저</b> 멎어야 한다. 뒤면 이미 안 받는 상태에서
-     * 레디스를 계속 두드린다.
+     * 컨테이너는 단계가 큰 것부터 멈춘다. 가장 크게 두면 웹 서버보다 먼저 멎는다.
      *
-     * <p>컨테이너는 단계가 큰 것부터 멈추므로 가장 크게 둔다. 드레이닝 자체는
-     * 닫힘 사건이 알리고, 그건 어떤 단계보다도 먼저 온다.
+     * <p><b>이 값의 원래 근거는 드레이닝 순서였는데 그건 이제 닫힘 사건이 진다.</b>
+     * 판정이 요청 경로에 붙으면 우아한 종료 구간 내내 얼어붙은 재료로 판정하게
+     * 되므로 그때 다시 정한다 (CY-422).
      */
     private static final int PHASE = Integer.MAX_VALUE;
 
@@ -74,8 +77,10 @@ public final class SnapshotRefreshLifecycle
 
     /**
      * <b>여기서만 드레이닝을 알린다.</b> 정지는 컨테이너가 잠깐 멈출 때도 불려서,
-     * 거기서 알리면 다시 켤 수 없는 상태가 된다. 닫힘 사건은 생명주기 정지보다
-     * 먼저 오므로 순서도 그대로다.
+     * 거기서 알리면 다시 켤 수 없는 상태가 된다.
+     *
+     * <p>맨 앞에 선다. 앞선 리스너가 터지면 컨테이너는 경고만 찍고 넘어가는데,
+     * 그러면 알림이 통째로 빠져 살아 있음 판정이 몇 초 뒤 파드를 죽인다.
      */
     @Override
     public void onApplicationEvent(ContextClosedEvent event) {
@@ -95,6 +100,8 @@ public final class SnapshotRefreshLifecycle
         if (mine != null) {
             mine.dispose();
         }
+        // 드레이닝 로그와 갈라져서, 이게 없으면 루프가 언제 멎었는지 안 남는다.
+        log.info("갱신 루프 정지");
     }
 
     @Override

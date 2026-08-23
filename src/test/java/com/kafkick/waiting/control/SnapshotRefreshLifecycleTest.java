@@ -18,9 +18,9 @@ import reactor.core.publisher.Mono;
 /**
  * 판정 재료 갱신 루프를 켜고 끈다.
  *
- * <p><b>멈추기 전에 드레이닝을 알린다.</b> 순서가 반대면 부하 분산기가 아직
- * 보내는 동안 재료가 늙기 시작하고, 살아 있음 판정이 그걸 정지로 세어 진행 중인
- * 요청을 든 파드를 죽인다.
+ * <p><b>종료와 정지를 가른다.</b> 정지는 잠깐 멈출 때도 불리므로, 거기서 종료를
+ * 알리면 그 컨텍스트가 다시 못 살아난다. 반대로 종료에서 안 알리면 살아 있음
+ * 판정이 진행 중인 요청을 든 파드를 죽인다.
  */
 class SnapshotRefreshLifecycleTest {
 
@@ -116,15 +116,24 @@ class SnapshotRefreshLifecycleTest {
     }
 
     @Test
-    @DisplayName("멈췄다_다시_켜면_돈다")
-    void 멈췄다_다시_켜면_돈다() {
+    @DisplayName("멈췄다_다시_켜면_다시_받아_온다")
+    void 멈췄다_다시_켜면_다시_받아_온다() {
+        // **깃발이 아니라 받아오는 것을 본다.** 시작은 구독보다 먼저 깃발을
+        // 세우므로, 깃발만 보면 버린 스케줄러를 다시 써서 루프가 죽어도 초록이다.
         SnapshotRefreshLifecycle lifecycle = lifecycle();
         lifecycle.start();
+        await().atMost(WAIT).untilAsserted(() -> assertThat(받아옴).hasValueGreaterThan(1));
         lifecycle.stop();
+        int 멈춘_뒤 = 받아옴.get();
 
         lifecycle.start();
 
-        assertThat(lifecycle.isRunning()).isTrue();
+        try {
+            await().atMost(WAIT)
+                    .untilAsserted(() -> assertThat(받아옴).hasValueGreaterThan(멈춘_뒤 + 1));
+        } finally {
+            lifecycle.stop();
+        }
     }
 
     @Test

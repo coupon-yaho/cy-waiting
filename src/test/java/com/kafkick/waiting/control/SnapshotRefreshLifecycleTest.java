@@ -12,7 +12,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.event.ContextClosedEvent;
 import org.springframework.context.support.GenericApplicationContext;
-import org.springframework.boot.web.server.context.WebServerGracefulShutdownLifecycle;
+import org.springframework.boot.web.server.context.WebServerApplicationContext;
 import reactor.core.publisher.Mono;
 
 /**
@@ -156,7 +156,7 @@ class SnapshotRefreshLifecycleTest {
         // 받아 부하 분산기가 뺄 시간을 번다. 상수가 아니라 그 관계를 못박는다.
         // **상수를 손으로 적지 않는다.** 프레임워크가 값을 바꾸면 시험이 같이
         // 움직여야 하고, 틀린 값을 적으면 다음 사람이 그걸 믿는다.
-        int 웹_서버_종료 = WebServerGracefulShutdownLifecycle.SMART_LIFECYCLE_PHASE;
+        int 웹_서버_종료 = WebServerApplicationContext.GRACEFUL_SHUTDOWN_PHASE;
         int 커넥션_팩토리 = 0;
 
         assertThat(lifecycle().getPhase())

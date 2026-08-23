@@ -19,15 +19,8 @@ permissions:
 
 jobs:
   # ── 1단계: 무엇이 바뀌었나 · 어느 Jira 이슈인가 ────────────────────────────
-  # **봇이 연 PR 은 통째로 건너뛴다.** 브랜치명과 커밋 규약은 사람이 지킬
-  # 규칙이라 봇은 만족시킬 수 없고, 그대로 두면 의존성 갱신마다 빨간 체크가
-  # 아홉 개씩 쌓여 진짜 실패가 그 사이에 묻힌다.
-  #
-  # 대신 **갱신된 의존성이 빌드를 깨는지 여기서 안 본다.** 그건 이 브랜치가
-  # develop 에 들어간 뒤 main·nightly 가 잡는다.
   context:
     name: 컨텍스트
-    if: ${{ github.event.pull_request.user.type != 'Bot' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -76,7 +69,6 @@ jobs:
   # ── 2단계: 규범 (코드 유무와 무관하게 항상) ────────────────────────────────
   conventions:
     name: 규범
-    if: ${{ github.event.pull_request.user.type != 'Bot' }}
     uses: ./.github/workflows/_verify-conventions.yml
     with:
       check-commits: true
@@ -169,7 +161,7 @@ jobs:
   verdict:
     name: 판정
     needs: [context, conventions, build, test-unit, test-integration, test-context, test-chaos, test-coverage, security, load-smoke]
-    if: ${{ !cancelled() && github.event.pull_request.user.type != 'Bot' }}
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -187,7 +179,7 @@ jobs:
   report:
     name: 리포트
     needs: [context, conventions, build, test-unit, test-integration, test-context, test-chaos, test-coverage, security, load-smoke, verdict]
-    if: ${{ !cancelled() && github.event.pull_request.user.type != 'Bot' }}
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/_report.yml
     with:
       status: ${{ needs.verdict.outputs.status || 'failure' }}

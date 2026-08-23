@@ -1,6 +1,7 @@
 package com.kafkick.waiting.domain.allocation;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.junit.jupiter.api.DisplayName;
@@ -180,6 +181,33 @@ class QueueingHysteresisTest {
 
         assertThat(앞선_리더.snapshot())
                 .isEqualTo(new QueueingHysteresis.Snapshot(true, 1));
+    }
+
+    @Test
+    @DisplayName("최소_유지가_0_이어도_이월받는다")
+    void 최소_유지가_0_이어도_이월받는다() {
+        // 자르기에 하한이 없으면 -1 이 되고, 그 값은 스냅샷이 거부한다 —
+        // 히스테리시스를 끈 설정에서 리더가 발행을 통째로 못 하게 된다.
+        QueueingHysteresis 이월받음 = QueueingHysteresis.restore(0.8, 0.5, 0,
+                new QueueingHysteresis.Snapshot(true, 3));
+
+        assertThatCode(이월받음::snapshot).doesNotThrowAnyException();
+        assertThat(이월받음.snapshot().belowExitTicks()).isZero();
+    }
+
+    @Test
+    @DisplayName("설정이_줄어도_이월값이_유지_범위_안에_든다")
+    void 설정이_줄어도_이월값이_유지_범위_안에_든다() {
+        // 배포 사이에 최소 유지가 줄면 옛 값이 그대로 실려 온다. 그 값은
+        // 스냅샷이 거부하는 범위라, 그대로 들고 있으면 다음에 넘길 때 터진다.
+        //
+        // 유효 최댓값으로 접는다 — 새 설정에서는 이미 놓았어야 할 상태이므로
+        // 다음 틱에 놓는 것이 맞다.
+        QueueingHysteresis 이월받음 = QueueingHysteresis.restore(0.8, 0.5, 3,
+                new QueueingHysteresis.Snapshot(true, 9));
+
+        assertThat(이월받음.snapshot().belowExitTicks()).isEqualTo(2);
+        assertThatCode(이월받음::snapshot).doesNotThrowAnyException();
     }
 
     @Test

@@ -50,8 +50,11 @@ class ControlPlaneGateTest {
 
         Mono<LeaderLock> acquire(String ownerId) {
             if (죽은.contains(ownerId)) {
-                // 죽은 프로세스는 응답이 없다. 오류도 아니다 — 그냥 안 온다.
-                return Mono.never();
+                // 죽은 프로세스는 아무것도 안 돌려준다. 오류도 아니다.
+                //
+                // **기다리게 두면 판마다 실제 시간이 흐른다.** 빈 완료로 두면
+                // 판정은 같으면서(확인 못 함 → 리스가 판단) 시험이 시계를 안 탄다.
+                return Mono.empty();
             }
             return Mono.fromSupplier(() -> {
                 long now = 시계.get();
@@ -117,7 +120,7 @@ class ControlPlaneGateTest {
 
         // **하네스가 정말 죽였는지 본다.** 조작이 무동작이면 아래가 다 통과해도
         // 아무것도 안 잰 것이다 — 호출부가 안 부르는 것에 기댄 셈이 된다.
-        a.renew().block(Duration.ofSeconds(1));
+        a.renew().block();
         assertThat(락.죽었나("node-a")).isTrue();
 
         int 승계까지 = 0;
@@ -125,7 +128,7 @@ class ControlPlaneGateTest {
             락.흘린다(TICK);
             // **죽은 노드도 매 틱 시도한다.** 안 부르면 죽음이 무동작이어도
             // 결과가 같다 — 호출부가 안 부르는 우연에 기댄 시험이 된다.
-            a.renew().block(Duration.ofSeconds(1));
+            a.renew().block();
             b.renew().block();
             if (b.isLeader()) {
                 승계까지 = tick;
@@ -154,7 +157,7 @@ class ControlPlaneGateTest {
         int 겹친_틱 = 0;
         for (int tick = 1; tick <= 5; tick++) {
             락.흘린다(TICK);
-            a.renew().block(Duration.ofSeconds(1));
+            a.renew().block();
             b.renew().block();
             if (a.isLeader() && b.isLeader()) {
                 겹친_틱++;

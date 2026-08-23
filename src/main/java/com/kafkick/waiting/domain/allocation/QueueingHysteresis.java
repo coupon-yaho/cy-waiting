@@ -35,7 +35,10 @@ public class QueueingHysteresis {
         // **유지 틱을 자른다.** 설정이 줄어든 뒤 옛 값이 실려 오면 이미 최소
         // 유지를 넘어, 이월받자마자 첫 틱에 놓아 버린다 — 이월이 스스로를
         // 무력화하고 표시가 한 번 더 튄다.
-        restored.belowExitTicks = Math.min(snapshot.belowExitTicks(), minHoldTicks - 1);
+        // **하한도 건다.** 최소 유지가 0 이면 위 식이 -1 을 만들고, 그 값은
+        // 스냅샷이 거부한다 — 히스테리시스를 끈 설정에서 리더가 발행을 못 한다.
+        restored.belowExitTicks =
+                Math.max(0, Math.min(snapshot.belowExitTicks(), minHoldTicks - 1));
         return restored;
     }
 

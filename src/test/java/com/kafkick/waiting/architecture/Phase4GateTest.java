@@ -78,7 +78,15 @@ class Phase4GateTest {
             return files.filter(p -> p.toString().endsWith(".java"))
                     .collect(Collectors.toMap(
                             p -> p.getFileName().toString().replace(".java", ""),
-                            Phase4GateTest::읽는다, (a, b) -> a));
+                            Phase4GateTest::읽는다,
+                            // **조용히 하나만 남기지 않는다.** 패키지가 다른 두
+                            // 시험이 같은 이름이면 엉뚱한 파일을 보고 판정하게 되고,
+                            // 게이트가 판정됨으로 남는데 실제 시험은 없는 상태가
+                            // 다시 생긴다.
+                            (a, b) -> {
+                                throw new IllegalStateException(
+                                        "같은 이름의 시험 클래스가 둘 이상이다");
+                            }));
         }
     }
 

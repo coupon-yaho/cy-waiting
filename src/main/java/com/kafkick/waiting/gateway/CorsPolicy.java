@@ -5,6 +5,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpMethod;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.reactive.CorsConfigurationSource;
@@ -20,6 +22,12 @@ import org.springframework.web.cors.reactive.UrlBasedCorsConfigurationSource;
 public class CorsPolicy {
 
     private static final String API = "/api/**";
+
+    /**
+     * 둘의 앞뒤를 값으로 못 박는다. 안 정하면 선언 순서로 정해져, 자리를 옮기는
+     * 것만으로 사전 요청이 막힌다.
+     */
+    private static final int CORS_ORDER = Ordered.HIGHEST_PRECEDENCE + 100;
 
     private final Origins origins;
 
@@ -48,9 +56,21 @@ public class CorsPolicy {
      * 설정만 만들어 두면 아무 요청에도 안 걸린다. 웹플럭스는 그 빈을 스스로
      * 집어가지 않으므로 필터로 직접 잇는다.
      */
+
+    /**
+     * <b>형식 검증보다 앞에 선다.</b> 브라우저는 사전 요청에 회원 헤더를 안 붙이는데,
+     * 뒤에 서면 그게 막히고 브라우저는 본 요청을 아예 안 보낸다.
+     */
     @Bean
+    @Order(CORS_ORDER)
     public CorsWebFilter corsWebFilter(CorsConfigurationSource source) {
         return new CorsWebFilter(source);
+    }
+
+    @Bean
+    @Order(CORS_ORDER + 1)
+    public MemberIdentityFilter memberIdentityFilter() {
+        return MemberIdentityFilter.create();
     }
 
     @Bean

@@ -96,18 +96,23 @@ class MemberIdentityFilterTest {
     @DisplayName("계약에_적힌_등급은_전부_통과한다")
     void 계약에_적힌_등급은_전부_통과한다(String 등급) {
         // 좁히다 실제 등급을 막으면 그 등급 사용자가 통째로 못 쓴다.
-        통과시킨다(발급_요청().header(ID, "1").header(GRADE, 등급));
+        MockServerWebExchange exchange = 통과시킨다(발급_요청().header(ID, "1").header(GRADE, 등급));
 
-        assertThat(뒷단이_본_것.get()).as("등급 %s", 등급).isNotNull();
+        assertThat(뒷단이_본_것.get()).as("등급 %s 가 뒷단에 닿는다", 등급)
+                .extracting(e -> e.getRequest().getHeaders().getFirst(GRADE)).isEqualTo(등급);
+        assertThat(exchange.getResponse().getStatusCode()).isNull();
     }
 
     @Test
     @DisplayName("관리_경로는_안_본다")
     void 관리_경로는_안_본다() {
         // 헬스체크에 회원 헤더를 붙일 리 없다. 막으면 프로브가 통째로 죽는다.
-        통과시킨다(MockServerHttpRequest.method(HttpMethod.GET, "/actuator/health"));
+        MockServerWebExchange exchange =
+                통과시킨다(MockServerHttpRequest.method(HttpMethod.GET, "/actuator/health"));
 
-        assertThat(뒷단이_본_것.get()).isNotNull();
+        assertThat(뒷단이_본_것.get())
+                .extracting(e -> e.getRequest().getPath().value()).isEqualTo("/actuator/health");
+        assertThat(exchange.getResponse().getStatusCode()).isNull();
     }
 
     @Test

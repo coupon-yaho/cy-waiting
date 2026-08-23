@@ -50,7 +50,8 @@ class LeaderFaultsTest {
         // 해제가 아니라 죽음이다 — 락은 그대로 남아 있어야 한다.
         assertThat(leader.현재_소유자()).isEqualTo("node-1");
         // 양수인지만 보면 1ms 남은 것과 30초 남은 것이 같아진다.
-        assertThat(leader.남은_lease()).isBetween(LEASE.minusSeconds(5), LEASE);
+        assertThat(leader.남은_lease()).hasValueSatisfying(
+                남은 -> assertThat(남은).isBetween(LEASE.minusSeconds(5), LEASE));
     }
 
     @Test
@@ -90,16 +91,41 @@ class LeaderFaultsTest {
         // 다만 **지우는 것과는 다르다** — 만료 임박 구간이 남아야 한다.
         assertThat(leader.리더로_만든다("node-1", LEASE)).isTrue();
 
-        leader.lease를_만료시킨다();
+        // **관측 창을 여기서 정한다.** 1밀리초로 두면 읽기 전에 멈칫하는 것만으로
+        // 이미 지워져 있다 — 결함이 아니라 지연에 지는 시험이 된다.
+        //
+        // 리스에서 파생시킨다. 손으로 적으면 둘이 어긋날 수 있고, 창이 리스보다
+        // 길면 만료가 아니라 원래 리스를 재게 된다.
+        // 서브초로 두면 레디스 왕복 한 번이 창보다 길어져 부하에 진다.
+        Duration 관측_창 = LEASE.dividedBy(15);
+        leader.lease를_만료시킨다(관측_창);
 
         // **중간 상태를 본다.** 곧바로 사라졌는지만 보면 DEL 과 구분이 안 되고,
         // 획득이 실패해도 소유자가 없으니 통과해 버린다.
         assertThat(leader.현재_소유자()).isEqualTo("node-1");
-        assertThat(leader.남은_lease()).isBetween(Duration.ZERO, Duration.ofMillis(1));
+        // **하한도 건다.** 넓힌 창을 상한으로만 쓰면 그 안의 아무 값이나 통과해서,
+        // 픽스처가 부탁받은 만큼 남기는지를 아무도 안 본다.
+        assertThat(leader.남은_lease()).hasValueSatisfying(
+                남은 -> assertThat(남은).isBetween(관측_창.dividedBy(2), 관측_창));
 
-        Awaitility.await().atMost(Duration.ofSeconds(5))
+        // 상한도 창에서 파생시킨다. 따로 적으면 창만 늘렸을 때 여유가 조용히 준다.
+        Awaitility.await().atMost(관측_창.multipliedBy(10))
                 .pollInterval(Duration.ofMillis(20))
-                .until(() -> leader.현재_소유자() == null);
+                .until(() -> leader.남은_lease().isEmpty());
+    }
+
+    @Test
+    @DisplayName("만료를_0_으로_걸_수_없다")
+    void 만료를_0_으로_걸_수_없다() {
+        // 0 이하는 키를 지워 버린다 — 만료 임박이 아니라 해제고, 그러면 이 픽스처를
+        // 쓰는 시험이 재려던 구별이 조용히 사라진다.
+        leader.리더로_만든다("node-1", LEASE);
+
+        assertThatThrownBy(() -> leader.lease를_만료시킨다(Duration.ZERO))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> leader.lease를_만료시킨다(Duration.ofMillis(-1)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(leader.현재_소유자()).as("거절했으면 락은 그대로다").isEqualTo("node-1");
     }
 
     @Test

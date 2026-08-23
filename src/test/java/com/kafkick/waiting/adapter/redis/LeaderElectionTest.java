@@ -42,7 +42,11 @@ class LeaderElectionTest extends RedisContainerSupport {
      */
     private static final Duration POLL = Duration.ofSeconds(1);
     private static final String LEADER = RedisKeys.LEADER;
-    private static final String LEASE = "2000";
+    /**
+     * 스크립트에 넘기는 리스. <b>초 단위로 둔다</b> — 여기서 파생시키는 관측 창이
+     * 서브초가 되면 레디스 왕복 한 번이 창보다 길어져, 결함이 아니라 부하에 진다.
+     */
+    private static final String LEASE = "8000";
 
     @Autowired
     private ReactiveStringRedisTemplate redis;
@@ -93,12 +97,25 @@ class LeaderElectionTest extends RedisContainerSupport {
     @Test
     @DisplayName("자기가_잡은_락은_연장된다")
     void 자기가_잡은_락은_연장된다() {
+        // **리스보다 짧게 줄여 둔다.** 연장하면 리스만큼으로 되돌아가고, 안 하면
+        // 줄여 둔 값이 그대로 남는다 — 그 차이가 이 시험이 재는 전부다.
+        Duration 줄여_둔_리스 = 리스().dividedBy(4);
         tryAcquire("node-1");
-        redis.expire(LEADER, Duration.ofMillis(300)).block(WAIT);
+        redis.expire(LEADER, 줄여_둔_리스).block(WAIT);
+
+        // **연장 경로를 탔는지부터 본다.** 그 사이 리스가 끝나면 두 번째 획득이
+        // 신규 분기를 타는데, 그쪽도 성공을 돌려주고 리스도 새로 걸어 준다 —
+        // 연장이 통째로 사라져도 시험은 조용히 초록이다.
+        assertThat(redis.opsForValue().get(LEADER).block(WAIT))
+                .as("연장하려면 아직 내 락이어야 한다").isEqualTo("node-1");
 
         assertThat(acquired(tryAcquire("node-1"))).isTrue();
+
+        // 줄여 둔 값보다 커야 연장을 잰 것이다. 1초 같은 손으로 적은 하한은
+        // 연장을 안 해도 넘으므로 아무것도 안 잰다.
         assertThat(redis.getExpire(LEADER).block(WAIT))
-                .isGreaterThan(Duration.ofMillis(1000));
+                .isGreaterThan(줄여_둔_리스)
+                .isLessThanOrEqualTo(리스());
     }
 
     @Test
@@ -179,9 +196,13 @@ class LeaderElectionTest extends RedisContainerSupport {
     @DisplayName("리스가_만료되면_다른_노드가_잡는다")
     void 리스가_만료되면_다른_노드가_잡는다() {
         // 리더가 죽으면 이만큼 뒤 승계된다. 안 풀리면 배분이 영영 멎는다.
-        redis.opsForValue().set(LEADER, "dead-node", Duration.ofMillis(200)).block(WAIT);
+        // 200밀리초로 두면 아래 확인 전에 끝나 버려, 걸었는데도 시험이 죽는다.
+        Duration 짧은_리스 = Duration.ofSeconds(1);
+        redis.opsForValue().set(LEADER, "dead-node", 짧은_리스).block(WAIT);
+        // 애초에 안 걸렸으면 "만료돼서 잡았다" 가 아니라 "원래 없었다" 를 재게 된다.
+        assertThat(redis.opsForValue().get(LEADER).block(WAIT)).isEqualTo("dead-node");
 
-        리스_만료를_기다린다();
+        리스_만료를_기다린다(짧은_리스);
 
         assertThat(acquired(tryAcquire("node-2"))).isTrue();
     }
@@ -192,8 +213,13 @@ class LeaderElectionTest extends RedisContainerSupport {
      * <p>고정 대기를 쓰지 않는다 — 짧으면 흔들리고 길면 시험이 느려진다.
      * 만료를 판정하는 것은 Redis 시계라 폴링으로 확인한다.
      */
-    private void 리스_만료를_기다린다() {
-        await().atMost(Duration.ofSeconds(5))
+    /** 스크립트에 넘기는 리스. 시험이 그 값에서 파생시키므로 한 곳에서 읽는다. */
+    private static Duration 리스() {
+        return Duration.ofMillis(Long.parseLong(LEASE));
+    }
+
+    private void 리스_만료를_기다린다(Duration 걸어_둔_리스) {
+        await().atMost(걸어_둔_리스.multipliedBy(5))
                 .until(() -> Boolean.FALSE.equals(redis.hasKey(LEADER).block(POLL)));
     }
 

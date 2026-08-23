@@ -5,6 +5,7 @@ import io.lettuce.core.ScriptOutputType;
 import io.lettuce.core.SetArgs;
 import io.lettuce.core.api.StatefulRedisConnection;
 import java.time.Duration;
+import java.util.Optional;
 
 /**
  * 리더를 죽이거나 내린다 (4.0.1).
@@ -80,19 +81,32 @@ public final class LeaderFaults {
      * lease 를 <b>거의</b> 만료시킨다 — 지우지 않는다.
      *
      * <p>{@code DEL} 로 모델링하면 해제와 구분이 없어지고, "만료 임박" 구간이
-     * 사라져 {@link #남은_lease()} 로 잴 대상이 없어진다. 승계가 만료를
-     * 기다리는 경로를 재려면 그 구간이 있어야 한다.
+     * 사라져 {@link #남은_lease()} 로 잴 대상이 없어진다.
+     *
+     * <p><b>남길 시간을 부르는 쪽이 정한다.</b> 여기서 정하면 그 값이 곧 관측
+     * 창인데, 재는 쪽은 그게 얼마인지 모른 채 곧바로 읽는다.
      */
-    public void lease를_만료시킨다() {
-        redis.sync().pexpire(RedisKeys.LEADER, 1L);
+    public void lease를_만료시킨다(Duration 남길_시간) {
+        // 0 이하를 넘기면 지워 버린다 — 만료 임박이 아니라 해제를 만드는 것이고,
+        // 그건 이 픽스처가 안 만들기로 한 상태다.
+        if (남길_시간 == null || 남길_시간.toMillis() <= 0) {
+            throw new IllegalArgumentException("남길 시간은 1밀리초 이상이어야 한다: " + 남길_시간);
+        }
+        redis.sync().pexpire(RedisKeys.LEADER, 남길_시간.toMillis());
     }
 
     public String 현재_소유자() {
         return redis.sync().get(RedisKeys.LEADER);
     }
 
-    public Duration 남은_lease() {
+    /**
+     * 남은 리스. <b>키가 없거나 리스가 안 걸렸으면 빈 값이다.</b>
+     *
+     * <p>0 으로 뭉개면 "만료 임박" 과 "이미 사라짐" 이 같은 값이 된다 — 둘을
+     * 가르는 것이 이 픽스처가 존재하는 이유인데, 그 구별을 픽스처가 지운다.
+     */
+    public Optional<Duration> 남은_lease() {
         long millis = redis.sync().pttl(RedisKeys.LEADER);
-        return millis > 0 ? Duration.ofMillis(millis) : Duration.ZERO;
+        return millis > 0 ? Optional.of(Duration.ofMillis(millis)) : Optional.empty();
     }
 }

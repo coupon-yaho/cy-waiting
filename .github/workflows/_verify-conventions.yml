@@ -133,7 +133,11 @@ jobs:
           fetch-depth: 0
 
       - name: 커밋 메시지 규약
-        if: inputs.check-commits
+        # 봇 PR 은 제외한다 — 한글 제목도 Jira 푸터도 봇이 쓸 수 있는 것이 아니다.
+        # 작업 로그 검사와 같은 기준을 쓴다. 기준이 둘이면 언젠가 갈라진다.
+        if: >-
+          inputs.check-commits &&
+          !endsWith(github.event.pull_request.user.login, '[bot]')
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}

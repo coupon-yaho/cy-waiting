@@ -2,8 +2,10 @@ package com.kafkick.waiting.architecture;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.lang.reflect.Method;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
@@ -12,6 +14,7 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -84,16 +87,22 @@ class Phase4GateTest {
                     "HealthGroupTest#레디스_기여자가_아예_안_올라온다",
                     "HealthUnderWireFaultsTest#회선이_끊겨도_받는_것을_유지한다")));
 
-    private static Map<String, String> 시험_파일() throws IOException {
+    /**
+     * 짝의 클래스 이름 → 그 클래스.
+     *
+     * <p>소스를 읽지 않고 <b>실제 클래스</b>를 집는다. 문자열로 찾으면 주석 안의
+     * 같은 시그니처나 애노테이션의 위치·표기에 판정이 흔들린다.
+     */
+    private static Map<String, Class<?>> 시험_클래스() throws IOException {
         try (Stream<Path> files = Files.walk(TESTS)) {
             return files.filter(p -> p.toString().endsWith(".java"))
                     .collect(Collectors.toMap(
                             p -> p.getFileName().toString().replace(".java", ""),
-                            Phase4GateTest::읽는다,
+                            Phase4GateTest::불러온다,
                             // **조용히 하나만 남기지 않는다.** 패키지가 다른 두
-                            // 시험이 같은 이름이면 엉뚱한 파일을 보고 판정하게 되고,
-                            // 게이트가 판정됨으로 남는데 실제 시험은 없는 상태가
-                            // 다시 생긴다.
+                            // 시험이 같은 이름이면 엉뚱한 클래스를 보고 판정하게
+                            // 되고, 게이트가 판정됨으로 남는데 실제 시험은 없는
+                            // 상태가 다시 생긴다.
                             (a, b) -> {
                                 throw new IllegalStateException(
                                         "같은 이름의 시험 클래스가 둘 이상이다");
@@ -101,11 +110,13 @@ class Phase4GateTest {
         }
     }
 
-    private static String 읽는다(Path path) {
+    private static Class<?> 불러온다(Path path) {
+        String 이름 = TESTS.relativize(path).toString()
+                .replace(".java", "").replace(File.separatorChar, '.');
         try {
-            return Files.readString(path);
-        } catch (IOException e) {
-            throw new IllegalStateException("시험 파일을 못 읽었다: " + path, e);
+            return Class.forName(이름, false, Phase4GateTest.class.getClassLoader());
+        } catch (ClassNotFoundException e) {
+            throw new IllegalStateException("시험 클래스를 못 불러왔다: " + 이름, e);
         }
     }
 
@@ -126,27 +137,30 @@ class Phase4GateTest {
     }
 
     @Test
-    @DisplayName("이어_둔_시험이_그_파일에_실제로_있다")
-    void 이어_둔_시험이_그_파일에_실제로_있다() throws IOException {
-        // 이름만 보면 엉뚱한 시험에 이어 놓아도 안 걸린다. 클래스까지 본다.
-        Map<String, String> 파일 = 시험_파일();
+    @DisplayName("이어_둔_시험이_실제로_돌아간다")
+    void 이어_둔_시험이_실제로_돌아간다() throws IOException {
+        Map<String, Class<?>> 클래스들 = 시험_클래스();
 
         assertThat(판정하는_시험).allSatisfy((gate, 시험들) -> 시험들.forEach(짝 -> {
-            String 클래스 = 짝.substring(0, 짝.indexOf('#'));
-            String 메서드 = 짝.substring(짝.indexOf('#') + 1);
+            String 클래스명 = 짝.substring(0, 짝.indexOf('#'));
+            String 메서드명 = 짝.substring(짝.indexOf('#') + 1);
 
-            assertThat(파일).as("%s 의 짝인 %s 가 없다", gate, 클래스).containsKey(클래스);
-            String 본문 = 파일.get(클래스);
-            String 선언 = "void " + 메서드 + "(";
-            assertThat(본문).as("%s 를 판정한다는 %s 가 그 파일에 없다", gate, 짝).contains(선언);
+            assertThat(클래스들).as("%s 의 짝인 %s 가 없다", gate, 클래스명).containsKey(클래스명);
+            Class<?> 클래스 = 클래스들.get(클래스명);
+            // 있기만 하면 안 된다. 이름이 같은 헬퍼에 이어 놓으면 아무것도 안 돈다.
+            List<Method> 그_클래스의_시험 = Stream.of(클래스.getDeclaredMethods())
+                    .filter(m -> m.isAnnotationPresent(Test.class)).toList();
+            assertThat(그_클래스의_시험).extracting(Method::getName)
+                    .as("%s 를 판정한다는 %s 가 그 클래스의 시험이 아니다", gate, 짝)
+                    .contains(메서드명);
 
-            // **꺼 둔 시험은 있는 것이 아니다.** 선언만 보면 실행에서 빼 놓아도
-            // 통과한다 — 아무것도 안 도는데 게이트는 판정됨으로 남는다.
-            String 앞 = 본문.substring(0, 본문.indexOf(선언));
-            assertThat(앞.substring(앞.lastIndexOf("@Test")))
-                    .as("%s 를 판정한다는 %s 가 꺼져 있다", gate, 짝)
-                    // 애노테이션 이름만 본다. 정규화해 적어도 걸리게 하려는 것이다.
-                    .doesNotContain("Disabled");
+            Method 메서드 = 그_클래스의_시험.stream()
+                    .filter(m -> m.getName().equals(메서드명)).findFirst().orElseThrow();
+            // **꺼 둔 시험은 있는 것이 아니다.** 클래스째 꺼도 마찬가지다.
+            assertThat(메서드.isAnnotationPresent(Disabled.class)
+                            || 클래스.isAnnotationPresent(Disabled.class))
+                    .as("%s 를 판정한다는 %s 가 꺼져 있다", gate, 짝).isFalse();
         }));
     }
+
 }

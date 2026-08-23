@@ -64,13 +64,11 @@ public final class SnapshotCodec {
     }
 
     /**
-     * 발행할 해시를 만든다.
+     * 발행할 해시를 만든다. 이월 상태에 <b>기본값을 안 준다</b> — 편의 오버로드를
+     * 두면 이월을 지우는 호출이 안 지우는 호출과 똑같이 생긴다.
      *
-     * <p>평활화와 히스테리시스를 같이 싣는다. 리더가 바뀔 때마다 0 에서 다시
-     * 시작하면 <b>회복 직후</b>, 즉 진동하기 가장 쉬운 구간에 ETA 가 튄다 (F9).
-     *
-     * <p>둘 다 기본값을 안 준다 — 편의 오버로드를 두면 이월을 지우는 호출이
-     * 안 지우는 호출과 똑같이 생겨서 발행 경로가 늘 때 조용히 섞인다.
+     * <p>리더가 바뀔 때마다 0 에서 시작하면 회복 직후, 즉 진동하기 가장 쉬운
+     * 구간에 ETA 가 튄다 (F9).
      */
     public Map<String, String> encode(GatewaySnapshot snapshot, CreditSmoother.Snapshot smoothing,
             QueueingHysteresis.Snapshot hysteresis) {

@@ -5,6 +5,7 @@ import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.QueueMode;
 import com.kafkick.waiting.domain.coupon.RuntimeState;
 import com.kafkick.waiting.domain.allocation.CreditSmoother;
+import com.kafkick.waiting.domain.allocation.QueueingHysteresis;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -40,6 +41,14 @@ public final class SnapshotCodec {
     private static final String EWMA = "#ewma";
     private static final String EWMA_SEEDED = "#ewmaSeeded";
 
+    /**
+     * 히스테리시스 상태. <b>EWMA 만 실으면 이월이 반쪽이다.</b>
+     *
+     * <p>붙잡고 있던 대기열이 교체마다 한 틱 꺼졌다 켜지면 진동이 그대로 보인다.
+     */
+    private static final String QUEUEING = "#queueing";
+    private static final String BELOW_EXIT = "#belowExitTicks";
+
     /** {@code mode:runtime:credit:stock:waiting:pollScale} */
     private static final int FIELDS = 6;
 
@@ -55,13 +64,12 @@ public final class SnapshotCodec {
     }
 
     /**
-     * 발행할 해시를 만든다.
-     *
-     * <p>평활화 상태를 같이 싣는다. 리더가 바뀔 때마다 0 에서 다시 시작하면 그
-     * 순간 표시 ETA 가 튀는데, <b>회복 직후가 진동하기 가장 쉬운 구간</b>이라
-     * 하필 그때 흔들린다 (F9).
+     * 이월 상태에 <b>기본값을 안 준다</b> — 편의 오버로드를 두면 이월을 지우는
+     * 호출이 안 지우는 호출과 똑같이 생겨서 발행 경로가 늘 때 조용히 섞인다.
+     * 리더마다 0 에서 시작하면 진동하기 가장 쉬운 회복 직후에 ETA 가 튄다 (F9).
      */
-    public Map<String, String> encode(GatewaySnapshot snapshot, CreditSmoother.Snapshot smoothing) {
+    public Map<String, String> encode(GatewaySnapshot snapshot, CreditSmoother.Snapshot smoothing,
+            QueueingHysteresis.Snapshot hysteresis) {
         Map<String, String> hash = new LinkedHashMap<>();
         snapshot.coupons().forEach((couponId, state) -> {
             // 예약 접두사를 단 쿠폰 하나로 전 쿠폰의 몫이 0 이 된다.
@@ -74,6 +82,8 @@ public final class SnapshotCodec {
         hash.put(PUBLISHED, Long.toString(snapshot.publishedAt().getEpochSecond()));
         hash.put(EWMA, Double.toString(smoothing.value()));
         hash.put(EWMA_SEEDED, smoothing.seeded() ? "1" : "0");
+        hash.put(QUEUEING, hysteresis.queueing() ? "1" : "0");
+        hash.put(BELOW_EXIT, Integer.toString(hysteresis.belowExitTicks()));
         return hash;
     }
 
@@ -97,6 +107,27 @@ public final class SnapshotCodec {
             return new CreditSmoother.Snapshot(Double.parseDouble(raw), true);
         } catch (IllegalArgumentException e) {
             return CreditSmoother.Snapshot.empty();
+        }
+    }
+
+    /**
+     * 유지 틱만 못 읽으면 <b>붙잡던 것은 지킨다</b> — 거기서 놓으면 대기열이
+     * 꺼졌다 켜져, 막으려던 진동이 리더 교체마다 난다. 모순된 조합은 통째로
+     * 버린다. 그대로 받으면 새 리더가 켜지자마자 끄는 판단을 하고, 여기서
+     * 던지면 리더가 바뀔 때마다 배분이 멎는다.
+     */
+    public QueueingHysteresis.Snapshot hysteresis(Map<String, String> hash) {
+        boolean queueing = "1".equals(hash.get(QUEUEING));
+        String raw = hash.get(BELOW_EXIT);
+        if (raw == null) {
+            // **붙잡던 것은 유지한다.** 유지 틱만 못 읽었다고 놓아 버리면 그
+            // 순간 대기열이 꺼졌다 켜진다 — 막으려던 진동이 그대로 난다.
+            return new QueueingHysteresis.Snapshot(queueing, 0);
+        }
+        try {
+            return new QueueingHysteresis.Snapshot(queueing, Integer.parseInt(raw));
+        } catch (IllegalArgumentException e) {
+            return new QueueingHysteresis.Snapshot(queueing, 0);
         }
     }
 

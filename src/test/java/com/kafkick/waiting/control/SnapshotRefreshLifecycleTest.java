@@ -10,6 +10,8 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.event.ContextClosedEvent;
+import org.springframework.context.support.GenericApplicationContext;
 import org.springframework.boot.web.server.context.WebServerGracefulShutdownLifecycle;
 import reactor.core.publisher.Mono;
 
@@ -89,15 +91,40 @@ class SnapshotRefreshLifecycleTest {
     }
 
     @Test
-    @DisplayName("멈추면_드레이닝을_알린다")
-    void 멈추면_드레이닝을_알린다() {
+    @DisplayName("컨텍스트가_닫히면_드레이닝을_알린다")
+    void 컨텍스트가_닫히면_드레이닝을_알린다() {
         // 안 알리면 부하 분산기가 계속 보내고, 그 사이 도착한 요청이 끊긴다.
+        SnapshotRefreshLifecycle lifecycle = lifecycle();
+        lifecycle.start();
+
+        lifecycle.onApplicationEvent(new ContextClosedEvent(new GenericApplicationContext()));
+
+        assertThat(shutdown.isDraining()).isTrue();
+    }
+
+    @Test
+    @DisplayName("잠깐_멈춘_것으로는_안_알린다")
+    void 잠깐_멈춘_것으로는_안_알린다() {
+        // **정지는 종료가 아니다.** 프레임워크가 안 쓰는 컨텍스트를 멈췄다 다시
+        // 켜는데, 정지에서 알리면 그 컨텍스트가 영영 못 살아난다.
         SnapshotRefreshLifecycle lifecycle = lifecycle();
         lifecycle.start();
 
         lifecycle.stop();
 
-        assertThat(shutdown.isDraining()).isTrue();
+        assertThat(shutdown.isDraining()).isFalse();
+    }
+
+    @Test
+    @DisplayName("멈췄다_다시_켜면_돈다")
+    void 멈췄다_다시_켜면_돈다() {
+        SnapshotRefreshLifecycle lifecycle = lifecycle();
+        lifecycle.start();
+        lifecycle.stop();
+
+        lifecycle.start();
+
+        assertThat(lifecycle.isRunning()).isTrue();
     }
 
     @Test

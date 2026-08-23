@@ -1,6 +1,7 @@
 package com.kafkick.waiting.gateway;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.List;
 import org.springframework.http.HttpMethod;
@@ -58,10 +59,20 @@ class GatewayRoutesTest {
     }
 
     @Test
+    @DisplayName("뒷단_주소가_없으면_기동을_막는다")
+    void 뒷단_주소가_없으면_기동을_막는다() {
+        // 주소가 없으면 프록시가 어디로 갈지 정해지지 않는다.
+        assertThatThrownBy(() -> new GatewayRoutes.Backend("  "))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new GatewayRoutes.Backend(null))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     @DisplayName("발급_요청을_잡는다")
     void 발급_요청을_잡는다() {
-        assertThat(잡는_라우트(HttpMethod.POST,
-                "/api/v1/coupons/c1/issue")).isNotNull();
+        assertThat(잡는_라우트(HttpMethod.POST, "/api/v1/coupons/c1/issue"))
+                .extracting(Route::getId).isEqualTo("issue");
     }
 
     /** 빌더가 순서를 매기려고 한 겹 감싼다. 감싼 것을 벗겨야 무엇이 붙었는지 보인다. */
@@ -88,7 +99,7 @@ class GatewayRoutesTest {
         // 조회는 그대로 프록시한다. 판정을 붙이면 조회가 큐에 들어간다.
         Route 조회 = 잡는_라우트(HttpMethod.GET, "/api/v1/coupons/c1");
 
-        assertThat(조회).isNotNull();
+        assertThat(조회).extracting(Route::getId).isEqualTo("coupons");
         assertThat(벗긴_필터(조회)).doesNotHaveAnyElementsOfTypes(AdmissionGatewayFilter.class);
     }
 

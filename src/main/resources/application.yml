@@ -16,6 +16,15 @@ spring:
       # 풀을 얹어도 처리량은 안 늘고 커넥션 수만 예측 불가가 된다.
       # commons-pool2 를 의존성에 넣지 않는 것이 실제 강제다.
 
+waiting:
+  backend:
+    # 가용량 기반 분배는 Phase 9 다. 여기서는 하나만 본다.
+    uri: http://localhost:8090
+  cors:
+    # 와일드카드를 안 쓴다. 열어 두면 이 목록이 있다는 사실이 무의미해진다.
+    allowed:
+      - http://localhost:5173
+
 server:
   port: 8080
   # 종료 신호를 받으면 진행 중인 요청만 마친다. 즉시 끊으면 부하 분산기가

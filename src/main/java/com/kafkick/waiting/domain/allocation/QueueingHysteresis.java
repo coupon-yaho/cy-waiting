@@ -15,10 +15,17 @@ public class QueueingHysteresis {
     private boolean queueing;
     private int belowExitTicks;
 
-    private QueueingHysteresis(double enterRatio, double exitRatio, int minHoldTicks) {
+    private QueueingHysteresis(double enterRatio, double exitRatio, int minHoldTicks,
+            Snapshot snapshot) {
         this.enterRatio = enterRatio;
         this.exitRatio = exitRatio;
         this.minHoldTicks = minHoldTicks;
+        this.queueing = snapshot.queueing();
+        // 설정이 줄어든 뒤 옛 값이 실려 오면 이미 최소 유지를 넘어, 이월받자마자
+        // 첫 틱에 놓아 버린다 — 이월이 스스로를 무력화하고 표시가 한 번 더 튄다.
+        // 하한도 건다. 최소 유지가 0 이면 상한이 -1 이 되고, 그 값은 스냅샷이
+        // 거부해서 히스테리시스를 끈 설정에서 리더가 발행을 못 한다.
+        this.belowExitTicks = Math.max(0, Math.min(snapshot.belowExitTicks(), minHoldTicks - 1));
     }
 
     /**
@@ -30,55 +37,6 @@ public class QueueingHysteresis {
      */
     public static QueueingHysteresis restore(double enterRatio, double exitRatio,
             int minHoldTicks, Snapshot snapshot) {
-        QueueingHysteresis restored = of(enterRatio, exitRatio, minHoldTicks);
-        restored.queueing = snapshot.queueing();
-        // **유지 틱을 자른다.** 설정이 줄어든 뒤 옛 값이 실려 오면 이미 최소
-        // 유지를 넘어, 이월받자마자 첫 틱에 놓아 버린다 — 이월이 스스로를
-        // 무력화하고 표시가 한 번 더 튄다.
-        // **하한도 건다.** 최소 유지가 0 이면 위 식이 -1 을 만들고, 그 값은
-        // 스냅샷이 거부한다 — 히스테리시스를 끈 설정에서 리더가 발행을 못 한다.
-        //
-        // **인자가 아니라 보정된 필드로 자른다.** of() 가 음수를 0 으로 올리므로
-        // 인자를 그대로 쓰면 판단 근거가 둘이 된다. Integer.MIN_VALUE 는 -1 에서
-        // 넘쳐 상한이 Integer.MAX_VALUE 가 되고, 자르기가 통째로 사라진다.
-        restored.belowExitTicks =
-                Math.max(0, Math.min(snapshot.belowExitTicks(), restored.minHoldTicks - 1));
-        return restored;
-    }
-
-    /** 다음 리더에게 넘길 상태. */
-    public Snapshot snapshot() {
-        return new Snapshot(queueing, belowExitTicks);
-    }
-
-    /**
-     * 이월 가능한 히스테리시스 상태.
-     *
-     * @param queueing        지금 줄을 세우고 있는가
-     * @param belowExitTicks  이탈 비율 아래로 연속 몇 틱인가
-     */
-    public record Snapshot(boolean queueing, int belowExitTicks) {
-
-        public Snapshot {
-            if (belowExitTicks < 0) {
-                throw new IllegalArgumentException(
-                        "belowExitTicks 는 0 이상이어야 한다: " + belowExitTicks);
-            }
-            // 안 붙잡고 있는데 유지 틱이 쌓여 있으면 말이 안 된다. 그대로 이월하면
-            // 다음 리더가 켜지자마자 곧바로 끄는 판단을 한다.
-            if (!queueing && belowExitTicks != 0) {
-                throw new IllegalArgumentException(
-                        "안 붙잡는 상태의 belowExitTicks 는 0 이어야 한다: " + belowExitTicks);
-            }
-        }
-
-        public static Snapshot empty() {
-            return new Snapshot(false, 0);
-        }
-    }
-
-    /** 해제 임계가 진입 임계보다 크면 히스테리시스가 아니라 진동 증폭기가 된다. */
-    public static QueueingHysteresis of(double enterRatio, double exitRatio, int minHoldTicks) {
         if (!Double.isFinite(enterRatio) || enterRatio < 0
                 || !Double.isFinite(exitRatio) || exitRatio < 0) {
             // 음수를 허용하면 수요가 0 이어도 load(0) >= enterRatio 가 참이라
@@ -90,7 +48,17 @@ public class QueueingHysteresis {
             throw new IllegalArgumentException(
                     "해제 임계가 진입 임계보다 클 수 없다: %s > %s".formatted(exitRatio, enterRatio));
         }
-        return new QueueingHysteresis(enterRatio, exitRatio, Math.max(0, minHoldTicks));
+        return new QueueingHysteresis(enterRatio, exitRatio, Math.max(0, minHoldTicks), snapshot);
+    }
+
+    /** 해제 임계가 진입 임계보다 크면 히스테리시스가 아니라 진동 증폭기가 된다. */
+    public static QueueingHysteresis of(double enterRatio, double exitRatio, int minHoldTicks) {
+        return restore(enterRatio, exitRatio, minHoldTicks, Snapshot.empty());
+    }
+
+    /** 다음 리더에게 넘길 상태. */
+    public Snapshot snapshot() {
+        return new Snapshot(queueing, belowExitTicks);
     }
 
     /**
@@ -127,5 +95,31 @@ public class QueueingHysteresis {
             return demand > 0 ? Double.POSITIVE_INFINITY : 0;
         }
         return (double) demand / capacity;
+    }
+
+    /**
+     * 이월 가능한 히스테리시스 상태.
+     *
+     * @param queueing        지금 줄을 세우고 있는가
+     * @param belowExitTicks  이탈 비율 아래로 연속 몇 틱인가
+     */
+    public record Snapshot(boolean queueing, int belowExitTicks) {
+
+        public Snapshot {
+            if (belowExitTicks < 0) {
+                throw new IllegalArgumentException(
+                        "belowExitTicks 는 0 이상이어야 한다: " + belowExitTicks);
+            }
+            // 안 붙잡고 있는데 유지 틱이 쌓여 있으면 말이 안 된다. 그대로 이월하면
+            // 다음 리더가 켜지자마자 곧바로 끄는 판단을 한다.
+            if (!queueing && belowExitTicks != 0) {
+                throw new IllegalArgumentException(
+                        "안 붙잡는 상태의 belowExitTicks 는 0 이어야 한다: " + belowExitTicks);
+            }
+        }
+
+        public static Snapshot empty() {
+            return new Snapshot(false, 0);
+        }
     }
 }

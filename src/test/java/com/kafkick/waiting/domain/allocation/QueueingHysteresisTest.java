@@ -1,7 +1,6 @@
 package com.kafkick.waiting.domain.allocation;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.junit.jupiter.api.DisplayName;
@@ -191,7 +190,6 @@ class QueueingHysteresisTest {
         QueueingHysteresis 이월받음 = QueueingHysteresis.restore(0.8, 0.5, 0,
                 new QueueingHysteresis.Snapshot(true, 3));
 
-        assertThatCode(이월받음::snapshot).doesNotThrowAnyException();
         assertThat(이월받음.snapshot().belowExitTicks()).isZero();
     }
 
@@ -219,7 +217,6 @@ class QueueingHysteresisTest {
                 new QueueingHysteresis.Snapshot(true, 9));
 
         assertThat(이월받음.snapshot().belowExitTicks()).isEqualTo(2);
-        assertThatCode(이월받음::snapshot).doesNotThrowAnyException();
     }
 
     @Test

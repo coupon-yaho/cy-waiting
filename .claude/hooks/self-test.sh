@@ -555,6 +555,31 @@ else
     printf '  ok   릴레이에 파이프 자르기가 없다\n'; pass=$((pass + 1))
 fi
 
+# 워크플로에 중복 키가 들어오면 GitHub 이 파일을 통째로 거절한다. 그러면 잡이
+# 하나도 안 뜨고, 필수 체크는 영원히 대기 상태로 남는다 — 실패보다 조용하다.
+# **표준 YAML 파서는 중복을 조용히 넘긴다.** 그래서 따로 본다.
+if python3 - "$ROOT" <<'PYEOF' >/dev/null 2>&1
+import sys, pathlib, yaml
+class Strict(yaml.SafeLoader):
+    pass
+def no_dup(loader, node, deep=False):
+    seen = set()
+    for k, _ in node.value:
+        key = loader.construct_object(k, deep=deep)
+        if key in seen:
+            raise ValueError(f"중복 키: {key}")
+        seen.add(key)
+    return yaml.SafeLoader.construct_mapping(loader, node, deep)
+Strict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, no_dup)
+for f in sorted(pathlib.Path(sys.argv[1], '.github/workflows').glob('*.yml')):
+    yaml.load(f.read_text(encoding='utf-8'), Strict)
+PYEOF
+then
+    printf '  ok   워크플로에 중복 키가 없다\n'; pass=$((pass + 1))
+else
+    printf '  FAIL 워크플로에 중복 키가 있다 — GitHub 이 파일을 거절한다\n'; fail=$((fail + 1))
+fi
+
 echo
 printf '통과 %d · 실패 %d\n' "$pass" "$fail"
 ((fail == 0))

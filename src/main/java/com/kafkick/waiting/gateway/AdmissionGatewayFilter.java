@@ -4,6 +4,7 @@ import com.kafkick.waiting.control.SnapshotHolder;
 import com.kafkick.waiting.domain.admission.AdmissionDecider;
 import com.kafkick.waiting.domain.admission.AdmissionDecision;
 import com.kafkick.waiting.domain.admission.AdmissionRequest;
+import com.kafkick.waiting.domain.admission.EnqueueLatch;
 import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.queue.EtaPolicy;
@@ -63,6 +64,17 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
 
     private static final String FAIL_OPEN_KEY = "enqueue";
 
+    /** 쿠폰 2,000개를 상정한 값. 넘으면 통째로 비운다 — 판정이 한 틱 헐거워질 뿐이다. */
+    private static final int LATCH_MAX_KEYS = 10_000;
+
+    /**
+     * 래치가 걸려 있는 시간.
+     *
+     * <p>스냅샷이 따라잡는 데 걸리는 시간보다 길어야 한다 — 배분 틱 1초에
+     * 받아오기 주기를 더하고 여유를 뒀다. 짧으면 그 틈으로 추월이 난다.
+     */
+    private static final long LATCH_TTL_SEC = 3;
+
     private final SnapshotHolder holder;
     private final AdmissionDecider decider;
     private final Clock clock;
@@ -71,6 +83,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     private final QueuePort queue;
     private final QueueToken tokens;
     private final SecondWindowLimiter failOpen;
+    private final EnqueueLatch latch;
     private final ApiError error;
     private final QueueResponse waiting = QueueResponse.create();
 
@@ -88,6 +101,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         this.queue = Objects.requireNonNull(queue, "queue 는 필수다");
         this.tokens = Objects.requireNonNull(tokens, "tokens 는 필수다");
         this.failOpen = SecondWindowLimiter.withMaxKeys(1);
+        this.latch = EnqueueLatch.of(LATCH_MAX_KEYS, LATCH_TTL_SEC);
         this.error = ApiError.of(clock);
     }
 
@@ -146,13 +160,15 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             return unknownCoupon(exchange, chain, view, couponId);
         }
 
+        // **지금 시각이다.** 스냅샷 발행 시각을 넘기면 배분이 멎는 순간 윈도가
+        // 영영 안 넘어가고, 상한만큼 쓴 뒤부터 전부 막힌다.
+        long nowSec = clock.instant().getEpochSecond();
         AdmissionDecision decision = decider.decide(new AdmissionRequest(
                 couponId, state, view.snapshot().meta(),
-                holder.isDataStale(view), false, false,
-                // **지금 시각이다.** 스냅샷 발행 시각을 넘기면 배분이 멎는 순간
-                // 윈도가 영영 안 넘어가고, 상한만큼 쓴 뒤부터 전부 막힌다 —
-                // 열어 줘야 할 구간에서 정반대로 조인다.
-                clock.instant().getEpochSecond(), MAX_ETA_SEC));
+                // **방금 줄로 보낸 쿠폰인가.** 스냅샷은 한 틱 늦어 아직 한산하다고
+                // 말한다 — 그대로 두면 다음 창의 신규 유입이 방금 선 사람을 넘는다.
+                holder.isDataStale(view), false, latch.latched(couponId, nowSec),
+                nowSec, MAX_ETA_SEC));
         exchange.getAttributes().put(DECISION, decision);
         count(decision.name());
         return route(exchange, chain, decision, couponId, state);
@@ -220,6 +236,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                         return error.write(exchange, ApiError.Code.QUEUE_FULL,
                                 retryAfterSec(AdmissionDecision.REJECT_QUEUE_FULL, random));
                     }
+                    // 이 노드가 방금 이 쿠폰을 줄로 보냈다. 다음 창의 신규
+                    // 유입이 이 사람을 넘지 않게 한 구간 붙잡는다.
+                    latch.mark(couponId, clock.instant().getEpochSecond());
                     double etaSec = EtaPolicy.etaSec(entry.rank(), state.credit());
                     return waiting.waiting(exchange,
                             tokens.issue(couponId, memberId, clock.instant()),

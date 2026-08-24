@@ -83,6 +83,23 @@ class EnqueueLatchTest {
         assertThat(좁은_것.size()).isLessThanOrEqualTo(10);
     }
 
+    /**
+     * 이미 걸린 쿠폰을 다시 세우는 것은 붐비는 동안 늘 일어난다. 그때마다
+     * 통째로 비우면 남의 래치가 사라져 그 쿠폰들이 추월당한다.
+     */
+    @Test
+    @DisplayName("있던_쿠폰을_다시_세워도_남의_래치가_안_사라진다")
+    void 있던_쿠폰을_다시_세워도_남의_래치가_안_사라진다() {
+        EnqueueLatch 좁은_것 = EnqueueLatch.of(2, 3);
+        좁은_것.mark("a", 100);
+        좁은_것.mark("b", 100);
+
+        좁은_것.mark("a", 101);
+
+        assertThat(좁은_것.latched("b", 101)).isTrue();
+        assertThat(좁은_것.size()).isEqualTo(2);
+    }
+
     @Test
     @DisplayName("수명이_양수가_아니면_안_만들어진다")
     void 수명이_양수가_아니면_안_만들어진다() {

@@ -114,7 +114,7 @@ Refs: CY-145     ← Jira
 | ~~D-C1~~ | ~~가용량 보고 계약 확대~~ | — | ✅ `{instanceId, addr, credits, ts}` + 60초 램프 (A-11·A-12·A-13) |
 | D-X2 | Spring Boot 버전 (PRD 3.x vs 실제 4.1.0) | 전체 | 🟡 |
 | D-L1 | 큐 진입 지연 예산 (절대값) | Phase 10 착수 판정 | 🟡 |
-| ~~D-C2~~ | ~~매진 응답 식별 신호~~ | — | ✅ `409` + `problem+json` (B-10·B-11) |
+| ~~D-C2~~ | ~~매진 응답 식별 신호~~ | — | ✅ `409` + `COUPON-306` (B-10·B-11) |
 | ~~D-C3~~ | ~~`coupon:policy` 형식 확장~~ | — | ✅ JSON + `pcall(cjson.decode)` (E-12) |
 | ~~D-P1~~ | ~~Redis 영속성 정책~~ | — | ✅ `everysec` + 복제본 (E-6) |
 | ~~D-R1~~ | ~~서비스 디스커버리~~ | — | ✅ 가용량 보고가 곧 레지스트리 (R-1) |

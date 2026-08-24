@@ -65,7 +65,7 @@
 | 판정 오류 방향 | 가능한가 |
 |---|---|
 | `stock<=0`으로 봤는데 실제로는 재고가 있다 | **재입고 직후 최대 1.5초** 가능. 다음 스냅샷이 되돌린다 (B-11) |
-| `stock>0`으로 봤는데 실제로는 매진 | 가능. 백엔드가 `409` + `application/problem+json` (`type`=…`/coupon-sold-out`) 로 처리 (B-10) |
+| `stock>0`으로 봤는데 실제로는 매진 | 가능. 백엔드가 `409` + `COUPON-306` 으로 처리 (B-10) |
 
 **negative cache 를 영구 보관하지 않는 이유가 이것이다** (B-11) — 캐시가 스냅샷보다
 오래 살면 자동 회복이 안 된다.
@@ -77,7 +77,7 @@
 
 ```
 1겹 — 스냅샷:        stock <= 0 → REJECT_SOLD_OUT (판정 최우선, Phase 2 4.5)
-2겹 — negative cache: 백엔드 409 + problem+json `type` 관찰 (B-10). 노드 로컬 기록
+2겹 — negative cache: 백엔드 409 + `COUPON-306` 관찰 (B-10). 노드 로컬 기록
 3겹 — 큐 종결:       CLOSED 상태에서 폴링 시 Redis 안 치고 SOLD_OUT 반환
 ```
 

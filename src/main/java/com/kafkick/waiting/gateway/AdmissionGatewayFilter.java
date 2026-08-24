@@ -135,7 +135,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                 clock.instant().getEpochSecond(), MAX_ETA_SEC));
         exchange.getAttributes().put(DECISION, decision);
         count(decision.name());
-        return route(exchange, chain, decision);
+        return route(exchange, chain, decision, couponId, state);
     }
 
     /**
@@ -155,12 +155,12 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     }
 
     private Mono<Void> route(ServerWebExchange exchange, GatewayFilterChain chain,
-            AdmissionDecision decision) {
+            AdmissionDecision decision, String couponId, CouponState state) {
         if (decision.isPass()) {
             return chain.filter(exchange);
         }
         if (decision.isEnqueue()) {
-            return enqueue(exchange, chain);
+            return enqueue(exchange, chain, couponId, state);
         }
         return error.write(exchange, codeOf(decision), retryAfterSec(decision, random));
     }
@@ -169,17 +169,27 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      * 줄에 세운다. <b>여기가 요청 경로에서 레디스를 치는 유일한 자리다</b> (RD-4) —
      * 통과한 사람은 여기 안 온다.
      */
-    private Mono<Void> enqueue(ServerWebExchange exchange, GatewayFilterChain chain) {
-        String couponId = pathVariable(exchange);
+    private Mono<Void> enqueue(ServerWebExchange exchange, GatewayFilterChain chain,
+            String couponId, CouponState state) {
         String memberId = exchange.getRequest().getHeaders().getFirst(MEMBER_ID);
         if (memberId == null) {
             // 형식 검증이 앞에서 걸렀어야 한다. 여기 오면 배선이 틀린 것이다.
             count("no-member");
             return error.write(exchange, ApiError.Code.INVALID_REQUEST);
         }
-        CouponState state = holder.view().snapshot().coupons().get(couponId);
-        long capacity = state == null ? 0 : state.queueCapacity(MAX_ETA_SEC);
+        // **판정에 쓴 상태를 그대로 쓴다.** 여기서 다시 읽으면 그 사이 틱이
+        // 지나 판정과 답이 어긋난다.
+        long capacity = state.queueCapacity(MAX_ETA_SEC);
         return queue.enqueue(couponId, memberId, capacity, clock.instant())
+                // **여기까지만 열어 준다.** 뒤에 붙이면 줄에 선 사람이 응답을
+                // 못 써서 뒷단까지 가고, 자리를 쥔 채로 재고까지 먹는다.
+                .onErrorResume(e -> {
+                    // 사유를 남긴다. 레디스가 죽은 것과 인자가 틀린 것은 다르게
+                    // 다뤄야 하는데, 계수만으로는 못 가린다.
+                    log.warn("줄에 못 세웠다 — 상한만큼 열어 준다", e);
+                    return Mono.empty();
+                })
+                .switchIfEmpty(Mono.defer(() -> failOpen(exchange, chain).then(Mono.empty())))
                 .flatMap(entry -> {
                     if (!entry.accepted()) {
                         // 2차 방어에 걸렸다. 판정은 자리가 있다고 봤지만 실제로는 없다.
@@ -187,15 +197,13 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                         return error.write(exchange, ApiError.Code.QUEUE_FULL,
                                 retryAfterSec(AdmissionDecision.REJECT_QUEUE_FULL, random));
                     }
-                    double etaSec = EtaPolicy.etaSec(entry.rank(),
-                            state == null ? EtaPolicy.UNKNOWN : state.credit());
+                    double etaSec = EtaPolicy.etaSec(entry.rank(), state.credit());
                     return waiting.waiting(exchange,
                             tokens.issue(couponId, memberId, clock.instant()),
                             entry.rank(), (long) Math.max(0, etaSec),
-                            state == null ? "ADAPTIVE" : state.mode().name(),
+                            state.mode().name(),
                             POLL.intervalSec(etaSec, random));
-                })
-                .onErrorResume(e -> failOpen(exchange, chain));
+                });
     }
 
     /**

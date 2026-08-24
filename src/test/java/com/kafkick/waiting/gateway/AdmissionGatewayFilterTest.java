@@ -256,6 +256,24 @@ class AdmissionGatewayFilterTest {
     }
 
     @Test
+    @DisplayName("줄에_선_사람은_뒷단으로_안_보낸다")
+    void 줄에_선_사람은_뒷단으로_안_보낸다() {
+        // 등록은 됐는데 응답을 못 쓰는 구간이다. 여기서 열어 주면 자리를 쥔
+        // 채로 재고까지 먹는다 — 자기가 자기를 추월한다.
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+        MockServerWebExchange exchange = 요청(COUPON);
+        exchange.getResponse().setComplete().block();
+
+        filter.filter(exchange, e -> {
+            뒷단에_닿음.set(true);
+            return Mono.empty();
+        }).block();
+
+        assertThat(줄.등록_횟수()).isEqualTo(1);
+        assertThat(뒷단에_닿음).hasValue(false);
+    }
+
+    @Test
     @DisplayName("회원_식별자가_없으면_줄을_안_친다")
     void 회원_식별자가_없으면_줄을_안_친다() {
         // 형식 검증이 앞에서 걸렀어야 한다. 여기 오면 배선이 틀린 것이다.

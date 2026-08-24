@@ -17,4 +17,13 @@ public record QueueTokenProperties(String secret) {
     public QueueToken queueToken() {
         return QueueToken.of(secret);
     }
+
+    /**
+     * <b>기본 구현을 그대로 두지 않는다.</b> 레코드는 필드를 다 찍는다 — 바인딩
+     * 실패 하나로 공개 저장소 CI 로그에 키가 남는다.
+     */
+    @Override
+    public String toString() {
+        return "QueueTokenProperties[secret=***]";
+    }
 }

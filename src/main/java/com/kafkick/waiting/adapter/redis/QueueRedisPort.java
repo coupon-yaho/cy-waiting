@@ -75,6 +75,9 @@ public final class QueueRedisPort implements QueuePort {
                         List.of(memberId, MAX_SCORE_TTL_SEC, ALIVE_TTL_SEC,
                                 Long.toString(maxLen), Long.toString(now.getEpochSecond())))
                 .next()
+                // **빈 결과를 성공으로 안 본다.** 그대로 두면 등록도 거절도 아닌
+                // 채로 200 이 나가고, 실패 경로가 통째로 안 돈다.
+                .switchIfEmpty(Mono.error(new IllegalStateException("등록 결과가 비었다")))
                 .map(this::toEntry);
     }
 
@@ -92,6 +95,7 @@ public final class QueueRedisPort implements QueuePort {
                                 RedisKeys.grace(couponId, shards, shard)),
                         List.of(memberId, ALIVE_TTL_SEC, Long.toString(now.getEpochSecond())))
                 .next()
+                .switchIfEmpty(Mono.error(new IllegalStateException("조회 결과가 비었다")))
                 .map(this::toStatus);
     }
 

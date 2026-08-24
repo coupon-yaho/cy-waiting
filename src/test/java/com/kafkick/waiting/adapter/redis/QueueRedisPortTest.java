@@ -152,6 +152,39 @@ class QueueRedisPortTest extends RedisContainerSupport {
     }
 
     /**
+     * <b>같은 답을 몇 번이고 준다.</b> 입장하면 큐에서 빼므로 다음 폴링은 줄에
+     * 없는 것으로 보인다. 그대로 두면 자기 차례를 받은 사람이 1초 뒤에 "매진" 을
+     * 보고, 다시 서면 그동안 온 사람들 뒤로 간다.
+     */
+    @Test
+    @DisplayName("입장은_다시_물어도_입장이다")
+    void 입장은_다시_물어도_입장이다() {
+        QueueEntry 첫째 = 등록("m1");
+        redis.opsForValue().set(RedisKeys.admitted(COUPON, SHARDS, 0),
+                Long.toString(첫째.score())).block(WAIT);
+
+        assertThat(port.status(COUPON, "m1", 지금).block(WAIT).state())
+                .isEqualTo(QueueState.ADMITTED);
+        // 응답을 놓친 클라이언트가 다시 묻는다. 여기서 매진이 나오면 복구 수단이 없다.
+        assertThat(port.status(COUPON, "m1", 지금).block(WAIT).state())
+                .isEqualTo(QueueState.ADMITTED);
+        assertThat(port.status(COUPON, "m1", 지금).block(WAIT).state())
+                .isEqualTo(QueueState.ADMITTED);
+    }
+
+    /** 줄에 선 적 없는 사람까지 입장으로 만들면 그게 곧 무제한 발급이다. */
+    @Test
+    @DisplayName("줄에_선_적_없으면_입장이_아니다")
+    void 줄에_선_적_없으면_입장이_아니다() {
+        등록("m1");
+        redis.opsForValue().set(RedisKeys.admitted(COUPON, SHARDS, 0), "99999999999999")
+                .block(WAIT);
+
+        assertThat(port.status(COUPON, "온적없음", 지금).block(WAIT).state())
+                .isEqualTo(QueueState.NOT_QUEUED);
+    }
+
+    /**
      * <b>등록과 조회가 같은 샤드를 봐야 한다.</b> 갈리면 방금 선 사람이 조회에서
      * 줄에 없는 것으로 나오고, 그는 영영 자기 순번을 못 본다.
      */

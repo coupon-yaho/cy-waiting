@@ -10,21 +10,25 @@ import { createServer } from 'node:http';
 // **설정 오타를 조용히 넘기지 않는다.** 숫자가 아니면 NaN 이 되고, NaN 비교는
 // 전부 거짓이라 한도가 무제한이 된다 — 용량을 흉내 내려고 만든 스텁이 아무것도
 // 안 재는 상태로 돈다.
-function num(name, fallback, { integer = false } = {}) {
+function num(name, fallback, { integer = false, min = 0, max = Infinity } = {}) {
   const raw = process.env[name];
-  if (raw === undefined || raw === '') {
+  // 공백만 있는 값은 Number 가 0 으로 읽는다. 그게 포트면 임시 포트에 붙어
+  // 헬스체크도 프록시 주소도 어긋난다 — 설정 실수가 조용히 넘어간다.
+  if (raw === undefined || raw.trim() === '') {
     return fallback;
   }
   const v = Number(raw);
-  const ok = Number.isFinite(v) && v >= 0 && (!integer || Number.isInteger(v));
+  const ok = Number.isFinite(v) && v >= min && v <= max
+      && (!integer || Number.isInteger(v));
   if (!ok) {
-    process.stderr.write(`${name} 가 0 이상${integer ? ' 정수' : ' 숫자'}가 아니다: ${raw}\n`);
+    process.stderr.write(
+        `${name} 가 [${min}, ${max}] 안의${integer ? ' 정수' : ' 숫자'}가 아니다: ${raw}\n`);
     process.exit(1);
   }
   return v;
 }
 
-const PORT = num('PORT', 8090, { integer: true });
+const PORT = num('PORT', 8090, { integer: true, min: 1, max: 65535 });
 const LATENCY_MS = num('LATENCY_MS', 0);
 // 0 은 무제한. 한도를 넘으면 503 을 내 — 뒷단이 못 받는 상태를 흉내 낸다.
 // 동시 한도는 세는 값이라 정수다. 1.5 를 받으면 둘째 요청까지 들어온다.

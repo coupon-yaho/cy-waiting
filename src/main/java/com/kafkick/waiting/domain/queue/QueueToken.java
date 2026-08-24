@@ -32,8 +32,13 @@ public final class QueueToken {
 
     private static final char SEPARATOR = '.';
 
-    /** 값에 못 들어가는 글자여야 한다. 쿠폰 이름에 섞이면 경계가 옮겨진다. */
-    private static final char FIELD = '\u001f';
+    /**
+     * 필드 구분자.
+     *
+     * <p>값에 못 들어가는 글자여야 한다. 쿠폰 이름에 섞이면 경계가 옮겨져
+     * 한 필드가 둘로 쪼개진다 — 단위 구분자는 식별자에 쓸 수 없는 제어문자다.
+     */
+    private static final char FIELD = (char) 0x1f;
 
     private static final Base64.Encoder ENCODER = Base64.getUrlEncoder().withoutPadding();
     private static final Base64.Decoder DECODER = Base64.getUrlDecoder();
@@ -88,12 +93,12 @@ public final class QueueToken {
         if (presented == null || !MessageDigest.isEqual(sign(payload), presented)) {
             return Optional.empty();
         }
-        byte[] claims = decode(payload);
-        if (claims == null) {
-            return Optional.empty();
-        }
-        // 서명이 맞으므로 여기서부터는 우리가 만든 문자열이다.
-        String[] parts = new String(claims, StandardCharsets.UTF_8).split(String.valueOf(FIELD), -1);
+        // 서명이 맞으므로 여기서부터는 우리가 만든 문자열이다 — 인코더가 낸
+        // 값이라 반드시 디코딩된다.
+        String[] parts = new String(DECODER.decode(payload), StandardCharsets.UTF_8)
+                .split(String.valueOf(FIELD), -1);
+        // **칸 수를 본다.** 쿠폰 이름에 구분자가 섞이면 한 필드가 둘로 쪼개져
+        // 만료 자리에 남의 값이 온다.
         if (parts.length != 3 || !parts[0].equals(couponId)) {
             return Optional.empty();
         }

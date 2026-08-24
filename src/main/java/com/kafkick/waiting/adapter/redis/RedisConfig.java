@@ -36,6 +36,18 @@ public class RedisConfig {
     }
 
     /**
+     * 요청 경로가 레디스를 치는 유일한 자리 (RD-4).
+     *
+     * <p>샤드 수는 스케줄러와 <b>같은 값</b>이어야 한다. 갈리면 배분이 올린 임계와
+     * 조회가 보는 줄이 다른 키가 되어, 차례가 와도 아무도 못 들어간다.
+     */
+    @Bean
+    QueueRedisPort queueRedisPort(ReactiveStringRedisTemplate redis,
+            ControlPlaneProperties properties) {
+        return QueueRedisPort.of(redis, properties.scheduler().shards());
+    }
+
+    /**
      * <b>여기 쓰는 리스가 락의 실제 수명이다.</b> 판정 쪽 유예와 갈리면 락은
      * 만료됐는데 자기가 아직 리더인 줄 아는 구간이 생긴다 — 리더가 둘이다.
      */

@@ -20,6 +20,10 @@ waiting:
   backend:
     # 가용량 기반 분배는 Phase 9 다. 여기서는 하나만 본다.
     uri: http://localhost:8090
+  token:
+    # **기본값을 안 둔다.** 두면 아무도 안 넣은 채로 운영에 나가고, 그때
+    # 서명은 공개된 값으로 찍힌다 — 서명이 있다는 사실만 남고 뜻은 사라진다.
+    secret: ${WAITING_TOKEN_SECRET:}
   cors:
     # 와일드카드를 안 쓴다. 열어 두면 이 목록이 있다는 사실이 무의미해진다.
     allowed:

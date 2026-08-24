@@ -3,8 +3,10 @@ package com.kafkick.waiting.gateway;
 import com.kafkick.waiting.control.SnapshotHolder;
 import com.kafkick.waiting.domain.admission.AdmissionDecider;
 import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
+import com.kafkick.waiting.domain.queue.QueueToken;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
@@ -14,6 +16,7 @@ import org.springframework.core.annotation.Order;
  * 것만으로 검증이 조용히 사라진다.
  */
 @Configuration
+@EnableConfigurationProperties(QueueTokenProperties.class)
 public class IdentityConfig {
 
     /** 쿠폰 2,000개를 상정한 값. 넘으면 판정이 그 사실을 따로 알린다. */
@@ -34,8 +37,27 @@ public class IdentityConfig {
      */
     @Bean
     public AdmissionGatewayFilter admissionGatewayFilter(SnapshotHolder holder,
-            AdmissionDecider decider, MeterRegistry meters) {
-        return AdmissionGatewayFilter.of(holder, decider, Clock.systemUTC(), meters);
+            AdmissionDecider decider, MeterRegistry meters,
+            QueuePort queue, QueueToken tokens) {
+        return AdmissionGatewayFilter.of(holder, decider, Clock.systemUTC(), meters,
+                queue, tokens);
+    }
+
+    /**
+     * 순번 조회. <b>대상을 토큰으로 특정한다</b> — 회원 헤더로 고르면 헤더 하나
+     * 바꿔서 남의 순번을 본다.
+     */
+    @Bean
+    @Order(FilterOrder.QUEUE_STATUS)
+    public QueueStatusFilter queueStatusFilter(SnapshotHolder holder, QueuePort queue,
+            QueueToken tokens, MeterRegistry meters) {
+        return QueueStatusFilter.of(holder, queue, tokens, Clock.systemUTC(), meters);
+    }
+
+    /** 비밀키가 없거나 짧으면 여기서 기동이 멎는다. 약한 키로 조용히 돌지 않는다. */
+    @Bean
+    public QueueToken queueToken(QueueTokenProperties properties) {
+        return properties.queueToken();
     }
 
     /**

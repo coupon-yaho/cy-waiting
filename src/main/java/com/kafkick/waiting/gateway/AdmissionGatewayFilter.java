@@ -6,7 +6,9 @@ import com.kafkick.waiting.domain.admission.AdmissionDecision;
 import com.kafkick.waiting.domain.admission.AdmissionRequest;
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.queue.EtaPolicy;
+import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
+import com.kafkick.waiting.domain.queue.QueueToken;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.util.Map;
@@ -45,37 +47,53 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     /** 재시도 안내의 흔들림 폭. 폴링 간격과 같은 정책을 쓴다. */
     private static final PollIntervalPolicy POLL = PollIntervalPolicy.of(0.2);
 
+    private static final String MEMBER_ID = "X-Member-Id";
+
+    /** 등록이 안 될 때 초당 몇 명까지 뒷단으로 흘려보낼 것인가. */
+    private static final long FAIL_OPEN_CAP = 200;
+
+    private static final String FAIL_OPEN_KEY = "enqueue";
+
     private final SnapshotHolder holder;
     private final AdmissionDecider decider;
     private final Clock clock;
     private final MeterRegistry meters;
     private final DoubleSupplier random;
+    private final QueuePort queue;
+    private final QueueToken tokens;
+    private final SecondWindowLimiter failOpen;
     private final ApiError error;
+    private final QueueResponse waiting = QueueResponse.create();
 
     /** 설정 오류를 한 번만 알린다. 라우트가 틀렸으면 늘 틀리다. */
     private final AtomicBoolean misconfigured = new AtomicBoolean();
 
     private AdmissionGatewayFilter(SnapshotHolder holder, AdmissionDecider decider,
-            Clock clock, MeterRegistry meters, DoubleSupplier random) {
+            Clock clock, MeterRegistry meters, DoubleSupplier random,
+            QueuePort queue, QueueToken tokens) {
         this.holder = Objects.requireNonNull(holder, "holder 는 필수다");
         this.decider = Objects.requireNonNull(decider, "decider 는 필수다");
         this.clock = Objects.requireNonNull(clock, "clock 은 필수다");
         this.meters = Objects.requireNonNull(meters, "meters 는 필수다");
         this.random = Objects.requireNonNull(random, "random 은 필수다");
+        this.queue = Objects.requireNonNull(queue, "queue 는 필수다");
+        this.tokens = Objects.requireNonNull(tokens, "tokens 는 필수다");
+        this.failOpen = SecondWindowLimiter.withMaxKeys(1);
         this.error = ApiError.of(clock);
     }
 
     /** 흔들림의 난수원은 스레드마다 따로 둔다 — 공유하면 그 자체가 경합점이다. */
     public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider,
-            Clock clock, MeterRegistry meters) {
+            Clock clock, MeterRegistry meters, QueuePort queue, QueueToken tokens) {
         return of(holder, decider, clock, meters,
-                () -> ThreadLocalRandom.current().nextDouble());
+                () -> ThreadLocalRandom.current().nextDouble(), queue, tokens);
     }
 
     /** 난수원을 받는다. 고정하지 못하면 흔들림이 실제로 붙었는지 못 잰다 (TS-4). */
     public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider,
-            Clock clock, MeterRegistry meters, DoubleSupplier random) {
-        return new AdmissionGatewayFilter(holder, decider, clock, meters, random);
+            Clock clock, MeterRegistry meters, DoubleSupplier random,
+            QueuePort queue, QueueToken tokens) {
+        return new AdmissionGatewayFilter(holder, decider, clock, meters, random, queue, tokens);
     }
 
     /**
@@ -141,12 +159,59 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         if (decision.isPass()) {
             return chain.filter(exchange);
         }
-        // 큐 등록은 CY-402 다. 그전까지는 붙잡지 않고 뒷단으로 보낸다 —
-        // 여기서 막으면 아직 못 만든 응답을 기다리는 사람이 생긴다.
         if (decision.isEnqueue()) {
-            return chain.filter(exchange);
+            return enqueue(exchange, chain);
         }
         return error.write(exchange, codeOf(decision), retryAfterSec(decision, random));
+    }
+
+    /**
+     * 줄에 세운다. <b>여기가 요청 경로에서 레디스를 치는 유일한 자리다</b> (RD-4) —
+     * 통과한 사람은 여기 안 온다.
+     */
+    private Mono<Void> enqueue(ServerWebExchange exchange, GatewayFilterChain chain) {
+        String couponId = pathVariable(exchange);
+        String memberId = exchange.getRequest().getHeaders().getFirst(MEMBER_ID);
+        if (memberId == null) {
+            // 형식 검증이 앞에서 걸렀어야 한다. 여기 오면 배선이 틀린 것이다.
+            count("no-member");
+            return error.write(exchange, ApiError.Code.INVALID_REQUEST);
+        }
+        CouponState state = holder.view().snapshot().coupons().get(couponId);
+        long capacity = state == null ? 0 : state.queueCapacity(MAX_ETA_SEC);
+        return queue.enqueue(couponId, memberId, capacity, clock.instant())
+                .flatMap(entry -> {
+                    if (!entry.accepted()) {
+                        // 2차 방어에 걸렸다. 판정은 자리가 있다고 봤지만 실제로는 없다.
+                        count(AdmissionDecision.REJECT_QUEUE_FULL.name());
+                        return error.write(exchange, ApiError.Code.QUEUE_FULL,
+                                retryAfterSec(AdmissionDecision.REJECT_QUEUE_FULL, random));
+                    }
+                    double etaSec = EtaPolicy.etaSec(entry.rank(),
+                            state == null ? EtaPolicy.UNKNOWN : state.credit());
+                    return waiting.waiting(exchange,
+                            tokens.issue(couponId, memberId, clock.instant()),
+                            entry.rank(), (long) Math.max(0, etaSec),
+                            state == null ? "ADAPTIVE" : state.mode().name(),
+                            POLL.intervalSec(etaSec, random));
+                })
+                .onErrorResume(e -> failOpen(exchange, chain));
+    }
+
+    /**
+     * 줄을 못 세웠다.
+     *
+     * <p><b>상한을 두고 열어 준다.</b> 전부 막으면 레디스 장애가 곧 전면 장애이고,
+     * 전부 열면 뒷단이 그대로 무너진다. 상한을 넘은 몫은 되돌려 보낸다.
+     */
+    private Mono<Void> failOpen(ServerWebExchange exchange, GatewayFilterChain chain) {
+        if (failOpen.tryAcquire(FAIL_OPEN_KEY, FAIL_OPEN_CAP, clock.instant().getEpochSecond())) {
+            count("enqueue-failed-open");
+            return chain.filter(exchange);
+        }
+        count("enqueue-failed-shed");
+        return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
+                retryAfterSec(AdmissionDecision.REJECT_OVERLOAD, random));
     }
 
     /**

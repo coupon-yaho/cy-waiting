@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Instant;
 import java.util.Optional;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -86,6 +87,33 @@ class QueueTokenTest {
                 .contains("m1");
     }
 
+    /**
+     * 쿠폰 이름에 구분자가 섞이면 한 필드가 둘로 쪼개져 만료 자리에 남의 값이 온다.
+     */
+    @Test
+    @DisplayName("구분자가_섞인_쿠폰은_안_통한다")
+    void 구분자가_섞인_쿠폰은_안_통한다() {
+        String 섞인_쿠폰 = "c1" + (char) 0x1f + "9999999999";
+
+        assertThat(token.verify(token.issue(섞인_쿠폰, "m1", 지금), 섞인_쿠폰, 지금)).isEmpty();
+    }
+
+    /** 서명 자리에 아무 글자나 들어온다. 디코딩부터 터지면 500 이 나간다. */
+    @Test
+    @DisplayName("서명이_형식부터_틀려도_거절한다")
+    void 서명이_형식부터_틀려도_거절한다() {
+        String issued = token.issue("c1", "m1", 지금);
+        String 앞부분 = issued.substring(0, issued.indexOf('.'));
+
+        assertThat(token.verify(앞부분 + ".!!!!", "c1", 지금)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("구분자가_없으면_거절한다")
+    void 구분자가_없으면_거절한다() {
+        assertThat(token.verify("qt_abcdef", "c1", 지금)).isEmpty();
+    }
+
     /** 사유를 나누면 어디를 고쳐야 하는지 알려 주는 셈이다. */
     @Test
     @DisplayName("거절_사유를_나누지_않는다")
@@ -121,7 +149,7 @@ class QueueTokenTest {
     @DisplayName("여러_스레드가_같이_써도_안_깨진다")
     void 여러_스레드가_같이_써도_안_깨진다() {
         // Mac 인스턴스를 공유하면 서명이 섞여 자기 토큰이 자기 검증에 떨어진다.
-        assertThat(java.util.stream.IntStream.range(0, 500).parallel()
+        assertThat(IntStream.range(0, 500).parallel()
                 .allMatch(i -> token.verify(
                         token.issue("c1", "m" + i, 지금), "c1", 지금).isPresent()))
                 .isTrue();

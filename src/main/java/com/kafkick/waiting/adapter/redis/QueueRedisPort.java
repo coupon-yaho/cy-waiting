@@ -2,6 +2,7 @@ package com.kafkick.waiting.adapter.redis;
 
 import com.kafkick.waiting.domain.queue.QueueEntry;
 import com.kafkick.waiting.domain.queue.QueueState;
+import com.kafkick.waiting.gateway.QueuePort;
 import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
@@ -16,7 +17,7 @@ import reactor.core.publisher.Mono;
  * <p><b>요청 경로가 레디스를 치는 유일한 자리다</b> (RD-4). 판정은 스냅샷이
  * 하고 여기는 판정이 끝난 뒤에만 돈다 — 통과하는 사람은 여기 안 온다.
  */
-public final class QueueRedisPort {
+public final class QueueRedisPort implements QueuePort {
 
     @SuppressWarnings("rawtypes")
     private static final RedisScript<List> ENQUEUE =
@@ -64,6 +65,7 @@ public final class QueueRedisPort {
      *
      * @param maxLen 큐 길이 상한. {@code 0} 이면 상한 없음
      */
+    @Override
     public Mono<QueueEntry> enqueue(String couponId, String memberId, long maxLen, Instant now) {
         int shard = ShardHash.shardOf(memberId, shards);
         return redis.execute(ENQUEUE,
@@ -80,6 +82,7 @@ public final class QueueRedisPort {
      * 지금 어디쯤인가. 조회·하트비트·배수 판정이 한 번에 일어난다 — 나누면
      * 성실히 새로고침하는 사람이 이탈자로 지워진다.
      */
+    @Override
     public Mono<QueueEntry> status(String couponId, String memberId, Instant now) {
         int shard = ShardHash.shardOf(memberId, shards);
         return redis.execute(STATUS,

@@ -16,6 +16,7 @@ import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.CouponStates;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
+import com.kafkick.waiting.domain.queue.QueueToken;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -45,6 +46,8 @@ class AdmissionGatewayFilterTest {
 
     private static final String COUPON = "c1";
 
+    private static final String MEMBER = "812934";
+
     /** 고정 시계. 실제 시계를 쓰면 낡음 판정이 장비 속도에 걸린다 (TS-4). */
     private static final Instant 지금 = Instant.parse("2026-08-24T00:00:00Z");
 
@@ -53,16 +56,21 @@ class AdmissionGatewayFilterTest {
     private final SnapshotHolder holder = SnapshotHolder.of(
             Duration.ofSeconds(3), Duration.ofSeconds(10),
             Clock.fixed(지금, ZoneOffset.UTC));
+    private final FakeQueuePort 줄 = FakeQueuePort.create();
+
+    private final QueueToken tokens = QueueToken.of("0123456789abcdef0123456789abcdef");
+
     private final AdmissionGatewayFilter filter = AdmissionGatewayFilter.of(
             holder, AdmissionDecider.of(SecondWindowLimiter.withMaxKeys(10_000), 0.2),
-            Clock.fixed(지금, ZoneOffset.UTC), meters);
+            Clock.fixed(지금, ZoneOffset.UTC), meters, 줄, tokens);
 
     private final AtomicReference<Boolean> 뒷단에_닿음 = new AtomicReference<>(false);
 
     private MockServerWebExchange 요청(String couponId) {
         MockServerWebExchange exchange = MockServerWebExchange.from(
                 MockServerHttpRequest.method(HttpMethod.POST,
-                        "/api/v1/coupons/" + couponId + "/issue"));
+                        "/api/v1/coupons/" + couponId + "/issue")
+                        .header("X-Member-Id", MEMBER));
         exchange.getAttributes().put(
                 ServerWebExchangeUtils.URI_TEMPLATE_VARIABLES_ATTRIBUTE,
                 Map.of("couponId", couponId));
@@ -158,18 +166,114 @@ class AdmissionGatewayFilterTest {
     }
 
     @Test
-    @DisplayName("대기_판정은_아직_뒷단으로_보낸다")
-    void 대기_판정은_아직_뒷단으로_보낸다() {
-        // 큐 등록과 순번 응답이 아직 없다. 여기서 붙잡으면 못 만든 응답을
-        // 기다리는 사람이 생긴다 — 만들어지면 이 시험이 바뀐다 (CY-402).
+    @DisplayName("대기_판정은_뒷단에_안_간다")
+    void 대기_판정은_뒷단에_안_간다() {
+        // 줄에 세운 사람을 뒷단으로도 보내면, 줄을 선 채로 발급까지 받는다 —
+        // 줄 선 사람을 자기가 추월하는 셈이다.
         스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
 
         MockServerWebExchange exchange = 태운다(COUPON);
 
         assertThat(exchange.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
                 .matches(AdmissionDecision::isEnqueue, "대기 판정");
+        assertThat(뒷단에_닿음).hasValue(false);
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+        assertThat(줄.등록_횟수()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("대기_응답에_순번과_토큰을_싣는다")
+    void 대기_응답에_순번과_토큰을_싣는다() {
+        // 토큰이 없으면 폴링할 수단이 없다. 순번이 없으면 얼마나 남았는지 모른다.
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+
+        MockServerWebExchange exchange = 태운다(COUPON);
+        String 본문 = exchange.getResponse().getBodyAsString().block();
+
+        assertThat(본문)
+                .contains("\"success\":true")
+                .contains("\"admitted\":false")
+                .contains("\"position\":0")
+                .contains("\"queueMode\":\"ADAPTIVE\"");
+        assertThat(tokens.verify(토큰(본문), COUPON, 지금)).contains(MEMBER);
+        // 순번은 사람마다 다르다. 프록시가 캐시하면 뒤에 온 사람이 남의 순번을 받는다.
+        assertThat(exchange.getResponse().getHeaders().getCacheControl()).isEqualTo("no-store");
+    }
+
+    @Test
+    @DisplayName("통과_판정은_줄을_안_친다")
+    void 통과_판정은_줄을_안_친다() {
+        // **요청 경로에서 레디스를 치지 않는다** (RD-4). 판정 재료는 스냅샷에만 있다.
+        스냅샷을_심는다(CouponStates.idle(1_000));
+
+        태운다(COUPON);
+
+        assertThat(뒷단에_닿음).hasValue(true);
+        assertThat(줄.왕복()).isZero();
+    }
+
+    @Test
+    @DisplayName("줄을_못_세우면_상한만큼_열어_준다")
+    void 줄을_못_세우면_상한만큼_열어_준다() {
+        // 전부 막으면 레디스 장애가 곧 전면 장애다. 전부 열면 뒷단이 무너진다.
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+        줄.터진다(new IllegalStateException("레디스가 죽었다"));
+
+        MockServerWebExchange exchange = 태운다(COUPON);
+
         assertThat(뒷단에_닿음).hasValue(true);
         assertThat(exchange.getResponse().getStatusCode()).isNull();
+    }
+
+    @Test
+    @DisplayName("줄이_실제로_찼으면_거절한다")
+    void 줄이_실제로_찼으면_거절한다() {
+        // 판정은 자리가 있다고 봤지만 실제로는 없다. 스냅샷은 한 틱 늦다.
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+        줄.가득_찼다();
+
+        MockServerWebExchange exchange = 태운다(COUPON);
+
+        assertThat(exchange.getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        assertThat(뒷단에_닿음).hasValue(false);
+    }
+
+    @Test
+    @DisplayName("상한을_넘긴_몫은_되돌려_보낸다")
+    void 상한을_넘긴_몫은_되돌려_보낸다() {
+        // 전부 열면 뒷단이 그대로 무너진다. 초당 상한을 넘긴 몫은 끊는다.
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+        줄.터진다(new IllegalStateException("레디스가 죽었다"));
+
+        MockServerWebExchange 마지막 = null;
+        for (int i = 0; i <= 200; i++) {
+            마지막 = 태운다(COUPON);
+        }
+
+        assertThat(마지막.getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+    }
+
+    @Test
+    @DisplayName("회원_식별자가_없으면_줄을_안_친다")
+    void 회원_식별자가_없으면_줄을_안_친다() {
+        // 형식 검증이 앞에서 걸렀어야 한다. 여기 오면 배선이 틀린 것이다.
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.method(HttpMethod.POST,
+                        "/api/v1/coupons/" + COUPON + "/issue"));
+        exchange.getAttributes().put(
+                ServerWebExchangeUtils.URI_TEMPLATE_VARIABLES_ATTRIBUTE, Map.of("couponId", COUPON));
+        filter.filter(exchange, e -> Mono.empty()).block();
+
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(줄.왕복()).isZero();
+    }
+
+    private String 토큰(String 본문) {
+        int from = 본문.indexOf("\"queueToken\":\"") + "\"queueToken\":\"".length();
+        return 본문.substring(from, 본문.indexOf('"', from));
     }
 
     @Test
@@ -244,7 +348,7 @@ class AdmissionGatewayFilterTest {
         // 안 알려 주면 각자 마음대로 돌아온다. 그 파도가 다음 거절을 만든다.
         AdmissionGatewayFilter f = AdmissionGatewayFilter.of(
                 holder, AdmissionDecider.of(SecondWindowLimiter.withMaxKeys(10_000), 0.2),
-                Clock.fixed(지금, ZoneOffset.UTC), meters, () -> 0.5);
+                Clock.fixed(지금, ZoneOffset.UTC), meters, () -> 0.5, 줄, tokens);
         스냅샷을_심는다(CouponStates.queueing(1, 1_000, 5_000));
 
         MockServerWebExchange exchange = 요청(COUPON);
@@ -358,7 +462,8 @@ class AdmissionGatewayFilterTest {
         Instant 낡은_발행 = 지금.minusSeconds(3_600);
         MutableClock 시계 = MutableClock.at(지금);
         AdmissionGatewayFilter 시계를_쓰는_필터 = AdmissionGatewayFilter.of(
-                holder, AdmissionDecider.of(SecondWindowLimiter.withMaxKeys(10), 0.2), 시계, meters);
+                holder, AdmissionDecider.of(SecondWindowLimiter.withMaxKeys(10), 0.2), 시계,
+                meters, 줄, tokens);
         holder.replace(new GatewaySnapshot(
                 Map.of(COUPON, CouponStates.idle(1_000_000)),
                 new SnapshotMeta(1, 1), 낡은_발행));

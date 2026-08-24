@@ -168,14 +168,14 @@ class QueueRedisPortTest extends RedisContainerSupport {
 
         쪼갠_것.enqueue(COUPON, member, 0, 지금).block(WAIT);
 
-        // 자기 샤드에만 들어갔는지 실물로 본다.
+        // 자기 샤드에만 들어갔는지 실물로 본다. 0번 샤드로 굳으면 자기 샤드가
+        // 0 이 아닌 사람에게서 드러나므로, 그 사람을 골랐다는 것도 못 박는다.
+        assertThat(내_샤드).isEqualTo(ShardHash.shardOf(member, 샤드수)).isPositive();
         assertThat(redis.opsForZSet()
                 .score(RedisKeys.queue(COUPON, 샤드수, 내_샤드), member).block(WAIT))
-                .isNotNull();
+                .isPositive();
         assertThat(쪼갠_것.status(COUPON, member, 지금).block(WAIT).state())
                 .isEqualTo(QueueState.WAITING);
-        // 0번 샤드로 굳으면 자기 샤드가 0 이 아닌 사람에게서 드러난다.
-        assertThat(내_샤드).isNotZero();
     }
 
     /**

@@ -207,7 +207,7 @@ class QueueStatusTest extends RedisContainerSupport {
 
         assertThatThrownBy(() ->
                 redis.execute(statusScript, List.of(QUEUE, ADMITTED, alive("m0"), GRACE),
-                                List.of("m0", "-1", NOW))
+                                List.of("m0", "0", NOW))
                         .blockFirst(WAIT))
                 .rootCause()
                 .hasMessageContaining("alive TTL");

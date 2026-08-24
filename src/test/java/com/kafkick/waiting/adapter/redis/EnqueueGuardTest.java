@@ -137,13 +137,26 @@ class EnqueueGuardTest extends RedisContainerSupport {
     }
 
     @Test
-    @DisplayName("상한이_0이면_제한하지_않는다")
-    void 상한이_0이면_제한하지_않는다() {
+    @DisplayName("상한_없음_표식이면_제한하지_않는다")
+    void 상한_없음_표식이면_제한하지_않는다() {
         for (int i = 0; i < 5; i++) {
             enqueue("m" + i, "30", "-1");
         }
 
         assertThat(redis.opsForZSet().size(QUEUE).block(WAIT)).isEqualTo(5);
+    }
+
+    /**
+     * 도메인은 상한 0 을 "배수할 수 없으니 받지 않는다" 로 읽는다. 여기서 상한
+     * 없음으로 읽으면 뜻이 정반대가 되고, 배수가 멎은 줄이 무한히 자란다.
+     */
+    @Test
+    @DisplayName("상한이_0이면_빈_줄에도_안_세운다")
+    void 상한이_0이면_빈_줄에도_안_세운다() {
+        List<Object> result = enqueue("m1", "30", "0");
+
+        assertThat(String.valueOf(result.get(0))).isEqualTo("-1");
+        assertThat(redis.opsForZSet().size(QUEUE).block(WAIT)).isZero();
     }
 
     @Test

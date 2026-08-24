@@ -67,7 +67,9 @@ public final class FakeQueuePort implements QueuePort {
             return Mono.error(터뜨릴_것);
         }
         boolean 있던_사람 = queued.containsKey(memberId);
-        if (!있던_사람 && (가득_참 || (maxLen > 0 && queued.size() >= maxLen))) {
+        // **0 도 상한이다.** 스크립트와 다르게 읽으면 게이트웨이 시험이 실제
+        // 거절을 놓친다 — 픽스처만 받아 주기 때문이다.
+        if (!있던_사람 && (가득_참 || (maxLen >= 0 && queued.size() >= maxLen))) {
             return Mono.just(QueueEntry.rejected());
         }
         queued.putIfAbsent(memberId, (long) queued.size() + 1);

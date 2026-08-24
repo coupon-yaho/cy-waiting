@@ -16,6 +16,21 @@ public final class ApiError {
     /** 검증 실패·필수 헤더 누락. 발급 계층 에러 코드 체계를 따른다. */
     public static final String INVALID_REQUEST = "COMMON-001";
 
+    /** 스냅샷에 없는 쿠폰. 발급 계층의 리소스 없음과 같은 코드다. */
+    public static final String NOT_FOUND = "COMMON-002";
+
+    /** 재고 소진. <b>뒷단이 내는 것과 구별되면 안 된다</b> — 그 차이가 신호가 된다. */
+    public static final String STOCK_EXHAUSTED = "STOCK_EXHAUSTED";
+
+    /** 줄 자체가 꽉 찼다. 매진과 다르다 — 잠시 뒤 다시 오면 된다. */
+    public static final String QUEUE_FULL = "QUEUE_FULL";
+
+    /** 노드가 감당량을 넘었다. 조일 것은 쿠폰이 아니라 노드 수다. */
+    public static final String TEMPORARILY_UNAVAILABLE = "TEMPORARILY_UNAVAILABLE";
+
+    /** 차례가 왔는데 상한을 넘었다. 큐 뒤로 안 돌린다 (F8). */
+    public static final String RETRY_TOKEN = "RETRY_TOKEN";
+
     private ApiError() {
     }
 

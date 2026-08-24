@@ -40,10 +40,18 @@ for path in files:
         print(f"  {path.name}: YAML 을 못 읽는다 — {str(e).splitlines()[0]}", file=sys.stderr)
         bad += 1
         continue
+    # 셸은 스텝 → 잡 → 워크플로 순으로 정해진다. 기본값은 러너의 bash 다.
+    top = ((doc.get('defaults') or {}).get('run') or {}).get('shell')
     for job, spec in (doc.get('jobs') or {}).items():
+        job_shell = ((spec.get('defaults') or {}).get('run') or {}).get('shell') or top
         for i, step in enumerate(spec.get('steps') or []):
             run = step.get('run')
             if not run:
+                continue
+            shell = step.get('shell') or job_shell or 'bash'
+            # **bash 가 아닌 것을 bash 로 읽지 않는다.** 파이썬 스크립트를
+            # `bash -n` 에 넣으면 멀쩡한 코드가 문법 오류로 나온다.
+            if shell.split()[0] not in ('bash', 'sh'):
                 continue
             with tempfile.NamedTemporaryFile('w', suffix='.sh', delete=False) as f:
                 f.write(re.sub(r'\$\{\{[^}]*\}\}', 'X', run))

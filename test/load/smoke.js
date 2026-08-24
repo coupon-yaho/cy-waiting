@@ -87,13 +87,9 @@ export default function () {
   });
   check(noToken, {
     '토큰 없는 순번 조회는 끊는다': (r) => r.status === 400,
-    '순번 조회는 뒷단까지 안 간다': (r) => {
-      try {
-        return r.json().data === undefined;
-      } catch {
-        return false;
-      }
-    },
+    // 뒷단이 답했으면 스텁이 경로를 되돌려 준다. data 유무로 보면 뒷단이
+    // data 없이 400 을 내도 통과한다.
+    '순번 조회는 뒷단까지 안 간다': (r) => !servedByBackend(r, '/api/v1/coupons/c1/queue'),
   });
 
   check(noId, {

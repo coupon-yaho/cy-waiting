@@ -58,6 +58,22 @@ dependencyManagement {
 // 해당 페이즈에 도달하기 전에는 넣지 않는다.
 // resilience4j·loadbalancer 를 미리 넣으면 쓰지 않는 의존성이 빌드를 무겁게 하고,
 // 어느 페이즈가 무엇을 요구하는지가 흐려진다.
+// **런처 판을 플랫폼 나머지와 맞춘다.** 뮤테이션 플러그인이 자기가 아는 판으로
+// 런처를 끌어내린다. 나머지 플랫폼 모듈은 부트 BOM 이 관리하는 최신이라, 갈린
+// 채로 돌면 실행기가 없는 메서드를 불러 **테스트가 통째로 안 뜬다** — 실패가
+// 아니라 실행기 오류라 어느 시험이 깨졌는지도 안 보인다.
+//
+// 판을 손으로 안 적는다. BOM 이 올릴 때 여기만 뒤처지면 같은 어긋남이 반대
+// 방향으로 다시 난다.
+configurations.testRuntimeClasspath {
+    resolutionStrategy.eachDependency { d ->
+        if (d.requested.group == 'org.junit.platform'
+                && d.requested.name == 'junit-platform-launcher') {
+            d.useVersion dependencyManagement.importedProperties['junit-jupiter.version']
+        }
+    }
+}
+
 dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-webflux'
     implementation 'org.springframework.cloud:spring-cloud-starter-gateway-server-webflux'

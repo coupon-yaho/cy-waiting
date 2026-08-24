@@ -3,6 +3,7 @@ package com.kafkick.waiting.gateway;
 import com.kafkick.waiting.control.SnapshotHolder;
 import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
 import com.kafkick.waiting.domain.coupon.CouponState;
+import com.kafkick.waiting.domain.queue.EntryToken;
 import com.kafkick.waiting.domain.queue.EtaPolicy;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import com.kafkick.waiting.domain.queue.QueueEntry;
@@ -60,6 +61,7 @@ public final class QueueStatusFilter implements WebFilter {
     private final SnapshotHolder holder;
     private final QueuePort queue;
     private final QueueToken tokens;
+    private final EntryToken entryTokens;
     private final Clock clock;
     private final MeterRegistry meters;
     private final DoubleSupplier random;
@@ -69,10 +71,11 @@ public final class QueueStatusFilter implements WebFilter {
 
     private QueueStatusFilter(SnapshotHolder holder, QueuePort queue, QueueToken tokens,
             Clock clock, MeterRegistry meters, DoubleSupplier random,
-            SecondWindowLimiter limiter) {
+            SecondWindowLimiter limiter, EntryToken entryTokens) {
         this.holder = Objects.requireNonNull(holder, "holder 는 필수다");
         this.queue = Objects.requireNonNull(queue, "queue 는 필수다");
         this.tokens = Objects.requireNonNull(tokens, "tokens 는 필수다");
+        this.entryTokens = Objects.requireNonNull(entryTokens, "entryTokens 는 필수다");
         this.clock = Objects.requireNonNull(clock, "clock 은 필수다");
         this.meters = Objects.requireNonNull(meters, "meters 는 필수다");
         this.random = Objects.requireNonNull(random, "random 은 필수다");
@@ -83,21 +86,24 @@ public final class QueueStatusFilter implements WebFilter {
     /** 흔들림의 난수원은 스레드마다 따로 둔다 — 공유하면 그 자체가 경합점이다. */
     @Autowired
     QueueStatusFilter(SnapshotHolder holder, QueuePort queue, QueueToken tokens,
-            Clock clock, MeterRegistry meters, SecondWindowLimiter limiter) {
+            Clock clock, MeterRegistry meters, SecondWindowLimiter limiter,
+            EntryToken entryTokens) {
         this(holder, queue, tokens, clock, meters,
-                () -> ThreadLocalRandom.current().nextDouble(), limiter);
+                () -> ThreadLocalRandom.current().nextDouble(), limiter, entryTokens);
     }
 
     public static QueueStatusFilter of(SnapshotHolder holder, QueuePort queue,
-            QueueToken tokens, Clock clock, MeterRegistry meters, SecondWindowLimiter limiter) {
-        return new QueueStatusFilter(holder, queue, tokens, clock, meters, limiter);
+            QueueToken tokens, Clock clock, MeterRegistry meters, SecondWindowLimiter limiter,
+            EntryToken entryTokens) {
+        return new QueueStatusFilter(holder, queue, tokens, clock, meters, limiter, entryTokens);
     }
 
     /** 난수원을 받는다. 고정하지 못하면 흔들림이 실제로 붙었는지 못 잰다 (TS-4). */
     public static QueueStatusFilter of(SnapshotHolder holder, QueuePort queue,
             QueueToken tokens, Clock clock, MeterRegistry meters, DoubleSupplier random,
-            SecondWindowLimiter limiter) {
-        return new QueueStatusFilter(holder, queue, tokens, clock, meters, random, limiter);
+            SecondWindowLimiter limiter, EntryToken entryTokens) {
+        return new QueueStatusFilter(holder, queue, tokens, clock, meters, random, limiter,
+                entryTokens);
     }
 
     @Override
@@ -126,7 +132,7 @@ public final class QueueStatusFilter implements WebFilter {
                     (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random));
         }
         return queue.status(couponId, member.get(), clock.instant())
-                .flatMap(entry -> answer(exchange, couponId, entry))
+                .flatMap(entry -> answer(exchange, couponId, member.get(), entry))
                 // 조회가 실패해도 순번은 레디스에 남는다. 다시 물으면 된다.
                 .onErrorResume(e -> {
                     count("unavailable");
@@ -135,15 +141,20 @@ public final class QueueStatusFilter implements WebFilter {
                 });
     }
 
-    private Mono<Void> answer(ServerWebExchange exchange, String couponId, QueueEntry entry) {
+    private Mono<Void> answer(ServerWebExchange exchange, String couponId, String memberId,
+            QueueEntry entry) {
         count(entry.state().name());
         if (entry.state() == QueueState.NOT_QUEUED) {
             // 다시 오라고 하지 않는다. 끝난 사람을 부르는 것이 된다.
             return response.status(exchange, entry.state(), 0, 0, 0);
         }
-        double etaSec = entry.state() == QueueState.ADMITTED
-                ? 0
-                : EtaPolicy.etaSec(entry.rank(), credit(couponId));
+        if (entry.state() == QueueState.ADMITTED) {
+            // **여기서 발급한다** (지연 발급). 배분 때 미리 만들면 안 돌아온
+            // 사람 몫이 그대로 버려지고, 그만큼 뒷사람이 늦게 들어간다.
+            return response.admitted(exchange,
+                    entryTokens.issue(couponId, memberId, clock.instant()), EntryToken.TTL_SEC);
+        }
+        double etaSec = EtaPolicy.etaSec(entry.rank(), credit(couponId));
         return response.status(exchange, entry.state(), entry.rank(),
                 (long) Math.max(0, etaSec), POLL.intervalSec(etaSec, random));
     }

@@ -2,6 +2,7 @@ package com.kafkick.waiting.gateway;
 
 import com.kafkick.waiting.domain.admission.AdmissionDecider;
 import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
+import com.kafkick.waiting.domain.queue.EntryToken;
 import com.kafkick.waiting.domain.queue.QueueToken;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -28,6 +29,12 @@ public class IdentityConfig {
     @Bean
     public QueueToken queueToken(QueueTokenProperties properties) {
         return properties.queueToken();
+    }
+
+    /** 같은 비밀키를 쓰되 접두와 수명이 다르다. 한쪽 토큰이 다른 쪽에서 안 통한다. */
+    @Bean
+    public EntryToken entryToken(QueueTokenProperties properties) {
+        return EntryToken.of(properties.secret());
     }
 
     /**

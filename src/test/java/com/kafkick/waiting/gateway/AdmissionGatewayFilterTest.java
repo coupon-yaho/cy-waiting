@@ -16,6 +16,7 @@ import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.CouponStates;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
+import com.kafkick.waiting.domain.queue.EntryToken;
 import com.kafkick.waiting.domain.queue.QueueToken;
 import java.time.Clock;
 import java.time.Duration;
@@ -60,13 +61,15 @@ class AdmissionGatewayFilterTest {
             Clock.fixed(지금, ZoneOffset.UTC));
     private final FakeQueuePort 줄 = FakeQueuePort.create();
 
+    private final EntryToken entryTokens = EntryToken.of("not-a-real-secret-0123456789abcdef");
+
     private final QueueToken tokens = QueueToken.of("not-a-real-secret-0123456789abcdef");
 
     private final SecondWindowLimiter limiter = SecondWindowLimiter.withMaxKeys(10_000);
 
     private final AdmissionGatewayFilter filter = AdmissionGatewayFilter.of(
             holder, AdmissionDecider.of(limiter, 0.2),
-            Clock.fixed(지금, ZoneOffset.UTC), meters, 줄, tokens, limiter);
+            Clock.fixed(지금, ZoneOffset.UTC), meters, 줄, tokens, limiter, entryTokens);
 
     private final AtomicReference<Boolean> 뒷단에_닿음 = new AtomicReference<>(false);
 
@@ -177,6 +180,51 @@ class AdmissionGatewayFilterTest {
     }
 
     @Test
+    @DisplayName("차례가_온_사람은_토큰으로_통과한다")
+    void 차례가_온_사람은_토큰으로_통과한다() {
+        // 토큰이 없으면 줄과 무관하게 판정되고, 기다린 사람과 안 기다린 사람이 같아진다.
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+
+        MockServerWebExchange exchange = 요청(COUPON);
+        exchange.getRequest().mutate();
+        MockServerWebExchange 토큰을_든_요청 = MockServerWebExchange.from(
+                MockServerHttpRequest.method(HttpMethod.POST,
+                                "/api/v1/coupons/" + COUPON + "/issue")
+                        .header("X-Member-Id", MEMBER)
+                        .header("Entry-Token", entryTokens.issue(COUPON, MEMBER, 지금)));
+        토큰을_든_요청.getAttributes().put(
+                ServerWebExchangeUtils.URI_TEMPLATE_VARIABLES_ATTRIBUTE, Map.of("couponId", COUPON));
+        filter.filter(토큰을_든_요청, e -> {
+            뒷단에_닿음.set(true);
+            return Mono.empty();
+        }).block();
+
+        assertThat(토큰을_든_요청.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .isEqualTo(AdmissionDecision.PASS_TOKEN);
+        assertThat(뒷단에_닿음).hasValue(true);
+        assertThat(exchange.getResponse().getStatusCode()).isNull();
+    }
+
+    @Test
+    @DisplayName("남의_토큰으로는_안_통한다")
+    void 남의_토큰으로는_안_통한다() {
+        // 다른 쿠폰의 토큰이 통하면 한 번 받은 것으로 모든 줄을 건너뛴다.
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.method(HttpMethod.POST,
+                                "/api/v1/coupons/" + COUPON + "/issue")
+                        .header("X-Member-Id", MEMBER)
+                        .header("Entry-Token", entryTokens.issue("다른쿠폰", MEMBER, 지금)));
+        exchange.getAttributes().put(
+                ServerWebExchangeUtils.URI_TEMPLATE_VARIABLES_ATTRIBUTE, Map.of("couponId", COUPON));
+
+        filter.filter(exchange, e -> Mono.empty()).block();
+
+        assertThat(exchange.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .matches(AdmissionDecision::isEnqueue, "대기 판정");
+    }
+
+    @Test
     @DisplayName("대기_판정은_뒷단에_안_간다")
     void 대기_판정은_뒷단에_안_간다() {
         // 줄에 세운 사람을 뒷단으로도 보내면, 줄을 선 채로 발급까지 받는다 —
@@ -217,7 +265,7 @@ class AdmissionGatewayFilterTest {
         MutableClock 시계 = MutableClock.at(지금);
         AdmissionGatewayFilter f = AdmissionGatewayFilter.of(
                 holder, AdmissionDecider.of(limiter, 0.2),
-                시계, meters, () -> 0.5, 줄, tokens, limiter);
+                시계, meters, () -> 0.5, 줄, tokens, limiter, entryTokens);
         스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
         태운다(f, COUPON);
 
@@ -465,7 +513,7 @@ class AdmissionGatewayFilterTest {
         // 안 알려 주면 각자 마음대로 돌아온다. 그 파도가 다음 거절을 만든다.
         AdmissionGatewayFilter f = AdmissionGatewayFilter.of(
                 holder, AdmissionDecider.of(limiter, 0.2),
-                Clock.fixed(지금, ZoneOffset.UTC), meters, () -> 0.5, 줄, tokens, limiter);
+                Clock.fixed(지금, ZoneOffset.UTC), meters, () -> 0.5, 줄, tokens, limiter, entryTokens);
         스냅샷을_심는다(CouponStates.queueing(1, 1_000, 5_000));
 
         MockServerWebExchange exchange = 요청(COUPON);
@@ -579,7 +627,7 @@ class AdmissionGatewayFilterTest {
         Instant 낡은_발행 = 지금.minusSeconds(3_600);
         MutableClock 시계 = MutableClock.at(지금);
         AdmissionGatewayFilter 시계를_쓰는_필터 = AdmissionGatewayFilter.of(
-                holder, AdmissionDecider.of(limiter, 0.2), 시계, meters, 줄, tokens, limiter);
+                holder, AdmissionDecider.of(limiter, 0.2), 시계, meters, 줄, tokens, limiter, entryTokens);
         holder.replace(new GatewaySnapshot(
                 Map.of(COUPON, CouponStates.idle(1_000_000)),
                 new SnapshotMeta(1, 1), 낡은_발행));

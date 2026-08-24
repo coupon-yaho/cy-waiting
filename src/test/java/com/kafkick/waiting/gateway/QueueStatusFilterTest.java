@@ -139,10 +139,15 @@ class QueueStatusFilterTest {
         줄.enqueue(COUPON, MEMBER, 0, 지금).block();
         줄.차례가_왔다();
 
-        MockServerWebExchange exchange = 토큰으로_조회한다(tokens.issue(COUPON, MEMBER, 지금));
-
-        assertThat(exchange.getResponse().getBodyAsString().block())
-                .contains("\"status\":\"WAITING\"");
+        // **앞사람이 실제로 들어갔는지 함께 본다.** 뒷사람만 보면 아무도
+        // 입장 못 시켜도 통과한다 — 그러면 재려던 것을 안 재게 된다.
+        assertThat(토큰으로_조회한다(tokens.issue(COUPON, "앞사람", 지금))
+                .getResponse().getBodyAsString().block())
+                .contains("\"status\":\"ADMITTED\"");
+        assertThat(토큰으로_조회한다(tokens.issue(COUPON, MEMBER, 지금))
+                .getResponse().getBodyAsString().block())
+                .contains("\"status\":\"WAITING\"")
+                .contains("\"position\":1");
     }
 
     @Test

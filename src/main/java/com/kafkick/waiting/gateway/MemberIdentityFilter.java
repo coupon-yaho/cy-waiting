@@ -50,7 +50,7 @@ public final class MemberIdentityFilter implements WebFilter {
         }
         HttpHeaders headers = exchange.getRequest().getHeaders();
         if (!validId(headers.get(MEMBER_ID)) || !validGrade(headers.get(MEMBER_GRADE))) {
-            return error.write(exchange, ApiError.INVALID_REQUEST);
+            return error.write(exchange, ApiError.Code.INVALID_REQUEST);
         }
         // 지우지도 넣지도 않는다. 넣을 검증된 신원이 없고, 지우면 뒷단이 누구인지 모른다.
         return chain.filter(exchange);

@@ -19,7 +19,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.cloud.gateway.filter.GatewayFilter;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.support.ServerWebExchangeUtils;
-import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
 
@@ -73,7 +72,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                 () -> ThreadLocalRandom.current().nextDouble());
     }
 
-    /** 난수원을 받는다. 고정하지 못하면 흔들림이 실제로 붙었는지 못 잰다 (DS-1). */
+    /** 난수원을 받는다. 고정하지 못하면 흔들림이 실제로 붙었는지 못 잰다 (TS-4). */
     public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider,
             Clock clock, MeterRegistry meters, DoubleSupplier random) {
         return new AdmissionGatewayFilter(holder, decider, clock, meters, random);
@@ -100,7 +99,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                 log.error("라우트에 {} 경로변수가 없다 — 판정할 대상을 못 정한다", COUPON_ID);
             }
             count("no-path-variable");
-            return error.write(exchange, ApiError.INVALID_REQUEST);
+            return error.write(exchange, ApiError.Code.INVALID_REQUEST);
         }
 
         SnapshotHolder.View view = holder.view();
@@ -134,25 +133,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             return chain.filter(exchange);
         }
         count("unknown-coupon");
-        return error.write(exchange, ApiError.NOT_FOUND);
-    }
-
-    /**
-     * 판정값이 받는 상태 코드. <b>거절을 하나로 뭉치지 않는다</b> — 매진은 끝난
-     * 것이고, 큐 만원은 잠시 뒤 다시 오면 되고, 과부하는 노드를 늘려야 한다.
-     */
-    public static HttpStatus statusOf(AdmissionDecision decision) {
-        return switch (decision) {
-            case PASS_TOKEN, PASS_BYPASS, PASS_FAIL_OPEN, PASS_UNDER_CAP -> HttpStatus.OK;
-            case ENQUEUE_STALE, ENQUEUE_ALWAYS, ENQUEUE_BACKLOG,
-                 ENQUEUE_RATE_COUPON, ENQUEUE_RATE_GLOBAL, ENQUEUE_KEY_SATURATED ->
-                    HttpStatus.ACCEPTED;
-            case REJECT_SOLD_OUT -> HttpStatus.CONFLICT;
-            case REJECT_QUEUE_FULL -> HttpStatus.TOO_MANY_REQUESTS;
-            case REJECT_OVERLOAD -> HttpStatus.SERVICE_UNAVAILABLE;
-            // 차례가 온 사람을 큐 뒤로 안 돌린다. 되돌리면 허가가 "아마도" 가 된다.
-            case RETRY_TOKEN -> HttpStatus.TOO_MANY_REQUESTS;
-        };
+        return error.write(exchange, ApiError.Code.UNKNOWN_COUPON);
     }
 
     private Mono<Void> route(ServerWebExchange exchange, GatewayFilterChain chain,
@@ -168,29 +149,43 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         return error.write(exchange, codeOf(decision), retryAfterSec(decision, random));
     }
 
-    /** 거절의 봉투. 매진만 뒷단 카탈로그를 그대로 쓴다 — 구별되면 안 된다. */
+    /**
+     * 거절의 봉투. <b>전부 열거한다</b> — 빠짐없이 적어야 새 판정값이 생겼을 때
+     * 컴파일이 깨진다. {@code default} 로 두면 새 사유가 조용히 매진으로 나간다.
+     */
     public static ApiError.Code codeOf(AdmissionDecision decision) {
         return switch (decision) {
-            case REJECT_QUEUE_FULL -> ApiError.QUEUE_FULL;
-            case REJECT_OVERLOAD -> ApiError.TEMPORARILY_UNAVAILABLE;
-            case RETRY_TOKEN -> ApiError.RETRY_TOKEN;
-            default -> ApiError.SOLD_OUT;
+            case REJECT_SOLD_OUT -> ApiError.Code.SOLD_OUT;
+            case REJECT_QUEUE_FULL -> ApiError.Code.QUEUE_FULL;
+            case REJECT_OVERLOAD -> ApiError.Code.TEMPORARILY_UNAVAILABLE;
+            // 차례가 온 사람을 큐 뒤로 안 돌린다. 되돌리면 허가가 "아마도" 가 된다.
+            case RETRY_TOKEN -> ApiError.Code.RETRY_TOKEN;
+            case PASS_TOKEN, PASS_BYPASS, PASS_FAIL_OPEN, PASS_UNDER_CAP,
+                 ENQUEUE_STALE, ENQUEUE_ALWAYS, ENQUEUE_BACKLOG,
+                 ENQUEUE_RATE_COUPON, ENQUEUE_RATE_GLOBAL, ENQUEUE_KEY_SATURATED ->
+                    throw new IllegalArgumentException("거절이 아니다: " + decision);
         };
     }
 
     /**
      * 다시 와도 되는 때. <b>같은 값을 주면 다 같이 돌아온다</b> — 흔들어서
      * 되돌아오는 파도를 흩는다.
-     *
-     * <p>매진은 안 싣는다. 다시 와도 소용없는데 시각을 주면 재시도를 부른다.
      */
     static int retryAfterSec(AdmissionDecision decision, DoubleSupplier random) {
         return switch (decision) {
             // 차례가 온 사람이다. 멀리 보내면 그 사이 몫이 남에게 간다.
+            //
+            // 가장 가까운 밴드(1초)라 흔들림은 반올림에 통째로 흡수된다. 여기서
+            // 흩을 대상은 몇 초 뒤에 몰릴 사람들이 아니라 30초 뒤의 파도다.
             case RETRY_TOKEN -> (int) POLL.intervalSec(0, random);
             case REJECT_QUEUE_FULL, REJECT_OVERLOAD ->
                     (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random);
-            default -> ApiError.NO_RETRY;
+            // 매진은 안 싣는다. 다시 와도 소용없는데 시각을 주면 재시도를 부른다.
+            case REJECT_SOLD_OUT -> ApiError.NO_RETRY;
+            case PASS_TOKEN, PASS_BYPASS, PASS_FAIL_OPEN, PASS_UNDER_CAP,
+                 ENQUEUE_STALE, ENQUEUE_ALWAYS, ENQUEUE_BACKLOG,
+                 ENQUEUE_RATE_COUPON, ENQUEUE_RATE_GLOBAL, ENQUEUE_KEY_SATURATED ->
+                    throw new IllegalArgumentException("거절이 아니다: " + decision);
         };
     }
 

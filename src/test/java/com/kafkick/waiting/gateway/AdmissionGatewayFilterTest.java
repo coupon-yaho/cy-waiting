@@ -1,6 +1,7 @@
 package com.kafkick.waiting.gateway;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.kafkick.waiting.MutableClock;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -18,6 +19,8 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.DisplayName;
@@ -55,24 +58,24 @@ class AdmissionGatewayFilterTest {
 
     private final AtomicReference<Boolean> 뒷단에_닿음 = new AtomicReference<>(false);
 
-    private AdmissionDecision 태운다(AdmissionGatewayFilter f, String couponId) {
+    private MockServerWebExchange 요청(String couponId) {
         MockServerWebExchange exchange = MockServerWebExchange.from(
                 MockServerHttpRequest.method(HttpMethod.POST,
                         "/api/v1/coupons/" + couponId + "/issue"));
         exchange.getAttributes().put(
                 ServerWebExchangeUtils.URI_TEMPLATE_VARIABLES_ATTRIBUTE,
                 Map.of("couponId", couponId));
+        return exchange;
+    }
+
+    private AdmissionDecision 태운다(AdmissionGatewayFilter f, String couponId) {
+        MockServerWebExchange exchange = 요청(couponId);
         f.filter(exchange, e -> Mono.empty()).block();
         return exchange.getAttribute(AdmissionGatewayFilter.DECISION);
     }
 
     private MockServerWebExchange 태운다(String couponId) {
-        MockServerWebExchange exchange = MockServerWebExchange.from(
-                MockServerHttpRequest.method(HttpMethod.POST,
-                        "/api/v1/coupons/" + couponId + "/issue"));
-        exchange.getAttributes().put(
-                ServerWebExchangeUtils.URI_TEMPLATE_VARIABLES_ATTRIBUTE,
-                Map.of("couponId", couponId));
+        MockServerWebExchange exchange = 요청(couponId);
         filter.filter(exchange, e -> {
             뒷단에_닿음.set(true);
             return Mono.empty();
@@ -173,27 +176,38 @@ class AdmissionGatewayFilterTest {
     void 거절_사유마다_다른_응답이다() {
         // **뭉치면 운영자가 엉뚱한 것을 조인다.** 매진은 끝난 것이고, 큐 만원은
         // 잠시 뒤 다시 오면 되고, 과부하는 노드를 늘려야 한다 — 셋이 다르다.
-        assertThat(AdmissionGatewayFilter.statusOf(AdmissionDecision.REJECT_SOLD_OUT))
-                .isEqualTo(HttpStatus.CONFLICT);
-        assertThat(AdmissionGatewayFilter.statusOf(AdmissionDecision.REJECT_QUEUE_FULL))
-                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
-        assertThat(AdmissionGatewayFilter.statusOf(AdmissionDecision.REJECT_OVERLOAD))
-                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(AdmissionGatewayFilter.codeOf(AdmissionDecision.REJECT_SOLD_OUT))
+                .isEqualTo(ApiError.Code.SOLD_OUT);
+        assertThat(AdmissionGatewayFilter.codeOf(AdmissionDecision.REJECT_QUEUE_FULL))
+                .isEqualTo(ApiError.Code.QUEUE_FULL);
+        assertThat(AdmissionGatewayFilter.codeOf(AdmissionDecision.REJECT_OVERLOAD))
+                .isEqualTo(ApiError.Code.TEMPORARILY_UNAVAILABLE);
     }
 
     @Test
-    @DisplayName("상태와_봉투가_어긋나지_않는다")
-    void 상태와_봉투가_어긋나지_않는다() {
-        // 상태 코드와 에러 코드를 따로 정하면 409 인데 QUEUE_FULL 같은 조합이
-        // 생긴다. 그 조합은 응답이 나가기 전까지 아무도 못 본다.
-        for (AdmissionDecision decision : AdmissionDecision.values()) {
-            if (!decision.isReject() && decision != AdmissionDecision.RETRY_TOKEN) {
-                continue;
-            }
-            assertThat(AdmissionGatewayFilter.codeOf(decision).status())
-                    .as("%s", decision)
-                    .isEqualTo(AdmissionGatewayFilter.statusOf(decision));
-        }
+    @DisplayName("거절_판정마다_봉투가_있다")
+    void 거절_판정마다_봉투가_있다() {
+        // 새 거절 사유가 생겼는데 봉투를 안 정하면, 열거가 아닌 곳에서는
+        // 조용히 매진으로 나간다 — 뒷단 코드를 남의 사유에 붙이는 셈이다.
+        List<AdmissionDecision> 거절 = Arrays.stream(AdmissionDecision.values())
+                .filter(AdmissionDecision::isReject)
+                .toList();
+
+        // 루프가 공회전해도 통과하지 않게 개수를 함께 본다.
+        assertThat(거절).hasSize(4);
+        assertThat(거절).allSatisfy(decision ->
+                assertThat(AdmissionGatewayFilter.codeOf(decision)).isNotNull());
+    }
+
+    @Test
+    @DisplayName("통과_판정에_봉투를_물으면_던진다")
+    void 통과_판정에_봉투를_물으면_던진다() {
+        // 조용히 매진을 돌려주면 통과해야 할 사람이 끝난 것으로 처리된다.
+        assertThatThrownBy(() -> AdmissionGatewayFilter.codeOf(AdmissionDecision.PASS_UNDER_CAP))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() ->
+                AdmissionGatewayFilter.retryAfterSec(AdmissionDecision.ENQUEUE_ALWAYS, () -> 0.5))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
@@ -225,16 +239,23 @@ class AdmissionGatewayFilterTest {
     @DisplayName("큐가_찼으면_다시_올_때를_알려_준다")
     void 큐가_찼으면_다시_올_때를_알려_준다() {
         // 안 알려 주면 각자 마음대로 돌아온다. 그 파도가 다음 거절을 만든다.
+        AdmissionGatewayFilter f = AdmissionGatewayFilter.of(
+                holder, AdmissionDecider.of(SecondWindowLimiter.withMaxKeys(10_000), 0.2),
+                Clock.fixed(지금, ZoneOffset.UTC), meters, () -> 0.5);
         스냅샷을_심는다(CouponStates.queueing(1, 1_000, 5_000));
 
-        MockServerWebExchange exchange = 태운다(COUPON);
+        MockServerWebExchange exchange = 요청(COUPON);
+        f.filter(exchange, e -> Mono.empty()).block();
 
+        // **어느 판정에 닿았는지 못 박는다.** 429 는 둘이라 판정이 바뀌어도
+        // 상태만 보면 통과한다.
+        assertThat(exchange.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .isEqualTo(AdmissionDecision.REJECT_QUEUE_FULL);
         assertThat(exchange.getResponse().getStatusCode())
                 .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
-        // 값까지 본다. 있기만 하면 0 이나 음수여도 통과하는데, 그건 안 알려
-        // 준 것과 같다 — 다들 곧바로 돌아온다.
+        // 난수를 고정했으니 값이 정해진다. 구간만 보면 정책이 통째로 바뀌어도 통과한다.
         assertThat(exchange.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER))
-                .asInt().isBetween(1, 60);
+                .isEqualTo("30");
     }
 
     @Test
@@ -242,10 +263,12 @@ class AdmissionGatewayFilterTest {
     void 다시_올_때를_흔들어_준다() {
         // 같은 값을 주면 거절당한 사람들이 다 같이 돌아온다. 되돌아오는
         // 파도가 다음 거절을 만들고, 그게 반복된다.
-        assertThat(AdmissionGatewayFilter.retryAfterSec(AdmissionDecision.REJECT_QUEUE_FULL,
-                () -> 0))
-                .isNotEqualTo(AdmissionGatewayFilter.retryAfterSec(
-                        AdmissionDecision.REJECT_QUEUE_FULL, () -> 1));
+        //
+        // 폭까지 본다. 다르기만 하면 흔들림이 얼마든 통과한다.
+        assertThat(AdmissionGatewayFilter.retryAfterSec(
+                AdmissionDecision.REJECT_QUEUE_FULL, () -> 0)).isEqualTo(24);
+        assertThat(AdmissionGatewayFilter.retryAfterSec(
+                AdmissionDecision.REJECT_QUEUE_FULL, () -> 1)).isEqualTo(36);
     }
 
     @Test
@@ -253,9 +276,19 @@ class AdmissionGatewayFilterTest {
     void 차례가_온_사람은_멀리_안_보낸다() {
         // 상한에 걸렸을 뿐 차례는 왔다. 큐 만원인 사람과 같이 두면 그 사이
         // 자기 몫이 남에게 간다.
-        assertThat(AdmissionGatewayFilter.retryAfterSec(AdmissionDecision.RETRY_TOKEN, () -> 0.5))
-                .isLessThan(AdmissionGatewayFilter.retryAfterSec(
-                        AdmissionDecision.REJECT_QUEUE_FULL, () -> 0.5));
+        //
+        // 가장 가까운 밴드라 흔들림이 반올림에 흡수된다 — 그것도 못 박는다.
+        assertThat(AdmissionGatewayFilter.retryAfterSec(AdmissionDecision.RETRY_TOKEN, () -> 0))
+                .isEqualTo(1);
+        assertThat(AdmissionGatewayFilter.retryAfterSec(AdmissionDecision.RETRY_TOKEN, () -> 1))
+                .isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("매진에는_안내를_안_싣는다")
+    void 매진에는_안내를_안_싣는다() {
+        assertThat(AdmissionGatewayFilter.retryAfterSec(AdmissionDecision.REJECT_SOLD_OUT,
+                () -> 0.5)).isEqualTo(ApiError.NO_RETRY);
     }
 
     @Test
@@ -263,20 +296,20 @@ class AdmissionGatewayFilterTest {
     void 차례가_온_사람은_큐로_안_돌린다() {
         // 토큰을 들고 왔는데 노드 상한을 넘은 경우다. 어느 술어에도 안 걸려서
         // 그냥 두면 조용히 통과한다 — 상한을 넘겼는데 지나가는 것이다.
-        assertThat(AdmissionGatewayFilter.statusOf(AdmissionDecision.RETRY_TOKEN))
-                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        assertThat(AdmissionGatewayFilter.codeOf(AdmissionDecision.RETRY_TOKEN))
+                .isEqualTo(ApiError.Code.RETRY_TOKEN);
     }
 
     @Test
     @DisplayName("모든_판정값에_대응이_있다")
     void 모든_판정값에_대응이_있다() {
-        // 값을 늘리고 분기를 안 늘리면 그 판정이 조용히 통과한다. 늘리는 순간 걸린다.
-        for (AdmissionDecision d : AdmissionDecision.values()) {
-            // 어떤 값인지까지 본다. 있기만 하면 엉뚱한 코드가 붙어도 안 걸린다.
-            assertThat(AdmissionGatewayFilter.statusOf(d)).as("판정 %s", d)
-                    .isIn(HttpStatus.OK, HttpStatus.ACCEPTED, HttpStatus.CONFLICT,
-                            HttpStatus.TOO_MANY_REQUESTS, HttpStatus.SERVICE_UNAVAILABLE);
-        }
+        // 필터는 통과·대기·거절 셋으로만 가른다. 어디에도 안 걸리는 값이 생기면
+        // 거절 경로로 떨어져 봉투를 못 찾고 500 이 나간다.
+        assertThat(AdmissionDecision.values()).hasSizeGreaterThan(10);
+        assertThat(AdmissionDecision.values()).allSatisfy(d -> {
+            int 해당 = (d.isPass() ? 1 : 0) + (d.isEnqueue() ? 1 : 0) + (d.isReject() ? 1 : 0);
+            assertThat(해당).as("판정 %s", d).isEqualTo(1);
+        });
     }
 
     @Test

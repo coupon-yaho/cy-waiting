@@ -174,7 +174,7 @@ class IdentityChainTest {
 
         // 문자열 포함으로 보면 다른 데 섞인 같은 글자에도 통과한다.
         assertThat(new String(본문, StandardCharsets.UTF_8))
-                .doesNotContain(ApiError.INVALID_REQUEST.code())
+                .doesNotContain(ApiError.Code.INVALID_REQUEST.code())
                 .contains("\"status\":\"OUT_OF_SERVICE\"");
     }
 

@@ -24,6 +24,8 @@ import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -92,6 +94,13 @@ class AdmissionGatewayFilterTest {
             return Mono.empty();
         }).block();
         return exchange;
+    }
+
+    /** 한산한 쿠폰 여럿을 심는다. 쿠폰별 상한에 먼저 걸리지 않고 노드 예산을 채우려면 필요하다. */
+    private void 한산한_쿠폰_여럿을_심는다(int 수) {
+        Map<String, CouponState> coupons = IntStream.range(0, 수).boxed()
+                .collect(Collectors.toMap(i -> "한산한쿠폰" + i, i -> CouponStates.idle(1_000_000)));
+        holder.replace(new GatewaySnapshot(coupons, new SnapshotMeta(1_000, 1), 지금));
     }
 
     private void 스냅샷을_심는다(CouponState state) {
@@ -306,10 +315,14 @@ class AdmissionGatewayFilterTest {
         스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
         줄.터진다(new IllegalStateException("레디스가 죽었다"));
 
-        // 판정이 그 초의 노드 예산을 이미 다 썼다.
+        // **판정 경로로 채운다.** 리미터를 손으로 채우면 판정이 다른 리미터를
+        // 쓰고 있어도 이 시험이 통과한다.
+        한산한_쿠폰_여럿을_심는다(50);
         for (int i = 0; i < 1_000; i++) {
-            limiter.tryAcquire(AdmissionDecider.GLOBAL_KEY, 1_000, 지금.getEpochSecond());
+            태운다("한산한쿠폰" + i % 50);
         }
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+        뒷단에_닿음.set(false);
 
         // 예산을 따로 들었으면 여기서 500 명이 더 나간다.
         MockServerWebExchange exchange = 태운다(COUPON);

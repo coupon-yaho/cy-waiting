@@ -10,6 +10,8 @@ import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import com.kafkick.waiting.domain.queue.QueueToken;
 import io.micrometer.core.instrument.MeterRegistry;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
 import java.time.Clock;
 import java.util.Map;
 import java.util.Objects;
@@ -28,6 +30,7 @@ import reactor.core.publisher.Mono;
  * 발급 요청을 통과·대기·거절로 가른다. <b>판정 재료는 로컬 스냅샷에서만 읽는다</b>
  * — 요청마다 레디스를 치면 제어 평면을 만든 이유가 사라진다.
  */
+@Component
 public final class AdmissionGatewayFilter implements GatewayFilter {
 
     /** 응답을 쓰는 쪽이 읽는다. 다시 판정하면 두 번 세고 답이 갈릴 수 있다. */
@@ -86,10 +89,16 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     }
 
     /** 흔들림의 난수원은 스레드마다 따로 둔다 — 공유하면 그 자체가 경합점이다. */
+    @Autowired
+    AdmissionGatewayFilter(SnapshotHolder holder, AdmissionDecider decider, Clock clock,
+            MeterRegistry meters, QueuePort queue, QueueToken tokens) {
+        this(holder, decider, clock, meters,
+                () -> ThreadLocalRandom.current().nextDouble(), queue, tokens);
+    }
+
     public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider,
             Clock clock, MeterRegistry meters, QueuePort queue, QueueToken tokens) {
-        return of(holder, decider, clock, meters,
-                () -> ThreadLocalRandom.current().nextDouble(), queue, tokens);
+        return new AdmissionGatewayFilter(holder, decider, clock, meters, queue, tokens);
     }
 
     /** 난수원을 받는다. 고정하지 못하면 흔들림이 실제로 붙었는지 못 잰다 (TS-4). */

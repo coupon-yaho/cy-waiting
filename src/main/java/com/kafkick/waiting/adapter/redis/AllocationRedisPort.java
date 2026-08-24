@@ -1,5 +1,6 @@
 package com.kafkick.waiting.adapter.redis;
 
+import com.kafkick.waiting.control.ControlPlaneProperties;
 import com.kafkick.waiting.control.FailureWindow;
 import com.kafkick.waiting.control.SnapshotSource;
 import com.kafkick.waiting.domain.allocation.Grant;
@@ -11,9 +12,11 @@ import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
+import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -23,6 +26,7 @@ import reactor.core.publisher.Mono;
  * <p>수요 수집은 <b>Lua 가 아니다.</b> 쿠폰마다 슬롯이 갈려 클러스터에서 못 돈다.
  * 재고도 샤드 무관 키라 같은 스크립트에서 못 읽는다. 잃는 것은 진단 편의뿐이다.
  */
+@Component
 public final class AllocationRedisPort implements SnapshotSource {
 
     @SuppressWarnings("rawtypes")
@@ -49,6 +53,15 @@ public final class AllocationRedisPort implements SnapshotSource {
     private final ReactiveStringRedisTemplate redis;
     private final int shards;
     private final FailureWindow rejected = FailureWindow.create();
+
+    /**
+     * <b>모든 노드가 쓴다.</b> 배분은 리더만 돌지만 판정 재료를 받아 오는 것은
+     * 전 노드가 하므로, 배분 토글 뒤에 두면 요청만 받는 노드가 재료를 못 받는다.
+     */
+    @Autowired
+    AllocationRedisPort(ReactiveStringRedisTemplate redis, ControlPlaneProperties properties) {
+        this(redis, properties.scheduler().shards());
+    }
 
     private AllocationRedisPort(ReactiveStringRedisTemplate redis, int shards) {
         if (shards < 1) {

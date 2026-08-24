@@ -28,10 +28,6 @@ public class HealthConfig {
         return SnapshotHolder.of(FETCH_STALE_AFTER, DATA_STALE_AFTER, Clock.systemUTC());
     }
 
-    @Bean
-    ShutdownState shutdownState() {
-        return ShutdownState.create();
-    }
 
     /**
      * 판정 재료를 받아 오는 루프.
@@ -51,13 +47,5 @@ public class HealthConfig {
         return SnapshotRefreshLifecycle.of(refresher, shutdown, FETCH_INTERVAL);
     }
 
-    @Bean
-    JudgingHealth judging(SnapshotHolder holder, ShutdownState shutdown) {
-        return JudgingHealth.of(holder, shutdown);
-    }
 
-    @Bean
-    LoopAliveHealth loopAlive(SnapshotHolder holder, ShutdownState shutdown) {
-        return LoopAliveHealth.of(holder, shutdown);
-    }
 }

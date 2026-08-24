@@ -21,16 +21,20 @@ public record QueueEntry(QueueState state, long rank, long score,
 
     public QueueEntry {
         Objects.requireNonNull(state, "state 는 필수다");
-        // **줄에 없는데 자리를 들고 있으면 안 된다.** 그 조합이 만들어지면
-        // 그것을 전제로 통과하는 시험이 생기고, 운영이 못 만드는 상태를 재게 된다.
-        boolean seatless = state == QueueState.NOT_QUEUED || state == QueueState.REJECTED;
-        if (seatless && (rank != NONE || score != NONE)) {
+        // **상태마다 가질 수 있는 값이 다르다.** 아무 조합이나 만들어지면 그것을
+        // 전제로 통과하는 시험이 생기고, 운영이 못 만드는 상태를 재게 된다.
+        boolean ok = switch (state) {
+            // 줄에 없다. 자리를 들고 있으면 안 된다.
+            case NOT_QUEUED, REJECTED -> rank == NONE && score == NONE;
+            // 줄에 있다. 앞의 인원도 순번도 있다.
+            case WAITING -> rank >= 0 && score >= 0;
+            // 차례가 왔다. 큐에서 빠졌으므로 앞에 아무도 없고, 유예 기록으로
+            // 되읽은 경우에는 순번을 모른다.
+            case ADMITTED -> rank == 0 && (score >= 0 || score == NONE);
+        };
+        if (!ok) {
             throw new IllegalArgumentException(
-                    "%s 는 자리가 없다: rank=%d score=%d".formatted(state, rank, score));
-        }
-        if (!seatless && (rank < 0 || score < 0)) {
-            throw new IllegalArgumentException(
-                    "%s 는 자리가 있다: rank=%d score=%d".formatted(state, rank, score));
+                    "%s 가 가질 수 없는 값이다: rank=%d score=%d".formatted(state, rank, score));
         }
     }
 

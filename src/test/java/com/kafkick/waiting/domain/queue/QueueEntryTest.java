@@ -60,7 +60,24 @@ class QueueEntryTest {
     void 줄에_있는데_자리가_없으면_안_만들어진다() {
         assertThatThrownBy(() -> new QueueEntry(QueueState.WAITING, -1, -1, false, false))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new QueueEntry(QueueState.ADMITTED, 0, -1, false, false))
+        assertThatThrownBy(() -> new QueueEntry(QueueState.WAITING, 0, -1, false, false))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /**
+     * 차례가 오면 큐에서 빠진다. 유예 기록으로 되읽으면 순번을 모르지만 앞에
+     * 아무도 없다는 것은 안다.
+     */
+    @Test
+    @DisplayName("입장은_순번을_몰라도_된다")
+    void 입장은_순번을_몰라도_된다() {
+        assertThat(new QueueEntry(QueueState.ADMITTED, 0, QueueEntry.NONE, true, false).admitted())
+                .isTrue();
+        // 앞에 사람이 있는 입장은 없다.
+        assertThatThrownBy(() -> new QueueEntry(QueueState.ADMITTED, 3, 1, false, false))
+                .isInstanceOf(IllegalArgumentException.class);
+        // 모른다는 뜻의 값이 아니면 음수도 안 된다.
+        assertThatThrownBy(() -> new QueueEntry(QueueState.ADMITTED, 0, -5, false, false))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 }

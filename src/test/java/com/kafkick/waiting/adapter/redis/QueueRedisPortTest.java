@@ -1,0 +1,173 @@
+package com.kafkick.waiting.adapter.redis;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import com.kafkick.waiting.domain.queue.QueueEntry;
+import com.kafkick.waiting.domain.queue.QueueState;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.List;
+import java.util.stream.IntStream;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
+import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
+import org.springframework.data.redis.connection.lettuce.LettuceClientConfiguration;
+import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
+import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
+
+/**
+ * 큐 등록과 순번 조회. <b>요청 경로에서 레디스를 치는 유일한 자리다</b> (RD-4) —
+ * 판정은 스냅샷이 하고 여기는 판정이 끝난 뒤에만 돈다.
+ */
+@Tag("integration")
+class QueueRedisPortTest extends RedisContainerSupport {
+
+    private static final String COUPON = "qp";
+    private static final int SHARDS = 1;
+    private static final Duration WAIT = Duration.ofSeconds(10);
+    private static final Instant 지금 = Instant.parse("2026-08-24T00:00:00Z");
+
+    private static LettuceConnectionFactory factory;
+    private static ReactiveStringRedisTemplate redis;
+    private static QueueRedisPort port;
+
+    @BeforeAll
+    static void 연결() {
+        factory = new LettuceConnectionFactory(
+                new RedisStandaloneConfiguration(REDIS.getHost(), REDIS.getMappedPort(6379)),
+                LettuceClientConfiguration.builder().commandTimeout(WAIT).build());
+        factory.afterPropertiesSet();
+        redis = new ReactiveStringRedisTemplate(factory);
+        port = QueueRedisPort.of(redis, SHARDS);
+    }
+
+    @BeforeEach
+    void 비운다() {
+        redis.delete(RedisKeys.queue(COUPON, SHARDS, 0),
+                RedisKeys.maxScore(COUPON, SHARDS, 0),
+                RedisKeys.alive(COUPON, SHARDS, 0),
+                RedisKeys.admitted(COUPON, SHARDS, 0),
+                RedisKeys.grace(COUPON, SHARDS, 0)).block(WAIT);
+    }
+
+    private QueueEntry 등록(String memberId) {
+        return port.enqueue(COUPON, memberId, 0, 지금).block(WAIT);
+    }
+
+    @Test
+    @DisplayName("등록하면_순번을_받는다")
+    void 등록하면_순번을_받는다() {
+        QueueEntry entry = 등록("m1");
+
+        assertThat(entry.accepted()).isTrue();
+        assertThat(entry.rank()).isZero();
+        assertThat(entry.score()).isPositive();
+    }
+
+    @Test
+    @DisplayName("먼저_온_사람이_앞이다")
+    void 먼저_온_사람이_앞이다() {
+        QueueEntry 첫째 = 등록("m1");
+        QueueEntry 둘째 = 등록("m2");
+
+        assertThat(첫째.rank()).isZero();
+        assertThat(둘째.rank()).isEqualTo(1);
+        assertThat(둘째.score()).isGreaterThan(첫째.score());
+    }
+
+    /** 덮어쓰면 새로고침 연타가 자기 자신을 뒤로 민다 — 기다릴수록 손해가 된다. */
+    @Test
+    @DisplayName("다시_등록해도_순번이_안_바뀐다")
+    void 다시_등록해도_순번이_안_바뀐다() {
+        QueueEntry 처음 = 등록("m1");
+        등록("m2");
+        QueueEntry 다시 = 등록("m1");
+
+        assertThat(다시.score()).isEqualTo(처음.score());
+        assertThat(다시.rank()).isZero();
+        assertThat(다시.alreadyQueued()).isTrue();
+    }
+
+    @Test
+    @DisplayName("상한을_넘으면_거절한다")
+    void 상한을_넘으면_거절한다() {
+        등록("m1");
+        등록("m2");
+
+        QueueEntry 셋째 = port.enqueue(COUPON, "m3", 2, 지금).block(WAIT);
+
+        assertThat(셋째.accepted()).isFalse();
+    }
+
+    /** 이미 선 사람을 상한으로 쫓아내면 줄이 길어진 것이 그 사람 잘못이 아닌데 자리를 잃는다. */
+    @Test
+    @DisplayName("이미_선_사람은_상한에_안_걸린다")
+    void 이미_선_사람은_상한에_안_걸린다() {
+        등록("m1");
+        등록("m2");
+
+        QueueEntry 다시 = port.enqueue(COUPON, "m1", 1, 지금).block(WAIT);
+
+        assertThat(다시.accepted()).isTrue();
+        assertThat(다시.rank()).isZero();
+    }
+
+    @Test
+    @DisplayName("조회하면_기다리는_중이다")
+    void 조회하면_기다리는_중이다() {
+        등록("m1");
+        등록("m2");
+
+        QueueEntry 조회 = port.status(COUPON, "m2", 지금).block(WAIT);
+
+        assertThat(조회.state()).isEqualTo(QueueState.WAITING);
+        assertThat(조회.rank()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("줄에_없으면_그렇게_말한다")
+    void 줄에_없으면_그렇게_말한다() {
+        QueueEntry 조회 = port.status(COUPON, "없는사람", 지금).block(WAIT);
+
+        assertThat(조회.state()).isEqualTo(QueueState.NOT_QUEUED);
+        assertThat(조회.rank()).isNegative();
+    }
+
+    @Test
+    @DisplayName("차례가_오면_입장이다")
+    void 차례가_오면_입장이다() {
+        QueueEntry 첫째 = 등록("m1");
+        등록("m2");
+        // 배분이 임계를 올린다. 개수가 아니라 score 값이다 (D-8).
+        redis.opsForValue().set(RedisKeys.admitted(COUPON, SHARDS, 0),
+                Long.toString(첫째.score())).block(WAIT);
+
+        assertThat(port.status(COUPON, "m1", 지금).block(WAIT).state())
+                .isEqualTo(QueueState.ADMITTED);
+        assertThat(port.status(COUPON, "m2", 지금).block(WAIT).state())
+                .isEqualTo(QueueState.WAITING);
+    }
+
+    /**
+     * 같은 사람이 동시에 여러 번 눌러도 자리는 하나다. 둘이 생기면 순번이
+     * 갈리고, 뒤엣것이 앞엣것을 밀어낸다.
+     */
+    @Test
+    @DisplayName("동시에_눌러도_자리는_하나다")
+    void 동시에_눌러도_자리는_하나다() {
+        List<QueueEntry> 결과 = reactor.core.publisher.Flux
+                .merge(IntStream.range(0, 32)
+                        .mapToObj(i -> port.enqueue(COUPON, "m1", 0, 지금))
+                        .toList())
+                .collectList()
+                .block(WAIT);
+
+        assertThat(결과).hasSize(32);
+        assertThat(결과).extracting(QueueEntry::score).containsOnly(결과.get(0).score());
+        assertThat(redis.opsForZSet().size(RedisKeys.queue(COUPON, SHARDS, 0)).block(WAIT))
+                .isEqualTo(1);
+    }
+}

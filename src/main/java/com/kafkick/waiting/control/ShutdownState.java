@@ -3,6 +3,7 @@ package com.kafkick.waiting.control;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
 
 /**
  * 종료 신호를 받았나. <b>두 판정이 함께 본다.</b>
@@ -11,6 +12,7 @@ import org.slf4j.LoggerFactory;
  * 파드를 죽인다 — 진행 중인 요청을 든 채로 끊긴다. 한쪽에 갇힌 플래그로는
  * 그 요구를 표현할 수 없다.
  */
+@Component
 public final class ShutdownState {
 
     private static final Logger log = LoggerFactory.getLogger(ShutdownState.class);

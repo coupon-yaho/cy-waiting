@@ -1,12 +1,15 @@
 package com.kafkick.waiting.adapter.redis;
 
+import com.kafkick.waiting.control.ControlPlaneProperties;
 import com.kafkick.waiting.control.LeaderLock;
 import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
+import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
 
 /**
@@ -16,6 +19,7 @@ import reactor.core.publisher.Mono;
  * 만료돼 다른 노드가 잡는데, 깨어난 이쪽이 그냥 연장하면 남의 락을 늘리고 그냥
  * 지우면 남이 리더인 채 락만 사라진다.
  */
+@Component
 public final class LeaderRedisPort {
 
     @SuppressWarnings("rawtypes")
@@ -28,16 +32,21 @@ public final class LeaderRedisPort {
     private final ReactiveStringRedisTemplate redis;
     private final Duration lease;
 
-    private LeaderRedisPort(ReactiveStringRedisTemplate redis, Duration lease) {
+    /**
+     * <b>여기 쓰는 리스가 락의 실제 수명이다.</b> 판정 쪽 유예와 갈리면 락은
+     * 만료됐는데 자기가 아직 리더인 줄 아는 구간이 생긴다 — 리더가 둘이다.
+     */
+    @Autowired
+    LeaderRedisPort(ReactiveStringRedisTemplate redis, ControlPlaneProperties properties) {
+        this(redis, properties.leader().lease());
+    }
+
+    LeaderRedisPort(ReactiveStringRedisTemplate redis, Duration lease) {
         if (lease == null || lease.isZero() || lease.isNegative()) {
             throw new IllegalArgumentException("lease 는 양수여야 한다: %s".formatted(lease));
         }
         this.redis = Objects.requireNonNull(redis, "redis 는 필수다");
         this.lease = lease;
-    }
-
-    public static LeaderRedisPort of(ReactiveStringRedisTemplate redis, Duration lease) {
-        return new LeaderRedisPort(redis, lease);
     }
 
     /**

@@ -13,6 +13,9 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.DoubleSupplier;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.annotation.Order;
+import org.springframework.stereotype.Component;
 import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.server.WebFilter;
 import org.springframework.web.server.WebFilterChain;
@@ -24,6 +27,8 @@ import reactor.core.publisher.Mono;
  * <b>대상을 토큰으로 특정한다</b> — 회원 헤더로 고르면 헤더 하나 바꿔서 남의
  * 순번을 본다. 로그인이 없어 그 헤더는 위조 가능하다.
  */
+@Component
+@Order(FilterOrder.QUEUE_STATUS)
 public final class QueueStatusFilter implements WebFilter {
 
     private static final PathPattern PATH = PathPatternParser.defaultInstance
@@ -56,10 +61,17 @@ public final class QueueStatusFilter implements WebFilter {
         this.error = ApiError.of(clock);
     }
 
+    /** 흔들림의 난수원은 스레드마다 따로 둔다 — 공유하면 그 자체가 경합점이다. */
+    @Autowired
+    QueueStatusFilter(SnapshotHolder holder, QueuePort queue, QueueToken tokens,
+            Clock clock, MeterRegistry meters) {
+        this(holder, queue, tokens, clock, meters,
+                () -> ThreadLocalRandom.current().nextDouble());
+    }
+
     public static QueueStatusFilter of(SnapshotHolder holder, QueuePort queue,
             QueueToken tokens, Clock clock, MeterRegistry meters) {
-        return of(holder, queue, tokens, clock, meters,
-                () -> ThreadLocalRandom.current().nextDouble());
+        return new QueueStatusFilter(holder, queue, tokens, clock, meters);
     }
 
     /** 난수원을 받는다. 고정하지 못하면 흔들림이 실제로 붙었는지 못 잰다 (TS-4). */

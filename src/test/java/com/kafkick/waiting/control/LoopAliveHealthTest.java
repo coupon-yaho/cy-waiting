@@ -53,7 +53,7 @@ class LoopAliveHealthTest {
     }
 
     private Status 판정() {
-        return LoopAliveHealth.of(holder, shutdown).health().getStatus();
+        return new LoopAliveHealth(holder, shutdown).health().getStatus();
     }
 
     @Test

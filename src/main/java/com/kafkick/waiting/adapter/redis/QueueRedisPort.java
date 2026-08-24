@@ -1,14 +1,17 @@
 package com.kafkick.waiting.adapter.redis;
 
+import com.kafkick.waiting.control.ControlPlaneProperties;
 import com.kafkick.waiting.domain.queue.QueueEntry;
 import com.kafkick.waiting.domain.queue.QueueState;
 import com.kafkick.waiting.gateway.QueuePort;
 import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
+import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
 
 /**
@@ -16,7 +19,11 @@ import reactor.core.publisher.Mono;
  *
  * <p><b>요청 경로가 레디스를 치는 유일한 자리다</b> (RD-4). 판정은 스냅샷이
  * 하고 여기는 판정이 끝난 뒤에만 돈다 — 통과하는 사람은 여기 안 온다.
+ *
+ * <p>샤드 수는 스케줄러와 <b>같은 값</b>이어야 한다. 갈리면 배분이 올린 임계와
+ * 조회가 보는 줄이 다른 키가 되어, 차례가 와도 아무도 못 들어간다.
  */
+@Component
 public final class QueueRedisPort implements QueuePort {
 
     @SuppressWarnings("rawtypes")
@@ -46,6 +53,15 @@ public final class QueueRedisPort implements QueuePort {
 
     private final ReactiveStringRedisTemplate redis;
     private final int shards;
+
+    /**
+     * <b>값은 설정에서 받는다.</b> 상수로 복제하면 검증기가 안 보는 값이
+     * 실제로 쓰이는 값이 된다.
+     */
+    @Autowired
+    QueueRedisPort(ReactiveStringRedisTemplate redis, ControlPlaneProperties properties) {
+        this(redis, properties.scheduler().shards());
+    }
 
     private QueueRedisPort(ReactiveStringRedisTemplate redis, int shards) {
         if (shards < 1) {

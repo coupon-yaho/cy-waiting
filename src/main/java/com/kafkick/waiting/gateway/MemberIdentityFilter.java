@@ -3,7 +3,9 @@ package com.kafkick.waiting.gateway;
 import java.time.Clock;
 import java.util.List;
 import java.util.Set;
+import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpHeaders;
+import org.springframework.stereotype.Component;
 import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.server.WebFilter;
 import org.springframework.web.server.WebFilterChain;
@@ -18,6 +20,8 @@ import reactor.core.publisher.Mono;
  * <p><b>필터 계층에 둔다.</b> 순번 조회는 게이트웨이 라우트를 안 타므로,
  * 라우트에만 붙이면 그 경로가 통째로 뚫린다.
  */
+@Component
+@Order(FilterOrder.IDENTITY)
 public final class MemberIdentityFilter implements WebFilter {
 
     private static final String MEMBER_ID = "X-Member-Id";
@@ -35,7 +39,7 @@ public final class MemberIdentityFilter implements WebFilter {
 
     private final ApiError error;
 
-    private MemberIdentityFilter(Clock clock) {
+    MemberIdentityFilter(Clock clock) {
         this.error = ApiError.of(clock);
     }
 

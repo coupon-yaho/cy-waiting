@@ -19,6 +19,8 @@ import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceClientConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
+import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.utility.DockerImageName;
 import org.springframework.data.redis.core.script.RedisScript;
 
 /**
@@ -31,7 +33,7 @@ import org.springframework.data.redis.core.script.RedisScript;
  * 올랐다가 다음 표본 선택 전에 내려오는 경우를 통째로 놓친다.
  */
 @Tag("integration")
-class RankMonotonicityIntegrationTest extends RedisContainerSupport {
+class RankMonotonicityIntegrationTest {
 
     private static final String NOW = "1800000000";
 
@@ -60,6 +62,22 @@ class RankMonotonicityIntegrationTest extends RedisContainerSupport {
      * 시험이 우회할 대상이 아니다. 재는 것은 정렬 집합의 순서뿐이다.
      */
     private static final Duration BULK_TIMEOUT = WAIT;
+
+    /**
+     * <b>이 시험만의 레디스다.</b> 재는 것은 정렬 집합의 순서지 내구성이 아니다.
+     *
+     * <p>공유 컨테이너는 운영 설정이라 매초 fsync 를 한다. 쓰기를 6천 번 몰아치는
+     * 이 하네스가 그 fsync 에 걸려 명령 하나가 30초를 넘겼다 — 세 번 연속으로.
+     */
+    @SuppressWarnings("resource")   // JVM 종료까지 살려 둔다
+    private static final GenericContainer<?> REDIS =
+            new GenericContainer<>(DockerImageName.parse("redis:7.4-alpine"))
+                    .withExposedPorts(6379)
+                    .withCommand("redis-server", "--appendonly", "no", "--save", "");
+
+    static {
+        REDIS.start();
+    }
 
     private static LettuceConnectionFactory factory;
     private static ReactiveStringRedisTemplate redis;

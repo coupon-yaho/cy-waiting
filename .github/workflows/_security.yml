@@ -167,7 +167,7 @@ jobs:
             echo "::error title=시크릿::위 위치에 유출이 있다. 값은 가렸다"
             exit "$status"
           fi
-          echo "::notice title=시크릿::유출 0건
+          echo "::notice title=시크릿::유출 0건"
 
       # 규칙으로도 한 번 더 — LG-6 (토큰·시크릿 로깅 금지) 는 정적 검사로 못 잡는
       # 커밋된 값 자체를 노린다

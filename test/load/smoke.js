@@ -48,6 +48,19 @@ const servedByBackend = (r, path) => {
   }
 };
 
+// 부하 중에도 요청마다 다른 값이어야 한다. 상수로 굳으면 여기서 드러난다.
+const tracedConsistently = (r) => {
+  const header = r.headers['X-Request-Id'];
+  if (!header) {
+    return false;
+  }
+  try {
+    return r.json().error.requestId === header;
+  } catch (e) {
+    return false;
+  }
+};
+
 export default function () {
   const member = __VU * 1000 + __ITER;
 
@@ -69,5 +82,9 @@ export default function () {
   });
   check(noId, {
     '회원 식별자가 없으면 게이트웨이가 끊는다': (r) => r.status === 400,
+    // 프록시가 캐시하면 뒤에 온 사람이 남의 답을 받는다.
+    '거절을 캐시하지 못하게 한다': (r) => r.headers['Cache-Control'] === 'no-store',
+    // 본문과 헤더가 어긋나면 로그와 응답을 잇는 키가 남을 가리킨다.
+    '응답의 추적 키가 헤더와 본문에서 같다': (r) => tracedConsistently(r),
   });
 }

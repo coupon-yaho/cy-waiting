@@ -9,10 +9,14 @@
 -- ARGV[4]  큐 길이 상한. 0 이면 상한 없음
 -- ARGV[5]  지금 시각(초). 생존 신호의 만료 시각을 계산한다
 --
--- 반환  {score, floorApplied, alreadyQueued}
+-- 반환  {score, floorApplied, alreadyQueued, rank}
 --   score          이 사람의 순번. 거부되면 '-1'
 --   floorApplied   바닥값이 적용됐는가. 1 이면 시계가 뒤로 갔다는 뜻이다
 --   alreadyQueued  이미 줄에 있었는가. 1 이면 순번을 그대로 돌려준 것이다
+--   rank           내 앞의 인원. 거부되면 -1
+--
+-- **rank 를 여기서 함께 낸다.** 등록하고 따로 물으면 그 사이 앞사람이 빠져
+-- 자기 순번보다 작은 수를 받는다 — 사용자가 보기엔 줄이 뒤로 간 것이다.
 --
 -- 순번이 카운터가 아니라 **벽시계**다 (A-9). NTP 보정이나 복제본 승격으로
 -- 시계가 뒤로 가면 나중에 온 사람이 앞선다 — 불변식 4 가 깨진다.
@@ -56,12 +60,12 @@ end
 local existing = redis.call('ZSCORE', KEYS[1], ARGV[1])
 if existing then
     redis.call('ZADD', KEYS[3], now + aliveTtl, ARGV[1])
-    return {existing, 0, 1}
+    return {existing, 0, 1, redis.call('ZCOUNT', KEYS[1], '-inf', '(' .. existing)}
 end
 
 -- 2차 방어다. 1차는 도메인이 낡은 스냅샷으로 판정하므로 여기서 한 번 더 본다.
 if maxLen > 0 and redis.call('ZCARD', KEYS[1]) >= maxLen then
-    return {'-1', 0, 0}
+    return {'-1', 0, 0, -1}
 end
 
 -- 이름을 now 와 겹치지 않게 둔다. 주입받은 시각(초)과 Redis 시계(μs)는
@@ -95,4 +99,7 @@ redis.call('ZADD', KEYS[3], now + aliveTtl, ARGV[1])
 --
 -- %d 가 아니라 %.0f 다. %d 는 정수로 캐스팅해 32비트 런타임에서 넘친다.
 -- %.0f 는 배정밀도 그대로 찍으므로 2^53 아래에서 정확하고 지수도 안 붙는다.
-return {string.format('%.0f', score), applied, 0}
+-- **개수를 세지 순위를 저장하지 않는다.** 저장하면 앞사람이 빠질 때마다
+-- 전원을 갱신해야 한다.
+local rank = redis.call('ZCOUNT', KEYS[1], '-inf', '(' .. string.format('%.0f', score))
+return {string.format('%.0f', score), applied, 0, rank}

@@ -81,7 +81,8 @@ class ClockMonotonicTest extends RedisContainerSupport {
     void 정상_등록은_바닥값을_적용하지_않는다() {
         List<Object> result = enqueue("m1");
 
-        assertThat(result).hasSize(3);
+        // score · floorApplied · alreadyQueued · rank
+        assertThat(result).hasSize(4);
         assertThat(appliedFlag(result)).isZero();
         assertThat(alreadyQueued(result)).isZero();
         assertThat(scoreOf("m1")).isPositive();

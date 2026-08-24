@@ -152,6 +152,33 @@ class QueueRedisPortTest extends RedisContainerSupport {
     }
 
     /**
+     * <b>등록과 조회가 같은 샤드를 봐야 한다.</b> 갈리면 방금 선 사람이 조회에서
+     * 줄에 없는 것으로 나오고, 그는 영영 자기 순번을 못 본다.
+     */
+    @Test
+    @DisplayName("등록한_샤드에서_조회한다")
+    void 등록한_샤드에서_조회한다() {
+        int 샤드수 = 8;
+        QueueRedisPort 쪼갠_것 = QueueRedisPort.of(redis, 샤드수);
+        String member = "m-shard";
+        int 내_샤드 = ShardHash.shardOf(member, 샤드수);
+        redis.delete(RedisKeys.queue(COUPON, 샤드수, 내_샤드),
+                RedisKeys.maxScore(COUPON, 샤드수, 내_샤드),
+                RedisKeys.alive(COUPON, 샤드수, 내_샤드)).block(WAIT);
+
+        쪼갠_것.enqueue(COUPON, member, 0, 지금).block(WAIT);
+
+        // 자기 샤드에만 들어갔는지 실물로 본다.
+        assertThat(redis.opsForZSet()
+                .score(RedisKeys.queue(COUPON, 샤드수, 내_샤드), member).block(WAIT))
+                .isNotNull();
+        assertThat(쪼갠_것.status(COUPON, member, 지금).block(WAIT).state())
+                .isEqualTo(QueueState.WAITING);
+        // 0번 샤드로 굳으면 자기 샤드가 0 이 아닌 사람에게서 드러난다.
+        assertThat(내_샤드).isNotZero();
+    }
+
+    /**
      * 같은 사람이 동시에 여러 번 눌러도 자리는 하나다. 둘이 생기면 순번이
      * 갈리고, 뒤엣것이 앞엣것을 밀어낸다.
      */

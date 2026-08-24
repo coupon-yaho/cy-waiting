@@ -105,6 +105,19 @@ class CorsChainTest {
     }
 
     @Test
+    @DisplayName("응답에서_읽어야_할_헤더가_열려_있다")
+    void 응답에서_읽어야_할_헤더가_열려_있다() {
+        // **읽게 해 주지 않으면 안 보낸 것과 같다.** 교차 출처 스크립트는 기본
+        // 여섯 헤더만 볼 수 있어, 여기 없으면 추적 키도 재시도 안내도 못 읽는다.
+        client.post().uri("/api/v1/coupons/c1/issue")
+                .header(HttpHeaders.ORIGIN, ORIGIN)
+                .exchange()
+                .expectHeader().value(HttpHeaders.ACCESS_CONTROL_EXPOSE_HEADERS,
+                        v -> assertThat(v).contains("X-Request-Id")
+                                .contains(HttpHeaders.RETRY_AFTER));
+    }
+
+    @Test
     @DisplayName("정해진_메서드만_사전_요청이_허용한다")
     void 정해진_메서드만_사전_요청이_허용한다() {
         // 넓히면 브라우저가 쓰기 요청을 더 보낼 수 있게 된다.

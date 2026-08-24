@@ -6,6 +6,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.reactive.CorsConfigurationSource;
@@ -71,6 +72,9 @@ public class CorsPolicy {
         // 막고 본 요청을 아예 안 보낸다 — 그 엔드포인트가 브라우저에서 통째로 안 된다.
         config.setAllowedHeaders(List.of("Content-Type", "X-Member-Id", "X-Member-Grade",
                 "Entry-Token", "Idempotency-Key", "X-Request-Id"));
+        // **읽게 해 주지 않으면 안 보낸 것과 같다.** 교차 출처 스크립트는 기본
+        // 여섯 헤더만 볼 수 있어, 여기 없으면 추적 키도 재시도 안내도 못 읽는다.
+        config.setExposedHeaders(List.of("X-Request-Id", HttpHeaders.RETRY_AFTER));
         config.setMaxAge(3_600L);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();

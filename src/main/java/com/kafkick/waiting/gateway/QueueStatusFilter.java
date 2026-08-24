@@ -1,6 +1,7 @@
 package com.kafkick.waiting.gateway;
 
 import com.kafkick.waiting.control.SnapshotHolder;
+import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.queue.EtaPolicy;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
@@ -41,43 +42,62 @@ public final class QueueStatusFilter implements WebFilter {
     /** 폴링 간격의 흔들림. 같은 밴드가 한꺼번에 두드리지 않게 한다. */
     private static final PollIntervalPolicy POLL = PollIntervalPolicy.of(0.2);
 
+    /** 조회 예산의 키. <b>판정과 나눈다</b> — 폴링이 발급 예산을 갉아먹으면 안 된다. */
+    private static final String POLL_KEY = "poll:";
+
+    /**
+     * 이 노드가 초당 받아 주는 조회 수.
+     *
+     * <p>동시 대기 20,000 이 폴링 간격 1초로 물으면 그만큼 온다. 노드 수로
+     * 나눠야 맞지만 조회는 어느 노드로든 가므로, 한 노드가 전부 받는 최악을 둔다.
+     */
+    private long pollCap() {
+        return MAX_POLL_PER_SEC;
+    }
+
+    private static final long MAX_POLL_PER_SEC = 20_000;
+
     private final SnapshotHolder holder;
     private final QueuePort queue;
     private final QueueToken tokens;
     private final Clock clock;
     private final MeterRegistry meters;
     private final DoubleSupplier random;
+    private final SecondWindowLimiter limiter;
     private final ApiError error;
     private final QueueResponse response = QueueResponse.create();
 
     private QueueStatusFilter(SnapshotHolder holder, QueuePort queue, QueueToken tokens,
-            Clock clock, MeterRegistry meters, DoubleSupplier random) {
+            Clock clock, MeterRegistry meters, DoubleSupplier random,
+            SecondWindowLimiter limiter) {
         this.holder = Objects.requireNonNull(holder, "holder 는 필수다");
         this.queue = Objects.requireNonNull(queue, "queue 는 필수다");
         this.tokens = Objects.requireNonNull(tokens, "tokens 는 필수다");
         this.clock = Objects.requireNonNull(clock, "clock 은 필수다");
         this.meters = Objects.requireNonNull(meters, "meters 는 필수다");
         this.random = Objects.requireNonNull(random, "random 은 필수다");
+        this.limiter = Objects.requireNonNull(limiter, "limiter 는 필수다");
         this.error = ApiError.of(clock);
     }
 
     /** 흔들림의 난수원은 스레드마다 따로 둔다 — 공유하면 그 자체가 경합점이다. */
     @Autowired
     QueueStatusFilter(SnapshotHolder holder, QueuePort queue, QueueToken tokens,
-            Clock clock, MeterRegistry meters) {
+            Clock clock, MeterRegistry meters, SecondWindowLimiter limiter) {
         this(holder, queue, tokens, clock, meters,
-                () -> ThreadLocalRandom.current().nextDouble());
+                () -> ThreadLocalRandom.current().nextDouble(), limiter);
     }
 
     public static QueueStatusFilter of(SnapshotHolder holder, QueuePort queue,
-            QueueToken tokens, Clock clock, MeterRegistry meters) {
-        return new QueueStatusFilter(holder, queue, tokens, clock, meters);
+            QueueToken tokens, Clock clock, MeterRegistry meters, SecondWindowLimiter limiter) {
+        return new QueueStatusFilter(holder, queue, tokens, clock, meters, limiter);
     }
 
     /** 난수원을 받는다. 고정하지 못하면 흔들림이 실제로 붙었는지 못 잰다 (TS-4). */
     public static QueueStatusFilter of(SnapshotHolder holder, QueuePort queue,
-            QueueToken tokens, Clock clock, MeterRegistry meters, DoubleSupplier random) {
-        return new QueueStatusFilter(holder, queue, tokens, clock, meters, random);
+            QueueToken tokens, Clock clock, MeterRegistry meters, DoubleSupplier random,
+            SecondWindowLimiter limiter) {
+        return new QueueStatusFilter(holder, queue, tokens, clock, meters, random, limiter);
     }
 
     @Override
@@ -95,6 +115,15 @@ public final class QueueStatusFilter implements WebFilter {
             // 어느 쪽을 고쳐야 하는지 알려 주는 셈이다.
             count("no-token");
             return error.write(exchange, ApiError.Code.INVALID_REQUEST);
+        }
+        // **폴링은 읽기가 아니라 쓰기다.** 생존 신호를 갱신하고 차례가 오면 큐에서
+        // 뺀다. 토큰은 줄을 서면 누구나 받고 한 시간 사니, 상한이 없으면 토큰 몇
+        // 개로 공유 레디스에 무제한 쓰기를 넣을 수 있다.
+        long nowSec = clock.instant().getEpochSecond();
+        if (!limiter.tryAcquire(POLL_KEY, pollCap(), nowSec)) {
+            count("rate-limited");
+            return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
+                    (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random));
         }
         return queue.status(couponId, member.get(), clock.instant())
                 .flatMap(entry -> answer(exchange, couponId, entry))

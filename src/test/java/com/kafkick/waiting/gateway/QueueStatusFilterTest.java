@@ -8,6 +8,8 @@ import com.kafkick.waiting.control.GatewaySnapshot;
 import com.kafkick.waiting.control.SnapshotHolder;
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.CouponStates;
+import com.kafkick.waiting.domain.admission.AdmissionDecider;
+import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import com.kafkick.waiting.domain.queue.QueueState;
 import com.kafkick.waiting.domain.queue.QueueToken;
@@ -44,8 +46,10 @@ class QueueStatusFilterTest {
             Duration.ofSeconds(3), Duration.ofSeconds(10), Clock.fixed(지금, ZoneOffset.UTC));
     private final AtomicBoolean 다음으로_감 = new AtomicBoolean();
 
+    private final SecondWindowLimiter limiter = SecondWindowLimiter.withMaxKeys(10);
+
     private final QueueStatusFilter filter = QueueStatusFilter.of(
-            holder, 줄, tokens, Clock.fixed(지금, ZoneOffset.UTC), meters, () -> 0.5);
+            holder, 줄, tokens, Clock.fixed(지금, ZoneOffset.UTC), meters, () -> 0.5, limiter);
 
     private void 스냅샷을_심는다(CouponState state) {
         holder.replace(new GatewaySnapshot(Map.of(COUPON, state), new SnapshotMeta(1, 1), 지금));
@@ -231,6 +235,46 @@ class QueueStatusFilterTest {
         // 끝난 사람에게 다시 오라고 하지 않는다.
         assertThat(exchange.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER))
                 .isNull();
+    }
+
+    /**
+     * 폴링은 읽기가 아니라 쓰기다. 토큰은 줄을 서면 누구나 받고 한 시간 사니,
+     * 상한이 없으면 토큰 몇 개로 공유 레디스에 무제한 쓰기를 넣을 수 있다.
+     */
+    @Test
+    @DisplayName("조회에도_초당_상한이_있다")
+    void 조회에도_초당_상한이_있다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100));
+        줄.enqueue(COUPON, MEMBER, NO_LIMIT, 지금).block();
+        String 토큰 = tokens.issue(COUPON, MEMBER, 지금);
+
+        // 예산을 다 쓴다. 조회 예산은 판정과 나뉘어 있다.
+        for (int i = 0; i < 20_000; i++) {
+            토큰으로_조회한다(토큰);
+        }
+        int 왕복 = 줄.왕복();
+        MockServerWebExchange 넘긴_것 = 토큰으로_조회한다(토큰);
+
+        assertThat(넘긴_것.getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        // 상한을 넘으면 레디스를 아예 안 친다. 치고 나서 막으면 막는 뜻이 없다.
+        assertThat(줄.왕복()).isEqualTo(왕복);
+    }
+
+    /** 폴링이 발급 예산을 갉아먹으면, 기다리는 사람이 많을수록 통과가 줄어든다. */
+    @Test
+    @DisplayName("조회_예산은_판정과_나뉜다")
+    void 조회_예산은_판정과_나뉜다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100));
+        줄.enqueue(COUPON, MEMBER, NO_LIMIT, 지금).block();
+        // 판정의 노드 예산을 통째로 쓴다.
+        for (int i = 0; i < 100_000; i++) {
+            limiter.tryAcquire(AdmissionDecider.GLOBAL_KEY, 100_000, 지금.getEpochSecond());
+        }
+
+        MockServerWebExchange exchange = 토큰으로_조회한다(tokens.issue(COUPON, MEMBER, 지금));
+
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.OK);
     }
 
     @Test

@@ -18,7 +18,7 @@ import org.junit.jupiter.api.Test;
 class QueueTokenTest {
 
     private static final Instant 지금 = Instant.parse("2026-08-24T00:00:00Z");
-    private static final String SECRET = "0123456789abcdef0123456789abcdef";
+    private static final String SECRET = "not-a-real-secret-0123456789abcdef";
 
     private final QueueToken token = QueueToken.of(SECRET);
 

@@ -58,7 +58,7 @@ class AdmissionGatewayFilterTest {
             Clock.fixed(지금, ZoneOffset.UTC));
     private final FakeQueuePort 줄 = FakeQueuePort.create();
 
-    private final QueueToken tokens = QueueToken.of("0123456789abcdef0123456789abcdef");
+    private final QueueToken tokens = QueueToken.of("not-a-real-secret-0123456789abcdef");
 
     private final AdmissionGatewayFilter filter = AdmissionGatewayFilter.of(
             holder, AdmissionDecider.of(SecondWindowLimiter.withMaxKeys(10_000), 0.2),

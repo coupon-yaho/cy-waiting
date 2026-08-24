@@ -37,7 +37,7 @@ class QueueStatusFilterTest {
 
     private final MeterRegistry meters = new SimpleMeterRegistry();
     private final FakeQueuePort 줄 = FakeQueuePort.create();
-    private final QueueToken tokens = QueueToken.of("0123456789abcdef0123456789abcdef");
+    private final QueueToken tokens = QueueToken.of("not-a-real-secret-0123456789abcdef");
     private final SnapshotHolder holder = SnapshotHolder.of(
             Duration.ofSeconds(3), Duration.ofSeconds(10), Clock.fixed(지금, ZoneOffset.UTC));
     private final AtomicBoolean 다음으로_감 = new AtomicBoolean();

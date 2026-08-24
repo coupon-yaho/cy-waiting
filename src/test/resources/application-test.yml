@@ -13,4 +13,4 @@ waiting:
     enabled: false
   # 시험용 비밀키. 운영 값은 환경에서 온다.
   token:
-    secret: test-secret-0123456789abcdef
+    secret: not-a-real-secret-0123456789abcdef

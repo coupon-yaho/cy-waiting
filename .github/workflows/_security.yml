@@ -149,13 +149,25 @@ jobs:
           curl -sSLo /tmp/gitleaks.tgz \
             "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz"
           tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
+          # **어디가 걸렸는지 남긴다.** 값은 가리되 위치는 찍어야 한다 —
+          # "leaks found: 2" 만 나오면 고칠 곳을 찾으려 로컬에서 다시 돌려야 하고,
+          # 그게 귀찮으면 사람은 검사를 끄는 쪽을 택한다.
+          args=(detect --source . --redact --no-banner
+                --report-format json --report-path gitleaks.json)
           # PR 이면 그 커밋만, 그 밖에는 이력 전체
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            /tmp/gitleaks detect --source . --redact --no-banner \
-              --log-opts="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
-          else
-            /tmp/gitleaks detect --source . --redact --no-banner
+            args+=(--log-opts="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}")
           fi
+          # 실패해도 리포트를 먼저 읽는다. set -e 로 여기서 끊기면 위치가 안 나온다.
+          status=0
+          /tmp/gitleaks "${args[@]}" || status=$?
+          if [[ "$status" -ne 0 ]]; then
+            jq -r '.[] | "  \(.RuleID)  \(.File):\(.StartLine)  (\(.Description))"' \
+              gitleaks.json || cat gitleaks.json
+            echo "::error title=시크릿::위 위치에 유출이 있다. 값은 가렸다"
+            exit "$status"
+          fi
+          echo "::notice title=시크릿::유출 0건
 
       # 규칙으로도 한 번 더 — LG-6 (토큰·시크릿 로깅 금지) 는 정적 검사로 못 잡는
       # 커밋된 값 자체를 노린다

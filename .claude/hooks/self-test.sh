@@ -184,6 +184,25 @@ class U {
     void f() {
     }
 }' 'src/main/java/U.java' block 'JS-6 한 줄 javadoc 이후도 검출 (회귀)'
+file_case check-java.sh 'class W {
+    private static final String P = "/api/**";
+
+    void f() {
+    }
+
+    void g() {
+    }
+
+    void h() {
+    }
+
+    void i() {
+    }
+
+    /** 짧다. */
+    void j() {
+    }
+}' 'src/main/java/W.java' allow 'JS-6 문자열 안의 /** 는 javadoc 이 아니다 (회귀)'
 file_case check-java.sh 'class A {
     void f() {
         log.info("token={}", token);

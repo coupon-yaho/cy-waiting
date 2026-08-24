@@ -119,7 +119,9 @@ report "JS-14" "중첩 클래스는 static — 바깥 인스턴스를 붙들어 
 hits=$(awk '
     {
         line = $0
-        if (!in_doc && line ~ /\/\*\*/) {
+        # 줄머리의 /** 만 javadoc 이다. 문자열 안의 "/api/**" 를 주석으로
+        # 읽으면 그 아래가 통째로 본문이 되어 없는 위반을 만든다.
+        if (!in_doc && line ~ /^[[:space:]]*\/\*\*/) {
             if (line ~ /\*\//) next          # 한 줄짜리 javadoc — 열고 닫는다
             in_doc = 1; count = 0; start = NR; next
         }

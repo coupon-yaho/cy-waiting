@@ -560,25 +560,64 @@ fi
 #
 # **YAML 파서를 안 쓴다.** 표준 파서는 중복을 조용히 넘겨서 못 잡고, 파이썬
 # 라이브러리에 기대면 그것이 없는 러너에서 검사가 거짓 실패를 낸다.
-dup_found=0
-for wf in "$ROOT"/.github/workflows/*.yml; do
-    dups=$(awk '
-        /^jobs:[[:space:]]*$/ { in_jobs = 1; next }
-        /^[^[:space:]#]/      { in_jobs = 0 }
-        in_jobs && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ {
-            key = $0; sub(/:[[:space:]]*$/, "", key); sub(/^  /, "", key)
-            if (key in seen) print key
-            seen[key] = 1
-        }
-    ' "$wf")
-    if [[ -n "$dups" ]]; then
-        printf '  FAIL %s 에 중복 잡 이름: %s\n' "${wf##*/}" "$(tr '\n' ' ' <<<"$dups")"
-        dup_found=1
-    fi
-done
-if ((dup_found == 0)); then
+duplicate_job_ids() {   # 디렉터리 → 중복 잡 이름 (없으면 빈 출력)
+    local dir=$1 f
+    while IFS= read -r -d '' f; do
+        awk '
+            # 인라인 주석을 떼고 본다. `jobs: # 설명` 도 유효한 YAML 이다.
+            { line = $0; sub(/[[:space:]]*#.*$/, "", line) }
+            line ~ /^jobs:[[:space:]]*$/ { in_jobs = 1; next }
+            line ~ /^[^[:space:]]/       { in_jobs = 0 }
+            in_jobs && line ~ /^  [A-Za-z0-9_-]+:[[:space:]]*$/ {
+                key = line; sub(/:[[:space:]]*$/, "", key); sub(/^  /, "", key)
+                if (key in seen) print FILENAME ":" key
+                seen[key] = 1
+            }
+        ' "$f"
+    done < <(find "$dir" -maxdepth 1 \( -name '*.yml' -o -name '*.yaml' \) -print0)
+}
+
+# **검사 자신을 먼저 잰다.** 실제 워크플로만 보면 정규식이 망가져도 초록이다.
+wf_fixture=$(mktemp -d)
+cat > "$wf_fixture/dup.yml" <<'FIXTURE'
+name: 중복
+on: push          # 인라인 주석이 붙어도 유효한 YAML 이다
+jobs:             # 여기도 마찬가지
+  build:
+    runs-on: ubuntu-latest
+  build:
+    runs-on: ubuntu-latest
+FIXTURE
+# **두 확장자에 다 둔다.** 한쪽만 두면 나머지를 검사에서 빼도 안 죽는다.
+sed 's/중복/중복2/' "$wf_fixture/dup.yml" > "$wf_fixture/dup.yaml"
+cat > "$wf_fixture/clean.yml" <<'FIXTURE'
+name: 깨끗
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+  test:
+    runs-on: ubuntu-latest
+FIXTURE
+wf_hits=$(duplicate_job_ids "$wf_fixture" | wc -l)
+if ((wf_hits == 2)); then
+    printf '  ok   중복 잡 이름을 잡는다 (인라인 주석·두 확장자)\n'; pass=$((pass + 1))
+else
+    printf '  FAIL 중복 잡 이름을 %d/2 만 잡는다\n' "$wf_hits"; fail=$((fail + 1))
+fi
+rm -f "$wf_fixture/dup.yml" "$wf_fixture/dup.yaml"
+if [[ -z "$(duplicate_job_ids "$wf_fixture")" ]]; then
+    printf '  ok   깨끗한 워크플로는 안 잡는다\n'; pass=$((pass + 1))
+else
+    printf '  FAIL 깨끗한 워크플로를 중복으로 본다\n'; fail=$((fail + 1))
+fi
+rm -rf "$wf_fixture"
+
+wf_dups=$(duplicate_job_ids "$ROOT/.github/workflows")
+if [[ -z "$wf_dups" ]]; then
     printf '  ok   워크플로에 중복 잡 이름이 없다\n'; pass=$((pass + 1))
 else
+    printf '  FAIL 워크플로에 중복 잡 이름: %s\n' "$(tr '\n' ' ' <<<"$wf_dups")"
     fail=$((fail + 1))
 fi
 

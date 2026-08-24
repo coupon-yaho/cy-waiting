@@ -3,6 +3,10 @@ package com.kafkick.waiting.domain.admission;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -106,5 +110,55 @@ class EnqueueLatchTest {
         // 0 이면 세우자마자 풀려서 래치가 있으나 마나다.
         assertThatThrownBy(() -> EnqueueLatch.of(10, 0))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /** 보정하면 0 을 넘긴 사람이 상한 0 을 기대하는데 하나가 남는다. */
+    @Test
+    @DisplayName("키_상한이_양수가_아니면_안_만들어진다")
+    void 키_상한이_양수가_아니면_안_만들어진다() {
+        assertThatThrownBy(() -> EnqueueLatch.of(0, 3))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> EnqueueLatch.of(-1, 3))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /**
+     * 검사와 삽입을 나누면 여럿이 동시에 "아직 여유 있다" 를 보고 다 같이 넣는다.
+     * 그러면 상한을 넘긴 채로 남는다.
+     */
+    @Test
+    @DisplayName("동시에_세워도_상한을_안_넘긴_채로_남는다")
+    void 동시에_세워도_상한을_안_넘긴_채로_남는다() throws InterruptedException {
+        int 상한 = 50;
+        EnqueueLatch 좁은_것 = EnqueueLatch.of(상한, 3);
+        int 스레드 = 32;
+        CountDownLatch 출발 = new CountDownLatch(1);
+        CountDownLatch 도착 = new CountDownLatch(스레드);
+        ExecutorService pool = Executors.newFixedThreadPool(스레드);
+        try {
+            for (int t = 0; t < 스레드; t++) {
+                int 나 = t;
+                pool.execute(() -> {
+                    try {
+                        출발.await();
+                        for (int i = 0; i < 200; i++) {
+                            좁은_것.mark("c" + 나 + "-" + i, 100);
+                        }
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    } finally {
+                        도착.countDown();
+                    }
+                });
+            }
+            출발.countDown();
+            assertThat(도착.await(30, TimeUnit.SECONDS)).isTrue();
+        } finally {
+            pool.shutdownNow();
+        }
+
+        // 넘긴 뒤에 비우므로 동시에 들어온 수만큼은 잠깐 넘칠 수 있다.
+        // 다 끝난 뒤에는 상한 + 스레드 수 안으로 돌아와 있어야 한다.
+        assertThat(좁은_것.size()).isLessThanOrEqualTo(상한 + 스레드);
     }
 }

@@ -68,9 +68,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     private static final int LATCH_MAX_KEYS = 10_000;
 
     /**
-     * 래치가 걸려 있는 시간.
-     *
-     * <p>스냅샷이 따라잡는 데 걸리는 시간보다 길어야 한다 — 배분 틱 1초에
+     * 래치가 걸려 있는 시간. 스냅샷이 따라잡는 시간보다 길어야 한다 — 배분 틱에
      * 받아오기 주기를 더하고 여유를 뒀다. 짧으면 그 틈으로 추월이 난다.
      */
     private static final long LATCH_TTL_SEC = 3;

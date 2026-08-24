@@ -105,9 +105,13 @@ public final class ApiError {
     /** 다시 오라는 안내를 안 싣는다는 뜻. 매진처럼 다시 와도 소용없는 경우다. */
     public static final int NO_RETRY = -1;
 
-    private static final Logger log = LoggerFactory.getLogger(ApiError.class);
+    /**
+     * 추적 키 헤더. <b>여기 한 곳에서 정한다</b> — 노출 목록과 갈리면 응답에는
+     * 실리는데 브라우저는 못 읽는 상태가 되고, 그래도 기동은 된다.
+     */
+    public static final String REQUEST_ID = "X-Request-Id";
 
-    private static final String REQUEST_ID = "X-Request-Id";
+    private static final Logger log = LoggerFactory.getLogger(ApiError.class);
 
     /** 뒷단이 거르는 형식 그대로다. 다르게 거르면 그 차이가 신호가 된다. */
     private static final Pattern SAFE_REQUEST_ID =

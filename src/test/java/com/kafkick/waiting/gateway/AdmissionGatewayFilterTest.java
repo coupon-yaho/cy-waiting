@@ -1,6 +1,7 @@
 package com.kafkick.waiting.gateway;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.kafkick.waiting.MutableClock;
@@ -195,8 +196,10 @@ class AdmissionGatewayFilterTest {
 
         // 루프가 공회전해도 통과하지 않게 개수를 함께 본다.
         assertThat(거절).hasSize(4);
+        // codeOf 는 switch 식이라 null 을 못 낸다 — 던지지 않는 것이 재려는 것이다.
         assertThat(거절).allSatisfy(decision ->
-                assertThat(AdmissionGatewayFilter.codeOf(decision)).isNotNull());
+                assertThatCode(() -> AdmissionGatewayFilter.codeOf(decision))
+                        .as("%s", decision).doesNotThrowAnyException());
     }
 
     @Test
@@ -305,7 +308,8 @@ class AdmissionGatewayFilterTest {
     void 모든_판정값에_대응이_있다() {
         // 필터는 통과·대기·거절 셋으로만 가른다. 어디에도 안 걸리는 값이 생기면
         // 거절 경로로 떨어져 봉투를 못 찾고 500 이 나간다.
-        assertThat(AdmissionDecision.values()).hasSizeGreaterThan(10);
+        // 개수를 정확히 못 박는다. 넘기만 하면 통과하면 값이 줄어도 안 걸린다.
+        assertThat(AdmissionDecision.values()).hasSize(14);
         assertThat(AdmissionDecision.values()).allSatisfy(d -> {
             int 해당 = (d.isPass() ? 1 : 0) + (d.isEnqueue() ? 1 : 0) + (d.isReject() ? 1 : 0);
             assertThat(해당).as("판정 %s", d).isEqualTo(1);

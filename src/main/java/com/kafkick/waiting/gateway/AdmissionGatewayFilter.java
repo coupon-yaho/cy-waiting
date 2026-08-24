@@ -153,7 +153,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      * 거절의 봉투. <b>전부 열거한다</b> — 빠짐없이 적어야 새 판정값이 생겼을 때
      * 컴파일이 깨진다. {@code default} 로 두면 새 사유가 조용히 매진으로 나간다.
      */
-    public static ApiError.Code codeOf(AdmissionDecision decision) {
+    static ApiError.Code codeOf(AdmissionDecision decision) {
         return switch (decision) {
             case REJECT_SOLD_OUT -> ApiError.Code.SOLD_OUT;
             case REJECT_QUEUE_FULL -> ApiError.Code.QUEUE_FULL;

@@ -132,7 +132,7 @@ class ApiErrorTest {
                     {"success":false,"error":{"status":409,\
                     "code":"COUPON-306","message":"쿠폰 재고가 모두 소진되었습니다.",\
                     "requestId":"%s","timestamp":"2026-08-18T05:00:12.482Z"}}"""
-                    .formatted(exchange.getResponse().getHeaders().getFirst("X-Request-Id")));
+                    .formatted(exchange.getResponse().getHeaders().getFirst(ApiError.REQUEST_ID)));
         }
 
         @Test
@@ -143,7 +143,7 @@ class ApiErrorTest {
 
             // 형식까지 본다. 앞뒤가 일관되기만 하면 통과하는 시험이라, 대시
             // 붙은 UUID 로 되돌아가도 안 걸린다 — 뒷단은 대시를 뗀다.
-            String header = exchange.getResponse().getHeaders().getFirst("X-Request-Id");
+            String header = exchange.getResponse().getHeaders().getFirst(ApiError.REQUEST_ID);
             assertThat(header).matches("[0-9a-f]{32}");
             assertThat(본문(exchange)).contains("\"requestId\":\"%s\"".formatted(header));
         }
@@ -154,10 +154,10 @@ class ApiErrorTest {
         void 받은_requestId_가_안전하면_그대로_쓴다() {
             MockServerWebExchange exchange = MockServerWebExchange.from(
                     MockServerHttpRequest.get("/api/v1/coupons/c1/entry")
-                            .header("X-Request-Id", "8f2c1d4ba7f04e0e9b2c66a1f0d3e551"));
+                            .header(ApiError.REQUEST_ID, "8f2c1d4ba7f04e0e9b2c66a1f0d3e551"));
             error.write(exchange, ApiError.Code.SOLD_OUT).block();
 
-            assertThat(exchange.getResponse().getHeaders().getFirst("X-Request-Id"))
+            assertThat(exchange.getResponse().getHeaders().getFirst(ApiError.REQUEST_ID))
                     .isEqualTo("8f2c1d4ba7f04e0e9b2c66a1f0d3e551");
         }
 
@@ -170,10 +170,10 @@ class ApiErrorTest {
         void 받은_requestId_가_형식을_벗어나면_새로_만든다() {
             MockServerWebExchange exchange = MockServerWebExchange.from(
                     MockServerHttpRequest.get("/api/v1/coupons/c1/entry")
-                            .header("X-Request-Id", "\"><script>"));
+                            .header(ApiError.REQUEST_ID, "\"><script>"));
             error.write(exchange, ApiError.Code.SOLD_OUT).block();
 
-            assertThat(exchange.getResponse().getHeaders().getFirst("X-Request-Id"))
+            assertThat(exchange.getResponse().getHeaders().getFirst(ApiError.REQUEST_ID))
                     .isNotEqualTo("\"><script>")
                     .matches("[0-9a-f]{32}");
         }
@@ -200,7 +200,7 @@ class ApiErrorTest {
         void 거절한_requestId_는_본문에도_안_들어간다() {
             MockServerWebExchange exchange = MockServerWebExchange.from(
                     MockServerHttpRequest.get("/api/v1/coupons/c1/entry")
-                            .header("X-Request-Id", "\"><script>"));
+                            .header(ApiError.REQUEST_ID, "\"><script>"));
             error.write(exchange, ApiError.Code.SOLD_OUT).block();
 
             assertThat(본문(exchange)).doesNotContain("script");
@@ -212,15 +212,16 @@ class ApiErrorTest {
         @DisplayName("requestId_길이_경계를_뒷단과_같게_본다")
         void requestId_길이_경계를_뒷단과_같게_본다() {
             assertThat(추적키("a".repeat(64))).isEqualTo("a".repeat(64));
-            assertThat(추적키("a".repeat(65))).isNotEqualTo("a".repeat(65));
+            // 다르기만 하면 잘라 쓰거나 빈 값이어도 통과한다. 새로 만든 형식까지 본다.
+            assertThat(추적키("a".repeat(65))).matches("[0-9a-f]{32}");
         }
 
         private String 추적키(String 받은_값) {
             MockServerWebExchange exchange = MockServerWebExchange.from(
                     MockServerHttpRequest.get("/api/v1/coupons/c1/entry")
-                            .header("X-Request-Id", 받은_값));
+                            .header(ApiError.REQUEST_ID, 받은_값));
             error.write(exchange, ApiError.Code.SOLD_OUT).block();
-            return exchange.getResponse().getHeaders().getFirst("X-Request-Id");
+            return exchange.getResponse().getHeaders().getFirst(ApiError.REQUEST_ID);
         }
     }
 
@@ -228,10 +229,6 @@ class ApiErrorTest {
     @DisplayName("헤더")
     class Headers {
 
-        /**
-         * 프록시가 이 응답을 캐시하면 뒤에 온 사람이 남의 답을 받는다. 매진은
-         * 재입고로 뒤집히고, 순번은 사람마다 다르다.
-         */
         /**
          * 프록시가 캐시하면 뒤에 온 사람이 남의 답을 받는다. 순번은 사람마다 다르다.
          */
@@ -321,7 +318,7 @@ class ApiErrorTest {
                                     error.write(exchange, ApiError.Code.SOLD_OUT).block();
                                 }
                                 발급된_것.add(exchange.getResponse().getHeaders()
-                                        .getFirst("X-Request-Id"));
+                                        .getFirst(ApiError.REQUEST_ID));
                                 본문들.add(본문(exchange).replaceAll(
                                         "\"requestId\":\"[^\"]*\"", ""));
                             }
@@ -391,7 +388,7 @@ class ApiErrorTest {
                     {"success":false,"error":{"status":500,"code":"COMMON-004",\
                     "message":"일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.",\
                     "requestId":"%s","timestamp":"2026-08-18T05:00:12.482Z"}}"""
-                    .formatted(exchange.getResponse().getHeaders().getFirst("X-Request-Id")));
+                    .formatted(exchange.getResponse().getHeaders().getFirst(ApiError.REQUEST_ID)));
         }
 
         /** 못 만든 본문에 재시도 안내를 실으면 500 을 재시도하라고 말하는 셈이다. */

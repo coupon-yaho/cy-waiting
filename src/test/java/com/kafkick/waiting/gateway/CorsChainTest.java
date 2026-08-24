@@ -90,7 +90,7 @@ class CorsChainTest {
         // 발급은 `Entry-Token` 이, 사용·취소는 멱등키가 필수다. 하나라도 빠지면
         // 브라우저가 본 요청을 아예 안 보내 그 엔드포인트가 통째로 안 된다.
         for (String 헤더 : List.of("Content-Type", "X-Member-Id", "X-Member-Grade",
-                "Entry-Token", "Idempotency-Key", "X-Request-Id")) {
+                "Entry-Token", "Idempotency-Key", ApiError.REQUEST_ID)) {
             client.options().uri("/api/v1/coupons/c1/issue")
                     .header(HttpHeaders.ORIGIN, ORIGIN)
                     .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "POST")
@@ -113,7 +113,7 @@ class CorsChainTest {
                 .header(HttpHeaders.ORIGIN, ORIGIN)
                 .exchange()
                 .expectHeader().value(HttpHeaders.ACCESS_CONTROL_EXPOSE_HEADERS,
-                        v -> assertThat(v).contains("X-Request-Id")
+                        v -> assertThat(v).contains(ApiError.REQUEST_ID)
                                 .contains(HttpHeaders.RETRY_AFTER));
     }
 

@@ -253,7 +253,7 @@ PRD 9절은 적응형 rate 를 **명시적으로 제외**하고 "논의를 재�
 |---|---|---|---|
 | 가용량 보고 | `capacity:coupon-svc:{version}` 해시에 **`{instanceId, addr, credits, ts}`** 자기보고. 주소가 들어가면서 **이 보고가 곧 인스턴스 레지스트리**가 된다 (R-1) | Phase 4 · **Phase 9** | A-11 ✅ |
 | 워밍업 램프 | 기동 후 60초 `credits × min(1, 경과/60s)` | Phase 4 | A-12 ✅ |
-| 매진 신호 | `409` + `application/problem+json` 의 `type` | Phase 7 | B-10 ✅ |
+| 매진 신호 | `409` + 발급 계층의 에러 코드 `COUPON-306` | Phase 7 | B-10 ✅ |
 | 정책 형식 | `coupon:policy` 를 JSON 으로 | Phase 10 | E-12 ✅ |
 | 활성 쿠폰 | `coupons:active` 집합 갱신 주체와 시점 | Phase 4 | — |
 | 에러 규격 | 게이트웨이 409 가 앱 409 와 **구별되지 않아야** 한다 | Phase 5 | — |

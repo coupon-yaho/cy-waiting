@@ -1,10 +1,10 @@
 package com.kafkick.waiting.gateway;
 
 import com.kafkick.waiting.control.SnapshotHolder;
-import io.micrometer.core.instrument.MeterRegistry;
-import java.time.Clock;
 import com.kafkick.waiting.domain.admission.AdmissionDecider;
 import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
+import io.micrometer.core.instrument.MeterRegistry;
+import java.time.Clock;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
@@ -25,7 +25,7 @@ public class IdentityConfig {
     @Bean
     @Order(FilterOrder.IDENTITY)
     public MemberIdentityFilter memberIdentityFilter() {
-        return MemberIdentityFilter.create();
+        return MemberIdentityFilter.of(Clock.systemUTC());
     }
 
     /**

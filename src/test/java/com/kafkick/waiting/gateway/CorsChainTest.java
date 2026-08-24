@@ -90,7 +90,7 @@ class CorsChainTest {
         // 발급은 `Entry-Token` 이, 사용·취소는 멱등키가 필수다. 하나라도 빠지면
         // 브라우저가 본 요청을 아예 안 보내 그 엔드포인트가 통째로 안 된다.
         for (String 헤더 : List.of("Content-Type", "X-Member-Id", "X-Member-Grade",
-                "Entry-Token", "Idempotency-Key", "X-Request-Id")) {
+                "Entry-Token", "Idempotency-Key", ApiError.REQUEST_ID)) {
             client.options().uri("/api/v1/coupons/c1/issue")
                     .header(HttpHeaders.ORIGIN, ORIGIN)
                     .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "POST")
@@ -102,6 +102,19 @@ class CorsChainTest {
                     .expectHeader().value(HttpHeaders.ACCESS_CONTROL_ALLOW_HEADERS,
                             v -> assertThat(v).as("헤더 %s", 헤더).contains(헤더));
         }
+    }
+
+    @Test
+    @DisplayName("응답에서_읽어야_할_헤더가_열려_있다")
+    void 응답에서_읽어야_할_헤더가_열려_있다() {
+        // **읽게 해 주지 않으면 안 보낸 것과 같다.** 교차 출처 스크립트는 기본
+        // 여섯 헤더만 볼 수 있어, 여기 없으면 추적 키도 재시도 안내도 못 읽는다.
+        client.post().uri("/api/v1/coupons/c1/issue")
+                .header(HttpHeaders.ORIGIN, ORIGIN)
+                .exchange()
+                .expectHeader().value(HttpHeaders.ACCESS_CONTROL_EXPOSE_HEADERS,
+                        v -> assertThat(v).contains(ApiError.REQUEST_ID)
+                                .contains(HttpHeaders.RETRY_AFTER));
     }
 
     @Test

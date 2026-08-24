@@ -2,7 +2,9 @@ package com.kafkick.waiting.gateway;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.nio.charset.StandardCharsets;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.DisplayName;
@@ -26,10 +28,13 @@ import reactor.core.publisher.Mono;
  */
 class MemberIdentityFilterTest {
 
+    /** 고정 시계. 실제 시계를 쓰면 봉투의 시각을 가릴 수밖에 없다 (TS-4). */
+    private static final Instant 지금 = Instant.parse("2026-08-18T05:00:12.482Z");
+
     private static final String ID = "X-Member-Id";
     private static final String GRADE = "X-Member-Grade";
 
-    private final MemberIdentityFilter filter = MemberIdentityFilter.create();
+    private final MemberIdentityFilter filter = MemberIdentityFilter.of(Clock.fixed(지금, ZoneOffset.UTC));
 
     private final AtomicReference<ServerWebExchange> 뒷단이_본_것 = new AtomicReference<>();
 
@@ -212,9 +217,10 @@ class MemberIdentityFilterTest {
         String 본문 = exchange.getResponse().getBodyAsString().block();
         assertThat(본문)
                 .contains("\"success\":false")
-                .contains("\"data\":null")
-                .contains("\"code\":\"%s\"".formatted(ApiError.INVALID_REQUEST))
-                .contains("\"status\":400");
+                .contains("\"code\":\"%s\"".formatted(ApiError.Code.INVALID_REQUEST.code()))
+                .contains("\"status\":400")
+                // 뒷단은 non_null 로 직렬화해 data 키 자체가 없다.
+                .doesNotContain("\"data\"");
     }
 
     @Test
@@ -230,8 +236,14 @@ class MemberIdentityFilterTest {
 
         // **같은 본문인지 본다.** 안 담겼는지만 보면 사유마다 다른 문구를 써도
         // 통과하는데, 그 차이가 곧 형식을 맞추는 데 쓰이는 신호다.
-        String 정본 = new String(ApiError.create().body(HttpStatus.BAD_REQUEST,
-                ApiError.INVALID_REQUEST, "요청 헤더가 올바르지 않습니다."), StandardCharsets.UTF_8);
-        assertThat(본문들).containsOnly(정본);
+        //
+        // requestId 만 요청마다 다르다. 시계는 고정했으므로 시각은 겹쳐 본다 —
+        // 가리면 시각이 깨져도 이 시험이 못 본다.
+        assertThat(본문들).map(본문 -> 본문.replaceAll(
+                "\"requestId\":\"[^\"]*\"", "\"requestId\":\"…\""))
+                .containsOnly("""
+                        {"success":false,"error":{"status":400,\
+                        "code":"COMMON-001","message":"잘못된 요청입니다.",\
+                        "requestId":"…","timestamp":"2026-08-18T05:00:12.482Z"}}""");
     }
 }

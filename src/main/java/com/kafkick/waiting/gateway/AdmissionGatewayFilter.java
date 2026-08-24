@@ -5,17 +5,20 @@ import com.kafkick.waiting.domain.admission.AdmissionDecider;
 import com.kafkick.waiting.domain.admission.AdmissionDecision;
 import com.kafkick.waiting.domain.admission.AdmissionRequest;
 import com.kafkick.waiting.domain.coupon.CouponState;
+import com.kafkick.waiting.domain.queue.EtaPolicy;
+import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.DoubleSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.cloud.gateway.filter.GatewayFilter;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.support.ServerWebExchangeUtils;
-import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
 
@@ -39,26 +42,40 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     /** 받아도 되는 최대 대기 시간. 넘으면 줄을 세우는 것이 되레 나쁘다. */
     private static final long MAX_ETA_SEC = 600;
 
+    /** 재시도 안내의 흔들림 폭. 폴링 간격과 같은 정책을 쓴다. */
+    private static final PollIntervalPolicy POLL = PollIntervalPolicy.of(0.2);
+
     private final SnapshotHolder holder;
     private final AdmissionDecider decider;
     private final Clock clock;
     private final MeterRegistry meters;
-    private final ApiError error = ApiError.create();
+    private final DoubleSupplier random;
+    private final ApiError error;
 
     /** 설정 오류를 한 번만 알린다. 라우트가 틀렸으면 늘 틀리다. */
     private final AtomicBoolean misconfigured = new AtomicBoolean();
 
     private AdmissionGatewayFilter(SnapshotHolder holder, AdmissionDecider decider,
-            Clock clock, MeterRegistry meters) {
+            Clock clock, MeterRegistry meters, DoubleSupplier random) {
         this.holder = Objects.requireNonNull(holder, "holder 는 필수다");
         this.decider = Objects.requireNonNull(decider, "decider 는 필수다");
         this.clock = Objects.requireNonNull(clock, "clock 은 필수다");
         this.meters = Objects.requireNonNull(meters, "meters 는 필수다");
+        this.random = Objects.requireNonNull(random, "random 은 필수다");
+        this.error = ApiError.of(clock);
     }
 
+    /** 흔들림의 난수원은 스레드마다 따로 둔다 — 공유하면 그 자체가 경합점이다. */
     public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider,
             Clock clock, MeterRegistry meters) {
-        return new AdmissionGatewayFilter(holder, decider, clock, meters);
+        return of(holder, decider, clock, meters,
+                () -> ThreadLocalRandom.current().nextDouble());
+    }
+
+    /** 난수원을 받는다. 고정하지 못하면 흔들림이 실제로 붙었는지 못 잰다 (TS-4). */
+    public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider,
+            Clock clock, MeterRegistry meters, DoubleSupplier random) {
+        return new AdmissionGatewayFilter(holder, decider, clock, meters, random);
     }
 
     /**
@@ -82,8 +99,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                 log.error("라우트에 {} 경로변수가 없다 — 판정할 대상을 못 정한다", COUPON_ID);
             }
             count("no-path-variable");
-            return reject(exchange, HttpStatus.BAD_REQUEST, ApiError.INVALID_REQUEST,
-                    "요청을 처리할 수 없습니다.");
+            return error.write(exchange, ApiError.Code.INVALID_REQUEST);
         }
 
         SnapshotHolder.View view = holder.view();
@@ -117,26 +133,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             return chain.filter(exchange);
         }
         count("unknown-coupon");
-        return reject(exchange, HttpStatus.NOT_FOUND, ApiError.NOT_FOUND,
-                "쿠폰을 찾을 수 없습니다.");
-    }
-
-    /**
-     * 판정값이 받는 상태 코드. <b>거절을 하나로 뭉치지 않는다</b> — 매진은 끝난
-     * 것이고, 큐 만원은 잠시 뒤 다시 오면 되고, 과부하는 노드를 늘려야 한다.
-     */
-    public static HttpStatus statusOf(AdmissionDecision decision) {
-        return switch (decision) {
-            case PASS_TOKEN, PASS_BYPASS, PASS_FAIL_OPEN, PASS_UNDER_CAP -> HttpStatus.OK;
-            case ENQUEUE_STALE, ENQUEUE_ALWAYS, ENQUEUE_BACKLOG,
-                 ENQUEUE_RATE_COUPON, ENQUEUE_RATE_GLOBAL, ENQUEUE_KEY_SATURATED ->
-                    HttpStatus.ACCEPTED;
-            case REJECT_SOLD_OUT -> HttpStatus.CONFLICT;
-            case REJECT_QUEUE_FULL -> HttpStatus.TOO_MANY_REQUESTS;
-            case REJECT_OVERLOAD -> HttpStatus.SERVICE_UNAVAILABLE;
-            // 차례가 온 사람을 큐 뒤로 안 돌린다. 되돌리면 허가가 "아마도" 가 된다.
-            case RETRY_TOKEN -> HttpStatus.TOO_MANY_REQUESTS;
-        };
+        return error.write(exchange, ApiError.Code.UNKNOWN_COUPON);
     }
 
     private Mono<Void> route(ServerWebExchange exchange, GatewayFilterChain chain,
@@ -149,24 +146,46 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         if (decision.isEnqueue()) {
             return chain.filter(exchange);
         }
-        return reject(exchange, statusOf(decision), codeOf(decision), messageOf(decision));
+        return error.write(exchange, codeOf(decision), retryAfterSec(decision, random));
     }
 
-    private String codeOf(AdmissionDecision decision) {
+    /**
+     * 거절의 봉투. <b>전부 열거한다</b> — 빠짐없이 적어야 새 판정값이 생겼을 때
+     * 컴파일이 깨진다. {@code default} 로 두면 새 사유가 조용히 매진으로 나간다.
+     */
+    static ApiError.Code codeOf(AdmissionDecision decision) {
         return switch (decision) {
-            case REJECT_QUEUE_FULL -> ApiError.QUEUE_FULL;
-            case REJECT_OVERLOAD -> ApiError.TEMPORARILY_UNAVAILABLE;
-            case RETRY_TOKEN -> ApiError.RETRY_TOKEN;
-            default -> ApiError.STOCK_EXHAUSTED;
+            case REJECT_SOLD_OUT -> ApiError.Code.SOLD_OUT;
+            case REJECT_QUEUE_FULL -> ApiError.Code.QUEUE_FULL;
+            case REJECT_OVERLOAD -> ApiError.Code.TEMPORARILY_UNAVAILABLE;
+            // 차례가 온 사람을 큐 뒤로 안 돌린다. 되돌리면 허가가 "아마도" 가 된다.
+            case RETRY_TOKEN -> ApiError.Code.RETRY_TOKEN;
+            case PASS_TOKEN, PASS_BYPASS, PASS_FAIL_OPEN, PASS_UNDER_CAP,
+                 ENQUEUE_STALE, ENQUEUE_ALWAYS, ENQUEUE_BACKLOG,
+                 ENQUEUE_RATE_COUPON, ENQUEUE_RATE_GLOBAL, ENQUEUE_KEY_SATURATED ->
+                    throw new IllegalArgumentException("거절이 아니다: " + decision);
         };
     }
 
-    private String messageOf(AdmissionDecision decision) {
+    /**
+     * 다시 와도 되는 때. <b>같은 값을 주면 다 같이 돌아온다</b> — 흔들어서
+     * 되돌아오는 파도를 흩는다.
+     */
+    static int retryAfterSec(AdmissionDecision decision, DoubleSupplier random) {
         return switch (decision) {
-            case REJECT_QUEUE_FULL -> "대기열이 가득 찼습니다.";
-            case REJECT_OVERLOAD -> "지금은 처리할 수 없습니다.";
-            case RETRY_TOKEN -> "잠시 후 다시 시도해 주세요.";
-            default -> "재고가 모두 소진되었습니다.";
+            // 차례가 온 사람이다. 멀리 보내면 그 사이 몫이 남에게 간다.
+            //
+            // 가장 가까운 밴드(1초)라 흔들림은 반올림에 통째로 흡수된다. 여기서
+            // 흩을 대상은 몇 초 뒤에 몰릴 사람들이 아니라 30초 뒤의 파도다.
+            case RETRY_TOKEN -> (int) POLL.intervalSec(0, random);
+            case REJECT_QUEUE_FULL, REJECT_OVERLOAD ->
+                    (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random);
+            // 매진은 안 싣는다. 다시 와도 소용없는데 시각을 주면 재시도를 부른다.
+            case REJECT_SOLD_OUT -> ApiError.NO_RETRY;
+            case PASS_TOKEN, PASS_BYPASS, PASS_FAIL_OPEN, PASS_UNDER_CAP,
+                 ENQUEUE_STALE, ENQUEUE_ALWAYS, ENQUEUE_BACKLOG,
+                 ENQUEUE_RATE_COUPON, ENQUEUE_RATE_GLOBAL, ENQUEUE_KEY_SATURATED ->
+                    throw new IllegalArgumentException("거절이 아니다: " + decision);
         };
     }
 
@@ -174,12 +193,6 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         Map<String, String> vars = exchange.getAttribute(
                 ServerWebExchangeUtils.URI_TEMPLATE_VARIABLES_ATTRIBUTE);
         return vars == null ? null : vars.get(COUPON_ID);
-    }
-
-    private Mono<Void> reject(ServerWebExchange exchange, HttpStatus status,
-            String code, String message) {
-        return error.write(exchange.getResponse(), status,
-                error.body(status, code, message));
     }
 
     @Override

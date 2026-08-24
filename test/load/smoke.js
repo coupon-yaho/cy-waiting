@@ -48,6 +48,20 @@ const servedByBackend = (r, path) => {
   }
 };
 
+// 헤더와 본문이 같은 키를 가리키는지 본다. 어긋나면 로그와 응답을 잇는
+// 키가 남을 가리킨다. 요청마다 다른지는 단위 시험이 본다.
+const tracedConsistently = (r) => {
+  const header = r.headers['X-Request-Id'];
+  if (!header) {
+    return false;
+  }
+  try {
+    return r.json().error.requestId === header;
+  } catch {
+    return false;
+  }
+};
+
 export default function () {
   const member = __VU * 1000 + __ITER;
 
@@ -69,5 +83,9 @@ export default function () {
   });
   check(noId, {
     '회원 식별자가 없으면 게이트웨이가 끊는다': (r) => r.status === 400,
+    // 뒷단은 캐시 헤더를 안 단다. 우리만 달면 그 헤더로 게이트웨이가 드러난다.
+    '뒷단도 내는 거절에 없는 헤더를 안 단다': (r) => !r.headers['Cache-Control'],
+    // 본문과 헤더가 어긋나면 로그와 응답을 잇는 키가 남을 가리킨다.
+    '응답의 추적 키가 헤더와 본문에서 같다': (r) => tracedConsistently(r),
   });
 }

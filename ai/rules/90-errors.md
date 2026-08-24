@@ -76,11 +76,11 @@ public abstract class BusinessException extends WaitingException {
 ```java
 public enum ErrorCode {
 
-    STOCK_EXHAUSTED(HttpStatus.CONFLICT,     "재고가 모두 소진되었습니다"),
-    QUEUE_FULL     (HttpStatus.TOO_MANY_REQUESTS, "대기열이 가득 찼습니다"),
-    OVERLOAD       (HttpStatus.SERVICE_UNAVAILABLE, "일시적으로 처리할 수 없습니다"),
-    UNKNOWN_COUPON (HttpStatus.NOT_FOUND,    "존재하지 않는 쿠폰입니다"),
-    UNAUTHORIZED   (HttpStatus.UNAUTHORIZED, "인증이 필요합니다"),
+    SOLD_OUT                (HttpStatus.CONFLICT,             "COUPON-306", "쿠폰 재고가 모두 소진되었습니다."),
+    UNKNOWN_COUPON          (HttpStatus.NOT_FOUND,            "COUPON-301", "쿠폰 회차를 찾을 수 없습니다."),
+    INVALID_REQUEST         (HttpStatus.BAD_REQUEST,          "COMMON-001", "잘못된 요청입니다."),
+    QUEUE_FULL              (HttpStatus.TOO_MANY_REQUESTS,    "QUEUE_FULL", "대기열이 가득 찼습니다."),
+    TEMPORARILY_UNAVAILABLE (HttpStatus.SERVICE_UNAVAILABLE,  "TEMPORARILY_UNAVAILABLE", "지금은 처리할 수 없습니다. 잠시 후 다시 시도해 주세요."),
     ...
 }
 ```
@@ -95,8 +95,9 @@ public enum ErrorCode {
 
 ### EX-6 · MUST · 응답 규격을 백엔드와 일치시킨다
 
-게이트웨이가 종결하는 `409 STOCK_EXHAUSTED`는 **쿠폰 서비스가 주는 것과
-클라이언트 입장에서 구별되지 않아야 한다.** 규격이 갈리면 클라이언트가
+게이트웨이가 종결하는 매진 `409` 는 **쿠폰 서비스가 주는 것과 클라이언트
+입장에서 구별되지 않아야 한다.** 코드와 문구뿐 아니라 **필드 구성과 헤더까지**
+같아야 한다 — 뒷단이 안 다는 헤더를 우리만 달면 그 존재만으로 갈린다. 규격이 갈리면 클라이언트가
 두 경로를 분기하게 되고, 그때부터 게이트웨이 종결이 관찰 가능한 변경이 된다.
 
 응답 스키마는 `plan/` 의 API 계약을 따른다. 바꿀 때는 양쪽을 같이 바꾼다.

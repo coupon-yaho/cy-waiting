@@ -77,7 +77,10 @@ check_ts11() {
 # TS-4 · 실제 시간 의존 / TS-7 · 비활성 테스트
 check_test_misc() {
     local file=$1
+    # **주석 줄은 보지 않는다.** "Instant.now() 를 부르지 않는다" 라고 적은
+    # 문서가 위반으로 잡히면, 규칙을 설명한 것이 규칙 위반이 된다.
     grep -nE 'Thread\.sleep|Instant\.now\(\)|System\.currentTimeMillis' "$file" 2>/dev/null \
+        | grep -vE '^[0-9]+:[[:space:]]*(//|\*|/\*)' \
         | sed "s|^|  TS-4 $file:|" | sed 's/$/  ← 시각·대기를 주입한다/'
     grep -nE '@Disabled|@RepeatedTest\(.*\)\s*//.*(불안정|flaky)' "$file" 2>/dev/null \
         | sed "s|^|  TS-7 $file:|" | sed 's/$/  ← 불안정 테스트를 덮지 않는다/'
@@ -267,6 +270,10 @@ self_test() {
         printf '  ✓ 테스트를 프로덕션 규칙으로 검사하지 않는다\n'
     fi
 
+    # 규칙을 설명한 주석이 규칙 위반으로 잡히던 오탐
+    probe "주석 속 시각 표현은 위반이 아니다" "src/test/java/ITest.java" \
+        $'class ITest {\n    // Instant.now() 를 부르지 않는다\n    void t() {}\n}\n' "위반 없음"
+
     # **티켓 혼입 회귀.** `git add -A` 가 브랜치를 옮겨도 따라온 미추적 파일을
     # 쓸어 담아 다른 티켓의 코드가 섞였고 CI 가 깨졌다. 검사가 실제로 무는지 본다.
     local repo; repo="$tmp/mixed"
@@ -337,7 +344,13 @@ if ! git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1; then
     head2 "기준을 해석할 수 없어 티켓 혼입을 못 본다: $BASE"
     findings=$((findings + 1))
 fi
+# **릴리스·핫픽스는 예외다.** 여러 티켓을 모아 main 으로 올리는 것이 이
+# 브랜치들의 목적이라(WF-3), 여기서 막으면 규범이 규범을 막는다.
+current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
 tickets=$(git log --format=%B "$BASE"..HEAD | grep -oE 'Refs: CY-[0-9]+' | sort -u | wc -l)
+case "$current_branch" in
+    release/*|hotfix/*) tickets=1 ;;
+esac
 if ((tickets > 1)); then
     head2 "브랜치에 티켓이 둘 이상 섞였다"
     git log --format='  %h %s%n     %(trailers:key=Refs,valueonly)' "$BASE"..HEAD 2>/dev/null \

@@ -182,6 +182,41 @@ class AdmissionGatewayFilterTest {
     }
 
     @Test
+    @DisplayName("줄을_세운_뒤에는_신규_유입이_못_넘는다")
+    void 줄을_세운_뒤에는_신규_유입이_못_넘는다() {
+        // **스냅샷은 한 틱 늦다.** 줄에 세운 직후에도 여전히 한산하다고 말한다.
+        // 그대로 두면 다음 창의 신규 유입이 방금 선 사람을 넘어간다 (불변식 4).
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+        태운다(COUPON);
+
+        // 배분이 줄을 비워 스냅샷이 한산해졌다. 그래도 방금 세운 줄은 남아 있다.
+        스냅샷을_심는다(CouponStates.idle(1_000));
+        MockServerWebExchange 뒤에_온_사람 = 태운다(COUPON);
+
+        assertThat(뒤에_온_사람.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .isEqualTo(AdmissionDecision.ENQUEUE_BACKLOG);
+        assertThat(뒤에_온_사람.getResponse().getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+    }
+
+    @Test
+    @DisplayName("래치는_다음_창까지_버틴다")
+    void 래치는_다음_창까지_버틴다() {
+        // **한 틱만 살면 그 다음 창이 뚫린다.** 초가 넘어가도 스냅샷은 아직
+        // 안 따라잡았을 수 있다.
+        MutableClock 시계 = MutableClock.at(지금);
+        AdmissionGatewayFilter f = AdmissionGatewayFilter.of(
+                holder, AdmissionDecider.of(SecondWindowLimiter.withMaxKeys(10_000), 0.2),
+                시계, meters, () -> 0.5, 줄, tokens);
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+        태운다(f, COUPON);
+
+        스냅샷을_심는다(CouponStates.idle(1_000));
+        시계.앞으로(Duration.ofSeconds(2));
+
+        assertThat(태운다(f, COUPON)).isEqualTo(AdmissionDecision.ENQUEUE_BACKLOG);
+    }
+
+    @Test
     @DisplayName("대기_응답에_순번과_토큰을_싣는다")
     void 대기_응답에_순번과_토큰을_싣는다() {
         // 토큰이 없으면 폴링할 수단이 없다. 순번이 없으면 얼마나 남았는지 모른다.

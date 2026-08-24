@@ -92,6 +92,10 @@ jobs:
     needs: context
     if: needs.context.outputs.code == 'true'
     uses: ./.github/workflows/_build.yml
+    # 부하 잡이 이 산출물을 받아 컨테이너에 넣는다. 안 올리면 그쪽이 JAR 를
+    # 못 찾아 이미지 빌드에서 죽는다.
+    with:
+      upload-artifact: true
 
   test-unit:
     name: 테스트

@@ -1,0 +1,55 @@
+# 부하 시나리오가 때릴 대상. 게이트웨이 · Redis · 뒷단 스텁.
+#
+# **전부 healthcheck 를 단다.** 없으면 `up --wait` 가 곧바로 돌아오고, 게이트웨이가
+# 뜨기 전에 k6 가 때려서 실패가 코드 결함인지 기동 경합인지 안 갈린다.
+
+services:
+  redis:
+    image: redis:7.4-alpine
+    volumes:
+      - ../../docker/redis.conf:/etc/redis/redis.conf:ro
+    command: ["redis-server", "/etc/redis/redis.conf"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 2s
+      retries: 20
+
+  # 지연과 동시 한도를 다르게 줘 인스턴스별 용량 차등을 만든다 (Phase 9).
+  # 스모크는 하나만 쓴다 — 여럿이 필요한 시나리오가 나중에 붙는다.
+  backend:
+    build: ./backend-stub
+    environment:
+      PORT: "8090"
+      LATENCY_MS: "5"
+      MAX_INFLIGHT: "200"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8090/stub/health"]
+      interval: 1s
+      timeout: 2s
+      retries: 20
+
+  gateway:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      args:
+        # 실행 JAR 이름을 정확히 짚는다. 여럿과 맞으면 무엇이 들어갈지
+        # 순서에 달린다. 판이 바뀌면 여기 한 줄만 고친다.
+        JAR: build/libs/waiting-0.1.0.jar
+    depends_on:
+      redis: { condition: service_healthy }
+      backend: { condition: service_healthy }
+    environment:
+      SPRING_DATA_REDIS_HOST: redis
+      WAITING_BACKEND_URI: http://backend:8090
+      WAITING_CORS_ALLOWED_0: http://localhost:5173
+    ports:
+      # 시나리오가 이 주소를 쓴다. 관리 포트는 안 연다 — 밖에서 닿으면 안 된다.
+      - "18080:8080"
+    healthcheck:
+      # **살아 있음으로 본다.** 받는 것으로 보면 재료가 아직 없어 영영 안 뜬다.
+      test: ["CMD", "wget", "-qO-", "http://localhost:8081/actuator/health/liveness"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

@@ -555,29 +555,31 @@ else
     printf '  ok   릴레이에 파이프 자르기가 없다\n'; pass=$((pass + 1))
 fi
 
-# 워크플로에 중복 키가 들어오면 GitHub 이 파일을 통째로 거절한다. 그러면 잡이
-# 하나도 안 뜨고, 필수 체크는 영원히 대기 상태로 남는다 — 실패보다 조용하다.
-# **표준 YAML 파서는 중복을 조용히 넘긴다.** 그래서 따로 본다.
-if python3 - "$ROOT" <<'PYEOF' >/dev/null 2>&1
-import sys, pathlib, yaml
-class Strict(yaml.SafeLoader):
-    pass
-def no_dup(loader, node, deep=False):
-    seen = set()
-    for k, _ in node.value:
-        key = loader.construct_object(k, deep=deep)
-        if key in seen:
-            raise ValueError(f"중복 키: {key}")
-        seen.add(key)
-    return yaml.SafeLoader.construct_mapping(loader, node, deep)
-Strict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, no_dup)
-for f in sorted(pathlib.Path(sys.argv[1], '.github/workflows').glob('*.yml')):
-    yaml.load(f.read_text(encoding='utf-8'), Strict)
-PYEOF
-then
-    printf '  ok   워크플로에 중복 키가 없다\n'; pass=$((pass + 1))
+# 워크플로에 중복 잡 이름이 들어오면 GitHub 이 파일을 통째로 거절한다. 그러면
+# 잡이 하나도 안 뜨고 필수 체크는 영원히 대기로 남는다 — 실패보다 조용하다.
+#
+# **YAML 파서를 안 쓴다.** 표준 파서는 중복을 조용히 넘겨서 못 잡고, 파이썬
+# 라이브러리에 기대면 그것이 없는 러너에서 검사가 거짓 실패를 낸다.
+dup_found=0
+for wf in "$ROOT"/.github/workflows/*.yml; do
+    dups=$(awk '
+        /^jobs:[[:space:]]*$/ { in_jobs = 1; next }
+        /^[^[:space:]#]/      { in_jobs = 0 }
+        in_jobs && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ {
+            key = $0; sub(/:[[:space:]]*$/, "", key); sub(/^  /, "", key)
+            if (key in seen) print key
+            seen[key] = 1
+        }
+    ' "$wf")
+    if [[ -n "$dups" ]]; then
+        printf '  FAIL %s 에 중복 잡 이름: %s\n' "${wf##*/}" "$(tr '\n' ' ' <<<"$dups")"
+        dup_found=1
+    fi
+done
+if ((dup_found == 0)); then
+    printf '  ok   워크플로에 중복 잡 이름이 없다\n'; pass=$((pass + 1))
 else
-    printf '  FAIL 워크플로에 중복 키가 있다 — GitHub 이 파일을 거절한다\n'; fail=$((fail + 1))
+    fail=$((fail + 1))
 fi
 
 echo

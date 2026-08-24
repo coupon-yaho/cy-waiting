@@ -7,10 +7,26 @@
 // 그 차이로 게이트웨이의 존재와 상태를 알아낼 수 있다.
 import { createServer } from 'node:http';
 
-const PORT = Number(process.env.PORT ?? 8090);
-const LATENCY_MS = Number(process.env.LATENCY_MS ?? 0);
+// **설정 오타를 조용히 넘기지 않는다.** 숫자가 아니면 NaN 이 되고, NaN 비교는
+// 전부 거짓이라 한도가 무제한이 된다 — 용량을 흉내 내려고 만든 스텁이 아무것도
+// 안 재는 상태로 돈다.
+function num(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') {
+    return fallback;
+  }
+  const v = Number(raw);
+  if (!Number.isFinite(v) || v < 0) {
+    process.stderr.write(`${name} 가 0 이상 숫자가 아니다: ${raw}\n`);
+    process.exit(1);
+  }
+  return v;
+}
+
+const PORT = num('PORT', 8090);
+const LATENCY_MS = num('LATENCY_MS', 0);
 // 0 은 무제한. 한도를 넘으면 503 을 내 — 뒷단이 못 받는 상태를 흉내 낸다.
-const MAX_INFLIGHT = Number(process.env.MAX_INFLIGHT ?? 0);
+const MAX_INFLIGHT = num('MAX_INFLIGHT', 0);
 
 let inflight = 0;
 let served = 0;

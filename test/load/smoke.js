@@ -30,27 +30,44 @@ export const options = {
   },
 };
 
-const 회원_헤더 = (id) => ({
+const memberHeaders = (id) => ({
   'X-Member-Id': String(id),
   'X-Member-Grade': 'GOLD',
 });
 
+// **뒷단이 답한 것인지 본다.** 상태만 보면 게이트웨이가 200 으로 단락시켜도
+// 통과한다 — 스텁이 경로를 되돌려 주는 이유가 그 구별이다.
+const servedByBackend = (r, path) => {
+  if (r.status !== 200) {
+    return false;
+  }
+  try {
+    return r.json().data.path === path;
+  } catch (e) {
+    return false;
+  }
+};
+
 export default function () {
-  const 회원 = __VU * 1000 + __ITER;
+  const member = __VU * 1000 + __ITER;
 
   // 조회는 그대로 프록시된다.
-  const 조회 = http.get(`${BASE}/api/v1/coupons/c1`, { headers: 회원_헤더(회원) });
-  check(조회, { '조회가 뒷단까지 간다': (r) => r.status === 200 });
+  const listPath = '/api/v1/coupons/c1';
+  const list = http.get(`${BASE}${listPath}`, { headers: memberHeaders(member) });
+  check(list, { '조회가 뒷단까지 간다': (r) => servedByBackend(r, listPath) });
 
   // 발급은 판정 필터를 지난다. 지금은 통과만 시킨다 — 판정 내용은 CY-400.
-  const 발급 = http.post(`${BASE}/api/v1/coupons/c1/issue`, null, {
-    headers: 회원_헤더(회원),
+  const issuePath = '/api/v1/coupons/c1/issue';
+  const issue = http.post(`${BASE}${issuePath}`, null, {
+    headers: memberHeaders(member),
   });
-  check(발급, { '발급이 뒷단까지 간다': (r) => r.status === 200 });
+  check(issue, { '발급이 뒷단까지 간다': (r) => servedByBackend(r, issuePath) });
 
-  // 형식이 깨진 요청은 게이트웨이가 끊는다. 뒷단까지 가면 안 된다.
-  const 깨진_것 = http.get(`${BASE}/api/v1/coupons/c1`, {
+  // 회원 식별자가 없으면 게이트웨이가 끊는다. 뒷단까지 가면 안 된다.
+  const noId = http.get(`${BASE}${listPath}`, {
     headers: { 'X-Member-Grade': 'GOLD' },
   });
-  check(깨진_것, { '헤더가 없으면 게이트웨이가 끊는다': (r) => r.status === 400 });
+  check(noId, {
+    '회원 식별자가 없으면 게이트웨이가 끊는다': (r) => r.status === 400,
+  });
 }

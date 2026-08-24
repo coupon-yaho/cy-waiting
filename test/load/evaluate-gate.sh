@@ -3,7 +3,7 @@
 #
 # **k6 임계만 보면 기준이 둘이 된다.** 그쪽은 조기 중단용이고, 통과 여부는
 # 여기서 정한다 — 계획서가 바뀌면 고칠 곳이 한 곳이어야 한다.
-set -euo pipefail
+set -uo pipefail
 
 scenario="${1:?시나리오 이름}"
 summary="${2:?k6 요약 JSON}"
@@ -23,6 +23,30 @@ violate() {
   failed=1
 }
 
+# **숫자인지 먼저 본다.** awk 는 숫자꼴이 아닌 값을 문자열로 비교해서
+# "HELLO" >= 0.99 가 참이 된다 — 깨진 요약이 통과로 읽힌다.
+numeric() {
+  [[ "${1:-}" =~ ^-?[0-9]+([.][0-9]+)?([eE][-+]?[0-9]+)?$ ]]
+}
+
+at_least() {   # 값 하한 이름
+  if ! numeric "${1:-}"; then
+    violate "$3 가 숫자가 아니다: ${1:-없음}"
+    return
+  fi
+  awk -v v="$1" -v m="$2" 'BEGIN { exit (v + 0 >= m + 0) ? 0 : 1 }' \
+    || violate "$3 $1 < $2"
+}
+
+at_most() {    # 값 상한 이름
+  if ! numeric "${1:-}"; then
+    violate "$3 가 숫자가 아니다: ${1:-없음}"
+    return
+  fi
+  awk -v v="$1" -v m="$2" 'BEGIN { exit (v + 0 <= m + 0) ? 0 : 1 }' \
+    || violate "$3 $1 > $2"
+}
+
 case "$scenario" in
   smoke)
     checks=$(read_metric '.metrics.checks.value')
@@ -32,23 +56,20 @@ case "$scenario" in
 
     report "검사 통과율" "${checks:-없음}"
     report "요청 실패율" "${req_failed:-없음}"
-    report "p95(ms)" "${p95:-없음}"
+    # 판정에 안 쓴다. 게이트웨이 오버헤드 기준은 뒷단 지연을 뺀 값이라 별도다.
+    report "p95(ms · 미판정)" "${p95:-없음}"
     report "요청 수" "${reqs:-없음}"
 
     # 요약이 비면 k6 가 안 돈 것이다. 그 상태를 통과로 세면 잡이 늘 초록이다.
-    if [[ -z "${reqs:-}" ]] || (( ${reqs%.*} <= 0 )); then
-      violate "요청이 하나도 안 나갔다 — 하네스가 안 돌았다"
-    fi
-
-    awk -v v="${checks:-0}" 'BEGIN { exit (v >= 0.99) ? 0 : 1 }' \
-      || violate "검사 통과율 ${checks:-없음} < 0.99"
-
+    at_least "${reqs:-}" 1 "요청 수"
+    at_least "${checks:-}" 0.99 "검사 통과율"
     # 계약에 없는 응답이 섞이면 그건 배선이 어긋난 것이다.
-    awk -v v="${req_failed:-1}" 'BEGIN { exit (v <= 0.01) ? 0 : 1 }' \
-      || violate "요청 실패율 ${req_failed:-없음} > 0.01"
+    at_most "${req_failed:-}" 0.01 "요청 실패율"
     ;;
   *)
-    report "판정 기준" "아직 없다"
+    # **모르는 시나리오를 통과로 안 센다.** 기본이 통과면 시나리오가 늘 때마다
+    # 아무 기준 없는 잡이 하나씩 생기고, 그 초록은 아무 뜻이 없다.
+    violate "'$scenario' 의 판정 기준이 없다 — 기준을 넣거나 시나리오를 지운다"
     ;;
 esac
 

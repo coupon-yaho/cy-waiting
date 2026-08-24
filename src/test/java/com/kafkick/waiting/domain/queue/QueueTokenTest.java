@@ -61,6 +61,10 @@ class QueueTokenTest {
         assertThat(token.verify(issued, "c2", 지금)).isEmpty();
     }
 
+    /**
+     * 만료 시각을 창에 맞춰 끊으므로 수명은 한 주기와 두 주기 사이다. 지금
+     * 시각을 그대로 담으면 초마다 다른 토큰이 나와 새로고침이 앞의 것을 죽인다.
+     */
     @Test
     @DisplayName("만료된_토큰을_거절한다")
     void 만료된_토큰을_거절한다() {
@@ -68,8 +72,18 @@ class QueueTokenTest {
 
         assertThat(token.verify(issued, "c1", 지금.plusSeconds(QueueToken.TTL_SEC - 1)))
                 .contains("m1");
-        assertThat(token.verify(issued, "c1", 지금.plusSeconds(QueueToken.TTL_SEC + 1)))
+        assertThat(token.verify(issued, "c1", 지금.plusSeconds(QueueToken.TTL_SEC * 2 + 1)))
                 .isEmpty();
+    }
+
+    /** 창이 넘어가도 앞서 받은 토큰이 곧바로 죽으면 안 된다. */
+    @Test
+    @DisplayName("창이_넘어가도_한_주기는_산다")
+    void 창이_넘어가도_한_주기는_산다() {
+        String issued = token.issue("c1", "m1", 지금);
+
+        assertThat(token.verify(issued, "c1", 지금.plusSeconds(QueueToken.TTL_SEC + 1)))
+                .contains("m1");
     }
 
     /** 사유를 나누면 어디를 고쳐야 하는지 알려 주는 셈이다. */

@@ -3,6 +3,7 @@ package com.kafkick.waiting.gateway;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.DisplayName;
@@ -29,7 +30,7 @@ class MemberIdentityFilterTest {
     private static final String ID = "X-Member-Id";
     private static final String GRADE = "X-Member-Grade";
 
-    private final MemberIdentityFilter filter = MemberIdentityFilter.create();
+    private final MemberIdentityFilter filter = MemberIdentityFilter.of(Clock.systemUTC());
 
     private final AtomicReference<ServerWebExchange> 뒷단이_본_것 = new AtomicReference<>();
 
@@ -213,7 +214,7 @@ class MemberIdentityFilterTest {
         assertThat(본문)
                 .contains("\"success\":false")
                 .contains("\"data\":null")
-                .contains("\"code\":\"%s\"".formatted(ApiError.INVALID_REQUEST))
+                .contains("\"code\":\"%s\"".formatted(ApiError.INVALID_REQUEST.code()))
                 .contains("\"status\":400");
     }
 
@@ -230,8 +231,13 @@ class MemberIdentityFilterTest {
 
         // **같은 본문인지 본다.** 안 담겼는지만 보면 사유마다 다른 문구를 써도
         // 통과하는데, 그 차이가 곧 형식을 맞추는 데 쓰이는 신호다.
-        String 정본 = new String(ApiError.create().body(HttpStatus.BAD_REQUEST,
-                ApiError.INVALID_REQUEST, "요청 헤더가 올바르지 않습니다."), StandardCharsets.UTF_8);
-        assertThat(본문들).containsOnly(정본);
+        //
+        // requestId 와 timestamp 는 요청마다 다르다. 그 둘만 가리고 나머지를 겹쳐 본다.
+        assertThat(본문들).map(본문 -> 본문.replaceAll(
+                "\"(requestId|timestamp)\":\"[^\"]*\"", "\"$1\":\"…\""))
+                .containsOnly("""
+                        {"success":false,"data":null,"error":{"status":400,\
+                        "code":"COMMON-001","message":"잘못된 요청입니다.",\
+                        "requestId":"…","timestamp":"…"}}""");
     }
 }

@@ -24,6 +24,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.cloud.gateway.route.Route;
 import org.springframework.cloud.gateway.support.ServerWebExchangeUtils;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
@@ -178,6 +179,83 @@ class AdmissionGatewayFilterTest {
                 .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
         assertThat(AdmissionGatewayFilter.statusOf(AdmissionDecision.REJECT_OVERLOAD))
                 .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+    }
+
+    @Test
+    @DisplayName("상태와_봉투가_어긋나지_않는다")
+    void 상태와_봉투가_어긋나지_않는다() {
+        // 상태 코드와 에러 코드를 따로 정하면 409 인데 QUEUE_FULL 같은 조합이
+        // 생긴다. 그 조합은 응답이 나가기 전까지 아무도 못 본다.
+        for (AdmissionDecision decision : AdmissionDecision.values()) {
+            if (!decision.isReject() && decision != AdmissionDecision.RETRY_TOKEN) {
+                continue;
+            }
+            assertThat(AdmissionGatewayFilter.codeOf(decision).status())
+                    .as("%s", decision)
+                    .isEqualTo(AdmissionGatewayFilter.statusOf(decision));
+        }
+    }
+
+    @Test
+    @DisplayName("매진은_뒷단_카탈로그_그대로_낸다")
+    void 매진은_뒷단_카탈로그_그대로_낸다() {
+        // 코드나 문구가 다르면 그 하나로 게이트웨이가 끊었는지 뒷단까지 갔는지 갈린다.
+        스냅샷을_심는다(CouponStates.closed(0));
+
+        MockServerWebExchange exchange = 태운다(COUPON);
+
+        assertThat(exchange.getResponse().getBodyAsString().block())
+                .contains("\"code\":\"COUPON-306\"")
+                .contains("\"message\":\"쿠폰 재고가 모두 소진되었습니다.\"");
+    }
+
+    @Test
+    @DisplayName("매진에는_다시_올_때를_안_싣는다")
+    void 매진에는_다시_올_때를_안_싣는다() {
+        // 재고가 없는데 시각을 주면 소용없는 재시도를 부른다.
+        스냅샷을_심는다(CouponStates.closed(0));
+
+        MockServerWebExchange exchange = 태운다(COUPON);
+
+        assertThat(exchange.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER))
+                .isNull();
+    }
+
+    @Test
+    @DisplayName("큐가_찼으면_다시_올_때를_알려_준다")
+    void 큐가_찼으면_다시_올_때를_알려_준다() {
+        // 안 알려 주면 각자 마음대로 돌아온다. 그 파도가 다음 거절을 만든다.
+        스냅샷을_심는다(CouponStates.queueing(1, 1_000, 5_000));
+
+        MockServerWebExchange exchange = 태운다(COUPON);
+
+        assertThat(exchange.getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        // 값까지 본다. 있기만 하면 0 이나 음수여도 통과하는데, 그건 안 알려
+        // 준 것과 같다 — 다들 곧바로 돌아온다.
+        assertThat(exchange.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER))
+                .asInt().isBetween(1, 60);
+    }
+
+    @Test
+    @DisplayName("다시_올_때를_흔들어_준다")
+    void 다시_올_때를_흔들어_준다() {
+        // 같은 값을 주면 거절당한 사람들이 다 같이 돌아온다. 되돌아오는
+        // 파도가 다음 거절을 만들고, 그게 반복된다.
+        assertThat(AdmissionGatewayFilter.retryAfterSec(AdmissionDecision.REJECT_QUEUE_FULL,
+                () -> 0))
+                .isNotEqualTo(AdmissionGatewayFilter.retryAfterSec(
+                        AdmissionDecision.REJECT_QUEUE_FULL, () -> 1));
+    }
+
+    @Test
+    @DisplayName("차례가_온_사람은_멀리_안_보낸다")
+    void 차례가_온_사람은_멀리_안_보낸다() {
+        // 상한에 걸렸을 뿐 차례는 왔다. 큐 만원인 사람과 같이 두면 그 사이
+        // 자기 몫이 남에게 간다.
+        assertThat(AdmissionGatewayFilter.retryAfterSec(AdmissionDecision.RETRY_TOKEN, () -> 0.5))
+                .isLessThan(AdmissionGatewayFilter.retryAfterSec(
+                        AdmissionDecision.REJECT_QUEUE_FULL, () -> 0.5));
     }
 
     @Test

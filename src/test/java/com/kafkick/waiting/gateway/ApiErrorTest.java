@@ -6,6 +6,12 @@ import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -14,7 +20,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
-import org.springframework.web.server.ServerWebExchange;
 
 /**
  * <b>게이트웨이가 낸 응답인지 뒷단이 낸 응답인지 알 수 없어야 한다.</b>
@@ -26,17 +31,17 @@ class ApiErrorTest {
 
     private final ApiError error = ApiError.of(Clock.fixed(NOW, ZoneOffset.UTC));
 
-    private ServerWebExchange 요청() {
+    private MockServerWebExchange 요청() {
         return MockServerWebExchange.from(MockServerHttpRequest.get("/api/v1/coupons/c1/entry"));
     }
 
-    private String 본문(ServerWebExchange exchange) {
+    private String 본문(MockServerWebExchange exchange) {
         return exchange.getResponse().getBodyAsString().block();
     }
 
     @Nested
     @DisplayName("뒷단 카탈로그")
-    class 카탈로그 {
+    class Catalog {
 
         /**
          * 매진은 뒷단이 실제로 내는 상황이다. 코드나 문구가 다르면 그 하나로
@@ -69,13 +74,13 @@ class ApiErrorTest {
 
     @Nested
     @DisplayName("봉투")
-    class 봉투 {
+    class Envelope {
 
         /** 필드 하나만 빠져도 뒷단 응답과 갈린다. 순서까지 같게 낸다. */
         @Test
         @DisplayName("뒷단과_같은_봉투로_낸다")
         void 뒷단과_같은_봉투로_낸다() {
-            ServerWebExchange exchange = 요청();
+            MockServerWebExchange exchange = 요청();
             error.write(exchange, ApiError.SOLD_OUT).block();
 
             assertThat(본문(exchange)).isEqualTo("""
@@ -88,7 +93,7 @@ class ApiErrorTest {
         @Test
         @DisplayName("본문의_requestId_가_응답_헤더와_같다")
         void 본문의_requestId_가_응답_헤더와_같다() {
-            ServerWebExchange exchange = 요청();
+            MockServerWebExchange exchange = 요청();
             error.write(exchange, ApiError.SOLD_OUT).block();
 
             String header = exchange.getResponse().getHeaders().getFirst("X-Request-Id");
@@ -100,7 +105,7 @@ class ApiErrorTest {
         @Test
         @DisplayName("받은_requestId_가_안전하면_그대로_쓴다")
         void 받은_requestId_가_안전하면_그대로_쓴다() {
-            ServerWebExchange exchange = MockServerWebExchange.from(
+            MockServerWebExchange exchange = MockServerWebExchange.from(
                     MockServerHttpRequest.get("/api/v1/coupons/c1/entry")
                             .header("X-Request-Id", "8f2c1d4ba7f04e0e9b2c66a1f0d3e551"));
             error.write(exchange, ApiError.SOLD_OUT).block();
@@ -116,7 +121,7 @@ class ApiErrorTest {
         @Test
         @DisplayName("받은_requestId_가_형식을_벗어나면_새로_만든다")
         void 받은_requestId_가_형식을_벗어나면_새로_만든다() {
-            ServerWebExchange exchange = MockServerWebExchange.from(
+            MockServerWebExchange exchange = MockServerWebExchange.from(
                     MockServerHttpRequest.get("/api/v1/coupons/c1/entry")
                             .header("X-Request-Id", "\"><script>"));
             error.write(exchange, ApiError.SOLD_OUT).block();
@@ -129,7 +134,7 @@ class ApiErrorTest {
         @Test
         @DisplayName("본문이_JSON_이다")
         void 본문이_JSON_이다() {
-            ServerWebExchange exchange = 요청();
+            MockServerWebExchange exchange = 요청();
             error.write(exchange, ApiError.SOLD_OUT).block();
 
             assertThat(exchange.getResponse().getHeaders().getContentType())
@@ -139,7 +144,7 @@ class ApiErrorTest {
 
     @Nested
     @DisplayName("헤더")
-    class 헤더 {
+    class Headers {
 
         /**
          * 프록시가 이 응답을 캐시하면 뒤에 온 사람이 남의 답을 받는다. 매진은
@@ -148,7 +153,7 @@ class ApiErrorTest {
         @Test
         @DisplayName("캐시를_금지한다")
         void 캐시를_금지한다() {
-            ServerWebExchange exchange = 요청();
+            MockServerWebExchange exchange = 요청();
             error.write(exchange, ApiError.SOLD_OUT).block();
 
             assertThat(exchange.getResponse().getHeaders().getCacheControl())
@@ -159,7 +164,7 @@ class ApiErrorTest {
         @Test
         @DisplayName("다시_와도_되는_때를_알려_준다")
         void 다시_와도_되는_때를_알려_준다() {
-            ServerWebExchange exchange = 요청();
+            MockServerWebExchange exchange = 요청();
             error.write(exchange, ApiError.QUEUE_FULL, 7).block();
 
             assertThat(exchange.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER))
@@ -173,7 +178,7 @@ class ApiErrorTest {
         @Test
         @DisplayName("매진에는_다시_올_때를_안_싣는다")
         void 매진에는_다시_올_때를_안_싣는다() {
-            ServerWebExchange exchange = 요청();
+            MockServerWebExchange exchange = 요청();
             error.write(exchange, ApiError.SOLD_OUT).block();
 
             assertThat(exchange.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER))
@@ -182,8 +187,54 @@ class ApiErrorTest {
     }
 
     @Nested
+    @DisplayName("동시성")
+    class Concurrency {
+
+        private static final int 스레드 = 32;
+        private static final int 반복 = 50;
+
+        /**
+         * 인스턴스 하나를 모든 요청이 나눠 쓴다. requestId 가 겹치면 로그와
+         * 응답을 잇는 키가 남을 가리키게 된다.
+         */
+        @Test
+        @DisplayName("동시에_써도_requestId_가_안_겹친다")
+        void 동시에_써도_requestId_가_안_겹친다() throws InterruptedException {
+            Set<String> 발급된_것 = ConcurrentHashMap.newKeySet();
+            CountDownLatch 출발 = new CountDownLatch(1);
+            CountDownLatch 도착 = new CountDownLatch(스레드);
+            ExecutorService pool = Executors.newFixedThreadPool(스레드);
+            try {
+                for (int t = 0; t < 스레드; t++) {
+                    pool.execute(() -> {
+                        try {
+                            출발.await();
+                            for (int i = 0; i < 반복; i++) {
+                                MockServerWebExchange exchange = 요청();
+                                error.write(exchange, ApiError.SOLD_OUT).block();
+                                발급된_것.add(exchange.getResponse().getHeaders()
+                                        .getFirst("X-Request-Id"));
+                            }
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        } finally {
+                            도착.countDown();
+                        }
+                    });
+                }
+                출발.countDown();
+                assertThat(도착.await(30, TimeUnit.SECONDS)).isTrue();
+            } finally {
+                pool.shutdownNow();
+            }
+
+            assertThat(발급된_것).hasSize(스레드 * 반복);
+        }
+    }
+
+    @Nested
     @DisplayName("실패 경로")
-    class 실패_경로 {
+    class FailurePath {
 
         /**
          * 헤더가 이미 나갔으면 상태 코드를 못 바꾼다. 그대로 쓰려 들면 예외가
@@ -192,7 +243,7 @@ class ApiErrorTest {
         @Test
         @DisplayName("이미_나간_응답은_되돌리지_않는다")
         void 이미_나간_응답은_되돌리지_않는다() {
-            ServerWebExchange exchange = 요청();
+            MockServerWebExchange exchange = 요청();
             exchange.getResponse().setStatusCode(HttpStatus.OK);
             exchange.getResponse().setComplete().block();
 
@@ -208,7 +259,7 @@ class ApiErrorTest {
         @Test
         @DisplayName("본문을_못_만들면_500_을_낸다")
         void 본문을_못_만들면_500_을_낸다() {
-            ServerWebExchange exchange = 요청();
+            MockServerWebExchange exchange = 요청();
             ApiError.Code 깨진_코드 = new ApiError.Code(
                     HttpStatus.CONFLICT, "COUPON-306", "따옴표 \" 가 든 문구");
 

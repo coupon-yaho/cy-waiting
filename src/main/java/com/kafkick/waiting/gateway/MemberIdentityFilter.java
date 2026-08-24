@@ -1,9 +1,9 @@
 package com.kafkick.waiting.gateway;
 
+import java.time.Clock;
 import java.util.List;
 import java.util.Set;
 import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.server.WebFilter;
 import org.springframework.web.server.WebFilterChain;
@@ -33,16 +33,14 @@ public final class MemberIdentityFilter implements WebFilter {
      */
     private static final PathPattern API = PathPatternParser.defaultInstance.parse("/api/**");
 
-    private final ApiError error = ApiError.create();
-    private final byte[] rejection = error.body(
-            HttpStatus.BAD_REQUEST, ApiError.INVALID_REQUEST, "요청 헤더가 올바르지 않습니다.");
+    private final ApiError error;
 
-    private MemberIdentityFilter() {
+    private MemberIdentityFilter(Clock clock) {
+        this.error = ApiError.of(clock);
     }
 
-    /** 상태가 없지만 인스턴스다. 검사가 늘면 여기 필드가 생긴다. */
-    public static MemberIdentityFilter create() {
-        return new MemberIdentityFilter();
+    public static MemberIdentityFilter of(Clock clock) {
+        return new MemberIdentityFilter(clock);
     }
 
     @Override
@@ -52,7 +50,7 @@ public final class MemberIdentityFilter implements WebFilter {
         }
         HttpHeaders headers = exchange.getRequest().getHeaders();
         if (!validId(headers.get(MEMBER_ID)) || !validGrade(headers.get(MEMBER_GRADE))) {
-            return error.write(exchange.getResponse(), HttpStatus.BAD_REQUEST, rejection);
+            return error.write(exchange, ApiError.INVALID_REQUEST);
         }
         // 지우지도 넣지도 않는다. 넣을 검증된 신원이 없고, 지우면 뒷단이 누구인지 모른다.
         return chain.filter(exchange);

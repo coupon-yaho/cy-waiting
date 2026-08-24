@@ -38,7 +38,14 @@ class RankMonotonicityIntegrationTest extends RedisContainerSupport {
     private static final long SEED = 20260819L;
     private static final int OPERATIONS = 3_000;
     private static final int PEOPLE = 200;
-    private static final Duration WAIT = Duration.ofSeconds(10);
+    /**
+     * 한 명령을 기다려 주는 시간.
+     *
+     * <p>이 하네스는 쓰기를 6천 번 몰아친다. {@code appendfsync everysec} 인
+     * 레디스가 느린 디스크를 만나면 그동안 초 단위로 멎는다 — 붐비는 러너에서
+     * 실제로 5초를 넘겼다. 재는 것은 지연이 아니라 순서다.
+     */
+    private static final Duration WAIT = Duration.ofSeconds(30);
 
     private static final String COUPON = "rank";
     private static final String QUEUE = RedisKeys.queue(COUPON, 1, 0);
@@ -52,7 +59,7 @@ class RankMonotonicityIntegrationTest extends RedisContainerSupport {
      * <p>{@link RedisTimeBudget} 은 긴 값으로 기동을 막는다. 옳은 규칙이라
      * 시험이 우회할 대상이 아니다. 재는 것은 정렬 집합의 순서뿐이다.
      */
-    private static final Duration BULK_TIMEOUT = Duration.ofSeconds(5);
+    private static final Duration BULK_TIMEOUT = WAIT;
 
     private static LettuceConnectionFactory factory;
     private static ReactiveStringRedisTemplate redis;

@@ -29,6 +29,15 @@ end
 
 local score = redis.call('ZSCORE', KEYS[1], ARGV[1])
 if not score then
+    -- **차례가 왔던 사람인지 먼저 본다.** 입장하면 큐에서 빼므로 다음 폴링은
+    -- 줄에 없는 것으로 보인다. 그대로 두면 자기 차례를 받은 사람이 1초 뒤에
+    -- "매진" 을 보고, 다시 서면 그동안 온 사람들 뒤로 간다 (불변식 4).
+    --
+    -- 탭이 둘이거나 응답이 유실돼 재시도해도 같은 일이 난다.
+    local grace = redis.call('HGET', KEYS[4], ARGV[1])
+    if grace == 'admitted' then
+        return {'ADMITTED', 0, '-1'}
+    end
     -- **0번째와 구분한다.** 없는 것과 맨 앞인 것은 다르다. 뭉치면 유실된
     -- 사람에게 "곧 입장" 을 보여 주게 된다.
     return {'NOT_QUEUED', -1, '-1'}

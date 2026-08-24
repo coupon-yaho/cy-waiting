@@ -136,9 +136,12 @@ class IdentityChainTest {
     @DisplayName("제대로_된_요청은_헤더째_지나간다")
     void 제대로_된_요청은_헤더째_지나간다() {
         // 거절만 재면 필터가 뜨는 것만 알 뿐, 통과가 되는지는 모른다.
+        //
+        // 순번 조회 경로를 안 쓴다. 그 경로는 게이트웨이가 답하므로 뒷단까지
+        // 안 가고, 그러면 이 시험이 재려는 것을 못 잰다.
         CapturingBackend.마지막.set(null);
 
-        client.get().uri("/api/v1/coupons/c1/queue")
+        client.get().uri("/api/v1/coupons/c1")
                 .header("X-Member-Id", "12345")
                 .header("X-Member-Grade", "GOLD")
                 .exchange()

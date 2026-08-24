@@ -14,6 +14,13 @@ public final class FilterOrder {
     /** 형식이 깨진 요청은 판정에 들어가기 전에 끊는다. */
     public static final int IDENTITY = CORS + 1;
 
+    /**
+     * 순번 조회. <b>라우트를 안 탄다</b> — 뒷단으로 갈 요청이 아니다.
+     *
+     * <p>형식 검증 뒤다. 깨진 회원 헤더를 여기서 다시 보게 두지 않는다.
+     */
+    public static final int QUEUE_STATUS = IDENTITY + 1;
+
     private FilterOrder() {
     }
 }

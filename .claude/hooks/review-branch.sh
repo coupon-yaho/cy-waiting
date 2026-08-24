@@ -371,7 +371,8 @@ head2 "CI 규범 검사 — 같은 스크립트"
 # 훅 자기검증은 `--self-test` 로 따로 돌린다.
 for check in \
     "문서 링크:.github/scripts/doc-links.sh" \
-    "작업 로그:.github/scripts/journal-index.sh --check"
+    "작업 로그:.github/scripts/journal-index.sh --check" \
+    "워크플로 셸:.github/scripts/workflow-shell.sh"
 do
     name="${check%%:*}"
     cmd="${check#*:}"

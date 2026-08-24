@@ -6,7 +6,9 @@ import com.kafkick.waiting.domain.admission.AdmissionDecision;
 import com.kafkick.waiting.domain.admission.AdmissionRequest;
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.queue.EtaPolicy;
+import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
+import com.kafkick.waiting.domain.queue.QueueToken;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.util.Map;
@@ -45,37 +47,56 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     /** 재시도 안내의 흔들림 폭. 폴링 간격과 같은 정책을 쓴다. */
     private static final PollIntervalPolicy POLL = PollIntervalPolicy.of(0.2);
 
+    private static final String MEMBER_ID = "X-Member-Id";
+
+    /**
+     * 등록이 안 될 때 흘려보내는 몫. <b>노드 하나의 초당 값이다</b> — 노드가 N 대면
+     * 뒷단이 받는 것은 그 N 배이고, 오토스케일이 붙으면 조용히 커진다.
+     */
+    private static final long FAIL_OPEN_CAP = 200;
+
+    private static final String FAIL_OPEN_KEY = "enqueue";
+
     private final SnapshotHolder holder;
     private final AdmissionDecider decider;
     private final Clock clock;
     private final MeterRegistry meters;
     private final DoubleSupplier random;
+    private final QueuePort queue;
+    private final QueueToken tokens;
+    private final SecondWindowLimiter failOpen;
     private final ApiError error;
+    private final QueueResponse waiting = QueueResponse.create();
 
     /** 설정 오류를 한 번만 알린다. 라우트가 틀렸으면 늘 틀리다. */
     private final AtomicBoolean misconfigured = new AtomicBoolean();
 
     private AdmissionGatewayFilter(SnapshotHolder holder, AdmissionDecider decider,
-            Clock clock, MeterRegistry meters, DoubleSupplier random) {
+            Clock clock, MeterRegistry meters, DoubleSupplier random,
+            QueuePort queue, QueueToken tokens) {
         this.holder = Objects.requireNonNull(holder, "holder 는 필수다");
         this.decider = Objects.requireNonNull(decider, "decider 는 필수다");
         this.clock = Objects.requireNonNull(clock, "clock 은 필수다");
         this.meters = Objects.requireNonNull(meters, "meters 는 필수다");
         this.random = Objects.requireNonNull(random, "random 은 필수다");
+        this.queue = Objects.requireNonNull(queue, "queue 는 필수다");
+        this.tokens = Objects.requireNonNull(tokens, "tokens 는 필수다");
+        this.failOpen = SecondWindowLimiter.withMaxKeys(1);
         this.error = ApiError.of(clock);
     }
 
     /** 흔들림의 난수원은 스레드마다 따로 둔다 — 공유하면 그 자체가 경합점이다. */
     public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider,
-            Clock clock, MeterRegistry meters) {
+            Clock clock, MeterRegistry meters, QueuePort queue, QueueToken tokens) {
         return of(holder, decider, clock, meters,
-                () -> ThreadLocalRandom.current().nextDouble());
+                () -> ThreadLocalRandom.current().nextDouble(), queue, tokens);
     }
 
     /** 난수원을 받는다. 고정하지 못하면 흔들림이 실제로 붙었는지 못 잰다 (TS-4). */
     public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider,
-            Clock clock, MeterRegistry meters, DoubleSupplier random) {
-        return new AdmissionGatewayFilter(holder, decider, clock, meters, random);
+            Clock clock, MeterRegistry meters, DoubleSupplier random,
+            QueuePort queue, QueueToken tokens) {
+        return new AdmissionGatewayFilter(holder, decider, clock, meters, random, queue, tokens);
     }
 
     /**
@@ -84,6 +105,11 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      */
     private void count(String outcome) {
         meters.counter(METRIC, "outcome", outcome).increment();
+    }
+
+    /** 예외 종류는 우리 코드가 정하는 값이라 라벨이 안 폭발한다. */
+    private void count(String outcome, String cause) {
+        meters.counter(METRIC, "outcome", outcome, "cause", cause).increment();
     }
 
     @Override
@@ -117,7 +143,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                 clock.instant().getEpochSecond(), MAX_ETA_SEC));
         exchange.getAttributes().put(DECISION, decision);
         count(decision.name());
-        return route(exchange, chain, decision);
+        return route(exchange, chain, decision, couponId, state);
     }
 
     /**
@@ -137,16 +163,74 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     }
 
     private Mono<Void> route(ServerWebExchange exchange, GatewayFilterChain chain,
-            AdmissionDecision decision) {
+            AdmissionDecision decision, String couponId, CouponState state) {
         if (decision.isPass()) {
             return chain.filter(exchange);
         }
-        // 큐 등록은 CY-402 다. 그전까지는 붙잡지 않고 뒷단으로 보낸다 —
-        // 여기서 막으면 아직 못 만든 응답을 기다리는 사람이 생긴다.
         if (decision.isEnqueue()) {
-            return chain.filter(exchange);
+            return enqueue(exchange, chain, couponId, state);
         }
         return error.write(exchange, codeOf(decision), retryAfterSec(decision, random));
+    }
+
+    /**
+     * 줄에 세운다. <b>여기가 요청 경로에서 레디스를 치는 유일한 자리다</b> (RD-4) —
+     * 통과한 사람은 여기 안 온다.
+     */
+    private Mono<Void> enqueue(ServerWebExchange exchange, GatewayFilterChain chain,
+            String couponId, CouponState state) {
+        String memberId = exchange.getRequest().getHeaders().getFirst(MEMBER_ID);
+        if (memberId == null) {
+            // 형식 검증이 앞에서 걸렀어야 한다. 여기 오면 배선이 틀린 것이다.
+            count("no-member");
+            return error.write(exchange, ApiError.Code.INVALID_REQUEST);
+        }
+        // **판정에 쓴 상태를 그대로 쓴다.** 여기서 다시 읽으면 그 사이 틱이
+        // 지나 판정과 답이 어긋난다.
+        long capacity = state.queueCapacity(MAX_ETA_SEC);
+        return queue.enqueue(couponId, memberId, capacity, clock.instant())
+                // **여기까지만 열어 준다.** 뒤에 붙이면 줄에 선 사람이 응답을
+                // 못 써서 뒷단까지 가고, 자리를 쥔 채로 재고까지 먹는다.
+                .onErrorResume(e -> {
+                    // **요청마다 안 찍는다.** 레디스 장애는 순간이 아니라 구간으로
+                    // 오므로, 여기서 찍으면 초당 수천 줄이 스택트레이스째 쌓인다.
+                    //
+                    // 대신 예외 종류를 라벨로 센다. 레디스가 죽은 것과 인자가
+                    // 틀린 것은 다르게 다뤄야 하는데, 한 숫자로는 못 가린다.
+                    count("enqueue-error", e.getClass().getSimpleName());
+                    return Mono.empty();
+                })
+                .switchIfEmpty(Mono.defer(() -> failOpen(exchange, chain).then(Mono.empty())))
+                .flatMap(entry -> {
+                    if (!entry.accepted()) {
+                        // 2차 방어에 걸렸다. 판정은 자리가 있다고 봤지만 실제로는 없다.
+                        count(AdmissionDecision.REJECT_QUEUE_FULL.name());
+                        return error.write(exchange, ApiError.Code.QUEUE_FULL,
+                                retryAfterSec(AdmissionDecision.REJECT_QUEUE_FULL, random));
+                    }
+                    double etaSec = EtaPolicy.etaSec(entry.rank(), state.credit());
+                    return waiting.waiting(exchange,
+                            tokens.issue(couponId, memberId, clock.instant()),
+                            entry.rank(), (long) Math.max(0, etaSec),
+                            state.mode().name(),
+                            POLL.intervalSec(etaSec, random));
+                });
+    }
+
+    /**
+     * 줄을 못 세웠다.
+     *
+     * <p><b>상한을 두고 열어 준다.</b> 전부 막으면 레디스 장애가 곧 전면 장애이고,
+     * 전부 열면 뒷단이 그대로 무너진다. 상한을 넘은 몫은 되돌려 보낸다.
+     */
+    private Mono<Void> failOpen(ServerWebExchange exchange, GatewayFilterChain chain) {
+        if (failOpen.tryAcquire(FAIL_OPEN_KEY, FAIL_OPEN_CAP, clock.instant().getEpochSecond())) {
+            count("enqueue-failed-open");
+            return chain.filter(exchange);
+        }
+        count("enqueue-failed-shed");
+        return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
+                retryAfterSec(AdmissionDecision.REJECT_OVERLOAD, random));
     }
 
     /**

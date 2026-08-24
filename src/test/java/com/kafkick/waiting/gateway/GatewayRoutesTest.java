@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.kafkick.waiting.control.SnapshotHolder;
 import com.kafkick.waiting.domain.admission.AdmissionDecider;
 import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
+import com.kafkick.waiting.domain.queue.QueueToken;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Clock;
 import java.time.Duration;
@@ -53,7 +54,9 @@ class GatewayRoutesTest {
             new GatewayRoutes.Backend("http://backend:8080"),
             AdmissionGatewayFilter.of(재료_없는_홀더(),
                     AdmissionDecider.of(SecondWindowLimiter.withMaxKeys(10), 0.2),
-                    Clock.systemUTC(), new SimpleMeterRegistry()));
+                    Clock.systemUTC(), new SimpleMeterRegistry(),
+                    FakeQueuePort.create(),
+                    QueueToken.of("not-a-real-secret-0123456789abcdef")));
 
     /**
      * 재료를 한 번도 못 받은 홀더. 이 시험은 <b>라우트가 무엇을 잡는가</b>만 보므로

@@ -152,16 +152,22 @@ class QueueStatusTest extends RedisContainerSupport {
     }
 
     @Test
-    @DisplayName("이미_빠진_사람이_다시_조회해도_망가지지_않는다")
-    void 이미_빠진_사람이_다시_조회해도_망가지지_않는다() {
+    @DisplayName("입장한_사람은_다시_물어도_입장이다")
+    void 입장한_사람은_다시_물어도_입장이다() {
         enqueue("m0");
         redis.opsForValue()
                 .set(ADMITTED, String.valueOf(redis.opsForZSet().score(QUEUE, "m0").block(WAIT).longValue()))
                 .block(WAIT);
         status("m0");
 
-        // 두 번째 조회는 큐에 없으니 NOT_QUEUED 다. 입장이 두 번 나지 않는다.
-        assertThat(state(status("m0"))).isEqualTo("NOT_QUEUED");
+        // **응답을 놓치면 복구 수단이 없다.** 탭이 둘이거나 재시도만 해도 큐에는
+        // 이미 없으니, 여기서 매진을 내면 자기 차례를 받은 사람이 다시 서야 하고
+        // 그동안 온 사람들 뒤로 간다.
+        assertThat(state(status("m0"))).isEqualTo("ADMITTED");
+
+        // 다만 입장 처리는 한 번뿐이다 — 유예 기록만 읽고 돌아간다.
+        assertThat(redis.opsForZSet().score(QUEUE, "m0").block(WAIT)).isNull();
+        assertThat(redis.opsForHash().get(GRACE, "m0").block(WAIT)).isEqualTo("admitted");
     }
 
     @Test

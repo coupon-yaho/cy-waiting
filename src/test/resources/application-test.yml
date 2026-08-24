@@ -11,3 +11,6 @@
 waiting:
   scheduler:
     enabled: false
+  # 시험용 비밀키. 운영 값은 환경에서 온다.
+  token:
+    secret: not-a-real-secret-0123456789abcdef

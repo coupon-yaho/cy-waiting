@@ -1,6 +1,7 @@
 package com.kafkick.waiting.gateway;
 
 import com.kafkick.waiting.control.SnapshotHolder;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import com.kafkick.waiting.domain.admission.AdmissionDecider;
 import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
@@ -33,8 +34,8 @@ public class IdentityConfig {
      */
     @Bean
     public AdmissionGatewayFilter admissionGatewayFilter(SnapshotHolder holder,
-            AdmissionDecider decider) {
-        return AdmissionGatewayFilter.of(holder, decider, Clock.systemUTC());
+            AdmissionDecider decider, MeterRegistry meters) {
+        return AdmissionGatewayFilter.of(holder, decider, Clock.systemUTC(), meters);
     }
 
     /**

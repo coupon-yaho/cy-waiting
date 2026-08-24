@@ -5,9 +5,11 @@ import com.kafkick.waiting.domain.admission.AdmissionDecider;
 import com.kafkick.waiting.domain.admission.AdmissionDecision;
 import com.kafkick.waiting.domain.admission.AdmissionRequest;
 import com.kafkick.waiting.domain.coupon.CouponState;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.cloud.gateway.filter.GatewayFilter;
@@ -30,23 +32,41 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
 
     private static final String COUPON_ID = "couponId";
 
+    /** 판정 결과를 사유별로 센다. <b>요청마다 로그를 남기지 않는다</b> — 낡음
+     * 구간에서 로그가 폭주하고, 그때 정작 봐야 할 것이 묻힌다. */
+    private static final String METRIC = "waiting.admission";
+
     /** 받아도 되는 최대 대기 시간. 넘으면 줄을 세우는 것이 되레 나쁘다. */
     private static final long MAX_ETA_SEC = 600;
 
     private final SnapshotHolder holder;
     private final AdmissionDecider decider;
     private final Clock clock;
+    private final MeterRegistry meters;
     private final ApiError error = ApiError.create();
 
-    private AdmissionGatewayFilter(SnapshotHolder holder, AdmissionDecider decider, Clock clock) {
+    /** 설정 오류를 한 번만 알린다. 라우트가 틀렸으면 늘 틀리다. */
+    private final AtomicBoolean misconfigured = new AtomicBoolean();
+
+    private AdmissionGatewayFilter(SnapshotHolder holder, AdmissionDecider decider,
+            Clock clock, MeterRegistry meters) {
         this.holder = Objects.requireNonNull(holder, "holder 는 필수다");
         this.decider = Objects.requireNonNull(decider, "decider 는 필수다");
         this.clock = Objects.requireNonNull(clock, "clock 은 필수다");
+        this.meters = Objects.requireNonNull(meters, "meters 는 필수다");
     }
 
     public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider,
-            Clock clock) {
-        return new AdmissionGatewayFilter(holder, decider, clock);
+            Clock clock, MeterRegistry meters) {
+        return new AdmissionGatewayFilter(holder, decider, clock, meters);
+    }
+
+    /**
+     * 사유별로 센다. <b>쿠폰 ID 를 라벨에 안 넣는다</b> — 인증이 없어 아무 문자열이나
+     * 들어오고, 그러면 지표 하나가 메모리를 밀어낸다.
+     */
+    private void count(String outcome) {
+        meters.counter(METRIC, "outcome", outcome).increment();
     }
 
     @Override
@@ -55,7 +75,13 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         if (couponId == null) {
             // 라우트에서 변수 이름을 빼면 판정할 쿠폰이 없다. 그대로 흘리면
             // 판정이 사라진 채로 기동만 성공한다.
-            log.error("라우트에 {} 경로변수가 없다 — 판정할 대상을 못 정한다", COUPON_ID);
+            //
+            // **이건 설정 오류라 요청마다 나지 않는다** — 라우트가 틀렸으면 늘
+            // 틀리므로 한 번 알리면 된다. 계속 찍으면 그게 곧 로그 폭주다.
+            if (misconfigured.compareAndSet(false, true)) {
+                log.error("라우트에 {} 경로변수가 없다 — 판정할 대상을 못 정한다", COUPON_ID);
+            }
+            count("no-path-variable");
             return reject(exchange, HttpStatus.BAD_REQUEST, ApiError.INVALID_REQUEST,
                     "요청을 처리할 수 없습니다.");
         }
@@ -74,6 +100,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                 // 열어 줘야 할 구간에서 정반대로 조인다.
                 clock.instant().getEpochSecond(), MAX_ETA_SEC));
         exchange.getAttributes().put(DECISION, decision);
+        count(decision.name());
         return route(exchange, chain, decision);
     }
 
@@ -86,9 +113,10 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         // 기동 직후 재료가 없다고 전면 404 를 내면 뜨자마자 모든 쿠폰이 없는 것이
         // 된다. 재료를 못 믿을 때도 마찬가지다 — 없는 것과 모르는 것은 다르다.
         if (view.isBeforeFirstTick() || holder.isDataStale(view)) {
-            log.debug("재료를 못 믿어 판정을 미룬다 — 쿠폰 {}", couponId);
+            count("deferred-no-material");
             return chain.filter(exchange);
         }
+        count("unknown-coupon");
         return reject(exchange, HttpStatus.NOT_FOUND, ApiError.NOT_FOUND,
                 "쿠폰을 찾을 수 없습니다.");
     }

@@ -3,6 +3,8 @@ package com.kafkick.waiting.gateway;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.kafkick.waiting.MutableClock;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.kafkick.waiting.control.GatewaySnapshot;
 import com.kafkick.waiting.control.SnapshotHolder;
 import com.kafkick.waiting.domain.admission.AdmissionDecider;
@@ -40,12 +42,14 @@ class AdmissionGatewayFilterTest {
     /** 고정 시계. 실제 시계를 쓰면 낡음 판정이 장비 속도에 걸린다 (TS-4). */
     private static final Instant 지금 = Instant.parse("2026-08-24T00:00:00Z");
 
+    private final MeterRegistry meters = new SimpleMeterRegistry();
+
     private final SnapshotHolder holder = SnapshotHolder.of(
             Duration.ofSeconds(3), Duration.ofSeconds(10),
             Clock.fixed(지금, ZoneOffset.UTC));
     private final AdmissionGatewayFilter filter = AdmissionGatewayFilter.of(
             holder, AdmissionDecider.of(SecondWindowLimiter.withMaxKeys(10_000), 0.2),
-            Clock.fixed(지금, ZoneOffset.UTC));
+            Clock.fixed(지금, ZoneOffset.UTC), meters);
 
     private final AtomicReference<Boolean> 뒷단에_닿음 = new AtomicReference<>(false);
 
@@ -100,7 +104,9 @@ class AdmissionGatewayFilterTest {
         // 없는 것이 된다 — 재기동해도 같은 구간을 또 지난다.
         MockServerWebExchange exchange = 태운다(COUPON);
 
-        assertThat(exchange.getResponse().getStatusCode()).isNotEqualTo(HttpStatus.NOT_FOUND);
+        // 404 가 아닌 것만 보면 400 이나 503 으로 끊어도 통과한다.
+        assertThat(뒷단에_닿음).as("판정을 미루고 그대로 흘린다").hasValue(true);
+        assertThat(exchange.getResponse().getStatusCode()).isNull();
     }
 
     @Test
@@ -195,6 +201,35 @@ class AdmissionGatewayFilterTest {
     }
 
     @Test
+    @DisplayName("사유별로_센다")
+    void 사유별로_센다() {
+        // **요청마다 로그를 남기지 않는다.** 낡음 구간에서 없는 쿠폰을 반복해
+        // 부르면 로그가 폭주하고, 그때 정작 봐야 할 것이 묻힌다.
+        스냅샷을_심는다(null);
+        태운다(COUPON);
+        스냅샷을_심는다(CouponStates.idle(100));
+        태운다(COUPON);
+
+        assertThat(meters.counter("waiting.admission", "outcome", "unknown-coupon").count())
+                .isEqualTo(1);
+        assertThat(meters.counter("waiting.admission", "outcome", "PASS_UNDER_CAP").count())
+                .isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("쿠폰_식별자를_라벨에_안_넣는다")
+    void 쿠폰_식별자를_라벨에_안_넣는다() {
+        // 인증이 없어 아무 문자열이나 들어온다. 라벨에 넣으면 지표 하나가
+        // 메모리를 밀어낸다.
+        스냅샷을_심는다(CouponStates.idle(100));
+        태운다(COUPON);
+
+        assertThat(meters.getMeters())
+                .allSatisfy(m -> assertThat(m.getId().getTags())
+                        .noneMatch(t -> t.getValue().equals(COUPON)));
+    }
+
+    @Test
     @DisplayName("리미터_윈도를_지금_시각으로_센다")
     void 리미터_윈도를_지금_시각으로_센다() {
         // **스냅샷 발행 시각을 쓰면 배분이 멎는 순간 윈도가 영영 안 넘어간다.**
@@ -204,7 +239,7 @@ class AdmissionGatewayFilterTest {
         Instant 낡은_발행 = 지금.minusSeconds(3_600);
         MutableClock 시계 = MutableClock.at(지금);
         AdmissionGatewayFilter 시계를_쓰는_필터 = AdmissionGatewayFilter.of(
-                holder, AdmissionDecider.of(SecondWindowLimiter.withMaxKeys(10), 0.2), 시계);
+                holder, AdmissionDecider.of(SecondWindowLimiter.withMaxKeys(10), 0.2), 시계, meters);
         holder.replace(new GatewaySnapshot(
                 Map.of(COUPON, CouponStates.idle(1_000_000)),
                 new SnapshotMeta(1, 1), 낡은_발행));

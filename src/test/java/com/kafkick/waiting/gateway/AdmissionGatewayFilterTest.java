@@ -13,6 +13,7 @@ import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.DisplayName;
@@ -35,8 +36,12 @@ class AdmissionGatewayFilterTest {
 
     private static final String COUPON = "c1";
 
+    /** 고정 시계. 실제 시계를 쓰면 낡음 판정이 장비 속도에 걸린다 (TS-4). */
+    private static final Instant 지금 = Instant.parse("2026-08-24T00:00:00Z");
+
     private final SnapshotHolder holder = SnapshotHolder.of(
-            Duration.ofSeconds(3), Duration.ofSeconds(10), Clock.systemUTC());
+            Duration.ofSeconds(3), Duration.ofSeconds(10),
+            Clock.fixed(지금, ZoneOffset.UTC));
     private final AdmissionGatewayFilter filter = AdmissionGatewayFilter.of(
             holder, AdmissionDecider.of(SecondWindowLimiter.withMaxKeys(10_000), 0.2));
 
@@ -59,7 +64,7 @@ class AdmissionGatewayFilterTest {
     private void 스냅샷을_심는다(CouponState state) {
         holder.replace(new GatewaySnapshot(
                 state == null ? Map.of() : Map.of(COUPON, state),
-                new SnapshotMeta(1_000, 1), Instant.now()));
+                new SnapshotMeta(1_000, 1), 지금));
     }
 
     @Test

@@ -3,7 +3,13 @@ package com.kafkick.waiting.gateway;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.kafkick.waiting.control.SnapshotHolder;
+import com.kafkick.waiting.domain.admission.AdmissionDecider;
+import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
+import java.time.Clock;
+import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Stream;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -17,6 +23,7 @@ import org.springframework.cloud.gateway.filter.GatewayFilter;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.OrderedGatewayFilter;
 import org.springframework.cloud.gateway.route.Route;
+import org.springframework.cloud.gateway.support.ServerWebExchangeUtils;
 import org.springframework.cloud.gateway.route.RouteLocator;
 import org.springframework.cloud.gateway.route.builder.RouteLocatorBuilder;
 import org.springframework.boot.webflux.autoconfigure.WebFluxProperties;
@@ -42,7 +49,18 @@ class GatewayRoutesTest {
     // 띄운다 — 애플리케이션을 통째로 세우면 라우트 하나 보려고 레디스까지 붙는다.
     private final RouteLocator locator = new GatewayRoutes().routes(
             new RouteLocatorBuilder(술어만_있는_컨텍스트()),
-            new GatewayRoutes.Backend("http://backend:8080"));
+            new GatewayRoutes.Backend("http://backend:8080"),
+            AdmissionGatewayFilter.of(재료_없는_홀더(),
+                    AdmissionDecider.of(SecondWindowLimiter.withMaxKeys(10), 0.2)));
+
+    /**
+     * 재료를 한 번도 못 받은 홀더. 이 시험은 <b>라우트가 무엇을 잡는가</b>만 보므로
+     * 판정이 끼면 안 된다 — 첫 틱 전에는 판정을 미루고 그대로 흘린다.
+     */
+    private static SnapshotHolder 재료_없는_홀더() {
+        return SnapshotHolder.of(Duration.ofSeconds(3), Duration.ofSeconds(10),
+                Clock.systemUTC());
+    }
 
     private static GenericApplicationContext 술어만_있는_컨텍스트() {
         GenericApplicationContext context = new GenericApplicationContext();
@@ -264,6 +282,10 @@ class GatewayRoutesTest {
                             .header("True-Client-IP", "1.2.3.4")
                             .header("X-Client-IP", "1.2.3.4")
                             .header("CF-Connecting-IP", "1.2.3.4"));
+            // 실제로는 술어가 채운다. 없으면 판정이 대상을 못 정해 끊는다.
+            exchange.getAttributes().put(
+                    ServerWebExchangeUtils.URI_TEMPLATE_VARIABLES_ATTRIBUTE,
+                    Map.of("couponId", "c1"));
 
             HttpHeaders 받은_것 = 뒷단이_받는_헤더(잡는_라우트(method, route), exchange);
 

@@ -65,13 +65,14 @@ public class GatewayRoutes {
     }
 
     @Bean
-    public RouteLocator routes(RouteLocatorBuilder builder, Backend backend) {
+    public RouteLocator routes(RouteLocatorBuilder builder, Backend backend,
+            AdmissionGatewayFilter admission) {
         return builder.routes()
                 .route("issue", r -> r
                         .method(HttpMethod.POST)
                         .and().path("/api/v1/coupons/" + COUPON_ID + "/issue")
                         .and().predicate(rawPathIsPlain())
-                        .filters(f -> stripSpoofableClientIp(f).filter(AdmissionGatewayFilter.create()))
+                        .filters(f -> stripSpoofableClientIp(f).filter(admission))
                         .uri(backend.uri()))
                 .route("coupons", r -> r
                         .method(HttpMethod.GET)

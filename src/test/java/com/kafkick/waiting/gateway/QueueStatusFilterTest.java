@@ -2,6 +2,7 @@ package com.kafkick.waiting.gateway;
 
 import static com.kafkick.waiting.adapter.redis.QueueRedisPort.NO_LIMIT;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.kafkick.waiting.control.GatewaySnapshot;
 import com.kafkick.waiting.control.SnapshotHolder;
@@ -62,6 +63,14 @@ class QueueStatusFilterTest {
 
     private MockServerWebExchange 토큰으로_조회한다(String token) {
         return 조회한다("/api/v1/coupons/" + COUPON + "/queue?queueToken=" + token);
+    }
+
+    /** 실물이 거절하는 값을 픽스처가 받아 주면 그 회귀를 시험이 못 본다. */
+    @Test
+    @DisplayName("잘못된_상한은_픽스처도_거절한다")
+    void 잘못된_상한은_픽스처도_거절한다() {
+        assertThatThrownBy(() -> 줄.enqueue(COUPON, MEMBER, -2, 지금).block())
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test

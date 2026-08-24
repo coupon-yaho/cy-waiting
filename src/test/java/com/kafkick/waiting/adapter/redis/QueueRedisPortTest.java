@@ -53,6 +53,15 @@ class QueueRedisPortTest extends RedisContainerSupport {
                 RedisKeys.grace(COUPON, SHARDS, 0)).block(WAIT);
     }
 
+    /** 조회가 보는 키를 다 비운다. 하나라도 남으면 앞선 시험의 상태가 답을 바꾼다. */
+    private void 비운다(int 샤드수, int 샤드) {
+        redis.delete(RedisKeys.queue(COUPON, 샤드수, 샤드),
+                RedisKeys.maxScore(COUPON, 샤드수, 샤드),
+                RedisKeys.alive(COUPON, 샤드수, 샤드),
+                RedisKeys.admitted(COUPON, 샤드수, 샤드),
+                RedisKeys.grace(COUPON, 샤드수, 샤드)).block(WAIT);
+    }
+
     private QueueEntry 등록(String memberId) {
         return port.enqueue(COUPON, memberId, QueueRedisPort.NO_LIMIT, 지금).block(WAIT);
     }
@@ -207,9 +216,7 @@ class QueueRedisPortTest extends RedisContainerSupport {
         QueueRedisPort 쪼갠_것 = QueueRedisPort.of(redis, 샤드수);
         String member = "m-shard";
         int 내_샤드 = ShardHash.shardOf(member, 샤드수);
-        redis.delete(RedisKeys.queue(COUPON, 샤드수, 내_샤드),
-                RedisKeys.maxScore(COUPON, 샤드수, 내_샤드),
-                RedisKeys.alive(COUPON, 샤드수, 내_샤드)).block(WAIT);
+        비운다(샤드수, 내_샤드);
 
         쪼갠_것.enqueue(COUPON, member, QueueRedisPort.NO_LIMIT, 지금).block(WAIT);
 
@@ -239,9 +246,8 @@ class QueueRedisPortTest extends RedisContainerSupport {
             뒷사람 = 뒷사람 + "b";
         }
         int 샤드 = ShardHash.shardOf(앞사람, 샤드수);
-        redis.delete(RedisKeys.queue(COUPON, 샤드수, 샤드),
-                RedisKeys.maxScore(COUPON, 샤드수, 샤드),
-                RedisKeys.alive(COUPON, 샤드수, 샤드)).block(WAIT);
+        // 조회가 보는 키를 다 비운다. 남으면 앞선 시험의 상태가 답을 바꾼다.
+        비운다(샤드수, 샤드);
 
         쪼갠_것.enqueue(COUPON, 앞사람, QueueRedisPort.NO_LIMIT, 지금).block(WAIT);
         QueueEntry 뒤 = 쪼갠_것.enqueue(COUPON, 뒷사람, QueueRedisPort.NO_LIMIT, 지금).block(WAIT);

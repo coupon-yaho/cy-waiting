@@ -10,4 +10,8 @@ COPY --chown=node:node server.js package.json ./
 
 ENV PORT=8090 LATENCY_MS=0 MAX_INFLIGHT=0
 EXPOSE 8090
+
+HEALTHCHECK --interval=5s --timeout=3s --retries=3 \
+    CMD wget -qO- http://localhost:8090/stub/health || exit 1
+
 ENTRYPOINT ["node", "server.js"]

@@ -17,4 +17,10 @@ ENV JAVA_OPTS="-XX:MaxRAMPercentage=70"
 # 관리 포트는 안 적는다. 적어 두면 `-P` 로 띄울 때 밖에서 열리고, 그 포트에는
 # 인증이 없어 진단 정보와 종료 조작이 닿는다.
 EXPOSE 8080
+
+# **이미지 자신이 건강을 말한다.** compose 에만 두면 다른 데서 띄울 때 사라지고,
+# 뜨자마자 트래픽을 받아 재료 없는 상태로 판정한다.
+HEALTHCHECK --interval=5s --timeout=3s --start-period=30s --retries=3 \
+    CMD wget -qO- http://localhost:8081/actuator/health/liveness || exit 1
+
 ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar app.jar"]

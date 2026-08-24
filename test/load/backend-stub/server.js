@@ -10,23 +10,25 @@ import { createServer } from 'node:http';
 // **설정 오타를 조용히 넘기지 않는다.** 숫자가 아니면 NaN 이 되고, NaN 비교는
 // 전부 거짓이라 한도가 무제한이 된다 — 용량을 흉내 내려고 만든 스텁이 아무것도
 // 안 재는 상태로 돈다.
-function num(name, fallback) {
+function num(name, fallback, { integer = false } = {}) {
   const raw = process.env[name];
   if (raw === undefined || raw === '') {
     return fallback;
   }
   const v = Number(raw);
-  if (!Number.isFinite(v) || v < 0) {
-    process.stderr.write(`${name} 가 0 이상 숫자가 아니다: ${raw}\n`);
+  const ok = Number.isFinite(v) && v >= 0 && (!integer || Number.isInteger(v));
+  if (!ok) {
+    process.stderr.write(`${name} 가 0 이상${integer ? ' 정수' : ' 숫자'}가 아니다: ${raw}\n`);
     process.exit(1);
   }
   return v;
 }
 
-const PORT = num('PORT', 8090);
+const PORT = num('PORT', 8090, { integer: true });
 const LATENCY_MS = num('LATENCY_MS', 0);
 // 0 은 무제한. 한도를 넘으면 503 을 내 — 뒷단이 못 받는 상태를 흉내 낸다.
-const MAX_INFLIGHT = num('MAX_INFLIGHT', 0);
+// 동시 한도는 세는 값이라 정수다. 1.5 를 받으면 둘째 요청까지 들어온다.
+const MAX_INFLIGHT = num('MAX_INFLIGHT', 0, { integer: true });
 
 let inflight = 0;
 let served = 0;

@@ -10,8 +10,11 @@ summary="${2:?k6 요약 JSON}"
 
 failed=0
 
+# **두 형식을 다 받는다.** k6 판에 따라 집계값이 `.value` 에도 `.values.*` 에도
+# 온다. 한쪽만 읽으면 판을 올리는 순간 전부 빈 값이 되고, 그러면 판정이 아니라
+# "하네스가 안 돌았다" 로 읽힌다.
 read_metric() {
-  jq -r "$1 // empty" "$summary"
+  jq -r "$1 // $2 // empty" "$summary"
 }
 
 report() {
@@ -49,10 +52,12 @@ at_most() {    # 값 상한 이름
 
 case "$scenario" in
   smoke)
-    checks=$(read_metric '.metrics.checks.value')
-    req_failed=$(read_metric '.metrics.http_req_failed.value')
-    p95=$(read_metric '.metrics.http_req_duration["p(95)"]')
-    reqs=$(read_metric '.metrics.http_reqs.count')
+    checks=$(read_metric '.metrics.checks.value' '.metrics.checks.values.rate')
+    req_failed=$(read_metric '.metrics.http_req_failed.value' \
+                             '.metrics.http_req_failed.values.rate')
+    p95=$(read_metric '.metrics.http_req_duration["p(95)"]' \
+                      '.metrics.http_req_duration.values["p(95)"]')
+    reqs=$(read_metric '.metrics.http_reqs.count' '.metrics.http_reqs.values.count')
 
     report "검사 통과율" "${checks:-없음}"
     report "요청 실패율" "${req_failed:-없음}"

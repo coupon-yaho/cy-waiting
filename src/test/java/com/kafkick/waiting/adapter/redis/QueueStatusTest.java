@@ -57,7 +57,7 @@ class QueueStatusTest extends RedisContainerSupport {
 
     private void enqueue(String memberId) {
         redis.execute(enqueueScript, List.of(QUEUE, MAX_SCORE, alive(memberId)),
-                        List.of(memberId, "86400", ALIVE_TTL, "0", NOW))
+                        List.of(memberId, "86400", ALIVE_TTL, "-1", NOW))
                 .blockFirst(WAIT);
     }
 
@@ -207,7 +207,7 @@ class QueueStatusTest extends RedisContainerSupport {
 
         assertThatThrownBy(() ->
                 redis.execute(statusScript, List.of(QUEUE, ADMITTED, alive("m0"), GRACE),
-                                List.of("m0", "0", NOW))
+                                List.of("m0", "-1", NOW))
                         .blockFirst(WAIT))
                 .rootCause()
                 .hasMessageContaining("alive TTL");

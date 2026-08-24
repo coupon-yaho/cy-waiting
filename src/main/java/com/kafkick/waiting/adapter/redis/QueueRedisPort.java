@@ -51,6 +51,9 @@ public final class QueueRedisPort implements QueuePort {
      */
     private static final String ALIVE_TTL_SEC = "90";
 
+    /** 상한 없음. <b>0 은 이 뜻이 아니다</b> — 0 은 한 명도 안 받는다는 뜻이다. */
+    public static final long NO_LIMIT = -1;
+
     private final ReactiveStringRedisTemplate redis;
     private final int shards;
 
@@ -79,7 +82,8 @@ public final class QueueRedisPort implements QueuePort {
      * 줄에 세운다. <b>조회와 등록을 나누지 않는다</b> — 나누면 새로고침 연타에
      * 항목이 둘 생긴다.
      *
-     * @param maxLen 큐 길이 상한. {@code 0} 이면 상한 없음
+     * @param maxLen 큐 길이 상한. <b>{@link #NO_LIMIT} 만 상한 없음이고 0 은
+     *               전원 거절이다</b> — 배수할 수 없는 쿠폰은 한 명도 안 받는다
      */
     @Override
     public Mono<QueueEntry> enqueue(String couponId, String memberId, long maxLen, Instant now) {

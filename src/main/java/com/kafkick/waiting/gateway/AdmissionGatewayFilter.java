@@ -218,6 +218,8 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         }
         // **판정에 쓴 상태를 그대로 쓴다.** 여기서 다시 읽으면 그 사이 틱이
         // 지나 판정과 답이 어긋난다.
+        // **상한을 그대로 넘긴다.** 0 은 "배수할 수 없으니 한 명도 안 받는다" 는
+        // 뜻이고 스크립트도 같게 읽는다 — 상한 없음은 따로 정한 값이다.
         long capacity = state.queueCapacity(MAX_ETA_SEC);
         return queue.enqueue(couponId, memberId, capacity, clock.instant())
                 // **여기까지만 열어 준다.** 뒤에 붙이면 줄에 선 사람이 응답을

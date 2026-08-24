@@ -48,15 +48,19 @@ import reactor.core.publisher.Mono;
 class GatewayRoutesTest {
 
     // 라우트 정의가 술어 팩토리를 컨텍스트에서 꺼낸다. 필요한 것만 등록해
+    private static final SecondWindowLimiter 공유_리미터 = SecondWindowLimiter.withMaxKeys(10);
+
     // 띄운다 — 애플리케이션을 통째로 세우면 라우트 하나 보려고 레디스까지 붙는다.
     private final RouteLocator locator = new GatewayRoutes().routes(
             new RouteLocatorBuilder(술어만_있는_컨텍스트()),
             new GatewayRoutes.Backend("http://backend:8080"),
             AdmissionGatewayFilter.of(재료_없는_홀더(),
-                    AdmissionDecider.of(SecondWindowLimiter.withMaxKeys(10), 0.2),
+                    AdmissionDecider.of(공유_리미터, 0.2),
                     Clock.systemUTC(), new SimpleMeterRegistry(),
                     FakeQueuePort.create(),
-                    QueueToken.of("not-a-real-secret-0123456789abcdef")));
+                    QueueToken.of("not-a-real-secret-0123456789abcdef"),
+                    // **판정과 같은 인스턴스다.** 따로 만들면 한 초에 두 예산이 나간다.
+                    공유_리미터));
 
     /**
      * 재료를 한 번도 못 받은 홀더. 이 시험은 <b>라우트가 무엇을 잡는가</b>만 보므로

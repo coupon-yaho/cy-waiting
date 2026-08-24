@@ -24,6 +24,8 @@ import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -60,9 +62,11 @@ class AdmissionGatewayFilterTest {
 
     private final QueueToken tokens = QueueToken.of("not-a-real-secret-0123456789abcdef");
 
+    private final SecondWindowLimiter limiter = SecondWindowLimiter.withMaxKeys(10_000);
+
     private final AdmissionGatewayFilter filter = AdmissionGatewayFilter.of(
-            holder, AdmissionDecider.of(SecondWindowLimiter.withMaxKeys(10_000), 0.2),
-            Clock.fixed(지금, ZoneOffset.UTC), meters, 줄, tokens);
+            holder, AdmissionDecider.of(limiter, 0.2),
+            Clock.fixed(지금, ZoneOffset.UTC), meters, 줄, tokens, limiter);
 
     private final AtomicReference<Boolean> 뒷단에_닿음 = new AtomicReference<>(false);
 
@@ -90,6 +94,13 @@ class AdmissionGatewayFilterTest {
             return Mono.empty();
         }).block();
         return exchange;
+    }
+
+    /** 한산한 쿠폰 여럿을 심는다. 쿠폰별 상한에 먼저 걸리지 않고 노드 예산을 채우려면 필요하다. */
+    private void 한산한_쿠폰_여럿을_심는다(int 수) {
+        Map<String, CouponState> coupons = IntStream.range(0, 수).boxed()
+                .collect(Collectors.toMap(i -> "한산한쿠폰" + i, i -> CouponStates.idle(1_000_000)));
+        holder.replace(new GatewaySnapshot(coupons, new SnapshotMeta(1_000, 1), 지금));
     }
 
     private void 스냅샷을_심는다(CouponState state) {
@@ -205,8 +216,8 @@ class AdmissionGatewayFilterTest {
         // 안 따라잡았을 수 있다.
         MutableClock 시계 = MutableClock.at(지금);
         AdmissionGatewayFilter f = AdmissionGatewayFilter.of(
-                holder, AdmissionDecider.of(SecondWindowLimiter.withMaxKeys(10_000), 0.2),
-                시계, meters, () -> 0.5, 줄, tokens);
+                holder, AdmissionDecider.of(limiter, 0.2),
+                시계, meters, () -> 0.5, 줄, tokens, limiter);
         스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
         태운다(f, COUPON);
 
@@ -277,13 +288,14 @@ class AdmissionGatewayFilterTest {
     @Test
     @DisplayName("상한을_넘긴_몫은_되돌려_보낸다")
     void 상한을_넘긴_몫은_되돌려_보낸다() {
-        // 전부 열면 뒷단이 그대로 무너진다. 초당 상한을 넘긴 몫은 끊는다.
+        // 전부 열면 뒷단이 그대로 무너진다. 노드 예산의 절반까지만 흘린다.
         스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
         줄.터진다(new IllegalStateException("레디스가 죽었다"));
 
-        // **양쪽에서 못 박는다.** 끊기는 것만 보면 상한이 1 로 바뀌어도 통과한다.
+        // 노드 예산은 globalCredit(1,000) / 게이트웨이 수(1) 이고 그 절반이 500 이다.
+        // **양쪽에서 못 박는다.** 끊기는 것만 보면 몫이 1 로 바뀌어도 통과한다.
         MockServerWebExchange 상한_직전 = null;
-        for (int i = 0; i < 200; i++) {
+        for (int i = 0; i < 500; i++) {
             상한_직전 = 태운다(COUPON);
         }
         MockServerWebExchange 상한_직후 = 태운다(COUPON);
@@ -291,6 +303,37 @@ class AdmissionGatewayFilterTest {
         assertThat(상한_직전.getResponse().getStatusCode()).isNull();
         assertThat(상한_직후.getResponse().getStatusCode())
                 .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+    }
+
+    /**
+     * 판정과 장애 개방이 각자 예산을 들면 한 초에 둘이 겹쳐 나간다. 리미터를
+     * 하나로 두라는 규칙이 막으려던 버스트가 그대로 난다 (F4).
+     */
+    @Test
+    @DisplayName("장애_개방이_판정_예산에서_가져간다")
+    void 장애_개방이_판정_예산에서_가져간다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+        줄.터진다(new IllegalStateException("레디스가 죽었다"));
+
+        // **판정 경로로 채운다.** 리미터를 손으로 채우면 판정이 다른 리미터를
+        // 쓰고 있어도 이 시험이 통과한다.
+        한산한_쿠폰_여럿을_심는다(50);
+        for (int i = 0; i < 1_000; i++) {
+            // **통과했는지 본다.** 안 보면 예산이 절반만 차도 마지막 단언이 통과한다.
+            assertThat(태운다("한산한쿠폰" + i % 50)
+                    .<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                    .as("%d 번째", i)
+                    .isEqualTo(AdmissionDecision.PASS_UNDER_CAP);
+        }
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+        뒷단에_닿음.set(false);
+
+        // 예산을 따로 들었으면 여기서 500 명이 더 나간다.
+        MockServerWebExchange exchange = 태운다(COUPON);
+
+        assertThat(exchange.getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(뒷단에_닿음).hasValue(false);
     }
 
     @Test
@@ -403,8 +446,8 @@ class AdmissionGatewayFilterTest {
     void 큐가_찼으면_다시_올_때를_알려_준다() {
         // 안 알려 주면 각자 마음대로 돌아온다. 그 파도가 다음 거절을 만든다.
         AdmissionGatewayFilter f = AdmissionGatewayFilter.of(
-                holder, AdmissionDecider.of(SecondWindowLimiter.withMaxKeys(10_000), 0.2),
-                Clock.fixed(지금, ZoneOffset.UTC), meters, () -> 0.5, 줄, tokens);
+                holder, AdmissionDecider.of(limiter, 0.2),
+                Clock.fixed(지금, ZoneOffset.UTC), meters, () -> 0.5, 줄, tokens, limiter);
         스냅샷을_심는다(CouponStates.queueing(1, 1_000, 5_000));
 
         MockServerWebExchange exchange = 요청(COUPON);
@@ -518,8 +561,7 @@ class AdmissionGatewayFilterTest {
         Instant 낡은_발행 = 지금.minusSeconds(3_600);
         MutableClock 시계 = MutableClock.at(지금);
         AdmissionGatewayFilter 시계를_쓰는_필터 = AdmissionGatewayFilter.of(
-                holder, AdmissionDecider.of(SecondWindowLimiter.withMaxKeys(10), 0.2), 시계,
-                meters, 줄, tokens);
+                holder, AdmissionDecider.of(limiter, 0.2), 시계, meters, 줄, tokens, limiter);
         holder.replace(new GatewaySnapshot(
                 Map.of(COUPON, CouponStates.idle(1_000_000)),
                 new SnapshotMeta(1, 1), 낡은_발행));

@@ -3,6 +3,7 @@ package com.kafkick.waiting.domain.admission;
 import com.kafkick.waiting.domain.admission.SecondWindowLimiter.AcquireResult;
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.QueueMode;
+import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import com.kafkick.waiting.domain.coupon.RuntimeState;
 
 /**
@@ -19,7 +20,13 @@ public class AdmissionDecider {
      * <p>쿠폰 키에는 {@link #couponBudgetKey} 가 다른 접두사를 붙인다. 접두사가
      * 없으면 쿠폰 ID 하나가 이 값과 같아지는 순간 두 예산이 한 카운터로 합쳐진다.
      */
-    private static final String GLOBAL_KEY = "node:";
+    /**
+     * 노드 전체 예산의 키.
+     *
+     * <p><b>드러내 둔다.</b> 장애 개방처럼 판정 밖에서 여는 경로도 같은 키를 써야
+     * 한다 — 따로 들면 한 초에 두 예산이 겹쳐 나간다 (F4).
+     */
+    public static final String GLOBAL_KEY = "node:";
 
     private static final String COUPON_KEY_PREFIX = "coupon:";
 
@@ -135,8 +142,12 @@ public class AdmissionDecider {
     }
 
     /** 이 노드가 초당 감당할 양. 쿠폰과 무관한 노드 전체의 상한이다. */
+    public static long globalCap(SnapshotMeta meta) {
+        return meta.globalCredit() / meta.effectiveGatewayCount();
+    }
+
     private long globalCap(AdmissionRequest req) {
-        return req.meta().globalCredit() / req.meta().effectiveGatewayCount();
+        return globalCap(req.meta());
     }
 
     /** 접두사를 붙여 전역 키와 절대 겹치지 않게 한다. */

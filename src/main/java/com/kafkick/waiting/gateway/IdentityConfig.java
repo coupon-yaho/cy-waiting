@@ -35,8 +35,16 @@ public class IdentityConfig {
      * 있다</b> — 상한을 넘긴 것은 예산 고갈과 다른 판정으로 나간다.
      */
     @Bean
-    public AdmissionDecider admissionDecider() {
-        return AdmissionDecider.of(SecondWindowLimiter.withMaxKeys(MAX_LIMITER_KEYS),
-                IDLE_CREDIT_RATIO);
+    public AdmissionDecider admissionDecider(SecondWindowLimiter limiter) {
+        return AdmissionDecider.of(limiter, IDLE_CREDIT_RATIO);
+    }
+
+    /**
+     * <b>리미터는 하나다.</b> 판정과 장애 개방이 각자 들면 한 초에 두 예산이
+     * 겹쳐 나가고, 경로를 나누지 말라는 규칙이 막으려던 버스트가 그대로 난다.
+     */
+    @Bean
+    public SecondWindowLimiter admissionLimiter() {
+        return SecondWindowLimiter.withMaxKeys(MAX_LIMITER_KEYS);
     }
 }

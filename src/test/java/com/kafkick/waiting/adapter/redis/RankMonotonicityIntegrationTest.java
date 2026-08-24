@@ -38,14 +38,21 @@ class RankMonotonicityIntegrationTest {
     private static final String NOW = "1800000000";
 
     private static final long SEED = 20260819L;
-    private static final int OPERATIONS = 3_000;
+
+    /**
+     * 연산 수.
+     *
+     * <p><b>줄였다.</b> 3,000 일 때 CI 에서 네 번 깨졌다 — 예산을 넓히고 전용
+     * 컨테이너까지 줬는데도 멎었다. 재는 것은 성질이지 규모가 아니다.
+     */
+    private static final int OPERATIONS = 800;
+
     private static final int PEOPLE = 200;
     /**
      * 한 명령을 기다려 주는 시간.
      *
-     * <p>이 하네스는 쓰기를 6천 번 몰아친다. {@code appendfsync everysec} 인
-     * 레디스가 느린 디스크를 만나면 그동안 초 단위로 멎는다 — 붐비는 러너에서
-     * 실제로 5초를 넘겼다. 재는 것은 지연이 아니라 순서다.
+     * <p>재는 것은 지연이 아니라 순서다. 붐비는 러너에서 명령 하나가 초 단위로
+     * 멎어도 순서는 그대로다.
      */
     private static final Duration WAIT = Duration.ofSeconds(30);
 

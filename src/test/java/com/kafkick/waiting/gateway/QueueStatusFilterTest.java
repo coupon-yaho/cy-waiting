@@ -252,13 +252,16 @@ class QueueStatusFilterTest {
         for (int i = 0; i < 20_000; i++) {
             토큰으로_조회한다(토큰);
         }
-        int 왕복 = 줄.왕복();
+
+        // **상한값을 정확히 못 박는다.** 넘긴 요청만 보면 그 전에 막혀도 통과한다.
+        // 등록 한 번과 허용된 조회 2만 번이다.
+        assertThat(줄.왕복()).isEqualTo(20_001);
         MockServerWebExchange 넘긴_것 = 토큰으로_조회한다(토큰);
 
         assertThat(넘긴_것.getResponse().getStatusCode())
                 .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
         // 상한을 넘으면 레디스를 아예 안 친다. 치고 나서 막으면 막는 뜻이 없다.
-        assertThat(줄.왕복()).isEqualTo(왕복);
+        assertThat(줄.왕복()).isEqualTo(20_001);
     }
 
     /** 폴링이 발급 예산을 갉아먹으면, 기다리는 사람이 많을수록 통과가 줄어든다. */

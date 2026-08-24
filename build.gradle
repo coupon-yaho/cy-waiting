@@ -276,7 +276,11 @@ pitest {
     // **control 도 넣는다.** 제어 평면의 순수 계산(분모·가용량)이 여기 있는데
     // 범위 밖이라 생존 뮤턴트가 CI 에서 안 잡혔다. 어댑터는 여전히 뺀다 —
     // 시간이 폭발하고 정작 지켜야 할 곳의 신호가 묻힌다.
-    targetClasses = ['com.kafkick.waiting.domain.*', 'com.kafkick.waiting.control.*']
+    //
+    // **gateway 의 판정 코드도 넣는다.** 응답 봉투·재시도 안내처럼 값을 정하는
+    // 코드가 여기 있는데, 범위 밖이라 약한 단언이 숫자에 안 잡혔다.
+    targetClasses = ['com.kafkick.waiting.domain.*', 'com.kafkick.waiting.control.*',
+                     'com.kafkick.waiting.gateway.*']
     // domain 은 Phase 2 에서 채워진다. 그전까지 대상이 0건인데, 이걸 실패로
     // 두면 파이프라인이 페이즈 진행을 막는다. 클래스가 들어오면 임계가 문다.
     failWhenNoMutations = false
@@ -290,6 +294,11 @@ pitest {
             'com.kafkick.waiting.*Application*',
             'com.kafkick.waiting.control.*Config',
             'com.kafkick.waiting.adapter.*.*Config',
+            'com.kafkick.waiting.gateway.*Config',
+            'com.kafkick.waiting.gateway.GatewayRoutes*',
+            'com.kafkick.waiting.gateway.CorsPolicy*',
+            'com.kafkick.waiting.gateway.ConfigUris*',
+            'com.kafkick.waiting.gateway.FilterOrder',
     ]
     mutationThreshold = 90          // 생존 ≤ 10%
     timestampedReports = false

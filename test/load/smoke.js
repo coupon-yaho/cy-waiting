@@ -81,6 +81,21 @@ export default function () {
   const noId = http.get(`${BASE}${listPath}`, {
     headers: { 'X-Member-Grade': 'GOLD' },
   });
+  // 순번 조회는 서명한 토큰으로만 답한다. 헤더만 들고 오면 끊는다.
+  const noToken = http.get(`${BASE}/api/v1/coupons/c1/queue`, {
+    headers: memberHeaders(member),
+  });
+  check(noToken, {
+    '토큰 없는 순번 조회는 끊는다': (r) => r.status === 400,
+    '순번 조회는 뒷단까지 안 간다': (r) => {
+      try {
+        return r.json().data === undefined;
+      } catch {
+        return false;
+      }
+    },
+  });
+
   check(noId, {
     '회원 식별자가 없으면 게이트웨이가 끊는다': (r) => r.status === 400,
     // 뒷단은 캐시 헤더를 안 단다. 우리만 달면 그 헤더로 게이트웨이가 드러난다.

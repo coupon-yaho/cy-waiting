@@ -44,6 +44,8 @@ services:
       SPRING_DATA_REDIS_HOST: redis
       WAITING_BACKEND_URI: http://backend:8090
       WAITING_CORS_ALLOWED_0: http://localhost:5173
+      # 하네스용 값. 운영 키는 배포에서 온다 — 여기 든 값은 시험 부하에만 쓴다.
+      WAITING_TOKEN_SECRET: load-harness-0123456789abcdef
     ports:
       # 시나리오가 이 주소를 쓴다. 관리 포트는 안 연다 — 밖에서 닿으면 안 된다.
       - "18080:8080"

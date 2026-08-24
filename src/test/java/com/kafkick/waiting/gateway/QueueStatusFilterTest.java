@@ -1,6 +1,8 @@
 package com.kafkick.waiting.gateway;
 
+import static com.kafkick.waiting.adapter.redis.QueueRedisPort.NO_LIMIT;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.kafkick.waiting.control.GatewaySnapshot;
 import com.kafkick.waiting.control.SnapshotHolder;
@@ -63,6 +65,14 @@ class QueueStatusFilterTest {
         return 조회한다("/api/v1/coupons/" + COUPON + "/queue?queueToken=" + token);
     }
 
+    /** 실물이 거절하는 값을 픽스처가 받아 주면 그 회귀를 시험이 못 본다. */
+    @Test
+    @DisplayName("잘못된_상한은_픽스처도_거절한다")
+    void 잘못된_상한은_픽스처도_거절한다() {
+        assertThatThrownBy(() -> 줄.enqueue(COUPON, MEMBER, -2, 지금).block())
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
     @Test
     @DisplayName("남의_경로는_그대로_흘려보낸다")
     void 남의_경로는_그대로_흘려보낸다() {
@@ -87,7 +97,7 @@ class QueueStatusFilterTest {
     @DisplayName("헤더만_바꿔서는_남의_순번을_못_본다")
     void 헤더만_바꿔서는_남의_순번을_못_본다() {
         스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100));
-        줄.enqueue(COUPON, "남", 0, 지금).block();
+        줄.enqueue(COUPON, "남", NO_LIMIT, 지금).block();
         String 내_토큰 = tokens.issue(COUPON, MEMBER, 지금);
 
         // 헤더에 남의 식별자를 넣어도 토큰이 가리키는 사람만 본다.
@@ -105,8 +115,8 @@ class QueueStatusFilterTest {
     @DisplayName("기다리는_중이면_순번을_준다")
     void 기다리는_중이면_순번을_준다() {
         스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100));
-        줄.enqueue(COUPON, "앞사람", 0, 지금).block();
-        줄.enqueue(COUPON, MEMBER, 0, 지금).block();
+        줄.enqueue(COUPON, "앞사람", NO_LIMIT, 지금).block();
+        줄.enqueue(COUPON, MEMBER, NO_LIMIT, 지금).block();
 
         MockServerWebExchange exchange = 토큰으로_조회한다(tokens.issue(COUPON, MEMBER, 지금));
 
@@ -121,7 +131,7 @@ class QueueStatusFilterTest {
     @DisplayName("차례가_오면_그렇게_말한다")
     void 차례가_오면_그렇게_말한다() {
         스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100));
-        줄.enqueue(COUPON, MEMBER, 0, 지금).block();
+        줄.enqueue(COUPON, MEMBER, NO_LIMIT, 지금).block();
         줄.차례가_왔다();
 
         MockServerWebExchange exchange = 토큰으로_조회한다(tokens.issue(COUPON, MEMBER, 지금));
@@ -135,8 +145,8 @@ class QueueStatusFilterTest {
     void 차례는_맨_앞부터_온다() {
         // 뒤에 선 사람까지 입장이 되면 줄이 통째로 한꺼번에 들어간다.
         스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100));
-        줄.enqueue(COUPON, "앞사람", 0, 지금).block();
-        줄.enqueue(COUPON, MEMBER, 0, 지금).block();
+        줄.enqueue(COUPON, "앞사람", NO_LIMIT, 지금).block();
+        줄.enqueue(COUPON, MEMBER, NO_LIMIT, 지금).block();
         줄.차례가_왔다();
 
         // **앞사람이 실제로 들어갔는지 함께 본다.** 뒷사람만 보면 아무도
@@ -155,7 +165,7 @@ class QueueStatusFilterTest {
     void 다음에_물을_때를_알려_준다() {
         // 안 알려 주면 각자 마음대로 두드린다. 그 부하를 정하는 것은 서버다.
         스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100));
-        줄.enqueue(COUPON, MEMBER, 0, 지금).block();
+        줄.enqueue(COUPON, MEMBER, NO_LIMIT, 지금).block();
 
         MockServerWebExchange exchange = 토큰으로_조회한다(tokens.issue(COUPON, MEMBER, 지금));
 
@@ -185,8 +195,8 @@ class QueueStatusFilterTest {
         holder.replace(new GatewaySnapshot(Map.of(COUPON, CouponStates.queueing(10, 1_000, 100)),
                 new SnapshotMeta(1, 1), 지금.minusSeconds(3_600)));
         // 앞에 사람이 있어야 배분 속도가 답에 들어간다. 맨 앞이면 늘 0 초다.
-        줄.enqueue(COUPON, "앞사람", 0, 지금).block();
-        줄.enqueue(COUPON, MEMBER, 0, 지금).block();
+        줄.enqueue(COUPON, "앞사람", NO_LIMIT, 지금).block();
+        줄.enqueue(COUPON, MEMBER, NO_LIMIT, 지금).block();
 
         MockServerWebExchange exchange = 토큰으로_조회한다(tokens.issue(COUPON, MEMBER, 지금));
 
@@ -198,8 +208,8 @@ class QueueStatusFilterTest {
     @DisplayName("모르는_쿠폰도_자주_묻게_하지_않는다")
     void 모르는_쿠폰도_자주_묻게_하지_않는다() {
         // 스냅샷에 없으면 배분 속도를 모른다. 모를수록 자주 묻게 하면 안 된다.
-        줄.enqueue(COUPON, "앞사람", 0, 지금).block();
-        줄.enqueue(COUPON, MEMBER, 0, 지금).block();
+        줄.enqueue(COUPON, "앞사람", NO_LIMIT, 지금).block();
+        줄.enqueue(COUPON, MEMBER, NO_LIMIT, 지금).block();
 
         MockServerWebExchange exchange = 토큰으로_조회한다(tokens.issue(COUPON, MEMBER, 지금));
 

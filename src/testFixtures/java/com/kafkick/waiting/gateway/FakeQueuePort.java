@@ -1,5 +1,6 @@
 package com.kafkick.waiting.gateway;
 
+import com.kafkick.waiting.adapter.redis.QueueRedisPort;
 import com.kafkick.waiting.domain.queue.QueueEntry;
 import com.kafkick.waiting.domain.queue.QueueState;
 import java.time.Instant;
@@ -63,11 +64,19 @@ public final class FakeQueuePort implements QueuePort {
     @Override
     public Mono<QueueEntry> enqueue(String couponId, String memberId, long maxLen, Instant now) {
         등록_호출.incrementAndGet();
+        // **잘못된 상한을 받아 주지 않는다.** 실물은 거절하는데 여기서 통과시키면
+        // 그 회귀를 게이트웨이 시험이 못 본다.
+        if (maxLen < QueueRedisPort.NO_LIMIT) {
+            return Mono.error(new IllegalArgumentException(
+                    "큐 길이 상한은 %d 이상이어야 한다: %d".formatted(QueueRedisPort.NO_LIMIT, maxLen)));
+        }
         if (터뜨릴_것 != null) {
             return Mono.error(터뜨릴_것);
         }
         boolean 있던_사람 = queued.containsKey(memberId);
-        if (!있던_사람 && (가득_참 || (maxLen > 0 && queued.size() >= maxLen))) {
+        // **0 도 상한이다.** 스크립트와 다르게 읽으면 게이트웨이 시험이 실제
+        // 거절을 놓친다 — 픽스처만 받아 주기 때문이다.
+        if (!있던_사람 && (가득_참 || (maxLen >= 0 && queued.size() >= maxLen))) {
             return Mono.just(QueueEntry.rejected());
         }
         queued.putIfAbsent(memberId, (long) queued.size() + 1);

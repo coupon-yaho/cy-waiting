@@ -6,7 +6,10 @@
 -- ARGV[1]  memberId
 -- ARGV[2]  maxscore TTL(초). 양의 정수
 -- ARGV[3]  alive TTL(초). 양의 정수. 폴링 간격에서 나온 값이라 주입받는다
--- ARGV[4]  큐 길이 상한. 0 이면 상한 없음
+-- ARGV[4]  큐 길이 상한. **-1 이 상한 없음이고 0 은 전원 거절이다**
+--          도메인은 상한 0 을 "배수할 수 없으니 받지 않는다" 로 읽는다. 여기서
+--          0 을 상한 없음으로 읽으면 그 뜻이 정반대가 되고, 배수가 멎은 쿠폰의
+--          줄이 무한히 자란다 — 갇힌 사람만 늘어난다
 -- ARGV[5]  지금 시각(초). 생존 신호의 만료 시각을 계산한다
 --
 -- 반환  {score, floorApplied, alreadyQueued, rank}
@@ -48,8 +51,8 @@ if now == nil or now < 0 then
 end
 
 local maxLen = tonumber(ARGV[4])
-if maxLen == nil or maxLen < 0 or maxLen ~= math.floor(maxLen) then
-    return redis.error_reply('큐 길이 상한은 0 이상 정수여야 한다: ' .. tostring(ARGV[4]))
+if maxLen == nil or maxLen < -1 or maxLen ~= math.floor(maxLen) then
+    return redis.error_reply('큐 길이 상한은 -1 이상 정수여야 한다: ' .. tostring(ARGV[4]))
 end
 
 -- **이미 줄에 있으면 그 순번을 지킨다.** 덮어쓰면 새로고침 연타가 자기
@@ -64,7 +67,8 @@ if existing then
 end
 
 -- 2차 방어다. 1차는 도메인이 낡은 스냅샷으로 판정하므로 여기서 한 번 더 본다.
-if maxLen > 0 and redis.call('ZCARD', KEYS[1]) >= maxLen then
+-- **0 도 상한이다.** 배수할 수 없는 쿠폰은 한 명도 안 받는다.
+if maxLen >= 0 and redis.call('ZCARD', KEYS[1]) >= maxLen then
     return {'-1', 0, 0, -1}
 end
 

@@ -34,7 +34,8 @@ class ClockMonotonicTest extends RedisContainerSupport {
     private static final String QUEUE = RedisKeys.queue(COUPON, 1, 0);
     private static final String MAX_SCORE = RedisKeys.maxScore(COUPON, 1, 0);
     private static final String ALIVE_TTL = "30";
-    private static final String NO_CAP = "0";
+    /** 상한 없음. 0 은 이 뜻이 아니다 — 0 은 한 명도 안 받는다는 뜻이다. */
+    private static final String NO_CAP = "-1";
 
     @Autowired
     private ReactiveStringRedisTemplate redis;

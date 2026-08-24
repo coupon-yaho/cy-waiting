@@ -54,7 +54,7 @@ class QueueRedisPortTest extends RedisContainerSupport {
     }
 
     private QueueEntry 등록(String memberId) {
-        return port.enqueue(COUPON, memberId, 0, 지금).block(WAIT);
+        return port.enqueue(COUPON, memberId, QueueRedisPort.NO_LIMIT, 지금).block(WAIT);
     }
 
     @Test
@@ -89,6 +89,18 @@ class QueueRedisPortTest extends RedisContainerSupport {
         assertThat(다시.score()).isEqualTo(처음.score());
         assertThat(다시.rank()).isZero();
         assertThat(다시.alreadyQueued()).isTrue();
+    }
+
+    /**
+     * 도메인은 상한 0 을 "배수할 수 없으니 받지 않는다" 로 읽는다. 여기서 0 을
+     * 상한 없음으로 읽으면 뜻이 정반대가 되고, 배수가 멎은 쿠폰의 줄이 무한히 자란다.
+     */
+    @Test
+    @DisplayName("상한_0_은_한_명도_안_받는다")
+    void 상한_0_은_한_명도_안_받는다() {
+        assertThat(port.enqueue(COUPON, "m1", 0, 지금).block(WAIT).accepted()).isFalse();
+        assertThat(redis.opsForZSet().size(RedisKeys.queue(COUPON, SHARDS, 0)).block(WAIT))
+                .isZero();
     }
 
     @Test
@@ -199,7 +211,7 @@ class QueueRedisPortTest extends RedisContainerSupport {
                 RedisKeys.maxScore(COUPON, 샤드수, 내_샤드),
                 RedisKeys.alive(COUPON, 샤드수, 내_샤드)).block(WAIT);
 
-        쪼갠_것.enqueue(COUPON, member, 0, 지금).block(WAIT);
+        쪼갠_것.enqueue(COUPON, member, QueueRedisPort.NO_LIMIT, 지금).block(WAIT);
 
         // 자기 샤드에만 들어갔는지 실물로 본다. 0번 샤드로 굳으면 자기 샤드가
         // 0 이 아닌 사람에게서 드러나므로, 그 사람을 골랐다는 것도 못 박는다.
@@ -220,7 +232,7 @@ class QueueRedisPortTest extends RedisContainerSupport {
     void 동시에_눌러도_자리는_하나다() {
         List<QueueEntry> 결과 = reactor.core.publisher.Flux
                 .merge(IntStream.range(0, 32)
-                        .mapToObj(i -> port.enqueue(COUPON, "m1", 0, 지금))
+                        .mapToObj(i -> port.enqueue(COUPON, "m1", QueueRedisPort.NO_LIMIT, 지금))
                         .toList())
                 .collectList()
                 .block(WAIT);

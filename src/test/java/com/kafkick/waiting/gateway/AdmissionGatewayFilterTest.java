@@ -285,6 +285,24 @@ class AdmissionGatewayFilterTest {
         assertThat(뒷단에_닿음).hasValue(false);
     }
 
+    /**
+     * 배분을 아직 못 받은 쿠폰이다. 상한이 0 이므로 줄을 받으면 배수할 수 없는
+     * 줄에 사람이 갇힌다 — 스크립트와 픽스처가 이 값을 같게 읽어야 한다.
+     */
+    @Test
+    @DisplayName("배수할_수_없으면_줄을_안_세운다")
+    void 배수할_수_없으면_줄을_안_세운다() {
+        스냅샷을_심는다(CouponStates.always(1_000));
+
+        MockServerWebExchange exchange = 태운다(COUPON);
+
+        assertThat(exchange.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .matches(AdmissionDecision::isEnqueue, "대기 판정");
+        assertThat(exchange.getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        assertThat(뒷단에_닿음).hasValue(false);
+    }
+
     @Test
     @DisplayName("상한을_넘긴_몫은_되돌려_보낸다")
     void 상한을_넘긴_몫은_되돌려_보낸다() {

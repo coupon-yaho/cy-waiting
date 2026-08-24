@@ -57,7 +57,7 @@ class QueueStatusTest extends RedisContainerSupport {
 
     private void enqueue(String memberId) {
         redis.execute(enqueueScript, List.of(QUEUE, MAX_SCORE, alive(memberId)),
-                        List.of(memberId, "86400", ALIVE_TTL, "0", NOW))
+                        List.of(memberId, "86400", ALIVE_TTL, "-1", NOW))
                 .blockFirst(WAIT);
     }
 

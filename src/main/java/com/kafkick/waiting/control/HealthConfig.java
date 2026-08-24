@@ -6,10 +6,10 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 /**
- * 헬스 배선.
+ * 스냅샷 받아오기 배선.
  *
- * <p>빈 이름이 곧 그룹에 적는 이름이다. 이름을 바꾸면 설정의 그룹이 조용히
- * 비고, <b>빈 그룹은 항상 통과</b>한다.
+ * <p>여기 남은 것은 <b>값이 있어야 서는 것</b>뿐이다 — 신선도 임계와 받아오기
+ * 주기가 그것이다. 헬스 지표 자체는 스스로 선다.
  */
 @Configuration
 public class HealthConfig {
@@ -24,10 +24,9 @@ public class HealthConfig {
     private static final Duration FETCH_INTERVAL = Duration.ofMillis(500);
 
     @Bean
-    SnapshotHolder snapshotHolder() {
-        return SnapshotHolder.of(FETCH_STALE_AFTER, DATA_STALE_AFTER, Clock.systemUTC());
+    SnapshotHolder snapshotHolder(Clock clock) {
+        return SnapshotHolder.of(FETCH_STALE_AFTER, DATA_STALE_AFTER, clock);
     }
-
 
     /**
      * 판정 재료를 받아 오는 루프.
@@ -37,8 +36,9 @@ public class HealthConfig {
      * 아무것도 안 하는 파드가 된다.
      */
     @Bean
-    SnapshotRefresher snapshotRefresher(SnapshotHolder holder, SnapshotSource source) {
-        return SnapshotRefresher.of(holder, source::load);
+    SnapshotRefresher snapshotRefresher(SnapshotHolder holder, SnapshotSource source,
+            Clock clock) {
+        return SnapshotRefresher.of(holder, source::load, clock);
     }
 
     @Bean
@@ -46,6 +46,5 @@ public class HealthConfig {
             ShutdownState shutdown) {
         return SnapshotRefreshLifecycle.of(refresher, shutdown, FETCH_INTERVAL);
     }
-
 
 }

@@ -3,6 +3,7 @@ package com.kafkick.waiting.control;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
+import java.util.Objects;
 import java.time.Clock;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
@@ -40,22 +41,33 @@ public final class SnapshotRefresher {
     private final Clock clock;
 
     private SnapshotRefresher(SnapshotHolder holder,
-            Supplier<Mono<Map<String, String>>> source, Duration timeout) {
+            Supplier<Mono<Map<String, String>>> source, Duration timeout, Clock clock) {
         this.holder = holder;
         this.source = source;
         this.timeout = timeout;
-        this.clock = Clock.systemUTC();
+        this.clock = Objects.requireNonNull(clock, "clock 은 필수다");
     }
 
     public static SnapshotRefresher of(SnapshotHolder holder,
+            Supplier<Mono<Map<String, String>>> source, Clock clock) {
+        return new SnapshotRefresher(holder, source, DEFAULT_TIMEOUT, clock);
+    }
+
+    /**
+     * 시계를 안 받는 형태. <b>운영 배선은 이걸 안 쓴다</b> — 빈으로 주입받는다.
+     *
+     * <p>나이를 재는 시계라 고정할 일이 드물어 남겨 둔다. 고정이 필요한 시험은
+     * 위의 형태를 쓴다.
+     */
+    public static SnapshotRefresher of(SnapshotHolder holder,
             Supplier<Mono<Map<String, String>>> source) {
-        return new SnapshotRefresher(holder, source, DEFAULT_TIMEOUT);
+        return of(holder, source, Clock.systemUTC());
     }
 
     /** 한 판의 상한을 주입한다. 발행 주기보다 짧아야 다음 판이 제때 돈다. */
     public static SnapshotRefresher of(SnapshotHolder holder,
             Supplier<Mono<Map<String, String>>> source, Duration timeout) {
-        return new SnapshotRefresher(holder, source, timeout);
+        return new SnapshotRefresher(holder, source, timeout, Clock.systemUTC());
     }
 
     /**

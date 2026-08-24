@@ -58,7 +58,7 @@ class JudgingHealthTest {
     }
 
     private Health 판정() {
-        return JudgingHealth.of(holder, shutdown).health();
+        return new JudgingHealth(holder, shutdown).health();
     }
 
     @Test

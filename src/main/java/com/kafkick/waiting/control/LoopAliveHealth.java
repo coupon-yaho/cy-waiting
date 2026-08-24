@@ -10,9 +10,10 @@ import org.springframework.stereotype.Component;
  *
  * <p>받아오기 실패는 여기 안 넣는다. 공유 원인일 수 있고, 그러면 전 노드가 동시에
  * 재기동해 그 자체가 전면 장애가 된다.
+ *
+ * <p>이름을 못 박는다. 헬스 그룹이 빈 이름으로 지목하므로 기본 이름에 맡기면
+ * 클래스 이름을 고치는 것만으로 그룹에서 빠진다.
  */
-// **이름을 못 박는다.** 헬스 그룹이 빈 이름으로 지목하므로,
-// 기본 이름에 맡기면 클래스 이름을 고치는 것만으로 그룹에서 빠진다.
 @Component("loopAlive")
 public final class LoopAliveHealth implements HealthIndicator {
 
@@ -24,9 +25,11 @@ public final class LoopAliveHealth implements HealthIndicator {
         this.shutdown = Objects.requireNonNull(shutdown, "shutdown 은 필수다");
     }
 
+    /** 패키지 밖 시험이 부른다. 스프링은 위의 생성자를 쓴다. */
     public static LoopAliveHealth of(SnapshotHolder holder, ShutdownState shutdown) {
         return new LoopAliveHealth(holder, shutdown);
     }
+
 
     /**
      * <b>한 번이라도 돈 뒤</b> 임계를 넘겼을 때만 죽는다.

@@ -6,14 +6,12 @@ import org.springframework.boot.health.contributor.HealthIndicator;
 import org.springframework.stereotype.Component;
 
 /**
- * <b>내가 판정할 수 있는가만 본다.</b>
+ * <b>내가 판정할 수 있는가만 본다.</b> 의존성 상태를 넣으면 공유 장애가 전 노드
+ * 동시 이탈로 번진다 — 낡은 재료로 판정하는 것보다 훨씬 나쁘다.
  *
- * <p>의존성 상태를 넣으면 공유 장애가 전 노드 동시 이탈로 번진다. 레디스가
- * 흔들릴 때 전 노드가 한꺼번에 빠지면 100% 장애다 — 낡은 재료로 판정하는 것보다
- * 훨씬 나쁘다.
+ * <p>이름을 못 박는다. 헬스 그룹이 빈 이름으로 지목하므로 기본 이름에 맡기면
+ * 클래스 이름을 고치는 것만으로 그룹에서 빠진다.
  */
-// **이름을 못 박는다.** 헬스 그룹이 빈 이름으로 지목하므로,
-// 기본 이름에 맡기면 클래스 이름을 고치는 것만으로 그룹에서 빠진다.
 @Component("judging")
 public final class JudgingHealth implements HealthIndicator {
 
@@ -28,9 +26,11 @@ public final class JudgingHealth implements HealthIndicator {
         this.shutdown = Objects.requireNonNull(shutdown, "shutdown 은 필수다");
     }
 
+    /** 패키지 밖 시험이 부른다. 스프링은 위의 생성자를 쓴다. */
     public static JudgingHealth of(SnapshotHolder holder, ShutdownState shutdown) {
         return new JudgingHealth(holder, shutdown);
     }
+
 
     /**
      * 못 받는 경우는 둘뿐이다 — <b>드레이닝</b>과 <b>판정 재료 없음</b>.

@@ -1,15 +1,15 @@
 package com.kafkick.waiting.adapter.redis;
 
+import com.kafkick.waiting.control.ControlPlaneProperties;
 import com.kafkick.waiting.control.LeaderLock;
 import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.ClassPathResource;
-import com.kafkick.waiting.control.ControlPlaneProperties;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
-import org.springframework.stereotype.Component;
 import org.springframework.data.redis.core.script.RedisScript;
+import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
 
 /**
@@ -41,16 +41,12 @@ public final class LeaderRedisPort {
         this(redis, properties.leader().lease());
     }
 
-    private LeaderRedisPort(ReactiveStringRedisTemplate redis, Duration lease) {
+    LeaderRedisPort(ReactiveStringRedisTemplate redis, Duration lease) {
         if (lease == null || lease.isZero() || lease.isNegative()) {
             throw new IllegalArgumentException("lease 는 양수여야 한다: %s".formatted(lease));
         }
         this.redis = Objects.requireNonNull(redis, "redis 는 필수다");
         this.lease = lease;
-    }
-
-    public static LeaderRedisPort of(ReactiveStringRedisTemplate redis, Duration lease) {
-        return new LeaderRedisPort(redis, lease);
     }
 
     /**

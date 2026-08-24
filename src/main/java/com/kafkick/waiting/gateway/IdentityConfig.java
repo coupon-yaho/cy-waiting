@@ -1,6 +1,7 @@
 package com.kafkick.waiting.gateway;
 
 import com.kafkick.waiting.control.SnapshotHolder;
+import java.time.Clock;
 import com.kafkick.waiting.domain.admission.AdmissionDecider;
 import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
 import org.springframework.context.annotation.Bean;
@@ -33,7 +34,7 @@ public class IdentityConfig {
     @Bean
     public AdmissionGatewayFilter admissionGatewayFilter(SnapshotHolder holder,
             AdmissionDecider decider) {
-        return AdmissionGatewayFilter.of(holder, decider);
+        return AdmissionGatewayFilter.of(holder, decider, Clock.systemUTC());
     }
 
     /**

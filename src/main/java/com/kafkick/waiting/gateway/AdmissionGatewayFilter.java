@@ -5,6 +5,7 @@ import com.kafkick.waiting.domain.admission.AdmissionDecider;
 import com.kafkick.waiting.domain.admission.AdmissionDecision;
 import com.kafkick.waiting.domain.admission.AdmissionRequest;
 import com.kafkick.waiting.domain.coupon.CouponState;
+import java.time.Clock;
 import java.util.Map;
 import java.util.Objects;
 import org.slf4j.Logger;
@@ -34,15 +35,18 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
 
     private final SnapshotHolder holder;
     private final AdmissionDecider decider;
+    private final Clock clock;
     private final ApiError error = ApiError.create();
 
-    private AdmissionGatewayFilter(SnapshotHolder holder, AdmissionDecider decider) {
+    private AdmissionGatewayFilter(SnapshotHolder holder, AdmissionDecider decider, Clock clock) {
         this.holder = Objects.requireNonNull(holder, "holder 는 필수다");
         this.decider = Objects.requireNonNull(decider, "decider 는 필수다");
+        this.clock = Objects.requireNonNull(clock, "clock 은 필수다");
     }
 
-    public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider) {
-        return new AdmissionGatewayFilter(holder, decider);
+    public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider,
+            Clock clock) {
+        return new AdmissionGatewayFilter(holder, decider, clock);
     }
 
     @Override
@@ -65,7 +69,10 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         AdmissionDecision decision = decider.decide(new AdmissionRequest(
                 couponId, state, view.snapshot().meta(),
                 holder.isDataStale(view), false, false,
-                view.snapshot().publishedAt().getEpochSecond(), MAX_ETA_SEC));
+                // **지금 시각이다.** 스냅샷 발행 시각을 넘기면 배분이 멎는 순간
+                // 윈도가 영영 안 넘어가고, 상한만큼 쓴 뒤부터 전부 막힌다 —
+                // 열어 줘야 할 구간에서 정반대로 조인다.
+                clock.instant().getEpochSecond(), MAX_ETA_SEC));
         exchange.getAttributes().put(DECISION, decision);
         return route(exchange, chain, decision);
     }
@@ -86,18 +93,53 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                 "쿠폰을 찾을 수 없습니다.");
     }
 
+    /**
+     * 판정값이 받는 상태 코드. <b>거절을 하나로 뭉치지 않는다</b> — 매진은 끝난
+     * 것이고, 큐 만원은 잠시 뒤 다시 오면 되고, 과부하는 노드를 늘려야 한다.
+     */
+    public static HttpStatus statusOf(AdmissionDecision decision) {
+        return switch (decision) {
+            case PASS_TOKEN, PASS_BYPASS, PASS_FAIL_OPEN, PASS_UNDER_CAP -> HttpStatus.OK;
+            case ENQUEUE_STALE, ENQUEUE_ALWAYS, ENQUEUE_BACKLOG,
+                 ENQUEUE_RATE_COUPON, ENQUEUE_RATE_GLOBAL, ENQUEUE_KEY_SATURATED ->
+                    HttpStatus.ACCEPTED;
+            case REJECT_SOLD_OUT -> HttpStatus.CONFLICT;
+            case REJECT_QUEUE_FULL -> HttpStatus.TOO_MANY_REQUESTS;
+            case REJECT_OVERLOAD -> HttpStatus.SERVICE_UNAVAILABLE;
+            // 차례가 온 사람을 큐 뒤로 안 돌린다. 되돌리면 허가가 "아마도" 가 된다.
+            case RETRY_TOKEN -> HttpStatus.TOO_MANY_REQUESTS;
+        };
+    }
+
     private Mono<Void> route(ServerWebExchange exchange, GatewayFilterChain chain,
             AdmissionDecision decision) {
         if (decision.isPass()) {
             return chain.filter(exchange);
         }
-        if (decision.isReject()) {
-            return reject(exchange, HttpStatus.CONFLICT, ApiError.STOCK_EXHAUSTED,
-                    "재고가 모두 소진되었습니다.");
-        }
         // 큐 등록은 CY-402 다. 그전까지는 붙잡지 않고 뒷단으로 보낸다 —
         // 여기서 막으면 아직 못 만든 응답을 기다리는 사람이 생긴다.
-        return chain.filter(exchange);
+        if (decision.isEnqueue()) {
+            return chain.filter(exchange);
+        }
+        return reject(exchange, statusOf(decision), codeOf(decision), messageOf(decision));
+    }
+
+    private String codeOf(AdmissionDecision decision) {
+        return switch (decision) {
+            case REJECT_QUEUE_FULL -> ApiError.QUEUE_FULL;
+            case REJECT_OVERLOAD -> ApiError.TEMPORARILY_UNAVAILABLE;
+            case RETRY_TOKEN -> ApiError.RETRY_TOKEN;
+            default -> ApiError.STOCK_EXHAUSTED;
+        };
+    }
+
+    private String messageOf(AdmissionDecision decision) {
+        return switch (decision) {
+            case REJECT_QUEUE_FULL -> "대기열이 가득 찼습니다.";
+            case REJECT_OVERLOAD -> "지금은 처리할 수 없습니다.";
+            case RETRY_TOKEN -> "잠시 후 다시 시도해 주세요.";
+            default -> "재고가 모두 소진되었습니다.";
+        };
     }
 
     private String pathVariable(ServerWebExchange exchange) {

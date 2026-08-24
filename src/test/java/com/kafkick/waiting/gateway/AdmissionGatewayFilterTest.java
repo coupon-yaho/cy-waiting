@@ -2,6 +2,7 @@ package com.kafkick.waiting.gateway;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.kafkick.waiting.MutableClock;
 import com.kafkick.waiting.control.GatewaySnapshot;
 import com.kafkick.waiting.control.SnapshotHolder;
 import com.kafkick.waiting.domain.admission.AdmissionDecider;
@@ -43,9 +44,21 @@ class AdmissionGatewayFilterTest {
             Duration.ofSeconds(3), Duration.ofSeconds(10),
             Clock.fixed(지금, ZoneOffset.UTC));
     private final AdmissionGatewayFilter filter = AdmissionGatewayFilter.of(
-            holder, AdmissionDecider.of(SecondWindowLimiter.withMaxKeys(10_000), 0.2));
+            holder, AdmissionDecider.of(SecondWindowLimiter.withMaxKeys(10_000), 0.2),
+            Clock.fixed(지금, ZoneOffset.UTC));
 
     private final AtomicReference<Boolean> 뒷단에_닿음 = new AtomicReference<>(false);
+
+    private AdmissionDecision 태운다(AdmissionGatewayFilter f, String couponId) {
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.method(HttpMethod.POST,
+                        "/api/v1/coupons/" + couponId + "/issue"));
+        exchange.getAttributes().put(
+                ServerWebExchangeUtils.URI_TEMPLATE_VARIABLES_ATTRIBUTE,
+                Map.of("couponId", couponId));
+        f.filter(exchange, e -> Mono.empty()).block();
+        return exchange.getAttribute(AdmissionGatewayFilter.DECISION);
+    }
 
     private MockServerWebExchange 태운다(String couponId) {
         MockServerWebExchange exchange = MockServerWebExchange.from(
@@ -130,6 +143,81 @@ class AdmissionGatewayFilterTest {
 
         assertThat(뒷단에_닿음).hasValue(false);
         assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+    }
+
+    @Test
+    @DisplayName("대기_판정은_아직_뒷단으로_보낸다")
+    void 대기_판정은_아직_뒷단으로_보낸다() {
+        // 큐 등록과 순번 응답이 아직 없다. 여기서 붙잡으면 못 만든 응답을
+        // 기다리는 사람이 생긴다 — 만들어지면 이 시험이 바뀐다 (CY-402).
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+
+        MockServerWebExchange exchange = 태운다(COUPON);
+
+        assertThat(exchange.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .matches(AdmissionDecision::isEnqueue, "대기 판정");
+        assertThat(뒷단에_닿음).hasValue(true);
+        assertThat(exchange.getResponse().getStatusCode()).isNull();
+    }
+
+    @Test
+    @DisplayName("거절_사유마다_다른_응답이다")
+    void 거절_사유마다_다른_응답이다() {
+        // **뭉치면 운영자가 엉뚱한 것을 조인다.** 매진은 끝난 것이고, 큐 만원은
+        // 잠시 뒤 다시 오면 되고, 과부하는 노드를 늘려야 한다 — 셋이 다르다.
+        assertThat(AdmissionGatewayFilter.statusOf(AdmissionDecision.REJECT_SOLD_OUT))
+                .isEqualTo(HttpStatus.CONFLICT);
+        assertThat(AdmissionGatewayFilter.statusOf(AdmissionDecision.REJECT_QUEUE_FULL))
+                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        assertThat(AdmissionGatewayFilter.statusOf(AdmissionDecision.REJECT_OVERLOAD))
+                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+    }
+
+    @Test
+    @DisplayName("차례가_온_사람은_큐로_안_돌린다")
+    void 차례가_온_사람은_큐로_안_돌린다() {
+        // 토큰을 들고 왔는데 노드 상한을 넘은 경우다. 어느 술어에도 안 걸려서
+        // 그냥 두면 조용히 통과한다 — 상한을 넘겼는데 지나가는 것이다.
+        assertThat(AdmissionGatewayFilter.statusOf(AdmissionDecision.RETRY_TOKEN))
+                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+    }
+
+    @Test
+    @DisplayName("모든_판정값에_대응이_있다")
+    void 모든_판정값에_대응이_있다() {
+        // 값을 늘리고 분기를 안 늘리면 그 판정이 조용히 통과한다. 늘리는 순간 걸린다.
+        for (AdmissionDecision d : AdmissionDecision.values()) {
+            // 어떤 값인지까지 본다. 있기만 하면 엉뚱한 코드가 붙어도 안 걸린다.
+            assertThat(AdmissionGatewayFilter.statusOf(d)).as("판정 %s", d)
+                    .isIn(HttpStatus.OK, HttpStatus.ACCEPTED, HttpStatus.CONFLICT,
+                            HttpStatus.TOO_MANY_REQUESTS, HttpStatus.SERVICE_UNAVAILABLE);
+        }
+    }
+
+    @Test
+    @DisplayName("리미터_윈도를_지금_시각으로_센다")
+    void 리미터_윈도를_지금_시각으로_센다() {
+        // **스냅샷 발행 시각을 쓰면 배분이 멎는 순간 윈도가 영영 안 넘어간다.**
+        // 상한만큼 쓴 뒤부터 전부 막힌다 — 열어 줘야 할 구간에서 정반대로 조인다.
+        //
+        // 발행 시각을 과거로 고정해 두고, 시계만 흘려 두 윈도가 갈리는지 본다.
+        Instant 낡은_발행 = 지금.minusSeconds(3_600);
+        MutableClock 시계 = MutableClock.at(지금);
+        AdmissionGatewayFilter 시계를_쓰는_필터 = AdmissionGatewayFilter.of(
+                holder, AdmissionDecider.of(SecondWindowLimiter.withMaxKeys(10), 0.2), 시계);
+        holder.replace(new GatewaySnapshot(
+                Map.of(COUPON, CouponStates.idle(1_000_000)),
+                new SnapshotMeta(1, 1), 낡은_발행));
+
+        // 상한이 1 이라 같은 윈도에서 두 번째는 막힌다.
+        AdmissionDecision 첫째 = 태운다(시계를_쓰는_필터, COUPON);
+        AdmissionDecision 둘째 = 태운다(시계를_쓰는_필터, COUPON);
+        시계.앞으로(Duration.ofSeconds(2));
+        AdmissionDecision 시계가_흐른_뒤 = 태운다(시계를_쓰는_필터, COUPON);
+
+        assertThat(첫째.isPass()).as("첫 요청").isTrue();
+        assertThat(둘째.isPass()).as("같은 윈도의 둘째").isFalse();
+        assertThat(시계가_흐른_뒤.isPass()).as("윈도가 넘어간 뒤").isTrue();
     }
 
     @Test

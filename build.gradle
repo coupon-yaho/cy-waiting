@@ -7,7 +7,7 @@ plugins {
     id 'codenarc'
     // 도메인 한정. 어댑터까지 돌리면 시간이 폭발하고, 정작 지켜야 할 곳의
     // 신호가 묻힌다 (Phase 2 Goal — 생존 ≤ 10%)
-    id 'info.solidsoft.pitest' version '1.15.0'
+    id 'info.solidsoft.pitest' version '1.19.0'
     // 픽스처를 src/test 에 두면 다른 소스셋에서 못 쓰고,
     // 프로덕션에 두면 도달 불가 상태를 만드는 생성자가 운영 코드에 노출된다 (TS-3).
     id 'java-test-fixtures'

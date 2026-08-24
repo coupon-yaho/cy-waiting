@@ -7,6 +7,7 @@ import com.kafkick.waiting.domain.admission.AdmissionRequest;
 import com.kafkick.waiting.domain.admission.EnqueueLatch;
 import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
 import com.kafkick.waiting.domain.coupon.CouponState;
+import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import com.kafkick.waiting.domain.queue.EtaPolicy;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import com.kafkick.waiting.domain.queue.QueueToken;
@@ -57,12 +58,12 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     private static final String MEMBER_ID = "X-Member-Id";
 
     /**
-     * 등록이 안 될 때 흘려보내는 몫. <b>노드 하나의 초당 값이다</b> — 노드가 N 대면
-     * 뒷단이 받는 것은 그 N 배이고, 오토스케일이 붙으면 조용히 커진다.
+     * 장애 개방이 노드 예산에서 가져다 쓰는 비율.
+     *
+     * <p>상수로 두면 뒷단 가용량과 무관한 양이 나간다. 판정이 쓰는 예산에서
+     * 몫을 떼되, 전부는 안 준다 — 그 초에 통과할 사람의 몫이 남아야 한다.
      */
-    private static final long FAIL_OPEN_CAP = 200;
-
-    private static final String FAIL_OPEN_KEY = "enqueue";
+    private static final double FAIL_OPEN_SHARE = 0.5;
 
     /** 쿠폰 2,000개를 상정한 값. 넘으면 통째로 비운다 — 판정이 한 틱 헐거워질 뿐이다. */
     private static final int LATCH_MAX_KEYS = 10_000;
@@ -80,7 +81,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     private final DoubleSupplier random;
     private final QueuePort queue;
     private final QueueToken tokens;
-    private final SecondWindowLimiter failOpen;
+    private final SecondWindowLimiter limiter;
     private final EnqueueLatch latch;
     private final ApiError error;
     private final QueueResponse waiting = QueueResponse.create();
@@ -90,7 +91,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
 
     private AdmissionGatewayFilter(SnapshotHolder holder, AdmissionDecider decider,
             Clock clock, MeterRegistry meters, DoubleSupplier random,
-            QueuePort queue, QueueToken tokens) {
+            QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter) {
         this.holder = Objects.requireNonNull(holder, "holder 는 필수다");
         this.decider = Objects.requireNonNull(decider, "decider 는 필수다");
         this.clock = Objects.requireNonNull(clock, "clock 은 필수다");
@@ -98,7 +99,8 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         this.random = Objects.requireNonNull(random, "random 은 필수다");
         this.queue = Objects.requireNonNull(queue, "queue 는 필수다");
         this.tokens = Objects.requireNonNull(tokens, "tokens 는 필수다");
-        this.failOpen = SecondWindowLimiter.withMaxKeys(1);
+        this.limiter = Objects.requireNonNull(limiter, "limiter 는 필수다");
+
         this.latch = EnqueueLatch.of(LATCH_MAX_KEYS, LATCH_TTL_SEC);
         this.error = ApiError.of(clock);
     }
@@ -106,21 +108,24 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     /** 흔들림의 난수원은 스레드마다 따로 둔다 — 공유하면 그 자체가 경합점이다. */
     @Autowired
     AdmissionGatewayFilter(SnapshotHolder holder, AdmissionDecider decider, Clock clock,
-            MeterRegistry meters, QueuePort queue, QueueToken tokens) {
+            MeterRegistry meters, QueuePort queue, QueueToken tokens,
+            SecondWindowLimiter limiter) {
         this(holder, decider, clock, meters,
-                () -> ThreadLocalRandom.current().nextDouble(), queue, tokens);
+                () -> ThreadLocalRandom.current().nextDouble(), queue, tokens, limiter);
     }
 
     public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider,
-            Clock clock, MeterRegistry meters, QueuePort queue, QueueToken tokens) {
-        return new AdmissionGatewayFilter(holder, decider, clock, meters, queue, tokens);
+            Clock clock, MeterRegistry meters, QueuePort queue, QueueToken tokens,
+            SecondWindowLimiter limiter) {
+        return new AdmissionGatewayFilter(holder, decider, clock, meters, queue, tokens, limiter);
     }
 
     /** 난수원을 받는다. 고정하지 못하면 흔들림이 실제로 붙었는지 못 잰다 (TS-4). */
     public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider,
             Clock clock, MeterRegistry meters, DoubleSupplier random,
-            QueuePort queue, QueueToken tokens) {
-        return new AdmissionGatewayFilter(holder, decider, clock, meters, random, queue, tokens);
+            QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter) {
+        return new AdmissionGatewayFilter(holder, decider, clock, meters, random, queue,
+                tokens, limiter);
     }
 
     /**
@@ -169,7 +174,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                 nowSec, MAX_ETA_SEC));
         exchange.getAttributes().put(DECISION, decision);
         count(decision.name());
-        return route(exchange, chain, decision, couponId, state);
+        return route(exchange, chain, decision, couponId, state, view.snapshot().meta());
     }
 
     /**
@@ -189,12 +194,12 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     }
 
     private Mono<Void> route(ServerWebExchange exchange, GatewayFilterChain chain,
-            AdmissionDecision decision, String couponId, CouponState state) {
+            AdmissionDecision decision, String couponId, CouponState state, SnapshotMeta meta) {
         if (decision.isPass()) {
             return chain.filter(exchange);
         }
         if (decision.isEnqueue()) {
-            return enqueue(exchange, chain, couponId, state);
+            return enqueue(exchange, chain, couponId, state, meta);
         }
         return error.write(exchange, codeOf(decision), retryAfterSec(decision, random));
     }
@@ -204,7 +209,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      * 통과한 사람은 여기 안 온다.
      */
     private Mono<Void> enqueue(ServerWebExchange exchange, GatewayFilterChain chain,
-            String couponId, CouponState state) {
+            String couponId, CouponState state, SnapshotMeta meta) {
         String memberId = exchange.getRequest().getHeaders().getFirst(MEMBER_ID);
         if (memberId == null) {
             // 형식 검증이 앞에서 걸렀어야 한다. 여기 오면 배선이 틀린 것이다.
@@ -226,7 +231,8 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                     count("enqueue-error", e.getClass().getSimpleName());
                     return Mono.empty();
                 })
-                .switchIfEmpty(Mono.defer(() -> failOpen(exchange, chain).then(Mono.empty())))
+                .switchIfEmpty(Mono.defer(() ->
+                        failOpen(exchange, chain, meta).then(Mono.empty())))
                 .flatMap(entry -> {
                     if (!entry.accepted()) {
                         // 2차 방어에 걸렸다. 판정은 자리가 있다고 봤지만 실제로는 없다.
@@ -252,8 +258,13 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      * <p><b>상한을 두고 열어 준다.</b> 전부 막으면 레디스 장애가 곧 전면 장애이고,
      * 전부 열면 뒷단이 그대로 무너진다. 상한을 넘은 몫은 되돌려 보낸다.
      */
-    private Mono<Void> failOpen(ServerWebExchange exchange, GatewayFilterChain chain) {
-        if (failOpen.tryAcquire(FAIL_OPEN_KEY, FAIL_OPEN_CAP, clock.instant().getEpochSecond())) {
+    private Mono<Void> failOpen(ServerWebExchange exchange, GatewayFilterChain chain,
+            SnapshotMeta meta) {
+        // **판정과 같은 리미터·같은 키다.** 따로 들면 한 초에 두 예산이 겹쳐
+        // 나가고, 리미터를 하나로 두라는 규칙이 막으려던 버스트가 그대로 난다.
+        long cap = (long) (AdmissionDecider.globalCap(meta) * FAIL_OPEN_SHARE);
+        if (limiter.tryAcquire(AdmissionDecider.GLOBAL_KEY, cap,
+                clock.instant().getEpochSecond())) {
             count("enqueue-failed-open");
             return chain.filter(exchange);
         }

@@ -1,6 +1,7 @@
 package com.kafkick.waiting.domain.queue;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.within;
 
 import org.junit.jupiter.api.DisplayName;
@@ -54,7 +55,7 @@ class EtaPolicyTest {
     @Test
     @DisplayName("음수_순위는_거부한다")
     void 음수_순위는_거부한다() {
-        org.assertj.core.api.Assertions.assertThatThrownBy(() -> EtaPolicy.etaSec(-1, 50))
+        assertThatThrownBy(() -> EtaPolicy.etaSec(-1, 50))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -81,7 +82,37 @@ class EtaPolicyTest {
         long 모를_때 = 폴링.intervalSec(EtaPolicy.UNKNOWN, () -> 0.5);
         long 아주_멀_때 = 폴링.intervalSec(100_000, () -> 0.5);
 
-        assertThat(모를_때).isEqualTo(아주_멀_때);
+        // **값까지 못 박는다.** 서로 같은지만 보면 둘이 함께 1초로 무너져도 통과한다.
+        assertThat(모를_때).isEqualTo(아주_멀_때).isEqualTo(30);
+    }
+
+    @Test
+    @DisplayName("말이_안_되는_값도_가장_넓은_구간이다")
+    void 말이_안_되는_값도_가장_넓은_구간이다() {
+        // **모름만 막으면 절반이다.** 음수는 첫 구간에 걸려 "곧 입장" 이 되는데,
+        // 그건 이 변경이 없애려던 바로 그 방향이다. 표시도 폴링도 같이 본다.
+        assertThat(EtaPolicy.bucket(-1)).isEqualTo(EtaDisplay.OVER_TEN_MINUTES);
+        assertThat(EtaPolicy.bucket(Double.NEGATIVE_INFINITY))
+                .isEqualTo(EtaDisplay.OVER_TEN_MINUTES);
+
+        PollIntervalPolicy 폴링 = PollIntervalPolicy.of(0);
+        assertThat(폴링.intervalSec(-1, () -> 0.5))
+                .isEqualTo(폴링.intervalSec(100_000, () -> 0.5));
+    }
+
+    @Test
+    @DisplayName("경계마다_어느_구간인지_못_박는다")
+    void 경계마다_어느_구간인지_못_박는다() {
+        // 경계만 늘리고 구간을 안 늘리면 마지막 경계에서 배열 밖을 짚는다.
+        // 다만 밟히는지만 보면 경계가 밀려도 안 걸린다 — 값까지 적는다.
+        assertThat(EtaPolicy.bucket(0)).isEqualTo(EtaDisplay.ALMOST_THERE);
+        assertThat(EtaPolicy.bucket(29)).isEqualTo(EtaDisplay.ALMOST_THERE);
+        assertThat(EtaPolicy.bucket(30)).isEqualTo(EtaDisplay.ABOUT_A_MINUTE);
+        assertThat(EtaPolicy.bucket(89)).isEqualTo(EtaDisplay.ABOUT_A_MINUTE);
+        assertThat(EtaPolicy.bucket(90)).isEqualTo(EtaDisplay.ABOUT_FIVE_MINUTES);
+        assertThat(EtaPolicy.bucket(449)).isEqualTo(EtaDisplay.ABOUT_FIVE_MINUTES);
+        assertThat(EtaPolicy.bucket(450)).isEqualTo(EtaDisplay.OVER_TEN_MINUTES);
+        assertThat(EtaPolicy.bucket(100_000)).isEqualTo(EtaDisplay.OVER_TEN_MINUTES);
     }
 
     @Test

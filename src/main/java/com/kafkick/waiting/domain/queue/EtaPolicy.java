@@ -52,8 +52,12 @@ public final class EtaPolicy {
      * 나쁘다 — 넉넉히 말했다가 일찍 들어가는 것은 반대다.
      */
     public static EtaDisplay bucket(double etaSec) {
-        // 모름을 따로 안 본다. NaN 은 어떤 비교에서도 거짓이라 아래 반복을 그대로
-        // 지나 마지막 구간으로 떨어진다 — 분기를 두면 아무도 안 도는 가지가 된다.
+        // **모르는 것과 말이 안 되는 것을 같이 본다.** NaN 은 비교가 전부 거짓이라
+        // 그냥 두면 마지막 구간으로 떨어지지만, 음수는 첫 구간에 걸려 "곧 입장" 이
+        // 된다 — 짧게 말했다가 오래 기다리게 하는 쪽이 훨씬 나쁘다.
+        if (!(etaSec >= 0)) {
+            return BUCKETS[BUCKETS.length - 1];
+        }
         for (int i = 0; i < BUCKET_EDGES.length; i++) {
             if (etaSec < BUCKET_EDGES[i]) {
                 return BUCKETS[i];

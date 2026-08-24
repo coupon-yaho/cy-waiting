@@ -131,6 +131,21 @@ class QueueStatusFilterTest {
     }
 
     @Test
+    @DisplayName("차례는_맨_앞부터_온다")
+    void 차례는_맨_앞부터_온다() {
+        // 뒤에 선 사람까지 입장이 되면 줄이 통째로 한꺼번에 들어간다.
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100));
+        줄.enqueue(COUPON, "앞사람", 0, 지금).block();
+        줄.enqueue(COUPON, MEMBER, 0, 지금).block();
+        줄.차례가_왔다();
+
+        MockServerWebExchange exchange = 토큰으로_조회한다(tokens.issue(COUPON, MEMBER, 지금));
+
+        assertThat(exchange.getResponse().getBodyAsString().block())
+                .contains("\"status\":\"WAITING\"");
+    }
+
+    @Test
     @DisplayName("다음에_물을_때를_알려_준다")
     void 다음에_물을_때를_알려_준다() {
         // 안 알려 주면 각자 마음대로 두드린다. 그 부하를 정하는 것은 서버다.

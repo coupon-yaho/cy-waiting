@@ -38,8 +38,8 @@ public final class FakeQueuePort implements QueuePort {
     }
 
     /**
-     * 배분이 임계를 올린 뒤. <b>자유형 세터를 안 둔다</b> — 아무 상태나 받으면
-     * 줄에 있으면서 줄에 없는 것 같은 조합이 생기고, 그 조합을 전제로 통과하는
+     * 배분이 임계를 맨 앞 사람까지 올린 뒤. <b>자유형 세터를 안 둔다</b> — 아무
+     * 상태나 받으면 운영이 못 만드는 조합이 생기고, 그 조합을 전제로 통과하는
      * 시험이 만들어진다.
      */
     public FakeQueuePort 차례가_왔다() {
@@ -84,8 +84,14 @@ public final class FakeQueuePort implements QueuePort {
         if (!queued.containsKey(memberId)) {
             return Mono.just(QueueEntry.notQueued());
         }
-        QueueState state = 차례가_옴 ? QueueState.ADMITTED : QueueState.WAITING;
-        return Mono.just(new QueueEntry(state, rankOf(memberId),
+        // **차례는 맨 앞부터 온다.** 뒤에 선 사람까지 입장으로 만들면 앞에
+        // 사람이 있는 입장이 되고, 그건 운영이 못 만드는 조합이다.
+        long rank = rankOf(memberId);
+        if (차례가_옴 && rank == 0) {
+            return Mono.just(new QueueEntry(QueueState.ADMITTED, 0,
+                    queued.get(memberId), true, false));
+        }
+        return Mono.just(new QueueEntry(QueueState.WAITING, rank,
                 queued.get(memberId), true, false));
     }
 

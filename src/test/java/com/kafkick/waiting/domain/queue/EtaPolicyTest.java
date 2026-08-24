@@ -22,11 +22,12 @@ class EtaPolicyTest {
     }
 
     @Test
-    @DisplayName("credit이_0이면_계산_중을_반환한다")
-    void credit이_0이면_계산_중을_반환한다() {
+    @DisplayName("배수율이_0_이하면_모름이다")
+    void 배수율이_0_이하면_모름이다() {
         // 무한을 그대로 내보내면 표시 계층이 터진다. 모른다고 말한다.
-        assertThat(EtaPolicy.etaSec(1000, 0)).isEqualTo(EtaPolicy.UNKNOWN);
-        assertThat(EtaPolicy.etaSec(1000, -1)).isEqualTo(EtaPolicy.UNKNOWN);
+        // 모름은 NaN 이라 자기 자신과도 같지 않다 — 값 비교로는 못 잰다.
+        assertThat(EtaPolicy.etaSec(1000, 0)).isNaN();
+        assertThat(EtaPolicy.etaSec(1000, -1)).isNaN();
     }
 
     @Test
@@ -48,13 +49,6 @@ class EtaPolicyTest {
         assertThat(EtaPolicy.bucket(90)).isEqualTo(EtaDisplay.ABOUT_FIVE_MINUTES);
         assertThat(EtaPolicy.bucket(449)).isEqualTo(EtaDisplay.ABOUT_FIVE_MINUTES);
         assertThat(EtaPolicy.bucket(450)).isEqualTo(EtaDisplay.OVER_TEN_MINUTES);
-    }
-
-    @Test
-    @DisplayName("계산_중은_별도_버킷이다")
-    void 계산_중은_별도_버킷이다() {
-        // "10분 이상" 과 "모른다" 를 뭉치면 사용자가 떠날지 판단할 수 없다.
-        assertThat(EtaPolicy.bucket(EtaPolicy.UNKNOWN)).isEqualTo(EtaDisplay.CALCULATING);
     }
 
     @Test

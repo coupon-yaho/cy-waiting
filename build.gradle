@@ -7,7 +7,7 @@ plugins {
     // 픽스처를 src/test 에 두면 다른 소스셋에서 못 쓰고,
     // 프로덕션에 두면 도달 불가 상태를 만드는 생성자가 운영 코드에 노출된다 (TS-3).
     id 'java-test-fixtures'
-    id 'org.springframework.boot' version '4.1.0'
+    id 'org.springframework.boot' version '4.1.1'
     id 'io.spring.dependency-management' version '1.1.7'
 }
 
@@ -28,7 +28,7 @@ repositories {
 // 드러나지 않는다. 버전은 maven-metadata.xml 로 실측한다 —
 // search.maven.org 색인은 뒤처져 있어 최신을 못 알려준다.
 ext {
-    springCloudVersion = '2025.1.2'
+    springCloudVersion = '2025.1.3'
     testcontainersVersion = '2.0.5'
 }
 

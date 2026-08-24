@@ -8,13 +8,16 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
+import org.springframework.data.redis.connection.lettuce.LettuceClientConfiguration;
+import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
 
@@ -28,7 +31,6 @@ import org.springframework.data.redis.core.script.RedisScript;
  * 올랐다가 다음 표본 선택 전에 내려오는 경우를 통째로 놓친다.
  */
 @Tag("integration")
-@SpringBootTest
 class RankMonotonicityIntegrationTest extends RedisContainerSupport {
 
     private static final String NOW = "1800000000";
@@ -42,8 +44,32 @@ class RankMonotonicityIntegrationTest extends RedisContainerSupport {
     private static final String QUEUE = RedisKeys.queue(COUPON, 1, 0);
     private static final String MAX_SCORE = RedisKeys.maxScore(COUPON, 1, 0);
 
-    @Autowired
-    private ReactiveStringRedisTemplate redis;
+    /**
+     * <b>연결을 직접 만든다.</b> 운영의 500ms 는 요청 경로 예산인데 여기는 연산
+     * 3,000 건을 순차로 왕복하는 하네스라 운영이 안 만드는 부하를 스스로 만든다.
+     * 붐비는 CI 러너에서 명령 하나가 예산을 넘어 실제로 깨졌다.
+     *
+     * <p>{@link RedisTimeBudget} 은 긴 값으로 기동을 막는다. 옳은 규칙이라
+     * 시험이 우회할 대상이 아니다. 재는 것은 정렬 집합의 순서뿐이다.
+     */
+    private static final Duration BULK_TIMEOUT = Duration.ofSeconds(5);
+
+    private static LettuceConnectionFactory factory;
+    private static ReactiveStringRedisTemplate redis;
+
+    @BeforeAll
+    static void 연결() {
+        factory = new LettuceConnectionFactory(
+                new RedisStandaloneConfiguration(REDIS.getHost(), REDIS.getMappedPort(6379)),
+                LettuceClientConfiguration.builder().commandTimeout(BULK_TIMEOUT).build());
+        factory.afterPropertiesSet();
+        redis = new ReactiveStringRedisTemplate(factory);
+    }
+
+    @AfterAll
+    static void 정리() {
+        factory.destroy();
+    }
 
     private RedisScript<List> enqueueScript;
 

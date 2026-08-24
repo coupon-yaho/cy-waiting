@@ -21,9 +21,16 @@ except ImportError:
 
 root = pathlib.Path(sys.argv[1])
 bad = 0
-files = sorted(root.glob('.github/workflows/*.yml')) + sorted(root.glob('.github/workflows/*.yaml'))
+
+# **없는 것과 사라진 것을 가른다.** 워크플로 디렉터리 자체가 없으면 검사 대상이
+# 아니다 — 픽스처 저장소가 그렇다. 있는데 비었으면 검사가 사라진 것이라 막는다.
+workflows = root / '.github' / 'workflows'
+if not workflows.is_dir():
+    sys.exit(0)
+
+files = sorted(workflows.glob('*.yml')) + sorted(workflows.glob('*.yaml'))
 if not files:
-    print("  워크플로가 없다", file=sys.stderr)
+    print("  워크플로 디렉터리가 비었다", file=sys.stderr)
     sys.exit(1)
 
 for path in files:

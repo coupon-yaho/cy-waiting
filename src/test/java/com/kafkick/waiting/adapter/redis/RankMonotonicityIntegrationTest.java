@@ -61,9 +61,8 @@ class RankMonotonicityIntegrationTest {
     private static final String MAX_SCORE = RedisKeys.maxScore(COUPON, 1, 0);
 
     /**
-     * <b>연결을 직접 만든다.</b> 운영의 500ms 는 요청 경로 예산인데 여기는 연산
-     * 3,000 건을 순차로 왕복하는 하네스라 운영이 안 만드는 부하를 스스로 만든다.
-     * 붐비는 CI 러너에서 명령 하나가 예산을 넘어 실제로 깨졌다.
+     * <b>연결을 직접 만든다.</b> 운영의 500ms 는 요청 경로 예산인데 여기는 연산을
+     * 순차로 몰아치는 하네스라 운영이 안 만드는 부하를 스스로 만든다.
      *
      * <p>{@link RedisTimeBudget} 은 긴 값으로 기동을 막는다. 옳은 규칙이라
      * 시험이 우회할 대상이 아니다. 재는 것은 정렬 집합의 순서뿐이다.
@@ -73,8 +72,8 @@ class RankMonotonicityIntegrationTest {
     /**
      * <b>이 시험만의 레디스다.</b> 재는 것은 정렬 집합의 순서지 내구성이 아니다.
      *
-     * <p>공유 컨테이너는 운영 설정이라 매초 fsync 를 한다. 쓰기를 6천 번 몰아치는
-     * 이 하네스가 그 fsync 에 걸려 명령 하나가 30초를 넘겼다 — 세 번 연속으로.
+     * <p>공유 컨테이너는 운영 설정이라 매초 fsync 를 하고, 몰아치는 쓰기가 거기
+     * 걸려 명령 하나가 30초를 넘겼다 — 세 번 연속으로.
      */
     @SuppressWarnings("resource")   // JVM 종료까지 살려 둔다
     private static final GenericContainer<?> REDIS =

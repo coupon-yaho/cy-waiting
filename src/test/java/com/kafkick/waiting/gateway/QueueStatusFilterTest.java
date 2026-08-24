@@ -260,6 +260,9 @@ class QueueStatusFilterTest {
 
         assertThat(넘긴_것.getResponse().getStatusCode())
                 .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        // 다시 올 때를 안 알려 주면 막힌 사람들이 곧바로 되돌아온다.
+        assertThat(넘긴_것.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER))
+                .isEqualTo("30");
         // 상한을 넘으면 레디스를 아예 안 친다. 치고 나서 막으면 막는 뜻이 없다.
         assertThat(줄.왕복()).isEqualTo(20_001);
     }

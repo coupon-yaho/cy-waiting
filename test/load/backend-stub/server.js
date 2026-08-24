@@ -12,12 +12,13 @@ import { createServer } from 'node:http';
 // 안 재는 상태로 돈다.
 function num(name, fallback, { integer = false, min = 0, max = Infinity } = {}) {
   const raw = process.env[name];
-  // 공백만 있는 값은 Number 가 0 으로 읽는다. 그게 포트면 임시 포트에 붙어
-  // 헬스체크도 프록시 주소도 어긋난다 — 설정 실수가 조용히 넘어간다.
-  if (raw === undefined || raw.trim() === '') {
+  // **안 넣은 것과 공백을 넣은 것은 다르다.** 뒤엣것은 실수이므로 기본값으로
+  // 덮으면 조용히 넘어간다. 그리고 Number 는 공백을 0 으로 읽어서, 그게 포트면
+  // 임시 포트에 붙어 헬스체크도 프록시 주소도 어긋난다.
+  if (raw === undefined) {
     return fallback;
   }
-  const v = Number(raw);
+  const v = raw.trim() === '' ? NaN : Number(raw);
   const ok = Number.isFinite(v) && v >= min && v <= max
       && (!integer || Number.isInteger(v));
   if (!ok) {

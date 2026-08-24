@@ -334,6 +334,8 @@ Plan: 1.2.1' block '계획서 ID (커밋에 남기지 않는다)'
 git_case 'feat(app): CY-18 진입점 추가
 Refs: CY-18' block '제목에 Jira 키'
 git_case 'Merge branch develop' allow '병합 커밋은 대상 아님'
+git_case 'Revert "feat(app): 진입점 추가"' allow '되돌리기는 대상 아님'
+git_case 'feat: Revert 기능 되돌리기' block '되돌리기처럼 보이는 보통 제목'
 
 # ── 브랜치 리뷰 러너 ─────────────────────────────────────────────────────────
 # 이 러너가 없으면 힙독·스크립트로 쓴 파일은 어떤 검사도 안 받는다.
@@ -551,6 +553,87 @@ if grep -qE 'head -c|head -1' "$ROOT/.github/workflows/coderabbit-relay.yml"; th
     printf '  FAIL 릴레이에 파이프 자르기가 다시 들어왔다\n'; fail=$((fail + 1))
 else
     printf '  ok   릴레이에 파이프 자르기가 없다\n'; pass=$((pass + 1))
+fi
+
+# 워크플로에 중복 잡 이름이 들어오면 GitHub 이 파일을 통째로 거절한다. 그러면
+# 잡이 하나도 안 뜨고 필수 체크는 영원히 대기로 남는다 — 실패보다 조용하다.
+#
+# **YAML 파서를 안 쓴다.** 표준 파서는 중복을 조용히 넘겨서 못 잡고, 파이썬
+# 라이브러리에 기대면 그것이 없는 러너에서 검사가 거짓 실패를 낸다.
+duplicate_job_ids() {   # 디렉터리 → 중복 잡 이름 (없으면 빈 출력)
+    local dir=$1 f
+    while IFS= read -r -d '' f; do
+        awk '
+            # 인라인 주석을 떼고 본다. `jobs: # 설명` 도 유효한 YAML 이다.
+            { line = $0; sub(/[[:space:]]*#.*$/, "", line) }
+            line ~ /^jobs:[[:space:]]*$/ { in_jobs = 1; width = 0; next }
+            line ~ /^[^[:space:]]/       { in_jobs = 0 }
+            # **들여쓰기 폭은 YAML 이 강제하지 않는다.** 두 칸으로만 보면 네 칸으로
+            # 쓴 파일의 중복을 통째로 놓친다. 첫 항목의 폭을 기억해 그것만 센다.
+            in_jobs && line ~ /^[[:space:]]+[A-Za-z0-9_-]+:[[:space:]]*$/ {
+                match(line, /^[[:space:]]+/)
+                if (width == 0) width = RLENGTH
+                if (RLENGTH != width) next
+                key = line; sub(/:[[:space:]]*$/, "", key); sub(/^[[:space:]]+/, "", key)
+                if (key in seen) print FILENAME ":" key
+                seen[key] = 1
+            }
+        ' "$f"
+    done < <(find "$dir" -maxdepth 1 \( -name '*.yml' -o -name '*.yaml' \) -print0)
+}
+
+# **검사 자신을 먼저 잰다.** 실제 워크플로만 보면 정규식이 망가져도 초록이다.
+wf_fixture=$(mktemp -d)
+cat > "$wf_fixture/dup.yml" <<'FIXTURE'
+name: 중복
+on: push          # 인라인 주석이 붙어도 유효한 YAML 이다
+jobs:             # 여기도 마찬가지
+  build:
+    runs-on: ubuntu-latest
+  build:
+    runs-on: ubuntu-latest
+FIXTURE
+# **두 확장자에 다 둔다.** 한쪽만 두면 나머지를 검사에서 빼도 안 죽는다.
+sed 's/중복/중복2/' "$wf_fixture/dup.yml" > "$wf_fixture/dup.yaml"
+# 네 칸 들여쓰기도 유효한 YAML 이다. 두 칸으로만 보면 통째로 놓친다.
+cat > "$wf_fixture/dup-wide.yml" <<'FIXTURE'
+name: 중복3
+on: push
+jobs:
+    build:
+        runs-on: ubuntu-latest
+    build:
+        runs-on: ubuntu-latest
+FIXTURE
+cat > "$wf_fixture/clean.yml" <<'FIXTURE'
+name: 깨끗
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+  test:
+    runs-on: ubuntu-latest
+FIXTURE
+wf_hits=$(duplicate_job_ids "$wf_fixture" | wc -l)
+if ((wf_hits == 3)); then
+    printf '  ok   중복 잡 이름을 잡는다 (주석·두 확장자·네 칸)\n'; pass=$((pass + 1))
+else
+    printf '  FAIL 중복 잡 이름을 %d/3 만 잡는다\n' "$wf_hits"; fail=$((fail + 1))
+fi
+rm -f "$wf_fixture/dup.yml" "$wf_fixture/dup.yaml" "$wf_fixture/dup-wide.yml"
+if [[ -z "$(duplicate_job_ids "$wf_fixture")" ]]; then
+    printf '  ok   깨끗한 워크플로는 안 잡는다\n'; pass=$((pass + 1))
+else
+    printf '  FAIL 깨끗한 워크플로를 중복으로 본다\n'; fail=$((fail + 1))
+fi
+rm -rf "$wf_fixture"
+
+wf_dups=$(duplicate_job_ids "$ROOT/.github/workflows")
+if [[ -z "$wf_dups" ]]; then
+    printf '  ok   워크플로에 중복 잡 이름이 없다\n'; pass=$((pass + 1))
+else
+    printf '  FAIL 워크플로에 중복 잡 이름: %s\n' "$(tr '\n' ' ' <<<"$wf_dups")"
+    fail=$((fail + 1))
 fi
 
 echo

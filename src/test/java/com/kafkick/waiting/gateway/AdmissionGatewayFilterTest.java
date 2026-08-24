@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.kafkick.waiting.MutableClock;
 import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Tag;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.kafkick.waiting.control.GatewaySnapshot;
 import com.kafkick.waiting.control.SnapshotHolder;
@@ -224,9 +225,12 @@ class AdmissionGatewayFilterTest {
         스냅샷을_심는다(CouponStates.idle(100));
         태운다(COUPON);
 
+        // **태그를 정확히 못 박는다.** 값만 보면 식별자를 키로 쓸 때 안 걸리고,
+        // 키만 보면 값으로 쓸 때 안 걸린다.
         assertThat(meters.getMeters())
-                .allSatisfy(m -> assertThat(m.getId().getTags())
-                        .noneMatch(t -> t.getValue().equals(COUPON)));
+                .singleElement()
+                .satisfies(m -> assertThat(m.getId().getTags())
+                        .containsExactly(Tag.of("outcome", "PASS_UNDER_CAP")));
     }
 
     @Test

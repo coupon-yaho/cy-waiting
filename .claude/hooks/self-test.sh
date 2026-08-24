@@ -566,10 +566,15 @@ duplicate_job_ids() {   # 디렉터리 → 중복 잡 이름 (없으면 빈 출�
         awk '
             # 인라인 주석을 떼고 본다. `jobs: # 설명` 도 유효한 YAML 이다.
             { line = $0; sub(/[[:space:]]*#.*$/, "", line) }
-            line ~ /^jobs:[[:space:]]*$/ { in_jobs = 1; next }
+            line ~ /^jobs:[[:space:]]*$/ { in_jobs = 1; width = 0; next }
             line ~ /^[^[:space:]]/       { in_jobs = 0 }
-            in_jobs && line ~ /^  [A-Za-z0-9_-]+:[[:space:]]*$/ {
-                key = line; sub(/:[[:space:]]*$/, "", key); sub(/^  /, "", key)
+            # **들여쓰기 폭은 YAML 이 강제하지 않는다.** 두 칸으로만 보면 네 칸으로
+            # 쓴 파일의 중복을 통째로 놓친다. 첫 항목의 폭을 기억해 그것만 센다.
+            in_jobs && line ~ /^[[:space:]]+[A-Za-z0-9_-]+:[[:space:]]*$/ {
+                match(line, /^[[:space:]]+/)
+                if (width == 0) width = RLENGTH
+                if (RLENGTH != width) next
+                key = line; sub(/:[[:space:]]*$/, "", key); sub(/^[[:space:]]+/, "", key)
                 if (key in seen) print FILENAME ":" key
                 seen[key] = 1
             }
@@ -590,6 +595,16 @@ jobs:             # 여기도 마찬가지
 FIXTURE
 # **두 확장자에 다 둔다.** 한쪽만 두면 나머지를 검사에서 빼도 안 죽는다.
 sed 's/중복/중복2/' "$wf_fixture/dup.yml" > "$wf_fixture/dup.yaml"
+# 네 칸 들여쓰기도 유효한 YAML 이다. 두 칸으로만 보면 통째로 놓친다.
+cat > "$wf_fixture/dup-wide.yml" <<'FIXTURE'
+name: 중복3
+on: push
+jobs:
+    build:
+        runs-on: ubuntu-latest
+    build:
+        runs-on: ubuntu-latest
+FIXTURE
 cat > "$wf_fixture/clean.yml" <<'FIXTURE'
 name: 깨끗
 on: push
@@ -600,12 +615,12 @@ jobs:
     runs-on: ubuntu-latest
 FIXTURE
 wf_hits=$(duplicate_job_ids "$wf_fixture" | wc -l)
-if ((wf_hits == 2)); then
-    printf '  ok   중복 잡 이름을 잡는다 (인라인 주석·두 확장자)\n'; pass=$((pass + 1))
+if ((wf_hits == 3)); then
+    printf '  ok   중복 잡 이름을 잡는다 (주석·두 확장자·네 칸)\n'; pass=$((pass + 1))
 else
-    printf '  FAIL 중복 잡 이름을 %d/2 만 잡는다\n' "$wf_hits"; fail=$((fail + 1))
+    printf '  FAIL 중복 잡 이름을 %d/3 만 잡는다\n' "$wf_hits"; fail=$((fail + 1))
 fi
-rm -f "$wf_fixture/dup.yml" "$wf_fixture/dup.yaml"
+rm -f "$wf_fixture/dup.yml" "$wf_fixture/dup.yaml" "$wf_fixture/dup-wide.yml"
 if [[ -z "$(duplicate_job_ids "$wf_fixture")" ]]; then
     printf '  ok   깨끗한 워크플로는 안 잡는다\n'; pass=$((pass + 1))
 else

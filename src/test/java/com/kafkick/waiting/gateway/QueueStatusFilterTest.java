@@ -122,7 +122,7 @@ class QueueStatusFilterTest {
     void 차례가_오면_그렇게_말한다() {
         스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100));
         줄.enqueue(COUPON, MEMBER, 0, 지금).block();
-        줄.상태는(QueueState.ADMITTED);
+        줄.차례가_왔다();
 
         MockServerWebExchange exchange = 토큰으로_조회한다(tokens.issue(COUPON, MEMBER, 지금));
 

@@ -20,8 +20,7 @@ public final class FakeQueuePort implements QueuePort {
 
     private RuntimeException 터뜨릴_것;
     private boolean 가득_참;
-    private QueueState 돌려줄_상태 = QueueState.WAITING;
-
+    private boolean 차례가_옴;
     public static FakeQueuePort create() {
         return new FakeQueuePort();
     }
@@ -38,8 +37,13 @@ public final class FakeQueuePort implements QueuePort {
         return this;
     }
 
-    public FakeQueuePort 상태는(QueueState state) {
-        this.돌려줄_상태 = state;
+    /**
+     * 배분이 임계를 올린 뒤. <b>자유형 세터를 안 둔다</b> — 아무 상태나 받으면
+     * 줄에 있으면서 줄에 없는 것 같은 조합이 생기고, 그 조합을 전제로 통과하는
+     * 시험이 만들어진다.
+     */
+    public FakeQueuePort 차례가_왔다() {
+        this.차례가_옴 = true;
         return this;
     }
 
@@ -64,7 +68,7 @@ public final class FakeQueuePort implements QueuePort {
         }
         boolean 있던_사람 = queued.containsKey(memberId);
         if (!있던_사람 && (가득_참 || (maxLen > 0 && queued.size() >= maxLen))) {
-            return Mono.just(new QueueEntry(QueueState.REJECTED, -1, -1, false, false));
+            return Mono.just(QueueEntry.rejected());
         }
         queued.putIfAbsent(memberId, (long) queued.size() + 1);
         return Mono.just(new QueueEntry(QueueState.WAITING, rankOf(memberId),
@@ -78,9 +82,10 @@ public final class FakeQueuePort implements QueuePort {
             return Mono.error(터뜨릴_것);
         }
         if (!queued.containsKey(memberId)) {
-            return Mono.just(new QueueEntry(QueueState.NOT_QUEUED, -1, -1, false, false));
+            return Mono.just(QueueEntry.notQueued());
         }
-        return Mono.just(new QueueEntry(돌려줄_상태, rankOf(memberId),
+        QueueState state = 차례가_옴 ? QueueState.ADMITTED : QueueState.WAITING;
+        return Mono.just(new QueueEntry(state, rankOf(memberId),
                 queued.get(memberId), true, false));
     }
 

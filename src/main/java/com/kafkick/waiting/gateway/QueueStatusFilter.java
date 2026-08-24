@@ -21,12 +21,8 @@ import org.springframework.web.util.pattern.PathPatternParser;
 import reactor.core.publisher.Mono;
 
 /**
- * 순번 조회.
- *
- * <p><b>대상을 토큰으로 특정한다</b> — 회원 헤더로 고르면 헤더 하나 바꿔서 남의
+ * <b>대상을 토큰으로 특정한다</b> — 회원 헤더로 고르면 헤더 하나 바꿔서 남의
  * 순번을 본다. 로그인이 없어 그 헤더는 위조 가능하다.
- *
- * <p>라우트를 안 탄다. 뒷단으로 갈 요청이 아니라 게이트웨이가 답할 요청이다.
  */
 public final class QueueStatusFilter implements WebFilter {
 
@@ -101,13 +97,13 @@ public final class QueueStatusFilter implements WebFilter {
     private Mono<Void> answer(ServerWebExchange exchange, String couponId, QueueEntry entry) {
         count(entry.state().name());
         if (entry.state() == QueueState.NOT_QUEUED) {
-            // 줄에 없다. 매진으로 끝났거나 이탈로 지워졌다 — 어느 쪽이든 다시 서야 한다.
-            return response.status(exchange, "CLOSED", 0, 0, 0);
+            // 다시 오라고 하지 않는다. 끝난 사람을 부르는 것이 된다.
+            return response.status(exchange, entry.state(), 0, 0, 0);
         }
         double etaSec = entry.state() == QueueState.ADMITTED
                 ? 0
                 : EtaPolicy.etaSec(entry.rank(), credit(couponId));
-        return response.status(exchange, entry.state().name(), entry.rank(),
+        return response.status(exchange, entry.state(), entry.rank(),
                 (long) Math.max(0, etaSec), POLL.intervalSec(etaSec, random));
     }
 

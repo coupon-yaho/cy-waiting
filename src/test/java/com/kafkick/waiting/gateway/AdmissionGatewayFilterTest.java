@@ -246,12 +246,15 @@ class AdmissionGatewayFilterTest {
         스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
         줄.터진다(new IllegalStateException("레디스가 죽었다"));
 
-        MockServerWebExchange 마지막 = null;
-        for (int i = 0; i <= 200; i++) {
-            마지막 = 태운다(COUPON);
+        // **양쪽에서 못 박는다.** 끊기는 것만 보면 상한이 1 로 바뀌어도 통과한다.
+        MockServerWebExchange 상한_직전 = null;
+        for (int i = 0; i < 200; i++) {
+            상한_직전 = 태운다(COUPON);
         }
+        MockServerWebExchange 상한_직후 = 태운다(COUPON);
 
-        assertThat(마지막.getResponse().getStatusCode())
+        assertThat(상한_직전.getResponse().getStatusCode()).isNull();
+        assertThat(상한_직후.getResponse().getStatusCode())
                 .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
     }
 

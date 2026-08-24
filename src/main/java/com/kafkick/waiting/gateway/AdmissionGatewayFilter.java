@@ -49,7 +49,10 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
 
     private static final String MEMBER_ID = "X-Member-Id";
 
-    /** 등록이 안 될 때 초당 몇 명까지 뒷단으로 흘려보낼 것인가. */
+    /**
+     * 등록이 안 될 때 흘려보내는 몫. <b>노드 하나의 초당 값이다</b> — 노드가 N 대면
+     * 뒷단이 받는 것은 그 N 배이고, 오토스케일이 붙으면 조용히 커진다.
+     */
     private static final long FAIL_OPEN_CAP = 200;
 
     private static final String FAIL_OPEN_KEY = "enqueue";
@@ -102,6 +105,11 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      */
     private void count(String outcome) {
         meters.counter(METRIC, "outcome", outcome).increment();
+    }
+
+    /** 예외 종류는 우리 코드가 정하는 값이라 라벨이 안 폭발한다. */
+    private void count(String outcome, String cause) {
+        meters.counter(METRIC, "outcome", outcome, "cause", cause).increment();
     }
 
     @Override
@@ -184,9 +192,12 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                 // **여기까지만 열어 준다.** 뒤에 붙이면 줄에 선 사람이 응답을
                 // 못 써서 뒷단까지 가고, 자리를 쥔 채로 재고까지 먹는다.
                 .onErrorResume(e -> {
-                    // 사유를 남긴다. 레디스가 죽은 것과 인자가 틀린 것은 다르게
-                    // 다뤄야 하는데, 계수만으로는 못 가린다.
-                    log.warn("줄에 못 세웠다 — 상한만큼 열어 준다", e);
+                    // **요청마다 안 찍는다.** 레디스 장애는 순간이 아니라 구간으로
+                    // 오므로, 여기서 찍으면 초당 수천 줄이 스택트레이스째 쌓인다.
+                    //
+                    // 대신 예외 종류를 라벨로 센다. 레디스가 죽은 것과 인자가
+                    // 틀린 것은 다르게 다뤄야 하는데, 한 숫자로는 못 가린다.
+                    count("enqueue-error", e.getClass().getSimpleName());
                     return Mono.empty();
                 })
                 .switchIfEmpty(Mono.defer(() -> failOpen(exchange, chain).then(Mono.empty())))

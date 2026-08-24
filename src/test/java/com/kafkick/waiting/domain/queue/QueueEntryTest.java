@@ -9,7 +9,7 @@ import org.junit.jupiter.api.Test;
 /** 줄에서의 자리. <b>없는 것과 맨 앞인 것을 뭉치지 않는다.</b> */
 class QueueEntryTest {
 
-    private QueueEntry 자리(QueueState state) {
+    private QueueEntry 줄에_있는(QueueState state) {
         return new QueueEntry(state, 0, 1, false, false);
     }
 
@@ -17,18 +17,18 @@ class QueueEntryTest {
     @DisplayName("거절만_자리가_없다")
     void 거절만_자리가_없다() {
         // 줄에 없는 것은 아직 안 선 것이지 거절당한 것이 아니다 — 다시 서면 된다.
-        assertThat(자리(QueueState.WAITING).accepted()).isTrue();
-        assertThat(자리(QueueState.ADMITTED).accepted()).isTrue();
-        assertThat(자리(QueueState.NOT_QUEUED).accepted()).isTrue();
-        assertThat(자리(QueueState.REJECTED).accepted()).isFalse();
+        assertThat(줄에_있는(QueueState.WAITING).accepted()).isTrue();
+        assertThat(줄에_있는(QueueState.ADMITTED).accepted()).isTrue();
+        assertThat(QueueEntry.notQueued().accepted()).isTrue();
+        assertThat(QueueEntry.rejected().accepted()).isFalse();
     }
 
     @Test
     @DisplayName("차례가_온_것만_입장이다")
     void 차례가_온_것만_입장이다() {
-        assertThat(자리(QueueState.ADMITTED).admitted()).isTrue();
-        assertThat(자리(QueueState.WAITING).admitted()).isFalse();
-        assertThat(자리(QueueState.NOT_QUEUED).admitted()).isFalse();
+        assertThat(줄에_있는(QueueState.ADMITTED).admitted()).isTrue();
+        assertThat(줄에_있는(QueueState.WAITING).admitted()).isFalse();
+        assertThat(QueueEntry.notQueued().admitted()).isFalse();
     }
 
     @Test
@@ -37,5 +37,30 @@ class QueueEntryTest {
         // 상태가 비면 읽는 쪽이 저마다 다르게 해석한다.
         assertThatThrownBy(() -> new QueueEntry(null, 0, 1, false, false))
                 .isInstanceOf(NullPointerException.class);
+    }
+
+    /**
+     * 줄에 없다는 뜻의 상태가 자리를 들고 있으면, 그 조합을 전제로 통과하는
+     * 시험이 생긴다. 운영이 못 만드는 것을 재게 된다.
+     */
+    @Test
+    @DisplayName("줄에_없는데_자리를_들면_안_만들어진다")
+    void 줄에_없는데_자리를_들면_안_만들어진다() {
+        assertThatThrownBy(() -> new QueueEntry(QueueState.NOT_QUEUED, 0, 1, false, false))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new QueueEntry(QueueState.REJECTED, 3, -1, false, false))
+                .isInstanceOf(IllegalArgumentException.class);
+        // 순번만 들고 있어도 마찬가지다. 둘 중 하나만 보면 나머지가 새어 나간다.
+        assertThatThrownBy(() -> new QueueEntry(QueueState.NOT_QUEUED, -1, 5, false, false))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("줄에_있는데_자리가_없으면_안_만들어진다")
+    void 줄에_있는데_자리가_없으면_안_만들어진다() {
+        assertThatThrownBy(() -> new QueueEntry(QueueState.WAITING, -1, -1, false, false))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new QueueEntry(QueueState.ADMITTED, 0, -1, false, false))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }

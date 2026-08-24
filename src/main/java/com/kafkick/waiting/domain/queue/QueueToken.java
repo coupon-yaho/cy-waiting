@@ -20,8 +20,14 @@ import javax.crypto.spec.SecretKeySpec;
  */
 public final class QueueToken {
 
-    /** 토큰이 사는 시간. 대기 자체가 그보다 길면 다시 받아야 한다. */
+    /** 토큰 수명의 상한. 대기 자체가 그보다 길면 다시 받아야 한다. */
     public static final long TTL_SEC = 3_600;
+
+    /**
+     * 발급 값을 끊는 단위. 짧을수록 새로고침 연타에 토큰이 자주 갈리고, 길수록
+     * 수명 편차가 커진다. 최소 수명은 {@code TTL_SEC - WINDOW_SEC} 이다.
+     */
+    private static final long WINDOW_SEC = 600;
 
     private static final String PREFIX = "qt_";
 
@@ -108,11 +114,14 @@ public final class QueueToken {
     }
 
     /**
-     * 만료 시각을 창에 맞춰 끊는다. 지금 시각을 그대로 담으면 초마다 다른 토큰이
-     * 나와 새로고침 연타가 앞서 받은 토큰을 죽인다.
+     * <b>만료가 아니라 발급 시각을 끊는다.</b> 만료를 끊으면 창 끝에 받은 사람의
+     * 토큰이 몇 초만 살고, 지금 시각을 그대로 담으면 초마다 다른 토큰이 나와
+     * 새로고침 연타가 앞서 받은 토큰을 죽인다.
+     *
+     * <p>수명은 {@link #TTL_SEC} 를 안 넘고 창 하나 이상 짧아지지도 않는다.
      */
     private long expiry(Instant now) {
-        return (now.getEpochSecond() / TTL_SEC + 2) * TTL_SEC;
+        return now.getEpochSecond() / WINDOW_SEC * WINDOW_SEC + TTL_SEC;
     }
 
     private String claims(String couponId, String memberId, long expiry) {

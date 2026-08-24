@@ -62,28 +62,30 @@ class QueueTokenTest {
         assertThat(token.verify(issued, "c2", 지금)).isEmpty();
     }
 
-    /**
-     * 만료 시각을 창에 맞춰 끊으므로 수명은 한 주기와 두 주기 사이다. 지금
-     * 시각을 그대로 담으면 초마다 다른 토큰이 나와 새로고침이 앞의 것을 죽인다.
-     */
+    /** 정한 것보다 오래 살면 유출된 토큰의 조회 권한도 그만큼 오래 간다. */
     @Test
-    @DisplayName("만료된_토큰을_거절한다")
-    void 만료된_토큰을_거절한다() {
-        String issued = token.issue("c1", "m1", 지금);
-
-        assertThat(token.verify(issued, "c1", 지금.plusSeconds(QueueToken.TTL_SEC - 1)))
-                .contains("m1");
-        assertThat(token.verify(issued, "c1", 지금.plusSeconds(QueueToken.TTL_SEC * 2 + 1)))
-                .isEmpty();
+    @DisplayName("정한_수명을_안_넘는다")
+    void 정한_수명을_안_넘는다() {
+        assertThat(token.verify(token.issue("c1", "m1", 지금), "c1",
+                지금.plusSeconds(QueueToken.TTL_SEC + 1))).isEmpty();
+        // 창 끝에서 받아도 마찬가지다.
+        Instant 창_끝 = 지금.plusSeconds(599);
+        assertThat(token.verify(token.issue("c1", "m1", 창_끝), "c1",
+                창_끝.plusSeconds(QueueToken.TTL_SEC + 1))).isEmpty();
     }
 
-    /** 창이 넘어가도 앞서 받은 토큰이 곧바로 죽으면 안 된다. */
+    /**
+     * 창 끝에 받은 사람의 토큰이 몇 초만 살면 안 된다. 대기가 그보다 길다.
+     */
     @Test
-    @DisplayName("창이_넘어가도_한_주기는_산다")
-    void 창이_넘어가도_한_주기는_산다() {
-        String issued = token.issue("c1", "m1", 지금);
+    @DisplayName("창_끝에_받아도_충분히_산다")
+    void 창_끝에_받아도_충분히_산다() {
+        Instant 창_끝 = 지금.plusSeconds(599);
 
-        assertThat(token.verify(issued, "c1", 지금.plusSeconds(QueueToken.TTL_SEC + 1)))
+        String issued = token.issue("c1", "m1", 창_끝);
+
+        // 최소 수명은 한 주기에서 창 하나를 뺀 값이다.
+        assertThat(token.verify(issued, "c1", 창_끝.plusSeconds(QueueToken.TTL_SEC - 600)))
                 .contains("m1");
     }
 

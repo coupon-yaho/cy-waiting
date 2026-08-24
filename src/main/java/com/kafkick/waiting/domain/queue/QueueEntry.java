@@ -16,8 +16,32 @@ import java.util.Objects;
 public record QueueEntry(QueueState state, long rank, long score,
         boolean alreadyQueued, boolean clockWentBack) {
 
+    /** 줄에 없다는 뜻. 0번째와 구분하려면 음수여야 한다. */
+    public static final long NONE = -1;
+
     public QueueEntry {
         Objects.requireNonNull(state, "state 는 필수다");
+        // **줄에 없는데 자리를 들고 있으면 안 된다.** 그 조합이 만들어지면
+        // 그것을 전제로 통과하는 시험이 생기고, 운영이 못 만드는 상태를 재게 된다.
+        boolean seatless = state == QueueState.NOT_QUEUED || state == QueueState.REJECTED;
+        if (seatless && (rank != NONE || score != NONE)) {
+            throw new IllegalArgumentException(
+                    "%s 는 자리가 없다: rank=%d score=%d".formatted(state, rank, score));
+        }
+        if (!seatless && (rank < 0 || score < 0)) {
+            throw new IllegalArgumentException(
+                    "%s 는 자리가 있다: rank=%d score=%d".formatted(state, rank, score));
+        }
+    }
+
+    /** 줄에 없다. 아직 안 섰거나 이탈로 지워졌다. */
+    public static QueueEntry notQueued() {
+        return new QueueEntry(QueueState.NOT_QUEUED, NONE, NONE, false, false);
+    }
+
+    /** 줄이 꽉 차 못 섰다. */
+    public static QueueEntry rejected() {
+        return new QueueEntry(QueueState.REJECTED, NONE, NONE, false, false);
     }
 
     /** 줄에 자리가 있는가. 거절은 상한에 걸린 것뿐이다. */

@@ -1,5 +1,6 @@
 package com.kafkick.waiting.gateway;
 
+import com.kafkick.waiting.domain.queue.QueueState;
 import java.nio.charset.StandardCharsets;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -44,16 +45,21 @@ public final class QueueResponse {
      * 폴링에 답한다. <b>차례가 왔는지만 말하고 토큰은 아직 안 준다</b> —
      * 입장 토큰은 다음 티켓이다.
      */
-    public Mono<Void> status(ServerWebExchange exchange, String state, long position,
+    public Mono<Void> status(ServerWebExchange exchange, QueueState state, long position,
             long etaSec, long pollAfterSec) {
+        // **전수로 적는다.** 빠뜨린 상태가 조용히 매진으로 나가면, 기다리던
+        // 사람에게 끝났다고 말하는 셈이다.
         String data = switch (state) {
-            case "WAITING" -> """
+            case WAITING -> """
                     {"status":"WAITING","position":%d,"etaSeconds":%d}"""
                     .formatted(position, etaSec);
-            case "ADMITTED" -> """
+            case ADMITTED -> """
                     {"status":"ADMITTED"}""";
-            default -> """
+            // 줄에 없다. 매진으로 지워졌거나 이탈로 빠졌다 — 어느 쪽이든 다시 서야 한다.
+            case NOT_QUEUED -> """
                     {"status":"CLOSED","reason":"STOCK_EXHAUSTED"}""";
+            // 조회로는 안 나온다. 등록 결과에만 있는 상태다.
+            case REJECTED -> throw new IllegalArgumentException("조회 결과가 아니다: " + state);
         };
         return write(exchange, HttpStatus.OK,
                 """

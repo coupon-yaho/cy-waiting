@@ -2,6 +2,7 @@ package com.kafkick.waiting.adapter.redis;
 
 import com.kafkick.waiting.control.ControlPlaneProperties;
 import com.kafkick.waiting.domain.queue.QueueEntry;
+import com.kafkick.waiting.domain.queue.RankEstimator;
 import com.kafkick.waiting.domain.queue.QueueState;
 import com.kafkick.waiting.gateway.QueuePort;
 import java.time.Instant;
@@ -122,15 +123,30 @@ public final class QueueRedisPort implements QueuePort {
     /** 등록 결과. {@code score} 가 {@code -1} 이면 상한에 걸린 것이다. */
     private QueueEntry toEntry(List<?> raw) {
         long score = number(raw.get(0));
-        boolean alreadyQueued = number(raw.get(2)) == 1;
-        QueueState state = score < 0 ? QueueState.REJECTED : QueueState.WAITING;
-        return new QueueEntry(state, number(raw.get(3)), score,
-                alreadyQueued, number(raw.get(1)) == 1);
+        if (score < 0) {
+            return QueueEntry.rejected();
+        }
+        return new QueueEntry(QueueState.WAITING, globalRank(number(raw.get(3))), score,
+                number(raw.get(2)) == 1, number(raw.get(1)) == 1);
     }
 
     private QueueEntry toStatus(List<?> raw) {
         QueueState state = QueueState.valueOf(String.valueOf(raw.get(0)));
-        return new QueueEntry(state, number(raw.get(1)), number(raw.get(2)), true, false);
+        if (state == QueueState.NOT_QUEUED) {
+            return QueueEntry.notQueued();
+        }
+        return new QueueEntry(state, globalRank(number(raw.get(1))),
+                number(raw.get(2)), true, false);
+    }
+
+    /**
+     * <b>샤드 안 등수를 그대로 내보내지 않는다.</b> 샤드가 넷이면 실제보다 네 배
+     * 작게 나가고, 사용자는 자기 앞이 실제보다 적다고 본다.
+     *
+     * <p>환산은 도메인이 한다. 샤드 수를 아는 것은 여기뿐이다.
+     */
+    private long globalRank(long localRank) {
+        return RankEstimator.globalRank(localRank, shards);
     }
 
     /**

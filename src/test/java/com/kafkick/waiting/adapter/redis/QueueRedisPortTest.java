@@ -224,6 +224,34 @@ class QueueRedisPortTest extends RedisContainerSupport {
     }
 
     /**
+     * 샤드 안 등수를 그대로 내보내면 샤드가 넷일 때 실제보다 네 배 작게 나간다.
+     * 사용자는 자기 앞이 실제보다 적다고 보고, 그만큼 기다림이 길게 느껴진다.
+     */
+    @Test
+    @DisplayName("순번은_샤드_안_등수가_아니라_전체_등수다")
+    void 순번은_샤드_안_등수가_아니라_전체_등수다() {
+        int 샤드수 = 8;
+        QueueRedisPort 쪼갠_것 = QueueRedisPort.of(redis, 샤드수);
+        String 앞사람 = "rank-a";
+        String 뒷사람 = "rank-b";
+        // 같은 샤드에 둘을 넣어야 등수가 1 이 된다.
+        while (ShardHash.shardOf(앞사람, 샤드수) != ShardHash.shardOf(뒷사람, 샤드수)) {
+            뒷사람 = 뒷사람 + "b";
+        }
+        int 샤드 = ShardHash.shardOf(앞사람, 샤드수);
+        redis.delete(RedisKeys.queue(COUPON, 샤드수, 샤드),
+                RedisKeys.maxScore(COUPON, 샤드수, 샤드),
+                RedisKeys.alive(COUPON, 샤드수, 샤드)).block(WAIT);
+
+        쪼갠_것.enqueue(COUPON, 앞사람, QueueRedisPort.NO_LIMIT, 지금).block(WAIT);
+        QueueEntry 뒤 = 쪼갠_것.enqueue(COUPON, 뒷사람, QueueRedisPort.NO_LIMIT, 지금).block(WAIT);
+
+        // 샤드 안 등수는 1 이지만 여덟으로 쪼갰으니 앞에 여덟 명이 있다고 본다.
+        assertThat(뒤.rank()).isEqualTo(8);
+        assertThat(쪼갠_것.status(COUPON, 뒷사람, 지금).block(WAIT).rank()).isEqualTo(8);
+    }
+
+    /**
      * 같은 사람이 동시에 여러 번 눌러도 자리는 하나다. 둘이 생기면 순번이
      * 갈리고, 뒤엣것이 앞엣것을 밀어낸다.
      */

@@ -319,7 +319,11 @@ class AdmissionGatewayFilterTest {
         // 쓰고 있어도 이 시험이 통과한다.
         한산한_쿠폰_여럿을_심는다(50);
         for (int i = 0; i < 1_000; i++) {
-            태운다("한산한쿠폰" + i % 50);
+            // **통과했는지 본다.** 안 보면 예산이 절반만 차도 마지막 단언이 통과한다.
+            assertThat(태운다("한산한쿠폰" + i % 50)
+                    .<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                    .as("%d 번째", i)
+                    .isEqualTo(AdmissionDecision.PASS_UNDER_CAP);
         }
         스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
         뒷단에_닿음.set(false);

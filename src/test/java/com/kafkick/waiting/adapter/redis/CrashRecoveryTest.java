@@ -167,7 +167,8 @@ class CrashRecoveryTest {
             StatefulRedisConnection<String, String> redis, String member, long nowSec) {
         return (List<Object>) redis.sync().eval(LuaScripts.of("enqueue.lua"), ScriptOutputType.MULTI,
                 new String[] {QUEUE, MAX_SCORE, ALIVE},
-                member, "86400", "30", "0", String.valueOf(nowSec));
+                // 상한 없음. 0 은 이 뜻이 아니다 — 0 은 한 명도 안 받는다는 뜻이다.
+                member, "86400", "30", "-1", String.valueOf(nowSec));
     }
 
     @SuppressWarnings("unchecked")

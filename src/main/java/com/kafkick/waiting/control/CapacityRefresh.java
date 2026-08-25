@@ -95,13 +95,20 @@ public final class CapacityRefresh {
                         recovered.elapsedSeconds(), recovered.swallowed(), value));
     }
 
+    /** 리더십이 갈렸다. <b>감쇠 창을 닫는다</b> — 안 닫으면 다음 감쇠가 안 남는다. */
+    public void leadershipChanged() {
+        decaying.exited().ifPresent(recovered ->
+                log.info("리더십이 갈렸다 — 감쇠 창을 닫는다. 그동안 {}판 깎았다",
+                        recovered.swallowed()));
+    }
+
     /**
      * <b>0건과 못 읽은 것은 다르다.</b> 빈 목록을 넘기면 하한으로 떨어져 전면
      * 억제가 되는데, 그건 관측이 아니라 왕복 실패다.
      */
     private void failed(Throwable e) {
         long before = collector.lastKnown();
-        collector.observationFailed();
+        collector.observationFailed(nodes.getAsInt());
         long after = collector.lastKnown();
         // **게이지가 배분값을 따라가야 한다.** 성공 판에서만 갱신하면 감쇠가 도는
         // 동안 지표는 장애 직전 값에 얼어 있고, 배분은 그와 다른 값으로 돈다 —

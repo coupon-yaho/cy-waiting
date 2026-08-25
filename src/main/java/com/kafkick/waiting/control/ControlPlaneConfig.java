@@ -117,7 +117,12 @@ public class ControlPlaneConfig {
                 properties.scheduler().firstTickDelay(),
                 // **승계는 유예를 처음부터 준다.** 비리더 구간에 얼어 있던 실패
                 // 횟수를 이어 쓰면 재승계 첫 판이 곧바로 크레딧을 깎는다.
-                LeadershipEdge.of(leadership::isLeader, collector::leadershipAcquired),
+                LeadershipEdge.of(leadership::isLeader,
+                        () -> {
+                            collector.leadershipAcquired();
+                            capacity.leadershipChanged();
+                        },
+                        capacity::leadershipChanged),
                 () -> capacity.refresh().then(round.run()),
                 nanos -> { }, allocationScheduler);
     }

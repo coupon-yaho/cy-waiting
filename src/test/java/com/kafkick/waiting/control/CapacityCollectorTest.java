@@ -198,7 +198,7 @@ class CapacityCollectorTest {
         long warmed = warm(collector, "a", 300);
         collector.collect(List.of(report("a", 300, warmed)), warmed, 1);
 
-        collector.observationFailed();
+        collector.observationFailed(1);
 
         assertThat(collector.lastKnown()).isEqualTo(300);
     }
@@ -531,11 +531,11 @@ class CapacityCollectorTest {
 
         // 유예 안에서는 그대로다. 한 판 실패했다고 조이면 순단마다 흔들린다.
         for (int i = 0; i < CapacityCollector.HOLD_ROUNDS; i++) {
-            collector.observationFailed();
+            collector.observationFailed(1);
         }
         assertThat(collector.lastKnown()).isEqualTo(관측);
 
-        collector.observationFailed();
+        collector.observationFailed(1);
 
         assertThat(collector.lastKnown()).isEqualTo(관측 / 2);
     }
@@ -553,7 +553,7 @@ class CapacityCollectorTest {
         collector.collect(List.of(report("a", 10_000, NOW)), NOW, 4);
 
         for (int i = 0; i < 100; i++) {
-            collector.observationFailed();
+            collector.observationFailed(4);
         }
 
         // 설정 하한은 10 이지만 노드가 넷이면 20 이 있어야 노드당 몫이 5 다.
@@ -572,7 +572,7 @@ class CapacityCollectorTest {
         assertThat(collector.collect(List.of(report("a", 0, NOW)), NOW, 1)).isZero();
 
         for (int i = 0; i < 100; i++) {
-            collector.observationFailed();
+            collector.observationFailed(1);
         }
 
         assertThat(collector.lastKnown()).isZero();
@@ -587,17 +587,35 @@ class CapacityCollectorTest {
     void 리더를_다시_잡으면_유예가_처음부터다() {
         CapacityCollector collector = collector();
         long 관측 = collector.collect(List.of(report("a", 10_000, NOW)), NOW, 1);
-        for (int i = 0; i < 100; i++) {
-            collector.observationFailed();
+        // **성공 판을 사이에 두지 않는다.** 성공이 카운터를 되돌리므로, 그러면
+        // 승계 알림을 지워도 이 시험이 통과한다.
+        for (int i = 0; i < CapacityCollector.HOLD_ROUNDS; i++) {
+            collector.observationFailed(1);
         }
 
         collector.leadershipAcquired();
-        collector.collect(List.of(report("a", 10_000, NOW + 1)), NOW + 1, 1);
         for (int i = 0; i < CapacityCollector.HOLD_ROUNDS; i++) {
-            collector.observationFailed();
+            collector.observationFailed(1);
         }
 
         assertThat(collector.lastKnown()).isEqualTo(관측);
+    }
+
+    /**
+     * 못 읽는 동안 노드가 늘 수 있다. 옛 바닥으로 멎으면 그만큼 낮아 노드당 몫이
+     * 다시 유휴 비율 아래로 내려간다 — 감쇠가 그 자리를 만든다.
+     */
+    @Test
+    @DisplayName("못_읽는_동안_노드가_늘면_바닥도_는다")
+    void 못_읽는_동안_노드가_늘면_바닥도_는다() {
+        CapacityCollector collector = collector();
+        collector.collect(List.of(report("a", 10_000, NOW)), NOW, 1);
+
+        for (int i = 0; i < 100; i++) {
+            collector.observationFailed(10);
+        }
+
+        assertThat(collector.lastKnown()).isEqualTo(10L * CapacityCollector.IDLE_DIVISOR);
     }
 
     /** 한 판이라도 성공하면 유예가 다시 찬다. 안 그러면 순단이 쌓여 조여진다. */
@@ -607,12 +625,12 @@ class CapacityCollectorTest {
         CapacityCollector collector = collector();
         long 관측 = collector.collect(List.of(report("a", 10_000, NOW)), NOW, 1);
         for (int i = 0; i < CapacityCollector.HOLD_ROUNDS + 1; i++) {
-            collector.observationFailed();
+            collector.observationFailed(1);
         }
 
         long 다시 = collector.collect(List.of(report("a", 10_000, NOW + 1)), NOW + 1, 1);
         for (int i = 0; i < CapacityCollector.HOLD_ROUNDS; i++) {
-            collector.observationFailed();
+            collector.observationFailed(1);
         }
 
         assertThat(관측).isEqualTo(다시);

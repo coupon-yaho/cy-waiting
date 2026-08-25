@@ -48,8 +48,8 @@ public final class CapacityCollector {
     /**
      * 못 읽어도 직전 값을 그대로 쓰는 판의 수.
      *
-     * <p><b>R-2 의 "3회 연속 누락" 과 다른 값이다.</b> 저건 뒷단 하나가 살아
-     * 있는가를 벽시계로 보고, 이건 우리가 전체를 볼 수 있는가를 판으로 센다.
+     * <p><b>R-2 의 "3회 연속 누락" 과 다른 값이다</b> — 저건 뒷단 하나를 벽시계로,
+     * 이건 우리 시야를 판으로 센다.
      */
     public static final int HOLD_ROUNDS = 3;
 
@@ -64,12 +64,7 @@ public final class CapacityCollector {
     /** 연속으로 못 읽은 판의 수. 한 판이라도 성공하면 다시 0 이다. */
     private final AtomicLong failedRounds = new AtomicLong();
 
-    /**
-     * 마지막 판의 바닥값. 감쇠가 이 아래로 안 내려간다.
-     *
-     * <p>노드 수를 반영한 값이라 걷을 때와 같다. 감쇠만 설정값을 보면 노드가
-     * 늘었을 때 한산 통과가 전 노드에서 막힌다.
-     */
+    /** 마지막 판의 바닥값. 걷을 때 쓴 것과 같아야 한다. */
     private final AtomicLong lastMinimum;
 
     /**
@@ -134,11 +129,12 @@ public final class CapacityCollector {
     /**
      * 이번 읽기가 실패했다. <b>유예 안에서는 직전 값을 지킨다.</b>
      *
-     * <p>0건과 못 읽은 것은 다르다 — 레디스가 안 되면 전 노드가 같이 실패하는데
-     * 여기서 하한으로 떨구면 전면 억제다. <b>다만 무기한은 아니다.</b> 길어지면
-     * 그건 관측이 아니라 추측이고, 분자는 유지가 과다 방향이다.
+     * <p>0건과 못 읽은 것은 다르다. <b>다만 무기한은 아니다</b> — 길어지면 그건
+     * 관측이 아니라 추측이고, 분자는 유지가 과다 방향이다.
+     *
+     * @param nodes 지금 살아 있는 게이트웨이 수. 바닥이 이 값을 받쳐야 한다
      */
-    public void observationFailed() {
+    public void observationFailed(int nodes) {
         if (failedRounds.incrementAndGet() <= HOLD_ROUNDS) {
             return;
         }
@@ -150,7 +146,9 @@ public final class CapacityCollector {
         //
         // **0 은 안 올린다.** 뒷단이 스스로 "여유 0" 이라고 말한 뒤라면 그건
         // 관측이고, 거기에 바닥을 얹으면 죽었다고 말한 뒷단에 다시 밀어넣는다.
-        long bottom = lastMinimum.get();
+        // **지금 노드 수로 다시 잰다.** 못 읽는 동안 노드가 늘면 옛 바닥은
+        // 그만큼 낮다 — 노드 하나로 걷은 뒤 열로 늘면 바닥이 열에 멎는다.
+        long bottom = Math.max(lastMinimum.get(), (long) Math.max(1, nodes) * IDLE_DIVISOR);
         lastKnown.updateAndGet(known -> known == 0 ? 0 : Math.max(bottom, known / 2));
     }
 

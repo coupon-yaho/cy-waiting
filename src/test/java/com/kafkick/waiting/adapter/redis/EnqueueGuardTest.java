@@ -153,7 +153,9 @@ class EnqueueGuardTest extends RedisContainerSupport {
 
         List<Object> 신규 = enqueue("m3", "30", "2");
 
-        assertThat(신규.get(0).toString()).isNotEqualTo("-1");
+        // **반환만 보면 안 된다.** score 만 돌려주고 ZSET 에 안 넣어도 통과한다.
+        assertThat(redis.opsForZSet().score(QUEUE, "m3").block(WAIT))
+                .isEqualTo(Double.valueOf(신규.get(0).toString()));
     }
 
     @Test

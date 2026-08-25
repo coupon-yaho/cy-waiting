@@ -53,8 +53,8 @@ public final class QueueResponse {
             case WAITING -> """
                     {"status":"WAITING","position":%d,"etaSeconds":%d}"""
                     .formatted(position, etaSec);
-            case ADMITTED -> """
-                    {"status":"ADMITTED"}""";
+            // 입장은 토큰을 실어야 하므로 여기로 안 온다.
+            case ADMITTED -> throw new IllegalArgumentException("입장은 따로 쓴다: " + state);
             // 줄에 없다. 매진으로 지워졌거나 이탈로 빠졌다 — 어느 쪽이든 다시 서야 한다.
             case NOT_QUEUED -> """
                     {"status":"CLOSED","reason":"STOCK_EXHAUSTED"}""";
@@ -64,6 +64,17 @@ public final class QueueResponse {
         return write(exchange, HttpStatus.OK,
                 """
                 {"success":true,"data":%s}""".formatted(data), pollAfterSec);
+    }
+
+    /**
+     * 차례가 왔다고 알린다. <b>토큰을 여기서 준다</b> — 폴링해 온 사람에게 그
+     * 자리에서 주면 안 돌아온 사람 몫이 안 버려진다.
+     */
+    public Mono<Void> admitted(ServerWebExchange exchange, String entryToken, long expiresIn) {
+        return write(exchange, HttpStatus.OK, """
+                {"success":true,"data":{"status":"ADMITTED",\
+                "entryToken":"%s","expiresIn":%d}}"""
+                .formatted(entryToken, expiresIn), 0);
     }
 
     private Mono<Void> write(ServerWebExchange exchange, HttpStatus status, String body,

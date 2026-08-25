@@ -8,6 +8,7 @@ import com.kafkick.waiting.domain.admission.EnqueueLatch;
 import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
+import com.kafkick.waiting.domain.queue.EntryToken;
 import com.kafkick.waiting.domain.queue.EtaPolicy;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import com.kafkick.waiting.domain.queue.QueueToken;
@@ -57,6 +58,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
 
     private static final String MEMBER_ID = "X-Member-Id";
 
+    /** 발급 계층 명세가 정한 이름. 조회가 준 토큰을 여기 실어 온다. */
+    private static final String ENTRY_TOKEN = "Entry-Token";
+
     /**
      * 장애 개방이 노드 예산에서 가져다 쓰는 비율.
      *
@@ -81,6 +85,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     private final DoubleSupplier random;
     private final QueuePort queue;
     private final QueueToken tokens;
+    private final EntryToken entryTokens;
     private final SecondWindowLimiter limiter;
     private final EnqueueLatch latch;
     private final ApiError error;
@@ -91,7 +96,8 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
 
     private AdmissionGatewayFilter(SnapshotHolder holder, AdmissionDecider decider,
             Clock clock, MeterRegistry meters, DoubleSupplier random,
-            QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter) {
+            QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter,
+            EntryToken entryTokens) {
         this.holder = Objects.requireNonNull(holder, "holder 는 필수다");
         this.decider = Objects.requireNonNull(decider, "decider 는 필수다");
         this.clock = Objects.requireNonNull(clock, "clock 은 필수다");
@@ -99,6 +105,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         this.random = Objects.requireNonNull(random, "random 은 필수다");
         this.queue = Objects.requireNonNull(queue, "queue 는 필수다");
         this.tokens = Objects.requireNonNull(tokens, "tokens 는 필수다");
+        this.entryTokens = Objects.requireNonNull(entryTokens, "entryTokens 는 필수다");
         this.limiter = Objects.requireNonNull(limiter, "limiter 는 필수다");
 
         this.latch = EnqueueLatch.of(LATCH_MAX_KEYS, LATCH_TTL_SEC);
@@ -109,23 +116,26 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     @Autowired
     AdmissionGatewayFilter(SnapshotHolder holder, AdmissionDecider decider, Clock clock,
             MeterRegistry meters, QueuePort queue, QueueToken tokens,
-            SecondWindowLimiter limiter) {
+            SecondWindowLimiter limiter, EntryToken entryTokens) {
         this(holder, decider, clock, meters,
-                () -> ThreadLocalRandom.current().nextDouble(), queue, tokens, limiter);
+                () -> ThreadLocalRandom.current().nextDouble(), queue, tokens, limiter,
+                entryTokens);
     }
 
     public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider,
             Clock clock, MeterRegistry meters, QueuePort queue, QueueToken tokens,
-            SecondWindowLimiter limiter) {
-        return new AdmissionGatewayFilter(holder, decider, clock, meters, queue, tokens, limiter);
+            SecondWindowLimiter limiter, EntryToken entryTokens) {
+        return new AdmissionGatewayFilter(holder, decider, clock, meters, queue, tokens, limiter,
+                entryTokens);
     }
 
     /** 난수원을 받는다. 고정하지 못하면 흔들림이 실제로 붙었는지 못 잰다 (TS-4). */
     public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider,
             Clock clock, MeterRegistry meters, DoubleSupplier random,
-            QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter) {
+            QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter,
+            EntryToken entryTokens) {
         return new AdmissionGatewayFilter(holder, decider, clock, meters, random, queue,
-                tokens, limiter);
+                tokens, limiter, entryTokens);
     }
 
     /**
@@ -170,7 +180,10 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                 couponId, state, view.snapshot().meta(),
                 // **방금 줄로 보낸 쿠폰인가.** 스냅샷은 한 틱 늦어 아직 한산하다고
                 // 말한다 — 그대로 두면 다음 창의 신규 유입이 방금 선 사람을 넘는다.
-                holder.isDataStale(view), false, latch.latched(couponId, nowSec),
+                // **차례가 온 증거를 들고 왔는가.** 없으면 줄과 무관하게 통과해
+                // 기다린 사람과 안 기다린 사람이 같아진다.
+                holder.isDataStale(view), hasEntryToken(exchange, couponId), 
+                latch.latched(couponId, nowSec),
                 nowSec, MAX_ETA_SEC));
         exchange.getAttributes().put(DECISION, decision);
         count(decision.name());
@@ -313,6 +326,20 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                  ENQUEUE_RATE_COUPON, ENQUEUE_RATE_GLOBAL, ENQUEUE_KEY_SATURATED ->
                     throw new IllegalArgumentException("거절이 아니다: " + decision);
         };
+    }
+
+    /**
+     * <b>사유를 나누지 않는다.</b> 없는 토큰과 만료된 토큰을 갈라 주면 어느 쪽을
+     * 고쳐야 하는지 알려 주는 셈이다.
+     */
+    private boolean hasEntryToken(ServerWebExchange exchange, String couponId) {
+        String presented = exchange.getRequest().getHeaders().getFirst(ENTRY_TOKEN);
+        String memberId = exchange.getRequest().getHeaders().getFirst(MEMBER_ID);
+        // **토큰이 가리키는 사람과 같아야 한다.** 안 보면 남의 토큰을 주워 와도
+        // 통하고, 발급은 주워 온 사람 앞으로 나간다.
+        return entryTokens.verify(presented, couponId, clock.instant())
+                .filter(owner -> owner.equals(memberId))
+                .isPresent();
     }
 
     private String pathVariable(ServerWebExchange exchange) {

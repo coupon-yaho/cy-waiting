@@ -11,6 +11,7 @@ import com.kafkick.waiting.domain.coupon.CouponStates;
 import com.kafkick.waiting.domain.admission.AdmissionDecider;
 import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
+import com.kafkick.waiting.domain.queue.EntryToken;
 import com.kafkick.waiting.domain.queue.QueueState;
 import com.kafkick.waiting.domain.queue.QueueToken;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -48,8 +49,10 @@ class QueueStatusFilterTest {
 
     private final SecondWindowLimiter limiter = SecondWindowLimiter.withMaxKeys(10);
 
+    private final EntryToken entryTokens = EntryToken.of("not-a-real-secret-0123456789abcdef");
+
     private final QueueStatusFilter filter = QueueStatusFilter.of(
-            holder, 줄, tokens, Clock.fixed(지금, ZoneOffset.UTC), meters, () -> 0.5, limiter);
+            holder, 줄, tokens, Clock.fixed(지금, ZoneOffset.UTC), meters, () -> 0.5, limiter, entryTokens);
 
     private void 스냅샷을_심는다(CouponState state) {
         holder.replace(new GatewaySnapshot(Map.of(COUPON, state), new SnapshotMeta(1, 1), 지금));
@@ -132,16 +135,42 @@ class QueueStatusFilterTest {
     }
 
     @Test
-    @DisplayName("차례가_오면_그렇게_말한다")
-    void 차례가_오면_그렇게_말한다() {
+    @DisplayName("차례가_오면_입장_토큰을_준다")
+    void 차례가_오면_입장_토큰을_준다() {
+        // **여기서 발급한다.** 배분 때 미리 만들면 안 돌아온 사람 몫이 버려지고,
+        // 그만큼 뒷사람이 늦게 들어간다.
         스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100));
         줄.enqueue(COUPON, MEMBER, NO_LIMIT, 지금).block();
         줄.차례가_왔다();
 
         MockServerWebExchange exchange = 토큰으로_조회한다(tokens.issue(COUPON, MEMBER, 지금));
+        String 본문 = exchange.getResponse().getBodyAsString().block();
 
-        assertThat(exchange.getResponse().getBodyAsString().block())
-                .contains("\"status\":\"ADMITTED\"");
+        assertThat(본문)
+                .contains("\"status\":\"ADMITTED\"")
+                .contains("\"expiresIn\":180");
+        assertThat(entryTokens.verify(입장_토큰(본문), COUPON, 지금)).contains(MEMBER);
+    }
+
+    /** 기다린 사람 것이어야 한다. 남의 토큰으로 통하면 줄이 무의미해진다. */
+    @Test
+    @DisplayName("입장_토큰은_그_사람_것이다")
+    void 입장_토큰은_그_사람_것이다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100));
+        줄.enqueue(COUPON, MEMBER, NO_LIMIT, 지금).block();
+        줄.차례가_왔다();
+
+        String 받은_것 = 입장_토큰(토큰으로_조회한다(tokens.issue(COUPON, MEMBER, 지금))
+                .getResponse().getBodyAsString().block());
+
+        assertThat(entryTokens.verify(받은_것, "다른쿠폰", 지금)).isEmpty();
+        assertThat(entryTokens.verify(받은_것, COUPON, 지금.plusSeconds(EntryToken.TTL_SEC + 1)))
+                .isEmpty();
+    }
+
+    private String 입장_토큰(String 본문) {
+        int from = 본문.indexOf("\"entryToken\":\"") + "\"entryToken\":\"".length();
+        return 본문.substring(from, 본문.indexOf('"', from));
     }
 
     @Test

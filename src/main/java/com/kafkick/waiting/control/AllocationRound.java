@@ -224,15 +224,19 @@ public final class AllocationRound {
     private CouponState stateOf(CouponDemand demand, Map<String, Long> granted) {
         if (demand.stock() <= 0) {
             return demand.waiting() > 0
-                    ? CouponState.closed(demand.waiting())
-                    : CouponState.idle(0);
+                    ? CouponState.closed(demand.mode(), demand.waiting())
+                    : CouponState.noQueue(demand.mode(), 0);
         }
+        // **운영자가 정한 모드를 그대로 싣는다.** 여기서 바꿔 실으면 그 설정이
+        // 한 틱을 못 넘긴다 — 판정 사다리에 분기가 있어도 발행자가 그 입력을
+        // 못 만들면 없는 것과 같다.
         if (demand.waiting() <= 0) {
-            return CouponState.idle(demand.stock());
+            return CouponState.noQueue(demand.mode(), demand.stock());
         }
         // 적용이 실패한 쿠폰은 임계가 안 올라갔다. 의도한 몫을 그대로 실으면
         // 노드들이 일어나지 않은 배수율로 대기 시간을 계산한다.
-        return CouponState.offWithQueue(granted.getOrDefault(demand.couponId(), 0L),
+        return CouponState.withQueue(demand.mode(),
+                granted.getOrDefault(demand.couponId(), 0L),
                 demand.stock(), demand.waiting());
     }
 

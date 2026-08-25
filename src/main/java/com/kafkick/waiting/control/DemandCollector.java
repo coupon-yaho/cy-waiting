@@ -1,6 +1,7 @@
 package com.kafkick.waiting.control;
 
 import com.kafkick.waiting.domain.allocation.CouponDemand;
+import com.kafkick.waiting.domain.coupon.QueueMode;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -21,20 +22,24 @@ public final class DemandCollector {
     private final Supplier<Mono<List<String>>> activeCoupons;
     private final Function<List<String>, Mono<Map<String, Long>>> queueSizes;
     private final Function<List<String>, Mono<Map<String, Long>>> stocks;
+    private final Function<List<String>, Mono<Map<String, QueueMode>>> queueModes;
 
     private DemandCollector(Supplier<Mono<List<String>>> activeCoupons,
             Function<List<String>, Mono<Map<String, Long>>> queueSizes,
-            Function<List<String>, Mono<Map<String, Long>>> stocks) {
+            Function<List<String>, Mono<Map<String, Long>>> stocks,
+            Function<List<String>, Mono<Map<String, QueueMode>>> queueModes) {
         this.activeCoupons = Objects.requireNonNull(activeCoupons, "activeCoupons 는 필수다");
         this.queueSizes = Objects.requireNonNull(queueSizes, "queueSizes 는 필수다");
         this.stocks = Objects.requireNonNull(stocks, "stocks 는 필수다");
+        this.queueModes = Objects.requireNonNull(queueModes, "queueModes 는 필수다");
     }
 
     /** 샤드는 여기서 안 본다 — 합산은 명령을 내는 쪽이 한다. */
     public static DemandCollector of(Supplier<Mono<List<String>>> activeCoupons,
             Function<List<String>, Mono<Map<String, Long>>> queueSizes,
-            Function<List<String>, Mono<Map<String, Long>>> stocks) {
-        return new DemandCollector(activeCoupons, queueSizes, stocks);
+            Function<List<String>, Mono<Map<String, Long>>> stocks,
+            Function<List<String>, Mono<Map<String, QueueMode>>> queueModes) {
+        return new DemandCollector(activeCoupons, queueSizes, stocks, queueModes);
     }
 
     public Mono<List<CouponDemand>> collect() {
@@ -44,8 +49,8 @@ public final class DemandCollector {
             if (coupons.isEmpty()) {
                 return Mono.just(List.<CouponDemand>of());
             }
-            return Mono.zip(queueSizes.apply(coupons), stocks.apply(coupons))
-                    .map(both -> assemble(coupons, both.getT1(), both.getT2()));
+            return Mono.zip(queueSizes.apply(coupons), stocks.apply(coupons), queueModes.apply(coupons))
+                    .map(all -> assemble(coupons, all.getT1(), all.getT2(), all.getT3()));
         });
     }
 
@@ -55,14 +60,17 @@ public final class DemandCollector {
      * 신호도 없다. 재고는 없을 수 있지만 대기 수는 언제나 온다.
      */
     private List<CouponDemand> assemble(List<String> coupons, Map<String, Long> sizes,
-            Map<String, Long> stockValues) {
+            Map<String, Long> stockValues, Map<String, QueueMode> modes) {
         if (!sizes.keySet().containsAll(coupons)) {
             throw new IllegalStateException("대기 응답에 빠진 쿠폰이 있다: 기대=%d 실제=%d"
                     .formatted(coupons.size(), sizes.size()));
         }
         List<CouponDemand> demands = new ArrayList<>(coupons.size());
+        // **정책이 없는 쿠폰은 적응형이다.** 여기만은 빠진 자리를 채워도 된다 —
+        // 안 걸었다는 것이 곧 기본값이지, 못 읽은 것이 아니다.
         coupons.forEach(couponId -> demands.add(new CouponDemand(couponId,
-                orZero(sizes.get(couponId)), orZero(stockValues.get(couponId)))));
+                orZero(sizes.get(couponId)), orZero(stockValues.get(couponId)),
+                modes.getOrDefault(couponId, QueueMode.ADAPTIVE))));
         return demands;
     }
 

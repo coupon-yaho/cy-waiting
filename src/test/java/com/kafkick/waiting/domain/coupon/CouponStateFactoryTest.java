@@ -117,4 +117,59 @@ class CouponStateFactoryTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("offWithQueue");
     }
+
+    /**
+     * <b>모드를 인자로 받는 팩토리가 필요한 이유.</b> 줄이 있다고 모드를 바꿔
+     * 실으면 운영자 설정이 한 틱을 못 넘긴다 — 항상 대기 쿠폰이 적응형으로
+     * 돌아가고, 꺼 둔 쿠폰의 우회도 조용히 멈춘다.
+     */
+    @Test
+    @DisplayName("withQueue_는_받은_모드를_그대로_싣는다")
+    void withQueue_는_받은_모드를_그대로_싣는다() {
+        assertThat(CouponState.withQueue(QueueMode.ALWAYS, 10, 500, 100).mode())
+                .isEqualTo(QueueMode.ALWAYS);
+        assertThat(CouponState.withQueue(QueueMode.OFF, 10, 500, 100).mode())
+                .isEqualTo(QueueMode.OFF);
+        assertThat(CouponState.withQueue(QueueMode.ADAPTIVE, 10, 500, 100).mode())
+                .isEqualTo(QueueMode.ADAPTIVE);
+    }
+
+    /** 런타임 경계는 {@code offWithQueue} 와 같은 자리다. 갈리면 정상 전이가 막힌다. */
+    @Test
+    @DisplayName("withQueue_의_경계는_offWithQueue_와_같다")
+    void withQueue_의_경계는_offWithQueue_와_같다() {
+        assertThat(CouponState.withQueue(QueueMode.ADAPTIVE, 100, 500, 100).runtime())
+                .isEqualTo(RuntimeState.DRAINING);
+        assertThat(CouponState.withQueue(QueueMode.ADAPTIVE, 99, 500, 100).runtime())
+                .isEqualTo(RuntimeState.QUEUEING);
+    }
+
+    @Test
+    @DisplayName("withQueue_는_빈_줄을_거부한다")
+    void withQueue_는_빈_줄을_거부한다() {
+        // 줄이 비었으면 IDLE 이고, IDLE 에 credit 이 실리면 I1 이 막는다.
+        assertThatThrownBy(() -> CouponState.withQueue(QueueMode.ADAPTIVE, 10, 500, 0))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("withQueue_는_빈_재고를_거부한다")
+    void withQueue_는_빈_재고를_거부한다() {
+        // 재고가 없는데 줄이 남았으면 매진이다. 여기서 만들면 아무것도 못 받을
+        // 줄에 사람을 계속 세우는 상태가 되고, 발행 경로에는 그 길이 없다.
+        assertThatThrownBy(() -> CouponState.withQueue(QueueMode.ADAPTIVE, 10, 0, 100))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("closed");
+    }
+
+    @Test
+    @DisplayName("noQueue_는_받은_모드로_IDLE을_만든다")
+    void noQueue_는_받은_모드로_IDLE을_만든다() {
+        CouponState s = CouponState.noQueue(QueueMode.OFF, 500);
+
+        assertThat(s.mode()).isEqualTo(QueueMode.OFF);
+        assertThat(s.runtime()).isEqualTo(RuntimeState.IDLE);
+        assertThat(s.credit()).isZero();
+        assertThat(s.waiting()).isZero();
+    }
 }

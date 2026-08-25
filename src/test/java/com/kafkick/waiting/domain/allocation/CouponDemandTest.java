@@ -3,6 +3,7 @@ package com.kafkick.waiting.domain.allocation;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.kafkick.waiting.domain.coupon.QueueMode;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -62,5 +63,20 @@ class CouponDemandTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new CouponDemand("  ", 10, 10))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("모드가_없으면_안_만들어진다")
+    void 모드가_없으면_안_만들어진다() {
+        // 정책을 못 읽은 것과 안 건 것은 다르다. 없는 것을 값으로 받으면
+        // 발행이 무엇을 실을지 모르게 된다.
+        assertThatThrownBy(() -> new CouponDemand("c1", 1, 1, null))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("모드를_안_주면_적응형이다")
+    void 모드를_안_주면_적응형이다() {
+        assertThat(new CouponDemand("c1", 1, 1).mode()).isEqualTo(QueueMode.ADAPTIVE);
     }
 }

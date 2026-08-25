@@ -64,12 +64,17 @@ class CapacityCollectorTest {
         // **자기 상태를 가장 잘 아는 쪽이 먼저 램프를 건다.** 그래도 게이트웨이가
         // 한 겹 더 건다 — 상대 구현이 늦어도 보호가 남아야 한다.
         CapacityCollector collector = collector();
-        collector.collect(List.of(report("cold", 200, NOW)), NOW, 1);
+        // **첫 판은 이미 돌던 무리다.** 승계 직후를 콜드로 보면 크레딧이 0 이 된다.
+        // 진짜 새 인스턴스는 그 뒤에 나타난 쪽이다.
+        collector.collect(List.of(report("warm", 100, NOW)), NOW, 1);
+        collector.collect(List.of(report("warm", 100, NOW), report("cold", 200, NOW)), NOW, 1);
 
-        long credit = collector.collect(List.of(report("cold", 200, NOW + 15)), NOW + 15, 1);
+        long credit = collector.collect(
+                List.of(report("warm", 100, NOW + 15), report("cold", 200, NOW + 15)),
+                NOW + 15, 1);
 
-        // 60초 중 15초 지났으므로 4분의 1이다.
-        assertThat(credit).isEqualTo(50);
+        // 이미 돌던 100 은 온전히, 콜드 200 은 60초 중 15초라 4분의 1이다.
+        assertThat(credit).isEqualTo(150);
     }
 
     @Test
@@ -79,8 +84,11 @@ class CapacityCollectorTest {
         // 관측됐다는 것이 곧 처음 본 시각이 있다는 뜻이라, 그 상태는 운영에
         // 존재할 수 없는데 시험만 만들 수 있게 된다.
         CapacityCollector collector = collector();
+        // 첫 판은 이미 돌던 무리로 본다. 진짜 새것은 그 뒤에 나타난 쪽이다.
+        collector.collect(List.of(report("warm", 0, NOW)), NOW, 1);
 
-        long first = collector.collect(List.of(report("new", 600, NOW)), NOW, 1);
+        long first = collector.collect(
+                List.of(report("warm", 0, NOW), report("new", 600, NOW)), NOW, 1);
 
         // 방금 처음 봤으므로 경과 0 이다. 콜드 인스턴스는 아직 못 받는다 —
         // 하한을 얹지 않는다. 하한은 "아무도 안 보고했을 때" 만이다.
@@ -224,6 +232,7 @@ class CapacityCollectorTest {
         // 전역 크레딧이 하한으로 떨어진다.
         CapacityCollector collector = CapacityCollector.of(
                 RAMP_UP, FRESHNESS, FLOOR, Long.MAX_VALUE);
+        collector.collect(List.of(report("seed", 0, NOW)), NOW, 1);
         collector.collect(List.of(report("huge", Long.MAX_VALUE, NOW)), NOW, 1);
 
         long credit = collector.collect(
@@ -295,6 +304,8 @@ class CapacityCollectorTest {
         CapacityCollector collector = CapacityCollector.of(
                 window, FRESHNESS, FLOOR, Long.MAX_VALUE);
         long half = window.toSeconds() / 2;
+        // 첫 판은 웜으로 잡히므로 램프를 재려면 그 뒤에 나타나야 한다.
+        collector.collect(List.of(report("seed", 0, NOW)), NOW, 1);
         for (long t = NOW; t <= NOW + half; t += FRESHNESS.toSeconds()) {
             collector.collect(List.of(report("a", Long.MAX_VALUE, t)), t, 1);
         }

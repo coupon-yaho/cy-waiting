@@ -1,6 +1,7 @@
 package com.kafkick.waiting.adapter.redis;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Duration;
 import java.util.List;
@@ -58,19 +59,27 @@ class GraceRecordTest extends RedisContainerSupport {
                 .blockFirst(WAIT);
     }
 
-    @SuppressWarnings("unchecked")
     private List<Object> 조회한다(String memberId, long now) {
-        return (List<Object>) redis.execute(statusScript,
-                        List.of(QUEUE, ADMITTED, ALIVE, GRACE),
-                        List.of(memberId, "30", String.valueOf(now)))
-                .blockFirst(WAIT);
+        return 조회한다(memberId, String.valueOf(now));
     }
 
     @SuppressWarnings("unchecked")
+    private List<Object> 조회한다(String memberId, String now) {
+        return (List<Object>) redis.execute(statusScript,
+                        List.of(QUEUE, ADMITTED, ALIVE, GRACE),
+                        List.of(memberId, "30", now))
+                .blockFirst(WAIT);
+    }
+
     private List<Object> 청소한다(long now) {
+        return 청소한다(String.valueOf(now));
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Object> 청소한다(String now) {
         return (List<Object>) redis.execute(sweepScript,
                         List.of(QUEUE, GRACE, ALIVE),
-                        List.of("100", String.valueOf(now), RETENTION, "1000", "0"))
+                        List.of("100", now, RETENTION, "1000", "0"))
                 .blockFirst(WAIT);
     }
 
@@ -90,6 +99,51 @@ class GraceRecordTest extends RedisContainerSupport {
         청소한다(NOW + 1);
 
         assertThat(조회한다("m1", NOW + 2).get(0)).isEqualTo("ADMITTED");
+    }
+
+    /**
+     * <b>배포 창에서 두 형식이 섞인다.</b> 게이트웨이가 여러 대라 옛 인스턴스가
+     * 남긴 표시를 새 인스턴스가 읽는 구간이 반드시 생긴다. 그때 못 알아보면
+     * 차례를 받은 사람이 종료를 받고, 다시 서면 그 사이 온 사람들 뒤로 간다.
+     */
+    @Test
+    @DisplayName("옛_형식의_입장_표시도_알아본다")
+    void 옛_형식의_입장_표시도_알아본다() {
+        등록한다("m1");
+        redis.opsForValue().set(ADMITTED, "9999999999999999").block(WAIT);
+        조회한다("m1", NOW);
+        // 옛 인스턴스가 남긴 모양으로 되돌린다.
+        redis.opsForHash().put(GRACE, "m1", "admitted").block(WAIT);
+
+        assertThat(조회한다("m1", NOW + 1).get(0)).isEqualTo("ADMITTED");
+    }
+
+    /** 청소도 마찬가지다. 못 알아보면 보관 기간을 기다리지 않고 첫 판에 지운다. */
+    @Test
+    @DisplayName("옛_형식의_입장_표시를_바로_안_지운다")
+    void 옛_형식의_입장_표시를_바로_안_지운다() {
+        등록한다("m1");
+        redis.opsForValue().set(ADMITTED, "9999999999999999").block(WAIT);
+        조회한다("m1", NOW);
+        redis.opsForHash().put(GRACE, "m1", "admitted").block(WAIT);
+
+        청소한다(NOW + 1);
+
+        assertThat(redis.opsForHash().hasKey(GRACE, "m1").block(WAIT)).isTrue();
+    }
+
+    /**
+     * <b>시각이 nan 이나 무한이면 그 항목이 불멸이 된다.</b> 비교가 늘 거짓이라
+     * 보관 기간이 아무리 지나도 안 걷힌다. 값으로 굳는 자리라 첫 쓰기 앞에서 막는다.
+     */
+    @Test
+    @DisplayName("시각이_유한하지_않으면_거부한다")
+    void 시각이_유한하지_않으면_거부한다() {
+        등록한다("m1");
+
+        assertThatThrownBy(() -> 청소한다("nan")).hasMessageContaining("시각");
+        assertThatThrownBy(() -> 청소한다("1e400")).hasMessageContaining("시각");
+        assertThatThrownBy(() -> 조회한다("m1", "nan")).hasMessageContaining("시각");
     }
 
     /**

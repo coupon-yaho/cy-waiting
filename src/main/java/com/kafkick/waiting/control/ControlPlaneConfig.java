@@ -111,9 +111,13 @@ public class ControlPlaneConfig {
     /** 배분 틱. <b>재료를 먼저 읽고 배분한다</b> — 안 읽으면 크레딧이 첫 하한에 머문다. */
     @Bean
     AllocationScheduler allocationLoop(ControlPlaneProperties properties, Leadership leadership,
-            AllocationRound round, CapacityRefresh capacity, Scheduler allocationScheduler) {
+            AllocationRound round, CapacityRefresh capacity, CapacityCollector collector,
+            Scheduler allocationScheduler) {
         return AllocationScheduler.of(properties.scheduler().tick(),
-                properties.scheduler().firstTickDelay(), leadership::isLeader,
+                properties.scheduler().firstTickDelay(),
+                // **승계는 유예를 처음부터 준다.** 비리더 구간에 얼어 있던 실패
+                // 횟수를 이어 쓰면 재승계 첫 판이 곧바로 크레딧을 깎는다.
+                LeadershipEdge.of(leadership::isLeader, collector::leadershipAcquired),
                 () -> capacity.refresh().then(round.run()),
                 nanos -> { }, allocationScheduler);
     }

@@ -48,8 +48,8 @@ public final class CapacityCollector {
     /**
      * 못 읽어도 직전 값을 그대로 쓰는 판의 수.
      *
-     * <p>R-2 가 정한 "3회 연속 누락이면 없는 것으로 본다" 와 같은 자리다. 한 판
-     * 실패했다고 조이면 순단마다 유입이 흔들리고, 안 조이면 뒷단이 죽어도 계속 민다.
+     * <p><b>R-2 의 "3회 연속 누락" 과 다른 값이다.</b> 저건 뒷단 하나가 살아
+     * 있는가를 벽시계로 보고, 이건 우리가 전체를 볼 수 있는가를 판으로 센다.
      */
     public static final int HOLD_ROUNDS = 3;
 
@@ -63,6 +63,14 @@ public final class CapacityCollector {
 
     /** 연속으로 못 읽은 판의 수. 한 판이라도 성공하면 다시 0 이다. */
     private final AtomicLong failedRounds = new AtomicLong();
+
+    /**
+     * 마지막 판의 바닥값. 감쇠가 이 아래로 안 내려간다.
+     *
+     * <p>노드 수를 반영한 값이라 걷을 때와 같다. 감쇠만 설정값을 보면 노드가
+     * 늘었을 때 한산 통과가 전 노드에서 막힌다.
+     */
+    private final AtomicLong lastMinimum;
 
     /**
      * 마지막 판에서 실제로 <b>하한이 답이 된</b> 값. 하한이 안 걸린 판에서는 0 이다.
@@ -87,6 +95,7 @@ public final class CapacityCollector {
         this.floor = floor;
         this.perInstanceCap = perInstanceCap;
         this.lastKnown = new AtomicLong(floor);
+        this.lastMinimum = new AtomicLong(floor);
     }
 
     /**
@@ -133,12 +142,29 @@ public final class CapacityCollector {
         if (failedRounds.incrementAndGet() <= HOLD_ROUNDS) {
             return;
         }
-        // **절벽이 아니라 비탈로 내려간다.** 유예가 끝나는 순간 하한으로 떨구면
+        // **절벽이 아니라 비탈로 내려간다.** 유예가 끝나는 순간 바닥으로 떨구면
         // 그 한 틱에 유입이 몇 배로 조여져 회복 구간이 더 나빠진다.
-        lastKnown.updateAndGet(known -> Math.max(floor, known / 2));
+        //
+        // **바닥은 걷을 때와 같은 값이다.** 설정값만 보면 노드가 그보다 늘었을 때
+        // 노드당 몫이 유휴 비율 아래로 내려가 한산 통과가 전 노드에서 막힌다.
+        //
+        // **0 은 안 올린다.** 뒷단이 스스로 "여유 0" 이라고 말한 뒤라면 그건
+        // 관측이고, 거기에 바닥을 얹으면 죽었다고 말한 뒷단에 다시 밀어넣는다.
+        long bottom = lastMinimum.get();
+        lastKnown.updateAndGet(known -> known == 0 ? 0 : Math.max(bottom, known / 2));
     }
 
-    /** 못 읽은 값이 마지막으로 성공한 관측의 결과. */
+    /** 리더가 됐다. <b>유예를 처음부터 준다</b> — 비리더 구간의 실패는 남의 판이다. */
+    public void leadershipAcquired() {
+        failedRounds.set(0);
+    }
+
+    /**
+     * 지금 배분이 쓰는 값.
+     *
+     * <p><b>관측치가 아닐 수 있다.</b> 못 읽는 판이 이어지면 감쇠한 값이다 —
+     * 호출부가 관측이라고 믿고 쓰면 그 차이를 못 본다.
+     */
     public long lastKnown() {
         return lastKnown.get();
     }
@@ -197,6 +223,7 @@ public final class CapacityCollector {
         // **하한은 살아 있는 분모에 맞춘다.** 설정값으로만 재면 노드가 그보다
         // 늘었을 때 노드당 몫이 다시 0 이 된다 — 하한을 둔 이유가 사라진다.
         long minimum = Math.max(floor, (long) Math.max(1, nodes) * IDLE_DIVISOR);
+        lastMinimum.set(minimum);
         // **하한은 부족분을 우리가 만들었을 때만이다.** 램프가 깎아 하한 아래로
         // 내려갔으면 되돌린다 — 안 되돌리면 노드당 몫이 유휴 비율 아래로 내려가
         // 한산 통과 상한이 0 이 되고, 그 쿠폰이 전 노드에서 막힌다 (R1).

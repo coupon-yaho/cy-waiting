@@ -4,6 +4,10 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.IntSupplier;
 import java.util.function.Supplier;
 import org.slf4j.Logger;
@@ -29,10 +33,13 @@ public final class CapacityRefresh {
     /** 타임아웃 타이머와 수집이 함께 도는 곳. 배분과 같은 스레드다. */
     private final Scheduler worker;
     private final FailureWindow failures = FailureWindow.create();
+    private final Counter readFailed;
+    private final AtomicLong credit = new AtomicLong();
+    private final AtomicInteger observed = new AtomicInteger();
 
     private CapacityRefresh(Supplier<Mono<List<CapacityReport>>> reports,
             CapacityCollector collector, Supplier<Instant> clock, IntSupplier nodes,
-            Duration budget, Scheduler worker) {
+            Duration budget, Scheduler worker, MeterRegistry meters) {
         if (budget == null || budget.isZero() || budget.isNegative()) {
             throw new IllegalArgumentException("budget 은 양수여야 한다: %s".formatted(budget));
         }
@@ -42,12 +49,18 @@ public final class CapacityRefresh {
         this.nodes = Objects.requireNonNull(nodes, "nodes 는 필수다");
         this.budget = budget;
         this.worker = Objects.requireNonNull(worker, "worker 는 필수다");
+        Objects.requireNonNull(meters, "meters 는 필수다");
+        // **게이지로 둔다.** 판정의 분자와 분모라 지금 값이 궁금하지 누적이 아니다.
+        meters.gauge("waiting.capacity.credit", credit, AtomicLong::get);
+        meters.gauge("waiting.capacity.nodes", observed, AtomicInteger::get);
+        // 못 읽은 판은 누적이 맞다 — 구간의 길이를 이 값으로 잰다.
+        this.readFailed = meters.counter("waiting.capacity.read.failed");
     }
 
     public static CapacityRefresh of(Supplier<Mono<List<CapacityReport>>> reports,
             CapacityCollector collector, Supplier<Instant> clock, IntSupplier nodes,
-            Duration budget, Scheduler worker) {
-        return new CapacityRefresh(reports, collector, clock, nodes, budget, worker);
+            Duration budget, Scheduler worker, MeterRegistry meters) {
+        return new CapacityRefresh(reports, collector, clock, nodes, budget, worker, meters);
     }
 
     /**
@@ -69,7 +82,9 @@ public final class CapacityRefresh {
     }
 
     private void collected(List<CapacityReport> read) {
-        collector.collect(read, clock.get().getEpochSecond(), nodes.getAsInt());
+        int seen = nodes.getAsInt();
+        credit.set(collector.collect(read, clock.get().getEpochSecond(), seen));
+        observed.set(seen);
         failures.exited().ifPresent(recovered ->
                 log.info("가용량을 다시 읽는다 — {}초 만에, 그동안 {}판 걸렀다",
                         recovered.elapsedSeconds(), recovered.swallowed()));
@@ -81,6 +96,7 @@ public final class CapacityRefresh {
      */
     private void failed(Throwable e) {
         collector.observationFailed();
+        readFailed.increment();
         if (failures.entered()) {
             log.warn("가용량을 못 읽는다 — 직전 값으로 배분한다: {}", e.toString());
         }

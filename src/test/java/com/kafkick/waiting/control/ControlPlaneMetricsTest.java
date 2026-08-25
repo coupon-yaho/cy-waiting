@@ -37,7 +37,10 @@ class ControlPlaneMetricsTest {
 
         refresh.refresh().block();
 
-        assertThat(meters.get("waiting.capacity.credit").gauge().value()).isEqualTo(300);
+        // **수집기가 낸 값을 그대로 비춘다.** 숫자를 따로 적으면 램프 규칙이 바뀔 때
+        // 지표가 아니라 시험이 틀린 것이 된다.
+        assertThat(meters.get("waiting.capacity.credit").gauge().value())
+                .isEqualTo(collector.lastKnown());
         assertThat(meters.get("waiting.capacity.nodes").gauge().value()).isEqualTo(3);
     }
 

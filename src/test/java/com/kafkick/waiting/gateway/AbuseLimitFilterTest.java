@@ -235,6 +235,40 @@ class AbuseLimitFilterTest {
         }
     }
 
+    /** 열어 주면 그 상태를 만드는 것이 곧 우회 통로가 된다. */
+    @Test
+    @DisplayName("주소를_못_읽으면_막는다")
+    void 주소를_못_읽으면_막는다() {
+        MockServerWebExchange 주소_없음 = MockServerWebExchange.from(
+                MockServerHttpRequest.method(HttpMethod.POST, ISSUE).header("X-Member-Id", "1"));
+        filter.filter(주소_없음, e -> {
+            다음으로_감.incrementAndGet();
+            return Mono.empty();
+        }).block();
+
+        assertThat(주소_없음.getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        assertThat(다음으로_감).hasValue(0);
+    }
+
+    /** 빈 값을 프록시 주소로 바꾸면, 빈 값을 보내는 것만으로 남을 막을 수 있다. */
+    @Test
+    @DisplayName("빈_전달_값은_막는다")
+    void 빈_전달_값은_막는다() {
+        MockServerWebExchange 빈_값 = MockServerWebExchange.from(
+                MockServerHttpRequest.method(HttpMethod.POST, ISSUE)
+                        .remoteAddress(new InetSocketAddress("127.0.0.1", 12345))
+                        .header("X-Member-Id", "1")
+                        .header("X-Forwarded-For", ""));
+        filter.filter(빈_값, e -> {
+            다음으로_감.incrementAndGet();
+            return Mono.empty();
+        }).block();
+
+        assertThat(빈_값.getResponse().getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        assertThat(다음으로_감).hasValue(0);
+    }
+
     @Test
     @DisplayName("남의_경로는_그대로_흘려보낸다")
     void 남의_경로는_그대로_흘려보낸다() {

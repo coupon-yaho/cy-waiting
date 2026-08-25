@@ -50,20 +50,16 @@ public final class AbuseLimitFilter implements WebFilter {
     private static final long MEMBER_ISSUE_CAP = 5;
 
     /**
-     * 주소당 상한. <b>사람당 상한보다 훨씬 크다</b> — NAT 뒤에서는 수백 명이
-     * 한 주소를 쓰고, 좁게 잡으면 그들이 통째로 막힌다.
-     *
-     * <p>여기서 잡는 것은 한 대가 두드리는 것이다. 식별자를 바꿔가며 우회해도
-     * 이 상한이 그 기계의 처리량을 묶는다.
+     * 주소당 상한. <b>사람당보다 훨씬 크다</b> — NAT 뒤에서는 수백 명이 한 주소를
+     * 쓰고, 좁게 잡으면 그들이 통째로 막힌다. 여기서 잡는 것은 한 대의 처리량이다.
      */
     private static final long IP_ISSUE_CAP = 200;
 
     /**
      * 폴링 경로의 상한.
      *
-     * <p><b>발급보다 느슨하다.</b> 게이트웨이가 1초 간격으로 물으라고 해 놓고 그
-     * 폴링을 남용으로 막으면 정상 대기자가 끊긴다. 가장 짧은 밴드가 1초이고
-     * 탭이 여럿일 수 있으니 그 열 배를 준다.
+     * <p><b>발급보다 느슨하다.</b> 1초 간격으로 물으라고 해 놓고 그 폴링을 막으면
+     * 정상 대기자가 끊긴다. 탭이 여럿일 수 있으니 그 열 배를 준다.
      */
     private static final long MEMBER_POLL_CAP = 10;
 
@@ -119,9 +115,17 @@ public final class AbuseLimitFilter implements WebFilter {
         // 으로는 우회되고, 주소는 여럿이 나눠 쓰므로 좁게 잡으면 남을 막는다.
         String member = exchange.getRequest().getHeaders().getFirst(MEMBER_ID);
         String ip = clientIp(exchange);
-        if (member == null || ip == null) {
-            // 하나라도 없으면 가를 수단이 없다. 형식 검증이 앞에서 걸렀어야 한다.
-            return chain.filter(exchange);
+        if (ip == null) {
+            // **주소를 못 읽으면 막는다.** 열어 주면 그 상태를 만드는 것이 곧
+            // 우회 통로가 된다 — 상한 없는 경로를 남기는 셈이다.
+            return reject(exchange, "no-address");
+        }
+        if (member == null) {
+            // 형식 검증이 앞에서 걸렀어야 한다. 주소 상한만으로 간다.
+            return limiter.tryAcquire("abuse:i:" + ip,
+                    polling ? IP_POLL_CAP : IP_ISSUE_CAP, nowSec)
+                    ? chain.filter(exchange)
+                    : reject(exchange, "ip");
         }
         // **한 걸음에 둘 다 잡는다.** 따로 차감하면 뒤에서 거부됐을 때 앞의 몫이
         // 이미 깎여, 통과한 요청이 하나도 없는데 예산이 빈다.
@@ -162,8 +166,9 @@ public final class AbuseLimitFilter implements WebFilter {
         }
         String last = forwarded.get(forwarded.size() - 1);
         String candidate = last.substring(last.lastIndexOf(',') + 1).trim();
-        // 빈 값이면 모두가 한 키를 나눠 쓰게 된다. 그건 상한이 없는 것과 같다.
-        return candidate.isEmpty() ? socket : candidate;
+        // **빈 값은 프록시 주소로 안 바꾼다.** 그러면 그 뒤의 모두가 프록시 몫을
+        // 나눠 쓰고, 빈 값을 보내는 것만으로 남을 막을 수 있다.
+        return candidate.isEmpty() ? null : candidate;
     }
 
     /** 미해결 주소는 {@code getAddress()} 가 비어 있다. 그대로 부르면 터진다. */

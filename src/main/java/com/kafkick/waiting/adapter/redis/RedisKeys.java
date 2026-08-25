@@ -32,7 +32,7 @@ public final class RedisKeys {
      * <p><b>판을 키에 담는다.</b> 측정 방식을 바꿀 때 옛 보고가 섞이면 배분이
      * 두 기준을 합산한다 — 그건 어느 쪽도 아닌 값이다 (4.4.7).
      */
-    public static final String CAPACITY = "coupon:capacity:v1";
+    public static final String CAPACITY = "capacity:coupon-svc:v1";
 
     /** 해시태그를 깨뜨리는 문자. 클라이언트 입력이 키에 들어가는 경로를 막는다. */
     // '#' 은 스냅샷 해시의 전역값 접두사다. 쿠폰 ID 에 들어가면 그 쿠폰이

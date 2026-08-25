@@ -25,6 +25,9 @@ class RedisKeysTest {
         assertThat(RedisKeys.TUNABLES).isEqualTo("gw:tunables");
         assertThat(RedisKeys.ACTIVE_COUPONS).isEqualTo("coupons:active");
         assertThat(RedisKeys.COUPON_POLICY).isEqualTo("coupon:policy");
+        // **저장소 경계를 넘는 키다.** 뒷단이 쓰고 우리가 읽는다 — 갈리면 읽는 것이
+        // 없어 전역 크레딧이 영영 하한에 머문다. 규범은 plan/90-decisions.md 다.
+        assertThat(RedisKeys.CAPACITY).isEqualTo("capacity:coupon-svc:v1");
     }
 
     @Test

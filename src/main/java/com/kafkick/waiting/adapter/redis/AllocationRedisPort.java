@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.slf4j.Logger;
@@ -89,6 +90,18 @@ public final class AllocationRedisPort implements SnapshotSource {
 
     public static AllocationRedisPort of(ReactiveStringRedisTemplate redis, int shards) {
         return new AllocationRedisPort(redis, shards);
+    }
+
+    /**
+     * 레디스 서버의 지금 시각(초).
+     *
+     * <p><b>신선도를 게이트웨이 시계로 재지 않는다.</b> 리더는 옮겨 다니므로,
+     * 자기 시계로 재면 같은 보고가 리더에 따라 신선하기도 낡기도 한다. 하트비트도
+     * 이 시계로 잰다 (A-9 와 같은 이유).
+     */
+    public Mono<Long> serverTime() {
+        return redis.execute(conn -> conn.serverCommands().time(TimeUnit.SECONDS))
+                .single();
     }
 
     /**

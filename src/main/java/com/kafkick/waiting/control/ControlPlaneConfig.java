@@ -104,7 +104,7 @@ public class ControlPlaneConfig {
     CapacityRefresh capacityRefresh(AllocationRedisPort port, CapacityCollector capacity,
             GatewayRegistry registry, ControlPlaneProperties properties,
             Scheduler allocationScheduler, MeterRegistry meters) {
-        return CapacityRefresh.of(port::capacityReports, capacity, Instant::now, registry::count,
+        return CapacityRefresh.of(port::capacityReports, capacity, port::serverTime, registry::count,
                 properties.scheduler().tick().dividedBy(4), allocationScheduler, meters);
     }
 

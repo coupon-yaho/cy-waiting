@@ -27,7 +27,7 @@ public final class CapacityRefresh {
 
     private final Supplier<Mono<List<CapacityReport>>> reports;
     private final CapacityCollector collector;
-    private final Supplier<Instant> clock;
+    private final Supplier<Mono<Long>> clock;
     private final IntSupplier nodes;
     private final Duration budget;
     /** 타임아웃 타이머와 수집이 함께 도는 곳. 배분과 같은 스레드다. */
@@ -38,7 +38,7 @@ public final class CapacityRefresh {
     private final AtomicInteger observed = new AtomicInteger();
 
     private CapacityRefresh(Supplier<Mono<List<CapacityReport>>> reports,
-            CapacityCollector collector, Supplier<Instant> clock, IntSupplier nodes,
+            CapacityCollector collector, Supplier<Mono<Long>> clock, IntSupplier nodes,
             Duration budget, Scheduler worker, MeterRegistry meters) {
         if (budget == null || budget.isZero() || budget.isNegative()) {
             throw new IllegalArgumentException("budget 은 양수여야 한다: %s".formatted(budget));
@@ -58,7 +58,7 @@ public final class CapacityRefresh {
     }
 
     public static CapacityRefresh of(Supplier<Mono<List<CapacityReport>>> reports,
-            CapacityCollector collector, Supplier<Instant> clock, IntSupplier nodes,
+            CapacityCollector collector, Supplier<Mono<Long>> clock, IntSupplier nodes,
             Duration budget, Scheduler worker, MeterRegistry meters) {
         return new CapacityRefresh(reports, collector, clock, nodes, budget, worker, meters);
     }
@@ -68,22 +68,24 @@ public final class CapacityRefresh {
      * 아니다. 직전 값으로 돈다.
      */
     public Mono<Void> refresh() {
-        return Mono.defer(reports)
+        // **읽기와 시각을 한 예산 안에서 같이 받는다.** 시각을 따로 받으면 그
+        // 왕복이 예산 밖이라, 느릴 때 관측과 기준 시각이 서로 다른 순간의 것이 된다.
+        return Mono.zip(Mono.defer(reports), Mono.defer(clock))
                 // **타이머도 배분 스케줄러다.** 기본 스케줄러를 쓰면 제어 평면의
                 // 시간과 분리되고, 시험이 가상 시간으로 재지 못한다.
                 .timeout(budget, worker)
                 // **수집을 레디스 이벤트 루프에서 돌리지 않는다.** 램프 기록은
                 // 동기화 없는 맵이고, 재연결로 루프가 갈리면 두 스레드가 만진다.
                 .publishOn(worker)
-                .doOnNext(this::collected)
+                .doOnNext(both -> collected(both.getT1(), both.getT2()))
                 .doOnError(this::failed)
                 .onErrorResume(e -> Mono.empty())
                 .then();
     }
 
-    private void collected(List<CapacityReport> read) {
+    private void collected(List<CapacityReport> read, long now) {
         int seen = nodes.getAsInt();
-        credit.set(collector.collect(read, clock.get().getEpochSecond(), seen));
+        credit.set(collector.collect(read, now, seen));
         observed.set(seen);
         failures.exited().ifPresent(recovered ->
                 log.info("가용량을 다시 읽는다 — {}초 만에, 그동안 {}판 걸렀다",

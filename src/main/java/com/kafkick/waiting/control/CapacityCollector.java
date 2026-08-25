@@ -202,8 +202,14 @@ public final class CapacityCollector {
     private boolean isFresh(CapacityReport report, long now) {
         // **TTL 만 믿지 않는다.** TTL 은 지우는 시점이지 신선한 시점이 아니다 —
         // 죽은 인스턴스의 마지막 보고가 TTL 동안 계속 세어진다.
-        long age = now - report.reportedAt();
-        return age >= 0 && age <= freshness.toSeconds();
+        //
+        // **앞선 것도 받는다.** 나이는 두 벽시계의 차라, 뒷단이 조금 앞서면
+        // 음수가 된다. 그것을 낡음으로 보면 전 인스턴스가 한꺼번에 사라진다 —
+        // 뒷단은 같은 NTP 를 보므로 어긋나면 다 같이 어긋난다. 다만 창보다 멀리
+        // 앞선 값은 시계가 아니라 보고가 깨진 것이라, 받으면 죽은 인스턴스가
+        // 영영 신선해진다.
+        long age = Math.abs(now - report.reportedAt());
+        return age <= freshness.toSeconds();
     }
 
     /**

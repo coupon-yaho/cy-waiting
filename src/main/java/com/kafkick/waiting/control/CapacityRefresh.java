@@ -1,7 +1,6 @@
 package com.kafkick.waiting.control;
 
 import java.time.Duration;
-import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
 import io.micrometer.core.instrument.Counter;
@@ -33,6 +32,7 @@ public final class CapacityRefresh {
     /** 타임아웃 타이머와 수집이 함께 도는 곳. 배분과 같은 스레드다. */
     private final Scheduler worker;
     private final FailureWindow failures = FailureWindow.create();
+    private final FailureWindow pinned = FailureWindow.create();
     private final Counter readFailed;
     private final AtomicLong credit = new AtomicLong();
     private final AtomicInteger observed = new AtomicInteger();
@@ -70,7 +70,11 @@ public final class CapacityRefresh {
     public Mono<Void> refresh() {
         // **읽기와 시각을 한 예산 안에서 같이 받는다.** 시각을 따로 받으면 그
         // 왕복이 예산 밖이라, 느릴 때 관측과 기준 시각이 서로 다른 순간의 것이 된다.
-        return Mono.zip(Mono.defer(reports), Mono.defer(clock))
+        return Mono.zip(
+                        // **어느 쪽이 터졌는지 남긴다.** 뭉치면 새벽에 이 경보를
+                        // 받은 사람이 멀쩡한 해시를 열어 보고 막힌다.
+                        Mono.defer(reports).onErrorMap(e -> tagged("보고", e)),
+                        Mono.defer(clock).onErrorMap(e -> tagged("시각", e)))
                 // **타이머도 배분 스케줄러다.** 기본 스케줄러를 쓰면 제어 평면의
                 // 시간과 분리되고, 시험이 가상 시간으로 재지 못한다.
                 .timeout(budget, worker)
@@ -85,8 +89,21 @@ public final class CapacityRefresh {
 
     private void collected(List<CapacityReport> read, long now) {
         int seen = nodes.getAsInt();
-        credit.set(collector.collect(read, now, seen));
+        long value = collector.collect(read, now, seen);
+        credit.set(value);
         observed.set(seen);
+        // **하한에 박힌 것은 모드 전환이다.** 진입도 해제도 안 남기면, 크레딧이
+        // 하한에 고정돼 한산 통과가 사실상 막힌 것을 사람이 게이지를 보고
+        // 있어야만 안다 (LG-2).
+        if (collector.lastFloor() > 0) {
+            if (pinned.entered()) {
+                log.warn("신선한 가용량 보고가 없다 — 크레딧을 하한 {}로 묶는다", value);
+            }
+        } else {
+            pinned.exited().ifPresent(recovered ->
+                    log.info("가용량 보고가 다시 온다 — {}초 만에, 그동안 {}판 하한이었다",
+                            recovered.elapsedSeconds(), recovered.swallowed()));
+        }
         failures.exited().ifPresent(recovered ->
                 log.info("가용량을 다시 읽는다 — {}초 만에, 그동안 {}판 걸렀다",
                         recovered.elapsedSeconds(), recovered.swallowed()));
@@ -102,5 +119,10 @@ public final class CapacityRefresh {
         if (failures.entered()) {
             log.warn("가용량을 못 읽는다 — 직전 값으로 배분한다: {}", e.toString());
         }
+    }
+
+    /** 원인을 예외 메시지에 실어 둔다. {@code Mono.zip} 은 어느 쪽인지 안 알려 준다. */
+    private Throwable tagged(String what, Throwable cause) {
+        return new IllegalStateException(what + " 읽기 실패", cause);
     }
 }

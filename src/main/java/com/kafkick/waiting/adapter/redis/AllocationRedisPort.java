@@ -66,6 +66,8 @@ public final class AllocationRedisPort implements SnapshotSource {
     private final FailureWindow rejected = FailureWindow.create();
     private final FailureWindow malformed = FailureWindow.create();
     private final FailureWindow badPolicy = FailureWindow.create();
+    /** 신선도의 기준 시각. 뒤로 가는 것을 여기서 막는다 (A-9). */
+    private final ServerClock serverClock = ServerClock.create();
 
     /** 마지막으로 성공한 정책 판. 읽기가 실패하면 여기로 되돌아간다. */
     private final AtomicReference<Map<String, QueueMode>> lastModes =
@@ -101,7 +103,13 @@ public final class AllocationRedisPort implements SnapshotSource {
      */
     public Mono<Long> serverTime() {
         return redis.execute(conn -> conn.serverCommands().time(TimeUnit.SECONDS))
-                .single();
+                .single()
+                .map(serverClock::observe);
+    }
+
+    /** 시계가 뒤로 간 사실을 남긴다. 조용히 보정하면 왜 그랬는지를 영영 못 밝힌다. */
+    public ClockSkewTracker clockSkew() {
+        return serverClock.skew();
     }
 
     /**

@@ -46,12 +46,23 @@ public final class CapacityCollector {
     public static final int IDLE_DIVISOR = 5;
 
     /**
+     * 못 읽어도 직전 값을 그대로 쓰는 판의 수.
+     *
+     * <p>R-2 가 정한 "3회 연속 누락이면 없는 것으로 본다" 와 같은 자리다. 한 판
+     * 실패했다고 조이면 순단마다 유입이 흔들리고, 안 조이면 뒷단이 죽어도 계속 민다.
+     */
+    public static final int HOLD_ROUNDS = 3;
+
+    /**
      * 아직 한 판도 안 걷었다. <b>승계와 신규 기동을 못 가른다</b> — 보고에
      * 기동 시각이 실리면 그때 이 추정을 버린다 (A-13).
      */
     private boolean firstRound = true;
 
     private final AtomicLong lastKnown;
+
+    /** 연속으로 못 읽은 판의 수. 한 판이라도 성공하면 다시 0 이다. */
+    private final AtomicLong failedRounds = new AtomicLong();
 
     /**
      * 마지막 판에서 실제로 <b>하한이 답이 된</b> 값. 하한이 안 걸린 판에서는 0 이다.
@@ -112,16 +123,22 @@ public final class CapacityCollector {
 
 
     /**
-     * 이번 읽기가 실패했다. <b>직전 값을 지킨다.</b>
+     * 이번 읽기가 실패했다. <b>유예 안에서는 직전 값을 지킨다.</b>
      *
-     * <p>보고가 0건인 것과 읽지 못한 것은 다르다. 레디스가 안 되면 모든 노드가
-     * 같이 실패하는데 여기서 하한으로 떨어뜨리면 전면 억제가 된다.
+     * <p>0건과 못 읽은 것은 다르다 — 레디스가 안 되면 전 노드가 같이 실패하는데
+     * 여기서 하한으로 떨구면 전면 억제다. <b>다만 무기한은 아니다.</b> 길어지면
+     * 그건 관측이 아니라 추측이고, 분자는 유지가 과다 방향이다.
      */
     public void observationFailed() {
-        // 아무것도 안 한다 — lastKnown 이 그대로 답이 된다.
+        if (failedRounds.incrementAndGet() <= HOLD_ROUNDS) {
+            return;
+        }
+        // **절벽이 아니라 비탈로 내려간다.** 유예가 끝나는 순간 하한으로 떨구면
+        // 그 한 틱에 유입이 몇 배로 조여져 회복 구간이 더 나빠진다.
+        lastKnown.updateAndGet(known -> Math.max(floor, known / 2));
     }
 
-    /** 마지막으로 성공한 관측의 결과. */
+    /** 못 읽은 값이 마지막으로 성공한 관측의 결과. */
     public long lastKnown() {
         return lastKnown.get();
     }
@@ -191,6 +208,9 @@ public final class CapacityCollector {
         long credit = fresh == 0 || rampMadeIt ? minimum : total;
         lastFloor.set(fresh == 0 || rampMadeIt ? minimum : 0);
         lastKnown.set(credit);
+        // 한 판이라도 성공하면 유예가 다시 찬다. 안 그러면 드문 순단이 쌓여
+        // 멀쩡한 구간에서도 조여진다.
+        failedRounds.set(0);
         return credit;
     }
 

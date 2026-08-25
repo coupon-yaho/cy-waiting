@@ -153,6 +153,11 @@ public class AdmissionDecider {
      * 사람을 더 세우느니 거절이 낫다. 폴백은 줄이 아직 없는 구간만을 위한 것이다.
      */
     public static long queueCapacity(CouponState state, SnapshotMeta meta, long maxEtaSec) {
+        // **원 함수의 가드를 뒤집지 않는다.** 받아 줄 시간이 없으면 상한도 없다.
+        // 이걸 안 걸면 아래 폴백이 그 0 을 "모른다" 로 읽고 하한 1 을 돌려준다.
+        if (maxEtaSec <= 0) {
+            return 0;
+        }
         // **배수 속도를 모르는 것과 자리가 없는 것은 다르다.** 한산하던 쿠폰에
         // 사람이 몰리기 시작하면 그 순간 credit 은 0 이다 — 배분은 줄이 있어야
         // 나가고 줄은 게이트웨이가 만든다. 여기서 0 을 상한으로 쓰면 줄이 한 번도

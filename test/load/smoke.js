@@ -6,9 +6,12 @@ import http from 'k6/http';
 import { check, sleep } from 'k6';
 import { Counter } from 'k6/metrics';
 
-// **의도한 400 을 실패로 세지 않는다.** 그대로 두면 실패율이 33% 로 나와서,
-// 진짜 실패가 났을 때 그 숫자가 아무 신호도 못 준다.
-http.setResponseCallback(http.expectedStatuses(200, 400));
+// **의도한 응답을 실패로 세지 않는다.** 그대로 두면 실패율이 진짜 실패가 났을 때
+// 아무 신호도 못 준다.
+//
+// 202 는 줄에 섰다는 뜻이다. 판정이 실제로 돌면 유휴 몫을 넘긴 요청은 큐로 가므로
+// 정상 결과다 — 판정을 우회하던 동안에는 이 응답이 아예 안 나왔다.
+http.setResponseCallback(http.expectedStatuses(200, 202, 400));
 
 const BASE = __ENV.BASE_URL || 'http://localhost:18080';
 

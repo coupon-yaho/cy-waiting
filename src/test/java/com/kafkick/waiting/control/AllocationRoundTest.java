@@ -181,18 +181,16 @@ class AllocationRoundTest {
     @Test
     @DisplayName("운영자가_정한_모드가_한_판을_넘긴다")
     void 운영자가_정한_모드가_한_판을_넘긴다() {
-        AllocationRound round = 판(List.of(
+        AllocationRound round = round(List.of(
                 new CouponDemand("always", 0, 10_000, QueueMode.ALWAYS),
                 new CouponDemand("off", 0, 10_000, QueueMode.OFF),
-                new CouponDemand("adaptive", 0, 10_000, QueueMode.ADAPTIVE)));
+                new CouponDemand("adaptive", 0, 10_000, QueueMode.ADAPTIVE)), 10_000, 1);
 
         round.run().block();
 
-        Map<String, CouponState> 실린_것 =
-                SnapshotCodec.create().decode(발행.get("last")).coupons();
-        assertThat(실린_것.get("always").mode()).isEqualTo(QueueMode.ALWAYS);
-        assertThat(실린_것.get("off").mode()).isEqualTo(QueueMode.OFF);
-        assertThat(실린_것.get("adaptive").mode()).isEqualTo(QueueMode.ADAPTIVE);
+        assertThat(발행된("always").mode()).isEqualTo(QueueMode.ALWAYS);
+        assertThat(발행된("off").mode()).isEqualTo(QueueMode.OFF);
+        assertThat(발행된("adaptive").mode()).isEqualTo(QueueMode.ADAPTIVE);
     }
 
     /**
@@ -202,40 +200,53 @@ class AllocationRoundTest {
     @Test
     @DisplayName("줄이_남아도_모드를_그대로_싣는다")
     void 줄이_남아도_모드를_그대로_싣는다() {
-        AllocationRound round = 판(List.of(
+        AllocationRound round = round(List.of(
                 new CouponDemand("always", 500, 10_000, QueueMode.ALWAYS),
                 new CouponDemand("off", 500, 10_000, QueueMode.OFF),
-                new CouponDemand("adaptive", 500, 10_000, QueueMode.ADAPTIVE)));
+                new CouponDemand("adaptive", 500, 10_000, QueueMode.ADAPTIVE)), 10_000, 1);
 
         round.run().block();
 
-        Map<String, CouponState> 실린_것 =
-                SnapshotCodec.create().decode(발행.get("last")).coupons();
-        assertThat(실린_것.get("always").mode()).isEqualTo(QueueMode.ALWAYS);
-        assertThat(실린_것.get("off").mode()).isEqualTo(QueueMode.OFF);
-        assertThat(실린_것.get("adaptive").mode()).isEqualTo(QueueMode.ADAPTIVE);
+        assertThat(발행된("always").mode()).isEqualTo(QueueMode.ALWAYS);
+        assertThat(발행된("off").mode()).isEqualTo(QueueMode.OFF);
+        assertThat(발행된("adaptive").mode()).isEqualTo(QueueMode.ADAPTIVE);
     }
 
-    /** 모드를 안 적은 쿠폰은 적응형이다 — 정책이 없다는 것이 곧 기본값이다. */
+    /** 모드를 안 적은 수요는 적응형으로 발행된다 — 정책이 없다는 것이 곧 기본값이다. */
     @Test
-    @DisplayName("모드를_안_적으면_적응형이다")
-    void 모드를_안_적으면_적응형이다() {
-        assertThat(new CouponDemand("c1", 0, 10).mode()).isEqualTo(QueueMode.ADAPTIVE);
+    @DisplayName("모드를_안_적은_수요는_적응형으로_실린다")
+    void 모드를_안_적은_수요는_적응형으로_실린다() {
+        AllocationRound round = round(List.of(new CouponDemand("c1", 0, 10_000)), 10_000, 1);
+
+        round.run().block();
+
+        assertThat(발행된("c1").mode()).isEqualTo(QueueMode.ADAPTIVE);
     }
 
-    private AllocationRound 판(List<CouponDemand> demands) {
-        return AllocationRound.of(
-                () -> true,
-                () -> Mono.just(demands),
-                () -> 10_000L, () -> 1,
-                grant -> Mono.just(grant.credit()),
-                hash -> {
-                    발행.put("last", hash);
-                    return Mono.empty();
-                },
-                () -> Instant.ofEpochSecond(1_700_000_000L),
-                () -> Mono.just(CreditSmoother.of(0.3)),
-                SnapshotCodec.create(), () -> 0L);
+    /** 몫이 대기자보다 적은 쪽도 지난다. 넉넉한 판만 재면 QUEUEING 이 안 걸린다. */
+    @Test
+    @DisplayName("몫이_모자라도_모드를_그대로_싣는다")
+    void 몫이_모자라도_모드를_그대로_싣는다() {
+        AllocationRound round = round(
+                List.of(new CouponDemand("always", 500, 10_000, QueueMode.ALWAYS)), 10, 1);
+
+        round.run().block();
+
+        assertThat(발행된("always").mode()).isEqualTo(QueueMode.ALWAYS);
+        assertThat(발행된("always").runtime()).isEqualTo(RuntimeState.QUEUEING);
+    }
+
+    /** 매진돼도 모드는 남는다. 대기 응답이 이미 모드를 싣는다. */
+    @Test
+    @DisplayName("매진된_쿠폰도_모드를_싣는다")
+    void 매진된_쿠폰도_모드를_싣는다() {
+        AllocationRound round = round(
+                List.of(new CouponDemand("off", 500, 0, QueueMode.OFF)), 10_000, 1);
+
+        round.run().block();
+
+        assertThat(발행된("off").mode()).isEqualTo(QueueMode.OFF);
+        assertThat(발행된("off").runtime()).isEqualTo(RuntimeState.CLOSED);
     }
 
     /**

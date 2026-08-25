@@ -40,7 +40,7 @@ class DemandCollectorTest {
                 ids -> Mono.just(ids.stream().collect(Collectors.toMap(
                         id -> id, id -> 큐.get(id).stream().mapToLong(Long::longValue).sum()))),
                 ids -> Mono.just(재고),
-                () -> Mono.just(정책));
+                ids -> Mono.just(정책));
     }
 
     /**
@@ -118,7 +118,7 @@ class DemandCollectorTest {
                 () -> Mono.just(List.of("c1")),
                 ids -> Mono.just(Collections.singletonMap("c1", null)),
                 ids -> Mono.just(Map.of("c1", 100L)),
-                () -> Mono.just(Map.of()));
+                ids -> Mono.just(Map.of()));
 
         List<CouponDemand> 수요 = collector.collect().block();
 
@@ -141,7 +141,7 @@ class DemandCollectorTest {
                     조회.incrementAndGet();
                     return Mono.just(Map.of());
                 },
-                () -> {
+                ids -> {
                     조회.incrementAndGet();
                     return Mono.just(Map.of());
                 });
@@ -163,7 +163,7 @@ class DemandCollectorTest {
                 () -> Mono.just(List.of("c1", "c2")),
                 ids -> Mono.just(Map.of("c1", 4L)),
                 ids -> Mono.just(Map.of("c1", 10L, "c2", 10L)),
-                () -> Mono.just(Map.of()));
+                ids -> Mono.just(Map.of()));
 
         assertThatThrownBy(() -> collector.collect().block())
                 .isInstanceOf(IllegalStateException.class)

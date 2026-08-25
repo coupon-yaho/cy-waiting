@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.entry;
 
 import com.kafkick.waiting.domain.allocation.Grant;
+import com.kafkick.waiting.domain.coupon.QueueMode;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -40,7 +41,8 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         redis.delete(RedisKeys.ACTIVE_COUPONS,
                 RedisKeys.queue("c1", SHARDS, 0), RedisKeys.admitted("c1", SHARDS, 0),
                 RedisKeys.queue("c2", SHARDS, 0), RedisKeys.admitted("c2", SHARDS, 0),
-                RedisKeys.stock("c1"), RedisKeys.stock("c2")).block(WAIT);
+                RedisKeys.stock("c1"), RedisKeys.stock("c2"),
+                RedisKeys.COUPON_POLICY).block(WAIT);
     }
 
     private void 줄_세운다(String couponId, long... scores) {
@@ -160,5 +162,74 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         port.publish(Map.of("c1", "c")).block(WAIT);
 
         assertThat(port.load().block(WAIT)).containsOnlyKeys("c1");
+    }
+
+    private void 정책을_건다(String couponId, String json) {
+        redis.opsForHash().put(RedisKeys.COUPON_POLICY, couponId, json).block(WAIT);
+    }
+
+    private Map<String, QueueMode> 정책(String... couponIds) {
+        return port.queueModes(List.of(couponIds)).block(WAIT);
+    }
+
+    @Test
+    @DisplayName("정책을_안_건_쿠폰은_비어_온다")
+    void 정책을_안_건_쿠폰은_비어_온다() {
+        // 없는 것은 고장이 아니다. 부르는 쪽이 기본값으로 채운다.
+        assertThat(정책("c1", "c2")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("건_정책을_읽어_온다")
+    void 건_정책을_읽어_온다() {
+        정책을_건다("c1", "{\"mode\":\"ALWAYS\"}");
+        // **소문자도 받는다.** 운영자가 손으로 넣는 값이라 대소문자를 못 믿는다.
+        정책을_건다("c2", "{\"mode\":\"off\"}");
+
+        assertThat(정책("c1", "c2"))
+                .containsEntry("c1", QueueMode.ALWAYS)
+                .containsEntry("c2", QueueMode.OFF);
+    }
+
+    @Test
+    @DisplayName("모르는_필드는_무시한다")
+    void 모르는_필드는_무시한다() {
+        // 앞뒤 호환. Phase 10 이 같은 키에 shards 를 얹는다 (E-12).
+        정책을_건다("c1", "{\"mode\":\"OFF\",\"shards\":4}");
+
+        assertThat(정책("c1")).containsEntry("c1", QueueMode.OFF);
+    }
+
+    @Test
+    @DisplayName("못_읽는_정책은_그_쿠폰만_뺀다")
+    void 못_읽는_정책은_그_쿠폰만_뺀다() {
+        // **판을 죽이지 않는다.** 운영자의 오타 하나가 전 쿠폰의 배분을 멈추면
+        // 안 된다. 넷 다 예외가 나는 모양이 달라 하나로 못 묶는다.
+        정책을_건다("c1", "{{");
+        정책을_건다("c2", "{\"mode\":\"NOPE\"}");
+        정책을_건다("c3", "{\"queueMode\":\"ALWAYS\"}");
+        정책을_건다("c4", "\"ALWAYS\"");
+        정책을_건다("c5", "{\"mode\":\"ADAPTIVE\"}");
+
+        assertThat(정책("c1", "c2", "c3", "c4", "c5"))
+                .containsExactly(entry("c5", QueueMode.ADAPTIVE));
+    }
+
+    @Test
+    @DisplayName("활성_목록_밖의_정책은_안_읽는다")
+    void 활성_목록_밖의_정책은_안_읽는다() {
+        // 정책 해시에는 청소가 없어 끝난 쿠폰이 쌓인다. 통째로 받으면 매 틱
+        // 그 전부를 파싱하고 몇 개만 쓴다.
+        정책을_건다("c1", "{\"mode\":\"OFF\"}");
+        정책을_건다("끝난쿠폰", "{\"mode\":\"ALWAYS\"}");
+
+        assertThat(정책("c1")).containsExactly(entry("c1", QueueMode.OFF));
+    }
+
+    @Test
+    @DisplayName("빈_목록이면_묻지_않는다")
+    void 빈_목록이면_묻지_않는다() {
+        // 빈 인자로 명령을 보내면 레디스가 오류를 낸다. 그 오류가 판을 죽인다.
+        assertThat(port.queueModes(List.of()).block(WAIT)).isEmpty();
     }
 }

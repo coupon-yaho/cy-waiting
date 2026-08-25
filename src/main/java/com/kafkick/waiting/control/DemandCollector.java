@@ -22,12 +22,12 @@ public final class DemandCollector {
     private final Supplier<Mono<List<String>>> activeCoupons;
     private final Function<List<String>, Mono<Map<String, Long>>> queueSizes;
     private final Function<List<String>, Mono<Map<String, Long>>> stocks;
-    private final Supplier<Mono<Map<String, QueueMode>>> queueModes;
+    private final Function<List<String>, Mono<Map<String, QueueMode>>> queueModes;
 
     private DemandCollector(Supplier<Mono<List<String>>> activeCoupons,
             Function<List<String>, Mono<Map<String, Long>>> queueSizes,
             Function<List<String>, Mono<Map<String, Long>>> stocks,
-            Supplier<Mono<Map<String, QueueMode>>> queueModes) {
+            Function<List<String>, Mono<Map<String, QueueMode>>> queueModes) {
         this.activeCoupons = Objects.requireNonNull(activeCoupons, "activeCoupons 는 필수다");
         this.queueSizes = Objects.requireNonNull(queueSizes, "queueSizes 는 필수다");
         this.stocks = Objects.requireNonNull(stocks, "stocks 는 필수다");
@@ -38,7 +38,7 @@ public final class DemandCollector {
     public static DemandCollector of(Supplier<Mono<List<String>>> activeCoupons,
             Function<List<String>, Mono<Map<String, Long>>> queueSizes,
             Function<List<String>, Mono<Map<String, Long>>> stocks,
-            Supplier<Mono<Map<String, QueueMode>>> queueModes) {
+            Function<List<String>, Mono<Map<String, QueueMode>>> queueModes) {
         return new DemandCollector(activeCoupons, queueSizes, stocks, queueModes);
     }
 
@@ -49,7 +49,7 @@ public final class DemandCollector {
             if (coupons.isEmpty()) {
                 return Mono.just(List.<CouponDemand>of());
             }
-            return Mono.zip(queueSizes.apply(coupons), stocks.apply(coupons), queueModes.get())
+            return Mono.zip(queueSizes.apply(coupons), stocks.apply(coupons), queueModes.apply(coupons))
                     .map(all -> assemble(coupons, all.getT1(), all.getT2(), all.getT3()));
         });
     }

@@ -13,6 +13,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -64,6 +65,10 @@ public final class AllocationRedisPort implements SnapshotSource {
     private final FailureWindow rejected = FailureWindow.create();
     private final FailureWindow malformed = FailureWindow.create();
     private final FailureWindow badPolicy = FailureWindow.create();
+
+    /** 마지막으로 성공한 정책 판. 읽기가 실패하면 여기로 되돌아간다. */
+    private final AtomicReference<Map<String, QueueMode>> lastModes =
+            new AtomicReference<>(Map.of());
 
     /**
      * <b>모든 노드가 쓴다.</b> 배분은 리더만 돌지만 판정 재료를 받아 오는 것은
@@ -171,31 +176,70 @@ public final class AllocationRedisPort implements SnapshotSource {
      * <p><b>밖에서 쓰는 키다.</b> 못 읽는 값이 하나 있다고 판을 죽이면 운영자의
      * 오타가 전 쿠폰의 배분을 멈춘다. 그 쿠폰만 기본값(적응형)으로 두고 남긴다.
      */
-    public Mono<Map<String, QueueMode>> queueModes() {
-        return redis.<String, String>opsForHash().entries(RedisKeys.COUPON_POLICY)
-                .mapNotNull(entry -> {
-                    QueueMode mode = parseMode(entry.getValue());
-                    return mode == null ? null : Map.entry(entry.getKey(), mode);
+    public Mono<Map<String, QueueMode>> queueModes(List<String> couponIds) {
+        if (couponIds.isEmpty()) {
+            return Mono.just(Map.of());
+        }
+        AtomicBoolean dropped = new AtomicBoolean();
+        // **활성 쿠폰만 묻는다.** 정책 해시에는 TTL 도 청소도 없어 끝난 쿠폰이
+        // 쌓인다. 통째로 받으면 매 틱 그 전부를 파싱하고 몇 개만 쓴다.
+        return redis.<String, String>opsForHash()
+                .multiGet(RedisKeys.COUPON_POLICY, couponIds)
+                .map(values -> {
+                    Map<String, QueueMode> byCoupon = new LinkedHashMap<>();
+                    for (int i = 0; i < couponIds.size(); i++) {
+                        QueueMode mode = parseMode(couponIds.get(i), values.get(i), dropped);
+                        if (mode != null) {
+                            byCoupon.put(couponIds.get(i), mode);
+                        }
+                    }
+                    return byCoupon;
                 })
-                .collectMap(Map.Entry::getKey, Map.Entry::getValue)
-                // 키 자체가 없으면 아무도 정책을 안 걸었다는 뜻이다. 빈 판이 맞다.
-                .defaultIfEmpty(Map.of());
+                .doOnNext(modes -> {
+                    if (!dropped.get()) {
+                        badPolicy.exited().ifPresent(recovered ->
+                                log.info("쿠폰 정책이 다시 깨끗하다 — {}초 만에, 그동안 {}건 걸렀다",
+                                        recovered.elapsedSeconds(), recovered.swallowed()));
+                    }
+                })
+                // **정책은 부가 정보다.** 이것 하나 때문에 판이 죽으면 대기 수와
+                // 재고가 멀쩡해도 스냅샷이 안 나간다. 빈 판으로 접으면 전원이
+                // 적응형이 되어 ALWAYS 가 조용히 풀리므로, 직전 값을 다시 쓴다.
+                .doOnNext(lastModes::set)
+                .onErrorResume(e -> {
+                    if (badPolicy.entered()) {
+                        log.warn("쿠폰 정책을 못 읽는다 — 직전 값으로 돈다: {}", e.getMessage());
+                    }
+                    return Mono.just(lastModes.get());
+                });
     }
 
-    private QueueMode parseMode(String value) {
+    private QueueMode parseMode(String couponId, String value, AtomicBoolean dropped) {
+        // 정책을 안 건 쿠폰이다. 없는 것은 고장이 아니라 기본값이다.
+        if (value == null) {
+            return null;
+        }
         try {
             JsonNode node = JSON.readTree(value);
             JsonNode mode = node.get("mode");
             if (mode == null || !mode.isTextual()) {
-                return null;
+                // **가장 흔한 오타가 여기다.** 필드 이름을 틀리거나 문자열만
+                // 넣으면 예외가 안 나므로, 안 남기면 운영자가 걸었다고 믿는
+                // 정책이 조용히 적응형이 된다.
+                return dropPolicy(couponId, "mode 가 문자열이 아니다", dropped);
             }
             return QueueMode.valueOf(mode.asString().toUpperCase(Locale.ROOT));
         } catch (JacksonException | IllegalArgumentException e) {
-            if (badPolicy.entered()) {
-                log.warn("쿠폰 정책을 못 읽는다 — 그 쿠폰만 기본값으로 둔다: {}", e.getMessage());
-            }
-            return null;
+            return dropPolicy(couponId, e.getMessage(), dropped);
         }
+    }
+
+    private QueueMode dropPolicy(String couponId, String why, AtomicBoolean dropped) {
+        dropped.set(true);
+        if (badPolicy.entered()) {
+            log.warn("쿠폰 정책을 못 읽는다 — 그 쿠폰만 기본값으로 둔다: {} ({})", couponId, why);
+        }
+        return null;
     }
 
     private boolean usable(String couponId, AtomicBoolean dropped) {

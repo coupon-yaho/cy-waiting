@@ -224,8 +224,8 @@ public final class AllocationRound {
     private CouponState stateOf(CouponDemand demand, Map<String, Long> granted) {
         if (demand.stock() <= 0) {
             return demand.waiting() > 0
-                    ? CouponState.closed(demand.waiting())
-                    : CouponState.idle(0);
+                    ? CouponState.closed(demand.mode(), demand.waiting())
+                    : CouponState.noQueue(demand.mode(), 0);
         }
         // **운영자가 정한 모드를 그대로 싣는다.** 여기서 바꿔 실으면 그 설정이
         // 한 틱을 못 넘긴다 — 판정 사다리에 분기가 있어도 발행자가 그 입력을

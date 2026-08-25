@@ -188,7 +188,16 @@ public record CouponState(
 
     /** 재고가 소진됐는데 대기자가 남았다. 스케줄러가 이 전이를 만든다. */
     public static CouponState closed(long waiting) {
-        return new CouponState(QueueMode.ADAPTIVE, RuntimeState.CLOSED, 0, 0, waiting, 1.0);
+        return closed(QueueMode.ADAPTIVE, waiting);
+    }
+
+    /**
+     * 매진된 쿠폰도 <b>운영자가 정한 모드를 그대로 싣는다.</b> 판정은 1번에서
+     * 끝나 모드를 안 보지만, 모드를 읽는 소비자가 하나라도 늘면 그날 이 자리가
+     * 거짓말을 한다 — 대기 응답이 이미 모드를 싣는다.
+     */
+    public static CouponState closed(QueueMode mode, long waiting) {
+        return new CouponState(mode, RuntimeState.CLOSED, 0, 0, waiting, 1.0);
     }
 
     /**
@@ -202,8 +211,12 @@ public record CouponState(
             long waiting) {
         if (waiting <= 0) {
             throw new IllegalArgumentException(
-                    "withQueue 는 줄이 남아 있을 때만이다: waiting=%d".formatted(waiting));
+                    "withQueue 는 줄이 남아 있을 때만이다. 비었으면 noQueue 를 쓴다: waiting=%d"
+                            .formatted(waiting));
         }
+        // 이번 틱에 다 뺄 수 있으면 배수 중, 아니면 아직 줄 서는 중이다.
+        // **I3 의 경계와 같은 자리**를 쓴다 — 갈리면 이 팩토리가 생성자에
+        // 막히는 조합을 만든다. 그래서 이 셈은 여기 한 곳에만 있다.
         RuntimeState runtime = credit >= waiting
                 ? RuntimeState.DRAINING
                 : RuntimeState.QUEUEING;
@@ -223,18 +236,15 @@ public record CouponState(
      * {@code QUEUEING} 이 되어 I3' 에 막힌다 (계획서 2절 3.7).
      */
     public static CouponState offWithQueue(long credit, long remainingStock, long waiting) {
+        // **가드는 여기 남긴다.** 이름이 "줄이 있는 OFF" 이므로 비었을 때
+        // 무엇을 쓰라고 그 자리에서 말해야 한다. 런타임 유도는 위임한다 —
+        // I3 의 경계를 두 곳에 적으면 갈린다.
         if (waiting <= 0) {
             throw new IllegalArgumentException(
                     "offWithQueue 는 줄이 남아 있을 때만이다. 비었으면 off 를 쓴다: waiting=%d"
                             .formatted(waiting));
         }
-        // 이번 틱에 다 뺄 수 있으면 배수 중, 아니면 아직 줄 서는 중이다.
-        // **I3 의 경계와 같은 자리**를 쓴다 — 갈리면 이 팩토리가 생성자에
-        // 막히는 조합을 만든다.
-        RuntimeState runtime = credit >= waiting
-                ? RuntimeState.DRAINING
-                : RuntimeState.QUEUEING;
-        return new CouponState(QueueMode.OFF, runtime, credit, remainingStock, waiting, 1.0);
+        return withQueue(QueueMode.OFF, credit, remainingStock, waiting);
     }
 
     /** 운영자가 무조건 줄을 세우기로 했다. 한산해도 대기열을 태운다. */

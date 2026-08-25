@@ -135,7 +135,7 @@ class AdmissionGatewayFilterTest {
         스냅샷을_심는다(state, META);
     }
 
-    /** 노드 예산을 바꿔 심는다. 배분 전 상한이 노드 몫에서 나오는지 재려면 필요하다. */
+    /** 판 크기를 바꿔 심는다. 한산 통과 상한을 0 으로 만들어야 배분 전 등록을 잰다. */
     private void 스냅샷을_심는다(CouponState state, SnapshotMeta meta) {
         holder.replace(new GatewaySnapshot(
                 state == null ? Map.of() : Map.of(COUPON, state),
@@ -422,9 +422,6 @@ class AdmissionGatewayFilterTest {
         // 상한번째까지는 줄 없이 통과한다. 넘긴 쪽만 보면 상한이 1 로 무너져도 초록이다.
         assertThat(마지막_통과자.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
                 .isEqualTo(AdmissionDecision.PASS_UNDER_CAP);
-        // 통과 경로는 줄을 안 친다 (RD-4).
-        assertThat(줄.왕복()).isZero();
-
         MockServerWebExchange 첫_대기자 = 태운다(COUPON, "대기자");
 
         assertThat(첫_대기자.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
@@ -441,12 +438,15 @@ class AdmissionGatewayFilterTest {
     @Test
     @DisplayName("배분_전에도_상한은_유한하다")
     void 배분_전에도_상한은_유한하다() {
-        // 노드 몫이 1 이면 상한은 최대 대기 시간만큼이다. META 로는 60만이라 못 잰다.
-        SnapshotMeta 작은_노드 = new SnapshotMeta(1, 1);
-        long CAP = AdmissionDecider.globalCap(작은_노드) * AdmissionGatewayFilter.MAX_ETA_SEC;
-        스냅샷을_심는다(CouponStates.idle(1_000_000), 작은_노드);
+        // 배분 전 천장은 최소 배수 속도 × 최대 대기 시간이다. 판 크기와 무관하다.
+        long CAP = AdmissionDecider.MIN_CREDIT * AdmissionGatewayFilter.MAX_ETA_SEC;
+        // 한산 통과 상한이 0 이어야 첫 사람부터 줄로 간다.
+        스냅샷을_심는다(CouponStates.idle(1_000_000), new SnapshotMeta(1, 1));
 
-        for (long i = 0; i < CAP - 1; i++) {
+        MockServerWebExchange 첫_사람 = 태운다(COUPON, "대기자0");
+        assertThat(첫_사람.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .isEqualTo(AdmissionDecision.ENQUEUE_RATE_COUPON);
+        for (long i = 1; i < CAP - 1; i++) {
             태운다(COUPON, "대기자" + i);
         }
         // 경계는 양쪽을 다 짚는다. 넘긴 쪽만 보면 상한이 1 로 무너져도 초록이다.

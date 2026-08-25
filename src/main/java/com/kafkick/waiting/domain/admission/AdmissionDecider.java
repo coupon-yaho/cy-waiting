@@ -148,7 +148,7 @@ public class AdmissionDecider {
 
     /**
      * <b>등록 경로가 쓰는</b> 줄 길이 상한. 배수 속도를 알면 그것으로, 모르면
-     * 전역 크레딧으로 재고 설계 동시 대기에서 끊는다.
+     * 가장 낮은 배수 속도를 가정해 잰다.
      *
      * <p>사다리 5번은 이 함수를 안 쓴다 — 폴백은 줄이 아직 없는 구간만을 위한
      * 것이다. 그래서 등록 경로와 5번이 서로 다른 상한을 본다 (AIJ-0073).
@@ -161,29 +161,24 @@ public class AdmissionDecider {
         }
         // **배수 속도를 모르는 것과 자리가 없는 것은 다르다.** 0 을 상한으로 쓰면
         // 줄이 한 번도 안 생기고, 아예 없애면 낡은 구간 내내 줄이 자란다 (R5).
-        //
-        // **노드 몫으로 재면 안 된다.** 이 수는 전 노드가 공유하는 줄 길이와
-        // 비교된다. 나눗셈은 노드 로컬 예산의 것이라, 여기서 나누면 노드를
-        // 늘릴수록 천장이 내려간다. 전문은 AIJ-0073.
         long byCredit = state.queueCapacity(maxEtaSec);
         if (byCredit > 0) {
             return byCredit;
         }
-        try {
-            return Math.max(1, Math.min(MAX_WAITING,
-                    Math.multiplyExact(meta.globalCredit(), maxEtaSec)));
-        } catch (ArithmeticException e) {
-            return MAX_WAITING;
-        }
+        // **모르면 가장 낮은 배수 속도를 가정한다.** 판의 크기로 재면 안 된다 —
+        // 그 수는 전 노드가 공유하는 줄 길이와 비교되고, 무엇보다 이 구간에는
+        // 그만큼 뺄 수 있다는 근거가 없다. 배분이 한 번 돌면 주 경로가 실제
+        // 크레딧으로 넘겨받는다. 전문은 AIJ-0073.
+        return MIN_CREDIT * maxEtaSec;
     }
 
     /**
-     * 배수 속도를 모를 때 줄이 자랄 수 있는 최대 길이.
+     * 배수 속도를 모를 때 가정하는 초당 배수 인원.
      *
-     * <p>R4 가 말하는 동시 대기 인원이다. 배수 속도를 아는 쿠폰은 자기 크레딧이
-     * 천장을 정하지만, 모르는 구간에는 그 근거가 없어 설계 목표를 천장으로 쓴다.
+     * <p>배분이 줄 수 있는 가장 작은 몫이다. 모르는 구간의 천장은 판의 크기가
+     * 아니라 <b>아는 것이 없다는 사실</b>에서 나와야 한다.
      */
-    public static final long MAX_WAITING = 20_000;
+    public static final long MIN_CREDIT = 1;
 
     /** 이 노드가 초당 감당할 양. 쿠폰과 무관한 노드 전체의 상한이다. */
     public static long globalCap(SnapshotMeta meta) {

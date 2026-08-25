@@ -307,49 +307,35 @@ class AdmissionDeciderTest {
      * 안 생기고 쿠폰이 그 상태에 갇힌다.
      */
     @Test
-    @DisplayName("배수_속도를_모르면_설계_상한으로_잰다")
-    void 배수_속도를_모르면_설계_상한으로_잰다() {
+    @DisplayName("배수_속도를_모르면_최소_배수로_잰다")
+    void 배수_속도를_모르면_최소_배수로_잰다() {
         assertThat(CouponStates.idle(1_000).queueCapacity(600)).isZero();
 
-        // 1,000 × 600 은 60만이라 설계 동시 대기(R4) 를 한참 넘는다. 거기서 끊는다.
+        // 초당 한 명. 아는 것이 없을 때 가정할 수 있는 가장 낮은 배수 속도다.
         assertThat(AdmissionDecider.queueCapacity(CouponStates.idle(1_000), META, 600))
-                .isEqualTo(AdmissionDecider.MAX_WAITING);
+                .isEqualTo(600);
     }
 
     /**
      * <b>줄은 전 노드가 공유한다.</b> 노드 몫을 공유 줄 길이와 비교하면 노드를
      * 늘릴수록 천장이 반비례로 내려간다 — 유입을 감당하려고 붙인 노드가 대기
-     * 등록 여력을 깎는다.
+     * 등록 여력을 깎는다. 판의 크기도 마찬가지로 근거가 아니다. 모르는 구간의
+     * 천장은 아는 것이 없다는 사실에서 나와야 한다.
      */
     @Test
-    @DisplayName("노드를_늘려도_천장이_안_줄어든다")
-    void 노드를_늘려도_천장이_안_줄어든다() {
+    @DisplayName("판이_달라져도_천장은_같다")
+    void 판이_달라져도_천장은_같다() {
         CouponState 배분_전 = CouponStates.idle(1_000);
 
         assertThat(AdmissionDecider.queueCapacity(배분_전, new SnapshotMeta(30, 1), 600))
                 .isEqualTo(AdmissionDecider.queueCapacity(배분_전, new SnapshotMeta(30, 10), 600))
-                .isEqualTo(18_000);
+                .isEqualTo(AdmissionDecider.queueCapacity(배분_전, new SnapshotMeta(0, 10), 600))
+                .isEqualTo(600);
     }
 
     /**
-     * 스냅샷이 낡은 동안에는 대기 인원이 영영 0 으로 보인다. 여기서 상한을
-     * 없애면 장애가 지속되는 내내 줄이 무한히 자란다 (R5).
-     */
-    @Test
-    @DisplayName("전역_크레딧이_0_이라도_상한은_양수다")
-    void 전역_크레딧이_0_이라도_상한은_양수다() {
-        SnapshotMeta 굶은_판 = new SnapshotMeta(0, 10);
-
-        // **값으로 못 박는다.** 0 보다 크다고만 재면 하한을 1,000 으로 올려도
-        // 아무도 안 막는다 — 못 빼는 줄에 1,000 명을 받는 것이 이 자리를 만든
-        // 이유와 정면으로 어긋난다.
-        assertThat(AdmissionDecider.queueCapacity(CouponStates.idle(1_000), 굶은_판, 600))
-                .isEqualTo(1);
-    }
-
-    /**
-     * 줄이 이미 선 쿠폰은 폴백을 안 쓴다. 배분이 살아나면 다음 틱에 크레딧을
-     * 받으므로 갇히는 고리가 없고, 뺄 수 없다고 아는 줄에 더 세우지 않는다.
+     * 줄이 이미 선 쿠폰은 폴백을 안 쓴다. credit 0 으로 굳는 구간은 있지만
+     * 그때도 뺄 수 없다고 아는 줄에 더 세우느니 거절이 맞다.
      */
     @Test
     @DisplayName("줄이_이미_섰는데_배수를_못_하면_거절한다")
@@ -372,16 +358,5 @@ class AdmissionDeciderTest {
 
         assertThat(AdmissionDecider.queueCapacity(CouponStates.idle(1_000), META, 0)).isZero();
         assertThat(AdmissionDecider.queueCapacity(CouponStates.idle(1_000), META, -600)).isZero();
-    }
-
-    @Test
-    @DisplayName("곱이_넘쳐도_음수가_되지_않는다")
-    void 곱이_넘쳐도_음수가_되지_않는다() {
-        // 음수가 되면 스크립트가 오류를 낸다. 그 오류는 fail-open 으로 흘러
-        // **닫히는 게 아니라 열린다** — 줄 선 사람을 추월한다.
-        SnapshotMeta 거대한_판 = new SnapshotMeta(Long.MAX_VALUE, 1);
-
-        assertThat(AdmissionDecider.queueCapacity(CouponStates.idle(1_000), 거대한_판, 600))
-                .isEqualTo(AdmissionDecider.MAX_WAITING);
     }
 }

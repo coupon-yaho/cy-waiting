@@ -912,6 +912,52 @@ class AdmissionGatewayFilterTest {
     }
 
     /**
+     * <b>래치가 스스로 갱신되면 안 된다.</b> 대기 판정이 다시 표식을 찍으면,
+     * 트래픽이 이어지는 쿠폰에서 래치가 영영 안 풀린다 — 줄이 다 빠지고 스냅샷이
+     * 계속 한산해도 그 노드는 무대기 통과를 못 준다 (R1).
+     */
+    @Test
+    @DisplayName("트래픽이_이어져도_래치가_풀린다")
+    void 트래픽이_이어져도_래치가_풀린다() {
+        MutableClock 시계 = MutableClock.at(지금);
+        AdmissionGatewayFilter f = AdmissionGatewayFilter.of(
+                holder, AdmissionDecider.of(limiter, IDLE_RATIO),
+                시계, meters, () -> 0.5, 줄, tokens, limiter, entryTokens);
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+        태운다(f, COUPON);
+
+        // 줄이 다 빠졌다. 그 뒤로도 초당 한 명씩 계속 들어온다.
+        스냅샷을_심는다(CouponStates.idle(1_000));
+        for (int 초 = 0; 초 < 홀더_유효_한계.plusSeconds(5).toSeconds(); 초++) {
+            시계.앞으로(Duration.ofSeconds(1));
+            태운다(f, COUPON);
+        }
+
+        assertThat(태운다(f, COUPON)).isEqualTo(AdmissionDecision.PASS_UNDER_CAP);
+    }
+
+    /**
+     * 반대로 <b>줄이 보이면 그 자리에서 푼다.</b> 그때부터는 사다리 8번이
+     * 런타임으로 잡으므로 래치가 할 일이 없다.
+     */
+    @Test
+    @DisplayName("줄이_보이면_래치를_푼다")
+    void 줄이_보이면_래치를_푼다() {
+        MutableClock 시계 = MutableClock.at(지금);
+        AdmissionGatewayFilter f = AdmissionGatewayFilter.of(
+                holder, AdmissionDecider.of(limiter, IDLE_RATIO),
+                시계, meters, () -> 0.5, 줄, tokens, limiter, entryTokens);
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+        태운다(f, COUPON);
+
+        // 스냅샷이 줄을 따라잡았다. 그 판정 한 번으로 래치가 풀린다.
+        태운다(f, COUPON);
+        스냅샷을_심는다(CouponStates.idle(1_000));
+
+        assertThat(태운다(f, COUPON)).isEqualTo(AdmissionDecision.PASS_UNDER_CAP);
+    }
+
+    /**
      * <b>거절도 줄이 있다는 관측이다.</b> 상한에 걸렸다는 것은 그 줄이 가득
      * 찼다는 뜻인데, 그때 래치를 안 찍으면 만료 뒤 사다리 3번이 켜져 낡음
      * 구간에서 fail-open 으로 뒤집힌다 — 방금 줄 선 사람들을 그 뒤 전원이

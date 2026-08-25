@@ -121,4 +121,28 @@ class CreditSmootherTest {
         assertThatThrownBy(() -> new CreditSmoother.Snapshot(500, false))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    /**
+     * <b>하강은 늦으면 안 된다.</b> 뒷단이 "여유가 줄었다" 고 말한 순간이 곧 그
+     * 값이다. 상승과 같은 계수로 내려가면 그 뒤로도 한참을 옛 값으로 밀어 넣는다 —
+     * 평활이 막으려던 것은 표시 흔들림이지 백프레셔 무시가 아니다.
+     */
+    @Test
+    @DisplayName("하강은_즉시_따라간다")
+    void 하강은_즉시_따라간다() {
+        CreditSmoother smoother = CreditSmoother.of(0.3);
+        smoother.observe(300);
+
+        assertThat(smoother.observe(100)).isEqualTo(100);
+    }
+
+    @Test
+    @DisplayName("상승은_평활을_거친다")
+    void 상승은_평활을_거친다() {
+        CreditSmoother smoother = CreditSmoother.of(0.3);
+        smoother.observe(100);
+
+        // 스파이크 하나가 표시 시간을 흔들지 않게 한다.
+        assertThat(smoother.observe(300)).isEqualTo(0.3 * 300 + 0.7 * 100);
+    }
 }

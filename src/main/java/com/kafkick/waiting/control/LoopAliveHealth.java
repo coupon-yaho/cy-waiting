@@ -39,8 +39,9 @@ public final class LoopAliveHealth implements HealthIndicator {
      */
     @Override
     public Health health() {
-        // 종료하려고 내린 루프를 정지로 세면 진행 중인 요청을 든 파드가 그
-        // 자리에서 끊긴다.
+        // **드레이닝 중에는 정지로 안 센다.** 여기서 실패를 내면 진행 중인 요청을
+        // 든 파드가 그 자리에서 끊긴다. 루프는 이제 웹 서버보다 나중에 멎으므로
+        // 정상 종료에서는 살아 있고, 이 면제는 그 구간에 정말 멎었을 때를 가린다.
         if (shutdown.isDraining()) {
             return Health.up().withDetail("draining", true).build();
         }

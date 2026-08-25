@@ -5,11 +5,11 @@ import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.web.server.context.WebServerApplicationContext;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
 import org.springframework.context.ApplicationListener;
 import org.springframework.context.SmartLifecycle;
-import org.springframework.boot.web.server.context.WebServerApplicationContext;
 import org.springframework.context.event.ContextClosedEvent;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
@@ -17,9 +17,9 @@ import reactor.core.Disposable;
 import reactor.core.scheduler.Scheduler;
 
 /**
- * <b>루프가 멎기 전에 드레이닝을 알린다.</b> 순서가 반대면 부하 분산기가 아직
- * 보내는 동안 재료가 늙고, 살아 있음 판정이 그걸 정지로 세어 진행 중인 요청을
- * 든 파드를 죽인다.
+ * <b>루프는 웹 서버보다 오래 산다.</b> 드레이닝이 끝날 때까지 재료가 신선해야
+ * 진행 중인 요청이 낡은 판정을 안 받는다. 드레이닝을 알리는 일은 단계가 아니라
+ * 닫힘 사건이 지므로, 신호는 그대로 먼저 간다.
  */
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public final class SnapshotRefreshLifecycle
@@ -43,6 +43,9 @@ public final class SnapshotRefreshLifecycle
     private volatile ApplicationContext owner;
     private volatile Scheduler scheduler;
     private volatile Disposable subscription;
+
+    /** 드레이닝이 시작된 단조 시각. 0 이면 정상 정지다. */
+    private volatile long drainingAt;
 
     private SnapshotRefreshLifecycle(SnapshotRefresher refresher, ShutdownState shutdown,
             Duration interval) {
@@ -88,6 +91,9 @@ public final class SnapshotRefreshLifecycle
         if (event.getApplicationContext() != owner) {
             return;
         }
+        // **여기서 시각을 잡는다.** 정지 로그가 드레이닝을 얼마나 버텼는지 말하려면
+        // 시작점이 필요한데, 그 시작점을 아는 것은 이 사건뿐이다.
+        drainingAt = System.nanoTime();
         shutdown.draining();
     }
 
@@ -109,8 +115,15 @@ public final class SnapshotRefreshLifecycle
         if (mine != null) {
             mine.dispose();
         }
-        // 드레이닝 로그와 갈라져서, 이게 없으면 루프가 언제 멎었는지 안 남는다.
-        log.info("갱신 루프 정지");
+        // **드레이닝 시작과 최대 30초 벌어진다.** 진입·해제 쌍이 제 역할을 하려면
+        // 그 사이를 버텼는지가 여기 남아야 한다 — 없으면 창이 다시 열려도 모른다.
+        long since = drainingAt;
+        if (since == 0) {
+            log.info("갱신 루프 정지");
+        } else {
+            log.info("갱신 루프 정지 — 드레이닝 시작 뒤 {}초",
+                    (System.nanoTime() - since) / 1_000_000_000L);
+        }
     }
 
     @Override

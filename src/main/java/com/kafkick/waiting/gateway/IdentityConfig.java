@@ -15,7 +15,7 @@ import org.springframework.context.annotation.Configuration;
  * (DS-1) — 값을 주고 만들어 주는 자리가 필요하다.
  */
 @Configuration
-@EnableConfigurationProperties(QueueTokenProperties.class)
+@EnableConfigurationProperties({QueueTokenProperties.class, ProxyProperties.class})
 public class IdentityConfig {
 
     /** 쿠폰 2,000개를 상정한 값. 넘으면 판정이 그 사실을 따로 알린다. */
@@ -24,6 +24,12 @@ public class IdentityConfig {
     /** 한산한 쿠폰이 유휴 몫으로 쓸 수 있는 전역 크레딧 비율. */
     private static final double IDLE_CREDIT_RATIO = 0.2;
 
+
+    /** 못 읽는 대역은 여기서 버린다. 요청 경로에서 다시 풀면 그 파싱이 거기 붙는다. */
+    @Bean
+    public TrustedProxies trustedProxies(ProxyProperties properties) {
+        return properties.trusted();
+    }
 
     /** 비밀키가 없거나 짧으면 여기서 기동이 멎는다. 약한 키로 조용히 돌지 않는다. */
     @Bean

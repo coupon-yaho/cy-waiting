@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Random;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -18,7 +19,7 @@ import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceClientConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
-import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.utility.DockerImageName;
 import org.springframework.data.redis.core.script.RedisScript;
@@ -26,11 +27,11 @@ import org.springframework.data.redis.core.script.RedisScript;
 /**
  * <b>순위는 뒤로 가지 않는다</b> (G3.11 · 불변식 3).
  *
- * <p>Phase 2 의 단조성 테스트는 <b>"입력이 단조면 출력도 단조"</b> 까지만 봤다.
- * {@code localRank} 자체가 단조라는 보장은 여기가 진다.
+ * <p>Phase 2 는 "입력이 단조면 출력도 단조" 까지만 봤다. 순위 자체가 단조라는
+ * 보장은 여기가 진다. <b>매 연산마다 전원을 본다</b> — 표본 하나만 보면 안 본
+ * 사람의 순위가 올랐다가 다음 표본 전에 내려오는 경우를 놓친다.
  *
- * <p><b>매 연산마다 전원을 본다.</b> 표본 하나만 보면 안 본 사람의 순위가
- * 올랐다가 다음 표본 선택 전에 내려오는 경우를 통째로 놓친다.
+ * <p>스크립트를 직접 부른다. 반응형 경로는 {@code QueueRedisPortTest} 가 진다.
  */
 @Tag("integration")
 class RankMonotonicityIntegrationTest {
@@ -42,10 +43,10 @@ class RankMonotonicityIntegrationTest {
     /**
      * 연산 수.
      *
-     * <p><b>줄였다.</b> 3,000 일 때 CI 에서 네 번 깨졌다 — 예산을 넓히고 전용
-     * 컨테이너까지 줬는데도 멎었다. 재는 것은 성질이지 규모가 아니다.
+     * <p>블로킹 클라이언트로 바꾸고 되돌렸다. 반응형을 수천 번 감쌌을 때는 800
+     * 으로 줄여도 멎었는데, 지금은 3,000 이 몇 초에 끝난다.
      */
-    private static final int OPERATIONS = 800;
+    private static final int OPERATIONS = 3_000;
 
     private static final int PEOPLE = 200;
     /**
@@ -86,7 +87,7 @@ class RankMonotonicityIntegrationTest {
     }
 
     private static LettuceConnectionFactory factory;
-    private static ReactiveStringRedisTemplate redis;
+    private static StringRedisTemplate redis;
 
     @BeforeAll
     static void 연결() {
@@ -94,7 +95,7 @@ class RankMonotonicityIntegrationTest {
                 new RedisStandaloneConfiguration(REDIS.getHost(), REDIS.getMappedPort(6379)),
                 LettuceClientConfiguration.builder().commandTimeout(BULK_TIMEOUT).build());
         factory.afterPropertiesSet();
-        redis = new ReactiveStringRedisTemplate(factory);
+        redis = new StringRedisTemplate(factory);
     }
 
     @AfterAll
@@ -107,21 +108,18 @@ class RankMonotonicityIntegrationTest {
     @BeforeEach
     void 준비() {
         enqueueScript = RedisScript.of(new ClassPathResource("redis/enqueue.lua"), List.class);
-        redis.delete(QUEUE, MAX_SCORE).block(WAIT);
+        redis.delete(List.of(QUEUE, MAX_SCORE));
     }
 
     private void enqueue(String memberId) {
         redis.execute(enqueueScript,
-                        List.of(QUEUE, MAX_SCORE, RedisKeys.alive(COUPON, 1, 0)),
-                        List.of(memberId, "86400", "30", "-1", NOW))
-                .blockFirst(WAIT);
+                List.of(QUEUE, MAX_SCORE, RedisKeys.alive(COUPON, 1, 0)),
+                memberId, "86400", "30", "-1", NOW);
     }
 
     /** 큐 전체를 순서대로 한 번에 읽는다. 사람마다 왕복하면 10만 회가 안 끝난다. */
     private List<String> queueOrder() {
-        return redis.opsForZSet().range(QUEUE, org.springframework.data.domain.Range.closed(0L, -1L))
-                .collectList()
-                .block(WAIT);
+        return List.copyOf(Objects.requireNonNull(redis.opsForZSet().range(QUEUE, 0, -1)));
     }
 
     @Test
@@ -142,12 +140,12 @@ class RankMonotonicityIntegrationTest {
             } else if (action < 80 && !expected.isEmpty()) {
                 // 입장 — 맨 앞이 빠진다
                 String front = expected.remove(0);
-                redis.opsForZSet().remove(QUEUE, front).block(WAIT);
+                redis.opsForZSet().remove(QUEUE, front);
                 lastRank.remove(front);
             } else if (!expected.isEmpty()) {
                 // 이탈 — 중간에서 빠진다
                 String gone = expected.remove(rnd.nextInt(expected.size()));
-                redis.opsForZSet().remove(QUEUE, gone).block(WAIT);
+                redis.opsForZSet().remove(QUEUE, gone);
                 lastRank.remove(gone);
             }
 

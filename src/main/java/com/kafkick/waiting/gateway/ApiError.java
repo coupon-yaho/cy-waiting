@@ -59,6 +59,10 @@ public final class ApiError {
          */
         QUEUE_FULL(HttpStatus.TOO_MANY_REQUESTS, "QUEUE_FULL", "대기열이 가득 찼습니다.", false),
 
+        /** 한 사람이 너무 빨리 두드린다. 큐에 안 넣는다 — 넣으면 자리를 차지한다. */
+        RATE_LIMITED(HttpStatus.TOO_MANY_REQUESTS, "RATE_LIMITED",
+                "요청이 너무 잦습니다.", false),
+
         /** 차례가 왔는데 상한을 넘었다. 큐 뒤로 안 돌린다. */
         RETRY_TOKEN(HttpStatus.TOO_MANY_REQUESTS, "RETRY_TOKEN",
                 "잠시 후 다시 시도해 주세요.", false),

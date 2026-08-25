@@ -15,11 +15,17 @@ public final class FilterOrder {
     public static final int IDENTITY = CORS + 1;
 
     /**
+     * 남용 방지. <b>판정 앞이다</b> — 판정에 들어가면 남용 요청이 노드 예산을
+     * 만지고, 큐에 넣으면 공격자가 자리를 차지한다.
+     */
+    public static final int ABUSE = IDENTITY + 1;
+
+    /**
      * 순번 조회. <b>라우트를 안 탄다</b> — 뒷단으로 갈 요청이 아니다.
      *
-     * <p>형식 검증 뒤다. 깨진 회원 헤더를 여기서 다시 보게 두지 않는다.
+     * <p>남용 방지 뒤다. 막힐 요청이 레디스를 치게 두지 않는다.
      */
-    public static final int QUEUE_STATUS = IDENTITY + 1;
+    public static final int QUEUE_STATUS = ABUSE + 1;
 
     private FilterOrder() {
     }

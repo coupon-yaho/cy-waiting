@@ -326,8 +326,24 @@ class AdmissionDeciderTest {
         SnapshotMeta 굶은_노드 = new SnapshotMeta(1, 10);
 
         assertThat(AdmissionDecider.globalCap(굶은_노드)).isZero();
+        // **값으로 못 박는다.** 0 보다 크다고만 재면 하한을 1,000 으로 올려도
+        // 아무도 안 막는다 — 못 빼는 줄에 1,000 명을 받는 것이 이 자리를 만든
+        // 이유와 정면으로 어긋난다.
         assertThat(AdmissionDecider.queueCapacity(CouponStates.idle(1_000), 굶은_노드, 600))
-                .isPositive();
+                .isEqualTo(1);
+    }
+
+    /**
+     * 줄이 이미 선 쿠폰은 폴백을 안 쓴다. 배분이 살아나면 다음 틱에 크레딧을
+     * 받으므로 갇히는 고리가 없고, 뺄 수 없다고 아는 줄에 더 세우지 않는다.
+     */
+    @Test
+    @DisplayName("줄이_이미_섰는데_배수를_못_하면_거절한다")
+    void 줄이_이미_섰는데_배수를_못_하면_거절한다() {
+        // 배분 적용이 실패하면 크레딧 0 이 실린 채로 발행된다.
+        AdmissionRequest req = request(CouponStates.offWithQueue(0, 1_000, 1));
+
+        assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.REJECT_QUEUE_FULL);
     }
 
     @Test

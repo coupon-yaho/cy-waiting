@@ -52,8 +52,17 @@ class AdmissionGatewayFilterTest {
 
     private static final String MEMBER = "812934";
 
-    /** 한산 통과 상한. 전역 크레딧 1,000 을 게이트웨이 한 대가 20% 로 쓴다. */
-    private static final int IDLE_CAP = 200;
+    /** 배수 속도를 아는 쿠폰의 크레딧. 상한을 여기서 유도한다. */
+    private static final long CREDIT = 1;
+
+    /** 스냅샷이 싣는 노드 예산. 심는 자리와 같은 값이어야 한다. */
+    private static final SnapshotMeta META = new SnapshotMeta(1_000, 1);
+
+    /** 판정기에 주는 유휴 몫 비율. 필터를 만들 때 쓰는 값과 같아야 한다. */
+    private static final double IDLE_RATIO = 0.2;
+
+    /** 한산 통과 상한. 숫자를 적지 않고 도메인에서 끌어온다. */
+    private static final long IDLE_CAP = CouponStates.idle(1).idleCap(META, IDLE_RATIO);
 
     /** 고정 시계. 실제 시계를 쓰면 낡음 판정이 장비 속도에 걸린다 (TS-4). */
     private static final Instant 지금 = Instant.parse("2026-08-24T00:00:00Z");
@@ -72,7 +81,7 @@ class AdmissionGatewayFilterTest {
     private final SecondWindowLimiter limiter = SecondWindowLimiter.withMaxKeys(10_000);
 
     private final AdmissionGatewayFilter filter = AdmissionGatewayFilter.of(
-            holder, AdmissionDecider.of(limiter, 0.2),
+            holder, AdmissionDecider.of(limiter, IDLE_RATIO),
             Clock.fixed(지금, ZoneOffset.UTC), meters, 줄, tokens, limiter, entryTokens);
 
     private final AtomicReference<Boolean> 뒷단에_닿음 = new AtomicReference<>(false);
@@ -119,13 +128,13 @@ class AdmissionGatewayFilterTest {
     private void 한산한_쿠폰_여럿을_심는다(int 수) {
         Map<String, CouponState> coupons = IntStream.range(0, 수).boxed()
                 .collect(Collectors.toMap(i -> "한산한쿠폰" + i, i -> CouponStates.idle(1_000_000)));
-        holder.replace(new GatewaySnapshot(coupons, new SnapshotMeta(1_000, 1), 지금));
+        holder.replace(new GatewaySnapshot(coupons, META, 지금));
     }
 
     private void 스냅샷을_심는다(CouponState state) {
         holder.replace(new GatewaySnapshot(
                 state == null ? Map.of() : Map.of(COUPON, state),
-                new SnapshotMeta(1_000, 1), 지금));
+                META, 지금));
     }
 
     @Test
@@ -301,7 +310,7 @@ class AdmissionGatewayFilterTest {
         // 안 따라잡았을 수 있다.
         MutableClock 시계 = MutableClock.at(지금);
         AdmissionGatewayFilter f = AdmissionGatewayFilter.of(
-                holder, AdmissionDecider.of(limiter, 0.2),
+                holder, AdmissionDecider.of(limiter, IDLE_RATIO),
                 시계, meters, () -> 0.5, 줄, tokens, limiter, entryTokens);
         스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
         태운다(f, COUPON);
@@ -399,7 +408,7 @@ class AdmissionGatewayFilterTest {
         스냅샷을_심는다(CouponStates.idle(1_000));
 
         // 한산 통과 상한은 전역 크레딧의 20% 다. 그 다음 한 명이 첫 대기자다.
-        for (int i = 0; i < IDLE_CAP; i++) {
+        for (long i = 0; i < IDLE_CAP; i++) {
             태운다(COUPON, "무대기" + i);
         }
         MockServerWebExchange 첫_대기자 = 태운다(COUPON, "대기자");
@@ -417,16 +426,23 @@ class AdmissionGatewayFilterTest {
     @Test
     @DisplayName("배수를_아는_쿠폰은_상한을_지킨다")
     void 배수를_아는_쿠폰은_상한을_지킨다() {
-        // credit 1 이면 600초 안에 600명을 뺄 수 있다 — 그것이 줄 길이 상한이다.
-        스냅샷을_심는다(CouponStates.queueing(1, 1_000_000, 2));
+        // 초당 CREDIT 명씩 최대 대기 시간만큼 뺄 수 있다 — 그것이 줄 길이 상한이다.
+        long CAP = CREDIT * AdmissionGatewayFilter.MAX_ETA_SEC;
+        스냅샷을_심는다(CouponStates.queueing(CREDIT, 1_000_000, 2));
 
-        for (int i = 0; i < 600; i++) {
+        for (int i = 0; i < CAP - 1; i++) {
             태운다(COUPON, "대기자" + i);
         }
-        MockServerWebExchange 넘긴_사람 = 태운다(COUPON, "601번째");
+        // **경계는 양쪽을 다 짚는다.** 넘긴 쪽만 보면 상한이 1 로 무너져도
+        // 시험이 초록으로 남는다.
+        MockServerWebExchange 마지막_자리 = 태운다(COUPON, "상한번째");
+        MockServerWebExchange 넘긴_사람 = 태운다(COUPON, "상한다음");
 
+        assertThat(마지막_자리.getResponse().getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
         assertThat(넘긴_사람.getResponse().getStatusCode())
                 .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        // 사다리 5번이 끊은 429 와 구별한다 — 여기서는 등록까지 갔다가 걸려야 한다.
+        assertThat(줄.등록_횟수()).isEqualTo((int) CAP + 1);
         assertThat(뒷단에_닿음).hasValue(false);
     }
 
@@ -591,7 +607,7 @@ class AdmissionGatewayFilterTest {
     void 큐가_찼으면_다시_올_때를_알려_준다() {
         // 안 알려 주면 각자 마음대로 돌아온다. 그 파도가 다음 거절을 만든다.
         AdmissionGatewayFilter f = AdmissionGatewayFilter.of(
-                holder, AdmissionDecider.of(limiter, 0.2),
+                holder, AdmissionDecider.of(limiter, IDLE_RATIO),
                 Clock.fixed(지금, ZoneOffset.UTC), meters, () -> 0.5, 줄, tokens, limiter, entryTokens);
         스냅샷을_심는다(CouponStates.queueing(1, 1_000, 5_000));
 
@@ -709,7 +725,7 @@ class AdmissionGatewayFilterTest {
     void 래치가_풀리면_무대기_통과가_되살아난다() {
         MutableClock 시계 = MutableClock.at(지금);
         AdmissionGatewayFilter f = AdmissionGatewayFilter.of(
-                holder, AdmissionDecider.of(limiter, 0.2), 시계, meters, () -> 0.5,
+                holder, AdmissionDecider.of(limiter, IDLE_RATIO), 시계, meters, () -> 0.5,
                 줄, tokens, limiter, entryTokens);
         스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
         // 래치가 실제로 걸렸는지부터 본다. 안 걸렸으면 뒤의 통과가 아무 뜻이 없다.
@@ -769,7 +785,7 @@ class AdmissionGatewayFilterTest {
         Instant 낡은_발행 = 지금.minusSeconds(3_600);
         MutableClock 시계 = MutableClock.at(지금);
         AdmissionGatewayFilter 시계를_쓰는_필터 = AdmissionGatewayFilter.of(
-                holder, AdmissionDecider.of(limiter, 0.2), 시계, meters, 줄, tokens, limiter, entryTokens);
+                holder, AdmissionDecider.of(limiter, IDLE_RATIO), 시계, meters, 줄, tokens, limiter, entryTokens);
         holder.replace(new GatewaySnapshot(
                 Map.of(COUPON, CouponStates.idle(1_000_000)),
                 new SnapshotMeta(1, 1), 낡은_발행));

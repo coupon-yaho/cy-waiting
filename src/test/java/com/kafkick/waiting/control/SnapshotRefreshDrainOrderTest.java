@@ -11,6 +11,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.awaitility.core.ConditionTimeoutException;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.web.server.context.WebServerApplicationContext;
 import org.springframework.context.SmartLifecycle;
@@ -26,6 +27,7 @@ import reactor.core.publisher.Mono;
  * 멈추므로, 나중에 누가 이 빈을 웹 서버 쪽에 의존시키면 순서가 뒤집히는데 단계
  * 단언은 그대로 초록이다.
  */
+@Tag("context")
 class SnapshotRefreshDrainOrderTest {
 
     /** 드레이닝을 흉내내는 창. 이 안에서 루프가 몇 판 도는지를 본다. */

@@ -203,6 +203,14 @@ tryAcquireAll(tier1, tier2):
 > 0 이고, 이 조건이 없으면 `0 >= 0` 이 참이 되어 전원이 `REJECT_QUEUE_FULL` 로
 > 간다 — 무대기 통과 경로가 통째로 막힌다.
 
+> **줄을 세울 때 쓰는 상한은 5번이 보는 값과 다르다.** 5번은 `credit × maxEtaSec`
+> 만 본다. 실제로 등록할 때는 그 값이 0 이면 노드 몫 `globalCap × maxEtaSec` 으로
+> 갈아탄다 (`AdmissionDecider.queueCapacity`). 배분은 줄이 있어야 나가고 줄은
+> 게이트웨이가 만드는데, 0 을 그대로 상한으로 쓰면 그 고리가 닫히지 않는다.
+> 5번에는 폴백을 쓰지 않는다 — 거기는 줄이 이미 선 쿠폰만 보고, 뺄 수 없다고
+> 아는 줄에 더 세우느니 거절이 낫다. 이 비대칭이 연 위험은
+> [AIJ-0073](../ai/journal/2026/08/AIJ-0073-idle-queue-capacity.md).
+
 **9번은 원자 판정이고, 여기 도달하는 것은 IDLE 쿠폰뿐이다.** `I4` 의 대우로
 8번 시점에 남는 것은 IDLE 아니면 `waiting>0` 이고 후자는 전부 큐로 간다.
 래치까지 보면 **`IDLE && !justEnqueued`** 만 9번에 도달한다.
@@ -401,6 +409,8 @@ CouponStates.unknown()
 
 - **산출물** `queueDepthSec()`, `queueCapacity()`
 - **근거** 3.5절 5번 · Phase 7 3.3절
+- **주의** 등록 경로의 상한은 여기서 끝나지 않는다. 이 값이 0 일 때의 폴백은
+  `AdmissionDecider.queueCapacity` 가 정한다 (3.5절 5번 각주)
 
 1. **RED** `credit이_0이면_큐_깊이는_무한이다` — 나눗셈 예외 없음
 2. **GREEN** 방어 분기

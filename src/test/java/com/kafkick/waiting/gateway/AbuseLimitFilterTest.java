@@ -77,12 +77,26 @@ class AbuseLimitFilterTest {
     @Test
     @DisplayName("식별자를_바꿔도_주소로_막는다")
     void 식별자를_바꿔도_주소로_막는다() {
-        for (int i = 0; i < 5; i++) {
+        for (int i = 0; i < 200; i++) {
             태운다(ISSUE, "member" + i, "10.0.0.1");
         }
 
-        assertThat(태운다(ISSUE, "member99", "10.0.0.1").getResponse().getStatusCode())
+        assertThat(태운다(ISSUE, "member999", "10.0.0.1").getResponse().getStatusCode())
                 .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+    }
+
+    /**
+     * NAT 나 회사 프록시 뒤에서는 수백 명이 한 주소를 쓴다. 주소 상한을 사람당
+     * 값과 같게 잡으면 그들이 통째로 막힌다 — 막으려던 것이 아니라 정상 사용자다.
+     */
+    @Test
+    @DisplayName("한_주소_뒤의_여럿은_안_막는다")
+    void 한_주소_뒤의_여럿은_안_막는다() {
+        for (int i = 0; i < 50; i++) {
+            assertThat(태운다(ISSUE, "member" + i, "10.0.0.1").getResponse().getStatusCode())
+                    .as("%d 번째 사람", i)
+                    .isNull();
+        }
     }
 
     @Test
@@ -102,7 +116,7 @@ class AbuseLimitFilterTest {
     @Test
     @DisplayName("앞에_끼워_넣은_주소를_안_믿는다")
     void 앞에_끼워_넣은_주소를_안_믿는다() {
-        for (int i = 0; i < 5; i++) {
+        for (int i = 0; i < 200; i++) {
             태운다(ISSUE, "m" + i, "1.2.3.4, 10.0.0.9");
         }
 

@@ -45,7 +45,16 @@ public final class AbuseLimitFilter implements WebFilter {
     private static final String METRIC = "waiting.abuse";
 
     /** 발급 경로의 사람당 초당 상한. 사람이 손으로 누를 수 있는 수의 몇 배다. */
-    private static final long ISSUE_CAP = 5;
+    private static final long MEMBER_ISSUE_CAP = 5;
+
+    /**
+     * 주소당 상한. <b>사람당 상한보다 훨씬 크다</b> — NAT 뒤에서는 수백 명이
+     * 한 주소를 쓰고, 좁게 잡으면 그들이 통째로 막힌다.
+     *
+     * <p>여기서 잡는 것은 한 대가 두드리는 것이다. 식별자를 바꿔가며 우회해도
+     * 이 상한이 그 기계의 처리량을 묶는다.
+     */
+    private static final long IP_ISSUE_CAP = 200;
 
     /**
      * 폴링 경로의 상한.
@@ -54,7 +63,10 @@ public final class AbuseLimitFilter implements WebFilter {
      * 폴링을 남용으로 막으면 정상 대기자가 끊긴다. 가장 짧은 밴드가 1초이고
      * 탭이 여럿일 수 있으니 그 열 배를 준다.
      */
-    private static final long POLL_CAP = 10;
+    private static final long MEMBER_POLL_CAP = 10;
+
+    /** 주소당 폴링 상한. 대기자 전원이 같은 회사에서 물을 수 있다. */
+    private static final long IP_POLL_CAP = 2_000;
 
     /** 키 상한. 식별자를 바꿔가며 메모리를 밀어내는 것을 막는다. */
     private static final int MAX_KEYS = 100_000;
@@ -95,16 +107,18 @@ public final class AbuseLimitFilter implements WebFilter {
             return chain.filter(exchange);
         }
         long nowSec = clock.instant().getEpochSecond();
-        long cap = polling(exchange) ? POLL_CAP : ISSUE_CAP;
+        boolean polling = polling(exchange);
 
-        // **둘 다 본다.** 회원 식별자는 바꾸는 비용이 0 이라 그것만으로는 우회된다.
-        // 주소가 실질적인 방어고, 회원 상한은 같은 주소 뒤의 여럿을 가른다.
+        // **둘 다 보되 상한이 다르다.** 회원 식별자는 바꾸는 비용이 0 이라 그것만
+        // 으로는 우회되고, 주소는 여럿이 나눠 쓰므로 좁게 잡으면 남을 막는다.
         String member = exchange.getRequest().getHeaders().getFirst(MEMBER_ID);
-        if (member != null && !limiter.tryAcquire("abuse:m:" + member, cap, nowSec)) {
+        long memberCap = polling ? MEMBER_POLL_CAP : MEMBER_ISSUE_CAP;
+        if (member != null && !limiter.tryAcquire("abuse:m:" + member, memberCap, nowSec)) {
             return reject(exchange, "member");
         }
         String ip = clientIp(exchange);
-        if (ip != null && !limiter.tryAcquire("abuse:i:" + ip, cap, nowSec)) {
+        long ipCap = polling ? IP_POLL_CAP : IP_ISSUE_CAP;
+        if (ip != null && !limiter.tryAcquire("abuse:i:" + ip, ipCap, nowSec)) {
             return reject(exchange, "ip");
         }
         return chain.filter(exchange);

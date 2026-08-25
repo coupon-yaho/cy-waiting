@@ -292,4 +292,52 @@ class AdmissionDeciderTest {
         assertThat(d.decide(request(idle).withValidToken(true)))
                 .isEqualTo(AdmissionDecision.PASS_TOKEN);
     }
+
+    /** META 는 전역 크레딧 1,000 을 게이트웨이 10대가 나눠 쓴다 — 노드 몫은 100 이다. */
+    @Test
+    @DisplayName("배수_속도를_알면_그것이_줄_길이_상한이다")
+    void 배수_속도를_알면_그것이_줄_길이_상한이다() {
+        CouponState 줄선_쿠폰 = CouponStates.queueing(3, 1_000, 10);
+
+        assertThat(AdmissionDecider.queueCapacity(줄선_쿠폰, 600)).isEqualTo(1_800);
+    }
+
+    /**
+     * 배분을 아직 못 받은 구간이다. 0 을 그대로 상한으로 쓰면 줄이 한 번도
+     * 안 생기고 쿠폰이 그 상태에 갇힌다.
+     */
+    @Test
+    @DisplayName("배수_속도를_모르면_최소_배수로_잰다")
+    void 배수_속도를_모르면_최소_배수로_잰다() {
+        assertThat(CouponStates.idle(1_000).queueCapacity(600)).isZero();
+
+        // 초당 한 명. 아는 것이 없을 때 가정할 수 있는 가장 낮은 배수 속도다.
+        assertThat(AdmissionDecider.queueCapacity(CouponStates.idle(1_000), 600))
+                .isEqualTo(600);
+    }
+
+    /**
+     * 줄이 이미 선 쿠폰은 폴백을 안 쓴다. credit 0 으로 굳는 구간은 있지만
+     * 그때도 뺄 수 없다고 아는 줄에 더 세우느니 거절이 맞다.
+     */
+    @Test
+    @DisplayName("줄이_이미_섰는데_배수를_못_하면_거절한다")
+    void 줄이_이미_섰는데_배수를_못_하면_거절한다() {
+        // 배분 적용이 실패하면 크레딧 0 이 실린 채로 발행된다.
+        AdmissionRequest req = request(CouponStates.offWithQueue(0, 1_000, 1));
+
+        assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.REJECT_QUEUE_FULL);
+    }
+
+    /**
+     * 원 함수는 최대 대기 시간이 0 이하면 0 을 준다 — 받아 줄 줄이 없다는 뜻이다.
+     * 가드가 없으면 음수가 폴백을 그대로 타고 나가고, 스크립트가 오류를 내고,
+     * 그 오류는 fail-open 으로 흘러 <b>닫히는 게 아니라 열린다.</b>
+     */
+    @Test
+    @DisplayName("최대_대기_시간이_0_이하면_아무도_안_받는다")
+    void 최대_대기_시간이_0_이하면_아무도_안_받는다() {
+        // 0 은 이 가드가 없어도 0 이다 — 곱이 대신 지킨다. 가드가 지탱하는 것은 음수다.
+        assertThat(AdmissionDecider.queueCapacity(CouponStates.idle(1_000), -600)).isZero();
+    }
 }

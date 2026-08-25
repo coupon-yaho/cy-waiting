@@ -51,7 +51,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     private static final String METRIC = "waiting.admission";
 
     /** 받아도 되는 최대 대기 시간. 넘으면 줄을 세우는 것이 되레 나쁘다. */
-    private static final long MAX_ETA_SEC = 600;
+    static final long MAX_ETA_SEC = 600;
 
     /** 재시도 안내의 흔들림 폭. 폴링 간격과 같은 정책을 쓴다. */
     private static final PollIntervalPolicy POLL = PollIntervalPolicy.of(0.2);
@@ -231,9 +231,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         }
         // **판정에 쓴 상태를 그대로 쓴다.** 여기서 다시 읽으면 그 사이 틱이
         // 지나 판정과 답이 어긋난다.
-        // **상한을 그대로 넘긴다.** 0 은 "배수할 수 없으니 한 명도 안 받는다" 는
-        // 뜻이고 스크립트도 같게 읽는다 — 상한 없음은 따로 정한 값이다.
-        long capacity = state.queueCapacity(MAX_ETA_SEC);
+        // **같은 것은 MAX_ETA_SEC 인자뿐이다** — 상한 함수는 5번과 일부러 다르다.
+        // 인자까지 갈라지면 5번이 건 상한과 실제 등록 상한의 근거가 어긋난다.
+        long capacity = AdmissionDecider.queueCapacity(state, MAX_ETA_SEC);
         return queue.enqueue(couponId, memberId, capacity, clock.instant())
                 // **여기까지만 열어 준다.** 뒤에 붙이면 줄에 선 사람이 응답을
                 // 못 써서 뒷단까지 가고, 자리를 쥔 채로 재고까지 먹는다.
@@ -249,15 +249,20 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                 .switchIfEmpty(Mono.defer(() ->
                         failOpen(exchange, chain, meta).then(Mono.empty())))
                 .flatMap(entry -> {
+                    // 이 노드가 방금 이 쿠폰의 줄을 봤다. 다음 창의 신규 유입이
+                    // 여기 선 사람을 넘지 않게 한 구간 붙잡는다.
+                    //
+                    // **거절도 관측이다.** 상한에 걸렸다는 것은 그 줄이 가득
+                    // 찼다는 뜻이다. 여기서 안 찍으면 줄이 차는 순간 래치가
+                    // 갱신을 못 받고, 만료되면 사다리 3번이 켜져 이 노드가
+                    // fail-open 으로 뒤집힌다 — 방금 줄 선 사람을 전원이 추월한다.
+                    latch.mark(couponId, clock.instant().getEpochSecond());
                     if (!entry.accepted()) {
                         // 2차 방어에 걸렸다. 판정은 자리가 있다고 봤지만 실제로는 없다.
                         count(AdmissionDecision.REJECT_QUEUE_FULL.name());
                         return error.write(exchange, ApiError.Code.QUEUE_FULL,
                                 retryAfterSec(AdmissionDecision.REJECT_QUEUE_FULL, random));
                     }
-                    // 이 노드가 방금 이 쿠폰을 줄로 보냈다. 다음 창의 신규
-                    // 유입이 이 사람을 넘지 않게 한 구간 붙잡는다.
-                    latch.mark(couponId, clock.instant().getEpochSecond());
                     double etaSec = EtaPolicy.etaSec(entry.rank(), state.credit());
                     return waiting.waiting(exchange,
                             tokens.issue(couponId, memberId, clock.instant()),

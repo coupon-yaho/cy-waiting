@@ -106,6 +106,11 @@ public class AdmissionDecider {
         //     **줄이 있을 때만 의미가 있다.** 한산한 쿠폰은 credit 이 0 이라
         //     용량도 0 이고, 조건을 안 걸면 waiting(0) >= 0 이 참이 되어
         //     R1 경로가 통째로 막힌다.
+        //
+        //     **여기서는 폴백을 안 쓴다.** 줄이 이미 섰으면 배분이 이 쿠폰을
+        //     보고 있고, 뺄 수 없다고 아는 줄에 더 세우느니 거절이 낫다.
+        //     credit 이 0 인 채로 굳는 구간은 있다 — 활성 쿠폰 수가 전역
+        //     크레딧보다 많으면 몫이 0 으로 떨어진다. 그때도 거절이 맞다.
         if (s.waiting() > 0 && s.waiting() >= s.queueCapacity(req.maxEtaSec())) {
             return AdmissionDecision.REJECT_QUEUE_FULL;
         }
@@ -140,6 +145,37 @@ public class AdmissionDecider {
             case KEY_SATURATED -> AdmissionDecision.ENQUEUE_KEY_SATURATED;
         };
     }
+
+    /**
+     * <b>등록 경로가 쓰는</b> 줄 길이 상한. 사다리 5번은 이 함수를 안 쓴다 —
+     * 폴백은 줄이 아직 없는 구간만의 것이라 둘이 다른 값을 본다 (AIJ-0073).
+     */
+    public static long queueCapacity(CouponState state, long maxEtaSec) {
+        // **원 함수의 가드를 뒤집지 않는다.** 받아 줄 시간이 없으면 자리도 없다.
+        // 이걸 안 걸면 음수가 그대로 폴백을 타고 나가고, 스크립트가 오류를 내고,
+        // 그 오류는 fail-open 으로 흘러 닫히는 게 아니라 열린다.
+        if (maxEtaSec <= 0) {
+            return 0;
+        }
+        // **배수 속도를 모르는 것과 자리가 없는 것은 다르다.** 0 을 상한으로 쓰면
+        // 줄이 한 번도 안 생기고, 아예 없애면 낡은 구간 내내 줄이 자란다 (R5).
+        long byCredit = state.queueCapacity(maxEtaSec);
+        if (byCredit > 0) {
+            return byCredit;
+        }
+        // **모르면 가장 낮은 배수 속도를 가정한다.** 판의 크기로 재면 안 된다 —
+        // 그 수는 전 노드가 공유하는 줄 길이와 비교되고, 무엇보다 이 구간에는
+        // 그만큼 뺄 수 있다는 근거가 없다. 배분이 한 번 돌면 주 경로가 실제
+        // 크레딧으로 넘겨받는다. 전문은 AIJ-0073.
+        return MIN_CREDIT * maxEtaSec;
+    }
+
+    /**
+     * 배수 속도를 모를 때 가정하는 초당 배수 인원. 배분이 줄 수 있는
+     * <b>0 이 아닌</b> 가장 작은 몫이다. 올리려면 오버플로 방어를 되살린다 —
+     * 곱이 안 넘치는 것은 이 값이 1 이기 때문이다.
+     */
+    public static final long MIN_CREDIT = 1;
 
     /** 이 노드가 초당 감당할 양. 쿠폰과 무관한 노드 전체의 상한이다. */
     public static long globalCap(SnapshotMeta meta) {

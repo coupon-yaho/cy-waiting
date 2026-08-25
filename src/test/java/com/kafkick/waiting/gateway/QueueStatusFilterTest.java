@@ -1,6 +1,6 @@
 package com.kafkick.waiting.gateway;
 
-import static com.kafkick.waiting.adapter.redis.QueueRedisPort.NO_LIMIT;
+import static com.kafkick.waiting.gateway.QueuePort.NO_LIMIT;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 

@@ -89,6 +89,9 @@ public record ControlPlaneProperties(Scheduler scheduler, Leader leader, Capacit
             // **하나만 받는다.** 여럿이면 몫을 샤드에 나눠 각각 적용해야 하는데
             // 지금 적용은 0번에만 나간다. 그러면 나머지 샤드의 줄은 영원히 안
             // 빠지고 아무 오류도 안 난다 — 산문으로 지킬 일이 아니다.
+            //
+            // 큐 등록 상한도 여기 걸린다. 상한은 쿠폰 전체의 수인데 스크립트는
+            // 자기 샤드만 세므로, 이 줄을 풀면 실효 상한이 샤드 수만큼 커진다.
             if (shards != 1) {
                 throw new IllegalArgumentException(
                         "shards 는 아직 1 만 지원한다 — 샤드별 적용이 없다: %d".formatted(shards));

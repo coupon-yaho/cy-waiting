@@ -166,7 +166,7 @@ class CrashRecoveryTest {
     private static List<Object> 등록한다(
             StatefulRedisConnection<String, String> redis, String member, long nowSec) {
         return (List<Object>) redis.sync().eval(LuaScripts.of("enqueue.lua"), ScriptOutputType.MULTI,
-                new String[] {QUEUE, MAX_SCORE, ALIVE},
+                new String[] {QUEUE, MAX_SCORE, ALIVE, ADMITTED},
                 // 상한 없음. 0 은 이 뜻이 아니다 — 0 은 한 명도 안 받는다는 뜻이다.
                 member, "86400", "30", "-1", String.valueOf(nowSec));
     }

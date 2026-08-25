@@ -32,6 +32,7 @@ class EnqueueGuardTest extends RedisContainerSupport {
     private static final String QUEUE = RedisKeys.queue(COUPON, 1, 0);
     private static final String MAX_SCORE = RedisKeys.maxScore(COUPON, 1, 0);
     private static final String ALIVE = RedisKeys.alive(COUPON, 1, 0);
+    private static final String ADMITTED = RedisKeys.admitted(COUPON, 1, 0);
 
     @Autowired
     private ReactiveStringRedisTemplate redis;
@@ -41,7 +42,7 @@ class EnqueueGuardTest extends RedisContainerSupport {
     @BeforeEach
     void 준비() {
         script = RedisScript.of(new ClassPathResource("redis/enqueue.lua"), List.class);
-        redis.delete(QUEUE, MAX_SCORE).block(WAIT);
+        redis.delete(QUEUE, MAX_SCORE, ADMITTED).block(WAIT);
         for (int i = 0; i < 10; i++) {
             redis.delete(RedisKeys.alive(COUPON, 1, 0)).block(WAIT);
         }
@@ -51,7 +52,7 @@ class EnqueueGuardTest extends RedisContainerSupport {
     private List<Object> enqueue(String memberId, String aliveTtl, String cap) {
         return (List<Object>) redis.execute(
                         script,
-                        List.of(QUEUE, MAX_SCORE, RedisKeys.alive(COUPON, 1, 0)),
+                        List.of(QUEUE, MAX_SCORE, RedisKeys.alive(COUPON, 1, 0), ADMITTED),
                         List.of(memberId, "86400", aliveTtl, cap, NOW))
                 .blockFirst(WAIT);
     }
@@ -134,6 +135,27 @@ class EnqueueGuardTest extends RedisContainerSupport {
 
         assertThat(String.valueOf(again.get(2))).isEqualTo("1");
         assertThat(redis.opsForZSet().score(QUEUE, "m1").block(WAIT)).isEqualTo(first);
+    }
+
+    /**
+     * <b>이미 들여보낸 사람은 줄이 아니다.</b> 상한이 세는 것은 기다리는 인원인데
+     * ZSET 은 입장자를 안 지운다 — 청소기가 붙기 전까지 유령이 쌓이고, 실제로
+     * 기다리는 사람이 0 명인데 신규가 영구 거절된다.
+     */
+    @Test
+    @DisplayName("입장한_사람은_상한에_안_센다")
+    void 입장한_사람은_상한에_안_센다() {
+        enqueue("m1", "30", "2");
+        enqueue("m2", "30", "2");
+        // 배분이 임계를 둘 다 넘겨 올렸다. 둘은 이미 나간 사람이다.
+        Double 뒷사람 = redis.opsForZSet().score(QUEUE, "m2").block(WAIT);
+        redis.opsForValue().set(ADMITTED, "%.0f".formatted(뒷사람)).block(WAIT);
+
+        List<Object> 신규 = enqueue("m3", "30", "2");
+
+        // **반환만 보면 안 된다.** score 만 돌려주고 ZSET 에 안 넣어도 통과한다.
+        assertThat(redis.opsForZSet().score(QUEUE, "m3").block(WAIT))
+                .isEqualTo(Double.valueOf(신규.get(0).toString()));
     }
 
     @Test

@@ -4,9 +4,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
-import java.time.Clock;
+import com.kafkick.waiting.MutableClock;
+import java.net.InetSocketAddress;
+import java.time.Duration;
+import java.util.List;
 import java.time.Instant;
-import java.time.ZoneOffset;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -32,12 +34,18 @@ class AbuseLimitFilterTest {
     private final MeterRegistry meters = new SimpleMeterRegistry();
     private final AtomicInteger 다음으로_감 = new AtomicInteger();
 
+    /** 초가 바뀌면 예산이 풀린다. 고정 시계로는 그 계약이 한 번도 안 돈다 (TS-4). */
+    private final MutableClock 시계 = MutableClock.at(지금);
+
+    /** 하네스는 신뢰 홉을 지나온 것처럼 군다. 안 그러면 전달 헤더가 무시된다. */
     private final AbuseLimitFilter filter = AbuseLimitFilter.of(
-            Clock.fixed(지금, ZoneOffset.UTC), meters, () -> 0.5);
+            시계, meters, () -> 0.5, new TrustedProxies(List.of("127.0.0.1")));
 
     private MockServerWebExchange 태운다(String path, String member, String ip) {
         MockServerHttpRequest.BaseBuilder<?> 요청 = MockServerHttpRequest
                 .method(HttpMethod.POST, path)
+                // 신뢰 홉을 지나온 연결. 없으면 전달 헤더를 아예 안 본다.
+                .remoteAddress(new InetSocketAddress("127.0.0.1", 12345))
                 .header("X-Member-Id", member);
         if (ip != null) {
             요청.header("X-Forwarded-For", ip);
@@ -163,6 +171,68 @@ class AbuseLimitFilterTest {
         // 정상 사용자가 걸리는지 보려면 사유가 갈려 있어야 한다.
         assertThat(meters.getMeters()).singleElement().satisfies(m ->
                 assertThat(m.getId().getTag("key")).isEqualTo("member"));
+    }
+
+    /** 초가 바뀌면 다시 통과해야 한다. 안 그러면 한 번 걸린 사람이 영영 막힌다. */
+    @Test
+    @DisplayName("초가_바뀌면_다시_통과한다")
+    void 초가_바뀌면_다시_통과한다() {
+        for (int i = 0; i < 6; i++) {
+            태운다(ISSUE, "1", "10.0.0.1");
+        }
+        assertThat(태운다(ISSUE, "1", "10.0.0.1").getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+
+        시계.앞으로(Duration.ofSeconds(1));
+
+        assertThat(태운다(ISSUE, "1", "10.0.0.1").getResponse().getStatusCode()).isNull();
+    }
+
+    /**
+     * 신뢰하지 않는 홉의 전달 헤더를 믿으면, 매 요청 다른 값을 넣어 상한을 넘고
+     * 키를 무한히 만들어 상한에 닿게 한다 — 그때부터 정상 사용자가 막힌다.
+     */
+    @Test
+    @DisplayName("신뢰하지_않는_홉의_헤더는_안_믿는다")
+    void 신뢰하지_않는_홉의_헤더는_안_믿는다() {
+        AbuseLimitFilter 안_믿는_것 = AbuseLimitFilter.of(
+                시계, new SimpleMeterRegistry(), () -> 0.5, new TrustedProxies(List.of()));
+
+        // 주소를 매번 바꿔도 소켓 주소가 같으므로 한 키로 모인다.
+        MockServerWebExchange 마지막 = null;
+        for (int i = 0; i < 201; i++) {
+            MockServerWebExchange exchange = MockServerWebExchange.from(
+                    MockServerHttpRequest.method(HttpMethod.POST, ISSUE)
+                            .remoteAddress(new InetSocketAddress("127.0.0.1", 12345))
+                            .header("X-Member-Id", "m" + i)
+                            .header("X-Forwarded-For", "9.9.9." + i));
+            안_믿는_것.filter(exchange, e -> Mono.empty()).block();
+            마지막 = exchange;
+        }
+
+        assertThat(마지막.getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+    }
+
+    /** 뒤에서 거부됐을 때 앞의 몫이 이미 깎이면, 통과가 하나도 없는데 예산이 빈다. */
+    @Test
+    @DisplayName("주소로_막힌_요청은_회원_예산을_안_깎는다")
+    void 주소로_막힌_요청은_회원_예산을_안_깎는다() {
+        // 주소 예산을 다 쓴다. 회원은 매번 다르므로 회원 예산은 안 닿는다.
+        for (int i = 0; i < 200; i++) {
+            태운다(ISSUE, "other" + i, "10.0.0.1");
+        }
+        // 이 사람은 주소 때문에 막힌다. 그때 회원 몫이 깎이면 안 된다.
+        assertThat(태운다(ISSUE, "victim", "10.0.0.1").getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+
+        // **같은 초 안에서 본다.** 시계를 넘기면 예산이 전부 풀려서 새는 것이 안 보인다.
+        // 다른 주소에서 오면 자기 몫을 그대로 써야 한다.
+        for (int i = 0; i < 5; i++) {
+            assertThat(태운다(ISSUE, "victim", "10.0.0.2").getResponse().getStatusCode())
+                    .as("%d 번째", i)
+                    .isNull();
+        }
     }
 
     @Test

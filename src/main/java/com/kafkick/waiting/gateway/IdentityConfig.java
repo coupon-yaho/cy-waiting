@@ -15,7 +15,7 @@ import org.springframework.context.annotation.Configuration;
  * (DS-1) — 값을 주고 만들어 주는 자리가 필요하다.
  */
 @Configuration
-@EnableConfigurationProperties(QueueTokenProperties.class)
+@EnableConfigurationProperties({QueueTokenProperties.class, TrustedProxies.class})
 public class IdentityConfig {
 
     /** 쿠폰 2,000개를 상정한 값. 넘으면 판정이 그 사실을 따로 알린다. */

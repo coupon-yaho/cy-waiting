@@ -95,8 +95,16 @@ public final class CapacityRefresh {
                         recovered.elapsedSeconds(), recovered.swallowed(), value));
     }
 
-    /** 리더십이 갈렸다. <b>감쇠 창을 닫는다</b> — 안 닫으면 다음 감쇠가 안 남는다. */
+    /**
+     * 리더십이 갈렸다. <b>열린 창을 전부 닫는다.</b>
+     *
+     * <p>안 닫으면 다음 리더의 첫 실패가 진입으로 안 잡혀 로그가 빠지고, 그 뒤
+     * 복귀 로그의 지속 시간에 비리더 구간이 섞인다 (LG-2).
+     */
     public void leadershipChanged() {
+        failures.exited().ifPresent(recovered ->
+                log.info("리더십이 갈렸다 — 읽기 실패 창을 닫는다. 그동안 {}판 걸렀다",
+                        recovered.swallowed()));
         decaying.exited().ifPresent(recovered ->
                 log.info("리더십이 갈렸다 — 감쇠 창을 닫는다. 그동안 {}판 깎았다",
                         recovered.swallowed()));

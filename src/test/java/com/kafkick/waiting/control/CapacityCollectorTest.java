@@ -602,20 +602,26 @@ class CapacityCollectorTest {
     }
 
     /**
-     * 못 읽는 동안 노드가 늘 수 있다. 옛 바닥으로 멎으면 그만큼 낮아 노드당 몫이
-     * 다시 유휴 비율 아래로 내려간다 — 감쇠가 그 자리를 만든다.
+     * 못 읽는 동안 노드 수가 바뀔 수 있다. 옛 바닥을 들고 있으면 양쪽으로 다
+     * 틀린다 — 늘면 그만큼 낮아 한산 통과가 막히고, 줄면 그만큼 높아 장애 중에
+     * 실제 바닥보다 많이 민다.
      */
     @Test
-    @DisplayName("못_읽는_동안_노드가_늘면_바닥도_는다")
-    void 못_읽는_동안_노드가_늘면_바닥도_는다() {
-        CapacityCollector collector = collector();
-        collector.collect(List.of(report("a", 10_000, NOW)), NOW, 1);
+    @DisplayName("감쇠_바닥은_지금_노드_수를_따른다")
+    void 감쇠_바닥은_지금_노드_수를_따른다() {
+        CapacityCollector 늘어난_쪽 = collector();
+        늘어난_쪽.collect(List.of(report("a", 10_000, NOW)), NOW, 1);
+        CapacityCollector 줄어든_쪽 = collector();
+        줄어든_쪽.collect(List.of(report("a", 10_000, NOW)), NOW, 10);
 
         for (int i = 0; i < 100; i++) {
-            collector.observationFailed(10);
+            늘어난_쪽.observationFailed(10);
+            줄어든_쪽.observationFailed(1);
         }
 
-        assertThat(collector.lastKnown()).isEqualTo(10L * CapacityCollector.IDLE_DIVISOR);
+        assertThat(늘어난_쪽.lastKnown()).isEqualTo(10L * CapacityCollector.IDLE_DIVISOR);
+        // 노드가 줄면 설정 하한까지 내려간다. 옛 바닥(50)에 멎으면 안 된다.
+        assertThat(줄어든_쪽.lastKnown()).isEqualTo(FLOOR);
     }
 
     /** 한 판이라도 성공하면 유예가 다시 찬다. 안 그러면 순단이 쌓여 조여진다. */

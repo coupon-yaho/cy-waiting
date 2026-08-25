@@ -64,9 +64,6 @@ public final class CapacityCollector {
     /** 연속으로 못 읽은 판의 수. 한 판이라도 성공하면 다시 0 이다. */
     private final AtomicLong failedRounds = new AtomicLong();
 
-    /** 마지막 판의 바닥값. 걷을 때 쓴 것과 같아야 한다. */
-    private final AtomicLong lastMinimum;
-
     /**
      * 마지막 판에서 실제로 <b>하한이 답이 된</b> 값. 하한이 안 걸린 판에서는 0 이다.
      *
@@ -90,7 +87,6 @@ public final class CapacityCollector {
         this.floor = floor;
         this.perInstanceCap = perInstanceCap;
         this.lastKnown = new AtomicLong(floor);
-        this.lastMinimum = new AtomicLong(floor);
     }
 
     /**
@@ -146,9 +142,10 @@ public final class CapacityCollector {
         //
         // **0 은 안 올린다.** 뒷단이 스스로 "여유 0" 이라고 말한 뒤라면 그건
         // 관측이고, 거기에 바닥을 얹으면 죽었다고 말한 뒷단에 다시 밀어넣는다.
-        // **지금 노드 수로 다시 잰다.** 못 읽는 동안 노드가 늘면 옛 바닥은
-        // 그만큼 낮다 — 노드 하나로 걷은 뒤 열로 늘면 바닥이 열에 멎는다.
-        long bottom = Math.max(lastMinimum.get(), (long) Math.max(1, nodes) * IDLE_DIVISOR);
+        // **지금 노드 수로 잰다.** 옛 바닥을 들고 있으면 양쪽으로 다 틀린다 —
+        // 노드가 늘면 그만큼 낮아 한산 통과가 막히고, 줄면 그만큼 높아 장애
+        // 중에 실제 바닥보다 많이 민다. 걷을 때와 같은 식을 쓴다.
+        long bottom = Math.max(floor, (long) Math.max(1, nodes) * IDLE_DIVISOR);
         lastKnown.updateAndGet(known -> known == 0 ? 0 : Math.max(bottom, known / 2));
     }
 
@@ -221,7 +218,6 @@ public final class CapacityCollector {
         // **하한은 살아 있는 분모에 맞춘다.** 설정값으로만 재면 노드가 그보다
         // 늘었을 때 노드당 몫이 다시 0 이 된다 — 하한을 둔 이유가 사라진다.
         long minimum = Math.max(floor, (long) Math.max(1, nodes) * IDLE_DIVISOR);
-        lastMinimum.set(minimum);
         // **하한은 부족분을 우리가 만들었을 때만이다.** 램프가 깎아 하한 아래로
         // 내려갔으면 되돌린다 — 안 되돌리면 노드당 몫이 유휴 비율 아래로 내려가
         // 한산 통과 상한이 0 이 되고, 그 쿠폰이 전 노드에서 막힌다 (R1).

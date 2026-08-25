@@ -349,4 +349,26 @@ class CapacityCollectorTest {
 
         assertThat(credit).isEqualTo(10L * CapacityCollector.IDLE_DIVISOR);
     }
+
+    /**
+     * <b>못 본 것과 새로 뜬 것은 다르다.</b> 보고가 몇 초 끊겼다고 램프 기록을
+     * 지우면, 돌아오는 첫 판에 전원이 램프를 다시 타 크레딧이 하한보다도 낮아진다.
+     * 정보가 없을 때보다 정보가 돌아온 순간이 더 나빠진다.
+     */
+    @Test
+    @DisplayName("잠깐_못_봐도_램프를_다시_안_탄다")
+    void 잠깐_못_봐도_램프를_다시_안_탄다() {
+        CapacityCollector collector = collector();
+        long warmed = warm(collector, "a", 100);
+
+        // **틱은 계속 돈다.** 보고만 안 들어온다 — 뒷단 GC 나 뒷단↔레디스 순단이다.
+        long 복귀 = warmed + FRESHNESS.toSeconds() * 3;
+        for (long t = warmed + 1; t < 복귀; t++) {
+            collector.collect(List.of(), t, 1);
+        }
+
+        long credit = collector.collect(List.of(report("a", 100, 복귀)), 복귀, 1);
+
+        assertThat(credit).isEqualTo(100);
+    }
 }

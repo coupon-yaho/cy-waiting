@@ -67,7 +67,7 @@ class PublishedModeDecisionTest {
         assertThat(신규유입(실린_것)).isEqualTo(AdmissionDecision.PASS_BYPASS);
     }
 
-    /** 7번도 같다. 발행이 ALWAYS 를 못 실으면 운영자가 켠 대기열이 안 켜진다. */
+    /** 3번도 같다. 발행이 ALWAYS 를 못 실으면 운영자가 켠 대기열이 안 켜진다. */
     @Test
     @DisplayName("항상_대기_쿠폰은_한산해도_줄을_세운다")
     void 항상_대기_쿠폰은_한산해도_줄을_세운다() {

@@ -131,7 +131,7 @@ class ControlPlanePropertiesTest {
         assertThatThrownBy(() -> new ControlPlaneProperties(scheduler,
                 ControlPlaneProperties.defaults().leader(),
                 new ControlPlaneProperties.Capacity(Duration.ofSeconds(60), Duration.ofSeconds(1),
-                        1, 10_000, 3, 1)))
+                        5, 10_000, 3, 1)))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("신선도");
     }
 

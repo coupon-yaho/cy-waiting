@@ -35,7 +35,7 @@ class CapacityRefreshTest {
         CapacityCollector collector = collector();
         CapacityRefresh refresh = CapacityRefresh.of(
                 () -> Mono.just(List.of(new CapacityReport("i1", 500, 지금.getEpochSecond()))),
-                collector, () -> 지금, () -> 1, 예산, Schedulers.immediate(), new SimpleMeterRegistry());
+                collector, () -> Mono.just(지금.getEpochSecond()), () -> 1, 예산, Schedulers.immediate(), new SimpleMeterRegistry());
 
         refresh.refresh().block();
 
@@ -53,7 +53,7 @@ class CapacityRefreshTest {
 
         CapacityRefresh refresh = CapacityRefresh.of(
                 () -> Mono.error(new IllegalStateException("레디스가 죽었다")),
-                collector, () -> 지금, () -> 1, 예산, Schedulers.immediate(), new SimpleMeterRegistry());
+                collector, () -> Mono.just(지금.getEpochSecond()), () -> 1, 예산, Schedulers.immediate(), new SimpleMeterRegistry());
 
         // **완료로 끝난다.** 여기서 오류를 흘리면 배분이 같이 안 돈다.
         refresh.refresh().block();
@@ -77,7 +77,7 @@ class CapacityRefreshTest {
         // 예산을 늘려도 통과하는 시험이 된다 (TS-4).
         VirtualTimeScheduler 시계 = VirtualTimeScheduler.create();
         CapacityRefresh refresh = CapacityRefresh.of(
-                Mono::never, collector, () -> 지금, () -> 1, 예산, 시계, new SimpleMeterRegistry());
+                Mono::never, collector, () -> Mono.just(지금.getEpochSecond()), () -> 1, 예산, 시계, new SimpleMeterRegistry());
 
         // **검증에 상한을 둔다.** 예산이 안 걸리는 구현에서 무기한 기다리면
         // 시험이 실패가 아니라 정지가 된다 — CI 에서 그건 진단이 안 된다.
@@ -86,6 +86,26 @@ class CapacityRefreshTest {
                 .expectComplete()
                 .verify(Duration.ofSeconds(5));
 
+        assertThat(collector.lastKnown()).isEqualTo(직전);
+    }
+
+    /**
+     * <b>시각도 예산 안에서 받는다.</b> 따로 받으면 그 왕복이 예산 밖이라, 느릴 때
+     * 관측과 기준 시각이 서로 다른 순간의 것이 된다 — 그 차이가 곧 나이다.
+     */
+    @Test
+    @DisplayName("시각을_못_받으면_수집을_거른다")
+    void 시각을_못_받으면_수집을_거른다() {
+        CapacityCollector collector = collector();
+        long 직전 = collector.lastKnown();
+        CapacityRefresh refresh = CapacityRefresh.of(
+                () -> Mono.just(List.of(new CapacityReport("i1", 500, 지금.getEpochSecond()))),
+                collector, () -> Mono.error(new IllegalStateException("시각을 못 읽는다")),
+                () -> 1, 예산, Schedulers.immediate(), new SimpleMeterRegistry());
+
+        refresh.refresh().block();
+
+        // 직전 값으로 돈다. 못 읽은 것을 관측으로 세면 하한으로 떨어진다.
         assertThat(collector.lastKnown()).isEqualTo(직전);
     }
 }

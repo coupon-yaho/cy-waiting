@@ -57,6 +57,16 @@ public final class SignedToken {
             throw new IllegalArgumentException(
                     "토큰 비밀키는 %d자 이상이어야 한다".formatted(MIN_SECRET_LENGTH));
         }
+        // 창이 0 이면 발급이 0 으로 나누고, 수명이 0 이면 받자마자 만료된다.
+        if (windowSec < 1 || ttlSec < 1) {
+            throw new IllegalArgumentException(
+                    "수명과 창은 양수여야 한다: ttl=%d window=%d".formatted(ttlSec, windowSec));
+        }
+        // 창이 수명보다 길면 최소 수명이 음수가 되어 방금 받은 토큰이 이미 만료다.
+        if (windowSec > ttlSec) {
+            throw new IllegalArgumentException(
+                    "창은 수명보다 짧아야 한다: ttl=%d window=%d".formatted(ttlSec, windowSec));
+        }
         return new SignedToken(prefix, ttlSec, windowSec,
                 secret.getBytes(StandardCharsets.UTF_8));
     }

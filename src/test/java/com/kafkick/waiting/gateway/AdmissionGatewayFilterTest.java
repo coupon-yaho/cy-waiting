@@ -202,6 +202,8 @@ class AdmissionGatewayFilterTest {
         assertThat(뒷단에_닿음).hasValue(true);
         // 통과는 게이트웨이가 응답을 안 쓴다. 쓰면 뒷단 응답을 덮는다.
         assertThat(토큰을_든_요청.getResponse().getStatusCode()).isNull();
+        // **검증에 레디스를 안 친다** (RD-4). 치면 발급마다 왕복이 통과 인원에 비례한다.
+        assertThat(줄.왕복()).isZero();
     }
 
     @Test

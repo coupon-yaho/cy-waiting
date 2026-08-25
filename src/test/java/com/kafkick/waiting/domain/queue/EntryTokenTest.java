@@ -148,6 +148,18 @@ class EntryTokenTest {
     }
 
     /** 약한 키로 조용히 돌면 서명이 있다는 사실이 무의미해진다. */
+    /** 창이 0 이면 발급이 0 으로 나누고, 창이 수명보다 길면 받자마자 만료다. */
+    @Test
+    @DisplayName("수명과_창이_성립해야_만들어진다")
+    void 수명과_창이_성립해야_만들어진다() {
+        assertThatThrownBy(() -> SignedToken.of("x_", 60, 0, SECRET))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> SignedToken.of("x_", 0, 10, SECRET))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> SignedToken.of("x_", 10, 60, SECRET))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
     @Test
     @DisplayName("짧은_비밀키로는_안_만들어진다")
     void 짧은_비밀키로는_안_만들어진다() {

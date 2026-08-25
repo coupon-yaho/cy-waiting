@@ -132,9 +132,14 @@ class AdmissionGatewayFilterTest {
     }
 
     private void 스냅샷을_심는다(CouponState state) {
+        스냅샷을_심는다(state, META);
+    }
+
+    /** 노드 예산을 바꿔 심는다. 배분 전 상한이 노드 몫에서 나오는지 재려면 필요하다. */
+    private void 스냅샷을_심는다(CouponState state, SnapshotMeta meta) {
         holder.replace(new GatewaySnapshot(
                 state == null ? Map.of() : Map.of(COUPON, state),
-                META, 지금));
+                meta, 지금));
     }
 
     @Test
@@ -408,14 +413,53 @@ class AdmissionGatewayFilterTest {
         스냅샷을_심는다(CouponStates.idle(1_000));
 
         // 한산 통과 상한은 전역 크레딧의 20% 다. 그 다음 한 명이 첫 대기자다.
+        MockServerWebExchange 마지막_통과자 = null;
         for (long i = 0; i < IDLE_CAP; i++) {
-            태운다(COUPON, "무대기" + i);
+            마지막_통과자 = 태운다(COUPON, "무대기" + i);
         }
+        // 상한번째까지는 줄 없이 통과한다. 넘긴 쪽만 보면 상한이 1 로 무너져도 초록이다.
+        assertThat(마지막_통과자.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .isEqualTo(AdmissionDecision.PASS_UNDER_CAP);
+        // 통과 경로는 줄을 안 친다 (RD-4).
+        assertThat(줄.왕복()).isZero();
+
         MockServerWebExchange 첫_대기자 = 태운다(COUPON, "대기자");
 
         assertThat(첫_대기자.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
                 .isEqualTo(AdmissionDecision.ENQUEUE_RATE_COUPON);
         assertThat(첫_대기자.getResponse().getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+    }
+
+    /**
+     * <b>상한을 푸는 것과 없애는 것은 다르다.</b> 배분 전이라 배수 속도를 모를
+     * 뿐이지 아무나 무한히 세워도 된다는 뜻이 아니다. 스냅샷이 낡은 동안에는
+     * 대기 인원이 영영 0 으로 보여 이 경로가 계속 불리므로, 상한이 없으면
+     * 장애가 지속되는 내내 줄이 자란다 (R5).
+     *
+     * <p>도메인이 그 값을 계산하는 것은 {@code AdmissionDeciderTest} 가 잰다.
+     * 여기서 재는 것은 <b>게이트웨이가 그 값을 실제로 포트에 넘기는가</b> 다.
+     */
+    @Test
+    @DisplayName("배분_전에도_상한은_유한하다")
+    void 배분_전에도_상한은_유한하다() {
+        // 노드 몫이 1 이면 상한은 최대 대기 시간만큼이다. META 로는 60만이라 못 잰다.
+        SnapshotMeta 작은_노드 = new SnapshotMeta(1, 1);
+        long CAP = AdmissionDecider.globalCap(작은_노드) * AdmissionGatewayFilter.MAX_ETA_SEC;
+        스냅샷을_심는다(CouponStates.idle(1_000_000), 작은_노드);
+
+        for (long i = 0; i < CAP - 1; i++) {
+            태운다(COUPON, "대기자" + i);
+        }
+        // 경계는 양쪽을 다 짚는다. 넘긴 쪽만 보면 상한이 1 로 무너져도 초록이다.
+        MockServerWebExchange 마지막_자리 = 태운다(COUPON, "상한번째");
+        MockServerWebExchange 넘긴_사람 = 태운다(COUPON, "상한다음");
+
+        assertThat(마지막_자리.getResponse().getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+        assertThat(넘긴_사람.getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        // 사다리 5번이 끊은 429 와 구별한다 — 여기서는 등록까지 갔다가 걸려야 한다.
+        assertThat(줄.등록_횟수()).isEqualTo((int) CAP + 1);
+        assertThat(뒷단에_닿음).hasValue(false);
     }
 
     /**

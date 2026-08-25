@@ -266,7 +266,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                     double etaSec = EtaPolicy.etaSec(entry.rank(), state.credit());
                     return waiting.waiting(exchange,
                             tokens.issue(couponId, memberId, clock.instant()),
-                            entry.rank(), (long) Math.max(0, etaSec),
+                            entry.rank(), EtaPolicy.reportSec(etaSec),
                             state.mode().name(),
                             POLL.intervalSec(etaSec, random));
                 });

@@ -156,7 +156,7 @@ public final class QueueStatusFilter implements WebFilter {
         }
         double etaSec = EtaPolicy.etaSec(entry.rank(), credit(couponId));
         return response.status(exchange, entry.state(), entry.rank(),
-                (long) Math.max(0, etaSec), POLL.intervalSec(etaSec, random));
+                EtaPolicy.reportSec(etaSec), POLL.intervalSec(etaSec, random));
     }
 
     /** 배분 속도를 모르면 ETA 도 모른다. 모를수록 자주 묻게 하지 않는다. */

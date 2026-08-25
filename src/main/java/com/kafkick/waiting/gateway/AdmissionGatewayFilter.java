@@ -334,7 +334,12 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      */
     private boolean hasEntryToken(ServerWebExchange exchange, String couponId) {
         String presented = exchange.getRequest().getHeaders().getFirst(ENTRY_TOKEN);
-        return entryTokens.verify(presented, couponId, clock.instant()).isPresent();
+        String memberId = exchange.getRequest().getHeaders().getFirst(MEMBER_ID);
+        // **토큰이 가리키는 사람과 같아야 한다.** 안 보면 남의 토큰을 주워 와도
+        // 통하고, 발급은 주워 온 사람 앞으로 나간다.
+        return entryTokens.verify(presented, couponId, clock.instant())
+                .filter(owner -> owner.equals(memberId))
+                .isPresent();
     }
 
     private String pathVariable(ServerWebExchange exchange) {

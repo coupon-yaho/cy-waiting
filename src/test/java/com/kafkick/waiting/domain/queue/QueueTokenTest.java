@@ -110,6 +110,24 @@ class QueueTokenTest {
         assertThat(token.verify(앞부분 + ".!!!!", "c1", 지금)).isEmpty();
     }
 
+    /**
+     * 둘은 같은 비밀키를 쓰고 페이로드 형식도 같다. 접두를 서명에 안 넣으면
+     * 접두만 바꿔 끼우는 것으로 다른 쓰임의 토큰이 된다 — 줄을 통째로 건너뛴다.
+     */
+    @Test
+    @DisplayName("다른_쓰임의_토큰은_접두를_바꿔도_안_통한다")
+    void 다른_쓰임의_토큰은_접두를_바꿔도_안_통한다() {
+        String 남의_쓰임 = EntryToken.of(SECRET).issue("c1", "m1", 지금);
+        String 접두를_바꾼_것 = 남의_쓰임.replaceFirst("^[a-z]+_", 접두());
+
+        assertThat(token.verify(접두를_바꾼_것, "c1", 지금)).isEmpty();
+    }
+
+    private String 접두() {
+        String 내_것 = token.issue("c1", "m1", 지금);
+        return 내_것.substring(0, 내_것.indexOf('_') + 1);
+    }
+
     @Test
     @DisplayName("구분자가_없으면_거절한다")
     void 구분자가_없으면_거절한다() {

@@ -225,6 +225,26 @@ class AdmissionGatewayFilterTest {
     }
 
     @Test
+    @DisplayName("남이_받은_토큰으로는_안_통한다")
+    void 남이_받은_토큰으로는_안_통한다() {
+        // 토큰이 가리키는 사람을 안 보면 남의 것을 주워 와도 통하고, 발급은
+        // 주워 온 사람 앞으로 나간다.
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.method(HttpMethod.POST,
+                                "/api/v1/coupons/" + COUPON + "/issue")
+                        .header("X-Member-Id", MEMBER)
+                        .header("Entry-Token", entryTokens.issue(COUPON, "999999", 지금)));
+        exchange.getAttributes().put(
+                ServerWebExchangeUtils.URI_TEMPLATE_VARIABLES_ATTRIBUTE, Map.of("couponId", COUPON));
+
+        filter.filter(exchange, e -> Mono.empty()).block();
+
+        assertThat(exchange.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .matches(AdmissionDecision::isEnqueue, "대기 판정");
+    }
+
+    @Test
     @DisplayName("대기_판정은_뒷단에_안_간다")
     void 대기_판정은_뒷단에_안_간다() {
         // 줄에 세운 사람을 뒷단으로도 보내면, 줄을 선 채로 발급까지 받는다 —

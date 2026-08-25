@@ -31,6 +31,7 @@ class SweepTest extends RedisContainerSupport {
     private static final String MAX_SCORE = RedisKeys.maxScore(COUPON, 1, 0);
     private static final String GRACE = RedisKeys.grace(COUPON, 1, 0);
     private static final String ALIVE = RedisKeys.alive(COUPON, 1, 0);
+    private static final String ADMITTED = RedisKeys.admitted(COUPON, 1, 0);
 
     /** 시각을 주입한다 — 실제 시계에 기대면 만료 시험이 흔들린다 (TS-4). */
     private static final long NOW = 1_800_000_000L;
@@ -52,7 +53,7 @@ class SweepTest extends RedisContainerSupport {
 
     private void enqueue(String memberId) {
         redis.execute(enqueueScript,
-                        List.of(QUEUE, MAX_SCORE, ALIVE),
+                        List.of(QUEUE, MAX_SCORE, ALIVE, ADMITTED),
                         List.of(memberId, "86400", "3600", "-1", String.valueOf(NOW)))
                 .blockFirst(WAIT);
     }

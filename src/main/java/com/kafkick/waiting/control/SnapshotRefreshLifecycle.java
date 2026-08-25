@@ -18,8 +18,8 @@ import reactor.core.scheduler.Scheduler;
 
 /**
  * <b>루프는 웹 서버보다 오래 산다.</b> 드레이닝이 끝날 때까지 재료가 신선해야
- * 진행 중인 요청이 낡은 판정을 안 받는다. 드레이닝을 알리는 일은 단계가 아니라
- * 닫힘 사건이 지므로, 신호는 그대로 먼저 간다.
+ * 진행 중인 요청이 낡은 판정을 안 받는다. 드레이닝을 알리는 것은 이 클래스가
+ * 받는 {@link ContextClosedEvent} 이고, 그 사건은 어떤 정지보다 먼저 온다.
  */
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public final class SnapshotRefreshLifecycle
@@ -31,7 +31,6 @@ public final class SnapshotRefreshLifecycle
     /**
      * 컨테이너는 단계가 큰 것부터 멈춘다. <b>웹 서버보다 작아야 나중에 멎는다</b> —
      * 드레이닝 동안에도 재료가 신선해야 진행 중인 요청이 낡은 판정을 안 받는다.
-     * 종료 신호를 먼저 받는 일은 닫힘 사건이 진다.
      */
     private static final int PHASE = WebServerApplicationContext.GRACEFUL_SHUTDOWN_PHASE - 1;
 

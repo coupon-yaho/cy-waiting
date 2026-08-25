@@ -34,12 +34,6 @@ public class ControlPlaneConfig {
     }
 
     @Bean
-    GatewayRegistry gatewayRegistry(ControlPlaneProperties properties) {
-        return GatewayRegistry.of(properties.capacity().rampDownTicks(),
-                properties.capacity().expectedNodes());
-    }
-
-    @Bean
     CapacityCollector capacityCollector(ControlPlaneProperties properties) {
         return CapacityCollector.of(properties.capacity().rampUp(),
                 properties.capacity().freshness(), properties.capacity().floor(),

@@ -133,6 +133,8 @@ class EtaPolicyTest {
     void 모르면_가장_넓은_구간의_초를_준다() {
         assertThat(EtaPolicy.reportSec(EtaPolicy.UNKNOWN)).isEqualTo(450);
         assertThat(EtaPolicy.reportSec(-1)).isEqualTo(450);
+        // 아주 작은 배수율에 큰 순번이면 넘친다. 그대로 캐스팅하면 Long.MAX_VALUE 다.
+        assertThat(EtaPolicy.reportSec(Double.POSITIVE_INFINITY)).isEqualTo(450);
     }
 
     @Test

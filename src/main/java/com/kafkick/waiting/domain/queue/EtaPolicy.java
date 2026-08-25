@@ -48,7 +48,9 @@ public final class EtaPolicy {
      * 모르면 가장 넓은 구간의 하한을 준다.
      */
     public static long reportSec(double etaSec) {
-        if (!(etaSec >= 0)) {
+        // **무한대도 모름이다.** 그대로 캐스팅하면 Long.MAX_VALUE 가 나가고,
+        // 그건 값이 아니라 고장으로 읽힌다. bucket() 도 같은 자리로 접는다.
+        if (!Double.isFinite(etaSec) || etaSec < 0) {
             return (long) BUCKET_EDGES[BUCKET_EDGES.length - 1];
         }
         return (long) etaSec;

@@ -363,7 +363,8 @@ class AdmissionDeciderTest {
     @Test
     @DisplayName("곱이_넘쳐도_음수가_되지_않는다")
     void 곱이_넘쳐도_음수가_되지_않는다() {
-        // 음수가 되면 스크립트가 잘못된 상한으로 보고 통째로 거절한다.
+        // 음수가 되면 스크립트가 오류를 낸다. 그 오류는 fail-open 으로 흘러
+        // **닫히는 게 아니라 열린다** — 줄 선 사람을 추월한다.
         SnapshotMeta 거대한_노드 = new SnapshotMeta(Long.MAX_VALUE, 1);
 
         assertThat(AdmissionDecider.queueCapacity(CouponStates.idle(1_000), 거대한_노드, 600))

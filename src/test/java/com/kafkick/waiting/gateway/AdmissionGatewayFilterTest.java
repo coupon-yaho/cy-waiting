@@ -655,11 +655,17 @@ class AdmissionGatewayFilterTest {
                 holder, AdmissionDecider.of(limiter, 0.2), 시계, meters, () -> 0.5,
                 줄, tokens, limiter, entryTokens);
         스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
-        태운다(f, COUPON);
+        // 래치가 실제로 걸렸는지부터 본다. 안 걸렸으면 뒤의 통과가 아무 뜻이 없다.
+        assertThat(태운다(f, COUPON)).matches(AdmissionDecision::isEnqueue, "대기 판정");
 
         // 스냅샷은 한산해졌지만 대기 인원이 0 이 되는 것은 여기서 한 번도 안 본다.
         스냅샷을_심는다(CouponStates.idle(1_000));
-        시계.앞으로(Duration.ofSeconds(5));
+        시계.앞으로(Duration.ofSeconds(2));
+        assertThat(태운다(f, COUPON))
+                .as("아직 안 풀렸다")
+                .isEqualTo(AdmissionDecision.ENQUEUE_BACKLOG);
+
+        시계.앞으로(Duration.ofSeconds(3));
 
         assertThat(태운다(f, COUPON)).isEqualTo(AdmissionDecision.PASS_UNDER_CAP);
     }

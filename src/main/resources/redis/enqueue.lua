@@ -3,6 +3,7 @@
 -- KEYS[1]  queue:{cid}          ZSET. score = Redis TIME 의 마이크로초
 -- KEYS[2]  maxscore:{cid}       시계 역행 방어용 바닥값
 -- KEYS[3]  alive:{cid}       생존 신호 ZSET. score 는 만료 시각(초)
+-- KEYS[4]  admitted:{cid}       배분이 올린 임계. 이 값 이하는 이미 들여보낸 사람
 -- ARGV[1]  memberId
 -- ARGV[2]  maxscore TTL(초). 양의 정수
 -- ARGV[3]  alive TTL(초). 양의 정수. 폴링 간격에서 나온 값이라 주입받는다
@@ -74,8 +75,16 @@ end
 
 -- 2차 방어다. 1차는 도메인이 낡은 스냅샷으로 판정하므로 여기서 한 번 더 본다.
 -- **0 도 상한이다.** 배수할 수 없는 쿠폰은 한 명도 안 받는다.
-if maxLen >= 0 and redis.call('ZCARD', KEYS[1]) >= maxLen then
-    return {'-1', 0, 0, -1}
+--
+-- **기다리는 사람만 센다.** ZSET 은 입장자를 안 지우고 청소기도 아직 없어서,
+-- ZCARD 를 그대로 쓰면 이미 나간 사람이 상한을 먹는다. 실제로 기다리는 사람이
+-- 0 명인데 신규가 영구 거절되는 상태가 된다.
+if maxLen >= 0 then
+    local admitted = tonumber(redis.call('GET', KEYS[4]) or -1)
+    local from = admitted >= 0 and ('(' .. string.format('%.0f', admitted)) or '-inf'
+    if redis.call('ZCOUNT', KEYS[1], from, '+inf') >= maxLen then
+        return {'-1', 0, 0, -1}
+    end
 end
 
 -- 이름을 now 와 겹치지 않게 둔다. 주입받은 시각(초)과 Redis 시계(μs)는

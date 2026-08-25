@@ -89,7 +89,8 @@ public final class QueueRedisPort implements QueuePort {
         return redis.execute(ENQUEUE,
                         List.of(RedisKeys.queue(couponId, shards, shard),
                                 RedisKeys.maxScore(couponId, shards, shard),
-                                RedisKeys.alive(couponId, shards, shard)),
+                                RedisKeys.alive(couponId, shards, shard),
+                                RedisKeys.admitted(couponId, shards, shard)),
                         List.of(memberId, MAX_SCORE_TTL_SEC, ALIVE_TTL_SEC,
                                 Long.toString(maxLen), Long.toString(now.getEpochSecond())))
                 .next()

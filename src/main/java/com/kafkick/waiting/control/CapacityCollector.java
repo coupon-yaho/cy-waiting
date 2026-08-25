@@ -136,9 +136,9 @@ public final class CapacityCollector {
 
         long total = 0;
         int fresh = 0;
-        // **램프가 만든 0 과 보고된 0 은 다르다.** 앞엣것은 우리가 만든 값이고
-        // 뒤엣것은 뒷단의 백프레셔다. 안 가르면 복귀 첫 판이 하한보다 낮아진다.
-        boolean anyPositive = false;
+        // **램프가 깎은 것과 뒷단이 못 가진 것은 다르다.** 앞엣것은 우리가 만든
+        // 값이고 뒤엣것은 백프레셔다. 가르려면 깎기 전 합도 같이 세야 한다.
+        long reported = 0;
         for (CapacityReport report : latest.values()) {
             if (!isFresh(report, now)) {
                 continue;
@@ -149,7 +149,7 @@ public final class CapacityCollector {
                 continue;
             }
             fresh++;
-            anyPositive |= report.credits() > 0;
+            reported = saturatedAdd(reported, Math.min(report.credits(), perInstanceCap));
             Seen was = seen.get(report.instanceId());
             // **첫 판에 본 무리는 이미 돌던 것으로 본다.** 리더가 바뀐 것이 뒷단이
             // 새로 뜬 것은 아니다. 여기서 램프를 걸면 승계마다 크레딧이 0 으로
@@ -164,15 +164,16 @@ public final class CapacityCollector {
         evictStale(now);
         firstRound = false;
 
-        // **하한은 "보고가 없을 때" 만이다.** 합이 0 인 것과 아무도 안 보고한
-        // 것은 다르다 — 뒷단이 신선하게 "여유 0" 을 보고했으면 그건 정확한
-        // 백프레셔다. 거기에 하한을 얹으면 명시적 신호를 무시하고 계속 민다.
         // **하한은 살아 있는 분모에 맞춘다.** 설정값으로만 재면 노드가 그보다
         // 늘었을 때 노드당 몫이 다시 0 이 된다 — 하한을 둔 이유가 사라진다.
         long minimum = Math.max(floor, (long) Math.max(1, nodes) * IDLE_DIVISOR);
-        // 보고가 없거나, 있어도 램프가 전부 0 으로 접었으면 하한을 쓴다. 뒷단이
-        // 스스로 0 이라고 말한 경우만 그 값을 존중한다.
-        long credit = fresh == 0 || (total == 0 && anyPositive) ? minimum : total;
+        // **하한이 되돌리는 것은 램프가 깎은 만큼까지다.** 뒷단이 신선하게 보고한
+        // 합(reported)이 천장이라, 스스로 "여유 0" 이라고 말했으면 0 이 그대로
+        // 남는다 — 명시적 백프레셔에 하한을 얹으면 그 신호를 무시하고 계속 민다.
+        // 반대로 뒷단은 넉넉한데 램프가 깎아 하한 아래로 내려간 경우는 우리가
+        // 만든 부족분이므로 되돌린다. 안 되돌리면 노드당 몫이 유휴 비율 아래로
+        // 내려가 한산 통과 상한이 0 이 되고, 그 쿠폰이 전 노드에서 막힌다 (R1).
+        long credit = fresh == 0 ? minimum : Math.max(total, Math.min(minimum, reported));
         lastKnown.set(credit);
         return credit;
     }

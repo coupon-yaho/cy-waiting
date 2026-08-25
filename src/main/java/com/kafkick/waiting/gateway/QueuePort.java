@@ -13,22 +13,16 @@ import reactor.core.publisher.Mono;
 public interface QueuePort {
 
     /**
-     * 줄 길이 상한 없음.
-     *
-     * <p><b>0 이 아니다.</b> 0 은 "한 명도 안 받는다" 는 뜻이고 스크립트도 같게
-     * 읽는다. 이 계약을 거꾸로 읽어서 배분 전 쿠폰이 줄을 못 세우는 회귀가 났다.
-     *
-     * <p>판정 경로는 이 값을 안 보낸다 — 도메인이 늘 유한한 상한을 준다.
+     * 줄 길이 상한 없음. <b>0 이 아니다</b> — 0 은 한 명도 안 받는다는 뜻이고
+     * 스크립트도 같게 읽는다. 거꾸로 읽어서 회귀가 났다 (AIJ-0073).
      */
     long NO_LIMIT = -1;
 
     /**
-     * 줄에 세운다. <b>상한은 신규 등록에만 걸린다</b> — 이미 선 사람은 상한이
-     * 0 이어도 자기 순번을 돌려받는다.
+     * 줄에 세운다. <b>상한은 신규 등록에만 걸린다</b> — 이미 선 사람은 자기
+     * 순번을 돌려받는다.
      *
-     * @param maxLen {@link #NO_LIMIT} 만 상한 없음이고 0 은 전원 거절이다.
-     *               쿠폰 전체의 수다. 샤드는 아직 하나만 받는다 — 근거는
-     *               {@code ControlPlaneProperties} 가 그 값을 막는 자리에 있다
+     * @param maxLen 쿠폰 전체의 수. {@link #NO_LIMIT} 만 상한 없음이다
      */
     Mono<QueueEntry> enqueue(String couponId, String memberId, long maxLen, Instant now);
 

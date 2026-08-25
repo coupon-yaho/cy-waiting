@@ -118,6 +118,26 @@ class QueueStatusFilterTest {
         assertThat(exchange.getResponse().getBodyAsString().block()).contains("CLOSED");
     }
 
+    /**
+     * <b>도메인 시험만으로는 배선이 안 잠긴다.</b> 값 산출이 맞아도 응답에 실리는
+     * 것이 다르면 사용자가 보는 것은 여전히 틀린다.
+     */
+    @Test
+    @DisplayName("배수_속도를_모르면_가장_넓은_구간을_싣는다")
+    void 배수_속도를_모르면_가장_넓은_구간을_싣는다() {
+        // 스냅샷에 없는 쿠폰이라 배분 속도를 모른다.
+        holder.replace(new GatewaySnapshot(Map.of(), new SnapshotMeta(1, 1), 지금));
+        줄.enqueue(COUPON, "앞사람", NO_LIMIT, 지금).block();
+        줄.enqueue(COUPON, MEMBER, NO_LIMIT, 지금).block();
+
+        MockServerWebExchange exchange = 토큰으로_조회한다(tokens.issue(COUPON, MEMBER, 지금));
+
+        // 0 이면 순번이 남았는데 곧 입장이라고 말하는 셈이다.
+        assertThat(exchange.getResponse().getBodyAsString().block())
+                .contains("\"position\":1")
+                .contains("\"etaSeconds\":450");
+    }
+
     @Test
     @DisplayName("기다리는_중이면_순번을_준다")
     void 기다리는_중이면_순번을_준다() {

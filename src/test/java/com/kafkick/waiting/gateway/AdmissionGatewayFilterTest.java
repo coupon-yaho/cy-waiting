@@ -25,6 +25,7 @@ import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.concurrent.atomic.AtomicReference;
@@ -564,6 +565,28 @@ class AdmissionGatewayFilterTest {
                 AdmissionDecision.REJECT_QUEUE_FULL, () -> 1)).isEqualTo(36);
     }
 
+    /**
+     * 같은 값을 주면 거절당한 사람들이 다 같이 돌아온다. 그 파도가 다음 거절을
+     * 만들고 반복된다 — 흔들림이 실제로 흩어 놓는지 폭으로 잰다 (F7).
+     */
+    @Test
+    @DisplayName("재시도_안내가_충분히_흩어진다")
+    void 재시도_안내가_충분히_흩어진다() {
+        Random 난수 = new Random(20260825L);
+        double[] 값 = new double[10_000];
+        for (int i = 0; i < 값.length; i++) {
+            값[i] = AdmissionGatewayFilter.retryAfterSec(
+                    AdmissionDecision.REJECT_QUEUE_FULL, 난수::nextDouble);
+        }
+
+        double 평균 = Arrays.stream(값).average().orElseThrow();
+        double 분산 = Arrays.stream(값).map(v -> (v - 평균) * (v - 평균)).average().orElseThrow();
+
+        assertThat(Math.sqrt(분산))
+                .as("표준편차가 작으면 다 같이 돌아온다")
+                .isGreaterThanOrEqualTo(0.5);
+    }
+
     @Test
     @DisplayName("차례가_온_사람은_멀리_안_보낸다")
     void 차례가_온_사람은_멀리_안_보낸다() {
@@ -604,6 +627,41 @@ class AdmissionGatewayFilterTest {
             int 해당 = (d.isPass() ? 1 : 0) + (d.isEnqueue() ? 1 : 0) + (d.isReject() ? 1 : 0);
             assertThat(해당).as("판정 %s", d).isEqualTo(1);
         });
+    }
+
+    /** 아무 문자열이나 흘려보내면 그것마다 큐 키가 하나씩 생긴다. */
+    @Test
+    @DisplayName("미지_쿠폰을_만_번_불러도_줄을_안_만든다")
+    void 미지_쿠폰을_만_번_불러도_줄을_안_만든다() {
+        스냅샷을_심는다(CouponStates.idle(1_000));
+
+        for (int i = 0; i < 10_000; i++) {
+            태운다("없는쿠폰" + i);
+        }
+
+        assertThat(줄.왕복()).isZero();
+        assertThat(뒷단에_닿음).hasValue(false);
+    }
+
+    /**
+     * 래치가 안 풀리면 한 번 붐빈 쿠폰이 영영 무대기 통과를 못 준다. 대기 인원이
+     * 0 이 되는 것을 한 번도 못 봐도 시간만으로 풀려야 한다.
+     */
+    @Test
+    @DisplayName("래치가_풀리면_무대기_통과가_되살아난다")
+    void 래치가_풀리면_무대기_통과가_되살아난다() {
+        MutableClock 시계 = MutableClock.at(지금);
+        AdmissionGatewayFilter f = AdmissionGatewayFilter.of(
+                holder, AdmissionDecider.of(limiter, 0.2), 시계, meters, () -> 0.5,
+                줄, tokens, limiter, entryTokens);
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+        태운다(f, COUPON);
+
+        // 스냅샷은 한산해졌지만 대기 인원이 0 이 되는 것은 여기서 한 번도 안 본다.
+        스냅샷을_심는다(CouponStates.idle(1_000));
+        시계.앞으로(Duration.ofSeconds(5));
+
+        assertThat(태운다(f, COUPON)).isEqualTo(AdmissionDecision.PASS_UNDER_CAP);
     }
 
     @Test

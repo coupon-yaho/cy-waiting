@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.kafkick.waiting.MutableClock;
+import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
 import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.List;
@@ -289,6 +290,21 @@ class AbuseLimitFilterTest {
         assertThat(이상한_값.getResponse().getStatusCode())
                 .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
         assertThat(다음으로_감).hasValue(0);
+    }
+
+    /**
+     * 식별자를 바꾸는 비용이 0 이다. 상한이 없으면 그것으로 메모리를 밀어낸다.
+     */
+    @Test
+    @DisplayName("식별자를_만_개로_바꿔도_맵이_유계다")
+    void 식별자를_만_개로_바꿔도_맵이_유계다() {
+        SecondWindowLimiter 좁은_것 = SecondWindowLimiter.withMaxKeys(100);
+
+        for (int i = 0; i < 10_000; i++) {
+            좁은_것.tryAcquire("abuse:m:member" + i, 5, 지금.getEpochSecond());
+        }
+
+        assertThat(좁은_것.size()).isLessThanOrEqualTo(100);
     }
 
     @Test

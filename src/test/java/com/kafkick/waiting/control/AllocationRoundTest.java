@@ -8,6 +8,7 @@ import ch.qos.logback.core.read.ListAppender;
 import com.kafkick.waiting.domain.allocation.CouponDemand;
 import com.kafkick.waiting.domain.allocation.CreditSmoother;
 import com.kafkick.waiting.domain.coupon.CouponState;
+import com.kafkick.waiting.domain.coupon.QueueMode;
 import com.kafkick.waiting.domain.coupon.RuntimeState;
 import java.time.Instant;
 import java.util.Iterator;
@@ -170,6 +171,71 @@ class AllocationRoundTest {
         // 대기 시간을 계산한다.
         assertThat(발행된("c1").credit()).isZero();
         assertThat(발행된("c2").credit()).isEqualTo(5);
+    }
+
+    /**
+     * <b>운영자가 정한 모드가 한 판을 넘겨야 한다.</b> 발행이 모드를 못 실으면
+     * 항상 대기로 둔 쿠폰이 다음 틱에 적응형으로 재발행되고, 줄이 빠지면 그냥
+     * 통과가 된다. 꺼 둔 쿠폰의 우회도 같은 이유로 조용히 멈춘다.
+     */
+    @Test
+    @DisplayName("운영자가_정한_모드가_한_판을_넘긴다")
+    void 운영자가_정한_모드가_한_판을_넘긴다() {
+        AllocationRound round = 판(List.of(
+                new CouponDemand("always", 0, 10_000, QueueMode.ALWAYS),
+                new CouponDemand("off", 0, 10_000, QueueMode.OFF),
+                new CouponDemand("adaptive", 0, 10_000, QueueMode.ADAPTIVE)));
+
+        round.run().block();
+
+        Map<String, CouponState> 실린_것 =
+                SnapshotCodec.create().decode(발행.get("last")).coupons();
+        assertThat(실린_것.get("always").mode()).isEqualTo(QueueMode.ALWAYS);
+        assertThat(실린_것.get("off").mode()).isEqualTo(QueueMode.OFF);
+        assertThat(실린_것.get("adaptive").mode()).isEqualTo(QueueMode.ADAPTIVE);
+    }
+
+    /**
+     * 줄이 남아 있어도 모드는 모드다. 여기가 특히 틀리기 쉽다 — 줄이 있는 쿠폰을
+     * 전부 {@code OFF} 로 실으면 대기 응답의 모드가 사실이 아니게 된다.
+     */
+    @Test
+    @DisplayName("줄이_남아도_모드를_그대로_싣는다")
+    void 줄이_남아도_모드를_그대로_싣는다() {
+        AllocationRound round = 판(List.of(
+                new CouponDemand("always", 500, 10_000, QueueMode.ALWAYS),
+                new CouponDemand("off", 500, 10_000, QueueMode.OFF),
+                new CouponDemand("adaptive", 500, 10_000, QueueMode.ADAPTIVE)));
+
+        round.run().block();
+
+        Map<String, CouponState> 실린_것 =
+                SnapshotCodec.create().decode(발행.get("last")).coupons();
+        assertThat(실린_것.get("always").mode()).isEqualTo(QueueMode.ALWAYS);
+        assertThat(실린_것.get("off").mode()).isEqualTo(QueueMode.OFF);
+        assertThat(실린_것.get("adaptive").mode()).isEqualTo(QueueMode.ADAPTIVE);
+    }
+
+    /** 모드를 안 적은 쿠폰은 적응형이다 — 정책이 없다는 것이 곧 기본값이다. */
+    @Test
+    @DisplayName("모드를_안_적으면_적응형이다")
+    void 모드를_안_적으면_적응형이다() {
+        assertThat(new CouponDemand("c1", 0, 10).mode()).isEqualTo(QueueMode.ADAPTIVE);
+    }
+
+    private AllocationRound 판(List<CouponDemand> demands) {
+        return AllocationRound.of(
+                () -> true,
+                () -> Mono.just(demands),
+                () -> 10_000L, () -> 1,
+                grant -> Mono.just(grant.credit()),
+                hash -> {
+                    발행.put("last", hash);
+                    return Mono.empty();
+                },
+                () -> Instant.ofEpochSecond(1_700_000_000L),
+                () -> Mono.just(CreditSmoother.of(0.3)),
+                SnapshotCodec.create(), () -> 0L);
     }
 
     /**

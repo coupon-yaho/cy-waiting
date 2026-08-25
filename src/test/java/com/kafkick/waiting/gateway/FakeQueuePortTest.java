@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.kafkick.waiting.domain.queue.QueueEntry;
+import com.kafkick.waiting.domain.queue.QueueState;
 import java.time.Instant;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -58,6 +59,21 @@ class FakeQueuePortTest {
         assertThat(줄.enqueue(COUPON, "둘째", 2, 지금).block().accepted()).isTrue();
 
         assertThat(줄.enqueue(COUPON, "셋째", 2, 지금).block().accepted()).isFalse();
+    }
+
+    /**
+     * 실물은 쿠폰마다 다른 ZSET 이다. 한 줄에 몰아넣으면 남의 쿠폰 상한이 나를
+     * 막고, 남의 쿠폰 순번이 내 것으로 나온다.
+     */
+    @Test
+    @DisplayName("다른_쿠폰의_줄은_따로_센다")
+    void 다른_쿠폰의_줄은_따로_센다() {
+        assertThat(줄.enqueue(COUPON, "누구", 1, 지금).block().accepted()).isTrue();
+
+        // c1 의 상한이 찼어도 c2 는 빈 줄이다.
+        assertThat(줄.enqueue("c2", "다른사람", 1, 지금).block().accepted()).isTrue();
+        assertThat(줄.status("c2", "누구", 지금).block().state())
+                .isEqualTo(QueueState.NOT_QUEUED);
     }
 
     @Test

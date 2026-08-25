@@ -82,7 +82,9 @@ class Phase5GateTest {
                     "QueueStatusFilterTest#헤더만_바꿔서는_남의_순번을_못_본다")),
             Map.entry("G5.16", List.of(
                     "AdmissionGatewayFilterTest#줄을_세운_뒤에는_신규_유입이_못_넘는다",
-                    "AdmissionGatewayFilterTest#래치는_다음_창까지_버틴다")),
+                    "AdmissionGatewayFilterTest#래치는_다음_창까지_버틴다",
+                    "AdmissionGatewayFilterTest#래치는_스냅샷이_유효한_동안_버틴다",
+                    "AdmissionGatewayFilterTest#소수부_한계에서도_래치가_더_오래_산다")),
             Map.entry("G5.17", List.of(
                     "AdmissionGatewayFilterTest#래치가_풀리면_무대기_통과가_되살아난다")));
 

@@ -10,6 +10,7 @@ import com.kafkick.waiting.domain.allocation.CreditSmoother;
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.RuntimeState;
 import java.time.Instant;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -169,6 +170,37 @@ class AllocationRoundTest {
         // 대기 시간을 계산한다.
         assertThat(발행된("c1").credit()).isZero();
         assertThat(발행된("c2").credit()).isEqualTo(5);
+    }
+
+    /**
+     * <b>발행 시각은 재료를 읽은 시각이다.</b> 판이 끝난 시각으로 찍으면 스냅샷
+     * 나이가 판 지속 시간만큼 어리게 나온다. 그만큼 낡음 판정이 늦어지고, 이미
+     * 늙은 대기 인원을 믿는 구간이 길어진다 — 그 구간이 추월 창이다 (불변식 4).
+     */
+    @Test
+    @DisplayName("발행_시각은_재료를_읽은_시각이다")
+    void 발행_시각은_재료를_읽은_시각이다() {
+        Instant 읽은_시각 = Instant.ofEpochSecond(1_700_000_000L);
+        // 판이 도는 동안 시계가 흐른다. 적용 왕복이 쿠폰마다 순차로 일어난다.
+        Iterator<Instant> 시계 = List.of(읽은_시각, 읽은_시각.plusSeconds(2),
+                읽은_시각.plusSeconds(3), 읽은_시각.plusSeconds(4)).iterator();
+        AllocationRound round = AllocationRound.of(
+                () -> true,
+                () -> Mono.just(List.of(new CouponDemand("c1", 1_000, 10_000))),
+                () -> 100L, () -> 1,
+                grant -> Mono.just(grant.credit()),
+                hash -> {
+                    발행.put("last", hash);
+                    return Mono.empty();
+                },
+                () -> 시계.hasNext() ? 시계.next() : 읽은_시각.plusSeconds(9),
+                () -> Mono.just(CreditSmoother.of(0.3)),
+                SnapshotCodec.create(), () -> 0L);
+
+        round.run().block();
+
+        assertThat(SnapshotCodec.create().decode(발행.get("last")).publishedAt())
+                .isEqualTo(읽은_시각);
     }
 
     /**

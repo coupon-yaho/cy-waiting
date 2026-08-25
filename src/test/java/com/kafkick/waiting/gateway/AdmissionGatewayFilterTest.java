@@ -339,27 +339,62 @@ class AdmissionGatewayFilterTest {
     }
 
     /**
-     * <b>래치는 스냅샷이 유효한 동안 살아 있어야 한다.</b> 래치가 먼저 풀리면,
-     * 그 뒤로도 유효하다고 보는 스냅샷에는 방금 세운 줄이 아직 안 보인다. 그
-     * 창으로 들어온 사람은 줄을 안 서고 지나간다 — 불변식 4 가 깨진다.
+     * <b>래치는 스냅샷이 유효한 동안 살아 있어야 한다.</b> 먼저 풀리면 그 뒤로도
+     * 유효한 스냅샷에 방금 세운 줄이 안 보여, 그 창으로 들어온 사람이 줄을 안
+     * 서고 지나간다 (불변식 4).
      *
-     * <p>두 값이 다른 클래스에 상수로 박혀 있어 조용히 갈라졌다. 여기서는
-     * 홀더가 정한 값을 필터가 따라오는지를 본다.
+     * <p>홀더와 필터가 같은 시계를 써야 나이가 실제로 자란다. 안 묶으면 늘 0 이다.
      */
     @Test
     @DisplayName("래치는_스냅샷이_유효한_동안_버틴다")
     void 래치는_스냅샷이_유효한_동안_버틴다() {
         MutableClock 시계 = MutableClock.at(지금);
+        SnapshotHolder 같은_시계_홀더 = SnapshotHolder.of(
+                Duration.ofSeconds(3), 홀더_유효_한계, 시계);
         AdmissionGatewayFilter f = AdmissionGatewayFilter.of(
-                holder, AdmissionDecider.of(limiter, IDLE_RATIO),
+                같은_시계_홀더, AdmissionDecider.of(limiter, IDLE_RATIO),
                 시계, meters, () -> 0.5, 줄, tokens, limiter, entryTokens);
-        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+        같은_시계_홀더.replace(new GatewaySnapshot(
+                Map.of(COUPON, CouponStates.queueing(10, 1_000, 5_000)), META, 지금));
         태운다(f, COUPON);
 
-        // 배분이 줄을 비운 것으로 보이는 스냅샷. 아직 유효 한계 안이다.
-        스냅샷을_심는다(CouponStates.idle(1_000));
-        시계.앞으로(홀더_유효_한계.minusSeconds(1));
+        // 배분이 줄을 비운 것으로 보이는 스냅샷. 발행 시각은 그대로라 나이가 자란다.
+        같은_시계_홀더.replace(new GatewaySnapshot(
+                Map.of(COUPON, CouponStates.idle(1_000)), META, 지금));
+        시계.앞으로(홀더_유효_한계);
 
+        // 한계와 같은 나이는 아직 유효하다. 여유가 없으면 여기서 래치만 먼저 죽는다.
+        assertThat(같은_시계_홀더.isDataStale(같은_시계_홀더.view())).as("아직 낡음 아님").isFalse();
+        assertThat(태운다(f, COUPON)).isEqualTo(AdmissionDecision.ENQUEUE_BACKLOG);
+    }
+
+    /**
+     * <b>한계가 정수 초가 아니어도 래치가 더 오래 산다.</b> 초로 내림하면 여유가
+     * 절삭에 다 먹혀 실효 수명이 한계보다 짧아진다. 운영자가 넣을 수 있는 값이라
+     * 잠재 결함이 아니라 계약의 구멍이다.
+     */
+    @Test
+    @DisplayName("소수부_한계에서도_래치가_더_오래_산다")
+    void 소수부_한계에서도_래치가_더_오래_산다() {
+        Duration 한계 = Duration.ofMillis(5_500);
+        MutableClock 시계 = MutableClock.at(지금);
+        SnapshotHolder 소수_홀더 = SnapshotHolder.of(Duration.ofSeconds(3), 한계, 시계);
+        AdmissionGatewayFilter f = AdmissionGatewayFilter.of(
+                소수_홀더, AdmissionDecider.of(limiter, IDLE_RATIO),
+                시계, meters, () -> 0.5, 줄, tokens, limiter, entryTokens);
+        // **초 경계 한가운데서 줄을 세운다.** 래치는 초로 자른 시각을 재므로,
+        // 초의 앞부분이 잘려 나간 만큼 실효 수명이 짧아진다. 경계에서 세우면
+        // 그 손실이 0 이라 절삭을 못 잰다.
+        시계.앞으로(Duration.ofMillis(900));
+        소수_홀더.replace(new GatewaySnapshot(
+                Map.of(COUPON, CouponStates.queueing(10, 1_000, 5_000)), META, 시계.instant()));
+        태운다(f, COUPON);
+
+        소수_홀더.replace(new GatewaySnapshot(
+                Map.of(COUPON, CouponStates.idle(1_000)), META, 시계.instant()));
+        시계.앞으로(한계);
+
+        assertThat(소수_홀더.isDataStale(소수_홀더.view())).as("아직 낡음 아님").isFalse();
         assertThat(태운다(f, COUPON)).isEqualTo(AdmissionDecision.ENQUEUE_BACKLOG);
     }
 

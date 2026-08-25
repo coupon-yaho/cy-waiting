@@ -63,8 +63,8 @@ class AdmissionGatewayFilterTest {
     /** 스냅샷이 싣는 노드 예산. 심는 자리와 같은 값이어야 한다. */
     private static final SnapshotMeta META = new SnapshotMeta(1_000, 1);
 
-    /** 판정기에 주는 유휴 몫 비율. 필터를 만들 때 쓰는 값과 같아야 한다. */
-    private static final double IDLE_RATIO = 0.2;
+    /** 판정기에 주는 유휴 몫 비율. 운영 배선과 같은 값이다 (B-13). */
+    private static final double IDLE_RATIO = 0.7;
 
     /** 한산 통과 상한. 숫자를 적지 않고 도메인에서 끌어온다. */
     private static final long IDLE_CAP = CouponStates.idle(1).idleCap(META, IDLE_RATIO);

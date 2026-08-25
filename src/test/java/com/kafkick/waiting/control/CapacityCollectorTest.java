@@ -550,14 +550,17 @@ class CapacityCollectorTest {
     @DisplayName("줄어도_노드를_받치는_바닥_아래로는_안_간다")
     void 줄어도_노드를_받치는_바닥_아래로는_안_간다() {
         CapacityCollector collector = collector();
-        collector.collect(List.of(report("a", 10_000, NOW)), NOW, 4);
+        // **설정 하한이 지배하지 않을 만큼 노드를 늘린다.** 안 그러면 이 시험이
+        // 노드 수가 아니라 설정값을 재게 된다.
+        int 노드 = (int) (FLOOR / CapacityCollector.IDLE_DIVISOR) + 4;
+        collector.collect(List.of(report("a", 10_000, NOW)), NOW, 노드);
 
         for (int i = 0; i < 100; i++) {
-            collector.observationFailed(4);
+            collector.observationFailed(노드);
         }
 
-        // 설정 하한은 10 이지만 노드가 넷이면 20 이 있어야 노드당 몫이 5 다.
-        assertThat(collector.lastKnown()).isEqualTo(4L * CapacityCollector.IDLE_DIVISOR);
+        assertThat(collector.lastKnown())
+                .isEqualTo((long) 노드 * CapacityCollector.IDLE_DIVISOR);
     }
 
     /**
@@ -609,17 +612,19 @@ class CapacityCollectorTest {
     @Test
     @DisplayName("감쇠_바닥은_지금_노드_수를_따른다")
     void 감쇠_바닥은_지금_노드_수를_따른다() {
+        int 노드_많음 = (int) (FLOOR / CapacityCollector.IDLE_DIVISOR) + 4;
         CapacityCollector 늘어난_쪽 = collector();
         늘어난_쪽.collect(List.of(report("a", 10_000, NOW)), NOW, 1);
         CapacityCollector 줄어든_쪽 = collector();
-        줄어든_쪽.collect(List.of(report("a", 10_000, NOW)), NOW, 10);
+        줄어든_쪽.collect(List.of(report("a", 10_000, NOW)), NOW, 노드_많음);
 
         for (int i = 0; i < 100; i++) {
-            늘어난_쪽.observationFailed(10);
+            늘어난_쪽.observationFailed(노드_많음);
             줄어든_쪽.observationFailed(1);
         }
 
-        assertThat(늘어난_쪽.lastKnown()).isEqualTo(10L * CapacityCollector.IDLE_DIVISOR);
+        assertThat(늘어난_쪽.lastKnown())
+                .isEqualTo((long) 노드_많음 * CapacityCollector.IDLE_DIVISOR);
         // 노드가 줄면 설정 하한까지 내려간다. 옛 바닥(50)에 멎으면 안 된다.
         assertThat(줄어든_쪽.lastKnown()).isEqualTo(FLOOR);
     }

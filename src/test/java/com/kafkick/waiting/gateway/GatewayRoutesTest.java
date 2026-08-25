@@ -56,7 +56,7 @@ class GatewayRoutesTest {
             new RouteLocatorBuilder(술어만_있는_컨텍스트()),
             new GatewayRoutes.Backend("http://backend:8080"),
             AdmissionGatewayFilter.of(재료_없는_홀더(),
-                    AdmissionDecider.of(공유_리미터, 0.2),
+                    AdmissionDecider.of(공유_리미터, 0.7),
                     Clock.systemUTC(), new SimpleMeterRegistry(),
                     FakeQueuePort.create(),
                     QueueToken.of("not-a-real-secret-0123456789abcdef"),

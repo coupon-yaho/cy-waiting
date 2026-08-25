@@ -197,9 +197,12 @@ class ControlPlanePropertiesTest {
         ControlPlaneProperties.Capacity 기본 = ControlPlaneProperties.defaults().capacity();
 
         // 설정으로 노드를 늘리면서 하한을 그대로 두면 조용히 전면 차단이 된다.
+        // **경계를 손으로 안 적는다.** 유휴 비율이 바뀌면 이 값도 같이 움직인다.
+        int 못_받치는_노드 = (int) (기본.floor() / CapacityCollector.IDLE_DIVISOR) + 1;
+
         assertThatThrownBy(() -> new ControlPlaneProperties.Capacity(기본.rampUp(),
                 기본.freshness(), 기본.floor(), 기본.perInstanceCap(),
-                기본.rampDownTicks(), 기본.expectedNodes() + 1))
+                기본.rampDownTicks(), 못_받치는_노드))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("하한");
     }

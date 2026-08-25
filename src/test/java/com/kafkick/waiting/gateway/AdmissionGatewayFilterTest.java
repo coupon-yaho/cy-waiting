@@ -863,12 +863,15 @@ class AdmissionGatewayFilterTest {
 
         // 스냅샷은 한산해졌지만 대기 인원이 0 이 되는 것은 여기서 한 번도 안 본다.
         스냅샷을_심는다(CouponStates.idle(1_000));
-        시계.앞으로(Duration.ofSeconds(2));
+        시계.앞으로(홀더_유효_한계.minusSeconds(1));
         assertThat(태운다(f, COUPON))
                 .as("아직 안 풀렸다")
                 .isEqualTo(AdmissionDecision.ENQUEUE_BACKLOG);
 
-        시계.앞으로(Duration.ofSeconds(3));
+        // 한계를 넘기면 풀린다. **여기도 한계에서 끌어온다** — 숫자를 손으로
+        // 적으면 수명을 바꿀 때 이 시험이 조용히 다른 것을 재게 된다.
+        // 바로 위 대기 판정이 래치를 다시 찍었으므로 그 시점부터 센다.
+        시계.앞으로(홀더_유효_한계.plusSeconds(2));
 
         assertThat(태운다(f, COUPON)).isEqualTo(AdmissionDecision.PASS_UNDER_CAP);
     }

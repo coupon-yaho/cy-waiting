@@ -4,10 +4,14 @@
 // 규모가 필요한 것은 main·nightly 의 다른 시나리오가 맡는다.
 import http from 'k6/http';
 import { check, sleep } from 'k6';
+import { Counter } from 'k6/metrics';
 
-// **의도한 400 을 실패로 세지 않는다.** 그대로 두면 실패율이 33% 로 나와서,
-// 진짜 실패가 났을 때 그 숫자가 아무 신호도 못 준다.
-http.setResponseCallback(http.expectedStatuses(200, 400));
+// **의도한 응답을 실패로 세지 않는다.** 그대로 두면 실패율이 진짜 실패가 났을 때
+// 아무 신호도 못 준다.
+//
+// 202 는 줄에 섰다는 뜻이다. 판정이 실제로 돌면 유휴 몫을 넘긴 요청은 큐로 가므로
+// 정상 결과다 — 판정을 우회하던 동안에는 이 응답이 아예 안 나왔다.
+http.setResponseCallback(http.expectedStatuses(200, 202, 400));
 
 const BASE = __ENV.BASE_URL || 'http://localhost:18080';
 
@@ -27,6 +31,10 @@ export const options = {
   // 판정은 여기가 아니라 evaluate-gate.sh 가 한다. 이건 조기 중단용이다.
   thresholds: {
     checks: ['rate>0.99'],
+    // **줄이 한 번은 서야 한다.** 뒷단 도달만으로 통과하면 판정을 통째로 우회해도
+    // 초록이다 — 이 하네스가 실제로 그랬다. 대기 응답이 나온다는 것이 판정
+    // 필터가 돌았다는 유일한 증거다.
+    queued_responses: ['count>0'],
   },
 };
 
@@ -66,6 +74,22 @@ const tracedConsistently = (r) => {
   }
 };
 
+const queuedResponses = new Counter('queued_responses');
+
+// 줄에 섰다. **봉투까지 본다** — 202 만 보면 뒷단이 낸 202 도 통과한다.
+const queued = (r) => {
+  if (r.status !== 202) {
+    return false;
+  }
+  try {
+    const data = r.json().data;
+    return data.admitted === false && typeof data.queueToken === 'string'
+        && typeof data.position === 'number';
+  } catch {
+    return false;
+  }
+};
+
 export default function () {
   const member = __VU * 1000 + __ITER;
 
@@ -74,12 +98,20 @@ export default function () {
   const list = http.get(`${BASE}${listPath}`, { headers: memberHeaders(member) });
   check(list, { '조회가 뒷단까지 간다': (r) => servedByBackend(r, listPath) });
 
-  // 발급은 판정 필터를 지난다. 지금은 통과만 시킨다 — 판정 내용은 CY-400.
+  // 발급은 판정 필터를 지난다. **둘 다 정상이다** — 유휴 몫 안이면 뒷단으로 가고,
+  // 넘치면 줄을 선다. 뒷단 도달만 재면 판정이 도는 순간 그 체크가 거짓이 되고,
+  // 실제로 판정을 우회하던 동안에만 초록이었다.
   const issuePath = '/api/v1/coupons/c1/issue';
   const issue = http.post(`${BASE}${issuePath}`, null, {
     headers: memberHeaders(member),
   });
-  check(issue, { '발급이 뒷단까지 간다': (r) => servedByBackend(r, issuePath) });
+  const wasQueued = queued(issue);
+  if (wasQueued) {
+    queuedResponses.add(1);
+  }
+  check(issue, {
+    '발급이 판정을 지난다': (r) => servedByBackend(r, issuePath) || wasQueued,
+  });
 
   // 회원 식별자가 없으면 게이트웨이가 끊는다. 뒷단까지 가면 안 된다.
   const noId = http.get(`${BASE}${listPath}`, {

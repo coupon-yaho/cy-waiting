@@ -43,6 +43,12 @@ public final class SnapshotHolder {
     }
 
     private SnapshotHolder(Duration fetchStaleAfter, Duration dataStaleAfter, Clock clock) {
+        // **이 값은 남의 불변식도 정한다.** 판정 쪽 래치 수명이 여기서 나오므로,
+        // 1 초 미만이면 래치가 사실상 없어지고 그 자리가 추월 창이 된다.
+        if (dataStaleAfter == null || dataStaleAfter.compareTo(Duration.ofSeconds(1)) < 0) {
+            throw new IllegalArgumentException(
+                    "dataStaleAfter 는 1초 이상이어야 한다: " + dataStaleAfter);
+        }
         this.fetchStaleAfter = fetchStaleAfter;
         this.dataStaleAfter = dataStaleAfter;
         this.clock = clock;

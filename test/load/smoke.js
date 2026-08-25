@@ -66,6 +66,20 @@ const tracedConsistently = (r) => {
   }
 };
 
+// 줄에 섰다. **봉투까지 본다** — 202 만 보면 뒷단이 낸 202 도 통과한다.
+const queued = (r) => {
+  if (r.status !== 202) {
+    return false;
+  }
+  try {
+    const data = r.json().data;
+    return data.admitted === false && typeof data.queueToken === 'string'
+        && typeof data.position === 'number';
+  } catch {
+    return false;
+  }
+};
+
 export default function () {
   const member = __VU * 1000 + __ITER;
 
@@ -74,12 +88,14 @@ export default function () {
   const list = http.get(`${BASE}${listPath}`, { headers: memberHeaders(member) });
   check(list, { '조회가 뒷단까지 간다': (r) => servedByBackend(r, listPath) });
 
-  // 발급은 판정 필터를 지난다. 지금은 통과만 시킨다 — 판정 내용은 CY-400.
+  // 발급은 판정 필터를 지난다. **둘 다 정상이다** — 유휴 몫 안이면 뒷단으로 가고,
+  // 넘치면 줄을 선다. 뒷단 도달만 재면 판정이 도는 순간 그 체크가 거짓이 되고,
+  // 실제로 판정을 우회하던 동안에만 초록이었다.
   const issuePath = '/api/v1/coupons/c1/issue';
   const issue = http.post(`${BASE}${issuePath}`, null, {
     headers: memberHeaders(member),
   });
-  check(issue, { '발급이 뒷단까지 간다': (r) => servedByBackend(r, issuePath) });
+  check(issue, { '발급이 판정을 지난다': (r) => servedByBackend(r, issuePath) || queued(r) });
 
   // 회원 식별자가 없으면 게이트웨이가 끊는다. 뒷단까지 가면 안 된다.
   const noId = http.get(`${BASE}${listPath}`, {

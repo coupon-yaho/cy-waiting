@@ -198,7 +198,7 @@ class CapacityCollectorTest {
         long warmed = warm(collector, "a", 300);
         collector.collect(List.of(report("a", 300, warmed)), warmed, 1);
 
-        collector.observationFailed();
+        collector.observationFailed(1);
 
         assertThat(collector.lastKnown()).isEqualTo(300);
     }
@@ -515,6 +515,132 @@ class CapacityCollectorTest {
         long credit = collector.collect(List.of(report("a", 3, warmed + 1)), warmed + 1, 2);
 
         assertThat(credit).isEqualTo(3);
+    }
+
+    /**
+     * <b>못 읽은 값에는 시효가 있어야 한다.</b> 직전 값을 지키는 것은 한 판이
+     * 실패했을 때 맞는 답이지만, 그것이 무기한이면 뒷단이 통째로 죽어도 옛
+     * 크레딧으로 계속 민다. 분모(노드 수)는 유지가 과소 방향이라 안전하지만
+     * 분자(크레딧)는 과다 방향이다.
+     */
+    @Test
+    @DisplayName("읽기_실패가_이어지면_값이_줄어든다")
+    void 읽기_실패가_이어지면_값이_줄어든다() {
+        CapacityCollector collector = collector();
+        long 관측 = collector.collect(List.of(report("a", 10_000, NOW)), NOW, 1);
+
+        // 유예 안에서는 그대로다. 한 판 실패했다고 조이면 순단마다 흔들린다.
+        for (int i = 0; i < CapacityCollector.HOLD_ROUNDS; i++) {
+            collector.observationFailed(1);
+        }
+        assertThat(collector.lastKnown()).isEqualTo(관측);
+
+        collector.observationFailed(1);
+
+        assertThat(collector.lastKnown()).isEqualTo(관측 / 2);
+    }
+
+    /**
+     * 아무리 줄어도 바닥 아래로는 안 간다. 그 아래는 전면 차단이다.
+     *
+     * <p><b>바닥은 걷을 때와 같은 값이어야 한다.</b> 설정값만 보면 노드가 그보다
+     * 늘었을 때 노드당 몫이 유휴 비율 아래로 내려가 한산 통과가 전 노드에서 막힌다.
+     */
+    @Test
+    @DisplayName("줄어도_노드를_받치는_바닥_아래로는_안_간다")
+    void 줄어도_노드를_받치는_바닥_아래로는_안_간다() {
+        CapacityCollector collector = collector();
+        collector.collect(List.of(report("a", 10_000, NOW)), NOW, 4);
+
+        for (int i = 0; i < 100; i++) {
+            collector.observationFailed(4);
+        }
+
+        // 설정 하한은 10 이지만 노드가 넷이면 20 이 있어야 노드당 몫이 5 다.
+        assertThat(collector.lastKnown()).isEqualTo(4L * CapacityCollector.IDLE_DIVISOR);
+    }
+
+    /**
+     * <b>뒷단이 스스로 0 이라고 말한 뒤에는 감쇠가 그것을 올리지 않는다.</b>
+     * 그건 관측이고, 거기에 바닥을 얹으면 죽었다고 말한 뒷단에 다시 밀어넣는다.
+     * 서킷이 half-open 으로 갈 때 시험 트래픽이 아니라 상시 유입이 도달해 있게 된다.
+     */
+    @Test
+    @DisplayName("보고한_0_은_감쇠가_안_올린다")
+    void 보고한_0_은_감쇠가_안_올린다() {
+        CapacityCollector collector = collector();
+        assertThat(collector.collect(List.of(report("a", 0, NOW)), NOW, 1)).isZero();
+
+        for (int i = 0; i < 100; i++) {
+            collector.observationFailed(1);
+        }
+
+        assertThat(collector.lastKnown()).isZero();
+    }
+
+    /**
+     * 비리더 구간의 실패는 남의 판이다. 이월하면 재승계 첫 판에 유예를 건너뛰고
+     * 곧바로 반토막을 내는데, 그 대상은 몇 분 전 관측치다.
+     */
+    @Test
+    @DisplayName("리더를_다시_잡으면_유예가_처음부터다")
+    void 리더를_다시_잡으면_유예가_처음부터다() {
+        CapacityCollector collector = collector();
+        long 관측 = collector.collect(List.of(report("a", 10_000, NOW)), NOW, 1);
+        // **성공 판을 사이에 두지 않는다.** 성공이 카운터를 되돌리므로, 그러면
+        // 승계 알림을 지워도 이 시험이 통과한다.
+        for (int i = 0; i < CapacityCollector.HOLD_ROUNDS; i++) {
+            collector.observationFailed(1);
+        }
+
+        collector.leadershipAcquired();
+        for (int i = 0; i < CapacityCollector.HOLD_ROUNDS; i++) {
+            collector.observationFailed(1);
+        }
+
+        assertThat(collector.lastKnown()).isEqualTo(관측);
+    }
+
+    /**
+     * 못 읽는 동안 노드 수가 바뀔 수 있다. 옛 바닥을 들고 있으면 양쪽으로 다
+     * 틀린다 — 늘면 그만큼 낮아 한산 통과가 막히고, 줄면 그만큼 높아 장애 중에
+     * 실제 바닥보다 많이 민다.
+     */
+    @Test
+    @DisplayName("감쇠_바닥은_지금_노드_수를_따른다")
+    void 감쇠_바닥은_지금_노드_수를_따른다() {
+        CapacityCollector 늘어난_쪽 = collector();
+        늘어난_쪽.collect(List.of(report("a", 10_000, NOW)), NOW, 1);
+        CapacityCollector 줄어든_쪽 = collector();
+        줄어든_쪽.collect(List.of(report("a", 10_000, NOW)), NOW, 10);
+
+        for (int i = 0; i < 100; i++) {
+            늘어난_쪽.observationFailed(10);
+            줄어든_쪽.observationFailed(1);
+        }
+
+        assertThat(늘어난_쪽.lastKnown()).isEqualTo(10L * CapacityCollector.IDLE_DIVISOR);
+        // 노드가 줄면 설정 하한까지 내려간다. 옛 바닥(50)에 멎으면 안 된다.
+        assertThat(줄어든_쪽.lastKnown()).isEqualTo(FLOOR);
+    }
+
+    /** 한 판이라도 성공하면 유예가 다시 찬다. 안 그러면 순단이 쌓여 조여진다. */
+    @Test
+    @DisplayName("한_판_성공하면_유예가_다시_찬다")
+    void 한_판_성공하면_유예가_다시_찬다() {
+        CapacityCollector collector = collector();
+        long 관측 = collector.collect(List.of(report("a", 10_000, NOW)), NOW, 1);
+        for (int i = 0; i < CapacityCollector.HOLD_ROUNDS + 1; i++) {
+            collector.observationFailed(1);
+        }
+
+        long 다시 = collector.collect(List.of(report("a", 10_000, NOW + 1)), NOW + 1, 1);
+        for (int i = 0; i < CapacityCollector.HOLD_ROUNDS; i++) {
+            collector.observationFailed(1);
+        }
+
+        assertThat(관측).isEqualTo(다시);
+        assertThat(collector.lastKnown()).isEqualTo(다시);
     }
 
     /**

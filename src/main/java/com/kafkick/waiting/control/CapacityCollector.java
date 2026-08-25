@@ -46,10 +46,18 @@ public final class CapacityCollector {
     public static final int IDLE_DIVISOR = 5;
 
     /**
+     * 못 읽어도 직전 값을 그대로 쓰는 판의 수.
+     *
+     * <p><b>R-2 의 "3회 연속 누락" 과 다른 값이다</b> — 저건 뒷단 하나를 벽시계로,
+     * 이건 우리 시야를 판으로 센다.
+     */
+    public static final int HOLD_ROUNDS = 3;
+
+    /**
      * 뒷단 보고가 기준 시각보다 앞서도 받아 주는 폭.
      *
-     * <p>읽기와 시각을 동시에 내므로 시계가 완벽해도 한 초 어긋난다. 그 경합을
-     * 덮는 데 필요한 것은 1 초지 신선도 창 전체가 아니다.
+     * <p>초 절단 때문에 시계가 완벽해도 한 초 어긋난다. 그 여유는 1 초지
+     * 신선도 창 전체가 아니다.
      */
     private static final long AHEAD_TOLERANCE_SEC = 1;
 
@@ -60,6 +68,9 @@ public final class CapacityCollector {
     private boolean firstRound = true;
 
     private final AtomicLong lastKnown;
+
+    /** 연속으로 못 읽은 판의 수. 한 판이라도 성공하면 다시 0 이다. */
+    private final AtomicLong failedRounds = new AtomicLong();
 
     /**
      * 마지막 판에서 실제로 <b>하한이 답이 된</b> 값. 하한이 안 걸린 판에서는 0 이다.
@@ -120,16 +131,43 @@ public final class CapacityCollector {
 
 
     /**
-     * 이번 읽기가 실패했다. <b>직전 값을 지킨다.</b>
+     * 이번 읽기가 실패했다. <b>유예 안에서는 직전 값을 지킨다.</b>
      *
-     * <p>보고가 0건인 것과 읽지 못한 것은 다르다. 레디스가 안 되면 모든 노드가
-     * 같이 실패하는데 여기서 하한으로 떨어뜨리면 전면 억제가 된다.
+     * <p>0건과 못 읽은 것은 다르다. <b>다만 무기한은 아니다</b> — 길어지면 그건
+     * 관측이 아니라 추측이고, 분자는 유지가 과다 방향이다.
+     *
+     * @param nodes 지금 살아 있는 게이트웨이 수. 바닥이 이 값을 받쳐야 한다
      */
-    public void observationFailed() {
-        // 아무것도 안 한다 — lastKnown 이 그대로 답이 된다.
+    public void observationFailed(int nodes) {
+        if (failedRounds.incrementAndGet() <= HOLD_ROUNDS) {
+            return;
+        }
+        // **절벽이 아니라 비탈로 내려간다.** 유예가 끝나는 순간 바닥으로 떨구면
+        // 그 한 틱에 유입이 몇 배로 조여져 회복 구간이 더 나빠진다.
+        //
+        // **바닥은 걷을 때와 같은 값이다.** 설정값만 보면 노드가 그보다 늘었을 때
+        // 노드당 몫이 유휴 비율 아래로 내려가 한산 통과가 전 노드에서 막힌다.
+        //
+        // **0 은 안 올린다.** 뒷단이 스스로 "여유 0" 이라고 말한 뒤라면 그건
+        // 관측이고, 거기에 바닥을 얹으면 죽었다고 말한 뒷단에 다시 밀어넣는다.
+        // **지금 노드 수로 잰다.** 옛 바닥을 들고 있으면 양쪽으로 다 틀린다 —
+        // 노드가 늘면 그만큼 낮아 한산 통과가 막히고, 줄면 그만큼 높아 장애
+        // 중에 실제 바닥보다 많이 민다. 걷을 때와 같은 식을 쓴다.
+        long bottom = Math.max(floor, (long) Math.max(1, nodes) * IDLE_DIVISOR);
+        lastKnown.updateAndGet(known -> known == 0 ? 0 : Math.max(bottom, known / 2));
     }
 
-    /** 마지막으로 성공한 관측의 결과. */
+    /** 리더가 됐다. <b>유예를 처음부터 준다</b> — 비리더 구간의 실패는 남의 판이다. */
+    public void leadershipAcquired() {
+        failedRounds.set(0);
+    }
+
+    /**
+     * 지금 배분이 쓰는 값.
+     *
+     * <p><b>관측치가 아닐 수 있다.</b> 못 읽는 판이 이어지면 감쇠한 값이다 —
+     * 호출부가 관측이라고 믿고 쓰면 그 차이를 못 본다.
+     */
     public long lastKnown() {
         return lastKnown.get();
     }
@@ -199,6 +237,9 @@ public final class CapacityCollector {
         long credit = fresh == 0 || rampMadeIt ? minimum : total;
         lastFloor.set(fresh == 0 || rampMadeIt ? minimum : 0);
         lastKnown.set(credit);
+        // 한 판이라도 성공하면 유예가 다시 찬다. 안 그러면 드문 순단이 쌓여
+        // 멀쩡한 구간에서도 조여진다.
+        failedRounds.set(0);
         return credit;
     }
 

@@ -31,6 +31,7 @@ public final class CapacityRefresh {
     /** 타임아웃 타이머와 수집이 함께 도는 곳. 배분과 같은 스레드다. */
     private final Scheduler worker;
     private final FailureWindow failures = FailureWindow.create();
+    private final FailureWindow decaying = FailureWindow.create();
     private final FailureWindow pinned = FailureWindow.create();
     private final Counter readFailed;
     private final AtomicLong credit = new AtomicLong();
@@ -103,6 +104,27 @@ public final class CapacityRefresh {
         failures.exited().ifPresent(recovered ->
                 log.info("가용량을 다시 읽는다 — {}초 만에, 그동안 {}판 걸렀다",
                         recovered.elapsedSeconds(), recovered.swallowed()));
+        decaying.exited().ifPresent(recovered ->
+                log.info("크레딧을 다시 관측으로 낸다 — {}초 만에, 그동안 {}판 깎았다. 지금 {}",
+                        recovered.elapsedSeconds(), recovered.swallowed(), value));
+    }
+
+    /**
+     * 리더십이 갈렸다. <b>열린 창을 전부 닫는다.</b>
+     *
+     * <p>안 닫으면 다음 리더의 첫 실패가 진입으로 안 잡혀 로그가 빠지고, 그 뒤
+     * 복귀 로그의 지속 시간에 비리더 구간이 섞인다 (LG-2).
+     */
+    public void leadershipChanged() {
+        pinned.exited().ifPresent(recovered ->
+                log.info("리더십이 갈렸다 — 하한 고정 창을 닫는다. {}초 동안 {}판 하한이었다",
+                        recovered.elapsedSeconds(), recovered.swallowed()));
+        failures.exited().ifPresent(recovered ->
+                log.info("리더십이 갈렸다 — 읽기 실패 창을 닫는다. 그동안 {}판 걸렀다",
+                        recovered.swallowed()));
+        decaying.exited().ifPresent(recovered ->
+                log.info("리더십이 갈렸다 — 감쇠 창을 닫는다. 그동안 {}판 깎았다",
+                        recovered.swallowed()));
     }
 
     /**
@@ -110,10 +132,21 @@ public final class CapacityRefresh {
      * 억제가 되는데, 그건 관측이 아니라 왕복 실패다.
      */
     private void failed(Throwable e) {
-        collector.observationFailed();
+        long before = collector.lastKnown();
+        collector.observationFailed(nodes.getAsInt());
+        long after = collector.lastKnown();
+        // **게이지가 배분값을 따라가야 한다.** 성공 판에서만 갱신하면 감쇠가 도는
+        // 동안 지표는 장애 직전 값에 얼어 있고, 배분은 그와 다른 값으로 돈다 —
+        // 회복 판정이 "아무 일도 없었다" 로 자동 통과한다 (RC6).
+        credit.set(after);
         readFailed.increment();
         if (failures.entered()) {
             log.warn("가용량을 못 읽는다 — 직전 값으로 배분한다: {}", e.toString());
+        }
+        // 감쇠는 읽기 실패와 다른 모드다. 진입 조건도 해제 조건도 명확한데
+        // 안 남기면 크레딧이 어디까지 깎였는지를 사후에 못 밝힌다 (LG-2).
+        if (after < before && decaying.entered()) {
+            log.warn("가용량을 오래 못 읽는다 — 크레딧을 깎기 시작한다: {} → {}", before, after);
         }
     }
 

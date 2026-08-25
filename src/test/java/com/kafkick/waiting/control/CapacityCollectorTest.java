@@ -40,7 +40,7 @@ class CapacityCollectorTest {
      */
     private static long warm(CapacityCollector collector, String id, long credits) {
         for (long t = NOW; t <= NOW + RAMP_UP.toSeconds(); t += FRESHNESS.toSeconds()) {
-            collector.collect(List.of(report(id, credits, t)), t);
+            collector.collect(List.of(report(id, credits, t)), t, 1);
         }
         return NOW + RAMP_UP.toSeconds();
     }
@@ -49,11 +49,11 @@ class CapacityCollectorTest {
     @DisplayName("신선한_보고를_더해_전역_크레딧을_만든다")
     void 신선한_보고를_더해_전역_크레딧을_만든다() {
         CapacityCollector collector = collector();
-        collector.collect(List.of(report("a", 100, NOW), report("b", 200, NOW)), NOW);
+        collector.collect(List.of(report("a", 100, NOW), report("b", 200, NOW)), NOW, 1);
         long warmed = NOW + RAMP_UP.toSeconds();
 
         long credit = collector.collect(
-                List.of(report("a", 100, warmed), report("b", 200, warmed)), warmed);
+                List.of(report("a", 100, warmed), report("b", 200, warmed)), warmed, 1);
 
         assertThat(credit).isEqualTo(300);
     }
@@ -64,9 +64,9 @@ class CapacityCollectorTest {
         // **자기 상태를 가장 잘 아는 쪽이 먼저 램프를 건다.** 그래도 게이트웨이가
         // 한 겹 더 건다 — 상대 구현이 늦어도 보호가 남아야 한다.
         CapacityCollector collector = collector();
-        collector.collect(List.of(report("cold", 200, NOW)), NOW);
+        collector.collect(List.of(report("cold", 200, NOW)), NOW, 1);
 
-        long credit = collector.collect(List.of(report("cold", 200, NOW + 15)), NOW + 15);
+        long credit = collector.collect(List.of(report("cold", 200, NOW + 15)), NOW + 15, 1);
 
         // 60초 중 15초 지났으므로 4분의 1이다.
         assertThat(credit).isEqualTo(50);
@@ -80,7 +80,7 @@ class CapacityCollectorTest {
         // 존재할 수 없는데 시험만 만들 수 있게 된다.
         CapacityCollector collector = collector();
 
-        long first = collector.collect(List.of(report("new", 600, NOW)), NOW);
+        long first = collector.collect(List.of(report("new", 600, NOW)), NOW, 1);
 
         // 방금 처음 봤으므로 경과 0 이다. 콜드 인스턴스는 아직 못 받는다 —
         // 하한을 얹지 않는다. 하한은 "아무도 안 보고했을 때" 만이다.
@@ -93,7 +93,7 @@ class CapacityCollectorTest {
         CapacityCollector collector = collector();
         long warmed = warm(collector, "warm", 200);
 
-        assertThat(collector.collect(List.of(report("warm", 200, warmed)), warmed))
+        assertThat(collector.collect(List.of(report("warm", 200, warmed)), warmed, 1))
                 .isEqualTo(200);
     }
 
@@ -105,17 +105,17 @@ class CapacityCollectorTest {
         // 기록이 자라는 것도 같은 뿌리다.
         CapacityCollector collector = collector();
         long warmed = warm(collector, "pod-0", 200);
-        assertThat(collector.collect(List.of(report("pod-0", 200, warmed)), warmed))
+        assertThat(collector.collect(List.of(report("pod-0", 200, warmed)), warmed, 1))
                 .isEqualTo(200);
 
         // 신선도 창을 넘겨 사라진다. 한 틱 빠진 것으로는 안 지운다 —
         // 그러면 정상 인스턴스가 틱마다 램프를 다시 탄다.
         long gone = warmed + FRESHNESS.toSeconds() + 1;
-        collector.collect(List.of(), gone);
+        collector.collect(List.of(), gone, 1);
 
         // 같은 이름으로 콜드 복귀했다. 램프가 다시 걸려야 한다.
         long back = gone + 1;
-        assertThat(collector.collect(List.of(report("pod-0", 200, back)), back)).isZero();
+        assertThat(collector.collect(List.of(report("pod-0", 200, back)), back, 1)).isZero();
     }
 
     @Test
@@ -125,11 +125,11 @@ class CapacityCollectorTest {
         // 죽은 인스턴스의 마지막 보고가 TTL 이 남아 있는 동안 계속 세어진다.
         CapacityCollector collector = collector();
         long warmed = warm(collector, "fresh", 100);
-        collector.collect(List.of(report("stale", 500, NOW)), NOW);
+        collector.collect(List.of(report("stale", 500, NOW)), NOW, 1);
 
         long credit = collector.collect(
                 List.of(report("stale", 500, warmed - FRESHNESS.toSeconds() - 1),
-                        report("fresh", 100, warmed)), warmed);
+                        report("fresh", 100, warmed)), warmed, 1);
 
         assertThat(credit).isEqualTo(100);
     }
@@ -141,9 +141,9 @@ class CapacityCollectorTest {
         CapacityCollector collector = collector();
         long warmed = warm(collector, "a", 200);
 
-        collector.collect(List.of(), warmed);
+        collector.collect(List.of(), warmed, 1);
 
-        assertThat(collector.collect(List.of(report("a", 200, warmed + 1)), warmed + 1))
+        assertThat(collector.collect(List.of(report("a", 200, warmed + 1)), warmed + 1, 1))
                 .isEqualTo(200);
     }
 
@@ -156,7 +156,7 @@ class CapacityCollectorTest {
         long warmed = warm(collector, "a", 100);
 
         // 램프(60초) 안이지만 신선도(3초) 밖이다.
-        assertThat(collector.collect(List.of(report("a", 100, warmed - 30)), warmed))
+        assertThat(collector.collect(List.of(report("a", 100, warmed - 30)), warmed, 1))
                 .isEqualTo(FLOOR);
     }
 
@@ -169,14 +169,14 @@ class CapacityCollectorTest {
         CapacityCollector collector = collector();
         long warmed = warm(collector, "a", 100);
 
-        assertThat(collector.collect(List.of(report("a", 0, warmed)), warmed)).isZero();
+        assertThat(collector.collect(List.of(report("a", 0, warmed)), warmed, 1)).isZero();
     }
 
     @Test
     @DisplayName("신선한_보고가_없으면_하한을_쓴다")
     void 신선한_보고가_없으면_하한을_쓴다() {
         // 0 을 내면 전 쿠폰이 전면 차단된다.
-        assertThat(collector().collect(List.of(), NOW)).isEqualTo(FLOOR);
+        assertThat(collector().collect(List.of(), NOW, 1)).isEqualTo(FLOOR);
     }
 
     @Test
@@ -186,7 +186,7 @@ class CapacityCollectorTest {
         // 같이 실패하는데 여기서 하한으로 떨어뜨리면 전면 억제가 된다.
         CapacityCollector collector = collector();
         long warmed = warm(collector, "a", 300);
-        collector.collect(List.of(report("a", 300, warmed)), warmed);
+        collector.collect(List.of(report("a", 300, warmed)), warmed, 1);
 
         collector.observationFailed();
 
@@ -197,11 +197,11 @@ class CapacityCollectorTest {
     @DisplayName("보고가_음수면_그_항목만_버린다")
     void 보고가_음수면_그_항목만_버린다() {
         CapacityCollector collector = collector();
-        collector.collect(List.of(report("broken", -5, NOW), report("ok", 70, NOW)), NOW);
+        collector.collect(List.of(report("broken", -5, NOW), report("ok", 70, NOW)), NOW, 1);
         long warmed = NOW + RAMP_UP.toSeconds();
 
         long credit = collector.collect(
-                List.of(report("broken", -5, warmed), report("ok", 70, warmed)), warmed);
+                List.of(report("broken", -5, warmed), report("ok", 70, warmed)), warmed, 1);
 
         assertThat(credit).isEqualTo(70);
     }
@@ -213,7 +213,7 @@ class CapacityCollectorTest {
         CapacityCollector collector = collector();
         long warmed = warm(collector, "huge", Long.MAX_VALUE);
 
-        assertThat(collector.collect(List.of(report("huge", Long.MAX_VALUE, warmed)), warmed))
+        assertThat(collector.collect(List.of(report("huge", Long.MAX_VALUE, warmed)), warmed, 1))
                 .isEqualTo(CAP);
     }
 
@@ -224,10 +224,10 @@ class CapacityCollectorTest {
         // 전역 크레딧이 하한으로 떨어진다.
         CapacityCollector collector = CapacityCollector.of(
                 RAMP_UP, FRESHNESS, FLOOR, Long.MAX_VALUE);
-        collector.collect(List.of(report("huge", Long.MAX_VALUE, NOW)), NOW);
+        collector.collect(List.of(report("huge", Long.MAX_VALUE, NOW)), NOW, 1);
 
         long credit = collector.collect(
-                List.of(report("huge", Long.MAX_VALUE, NOW + 30)), NOW + 30);
+                List.of(report("huge", Long.MAX_VALUE, NOW + 30)), NOW + 30, 1);
 
         // **양수인지만 보면 아무 값이나 통과한다.** 30초는 창의 절반이므로
         // 정확히 절반이어야 한다 — 넘침을 막느라 값이 틀어지면 그것도 결함이다.
@@ -241,7 +241,7 @@ class CapacityCollectorTest {
         // 하한이 안 걸리고 전역 크레딧이 0 이 된다 — 전면 차단이다.
         CapacityCollector collector = collector();
 
-        assertThat(collector.collect(List.of(report("broken", -5, NOW)), NOW))
+        assertThat(collector.collect(List.of(report("broken", -5, NOW)), NOW, 1))
                 .isEqualTo(FLOOR);
     }
 
@@ -255,12 +255,12 @@ class CapacityCollectorTest {
         long warmed = NOW + RAMP_UP.toSeconds();
         for (long t = NOW; t <= warmed; t += FRESHNESS.toSeconds()) {
             collector.collect(
-                    List.of(report("a", Long.MAX_VALUE, t), report("b", Long.MAX_VALUE, t)), t);
+                    List.of(report("a", Long.MAX_VALUE, t), report("b", Long.MAX_VALUE, t)), t, 1);
         }
 
         assertThat(collector.collect(
                 List.of(report("a", Long.MAX_VALUE, warmed), report("b", Long.MAX_VALUE, warmed)),
-                warmed)).isEqualTo(Long.MAX_VALUE);
+                warmed, 1)).isEqualTo(Long.MAX_VALUE);
     }
 
     @Test
@@ -296,11 +296,11 @@ class CapacityCollectorTest {
                 window, FRESHNESS, FLOOR, Long.MAX_VALUE);
         long half = window.toSeconds() / 2;
         for (long t = NOW; t <= NOW + half; t += FRESHNESS.toSeconds()) {
-            collector.collect(List.of(report("a", Long.MAX_VALUE, t)), t);
+            collector.collect(List.of(report("a", Long.MAX_VALUE, t)), t, 1);
         }
 
         long credit = collector.collect(
-                List.of(report("a", Long.MAX_VALUE, NOW + half)), NOW + half);
+                List.of(report("a", Long.MAX_VALUE, NOW + half)), NOW + half, 1);
 
         assertThat(credit).isEqualTo(Long.MAX_VALUE / 2);
     }
@@ -313,7 +313,7 @@ class CapacityCollectorTest {
         long warmed = warm(collector, "a", 100);
 
         long credit = collector.collect(
-                List.of(report("a", 100, warmed), report("a", 100, warmed)), warmed);
+                List.of(report("a", 100, warmed), report("a", 100, warmed)), warmed, 1);
 
         assertThat(credit).isEqualTo(100);
     }
@@ -333,5 +333,20 @@ class CapacityCollectorTest {
                 .hasMessageContaining("floor");
         assertThatThrownBy(() -> CapacityCollector.of(RAMP_UP, FRESHNESS, FLOOR, 0))
                 .hasMessageContaining("perInstanceCap");
+    }
+
+    /**
+     * <b>하한은 살아 있는 분모를 따라야 한다.</b> 설정값으로만 재면 노드가 그보다
+     * 늘었을 때 노드당 몫이 다시 0 이 되고, 하한을 둔 이유가 사라진다.
+     */
+    @Test
+    @DisplayName("하한이_노드_수를_따른다")
+    void 하한이_노드_수를_따른다() {
+        CapacityCollector collector = collector();
+
+        // 보고가 하나도 없다. 설정 하한은 5 지만 노드가 열이면 그것으로 부족하다.
+        long credit = collector.collect(List.of(), NOW, 10);
+
+        assertThat(credit).isEqualTo(10L * CapacityCollector.IDLE_DIVISOR);
     }
 }

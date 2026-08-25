@@ -52,14 +52,6 @@ public record ControlPlaneProperties(Scheduler scheduler, Leader leader, Capacit
     public record Capacity(Duration rampUp, Duration freshness, long floor, long perInstanceCap,
             int rampDownTicks, int expectedNodes) {
 
-        /**
-         * 유휴 비율의 역수. 노드당 몫이 이만큼은 돼야 한산 통과 상한이 1 이 된다.
-         *
-         * <p>비율은 게이트웨이가 주입받는 값이라 여기서 못 읽는다. 갈라지면 하한이
-         * 다시 전면 차단이 되므로, 바꿀 때 두 곳을 같이 본다.
-         */
-        private static final int IDLE_DIVISOR = 5;
-
         public Capacity {
             Durations.requirePositive(rampUp, "rampUp");
             Durations.requirePositive(freshness, "freshness");
@@ -82,7 +74,7 @@ public record ControlPlaneProperties(Scheduler scheduler, Leader leader, Capacit
             // **하한이 전면 차단과 같으면 안 된다.** 노드당 몫에 유휴 비율을 곱한
             // 값이 1 을 못 넘으면 한산한 쿠폰이 첫 요청부터 줄을 선다 — 하한을
             // 둔 이유가 사라진다. 노드를 늘리면서 하한을 그대로 두는 것이 그 길이다.
-            if (floor > 0 && floor < (long) expectedNodes * IDLE_DIVISOR) {
+            if (floor > 0 && floor < (long) expectedNodes * CapacityCollector.IDLE_DIVISOR) {
                 throw new IllegalArgumentException(
                         "하한이 노드 수를 못 받친다 — 한산 통과 상한이 0 이 된다: floor=%d nodes=%d"
                                 .formatted(floor, expectedNodes));

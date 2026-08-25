@@ -34,7 +34,7 @@ class CapacityRefreshTest {
         CapacityCollector collector = collector();
         CapacityRefresh refresh = CapacityRefresh.of(
                 () -> Mono.just(List.of(new CapacityReport("i1", 500, 지금.getEpochSecond()))),
-                collector, () -> 지금, 예산, Schedulers.immediate());
+                collector, () -> 지금, () -> 1, 예산, Schedulers.immediate());
 
         refresh.refresh().block();
 
@@ -47,12 +47,12 @@ class CapacityRefreshTest {
     void 못_읽으면_직전_값을_지킨다() {
         CapacityCollector collector = collector();
         collector.collect(List.of(new CapacityReport("i1", 500, 지금.getEpochSecond() - 120)),
-                지금.getEpochSecond());
+                지금.getEpochSecond(), 1);
         long 직전 = collector.lastKnown();
 
         CapacityRefresh refresh = CapacityRefresh.of(
                 () -> Mono.error(new IllegalStateException("레디스가 죽었다")),
-                collector, () -> 지금, 예산, Schedulers.immediate());
+                collector, () -> 지금, () -> 1, 예산, Schedulers.immediate());
 
         // **완료로 끝난다.** 여기서 오류를 흘리면 배분이 같이 안 돈다.
         refresh.refresh().block();
@@ -69,14 +69,14 @@ class CapacityRefreshTest {
     void 느리면_예산_안에서_포기한다() {
         CapacityCollector collector = collector();
         collector.collect(List.of(new CapacityReport("i1", 500, 지금.getEpochSecond() - 120)),
-                지금.getEpochSecond());
+                지금.getEpochSecond(), 1);
         long 직전 = collector.lastKnown();
 
         // **가상 시간으로 잰다.** 실제로 기다리면 시험이 장비 속도에 걸리고,
         // 예산을 늘려도 통과하는 시험이 된다 (TS-4).
         VirtualTimeScheduler 시계 = VirtualTimeScheduler.create();
         CapacityRefresh refresh = CapacityRefresh.of(
-                Mono::never, collector, () -> 지금, 예산, 시계);
+                Mono::never, collector, () -> 지금, () -> 1, 예산, 시계);
 
         // **검증에 상한을 둔다.** 예산이 안 걸리는 구현에서 무기한 기다리면
         // 시험이 실패가 아니라 정지가 된다 — CI 에서 그건 진단이 안 된다.

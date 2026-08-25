@@ -708,7 +708,7 @@ CouponStates.unknown()
 - **산출물** `domain/allocation/CreditSmoother.java`
 - **근거** Phase 4 F9 · Phase 10 5.2절 (ETA 오차의 지배항)
 
-1. **RED** `EWMA는_설정된_시상수로_수렴한다` — α=0.2, 5틱
+1. **RED** `EWMA는_설정된_시상수로_수렴한다` — α=0.2, 5틱 (시험 계수다. 운영값은 0.3)
 2. **GREEN** `α×credit + (1-α)×prev`
 3. **RED** `첫_관측치가_초기값이_된다`
 4. **GREEN** 초기화

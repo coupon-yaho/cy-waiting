@@ -231,8 +231,8 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         }
         // **판정에 쓴 상태를 그대로 쓴다.** 여기서 다시 읽으면 그 사이 틱이
         // 지나 판정과 답이 어긋난다.
-        // 사다리 5번과 같은 MAX_ETA_SEC 을 넘긴다. 갈라지면 5번이 상한을
-        // 걸었다고 믿는 쿠폰에서 무제한 등록이 난다.
+        // **같은 것은 MAX_ETA_SEC 인자뿐이다** — 상한 함수는 5번과 일부러 다르다.
+        // 인자까지 갈라지면 5번이 건 상한과 실제 등록 상한의 근거가 어긋난다.
         long capacity = AdmissionDecider.queueCapacity(state, meta, MAX_ETA_SEC);
         return queue.enqueue(couponId, memberId, capacity, clock.instant())
                 // **여기까지만 열어 준다.** 뒤에 붙이면 줄에 선 사람이 응답을

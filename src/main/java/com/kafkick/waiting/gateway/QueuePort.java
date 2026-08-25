@@ -23,12 +23,11 @@ public interface QueuePort {
     long NO_LIMIT = -1;
 
     /**
-     * 줄에 세운다.
+     * 줄에 세운다. <b>상한은 신규 등록에만 걸린다</b> — 이미 선 사람은 상한이
+     * 0 이어도 자기 순번을 돌려받는다.
      *
-     * @param maxLen 큐 길이 상한. {@link #NO_LIMIT} 만 상한 없음이고,
-     *               0 은 상한이 0 이라 아무도 안 받는다는 뜻이다.
-     *               <b>쿠폰 전체의 수다</b> — 샤드가 여럿이면 어댑터가 나눠야
-     *               한다. 지금은 샤드 1 만 허용해 두 수가 같다
+     * @param maxLen {@link #NO_LIMIT} 만 상한 없음이고 0 은 전원 거절이다.
+     *               쿠폰 전체의 수라, 샤드가 여럿이면 어댑터가 나눠야 한다
      */
     Mono<QueueEntry> enqueue(String couponId, String memberId, long maxLen, Instant now);
 

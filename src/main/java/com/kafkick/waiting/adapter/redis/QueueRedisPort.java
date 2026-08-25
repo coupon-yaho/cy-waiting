@@ -52,7 +52,6 @@ public final class QueueRedisPort implements QueuePort {
      */
     private static final String ALIVE_TTL_SEC = "90";
 
-
     private final ReactiveStringRedisTemplate redis;
     private final int shards;
 

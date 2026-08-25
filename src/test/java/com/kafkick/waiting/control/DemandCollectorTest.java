@@ -1,12 +1,15 @@
 package com.kafkick.waiting.control;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.kafkick.waiting.domain.allocation.CouponDemand;
+import com.kafkick.waiting.domain.coupon.QueueMode;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.time.Duration;
 import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -27,11 +30,38 @@ class DemandCollectorTest {
 
     private DemandCollector collector(List<String> 쿠폰, Map<String, List<Long>> 큐,
             Map<String, Long> 재고) {
+        return collector(쿠폰, 큐, 재고, Map.of());
+    }
+
+    private DemandCollector collector(List<String> 쿠폰, Map<String, List<Long>> 큐,
+            Map<String, Long> 재고, Map<String, QueueMode> 정책) {
         return DemandCollector.of(
                 () -> Mono.just(쿠폰),
                 ids -> Mono.just(ids.stream().collect(Collectors.toMap(
                         id -> id, id -> 큐.get(id).stream().mapToLong(Long::longValue).sum()))),
-                ids -> Mono.just(재고));
+                ids -> Mono.just(재고),
+                () -> Mono.just(정책));
+    }
+
+    /**
+     * <b>운영자 정책이 여기서 안 실리면 판정에 닿을 길이 없다.</b> 사다리에 분기가
+     * 있어도 유일한 발행자가 그 입력을 못 만들면 없는 것과 같다.
+     */
+    @Test
+    @DisplayName("운영자_정책을_수요에_싣는다")
+    void 운영자_정책을_수요에_싣는다() {
+        DemandCollector collector = collector(List.of("c1", "c2"),
+                Map.of("c1", List.of(10L), "c2", List.of(0L)),
+                Map.of("c1", 100L, "c2", 100L),
+                Map.of("c1", QueueMode.ALWAYS));
+
+        List<CouponDemand> 수요 = collector.collect().block(Duration.ofSeconds(5));
+
+        assertThat(수요).extracting(CouponDemand::couponId, CouponDemand::mode)
+                .containsExactly(
+                        tuple("c1", QueueMode.ALWAYS),
+                        // 정책을 안 건 쿠폰은 적응형이다.
+                        tuple("c2", QueueMode.ADAPTIVE));
     }
 
     @Test
@@ -87,7 +117,8 @@ class DemandCollectorTest {
         DemandCollector collector = DemandCollector.of(
                 () -> Mono.just(List.of("c1")),
                 ids -> Mono.just(Collections.singletonMap("c1", null)),
-                ids -> Mono.just(Map.of("c1", 100L)));
+                ids -> Mono.just(Map.of("c1", 100L)),
+                () -> Mono.just(Map.of()));
 
         List<CouponDemand> 수요 = collector.collect().block();
 
@@ -109,6 +140,10 @@ class DemandCollectorTest {
                 ids -> {
                     조회.incrementAndGet();
                     return Mono.just(Map.of());
+                },
+                () -> {
+                    조회.incrementAndGet();
+                    return Mono.just(Map.of());
                 });
 
         List<CouponDemand> 수요 = collector.collect().block();
@@ -127,7 +162,8 @@ class DemandCollectorTest {
         DemandCollector collector = DemandCollector.of(
                 () -> Mono.just(List.of("c1", "c2")),
                 ids -> Mono.just(Map.of("c1", 4L)),
-                ids -> Mono.just(Map.of("c1", 10L, "c2", 10L)));
+                ids -> Mono.just(Map.of("c1", 10L, "c2", 10L)),
+                () -> Mono.just(Map.of()));
 
         assertThatThrownBy(() -> collector.collect().block())
                 .isInstanceOf(IllegalStateException.class)

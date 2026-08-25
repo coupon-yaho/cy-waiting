@@ -148,13 +148,13 @@ public class AdmissionDecider {
 
     /**
      * <b>등록 경로가 쓰는</b> 줄 길이 상한. 배수 속도를 알면 그것으로, 모르면
-     * 노드 몫으로 잰다.
+     * 전역 크레딧으로 재고 설계 동시 대기에서 끊는다.
      *
      * <p>사다리 5번은 이 함수를 안 쓴다 — 폴백은 줄이 아직 없는 구간만을 위한
      * 것이다. 그래서 등록 경로와 5번이 서로 다른 상한을 본다 (AIJ-0073).
      */
     public static long queueCapacity(CouponState state, SnapshotMeta meta, long maxEtaSec) {
-        // **원 함수의 가드를 뒤집지 않는다.** 받아 줄 시간이 없으면 상한도 없다.
+        // **원 함수의 가드를 뒤집지 않는다.** 받아 줄 시간이 없으면 자리도 없다.
         // 이걸 안 걸면 아래 폴백이 그 0 을 "모른다" 로 읽고 하한 1 을 돌려준다.
         if (maxEtaSec <= 0) {
             return 0;
@@ -162,20 +162,28 @@ public class AdmissionDecider {
         // **배수 속도를 모르는 것과 자리가 없는 것은 다르다.** 0 을 상한으로 쓰면
         // 줄이 한 번도 안 생기고, 아예 없애면 낡은 구간 내내 줄이 자란다 (R5).
         //
-        // 그래서 **노드 몫으로 잰다.** 2·3번(토큰·fail-open)이 쓰는 것과 같은
-        // 값이다. 9번의 한산 통과 상한은 여기에 idleCreditRatio 를 곱한 것이라
-        // 5배 작다 — 그쪽은 뒷단에 꽂는 양이고 여기는 줄에 세우는 양이라 다르다.
-        // 같은 이유로 하한 1 이 여기서는 허용된다. 전문은 AIJ-0073.
+        // **노드 몫으로 재면 안 된다.** 이 수는 전 노드가 공유하는 줄 길이와
+        // 비교된다. 나눗셈은 노드 로컬 예산의 것이라, 여기서 나누면 노드를
+        // 늘릴수록 천장이 내려간다. 전문은 AIJ-0073.
         long byCredit = state.queueCapacity(maxEtaSec);
         if (byCredit > 0) {
             return byCredit;
         }
         try {
-            return Math.max(1, Math.multiplyExact(globalCap(meta), maxEtaSec));
+            return Math.max(1, Math.min(MAX_WAITING,
+                    Math.multiplyExact(meta.globalCredit(), maxEtaSec)));
         } catch (ArithmeticException e) {
-            return Long.MAX_VALUE;
+            return MAX_WAITING;
         }
     }
+
+    /**
+     * 배수 속도를 모를 때 줄이 자랄 수 있는 최대 길이.
+     *
+     * <p>R4 가 말하는 동시 대기 인원이다. 배수 속도를 아는 쿠폰은 자기 크레딧이
+     * 천장을 정하지만, 모르는 구간에는 그 근거가 없어 설계 목표를 천장으로 쓴다.
+     */
+    public static final long MAX_WAITING = 20_000;
 
     /** 이 노드가 초당 감당할 양. 쿠폰과 무관한 노드 전체의 상한이다. */
     public static long globalCap(SnapshotMeta meta) {

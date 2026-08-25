@@ -100,8 +100,9 @@ public class ControlPlaneConfig {
      */
     @Bean
     CapacityRefresh capacityRefresh(AllocationRedisPort port, CapacityCollector capacity,
-            ControlPlaneProperties properties, Scheduler allocationScheduler) {
-        return CapacityRefresh.of(port::capacityReports, capacity, Instant::now,
+            GatewayRegistry registry, ControlPlaneProperties properties,
+            Scheduler allocationScheduler) {
+        return CapacityRefresh.of(port::capacityReports, capacity, Instant::now, registry::count,
                 properties.scheduler().tick().dividedBy(4), allocationScheduler);
     }
 

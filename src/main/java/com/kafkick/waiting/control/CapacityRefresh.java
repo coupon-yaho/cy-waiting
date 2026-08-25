@@ -4,6 +4,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.IntSupplier;
 import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,28 +24,30 @@ public final class CapacityRefresh {
     private final Supplier<Mono<List<CapacityReport>>> reports;
     private final CapacityCollector collector;
     private final Supplier<Instant> clock;
+    private final IntSupplier nodes;
     private final Duration budget;
     /** 타임아웃 타이머와 수집이 함께 도는 곳. 배분과 같은 스레드다. */
     private final Scheduler worker;
     private final FailureWindow failures = FailureWindow.create();
 
     private CapacityRefresh(Supplier<Mono<List<CapacityReport>>> reports,
-            CapacityCollector collector, Supplier<Instant> clock, Duration budget,
-            Scheduler worker) {
+            CapacityCollector collector, Supplier<Instant> clock, IntSupplier nodes,
+            Duration budget, Scheduler worker) {
         if (budget == null || budget.isZero() || budget.isNegative()) {
             throw new IllegalArgumentException("budget 은 양수여야 한다: %s".formatted(budget));
         }
         this.reports = Objects.requireNonNull(reports, "reports 는 필수다");
         this.collector = Objects.requireNonNull(collector, "collector 는 필수다");
         this.clock = Objects.requireNonNull(clock, "clock 은 필수다");
+        this.nodes = Objects.requireNonNull(nodes, "nodes 는 필수다");
         this.budget = budget;
         this.worker = Objects.requireNonNull(worker, "worker 는 필수다");
     }
 
     public static CapacityRefresh of(Supplier<Mono<List<CapacityReport>>> reports,
-            CapacityCollector collector, Supplier<Instant> clock, Duration budget,
-            Scheduler worker) {
-        return new CapacityRefresh(reports, collector, clock, budget, worker);
+            CapacityCollector collector, Supplier<Instant> clock, IntSupplier nodes,
+            Duration budget, Scheduler worker) {
+        return new CapacityRefresh(reports, collector, clock, nodes, budget, worker);
     }
 
     /**
@@ -66,7 +69,7 @@ public final class CapacityRefresh {
     }
 
     private void collected(List<CapacityReport> read) {
-        collector.collect(read, clock.get().getEpochSecond());
+        collector.collect(read, clock.get().getEpochSecond(), nodes.getAsInt());
         failures.exited().ifPresent(recovered ->
                 log.info("가용량을 다시 읽는다 — {}초 만에, 그동안 {}판 걸렀다",
                         recovered.elapsedSeconds(), recovered.swallowed()));

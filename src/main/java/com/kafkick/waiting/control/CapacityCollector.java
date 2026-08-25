@@ -37,6 +37,14 @@ public final class CapacityCollector {
     }
 
     /** 마지막으로 성공한 관측. 읽기가 실패하면 여기로 되돌아간다. */
+    /**
+     * 유휴 비율의 역수. 노드당 몫이 이만큼은 돼야 한산 통과 상한이 1 이 된다.
+     *
+     * <p>비율은 게이트웨이가 주입받는 값이라 여기서 못 읽는다. 갈라지면 하한이
+     * 다시 전면 차단이 되므로, 바꿀 때 두 곳을 같이 본다.
+     */
+    public static final int IDLE_DIVISOR = 5;
+
     private final AtomicLong lastKnown;
 
     private CapacityCollector(Duration rampUp, Duration freshness, long floor, long perInstanceCap) {
@@ -112,7 +120,7 @@ public final class CapacityCollector {
      *
      * @param now 읽은 시각(초). {@code reportedAt} 과 <b>같은 시계</b>여야 한다
      */
-    public long collect(Collection<CapacityReport> reports, long now) {
+    public long collect(Collection<CapacityReport> reports, long now, int nodes) {
         Map<String, CapacityReport> latest = new HashMap<>();
         for (CapacityReport report : reports) {
             // 버전별 키를 함께 읽으면 같은 인스턴스가 두 번 온다. 세면 두 배다.
@@ -143,7 +151,10 @@ public final class CapacityCollector {
         // **하한은 "보고가 없을 때" 만이다.** 합이 0 인 것과 아무도 안 보고한
         // 것은 다르다 — 뒷단이 신선하게 "여유 0" 을 보고했으면 그건 정확한
         // 백프레셔다. 거기에 하한을 얹으면 명시적 신호를 무시하고 계속 민다.
-        long credit = fresh == 0 ? floor : total;
+        // **하한은 살아 있는 분모에 맞춘다.** 설정값으로만 재면 노드가 그보다
+        // 늘었을 때 노드당 몫이 다시 0 이 된다 — 하한을 둔 이유가 사라진다.
+        long credit = fresh == 0 ? Math.max(floor, (long) Math.max(1, nodes) * IDLE_DIVISOR)
+                : total;
         lastKnown.set(credit);
         return credit;
     }

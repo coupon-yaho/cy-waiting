@@ -47,7 +47,7 @@ class SnapshotRefreshLifecycleTest {
         SnapshotRefresher refresher = SnapshotRefresher.of(holder, () -> {
             받아옴.incrementAndGet();
             return Mono.just(Map.<String, String>of());
-        });
+        }, 시계값);
         // 멈췄다 다시 켜면 스케줄러를 새로 받는다. 버린 것을 다시 쓰면 루프가 죽는다.
         return SnapshotRefreshLifecycle.of(refresher, shutdown, INTERVAL,
                 () -> 시계 = VirtualTimeScheduler.create());
@@ -239,7 +239,7 @@ class SnapshotRefreshLifecycleTest {
         SnapshotRefresher refresher = SnapshotRefresher.of(holder, () -> {
             받아옴.incrementAndGet();
             return Mono.just(Map.<String, String>of());
-        });
+        }, 시계값);
         SnapshotRefreshLifecycle lifecycle = SnapshotRefreshLifecycle.of(
                 refresher, shutdown, INTERVAL,
                 () -> {

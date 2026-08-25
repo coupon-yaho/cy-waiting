@@ -517,6 +517,62 @@ class CapacityCollectorTest {
         assertThat(credit).isEqualTo(3);
     }
 
+    /**
+     * <b>못 읽은 값에는 시효가 있어야 한다.</b> 직전 값을 지키는 것은 한 판이
+     * 실패했을 때 맞는 답이지만, 그것이 무기한이면 뒷단이 통째로 죽어도 옛
+     * 크레딧으로 계속 민다. 분모(노드 수)는 유지가 과소 방향이라 안전하지만
+     * 분자(크레딧)는 과다 방향이다.
+     */
+    @Test
+    @DisplayName("읽기_실패가_이어지면_값이_줄어든다")
+    void 읽기_실패가_이어지면_값이_줄어든다() {
+        CapacityCollector collector = collector();
+        long 관측 = collector.collect(List.of(report("a", 10_000, NOW)), NOW, 1);
+
+        // 유예 안에서는 그대로다. 한 판 실패했다고 조이면 순단마다 흔들린다.
+        for (int i = 0; i < CapacityCollector.HOLD_ROUNDS; i++) {
+            collector.observationFailed();
+        }
+        assertThat(collector.lastKnown()).isEqualTo(관측);
+
+        collector.observationFailed();
+
+        assertThat(collector.lastKnown()).isEqualTo(관측 / 2);
+    }
+
+    /** 아무리 줄어도 하한 아래로는 안 간다. 그 아래는 전면 차단이다. */
+    @Test
+    @DisplayName("줄어도_하한_아래로는_안_간다")
+    void 줄어도_하한_아래로는_안_간다() {
+        CapacityCollector collector = collector();
+        collector.collect(List.of(report("a", 10_000, NOW)), NOW, 1);
+
+        for (int i = 0; i < 100; i++) {
+            collector.observationFailed();
+        }
+
+        assertThat(collector.lastKnown()).isEqualTo(FLOOR);
+    }
+
+    /** 한 판이라도 성공하면 유예가 다시 찬다. 안 그러면 순단이 쌓여 조여진다. */
+    @Test
+    @DisplayName("한_판_성공하면_유예가_다시_찬다")
+    void 한_판_성공하면_유예가_다시_찬다() {
+        CapacityCollector collector = collector();
+        long 관측 = collector.collect(List.of(report("a", 10_000, NOW)), NOW, 1);
+        for (int i = 0; i < CapacityCollector.HOLD_ROUNDS + 1; i++) {
+            collector.observationFailed();
+        }
+
+        long 다시 = collector.collect(List.of(report("a", 10_000, NOW + 1)), NOW + 1, 1);
+        for (int i = 0; i < CapacityCollector.HOLD_ROUNDS; i++) {
+            collector.observationFailed();
+        }
+
+        assertThat(관측).isEqualTo(다시);
+        assertThat(collector.lastKnown()).isEqualTo(다시);
+    }
+
     /** 창과 정확히 같은 공백은 아직 산다. 경계를 한 칸 옮겨도 안 죽으면 안 잰 것이다. */
     @Test
     @DisplayName("창과_같은_공백은_아직_산다")

@@ -27,11 +27,11 @@ import org.springframework.data.redis.core.script.RedisScript;
 /**
  * <b>순위는 뒤로 가지 않는다</b> (G3.11 · 불변식 3).
  *
- * <p>Phase 2 의 단조성 테스트는 <b>"입력이 단조면 출력도 단조"</b> 까지만 봤다.
- * {@code localRank} 자체가 단조라는 보장은 여기가 진다.
+ * <p>Phase 2 는 "입력이 단조면 출력도 단조" 까지만 봤다. 순위 자체가 단조라는
+ * 보장은 여기가 진다. <b>매 연산마다 전원을 본다</b> — 표본 하나만 보면 안 본
+ * 사람의 순위가 올랐다가 다음 표본 전에 내려오는 경우를 놓친다.
  *
- * <p><b>매 연산마다 전원을 본다.</b> 표본 하나만 보면 안 본 사람의 순위가
- * 올랐다가 다음 표본 선택 전에 내려오는 경우를 통째로 놓친다.
+ * <p>스크립트를 직접 부른다. 반응형 경로는 {@code QueueRedisPortTest} 가 진다.
  */
 @Tag("integration")
 class RankMonotonicityIntegrationTest {

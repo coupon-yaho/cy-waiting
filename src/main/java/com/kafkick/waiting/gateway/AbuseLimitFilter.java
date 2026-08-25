@@ -166,9 +166,9 @@ public final class AbuseLimitFilter implements WebFilter {
         }
         String last = forwarded.get(forwarded.size() - 1);
         String candidate = last.substring(last.lastIndexOf(',') + 1).trim();
-        // **빈 값은 프록시 주소로 안 바꾼다.** 그러면 그 뒤의 모두가 프록시 몫을
-        // 나눠 쓰고, 빈 값을 보내는 것만으로 남을 막을 수 있다.
-        return candidate.isEmpty() ? null : candidate;
+        // **주소로 안 읽히면 버린다.** 프록시 주소로 바꾸면 그 뒤의 모두가 한 몫을
+        // 나눠 쓰고, 그대로 키로 쓰면 값을 바꿔가며 키를 무한히 만들 수 있다.
+        return TrustedProxies.literal(candidate) == null ? null : candidate;
     }
 
     /** 미해결 주소는 {@code getAddress()} 가 비어 있다. 그대로 부르면 터진다. */

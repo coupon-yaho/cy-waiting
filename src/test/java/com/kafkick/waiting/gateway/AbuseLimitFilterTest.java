@@ -39,7 +39,7 @@ class AbuseLimitFilterTest {
 
     /** 하네스는 신뢰 홉을 지나온 것처럼 군다. 안 그러면 전달 헤더가 무시된다. */
     private final AbuseLimitFilter filter = AbuseLimitFilter.of(
-            시계, meters, () -> 0.5, new TrustedProxies(List.of("127.0.0.1")));
+            시계, meters, () -> 0.5, TrustedProxies.of(List.of("127.0.0.1")));
 
     private MockServerWebExchange 태운다(String path, String member, String ip) {
         MockServerHttpRequest.BaseBuilder<?> 요청 = MockServerHttpRequest
@@ -196,7 +196,7 @@ class AbuseLimitFilterTest {
     @DisplayName("신뢰하지_않는_홉의_헤더는_안_믿는다")
     void 신뢰하지_않는_홉의_헤더는_안_믿는다() {
         AbuseLimitFilter 안_믿는_것 = AbuseLimitFilter.of(
-                시계, new SimpleMeterRegistry(), () -> 0.5, new TrustedProxies(List.of()));
+                시계, new SimpleMeterRegistry(), () -> 0.5, TrustedProxies.of(List.of()));
 
         // 주소를 매번 바꿔도 소켓 주소가 같으므로 한 키로 모인다.
         MockServerWebExchange 마지막 = null;
@@ -266,6 +266,28 @@ class AbuseLimitFilterTest {
         }).block();
 
         assertThat(빈_값.getResponse().getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        assertThat(다음으로_감).hasValue(0);
+    }
+
+    /**
+     * 값을 바꿔가며 키를 무한히 만들면 리미터가 포화하고, 그때부터 정상 요청도
+     * 막힌다. 신뢰 홉이 넘겨도 주소로 안 읽히면 버린다.
+     */
+    @Test
+    @DisplayName("주소가_아닌_전달_값은_막는다")
+    void 주소가_아닌_전달_값은_막는다() {
+        MockServerWebExchange 이상한_값 = MockServerWebExchange.from(
+                MockServerHttpRequest.method(HttpMethod.POST, ISSUE)
+                        .remoteAddress(new InetSocketAddress("127.0.0.1", 12345))
+                        .header("X-Member-Id", "1")
+                        .header("X-Forwarded-For", "invalid-address"));
+        filter.filter(이상한_값, e -> {
+            다음으로_감.incrementAndGet();
+            return Mono.empty();
+        }).block();
+
+        assertThat(이상한_값.getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
         assertThat(다음으로_감).hasValue(0);
     }
 

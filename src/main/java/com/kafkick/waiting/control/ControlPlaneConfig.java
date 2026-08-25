@@ -3,6 +3,7 @@ package com.kafkick.waiting.control;
 import com.kafkick.waiting.adapter.redis.AllocationRedisPort;
 import com.kafkick.waiting.adapter.redis.LeaderRedisPort;
 import com.kafkick.waiting.domain.allocation.CreditSmoother;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Instant;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
@@ -101,9 +102,9 @@ public class ControlPlaneConfig {
     @Bean
     CapacityRefresh capacityRefresh(AllocationRedisPort port, CapacityCollector capacity,
             GatewayRegistry registry, ControlPlaneProperties properties,
-            Scheduler allocationScheduler) {
+            Scheduler allocationScheduler, MeterRegistry meters) {
         return CapacityRefresh.of(port::capacityReports, capacity, Instant::now, registry::count,
-                properties.scheduler().tick().dividedBy(4), allocationScheduler);
+                properties.scheduler().tick().dividedBy(4), allocationScheduler, meters);
     }
 
     /** 배분 틱. <b>재료를 먼저 읽고 배분한다</b> — 안 읽으면 크레딧이 첫 하한에 머문다. */

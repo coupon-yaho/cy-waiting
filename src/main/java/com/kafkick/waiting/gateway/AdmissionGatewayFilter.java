@@ -197,10 +197,18 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     private Mono<Void> unknownCoupon(ServerWebExchange exchange, GatewayFilterChain chain,
             SnapshotHolder.View view, String couponId) {
         // 기동 직후 재료가 없다고 전면 404 를 내면 뜨자마자 모든 쿠폰이 없는 것이
-        // 된다. 재료를 못 믿을 때도 마찬가지다 — 없는 것과 모르는 것은 다르다.
-        if (view.isBeforeFirstTick() || holder.isDataStale(view)) {
+        // 된다. **여기는 상한을 못 건다** — 예산의 근거인 메타 자체가 아직 없어
+        // 상한이 0 이 되고, 그건 전면 차단이다. 이 구간은 준비성 판정이 막는다.
+        if (view.isBeforeFirstTick()) {
             count("deferred-no-material");
             return chain.filter(exchange);
+        }
+        // **모른다는 것이 무제한의 사유는 아니다.** 사다리 3번은 같은 무지에서
+        // 노드 몫 안에서만 여는데, 여기만 열어 두면 아무 문자열 쿠폰이나 그
+        // 상한 밖으로 나간다. 같은 예산에 태운다.
+        if (holder.isDataStale(view)) {
+            count("deferred-stale-material");
+            return failOpen(exchange, chain, view.snapshot().meta());
         }
         count("unknown-coupon");
         return error.write(exchange, ApiError.Code.UNKNOWN_COUPON);

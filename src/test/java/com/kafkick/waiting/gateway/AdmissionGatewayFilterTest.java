@@ -30,6 +30,7 @@ import java.util.Map;
 import java.util.Random;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -90,6 +91,9 @@ class AdmissionGatewayFilterTest {
 
     private final AtomicReference<Boolean> 뒷단에_닿음 = new AtomicReference<>(false);
 
+    /** 몇 번 닿았나. 한 번이라도 닿았는지만 보면 상한이 무너져도 안 걸린다. */
+    private final AtomicInteger 뒷단_횟수 = new AtomicInteger();
+
     private MockServerWebExchange 요청(String couponId) {
         return 요청(couponId, MEMBER);
     }
@@ -123,6 +127,7 @@ class AdmissionGatewayFilterTest {
         MockServerWebExchange exchange = 요청(couponId, memberId);
         filter.filter(exchange, e -> {
             뒷단에_닿음.set(true);
+            뒷단_횟수.incrementAndGet();
             return Mono.empty();
         }).block();
         return exchange;
@@ -772,6 +777,34 @@ class AdmissionGatewayFilterTest {
     }
 
     /** 아무 문자열이나 흘려보내면 그것마다 큐 키가 하나씩 생긴다. */
+    /**
+     * <b>모른다는 것이 무제한의 사유가 아니다.</b> 사다리 3번은 같은 무지에서
+     * 노드 몫 안에서만 여는데, 이 경로만 리미터를 아예 안 탔다. 낡음이 지속되면
+     * 아무 문자열 쿠폰이나 초당 무한히 뒷단에 꽂힌다.
+     */
+    @Test
+    @DisplayName("미지_쿠폰도_낡으면_상한_안에서만_흘린다")
+    void 미지_쿠폰도_낡으면_상한_안에서만_흘린다() {
+        // 스냅샷이 낡으면 없는 쿠폰을 404 로 끝내지 않고 이연한다.
+        holder.replace(new GatewaySnapshot(Map.of(COUPON, CouponStates.idle(1_000)),
+                META, 지금.minusSeconds(60)));
+        long CAP = (long) (AdmissionDecider.globalCap(META) * 0.5);
+
+        // **예산 안은 전부 통과해야 한다.** 한 번이라도 닿았는지만 보면 앞쪽이
+        // 이미 막혀도 초록이다.
+        for (long i = 0; i < CAP; i++) {
+            MockServerWebExchange 통과자 = 태운다("없는쿠폰" + i, "회원" + i);
+            assertThat(통과자.getResponse().getStatusCode())
+                    .as("예산 안 %d 번째", i)
+                    .isNotEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        }
+        MockServerWebExchange 넘긴_사람 = 태운다("없는쿠폰넘침", "회원넘침");
+
+        assertThat(뒷단_횟수).hasValue((int) CAP);
+        assertThat(넘긴_사람.getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+    }
+
     @Test
     @DisplayName("미지_쿠폰을_만_번_불러도_줄을_안_만든다")
     void 미지_쿠폰을_만_번_불러도_줄을_안_만든다() {

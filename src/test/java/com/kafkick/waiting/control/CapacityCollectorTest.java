@@ -349,4 +349,40 @@ class CapacityCollectorTest {
 
         assertThat(credit).isEqualTo(10L * CapacityCollector.IDLE_DIVISOR);
     }
+
+    /**
+     * <b>리더가 바뀐 것이 뒷단이 새로 뜬 것은 아니다.</b> 램프 기록은 리더 로컬이라
+     * 승계하면 비어 있는데, 그때 전 인스턴스에 램프를 걸면 크레딧이 0 이 된다 —
+     * 신선한 보고가 있어 하한도 안 걸린다. 차례가 온 사람이 되돌아가고 신규는
+     * 큐도 못 선다.
+     */
+    @Test
+    @DisplayName("처음_본_무리는_이미_돌던_것으로_본다")
+    void 처음_본_무리는_이미_돌던_것으로_본다() {
+        CapacityCollector collector = collector();
+
+        // 승계 직후 첫 판. 뒷단 셋이 신선하게 보고한다.
+        long credit = collector.collect(
+                List.of(report("a", 100, NOW), report("b", 100, NOW), report("c", 100, NOW)),
+                NOW, 1);
+
+        assertThat(credit).isEqualTo(300);
+    }
+
+    /**
+     * 첫 판 뒤에 나타난 인스턴스는 진짜 새것이다. 그때는 램프를 건다 — 콜드
+     * 인스턴스에 제 몫을 그대로 주면 뜨자마자 무너진다 (F6).
+     */
+    @Test
+    @DisplayName("뒤에_나타난_인스턴스는_램프를_탄다")
+    void 뒤에_나타난_인스턴스는_램프를_탄다() {
+        CapacityCollector collector = collector();
+        collector.collect(List.of(report("a", 100, NOW)), NOW, 1);
+
+        long credit = collector.collect(
+                List.of(report("a", 100, NOW + 1), report("b", 100, NOW + 1)), NOW + 1, 1);
+
+        // a 는 온전히, b 는 램프 첫 구간이라 거의 0 이다.
+        assertThat(credit).isLessThan(200).isGreaterThanOrEqualTo(100);
+    }
 }

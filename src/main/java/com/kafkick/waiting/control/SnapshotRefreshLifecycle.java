@@ -42,8 +42,8 @@ public final class SnapshotRefreshLifecycle
     /**
      * 판을 도는 스케줄러를 만든다.
      *
-     * <p><b>안에서 만들면 시험이 가상 시계를 못 넣는다.</b> 그러면 이 클래스만
-     * 실제로 기다리게 되고, 관용치로 흔들림을 덮은 시험이 남는다 (TS-4).
+     * <p><b>안에서 만들면 시험이 가상 시계를 못 넣는다</b> — 관용치로 흔들림을
+     * 덮은 시험이 남는다 (TS-4).
      */
     private final Supplier<Scheduler> schedulers;
 
@@ -87,11 +87,19 @@ public final class SnapshotRefreshLifecycle
         if (!running.compareAndSet(false, true)) {
             return;
         }
-        scheduler = schedulers.get();
-        // 오류를 소비하지 않으면 루프가 조용히 죽고 왜 죽었는지도 안 남는다.
-        subscription = refresher.loop(interval, scheduler)
-                .subscribe(ignored -> { },
-                        e -> log.error("갱신 루프가 끊겼다 — 재기동으로 복구된다", e));
+        try {
+            scheduler = Objects.requireNonNull(schedulers.get(), "스케줄러가 null 이다");
+            // 오류를 소비하지 않으면 루프가 조용히 죽고 왜 죽었는지도 안 남는다.
+            subscription = refresher.loop(interval, scheduler)
+                    .subscribe(ignored -> { },
+                            e -> log.error("갱신 루프가 끊겼다 — 재기동으로 복구된다", e));
+        } catch (RuntimeException e) {
+            // **깃발을 되돌린다.** 안 되돌리면 다음 start() 가 즉시 돌아가고,
+            // 루프는 안 도는데 도는 것처럼 보이는 상태로 굳는다.
+            running.set(false);
+            disposeScheduler();
+            throw e;
+        }
     }
 
     /**
@@ -112,6 +120,14 @@ public final class SnapshotRefreshLifecycle
         shutdown.draining();
     }
 
+    private void disposeScheduler() {
+        Scheduler mine = scheduler;
+        if (mine != null) {
+            mine.dispose();
+            scheduler = null;
+        }
+    }
+
     @Override
     public void setApplicationContext(ApplicationContext context) {
         this.owner = context;
@@ -126,10 +142,7 @@ public final class SnapshotRefreshLifecycle
         if (current != null) {
             current.dispose();
         }
-        Scheduler mine = scheduler;
-        if (mine != null) {
-            mine.dispose();
-        }
+        disposeScheduler();
         // **드레이닝 시작과 최대 30초 벌어진다.** 진입·해제 쌍이 제 역할을 하려면
         // 그 사이를 버텼는지가 여기 남아야 한다 — 없으면 창이 다시 열려도 모른다.
         long since = drainingAt;

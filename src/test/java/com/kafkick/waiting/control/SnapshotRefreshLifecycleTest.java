@@ -5,7 +5,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -31,8 +34,12 @@ class SnapshotRefreshLifecycleTest {
      */
     private VirtualTimeScheduler 시계 = VirtualTimeScheduler.create();
 
+    /** 가상 시계는 스케줄러만 가상화한다. 홀더가 찍는 시각도 같이 못 박는다 (TS-4). */
+    private final Clock 시계값 = Clock.fixed(
+            Instant.ofEpochSecond(1_800_000_000L), ZoneOffset.UTC);
+
     private final SnapshotHolder holder = SnapshotHolder.of(
-            Duration.ofSeconds(3), Duration.ofSeconds(5), Clock.systemUTC());
+            Duration.ofSeconds(3), Duration.ofSeconds(5), 시계값);
     private final ShutdownState shutdown = ShutdownState.create();
     private final AtomicInteger 받아옴 = new AtomicInteger();
 
@@ -219,5 +226,40 @@ class SnapshotRefreshLifecycleTest {
 
         assertThatThrownBy(() -> SnapshotRefreshLifecycle.of(refresher, shutdown, Duration.ZERO))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageStartingWith("interval");
+    }
+
+    /**
+     * <b>못 뜨면 깃발도 되돌려야 한다.</b> 안 되돌리면 다음 {@code start()} 가
+     * 즉시 돌아가고, 루프는 안 도는데 도는 것처럼 보이는 상태로 굳는다.
+     */
+    @Test
+    @DisplayName("스케줄러를_못_만들면_다시_시작할_수_있다")
+    void 스케줄러를_못_만들면_다시_시작할_수_있다() {
+        AtomicBoolean 터뜨린다 = new AtomicBoolean(true);
+        SnapshotRefresher refresher = SnapshotRefresher.of(holder, () -> {
+            받아옴.incrementAndGet();
+            return Mono.just(Map.<String, String>of());
+        });
+        SnapshotRefreshLifecycle lifecycle = SnapshotRefreshLifecycle.of(
+                refresher, shutdown, INTERVAL,
+                () -> {
+                    if (터뜨린다.get()) {
+                        throw new IllegalStateException("스케줄러를 못 만든다");
+                    }
+                    return 시계 = VirtualTimeScheduler.create();
+                });
+
+        assertThatThrownBy(lifecycle::start).isInstanceOf(IllegalStateException.class);
+        assertThat(lifecycle.isRunning()).isFalse();
+
+        터뜨린다.set(false);
+        lifecycle.start();
+
+        try {
+            판을_돌린다(2);
+            assertThat(받아옴).hasValue(3);
+        } finally {
+            lifecycle.stop();
+        }
     }
 }

@@ -153,6 +153,16 @@ class CouponStateFactoryTest {
     }
 
     @Test
+    @DisplayName("withQueue_는_빈_재고를_거부한다")
+    void withQueue_는_빈_재고를_거부한다() {
+        // 재고가 없는데 줄이 남았으면 매진이다. 여기서 만들면 아무것도 못 받을
+        // 줄에 사람을 계속 세우는 상태가 되고, 발행 경로에는 그 길이 없다.
+        assertThatThrownBy(() -> CouponState.withQueue(QueueMode.ADAPTIVE, 10, 0, 100))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("closed");
+    }
+
+    @Test
     @DisplayName("noQueue_는_받은_모드로_IDLE을_만든다")
     void noQueue_는_받은_모드로_IDLE을_만든다() {
         CouponState s = CouponState.noQueue(QueueMode.OFF, 500);

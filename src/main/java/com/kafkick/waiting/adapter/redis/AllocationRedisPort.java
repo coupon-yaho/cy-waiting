@@ -202,16 +202,42 @@ public final class AllocationRedisPort implements SnapshotSource {
                                         recovered.elapsedSeconds(), recovered.swallowed()));
                     }
                 })
+                // **물어본 쿠폰만 갱신한다.** 판마다 통째로 갈아치우면, 이번 판에
+                // 안 물어본 쿠폰의 정책이 캐시에서 사라진다 — 그 쿠폰이 다음 판에
+                // 돌아왔을 때 읽기가 실패하면 ALWAYS 가 조용히 적응형이 된다.
+                .doOnNext(modes -> remember(couponIds, modes))
                 // **정책은 부가 정보다.** 이것 하나 때문에 판이 죽으면 대기 수와
                 // 재고가 멀쩡해도 스냅샷이 안 나간다. 빈 판으로 접으면 전원이
                 // 적응형이 되어 ALWAYS 가 조용히 풀리므로, 직전 값을 다시 쓴다.
-                .doOnNext(lastModes::set)
                 .onErrorResume(e -> {
                     if (badPolicy.entered()) {
                         log.warn("쿠폰 정책을 못 읽는다 — 직전 값으로 돈다: {}", e.getMessage());
                     }
-                    return Mono.just(lastModes.get());
+                    return Mono.just(recalled(couponIds));
                 });
+    }
+
+    /** 물어본 쿠폰의 자리만 덮는다. 정책이 없어진 쿠폰은 그 자리를 비운다. */
+    private void remember(List<String> couponIds, Map<String, QueueMode> modes) {
+        lastModes.updateAndGet(prev -> {
+            Map<String, QueueMode> merged = new LinkedHashMap<>(prev);
+            couponIds.forEach(merged::remove);
+            merged.putAll(modes);
+            return Map.copyOf(merged);
+        });
+    }
+
+    /** 직전 값 중 이번에 물어본 것만. 안 물어본 쿠폰을 끼워 주면 그건 관측이 아니다. */
+    private Map<String, QueueMode> recalled(List<String> couponIds) {
+        Map<String, QueueMode> known = lastModes.get();
+        Map<String, QueueMode> subset = new LinkedHashMap<>();
+        couponIds.forEach(couponId -> {
+            QueueMode mode = known.get(couponId);
+            if (mode != null) {
+                subset.put(couponId, mode);
+            }
+        });
+        return subset;
     }
 
     private QueueMode parseMode(String couponId, String value, AtomicBoolean dropped) {

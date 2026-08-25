@@ -214,6 +214,13 @@ public record CouponState(
                     "withQueue 는 줄이 남아 있을 때만이다. 비었으면 noQueue 를 쓴다: waiting=%d"
                             .formatted(waiting));
         }
+        // 재고가 없는데 줄이 남았으면 그건 매진이다. 여기서 만들면 아무것도 못
+        // 받을 줄에 사람을 계속 세우는 상태가 되고, 발행 경로에는 그 길이 없다.
+        if (remainingStock <= 0) {
+            throw new IllegalArgumentException(
+                    "재고가 없으면 매진이다. closed 를 쓴다: remainingStock=%d"
+                            .formatted(remainingStock));
+        }
         // 이번 틱에 다 뺄 수 있으면 배수 중, 아니면 아직 줄 서는 중이다.
         // **I3 의 경계와 같은 자리**를 쓴다 — 갈리면 이 팩토리가 생성자에
         // 막히는 조합을 만든다. 그래서 이 셈은 여기 한 곳에만 있다.

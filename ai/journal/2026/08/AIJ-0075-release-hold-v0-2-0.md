@@ -1,10 +1,10 @@
 ---
 id: AIJ-0075
 date: 2026-08-25
-kind: decision
+kind: decide
 phase: 4
 plan: [04-control-plane, 05-data-plane]
-jira: TBD
+jira: CY-267
 commits: []
 agent: claude-opus-5
 confidence: high

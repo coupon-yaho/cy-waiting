@@ -8,22 +8,23 @@ import org.slf4j.LoggerFactory;
 /**
  * 레디스 서버 시각을 <b>뒤로 안 가게</b> 받는다 (A-9).
  *
- * <p>{@code TIME} 은 벽시계라 NTP 보정이나 복제본 승격으로 뒤로 간다. 그 값을
- * 신선도의 기준으로 삼으면 뒷단 보고가 전부 미래가 되어 한꺼번에 낡음이 되고,
- * 시계가 따라잡을 때까지 크레딧이 하한에 박힌다. slew 보정이면 몇 분, step 이
- * 아니라 500ppm 이면 몇 시간이다.
+ * <p>뒤로 간 값을 기준으로 삼으면 뒷단 보고가 전부 미래가 되어 한꺼번에 낡음이
+ * 되고, 시계가 따라잡을 때까지 크레딧이 하한에 박힌다.
  */
 public final class ServerClock {
 
     private static final Logger log = LoggerFactory.getLogger(ServerClock.class);
 
-    /**
-     * 2026-01-01. 이보다 이른 값은 초가 아니거나 시계가 안 선 것이다.
-     *
-     * <p>바닥값이 아직 없는 첫 관측에서는 단조 가드가 못 막는다. 안 믿는 편이
-     * 낫다 — 직전 값으로 도는 길이 이미 있다.
-     */
+    /** 2026-01-01. 이보다 이르면 시계가 안 선 값이다. */
     private static final long EARLIEST_SANE = 1_767_225_600L;
+
+    /**
+     * 2100-01-01. 이보다 늦으면 초가 아니라 밀리초다.
+     *
+     * <p><b>위쪽이 더 위험하다.</b> 밀리초가 바닥값에 한 번 들어가면 그 뒤 정상
+     * 시각이 전부 그 값으로 보정돼 크레딧이 영영 하한이다.
+     */
+    private static final long LATEST_SANE = 4_102_444_800L;
 
     private final AtomicLong floor = new AtomicLong();
     private final ClockSkewTracker skew = ClockSkewTracker.create();
@@ -42,8 +43,8 @@ public final class ServerClock {
      * @throws IllegalStateException 초로 볼 수 없는 값일 때
      */
     public long observe(long seconds) {
-        if (seconds < EARLIEST_SANE) {
-            throw new IllegalStateException("서버 시각이 말이 안 된다: " + seconds);
+        if (seconds < EARLIEST_SANE || seconds > LATEST_SANE) {
+            throw new IllegalStateException("서버 시각이 초로 안 보인다: " + seconds);
         }
         long floored = floor.accumulateAndGet(seconds, Math::max);
         boolean applied = floored > seconds;

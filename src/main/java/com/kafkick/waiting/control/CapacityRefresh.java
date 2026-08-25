@@ -24,9 +24,8 @@ public final class CapacityRefresh {
 
     private static final Logger log = LoggerFactory.getLogger(CapacityRefresh.class);
 
-    private final Supplier<Mono<List<CapacityReport>>> reports;
+    private final Supplier<Mono<CapacitySample>> sample;
     private final CapacityCollector collector;
-    private final Supplier<Mono<Long>> clock;
     private final IntSupplier nodes;
     private final Duration budget;
     /** 타임아웃 타이머와 수집이 함께 도는 곳. 배분과 같은 스레드다. */
@@ -37,15 +36,14 @@ public final class CapacityRefresh {
     private final AtomicLong credit = new AtomicLong();
     private final AtomicInteger observed = new AtomicInteger();
 
-    private CapacityRefresh(Supplier<Mono<List<CapacityReport>>> reports,
-            CapacityCollector collector, Supplier<Mono<Long>> clock, IntSupplier nodes,
+    private CapacityRefresh(Supplier<Mono<CapacitySample>> sample,
+            CapacityCollector collector, IntSupplier nodes,
             Duration budget, Scheduler worker, MeterRegistry meters) {
         if (budget == null || budget.isZero() || budget.isNegative()) {
             throw new IllegalArgumentException("budget 은 양수여야 한다: %s".formatted(budget));
         }
-        this.reports = Objects.requireNonNull(reports, "reports 는 필수다");
+        this.sample = Objects.requireNonNull(sample, "sample 은 필수다");
         this.collector = Objects.requireNonNull(collector, "collector 는 필수다");
-        this.clock = Objects.requireNonNull(clock, "clock 은 필수다");
         this.nodes = Objects.requireNonNull(nodes, "nodes 는 필수다");
         this.budget = budget;
         this.worker = Objects.requireNonNull(worker, "worker 는 필수다");
@@ -57,10 +55,10 @@ public final class CapacityRefresh {
         this.readFailed = meters.counter("waiting.capacity.read.failed");
     }
 
-    public static CapacityRefresh of(Supplier<Mono<List<CapacityReport>>> reports,
-            CapacityCollector collector, Supplier<Mono<Long>> clock, IntSupplier nodes,
+    public static CapacityRefresh of(Supplier<Mono<CapacitySample>> sample,
+            CapacityCollector collector, IntSupplier nodes,
             Duration budget, Scheduler worker, MeterRegistry meters) {
-        return new CapacityRefresh(reports, collector, clock, nodes, budget, worker, meters);
+        return new CapacityRefresh(sample, collector, nodes, budget, worker, meters);
     }
 
     /**
@@ -70,18 +68,16 @@ public final class CapacityRefresh {
     public Mono<Void> refresh() {
         // **읽기와 시각을 한 예산 안에서 같이 받는다.** 시각을 따로 받으면 그
         // 왕복이 예산 밖이라, 느릴 때 관측과 기준 시각이 서로 다른 순간의 것이 된다.
-        return Mono.zip(
-                        // **어느 쪽이 터졌는지 남긴다.** 뭉치면 새벽에 이 경보를
-                        // 받은 사람이 멀쩡한 해시를 열어 보고 막힌다.
-                        Mono.defer(reports).onErrorMap(e -> tagged("보고", e)),
-                        Mono.defer(clock).onErrorMap(e -> tagged("시각", e)))
+        // **보고와 기준 시각을 한 왕복으로 받는다.** 따로 내면 같은 순간이
+        // 아니고, 클러스터에서는 아예 다른 노드의 벽시계가 된다.
+        return Mono.defer(sample)
                 // **타이머도 배분 스케줄러다.** 기본 스케줄러를 쓰면 제어 평면의
                 // 시간과 분리되고, 시험이 가상 시간으로 재지 못한다.
                 .timeout(budget, worker)
                 // **수집을 레디스 이벤트 루프에서 돌리지 않는다.** 램프 기록은
                 // 동기화 없는 맵이고, 재연결로 루프가 갈리면 두 스레드가 만진다.
                 .publishOn(worker)
-                .doOnNext(both -> collected(both.getT1(), both.getT2()))
+                .doOnNext(read -> collected(read.reports(), read.now()))
                 .doOnError(this::failed)
                 .onErrorResume(e -> Mono.empty())
                 .then();
@@ -121,8 +117,4 @@ public final class CapacityRefresh {
         }
     }
 
-    /** 원인을 예외 메시지에 실어 둔다. {@code Mono.zip} 은 어느 쪽인지 안 알려 준다. */
-    private Throwable tagged(String what, Throwable cause) {
-        return new IllegalStateException(what + " 읽기 실패", cause);
-    }
 }

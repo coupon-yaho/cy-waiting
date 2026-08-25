@@ -12,8 +12,7 @@ import reactor.core.publisher.Mono;
  * 노드가 자기 존재를 알리고, 살아 있는 노드 수를 받아 온다.
  *
  * <p><b>세는 것과 쓰는 것을 나누지 않는다.</b> 나누면 그 사이에 다른 노드가 세어
- * 방금 지운 항목을 살아 있는 것으로 본다 — 분모가 사실보다 커지고, 그만큼 전
- * 노드가 몫을 덜 쓴다.
+ * 방금 지운 항목을 살아 있는 것으로 본다 — 분모가 사실보다 커진다.
  */
 @Component
 public final class GatewayRedisPort {

@@ -72,10 +72,14 @@ class SnapshotRefreshDrainOrderTest {
     }
 
     /** 웹 서버 종료 단계에 서서 드레이닝을 흉내낸다. */
-    record FakeWebServer() implements SmartLifecycle {
+    static final class FakeWebServer implements SmartLifecycle {
+
+        /** 실제 웹 서버는 기동 전·정지 후에 안 돈다. 항상 참이면 못 만드는 상태다. */
+        private final AtomicBoolean running = new AtomicBoolean();
 
         @Override
         public void start() {
+            running.set(true);
         }
 
         @Override
@@ -91,11 +95,12 @@ class SnapshotRefreshDrainOrderTest {
                 // 컨테이너 종료를 여기서 끊지 않는다.
             }
             드레이닝_동안_받아옴.set(받아옴.get() - 시작);
+            running.set(false);
         }
 
         @Override
         public boolean isRunning() {
-            return true;
+            return running.get();
         }
 
         @Override

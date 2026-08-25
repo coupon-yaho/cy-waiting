@@ -146,7 +146,6 @@ class OffModeQueueTest {
         AdmissionDecision 판정 = decider.decide(신규유입(줄이빈꺼짐));
 
         assertThat(판정).isEqualTo(AdmissionDecision.PASS_BYPASS);
-        assertThat(판정.name()).doesNotStartWith("ENQUEUE");
     }
 
     /**

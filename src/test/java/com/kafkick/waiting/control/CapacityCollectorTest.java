@@ -393,7 +393,9 @@ class CapacityCollectorTest {
         long credit = collector.collect(
                 List.of(report("a", 100, NOW + 1), report("b", 100, NOW + 1)), NOW + 1, 1);
 
-        // a 는 온전히, b 는 램프 첫 구간이라 거의 0 이다.
-        assertThat(credit).isLessThan(200).isGreaterThanOrEqualTo(100);
+        // a 는 온전히 100. b 는 처음 본 순간이라 데운 시간이 0 이므로 몫도 0 이다.
+        // **범위로 두지 않는다.** 콜드 인스턴스가 첫 판에 제 몫을 다 받는 결함이
+        // 범위 안에 숨는다 — 그게 이 시험이 막으려는 바로 그것이다.
+        assertThat(credit).isEqualTo(100);
     }
 }

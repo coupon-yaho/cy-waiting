@@ -122,4 +122,24 @@ class EtaPolicyTest {
         assertThat(EtaPolicy.bucket(EtaPolicy.etaSec(0, 0)))
                 .isEqualTo(EtaDisplay.ALMOST_THERE);
     }
+
+    /**
+     * <b>모른다는 것을 0 으로 말하면 안 된다.</b> 와이어는 숫자 하나뿐이라
+     * NaN 을 그대로 실을 수 없는데, {@code (long) Math.max(0, NaN)} 은 0 이
+     * 되어 "곧 입장" 이 된다 — 하필 배수가 멎은 구간에서 그렇게 나간다.
+     */
+    @Test
+    @DisplayName("모르면_가장_넓은_구간의_초를_준다")
+    void 모르면_가장_넓은_구간의_초를_준다() {
+        assertThat(EtaPolicy.reportSec(EtaPolicy.UNKNOWN)).isEqualTo(450);
+        assertThat(EtaPolicy.reportSec(-1)).isEqualTo(450);
+    }
+
+    @Test
+    @DisplayName("아는_값은_그대로_준다")
+    void 아는_값은_그대로_준다() {
+        assertThat(EtaPolicy.reportSec(0)).isZero();
+        assertThat(EtaPolicy.reportSec(42.7)).isEqualTo(42);
+        assertThat(EtaPolicy.reportSec(1_000)).isEqualTo(1_000);
+    }
 }

@@ -43,6 +43,18 @@ public final class EtaPolicy {
     }
 
     /**
+     * 와이어에 실을 초. <b>모름을 0 으로 말하지 않는다</b> — 필드가 숫자 하나라
+     * NaN 을 그대로 못 싣는데, 그대로 캐스팅하면 0 이 되어 "곧 입장" 이 된다.
+     * 모르면 가장 넓은 구간의 하한을 준다.
+     */
+    public static long reportSec(double etaSec) {
+        if (!(etaSec >= 0)) {
+            return (long) BUCKET_EDGES[BUCKET_EDGES.length - 1];
+        }
+        return (long) etaSec;
+    }
+
+    /**
      * 표시할 구간. <b>모를 때도 값을 준다</b> — 계산 중이라는 표시는 떠날지
      * 기다릴지 판단할 근거를 안 준다. 모르면 가장 넓은 구간이다. 짧게 말했다가
      * 오래 기다리게 하는 쪽이 훨씬 나쁘다.

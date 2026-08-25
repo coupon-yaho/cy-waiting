@@ -7,6 +7,7 @@ import java.time.Instant;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
@@ -89,11 +90,24 @@ public class ControlPlaneConfig {
                 properties.leader().attempt(), allocationScheduler);
     }
 
+    /**
+     * 배분 틱. <b>재료를 먼저 읽고 배분한다</b> — 안 읽으면 수집기가 첫 하한을
+     * 영영 답으로 내고, 그 하한에서는 한산 통과 상한이 0 이라 대기열이 통째로
+     * 켜진다. 읽기가 실패하면 수집을 건너뛴다 (아래 주석).
+     */
     @Bean
     AllocationScheduler allocationLoop(ControlPlaneProperties properties, Leadership leadership,
-            AllocationRound round, Scheduler allocationScheduler) {
+            AllocationRound round, AllocationRedisPort port, CapacityCollector capacity,
+            Scheduler allocationScheduler) {
         return AllocationScheduler.of(properties.scheduler().tick(),
-                properties.scheduler().firstTickDelay(), leadership::isLeader, round::run,
+                properties.scheduler().firstTickDelay(), leadership::isLeader,
+                () -> port.capacityReports()
+                        .doOnNext(reports ->
+                                capacity.collect(reports, Instant.now().getEpochSecond()))
+                        // **빈 목록을 넘기지 않는다.** 그러면 신선한 보고 0 건이
+                        // 되어 하한으로 떨어지는데, 그건 관측이 아니라 왕복 실패다.
+                        .onErrorResume(e -> Mono.empty())
+                        .then(round.run()),
                 nanos -> { }, allocationScheduler);
     }
 }

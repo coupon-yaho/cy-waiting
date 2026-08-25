@@ -19,6 +19,8 @@ import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import com.kafkick.waiting.domain.queue.EntryToken;
 import com.kafkick.waiting.domain.queue.QueueToken;
 import java.time.Clock;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -47,6 +49,8 @@ import reactor.core.publisher.Mono;
  * 없는 쿠폰을 그대로 흘리면 레디스 키가 무한히 생긴다.
  */
 class AdmissionGatewayFilterTest {
+
+    private static final ObjectMapper JSON = new ObjectMapper();
 
     private static final String COUPON = "c1";
 
@@ -402,6 +406,28 @@ class AdmissionGatewayFilterTest {
         assertThat(뒷단에_닿음).hasValue(false);
         // **그 쿠폰의 줄에 섰는지 본다.** 등록 횟수만 세면 어느 줄에 들어갔든 초록이다.
         assertThat(줄.줄_길이(COUPON)).isEqualTo(1);
+    }
+
+    /**
+     * <b>도메인 시험만으로는 배선이 안 잠긴다.</b> 배분 전이라 배수 속도를 모르는데
+     * 0 이 나가면 앞에 사람이 남았는데 곧 입장이라고 말하는 셈이다.
+     */
+    @Test
+    @DisplayName("배수를_모르면_가장_넓은_구간을_싣는다")
+    void 배수를_모르면_가장_넓은_구간을_싣는다() {
+        스냅샷을_심는다(CouponStates.always(1_000));
+        // 앞사람이 있어야 ETA 가 0 이 아니다 — 맨 앞 사람은 정말 0 이 맞다.
+        태운다(COUPON, "앞사람");
+
+        MockServerWebExchange exchange = 태운다(COUPON, "뒷사람");
+
+        // **값으로 읽는다** — 포함 검사는 450 자리를 4500 이 통과한다.
+        assertThat(본문(exchange).get("data").get("position").asLong()).isEqualTo(1);
+        assertThat(본문(exchange).get("data").get("etaSeconds").asLong()).isEqualTo(450);
+    }
+
+    private JsonNode 본문(MockServerWebExchange exchange) {
+        return JSON.readTree(exchange.getResponse().getBodyAsString().block());
     }
 
     /**

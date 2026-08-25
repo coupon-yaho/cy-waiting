@@ -17,6 +17,8 @@ import com.kafkick.waiting.domain.queue.QueueToken;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Clock;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -38,6 +40,8 @@ class QueueStatusFilterTest {
 
     private static final String COUPON = "c1";
     private static final String MEMBER = "812934";
+    private static final ObjectMapper JSON = new ObjectMapper();
+
     private static final Instant 지금 = Instant.parse("2026-08-24T00:00:00Z");
 
     private final MeterRegistry meters = new SimpleMeterRegistry();
@@ -118,6 +122,27 @@ class QueueStatusFilterTest {
         assertThat(exchange.getResponse().getBodyAsString().block()).contains("CLOSED");
     }
 
+    /**
+     * <b>도메인 시험만으로는 배선이 안 잠긴다.</b> 값 산출이 맞아도 응답에 실리는
+     * 것이 다르면 사용자가 보는 것은 여전히 틀린다.
+     */
+    @Test
+    @DisplayName("배수_속도를_모르면_가장_넓은_구간을_싣는다")
+    void 배수_속도를_모르면_가장_넓은_구간을_싣는다() {
+        // 스냅샷에 없는 쿠폰이라 배분 속도를 모른다.
+        holder.replace(new GatewaySnapshot(Map.of(), new SnapshotMeta(1, 1), 지금));
+        줄.enqueue(COUPON, "앞사람", NO_LIMIT, 지금).block();
+        줄.enqueue(COUPON, MEMBER, NO_LIMIT, 지금).block();
+
+        MockServerWebExchange exchange = 토큰으로_조회한다(tokens.issue(COUPON, MEMBER, 지금));
+
+        // **값으로 읽는다.** 문자열 포함으로 재면 450 자리를 4500 이 통과한다.
+        JsonNode data = 본문(exchange).get("data");
+        assertThat(data.get("position").asLong()).isEqualTo(1);
+        // 0 이면 순번이 남았는데 곧 입장이라고 말하는 셈이다.
+        assertThat(data.get("etaSeconds").asLong()).isEqualTo(450);
+    }
+
     @Test
     @DisplayName("기다리는_중이면_순번을_준다")
     void 기다리는_중이면_순번을_준다() {
@@ -166,6 +191,11 @@ class QueueStatusFilterTest {
         assertThat(entryTokens.verify(받은_것, "다른쿠폰", 지금)).isEmpty();
         assertThat(entryTokens.verify(받은_것, COUPON, 지금.plusSeconds(EntryToken.TTL_SEC + 1)))
                 .isEmpty();
+    }
+
+    /** 본문을 값으로 읽는다. 포함 검사로 재면 자릿수가 다른 값이 통과한다 (TS-11). */
+    private JsonNode 본문(MockServerWebExchange exchange) {
+        return JSON.readTree(exchange.getResponse().getBodyAsString().block());
     }
 
     private String 입장_토큰(String 본문) {

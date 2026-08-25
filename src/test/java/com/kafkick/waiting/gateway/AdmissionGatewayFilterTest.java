@@ -74,8 +74,11 @@ class AdmissionGatewayFilterTest {
 
     private final MeterRegistry meters = new SimpleMeterRegistry();
 
+    /** 스냅샷을 아직 믿는 한계. 래치는 이만큼은 버텨야 한다 (불변식 4). */
+    private static final Duration 홀더_유효_한계 = Duration.ofSeconds(10);
+
     private final SnapshotHolder holder = SnapshotHolder.of(
-            Duration.ofSeconds(3), Duration.ofSeconds(10),
+            Duration.ofSeconds(3), 홀더_유효_한계,
             Clock.fixed(지금, ZoneOffset.UTC));
     private final FakeQueuePort 줄 = FakeQueuePort.create();
 
@@ -331,6 +334,31 @@ class AdmissionGatewayFilterTest {
 
         스냅샷을_심는다(CouponStates.idle(1_000));
         시계.앞으로(Duration.ofSeconds(2));
+
+        assertThat(태운다(f, COUPON)).isEqualTo(AdmissionDecision.ENQUEUE_BACKLOG);
+    }
+
+    /**
+     * <b>래치는 스냅샷이 유효한 동안 살아 있어야 한다.</b> 래치가 먼저 풀리면,
+     * 그 뒤로도 유효하다고 보는 스냅샷에는 방금 세운 줄이 아직 안 보인다. 그
+     * 창으로 들어온 사람은 줄을 안 서고 지나간다 — 불변식 4 가 깨진다.
+     *
+     * <p>두 값이 다른 클래스에 상수로 박혀 있어 조용히 갈라졌다. 여기서는
+     * 홀더가 정한 값을 필터가 따라오는지를 본다.
+     */
+    @Test
+    @DisplayName("래치는_스냅샷이_유효한_동안_버틴다")
+    void 래치는_스냅샷이_유효한_동안_버틴다() {
+        MutableClock 시계 = MutableClock.at(지금);
+        AdmissionGatewayFilter f = AdmissionGatewayFilter.of(
+                holder, AdmissionDecider.of(limiter, IDLE_RATIO),
+                시계, meters, () -> 0.5, 줄, tokens, limiter, entryTokens);
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+        태운다(f, COUPON);
+
+        // 배분이 줄을 비운 것으로 보이는 스냅샷. 아직 유효 한계 안이다.
+        스냅샷을_심는다(CouponStates.idle(1_000));
+        시계.앞으로(홀더_유효_한계.minusSeconds(1));
 
         assertThat(태운다(f, COUPON)).isEqualTo(AdmissionDecision.ENQUEUE_BACKLOG);
     }

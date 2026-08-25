@@ -167,7 +167,7 @@ class QueueStatusTest extends RedisContainerSupport {
 
         // 다만 입장 처리는 한 번뿐이다 — 유예 기록만 읽고 돌아간다.
         assertThat(redis.opsForZSet().score(QUEUE, "m0").block(WAIT)).isNull();
-        assertThat(redis.opsForHash().get(GRACE, "m0").block(WAIT)).isEqualTo("admitted");
+        assertThat(redis.opsForHash().get(GRACE, "m0").block(WAIT)).isEqualTo("a:" + NOW);
     }
 
     @Test
@@ -180,7 +180,9 @@ class QueueStatusTest extends RedisContainerSupport {
 
         status("m0");
 
-        assertThat(redis.opsForHash().get(GRACE, "m0").block(WAIT)).isEqualTo("admitted");
+        // **종류와 시각을 함께 남긴다.** 종류가 없으면 청소가 이탈 기록으로 읽어
+        // 낡았다고 지우고, 시각이 없으면 아무도 안 지워 해시가 자란다.
+        assertThat(redis.opsForHash().get(GRACE, "m0").block(WAIT)).isEqualTo("a:" + NOW);
     }
 
     @Test

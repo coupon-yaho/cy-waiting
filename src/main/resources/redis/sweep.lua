@@ -11,6 +11,15 @@
 --
 -- 반환  {swept, expiredSignals, expiredGrace, nextCursor}
 --
+-- **이탈 기록 해시에는 writer 가 둘이다.** 여기는 이탈 시각을, queue_status 는
+-- 입장 표시를 같은 자리에 쓴다. 값에 종류를 실어 가른다 — 안 가르면 이쪽이
+-- 입장 표시를 숫자로 못 읽어 낡은 것으로 보고 다음 청소에서 지운다. 그러면
+-- 입장한 사람이 1초 뒤 폴링에서 종료를 받는다.
+--
+--   'd:<초>'  이탈 기록      'a:<초>'  입장 표시
+--
+-- 접두사가 없는 값은 종류가 생기기 전의 이탈 기록이다. 숫자로 읽는다.
+--
 -- **키를 문자열로 조립하지 않는다.** 사람마다 alive 키를 만들면 KEYS 에
 -- 선언되지 않은 키를 만지게 되고 클러스터가 거부한다 (RD-1).
 --
@@ -27,6 +36,11 @@ local now = tonumber(ARGV[2])
 if now == nil or now < 0 then
     return redis.error_reply('시각은 0 이상이어야 한다: ' .. tostring(ARGV[2]))
 end
+-- **nan 과 무한은 비교로 안 걸린다.** 0 이상인지만 보면 통과하는데,
+-- 그 값이 기록에 굳으면 그 항목은 어떤 보관 기간으로도 안 걷힌다.
+if now ~= now or now == math.huge or now == -math.huge then
+    return redis.error_reply('시각은 유한해야 한다: ' .. tostring(ARGV[2]))
+end
 
 local retention = tonumber(ARGV[3])
 if retention == nil or retention < 1 or retention ~= math.floor(retention) then
@@ -36,6 +50,24 @@ end
 local budget = tonumber(ARGV[4])
 if budget == nil or budget < 1 or budget ~= math.floor(budget) then
     return redis.error_reply('정리 예산은 양의 정수여야 한다: ' .. tostring(ARGV[4]))
+end
+
+-- 종류를 뗀 시각. 못 읽으면 nil 이고, 부르는 쪽이 그것을 낡음으로 본다 —
+-- 형식이 깨진 값은 남겨 둘 근거가 없다.
+local function stampOf(value)
+    if type(value) ~= 'string' then
+        return nil
+    end
+    local kind = string.sub(value, 1, 2)
+    local at = (kind == 'd:' or kind == 'a:')
+            and tonumber(string.sub(value, 3))
+            or tonumber(value)
+    -- **nan 과 무한은 어떤 비교도 참으로 안 만든다.** 그대로 돌려주면 그 항목이
+    -- 영영 안 걷힌다 — 형식이 깨진 값은 남겨 둘 근거가 없으므로 낡음으로 본다.
+    if at == nil or at ~= at or at == math.huge or at == -math.huge or at < 0 then
+        return nil
+    end
+    return at
 end
 
 -- **커서도 쓰기 전에 본다.** 형식이 틀리면 HSCAN 이 오류를 내는데, 그때는
@@ -63,7 +95,7 @@ if #front > 0 then
             gone[#gone + 1] = front[i]
             -- 자리는 안 보관한다. 재방문자로 식별만 한다 (D-11).
             records[#records + 1] = front[i]
-            records[#records + 1] = now
+            records[#records + 1] = 'd:' .. string.format('%.0f', now)
         end
     end
 
@@ -102,14 +134,29 @@ local scanned = redis.call('HSCAN', KEYS[2], cursor, 'COUNT', budget)
 local fields = scanned[2]
 local cutoff = now - retention
 local doomed = {}
+local stamped = {}
 for i = 1, #fields, 2 do
-    if #doomed >= budget then
+    if #doomed >= budget or #stamped >= budget then
         break
     end
-    local at = tonumber(fields[i + 1])
-    if at == nil or at < cutoff then
-        doomed[#doomed + 1] = fields[i]
+    local value = fields[i + 1]
+    if value == 'admitted' then
+        -- **옛 표시에는 시각이 없다.** 그대로 두면 나이를 못 재 영영 안 걷히고,
+        -- 지금으로 쳐 주면 매 판 다시 젊어져 같은 일이 난다. 지금을 못 박아
+        -- 다음 판부터 늙게 한다 — 그러면 한 보관 기간 뒤 옛 값이 사라지고,
+        -- 그때 이 분기를 뗀다.
+        stamped[#stamped + 1] = fields[i]
+        stamped[#stamped + 1] = 'a:' .. string.format('%.0f', now)
+    else
+        local at = stampOf(value)
+        if at == nil or at < cutoff then
+            doomed[#doomed + 1] = fields[i]
+        end
     end
+end
+
+if #stamped > 0 then
+    redis.call('HSET', KEYS[2], unpack(stamped))
 end
 
 local expiredGrace = 0

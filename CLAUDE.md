@@ -20,7 +20,7 @@ Spring WebFlux 기반 **적응형 대기열 게이트웨이**. 뒷단은 쿠폰 
 | R4 | 피크 100K / 동시 대기 20,000 |
 | R5 | **장애 진입·유지·회복 전 구간에서 정합성과 공정성 유지** |
 
-**현재 상태**: 제로베이스 재작성 중. **Phase 6(Protection) 착수.**
+**현재 상태**: 제로베이스 재작성 중. **Phase 6(Protection) 착수 — v0.2.0.**
 Phase 1·2·3·4·5 는 닫혔다. 브랜치는 태스크 단위로 딴다 (WF-3).
 진행 상황은 [plan/README.md](plan/README.md) 2절, 저장소 소개는 [README.md](README.md).
 

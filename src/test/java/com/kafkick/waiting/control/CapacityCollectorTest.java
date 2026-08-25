@@ -482,18 +482,37 @@ class CapacityCollectorTest {
     }
 
     /**
-     * <b>하한이 없는 여유를 만들어 내지는 않는다.</b> 뒷단이 실제로 가진 것이
-     * 하한보다 적으면 그 값이 천장이다. 하한은 램프가 깎은 만큼만 되돌린다.
+     * <b>램프가 깎았으면 남은 값의 크기는 안 본다.</b> 깎기 전 합이 하한보다
+     * 적어도 마찬가지다 — 뒷단이 못 받겠다고 말한 것이 아니라 우리가 아직 안
+     * 믿기로 한 것뿐이다. 여기서 하한을 안 걸면 노드가 여럿일 때 한산 통과가
+     * 통째로 막힌다.
      */
     @Test
-    @DisplayName("하한은_뒷단이_가진_것을_못_넘는다")
-    void 하한은_뒷단이_가진_것을_못_넘는다() {
+    @DisplayName("깎기_전_합이_하한보다_적어도_하한을_쓴다")
+    void 깎기_전_합이_하한보다_적어도_하한을_쓴다() {
         CapacityCollector collector = collector();
-        collector.collect(List.of(report("seed", 0, NOW)), NOW, 2);
+        collector.collect(List.of(report("seed", 0, NOW)), NOW, 8);
 
-        // 뒷단이 가진 것이 3 뿐이다. 램프가 그것을 0 으로 접었어도 3 이 천장이다.
+        // 처음 보는 뒷단이 12 를 보고한다. 노드 여덟의 하한 40 에는 못 미친다.
         long credit = collector.collect(
-                List.of(report("seed", 0, NOW + 1), report("fresh", 3, NOW + 1)), NOW + 1, 2);
+                List.of(report("seed", 0, NOW + 1), report("cold", 12, NOW + 1)), NOW + 1, 8);
+
+        assertThat(credit).isEqualTo(8L * CapacityCollector.IDLE_DIVISOR);
+    }
+
+    /**
+     * <b>하한이 없는 여유를 만들어 내지는 않는다.</b> 램프가 손대지 않은 값은
+     * 뒷단이 실제로 가진 것이다. 그것이 하한보다 적다고 올리면 뒷단이 못 받는
+     * 만큼을 우리가 지어내는 셈이다.
+     */
+    @Test
+    @DisplayName("램프_밖의_부족은_그대로_둔다")
+    void 램프_밖의_부족은_그대로_둔다() {
+        CapacityCollector collector = collector();
+        // 다 데워진 뒷단이 3 을 보고한다. 램프는 여기 손대지 않았다.
+        long warmed = warm(collector, "a", 3);
+
+        long credit = collector.collect(List.of(report("a", 3, warmed + 1)), warmed + 1, 2);
 
         assertThat(credit).isEqualTo(3);
     }

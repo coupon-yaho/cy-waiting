@@ -74,7 +74,7 @@ class AllocationRoundTest {
                 },
                 () -> Instant.ofEpochSecond(1_700_000_000L),
                 () -> Mono.just(CreditSmoother.of(1.0)),
-                SnapshotCodec.create());
+                SnapshotCodec.create(), () -> 0L);
     }
 
     private List<String> 로그_메시지() {
@@ -155,7 +155,7 @@ class AllocationRoundTest {
                 },
                 () -> Instant.ofEpochSecond(1_700_000_000L),
                 () -> Mono.just(CreditSmoother.of(1.0)),
-                SnapshotCodec.create());
+                SnapshotCodec.create(), () -> 0L);
 
         round.run().block();
 
@@ -169,6 +169,39 @@ class AllocationRoundTest {
         // 대기 시간을 계산한다.
         assertThat(발행된("c1").credit()).isZero();
         assertThat(발행된("c2").credit()).isEqualTo(5);
+    }
+
+    /**
+     * <b>하한은 평활을 기다리지 않는다.</b> 하한은 관측이 아니라 정책이다 —
+     * 평활을 거치면 앞선 낮은 값에서 올라오는 데 열 틱이 넘게 걸리고, 그동안
+     * 노드당 몫이 유휴 비율 아래에 머물러 한산 통과 상한이 0 이다. 하한을 둔
+     * 이유가 그 구간에서 사라진다 (R1).
+     */
+    @Test
+    @DisplayName("하한은_평활에_묻히지_않는다")
+    void 하한은_평활에_묻히지_않는다() {
+        CreditSmoother smoother = CreditSmoother.of(0.3);
+        // 앞선 판이 뒷단의 정직한 0 으로 굳어 있다.
+        smoother.observe(0);
+        AllocationRound round = AllocationRound.of(
+                () -> true,
+                () -> Mono.just(List.of(new CouponDemand("c1", 1_000, 10_000))),
+                () -> 40L, () -> 8,
+                grant -> Mono.just(grant.credit()),
+                hash -> {
+                    발행.put("last", hash);
+                    return Mono.empty();
+                },
+                () -> Instant.ofEpochSecond(1_700_000_000L),
+                () -> Mono.just(smoother),
+                SnapshotCodec.create(),
+                () -> 40L);
+
+        round.run().block();
+
+        // 평활만 거치면 12 다. 노드 여덟에 나누면 노드당 1, 유휴 상한은 0 이다.
+        assertThat(SnapshotCodec.create().decode(발행.get("last")).meta().globalCredit())
+                .isEqualTo(40);
     }
 
     @Test
@@ -187,7 +220,7 @@ class AllocationRoundTest {
                 },
                 () -> Instant.ofEpochSecond(1_700_000_000L),
                 () -> Mono.just(smoother),
-                SnapshotCodec.create());
+                SnapshotCodec.create(), () -> 0L);
 
         round.run().block();
 
@@ -240,7 +273,7 @@ class AllocationRoundTest {
                 },
                 () -> Instant.ofEpochSecond(1_700_000_000L),
                 () -> Mono.just(CreditSmoother.of(1.0)),
-                SnapshotCodec.create());
+                SnapshotCodec.create(), () -> 0L);
 
         round.run().block();
 
@@ -268,7 +301,7 @@ class AllocationRoundTest {
                     이월.incrementAndGet();
                     return CreditSmoother.of(1.0);
                 }),
-                SnapshotCodec.create());
+                SnapshotCodec.create(), () -> 0L);
 
         round.run().block();
         round.run().block();
@@ -296,7 +329,7 @@ class AllocationRoundTest {
                 },
                 () -> Instant.ofEpochSecond(1_700_000_000L),
                 () -> Mono.error(new IllegalStateException("끊겼다")),
-                SnapshotCodec.create());
+                SnapshotCodec.create(), () -> 0L);
 
         round.run().block();
 
@@ -343,7 +376,7 @@ class AllocationRoundTest {
                 },
                 () -> Instant.ofEpochSecond(1_700_000_000L),
                 () -> Mono.just(CreditSmoother.of(1.0)),
-                SnapshotCodec.create());
+                SnapshotCodec.create(), () -> 0L);
 
         round.run().block();
 
@@ -374,7 +407,7 @@ class AllocationRoundTest {
                 },
                 () -> Instant.ofEpochSecond(1_700_000_000L),
                 () -> Mono.just(CreditSmoother.of(1.0)),
-                SnapshotCodec.create());
+                SnapshotCodec.create(), () -> 0L);
 
         round.run().block();
 

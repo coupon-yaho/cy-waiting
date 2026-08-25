@@ -106,6 +106,10 @@ public class AdmissionDecider {
         //     **줄이 있을 때만 의미가 있다.** 한산한 쿠폰은 credit 이 0 이라
         //     용량도 0 이고, 조건을 안 걸면 waiting(0) >= 0 이 참이 되어
         //     R1 경로가 통째로 막힌다.
+        //
+        //     **여기서는 폴백을 안 쓴다.** 줄이 이미 섰다는 것은 이 쿠폰이 이미
+        //     활성이라는 뜻이라, 배분이 살아나면 다음 틱에 크레딧을 받는다.
+        //     갇히는 고리가 없으므로 뺄 수 없다고 아는 줄에 더 세우지 않는다.
         if (s.waiting() > 0 && s.waiting() >= s.queueCapacity(req.maxEtaSec())) {
             return AdmissionDecision.REJECT_QUEUE_FULL;
         }
@@ -144,9 +148,9 @@ public class AdmissionDecider {
     /**
      * 줄 길이 상한.
      *
-     * <p><b>{@code maxEtaSec} 은 사다리 5번과 같은 값이어야 한다.</b> 갈라지면
-     * 대기 인원이 0 보다 큰데 상한이 0 인 조합이 생기고, 5번이 상한을 걸었다고
-     * 믿는 쿠폰에서 무제한 등록이 난다.
+     * <p><b>5번은 이 함수를 안 쓴다.</b> 거기는 줄이 이미 선 쿠폰만 보고, 그런
+     * 쿠폰은 배분이 살아나면 다음 틱에 크레딧을 받는다. 뺄 수 없다고 아는 줄에
+     * 사람을 더 세우느니 거절이 낫다. 폴백은 줄이 아직 없는 구간만을 위한 것이다.
      */
     public static long queueCapacity(CouponState state, SnapshotMeta meta, long maxEtaSec) {
         // **배수 속도를 모르는 것과 자리가 없는 것은 다르다.** 한산하던 쿠폰에

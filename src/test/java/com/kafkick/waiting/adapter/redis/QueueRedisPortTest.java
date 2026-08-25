@@ -3,6 +3,7 @@ package com.kafkick.waiting.adapter.redis;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.kafkick.waiting.domain.queue.QueueEntry;
+import com.kafkick.waiting.gateway.QueuePort;
 import com.kafkick.waiting.domain.queue.QueueState;
 import java.time.Duration;
 import java.time.Instant;
@@ -63,7 +64,7 @@ class QueueRedisPortTest extends RedisContainerSupport {
     }
 
     private QueueEntry 등록(String memberId) {
-        return port.enqueue(COUPON, memberId, QueueRedisPort.NO_LIMIT, 지금).block(WAIT);
+        return port.enqueue(COUPON, memberId, QueuePort.NO_LIMIT, 지금).block(WAIT);
     }
 
     @Test
@@ -218,7 +219,7 @@ class QueueRedisPortTest extends RedisContainerSupport {
         int 내_샤드 = ShardHash.shardOf(member, 샤드수);
         비운다(샤드수, 내_샤드);
 
-        쪼갠_것.enqueue(COUPON, member, QueueRedisPort.NO_LIMIT, 지금).block(WAIT);
+        쪼갠_것.enqueue(COUPON, member, QueuePort.NO_LIMIT, 지금).block(WAIT);
 
         // 자기 샤드에만 들어갔는지 실물로 본다. 0번 샤드로 굳으면 자기 샤드가
         // 0 이 아닌 사람에게서 드러나므로, 그 사람을 골랐다는 것도 못 박는다.
@@ -249,8 +250,8 @@ class QueueRedisPortTest extends RedisContainerSupport {
         // 조회가 보는 키를 다 비운다. 남으면 앞선 시험의 상태가 답을 바꾼다.
         비운다(샤드수, 샤드);
 
-        쪼갠_것.enqueue(COUPON, 앞사람, QueueRedisPort.NO_LIMIT, 지금).block(WAIT);
-        QueueEntry 뒤 = 쪼갠_것.enqueue(COUPON, 뒷사람, QueueRedisPort.NO_LIMIT, 지금).block(WAIT);
+        쪼갠_것.enqueue(COUPON, 앞사람, QueuePort.NO_LIMIT, 지금).block(WAIT);
+        QueueEntry 뒤 = 쪼갠_것.enqueue(COUPON, 뒷사람, QueuePort.NO_LIMIT, 지금).block(WAIT);
 
         // 샤드 안 등수는 1 이지만 여덟으로 쪼갰으니 앞에 여덟 명이 있다고 본다.
         assertThat(뒤.rank()).isEqualTo(8);
@@ -266,7 +267,7 @@ class QueueRedisPortTest extends RedisContainerSupport {
     void 동시에_눌러도_자리는_하나다() {
         List<QueueEntry> 결과 = reactor.core.publisher.Flux
                 .merge(IntStream.range(0, 32)
-                        .mapToObj(i -> port.enqueue(COUPON, "m1", QueueRedisPort.NO_LIMIT, 지금))
+                        .mapToObj(i -> port.enqueue(COUPON, "m1", QueuePort.NO_LIMIT, 지금))
                         .toList())
                 .collectList()
                 .block(WAIT);

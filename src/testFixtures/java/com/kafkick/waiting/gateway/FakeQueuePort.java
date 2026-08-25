@@ -1,6 +1,5 @@
 package com.kafkick.waiting.gateway;
 
-import com.kafkick.waiting.adapter.redis.QueueRedisPort;
 import com.kafkick.waiting.domain.queue.QueueEntry;
 import com.kafkick.waiting.domain.queue.QueueState;
 import java.time.Instant;
@@ -66,9 +65,9 @@ public final class FakeQueuePort implements QueuePort {
         등록_호출.incrementAndGet();
         // **잘못된 상한을 받아 주지 않는다.** 실물은 거절하는데 여기서 통과시키면
         // 그 회귀를 게이트웨이 시험이 못 본다.
-        if (maxLen < QueueRedisPort.NO_LIMIT) {
+        if (maxLen < QueuePort.NO_LIMIT) {
             return Mono.error(new IllegalArgumentException(
-                    "큐 길이 상한은 %d 이상이어야 한다: %d".formatted(QueueRedisPort.NO_LIMIT, maxLen)));
+                    "큐 길이 상한은 %d 이상이어야 한다: %d".formatted(QueuePort.NO_LIMIT, maxLen)));
         }
         if (터뜨릴_것 != null) {
             return Mono.error(터뜨릴_것);

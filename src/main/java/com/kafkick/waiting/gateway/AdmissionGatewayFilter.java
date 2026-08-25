@@ -51,7 +51,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     private static final String METRIC = "waiting.admission";
 
     /** 받아도 되는 최대 대기 시간. 넘으면 줄을 세우는 것이 되레 나쁘다. */
-    private static final long MAX_ETA_SEC = 600;
+    static final long MAX_ETA_SEC = 600;
 
     /** 재시도 안내의 흔들림 폭. 폴링 간격과 같은 정책을 쓴다. */
     private static final PollIntervalPolicy POLL = PollIntervalPolicy.of(0.2);

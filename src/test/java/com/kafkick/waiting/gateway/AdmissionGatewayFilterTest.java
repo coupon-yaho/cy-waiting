@@ -356,21 +356,41 @@ class AdmissionGatewayFilterTest {
     }
 
     /**
-     * 배분을 아직 못 받은 쿠폰이다. 상한이 0 이므로 줄을 받으면 배수할 수 없는
-     * 줄에 사람이 갇힌다 — 스크립트와 픽스처가 이 값을 같게 읽어야 한다.
+     * <b>한산하던 쿠폰에 사람이 몰리기 시작하는 순간이다.</b> 그때 credit 은 0 인데
+     * — 배분은 줄이 있어야 나가고 줄은 여기서 만들어진다 — 상한을 0 으로 넘기면
+     * 줄이 한 번도 안 생기고 쿠폰이 영영 그 상태에 갇힌다.
      */
     @Test
-    @DisplayName("배수할_수_없으면_줄을_안_세운다")
-    void 배수할_수_없으면_줄을_안_세운다() {
+    @DisplayName("배수를_아직_못_받아도_줄은_선다")
+    void 배수를_아직_못_받아도_줄은_선다() {
         스냅샷을_심는다(CouponStates.always(1_000));
 
         MockServerWebExchange exchange = 태운다(COUPON);
 
         assertThat(exchange.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
                 .matches(AdmissionDecision::isEnqueue, "대기 판정");
-        assertThat(exchange.getResponse().getStatusCode())
-                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
         assertThat(뒷단에_닿음).hasValue(false);
+    }
+
+    /**
+     * 한산한 쿠폰에 상한을 넘겨 몰릴 때다. 초과분이 429 를 받으면 그 쿠폰은
+     * 활성화되지 못하고 배분을 영영 못 받는다.
+     */
+    @Test
+    @DisplayName("한산한_쿠폰의_초과분이_줄을_선다")
+    void 한산한_쿠폰의_초과분이_줄을_선다() {
+        스냅샷을_심는다(CouponStates.idle(1_000_000));
+
+        MockServerWebExchange 마지막 = null;
+        for (int i = 0; i < 500; i++) {
+            마지막 = 태운다(COUPON);
+        }
+
+        assertThat(마지막.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .matches(AdmissionDecision::isEnqueue, "대기 판정");
+        // 429 를 받으면 그 쿠폰은 활성화되지 못하고 배분을 영영 못 받는다.
+        assertThat(마지막.getResponse().getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
     }
 
     @Test

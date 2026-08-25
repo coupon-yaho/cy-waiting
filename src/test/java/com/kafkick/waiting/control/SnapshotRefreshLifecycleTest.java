@@ -182,18 +182,22 @@ class SnapshotRefreshLifecycleTest {
         assertThat(lifecycle.isRunning()).isFalse();
     }
 
+    /**
+     * <b>드레이닝이 끝날 때까지 재료가 신선해야 한다.</b> 먼저 멎으면 진행 중인
+     * 요청이 늙은 스냅샷으로 판정된다 — 줄 없는 쿠폰은 fail-open 예산을 태우다
+     * 503 이 되고, 미지 쿠폰은 상한 없이 뒷단으로 간다. 배포마다 열린다.
+     */
     @Test
-    @DisplayName("웹_서버보다_먼저_종료_신호를_받는다")
-    void 웹_서버보다_먼저_종료_신호를_받는다() {
-        // 컨테이너는 단계가 큰 것부터 멈춘다. 웹 서버보다 커야 종료 신호를 먼저
-        // 받아 부하 분산기가 뺄 시간을 번다. 상수가 아니라 그 관계를 못박는다.
+    @DisplayName("웹_서버가_드레이닝을_끝낸_뒤에_멎는다")
+    void 웹_서버가_드레이닝을_끝낸_뒤에_멎는다() {
+        // 컨테이너는 단계가 큰 것부터 멈춘다. 작아야 나중에 멎는다.
         // **상수를 손으로 적지 않는다.** 프레임워크가 값을 바꾸면 시험이 같이
         // 움직여야 하고, 틀린 값을 적으면 다음 사람이 그걸 믿는다.
         int 웹_서버_종료 = WebServerApplicationContext.GRACEFUL_SHUTDOWN_PHASE;
         int 커넥션_팩토리 = 0;
 
         assertThat(lifecycle().getPhase())
-                .isGreaterThan(웹_서버_종료)
+                .isLessThan(웹_서버_종료)
                 .isGreaterThan(커넥션_팩토리);
     }
 

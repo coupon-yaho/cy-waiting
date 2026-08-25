@@ -62,12 +62,14 @@ hooks   ci
 ## WF-2 · MUST · TDD 사이클을 커밋으로 남긴다
 
 ```
-test(admission): 한산한 쿠폰의 무대기 통과 검증          [red]
+test(admission): 한산한 쿠폰의 무대기 통과 검증
+    └ 바디 첫 줄에 [red]
 feat(admission): 전역 크레딧 기반 통과 상한 산출
 refactor(admission): 리미터 계층 선택 분리          (선택)
 ```
 
-RED 커밋 바디 첫 줄에 `[red]`를 남긴다. CI가 이걸 보고 실패를 허용한다.
+RED 커밋 **바디 첫 줄**에 `[red]`를 남긴다. CI가 이걸 보고 실패를 허용한다.
+제목에 적으면 CI 가 못 본다 — 위 예시가 제목에 적어 두어 실제로 갈라졌다.
 
 ---
 

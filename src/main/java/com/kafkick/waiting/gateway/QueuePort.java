@@ -12,7 +12,20 @@ import reactor.core.publisher.Mono;
  */
 public interface QueuePort {
 
-    /** 줄에 세운다. {@code maxLen} 이 0 이면 상한 없음. */
+    /**
+     * 줄 길이 상한 없음.
+     *
+     * <p><b>0 이 아니다.</b> 0 은 "한 명도 안 받는다" 는 뜻이고 스크립트도 같게
+     * 읽는다. 이 계약을 거꾸로 읽어서 배분 전 쿠폰이 줄을 못 세우는 회귀가 났다.
+     */
+    long NO_LIMIT = -1;
+
+    /**
+     * 줄에 세운다.
+     *
+     * @param maxLen 큐 길이 상한. {@link #NO_LIMIT} 만 상한 없음이고,
+     *               0 은 상한이 0 이라 아무도 안 받는다는 뜻이다
+     */
     Mono<QueueEntry> enqueue(String couponId, String memberId, long maxLen, Instant now);
 
     /** 지금 어디쯤인가. 조회가 곧 생존 신호다. */

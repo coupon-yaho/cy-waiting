@@ -53,7 +53,7 @@ public final class QueueRedisPort implements QueuePort {
     private static final String ALIVE_TTL_SEC = "90";
 
     /** 상한 없음. <b>0 은 이 뜻이 아니다</b> — 0 은 한 명도 안 받는다는 뜻이다. */
-    public static final long NO_LIMIT = -1;
+    public static final long NO_LIMIT = QueuePort.NO_LIMIT;
 
     private final ReactiveStringRedisTemplate redis;
     private final int shards;

@@ -346,6 +346,20 @@ class AdmissionDeciderTest {
         assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.REJECT_QUEUE_FULL);
     }
 
+    /**
+     * 원 함수는 최대 대기 시간이 0 이하면 0 을 준다 — 받아 줄 줄이 없다는 뜻이다.
+     * 래퍼가 그 0 을 "배수 속도를 모른다" 로 읽으면 가드가 뒤집혀 폴백으로 내려가고,
+     * 하한 1 때문에 <b>아무도 안 받아야 할 자리에서 한 명을 받는다.</b>
+     */
+    @Test
+    @DisplayName("최대_대기_시간이_0_이하면_아무도_안_받는다")
+    void 최대_대기_시간이_0_이하면_아무도_안_받는다() {
+        assertThat(CouponStates.idle(1_000).queueCapacity(0)).isZero();
+
+        assertThat(AdmissionDecider.queueCapacity(CouponStates.idle(1_000), META, 0)).isZero();
+        assertThat(AdmissionDecider.queueCapacity(CouponStates.idle(1_000), META, -600)).isZero();
+    }
+
     @Test
     @DisplayName("곱이_넘쳐도_음수가_되지_않는다")
     void 곱이_넘쳐도_음수가_되지_않는다() {

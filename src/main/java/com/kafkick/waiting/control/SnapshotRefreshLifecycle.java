@@ -3,6 +3,7 @@ package com.kafkick.waiting.control;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.web.server.context.WebServerApplicationContext;
@@ -38,6 +39,14 @@ public final class SnapshotRefreshLifecycle
     private final ShutdownState shutdown;
     private final Duration interval;
 
+    /**
+     * 판을 도는 스케줄러를 만든다.
+     *
+     * <p><b>안에서 만들면 시험이 가상 시계를 못 넣는다.</b> 그러면 이 클래스만
+     * 실제로 기다리게 되고, 관용치로 흔들림을 덮은 시험이 남는다 (TS-4).
+     */
+    private final Supplier<Scheduler> schedulers;
+
     private final AtomicBoolean running = new AtomicBoolean();
     private volatile ApplicationContext owner;
     private volatile Scheduler scheduler;
@@ -47,18 +56,25 @@ public final class SnapshotRefreshLifecycle
     private volatile long drainingAt;
 
     private SnapshotRefreshLifecycle(SnapshotRefresher refresher, ShutdownState shutdown,
-            Duration interval) {
+            Duration interval, Supplier<Scheduler> schedulers) {
         if (interval == null || interval.isZero() || interval.isNegative()) {
             throw new IllegalArgumentException("interval 은 양수여야 한다: %s".formatted(interval));
         }
         this.refresher = Objects.requireNonNull(refresher, "refresher 는 필수다");
         this.shutdown = Objects.requireNonNull(shutdown, "shutdown 은 필수다");
         this.interval = interval;
+        this.schedulers = Objects.requireNonNull(schedulers, "schedulers 는 필수다");
     }
 
     public static SnapshotRefreshLifecycle of(SnapshotRefresher refresher, ShutdownState shutdown,
             Duration interval) {
-        return new SnapshotRefreshLifecycle(refresher, shutdown, interval);
+        return of(refresher, shutdown, interval, SnapshotRefresher::dedicatedScheduler);
+    }
+
+    /** 스케줄러를 밖에서 준다. 시험이 가상 시계를 넣는 자리다. */
+    public static SnapshotRefreshLifecycle of(SnapshotRefresher refresher, ShutdownState shutdown,
+            Duration interval, Supplier<Scheduler> schedulers) {
+        return new SnapshotRefreshLifecycle(refresher, shutdown, interval, schedulers);
     }
 
     @Override
@@ -71,7 +87,7 @@ public final class SnapshotRefreshLifecycle
         if (!running.compareAndSet(false, true)) {
             return;
         }
-        scheduler = SnapshotRefresher.dedicatedScheduler();
+        scheduler = schedulers.get();
         // 오류를 소비하지 않으면 루프가 조용히 죽고 왜 죽었는지도 안 남는다.
         subscription = refresher.loop(interval, scheduler)
                 .subscribe(ignored -> { },

@@ -53,7 +53,7 @@ class AdmissionGatewayFilterTest {
     private static final String MEMBER = "812934";
 
     /** 배수 속도를 아는 쿠폰의 크레딧. 상한을 여기서 유도한다. */
-    private static final long CREDIT = 1;
+    private static final long CREDIT = 3;
 
     /** 스냅샷이 싣는 노드 예산. 심는 자리와 같은 값이어야 한다. */
     private static final SnapshotMeta META = new SnapshotMeta(1_000, 1);
@@ -471,7 +471,7 @@ class AdmissionGatewayFilterTest {
     void 배수를_아는_쿠폰은_상한을_지킨다() {
         // 초당 CREDIT 명씩 최대 대기 시간만큼 뺄 수 있다 — 그것이 줄 길이 상한이다.
         long CAP = CREDIT * AdmissionGatewayFilter.MAX_ETA_SEC;
-        스냅샷을_심는다(CouponStates.queueing(CREDIT, 1_000_000, 2));
+        스냅샷을_심는다(CouponStates.queueing(CREDIT, 1_000_000, CREDIT + 1));
 
         for (int i = 0; i < CAP - 1; i++) {
             태운다(COUPON, "대기자" + i);

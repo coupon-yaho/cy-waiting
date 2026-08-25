@@ -36,6 +36,11 @@ local now = tonumber(ARGV[2])
 if now == nil or now < 0 then
     return redis.error_reply('시각은 0 이상이어야 한다: ' .. tostring(ARGV[2]))
 end
+-- **nan 과 무한은 비교로 안 걸린다.** 0 이상인지만 보면 통과하는데,
+-- 그 값이 기록에 굳으면 그 항목은 어떤 보관 기간으로도 안 걷힌다.
+if now ~= now or now == math.huge or now == -math.huge then
+    return redis.error_reply('시각은 유한해야 한다: ' .. tostring(ARGV[2]))
+end
 
 local retention = tonumber(ARGV[3])
 if retention == nil or retention < 1 or retention ~= math.floor(retention) then
@@ -52,6 +57,12 @@ end
 local function stampOf(value)
     if type(value) ~= 'string' then
         return nil
+    end
+    -- 종류가 생기기 전의 입장 표시다. 시각이 없어 나이를 못 재므로 지금을
+    -- 준다 — 못 알아보면 보관 기간을 안 기다리고 첫 판에 지운다. 배포 중
+    -- 한 릴리스만 받고 뗀다.
+    if value == 'admitted' then
+        return now
     end
     local kind = string.sub(value, 1, 2)
     if kind == 'd:' or kind == 'a:' then

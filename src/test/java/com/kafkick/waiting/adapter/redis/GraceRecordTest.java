@@ -141,9 +141,11 @@ class GraceRecordTest extends RedisContainerSupport {
     void 시각이_유한하지_않으면_거부한다() {
         등록한다("m1");
 
-        assertThatThrownBy(() -> 청소한다("nan")).hasMessageContaining("시각");
-        assertThatThrownBy(() -> 청소한다("1e400")).hasMessageContaining("시각");
-        assertThatThrownBy(() -> 조회한다("m1", "nan")).hasMessageContaining("시각");
+        // 스크립트의 거절은 실행 예외로 감싸여 온다. 원인 쪽에 사유가 있다.
+        assertThatThrownBy(() -> 청소한다("nan")).hasRootCauseMessage("시각은 유한해야 한다: nan");
+        assertThatThrownBy(() -> 청소한다("1e400")).hasRootCauseMessage("시각은 유한해야 한다: 1e400");
+        assertThatThrownBy(() -> 조회한다("m1", "nan"))
+                .hasRootCauseMessage("시각은 유한해야 한다: nan");
     }
 
     /**

@@ -53,6 +53,14 @@ public final class CapacityCollector {
 
     private final AtomicLong lastKnown;
 
+    /**
+     * 마지막 판에서 실제로 <b>하한이 답이 된</b> 값. 하한이 안 걸린 판에서는 0 이다.
+     *
+     * <p>배분이 평활 뒤에 이것을 다시 건다. 하한은 관측이 아니라 정책이라
+     * 평활에 묻히면 안 된다.
+     */
+    private final AtomicLong lastFloor = new AtomicLong();
+
     private CapacityCollector(Duration rampUp, Duration freshness, long floor, long perInstanceCap) {
         require(rampUp, "rampUp");
         require(freshness, "freshness");
@@ -118,6 +126,11 @@ public final class CapacityCollector {
         return lastKnown.get();
     }
 
+    /** 마지막 판에서 하한이 답이 됐으면 그 값, 아니면 0. */
+    public long lastFloor() {
+        return lastFloor.get();
+    }
+
     /**
      * 신선한 보고를 모아 전역 크레딧을 낸다.
      *
@@ -167,13 +180,16 @@ public final class CapacityCollector {
         // **하한은 살아 있는 분모에 맞춘다.** 설정값으로만 재면 노드가 그보다
         // 늘었을 때 노드당 몫이 다시 0 이 된다 — 하한을 둔 이유가 사라진다.
         long minimum = Math.max(floor, (long) Math.max(1, nodes) * IDLE_DIVISOR);
-        // **하한이 되돌리는 것은 램프가 깎은 만큼까지다.** 뒷단이 신선하게 보고한
-        // 합(reported)이 천장이라, 스스로 "여유 0" 이라고 말했으면 0 이 그대로
-        // 남는다 — 명시적 백프레셔에 하한을 얹으면 그 신호를 무시하고 계속 민다.
-        // 반대로 뒷단은 넉넉한데 램프가 깎아 하한 아래로 내려간 경우는 우리가
-        // 만든 부족분이므로 되돌린다. 안 되돌리면 노드당 몫이 유휴 비율 아래로
-        // 내려가 한산 통과 상한이 0 이 되고, 그 쿠폰이 전 노드에서 막힌다 (R1).
-        long credit = fresh == 0 ? minimum : Math.max(total, Math.min(minimum, reported));
+        // **하한은 부족분을 우리가 만들었을 때만이다.** 램프가 깎아 하한 아래로
+        // 내려갔으면 되돌린다 — 안 되돌리면 노드당 몫이 유휴 비율 아래로 내려가
+        // 한산 통과 상한이 0 이 되고, 그 쿠폰이 전 노드에서 막힌다 (R1).
+        //
+        // 깎기 전 합(reported)과 같으면 램프가 손대지 않은 값이다. 그건 뒷단이
+        // 실제로 가진 것이므로 하한을 얹지 않는다 — 없는 여유를 만들어 내는
+        // 셈이고, "여유 0" 이라는 명시적 백프레셔도 그 규칙으로 0 이 남는다.
+        boolean rampMadeIt = total < minimum && total < reported;
+        long credit = fresh == 0 || rampMadeIt ? minimum : total;
+        lastFloor.set(fresh == 0 || rampMadeIt ? minimum : 0);
         lastKnown.set(credit);
         return credit;
     }

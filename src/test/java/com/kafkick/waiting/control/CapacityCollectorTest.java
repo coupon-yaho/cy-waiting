@@ -371,4 +371,52 @@ class CapacityCollectorTest {
 
         assertThat(credit).isEqualTo(100);
     }
+
+    /**
+     * <b>램프가 만든 0 은 관측이 아니다.</b> 뒷단이 정직하게 "여유 0" 을 보고한
+     * 것과, 게이트웨이 자신의 램프 계수가 0 을 만든 것은 다르다. 뒤엣것에 하한을
+     * 안 걸면 복귀 첫 판이 하한보다 낮아진다 — 창을 아무리 늘려도 그 너머에서
+     * 같은 일이 난다.
+     */
+    @Test
+    @DisplayName("램프가_만든_0_에는_하한을_쓴다")
+    void 램프가_만든_0_에는_하한을_쓴다() {
+        CapacityCollector collector = collector();
+        // 첫 판을 웜으로 안 보게 한 뒤, 처음 보는 인스턴스가 신선하게 보고한다.
+        collector.collect(List.of(report("seed", 0, NOW)), NOW, 1);
+
+        long credit = collector.collect(
+                List.of(report("seed", 0, NOW), report("cold", 500, NOW)), NOW, 2);
+
+        // 램프 때문에 합이 0 이다. 그래도 하한 아래로는 안 간다.
+        assertThat(credit).isEqualTo(2L * CapacityCollector.IDLE_DIVISOR);
+    }
+
+    /**
+     * 뒷단이 신선하게 "여유 0" 을 보고한 것은 정확한 백프레셔다. 거기에 하한을
+     * 얹으면 명시적 신호를 무시하고 계속 민다.
+     */
+    @Test
+    @DisplayName("보고한_0_에는_하한을_안_쓴다")
+    void 보고한_0_에는_하한을_안_쓴다() {
+        CapacityCollector collector = collector();
+
+        long credit = collector.collect(List.of(report("a", 0, NOW)), NOW, 2);
+
+        assertThat(credit).isZero();
+    }
+
+    /** 창과 정확히 같은 공백은 아직 산다. 경계를 한 칸 옮겨도 안 죽으면 안 잰 것이다. */
+    @Test
+    @DisplayName("창과_같은_공백은_아직_산다")
+    void 창과_같은_공백은_아직_산다() {
+        CapacityCollector collector = collector();
+        long warmed = warm(collector, "a", 100);
+
+        long edge = warmed + RAMP_UP.toSeconds();
+        collector.collect(List.of(), edge, 1);
+        long back = edge + 1;
+
+        assertThat(collector.collect(List.of(report("a", 100, back)), back, 1)).isEqualTo(100);
+    }
 }

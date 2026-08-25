@@ -116,6 +116,9 @@ public final class CapacityRefresh {
      * 복귀 로그의 지속 시간에 비리더 구간이 섞인다 (LG-2).
      */
     public void leadershipChanged() {
+        pinned.exited().ifPresent(recovered ->
+                log.info("리더십이 갈렸다 — 하한 고정 창을 닫는다. {}초 동안 {}판 하한이었다",
+                        recovered.elapsedSeconds(), recovered.swallowed()));
         failures.exited().ifPresent(recovered ->
                 log.info("리더십이 갈렸다 — 읽기 실패 창을 닫는다. 그동안 {}판 걸렀다",
                         recovered.swallowed()));

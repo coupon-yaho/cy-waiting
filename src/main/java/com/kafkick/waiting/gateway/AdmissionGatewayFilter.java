@@ -249,15 +249,20 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                 .switchIfEmpty(Mono.defer(() ->
                         failOpen(exchange, chain, meta).then(Mono.empty())))
                 .flatMap(entry -> {
+                    // 이 노드가 방금 이 쿠폰의 줄을 봤다. 다음 창의 신규 유입이
+                    // 여기 선 사람을 넘지 않게 한 구간 붙잡는다.
+                    //
+                    // **거절도 관측이다.** 상한에 걸렸다는 것은 그 줄이 가득
+                    // 찼다는 뜻이다. 여기서 안 찍으면 줄이 차는 순간 래치가
+                    // 갱신을 못 받고, 만료되면 사다리 3번이 켜져 이 노드가
+                    // fail-open 으로 뒤집힌다 — 방금 줄 선 사람을 전원이 추월한다.
+                    latch.mark(couponId, clock.instant().getEpochSecond());
                     if (!entry.accepted()) {
                         // 2차 방어에 걸렸다. 판정은 자리가 있다고 봤지만 실제로는 없다.
                         count(AdmissionDecision.REJECT_QUEUE_FULL.name());
                         return error.write(exchange, ApiError.Code.QUEUE_FULL,
                                 retryAfterSec(AdmissionDecision.REJECT_QUEUE_FULL, random));
                     }
-                    // 이 노드가 방금 이 쿠폰을 줄로 보냈다. 다음 창의 신규
-                    // 유입이 이 사람을 넘지 않게 한 구간 붙잡는다.
-                    latch.mark(couponId, clock.instant().getEpochSecond());
                     double etaSec = EtaPolicy.etaSec(entry.rank(), state.credit());
                     return waiting.waiting(exchange,
                             tokens.issue(couponId, memberId, clock.instant()),

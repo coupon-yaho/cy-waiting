@@ -8,6 +8,7 @@ import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 /**
  * 재료 읽기 한 판.
@@ -31,7 +32,7 @@ class CapacityRefreshTest {
         CapacityCollector collector = collector();
         CapacityRefresh refresh = CapacityRefresh.of(
                 () -> Mono.just(List.of(new CapacityReport("i1", 500, 지금.getEpochSecond()))),
-                collector, () -> 지금, 예산);
+                collector, () -> 지금, 예산, Schedulers.immediate());
 
         refresh.refresh().block();
 
@@ -49,7 +50,7 @@ class CapacityRefreshTest {
 
         CapacityRefresh refresh = CapacityRefresh.of(
                 () -> Mono.error(new IllegalStateException("레디스가 죽었다")),
-                collector, () -> 지금, 예산);
+                collector, () -> 지금, 예산, Schedulers.immediate());
 
         // **완료로 끝난다.** 여기서 오류를 흘리면 배분이 같이 안 돈다.
         refresh.refresh().block();
@@ -70,7 +71,7 @@ class CapacityRefreshTest {
         long 직전 = collector.lastKnown();
 
         CapacityRefresh refresh = CapacityRefresh.of(
-                () -> Mono.<List<CapacityReport>>never(), collector, () -> 지금, 예산);
+                () -> Mono.<List<CapacityReport>>never(), collector, () -> 지금, 예산, Schedulers.immediate());
 
         assertThat(refresh.refresh().blockOptional(Duration.ofSeconds(5))).isEmpty();
         assertThat(collector.lastKnown()).isEqualTo(직전);

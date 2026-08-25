@@ -8,6 +8,7 @@ import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Scheduler;
 
 /**
  * 배분 재료를 읽어 수집기에 넣는다.
@@ -23,10 +24,12 @@ public final class CapacityRefresh {
     private final CapacityCollector collector;
     private final Supplier<Instant> clock;
     private final Duration budget;
+    private final Scheduler worker;
     private final FailureWindow failures = FailureWindow.create();
 
     private CapacityRefresh(Supplier<Mono<List<CapacityReport>>> reports,
-            CapacityCollector collector, Supplier<Instant> clock, Duration budget) {
+            CapacityCollector collector, Supplier<Instant> clock, Duration budget,
+            Scheduler worker) {
         if (budget == null || budget.isZero() || budget.isNegative()) {
             throw new IllegalArgumentException("budget 은 양수여야 한다: %s".formatted(budget));
         }
@@ -34,11 +37,13 @@ public final class CapacityRefresh {
         this.collector = Objects.requireNonNull(collector, "collector 는 필수다");
         this.clock = Objects.requireNonNull(clock, "clock 은 필수다");
         this.budget = budget;
+        this.worker = Objects.requireNonNull(worker, "worker 는 필수다");
     }
 
     public static CapacityRefresh of(Supplier<Mono<List<CapacityReport>>> reports,
-            CapacityCollector collector, Supplier<Instant> clock, Duration budget) {
-        return new CapacityRefresh(reports, collector, clock, budget);
+            CapacityCollector collector, Supplier<Instant> clock, Duration budget,
+            Scheduler worker) {
+        return new CapacityRefresh(reports, collector, clock, budget, worker);
     }
 
     /**
@@ -48,6 +53,9 @@ public final class CapacityRefresh {
     public Mono<Void> refresh() {
         return Mono.defer(reports)
                 .timeout(budget)
+                // **수집을 레디스 이벤트 루프에서 돌리지 않는다.** 램프 기록은
+                // 동기화 없는 맵이고, 재연결로 루프가 갈리면 두 스레드가 만진다.
+                .publishOn(worker)
                 .doOnNext(this::collected)
                 .doOnError(this::failed)
                 .onErrorResume(e -> Mono.empty())

@@ -100,9 +100,9 @@ public class ControlPlaneConfig {
      */
     @Bean
     CapacityRefresh capacityRefresh(AllocationRedisPort port, CapacityCollector capacity,
-            ControlPlaneProperties properties) {
+            ControlPlaneProperties properties, Scheduler allocationScheduler) {
         return CapacityRefresh.of(port::capacityReports, capacity, Instant::now,
-                properties.scheduler().tick().dividedBy(4));
+                properties.scheduler().tick().dividedBy(4), allocationScheduler);
     }
 
     /** 배분 틱. <b>재료를 먼저 읽고 배분한다</b> — 안 읽으면 크레딧이 첫 하한에 머문다. */

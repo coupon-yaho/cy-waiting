@@ -9,6 +9,7 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
 import org.springframework.context.ApplicationListener;
 import org.springframework.context.SmartLifecycle;
+import org.springframework.boot.web.server.context.WebServerApplicationContext;
 import org.springframework.context.event.ContextClosedEvent;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
@@ -28,11 +29,11 @@ public final class SnapshotRefreshLifecycle
     private static final Logger log = LoggerFactory.getLogger(SnapshotRefreshLifecycle.class);
 
     /**
-     * 컨테이너는 단계가 큰 것부터 멈추므로, 가장 크면 웹 서버보다 먼저 멎는다.
-     * <b>원래 근거였던 드레이닝 순서는 이제 닫힘 사건이 진다</b> — 판정이 요청
-     * 경로에 붙기 전에 다시 정한다 (CY-422).
+     * 컨테이너는 단계가 큰 것부터 멈춘다. <b>웹 서버보다 작아야 나중에 멎는다</b> —
+     * 드레이닝 동안에도 재료가 신선해야 진행 중인 요청이 낡은 판정을 안 받는다.
+     * 종료 신호를 먼저 받는 일은 닫힘 사건이 진다.
      */
-    private static final int PHASE = Integer.MAX_VALUE;
+    private static final int PHASE = WebServerApplicationContext.GRACEFUL_SHUTDOWN_PHASE - 1;
 
     private final SnapshotRefresher refresher;
     private final ShutdownState shutdown;

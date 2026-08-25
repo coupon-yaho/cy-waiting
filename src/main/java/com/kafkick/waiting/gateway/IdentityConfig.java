@@ -21,7 +21,12 @@ public class IdentityConfig {
     /** 쿠폰 2,000개를 상정한 값. 넘으면 판정이 그 사실을 따로 알린다. */
     private static final int MAX_LIMITER_KEYS = 10_000;
 
-    /** 한산한 쿠폰이 유휴 몫으로 쓸 수 있는 노드 예산 비율 (B-13. Phase 9 후 1.0). */
+    /**
+     * 한산한 쿠폰이 쓸 수 있는 노드 예산 비율 (B-13).
+     *
+     * <p><b>1 보다 작아야 한다.</b> 두 상한이 같으면 노드 상한이 먼저 차거나
+     * 동시에 차서 쿠폰별 상한이 죽은 분기가 된다. Phase 9 를 통과하면 1.0 이다.
+     */
     private static final double IDLE_CREDIT_RATIO = 0.7;
 
 

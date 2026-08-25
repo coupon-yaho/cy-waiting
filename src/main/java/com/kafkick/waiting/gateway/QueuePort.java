@@ -27,7 +27,8 @@ public interface QueuePort {
      * 0 이어도 자기 순번을 돌려받는다.
      *
      * @param maxLen {@link #NO_LIMIT} 만 상한 없음이고 0 은 전원 거절이다.
-     *               쿠폰 전체의 수라, 샤드가 여럿이면 어댑터가 나눠야 한다
+     *               쿠폰 전체의 수다. 샤드는 아직 하나만 받는다 — 근거는
+     *               {@code ControlPlaneProperties} 가 그 값을 막는 자리에 있다
      */
     Mono<QueueEntry> enqueue(String couponId, String memberId, long maxLen, Instant now);
 

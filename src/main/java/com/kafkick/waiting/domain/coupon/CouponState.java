@@ -156,7 +156,7 @@ public record CouponState(
      * 받아도 되는 줄의 최대 길이. <b>사다리 5번이 보는 값이다.</b>
      *
      * <p>배수할 수 없는데(credit 0) 줄을 받으면 갇힌 사람만 늘어난다. 다만
-     * 등록 경로는 이 값이 0 이면 {@code AdmissionDecider.queueCapacity} 의
+     * 등록 경로는 credit 이 0 이면 {@code AdmissionDecider.queueCapacity} 의
      * 폴백으로 갈아탄다 — 아직 배분을 못 받은 것과 자리가 없는 것은 다르다.
      */
     public long queueCapacity(long maxEtaSec) {

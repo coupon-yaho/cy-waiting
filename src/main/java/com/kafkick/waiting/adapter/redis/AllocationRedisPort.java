@@ -5,9 +5,11 @@ import com.kafkick.waiting.control.ControlPlaneProperties;
 import com.kafkick.waiting.control.FailureWindow;
 import com.kafkick.waiting.control.SnapshotSource;
 import com.kafkick.waiting.domain.allocation.Grant;
+import com.kafkick.waiting.domain.coupon.QueueMode;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -61,6 +63,7 @@ public final class AllocationRedisPort implements SnapshotSource {
     private final int shards;
     private final FailureWindow rejected = FailureWindow.create();
     private final FailureWindow malformed = FailureWindow.create();
+    private final FailureWindow badPolicy = FailureWindow.create();
 
     /**
      * <b>모든 노드가 쓴다.</b> 배분은 리더만 돌지만 판정 재료를 받아 오는 것은
@@ -160,6 +163,39 @@ public final class AllocationRedisPort implements SnapshotSource {
                                         recovered.elapsedSeconds(), recovered.swallowed()));
                     }
                 });
+    }
+
+    /**
+     * 운영자가 정한 쿠폰별 대기열 정책.
+     *
+     * <p><b>밖에서 쓰는 키다.</b> 못 읽는 값이 하나 있다고 판을 죽이면 운영자의
+     * 오타가 전 쿠폰의 배분을 멈춘다. 그 쿠폰만 기본값(적응형)으로 두고 남긴다.
+     */
+    public Mono<Map<String, QueueMode>> queueModes() {
+        return redis.<String, String>opsForHash().entries(RedisKeys.COUPON_POLICY)
+                .mapNotNull(entry -> {
+                    QueueMode mode = parseMode(entry.getValue());
+                    return mode == null ? null : Map.entry(entry.getKey(), mode);
+                })
+                .collectMap(Map.Entry::getKey, Map.Entry::getValue)
+                // 키 자체가 없으면 아무도 정책을 안 걸었다는 뜻이다. 빈 판이 맞다.
+                .defaultIfEmpty(Map.of());
+    }
+
+    private QueueMode parseMode(String value) {
+        try {
+            JsonNode node = JSON.readTree(value);
+            JsonNode mode = node.get("mode");
+            if (mode == null || !mode.isTextual()) {
+                return null;
+            }
+            return QueueMode.valueOf(mode.asString().toUpperCase(Locale.ROOT));
+        } catch (JacksonException | IllegalArgumentException e) {
+            if (badPolicy.entered()) {
+                log.warn("쿠폰 정책을 못 읽는다 — 그 쿠폰만 기본값으로 둔다: {}", e.getMessage());
+            }
+            return null;
+        }
     }
 
     private boolean usable(String couponId, AtomicBoolean dropped) {

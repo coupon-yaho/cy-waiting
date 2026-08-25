@@ -192,6 +192,30 @@ public record CouponState(
     }
 
     /**
+     * 줄이 남아 있는 쿠폰. <b>모드는 운영자가 정한 그대로 싣는다</b> — 줄이 있다고
+     * 모드를 바꿔 실으면 대기 응답의 모드가 사실이 아니게 되고, 항상 대기로 둔
+     * 쿠폰이 다음 틱에 적응형으로 돌아간다.
+     *
+     * <p>런타임은 못 박지 않고 유도한다 ({@link #offWithQueue} 와 같은 이유).
+     */
+    public static CouponState withQueue(QueueMode mode, long credit, long remainingStock,
+            long waiting) {
+        if (waiting <= 0) {
+            throw new IllegalArgumentException(
+                    "withQueue 는 줄이 남아 있을 때만이다: waiting=%d".formatted(waiting));
+        }
+        RuntimeState runtime = credit >= waiting
+                ? RuntimeState.DRAINING
+                : RuntimeState.QUEUEING;
+        return new CouponState(mode, runtime, credit, remainingStock, waiting, 1.0);
+    }
+
+    /** 줄이 빈 쿠폰. 배분을 못 받았으므로 credit 은 0 이다 (I1). */
+    public static CouponState noQueue(QueueMode mode, long remainingStock) {
+        return new CouponState(mode, RuntimeState.IDLE, 0, remainingStock, 0, 1.0);
+    }
+
+    /**
      * 운영자가 껐는데 <b>줄이 아직 남아 있다.</b> {@code mode} 와 {@code waiting}
      * 은 서로 독립이다.
      *

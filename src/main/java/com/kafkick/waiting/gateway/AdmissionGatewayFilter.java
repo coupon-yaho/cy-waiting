@@ -200,7 +200,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             count("deferred-no-material");
             return chain.filter(exchange);
         }
-        // **모른다는 것이 무제한의 사유는 아니다.** 사다리 3번은 같은 무지에서
+        // **모른다는 것이 무제한의 사유는 아니다.** 사다리 4번은 같은 무지에서
         // 노드 몫 안에서만 여는데, 여기만 열어 두면 아무 문자열 쿠폰이나 그
         // 상한 밖으로 나간다. 같은 예산에 태운다.
         if (holder.isDataStale(view)) {
@@ -259,7 +259,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                     //
                     // **거절도 관측이다.** 상한에 걸렸다는 것은 그 줄이 가득
                     // 찼다는 뜻이다. 여기서 안 찍으면 줄이 차는 순간 래치가
-                    // 표식을 못 받고, 사다리 3번이 켜져 이 노드가 fail-open 으로
+                    // 표식을 못 받고, 사다리 4번이 켜져 이 노드가 fail-open 으로
                     // 뒤집힌다 — 방금 줄 선 사람을 전원이 추월한다.
                     //
                     // **스냅샷이 줄을 보고 있어도 찍는다.** 그 스냅샷은 방금 넣은

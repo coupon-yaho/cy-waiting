@@ -340,4 +340,28 @@ class AdmissionDeciderTest {
         // 0 은 이 가드가 없어도 0 이다 — 곱이 대신 지킨다. 가드가 지탱하는 것은 음수다.
         assertThat(AdmissionDecider.queueCapacity(CouponStates.idle(1_000), -600)).isZero();
     }
+
+    /**
+     * <b>운영자가 켠 대기열은 낡음이 못 끈다.</b> 3번이 앞서면 `ALWAYS` 쿠폰이
+     * 낡은 구간에서 통째로 우회한다 — 그리고 아무도 큐에 안 들어가니
+     * {@code hasQueue} 가 영영 거짓이라 그 상태가 스스로 유지된다.
+     *
+     * <p>운영자가 `ALWAYS` 를 거는 순간이 바로 리더가 흔들리는 오픈 직후다.
+     */
+    @Test
+    @DisplayName("낡아도_항상_대기는_줄을_세운다")
+    void 낡아도_항상_대기는_줄을_세운다() {
+        AdmissionRequest 낡음 = request(CouponStates.always(10_000)).withDataStale(true);
+
+        assertThat(decider().decide(낡음)).isEqualTo(AdmissionDecision.ENQUEUE_ALWAYS);
+    }
+
+    /** 꺼진 쿠폰은 반대다. 낡은 구간의 상한이 그 우회보다 앞에 있어야 한다. */
+    @Test
+    @DisplayName("낡으면_꺼진_쿠폰은_상한을_먼저_탄다")
+    void 낡으면_꺼진_쿠폰은_상한을_먼저_탄다() {
+        AdmissionRequest 낡음 = request(CouponStates.off(10_000)).withDataStale(true);
+
+        assertThat(decider().decide(낡음)).isEqualTo(AdmissionDecision.PASS_FAIL_OPEN);
+    }
 }

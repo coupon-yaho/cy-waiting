@@ -7,7 +7,6 @@ import java.time.Instant;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
@@ -95,19 +94,24 @@ public class ControlPlaneConfig {
      * 영영 답으로 내고, 그 하한에서는 한산 통과 상한이 0 이라 대기열이 통째로
      * 켜진다. 읽기가 실패하면 수집을 건너뛴다 (아래 주석).
      */
+    /**
+     * 재료 읽기. <b>배분 예산의 1/4 만 쓴다</b> — 한 예산을 나눠 쓰면 읽기가 느릴 때
+     * 판이 통째로 안 끝나고, 임계가 안 올라가 큐가 자라 다음 판이 더 무거워진다.
+     */
+    @Bean
+    CapacityRefresh capacityRefresh(AllocationRedisPort port, CapacityCollector capacity,
+            ControlPlaneProperties properties) {
+        return CapacityRefresh.of(port::capacityReports, capacity, Instant::now,
+                properties.scheduler().tick().dividedBy(4));
+    }
+
+    /** 배분 틱. <b>재료를 먼저 읽고 배분한다</b> — 안 읽으면 크레딧이 첫 하한에 머문다. */
     @Bean
     AllocationScheduler allocationLoop(ControlPlaneProperties properties, Leadership leadership,
-            AllocationRound round, AllocationRedisPort port, CapacityCollector capacity,
-            Scheduler allocationScheduler) {
+            AllocationRound round, CapacityRefresh capacity, Scheduler allocationScheduler) {
         return AllocationScheduler.of(properties.scheduler().tick(),
                 properties.scheduler().firstTickDelay(), leadership::isLeader,
-                () -> port.capacityReports()
-                        .doOnNext(reports ->
-                                capacity.collect(reports, Instant.now().getEpochSecond()))
-                        // **빈 목록을 넘기지 않는다.** 그러면 신선한 보고 0 건이
-                        // 되어 하한으로 떨어지는데, 그건 관측이 아니라 왕복 실패다.
-                        .onErrorResume(e -> Mono.empty())
-                        .then(round.run()),
+                () -> capacity.refresh().then(round.run()),
                 nanos -> { }, allocationScheduler);
     }
 }

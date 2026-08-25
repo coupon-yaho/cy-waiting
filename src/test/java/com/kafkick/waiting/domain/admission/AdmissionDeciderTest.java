@@ -299,7 +299,7 @@ class AdmissionDeciderTest {
     void 배수_속도를_알면_그것이_줄_길이_상한이다() {
         CouponState 줄선_쿠폰 = CouponStates.queueing(3, 1_000, 10);
 
-        assertThat(AdmissionDecider.queueCapacity(줄선_쿠폰, META, 600)).isEqualTo(1_800);
+        assertThat(AdmissionDecider.queueCapacity(줄선_쿠폰, 600)).isEqualTo(1_800);
     }
 
     /**
@@ -312,24 +312,7 @@ class AdmissionDeciderTest {
         assertThat(CouponStates.idle(1_000).queueCapacity(600)).isZero();
 
         // 초당 한 명. 아는 것이 없을 때 가정할 수 있는 가장 낮은 배수 속도다.
-        assertThat(AdmissionDecider.queueCapacity(CouponStates.idle(1_000), META, 600))
-                .isEqualTo(600);
-    }
-
-    /**
-     * <b>줄은 전 노드가 공유한다.</b> 노드 몫을 공유 줄 길이와 비교하면 노드를
-     * 늘릴수록 천장이 반비례로 내려간다 — 유입을 감당하려고 붙인 노드가 대기
-     * 등록 여력을 깎는다. 판의 크기도 마찬가지로 근거가 아니다. 모르는 구간의
-     * 천장은 아는 것이 없다는 사실에서 나와야 한다.
-     */
-    @Test
-    @DisplayName("판이_달라져도_천장은_같다")
-    void 판이_달라져도_천장은_같다() {
-        CouponState 배분_전 = CouponStates.idle(1_000);
-
-        assertThat(AdmissionDecider.queueCapacity(배분_전, new SnapshotMeta(30, 1), 600))
-                .isEqualTo(AdmissionDecider.queueCapacity(배분_전, new SnapshotMeta(30, 10), 600))
-                .isEqualTo(AdmissionDecider.queueCapacity(배분_전, new SnapshotMeta(0, 10), 600))
+        assertThat(AdmissionDecider.queueCapacity(CouponStates.idle(1_000), 600))
                 .isEqualTo(600);
     }
 
@@ -348,15 +331,13 @@ class AdmissionDeciderTest {
 
     /**
      * 원 함수는 최대 대기 시간이 0 이하면 0 을 준다 — 받아 줄 줄이 없다는 뜻이다.
-     * 래퍼가 그 0 을 "배수 속도를 모른다" 로 읽으면 가드가 뒤집혀 폴백으로 내려가고,
-     * 하한 1 때문에 <b>아무도 안 받아야 할 자리에서 한 명을 받는다.</b>
+     * 가드가 없으면 음수가 폴백을 그대로 타고 나가고, 스크립트가 오류를 내고,
+     * 그 오류는 fail-open 으로 흘러 <b>닫히는 게 아니라 열린다.</b>
      */
     @Test
     @DisplayName("최대_대기_시간이_0_이하면_아무도_안_받는다")
     void 최대_대기_시간이_0_이하면_아무도_안_받는다() {
-        assertThat(CouponStates.idle(1_000).queueCapacity(0)).isZero();
-
-        assertThat(AdmissionDecider.queueCapacity(CouponStates.idle(1_000), META, 0)).isZero();
-        assertThat(AdmissionDecider.queueCapacity(CouponStates.idle(1_000), META, -600)).isZero();
+        // 0 은 이 가드가 없어도 0 이다 — 곱이 대신 지킨다. 가드가 지탱하는 것은 음수다.
+        assertThat(AdmissionDecider.queueCapacity(CouponStates.idle(1_000), -600)).isZero();
     }
 }

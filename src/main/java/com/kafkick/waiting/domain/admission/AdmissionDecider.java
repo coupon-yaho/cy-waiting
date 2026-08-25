@@ -153,9 +153,10 @@ public class AdmissionDecider {
      * <p>사다리 5번은 이 함수를 안 쓴다 — 폴백은 줄이 아직 없는 구간만을 위한
      * 것이다. 그래서 등록 경로와 5번이 서로 다른 상한을 본다 (AIJ-0073).
      */
-    public static long queueCapacity(CouponState state, SnapshotMeta meta, long maxEtaSec) {
+    public static long queueCapacity(CouponState state, long maxEtaSec) {
         // **원 함수의 가드를 뒤집지 않는다.** 받아 줄 시간이 없으면 자리도 없다.
-        // 이걸 안 걸면 아래 폴백이 그 0 을 "모른다" 로 읽고 하한 1 을 돌려준다.
+        // 이걸 안 걸면 음수가 그대로 폴백을 타고 나가고, 스크립트가 오류를 내고,
+        // 그 오류는 fail-open 으로 흘러 닫히는 게 아니라 열린다.
         if (maxEtaSec <= 0) {
             return 0;
         }
@@ -175,8 +176,9 @@ public class AdmissionDecider {
     /**
      * 배수 속도를 모를 때 가정하는 초당 배수 인원.
      *
-     * <p>배분이 줄 수 있는 가장 작은 몫이다. 모르는 구간의 천장은 판의 크기가
-     * 아니라 <b>아는 것이 없다는 사실</b>에서 나와야 한다.
+     * <p>배분이 줄 수 있는 <b>0 이 아닌</b> 가장 작은 몫이다. 몫 0 은 배분이
+     * 실제로 내는 값이지만 그것을 가정하면 줄이 아예 안 선다. <b>1 이어야
+     * 곱이 넘칠 수 없다</b> — 올리려면 오버플로 방어를 되살린다.
      */
     public static final long MIN_CREDIT = 1;
 

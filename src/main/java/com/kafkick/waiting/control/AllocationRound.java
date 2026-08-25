@@ -41,6 +41,7 @@ public final class AllocationRound {
     private final BooleanSupplier stillLeader;
     private final Supplier<Mono<List<CouponDemand>>> demands;
     private final LongSupplier globalCredit;
+    private final LongSupplier creditFloor;
     private final IntSupplier gatewayCount;
     private final Function<Grant, Mono<Long>> apply;
     private final Function<Map<String, String>, Mono<Void>> publish;
@@ -62,10 +63,12 @@ public final class AllocationRound {
             Supplier<Mono<List<CouponDemand>>> demands, LongSupplier globalCredit,
             IntSupplier gatewayCount, Function<Grant, Mono<Long>> apply,
             Function<Map<String, String>, Mono<Void>> publish, Supplier<Instant> clock,
-            Supplier<Mono<CreditSmoother>> restore, SnapshotCodec codec) {
+            Supplier<Mono<CreditSmoother>> restore, SnapshotCodec codec,
+            LongSupplier creditFloor) {
         this.stillLeader = Objects.requireNonNull(stillLeader, "stillLeader 는 필수다");
         this.demands = Objects.requireNonNull(demands, "demands 는 필수다");
         this.globalCredit = Objects.requireNonNull(globalCredit, "globalCredit 은 필수다");
+        this.creditFloor = Objects.requireNonNull(creditFloor, "creditFloor 는 필수다");
         this.gatewayCount = Objects.requireNonNull(gatewayCount, "gatewayCount 는 필수다");
         this.apply = Objects.requireNonNull(apply, "apply 는 필수다");
         this.publish = Objects.requireNonNull(publish, "publish 는 필수다");
@@ -84,9 +87,10 @@ public final class AllocationRound {
             Supplier<Mono<List<CouponDemand>>> demands,
             LongSupplier globalCredit, IntSupplier gatewayCount, Function<Grant, Mono<Long>> apply,
             Function<Map<String, String>, Mono<Void>> publish, Supplier<Instant> clock,
-            Supplier<Mono<CreditSmoother>> restore, SnapshotCodec codec) {
+            Supplier<Mono<CreditSmoother>> restore, SnapshotCodec codec,
+            LongSupplier creditFloor) {
         return new AllocationRound(stillLeader, demands, globalCredit, gatewayCount, apply, publish,
-                clock, restore, codec);
+                clock, restore, codec, creditFloor);
     }
 
     public Mono<Void> run() {
@@ -133,7 +137,11 @@ public final class AllocationRound {
 
     private Mono<Void> allocate(List<CouponDemand> collected) {
         CreditSmoother current = smoother.get();
-        long credit = Math.round(current.observe(Math.max(0, globalCredit.getAsLong())));
+        // **하한은 평활 뒤에 건다.** 하한은 관측이 아니라 정책이다. 평활을 거치면
+        // 앞선 낮은 값에서 올라오는 데 열 틱이 넘고, 그동안 노드당 몫이 유휴 비율
+        // 아래에 머물러 한산 통과 상한이 0 이다 — 하한을 둔 이유가 사라진다 (R1).
+        long smoothed = Math.round(current.observe(Math.max(0, globalCredit.getAsLong())));
+        long credit = Math.max(smoothed, Math.max(0, creditFloor.getAsLong()));
         Map<String, Long> granted = new LinkedHashMap<>();
         allocator.allocate(credit, collected).forEach(g -> granted.put(g.couponId(), g.credit()));
 

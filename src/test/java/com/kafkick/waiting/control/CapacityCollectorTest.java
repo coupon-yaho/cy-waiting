@@ -457,6 +457,66 @@ class CapacityCollectorTest {
         assertThat(credit).isZero();
     }
 
+    /**
+     * <b>램프가 만든 것은 0 이 아닐 때도 우리가 만든 값이다.</b> 하한을 0 에만
+     * 걸면, 램프 중 합이 하한과 0 사이인 구간이 통째로 비어 버린다. 그 구간에서
+     * 노드당 몫이 {@code IDLE_DIVISOR} 아래로 내려가 한산 통과 상한이 0 이 되고,
+     * 리미터는 상한 0 을 무조건 거절로 처리한다 — 안 몰리는 쿠폰의 요청이 전
+     * 노드에서 막힌다 (R1).
+     */
+    @Test
+    @DisplayName("램프가_만든_부족분에도_하한을_쓴다")
+    void 램프가_만든_부족분에도_하한을_쓴다() {
+        CapacityCollector collector = collector();
+        // 첫 판을 웜으로 안 보게 한 뒤, 처음 보는 뒷단이 넉넉하게 보고한다.
+        collector.collect(List.of(report("seed", 0, NOW)), NOW, 8);
+        collector.collect(
+                List.of(report("seed", 0, NOW + 1), report("fresh", 1_000, NOW + 1)), NOW + 1, 8);
+
+        // 램프 1초. 1000 중 16 만 쓸 수 있다 — 0 이 아니라 그냥 적다.
+        long credit = collector.collect(
+                List.of(report("seed", 0, NOW + 2), report("fresh", 1_000, NOW + 2)), NOW + 2, 8);
+
+        // 노드가 여덟이면 하한도 여덟을 받쳐야 한다.
+        assertThat(credit).isEqualTo(8L * CapacityCollector.IDLE_DIVISOR);
+    }
+
+    /**
+     * <b>램프가 깎았으면 남은 값의 크기는 안 본다.</b> 깎기 전 합이 하한보다
+     * 적어도 마찬가지다 — 뒷단이 못 받겠다고 말한 것이 아니라 우리가 아직 안
+     * 믿기로 한 것뿐이다. 여기서 하한을 안 걸면 노드가 여럿일 때 한산 통과가
+     * 통째로 막힌다.
+     */
+    @Test
+    @DisplayName("깎기_전_합이_하한보다_적어도_하한을_쓴다")
+    void 깎기_전_합이_하한보다_적어도_하한을_쓴다() {
+        CapacityCollector collector = collector();
+        collector.collect(List.of(report("seed", 0, NOW)), NOW, 8);
+
+        // 처음 보는 뒷단이 12 를 보고한다. 노드 여덟의 하한 40 에는 못 미친다.
+        long credit = collector.collect(
+                List.of(report("seed", 0, NOW + 1), report("cold", 12, NOW + 1)), NOW + 1, 8);
+
+        assertThat(credit).isEqualTo(8L * CapacityCollector.IDLE_DIVISOR);
+    }
+
+    /**
+     * <b>하한이 없는 여유를 만들어 내지는 않는다.</b> 램프가 손대지 않은 값은
+     * 뒷단이 실제로 가진 것이다. 그것이 하한보다 적다고 올리면 뒷단이 못 받는
+     * 만큼을 우리가 지어내는 셈이다.
+     */
+    @Test
+    @DisplayName("램프_밖의_부족은_그대로_둔다")
+    void 램프_밖의_부족은_그대로_둔다() {
+        CapacityCollector collector = collector();
+        // 다 데워진 뒷단이 3 을 보고한다. 램프는 여기 손대지 않았다.
+        long warmed = warm(collector, "a", 3);
+
+        long credit = collector.collect(List.of(report("a", 3, warmed + 1)), warmed + 1, 2);
+
+        assertThat(credit).isEqualTo(3);
+    }
+
     /** 창과 정확히 같은 공백은 아직 산다. 경계를 한 칸 옮겨도 안 죽으면 안 잰 것이다. */
     @Test
     @DisplayName("창과_같은_공백은_아직_산다")

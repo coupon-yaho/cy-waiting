@@ -325,7 +325,7 @@ class ControlPlaneGateTest {
                 hash -> Mono.empty(),
                 () -> Instant.ofEpochSecond(1_700_000_000L),
                 () -> Mono.just(CreditSmoother.of(0.3)),
-                SnapshotCodec.create());
+                SnapshotCodec.create(), () -> 0L);
 
         // **예열한다.** 첫 판의 90% 는 클래스 로딩과 컴파일이라, 그걸 그대로
         // 재면 임계가 뜻하는 것이 배분 비용이 아니라 기동 비용이 된다.

@@ -29,6 +29,34 @@ services:
       timeout: 2s
       retries: 20
 
+  # **재료를 심는다.** 활성 쿠폰과 재고가 없으면 스냅샷이 영영 비고, 모든 요청이
+  # 미지 쿠폰 경로로 빠져 판정 필터를 통째로 우회한다 — 그 상태로 잰 초록은
+  # 판정을 안 지난 초록이다.
+  #
+  # 가용량 보고는 뒷단이 자기 상태를 적는 것이라 주기적으로 갱신해야 한다.
+  # 신선도 임계를 넘기면 하한으로 떨어져 대기열이 통째로 켜진다.
+  seeder:
+    image: redis:7.4-alpine
+    depends_on:
+      redis: { condition: service_healthy }
+    command:
+      - sh
+      - -c
+      - |
+        set -eu
+        redis-cli -h redis SADD coupons:active c1
+        redis-cli -h redis SET 'stock:{c1}' 1000000
+        while :; do
+          redis-cli -h redis HSET capacity:coupon-svc:v1 stub-1 \
+            "{\"addr\":\"backend:8090\",\"credits\":300,\"ts\":$(date +%s)}" > /dev/null
+          sleep 1
+        done
+    healthcheck:
+      test: ["CMD", "sh", "-c", "redis-cli -h redis SISMEMBER coupons:active c1 | grep -q 1"]
+      interval: 1s
+      timeout: 2s
+      retries: 20
+
   gateway:
     build:
       context: ../..
@@ -40,6 +68,7 @@ services:
     depends_on:
       redis: { condition: service_healthy }
       backend: { condition: service_healthy }
+      seeder: { condition: service_healthy }
     environment:
       SPRING_DATA_REDIS_HOST: redis
       WAITING_BACKEND_URI: http://backend:8090
@@ -50,8 +79,9 @@ services:
       # 시나리오가 이 주소를 쓴다. 관리 포트는 안 연다 — 밖에서 닿으면 안 된다.
       - "18080:8080"
     healthcheck:
-      # **살아 있음으로 본다.** 받는 것으로 보면 재료가 아직 없어 영영 안 뜬다.
-      test: ["CMD", "wget", "-qO-", "http://localhost:8081/actuator/health/liveness"]
+      # **받는 것으로 본다.** 살아 있음만 보면 재료가 없는 노드에 부하를 넣게 되고,
+      # 그러면 판정을 우회한 결과를 게이트로 쓴다. 재료는 시더가 먼저 심는다.
+      test: ["CMD", "wget", "-qO-", "http://localhost:8081/actuator/health/readiness"]
       interval: 2s
       timeout: 3s
       retries: 30

@@ -400,6 +400,8 @@ class AdmissionGatewayFilterTest {
                 .isEqualTo(AdmissionDecision.ENQUEUE_ALWAYS);
         assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
         assertThat(뒷단에_닿음).hasValue(false);
+        // **그 쿠폰의 줄에 섰는지 본다.** 등록 횟수만 세면 어느 줄에 들어갔든 초록이다.
+        assertThat(줄.줄_길이(COUPON)).isEqualTo(1);
     }
 
     /**

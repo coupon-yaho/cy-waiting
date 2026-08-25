@@ -14,7 +14,8 @@ import reactor.core.publisher.Mono;
  */
 public final class FakeQueuePort implements QueuePort {
 
-    private final Map<String, Long> queued = new LinkedHashMap<>();
+    /** 쿠폰마다 다른 줄이다. 실물이 쿠폰별 ZSET 이라 여기서 합치면 그 차이가 안 보인다. */
+    private final Map<String, Map<String, Long>> queues = new LinkedHashMap<>();
     private final AtomicInteger 등록_호출 = new AtomicInteger();
     private final AtomicInteger 조회_호출 = new AtomicInteger();
 
@@ -47,6 +48,11 @@ public final class FakeQueuePort implements QueuePort {
         return this;
     }
 
+    /** 그 쿠폰의 줄에 선 인원. <b>쿠폰을 가려서 센다</b> — 합쳐 세면 키가 섞여도 안 보인다. */
+    public int 줄_길이(String couponId) {
+        return queues.getOrDefault(couponId, Map.of()).size();
+    }
+
     public int 등록_횟수() {
         return 등록_호출.get();
     }
@@ -72,6 +78,7 @@ public final class FakeQueuePort implements QueuePort {
         if (터뜨릴_것 != null) {
             return Mono.error(터뜨릴_것);
         }
+        Map<String, Long> queued = queues.computeIfAbsent(couponId, id -> new LinkedHashMap<>());
         boolean 있던_사람 = queued.containsKey(memberId);
         // **0 도 상한이다.** 스크립트와 다르게 읽으면 게이트웨이 시험이 실제
         // 거절을 놓친다 — 픽스처만 받아 주기 때문이다.
@@ -79,7 +86,7 @@ public final class FakeQueuePort implements QueuePort {
             return Mono.just(QueueEntry.rejected());
         }
         queued.putIfAbsent(memberId, (long) queued.size() + 1);
-        return Mono.just(new QueueEntry(QueueState.WAITING, rankOf(memberId),
+        return Mono.just(new QueueEntry(QueueState.WAITING, rankOf(couponId, memberId),
                 queued.get(memberId), 있던_사람, false));
     }
 
@@ -89,12 +96,13 @@ public final class FakeQueuePort implements QueuePort {
         if (터뜨릴_것 != null) {
             return Mono.error(터뜨릴_것);
         }
+        Map<String, Long> queued = queues.getOrDefault(couponId, Map.of());
         if (!queued.containsKey(memberId)) {
             return Mono.just(QueueEntry.notQueued());
         }
         // **차례는 맨 앞부터 온다.** 뒤에 선 사람까지 입장으로 만들면 앞에
         // 사람이 있는 입장이 되고, 그건 운영이 못 만드는 조합이다.
-        long rank = rankOf(memberId);
+        long rank = rankOf(couponId, memberId);
         if (차례가_옴 && rank == 0) {
             return Mono.just(new QueueEntry(QueueState.ADMITTED, 0,
                     queued.get(memberId), true, false));
@@ -103,7 +111,8 @@ public final class FakeQueuePort implements QueuePort {
                 queued.get(memberId), true, false));
     }
 
-    private long rankOf(String memberId) {
-        return queued.keySet().stream().takeWhile(id -> !id.equals(memberId)).count();
+    private long rankOf(String couponId, String memberId) {
+        return queues.getOrDefault(couponId, Map.of()).keySet().stream()
+                .takeWhile(id -> !id.equals(memberId)).count();
     }
 }

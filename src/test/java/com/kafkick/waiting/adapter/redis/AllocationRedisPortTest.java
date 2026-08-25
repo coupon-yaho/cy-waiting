@@ -289,4 +289,5 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         // 빈 인자로 명령을 보내면 레디스가 오류를 낸다. 그 오류가 판을 죽인다.
         assertThat(port.queueModes(List.of()).block(WAIT)).isEmpty();
     }
+
 }

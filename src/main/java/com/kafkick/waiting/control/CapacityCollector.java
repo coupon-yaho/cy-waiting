@@ -54,6 +54,14 @@ public final class CapacityCollector {
     public static final int HOLD_ROUNDS = 3;
 
     /**
+     * 뒷단 보고가 기준 시각보다 앞서도 받아 주는 폭.
+     *
+     * <p>초 절단 때문에 시계가 완벽해도 한 초 어긋난다. 그 여유는 1 초지
+     * 신선도 창 전체가 아니다.
+     */
+    private static final long AHEAD_TOLERANCE_SEC = 1;
+
+    /**
      * 아직 한 판도 안 걷었다. <b>승계와 신규 기동을 못 가른다</b> — 보고에
      * 기동 시각이 실리면 그때 이 추정을 버린다 (A-13).
      */
@@ -243,8 +251,17 @@ public final class CapacityCollector {
     private boolean isFresh(CapacityReport report, long now) {
         // **TTL 만 믿지 않는다.** TTL 은 지우는 시점이지 신선한 시점이 아니다 —
         // 죽은 인스턴스의 마지막 보고가 TTL 동안 계속 세어진다.
+        //
+        // **앞선 것도 조금은 받는다.** 나이는 두 벽시계의 차라 뒷단이 앞서면
+        // 음수가 되는데, 그것을 낡음으로 보면 전 인스턴스가 한꺼번에 사라진다 —
+        // 뒷단은 같은 NTP 를 보므로 어긋나면 다 같이 어긋난다.
+        //
+        // **두 방향을 같은 값으로 재지 않는다.** 뒤쪽은 "얼마나 낡은 것까지 세느냐"
+        // 이고 앞쪽은 "시계가 얼마나 앞서도 봐주느냐" 다. 창을 통째로 열면 죽은
+        // 인스턴스의 마지막 보고가 창의 두 배 동안 살아 있고, 그 유령 몫이 회복
+        // 첫 구간 — 뒷단이 가장 차가울 때 — 에 그대로 실린다 (F6·RC4).
         long age = now - report.reportedAt();
-        return age >= 0 && age <= freshness.toSeconds();
+        return age <= freshness.toSeconds() && age >= -AHEAD_TOLERANCE_SEC;
     }
 
     /**

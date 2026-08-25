@@ -32,8 +32,8 @@ class ControlPlaneMetricsTest {
         CapacityCollector collector =
                 CapacityCollector.of(Duration.ofSeconds(60), Duration.ofSeconds(3), 5, 10_000);
         CapacityRefresh refresh = CapacityRefresh.of(
-                () -> Mono.just(List.of(new CapacityReport("i1", 300, 지금.getEpochSecond()))),
-                collector, () -> 지금, () -> 3, 예산, Schedulers.immediate(), meters);
+                () -> Mono.just(new CapacitySample(List.of(new CapacityReport("i1", 300, 지금.getEpochSecond())), 지금.getEpochSecond())),
+                collector, () -> 3, 예산, Schedulers.immediate(), meters);
 
         refresh.refresh().block();
 
@@ -52,7 +52,7 @@ class ControlPlaneMetricsTest {
                 CapacityCollector.of(Duration.ofSeconds(60), Duration.ofSeconds(3), 5, 10_000);
         CapacityRefresh refresh = CapacityRefresh.of(
                 () -> Mono.error(new IllegalStateException("레디스가 죽었다")),
-                collector, () -> 지금, () -> 1, 예산, Schedulers.immediate(), meters);
+                collector, () -> 1, 예산, Schedulers.immediate(), meters);
 
         refresh.refresh().block();
 

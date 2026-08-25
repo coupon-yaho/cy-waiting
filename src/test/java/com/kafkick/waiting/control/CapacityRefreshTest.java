@@ -25,8 +25,11 @@ class CapacityRefreshTest {
 
     private static final Duration 예산 = Duration.ofMillis(250);
 
+    /** 노드 하나를 받치는 하한. 노드 수 × 유휴 역수보다 작으면 기동이 막힌다. */
+    private static final long FLOOR = CapacityCollector.IDLE_DIVISOR;
+
     private CapacityCollector collector() {
-        return CapacityCollector.of(Duration.ofSeconds(60), Duration.ofSeconds(3), 1, 10_000);
+        return CapacityCollector.of(Duration.ofSeconds(60), Duration.ofSeconds(3), FLOOR, 10_000);
     }
 
     @Test
@@ -34,13 +37,16 @@ class CapacityRefreshTest {
     void 읽으면_수집한다() {
         CapacityCollector collector = collector();
         CapacityRefresh refresh = CapacityRefresh.of(
-                () -> Mono.just(List.of(new CapacityReport("i1", 500, 지금.getEpochSecond()))),
-                collector, () -> 지금, () -> 1, 예산, Schedulers.immediate(), new SimpleMeterRegistry());
+                () -> Mono.just(new CapacitySample(
+                        List.of(new CapacityReport("i1", 500, 지금.getEpochSecond())),
+                        지금.getEpochSecond())),
+                collector, () -> 1, 예산, Schedulers.immediate(), new SimpleMeterRegistry());
 
         refresh.refresh().block();
 
-        // 램프 첫 판이라 값 자체는 0 이지만, 수집이 돌았다는 것은 관측이 섰다는 뜻이다.
-        assertThat(collector.lastKnown()).isNotNegative();
+        // **초기값도 통과하는 단언은 아무것도 안 잰다.** 첫 판에 본 무리는 이미
+        // 돌던 것으로 보므로 보고한 값이 그대로 나온다 — 그 값을 못 박는다.
+        assertThat(collector.lastKnown()).isEqualTo(500);
     }
 
     @Test
@@ -53,7 +59,7 @@ class CapacityRefreshTest {
 
         CapacityRefresh refresh = CapacityRefresh.of(
                 () -> Mono.error(new IllegalStateException("레디스가 죽었다")),
-                collector, () -> 지금, () -> 1, 예산, Schedulers.immediate(), new SimpleMeterRegistry());
+                collector, () -> 1, 예산, Schedulers.immediate(), new SimpleMeterRegistry());
 
         // **완료로 끝난다.** 여기서 오류를 흘리면 배분이 같이 안 돈다.
         refresh.refresh().block();
@@ -77,7 +83,7 @@ class CapacityRefreshTest {
         // 예산을 늘려도 통과하는 시험이 된다 (TS-4).
         VirtualTimeScheduler 시계 = VirtualTimeScheduler.create();
         CapacityRefresh refresh = CapacityRefresh.of(
-                Mono::never, collector, () -> 지금, () -> 1, 예산, 시계, new SimpleMeterRegistry());
+                Mono::never, collector, () -> 1, 예산, 시계, new SimpleMeterRegistry());
 
         // **검증에 상한을 둔다.** 예산이 안 걸리는 구현에서 무기한 기다리면
         // 시험이 실패가 아니라 정지가 된다 — CI 에서 그건 진단이 안 된다.
@@ -86,6 +92,25 @@ class CapacityRefreshTest {
                 .expectComplete()
                 .verify(Duration.ofSeconds(5));
 
+        assertThat(collector.lastKnown()).isEqualTo(직전);
+    }
+
+    /**
+     * <b>관측과 기준 시각은 같은 순간의 것이어야 한다.</b> 한 왕복으로 받으므로
+     * 그 왕복이 실패하면 판 전체가 걸러진다 — 반쪽 관측으로 도는 길은 없다.
+     */
+    @Test
+    @DisplayName("한_왕복이_실패하면_판을_거른다")
+    void 한_왕복이_실패하면_판을_거른다() {
+        CapacityCollector collector = collector();
+        long 직전 = collector.lastKnown();
+        CapacityRefresh refresh = CapacityRefresh.of(
+                () -> Mono.error(new IllegalStateException("못 읽는다")),
+                collector, () -> 1, 예산, Schedulers.immediate(), new SimpleMeterRegistry());
+
+        refresh.refresh().block();
+
+        // 직전 값으로 돈다. 못 읽은 것을 관측으로 세면 하한으로 떨어진다.
         assertThat(collector.lastKnown()).isEqualTo(직전);
     }
 }

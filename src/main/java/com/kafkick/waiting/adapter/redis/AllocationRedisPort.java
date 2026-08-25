@@ -1,6 +1,7 @@
 package com.kafkick.waiting.adapter.redis;
 
 import com.kafkick.waiting.control.CapacityReport;
+import com.kafkick.waiting.control.CapacitySample;
 import com.kafkick.waiting.control.ControlPlaneProperties;
 import com.kafkick.waiting.control.FailureWindow;
 import com.kafkick.waiting.control.SnapshotSource;
@@ -44,6 +45,11 @@ public final class AllocationRedisPort implements SnapshotSource {
     private static final RedisScript<List> PUBLISH =
             RedisScript.of(new ClassPathResource("redis/snapshot_publish.lua"), List.class);
 
+    /** 보고와 기준 시각을 <b>같은 노드에서 같은 순간에</b> 읽는다. */
+    @SuppressWarnings("rawtypes")
+    private static final RedisScript<List> CAPACITY_READ =
+            RedisScript.of(new ClassPathResource("redis/capacity_read.lua"), List.class);
+
     /**
      * 스크립트에 한 번에 넘기는 인자 상한.
      *
@@ -65,6 +71,8 @@ public final class AllocationRedisPort implements SnapshotSource {
     private final FailureWindow rejected = FailureWindow.create();
     private final FailureWindow malformed = FailureWindow.create();
     private final FailureWindow badPolicy = FailureWindow.create();
+    /** 신선도의 기준 시각. 뒤로 가는 것을 여기서 막는다 (A-9). */
+    private final ServerClock serverClock = ServerClock.create();
 
     /** 마지막으로 성공한 정책 판. 읽기가 실패하면 여기로 되돌아간다. */
     private final AtomicReference<Map<String, QueueMode>> lastModes =
@@ -91,18 +99,23 @@ public final class AllocationRedisPort implements SnapshotSource {
         return new AllocationRedisPort(redis, shards);
     }
 
+    /** 시계가 뒤로 간 사실을 남긴다. 조용히 보정하면 왜 그랬는지를 영영 못 밝힌다. */
+    public ClockSkewTracker clockSkew() {
+        return serverClock.skew();
+    }
+
     /**
      * 뒷단이 스스로 적어 둔 여유를 읽는다.
      *
      * <p><b>밖에서 쓰는 키라 아무 값이나 들어온다.</b> 깨진 값 하나가 판을 죽이면
      * 멀쩡한 인스턴스 몫까지 사라져 전역 크레딧이 하한으로 떨어진다 (4.4.6).
      */
-    public Mono<List<CapacityReport>> capacityReports() {
+    public Mono<CapacitySample> capacitySample() {
         AtomicBoolean dropped = new AtomicBoolean();
-        return redis.<String, String>opsForHash().entries(RedisKeys.CAPACITY)
-                .mapNotNull(entry -> parse(entry.getKey(), entry.getValue(), dropped))
-                .collectList()
-                .doOnNext(reports -> {
+        return redis.execute(CAPACITY_READ, List.of(RedisKeys.CAPACITY))
+                .next()
+                .map(raw -> readSample(raw, dropped))
+                .doOnNext(sample -> {
                     if (!dropped.get()) {
                         malformed.exited().ifPresent(recovered ->
                                 log.info("가용량 보고가 다시 깨끗하다 — {}초 만에, 그동안 {}건 걸렀다",
@@ -112,9 +125,23 @@ public final class AllocationRedisPort implements SnapshotSource {
                 // **전부 버렸으면 그건 관측이 아니다.** 빈 목록을 내려보내면 부르는
                 // 쪽이 "신선한 보고 0건" 으로 읽어 하한으로 떨어뜨린다. 형식이
                 // 어긋나 전멸한 것과 뒷단이 정말 하나도 없는 것은 다르다.
-                .flatMap(reports -> reports.isEmpty() && dropped.get()
+                .flatMap(sample -> sample.reports().isEmpty() && dropped.get()
                         ? Mono.error(new IllegalStateException("가용량 보고를 전부 걸렀다"))
-                        : Mono.just(reports));
+                        : Mono.just(sample));
+    }
+
+    /** 스크립트가 돌려준 {@code {now, field, value, ...}} 를 읽는다. */
+    private CapacitySample readSample(List<Object> raw, AtomicBoolean dropped) {
+        long now = serverClock.observe(Long.parseLong(String.valueOf(raw.get(0))));
+        List<CapacityReport> reports = new ArrayList<>();
+        for (int i = 1; i + 1 < raw.size(); i += 2) {
+            CapacityReport report = parse(String.valueOf(raw.get(i)),
+                    String.valueOf(raw.get(i + 1)), dropped);
+            if (report != null) {
+                reports.add(report);
+            }
+        }
+        return new CapacitySample(reports, now);
     }
 
     /**

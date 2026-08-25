@@ -1,6 +1,7 @@
 package com.kafkick.waiting.adapter.redis;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.kafkick.waiting.control.CapacityReport;
 import java.time.Duration;
@@ -72,5 +73,20 @@ class CapacityReportsTest extends RedisContainerSupport {
     void 보고가_없으면_빈_목록이다() {
         // 예외가 아니다. 신선한 보고 0 건에서 하한을 쓰는 판단은 수집기가 한다.
         assertThat(port.capacityReports().block(WAIT)).isEmpty();
+    }
+
+    /**
+     * <b>전부 버린 것과 원래 없는 것은 다르다.</b> 형식이 어긋나 전멸했는데 빈
+     * 목록을 내려보내면 부르는 쪽이 "신선한 보고 0 건" 으로 읽어 하한으로
+     * 떨어뜨린다 — 그 하한에서는 대기열이 통째로 켜지고 아무 신호도 안 난다.
+     */
+    @Test
+    @DisplayName("전부_걸렀으면_관측_실패다")
+    void 전부_걸렀으면_관측_실패다() {
+        보고("i1", "{\"credits\":\"180\",\"ts\":\"1755000000\"}");
+        보고("i2", "{\"credit\":180,\"timestamp\":1755000000}");
+
+        assertThatThrownBy(() -> port.capacityReports().block(WAIT))
+                .isInstanceOf(IllegalStateException.class);
     }
 }

@@ -100,7 +100,13 @@ public final class AllocationRedisPort implements SnapshotSource {
                                 log.info("가용량 보고가 다시 깨끗하다 — {}초 만에, 그동안 {}건 걸렀다",
                                         recovered.elapsedSeconds(), recovered.swallowed()));
                     }
-                });
+                })
+                // **전부 버렸으면 그건 관측이 아니다.** 빈 목록을 내려보내면 부르는
+                // 쪽이 "신선한 보고 0건" 으로 읽어 하한으로 떨어뜨린다. 형식이
+                // 어긋나 전멸한 것과 뒷단이 정말 하나도 없는 것은 다르다.
+                .flatMap(reports -> reports.isEmpty() && dropped.get()
+                        ? Mono.error(new IllegalStateException("가용량 보고를 전부 걸렀다"))
+                        : Mono.just(reports));
     }
 
     /**

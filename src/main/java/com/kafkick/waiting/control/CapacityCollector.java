@@ -45,6 +45,12 @@ public final class CapacityCollector {
      */
     public static final int IDLE_DIVISOR = 5;
 
+    /**
+     * 아직 한 판도 안 걷었다. <b>승계와 신규 기동을 못 가른다</b> — 보고에
+     * 기동 시각이 실리면 그때 이 추정을 버린다 (A-13).
+     */
+    private boolean firstRound = true;
+
     private final AtomicLong lastKnown;
 
     private CapacityCollector(Duration rampUp, Duration freshness, long floor, long perInstanceCap) {
@@ -145,12 +151,18 @@ public final class CapacityCollector {
             fresh++;
             anyPositive |= report.credits() > 0;
             Seen was = seen.get(report.instanceId());
-            seen.put(report.instanceId(), new Seen(was == null ? now : was.first(), now));
+            // **첫 판에 본 무리는 이미 돌던 것으로 본다.** 리더가 바뀐 것이 뒷단이
+            // 새로 뜬 것은 아니다. 여기서 램프를 걸면 승계마다 크레딧이 0 으로
+            // 떨어지고, 신선한 보고가 있어 하한도 안 걸린다.
+            long first = was != null ? was.first()
+                    : (firstRound ? now - rampUp.toSeconds() : now);
+            seen.put(report.instanceId(), new Seen(first, now));
             // 인스턴스가 많고 각자 상한에 가까우면 합이 넘친다. 넘치면 음수가
             // 되어 전역 크레딧이 0 이 된다 — 전면 차단이다.
             total = saturatedAdd(total, usable(report, now));
         }
         evictStale(now);
+        firstRound = false;
 
         // **하한은 "보고가 없을 때" 만이다.** 합이 0 인 것과 아무도 안 보고한
         // 것은 다르다 — 뒷단이 신선하게 "여유 0" 을 보고했으면 그건 정확한

@@ -175,11 +175,12 @@ class AllocationRoundTest {
     @DisplayName("평활화한_전역_크레딧을_싣는다")
     void 평활화한_전역_크레딧을_싣는다() {
         CreditSmoother smoother = CreditSmoother.of(0.5);
-        smoother.observe(100);
+        // **올라가는 쪽으로 잰다.** 내려갈 때는 평활을 안 거치므로 원본과 구별이 안 된다.
+        smoother.observe(20);
         AllocationRound round = AllocationRound.of(
                 () -> true,
                 () -> Mono.just(List.of(new CouponDemand("c1", 1_000, 10_000))),
-                () -> 20L, () -> 1,
+                () -> 100L, () -> 1,
                 grant -> Mono.just(grant.credit()),
                 hash -> {
                     발행.put("last", hash);
@@ -191,7 +192,7 @@ class AllocationRoundTest {
 
         round.run().block();
 
-        // 100 과 20 의 중간이다. 순간값을 그대로 쓰면 스파이크 한 번이 표시
+        // 20 과 100 의 중간이다. 순간값을 그대로 쓰면 스파이크 한 번이 표시
         // 대기 시간을 몇 배로 만든다.
         assertThat(SnapshotCodec.create().decode(발행.get("last")).meta().globalCredit())
                 .isEqualTo(60);

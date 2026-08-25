@@ -25,19 +25,24 @@ class CreditSmootherTest {
         assertThat(s.observe(1000)).isEqualTo(1000.0);
     }
 
+    /**
+     * <b>수렴은 올라갈 때만이다.</b> 내려갈 때 시상수를 두면 뒷단이 못 받겠다고
+     * 말한 뒤에도 옛 값으로 계속 민다 — 평활이 막으려는 것은 표시 흔들림이지
+     * 백프레셔 무시가 아니다.
+     */
     @Test
-    @DisplayName("EWMA는_설정된_시상수로_수렴한다")
-    void EWMA는_설정된_시상수로_수렴한다() {
-        // α=0.2 로 1000 에서 시작해 0 을 5틱 관측하면 1000×0.8^5 = 327.68
+    @DisplayName("상승은_설정된_시상수로_수렴한다")
+    void 상승은_설정된_시상수로_수렴한다() {
+        // α=0.2 로 0 에서 시작해 1000 을 5틱 관측하면 1000×(1−0.8^5) = 672.32
         CreditSmoother s = CreditSmoother.of(0.2);
-        s.observe(1000);
+        s.observe(0);
 
         double value = 0;
         for (int i = 0; i < 5; i++) {
-            value = s.observe(0);
+            value = s.observe(1000);
         }
 
-        assertThat(value).isCloseTo(327.68, within(0.01));
+        assertThat(value).isCloseTo(672.32, within(0.01));
     }
 
     @Test
@@ -46,7 +51,7 @@ class CreditSmootherTest {
         CreditSmoother s = CreditSmoother.of(0.2);
         s.observe(1000);
 
-        // 한 틱 튀어도 20% 만 먹는다
+        // 한 틱 튀어도 20% 만 먹는다. 아래로 튀는 것은 다르다 — 그건 뒷단의 신호다.
         assertThat(s.observe(2000)).isCloseTo(1200, within(0.01));
     }
 

@@ -37,7 +37,8 @@ public class CreditSmoother {
     }
 
     /**
-     * 관측치를 넣고 다듬어진 값을 돌려준다.
+     * 관측치를 넣고 다듬어진 값을 돌려준다. <b>내려갈 때는 안 다듬는다</b> —
+     * 평활이 막으려는 것은 표시 흔들림이지 백프레셔 무시가 아니다.
      *
      * <p>첫 관측치는 그대로 초기값이 된다. 0 에서 시작하면 첫 몇 틱 동안
      * 실제보다 한참 낮은 값이 나가고 그 사이 표시 ETA 가 몇 배로 뛴다.
@@ -46,7 +47,10 @@ public class CreditSmoother {
         if (!Double.isFinite(credit) || credit < 0) {
             throw new IllegalArgumentException("credit 은 0 이상 유한값이어야 한다: " + credit);
         }
-        value = seeded ? alpha * credit + (1 - alpha) * value : credit;
+        // **비대칭이다.** 상승을 늦추면 스파이크가 표시 시간을 흔드는 것을 막지만,
+        // 하강을 늦추면 뒷단이 못 받겠다고 말한 뒤에도 계속 민다. 두 방향의 사고가
+        // 다르므로 한 계수로 조종하면 안 된다.
+        value = !seeded || credit < value ? credit : alpha * credit + (1 - alpha) * value;
         seeded = true;
         return value;
     }

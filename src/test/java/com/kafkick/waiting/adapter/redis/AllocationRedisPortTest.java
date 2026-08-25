@@ -308,4 +308,5 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         assertThat(처음).isGreaterThan(EPOCH_2026);
         assertThat(다음).isGreaterThanOrEqualTo(처음);
     }
+
 }

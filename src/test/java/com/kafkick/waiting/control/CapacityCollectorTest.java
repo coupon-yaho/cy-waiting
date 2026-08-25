@@ -540,13 +540,14 @@ class CapacityCollectorTest {
      * 것이 아니라 보고가 깨진 것이다 — 받으면 죽은 인스턴스가 영영 신선해진다.
      */
     @Test
-    @DisplayName("창보다_멀리_앞선_보고는_안_받는다")
-    void 창보다_멀리_앞선_보고는_안_받는다() {
+    @DisplayName("허용치보다_앞선_보고는_안_받는다")
+    void 허용치보다_앞선_보고는_안_받는다() {
         CapacityCollector collector = collector();
         long warmed = warm(collector, "a", 100);
 
-        long credit = collector.collect(
-                List.of(report("a", 100, warmed + FRESHNESS.toSeconds() + 1)), warmed, 1);
+        // **경계를 한 칸 넘긴다.** 창 전체를 앞쪽으로 열면 죽은 인스턴스의
+        // 마지막 보고가 창의 두 배 동안 살아 있다 — 여기서 그 폭을 잠근다.
+        long credit = collector.collect(List.of(report("a", 100, warmed + 2)), warmed, 1);
 
         // 신선한 보고가 없으니 하한이다.
         assertThat(credit).isEqualTo(FLOOR);

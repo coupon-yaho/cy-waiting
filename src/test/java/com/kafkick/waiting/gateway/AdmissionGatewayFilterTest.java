@@ -52,6 +52,9 @@ class AdmissionGatewayFilterTest {
 
     private static final String MEMBER = "812934";
 
+    /** 한산 통과 상한. 전역 크레딧 1,000 을 게이트웨이 한 대가 20% 로 쓴다. */
+    private static final int IDLE_CAP = 200;
+
     /** 고정 시계. 실제 시계를 쓰면 낡음 판정이 장비 속도에 걸린다 (TS-4). */
     private static final Instant 지금 = Instant.parse("2026-08-24T00:00:00Z");
 
@@ -75,10 +78,14 @@ class AdmissionGatewayFilterTest {
     private final AtomicReference<Boolean> 뒷단에_닿음 = new AtomicReference<>(false);
 
     private MockServerWebExchange 요청(String couponId) {
+        return 요청(couponId, MEMBER);
+    }
+
+    private MockServerWebExchange 요청(String couponId, String memberId) {
         MockServerWebExchange exchange = MockServerWebExchange.from(
                 MockServerHttpRequest.method(HttpMethod.POST,
                         "/api/v1/coupons/" + couponId + "/issue")
-                        .header("X-Member-Id", MEMBER));
+                        .header("X-Member-Id", memberId));
         exchange.getAttributes().put(
                 ServerWebExchangeUtils.URI_TEMPLATE_VARIABLES_ATTRIBUTE,
                 Map.of("couponId", couponId));
@@ -92,7 +99,15 @@ class AdmissionGatewayFilterTest {
     }
 
     private MockServerWebExchange 태운다(String couponId) {
-        MockServerWebExchange exchange = 요청(couponId);
+        return 태운다(couponId, MEMBER);
+    }
+
+    /**
+     * <b>회원을 갈아 가며 태운다.</b> 같은 회원으로 반복하면 픽스처가 재등록으로
+     * 보고 상한 검사를 건너뛴다 — 줄 길이가 1 에 멈춰 상한을 아무도 안 잰다.
+     */
+    private MockServerWebExchange 태운다(String couponId, String memberId) {
+        MockServerWebExchange exchange = 요청(couponId, memberId);
         filter.filter(exchange, e -> {
             뒷단에_닿음.set(true);
             return Mono.empty();
@@ -368,29 +383,51 @@ class AdmissionGatewayFilterTest {
         MockServerWebExchange exchange = 태운다(COUPON);
 
         assertThat(exchange.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
-                .matches(AdmissionDecision::isEnqueue, "대기 판정");
+                .isEqualTo(AdmissionDecision.ENQUEUE_ALWAYS);
         assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
         assertThat(뒷단에_닿음).hasValue(false);
     }
 
     /**
-     * 한산한 쿠폰에 상한을 넘겨 몰릴 때다. 초과분이 429 를 받으면 그 쿠폰은
-     * 활성화되지 못하고 배분을 영영 못 받는다.
+     * 한산한 쿠폰이 노드 예산을 넘겨 몰릴 때다. 예산을 넘긴 첫 사람이 429 를
+     * 받으면 줄이 한 번도 안 생기고, 그 쿠폰은 활성화되지 못해 배분을 영영
+     * 못 받는다.
      */
     @Test
     @DisplayName("한산한_쿠폰의_초과분이_줄을_선다")
     void 한산한_쿠폰의_초과분이_줄을_선다() {
-        스냅샷을_심는다(CouponStates.idle(1_000_000));
+        스냅샷을_심는다(CouponStates.idle(1_000));
 
-        MockServerWebExchange 마지막 = null;
-        for (int i = 0; i < 500; i++) {
-            마지막 = 태운다(COUPON);
+        // 한산 통과 상한은 전역 크레딧의 20% 다. 그 다음 한 명이 첫 대기자다.
+        for (int i = 0; i < IDLE_CAP; i++) {
+            태운다(COUPON, "무대기" + i);
         }
+        MockServerWebExchange 첫_대기자 = 태운다(COUPON, "대기자");
 
-        assertThat(마지막.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
-                .matches(AdmissionDecision::isEnqueue, "대기 판정");
-        // 429 를 받으면 그 쿠폰은 활성화되지 못하고 배분을 영영 못 받는다.
-        assertThat(마지막.getResponse().getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+        assertThat(첫_대기자.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .isEqualTo(AdmissionDecision.ENQUEUE_RATE_COUPON);
+        assertThat(첫_대기자.getResponse().getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+    }
+
+    /**
+     * <b>상한 해제는 배분 전 구간에만 걸린다.</b> 배수 속도를 아는 쿠폰까지
+     * 상한 없이 받으면 줄이 무한히 자라고, 뒤에 선 사람의 대기 시간이 어떤
+     * 값도 아니게 된다.
+     */
+    @Test
+    @DisplayName("배수를_아는_쿠폰은_상한을_지킨다")
+    void 배수를_아는_쿠폰은_상한을_지킨다() {
+        // credit 1 이면 600초 안에 600명을 뺄 수 있다 — 그것이 줄 길이 상한이다.
+        스냅샷을_심는다(CouponStates.queueing(1, 1_000_000, 2));
+
+        for (int i = 0; i < 600; i++) {
+            태운다(COUPON, "대기자" + i);
+        }
+        MockServerWebExchange 넘긴_사람 = 태운다(COUPON, "601번째");
+
+        assertThat(넘긴_사람.getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        assertThat(뒷단에_닿음).hasValue(false);
     }
 
     @Test

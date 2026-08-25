@@ -292,4 +292,51 @@ class AdmissionDeciderTest {
         assertThat(d.decide(request(idle).withValidToken(true)))
                 .isEqualTo(AdmissionDecision.PASS_TOKEN);
     }
+
+    /** META 는 전역 크레딧 1,000 을 게이트웨이 10대가 나눠 쓴다 — 노드 몫은 100 이다. */
+    @Test
+    @DisplayName("배수_속도를_알면_그것이_줄_길이_상한이다")
+    void 배수_속도를_알면_그것이_줄_길이_상한이다() {
+        CouponState 줄선_쿠폰 = CouponStates.queueing(3, 1_000, 10);
+
+        assertThat(AdmissionDecider.queueCapacity(줄선_쿠폰, META, 600)).isEqualTo(1_800);
+    }
+
+    /**
+     * 배분을 아직 못 받은 구간이다. 0 을 그대로 상한으로 쓰면 줄이 한 번도
+     * 안 생기고 쿠폰이 그 상태에 갇힌다.
+     */
+    @Test
+    @DisplayName("배수_속도를_모르면_노드_몫으로_잰다")
+    void 배수_속도를_모르면_노드_몫으로_잰다() {
+        assertThat(CouponStates.idle(1_000).queueCapacity(600)).isZero();
+
+        // 100 × 600. 상한 없음(-1)도 0 도 아닌, 노드가 감당하는 양이다.
+        assertThat(AdmissionDecider.queueCapacity(CouponStates.idle(1_000), META, 600))
+                .isEqualTo(60_000);
+    }
+
+    /**
+     * 스냅샷이 낡은 동안에는 대기 인원이 영영 0 으로 보인다. 여기서 상한을
+     * 없애면 장애가 지속되는 내내 줄이 무한히 자란다 (R5).
+     */
+    @Test
+    @DisplayName("노드_몫이_0_이라도_상한은_양수다")
+    void 노드_몫이_0_이라도_상한은_양수다() {
+        SnapshotMeta 굶은_노드 = new SnapshotMeta(1, 10);
+
+        assertThat(AdmissionDecider.globalCap(굶은_노드)).isZero();
+        assertThat(AdmissionDecider.queueCapacity(CouponStates.idle(1_000), 굶은_노드, 600))
+                .isPositive();
+    }
+
+    @Test
+    @DisplayName("곱이_넘쳐도_음수가_되지_않는다")
+    void 곱이_넘쳐도_음수가_되지_않는다() {
+        // 음수가 되면 스크립트가 잘못된 상한으로 보고 통째로 거절한다.
+        SnapshotMeta 거대한_노드 = new SnapshotMeta(Long.MAX_VALUE, 1);
+
+        assertThat(AdmissionDecider.queueCapacity(CouponStates.idle(1_000), 거대한_노드, 600))
+                .isEqualTo(Long.MAX_VALUE);
+    }
 }

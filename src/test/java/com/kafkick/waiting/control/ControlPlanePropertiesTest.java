@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.kafkick.waiting.domain.coupon.CouponStates;
+import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import java.time.Duration;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -16,6 +18,9 @@ import org.junit.jupiter.api.Test;
  * 리더가 없어진다.
  */
 class ControlPlanePropertiesTest {
+
+    /** 한산 통과 상한이 쓰는 비율. 게이트웨이 배선과 같은 값이어야 한다. */
+    private static final double IDLE_CREDIT_RATIO = 0.2;
 
     private static ControlPlaneProperties.Leader leader(Duration lease, Duration attempt,
             Duration delay) {
@@ -169,5 +174,33 @@ class ControlPlanePropertiesTest {
         assertThat(defaults.leader().lease()).isEqualTo(Duration.ofSeconds(2));
         assertThat(defaults.leader().attempt()).isEqualTo(Duration.ofMillis(300));
         assertThat(defaults.leader().renewDelay()).isEqualTo(Duration.ofMillis(100));
+    }
+
+    /**
+     * <b>하한은 전면 차단과 달라야 한다.</b> 신선한 보고가 없을 때 쓰는 값인데,
+     * 그 값에서 한산 통과 상한이 0 이 되면 하한이 있으나 마나다 — 대기열이 통째로
+     * 켜지고 R1 이 죽는다 (G4.10).
+     */
+    @Test
+    @DisplayName("하한에서도_한산_통과가_열린다")
+    void 하한에서도_한산_통과가_열린다() {
+        ControlPlaneProperties.Capacity capacity = ControlPlaneProperties.defaults().capacity();
+        SnapshotMeta 하한 = new SnapshotMeta(capacity.floor(), capacity.expectedNodes());
+
+        assertThat(CouponStates.idle(1_000).idleCap(하한, IDLE_CREDIT_RATIO))
+                .isGreaterThanOrEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("하한이_노드_수를_못_받치면_안_뜬다")
+    void 하한이_노드_수를_못_받치면_안_뜬다() {
+        ControlPlaneProperties.Capacity 기본 = ControlPlaneProperties.defaults().capacity();
+
+        // 설정으로 노드를 늘리면서 하한을 그대로 두면 조용히 전면 차단이 된다.
+        assertThatThrownBy(() -> new ControlPlaneProperties.Capacity(기본.rampUp(),
+                기본.freshness(), 기본.floor(), 기본.perInstanceCap(),
+                기본.rampDownTicks(), 기본.expectedNodes() + 1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("하한");
     }
 }

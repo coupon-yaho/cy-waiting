@@ -89,11 +89,29 @@ public class ControlPlaneConfig {
                 properties.leader().attempt(), allocationScheduler);
     }
 
+    /**
+     * 배분 틱. <b>재료를 먼저 읽고 배분한다</b> — 안 읽으면 수집기가 첫 하한을
+     * 영영 답으로 내고, 그 하한에서는 한산 통과 상한이 0 이라 대기열이 통째로
+     * 켜진다. 읽기가 실패하면 수집을 건너뛴다 (아래 주석).
+     */
+    /**
+     * 재료 읽기. <b>배분 예산의 1/4 만 쓴다</b> — 한 예산을 나눠 쓰면 읽기가 느릴 때
+     * 판이 통째로 안 끝나고, 임계가 안 올라가 큐가 자라 다음 판이 더 무거워진다.
+     */
+    @Bean
+    CapacityRefresh capacityRefresh(AllocationRedisPort port, CapacityCollector capacity,
+            ControlPlaneProperties properties, Scheduler allocationScheduler) {
+        return CapacityRefresh.of(port::capacityReports, capacity, Instant::now,
+                properties.scheduler().tick().dividedBy(4), allocationScheduler);
+    }
+
+    /** 배분 틱. <b>재료를 먼저 읽고 배분한다</b> — 안 읽으면 크레딧이 첫 하한에 머문다. */
     @Bean
     AllocationScheduler allocationLoop(ControlPlaneProperties properties, Leadership leadership,
-            AllocationRound round, Scheduler allocationScheduler) {
+            AllocationRound round, CapacityRefresh capacity, Scheduler allocationScheduler) {
         return AllocationScheduler.of(properties.scheduler().tick(),
-                properties.scheduler().firstTickDelay(), leadership::isLeader, round::run,
+                properties.scheduler().firstTickDelay(), leadership::isLeader,
+                () -> capacity.refresh().then(round.run()),
                 nanos -> { }, allocationScheduler);
     }
 }

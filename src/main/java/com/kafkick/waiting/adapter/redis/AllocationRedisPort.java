@@ -1,5 +1,6 @@
 package com.kafkick.waiting.adapter.redis;
 
+import com.kafkick.waiting.control.CapacityReport;
 import com.kafkick.waiting.control.ControlPlaneProperties;
 import com.kafkick.waiting.control.FailureWindow;
 import com.kafkick.waiting.control.SnapshotSource;
@@ -17,6 +18,9 @@ import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Component;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -48,11 +52,15 @@ public final class AllocationRedisPort implements SnapshotSource {
     /** 한 판이 동시에 낼 수 있는 읽기. 무제한이면 한 판이 커넥션을 독점한다. */
     private static final int MAX_CONCURRENT_READS = 16;
 
+    /** 값이 JSON 인 것은 계약이다 — 위치 기반 문자열은 필드가 늘면 깨진다 (D-C3). */
+    private static final ObjectMapper JSON = new ObjectMapper();
+
     private static final Logger log = LoggerFactory.getLogger(AllocationRedisPort.class);
 
     private final ReactiveStringRedisTemplate redis;
     private final int shards;
     private final FailureWindow rejected = FailureWindow.create();
+    private final FailureWindow malformed = FailureWindow.create();
 
     /**
      * <b>모든 노드가 쓴다.</b> 배분은 리더만 돌지만 판정 재료를 받아 오는 것은
@@ -73,6 +81,61 @@ public final class AllocationRedisPort implements SnapshotSource {
 
     public static AllocationRedisPort of(ReactiveStringRedisTemplate redis, int shards) {
         return new AllocationRedisPort(redis, shards);
+    }
+
+    /**
+     * 뒷단이 스스로 적어 둔 여유를 읽는다.
+     *
+     * <p><b>밖에서 쓰는 키라 아무 값이나 들어온다.</b> 깨진 값 하나가 판을 죽이면
+     * 멀쩡한 인스턴스 몫까지 사라져 전역 크레딧이 하한으로 떨어진다 (4.4.6).
+     */
+    public Mono<List<CapacityReport>> capacityReports() {
+        AtomicBoolean dropped = new AtomicBoolean();
+        return redis.<String, String>opsForHash().entries(RedisKeys.CAPACITY)
+                .mapNotNull(entry -> parse(entry.getKey(), entry.getValue(), dropped))
+                .collectList()
+                .doOnNext(reports -> {
+                    if (!dropped.get()) {
+                        malformed.exited().ifPresent(recovered ->
+                                log.info("가용량 보고가 다시 깨끗하다 — {}초 만에, 그동안 {}건 걸렀다",
+                                        recovered.elapsedSeconds(), recovered.swallowed()));
+                    }
+                })
+                // **전부 버렸으면 그건 관측이 아니다.** 빈 목록을 내려보내면 부르는
+                // 쪽이 "신선한 보고 0건" 으로 읽어 하한으로 떨어뜨린다. 형식이
+                // 어긋나 전멸한 것과 뒷단이 정말 하나도 없는 것은 다르다.
+                .flatMap(reports -> reports.isEmpty() && dropped.get()
+                        ? Mono.error(new IllegalStateException("가용량 보고를 전부 걸렀다"))
+                        : Mono.just(reports));
+    }
+
+    /**
+     * 보고 하나를 읽는다. <b>없는 필드를 0 으로 접지 않는다</b> — 그러면 그
+     * 인스턴스가 죽은 것처럼 보여 전역 크레딧이 조용히 줄어든다.
+     */
+    private CapacityReport parse(String instanceId, String value, AtomicBoolean dropped) {
+        try {
+            JsonNode node = JSON.readTree(value);
+            JsonNode credits = node.get("credits");
+            JsonNode ts = node.get("ts");
+            if (credits == null || !credits.canConvertToLong()
+                    || ts == null || !ts.canConvertToLong()) {
+                return drop(instanceId, "필드가 없거나 수가 아니다", dropped);
+            }
+            return new CapacityReport(instanceId, credits.longValue(), ts.longValue());
+        } catch (JacksonException e) {
+            return drop(instanceId, e.getMessage(), dropped);
+        }
+    }
+
+    private CapacityReport drop(String instanceId, String why, AtomicBoolean dropped) {
+        dropped.set(true);
+        // **구간의 첫 건만 남긴다.** 뒷단이 깨진 값을 계속 쓰면 매 틱 같은 줄이
+        // 쌓이고, 그때 정작 봐야 할 것이 묻힌다.
+        if (malformed.entered()) {
+            log.warn("가용량 보고를 걸렀다 — {}: {}. 이 인스턴스 몫은 안 센다", instanceId, why);
+        }
+        return null;
     }
 
     /**

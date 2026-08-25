@@ -30,6 +30,7 @@ import java.util.Map;
 import java.util.Random;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -90,6 +91,9 @@ class AdmissionGatewayFilterTest {
 
     private final AtomicReference<Boolean> 뒷단에_닿음 = new AtomicReference<>(false);
 
+    /** 몇 번 닿았나. 한 번이라도 닿았는지만 보면 상한이 무너져도 안 걸린다. */
+    private final AtomicInteger 뒷단_횟수 = new AtomicInteger();
+
     private MockServerWebExchange 요청(String couponId) {
         return 요청(couponId, MEMBER);
     }
@@ -123,6 +127,7 @@ class AdmissionGatewayFilterTest {
         MockServerWebExchange exchange = 요청(couponId, memberId);
         filter.filter(exchange, e -> {
             뒷단에_닿음.set(true);
+            뒷단_횟수.incrementAndGet();
             return Mono.empty();
         }).block();
         return exchange;
@@ -785,12 +790,17 @@ class AdmissionGatewayFilterTest {
                 META, 지금.minusSeconds(60)));
         long CAP = (long) (AdmissionDecider.globalCap(META) * 0.5);
 
+        // **예산 안은 전부 통과해야 한다.** 한 번이라도 닿았는지만 보면 앞쪽이
+        // 이미 막혀도 초록이다.
         for (long i = 0; i < CAP; i++) {
-            태운다("없는쿠폰" + i, "회원" + i);
+            MockServerWebExchange 통과자 = 태운다("없는쿠폰" + i, "회원" + i);
+            assertThat(통과자.getResponse().getStatusCode())
+                    .as("예산 안 %d 번째", i)
+                    .isNotEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
         }
         MockServerWebExchange 넘긴_사람 = 태운다("없는쿠폰넘침", "회원넘침");
 
-        assertThat(뒷단에_닿음).hasValue(true);
+        assertThat(뒷단_횟수).hasValue((int) CAP);
         assertThat(넘긴_사람.getResponse().getStatusCode())
                 .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
     }

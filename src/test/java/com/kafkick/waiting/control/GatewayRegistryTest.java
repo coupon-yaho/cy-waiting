@@ -167,4 +167,21 @@ class GatewayRegistryTest {
         assertThatThrownBy(() -> GatewayRegistry.of(RAMP_DOWN, 0))
                 .hasMessageContaining("initial");
     }
+
+    /**
+     * <b>안 변한 관측은 감소가 아니다.</b> 정상 관측이 확정 카운터를 올리면 정상
+     * 운영 몇 틱 만에 카운터가 임계에 닿고, 그다음 하트비트가 한 번만 헛디뎌도
+     * 분모가 그 자리에서 떨어진다 — 살아 있는 노드가 각자 큰 몫을 쓴다.
+     */
+    @Test
+    @DisplayName("안_변한_관측이_감소_확정을_당기지_않는다")
+    void 안_변한_관측이_감소_확정을_당기지_않는다() {
+        GatewayRegistry registry = GatewayRegistry.of(3, 10);
+        registry.observed(10);
+        registry.observed(10);
+
+        registry.observed(2);
+
+        assertThat(registry.count()).isEqualTo(10);
+    }
 }

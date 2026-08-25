@@ -11,6 +11,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.web.server.context.WebServerApplicationContext;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Mono;
 import reactor.test.scheduler.VirtualTimeScheduler;
@@ -195,7 +196,9 @@ class ControlPlaneLifecycleTest {
         // 커야 락을 놓을 수 있고, 웹 서버보다는 작아야 요청이 먼저 빠진다.
         // 상수가 아니라 그 관계를 못박는다.
         int 커넥션_팩토리 = 0;
-        int 웹_서버 = Integer.MAX_VALUE;
+        // **상수를 손으로 적지 않는다.** 여기 Integer.MAX_VALUE 를 적어 뒀는데 실제
+        // 값은 그보다 1024 작다 — 그래서 이 단언이 거의 아무것도 안 막았다.
+        int 웹_서버 = WebServerApplicationContext.GRACEFUL_SHUTDOWN_PHASE;
 
         assertThat(lifecycle(VirtualTimeScheduler.create()).getPhase())
                 .isGreaterThan(커넥션_팩토리)

@@ -12,6 +12,7 @@ import org.awaitility.Awaitility;
 import org.junit.jupiter.api.DisplayName;
 import org.springframework.context.SmartLifecycle;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.web.server.context.WebServerApplicationContext;
 import reactor.core.publisher.Mono;
 import reactor.test.scheduler.VirtualTimeScheduler;
 
@@ -265,6 +266,11 @@ class GatewayHeartbeatLoopTest {
 
         assertThat(loop).isInstanceOf(SmartLifecycle.class);
         assertThat(loop.isAutoStartup()).isTrue();
-        assertThat(loop.getPhase()).isGreaterThan(0);
+        // **위쪽도 잠근다.** 드레이닝보다 먼저 빼면 아직 요청을 처리하는 노드가
+        // 분모에서 빠지고, 남은 노드가 크레딧을 다 쓴 위에 이 노드의 통과분이
+        // 더해진다. 아래만 재면 그 경로가 그대로 열린다.
+        assertThat(loop.getPhase())
+                .isGreaterThan(0)
+                .isLessThan(WebServerApplicationContext.GRACEFUL_SHUTDOWN_PHASE);
     }
 }

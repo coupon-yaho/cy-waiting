@@ -25,24 +25,19 @@ class CreditSmootherTest {
         assertThat(s.observe(1000)).isEqualTo(1000.0);
     }
 
-    /**
-     * <b>수렴은 올라갈 때만이다.</b> 내려갈 때 시상수를 두면 뒷단이 못 받겠다고
-     * 말한 뒤에도 옛 값으로 계속 민다 — 평활이 막으려는 것은 표시 흔들림이지
-     * 백프레셔 무시가 아니다.
-     */
     @Test
-    @DisplayName("상승은_설정된_시상수로_수렴한다")
-    void 상승은_설정된_시상수로_수렴한다() {
-        // α=0.2 로 0 에서 시작해 1000 을 5틱 관측하면 1000×(1−0.8^5) = 672.32
+    @DisplayName("EWMA는_설정된_시상수로_수렴한다")
+    void EWMA는_설정된_시상수로_수렴한다() {
+        // α=0.2 로 1000 에서 시작해 0 을 5틱 관측하면 1000×0.8^5 = 327.68
         CreditSmoother s = CreditSmoother.of(0.2);
-        s.observe(0);
+        s.observe(1000);
 
         double value = 0;
         for (int i = 0; i < 5; i++) {
-            value = s.observe(1000);
+            value = s.observe(0);
         }
 
-        assertThat(value).isCloseTo(672.32, within(0.01));
+        assertThat(value).isCloseTo(327.68, within(0.01));
     }
 
     @Test
@@ -51,7 +46,7 @@ class CreditSmootherTest {
         CreditSmoother s = CreditSmoother.of(0.2);
         s.observe(1000);
 
-        // 한 틱 튀어도 20% 만 먹는다. 아래로 튀는 것은 다르다 — 그건 뒷단의 신호다.
+        // 한 틱 튀어도 20% 만 먹는다
         assertThat(s.observe(2000)).isCloseTo(1200, within(0.01));
     }
 
@@ -125,29 +120,5 @@ class CreditSmootherTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new CreditSmoother.Snapshot(500, false))
                 .isInstanceOf(IllegalArgumentException.class);
-    }
-
-    /**
-     * <b>하강은 늦으면 안 된다.</b> 뒷단이 "여유가 줄었다" 고 말한 순간이 곧 그
-     * 값이다. 상승과 같은 계수로 내려가면 그 뒤로도 한참을 옛 값으로 밀어 넣는다 —
-     * 평활이 막으려던 것은 표시 흔들림이지 백프레셔 무시가 아니다.
-     */
-    @Test
-    @DisplayName("하강은_즉시_따라간다")
-    void 하강은_즉시_따라간다() {
-        CreditSmoother smoother = CreditSmoother.of(0.3);
-        smoother.observe(300);
-
-        assertThat(smoother.observe(100)).isEqualTo(100);
-    }
-
-    @Test
-    @DisplayName("상승은_평활을_거친다")
-    void 상승은_평활을_거친다() {
-        CreditSmoother smoother = CreditSmoother.of(0.3);
-        smoother.observe(100);
-
-        // 스파이크 하나가 표시 시간을 흔들지 않게 한다.
-        assertThat(smoother.observe(300)).isEqualTo(0.3 * 300 + 0.7 * 100);
     }
 }

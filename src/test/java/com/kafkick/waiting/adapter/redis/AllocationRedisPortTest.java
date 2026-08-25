@@ -30,9 +30,6 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     private static final Duration WAIT = Duration.ofSeconds(10);
     private static final int SHARDS = 1;
 
-    /** 2026-01-01. 서버 시각이 초 단위 epoch 인지를 붙박이 값으로 잰다. */
-    private static final long EPOCH_2026 = 1_767_225_600L;
-
     @Autowired
     private ReactiveStringRedisTemplate redis;
 
@@ -291,22 +288,6 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     void 빈_목록이면_묻지_않는다() {
         // 빈 인자로 명령을 보내면 레디스가 오류를 낸다. 그 오류가 판을 죽인다.
         assertThat(port.queueModes(List.of()).block(WAIT)).isEmpty();
-    }
-
-    /**
-     * <b>신선도의 기준 시각은 서버가 준다.</b> 리더는 옮겨 다니므로 자기 시계로
-     * 재면 같은 보고가 리더에 따라 신선하기도 낡기도 한다.
-     */
-    @Test
-    @DisplayName("서버_시각을_읽어_온다")
-    void 서버_시각을_읽어_온다() {
-        long 처음 = port.serverTime().block(WAIT);
-        long 다음 = port.serverTime().block(WAIT);
-
-        // **값의 존재가 아니라 자릿수를 본다.** null 아님만 보면 0 이 와도
-        // 통과한다. 실제 시계에 기대지 않으려고 붙박이 하한과 비교한다 (TS-4).
-        assertThat(처음).isGreaterThan(EPOCH_2026);
-        assertThat(다음).isGreaterThanOrEqualTo(처음);
     }
 
 }

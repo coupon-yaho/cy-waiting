@@ -66,8 +66,19 @@ class ServerClockTest {
     void 초로_볼_수_없는_값은_거부한다() {
         assertThatThrownBy(() -> clock.observe(0))
                 .isInstanceOf(IllegalStateException.class);
-        // 밀리초를 받은 경우는 오히려 커서 안 걸린다. 작은 쪽만 막는다.
-        assertThatThrownBy(() -> clock.observe(1_700_000_000L))
+        // **위쪽이 더 위험하다.** 밀리초가 바닥값에 한 번 들어가면 그 뒤 정상
+        // 시각이 전부 그 값으로 보정돼 크레딧이 영영 하한이다.
+        assertThatThrownBy(() -> clock.observe(1_800_000_000_000L))
                 .isInstanceOf(IllegalStateException.class);
+    }
+
+    /** 거부한 값이 바닥값에 안 남는다. 남으면 그 뒤 정상 시각이 전부 보정된다. */
+    @Test
+    @DisplayName("거부한_값은_바닥값에_안_남는다")
+    void 거부한_값은_바닥값에_안_남는다() {
+        assertThatThrownBy(() -> clock.observe(1_800_000_000_000L))
+                .isInstanceOf(IllegalStateException.class);
+
+        assertThat(clock.observe(지금)).isEqualTo(지금);
     }
 }

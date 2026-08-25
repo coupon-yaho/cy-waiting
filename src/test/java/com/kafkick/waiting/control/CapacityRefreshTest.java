@@ -9,6 +9,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
+import reactor.test.StepVerifier;
+import reactor.test.scheduler.VirtualTimeScheduler;
 
 /**
  * 재료 읽기 한 판.
@@ -70,10 +72,19 @@ class CapacityRefreshTest {
                 지금.getEpochSecond());
         long 직전 = collector.lastKnown();
 
+        // **가상 시간으로 잰다.** 실제로 기다리면 시험이 장비 속도에 걸리고,
+        // 예산을 늘려도 통과하는 시험이 된다 (TS-4).
+        VirtualTimeScheduler 시계 = VirtualTimeScheduler.create();
         CapacityRefresh refresh = CapacityRefresh.of(
-                () -> Mono.<List<CapacityReport>>never(), collector, () -> 지금, 예산, Schedulers.immediate());
+                Mono::never, collector, () -> 지금, 예산, 시계);
 
-        assertThat(refresh.refresh().blockOptional(Duration.ofSeconds(5))).isEmpty();
+        // **검증에 상한을 둔다.** 예산이 안 걸리는 구현에서 무기한 기다리면
+        // 시험이 실패가 아니라 정지가 된다 — CI 에서 그건 진단이 안 된다.
+        StepVerifier.create(refresh.refresh())
+                .then(() -> 시계.advanceTimeBy(예산))
+                .expectComplete()
+                .verify(Duration.ofSeconds(5));
+
         assertThat(collector.lastKnown()).isEqualTo(직전);
     }
 }

@@ -24,6 +24,7 @@ public final class CapacityRefresh {
     private final CapacityCollector collector;
     private final Supplier<Instant> clock;
     private final Duration budget;
+    /** 타임아웃 타이머와 수집이 함께 도는 곳. 배분과 같은 스레드다. */
     private final Scheduler worker;
     private final FailureWindow failures = FailureWindow.create();
 
@@ -52,7 +53,9 @@ public final class CapacityRefresh {
      */
     public Mono<Void> refresh() {
         return Mono.defer(reports)
-                .timeout(budget)
+                // **타이머도 배분 스케줄러다.** 기본 스케줄러를 쓰면 제어 평면의
+                // 시간과 분리되고, 시험이 가상 시간으로 재지 못한다.
+                .timeout(budget, worker)
                 // **수집을 레디스 이벤트 루프에서 돌리지 않는다.** 램프 기록은
                 // 동기화 없는 맵이고, 재연결로 루프가 갈리면 두 스레드가 만진다.
                 .publishOn(worker)

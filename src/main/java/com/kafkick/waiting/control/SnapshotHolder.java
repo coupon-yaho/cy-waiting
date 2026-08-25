@@ -61,9 +61,7 @@ public final class SnapshotHolder {
     /**
      * 스냅샷을 아직 믿는 한계.
      *
-     * <p><b>줄을 세운 기록은 이만큼은 살아 있어야 한다.</b> 먼저 풀리면, 그 뒤로도
-     * 유효하다고 보는 스냅샷에 방금 세운 줄이 안 보여 뒤에 온 사람이 그냥
-     * 지나간다 — 줄 선 사람을 추월시키지 않는다는 불변식이 깨진다.
+     * <p><b>줄을 세운 기록이 이보다 먼저 풀리면 추월이 난다</b> (불변식 4).
      */
     public Duration dataStaleAfter() {
         return dataStaleAfter;

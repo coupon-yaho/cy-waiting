@@ -8,6 +8,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
+import java.time.Duration;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -160,5 +161,32 @@ class EnqueueLatchTest {
         // 넘긴 뒤에 비우므로 동시에 들어온 수만큼은 잠깐 넘칠 수 있다.
         // 다 끝난 뒤에는 상한 + 스레드 수 안으로 돌아와 있어야 한다.
         assertThat(좁은_것.size()).isLessThanOrEqualTo(상한 + 스레드);
+    }
+
+    /**
+     * <b>0 이하를 받으면 수명 1 초짜리 래치가 된다.</b> 래치가 없는 것과 같은데
+     * 있는 것처럼 보여, 추월 창이 열린 것을 아무도 모른다.
+     */
+    @Test
+    @DisplayName("덮을_기간이_0_이하면_안_만들어진다")
+    void 덮을_기간이_0_이하면_안_만들어진다() {
+        assertThatThrownBy(() -> EnqueueLatch.covering(1_000, Duration.ofMillis(-500)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> EnqueueLatch.covering(1_000, Duration.ZERO))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> EnqueueLatch.covering(1_000, null))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /** 소수부가 있으면 올린다. 내리면 절삭까지 겹쳐 덮으려던 기간보다 짧아진다. */
+    @Test
+    @DisplayName("덮을_기간의_소수부는_올린다")
+    void 덮을_기간의_소수부는_올린다() {
+        EnqueueLatch 소수 = EnqueueLatch.covering(1_000, Duration.ofMillis(5_500));
+        소수.mark(COUPON, 100);
+
+        // 올림(6) + 여유(1) = 7. 106 은 살아 있고 107 은 아니다.
+        assertThat(소수.latched(COUPON, 106)).isTrue();
+        assertThat(소수.latched(COUPON, 107)).isFalse();
     }
 }

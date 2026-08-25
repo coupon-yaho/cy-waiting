@@ -118,10 +118,15 @@ class GraceRecordTest extends RedisContainerSupport {
         assertThat(조회한다("m1", NOW + 1).get(0)).isEqualTo("ADMITTED");
     }
 
-    /** 청소도 마찬가지다. 못 알아보면 보관 기간을 기다리지 않고 첫 판에 지운다. */
+    /**
+     * 청소도 마찬가지다. 못 알아보면 보관 기간을 기다리지 않고 첫 판에 지운다.
+     *
+     * <p><b>지금 시각을 못 박아 둔다.</b> 시각 없는 값을 매 판 "지금" 으로 쳐 주면
+     * 다시 젊어져 영영 안 걷힌다. 못 박으면 다음 판부터 늙는다.
+     */
     @Test
-    @DisplayName("옛_형식의_입장_표시를_바로_안_지운다")
-    void 옛_형식의_입장_표시를_바로_안_지운다() {
+    @DisplayName("옛_형식의_입장_표시에_시각을_박는다")
+    void 옛_형식의_입장_표시에_시각을_박는다() {
         등록한다("m1");
         redis.opsForValue().set(ADMITTED, "9999999999999999").block(WAIT);
         조회한다("m1", NOW);
@@ -129,7 +134,38 @@ class GraceRecordTest extends RedisContainerSupport {
 
         청소한다(NOW + 1);
 
-        assertThat(redis.opsForHash().hasKey(GRACE, "m1").block(WAIT)).isTrue();
+        assertThat(redis.opsForHash().get(GRACE, "m1").block(WAIT)).isEqualTo("a:" + (NOW + 1));
+        assertThat(조회한다("m1", NOW + 2).get(0)).isEqualTo("ADMITTED");
+    }
+
+    /** 못 박았으니 늙는다. 옛 값이 영영 남으면 해시가 발급 인원만큼 자란다. */
+    @Test
+    @DisplayName("시각을_박은_옛_표시도_결국_걷힌다")
+    void 시각을_박은_옛_표시도_결국_걷힌다() {
+        등록한다("m1");
+        redis.opsForHash().put(GRACE, "m1", "admitted").block(WAIT);
+        청소한다(NOW + 1);
+
+        청소한다(NOW + 1 + Long.parseLong(RETENTION) + 1);
+
+        assertThat(redis.opsForHash().hasKey(GRACE, "m1").block(WAIT)).isFalse();
+    }
+
+    /**
+     * <b>기록된 시각이 유한하지 않으면 그 항목이 불멸이 된다.</b> nan 은 어떤
+     * 비교도 참으로 안 만들고 무한은 어떤 기준보다도 크다. 형식이 깨진 값은
+     * 남겨 둘 근거가 없으므로 낡음으로 본다.
+     */
+    @Test
+    @DisplayName("깨진_시각의_기록은_걷힌다")
+    void 깨진_시각의_기록은_걷힌다() {
+        for (String 깨진_값 : List.of("a:nan", "d:nan", "a:1e400", "d:-1e400", "a:", "d:-1")) {
+            redis.opsForHash().put(GRACE, 깨진_값, 깨진_값).block(WAIT);
+        }
+
+        청소한다(NOW + 1);
+
+        assertThat(redis.opsForHash().keys(GRACE).collectList().block(WAIT)).isEmpty();
     }
 
     /**

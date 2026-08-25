@@ -58,17 +58,16 @@ local function stampOf(value)
     if type(value) ~= 'string' then
         return nil
     end
-    -- 종류가 생기기 전의 입장 표시다. 시각이 없어 나이를 못 재므로 지금을
-    -- 준다 — 못 알아보면 보관 기간을 안 기다리고 첫 판에 지운다. 배포 중
-    -- 한 릴리스만 받고 뗀다.
-    if value == 'admitted' then
-        return now
-    end
     local kind = string.sub(value, 1, 2)
-    if kind == 'd:' or kind == 'a:' then
-        return tonumber(string.sub(value, 3))
+    local at = (kind == 'd:' or kind == 'a:')
+            and tonumber(string.sub(value, 3))
+            or tonumber(value)
+    -- **nan 과 무한은 어떤 비교도 참으로 안 만든다.** 그대로 돌려주면 그 항목이
+    -- 영영 안 걷힌다 — 형식이 깨진 값은 남겨 둘 근거가 없으므로 낡음으로 본다.
+    if at == nil or at ~= at or at == math.huge or at == -math.huge or at < 0 then
+        return nil
     end
-    return tonumber(value)
+    return at
 end
 
 -- **커서도 쓰기 전에 본다.** 형식이 틀리면 HSCAN 이 오류를 내는데, 그때는
@@ -135,14 +134,29 @@ local scanned = redis.call('HSCAN', KEYS[2], cursor, 'COUNT', budget)
 local fields = scanned[2]
 local cutoff = now - retention
 local doomed = {}
+local stamped = {}
 for i = 1, #fields, 2 do
-    if #doomed >= budget then
+    if #doomed >= budget or #stamped >= budget then
         break
     end
-    local at = stampOf(fields[i + 1])
-    if at == nil or at < cutoff then
-        doomed[#doomed + 1] = fields[i]
+    local value = fields[i + 1]
+    if value == 'admitted' then
+        -- **옛 표시에는 시각이 없다.** 그대로 두면 나이를 못 재 영영 안 걷히고,
+        -- 지금으로 쳐 주면 매 판 다시 젊어져 같은 일이 난다. 지금을 못 박아
+        -- 다음 판부터 늙게 한다 — 그러면 한 보관 기간 뒤 옛 값이 사라지고,
+        -- 그때 이 분기를 뗀다.
+        stamped[#stamped + 1] = fields[i]
+        stamped[#stamped + 1] = 'a:' .. string.format('%.0f', now)
+    else
+        local at = stampOf(value)
+        if at == nil or at < cutoff then
+            doomed[#doomed + 1] = fields[i]
+        end
     end
+end
+
+if #stamped > 0 then
+    redis.call('HSET', KEYS[2], unpack(stamped))
 end
 
 local expiredGrace = 0

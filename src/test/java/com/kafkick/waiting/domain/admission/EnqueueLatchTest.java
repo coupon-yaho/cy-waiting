@@ -189,4 +189,31 @@ class EnqueueLatchTest {
         assertThat(소수.latched(COUPON, 106)).isTrue();
         assertThat(소수.latched(COUPON, 107)).isFalse();
     }
+
+    /**
+     * <b>이미 걸린 래치는 시각을 안 고친다.</b> 대기 판정이 다시 표식을 찍는
+     * 닫힌 고리가 있어, 갱신하면 트래픽이 이어지는 동안 영영 안 풀린다.
+     */
+    @Test
+    @DisplayName("다시_찍어도_수명이_안_늘어난다")
+    void 다시_찍어도_수명이_안_늘어난다() {
+        latch.mark(COUPON, 100);
+        latch.mark(COUPON, 102);
+
+        // 첫 표식(100)부터 3 초다. 갱신되면 105 에도 살아 있다.
+        assertThat(latch.latched(COUPON, 102)).isTrue();
+        assertThat(latch.latched(COUPON, 103)).isFalse();
+    }
+
+    /** 만료된 표식은 그 자리에서 지운다. 안 지우면 맵이 프로세스 수명 동안 자란다. */
+    @Test
+    @DisplayName("만료를_보면_그_자리에서_지운다")
+    void 만료를_보면_그_자리에서_지운다() {
+        latch.mark(COUPON, 100);
+        assertThat(latch.size()).isEqualTo(1);
+
+        latch.latched(COUPON, 200);
+
+        assertThat(latch.size()).isZero();
+    }
 }

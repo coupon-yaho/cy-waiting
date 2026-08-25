@@ -61,9 +61,13 @@ public final class EnqueueLatch {
      * 여유 있다" 를 보고 다 같이 넣어 상한을 넘긴다.
      */
     public void mark(String couponKey, long epochSecond) {
+        // **이미 걸려 있으면 시각을 안 고친다.** 대기 판정이 다시 여기로 돌아오는
+        // 닫힌 고리가 있어, 갱신하면 트래픽이 이어지는 동안 영영 안 풀린다 —
+        // 줄이 다 빠지고 스냅샷이 한산해도 그 노드는 무대기 통과를 못 준다 (R1).
+        //
+        // 처음 찍은 시각부터 재는 것이 맞다. 래치가 덮으려는 것은 "이 노드가
+        // 줄을 세운 뒤 스냅샷이 따라잡기까지" 이고, 그 시작은 첫 등록이다.
         if (marked.putIfAbsent(couponKey, epochSecond) != null) {
-            // 있던 쿠폰이다. 붐비는 동안 늘 일어나고, 이때 비우면 남의 래치가 사라진다.
-            marked.put(couponKey, epochSecond);
             return;
         }
         if (marked.size() > maxKeys) {
@@ -87,8 +91,15 @@ public final class EnqueueLatch {
             return false;
         }
         long age = epochSecond - at;
-        return age >= 0 && age < ttlSec;
+        if (age >= 0 && age < ttlSec) {
+            return true;
+        }
+        // **만료된 것은 그 자리에서 지운다.** 안 지우면 맵이 프로세스 수명 동안
+        // 단조 증가하고, 상한을 넘는 순간 살아 있던 래치까지 통째로 날아간다.
+        marked.remove(couponKey, at);
+        return false;
     }
+
 
     /** 지금 들고 있는 키의 수. 상한이 실제로 도는지 보려면 이것이 필요하다. */
     public int size() {

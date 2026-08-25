@@ -937,24 +937,26 @@ class AdmissionGatewayFilterTest {
     }
 
     /**
-     * 반대로 <b>줄이 보이면 그 자리에서 푼다.</b> 그때부터는 사다리 8번이
-     * 런타임으로 잡으므로 래치가 할 일이 없다.
+     * <b>줄이 보여도 표식은 찍는다.</b> 그 스냅샷은 방금 넣은 이 사람을 아직
+     * 모른다 — 다음 판에 줄이 다 빠져 한산으로 뒤집히면 그 사람이 통째로
+     * 추월당한다. 계획서가 "줄이 보이면 바로 풀어도 된다" 고 적은 것은 그 한
+     * 명을 안 센 것이다.
      */
     @Test
-    @DisplayName("줄이_보이면_래치를_푼다")
-    void 줄이_보이면_래치를_푼다() {
+    @DisplayName("줄이_보여도_표식은_찍는다")
+    void 줄이_보여도_표식은_찍는다() {
         MutableClock 시계 = MutableClock.at(지금);
         AdmissionGatewayFilter f = AdmissionGatewayFilter.of(
                 holder, AdmissionDecider.of(limiter, IDLE_RATIO),
                 시계, meters, () -> 0.5, 줄, tokens, limiter, entryTokens);
+        // 스냅샷이 이미 줄을 보고 있는 상태에서 한 명 더 넣는다.
         스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
         태운다(f, COUPON);
 
-        // 스냅샷이 줄을 따라잡았다. 그 판정 한 번으로 래치가 풀린다.
-        태운다(f, COUPON);
+        // 배분이 줄을 비웠다. 방금 넣은 사람은 이 스냅샷에 없다.
         스냅샷을_심는다(CouponStates.idle(1_000));
 
-        assertThat(태운다(f, COUPON)).isEqualTo(AdmissionDecision.PASS_UNDER_CAP);
+        assertThat(태운다(f, COUPON)).isEqualTo(AdmissionDecision.ENQUEUE_BACKLOG);
     }
 
     /**

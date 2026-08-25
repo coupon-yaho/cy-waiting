@@ -130,6 +130,9 @@ public final class CapacityCollector {
 
         long total = 0;
         int fresh = 0;
+        // **램프가 만든 0 과 보고된 0 은 다르다.** 앞엣것은 우리가 만든 값이고
+        // 뒤엣것은 뒷단의 백프레셔다. 안 가르면 복귀 첫 판이 하한보다 낮아진다.
+        boolean anyPositive = false;
         for (CapacityReport report : latest.values()) {
             if (!isFresh(report, now)) {
                 continue;
@@ -140,6 +143,7 @@ public final class CapacityCollector {
                 continue;
             }
             fresh++;
+            anyPositive |= report.credits() > 0;
             Seen was = seen.get(report.instanceId());
             seen.put(report.instanceId(), new Seen(was == null ? now : was.first(), now));
             // 인스턴스가 많고 각자 상한에 가까우면 합이 넘친다. 넘치면 음수가
@@ -153,8 +157,10 @@ public final class CapacityCollector {
         // 백프레셔다. 거기에 하한을 얹으면 명시적 신호를 무시하고 계속 민다.
         // **하한은 살아 있는 분모에 맞춘다.** 설정값으로만 재면 노드가 그보다
         // 늘었을 때 노드당 몫이 다시 0 이 된다 — 하한을 둔 이유가 사라진다.
-        long credit = fresh == 0 ? Math.max(floor, (long) Math.max(1, nodes) * IDLE_DIVISOR)
-                : total;
+        long minimum = Math.max(floor, (long) Math.max(1, nodes) * IDLE_DIVISOR);
+        // 보고가 없거나, 있어도 램프가 전부 0 으로 접었으면 하한을 쓴다. 뒷단이
+        // 스스로 0 이라고 말한 경우만 그 값을 존중한다.
+        long credit = fresh == 0 || (total == 0 && anyPositive) ? minimum : total;
         lastKnown.set(credit);
         return credit;
     }

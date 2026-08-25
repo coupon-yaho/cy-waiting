@@ -82,9 +82,9 @@ class CapacityCollectorTest {
 
         long first = collector.collect(List.of(report("new", 600, NOW)), NOW, 1);
 
-        // 방금 처음 봤으므로 경과 0 이다. 콜드 인스턴스는 아직 못 받는다 —
-        // 하한을 얹지 않는다. 하한은 "아무도 안 보고했을 때" 만이다.
-        assertThat(first).isZero();
+        // 방금 처음 봤으므로 경과 0 이라 그 인스턴스 몫은 0 이다. 다만 합이 0 이
+        // 된 이유가 램프라면 하한을 쓴다 — 우리가 만든 0 이지 뒷단이 말한 0 이 아니다.
+        assertThat(first).isEqualTo(FLOOR);
     }
 
     @Test
@@ -113,9 +113,11 @@ class CapacityCollectorTest {
         long gone = warmed + RAMP_UP.toSeconds() + 1;
         collector.collect(List.of(), gone, 1);
 
-        // 기록이 지워진 뒤라 처음 보는 것과 같다. 램프가 다시 걸려야 한다.
+        // 기록이 지워진 뒤라 처음 보는 것과 같다. 램프가 다시 걸린다 — 다만 합이
+        // 0 이 된 이유가 램프라서 발행값은 하한이다.
         long back = gone + 1;
-        assertThat(collector.collect(List.of(report("pod-0", 200, back)), back, 1)).isZero();
+        assertThat(collector.collect(List.of(report("pod-0", 200, back)), back, 1))
+                .isEqualTo(FLOOR);
     }
 
     @Test
@@ -389,7 +391,7 @@ class CapacityCollectorTest {
                 List.of(report("seed", 0, NOW), report("cold", 500, NOW)), NOW, 2);
 
         // 램프 때문에 합이 0 이다. 그래도 하한 아래로는 안 간다.
-        assertThat(credit).isEqualTo(2L * CapacityCollector.IDLE_DIVISOR);
+        assertThat(credit).isEqualTo(FLOOR);
     }
 
     /**

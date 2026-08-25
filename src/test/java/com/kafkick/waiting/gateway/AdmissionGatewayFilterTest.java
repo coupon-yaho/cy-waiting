@@ -185,8 +185,6 @@ class AdmissionGatewayFilterTest {
         // 토큰이 없으면 줄과 무관하게 판정되고, 기다린 사람과 안 기다린 사람이 같아진다.
         스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
 
-        MockServerWebExchange exchange = 요청(COUPON);
-        exchange.getRequest().mutate();
         MockServerWebExchange 토큰을_든_요청 = MockServerWebExchange.from(
                 MockServerHttpRequest.method(HttpMethod.POST,
                                 "/api/v1/coupons/" + COUPON + "/issue")
@@ -202,7 +200,8 @@ class AdmissionGatewayFilterTest {
         assertThat(토큰을_든_요청.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
                 .isEqualTo(AdmissionDecision.PASS_TOKEN);
         assertThat(뒷단에_닿음).hasValue(true);
-        assertThat(exchange.getResponse().getStatusCode()).isNull();
+        // 통과는 게이트웨이가 응답을 안 쓴다. 쓰면 뒷단 응답을 덮는다.
+        assertThat(토큰을_든_요청.getResponse().getStatusCode()).isNull();
     }
 
     @Test

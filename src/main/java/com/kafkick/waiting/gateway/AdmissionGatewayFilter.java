@@ -1,5 +1,6 @@
 package com.kafkick.waiting.gateway;
 
+import com.kafkick.waiting.adapter.redis.QueueRedisPort;
 import com.kafkick.waiting.control.SnapshotHolder;
 import com.kafkick.waiting.domain.admission.AdmissionDecider;
 import com.kafkick.waiting.domain.admission.AdmissionDecision;
@@ -231,9 +232,19 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         }
         // **판정에 쓴 상태를 그대로 쓴다.** 여기서 다시 읽으면 그 사이 틱이
         // 지나 판정과 답이 어긋난다.
-        // **상한을 그대로 넘긴다.** 0 은 "배수할 수 없으니 한 명도 안 받는다" 는
-        // 뜻이고 스크립트도 같게 읽는다 — 상한 없음은 따로 정한 값이다.
+        // **배수 속도를 모르는 것과 자리가 없는 것은 다르다.**
+        //
+        // 한산하던 쿠폰에 사람이 몰리기 시작하면 그 순간 credit 은 0 이다 —
+        // 배분은 줄이 있어야 나가고 줄은 여기서 만들어진다. 그때 상한을 0 으로
+        // 넘기면 줄이 한 번도 안 생기고 초과분이 전부 429 를 받는다. 쿠폰은
+        // 영영 한산한 상태에 갇히고, 계획서가 약속한 자기 교정이 안 일어난다.
+        //
+        // 그 구간은 상한 없이 받는다. 다음 틱이면 스냅샷이 줄을 보고, 그때부터
+        // 판정의 5번(줄이 꽉 찼다)이 진짜 상한을 진다.
         long capacity = state.queueCapacity(MAX_ETA_SEC);
+        if (capacity <= 0) {
+            capacity = QueueRedisPort.NO_LIMIT;
+        }
         return queue.enqueue(couponId, memberId, capacity, clock.instant())
                 // **여기까지만 열어 준다.** 뒤에 붙이면 줄에 선 사람이 응답을
                 // 못 써서 뒷단까지 가고, 자리를 쥔 채로 재고까지 먹는다.

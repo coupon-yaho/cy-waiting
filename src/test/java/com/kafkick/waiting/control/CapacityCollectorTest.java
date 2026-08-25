@@ -35,8 +35,8 @@ class CapacityCollectorTest {
     /**
      * 램프를 끝내 둔다 — 램프가 아니라 다른 것을 재는 시험들이 쓴다.
      *
-     * <p><b>보고를 계속 심는다.</b> 한 번만 심으면 신선도 창을 넘겨 기록이
-     * 지워진다 — 운영에서 보고는 1초 주기다.
+     * <p><b>보고를 계속 심는다.</b> 램프가 걸리려면 그 창 동안 관측이 이어져야
+     * 한다 — 운영에서 보고는 1초 주기다.
      */
     private static long warm(CapacityCollector collector, String id, long credits) {
         for (long t = NOW; t <= NOW + RAMP_UP.toSeconds(); t += FRESHNESS.toSeconds()) {
@@ -82,9 +82,9 @@ class CapacityCollectorTest {
 
         long first = collector.collect(List.of(report("new", 600, NOW)), NOW, 1);
 
-        // 방금 처음 봤으므로 경과 0 이다. 콜드 인스턴스는 아직 못 받는다 —
-        // 하한을 얹지 않는다. 하한은 "아무도 안 보고했을 때" 만이다.
-        assertThat(first).isZero();
+        // 방금 처음 봤으므로 경과 0 이라 그 인스턴스 몫은 0 이다. 다만 합이 0 이
+        // 된 이유가 램프라면 하한을 쓴다 — 우리가 만든 0 이지 뒷단이 말한 0 이 아니다.
+        assertThat(first).isEqualTo(FLOOR);
     }
 
     @Test
@@ -108,14 +108,16 @@ class CapacityCollectorTest {
         assertThat(collector.collect(List.of(report("pod-0", 200, warmed)), warmed, 1))
                 .isEqualTo(200);
 
-        // 신선도 창을 넘겨 사라진다. 한 틱 빠진 것으로는 안 지운다 —
-        // 그러면 정상 인스턴스가 틱마다 램프를 다시 탄다.
-        long gone = warmed + FRESHNESS.toSeconds() + 1;
+        // **램프 창을 넘겨 안 보인다.** 몇 초 빠진 것으로는 안 지운다 — 그건 관측
+        // 실패지 사라진 것이 아니고, 지우면 정상 인스턴스가 램프를 다시 탄다.
+        long gone = warmed + RAMP_UP.toSeconds() + 1;
         collector.collect(List.of(), gone, 1);
 
-        // 같은 이름으로 콜드 복귀했다. 램프가 다시 걸려야 한다.
+        // 기록이 지워진 뒤라 처음 보는 것과 같다. 램프가 다시 걸린다 — 다만 합이
+        // 0 이 된 이유가 램프라서 발행값은 하한이다.
         long back = gone + 1;
-        assertThat(collector.collect(List.of(report("pod-0", 200, back)), back, 1)).isZero();
+        assertThat(collector.collect(List.of(report("pod-0", 200, back)), back, 1))
+                .isEqualTo(FLOOR);
     }
 
     @Test
@@ -348,5 +350,75 @@ class CapacityCollectorTest {
         long credit = collector.collect(List.of(), NOW, 10);
 
         assertThat(credit).isEqualTo(10L * CapacityCollector.IDLE_DIVISOR);
+    }
+
+    /**
+     * <b>못 본 것과 새로 뜬 것은 다르다.</b> 보고가 몇 초 끊겼다고 램프 기록을
+     * 지우면, 돌아오는 첫 판에 전원이 램프를 다시 타 크레딧이 하한보다도 낮아진다.
+     * 정보가 없을 때보다 정보가 돌아온 순간이 더 나빠진다.
+     */
+    @Test
+    @DisplayName("잠깐_못_봐도_램프를_다시_안_탄다")
+    void 잠깐_못_봐도_램프를_다시_안_탄다() {
+        CapacityCollector collector = collector();
+        long warmed = warm(collector, "a", 100);
+
+        // **틱은 계속 돈다.** 보고만 안 들어온다 — 뒷단 GC 나 뒷단↔레디스 순단이다.
+        long 복귀 = warmed + FRESHNESS.toSeconds() * 4;
+        for (long t = warmed + 1; t < 복귀; t++) {
+            collector.collect(List.of(), t, 1);
+        }
+
+        long credit = collector.collect(List.of(report("a", 100, 복귀)), 복귀, 1);
+
+        assertThat(credit).isEqualTo(100);
+    }
+
+    /**
+     * <b>램프가 만든 0 은 관측이 아니다.</b> 뒷단이 정직하게 "여유 0" 을 보고한
+     * 것과, 게이트웨이 자신의 램프 계수가 0 을 만든 것은 다르다. 뒤엣것에 하한을
+     * 안 걸면 복귀 첫 판이 하한보다 낮아진다 — 창을 아무리 늘려도 그 너머에서
+     * 같은 일이 난다.
+     */
+    @Test
+    @DisplayName("램프가_만든_0_에는_하한을_쓴다")
+    void 램프가_만든_0_에는_하한을_쓴다() {
+        CapacityCollector collector = collector();
+        // 첫 판을 웜으로 안 보게 한 뒤, 처음 보는 인스턴스가 신선하게 보고한다.
+        collector.collect(List.of(report("seed", 0, NOW)), NOW, 1);
+
+        long credit = collector.collect(
+                List.of(report("seed", 0, NOW), report("cold", 500, NOW)), NOW, 2);
+
+        // 램프 때문에 합이 0 이다. 그래도 하한 아래로는 안 간다.
+        assertThat(credit).isEqualTo(FLOOR);
+    }
+
+    /**
+     * 뒷단이 신선하게 "여유 0" 을 보고한 것은 정확한 백프레셔다. 거기에 하한을
+     * 얹으면 명시적 신호를 무시하고 계속 민다.
+     */
+    @Test
+    @DisplayName("보고한_0_에는_하한을_안_쓴다")
+    void 보고한_0_에는_하한을_안_쓴다() {
+        CapacityCollector collector = collector();
+
+        long credit = collector.collect(List.of(report("a", 0, NOW)), NOW, 2);
+
+        assertThat(credit).isZero();
+    }
+
+    /** 창과 정확히 같은 공백은 아직 산다. 경계를 한 칸 옮겨도 안 죽으면 안 잰 것이다. */
+    @Test
+    @DisplayName("창과_같은_공백은_아직_산다")
+    void 창과_같은_공백은_아직_산다() {
+        CapacityCollector collector = collector();
+        long warmed = warm(collector, "a", 100);
+
+        long edge = warmed + RAMP_UP.toSeconds();
+        collector.collect(List.of(), edge, 1);
+        long back = edge + 1;
+
+        assertThat(collector.collect(List.of(report("a", 100, back)), back, 1)).isEqualTo(100);
     }
 }

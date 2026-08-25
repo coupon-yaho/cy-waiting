@@ -26,9 +26,9 @@ public final class CapacityCollector {
     /**
      * 인스턴스를 처음 본 시각.
      *
-     * <p><b>신선도 창을 넘겨 사라진 인스턴스는 지운다.</b> 안 지우면 이름이 고정된
-     * 파드가 재기동할 때 옛 기록이 남아 <b>램프가 아예 안 걸린다</b> — 콜드 복귀가
-     * 램프를 거는 유일한 이유인데 거기서만 안 걸린다. 맵이 자라는 것도 같은 뿌리다.
+     * <p><b>램프 창을 넘겨 안 보이면 지운다.</b> 재기동은 새 식별자로 오므로(R-3)
+     * 옛 기록이 램프를 건너뛰게 하지 않는다 — 지우는 이유는 맵이 배포 이력만큼
+     * 쌓이는 것뿐이다.
      */
     private final Map<String, Seen> seen = new LinkedHashMap<>();
 
@@ -130,6 +130,9 @@ public final class CapacityCollector {
 
         long total = 0;
         int fresh = 0;
+        // **램프가 만든 0 과 보고된 0 은 다르다.** 앞엣것은 우리가 만든 값이고
+        // 뒤엣것은 뒷단의 백프레셔다. 안 가르면 복귀 첫 판이 하한보다 낮아진다.
+        boolean anyPositive = false;
         for (CapacityReport report : latest.values()) {
             if (!isFresh(report, now)) {
                 continue;
@@ -140,6 +143,7 @@ public final class CapacityCollector {
                 continue;
             }
             fresh++;
+            anyPositive |= report.credits() > 0;
             Seen was = seen.get(report.instanceId());
             seen.put(report.instanceId(), new Seen(was == null ? now : was.first(), now));
             // 인스턴스가 많고 각자 상한에 가까우면 합이 넘친다. 넘치면 음수가
@@ -153,8 +157,10 @@ public final class CapacityCollector {
         // 백프레셔다. 거기에 하한을 얹으면 명시적 신호를 무시하고 계속 민다.
         // **하한은 살아 있는 분모에 맞춘다.** 설정값으로만 재면 노드가 그보다
         // 늘었을 때 노드당 몫이 다시 0 이 된다 — 하한을 둔 이유가 사라진다.
-        long credit = fresh == 0 ? Math.max(floor, (long) Math.max(1, nodes) * IDLE_DIVISOR)
-                : total;
+        long minimum = Math.max(floor, (long) Math.max(1, nodes) * IDLE_DIVISOR);
+        // 보고가 없거나, 있어도 램프가 전부 0 으로 접었으면 하한을 쓴다. 뒷단이
+        // 스스로 0 이라고 말한 경우만 그 값을 존중한다.
+        long credit = fresh == 0 || (total == 0 && anyPositive) ? minimum : total;
         lastKnown.set(credit);
         return credit;
     }
@@ -172,11 +178,14 @@ public final class CapacityCollector {
     }
 
     /**
-     * <b>시간으로 지운다.</b> 이번 판에 없다고 지우면 한 틱만 안 보여도 워밍업이
-     * 날아가고, 그러면 정상 인스턴스가 틱마다 램프를 다시 탄다.
+     * <b>맵이 자라는 것만 막는다.</b> 재기동은 새 식별자로 오므로(R-3) 옛 기록이
+     * 램프를 건너뛰게 하지 않는다 — 지우는 이유는 배포 이력만큼 쌓이는 것뿐이다.
+     *
+     * <p>그래서 램프 창만큼 산다. 그보다 짧게 잡으면 몇 초 못 본 인스턴스가 램프를
+     * 다시 타고, 돌아오는 첫 판에 크레딧이 하한보다도 낮아진다.
      */
     private void evictStale(long now) {
-        seen.values().removeIf(s -> now - s.last() > freshness.toSeconds());
+        seen.values().removeIf(s -> now - s.last() > rampUp.toSeconds());
     }
 
     private long usable(CapacityReport report, long now) {

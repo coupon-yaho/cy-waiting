@@ -108,9 +108,9 @@ class CapacityCollectorTest {
         assertThat(collector.collect(List.of(report("pod-0", 200, warmed)), warmed, 1))
                 .isEqualTo(200);
 
-        // 신선도 창을 넘겨 사라진다. 한 틱 빠진 것으로는 안 지운다 —
-        // 그러면 정상 인스턴스가 틱마다 램프를 다시 탄다.
-        long gone = warmed + FRESHNESS.toSeconds() + 1;
+        // **재기동으로 볼 만큼 오래 안 보인다.** 몇 초 빠진 것으로는 안 지운다 —
+        // 그건 관측 실패지 재기동이 아니고, 지우면 정상 인스턴스가 램프를 다시 탄다.
+        long gone = warmed + FRESHNESS.toSeconds() * 3 + 1;
         collector.collect(List.of(), gone, 1);
 
         // 같은 이름으로 콜드 복귀했다. 램프가 다시 걸려야 한다.

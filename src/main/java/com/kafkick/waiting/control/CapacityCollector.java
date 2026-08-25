@@ -45,6 +45,14 @@ public final class CapacityCollector {
      */
     public static final int IDLE_DIVISOR = 5;
 
+    /**
+     * 이 배수만큼 신선도를 넘겨 안 보이면 재기동으로 본다.
+     *
+     * <p>짧은 공백(GC·순단)은 관측 실패지 재기동이 아니다. 그 둘을 시각 없이
+     * 가르는 유일한 단서가 안 보인 길이다.
+     */
+    private static final int RESTART_GUESS = 3;
+
     private final AtomicLong lastKnown;
 
     private CapacityCollector(Duration rampUp, Duration freshness, long floor, long perInstanceCap) {
@@ -172,11 +180,15 @@ public final class CapacityCollector {
     }
 
     /**
-     * <b>시간으로 지운다.</b> 이번 판에 없다고 지우면 한 틱만 안 보여도 워밍업이
-     * 날아가고, 그러면 정상 인스턴스가 틱마다 램프를 다시 탄다.
+     * <b>못 본 것과 새로 뜬 것을 가른다.</b> 신선도로 지우면 몇 초만 못 봐도 기록이
+     * 날아가고, 돌아오는 첫 판에 전원이 램프를 다시 탄다. 반대로 영영 안 지우면
+     * 재기동한 인스턴스가 제 몫을 그대로 받아 뜨자마자 무너진다.
+     *
+     * <p>기준은 재기동에 걸리는 최소 시간이다 (보고에 기동 시각이 실리면 이 추정을
+     * 버린다 — A-13).
      */
     private void evictStale(long now) {
-        seen.values().removeIf(s -> now - s.last() > freshness.toSeconds());
+        seen.values().removeIf(s -> now - s.last() > freshness.toSeconds() * RESTART_GUESS);
     }
 
     private long usable(CapacityReport report, long now) {

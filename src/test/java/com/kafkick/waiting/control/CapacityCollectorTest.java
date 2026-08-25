@@ -517,6 +517,41 @@ class CapacityCollectorTest {
         assertThat(credit).isEqualTo(3);
     }
 
+    /**
+     * <b>뒷단이 조금 앞선 것은 죽은 것이 아니다.</b> 나이를 두 벽시계의 차로
+     * 재므로 뒷단 시계가 1초만 앞서도 나이가 음수가 되고, 지금은 그것을 낡음으로
+     * 봐서 <b>전 인스턴스가 한꺼번에 사라진다.</b> 뒷단은 같은 NTP 를 보므로
+     * 어긋나면 다 같이 어긋난다 — 그 순간 크레딧이 하한으로 떨어진다.
+     */
+    @Test
+    @DisplayName("조금_앞선_보고도_신선하다")
+    void 조금_앞선_보고도_신선하다() {
+        CapacityCollector collector = collector();
+        long warmed = warm(collector, "a", 100);
+
+        // 뒷단 시계가 1초 앞선다. 관측 자체는 방금 것이다.
+        long credit = collector.collect(List.of(report("a", 100, warmed + 1)), warmed, 1);
+
+        assertThat(credit).isEqualTo(100);
+    }
+
+    /**
+     * 그렇다고 아무리 앞서도 받지는 않는다. 창보다 멀리 앞선 값은 시계가 어긋난
+     * 것이 아니라 보고가 깨진 것이다 — 받으면 죽은 인스턴스가 영영 신선해진다.
+     */
+    @Test
+    @DisplayName("창보다_멀리_앞선_보고는_안_받는다")
+    void 창보다_멀리_앞선_보고는_안_받는다() {
+        CapacityCollector collector = collector();
+        long warmed = warm(collector, "a", 100);
+
+        long credit = collector.collect(
+                List.of(report("a", 100, warmed + FRESHNESS.toSeconds() + 1)), warmed, 1);
+
+        // 신선한 보고가 없으니 하한이다.
+        assertThat(credit).isEqualTo(FLOOR);
+    }
+
     /** 창과 정확히 같은 공백은 아직 산다. 경계를 한 칸 옮겨도 안 죽으면 안 잰 것이다. */
     @Test
     @DisplayName("창과_같은_공백은_아직_산다")

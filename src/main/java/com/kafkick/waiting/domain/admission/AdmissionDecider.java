@@ -79,7 +79,19 @@ public class AdmissionDecider {
         // 실제로 생긴다.
         boolean hasQueue = s.waiting() > 0 || req.justEnqueued();
 
-        // 3 — 낡았지만 줄이 비었다. 밀어낼 사람이 없으니 상한 안에서 통과.
+        // 3 — 운영자가 무조건 세우기로 했다. **낡음보다 앞이다.**
+        //
+        // 뒤에 두면 낡은 구간에서 이 쿠폰이 통째로 우회하고, 아무도 큐에 안
+        // 들어가니 hasQueue 가 영영 거짓이라 그 상태가 스스로 유지된다. 운영자가
+        // 이 값을 거는 순간이 바로 리더가 흔들리는 오픈 직후다.
+        //
+        // 가용성을 안 버린다. 큐가 안 닿으면 등록이 실패하고, 그때는 부르는
+        // 쪽이 상한 있는 fail-open 으로 받는다.
+        if (s.mode() == QueueMode.ALWAYS) {
+            return AdmissionDecision.ENQUEUE_ALWAYS;
+        }
+
+        // 4 — 낡았지만 줄이 비었다. 밀어낼 사람이 없으니 상한 안에서 통과.
         //
         // **꺼진 쿠폰보다 앞이다.** 낡은 구간은 상태를 모르는 구간이고 그래서
         // 상한이 있다. 뒤에 두면 꺼진 쿠폰만 무제한으로 뒷단에 꽂혀 그 상한이
@@ -90,7 +102,7 @@ public class AdmissionDecider {
                     : AdmissionDecision.REJECT_OVERLOAD;
         }
 
-        // 4 — 운영자가 껐다. **다만 줄이 비었을 때만이다.**
+        // 5 — 운영자가 껐다. **다만 줄이 비었을 때만이다.**
         //
         // 줄이 남아 있는데 우회시키면 신규 유입이 그 줄을 통째로 추월하고
         // 재고까지 먼저 먹는다 — 6번이 낡은 스냅샷에서 막은 것을 여기서
@@ -102,7 +114,7 @@ public class AdmissionDecider {
             return AdmissionDecision.PASS_BYPASS;
         }
 
-        // 5 — 줄 자체가 꽉 찼다. 큐로 보내는 모든 줄보다 앞에 있어야 한다.
+        // 6 — 줄 자체가 꽉 찼다. 큐로 보내는 모든 줄보다 앞에 있어야 한다.
         //     **줄이 있을 때만 의미가 있다.** 한산한 쿠폰은 credit 이 0 이라
         //     용량도 0 이고, 조건을 안 걸면 waiting(0) >= 0 이 참이 되어
         //     R1 경로가 통째로 막힌다.
@@ -115,14 +127,9 @@ public class AdmissionDecider {
             return AdmissionDecision.REJECT_QUEUE_FULL;
         }
 
-        // 6 — 낡았는데 줄에 사람이 있다. 모른다는 것이 추월의 사유가 아니다 (F1).
+        // 7 — 낡았는데 줄에 사람이 있다. 모른다는 것이 추월의 사유가 아니다 (F1).
         if (req.dataStale()) {
             return AdmissionDecision.ENQUEUE_STALE;
-        }
-
-        // 7 — 운영자가 무조건 세우기로 했다.
-        if (s.mode() == QueueMode.ALWAYS) {
-            return AdmissionDecision.ENQUEUE_ALWAYS;
         }
 
         // 8 — 이미 붐빈다. 래치는 스냅샷이 따라잡기 전의 한 틱을 메운다.
@@ -147,7 +154,7 @@ public class AdmissionDecider {
     }
 
     /**
-     * <b>등록 경로가 쓰는</b> 줄 길이 상한. 사다리 5번은 이 함수를 안 쓴다 —
+     * <b>등록 경로가 쓰는</b> 줄 길이 상한. 사다리 6번은 이 함수를 안 쓴다 —
      * 폴백은 줄이 아직 없는 구간만의 것이라 둘이 다른 값을 본다 (AIJ-0073).
      */
     public static long queueCapacity(CouponState state, long maxEtaSec) {

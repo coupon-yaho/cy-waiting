@@ -172,13 +172,13 @@ tryAcquireAll(tier1, tier2):
 ```
  1. stock <= 0                        → REJECT_SOLD_OUT
  2. hasValidToken                     → tier2 통과 시 PASS_TOKEN, 초과 시 RETRY_TOKEN
- 3. dataStale && !hasQueue            → failOpen (상한 내 PASS, 초과 시 REJECT_OVERLOAD)
- 4. mode == OFF && !hasQueue          → PASS_BYPASS
- 5. waiting > 0 && waiting >= queueCapacity
+ 3. mode == ALWAYS                    → ENQUEUE_ALWAYS       ← 낡음보다 앞
+ 4. dataStale && !hasQueue            → failOpen (상한 내 PASS, 초과 시 REJECT_OVERLOAD)
+ 5. mode == OFF && !hasQueue          → PASS_BYPASS
+ 6. waiting > 0 && waiting >= queueCapacity
                                       → REJECT_QUEUE_FULL    ← 큐로 가는 경로보다 앞
- 6. dataStale && (waiting > 0 || justEnqueued)
+ 7. dataStale && (waiting > 0 || justEnqueued)
                                       → ENQUEUE_STALE        (F1)
- 7. mode == ALWAYS                    → ENQUEUE_ALWAYS
  8. runtime != IDLE || justEnqueued    → ENQUEUE_BACKLOG      (새치기 방지)
 ───────────── 여기부터 한산한 쿠폰 ─────────────
  9. tryAcquireAll(tier1, tier2)       → 부족한 쪽에 따라 ENQUEUE_RATE_COUPON /
@@ -189,17 +189,23 @@ tryAcquireAll(tier1, tier2):
 > **`hasQueue` 는 `waiting > 0 || justEnqueued` 다.** 한 번 정의하고 세 줄이
 > 같은 것을 쓴다 — 풀어 쓰면 한 줄만 고쳐지고 나머지가 갈라진다.
 
-> **3번이 4번보다 앞이다.** 낡은 구간은 상태를 모르는 구간이고 그래서 상한이
+> **3번이 4번보다 앞이다** (C-8). 뒤에 두면 `ALWAYS` 쿠폰이 낡은 구간에서
+> 통째로 우회하고, 아무도 큐에 안 들어가니 `hasQueue` 가 영영 거짓이라 그 상태가
+> 스스로 유지된다. 운영자가 이 값을 거는 순간이 바로 리더가 흔들리는 오픈
+> 직후다. 가용성을 버리는 것도 아니다 — 큐가 안 닿으면 등록이 실패하고 그때는
+> 부르는 쪽이 상한 있는 fail-open 으로 받는다.
+
+> **4번이 5번보다 앞이다.** 낡은 구간은 상태를 모르는 구간이고 그래서 상한이
 > 있다. 꺼진 쿠폰을 앞에 두면 그것만 무제한으로 뒷단에 꽂혀 상한이 있으나
 > 마나가 된다 — 실측으로 5,000건이 전부 나갔다.
 
-> **4번의 `!hasQueue` 가 불변식 4 다.** `mode` 는 사람이 고른 값이고 `waiting` 은
+> **5번의 `!hasQueue` 가 불변식 4 다.** `mode` 는 사람이 고른 값이고 `waiting` 은
 > 기계가 관측한 값이라 서로 독립이다. 줄이 남아 있는데 우회시키면 신규 유입이
 > 그 줄을 통째로 추월하고 재고까지 먼저 먹는다 — 6번이 낡은 스냅샷에서 막은
 > 것을 여기서 뚫는 셈이다. `OFF` 는 배분에 관여하지 않으므로 남은 줄은
 > 정상적으로 빠지고, 비는 순간 이 줄이 다시 산다.
 
-> **5번의 `waiting > 0` 가 R1 이다.** 한산한 쿠폰은 `credit` 이 0 이라 용량도
+> **6번의 `waiting > 0` 가 R1 이다.** 한산한 쿠폰은 `credit` 이 0 이라 용량도
 > 0 이고, 이 조건이 없으면 `0 >= 0` 이 참이 되어 전원이 `REJECT_QUEUE_FULL` 로
 > 간다 — 무대기 통과 경로가 통째로 막힌다.
 
@@ -420,9 +426,9 @@ CouponStates.unknown()
 #### T2.1.7 · 큐 파생값
 
 - **산출물** `queueDepthSec()`, `queueCapacity()`
-- **근거** 3.5절 5번 · Phase 7 3.3절
+- **근거** 3.5절 6번 · Phase 7 3.3절
 - **주의** 등록 경로의 상한은 여기서 끝나지 않는다. 이 값이 0 일 때의 폴백은
-  `AdmissionDecider.queueCapacity` 가 정한다 (3.5절 5번 각주)
+  `AdmissionDecider.queueCapacity` 가 정한다 (3.5절 6번 각주)
 
 1. **RED** `credit이_0이면_큐_깊이는_무한이다` — 나눗셈 예외 없음
 2. **GREEN** 방어 분기
@@ -545,7 +551,7 @@ CouponStates.unknown()
 #### T2.3.5 · 큐 상한
 
 - **산출물** `AdmissionDecider.java`
-- **근거** 3.5절 5번 (죽은 분기 방지)
+- **근거** 3.5절 6번 (죽은 분기 방지)
 - **선행** T2.1.7
 
 1. **RED** `큐가_상한에_닿으면_거절한다` → `REJECT_QUEUE_FULL`

@@ -550,7 +550,7 @@ class AdmissionGatewayFilterTest {
         assertThat(마지막_자리.getResponse().getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
         assertThat(넘긴_사람.getResponse().getStatusCode())
                 .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
-        // 사다리 5번이 끊은 429 와 구별한다 — 여기서는 등록까지 갔다가 걸려야 한다.
+        // 사다리 6번이 끊은 429 와 구별한다 — 여기서는 등록까지 갔다가 걸려야 한다.
         assertThat(줄.등록_횟수()).isEqualTo((int) CAP + 1);
         assertThat(뒷단에_닿음).hasValue(false);
     }
@@ -578,7 +578,7 @@ class AdmissionGatewayFilterTest {
         assertThat(마지막_자리.getResponse().getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
         assertThat(넘긴_사람.getResponse().getStatusCode())
                 .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
-        // 사다리 5번이 끊은 429 와 구별한다 — 여기서는 등록까지 갔다가 걸려야 한다.
+        // 사다리 6번이 끊은 429 와 구별한다 — 여기서는 등록까지 갔다가 걸려야 한다.
         assertThat(줄.등록_횟수()).isEqualTo((int) CAP + 1);
         assertThat(뒷단에_닿음).hasValue(false);
     }
@@ -841,7 +841,7 @@ class AdmissionGatewayFilterTest {
 
     /** 아무 문자열이나 흘려보내면 그것마다 큐 키가 하나씩 생긴다. */
     /**
-     * <b>모른다는 것이 무제한의 사유가 아니다.</b> 사다리 3번은 같은 무지에서
+     * <b>모른다는 것이 무제한의 사유가 아니다.</b> 사다리 4번은 같은 무지에서
      * 노드 몫 안에서만 여는데, 이 경로만 리미터를 아예 안 탔다. 낡음이 지속되면
      * 아무 문자열 쿠폰이나 초당 무한히 뒷단에 꽂힌다.
      */
@@ -961,7 +961,7 @@ class AdmissionGatewayFilterTest {
 
     /**
      * <b>거절도 줄이 있다는 관측이다.</b> 상한에 걸렸다는 것은 그 줄이 가득
-     * 찼다는 뜻인데, 그때 래치를 안 찍으면 만료 뒤 사다리 3번이 켜져 낡음
+     * 찼다는 뜻인데, 그때 래치를 안 찍으면 만료 뒤 사다리 4번이 켜져 낡음
      * 구간에서 fail-open 으로 뒤집힌다 — 방금 줄 선 사람들을 그 뒤 전원이
      * 추월한다 (불변식 4).
      */

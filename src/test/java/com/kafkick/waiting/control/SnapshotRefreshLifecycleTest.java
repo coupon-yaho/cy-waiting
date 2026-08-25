@@ -222,7 +222,8 @@ class SnapshotRefreshLifecycleTest {
     @Test
     @DisplayName("주기가_잘못되면_안_뜬다")
     void 주기가_잘못되면_안_뜬다() {
-        SnapshotRefresher refresher = SnapshotRefresher.of(holder, () -> Mono.just(Map.of()));
+        SnapshotRefresher refresher =
+                SnapshotRefresher.of(holder, () -> Mono.just(Map.of()), 시계값);
 
         assertThatThrownBy(() -> SnapshotRefreshLifecycle.of(refresher, shutdown, Duration.ZERO))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageStartingWith("interval");

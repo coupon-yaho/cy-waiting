@@ -155,8 +155,9 @@ class SweepTest extends RedisContainerSupport {
 
         sweep("10");
 
+        // 값에 종류를 싣는다. 조회가 쓰는 입장 표시와 같은 해시를 나눠 쓴다.
         assertThat(redis.opsForHash().get(GRACE, "m0").block(WAIT))
-                .isEqualTo(String.valueOf(NOW));
+                .isEqualTo("d:" + NOW);
     }
 
     @Test

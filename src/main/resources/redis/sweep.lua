@@ -11,6 +11,15 @@
 --
 -- 반환  {swept, expiredSignals, expiredGrace, nextCursor}
 --
+-- **이탈 기록 해시에는 writer 가 둘이다.** 여기는 이탈 시각을, queue_status 는
+-- 입장 표시를 같은 자리에 쓴다. 값에 종류를 실어 가른다 — 안 가르면 이쪽이
+-- 입장 표시를 숫자로 못 읽어 낡은 것으로 보고 다음 청소에서 지운다. 그러면
+-- 입장한 사람이 1초 뒤 폴링에서 종료를 받는다.
+--
+--   'd:<초>'  이탈 기록      'a:<초>'  입장 표시
+--
+-- 접두사가 없는 값은 종류가 생기기 전의 이탈 기록이다. 숫자로 읽는다.
+--
 -- **키를 문자열로 조립하지 않는다.** 사람마다 alive 키를 만들면 KEYS 에
 -- 선언되지 않은 키를 만지게 되고 클러스터가 거부한다 (RD-1).
 --
@@ -38,6 +47,19 @@ if budget == nil or budget < 1 or budget ~= math.floor(budget) then
     return redis.error_reply('정리 예산은 양의 정수여야 한다: ' .. tostring(ARGV[4]))
 end
 
+-- 종류를 뗀 시각. 못 읽으면 nil 이고, 부르는 쪽이 그것을 낡음으로 본다 —
+-- 형식이 깨진 값은 남겨 둘 근거가 없다.
+local function stampOf(value)
+    if type(value) ~= 'string' then
+        return nil
+    end
+    local kind = string.sub(value, 1, 2)
+    if kind == 'd:' or kind == 'a:' then
+        return tonumber(string.sub(value, 3))
+    end
+    return tonumber(value)
+end
+
 -- **커서도 쓰기 전에 본다.** 형식이 틀리면 HSCAN 이 오류를 내는데, 그때는
 -- 이미 앞의 쓰기가 끝나 있다. Lua 는 롤백하지 않는다.
 local cursor = ARGV[5]
@@ -63,7 +85,7 @@ if #front > 0 then
             gone[#gone + 1] = front[i]
             -- 자리는 안 보관한다. 재방문자로 식별만 한다 (D-11).
             records[#records + 1] = front[i]
-            records[#records + 1] = now
+            records[#records + 1] = 'd:' .. string.format('%.0f', now)
         end
     end
 
@@ -106,7 +128,7 @@ for i = 1, #fields, 2 do
     if #doomed >= budget then
         break
     end
-    local at = tonumber(fields[i + 1])
+    local at = stampOf(fields[i + 1])
     if at == nil or at < cutoff then
         doomed[#doomed + 1] = fields[i]
     end

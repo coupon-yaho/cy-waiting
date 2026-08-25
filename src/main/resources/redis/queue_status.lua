@@ -34,8 +34,10 @@ if not score then
     -- "매진" 을 보고, 다시 서면 그동안 온 사람들 뒤로 간다 (불변식 4).
     --
     -- 탭이 둘이거나 응답이 유실돼 재시도해도 같은 일이 난다.
+    -- **종류를 보고 읽는다.** 이 해시에는 청소도 쓴다. 값 전체를 비교하면
+    -- 시각이 붙은 순간 못 알아보고, 차례가 왔던 사람이 종료를 받는다.
     local grace = redis.call('HGET', KEYS[4], ARGV[1])
-    if grace == 'admitted' then
+    if type(grace) == 'string' and string.sub(grace, 1, 2) == 'a:' then
         return {'ADMITTED', 0, '-1'}
     end
     -- **0번째와 구분한다.** 없는 것과 맨 앞인 것은 다르다. 뭉치면 유실된
@@ -58,7 +60,9 @@ if admitted >= 0 and tonumber(score) <= admitted then
     -- 차례가 왔다. 큐에서 빼지 않으면 대기 인원이 계속 부풀고 ETA 가 틀어진다.
     redis.call('ZREM', KEYS[1], ARGV[1])
     redis.call('ZREM', KEYS[3], ARGV[1])
-    redis.call('HSET', KEYS[4], ARGV[1], 'admitted')
+    -- 청소가 보관 기간으로 걷을 수 있게 시각을 함께 남긴다. 안 남기면 이
+    -- 해시가 쿠폰당 발급 인원만큼 자라고 아무도 안 지운다.
+    redis.call('HSET', KEYS[4], ARGV[1], 'a:' .. string.format('%.0f', now))
     return {'ADMITTED', 0, score}
 end
 

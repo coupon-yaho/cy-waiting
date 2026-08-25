@@ -128,4 +128,37 @@ class OffModeQueueTest {
         assertThat(판정기().decide(방금등록))
                 .isEqualTo(AdmissionDecision.ENQUEUE_BACKLOG);
     }
+
+    /**
+     * <b>우회에 상한이 없는 것을 떠받치는 성질이다.</b> 신선한 스냅샷에 줄이 안
+     * 보이는 꺼진 쿠폰은 <b>어느 노드도 줄을 못 세운다</b> — 그래서 추월당할
+     * 사람 자체가 없다.
+     *
+     * <p>여기 걸리는 분기가 하나라도 생기면 우회가 그 사람을 넘는다 (C-9).
+     */
+    @Test
+    @DisplayName("꺼진_쿠폰은_줄이_비면_아무도_안_세운다")
+    void 꺼진_쿠폰은_줄이_비면_아무도_안_세운다() {
+        AdmissionDecider decider = 판정기();
+        CouponState 줄이빈꺼짐 = CouponStates.off(10_000);
+
+        // 토큰 없음·낡지 않음·방금 등록 안 함 — 우회가 서는 그 조합이다.
+        AdmissionDecision 판정 = decider.decide(신규유입(줄이빈꺼짐));
+
+        assertThat(판정).isEqualTo(AdmissionDecision.PASS_BYPASS);
+        assertThat(판정.name()).doesNotStartWith("ENQUEUE");
+    }
+
+    /**
+     * 방금 이 노드가 세웠으면 자기 줄을 자기가 넘지 않는다. 노드 로컬 래치가
+     * 덮는 것은 <b>이 노드가 세운 줄까지</b>다 (CY-582 의 남은 창).
+     */
+    @Test
+    @DisplayName("방금_세웠으면_우회하지_않는다")
+    void 방금_세웠으면_우회하지_않는다() {
+        AdmissionRequest 방금_세움 =
+                신규유입(CouponStates.off(10_000)).withJustEnqueued(true);
+
+        assertThat(판정기().decide(방금_세움)).isEqualTo(AdmissionDecision.ENQUEUE_BACKLOG);
+    }
 }

@@ -52,7 +52,15 @@ services:
           sleep 1
         done
     healthcheck:
-      test: ["CMD", "sh", "-c", "redis-cli -h redis SISMEMBER coupons:active c1 | grep -q 1"]
+      # **셋을 다 본다.** 하나만 보면 나머지가 아직 없는데 준비됐다고 말한다.
+      test:
+        - CMD
+        - sh
+        - -c
+        - |
+          [ "$$(redis-cli -h redis SISMEMBER coupons:active c1)" = 1 ] &&
+          [ "$$(redis-cli -h redis EXISTS 'stock:{c1}')" = 1 ] &&
+          [ "$$(redis-cli -h redis HEXISTS capacity:coupon-svc:v1 stub-1)" = 1 ]
       interval: 1s
       timeout: 2s
       retries: 20

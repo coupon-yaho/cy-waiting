@@ -142,7 +142,11 @@ class GraceRecordTest extends RedisContainerSupport {
     @Test
     @DisplayName("시각을_박은_옛_표시도_결국_걷힌다")
     void 시각을_박은_옛_표시도_결국_걷힌다() {
+        // **실제 입장 경로를 지난다.** 큐에 남은 채로 입장 표시만 얹으면 그건
+        // 도달 불가능한 상태다 — 시험이 그 상태에서만 참인 것을 증명하게 된다.
         등록한다("m1");
+        redis.opsForValue().set(ADMITTED, "9999999999999999").block(WAIT);
+        조회한다("m1", NOW);
         redis.opsForHash().put(GRACE, "m1", "admitted").block(WAIT);
         청소한다(NOW + 1);
 

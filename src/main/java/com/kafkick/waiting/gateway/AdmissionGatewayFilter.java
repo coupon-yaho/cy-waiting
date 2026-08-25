@@ -72,12 +72,6 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     /** 쿠폰 2,000개를 상정한 값. 넘으면 통째로 비운다 — 판정이 한 틱 헐거워질 뿐이다. */
     private static final int LATCH_MAX_KEYS = 10_000;
 
-    /**
-     * 래치가 걸려 있는 시간. 스냅샷이 따라잡는 시간보다 길어야 한다 — 배분 틱에
-     * 받아오기 주기를 더하고 여유를 뒀다. 짧으면 그 틈으로 추월이 난다.
-     */
-    private static final long LATCH_TTL_SEC = 3;
-
     private final SnapshotHolder holder;
     private final AdmissionDecider decider;
     private final Clock clock;
@@ -108,7 +102,10 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         this.entryTokens = Objects.requireNonNull(entryTokens, "entryTokens 는 필수다");
         this.limiter = Objects.requireNonNull(limiter, "limiter 는 필수다");
 
-        this.latch = EnqueueLatch.of(LATCH_MAX_KEYS, LATCH_TTL_SEC);
+        // **래치 수명을 여기서 정하지 않는다.** 스냅샷을 아직 믿는 한계보다 짧으면
+        // 그 차이가 그대로 추월 창이 된다. 두 값이 다른 클래스에 있으면 조용히
+        // 갈라지므로, 한계를 정한 쪽에서 끌어온다.
+        this.latch = EnqueueLatch.covering(LATCH_MAX_KEYS, holder.dataStaleAfter());
         this.error = ApiError.of(clock);
     }
 

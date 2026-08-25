@@ -94,7 +94,11 @@ public final class AllocationRound {
     }
 
     public Mono<Void> run() {
-        return seeded().then(demands.get().flatMap(this::allocate));
+        // **재료를 읽은 시각을 그때 찍는다.** 발행 시각으로 찍으면 스냅샷 나이가
+        // 판 지속 시간만큼 실제보다 어리게 나온다 — 그 차이만큼 낡음 판정이
+        // 늦어지고, 대기 인원을 믿는 구간이 길어져 추월 창이 된다.
+        return seeded().then(Mono.fromSupplier(clock::get)
+                .flatMap(readAt -> demands.get().flatMap(d -> allocate(d, readAt))));
     }
 
     /**
@@ -135,7 +139,7 @@ public final class AllocationRound {
         return true;
     }
 
-    private Mono<Void> allocate(List<CouponDemand> collected) {
+    private Mono<Void> allocate(List<CouponDemand> collected, Instant readAt) {
         CreditSmoother current = smoother.get();
         // **하한은 평활 뒤에 건다.** 하한은 관측이 아니라 정책이다. 평활을 거치면
         // 앞선 낮은 값에서 올라오는 데 열 틱이 넘고, 그동안 노드당 몫이 유휴 비율
@@ -175,7 +179,7 @@ public final class AllocationRound {
                         // 히스테리시스를 안 돌려서 실을 상태가 없다 (CY-324).
                         // 돌리기 시작하면 여기가 매 틱 이월을 지우는 자리가
                         // 되므로, 기본값에 숨기지 않고 눈에 보이게 둔다.
-                        : publish.apply(codec.encode(snapshot(collected, granted, credit),
+                        : publish.apply(codec.encode(snapshot(collected, granted, credit, readAt),
                                 current.snapshot(),
                                 QueueingHysteresis.Snapshot.empty()))));
     }
@@ -233,11 +237,11 @@ public final class AllocationRound {
     }
 
     private GatewaySnapshot snapshot(List<CouponDemand> collected, Map<String, Long> granted,
-            long credit) {
+            long credit, Instant readAt) {
         Map<String, CouponState> coupons = new LinkedHashMap<>();
         collected.forEach(demand ->
                 coupons.put(demand.couponId(), stateOf(demand, granted)));
         return new GatewaySnapshot(coupons,
-                new SnapshotMeta(credit, gatewayCount.getAsInt()), clock.get());
+                new SnapshotMeta(credit, gatewayCount.getAsInt()), readAt);
     }
 }

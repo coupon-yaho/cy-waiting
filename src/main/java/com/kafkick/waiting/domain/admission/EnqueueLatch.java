@@ -1,5 +1,6 @@
 package com.kafkick.waiting.domain.admission;
 
+import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -34,6 +35,23 @@ public final class EnqueueLatch {
      */
     public static EnqueueLatch of(int maxKeys, long ttlSec) {
         return new EnqueueLatch(maxKeys, ttlSec);
+    }
+
+    /**
+     * 주어진 기간을 <b>반드시 덮는</b> 래치.
+     *
+     * <p>초로 자른 시각을 재므로 실효 수명이 {@code (ttl-1, ttl]} 이다.
+     * 그래서 올림한 뒤 한 초를 더한다.
+     */
+    public static EnqueueLatch covering(int maxKeys, Duration atLeast) {
+        // 0 이하를 받으면 아래 셈이 수명 1 초짜리 래치를 만든다. 그건 래치가
+        // 없는 것과 같은데, 있는 것처럼 보여서 더 나쁘다.
+        if (atLeast == null || atLeast.isNegative() || atLeast.isZero()) {
+            throw new IllegalArgumentException("덮을 기간은 양수여야 한다: " + atLeast);
+        }
+        long seconds = atLeast.toSeconds();
+        long rounded = atLeast.minusSeconds(seconds).isZero() ? seconds : seconds + 1;
+        return new EnqueueLatch(maxKeys, rounded + 1);
     }
 
     /**

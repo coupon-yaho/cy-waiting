@@ -98,9 +98,11 @@ class LuaKeysDeclarationTest {
             assertThat(header)
                     .withFailMessage("%s 상단에 KEYS 계약이 없다", script.getFileName())
                     .contains("KEYS[1]");
+            // 인자가 없는 스크립트도 있다. 그때는 <b>없다는 것이 계약</b>이라,
+            // 안 적으면 호출부가 무엇을 안 넘겨도 되는지를 코드에서 추측한다.
             assertThat(header)
                     .withFailMessage("%s 상단에 ARGV 계약이 없다", script.getFileName())
-                    .contains("ARGV[1]");
+                    .containsAnyOf("ARGV[1]", "ARGV     없다");
         }
     }
 

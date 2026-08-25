@@ -786,6 +786,29 @@ class AdmissionGatewayFilterTest {
         assertThat(태운다(f, COUPON)).isEqualTo(AdmissionDecision.PASS_UNDER_CAP);
     }
 
+    /**
+     * <b>거절도 줄이 있다는 관측이다.</b> 상한에 걸렸다는 것은 그 줄이 가득
+     * 찼다는 뜻인데, 그때 래치를 안 찍으면 만료 뒤 사다리 3번이 켜져 낡음
+     * 구간에서 fail-open 으로 뒤집힌다 — 방금 줄 선 사람들을 그 뒤 전원이
+     * 추월한다 (불변식 4).
+     */
+    @Test
+    @DisplayName("줄이_찼어도_래치는_찍힌다")
+    void 줄이_찼어도_래치는_찍힌다() {
+        // 한산 통과 상한이 0 이어야 첫 사람부터 줄로 간다.
+        스냅샷을_심는다(CouponStates.idle(1_000_000), new SnapshotMeta(1, 1));
+        줄.가득_찼다();
+
+        MockServerWebExchange 거절된_사람 = 태운다(COUPON, "대기자0");
+        assertThat(거절된_사람.getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+
+        // 래치가 안 찍혔으면 이 노드가 줄을 세운 적 없는 것처럼 판정된다.
+        assertThat(태운다(COUPON, "대기자1")
+                .<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .isEqualTo(AdmissionDecision.ENQUEUE_BACKLOG);
+    }
+
     @Test
     @DisplayName("사유별로_센다")
     void 사유별로_센다() {

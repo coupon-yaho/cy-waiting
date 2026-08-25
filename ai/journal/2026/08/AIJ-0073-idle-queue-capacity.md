@@ -3,9 +3,9 @@ id: AIJ-0073
 date: 2026-08-25
 kind: fix
 phase: 5
-plan: []
+plan: [05-data-plane]
 jira: CY-508
-commits: [e2da6eb, a971efe, TBD]
+commits: [e2da6eb, a971efe, 68570bc, 378cad1, 1dc76b3, 41f6910, e1bb3b2, 42ec5ab]
 agent: claude-opus-5
 confidence: high
 promoted-to:
@@ -22,6 +22,12 @@ promoted-to:
 
 깨진 동작을 정상으로 못 박아 둔 시험을 뒤집고, 상한이 실제로 지켜지는지 재는
 시험을 더했다.
+
+상한 없음을 뜻하는 값은 `QueuePort.NO_LIMIT` 한 곳에만 둔다. 어댑터에 별칭을
+남겼더니 게이트웨이 픽스처가 자기 패키지의 상수를 어댑터를 거쳐 읽는 꼴이 됐다.
+사다리 5번이 이 폴백을 쓰지 않는 이유도 본문에 적었다. 줄이 이미 섰다는 것은
+쿠폰이 이미 활성이라는 뜻이라 배분이 살아나면 다음 틱에 크레딧을 받고, 갇히는
+고리가 없으니 뺄 수 없다고 아는 줄에 사람을 더 세울 이유가 없다.
 
 ## 왜 (근거)
 

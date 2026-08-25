@@ -35,8 +35,8 @@ class CapacityCollectorTest {
     /**
      * 램프를 끝내 둔다 — 램프가 아니라 다른 것을 재는 시험들이 쓴다.
      *
-     * <p><b>보고를 계속 심는다.</b> 한 번만 심으면 신선도 창을 넘겨 기록이
-     * 지워진다 — 운영에서 보고는 1초 주기다.
+     * <p><b>보고를 계속 심는다.</b> 램프가 걸리려면 그 창 동안 관측이 이어져야
+     * 한다 — 운영에서 보고는 1초 주기다.
      */
     private static long warm(CapacityCollector collector, String id, long credits) {
         for (long t = NOW; t <= NOW + RAMP_UP.toSeconds(); t += FRESHNESS.toSeconds()) {
@@ -108,12 +108,12 @@ class CapacityCollectorTest {
         assertThat(collector.collect(List.of(report("pod-0", 200, warmed)), warmed, 1))
                 .isEqualTo(200);
 
-        // **재기동으로 볼 만큼 오래 안 보인다.** 몇 초 빠진 것으로는 안 지운다 —
-        // 그건 관측 실패지 재기동이 아니고, 지우면 정상 인스턴스가 램프를 다시 탄다.
-        long gone = warmed + FRESHNESS.toSeconds() * 3 + 1;
+        // **램프 창을 넘겨 안 보인다.** 몇 초 빠진 것으로는 안 지운다 — 그건 관측
+        // 실패지 사라진 것이 아니고, 지우면 정상 인스턴스가 램프를 다시 탄다.
+        long gone = warmed + RAMP_UP.toSeconds() + 1;
         collector.collect(List.of(), gone, 1);
 
-        // 같은 이름으로 콜드 복귀했다. 램프가 다시 걸려야 한다.
+        // 기록이 지워진 뒤라 처음 보는 것과 같다. 램프가 다시 걸려야 한다.
         long back = gone + 1;
         assertThat(collector.collect(List.of(report("pod-0", 200, back)), back, 1)).isZero();
     }
@@ -362,7 +362,7 @@ class CapacityCollectorTest {
         long warmed = warm(collector, "a", 100);
 
         // **틱은 계속 돈다.** 보고만 안 들어온다 — 뒷단 GC 나 뒷단↔레디스 순단이다.
-        long 복귀 = warmed + FRESHNESS.toSeconds() * 3;
+        long 복귀 = warmed + FRESHNESS.toSeconds() * 4;
         for (long t = warmed + 1; t < 복귀; t++) {
             collector.collect(List.of(), t, 1);
         }

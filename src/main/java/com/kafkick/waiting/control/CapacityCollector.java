@@ -26,9 +26,9 @@ public final class CapacityCollector {
     /**
      * 인스턴스를 처음 본 시각.
      *
-     * <p><b>신선도 창을 넘겨 사라진 인스턴스는 지운다.</b> 안 지우면 이름이 고정된
-     * 파드가 재기동할 때 옛 기록이 남아 <b>램프가 아예 안 걸린다</b> — 콜드 복귀가
-     * 램프를 거는 유일한 이유인데 거기서만 안 걸린다. 맵이 자라는 것도 같은 뿌리다.
+     * <p><b>램프 창을 넘겨 안 보이면 지운다.</b> 재기동은 새 식별자로 오므로(R-3)
+     * 옛 기록이 램프를 건너뛰게 하지 않는다 — 지우는 이유는 맵이 배포 이력만큼
+     * 쌓이는 것뿐이다.
      */
     private final Map<String, Seen> seen = new LinkedHashMap<>();
 
@@ -44,14 +44,6 @@ public final class CapacityCollector {
      * 다시 전면 차단이 되므로, 바꿀 때 두 곳을 같이 본다.
      */
     public static final int IDLE_DIVISOR = 5;
-
-    /**
-     * 이 배수만큼 신선도를 넘겨 안 보이면 재기동으로 본다.
-     *
-     * <p>짧은 공백(GC·순단)은 관측 실패지 재기동이 아니다. 그 둘을 시각 없이
-     * 가르는 유일한 단서가 안 보인 길이다.
-     */
-    private static final int RESTART_GUESS = 3;
 
     private final AtomicLong lastKnown;
 
@@ -180,15 +172,14 @@ public final class CapacityCollector {
     }
 
     /**
-     * <b>못 본 것과 새로 뜬 것을 가른다.</b> 신선도로 지우면 몇 초만 못 봐도 기록이
-     * 날아가고, 돌아오는 첫 판에 전원이 램프를 다시 탄다. 반대로 영영 안 지우면
-     * 재기동한 인스턴스가 제 몫을 그대로 받아 뜨자마자 무너진다.
+     * <b>맵이 자라는 것만 막는다.</b> 재기동은 새 식별자로 오므로(R-3) 옛 기록이
+     * 램프를 건너뛰게 하지 않는다 — 지우는 이유는 배포 이력만큼 쌓이는 것뿐이다.
      *
-     * <p>기준은 재기동에 걸리는 최소 시간이다 (보고에 기동 시각이 실리면 이 추정을
-     * 버린다 — A-13).
+     * <p>그래서 램프 창만큼 산다. 그보다 짧게 잡으면 몇 초 못 본 인스턴스가 램프를
+     * 다시 타고, 돌아오는 첫 판에 크레딧이 하한보다도 낮아진다.
      */
     private void evictStale(long now) {
-        seen.values().removeIf(s -> now - s.last() > freshness.toSeconds() * RESTART_GUESS);
+        seen.values().removeIf(s -> now - s.last() > rampUp.toSeconds());
     }
 
     private long usable(CapacityReport report, long now) {

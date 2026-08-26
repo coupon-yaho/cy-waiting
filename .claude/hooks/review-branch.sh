@@ -372,7 +372,8 @@ head2 "CI 규범 검사 — 같은 스크립트"
 for check in \
     "문서 링크:.github/scripts/doc-links.sh" \
     "작업 로그:.github/scripts/journal-index.sh --check" \
-    "워크플로 셸:.github/scripts/workflow-shell.sh"
+    "워크플로 셸:.github/scripts/workflow-shell.sh" \
+    "액션 핀:.github/scripts/action-pins.sh"
 do
     name="${check%%:*}"
     cmd="${check#*:}"

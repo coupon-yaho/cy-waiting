@@ -12,6 +12,16 @@ spring:
         # 뒷단 요청 타임아웃은 6.2 에서 멱등 키와 함께 정한다 (CY-614).
         disable-time-limiter: true
 
+  lifecycle:
+    # 드레인 상한. **기본값과 같지만 적어 둔다** — 종료 예산을 계산하려면 이
+    # 값이 보여야 하고, 기본값에 기대면 프레임워크가 바꿀 때 조용히 어긋난다.
+    #
+    # 종료 예산 = lb-removal-wait(6s) + 이 값(30s) = 36s.
+    # **오케스트레이터의 유예(terminationGracePeriodSeconds)가 이보다 커야 한다.**
+    # 작으면 드레인 도중에 강제 종료되어 진행 중인 요청이 끊긴다 — 기본값 30s
+    # 그대로 두면 그 일이 매 배포마다 난다.
+    timeout-per-shutdown-phase: 30s
+
   data:
     redis:
       host: localhost
@@ -62,6 +72,18 @@ waiting:
     # **비면 아무 헤더도 안 믿는다.** 앞단이 전달 헤더를 덮어쓴다는 보장이
     # 있을 때만 채운다 — 아니면 클라이언트가 매 요청 다른 값을 넣어 상한을 넘는다.
     cidrs: ${WAITING_TRUSTED_PROXIES:}
+  shutdown:
+    # **앞단 부하 분산기 설정과 짝입니다.** readiness 를 내려도 앞단이 알아채기
+    # 전까지는 계속 보내므로, 그 시간만큼 기다린 뒤에 드레인을 시작합니다.
+    # 기다리지 않으면 그 사이 도착한 요청이 커넥션째 끊깁니다.
+    #
+    # 앞단 체크가 2초 간격에 2회 실패로 제외하므로 4초, 여기에 여유 2초입니다.
+    # 한쪽만 바꾸면 어긋납니다.
+    #
+    # **이 대기는 spring.lifecycle.timeout-per-shutdown-phase 밖입니다.** 그 상한은
+    # 종료 이벤트를 다 돌린 뒤의 단계별 정지에만 걸리므로 여기를 못 끊습니다.
+    # 그래서 코드가 30s 를 상한으로 못 박습니다 (DrainWait.MAX_WAIT).
+    lb-removal-wait: 6s
   cors:
     # 와일드카드를 안 쓴다. 열어 두면 이 목록이 있다는 사실이 무의미해진다.
     allowed:

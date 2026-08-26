@@ -70,7 +70,8 @@ class GatewayRoutesTest {
                     QueueToken.of("not-a-real-secret-0123456789abcdef"),
                     // **판정과 같은 인스턴스다.** 따로 만들면 한 초에 두 예산이 나간다.
                     공유_리미터,
-                    EntryToken.of("not-a-real-secret-0123456789abcdef")),
+                    EntryToken.of("not-a-real-secret-0123456789abcdef"),
+                    IdempotencyKey.of("not-a-real-secret-0123456789abcdef")),
             컨텍스트.getBean(SpringCloudCircuitBreakerResilience4JFilterFactory.class));
 
     /**
@@ -316,6 +317,8 @@ class GatewayRoutesTest {
             HttpMethod method = route.endsWith("/issue") ? HttpMethod.POST : HttpMethod.GET;
             MockServerWebExchange exchange = MockServerWebExchange.from(
                     MockServerHttpRequest.method(method, route)
+                            // 신원 필터가 앞에서 보장한다. 없으면 판정이 끊는다.
+                            .header("X-Member-Id", "812934")
                             .header("X-Real-IP", "1.2.3.4")
                             .header("True-Client-IP", "1.2.3.4")
                             .header("X-Client-IP", "1.2.3.4")

@@ -14,3 +14,8 @@ waiting:
   # 시험용 비밀키. 운영 값은 환경에서 온다.
   token:
     secret: not-a-real-secret-0123456789abcdef
+  shutdown:
+    # **시험에서는 안 기다린다.** 컨텍스트를 닫을 때마다 6초를 실제로 자면
+    # 시험 시간이 컨텍스트 수만큼 늘어난다 (지금 컨텍스트 5개에 30초).
+    # 배포되는 값은 ShutdownBudgetTest 가 파일에서 직접 읽어 못 박는다.
+    lb-removal-wait: 1ms

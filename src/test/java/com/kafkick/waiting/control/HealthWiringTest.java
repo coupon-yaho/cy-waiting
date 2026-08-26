@@ -64,11 +64,17 @@ class HealthWiringTest {
     }
 
     @Test
-    @DisplayName("관리_포트에_노출되는_것은_헬스뿐이다")
-    void 관리_포트에_노출되는_것은_헬스뿐이다() {
+    @DisplayName("관리_포트에_헬스와_지표만_노출한다")
+    void 관리_포트에_헬스와_지표만_노출한다() {
         // **이 값은 관리 포트를 지배한다.** 포트를 나눈 뒤로는 서비스 포트와
         // 무관하므로, 서비스 포트 격리는 실제로 찔러 봐야 안다.
-        assertThat(값("management.endpoints.web.exposure.include")).isEqualTo("health");
+        //
+        // **정확히 같은지 본다.** 목록이 늘어나면 `env`·`configprops` 같은 것이
+        // 딸려 올라오는데, 관리 포트는 인증이 없어 클러스터 안에서 누구나 읽는다.
+        // 지표를 연 것은 수집기가 읽을 자리가 필요해서다 — 세기만 하고 내보낼
+        // 곳이 없으면 대시보드가 비고, 사고 중에야 그 사실을 안다.
+        assertThat(값("management.endpoints.web.exposure.include"))
+                .isEqualTo("health,prometheus");
     }
 
     @Test

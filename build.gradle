@@ -78,6 +78,8 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-webflux'
     implementation 'org.springframework.cloud:spring-cloud-starter-gateway-server-webflux'
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    // 지표를 밖에서 긁어 갈 자리 (Phase 6.5). 판은 부트 BOM 이 관리한다.
+    implementation 'io.micrometer:micrometer-registry-prometheus'
 
     // 요청 경로는 레디스를 치지 않는다 (RD-4). 그래도 제어 평면 — 스케줄러와
     // 큐 — 은 쳐야 한다. reactive 쪽만 쓴다. Jedis 는 블로킹이라 배경 루프를

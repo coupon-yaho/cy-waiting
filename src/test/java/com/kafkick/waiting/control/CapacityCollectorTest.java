@@ -697,4 +697,108 @@ class CapacityCollectorTest {
 
         assertThat(collector.collect(List.of(report("a", 100, back)), back, 1)).isEqualTo(100);
     }
+
+    /** 하한 0 은 하한이 없는 것과 같다. 경계를 한 칸 옮기면 그 뜻이 갈린다. */
+    @Test
+    @DisplayName("하한이_0이면_안_뜬다")
+    void 하한이_0이면_안_뜬다() {
+        assertThatThrownBy(() -> CapacityCollector.of(RAMP_UP, FRESHNESS, 0, CAP))
+                .isInstanceOf(IllegalArgumentException.class);
+        // 1 은 뜬다. 여기까지 막으면 하한을 못 쓰는 설정이 된다.
+        assertThat(CapacityCollector.of(RAMP_UP, FRESHNESS, 1, CAP).lastKnown()).isOne();
+    }
+
+    @Test
+    @DisplayName("인스턴스_상한이_0이면_안_뜬다")
+    void 인스턴스_상한이_0이면_안_뜬다() {
+        assertThatThrownBy(() -> CapacityCollector.of(RAMP_UP, FRESHNESS, FLOOR, 0))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(CapacityCollector.of(RAMP_UP, FRESHNESS, FLOOR, 1).lastKnown())
+                .isEqualTo(FLOOR);
+    }
+
+    /**
+     * <b>같은 인스턴스가 두 번 오면 새 것을 쓴다.</b> 버전별 키를 함께 읽는
+     * 롤아웃 중에 옛 보고가 이기면 그 인스턴스가 낡음으로 판정돼 사라진다.
+     */
+    @Test
+    @DisplayName("같은_인스턴스는_새_보고가_이긴다")
+    void 같은_인스턴스는_새_보고가_이긴다() {
+        CapacityCollector collector = collector();
+
+        // 순서를 바꿔 넣어도 결과가 같아야 한다 — 시각이 이기는 것이지 순서가 아니다.
+        long 새것_먼저 = collector.collect(
+                List.of(report("a", 100, NOW), report("a", 10, NOW - 1)), NOW, 1);
+        long 옛것_먼저 = collector().collect(
+                List.of(report("a", 10, NOW - 1), report("a", 100, NOW)), NOW, 1);
+
+        assertThat(새것_먼저).isEqualTo(100);
+        assertThat(옛것_먼저).isEqualTo(100);
+    }
+
+    /** 시각이 같으면 어느 쪽이든 같은 값이어야 한다. 경계에서 값이 흔들리면 안 된다. */
+    @Test
+    @DisplayName("보고_시각이_같으면_한_번만_센다")
+    void 보고_시각이_같으면_한_번만_센다() {
+        CapacityCollector collector = collector();
+
+        long credit = collector.collect(
+                List.of(report("a", 100, NOW), report("a", 100, NOW)), NOW, 1);
+
+        // 두 번 세면 200 이다. 같은 인스턴스는 하나다.
+        assertThat(credit).isEqualTo(100);
+    }
+
+    /** 하한이 답이 된 판만 기록한다. 안 걸린 판까지 남기면 배분이 매번 하한을 얹는다. */
+    @Test
+    @DisplayName("하한이_안_걸린_판은_0을_남긴다")
+    void 하한이_안_걸린_판은_0을_남긴다() {
+        CapacityCollector collector = collector();
+        collector.collect(List.of(report("seed", 0, NOW)), NOW, 1);
+
+        collector.collect(List.of(report("seed", 10_000, NOW + 1)), NOW + 1, 1);
+
+        assertThat(collector.lastFloor()).isZero();
+    }
+
+    @Test
+    @DisplayName("하한이_걸린_판은_그_값을_남긴다")
+    void 하한이_걸린_판은_그_값을_남긴다() {
+        CapacityCollector collector = collector();
+
+        collector.collect(List.of(), NOW, 3);
+
+        assertThat(collector.lastFloor())
+                .isEqualTo(Math.max(FLOOR, 3L * CapacityCollector.IDLE_DIVISOR));
+    }
+
+    /** 램프 창과 정확히 같으면 다 데운 것이다. 경계를 한 칸 옮기면 마지막 구간이 깎인다. */
+    @Test
+    @DisplayName("램프_창과_같으면_전액을_쓴다")
+    void 램프_창과_같으면_전액을_쓴다() {
+        CapacityCollector collector = collector();
+        collector.collect(List.of(report("seed", 0, NOW)), NOW, 1);
+        collector.collect(List.of(report("seed", 0, NOW + 1), report("a", 600, NOW + 1)), NOW + 1, 1);
+
+        long 창_끝 = NOW + 1 + RAMP_UP.toSeconds();
+        long credit = collector.collect(
+                List.of(report("seed", 0, 창_끝), report("a", 600, 창_끝)), 창_끝, 1);
+
+        assertThat(credit).isEqualTo(600);
+    }
+
+    /** 창 한 칸 앞에서는 아직 덜 데웠다. 위 시험과 짝이라야 경계가 잠긴다. */
+    @Test
+    @DisplayName("램프_창_한_칸_앞은_덜_데웠다")
+    void 램프_창_한_칸_앞은_덜_데웠다() {
+        CapacityCollector collector = collector();
+        collector.collect(List.of(report("seed", 0, NOW)), NOW, 1);
+        collector.collect(List.of(report("seed", 0, NOW + 1), report("a", 600, NOW + 1)), NOW + 1, 1);
+
+        long 창_직전 = NOW + RAMP_UP.toSeconds();
+        long credit = collector.collect(
+                List.of(report("seed", 0, 창_직전), report("a", 600, 창_직전)), 창_직전, 1);
+
+        assertThat(credit).isLessThan(600);
+    }
 }

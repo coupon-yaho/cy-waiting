@@ -14,10 +14,13 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
+import java.util.List;
+import org.springframework.http.codec.HttpMessageWriter;
 import org.springframework.web.reactive.function.server.HandlerStrategies;
 import org.springframework.web.reactive.function.server.RouterFunction;
 import org.springframework.web.reactive.function.server.ServerRequest;
 import org.springframework.web.reactive.function.server.ServerResponse;
+import org.springframework.web.reactive.result.view.ViewResolver;
 
 /**
  * 서킷이 열렸을 때 사용자가 받는 것.
@@ -37,9 +40,31 @@ class BackendFallbackTest {
     private final BackendFallback fallback = BackendFallback.of(
             Clock.fixed(지금, ZoneOffset.UTC), meters, () -> 0.5);
 
+    private static final HandlerStrategies 기본 = HandlerStrategies.withDefaults();
+
     private MockServerWebExchange 넘어온_요청() {
         return MockServerWebExchange.from(
                 MockServerHttpRequest.method(HttpMethod.POST, "/fallback/issue"));
+    }
+
+    /**
+     * <b>실제로 실어 보내는 데까지 간다.</b> 만들어진 응답만 보면 라우트가 그것을
+     * 못 싣는 형태여도 초록이다.
+     */
+    private void 답한다(BackendFallback f, MockServerWebExchange exchange) {
+        f.respond(ServerRequest.create(exchange, 기본.messageReaders()))
+                .flatMap(r -> r.writeTo(exchange, new ServerResponse.Context() {
+                    @Override
+                    public List<HttpMessageWriter<?>> messageWriters() {
+                        return 기본.messageWriters();
+                    }
+
+                    @Override
+                    public List<ViewResolver> viewResolvers() {
+                        return List.of();
+                    }
+                }))
+                .block();
     }
 
     /** 뒷단이 못 받는 것과 없는 것은 다르다. 404 는 사용자에게 매진으로 읽힌다. */
@@ -48,7 +73,7 @@ class BackendFallbackTest {
     void 서킷이_열리면_503을_낸다() {
         MockServerWebExchange exchange = 넘어온_요청();
 
-        fallback.handle(exchange).block();
+        답한다(fallback, exchange);
 
         assertThat(exchange.getResponse().getStatusCode())
                 .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
@@ -63,7 +88,7 @@ class BackendFallbackTest {
     void 다시_올_시각을_알려_준다() {
         MockServerWebExchange exchange = 넘어온_요청();
 
-        fallback.handle(exchange).block();
+        답한다(fallback, exchange);
 
         assertThat(exchange.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER))
                 .isNotNull()
@@ -79,7 +104,7 @@ class BackendFallbackTest {
     void 순번이_유지된다고_안내한다() {
         MockServerWebExchange exchange = 넘어온_요청();
 
-        fallback.handle(exchange).block();
+        답한다(fallback, exchange);
 
         assertThat(exchange.getResponse().getBodyAsString().block())
                 .contains("대기 순번");
@@ -99,8 +124,8 @@ class BackendFallbackTest {
 
         MockServerWebExchange a = 넘어온_요청();
         MockServerWebExchange b = 넘어온_요청();
-        이른_쪽.handle(a).block();
-        늦은_쪽.handle(b).block();
+        답한다(이른_쪽, a);
+        답한다(늦은_쪽, b);
 
         assertThat(a.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER))
                 .isNotEqualTo(b.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER));
@@ -110,8 +135,8 @@ class BackendFallbackTest {
     @Test
     @DisplayName("넘어온_횟수를_센다")
     void 넘어온_횟수를_센다() {
-        fallback.handle(넘어온_요청()).block();
-        fallback.handle(넘어온_요청()).block();
+        답한다(fallback, 넘어온_요청());
+        답한다(fallback, 넘어온_요청());
 
         assertThat(meters.counter("waiting.backend.fallback", "outcome", "open").count())
                 .isEqualTo(2);

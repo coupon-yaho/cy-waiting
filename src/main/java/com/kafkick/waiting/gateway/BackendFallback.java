@@ -8,7 +8,8 @@ import java.util.Objects;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.DoubleSupplier;
 import org.springframework.http.HttpStatus;
-import org.springframework.web.server.ServerWebExchange;
+import org.springframework.web.reactive.function.server.ServerRequest;
+import org.springframework.web.reactive.function.server.ServerResponse;
 import reactor.core.publisher.Mono;
 
 /**
@@ -58,12 +59,24 @@ public final class BackendFallback {
     }
 
     /**
-     * <b>같은 값을 주지 않는다.</b> 전원이 같은 순간에 다시 오면 서킷이 닫히자마자
-     * 재포화되어 다시 열리고, 그 진동이 회복을 막는다.
+     * 서킷이 넘긴 요청에 답한다.
+     *
+     * <p><b>같은 값을 주지 않는다.</b> 전원이 같은 순간에 다시 오면 서킷이
+     * 닫히자마자 재포화되어 다시 열리고, 그 진동이 회복을 막는다.
+     *
+     * <p>봉투는 {@link ApiError} 가 만든다 — 여기서 따로 짜면 같은 게이트웨이가
+     * 두 가지 오류 형식을 낸다.
      */
-    public Mono<Void> handle(ServerWebExchange exchange) {
+    public Mono<ServerResponse> respond(ServerRequest request) {
         meters.counter(METRIC, "outcome", "open").increment();
-        return error.write(exchange, HttpStatus.SERVICE_UNAVAILABLE, CODE, MESSAGE,
-                (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random), false);
+        ApiError.Envelope envelope = error.render(request.exchange(),
+                HttpStatus.SERVICE_UNAVAILABLE, CODE, MESSAGE, retryAfterSec(), false);
+        return ServerResponse.status(envelope.status())
+                .headers(headers -> headers.putAll(envelope.headers()))
+                .bodyValue(envelope.body());
+    }
+
+    private int retryAfterSec() {
+        return (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random);
     }
 }

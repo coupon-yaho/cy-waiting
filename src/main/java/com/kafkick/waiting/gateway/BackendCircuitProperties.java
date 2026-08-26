@@ -15,10 +15,10 @@ public record BackendCircuitProperties(
         Duration slidingWindowSize,
         Integer minimumNumberOfCalls,
         Float failureRateThreshold,
-        Duration timeout,
         Duration slowCallDurationThreshold,
         Float slowCallRateThreshold,
         Duration waitDurationInOpenState,
+        Duration maxWaitDurationInHalfOpenState,
         Integer permittedNumberOfCallsInHalfOpenState) {
 
     public BackendCircuitProperties {
@@ -29,22 +29,24 @@ public record BackendCircuitProperties(
         check.present(slidingWindowSize, "sliding-window-size");
         check.present(minimumNumberOfCalls, "minimum-number-of-calls");
         check.present(failureRateThreshold, "failure-rate-threshold");
-        check.present(timeout, "timeout");
         check.present(slowCallDurationThreshold, "slow-call-duration-threshold");
         check.present(slowCallRateThreshold, "slow-call-rate-threshold");
         check.present(waitDurationInOpenState, "wait-duration-in-open-state");
+        check.present(maxWaitDurationInHalfOpenState, "max-wait-duration-in-half-open-state");
         check.present(permittedNumberOfCallsInHalfOpenState,
                 "permitted-number-of-calls-in-half-open-state");
 
         check.percent(failureRateThreshold, "failure-rate-threshold");
         check.percent(slowCallRateThreshold, "slow-call-rate-threshold");
         check.positive(slidingWindowSize, "sliding-window-size");
-        check.positive(timeout, "timeout");
         check.positive(waitDurationInOpenState, "wait-duration-in-open-state");
+        // **여기에도 상한을 건다.** 라이브러리 기본값은 0(무제한)이라, 안 적으면
+        // 프로브가 응답 없는 뒷단에 매달려 서킷이 HALF_OPEN 에 고정된다 —
+        // 나가는 조건이 없다. 이 레코드가 막겠다고 한 실패 유형 그 자체다.
+        check.positive(maxWaitDurationInHalfOpenState, "max-wait-duration-in-half-open-state");
         check.positive(slowCallDurationThreshold, "slow-call-duration-threshold");
         check.atLeastOne(minimumNumberOfCalls, "minimum-number-of-calls");
         check.atLeastOne(permittedNumberOfCallsInHalfOpenState,
                 "permitted-number-of-calls-in-half-open-state");
-        check.slowBeforeTimeout(slowCallDurationThreshold, timeout);
     }
 }

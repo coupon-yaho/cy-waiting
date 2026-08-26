@@ -41,10 +41,16 @@ public class BackendCircuit {
                 .waitDurationInOpenState(props.waitDurationInOpenState())
                 .permittedNumberOfCallsInHalfOpenState(
                         props.permittedNumberOfCallsInHalfOpenState())
-                // **스스로 반쯤 열지 않는다.** 자동 전환은 트래픽이 없어도 시각만
-                // 보고 넘어가는데, 그러면 아무도 안 두드린 채 닫혀 다음 유입이
-                // 통째로 약한 뒷단에 꽂힌다.
-                .automaticTransitionFromOpenToHalfOpenEnabled(false)
+                // **반쯤 열린 채로 두지 않는다.** 기본값 0 은 무제한이라 프로브가
+                // 응답 없는 뒷단에 매달리면 그 상태로 고정된다 — 나갈 조건이 없다.
+                .maxWaitDurationInHalfOpenState(props.maxWaitDurationInHalfOpenState())
+                // **스스로 반쯤 연다.** 수동 전환은 호출이 와야 상태를 다시 보는데,
+                // 판정이 OPEN 에서 유효 credit 을 0 으로 조이면(F3) 서킷에 닿는
+                // 호출이 0 이 되어 영영 안 풀린다 — 진입은 있고 해제가 없다.
+                //
+                // 자동 전환이 가는 곳은 CLOSED 가 아니라 HALF_OPEN 이다. 거기서
+                // 프로브를 받아 판정하므로 약한 뒷단에 전량이 꽂히지 않는다.
+                .automaticTransitionFromOpenToHalfOpenEnabled(true)
                 .build());
     }
 

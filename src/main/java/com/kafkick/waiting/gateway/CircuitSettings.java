@@ -53,14 +53,4 @@ final class CircuitSettings {
         }
     }
 
-    /**
-     * <b>켰다고 믿게 두지 않는다.</b> 느림 임계가 타임아웃 이상이면 타임아웃이
-     * 먼저 끊어 느린 호출이 한 건도 안 집계된다 (6.1.8).
-     */
-    void slowBeforeTimeout(Duration slow, Duration timeout) {
-        if (slow.compareTo(timeout) >= 0) {
-            throw new IllegalArgumentException(
-                    "느림 임계는 타임아웃보다 낮아야 한다: %s >= %s".formatted(slow, timeout));
-        }
-    }
 }

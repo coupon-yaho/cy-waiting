@@ -2,6 +2,8 @@ package com.kafkick.waiting.gateway;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.cloud.gateway.filter.GatewayFilter;
+import org.springframework.cloud.gateway.filter.factory.SpringCloudCircuitBreakerFilterFactory;
 import org.springframework.cloud.gateway.route.RouteLocator;
 import org.springframework.cloud.gateway.route.builder.GatewayFilterSpec;
 import org.springframework.cloud.gateway.route.builder.RouteLocatorBuilder;
@@ -40,7 +42,7 @@ public class GatewayRoutes {
      * <b>인스턴스마다 따로 이름을 잡는다</b> (R-10) — 뒷단 전체를 하나로 묶으면
      * 한 대가 죽어도 전 트래픽이 막힌다.
      */
-    private static final String CIRCUIT = "backend";
+    public static final String CIRCUIT = "backend";
 
     /**
      * 관례로 쓰이는 클라이언트 IP 헤더. 프레임워크는 {@code X-Forwarded-*} 만
@@ -81,21 +83,36 @@ public class GatewayRoutes {
         }
     }
 
+    /**
+     * 서킷 필터를 손으로 만든다.
+     *
+     * <p>{@code circuitBreaker(...)} 는 order 를 줄 자리가 없어 0 으로 붙는다.
+     * 판정도 0 이면 둘의 앞뒤가 안정 정렬에만 기대게 된다.
+     */
+    private GatewayFilter circuit(SpringCloudCircuitBreakerFilterFactory breakers) {
+        SpringCloudCircuitBreakerFilterFactory.Config config =
+                new SpringCloudCircuitBreakerFilterFactory.Config();
+        config.setName(CIRCUIT);
+        config.setFallbackUri(FALLBACK_URI);
+        config.setRouteId("issue");
+        return breakers.apply(config);
+    }
+
     @Bean
     public RouteLocator routes(RouteLocatorBuilder builder, Backend backend,
-            AdmissionGatewayFilter admission) {
+            AdmissionGatewayFilter admission,
+            SpringCloudCircuitBreakerFilterFactory breakers) {
         return builder.routes()
                 .route("issue", r -> r
                         .method(HttpMethod.POST)
                         .and().path("/api/v1/coupons/" + COUPON_ID + "/issue")
                         .and().predicate(rawPathIsPlain())
+                        // **앞뒤를 값으로 정한다.** 안 정하면 둘 다 0 이라 선언
+                        // 위치를 옮기는 것만으로 순서가 바뀌고, 서킷이 판정 앞으로
+                        // 가면 래치가 죽는다 (FilterOrder).
                         .filters(f -> stripSpoofableClientIp(f)
-                                .filter(admission)
-                                // **판정 뒤에 건다.** 앞에 걸면 서킷이 열린 동안
-                                // 판정이 아예 안 돌아, 이 노드가 줄을 세운 적 없는
-                                // 것으로 보이고 래치가 표식을 못 받는다.
-                                .circuitBreaker(c -> c.setName(CIRCUIT)
-                                        .setFallbackUri(FALLBACK_URI)))
+                                .filter(admission, FilterOrder.ROUTE_ADMISSION)
+                                .filter(circuit(breakers), FilterOrder.ROUTE_CIRCUIT))
                         .uri(backend.uri()))
                 .route("coupons", r -> r
                         .method(HttpMethod.GET)

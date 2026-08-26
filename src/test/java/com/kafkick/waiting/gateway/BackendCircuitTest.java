@@ -16,8 +16,8 @@ import org.junit.jupiter.api.Test;
 class BackendCircuitTest {
 
     private static final BackendCircuitProperties 설정 = new BackendCircuitProperties(
-            Duration.ofSeconds(10), 20, 50f, Duration.ofSeconds(3),
-            Duration.ofMillis(1500), 50f, Duration.ofSeconds(5), 10);
+            Duration.ofSeconds(10), 20, 50f, Duration.ofMillis(1500), 50f,
+            Duration.ofSeconds(5), Duration.ofSeconds(30), 10);
 
     private final CircuitBreakerRegistry registry =
             BackendCircuit.registry(설정);
@@ -79,5 +79,30 @@ class BackendCircuitTest {
         assertThat(registry.circuitBreaker("backend-1").getCircuitBreakerConfig()
                 .getWaitIntervalFunctionInOpenState().apply(1))
                 .isEqualTo(Duration.ofSeconds(5).toMillis());
+    }
+
+    /**
+     * <b>반쯤 열린 채로 두지 않는다.</b> 기본값 0 은 무제한이라, 프로브가 응답
+     * 없는 뒷단에 매달리면 그 상태로 고정되고 나갈 조건이 없다.
+     */
+    @Test
+    @DisplayName("반쯤_열린_상태에_상한을_건다")
+    void 반쯤_열린_상태에_상한을_건다() {
+        assertThat(registry.circuitBreaker("backend-1").getCircuitBreakerConfig()
+                .getMaxWaitDurationInHalfOpenState())
+                .isEqualTo(Duration.ofSeconds(30));
+    }
+
+    /**
+     * <b>스스로 반쯤 연다.</b> 수동 전환은 호출이 와야 상태를 다시 보는데, 판정이
+     * OPEN 에서 유효 credit 을 0 으로 조이면(F3) 서킷에 닿는 호출이 0 이 되어 영영
+     * 안 풀린다 — 진입은 있고 해제가 없다.
+     */
+    @Test
+    @DisplayName("호출이_없어도_반쯤_열린다")
+    void 호출이_없어도_반쯤_열린다() {
+        assertThat(registry.circuitBreaker("backend-1").getCircuitBreakerConfig()
+                .isAutomaticTransitionFromOpenToHalfOpenEnabled())
+                .isTrue();
     }
 }

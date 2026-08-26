@@ -9,6 +9,8 @@ import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import java.time.Duration;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.cloud.gateway.support.ServerWebExchangeUtils;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.cloud.gateway.handler.RoutePredicateHandlerMapping;
 import org.springframework.cloud.gateway.route.Route;
@@ -46,6 +48,9 @@ class GatewayWiringTest {
 
     @Autowired
     private CircuitBreakerRegistry circuitRegistry;
+
+    @Value("${spring.cloud.circuitbreaker.resilience4j.disable-time-limiter}")
+    private boolean disableTimeLimiter;
 
     @Autowired
     private RoutePredicateHandlerMapping gatewayMapping;
@@ -98,9 +103,12 @@ class GatewayWiringTest {
     @Test
     @DisplayName("fallback_라우터가_컨텍스트에_올라온다")
     void fallback_라우터가_컨텍스트에_올라온다() {
-        ServerWebExchange 넘어옴 = MockServerWebExchange.from(
+        MockServerWebExchange 넘어옴 = MockServerWebExchange.from(
                 MockServerHttpRequest.method(HttpMethod.POST,
                         BackendFallbackRoutes.FALLBACK_ISSUE));
+        // 게이트웨이가 넘긴 표식을 단다. 없으면 안 잡는 것이 맞다 — 밖에서 치면
+        // 서킷 상태 지표가 오르고, 그걸로 회복을 판정한다.
+        넘어옴.getAttributes().put(ServerWebExchangeUtils.GATEWAY_ROUTE_ATTR, "issue");
 
         // 매핑까지 해석한다. 빈만 보면 경로가 어긋나도 통과한다.
         //
@@ -132,10 +140,10 @@ class GatewayWiringTest {
         assertThat(circuit.slidingWindowSize()).isEqualTo(Duration.ofSeconds(10));
         assertThat(circuit.minimumNumberOfCalls()).isEqualTo(20);
         assertThat(circuit.failureRateThreshold()).isEqualTo(50f);
-        assertThat(circuit.timeout()).isEqualTo(Duration.ofSeconds(3));
         assertThat(circuit.slowCallDurationThreshold()).isEqualTo(Duration.ofMillis(1500));
         assertThat(circuit.slowCallRateThreshold()).isEqualTo(50f);
         assertThat(circuit.waitDurationInOpenState()).isEqualTo(Duration.ofSeconds(5));
+        assertThat(circuit.maxWaitDurationInHalfOpenState()).isEqualTo(Duration.ofSeconds(30));
         assertThat(circuit.permittedNumberOfCallsInHalfOpenState()).isEqualTo(10);
     }
 
@@ -146,5 +154,33 @@ class GatewayWiringTest {
         assertThat(circuitRegistry.circuitBreaker("backend-1").getCircuitBreakerConfig()
                 .getSlidingWindowType())
                 .isEqualTo(CircuitBreakerConfig.SlidingWindowType.TIME_BASED);
+    }
+
+    /**
+     * <b>아무도 정하지 않은 타임아웃이 켜져 있으면 안 된다.</b> 라이브러리는
+     * 안 끄면 1초를 거는데, 그 값은 뒷단이 정상 처리한 발급을 중간에 끊는다.
+     * 입장 토큰은 소모되지 않으므로 같은 사람이 다시 발급받는다 — 초과 발급이다.
+     *
+     * <p>뒷단 요청 타임아웃은 6.2 에서 멱등 키와 함께 정한다.
+     */
+    @Test
+    @DisplayName("정하지_않은_타임아웃이_안_켜진다")
+    void 정하지_않은_타임아웃이_안_켜진다() {
+        assertThat(disableTimeLimiter).isTrue();
+    }
+
+    /**
+     * <b>밖에서 직접 치면 안 잡는다.</b> 이 경로는 신원 필터와 남용 리미터의
+     * {@code /api/**} 밖이라 아무나 칠 수 있는데, 한 번마다 서킷 상태 지표가
+     * 오른다 — 밖에서 회복 판정을 흔들 수 있다.
+     */
+    @Test
+    @DisplayName("밖에서_친_fallback은_컨텍스트도_안_잡는다")
+    void 밖에서_친_fallback은_컨텍스트도_안_잡는다() {
+        ServerWebExchange 직접 = MockServerWebExchange.from(
+                MockServerHttpRequest.method(HttpMethod.POST,
+                        BackendFallbackRoutes.FALLBACK_ISSUE));
+
+        assertThat(routerFunctionMapping.getHandler(직접).block()).isNull();
     }
 }

@@ -57,8 +57,11 @@ class GatewayRoutesTest {
     private static final SecondWindowLimiter 공유_리미터 = SecondWindowLimiter.withMaxKeys(10);
 
     // 띄운다 — 애플리케이션을 통째로 세우면 라우트 하나 보려고 레디스까지 붙는다.
+    private static final GenericApplicationContext 컨텍스트 = 술어만_있는_컨텍스트();
+
+    // 띄운다 — 애플리케이션을 통째로 세우면 라우트 하나 보려고 레디스까지 붙는다.
     private final RouteLocator locator = new GatewayRoutes().routes(
-            new RouteLocatorBuilder(술어만_있는_컨텍스트()),
+            new RouteLocatorBuilder(컨텍스트),
             new GatewayRoutes.Backend("http://backend:8080"),
             AdmissionGatewayFilter.of(재료_없는_홀더(),
                     AdmissionDecider.of(공유_리미터, 0.7),
@@ -67,7 +70,8 @@ class GatewayRoutesTest {
                     QueueToken.of("not-a-real-secret-0123456789abcdef"),
                     // **판정과 같은 인스턴스다.** 따로 만들면 한 초에 두 예산이 나간다.
                     공유_리미터,
-                    EntryToken.of("not-a-real-secret-0123456789abcdef")));
+                    EntryToken.of("not-a-real-secret-0123456789abcdef")),
+            컨텍스트.getBean(SpringCloudCircuitBreakerResilience4JFilterFactory.class));
 
     /**
      * 재료를 한 번도 못 받은 홀더. 이 시험은 <b>라우트가 무엇을 잡는가</b>만 보므로
@@ -81,8 +85,8 @@ class GatewayRoutesTest {
     /** 라우트가 무엇을 잡는지만 보는 시험이라 값 자체는 안 잰다. 온전하면 된다. */
     private static BackendCircuitProperties 서킷_설정() {
         return new BackendCircuitProperties(Duration.ofSeconds(10), 20, 50f,
-                Duration.ofSeconds(3), Duration.ofMillis(1500), 50f,
-                Duration.ofSeconds(5), 10);
+                Duration.ofMillis(1500), 50f, Duration.ofSeconds(5),
+                Duration.ofSeconds(30), 10);
     }
 
     private static GenericApplicationContext 술어만_있는_컨텍스트() {
@@ -389,5 +393,31 @@ class GatewayRoutesTest {
                 .map(f -> f instanceof OrderedGatewayFilter o
                         ? o.getDelegate().toString() : f.toString())
                 .toList();
+    }
+
+    /**
+     * <b>판정이 서킷보다 앞이어야 한다.</b> 뒤로 가면 서킷이 열린 동안 판정이
+     * 아예 안 돌아, 이 노드가 줄을 세운 적 없는 것으로 보이고 래치가 표식을 못
+     * 받는다 — 다음 창의 신규 유입이 방금 줄 선 사람을 추월한다 (불변식 4).
+     *
+     * <p>붙었는지만 보면 이 순서가 안 고정된다. 둘 다 order 0 이면 선언 위치를
+     * 옮기는 것만으로 뒤집히고, 그때도 시험은 초록이다.
+     */
+    @Test
+    @DisplayName("판정이_서킷보다_앞이다")
+    void 판정이_서킷보다_앞이다() {
+        List<String> 이름 = 필터_이름(잡는_라우트(HttpMethod.POST, "/api/v1/coupons/c1/issue"));
+
+        assertThat(이름.indexOf("Admission"))
+                .isLessThan(이름.stream()
+                        .filter(n -> n.contains("CircuitBreaker"))
+                        .findFirst().map(이름::indexOf).orElse(-1));
+    }
+
+    /** 값 자체도 못 박는다. 순서만 보면 둘 다 0 으로 되돌려도 이번엔 통과한다. */
+    @Test
+    @DisplayName("판정과_서킷의_앞뒤가_값으로_정해져_있다")
+    void 판정과_서킷의_앞뒤가_값으로_정해져_있다() {
+        assertThat(FilterOrder.ROUTE_ADMISSION).isLessThan(FilterOrder.ROUTE_CIRCUIT);
     }
 }

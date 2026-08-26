@@ -2,6 +2,16 @@ spring:
   application:
     name: waiting
 
+  cloud:
+    circuitbreaker:
+      resilience4j:
+        # **타임아웃을 여기서 켜지 않는다.** 안 끄면 라이브러리가 아무도 정하지
+        # 않은 1초를 건다. 그 값은 뒷단이 정상 처리한 발급을 중간에 끊을 수 있고,
+        # 입장 토큰은 소모되지 않으므로 같은 사람이 다시 발급받는다 — 초과 발급이다.
+        #
+        # 뒷단 요청 타임아웃은 6.2 에서 멱등 키와 함께 정한다 (CY-614).
+        disable-time-limiter: true
+
   data:
     redis:
       host: localhost
@@ -30,15 +40,20 @@ waiting:
       minimum-number-of-calls: 20
       # 백분율이다. 0.5 로 적으면 0% 로 반올림돼 첫 실패에 열린다.
       failure-rate-threshold: 50
-      timeout: 3s
-      # **타임아웃보다 낮아야 한다.** 안 그러면 타임아웃이 먼저 끊어 느린 호출이
-      # 한 건도 안 집계되고, 운영자는 켰다고 믿는다 (6.1.8).
+      # 이보다 오래 걸리면 느린 호출로 센다. 타임아웃만 보면 타임아웃 직전까지
+      # 느려진 인스턴스가 전부 성공으로 집계된다 (6.1.8).
       slow-call-duration-threshold: 1500ms
       slow-call-rate-threshold: 50
-      # 회복이 늦어도 두 번째 시도에 판정되도록 짧게 둔다 (G8.12).
+      # 열린 뒤 이만큼 지나면 프로브를 받는다. **짧을수록 회복 시도가 잦아진다** —
+      # G8.12(시도 2회 이하)를 만족시키는 것은 이 값이 아니라 판정 쪽의 유입
+      # 억제(F3)다. 그게 붙기 전에는 진동이 그대로 난다 (8.1.5 가 의도한 상태).
       wait-duration-in-open-state: 5s
       # 회복을 판정할 표본 수다. 유입 억제는 판정 쪽이 유효 credit 으로 따로 한다.
       permitted-number-of-calls-in-half-open-state: 10
+      # **무제한으로 두지 않는다.** 라이브러리 기본값 0 은 무제한이라, 프로브가
+      # 응답 없는 뒷단에 매달리면 서킷이 반쯤 열린 채 고정된다 — 나갈 조건이 없다.
+      max-wait-duration-in-half-open-state: 30s
+
   token:
     # **기본값을 안 둔다.** 두면 아무도 안 넣은 채로 운영에 나가고, 그때
     # 서명은 공개된 값으로 찍힌다 — 서명이 있다는 사실만 남고 뜻은 사라진다.

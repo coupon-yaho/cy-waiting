@@ -17,19 +17,16 @@ import org.junit.jupiter.api.Test;
 class BackendCircuitPropertiesTest {
 
     private static final Duration 창 = Duration.ofSeconds(10);
-    private static final Duration 타임아웃 = Duration.ofSeconds(3);
     private static final Duration 느림 = Duration.ofMillis(1500);
     private static final Duration 대기 = Duration.ofSeconds(5);
+    private static final Duration 반쯤_상한 = Duration.ofSeconds(30);
 
     /** 온전한 한 벌. 시험마다 한 자리씩 흠집을 낸다. */
-    private static BackendCircuitProperties 값(Float 실패비율, Duration 타임아웃값,
-            Duration 느림임계, Float 느림비율) {
+    private static BackendCircuitProperties 값(Float 실패비율, Float 느림비율) {
         return new BackendCircuitProperties(창, 20,
                 실패비율 == null ? 50f : 실패비율,
-                타임아웃값 == null ? 타임아웃 : 타임아웃값,
-                느림임계 == null ? 느림 : 느림임계,
-                느림비율 == null ? 50f : 느림비율,
-                대기, 10);
+                느림, 느림비율 == null ? 50f : 느림비율,
+                대기, 반쯤_상한, 10);
     }
 
     /**
@@ -40,17 +37,34 @@ class BackendCircuitPropertiesTest {
     @DisplayName("값을_안_적으면_기동을_막는다")
     void 값을_안_적으면_기동을_막는다() {
         assertThatThrownBy(() -> new BackendCircuitProperties(
-                null, 20, 50f, 타임아웃, 느림, 50f, 대기, 10))
+                null, 20, 50f, 느림, 50f, 대기, 반쯤_상한, 10))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("sliding-window-size");
         assertThatThrownBy(() -> new BackendCircuitProperties(
-                창, null, 50f, 타임아웃, 느림, 50f, 대기, 10))
+                창, null, 50f, 느림, 50f, 대기, 반쯤_상한, 10))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("minimum-number-of-calls");
         assertThatThrownBy(() -> new BackendCircuitProperties(
-                창, 20, 50f, 타임아웃, 느림, 50f, null, 10))
+                창, 20, 50f, 느림, 50f, null, 반쯤_상한, 10))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("wait-duration-in-open-state");
+    }
+
+    /**
+     * <b>반쯤 열린 상태에도 상한이 있어야 한다.</b> 라이브러리 기본값 0 은
+     * 무제한이라, 안 적으면 프로브가 응답 없는 뒷단에 매달려 그 상태로 고정된다 —
+     * 나가는 조건이 없다.
+     */
+    @Test
+    @DisplayName("반쯤_열린_상태의_상한을_안_적으면_막는다")
+    void 반쯤_열린_상태의_상한을_안_적으면_막는다() {
+        assertThatThrownBy(() -> new BackendCircuitProperties(
+                창, 20, 50f, 느림, 50f, 대기, null, 10))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("max-wait-duration-in-half-open-state");
+        assertThatThrownBy(() -> new BackendCircuitProperties(
+                창, 20, 50f, 느림, 50f, 대기, Duration.ZERO, 10))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     /**
@@ -60,33 +74,17 @@ class BackendCircuitPropertiesTest {
     @Test
     @DisplayName("비율이_범위를_벗어나면_기동을_막는다")
     void 비율이_범위를_벗어나면_기동을_막는다() {
-        assertThatThrownBy(() -> 값(0f, null, null, null))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> 값(101f, null, null, null))
-                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> 값(0f, null)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> 값(101f, null)).isInstanceOf(IllegalArgumentException.class);
         // 느림 비율도 같은 규칙을 탄다. 하나만 걸면 다른 쪽이 조용히 0 이 된다.
-        assertThatThrownBy(() -> 값(null, null, null, 0f))
-                .isInstanceOf(IllegalArgumentException.class);
-    }
-
-    /**
-     * <b>느림 임계가 타임아웃 이상이면 그 설정이 죽은 값이 된다.</b> 타임아웃이
-     * 먼저 끊어 느린 호출이 한 건도 안 집계되고, 운영자는 켰다고 믿는다 (6.1.8).
-     */
-    @Test
-    @DisplayName("느림_임계가_타임아웃_이상이면_기동을_막는다")
-    void 느림_임계가_타임아웃_이상이면_기동을_막는다() {
-        assertThatThrownBy(() -> 값(null, Duration.ofSeconds(3), Duration.ofSeconds(3), null))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("느림");
+        assertThatThrownBy(() -> 값(null, 0f)).isInstanceOf(IllegalArgumentException.class);
     }
 
     /** 온전한 한 벌은 받아들인다. 거절만 재면 전부 거절해도 통과한다. */
     @Test
     @DisplayName("온전한_설정은_받아들인다")
     void 온전한_설정은_받아들인다() {
-        assertThat(값(null, null, null, null).slowCallDurationThreshold())
-                .isEqualTo(느림);
+        assertThat(값(null, null).slowCallDurationThreshold()).isEqualTo(느림);
     }
 
     /** 표본 하한이 0 이면 첫 한 건으로 서킷이 열린다. */
@@ -94,10 +92,10 @@ class BackendCircuitPropertiesTest {
     @DisplayName("표본_하한이_0이면_기동을_막는다")
     void 표본_하한이_0이면_기동을_막는다() {
         assertThatThrownBy(() -> new BackendCircuitProperties(
-                창, 0, 50f, 타임아웃, 느림, 50f, 대기, 10))
+                창, 0, 50f, 느림, 50f, 대기, 반쯤_상한, 10))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new BackendCircuitProperties(
-                창, 20, 50f, 타임아웃, 느림, 50f, 대기, 0))
+                창, 20, 50f, 느림, 50f, 대기, 반쯤_상한, 0))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 }

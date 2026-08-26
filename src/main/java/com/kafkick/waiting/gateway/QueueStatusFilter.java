@@ -13,6 +13,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.DoubleSupplier;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -203,7 +204,7 @@ public final class QueueStatusFilter implements WebFilter {
         if (e instanceof IllegalArgumentException || e instanceof IllegalStateException) {
             return "bad-state";
         }
-        if (e instanceof java.util.concurrent.TimeoutException) {
+        if (e instanceof TimeoutException) {
             return "timeout";
         }
         return "io";

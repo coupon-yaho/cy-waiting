@@ -103,10 +103,19 @@ PY
 # 읽힌 주석이 전부를 대신한다 — 한 줄의 틀린 판 주석이 다른 줄의 맞는 주석에
 # 가려지고, 그 가림은 아무 흔적을 안 남긴다. 파일까지 키에 넣어도 한 파일 안에서
 # 같은 문제가 남는다.
+#
+# **YAML 파일만 읽는다.** 디렉터리를 통째로 훑으면 액션의 `README.md` 에 적힌
+# 예시까지 세어, 아래 개수 대조가 멀쩡한 저장소에서 실패한다.
 occurrences=$(
-    grep -rHnoE "uses:[[:space:]]*[\"']?[^\"'[:space:]]+[\"']?([[:space:]]*#[[:space:]]*\S+)?" \
-        .github/workflows .github/actions 2>/dev/null \
+    find .github/workflows -maxdepth 1 \( -name '*.yml' -o -name '*.yaml' \) -print0 2>/dev/null \
+        > /tmp/.pin-targets-$$ ; \
+    find .github/actions \( -name 'action.yml' -o -name 'action.yaml' \) -print0 2>/dev/null \
+        >> /tmp/.pin-targets-$$ ; \
+    xargs -0 -r grep -HnoE \
+        "uses:[[:space:]]*[\"']?[^\"'[:space:]]+[\"']?([[:space:]]*#[[:space:]]*\S+)?" \
+        < /tmp/.pin-targets-$$ 2>/dev/null \
         | sed -E "s/:([0-9]+):uses:[[:space:]]*[\"']?/\t\1\t/; s/[\"']?[[:space:]]*#[[:space:]]*/\t/"
+    rm -f /tmp/.pin-targets-$$
 )
 
 refs=$(list_uses) || exit 1
@@ -131,7 +140,9 @@ if [[ "${1:-}" == "--refresh" ]]; then
     : >"$LOCK.tmp"
     while IFS=$'\t' read -r file line ref version; do
         [[ -z "$ref" ]] && continue
-        [[ "$ref" == ./* || "$ref" == .github/* || "$ref" == docker://* ]] && continue
+        # `$/` 는 러너 2.336 이후의 같은 저장소 참조다. SHA 를 요구하지 않는다.
+        [[ "$ref" == ./* || "$ref" == .github/* || "$ref" == '$/'* \
+            || "$ref" == docker://* ]] && continue
         path=${ref%@*}
         rev=${ref##*@}
         [[ "$ref" != *@* || ! "$rev" =~ ^[0-9a-f]{40}$ ]] && continue
@@ -192,7 +203,8 @@ while IFS=$'\t' read -r file line ref version; do
     [[ -z "$ref" ]] && continue
 
     # 이 저장소 안의 액션. 우리 코드라 공급망 경계가 아니다.
-    [[ "$ref" == ./* || "$ref" == .github/* ]] && continue
+    # `$/` 는 러너 2.336 이후의 같은 저장소 참조 표기다.
+    [[ "$ref" == ./* || "$ref" == .github/* || "$ref" == '$/'* ]] && continue
 
     if [[ "$ref" == docker://* ]]; then
         # 태그는 움직인다. 다이제스트만 받는다.

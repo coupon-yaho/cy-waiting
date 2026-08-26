@@ -1058,4 +1058,85 @@ class AdmissionGatewayFilterTest {
         assertThat(exchange.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
                 .isEqualTo(AdmissionDecision.PASS_UNDER_CAP);
     }
+
+    /**
+     * <b>게이트웨이가 끊어도 뒷단은 처리했을 수 있다.</b> 타임아웃은 응답을 안
+     * 기다리겠다는 뜻이지 뒷단이 안 했다는 뜻이 아니다. 사용자가 다시 시도하면
+     * 같은 사람이 두 번 발급된다 — 재사용 방지는 발급 계층이 지되(A-10) 그
+     * 멱등성이 작동할 근거는 우리가 줘야 한다.
+     */
+    @Test
+    @DisplayName("통과에는_멱등_키를_실어_보낸다")
+    void 통과에는_멱등_키를_실어_보낸다() {
+        스냅샷을_심는다(CouponStates.idle(1_000), META);
+        AtomicReference<String> 실린_키 = new AtomicReference<>();
+        MockServerWebExchange exchange = 요청(COUPON);
+
+        filter.filter(exchange, e -> {
+            실린_키.set(e.getRequest().getHeaders().getFirst(IdempotencyKey.HEADER));
+            return Mono.empty();
+        }).block();
+
+        assertThat(실린_키.get()).isNotBlank();
+    }
+
+    /**
+     * <b>같은 시도면 같은 키다.</b> 다르면 뒷단이 두 건으로 보고 두 번 발급한다 —
+     * 멱등 키를 실은 의미가 사라진다.
+     */
+    @Test
+    @DisplayName("같은_시도를_다시_보내면_같은_키다")
+    void 같은_시도를_다시_보내면_같은_키다() {
+        스냅샷을_심는다(CouponStates.idle(1_000), META);
+
+        assertThat(실린_멱등_키()).isEqualTo(실린_멱등_키());
+    }
+
+    /** 사람이 다르면 다른 시도다. 같은 키를 주면 뒤에 온 사람이 조용히 버려진다. */
+    @Test
+    @DisplayName("사람이_다르면_다른_키다")
+    void 사람이_다르면_다른_키다() {
+        스냅샷을_심는다(CouponStates.idle(1_000), META);
+
+        assertThat(실린_멱등_키(MEMBER)).isNotEqualTo(실린_멱등_키("다른사람"));
+    }
+
+    /**
+     * <b>클라이언트가 준 값을 안 믿는다.</b> 그대로 쓰면 매 요청 다른 값을 넣어
+     * 멱등성을 우회하고, 끊긴 발급을 두 번 받아 갈 수 있다.
+     */
+    @Test
+    @DisplayName("클라이언트가_준_멱등_키를_덮는다")
+    void 클라이언트가_준_멱등_키를_덮는다() {
+        스냅샷을_심는다(CouponStates.idle(1_000), META);
+        AtomicReference<String> 실린_키 = new AtomicReference<>();
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.method(HttpMethod.POST,
+                                "/api/v1/coupons/" + COUPON + "/issue")
+                        .header("X-Member-Id", MEMBER)
+                        .header(IdempotencyKey.HEADER, "내가-정한-값"));
+        exchange.getAttributes().put(
+                ServerWebExchangeUtils.URI_TEMPLATE_VARIABLES_ATTRIBUTE,
+                Map.of("couponId", COUPON));
+
+        filter.filter(exchange, e -> {
+            실린_키.set(e.getRequest().getHeaders().getFirst(IdempotencyKey.HEADER));
+            return Mono.empty();
+        }).block();
+
+        assertThat(실린_키.get()).isNotEqualTo("내가-정한-값");
+    }
+
+    private String 실린_멱등_키() {
+        return 실린_멱등_키(MEMBER);
+    }
+
+    private String 실린_멱등_키(String memberId) {
+        AtomicReference<String> 키 = new AtomicReference<>();
+        filter.filter(요청(COUPON, memberId), e -> {
+            키.set(e.getRequest().getHeaders().getFirst(IdempotencyKey.HEADER));
+            return Mono.empty();
+        }).block();
+        return 키.get();
+    }
 }

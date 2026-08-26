@@ -5,9 +5,11 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 import com.kafkick.waiting.domain.admission.AdmissionDecision;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import org.junit.jupiter.api.DisplayName;
@@ -205,6 +207,32 @@ class BackendFallbackTest {
 
         assertThat(meters.counter("waiting.backend.fallback", "state", "unknown").count())
                 .isEqualTo(2);
+    }
+
+    /**
+     * <b>라벨을 "열렸다" 로 고정하면 안 된다.</b> 폴백은 서킷 오픈뿐 아니라 연결
+     * 실패나 뒷단 오류로도 온다. 서킷이 닫힌 채 실패만 나는 구간에서 지표가
+     * 거짓말하고, 회복을 그 지표로 판정한다 (8.4.3).
+     *
+     * <p>운영이 쓰는 팩토리를 태운다. 레지스트리 없는 쪽만 재면 늘 unknown 이다.
+     */
+    @Test
+    @DisplayName("서킷의_실제_상태를_라벨에_싣는다")
+    void 서킷의_실제_상태를_라벨에_싣는다() {
+        CircuitBreakerRegistry 레지스트리 = BackendCircuit.registry(new BackendCircuitProperties(
+                Duration.ofSeconds(10), 20, 50f, Duration.ofMillis(1500), 50f,
+                Duration.ofSeconds(5), Duration.ofSeconds(30), 10));
+        BackendFallback 운영 = BackendFallback.of(
+                Clock.fixed(지금, ZoneOffset.UTC), meters, 레지스트리, GatewayRoutes.CIRCUIT);
+
+        답한다(운영, 넘어온_요청());
+        레지스트리.circuitBreaker(GatewayRoutes.CIRCUIT).transitionToOpenState();
+        답한다(운영, 넘어온_요청());
+
+        assertThat(meters.counter("waiting.backend.fallback", "state", "CLOSED").count())
+                .isEqualTo(1);
+        assertThat(meters.counter("waiting.backend.fallback", "state", "OPEN").count())
+                .isEqualTo(1);
     }
 
     /**

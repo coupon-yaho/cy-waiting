@@ -235,8 +235,6 @@ jobs:
       # 주석이 `v7.0.0` 인데 `v6.0.0` 을 핀하고 있었고, `gradle/actions` 는 커밋이
       # 아니라 태그 객체를 핀했다. 리뷰어는 주석을 믿고 넘어간다.
       - name: 액션 핀 검사
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: .github/scripts/action-pins.sh
 
       # 파일만 확인하면 `](other.md#anchor)` 의 앵커가 사라져도 통과한다.

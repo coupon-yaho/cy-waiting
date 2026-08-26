@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 서드파티 액션이 커밋 SHA 로 핀됐고, 옆 주석이 그 SHA 의 판과 맞는지 본다.
+# 서드파티 액션이 커밋 SHA 로 핀됐고, 그 SHA 가 락파일이 적은 판과 맞는지 본다.
 #
 # **모든 `uses:` 를 열거해서 규격에 안 맞는 것을 잡는다.** 규격에 맞는 것만
 # 정규식으로 찾으면 그물이 거꾸로 걸린다 — `@v1`, `@main`, 따옴표를 씌운 핀,
@@ -11,18 +11,32 @@
 # YAML 로 유효하고 러너는 그 SHA 를 체크아웃한다. diff 에는 따옴표가 붙고 16진수
 # 40자가 바뀐 것뿐이라 사람 눈에는 정상 갱신으로 읽힌다.
 #
-# **주석이 거짓말한 적도 있다.** `download-artifact` 는 주석이 `v7.0.0` 인데
-# `v8.0.1` 을 핀하고 있었고, `gradle/actions` 는 커밋이 아니라 태그 객체를 핀했다.
+# **검사 자체는 네트워크를 안 탄다.** 원격에 물어서 판정하면 두 가지가 구별이 안
+# 된다 — 조직이 IP 허용 목록을 걸어 못 묻는 것과, 아예 없는 저장소를 못 묻는 것.
+# 앞은 공급망 신호가 아니고 뒤는 그 자체가 사고인데, 응답은 똑같이 실패다. 어느
+# 쪽으로 정해도 틀린다: 막으면 게이트가 흔들리고, 넘기면 공격자가 없는 저장소를
+# 적어 지나간다. 실제로 `aquasecurity` 가 러너에서 403 을 냈고, 관대하게 바꾸자
+# 곧바로 가짜 저장소가 통과했다.
 #
-# 네트워크가 필요하다. 못 물으면 실패한다 — 조용히 통과하는 검사는 없는 것보다
-# 나쁘다는 것이 이 파일의 전제다.
+# 그래서 **원격에 묻는 일을 검사에서 떼어 `--refresh` 로 옮겼다.** 결과는
+# 락파일에 커밋되고, 그 파일의 diff 가 곧 "이 SHA 는 이 판이다" 라는 주장이 되어
+# 사람이 리뷰한다. `go.sum` 이 하는 일과 같다 — 처음 볼 때 확인하고, 그 뒤로는
+# 바뀌었는지만 본다.
 set -uo pipefail
 
 root=$(git rev-parse --show-toplevel 2>/dev/null) || root=.
 cd "$root" || exit 1
 
-# 1) 모든 `uses:` 를 YAML 로 열거한다. 셸 검사(workflow-shell.sh)와 같은 방식이다.
-refs=$(python3 - <<'PY'
+readonly LOCK=.github/action-pins.lock
+
+# 우리 조직 액션은 **판 주석·락파일 규칙만** 면제한다. 판을 우리가 올리므로
+# 주석이 뒤처지는 것은 사고가 아니다. 핀 자체는 그대로 요구한다 — 그 잡에
+# Atlassian 토큰이 붙는데, `@v1` 로 바꿔도 아무 말 안 하면 제외가 구멍이 된다.
+readonly OURS='coupon-yaho/'
+
+# 모든 `uses:` 를 YAML 로 열거한다. 셸 검사(workflow-shell.sh)와 같은 방식이다.
+list_uses() {
+    python3 - <<'PY'
 import pathlib, sys
 
 try:
@@ -72,9 +86,9 @@ if not found:
 
 print("\n".join(found))
 PY
-) || exit 1
+}
 
-# 2) 주석은 YAML 이 버리므로 원문에서 따로 읽는다. 참조 → 주석.
+# 주석은 YAML 이 버리므로 원문에서 따로 읽는다. 참조 → 주석.
 declare -A comment_of
 while IFS=$'\t' read -r ref note; do
     [[ -n "$ref" ]] && comment_of["$ref"]="$note"
@@ -84,10 +98,70 @@ done < <(
         | sed -E "s/uses:[[:space:]]*[\"']?//; s/[\"']?[[:space:]]*#[[:space:]]*/\t/"
 )
 
-# 우리 조직 액션은 **판 주석 규칙만** 면제한다. 판을 우리가 올리므로 주석이
-# 뒤처지는 것은 사고가 아니다. 핀 자체는 그대로 요구한다 — 그 잡에 Atlassian
-# 토큰이 붙는데, `@v1` 로 바꿔도 아무 말 안 하면 제외가 구멍이 된다.
-readonly OURS='coupon-yaho/'
+refs=$(list_uses) || exit 1
+
+# ── 판을 원격에 물어 락파일을 다시 쓴다 ──────────────────────────────────────
+# 검사가 아니라 갱신이다. 결과는 커밋되어 사람이 diff 로 본다.
+if [[ "${1:-}" == "--refresh" ]]; then
+    fail=0
+    : >"$LOCK.tmp"
+    while IFS=$'\t' read -r file ref; do
+        [[ -z "$ref" ]] && continue
+        [[ "$ref" == ./* || "$ref" == .github/* || "$ref" == docker://* ]] && continue
+        path=${ref%@*}
+        rev=${ref##*@}
+        [[ "$ref" != *@* || ! "$rev" =~ ^[0-9a-f]{40}$ ]] && continue
+        [[ "$path" == "$OURS"* ]] && continue
+
+        version=${comment_of[$ref]:-}
+        [[ -z "$version" ]] && continue
+        repo=$(cut -d/ -f1,2 <<<"$path")
+
+        if ! remote=$(timeout 30 git ls-remote "https://github.com/$repo" \
+                "refs/tags/$version" "refs/tags/$version^{}" 2>&1); then
+            echo "::error::$repo 에 못 물었다: $remote" >&2
+            fail=1
+            continue
+        fi
+        # `^{}` 가 있으면 주석 달린 태그다. 그쪽이 커밋이고 위는 태그 객체다 —
+        # 안 풀면 태그 객체와 커밋을 비교하게 된다. `gradle/actions` 가 그랬다.
+        actual=$(awk -v v="refs/tags/$version^{}" '$2 == v { print $1 }' <<<"$remote")
+        [[ -z "$actual" ]] \
+            && actual=$(awk -v v="refs/tags/$version" '$2 == v { print $1 }' <<<"$remote")
+
+        if [[ -z "$actual" ]]; then
+            echo "::error::$repo 에 태그 '$version' 이 없다" >&2
+            fail=1
+        elif [[ "$actual" != "$rev" ]]; then
+            echo "::error::$path — 핀과 주석이 어긋난다." \
+                 "주석=$version 은 $actual 인데 핀은 $rev 다" >&2
+            fail=1
+        else
+            printf '%s\t%s\t%s\n' "$path" "$rev" "$version" >>"$LOCK.tmp"
+        fi
+    done <<<"$refs"
+
+    if [[ $fail -ne 0 ]]; then
+        rm -f "$LOCK.tmp"
+        echo "::error::어긋난 핀이 있어 락파일을 안 고쳤다" >&2
+        exit 1
+    fi
+    sort -u "$LOCK.tmp" >"$LOCK"
+    rm -f "$LOCK.tmp"
+    echo "락파일 갱신: $(wc -l <"$LOCK") 건"
+    exit 0
+fi
+
+# ── 검사 ────────────────────────────────────────────────────────────────────
+if [[ ! -f "$LOCK" ]]; then
+    echo "::error::$LOCK 이 없다. \`.github/scripts/action-pins.sh --refresh\` 로 만든다"
+    exit 1
+fi
+
+declare -A locked
+while IFS=$'\t' read -r path sha version; do
+    [[ -n "$path" ]] && locked["$path@$sha"]="$version"
+done <"$LOCK"
 
 fail=0
 checked=0
@@ -134,30 +208,16 @@ while IFS=$'\t' read -r file ref; do
         continue
     fi
 
-    repo=$(cut -d/ -f1,2 <<<"$path")
-
-    # **페이지네이션을 안 탄다.** `tags?per_page=100` 은 첫 장만 보므로, 판을
-    # 오래 안 올리면 태그가 밖으로 밀려 멀쩡한 핀이 빨간불이 된다.
-    if ! object=$(gh api "repos/$repo/git/ref/tags/$version" --jq '.object.type + " " + .object.sha' 2>&1); then
-        echo "::error file=$file::$path — $repo 의 태그 '$version' 을 못 읽었다: $object"
+    # **락파일에 없으면 막는다.** 새 핀이나 바뀐 핀은 `--refresh` 를 거쳐야 하고,
+    # 그때 원격에 물은 결과가 락파일 diff 로 남아 사람이 본다.
+    entry=${locked["$path@$rev"]:-}
+    if [[ -z "$entry" ]]; then
+        echo "::error file=$file::$path@$rev 이 $LOCK 에 없다." \
+             "\`.github/scripts/action-pins.sh --refresh\` 로 갱신하고 같이 커밋한다"
         fail=1
-        continue
-    fi
-
-    read -r kind actual <<<"$object"
-    # 주석 달린 태그는 한 겹 더 푼다. 안 풀면 태그 객체와 커밋을 비교하게 된다 —
-    # `gradle/actions` 가 그 상태로 핀돼 있었다.
-    if [[ "$kind" == tag ]]; then
-        if ! actual=$(gh api "repos/$repo/git/tags/$actual" --jq '.object.sha' 2>&1); then
-            echo "::error file=$file::$path — 태그 객체를 못 풀었다: $actual"
-            fail=1
-            continue
-        fi
-    fi
-
-    if [[ "$actual" != "$rev" ]]; then
-        echo "::error file=$file::$path — 핀과 주석이 어긋난다." \
-             "주석=$version 은 $actual 인데 핀은 $rev 다"
+    elif [[ "$entry" != "$version" ]]; then
+        echo "::error file=$file::$path — 주석과 락파일이 어긋난다." \
+             "주석=$version 인데 락파일=$entry 다"
         fail=1
     fi
 done <<<"$refs"

@@ -344,12 +344,15 @@ if ! git rev-parse --verify "$BASE^{commit}" >/dev/null 2>&1; then
     head2 "기준을 해석할 수 없어 티켓 혼입을 못 본다: $BASE"
     findings=$((findings + 1))
 fi
-# **릴리스·핫픽스는 예외다.** 여러 티켓을 모아 main 으로 올리는 것이 이
-# 브랜치들의 목적이라(WF-3), 여기서 막으면 규범이 규범을 막는다.
+# **릴리스·핫픽스·통합은 예외다.** 여러 티켓을 모아 올리는 것이 이 브랜치들의
+# 목적이라(WF-3), 여기서 막으면 규범이 규범을 막는다.
+#
+# `integration/*` 은 리뷰 도구의 사용량이 시간당 한 건이라 생긴 자리다. 브랜치는
+# 하위 작업 단위로 잘게 두되, 논리적으로 한 문장인 것들을 여기서 묶어 PR 을 연다.
 current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
 tickets=$(git log --format=%B "$BASE"..HEAD | grep -oE 'Refs: CY-[0-9]+' | sort -u | wc -l)
 case "$current_branch" in
-    release/*|hotfix/*) tickets=1 ;;
+    release/*|hotfix/*|integration/*) tickets=1 ;;
 esac
 if ((tickets > 1)); then
     head2 "브랜치에 티켓이 둘 이상 섞였다"

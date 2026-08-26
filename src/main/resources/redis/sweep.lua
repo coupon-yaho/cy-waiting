@@ -154,11 +154,8 @@ local doomed = {}
 local stamped = {}
 -- **받은 것은 끝까지 분류한다.** 커서는 응답 전체 뒤로 전진하므로, 중간에
 -- 끊으면 그 뒤 항목이 이번 순회에서 통째로 빠진다 — 다음 한 바퀴가 돌 때까지
--- 안 걷힌다. 비용은 COUNT 로 잡는다.
+-- 안 걷힌다. 예산은 분류가 아니라 **쓰기**에 건다. 비용은 COUNT 로 잡는다.
 for i = 1, #fields, 2 do
-    if #doomed >= budget or #stamped >= budget then
-        break
-    end
     local value = fields[i + 1]
     if value == 'admitted' then
         -- **옛 표시에는 시각이 없다.** 그대로 두면 나이를 못 재 영영 안 걷히고,
@@ -175,11 +172,25 @@ for i = 1, #fields, 2 do
     end
 end
 
+-- 예산만큼만 쓴다. 남은 것은 다음 한 바퀴에서 다시 만난다.
+local function firstOf(list, count)
+    if #list <= count then
+        return list
+    end
+    local cut = {}
+    for i = 1, count do
+        cut[i] = list[i]
+    end
+    return cut
+end
+
+stamped = firstOf(stamped, budget * 2)
 if #stamped > 0 then
     redis.call('HSET', KEYS[2], unpack(stamped))
 end
 
 local expiredGrace = 0
+doomed = firstOf(doomed, budget)
 if #doomed > 0 then
     redis.call('HDEL', KEYS[2], unpack(doomed))
     expiredGrace = #doomed

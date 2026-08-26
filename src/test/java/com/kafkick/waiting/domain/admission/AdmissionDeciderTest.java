@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.kafkick.waiting.domain.coupon.CouponState;
+import com.kafkick.waiting.domain.coupon.QueueMode;
 import com.kafkick.waiting.domain.coupon.CouponStates;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import org.junit.jupiter.api.DisplayName;
@@ -363,5 +364,30 @@ class AdmissionDeciderTest {
         AdmissionRequest 낡음 = request(CouponStates.off(10_000)).withDataStale(true);
 
         assertThat(decider().decide(낡음)).isEqualTo(AdmissionDecision.PASS_FAIL_OPEN);
+    }
+
+    /**
+     * <b>항상 대기라도 찬 줄에는 안 세운다.</b> 안 걸면 거절 대상 하나하나가
+     * 레디스 왕복을 시도하고, 레디스가 느린 구간에서는 그 왕복이 전부 타임아웃해
+     * fail-open 으로 흘러 뒷단 트래픽 생성기가 된다.
+     */
+    @Test
+    @DisplayName("항상_대기라도_줄이_차면_거절한다")
+    void 항상_대기라도_줄이_차면_거절한다() {
+        // credit 0 이면 용량은 폴백(1 × maxEtaSec)이라 그만큼 찬 줄을 만든다.
+        CouponState 찬_줄 = CouponState.withQueue(QueueMode.ALWAYS, 0, 10_000, 100);
+        AdmissionRequest req = new AdmissionRequest("c1", 찬_줄, META, false, false, false, 0, 50);
+
+        assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.REJECT_QUEUE_FULL);
+    }
+
+    /** 안 찼으면 그대로 세운다. 위 시험만 있으면 항상 거절해도 통과한다. */
+    @Test
+    @DisplayName("항상_대기는_줄이_안_차면_세운다")
+    void 항상_대기는_줄이_안_차면_세운다() {
+        CouponState 여유 = CouponState.withQueue(QueueMode.ALWAYS, 100, 10_000, 100);
+        AdmissionRequest req = new AdmissionRequest("c1", 여유, META, false, false, false, 0, 600);
+
+        assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.ENQUEUE_ALWAYS);
     }
 }

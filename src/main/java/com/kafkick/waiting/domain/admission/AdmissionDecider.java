@@ -41,7 +41,7 @@ public class AdmissionDecider {
     /**
      * 설정을 검증하고 만든다.
      *
-     * <p>비율은 10번 줄에서만 쓰이므로, 여기서 안 막으면 <b>잘못된 설정으로도
+     * <p>비율은 9번 줄에서만 쓰이므로, 여기서 안 막으면 <b>잘못된 설정으로도
      * 토큰·bypass·fail-open 판정이 정상으로 돌아간다.</b> 그러다 한산한 쿠폰
      * 요청 하나가 들어오는 순간 터진다 — 원인에서 먼 곳에서.
      */
@@ -54,6 +54,16 @@ public class AdmissionDecider {
                     "idleCreditRatio 는 0 이상 유한값이어야 한다: %s".formatted(idleCreditRatio));
         }
         return new AdmissionDecider(limiter, idleCreditRatio);
+    }
+
+    /**
+     * 줄이 받을 수 있는 만큼 찼는가.
+     *
+     * <p><b>줄이 있을 때만 의미가 있다.</b> 한산한 쿠폰은 credit 이 0 이라 용량도
+     * 0 이고, 조건을 안 걸면 {@code 0 >= 0} 이 참이 되어 R1 경로가 통째로 막힌다.
+     */
+    private boolean queueFull(CouponState s, AdmissionRequest req) {
+        return s.waiting() > 0 && s.waiting() >= s.queueCapacity(req.maxEtaSec());
     }
 
     /** 판정 사다리 10줄. 위에서부터 처음 걸리는 줄이 답이다. */
@@ -87,7 +97,10 @@ public class AdmissionDecider {
         //
         // 가용성을 안 버린다. 큐가 안 닿으면 등록이 실패하고, 그때는 부르는
         // 쪽이 상한 있는 fail-open 으로 받는다.
-        if (s.mode() == QueueMode.ALWAYS) {
+        // **줄이 이미 찼으면 여기서 안 세운다.** 안 걸면 거절 대상 하나하나가
+        // 레디스 왕복을 시도하고, 레디스가 느린 구간에서는 그 왕복이 전부
+        // 타임아웃해 fail-open 으로 흘러 뒷단 트래픽 생성기가 된다.
+        if (s.mode() == QueueMode.ALWAYS && !queueFull(s, req)) {
             return AdmissionDecision.ENQUEUE_ALWAYS;
         }
 
@@ -105,7 +118,7 @@ public class AdmissionDecider {
         // 5 — 운영자가 껐다. **다만 줄이 비었을 때만이다.**
         //
         // 줄이 남아 있는데 우회시키면 신규 유입이 그 줄을 통째로 추월하고
-        // 재고까지 먼저 먹는다 — 6번이 낡은 스냅샷에서 막은 것을 여기서
+        // 재고까지 먼저 먹는다 — 7번이 낡은 스냅샷에서 막은 것을 여기서
         // 그대로 뚫는 셈이다 (불변식 4).
         //
         // `justEnqueued` 를 포함한다. waiting 이 아직 0 인데 이 요청이 방금
@@ -123,7 +136,7 @@ public class AdmissionDecider {
         //     보고 있고, 뺄 수 없다고 아는 줄에 더 세우느니 거절이 낫다.
         //     credit 이 0 인 채로 굳는 구간은 있다 — 활성 쿠폰 수가 전역
         //     크레딧보다 많으면 몫이 0 으로 떨어진다. 그때도 거절이 맞다.
-        if (s.waiting() > 0 && s.waiting() >= s.queueCapacity(req.maxEtaSec())) {
+        if (queueFull(s, req)) {
             return AdmissionDecision.REJECT_QUEUE_FULL;
         }
 

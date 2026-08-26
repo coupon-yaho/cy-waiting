@@ -97,4 +97,30 @@ class AdmissionCapTest {
             }
         }
     }
+
+    /**
+     * <b>노드 몫이 있는데 상한이 0 이면 R1 이 역전된다.</b> 노드 예산은 한 명을
+     * 받을 수 있는데 쿠폰별 상한이 먼저 막아, 아무도 안 몰리는 쿠폰이 전 노드에서
+     * 줄을 선다.
+     */
+    @Test
+    @DisplayName("노드_몫이_있으면_상한이_0이_아니다")
+    void 노드_몫이_있으면_상한이_0이_아니다() {
+        // globalCredit 19 / 노드 10 → 노드당 1. 0.7 을 곱하면 절삭돼 0 이다.
+        SnapshotMeta 빠듯함 = new SnapshotMeta(19, 10);
+
+        assertThat(CouponStates.idle(1_000).idleCap(빠듯함, 0.7)).isOne();
+    }
+
+    /**
+     * <b>몫 자체가 0 이면 0 이다.</b> 크레딧이 노드 수보다 적을 때 각자 하나씩
+     * 통과시키면 총합이 크레딧을 넘는다 (B-2).
+     */
+    @Test
+    @DisplayName("노드_몫이_0이면_상한도_0이다")
+    void 노드_몫이_0이면_상한도_0이다() {
+        SnapshotMeta 부족함 = new SnapshotMeta(9, 10);
+
+        assertThat(CouponStates.idle(1_000).idleCap(부족함, 0.7)).isZero();
+    }
 }

@@ -136,7 +136,19 @@ public record CouponState(
                     "idleCreditRatio 는 0 이상 유한값이어야 한다: %s".formatted(idleCreditRatio));
         }
         long perNode = meta.globalCredit() / meta.effectiveGatewayCount();
-        return (long) (perNode * idleCreditRatio);
+        long capped = (long) (perNode * idleCreditRatio);
+        // **몫이 있는데 0 으로 잘리면 안 된다.** 노드당 1 이면 비율을 곱한 값이
+        // 절삭돼 0 이 되고, 그러면 노드 예산은 한 명을 받을 수 있는데 쿠폰별
+        // 상한이 먼저 막는다 — 아무도 안 몰리는 쿠폰이 전 노드에서 줄을 선다.
+        //
+        // **B-2 가 막는 것과 다른 자리다.** 거기는 크레딧이 노드 수보다 적을 때
+        // 각자 하나씩 통과시켜 총합이 크레딧을 넘는 경우다. 여기서 1 을 보장하는
+        // 것은 `perNode >= 1` 일 때뿐이고, 그때 총합은 노드 수 이하이며
+        // `globalCredit >= 노드 수` 이므로 넘지 않는다 (C-10).
+        //
+        // **비율 0 은 예외다.** 그건 절삭이 아니라 "한산 통과를 끈다" 는 설정이라,
+        // 여기서 1 을 얹으면 운영자가 끈 것이 안 꺼진다.
+        return capped == 0 && perNode > 0 && idleCreditRatio > 0 ? 1 : capped;
     }
 
     /**

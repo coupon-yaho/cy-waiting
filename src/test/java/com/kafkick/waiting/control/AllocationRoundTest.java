@@ -58,12 +58,15 @@ class AllocationRoundTest {
         logger.setLevel(원래_수준);
     }
 
+    /** 재료를 읽은 시각. 발행 시각이 여기서 나온다. */
+    private static final long 읽은_시각 = 1_700_000_000L;
+
     private final Map<String, Map<String, String>> 발행 = new LinkedHashMap<>();
 
     private AllocationRound round(List<CouponDemand> 수요, long 전역_크레딧, int 노드_수) {
         return AllocationRound.of(
                 () -> true,
-                () -> Mono.just(수요),
+                () -> Mono.just(new TimedDemands(수요, 읽은_시각)),
                 () -> 전역_크레딧,
                 () -> 노드_수,
                 grant -> {
@@ -145,8 +148,8 @@ class AllocationRoundTest {
         // 안 됐다는 것과 매진은 전혀 다른 상태다.
         AllocationRound round = AllocationRound.of(
                 () -> true,
-                () -> Mono.just(List.of(new CouponDemand("c1", 5, 100),
-                        new CouponDemand("c2", 5, 100))),
+                () -> Mono.just(new TimedDemands(List.of(new CouponDemand("c1", 5, 100),
+                        new CouponDemand("c2", 5, 100)), 읽은_시각)),
                 () -> 10L, () -> 1,
                 grant -> "c1".equals(grant.couponId())
                         ? Mono.error(new IllegalStateException("끊겼다"))
@@ -254,30 +257,31 @@ class AllocationRoundTest {
      * 나이가 판 지속 시간만큼 어리게 나온다. 그만큼 낡음 판정이 늦어지고, 이미
      * 늙은 대기 인원을 믿는 구간이 길어진다 — 그 구간이 추월 창이다 (불변식 4).
      */
+    /** 리더 시계가 아니라 재료와 같이 온 시각이다. 리더가 옮겨 다녀도 안 흔들린다. */
     @Test
     @DisplayName("발행_시각은_재료를_읽은_시각이다")
     void 발행_시각은_재료를_읽은_시각이다() {
-        Instant 읽은_시각 = Instant.ofEpochSecond(1_700_000_000L);
         // 판이 도는 동안 시계가 흐른다. 적용 왕복이 쿠폰마다 순차로 일어난다.
-        Iterator<Instant> 시계 = List.of(읽은_시각, 읽은_시각.plusSeconds(2),
-                읽은_시각.plusSeconds(3), 읽은_시각.plusSeconds(4)).iterator();
+        Iterator<Instant> 시계 = List.of(
+                Instant.ofEpochSecond(읽은_시각 + 2), Instant.ofEpochSecond(읽은_시각 + 3),
+                Instant.ofEpochSecond(읽은_시각 + 4)).iterator();
         AllocationRound round = AllocationRound.of(
                 () -> true,
-                () -> Mono.just(List.of(new CouponDemand("c1", 1_000, 10_000))),
+                () -> Mono.just(new TimedDemands(List.of(new CouponDemand("c1", 1_000, 10_000)), 읽은_시각)),
                 () -> 100L, () -> 1,
                 grant -> Mono.just(grant.credit()),
                 hash -> {
                     발행.put("last", hash);
                     return Mono.empty();
                 },
-                () -> 시계.hasNext() ? 시계.next() : 읽은_시각.plusSeconds(9),
+                () -> 시계.hasNext() ? 시계.next() : Instant.ofEpochSecond(읽은_시각 + 9),
                 () -> Mono.just(CreditSmoother.of(0.3)),
                 SnapshotCodec.create(), () -> 0L);
 
         round.run().block();
 
         assertThat(SnapshotCodec.create().decode(발행.get("last")).publishedAt())
-                .isEqualTo(읽은_시각);
+                .isEqualTo(Instant.ofEpochSecond(읽은_시각));
     }
 
     /**
@@ -294,7 +298,7 @@ class AllocationRoundTest {
         smoother.observe(0);
         AllocationRound round = AllocationRound.of(
                 () -> true,
-                () -> Mono.just(List.of(new CouponDemand("c1", 1_000, 10_000))),
+                () -> Mono.just(new TimedDemands(List.of(new CouponDemand("c1", 1_000, 10_000)), 읽은_시각)),
                 () -> 40L, () -> 8,
                 grant -> Mono.just(grant.credit()),
                 hash -> {
@@ -320,7 +324,7 @@ class AllocationRoundTest {
         smoother.observe(100);
         AllocationRound round = AllocationRound.of(
                 () -> true,
-                () -> Mono.just(List.of(new CouponDemand("c1", 1_000, 10_000))),
+                () -> Mono.just(new TimedDemands(List.of(new CouponDemand("c1", 1_000, 10_000)), 읽은_시각)),
                 () -> 20L, () -> 1,
                 grant -> Mono.just(grant.credit()),
                 hash -> {
@@ -369,7 +373,7 @@ class AllocationRoundTest {
         AtomicBoolean 리더 = new AtomicBoolean(true);
         AllocationRound round = AllocationRound.of(
                 리더::get,
-                () -> Mono.just(List.of(new CouponDemand("c1", 10, 100))),
+                () -> Mono.just(new TimedDemands(List.of(new CouponDemand("c1", 10, 100)), 읽은_시각)),
                 () -> 8L, () -> 1,
                 grant -> {
                     적용.add(grant.couponId());
@@ -398,7 +402,7 @@ class AllocationRoundTest {
         AtomicInteger 이월 = new AtomicInteger();
         AllocationRound round = AllocationRound.of(
                 () -> true,
-                () -> Mono.just(List.of(new CouponDemand("c1", 10, 100))),
+                () -> Mono.just(new TimedDemands(List.of(new CouponDemand("c1", 10, 100)), 읽은_시각)),
                 () -> 8L, () -> 1,
                 grant -> Mono.just(grant.credit()),
                 hash -> {
@@ -426,7 +430,7 @@ class AllocationRoundTest {
         // 레디스가 흔들릴 때 배분이 통째로 안 시작한다.
         AllocationRound round = AllocationRound.of(
                 () -> true,
-                () -> Mono.just(List.of(new CouponDemand("c1", 10, 100))),
+                () -> Mono.just(new TimedDemands(List.of(new CouponDemand("c1", 10, 100)), 읽은_시각)),
                 () -> 8L, () -> 1,
                 grant -> {
                     적용.add(grant.couponId());
@@ -476,7 +480,7 @@ class AllocationRoundTest {
         // 적용이 실패하면 0 이다. 안 남기면 크레딧이 어디서 새는지 못 가린다.
         AllocationRound round = AllocationRound.of(
                 () -> true,
-                () -> Mono.just(List.of(new CouponDemand("c1", 10, 100))),
+                () -> Mono.just(new TimedDemands(List.of(new CouponDemand("c1", 10, 100)), 읽은_시각)),
                 () -> 8L, () -> 1,
                 grant -> Mono.just(3L),
                 hash -> {
@@ -503,7 +507,7 @@ class AllocationRoundTest {
                 리더::get,
                 () -> Mono.fromSupplier(() -> {
                     리더.set(false);
-                    return List.of(new CouponDemand("c1", 10, 100));
+                    return new TimedDemands(List.of(new CouponDemand("c1", 10, 100)), 읽은_시각);
                 }),
                 () -> 8L, () -> 1,
                 grant -> {

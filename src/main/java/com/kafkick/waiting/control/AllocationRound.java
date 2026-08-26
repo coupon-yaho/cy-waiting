@@ -39,7 +39,7 @@ public final class AllocationRound {
     private static final double DEFAULT_ALPHA = 0.3;
 
     private final BooleanSupplier stillLeader;
-    private final Supplier<Mono<List<CouponDemand>>> demands;
+    private final Supplier<Mono<TimedDemands>> demands;
     private final LongSupplier globalCredit;
     private final LongSupplier creditFloor;
     private final IntSupplier gatewayCount;
@@ -60,7 +60,7 @@ public final class AllocationRound {
     private final FailureWindow failures;
 
     private AllocationRound(BooleanSupplier stillLeader,
-            Supplier<Mono<List<CouponDemand>>> demands, LongSupplier globalCredit,
+            Supplier<Mono<TimedDemands>> demands, LongSupplier globalCredit,
             IntSupplier gatewayCount, Function<Grant, Mono<Long>> apply,
             Function<Map<String, String>, Mono<Void>> publish, Supplier<Instant> clock,
             Supplier<Mono<CreditSmoother>> restore, SnapshotCodec codec,
@@ -84,7 +84,7 @@ public final class AllocationRound {
     }
 
     public static AllocationRound of(BooleanSupplier stillLeader,
-            Supplier<Mono<List<CouponDemand>>> demands,
+            Supplier<Mono<TimedDemands>> demands,
             LongSupplier globalCredit, IntSupplier gatewayCount, Function<Grant, Mono<Long>> apply,
             Function<Map<String, String>, Mono<Void>> publish, Supplier<Instant> clock,
             Supplier<Mono<CreditSmoother>> restore, SnapshotCodec codec,
@@ -94,11 +94,12 @@ public final class AllocationRound {
     }
 
     public Mono<Void> run() {
-        // **재료를 읽은 시각을 그때 찍는다.** 발행 시각으로 찍으면 스냅샷 나이가
-        // 판 지속 시간만큼 실제보다 어리게 나온다 — 그 차이만큼 낡음 판정이
-        // 늦어지고, 대기 인원을 믿는 구간이 길어져 추월 창이 된다.
-        return seeded().then(Mono.fromSupplier(clock::get)
-                .flatMap(readAt -> demands.get().flatMap(d -> allocate(d, readAt))));
+        // **재료를 읽은 시각을 재료와 같이 받는다.** 판이 끝난 시각으로 찍으면
+        // 나이가 판 지속 시간만큼 어리고, 리더 벽시계로 찍으면 노드마다 다르게
+        // 낡는다 — 둘 다 낡음 판정을 흔든다.
+        return seeded().then(demands.get()
+                .flatMap(read -> allocate(read.demands(),
+                        Instant.ofEpochSecond(read.readAt()))));
     }
 
     /**

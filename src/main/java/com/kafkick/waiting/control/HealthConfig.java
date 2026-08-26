@@ -38,7 +38,7 @@ public class HealthConfig {
     @Bean
     SnapshotRefresher snapshotRefresher(SnapshotHolder holder, SnapshotSource source,
             Clock clock) {
-        return SnapshotRefresher.of(holder, source::load, clock);
+        return SnapshotRefresher.timed(holder, source::loadTimed, clock);
     }
 
     @Bean

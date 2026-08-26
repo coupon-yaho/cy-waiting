@@ -27,7 +27,12 @@ public final class SnapshotHolder {
      * <p>따로 두면 읽는 쪽이 새 스냅샷과 옛 시각을 짝지어 본다. 그러면 방금
      * 갱신했는데도 낡음이 되고, 그 값이 노드를 빼는 경로에 물려 있다.
      */
-    private record Held(GatewaySnapshot snapshot, Instant fetchedAt, Instant lastTick) {
+    /**
+     * @param ageAtFetch 받아온 순간에 잰 재료의 나이. <b>레디스 시계 하나로</b>
+     *                   잰 값이라 노드 시계가 어긋나도 안 흔들린다
+     */
+    private record Held(GatewaySnapshot snapshot, Instant fetchedAt, Instant lastTick,
+            Duration ageAtFetch) {
     }
 
     /**
@@ -35,7 +40,8 @@ public final class SnapshotHolder {
      * 경합이 생긴다. 참조 교체는 원자적이고 담긴 것이 전부 불변이라 족하다.
      */
     private final AtomicReference<Held> current =
-            new AtomicReference<>(new Held(GatewaySnapshot.EMPTY, Instant.EPOCH, null));
+            new AtomicReference<>(
+                    new Held(GatewaySnapshot.EMPTY, Instant.EPOCH, null, Duration.ZERO));
 
     public static SnapshotHolder of(Duration fetchStaleAfter, Duration dataStaleAfter,
             Clock clock) {
@@ -76,22 +82,23 @@ public final class SnapshotHolder {
     public View view() {
         Held held = current.get();
         Instant now = clock.instant();
+        Duration dataAge = dataAgeOf(held, now);
         return new View(held.snapshot(), age(held.fetchedAt(), now),
                 held.lastTick() == null ? null : age(held.lastTick(), now),
-                dataAgeOf(held, now), isClockAheadOf(held, now));
+                dataAge.isNegative() ? Duration.ZERO : dataAge, dataAge.isNegative());
     }
 
     private Duration age(Instant since, Instant now) {
         return Duration.between(since, now);
     }
 
+    /**
+     * <b>절대 시각을 빼지 않는다.</b> 받아온 순간에 잰 나이에 그 뒤로 이 노드가
+     * 흐른 시간을 더한다 — 앞은 레디스 시계 하나로, 뒤는 노드 시계 하나로 잰
+     * 값이라 어느 쪽도 두 시계의 차가 아니다.
+     */
     private Duration dataAgeOf(Held held, Instant now) {
-        Duration age = Duration.between(held.snapshot().publishedAt(), now);
-        return age.isNegative() ? Duration.ZERO : age;
-    }
-
-    private boolean isClockAheadOf(Held held, Instant now) {
-        return Duration.between(held.snapshot().publishedAt(), now).isNegative();
+        return held.ageAtFetch().plus(Duration.between(held.fetchedAt(), now));
     }
 
     /**
@@ -123,7 +130,23 @@ public final class SnapshotHolder {
      */
     public void replace(GatewaySnapshot snapshot) {
         Instant now = clock.instant();
-        current.set(new Held(snapshot, now, now));
+        // 시각을 못 받았으면 두 벽시계를 비교하는 수밖에 없다. 받아오는 쪽이
+        // 레디스 시각을 같이 읽으므로 운영에서는 아래 형태를 쓴다.
+        current.set(new Held(snapshot, now, now, Duration.between(snapshot.publishedAt(), now)));
+    }
+
+    /**
+     * 받아온 순간의 <b>레디스 시각</b>과 함께 갈아 끼운다.
+     *
+     * <p>재료의 나이를 여기서 한 번만 재고, 그 뒤로는 이 노드가 흐른 시간만
+     * 더한다 — 두 벽시계를 빼는 자리가 없어진다.
+     */
+    public void replace(GatewaySnapshot snapshot, long serverSec) {
+        Instant now = clock.instant();
+        // **부호를 안 지운다.** 발행 시각이 미래면 그건 시계가 갈렸다는 신호라,
+        // 조용히 0 으로 접으면 스케줄러가 죽어도 아무도 모른다.
+        current.set(new Held(snapshot, now, now,
+                Duration.between(snapshot.publishedAt(), Instant.ofEpochSecond(serverSec))));
     }
 
     /**
@@ -135,7 +158,7 @@ public final class SnapshotHolder {
      */
     public void loopTicked() {
         Instant now = clock.instant();
-        current.updateAndGet(s -> new Held(s.snapshot(), s.fetchedAt(), now));
+        current.updateAndGet(s -> new Held(s.snapshot(), s.fetchedAt(), now, s.ageAtFetch()));
     }
 
     /**

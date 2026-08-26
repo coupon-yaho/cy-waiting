@@ -28,6 +28,9 @@ import reactor.core.publisher.Mono;
  */
 class DemandCollectorTest {
 
+    /** 재료를 읽은 시각. 발행 시각이 여기서 나온다. */
+    private static final long 읽은_시각 = 1_700_000_000L;
+
     private DemandCollector collector(List<String> 쿠폰, Map<String, List<Long>> 큐,
             Map<String, Long> 재고) {
         return collector(쿠폰, 큐, 재고, Map.of());
@@ -36,7 +39,7 @@ class DemandCollectorTest {
     private DemandCollector collector(List<String> 쿠폰, Map<String, List<Long>> 큐,
             Map<String, Long> 재고, Map<String, QueueMode> 정책) {
         return DemandCollector.of(
-                () -> Mono.just(쿠폰),
+                () -> Mono.just(new TimedCoupons(쿠폰, 읽은_시각)),
                 ids -> Mono.just(ids.stream().collect(Collectors.toMap(
                         id -> id, id -> 큐.get(id).stream().mapToLong(Long::longValue).sum()))),
                 ids -> Mono.just(재고),
@@ -55,7 +58,7 @@ class DemandCollectorTest {
                 Map.of("c1", 100L, "c2", 100L),
                 Map.of("c1", QueueMode.ALWAYS));
 
-        List<CouponDemand> 수요 = collector.collect().block(Duration.ofSeconds(5));
+        List<CouponDemand> 수요 = collector.collect().block(Duration.ofSeconds(5)).demands();
 
         assertThat(수요).extracting(CouponDemand::couponId, CouponDemand::mode)
                 .containsExactly(
@@ -70,7 +73,7 @@ class DemandCollectorTest {
         DemandCollector collector = collector(List.of("c1"),
                 Map.of("c1", List.of(3L, 5L, 0L, 2L)), Map.of("c1", 100L));
 
-        List<CouponDemand> 수요 = collector.collect().block();
+        List<CouponDemand> 수요 = collector.collect().block().demands();
 
         assertThat(수요).singleElement()
                 .satisfies(d -> {
@@ -89,7 +92,7 @@ class DemandCollectorTest {
                 Map.of("c1", List.of(1L, 1L, 1L, 1L), "c2", List.of(10L, 0L, 0L, 0L)),
                 Map.of("c1", 50L, "c2", 7L));
 
-        List<CouponDemand> 수요 = collector.collect().block();
+        List<CouponDemand> 수요 = collector.collect().block().demands();
 
         assertThat(수요).extracting(CouponDemand::couponId, CouponDemand::waiting,
                         CouponDemand::stock)
@@ -105,7 +108,7 @@ class DemandCollectorTest {
         DemandCollector collector = collector(List.of("c1"),
                 Map.of("c1", List.of(9L, 0L, 0L, 0L)), Collections.emptyMap());
 
-        List<CouponDemand> 수요 = collector.collect().block();
+        List<CouponDemand> 수요 = collector.collect().block().demands();
 
         assertThat(수요).singleElement().satisfies(d -> assertThat(d.stock()).isZero());
     }
@@ -115,12 +118,12 @@ class DemandCollectorTest {
     void 대기를_모르면_없는_것으로_본다() {
         // 값이 안 오는 것과 0 인 것은 같다. 모르는 쪽을 크게 잡으면 초과 배분이다.
         DemandCollector collector = DemandCollector.of(
-                () -> Mono.just(List.of("c1")),
+                () -> Mono.just(new TimedCoupons(List.of("c1"), 읽은_시각)),
                 ids -> Mono.just(Collections.singletonMap("c1", null)),
                 ids -> Mono.just(Map.of("c1", 100L)),
                 ids -> Mono.just(Map.of()));
 
-        List<CouponDemand> 수요 = collector.collect().block();
+        List<CouponDemand> 수요 = collector.collect().block().demands();
 
         assertThat(수요).singleElement().satisfies(d -> assertThat(d.waiting()).isZero());
     }
@@ -132,7 +135,7 @@ class DemandCollectorTest {
         // 판을 죽이면 대상이 생겨도 배분이 안 돈다.
         AtomicInteger 조회 = new AtomicInteger();
         DemandCollector collector = DemandCollector.of(
-                () -> Mono.just(List.of()),
+                () -> Mono.just(new TimedCoupons(List.of(), 읽은_시각)),
                 ids -> {
                     조회.incrementAndGet();
                     return Mono.just(Map.of());
@@ -146,7 +149,7 @@ class DemandCollectorTest {
                     return Mono.just(Map.of());
                 });
 
-        List<CouponDemand> 수요 = collector.collect().block();
+        List<CouponDemand> 수요 = collector.collect().block().demands();
 
         assertThat(수요).isEmpty();
         assertThat(조회).hasValue(0);
@@ -160,7 +163,7 @@ class DemandCollectorTest {
         //
         // 기대값이 없으면 어긋난 정도를 모른다.
         DemandCollector collector = DemandCollector.of(
-                () -> Mono.just(List.of("c1", "c2")),
+                () -> Mono.just(new TimedCoupons(List.of("c1", "c2"), 읽은_시각)),
                 ids -> Mono.just(Map.of("c1", 4L)),
                 ids -> Mono.just(Map.of("c1", 10L, "c2", 10L)),
                 ids -> Mono.just(Map.of()));

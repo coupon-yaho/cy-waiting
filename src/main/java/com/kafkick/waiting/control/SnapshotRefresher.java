@@ -23,6 +23,10 @@ import reactor.core.scheduler.Schedulers;
  */
 public final class SnapshotRefresher {
 
+    /** 해독한 재료와 그것을 읽은 레디스 시각. */
+    private record Read(GatewaySnapshot snapshot, long now) {
+    }
+
     private static final Logger log = LoggerFactory.getLogger(SnapshotRefresher.class);
     private static final Duration DEFAULT_TIMEOUT = Duration.ofMillis(400);
 
@@ -36,12 +40,12 @@ public final class SnapshotRefresher {
      */
     private final AtomicReference<Instant> failingSince = new AtomicReference<>();
     private final SnapshotHolder holder;
-    private final Supplier<Mono<Map<String, String>>> source;
+    private final Supplier<Mono<TimedSnapshot>> source;
     private final Duration timeout;
     private final Clock clock;
 
     private SnapshotRefresher(SnapshotHolder holder,
-            Supplier<Mono<Map<String, String>>> source, Duration timeout, Clock clock) {
+            Supplier<Mono<TimedSnapshot>> source, Duration timeout, Clock clock) {
         this.holder = holder;
         this.source = source;
         this.timeout = timeout;
@@ -50,8 +54,21 @@ public final class SnapshotRefresher {
 
     public static SnapshotRefresher of(SnapshotHolder holder,
             Supplier<Mono<Map<String, String>>> source, Clock clock) {
+        return timed(holder, TimedSnapshot.untimed(source), clock);
+    }
+
+    /**
+     * 재료와 <b>그것을 읽은 레디스 시각</b>을 같이 받는다. 운영 배선이 쓰는 형태다.
+     *
+     * <p>시각을 안 받으면 나이를 두 벽시계의 차로 재게 되고, 같은 스냅샷이
+     * 노드마다 다르게 낡는다.
+     */
+    public static SnapshotRefresher timed(SnapshotHolder holder,
+            Supplier<Mono<TimedSnapshot>> source, Clock clock) {
         return new SnapshotRefresher(holder, source, DEFAULT_TIMEOUT, clock);
     }
+
+
 
     /**
      * 시계를 안 받는 형태. <b>운영 배선은 이걸 안 쓴다</b> — 빈으로 주입받는다.
@@ -67,7 +84,7 @@ public final class SnapshotRefresher {
     /** 한 판의 상한을 주입한다. 발행 주기보다 짧아야 다음 판이 제때 돈다. */
     public static SnapshotRefresher of(SnapshotHolder holder,
             Supplier<Mono<Map<String, String>>> source, Duration timeout) {
-        return new SnapshotRefresher(holder, source, timeout, Clock.systemUTC());
+        return new SnapshotRefresher(holder, TimedSnapshot.untimed(source), timeout, Clock.systemUTC());
     }
 
     /**
@@ -95,23 +112,29 @@ public final class SnapshotRefresher {
                 // 발행 표시가 없으면 버리되 **조용히 버리지 않는다.** 필터는
                 // 오류가 아니라서 아무 흔적을 안 남기는데, 스케줄러 판이 그
                 // 필드를 아직 안 쓰면 전 노드가 영영 갱신을 못 한다.
-                .map(codec::decode)
+                .map(read -> new Read(codec.decode(read.hash()), read.now()))
                 // **받아들일 수 있는 것만 받는다.** 발행 표시가 없으면 스케줄러가
                 // 낸 것이 아니고, 쿠폰을 하나도 못 읽었으면 형식이 갈린 것이다 —
                 // 둘 다 그대로 받으면 홀더가 비고 전 쿠폰이 매진으로 보인다.
                 //
                 // 조용히 버리지 않는다. 필터는 오류가 아니라 흔적을 안 남기는데,
                 // 스케줄러 판이 갈리면 전 노드가 영영 갱신을 못 한다.
-                .doOnNext(snapshot -> {
-                    if (!isAcceptable(snapshot)) {
+                .doOnNext(read -> {
+                    if (!isAcceptable(read.snapshot())) {
                         enterFailing("받아들일 수 없는 스냅샷 — 발행={} 쿠폰={}",
-                                !snapshot.publishedAt().equals(Instant.EPOCH),
-                                snapshot.coupons().size());
+                                !read.snapshot().publishedAt().equals(Instant.EPOCH),
+                                read.snapshot().coupons().size());
                     }
                 })
-                .filter(this::isAcceptable)
-                .doOnNext(snapshot -> {
-                    holder.replace(snapshot);
+                .filter(read -> isAcceptable(read.snapshot()))
+                .doOnNext(read -> {
+                    // 시각을 못 받았으면 홀더가 자기 시계로 잰다. 운영 배선은
+                    // 늘 받으므로 그 경로는 시험이 따로 잠근다.
+                    if (read.now() > 0) {
+                        holder.replace(read.snapshot(), read.now());
+                    } else {
+                        holder.replace(read.snapshot());
+                    }
                     exitFailing();
                 })
                 .doOnError(e -> enterFailing("스냅샷 갱신 실패 — 들고 있던 것을 유지한다: {}",

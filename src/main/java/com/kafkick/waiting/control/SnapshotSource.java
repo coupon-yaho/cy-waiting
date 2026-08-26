@@ -13,4 +13,14 @@ public interface SnapshotSource {
 
     /** 발행된 판정 재료 전체. 없으면 빈 것이 온다. */
     Mono<Map<String, String>> load();
+
+    /**
+     * 재료와 <b>그것을 읽은 레디스 시각</b>.
+     *
+     * <p>기본은 시각 없이(0) 돌려준다 — 그때는 홀더가 자기 시계로 나이를 잰다.
+     * 실배선은 이것을 재정의해 한 왕복으로 같이 읽는다.
+     */
+    default Mono<TimedSnapshot> loadTimed() {
+        return load().map(hash -> new TimedSnapshot(hash, 0));
+    }
 }

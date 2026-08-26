@@ -232,4 +232,37 @@ class SnapshotHolderTest {
         Map<String, CouponState> coupons = Map.of("c1", CouponState.always(100));
         return new GatewaySnapshot(coupons, new SnapshotMeta(1000, 3), publishedAt);
     }
+
+    /**
+     * <b>나이를 두 벽시계의 차로 재지 않는다.</b> 발행 시각은 리더가 찍고 나이는
+     * 각 노드가 재므로, 보정 없이는 시계가 어긋난 만큼 같은 스냅샷이 노드마다
+     * 다르게 낡는다 — 어떤 노드는 fail-open 으로 열리고 어떤 노드는 안 열린다.
+     */
+    @Test
+    @DisplayName("나이는_받아온_순간에_한_번만_잰다")
+    void 나이는_받아온_순간에_한_번만_잰다() {
+        // 이 노드 시계가 레디스보다 100 초 앞선다.
+        MutableClock 앞선_시계 = MutableClock.at(지금.plusSeconds(100));
+        SnapshotHolder holder = SnapshotHolder.of(
+                Duration.ofSeconds(3), Duration.ofSeconds(5), 앞선_시계);
+
+        // 레디스 기준으로는 방금 발행된 재료다.
+        holder.replace(스냅샷(지금.minusSeconds(2)), 지금.getEpochSecond());
+
+        assertThat(holder.view().dataAge()).isEqualTo(Duration.ofSeconds(2));
+    }
+
+    /** 받아온 뒤로는 이 노드가 흐른 만큼만 더한다. 그건 한 시계로 잰 값이다. */
+    @Test
+    @DisplayName("받아온_뒤_흐른_시간이_더해진다")
+    void 받아온_뒤_흐른_시간이_더해진다() {
+        MutableClock 시계 = MutableClock.at(지금.plusSeconds(100));
+        SnapshotHolder holder = SnapshotHolder.of(
+                Duration.ofSeconds(3), Duration.ofSeconds(5), 시계);
+        holder.replace(스냅샷(지금.minusSeconds(2)), 지금.getEpochSecond());
+
+        시계.앞으로(Duration.ofSeconds(3));
+
+        assertThat(holder.view().dataAge()).isEqualTo(Duration.ofSeconds(5));
+    }
 }

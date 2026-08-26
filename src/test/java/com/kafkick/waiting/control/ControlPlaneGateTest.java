@@ -319,7 +319,7 @@ class ControlPlaneGateTest {
         Duration 임계 = Duration.ofMillis(100);
         AllocationRound round = AllocationRound.of(
                 () -> true,
-                () -> Mono.just(수요(쿠폰_수)),
+                () -> Mono.just(new TimedDemands(수요(쿠폰_수), 1_700_000_000L)),
                 () -> 10_000L, () -> 10,
                 grant -> Mono.just(grant.credit()),
                 hash -> Mono.empty(),

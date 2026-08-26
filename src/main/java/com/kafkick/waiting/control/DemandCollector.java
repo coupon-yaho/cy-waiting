@@ -19,12 +19,12 @@ import reactor.core.publisher.Mono;
  */
 public final class DemandCollector {
 
-    private final Supplier<Mono<List<String>>> activeCoupons;
+    private final Supplier<Mono<TimedCoupons>> activeCoupons;
     private final Function<List<String>, Mono<Map<String, Long>>> queueSizes;
     private final Function<List<String>, Mono<Map<String, Long>>> stocks;
     private final Function<List<String>, Mono<Map<String, QueueMode>>> queueModes;
 
-    private DemandCollector(Supplier<Mono<List<String>>> activeCoupons,
+    private DemandCollector(Supplier<Mono<TimedCoupons>> activeCoupons,
             Function<List<String>, Mono<Map<String, Long>>> queueSizes,
             Function<List<String>, Mono<Map<String, Long>>> stocks,
             Function<List<String>, Mono<Map<String, QueueMode>>> queueModes) {
@@ -35,22 +35,30 @@ public final class DemandCollector {
     }
 
     /** 샤드는 여기서 안 본다 — 합산은 명령을 내는 쪽이 한다. */
-    public static DemandCollector of(Supplier<Mono<List<String>>> activeCoupons,
+    public static DemandCollector of(Supplier<Mono<TimedCoupons>> activeCoupons,
             Function<List<String>, Mono<Map<String, Long>>> queueSizes,
             Function<List<String>, Mono<Map<String, Long>>> stocks,
             Function<List<String>, Mono<Map<String, QueueMode>>> queueModes) {
         return new DemandCollector(activeCoupons, queueSizes, stocks, queueModes);
     }
 
-    public Mono<List<CouponDemand>> collect() {
-        return activeCoupons.get().flatMap(coupons -> {
+    /**
+     * 이번 틱의 수요와 <b>그것을 읽은 시각</b>.
+     *
+     * <p>발행 시각이 여기서 나온다 — 재료를 읽은 순간이 곧 그 재료의 나이가
+     * 시작되는 지점이다.
+     */
+    public Mono<TimedDemands> collect() {
+        return activeCoupons.get().flatMap(read -> {
+            List<String> coupons = read.coupons();
             // 빈 인자로 명령을 보내면 레디스가 오류를 낸다. 그 오류가 판을 죽이면
             // 대상이 생겨도 배분이 안 돈다.
             if (coupons.isEmpty()) {
-                return Mono.just(List.<CouponDemand>of());
+                return Mono.just(new TimedDemands(List.of(), read.now()));
             }
             return Mono.zip(queueSizes.apply(coupons), stocks.apply(coupons), queueModes.apply(coupons))
-                    .map(all -> assemble(coupons, all.getT1(), all.getT2(), all.getT3()));
+                    .map(all -> new TimedDemands(
+                            assemble(coupons, all.getT1(), all.getT2(), all.getT3()), read.now()));
         });
     }
 

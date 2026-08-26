@@ -2,6 +2,8 @@ package com.kafkick.waiting.adapter.redis;
 
 import com.kafkick.waiting.control.CapacityReport;
 import com.kafkick.waiting.control.CapacitySample;
+import com.kafkick.waiting.control.TimedCoupons;
+import com.kafkick.waiting.control.TimedSnapshot;
 import com.kafkick.waiting.control.ControlPlaneProperties;
 import com.kafkick.waiting.control.FailureWindow;
 import com.kafkick.waiting.control.SnapshotSource;
@@ -49,6 +51,16 @@ public final class AllocationRedisPort implements SnapshotSource {
     @SuppressWarnings("rawtypes")
     private static final RedisScript<List> CAPACITY_READ =
             RedisScript.of(new ClassPathResource("redis/capacity_read.lua"), List.class);
+
+    /** 재료와 그것을 잰 시각을 같이 읽는다. 나이를 한 시계로 재려는 것이다. */
+    @SuppressWarnings("rawtypes")
+    private static final RedisScript<List> SNAPSHOT_READ =
+            RedisScript.of(new ClassPathResource("redis/snapshot_read.lua"), List.class);
+
+    /** 배분 대상과 그것을 읽은 시각. 발행 시각이 여기서 나온다. */
+    @SuppressWarnings("rawtypes")
+    private static final RedisScript<List> ACTIVE_READ =
+            RedisScript.of(new ClassPathResource("redis/active_read.lua"), List.class);
 
     /**
      * 스크립트에 한 번에 넘기는 인자 상한.
@@ -180,6 +192,41 @@ public final class AllocationRedisPort implements SnapshotSource {
      * 판을 죽이면 멀쩡한 쿠폰 전부의 배분이 멎는데, 사람이 목록을 고치기 전에는
      * 안 풀린다. 그래서 걸러 내되 걸러 냈다는 사실을 남긴다.
      */
+    /**
+     * 배분 대상과 <b>그것을 읽은 레디스 시각</b>.
+     *
+     * <p>발행 시각을 리더 벽시계로 찍으면 같은 스냅샷이 노드마다 다르게 낡는다.
+     */
+    public Mono<TimedCoupons> activeCouponsTimed() {
+        AtomicBoolean dropped = new AtomicBoolean();
+        return redis.execute(ACTIVE_READ, List.of(RedisKeys.ACTIVE_COUPONS))
+                .next()
+                .map(raw -> {
+                    List<?> parts = (List<?>) raw;
+                    // **원시 값을 그대로 싣는다.** 단조 바닥값은 프로세스 전체의
+                    // 최댓값이라, 다른 슬롯을 먼저 읽으면 이 읽기와 시각의 짝이
+                    // 깨진다. 가드는 말이 되는 값인지 보고 역행을 남기는 몫이다.
+                    long now = Long.parseLong(String.valueOf(parts.get(0)));
+                    serverClock.observe(now);
+                    List<String> coupons = new ArrayList<>();
+                    for (int i = 1; i < parts.size(); i++) {
+                        String couponId = String.valueOf(parts.get(i));
+                        if (usable(couponId, dropped)) {
+                            coupons.add(couponId);
+                        }
+                    }
+                    coupons.sort(String::compareTo);
+                    return new TimedCoupons(coupons, now);
+                })
+                .doOnNext(read -> {
+                    if (!dropped.get()) {
+                        rejected.exited().ifPresent(recovered ->
+                                log.info("배분 대상이 다시 깨끗하다 — {}초 만에, 그동안 {}건 걸렀다",
+                                        recovered.elapsedSeconds(), recovered.swallowed()));
+                    }
+                });
+    }
+
     public Mono<List<String>> activeCoupons() {
         AtomicBoolean dropped = new AtomicBoolean();
         return redis.opsForSet().members(RedisKeys.ACTIVE_COUPONS)
@@ -386,6 +433,26 @@ public final class AllocationRedisPort implements SnapshotSource {
             args.add(value);
         });
         return redis.execute(PUBLISH, List.of(RedisKeys.SNAPSHOT), args).next().then();
+    }
+
+    /**
+     * 재료와 그것을 잰 시각을 <b>한 번에</b> 읽는다.
+     *
+     * <p>나이를 두 벽시계의 차로 재면 같은 스냅샷이 노드마다 다르게 낡는다.
+     */
+    public Mono<TimedSnapshot> loadTimed() {
+        return redis.execute(SNAPSHOT_READ, List.of(RedisKeys.SNAPSHOT))
+                .next()
+                .map(raw -> {
+                    List<?> parts = (List<?>) raw;
+                    long now = Long.parseLong(String.valueOf(parts.get(0)));
+                    serverClock.observe(now);
+                    Map<String, String> hash = new LinkedHashMap<>();
+                    for (int i = 1; i + 1 < parts.size(); i += 2) {
+                        hash.put(String.valueOf(parts.get(i)), String.valueOf(parts.get(i + 1)));
+                    }
+                    return new TimedSnapshot(hash, now);
+                });
     }
 
     @Override

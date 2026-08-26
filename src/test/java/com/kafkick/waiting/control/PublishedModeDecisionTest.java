@@ -34,7 +34,7 @@ class PublishedModeDecisionTest {
     private CouponState 한_판_돌린다(CouponDemand 수요, long 전역_크레딧) {
         AllocationRound.of(
                         () -> true,
-                        () -> Mono.just(List.of(수요)),
+                        () -> Mono.just(new TimedDemands(List.of(수요), 1_700_000_000L)),
                         () -> 전역_크레딧, () -> 1,
                         grant -> Mono.just(grant.credit()),
                         hash -> {

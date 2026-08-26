@@ -43,7 +43,7 @@ public class ControlPlaneConfig {
 
     @Bean
     DemandCollector demandCollector(AllocationRedisPort port) {
-        return DemandCollector.of(port::activeCoupons, port::queueSizes, port::stocks,
+        return DemandCollector.of(port::activeCouponsTimed, port::queueSizes, port::stocks,
                 port::queueModes);
     }
 

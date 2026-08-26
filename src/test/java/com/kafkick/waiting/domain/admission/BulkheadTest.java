@@ -3,6 +3,11 @@ package com.kafkick.waiting.domain.admission;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -131,5 +136,100 @@ class BulkheadTest {
     void 키_상한이_0이하면_거부한다() {
         assertThatThrownBy(() -> Bulkhead.withMaxKeys(0))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /** 다 나가면 0 으로 돌아온다. 안 돌아오면 지표가 영영 안 내려간다. */
+    @Test
+    @DisplayName("다_나가면_걸린_건수가_0이_된다")
+    void 다_나가면_걸린_건수가_0이_된다() {
+        bulkhead.tryEnter("c1", 3);
+        bulkhead.tryEnter("c2", 3);
+
+        bulkhead.exit("c1");
+        bulkhead.exit("c2");
+
+        assertThat(bulkhead.inFlight()).isZero();
+        assertThat(bulkhead.size()).isZero();
+    }
+
+    /**
+     * <b>검사와 증가를 나누면 여럿이 동시에 "아직 자리 있다" 를 보고 다 들어간다.</b>
+     * 요청 경로에서 공유하는 값이라 그때 상한이 있으나 마나가 된다.
+     */
+    @Test
+    @DisplayName("동시에_들어와도_상한만큼만_들어간다")
+    void 동시에_들어와도_상한만큼만_들어간다() throws InterruptedException {
+        int 상한 = 50;
+        int 스레드 = 32;
+        AtomicInteger 들어간_수 = new AtomicInteger();
+        CountDownLatch 출발 = new CountDownLatch(1);
+        CountDownLatch 도착 = new CountDownLatch(스레드);
+        ExecutorService pool = Executors.newFixedThreadPool(스레드);
+        try {
+            for (int t = 0; t < 스레드; t++) {
+                pool.execute(() -> {
+                    try {
+                        출발.await();
+                        for (int i = 0; i < 200; i++) {
+                            if (bulkhead.tryEnter("c1", 상한)) {
+                                들어간_수.incrementAndGet();
+                            }
+                        }
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    } finally {
+                        도착.countDown();
+                    }
+                });
+            }
+            출발.countDown();
+            assertThat(도착.await(30, TimeUnit.SECONDS)).isTrue();
+        } finally {
+            pool.shutdownNow();
+        }
+
+        // 아무도 안 나갔으니 정확히 상한만큼만 들어가 있어야 한다.
+        assertThat(들어간_수).hasValue(상한);
+        assertThat(bulkhead.inFlight()).isEqualTo(상한);
+    }
+
+    /**
+     * <b>들어간 만큼 나가면 정확히 0 이다.</b> 반납이 경합에서 하나라도 새면
+     * 격벽이 조금씩 조여져, 뒷단이 멀쩡한데도 서서히 막히기 시작한다.
+     */
+    @Test
+    @DisplayName("동시에_드나들어도_건수가_안_샌다")
+    void 동시에_드나들어도_건수가_안_샌다() throws InterruptedException {
+        int 스레드 = 32;
+        CountDownLatch 출발 = new CountDownLatch(1);
+        CountDownLatch 도착 = new CountDownLatch(스레드);
+        ExecutorService pool = Executors.newFixedThreadPool(스레드);
+        try {
+            for (int t = 0; t < 스레드; t++) {
+                int 나 = t;
+                pool.execute(() -> {
+                    try {
+                        출발.await();
+                        for (int i = 0; i < 200; i++) {
+                            String 쿠폰 = "c" + (나 % 4);
+                            if (bulkhead.tryEnter(쿠폰, Long.MAX_VALUE)) {
+                                bulkhead.exit(쿠폰);
+                            }
+                        }
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    } finally {
+                        도착.countDown();
+                    }
+                });
+            }
+            출발.countDown();
+            assertThat(도착.await(30, TimeUnit.SECONDS)).isTrue();
+        } finally {
+            pool.shutdownNow();
+        }
+
+        assertThat(bulkhead.inFlight()).isZero();
+        assertThat(bulkhead.size()).isZero();
     }
 }

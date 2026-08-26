@@ -1,0 +1,26 @@
+# 게이트웨이 로그를 Loki 로 보낸다.
+#
+# **라벨은 허용 목록 안에서만 쓴다** (LG-4). Loki 는 라벨마다 스트림을 만들어서,
+# 쿠폰 식별자처럼 가짓수에 상한이 없는 값을 넣으면 인덱스가 무너진다. 목록을
+# 늘리려면 그 값의 가짓수에 상한이 있는지 먼저 따진다.
+# 검사는 `.github/scripts/loki-labels.sh` 가 한다.
+server:
+  http_listen_port: 9080
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: waiting
+    static_configs:
+      - targets: [localhost]
+        labels:
+          app: waiting
+          env: local
+          # 노드를 가르는 값. 스무 대의 로그가 한 줄로 합쳐지면 한 대만 이상한
+          # 상황을 못 본다.
+          instance: gateway-local
+          __path__: /var/log/waiting/*.log

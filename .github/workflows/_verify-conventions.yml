@@ -231,6 +231,11 @@ jobs:
       - name: 문서 링크 검사
         run: .github/scripts/doc-links.sh
 
+      # **사람이 리뷰로 막을 수 없다.** 라벨 하나 추가는 한 줄이고, 그 한 줄이
+      # 무엇을 뜻하는지는 운영에서 인덱스가 죽고 나서야 드러난다 (LG-4).
+      - name: Loki 라벨 검사
+        run: .github/scripts/loki-labels.sh
+
       # 파일만 확인하면 `](other.md#anchor)` 의 앵커가 사라져도 통과한다.
       # 링크는 열리는데 엉뚱한 위치로 가므로 읽는 사람만 손해다.
       - name: 문서 앵커 검사

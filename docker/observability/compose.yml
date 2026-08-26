@@ -1,0 +1,57 @@
+# 지표와 로그를 로컬에서 본다.
+#
+# **대시보드가 없으면 지표를 만든 의미가 없다.** 값은 나가는데 보는 곳이 없으면
+# 그 사실을 사고가 난 뒤에야 안다.
+#
+# 부하 하네스(`test/load/compose.yml`)와 같은 네트워크에 붙여 쓴다.
+services:
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/healthy"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  loki:
+    image: grafana/loki:3.3.2
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    ports:
+      - "3100:3100"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3100/ready"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  promtail:
+    image: grafana/promtail:3.3.2
+    command: ["-config.file=/etc/promtail/promtail.yml"]
+    volumes:
+      - ./promtail.yml:/etc/promtail/promtail.yml:ro
+    depends_on:
+      loki:
+        condition: service_healthy
+
+  grafana:
+    image: grafana/grafana:11.5.1
+    environment:
+      # 로컬 전용이다. 대시보드를 보려고 매번 로그인하지 않는다.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_SECURITY_ALLOW_EMBEDDING: "true"
+    volumes:
+      - ./grafana-datasources.yml:/etc/grafana/provisioning/datasources/ds.yml:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+
+networks:
+  default:
+    name: waiting-observability

@@ -16,6 +16,7 @@ import com.kafkick.waiting.domain.queue.EtaPolicy;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import com.kafkick.waiting.domain.queue.QueueToken;
 import io.micrometer.core.instrument.MeterRegistry;
+import org.springframework.http.HttpHeaders;
 import java.time.Clock;
 import java.util.Map;
 import java.util.Objects;
@@ -86,6 +87,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     private final EntryToken entryTokens;
     private final SecondWindowLimiter limiter;
     private final EnqueueLatch latch;
+
+    /** 뒷단의 멱등성이 작동할 근거. 같은 시도에 같은 값을 준다 (A-10). */
+    private final IdempotencyKey idempotency;
     private final ApiError error;
     private final QueueResponse waiting = QueueResponse.create();
 
@@ -104,7 +108,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     private AdmissionGatewayFilter(SnapshotHolder holder, AdmissionDecider decider,
             Clock clock, MeterRegistry meters, DoubleSupplier random,
             QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter,
-            EntryToken entryTokens, LongSupplier ticker) {
+            EntryToken entryTokens, IdempotencyKey idempotency, LongSupplier ticker) {
         this.holder = Objects.requireNonNull(holder, "holder 는 필수다");
         this.failOpenWindow = FailureWindow.of(ticker);
         this.decider = Objects.requireNonNull(decider, "decider 는 필수다");
@@ -120,6 +124,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         // 그 차이가 그대로 추월 창이 된다. 두 값이 다른 클래스에 있으면 조용히
         // 갈라지므로, 한계를 정한 쪽에서 끌어온다.
         this.latch = EnqueueLatch.covering(LATCH_MAX_KEYS, holder.dataStaleAfter());
+        this.idempotency = Objects.requireNonNull(idempotency, "idempotency 는 필수다");
         this.error = ApiError.of(clock);
     }
 
@@ -127,26 +132,28 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     @Autowired
     AdmissionGatewayFilter(SnapshotHolder holder, AdmissionDecider decider, Clock clock,
             MeterRegistry meters, QueuePort queue, QueueToken tokens,
-            SecondWindowLimiter limiter, EntryToken entryTokens) {
+            SecondWindowLimiter limiter, EntryToken entryTokens,
+            IdempotencyKey idempotency) {
         this(holder, decider, clock, meters,
                 () -> ThreadLocalRandom.current().nextDouble(), queue, tokens, limiter,
-                entryTokens, System::nanoTime);
+                entryTokens, idempotency, System::nanoTime);
     }
 
     public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider,
             Clock clock, MeterRegistry meters, QueuePort queue, QueueToken tokens,
-            SecondWindowLimiter limiter, EntryToken entryTokens) {
+            SecondWindowLimiter limiter, EntryToken entryTokens,
+            IdempotencyKey idempotency) {
         return new AdmissionGatewayFilter(holder, decider, clock, meters, queue, tokens, limiter,
-                entryTokens);
+                entryTokens, idempotency);
     }
 
     /** 난수원을 받는다. 고정하지 못하면 흔들림이 실제로 붙었는지 못 잰다 (TS-4). */
     public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider,
             Clock clock, MeterRegistry meters, DoubleSupplier random,
             QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter,
-            EntryToken entryTokens) {
+            EntryToken entryTokens, IdempotencyKey idempotency) {
         return new AdmissionGatewayFilter(holder, decider, clock, meters, random, queue,
-                tokens, limiter, entryTokens, System::nanoTime);
+                tokens, limiter, entryTokens, idempotency, System::nanoTime);
     }
 
     /**
@@ -159,9 +166,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider,
             Clock clock, MeterRegistry meters, DoubleSupplier random,
             QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter,
-            EntryToken entryTokens, LongSupplier ticker) {
+            EntryToken entryTokens, IdempotencyKey idempotency, LongSupplier ticker) {
         return new AdmissionGatewayFilter(holder, decider, clock, meters, random, queue,
-                tokens, limiter, entryTokens, ticker);
+                tokens, limiter, entryTokens, idempotency, ticker);
     }
 
     /**
@@ -231,14 +238,14 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         // 상한이 0 이 되고, 그건 전면 차단이다. 이 구간은 준비성 판정이 막는다.
         if (view.isBeforeFirstTick()) {
             count("deferred-no-material");
-            return chain.filter(exchange);
+            return forward(exchange, chain, couponId);
         }
         // **모른다는 것이 무제한의 사유는 아니다.** 사다리 4번은 같은 무지에서
         // 노드 몫 안에서만 여는데, 여기만 열어 두면 아무 문자열 쿠폰이나 그
         // 상한 밖으로 나간다. 같은 예산에 태운다.
         if (holder.isDataStale(view)) {
             count("deferred-stale-material");
-            return failOpen(exchange, chain, view.snapshot().meta());
+            return failOpen(exchange, chain, view.snapshot().meta(), couponId);
         }
         count("unknown-coupon");
         return error.write(exchange, ApiError.Code.UNKNOWN_COUPON);
@@ -247,7 +254,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     private Mono<Void> route(ServerWebExchange exchange, GatewayFilterChain chain,
             AdmissionDecision decision, String couponId, CouponState state, SnapshotMeta meta) {
         if (decision.isPass()) {
-            return chain.filter(exchange);
+            return forward(exchange, chain, couponId);
         }
         if (decision.isEnqueue()) {
             return enqueue(exchange, chain, couponId, state, meta);
@@ -285,7 +292,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                     return Mono.empty();
                 })
                 .switchIfEmpty(Mono.defer(() ->
-                        failOpen(exchange, chain, meta).then(Mono.empty())))
+                        failOpen(exchange, chain, meta, couponId).then(Mono.empty())))
                 .flatMap(entry -> {
                     // 이 노드가 방금 이 쿠폰의 줄을 봤다. 다음 창의 신규 유입이
                     // 여기 선 사람을 넘지 않게 한 구간 붙잡는다.
@@ -327,7 +334,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      * 전부 열면 뒷단이 그대로 무너진다. 상한을 넘은 몫은 되돌려 보낸다.
      */
     private Mono<Void> failOpen(ServerWebExchange exchange, GatewayFilterChain chain,
-            SnapshotMeta meta) {
+            SnapshotMeta meta, String couponId) {
         // **판정과 같은 리미터·같은 키다.** 따로 들면 한 초에 두 예산이 겹쳐
         // 나가고, 리미터를 하나로 두라는 규칙이 막으려던 버스트가 그대로 난다.
         long cap = (long) (AdmissionDecider.globalCap(meta) * FAIL_OPEN_SHARE);
@@ -338,7 +345,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                 log.warn("fail-open 진입 — 줄 등록이 안 돼 통과시킨다, 상한={}", cap);
             }
             count("enqueue-failed-open");
-            return chain.filter(exchange);
+            return forward(exchange, chain, couponId);
         }
         count("enqueue-failed-shed");
         return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
@@ -397,6 +404,29 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         return entryTokens.verify(presented, couponId, clock.instant())
                 .filter(owner -> owner.equals(memberId))
                 .isPresent();
+    }
+
+    /**
+     * 뒷단으로 넘긴다. <b>통과하는 모든 길이 여기를 지난다.</b>
+     *
+     * <p>한 갈래만 키를 실으면 나머지에서는 클라이언트가 준 값이 그대로 뒷단에
+     * 닿는다. 그러면 매 시도 다른 값을 넣어 멱등성을 우회하거나, 남의 키를 주워
+     * 먼저 태워 그 사람의 진짜 시도를 재생으로 버리게 만들 수 있다.
+     */
+    private Mono<Void> forward(ServerWebExchange exchange, GatewayFilterChain chain,
+            String couponId) {
+        HttpHeaders headers = exchange.getRequest().getHeaders();
+        String memberId = headers.getFirst(MEMBER_ID);
+        if (memberId == null) {
+            // 신원 필터가 앞에서 막으므로 여기 오면 배선이 바뀐 것이다.
+            // "null" 로 뭉개면 전원이 같은 키를 받아 서로의 발급을 지운다.
+            return error.write(exchange, ApiError.Code.INVALID_REQUEST);
+        }
+        String key = idempotency.of(couponId, memberId,
+                headers.getFirst(IdempotencyKey.HEADER));
+        return chain.filter(exchange.mutate()
+                .request(r -> r.headers(h -> h.set(IdempotencyKey.HEADER, key)))
+                .build());
     }
 
     private String pathVariable(ServerWebExchange exchange) {

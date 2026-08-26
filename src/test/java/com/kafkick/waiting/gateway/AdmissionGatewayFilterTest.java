@@ -88,9 +88,13 @@ class AdmissionGatewayFilterTest {
 
     private final SecondWindowLimiter limiter = SecondWindowLimiter.withMaxKeys(10_000);
 
+    /** 입장 토큰과 같은 비밀키다. 나누면 운영자가 하나만 넣은 채로 나간다. */
+    private final IdempotencyKey 멱등키 =
+            IdempotencyKey.of("not-a-real-secret-0123456789abcdef");
+
     private final AdmissionGatewayFilter filter = AdmissionGatewayFilter.of(
             holder, AdmissionDecider.of(limiter, IDLE_RATIO),
-            Clock.fixed(지금, ZoneOffset.UTC), meters, 줄, tokens, limiter, entryTokens);
+            Clock.fixed(지금, ZoneOffset.UTC), meters, 줄, tokens, limiter, entryTokens, 멱등키);
 
     private final AtomicReference<Boolean> 뒷단에_닿음 = new AtomicReference<>(false);
 
@@ -328,7 +332,7 @@ class AdmissionGatewayFilterTest {
         MutableClock 시계 = MutableClock.at(지금);
         AdmissionGatewayFilter f = AdmissionGatewayFilter.of(
                 holder, AdmissionDecider.of(limiter, IDLE_RATIO),
-                시계, meters, () -> 0.5, 줄, tokens, limiter, entryTokens);
+                시계, meters, () -> 0.5, 줄, tokens, limiter, entryTokens, 멱등키);
         스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
         태운다(f, COUPON);
 
@@ -353,7 +357,7 @@ class AdmissionGatewayFilterTest {
                 Duration.ofSeconds(3), 홀더_유효_한계, 시계);
         AdmissionGatewayFilter f = AdmissionGatewayFilter.of(
                 같은_시계_홀더, AdmissionDecider.of(limiter, IDLE_RATIO),
-                시계, meters, () -> 0.5, 줄, tokens, limiter, entryTokens);
+                시계, meters, () -> 0.5, 줄, tokens, limiter, entryTokens, 멱등키);
         같은_시계_홀더.replace(new GatewaySnapshot(
                 Map.of(COUPON, CouponStates.queueing(10, 1_000, 5_000)), META, 지금));
         태운다(f, COUPON);
@@ -381,7 +385,7 @@ class AdmissionGatewayFilterTest {
         SnapshotHolder 소수_홀더 = SnapshotHolder.of(Duration.ofSeconds(3), 한계, 시계);
         AdmissionGatewayFilter f = AdmissionGatewayFilter.of(
                 소수_홀더, AdmissionDecider.of(limiter, IDLE_RATIO),
-                시계, meters, () -> 0.5, 줄, tokens, limiter, entryTokens);
+                시계, meters, () -> 0.5, 줄, tokens, limiter, entryTokens, 멱등키);
         // **초 경계 한가운데서 줄을 세운다.** 래치는 초로 자른 시각을 재므로,
         // 초의 앞부분이 잘려 나간 만큼 실효 수명이 짧아진다. 경계에서 세우면
         // 그 손실이 0 이라 절삭을 못 잰다.
@@ -746,7 +750,7 @@ class AdmissionGatewayFilterTest {
         // 안 알려 주면 각자 마음대로 돌아온다. 그 파도가 다음 거절을 만든다.
         AdmissionGatewayFilter f = AdmissionGatewayFilter.of(
                 holder, AdmissionDecider.of(limiter, IDLE_RATIO),
-                Clock.fixed(지금, ZoneOffset.UTC), meters, () -> 0.5, 줄, tokens, limiter, entryTokens);
+                Clock.fixed(지금, ZoneOffset.UTC), meters, () -> 0.5, 줄, tokens, limiter, entryTokens, 멱등키);
         스냅샷을_심는다(CouponStates.queueing(1, 1_000, 5_000));
 
         MockServerWebExchange exchange = 요청(COUPON);
@@ -892,7 +896,7 @@ class AdmissionGatewayFilterTest {
         MutableClock 시계 = MutableClock.at(지금);
         AdmissionGatewayFilter f = AdmissionGatewayFilter.of(
                 holder, AdmissionDecider.of(limiter, IDLE_RATIO), 시계, meters, () -> 0.5,
-                줄, tokens, limiter, entryTokens);
+                줄, tokens, limiter, entryTokens, 멱등키);
         스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
         // 래치가 실제로 걸렸는지부터 본다. 안 걸렸으면 뒤의 통과가 아무 뜻이 없다.
         assertThat(태운다(f, COUPON)).matches(AdmissionDecision::isEnqueue, "대기 판정");
@@ -923,7 +927,7 @@ class AdmissionGatewayFilterTest {
         MutableClock 시계 = MutableClock.at(지금);
         AdmissionGatewayFilter f = AdmissionGatewayFilter.of(
                 holder, AdmissionDecider.of(limiter, IDLE_RATIO),
-                시계, meters, () -> 0.5, 줄, tokens, limiter, entryTokens);
+                시계, meters, () -> 0.5, 줄, tokens, limiter, entryTokens, 멱등키);
         스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
         태운다(f, COUPON);
 
@@ -949,7 +953,7 @@ class AdmissionGatewayFilterTest {
         MutableClock 시계 = MutableClock.at(지금);
         AdmissionGatewayFilter f = AdmissionGatewayFilter.of(
                 holder, AdmissionDecider.of(limiter, IDLE_RATIO),
-                시계, meters, () -> 0.5, 줄, tokens, limiter, entryTokens);
+                시계, meters, () -> 0.5, 줄, tokens, limiter, entryTokens, 멱등키);
         // 스냅샷이 이미 줄을 보고 있는 상태에서 한 명 더 넣는다.
         스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
         태운다(f, COUPON);
@@ -1030,7 +1034,7 @@ class AdmissionGatewayFilterTest {
         Instant 낡은_발행 = 지금.minusSeconds(3_600);
         MutableClock 시계 = MutableClock.at(지금);
         AdmissionGatewayFilter 시계를_쓰는_필터 = AdmissionGatewayFilter.of(
-                holder, AdmissionDecider.of(limiter, IDLE_RATIO), 시계, meters, 줄, tokens, limiter, entryTokens);
+                holder, AdmissionDecider.of(limiter, IDLE_RATIO), 시계, meters, 줄, tokens, limiter, entryTokens, 멱등키);
         holder.replace(new GatewaySnapshot(
                 Map.of(COUPON, CouponStates.idle(1_000_000)),
                 new SnapshotMeta(1, 1), 낡은_발행));
@@ -1057,5 +1061,157 @@ class AdmissionGatewayFilterTest {
 
         assertThat(exchange.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
                 .isEqualTo(AdmissionDecision.PASS_UNDER_CAP);
+    }
+
+    /**
+     * <b>게이트웨이가 끊어도 뒷단은 처리했을 수 있다.</b> 타임아웃은 응답을 안
+     * 기다리겠다는 뜻이지 뒷단이 안 했다는 뜻이 아니다. 사용자가 다시 시도하면
+     * 같은 사람이 두 번 발급된다 — 재사용 방지는 발급 계층이 지되(A-10) 그
+     * 멱등성이 작동할 근거는 우리가 줘야 한다.
+     */
+    @Test
+    @DisplayName("통과에는_멱등_키를_실어_보낸다")
+    void 통과에는_멱등_키를_실어_보낸다() {
+        스냅샷을_심는다(CouponStates.idle(1_000), META);
+        AtomicReference<String> 실린_키 = new AtomicReference<>();
+        MockServerWebExchange exchange = 요청(COUPON);
+
+        filter.filter(exchange, e -> {
+            실린_키.set(e.getRequest().getHeaders().getFirst(IdempotencyKey.HEADER));
+            return Mono.empty();
+        }).block();
+
+        assertThat(실린_키.get()).isNotBlank();
+    }
+
+    /**
+     * <b>같은 시도면 같은 키다.</b> 다르면 뒷단이 두 건으로 보고 두 번 발급한다 —
+     * 멱등 키를 실은 의미가 사라진다.
+     */
+    @Test
+    @DisplayName("같은_시도를_다시_보내면_같은_키다")
+    void 같은_시도를_다시_보내면_같은_키다() {
+        스냅샷을_심는다(CouponStates.idle(1_000), META);
+
+        assertThat(실린_멱등_키()).isEqualTo(실린_멱등_키());
+    }
+
+    /** 사람이 다르면 다른 시도다. 같은 키를 주면 뒤에 온 사람이 조용히 버려진다. */
+    @Test
+    @DisplayName("사람이_다르면_다른_키다")
+    void 사람이_다르면_다른_키다() {
+        스냅샷을_심는다(CouponStates.idle(1_000), META);
+
+        assertThat(실린_멱등_키(MEMBER)).isNotEqualTo(실린_멱등_키("다른사람"));
+    }
+
+    /**
+     * <b>클라이언트가 준 값을 안 믿는다.</b> 그대로 쓰면 매 요청 다른 값을 넣어
+     * 멱등성을 우회하고, 끊긴 발급을 두 번 받아 갈 수 있다.
+     */
+    @Test
+    @DisplayName("클라이언트가_준_멱등_키를_덮는다")
+    void 클라이언트가_준_멱등_키를_덮는다() {
+        스냅샷을_심는다(CouponStates.idle(1_000), META);
+        AtomicReference<String> 실린_키 = new AtomicReference<>();
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.method(HttpMethod.POST,
+                                "/api/v1/coupons/" + COUPON + "/issue")
+                        .header("X-Member-Id", MEMBER)
+                        .header(IdempotencyKey.HEADER, "내가-정한-값"));
+        exchange.getAttributes().put(
+                ServerWebExchangeUtils.URI_TEMPLATE_VARIABLES_ATTRIBUTE,
+                Map.of("couponId", COUPON));
+
+        filter.filter(exchange, e -> {
+            실린_키.set(e.getRequest().getHeaders().getFirst(IdempotencyKey.HEADER));
+            return Mono.empty();
+        }).block();
+
+        assertThat(실린_키.get()).isNotEqualTo("내가-정한-값");
+    }
+
+    private String 실린_멱등_키() {
+        return 실린_멱등_키(MEMBER);
+    }
+
+    private String 실린_멱등_키(String memberId) {
+        AtomicReference<String> 키 = new AtomicReference<>();
+        filter.filter(요청(COUPON, memberId), e -> {
+            키.set(e.getRequest().getHeaders().getFirst(IdempotencyKey.HEADER));
+            return Mono.empty();
+        }).block();
+        return 키.get();
+    }
+
+    /**
+     * <b>통과하는 모든 길이 키를 덮어야 한다.</b> 한 갈래만 덮으면 나머지에서
+     * 클라이언트가 준 값이 그대로 뒷단에 닿고, 거기로 멱등성을 우회한다.
+     *
+     * <p>fail-open 은 레디스가 흔들리는 구간이다 — 뒷단 지연이 가장 크고 타임아웃이
+     * 실제로 나는 그 구간에서 안 막히면 이 장치가 있으나 마나다.
+     */
+    @Test
+    @DisplayName("fail_open_통과에도_멱등_키를_덮는다")
+    void fail_open_통과에도_멱등_키를_덮는다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+        줄.터진다(new IllegalStateException("레디스가 죽었다"));
+
+        assertThat(실린_키(요청_with_키("내가-정한-값"))).isNotEqualTo("내가-정한-값");
+    }
+
+    /**
+     * <b>첫 틱 전 통과도 마찬가지다.</b> 기동 직후라 판정 재료가 없을 뿐,
+     * 뒷단으로 가는 것은 같다.
+     */
+    @Test
+    @DisplayName("첫_틱_전_통과에도_멱등_키를_덮는다")
+    void 첫_틱_전_통과에도_멱등_키를_덮는다() {
+        // 스냅샷을 안 심는다. 홀더가 첫 틱 전이다.
+        assertThat(실린_키(요청_with_키("내가-정한-값"))).isNotEqualTo("내가-정한-값");
+    }
+
+    /**
+     * <b>클라이언트가 준 값이 시도를 가른다.</b> 게이트웨이는 무엇이 한 번의
+     * 시도인지 모른다 — 발급 정책은 뒷단 것이다.
+     */
+    @Test
+    @DisplayName("클라이언트_값이_다르면_다른_키가_나간다")
+    void 클라이언트_값이_다르면_다른_키가_나간다() {
+        스냅샷을_심는다(CouponStates.idle(1_000), META);
+
+        assertThat(실린_키(요청_with_키("시도-1")))
+                .isNotEqualTo(실린_키(요청_with_키("시도-2")));
+    }
+
+    /** 같은 값을 다시 주면 같은 키다. 아니면 끊긴 발급의 재시도가 새 시도가 된다. */
+    @Test
+    @DisplayName("같은_클라이언트_값은_같은_키가_나간다")
+    void 같은_클라이언트_값은_같은_키가_나간다() {
+        스냅샷을_심는다(CouponStates.idle(1_000), META);
+
+        assertThat(실린_키(요청_with_키("시도-1")))
+                .isEqualTo(실린_키(요청_with_키("시도-1")));
+    }
+
+    private MockServerWebExchange 요청_with_키(String 클라이언트_값) {
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.method(HttpMethod.POST,
+                                "/api/v1/coupons/" + COUPON + "/issue")
+                        .header("X-Member-Id", MEMBER)
+                        .header(IdempotencyKey.HEADER, 클라이언트_값));
+        exchange.getAttributes().put(
+                ServerWebExchangeUtils.URI_TEMPLATE_VARIABLES_ATTRIBUTE,
+                Map.of("couponId", COUPON));
+        return exchange;
+    }
+
+    private String 실린_키(MockServerWebExchange exchange) {
+        AtomicReference<String> 키 = new AtomicReference<>();
+        filter.filter(exchange, e -> {
+            키.set(e.getRequest().getHeaders().getFirst(IdempotencyKey.HEADER));
+            return Mono.empty();
+        }).block();
+        return 키.get();
     }
 }

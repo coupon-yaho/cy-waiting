@@ -331,4 +331,35 @@ class GatewayRoutesTest {
         assertThat(잡는_라우트(HttpMethod.GET,
                 "/api/v1/coupons/c1/issue")).isNull();
     }
+
+    /**
+     * <b>발급 라우트에 서킷이 걸려 있어야 한다.</b> 안 걸면 뒷단이 멎었을 때
+     * 게이트웨이의 커넥션이 통째로 그 뒷단을 기다리며 물리고, 한산한 쿠폰의
+     * 통과 경로까지 같이 죽는다.
+     */
+    @Test
+    @DisplayName("발급_라우트에_서킷이_걸려_있다")
+    void 발급_라우트에_서킷이_걸려_있다() {
+        assertThat(필터_이름(잡는_라우트(HttpMethod.POST, "/api/v1/coupons/c1/issue")))
+                .contains("CircuitBreaker");
+    }
+
+    /**
+     * <b>넘길 주소가 받는 주소와 같아야 한다.</b> 갈리면 기동은 되고 장애 때만
+     * 404 가 드러난다 — 사용자에게는 매진으로 읽힌다.
+     */
+    @Test
+    @DisplayName("서킷이_넘길_주소가_받는_주소와_같다")
+    void 서킷이_넘길_주소가_받는_주소와_같다() {
+        assertThat(GatewayRoutes.FALLBACK_URI)
+                .isEqualTo("forward:" + BackendFallbackRoutes.FALLBACK_ISSUE);
+    }
+
+    /** 라우트에 걸린 필터의 이름들. 어떤 것이 붙었는지는 이걸로만 볼 수 있다. */
+    private List<String> 필터_이름(Route route) {
+        return route.getFilters().stream()
+                .map(f -> f instanceof OrderedGatewayFilter o
+                        ? o.getDelegate().toString() : f.toString())
+                .toList();
+    }
 }

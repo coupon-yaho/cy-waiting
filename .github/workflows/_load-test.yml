@@ -63,7 +63,7 @@ jobs:
       # 두 번 만들면 부하가 때리는 산출물과 검사를 통과한 산출물이 갈릴 수 있다.
       - name: 빌드 산출물 받기
         if: steps.probe.outputs.ready == 'true'
-        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53  # v7.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v7.0.0
         with:
           name: build-libs
           path: build/libs/

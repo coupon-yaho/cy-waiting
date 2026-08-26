@@ -36,16 +36,9 @@ jobs:
   review:
     name: Qodo
     # 코멘트로 부르는 경우는 PR 이어야 하고, 명령어로 시작해야 한다.
-    #
-    # **잡일은 리뷰 몫을 안 쓴다.** 설정·배선·의존성 갱신은 기계 검사가 보고,
-    # 여기에 한 건을 쓰면 정작 코드를 볼 몫이 그만큼 준다. 그래도 봐야 하면
-    # Actions 에서 직접 돌린다 — 그때는 사람이 판단한 것이다.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.issue.pull_request &&
-       !startsWith(github.event.issue.title, 'chore') &&
-       !startsWith(github.event.issue.title, 'ci:') &&
-       !startsWith(github.event.issue.title, 'docs') &&
        (startsWith(github.event.comment.body, '/review') ||
         startsWith(github.event.comment.body, '/improve') ||
         startsWith(github.event.comment.body, '/describe')))

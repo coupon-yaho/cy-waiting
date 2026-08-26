@@ -45,15 +45,22 @@ except ImportError:
     print("::error::PyYAML 이 없어 액션 핀을 못 읽는다", file=sys.stderr)
     sys.exit(1)
 
+# **없는 것과 사라진 것을 가른다.** 워크플로 디렉터리 자체가 없으면 검사 대상이
+# 아니다 — 픽스처 저장소가 그렇다. 있는데 비었으면 검사가 사라진 것이라 막는다.
+# (`workflow-shell.sh` 와 같은 규칙이다.)
+workflows = pathlib.Path('.github/workflows')
+if not workflows.is_dir():
+    sys.exit(0)
+
 # composite action 도 본다. `.github/workflows` 만 보면 `setup-gradle` 안의
 # 서드파티 액션이 통째로 빠진다 — dependabot.yml 이 같은 이유로 경로를 나눈다.
 # **중첩까지 훑는다.** 한 겹만 보면 액션 안의 액션이 통째로 검사에서 빠지고,
 # 빠지는 것이 곧 이 검사가 막으려던 실패 형태다.
-targets = sorted(pathlib.Path('.github/workflows').glob('*.y*ml')) \
+targets = sorted(workflows.glob('*.y*ml')) \
     + sorted(pathlib.Path('.github/actions').rglob('action.y*ml'))
 
 if not targets:
-    print("::error::검사할 워크플로·액션 파일이 없다 — 검사가 헛돈다", file=sys.stderr)
+    print("::error::워크플로 디렉터리가 비었다", file=sys.stderr)
     sys.exit(1)
 
 
@@ -103,6 +110,9 @@ occurrences=$(
 )
 
 refs=$(list_uses) || exit 1
+
+# 검사 대상 자체가 없는 저장소다. 위에서 0 으로 끝냈다.
+[[ -z "$refs" ]] && exit 0
 
 # **YAML 이 본 수와 원문이 본 수가 같아야 한다.** 원문 훑기가 못 보는 표기(여러
 # 줄로 쓴 값 같은 것)가 있으면 그 항목은 검사에서 통째로 빠진다.

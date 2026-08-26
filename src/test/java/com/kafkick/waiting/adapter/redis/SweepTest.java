@@ -46,6 +46,10 @@ class SweepTest extends RedisContainerSupport {
     private static final String RETENTION = String.valueOf(GraceRetention.SECONDS);
     private static final String BUDGET = "1000";
 
+    /** unpack 한계에서 실측한 상한. 기록이 쌍이라 검사 범위 쪽이 먼저 걸린다. */
+    private static final int MAX_SCAN = 3_999;
+    private static final int MAX_BUDGET = 7_999;
+
     @Autowired
     private ReactiveStringRedisTemplate redis;
 
@@ -277,5 +281,33 @@ class SweepTest extends RedisContainerSupport {
 
         assertThat(Long.parseLong(String.valueOf(result.get(1)))).isEqualTo(5);
         assertThat(redis.opsForZSet().size(ALIVE).block(WAIT)).isEqualTo(15);
+    }
+
+    /**
+     * <b>천장이 없으면 부하가 오른 날 스위퍼가 통째로 멎는다.</b> 인자가 쌍이라
+     * 기록 쓰기가 먼저 걸리고, 같은 자리가 매 틱 반복되면 큐가 영구 정지한다.
+     *
+     * <p>실측 상한은 검사 범위 3,999 · 예산 7,999 다. 호출부가 우회 못 하게
+     * 스크립트 안에서 막는다.
+     */
+    @Test
+    @DisplayName("검사_범위가_천장을_넘으면_거부한다")
+    void 검사_범위가_천장을_넘으면_거부한다() {
+        assertThatThrownBy(() -> sweep(String.valueOf(MAX_SCAN + 1)))
+                .hasRootCauseMessage("검사 범위는 %d 이하여야 한다: %d".formatted(MAX_SCAN, MAX_SCAN + 1));
+
+        // 경계는 통과한다. 한 칸 안쪽만 막으면 실사용 폭이 조용히 줄어든다.
+        // 빈 큐라 한 명도 안 걷힌다 — 반환 모양까지 본다.
+        assertThat(swept(sweep(String.valueOf(MAX_SCAN)))).isZero();
+    }
+
+    @Test
+    @DisplayName("예산이_천장을_넘으면_거부한다")
+    void 예산이_천장을_넘으면_거부한다() {
+        assertThatThrownBy(() -> sweep("10", String.valueOf(MAX_BUDGET + 1), "0"))
+                .hasRootCauseMessage(
+                        "정리 예산은 %d 이하여야 한다: %d".formatted(MAX_BUDGET, MAX_BUDGET + 1));
+
+        assertThat(swept(sweep("10", String.valueOf(MAX_BUDGET), "0"))).isZero();
     }
 }

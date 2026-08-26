@@ -3,10 +3,10 @@
 -- KEYS[1]  queue:{cid}   ZSET
 -- KEYS[2]  grace:{cid}   이탈 기록 해시
 -- KEYS[3]  alive:{cid}   생존 신호 ZSET. score 는 만료 시각(초)
--- ARGV[1]  검사 범위 K. 큐 앞에서 이만큼만 본다
+-- ARGV[1]  검사 범위 K. 큐 앞에서 이만큼만 본다. 1..3999
 -- ARGV[2]  지금 시각(초). 도메인처럼 주입받는다
 -- ARGV[3]  유예 보관 기간(초)
--- ARGV[4]  정리 예산. 만료 신호와 유예 기록을 각각 이만큼까지 지운다
+-- ARGV[4]  정리 예산. 만료 신호와 유예 기록을 각각 이만큼까지 지운다. 1..7999
 -- ARGV[5]  HSCAN 커서. 첫 호출은 '0'. 반환된 값을 다음에 넘긴다
 --
 -- 반환  {swept, expiredSignals, expiredGrace, nextCursor}
@@ -23,13 +23,26 @@
 -- **키를 문자열로 조립하지 않는다.** 사람마다 alive 키를 만들면 KEYS 에
 -- 선언되지 않은 키를 만지게 되고 클러스터가 거부한다 (RD-1).
 --
+-- **상한은 unpack 한계에서 왔다.** 넘기면 ZMSCORE 나 HSET 이 죽고, 같은 자리가
+-- 매 틱 반복되면 큐가 영구 정지한다. 기록이 인자 쌍이라 검사 범위가 먼저 걸린다.
+--
 -- **모든 순회에 상한이 걸려 있어야 한다.** Lua 는 통째로 도는 동안 다른
 -- 요청을 전부 막는다. K 를 작게 줘도 어딘가에서 전체를 훑으면 그 K 는
 -- 아무 의미가 없다.
 
+-- **unpack 한계를 호출부가 우회 못 하게 여기서 막는다.** 넘기면 ZMSCORE 나
+-- HSET 이 'too many results to unpack' 으로 죽고, 같은 자리가 매 틱 반복되면
+-- 큐가 영구 정지한다. 기록은 인자가 쌍이라 검사 범위 쪽이 먼저 걸린다.
+local MAX_SCAN = 3999
+local MAX_BUDGET = 7999
+
 local limit = tonumber(ARGV[1])
 if limit == nil or limit < 1 or limit ~= math.floor(limit) then
     return redis.error_reply('검사 범위는 양의 정수여야 한다: ' .. tostring(ARGV[1]))
+end
+if limit > MAX_SCAN then
+    return redis.error_reply(
+            '검사 범위는 ' .. MAX_SCAN .. ' 이하여야 한다: ' .. string.format('%.0f', limit))
 end
 
 local now = tonumber(ARGV[2])
@@ -50,6 +63,10 @@ end
 local budget = tonumber(ARGV[4])
 if budget == nil or budget < 1 or budget ~= math.floor(budget) then
     return redis.error_reply('정리 예산은 양의 정수여야 한다: ' .. tostring(ARGV[4]))
+end
+if budget > MAX_BUDGET then
+    return redis.error_reply(
+            '정리 예산은 ' .. MAX_BUDGET .. ' 이하여야 한다: ' .. string.format('%.0f', budget))
 end
 
 -- 종류를 뗀 시각. 못 읽으면 nil 이고, 부르는 쪽이 그것을 낡음으로 본다 —
@@ -135,10 +152,10 @@ local fields = scanned[2]
 local cutoff = now - retention
 local doomed = {}
 local stamped = {}
+-- **받은 것은 끝까지 분류한다.** 커서는 응답 전체 뒤로 전진하므로, 중간에
+-- 끊으면 그 뒤 항목이 이번 순회에서 통째로 빠진다 — 다음 한 바퀴가 돌 때까지
+-- 안 걷힌다. 예산은 분류가 아니라 **쓰기**에 건다. 비용은 COUNT 로 잡는다.
 for i = 1, #fields, 2 do
-    if #doomed >= budget or #stamped >= budget then
-        break
-    end
     local value = fields[i + 1]
     if value == 'admitted' then
         -- **옛 표시에는 시각이 없다.** 그대로 두면 나이를 못 재 영영 안 걷히고,
@@ -155,11 +172,25 @@ for i = 1, #fields, 2 do
     end
 end
 
+-- 예산만큼만 쓴다. 남은 것은 다음 한 바퀴에서 다시 만난다.
+local function firstOf(list, count)
+    if #list <= count then
+        return list
+    end
+    local cut = {}
+    for i = 1, count do
+        cut[i] = list[i]
+    end
+    return cut
+end
+
+stamped = firstOf(stamped, budget * 2)
 if #stamped > 0 then
     redis.call('HSET', KEYS[2], unpack(stamped))
 end
 
 local expiredGrace = 0
+doomed = firstOf(doomed, budget)
 if #doomed > 0 then
     redis.call('HDEL', KEYS[2], unpack(doomed))
     expiredGrace = #doomed

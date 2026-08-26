@@ -37,6 +37,9 @@ public final class SnapshotRefreshLifecycle
 
     private final SnapshotRefresher refresher;
     private final ShutdownState shutdown;
+
+    /** readiness 를 내리고 부하 분산기가 뺄 때까지 기다린다 (6.4.1·6.4.2). */
+    private final DrainWait drainWait;
     private final Duration interval;
 
     /**
@@ -56,7 +59,7 @@ public final class SnapshotRefreshLifecycle
     private volatile long drainingAt;
 
     private SnapshotRefreshLifecycle(SnapshotRefresher refresher, ShutdownState shutdown,
-            Duration interval, Supplier<Scheduler> schedulers) {
+            Duration interval, Supplier<Scheduler> schedulers, DrainWait drainWait) {
         if (interval == null || interval.isZero() || interval.isNegative()) {
             throw new IllegalArgumentException("interval 은 양수여야 한다: %s".formatted(interval));
         }
@@ -64,17 +67,18 @@ public final class SnapshotRefreshLifecycle
         this.shutdown = Objects.requireNonNull(shutdown, "shutdown 은 필수다");
         this.interval = interval;
         this.schedulers = Objects.requireNonNull(schedulers, "schedulers 는 필수다");
+        this.drainWait = Objects.requireNonNull(drainWait, "drainWait 는 필수다");
     }
 
     public static SnapshotRefreshLifecycle of(SnapshotRefresher refresher, ShutdownState shutdown,
-            Duration interval) {
-        return of(refresher, shutdown, interval, SnapshotRefresher::dedicatedScheduler);
+            Duration interval, DrainWait drainWait) {
+        return of(refresher, shutdown, interval, SnapshotRefresher::dedicatedScheduler, drainWait);
     }
 
     /** 스케줄러를 밖에서 준다. 시험이 가상 시계를 넣는 자리다. */
     public static SnapshotRefreshLifecycle of(SnapshotRefresher refresher, ShutdownState shutdown,
-            Duration interval, Supplier<Scheduler> schedulers) {
-        return new SnapshotRefreshLifecycle(refresher, shutdown, interval, schedulers);
+            Duration interval, Supplier<Scheduler> schedulers, DrainWait drainWait) {
+        return new SnapshotRefreshLifecycle(refresher, shutdown, interval, schedulers, drainWait);
     }
 
     @Override
@@ -117,7 +121,10 @@ public final class SnapshotRefreshLifecycle
         // **여기서 시각을 잡는다.** 정지 로그가 드레이닝을 얼마나 버텼는지 말하려면
         // 시작점이 필요한데, 그 시작점을 아는 것은 이 사건뿐이다.
         drainingAt = System.nanoTime();
-        shutdown.draining();
+        // **readiness 를 내리고 부하 분산기가 뺄 시간을 준다.** 곧바로 드레인하면
+        // 그 사이 도착한 요청이 커넥션째 끊긴다. 이 사건이 웹 서버 정지보다
+        // 먼저 오므로, 여기서 막는 것이 곧 유입을 멎게 하는 일이다.
+        drainWait.beforeDrain(() -> { });
     }
 
     private void disposeScheduler() {

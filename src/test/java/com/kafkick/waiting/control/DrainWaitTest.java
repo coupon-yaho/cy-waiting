@@ -73,7 +73,8 @@ class DrainWaitTest {
 
     /**
      * <b>두 번 불려도 한 번만 기다립니다.</b> 프레임워크가 종료 이벤트를 여러 번
-     * 보내면 대기가 곱해져 배포가 그만큼 느려집니다.
+     * 보내면 대기가 곱해져 배포가 그만큼 느려집니다. 드레인 자체는 부르는 쪽의
+     * 몫이라 막지 않습니다.
      */
     @Test
     @DisplayName("두_번_불려도_한_번만_기다린다")
@@ -83,7 +84,8 @@ class DrainWaitTest {
         wait.beforeDrain(() -> 순서.add("드레인"));
         wait.beforeDrain(() -> 순서.add("드레인"));
 
-        assertThat(순서).containsExactly("잤다:6000", "드레인");
+        assertThat(순서).filteredOn(s -> s.startsWith("잤다")).hasSize(1);
+        assertThat(순서).containsExactly("잤다:6000", "드레인", "드레인");
     }
 
     /** 기다리는 중에 끊기면 그 사실을 남기고 계속한다. 끊겼다고 안 죽으면 안 된다. */

@@ -40,8 +40,9 @@ server:
   shutdown: graceful
 
 management:
-  # 지표에 인스턴스를 구별할 라벨을 붙인다. 없으면 노드 스무 대의 값이 한 줄로
-  # 합쳐져, 한 대만 이상한 상황을 못 본다.
+  # 어느 애플리케이션이 낸 값인지 붙인다. 스무 대가 같은 값을 달고 나가므로
+  # **노드를 가르지 않는다** — 노드별 구분은 수집기가 붙이는 instance 라벨이
+  # 한다. 여기에 노드를 넣을 값을 적지 않는다 (LG-4).
   metrics:
     tags:
       application: ${spring.application.name}

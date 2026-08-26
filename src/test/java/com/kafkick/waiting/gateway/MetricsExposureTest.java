@@ -3,6 +3,14 @@ package com.kafkick.waiting.gateway;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -44,16 +52,40 @@ class MetricsExposureTest {
     }
 
     /**
-     * <b>같은 이름에 태그 키 집합이 둘이면 등록을 거절한다.</b> 단순 레지스트리는
-     * 받아 주므로 이 시험 없이는 운영에서야 드러난다.
+     * <b>레지스트리는 태그 키가 갈려도 안 막는다.</b> 실측으로 두 벌이 그대로
+     * 나갔다 — 그걸 버리는 것은 수집기이고, 버려진 줄은 조용히 사라진다.
+     * 그래서 등록이 거절되기를 기대하지 않고 <b>나가는 문자열</b>에서 직접 본다.
      */
     @Test
-    @DisplayName("판정_지표의_태그_집합이_한_벌이다")
-    void 판정_지표의_태그_집합이_한_벌이다() {
-        registry.counter("waiting.admission", "outcome", "a", "cause", "none").increment();
-        registry.counter("waiting.admission", "outcome", "b", "cause", "io").increment();
+    @DisplayName("우리_지표는_이름마다_태그_키가_한_벌이다")
+    void 우리_지표는_이름마다_태그_키가_한_벌이다() {
+        registry.counter("waiting.admission", "outcome", "PASS_UNDER_CAP", "cause", "none")
+                .increment();
 
-        assertThat(registry.scrape()).contains("waiting_admission_total");
+        assertThat(태그_키_집합들()).isNotEmpty()
+                .containsKey("waiting_admission_total")
+                .allSatisfy((name, keys) ->
+                        assertThat(keys).as("%s 의 태그 키 집합", name).hasSize(1));
+    }
+
+    /** 나간 줄을 이름별로 모아 태그 키 집합이 몇 벌인지 센다. */
+    private Map<String, Set<List<String>>> 태그_키_집합들() {
+        Map<String, Set<List<String>>> 이름별 = new LinkedHashMap<>();
+        Pattern 줄 = Pattern.compile("^(waiting_[^{ ]+)\\{([^}]*)}");
+        registry.scrape().lines()
+                .map(줄::matcher)
+                .filter(Matcher::find)
+                .forEach(m -> 이름별
+                        .computeIfAbsent(m.group(1), ignored -> new LinkedHashSet<>())
+                        .add(태그_키(m.group(2))));
+        return 이름별;
+    }
+
+    private List<String> 태그_키(String 태그들) {
+        return Arrays.stream(태그들.split(","))
+                .map(t -> t.substring(0, t.indexOf('=')))
+                .sorted()
+                .toList();
     }
 
     /**
@@ -86,9 +118,12 @@ class MetricsExposureTest {
         // 시험은 세 지표가 전부 죽은 상태에서도 통과한다.
         System.gc();
 
+        // **세 개를 다 짚는다.** 둘만 짚으면 나머지 하나가 등록에서 빠져도
+        // 통과한다 — 실제로 나이 게이지를 지우고 돌려 봤더니 초록이었다.
         assertThat(registry.scrape())
                 .containsPattern("waiting_queue_waiting\\{[^}]*\\} [0-9.E-]+\\n")
                 .containsPattern("waiting_snapshot_coupons\\{[^}]*\\} [0-9.E-]+\\n")
+                .containsPattern("waiting_snapshot_age\\{[^}]*\\} [0-9.E-]+\\n")
                 .doesNotContain("NaN");
     }
 }

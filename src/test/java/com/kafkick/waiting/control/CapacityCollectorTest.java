@@ -799,6 +799,7 @@ class CapacityCollectorTest {
         long credit = collector.collect(
                 List.of(report("seed", 0, 창_직전), report("a", 600, 창_직전)), 창_직전, 1);
 
-        assertThat(credit).isLessThan(600);
+        // 창의 59/60 만큼 데웠다. 범위로 두면 0 이나 하한도 통과한다.
+        assertThat(credit).isEqualTo(590);
     }
 }

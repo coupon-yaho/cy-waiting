@@ -56,6 +56,22 @@ class CapacityRefreshLogTest {
         return 로그.list.stream().map(ILoggingEvent::getMessage).toList();
     }
 
+    /** 그 전이가 <b>몇 번</b> 남았는지. 있기만 하면 통과하는 단언은 반복을 못 본다. */
+    private long 남은_횟수(String 조각) {
+        return 메시지().stream().filter(m -> m.contains(조각)).count();
+    }
+
+    /** 몇 번째 줄에 남았는지. 해제가 진입보다 앞서면 쌍이 아니다. */
+    private int 자리(String 조각) {
+        List<String> all = 메시지();
+        for (int i = 0; i < all.size(); i++) {
+            if (all.get(i).contains(조각)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
     private static final Duration 램프 = Duration.ofSeconds(60);
 
     private CapacityCollector collector() {
@@ -86,10 +102,9 @@ class CapacityRefreshLogTest {
                 Schedulers.immediate(), new SimpleMeterRegistry());
         refresh.refresh().block();
 
-        assertThat(메시지()).anyMatch(m -> m.contains("신선한 가용량 보고가 없다"));
+        assertThat(남은_횟수("신선한 가용량 보고가 없다")).isOne();
 
         // 보고가 돌아오고 램프가 끝나면 해제가 남는다. 진입만 남기면 구간의 끝을 모른다.
-        로그.list.clear();
         보고.set(List.of(new CapacityReport("i1", 500, NOW)));
         refresh.refresh().block();
         long 램프_뒤 = NOW + 램프.toSeconds();
@@ -97,7 +112,10 @@ class CapacityRefreshLogTest {
         보고.set(List.of(new CapacityReport("i1", 500, 램프_뒤)));
         refresh.refresh().block();
 
-        assertThat(메시지()).anyMatch(m -> m.contains("가용량 보고가 다시 온다"));
+        assertThat(남은_횟수("가용량 보고가 다시 온다")).isOne();
+        // 해제는 진입 뒤다. 순서가 뒤집히면 쌍이 아니라 두 개의 낱말이다.
+        assertThat(자리("가용량 보고가 다시 온다"))
+                .isGreaterThan(자리("신선한 가용량 보고가 없다"));
     }
 
     @Test
@@ -132,7 +150,7 @@ class CapacityRefreshLogTest {
             refresh.refresh().block();
         }
 
-        assertThat(메시지()).anyMatch(m -> m.contains("크레딧을 깎기 시작한다"));
+        assertThat(남은_횟수("크레딧을 깎기 시작한다")).isOne();
     }
 
     /**

@@ -27,9 +27,19 @@
 -- 요청을 전부 막는다. K 를 작게 줘도 어딘가에서 전체를 훑으면 그 K 는
 -- 아무 의미가 없다.
 
+-- **unpack 한계를 호출부가 우회 못 하게 여기서 막는다.** 넘기면 ZMSCORE 나
+-- HSET 이 'too many results to unpack' 으로 죽고, 같은 자리가 매 틱 반복되면
+-- 큐가 영구 정지한다. 기록은 인자가 쌍이라 검사 범위 쪽이 먼저 걸린다.
+local MAX_SCAN = 3999
+local MAX_BUDGET = 7999
+
 local limit = tonumber(ARGV[1])
 if limit == nil or limit < 1 or limit ~= math.floor(limit) then
     return redis.error_reply('검사 범위는 양의 정수여야 한다: ' .. tostring(ARGV[1]))
+end
+if limit > MAX_SCAN then
+    return redis.error_reply(
+            '검사 범위는 ' .. MAX_SCAN .. ' 이하여야 한다: ' .. string.format('%.0f', limit))
 end
 
 local now = tonumber(ARGV[2])
@@ -50,6 +60,10 @@ end
 local budget = tonumber(ARGV[4])
 if budget == nil or budget < 1 or budget ~= math.floor(budget) then
     return redis.error_reply('정리 예산은 양의 정수여야 한다: ' .. tostring(ARGV[4]))
+end
+if budget > MAX_BUDGET then
+    return redis.error_reply(
+            '정리 예산은 ' .. MAX_BUDGET .. ' 이하여야 한다: ' .. string.format('%.0f', budget))
 end
 
 -- 종류를 뗀 시각. 못 읽으면 nil 이고, 부르는 쪽이 그것을 낡음으로 본다 —
@@ -135,8 +149,12 @@ local fields = scanned[2]
 local cutoff = now - retention
 local doomed = {}
 local stamped = {}
+-- **훑는 양 자체에 상한을 건다.** 지울 것이 없으면 위 조기 종료가 절대 안
+-- 걸려서, 정상 운영(대부분 신선)에서는 매 틱 받은 것을 끝까지 헛돈다. HSCAN 의
+-- COUNT 는 힌트라 조밀하게 인코딩된 해시에서는 예산보다 많이 돌아온다.
+local scanCap = budget * 2
 for i = 1, #fields, 2 do
-    if #doomed >= budget or #stamped >= budget then
+    if #doomed >= budget or #stamped >= budget or i > scanCap then
         break
     end
     local value = fields[i + 1]

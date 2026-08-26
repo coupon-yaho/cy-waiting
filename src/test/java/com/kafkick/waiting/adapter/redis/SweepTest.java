@@ -289,7 +289,8 @@ class SweepTest extends RedisContainerSupport {
                 .hasRootCauseMessage("검사 범위는 %d 이하여야 한다: %d".formatted(MAX_SCAN, MAX_SCAN + 1));
 
         // 경계는 통과한다. 한 칸 안쪽만 막으면 실사용 폭이 조용히 줄어든다.
-        assertThat(sweep(String.valueOf(MAX_SCAN))).isNotNull();
+        // 빈 큐라 한 명도 안 걷힌다 — 반환 모양까지 본다.
+        assertThat(swept(sweep(String.valueOf(MAX_SCAN)))).isZero();
     }
 
     @Test
@@ -299,6 +300,6 @@ class SweepTest extends RedisContainerSupport {
                 .hasRootCauseMessage(
                         "정리 예산은 %d 이하여야 한다: %d".formatted(MAX_BUDGET, MAX_BUDGET + 1));
 
-        assertThat(sweep("10", String.valueOf(MAX_BUDGET), "0")).isNotNull();
+        assertThat(swept(sweep("10", String.valueOf(MAX_BUDGET), "0"))).isZero();
     }
 }

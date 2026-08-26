@@ -17,16 +17,14 @@ import org.junit.jupiter.api.Test;
 /**
  * 청소가 실패해도 <b>자리와 기록이 함께 움직인다</b>.
  *
- * <p>제거를 먼저 하면 그 뒤 단계가 터졌을 때 <b>자리도 잃고 재방문자로도
- * 식별 안 되는 사람</b>이 남는다 — 이 스크립트를 Lua 로 둔 이유가 정확히
- * 그것을 막는 것이다. 기록을 먼저 하면 실패 시 남는 것은 "아직 안 빠진
- * 사람" 이라 다음 틱에 다시 처리된다.
+ * <p>제거를 먼저 하면 터졌을 때 자리도 잃고 식별도 안 되는 사람이 남는다.
+ * 인자 상한이 이제 그 지점에 못 가게 막지만, 상한을 올리면 다시 그 자리다.
  */
 @Tag("chaos")
 class SweepWriteOrderTest {
 
-    /** {@code unpack} 인자 한계. 기록은 쌍이라 이 절반에서 먼저 걸린다. */
-    private static final int UNPACK_LIMIT = 8000;
+    /** 스크립트가 받는 검사 범위 상한. 기록이 쌍이라 여기서 먼저 걸린다. */
+    private static final int MAX_SCAN = 3999;
 
     private static final String COUPON = "order";
     private static final String QUEUE = RedisKeys.queue(COUPON, 1, 0);
@@ -80,15 +78,15 @@ class SweepWriteOrderTest {
     }
 
     @Test
-    @DisplayName("한_번에_못_담는_인원이면_아무도_빠지지_않는다")
-    void 한_번에_못_담는_인원이면_아무도_빠지지_않는다() {
-        // 제거가 먼저면 여기서 큐만 비고 기록이 0 이 된다 — 그 인원이
-        // 흔적 없이 사라지고 호출부는 사라진 사실조차 모른다.
-        int 인원 = UNPACK_LIMIT / 2;
+    @DisplayName("상한을_넘기면_아무도_안_빠진다")
+    void 상한을_넘기면_아무도_안_빠진다() {
+        // **거절이 쓰기 앞이다.** 인자를 다 본 뒤에 거절하므로 큐도 기록도
+        // 안 건드린다 — 그 인원이 흔적 없이 사라지는 일이 없다.
+        int 인원 = MAX_SCAN + 1;
         이탈자를_채운다(인원);
 
         assertThatThrownBy(() -> 청소한다(인원))
-                .hasMessageContaining("unpack");
+                .hasMessageContaining("검사 범위는");
 
         // **수만 세면 다른 사람이 같은 수로 남아도 통과한다.** 자리는 순서가
         // 곧 의미라, 누가 어느 순서로 남았는지까지 본다.
@@ -107,7 +105,7 @@ class SweepWriteOrderTest {
     @Test
     @DisplayName("담을_수_있는_인원은_자리와_기록이_함께_움직인다")
     void 담을_수_있는_인원은_자리와_기록이_함께_움직인다() {
-        int 인원 = UNPACK_LIMIT / 2 - 1;
+        int 인원 = MAX_SCAN;
         이탈자를_채운다(인원);
 
         청소한다(인원);

@@ -26,6 +26,8 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.List;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.stream.Collectors;
@@ -42,6 +44,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 
 /**
  * 판정 재료를 <b>로컬 스냅샷에서만</b> 읽는다.
@@ -1213,5 +1216,95 @@ class AdmissionGatewayFilterTest {
             return Mono.empty();
         }).block();
         return 키.get();
+    }
+
+    /**
+     * <b>초당 건수로는 못 막는 것이 있습니다.</b> 뒷단이 응답을 안 주면 요청이
+     * 쌓이고, 느려진 한 대가 커넥션을 다 붙잡으면 한산한 쿠폰의 통과 경로까지
+     * 같이 죽습니다.
+     */
+    @Test
+    @DisplayName("동시_건수가_상한을_넘으면_막는다")
+    void 동시_건수가_상한을_넘으면_막는다() {
+        // credit 3 × 3초 = 동시 9건이 상한이다.
+        스냅샷을_심는다(CouponStates.idle(1_000_000), META);
+        List<Sinks.Empty<Void>> 붙잡은_것 = new ArrayList<>();
+
+        for (int i = 0; i < 9; i++) {
+            Sinks.Empty<Void> 안_끝남 = Sinks.empty();
+            붙잡은_것.add(안_끝남);
+            filter.filter(요청(COUPON, "사람" + i), e -> 안_끝남.asMono()).subscribe();
+        }
+
+        MockServerWebExchange 열번째 = 요청(COUPON, "사람9");
+        filter.filter(열번째, e -> Mono.empty()).block();
+
+        assertThat(열번째.getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        붙잡은_것.forEach(Sinks.Empty::tryEmitEmpty);
+    }
+
+    /**
+     * <b>끝나면 자리가 돌아와야 합니다.</b> 안 돌려주면 격벽이 한 번 차고 나서
+     * 영영 안 열리고, 그 쿠폰은 뒷단이 멀쩡해져도 계속 막힙니다.
+     */
+    @Test
+    @DisplayName("끝나면_자리가_돌아온다")
+    void 끝나면_자리가_돌아온다() {
+        스냅샷을_심는다(CouponStates.idle(1_000_000), META);
+        for (int i = 0; i < 9; i++) {
+            filter.filter(요청(COUPON, "사람" + i), e -> Mono.empty()).block();
+        }
+
+        MockServerWebExchange 열번째 = 요청(COUPON, "사람9");
+        filter.filter(열번째, e -> Mono.empty()).block();
+
+        assertThat(열번째.getResponse().getStatusCode()).isNull();
+    }
+
+    /**
+     * <b>실패로 끝나도 자리가 돌아와야 합니다.</b> 뒷단이 터지는 구간이 곧 격벽이
+     * 가장 필요한 구간인데, 거기서 자리가 새면 그때부터 아무도 못 지나갑니다.
+     */
+    @Test
+    @DisplayName("터져서_끝나도_자리가_돌아온다")
+    void 터져서_끝나도_자리가_돌아온다() {
+        스냅샷을_심는다(CouponStates.idle(1_000_000), META);
+        for (int i = 0; i < 9; i++) {
+            filter.filter(요청(COUPON, "사람" + i),
+                    e -> Mono.error(new IllegalStateException("뒷단이 터졌다")))
+                    .onErrorResume(e -> Mono.empty()).block();
+        }
+
+        MockServerWebExchange 열번째 = 요청(COUPON, "사람9");
+        filter.filter(열번째, e -> Mono.empty()).block();
+
+        assertThat(열번째.getResponse().getStatusCode()).isNull();
+    }
+
+    /**
+     * <b>핫 쿠폰이 콜드 쿠폰의 통로를 막으면 안 됩니다.</b> 하나로 세면 몰리는
+     * 쿠폰이 자리를 다 쓰고 한산한 쿠폰이 그 뒤에 밀립니다 — R1 이 뒤집힙니다.
+     */
+    @Test
+    @DisplayName("다른_쿠폰은_따로_센다")
+    void 다른_쿠폰은_따로_센다() {
+        스냅샷을_심는다(CouponStates.idle(1_000_000), META);
+        List<Sinks.Empty<Void>> 붙잡은_것 = new ArrayList<>();
+        for (int i = 0; i < 9; i++) {
+            Sinks.Empty<Void> 안_끝남 = Sinks.empty();
+            붙잡은_것.add(안_끝남);
+            filter.filter(요청(COUPON, "사람" + i), e -> 안_끝남.asMono()).subscribe();
+        }
+
+        holder.replace(new GatewaySnapshot(
+                Map.of(COUPON, CouponStates.idle(1_000_000),
+                        "c2", CouponStates.idle(1_000_000)),
+                META, 지금));
+        MockServerWebExchange 콜드 = 요청("c2", "사람9");
+        filter.filter(콜드, e -> Mono.empty()).block();
+
+        assertThat(콜드.getResponse().getStatusCode()).isNull();
+        붙잡은_것.forEach(Sinks.Empty::tryEmitEmpty);
     }
 }

@@ -54,8 +54,14 @@ public class BackendCircuit {
                 .build());
     }
 
+    /**
+     * <b>전이를 로깅한다</b> (LG-2). 판정이 OPEN 에서 유효 credit 을 조이면(F3)
+     * 서킷에 닿는 호출이 0 이라, 요청 쪽 지표만으로는 열린 사실조차 안 보인다.
+     */
     @Bean
     public CircuitBreakerRegistry backendCircuitRegistry(BackendCircuitProperties props) {
-        return registry(props);
+        CircuitBreakerRegistry registry = registry(props);
+        CircuitTransitionLog.create().watch(registry);
+        return registry;
     }
 }

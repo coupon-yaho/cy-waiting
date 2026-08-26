@@ -2,6 +2,7 @@ package com.kafkick.waiting.gateway;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import java.time.Duration;
 import org.junit.jupiter.api.DisplayName;
@@ -51,8 +52,7 @@ class BackendCircuitTest {
         var config = registry.circuitBreaker("backend-1").getCircuitBreakerConfig();
 
         assertThat(config.getSlidingWindowType())
-                .isEqualTo(io.github.resilience4j.circuitbreaker.CircuitBreakerConfig
-                        .SlidingWindowType.TIME_BASED);
+                .isEqualTo(CircuitBreakerConfig.SlidingWindowType.TIME_BASED);
         assertThat(config.getSlidingWindowSize()).isEqualTo(10);
         assertThat(config.getMinimumNumberOfCalls()).isEqualTo(20);
         assertThat(config.getFailureRateThreshold()).isEqualTo(50f);

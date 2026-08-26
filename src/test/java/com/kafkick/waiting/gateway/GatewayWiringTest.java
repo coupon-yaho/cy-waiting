@@ -9,7 +9,7 @@ import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import java.time.Duration;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.cloud.circuitbreaker.resilience4j.Resilience4JConfigurationProperties;
 import org.springframework.cloud.gateway.support.ServerWebExchangeUtils;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.cloud.gateway.handler.RoutePredicateHandlerMapping;
@@ -49,8 +49,13 @@ class GatewayWiringTest {
     @Autowired
     private CircuitBreakerRegistry circuitRegistry;
 
-    @Value("${spring.cloud.circuitbreaker.resilience4j.disable-time-limiter}")
-    private boolean disableTimeLimiter;
+    /**
+     * <b>라이브러리가 실제로 바인딩한 값을 본다.</b> yml 문자열을 {@code @Value} 로
+     * 다시 읽으면 우리가 적은 것을 우리가 확인하는 것뿐이라, 키가 라이브러리가
+     * 보는 이름과 어긋나도 초록이다.
+     */
+    @Autowired
+    private Resilience4JConfigurationProperties resilience4j;
 
     @Autowired
     private RoutePredicateHandlerMapping gatewayMapping;
@@ -147,13 +152,32 @@ class GatewayWiringTest {
         assertThat(circuit.permittedNumberOfCallsInHalfOpenState()).isEqualTo(10);
     }
 
-    /** 레지스트리도 빈으로 올라와야 한다. 없으면 서킷을 붙일 수단이 없다. */
+    /**
+     * <b>실제로 쓰이는 서킷이 yml 값을 달고 있어야 한다.</b> 레지스트리 빈이
+     * 있는지만 보면, 그것을 {@code ofDefaults()} 로 되돌려도 초록이다 — 그때는
+     * 건수 창 100 으로 돌고 100K RPS 에서 수 ms 마다 열린다.
+     */
     @Test
-    @DisplayName("서킷_레지스트리가_컨텍스트에_올라온다")
-    void 서킷_레지스트리가_컨텍스트에_올라온다() {
-        assertThat(circuitRegistry.circuitBreaker("backend-1").getCircuitBreakerConfig()
-                .getSlidingWindowType())
+    @DisplayName("서킷_레지스트리가_yml_값을_달고_올라온다")
+    void 서킷_레지스트리가_yml_값을_달고_올라온다() {
+        CircuitBreakerConfig 실린_것 = circuitRegistry
+                .circuitBreaker(GatewayRoutes.CIRCUIT).getCircuitBreakerConfig();
+
+        assertThat(실린_것.getSlidingWindowType())
                 .isEqualTo(CircuitBreakerConfig.SlidingWindowType.TIME_BASED);
+        assertThat(실린_것.getSlidingWindowSize())
+                .isEqualTo((int) circuit.slidingWindowSize().toSeconds());
+        assertThat(실린_것.getMinimumNumberOfCalls()).isEqualTo(circuit.minimumNumberOfCalls());
+        assertThat(실린_것.getFailureRateThreshold()).isEqualTo(circuit.failureRateThreshold());
+        assertThat(실린_것.getSlowCallRateThreshold()).isEqualTo(circuit.slowCallRateThreshold());
+        assertThat(실린_것.getSlowCallDurationThreshold())
+                .isEqualTo(circuit.slowCallDurationThreshold());
+        assertThat(실린_것.getMaxWaitDurationInHalfOpenState())
+                .isEqualTo(circuit.maxWaitDurationInHalfOpenState());
+        assertThat(실린_것.getPermittedNumberOfCallsInHalfOpenState())
+                .isEqualTo(circuit.permittedNumberOfCallsInHalfOpenState());
+        assertThat(실린_것.getWaitIntervalFunctionInOpenState().apply(1))
+                .isEqualTo(circuit.waitDurationInOpenState().toMillis());
     }
 
     /**
@@ -166,7 +190,11 @@ class GatewayWiringTest {
     @Test
     @DisplayName("정하지_않은_타임아웃이_안_켜진다")
     void 정하지_않은_타임아웃이_안_켜진다() {
-        assertThat(disableTimeLimiter).isTrue();
+        assertThat(resilience4j.isDisableTimeLimiter()).isTrue();
+        // 이름별 예외로 발급 서킷만 다시 켜 두지 않았는지도 본다. 여기 한 줄이면
+        // 위의 전역 끄기가 그 서킷에 대해서만 조용히 뒤집힌다.
+        assertThat(resilience4j.getDisableTimeLimiterMap())
+                .doesNotContainEntry(GatewayRoutes.CIRCUIT, false);
     }
 
     /**

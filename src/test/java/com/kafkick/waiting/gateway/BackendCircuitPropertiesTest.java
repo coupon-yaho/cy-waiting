@@ -4,8 +4,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Duration;
+import java.util.stream.Stream;
+import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 /**
  * 서킷 설정은 <b>코드가 아니라 설정에 둔다.</b>
@@ -29,42 +34,64 @@ class BackendCircuitPropertiesTest {
                 대기, 반쯤_상한, 10);
     }
 
+    /** 여덟 자리를 하나씩 비운 한 벌. 한 자리라도 빠지면 그 자리는 무방비다. */
+    private static Stream<Arguments> 한_자리씩_빈_설정() {
+        return Stream.of(
+                Arguments.of("sliding-window-size", (ThrowingCallable) () ->
+                        new BackendCircuitProperties(
+                                null, 20, 50f, 느림, 50f, 대기, 반쯤_상한, 10)),
+                Arguments.of("minimum-number-of-calls", (ThrowingCallable) () ->
+                        new BackendCircuitProperties(
+                                창, null, 50f, 느림, 50f, 대기, 반쯤_상한, 10)),
+                Arguments.of("failure-rate-threshold", (ThrowingCallable) () ->
+                        new BackendCircuitProperties(
+                                창, 20, null, 느림, 50f, 대기, 반쯤_상한, 10)),
+                Arguments.of("slow-call-duration-threshold", (ThrowingCallable) () ->
+                        new BackendCircuitProperties(
+                                창, 20, 50f, null, 50f, 대기, 반쯤_상한, 10)),
+                Arguments.of("slow-call-rate-threshold", (ThrowingCallable) () ->
+                        new BackendCircuitProperties(
+                                창, 20, 50f, 느림, null, 대기, 반쯤_상한, 10)),
+                Arguments.of("wait-duration-in-open-state", (ThrowingCallable) () ->
+                        new BackendCircuitProperties(
+                                창, 20, 50f, 느림, 50f, null, 반쯤_상한, 10)),
+                Arguments.of("max-wait-duration-in-half-open-state", (ThrowingCallable) () ->
+                        new BackendCircuitProperties(
+                                창, 20, 50f, 느림, 50f, 대기, null, 10)),
+                Arguments.of("permitted-number-of-calls-in-half-open-state",
+                        (ThrowingCallable) () -> new BackendCircuitProperties(
+                                창, 20, 50f, 느림, 50f, 대기, 반쯤_상한, null)));
+    }
+
     /**
-     * <b>안 적으면 기동을 막는다.</b> 조용히 채우면 yml 의 오타가 그대로 운영에
-     * 나가고, 운영자는 자기가 적은 값으로 돌고 있다고 믿는다.
+     * <b>여덟 자리 전부가 기동을 막아야 한다.</b> 한 자리만 빠져도 그 값은 조용히
+     * 라이브러리 기본값으로 떨어지고 기동은 성공한다 — 실제로
+     * {@code max-wait-duration-in-half-open-state} 하나가 그렇게 빠져 있었다.
+     *
+     * <p>메시지에 키까지 본다. {@code NullPointerException} 으로 멎어도 기동은
+     * 막히지만, 운영자는 어느 줄을 고쳐야 하는지 못 듣는다.
      */
-    @Test
-    @DisplayName("값을_안_적으면_기동을_막는다")
-    void 값을_안_적으면_기동을_막는다() {
-        assertThatThrownBy(() -> new BackendCircuitProperties(
-                null, 20, 50f, 느림, 50f, 대기, 반쯤_상한, 10))
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("한_자리씩_빈_설정")
+    @DisplayName("여덟_자리_어느_하나가_비어도_기동을_막는다")
+    void 여덟_자리_어느_하나가_비어도_기동을_막는다(String 키, ThrowingCallable 만든다) {
+        assertThatThrownBy(만든다)
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("sliding-window-size");
-        assertThatThrownBy(() -> new BackendCircuitProperties(
-                창, null, 50f, 느림, 50f, 대기, 반쯤_상한, 10))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("minimum-number-of-calls");
-        assertThatThrownBy(() -> new BackendCircuitProperties(
-                창, 20, 50f, 느림, 50f, null, 반쯤_상한, 10))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("wait-duration-in-open-state");
+                .hasMessageContaining(키);
     }
 
     /**
      * <b>반쯤 열린 상태에도 상한이 있어야 한다.</b> 라이브러리 기본값 0 은
-     * 무제한이라, 안 적으면 프로브가 응답 없는 뒷단에 매달려 그 상태로 고정된다 —
-     * 나가는 조건이 없다.
+     * 무제한이라, 0 으로 적으면 프로브가 응답 없는 뒷단에 매달려 그 상태로
+     * 고정된다 — 나가는 조건이 없다.
      */
     @Test
-    @DisplayName("반쯤_열린_상태의_상한을_안_적으면_막는다")
-    void 반쯤_열린_상태의_상한을_안_적으면_막는다() {
-        assertThatThrownBy(() -> new BackendCircuitProperties(
-                창, 20, 50f, 느림, 50f, 대기, null, 10))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("max-wait-duration-in-half-open-state");
+    @DisplayName("반쯤_열린_상태의_상한이_0이면_막는다")
+    void 반쯤_열린_상태의_상한이_0이면_막는다() {
         assertThatThrownBy(() -> new BackendCircuitProperties(
                 창, 20, 50f, 느림, 50f, 대기, Duration.ZERO, 10))
-                .isInstanceOf(IllegalArgumentException.class);
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("max-wait-duration-in-half-open-state");
     }
 
     /**

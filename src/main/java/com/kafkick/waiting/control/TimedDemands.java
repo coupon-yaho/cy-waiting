@@ -7,11 +7,9 @@ import java.util.Objects;
 /**
  * 이번 틱의 수요와 <b>그것을 읽은 시각</b>.
  *
- * <p>발행 시각이 여기서 나온다 — 재료를 읽은 순간이 곧 그 재료의 나이가
- * 시작되는 지점이다.
+ * <p>재료를 읽은 순간이 곧 그 재료의 나이가 시작되는 지점이다.
  *
- * @param demands 쿠폰별 요구량
- * @param readAt  읽은 순간의 <b>레디스</b> 시각(초)
+ * @param readAt 읽은 순간의 <b>레디스</b> 시각(초)
  */
 public record TimedDemands(List<CouponDemand> demands, long readAt) {
 

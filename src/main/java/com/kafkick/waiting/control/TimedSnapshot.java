@@ -8,10 +8,9 @@ import reactor.core.publisher.Mono;
 /**
  * 받아 온 재료와 <b>그것을 잰 시각</b>.
  *
- * <p>나이를 두 벽시계의 차로 재면 같은 스냅샷이 노드마다 다르게 낡는다.
+ * <p>두 벽시계의 차로 재면 같은 스냅샷이 노드마다 다르게 낡는다.
  *
- * @param hash 스냅샷 해시. 아직 해독하지 않은 원본이다
- * @param now  읽은 순간의 <b>레디스</b> 시각(초)
+ * @param now 읽은 순간의 <b>레디스</b> 시각(초)
  */
 public record TimedSnapshot(Map<String, String> hash, long now) {
 

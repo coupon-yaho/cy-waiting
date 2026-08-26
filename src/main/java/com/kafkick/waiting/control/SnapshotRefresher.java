@@ -23,7 +23,7 @@ import reactor.core.scheduler.Schedulers;
  */
 public final class SnapshotRefresher {
 
-    /** 해독한 재료와 그것을 읽은 레디스 시각. */
+    /** 해독하면서 시각을 잃지 않으려고 같이 든다. */
     private record Read(GatewaySnapshot snapshot, long now) {
     }
 
@@ -58,10 +58,9 @@ public final class SnapshotRefresher {
     }
 
     /**
-     * 재료와 <b>그것을 읽은 레디스 시각</b>을 같이 받는다. 운영 배선이 쓰는 형태다.
+     * 재료와 <b>그것을 읽은 레디스 시각</b>을 같이 받는다.
      *
-     * <p>시각을 안 받으면 나이를 두 벽시계의 차로 재게 되고, 같은 스냅샷이
-     * 노드마다 다르게 낡는다.
+     * <p>안 받으면 나이가 두 벽시계의 차가 되어 노드마다 다르게 낡는다.
      */
     public static SnapshotRefresher timed(SnapshotHolder holder,
             Supplier<Mono<TimedSnapshot>> source, Clock clock) {

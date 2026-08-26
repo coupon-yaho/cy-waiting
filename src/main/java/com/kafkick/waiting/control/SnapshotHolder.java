@@ -201,13 +201,12 @@ public final class SnapshotHolder {
      * 않고 {@link #isClockAhead()} 로 드러낸다.
      */
     public Duration dataAge() {
-        Duration age = Duration.between(current.get().snapshot().publishedAt(), clock.instant());
-        return age.isNegative() ? Duration.ZERO : age;
+        return view().dataAge();
     }
 
     /** 발행 시각이 이 노드의 현재보다 미래인가 — 시계가 갈렸다는 신호다. */
     public boolean isClockAhead() {
-        return Duration.between(current.get().snapshot().publishedAt(), clock.instant()).isNegative();
+        return view().clockAhead();
     }
 
     /** 임계와 같으면 아직 낡지 않았다 — 넘어야 낡음이다. */

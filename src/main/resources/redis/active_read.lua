@@ -11,7 +11,9 @@
 -- 스냅샷이 노드마다 다르게 낡는다 — 어떤 노드는 fail-open 으로 열리고 어떤
 -- 노드는 안 열린다. 리더는 옮겨 다니므로 그 편차가 승계마다 바뀐다.
 
-local now = redis.call('TIME')[1]
+-- **데이터를 먼저 읽는다.** TIME 을 앞에 두면 SMEMBERS 가 도는 사이 초 경계를
+-- 넘을 수 있고, 그러면 나이가 최대 1 초 어리게 나온다.
 local coupons = redis.call('SMEMBERS', KEYS[1])
+local now = redis.call('TIME')[1]
 table.insert(coupons, 1, now)
 return coupons

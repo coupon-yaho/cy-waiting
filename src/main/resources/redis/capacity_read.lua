@@ -16,7 +16,9 @@
 -- 완벽해도 나이가 음수로 나온다 — 그 경합을 덮으려고 판정을 느슨하게 하면
 -- 죽은 인스턴스가 그만큼 오래 세어진다.
 
-local now = redis.call('TIME')[1]
+-- **데이터를 먼저 읽는다.** TIME 을 앞에 두면 HGETALL 이 도는 사이 초 경계를
+-- 넘을 수 있고, 그러면 나이가 최대 1 초 어리게 나온다.
 local entries = redis.call('HGETALL', KEYS[1])
+local now = redis.call('TIME')[1]
 table.insert(entries, 1, now)
 return entries

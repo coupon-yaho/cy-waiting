@@ -13,7 +13,9 @@
 -- 여기서 받은 시각으로 노드가 **자기 시계와의 차이를 배운다.** 그 보정은 요청
 -- 경로 밖에서 일어나므로 불변식 1 을 안 건드린다.
 
-local now = redis.call('TIME')[1]
+-- **데이터를 먼저 읽는다.** TIME 을 앞에 두면 HGETALL 이 도는 사이 초 경계를
+-- 넘을 수 있고, 그러면 나이가 최대 1 초 어리게 나온다.
 local entries = redis.call('HGETALL', KEYS[1])
+local now = redis.call('TIME')[1]
 table.insert(entries, 1, now)
 return entries

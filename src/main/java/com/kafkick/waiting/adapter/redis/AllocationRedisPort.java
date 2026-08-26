@@ -203,8 +203,11 @@ public final class AllocationRedisPort implements SnapshotSource {
                 .next()
                 .map(raw -> {
                     List<?> parts = (List<?>) raw;
-                    long now = serverClock.observe(
-                            Long.parseLong(String.valueOf(parts.get(0))));
+                    // **원시 값을 그대로 싣는다.** 단조 바닥값은 프로세스 전체의
+                    // 최댓값이라, 다른 슬롯을 먼저 읽으면 이 읽기와 시각의 짝이
+                    // 깨진다. 가드는 말이 되는 값인지 보고 역행을 남기는 몫이다.
+                    long now = Long.parseLong(String.valueOf(parts.get(0)));
+                    serverClock.observe(now);
                     List<String> coupons = new ArrayList<>();
                     for (int i = 1; i < parts.size(); i++) {
                         String couponId = String.valueOf(parts.get(i));
@@ -442,8 +445,8 @@ public final class AllocationRedisPort implements SnapshotSource {
                 .next()
                 .map(raw -> {
                     List<?> parts = (List<?>) raw;
-                    long now = serverClock.observe(
-                            Long.parseLong(String.valueOf(parts.get(0))));
+                    long now = Long.parseLong(String.valueOf(parts.get(0)));
+                    serverClock.observe(now);
                     Map<String, String> hash = new LinkedHashMap<>();
                     for (int i = 1; i + 1 < parts.size(); i += 2) {
                         hash.put(String.valueOf(parts.get(i)), String.valueOf(parts.get(i + 1)));

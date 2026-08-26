@@ -155,4 +155,44 @@ class CircuitTransitionLogTest {
                     assertThat(e.getFormattedMessage()).contains("서킷 열림");
                 });
     }
+
+    /**
+     * <b>다시 열리는 것은 새 구간이 아닙니다.</b> 회복을 시도했다 실패한 것이므로,
+     * 덮어쓰면 원래 시작 시각과 그동안 막은 건수가 사라집니다. 그러면 닫힘 로그가
+     * 장애를 실제보다 짧고 가볍게 말합니다.
+     */
+    @Test
+    @DisplayName("다시_열려도_구간의_시작과_건수를_지킨다")
+    void 다시_열려도_구간의_시작과_건수를_지킨다() {
+        서킷().transitionToOpenState();
+        서킷().tryAcquirePermission();
+        서킷().tryAcquirePermission();
+
+        // 회복을 시도했다 실패한다. 여기서 이력이 사라지면 안 된다.
+        나노.set(java.util.concurrent.TimeUnit.SECONDS.toNanos(20));
+        서킷().transitionToHalfOpenState();
+        서킷().transitionToOpenState();
+        서킷().tryAcquirePermission();
+
+        나노.set(java.util.concurrent.TimeUnit.SECONDS.toNanos(30));
+        서킷().transitionToClosedState();
+
+        assertThat(남은것("서킷 닫힘")).singleElement()
+                .satisfies(e -> assertThat(e.getFormattedMessage())
+                        // 두 번째 열림부터가 아니라 처음부터 30초, 막은 것도 셋 다.
+                        .contains("30초").contains("3건"));
+    }
+
+    /** 회복 시도가 실패한 사실도 남깁니다. 진동을 사후에 세려면 그 줄이 필요합니다. */
+    @Test
+    @DisplayName("회복_시도가_실패하면_그_사실을_남긴다")
+    void 회복_시도가_실패하면_그_사실을_남긴다() {
+        서킷().transitionToOpenState();
+
+        나노.set(java.util.concurrent.TimeUnit.SECONDS.toNanos(20));
+        서킷().transitionToHalfOpenState();
+        서킷().transitionToOpenState();
+
+        assertThat(남은것("회복 시도가 실패했다")).hasSize(1);
+    }
 }

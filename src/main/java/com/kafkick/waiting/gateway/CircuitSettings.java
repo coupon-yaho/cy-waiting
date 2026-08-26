@@ -61,7 +61,9 @@ final class CircuitSettings {
      */
     void wholeSeconds(Duration value, String key) {
         long seconds = value.toSeconds();
-        if (value.toMillis() % 1000 != 0 || seconds < 1 || seconds > Integer.MAX_VALUE) {
+        // **나노초까지 본다.** `toMillis()` 로 재면 `PT1.000000001S` 가 통과하는데,
+        // 실제로는 1초로 줄어들어 적은 값과 도는 값이 달라진다.
+        if (value.getNano() != 0 || seconds < 1 || seconds > Integer.MAX_VALUE) {
             throw new IllegalArgumentException(
                     "%s%s 는 1초 이상의 정수 초여야 한다: %s".formatted(PREFIX, key, value));
         }

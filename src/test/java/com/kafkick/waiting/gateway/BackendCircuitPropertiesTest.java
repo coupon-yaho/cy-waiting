@@ -138,6 +138,10 @@ class BackendCircuitPropertiesTest {
                 Duration.ofMillis(500), 20, 50f, 느림, 50f, 대기, 반쯤_상한, 10))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("sliding-window-size");
+        // 밀리초로 재면 통과하는 값. 실제로는 1초로 줄어 적은 값과 달라진다.
+        assertThatThrownBy(() -> new BackendCircuitProperties(
+                Duration.ofSeconds(1).plusNanos(1), 20, 50f, 느림, 50f, 대기, 반쯤_상한, 10))
+                .isInstanceOf(IllegalArgumentException.class);
         // int 로 잘려 작은 창이 되는 값. 양수 검사만으로는 안 걸린다.
         assertThatThrownBy(() -> new BackendCircuitProperties(
                 Duration.ofSeconds(4_294_967_306L), 20, 50f, 느림, 50f, 대기, 반쯤_상한, 10))

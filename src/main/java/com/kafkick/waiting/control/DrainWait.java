@@ -36,12 +36,18 @@ public final class DrainWait {
 
     private DrainWait(ShutdownState shutdown, Duration wait, LongConsumer sleeper) {
         this.shutdown = Objects.requireNonNull(shutdown, "shutdown 은 필수다");
-        this.sleeper = Objects.requireNonNull(sleeper, "sleeper 는 필수다");
+        // 안 주면 실제로 잠듭니다. 생성자에서 정하므로 필드는 늘 채워집니다.
+        this.sleeper = sleeper == null ? this::sleep : sleeper;
         Objects.requireNonNull(wait, "wait 는 필수다");
         // **0 이면 이 장치가 없는 것과 같습니다.** 값으로 끄면 기다림이 사라졌다는
         // 사실이 설정 어디에도 안 드러납니다.
         if (wait.isNegative() || wait.isZero()) {
             throw new IllegalArgumentException("LB 제외 대기는 양수여야 한다: " + wait);
+        }
+        // **밀리초 미만은 0 으로 잘립니다.** `PT0.0005S` 는 양수 검사를 통과하지만
+        // 실제로는 안 기다리고, 기다림이 사라진 사실이 어디에도 안 드러납니다.
+        if (wait.toMillis() < 1) {
+            throw new IllegalArgumentException("LB 제외 대기는 1ms 이상이어야 한다: " + wait);
         }
         if (wait.compareTo(MAX_WAIT) > 0) {
             throw new IllegalArgumentException(
@@ -52,7 +58,7 @@ public final class DrainWait {
 
     /** 실제로 잠듭니다. 운영 배선이 쓰는 길입니다. */
     public static DrainWait of(ShutdownState shutdown, Duration wait) {
-        return new DrainWait(shutdown, wait, DrainWait::sleep);
+        return new DrainWait(shutdown, wait, null);
     }
 
     /** 잠드는 방식을 받습니다. 실제로 자면 이 시험만 장비 속도에 걸립니다 (TS-4). */
@@ -87,9 +93,7 @@ public final class DrainWait {
                 (System.nanoTime() - startedAt) / 1_000_000L);
     }
 
-    // RULE-EXCEPTION(JS-13): 기본 잠듦 구현이라 인스턴스 상태가 없다. 인스턴스
-    // 메서드로 두면 생성자에서 자기 자신을 참조해야 한다.
-    private static void sleep(long millis) {
+    private void sleep(long millis) {
         try {
             // RULE-EXCEPTION(RX-1): 종료 경로다. 여기서 막는 것이 목적이고, 상한은
             // 생성자가 MAX_WAIT 이하의 양수로 강제한다.

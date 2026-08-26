@@ -124,7 +124,11 @@ public final class SnapshotRefreshLifecycle
         // **readiness 를 내리고 부하 분산기가 뺄 시간을 준다.** 곧바로 드레인하면
         // 그 사이 도착한 요청이 커넥션째 끊긴다. 이 사건이 웹 서버 정지보다
         // 먼저 오므로, 여기서 막는 것이 곧 유입을 멎게 하는 일이다.
-        drainWait.beforeDrain(() -> { });
+        //
+        // **여기에 등록 해제를 붙이지 않는다.** 아직 요청을 받는 노드를 분모에서
+        // 빼면 남은 노드가 크레딧을 다 쓰고 그 위에 이 노드의 통과분이 더해진다.
+        // 그 일은 드레인이 끝난 뒤 GatewayHeartbeatLoop 가 한다 (6.4.4).
+        drainWait.beforeDrain();
     }
 
     private void disposeScheduler() {

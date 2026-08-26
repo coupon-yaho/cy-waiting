@@ -18,6 +18,15 @@ public final class DrainWait {
 
     private static final Logger log = LoggerFactory.getLogger(DrainWait.class);
 
+    /**
+     * 대기 상한. {@code spring.lifecycle.timeout-per-shutdown-phase} 와 같은 값이다.
+     *
+     * <p>이 대기는 컨테이너의 단계별 상한 <b>밖</b>이라 프레임워크가 못 끊는다.
+     * 여기서 안 막으면 {@code 6s} 를 {@code 6m} 로 적은 오타 하나가 노드를 기동
+     * 상태로 붙들고, 오케스트레이터가 진행 중인 요청째 강제 종료한다.
+     */
+    private static final Duration MAX_WAIT = Duration.ofSeconds(30);
+
     private final ShutdownState shutdown;
     private final Duration wait;
     private final LongConsumer sleeper;
@@ -34,6 +43,10 @@ public final class DrainWait {
         if (wait.isNegative() || wait.isZero()) {
             throw new IllegalArgumentException("LB 제외 대기는 양수여야 한다: " + wait);
         }
+        if (wait.compareTo(MAX_WAIT) > 0) {
+            throw new IllegalArgumentException(
+                    "LB 제외 대기는 " + MAX_WAIT + " 이하여야 한다: " + wait);
+        }
         this.wait = wait;
     }
 
@@ -48,31 +61,30 @@ public final class DrainWait {
     }
 
     /**
-     * readiness 를 내리고, 부하 분산기가 뺄 시간을 준 뒤 드레인을 실행합니다.
+     * readiness 를 내리고, 부하 분산기가 뺄 시간을 준 뒤 돌아옵니다.
      *
      * <p><b>순서가 뒤집히면 안 됩니다.</b> 기다린 뒤에 내리면 그 대기 시간 동안
      * 앞단은 우리가 멀쩡하다고 보고 계속 보냅니다.
      *
-     * <p>드레인이 실패해도 삼킵니다. 여기서 막히면 노드가 안 죽고 배포가 멈춥니다.
+     * <p>드레인 자체는 이 뒤에 컨테이너가 합니다 — 부르는 쪽이 돌아가야 시작됩니다.
      */
-    public void beforeDrain(Runnable drain) {
-        Objects.requireNonNull(drain, "drain 은 필수다");
+    public void beforeDrain() {
         shutdown.draining();
-        if (waited.compareAndSet(false, true)) {
-            log.info("종료 시작 — readiness 를 내리고 {}초 동안 부하 분산기를 기다린다",
-                    wait.toSeconds());
-            try {
-                sleeper.accept(wait.toMillis());
-            } catch (RuntimeException e) {
-                // 끊겼다고 안 죽으면 안 됩니다. 그 사실만 남기고 계속합니다.
-                log.warn("부하 분산기 대기가 끊겼다 — 그대로 드레인한다: {}", e.toString());
-            }
+        if (!waited.compareAndSet(false, true)) {
+            return;
         }
+        log.info("종료 시작 — readiness 를 내리고 {}초 동안 부하 분산기를 기다린다",
+                wait.toSeconds());
+        long startedAt = System.nanoTime();
         try {
-            drain.run();
+            sleeper.accept(wait.toMillis());
         } catch (RuntimeException e) {
-            log.warn("드레인 준비가 실패했다 — 종료는 계속한다: {}", e.toString());
+            // 끊겼다고 안 죽으면 안 됩니다. 그 사실만 남기고 계속합니다.
+            log.warn("부하 분산기 대기가 끊겼다 — 덜 기다린 채로 드레인한다", e);
         }
+        // 진입만 남기면 얼마나 버텼는지를 사후에 못 답한다 (LG-2).
+        log.info("부하 분산기 대기 끝 — {}ms 기다렸다. 드레인을 시작한다",
+                (System.nanoTime() - startedAt) / 1_000_000L);
     }
 
     // RULE-EXCEPTION(JS-13): 기본 잠듦 구현이라 인스턴스 상태가 없다. 인스턴스
@@ -80,10 +92,13 @@ public final class DrainWait {
     private static void sleep(long millis) {
         try {
             // RULE-EXCEPTION(RX-1): 종료 경로다. 여기서 막는 것이 목적이고, 상한은
-            // 생성자가 양수로 강제하며 spring.lifecycle.timeout 이 다시 덮는다.
+            // 생성자가 MAX_WAIT 이하의 양수로 강제한다.
             Thread.sleep(millis);
         } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+            // **끊긴 표시를 다시 세우지 않는다.** 이 스레드는 곧바로 컨테이너의
+            // 단계별 정지로 들어가 `latch.await` 로 드레인을 기다리는데, 표시가
+            // 서 있으면 그 기다림이 즉시 깨진다 — 지켜 주려던 진행 중인 요청이
+            // 바로 그때 끊긴다. 끊겼다는 사실은 부르는 쪽이 로그로 남긴다.
             throw new IllegalStateException("대기가 끊겼다", e);
         }
     }

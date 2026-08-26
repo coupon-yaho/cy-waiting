@@ -66,7 +66,7 @@ class SnapshotRefreshDrainOrderTest {
             ShutdownState shutdown = ShutdownState.create();
             관찰_대상 = SnapshotRefreshLifecycle.of(refresher, shutdown, 주기,
                     // 실제로 안 잔다. 자면 이 시험만 장비 속도에 걸린다 (TS-4).
-                    DrainWait.of(shutdown, java.time.Duration.ofSeconds(6), ms -> { }));
+                    DrainWait.of(shutdown, Duration.ofSeconds(6), ms -> { }));
             return 관찰_대상;
         }
 

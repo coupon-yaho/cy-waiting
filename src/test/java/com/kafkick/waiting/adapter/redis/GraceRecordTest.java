@@ -3,6 +3,7 @@ package com.kafkick.waiting.adapter.redis;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.kafkick.waiting.domain.queue.GraceRetention;
 import java.time.Duration;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
@@ -35,7 +36,8 @@ class GraceRecordTest extends RedisContainerSupport {
     private static final String ADMITTED = RedisKeys.admitted(COUPON, 1, 0);
 
     private static final long NOW = 1_800_000_000L;
-    private static final String RETENTION = "300";
+    /** 보관 기간. <b>손으로 안 적는다</b> — 토큰 수명과의 관계가 도메인에 있다. */
+    private static final String RETENTION = String.valueOf(GraceRetention.SECONDS);
 
     @Autowired
     private ReactiveStringRedisTemplate redis;

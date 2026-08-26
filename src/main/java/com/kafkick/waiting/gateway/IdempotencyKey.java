@@ -46,20 +46,20 @@ public final class IdempotencyKey {
     /**
      * 이 시도의 키.
      *
-     * <p><b>입장 토큰이 시도를 가른다.</b> 회원과 쿠폰만으로 만들면 두 번 줄 서서
-     * 두 번 차례가 온 사람의 두 번째가 조용히 버려진다. 토큰을 그대로 싣지도
-     * 않는다 — 키가 남는 뒷단 로그에서 남의 차례를 주울 수 있다.
+     * <p><b>클라이언트가 시도를 가른다.</b> 게이트웨이는 무엇이 한 번의 시도인지
+     * 모른다 — 발급 정책은 뒷단 것이다. 클라이언트가 준 값을 재료에 넣되 회원에
+     * 묶어, 남의 키를 주워 와도 그 사람 앞으로는 못 쓰게 한다.
      */
-    public String of(String couponId, String memberId, String entryToken) {
+    public String of(String couponId, String memberId, String clientKey) {
         Objects.requireNonNull(couponId, "couponId 는 필수다");
         Objects.requireNonNull(memberId, "memberId 는 필수다");
-        Objects.requireNonNull(entryToken, "entryToken 은 필수다");
         // 길이를 같이 넣는다. 구분자만 쓰면 ("a|b", "c") 와 ("a", "b|c") 가 같은
         // 바이트가 되어 서로 다른 시도가 같은 키를 받는다.
-        String material = "%d:%s:%d:%s:%d:%s"
+        String material = PREFIX + "%d:%s:%d:%s:%d:%s"
                 .formatted(couponId.length(), couponId,
                         memberId.length(), memberId,
-                        entryToken.length(), entryToken);
+                        clientKey == null ? -1 : clientKey.length(),
+                        clientKey == null ? "" : clientKey);
         return PREFIX + ENCODER.encodeToString(sign(material));
     }
 

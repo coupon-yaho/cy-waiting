@@ -1143,4 +1143,75 @@ class AdmissionGatewayFilterTest {
         }).block();
         return 키.get();
     }
+
+    /**
+     * <b>통과하는 모든 길이 키를 덮어야 한다.</b> 한 갈래만 덮으면 나머지에서
+     * 클라이언트가 준 값이 그대로 뒷단에 닿고, 거기로 멱등성을 우회한다.
+     *
+     * <p>fail-open 은 레디스가 흔들리는 구간이다 — 뒷단 지연이 가장 크고 타임아웃이
+     * 실제로 나는 그 구간에서 안 막히면 이 장치가 있으나 마나다.
+     */
+    @Test
+    @DisplayName("fail_open_통과에도_멱등_키를_덮는다")
+    void fail_open_통과에도_멱등_키를_덮는다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+        줄.터진다(new IllegalStateException("레디스가 죽었다"));
+
+        assertThat(실린_키(요청_with_키("내가-정한-값"))).isNotEqualTo("내가-정한-값");
+    }
+
+    /**
+     * <b>첫 틱 전 통과도 마찬가지다.</b> 기동 직후라 판정 재료가 없을 뿐,
+     * 뒷단으로 가는 것은 같다.
+     */
+    @Test
+    @DisplayName("첫_틱_전_통과에도_멱등_키를_덮는다")
+    void 첫_틱_전_통과에도_멱등_키를_덮는다() {
+        // 스냅샷을 안 심는다. 홀더가 첫 틱 전이다.
+        assertThat(실린_키(요청_with_키("내가-정한-값"))).isNotEqualTo("내가-정한-값");
+    }
+
+    /**
+     * <b>클라이언트가 준 값이 시도를 가른다.</b> 게이트웨이는 무엇이 한 번의
+     * 시도인지 모른다 — 발급 정책은 뒷단 것이다.
+     */
+    @Test
+    @DisplayName("클라이언트_값이_다르면_다른_키가_나간다")
+    void 클라이언트_값이_다르면_다른_키가_나간다() {
+        스냅샷을_심는다(CouponStates.idle(1_000), META);
+
+        assertThat(실린_키(요청_with_키("시도-1")))
+                .isNotEqualTo(실린_키(요청_with_키("시도-2")));
+    }
+
+    /** 같은 값을 다시 주면 같은 키다. 아니면 끊긴 발급의 재시도가 새 시도가 된다. */
+    @Test
+    @DisplayName("같은_클라이언트_값은_같은_키가_나간다")
+    void 같은_클라이언트_값은_같은_키가_나간다() {
+        스냅샷을_심는다(CouponStates.idle(1_000), META);
+
+        assertThat(실린_키(요청_with_키("시도-1")))
+                .isEqualTo(실린_키(요청_with_키("시도-1")));
+    }
+
+    private MockServerWebExchange 요청_with_키(String 클라이언트_값) {
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.method(HttpMethod.POST,
+                                "/api/v1/coupons/" + COUPON + "/issue")
+                        .header("X-Member-Id", MEMBER)
+                        .header(IdempotencyKey.HEADER, 클라이언트_값));
+        exchange.getAttributes().put(
+                ServerWebExchangeUtils.URI_TEMPLATE_VARIABLES_ATTRIBUTE,
+                Map.of("couponId", COUPON));
+        return exchange;
+    }
+
+    private String 실린_키(MockServerWebExchange exchange) {
+        AtomicReference<String> 키 = new AtomicReference<>();
+        filter.filter(exchange, e -> {
+            키.set(e.getRequest().getHeaders().getFirst(IdempotencyKey.HEADER));
+            return Mono.empty();
+        }).block();
+        return 키.get();
+    }
 }

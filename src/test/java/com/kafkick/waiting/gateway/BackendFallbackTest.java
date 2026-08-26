@@ -14,6 +14,10 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
+import org.springframework.web.reactive.function.server.HandlerStrategies;
+import org.springframework.web.reactive.function.server.RouterFunction;
+import org.springframework.web.reactive.function.server.ServerRequest;
+import org.springframework.web.reactive.function.server.ServerResponse;
 
 /**
  * 서킷이 열렸을 때 사용자가 받는 것.
@@ -111,5 +115,37 @@ class BackendFallbackTest {
 
         assertThat(meters.counter("waiting.backend.fallback", "outcome", "open").count())
                 .isEqualTo(2);
+    }
+
+    /**
+     * <b>핸들러가 있어도 아무도 그 주소로 안 보내면 소용없다.</b> 서킷 필터는
+     * {@code forward:} 로 넘길 뿐이라, 받는 라우트가 없으면 404 다 — 핸들러를
+     * 만들어 둔 것이 오히려 안심을 준다.
+     */
+    @Test
+    @DisplayName("fallback_주소를_받는_라우트가_있다")
+    void fallback_주소를_받는_라우트가_있다() {
+        RouterFunction<ServerResponse> routes = new BackendFallbackRoutes().fallbackRoutes(fallback);
+
+        ServerRequest 넘어옴 = ServerRequest.create(
+                MockServerWebExchange.from(
+                        MockServerHttpRequest.method(HttpMethod.POST, "/fallback/issue")),
+                HandlerStrategies.withDefaults().messageReaders());
+
+        assertThat(routes.route(넘어옴).blockOptional()).isPresent();
+    }
+
+    /** 남의 경로까지 잡으면 안 된다. 잡으면 그 경로가 통째로 503 이 된다. */
+    @Test
+    @DisplayName("fallback_라우트가_남의_경로를_안_잡는다")
+    void fallback_라우트가_남의_경로를_안_잡는다() {
+        RouterFunction<ServerResponse> routes = new BackendFallbackRoutes().fallbackRoutes(fallback);
+
+        ServerRequest 발급 = ServerRequest.create(
+                MockServerWebExchange.from(
+                        MockServerHttpRequest.method(HttpMethod.POST, "/api/v1/coupons/c1/issue")),
+                HandlerStrategies.withDefaults().messageReaders());
+
+        assertThat(routes.route(발급).blockOptional()).isEmpty();
     }
 }

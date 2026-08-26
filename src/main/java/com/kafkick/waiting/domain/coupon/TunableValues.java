@@ -56,9 +56,9 @@ final class TunableValues {
         }
         try {
             return Double.valueOf(json.substring(start, end));
-        } catch (NumberFormatException | StringIndexOutOfBoundsException e) {
+        } catch (NumberFormatException e) {
             // **그 값만 버립니다.** 여기서 던지면 오타 하나가 방금 고친 다른 값도
-            // 되돌립니다.
+            // 되돌립니다. 자리 계산은 위에서 길이를 보므로 범위를 안 넘습니다.
             return null;
         }
     }

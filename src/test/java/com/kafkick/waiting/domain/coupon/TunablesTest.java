@@ -79,4 +79,68 @@ class TunablesTest {
 
         assertThat(하나).isEqualTo(둘);
     }
+
+    /** 콜론이 없으면 값이 아니다. 키만 적고 만 경우다. */
+    @Test
+    @DisplayName("콜론이_없으면_기본값이_된다")
+    void 콜론이_없으면_기본값이_된다() {
+        assertThat(Tunables.parse("{\"inFlightSeconds\"}"))
+                .isEqualTo(Tunables.defaults());
+    }
+
+    /** 값 자리가 수가 아니면 그 값만 버린다. */
+    @Test
+    @DisplayName("수가_아니면_그_값만_버린다")
+    void 수가_아니면_그_값만_버린다() {
+        Tunables t = Tunables.parse("{\"idleCreditRatio\":\"높게\",\"inFlightSeconds\":4}");
+
+        assertThat(t.idleCreditRatio()).isEqualTo(Tunables.defaults().idleCreditRatio());
+        assertThat(t.inFlightSeconds()).isEqualTo(4);
+    }
+
+    /** 공백이 끼어도 읽는다. 사람이 손으로 적는 값이다. */
+    @Test
+    @DisplayName("공백이_있어도_읽는다")
+    void 공백이_있어도_읽는다() {
+        assertThat(Tunables.parse("{\"inFlightSeconds\" :   9 }").inFlightSeconds())
+                .isEqualTo(9);
+    }
+
+    /**
+     * <b>비율이 0 이나 1 이면 안 됩니다.</b> 0 이면 한산 통과가 통째로 막히고,
+     * 1 이면 그 경로가 노드 예산을 다 써 토큰을 든 사람이 밀립니다.
+     */
+    @Test
+    @DisplayName("비율의_양_끝은_안_받는다")
+    void 비율의_양_끝은_안_받는다() {
+        double 기본 = Tunables.defaults().idleCreditRatio();
+
+        assertThat(Tunables.parse("{\"idleCreditRatio\":0}").idleCreditRatio()).isEqualTo(기본);
+        assertThat(Tunables.parse("{\"idleCreditRatio\":1}").idleCreditRatio()).isEqualTo(기본);
+    }
+
+    /** 걸려 있을 수 있는 시간이 1 초 미만이면 격벽이 아무도 안 들여보낸다. */
+    @Test
+    @DisplayName("초가_1_미만이면_기본값이_된다")
+    void 초가_1_미만이면_기본값이_된다() {
+        assertThat(Tunables.parse("{\"inFlightSeconds\":0}").inFlightSeconds())
+                .isEqualTo(Tunables.defaults().inFlightSeconds());
+    }
+
+    /** 콜론 뒤가 끊긴 값. 잘려서 저장된 경우다. */
+    @Test
+    @DisplayName("콜론_뒤가_끊겨도_기본값이_된다")
+    void 콜론_뒤가_끊겨도_기본값이_된다() {
+        assertThat(Tunables.parse("{\"inFlightSeconds\":"))
+                .isEqualTo(Tunables.defaults());
+        assertThat(Tunables.parse("{\"inFlightSeconds\":  "))
+                .isEqualTo(Tunables.defaults());
+    }
+
+    /** 닫는 괄호 없이 수로 끝나도 읽는다. */
+    @Test
+    @DisplayName("수로_끝나도_읽는다")
+    void 수로_끝나도_읽는다() {
+        assertThat(Tunables.parse("{\"inFlightSeconds\":8").inFlightSeconds()).isEqualTo(8);
+    }
 }

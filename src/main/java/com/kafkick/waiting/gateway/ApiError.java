@@ -171,6 +171,22 @@ public final class ApiError {
             return Mono.empty();
         }
 
+        Envelope envelope = render(exchange, status, code, message, retryAfterSec, mirrorsBackend);
+        response.setStatusCode(envelope.status());
+        response.getHeaders().putAll(envelope.headers());
+        return response.writeWith(Mono.just(response.bufferFactory().wrap(envelope.body())));
+    }
+
+    /**
+     * 봉투를 만들되 <b>쓰지는 않는다.</b>
+     *
+     * <p>함수형 라우트는 {@code ServerResponse} 를 돌려줘야 해서 교환에 직접 못
+     * 쓴다. 그렇다고 거기서 봉투를 따로 짜면 <b>같은 게이트웨이가 두 가지 오류
+     * 형식을 낸다</b> — 클라이언트는 어느 쪽을 파싱할지 알 수 없다. 만드는 곳을
+     * 하나로 두고 싣는 방식만 가른다.
+     */
+    Envelope render(ServerWebExchange exchange, HttpStatus status, String code,
+            String message, int retryAfterSec, boolean mirrorsBackend) {
         String requestId = requestId(exchange);
         byte[] body = body(status.value(), code, message, requestId);
         boolean fellBack = body == null;
@@ -179,19 +195,23 @@ public final class ApiError {
                     Code.INTERNAL.message(), requestId);
         }
 
-        response.setStatusCode(fellBack ? Code.INTERNAL.status() : status);
-        response.getHeaders().setContentType(MediaType.APPLICATION_JSON);
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
         // 뒷단이 안 다는 헤더는 우리도 안 단다. 프록시 캐시가 걱정되는 것은
         // 사람마다 답이 다른 응답인데, 그건 전부 게이트웨이만 내는 것이다.
         if (!mirrorsBackend && !fellBack) {
-            response.getHeaders().setCacheControl("no-store");
+            headers.setCacheControl("no-store");
         }
         // 뒷단도 요청마다 심는다. 안 실으면 그 부재가 곧 표지다.
-        response.getHeaders().set(REQUEST_ID, requestId);
+        headers.set(REQUEST_ID, requestId);
         if (retryAfterSec > NO_RETRY && !fellBack) {
-            response.getHeaders().set(HttpHeaders.RETRY_AFTER, Integer.toString(retryAfterSec));
+            headers.set(HttpHeaders.RETRY_AFTER, Integer.toString(retryAfterSec));
         }
-        return response.writeWith(Mono.just(response.bufferFactory().wrap(body)));
+        return new Envelope(fellBack ? Code.INTERNAL.status() : status, headers, body);
+    }
+
+    /** 만들어 둔 응답. 교환에 쓰든 {@code ServerResponse} 로 싣든 같은 값이다. */
+    record Envelope(HttpStatus status, HttpHeaders headers, byte[] body) {
     }
 
     /**

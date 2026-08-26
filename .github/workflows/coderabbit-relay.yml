@@ -46,7 +46,7 @@ jobs:
       cancel-in-progress: true
 
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
@@ -73,8 +73,10 @@ jobs:
           echo "relay=true" >> "$GITHUB_OUTPUT"
 
           # "Actionable comments posted: N" 에서 지적 수를 뽑는다
-          count=$(grep -oiE 'actionable comments posted:[[:space:]]*[0-9]+' <<<"$BODY" \
-                  | grep -oE '[0-9]+' | head -1 || true)
+          # 여기도 head 를 안 쓴다 — 긴 본문에서 앞 명령이 SIGPIPE 로 죽는다.
+          counts=$(grep -oiE 'actionable comments posted:[[:space:]]*[0-9]+' <<<"$BODY" \
+                  | grep -oE '[0-9]+' || true)
+          count=${counts%%$'\n'*}
           count=${count:-0}
           echo "count=$count" >> "$GITHUB_OUTPUT"
 
@@ -87,8 +89,14 @@ jobs:
           echo "status=$status"   >> "$GITHUB_OUTPUT"
           echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
 
-          # 본문은 Slack 에서 읽을 만큼만 자른다
-          excerpt=$(printf '%s' "$BODY" | sed -E 's/<[^>]*>//g' | head -c 600 | tr '\n' ' ')
+          # 본문은 Slack 에서 읽을 만큼만 자른다.
+          #
+          # **파이프로 자르지 않는다.** head 가 상한에서 먼저 닫으면 앞의 sed 가
+          # SIGPIPE 로 죽고 pipefail 이 그걸 잡는다. 본문이 파이프 버퍼보다
+          # 작으면 sed 가 먼저 끝나 안 터지므로, 짧은 리뷰에서는 통과하고
+          # 긴 리뷰에서만 실패한다.
+          stripped=$(printf '%s' "$BODY" | sed -E 's/<[^>]*>//g' | tr '\n' ' ')
+          excerpt=${stripped:0:600}
           {
             echo "excerpt<<EOF"
             echo "$excerpt"
@@ -103,7 +111,9 @@ jobs:
           TITLE: ${{ github.event.pull_request.title }}
         run: |
           set -uo pipefail
-          key=$(grep -oE '(^|[^A-Za-z0-9_])CY-[0-9]+' <<<"$TITLE" | grep -oE 'CY-[0-9]+' | head -1 || true)
+          # 여기도 같은 이유로 head 를 안 쓴다. 첫 줄만 셸로 집는다.
+          keys=$(grep -oE '(^|[^A-Za-z0-9_])CY-[0-9]+' <<<"$TITLE" | grep -oE 'CY-[0-9]+' || true)
+          key=${keys%%$'\n'*}
           echo "key=$key" >> "$GITHUB_OUTPUT"
 
       - if: steps.parse.outputs.relay == 'true'

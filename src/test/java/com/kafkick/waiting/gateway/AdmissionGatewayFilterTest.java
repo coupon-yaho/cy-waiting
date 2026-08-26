@@ -1,0 +1,1061 @@
+package com.kafkick.waiting.gateway;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import com.kafkick.waiting.MutableClock;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Tag;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import com.kafkick.waiting.control.GatewaySnapshot;
+import com.kafkick.waiting.control.SnapshotHolder;
+import com.kafkick.waiting.domain.admission.AdmissionDecider;
+import com.kafkick.waiting.domain.admission.AdmissionDecision;
+import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
+import com.kafkick.waiting.domain.coupon.CouponState;
+import com.kafkick.waiting.domain.coupon.CouponStates;
+import com.kafkick.waiting.domain.coupon.SnapshotMeta;
+import com.kafkick.waiting.domain.queue.EntryToken;
+import com.kafkick.waiting.domain.queue.QueueToken;
+import java.time.Clock;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
+import java.util.Random;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.cloud.gateway.route.Route;
+import org.springframework.cloud.gateway.support.ServerWebExchangeUtils;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
+import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
+import org.springframework.mock.web.server.MockServerWebExchange;
+import reactor.core.publisher.Mono;
+
+/**
+ * 판정 재료를 <b>로컬 스냅샷에서만</b> 읽는다.
+ *
+ * <p>요청마다 레디스를 치면 제어 평면을 만든 이유가 사라진다. 그리고 스냅샷에
+ * 없는 쿠폰을 그대로 흘리면 레디스 키가 무한히 생긴다.
+ */
+class AdmissionGatewayFilterTest {
+
+    private static final ObjectMapper JSON = new ObjectMapper();
+
+    private static final String COUPON = "c1";
+
+    private static final String MEMBER = "812934";
+
+    /** 배수 속도를 아는 쿠폰의 크레딧. 상한을 여기서 유도한다. */
+    private static final long CREDIT = 3;
+
+    /** 스냅샷이 싣는 노드 예산. 심는 자리와 같은 값이어야 한다. */
+    private static final SnapshotMeta META = new SnapshotMeta(1_000, 1);
+
+    /** 판정기에 주는 유휴 몫 비율. 운영 배선과 같은 값이다 (B-13). */
+    private static final double IDLE_RATIO = 0.7;
+
+    /** 한산 통과 상한. 숫자를 적지 않고 도메인에서 끌어온다. */
+    private static final long IDLE_CAP = CouponStates.idle(1).idleCap(META, IDLE_RATIO);
+
+    /** 고정 시계. 실제 시계를 쓰면 낡음 판정이 장비 속도에 걸린다 (TS-4). */
+    private static final Instant 지금 = Instant.parse("2026-08-24T00:00:00Z");
+
+    private final MeterRegistry meters = new SimpleMeterRegistry();
+
+    /** 스냅샷을 아직 믿는 한계. 래치는 이만큼은 버텨야 한다 (불변식 4). */
+    private static final Duration 홀더_유효_한계 = Duration.ofSeconds(10);
+
+    private final SnapshotHolder holder = SnapshotHolder.of(
+            Duration.ofSeconds(3), 홀더_유효_한계,
+            Clock.fixed(지금, ZoneOffset.UTC));
+    private final FakeQueuePort 줄 = FakeQueuePort.create();
+
+    private final EntryToken entryTokens = EntryToken.of("not-a-real-secret-0123456789abcdef");
+
+    private final QueueToken tokens = QueueToken.of("not-a-real-secret-0123456789abcdef");
+
+    private final SecondWindowLimiter limiter = SecondWindowLimiter.withMaxKeys(10_000);
+
+    private final AdmissionGatewayFilter filter = AdmissionGatewayFilter.of(
+            holder, AdmissionDecider.of(limiter, IDLE_RATIO),
+            Clock.fixed(지금, ZoneOffset.UTC), meters, 줄, tokens, limiter, entryTokens);
+
+    private final AtomicReference<Boolean> 뒷단에_닿음 = new AtomicReference<>(false);
+
+    /** 몇 번 닿았나. 한 번이라도 닿았는지만 보면 상한이 무너져도 안 걸린다. */
+    private final AtomicInteger 뒷단_횟수 = new AtomicInteger();
+
+    private MockServerWebExchange 요청(String couponId) {
+        return 요청(couponId, MEMBER);
+    }
+
+    private MockServerWebExchange 요청(String couponId, String memberId) {
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.method(HttpMethod.POST,
+                        "/api/v1/coupons/" + couponId + "/issue")
+                        .header("X-Member-Id", memberId));
+        exchange.getAttributes().put(
+                ServerWebExchangeUtils.URI_TEMPLATE_VARIABLES_ATTRIBUTE,
+                Map.of("couponId", couponId));
+        return exchange;
+    }
+
+    private AdmissionDecision 태운다(AdmissionGatewayFilter f, String couponId) {
+        MockServerWebExchange exchange = 요청(couponId);
+        f.filter(exchange, e -> Mono.empty()).block();
+        return exchange.getAttribute(AdmissionGatewayFilter.DECISION);
+    }
+
+    private MockServerWebExchange 태운다(String couponId) {
+        return 태운다(couponId, MEMBER);
+    }
+
+    /**
+     * <b>회원을 갈아 가며 태운다.</b> 같은 회원으로 반복하면 픽스처가 재등록으로
+     * 보고 상한 검사를 건너뛴다 — 줄 길이가 1 에 멈춰 상한을 아무도 안 잰다.
+     */
+    private MockServerWebExchange 태운다(String couponId, String memberId) {
+        MockServerWebExchange exchange = 요청(couponId, memberId);
+        filter.filter(exchange, e -> {
+            뒷단에_닿음.set(true);
+            뒷단_횟수.incrementAndGet();
+            return Mono.empty();
+        }).block();
+        return exchange;
+    }
+
+    /** 한산한 쿠폰 여럿을 심는다. 쿠폰별 상한에 먼저 걸리지 않고 노드 예산을 채우려면 필요하다. */
+    private void 한산한_쿠폰_여럿을_심는다(int 수) {
+        Map<String, CouponState> coupons = IntStream.range(0, 수).boxed()
+                .collect(Collectors.toMap(i -> "한산한쿠폰" + i, i -> CouponStates.idle(1_000_000)));
+        holder.replace(new GatewaySnapshot(coupons, META, 지금));
+    }
+
+    private void 스냅샷을_심는다(CouponState state) {
+        스냅샷을_심는다(state, META);
+    }
+
+    /** 판 크기를 바꿔 심는다. 한산 통과 상한을 0 으로 만들어야 배분 전 등록을 잰다. */
+    private void 스냅샷을_심는다(CouponState state, SnapshotMeta meta) {
+        holder.replace(new GatewaySnapshot(
+                state == null ? Map.of() : Map.of(COUPON, state),
+                meta, 지금));
+    }
+
+    @Test
+    @DisplayName("스냅샷에_없는_쿠폰은_뒷단에_안_간다")
+    void 스냅샷에_없는_쿠폰은_뒷단에_안_간다() {
+        // **레디스 키 무한 생성을 막는 자리다.** 없는 쿠폰을 그대로 흘리면
+        // 아무 문자열이나 큐를 하나씩 만든다.
+        스냅샷을_심는다(null);
+
+        MockServerWebExchange exchange = 태운다(COUPON);
+
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(뒷단에_닿음).hasValue(false);
+    }
+
+    @Test
+    @DisplayName("첫_스냅샷_전에는_404_를_안_낸다")
+    void 첫_스냅샷_전에는_404_를_안_낸다() {
+        // 기동 직후 재료가 없다고 전면 404 를 내면, 뜨자마자 모든 쿠폰이
+        // 없는 것이 된다 — 재기동해도 같은 구간을 또 지난다.
+        MockServerWebExchange exchange = 태운다(COUPON);
+
+        // 404 가 아닌 것만 보면 400 이나 503 으로 끊어도 통과한다.
+        assertThat(뒷단에_닿음).as("판정을 미루고 그대로 흘린다").hasValue(true);
+        assertThat(exchange.getResponse().getStatusCode()).isNull();
+    }
+
+    @Test
+    @DisplayName("경로변수가_없으면_400_이다")
+    void 경로변수가_없으면_400_이다() {
+        // 라우트에서 변수 이름을 빼면 판정할 쿠폰이 없다. 그대로 흘리면
+        // 판정이 사라진 채로 기동만 성공한다.
+        스냅샷을_심는다(CouponStates.idle(100));
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.method(HttpMethod.POST, "/api/v1/coupons/c1/issue"));
+
+        filter.filter(exchange, e -> {
+            뒷단에_닿음.set(true);
+            return Mono.empty();
+        }).block();
+
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(뒷단에_닿음).hasValue(false);
+    }
+
+    @Test
+    @DisplayName("한산한_쿠폰은_그대로_지나간다")
+    void 한산한_쿠폰은_그대로_지나간다() {
+        // **이 경로가 R1 이다.** 안 몰리는 쿠폰까지 줄을 세우면 제품이 성립하지 않는다.
+        스냅샷을_심는다(CouponStates.idle(100));
+
+        MockServerWebExchange exchange = 태운다(COUPON);
+
+        assertThat(뒷단에_닿음).hasValue(true);
+        assertThat(exchange.getResponse().getStatusCode()).isNull();
+    }
+
+    @Test
+    @DisplayName("매진은_뒷단에_안_간다")
+    void 매진은_뒷단에_안_간다() {
+        // 재고가 없으면 여기서 끝낸다. 레디스도 뒷단도 안 친다.
+        스냅샷을_심는다(CouponStates.closed(0));
+
+        MockServerWebExchange exchange = 태운다(COUPON);
+
+        assertThat(뒷단에_닿음).hasValue(false);
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+    }
+
+    @Test
+    @DisplayName("차례가_온_사람은_토큰으로_통과한다")
+    void 차례가_온_사람은_토큰으로_통과한다() {
+        // 토큰이 없으면 줄과 무관하게 판정되고, 기다린 사람과 안 기다린 사람이 같아진다.
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+
+        MockServerWebExchange 토큰을_든_요청 = MockServerWebExchange.from(
+                MockServerHttpRequest.method(HttpMethod.POST,
+                                "/api/v1/coupons/" + COUPON + "/issue")
+                        .header("X-Member-Id", MEMBER)
+                        .header("Entry-Token", entryTokens.issue(COUPON, MEMBER, 지금)));
+        토큰을_든_요청.getAttributes().put(
+                ServerWebExchangeUtils.URI_TEMPLATE_VARIABLES_ATTRIBUTE, Map.of("couponId", COUPON));
+        filter.filter(토큰을_든_요청, e -> {
+            뒷단에_닿음.set(true);
+            return Mono.empty();
+        }).block();
+
+        assertThat(토큰을_든_요청.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .isEqualTo(AdmissionDecision.PASS_TOKEN);
+        assertThat(뒷단에_닿음).hasValue(true);
+        // 통과는 게이트웨이가 응답을 안 쓴다. 쓰면 뒷단 응답을 덮는다.
+        assertThat(토큰을_든_요청.getResponse().getStatusCode()).isNull();
+        // **검증에 레디스를 안 친다** (RD-4). 치면 발급마다 왕복이 통과 인원에 비례한다.
+        assertThat(줄.왕복()).isZero();
+    }
+
+    @Test
+    @DisplayName("남의_토큰으로는_안_통한다")
+    void 남의_토큰으로는_안_통한다() {
+        // 다른 쿠폰의 토큰이 통하면 한 번 받은 것으로 모든 줄을 건너뛴다.
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.method(HttpMethod.POST,
+                                "/api/v1/coupons/" + COUPON + "/issue")
+                        .header("X-Member-Id", MEMBER)
+                        .header("Entry-Token", entryTokens.issue("다른쿠폰", MEMBER, 지금)));
+        exchange.getAttributes().put(
+                ServerWebExchangeUtils.URI_TEMPLATE_VARIABLES_ATTRIBUTE, Map.of("couponId", COUPON));
+
+        filter.filter(exchange, e -> Mono.empty()).block();
+
+        assertThat(exchange.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .matches(AdmissionDecision::isEnqueue, "대기 판정");
+    }
+
+    @Test
+    @DisplayName("남이_받은_토큰으로는_안_통한다")
+    void 남이_받은_토큰으로는_안_통한다() {
+        // 토큰이 가리키는 사람을 안 보면 남의 것을 주워 와도 통하고, 발급은
+        // 주워 온 사람 앞으로 나간다.
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.method(HttpMethod.POST,
+                                "/api/v1/coupons/" + COUPON + "/issue")
+                        .header("X-Member-Id", MEMBER)
+                        .header("Entry-Token", entryTokens.issue(COUPON, "999999", 지금)));
+        exchange.getAttributes().put(
+                ServerWebExchangeUtils.URI_TEMPLATE_VARIABLES_ATTRIBUTE, Map.of("couponId", COUPON));
+
+        filter.filter(exchange, e -> Mono.empty()).block();
+
+        assertThat(exchange.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .matches(AdmissionDecision::isEnqueue, "대기 판정");
+    }
+
+    @Test
+    @DisplayName("대기_판정은_뒷단에_안_간다")
+    void 대기_판정은_뒷단에_안_간다() {
+        // 줄에 세운 사람을 뒷단으로도 보내면, 줄을 선 채로 발급까지 받는다 —
+        // 줄 선 사람을 자기가 추월하는 셈이다.
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+
+        MockServerWebExchange exchange = 태운다(COUPON);
+
+        assertThat(exchange.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .matches(AdmissionDecision::isEnqueue, "대기 판정");
+        assertThat(뒷단에_닿음).hasValue(false);
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+        assertThat(줄.등록_횟수()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("줄을_세운_뒤에는_신규_유입이_못_넘는다")
+    void 줄을_세운_뒤에는_신규_유입이_못_넘는다() {
+        // **스냅샷은 한 틱 늦다.** 줄에 세운 직후에도 여전히 한산하다고 말한다.
+        // 그대로 두면 다음 창의 신규 유입이 방금 선 사람을 넘어간다 (불변식 4).
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+        태운다(COUPON);
+
+        // 배분이 줄을 비워 스냅샷이 한산해졌다. 그래도 방금 세운 줄은 남아 있다.
+        스냅샷을_심는다(CouponStates.idle(1_000));
+        MockServerWebExchange 뒤에_온_사람 = 태운다(COUPON);
+
+        assertThat(뒤에_온_사람.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .isEqualTo(AdmissionDecision.ENQUEUE_BACKLOG);
+        assertThat(뒤에_온_사람.getResponse().getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+    }
+
+    @Test
+    @DisplayName("래치는_다음_창까지_버틴다")
+    void 래치는_다음_창까지_버틴다() {
+        // **한 틱만 살면 그 다음 창이 뚫린다.** 초가 넘어가도 스냅샷은 아직
+        // 안 따라잡았을 수 있다.
+        MutableClock 시계 = MutableClock.at(지금);
+        AdmissionGatewayFilter f = AdmissionGatewayFilter.of(
+                holder, AdmissionDecider.of(limiter, IDLE_RATIO),
+                시계, meters, () -> 0.5, 줄, tokens, limiter, entryTokens);
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+        태운다(f, COUPON);
+
+        스냅샷을_심는다(CouponStates.idle(1_000));
+        시계.앞으로(Duration.ofSeconds(2));
+
+        assertThat(태운다(f, COUPON)).isEqualTo(AdmissionDecision.ENQUEUE_BACKLOG);
+    }
+
+    /**
+     * <b>래치는 스냅샷이 유효한 동안 살아 있어야 한다.</b> 먼저 풀리면 그 뒤로도
+     * 유효한 스냅샷에 방금 세운 줄이 안 보여, 그 창으로 들어온 사람이 줄을 안
+     * 서고 지나간다 (불변식 4).
+     *
+     * <p>홀더와 필터가 같은 시계를 써야 나이가 실제로 자란다. 안 묶으면 늘 0 이다.
+     */
+    @Test
+    @DisplayName("래치는_스냅샷이_유효한_동안_버틴다")
+    void 래치는_스냅샷이_유효한_동안_버틴다() {
+        MutableClock 시계 = MutableClock.at(지금);
+        SnapshotHolder 같은_시계_홀더 = SnapshotHolder.of(
+                Duration.ofSeconds(3), 홀더_유효_한계, 시계);
+        AdmissionGatewayFilter f = AdmissionGatewayFilter.of(
+                같은_시계_홀더, AdmissionDecider.of(limiter, IDLE_RATIO),
+                시계, meters, () -> 0.5, 줄, tokens, limiter, entryTokens);
+        같은_시계_홀더.replace(new GatewaySnapshot(
+                Map.of(COUPON, CouponStates.queueing(10, 1_000, 5_000)), META, 지금));
+        태운다(f, COUPON);
+
+        // 배분이 줄을 비운 것으로 보이는 스냅샷. 발행 시각은 그대로라 나이가 자란다.
+        같은_시계_홀더.replace(new GatewaySnapshot(
+                Map.of(COUPON, CouponStates.idle(1_000)), META, 지금));
+        시계.앞으로(홀더_유효_한계);
+
+        // 한계와 같은 나이는 아직 유효하다. 여유가 없으면 여기서 래치만 먼저 죽는다.
+        assertThat(같은_시계_홀더.isDataStale(같은_시계_홀더.view())).as("아직 낡음 아님").isFalse();
+        assertThat(태운다(f, COUPON)).isEqualTo(AdmissionDecision.ENQUEUE_BACKLOG);
+    }
+
+    /**
+     * <b>한계가 정수 초가 아니어도 래치가 더 오래 산다.</b> 초로 내림하면 여유가
+     * 절삭에 다 먹혀 실효 수명이 한계보다 짧아진다. 운영자가 넣을 수 있는 값이라
+     * 잠재 결함이 아니라 계약의 구멍이다.
+     */
+    @Test
+    @DisplayName("소수부_한계에서도_래치가_더_오래_산다")
+    void 소수부_한계에서도_래치가_더_오래_산다() {
+        Duration 한계 = Duration.ofMillis(5_500);
+        MutableClock 시계 = MutableClock.at(지금);
+        SnapshotHolder 소수_홀더 = SnapshotHolder.of(Duration.ofSeconds(3), 한계, 시계);
+        AdmissionGatewayFilter f = AdmissionGatewayFilter.of(
+                소수_홀더, AdmissionDecider.of(limiter, IDLE_RATIO),
+                시계, meters, () -> 0.5, 줄, tokens, limiter, entryTokens);
+        // **초 경계 한가운데서 줄을 세운다.** 래치는 초로 자른 시각을 재므로,
+        // 초의 앞부분이 잘려 나간 만큼 실효 수명이 짧아진다. 경계에서 세우면
+        // 그 손실이 0 이라 절삭을 못 잰다.
+        시계.앞으로(Duration.ofMillis(900));
+        소수_홀더.replace(new GatewaySnapshot(
+                Map.of(COUPON, CouponStates.queueing(10, 1_000, 5_000)), META, 시계.instant()));
+        태운다(f, COUPON);
+
+        소수_홀더.replace(new GatewaySnapshot(
+                Map.of(COUPON, CouponStates.idle(1_000)), META, 시계.instant()));
+        시계.앞으로(한계);
+
+        assertThat(소수_홀더.isDataStale(소수_홀더.view())).as("아직 낡음 아님").isFalse();
+        assertThat(태운다(f, COUPON)).isEqualTo(AdmissionDecision.ENQUEUE_BACKLOG);
+    }
+
+    @Test
+    @DisplayName("대기_응답에_순번과_토큰을_싣는다")
+    void 대기_응답에_순번과_토큰을_싣는다() {
+        // 토큰이 없으면 폴링할 수단이 없다. 순번이 없으면 얼마나 남았는지 모른다.
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+
+        MockServerWebExchange exchange = 태운다(COUPON);
+        String 본문 = exchange.getResponse().getBodyAsString().block();
+
+        assertThat(본문)
+                .contains("\"success\":true")
+                .contains("\"admitted\":false")
+                .contains("\"position\":0")
+                .contains("\"queueMode\":\"ADAPTIVE\"");
+        assertThat(tokens.verify(토큰(본문), COUPON, 지금)).contains(MEMBER);
+        // 순번은 사람마다 다르다. 프록시가 캐시하면 뒤에 온 사람이 남의 순번을 받는다.
+        assertThat(exchange.getResponse().getHeaders().getCacheControl()).isEqualTo("no-store");
+    }
+
+    @Test
+    @DisplayName("통과_판정은_줄을_안_친다")
+    void 통과_판정은_줄을_안_친다() {
+        // **요청 경로에서 레디스를 치지 않는다** (RD-4). 판정 재료는 스냅샷에만 있다.
+        스냅샷을_심는다(CouponStates.idle(1_000));
+
+        태운다(COUPON);
+
+        assertThat(뒷단에_닿음).hasValue(true);
+        assertThat(줄.왕복()).isZero();
+    }
+
+    @Test
+    @DisplayName("줄을_못_세우면_상한만큼_열어_준다")
+    void 줄을_못_세우면_상한만큼_열어_준다() {
+        // 전부 막으면 레디스 장애가 곧 전면 장애다. 전부 열면 뒷단이 무너진다.
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+        줄.터진다(new IllegalStateException("레디스가 죽었다"));
+
+        MockServerWebExchange exchange = 태운다(COUPON);
+
+        assertThat(뒷단에_닿음).hasValue(true);
+        assertThat(exchange.getResponse().getStatusCode()).isNull();
+    }
+
+    @Test
+    @DisplayName("줄이_실제로_찼으면_거절한다")
+    void 줄이_실제로_찼으면_거절한다() {
+        // 판정은 자리가 있다고 봤지만 실제로는 없다. 스냅샷은 한 틱 늦다.
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+        줄.가득_찼다();
+
+        MockServerWebExchange exchange = 태운다(COUPON);
+
+        assertThat(exchange.getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        assertThat(뒷단에_닿음).hasValue(false);
+    }
+
+    /**
+     * <b>한산하던 쿠폰에 사람이 몰리기 시작하는 순간이다.</b> 그때 credit 은 0 인데
+     * — 배분은 줄이 있어야 나가고 줄은 여기서 만들어진다 — 상한을 0 으로 넘기면
+     * 줄이 한 번도 안 생기고 쿠폰이 영영 그 상태에 갇힌다.
+     */
+    @Test
+    @DisplayName("배수를_아직_못_받아도_줄은_선다")
+    void 배수를_아직_못_받아도_줄은_선다() {
+        스냅샷을_심는다(CouponStates.always(1_000));
+
+        MockServerWebExchange exchange = 태운다(COUPON);
+
+        assertThat(exchange.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .isEqualTo(AdmissionDecision.ENQUEUE_ALWAYS);
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+        assertThat(뒷단에_닿음).hasValue(false);
+        // **그 쿠폰의 줄에 섰는지 본다.** 등록 횟수만 세면 어느 줄에 들어갔든 초록이다.
+        assertThat(줄.줄_길이(COUPON)).isEqualTo(1);
+    }
+
+    /**
+     * <b>도메인 시험만으로는 배선이 안 잠긴다.</b> 배분 전이라 배수 속도를 모르는데
+     * 0 이 나가면 앞에 사람이 남았는데 곧 입장이라고 말하는 셈이다.
+     */
+    @Test
+    @DisplayName("배수를_모르면_가장_넓은_구간을_싣는다")
+    void 배수를_모르면_가장_넓은_구간을_싣는다() {
+        스냅샷을_심는다(CouponStates.always(1_000));
+        // 앞사람이 있어야 ETA 가 0 이 아니다 — 맨 앞 사람은 정말 0 이 맞다.
+        태운다(COUPON, "앞사람");
+
+        MockServerWebExchange exchange = 태운다(COUPON, "뒷사람");
+
+        // **값으로 읽는다** — 포함 검사는 450 자리를 4500 이 통과한다.
+        assertThat(본문(exchange).get("data").get("position").asLong()).isEqualTo(1);
+        assertThat(본문(exchange).get("data").get("etaSeconds").asLong()).isEqualTo(450);
+    }
+
+    private JsonNode 본문(MockServerWebExchange exchange) {
+        return JSON.readTree(exchange.getResponse().getBodyAsString().block());
+    }
+
+    /**
+     * 한산한 쿠폰이 노드 예산을 넘겨 몰릴 때다. 예산을 넘긴 첫 사람이 429 를
+     * 받으면 줄이 한 번도 안 생기고, 그 쿠폰은 활성화되지 못해 배분을 영영
+     * 못 받는다.
+     */
+    @Test
+    @DisplayName("한산한_쿠폰의_초과분이_줄을_선다")
+    void 한산한_쿠폰의_초과분이_줄을_선다() {
+        스냅샷을_심는다(CouponStates.idle(1_000));
+
+        // 한산 통과 상한은 전역 크레딧의 20% 다. 그 다음 한 명이 첫 대기자다.
+        MockServerWebExchange 마지막_통과자 = null;
+        for (long i = 0; i < IDLE_CAP; i++) {
+            마지막_통과자 = 태운다(COUPON, "무대기" + i);
+        }
+        // 상한번째까지는 줄 없이 통과한다. 넘긴 쪽만 보면 상한이 1 로 무너져도 초록이다.
+        assertThat(마지막_통과자.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .isEqualTo(AdmissionDecision.PASS_UNDER_CAP);
+        MockServerWebExchange 첫_대기자 = 태운다(COUPON, "대기자");
+
+        assertThat(첫_대기자.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .isEqualTo(AdmissionDecision.ENQUEUE_RATE_COUPON);
+        assertThat(첫_대기자.getResponse().getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+    }
+
+    /**
+     * <b>상한을 푸는 것과 없애는 것은 다르다.</b> 낡은 구간에는 대기 인원이 영영
+     * 0 으로 보여 이 경로가 계속 불린다 — 없으면 장애 내내 줄이 자란다 (R5).
+     * 값을 계산하는 것은 도메인 시험이 잰다. 여기서 재는 것은 <b>게이트웨이가
+     * 그 값을 실제로 포트에 넘기는가</b> 다.
+     */
+    @Test
+    @DisplayName("배분_전에도_상한은_유한하다")
+    void 배분_전에도_상한은_유한하다() {
+        // 배분 전 천장은 최소 배수 속도 × 최대 대기 시간이다. 판 크기와 무관하다.
+        long CAP = AdmissionDecider.MIN_CREDIT * AdmissionGatewayFilter.MAX_ETA_SEC;
+        // 한산 통과 상한이 0 이어야 첫 사람부터 줄로 간다. 노드 몫 자체가 0 인
+        // 판을 쓴다 — 몫이 1 이면 절삭 보정이 걸려 상한이 1 이 된다 (C-10).
+        스냅샷을_심는다(CouponStates.idle(1_000_000), new SnapshotMeta(0, 1));
+
+        MockServerWebExchange 첫_사람 = 태운다(COUPON, "대기자0");
+        assertThat(첫_사람.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .isEqualTo(AdmissionDecision.ENQUEUE_RATE_COUPON);
+        for (long i = 1; i < CAP - 1; i++) {
+            태운다(COUPON, "대기자" + i);
+        }
+        // 경계는 양쪽을 다 짚는다. 넘긴 쪽만 보면 상한이 1 로 무너져도 초록이다.
+        MockServerWebExchange 마지막_자리 = 태운다(COUPON, "상한번째");
+        MockServerWebExchange 넘긴_사람 = 태운다(COUPON, "상한다음");
+
+        assertThat(마지막_자리.getResponse().getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+        assertThat(넘긴_사람.getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        // 사다리 6번이 끊은 429 와 구별한다 — 여기서는 등록까지 갔다가 걸려야 한다.
+        assertThat(줄.등록_횟수()).isEqualTo((int) CAP + 1);
+        assertThat(뒷단에_닿음).hasValue(false);
+    }
+
+    /**
+     * <b>상한 해제는 배분 전 구간에만 걸린다.</b> 배수 속도를 아는 쿠폰까지
+     * 상한 없이 받으면 줄이 무한히 자라고, 뒤에 선 사람의 대기 시간이 어떤
+     * 값도 아니게 된다.
+     */
+    @Test
+    @DisplayName("배수를_아는_쿠폰은_상한을_지킨다")
+    void 배수를_아는_쿠폰은_상한을_지킨다() {
+        // 초당 CREDIT 명씩 최대 대기 시간만큼 뺄 수 있다 — 그것이 줄 길이 상한이다.
+        long CAP = CREDIT * AdmissionGatewayFilter.MAX_ETA_SEC;
+        스냅샷을_심는다(CouponStates.queueing(CREDIT, 1_000_000, CREDIT + 1));
+
+        for (int i = 0; i < CAP - 1; i++) {
+            태운다(COUPON, "대기자" + i);
+        }
+        // **경계는 양쪽을 다 짚는다.** 넘긴 쪽만 보면 상한이 1 로 무너져도
+        // 시험이 초록으로 남는다.
+        MockServerWebExchange 마지막_자리 = 태운다(COUPON, "상한번째");
+        MockServerWebExchange 넘긴_사람 = 태운다(COUPON, "상한다음");
+
+        assertThat(마지막_자리.getResponse().getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+        assertThat(넘긴_사람.getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        // 사다리 6번이 끊은 429 와 구별한다 — 여기서는 등록까지 갔다가 걸려야 한다.
+        assertThat(줄.등록_횟수()).isEqualTo((int) CAP + 1);
+        assertThat(뒷단에_닿음).hasValue(false);
+    }
+
+    @Test
+    @DisplayName("상한을_넘긴_몫은_되돌려_보낸다")
+    void 상한을_넘긴_몫은_되돌려_보낸다() {
+        // 전부 열면 뒷단이 그대로 무너진다. 노드 예산의 절반까지만 흘린다.
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+        줄.터진다(new IllegalStateException("레디스가 죽었다"));
+
+        // 노드 예산은 globalCredit(1,000) / 게이트웨이 수(1) 이고 그 절반이 500 이다.
+        // **양쪽에서 못 박는다.** 끊기는 것만 보면 몫이 1 로 바뀌어도 통과한다.
+        MockServerWebExchange 상한_직전 = null;
+        for (int i = 0; i < 500; i++) {
+            상한_직전 = 태운다(COUPON);
+        }
+        MockServerWebExchange 상한_직후 = 태운다(COUPON);
+
+        assertThat(상한_직전.getResponse().getStatusCode()).isNull();
+        assertThat(상한_직후.getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+    }
+
+    /**
+     * 판정과 장애 개방이 각자 예산을 들면 한 초에 둘이 겹쳐 나간다. 리미터를
+     * 하나로 두라는 규칙이 막으려던 버스트가 그대로 난다 (F4).
+     */
+    @Test
+    @DisplayName("장애_개방이_판정_예산에서_가져간다")
+    void 장애_개방이_판정_예산에서_가져간다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+        줄.터진다(new IllegalStateException("레디스가 죽었다"));
+
+        // **판정 경로로 채운다.** 리미터를 손으로 채우면 판정이 다른 리미터를
+        // 쓰고 있어도 이 시험이 통과한다.
+        한산한_쿠폰_여럿을_심는다(50);
+        for (int i = 0; i < 1_000; i++) {
+            // **통과했는지 본다.** 안 보면 예산이 절반만 차도 마지막 단언이 통과한다.
+            assertThat(태운다("한산한쿠폰" + i % 50)
+                    .<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                    .as("%d 번째", i)
+                    .isEqualTo(AdmissionDecision.PASS_UNDER_CAP);
+        }
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+        뒷단에_닿음.set(false);
+
+        // 예산을 따로 들었으면 여기서 500 명이 더 나간다.
+        MockServerWebExchange exchange = 태운다(COUPON);
+
+        assertThat(exchange.getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(뒷단에_닿음).hasValue(false);
+    }
+
+    @Test
+    @DisplayName("줄에_선_사람은_뒷단으로_안_보낸다")
+    void 줄에_선_사람은_뒷단으로_안_보낸다() {
+        // 등록은 됐는데 응답을 못 쓰는 구간이다. 여기서 열어 주면 자리를 쥔
+        // 채로 재고까지 먹는다 — 자기가 자기를 추월한다.
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+        MockServerWebExchange exchange = 요청(COUPON);
+        exchange.getResponse().setComplete().block();
+
+        filter.filter(exchange, e -> {
+            뒷단에_닿음.set(true);
+            return Mono.empty();
+        }).block();
+
+        assertThat(줄.등록_횟수()).isEqualTo(1);
+        assertThat(뒷단에_닿음).hasValue(false);
+    }
+
+    @Test
+    @DisplayName("회원_식별자가_없으면_줄을_안_친다")
+    void 회원_식별자가_없으면_줄을_안_친다() {
+        // 형식 검증이 앞에서 걸렀어야 한다. 여기 오면 배선이 틀린 것이다.
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.method(HttpMethod.POST,
+                        "/api/v1/coupons/" + COUPON + "/issue"));
+        exchange.getAttributes().put(
+                ServerWebExchangeUtils.URI_TEMPLATE_VARIABLES_ATTRIBUTE, Map.of("couponId", COUPON));
+        filter.filter(exchange, e -> Mono.empty()).block();
+
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(줄.왕복()).isZero();
+    }
+
+    private String 토큰(String 본문) {
+        int from = 본문.indexOf("\"queueToken\":\"") + "\"queueToken\":\"".length();
+        return 본문.substring(from, 본문.indexOf('"', from));
+    }
+
+    @Test
+    @DisplayName("거절_사유마다_다른_응답이다")
+    void 거절_사유마다_다른_응답이다() {
+        // **뭉치면 운영자가 엉뚱한 것을 조인다.** 매진은 끝난 것이고, 큐 만원은
+        // 잠시 뒤 다시 오면 되고, 과부하는 노드를 늘려야 한다 — 셋이 다르다.
+        assertThat(AdmissionGatewayFilter.codeOf(AdmissionDecision.REJECT_SOLD_OUT))
+                .isEqualTo(ApiError.Code.SOLD_OUT);
+        assertThat(AdmissionGatewayFilter.codeOf(AdmissionDecision.REJECT_QUEUE_FULL))
+                .isEqualTo(ApiError.Code.QUEUE_FULL);
+        assertThat(AdmissionGatewayFilter.codeOf(AdmissionDecision.REJECT_OVERLOAD))
+                .isEqualTo(ApiError.Code.TEMPORARILY_UNAVAILABLE);
+    }
+
+    @Test
+    @DisplayName("거절_판정마다_봉투가_있다")
+    void 거절_판정마다_봉투가_있다() {
+        // 새 거절 사유가 생겼는데 봉투를 안 정하면, 열거가 아닌 곳에서는
+        // 조용히 매진으로 나간다 — 뒷단 코드를 남의 사유에 붙이는 셈이다.
+        List<AdmissionDecision> 거절 = Arrays.stream(AdmissionDecision.values())
+                .filter(AdmissionDecision::isReject)
+                .toList();
+
+        // 루프가 공회전해도 통과하지 않게 개수를 함께 본다.
+        assertThat(거절).hasSize(4);
+        // codeOf 는 switch 식이라 null 을 못 낸다 — 던지지 않는 것이 재려는 것이다.
+        assertThat(거절).allSatisfy(decision ->
+                assertThatCode(() -> AdmissionGatewayFilter.codeOf(decision))
+                        .as("%s", decision).doesNotThrowAnyException());
+    }
+
+    @Test
+    @DisplayName("통과_판정에_봉투를_물으면_던진다")
+    void 통과_판정에_봉투를_물으면_던진다() {
+        // 조용히 매진을 돌려주면 통과해야 할 사람이 끝난 것으로 처리된다.
+        assertThatThrownBy(() -> AdmissionGatewayFilter.codeOf(AdmissionDecision.PASS_UNDER_CAP))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() ->
+                AdmissionGatewayFilter.retryAfterSec(AdmissionDecision.ENQUEUE_ALWAYS, () -> 0.5))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("매진은_뒷단_카탈로그_그대로_낸다")
+    void 매진은_뒷단_카탈로그_그대로_낸다() {
+        // 코드나 문구가 다르면 그 하나로 게이트웨이가 끊었는지 뒷단까지 갔는지 갈린다.
+        스냅샷을_심는다(CouponStates.closed(0));
+
+        MockServerWebExchange exchange = 태운다(COUPON);
+
+        assertThat(exchange.getResponse().getBodyAsString().block())
+                .contains("\"code\":\"COUPON-306\"")
+                .contains("\"message\":\"쿠폰 재고가 모두 소진되었습니다.\"");
+    }
+
+    @Test
+    @DisplayName("매진에는_다시_올_때를_안_싣는다")
+    void 매진에는_다시_올_때를_안_싣는다() {
+        // 재고가 없는데 시각을 주면 소용없는 재시도를 부른다.
+        스냅샷을_심는다(CouponStates.closed(0));
+
+        MockServerWebExchange exchange = 태운다(COUPON);
+
+        assertThat(exchange.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER))
+                .isNull();
+    }
+
+    @Test
+    @DisplayName("큐가_찼으면_다시_올_때를_알려_준다")
+    void 큐가_찼으면_다시_올_때를_알려_준다() {
+        // 안 알려 주면 각자 마음대로 돌아온다. 그 파도가 다음 거절을 만든다.
+        AdmissionGatewayFilter f = AdmissionGatewayFilter.of(
+                holder, AdmissionDecider.of(limiter, IDLE_RATIO),
+                Clock.fixed(지금, ZoneOffset.UTC), meters, () -> 0.5, 줄, tokens, limiter, entryTokens);
+        스냅샷을_심는다(CouponStates.queueing(1, 1_000, 5_000));
+
+        MockServerWebExchange exchange = 요청(COUPON);
+        f.filter(exchange, e -> Mono.empty()).block();
+
+        // **어느 판정에 닿았는지 못 박는다.** 429 는 둘이라 판정이 바뀌어도
+        // 상태만 보면 통과한다.
+        assertThat(exchange.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .isEqualTo(AdmissionDecision.REJECT_QUEUE_FULL);
+        assertThat(exchange.getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        // 난수를 고정했으니 값이 정해진다. 구간만 보면 정책이 통째로 바뀌어도 통과한다.
+        assertThat(exchange.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER))
+                .isEqualTo("30");
+    }
+
+    @Test
+    @DisplayName("다시_올_때를_흔들어_준다")
+    void 다시_올_때를_흔들어_준다() {
+        // 같은 값을 주면 거절당한 사람들이 다 같이 돌아온다. 되돌아오는
+        // 파도가 다음 거절을 만들고, 그게 반복된다.
+        //
+        // 폭까지 본다. 다르기만 하면 흔들림이 얼마든 통과한다.
+        assertThat(AdmissionGatewayFilter.retryAfterSec(
+                AdmissionDecision.REJECT_QUEUE_FULL, () -> 0)).isEqualTo(24);
+        assertThat(AdmissionGatewayFilter.retryAfterSec(
+                AdmissionDecision.REJECT_QUEUE_FULL, () -> 1)).isEqualTo(36);
+    }
+
+    /**
+     * 같은 값을 주면 거절당한 사람들이 다 같이 돌아온다. 그 파도가 다음 거절을
+     * 만들고 반복된다 — 흔들림이 실제로 흩어 놓는지 폭으로 잰다 (F7).
+     */
+    @Test
+    @DisplayName("재시도_안내가_충분히_흩어진다")
+    void 재시도_안내가_충분히_흩어진다() {
+        Random 난수 = new Random(20260825L);
+        double[] 값 = new double[10_000];
+        for (int i = 0; i < 값.length; i++) {
+            값[i] = AdmissionGatewayFilter.retryAfterSec(
+                    AdmissionDecision.REJECT_QUEUE_FULL, 난수::nextDouble);
+        }
+
+        double 평균 = Arrays.stream(값).average().orElseThrow();
+        double 분산 = Arrays.stream(값).map(v -> (v - 평균) * (v - 평균)).average().orElseThrow();
+
+        assertThat(Math.sqrt(분산))
+                .as("표준편차가 작으면 다 같이 돌아온다")
+                .isGreaterThanOrEqualTo(0.5);
+    }
+
+    @Test
+    @DisplayName("차례가_온_사람은_멀리_안_보낸다")
+    void 차례가_온_사람은_멀리_안_보낸다() {
+        // 상한에 걸렸을 뿐 차례는 왔다. 큐 만원인 사람과 같이 두면 그 사이
+        // 자기 몫이 남에게 간다.
+        //
+        // 가장 가까운 밴드라 흔들림이 반올림에 흡수된다 — 그것도 못 박는다.
+        assertThat(AdmissionGatewayFilter.retryAfterSec(AdmissionDecision.RETRY_TOKEN, () -> 0))
+                .isEqualTo(1);
+        assertThat(AdmissionGatewayFilter.retryAfterSec(AdmissionDecision.RETRY_TOKEN, () -> 1))
+                .isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("매진에는_안내를_안_싣는다")
+    void 매진에는_안내를_안_싣는다() {
+        assertThat(AdmissionGatewayFilter.retryAfterSec(AdmissionDecision.REJECT_SOLD_OUT,
+                () -> 0.5)).isEqualTo(ApiError.NO_RETRY);
+    }
+
+    @Test
+    @DisplayName("차례가_온_사람은_큐로_안_돌린다")
+    void 차례가_온_사람은_큐로_안_돌린다() {
+        // 토큰을 들고 왔는데 노드 상한을 넘은 경우다. 어느 술어에도 안 걸려서
+        // 그냥 두면 조용히 통과한다 — 상한을 넘겼는데 지나가는 것이다.
+        assertThat(AdmissionGatewayFilter.codeOf(AdmissionDecision.RETRY_TOKEN))
+                .isEqualTo(ApiError.Code.RETRY_TOKEN);
+    }
+
+    @Test
+    @DisplayName("모든_판정값에_대응이_있다")
+    void 모든_판정값에_대응이_있다() {
+        // 필터는 통과·대기·거절 셋으로만 가른다. 어디에도 안 걸리는 값이 생기면
+        // 거절 경로로 떨어져 봉투를 못 찾고 500 이 나간다.
+        // 개수를 정확히 못 박는다. 넘기만 하면 통과하면 값이 줄어도 안 걸린다.
+        assertThat(AdmissionDecision.values()).hasSize(14);
+        assertThat(AdmissionDecision.values()).allSatisfy(d -> {
+            int 해당 = (d.isPass() ? 1 : 0) + (d.isEnqueue() ? 1 : 0) + (d.isReject() ? 1 : 0);
+            assertThat(해당).as("판정 %s", d).isEqualTo(1);
+        });
+    }
+
+    /** 아무 문자열이나 흘려보내면 그것마다 큐 키가 하나씩 생긴다. */
+    /**
+     * <b>모른다는 것이 무제한의 사유가 아니다.</b> 사다리 4번은 같은 무지에서
+     * 노드 몫 안에서만 여는데, 이 경로만 리미터를 아예 안 탔다. 낡음이 지속되면
+     * 아무 문자열 쿠폰이나 초당 무한히 뒷단에 꽂힌다.
+     */
+    @Test
+    @DisplayName("미지_쿠폰도_낡으면_상한_안에서만_흘린다")
+    void 미지_쿠폰도_낡으면_상한_안에서만_흘린다() {
+        // 스냅샷이 낡으면 없는 쿠폰을 404 로 끝내지 않고 이연한다.
+        holder.replace(new GatewaySnapshot(Map.of(COUPON, CouponStates.idle(1_000)),
+                META, 지금.minusSeconds(60)));
+        long CAP = (long) (AdmissionDecider.globalCap(META) * 0.5);
+
+        // **예산 안은 전부 통과해야 한다.** 한 번이라도 닿았는지만 보면 앞쪽이
+        // 이미 막혀도 초록이다.
+        for (long i = 0; i < CAP; i++) {
+            MockServerWebExchange 통과자 = 태운다("없는쿠폰" + i, "회원" + i);
+            assertThat(통과자.getResponse().getStatusCode())
+                    .as("예산 안 %d 번째", i)
+                    .isNotEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        }
+        MockServerWebExchange 넘긴_사람 = 태운다("없는쿠폰넘침", "회원넘침");
+
+        assertThat(뒷단_횟수).hasValue((int) CAP);
+        assertThat(넘긴_사람.getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+    }
+
+    @Test
+    @DisplayName("미지_쿠폰을_만_번_불러도_줄을_안_만든다")
+    void 미지_쿠폰을_만_번_불러도_줄을_안_만든다() {
+        스냅샷을_심는다(CouponStates.idle(1_000));
+
+        for (int i = 0; i < 10_000; i++) {
+            태운다("없는쿠폰" + i);
+        }
+
+        assertThat(줄.왕복()).isZero();
+        assertThat(뒷단에_닿음).hasValue(false);
+    }
+
+    /**
+     * 래치가 안 풀리면 한 번 붐빈 쿠폰이 영영 무대기 통과를 못 준다. 대기 인원이
+     * 0 이 되는 것을 한 번도 못 봐도 시간만으로 풀려야 한다.
+     */
+    @Test
+    @DisplayName("래치가_풀리면_무대기_통과가_되살아난다")
+    void 래치가_풀리면_무대기_통과가_되살아난다() {
+        MutableClock 시계 = MutableClock.at(지금);
+        AdmissionGatewayFilter f = AdmissionGatewayFilter.of(
+                holder, AdmissionDecider.of(limiter, IDLE_RATIO), 시계, meters, () -> 0.5,
+                줄, tokens, limiter, entryTokens);
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+        // 래치가 실제로 걸렸는지부터 본다. 안 걸렸으면 뒤의 통과가 아무 뜻이 없다.
+        assertThat(태운다(f, COUPON)).matches(AdmissionDecision::isEnqueue, "대기 판정");
+
+        // 스냅샷은 한산해졌지만 대기 인원이 0 이 되는 것은 여기서 한 번도 안 본다.
+        스냅샷을_심는다(CouponStates.idle(1_000));
+        시계.앞으로(홀더_유효_한계.minusSeconds(1));
+        assertThat(태운다(f, COUPON))
+                .as("아직 안 풀렸다")
+                .isEqualTo(AdmissionDecision.ENQUEUE_BACKLOG);
+
+        // 한계를 넘기면 풀린다. **여기도 한계에서 끌어온다** — 숫자를 손으로
+        // 적으면 수명을 바꿀 때 이 시험이 조용히 다른 것을 재게 된다.
+        // 바로 위 대기 판정이 래치를 다시 찍었으므로 그 시점부터 센다.
+        시계.앞으로(홀더_유효_한계.plusSeconds(2));
+
+        assertThat(태운다(f, COUPON)).isEqualTo(AdmissionDecision.PASS_UNDER_CAP);
+    }
+
+    /**
+     * <b>래치가 스스로 갱신되면 안 된다.</b> 대기 판정이 다시 표식을 찍으면,
+     * 트래픽이 이어지는 쿠폰에서 래치가 영영 안 풀린다 — 줄이 다 빠지고 스냅샷이
+     * 계속 한산해도 그 노드는 무대기 통과를 못 준다 (R1).
+     */
+    @Test
+    @DisplayName("트래픽이_이어져도_래치가_풀린다")
+    void 트래픽이_이어져도_래치가_풀린다() {
+        MutableClock 시계 = MutableClock.at(지금);
+        AdmissionGatewayFilter f = AdmissionGatewayFilter.of(
+                holder, AdmissionDecider.of(limiter, IDLE_RATIO),
+                시계, meters, () -> 0.5, 줄, tokens, limiter, entryTokens);
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+        태운다(f, COUPON);
+
+        // 줄이 다 빠졌다. 그 뒤로도 초당 한 명씩 계속 들어온다.
+        스냅샷을_심는다(CouponStates.idle(1_000));
+        for (int 초 = 0; 초 < 홀더_유효_한계.plusSeconds(5).toSeconds(); 초++) {
+            시계.앞으로(Duration.ofSeconds(1));
+            태운다(f, COUPON);
+        }
+
+        assertThat(태운다(f, COUPON)).isEqualTo(AdmissionDecision.PASS_UNDER_CAP);
+    }
+
+    /**
+     * <b>줄이 보여도 표식은 찍는다.</b> 그 스냅샷은 방금 넣은 이 사람을 아직
+     * 모른다 — 다음 판에 줄이 다 빠져 한산으로 뒤집히면 그 사람이 통째로
+     * 추월당한다. 계획서가 "줄이 보이면 바로 풀어도 된다" 고 적은 것은 그 한
+     * 명을 안 센 것이다.
+     */
+    @Test
+    @DisplayName("줄이_보여도_표식은_찍는다")
+    void 줄이_보여도_표식은_찍는다() {
+        MutableClock 시계 = MutableClock.at(지금);
+        AdmissionGatewayFilter f = AdmissionGatewayFilter.of(
+                holder, AdmissionDecider.of(limiter, IDLE_RATIO),
+                시계, meters, () -> 0.5, 줄, tokens, limiter, entryTokens);
+        // 스냅샷이 이미 줄을 보고 있는 상태에서 한 명 더 넣는다.
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+        태운다(f, COUPON);
+
+        // 배분이 줄을 비웠다. 방금 넣은 사람은 이 스냅샷에 없다.
+        스냅샷을_심는다(CouponStates.idle(1_000));
+
+        assertThat(태운다(f, COUPON)).isEqualTo(AdmissionDecision.ENQUEUE_BACKLOG);
+    }
+
+    /**
+     * <b>거절도 줄이 있다는 관측이다.</b> 상한에 걸렸다는 것은 그 줄이 가득
+     * 찼다는 뜻인데, 그때 래치를 안 찍으면 만료 뒤 사다리 4번이 켜져 낡음
+     * 구간에서 fail-open 으로 뒤집힌다 — 방금 줄 선 사람들을 그 뒤 전원이
+     * 추월한다 (불변식 4).
+     */
+    @Test
+    @DisplayName("줄이_찼어도_래치는_찍힌다")
+    void 줄이_찼어도_래치는_찍힌다() {
+        // 한산 통과 상한이 0 이어야 첫 사람부터 줄로 간다. 노드 몫 자체가 0 인
+        // 판을 쓴다 — 몫이 1 이면 절삭 보정이 걸려 상한이 1 이 된다 (C-10).
+        스냅샷을_심는다(CouponStates.idle(1_000_000), new SnapshotMeta(0, 1));
+        줄.가득_찼다();
+
+        MockServerWebExchange 거절된_사람 = 태운다(COUPON, "대기자0");
+        assertThat(거절된_사람.getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+
+        // 래치가 안 찍혔으면 이 노드가 줄을 세운 적 없는 것처럼 판정된다.
+        assertThat(태운다(COUPON, "대기자1")
+                .<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .isEqualTo(AdmissionDecision.ENQUEUE_BACKLOG);
+    }
+
+    @Test
+    @DisplayName("사유별로_센다")
+    void 사유별로_센다() {
+        // **요청마다 로그를 남기지 않는다.** 낡음 구간에서 없는 쿠폰을 반복해
+        // 부르면 로그가 폭주하고, 그때 정작 봐야 할 것이 묻힌다.
+        스냅샷을_심는다(null);
+        태운다(COUPON);
+        스냅샷을_심는다(CouponStates.idle(100));
+        태운다(COUPON);
+
+        assertThat(meters.counter("waiting.admission",
+                "outcome", "unknown-coupon", "cause", "none").count()).isEqualTo(1);
+        assertThat(meters.counter("waiting.admission",
+                "outcome", "PASS_UNDER_CAP", "cause", "none").count()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("쿠폰_식별자를_라벨에_안_넣는다")
+    void 쿠폰_식별자를_라벨에_안_넣는다() {
+        // 인증이 없어 아무 문자열이나 들어온다. 라벨에 넣으면 지표 하나가
+        // 메모리를 밀어낸다.
+        스냅샷을_심는다(CouponStates.idle(100));
+        태운다(COUPON);
+
+        // **태그를 정확히 못 박는다.** 값만 보면 식별자를 키로 쓸 때 안 걸리고,
+        // 키만 보면 값으로 쓸 때 안 걸린다.
+        //
+        // `cause` 는 늘 실린다 — 같은 이름에 태그 키 집합이 둘이면 프로메테우스
+        // 레지스트리가 등록을 거절한다.
+        assertThat(meters.getMeters())
+                .singleElement()
+                .satisfies(m -> assertThat(m.getId().getTags())
+                        .containsExactly(Tag.of("cause", "none"),
+                                Tag.of("outcome", "PASS_UNDER_CAP")));
+    }
+
+    @Test
+    @DisplayName("리미터_윈도를_지금_시각으로_센다")
+    void 리미터_윈도를_지금_시각으로_센다() {
+        // **스냅샷 발행 시각을 쓰면 배분이 멎는 순간 윈도가 영영 안 넘어간다.**
+        // 상한만큼 쓴 뒤부터 전부 막힌다 — 열어 줘야 할 구간에서 정반대로 조인다.
+        //
+        // 발행 시각을 과거로 고정해 두고, 시계만 흘려 두 윈도가 갈리는지 본다.
+        Instant 낡은_발행 = 지금.minusSeconds(3_600);
+        MutableClock 시계 = MutableClock.at(지금);
+        AdmissionGatewayFilter 시계를_쓰는_필터 = AdmissionGatewayFilter.of(
+                holder, AdmissionDecider.of(limiter, IDLE_RATIO), 시계, meters, 줄, tokens, limiter, entryTokens);
+        holder.replace(new GatewaySnapshot(
+                Map.of(COUPON, CouponStates.idle(1_000_000)),
+                new SnapshotMeta(1, 1), 낡은_발행));
+
+        // 상한이 1 이라 같은 윈도에서 두 번째는 막힌다.
+        AdmissionDecision 첫째 = 태운다(시계를_쓰는_필터, COUPON);
+        AdmissionDecision 둘째 = 태운다(시계를_쓰는_필터, COUPON);
+        시계.앞으로(Duration.ofSeconds(2));
+        AdmissionDecision 시계가_흐른_뒤 = 태운다(시계를_쓰는_필터, COUPON);
+
+        assertThat(첫째.isPass()).as("첫 요청").isTrue();
+        assertThat(둘째.isPass()).as("같은 윈도의 둘째").isFalse();
+        assertThat(시계가_흐른_뒤.isPass()).as("윈도가 넘어간 뒤").isTrue();
+    }
+
+    @Test
+    @DisplayName("판정값을_요청에_남긴다")
+    void 판정값을_요청에_남긴다() {
+        // 응답을 쓰는 쪽이 무엇 때문에 그렇게 됐는지 알아야 한다. 다시 판정하면
+        // 두 번 세고, 그 사이 상태가 바뀌면 서로 다른 답을 낸다.
+        스냅샷을_심는다(CouponStates.idle(100));
+
+        MockServerWebExchange exchange = 태운다(COUPON);
+
+        assertThat(exchange.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .isEqualTo(AdmissionDecision.PASS_UNDER_CAP);
+    }
+}

@@ -1,6 +1,7 @@
 package com.kafkick.waiting.domain.coupon;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.junit.jupiter.api.DisplayName;
@@ -26,7 +27,7 @@ class CouponStateTest {
         void IDLE_상태에서_credit이_0이_아니면_생성에_실패한다() {
             assertThatThrownBy(() -> new CouponState(QueueMode.ADAPTIVE, RuntimeState.IDLE, 1000, 500, 0, 1.0))
                     .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("IDLE");
+                    .hasMessageContaining("[I1]");
         }
 
         @Test
@@ -49,7 +50,7 @@ class CouponStateTest {
         void CLOSED_인데_재고가_남아_있으면_생성에_실패한다() {
             assertThatThrownBy(() -> new CouponState(QueueMode.ADAPTIVE, RuntimeState.CLOSED, 0, 10, 5, 1.0))
                     .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("CLOSED");
+                    .hasMessageContaining("[I2]");
         }
     }
 
@@ -63,7 +64,31 @@ class CouponStateTest {
         void DRAINING_인데_credit이_대기자보다_적으면_생성에_실패한다() {
             assertThatThrownBy(() -> new CouponState(QueueMode.ADAPTIVE, RuntimeState.DRAINING, 10, 500, 100, 1.0))
                     .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("DRAINING");
+                    .hasMessageContaining("[I3]");
+        }
+
+        @Test
+        @DisplayName("QUEUEING_인데_다_뺄_수_있으면_생성에_실패한다")
+        void QUEUEING_인데_다_뺄_수_있으면_생성에_실패한다() {
+            // **반대 방향도 막아야 불변식이다.** 한쪽만 보면 같은 (credit,
+            // waiting) 조합이 DRAINING 으로도 QUEUEING 으로도 만들어진다.
+            // 판정기는 runtime != IDLE 을 ENQUEUE_BACKLOG 로 보므로, 이번 틱에
+            // 다 뺄 수 있는 줄인데도 계속 줄을 세운다.
+            assertThatThrownBy(() -> new CouponState(QueueMode.ADAPTIVE, RuntimeState.QUEUEING, 500, 10_000, 100, 1.0))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("[I3']");
+        }
+
+        @Test
+        @DisplayName("경계는_같을_때다_생성자는_DRAINING만_받는다")
+        void 경계는_같을_때다_생성자는_DRAINING만_받는다() {
+            // 같으면 다 뺄 수 있다. 그러니 QUEUEING 이 아니다 — 경계를 어디에
+            // 두는지가 두 방향에서 같아야 한 조합이 한 상태만 갖는다.
+            assertThatCode(() -> new CouponState(QueueMode.ADAPTIVE, RuntimeState.DRAINING, 100, 500, 100, 1.0))
+                    .doesNotThrowAnyException();
+            assertThatThrownBy(() -> new CouponState(QueueMode.ADAPTIVE, RuntimeState.QUEUEING, 100, 500, 100, 1.0))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("[I3']");
         }
     }
 
@@ -77,7 +102,7 @@ class CouponStateTest {
         void 대기자가_0인데_QUEUEING이면_생성에_실패한다() {
             assertThatThrownBy(() -> new CouponState(QueueMode.ADAPTIVE, RuntimeState.QUEUEING, 100, 500, 0, 1.0))
                     .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("waiting");
+                    .hasMessageContaining("[I4]");
         }
 
         @Test
@@ -115,7 +140,7 @@ class CouponStateTest {
     // 규칙의 근거는 바깥 인스턴스 누수인데, 테스트 인스턴스는 실행 후 버려져 해당 없다.
     @Nested
     @DisplayName("IDLE 은 줄이 없다")
-    class IDLE에줄이없다 {
+    class IdleHasNoQueue {
 
         @Test
         @DisplayName("IDLE인데_대기자가_있으면_생성에_실패한다")
@@ -125,14 +150,14 @@ class CouponStateTest {
             assertThatThrownBy(
                             () -> new CouponState(QueueMode.ADAPTIVE, RuntimeState.IDLE, 0, 500, 5000, 1.0))
                     .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("waiting");
+                    .hasMessageContaining("[I1']");
         }
     }
 
     // 규칙의 근거는 바깥 인스턴스 누수인데, 테스트 인스턴스는 실행 후 버려져 해당 없다.
     @Nested
     @DisplayName("pollScale 유한값")
-    class pollScale유한값 {
+    class PollScaleFinite {
 
         @Test
         @DisplayName("pollScale이_NaN이면_생성에_실패한다")
@@ -148,7 +173,7 @@ class CouponStateTest {
     // 규칙의 근거는 바깥 인스턴스 누수인데, 테스트 인스턴스는 실행 후 버려져 해당 없다.
     @Nested
     @DisplayName("필수 값")
-    class 필수값 {
+    class RequiredFields {
 
         @Test
         @DisplayName("mode가_null이면_생성에_실패한다")
@@ -168,7 +193,7 @@ class CouponStateTest {
     // 규칙의 근거는 바깥 인스턴스 누수인데, 테스트 인스턴스는 실행 후 버려져 해당 없다.
     @Nested
     @DisplayName("음수 방어")
-    class 음수 {
+    class NegativeValues {
 
         @Test
         @DisplayName("재고가_음수면_생성에_실패한다")

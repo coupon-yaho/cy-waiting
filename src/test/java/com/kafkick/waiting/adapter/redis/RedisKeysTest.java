@@ -25,6 +25,9 @@ class RedisKeysTest {
         assertThat(RedisKeys.TUNABLES).isEqualTo("gw:tunables");
         assertThat(RedisKeys.ACTIVE_COUPONS).isEqualTo("coupons:active");
         assertThat(RedisKeys.COUPON_POLICY).isEqualTo("coupon:policy");
+        // **저장소 경계를 넘는 키다.** 뒷단이 쓰고 우리가 읽는다 — 갈리면 읽는 것이
+        // 없어 전역 크레딧이 영영 하한에 머문다. 규범은 plan/90-decisions.md 다.
+        assertThat(RedisKeys.CAPACITY).isEqualTo("capacity:coupon-svc:v1");
     }
 
     @Test
@@ -98,6 +101,20 @@ class RedisKeysTest {
         assertThatThrownBy(() -> RedisKeys.queue("c1", 4, 4))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> RedisKeys.queue("c1", 4, -1))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("스냅샷_예약_접두사는_쿠폰_ID에_못_들어간다")
+    void 스냅샷_예약_접두사는_쿠폰_ID에_못_들어간다() {
+        // '#' 는 스냅샷 해시에서 전역값을 가르는 접두사다. 쿠폰 ID 에 들어가면
+        // 그 쿠폰이 전역값을 덮어쓴다 — '#credit' 이름의 쿠폰 하나로 전 쿠폰의
+        // 몫이 0 이 되고, 한산한 쿠폰이 전부 큐로 간다.
+        assertThatThrownBy(() -> RedisKeys.queue("#credit", 1, 0))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> RedisKeys.queue("c#1", 1, 0))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> RedisKeys.stock("#nodes"))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 }

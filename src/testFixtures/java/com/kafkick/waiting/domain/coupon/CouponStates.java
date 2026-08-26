@@ -44,6 +44,22 @@ public final class CouponStates {
         return CouponState.unknown();
     }
 
+
+    /** 운영자가 껐는데 줄이 아직 남아 있다 — 붐비는 쿠폰을 끄면 생긴다. */
+    public static CouponState offWithQueue(long credit, long remainingStock, long waiting) {
+        return CouponState.offWithQueue(credit, remainingStock, waiting);
+    }
+
+    /**
+     * 운영자가 항상 대기를 걸었고 줄이 이미 섰다.
+     *
+     * <p>발행 경로가 실제로 만드는 상태다 — {@code AllocationRound.stateOf} 가
+     * {@code demand.mode()} 를 그대로 싣고 그 값이 {@code ALWAYS} 일 수 있다.
+     */
+    public static CouponState alwaysWithQueue(long credit, long remainingStock, long waiting) {
+        return CouponState.withQueue(QueueMode.ALWAYS, credit, remainingStock, waiting);
+    }
+
     private CouponStates() {
     }
 }

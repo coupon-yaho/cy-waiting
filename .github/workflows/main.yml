@@ -29,7 +29,7 @@ jobs:
       version: ${{ steps.meta.outputs.version }}
       subject-html: ${{ steps.jira.outputs.subject_html }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -104,6 +104,35 @@ jobs:
     uses: ./.github/workflows/_test.yml
     with: { layer: mutation, timeout-minutes: 40 }
 
+  # **취약점 스캔이 지금 Java 를 하나도 안 본다** (CI 로그 num=0).
+  # Trivy 는 Gradle 을 락파일로만 읽는데 이 저장소에 락파일이 없고, 같은 이유로
+  # 의존성 그래프에도 Java 패키지가 0개라 dependency-review 와 Dependabot 알림도
+  # 무의미하다 — 취약점 0건이라는 초록불이 근거 없는 초록불이었다 (CY-293).
+  #
+  # 그래프를 채우는 쪽을 택했다. 락파일은 갱신 부담이 계속 따라오고,
+  # 그래프는 Dependabot 알림·dependency-review 를 한꺼번에 살린다.
+  dependency-graph:
+    name: 보안
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write      # 그래프 제출에 필요한 최소 권한
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+
+      # **needs 는 러너를 공유하지 않는다.** 앞 잡이 빌드했다고 여기 JDK 가
+      # 있는 게 아니다 — 툴체인이 없으면 Gradle 이 못 돈다.
+      - uses: ./.github/actions/setup-gradle
+
+      # setup-gradle 과 같은 SHA 다 — 판을 섞으면 캐시 형식이 어긋난다.
+      - uses: gradle/actions/dependency-submission@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d  # v4
+        with:
+          dependency-resolution-task: dependencies
+          dependency-graph: generate-and-submit
+
   security:
     name: 보안
     uses: ./.github/workflows/_security.yml
@@ -124,6 +153,52 @@ jobs:
     with: { scenario: idle-coupon, timeout-minutes: 25 }
 
   # 취소를 통과로 세지 않기 위해 별도 잡으로 뺐다. 규칙은 verdict 액션에 있다.
+  # 작업 로그 색인은 생성물이라 저장소에 없다 (CY-303). PR 에서는 잡 요약으로
+  # 보고, main 에 들어갈 때 여기서 위키를 갱신한다 — 사람이 링크로 공유하는 자리다.
+  journal-index:
+    name: 작업 로그 색인
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # 실패해도 파이프라인을 막지 않는다. 판정이 아니라 가시성이다.
+    continue-on-error: true
+    permissions:
+      contents: read
+    env:
+      # 단계 수준 if 에서는 secrets 컨텍스트를 못 쓴다. 잡 수준에서 한 번
+      # 불리언으로 접어 둔다. parent-id 는 선택 입력이라 조건에 안 넣는다.
+      HAS_CONFLUENCE: >-
+        ${{ secrets.CONFLUENCE_SPACE_KEY != '' && secrets.ATLASSIAN_BASE_URL != ''
+            && secrets.ATLASSIAN_USER_EMAIL != '' && secrets.ATLASSIAN_API_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+
+      # **생성이 실패하면 게시하지 않는다.** 빈 본문으로 upsert 하면 위키의
+      # 기존 색인을 통째로 지운다 — 가시성을 얻으려다 있던 것을 없앤다.
+      - id: build
+        run: |
+          set -euo pipefail
+          index=$(.github/scripts/journal-index.sh)
+          {
+            echo 'body<<INDEX_EOF'
+            printf '%s\n' "$index"
+            echo 'INDEX_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - if: env.HAS_CONFLUENCE == 'true'
+        uses: coupon-yaho/cy-ci-actions/actions/confluence@c5d6391379ae34d56894538027ff3631ea4923a2  # v1
+        with:
+          space-key: ${{ secrets.CONFLUENCE_SPACE_KEY }}
+          parent-id: ${{ secrets.CONFLUENCE_PARENT_ID }}
+          title: 작업 로그 색인
+          body: ${{ steps.build.outputs.body }}
+          mode: upsert
+          labels: ci
+          base-url: ${{ secrets.ATLASSIAN_BASE_URL }}
+          email: ${{ secrets.ATLASSIAN_USER_EMAIL }}
+          token: ${{ secrets.ATLASSIAN_API_TOKEN }}
+
   verdict:
     name: 판정
     needs: [context, conventions, build, test-unit, test-integration, test-context, test-chaos, test-coverage, test-mutation, security, load-idle]
@@ -134,7 +209,7 @@ jobs:
       status: ${{ steps.v.outputs.status }}
       ok: ${{ steps.v.outputs.ok }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
       - id: v

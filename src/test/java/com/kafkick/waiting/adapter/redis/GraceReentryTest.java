@@ -46,8 +46,9 @@ class GraceReentryTest extends RedisContainerSupport {
 
     private void enqueue(String memberId) {
         redis.execute(enqueueScript,
-                        List.of(QUEUE, MAX_SCORE, RedisKeys.alive(COUPON, 1, 0)),
-                        List.of(memberId, "86400", "30", "0", NOW))
+                        List.of(QUEUE, MAX_SCORE, RedisKeys.alive(COUPON, 1, 0),
+                                RedisKeys.admitted(COUPON, 1, 0)),
+                        List.of(memberId, "86400", "30", "-1", NOW))
                 .blockFirst(WAIT);
     }
 

@@ -3,6 +3,7 @@ package com.kafkick.waiting.adapter.redis;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.kafkick.waiting.domain.queue.GraceRetention;
 import java.time.Duration;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
@@ -31,11 +32,23 @@ class SweepTest extends RedisContainerSupport {
     private static final String MAX_SCORE = RedisKeys.maxScore(COUPON, 1, 0);
     private static final String GRACE = RedisKeys.grace(COUPON, 1, 0);
     private static final String ALIVE = RedisKeys.alive(COUPON, 1, 0);
+    private static final String ADMITTED = RedisKeys.admitted(COUPON, 1, 0);
 
     /** 시각을 주입한다 — 실제 시계에 기대면 만료 시험이 흔들린다 (TS-4). */
     private static final long NOW = 1_800_000_000L;
-    private static final String RETENTION = "300";
+
+    /** 보관 기간을 확실히 넘긴 시각. <b>손으로 안 적는다</b> — 기간이 늘면 같이 는다. */
+    private static final long 만료된_시각 = NOW - GraceRetention.SECONDS - 1;
+
+    /** 아직 안 넘긴 시각. 경계 바로 안쪽이라 기간이 늘어도 신선하다. */
+    private static final long 신선한_시각 = NOW - 1;
+    /** 보관 기간. <b>손으로 안 적는다</b> — 토큰 수명과의 관계가 도메인에 있다. */
+    private static final String RETENTION = String.valueOf(GraceRetention.SECONDS);
     private static final String BUDGET = "1000";
+
+    /** unpack 한계에서 실측한 상한. 기록이 쌍이라 검사 범위 쪽이 먼저 걸린다. */
+    private static final int MAX_SCAN = 3_999;
+    private static final int MAX_BUDGET = 7_999;
 
     @Autowired
     private ReactiveStringRedisTemplate redis;
@@ -52,8 +65,8 @@ class SweepTest extends RedisContainerSupport {
 
     private void enqueue(String memberId) {
         redis.execute(enqueueScript,
-                        List.of(QUEUE, MAX_SCORE, ALIVE),
-                        List.of(memberId, "86400", "3600", "0", String.valueOf(NOW)))
+                        List.of(QUEUE, MAX_SCORE, ALIVE, ADMITTED),
+                        List.of(memberId, "86400", "3600", "-1", String.valueOf(NOW)))
                 .blockFirst(WAIT);
     }
 
@@ -154,15 +167,16 @@ class SweepTest extends RedisContainerSupport {
 
         sweep("10");
 
+        // 값에 종류를 싣는다. 조회가 쓰는 입장 표시와 같은 해시를 나눠 쓴다.
         assertThat(redis.opsForHash().get(GRACE, "m0").block(WAIT))
-                .isEqualTo(String.valueOf(NOW));
+                .isEqualTo("d:" + NOW);
     }
 
     @Test
     @DisplayName("만료된_유예_기록이_정리된다")
     void 만료된_유예_기록이_정리된다() {
-        redis.opsForHash().put(GRACE, "old", String.valueOf(NOW - 400)).block(WAIT);
-        redis.opsForHash().put(GRACE, "fresh", String.valueOf(NOW - 100)).block(WAIT);
+        redis.opsForHash().put(GRACE, "old", String.valueOf(만료된_시각)).block(WAIT);
+        redis.opsForHash().put(GRACE, "fresh", String.valueOf(신선한_시각)).block(WAIT);
 
         assertThat(expired(sweep("10"))).isOne();
         assertThat(redis.opsForHash().hasKey(GRACE, "old").block(WAIT)).isFalse();
@@ -174,7 +188,7 @@ class SweepTest extends RedisContainerSupport {
     void 유예_기록이_무한히_쌓이지_않는다() {
         // 만료가 없으면 이 해시가 영원히 자란다 (RD-7).
         for (int i = 0; i < 50; i++) {
-            redis.opsForHash().put(GRACE, "old" + i, String.valueOf(NOW - 1000)).block(WAIT);
+            redis.opsForHash().put(GRACE, "old" + i, String.valueOf(만료된_시각)).block(WAIT);
         }
 
         sweep("10");
@@ -211,7 +225,7 @@ class SweepTest extends RedisContainerSupport {
         // COUNT 는 힌트지 상한이 아니다. 받은 것 중 예산만큼만 지워야
         // 한 번의 실행이 유계다.
         for (int i = 0; i < 40; i++) {
-            redis.opsForHash().put(GRACE, "old" + i, String.valueOf(NOW - 1000)).block(WAIT);
+            redis.opsForHash().put(GRACE, "old" + i, String.valueOf(만료된_시각)).block(WAIT);
         }
 
         assertThat(expired(sweep("10", "5", "0"))).isEqualTo(5);
@@ -224,7 +238,7 @@ class SweepTest extends RedisContainerSupport {
         // 한 번에 다 안 지우는 대신 다음 틱이 이어받는다. 커서가 돌지
         // 않으면 같은 앞부분만 계속 보고 뒤는 영영 안 지워진다.
         for (int i = 0; i < 40; i++) {
-            redis.opsForHash().put(GRACE, "old" + i, String.valueOf(NOW - 1000)).block(WAIT);
+            redis.opsForHash().put(GRACE, "old" + i, String.valueOf(만료된_시각)).block(WAIT);
         }
 
         String cursor = "0";
@@ -267,5 +281,33 @@ class SweepTest extends RedisContainerSupport {
 
         assertThat(Long.parseLong(String.valueOf(result.get(1)))).isEqualTo(5);
         assertThat(redis.opsForZSet().size(ALIVE).block(WAIT)).isEqualTo(15);
+    }
+
+    /**
+     * <b>천장이 없으면 부하가 오른 날 스위퍼가 통째로 멎는다.</b> 인자가 쌍이라
+     * 기록 쓰기가 먼저 걸리고, 같은 자리가 매 틱 반복되면 큐가 영구 정지한다.
+     *
+     * <p>실측 상한은 검사 범위 3,999 · 예산 7,999 다. 호출부가 우회 못 하게
+     * 스크립트 안에서 막는다.
+     */
+    @Test
+    @DisplayName("검사_범위가_천장을_넘으면_거부한다")
+    void 검사_범위가_천장을_넘으면_거부한다() {
+        assertThatThrownBy(() -> sweep(String.valueOf(MAX_SCAN + 1)))
+                .hasRootCauseMessage("검사 범위는 %d 이하여야 한다: %d".formatted(MAX_SCAN, MAX_SCAN + 1));
+
+        // 경계는 통과한다. 한 칸 안쪽만 막으면 실사용 폭이 조용히 줄어든다.
+        // 빈 큐라 한 명도 안 걷힌다 — 반환 모양까지 본다.
+        assertThat(swept(sweep(String.valueOf(MAX_SCAN)))).isZero();
+    }
+
+    @Test
+    @DisplayName("예산이_천장을_넘으면_거부한다")
+    void 예산이_천장을_넘으면_거부한다() {
+        assertThatThrownBy(() -> sweep("10", String.valueOf(MAX_BUDGET + 1), "0"))
+                .hasRootCauseMessage(
+                        "정리 예산은 %d 이하여야 한다: %d".formatted(MAX_BUDGET, MAX_BUDGET + 1));
+
+        assertThat(swept(sweep("10", String.valueOf(MAX_BUDGET), "0"))).isZero();
     }
 }

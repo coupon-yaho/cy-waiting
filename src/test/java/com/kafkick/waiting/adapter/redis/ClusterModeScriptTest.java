@@ -123,7 +123,8 @@ class ClusterModeScriptTest {
             case "enqueue.lua" -> List.of(
                     RedisKeys.queue("c1", 1, 0),
                     RedisKeys.maxScore("c1", 1, 0),
-                    RedisKeys.alive("c1", 1, 0));
+                    RedisKeys.alive("c1", 1, 0),
+                    RedisKeys.admitted("c1", 1, 0));
             case "queue_status.lua" -> List.of(
                     RedisKeys.queue("c1", 1, 0),
                     RedisKeys.admitted("c1", 1, 0),
@@ -133,18 +134,32 @@ class ClusterModeScriptTest {
                     RedisKeys.queue("c1", 1, 0),
                     RedisKeys.grace("c1", 1, 0),
                     RedisKeys.alive("c1", 1, 0));
+            case "snapshot_publish.lua" -> List.of(RedisKeys.SNAPSHOT);
+            case "capacity_read.lua" -> List.of(RedisKeys.CAPACITY);
+            case "snapshot_read.lua" -> List.of(RedisKeys.SNAPSHOT);
+            case "active_read.lua" -> List.of(RedisKeys.ACTIVE_COUPONS);
+            case "allocation_apply.lua" -> List.of(
+                    RedisKeys.queue("c1", 1, 0),
+                    RedisKeys.admitted("c1", 1, 0));
             case "leader_acquire.lua", "leader_release.lua" -> List.of(RedisKeys.LEADER);
+            case "gateway_heartbeat.lua", "gateway_leave.lua" -> List.of(RedisKeys.INSTANCES);
             default -> throw new IllegalStateException("인자를 안 정한 스크립트: " + script);
         };
     }
 
     private static List<String> argsFor(String script) {
         return switch (script) {
-            case "enqueue.lua" -> List.of("m1", "60", "30", "0", "1000");
+            case "enqueue.lua" -> List.of("m1", "60", "30", "-1", "1000");
             case "queue_status.lua" -> List.of("m1", "30", "1000");
             case "sweep.lua" -> List.of("10", "1000", "300", "50", "0");
+            case "allocation_apply.lua" -> List.of("1");
+            // 인자가 없다. 기준 시각을 밖에서 주면 이 스크립트를 둔 이유가 사라진다.
+            case "capacity_read.lua", "snapshot_read.lua", "active_read.lua" -> List.of();
+            case "snapshot_publish.lua" -> List.of("#credit", "0");
             case "leader_acquire.lua" -> List.of("node-1", "2000");
             case "leader_release.lua" -> List.of("node-1");
+            case "gateway_heartbeat.lua" -> List.of("node-1", "30");
+            case "gateway_leave.lua" -> List.of("node-1");
             default -> throw new IllegalStateException("인자를 안 정한 스크립트: " + script);
         };
     }

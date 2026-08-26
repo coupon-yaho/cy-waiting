@@ -15,6 +15,47 @@ trap 'rm -rf "$tmp"' EXIT
 pass=0
 fail=0
 
+# **로케일을 바꿔 같은 검사를 다시 돌린다.** 대괄호 범위는 콜레이션 순서를 따라서
+# 개발자 로케일(ko_KR.UTF-8)에서만 물고 CI(C.UTF-8)에서는 조용히 새는 일이 실제로
+# 있었다. 로케일에 기대는 판정은 로컬 통과가 아무 뜻이 없다.
+# **로케일을 바꿔 같은 검사를 다시 돌린다.** 대괄호 범위는 콜레이션 순서를 따라서
+# 개발자 로케일(ko_KR.UTF-8)에서만 물고 CI(C.UTF-8)에서는 조용히 새는 일이 실제로
+# 있었다. 로케일에 기대는 판정은 로컬 통과가 아무 뜻이 없다.
+# 빌드 스크립트 검사는 훅이 아니라 디렉터리를 받는 CI 스크립트다. 그래서
+# file_case 를 못 쓴다. **그렇다고 안 재면 이 게이트는 영원히 초록이다** (TS-9).
+gradle_case() {   # 내용 기대(block|allow) 설명 [확장자]
+    local content=$1 expect=$2 label=$3 ext=${4:-.gradle}
+    local dir="$tmp/gradle-$RANDOM"
+    mkdir -p "$dir"
+    printf '%s\n' "$content" > "$dir/build$ext"
+    "$ROOT/.github/scripts/build-script-identifiers.sh" "$dir" >/dev/null 2>&1
+    local code=$?
+    local actual=allow
+    ((code != 0)) && actual=block
+    if [[ "$actual" == "$expect" ]]; then
+        printf '  ok   %s\n' "$label"; pass=$((pass + 1))
+    else
+        printf '  FAIL %s (기대 %s, 실제 %s)\n' "$label" "$expect" "$actual"; fail=$((fail + 1))
+    fi
+}
+
+locale_case() {   # 로케일 hook 내용 파일명 기대 설명
+    local loc=$1; shift
+    local label=${!#}
+
+    # **로케일이 설치돼 있는지 확인한다.** 없는 로케일을 요청하면 도구가 조용히
+    # 기본값으로 돌고, 그러면 프로브가 "다른 로케일에서도 문다" 를 증명한 척만
+    # 한다. `locale` 은 없는 값도 그대로 되읊으므로 `locale -a` 를 봐야 한다 —
+    # 표기가 en_US.utf8 / en_US.UTF-8 로 갈리니 소문자로 눕히고 하이픈을 뗀다.
+    if ! locale -a 2>/dev/null | tr 'A-Z' 'a-z' | tr -d '-' \
+            | grep -qx "$(printf '%s' "$loc" | tr 'A-Z' 'a-z' | tr -d '-')"; then
+        printf '  FAIL %s (로케일 %s 을 못 쓴다 — 프로브가 헛돈다)\n' "$label" "$loc"
+        fail=$((fail + 1))
+        return
+    fi
+    LC_ALL="$loc" file_case "$@"
+}
+
 file_case() {   # hook 내용 파일명 기대(block|allow) 설명
     local hook=$1 content=$2 name=$3 expect=$4 label=$5
     local path="$tmp/$name"
@@ -143,6 +184,25 @@ class U {
     void f() {
     }
 }' 'src/main/java/U.java' block 'JS-6 한 줄 javadoc 이후도 검출 (회귀)'
+file_case check-java.sh 'class W {
+    private static final String P = "/api/**";
+
+    void f() {
+    }
+
+    void g() {
+    }
+
+    void h() {
+    }
+
+    void i() {
+    }
+
+    /** 짧다. */
+    void j() {
+    }
+}' 'src/main/java/W.java' allow 'JS-6 문자열 안의 /** 는 javadoc 이 아니다 (회귀)'
 file_case check-java.sh 'class A {
     void f() {
         log.info("token={}", token);
@@ -293,6 +353,8 @@ Plan: 1.2.1' block '계획서 ID (커밋에 남기지 않는다)'
 git_case 'feat(app): CY-18 진입점 추가
 Refs: CY-18' block '제목에 Jira 키'
 git_case 'Merge branch develop' allow '병합 커밋은 대상 아님'
+git_case 'Revert "feat(app): 진입점 추가"' allow '되돌리기는 대상 아님'
+git_case 'feat: Revert 기능 되돌리기' block '되돌리기처럼 보이는 보통 제목'
 
 # ── 브랜치 리뷰 러너 ─────────────────────────────────────────────────────────
 # 이 러너가 없으면 힙독·스크립트로 쓴 파일은 어떤 검사도 안 받는다.
@@ -342,7 +404,18 @@ rm -rf "$probe_dir"
 # 났다. stash 로 씻는 것도 답이 아니다. 스크립트가 중간에 죽으면 남의 작업이
 # stash 로 숨는다. **깨끗한 임시 저장소를 만들어 거기서 시험한다.**
 clean_repo="$tmp/clean"
-mkdir -p "$clean_repo/.claude/hooks"
+mkdir -p "$clean_repo/.claude/hooks" "$clean_repo/.github/scripts" \
+         "$clean_repo/ai/journal/2026/08"
+# 러너가 CI 규범 검사도 부른다. 스크립트가 없으면 "실행할 수 없다" 로 막는데
+# (fail closed, 옳다) 그러면 깨끗한 케이스가 그 이유로 막혀 시험이 헛돈다.
+# **픽스처가 조용히 실패하면 그 뒤 검사가 헛돈다.** 스크립트가 안 복사되면
+# 러너가 "실행할 수 없다" 로 막고, 그건 우리가 재려던 것이 아니다.
+if ! cp "$ROOT/.github/scripts/"*.sh "$clean_repo/.github/scripts/" 2>/dev/null \
+    || ! chmod +x "$clean_repo/.github/scripts/"*.sh 2>/dev/null \
+    || [[ ! -x "$clean_repo/.github/scripts/doc-links.sh" ]]; then
+    printf '  FAIL 임시 저장소에 CI 스크립트를 못 넣었다 — 아래 검사가 무의미하다\n'
+    fail=$((fail + 1))
+fi
 cp "$HOOKS/review-branch.sh" "$HOOKS/check-java.sh" "$HOOKS/check-lua.sh" \
    "$clean_repo/.claude/hooks/" 2>/dev/null
 chmod +x "$clean_repo/.claude/hooks/"*.sh 2>/dev/null
@@ -355,6 +428,9 @@ chmod +x "$clean_repo/.claude/hooks/"*.sh 2>/dev/null
     git config user.email t@t
     git config user.name t
     : > seed.txt
+    # **빌드 스크립트를 하나 넣어 둔다.** 식별자 검사가 "볼 것이 하나도 없으면
+    # 실패" 로 fail-closed 라, 없으면 깨끗한 케이스가 그 이유로 막혀 헛돈다.
+    printf "plugins {\n    id 'java'\n}\n" > build.gradle
     git add -A
     git commit -q -m 'chore: 씨앗'
     git branch -q develop
@@ -364,7 +440,34 @@ chmod +x "$clean_repo/.claude/hooks/"*.sh 2>/dev/null
     git commit -q -m 'feat(a): 깨끗한 변경' -m 'Refs: CY-1'
 ) >/dev/null 2>&1
 
-cp "$HOOKS/guard-pr.sh" "$clean_repo/.claude/hooks/" && chmod +x "$clean_repo/.claude/hooks/guard-pr.sh"
+if ! cp "$HOOKS/guard-pr.sh" "$clean_repo/.claude/hooks/" \
+    || ! chmod +x "$clean_repo/.claude/hooks/guard-pr.sh"; then
+    printf '  FAIL 임시 저장소에 가드를 못 넣었다\n'; fail=$((fail + 1))
+fi
+
+# 가드는 에이전트 리뷰 증거도 요구한다. 여기서 보는 것은 **기계 검사 경로**라
+# 증거를 만들어 두고 그 부분만 시험한다 — 증거 요구 자체는 아래에서 따로 본다.
+if ! git -C "$clean_repo" rev-parse HEAD > "$clean_repo/.claude/.agents-reviewed" \
+        2>/dev/null \
+    || ! echo '돌린 에이전트: 자기검증' >> "$clean_repo/.claude/.agents-reviewed" \
+    || [[ ! -s "$clean_repo/.claude/.agents-reviewed" ]]; then
+    printf '  FAIL 증거 픽스처를 못 만들었다 — 깨끗한 케이스가 그 이유로 막힌다\n'
+    fail=$((fail + 1))
+fi
+
+# 낡은 증거와 목록 없는 증거도 막아야 한다. 안 막으면 한 줄로 우회된다.
+printf '%s\n돌린 에이전트: 옛 커밋\n' 0000000000000000000000000000000000000000 \
+    > "$clean_repo/.claude/.agents-reviewed.stale"
+stale=$(cd "$clean_repo" \
+    && cp .claude/.agents-reviewed .claude/.agents-reviewed.bak \
+    && cp .claude/.agents-reviewed.stale .claude/.agents-reviewed \
+    && printf '{"tool_input":{"command":"gh pr create --base develop"}}' \
+    | ./.claude/hooks/guard-pr.sh >/dev/null 2>&1; echo $?)
+listless=$(cd "$clean_repo" \
+    && git rev-parse HEAD > .claude/.agents-reviewed \
+    && printf '{"tool_input":{"command":"gh pr create --base develop"}}' \
+    | ./.claude/hooks/guard-pr.sh >/dev/null 2>&1; echo $?)
+cp "$clean_repo/.claude/.agents-reviewed.bak" "$clean_repo/.claude/.agents-reviewed"
 
 # 원격이 없는 임시 저장소라 origin/develop 이 없다. 원격 이름을 붙여 두어
 # 가드가 실제와 같은 경로(origin/<base>)를 타게 한다.
@@ -382,6 +485,14 @@ printf '{"tool_input":{"command":"git status"}}' \
     | "$ROOT/.claude/hooks/guard-pr.sh" >/dev/null 2>&1
 unrelated=$?
 
+# **증거가 없으면 막아야 한다.** 알리기만 하던 시절에 매 PR 마다 건너뛰었고,
+# 뒤늦게 돌렸더니 불변식 위반 하나와 치명 둘이 나왔다.
+rm -f "$clean_repo/.claude/.agents-reviewed"
+nostamp=$(cd "$clean_repo" && printf '{"tool_input":{"command":"gh pr create --base develop"}}' \
+    | "$clean_repo/.claude/hooks/guard-pr.sh" >/dev/null 2>&1; echo $?)
+git -C "$clean_repo" rev-parse HEAD > "$clean_repo/.claude/.agents-reviewed" 2>/dev/null
+echo '돌린 에이전트: 자기검증' >> "$clean_repo/.claude/.agents-reviewed"
+
 # 검사를 못 돌리는 상황에서 통과시키면 게이트가 조용히 사라진다 (fail closed)
 failclosed=$(cd /tmp && printf '{"tool_input":{"command":"gh pr create"}}' \
     | "$ROOT/.claude/hooks/guard-pr.sh" >/dev/null 2>&1; echo $?)
@@ -395,6 +506,21 @@ if ((failclosed == 2)); then
     printf '  ok   저장소 밖에서는 막는다 (fail closed)\n'; pass=$((pass + 1))
 else
     printf '  FAIL 저장소 밖인데 통과시켰다 (exit %d)\n' "$failclosed"; fail=$((fail + 1))
+fi
+if ((stale == 2)); then
+    printf '  ok   낡은 증거는 막는다\n'; pass=$((pass + 1))
+else
+    printf '  FAIL 낡은 증거인데 통과시켰다 (exit %d)\n' "$stale"; fail=$((fail + 1))
+fi
+if ((listless == 2)); then
+    printf '  ok   목록 없는 증거는 막는다\n'; pass=$((pass + 1))
+else
+    printf '  FAIL 목록이 없는데 통과시켰다 (exit %d)\n' "$listless"; fail=$((fail + 1))
+fi
+if ((nostamp == 2)); then
+    printf '  ok   에이전트 리뷰 증거가 없으면 막는다\n'; pass=$((pass + 1))
+else
+    printf '  FAIL 증거가 없는데 통과시켰다 (exit %d)\n' "$nostamp"; fail=$((fail + 1))
 fi
 if ((blocked == 2)); then
     printf '  ok   실제 위반에서 PR 생성을 막는다\n'; pass=$((pass + 1))
@@ -412,6 +538,121 @@ if ((unrelated == 0)); then
     printf '  ok   PR 생성이 아닌 명령은 건드리지 않는다\n'; pass=$((pass + 1))
 else
     printf '  FAIL 무관한 명령을 막았다 (exit %d)\n' "$unrelated"; fail=$((fail + 1))
+fi
+
+# ── 릴레이가 긴 본문에서 안 죽는다 ───────────────────────────────────────────
+#
+# **짧은 본문으로는 못 잡는다.** 파이프 버퍼(64KB)보다 작으면 앞 명령이 먼저
+# 끝나 SIGPIPE 가 안 난다 — 그래서 짧은 리뷰에서는 통과하고 긴 리뷰에서만
+# 실패했다. 실제로 그 상태로 배포돼 매 PR 마다 빨간 잡이 남았다.
+echo
+echo '릴레이 자르기'
+relay_body=$(printf 'x%.0s' $(seq 1 300000))
+relay_body="${relay_body} Actionable comments posted: 7"
+
+relay_rc=0
+(
+    set -uo pipefail
+    stripped=$(printf '%s' "$relay_body" | sed -E 's/<[^>]*>//g' | tr '\n' ' ')
+    excerpt=${stripped:0:600}
+    counts=$(grep -oiE 'actionable comments posted:[[:space:]]*[0-9]+' <<<"$relay_body" \
+            | grep -oE '[0-9]+' || true)
+    count=${counts%%$'\n'*}
+    [[ ${#excerpt} -eq 600 && "$count" == 7 ]]
+) || relay_rc=$?
+
+if ((relay_rc == 0)); then
+    printf '  ok   긴 본문에서도 자르기가 안 죽는다\n'; pass=$((pass + 1))
+else
+    printf '  FAIL 긴 본문에서 자르기가 죽었다 (exit %d)\n' "$relay_rc"; fail=$((fail + 1))
+fi
+
+# 워크플로에 파이프 자르기가 다시 들어오면 잡는다
+if grep -qE 'head -c|head -1' "$ROOT/.github/workflows/coderabbit-relay.yml"; then
+    printf '  FAIL 릴레이에 파이프 자르기가 다시 들어왔다\n'; fail=$((fail + 1))
+else
+    printf '  ok   릴레이에 파이프 자르기가 없다\n'; pass=$((pass + 1))
+fi
+
+# 워크플로에 중복 잡 이름이 들어오면 GitHub 이 파일을 통째로 거절한다. 그러면
+# 잡이 하나도 안 뜨고 필수 체크는 영원히 대기로 남는다 — 실패보다 조용하다.
+#
+# **YAML 파서를 안 쓴다.** 표준 파서는 중복을 조용히 넘겨서 못 잡고, 파이썬
+# 라이브러리에 기대면 그것이 없는 러너에서 검사가 거짓 실패를 낸다.
+duplicate_job_ids() {   # 디렉터리 → 중복 잡 이름 (없으면 빈 출력)
+    local dir=$1 f
+    while IFS= read -r -d '' f; do
+        awk '
+            # 인라인 주석을 떼고 본다. `jobs: # 설명` 도 유효한 YAML 이다.
+            { line = $0; sub(/[[:space:]]*#.*$/, "", line) }
+            line ~ /^jobs:[[:space:]]*$/ { in_jobs = 1; width = 0; next }
+            line ~ /^[^[:space:]]/       { in_jobs = 0 }
+            # **들여쓰기 폭은 YAML 이 강제하지 않는다.** 두 칸으로만 보면 네 칸으로
+            # 쓴 파일의 중복을 통째로 놓친다. 첫 항목의 폭을 기억해 그것만 센다.
+            in_jobs && line ~ /^[[:space:]]+[A-Za-z0-9_-]+:[[:space:]]*$/ {
+                match(line, /^[[:space:]]+/)
+                if (width == 0) width = RLENGTH
+                if (RLENGTH != width) next
+                key = line; sub(/:[[:space:]]*$/, "", key); sub(/^[[:space:]]+/, "", key)
+                if (key in seen) print FILENAME ":" key
+                seen[key] = 1
+            }
+        ' "$f"
+    done < <(find "$dir" -maxdepth 1 \( -name '*.yml' -o -name '*.yaml' \) -print0)
+}
+
+# **검사 자신을 먼저 잰다.** 실제 워크플로만 보면 정규식이 망가져도 초록이다.
+wf_fixture=$(mktemp -d)
+cat > "$wf_fixture/dup.yml" <<'FIXTURE'
+name: 중복
+on: push          # 인라인 주석이 붙어도 유효한 YAML 이다
+jobs:             # 여기도 마찬가지
+  build:
+    runs-on: ubuntu-latest
+  build:
+    runs-on: ubuntu-latest
+FIXTURE
+# **두 확장자에 다 둔다.** 한쪽만 두면 나머지를 검사에서 빼도 안 죽는다.
+sed 's/중복/중복2/' "$wf_fixture/dup.yml" > "$wf_fixture/dup.yaml"
+# 네 칸 들여쓰기도 유효한 YAML 이다. 두 칸으로만 보면 통째로 놓친다.
+cat > "$wf_fixture/dup-wide.yml" <<'FIXTURE'
+name: 중복3
+on: push
+jobs:
+    build:
+        runs-on: ubuntu-latest
+    build:
+        runs-on: ubuntu-latest
+FIXTURE
+cat > "$wf_fixture/clean.yml" <<'FIXTURE'
+name: 깨끗
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+  test:
+    runs-on: ubuntu-latest
+FIXTURE
+wf_hits=$(duplicate_job_ids "$wf_fixture" | wc -l)
+if ((wf_hits == 3)); then
+    printf '  ok   중복 잡 이름을 잡는다 (주석·두 확장자·네 칸)\n'; pass=$((pass + 1))
+else
+    printf '  FAIL 중복 잡 이름을 %d/3 만 잡는다\n' "$wf_hits"; fail=$((fail + 1))
+fi
+rm -f "$wf_fixture/dup.yml" "$wf_fixture/dup.yaml" "$wf_fixture/dup-wide.yml"
+if [[ -z "$(duplicate_job_ids "$wf_fixture")" ]]; then
+    printf '  ok   깨끗한 워크플로는 안 잡는다\n'; pass=$((pass + 1))
+else
+    printf '  FAIL 깨끗한 워크플로를 중복으로 본다\n'; fail=$((fail + 1))
+fi
+rm -rf "$wf_fixture"
+
+wf_dups=$(duplicate_job_ids "$ROOT/.github/workflows")
+if [[ -z "$wf_dups" ]]; then
+    printf '  ok   워크플로에 중복 잡 이름이 없다\n'; pass=$((pass + 1))
+else
+    printf '  FAIL 워크플로에 중복 잡 이름: %s\n' "$(tr '\n' ' ' <<<"$wf_dups")"
+    fail=$((fail + 1))
 fi
 
 echo

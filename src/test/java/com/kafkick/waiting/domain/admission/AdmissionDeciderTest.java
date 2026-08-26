@@ -47,8 +47,8 @@ class AdmissionDeciderTest {
     }
 
     @Test
-    @DisplayName("대기열이_꺼져_있으면_붐벼도_통과한다")
-    void 대기열이_꺼져_있으면_붐벼도_통과한다() {
+    @DisplayName("대기열이_꺼져_있고_줄이_비면_통과한다")
+    void 대기열이_꺼져_있고_줄이_비면_통과한다() {
         assertThat(decider().decide(request(CouponStates.off(500))))
                 .isEqualTo(AdmissionDecision.PASS_BYPASS);
     }
@@ -291,5 +291,120 @@ class AdmissionDeciderTest {
         // 토큰을 든 사람은 그것과 무관하게 통과한다
         assertThat(d.decide(request(idle).withValidToken(true)))
                 .isEqualTo(AdmissionDecision.PASS_TOKEN);
+    }
+
+    /** META 는 전역 크레딧 1,000 을 게이트웨이 10대가 나눠 쓴다 — 노드 몫은 100 이다. */
+    @Test
+    @DisplayName("배수_속도를_알면_그것이_줄_길이_상한이다")
+    void 배수_속도를_알면_그것이_줄_길이_상한이다() {
+        CouponState 줄선_쿠폰 = CouponStates.queueing(3, 1_000, 10);
+
+        assertThat(AdmissionDecider.queueCapacity(줄선_쿠폰, 600)).isEqualTo(1_800);
+    }
+
+    /**
+     * 배분을 아직 못 받은 구간이다. 0 을 그대로 상한으로 쓰면 줄이 한 번도
+     * 안 생기고 쿠폰이 그 상태에 갇힌다.
+     */
+    @Test
+    @DisplayName("배수_속도를_모르면_최소_배수로_잰다")
+    void 배수_속도를_모르면_최소_배수로_잰다() {
+        assertThat(CouponStates.idle(1_000).queueCapacity(600)).isZero();
+
+        // 초당 한 명. 아는 것이 없을 때 가정할 수 있는 가장 낮은 배수 속도다.
+        assertThat(AdmissionDecider.queueCapacity(CouponStates.idle(1_000), 600))
+                .isEqualTo(600);
+    }
+
+    /**
+     * 줄이 이미 선 쿠폰은 폴백을 안 쓴다. credit 0 으로 굳는 구간은 있지만
+     * 그때도 뺄 수 없다고 아는 줄에 더 세우느니 거절이 맞다.
+     */
+    @Test
+    @DisplayName("줄이_이미_섰는데_배수를_못_하면_거절한다")
+    void 줄이_이미_섰는데_배수를_못_하면_거절한다() {
+        // 배분 적용이 실패하면 크레딧 0 이 실린 채로 발행된다.
+        AdmissionRequest req = request(CouponStates.offWithQueue(0, 1_000, 1));
+
+        assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.REJECT_QUEUE_FULL);
+    }
+
+    /**
+     * 원 함수는 최대 대기 시간이 0 이하면 0 을 준다 — 받아 줄 줄이 없다는 뜻이다.
+     * 가드가 없으면 음수가 폴백을 그대로 타고 나가고, 스크립트가 오류를 내고,
+     * 그 오류는 fail-open 으로 흘러 <b>닫히는 게 아니라 열린다.</b>
+     */
+    @Test
+    @DisplayName("최대_대기_시간이_0_이하면_아무도_안_받는다")
+    void 최대_대기_시간이_0_이하면_아무도_안_받는다() {
+        // 0 은 이 가드가 없어도 0 이다 — 곱이 대신 지킨다. 가드가 지탱하는 것은 음수다.
+        assertThat(AdmissionDecider.queueCapacity(CouponStates.idle(1_000), -600)).isZero();
+    }
+
+    /**
+     * <b>운영자가 켠 대기열은 낡음이 못 끈다.</b> 3번이 앞서면 `ALWAYS` 쿠폰이
+     * 낡은 구간에서 통째로 우회한다 — 그리고 아무도 큐에 안 들어가니
+     * {@code hasQueue} 가 영영 거짓이라 그 상태가 스스로 유지된다.
+     *
+     * <p>운영자가 `ALWAYS` 를 거는 순간이 바로 리더가 흔들리는 오픈 직후다.
+     */
+    @Test
+    @DisplayName("낡아도_항상_대기는_줄을_세운다")
+    void 낡아도_항상_대기는_줄을_세운다() {
+        AdmissionRequest 낡음 = request(CouponStates.always(10_000)).withDataStale(true);
+
+        assertThat(decider().decide(낡음)).isEqualTo(AdmissionDecision.ENQUEUE_ALWAYS);
+    }
+
+    /** 꺼진 쿠폰은 반대다. 낡은 구간의 상한이 그 우회보다 앞에 있어야 한다. */
+    @Test
+    @DisplayName("낡으면_꺼진_쿠폰은_상한을_먼저_탄다")
+    void 낡으면_꺼진_쿠폰은_상한을_먼저_탄다() {
+        AdmissionRequest 낡음 = request(CouponStates.off(10_000)).withDataStale(true);
+
+        assertThat(decider().decide(낡음)).isEqualTo(AdmissionDecision.PASS_FAIL_OPEN);
+    }
+
+    /**
+     * <b>항상 대기라도 찬 줄에는 안 세운다.</b> 안 걸면 거절 대상 하나하나가
+     * 레디스 왕복을 시도하고, 레디스가 느린 구간에서는 그 왕복이 전부 타임아웃해
+     * fail-open 으로 흘러 뒷단 트래픽 생성기가 된다.
+     *
+     * <p><b>경계에서 잰다.</b> 여유가 많은 줄로 재면 이 줄이 상한을 어떻게
+     * 산출하든 통과한다.
+     */
+    @Test
+    @DisplayName("항상_대기라도_줄이_차면_거절한다")
+    void 항상_대기라도_줄이_차면_거절한다() {
+        // credit 0 이면 용량은 폴백(1 × 600)이다. 딱 그만큼 찬 줄을 만든다.
+        CouponState 찬_줄 = CouponStates.alwaysWithQueue(0, 10_000, 600);
+        AdmissionRequest req = new AdmissionRequest("c1", 찬_줄, META, false, false, false, 0, 600);
+
+        assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.REJECT_QUEUE_FULL);
+    }
+
+    /**
+     * <b>배분이 아직 안 돈 구간에서 한 명 때문에 전원이 막히면 안 된다.</b>
+     * 6번의 참을 그대로 쓰면 `credit == 0` 에서 용량이 0 이 되어, 대기자 하나에
+     * `ALWAYS` 가 하는 일이 사라진다 — 운영자가 이 값을 거는 오픈 직후가 정확히
+     * 그 구간이다 (C-8).
+     */
+    @Test
+    @DisplayName("배분_전에도_항상_대기는_줄을_세운다")
+    void 배분_전에도_항상_대기는_줄을_세운다() {
+        CouponState 배분_전 = CouponStates.alwaysWithQueue(0, 10_000, 1);
+        AdmissionRequest req = new AdmissionRequest("c1", 배분_전, META, false, false, false, 0, 600);
+
+        assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.ENQUEUE_ALWAYS);
+    }
+
+    /** 안 찼으면 그대로 세운다. 위 시험만 있으면 항상 거절해도 통과한다. */
+    @Test
+    @DisplayName("항상_대기는_줄이_안_차면_세운다")
+    void 항상_대기는_줄이_안_차면_세운다() {
+        CouponState 여유 = CouponStates.alwaysWithQueue(100, 10_000, 100);
+        AdmissionRequest req = new AdmissionRequest("c1", 여유, META, false, false, false, 0, 600);
+
+        assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.ENQUEUE_ALWAYS);
     }
 }

@@ -172,19 +172,67 @@ tryAcquireAll(tier1, tier2):
 ```
  1. stock <= 0                        → REJECT_SOLD_OUT
  2. hasValidToken                     → tier2 통과 시 PASS_TOKEN, 초과 시 RETRY_TOKEN
- 3. mode == OFF                       → PASS_BYPASS
- 4. dataStale && waiting == 0 && !justEnqueued
-                                      → failOpen (상한 내 PASS, 초과 시 REJECT_OVERLOAD)
- 5. waiting >= queueCapacity          → REJECT_QUEUE_FULL    ← 큐로 가는 경로보다 앞
- 6. dataStale && (waiting > 0 || justEnqueued)
+ 3. mode == ALWAYS && !queueFull      → ENQUEUE_ALWAYS       ← 낡음보다 앞
+ 4. dataStale && !hasQueue            → failOpen (상한 내 PASS, 초과 시 REJECT_OVERLOAD)
+ 5. mode == OFF && !hasQueue          → PASS_BYPASS
+ 6. waiting > 0 && waiting >= queueCapacity
+                                      → REJECT_QUEUE_FULL    ← 큐로 가는 경로보다 앞
+ 7. dataStale && (waiting > 0 || justEnqueued)
                                       → ENQUEUE_STALE        (F1)
- 7. mode == ALWAYS                    → ENQUEUE_ALWAYS
  8. runtime != IDLE || justEnqueued    → ENQUEUE_BACKLOG      (새치기 방지)
 ───────────── 여기부터 한산한 쿠폰 ─────────────
  9. tryAcquireAll(tier1, tier2)       → 부족한 쪽에 따라 ENQUEUE_RATE_COUPON /
                                           ENQUEUE_RATE_GLOBAL / ENQUEUE_KEY_SATURATED
 10.                                   → PASS_UNDER_CAP
 ```
+
+> **`hasQueue` 는 `waiting > 0 || justEnqueued` 다.** 한 번 정의하고 세 줄이
+> 같은 것을 쓴다 — 풀어 쓰면 한 줄만 고쳐지고 나머지가 갈라진다.
+
+> **3번이 4번보다 앞이다** (C-8). 뒤에 두면 `ALWAYS` 쿠폰이 낡은 구간에서
+> 통째로 우회하고, 아무도 큐에 안 들어가니 `hasQueue` 가 영영 거짓이라 그 상태가
+> 스스로 유지된다. 운영자가 이 값을 거는 순간이 바로 리더가 흔들리는 오픈
+> 직후다. 가용성을 버리는 것도 아니다 — 큐가 안 닿으면 등록이 실패하고 그때는
+> 부르는 쪽이 상한 있는 fail-open 으로 받는다.
+
+> **4번이 5번보다 앞이다.** 낡은 구간은 상태를 모르는 구간이고 그래서 상한이
+> 있다. 꺼진 쿠폰을 앞에 두면 그것만 무제한으로 뒷단에 꽂혀 상한이 있으나
+> 마나가 된다 — 실측으로 5,000건이 전부 나갔다.
+
+> **5번은 리미터를 안 탄다** (C-9). 상한을 걸면 그 모드가 하는 일이 없어진다.
+> 안전은 상한이 아니라 "줄이 안 보이면 어느 노드도 안 세운다" 가 떠받친다 —
+> 등록으로 가는 줄이 전부 낡음이나 `hasQueue` 를 요구하므로 추월당할 사람이
+> 없다. 남는 창은 켜 뒀다 끈 뒤 줄이 다 빠지는 그 판뿐이고, 상한은 그 창을
+> 안 닫는다.
+
+> **3번도 줄이 차면 안 세운다.** 안 걸면 6번보다 앞이라 거절 대상 하나하나가
+> 요청 경로 레디스 왕복을 시도하고, 그 왕복이 실패하면 부르는 쪽이 fail-open 으로
+> 받아 **꽉 찬 줄을 통째로 추월한다.** 6번은 로컬에서 답을 내던 자리였다.
+>
+> **다만 3번이 보는 상한은 6번과 다르다.** 3번은 등록 경로와 같은 값
+> (`AdmissionDecider.queueCapacity`, 폴백 포함) 으로 잰다. 6번의 값을 그대로 쓰면
+> 배분 전 `credit == 0` 구간에서 용량이 0 이 되어 **대기자 한 명에 전원이 거절되고**,
+> 운영자가 이 모드를 거는 오픈 직후가 정확히 그 구간이다 (C-8).
+
+> **5번의 `!hasQueue` 가 불변식 4 다.** `mode` 는 사람이 고른 값이고 `waiting` 은
+> 기계가 관측한 값이라 서로 독립이다. 줄이 남아 있는데 우회시키면 신규 유입이
+> 그 줄을 통째로 추월하고 재고까지 먼저 먹는다 — 7번이 낡은 스냅샷에서 막은
+> 것을 여기서 뚫는 셈이다. `OFF` 는 배분에 관여하지 않으므로 남은 줄은
+> 정상적으로 빠지고, 비는 순간 이 줄이 다시 산다.
+
+> **6번의 `waiting > 0` 가 R1 이다.** 한산한 쿠폰은 `credit` 이 0 이라 용량도
+> 0 이고, 이 조건이 없으면 `0 >= 0` 이 참이 되어 전원이 `REJECT_QUEUE_FULL` 로
+> 간다 — 무대기 통과 경로가 통째로 막힌다.
+
+> **줄을 세울 때 쓰는 상한은 6번이 보는 값과 다르다.** 6번은 `credit × maxEtaSec`
+> 만 본다. 실제로 등록할 때는 그 값이 0 이면 **가장 낮은 배수 속도(초당 1명)를
+> 가정해** `1 × maxEtaSec` 으로 갈아탄다 (`AdmissionDecider.queueCapacity`).
+> **판의 크기로 재지 않는다** — 그 수는 전 노드가 공유하는 줄 길이와 비교되고,
+> 무엇보다 이 구간에는 그만큼 뺄 수 있다는 근거가 없다. 배분은 줄이 있어야 나가고 줄은
+> 게이트웨이가 만드는데, 0 을 그대로 상한으로 쓰면 그 고리가 닫히지 않는다.
+> 6번에는 폴백을 쓰지 않는다 — 거기는 줄이 이미 선 쿠폰만 보고, 뺄 수 없다고
+> 아는 줄에 더 세우느니 거절이 낫다. 이 비대칭이 연 위험은
+> [AIJ-0073](../ai/journal/2026/08/AIJ-0073-idle-queue-capacity.md).
 
 **9번은 원자 판정이고, 여기 도달하는 것은 IDLE 쿠폰뿐이다.** `I4` 의 대우로
 8번 시점에 남는 것은 IDLE 아니면 `waiting>0` 이고 후자는 전부 큐로 간다.
@@ -220,9 +268,19 @@ t=0.6s  B 도착 → 스냅샷은 아직 IDLE → 8번 통과 → 버킷 리필�
 도메인은 스냅샷과 인자만 본다.
 
 **해제는 시간으로 한다.** 등록이 스냅샷에 반영되는 데 걸리는 시간
-([`scheduler.tick` + `snapshot.fetch`](04-control-plane.md))의 두 배가 지나면
-만료시킨다. `waiting > 0` 을 먼저 보면 그때 바로 풀어도 된다 — 그 시점부터는 8번이
-`runtime` 으로 잡기 때문이다.
+([`scheduler.tick` + `snapshot.fetch`](04-control-plane.md))의 두 배가 하한이다.
+**스냅샷을 아직 믿는 한계(`dataStaleAfter`)도 하한이다** — 래치가 먼저 풀리면 그
+뒤로도 유효한 스냅샷에 방금 세운 줄이 안 보여 그 차이가 추월 창이 된다. 둘 중
+큰 쪽에 절삭 여유를 더해 만료시킨다.
+
+**`waiting > 0` 을 봤다고 바로 풀지는 않는다.** 그 스냅샷은 방금 넣은 사람을 아직
+모른다 — 다음 판에 줄이 다 빠져 한산으로 뒤집히면 그 한 명이 통째로 추월당한다.
+8번이 `runtime` 으로 잡는 것은 스냅샷에 실린 줄까지이고, 마지막 한 명은 여전히
+래치가 덮어야 한다.
+
+**대신 표식을 갱신하지 않는다.** 이미 걸린 래치에 다시 찍으면, 대기 판정이 다시
+표식을 부르는 닫힌 고리 때문에 트래픽이 이어지는 동안 영영 안 풀린다. 수명은
+처음 찍은 시각부터 잰다 — 래치가 덮으려는 구간의 시작이 거기다.
 
 **만료 계산은 도메인이 하지 않는다.** 도메인은 시계를 참조할 수 없다 (Goal 통과
 수치 · T2.8.1). `localRank` 와 같이 **어댑터가 계산해 `boolean` 으로 주입**하고,
@@ -235,16 +293,17 @@ t=0.6s  B 도착 → 스냅샷은 아직 IDLE → 8번 통과 → 버킷 리필�
 오판 방향은 안전하다 — 큐가 실제로 비었는데 래치가 남으면 몇 명이 불필요하게 줄을
 서고 만료되면 풀린다. 반대 방향(추월)은 생기지 않는다.
 
-**4번과 6번에도 같이 건다.** 둘 다 `waiting` 을 보는데 그 값 역시 스냅샷이라
-같은 지연을 겪는다. 4번은 8번보다 **앞**이므로, 8번에만 래치를 걸면 `dataStale`
-구간에서 4번이 먼저 fail-open 통과를 시켜 래치가 무력화된다. **`waiting` 을 보는
+**4번과 5번에도 같이 건다.** 통과를 내주면서 `waiting` 을 보는 줄이 그 둘이고,
+그 값 역시 스냅샷이라 같은 지연을 겪는다. 4번은 8번보다 **앞**이므로, 8번에만
+래치를 걸면 `dataStale` 구간에서 4번이 먼저 fail-open 통과를 시켜 래치가
+무력화된다. **`waiting` 을 보는
 모든 줄이 래치를 함께 봐야 한다.**
 
 **1번이 맨 앞**: 매진 오판은 **안전한 방향으로만** 일어나고 다음 스냅샷이 되돌린다 (B-11).
 위험한 방향(매진인데 통과)은 재고가 줄기만 하는 구간에서 안 생긴다.
 `dataStale` 뒤에 두면 스케줄러 장애 시 매진 쿠폰이 fail-open 상한을 갉아먹는다.
 
-**5번이 6~10번보다 앞**: 큐 상한은 `waiting > 0`일 때만 의미가 있는데, 그러면
+**6번이 7~10번보다 앞**: 큐 상한은 `waiting > 0`일 때만 의미가 있는데, 그러면
 `runtime != IDLE`이라 8번에서 먼저 반환된다. 뒤에 두면 **영원히 도달하지 않는
 죽은 분기**가 된다.
 
@@ -253,14 +312,30 @@ t=0.6s  B 도착 → 스냅샷은 아직 IDLE → 8번 통과 → 버킷 리필�
 | ID | 불변식 | 강제 |
 |---|---|---|
 | I1 | `runtime == IDLE ⟹ credit == 0` | 컴팩트 생성자 |
+| I1' | `runtime == IDLE ⟹ waiting == 0` | 컴팩트 생성자 |
 | I2 | `runtime == CLOSED ⟹ remainingStock == 0` | 컴팩트 생성자 |
 | I3 | `runtime == DRAINING ⟹ credit >= waiting` | 컴팩트 생성자 |
+| I3' | `runtime == QUEUEING ⟹ credit < waiting` (**I4 뒤에 검사**) | 컴팩트 생성자 |
 | I4 | `waiting == 0 ⟹ runtime ∈ {IDLE, CLOSED}` | 컴팩트 생성자 |
 | I5 | 표시 순위는 단조 비증가 | 속성 테스트 |
 | I6 | `pollScale >= 1.0` | 생성자 정규화 |
 
 **I1이 가장 중요하다.** `IDLE`과 `credit==0`은 독립 값이 아니라 같은 원인
 (`waiting == 0`)에서 나온다.
+
+**I3 와 I3' 은 짝이다.** 한쪽만 두면 같은 `(credit, waiting)` 이 두 런타임을 다
+가질 수 있고, 두 발행자가 같은 사실을 다른 이름으로 적는다. 경계는 양쪽이 같은
+자리여야 한다 — `credit == waiting` 은 다 뺄 수 있으므로 `DRAINING` 한쪽에만
+속한다. 그래서 `waiting > 0` 구간에서 두 상태가 credit 축을 정확히 이분한다.
+
+**단, `stock > 0` 일 때만이다.** I2 는 `CLOSED ⟹ stock == 0` 만 걸고 역방향이
+없어서, `stock == 0` 이면 `CLOSED` 와 `DRAINING`(또는 `QUEUEING`)이 같은 값
+조합을 공유한다. 유일성은 거기서 깨진다. 사다리 1번이 `stock <= 0` 을 먼저
+걷어내 판정에는 해가 없고, 불변식을 더 넣으면 코덱이 떨구는 축만 는다 — 그래서
+지금은 한계를 적어 두는 쪽을 골랐다 (CY-323).
+
+**판정은 이걸로 달라지지 않는다.** 사다리는 `runtime` 을 `!= IDLE` 로만 보므로
+둘이 같은 칸이다. 얻는 것은 **표현의 유일성**이다.
 
 ### 3.7 픽스처 설계 — 이 페이즈에서 가장 중요한 규칙
 
@@ -270,7 +345,7 @@ t=0.6s  B 도착 → 스냅샷은 아직 IDLE → 8번 통과 → 버킷 리필�
 // 금지 — 불변식을 어긴 조합을 만들 수 있다
 new CouponState(mode, runtime, credit, stock, waiting, scale)
 
-// 허용 — 각 팩토리가 하나의 도달 가능한 상태만 만든다
+// 허용 — 각 팩토리가 도달 가능한 상황 하나씩만 만든다
 CouponStates.idle(stock)
 CouponStates.queueing(credit, stock, waiting)
 CouponStates.draining(credit, stock, waiting)
@@ -315,7 +390,7 @@ CouponStates.unknown()
 
 #### T2.1.3 · 정적 팩토리 ★
 
-- **산출물** `CouponState.java` (팩토리 6종)
+- **산출물** `CouponState.java` (팩토리 8종 — `always`·`offWithQueue` 포함)
 - **근거** 3.7절 · JS-12 · DS-2
 - **선행** T2.1.2
 
@@ -323,7 +398,13 @@ CouponStates.unknown()
 2. **GREEN** `idle(stock)`
 3. **RED** 나머지 5종 각각 (`queueing`/`draining`/`closed`/`off`/`unknown`)
 4. **GREEN** 팩토리 추가. 각각 **이 상태가 실제로 어떻게 생기는지** Javadoc 한 줄
-5. **완료** 6개 팩토리가 전부 도달 가능한 상태만 만든다
+5. **완료** 8개 팩토리가 전부 도달 가능한 상황만 만든다
+
+> **`offWithQueue` 는 상태가 둘이다.** 런타임을 못 박지 않고 `(credit, waiting)`
+> 에서 유도하기 때문이다 — 못 박으면 다 뺄 수 있는 줄까지 `QUEUEING` 이 되어
+> I3' 에 막힌다. "하나의 상태" 가 아니라 **"하나의 상황"** 이 계약이다.
+> 유도하는 팩토리는 그 경계가 생성자와 같은 자리인지를 **팩토리에 대고** 재야
+> 한다. 생성자 단언은 런타임을 인자로 받아 동어반복이다.
 
 #### T2.1.4 · 테스트 픽스처 `CouponStates` ★
 
@@ -361,7 +442,9 @@ CouponStates.unknown()
 #### T2.1.7 · 큐 파생값
 
 - **산출물** `queueDepthSec()`, `queueCapacity()`
-- **근거** 3.5절 5번 · Phase 7 3.3절
+- **근거** 3.5절 6번 · Phase 7 3.3절
+- **주의** 등록 경로의 상한은 여기서 끝나지 않는다. 이 값이 0 일 때의 폴백은
+  `AdmissionDecider.queueCapacity` 가 정한다 (3.5절 6번 각주)
 
 1. **RED** `credit이_0이면_큐_깊이는_무한이다` — 나눗셈 예외 없음
 2. **GREEN** 방어 분기
@@ -472,7 +555,7 @@ CouponStates.unknown()
 2. **GREEN** 4번 분기
 3. **RED** `스냅샷이_낡아도_줄_선_사람이_있으면_추월시키지_않는다` ★
    — `dataStale=true`, `waiting=5000` → `ENQUEUE_STALE`
-4. **GREEN** 6번 분기. **4번보다 뒤, 5번보다 뒤**
+4. **GREEN** 7번 분기. **5번보다 뒤, 6번보다 뒤**
 5. **RED** `fail_open_상한을_넘으면_거절한다` → `REJECT_OVERLOAD`
 6. **GREEN** 상한 적용 (노드 수로 나눈다 — Phase 4 F5와 같은 논리)
 7. **RED** `스냅샷이_아직_큐가_비었다고_해도_방금_보냈으면_통과시키지_않는다` ★
@@ -484,20 +567,20 @@ CouponStates.unknown()
 #### T2.3.5 · 큐 상한
 
 - **산출물** `AdmissionDecider.java`
-- **근거** 3.5절 5번 (죽은 분기 방지)
+- **근거** 3.5절 6번 (죽은 분기 방지)
 - **선행** T2.1.7
 
 1. **RED** `큐가_상한에_닿으면_거절한다` → `REJECT_QUEUE_FULL`
-2. **GREEN** 5번 분기를 **6~10번보다 앞에**
+2. **GREEN** 6번 분기를 **7~10번보다 앞에**
 3. **완료** `waiting >= capacity` 인 입력이 `ENQUEUE_BACKLOG` 로 가려지지 않는다
 
 #### T2.3.6 · 새치기 방지
 
 - **산출물** `AdmissionDecider.java`
-- **근거** 3.5절 7·8번
+- **근거** 3.5절 3·8번
 
 1. **RED** `ALWAYS_모드는_유입과_무관하게_줄을_세운다`
-2. **GREEN** 7번 분기
+2. **GREEN** 3번 분기
 3. **RED** `이미_기다리는_사람이_있으면_새치기를_막는다` → `ENQUEUE_BACKLOG`
 4. **GREEN** 8번 분기
 5. **RED** `스냅샷이_아직_IDLE_이어도_방금_큐로_보냈으면_막는다` — `justEnqueued`
@@ -657,7 +740,7 @@ CouponStates.unknown()
 - **산출물** `domain/allocation/CreditSmoother.java`
 - **근거** Phase 4 F9 · Phase 10 5.2절 (ETA 오차의 지배항)
 
-1. **RED** `EWMA는_설정된_시상수로_수렴한다` — α=0.2, 5틱
+1. **RED** `EWMA는_설정된_시상수로_수렴한다` — α=0.2, 5틱 (시험 계수다. 운영값은 0.3)
 2. **GREEN** `α×credit + (1-α)×prev`
 3. **RED** `첫_관측치가_초기값이_된다`
 4. **GREEN** 초기화
@@ -727,8 +810,8 @@ CouponStates.unknown()
 
 1. **RED** `ETA는_EWMA_credit으로_나눈다` — 순간 credit 아님
 2. **GREEN** EWMA 사용
-3. **RED** `credit이_0이면_계산_중을_반환한다`
-4. **GREEN** `-1` 또는 sentinel
+3. **RED** `배수율이_0_이하면_모름이다`
+4. **GREEN** 모름은 `NaN` — 표시는 **가장 넓은 구간**으로 접는다 (CY-282)
 5. **RED** `표시_ETA는_거친_버킷이다` — "약 1분" / "약 5분" / "10분 이상"
 6. **GREEN** 버킷화
 7. **완료** ±1.5초 오차가 사용자 눈에 보이지 않는다

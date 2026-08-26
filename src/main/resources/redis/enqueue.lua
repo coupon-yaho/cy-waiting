@@ -3,16 +3,30 @@
 -- KEYS[1]  queue:{cid}          ZSET. score = Redis TIME 의 마이크로초
 -- KEYS[2]  maxscore:{cid}       시계 역행 방어용 바닥값
 -- KEYS[3]  alive:{cid}       생존 신호 ZSET. score 는 만료 시각(초)
+-- KEYS[4]  admitted:{cid}       배분이 올린 임계. 이 값 이하는 이미 들여보낸 사람
 -- ARGV[1]  memberId
 -- ARGV[2]  maxscore TTL(초). 양의 정수
 -- ARGV[3]  alive TTL(초). 양의 정수. 폴링 간격에서 나온 값이라 주입받는다
--- ARGV[4]  큐 길이 상한. 0 이면 상한 없음
+-- ARGV[4]  큐 길이 상한. **-1 이 상한 없음이고 0 은 전원 거절이다**
+--          **이 스크립트는 자기 샤드의 ZCARD 와 비교한다.** 부르는 쪽은 쿠폰
+--          전체의 수를 쥐고 있으므로, 샤드가 여럿이 되면 나눠서 넘겨야 한다 —
+--          안 그러면 실효 상한이 샤드 수만큼 커진다 (지금은 샤드 1 만 허용).
+--          나눠서 0 이 되면 그 샤드가 전원 거절이 된다. 그 하한은 아직 없다
+--          **상한은 신규 등록에만 걸린다.** 이미 줄에 선 사람은 아래 ZSCORE
+--          분기에서 먼저 돌아가므로 상한이 0 이어도 자기 순번을 지킨다
+--          도메인은 상한 0 을 "배수할 수 없으니 받지 않는다" 로 읽는다. 여기서
+--          0 을 상한 없음으로 읽으면 그 뜻이 정반대가 되고, 배수가 멎은 쿠폰의
+--          줄이 무한히 자란다 — 갇힌 사람만 늘어난다
 -- ARGV[5]  지금 시각(초). 생존 신호의 만료 시각을 계산한다
 --
--- 반환  {score, floorApplied, alreadyQueued}
+-- 반환  {score, floorApplied, alreadyQueued, rank}
 --   score          이 사람의 순번. 거부되면 '-1'
 --   floorApplied   바닥값이 적용됐는가. 1 이면 시계가 뒤로 갔다는 뜻이다
 --   alreadyQueued  이미 줄에 있었는가. 1 이면 순번을 그대로 돌려준 것이다
+--   rank           내 앞의 인원. 거부되면 -1
+--
+-- **rank 를 여기서 함께 낸다.** 등록하고 따로 물으면 그 사이 앞사람이 빠져
+-- 자기 순번보다 작은 수를 받는다 — 사용자가 보기엔 줄이 뒤로 간 것이다.
 --
 -- 순번이 카운터가 아니라 **벽시계**다 (A-9). NTP 보정이나 복제본 승격으로
 -- 시계가 뒤로 가면 나중에 온 사람이 앞선다 — 불변식 4 가 깨진다.
@@ -44,8 +58,8 @@ if now == nil or now < 0 then
 end
 
 local maxLen = tonumber(ARGV[4])
-if maxLen == nil or maxLen < 0 or maxLen ~= math.floor(maxLen) then
-    return redis.error_reply('큐 길이 상한은 0 이상 정수여야 한다: ' .. tostring(ARGV[4]))
+if maxLen == nil or maxLen < -1 or maxLen ~= math.floor(maxLen) then
+    return redis.error_reply('큐 길이 상한은 -1 이상 정수여야 한다: ' .. tostring(ARGV[4]))
 end
 
 -- **이미 줄에 있으면 그 순번을 지킨다.** 덮어쓰면 새로고침 연타가 자기
@@ -56,12 +70,28 @@ end
 local existing = redis.call('ZSCORE', KEYS[1], ARGV[1])
 if existing then
     redis.call('ZADD', KEYS[3], now + aliveTtl, ARGV[1])
-    return {existing, 0, 1}
+    return {existing, 0, 1, redis.call('ZCOUNT', KEYS[1], '-inf', '(' .. existing)}
 end
 
 -- 2차 방어다. 1차는 도메인이 낡은 스냅샷으로 판정하므로 여기서 한 번 더 본다.
-if maxLen > 0 and redis.call('ZCARD', KEYS[1]) >= maxLen then
-    return {'-1', 0, 0}
+-- **0 도 상한이다.** 배수할 수 없는 쿠폰은 한 명도 안 받는다.
+--
+-- **기다리는 사람만 센다.** ZSET 은 입장자를 안 지우고 청소기도 아직 없어서,
+-- ZCARD 를 그대로 쓰면 이미 나간 사람이 상한을 먹는다. 실제로 기다리는 사람이
+-- 0 명인데 신규가 영구 거절되는 상태가 된다.
+if maxLen >= 0 then
+    -- **깨진 임계로 비교하면 그 쿠폰의 등록이 전부 예외로 떨어진다.** 부르는
+    -- 쪽이 그것을 삼켜 fail-open 으로 흘리므로, 등록이 아니라 통과가 된다.
+    -- 형제 둘(queue_status·allocation_apply)은 이미 이 가드를 갖고 있다.
+    local admittedRaw = redis.call('GET', KEYS[4])
+    local admitted = admittedRaw and tonumber(admittedRaw) or -1
+    if admitted ~= admitted or admitted == math.huge or admitted == -math.huge then
+        admitted = -1
+    end
+    local from = admitted >= 0 and ('(' .. string.format('%.0f', admitted)) or '-inf'
+    if redis.call('ZCOUNT', KEYS[1], from, '+inf') >= maxLen then
+        return {'-1', 0, 0, -1}
+    end
 end
 
 -- 이름을 now 와 겹치지 않게 둔다. 주입받은 시각(초)과 Redis 시계(μs)는
@@ -95,4 +125,7 @@ redis.call('ZADD', KEYS[3], now + aliveTtl, ARGV[1])
 --
 -- %d 가 아니라 %.0f 다. %d 는 정수로 캐스팅해 32비트 런타임에서 넘친다.
 -- %.0f 는 배정밀도 그대로 찍으므로 2^53 아래에서 정확하고 지수도 안 붙는다.
-return {string.format('%.0f', score), applied, 0}
+-- **개수를 세지 순위를 저장하지 않는다.** 저장하면 앞사람이 빠질 때마다
+-- 전원을 갱신해야 한다.
+local rank = redis.call('ZCOUNT', KEYS[1], '-inf', '(' .. string.format('%.0f', score))
+return {string.format('%.0f', score), applied, 0, rank}

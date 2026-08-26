@@ -1,6 +1,7 @@
 package com.kafkick.waiting.domain.allocation;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -157,5 +158,84 @@ class QueueingHysteresisTest {
         QueueingHysteresis h = QueueingHysteresis.of(0.0, 0.0, 1);
 
         assertThat(h.shouldQueue(0, 100)).isTrue();
+    }
+
+    @Test
+    @DisplayName("이월받은_상태로_시작한다")
+    void 이월받은_상태로_시작한다() {
+        // 리더가 바뀔 때마다 꺼진 채로 시작하면, 붙잡고 있던 대기열이 한 틱
+        // 꺼졌다 다시 켜진다 — 막으려던 진동이 교체 때마다 난다.
+        QueueingHysteresis 이월받음 = QueueingHysteresis.restore(0.8, 0.5, 3,
+                new QueueingHysteresis.Snapshot(true, 1));
+
+        assertThat(이월받음.shouldQueue(40, 100)).isTrue();
+    }
+
+    @Test
+    @DisplayName("넘길_상태를_그대로_돌려준다")
+    void 넘길_상태를_그대로_돌려준다() {
+        QueueingHysteresis 앞선_리더 = QueueingHysteresis.of(0.8, 0.5, 3);
+        앞선_리더.shouldQueue(90, 100);
+        앞선_리더.shouldQueue(40, 100);
+
+        assertThat(앞선_리더.snapshot())
+                .isEqualTo(new QueueingHysteresis.Snapshot(true, 1));
+    }
+
+    @Test
+    @DisplayName("최소_유지가_0_이어도_이월받는다")
+    void 최소_유지가_0_이어도_이월받는다() {
+        // 자르기에 하한이 없으면 -1 이 되고, 그 값은 스냅샷이 거부한다 —
+        // 히스테리시스를 끈 설정에서 리더가 발행을 통째로 못 하게 된다.
+        QueueingHysteresis 이월받음 = QueueingHysteresis.restore(0.8, 0.5, 0,
+                new QueueingHysteresis.Snapshot(true, 3));
+
+        assertThat(이월받음.snapshot().belowExitTicks()).isZero();
+    }
+
+    @Test
+    @DisplayName("최소_유지가_음수여도_이월값이_넘치지_않는다")
+    void 최소_유지가_음수여도_이월값이_넘치지_않는다() {
+        // 보정 전 인자로 상한을 세면 Integer.MIN_VALUE 가 -1 에서 넘쳐
+        // 상한이 Integer.MAX_VALUE 가 된다 — 자르기가 통째로 사라지고,
+        // 최소 유지가 0 인 객체가 도달할 수 없는 유지 틱을 들고 시작한다.
+        QueueingHysteresis 이월받음 = QueueingHysteresis.restore(0.8, 0.5,
+                Integer.MIN_VALUE, new QueueingHysteresis.Snapshot(true, 3));
+
+        assertThat(이월받음.snapshot().belowExitTicks()).isZero();
+    }
+
+    @Test
+    @DisplayName("설정이_줄어도_이월값이_유지_범위_안에_든다")
+    void 설정이_줄어도_이월값이_유지_범위_안에_든다() {
+        // 배포 사이에 최소 유지가 줄면 옛 값이 그대로 실려 온다. 그 값은
+        // 스냅샷이 거부하는 범위라, 그대로 들고 있으면 다음에 넘길 때 터진다.
+        //
+        // 유효 최댓값으로 접는다 — 새 설정에서는 이미 놓았어야 할 상태이므로
+        // 다음 틱에 놓는 것이 맞다.
+        QueueingHysteresis 이월받음 = QueueingHysteresis.restore(0.8, 0.5, 3,
+                new QueueingHysteresis.Snapshot(true, 9));
+
+        assertThat(이월받음.snapshot().belowExitTicks()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("모순된_상태는_이월받지_않는다")
+    void 모순된_상태는_이월받지_않는다() {
+        // 안 붙잡는데 유지 틱이 쌓여 있으면 말이 안 된다. 그대로 이월하면
+        // 다음 리더가 켜지자마자 곧바로 끄는 판단을 한다.
+        assertThatThrownBy(() -> new QueueingHysteresis.Snapshot(false, 2))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("belowExitTicks");
+        assertThatThrownBy(() -> new QueueingHysteresis.Snapshot(true, -1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("belowExitTicks");
+    }
+
+    @Test
+    @DisplayName("빈_상태는_안_붙잡는_것이다")
+    void 빈_상태는_안_붙잡는_것이다() {
+        assertThat(QueueingHysteresis.Snapshot.empty())
+                .isEqualTo(new QueueingHysteresis.Snapshot(false, 0));
     }
 }

@@ -36,9 +36,10 @@ on:
         required: false
         default: true
 
+# **잡마다 필요한 것만 준다.** 워크플로 수준에 두면 SARIF 를 안 올리는 잡도
+# security-events: write 를 받는다.
 permissions:
   contents: read
-  security-events: write
 
 jobs:
   cve:
@@ -46,15 +47,34 @@ jobs:
     if: inputs.cve
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # SARIF 를 올리는 잡은 여기뿐이다.
+    permissions:
+      contents: read
+      security-events: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
   
+      # **Trivy 가 Java 를 보게 하려면 락파일이 있어야 한다.** Gradle 은
+      # build.gradle 을 파싱 대상으로 안 삼는다 — 그래서 이 검사가 오랫동안
+      # num=0 으로 아무것도 안 보고 초록불을 냈다 (CY-293, AIJ-0029).
+      #
+      # **실패를 삼키지 않는다.** 삼키면 락파일 없이 Trivy 가 돌고, 다시
+      # "볼 것이 없어서 0건" 이 된다 — 고치려던 바로 그 상태로 되돌아간다.
+      - name: 의존성 락파일
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon \
+            -I .github/scripts/dependency-locking.init.gradle --write-locks \
+            dependencies --configuration runtimeClasspath >/dev/null
+          test -s gradle.lockfile
+          echo "::notice title=Trivy::락파일 $(grep -c '^[^#]' gradle.lockfile) 항목"
+
       # 이미지 빌드 전이라 fs 모드. 차단과 업로드에 SARIF 하나를 같이 쓴다 —
       # 나누면 같은 스캔이 두 번 돈다 (DB 내려받기까지).
       - name: Trivy
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8  # v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -113,7 +133,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0   # 이력 전체를 봐야 과거 커밋의 유출을 잡는다
@@ -129,13 +149,32 @@ jobs:
           curl -sSLo /tmp/gitleaks.tgz \
             "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz"
           tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
+          # **어디가 걸렸는지 남긴다.** 값은 가리되 위치는 찍어야 한다 —
+          # "leaks found: 2" 만 나오면 고칠 곳을 찾으려 로컬에서 다시 돌려야 하고,
+          # 그게 귀찮으면 사람은 검사를 끄는 쪽을 택한다.
+          # **유출과 실행 오류를 가른다.** 기본값은 둘 다 1 이라, 도구가 못 뜨는
+          # 것과 키가 새는 것이 같은 신호로 나온다 — 앞의 것을 뒤의 것으로 읽으면
+          # 있지도 않은 유출을 찾느라 시간을 쓴다.
+          args=(detect --source . --redact --no-banner --exit-code 2
+                --report-format json --report-path gitleaks.json)
           # PR 이면 그 커밋만, 그 밖에는 이력 전체
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            /tmp/gitleaks detect --source . --redact --no-banner \
-              --log-opts="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
-          else
-            /tmp/gitleaks detect --source . --redact --no-banner
+            args+=(--log-opts="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}")
           fi
+          # 실패해도 리포트를 먼저 읽는다. set -e 로 여기서 끊기면 위치가 안 나온다.
+          status=0
+          /tmp/gitleaks "${args[@]}" || status=$?
+          if [[ "$status" -eq 2 ]]; then
+            jq -r '.[] | "  \(.RuleID)  \(.File):\(.StartLine)  (\(.Description))"' \
+              gitleaks.json || cat gitleaks.json
+            echo "::error title=시크릿::위 위치에 유출이 있다. 값은 가렸다"
+            exit 1
+          fi
+          if [[ "$status" -ne 0 ]]; then
+            echo "::error title=시크릿::검사가 못 돌았다 (종료 코드 $status)"
+            exit "$status"
+          fi
+          echo "::notice title=시크릿::유출 0건"
 
       # 규칙으로도 한 번 더 — LG-6 (토큰·시크릿 로깅 금지) 는 정적 검사로 못 잡는
       # 커밋된 값 자체를 노린다
@@ -160,7 +199,7 @@ jobs:
       pull-requests: write
     steps:
       # 체크아웃하지 않는다 — 이 액션은 GitHub API 로 의존성 변화를 읽는다
-      - uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48  # v4.9.0
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294  # v5.0.0
         with:
           fail-on-severity: high
           comment-summary-in-pr: ${{ github.event.pull_request.head.repo.fork && 'never' || 'on-failure' }}

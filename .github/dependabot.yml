@@ -1,5 +1,12 @@
 version: 2
 
+# **대상은 develop 이다.** 안 적으면 기본 브랜치(main)로 간다 — 사람은 전부
+# develop 으로 여는데 봇만 릴리스 브랜치로 바로 들어가고, 그러면 의존성 갱신이
+# develop 의 검증을 통째로 건너뛴다.
+#
+# 워크플로도 대상 브랜치 것이 돈다. 그래서 develop 에 넣은 규약 면제가 봇 PR 에
+# 안 닿아, 고쳤는데 안 고쳐진 것처럼 보였다.
+
 updates:
   # 서드파티 액션은 SHA 로 핀 고정하는 것이 원칙이다.
   # 손으로 고정하면 갱신이 멈추므로 dependabot 이 SHA 를 올려 준다.
@@ -11,6 +18,8 @@ updates:
     directories:
       - /
       - /.github/actions/*
+    target-branch: develop
+
     schedule:
       interval: weekly
       day: monday
@@ -25,6 +34,8 @@ updates:
 
   - package-ecosystem: gradle
     directory: /
+    target-branch: develop
+
     schedule:
       interval: weekly
       day: monday

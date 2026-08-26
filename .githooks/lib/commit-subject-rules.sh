@@ -11,10 +11,22 @@
 #
 # 사용: check_commit_subject "<제목>"  → 위반 메시지를 stdout 으로, 있으면 1
 
+# 병합·되돌리기·고침은 제목을 사람이 짓지 않는다 — git 이 정한 문구다.
+# 규약을 요구하면 되돌릴 때마다 고쳐 써야 하고, 그러면 무엇을 되돌렸는지가
+# 제목에서 사라진다. 푸터도 마찬가지라 검사하는 쪽마다 이걸 먼저 묻는다.
+is_tool_authored_subject() {
+    case "$1" in
+        'Merge '*|'Revert '*|'fixup! '*|'squash! '*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 check_commit_subject() {
     local subject="$1"
     local types='feat|fix|test|refactor|perf|docs|build|ci|chore'
     local errors=()
+
+    is_tool_authored_subject "$subject" && return 0
 
     printf '%s' "$subject" | grep -qE "^($types)(\([a-z0-9-]+\))?: .+" \
         || errors+=("형식이 맞지 않는다: '<type>(<scope>): <subject>' / 허용 type: $types")

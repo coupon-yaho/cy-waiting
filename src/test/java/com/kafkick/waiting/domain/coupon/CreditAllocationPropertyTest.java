@@ -31,7 +31,7 @@ class CreditAllocationPropertyTest {
 
             CouponState s = credit == 0
                     ? CouponState.idle(500)
-                    : CouponState.queueing(credit, 500, 1);
+                    : CouponState.queueing(credit, 500, credit + 1);
 
             long total = 0;
             for (int node = 0; node < nodes; node++) {
@@ -60,7 +60,7 @@ class CreditAllocationPropertyTest {
             long credit = rnd.nextLong(1, 200_000);
             int nodes = rnd.nextInt(1, 200);
 
-            CouponState s = CouponState.queueing(credit, 500, 1);
+            CouponState s = CouponState.queueing(credit, 500, credit + 1);
 
             long total = 0;
             for (int node = 0; node < nodes; node++) {

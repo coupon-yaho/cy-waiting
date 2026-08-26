@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
@@ -30,13 +30,17 @@ jobs:
         with:
           cache-write: 'true'
 
+      # **정적 분석을 여기서 돈다.** check 에만 걸어 두면 병합 경로에서 안 돈다 —
+      # 테스트는 잡이 따로 있어 check 를 통째로 부르면 겹친다. 태스크를 짚는다.
       # testClasses 까지 — assemble 만 하면 테스트 컴파일을 잡마다 다시 한다.
       - name: 컴파일 (assemble + testClasses)
         if: steps.setup.outputs.buildable == 'true'
-        run: ./gradlew --no-daemon assemble testClasses
+        run: >-
+          ./gradlew --no-daemon assemble testClasses
+          checkstyleMain checkstyleTest checkstyleTestFixtures codenarcBuildScripts
 
       - if: inputs.upload-artifact && steps.setup.outputs.buildable == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: build-libs
           path: build/libs/

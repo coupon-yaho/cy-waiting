@@ -42,13 +42,19 @@ local waiting = redis.call('ZCARD', KEYS[1])
 ### 키 스킴
 
 ```
-S >  1:   queue:{cid:s}   maxscore:{cid:s}   admitted:{cid:s}   grace:{cid:s}   alive:{cid:s}:{member}
-S == 1:   queue:{cid}     maxscore:{cid}     admitted:{cid}     grace:{cid}     alive:{cid}:{member}
+S >  1:   queue:{cid:s}   maxscore:{cid:s}   admitted:{cid:s}   grace:{cid:s}   alive:{cid:s}
+S == 1:   queue:{cid}     maxscore:{cid}     admitted:{cid}     grace:{cid}     alive:{cid}
 
 전역:     gw:snapshot   gw:instances   scheduler:leader
           coupons:active   coupon:policy   capacity:coupon-svc:{version}
 쿠폰별:   stock:{cid}   ← 발급 계층 소유. 게이트웨이는 읽기만
 ```
+
+**`alive` 는 사람마다 키를 만들지 않는다.** 쿠폰(샤드)당 ZSET 하나이고 만료
+시각을 score 에 담는다. 사람마다 키를 만들면 청소 스크립트가 **KEYS 에 선언되지
+않은 키**를 만지게 되어 클러스터가 거부하고(RD-1), 20,000 동시 대기에서 쿠폰당
+2만 개 키가 생긴다(RD-7). 단독 모드에서는 그냥 성공하므로 **아무 오류 없이
+조용히 잘못 돈다** — 그래서 여기 못 박는다 (AIJ-0021).
 
 **S==1에서 접미사를 붙이지 않는 것이 중요하다.** 붙이면 나중에 샤딩을 도입할 때
 콜드 쿠폰 전체의 키가 바뀌어 진행 중인 큐가 유실된다.

@@ -1,0 +1,114 @@
+# 부하 시나리오가 때릴 대상. 게이트웨이 · Redis · 뒷단 스텁.
+#
+# **전부 healthcheck 를 단다.** 없으면 `up --wait` 가 곧바로 돌아오고, 게이트웨이가
+# 뜨기 전에 k6 가 때려서 실패가 코드 결함인지 기동 경합인지 안 갈린다.
+
+services:
+  redis:
+    image: redis:7.4-alpine
+    volumes:
+      - ../../docker/redis.conf:/etc/redis/redis.conf:ro
+    command: ["redis-server", "/etc/redis/redis.conf"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 2s
+      retries: 20
+
+  # 지연과 동시 한도를 다르게 줘 인스턴스별 용량 차등을 만든다 (Phase 9).
+  # 스모크는 하나만 쓴다 — 여럿이 필요한 시나리오가 나중에 붙는다.
+  backend:
+    build: ./backend-stub
+    environment:
+      PORT: "8090"
+      LATENCY_MS: "5"
+      MAX_INFLIGHT: "200"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8090/stub/health"]
+      interval: 1s
+      timeout: 2s
+      retries: 20
+
+  # **재료를 심는다.** 활성 쿠폰과 재고가 없으면 스냅샷이 영영 비고, 모든 요청이
+  # 미지 쿠폰 경로로 빠져 판정 필터를 통째로 우회한다 — 그 상태로 잰 초록은
+  # 판정을 안 지난 초록이다.
+  #
+  # 가용량 보고는 뒷단이 자기 상태를 적는 것이라 주기적으로 갱신해야 한다.
+  # 신선도 임계를 넘기면 하한으로 떨어져 대기열이 통째로 켜진다.
+  seeder:
+    image: redis:7.4-alpine
+    depends_on:
+      redis: { condition: service_healthy }
+    command:
+      - sh
+      - -c
+      - |
+        set -eu
+        redis-cli -h redis SADD coupons:active c1
+        redis-cli -h redis SET 'stock:{c1}' 1000000
+        while :; do
+          redis-cli -h redis HSET capacity:coupon-svc:v1 stub-1 \
+            "{\"addr\":\"backend:8090\",\"credits\":300,\"ts\":$(date +%s)}" > /dev/null
+          sleep 1
+        done
+    healthcheck:
+      # **셋을 다 본다.** 하나만 보면 나머지가 아직 없는데 준비됐다고 말한다.
+      test:
+        - CMD
+        - sh
+        - -c
+        - |
+          [ "$$(redis-cli -h redis SISMEMBER coupons:active c1)" = 1 ] &&
+          [ "$$(redis-cli -h redis EXISTS 'stock:{c1}')" = 1 ] &&
+          [ "$$(redis-cli -h redis HEXISTS capacity:coupon-svc:v1 stub-1)" = 1 ]
+      interval: 1s
+      timeout: 2s
+      retries: 20
+
+  # **예열을 기다린다.** 가용량 보고가 들어와도 램프가 끝나기 전에는 크레딧이
+  # 0 에 가깝고, 그러면 한산 통과 상한이 0 이라 모든 발급이 큐로 간다. 그 상태에
+  # 부하를 넣으면 판정을 재는 게 아니라 램프를 재는 셈이다.
+  warmup:
+    image: redis:7.4-alpine
+    depends_on:
+      gateway: { condition: service_healthy }
+    command: ["sh", "-c", "sleep infinity"]
+    healthcheck:
+      # 한산 통과 상한이 1 이상이 되는 지점까지 기다린다.
+      test:
+        - CMD
+        - sh
+        - -c
+        - "[ \"$$(redis-cli -h redis HGET gw:snapshot '#credit')\" -ge 20 ]"
+      interval: 2s
+      timeout: 3s
+      retries: 60
+
+  gateway:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      args:
+        # 실행 JAR 이름을 정확히 짚는다. 여럿과 맞으면 무엇이 들어갈지
+        # 순서에 달린다. 판이 바뀌면 여기 한 줄만 고친다.
+        JAR: build/libs/waiting-0.2.0.jar
+    depends_on:
+      redis: { condition: service_healthy }
+      backend: { condition: service_healthy }
+      seeder: { condition: service_healthy }
+    environment:
+      SPRING_DATA_REDIS_HOST: redis
+      WAITING_BACKEND_URI: http://backend:8090
+      WAITING_CORS_ALLOWED_0: http://localhost:5173
+      # 하네스용 값. 운영 키는 배포에서 온다 — 여기 든 값은 시험 부하에만 쓴다.
+      WAITING_TOKEN_SECRET: load-harness-not-a-real-secret-0123456789
+    ports:
+      # 시나리오가 이 주소를 쓴다. 관리 포트는 안 연다 — 밖에서 닿으면 안 된다.
+      - "18080:8080"
+    healthcheck:
+      # **받는 것으로 본다.** 살아 있음만 보면 재료가 없는 노드에 부하를 넣게 되고,
+      # 그러면 판정을 우회한 결과를 게이트로 쓴다. 재료는 시더가 먼저 심는다.
+      test: ["CMD", "wget", "-qO-", "http://localhost:8081/actuator/health/readiness"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

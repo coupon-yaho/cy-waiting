@@ -37,13 +37,13 @@ public record CouponState(
         // 역전이 생기고, 그게 이전 구현의 핵심 버그였다.
         if (runtime == RuntimeState.IDLE && credit != 0) {
             throw new IllegalArgumentException(
-                    "IDLE 이면 credit 이 0 이어야 한다: credit=%d".formatted(credit));
+                    "[I1] IDLE 이면 credit 이 0 이어야 한다: credit=%d".formatted(credit));
         }
 
         // I2 — 재고가 남았는데 종결됐다면 그건 종결이 아니다.
         if (runtime == RuntimeState.CLOSED && remainingStock != 0) {
             throw new IllegalArgumentException(
-                    "CLOSED 면 remainingStock 이 0 이어야 한다: remainingStock=%d"
+                    "[I2] CLOSED 면 remainingStock 이 0 이어야 한다: remainingStock=%d"
                             .formatted(remainingStock));
         }
 
@@ -51,7 +51,7 @@ public record CouponState(
         // 몫이 대기자보다 적으면 그건 아직 QUEUEING 이다.
         if (runtime == RuntimeState.DRAINING && credit < waiting) {
             throw new IllegalArgumentException(
-                    "DRAINING 이면 credit >= waiting 이어야 한다: credit=%d, waiting=%d"
+                    "[I3] DRAINING 이면 credit >= waiting 이어야 한다: credit=%d, waiting=%d"
                             .formatted(credit, waiting));
         }
 
@@ -59,7 +59,7 @@ public record CouponState(
         // 줄 선 사람을 추월한다. I4 의 대우로는 이 조합이 막히지 않는다.
         if (runtime == RuntimeState.IDLE && waiting != 0) {
             throw new IllegalArgumentException(
-                    "IDLE 이면 waiting 이 0 이어야 한다: waiting=%d".formatted(waiting));
+                    "[I1'] IDLE 이면 waiting 이 0 이어야 한다: waiting=%d".formatted(waiting));
         }
 
         // I4 — 줄이 비었는데 큐 상태라는 것은 유령이다. 판정 사다리 9번이
@@ -68,7 +68,24 @@ public record CouponState(
                 && runtime != RuntimeState.IDLE
                 && runtime != RuntimeState.CLOSED) {
             throw new IllegalArgumentException(
-                    "waiting 이 0 이면 IDLE 또는 CLOSED 여야 한다: runtime=%s".formatted(runtime));
+                    "[I4] waiting 이 0 이면 IDLE 또는 CLOSED 여야 한다: runtime=%s".formatted(runtime));
+        }
+
+        // I3' — **반대 방향도 막는다.** 한쪽만 보면 같은 (credit, waiting) 이
+        // 두 상태를 다 가질 수 있다. 그러면 상태가 사실을 안 말하고, 두 발행자가
+        // 같은 사실을 다른 이름으로 적는다.
+        //
+        // **판정은 이걸로 달라지지 않는다.** 사다리는 runtime 을 `!= IDLE` 로만
+        // 보므로 DRAINING 과 QUEUEING 이 같은 칸이다. 줄이 있으면 뒤에 세우는
+        // 것이 맞고(불변식 4), 다 뺄 수 있다고 통과시키면 그게 추월이다.
+        // 여기서 얻는 것은 **표현의 유일성**이지 판정의 변화가 아니다.
+        //
+        // **I4 뒤에 둔다.** 앞에 두면 줄이 빈 QUEUEING 이 여기서 먼저 걸려
+        // "줄이 비었다" 대신 "다 뺄 수 있다" 고 답한다 — 원인을 잘못 말한다.
+        if (runtime == RuntimeState.QUEUEING && credit >= waiting) {
+            throw new IllegalArgumentException(
+                    "[I3'] QUEUEING 이면 credit < waiting 이어야 한다: credit=%d, waiting=%d"
+                            .formatted(credit, waiting));
         }
 
         // NaN 은 비교가 전부 false 라 Math.max 를 그냥 통과한다. 그대로 두면
@@ -119,7 +136,19 @@ public record CouponState(
                     "idleCreditRatio 는 0 이상 유한값이어야 한다: %s".formatted(idleCreditRatio));
         }
         long perNode = meta.globalCredit() / meta.effectiveGatewayCount();
-        return (long) (perNode * idleCreditRatio);
+        long capped = (long) (perNode * idleCreditRatio);
+        // **몫이 있는데 0 으로 잘리면 안 된다.** 노드당 1 이면 비율을 곱한 값이
+        // 절삭돼 0 이 되고, 그러면 노드 예산은 한 명을 받을 수 있는데 쿠폰별
+        // 상한이 먼저 막는다 — 아무도 안 몰리는 쿠폰이 전 노드에서 줄을 선다.
+        //
+        // **B-2 가 막는 것과 다른 자리다.** 거기는 크레딧이 노드 수보다 적을 때
+        // 각자 하나씩 통과시켜 총합이 크레딧을 넘는 경우다. 여기서 1 을 보장하는
+        // 것은 `perNode >= 1` 일 때뿐이고, 그때 총합은 노드 수 이하이며
+        // `globalCredit >= 노드 수` 이므로 넘지 않는다 (C-10).
+        //
+        // **비율 0 은 예외다.** 그건 절삭이 아니라 "한산 통과를 끈다" 는 설정이라,
+        // 여기서 1 을 얹으면 운영자가 끈 것이 안 꺼진다.
+        return capped == 0 && perNode > 0 && idleCreditRatio > 0 ? 1 : capped;
     }
 
     /**
@@ -136,9 +165,9 @@ public record CouponState(
     }
 
     /**
-     * 받아도 되는 줄의 최대 길이.
-     *
-     * <p>배수할 수 없는데(credit 0) 줄을 받으면 갇힌 사람만 늘어난다.
+     * 받아도 되는 줄의 최대 길이. <b>사다리 6번이 보는 값이다.</b> 배수할 수
+     * 없는데(credit 0) 줄을 받으면 갇힌 사람만 늘어난다. 등록 경로는 그때
+     * {@code AdmissionDecider.queueCapacity} 의 폴백으로 갈아탄다.
      */
     public long queueCapacity(long maxEtaSec) {
         if (maxEtaSec <= 0) {
@@ -171,7 +200,70 @@ public record CouponState(
 
     /** 재고가 소진됐는데 대기자가 남았다. 스케줄러가 이 전이를 만든다. */
     public static CouponState closed(long waiting) {
-        return new CouponState(QueueMode.ADAPTIVE, RuntimeState.CLOSED, 0, 0, waiting, 1.0);
+        return closed(QueueMode.ADAPTIVE, waiting);
+    }
+
+    /**
+     * 매진된 쿠폰도 <b>운영자가 정한 모드를 그대로 싣는다.</b> 판정은 1번에서
+     * 끝나 모드를 안 보지만, 모드를 읽는 소비자가 하나라도 늘면 그날 이 자리가
+     * 거짓말을 한다 — 대기 응답이 이미 모드를 싣는다.
+     */
+    public static CouponState closed(QueueMode mode, long waiting) {
+        return new CouponState(mode, RuntimeState.CLOSED, 0, 0, waiting, 1.0);
+    }
+
+    /**
+     * 줄이 남아 있는 쿠폰. <b>모드는 운영자가 정한 그대로 싣는다</b> — 줄이 있다고
+     * 모드를 바꿔 실으면 대기 응답의 모드가 사실이 아니게 되고, 항상 대기로 둔
+     * 쿠폰이 다음 틱에 적응형으로 돌아간다.
+     *
+     * <p>런타임은 못 박지 않고 유도한다 ({@link #offWithQueue} 와 같은 이유).
+     */
+    public static CouponState withQueue(QueueMode mode, long credit, long remainingStock,
+            long waiting) {
+        if (waiting <= 0) {
+            throw new IllegalArgumentException(
+                    "withQueue 는 줄이 남아 있을 때만이다. 비었으면 noQueue 를 쓴다: waiting=%d"
+                            .formatted(waiting));
+        }
+        // 재고가 없는데 줄이 남았으면 그건 매진이다. 여기서 만들면 아무것도 못
+        // 받을 줄에 사람을 계속 세우는 상태가 되고, 발행 경로에는 그 길이 없다.
+        if (remainingStock <= 0) {
+            throw new IllegalArgumentException(
+                    "재고가 없으면 매진이다. closed 를 쓴다: remainingStock=%d"
+                            .formatted(remainingStock));
+        }
+        // 이번 틱에 다 뺄 수 있으면 배수 중, 아니면 아직 줄 서는 중이다.
+        // **I3 의 경계와 같은 자리**를 쓴다 — 갈리면 이 팩토리가 생성자에
+        // 막히는 조합을 만든다. 그래서 이 셈은 여기 한 곳에만 있다.
+        RuntimeState runtime = credit >= waiting
+                ? RuntimeState.DRAINING
+                : RuntimeState.QUEUEING;
+        return new CouponState(mode, runtime, credit, remainingStock, waiting, 1.0);
+    }
+
+    /** 줄이 빈 쿠폰. 배분을 못 받았으므로 credit 은 0 이다 (I1). */
+    public static CouponState noQueue(QueueMode mode, long remainingStock) {
+        return new CouponState(mode, RuntimeState.IDLE, 0, remainingStock, 0, 1.0);
+    }
+
+    /**
+     * 운영자가 껐는데 <b>줄이 아직 남아 있다.</b> {@code mode} 와 {@code waiting}
+     * 은 서로 독립이다.
+     *
+     * <p>런타임은 <b>못 박지 않고 유도한다.</b> 못 박으면 다 뺄 수 있는 줄까지
+     * {@code QUEUEING} 이 되어 I3' 에 막힌다 (계획서 2절 3.7).
+     */
+    public static CouponState offWithQueue(long credit, long remainingStock, long waiting) {
+        // **가드는 여기 남긴다.** 이름이 "줄이 있는 OFF" 이므로 비었을 때
+        // 무엇을 쓰라고 그 자리에서 말해야 한다. 런타임 유도는 위임한다 —
+        // I3 의 경계를 두 곳에 적으면 갈린다.
+        if (waiting <= 0) {
+            throw new IllegalArgumentException(
+                    "offWithQueue 는 줄이 남아 있을 때만이다. 비었으면 off 를 쓴다: waiting=%d"
+                            .formatted(waiting));
+        }
+        return withQueue(QueueMode.OFF, credit, remainingStock, waiting);
     }
 
     /** 운영자가 무조건 줄을 세우기로 했다. 한산해도 대기열을 태운다. */
@@ -179,7 +271,7 @@ public record CouponState(
         return new CouponState(QueueMode.ALWAYS, RuntimeState.IDLE, 0, remainingStock, 0, 1.0);
     }
 
-    /** 운영자가 대기열을 껐다. 붐비든 말든 줄을 세우지 않는다. */
+    /** 운영자가 대기열을 껐다. 줄이 비어 있는 동안 줄을 세우지 않는다. */
     public static CouponState off(long remainingStock) {
         return new CouponState(QueueMode.OFF, RuntimeState.IDLE, 0, remainingStock, 0, 1.0);
     }

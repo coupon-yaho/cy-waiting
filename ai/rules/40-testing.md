@@ -32,6 +32,20 @@ void 스케줄러가_멎어도_줄_선_사람을_추월시키지_않는다() { }
 
 `test1`, `shouldWork`, `testDecide` 같은 이름은 쓰지 않는다.
 
+**한글인 것은 시험 메서드 이름과 헬퍼뿐이다.** 클래스·레코드·`@Nested` 는 영문이다
+(JS-11). 이름은 문장이라 한글이 정확하지만, 타입 이름은 스택트레이스와 도구가
+그대로 노출한다 — 경계를 파일이 아니라 **선언 종류**로 긋는다.
+
+```java
+@Nested
+@DisplayName("I3 — 배수 중이면 남은 대기자를 다 뺄 수 있다")
+class I3 {                      // 타입은 영문, 표시 이름이 한글을 맡는다
+
+    @Test
+    void 대기자가_0인데_QUEUEING이면_생성에_실패한다() { }
+}
+```
+
 ---
 
 ## TS-3 · MUST · 픽스처는 도달 가능한 상태만 만든다
@@ -47,7 +61,9 @@ void 스케줄러가_멎어도_줄_선_사람을_추월시키지_않는다() { }
 private static CouponState state(QueueMode mode, RuntimeState runtime,
                                  int credit, long stock, long waiting, double scale)
 
-// 올바름 — 각 팩토리가 하나의 도달 가능한 상태만 만든다
+// 올바름 — 각 팩토리가 도달 가능한 상황 하나씩만 만든다
+//          (런타임을 유도하는 팩토리는 상태가 둘일 수 있다. 그때는 경계를
+//           팩토리에 대고 잰다 — 생성자 단언은 동어반복이다)
 CouponStates.idle(long stock)
 CouponStates.queueing(int credit, long stock, long waiting)
 CouponStates.draining(int credit, long stock, long waiting)

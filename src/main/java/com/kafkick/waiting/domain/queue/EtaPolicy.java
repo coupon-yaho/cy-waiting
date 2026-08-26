@@ -8,8 +8,12 @@ package com.kafkick.waiting.domain.queue;
  */
 public final class EtaPolicy {
 
-    /** 배수율을 아직 모른다. 무한을 그대로 내보내면 표시 계층이 터진다. */
-    public static final double UNKNOWN = -1;
+    /**
+     * 배수율을 아직 모른다. <b>음수를 안 쓴다</b> — 어떤 구간보다도 작아서 읽는
+     * 쪽이 "아주 가까움" 으로 뒤집어 읽고, 하필 배수가 멈춘 순간에 폴링이 가장
+     * 짧아진다.
+     */
+    public static final double UNKNOWN = Double.NaN;
 
     private static final double[] BUCKET_EDGES = {30, 90, 450};
 
@@ -38,10 +42,31 @@ public final class EtaPolicy {
         return rank / smoothedCredit;
     }
 
-    /** 표시할 구간. */
+    /**
+     * 와이어에 실을 초. <b>모름을 0 으로 말하지 않는다</b> — 필드가 숫자 하나라
+     * NaN 을 그대로 못 싣는데, 그대로 캐스팅하면 0 이 되어 "곧 입장" 이 된다.
+     * 모르면 가장 넓은 구간의 하한을 준다.
+     */
+    public static long reportSec(double etaSec) {
+        // **무한대도 모름이다.** 그대로 캐스팅하면 Long.MAX_VALUE 가 나가고,
+        // 그건 값이 아니라 고장으로 읽힌다. bucket() 도 같은 자리로 접는다.
+        if (!Double.isFinite(etaSec) || etaSec < 0) {
+            return (long) BUCKET_EDGES[BUCKET_EDGES.length - 1];
+        }
+        return (long) etaSec;
+    }
+
+    /**
+     * 표시할 구간. <b>모를 때도 값을 준다</b> — 계산 중이라는 표시는 떠날지
+     * 기다릴지 판단할 근거를 안 준다. 모르면 가장 넓은 구간이다. 짧게 말했다가
+     * 오래 기다리게 하는 쪽이 훨씬 나쁘다.
+     */
     public static EtaDisplay bucket(double etaSec) {
-        if (etaSec < 0) {
-            return EtaDisplay.CALCULATING;
+        // **모르는 것과 말이 안 되는 것을 같이 본다.** NaN 은 비교가 전부 거짓이라
+        // 그냥 두면 마지막 구간으로 떨어지지만, 음수는 첫 구간에 걸려 "곧 입장" 이
+        // 된다 — 짧게 말했다가 오래 기다리게 하는 쪽이 훨씬 나쁘다.
+        if (!(etaSec >= 0)) {
+            return BUCKETS[BUCKETS.length - 1];
         }
         for (int i = 0; i < BUCKET_EDGES.length; i++) {
             if (etaSec < BUCKET_EDGES[i]) {

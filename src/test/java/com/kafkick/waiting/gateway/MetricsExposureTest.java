@@ -73,4 +73,17 @@ class MetricsExposureTest {
     private boolean 잡는가(Route route, ServerWebExchange exchange) {
         return Boolean.TRUE.equals(Mono.from(route.getPredicate().apply(exchange)).block());
     }
+
+    /**
+     * <b>만들어 두고 안 걸면 지표가 안 나온다.</b> 단위 시험은 거는 코드가 맞는지만
+     * 보고, 그 코드를 아무도 안 부르는 상황은 못 본다.
+     */
+    @Test
+    @DisplayName("판정_재료_지표가_실제로_긁힌다")
+    void 판정_재료_지표가_실제로_긁힌다() {
+        assertThat(registry.scrape())
+                .contains("waiting_queue_waiting")
+                .contains("waiting_snapshot_age")
+                .contains("waiting_snapshot_coupons");
+    }
 }

@@ -73,7 +73,15 @@ class QueueStatusFilterTest {
     }
 
     private MockServerWebExchange 토큰으로_조회한다(String token) {
-        return 조회한다("/api/v1/coupons/" + COUPON + "/queue?queueToken=" + token);
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.get("/api/v1/coupons/" + COUPON + "/queue")
+                        .header("X-Member-Id", MEMBER)
+                        .header("Queue-Token", token));
+        filter.filter(exchange, e -> {
+            다음으로_감.set(true);
+            return Mono.empty();
+        }).block();
+        return exchange;
     }
 
     /** 실물이 거절하는 값을 픽스처가 받아 주면 그 회귀를 시험이 못 본다. */
@@ -350,5 +358,60 @@ class QueueStatusFilterTest {
 
         assertThat(meters.getMeters()).singleElement().satisfies(m ->
                 assertThat(m.getId().getTags()).noneMatch(t -> t.getValue().contains(COUPON)));
+    }
+
+    /**
+     * <b>토큰은 URL 에 안 남는다.</b> 앞단 프록시 액세스 로그에 쿼리스트링이
+     * 그대로 남고, 그 한 줄이면 남의 차례를 통째로 가로챈다 — 페이로드에
+     * {@code memberId} 가 평문이라 발급까지 이어진다.
+     */
+    @Test
+    @DisplayName("헤더로_보낸_토큰이_받아들여진다")
+    void 헤더로_보낸_토큰이_받아들여진다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100));
+        줄.enqueue(COUPON, MEMBER, NO_LIMIT, 지금).block();
+
+        MockServerWebExchange exchange = 토큰으로_조회한다(tokens.issue(COUPON, MEMBER, 지금));
+
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(exchange.getResponse().getBodyAsString().block()).contains("WAITING");
+    }
+
+    /**
+     * <b>옛 자리도 한 릴리스는 받는다.</b> 같이 끊으면 이미 발급된 토큰을 든
+     * 클라이언트가 배포 순간 전부 자기 순번을 잃는다.
+     */
+    @Test
+    @DisplayName("쿼리로_보낸_토큰도_한_릴리스는_받는다")
+    void 쿼리로_보낸_토큰도_한_릴리스는_받는다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100));
+        줄.enqueue(COUPON, MEMBER, NO_LIMIT, 지금).block();
+        String 토큰 = tokens.issue(COUPON, MEMBER, 지금);
+
+        MockServerWebExchange exchange =
+                조회한다("/api/v1/coupons/" + COUPON + "/queue?queueToken=" + 토큰);
+
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.OK);
+    }
+
+    /**
+     * <b>헤더가 먼저다.</b> 폴백이 이기면 옛 자리에 아무 값이나 붙여 헤더를 무르게
+     * 만들 수 있고, 그러면 자리를 옮긴 의미가 없어진다.
+     */
+    @Test
+    @DisplayName("헤더가_있으면_쿼리는_안_본다")
+    void 헤더가_있으면_쿼리는_안_본다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100));
+        줄.enqueue(COUPON, MEMBER, NO_LIMIT, 지금).block();
+
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest
+                        .get("/api/v1/coupons/" + COUPON + "/queue?queueToken="
+                                + tokens.issue(COUPON, MEMBER, 지금))
+                        .header("X-Member-Id", MEMBER)
+                        .header("Queue-Token", "망가진토큰"));
+        filter.filter(exchange, e -> Mono.empty()).block();
+
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
     }
 }

@@ -131,4 +131,15 @@ class CorsPolicyTest {
         // 관리 포트는 브라우저가 부를 것이 아니다.
         assertThat(적용되는_설정("/actuator/health")).isNull();
     }
+
+    /**
+     * <b>순번 토큰 헤더가 빠지면 폴링이 브라우저에서 통째로 안 된다.</b> 사전
+     * 요청에서 막혀 본 요청이 아예 안 나간다.
+     */
+    @Test
+    @DisplayName("순번_토큰_헤더를_허용한다")
+    void 순번_토큰_헤더를_허용한다() {
+        assertThat(적용되는_설정("/api/v1/coupons/c1/queue").getAllowedHeaders())
+                .contains("Queue-Token");
+    }
 }

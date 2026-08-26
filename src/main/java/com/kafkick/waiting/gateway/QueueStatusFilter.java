@@ -17,6 +17,7 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.DoubleSupplier;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.annotation.Order;
+import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.server.WebFilter;
@@ -36,6 +37,16 @@ public final class QueueStatusFilter implements WebFilter {
     private static final PathPattern PATH = PathPatternParser.defaultInstance
             .parse("/api/v1/coupons/{couponId}/queue");
 
+    /**
+     * 순번 토큰을 싣는 헤더.
+     *
+     * <p><b>쿼리스트링으로 받지 않는다.</b> 앞단 프록시 액세스 로그에 URL 이
+     * 그대로 남고, 그 한 줄이면 남의 차례를 통째로 가로챈다 — 페이로드에
+     * `memberId` 가 평문이라 발급까지 이어진다.
+     */
+    private static final String TOKEN_HEADER = "Queue-Token";
+
+    /** 한 릴리스만 받는 옛 자리. 다음 릴리스에서 뗀다. */
     private static final String TOKEN_PARAM = "queueToken";
 
     private static final String METRIC = "waiting.queue.status";
@@ -114,8 +125,7 @@ public final class QueueStatusFilter implements WebFilter {
         }
         String couponId = vars.getUriVariables().get("couponId");
         Optional<String> member = tokens.verify(
-                exchange.getRequest().getQueryParams().getFirst(TOKEN_PARAM),
-                couponId, clock.instant());
+                tokenOf(exchange.getRequest()), couponId, clock.instant());
         if (member.isEmpty()) {
             // **사유를 나누지 않는다.** 없는 토큰과 남의 토큰을 갈라 주면
             // 어느 쪽을 고쳐야 하는지 알려 주는 셈이다.
@@ -135,7 +145,9 @@ public final class QueueStatusFilter implements WebFilter {
                 .flatMap(entry -> answer(exchange, couponId, member.get(), entry))
                 // 조회가 실패해도 순번은 레디스에 남는다. 다시 물으면 된다.
                 .onErrorResume(e -> {
-                    count("unavailable");
+                    // **무엇이 실패했는지는 남긴다.** 라벨이 하나면 레디스가 끊긴
+                    // 것과 역직렬화가 깨진 것이 같은 수치로 보여, 대응이 갈린다.
+                    count("unavailable", e.getClass().getSimpleName());
                     return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
                             (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random));
                 });
@@ -168,8 +180,19 @@ public final class QueueStatusFilter implements WebFilter {
                 : state.credit();
     }
 
+    /** 헤더가 먼저다. 쿼리는 옛 클라이언트를 위한 한 릴리스짜리 폴백이다. */
+    private String tokenOf(ServerHttpRequest request) {
+        String header = request.getHeaders().getFirst(TOKEN_HEADER);
+        return header != null ? header : request.getQueryParams().getFirst(TOKEN_PARAM);
+    }
+
     /** 쿠폰 식별자를 라벨에 안 넣는다. 인증이 없어 아무 문자열이나 들어온다. */
     private void count(String outcome) {
         meters.counter(METRIC, "outcome", outcome).increment();
+    }
+
+    /** 실패 종류까지 남긴다. 종류는 우리 클래스 이름이라 카디널리티가 유계다. */
+    private void count(String outcome, String cause) {
+        meters.counter(METRIC, "outcome", outcome, "cause", cause).increment();
     }
 }

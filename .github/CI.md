@@ -56,8 +56,11 @@ TypeScript 액션을 쓴다. 재시도와 형식 변환처럼 테스트가 필�
 
 | 도구 | 설정 | 부르는 법 |
 |---|---|---|
-| CodeRabbit | `.coderabbit.yaml` | 무료 플랜은 시간당 한 건. `@coderabbitai review` |
+| CodeRabbit | `.coderabbit.yaml` | **자동 리뷰를 껐습니다.** `@coderabbitai review` 로 부릅니다 |
 | Qodo Merge | `.pr_agent.toml` | PR 에 `/review` 또는 `/improve`, 혹은 Actions 에서 직접 |
+
+무료 플랜은 시간당 리뷰 한 건입니다. PR 을 열 때마다 자동으로 쓰면 정작 고치고
+나서 다시 볼 때 쓸 몫이 없으므로, 반영한 뒤에 불러 같은 사용량으로 더 많이 봅니다.
 
 둘 다 **규칙을 복사하지 않고 `ai/rules/` 를 가리킵니다.** 사본이 생기면 둘이
 갈라지고, 그때부터 아무도 믿지 않습니다.

@@ -32,6 +32,12 @@ public final class FakeQueuePort implements QueuePort {
         return this;
     }
 
+    /** 장애가 걷힌다. 진입만 만들 수 있으면 해제 쪽 전이를 못 잰다. */
+    public FakeQueuePort 나았다() {
+        this.터뜨릴_것 = null;
+        return this;
+    }
+
     /** 판정과 실제가 갈린 구간. 스냅샷은 한 틱 늦으므로 실제로 일어난다. */
     public FakeQueuePort 가득_찼다() {
         this.가득_참 = true;

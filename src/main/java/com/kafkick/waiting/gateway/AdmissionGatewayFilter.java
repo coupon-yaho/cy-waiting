@@ -1,5 +1,8 @@
 package com.kafkick.waiting.gateway;
 
+import static java.util.concurrent.TimeUnit.NANOSECONDS;
+
+import com.kafkick.waiting.control.FailureWindow;
 import com.kafkick.waiting.control.SnapshotHolder;
 import com.kafkick.waiting.domain.admission.AdmissionDecider;
 import com.kafkick.waiting.domain.admission.AdmissionDecision;
@@ -87,6 +90,15 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
 
     /** 설정 오류를 한 번만 알린다. 라우트가 틀렸으면 늘 틀리다. */
     private final AtomicBoolean misconfigured = new AtomicBoolean();
+
+    /**
+     * fail-open 구간의 진입과 해제 (LG-2).
+     *
+     * <p>이 전이가 로그에 없으면 사후에 <b>추월이 언제 열렸는지</b>를 못 짚는다.
+     * 지표는 초 단위로 뭉개져 남고 보존 기간도 짧아, 사고 조사에서 필요한
+     * "몇 시 몇 분에 열려 얼마나 갔는가" 를 답하지 못한다.
+     */
+    private final FailureWindow failOpenWindow = FailureWindow.create();
 
     private AdmissionGatewayFilter(SnapshotHolder holder, AdmissionDecider decider,
             Clock clock, MeterRegistry meters, DoubleSupplier random,
@@ -267,6 +279,11 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                     // 뒤집히면 그 사람이 통째로 추월당한다. 계획서가 "줄이 보이면
                     // 바로 풀어도 된다" 고 적은 것은 그 한 명을 안 센 것이다.
                     latch.mark(couponId, clock.instant().getEpochSecond());
+                    // 등록이 다시 되면 fail-open 구간이 끝난 것이다. 쌍으로 안
+                    // 남기면 로그에 진입만 있고 언제 닫혔는지가 없다 (LG-2).
+                    failOpenWindow.exited().ifPresent(r -> log.info(
+                            "fail-open 해제 — {}초 동안 {}건 통과시켰다",
+                            NANOSECONDS.toSeconds(r.elapsedNanos()), r.swallowed()));
                     if (!entry.accepted()) {
                         // 2차 방어에 걸렸다. 판정은 자리가 있다고 봤지만 실제로는 없다.
                         count(AdmissionDecision.REJECT_QUEUE_FULL.name());
@@ -295,6 +312,10 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         long cap = (long) (AdmissionDecider.globalCap(meta) * FAIL_OPEN_SHARE);
         if (limiter.tryAcquire(AdmissionDecider.GLOBAL_KEY, cap,
                 clock.instant().getEpochSecond())) {
+            // 매 요청 찍으면 정작 조사가 필요한 순간에 묻힌다. 구간의 시작만 찍는다.
+            if (failOpenWindow.entered()) {
+                log.warn("fail-open 진입 — 줄 등록이 안 돼 통과시킨다, 상한={}", cap);
+            }
             count("enqueue-failed-open");
             return chain.filter(exchange);
         }

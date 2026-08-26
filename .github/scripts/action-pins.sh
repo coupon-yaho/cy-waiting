@@ -35,6 +35,10 @@ readonly LOCK=.github/action-pins.lock
 readonly OURS='coupon-yaho/'
 
 # 모든 `uses:` 를 YAML 로 열거한다. 셸 검사(workflow-shell.sh)와 같은 방식이다.
+#
+# **주석도 여기서 같이 뽑는다.** 원문을 따로 훑으면 `run: echo "uses: ..."` 같은
+# 평범한 문자열이나 주석 속 예시까지 걸려, 두 목록의 개수가 어긋나 멀쩡한
+# 저장소에서 검사가 멎는다. 노드 위치를 알면 그 줄에서만 주석을 읽으면 된다.
 list_uses() {
     python3 - <<'PY'
 import pathlib, sys
@@ -65,73 +69,48 @@ if not targets:
 
 
 def walk(node, out):
-    """`uses:` 는 워크플로(steps)와 재사용 워크플로(jobs) 양쪽에 나온다."""
-    if isinstance(node, dict):
-        value = node.get('uses')
-        if isinstance(value, str):
-            out.append(value)
-        for child in node.values():
-            walk(child, out)
-    elif isinstance(node, list):
-        for child in node:
+    """`uses` 키의 값 노드만 모은다. 위치를 알아야 주석을 읽을 수 있다."""
+    if isinstance(node, yaml.MappingNode):
+        for key, value in node.value:
+            if getattr(key, 'value', None) == 'uses' and isinstance(value, yaml.ScalarNode):
+                out.append((value.start_mark.line, value.value))
+            walk(value, out)
+    elif isinstance(node, yaml.SequenceNode):
+        for child in node.value:
             walk(child, out)
 
 
 found = []
 for path in targets:
+    text = path.read_text()
     try:
-        doc = yaml.safe_load(path.read_text())
+        root = yaml.compose(text)
     except yaml.YAMLError as e:
         print(f"::error file={path}::YAML 을 못 읽는다: {e}", file=sys.stderr)
         sys.exit(1)
+    if root is None:
+        continue
+    lines = text.splitlines()
     seen = []
-    walk(doc, seen)
-    for ref in seen:
-        found.append(f"{path}\t{ref}")
-
-if not found:
-    print("::error::`uses:` 를 하나도 못 찾았다 — 검사가 헛돈다", file=sys.stderr)
-    sys.exit(1)
+    walk(root, seen)
+    for index, ref in seen:
+        raw = lines[index] if index < len(lines) else ''
+        # 주석은 YAML 이 버리므로 그 줄에서 직접 읽는다. 값 뒤의 `#` 부터가 주석이다.
+        comment = ''
+        marker = raw.find('#', raw.find(ref) + len(ref)) if ref in raw else -1
+        if marker >= 0:
+            comment = raw[marker + 1:].strip()
+        found.append(f"{path}\t{index + 1}\t{ref}\t{comment}")
 
 print("\n".join(found))
 PY
 }
-
-# 원문을 줄 단위로 읽어 **항목마다** 따로 본다.
-#
-# **맵으로 들면 안 된다.** 참조를 키로 삼으면 같은 핀이 여러 번 나올 때 마지막에
-# 읽힌 주석이 전부를 대신한다 — 한 줄의 틀린 판 주석이 다른 줄의 맞는 주석에
-# 가려지고, 그 가림은 아무 흔적을 안 남긴다. 파일까지 키에 넣어도 한 파일 안에서
-# 같은 문제가 남는다.
-#
-# **YAML 파일만 읽는다.** 디렉터리를 통째로 훑으면 액션의 `README.md` 에 적힌
-# 예시까지 세어, 아래 개수 대조가 멀쩡한 저장소에서 실패한다.
-occurrences=$(
-    find .github/workflows -maxdepth 1 \( -name '*.yml' -o -name '*.yaml' \) -print0 2>/dev/null \
-        > /tmp/.pin-targets-$$ ; \
-    find .github/actions \( -name 'action.yml' -o -name 'action.yaml' \) -print0 2>/dev/null \
-        >> /tmp/.pin-targets-$$ ; \
-    xargs -0 -r grep -HnoE \
-        "uses:[[:space:]]*[\"']?[^\"'[:space:]]+[\"']?([[:space:]]*#[[:space:]]*\S+)?" \
-        < /tmp/.pin-targets-$$ 2>/dev/null \
-        | sed -E "s/:([0-9]+):uses:[[:space:]]*[\"']?/\t\1\t/; s/[\"']?[[:space:]]*#[[:space:]]*/\t/"
-    rm -f /tmp/.pin-targets-$$
-)
 
 refs=$(list_uses) || exit 1
 
 # 검사 대상 자체가 없는 저장소다. 위에서 0 으로 끝냈다.
 [[ -z "$refs" ]] && exit 0
 
-# **YAML 이 본 수와 원문이 본 수가 같아야 한다.** 원문 훑기가 못 보는 표기(여러
-# 줄로 쓴 값 같은 것)가 있으면 그 항목은 검사에서 통째로 빠진다.
-yaml_count=$(grep -c . <<<"$refs")
-raw_count=$(grep -c . <<<"$occurrences")
-if [[ "$yaml_count" != "$raw_count" ]]; then
-    echo "::error::uses 항목 수가 안 맞는다 — YAML $yaml_count, 원문 $raw_count." \
-         "원문 훑기가 못 보는 표기가 있다"
-    exit 1
-fi
 
 # ── 판을 원격에 물어 락파일을 다시 쓴다 ──────────────────────────────────────
 # 검사가 아니라 갱신이다. 결과는 커밋되어 사람이 diff 로 본다.
@@ -172,7 +151,7 @@ if [[ "${1:-}" == "--refresh" ]]; then
         else
             printf '%s\t%s\t%s\n' "$path" "$rev" "$version" >>"$LOCK.tmp"
         fi
-    done <<<"$occurrences"
+    done <<<"$refs"
 
     if [[ $fail -ne 0 ]]; then
         rm -f "$LOCK.tmp"
@@ -253,7 +232,7 @@ while IFS=$'\t' read -r file line ref version; do
              "주석=$version 인데 락파일=$entry 다"
         fail=1
     fi
-done <<<"$occurrences"
+done <<<"$refs"
 
 # 검사 대상이 0 이면 정규식이나 경로가 어긋난 것이다. 통과시키지 않는다.
 if [[ $checked -eq 0 ]]; then

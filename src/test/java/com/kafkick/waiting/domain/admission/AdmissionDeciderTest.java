@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.kafkick.waiting.domain.coupon.CouponState;
-import com.kafkick.waiting.domain.coupon.QueueMode;
 import com.kafkick.waiting.domain.coupon.CouponStates;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import org.junit.jupiter.api.DisplayName;
@@ -378,7 +377,7 @@ class AdmissionDeciderTest {
     @DisplayName("항상_대기라도_줄이_차면_거절한다")
     void 항상_대기라도_줄이_차면_거절한다() {
         // credit 0 이면 용량은 폴백(1 × 600)이다. 딱 그만큼 찬 줄을 만든다.
-        CouponState 찬_줄 = CouponState.withQueue(QueueMode.ALWAYS, 0, 10_000, 600);
+        CouponState 찬_줄 = CouponStates.alwaysWithQueue(0, 10_000, 600);
         AdmissionRequest req = new AdmissionRequest("c1", 찬_줄, META, false, false, false, 0, 600);
 
         assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.REJECT_QUEUE_FULL);
@@ -393,7 +392,7 @@ class AdmissionDeciderTest {
     @Test
     @DisplayName("배분_전에도_항상_대기는_줄을_세운다")
     void 배분_전에도_항상_대기는_줄을_세운다() {
-        CouponState 배분_전 = CouponState.withQueue(QueueMode.ALWAYS, 0, 10_000, 1);
+        CouponState 배분_전 = CouponStates.alwaysWithQueue(0, 10_000, 1);
         AdmissionRequest req = new AdmissionRequest("c1", 배분_전, META, false, false, false, 0, 600);
 
         assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.ENQUEUE_ALWAYS);
@@ -403,7 +402,7 @@ class AdmissionDeciderTest {
     @Test
     @DisplayName("항상_대기는_줄이_안_차면_세운다")
     void 항상_대기는_줄이_안_차면_세운다() {
-        CouponState 여유 = CouponState.withQueue(QueueMode.ALWAYS, 100, 10_000, 100);
+        CouponState 여유 = CouponStates.alwaysWithQueue(100, 10_000, 100);
         AdmissionRequest req = new AdmissionRequest("c1", 여유, META, false, false, false, 0, 600);
 
         assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.ENQUEUE_ALWAYS);

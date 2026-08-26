@@ -13,7 +13,6 @@ import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.DoubleSupplier;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -51,8 +50,6 @@ public final class QueueStatusFilter implements WebFilter {
     private static final String TOKEN_PARAM = "queueToken";
 
     private static final String METRIC = "waiting.queue.status";
-    /** 실패가 아닌 판정의 사유 자리. 태그 키 집합을 늘 같게 두려고 채운다. */
-    private static final String NO_CAUSE = "none";
 
     /** 폴링 간격의 흔들림. 같은 밴드가 한꺼번에 두드리지 않게 한다. */
     private static final PollIntervalPolicy POLL = PollIntervalPolicy.of(0.2);
@@ -154,7 +151,7 @@ public final class QueueStatusFilter implements WebFilter {
                     // **밖에서 온 이름을 그대로 안 쓴다.** 여기 올라오는 것은
                     // 레티스·네티·리액터의 클래스명이고 익명 클래스면 빈
                     // 문자열이다 — 라벨 값 집합을 우리가 안 소유하게 된다.
-                    count("unavailable", causeOf(e));
+                    count("unavailable", FailureCause.of(e));
                     return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
                             (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random));
                 });
@@ -194,24 +191,8 @@ public final class QueueStatusFilter implements WebFilter {
     }
 
     /** 쿠폰 식별자를 라벨에 안 넣는다. 인증이 없어 아무 문자열이나 들어온다. */
-    /**
-     * 실패를 우리가 정한 몇 갈래로 좁힌다.
-     *
-     * <p>어댑터가 예외를 안 번역하므로 여기서 막는다. 안 막으면 라이브러리가
-     * 클래스 하나 바꿀 때마다 라벨 값이 는다.
-     */
-    private String causeOf(Throwable e) {
-        if (e instanceof IllegalArgumentException || e instanceof IllegalStateException) {
-            return "bad-state";
-        }
-        if (e instanceof TimeoutException) {
-            return "timeout";
-        }
-        return "io";
-    }
-
     private void count(String outcome) {
-        count(outcome, NO_CAUSE);
+        count(outcome, FailureCause.NONE);
     }
 
     /**

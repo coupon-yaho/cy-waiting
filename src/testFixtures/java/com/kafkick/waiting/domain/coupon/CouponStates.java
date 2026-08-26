@@ -50,6 +50,16 @@ public final class CouponStates {
         return CouponState.offWithQueue(credit, remainingStock, waiting);
     }
 
+    /**
+     * 운영자가 항상 대기를 걸었고 줄이 이미 섰다.
+     *
+     * <p>발행 경로가 실제로 만드는 상태다 — {@code AllocationRound.stateOf} 가
+     * {@code demand.mode()} 를 그대로 싣고 그 값이 {@code ALWAYS} 일 수 있다.
+     */
+    public static CouponState alwaysWithQueue(long credit, long remainingStock, long waiting) {
+        return CouponState.withQueue(QueueMode.ALWAYS, credit, remainingStock, waiting);
+    }
+
     private CouponStates() {
     }
 }

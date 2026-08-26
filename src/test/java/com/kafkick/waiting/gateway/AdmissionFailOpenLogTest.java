@@ -16,6 +16,7 @@ import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import com.kafkick.waiting.domain.queue.EntryToken;
 import com.kafkick.waiting.domain.queue.QueueToken;
 import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Tag;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Clock;
 import java.time.Duration;
@@ -160,5 +161,25 @@ class AdmissionFailOpenLogTest {
         태운다("사람1");
 
         assertThat(남은것("fail-open")).isEmpty();
+    }
+
+    /**
+     * <b>등록 실패의 사유 라벨에 밖의 이름이 안 들어간다.</b> 판정 지표는 상태
+     * 폴링보다 트래픽이 훨씬 많아, 값이 새면 여기서 먼저 터진다.
+     */
+    @Test
+    @DisplayName("등록_실패_사유가_유계다")
+    void 등록_실패_사유가_유계다() {
+        스냅샷을_심는다();
+        줄.터진다(new UnsupportedOperationException(COUPON));
+
+        태운다("사람1");
+
+        assertThat(meters.getMeters())
+                .filteredOn(m -> "enqueue-error".equals(m.getId().getTag("outcome")))
+                .singleElement()
+                .satisfies(m -> assertThat(m.getId().getTags())
+                        .containsExactly(Tag.of("cause", "io"),
+                                Tag.of("outcome", "enqueue-error")));
     }
 }

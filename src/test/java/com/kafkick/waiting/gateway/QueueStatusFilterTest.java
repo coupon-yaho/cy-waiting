@@ -439,6 +439,28 @@ class QueueStatusFilterTest {
                                 Tag.of("outcome", "unavailable")));
     }
 
+    /**
+     * <b>우리가 안 던진 것은 전부 한 갈래다.</b> 라이브러리 예외를 종류별로
+     * 나누면 그 라이브러리가 클래스 하나 바꿀 때마다 시계열이 는다.
+     */
+    @Test
+    @DisplayName("모르는_실패는_한_갈래로_묶는다")
+    void 모르는_실패는_한_갈래로_묶는다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100));
+        줄.enqueue(COUPON, MEMBER, NO_LIMIT, 지금).block();
+        // 밖에서 온 예외를 흉내 낸다. 이름이 라벨로 새면 여기서 드러난다.
+        줄.터진다(new UnsupportedOperationException(COUPON));
+
+        토큰으로_조회한다(tokens.issue(COUPON, MEMBER, 지금));
+
+        assertThat(meters.getMeters())
+                .filteredOn(m -> "unavailable".equals(m.getId().getTag("outcome")))
+                .singleElement()
+                .satisfies(m -> assertThat(m.getId().getTags())
+                        .containsExactly(Tag.of("cause", "io"),
+                                Tag.of("outcome", "unavailable")));
+    }
+
     /** 정상 판정도 같은 태그 키 집합을 쓴다. 안 그러면 프로메테우스가 거절한다. */
     @Test
     @DisplayName("정상_판정도_사유_태그를_싣는다")
@@ -448,7 +470,9 @@ class QueueStatusFilterTest {
 
         토큰으로_조회한다(tokens.issue(COUPON, MEMBER, 지금));
 
+        // **값까지 본다.** 있기만 보면 사유 자리에 아무 값이나 넣어도 통과한다.
         assertThat(meters.getMeters())
-                .allSatisfy(m -> assertThat(m.getId().getTag("cause")).isNotNull());
+                .allSatisfy(m -> assertThat(m.getId().getTags())
+                        .contains(Tag.of("cause", "none")));
     }
 }

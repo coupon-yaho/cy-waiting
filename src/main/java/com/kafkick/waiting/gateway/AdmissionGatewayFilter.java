@@ -53,8 +53,6 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     /** 판정 결과를 사유별로 센다. <b>요청마다 로그를 남기지 않는다</b> — 낡음
      * 구간에서 로그가 폭주하고, 그때 정작 봐야 할 것이 묻힌다. */
     private static final String METRIC = "waiting.admission";
-    /** 실패가 아닌 판정의 사유 자리. 태그 키 집합을 늘 같게 두려고 채운다. */
-    private static final String NO_CAUSE = "none";
 
     /** 받아도 되는 최대 대기 시간. 넘으면 줄을 세우는 것이 되레 나쁘다. */
     static final long MAX_ETA_SEC = 600;
@@ -171,7 +169,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      * 들어오고, 그러면 지표 하나가 메모리를 밀어낸다.
      */
     private void count(String outcome) {
-        count(outcome, NO_CAUSE);
+        count(outcome, FailureCause.NONE);
     }
 
     /**
@@ -283,7 +281,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                     //
                     // 대신 예외 종류를 라벨로 센다. 레디스가 죽은 것과 인자가
                     // 틀린 것은 다르게 다뤄야 하는데, 한 숫자로는 못 가린다.
-                    count("enqueue-error", e.getClass().getSimpleName());
+                    count("enqueue-error", FailureCause.of(e));
                     return Mono.empty();
                 })
                 .switchIfEmpty(Mono.defer(() ->

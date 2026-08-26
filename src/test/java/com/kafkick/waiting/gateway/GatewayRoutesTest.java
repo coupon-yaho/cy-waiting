@@ -396,22 +396,51 @@ class GatewayRoutesTest {
     }
 
     /**
+     * 필터에 <b>실제로 실린 order</b>. 프레임워크는 선언 위치가 아니라 이 값으로
+     * 정렬하므로, 여기를 안 보면 순서를 본 것이 아니다.
+     */
+    private int 실린_순서(Route route, String 이름) {
+        return route.getFilters().stream()
+                .filter(f -> 끝까지_벗긴다(f).toString().contains(이름))
+                .map(f -> {
+                    assertThat(f).as("%s 필터에 order 가 안 실렸다", 이름)
+                            .isInstanceOf(OrderedGatewayFilter.class);
+                    return ((OrderedGatewayFilter) f).getOrder();
+                })
+                // **못 찾으면 실패다.** 없는 것을 -1 같은 값으로 대신하면 필터가
+                // 통째로 빠져도, 이름이 바뀌어도 이 시험이 조용히 통과한다.
+                .findFirst()
+                .orElseThrow(() -> new AssertionError(이름 + " 필터가 발급 라우트에 없다"));
+    }
+
+    /**
      * <b>판정이 서킷보다 앞이어야 한다.</b> 뒤로 가면 서킷이 열린 동안 판정이
-     * 아예 안 돌아, 이 노드가 줄을 세운 적 없는 것으로 보이고 래치가 표식을 못
-     * 받는다 — 다음 창의 신규 유입이 방금 줄 선 사람을 추월한다 (불변식 4).
+     * 안 돌아 래치가 표식을 못 받고, 다음 창의 신규 유입이 방금 줄 선 사람을
+     * 추월한다 (불변식 4).
      *
-     * <p>붙었는지만 보면 이 순서가 안 고정된다. 둘 다 order 0 이면 선언 위치를
-     * 옮기는 것만으로 뒤집히고, 그때도 시험은 초록이다.
+     * <p><b>목록의 자리가 아니라 실린 order 를 본다</b> — 프레임워크가 그 값으로
+     * 다시 정렬한다. 자리만 보면 두 인자를 서로 바꿔 단 회귀를 못 잡는다.
      */
     @Test
     @DisplayName("판정이_서킷보다_앞이다")
     void 판정이_서킷보다_앞이다() {
-        List<String> 이름 = 필터_이름(잡는_라우트(HttpMethod.POST, "/api/v1/coupons/c1/issue"));
+        Route 발급 = 잡는_라우트(HttpMethod.POST, "/api/v1/coupons/c1/issue");
 
-        assertThat(이름.indexOf("Admission"))
-                .isLessThan(이름.stream()
-                        .filter(n -> n.contains("CircuitBreaker"))
-                        .findFirst().map(이름::indexOf).orElse(-1));
+        assertThat(실린_순서(발급, "Admission"))
+                .isLessThan(실린_순서(발급, "CircuitBreaker"));
+    }
+
+    /**
+     * 값이 계약에서 나와야 한다. 라우트가 우연히 맞는 숫자를 직접 적으면
+     * {@link FilterOrder} 를 고쳐도 라우트는 안 따라오고, 둘이 갈린 채로 돈다.
+     */
+    @Test
+    @DisplayName("라우트가_계약에_적힌_순서를_그대로_단다")
+    void 라우트가_계약에_적힌_순서를_그대로_단다() {
+        Route 발급 = 잡는_라우트(HttpMethod.POST, "/api/v1/coupons/c1/issue");
+
+        assertThat(실린_순서(발급, "Admission")).isEqualTo(FilterOrder.ROUTE_ADMISSION);
+        assertThat(실린_순서(발급, "CircuitBreaker")).isEqualTo(FilterOrder.ROUTE_CIRCUIT);
     }
 
     /** 값 자체도 못 박는다. 순서만 보면 둘 다 0 으로 되돌려도 이번엔 통과한다. */

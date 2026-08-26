@@ -60,16 +60,16 @@ public final class SnapshotMetrics {
     }
 
     /**
-     * 재료가 얼마나 낡았는지를 냅니다.
+     * 재료가 얼마나 낡았는지를 냅니다. 판정이 낡음으로 넘어가는 순간을 짚는 값입니다.
      *
-     * <p>판정이 낡음 경로로 넘어가는 순간을 사후에 짚는 값입니다.
-     *
-     * <p><b>못 받은 구간은 -1 입니다.</b> 기준선이 {@code Instant.EPOCH} 라 그대로
-     * 내면 기동할 때마다 17억이 나가고, 낡음 알람이 전부 울립니다.
+     * <p><b>못 받았으면 -1 입니다.</b> 기준선이 {@code Instant.EPOCH} 라 그대로 내면
+     * 17억이 나갑니다. 가르는 기준은 루프가 돌았는지가 아니라 <b>재료를 받았는지</b>
+     * 입니다 — 실패해도 루프는 돌아서, 첫 틱으로 가르면 레디스가 죽은 채 뜬 노드가
+     * 곧바로 17억을 냅니다. 헬스 지시자가 같은 기준을 씁니다.
      */
     private double ageSeconds() {
         SnapshotHolder.View view = holder.view();
-        return view.isBeforeFirstTick() ? UNKNOWN : view.dataAge().toMillis() / 1000.0;
+        return view.snapshot().isPublished() ? view.dataAge().toMillis() / 1000.0 : UNKNOWN;
     }
 
     /** 보고 있는 쿠폰 수입니다. 0 이면 배분이 멎었거나 활성 목록이 빈 것입니다. */

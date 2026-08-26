@@ -79,10 +79,11 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     private static final int LATCH_MAX_KEYS = 10_000;
 
     /**
-     * 한 건이 뒷단에 걸려 있을 수 있는 시간(초).
+     * 한 건이 뒷단에 걸려 있을 수 있는 시간(초). 상한은 초당 예산 × 이 값이다.
      *
-     * <p>서킷의 느림 임계(1.5초)보다 넉넉해야 합니다. 그보다 짧게 잡으면 격벽이
-     * 서킷보다 먼저 막아, 느린 뒷단이 서킷에 집계되지 않고 사라집니다.
+     * <p>유입은 같은 예산이 이미 조이므로 걸려 있는 수는 <b>예산 × 지연</b>이고,
+     * 이 값이 곧 격벽이 막기 시작하는 지연이다. 서킷의 느림 임계보다 커야
+     * 느린 뒷단이 서킷에 집계된 뒤에 막힌다 — 6.8.1 에서 튜너블로 뺀다.
      */
     private static final long MAX_IN_FLIGHT_SEC = 3;
 
@@ -267,7 +268,10 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     private Mono<Void> route(ServerWebExchange exchange, GatewayFilterChain chain,
             AdmissionDecision decision, String couponId, CouponState state, SnapshotMeta meta) {
         if (decision.isPass()) {
-            return forward(exchange, chain, couponId, state.credit());
+            // **판정이 쓴 예산을 그대로 받는다.** 여기서 credit 을 다시 꺼내면
+            // 한산 통과가 0 을 받고, 0 은 상한으로 쓰이는 순간 전면 차단이다 (I1).
+            return forward(exchange, chain, couponId,
+                    decider.admittedRatePerSec(decision, state, meta));
         }
         if (decision.isEnqueue()) {
             return enqueue(exchange, chain, couponId, state, meta);
@@ -358,8 +362,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                 log.warn("fail-open 진입 — 줄 등록이 안 돼 통과시킨다, 상한={}", cap);
             }
             count("enqueue-failed-open");
-            // 줄을 못 세운 구간이라 이 쿠폰의 크레딧을 못 믿는다. 폴백을 쓴다.
-            return forward(exchange, chain, couponId, 0);
+            // **연 예산이 곧 격벽의 밑변이다.** 여기서 0 을 넘기면 최소 배수
+            // 속도로 떨어져, 상한을 두고 연 몫의 대부분이 격벽에서 다시 막힌다.
+            return forward(exchange, chain, couponId, cap);
         }
         count("enqueue-failed-shed");
         return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
@@ -428,7 +433,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      * 먼저 태워 그 사람의 진짜 시도를 재생으로 버리게 만들 수 있다.
      */
     private Mono<Void> forward(ServerWebExchange exchange, GatewayFilterChain chain,
-            String couponId, long credit) {
+            String couponId, long ratePerSec) {
         HttpHeaders headers = exchange.getRequest().getHeaders();
         String memberId = headers.getFirst(MEMBER_ID);
         if (memberId == null) {
@@ -439,7 +444,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         // **초당 건수로는 못 막는 것이 있다.** 초당 100건이어도 각각 10초 걸리면
         // 동시 1,000건이다. 느려진 뒷단이 커넥션을 다 붙잡으면 한산한 쿠폰의
         // 통과 경로까지 같이 죽는다.
-        if (!bulkhead.tryEnter(couponId, inFlightCap(credit))) {
+        if (!bulkhead.tryEnter(couponId, inFlightCap(ratePerSec))) {
             count("bulkhead-full");
             return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
                     retryAfterSec(AdmissionDecision.REJECT_OVERLOAD, random));
@@ -457,15 +462,19 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     /**
      * 이 쿠폰이 동시에 걸어 둘 수 있는 건수.
      *
-     * <p>초당 빠지는 수(credit)에 <b>한 건이 걸려 있을 수 있는 시간</b>을 곱한다.
-     * 크레딧이 줄면 격벽도 같이 조여진다 (6.3.3).
+     * <p>이 통과를 낸 <b>초당 예산</b>에 한 건이 걸려 있을 수 있는 시간을 곱한다.
+     * 예산이 줄면 격벽도 같이 조여진다 (6.3.3).
      *
-     * <p><b>배분 전에는 폴백을 쓴다.</b> 크레딧이 0 인 구간이 실제로 있고, 그때
-     * 0 을 상한으로 쓰면 전면 차단이다 — 등록 경로가 같은 이유로 폴백을 쓴다.
+     * <p><b>예산이 0 인 구간에는 폴백을 쓴다.</b> 재료가 아직 없는 기동 직후가
+     * 그렇고, 0 을 상한으로 쓰면 전면 차단이다 — 등록 경로와 같은 폴백이다.
      */
-    private long inFlightCap(long credit) {
-        long perSecond = credit > 0 ? credit : AdmissionDecider.MIN_CREDIT;
-        return perSecond * MAX_IN_FLIGHT_SEC;
+    private long inFlightCap(long ratePerSec) {
+        long perSecond = ratePerSec > 0 ? ratePerSec : AdmissionDecider.MIN_CREDIT;
+        // **곱이 넘치면 음수가 되고, 음수 상한은 전면 차단이다.** 예산은 밖에서
+        // 오는 globalCredit 에서 나오므로 여기서 막는다.
+        return perSecond > Long.MAX_VALUE / MAX_IN_FLIGHT_SEC
+                ? Long.MAX_VALUE
+                : perSecond * MAX_IN_FLIGHT_SEC;
     }
 
     private String pathVariable(ServerWebExchange exchange) {

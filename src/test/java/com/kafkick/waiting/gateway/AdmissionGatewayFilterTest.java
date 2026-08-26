@@ -1293,6 +1293,29 @@ class AdmissionGatewayFilterTest {
     }
 
     /**
+     * <b>연 예산이 곧 격벽의 밑변입니다.</b> 여기서 최소 배수 속도로 떨어지면
+     * 상한을 두고 연 몫의 대부분이 격벽에서 다시 막힙니다 — 레디스가 흔들리는
+     * 구간에 그게 곧 전면 차단입니다.
+     */
+    @Test
+    @DisplayName("장애_개방은_연_예산만큼_격벽도_연다")
+    void 장애_개방은_연_예산만큼_격벽도_연다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000_000, 5_000), META);
+        줄.터진다(new IllegalStateException("레디스가 죽었다"));
+        for (int i = 0; i < 10; i++) {
+            Sinks.Empty<Void> 안_끝남 = Sinks.empty();
+            붙잡은_자리.add(안_끝남);
+            filter.filter(요청(COUPON, "사람" + i), e -> 안_끝남.asMono()).subscribe();
+        }
+
+        MockServerWebExchange 열한번째 = 요청(COUPON, "사람10");
+        filter.filter(열한번째, e -> Mono.empty()).block();
+
+        assertThat(열한번째.getResponse().getStatusCode()).isNull();
+        풀어_준다();
+    }
+
+    /**
      * <b>끝나면 자리가 돌아와야 합니다.</b> 안 돌려주면 격벽이 한 번 차고 나서
      * 영영 안 열리고, 그 쿠폰은 뒷단이 멀쩡해져도 계속 막힙니다.
      */

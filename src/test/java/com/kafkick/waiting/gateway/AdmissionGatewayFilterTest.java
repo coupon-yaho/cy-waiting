@@ -88,9 +88,13 @@ class AdmissionGatewayFilterTest {
 
     private final SecondWindowLimiter limiter = SecondWindowLimiter.withMaxKeys(10_000);
 
+    /** 입장 토큰과 같은 비밀키다. 나누면 운영자가 하나만 넣은 채로 나간다. */
+    private final IdempotencyKey 멱등키 =
+            IdempotencyKey.of("not-a-real-secret-0123456789abcdef");
+
     private final AdmissionGatewayFilter filter = AdmissionGatewayFilter.of(
             holder, AdmissionDecider.of(limiter, IDLE_RATIO),
-            Clock.fixed(지금, ZoneOffset.UTC), meters, 줄, tokens, limiter, entryTokens);
+            Clock.fixed(지금, ZoneOffset.UTC), meters, 줄, tokens, limiter, entryTokens, 멱등키);
 
     private final AtomicReference<Boolean> 뒷단에_닿음 = new AtomicReference<>(false);
 
@@ -328,7 +332,7 @@ class AdmissionGatewayFilterTest {
         MutableClock 시계 = MutableClock.at(지금);
         AdmissionGatewayFilter f = AdmissionGatewayFilter.of(
                 holder, AdmissionDecider.of(limiter, IDLE_RATIO),
-                시계, meters, () -> 0.5, 줄, tokens, limiter, entryTokens);
+                시계, meters, () -> 0.5, 줄, tokens, limiter, entryTokens, 멱등키);
         스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
         태운다(f, COUPON);
 
@@ -353,7 +357,7 @@ class AdmissionGatewayFilterTest {
                 Duration.ofSeconds(3), 홀더_유효_한계, 시계);
         AdmissionGatewayFilter f = AdmissionGatewayFilter.of(
                 같은_시계_홀더, AdmissionDecider.of(limiter, IDLE_RATIO),
-                시계, meters, () -> 0.5, 줄, tokens, limiter, entryTokens);
+                시계, meters, () -> 0.5, 줄, tokens, limiter, entryTokens, 멱등키);
         같은_시계_홀더.replace(new GatewaySnapshot(
                 Map.of(COUPON, CouponStates.queueing(10, 1_000, 5_000)), META, 지금));
         태운다(f, COUPON);
@@ -381,7 +385,7 @@ class AdmissionGatewayFilterTest {
         SnapshotHolder 소수_홀더 = SnapshotHolder.of(Duration.ofSeconds(3), 한계, 시계);
         AdmissionGatewayFilter f = AdmissionGatewayFilter.of(
                 소수_홀더, AdmissionDecider.of(limiter, IDLE_RATIO),
-                시계, meters, () -> 0.5, 줄, tokens, limiter, entryTokens);
+                시계, meters, () -> 0.5, 줄, tokens, limiter, entryTokens, 멱등키);
         // **초 경계 한가운데서 줄을 세운다.** 래치는 초로 자른 시각을 재므로,
         // 초의 앞부분이 잘려 나간 만큼 실효 수명이 짧아진다. 경계에서 세우면
         // 그 손실이 0 이라 절삭을 못 잰다.
@@ -746,7 +750,7 @@ class AdmissionGatewayFilterTest {
         // 안 알려 주면 각자 마음대로 돌아온다. 그 파도가 다음 거절을 만든다.
         AdmissionGatewayFilter f = AdmissionGatewayFilter.of(
                 holder, AdmissionDecider.of(limiter, IDLE_RATIO),
-                Clock.fixed(지금, ZoneOffset.UTC), meters, () -> 0.5, 줄, tokens, limiter, entryTokens);
+                Clock.fixed(지금, ZoneOffset.UTC), meters, () -> 0.5, 줄, tokens, limiter, entryTokens, 멱등키);
         스냅샷을_심는다(CouponStates.queueing(1, 1_000, 5_000));
 
         MockServerWebExchange exchange = 요청(COUPON);
@@ -892,7 +896,7 @@ class AdmissionGatewayFilterTest {
         MutableClock 시계 = MutableClock.at(지금);
         AdmissionGatewayFilter f = AdmissionGatewayFilter.of(
                 holder, AdmissionDecider.of(limiter, IDLE_RATIO), 시계, meters, () -> 0.5,
-                줄, tokens, limiter, entryTokens);
+                줄, tokens, limiter, entryTokens, 멱등키);
         스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
         // 래치가 실제로 걸렸는지부터 본다. 안 걸렸으면 뒤의 통과가 아무 뜻이 없다.
         assertThat(태운다(f, COUPON)).matches(AdmissionDecision::isEnqueue, "대기 판정");
@@ -923,7 +927,7 @@ class AdmissionGatewayFilterTest {
         MutableClock 시계 = MutableClock.at(지금);
         AdmissionGatewayFilter f = AdmissionGatewayFilter.of(
                 holder, AdmissionDecider.of(limiter, IDLE_RATIO),
-                시계, meters, () -> 0.5, 줄, tokens, limiter, entryTokens);
+                시계, meters, () -> 0.5, 줄, tokens, limiter, entryTokens, 멱등키);
         스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
         태운다(f, COUPON);
 
@@ -949,7 +953,7 @@ class AdmissionGatewayFilterTest {
         MutableClock 시계 = MutableClock.at(지금);
         AdmissionGatewayFilter f = AdmissionGatewayFilter.of(
                 holder, AdmissionDecider.of(limiter, IDLE_RATIO),
-                시계, meters, () -> 0.5, 줄, tokens, limiter, entryTokens);
+                시계, meters, () -> 0.5, 줄, tokens, limiter, entryTokens, 멱등키);
         // 스냅샷이 이미 줄을 보고 있는 상태에서 한 명 더 넣는다.
         스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
         태운다(f, COUPON);
@@ -1030,7 +1034,7 @@ class AdmissionGatewayFilterTest {
         Instant 낡은_발행 = 지금.minusSeconds(3_600);
         MutableClock 시계 = MutableClock.at(지금);
         AdmissionGatewayFilter 시계를_쓰는_필터 = AdmissionGatewayFilter.of(
-                holder, AdmissionDecider.of(limiter, IDLE_RATIO), 시계, meters, 줄, tokens, limiter, entryTokens);
+                holder, AdmissionDecider.of(limiter, IDLE_RATIO), 시계, meters, 줄, tokens, limiter, entryTokens, 멱등키);
         holder.replace(new GatewaySnapshot(
                 Map.of(COUPON, CouponStates.idle(1_000_000)),
                 new SnapshotMeta(1, 1), 낡은_발행));

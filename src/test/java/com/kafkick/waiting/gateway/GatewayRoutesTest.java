@@ -62,7 +62,8 @@ class GatewayRoutesTest {
                     QueueToken.of("not-a-real-secret-0123456789abcdef"),
                     // **판정과 같은 인스턴스다.** 따로 만들면 한 초에 두 예산이 나간다.
                     공유_리미터,
-                    EntryToken.of("not-a-real-secret-0123456789abcdef")));
+                    EntryToken.of("not-a-real-secret-0123456789abcdef"),
+                    IdempotencyKey.of("not-a-real-secret-0123456789abcdef")));
 
     /**
      * 재료를 한 번도 못 받은 홀더. 이 시험은 <b>라우트가 무엇을 잡는가</b>만 보므로

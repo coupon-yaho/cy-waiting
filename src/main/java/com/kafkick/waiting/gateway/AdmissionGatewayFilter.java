@@ -16,6 +16,7 @@ import com.kafkick.waiting.domain.queue.EtaPolicy;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import com.kafkick.waiting.domain.queue.QueueToken;
 import io.micrometer.core.instrument.MeterRegistry;
+import org.springframework.http.HttpHeaders;
 import java.time.Clock;
 import java.util.Map;
 import java.util.Objects;
@@ -86,6 +87,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     private final EntryToken entryTokens;
     private final SecondWindowLimiter limiter;
     private final EnqueueLatch latch;
+
+    /** 뒷단의 멱등성이 작동할 근거. 같은 시도에 같은 값을 준다 (A-10). */
+    private final IdempotencyKey idempotency;
     private final ApiError error;
     private final QueueResponse waiting = QueueResponse.create();
 
@@ -104,7 +108,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     private AdmissionGatewayFilter(SnapshotHolder holder, AdmissionDecider decider,
             Clock clock, MeterRegistry meters, DoubleSupplier random,
             QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter,
-            EntryToken entryTokens, LongSupplier ticker) {
+            EntryToken entryTokens, IdempotencyKey idempotency, LongSupplier ticker) {
         this.holder = Objects.requireNonNull(holder, "holder 는 필수다");
         this.failOpenWindow = FailureWindow.of(ticker);
         this.decider = Objects.requireNonNull(decider, "decider 는 필수다");
@@ -120,6 +124,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         // 그 차이가 그대로 추월 창이 된다. 두 값이 다른 클래스에 있으면 조용히
         // 갈라지므로, 한계를 정한 쪽에서 끌어온다.
         this.latch = EnqueueLatch.covering(LATCH_MAX_KEYS, holder.dataStaleAfter());
+        this.idempotency = Objects.requireNonNull(idempotency, "idempotency 는 필수다");
         this.error = ApiError.of(clock);
     }
 
@@ -127,26 +132,28 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     @Autowired
     AdmissionGatewayFilter(SnapshotHolder holder, AdmissionDecider decider, Clock clock,
             MeterRegistry meters, QueuePort queue, QueueToken tokens,
-            SecondWindowLimiter limiter, EntryToken entryTokens) {
+            SecondWindowLimiter limiter, EntryToken entryTokens,
+            IdempotencyKey idempotency) {
         this(holder, decider, clock, meters,
                 () -> ThreadLocalRandom.current().nextDouble(), queue, tokens, limiter,
-                entryTokens, System::nanoTime);
+                entryTokens, idempotency, System::nanoTime);
     }
 
     public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider,
             Clock clock, MeterRegistry meters, QueuePort queue, QueueToken tokens,
-            SecondWindowLimiter limiter, EntryToken entryTokens) {
+            SecondWindowLimiter limiter, EntryToken entryTokens,
+            IdempotencyKey idempotency) {
         return new AdmissionGatewayFilter(holder, decider, clock, meters, queue, tokens, limiter,
-                entryTokens);
+                entryTokens, idempotency);
     }
 
     /** 난수원을 받는다. 고정하지 못하면 흔들림이 실제로 붙었는지 못 잰다 (TS-4). */
     public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider,
             Clock clock, MeterRegistry meters, DoubleSupplier random,
             QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter,
-            EntryToken entryTokens) {
+            EntryToken entryTokens, IdempotencyKey idempotency) {
         return new AdmissionGatewayFilter(holder, decider, clock, meters, random, queue,
-                tokens, limiter, entryTokens, System::nanoTime);
+                tokens, limiter, entryTokens, idempotency, System::nanoTime);
     }
 
     /**
@@ -159,9 +166,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider,
             Clock clock, MeterRegistry meters, DoubleSupplier random,
             QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter,
-            EntryToken entryTokens, LongSupplier ticker) {
+            EntryToken entryTokens, IdempotencyKey idempotency, LongSupplier ticker) {
         return new AdmissionGatewayFilter(holder, decider, clock, meters, random, queue,
-                tokens, limiter, entryTokens, ticker);
+                tokens, limiter, entryTokens, idempotency, ticker);
     }
 
     /**
@@ -247,7 +254,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     private Mono<Void> route(ServerWebExchange exchange, GatewayFilterChain chain,
             AdmissionDecision decision, String couponId, CouponState state, SnapshotMeta meta) {
         if (decision.isPass()) {
-            return chain.filter(exchange);
+            return chain.filter(withIdempotencyKey(exchange, couponId));
         }
         if (decision.isEnqueue()) {
             return enqueue(exchange, chain, couponId, state, meta);
@@ -397,6 +404,25 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         return entryTokens.verify(presented, couponId, clock.instant())
                 .filter(owner -> owner.equals(memberId))
                 .isPresent();
+    }
+
+    /**
+     * 뒷단이 같은 시도를 두 번 처리하지 않게 하는 키를 싣는다.
+     *
+     * <p><b>클라이언트가 준 값을 안 믿는다.</b> 그대로 쓰면 매 요청 다른 값을 넣어
+     * 멱등성을 우회하고, 끊긴 발급을 두 번 받아 갈 수 있다. 재사용 방지는 발급
+     * 계층이 지되(A-10) 그 멱등성이 작동할 근거는 우리가 준다.
+     */
+    private ServerWebExchange withIdempotencyKey(ServerWebExchange exchange, String couponId) {
+        HttpHeaders headers = exchange.getRequest().getHeaders();
+        String key = idempotency.of(couponId,
+                String.valueOf(headers.getFirst(MEMBER_ID)),
+                // 토큰 없이 통과하는 경로(R1·fail-open)도 있다. 그 사람은 차례가
+                // 온 것이 아니라 한산해서 지나가는 것이라 시도를 가를 것이 없다.
+                String.valueOf(headers.getFirst(ENTRY_TOKEN)));
+        return exchange.mutate()
+                .request(r -> r.headers(h -> h.set(IdempotencyKey.HEADER, key)))
+                .build();
     }
 
     private String pathVariable(ServerWebExchange exchange) {

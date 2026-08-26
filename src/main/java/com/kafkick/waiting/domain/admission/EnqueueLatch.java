@@ -82,8 +82,8 @@ public final class EnqueueLatch {
     }
 
     /**
-     * 아직 걸려 있는가. <b>미래의 표식은 안 믿는다</b> — 시계가 뒤로 가면 그
-     * 표식이 영원히 살아 한산한 쿠폰이 영영 안 풀린다.
+     * 아직 걸려 있는가. <b>수명만큼은 뒤로 간 시계도 걸린 것으로 본다</b> —
+     * 거기서 풀어 주면 그 방향이 추월이다. 더 앞선 표식은 잘못 찍힌 값이다.
      */
     public boolean latched(String couponKey, long epochSecond) {
         Long at = marked.get(couponKey);
@@ -91,7 +91,12 @@ public final class EnqueueLatch {
             return false;
         }
         long age = epochSecond - at;
-        if (age >= 0 && age < ttlSec) {
+        // **조금 뒤로 간 시계에서는 안 풀어 준다.** 거기서 푸는 것은 추월
+        // 방향이고, 오판은 몇 명이 괜히 줄 서는 쪽으로만 해야 한다.
+        //
+        // 다만 무한정은 아니다. 수명만큼 앞선 표식은 시계 흔들림이 아니라 잘못
+        // 찍힌 값이라, 그대로 두면 그 쿠폰이 영영 안 풀린다.
+        if (age < ttlSec && age > -ttlSec) {
             return true;
         }
         // **만료된 것은 그 자리에서 지운다.** 안 지우면 맵이 프로세스 수명 동안

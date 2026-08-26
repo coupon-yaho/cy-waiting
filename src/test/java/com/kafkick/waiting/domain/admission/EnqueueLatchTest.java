@@ -65,7 +65,7 @@ class EnqueueLatchTest {
         assertThat(latch.latched("다른쿠폰", 100)).isFalse();
     }
 
-    /** 시계가 뒤로 가도 미래의 표식이 영원히 살면 안 된다. */
+    /** 수명보다 멀리 앞선 표식은 시계 흔들림이 아니라 잘못 찍힌 값이다. */
     @Test
     @DisplayName("시계가_뒤로_가도_영원히_안_산다")
     void 시계가_뒤로_가도_영원히_안_산다() {
@@ -215,5 +215,20 @@ class EnqueueLatchTest {
         latch.latched(COUPON, 200);
 
         assertThat(latch.size()).isZero();
+    }
+
+    /**
+     * <b>조금 뒤로 간 시계에서는 안 풀어 준다.</b> 거기서 푸는 것은 추월
+     * 방향이다 — 오판은 몇 명이 괜히 줄 서는 쪽으로만 해야 한다.
+     */
+    @Test
+    @DisplayName("시계가_조금_뒤로_가도_안_풀린다")
+    void 시계가_조금_뒤로_가도_안_풀린다() {
+        latch.mark(COUPON, 100);
+
+        // 1 초 되감김. NTP 스텝 보정에서 흔한 폭이다.
+        assertThat(latch.latched(COUPON, 99)).isTrue();
+        // 수명(3초)만큼 앞선 것은 안 받는다. 경계를 한 칸 넘긴다.
+        assertThat(latch.latched(COUPON, 97)).isFalse();
     }
 }

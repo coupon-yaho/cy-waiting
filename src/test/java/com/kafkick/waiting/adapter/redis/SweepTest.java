@@ -36,6 +36,12 @@ class SweepTest extends RedisContainerSupport {
 
     /** 시각을 주입한다 — 실제 시계에 기대면 만료 시험이 흔들린다 (TS-4). */
     private static final long NOW = 1_800_000_000L;
+
+    /** 보관 기간을 확실히 넘긴 시각. <b>손으로 안 적는다</b> — 기간이 늘면 같이 는다. */
+    private static final long 만료된_시각 = NOW - GraceRetention.SECONDS - 1;
+
+    /** 아직 안 넘긴 시각. 경계 바로 안쪽이라 기간이 늘어도 신선하다. */
+    private static final long 신선한_시각 = NOW - 1;
     /** 보관 기간. <b>손으로 안 적는다</b> — 토큰 수명과의 관계가 도메인에 있다. */
     private static final String RETENTION = String.valueOf(GraceRetention.SECONDS);
     private static final String BUDGET = "1000";
@@ -165,8 +171,8 @@ class SweepTest extends RedisContainerSupport {
     @Test
     @DisplayName("만료된_유예_기록이_정리된다")
     void 만료된_유예_기록이_정리된다() {
-        redis.opsForHash().put(GRACE, "old", String.valueOf(NOW - 400)).block(WAIT);
-        redis.opsForHash().put(GRACE, "fresh", String.valueOf(NOW - 100)).block(WAIT);
+        redis.opsForHash().put(GRACE, "old", String.valueOf(만료된_시각)).block(WAIT);
+        redis.opsForHash().put(GRACE, "fresh", String.valueOf(신선한_시각)).block(WAIT);
 
         assertThat(expired(sweep("10"))).isOne();
         assertThat(redis.opsForHash().hasKey(GRACE, "old").block(WAIT)).isFalse();
@@ -178,7 +184,7 @@ class SweepTest extends RedisContainerSupport {
     void 유예_기록이_무한히_쌓이지_않는다() {
         // 만료가 없으면 이 해시가 영원히 자란다 (RD-7).
         for (int i = 0; i < 50; i++) {
-            redis.opsForHash().put(GRACE, "old" + i, String.valueOf(NOW - 1000)).block(WAIT);
+            redis.opsForHash().put(GRACE, "old" + i, String.valueOf(만료된_시각)).block(WAIT);
         }
 
         sweep("10");
@@ -215,7 +221,7 @@ class SweepTest extends RedisContainerSupport {
         // COUNT 는 힌트지 상한이 아니다. 받은 것 중 예산만큼만 지워야
         // 한 번의 실행이 유계다.
         for (int i = 0; i < 40; i++) {
-            redis.opsForHash().put(GRACE, "old" + i, String.valueOf(NOW - 1000)).block(WAIT);
+            redis.opsForHash().put(GRACE, "old" + i, String.valueOf(만료된_시각)).block(WAIT);
         }
 
         assertThat(expired(sweep("10", "5", "0"))).isEqualTo(5);
@@ -228,7 +234,7 @@ class SweepTest extends RedisContainerSupport {
         // 한 번에 다 안 지우는 대신 다음 틱이 이어받는다. 커서가 돌지
         // 않으면 같은 앞부분만 계속 보고 뒤는 영영 안 지워진다.
         for (int i = 0; i < 40; i++) {
-            redis.opsForHash().put(GRACE, "old" + i, String.valueOf(NOW - 1000)).block(WAIT);
+            redis.opsForHash().put(GRACE, "old" + i, String.valueOf(만료된_시각)).block(WAIT);
         }
 
         String cursor = "0";

@@ -221,6 +221,7 @@ CI 가 브랜치명에서 CY-42 를 뽑아
 | `phase-2` | [`CY-19`](https://shseol.atlassian.net/browse/CY-19) |
 | `phase-3` | [`CY-227`](https://shseol.atlassian.net/browse/CY-227) |
 | `phase-5` | [`CY-22`](https://shseol.atlassian.net/browse/CY-22) |
+| `phase-6` | [`CY-612`](https://shseol.atlassian.net/browse/CY-612) |
 | `phase-8` | [`CY-24`](https://shseol.atlassian.net/browse/CY-24) |
 | `phase-9` | [`CY-25`](https://shseol.atlassian.net/browse/CY-25) |
 | `phase-10` | [`CY-26`](https://shseol.atlassian.net/browse/CY-26) |

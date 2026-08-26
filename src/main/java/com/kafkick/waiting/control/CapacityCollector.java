@@ -38,12 +38,13 @@ public final class CapacityCollector {
 
     /** 마지막으로 성공한 관측. 읽기가 실패하면 여기로 되돌아간다. */
     /**
-     * 유휴 비율의 역수. 노드당 몫이 이만큼은 돼야 한산 통과 상한이 1 이 된다.
+     * 유휴 비율(B-13 의 0.7)의 역수를 올림한 값. 노드당 몫이 이만큼은 돼야
+     * 한산 통과 상한이 1 이 된다.
      *
      * <p>비율은 게이트웨이가 주입받는 값이라 여기서 못 읽는다. 갈라지면 하한이
      * 다시 전면 차단이 되므로, 바꿀 때 두 곳을 같이 본다.
      */
-    public static final int IDLE_DIVISOR = 5;
+    public static final int IDLE_DIVISOR = 2;
 
     /**
      * 못 읽어도 직전 값을 그대로 쓰는 판의 수.

@@ -373,7 +373,8 @@ for check in \
     "문서 링크:.github/scripts/doc-links.sh" \
     "작업 로그:.github/scripts/journal-index.sh --check" \
     "워크플로 셸:.github/scripts/workflow-shell.sh" \
-    "Loki 라벨:.github/scripts/loki-labels.sh"
+    "Loki 라벨:.github/scripts/loki-labels.sh" \
+    "대시보드 지표:.github/scripts/dashboard-queries.sh"
 do
     name="${check%%:*}"
     cmd="${check#*:}"

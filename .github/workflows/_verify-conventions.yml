@@ -236,6 +236,11 @@ jobs:
       - name: Loki 라벨 검사
         run: .github/scripts/loki-labels.sh
 
+      # **없는 지표를 보는 패널은 영원히 빈 화면이다.** 대시보드를 열어 보기
+      # 전까지 아무도 모르고, 지표 이름을 바꾸면 특히 그렇다 (LG-11).
+      - name: 대시보드 지표 검사
+        run: .github/scripts/dashboard-queries.sh
+
       # 파일만 확인하면 `](other.md#anchor)` 의 앵커가 사라져도 통과한다.
       # 링크는 열리는데 엉뚱한 위치로 가므로 읽는 사람만 손해다.
       - name: 문서 앵커 검사

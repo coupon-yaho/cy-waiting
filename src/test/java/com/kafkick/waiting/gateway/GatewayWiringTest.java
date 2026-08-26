@@ -5,6 +5,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import java.time.Duration;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.cloud.gateway.handler.RoutePredicateHandlerMapping;
@@ -37,6 +40,12 @@ class GatewayWiringTest {
 
     @Autowired
     private RouterFunctionMapping routerFunctionMapping;
+
+    @Autowired
+    private BackendCircuitProperties circuit;
+
+    @Autowired
+    private CircuitBreakerRegistry circuitRegistry;
 
     @Autowired
     private RoutePredicateHandlerMapping gatewayMapping;
@@ -110,5 +119,32 @@ class GatewayWiringTest {
     @DisplayName("fallback_주소가_한_곳에서_나온다")
     void fallback_주소가_한_곳에서_나온다() {
         assertThat(BackendFallbackRoutes.FALLBACK_ISSUE).isEqualTo("/fallback/issue");
+    }
+
+    /**
+     * <b>설정이 실제로 실려야 한다.</b> yml 의 키가 하나라도 어긋나면 그 값만
+     * 조용히 라이브러리 기본값으로 돌아간다 — 건수 창 100 은 100K RPS 에서 수 ms
+     * 분량이라 순간 변동에 서킷이 열린다. 기동은 성공한다.
+     */
+    @Test
+    @DisplayName("서킷_설정이_yml에서_올라온다")
+    void 서킷_설정이_yml에서_올라온다() {
+        assertThat(circuit.slidingWindowSize()).isEqualTo(Duration.ofSeconds(10));
+        assertThat(circuit.minimumNumberOfCalls()).isEqualTo(20);
+        assertThat(circuit.failureRateThreshold()).isEqualTo(50f);
+        assertThat(circuit.timeout()).isEqualTo(Duration.ofSeconds(3));
+        assertThat(circuit.slowCallDurationThreshold()).isEqualTo(Duration.ofMillis(1500));
+        assertThat(circuit.slowCallRateThreshold()).isEqualTo(50f);
+        assertThat(circuit.waitDurationInOpenState()).isEqualTo(Duration.ofSeconds(5));
+        assertThat(circuit.permittedNumberOfCallsInHalfOpenState()).isEqualTo(10);
+    }
+
+    /** 레지스트리도 빈으로 올라와야 한다. 없으면 서킷을 붙일 수단이 없다. */
+    @Test
+    @DisplayName("서킷_레지스트리가_컨텍스트에_올라온다")
+    void 서킷_레지스트리가_컨텍스트에_올라온다() {
+        assertThat(circuitRegistry.circuitBreaker("backend-1").getCircuitBreakerConfig()
+                .getSlidingWindowType())
+                .isEqualTo(CircuitBreakerConfig.SlidingWindowType.TIME_BASED);
     }
 }

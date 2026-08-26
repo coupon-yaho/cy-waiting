@@ -12,57 +12,48 @@ import org.junit.jupiter.api.Test;
  *
  * <p>실측 전에는 맞는 값을 모른다. 코드에 박으면 재조정마다 배포가 필요하고,
  * 배포가 필요하면 장애 중에는 못 고친다 — 정작 고쳐야 할 때가 그때다.
+ *
+ * <p><b>여기서는 값을 안 정하고 검증만 한다.</b> 코드에도 기본값이 있으면 yml 의
+ * 키를 하나 잘못 적어도 조용히 그 값으로 떨어진다. 실제로 그 오타를 시험이 못
+ * 잡았다. 실린 값 자체는 {@code GatewayWiringTest} 가 뜬 컨텍스트에서 본다.
  */
 class BackendCircuitPropertiesTest {
 
-    private static BackendCircuitProperties 기본() {
-        return new BackendCircuitProperties(null, null, null, null, null, null, null);
+    private static final Duration 창 = Duration.ofSeconds(10);
+    private static final Duration 타임아웃 = Duration.ofSeconds(3);
+    private static final Duration 느림 = Duration.ofMillis(1500);
+    private static final Duration 대기 = Duration.ofSeconds(5);
+
+    /** 온전한 한 벌. 시험마다 한 자리씩 흠집을 낸다. */
+    private static BackendCircuitProperties 값(Float 실패비율, Duration 타임아웃값,
+            Duration 느림임계, Float 느림비율) {
+        return new BackendCircuitProperties(창, 20,
+                실패비율 == null ? 50f : 실패비율,
+                타임아웃값 == null ? 타임아웃 : 타임아웃값,
+                느림임계 == null ? 느림 : 느림임계,
+                느림비율 == null ? 50f : 느림비율,
+                대기, 10);
     }
 
     /**
-     * <b>건수 창을 쓰면 안 된다.</b> 100K RPS 에서 건수 100 은 수 ms 분량이라,
-     * GC 한 번이나 순간 변동에 서킷이 열린다.
+     * <b>안 적으면 기동을 막는다.</b> 조용히 채우면 yml 의 오타가 그대로 운영에
+     * 나가고, 운영자는 자기가 적은 값으로 돌고 있다고 믿는다.
      */
     @Test
-    @DisplayName("기본값은_시간_기반_창이다")
-    void 기본값은_시간_기반_창이다() {
-        assertThat(기본().slidingWindowSize()).isEqualTo(Duration.ofSeconds(10));
-    }
-
-    /** 표본이 적을 때 열면 오픈 직후 첫 몇 건으로 전 노드가 서킷을 연다. */
-    @Test
-    @DisplayName("표본이_모자라면_안_연다")
-    void 표본이_모자라면_안_연다() {
-        assertThat(기본().minimumNumberOfCalls()).isEqualTo(20);
-    }
-
-    /**
-     * <b>느린 호출을 실패로 센다.</b> 타임아웃만 보면 타임아웃 직전까지 느려진
-     * 인스턴스가 전부 성공으로 집계되어 서킷이 안 열린다 (6.1.8).
-     */
-    @Test
-    @DisplayName("느림_임계가_타임아웃보다_낮다")
-    void 느림_임계가_타임아웃보다_낮다() {
-        BackendCircuitProperties p = 기본();
-
-        assertThat(p.slowCallDurationThreshold()).isLessThan(p.timeout());
-    }
-
-    /**
-     * <b>회복을 늦어도 두 번째 시도에 판정한다.</b> G8.12 가 half-open 회복
-     * 시도를 2회 이하로 못 박는다 — 대기가 길면 그 안에 못 든다.
-     */
-    @Test
-    @DisplayName("열린_뒤_대기가_회복_판정을_막지_않는다")
-    void 열린_뒤_대기가_회복_판정을_막지_않는다() {
-        assertThat(기본().waitDurationInOpenState()).isEqualTo(Duration.ofSeconds(5));
-    }
-
-    /** 서킷이 회복을 판정할 표본 수. 유입 억제는 판정 쪽이 따로 한다. */
-    @Test
-    @DisplayName("반쯤_열린_상태의_표본_수를_정한다")
-    void 반쯤_열린_상태의_표본_수를_정한다() {
-        assertThat(기본().permittedNumberOfCallsInHalfOpenState()).isEqualTo(10);
+    @DisplayName("값을_안_적으면_기동을_막는다")
+    void 값을_안_적으면_기동을_막는다() {
+        assertThatThrownBy(() -> new BackendCircuitProperties(
+                null, 20, 50f, 타임아웃, 느림, 50f, 대기, 10))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("sliding-window-size");
+        assertThatThrownBy(() -> new BackendCircuitProperties(
+                창, null, 50f, 타임아웃, 느림, 50f, 대기, 10))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("minimum-number-of-calls");
+        assertThatThrownBy(() -> new BackendCircuitProperties(
+                창, 20, 50f, 타임아웃, 느림, 50f, null, 10))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("wait-duration-in-open-state");
     }
 
     /**
@@ -72,24 +63,44 @@ class BackendCircuitPropertiesTest {
     @Test
     @DisplayName("비율이_범위를_벗어나면_기동을_막는다")
     void 비율이_범위를_벗어나면_기동을_막는다() {
-        assertThatThrownBy(() -> new BackendCircuitProperties(
-                null, null, 0f, null, null, null, null))
+        assertThatThrownBy(() -> 값(0f, null, null, null))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new BackendCircuitProperties(
-                null, null, 101f, null, null, null, null))
+        assertThatThrownBy(() -> 값(101f, null, null, null))
+                .isInstanceOf(IllegalArgumentException.class);
+        // 느림 비율도 같은 규칙을 탄다. 하나만 걸면 다른 쪽이 조용히 0 이 된다.
+        assertThatThrownBy(() -> 값(null, null, null, 0f))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
     /**
-     * <b>느림 임계가 타임아웃보다 크면 그 설정이 죽은 값이 된다.</b> 타임아웃이
-     * 먼저 끊어 느린 호출이 한 건도 안 집계되고, 운영자는 켰다고 믿는다.
+     * <b>느림 임계가 타임아웃 이상이면 그 설정이 죽은 값이 된다.</b> 타임아웃이
+     * 먼저 끊어 느린 호출이 한 건도 안 집계되고, 운영자는 켰다고 믿는다 (6.1.8).
      */
     @Test
     @DisplayName("느림_임계가_타임아웃_이상이면_기동을_막는다")
     void 느림_임계가_타임아웃_이상이면_기동을_막는다() {
-        assertThatThrownBy(() -> new BackendCircuitProperties(
-                null, null, null, Duration.ofSeconds(3), null, Duration.ofSeconds(3), null))
+        assertThatThrownBy(() -> 값(null, Duration.ofSeconds(3), Duration.ofSeconds(3), null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("느림");
+    }
+
+    /** 온전한 한 벌은 받아들인다. 거절만 재면 전부 거절해도 통과한다. */
+    @Test
+    @DisplayName("온전한_설정은_받아들인다")
+    void 온전한_설정은_받아들인다() {
+        assertThat(값(null, null, null, null).slowCallDurationThreshold())
+                .isEqualTo(느림);
+    }
+
+    /** 표본 하한이 0 이면 첫 한 건으로 서킷이 열린다. */
+    @Test
+    @DisplayName("표본_하한이_0이면_기동을_막는다")
+    void 표본_하한이_0이면_기동을_막는다() {
+        assertThatThrownBy(() -> new BackendCircuitProperties(
+                창, 0, 50f, 타임아웃, 느림, 50f, 대기, 10))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new BackendCircuitProperties(
+                창, 20, 50f, 타임아웃, 느림, 50f, 대기, 0))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }

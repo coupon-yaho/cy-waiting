@@ -465,12 +465,20 @@ Refs: CY-<phase-6-gate>
 
 티켓에는 라벨을 붙이지 않는다. 계획서 ID 와의 대응은 [91-jira-map.md](91-jira-map.md) 9절에 있다.
 
-**에픽** 없다. `6.5`·`6.6` 은 페이즈를 쪼개기 전 [Phase 5](05-data-plane.md) 아래에서
-만든 티켓이라 상위가 아직 `CY-22` 다. **이 페이즈에 진입할 때 에픽을 만들고 옮긴다.**
-`6.1`~`6.4`·`6.7`~`6.9` 는 그때 함께 발번한다.
+**에픽** [`CY-612`](https://shseol.atlassian.net/browse/CY-612) — 대기열 — 보호와 측정.
+`6.5`·`6.6` 은 페이즈를 쪼개기 전 [Phase 5](05-data-plane.md) 아래에서 만든 티켓이라
+상위가 `CY-22` 였고, 이 페이즈에 진입하며 옮겼다.
 
 | 계획서 | 티켓 | 이름 |
 |---|---|---|
+| `6.1` | [`CY-613`](https://shseol.atlassian.net/browse/CY-613) | **서킷브레이커** |
+| `6.1.2`~`6.1.5` | [`CY-623`](https://shseol.atlassian.net/browse/CY-623) | 서킷이 열렸을 때의 응답과 fallback 라우트 |
+| `6.1.1`·`6.1.9` | [`CY-624`](https://shseol.atlassian.net/browse/CY-624) | resilience4j 를 인스턴스별로 붙이고 설정을 yml 로 |
+| `6.1.8` | [`CY-625`](https://shseol.atlassian.net/browse/CY-625) | 느린 호출을 실패로 집계한다 |
+| `6.1.6`·`6.1.7` | [`CY-626`](https://shseol.atlassian.net/browse/CY-626) | 열린 인스턴스를 라우팅에서 빼고 전부 열리면 503 |
+| `6.2` | [`CY-614`](https://shseol.atlassian.net/browse/CY-614) | **뒷단 요청 타임아웃** |
+| `6.3` | [`CY-615`](https://shseol.atlassian.net/browse/CY-615) | **격벽** |
+| `6.4` | [`CY-616`](https://shseol.atlassian.net/browse/CY-616) | **무중단 종료** |
 | `6.5` | [`CY-38`](https://shseol.atlassian.net/browse/CY-38) | **지표와 로그 수집** |
 | `6.5.1` | [`CY-125`](https://shseol.atlassian.net/browse/CY-125) | 판정 결과·대기 인원·여유를 지표로 노출 |
 | `6.5.2` | [`CY-126`](https://shseol.atlassian.net/browse/CY-126) | 프로메테우스와 로키를 로컬에서 띄우고, 고카디널리티 라벨을 막는 검사를 건다 |
@@ -483,8 +491,16 @@ Refs: CY-<phase-6-gate>
 | `6.6.5` | [`CY-123`](https://shseol.atlassian.net/browse/CY-123) | 혼합 트래픽과 중도 이탈 시나리오 |
 | `6.6.6` | **미발번** | 같은 쿠폰 상세를 동시에 몰아쳐 코얼레싱 효과를 재는 시나리오 |
 | `6.6.7` | [`CY-124`](https://shseol.atlassian.net/browse/CY-124) | 측정값이 게이트 기준을 넘는지 자동 판정 |
+| `6.7` | [`CY-617`](https://shseol.atlassian.net/browse/CY-617) | **R1 실측** |
+| `6.8` | [`CY-618`](https://shseol.atlassian.net/browse/CY-618) | **운영 튜너블** |
+| `6.9` | [`CY-619`](https://shseol.atlassian.net/browse/CY-619) | **알람 규칙** |
+| `6.10` | [`CY-620`](https://shseol.atlassian.net/browse/CY-620) | **조회 코얼레싱** |
 
-브랜치는 티켓 단위로 판다. 커밋 푸터는 지라 키 하나만 남긴다 — 계획서 ID 를 박지 않는다.
+**브랜치는 하위 작업 단위로 판다.** 절 하나를 통째로 한 브랜치에 담으면 PR 이
+커져 리뷰가 형식만 보게 되고, 되돌릴 때도 같이 넣은 것까지 딸려 나온다. 위 표에서
+`6.1` 같은 절 티켓은 묶는 자리일 뿐이고 브랜치는 그 아래 하위 작업에서 딴다.
+
+커밋 푸터는 지라 키 하나만 남긴다 — 계획서 ID 를 박지 않는다.
 
 ```
 Refs: CY-145

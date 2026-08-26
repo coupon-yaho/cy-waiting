@@ -15,7 +15,13 @@ reviews:
   collapse_walkthrough: false
 
   auto_review:
-    enabled: true
+    # **부를 때만 돈다.** 무료 플랜은 시간당 리뷰 한 건이라, PR 을 열 때마다
+    # 자동으로 쓰면 정작 고치고 나서 다시 볼 때 쓸 몫이 없다. 반영하고
+    # `@coderabbitai review` 로 부르는 편이 같은 사용량으로 더 많이 본다.
+    #
+    # 아래 값들은 껐어도 그대로 둔다 — 다시 켤 때 무엇을 걸러야 하는지가
+    # 여기 남아 있어야 하고, 지우면 그 판단을 처음부터 다시 해야 한다.
+    enabled: false
     drafts: false          # 초안은 아직 리뷰할 상태가 아니다
     base_branches:
       - develop

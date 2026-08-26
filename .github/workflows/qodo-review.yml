@@ -1,0 +1,74 @@
+name: Qodo 리뷰
+
+# **자동으로 안 돈다.** 리뷰 도구의 사용량이 유한하므로 언제 쓸지를 사람이 정한다.
+# PR 에 `/review` 나 `/improve` 를 코멘트하거나, Actions 에서 직접 돌린다.
+#
+# 설정은 `.pr_agent.toml` 에 있다. 규칙 자체는 `ai/rules/` 에 있고 거기를 가리킬
+# 뿐이다 — 사본을 만들면 둘이 갈라진다.
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: 리뷰할 PR 번호
+        required: true
+        type: string
+      command:
+        description: 무엇을 시킬지
+        required: true
+        default: review
+        type: choice
+        options: [review, improve, describe]
+
+# **최소 권한이다.** 리뷰를 쓰려면 PR 에 코멘트를 달아야 하고 그게 전부다.
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  # **뒤엣것을 취소한다.** 같은 PR 에 두 번 부르면 사용량만 두 배로 쓴다.
+  # `false` 로 두면 줄만 세울 뿐 둘 다 돌아, 막으려던 것이 그대로 난다.
+  group: qodo-${{ github.event.issue.number || inputs.pr }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: Qodo
+    # 코멘트로 부르는 경우는 PR 이어야 하고, 명령어로 시작해야 한다.
+    #
+    # **아무나 우리 키를 못 태운다.** 공개 저장소라 누구든 코멘트를 달 수 있고,
+    # 그 한 줄이 곧 우리 사용량이다. 저장소에 쓸 권한이 있는 사람만 부를 수 있게
+    # 한다 — 밖에서 온 코멘트는 무시하고 그 사실도 안 알린다.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.issue.pull_request &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+                github.event.comment.author_association) &&
+       (startsWith(github.event.comment.body, '/review') ||
+        startsWith(github.event.comment.body, '/improve') ||
+        startsWith(github.event.comment.body, '/describe')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: 리뷰
+        uses: qodo-ai/pr-agent@4ebd5c5333c6ef21509e7304d27969eb825e6f22  # v0.43.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_KEY: ${{ secrets.OPENAI_KEY }}
+          # 설정 파일을 저장소에서 읽는다. 여기에 값을 적으면 두 곳이 갈라진다.
+          CONFIG.MODEL: ${{ vars.QODO_MODEL || 'gpt-4o' }}
+          # 수동으로 돌릴 때는 무엇을 할지 입력으로 받는다.
+          GITHUB_ACTION_CONFIG.AUTO_REVIEW: "false"
+          GITHUB_ACTION_CONFIG.AUTO_DESCRIBE: "false"
+          GITHUB_ACTION_CONFIG.AUTO_IMPROVE: "false"
+          PR_URL: >-
+            ${{ github.event_name == 'workflow_dispatch'
+            && format('{0}/{1}/pull/{2}', github.server_url, github.repository, inputs.pr)
+            || '' }}
+          COMMAND: ${{ github.event_name == 'workflow_dispatch' && inputs.command || '' }}

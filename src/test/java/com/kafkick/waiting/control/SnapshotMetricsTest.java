@@ -64,6 +64,35 @@ class SnapshotMetricsTest {
         assertThat(meters.get("waiting.snapshot.age").gauge().value()).isZero();
     }
 
+    /**
+     * <b>못 받은 구간은 -1 이다.</b> 기준선이 EPOCH 라 그대로 내면 기동할 때마다
+     * 17억이 나가고, 낡음 알람이 전부 울린다. 헬스 지시자와 같은 값을 쓴다.
+     */
+    @Test
+    @DisplayName("첫_틱_전에는_나이가_음수다")
+    void 첫_틱_전에는_나이가_음수다() {
+        지표를_건다();
+
+        assertThat(meters.get("waiting.snapshot.age").gauge().value()).isEqualTo(-1);
+    }
+
+    /**
+     * <b>게이지가 대상을 강하게 잡아야 한다.</b> 약한 참조면 첫 GC 에 수거되고
+     * 그 뒤로는 영원히 NaN 을 낸다 — 프로메테우스는 그 줄을 그대로 내보내므로
+     * 이름만 보는 시험으로는 안 드러난다.
+     */
+    @Test
+    @DisplayName("수거되어도_값을_계속_낸다")
+    void 수거되어도_값을_계속_낸다() {
+        지표를_건다();
+        스냅샷을_심는다(100);
+
+        System.gc();
+
+        assertThat(meters.get("waiting.queue.waiting").gauge().value()).isEqualTo(300);
+        assertThat(meters.get("waiting.snapshot.coupons").gauge().value()).isEqualTo(2);
+    }
+
     /** 몇 개 쿠폰을 보고 있는지. 활성 목록이 비면 배분이 통째로 멎는다. */
     @Test
     @DisplayName("보고_있는_쿠폰_수를_낸다")

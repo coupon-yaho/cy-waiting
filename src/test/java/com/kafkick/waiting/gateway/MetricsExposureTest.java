@@ -79,11 +79,16 @@ class MetricsExposureTest {
      * 보고, 그 코드를 아무도 안 부르는 상황은 못 본다.
      */
     @Test
-    @DisplayName("판정_재료_지표가_실제로_긁힌다")
-    void 판정_재료_지표가_실제로_긁힌다() {
+    @DisplayName("판정_재료_지표가_값과_함께_긁힌다")
+    void 판정_재료_지표가_값과_함께_긁힌다() {
+        // **이름만 보면 안 된다.** 게이지가 약한 참조로 등록되면 대상이 수거된
+        // 뒤 NaN 을 내는데, 프로메테우스는 그 줄을 그대로 내보낸다. 이름만 재는
+        // 시험은 세 지표가 전부 죽은 상태에서도 통과한다.
+        System.gc();
+
         assertThat(registry.scrape())
-                .contains("waiting_queue_waiting")
-                .contains("waiting_snapshot_age")
-                .contains("waiting_snapshot_coupons");
+                .containsPattern("waiting_queue_waiting\\{[^}]*\\} [0-9.E-]+\\n")
+                .containsPattern("waiting_snapshot_coupons\\{[^}]*\\} [0-9.E-]+\\n")
+                .doesNotContain("NaN");
     }
 }

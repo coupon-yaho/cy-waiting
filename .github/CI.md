@@ -50,6 +50,21 @@ TypeScript 액션을 쓴다. 재시도와 형식 변환처럼 테스트가 필�
 
 ---
 
+## PR 리뷰
+
+리뷰 도구가 둘입니다. **사용량이 유한하므로 언제 쓸지를 사람이 정합니다.**
+
+| 도구 | 설정 | 언제 |
+|---|---|---|
+| CodeRabbit | `.coderabbit.yaml` | 무료 플랜은 시간당 한 건. `@coderabbitai review` 로 부릅니다 |
+| Qodo Merge | `.pr_agent.toml` | PR 에 `/review` 또는 `/improve` 를 코멘트하거나 Actions 에서 직접 돕니다 |
+
+둘 다 **규칙을 복사하지 않고 `ai/rules/` 를 가리킵니다.** 사본이 생기면 둘이
+갈라지고, 그때부터 아무도 믿지 않습니다.
+
+Qodo 는 `secrets.OPENAI_KEY` 가 있어야 돕니다. 없으면 워크플로가 실패하는데,
+그것이 의도입니다 — 조용히 통과하면 리뷰를 받은 것으로 오해합니다.
+
 ## 대시보드 지표
 
 패널이 참조하는 지표가 코드에 실제로 있는지 `.github/scripts/dashboard-queries.sh`

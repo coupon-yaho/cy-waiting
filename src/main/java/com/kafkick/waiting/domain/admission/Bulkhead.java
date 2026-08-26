@@ -25,6 +25,14 @@ public class Bulkhead {
     /** 쿠폰별로 지금 걸려 있는 건수. 0 이 되면 지웁니다. */
     private final Map<String, Integer> inFlight = new HashMap<>();
 
+    /**
+     * 전체 합. <b>들고 다니지 않으면 읽을 때마다 맵을 훑습니다.</b>
+     *
+     * <p>그 훑기가 자리를 잡는 것과 같은 자물쇠 안이라, 지표를 한 번 긁는 동안
+     * 요청 경로가 통째로 멈춥니다 — 키가 만 개면 그 길이만큼.
+     */
+    private int total;
+
     Bulkhead(int maxKeys) {
         if (maxKeys < 1) {
             throw new IllegalArgumentException("maxKeys 는 1 이상이어야 한다: " + maxKeys);
@@ -56,6 +64,7 @@ public class Bulkhead {
             return false;
         }
         inFlight.put(couponId, current + 1);
+        total++;
         return true;
     }
 
@@ -71,6 +80,7 @@ public class Bulkhead {
         if (current == null) {
             return;
         }
+        total--;
         if (current <= 1) {
             // 비면 지웁니다. 안 지우면 끝난 쿠폰이 맵을 차지한 채 남아, 새
             // 캠페인이 열릴 때 그 쿠폰이 못 들어갑니다.
@@ -80,9 +90,9 @@ public class Bulkhead {
         inFlight.put(couponId, current - 1);
     }
 
-    /** 지금 걸려 있는 전체 건수. 지표가 이 값을 읽습니다. */
+    /** 지금 걸려 있는 전체 건수. 지표가 이 값을 읽습니다 (6.3.6). */
     public synchronized int inFlight() {
-        return inFlight.values().stream().mapToInt(Integer::intValue).sum();
+        return total;
     }
 
     /** 담고 있는 쿠폰 수. 맵이 상한에 붙었는지 보는 값입니다. */

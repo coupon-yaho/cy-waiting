@@ -472,6 +472,10 @@ Refs: CY-<phase-6-gate>
 | 계획서 | 티켓 | 이름 |
 |---|---|---|
 | `6.1` | [`CY-613`](https://shseol.atlassian.net/browse/CY-613) | **서킷브레이커** |
+| `6.1.2`~`6.1.5` | [`CY-623`](https://shseol.atlassian.net/browse/CY-623) | 서킷이 열렸을 때의 응답과 fallback 라우트 |
+| `6.1.1`·`6.1.9` | [`CY-624`](https://shseol.atlassian.net/browse/CY-624) | resilience4j 를 인스턴스별로 붙이고 설정을 yml 로 |
+| `6.1.8` | [`CY-625`](https://shseol.atlassian.net/browse/CY-625) | 느린 호출을 실패로 집계한다 |
+| `6.1.6`·`6.1.7` | [`CY-626`](https://shseol.atlassian.net/browse/CY-626) | 열린 인스턴스를 라우팅에서 빼고 전부 열리면 503 |
 | `6.2` | [`CY-614`](https://shseol.atlassian.net/browse/CY-614) | **뒷단 요청 타임아웃** |
 | `6.3` | [`CY-615`](https://shseol.atlassian.net/browse/CY-615) | **격벽** |
 | `6.4` | [`CY-616`](https://shseol.atlassian.net/browse/CY-616) | **무중단 종료** |
@@ -492,7 +496,11 @@ Refs: CY-<phase-6-gate>
 | `6.9` | [`CY-619`](https://shseol.atlassian.net/browse/CY-619) | **알람 규칙** |
 | `6.10` | [`CY-620`](https://shseol.atlassian.net/browse/CY-620) | **조회 코얼레싱** |
 
-브랜치는 티켓 단위로 판다. 커밋 푸터는 지라 키 하나만 남긴다 — 계획서 ID 를 박지 않는다.
+**브랜치는 하위 작업 단위로 판다.** 절 하나를 통째로 한 브랜치에 담으면 PR 이
+커져 리뷰가 형식만 보게 되고, 되돌릴 때도 같이 넣은 것까지 딸려 나온다. 위 표에서
+`6.1` 같은 절 티켓은 묶는 자리일 뿐이고 브랜치는 그 아래 하위 작업에서 딴다.
+
+커밋 푸터는 지라 키 하나만 남긴다 — 계획서 ID 를 박지 않는다.
 
 ```
 Refs: CY-145

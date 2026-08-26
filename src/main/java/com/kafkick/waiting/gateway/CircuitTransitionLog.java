@@ -94,13 +94,16 @@ final class CircuitTransitionLog {
         // **다시 열리는 것은 새 구간이 아니다.** OPEN → HALF_OPEN → OPEN 은 회복을
         // 시도했다 실패한 것이므로, 덮어쓰면 원래 시작 시각과 그동안 막은 건수가
         // 사라진다. 그러면 닫힘 로그가 장애를 실제보다 짧고 가볍게 말한다.
-        Opened window = opened.computeIfAbsent(name,
-                key -> new Opened(nanoTicker.getAsLong(), new LongAdder()));
+        //
+        // **시각은 한 번만 읽는다.** 두 번 읽으면 첫 열림에서도 값이 달라져,
+        // 회복을 시도한 적이 없는데 실패했다는 줄이 남는다.
+        long now = nanoTicker.getAsLong();
+        Opened before = opened.putIfAbsent(name, new Opened(now, new LongAdder()));
         log.warn("서킷 열림({}) — {} 로 가는 발급을 막는다. 그 인스턴스의 지연과 오류율을 확인하라",
                 to, name);
-        if (window.since() != nanoTicker.getAsLong()) {
+        if (before != null) {
             log.warn("회복 시도가 실패했다 — {} 가 {}초째 열려 있다", name,
-                    NANOSECONDS.toSeconds(nanoTicker.getAsLong() - window.since()));
+                    NANOSECONDS.toSeconds(now - before.since()));
         }
     }
 

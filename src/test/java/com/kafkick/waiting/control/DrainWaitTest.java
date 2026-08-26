@@ -123,4 +123,23 @@ class DrainWaitTest {
                 .isFalse();
         assertThat(shutdown.isDraining()).isTrue();
     }
+
+    /**
+     * <b>넘치는 값이 검증을 우회하면 안 됩니다.</b> {@code toMillis()} 는 넘치면
+     * 다른 예외를 던지므로, 상한을 뒤에 두면 아주 큰 값이 통째로 빠져나갑니다.
+     */
+    @Test
+    @DisplayName("넘치는_대기도_기동을_막는다")
+    void 넘치는_대기도_기동을_막는다() {
+        assertThatThrownBy(() -> 대기(Duration.ofSeconds(Long.MAX_VALUE)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /** 밀리초 미만은 0 으로 잘려 안 기다린다. 양수 검사만으로는 안 드러난다. */
+    @Test
+    @DisplayName("밀리초_미만_대기는_기동을_막는다")
+    void 밀리초_미만_대기는_기동을_막는다() {
+        assertThatThrownBy(() -> 대기(Duration.ofNanos(500)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
 }

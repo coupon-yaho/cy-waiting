@@ -195,4 +195,16 @@ class CircuitTransitionLogTest {
 
         assertThat(남은것("회복 시도가 실패했다")).hasSize(1);
     }
+
+    /**
+     * <b>첫 열림에는 회복 실패 줄이 없어야 합니다.</b> 시도한 적이 없는 회복을
+     * 실패했다고 적으면, 진동을 세는 사람이 없는 진동을 셉니다.
+     */
+    @Test
+    @DisplayName("첫_열림에는_회복_실패를_안_남긴다")
+    void 첫_열림에는_회복_실패를_안_남긴다() {
+        서킷().transitionToOpenState();
+
+        assertThat(남은것("회복 시도가 실패했다")).isEmpty();
+    }
 }

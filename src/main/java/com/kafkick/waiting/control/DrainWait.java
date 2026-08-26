@@ -44,14 +44,16 @@ public final class DrainWait {
         if (wait.isNegative() || wait.isZero()) {
             throw new IllegalArgumentException("LB 제외 대기는 양수여야 한다: " + wait);
         }
+        // **상한을 먼저 봅니다.** `toMillis()` 는 넘치면 `ArithmeticException` 을
+        // 던지므로, 뒤에 두면 아주 큰 값이 검증을 통째로 우회합니다.
+        if (wait.compareTo(MAX_WAIT) > 0) {
+            throw new IllegalArgumentException(
+                    "LB 제외 대기는 " + MAX_WAIT + " 이하여야 한다: " + wait);
+        }
         // **밀리초 미만은 0 으로 잘립니다.** `PT0.0005S` 는 양수 검사를 통과하지만
         // 실제로는 안 기다리고, 기다림이 사라진 사실이 어디에도 안 드러납니다.
         if (wait.toMillis() < 1) {
             throw new IllegalArgumentException("LB 제외 대기는 1ms 이상이어야 한다: " + wait);
-        }
-        if (wait.compareTo(MAX_WAIT) > 0) {
-            throw new IllegalArgumentException(
-                    "LB 제외 대기는 " + MAX_WAIT + " 이하여야 한다: " + wait);
         }
         this.wait = wait;
     }

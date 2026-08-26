@@ -10,7 +10,11 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.cloud.gateway.handler.RoutePredicateHandlerMapping;
 import org.springframework.cloud.gateway.route.Route;
 import org.springframework.cloud.gateway.route.RouteLocator;
+import org.springframework.http.HttpMethod;
+import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
+import org.springframework.mock.web.server.MockServerWebExchange;
 import org.springframework.web.reactive.function.server.support.RouterFunctionMapping;
+import org.springframework.web.server.ServerWebExchange;
 
 /**
  * 라우트가 <b>실제로 뜬 컨텍스트에</b> 있는가.
@@ -75,5 +79,36 @@ class GatewayWiringTest {
         // 값까지 본다. 비지 않았는지만 보면 설정 파일의 오타가 그대로 통과한다.
         // 값까지 못 박는다. 비지 않았는지만 보면 엉뚱한 오리진이 들어가도 통과한다.
         assertThat(origins.allowed()).containsExactly("http://localhost:5173");
+    }
+
+    /**
+     * <b>단위로 만든 라우터 함수가 맞아도 뜬 컨텍스트에 없으면 404 다.</b>
+     * 시험이 설정 클래스를 직접 만들면 {@code @Configuration} 을 지워도 초록이고,
+     * 그때 서킷이 열리는 순간 사용자가 받는 것은 "없는 경로" 다.
+     */
+    @Test
+    @DisplayName("fallback_라우터가_컨텍스트에_올라온다")
+    void fallback_라우터가_컨텍스트에_올라온다() {
+        ServerWebExchange 넘어옴 = MockServerWebExchange.from(
+                MockServerHttpRequest.method(HttpMethod.POST,
+                        BackendFallbackRoutes.FALLBACK_ISSUE));
+
+        // 매핑까지 해석한다. 빈만 보면 경로가 어긋나도 통과한다.
+        //
+        // **무엇에 물렸는지까지 본다.** 아무 핸들러나 잡혀도 통과하면, 다른
+        // 라우터 함수가 이 경로를 먼저 가져가는 회귀를 못 본다.
+        assertThat(routerFunctionMapping.getHandler(넘어옴).block())
+                .asString()
+                .contains("BackendFallback");
+    }
+
+    /**
+     * 서킷 필터가 넘길 주소와 받는 주소가 <b>같은 상수에서 나와야</b> 한다.
+     * 갈리면 기동은 되고 장애 때만 404 가 드러난다.
+     */
+    @Test
+    @DisplayName("fallback_주소가_한_곳에서_나온다")
+    void fallback_주소가_한_곳에서_나온다() {
+        assertThat(BackendFallbackRoutes.FALLBACK_ISSUE).isEqualTo("/fallback/issue");
     }
 }

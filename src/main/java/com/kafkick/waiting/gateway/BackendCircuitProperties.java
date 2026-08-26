@@ -38,7 +38,8 @@ public record BackendCircuitProperties(
 
         check.percent(failureRateThreshold, "failure-rate-threshold");
         check.percent(slowCallRateThreshold, "slow-call-rate-threshold");
-        check.positive(slidingWindowSize, "sliding-window-size");
+        // 라이브러리가 정수 초를 받는다. 양수만 보면 500ms 가 0 이 된다.
+        check.wholeSeconds(slidingWindowSize, "sliding-window-size");
         check.positive(waitDurationInOpenState, "wait-duration-in-open-state");
         // **여기에도 상한을 건다.** 라이브러리 기본값은 0(무제한)이라, 안 적으면
         // 프로브가 응답 없는 뒷단에 매달려 서킷이 HALF_OPEN 에 고정된다 —

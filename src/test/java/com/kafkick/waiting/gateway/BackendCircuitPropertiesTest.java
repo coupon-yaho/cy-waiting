@@ -98,4 +98,22 @@ class BackendCircuitPropertiesTest {
                 창, 20, 50f, 느림, 50f, 대기, 반쯤_상한, 0))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    /**
+     * <b>창은 정수 초로 쓰인다.</b> 라이브러리가 {@code int} 초를 받으므로
+     * {@code 500ms} 는 0 이 되어 기동이 실패하고, 아주 큰 값은 잘려 조용히 작은
+     * 창이 된다 — 뒤가 더 나쁘다. 순간 변동에 서킷이 열린다.
+     */
+    @Test
+    @DisplayName("창이_정수_초가_아니면_기동을_막는다")
+    void 창이_정수_초가_아니면_기동을_막는다() {
+        assertThatThrownBy(() -> new BackendCircuitProperties(
+                Duration.ofMillis(500), 20, 50f, 느림, 50f, 대기, 반쯤_상한, 10))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("sliding-window-size");
+        // int 로 잘려 작은 창이 되는 값. 양수 검사만으로는 안 걸린다.
+        assertThatThrownBy(() -> new BackendCircuitProperties(
+                Duration.ofSeconds(4_294_967_306L), 20, 50f, 느림, 50f, 대기, 반쯤_상한, 10))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
 }

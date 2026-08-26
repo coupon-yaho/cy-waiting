@@ -53,4 +53,17 @@ final class CircuitSettings {
         }
     }
 
+
+    /**
+     * <b>초 단위로 쓰이는 값이다.</b> 라이브러리가 정수 초 {@code int} 를 받으므로
+     * {@code 500ms} 는 0 이 되어 기동이 실패하고, 아주 큰 값은 {@code int} 로
+     * 잘려 조용히 작은 창이 된다 — 뒤가 더 나쁘다.
+     */
+    void wholeSeconds(Duration value, String key) {
+        long seconds = value.toSeconds();
+        if (value.toMillis() % 1000 != 0 || seconds < 1 || seconds > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException(
+                    "%s%s 는 1초 이상의 정수 초여야 한다: %s".formatted(PREFIX, key, value));
+        }
+    }
 }

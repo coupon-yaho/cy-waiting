@@ -40,6 +40,11 @@ server:
   shutdown: graceful
 
 management:
+  # 지표에 인스턴스를 구별할 라벨을 붙인다. 없으면 노드 스무 대의 값이 한 줄로
+  # 합쳐져, 한 대만 이상한 상황을 못 본다.
+  metrics:
+    tags:
+      application: ${spring.application.name}
   health:
     # **의존성 기여자를 아예 끈다.** 그룹에서 빼는 것만으로는 루트가 여전히
     # 합산하고, 프로브 경로를 루트로 적은 배포 설정 한 줄이면 레디스 흔들림이
@@ -54,7 +59,9 @@ management:
   endpoints:
     web:
       exposure:
-        include: health
+        # **지표도 연다.** 세기만 하고 내보낼 자리가 없으면 아무도 못 본다 —
+        # 그때 대시보드는 비어 있고, 사고 중에야 그 사실을 안다.
+        include: health,prometheus
   endpoint:
     health:
       probes:

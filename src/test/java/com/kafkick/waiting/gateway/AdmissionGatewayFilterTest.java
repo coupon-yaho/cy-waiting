@@ -534,8 +534,9 @@ class AdmissionGatewayFilterTest {
     void 배분_전에도_상한은_유한하다() {
         // 배분 전 천장은 최소 배수 속도 × 최대 대기 시간이다. 판 크기와 무관하다.
         long CAP = AdmissionDecider.MIN_CREDIT * AdmissionGatewayFilter.MAX_ETA_SEC;
-        // 한산 통과 상한이 0 이어야 첫 사람부터 줄로 간다.
-        스냅샷을_심는다(CouponStates.idle(1_000_000), new SnapshotMeta(1, 1));
+        // 한산 통과 상한이 0 이어야 첫 사람부터 줄로 간다. 노드 몫 자체가 0 인
+        // 판을 쓴다 — 몫이 1 이면 절삭 보정이 걸려 상한이 1 이 된다 (C-10).
+        스냅샷을_심는다(CouponStates.idle(1_000_000), new SnapshotMeta(0, 1));
 
         MockServerWebExchange 첫_사람 = 태운다(COUPON, "대기자0");
         assertThat(첫_사람.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
@@ -968,8 +969,9 @@ class AdmissionGatewayFilterTest {
     @Test
     @DisplayName("줄이_찼어도_래치는_찍힌다")
     void 줄이_찼어도_래치는_찍힌다() {
-        // 한산 통과 상한이 0 이어야 첫 사람부터 줄로 간다.
-        스냅샷을_심는다(CouponStates.idle(1_000_000), new SnapshotMeta(1, 1));
+        // 한산 통과 상한이 0 이어야 첫 사람부터 줄로 간다. 노드 몫 자체가 0 인
+        // 판을 쓴다 — 몫이 1 이면 절삭 보정이 걸려 상한이 1 이 된다 (C-10).
+        스냅샷을_심는다(CouponStates.idle(1_000_000), new SnapshotMeta(0, 1));
         줄.가득_찼다();
 
         MockServerWebExchange 거절된_사람 = 태운다(COUPON, "대기자0");
@@ -992,10 +994,10 @@ class AdmissionGatewayFilterTest {
         스냅샷을_심는다(CouponStates.idle(100));
         태운다(COUPON);
 
-        assertThat(meters.counter("waiting.admission", "outcome", "unknown-coupon").count())
-                .isEqualTo(1);
-        assertThat(meters.counter("waiting.admission", "outcome", "PASS_UNDER_CAP").count())
-                .isEqualTo(1);
+        assertThat(meters.counter("waiting.admission",
+                "outcome", "unknown-coupon", "cause", "none").count()).isEqualTo(1);
+        assertThat(meters.counter("waiting.admission",
+                "outcome", "PASS_UNDER_CAP", "cause", "none").count()).isEqualTo(1);
     }
 
     @Test
@@ -1008,10 +1010,14 @@ class AdmissionGatewayFilterTest {
 
         // **태그를 정확히 못 박는다.** 값만 보면 식별자를 키로 쓸 때 안 걸리고,
         // 키만 보면 값으로 쓸 때 안 걸린다.
+        //
+        // `cause` 는 늘 실린다 — 같은 이름에 태그 키 집합이 둘이면 프로메테우스
+        // 레지스트리가 등록을 거절한다.
         assertThat(meters.getMeters())
                 .singleElement()
                 .satisfies(m -> assertThat(m.getId().getTags())
-                        .containsExactly(Tag.of("outcome", "PASS_UNDER_CAP")));
+                        .containsExactly(Tag.of("cause", "none"),
+                                Tag.of("outcome", "PASS_UNDER_CAP")));
     }
 
     @Test

@@ -1,5 +1,8 @@
 package com.kafkick.waiting.gateway;
 
+import static java.util.concurrent.TimeUnit.NANOSECONDS;
+
+import com.kafkick.waiting.control.FailureWindow;
 import com.kafkick.waiting.control.SnapshotHolder;
 import com.kafkick.waiting.domain.admission.AdmissionDecider;
 import com.kafkick.waiting.domain.admission.AdmissionDecision;
@@ -19,6 +22,7 @@ import java.util.Objects;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.DoubleSupplier;
+import java.util.function.LongSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -88,11 +92,21 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     /** 설정 오류를 한 번만 알린다. 라우트가 틀렸으면 늘 틀리다. */
     private final AtomicBoolean misconfigured = new AtomicBoolean();
 
+    /**
+     * fail-open 구간의 진입과 해제 (LG-2).
+     *
+     * <p>이 전이가 로그에 없으면 사후에 <b>추월이 언제 열렸는지</b>를 못 짚는다.
+     * 지표는 초 단위로 뭉개져 남고 보존 기간도 짧아, 사고 조사에서 필요한
+     * "몇 시 몇 분에 열려 얼마나 갔는가" 를 답하지 못한다.
+     */
+    private final FailureWindow failOpenWindow;
+
     private AdmissionGatewayFilter(SnapshotHolder holder, AdmissionDecider decider,
             Clock clock, MeterRegistry meters, DoubleSupplier random,
             QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter,
-            EntryToken entryTokens) {
+            EntryToken entryTokens, LongSupplier ticker) {
         this.holder = Objects.requireNonNull(holder, "holder 는 필수다");
+        this.failOpenWindow = FailureWindow.of(ticker);
         this.decider = Objects.requireNonNull(decider, "decider 는 필수다");
         this.clock = Objects.requireNonNull(clock, "clock 은 필수다");
         this.meters = Objects.requireNonNull(meters, "meters 는 필수다");
@@ -116,7 +130,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             SecondWindowLimiter limiter, EntryToken entryTokens) {
         this(holder, decider, clock, meters,
                 () -> ThreadLocalRandom.current().nextDouble(), queue, tokens, limiter,
-                entryTokens);
+                entryTokens, System::nanoTime);
     }
 
     public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider,
@@ -132,7 +146,22 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter,
             EntryToken entryTokens) {
         return new AdmissionGatewayFilter(holder, decider, clock, meters, random, queue,
-                tokens, limiter, entryTokens);
+                tokens, limiter, entryTokens, System::nanoTime);
+    }
+
+    /**
+     * 구간 시계를 받는다. <b>요청 시계와 따로다</b> — 구간 길이는 단조 시계로 재야
+     * NTP 가 시각을 되돌릴 때 음수가 안 된다.
+     *
+     * <p>고정하지 못하면 fail-open 이 얼마나 이어졌는지를 재는 계산 자체가
+     * 시험에서 늘 0 이 되어, 단위를 틀려도 통과한다 (TS-4).
+     */
+    public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider,
+            Clock clock, MeterRegistry meters, DoubleSupplier random,
+            QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter,
+            EntryToken entryTokens, LongSupplier ticker) {
+        return new AdmissionGatewayFilter(holder, decider, clock, meters, random, queue,
+                tokens, limiter, entryTokens, ticker);
     }
 
     /**
@@ -140,10 +169,14 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      * 들어오고, 그러면 지표 하나가 메모리를 밀어낸다.
      */
     private void count(String outcome) {
-        meters.counter(METRIC, "outcome", outcome).increment();
+        count(outcome, FailureCause.NONE);
     }
 
-    /** 예외 종류는 우리 코드가 정하는 값이라 라벨이 안 폭발한다. */
+    /**
+     * <b>태그 키 집합을 늘 같게 둔다.</b> 같은 이름에 키 집합이 둘이면
+     * 프로메테우스 레지스트리가 등록을 거절한다 — 지금은 단순 레지스트리라 안
+     * 터지고, 6.5 에서 붙이는 순간 터진다.
+     */
     private void count(String outcome, String cause) {
         meters.counter(METRIC, "outcome", outcome, "cause", cause).increment();
     }
@@ -236,8 +269,8 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         }
         // **판정에 쓴 상태를 그대로 쓴다.** 여기서 다시 읽으면 그 사이 틱이
         // 지나 판정과 답이 어긋난다.
-        // **같은 것은 MAX_ETA_SEC 인자뿐이다** — 상한 함수는 5번과 일부러 다르다.
-        // 인자까지 갈라지면 5번이 건 상한과 실제 등록 상한의 근거가 어긋난다.
+        // **같은 것은 MAX_ETA_SEC 인자뿐이다** — 상한 함수는 6번과 일부러 다르다.
+        // 인자까지 갈라지면 6번이 건 상한과 실제 등록 상한의 근거가 어긋난다.
         long capacity = AdmissionDecider.queueCapacity(state, MAX_ETA_SEC);
         return queue.enqueue(couponId, memberId, capacity, clock.instant())
                 // **여기까지만 열어 준다.** 뒤에 붙이면 줄에 선 사람이 응답을
@@ -248,7 +281,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                     //
                     // 대신 예외 종류를 라벨로 센다. 레디스가 죽은 것과 인자가
                     // 틀린 것은 다르게 다뤄야 하는데, 한 숫자로는 못 가린다.
-                    count("enqueue-error", e.getClass().getSimpleName());
+                    count("enqueue-error", FailureCause.of(e));
                     return Mono.empty();
                 })
                 .switchIfEmpty(Mono.defer(() ->
@@ -267,6 +300,11 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                     // 뒤집히면 그 사람이 통째로 추월당한다. 계획서가 "줄이 보이면
                     // 바로 풀어도 된다" 고 적은 것은 그 한 명을 안 센 것이다.
                     latch.mark(couponId, clock.instant().getEpochSecond());
+                    // 등록이 다시 되면 fail-open 구간이 끝난 것이다. 쌍으로 안
+                    // 남기면 로그에 진입만 있고 언제 닫혔는지가 없다 (LG-2).
+                    failOpenWindow.exited().ifPresent(r -> log.info(
+                            "fail-open 해제 — {}초 동안 {}건 통과시켰다",
+                            NANOSECONDS.toSeconds(r.elapsedNanos()), r.swallowed()));
                     if (!entry.accepted()) {
                         // 2차 방어에 걸렸다. 판정은 자리가 있다고 봤지만 실제로는 없다.
                         count(AdmissionDecision.REJECT_QUEUE_FULL.name());
@@ -295,6 +333,10 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         long cap = (long) (AdmissionDecider.globalCap(meta) * FAIL_OPEN_SHARE);
         if (limiter.tryAcquire(AdmissionDecider.GLOBAL_KEY, cap,
                 clock.instant().getEpochSecond())) {
+            // 매 요청 찍으면 정작 조사가 필요한 순간에 묻힌다. 구간의 시작만 찍는다.
+            if (failOpenWindow.entered()) {
+                log.warn("fail-open 진입 — 줄 등록이 안 돼 통과시킨다, 상한={}", cap);
+            }
             count("enqueue-failed-open");
             return chain.filter(exchange);
         }

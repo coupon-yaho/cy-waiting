@@ -144,7 +144,10 @@ public final class AllocationRedisPort implements SnapshotSource {
 
     /** 스크립트가 돌려준 {@code {now, field, value, ...}} 를 읽는다. */
     private CapacitySample readSample(List<Object> raw, AtomicBoolean dropped) {
-        long now = serverClock.observe(Long.parseLong(String.valueOf(raw.get(0))));
+        // **원시 값을 싣는다.** 단조 바닥값은 프로세스 전체의 최댓값이라, 다른
+        // 슬롯의 앞선 시계가 여기 나이에 실리면 보고가 전부 낡음이 된다.
+        long now = Long.parseLong(String.valueOf(raw.get(0)));
+        serverClock.observe(now);
         List<CapacityReport> reports = new ArrayList<>();
         for (int i = 1; i + 1 < raw.size(); i += 2) {
             CapacityReport report = parse(String.valueOf(raw.get(i)),

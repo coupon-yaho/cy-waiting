@@ -39,4 +39,36 @@ class CoverageGateTest {
                 .containsPattern("counter\\s*=\\s*'BRANCH'")
                 .containsPattern("minimum\\s*=\\s*1(\\.0+)?");
     }
+
+    /**
+     * <b>배선도 재는지 본다.</b> 도메인 규칙 하나로 이 게이트를 통과로 표시하면
+     * {@code gateway} 는 아무도 안 재면서 잰 것으로 기록된다.
+     */
+    @Test
+    @DisplayName("게이트웨이_패키지에도_분기_임계가_걸려_있다")
+    void 게이트웨이_패키지에도_분기_임계가_걸려_있다() throws IOException {
+        String script = Files.readString(BUILD);
+
+        Matcher rule = Pattern.compile(
+                        "rule\\s*\\{[^{]*?includes\\s*=\\s*\\[\\s*'com\\.kafkick\\.waiting\\.gateway'"
+                                + "[^}]*?\\}[^}]*?\\}", Pattern.DOTALL)
+                .matcher(script);
+
+        assertThat(rule.find()).as("게이트웨이 패키지 규칙이 사라졌다").isTrue();
+        assertThat(rule.group())
+                .as("그 규칙이 분기를 안 잡는다")
+                .containsPattern("counter\\s*=\\s*'BRANCH'")
+                .containsPattern("minimum\\s*=\\s*0\\.85")
+                // **element 까지 본다.** BUNDLE 로 바뀌면 이 이름이 어떤 번들에도
+                // 안 맞아 규칙이 공집합에 걸리고, 그래도 빌드는 초록이다.
+                .containsPattern("element\\s*=\\s*'PACKAGE'");
+    }
+
+    /** 재는 임계가 실제로 돌아야 한다. check 에 안 물리면 장식이다. */
+    @Test
+    @DisplayName("게이트웨이_임계가_check에_물려_있다")
+    void 게이트웨이_임계가_check에_물려_있다() throws IOException {
+        assertThat(Files.readString(BUILD))
+                .containsPattern("tasks\\.named\\('check'\\)[^}]*?gatewayCoverageVerification");
+    }
 }

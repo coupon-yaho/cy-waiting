@@ -80,7 +80,14 @@ end
 -- ZCARD 를 그대로 쓰면 이미 나간 사람이 상한을 먹는다. 실제로 기다리는 사람이
 -- 0 명인데 신규가 영구 거절되는 상태가 된다.
 if maxLen >= 0 then
-    local admitted = tonumber(redis.call('GET', KEYS[4]) or -1)
+    -- **깨진 임계로 비교하면 그 쿠폰의 등록이 전부 예외로 떨어진다.** 부르는
+    -- 쪽이 그것을 삼켜 fail-open 으로 흘리므로, 등록이 아니라 통과가 된다.
+    -- 형제 둘(queue_status·allocation_apply)은 이미 이 가드를 갖고 있다.
+    local admittedRaw = redis.call('GET', KEYS[4])
+    local admitted = admittedRaw and tonumber(admittedRaw) or -1
+    if admitted ~= admitted or admitted == math.huge or admitted == -math.huge then
+        admitted = -1
+    end
     local from = admitted >= 0 and ('(' .. string.format('%.0f', admitted)) or '-inf'
     if redis.call('ZCOUNT', KEYS[1], from, '+inf') >= maxLen then
         return {'-1', 0, 0, -1}

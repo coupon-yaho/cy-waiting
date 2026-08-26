@@ -157,6 +157,13 @@ jobs:
             # 병합 커밋은 규약 대상이 아니다. 부모 수로만 알 수 있어 여기서 본다.
             [[ $(git rev-list --parents -n1 "$sha" | wc -w) -gt 2 ]] && continue
 
+            # **봇이 쓴 커밋도 제외한다.** 위의 PR 작성자 조건은 봇이 연 PR 만
+            # 걸러, 사람이 연 PR 안에 섞여 들어온 범프 커밋은 그대로 검사한다.
+            # 릴리스 PR 처럼 여러 병합을 한꺼번에 담는 자리에서는 반드시 섞인다 —
+            # 그러면 봇에게 한글 제목과 Jira 푸터를 요구하는 셈이 된다.
+            author=$(git log -1 --format=%ae "$sha")
+            [[ "$author" == *"[bot]"* ]] && continue
+
             if ! violations=$(check_commit_subject "$subject"); then
               echo "::error::[$sha] $subject"
               while IFS= read -r line; do

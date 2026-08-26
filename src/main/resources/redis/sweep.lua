@@ -184,7 +184,10 @@ local function firstOf(list, count)
     return cut
 end
 
-stamped = firstOf(stamped, budget * 2)
+-- **인자가 쌍이라 예산의 두 배가 아니라 상한의 두 배로 잰다.** budget 이
+-- MAX_BUDGET 이면 쌍이 16,000 개가 되어 unpack 한계를 넘는다 — 그러면 그 쿠폰의
+-- 청소가 매 틱 같은 자리에서 죽고 커서가 전진을 못 한다.
+stamped = firstOf(stamped, math.min(budget, MAX_SCAN) * 2)
 if #stamped > 0 then
     redis.call('HSET', KEYS[2], unpack(stamped))
 end

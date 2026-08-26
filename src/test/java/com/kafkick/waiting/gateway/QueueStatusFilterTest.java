@@ -2,6 +2,8 @@ package com.kafkick.waiting.gateway;
 
 import static com.kafkick.waiting.gateway.QueuePort.NO_LIMIT;
 import static org.assertj.core.api.Assertions.assertThat;
+
+import io.micrometer.core.instrument.Tag;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.kafkick.waiting.control.GatewaySnapshot;
@@ -413,5 +415,40 @@ class QueueStatusFilterTest {
         filter.filter(exchange, e -> Mono.empty()).block();
 
         assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+    }
+
+    /**
+     * <b>밖에서 온 이름을 라벨로 쓰지 않는다.</b> 여기 올라오는 예외의 메시지에는
+     * 레디스가 실은 키(쿠폰 ID·회원 식별자)가 딸려 오고, 그것이 그대로 라벨이
+     * 되면 지표 하나가 메모리를 밀어낸다.
+     */
+    @Test
+    @DisplayName("실패_사유_라벨에_밖의_값이_안_들어간다")
+    void 실패_사유_라벨에_밖의_값이_안_들어간다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100));
+        줄.enqueue(COUPON, MEMBER, NO_LIMIT, 지금).block();
+        줄.터진다(new IllegalStateException(COUPON + " 의 " + MEMBER + " 가 죽었다"));
+
+        토큰으로_조회한다(tokens.issue(COUPON, MEMBER, 지금));
+
+        assertThat(meters.getMeters())
+                .filteredOn(m -> "unavailable".equals(m.getId().getTag("outcome")))
+                .singleElement()
+                .satisfies(m -> assertThat(m.getId().getTags())
+                        .containsExactly(Tag.of("cause", "bad-state"),
+                                Tag.of("outcome", "unavailable")));
+    }
+
+    /** 정상 판정도 같은 태그 키 집합을 쓴다. 안 그러면 프로메테우스가 거절한다. */
+    @Test
+    @DisplayName("정상_판정도_사유_태그를_싣는다")
+    void 정상_판정도_사유_태그를_싣는다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100));
+        줄.enqueue(COUPON, MEMBER, NO_LIMIT, 지금).block();
+
+        토큰으로_조회한다(tokens.issue(COUPON, MEMBER, 지금));
+
+        assertThat(meters.getMeters())
+                .allSatisfy(m -> assertThat(m.getId().getTag("cause")).isNotNull());
     }
 }

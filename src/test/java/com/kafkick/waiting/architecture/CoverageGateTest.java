@@ -58,7 +58,10 @@ class CoverageGateTest {
         assertThat(rule.group())
                 .as("그 규칙이 분기를 안 잡는다")
                 .containsPattern("counter\\s*=\\s*'BRANCH'")
-                .containsPattern("minimum\\s*=\\s*0\\.85");
+                .containsPattern("minimum\\s*=\\s*0\\.85")
+                // **element 까지 본다.** BUNDLE 로 바뀌면 이 이름이 어떤 번들에도
+                // 안 맞아 규칙이 공집합에 걸리고, 그래도 빌드는 초록이다.
+                .containsPattern("element\\s*=\\s*'PACKAGE'");
     }
 
     /** 재는 임계가 실제로 돌아야 한다. check 에 안 물리면 장식이다. */

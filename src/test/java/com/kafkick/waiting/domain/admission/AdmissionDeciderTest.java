@@ -370,15 +370,33 @@ class AdmissionDeciderTest {
      * <b>항상 대기라도 찬 줄에는 안 세운다.</b> 안 걸면 거절 대상 하나하나가
      * 레디스 왕복을 시도하고, 레디스가 느린 구간에서는 그 왕복이 전부 타임아웃해
      * fail-open 으로 흘러 뒷단 트래픽 생성기가 된다.
+     *
+     * <p><b>경계에서 잰다.</b> 여유가 많은 줄로 재면 이 줄이 상한을 어떻게
+     * 산출하든 통과한다.
      */
     @Test
     @DisplayName("항상_대기라도_줄이_차면_거절한다")
     void 항상_대기라도_줄이_차면_거절한다() {
-        // credit 0 이면 용량은 폴백(1 × maxEtaSec)이라 그만큼 찬 줄을 만든다.
-        CouponState 찬_줄 = CouponState.withQueue(QueueMode.ALWAYS, 0, 10_000, 100);
-        AdmissionRequest req = new AdmissionRequest("c1", 찬_줄, META, false, false, false, 0, 50);
+        // credit 0 이면 용량은 폴백(1 × 600)이다. 딱 그만큼 찬 줄을 만든다.
+        CouponState 찬_줄 = CouponState.withQueue(QueueMode.ALWAYS, 0, 10_000, 600);
+        AdmissionRequest req = new AdmissionRequest("c1", 찬_줄, META, false, false, false, 0, 600);
 
         assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.REJECT_QUEUE_FULL);
+    }
+
+    /**
+     * <b>배분이 아직 안 돈 구간에서 한 명 때문에 전원이 막히면 안 된다.</b>
+     * 6번의 참을 그대로 쓰면 `credit == 0` 에서 용량이 0 이 되어, 대기자 하나에
+     * `ALWAYS` 가 하는 일이 사라진다 — 운영자가 이 값을 거는 오픈 직후가 정확히
+     * 그 구간이다 (C-8).
+     */
+    @Test
+    @DisplayName("배분_전에도_항상_대기는_줄을_세운다")
+    void 배분_전에도_항상_대기는_줄을_세운다() {
+        CouponState 배분_전 = CouponState.withQueue(QueueMode.ALWAYS, 0, 10_000, 1);
+        AdmissionRequest req = new AdmissionRequest("c1", 배분_전, META, false, false, false, 0, 600);
+
+        assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.ENQUEUE_ALWAYS);
     }
 
     /** 안 찼으면 그대로 세운다. 위 시험만 있으면 항상 거절해도 통과한다. */

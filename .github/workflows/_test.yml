@@ -48,9 +48,13 @@ jobs:
             context)     ./gradlew --no-daemon contextTest ;;
             chaos)       ./gradlew --no-daemon chaosTest ;;
             mutation)    ./gradlew --no-daemon pitest ;;
-            # 어댑터는 단위·통합 양쪽에서 덮인다. 계층이 잡으로 갈려 exec 가
-            # 한자리에 안 모이므로 여기서 둘을 함께 돌려 합쳐 잰다.
-            coverage)    ./gradlew --no-daemon test integrationTest adapterCoverageVerification ;;
+            # 어댑터는 단위·통합 양쪽에서, 게이트웨이는 단위·컨텍스트 양쪽에서
+            # 덮인다. 계층이 잡으로 갈려 exec 가 한자리에 안 모이므로 여기서
+            # 셋을 함께 돌려 합쳐 잰다 — 빠뜨리면 임계가 안 도는데 잰 것으로
+            # 기록된다. jacocoTestCoverageVerification 은 도메인 100% 다.
+            coverage)    ./gradlew --no-daemon test integrationTest contextTest \
+                           jacocoTestCoverageVerification \
+                           adapterCoverageVerification gatewayCoverageVerification ;;
             *) echo "::error::알 수 없는 계층 '${{ inputs.layer }}'"; exit 1 ;;
           esac
 

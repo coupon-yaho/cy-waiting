@@ -22,6 +22,7 @@ import java.util.Objects;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.DoubleSupplier;
+import java.util.function.LongSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -52,6 +53,8 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     /** 판정 결과를 사유별로 센다. <b>요청마다 로그를 남기지 않는다</b> — 낡음
      * 구간에서 로그가 폭주하고, 그때 정작 봐야 할 것이 묻힌다. */
     private static final String METRIC = "waiting.admission";
+    /** 실패가 아닌 판정의 사유 자리. 태그 키 집합을 늘 같게 두려고 채운다. */
+    private static final String NO_CAUSE = "none";
 
     /** 받아도 되는 최대 대기 시간. 넘으면 줄을 세우는 것이 되레 나쁘다. */
     static final long MAX_ETA_SEC = 600;
@@ -98,13 +101,14 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      * 지표는 초 단위로 뭉개져 남고 보존 기간도 짧아, 사고 조사에서 필요한
      * "몇 시 몇 분에 열려 얼마나 갔는가" 를 답하지 못한다.
      */
-    private final FailureWindow failOpenWindow = FailureWindow.create();
+    private final FailureWindow failOpenWindow;
 
     private AdmissionGatewayFilter(SnapshotHolder holder, AdmissionDecider decider,
             Clock clock, MeterRegistry meters, DoubleSupplier random,
             QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter,
-            EntryToken entryTokens) {
+            EntryToken entryTokens, LongSupplier ticker) {
         this.holder = Objects.requireNonNull(holder, "holder 는 필수다");
+        this.failOpenWindow = FailureWindow.of(ticker);
         this.decider = Objects.requireNonNull(decider, "decider 는 필수다");
         this.clock = Objects.requireNonNull(clock, "clock 은 필수다");
         this.meters = Objects.requireNonNull(meters, "meters 는 필수다");
@@ -128,7 +132,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             SecondWindowLimiter limiter, EntryToken entryTokens) {
         this(holder, decider, clock, meters,
                 () -> ThreadLocalRandom.current().nextDouble(), queue, tokens, limiter,
-                entryTokens);
+                entryTokens, System::nanoTime);
     }
 
     public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider,
@@ -144,7 +148,22 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter,
             EntryToken entryTokens) {
         return new AdmissionGatewayFilter(holder, decider, clock, meters, random, queue,
-                tokens, limiter, entryTokens);
+                tokens, limiter, entryTokens, System::nanoTime);
+    }
+
+    /**
+     * 구간 시계를 받는다. <b>요청 시계와 따로다</b> — 구간 길이는 단조 시계로 재야
+     * NTP 가 시각을 되돌릴 때 음수가 안 된다.
+     *
+     * <p>고정하지 못하면 fail-open 이 얼마나 이어졌는지를 재는 계산 자체가
+     * 시험에서 늘 0 이 되어, 단위를 틀려도 통과한다 (TS-4).
+     */
+    public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider,
+            Clock clock, MeterRegistry meters, DoubleSupplier random,
+            QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter,
+            EntryToken entryTokens, LongSupplier ticker) {
+        return new AdmissionGatewayFilter(holder, decider, clock, meters, random, queue,
+                tokens, limiter, entryTokens, ticker);
     }
 
     /**
@@ -152,10 +171,14 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      * 들어오고, 그러면 지표 하나가 메모리를 밀어낸다.
      */
     private void count(String outcome) {
-        meters.counter(METRIC, "outcome", outcome).increment();
+        count(outcome, NO_CAUSE);
     }
 
-    /** 예외 종류는 우리 코드가 정하는 값이라 라벨이 안 폭발한다. */
+    /**
+     * <b>태그 키 집합을 늘 같게 둔다.</b> 같은 이름에 키 집합이 둘이면
+     * 프로메테우스 레지스트리가 등록을 거절한다 — 지금은 단순 레지스트리라 안
+     * 터지고, 6.5 에서 붙이는 순간 터진다.
+     */
     private void count(String outcome, String cause) {
         meters.counter(METRIC, "outcome", outcome, "cause", cause).increment();
     }

@@ -994,10 +994,10 @@ class AdmissionGatewayFilterTest {
         스냅샷을_심는다(CouponStates.idle(100));
         태운다(COUPON);
 
-        assertThat(meters.counter("waiting.admission", "outcome", "unknown-coupon").count())
-                .isEqualTo(1);
-        assertThat(meters.counter("waiting.admission", "outcome", "PASS_UNDER_CAP").count())
-                .isEqualTo(1);
+        assertThat(meters.counter("waiting.admission",
+                "outcome", "unknown-coupon", "cause", "none").count()).isEqualTo(1);
+        assertThat(meters.counter("waiting.admission",
+                "outcome", "PASS_UNDER_CAP", "cause", "none").count()).isEqualTo(1);
     }
 
     @Test
@@ -1010,10 +1010,14 @@ class AdmissionGatewayFilterTest {
 
         // **태그를 정확히 못 박는다.** 값만 보면 식별자를 키로 쓸 때 안 걸리고,
         // 키만 보면 값으로 쓸 때 안 걸린다.
+        //
+        // `cause` 는 늘 실린다 — 같은 이름에 태그 키 집합이 둘이면 프로메테우스
+        // 레지스트리가 등록을 거절한다.
         assertThat(meters.getMeters())
                 .singleElement()
                 .satisfies(m -> assertThat(m.getId().getTags())
-                        .containsExactly(Tag.of("outcome", "PASS_UNDER_CAP")));
+                        .containsExactly(Tag.of("cause", "none"),
+                                Tag.of("outcome", "PASS_UNDER_CAP")));
     }
 
     @Test

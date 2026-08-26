@@ -172,7 +172,7 @@ tryAcquireAll(tier1, tier2):
 ```
  1. stock <= 0                        → REJECT_SOLD_OUT
  2. hasValidToken                     → tier2 통과 시 PASS_TOKEN, 초과 시 RETRY_TOKEN
- 3. mode == ALWAYS                    → ENQUEUE_ALWAYS       ← 낡음보다 앞
+ 3. mode == ALWAYS && !queueFull      → ENQUEUE_ALWAYS       ← 낡음보다 앞
  4. dataStale && !hasQueue            → failOpen (상한 내 PASS, 초과 시 REJECT_OVERLOAD)
  5. mode == OFF && !hasQueue          → PASS_BYPASS
  6. waiting > 0 && waiting >= queueCapacity
@@ -204,6 +204,15 @@ tryAcquireAll(tier1, tier2):
 > 등록으로 가는 줄이 전부 낡음이나 `hasQueue` 를 요구하므로 추월당할 사람이
 > 없다. 남는 창은 켜 뒀다 끈 뒤 줄이 다 빠지는 그 판뿐이고, 상한은 그 창을
 > 안 닫는다.
+
+> **3번도 줄이 차면 안 세운다.** 안 걸면 6번보다 앞이라 거절 대상 하나하나가
+> 요청 경로 레디스 왕복을 시도하고, 그 왕복이 실패하면 부르는 쪽이 fail-open 으로
+> 받아 **꽉 찬 줄을 통째로 추월한다.** 6번은 로컬에서 답을 내던 자리였다.
+>
+> **다만 3번이 보는 상한은 6번과 다르다.** 3번은 등록 경로와 같은 값
+> (`AdmissionDecider.queueCapacity`, 폴백 포함) 으로 잰다. 6번의 값을 그대로 쓰면
+> 배분 전 `credit == 0` 구간에서 용량이 0 이 되어 **대기자 한 명에 전원이 거절되고**,
+> 운영자가 이 모드를 거는 오픈 직후가 정확히 그 구간이다 (C-8).
 
 > **5번의 `!hasQueue` 가 불변식 4 다.** `mode` 는 사람이 고른 값이고 `waiting` 은
 > 기계가 관측한 값이라 서로 독립이다. 줄이 남아 있는데 우회시키면 신규 유입이

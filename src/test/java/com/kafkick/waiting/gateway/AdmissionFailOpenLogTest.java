@@ -1,8 +1,10 @@
 package com.kafkick.waiting.gateway;
 
+import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.kafkick.waiting.control.SnapshotHolder;
@@ -21,6 +23,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -54,18 +57,21 @@ class AdmissionFailOpenLogTest {
 
     private final SecondWindowLimiter limiter = SecondWindowLimiter.withMaxKeys(10_000);
 
+    /** 구간 시계. 고정하지 못하면 지속 시간 계산이 시험에서 늘 0 이다 (TS-4). */
+    private final AtomicLong 나노 = new AtomicLong();
+
     private final AdmissionGatewayFilter filter = AdmissionGatewayFilter.of(
             holder, AdmissionDecider.of(limiter, 0.7),
-            Clock.fixed(지금, ZoneOffset.UTC), meters, 줄,
+            Clock.fixed(지금, ZoneOffset.UTC), meters, () -> 0.5, 줄,
             QueueToken.of("not-a-real-secret-0123456789abcdef"), limiter,
-            EntryToken.of("not-a-real-secret-0123456789abcdef"));
+            EntryToken.of("not-a-real-secret-0123456789abcdef"), 나노::get);
 
     private ListAppender<ILoggingEvent> 로그;
     private Level 원래_수준;
 
     private static ch.qos.logback.classic.Logger 로거() {
-        return (ch.qos.logback.classic.Logger)
-                LoggerFactory.getLogger(AdmissionGatewayFilter.class);
+        return ((LoggerContext) LoggerFactory.getILoggerFactory())
+                .getLogger(AdmissionGatewayFilter.class);
     }
 
     @BeforeEach
@@ -133,13 +139,16 @@ class AdmissionFailOpenLogTest {
         태운다("사람1");
         태운다("사람2");
 
+        // **구간을 실제로 흘린다.** 1초 미만이면 어떤 값이든 0 으로 잘려, 단위를
+        // 틀리거나 부호를 뒤집어도 통과한다.
+        나노.set(SECONDS.toNanos(7));
         줄.나았다();
         태운다("사람3");
 
         List<ILoggingEvent> 해제 = 남은것("fail-open 해제");
         assertThat(해제).hasSize(1);
         // **인자까지 본다.** 건수를 안 보면 삼킨 수를 0 으로 적어도 통과한다.
-        assertThat(해제.getFirst().getArgumentArray()).containsExactly(0L, 2);
+        assertThat(해제.getFirst().getArgumentArray()).containsExactly(7L, 2);
     }
 
     /** 장애가 없으면 아무것도 안 남는다. 늘 찍히면 전이 로그가 아니다. */

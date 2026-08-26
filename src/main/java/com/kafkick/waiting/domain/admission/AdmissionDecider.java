@@ -57,13 +57,25 @@ public class AdmissionDecider {
     }
 
     /**
-     * 줄이 받을 수 있는 만큼 찼는가.
+     * 사다리 6번이 보는 참. 폴백을 안 탄다 (AIJ-0073).
      *
      * <p><b>줄이 있을 때만 의미가 있다.</b> 한산한 쿠폰은 credit 이 0 이라 용량도
      * 0 이고, 조건을 안 걸면 {@code 0 >= 0} 이 참이 되어 R1 경로가 통째로 막힌다.
      */
     private boolean queueFull(CouponState s, AdmissionRequest req) {
         return s.waiting() > 0 && s.waiting() >= s.queueCapacity(req.maxEtaSec());
+    }
+
+    /**
+     * 사다리 3번이 보는 참. <b>등록 경로와 같은 상한으로 잰다.</b>
+     *
+     * <p>6번의 참을 그대로 쓰면 안 된다. 거기가 폴백을 안 타는 근거는 "줄이 이미
+     * 섰으니 배분이 이 쿠폰을 보고 있다" 인데, 3번에는 그 전제가 없다. 배분이 아직
+     * 안 돈 구간에서 `credit` 이 0 이면 용량이 0 이 되어 <b>대기자 한 명에 전원이
+     * 거절된다</b> — 운영자가 이 값을 거는 오픈 직후가 정확히 그 구간이다 (C-8).
+     */
+    private boolean alwaysQueueFull(CouponState s, AdmissionRequest req) {
+        return s.waiting() > 0 && s.waiting() >= queueCapacity(s, req.maxEtaSec());
     }
 
     /** 판정 사다리 10줄. 위에서부터 처음 걸리는 줄이 답이다. */
@@ -100,7 +112,7 @@ public class AdmissionDecider {
         // **줄이 이미 찼으면 여기서 안 세운다.** 안 걸면 거절 대상 하나하나가
         // 레디스 왕복을 시도하고, 레디스가 느린 구간에서는 그 왕복이 전부
         // 타임아웃해 fail-open 으로 흘러 뒷단 트래픽 생성기가 된다.
-        if (s.mode() == QueueMode.ALWAYS && !queueFull(s, req)) {
+        if (s.mode() == QueueMode.ALWAYS && !alwaysQueueFull(s, req)) {
             return AdmissionDecision.ENQUEUE_ALWAYS;
         }
 

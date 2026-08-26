@@ -26,6 +26,23 @@ public class GatewayRoutes {
     private static final String COUPON_ID = "{couponId:[A-Za-z0-9_-]{1,64}}";
 
     /**
+     * 서킷이 열렸을 때 넘길 주소.
+     *
+     * <p><b>받는 주소와 같은 상수에서 나온다.</b> 갈리면 기동은 되고 장애 때만
+     * 404 가 드러난다 — 사용자에게 404 는 매진으로 읽혀 다시 오지 않는다.
+     */
+    public static final String FALLBACK_URI = "forward:" + BackendFallbackRoutes.FALLBACK_ISSUE;
+
+    /**
+     * 서킷의 이름.
+     *
+     * <p>지금은 뒷단 주소가 하나라 하나뿐이다. 가용량 기반 분배(Phase 9)가 붙으면
+     * <b>인스턴스마다 따로 이름을 잡는다</b> (R-10) — 뒷단 전체를 하나로 묶으면
+     * 한 대가 죽어도 전 트래픽이 막힌다.
+     */
+    private static final String CIRCUIT = "backend";
+
+    /**
      * 관례로 쓰이는 클라이언트 IP 헤더. 프레임워크는 {@code X-Forwarded-*} 만
      * 지우므로 이것들은 그대로 넘어가고, 뒷단이 하나라도 믿으면 IP 단위 제한이
      * 헤더 한 줄로 우회된다.
@@ -72,7 +89,13 @@ public class GatewayRoutes {
                         .method(HttpMethod.POST)
                         .and().path("/api/v1/coupons/" + COUPON_ID + "/issue")
                         .and().predicate(rawPathIsPlain())
-                        .filters(f -> stripSpoofableClientIp(f).filter(admission))
+                        .filters(f -> stripSpoofableClientIp(f)
+                                .filter(admission)
+                                // **판정 뒤에 건다.** 앞에 걸면 서킷이 열린 동안
+                                // 판정이 아예 안 돌아, 이 노드가 줄을 세운 적 없는
+                                // 것으로 보이고 래치가 표식을 못 받는다.
+                                .circuitBreaker(c -> c.setName(CIRCUIT)
+                                        .setFallbackUri(FALLBACK_URI)))
                         .uri(backend.uri()))
                 .route("coupons", r -> r
                         .method(HttpMethod.GET)

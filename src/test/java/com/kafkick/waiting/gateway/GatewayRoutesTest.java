@@ -30,7 +30,12 @@ import org.springframework.cloud.gateway.support.ServerWebExchangeUtils;
 import org.springframework.cloud.gateway.route.RouteLocator;
 import org.springframework.cloud.gateway.route.builder.RouteLocatorBuilder;
 import org.springframework.boot.webflux.autoconfigure.WebFluxProperties;
+import io.github.resilience4j.timelimiter.TimeLimiterRegistry;
+import org.springframework.cloud.client.circuitbreaker.ReactiveCircuitBreakerFactory;
+import org.springframework.cloud.circuitbreaker.resilience4j.ReactiveResilience4JCircuitBreakerFactory;
+import org.springframework.cloud.circuitbreaker.resilience4j.Resilience4JConfigurationProperties;
 import org.springframework.cloud.gateway.filter.factory.RemoveRequestHeaderGatewayFilterFactory;
+import org.springframework.cloud.gateway.filter.factory.SpringCloudCircuitBreakerResilience4JFilterFactory;
 import org.springframework.cloud.gateway.handler.predicate.MethodRoutePredicateFactory;
 import org.springframework.cloud.gateway.handler.predicate.PathRoutePredicateFactory;
 import org.springframework.context.support.GenericApplicationContext;
@@ -73,12 +78,30 @@ class GatewayRoutesTest {
                 Clock.systemUTC());
     }
 
+    /** 라우트가 무엇을 잡는지만 보는 시험이라 값 자체는 안 잰다. 온전하면 된다. */
+    private static BackendCircuitProperties 서킷_설정() {
+        return new BackendCircuitProperties(Duration.ofSeconds(10), 20, 50f,
+                Duration.ofSeconds(3), Duration.ofMillis(1500), 50f,
+                Duration.ofSeconds(5), 10);
+    }
+
     private static GenericApplicationContext 술어만_있는_컨텍스트() {
         GenericApplicationContext context = new GenericApplicationContext();
         context.registerBean(WebFluxProperties.class);
         context.registerBean(RemoveRequestHeaderGatewayFilterFactory.class);
         context.registerBean(MethodRoutePredicateFactory.class);
         context.registerBean(PathRoutePredicateFactory.class);
+        // 서킷 필터도 컨텍스트에서 꺼낸다. 안 넣으면 라우트 정의가 통째로 못
+        // 만들어져, 이 시험이 "라우트가 무엇을 잡는가" 를 아예 못 재게 된다.
+        //
+        // 전달 핸들러는 안 넣는다. 이 시험은 무엇이 붙었는지만 보고 실제로
+        // 넘기지 않는다 — 넘기는 것은 컨텍스트 시험이 본다.
+        context.registerBean(ReactiveCircuitBreakerFactory.class,
+                () -> new ReactiveResilience4JCircuitBreakerFactory(
+                        BackendCircuit.registry(서킷_설정()),
+                        TimeLimiterRegistry.ofDefaults(), null,
+                        new Resilience4JConfigurationProperties()));
+        context.registerBean(SpringCloudCircuitBreakerResilience4JFilterFactory.class);
         context.refresh();
         return context;
     }
@@ -340,8 +363,13 @@ class GatewayRoutesTest {
     @Test
     @DisplayName("발급_라우트에_서킷이_걸려_있다")
     void 발급_라우트에_서킷이_걸려_있다() {
+        // **이름과 넘길 주소까지 본다.** 붙었는지만 보면 엉뚱한 서킷에 물리거나
+        // fallback 이 빠져도 초록이고, 그때 서킷이 열리면 404 가 나간다.
         assertThat(필터_이름(잡는_라우트(HttpMethod.POST, "/api/v1/coupons/c1/issue")))
-                .contains("CircuitBreaker");
+                .anySatisfy(name -> assertThat(name)
+                        .contains("CircuitBreaker")
+                        .contains("name = 'backend'")
+                        .contains("fallback = " + GatewayRoutes.FALLBACK_URI));
     }
 
     /**

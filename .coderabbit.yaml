@@ -35,7 +35,12 @@ reviews:
       - 'wip:'
       - 'docs:'            # 문서만 바꾸는 PR — path_filters 로도 걸리지만 이중으로
       - 'docs('
-      - 'chore(deps)'      # dependabot PR 은 dependency-review 가 본다
+      # **잡일은 리뷰 몫을 안 쓴다.** 설정·배선·의존성 갱신은 기계 검사가 보고,
+      # 여기에 한 건을 쓰면 정작 코드를 볼 몫이 그만큼 준다.
+      - 'chore:'
+      - 'chore('
+      - 'ci:'
+      - 'ci('
       # **릴리스는 이미 리뷰가 끝난 커밋을 모은 것이다.** develop→main PR 을
       # 다시 보면 누적 diff 전체를 재검토하게 되고, 지나간 지적으로
       # request_changes 가 걸려 병합까지 막힌다.

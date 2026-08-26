@@ -1293,6 +1293,22 @@ class AdmissionGatewayFilterTest {
     }
 
     /**
+     * <b>곱이 넘치면 음수가 되고, 음수 상한은 전면 차단입니다.</b> 예산은 밖에서
+     * 오는 값이라, 판이 커지는 방향으로 잘못 실리면 격벽이 정반대로 동작합니다.
+     */
+    @Test
+    @DisplayName("예산이_아무리_커도_격벽이_안_뒤집힌다")
+    void 예산이_아무리_커도_격벽이_안_뒤집힌다() {
+        // 세 배가 정확히 음수로 넘어가는 판. 큰 값이면 아무거나 되는 것이 아니다.
+        스냅샷을_심는다(CouponStates.off(1_000_000), new SnapshotMeta(1L << 62, 1));
+
+        MockServerWebExchange exchange = 요청(COUPON, "사람0");
+        filter.filter(exchange, e -> Mono.empty()).block();
+
+        assertThat(exchange.getResponse().getStatusCode()).isNull();
+    }
+
+    /**
      * <b>연 예산이 곧 격벽의 밑변입니다.</b> 여기서 최소 배수 속도로 떨어지면
      * 상한을 두고 연 몫의 대부분이 격벽에서 다시 막힙니다 — 레디스가 흔들리는
      * 구간에 그게 곧 전면 차단입니다.

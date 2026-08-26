@@ -70,7 +70,9 @@ class Phase5GateTest {
                     "EntryTokenTest#짧은_비밀키로는_안_만들어진다")),
             // 커버리지는 시험이 아니라 게이트 작업이 잰다. 그 설정이 살아 있는지를 본다.
             Map.entry("G5.10", List.of(
-                    "CoverageGateTest#판정_패키지에_분기_100_퍼센트가_걸려_있다")),
+                    "CoverageGateTest#판정_패키지에_분기_100_퍼센트가_걸려_있다",
+                    "CoverageGateTest#게이트웨이_패키지에도_분기_임계가_걸려_있다",
+                    "CoverageGateTest#게이트웨이_임계가_check에_물려_있다")),
             Map.entry("G5.12", List.of(
                     "AbuseLimitFilterTest#한_사람이_너무_빨리_두드리면_막는다",
                     "AbuseLimitFilterTest#식별자를_바꿔도_주소로_막는다")),

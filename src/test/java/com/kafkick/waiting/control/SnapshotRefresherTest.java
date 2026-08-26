@@ -309,4 +309,49 @@ class SnapshotRefresherTest {
         }
     }
 
+    /**
+     * <b>운영 배선이 타는 유일한 경로다.</b> 나이를 레디스 시계 하나로 재는 것이
+     * 여기서만 일어나는데, 나머지 시험은 전부 시각 없이 오는 길을 탄다.
+     *
+     * <p>스크립트가 초 대신 밀리초를 돌려주면 나이가 수천만 초가 되어 전 노드가
+     * 영구히 낡음으로 굳고, 0 근처를 돌려주면 갱신이 멎어도 영원히 최신이다.
+     * 둘 다 빌드는 초록이고 부하 시험 전까지 안 드러난다.
+     */
+    @Test
+    @DisplayName("레디스가_준_시각으로_나이를_잰다")
+    void 레디스가_준_시각으로_나이를_잰다() {
+        // 발행은 지금, 레디스는 그로부터 7초 뒤를 가리킨다.
+        long 레디스_시각 = 지금.getEpochSecond() + 7;
+        // 노드 시계는 일부러 한참 어긋나게 둔다. 여기에 기대면 값이 달라진다.
+        MutableClock clock = MutableClock.at(지금.plusSeconds(3_600));
+        SnapshotHolder holder = 홀더(clock);
+        SnapshotRefresher refresher = SnapshotRefresher.timed(
+                holder, () -> Mono.just(new TimedSnapshot(정상, 레디스_시각)), clock);
+
+        StepVerifier.create(refresher.once()).verifyComplete();
+
+        // 노드 시계로 쟀으면 3,600 초다. 임계 5 초를 넘은 것은 레디스 쪽 7 초다.
+        assertThat(holder.dataAge()).isEqualTo(Duration.ofSeconds(7));
+        assertThat(holder.isDataStale()).isTrue();
+    }
+
+    /**
+     * <b>받아온 뒤 흐른 시간은 더한다.</b> 재는 순간의 나이만 들고 있으면 갱신이
+     * 멎어도 그 값이 안 늙어, 낡은 재료로 계속 판정한다.
+     */
+    @Test
+    @DisplayName("받아온_뒤_흐른_시간이_나이에_더해진다")
+    void 받아온_뒤_흐른_시간이_나이에_더해진다() {
+        MutableClock clock = MutableClock.at(지금);
+        SnapshotHolder holder = 홀더(clock);
+        SnapshotRefresher refresher = SnapshotRefresher.timed(holder,
+                () -> Mono.just(new TimedSnapshot(정상, 지금.getEpochSecond() + 1)), clock);
+        StepVerifier.create(refresher.once()).verifyComplete();
+
+        clock.앞으로(Duration.ofSeconds(4));
+
+        // 잰 나이 1 초 + 그 뒤로 흐른 4 초. dataStaleAfter 는 5 초다.
+        assertThat(holder.dataAge()).isEqualTo(Duration.ofSeconds(5));
+        assertThat(holder.isDataStale()).isFalse();
+    }
 }

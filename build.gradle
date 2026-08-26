@@ -250,8 +250,51 @@ tasks.register('adapterCoverageVerification', JacocoCoverageVerification) {
     }
 }
 
+// 게이트웨이 배선은 단위와 컨텍스트 양쪽에서 덮인다. 필터 순서와 CORS 는
+// 컨텍스트에서만 도는데, 단위 exec 만 보면 그 부분이 통째로 안 덮인 것으로
+// 잡힌다. 도메인의 100% 규칙을 이 패키지에 그대로 걸 수는 없다 — 프레임워크
+// 계약상 안 도는 방어 분기가 남아 있어서다 (G5.10 각주).
+def gatewayClasses = { ->
+    sourceSets.main.output.classesDirs.asFileTree.matching {
+        include 'com/kafkick/waiting/gateway/**'
+    }
+}
+
+tasks.register('gatewayCoverageReport', JacocoReport) {
+    description = '게이트웨이 커버리지 보고 — 단위·컨텍스트 결합 기준'
+    group = 'verification'
+    dependsOn test, contextTest
+    executionData test, contextTest
+    sourceDirectories.setFrom(sourceSets.main.java.sourceDirectories)
+    classDirectories.setFrom(gatewayClasses())
+    reports {
+        xml.required = true
+        html.required = true
+    }
+}
+
+tasks.register('gatewayCoverageVerification', JacocoCoverageVerification) {
+    description = '게이트웨이 커버리지 임계 — 단위·컨텍스트 결합 기준'
+    group = 'verification'
+    dependsOn test, contextTest
+    executionData test, contextTest
+    sourceDirectories.setFrom(sourceSets.main.java.sourceDirectories)
+    classDirectories.setFrom(gatewayClasses())
+    finalizedBy 'gatewayCoverageReport'
+    violationRules {
+        rule {
+            element = 'PACKAGE'
+            includes = ['com.kafkick.waiting.gateway']
+            limit {
+                counter = 'BRANCH'
+                minimum = 0.85
+            }
+        }
+    }
+}
+
 tasks.named('check') {
-    dependsOn jacocoTestCoverageVerification
+    dependsOn jacocoTestCoverageVerification, 'gatewayCoverageVerification'
 }
 
 // 픽스처가 프로덕션 아티팩트에 새면 도달 불가 상태를 만드는 생성자가

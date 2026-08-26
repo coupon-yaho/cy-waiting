@@ -528,6 +528,46 @@ class AllocationRoundTest {
         assertThat(발행).isEmpty();
     }
 
+    /**
+     * <b>쿠폰 사이에서 잃는 것이 실제 모습이다.</b> 판 진입에서만 보면, 첫 쿠폰을
+     * 쓰는 동안 리스가 끝난 판이 남은 쿠폰에 계속 임계를 쓴다.
+     *
+     * <p>둘째 쿠폰에 임계를 쓰면 새 리더가 쓴 값을 덮고, 발행까지 나가면 새 리더가
+     * 이미 나눠 준 크레딧을 스냅샷이 한 번 더 광고한다 — 불변식 2 다.
+     */
+    @Test
+    @DisplayName("쿠폰_사이에서_잃으면_남은_몫이_0이_된다")
+    void 쿠폰_사이에서_잃으면_남은_몫이_0이_된다() {
+        AtomicBoolean 리더 = new AtomicBoolean(true);
+        AllocationRound round = AllocationRound.of(
+                리더::get,
+                () -> Mono.just(new TimedDemands(
+                        List.of(new CouponDemand("c1", 10, 100),
+                                new CouponDemand("c2", 10, 100)),
+                        읽은_시각)),
+                () -> 8L, () -> 1,
+                grant -> {
+                    // 첫 쿠폰을 쓰는 순간 리스가 끝난다.
+                    리더.set(false);
+                    적용.add(grant.couponId());
+                    return Mono.just(grant.credit());
+                },
+                hash -> {
+                    발행.put("last", hash);
+                    return Mono.empty();
+                },
+                () -> Instant.ofEpochSecond(1_700_000_000L),
+                () -> Mono.just(CreditSmoother.of(1.0)),
+                SnapshotCodec.create(), () -> 0L);
+
+        round.run().block();
+
+        // 옛 리더가 둘째 쿠폰의 임계를 쓰면 새 리더가 쓴 값을 덮는다.
+        assertThat(적용).containsExactly("c1");
+        // 발행도 안 나간다. 나갔으면 새 리더가 나눠 준 몫을 한 번 더 광고한다.
+        assertThat(발행).isEmpty();
+    }
+
     @Test
     @DisplayName("대상이_없어도_발행은_한다")
     void 대상이_없어도_발행은_한다() {

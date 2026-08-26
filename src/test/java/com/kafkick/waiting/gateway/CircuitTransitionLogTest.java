@@ -169,12 +169,12 @@ class CircuitTransitionLogTest {
         서킷().tryAcquirePermission();
 
         // 회복을 시도했다 실패한다. 여기서 이력이 사라지면 안 된다.
-        나노.set(java.util.concurrent.TimeUnit.SECONDS.toNanos(20));
+        나노.set(SECONDS.toNanos(20));
         서킷().transitionToHalfOpenState();
         서킷().transitionToOpenState();
         서킷().tryAcquirePermission();
 
-        나노.set(java.util.concurrent.TimeUnit.SECONDS.toNanos(30));
+        나노.set(SECONDS.toNanos(30));
         서킷().transitionToClosedState();
 
         assertThat(남은것("서킷 닫힘")).singleElement()
@@ -189,7 +189,7 @@ class CircuitTransitionLogTest {
     void 회복_시도가_실패하면_그_사실을_남긴다() {
         서킷().transitionToOpenState();
 
-        나노.set(java.util.concurrent.TimeUnit.SECONDS.toNanos(20));
+        나노.set(SECONDS.toNanos(20));
         서킷().transitionToHalfOpenState();
         서킷().transitionToOpenState();
 

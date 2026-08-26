@@ -47,8 +47,10 @@ except ImportError:
 
 # composite action 도 본다. `.github/workflows` 만 보면 `setup-gradle` 안의
 # 서드파티 액션이 통째로 빠진다 — dependabot.yml 이 같은 이유로 경로를 나눈다.
+# **중첩까지 훑는다.** 한 겹만 보면 액션 안의 액션이 통째로 검사에서 빠지고,
+# 빠지는 것이 곧 이 검사가 막으려던 실패 형태다.
 targets = sorted(pathlib.Path('.github/workflows').glob('*.y*ml')) \
-    + sorted(pathlib.Path('.github/actions').glob('*/action.y*ml'))
+    + sorted(pathlib.Path('.github/actions').rglob('action.y*ml'))
 
 if not targets:
     print("::error::검사할 워크플로·액션 파일이 없다 — 검사가 헛돈다", file=sys.stderr)
@@ -88,32 +90,42 @@ print("\n".join(found))
 PY
 }
 
-# 주석은 YAML 이 버리므로 원문에서 따로 읽는다. 참조 → 주석.
-declare -A comment_of
-while IFS=$'\t' read -r ref note; do
-    [[ -n "$ref" ]] && comment_of["$ref"]="$note"
-done < <(
-    grep -rhoE "uses:[[:space:]]*[\"']?[^\"'[:space:]]+[\"']?[[:space:]]*#[[:space:]]*\S+" \
+# 원문을 줄 단위로 읽어 **항목마다** 따로 본다.
+#
+# **맵으로 들면 안 된다.** 참조를 키로 삼으면 같은 핀이 여러 번 나올 때 마지막에
+# 읽힌 주석이 전부를 대신한다 — 한 줄의 틀린 판 주석이 다른 줄의 맞는 주석에
+# 가려지고, 그 가림은 아무 흔적을 안 남긴다. 파일까지 키에 넣어도 한 파일 안에서
+# 같은 문제가 남는다.
+occurrences=$(
+    grep -rHnoE "uses:[[:space:]]*[\"']?[^\"'[:space:]]+[\"']?([[:space:]]*#[[:space:]]*\S+)?" \
         .github/workflows .github/actions 2>/dev/null \
-        | sed -E "s/uses:[[:space:]]*[\"']?//; s/[\"']?[[:space:]]*#[[:space:]]*/\t/"
+        | sed -E "s/:([0-9]+):uses:[[:space:]]*[\"']?/\t\1\t/; s/[\"']?[[:space:]]*#[[:space:]]*/\t/"
 )
 
 refs=$(list_uses) || exit 1
+
+# **YAML 이 본 수와 원문이 본 수가 같아야 한다.** 원문 훑기가 못 보는 표기(여러
+# 줄로 쓴 값 같은 것)가 있으면 그 항목은 검사에서 통째로 빠진다.
+yaml_count=$(grep -c . <<<"$refs")
+raw_count=$(grep -c . <<<"$occurrences")
+if [[ "$yaml_count" != "$raw_count" ]]; then
+    echo "::error::uses 항목 수가 안 맞는다 — YAML $yaml_count, 원문 $raw_count." \
+         "원문 훑기가 못 보는 표기가 있다"
+    exit 1
+fi
 
 # ── 판을 원격에 물어 락파일을 다시 쓴다 ──────────────────────────────────────
 # 검사가 아니라 갱신이다. 결과는 커밋되어 사람이 diff 로 본다.
 if [[ "${1:-}" == "--refresh" ]]; then
     fail=0
     : >"$LOCK.tmp"
-    while IFS=$'\t' read -r file ref; do
+    while IFS=$'\t' read -r file line ref version; do
         [[ -z "$ref" ]] && continue
         [[ "$ref" == ./* || "$ref" == .github/* || "$ref" == docker://* ]] && continue
         path=${ref%@*}
         rev=${ref##*@}
         [[ "$ref" != *@* || ! "$rev" =~ ^[0-9a-f]{40}$ ]] && continue
         [[ "$path" == "$OURS"* ]] && continue
-
-        version=${comment_of[$ref]:-}
         [[ -z "$version" ]] && continue
         repo=$(cut -d/ -f1,2 <<<"$path")
 
@@ -139,7 +151,7 @@ if [[ "${1:-}" == "--refresh" ]]; then
         else
             printf '%s\t%s\t%s\n' "$path" "$rev" "$version" >>"$LOCK.tmp"
         fi
-    done <<<"$refs"
+    done <<<"$occurrences"
 
     if [[ $fail -ne 0 ]]; then
         rm -f "$LOCK.tmp"
@@ -166,7 +178,7 @@ done <"$LOCK"
 fail=0
 checked=0
 
-while IFS=$'\t' read -r file ref; do
+while IFS=$'\t' read -r file line ref version; do
     [[ -z "$ref" ]] && continue
 
     # 이 저장소 안의 액션. 우리 코드라 공급망 경계가 아니다.
@@ -175,7 +187,7 @@ while IFS=$'\t' read -r file ref; do
     if [[ "$ref" == docker://* ]]; then
         # 태그는 움직인다. 다이제스트만 받는다.
         [[ "$ref" == *"@sha256:"* ]] \
-            || { echo "::error file=$file::$ref — docker 액션은 다이제스트로 핀한다"; fail=1; }
+            || { echo "::error file=$file,line=$line::$ref — docker 액션은 다이제스트로 핀한다"; fail=1; }
         checked=$((checked + 1))
         continue
     fi
@@ -185,7 +197,7 @@ while IFS=$'\t' read -r file ref; do
     rev=${ref##*@}
 
     if [[ "$ref" != *@* || ! "$rev" =~ ^[0-9a-f]{40}$ ]]; then
-        echo "::error file=$file::$ref — 커밋 SHA 40자로 핀해야 한다." \
+        echo "::error file=$file,line=$line::$ref — 커밋 SHA 40자로 핀해야 한다." \
              "태그와 브랜치는 움직인다"
         fail=1
         continue
@@ -193,16 +205,15 @@ while IFS=$'\t' read -r file ref; do
 
     [[ "$path" == "$OURS"* ]] && continue
 
-    version=${comment_of[$ref]:-}
     if [[ -z "$version" ]]; then
-        echo "::error file=$file::$path — 핀 옆에 판 주석이 없다." \
+        echo "::error file=$file,line=$line::$path — 핀 옆에 판 주석이 없다." \
              "없으면 무엇이 핀됐는지 사람도 Dependabot 도 모른다"
         fail=1
         continue
     fi
 
     if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        echo "::error file=$file::$path — 주석이 정확한 판이 아니다: '$version'." \
+        echo "::error file=$file,line=$line::$path — 주석이 정확한 판이 아니다: '$version'." \
              "메이저만 적으면 Dependabot 이 그 메이저에 묶는다"
         fail=1
         continue
@@ -212,15 +223,15 @@ while IFS=$'\t' read -r file ref; do
     # 그때 원격에 물은 결과가 락파일 diff 로 남아 사람이 본다.
     entry=${locked["$path@$rev"]:-}
     if [[ -z "$entry" ]]; then
-        echo "::error file=$file::$path@$rev 이 $LOCK 에 없다." \
+        echo "::error file=$file,line=$line::$path@$rev 이 $LOCK 에 없다." \
              "\`.github/scripts/action-pins.sh --refresh\` 로 갱신하고 같이 커밋한다"
         fail=1
     elif [[ "$entry" != "$version" ]]; then
-        echo "::error file=$file::$path — 주석과 락파일이 어긋난다." \
+        echo "::error file=$file,line=$line::$path — 주석과 락파일이 어긋난다." \
              "주석=$version 인데 락파일=$entry 다"
         fail=1
     fi
-done <<<"$refs"
+done <<<"$occurrences"
 
 # 검사 대상이 0 이면 정규식이나 경로가 어긋난 것이다. 통과시키지 않는다.
 if [[ $checked -eq 0 ]]; then

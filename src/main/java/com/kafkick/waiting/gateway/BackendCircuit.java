@@ -13,9 +13,8 @@ import org.springframework.context.annotation.Configuration;
  * <p>뒷단 전체를 하나로 묶으면 한 대가 죽어도 전 트래픽이 막힌다. 인스턴스별이라야
  * 로드밸런서가 그 한 대만 빼고 나머지로 흘린다.
  *
- * <p><b>그래서 판정이 보는 값도 바뀐다.</b> "서킷이 열렸는가" 가 아니라 "살아 있는
- * 인스턴스 비율" 이다 (B-7) — 10대 중 3대가 열렸으면 통과 상한도 그만큼 줄어야
- * 한다. 안 그러면 남은 7대에 10대분이 몰린다. 그 배선은 CY-626 이다.
+ * <p><b>그래서 판정이 보는 값도 바뀐다</b> — "서킷이 열렸는가" 가 아니라 "살아 있는
+ * 인스턴스 비율" 이다 (B-7). 그 배선은 CY-626 이다.
  */
 @Configuration
 @EnableConfigurationProperties(BackendCircuitProperties.class)

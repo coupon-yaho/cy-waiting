@@ -3,10 +3,10 @@
 -- KEYS[1]  queue:{cid}   ZSET
 -- KEYS[2]  grace:{cid}   이탈 기록 해시
 -- KEYS[3]  alive:{cid}   생존 신호 ZSET. score 는 만료 시각(초)
--- ARGV[1]  검사 범위 K. 큐 앞에서 이만큼만 본다
+-- ARGV[1]  검사 범위 K. 큐 앞에서 이만큼만 본다. 1..3999
 -- ARGV[2]  지금 시각(초). 도메인처럼 주입받는다
 -- ARGV[3]  유예 보관 기간(초)
--- ARGV[4]  정리 예산. 만료 신호와 유예 기록을 각각 이만큼까지 지운다
+-- ARGV[4]  정리 예산. 만료 신호와 유예 기록을 각각 이만큼까지 지운다. 1..7999
 -- ARGV[5]  HSCAN 커서. 첫 호출은 '0'. 반환된 값을 다음에 넘긴다
 --
 -- 반환  {swept, expiredSignals, expiredGrace, nextCursor}
@@ -22,6 +22,9 @@
 --
 -- **키를 문자열로 조립하지 않는다.** 사람마다 alive 키를 만들면 KEYS 에
 -- 선언되지 않은 키를 만지게 되고 클러스터가 거부한다 (RD-1).
+--
+-- **상한은 unpack 한계에서 왔다.** 넘기면 ZMSCORE 나 HSET 이 죽고, 같은 자리가
+-- 매 틱 반복되면 큐가 영구 정지한다. 기록이 인자 쌍이라 검사 범위가 먼저 걸린다.
 --
 -- **모든 순회에 상한이 걸려 있어야 한다.** Lua 는 통째로 도는 동안 다른
 -- 요청을 전부 막는다. K 를 작게 줘도 어딘가에서 전체를 훑으면 그 K 는
@@ -149,12 +152,11 @@ local fields = scanned[2]
 local cutoff = now - retention
 local doomed = {}
 local stamped = {}
--- **훑는 양 자체에 상한을 건다.** 지울 것이 없으면 위 조기 종료가 절대 안
--- 걸려서, 정상 운영(대부분 신선)에서는 매 틱 받은 것을 끝까지 헛돈다. HSCAN 의
--- COUNT 는 힌트라 조밀하게 인코딩된 해시에서는 예산보다 많이 돌아온다.
-local scanCap = budget * 2
+-- **받은 것은 끝까지 분류한다.** 커서는 응답 전체 뒤로 전진하므로, 중간에
+-- 끊으면 그 뒤 항목이 이번 순회에서 통째로 빠진다 — 다음 한 바퀴가 돌 때까지
+-- 안 걷힌다. 비용은 COUNT 로 잡는다.
 for i = 1, #fields, 2 do
-    if #doomed >= budget or #stamped >= budget or i > scanCap then
+    if #doomed >= budget or #stamped >= budget then
         break
     end
     local value = fields[i + 1]

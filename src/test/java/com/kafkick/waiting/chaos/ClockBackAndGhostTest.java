@@ -43,7 +43,8 @@ class ClockBackAndGhostTest {
         long 승격_직후 = clock.observe(NOW - 30);
 
         assertThat(승격_직후).isEqualTo(NOW);
-        assertThat(clock.skew().appliedCount()).isPositive();
+        // 역행은 한 번뿐이다. 양수만 보면 중복 기록도 통과한다.
+        assertThat(clock.skew().appliedCount()).isEqualTo(1);
         assertThat(clock.skew().maxSkewMicros()).isEqualTo(30_000_000L);
     }
 

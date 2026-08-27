@@ -115,7 +115,7 @@
       "description": "진입과 해제가 쌍으로 남는다 (LG-2). 지표는 초 단위로 뭉개져 '몇 시 몇 분에 열려 얼마나 갔는가' 를 못 답한다.",
       "gridPos": {
         "h": 8,
-        "w": 24,
+        "w": 12,
         "x": 0,
         "y": 16
       },
@@ -136,9 +136,9 @@
       "description": "사람을 부르는 줄만 남는다. 자동으로 걷히는 전이는 WARN 이라 여기 안 온다 (LG-7).",
       "gridPos": {
         "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 24
+        "w": 12,
+        "x": 12,
+        "y": 16
       },
       "datasource": {
         "type": "loki",
@@ -161,9 +161,9 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 24,
+        "w": 12,
         "x": 0,
-        "y": 32
+        "y": 24
       },
       "targets": [
         {
@@ -183,8 +183,8 @@
     {
       "id": 8,
       "type": "timeseries",
-      "title": "적용 중인 운영 값",
-      "description": "배포 없이 바꾼 값이 닿았는지를 본다. -1 은 안 실려 온 것 (기동값으로 도는 중)",
+      "title": "격벽 포화",
+      "description": "막은 횟수는 이미 막힌 뒤에야 오른다. 차오르는 중인지를 본다",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -194,6 +194,36 @@
         "w": 12,
         "x": 12,
         "y": 24
+      },
+      "targets": [
+        {
+          "expr": "waiting_bulkhead_inflight",
+          "legendFormat": "{{instance}} — 걸려 있는 요청"
+        },
+        {
+          "expr": "waiting_bulkhead_coupons",
+          "legendFormat": "{{instance}} — 자리를 쥔 쿠폰"
+        },
+        {
+          "expr": "waiting_bulkhead_max_coupons",
+          "legendFormat": "{{instance}} — 담을 수 있는 쿠폰 (분모)"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "적용 중인 운영 값",
+      "description": "배포 없이 바꾼 값이 닿았는지를 본다. -1 은 안 실려 온 것 (기동값으로 도는 중)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 32
       },
       "targets": [
         {

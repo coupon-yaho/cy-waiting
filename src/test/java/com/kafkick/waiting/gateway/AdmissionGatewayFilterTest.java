@@ -16,6 +16,7 @@ import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.CouponStates;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
+import com.kafkick.waiting.domain.coupon.Tunables;
 import com.kafkick.waiting.domain.queue.EntryToken;
 import com.kafkick.waiting.domain.queue.QueueToken;
 import java.time.Clock;
@@ -1562,6 +1563,44 @@ class AdmissionGatewayFilterTest {
 
         assertThat(핫.getResponse().getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
         assertThat(콜드.getResponse().getStatusCode()).isNull();
+        풀어_준다();
+    }
+
+    /**
+     * <b>배포 없이 되돌릴 수 있어야 롤백이 성립합니다</b> (P-1). 재료에 실려 온
+     * 값이 기동 설정을 이깁니다 — 그 전파 경로가 스냅샷입니다.
+     */
+    @Test
+    @DisplayName("실려_온_걸림_시간이_격벽_상한을_바꾼다")
+    void 실려_온_걸림_시간이_격벽_상한을_바꾼다() {
+        // 걸림 시간을 1초로 줄이면 상한이 세 배에서 한 배로 조여진다.
+        holder.replace(new GatewaySnapshot(
+                Map.of(COUPON, CouponStates.queueing(CREDIT, 1_000_000, 10)),
+                new SnapshotMeta(CREDIT, 1, new Tunables(0.7, 1)), 지금));
+        붙잡아_채운다(초당_통과);
+
+        MockServerWebExchange 한_건_더 = 다음_초에_한_건("사람" + 초당_통과, e -> Mono.empty());
+
+        assertThat(한_건_더.getResponse().getStatusCode())
+                .as("걸림 시간 1초면 상한도 1배다")
+                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        풀어_준다();
+    }
+
+    /**
+     * <b>안 실려 오면 기동값입니다.</b> 기본값으로 채워 버리면 그 값이 각 노드의
+     * 기동 설정을 덮어써서, 운영자가 아무것도 안 바꿨는데 값이 바뀝니다.
+     */
+    @Test
+    @DisplayName("안_실려_오면_기동값으로_돈다")
+    void 안_실려_오면_기동값으로_돈다() {
+        스냅샷을_심는다(CouponStates.queueing(CREDIT, 1_000_000, 10), 좁은_META);
+        붙잡아_채운다(초당_통과);
+
+        // 기동값은 3초라 상한이 세 배다. 한 배 치를 채운 것으로는 안 막힌다.
+        MockServerWebExchange 한_건_더 = 다음_초에_한_건("사람" + 초당_통과, e -> Mono.empty());
+
+        assertThat(한_건_더.getResponse().getStatusCode()).isNull();
         풀어_준다();
     }
 }

@@ -9,12 +9,23 @@ package com.kafkick.waiting.domain.coupon;
  * @param globalCredit  전 쿠폰 합산 초당 통과 몫
  * @param gatewayCount  신선한 게이트웨이 수. 스케줄러가 하트비트로 센다
  */
-public record SnapshotMeta(long globalCredit, int gatewayCount) {
+public record SnapshotMeta(long globalCredit, int gatewayCount, Tunables tunables) {
 
     public SnapshotMeta {
         if (globalCredit < 0) {
             throw new IllegalArgumentException("globalCredit 은 음수가 될 수 없다: %d".formatted(globalCredit));
         }
+    }
+
+    /**
+     * 튜너블을 안 실은 재료.
+     *
+     * <p><b>{@code null} 은 "안 실려 왔다" 는 뜻입니다.</b> 기본값으로 채워 버리면
+     * 그 기본값이 기동 설정을 덮어써서, 운영자가 아무것도 안 바꿨는데 값이
+     * 바뀝니다 — 읽는 쪽이 기동값을 쓰도록 그대로 둡니다.
+     */
+    public SnapshotMeta(long globalCredit, int gatewayCount) {
+        this(globalCredit, gatewayCount, null);
     }
 
     /**

@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.CouponStates;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
+import com.kafkick.waiting.domain.coupon.Tunables;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -462,4 +463,22 @@ class AdmissionDeciderTest {
                 AdmissionDecision.ENQUEUE_BACKLOG, CouponStates.queueing(1, 10, 5), META))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    /**
+     * <b>배포 없이 되돌릴 수 있어야 롤백이 성립합니다</b> (P-1). 재료에 실려 온
+     * 한산 몫이 기동 설정을 이깁니다 — 그 전파 경로가 스냅샷입니다.
+     */
+    @Test
+    @DisplayName("실려_온_한산_몫이_기동값을_이긴다")
+    void 실려_온_한산_몫이_기동값을_이긴다() {
+        CouponState 한산 = CouponStates.idle(500);
+        SnapshotMeta 실려_온_것 = new SnapshotMeta(META.globalCredit(), META.gatewayCount(),
+                new Tunables(0.2, 3));
+
+        assertThat(decider().admittedRatePerSec(
+                AdmissionDecision.PASS_UNDER_CAP, 한산, 실려_온_것))
+                .isEqualTo(한산.idleCap(실려_온_것, 0.2))
+                .isNotEqualTo(한산.idleCap(META, IDLE_RATIO));
+    }
+
 }

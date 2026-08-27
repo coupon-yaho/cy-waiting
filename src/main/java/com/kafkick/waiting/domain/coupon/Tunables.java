@@ -50,4 +50,15 @@ public record Tunables(double idleCreditRatio, long inFlightSeconds) {
                 read.ratio(json, "idleCreditRatio", base.idleCreditRatio()),
                 read.seconds(json, "inFlightSeconds", base.inFlightSeconds()));
     }
+
+    /**
+     * 스냅샷에 실어 보낼 모양.
+     *
+     * <p><b>읽는 쪽과 같은 형식이어야 합니다.</b> 갈리면 리더가 실은 값과 노드가
+     * 읽는 값이 달라지고, 그 차이는 값을 바꿔 본 뒤에야 드러납니다.
+     */
+    public String toJson() {
+        return "{\"idleCreditRatio\":" + idleCreditRatio
+                + ",\"inFlightSeconds\":" + inFlightSeconds + "}";
+    }
 }

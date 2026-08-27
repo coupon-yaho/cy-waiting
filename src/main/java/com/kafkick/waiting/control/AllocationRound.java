@@ -7,6 +7,7 @@ import com.kafkick.waiting.domain.allocation.FairShareAllocator;
 import com.kafkick.waiting.domain.allocation.Grant;
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
+import com.kafkick.waiting.domain.coupon.Tunables;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -57,6 +58,18 @@ public final class AllocationRound {
     private final AtomicReference<CreditSmoother> smoother = new AtomicReference<>();
     private final Supplier<Mono<CreditSmoother>> restore;
     private final FairShareAllocator allocator = FairShareAllocator.create();
+    /**
+     * 운영자가 적은 값을 매 틱 읽습니다 (P-1).
+     *
+     * <p><b>못 읽으면 기본값입니다.</b> 여기서 멈추면 배포 없이 되돌리려고 만든
+     * 장치가 되레 배분을 멈춥니다.
+     */
+    private final Supplier<Mono<String>> readTunables;
+
+    /** 이번 판에 실을 값. 바뀔 때만 로그를 남기려고 앞 판의 것을 기억한다. */
+    private final AtomicReference<Tunables> lastTunables =
+            new AtomicReference<>(Tunables.defaults());
+
     private final FailureWindow failures;
 
     private AllocationRound(BooleanSupplier stillLeader,
@@ -64,7 +77,8 @@ public final class AllocationRound {
             IntSupplier gatewayCount, Function<Grant, Mono<Long>> apply,
             Function<Map<String, String>, Mono<Void>> publish, Supplier<Instant> clock,
             Supplier<Mono<CreditSmoother>> restore, SnapshotCodec codec,
-            LongSupplier creditFloor) {
+            LongSupplier creditFloor, Supplier<Mono<String>> readTunables) {
+        this.readTunables = Objects.requireNonNull(readTunables, "readTunables 는 필수다");
         this.stillLeader = Objects.requireNonNull(stillLeader, "stillLeader 는 필수다");
         this.demands = Objects.requireNonNull(demands, "demands 는 필수다");
         this.globalCredit = Objects.requireNonNull(globalCredit, "globalCredit 은 필수다");
@@ -88,9 +102,20 @@ public final class AllocationRound {
             LongSupplier globalCredit, IntSupplier gatewayCount, Function<Grant, Mono<Long>> apply,
             Function<Map<String, String>, Mono<Void>> publish, Supplier<Instant> clock,
             Supplier<Mono<CreditSmoother>> restore, SnapshotCodec codec,
-            LongSupplier creditFloor) {
+            LongSupplier creditFloor, Supplier<Mono<String>> readTunables) {
         return new AllocationRound(stillLeader, demands, globalCredit, gatewayCount, apply, publish,
-                clock, restore, codec, creditFloor);
+                clock, restore, codec, creditFloor, readTunables);
+    }
+
+    /** 튜너블을 안 읽던 자리. 늘 기본값으로 돈다. */
+    public static AllocationRound of(BooleanSupplier stillLeader,
+            Supplier<Mono<TimedDemands>> demands,
+            LongSupplier globalCredit, IntSupplier gatewayCount, Function<Grant, Mono<Long>> apply,
+            Function<Map<String, String>, Mono<Void>> publish, Supplier<Instant> clock,
+            Supplier<Mono<CreditSmoother>> restore, SnapshotCodec codec,
+            LongSupplier creditFloor) {
+        return of(stillLeader, demands, globalCredit, gatewayCount, apply, publish, clock,
+                restore, codec, creditFloor, () -> Mono.empty());
     }
 
     public Mono<Void> run() {
@@ -180,9 +205,11 @@ public final class AllocationRound {
                         // 히스테리시스를 안 돌려서 실을 상태가 없다 (CY-324).
                         // 돌리기 시작하면 여기가 매 틱 이월을 지우는 자리가
                         // 되므로, 기본값에 숨기지 않고 눈에 보이게 둔다.
-                        : publish.apply(codec.encode(snapshot(collected, granted, credit, readAt),
-                                current.snapshot(),
-                                QueueingHysteresis.Snapshot.empty()))));
+                        : tunables().flatMap(applied ->
+                                publish.apply(codec.encode(
+                                        snapshot(collected, granted, credit, readAt, applied),
+                                        current.snapshot(),
+                                        QueueingHysteresis.Snapshot.empty())))));
     }
 
     /**
@@ -242,11 +269,43 @@ public final class AllocationRound {
     }
 
     private GatewaySnapshot snapshot(List<CouponDemand> collected, Map<String, Long> granted,
-            long credit, Instant readAt) {
+            long credit, Instant readAt, Tunables applied) {
         Map<String, CouponState> coupons = new LinkedHashMap<>();
         collected.forEach(demand ->
                 coupons.put(demand.couponId(), stateOf(demand, granted)));
         return new GatewaySnapshot(coupons,
-                new SnapshotMeta(credit, gatewayCount.getAsInt()), readAt);
+                new SnapshotMeta(credit, gatewayCount.getAsInt(), applied), readAt);
+    }
+
+    /**
+     * 이번 판에 실을 튜너블.
+     *
+     * <p><b>못 읽으면 기본값입니다.</b> 장애 중에 손으로 넣는 값이라 오타가 나는데,
+     * 그때 배분이 멎으면 되돌릴 수단 자체가 사라집니다.
+     */
+    private Mono<Tunables> tunables() {
+        return readTunables.get()
+                .map(Tunables::parse)
+                .defaultIfEmpty(Tunables.defaults())
+                .onErrorResume(e -> {
+                    log.warn("튜너블을 못 읽어 기본값으로 간다 — {}", e.toString());
+                    return Mono.just(Tunables.defaults());
+                })
+                .doOnNext(this::logIfChanged);
+    }
+
+    /**
+     * 바뀔 때만 남깁니다.
+     *
+     * <p>매 틱 찍으면 초당 한 줄이라 정작 조사가 필요한 순간에 묻힙니다. 그리고
+     * 장애 뒤에 무엇을 건드렸는지는 이 줄로만 되짚습니다 (6.8.5).
+     */
+    private void logIfChanged(Tunables now) {
+        Tunables before = lastTunables.getAndSet(now);
+        if (!before.equals(now)) {
+            log.info("튜너블 변경 — 한산 몫 {} → {}, 걸림 시간 {}초 → {}초",
+                    before.idleCreditRatio(), now.idleCreditRatio(),
+                    before.inFlightSeconds(), now.inFlightSeconds());
+        }
     }
 }

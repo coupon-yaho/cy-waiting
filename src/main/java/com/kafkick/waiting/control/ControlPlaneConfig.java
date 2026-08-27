@@ -62,7 +62,7 @@ public class ControlPlaneConfig {
                 registry::count, port::apply, port::publish, Instant::now,
                 () -> port.load().map(hash ->
                         CreditSmoother.restore(SMOOTHING_ALPHA, codec.smoothing(hash))),
-                codec, capacity::lastFloor);
+                codec, capacity::lastFloor, port::readTunables);
     }
 
     /**

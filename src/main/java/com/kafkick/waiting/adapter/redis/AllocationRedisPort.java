@@ -416,6 +416,16 @@ public final class AllocationRedisPort implements SnapshotSource {
     }
 
     /**
+     * 운영자가 적은 값을 읽습니다 (P-1).
+     *
+     * <p><b>리더만 읽습니다.</b> 전 노드가 매 틱 읽으면 그 자체가 요청 경로 밖의
+     * 부하이고, 노드마다 다른 값을 볼 수 있습니다 — 스냅샷으로 퍼뜨리는 이유입니다.
+     */
+    public Mono<String> readTunables() {
+        return redis.opsForValue().get(RedisKeys.TUNABLES);
+    }
+
+    /**
      * <b>통째로 갈아 끼우되 사이가 벌어지지 않게 한다.</b>
      *
      * <p>지우고 쓰는 것을 나눠 치면 그 사이에 끊길 때 키가 없는 채로 남고,

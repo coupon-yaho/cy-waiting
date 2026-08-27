@@ -23,7 +23,13 @@ class ResponseCacheTest {
 
     private final MutableClock 시계 = MutableClock.at(지금);
 
-    private final ResponseCache cache = ResponseCache.of(시계, 3);
+    /** 항목 하나의 무게. 본문 두 바이트에 헤더 몫이 붙는다. */
+    private static final long 한_항목 = 2 + 512;
+
+    /** 딱 셋만 들어가는 예산. 넷째가 못 들어가는 것을 값으로 잰다. */
+    private static final long 예산 = 3 * 한_항목;
+
+    private final ResponseCache cache = ResponseCache.ofBytes(시계, 예산);
 
     private static ResponseCache.Entry 응답(String body) {
         return new ResponseCache.Entry(200,
@@ -65,6 +71,7 @@ class ResponseCacheTest {
         for (int i = 0; i < 3; i++) {
             cache.put("k" + i, 응답("v" + i), Duration.ofMillis(200));
         }
+        assertThat(cache.isFull()).as("예산이 찼는지 먼저 잰다").isTrue();
 
         cache.put("넘친다", 응답("v"), Duration.ofMillis(200));
 
@@ -105,6 +112,40 @@ class ResponseCacheTest {
         cache.put("새것", 응답("v"), Duration.ofMillis(200));
 
         assertThat(cache.get("새것")).isPresent();
+        // 지난 셋이 실제로 빠졌는지까지 본다. 안 빠졌으면 다음 것이 못 들어간다.
+        assertThat(cache.size()).as("담고 있는 키 수").isEqualTo(1);
+    }
+
+    /**
+     * <b>키 수로만 막으면 유계가 아닙니다.</b> 키 1만 × 본문 256KiB 는 2.4GiB 라,
+     * 메모리를 지키겠다고 만든 상한이 그대로 OOM 의 근거가 됩니다.
+     */
+    @Test
+    @DisplayName("예산보다_큰_응답은_아예_안_담는다")
+    void 예산보다_큰_응답은_아예_안_담는다() {
+        cache.put("큰것", 응답("가".repeat((int) 예산)), Duration.ofMillis(200));
+
+        assertThat(cache.get("큰것")).isEmpty();
+        assertThat(cache.bytes()).as("들고 있는 바이트").isZero();
+    }
+
+    /**
+     * <b>준 쪽이 나중에 고치면 안 됩니다.</b> 그러면 그다음 요청들이 바뀐 것을
+     * 받습니다 — 담아 둔 응답이 조용히 다른 것이 됩니다.
+     */
+    @Test
+    @DisplayName("담은_뒤_원본을_고쳐도_안_바뀐다")
+    void 담은_뒤_원본을_고쳐도_안_바뀐다() {
+        byte[] 원본 = "첫 응답".getBytes();
+        cache.put("k", new ResponseCache.Entry(200,
+                Map.of("X", List.of("하나")), 원본), Duration.ofMillis(200));
+
+        원본[0] = 0;
+        byte[] 받은_것 = cache.get("k").orElseThrow().body();
+        받은_것[0] = 0;
+
+        assertThat(cache.get("k").orElseThrow().body())
+                .isEqualTo("첫 응답".getBytes());
     }
 
     @Test
@@ -116,7 +157,7 @@ class ResponseCacheTest {
     @Test
     @DisplayName("상한이_1_미만이면_만들지_못한다")
     void 상한이_1_미만이면_만들지_못한다() {
-        assertThatThrownBy(() -> ResponseCache.of(시계, 0))
+        assertThatThrownBy(() -> ResponseCache.ofBytes(시계, 0))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 

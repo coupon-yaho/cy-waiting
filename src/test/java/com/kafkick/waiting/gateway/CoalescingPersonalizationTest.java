@@ -177,6 +177,49 @@ class CoalescingPersonalizationTest {
     }
 
     /**
+     * <b>선언을 안 하는 뒷단에는 붙지 않습니다.</b>
+     *
+     * <p>붙으면 리더의 왕복이 끝난 뒤 각자 다시 부릅니다 — 뒷단 부하는 필터가 없을
+     * 때와 같고 지연만 두 배가 됩니다. 없느니만 못한 상태입니다.
+     */
+    @Test
+    @DisplayName("선언을_안_하면_다음부터는_안_붙는다")
+    void 선언을_안_하면_다음부터는_안_붙는다() {
+        AtomicInteger 붙은_횟수 = new AtomicInteger();
+
+        // 첫 판이 가르친다. 그 뒤로는 아무도 안 붙는다.
+        IntStream.range(0, 4).forEach(i ->
+                filter.filter(조회("사람" + i), ex -> 그냥_답한다(ex, "목록")).block());
+        filter.filter(조회("나중"), ex -> {
+            붙은_횟수.incrementAndGet();
+            return 그냥_답한다(ex, "목록");
+        }).block();
+
+        assertThat(붙은_횟수).as("각자 그대로 지나간다").hasValue(1);
+    }
+
+    /** 선언이 돌아오면 곧바로 다시 모읍니다. 안 그러면 한 번의 누락이 영구가 됩니다. */
+    @Test
+    @DisplayName("선언이_돌아오면_다시_모은다")
+    void 선언이_돌아오면_다시_모은다() {
+        AtomicInteger 뒷단 = new AtomicInteger();
+
+        filter.filter(조회("먼저"), ex -> 그냥_답한다(ex, "목록")).block();
+        시계.앞으로(Duration.ofSeconds(1));
+        // 선언을 붙여 한 번 답하면 그 사실을 배운다.
+        filter.filter(조회("가르침"), ex -> 답한다(ex, "목록")).block();
+        시계.앞으로(Duration.ofSeconds(1));
+
+        IntStream.range(0, 3).forEach(i ->
+                filter.filter(조회("나중" + i), ex -> {
+                    뒷단.incrementAndGet();
+                    return 답한다(ex, "목록");
+                }).block());
+
+        assertThat(뒷단).as("다시 모인다").hasValue(1);
+    }
+
+    /**
      * <b>같은 것을 답하면 모여야 합니다.</b> 위 시험이 "늘 안 모인다" 로도 통과하면
      * 안전장치가 아니라 기능 정지 확인이 됩니다.
      */

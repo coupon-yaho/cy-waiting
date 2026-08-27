@@ -88,6 +88,15 @@ public class GatewayRoutes {
                 throw new IllegalArgumentException(
                         "responseTimeout 은 1ms 이상이어야 한다: " + responseTimeout);
             }
+            // **격벽 시한보다 앞이어야 한다.** 뒤에 있으면 격벽이 먼저 끊고, 그때
+            // 서킷에 가는 것은 오류가 아니라 취소다 — 취소는 창에 안 쌓여 멎은
+            // 뒷단의 서킷이 영영 안 열린다. 시험으로만 두면 배포 설정 한 줄이
+            // 이 순서를 뒤집고, 그 사실은 장애 때만 드러난다.
+            if (responseTimeout.compareTo(AdmissionGatewayFilter.MAX_IN_FLIGHT) >= 0) {
+                throw new IllegalArgumentException(
+                        "responseTimeout 은 격벽 시한(" + AdmissionGatewayFilter.MAX_IN_FLIGHT
+                                + ") 보다 짧아야 한다: " + responseTimeout);
+            }
         }
     }
 

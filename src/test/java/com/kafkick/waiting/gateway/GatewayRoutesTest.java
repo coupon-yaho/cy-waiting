@@ -1,6 +1,7 @@
 package com.kafkick.waiting.gateway;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.kafkick.waiting.control.SnapshotHolder;
@@ -186,6 +187,26 @@ class GatewayRoutesTest {
         assertThatThrownBy(() ->
                 new GatewayRoutes.Backend("http://backend:8080", Duration.ZERO))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /**
+     * <b>순서를 시험으로만 두면 배포 설정 한 줄이 뒤집습니다.</b> 격벽이 먼저
+     * 끊으면 서킷이 받는 것은 오류가 아니라 취소이고, 멎은 뒷단의 서킷이 영영
+     * 안 열립니다. 기동에서 막아야 그 설정이 운영에 못 나갑니다.
+     */
+    @Test
+    @DisplayName("응답_상한이_격벽_시한_뒤면_기동을_막는다")
+    void 응답_상한이_격벽_시한_뒤면_기동을_막는다() {
+        assertThatThrownBy(() -> new GatewayRoutes.Backend("http://backend:8080",
+                AdmissionGatewayFilter.MAX_IN_FLIGHT))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new GatewayRoutes.Backend("http://backend:8080",
+                AdmissionGatewayFilter.MAX_IN_FLIGHT.plusSeconds(1)))
+                .isInstanceOf(IllegalArgumentException.class);
+        // 바로 앞은 받아야 한다. 안 그러면 상한을 못 올린다.
+        assertThatCode(() -> new GatewayRoutes.Backend("http://backend:8080",
+                AdmissionGatewayFilter.MAX_IN_FLIGHT.minusMillis(1)))
+                .doesNotThrowAnyException();
     }
 
     @Test

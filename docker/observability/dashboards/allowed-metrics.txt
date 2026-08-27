@@ -6,3 +6,6 @@
 #
 # 주석과 빈 줄은 무시한다.
 spring_cloud_gateway_requests_seconds_count
+# 서킷 상태. resilience4j 가 내고, BackendCircuit 이 직접 묶는다 — 자동 구성에
+# 기대면 레지스트리를 손으로 만드는 순간 조용히 빠진다.
+resilience4j_circuitbreaker_state

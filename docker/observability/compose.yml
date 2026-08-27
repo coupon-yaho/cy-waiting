@@ -13,6 +13,7 @@ services:
     image: prom/prometheus:v3.1.0
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./rules:/etc/prometheus/rules:ro
     # **`gateway` 가 어디인지 알려 준다.** 이 스택만으로는 그런 이름의 컨테이너가
     # 없어서 `gateway:8081` 이 안 풀리고, 프로메테우스는 대상이 없다고 조용히
     # 표시할 뿐이다 — 대시보드는 그냥 비어 보인다.

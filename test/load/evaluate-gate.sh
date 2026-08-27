@@ -167,6 +167,32 @@ case "$scenario" in
       violate "STUB_SERVED 가 없어 뒷단 도달 수를 못 봤다 — 이 시나리오의 핵심 증거다"
     fi
     ;;
+  read-window)
+    checks=$(read_metric '.metrics.checks.value' '.metrics.checks.values.rate')
+    reqs=$(read_metric '.metrics.http_reqs.count' '.metrics.http_reqs.values.count')
+
+    report "검사 통과율" "${checks:-없음}"
+    report "요청 수" "${reqs:-없음}"
+
+    at_least "${reqs:-}" 1 "요청 수"
+    at_least "${checks:-}" 0.99 "검사 통과율"
+
+    # **"동시 1만" 을 하네스가 못 만든다.** 1만 VU 를 띄우는 데만 십수 초가
+    # 걸려서 도착이 수명 창 수십 개에 흩어진다. 그래서 뒷단 도달 수를 절대값으로
+    # 재는 대신 병합 배수로 잰다 — 재려던 것(같은 조회가 뒷단에 한 번만 간다)은
+    # 그 값이 답한다.
+    if [[ -n "${STUB_SERVED:-}" ]]; then
+      report "뒷단 도달" "${STUB_SERVED}"
+      report "병합 배수" "$(awk -v a="${reqs:-0}" -v b="${STUB_SERVED:-1}" \
+          'BEGIN { printf "%.0f", (b + 0 == 0) ? 0 : (a + 0) / (b + 0) }')"
+      at_least "${STUB_SERVED}" 1 "뒷단 도달"
+      at_least "$(awk -v a="${reqs:-0}" -v b="${STUB_SERVED:-1}" \
+          'BEGIN { printf "%.0f", (b + 0 == 0) ? 0 : (a + 0) / (b + 0) }')" \
+          500 "병합 배수"
+    else
+      violate "STUB_SERVED 가 없어 뒷단 도달 수를 못 봤다 — 이 시나리오의 핵심 증거다"
+    fi
+    ;;
   *)
     # **모르는 시나리오를 통과로 안 센다.** 기본이 통과면 시나리오가 늘 때마다
     # 아무 기준 없는 잡이 하나씩 생기고, 그 초록은 아무 뜻이 없다.

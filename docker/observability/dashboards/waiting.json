@@ -227,12 +227,16 @@
       },
       "targets": [
         {
-          "expr": "waiting_allocation_over",
-          "legendFormat": "{{instance}} — 배분 초과"
+          "expr": "increase(waiting_allocation_budget_overshoot_total[5m])",
+          "legendFormat": "{{instance}} — 예산 초과(평활 지연·하한)"
         },
         {
-          "expr": "waiting_queue_floor_applied",
-          "legendFormat": "{{instance}} — 바닥값 적용(시계 역행)"
+          "expr": "increase(waiting_allocation_entered_overshoot_total[5m])",
+          "legendFormat": "{{instance}} — 초과 입장(직접 증거)"
+        },
+        {
+          "expr": "increase(waiting_snapshot_clock_floor_applied_total[5m])",
+          "legendFormat": "{{instance}} — 재료 시각 역행"
         }
       ]
     }

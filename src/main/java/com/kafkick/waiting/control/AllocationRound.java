@@ -60,11 +60,14 @@ public final class AllocationRound {
     private final FairShareAllocator allocator = FairShareAllocator.create();
     private final FailureWindow failures;
 
-    /** 배분 초과 구간. 틱마다 찍으면 정작 조사가 필요한 순간에 묻힌다 (LG-2). */
-    private final FailureWindow overAllocation = FailureWindow.create();
+    /** 초과 구간. 틱마다 찍으면 정작 조사가 필요한 순간에 묻힌다 (LG-2). */
+    private final FailureWindow overshoot = FailureWindow.create();
 
-    /** 마지막 틱의 초과분. 0 이 정상이고, 그 밖은 전부 사고다. */
-    private final AtomicLong overAllocated = new AtomicLong();
+    /** 뒷단이 받을 수 있다고 한 것보다 더 나눠 준 누적량. */
+    private final AtomicLong budgetOvershoot = new AtomicLong();
+
+    /** 예산보다 더 들여보낸 누적 인원. */
+    private final AtomicLong enteredOvershoot = new AtomicLong();
 
     private AllocationRound(BooleanSupplier stillLeader,
             Supplier<Mono<TimedDemands>> demands, LongSupplier globalCredit,
@@ -156,11 +159,11 @@ public final class AllocationRound {
         long credit = Math.max(smoothed, Math.max(0, creditFloor.getAsLong()));
         Map<String, Long> granted = new LinkedHashMap<>();
         allocator.allocate(credit, collected).forEach(g -> granted.put(g.couponId(), g.credit()));
-        watchOverAllocation(granted, credit);
 
         if (lostLeadership()) {
             return Mono.empty();
         }
+        watchBudget(credit);
         AtomicBoolean anyFailed = new AtomicBoolean();
         return Flux.fromIterable(collected)
                 .concatMap(demand -> applyOne(demand, granted, anyFailed))
@@ -168,6 +171,7 @@ public final class AllocationRound {
                 // **실제로 들어온 수는 나눠 준 수와 다르다.** 큐가 몫보다 짧으면
                 // 남고, 적용이 실패하면 0 이다. 안 남기면 크레딧이 어디서 새는지
                 // 사후에 못 가린다.
+                .doOnNext(admitted -> watchEntered(admitted, credit))
                 .doOnNext(admitted -> {
                     // **판이 통째로 성공해야 걷힌 것이다.** 쿠폰 하나가 계속
                     // 실패하고 다른 쿠폰이 성공하는 동안 매 판 복귀를 찍으면,
@@ -194,29 +198,51 @@ public final class AllocationRound {
     }
 
     /**
-     * 나눠 준 합이 가진 것을 넘었는가.
+     * 나눠 준 예산이 <b>뒷단이 받을 수 있다고 한 것</b>을 넘었는가 (6.9.1).
      *
-     * <p><b>초과 발급의 선행 지표다</b> (불변식 2). 게이트웨이는 재고를 안 가져
-     * 초과 발급 자체를 못 본다 — 여기가 넘으면 원인이 배분에 있다.
+     * <p>배분기는 준 예산을 안 넘긴다 — 그걸 다시 재면 항등식이다. 넘는 자리는
+     * 평활 지연과 하한이다.
      */
-    // 세는 것으로 끝낸다. 여기서 멈추면 계산 오류 한 번이 대기열을 통째로 세운다.
-    private void watchOverAllocation(Map<String, Long> granted, long credit) {
-        long sum = granted.values().stream().mapToLong(Long::longValue).sum();
-        overAllocated.set(Math.max(0, sum - credit));
-        if (sum <= credit) {
-            overAllocation.exited().ifPresent(r -> log.warn(
-                    "배분 초과 해제 — {}초 동안 {}틱이 넘겼다", r.elapsedSeconds(), r.swallowed()));
+    // 뒷단이 1,000 으로 떨어졌다고 보고해도 평활은 열 틱 넘게 7,300 을 나눠 준다.
+    // 그 구간이 초과 발급 직전 상태이고, 이 값이 그것을 센다.
+    private void watchBudget(long credit) {
+        long observed = Math.max(0, globalCredit.getAsLong());
+        long over = credit - observed;
+        if (over <= 0) {
+            overshoot.exited().ifPresent(r -> log.info(
+                    "배분 예산 초과 해제 — {}초 동안 {}틱", r.elapsedSeconds(), r.swallowed()));
             return;
         }
-        if (overAllocation.entered()) {
-            log.error("배분이 가진 것보다 많이 나눠 줬다 — 크레딧 {}, 나눠 준 합 {}. "
-                    + "초과 발급의 선행 지표다", credit, sum);
+        budgetOvershoot.addAndGet(over);
+        if (overshoot.entered()) {
+            log.warn("뒷단이 받는다는 것보다 많이 나눠 준다 — 관측 {}, 나눠 준 예산 {}. "
+                    + "초과 발급의 선행 지표다", observed, credit);
         }
     }
 
-    /** 마지막 틱의 초과분. 지표가 이 값을 읽는다 (6.9.1). */
-    public long lastOverAllocated() {
-        return overAllocated.get();
+    /**
+     * 실제로 들여보낸 수가 예산을 넘었는가 (6.9.1).
+     *
+     * <p><b>나눠 준 수와 다르다.</b> 동점 score 가 있으면 임계 하나에 여럿이
+     * 걸려, 준 몫보다 많이 들어간다 — 이건 항등식이 아니다.
+     */
+    private void watchEntered(long admitted, long credit) {
+        long over = admitted - credit;
+        if (over > 0) {
+            enteredOvershoot.addAndGet(over);
+            log.error("예산보다 많이 들여보냈다 — 예산 {}, 들인 인원 {}. "
+                    + "초과 발급의 직접 증거다", credit, admitted);
+        }
+    }
+
+    /** 뒷단이 받는다는 것보다 더 나눠 준 누적량. 지표가 이 값을 읽는다. */
+    public double budgetOvershoot() {
+        return budgetOvershoot.get();
+    }
+
+    /** 예산보다 더 들여보낸 누적 인원. */
+    public double enteredOvershoot() {
+        return enteredOvershoot.get();
     }
 
     /**

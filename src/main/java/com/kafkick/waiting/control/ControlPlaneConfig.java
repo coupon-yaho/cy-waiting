@@ -108,6 +108,18 @@ public class ControlPlaneConfig {
                 properties.scheduler().tick().dividedBy(4), allocationScheduler, meters);
     }
 
+    /**
+     * 불변식의 선행 지표.
+     *
+     * <p>초과 발급 자체는 발급 계층만 안다. 게이트웨이는 스스로 계산한 값으로
+     * 대신 보고, 그것이 오르면 원인이 이쪽이라는 뜻이다 (6.9.1).
+     */
+    @Bean
+    InvariantMetrics invariantMetrics(AllocationRound round, AllocationRedisPort port,
+            MeterRegistry meters) {
+        return InvariantMetrics.bind(round, port.clockSkew(), meters);
+    }
+
     /** 배분 틱. <b>재료를 먼저 읽고 배분한다</b> — 안 읽으면 크레딧이 첫 하한에 머문다. */
     @Bean
     AllocationScheduler allocationLoop(ControlPlaneProperties properties, Leadership leadership,

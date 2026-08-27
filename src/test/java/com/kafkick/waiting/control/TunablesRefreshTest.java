@@ -5,11 +5,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.kafkick.waiting.domain.coupon.Tunables;
 import java.time.Duration;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
+import reactor.test.StepVerifier;
 
 /**
  * 운영자가 적은 값을 <b>배분 판 밖에서</b> 읽습니다 (P-1 · 6.8.2).
@@ -21,8 +23,14 @@ class TunablesRefreshTest {
 
     private final AtomicReference<Mono<String>> 응답 = new AtomicReference<>(Mono.empty());
 
+    /** 재료에 실려 있던 값. 승계 첫 판이 이걸 이어 싣는다. */
+    private final AtomicReference<Optional<Tunables>> 재료 =
+            new AtomicReference<>(Optional.empty());
+
+    private final AtomicLong 시계 = new AtomicLong();
+
     private final TunablesRefresh refresh = TunablesRefresh.of(
-            응답::get, Duration.ofMillis(200), Schedulers.parallel());
+            응답::get, 재료::get, Duration.ofMillis(200), Schedulers.parallel(), 시계::get);
 
     /**
      * <b>키가 없으면 안 실린 것입니다.</b> 기본값으로 채우면 그 값이 각 노드의
@@ -74,10 +82,58 @@ class TunablesRefreshTest {
         refresh.refresh().block();
         응답.set(Mono.never());
 
-        // 상한(200ms)이 안 걸리면 여기서 영원히 멈춘다.
-        refresh.refresh().block(Duration.ofSeconds(5));
+        // 예산이 실제로 200ms 인지를 가상 시계로 잰다. 실시계로 재면 CI 부하에
+        // 흔들리고, 넉넉한 상한은 그 예산을 안 재는 것과 같다 (TS-4).
+        StepVerifier.withVirtualTime(refresh::refresh)
+                .thenAwait(Duration.ofMillis(200))
+                .verifyComplete();
 
         assertThat(refresh.current()).contains(new Tunables(0.3, 5));
+    }
+
+    /**
+     * <b>승계 첫 판이 위험합니다.</b> 새 리더의 캐시는 비어 있는데, 그 상태로
+     * 발행하면 앞 리더가 싣던 값이 지워집니다.
+     */
+    @Test
+    @DisplayName("한_번도_못_읽었으면_재료에_있던_것을_이어_싣는다")
+    void 한_번도_못_읽었으면_재료에_있던_것을_이어_싣는다() {
+        재료.set(Optional.of(new Tunables(0.25, 6)));
+        응답.set(Mono.error(new IllegalStateException("승계 직후 레디스가 흔들린다")));
+
+        refresh.refresh().block();
+
+        assertThat(refresh.current()).contains(new Tunables(0.25, 6));
+    }
+
+    /** 한 번 읽고 나면 재료가 아니라 읽은 값을 쓴다. 안 그러면 갱신이 안 보인다. */
+    @Test
+    @DisplayName("한_번_읽고_나면_재료를_안_본다")
+    void 한_번_읽고_나면_재료를_안_본다() {
+        재료.set(Optional.of(new Tunables(0.25, 6)));
+        응답.set(Mono.empty());
+
+        refresh.refresh().block();
+
+        assertThat(refresh.current()).isEmpty();
+    }
+
+    /**
+     * <b>게이지는 마지막 값을 계속 냅니다.</b> 못 읽고 있다는 사실은 이 값으로만
+     * 드러나고, 없으면 "5분째 못 받음" 을 걸 곳이 없습니다.
+     */
+    @Test
+    @DisplayName("못_읽는_동안_나이가_자란다")
+    void 못_읽는_동안_나이가_자란다() {
+        응답.set(Mono.just("{\"idleCreditRatio\":0.3,\"inFlightSeconds\":5}"));
+        refresh.refresh().block();
+        assertThat(refresh.staleSeconds()).isZero();
+
+        시계.addAndGet(Duration.ofSeconds(90).toNanos());
+        응답.set(Mono.error(new IllegalStateException("레디스가 죽었다")));
+        refresh.refresh().block();
+
+        assertThat(refresh.staleSeconds()).isEqualTo(90);
     }
 
     /**

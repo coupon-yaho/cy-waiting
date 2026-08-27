@@ -1576,17 +1576,17 @@ class AdmissionGatewayFilterTest {
     }
 
     /**
-     * <b>배포 없이 되돌릴 수 있어야 롤백이 성립합니다</b> (P-1). 재료에 실려 온
-     * 값이 기동 설정을 이깁니다 — 그 전파 경로가 스냅샷입니다.
+     * <b>배포 없이 되돌릴 수 있어야 롤백이 성립합니다</b> (P-1). 실려 온 값이 이깁니다.
      */
     @Test
     @DisplayName("실려_온_걸림_시간이_격벽_상한을_바꾼다")
     void 실려_온_걸림_시간이_격벽_상한을_바꾼다() {
+        List<MockServerWebExchange> 태운_것;
         // 걸림 시간을 2초로 줄이면 상한이 세 배에서 두 배로 조여진다.
         holder.replace(new GatewaySnapshot(
                 Map.of(COUPON, CouponStates.queueing(CREDIT, 1_000_000, 10)),
                 new SnapshotMeta(CREDIT, 1, new Tunables(0.7, 2)), 지금));
-        붙잡아_채운다(초당_통과 * 2);
+        태운_것 = 붙잡아_채운다(초당_통과 * 2);
 
         MockServerWebExchange 한_건_더 = 다음_초에_한_건("사람" + 초당_통과, e -> Mono.empty());
 
@@ -1597,8 +1597,7 @@ class AdmissionGatewayFilterTest {
     }
 
     /**
-     * <b>안 실려 오면 기동값입니다.</b> 기본값으로 채워 버리면 그 값이 각 노드의
-     * 기동 설정을 덮어써서, 운영자가 아무것도 안 바꿨는데 값이 바뀝니다.
+     * <b>안 실려 오면 기동값입니다.</b> 기본값으로 채우면 각 노드의 설정이 덮입니다.
      */
     @Test
     @DisplayName("안_실려_오면_기동값으로_돈다")

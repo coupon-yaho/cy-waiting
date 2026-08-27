@@ -58,13 +58,9 @@ public final class SnapshotMetrics {
                 .register(meters);
     }
 
-    /**
-     * 적용 중인 한산 몫.
-     *
-     * <p><b>{@code -1} 은 "안 실려 왔다" 는 뜻입니다.</b> 그때는 각 노드가 자기
-     * 기동 설정으로 돌고 있고, 그 사실이 0 과 구별돼야 합니다 — 0 은 운영자가
-     * 한산 통과를 끈 것이라 전혀 다른 상태입니다.
-     */
+    /** 적용 중인 한산 몫. <b>{@code -1} 은 "안 실려 왔다" 는 뜻입니다.</b> */
+    // 그때는 각 노드가 자기 기동 설정으로 돈다. 운영 값으로는 0 을 못 넣으므로
+    // 이 게이지가 0 을 낼 일은 없다 — 음수만이 미전파를 뜻한다.
     private double idleRatio() {
         Tunables applied = holder.current().meta().tunables();
         return applied == null ? UNKNOWN : applied.idleCreditRatio();

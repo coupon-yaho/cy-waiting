@@ -3,8 +3,10 @@ package com.kafkick.waiting.control;
 import com.kafkick.waiting.adapter.redis.AllocationRedisPort;
 import com.kafkick.waiting.adapter.redis.LeaderRedisPort;
 import com.kafkick.waiting.domain.allocation.CreditSmoother;
+import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Instant;
+import java.util.Optional;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -114,10 +116,22 @@ public class ControlPlaneConfig {
      * 매달려, 레디스가 조금 느려지는 것만으로 스냅샷이 아예 안 나간다.
      */
     @Bean
-    TunablesRefresh tunablesRefresh(AllocationRedisPort port,
-            ControlPlaneProperties properties, Scheduler allocationScheduler) {
-        return TunablesRefresh.of(port::readTunables,
+    TunablesRefresh tunablesRefresh(AllocationRedisPort port, SnapshotHolder holder,
+            ControlPlaneProperties properties, Scheduler allocationScheduler,
+            MeterRegistry meters) {
+        // **승계 첫 판이 위험하다.** 새 리더의 캐시는 비어 있는데 그 상태로
+        // 발행하면 앞 리더가 싣던 값이 지워진다 — 재료에 있던 것을 이어 싣는다.
+        TunablesRefresh refresh = TunablesRefresh.of(port::readTunables,
+                () -> Optional.ofNullable(holder.current().meta().tunables()),
                 properties.scheduler().tick().dividedBy(4), allocationScheduler);
+        // **게이지는 마지막 값을 계속 낸다.** 못 읽고 있다는 사실은 이 값으로만
+        // 드러나고, 없으면 "5분째 못 받음" 을 걸 곳이 없다.
+        Gauge.builder("waiting.tunable.stale.seconds", refresh,
+                        TunablesRefresh::staleSeconds)
+                .description("운영 값을 마지막으로 읽은 지 몇 초. 리더만 오른다")
+                .strongReference(true)
+                .register(meters);
+        return refresh;
     }
 
     /** 배분 틱. <b>재료를 먼저 읽고 배분한다</b> — 안 읽으면 크레딧이 첫 하한에 머문다. */

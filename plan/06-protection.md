@@ -560,7 +560,7 @@ Refs: CY-<phase-6-gate>
 | `6.6.3` | [`CY-121`](https://shseol.atlassian.net/browse/CY-121) | 한산한 쿠폰이 큐 없이 통과하는지 보는 시나리오 |
 | `6.6.4` | [`CY-122`](https://shseol.atlassian.net/browse/CY-122) | 오픈 순간 스파이크 시나리오 |
 | `6.6.5` | [`CY-123`](https://shseol.atlassian.net/browse/CY-123) | 혼합 트래픽과 중도 이탈 시나리오 |
-| `6.6.6` | **미발번** | 같은 쿠폰 상세를 동시에 몰아쳐 코얼레싱 효과를 재는 시나리오 |
+| `6.6.6` | [`CY-667`](https://shseol.atlassian.net/browse/CY-667) | 같은 쿠폰 상세를 동시에 몰아쳐 코얼레싱 효과를 재는 시나리오 |
 | `6.6.7` | [`CY-124`](https://shseol.atlassian.net/browse/CY-124) | 측정값이 게이트 기준을 넘는지 자동 판정 |
 | `6.7` | [`CY-617`](https://shseol.atlassian.net/browse/CY-617) | **R1 실측** |
 | `6.8` | [`CY-618`](https://shseol.atlassian.net/browse/CY-618) | **운영 튜너블** |

@@ -196,13 +196,10 @@ public final class AllocationRound {
     /**
      * 나눠 준 합이 가진 것을 넘었는가.
      *
-     * <p><b>초과 발급의 선행 지표다</b> (불변식 2). 재고를 가진 것은 발급 계층이라
-     * 게이트웨이는 초과 발급 자체를 못 본다. 대신 <b>스스로 계산한 값</b>인 이것을
-     * 본다 — 여기가 넘으면 뒤에서 무엇이 터지든 원인이 배분에 있다.
-     *
-     * <p>세는 것으로 끝낸다. 여기서 배분을 멈추면 한 번의 계산 오류가 대기열을
-     * 통째로 세우고, 그건 막으려던 것보다 나쁘다.
+     * <p><b>초과 발급의 선행 지표다</b> (불변식 2). 게이트웨이는 재고를 안 가져
+     * 초과 발급 자체를 못 본다 — 여기가 넘으면 원인이 배분에 있다.
      */
+    // 세는 것으로 끝낸다. 여기서 멈추면 계산 오류 한 번이 대기열을 통째로 세운다.
     private void watchOverAllocation(Map<String, Long> granted, long credit) {
         long sum = granted.values().stream().mapToLong(Long::longValue).sum();
         overAllocated.set(Math.max(0, sum - credit));

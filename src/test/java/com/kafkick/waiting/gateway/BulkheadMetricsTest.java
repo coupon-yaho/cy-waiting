@@ -127,7 +127,8 @@ class BulkheadMetricsTest {
     @DisplayName("두_번_걸면_두_번째는_버려진다")
     void 두_번_걸면_두_번째는_버려진다() {
         Bulkhead 첫째 = Bulkhead.withMaxKeys(10);
-        Bulkhead 둘째 = Bulkhead.withMaxKeys(10);
+        // **상한을 다르게 준다.** 같은 값이면 분모가 어느 격벽에서 왔는지 못 가른다.
+        Bulkhead 둘째 = Bulkhead.withMaxKeys(99);
         둘째.tryEnter("c1", 5);
         둘째.tryEnter("c2", 5);
 
@@ -138,6 +139,9 @@ class BulkheadMetricsTest {
         assertThat(meters.get("waiting.bulkhead.inflight").gauge().value())
                 .as("첫 격벽을 계속 읽는다")
                 .isZero();
+        assertThat(meters.get("waiting.bulkhead.max.coupons").gauge().value())
+                .as("분모도 첫 격벽에서 온다")
+                .isEqualTo(10.0);
     }
 
     /**

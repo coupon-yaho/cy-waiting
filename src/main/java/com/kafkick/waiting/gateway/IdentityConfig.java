@@ -77,6 +77,9 @@ public class IdentityConfig {
     /**
      * <b>리미터는 하나다.</b> 판정과 장애 개방이 각자 들면 한 초에 두 예산이
      * 겹쳐 나가고, 경로를 나누지 말라는 규칙이 막으려던 버스트가 그대로 난다.
+     *
+     * <p>이 인스턴스는 <b>쿠폰으로 센다.</b> 그래서 격벽·래치와 같은 상한을 쓴다
+     * (6.3.5). 클라이언트 식별자로 세는 남용 리미터는 키 공간이 달라 별개다.
      */
     @Bean
     public SecondWindowLimiter admissionLimiter() {

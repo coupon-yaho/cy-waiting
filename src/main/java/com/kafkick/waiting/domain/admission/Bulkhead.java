@@ -14,7 +14,7 @@ import java.util.Map;
  */
 public class Bulkhead {
 
-    /** 담을 수 있는 쿠폰 수. 값은 {@link CouponKeys} 가 정합니다. */
+    /** 담을 수 있는 쿠폰 수. 프로덕션 배선은 {@link CouponKeys#MAX} 를 넘깁니다. */
     private final int maxKeys;
 
     /** 쿠폰별로 지금 걸려 있는 건수. 0 이 되면 지웁니다. */

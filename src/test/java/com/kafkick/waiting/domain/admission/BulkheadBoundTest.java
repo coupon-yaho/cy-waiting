@@ -74,6 +74,34 @@ class BulkheadBoundTest {
         assertThat(bulkhead.inFlight()).isZero();
     }
 
+    /**
+     * 맵이 꽉 차도 <b>이미 자리를 쥔 쿠폰은 계속 씁니다.</b>
+     *
+     * <p>여기서 같이 막으면 캠페인이 만 개 도는 중에 <b>진행 중인 쿠폰이 자기 자리를
+     * 못 쓰게</b> 됩니다. 맵은 어차피 안 커지므로 막을 이유도 없습니다.
+     *
+     * <p>앞의 시험들은 쿠폰마다 한 번씩만 들어가서 이 갈래를 안 지납니다 — 상한을
+     * 보는 조건에서 "새 쿠폰만" 을 지워도 전부 통과합니다.
+     */
+    @Test
+    @DisplayName("맵이_꽉_차도_쥔_쿠폰은_계속_쓴다")
+    void 맵이_꽉_차도_쥔_쿠폰은_계속_쓴다() {
+        int max = 4;
+        Bulkhead bulkhead = Bulkhead.withMaxKeys(max);
+        for (int i = 0; i < max; i++) {
+            bulkhead.tryEnter("c" + i, 3);
+        }
+
+        assertThat(bulkhead.tryEnter("새 쿠폰", 3))
+                .describedAs("맵이 찼으면 새 쿠폰은 안 받는다")
+                .isFalse();
+        assertThat(bulkhead.tryEnter("c0", 3))
+                .describedAs("이미 자리를 쥔 쿠폰은 자기 몫을 계속 쓴다")
+                .isTrue();
+        assertThat(bulkhead.size()).isEqualTo(max);
+        assertThat(bulkhead.inFlight()).isEqualTo(max + 1);
+    }
+
     /** 상한은 밖에서 받지 않고 자기가 안다. 지표가 분모로 이 값을 읽는다 (6.3.6). */
     @Test
     @DisplayName("자기_상한을_말한다")

@@ -102,12 +102,17 @@ public class SecondWindowLimiter {
         return AcquireResult.ACQUIRED;
     }
 
-    /** 지금 들고 있는 키 수. 상한이 지켜지는지 시험하려고 노출한다. */
-    /** 담을 수 있는 쿠폰 수. 격벽과 같은 값이어야 합니다 (6.3.5). */
+    /**
+     * 담을 수 있는 키 수.
+     *
+     * <p><b>이 타입은 쿠폰 전용이 아니다.</b> 클라이언트 식별자로 세는 인스턴스도
+     * 있고 그쪽 상한은 다르다. 무엇으로 세는지는 만드는 자리가 정한다.
+     */
     public int maxKeys() {
         return maxKeys;
     }
 
+    /** 지금 들고 있는 키 수. 상한이 지켜지는지 시험하려고 노출한다. */
     public synchronized int size() {
         return used.size();
     }

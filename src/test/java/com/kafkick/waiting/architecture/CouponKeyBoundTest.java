@@ -43,7 +43,7 @@ class CouponKeyBoundTest {
     void 쿠폰으로_세는_자리는_모두_같은_상한을_쓴다() throws IOException {
         List<String> passed = new ArrayList<>();
         for (Site site : SITES) {
-            passed.add(site.call() + firstArgument(site));
+            arguments(site).forEach(arg -> passed.add(site.call() + arg));
         }
 
         assertThat(passed)
@@ -53,19 +53,26 @@ class CouponKeyBoundTest {
     }
 
     /**
-     * 첫 인자를 그대로 꺼냅니다.
+     * 그 호출의 첫 인자를 <b>전부</b> 꺼냅니다.
      *
      * <p><b>값이 아니라 무엇을 적었는지를 봅니다.</b> 값으로 보면 같은 수를 자리마다
      * 적어 놓은 상태가 통과합니다 — 그것이 바로 막으려는 것입니다.
+     *
+     * <p>한 번만 찾으면 같은 호출이 둘 이상 생겼을 때 두 번째부터는 리터럴을 적어도
+     * 지나갑니다.
      */
-    private String firstArgument(Site site) throws IOException {
+    private List<String> arguments(Site site) throws IOException {
         String source = Files.readString(Path.of(site.file()));
-        Matcher m = Pattern.compile(Pattern.quote(site.call()) + "([A-Za-z0-9_.]+)")
+        Matcher m = Pattern.compile(Pattern.quote(site.call()) + "\\s*([A-Za-z0-9_.]+)")
                 .matcher(source);
-        assertThat(m.find())
+        List<String> found = new ArrayList<>();
+        while (m.find()) {
+            found.add(m.group(1));
+        }
+        assertThat(found)
                 .describedAs("%s 에 %s 호출이 없다 — 시험이 없는 자리를 보고 있다",
                         site.file(), site.call())
-                .isTrue();
-        return m.group(1);
+                .isNotEmpty();
+        return found;
     }
 }

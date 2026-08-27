@@ -27,9 +27,13 @@ const SOLD = '/api/v1/coupons/c3/issue';
 // 한산 통과 상한(크레딧의 70%)의 절반쯤. 상한에 붙여 놓으면 창 경계가 한 번
 // 흔들릴 때 큐가 켜지고, 그 뒤로는 사다리 8번이 판을 통째로 가져간다.
 const RATE = 100;
-// 갓 뜬 JVM 은 C1·C2 컴파일과 커넥션 풀 채우기가 겹친다. 그 구간을 안 버리면
-// 정상 상태가 아니라 예열을 재고, 200 표본이면 꼬리 정의 구간의 몇 배다.
-const WARMUP = '12s';
+// **갓 뜬 JVM 을 재면 게이트웨이가 아니라 예열을 잰다.** 같은 콜드 JVM 에서
+// 12초를 넣었을 때 오버헤드 p99 가 9.82ms, 60초를 넣었을 때 5.44ms 였다.
+// 그 위로는 더 안 내려간다 — 150초를 넣어도 5.58 이었다. 남는 것은 JIT 가
+// 아니라 판 자체의 잡음이고, 그 잡음은 대조군 상한이 잡는다.
+//
+// 러너마다 다를 수 있어 밖에서 덮을 수 있게 둔다.
+const WARMUP = __ENV.WARMUP || '60s';
 const MEASURE = '90s';
 
 // 매진 단락은 뒷단을 안 거치니 스텁에 부하를 안 얹는다. 두 갈래의 차이를
@@ -64,6 +68,8 @@ export const options = {
     // **갈래가 아예 안 돈 경우를 잡는다.** exec 이름이 어긋나면 검사도 안
     // 찍히므로 통과율로는 안 걸리고, 요청 수 하한은 나머지 셋이 채운다.
     soldout_measured: ['count>0'],
+    gateway_measured: ['count>0'],
+    direct_measured: ['count>0'],
   },
   // **요약에 p99 를 실어야 게이트가 읽는다.** 기본은 p95 까지라, 없으면
   // 판정이 "숫자가 아니다" 로 떨어진다 — 실제로 그렇게 한 번 떨어뜨렸다.
@@ -86,18 +92,30 @@ const missing = new Counter('overhead_unmeasured');
 const clamped = new Counter('overhead_clamped');
 
 /**
- * 실제로 센 표본 수. **없으면 표본 0 건인 판이 통과한다** — 임계가 달린 Trend 는
- * 표본이 없어도 요약에서 안 사라지고 모든 통계가 0 으로 남는다. 0 은 상한을
- * 안 넘으므로 "아무것도 안 쟀다" 가 "아주 빨랐다" 로 읽힌다.
+ * 갈래마다 따로 센다. **없으면 표본 0 건인 판이 통과한다** — 임계가 달린 Trend 는
+ * 표본이 없어도 요약에서 안 사라지고 모든 통계가 0 으로 남고, 0 은 상한을 안
+ * 넘으므로 "아무것도 안 쟀다" 가 "아주 빨랐다" 로 읽힌다.
+ *
+ * <p>하나로 합치면 하한이 <b>산수 우연</b>에 기댄다 — 한쪽이 통째로 죽어도
+ * 나머지 한쪽이 하한을 채울 수 있고, 도착률이나 판 길이를 건드리는 순간 그
+ * 우연이 깨진다.
  */
-const measured = new Counter('overhead_measured');
+const gwMeasured = new Counter('gateway_measured');
 
-/** 매진 갈래의 표본 수. 저쪽은 뺄 값이 없어 {@code record} 를 안 거친다. */
+const directMeasured = new Counter('direct_measured');
+
+/** 매진 갈래는 뺄 값이 없어 {@code record} 를 안 거친다. */
 const soldOutMeasured = new Counter('soldout_measured');
 
-// 주소를 VU 로 만들면 안 된다. 5ms 응답에 100rps 면 필요한 동시성이 한 자리라
-// 실제로 도는 VU 가 한둘뿐이고, 주소도 그만큼만 생겨 남용 상한에 붙는다.
-const spread = (n) => `10.14.${(n >> 8) % 250}.${n % 250}`;
+// **`>>` 를 안 쓴다.** JS 의 비트 시프트는 32비트라 VU 가 269 를 넘으면 음수
+// 옥텟이 나오고, 그 주소는 신뢰 목록에 못 들어가 429 가 된다. 판이 느려져 VU 가
+// 늘 때 — 측정이 가장 필요한 순간에 — 터지고, 실패는 통과율로만 보여 원인을
+// 안 가리킨다.
+//
+// 지금 도착률(게이트웨이 100 + 매진 20)은 남용 상한 200/초 아래라 한 주소로
+// 몰려도 안 걸린다. 그래도 펴 두는 것은 도착률을 올릴 때 여기가 먼저 막히기
+// 때문이다 — 그때 증상은 오버헤드가 아니라 통과율로 나타난다.
+const spread = (n) => `10.14.${Math.floor(n / 256) % 250}.${n % 250}`;
 
 const headers = (n) => ({
   'X-Member-Id': String(n),
@@ -109,7 +127,7 @@ const headers = (n) => ({
 const nth = () => __VU * 1000003 + __ITER;
 
 /** 뒷단이 실어 준 자기 시간을 빼서 담는다. 못 빼면 안 센다. */
-function record(trend, r) {
+function record(trend, counter, r) {
   const spent = Number(r.headers['X-Stub-Service-Ms']);
   if (!Number.isFinite(spent)) {
     // **뺄 값이 없으면 안 센다.** 전체 시간을 그대로 넣으면 뒷단 몫이 우리
@@ -124,7 +142,7 @@ function record(trend, r) {
     return;
   }
   trend.add(own);
-  measured.add(1);
+  counter.add(1);
 }
 
 function served(r, path) {
@@ -171,7 +189,7 @@ export function viaGateway() {
   const ok = served(r, IDLE);
   // 줄을 선 응답은 뒷단을 안 거친다. 그것까지 담으면 다른 경로를 재게 된다.
   if (ok) {
-    record(viaGw, r);
+    record(viaGw, gwMeasured, r);
   }
   check(r, { '한산한 쿠폰이 뒷단까지 간다': () => ok });
 }
@@ -180,7 +198,7 @@ export function viaStub() {
   const r = http.post(`${STUB}${IDLE}`, null, { headers: headers(nth()) });
   const ok = served(r, IDLE);
   if (ok) {
-    record(viaDirect, r);
+    record(viaDirect, directMeasured, r);
   }
   check(r, { '대조군이 스텁까지 간다': () => ok });
 }

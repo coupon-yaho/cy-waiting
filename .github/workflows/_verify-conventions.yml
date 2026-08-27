@@ -47,6 +47,13 @@ jobs:
           chmod +x .claude/hooks/*.sh
           .claude/hooks/self-test.sh
 
+      # 심판이 헐거우면 하네스가 무엇을 재든 초록이다. 실제로 게이트웨이를 안
+      # 띄운 판과 표본 0 건인 판이 통과한 적이 있다 (TS-9).
+      - name: 부하 게이트 자기검증
+        run: |
+          chmod +x test/load/*.sh
+          test/load/gate-selftest.sh
+
       # 존재하지 않는 태스크를 가리키는 게이트는 판정할 수 없다. ID 가 겹치면
       # 두 작업이 한 번호를 쓴다. 번호를 바꿀 때 조용히 깨진다.
       - name: 게이트·태스크 ID 중복

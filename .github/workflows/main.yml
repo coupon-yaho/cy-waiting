@@ -159,13 +159,6 @@ jobs:
     uses: ./.github/workflows/_load-test.yml
     with: { scenario: read-burst, timeout-minutes: 25 }
 
-  # **오버헤드는 게이트웨이만의 몫이다** (G6.11). 뒷단이 자기가 쓴 시간을 실어
-  # 주므로 요청마다 그것을 뺀다 — 상수를 빼면 스케줄링 흔들림이 우리 몫이 된다.
-  load-overhead:
-    needs: build
-    uses: ./.github/workflows/_load-test.yml
-    with: { scenario: overhead, timeout-minutes: 25 }
-
   # 취소를 통과로 세지 않기 위해 별도 잡으로 뺐다. 규칙은 verdict 액션에 있다.
   # 작업 로그 색인은 생성물이라 저장소에 없다 (CY-303). PR 에서는 잡 요약으로
   # 보고, main 에 들어갈 때 여기서 위키를 갱신한다 — 사람이 링크로 공유하는 자리다.
@@ -215,7 +208,7 @@ jobs:
 
   verdict:
     name: 판정
-    needs: [context, conventions, build, test-unit, test-integration, test-context, test-chaos, test-coverage, test-mutation, security, load-idle, load-read-burst, load-overhead]
+    needs: [context, conventions, build, test-unit, test-integration, test-context, test-chaos, test-coverage, test-mutation, security, load-idle, load-read-burst]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -234,7 +227,7 @@ jobs:
   report:
     name: 리포트
     needs: [context, conventions, build, test-unit, test-integration, test-context,
-            test-chaos, test-coverage, test-mutation, security, load-idle, load-read-burst, load-overhead, verdict]
+            test-chaos, test-coverage, test-mutation, security, load-idle, load-read-burst, verdict]
     if: ${{ !cancelled() }}
     uses: ./.github/workflows/_report.yml
     with:
@@ -254,7 +247,6 @@ jobs:
         보안=${{ needs.security.result }}
         부하(R1)=${{ needs.load-idle.result }}
         부하(조회 폭주)=${{ needs.load-read-burst.result }}
-        부하(오버헤드)=${{ needs.load-overhead.result }}
       link-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       jira-key: ${{ needs.context.outputs.jira-key }}
       jira-transition: ${{ needs.verdict.outputs.ok == 'true' && '완료' || '' }}
@@ -277,7 +269,6 @@ jobs:
           <tr><td>보안 스캔</td><td>${{ needs.security.result }}</td></tr>
           <tr><td>부하 (R1 검증)</td><td>${{ needs.load-idle.result }}</td></tr>
           <tr><td>부하 (조회 폭주 · G6.16)</td><td>${{ needs.load-read-burst.result }}</td></tr>
-          <tr><td>부하 (오버헤드 · G6.11)</td><td>${{ needs.load-overhead.result }}</td></tr>
         </table>
         <h2>커밋</h2>
         <p><code>${{ github.sha }}</code></p>

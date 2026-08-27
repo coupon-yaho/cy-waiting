@@ -2,6 +2,7 @@ package com.kafkick.waiting.control;
 
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
+import com.kafkick.waiting.domain.coupon.Tunables;
 import java.util.Objects;
 import java.util.function.ToDoubleFunction;
 
@@ -40,6 +41,13 @@ public final class SnapshotMetrics {
                 "판정 재료의 나이(초). 아직 못 받았으면 -1");
         metrics.gauge(meters, "waiting.snapshot.coupons", SnapshotMetrics::couponCount,
                 "지금 보고 있는 쿠폰 수");
+        // **지금 무엇이 걸려 있는지가 보여야 합니다** (6.8.4). 안 보이면 값을
+        // 바꾸고도 그것이 닿았는지를 못 확인하고, 장애 중에 그 확인이 필요합니다.
+        metrics.gauge(meters, "waiting.tunable.idle.ratio", SnapshotMetrics::idleRatio,
+                "적용 중인 한산 몫. 안 실려 왔으면 -1");
+        metrics.gauge(meters, "waiting.tunable.inflight.seconds",
+                SnapshotMetrics::inFlightSeconds,
+                "적용 중인 걸림 시간(초). 안 실려 왔으면 -1");
     }
 
     private void gauge(MeterRegistry meters, String name,
@@ -48,6 +56,24 @@ public final class SnapshotMetrics {
                 .description(why)
                 .strongReference(true)
                 .register(meters);
+    }
+
+    /**
+     * 적용 중인 한산 몫.
+     *
+     * <p><b>{@code -1} 은 "안 실려 왔다" 는 뜻입니다.</b> 그때는 각 노드가 자기
+     * 기동 설정으로 돌고 있고, 그 사실이 0 과 구별돼야 합니다 — 0 은 운영자가
+     * 한산 통과를 끈 것이라 전혀 다른 상태입니다.
+     */
+    private double idleRatio() {
+        Tunables applied = holder.current().meta().tunables();
+        return applied == null ? UNKNOWN : applied.idleCreditRatio();
+    }
+
+    /** 적용 중인 걸림 시간. 안 실려 왔으면 -1 입니다. */
+    private double inFlightSeconds() {
+        Tunables applied = holder.current().meta().tunables();
+        return applied == null ? UNKNOWN : applied.inFlightSeconds();
     }
 
     /** 전 쿠폰의 대기 인원 합입니다. 이 값이 곧 "지금 얼마나 밀렸는가" 입니다. */

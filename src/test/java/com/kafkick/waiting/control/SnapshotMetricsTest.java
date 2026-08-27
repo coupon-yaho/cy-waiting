@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.kafkick.waiting.domain.coupon.CouponStates;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
+import com.kafkick.waiting.domain.coupon.Tunables;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Clock;
@@ -130,5 +131,36 @@ class SnapshotMetricsTest {
         지표를_건다();
 
         assertThat(meters.get("waiting.snapshot.coupons").gauge().value()).isZero();
+    }
+
+    /**
+     * <b>지금 무엇이 걸려 있는지가 보여야 합니다</b> (6.8.4). 안 보이면 값을 바꾸고도
+     * 그것이 닿았는지를 못 확인하고, 장애 중에 그 확인이 필요합니다.
+     */
+    @Test
+    @DisplayName("적용_중인_튜너블을_낸다")
+    void 적용_중인_튜너블을_낸다() {
+        holder.replace(new GatewaySnapshot(Map.of(), new SnapshotMeta(1_000, 1,
+                new Tunables(0.35, 9)), 지금));
+        SnapshotMetrics.bind(holder, meters);
+
+        assertThat(meters.get("waiting.tunable.idle.ratio").gauge().value()).isEqualTo(0.35);
+        assertThat(meters.get("waiting.tunable.inflight.seconds").gauge().value())
+                .isEqualTo(9.0);
+    }
+
+    /**
+     * <b>안 실려 온 것과 0 은 다릅니다.</b> 0 은 운영자가 한산 통과를 끈 것이고,
+     * 안 실려 온 것은 각 노드가 자기 기동 설정으로 도는 중입니다.
+     */
+    @Test
+    @DisplayName("안_실려_오면_음수로_구별한다")
+    void 안_실려_오면_음수로_구별한다() {
+        holder.replace(new GatewaySnapshot(Map.of(), new SnapshotMeta(1_000, 1), 지금));
+        SnapshotMetrics.bind(holder, meters);
+
+        assertThat(meters.get("waiting.tunable.idle.ratio").gauge().value()).isEqualTo(-1);
+        assertThat(meters.get("waiting.tunable.inflight.seconds").gauge().value())
+                .isEqualTo(-1);
     }
 }

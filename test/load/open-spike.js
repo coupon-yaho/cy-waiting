@@ -25,7 +25,7 @@ const SPIKE_USERS = Number(__ENV.SPIKE_USERS || '20000');
 
 export const options = {
   // 게이트가 분위수를 읽는다. 기본은 p95 까지라 p90 은 들어 있다.
-  summaryTrendStats: ['min', 'med', 'avg', 'p(90)', 'p(95)', 'max'],
+  summaryTrendStats: ['min', 'p(10)', 'p(25)', 'med', 'p(75)', 'p(90)', 'max'],
   scenarios: {
     spike: {
       executor: 'per-vu-iterations',
@@ -48,8 +48,11 @@ export const options = {
 const queuedResponses = new Counter('queued_responses');
 const shedResponses = new Counter('shed_responses');
 // **폭만 보면 부족하다.** 만 건 중 9,999 건이 한 값이고 하나만 멀리 있어도 폭은
-// 넓다. 그 판은 회복이 곧 두 번째 스파이크가 되는데 게이트는 초록이다. 그래서
-// 판정은 분위수로 한다 — 중앙값이 최소와 붙어 있으면 몰린 것이다.
+// 넓다. 그 판은 회복이 곧 두 번째 스파이크가 되는데 게이트는 초록이다.
+//
+// 분위수 둘로도 부족하다. 절반이 24초, 40%가 30초, 나머지가 36초면 최소·중앙·p90
+// 이 서로 다르지만 **89%가 두 덩어리로 돌아온다.** 사분위를 촘촘히 놓고 이웃한
+// 값끼리 붙어 있는 자리가 있는지 본다 — 덩어리는 반드시 어딘가를 붙여 놓는다.
 const retryAfterSeconds = new Trend('retry_after_seconds');
 
 const headers = (member) => ({

@@ -263,25 +263,36 @@ case "$scenario" in
     #
     # 폭만 보면 부족하다 — 만 건 중 9,999 건이 한 값이고 하나만 멀리 있어도
     # 폭은 넓다. 분위수가 서로 떨어져 있는지까지 본다.
+    # **사분위를 촘촘히 본다.** 둘만 보면 덩어리 둘로 나뉜 분포가 통과한다 —
+    # 절반이 24초, 40%가 30초, 나머지가 36초면 최소·중앙·p90 이 서로 다르지만
+    # 89%가 두 덩어리로 돌아온다. 덩어리는 반드시 이웃한 분위수를 붙여 놓는다.
+    retry_p10=$(read_metric '.metrics.retry_after_seconds["p(10)"]' \
+                            '.metrics.retry_after_seconds.values["p(10)"]')
+    retry_p25=$(read_metric '.metrics.retry_after_seconds["p(25)"]' \
+                            '.metrics.retry_after_seconds.values["p(25)"]')
     retry_med=$(read_metric '.metrics.retry_after_seconds.med' \
                             '.metrics.retry_after_seconds.values.med')
+    retry_p75=$(read_metric '.metrics.retry_after_seconds["p(75)"]' \
+                            '.metrics.retry_after_seconds.values["p(75)"]')
     retry_p90=$(read_metric '.metrics.retry_after_seconds["p(90)"]' \
                             '.metrics.retry_after_seconds.values["p(90)"]')
     if [[ -n "${shed:-}" ]] && awk -v v="${shed:-0}" 'BEGIN { exit (v + 0 > 0) ? 0 : 1 }'; then
-      if numeric "${retry_min:-}" && numeric "${retry_max:-}" \
-          && numeric "${retry_med:-}" && numeric "${retry_p90:-}"; then
-        report "다시 올 시각 분포" "${retry_min} / ${retry_med} / ${retry_p90} / ${retry_max}"
-        at_least "$(awk -v a="${retry_max}" -v b="${retry_min}" \
-            'BEGIN { print a - b }')" 0.5 "다시 올 시각의 폭"
-        # 중앙값이 최소와 붙어 있으면 절반 넘게 한 값에 몰린 것이다.
-        at_least "$(awk -v a="${retry_med}" -v b="${retry_min}" \
-            'BEGIN { print a - b }')" 0.5 "최소와 중앙값의 거리"
-        # 위쪽도 본다. 중앙값과 p90 이 같으면 꼬리가 없다.
-        at_least "$(awk -v a="${retry_p90}" -v b="${retry_med}" \
-            'BEGIN { print a - b }')" 0.5 "중앙값과 p90 의 거리"
-      else
-        violate "막힌 응답이 있는데 Retry-After 분포를 못 읽었다"
-      fi
+      report "다시 올 시각 분포" \
+          "${retry_min:-?} / ${retry_p10:-?} / ${retry_p25:-?} / ${retry_med:-?} / ${retry_p75:-?} / ${retry_p90:-?} / ${retry_max:-?}"
+      at_least "$(awk -v a="${retry_max:-0}" -v b="${retry_min:-0}" \
+          'BEGIN { print a - b }')" 0.5 "다시 올 시각의 폭"
+      # 이웃한 분위수가 붙어 있으면 그 사이에 덩어리가 있다는 뜻이다.
+      prev="${retry_min:-}"
+      for name in p10 p25 med p75 p90 max; do
+        eval "next=\${retry_$name:-}"
+        if ! numeric "${prev:-}" || ! numeric "${next:-}"; then
+          violate "막힌 응답이 있는데 Retry-After 의 $name 을 못 읽었다"
+          break
+        fi
+        at_least "$(awk -v a="$next" -v b="$prev" 'BEGIN { print a - b }')" 0.5 \
+            "다시 올 시각의 $name 간격"
+        prev="$next"
+      done
     fi
     ;;
   mixed)

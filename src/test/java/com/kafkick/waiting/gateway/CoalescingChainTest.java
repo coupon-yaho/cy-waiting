@@ -13,7 +13,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.web.server.LocalServerPort;
-import org.springframework.cloud.gateway.filter.NettyWriteResponseFilter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
@@ -81,18 +80,6 @@ class CoalescingChainTest {
     private int port;
 
     /**
-     * <b>본문을 감싸는 자리가 맞아야 합니다.</b> 프레임워크의 쓰기 필터보다 뒤에
-     * 서면 우리가 감싼 응답을 아무도 안 쓰고, 담는 것이 늘 빈 본문이 됩니다.
-     */
-    @Test
-    @DisplayName("모으기는_응답을_쓰는_필터보다_앞에_선다")
-    void 모으기는_응답을_쓰는_필터보다_앞에_선다() {
-        assertThat(FilterOrder.ROUTE_COALESCING)
-                .as("모으기 순서")
-                .isLessThan(NettyWriteResponseFilter.WRITE_RESPONSE_FILTER_ORDER);
-    }
-
-    /**
      * <b>모아 준 응답도 온전해야 합니다.</b> 뒷단 도달 수를 줄이면서 본문이 비면
      * 그건 보호가 아니라 사고입니다.
      */
@@ -106,7 +93,8 @@ class CoalescingChainTest {
         String 첫째 = 본문(client);
         String 둘째 = 본문(client);
 
-        assertThat(첫째).as("첫 응답").isNotBlank().startsWith("{\"n\":");
+        // 뒷단이 매번 다른 본문을 낸다. 기대값이 정해지므로 값으로 못 박는다.
+        assertThat(첫째).as("첫 응답").isEqualTo("{\"n\":" + (시작 + 1) + "}");
         // 뒷단은 매번 다른 본문을 낸다. 같다는 것이 곧 담아 둔 것을 받았다는 뜻이다.
         assertThat(둘째).as("담아 둔 것을 받은 응답").isEqualTo(첫째);
         assertThat(뒷단_호출.get() - 시작).as("뒷단 호출").isEqualTo(1);

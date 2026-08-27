@@ -44,8 +44,25 @@ class QueryCoalescingFilterTest {
     private final QueryCoalescingFilter filter =
             QueryCoalescingFilter.of(설정, 시계, meters);
 
+    /**
+     * 신원 필터를 지난 평범한 조회.
+     *
+     * <p><b>회원 헤더가 늘 있습니다.</b> 없는 요청은 프로덕션에 도달할 수 없고
+     * (신원 필터가 막습니다), 그런 픽스처는 "회원 헤더가 늘 있다" 때문에 난
+     * 결함에 구조적으로 눈이 없습니다 (TS-3).
+     */
     private MockServerWebExchange 조회(String uri) {
-        return MockServerWebExchange.from(MockServerHttpRequest.method(HttpMethod.GET, uri));
+        return MockServerWebExchange.from(MockServerHttpRequest.method(HttpMethod.GET, uri)
+                .header("X-Member-Id", "812934")
+                .header("X-Member-Grade", "GOLD"));
+    }
+
+    /** 브라우저가 보내는 조회. 분석 쿠키 하나만 있어도 매 요청에 실린다. */
+    private MockServerWebExchange 브라우저_조회(String uri) {
+        return MockServerWebExchange.from(MockServerHttpRequest.method(HttpMethod.GET, uri)
+                .header("X-Member-Id", "812934")
+                .header("X-Member-Grade", "GOLD")
+                .header("Cookie", "_ga=GA1.1.1; SESSION=abc"));
     }
 
     /** 뒷단이 답하는 척한다. 몇 번 불렸는지가 이 시험의 값이다. */
@@ -137,7 +154,10 @@ class QueryCoalescingFilterTest {
         MockServerWebExchange 둘 = 조회(PATH + "?page=2");
         filter.filter(둘, ex -> 답한다(ex, "페이지" + 뒷단.incrementAndGet())).block();
 
-        assertThat(본문(하나)).isNotEqualTo(본문(둘));
+        // **뒤바뀜을 잡는다.** 다르기만 보면 하나가 둘의 응답을 받아도 통과한다 —
+        // 키가 뒤섞이는 것이 정확히 이 기능의 사고 모양이다.
+        assertThat(본문(하나)).isEqualTo("페이지1");
+        assertThat(본문(둘)).isEqualTo("페이지2");
         assertThat(뒷단).hasValue(2);
     }
 
@@ -179,16 +199,15 @@ class QueryCoalescingFilterTest {
     void 자격_증명이_실려_오면_안_모은다() {
         AtomicInteger 뒷단 = new AtomicInteger();
 
-        for (String 헤더 : List.of("Authorization", "Cookie")) {
-            for (int i = 0; i < 2; i++) {
-                MockServerWebExchange e = MockServerWebExchange.from(
-                        MockServerHttpRequest.method(HttpMethod.GET, PATH)
-                                .header(헤더, "값"));
-                filter.filter(e, ex -> 답한다(ex, "개인" + 뒷단.incrementAndGet())).block();
-            }
+        for (int i = 0; i < 2; i++) {
+            MockServerWebExchange e = MockServerWebExchange.from(
+                    MockServerHttpRequest.method(HttpMethod.GET, PATH)
+                            .header("X-Member-Id", "812934")
+                            .header("Authorization", "Bearer 토큰"));
+            filter.filter(e, ex -> 답한다(ex, "개인" + 뒷단.incrementAndGet())).block();
         }
 
-        assertThat(뒷단).as("헤더 두 종류 × 두 번").hasValue(4);
+        assertThat(뒷단).as("토큰을 든 요청은 각자 간다").hasValue(2);
     }
 
     /**
@@ -236,6 +255,38 @@ class QueryCoalescingFilterTest {
     }
 
     /**
+     * <b>배우기 전의 첫 무리가 가장 위험합니다.</b> 그때는 갈림 헤더를 몰라 회원이
+     * 서로 다른 요청들이 한 키에 붙어 있습니다. 응답이 "이 헤더로 갈린다" 고
+     * 말하는 순간, 그 무리는 남의 응답을 받게 됩니다.
+     *
+     * <p>순차로 재면 이 자리가 안 보입니다 — 첫 요청이 이미 배운 뒤라 키가
+     * 갈립니다. <b>동시일 때만 납니다. 그리고 이 기능이 쓰이는 순간이 그때입니다.</b>
+     */
+    @Test
+    @DisplayName("배우기_전에_모인_무리는_남의_응답을_안_받는다")
+    void 배우기_전에_모인_무리는_남의_응답을_안_받는다() {
+        Sinks.Empty<Void> 아직 = Sinks.empty();
+        List<MockServerWebExchange> 사람들 = IntStream.range(0, 5)
+                .mapToObj(i -> MockServerWebExchange.from(
+                        MockServerHttpRequest.method(HttpMethod.GET, PATH)
+                                .header("X-Member-Id", "사람" + i)))
+                .toList();
+
+        사람들.forEach(e -> filter.filter(e, ex -> {
+            ex.getResponse().getHeaders().set("Vary", "X-Member-Id");
+            String 회원 = ex.getRequest().getHeaders().getFirst("X-Member-Id");
+            return 답한다(ex, "발급이력:" + 회원).then(아직.asMono());
+        }).subscribe());
+        아직.tryEmitEmpty();
+
+        // 각자 자기 것을 받아야 한다. 하나로 모이면 넷이 남의 발급 이력을 본다.
+        assertThat(사람들).allSatisfy(e -> {
+            String 회원 = e.getRequest().getHeaders().getFirst("X-Member-Id");
+            assertThat(본문(e)).as("%s 가 받은 것", 회원).isEqualTo("발급이력:" + 회원);
+        });
+    }
+
+    /**
      * <b>같은 값이면 모읍니다.</b> CORS 필터가 모든 응답에 {@code Vary: Origin} 을
      * 다는데, 그것까지 거부하면 이 기능이 한 번도 안 돕니다 — 실제로 그랬습니다.
      */
@@ -252,8 +303,11 @@ class QueryCoalescingFilterTest {
             }).block();
         }
 
-        // 첫 요청은 Vary 를 배우기 전이라 못 담는다. 그 뒤로는 모인다.
-        assertThat(뒷단.get()).as("뒷단 호출").isLessThanOrEqualTo(2);
+        // **한 번이다.** 첫 응답을 담을 때 방금 배운 것으로 키를 다시 만들기
+        // 때문에, 두 번째 요청이 같은 키로 찾아 담아 둔 것을 받는다. 담는 것과
+        // 나눠 주는 것을 같은 판단으로 묶었을 때는 여기가 2 였다 — 경로마다
+        // 뒷단을 한 번씩 더 부르고, 그 한 번이 오픈 순간의 버스트다.
+        assertThat(뒷단).as("뒷단 호출").hasValue(1);
     }
 
     /** 전부 갈린다는 뜻은 키로 못 만든다. 그때는 나눠 주지도 담지도 않는다. */
@@ -352,5 +406,23 @@ class QueryCoalescingFilterTest {
         }
 
         assertThat(뒷단).hasValue(3);
+    }
+
+    /**
+     * <b>브라우저는 쿠키를 보냅니다.</b> 분석 쿠키 하나만 있어도 매 요청에 실리므로,
+     * 있다고 거르면 이 기능이 브라우저에서 한 번도 안 돕니다 — 회원 헤더로 거르다
+     * 통째로 죽였던 것과 같은 실수입니다.
+     */
+    @Test
+    @DisplayName("쿠키가_실려_와도_모은다")
+    void 쿠키가_실려_와도_모은다() {
+        AtomicInteger 뒷단 = new AtomicInteger();
+
+        for (int i = 0; i < 3; i++) {
+            MockServerWebExchange e = 브라우저_조회(PATH);
+            filter.filter(e, ex -> 답한다(ex, "목록" + 뒷단.incrementAndGet())).block();
+        }
+
+        assertThat(뒷단).as("뒷단 호출").hasValue(1);
     }
 }

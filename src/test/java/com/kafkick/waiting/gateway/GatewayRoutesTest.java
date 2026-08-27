@@ -26,6 +26,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.springframework.cloud.gateway.filter.GatewayFilter;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.OrderedGatewayFilter;
+import org.springframework.cloud.gateway.filter.NettyWriteResponseFilter;
 import org.springframework.cloud.gateway.route.Route;
 import org.springframework.cloud.gateway.support.ServerWebExchangeUtils;
 import org.springframework.cloud.gateway.route.RouteLocator;
@@ -76,7 +77,8 @@ class GatewayRoutesTest {
                     공유_리미터,
                     EntryToken.of("not-a-real-secret-0123456789abcdef"),
                     IdempotencyKey.of("not-a-real-secret-0123456789abcdef")),
-            // 이 시험은 라우트가 무엇을 잡는가만 본다. 모으기는 꺼 둔다.
+            // 이 시험은 배선을 본다. 켜고 끄는 것은 필터 안에서 갈리므로
+            // 여기서는 꺼 두어도 라우트에 실리는 것은 같다.
             QueryCoalescingFilter.of(
                     new CoalescingProperties(false, 1024, 100, List.of()),
                     Clock.systemUTC(), new SimpleMeterRegistry()),
@@ -489,6 +491,39 @@ class GatewayRoutesTest {
 
         assertThat(실린_순서(발급, "Admission"))
                 .isLessThan(실린_순서(발급, "CircuitBreaker"));
+    }
+
+    /**
+     * <b>모으기는 응답을 쓰는 필터보다 앞이어야 한다.</b> 뒤에 서면 우리가 감싼
+     * 응답을 아무도 안 쓰고, 담는 것이 늘 빈 본문이 된다.
+     *
+     * <p>상수끼리 비교하면 항진명제다 — 라우트에서 order 인자를 지워도 통과한다.
+     * <b>실제로 실린 값</b>을 봐야 그 회귀가 잡힌다.
+     */
+    @Test
+    @DisplayName("조회_라우트가_모으기를_쓰기_필터보다_앞에_단다")
+    void 조회_라우트가_모으기를_쓰기_필터보다_앞에_단다() {
+        Route 조회 = 잡는_라우트(HttpMethod.GET, "/api/v1/coupons");
+
+        assertThat(실린_순서(조회, "QueryCoalescing"))
+                .isEqualTo(FilterOrder.ROUTE_COALESCING)
+                .isLessThan(NettyWriteResponseFilter.WRITE_RESPONSE_FILTER_ORDER);
+    }
+
+    /**
+     * <b>조회에도 끊는 자리가 있어야 한다.</b> 모으기가 붙은 뒤로는 멎은 요청
+     * 하나가 그 키를 영구히 잠근다 — 뒤이어 오는 모든 조회가 끝나지 않는 것에
+     * 붙고, 뒷단이 살아나도 게이트웨이를 재시작해야 풀린다.
+     */
+    @Test
+    @DisplayName("조회_라우트도_응답_상한을_들고_있다")
+    void 조회_라우트도_응답_상한을_들고_있다() {
+        Route 조회 = 라우트().stream()
+                .filter(r -> "coupons".equals(r.getId()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("coupons 라우트가 없다"));
+
+        assertThat(조회.getMetadata()).containsEntry("response-timeout", 응답_상한.toMillis());
     }
 
     /**

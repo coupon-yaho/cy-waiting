@@ -195,6 +195,47 @@ case "$scenario" in
       violate "STUB_SERVED 가 없어 뒷단 도달 수를 못 봤다 — 이 시나리오의 핵심 증거다"
     fi
     ;;
+  mixed)
+    checks=$(read_metric '.metrics.checks.value' '.metrics.checks.values.rate')
+    hot=$(read_metric '.metrics.hot_queued.count' '.metrics.hot_queued.values.count')
+    cold_q=$(read_metric '.metrics.cold_queued.count' '.metrics.cold_queued.values.count')
+    cold_p=$(read_metric '.metrics.cold_passed.count' '.metrics.cold_passed.values.count')
+
+    report "핫이 줄 선 수" "${hot:-없음}"
+    report "콜드가 줄 선 수" "${cold_q:-없음}"
+    report "콜드가 지나간 수" "${cold_p:-없음}"
+    report "검사 통과율" "${checks:-없음}"
+
+    # **핫이 몰려야 이 판이 혼합이다.** 안 몰리면 격리를 안 잰 것이다.
+    at_least "${hot:-}" 1 "핫이 줄 선 수"
+    at_least "${cold_p:-}" 1 "콜드가 지나간 수"
+    # **콜드가 한 번이라도 줄을 서면 격리가 깨진 것이다** (R1).
+    at_most "${cold_q:-}" 0 "콜드가 줄 선 수"
+    at_least "${checks:-}" 0.99 "검사 통과율"
+    ;;
+  abandonment)
+    checks=$(read_metric '.metrics.checks.value' '.metrics.checks.values.rate')
+    joined=$(read_metric '.metrics.joined.count' '.metrics.joined.values.count')
+    left=$(read_metric '.metrics.abandoned.count' '.metrics.abandoned.values.count')
+    polled=$(read_metric '.metrics.polled.count' '.metrics.polled.values.count')
+
+    report "줄 선 수" "${joined:-없음}"
+    report "이탈한 수" "${left:-없음}"
+    report "다시 온 수" "${polled:-없음}"
+    report "검사 통과율" "${checks:-없음}"
+
+    at_least "${joined:-}" 1 "줄 선 수"
+    # **이탈자가 있어야 잴 수 있다.** 없으면 이 시나리오가 이탈을 안 만든 것이다.
+    at_least "${left:-}" 1 "이탈한 수"
+    # **안 이탈한 사람은 다시 와야 한다.** 안 오면 이탈률이 100% 로 보이고,
+    # 그때는 이탈이 아니라 배선 오류를 재는 것이다.
+    at_least "${polled:-}" 1 "다시 온 수"
+    at_least "${checks:-}" 0.99 "검사 통과율"
+
+    # **크레딧 낭비는 아직 못 잰다.** 큐에서 나가는 경로가 Phase 7 이라, 지금은
+    # 이탈자가 그냥 줄에 남는다 — 낭비율을 여기서 판정하면 없는 기능을 재는 것이다.
+    report "크레딧 낭비 판정" "Phase 7 에서 (G7.5)"
+    ;;
   *)
     # **모르는 시나리오를 통과로 안 센다.** 기본이 통과면 시나리오가 늘 때마다
     # 아무 기준 없는 잡이 하나씩 생기고, 그 초록은 아무 뜻이 없다.

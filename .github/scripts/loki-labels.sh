@@ -47,13 +47,22 @@ doc = yaml.safe_load(pathlib.Path('docker/observability/promtail.yml').read_text
 
 
 def walk(node, out):
-    """`labels` 와 `static_configs` 아래의 라벨 이름을 모은다."""
+    """스트림 라벨이 되는 이름을 전부 모은다.
+
+    **나가는 자리만 본다.** `source_labels` 는 읽는 자리라 스트림에 안 남고,
+    `target_label` 과 파이프라인의 `labels` 는 남는다. 읽는 자리만 보면
+    리라벨로 만든 라벨이 통째로 검사를 지나간다.
+    """
     if isinstance(node, dict):
         for key, value in node.items():
-            if key in ('labels', 'source_labels') and isinstance(value, dict):
+            if key == 'labels' and isinstance(value, dict):
+                # 파이프라인의 `labels` 는 `{라벨: 추출키}` 다. 값이 비면
+                # 라벨 이름이 곧 추출키다.
                 out.update(value.keys())
             elif key == 'labels' and isinstance(value, list):
                 out.update(str(v) for v in value)
+            elif key == 'target_label' and isinstance(value, str):
+                out.add(value)
             else:
                 walk(value, out)
     elif isinstance(node, list):

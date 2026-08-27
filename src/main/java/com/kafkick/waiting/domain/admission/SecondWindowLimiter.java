@@ -103,6 +103,11 @@ public class SecondWindowLimiter {
     }
 
     /** 지금 들고 있는 키 수. 상한이 지켜지는지 시험하려고 노출한다. */
+    /** 담을 수 있는 쿠폰 수. 격벽과 같은 값이어야 합니다 (6.3.5). */
+    public int maxKeys() {
+        return maxKeys;
+    }
+
     public synchronized int size() {
         return used.size();
     }

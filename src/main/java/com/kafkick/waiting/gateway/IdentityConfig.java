@@ -1,6 +1,7 @@
 package com.kafkick.waiting.gateway;
 
 import com.kafkick.waiting.domain.admission.AdmissionDecider;
+import com.kafkick.waiting.domain.admission.CouponKeys;
 import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
 import com.kafkick.waiting.domain.queue.EntryToken;
 import com.kafkick.waiting.domain.queue.QueueToken;
@@ -20,9 +21,6 @@ import org.springframework.context.annotation.Configuration;
 @EnableConfigurationProperties({QueueTokenProperties.class, ProxyProperties.class,
         CoalescingProperties.class})
 public class IdentityConfig {
-
-    /** 쿠폰 2,000개를 상정한 값. 넘으면 판정이 그 사실을 따로 알린다. */
-    private static final int MAX_LIMITER_KEYS = 10_000;
 
     /**
      * 한산한 쿠폰이 쓸 수 있는 노드 예산 비율 (B-13).
@@ -82,7 +80,7 @@ public class IdentityConfig {
      */
     @Bean
     public SecondWindowLimiter admissionLimiter() {
-        return SecondWindowLimiter.withMaxKeys(MAX_LIMITER_KEYS);
+        return SecondWindowLimiter.withMaxKeys(CouponKeys.MAX);
     }
 
     /**

@@ -14,12 +14,7 @@ import java.util.Map;
  */
 public class Bulkhead {
 
-    /**
-     * 담을 수 있는 쿠폰 수.
-     *
-     * <p><b>쿠폰 식별자는 밖에서 오는 값입니다.</b> 가짓수에 상한이 없으므로
-     * 안 막으면 맵 하나가 메모리를 밀어냅니다 (리미터와 같은 이유).
-     */
+    /** 담을 수 있는 쿠폰 수. 값은 {@link CouponKeys} 가 정합니다. */
     private final int maxKeys;
 
     /** 쿠폰별로 지금 걸려 있는 건수. 0 이 되면 지웁니다. */
@@ -98,5 +93,10 @@ public class Bulkhead {
     /** 담고 있는 쿠폰 수. 맵이 상한에 붙었는지 보는 값입니다. */
     public synchronized int size() {
         return inFlight.size();
+    }
+
+    /** 담을 수 있는 쿠폰 수. <b>지표가 분모로 읽습니다</b> (6.3.6). */
+    public int maxKeys() {
+        return maxKeys;
     }
 }

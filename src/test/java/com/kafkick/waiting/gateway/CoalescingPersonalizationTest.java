@@ -36,10 +36,27 @@ class CoalescingPersonalizationTest {
 
     private final MutableClock 시계 = MutableClock.at(Instant.parse("2026-08-27T00:00:00Z"));
 
+    private final SimpleMeterRegistry meters = new SimpleMeterRegistry();
+
     private final QueryCoalescingFilter filter = QueryCoalescingFilter.of(
             new CoalescingProperties(true, 1024, 1 << 20, 100,
                     List.of(new CoalescingProperties.Route(PATH, Duration.ofMillis(200)))),
-            시계, new SimpleMeterRegistry());
+            시계, meters);
+
+    /** 왜 안 모았는지. <b>사유가 갈려야 계약이 안 선 것을 다른 거절과 구분한다.</b> */
+    private double 센다(String 결과, String 사유) {
+        var counter = meters.find("waiting.coalescing")
+                .tags("outcome", 결과, "cause", 사유).counter();
+        return counter == null ? 0 : counter.count();
+    }
+
+    private double 건너뛴(String 사유) {
+        return 센다("skipped", 사유);
+    }
+
+    private double 거절한(String 사유) {
+        return 센다("refused", 사유);
+    }
 
     private MockServerWebExchange 조회(String memberId) {
         return MockServerWebExchange.from(MockServerHttpRequest.method(HttpMethod.GET, PATH)
@@ -190,17 +207,60 @@ class CoalescingPersonalizationTest {
     @Test
     @DisplayName("선언을_안_하면_다음부터는_안_붙는다")
     void 선언을_안_하면_다음부터는_안_붙는다() {
-        AtomicInteger 붙은_횟수 = new AtomicInteger();
+        // 첫 판이 가르친다. 뒷단 호출 수로는 못 가른다 — 붙든 안 붙든 요청
+        // 하나면 뒷단은 한 번 불린다. 왜 건너뛰었는지를 사유로 본다.
+        filter.filter(조회("먼저"), ex -> 그냥_답한다(ex, "목록")).block();
+        assertThat(건너뛴("no-shared-marker")).as("가르치는 판은 아직 붙는다").isZero();
 
-        // 첫 판이 가르친다. 그 뒤로는 아무도 안 붙는다.
-        IntStream.range(0, 4).forEach(i ->
-                filter.filter(조회("사람" + i), ex -> 그냥_답한다(ex, "목록")).block());
-        filter.filter(조회("나중"), ex -> {
-            붙은_횟수.incrementAndGet();
-            return 그냥_답한다(ex, "목록");
+        filter.filter(조회("나중"), ex -> 그냥_답한다(ex, "목록")).block();
+
+        assertThat(건너뛴("no-shared-marker")).as("배운 뒤로는 안 붙는다").isEqualTo(1);
+    }
+
+    /**
+     * <b>실패 응답으로는 안 배웁니다.</b>
+     *
+     * <p>장애 구간의 5xx 에 헤더가 없다고 계약이 깨진 것으로 읽으면, 뒷단이 살아난
+     * 뒤에도 안 모읍니다 — 장애 하나가 성능 저하로 굳습니다.
+     */
+    @Test
+    @DisplayName("실패_응답으로는_계약을_안_배운다")
+    void 실패_응답으로는_계약을_안_배운다() {
+        AtomicInteger 뒷단 = new AtomicInteger();
+
+        filter.filter(조회("장애"), ex -> {
+            ex.getResponse().setStatusCode(org.springframework.http.HttpStatus.BAD_GATEWAY);
+            return ex.getResponse().writeWith(Mono.just(
+                    ex.getResponse().bufferFactory().wrap("에러".getBytes())));
         }).block();
+        시계.앞으로(Duration.ofSeconds(1));
 
-        assertThat(붙은_횟수).as("각자 그대로 지나간다").hasValue(1);
+        IntStream.range(0, 3).forEach(i ->
+                filter.filter(조회("나중" + i), ex -> {
+                    뒷단.incrementAndGet();
+                    return 답한다(ex, "목록");
+                }).block());
+
+        assertThat(건너뛴("no-shared-marker")).as("5xx 로는 계약을 안 배운다").isZero();
+        assertThat(뒷단).as("그대로 모인다").hasValue(1);
+    }
+
+    /** 쿠키·선언 없음·명시 거절이 <b>다른 사유</b>로 남는다. 한 라벨이면 원인을 못 가린다. */
+    @Test
+    @DisplayName("거절_사유를_갈라_남긴다")
+    void 거절_사유를_갈라_남긴다() {
+        List.of(조회("A"), 조회("B")).forEach(e -> filter.filter(e, ex -> {
+            ex.getResponse().getHeaders().add("Set-Cookie", "SESSION=x");
+            return 답한다(ex, "목록");
+        }).block());
+        시계.앞으로(Duration.ofSeconds(1));
+        List.of(조회("C"), 조회("D")).forEach(e -> filter.filter(e, ex -> {
+            ex.getResponse().getHeaders().setCacheControl("public, no-store");
+            return 그냥_답한다(ex, "목록");
+        }).block());
+
+        assertThat(거절한("set-cookie")).as("쿠키").isPositive();
+        assertThat(거절한("not-shareable")).as("명시 거절").isPositive();
     }
 
     /** 선언이 돌아오면 곧바로 다시 모읍니다. 안 그러면 한 번의 누락이 영구가 됩니다. */
@@ -211,8 +271,14 @@ class CoalescingPersonalizationTest {
 
         filter.filter(조회("먼저"), ex -> 그냥_답한다(ex, "목록")).block();
         시계.앞으로(Duration.ofSeconds(1));
-        // 선언을 붙여 한 번 답하면 그 사실을 배운다.
-        filter.filter(조회("가르침"), ex -> 답한다(ex, "목록")).block();
+        // **한 건으로는 안 되돌린다.** 롤링 배포 구간에서 켜졌다 꺼졌다 하면
+        // 로그가 요청마다 나가고 병합 배수도 무의미해진다.
+        filter.filter(조회("한 건"), ex -> 답한다(ex, "목록")).block();
+        assertThat(건너뛴("no-shared-marker")).as("한 건으로는 안 돌아온다").isEqualTo(1);
+        IntStream.range(0, 30).forEach(i -> {
+            시계.앞으로(Duration.ofSeconds(1));
+            filter.filter(조회("가르침" + i), ex -> 답한다(ex, "목록")).block();
+        });
         시계.앞으로(Duration.ofSeconds(1));
 
         IntStream.range(0, 3).forEach(i ->

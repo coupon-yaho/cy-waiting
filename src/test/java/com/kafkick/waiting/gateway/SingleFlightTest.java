@@ -6,9 +6,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import reactor.core.Disposable;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.test.StepVerifier;
@@ -104,12 +106,15 @@ class SingleFlightTest {
         Mono<String> 첫째 = flight.join("k", 뒷단::asMono);
         Mono<String> 둘째 = flight.join("k", 뒷단::asMono);
 
-        reactor.core.Disposable 구독 = 첫째.subscribe();
-        둘째.subscribe();
-        구독.dispose();
+        // **기존 구독으로 재야 한다.** 나중에 새로 구독하면, 첫째의 취소로 둘째의
+        // 원래 구독이 같이 죽었어도 이 시험이 통과한다.
+        AtomicReference<String> 둘째가_받은_것 = new AtomicReference<>();
+        Disposable 첫_구독 = 첫째.subscribe();
+        둘째.subscribe(둘째가_받은_것::set);
+        첫_구독.dispose();
         뒷단.tryEmitValue("응답");
 
-        StepVerifier.create(둘째).expectNext("응답").verifyComplete();
+        assertThat(둘째가_받은_것).hasValue("응답");
     }
 
     /**

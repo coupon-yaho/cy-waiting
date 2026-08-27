@@ -34,7 +34,7 @@ class CoalescingPersonalizationTest {
     private final MutableClock 시계 = MutableClock.at(Instant.parse("2026-08-27T00:00:00Z"));
 
     private final QueryCoalescingFilter filter = QueryCoalescingFilter.of(
-            new CoalescingProperties(true, 1024, 100,
+            new CoalescingProperties(true, 1024, 1 << 20, 100,
                     List.of(new CoalescingProperties.Route(PATH, Duration.ofMillis(200)))),
             시계, new SimpleMeterRegistry());
 

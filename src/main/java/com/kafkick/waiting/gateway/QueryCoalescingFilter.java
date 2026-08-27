@@ -1,5 +1,7 @@
 package com.kafkick.waiting.gateway;
 
+import static java.util.concurrent.TimeUnit.NANOSECONDS;
+
 import com.kafkick.waiting.control.FailureWindow;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -15,6 +17,8 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import org.reactivestreams.Publisher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.cloud.gateway.filter.GatewayFilter;
@@ -51,6 +55,17 @@ public final class QueryCoalescingFilter implements GatewayFilter {
     private static final List<String> CREDENTIALS = List.of(HttpHeaders.AUTHORIZATION);
 
     /**
+     * 응답의 뜻을 바꾸는 요청 헤더.
+     *
+     * <p>키에 안 넣을 것이면 모으지도 않아야 합니다 — 범위 요청이 전체를 받거나
+     * 조건부 요청이 조건 없는 200 을 받습니다.
+     */
+    private static final List<String> SPECIAL = List.of(
+            HttpHeaders.RANGE, HttpHeaders.IF_NONE_MATCH, HttpHeaders.IF_MODIFIED_SINCE,
+            HttpHeaders.IF_MATCH, HttpHeaders.IF_UNMODIFIED_SINCE, HttpHeaders.IF_RANGE,
+            HttpHeaders.CACHE_CONTROL, HttpHeaders.PRAGMA);
+
+    /**
      * 연결에 매인 헤더. <b>다시 쓸 때 옮기면 안 됩니다.</b>
      *
      * <p>담아 둔 값은 그때의 연결에 대한 것이라, 다른 연결에 그대로 실으면 길이와
@@ -79,7 +94,7 @@ public final class QueryCoalescingFilter implements GatewayFilter {
             MeterRegistry meters) {
         this.props = Objects.requireNonNull(props, "props 는 필수다");
         this.meters = Objects.requireNonNull(meters, "meters 는 필수다");
-        this.cache = ResponseCache.of(clock, props.enabled() ? props.maxKeys() : 1);
+        this.cache = ResponseCache.ofBytes(clock, props.enabled() ? props.maxCacheBytes() : 1);
         this.flight = SingleFlight.withMaxKeys(props.enabled() ? props.maxKeys() : 1);
         // **경로별 수명을 미리 뽑는다.** 요청마다 다시 만들면 100K RPS 에서
         // 조회 한 건마다 맵을 새로 짓는 셈이다.
@@ -101,7 +116,7 @@ public final class QueryCoalescingFilter implements GatewayFilter {
      * @param cause 못 나눠 주는 이유. 지표가 이 값으로 갈린다
      */
     private record Captured(int status, Map<String, List<String>> headers, byte[] body,
-            boolean shareable, String cause) {
+            boolean shareable, String cause, String key) {
     }
 
     @Override
@@ -110,13 +125,19 @@ public final class QueryCoalescingFilter implements GatewayFilter {
         // **화이트리스트 밖은 그대로 흘린다.** 기본이 켜짐이면 개인화된 응답이
         // 붙는 순간 남의 응답을 받는다.
         if (!HttpMethod.GET.equals(exchange.getRequest().getMethod())
-                || !props.covers(path)) {
+                || !props.enabled() || !ttlByPath.containsKey(path)) {
             return chain.filter(exchange);
         }
         // **자격 증명이 실려 오면 안 모은다.** 하나로 모으면 그 값이 다른 사람이
         // 같은 응답을 받는다.
         if (hasCredential(exchange)) {
             count("skipped", "credential");
+            return chain.filter(exchange);
+        }
+        // **뜻이 다른 GET 은 같은 응답을 받으면 안 된다.** 범위 요청이 전체를
+        // 받거나, 조건부 요청이 조건 없는 200 을 받는다.
+        if (isSpecialRequest(exchange)) {
+            count("skipped", "request-directive");
             return chain.filter(exchange);
         }
 
@@ -134,9 +155,17 @@ public final class QueryCoalescingFilter implements GatewayFilter {
         AtomicBoolean called = new AtomicBoolean();
         // **모으기가 멎었으면 그 사실을 남긴다.** 카운터만 두면 뒷단 도달 수가
         // 조용히 원상복귀하고, 아무도 이유를 모른다.
-        if (flight.isFull() && saturation.entered()) {
-            log.warn("모으기 포화 진입 — 키 상한 {} 를 채웠다. max-keys 를 올리거나 ttl 을 줄인다",
-                    props.maxKeys());
+        if (flight.isFull() || cache.isFull()) {
+            if (saturation.entered()) {
+                log.warn("모으기 포화 진입 — 상한을 채웠다. max-keys 나 max-cache-bytes 를 "
+                        + "올리거나 ttl 을 줄인다");
+            }
+        } else {
+            // 쌍으로 안 남기면 진입만 있고 언제 풀렸는지가 없다 (LG-2). 그리고
+            // 한 번 켠 뒤 안 끄면 두 번째 포화부터는 조용하다.
+            saturation.exited().ifPresent(r -> log.warn(
+                    "모으기 포화 해제 — {}초 동안 {}건을 못 모았다",
+                    NANOSECONDS.toSeconds(r.elapsedNanos()), r.swallowed()));
         }
         return flight.join(key.value(), () -> {
                     called.set(true);
@@ -145,6 +174,16 @@ public final class QueryCoalescingFilter implements GatewayFilter {
                 .flatMap(captured -> {
                     if (called.get()) {
                         return Mono.empty();
+                    }
+                    // **값이 같은 사람에게는 줄 수 있다.** 배우기 전에 모인 무리를
+                    // 통째로 돌려보내면, 정작 모여야 할 오픈 첫 버스트가 하나도
+                    // 안 모인다 — 캐시가 가장 차가운 순간이 가장 뜨거운 순간이다.
+                    if (!captured.shareable()
+                            && captured.key() != null
+                            && captured.key().equals(keys.of(exchange, path).value())) {
+                        count("hit", "flight-revalidated");
+                        return write(exchange, new ResponseCache.Entry(
+                                captured.status(), captured.headers(), captured.body()));
                     }
                     if (!captured.shareable()) {
                         // 나눠 줄 수 없는 응답이다. 각자 부른다.
@@ -174,13 +213,16 @@ public final class QueryCoalescingFilter implements GatewayFilter {
     private Mono<Captured> proxy(ServerWebExchange exchange, GatewayFilterChain chain,
             Duration ttl, CoalescingKeys.Key key, String path) {
         List<byte[]> chunks = new ArrayList<>();
+        // **들고 다닌다.** 청크마다 앞엣것을 다시 합산하면 제곱 시간이고, 그
+        // 계산이 요청 경로의 이벤트 루프에서 돈다.
+        AtomicLong held = new AtomicLong();
         AtomicBoolean tooBig = new AtomicBoolean();
         ServerHttpResponse original = exchange.getResponse();
         ServerHttpResponseDecorator tee = new ServerHttpResponseDecorator(original) {
             @Override
-            public Mono<Void> writeWith(org.reactivestreams.Publisher<? extends DataBuffer> body) {
+            public Mono<Void> writeWith(Publisher<? extends DataBuffer> body) {
                 return super.writeWith(Flux.from(body).doOnNext(buffer -> capture(
-                        buffer, chunks, tooBig)));
+                        buffer, chunks, held, tooBig)));
             }
         };
         count("miss", FailureCause.NONE);
@@ -193,20 +235,22 @@ public final class QueryCoalescingFilter implements GatewayFilter {
      * 담되 <b>상한에서 멈춥니다.</b> 넘긴 응답은 담지도 나눠 주지도 않습니다 —
      * 뒤엣사람은 각자 부릅니다.
      */
-    private void capture(DataBuffer buffer, List<byte[]> chunks, AtomicBoolean tooBig) {
+    private void capture(DataBuffer buffer, List<byte[]> chunks, AtomicLong held,
+            AtomicBoolean tooBig) {
         if (tooBig.get()) {
             return;
         }
-        int held = chunks.stream().mapToInt(c -> c.length).sum();
-        if (held + buffer.readableByteCount() > props.maxBodyBytes()) {
+        if (held.get() + buffer.readableByteCount() > props.maxBodyBytes()) {
             tooBig.set(true);
             chunks.clear();
+            held.set(0);
             return;
         }
         byte[] copy = new byte[buffer.readableByteCount()];
         // **읽는 자리를 안 옮긴다.** 옮기면 뒤이어 나가는 본문이 잘린다.
         buffer.toByteBuffer().get(copy);
         chunks.add(copy);
+        held.addAndGet(copy.length);
     }
 
     private Captured finish(ServerHttpResponse response, List<byte[]> chunks,
@@ -219,7 +263,7 @@ public final class QueryCoalescingFilter implements GatewayFilter {
         Map<String, List<String>> headers = new LinkedHashMap<>();
         response.getHeaders().forEach((name, values) -> headers.put(name, List.copyOf(values)));
         if (tooBig.get()) {
-            return new Captured(code, headers, new byte[0], false, "oversize");
+            return new Captured(code, headers, new byte[0], false, "oversize", null);
         }
         byte[] body = join(chunks);
         List<String> learned = keys.learn(path, response.getHeaders());
@@ -230,8 +274,9 @@ public final class QueryCoalescingFilter implements GatewayFilter {
         String storeKey = keys.of(exchange, path).value();
         // **장애 응답은 안 담는다.** 담으면 그 수명 동안 장애가 고정되고,
         // 뒷단이 멀쩡해져도 계속 실패를 돌려준다.
-        if (code < 400 && !noStore(response.getHeaders())
-                && !learned.contains(CoalescingKeys.ALL)) {
+        boolean shareable = code < 400 && !unshareable(response.getHeaders())
+                && !learned.contains(CoalescingKeys.ALL);
+        if (shareable) {
             cache.put(storeKey, new ResponseCache.Entry(code, headers, body), ttl);
             if (cache.isFull()) {
                 count("skipped", "cache-full");
@@ -241,17 +286,34 @@ public final class QueryCoalescingFilter implements GatewayFilter {
         // **배우기 전의 첫 무리가 가장 위험하다.** 그때는 갈림 헤더를 몰라 회원이
         // 서로 다른 요청들이 한 키에 붙어 있다. 응답이 "이 헤더로 갈린다" 고
         // 말하는 순간, 그 무리는 남의 응답을 받게 된다.
-        if (!keys.shareable(key, learned)) {
+        if (!shareable) {
+            // **담기만 막으면 안 된다.** 지금 모여 있는 사람들이 그대로 그 응답을
+            // 받는다 — no-store 를 낸 뒷단이 막으려던 것이 정확히 그것이다.
+            // 키를 안 실어 보내 아무도 되받지 못하게 한다.
             return new Captured(code, headers, new byte[0], false,
-                    learned.contains(CoalescingKeys.ALL) ? "vary-all" : "vary-learned");
+                    learned.contains(CoalescingKeys.ALL) ? "vary-all" : "not-shareable", null);
         }
-        return new Captured(code, headers, body, true, FailureCause.NONE);
+        if (!keys.shareable(key, learned)) {
+            // 배우기 전에 모인 무리다. 갈리는 값이 같은 사람은 이 키로 되찾아 간다.
+            return new Captured(code, headers, body, false, "vary-learned", storeKey);
+        }
+        return new Captured(code, headers, body, true, FailureCause.NONE, storeKey);
     }
 
-    /** 뒷단이 담지 말라면 안 담는다. 우리 판단으로 덮어쓰지 않는다. */
-    private boolean noStore(HttpHeaders headers) {
+    /**
+     * 뒷단이 나눠 쓰지 말라고 했는가.
+     *
+     * <p>지시어는 대소문자를 안 가립니다. {@code private} 와 {@code no-cache} 도
+     * 공유 캐시에서는 못 씁니다 — {@code no-store} 만 보면 그 둘이 새 나갑니다.
+     */
+    private boolean unshareable(HttpHeaders headers) {
         String control = headers.getCacheControl();
-        return control != null && control.contains("no-store");
+        if (control == null) {
+            return false;
+        }
+        String lower = control.toLowerCase(Locale.ROOT);
+        return lower.contains("no-store") || lower.contains("private")
+                || lower.contains("no-cache");
     }
 
     private byte[] join(List<byte[]> chunks) {
@@ -287,6 +349,18 @@ public final class QueryCoalescingFilter implements GatewayFilter {
     // 있다고 거르면 이 기능이 브라우저에서 한 번도 안 돈다. 회원 헤더로 거르다
     // 통째로 죽였던 것과 같은 실수다. 쿠키로 갈리는 응답은 뒷단이 `Vary: Cookie`
     // 로 말해야 한다. 안 말하면 못 막고, 그때는 화이트리스트에서 빼야 한다.
+    /**
+     * 뜻이 달라 같은 응답을 받으면 안 되는 요청인가.
+     *
+     * <p>범위·조건부 요청과 캐시 지시어는 응답의 의미를 바꿉니다. 키에 안 넣을
+     * 것이면 모으지도 않아야 합니다.
+     */
+    private boolean isSpecialRequest(ServerWebExchange exchange) {
+        HttpHeaders headers = exchange.getRequest().getHeaders();
+        return headers.headerNames().stream()
+                .anyMatch(name -> SPECIAL.stream().anyMatch(name::equalsIgnoreCase));
+    }
+
     private boolean hasCredential(ServerWebExchange exchange) {
         HttpHeaders headers = exchange.getRequest().getHeaders();
         return headers.headerNames().stream()
@@ -305,7 +379,11 @@ public final class QueryCoalescingFilter implements GatewayFilter {
      */
     public void bindMetrics(MeterRegistry registry) {
         Gauge.builder("waiting.coalescing.cached", cache, ResponseCache::size)
-                .description("담고 있는 키 수. 상한에 닿으면 모으기가 멎는다")
+                .description("담고 있는 키 수")
+                .strongReference(true)
+                .register(registry);
+        Gauge.builder("waiting.coalescing.bytes", cache, ResponseCache::bytes)
+                .description("담고 있는 바이트. 예산에 닿으면 모으기가 멎는다")
                 .strongReference(true)
                 .register(registry);
         Gauge.builder("waiting.coalescing.in.flight", flight, SingleFlight::inFlight)

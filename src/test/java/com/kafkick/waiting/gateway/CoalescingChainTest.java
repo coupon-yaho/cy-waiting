@@ -36,9 +36,12 @@ import reactor.netty.http.server.HttpServer;
         properties = {
             "waiting.coalescing.enabled=true",
             "waiting.coalescing.max-body-bytes=262144",
+            "waiting.coalescing.max-cache-bytes=1048576",
             "waiting.coalescing.max-keys=100",
             "waiting.coalescing.routes[0].path=/api/v1/coupons",
-            "waiting.coalescing.routes[0].ttl=300ms",
+            // **수명 경계를 재는 시험이 아니다.** 300ms 로 두면 CI 지연 한 번에
+            // 만료돼 배선 시험이 흔들린다. 경계는 ResponseCacheTest 가 잰다.
+            "waiting.coalescing.routes[0].ttl=30s",
         })
 @Import(CoalescingChainTest.NoMaterial.class)
 class CoalescingChainTest {

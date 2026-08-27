@@ -38,8 +38,8 @@ class QueryCoalescingFilterTest {
     private final MeterRegistry meters = new SimpleMeterRegistry();
 
     private final CoalescingProperties 설정 = new CoalescingProperties(
-            true, 1024, 100, List.of(new CoalescingProperties.Route(PATH,
-            Duration.ofMillis(200))));
+            true, 1024, 1 << 20, 100,
+            List.of(new CoalescingProperties.Route(PATH, Duration.ofMillis(200))));
 
     private final QueryCoalescingFilter filter =
             QueryCoalescingFilter.of(설정, 시계, meters);
@@ -398,7 +398,7 @@ class QueryCoalescingFilterTest {
     @DisplayName("꺼_두면_아무것도_안_모은다")
     void 꺼_두면_아무것도_안_모은다() {
         QueryCoalescingFilter 꺼진_것 = QueryCoalescingFilter.of(
-                new CoalescingProperties(false, 1024, 100, List.of()), 시계, meters);
+                new CoalescingProperties(false, 1024, 1 << 20, 100, List.of()), 시계, meters);
         AtomicInteger 뒷단 = new AtomicInteger();
 
         for (int i = 0; i < 3; i++) {
@@ -424,5 +424,51 @@ class QueryCoalescingFilterTest {
         }
 
         assertThat(뒷단).as("뒷단 호출").hasValue(1);
+    }
+
+    /**
+     * <b>뜻이 다른 GET 은 같은 응답을 받으면 안 됩니다.</b> 범위 요청이 전체를
+     * 받거나, 조건부 요청이 조건 없는 200 을 받습니다.
+     */
+    @Test
+    @DisplayName("뜻이_다른_요청은_안_모은다")
+    void 뜻이_다른_요청은_안_모은다() {
+        AtomicInteger 뒷단 = new AtomicInteger();
+
+        for (String 헤더 : List.of("Range", "If-None-Match", "If-Modified-Since",
+                "Cache-Control")) {
+            for (int i = 0; i < 2; i++) {
+                MockServerWebExchange e = MockServerWebExchange.from(
+                        MockServerHttpRequest.method(HttpMethod.GET, PATH)
+                                .header("X-Member-Id", "812934")
+                                .header(헤더, "값"));
+                filter.filter(e, ex -> 답한다(ex, "각자" + 뒷단.incrementAndGet())).block();
+            }
+        }
+
+        assertThat(뒷단).as("헤더 네 종류 × 두 번").hasValue(8);
+    }
+
+    /**
+     * <b>담기만 막으면 안 됩니다.</b> 지금 모여 있는 사람들이 그대로 그 응답을
+     * 받습니다 — 뒷단이 막으려던 것이 정확히 그것입니다.
+     */
+    @Test
+    @DisplayName("나눠_쓰지_말라는_응답은_모여_있어도_안_준다")
+    void 나눠_쓰지_말라는_응답은_모여_있어도_안_준다() {
+        for (String 지시어 : List.of("No-Store", "private", "no-cache")) {
+            AtomicInteger 뒷단 = new AtomicInteger();
+            Sinks.Empty<Void> 아직 = Sinks.empty();
+            List<MockServerWebExchange> 사람들 = IntStream.range(0, 3)
+                    .mapToObj(i -> 조회(PATH)).toList();
+
+            사람들.forEach(e -> filter.filter(e, ex -> {
+                ex.getResponse().getHeaders().setCacheControl(지시어);
+                return 답한다(ex, "개인" + 뒷단.incrementAndGet()).then(아직.asMono());
+            }).subscribe());
+            아직.tryEmitEmpty();
+
+            assertThat(뒷단).as("%s 를 낸 응답은 각자 받는다", 지시어).hasValue(3);
+        }
     }
 }

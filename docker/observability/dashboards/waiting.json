@@ -161,9 +161,9 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
+        "w": 24,
         "x": 0,
-        "y": 24
+        "y": 32
       },
       "targets": [
         {
@@ -173,6 +173,10 @@
         {
           "expr": "waiting_coalescing_cached",
           "legendFormat": "담고 있는 키 수 (상한에 닿으면 모으기가 멎는다)"
+        },
+        {
+          "expr": "waiting_coalescing_bytes",
+          "legendFormat": "담고 있는 바이트 (예산에 닿으면 모으기가 멎는다)"
         }
       ]
     }

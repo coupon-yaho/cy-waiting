@@ -209,6 +209,32 @@
           "legendFormat": "{{instance}} — 담을 수 있는 쿠폰 (분모)"
         }
       ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "불변식 선행 지표",
+      "description": "초과 발급과 순번 역행은 게이트웨이가 직접 못 본다. 스스로 계산한 값으로 대신 본다",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 32
+      },
+      "targets": [
+        {
+          "expr": "waiting_allocation_over",
+          "legendFormat": "{{instance}} — 배분 초과"
+        },
+        {
+          "expr": "waiting_queue_floor_applied",
+          "legendFormat": "{{instance}} — 바닥값 적용(시계 역행)"
+        }
+      ]
     }
   ]
 }

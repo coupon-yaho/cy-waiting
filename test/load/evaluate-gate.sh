@@ -50,6 +50,25 @@ at_most() {    # 값 상한 이름
     || violate "$3 $1 > $2"
 }
 
+at_below() {   # 값 상한 이름 — 경계를 통과로 안 센다
+  if ! numeric "${1:-}"; then
+    violate "$3 가 숫자가 아니다: ${1:-없음}"
+    return
+  fi
+  awk -v v="$1" -v m="$2" 'BEGIN { exit (v + 0 < m + 0) ? 0 : 1 }' \
+    || violate "$3 $1 >= $2"
+}
+
+# **없는 값을 0 으로 안 읽는다.** 무결성 카운터는 시나리오가 반드시 내보낸다.
+# 안 나왔으면 0 건이었던 것이 아니라 요약이 깨진 것이고, 그 판은 못 믿는다.
+required() {   # 값 이름
+  if [[ -z "${1:-}" ]]; then
+    violate "$2 가 요약에 없다 — 시나리오가 내보내는 값이라 없으면 깨진 판이다"
+    return 1
+  fi
+  return 0
+}
+
 # **덜 실린 판을 통과시키지 않는다.** 도착률 실행기는 VU 가 모자라면 반복을
 # 조용히 버린다. 검사 통과율은 실행된 반복만 세므로 그 사실을 못 본다 —
 # 하한이 1 이면 "거의 다 버려진 판" 이 초록으로 남는다.
@@ -309,20 +328,25 @@ case "$scenario" in
   overhead)
     checks=$(read_metric '.metrics.checks.value' '.metrics.checks.values.rate')
     reqs=$(read_metric '.metrics.http_reqs.count' '.metrics.http_reqs.values.count')
+    # **판정하는 값.** 게이트웨이 왕복과 바닥을 같은 반복에서 재고 그 자리에서
+    # 뺀 것이라, 한 표본이 품은 하네스 몫이 그 표본에서 빠진다. 서로 다른
+    # 분포의 분위수를 빼면 그 값은 어느 표본의 것도 아니다.
+    own99=$(read_metric '.metrics.gateway_overhead_ms["p(99)"]' \
+                        '.metrics.gateway_overhead_ms.values["p(99)"]')
+    own50=$(read_metric '.metrics.gateway_overhead_ms.med' \
+                        '.metrics.gateway_overhead_ms.values.med')
+    sold_own99=$(read_metric '.metrics.soldout_overhead_ms["p(99)"]' \
+                             '.metrics.soldout_overhead_ms.values["p(99)"]')
+    # 아래 셋은 판정에 안 쓴다. 무엇이 얼마였는지를 사람이 보는 값이다.
     gw99=$(read_metric '.metrics.gateway_own_ms["p(99)"]' \
                        '.metrics.gateway_own_ms.values["p(99)"]')
-    gw50=$(read_metric '.metrics.gateway_own_ms.med' \
-                       '.metrics.gateway_own_ms.values.med')
     base99=$(read_metric '.metrics.harness_baseline_ms["p(99)"]' \
                          '.metrics.harness_baseline_ms.values["p(99)"]')
     base50=$(read_metric '.metrics.harness_baseline_ms.med' \
                          '.metrics.harness_baseline_ms.values.med')
-    sold99=$(read_metric '.metrics.soldout_ms["p(99)"]' \
-                         '.metrics.soldout_ms.values["p(99)"]')
+
     gw_measured=$(read_metric '.metrics.gateway_measured.count' \
                               '.metrics.gateway_measured.values.count')
-    direct_measured=$(read_metric '.metrics.direct_measured.count' \
-                                  '.metrics.direct_measured.values.count')
     sold_measured=$(read_metric '.metrics.soldout_measured.count' \
                                 '.metrics.soldout_measured.values.count')
     unmeasured=$(read_metric '.metrics.overhead_unmeasured.count' \
@@ -331,72 +355,53 @@ case "$scenario" in
                           '.metrics.overhead_clamped.values.count')
 
     report "요청 수" "${reqs:-없음}"
-    report "갈래별 표본 수" "게이트웨이 ${gw_measured:-0} / 대조군 ${direct_measured:-0} / 매진 ${sold_measured:-0}"
-    # **왕복이 아니다.** 둘 다 뒷단이 실어 준 자기 시간을 뺀 잔차라, 왕복으로
-    # 읽으면 게이트웨이가 실제보다 느려 보인다.
-    report "게이트웨이 잔차 p50/p99(ms)" "${gw50:-없음} / ${gw99:-없음}"
-    report "대조군 잔차 p50/p99(ms)" "${base50:-없음} / ${base99:-없음}"
-    report "매진 단락 p99(ms)" "${sold99:-없음}"
+    report "갈래별 표본 수" "한산 ${gw_measured:-없음} / 매진 ${sold_measured:-없음}"
+    report "게이트웨이 잔차 p99(ms)" "${gw99:-없음}"
+    report "하네스 바닥 p50/p99(ms)" "${base50:-없음} / ${base99:-없음}"
+    report "게이트웨이 오버헤드 p50/p99(ms)" "${own50:-없음} / ${own99:-없음}"
+    report "매진 단락 오버헤드 p99(ms)" "${sold_own99:-없음}"
     report "검사 통과율" "${checks:-없음}"
 
-    # 100rps 두 갈래와 20rps 한 갈래를 90초. 하한이 1 이면 한 건 보낸 판도 통과한다.
-    delivered "${reqs:-}" 300 15000 "요청 수"
+    # 예열 3,000 · 한산 18,000 · 매진 3,600 = 24,600 을 기대한다 (반복마다
+    # 요청 둘). 하한이 1 이면 한 건 보낸 판도 통과한다.
+    delivered "${reqs:-}" 300 20000 "요청 수"
     at_least "${checks:-}" 0.99 "검사 통과율"
+
     # **임계가 달린 Trend 는 표본이 없어도 요약에서 안 사라지고 전부 0 으로
     # 남는다.** 0 은 상한을 안 넘으므로, 표본 수를 따로 못 박지 않으면
-    # 아무것도 안 잰 판이 통과한다.
-    #
-    # 갈래마다 따로 못 박는다. 하나로 합치면 한쪽이 통째로 죽어도 나머지가
-    # 하한을 채울 수 있고, 그 보호는 도착률과 판 길이에 달린 우연이다.
-    at_least "${gw_measured:-0}" 6000 "게이트웨이 갈래 표본 수"
-    at_least "${direct_measured:-0}" 6000 "대조군 갈래 표본 수"
+    # 아무것도 안 잰 판이 통과한다. 갈래마다 따로 못 박는다 — 하나로 합치면
+    # 한쪽이 죽어도 나머지가 하한을 채울 수 있고, 그 보호는 도착률에 달린
+    # 우연이다.
+    at_least "${gw_measured:-0}" 6000 "한산 갈래 표본 수"
     at_least "${sold_measured:-0}" 1000 "매진 갈래 표본 수"
-    # **표본이 빠지면 p99 가 낙관적이다.** 뒷단이 자기 시간을 안 실어 준 응답을
-    # 안 세면, 그만큼 느린 표본이 빠진 채로 판정한다.
+
+    # **없는 값을 0 으로 안 읽는다.** 이 둘은 시나리오가 반드시 내보내므로,
+    # 안 나왔으면 0 건이었던 것이 아니라 요약이 깨진 것이다.
     #
-    # 비율이 아니라 0 인 것은 이 헤더가 붙거나 안 붙거나 둘 중 하나라서다.
-    # 하나라도 빠졌으면 스텁이 바뀐 것이고, 그 판의 숫자는 무엇을 뺀 값인지
-    # 모르는 값이다. 허용치를 두면 그 사실이 허용치 안에 숨는다.
-    at_most "${unmeasured:-0}" 0 "못 잰 응답"
-    # 뺀 값이 음수면 시계나 단위가 어긋난 것이다. 그 판의 숫자는 못 믿는다.
-    at_most "${clamped:-0}" 0 "음수로 나온 응답"
-
-    # **G6.11 이다.** 두 갈래의 차이가 게이트웨이가 더 쓴 시간이다. k6 자신의
-    # 비용도, 루프백 왕복도, 스텁이 헤더를 내보낸 뒤 응답을 쓰는 시간도 양쪽에
-    # 똑같이 들어 있어 빼면 사라진다. 왕복값을 그대로 판정하면 그 셋이 전부
-    # 게이트웨이 몫으로 청구된다 — 실측으로 p99 의 절반 가까이였다.
-    if numeric "${gw99:-}" && numeric "${base50:-}" && numeric "${base99:-}"; then
-      # **p99 에서 p99 를 빼지 않는다.** 게이트웨이 갈래의 한 표본이 품고 있는
-      # 바닥값은 하나뿐인데, 거기서 바닥값의 꼬리를 빼면 그 표본에 들어 있지도
-      # 않은 값을 빼는 것이다. 실측으로 참값보다 0.7ms 를 깎아 읽었다 — 예산의
-      # 14% 다. 중앙값을 빼면 참값에 훨씬 가깝다.
-      own99=$(awk -v g="$gw99" -v b="$base50" 'BEGIN { printf "%.3f", g - b }')
-      floor99=$(awk -v g="$gw99" -v b="$base99" 'BEGIN { printf "%.3f", g - b }')
-      report "게이트웨이 오버헤드 p99(ms)" "$own99 (꼬리까지 빼면 $floor99)"
-      at_most "$own99" 5 "게이트웨이 오버헤드 p99(ms)"
-      # **음수는 좋은 소식이 아니다.** 대조군이 게이트웨이보다 느리게 나왔다는
-      # 뜻이고, 그건 성능이 아니라 배선이 바뀐 것이다.
-      at_least "$own99" 0 "게이트웨이 오버헤드 p99(ms)"
-    else
-      violate "두 갈래 중 한쪽이 안 나왔다 — 차이로 판정할 수 없다: ${gw99:-없음} / ${base50:-없음}"
+    # 문턱이 비율이 아니라 0 인 것은 그 헤더가 붙거나 안 붙거나 둘 중
+    # 하나라서다. 하나라도 빠졌으면 스텁이 바뀐 것이고, 그 판의 숫자는 무엇을
+    # 뺀 값인지 모르는 값이다. 허용치를 두면 그 사실이 허용치 안에 숨는다.
+    if required "${unmeasured:-}" "못 잰 응답"; then
+      at_most "$unmeasured" 0 "못 잰 응답"
+    fi
+    if required "${clamped:-}" "음수로 나온 응답"; then
+      at_most "$clamped" 0 "음수로 나온 응답"
     fi
 
-    # **바닥이 시끄러우면 차이가 커진다 — 좋아진 것이 아니다.** 대조군의 꼬리가
-    # 늘수록 판정값이 내려가므로, 상한을 안 두면 러너가 느릴수록 게이트가
-    # 헐거워진다. 이 값이 걸린 판은 느린 판이 아니라 못 재는 판이다.
-    at_most "${base99:-}" 2.5 "대조군 잔차 p99(ms)"
+    # **바닥이 시끄러우면 짝지어 빼도 잡음이 커진다.** 상한을 안 두면 러너가
+    # 느릴수록 꼬리가 넓어져 판정이 흔들린다. 이 값이 걸린 판은 느린 판이
+    # 아니라 못 재는 판이다.
+    at_most "${base99:-}" 2.5 "하네스 바닥 p99(ms)"
 
-    # 매진 단락은 뒷단도 Redis 도 안 거친다 (R3). 다만 왕복에는 하네스 바닥이
-    # 그대로 들어 있어, 절대값으로 대면 옆 갈래와 기준이 달라진다 — 바닥이 두
-    # 배인 러너에서 게이트웨이가 안 변해도 빨간불이 뜬다.
-    if numeric "${sold99:-}" && numeric "${base50:-}"; then
-      sold_own=$(awk -v s="$sold99" -v b="$base50" 'BEGIN { printf "%.3f", s - b }')
-      report "매진 단락 오버헤드 p99(ms)" "$sold_own"
-      at_most "$sold_own" 5 "매진 단락 오버헤드 p99(ms)"
-      at_least "$sold_own" 0 "매진 단락 오버헤드 p99(ms)"
-    else
-      violate "매진 갈래나 대조군이 안 나왔다 — 차이로 판정할 수 없다: ${sold99:-없음} / ${base50:-없음}"
-    fi
+    # **G6.11 은 `< 5ms` 다.** 경계를 통과로 세면 계획서가 금지한 값이 초록이 된다.
+    at_below "${own99:-}" 5 "게이트웨이 오버헤드 p99(ms)"
+    # 음수는 좋은 소식이 아니다. 게이트웨이를 지난 쪽이 스텁 직행보다 빨랐다는
+    # 뜻이고, 그건 성능이 아니라 배선이 바뀐 것이다.
+    at_least "${own99:-}" 0 "게이트웨이 오버헤드 p99(ms)"
+
+    # 매진 단락은 뒷단도 Redis 도 안 거친다 (R3). 같은 방식으로 바닥을 뺀다.
+    at_below "${sold_own99:-}" 5 "매진 단락 오버헤드 p99(ms)"
+    at_least "${sold_own99:-}" 0 "매진 단락 오버헤드 p99(ms)"
     ;;
   *)
     # **모르는 시나리오를 통과로 안 센다.** 기본이 통과면 시나리오가 늘 때마다

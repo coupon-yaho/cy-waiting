@@ -9,9 +9,13 @@
 //   direct   스텁을 직접 — 같은 빼기를 한다. 남는 것이 하네스의 바닥값이다
 //   soldout  매진 단락 — 뒷단을 아예 안 거치므로 뺄 것이 없다 (R3)
 //
-// 판정은 `gateway - direct` 다. 스텁이 응답을 쓰는 시간은 헤더가 이미 나간
-// 뒤라 자기 시계에 안 잡히는데, 그 미측정 구간이 양쪽에 똑같이 들어 있어
-// 빼면 사라진다. 따로 돌려 빼는 것과 달리 부하 조건도 어긋나지 않는다.
+// **빼기는 한 반복 안에서 한다.** 두 요청을 잇달아 보내고 그 자리에서 뺀 값을
+// 담는다. 서로 다른 분포의 분위수를 빼면 — p99 에서 p99 든 중앙값이든 —
+// 그것은 어느 표본의 값도 아니고, 바닥 분포가 바뀌면 게이트웨이가 그대로여도
+// 판정값이 움직인다.
+//
+// 짝지어 빼면 한 표본이 품은 하네스 몫을 그 표본에서 뺀다. 스텁이 응답을
+// 쓰는 시간처럼 자기 시계에 안 잡히는 구간도 양쪽에 똑같이 들어 있어 사라진다.
 import http from 'k6/http';
 import { check, fail } from 'k6';
 import { Counter, Trend } from 'k6/metrics';
@@ -26,7 +30,11 @@ const SOLD = '/api/v1/coupons/c3/issue';
 
 // 한산 통과 상한(크레딧의 70%)의 절반쯤. 상한에 붙여 놓으면 창 경계가 한 번
 // 흔들릴 때 큐가 켜지고, 그 뒤로는 사다리 8번이 판을 통째로 가져간다.
-const RATE = 100;
+//
+// **짝지어 보내면 같은 도착률이 스텁에 두 배로 얹힌다.** 100 으로 두면 바닥의
+// 꼬리가 측정 가능 상한 위로 올라가 판이 통째로 못 쓰는 판이 된다 — 갈래를
+// 따로 돌린 옛 판과 같은 기계에서 대 보니 바닥 p99 가 2.60 대 3.34 였다.
+const RATE = 50;
 // **갓 뜬 JVM 을 재면 게이트웨이가 아니라 예열을 잰다.** 같은 콜드 JVM 에서
 // 12초를 넣었을 때 오버헤드 p99 가 9.82ms, 60초를 넣었을 때 5.44ms 였다.
 // 그 위로는 더 안 내려간다 — 150초를 넣어도 5.58 이었다. 남는 것은 JIT 가
@@ -34,11 +42,13 @@ const RATE = 100;
 //
 // 러너마다 다를 수 있어 밖에서 덮을 수 있게 둔다.
 const WARMUP = __ENV.WARMUP || '60s';
-const MEASURE = '90s';
+// 도착률을 절반으로 내렸으니 판을 두 배로 늘려 표본 수를 지킨다. p99 를
+// 9,000 표본으로 보는 것과 4,500 으로 보는 것은 꼬리 폭이 다르다.
+const MEASURE = '180s';
 
-// 매진 단락은 뒷단을 안 거치니 스텁에 부하를 안 얹는다. 두 갈래의 차이를
-// 흔들지 않을 만큼만 넣고, 90초에 1,800 표본이면 p99 를 보기에 족하다.
-const SOLDOUT_RATE = 20;
+// 매진 갈래도 짝을 위해 스텁을 한 번 친다. 바닥을 흔들지 않을 만큼만 넣고,
+// 180초에 1,800 표본이면 p99 를 보기에 족하다.
+const SOLDOUT_RATE = 10;
 
 const arm = (exec, rate) => ({
   executor: 'constant-arrival-rate',
@@ -53,9 +63,8 @@ export const options = {
       rate: RATE, timeUnit: '1s', duration: WARMUP,
       preAllocatedVUs: 40, maxVUs: 200, exec: 'warm',
     },
-    gateway: arm('viaGateway', RATE),
-    direct: arm('viaStub', RATE),
-    soldout: arm('soldOut', SOLDOUT_RATE),
+    gateway: arm('pairedIdle', RATE),
+    soldout: arm('pairedSoldOut', SOLDOUT_RATE),
   },
   thresholds: {
     checks: ['rate>0.99'],
@@ -66,24 +75,29 @@ export const options = {
     overhead_unmeasured: ['count==0'],
     overhead_clamped: ['count==0'],
     // **갈래가 아예 안 돈 경우를 잡는다.** exec 이름이 어긋나면 검사도 안
-    // 찍히므로 통과율로는 안 걸리고, 요청 수 하한은 나머지 셋이 채운다.
-    soldout_measured: ['count>0'],
+    // 찍히므로 통과율로는 안 걸리고, 요청 수 하한은 남은 갈래가 채운다.
     gateway_measured: ['count>0'],
-    direct_measured: ['count>0'],
+    soldout_measured: ['count>0'],
   },
   // **요약에 p99 를 실어야 게이트가 읽는다.** 기본은 p95 까지라, 없으면
   // 판정이 "숫자가 아니다" 로 떨어진다 — 실제로 그렇게 한 번 떨어뜨렸다.
   summaryTrendStats: ['min', 'med', 'avg', 'p(90)', 'p(95)', 'p(99)', 'max'],
 };
 
-/** 게이트웨이를 지난 왕복에서 뒷단 몫을 뺀 값. */
+/** 게이트웨이를 지난 왕복에서 뒷단 몫을 뺀 값. 하네스 바닥이 아직 들어 있다. */
 const viaGw = new Trend('gateway_own_ms');
 
-/** 스텁을 직접 친 왕복에서 같은 빼기를 한 값. 하네스의 바닥이다. */
+/** 같은 반복에서 스텁을 직접 친 값. 그 바닥이 얼마인지를 말한다. */
 const viaDirect = new Trend('harness_baseline_ms');
 
-/** 매진 단락. 뒷단을 안 거치므로 전부 게이트웨이 몫이다. */
+/** **판정하는 값.** 위 둘의 차이를 표본마다 낸 것이다 (G6.11). */
+const overhead = new Trend('gateway_overhead_ms');
+
+/** 매진 단락 왕복. 뒷단을 안 거치지만 하네스 바닥은 들어 있다. */
 const soldOutMs = new Trend('soldout_ms');
+
+/** 매진 단락에서 같은 반복의 바닥을 뺀 값. 이쪽 판정도 이 값으로 한다. */
+const soldOutOverhead = new Trend('soldout_overhead_ms');
 
 /** 뒷단이 자기 시간을 안 실어 준 응답. 있으면 그만큼 표본이 빠진 것이다. */
 const missing = new Counter('overhead_unmeasured');
@@ -102,9 +116,6 @@ const clamped = new Counter('overhead_clamped');
  */
 const gwMeasured = new Counter('gateway_measured');
 
-const directMeasured = new Counter('direct_measured');
-
-/** 매진 갈래는 뺄 값이 없어 {@code record} 를 안 거친다. */
 const soldOutMeasured = new Counter('soldout_measured');
 
 // **`>>` 를 안 쓴다.** JS 의 비트 시프트는 32비트라 VU 가 269 를 넘으면 음수
@@ -126,23 +137,34 @@ const headers = (n) => ({
 /** 한 요청분의 식별자. VU 가 몇 개든 겹치지 않게 편다. */
 const nth = () => __VU * 1000003 + __ITER;
 
-/** 뒷단이 실어 준 자기 시간을 빼서 담는다. 못 빼면 안 센다. */
-function record(trend, counter, r) {
+/**
+ * 뒷단이 실어 준 자기 시간을 뺀 값. 못 빼면 {@code null} 이다.
+ *
+ * <p>설정값을 빼면 {@code setTimeout} 의 스케줄링 흔들림이 우리 몫으로 넘어온다.
+ */
+function residual(r) {
   const spent = Number(r.headers['X-Stub-Service-Ms']);
   if (!Number.isFinite(spent)) {
     // **뺄 값이 없으면 안 센다.** 전체 시간을 그대로 넣으면 뒷단 몫이 우리
     // 오버헤드로 보이고, 그 판정은 틀린 값이다.
     missing.add(1);
-    return;
+    return null;
   }
   const own = r.timings.duration - spent;
   if (own < 0) {
     // 클램프해서 0 으로 넣으면 빼기가 통째로 뒤집혀도 p99 가 0 으로 초록이다.
     clamped.add(1);
-    return;
+    return null;
   }
-  trend.add(own);
-  counter.add(1);
+  return own;
+}
+
+/** 같은 반복에서 스텁을 직접 쳐 바닥을 잰다. */
+function baseline(n) {
+  const r = http.post(`${STUB}${IDLE}`, null, { headers: headers(n) });
+  const ok = served(r, IDLE);
+  check(r, { '대조군이 스텁까지 간다': () => ok });
+  return ok ? residual(r) : null;
 }
 
 function served(r, path) {
@@ -184,36 +206,48 @@ export function warm() {
   http.post(`${BASE}${IDLE}`, null, { headers: headers(nth()) });
 }
 
-export function viaGateway() {
-  const r = http.post(`${BASE}${IDLE}`, null, { headers: headers(nth()) });
+/** 한산 통과 경로. 게이트웨이를 지난 값과 바닥을 **같은 반복에서** 잰다. */
+export function pairedIdle() {
+  const n = nth();
+  const r = http.post(`${BASE}${IDLE}`, null, { headers: headers(n) });
   const ok = served(r, IDLE);
-  // 줄을 선 응답은 뒷단을 안 거친다. 그것까지 담으면 다른 경로를 재게 된다.
-  if (ok) {
-    record(viaGw, gwMeasured, r);
-  }
   check(r, { '한산한 쿠폰이 뒷단까지 간다': () => ok });
-}
+  // 줄을 선 응답은 뒷단을 안 거친다. 그것까지 담으면 다른 경로를 재게 된다.
+  const own = ok ? residual(r) : null;
 
-export function viaStub() {
-  const r = http.post(`${STUB}${IDLE}`, null, { headers: headers(nth()) });
-  const ok = served(r, IDLE);
-  if (ok) {
-    record(viaDirect, directMeasured, r);
+  const floor = baseline(n + 1);
+  if (own === null || floor === null) {
+    return;
   }
-  check(r, { '대조군이 스텁까지 간다': () => ok });
+  viaGw.add(own);
+  viaDirect.add(floor);
+  // **이 값이 판정 대상이다.** 두 요청이 몇 마이크로초 사이라 k6 자신의 비용도,
+  // 루프백 왕복도, 스텁이 헤더를 내보낸 뒤 응답을 쓰는 시간도 같은 크기로
+  // 들어 있다. 음수도 그대로 담는다 — 잡음의 한쪽 꼬리를 자르면 분포가 위로
+  // 밀리고, 그건 게이트웨이가 느려진 것처럼 보인다.
+  overhead.add(own - floor);
+  gwMeasured.add(1);
 }
 
-export function soldOut() {
-  const r = http.post(`${BASE}${SOLD}`, null, { headers: headers(nth()) });
+/** 매진 단락 (R3). 뒷단을 안 거치지만 하네스 바닥은 같은 반복에서 뺀다. */
+export function pairedSoldOut() {
+  const n = nth();
+  const r = http.post(`${BASE}${SOLD}`, null, { headers: headers(n) });
   let ok = false;
   try {
     ok = r.status === 409 && r.json().error.code === 'COUPON-306';
   } catch (e) {
     ok = false;
   }
-  if (ok) {
-    soldOutMs.add(r.timings.duration);
-    soldOutMeasured.add(1);
-  }
   check(r, { '매진은 게이트웨이가 종결한다': () => ok });
+  if (!ok) {
+    return;
+  }
+  const floor = baseline(n + 1);
+  if (floor === null) {
+    return;
+  }
+  soldOutMs.add(r.timings.duration);
+  soldOutOverhead.add(r.timings.duration - floor);
+  soldOutMeasured.add(1);
 }

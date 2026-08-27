@@ -54,6 +54,21 @@ jobs:
           chmod +x test/load/*.sh
           test/load/gate-selftest.sh
 
+      # 리포트가 "4개 시나리오" 라고 적은 채 여덟 개를 돌고 있었다. 사본이
+      # 생기면 갈라지고, 갈라진 쪽을 보는 사람은 안 돈 것을 돌았다고 읽는다.
+      - name: nightly 시나리오 수가 리포트와 맞는가
+        run: |
+          python3 - <<'EOF'
+          import json, pathlib, re, sys
+          t = pathlib.Path('.github/workflows/nightly.yml').read_text()
+          n = len(json.loads(re.search(r"all='(\[[^\]]*\])'", t).group(1)))
+          bad = [m for m in re.findall(r'부하 \((\d+) 시나리오\)|(\d+)개 부하 시나리오', t)
+                 for m in m if m and int(m) != n]
+          for m in bad:
+              print(f'::error title=시나리오 수 불일치::리포트는 {m}, 목록은 {n}')
+          sys.exit(1 if bad else 0)
+          EOF
+
       # 존재하지 않는 태스크를 가리키는 게이트는 판정할 수 없다. ID 가 겹치면
       # 두 작업이 한 번호를 쓴다. 번호를 바꿀 때 조용히 깨진다.
       - name: 게이트·태스크 ID 중복

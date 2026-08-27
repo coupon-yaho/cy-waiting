@@ -2,6 +2,8 @@ package com.kafkick.waiting.gateway;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.cloud.gateway.filter.GatewayFilter;
+import org.springframework.cloud.gateway.filter.factory.SpringCloudCircuitBreakerFilterFactory;
 import org.springframework.cloud.gateway.route.RouteLocator;
 import org.springframework.cloud.gateway.route.builder.GatewayFilterSpec;
 import org.springframework.cloud.gateway.route.builder.RouteLocatorBuilder;
@@ -24,6 +26,23 @@ public class GatewayRoutes {
      * 값과 뒷단이 받는 값이 갈리고, 그 값이 레디스 키·캐시 키·리미터 키가 된다.
      */
     private static final String COUPON_ID = "{couponId:[A-Za-z0-9_-]{1,64}}";
+
+    /**
+     * 서킷이 열렸을 때 넘길 주소.
+     *
+     * <p><b>받는 주소와 같은 상수에서 나온다.</b> 갈리면 기동은 되고 장애 때만
+     * 404 가 드러난다 — 사용자에게 404 는 매진으로 읽혀 다시 오지 않는다.
+     */
+    public static final String FALLBACK_URI = "forward:" + BackendFallbackRoutes.FALLBACK_ISSUE;
+
+    /**
+     * 서킷의 이름.
+     *
+     * <p>지금은 뒷단 주소가 하나라 하나뿐이다. 가용량 기반 분배(Phase 9)가 붙으면
+     * <b>인스턴스마다 따로 이름을 잡는다</b> (R-10) — 뒷단 전체를 하나로 묶으면
+     * 한 대가 죽어도 전 트래픽이 막힌다.
+     */
+    public static final String CIRCUIT = "backend";
 
     /**
      * 관례로 쓰이는 클라이언트 IP 헤더. 프레임워크는 {@code X-Forwarded-*} 만
@@ -64,15 +83,36 @@ public class GatewayRoutes {
         }
     }
 
+    /**
+     * 서킷 필터를 손으로 만든다.
+     *
+     * <p>{@code circuitBreaker(...)} 는 order 를 줄 자리가 없어 0 으로 붙는다.
+     * 판정도 0 이면 둘의 앞뒤가 안정 정렬에만 기대게 된다.
+     */
+    private GatewayFilter circuit(SpringCloudCircuitBreakerFilterFactory breakers) {
+        SpringCloudCircuitBreakerFilterFactory.Config config =
+                new SpringCloudCircuitBreakerFilterFactory.Config();
+        config.setName(CIRCUIT);
+        config.setFallbackUri(FALLBACK_URI);
+        config.setRouteId("issue");
+        return breakers.apply(config);
+    }
+
     @Bean
     public RouteLocator routes(RouteLocatorBuilder builder, Backend backend,
-            AdmissionGatewayFilter admission) {
+            AdmissionGatewayFilter admission,
+            SpringCloudCircuitBreakerFilterFactory breakers) {
         return builder.routes()
                 .route("issue", r -> r
                         .method(HttpMethod.POST)
                         .and().path("/api/v1/coupons/" + COUPON_ID + "/issue")
                         .and().predicate(rawPathIsPlain())
-                        .filters(f -> stripSpoofableClientIp(f).filter(admission))
+                        // **앞뒤를 값으로 정한다.** 안 정하면 둘 다 0 이라 선언
+                        // 위치를 옮기는 것만으로 순서가 바뀌고, 서킷이 판정 앞으로
+                        // 가면 래치가 죽는다 (FilterOrder).
+                        .filters(f -> stripSpoofableClientIp(f)
+                                .filter(admission, FilterOrder.ROUTE_ADMISSION)
+                                .filter(circuit(breakers), FilterOrder.ROUTE_CIRCUIT))
                         .uri(backend.uri()))
                 .route("coupons", r -> r
                         .method(HttpMethod.GET)

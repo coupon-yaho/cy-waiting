@@ -5,7 +5,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import java.time.Duration;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.cloud.circuitbreaker.resilience4j.Resilience4JConfigurationProperties;
+import org.springframework.cloud.gateway.support.ServerWebExchangeUtils;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.cloud.gateway.handler.RoutePredicateHandlerMapping;
 import org.springframework.cloud.gateway.route.Route;
@@ -37,6 +42,20 @@ class GatewayWiringTest {
 
     @Autowired
     private RouterFunctionMapping routerFunctionMapping;
+
+    @Autowired
+    private BackendCircuitProperties circuit;
+
+    @Autowired
+    private CircuitBreakerRegistry circuitRegistry;
+
+    /**
+     * <b>라이브러리가 실제로 바인딩한 값을 본다.</b> yml 문자열을 {@code @Value} 로
+     * 다시 읽으면 우리가 적은 것을 우리가 확인하는 것뿐이라, 키가 라이브러리가
+     * 보는 이름과 어긋나도 초록이다.
+     */
+    @Autowired
+    private Resilience4JConfigurationProperties resilience4j;
 
     @Autowired
     private RoutePredicateHandlerMapping gatewayMapping;
@@ -89,9 +108,12 @@ class GatewayWiringTest {
     @Test
     @DisplayName("fallback_라우터가_컨텍스트에_올라온다")
     void fallback_라우터가_컨텍스트에_올라온다() {
-        ServerWebExchange 넘어옴 = MockServerWebExchange.from(
+        MockServerWebExchange 넘어옴 = MockServerWebExchange.from(
                 MockServerHttpRequest.method(HttpMethod.POST,
                         BackendFallbackRoutes.FALLBACK_ISSUE));
+        // 게이트웨이가 넘긴 표식을 단다. 없으면 안 잡는 것이 맞다 — 밖에서 치면
+        // 서킷 상태 지표가 오르고, 그걸로 회복을 판정한다.
+        넘어옴.getAttributes().put(ServerWebExchangeUtils.GATEWAY_ROUTE_ATTR, "issue");
 
         // 매핑까지 해석한다. 빈만 보면 경로가 어긋나도 통과한다.
         //
@@ -110,5 +132,83 @@ class GatewayWiringTest {
     @DisplayName("fallback_주소가_한_곳에서_나온다")
     void fallback_주소가_한_곳에서_나온다() {
         assertThat(BackendFallbackRoutes.FALLBACK_ISSUE).isEqualTo("/fallback/issue");
+    }
+
+    /**
+     * <b>설정이 실제로 실려야 한다.</b> yml 의 키가 하나라도 어긋나면 그 값만
+     * 조용히 라이브러리 기본값으로 돌아간다 — 건수 창 100 은 100K RPS 에서 수 ms
+     * 분량이라 순간 변동에 서킷이 열린다. 기동은 성공한다.
+     */
+    @Test
+    @DisplayName("서킷_설정이_yml에서_올라온다")
+    void 서킷_설정이_yml에서_올라온다() {
+        assertThat(circuit.slidingWindowSize()).isEqualTo(Duration.ofSeconds(10));
+        assertThat(circuit.minimumNumberOfCalls()).isEqualTo(20);
+        assertThat(circuit.failureRateThreshold()).isEqualTo(50f);
+        assertThat(circuit.slowCallDurationThreshold()).isEqualTo(Duration.ofMillis(1500));
+        assertThat(circuit.slowCallRateThreshold()).isEqualTo(50f);
+        assertThat(circuit.waitDurationInOpenState()).isEqualTo(Duration.ofSeconds(5));
+        assertThat(circuit.maxWaitDurationInHalfOpenState()).isEqualTo(Duration.ofSeconds(30));
+        assertThat(circuit.permittedNumberOfCallsInHalfOpenState()).isEqualTo(10);
+    }
+
+    /**
+     * <b>실제로 쓰이는 서킷이 yml 값을 달고 있어야 한다.</b> 레지스트리 빈이
+     * 있는지만 보면, 그것을 {@code ofDefaults()} 로 되돌려도 초록이다 — 그때는
+     * 건수 창 100 으로 돌고 100K RPS 에서 수 ms 마다 열린다.
+     */
+    @Test
+    @DisplayName("서킷_레지스트리가_yml_값을_달고_올라온다")
+    void 서킷_레지스트리가_yml_값을_달고_올라온다() {
+        CircuitBreakerConfig 실린_것 = circuitRegistry
+                .circuitBreaker(GatewayRoutes.CIRCUIT).getCircuitBreakerConfig();
+
+        assertThat(실린_것.getSlidingWindowType())
+                .isEqualTo(CircuitBreakerConfig.SlidingWindowType.TIME_BASED);
+        assertThat(실린_것.getSlidingWindowSize())
+                .isEqualTo((int) circuit.slidingWindowSize().toSeconds());
+        assertThat(실린_것.getMinimumNumberOfCalls()).isEqualTo(circuit.minimumNumberOfCalls());
+        assertThat(실린_것.getFailureRateThreshold()).isEqualTo(circuit.failureRateThreshold());
+        assertThat(실린_것.getSlowCallRateThreshold()).isEqualTo(circuit.slowCallRateThreshold());
+        assertThat(실린_것.getSlowCallDurationThreshold())
+                .isEqualTo(circuit.slowCallDurationThreshold());
+        assertThat(실린_것.getMaxWaitDurationInHalfOpenState())
+                .isEqualTo(circuit.maxWaitDurationInHalfOpenState());
+        assertThat(실린_것.getPermittedNumberOfCallsInHalfOpenState())
+                .isEqualTo(circuit.permittedNumberOfCallsInHalfOpenState());
+        assertThat(실린_것.getWaitIntervalFunctionInOpenState().apply(1))
+                .isEqualTo(circuit.waitDurationInOpenState().toMillis());
+    }
+
+    /**
+     * <b>아무도 정하지 않은 타임아웃이 켜져 있으면 안 된다.</b> 라이브러리는
+     * 안 끄면 1초를 거는데, 그 값은 뒷단이 정상 처리한 발급을 중간에 끊는다.
+     * 입장 토큰은 소모되지 않으므로 같은 사람이 다시 발급받는다 — 초과 발급이다.
+     *
+     * <p>뒷단 요청 타임아웃은 6.2 에서 멱등 키와 함께 정한다.
+     */
+    @Test
+    @DisplayName("정하지_않은_타임아웃이_안_켜진다")
+    void 정하지_않은_타임아웃이_안_켜진다() {
+        assertThat(resilience4j.isDisableTimeLimiter()).isTrue();
+        // 이름별 예외로 발급 서킷만 다시 켜 두지 않았는지도 본다. 여기 한 줄이면
+        // 위의 전역 끄기가 그 서킷에 대해서만 조용히 뒤집힌다.
+        assertThat(resilience4j.getDisableTimeLimiterMap())
+                .doesNotContainEntry(GatewayRoutes.CIRCUIT, false);
+    }
+
+    /**
+     * <b>밖에서 직접 치면 안 잡는다.</b> 이 경로는 신원 필터와 남용 리미터의
+     * {@code /api/**} 밖이라 아무나 칠 수 있는데, 한 번마다 서킷 상태 지표가
+     * 오른다 — 밖에서 회복 판정을 흔들 수 있다.
+     */
+    @Test
+    @DisplayName("밖에서_친_fallback은_컨텍스트도_안_잡는다")
+    void 밖에서_친_fallback은_컨텍스트도_안_잡는다() {
+        ServerWebExchange 직접 = MockServerWebExchange.from(
+                MockServerHttpRequest.method(HttpMethod.POST,
+                        BackendFallbackRoutes.FALLBACK_ISSUE));
+
+        assertThat(routerFunctionMapping.getHandler(직접).block()).isNull();
     }
 }

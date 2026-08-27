@@ -50,7 +50,12 @@ class SnapshotRefreshLifecycleTest {
         }, 시계값);
         // 멈췄다 다시 켜면 스케줄러를 새로 받는다. 버린 것을 다시 쓰면 루프가 죽는다.
         return SnapshotRefreshLifecycle.of(refresher, shutdown, INTERVAL,
-                () -> 시계 = VirtualTimeScheduler.create());
+                () -> 시계 = VirtualTimeScheduler.create(), 대기());
+    }
+
+    /** 실제로 안 잔다. 자면 이 시험만 장비 속도에 걸린다 (TS-4). */
+    private DrainWait 대기() {
+        return DrainWait.of(shutdown, Duration.ofSeconds(6), ms -> { });
     }
 
     /** 가상 시계를 이만큼 민다. 판이 도는 것은 여기서만 일어난다. */
@@ -225,7 +230,8 @@ class SnapshotRefreshLifecycleTest {
         SnapshotRefresher refresher =
                 SnapshotRefresher.of(holder, () -> Mono.just(Map.of()), 시계값);
 
-        assertThatThrownBy(() -> SnapshotRefreshLifecycle.of(refresher, shutdown, Duration.ZERO))
+        assertThatThrownBy(() -> SnapshotRefreshLifecycle.of(
+                refresher, shutdown, Duration.ZERO, 대기()))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageStartingWith("interval");
     }
 
@@ -248,7 +254,7 @@ class SnapshotRefreshLifecycleTest {
                         throw new IllegalStateException("스케줄러를 못 만든다");
                     }
                     return 시계 = VirtualTimeScheduler.create();
-                });
+                }, 대기());
 
         assertThatThrownBy(lifecycle::start).isInstanceOf(IllegalStateException.class);
         assertThat(lifecycle.isRunning()).isFalse();

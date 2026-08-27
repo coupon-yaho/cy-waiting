@@ -40,7 +40,9 @@ class ShutdownSignalTest {
                     Duration.ofSeconds(3), Duration.ofSeconds(10), Clock.systemUTC());
             return SnapshotRefreshLifecycle.of(
                     SnapshotRefresher.of(holder, () -> Mono.just(Map.of())),
-                    shutdown, Duration.ofMillis(50));
+                    shutdown, Duration.ofMillis(50),
+                    // 실제로 안 잔다. 자면 이 시험만 장비 속도에 걸린다 (TS-4).
+                    DrainWait.of(shutdown, Duration.ofSeconds(6), ms -> { }));
         }
     }
 
@@ -59,7 +61,9 @@ class ShutdownSignalTest {
                     Duration.ofSeconds(3), Duration.ofSeconds(10), Clock.systemUTC());
             return SnapshotRefreshLifecycle.of(
                     SnapshotRefresher.of(holder, () -> Mono.just(Map.of())),
-                    shutdown, Duration.ofMillis(50));
+                    shutdown, Duration.ofMillis(50),
+                    // 실제로 안 잔다. 자면 이 시험만 장비 속도에 걸린다 (TS-4).
+                    DrainWait.of(shutdown, Duration.ofSeconds(6), ms -> { }));
         }
 
         @Bean

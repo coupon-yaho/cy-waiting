@@ -85,6 +85,8 @@ RED 커밋 **바디 첫 줄**에 `[red]`를 남긴다. CI가 이걸 보고 실�
 | `bugfix/CY-124-<slug>` | `develop` 의 결함 수정 | `develop` → `develop` |
 | `release/<version>` | 릴리스 준비 (게이트 판정·문서 정리) | `develop` → `main` + `develop` |
 | `hotfix/CY-125-<slug>` | 운영 장애 긴급 수정 | `main` → `main` + `develop` |
+| `integration/CY-126-<slug>` | **여러 feature 를 묶어 한 PR 로** | `develop` → `develop` |
+| `chore/CY-127-<slug>` | 코드가 아닌 배선 (CI·리뷰 도구·설정) | `develop` → `develop` |
 
 ### 브랜치 이름 규칙
 
@@ -97,6 +99,10 @@ feature/CY-231-idle-cap-from-global-credit
 - **Jira 키가 반드시 앞에 온다.** CI 가 브랜치명에서 키를 뽑아 이슈 상태 전이·
   PR 링크·Confluence 리포트를 연결한다 → [`.github/CI.md`](../../.github/CI.md)
 - 키가 없으면 **CI 가 PR 을 차단**한다
+- **`integration/*` 은 티켓이 섞여도 된다.** 리뷰 도구의 사용량이 시간당 한 건이라
+  PR 을 잘게 쪼개면 리뷰를 못 받은 것이 쌓이고, 결국 리뷰 없이 병합하려는 압력이
+  생긴다. 브랜치는 하위 작업 단위로 잘게 두되 **PR 을 묶는 자리**로 쓴다. 묶는
+  기준은 한 문장으로 설명되는가다 — 키는 그 묶음의 상위 티켓을 적는다
 - **기본은 태스크 단위다.** 페이즈는 Jira Epic 이고 브랜치는 그 아래 태스크를 딴다
 
 **예외 — 스캐폴딩 페이즈는 에픽 단위로 딴다.** Phase 1 처럼 태스크가 서로 얹혀 있어

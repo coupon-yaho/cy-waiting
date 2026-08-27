@@ -168,15 +168,15 @@
       "targets": [
         {
           "expr": "waiting_bulkhead_inflight",
-          "legendFormat": "걸려 있는 요청"
+          "legendFormat": "{{instance}} — 걸려 있는 요청"
         },
         {
           "expr": "waiting_bulkhead_coupons",
-          "legendFormat": "자리를 쥔 쿠폰"
+          "legendFormat": "{{instance}} — 자리를 쥔 쿠폰"
         },
         {
           "expr": "waiting_bulkhead_max_coupons",
-          "legendFormat": "담을 수 있는 쿠폰 (분모)"
+          "legendFormat": "{{instance}} — 담을 수 있는 쿠폰 (분모)"
         }
       ]
     }

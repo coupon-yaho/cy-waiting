@@ -153,9 +153,16 @@ case "$scenario" in
       report "뒷단 도달" "${STUB_SERVED}"
       report "병합 배수" "$(awk -v a="${reqs:-0}" -v b="${STUB_SERVED:-1}" \
           'BEGIN { printf "%.1f", (b + 0 == 0) ? 0 : (a + 0) / (b + 0) }')"
+      # **0 을 통과로 세지 않는다.** 하한이 없으면 "완벽히 모았다" 와 "정규식이
+      # 안 맞았다 / 요청이 뒷단에 하나도 안 갔다" 가 같은 초록이 된다.
+      at_least "${STUB_SERVED}" 1 "뒷단 도달"
       # 수명이 300ms 이므로 10초 동안 뒷단은 많아야 수십 번 받아야 한다.
       # 요청 수만큼 받았으면 하나도 안 모인 것이다.
       at_most "${STUB_SERVED}" 200 "뒷단 도달"
+      # 배수도 판정에 쓴다. 출력만 하면 그 값이 1 이어도 통과한다.
+      at_least "$(awk -v a="${reqs:-0}" -v b="${STUB_SERVED:-1}" \
+          'BEGIN { printf "%.1f", (b + 0 == 0) ? 0 : (a + 0) / (b + 0) }')" \
+          10 "병합 배수"
     else
       violate "STUB_SERVED 가 없어 뒷단 도달 수를 못 봤다 — 이 시나리오의 핵심 증거다"
     fi

@@ -38,6 +38,9 @@ const headers = () => ({
   'X-Member-Id': String(__VU * 1000 + __ITER),
   'X-Member-Grade': 'GOLD',
   'X-Forwarded-For': `10.4.${__VU % 250}.1`,
+  // **브라우저처럼 쿠키를 보낸다.** 안 보내면 하네스가 재는 것이 실제 조회가
+  // 아니다 — 쿠키가 있다고 안 모으는 규칙이 들어와도 이 시험이 안 빨개진다.
+  Cookie: `_ga=GA1.1.${__VU}; SESSION=${__VU}`,
 });
 
 export default function () {

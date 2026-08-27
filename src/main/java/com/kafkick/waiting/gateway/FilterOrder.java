@@ -53,10 +53,7 @@ public final class FilterOrder {
      *
      * <p><b>응답을 쓰는 필터보다 앞이어야 한다.</b> 본문은 프레임워크의 쓰기
      * 필터가 쓰는데, 그건 우리보다 바깥이라 우리가 감싼 응답을 안 본다 — 뒤에
-     * 서면 담는 것이 늘 빈 본문이고, 그 빈 것을 뒤엣사람에게 준다.
-     *
-     * <p>실제로 그 상태로 부하를 돌렸다. 응답은 200 이고 길이만 0 이라, 상태만
-     * 보는 검사로는 완벽히 도는 것처럼 보였다.
+     * 서면 담는 것이 늘 빈 본문이고, 상태만 보는 검사로는 안 드러난다.
      */
     public static final int ROUTE_COALESCING =
             NettyWriteResponseFilter.WRITE_RESPONSE_FILTER_ORDER - 1;

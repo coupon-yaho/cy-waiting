@@ -182,19 +182,29 @@ class CoalescingPersonalizationTest {
     void public이_토큰이_아니면_안_모은다() {
         List.of("max-age=300, no-public", "community=\"public-catalog\"",
                 // 따옴표 안의 콤마로 자르면 여기서 public 조각이 나온다.
-                "community=\"catalog, public, personalized\"").forEach(지시어 -> {
+                "community=\"catalog, public, personalized\"",
+                // 이스케이프된 따옴표에서 인용이 끝났다고 보면 마찬가지다.
+                "community=\"a\\\"b, public\"",
+                // 닫히지 않은 따옴표는 못 읽은 것이다. 읽다 만 값으로 판단하지 않는다.
+                "community=\"catalog, public").forEach(지시어 -> {
             QueryCoalescingFilter 새것 = 새_필터();
             AtomicInteger 뒷단 = new AtomicInteger();
+            Set<String> 받은_것 = ConcurrentHashMap.newKeySet();
             // **첫 두 건으로 판정한다.** 세 번째부터는 안 붙기가 이미 배워져 있어
             // 무엇을 보내든 뒷단이 불린다 — 그 상태로 세면 항진명제다.
-            IntStream.range(0, 2).forEach(i ->
-                    새것.filter(조회("사람" + i), ex -> {
-                        뒷단.incrementAndGet();
-                        ex.getResponse().getHeaders().setCacheControl(지시어);
-                        return 그냥_답한다(ex, "목록");
-                    }).block());
+            List<MockServerWebExchange> 사람들 = List.of(조회("갑"), 조회("을"));
+            사람들.forEach(e -> 새것.filter(e, ex -> {
+                뒷단.incrementAndGet();
+                ex.getResponse().getHeaders().setCacheControl(지시어);
+                // 회원마다 다르게 답한다. 나눠 주면 그 사실이 본문으로 드러난다.
+                return 그냥_답한다(ex, "이력:" + ex.getRequest().getHeaders()
+                        .getFirst("X-Member-Id"));
+            }).block());
+            사람들.forEach(e -> 받은_것.add(e.getResponse().getBodyAsString().block()));
 
             assertThat(뒷단).as("%s 는 허락이 아니다", 지시어).hasValue(2);
+            // **본문까지 본다.** 개인화된 응답이 담기거나 나눠지지 않는다.
+            assertThat(받은_것).as("%s 에서 각자 자기 것을 받는다", 지시어).hasSize(2);
         });
     }
 

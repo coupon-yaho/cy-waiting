@@ -339,10 +339,11 @@ case "$scenario" in
     at_least "${checks:-}" 0.99 "검사 통과율"
 
     if [[ -n "${STUB_SERVED:-}" ]]; then
+      # **반올림한 값으로 판정하지 않는다.** 1.054 가 1.05 가 되어 통과한다.
       ratio=$(awk -v a="${reqs:-0}" -v b="${STUB_SERVED:-1}" \
-          'BEGIN { printf "%.2f", (b + 0 == 0) ? 0 : (a + 0) / (b + 0) }')
+          'BEGIN { print (b + 0 == 0) ? 0 : (a + 0) / (b + 0) }')
       report "뒷단 도달" "${STUB_SERVED}"
-      report "병합 배수" "$ratio"
+      report "병합 배수" "$(awk -v r="$ratio" 'BEGIN { printf "%.2f", r }')"
       at_least "${STUB_SERVED}" 1 "뒷단 도달"
       # **1 이어야 한다.** 1 보다 크면 선언을 안 한 응답을 나눠 준 것이고,
       # 그것이 이 변경이 막으려던 것이다. 반대로 모으기가 통째로 꺼져 있어도

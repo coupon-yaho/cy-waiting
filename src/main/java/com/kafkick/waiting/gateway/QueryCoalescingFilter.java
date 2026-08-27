@@ -511,7 +511,11 @@ public final class QueryCoalescingFilter implements GatewayFilter {
         boolean afterEquals = false;
         for (int i = 0; i < lower.length(); i++) {
             char c = lower.charAt(i);
-            if (c == '"') {
+            // 이스케이프된 따옴표는 따옴표를 안 닫는다. 안 보면 그 자리에서 인용이
+            // 끝난 것으로 읽혀 뒤의 콤마가 다시 구분자가 된다.
+            if (quoted && c == '\\' && i + 1 < lower.length()) {
+                i++;
+            } else if (c == '"') {
                 quoted = !quoted;
             } else if (c == ',' && !quoted) {
                 names.add(name.toString().strip());
@@ -522,6 +526,11 @@ public final class QueryCoalescingFilter implements GatewayFilter {
             } else if (!afterEquals) {
                 name.append(c);
             }
+        }
+        if (quoted) {
+            // **닫히지 않은 따옴표는 못 읽은 것이다.** 읽다 만 값으로 허락을
+            // 판단하면, 헤더를 비틀어 넣는 것만으로 나눔이 켜진다.
+            return Set.of();
         }
         names.add(name.toString().strip());
         return names;

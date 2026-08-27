@@ -73,6 +73,10 @@ const server = createServer((req, res) => {
     // 넘어온다 — 그 오차가 그대로 판정에 들어간다.
     const spentMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
     res.setHeader('X-Stub-Service-Ms', spentMs.toFixed(3));
+    // **공유해도 된다고 말한다.** 게이트웨이는 응답이 개인화됐는지 모르므로
+    // 말 안 한 응답은 안 모은다. 안 붙이면 조회 폭주 시나리오의 병합 배수가
+    // 조용히 1 이 되고, 그 판은 모으기를 재는 게 아니라 끈 것을 잰다.
+    res.setHeader('Cache-Control', 'public');
     // 발급이든 조회든 형태만 맞으면 된다. 내용은 게이트웨이가 안 본다.
     json(res, 200, {
       success: true,

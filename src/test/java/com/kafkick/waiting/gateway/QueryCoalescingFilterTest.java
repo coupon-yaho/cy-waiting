@@ -68,6 +68,11 @@ class QueryCoalescingFilterTest {
     /** 뒷단이 답하는 척한다. 몇 번 불렸는지가 이 시험의 값이다. */
     private static Mono<Void> 답한다(org.springframework.web.server.ServerWebExchange e,
             String body) {
+        // **계약을 지킨 뒷단.** 이미 다른 말을 한 응답은 그대로 둔다 — 덮으면
+        // 그 시험이 무엇을 재는지 바뀐다.
+        if (e.getResponse().getHeaders().getCacheControl() == null) {
+            e.getResponse().getHeaders().setCacheControl("public");
+        }
         e.getResponse().setStatusCode(HttpStatus.OK);
         return e.getResponse().writeWith(Mono.just(
                 e.getResponse().bufferFactory().wrap(body.getBytes(StandardCharsets.UTF_8))));

@@ -47,6 +47,14 @@ public final class QueryCoalescingFilter implements GatewayFilter {
     private static final String METRIC = "waiting.coalescing";
 
     /**
+     * 뒷단이 <b>공유해도 된다고 말하는</b> 지시어.
+     *
+     * <p>표준 의미 그대로다 — 공유 캐시가 나눠 줘도 되는 응답. 자체 헤더를 만들면
+     * 그 뜻을 두 팀이 각자 해석하게 되고, 발급 계층이 안 붙이는 날 조용히 나뉜다.
+     */
+    private static final String SHARED = "public";
+
+    /**
      * 자격 증명. <b>이게 실려 오면 안 모읍니다.</b>
      *
      * <p>토큰을 든 요청은 정의상 그 사람 것입니다. 우리 API 는 이 헤더를 안 쓰므로
@@ -309,10 +317,13 @@ public final class QueryCoalescingFilter implements GatewayFilter {
     private boolean unshareable(HttpHeaders headers) {
         String control = headers.getCacheControl();
         if (control == null) {
-            return false;
+            // **말이 없으면 못 나눈다.** 개인화됐는지 아는 것은 뒷단뿐이고,
+            // 기본이 나눔이면 필드 하나가 붙는 날 남의 응답이 나간다.
+            return true;
         }
         String lower = control.toLowerCase(Locale.ROOT);
-        return lower.contains("no-store") || lower.contains("private")
+        return !lower.contains(SHARED)
+                || lower.contains("no-store") || lower.contains("private")
                 || lower.contains("no-cache");
     }
 

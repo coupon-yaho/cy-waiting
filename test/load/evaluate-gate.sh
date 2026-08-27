@@ -195,6 +195,40 @@ case "$scenario" in
       violate "STUB_SERVED 가 없어 뒷단 도달 수를 못 봤다 — 이 시나리오의 핵심 증거다"
     fi
     ;;
+  open-spike)
+    checks=$(read_metric '.metrics.checks.value' '.metrics.checks.values.rate')
+    reqs=$(read_metric '.metrics.http_reqs.count' '.metrics.http_reqs.values.count')
+    queued=$(read_metric '.metrics.queued_responses.count' \
+                         '.metrics.queued_responses.values.count')
+    shed=$(read_metric '.metrics.shed_responses.count' '.metrics.shed_responses.values.count')
+    retry_min=$(read_metric '.metrics.retry_after_seconds.min' \
+                            '.metrics.retry_after_seconds.values.min')
+    retry_max=$(read_metric '.metrics.retry_after_seconds.max' \
+                            '.metrics.retry_after_seconds.values.max')
+
+    report "검사 통과율" "${checks:-없음}"
+    report "요청 수" "${reqs:-없음}"
+    report "줄 선 응답" "${queued:-없음}"
+    report "막힌 응답" "${shed:-없음}"
+    report "다시 올 시각(초)" "${retry_min:-없음} ~ ${retry_max:-없음}"
+
+    at_least "${reqs:-}" 1 "요청 수"
+    at_least "${checks:-}" 0.99 "검사 통과율"
+    # **줄이 서야 한다.** 안 서면 스파이크가 유휴 몫을 못 넘긴 것이고, 그때는
+    # 이 시나리오가 스파이크를 안 만든 것이다.
+    at_least "${queued:-}" 1 "줄 선 응답"
+
+    # **다시 올 시각이 흩어져야 한다** (F7 · G6.20). 한 값으로 몰리면 그 초에
+    # 같은 스파이크가 다시 오고, 회복이 곧 두 번째 사고가 된다.
+    if [[ -n "${shed:-}" ]] && awk -v v="${shed:-0}" 'BEGIN { exit (v + 0 > 0) ? 0 : 1 }'; then
+      if numeric "${retry_min:-}" && numeric "${retry_max:-}"; then
+        at_least "$(awk -v a="${retry_max}" -v b="${retry_min}" \
+            'BEGIN { printf "%.2f", a - b }')" 0.5 "다시 올 시각의 폭"
+      else
+        violate "막힌 응답이 있는데 Retry-After 를 못 읽었다"
+      fi
+    fi
+    ;;
   *)
     # **모르는 시나리오를 통과로 안 센다.** 기본이 통과면 시나리오가 늘 때마다
     # 아무 기준 없는 잡이 하나씩 생기고, 그 초록은 아무 뜻이 없다.

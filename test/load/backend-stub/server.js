@@ -64,9 +64,15 @@ const server = createServer((req, res) => {
   }
 
   inflight += 1;
+  const startedAt = process.hrtime.bigint();
   setTimeout(() => {
     inflight -= 1;
     served += 1;
+    // **자기가 쓴 시간을 실어 보낸다.** 게이트웨이 오버헤드를 재려면 뒷단 몫을
+    // 빼야 하는데, 설정값(LATENCY_MS)을 빼면 스케줄링 흔들림이 우리 몫으로
+    // 넘어온다 — 그 오차가 그대로 판정에 들어간다.
+    const spentMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+    res.setHeader('X-Stub-Service-Ms', spentMs.toFixed(3));
     // 발급이든 조회든 형태만 맞으면 된다. 내용은 게이트웨이가 안 본다.
     json(res, 200, {
       success: true,

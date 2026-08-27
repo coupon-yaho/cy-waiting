@@ -9,7 +9,7 @@ on:
   workflow_call:
     inputs:
       scenario:
-        description: smoke | idle-coupon | contended-coupon | read-burst | read-window | open-spike | mixed | abandonment
+        description: smoke | idle-coupon | contended-coupon | read-burst | read-window | open-spike | mixed | abandonment | overhead
         type: string
         required: true
       timeout-minutes:

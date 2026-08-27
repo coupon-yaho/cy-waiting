@@ -23,6 +23,10 @@ services:
       PORT: "8090"
       LATENCY_MS: "5"
       MAX_INFLIGHT: "200"
+    ports:
+      # **오버헤드 대조군이 여기를 직접 친다.** 게이트웨이를 지난 값과 같은
+      # 판에서 빼야 k6 자신의 비용과 루프백 왕복이 상쇄된다.
+      - "18090:8090"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8090/stub/health"]
       interval: 1s
@@ -51,6 +55,11 @@ services:
         # 통째로 꺼도 R1 시나리오가 통과한다.
         redis-cli -h redis SADD coupons:active c2
         redis-cli -h redis SET 'stock:{c2}' 1000000
+        # **매진 쿠폰.** 게이트웨이만 만들 수 있는 응답이 하나 있어야
+        # "이 판에 게이트웨이가 있었다" 를 시나리오가 증명할 수 있다.
+        # 스텁은 어떤 URL 에도 성공을 돌려주므로 통과 응답으로는 못 한다.
+        redis-cli -h redis SADD coupons:active c3
+        redis-cli -h redis SET 'stock:{c3}' 0
         while :; do
           redis-cli -h redis HSET capacity:coupon-svc:v1 stub-1 \
             "{\"addr\":\"backend:8090\",\"credits\":300,\"ts\":$(date +%s)}" > /dev/null
@@ -65,8 +74,10 @@ services:
         - |
           [ "$$(redis-cli -h redis SISMEMBER coupons:active c1)" = 1 ] &&
           [ "$$(redis-cli -h redis SISMEMBER coupons:active c2)" = 1 ] &&
+          [ "$$(redis-cli -h redis SISMEMBER coupons:active c3)" = 1 ] &&
           [ "$$(redis-cli -h redis EXISTS 'stock:{c1}')" = 1 ] &&
           [ "$$(redis-cli -h redis EXISTS 'stock:{c2}')" = 1 ] &&
+          [ "$$(redis-cli -h redis EXISTS 'stock:{c3}')" = 1 ] &&
           [ "$$(redis-cli -h redis HEXISTS capacity:coupon-svc:v1 stub-1)" = 1 ]
       interval: 1s
       timeout: 2s
@@ -81,15 +92,19 @@ services:
       gateway: { condition: service_healthy }
     command: ["sh", "-c", "sleep infinity"]
     healthcheck:
-      # 한산 통과 상한이 1 이상이 되는 지점까지 기다린다.
+      # **가장 굶주린 시나리오가 필요한 값까지 기다린다.** 상한이 1 이상이면
+      # 된다고 두면, 초당 100 을 넣는 판이 상한 14 인 상태에서 시작한다. 첫
+      # 초에 큐가 켜지고 그 뒤로는 사다리 8번이 판을 통째로 가져간다 —
+      # 게이트웨이 오버헤드를 잰다고 적고 큐 등록 경로를 재게 된다.
       test:
         - CMD
         - sh
         - -c
-        - "[ \"$$(redis-cli -h redis HGET gw:snapshot '#credit')\" -ge 20 ]"
+        - "[ \"$$(redis-cli -h redis HGET gw:snapshot '#credit')\" -ge 200 ]"
       interval: 2s
       timeout: 3s
-      retries: 60
+      # 램프는 60초짜리다. 재시도 예산이 그보다 짧으면 판이 아니라 기동이 진다.
+      retries: 90
 
   gateway:
     build:

@@ -246,6 +246,7 @@ jobs:
         뮤테이션=${{ needs.test-mutation.result }}
         보안=${{ needs.security.result }}
         부하(R1)=${{ needs.load-idle.result }}
+        부하(조회 폭주)=${{ needs.load-read-burst.result }}
       link-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       jira-key: ${{ needs.context.outputs.jira-key }}
       jira-transition: ${{ needs.verdict.outputs.ok == 'true' && '완료' || '' }}
@@ -267,6 +268,7 @@ jobs:
           <tr><td>뮤테이션 테스트</td><td>${{ needs.test-mutation.result }}</td></tr>
           <tr><td>보안 스캔</td><td>${{ needs.security.result }}</td></tr>
           <tr><td>부하 (R1 검증)</td><td>${{ needs.load-idle.result }}</td></tr>
+          <tr><td>부하 (조회 폭주 · G6.16)</td><td>${{ needs.load-read-burst.result }}</td></tr>
         </table>
         <h2>커밋</h2>
         <p><code>${{ github.sha }}</code></p>

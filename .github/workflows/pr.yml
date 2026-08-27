@@ -52,9 +52,12 @@ jobs:
             echo "key=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if ! grep -qE '^(feature|bugfix|hotfix|release)/CY-[0-9]+-[a-z0-9-]+$' <<<"$BRANCH"; then
+          # `integration` 은 여러 하위 작업을 묶어 한 PR 로 올리는 자리이고,
+          # `chore` 는 코드가 아닌 배선을 고치는 자리다. 둘 다 WF-3 이 이름으로
+          # 드러내라고 정한 형태다.
+          if ! grep -qE '^(feature|bugfix|hotfix|release|integration|chore)/CY-[0-9]+-[a-z0-9-]+$' <<<"$BRANCH"; then
             echo "::error title=WF-3::브랜치명이 규칙에 맞지 않는다: '$BRANCH'"
-            echo "::error::형식: <feature|bugfix|hotfix|release>/CY-<번호>-<영문-kebab-슬러그>"
+            echo "::error::형식: <feature|bugfix|hotfix|release|integration|chore>/CY-<번호>-<영문-kebab-슬러그>"
             exit 1
           fi
           key=$(grep -oE 'CY-[0-9]+' <<<"$BRANCH" | head -1)

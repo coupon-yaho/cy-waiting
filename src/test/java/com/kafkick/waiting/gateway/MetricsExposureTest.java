@@ -62,7 +62,7 @@ class MetricsExposureTest {
         registry.counter("waiting.admission", "outcome", "PASS_UNDER_CAP", "cause", "none")
                 .increment();
 
-        assertThat(태그_키_집합들()).isNotEmpty()
+        assertThat(태그_키_집합들())
                 .containsKey("waiting_admission_total")
                 .allSatisfy((name, keys) ->
                         assertThat(keys).as("%s 의 태그 키 집합", name).hasSize(1));

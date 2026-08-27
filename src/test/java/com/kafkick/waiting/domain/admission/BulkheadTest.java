@@ -61,7 +61,9 @@ class BulkheadTest {
     @Test
     @DisplayName("쿠폰마다_따로_센다")
     void 쿠폰마다_따로_센다() {
-        bulkhead.tryEnter("핫", 1);
+        // 선행 조건을 잰다. 핫이 안 들어갔으면 콜드가 통과해도 아무것도 안 잰 것이다.
+        assertThat(bulkhead.tryEnter("핫", 1)).isTrue();
+        assertThat(bulkhead.tryEnter("핫", 1)).as("핫은 자기 상한에서 막힌다").isFalse();
 
         assertThat(bulkhead.tryEnter("콜드", 1)).isTrue();
     }
@@ -112,8 +114,13 @@ class BulkheadTest {
     @DisplayName("비면_맵에서_빠진다")
     void 비면_맵에서_빠진다() {
         for (int i = 0; i < 10; i++) {
-            bulkhead.tryEnter("c" + i, 5);
+            assertThat(bulkhead.tryEnter("c" + i, 5)).isTrue();
         }
+        // 맵이 실제로 찼는지부터 잰다. 안 찼으면 exit 이 없어도 새것이 들어가고,
+        // 이 시험은 "비면 빠진다" 를 전혀 안 잰 채 초록으로 남는다.
+        assertThat(bulkhead.size()).isEqualTo(10);
+        assertThat(bulkhead.tryEnter("가득", 5)).as("찬 뒤에는 새 쿠폰을 안 받는다").isFalse();
+
         bulkhead.exit("c0");
 
         assertThat(bulkhead.tryEnter("새것", 5)).isTrue();

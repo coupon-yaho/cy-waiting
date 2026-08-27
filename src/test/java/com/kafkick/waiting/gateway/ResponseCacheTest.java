@@ -6,6 +6,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.kafkick.waiting.MutableClock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -24,8 +26,8 @@ class ResponseCacheTest {
     private final ResponseCache cache = ResponseCache.of(시계, 3);
 
     private static ResponseCache.Entry 응답(String body) {
-        return new ResponseCache.Entry(200, java.util.Map.of("Content-Type",
-                java.util.List.of("application/json")), body.getBytes());
+        return new ResponseCache.Entry(200,
+                Map.of("Content-Type", List.of("application/json")), body.getBytes());
     }
 
     @Test

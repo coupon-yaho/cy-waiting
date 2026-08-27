@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -164,7 +165,7 @@ public final class QueryCoalescingFilter implements GatewayFilter {
         int code = status == null ? 200 : status.value();
         // 헤더를 값으로 복사한다. 뷰를 들고 있으면 다음 요청이 그 응답의
         // 헤더를 고칠 때 담아 둔 것까지 같이 바뀐다.
-        Map<String, List<String>> headers = new java.util.LinkedHashMap<>();
+        Map<String, List<String>> headers = new LinkedHashMap<>();
         response.getHeaders().forEach((name, values) -> headers.put(name, List.copyOf(values)));
         if (tooBig.get()) {
             return new Captured(code, headers, new byte[0], true);

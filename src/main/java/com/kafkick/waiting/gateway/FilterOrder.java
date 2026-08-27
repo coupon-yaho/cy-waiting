@@ -46,6 +46,14 @@ public final class FilterOrder {
      */
     public static final int ROUTE_CIRCUIT = ROUTE_ADMISSION + 1;
 
+    /**
+     * 조회 라우트의 코얼레싱.
+     *
+     * <p><b>주소를 지우는 필터보다 뒤다.</b> 앞에 서면 위조 가능한 헤더가 남은
+     * 채로 키가 만들어지고, 그 값으로 응답을 나눠 주게 된다.
+     */
+    public static final int ROUTE_COALESCING = 1;
+
     private FilterOrder() {
     }
 }

@@ -117,7 +117,7 @@ public class GatewayRoutes {
 
     @Bean
     public RouteLocator routes(RouteLocatorBuilder builder, Backend backend,
-            AdmissionGatewayFilter admission,
+            AdmissionGatewayFilter admission, QueryCoalescingFilter coalescing,
             SpringCloudCircuitBreakerFilterFactory breakers) {
         return builder.routes()
                 .route("issue", r -> r
@@ -139,7 +139,10 @@ public class GatewayRoutes {
                         .method(HttpMethod.GET)
                         .and().path("/api/v1/coupons", "/api/v1/coupons/" + COUPON_ID)
                         .and().predicate(rawPathIsPlain())
-                        .filters(this::stripSpoofableClientIp)
+                        // **조회에만 붙인다.** 발급에 붙이면 같은 응답을 여럿이
+                        // 받고, 그건 곧 초과 발급이다.
+                        .filters(f -> stripSpoofableClientIp(f)
+                                .filter(coalescing, FilterOrder.ROUTE_COALESCING))
                         .uri(backend.uri()))
                 .build();
     }

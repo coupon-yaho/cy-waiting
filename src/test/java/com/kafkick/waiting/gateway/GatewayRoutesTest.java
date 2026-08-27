@@ -76,6 +76,10 @@ class GatewayRoutesTest {
                     공유_리미터,
                     EntryToken.of("not-a-real-secret-0123456789abcdef"),
                     IdempotencyKey.of("not-a-real-secret-0123456789abcdef")),
+            // 이 시험은 라우트가 무엇을 잡는가만 본다. 모으기는 꺼 둔다.
+            QueryCoalescingFilter.of(
+                    new CoalescingProperties(false, 1024, 100, List.of()),
+                    Clock.systemUTC(), new SimpleMeterRegistry()),
             컨텍스트.getBean(SpringCloudCircuitBreakerResilience4JFilterFactory.class));
 
     /**

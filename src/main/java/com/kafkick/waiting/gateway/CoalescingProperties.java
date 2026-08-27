@@ -4,6 +4,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.stream.Collectors;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
@@ -59,7 +60,7 @@ public record CoalescingProperties(boolean enabled, int maxBodyBytes, int maxKey
 
     /** 경로별 수명. 없는 경로는 안 모은다. */
     public Map<String, Duration> ttlByPath() {
-        return routes.stream().collect(java.util.stream.Collectors.toUnmodifiableMap(
+        return routes.stream().collect(Collectors.toUnmodifiableMap(
                 Route::path, Route::ttl, (a, b) -> {
                     throw new IllegalArgumentException("같은 경로를 두 번 적었다");
                 }));

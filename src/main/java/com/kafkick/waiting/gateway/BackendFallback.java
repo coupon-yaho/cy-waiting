@@ -1,7 +1,9 @@
 package com.kafkick.waiting.gateway;
 
+import com.kafkick.waiting.domain.admission.AdmissionDecision;
 import com.kafkick.waiting.domain.queue.EtaPolicy;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.util.Objects;
@@ -30,9 +32,17 @@ public final class BackendFallback {
      * <b>줄에 선 사람에게 자리가 그대로라고 말한다.</b> 안 그러면 다시 줄을
      * 서려 하고, 그건 자기 자리를 버리는 일이다.
      */
-    private static final String MESSAGE =
+    private static final String QUEUED =
             "지금은 발급을 처리할 수 없습니다. 대기 순번은 그대로 유지되니 "
                     + "잠시 후 다시 시도해 주세요.";
+
+    /**
+     * <b>차례가 온 사람에게는 다른 말을 한다.</b> 그는 이미 큐에서 빠졌고 손에
+     * 든 것은 수명이 있는 입장 토큰뿐이다. "순번이 유지된다" 는 그에게 거짓이고,
+     * 멀리 보내면 그 사이 토큰이 죽어 줄 맨 뒤로 다시 선다.
+     */
+    private static final String ADMITTED =
+            "지금은 발급을 처리할 수 없습니다. 곧 다시 시도해 주세요.";
 
     /** 뒷단 카탈로그에 없는 상황이라 우리 코드를 쓴다. */
     private static final String CODE = "BACKEND_UNAVAILABLE";
@@ -41,21 +51,38 @@ public final class BackendFallback {
     private final MeterRegistry meters;
     private final DoubleSupplier random;
 
-    private BackendFallback(Clock clock, MeterRegistry meters, DoubleSupplier random) {
+    /** 없으면 상태를 모른다고 적는다. 시험이 레지스트리 없이도 돌 수 있어야 한다. */
+    private final CircuitBreakerRegistry circuits;
+
+    private final String circuitName;
+
+    private BackendFallback(Clock clock, MeterRegistry meters, DoubleSupplier random,
+            CircuitBreakerRegistry circuits, String circuitName) {
         this.error = ApiError.of(Objects.requireNonNull(clock, "clock 은 필수다"));
         this.meters = Objects.requireNonNull(meters, "meters 는 필수다");
         this.random = Objects.requireNonNull(random, "random 은 필수다");
+        this.circuits = circuits;
+        this.circuitName = circuitName;
     }
 
     /** 흔들림의 난수원은 스레드마다 따로 둔다 — 공유하면 그 자체가 경합점이다. */
     public static BackendFallback of(Clock clock, MeterRegistry meters) {
         return new BackendFallback(clock, meters,
-                () -> ThreadLocalRandom.current().nextDouble());
+                () -> ThreadLocalRandom.current().nextDouble(), null, null);
+    }
+
+    /** 서킷 상태를 지표에 싣는다. 없으면 "열렸다" 를 단정하게 되어 지표가 거짓말한다. */
+    public static BackendFallback of(Clock clock, MeterRegistry meters,
+            CircuitBreakerRegistry circuits, String circuitName) {
+        return new BackendFallback(clock, meters,
+                () -> ThreadLocalRandom.current().nextDouble(),
+                Objects.requireNonNull(circuits, "circuits 는 필수다"),
+                Objects.requireNonNull(circuitName, "circuitName 은 필수다"));
     }
 
     /** 난수원을 받는다. 고정하지 못하면 흔들림이 실제로 붙었는지 못 잰다 (TS-4). */
     public static BackendFallback of(Clock clock, MeterRegistry meters, DoubleSupplier random) {
-        return new BackendFallback(clock, meters, random);
+        return new BackendFallback(clock, meters, random, null, null);
     }
 
     /**
@@ -68,15 +95,45 @@ public final class BackendFallback {
      * 두 가지 오류 형식을 낸다.
      */
     public Mono<ServerResponse> respond(ServerRequest request) {
-        meters.counter(METRIC, "outcome", "open").increment();
+        // **"열렸다" 라고 단정하지 않는다.** 폴백은 서킷 오픈뿐 아니라 연결 실패나
+        // 뒷단 오류로도 온다. 라벨을 오픈으로 고정하면 서킷이 닫힌 채 실패만 나는
+        // 구간에서 지표가 거짓말하고, 그 지표로 회복을 판정한다 (8.4.3).
+        meters.counter(METRIC, "state", state()).increment();
+        // **차례가 온 사람과 줄에 선 사람에게 같은 답을 하면 안 된다.** 앞은 손에
+        // 든 토큰의 수명 안에 돌아와야 하고, 뒤는 그럴 필요가 없다. 판정 경로가
+        // 이미 그렇게 가르고 있는데(RETRY_TOKEN 은 가장 가까운 밴드) 여기만 하나로
+        // 답하면 같은 상황에 두 정책이 갈린다.
+        boolean admitted = admitted(request);
         ApiError.Envelope envelope = error.render(request.exchange(),
-                HttpStatus.SERVICE_UNAVAILABLE, CODE, MESSAGE, retryAfterSec(), false);
+                HttpStatus.SERVICE_UNAVAILABLE, CODE,
+                admitted ? ADMITTED : QUEUED, retryAfterSec(admitted), false);
         return ServerResponse.status(envelope.status())
                 .headers(headers -> headers.putAll(envelope.headers()))
                 .bodyValue(envelope.body());
     }
 
-    private int retryAfterSec() {
-        return (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random);
+    /** 서킷의 실제 상태. 레지스트리를 안 받으면 모른다고 적는다. */
+    private String state() {
+        return circuits == null ? "unknown"
+                : circuits.circuitBreaker(circuitName).getState().name();
+    }
+
+    /**
+     * 차례가 온 사람인가. <b>판정이 남긴 값으로 본다</b> — 서킷의 전달은 우리
+     * 속성을 안 지운다.
+     */
+    private boolean admitted(ServerRequest request) {
+        return request.exchange().getAttribute(AdmissionGatewayFilter.DECISION)
+                == AdmissionDecision.PASS_TOKEN;
+    }
+
+    /**
+     * 다시 올 시각.
+     *
+     * <p>차례가 온 사람은 <b>가장 가까운 밴드</b>로 부른다. 멀리 보내면 그 사이
+     * 그의 몫이 남에게 가고, 토큰 수명이 다하면 줄 맨 뒤로 다시 선다.
+     */
+    private int retryAfterSec(boolean admitted) {
+        return (int) POLL.intervalSec(admitted ? 0 : EtaPolicy.UNKNOWN, random);
     }
 }

@@ -3,10 +3,13 @@ package com.kafkick.waiting.gateway;
 import static org.springframework.web.reactive.function.server.RequestPredicates.path;
 import static org.springframework.web.reactive.function.server.RouterFunctions.route;
 
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
+import org.springframework.cloud.gateway.support.ServerWebExchangeUtils;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.web.reactive.function.server.RequestPredicate;
 import org.springframework.web.reactive.function.server.RouterFunction;
 import org.springframework.web.reactive.function.server.ServerResponse;
 
@@ -30,12 +33,25 @@ public class BackendFallbackRoutes {
      */
     @Bean
     public RouterFunction<ServerResponse> fallbackRoutes(BackendFallback fallback) {
-        return route(path(FALLBACK_ISSUE), fallback::respond);
+        return route(path(FALLBACK_ISSUE).and(forwarded()), fallback::respond);
+    }
+
+    /**
+     * <b>밖에서 온 요청은 안 받는다.</b> 이 경로는 신원 필터와 남용 리미터의
+     * {@code /api/**} 밖이라 아무나 칠 수 있는데, 한 번마다 "서킷이 열렸다" 는
+     * 지표가 오른다 — 밖에서 회복 판정을 흔들 수 있다.
+     *
+     * <p>게이트웨이가 넘긴 요청에만 있는 표식으로 가른다.
+     */
+    private RequestPredicate forwarded() {
+        return request -> request.exchange()
+                .getAttribute(ServerWebExchangeUtils.GATEWAY_ROUTE_ATTR) != null;
     }
 
     /** 응답 시각은 주입받은 시계로 찍는다 — 판정 경로와 갈리면 안 된다 (TS-4). */
     @Bean
-    public BackendFallback backendFallback(Clock clock, MeterRegistry meters) {
-        return BackendFallback.of(clock, meters);
+    public BackendFallback backendFallback(Clock clock, MeterRegistry meters,
+            CircuitBreakerRegistry circuits) {
+        return BackendFallback.of(clock, meters, circuits, GatewayRoutes.CIRCUIT);
     }
 }

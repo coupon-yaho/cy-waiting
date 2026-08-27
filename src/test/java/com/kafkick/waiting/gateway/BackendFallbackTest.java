@@ -4,9 +4,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+import com.kafkick.waiting.domain.admission.AdmissionDecision;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import org.junit.jupiter.api.DisplayName;
@@ -16,6 +19,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
+import org.springframework.cloud.gateway.support.ServerWebExchangeUtils;
 import org.springframework.mock.web.server.MockServerWebExchange;
 import java.util.List;
 import java.util.HashSet;
@@ -201,8 +205,34 @@ class BackendFallbackTest {
         답한다(fallback, 넘어온_요청());
         답한다(fallback, 넘어온_요청());
 
-        assertThat(meters.counter("waiting.backend.fallback", "outcome", "open").count())
+        assertThat(meters.counter("waiting.backend.fallback", "state", "unknown").count())
                 .isEqualTo(2);
+    }
+
+    /**
+     * <b>라벨을 "열렸다" 로 고정하면 안 된다.</b> 폴백은 서킷 오픈뿐 아니라 연결
+     * 실패나 뒷단 오류로도 온다. 서킷이 닫힌 채 실패만 나는 구간에서 지표가
+     * 거짓말하고, 회복을 그 지표로 판정한다 (8.4.3).
+     *
+     * <p>운영이 쓰는 팩토리를 태운다. 레지스트리 없는 쪽만 재면 늘 unknown 이다.
+     */
+    @Test
+    @DisplayName("서킷의_실제_상태를_라벨에_싣는다")
+    void 서킷의_실제_상태를_라벨에_싣는다() {
+        CircuitBreakerRegistry 레지스트리 = BackendCircuit.registry(new BackendCircuitProperties(
+                Duration.ofSeconds(10), 20, 50f, Duration.ofMillis(1500), 50f,
+                Duration.ofSeconds(5), Duration.ofSeconds(30), 10));
+        BackendFallback 운영 = BackendFallback.of(
+                Clock.fixed(지금, ZoneOffset.UTC), meters, 레지스트리, GatewayRoutes.CIRCUIT);
+
+        답한다(운영, 넘어온_요청());
+        레지스트리.circuitBreaker(GatewayRoutes.CIRCUIT).transitionToOpenState();
+        답한다(운영, 넘어온_요청());
+
+        assertThat(meters.counter("waiting.backend.fallback", "state", "CLOSED").count())
+                .isEqualTo(1);
+        assertThat(meters.counter("waiting.backend.fallback", "state", "OPEN").count())
+                .isEqualTo(1);
     }
 
     /**
@@ -215,8 +245,7 @@ class BackendFallbackTest {
     void fallback_주소를_받는_라우트가_있다() {
         RouterFunction<ServerResponse> routes = new BackendFallbackRoutes().fallbackRoutes(fallback);
 
-        MockServerWebExchange exchange = MockServerWebExchange.from(
-                MockServerHttpRequest.method(HttpMethod.POST, "/fallback/issue"));
+        MockServerWebExchange exchange = 게이트웨이가_넘긴_요청();
         ServerRequest 넘어옴 = ServerRequest.create(exchange, 기본.messageReaders());
 
         // **핸들러까지 태운다.** 잡는지만 보면 엉뚱한 핸들러에 물려 200 을 내도
@@ -238,5 +267,73 @@ class BackendFallbackTest {
                 HandlerStrategies.withDefaults().messageReaders());
 
         assertThat(routes.route(발급).blockOptional()).isEmpty();
+    }
+
+    /**
+     * <b>밖에서 온 요청은 안 받는다.</b> 이 경로는 신원 필터와 남용 리미터의
+     * {@code /api/**} 밖이라 아무나 칠 수 있는데, 한 번마다 서킷 상태 지표가
+     * 오른다 — 밖에서 회복 판정을 흔들 수 있다.
+     */
+    @Test
+    @DisplayName("밖에서_직접_친_요청은_안_잡는다")
+    void 밖에서_직접_친_요청은_안_잡는다() {
+        RouterFunction<ServerResponse> routes = new BackendFallbackRoutes().fallbackRoutes(fallback);
+
+        ServerRequest 직접 = ServerRequest.create(넘어온_요청(), 기본.messageReaders());
+
+        assertThat(routes.route(직접).blockOptional()).isEmpty();
+    }
+
+    /** 게이트웨이가 넘긴 요청. 전달 표식이 있어야 이 경로가 산다. */
+    private MockServerWebExchange 게이트웨이가_넘긴_요청() {
+        MockServerWebExchange exchange = 넘어온_요청();
+        exchange.getAttributes().put(
+                ServerWebExchangeUtils.GATEWAY_ROUTE_ATTR, "issue");
+        return exchange;
+    }
+
+    /**
+     * <b>차례가 온 사람에게 "순번이 유지된다" 는 거짓이다.</b> 그는 이미 큐에서
+     * 빠졌고 손에 든 것은 수명이 있는 입장 토큰뿐이다.
+     */
+    @Test
+    @DisplayName("차례가_온_사람에게는_다르게_답한다")
+    void 차례가_온_사람에게는_다르게_답한다() {
+        MockServerWebExchange exchange = 차례가_온_요청();
+
+        답한다(fallback, exchange);
+
+        assertThat(exchange.getResponse().getBodyAsString().block())
+                .doesNotContain("대기 순번");
+    }
+
+    /**
+     * <b>가장 가까운 밴드로 부른다.</b> 멀리 보내면 그 사이 그의 몫이 남에게 가고,
+     * 토큰 수명이 다하면 줄 맨 뒤로 다시 선다. 판정 경로가 같은 사람에게 이미
+     * 그렇게 답하는데 여기만 다르면 두 정책이 갈린다.
+     */
+    @Test
+    @DisplayName("차례가_온_사람은_가까운_밴드로_부른다")
+    void 차례가_온_사람은_가까운_밴드로_부른다() {
+        MockServerWebExchange 차례 = 차례가_온_요청();
+        MockServerWebExchange 줄 = 게이트웨이가_넘긴_요청();
+
+        답한다(fallback, 차례);
+        답한다(fallback, 줄);
+
+        int 차례_초 = Integer.parseInt(
+                차례.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER));
+        int 줄_초 = Integer.parseInt(
+                줄.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER));
+        // 30초 밴드와 1초 밴드다. 값까지 못 박아야 밴드가 같아져도 잡힌다.
+        assertThat(차례_초).isEqualTo(1);
+        assertThat(줄_초).isEqualTo(30);
+    }
+
+    private MockServerWebExchange 차례가_온_요청() {
+        MockServerWebExchange exchange = 게이트웨이가_넘긴_요청();
+        exchange.getAttributes().put(
+                AdmissionGatewayFilter.DECISION, AdmissionDecision.PASS_TOKEN);
+        return exchange;
     }
 }

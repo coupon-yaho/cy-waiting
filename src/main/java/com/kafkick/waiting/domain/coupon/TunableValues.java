@@ -38,11 +38,25 @@ final class TunableValues {
      * 파서를 들이는 것보다 여기서 끝내는 편이 의존을 안 늘립니다.
      */
     private Double number(String json, String key) {
-        int at = json.indexOf('"' + key + '"');
+        // **키 자리인지 확인한다.** 원문에서 찾기만 하면 `{"note":"inFlightSeconds"}`
+        // 처럼 값 안에 든 문자열도 키로 읽고, 그 뒤의 아무 수나 설정으로 들인다.
+        String quoted = '"' + key + '"';
+        int at = -1;
+        for (int from = json.indexOf(quoted); from >= 0; from = json.indexOf(quoted, from + 1)) {
+            int before = from - 1;
+            while (before >= 0 && Character.isWhitespace(json.charAt(before))) {
+                before--;
+            }
+            // 키는 `{` 나 `,` 뒤에 온다. 값 자리에 오면 `:` 뒤다.
+            if (before >= 0 && (json.charAt(before) == '{' || json.charAt(before) == ',')) {
+                at = from;
+                break;
+            }
+        }
         if (at < 0) {
             return null;
         }
-        int colon = json.indexOf(':', at);
+        int colon = json.indexOf(':', at + quoted.length());
         if (colon < 0) {
             return null;
         }
@@ -54,11 +68,20 @@ final class TunableValues {
         while (end < json.length() && "-+.0123456789eE".indexOf(json.charAt(end)) >= 0) {
             end++;
         }
+        // **뒤에 뭐가 붙었으면 그 값은 못 믿는다.** 앞부분만 읽으면 `8oops` 가
+        // 8 로 들어가고, 운영자는 자기가 적은 값이 통과한 줄 안다.
+        int after = end;
+        while (after < json.length() && Character.isWhitespace(json.charAt(after))) {
+            after++;
+        }
+        if (after < json.length() && json.charAt(after) != ',' && json.charAt(after) != '}') {
+            return null;
+        }
         try {
             return Double.valueOf(json.substring(start, end));
         } catch (NumberFormatException e) {
             // **그 값만 버립니다.** 여기서 던지면 오타 하나가 방금 고친 다른 값도
-            // 되돌립니다. 자리 계산은 위에서 길이를 보므로 범위를 안 넘습니다.
+            // 되돌립니다.
             return null;
         }
     }

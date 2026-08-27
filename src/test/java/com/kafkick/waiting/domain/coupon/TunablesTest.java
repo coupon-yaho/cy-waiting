@@ -143,4 +143,52 @@ class TunablesTest {
     void 수로_끝나도_읽는다() {
         assertThat(Tunables.parse("{\"inFlightSeconds\":8").inFlightSeconds()).isEqualTo(8);
     }
+
+    /**
+     * <b>값 안에 든 문자열을 키로 읽으면 안 됩니다.</b> 그러면 아무 문자열이나
+     * 적어 넣어 그 뒤의 수를 설정으로 들일 수 있습니다.
+     */
+    @Test
+    @DisplayName("값_안의_문자열은_키가_아니다")
+    void 값_안의_문자열은_키가_아니다() {
+        // 같은 낱말이 값 자리에 먼저 오고, 진짜 키가 뒤에 온다. 앞엣것을 키로
+        // 읽으면 뒤에 적힌 진짜 값이 묻힌다.
+        Tunables t = Tunables.parse("{\"note\":\"inFlightSeconds\",\"inFlightSeconds\":6}");
+
+        assertThat(t.inFlightSeconds()).isEqualTo(6);
+    }
+
+    /**
+     * <b>수 뒤에 뭐가 붙었으면 그 값은 못 믿습니다.</b> 앞부분만 읽으면 {@code 8oops}
+     * 가 8 로 들어가고, 운영자는 자기가 적은 값이 통과한 줄 압니다.
+     */
+    @Test
+    @DisplayName("수_뒤에_뭐가_붙으면_버린다")
+    void 수_뒤에_뭐가_붙으면_버린다() {
+        assertThat(Tunables.parse("{\"inFlightSeconds\":8oops}").inFlightSeconds())
+                .isEqualTo(Tunables.defaults().inFlightSeconds());
+    }
+
+    /**
+     * <b>사람이 손으로 적는 값입니다.</b> 들여쓰기와 줄바꿈이 들어간다고 해서
+     * 키를 못 찾으면, 운영자는 자기가 적은 값이 왜 안 먹는지 모릅니다.
+     */
+    @Test
+    @DisplayName("보기_좋게_적은_설정도_읽는다")
+    void 보기_좋게_적은_설정도_읽는다() {
+        Tunables t = Tunables.parse("{\n  \"inFlightSeconds\" : 7 ,\n  \"x\": 1\n}");
+
+        assertThat(t.inFlightSeconds()).isEqualTo(7);
+    }
+
+    /**
+     * <b>객체가 아니면 설정이 아닙니다.</b> 중괄호 없이 키만 적힌 것을 읽어 주면
+     * 형식이 깨진 값이 조용히 통과하고, 그때부터 무엇이 실렸는지 못 믿습니다.
+     */
+    @Test
+    @DisplayName("객체가_아니면_안_읽는다")
+    void 객체가_아니면_안_읽는다() {
+        assertThat(Tunables.parse("\"inFlightSeconds\":5").inFlightSeconds())
+                .isEqualTo(Tunables.defaults().inFlightSeconds());
+    }
 }

@@ -19,8 +19,10 @@ import com.kafkick.waiting.domain.queue.QueueToken;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.http.HttpHeaders;
 import java.time.Clock;
+import java.time.Duration;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.DoubleSupplier;
@@ -92,6 +94,14 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      * 느린 뒷단이 서킷에 집계된 뒤에 막힌다 — 6.8.1 에서 튜너블로 뺀다.
      */
     private static final long MAX_IN_FLIGHT_SEC = 3;
+
+    /**
+     * 자리를 놓게 하는 상한의 여유 배수.
+     *
+     * <p>격벽이 막기 시작하는 지연보다 넉넉해야 합니다. 같으면 정상적으로 느린
+     * 요청까지 끊어, 격벽이 하려던 것과 반대로 동작합니다.
+     */
+    private static final long IN_FLIGHT_GRACE = 4;
 
     private final SnapshotHolder holder;
     private final AdmissionDecider decider;
@@ -460,6 +470,24 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         return chain.filter(exchange.mutate()
                         .request(r -> r.headers(h -> h.set(IdempotencyKey.HEADER, key)))
                         .build())
+                // **안 끝나는 요청을 끝내 준다.** `doFinally` 는 끝나는 것만
+                // 돌려주지 끝나지 않는 것을 끝내지 못한다. 멈춘 뒷단 하나가 그
+                // 쿠폰의 격벽을 영구히 닫는 것을 이 상한이 막는다.
+                //
+                // 뒷단 응답 타임아웃(6.2)과는 다른 자리다. 그쪽은 응답을 얼마나
+                // 기다릴지이고, 여기는 자리를 얼마나 쥐고 있게 둘지다.
+                .timeout(Duration.ofSeconds(MAX_IN_FLIGHT_SEC * IN_FLIGHT_GRACE))
+                .onErrorResume(TimeoutException.class, e -> {
+                    count("bulkhead-timeout", "timeout");
+                    // 뒷단이 응답을 쓰기 시작한 뒤 멎었으면 상태줄이 이미 나갔다.
+                    // 거기에 오류 본문을 덧쓰면 클라이언트가 받는 것은 잘린
+                    // 응답이 아니라 깨진 응답이다. 끊는 데서 끝낸다.
+                    if (exchange.getResponse().isCommitted()) {
+                        return exchange.getResponse().setComplete();
+                    }
+                    return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
+                            retryAfterSec(AdmissionDecision.REJECT_OVERLOAD, random));
+                })
                 // **어느 쪽으로 끝나도 돌려준다.** 안 돌려주면 격벽이 한 번 차고
                 // 나서 영영 안 열리고, 그 쿠폰은 뒷단이 멀쩡해져도 계속 막힌다.
                 .doFinally(signal -> bulkhead.exit(couponId));

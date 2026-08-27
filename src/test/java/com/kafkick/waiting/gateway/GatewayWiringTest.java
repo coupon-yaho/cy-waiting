@@ -6,6 +6,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
+import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import java.time.Duration;
@@ -254,10 +255,15 @@ class GatewayWiringTest {
         // 이름이 붙은 서킷이 하나는 있어야 계량기가 생긴다.
         circuitRegistry.circuitBreaker(GatewayRoutes.CIRCUIT);
 
+        // 상태 하나가 1 이고 나머지는 0 이다. 계량기가 있는지만 보면 값이
+        // 통째로 NaN 이어도 통과한다 — 약한 참조로 등록했을 때 실제로 그랬다.
         assertThat(meters.find("resilience4j.circuitbreaker.state")
                 .tag("name", GatewayRoutes.CIRCUIT)
-                .gauges())
-                .as("서킷 상태 게이지")
-                .isNotEmpty();
+                .tag("state", "closed")
+                .gauge())
+                .as("닫힌 상태 게이지")
+                .isNotNull()
+                .extracting(Gauge::value)
+                .isEqualTo(1.0);
     }
 }

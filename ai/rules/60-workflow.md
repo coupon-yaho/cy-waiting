@@ -86,6 +86,7 @@ RED 커밋 **바디 첫 줄**에 `[red]`를 남긴다. CI가 이걸 보고 실�
 | `release/<version>` | 릴리스 준비 (게이트 판정·문서 정리) | `develop` → `main` + `develop` |
 | `hotfix/CY-125-<slug>` | 운영 장애 긴급 수정 | `main` → `main` + `develop` |
 | `integration/CY-126-<slug>` | **여러 feature 를 묶어 한 PR 로** | `develop` → `develop` |
+| `chore/CY-127-<slug>` | 코드가 아닌 배선 (CI·리뷰 도구·설정) | `develop` → `develop` |
 
 ### 브랜치 이름 규칙
 

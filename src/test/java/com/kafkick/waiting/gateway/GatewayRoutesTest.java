@@ -80,7 +80,7 @@ class GatewayRoutesTest {
             // 이 시험은 배선을 본다. 켜고 끄는 것은 필터 안에서 갈리므로
             // 여기서는 꺼 두어도 라우트에 실리는 것은 같다.
             QueryCoalescingFilter.of(
-                    new CoalescingProperties(false, 1024, 100, List.of()),
+                    new CoalescingProperties(false, 1024, 1 << 20, 100, List.of()),
                     Clock.systemUTC(), new SimpleMeterRegistry()),
             컨텍스트.getBean(SpringCloudCircuitBreakerResilience4JFilterFactory.class));
 

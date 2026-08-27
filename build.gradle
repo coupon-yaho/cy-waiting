@@ -144,6 +144,10 @@ tasks.named('test') {
     useJUnitPlatform {
         excludeTags 'integration', 'context', 'chaos'
     }
+    // **계획서도 시험의 입력이다.** 게이트와 시험을 잇는 표를 계획서에서 읽는
+    // 시험이 있는데, 그레이들이 이 경로를 모르면 계획서만 고친 판에서 그 시험이
+    // 안 돈다 — 게이트를 지워도 로컬은 초록이다.
+    inputs.dir('plan').withPropertyName('plan').withPathSensitivity(PathSensitivity.RELATIVE)
     finalizedBy jacocoTestReport
 }
 

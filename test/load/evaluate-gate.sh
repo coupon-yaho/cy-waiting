@@ -71,6 +71,69 @@ case "$scenario" in
     # 계약에 없는 응답이 섞이면 그건 배선이 어긋난 것이다.
     at_most "${req_failed:-}" 0.01 "요청 실패율"
     ;;
+  idle-coupon)
+    checks=$(read_metric '.metrics.checks.value' '.metrics.checks.values.rate')
+    queued=$(read_metric '.metrics.queued_responses.count' \
+                         '.metrics.queued_responses.values.count')
+    admitted=$(read_metric '.metrics.admitted_responses.count' \
+                           '.metrics.admitted_responses.values.count')
+    reqs=$(read_metric '.metrics.http_reqs.count' '.metrics.http_reqs.values.count')
+
+    report "검사 통과율" "${checks:-없음}"
+    report "줄 선 응답" "${queued:-없음}"
+    report "뒷단까지 간 응답" "${admitted:-없음}"
+    report "요청 수" "${reqs:-없음}"
+
+    at_least "${reqs:-}" 1 "요청 수"
+    # **하나라도 뒷단까지 가야 한다.** 전부 막혔는데 줄도 안 섰으면 0/0 이라
+    # 아래 상한이 그냥 통과한다 — 아무것도 안 지나간 초록이다.
+    at_least "${admitted:-}" 1 "뒷단까지 간 응답"
+    at_least "${checks:-}" 0.99 "검사 통과율"
+    # **R1 은 값으로 못 박는다.** 한산한 쿠폰이 줄을 서도 응답은 202 라 정상으로
+    # 보이고, 사용자는 기다릴 뿐 오류를 안 본다 — 레거시가 뒤집힌 방식이다.
+    at_most "${queued:-}" 0 "줄 선 응답"
+
+    # **줄 키가 아예 없어야 한다.** 응답만 보면 게이트웨이가 등록해 놓고 통과
+    # 응답을 내도 통과한다. 요청 경로에서 레디스를 안 친다는 것(불변식 1)의
+    # 유일한 직접 증거다.
+    if [[ -n "${REDIS_CLI:-}" ]]; then
+      queue_len=$($REDIS_CLI --no-raw ZCARD 'queue:{c1}' 2>/dev/null | tr -dc '0-9')
+      report "줄 키 길이" "${queue_len:-없음}"
+      at_most "${queue_len:-}" 0 "줄 키 길이"
+    else
+      # 못 재는 것을 통과로 세지 않는다. 그러면 이 검사가 있으나 마나다.
+      violate "REDIS_CLI 가 없어 줄 키를 못 봤다 — 이 시나리오의 핵심 증거다"
+    fi
+    ;;
+  contended-coupon)
+    queued=$(read_metric '.metrics.queued_responses.count' \
+                         '.metrics.queued_responses.values.count')
+    passed=$(read_metric '.metrics.passed_responses.count' \
+                         '.metrics.passed_responses.values.count')
+    checks=$(read_metric '.metrics.checks.value' '.metrics.checks.values.rate')
+    reqs=$(read_metric '.metrics.http_reqs.count' '.metrics.http_reqs.values.count')
+
+    report "줄 선 응답" "${queued:-없음}"
+    report "지나간 응답" "${passed:-없음}"
+    report "검사 통과율" "${checks:-없음}"
+    report "요청 수" "${reqs:-없음}"
+
+    at_least "${reqs:-}" 1 "요청 수"
+    at_least "${checks:-}" 0.99 "검사 통과율"
+    # **대조군의 전부다.** 줄이 한 번도 안 서면 idle 쪽 초록은 "대기열이 꺼져
+    # 있다" 와 구별되지 않는다.
+    at_least "${queued:-}" 1 "줄 선 응답"
+
+    # **줄 키가 실제로 자라야 한다.** 응답만 보면 게이트웨이가 202 를 내면서
+    # 레디스에 안 올려도 통과한다 — 그러면 순번이 아무 데도 없다.
+    if [[ -n "${REDIS_CLI:-}" ]]; then
+      queue_len=$($REDIS_CLI --no-raw ZCARD 'queue:{c2}' 2>/dev/null | tr -dc '0-9')
+      report "줄 키 길이" "${queue_len:-없음}"
+      at_least "${queue_len:-}" 1 "줄 키 길이"
+    else
+      violate "REDIS_CLI 가 없어 줄 키를 못 봤다 — 이 시나리오의 핵심 증거다"
+    fi
+    ;;
   *)
     # **모르는 시나리오를 통과로 안 센다.** 기본이 통과면 시나리오가 늘 때마다
     # 아무 기준 없는 잡이 하나씩 생기고, 그 초록은 아무 뜻이 없다.

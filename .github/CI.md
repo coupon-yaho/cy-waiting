@@ -73,10 +73,6 @@ TypeScript 액션을 쓴다. 재시도와 형식 변환처럼 테스트가 필�
 
 리뷰 도구가 둘입니다. **사용량이 유한하므로 언제 쓸지를 사람이 정합니다.**
 
-| 도구 | 설정 | 언제 |
-|---|---|---|
-| CodeRabbit | `.coderabbit.yaml` | 무료 플랜은 시간당 한 건. `@coderabbitai review` 로 부릅니다 |
-| Qodo Merge | `.pr_agent.toml` | PR 에 `/review` 또는 `/improve` 를 코멘트하거나 Actions 에서 직접 돕니다 |
 | 도구 | 설정 | 부르는 법 |
 |---|---|---|
 | CodeRabbit | `.coderabbit.yaml` | **자동 리뷰를 껐습니다.** `@coderabbitai review` 로 부릅니다 |

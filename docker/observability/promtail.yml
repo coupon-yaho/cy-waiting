@@ -4,11 +4,17 @@
 # 쿠폰 식별자처럼 가짓수에 상한이 없는 값을 넣으면 인덱스가 무너진다. 목록을
 # 늘리려면 그 값의 가짓수에 상한이 있는지 먼저 따진다.
 # 검사는 `.github/scripts/loki-labels.sh` 가 한다.
+#
+# **읽을 파일이 실제로 있어야 한다.** 게이트웨이는 기본으로 표준 출력에만 쓰므로
+# `observability` 프로필로 띄워야 여기 경로에 파일이 생긴다. 없으면 Promtail 은
+# 아무 불평 없이 빈 채로 돈다 — 그 조용함이 이 설정의 가장 나쁜 실패다.
+#   ./gradlew bootRun --args='--spring.profiles.active=observability'
 server:
   http_listen_port: 9080
 
 positions:
-  filename: /tmp/positions.yaml
+  # 볼륨에 남긴다. `/tmp` 는 재시작마다 비어 같은 로그를 다시 보낸다.
+  filename: /var/lib/promtail/positions.yaml
 
 clients:
   - url: http://loki:3100/loki/api/v1/push
@@ -24,3 +30,14 @@ scrape_configs:
           # 상황을 못 본다.
           instance: gateway-local
           __path__: /var/log/waiting/*.log
+    pipeline_stages:
+      # **레벨을 라벨로 뽑는다.** 안 뽑으면 ERROR 만 보는 패널이 영원히 비고,
+      # 사고 중에 그 사실을 안다. 레벨은 여섯 가지뿐이라 스트림이 안 늘어난다.
+      #
+      # 시각은 한 토큰이다 — Boot 4 의 기본 파일 패턴이 ISO-8601 이라 날짜와
+      # 시각이 안 갈린다. 두 토큰으로 읽으면 레벨 자리에 PID 가 와서 아무것도
+      # 안 붙고, 그런데도 Promtail 은 조용히 통과시킨다.
+      - regex:
+          expression: '^\S+\s+(?P<level>[A-Z]+)\s'
+      - labels:
+          level:

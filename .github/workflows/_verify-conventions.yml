@@ -241,6 +241,21 @@ jobs:
       - name: 대시보드 지표 검사
         run: .github/scripts/dashboard-queries.sh
 
+      # **문법이 깨진 규칙 파일은 조용히 건너뛰어진다.** 알람이 하나도 안 걸린
+      # 채로 초록이고, 그 사실은 장애가 나서 아무도 안 불릴 때 드러난다 (6.9.5).
+      - name: promtool 설치
+        run: |
+          set -euo pipefail
+          ver=3.1.0
+          url="https://github.com/prometheus/prometheus/releases/download/v${ver}/prometheus-${ver}.linux-amd64.tar.gz"
+          curl -fsSL "$url" -o /tmp/prom.tgz
+          tar -xzf /tmp/prom.tgz -C /tmp
+          sudo install "/tmp/prometheus-${ver}.linux-amd64/promtool" /usr/local/bin/promtool
+          promtool --version
+
+      - name: 알람 규칙 검사
+        run: .github/scripts/alert-rules.sh
+
       # **핀 옆 주석이 거짓말하면 핀이 무의미하다.** 실제로 `download-artifact` 는
       # 주석이 `v7.0.0` 인데 `v6.0.0` 을 핀하고 있었고, `gradle/actions` 는 커밋이
       # 아니라 태그 객체를 핀했다. 리뷰어는 주석을 믿고 넘어간다.

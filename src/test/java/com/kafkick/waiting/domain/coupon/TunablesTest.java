@@ -1,9 +1,12 @@
 package com.kafkick.waiting.domain.coupon;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * 장애 중에 배포 없이 되돌릴 수 있어야 롤백 전략이 성립합니다.
@@ -107,16 +110,51 @@ class TunablesTest {
     }
 
     /**
-     * <b>비율이 0 이나 1 이면 안 됩니다.</b> 0 이면 한산 통과가 통째로 막히고,
-     * 1 이면 그 경로가 노드 예산을 다 써 토큰을 든 사람이 밀립니다.
+     * <b>1 은 안 받고 0 은 받습니다.</b> 1 이면 한산 통과가 노드 예산을 다 써
+     * 토큰을 든 사람이 밀립니다. 0 은 그 경로를 끄겠다는 뜻이라 유효한 값입니다 —
+     * 기본값으로 되돌리면 운영자가 그 경로를 못 끕니다.
      */
     @Test
-    @DisplayName("비율의_양_끝은_안_받는다")
-    void 비율의_양_끝은_안_받는다() {
-        double 기본 = Tunables.defaults().idleCreditRatio();
+    @DisplayName("비율_1_은_안_받고_0_은_받는다")
+    void 비율_1_은_안_받고_0_은_받는다() {
+        assertThat(Tunables.parse("{\"idleCreditRatio\":1}").idleCreditRatio())
+                .isEqualTo(Tunables.defaults().idleCreditRatio());
+        assertThat(Tunables.parse("{\"idleCreditRatio\":0}").idleCreditRatio()).isZero();
+        // 음수는 값이 아니다. 그대로 실으면 상한 계산이 음수가 되고 전면 차단이다.
+        assertThat(Tunables.parse("{\"idleCreditRatio\":-0.5}").idleCreditRatio())
+                .isEqualTo(Tunables.defaults().idleCreditRatio());
+    }
 
-        assertThat(Tunables.parse("{\"idleCreditRatio\":0}").idleCreditRatio()).isEqualTo(기본);
-        assertThat(Tunables.parse("{\"idleCreditRatio\":1}").idleCreditRatio()).isEqualTo(기본);
+    /**
+     * <b>직접 만드는 길에도 같은 문턱이 있어야 합니다.</b> 읽기만 거르면 NaN 이나
+     * 1 이상의 비율이 그대로 들어오고, 그 값은 상한 계산을 통째로 뒤집습니다.
+     */
+    @Test
+    @DisplayName("직접_만들_때도_문턱을_지킨다")
+    void 직접_만들_때도_문턱을_지킨다() {
+        assertThatThrownBy(() -> new Tunables(Double.NaN, 3))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new Tunables(1.0, 3))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new Tunables(-0.1, 3))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new Tunables(0.7, 0))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /**
+     * <b>무한대는 좁히면 멀쩡한 값이 됩니다.</b> {@code 1e309} 가 그대로 통과하면
+     * {@code Long.MAX_VALUE} 초로 저장되고, 격벽 상한이 사실상 무한이 됩니다.
+     */
+    @Test
+    @DisplayName("long_밖의_초는_안_받는다")
+    void long_밖의_초는_안_받는다() {
+        long 기본 = Tunables.defaults().inFlightSeconds();
+
+        assertThat(Tunables.parse("{\"inFlightSeconds\":1e309}").inFlightSeconds())
+                .isEqualTo(기본);
+        assertThat(Tunables.parse("{\"inFlightSeconds\":1e30}").inFlightSeconds())
+                .isEqualTo(기본);
     }
 
     /** 걸려 있을 수 있는 시간이 1 초 미만이면 격벽이 아무도 안 들여보낸다. */
@@ -125,6 +163,26 @@ class TunablesTest {
     void 초가_1_미만이면_기본값이_된다() {
         assertThat(Tunables.parse("{\"inFlightSeconds\":0}").inFlightSeconds())
                 .isEqualTo(Tunables.defaults().inFlightSeconds());
+        // **1 은 받아야 한다.** 못 받으면 가장 조인 격벽이 조용히 기본값으로
+        // 되돌아가고, 장애 중에 조인 운영자는 그 사실을 모른다.
+        assertThat(Tunables.parse("{\"inFlightSeconds\":1}").inFlightSeconds()).isEqualTo(1);
+    }
+
+    /**
+     * <b>중첩과 배열은 키 자리가 아닙니다.</b> 앞뒤 문자만 보면 블록 안의 같은
+     * 이름이 최상위의 진짜 값을 이기고, 최상위가 배열이어도 읽힙니다.
+     */
+    @Test
+    @DisplayName("최상위_객체의_멤버만_키로_본다")
+    void 최상위_객체의_멤버만_키로_본다() {
+        long 기본 = Tunables.defaults().inFlightSeconds();
+
+        assertThat(Tunables.parse("{\"note\":{\"inFlightSeconds\":99},\"inFlightSeconds\":5}")
+                .inFlightSeconds()).as("중첩이 진짜 키를 이기면 안 된다").isEqualTo(5);
+        assertThat(Tunables.parse("{\"tags\":[\"a\",\"inFlightSeconds\"],\"other\":42}")
+                .inFlightSeconds()).as("배열 원소는 키가 아니다").isEqualTo(기본);
+        assertThat(Tunables.parse("[{\"inFlightSeconds\":9}]")
+                .inFlightSeconds()).as("최상위가 객체가 아니면 안 읽는다").isEqualTo(기본);
     }
 
     /** 콜론 뒤가 끊긴 값. 잘려서 저장된 경우다. */
@@ -142,5 +200,100 @@ class TunablesTest {
     @DisplayName("수로_끝나도_읽는다")
     void 수로_끝나도_읽는다() {
         assertThat(Tunables.parse("{\"inFlightSeconds\":8").inFlightSeconds()).isEqualTo(8);
+    }
+
+    /**
+     * <b>값 안에 든 문자열을 키로 읽으면 안 됩니다.</b> 그러면 아무 문자열이나
+     * 적어 넣어 그 뒤의 수를 설정으로 들일 수 있습니다.
+     */
+    @Test
+    @DisplayName("값_안의_문자열은_키가_아니다")
+    void 값_안의_문자열은_키가_아니다() {
+        // **뒤에 오는 키가 다른 이름이어야 가른다.** 같은 이름을 두면 취약한
+        // 파서도 진짜 키의 콜론에 착지해서 답만 맞힌다 — 이유는 틀린 채로.
+        Tunables t = Tunables.parse("{\"note\":\"inFlightSeconds\",\"other\":99}");
+
+        assertThat(t.inFlightSeconds()).isEqualTo(Tunables.defaults().inFlightSeconds());
+    }
+
+    /**
+     * <b>수 뒤에 뭐가 붙었으면 그 값은 못 믿습니다.</b> 앞부분만 읽으면 {@code 8oops}
+     * 가 8 로 들어가고, 운영자는 자기가 적은 값이 통과한 줄 압니다.
+     */
+    @Test
+    @DisplayName("수_뒤에_뭐가_붙으면_버린다")
+    void 수_뒤에_뭐가_붙으면_버린다() {
+        assertThat(Tunables.parse("{\"inFlightSeconds\":8oops}").inFlightSeconds())
+                .isEqualTo(Tunables.defaults().inFlightSeconds());
+    }
+
+    /**
+     * <b>사람이 손으로 적는 값입니다.</b> 들여쓰기와 줄바꿈이 들어간다고 해서
+     * 키를 못 찾으면, 운영자는 자기가 적은 값이 왜 안 먹는지 모릅니다.
+     */
+    @Test
+    @DisplayName("보기_좋게_적은_설정도_읽는다")
+    void 보기_좋게_적은_설정도_읽는다() {
+        Tunables t = Tunables.parse("{\n  \"inFlightSeconds\" : 7 ,\n  \"x\": 1\n}");
+
+        assertThat(t.inFlightSeconds()).isEqualTo(7);
+    }
+
+    /**
+     * <b>객체가 아니면 설정이 아닙니다.</b> 중괄호 없이 키만 적힌 것을 읽어 주면
+     * 형식이 깨진 값이 조용히 통과하고, 그때부터 무엇이 실렸는지 못 믿습니다.
+     */
+    @Test
+    @DisplayName("객체가_아니면_안_읽는다")
+    void 객체가_아니면_안_읽는다() {
+        assertThat(Tunables.parse("\"inFlightSeconds\":5").inFlightSeconds())
+                .isEqualTo(Tunables.defaults().inFlightSeconds());
+    }
+
+    /**
+     * <b>잘린 값은 전부 기본값으로 떨어집니다.</b> 장애 중에 손으로 넣다 만 값,
+     * 복사가 끊긴 값이 실제로 들어옵니다 — 그때 절반만 읽어 들이면 아무도 무엇이
+     * 실렸는지 모릅니다.
+     */
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {
+        "   ",
+        "{",
+        "{ \"",
+        "{\"inFlightSeconds\"",
+        "{\"inFlightSeconds\"}",
+        "{\"inFlightSeconds\":",
+        "{\"inFlightSeconds\":}",
+        "{\"note\":\"x",
+        "{\"note\":{",
+        "{\"note\":{\"a",
+        "{\"note\":1 \"inFlightSeconds\":2}",
+        "{\"note\":1,",
+    })
+    @DisplayName("잘린_값은_기본값으로_떨어진다")
+    void 잘린_값은_기본값으로_떨어진다(String 잘린_것) {
+        assertThat(Tunables.parse(잘린_것).inFlightSeconds())
+                .isEqualTo(Tunables.defaults().inFlightSeconds());
+    }
+
+    /**
+     * <b>이스케이프된 따옴표는 문자열을 안 끝냅니다.</b> 안 세면 키 이름이 거기서
+     * 잘리고, 그 뒤가 통째로 값 자리로 밀려 나머지 설정이 사라집니다.
+     */
+    @Test
+    @DisplayName("이스케이프된_따옴표를_넘어_읽는다")
+    void 이스케이프된_따옴표를_넘어_읽는다() {
+        assertThat(Tunables.parse("{\"no\\\"te\":\"x\",\"inFlightSeconds\":4}")
+                .inFlightSeconds()).isEqualTo(4);
+        assertThat(Tunables.parse("{\"note\":\"x\\\"y\",\"inFlightSeconds\":4}")
+                .inFlightSeconds()).isEqualTo(4);
+    }
+
+    /** 값이 문자열·객체·배열이어도 그 다음 멤버를 이어서 읽는다. */
+    @Test
+    @DisplayName("어떤_값이_앞에_와도_다음_멤버를_읽는다")
+    void 어떤_값이_앞에_와도_다음_멤버를_읽는다() {
+        assertThat(Tunables.parse("{\"a\":[1,[2],{\"b\":3}],\"inFlightSeconds\":7}")
+                .inFlightSeconds()).isEqualTo(7);
     }
 }

@@ -34,19 +34,17 @@ public final class SnapshotMetrics {
         Objects.requireNonNull(meters, "meters 는 필수다");
         SnapshotMetrics metrics = new SnapshotMetrics(holder);
 
-        gauge(meters, "waiting.queue.waiting", metrics, SnapshotMetrics::waitingTotal,
+        metrics.gauge(meters, "waiting.queue.waiting", SnapshotMetrics::waitingTotal,
                 "전 쿠폰의 대기 인원 합");
-        gauge(meters, "waiting.snapshot.age", metrics, SnapshotMetrics::ageSeconds,
+        metrics.gauge(meters, "waiting.snapshot.age", SnapshotMetrics::ageSeconds,
                 "판정 재료의 나이(초). 아직 못 받았으면 -1");
-        gauge(meters, "waiting.snapshot.coupons", metrics, SnapshotMetrics::couponCount,
+        metrics.gauge(meters, "waiting.snapshot.coupons", SnapshotMetrics::couponCount,
                 "지금 보고 있는 쿠폰 수");
     }
 
-    // RULE-EXCEPTION(JS-13): 등록 시점에만 쓰이는 배선이고, 인스턴스 메서드로 두면
-    // 게이지 대상과 등록 주체가 같은 객체가 되어 참조 관계가 오히려 흐려진다.
-    private static void gauge(MeterRegistry meters, String name, SnapshotMetrics target,
+    private void gauge(MeterRegistry meters, String name,
             ToDoubleFunction<SnapshotMetrics> read, String why) {
-        Gauge.builder(name, target, read)
+        Gauge.builder(name, this, read)
                 .description(why)
                 .strongReference(true)
                 .register(meters);

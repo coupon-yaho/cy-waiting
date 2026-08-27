@@ -208,7 +208,7 @@ jobs:
 
   verdict:
     name: 판정
-    needs: [context, conventions, build, test-unit, test-integration, test-context, test-chaos, test-coverage, test-mutation, security, load-idle]
+    needs: [context, conventions, build, test-unit, test-integration, test-context, test-chaos, test-coverage, test-mutation, security, load-idle, load-read-burst]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -227,7 +227,7 @@ jobs:
   report:
     name: 리포트
     needs: [context, conventions, build, test-unit, test-integration, test-context,
-            test-chaos, test-coverage, test-mutation, security, load-idle, verdict]
+            test-chaos, test-coverage, test-mutation, security, load-idle, load-read-burst, verdict]
     if: ${{ !cancelled() }}
     uses: ./.github/workflows/_report.yml
     with:

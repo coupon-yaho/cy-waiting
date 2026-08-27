@@ -212,10 +212,19 @@ case "$scenario" in
     report "막힌 응답" "${shed:-없음}"
     report "다시 올 시각(초)" "${retry_min:-없음} ~ ${retry_max:-없음}"
 
-    at_least "${reqs:-}" 1 "요청 수"
+    # **정한 인원이 다 던져야 한다.** 하한이 1 이면 한 명이 보낸 판도 통과하고,
+    # 그 값으로 Phase 10 착수를 판정하게 된다.
+    at_least "${reqs:-}" "${SPIKE_USERS:-20000}" "요청 수"
     at_least "${checks:-}" 0.99 "검사 통과율"
-    # **줄이 서야 한다.** 안 서면 스파이크가 유휴 몫을 못 넘긴 것이고, 그때는
-    # 이 시나리오가 스파이크를 안 만든 것이다.
+
+    # **도착이 짧은 창에 몰려야 스파이크다.** 늘어지면 같은 인원이라도 선착순
+    # 오픈이 아니라 지속 부하를 잰 것이다 — 1초 균등은 실제 스파이크를 다섯 배
+    # 과소평가한다.
+    arrival_rate=$(read_metric '.metrics.http_reqs.rate' '.metrics.http_reqs.values.rate')
+    report "실측 도착률(초당)" "${arrival_rate:-없음}"
+    at_least "${arrival_rate:-}" "${SPIKE_MIN_RATE:-2000}" "실측 도착률"
+
+    # **줄이 서야 한다.** 안 서면 스파이크가 유휴 몫을 못 넘긴 것이다.
     at_least "${queued:-}" 1 "줄 선 응답"
 
     # **다시 올 시각이 흩어져야 한다** (F7 · G6.20). 한 값으로 몰리면 그 초에

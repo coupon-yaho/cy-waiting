@@ -12,26 +12,31 @@ http.setResponseCallback(http.expectedStatuses(200, 202, 429, 503));
 
 const BASE = __ENV.BASE_URL || 'http://localhost:18080';
 
-// **200ms 안에 다 던진다.** k6 가 VU 를 그만큼 빨리 못 띄우면 도착이 늘어지고,
-// 그러면 이 시나리오는 재려던 것을 안 재는 것이다 — 실측 램프를 같이 남긴다.
+// **200ms 안에 다 던진다.** `target` 은 초당 도착률이라, 200ms 램프 뒤에 그 비율을
+// 유지하면 버스트가 아니라 고원을 재게 된다 — 처음에 그렇게 짰다.
+//
+// 정해진 인원이 각자 한 번씩 보내게 두고, 그 도착이 실제로 얼마나 짧은 창에
+// 몰렸는지를 게이트가 잰다. 창이 벌어지면 그 판은 스파이크를 안 만든 것이다.
+//
+// **한 러너로는 200ms 를 못 만든다.** 2만 VU 를 띄우는 데만 몇 초가 걸려 실측
+// 도착률이 4,000/초 언저리다 — 200ms 라면 100,000/초여야 한다. 진짜 그 값은
+// 생성기를 여러 대로 나눠야 하고, 그건 Phase 10 의 일이다.
+const SPIKE_USERS = Number(__ENV.SPIKE_USERS || '20000');
+
 export const options = {
   scenarios: {
     spike: {
-      executor: 'ramping-arrival-rate',
-      startRate: 0,
-      timeUnit: '1s',
-      preAllocatedVUs: 2000,
-      maxVUs: 20000,
-      stages: [
-        { duration: '200ms', target: 20000 },
-        { duration: '3s', target: 20000 },
-        { duration: '2s', target: 0 },
-      ],
+      executor: 'per-vu-iterations',
+      vus: SPIKE_USERS,
+      iterations: 1,
+      maxDuration: '60s',
     },
   },
   thresholds: {
     // 판정이 안 낸 응답이 섞이면 배선이 어긋난 것이다.
     http_req_failed: ['rate<0.01'],
+    // **다 던져야 한다.** 한 명이라도 못 보내면 스파이크가 그만큼 작아진다.
+    http_reqs: [`count>=${SPIKE_USERS}`],
     // **줄이 서야 한다.** 안 서면 스파이크가 유휴 몫을 못 넘긴 것이고,
     // 그때는 이 시나리오가 스파이크를 안 만든 것이다.
     queued_responses: ['count>0'],

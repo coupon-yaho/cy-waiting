@@ -127,6 +127,9 @@ class MetricsExposureTest {
                 // 실려도 안 걸린다 (LG-4).
                 .containsPattern("waiting_bulkhead_inflight\\{application=\"[^\"]*\"\\} [0-9.E-]+\\n")
                 .containsPattern("waiting_bulkhead_coupons\\{application=\"[^\"]*\"\\} [0-9.E-]+\\n")
+                // **분모까지 짚는다.** 분자만 나가면 800 이 여유인지 임박인지 모른다
+                // (6.3.6). 값도 박아 배선이 실제로 CouponKeys.MAX 를 쓰는지 본다.
+                .containsPattern("waiting_bulkhead_max_coupons\\{application=\"[^\"]*\"\\} 10000\\.0\\n")
                 .containsPattern("waiting_snapshot_age\\{[^}]*\\} [0-9.E-]+\\n")
                 .doesNotContain("NaN");
     }

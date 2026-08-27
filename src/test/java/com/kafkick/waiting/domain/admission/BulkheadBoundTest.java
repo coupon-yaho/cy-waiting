@@ -6,10 +6,14 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * 쿠폰이 몇 개가 오든 <b>격벽이 메모리를 안 밀어낸다</b> (G6.4).
+ * 쿠폰이 몇 개가 오든 <b>격벽의 키가 상한에서 멈춘다</b> (G6.4).
  *
  * <p>쿠폰 식별자는 밖에서 오는 값이라 가짓수에 상한이 없다. 안 막으면 맵 하나가
  * 힙을 차지하고, 그때 죽는 것은 격벽이 아니라 노드다.
+ *
+ * <p><b>여기서 재는 것은 키 수다.</b> 쿠폰당 값이 정수 하나라 키 수가 곧 메모리이지만,
+ * 그것은 이 시험이 증명하는 것이 아니라 {@code Bulkhead} 의 자료구조가 정하는 것이다.
+ * 같은 상한을 쓰는 나머지 두 자리(리미터·래치)는 각자의 시험이 본다.
  */
 class BulkheadBoundTest {
 
@@ -32,23 +36,34 @@ class BulkheadBoundTest {
     }
 
     /**
-     * 상한을 넘겨도 맵이 안 커집니다.
+     * 상한을 넘기면 <b>거절합니다.</b> 밀어내고 받는 것이 아닙니다.
      *
-     * <p>여기서 막는 대신 받아 주면 상한이 있으나 마나입니다 — 밖에서 오는 값이라
-     * 얼마든지 밀어 넣을 수 있습니다.
+     * <p>크기만 보면 축출하는 구현이 그대로 통과합니다 — 맵은 상한에서 멈추지만
+     * 밀려난 쿠폰의 동시 카운터가 0 으로 되돌아가, 그 쿠폰이 상한을 두 배로 씁니다.
+     * 격벽이 있으나 마나가 됩니다.
      */
     @Test
-    @DisplayName("상한을_넘겨도_맵이_안_커진다")
-    void 상한을_넘겨도_맵이_안_커진다() {
+    @DisplayName("상한을_넘기면_밀어내지_않고_거절한다")
+    void 상한을_넘기면_밀어내지_않고_거절한다() {
         int max = 64;
         Bulkhead bulkhead = Bulkhead.withMaxKeys(max);
 
+        int rejected = 0;
         for (int i = 0; i < max * 100; i++) {
-            bulkhead.tryEnter("c" + i, 1);
+            if (!bulkhead.tryEnter("c" + i, 1)) {
+                rejected++;
+            }
         }
 
+        assertThat(rejected)
+                .describedAs("상한 뒤로 온 것은 전부 거절한다")
+                .isEqualTo(max * 99);
         assertThat(bulkhead.size()).isEqualTo(max);
         assertThat(bulkhead.inFlight()).isEqualTo(max);
+
+        // 먼저 들어온 쿠폰이 자리를 지키고 있다. 축출하는 구현이면 여기서 깨진다.
+        bulkhead.exit("c0");
+        assertThat(bulkhead.size()).isEqualTo(max - 1);
     }
 
     /**
@@ -100,6 +115,21 @@ class BulkheadBoundTest {
                 .isTrue();
         assertThat(bulkhead.size()).isEqualTo(max);
         assertThat(bulkhead.inFlight()).isEqualTo(max + 1);
+    }
+
+    /**
+     * 상한이 1 이어도 <b>하나는 담습니다.</b>
+     *
+     * <p>경계를 한 칸 잘못 잡으면 여기서 아무도 못 들어가고, 그 상태는 상한이 큰
+     * 시험으로는 안 드러납니다.
+     */
+    @Test
+    @DisplayName("상한이_1이면_쿠폰_하나는_담는다")
+    void 상한이_1이면_쿠폰_하나는_담는다() {
+        Bulkhead bulkhead = Bulkhead.withMaxKeys(1);
+
+        assertThat(bulkhead.tryEnter("c1", 1)).isTrue();
+        assertThat(bulkhead.tryEnter("c2", 1)).isFalse();
     }
 
     /** 상한은 밖에서 받지 않고 자기가 안다. 지표가 분모로 이 값을 읽는다 (6.3.6). */

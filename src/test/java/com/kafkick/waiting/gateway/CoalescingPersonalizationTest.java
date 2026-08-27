@@ -24,9 +24,12 @@ import reactor.core.publisher.Mono;
  * <p>지금 조회 응답에 개인화는 없습니다. 하지만 "내가 발급받았는지" 필드가 하나
  * 붙는 순간 남의 응답을 받게 되고, <b>사람 리뷰로는 그 한 줄을 못 막습니다.</b>
  *
- * <p>뒷단이 {@code Vary} 를 달면 필터가 가려 냅니다. 안 달면 아무도 못 막으므로,
- * 여기서 "응답이 회원마다 갈리는가" 를 직접 잽니다.
+ * <p>뒷단이 <b>공유해도 된다고 말한 응답만</b> 나눠 줍니다. 말이 없으면 각자 자기
+ * 것을 받으므로, 필드 하나가 붙는 것만으로는 남의 응답이 안 나갑니다.
  */
+// 막지 못하는 것은 계약을 어긴 응답이다 — 공유해도 된다고 해 놓고 회원마다 다르게
+// 답하는 뒷단. 그 사실도 여기서 값으로 적어 둔다.
+
 class CoalescingPersonalizationTest {
 
     private static final String PATH = "/api/v1/coupons";
@@ -73,16 +76,18 @@ class CoalescingPersonalizationTest {
         List<MockServerWebExchange> 사람들 = IntStream.range(0, 5)
                 .mapToObj(i -> 조회("사람" + i))
                 .toList();
-        // Vary 를 안 단 채 회원별로 다르게 답하는 뒷단.
+        // 공유해도 된다고 말해 놓고 회원별로 다르게 답하는 뒷단.
         사람들.forEach(e -> filter.filter(e, ex -> 답한다(ex,
                 "이력:" + ex.getRequest().getHeaders().getFirst("X-Member-Id"))).block());
         사람들.forEach(e -> 받은_것.add(e.getResponse().getBodyAsString().block()));
 
         // **이것이 지금의 사실입니다.** 다섯이 한 가지를 받습니다 — 넷은 남의
         // 것입니다. 안전장치가 아니라, 안전이 어디에 달려 있는지의 기록입니다.
+        // **누구 것을 받는지까지 본다.** "같은 것을 받는다" 만 보면 이 사고의
+        // 모양이 안 드러난다 — 먼저 온 사람의 것이 나머지에게 간다.
         assertThat(받은_것)
-                .as("화이트리스트에 올린 경로가 개인화되면 이렇게 된다")
-                .hasSize(1);
+                .as("계약을 어기면 이렇게 된다")
+                .containsExactly("이력:사람0");
     }
 
     /**
@@ -227,13 +232,65 @@ class CoalescingPersonalizationTest {
     @DisplayName("뒷단이_같게_답하면_모인다")
     void 뒷단이_같게_답하면_모인다() {
         AtomicInteger 뒷단 = new AtomicInteger();
+        List<MockServerWebExchange> 사람들 = IntStream.range(0, 5)
+                .mapToObj(i -> 조회("사람" + i))
+                .toList();
 
-        IntStream.range(0, 5).forEach(i ->
-                filter.filter(조회("사람" + i), ex -> {
-                    뒷단.incrementAndGet();
-                    return 답한다(ex, "모두 같은 목록");
-                }).block());
+        사람들.forEach(e -> filter.filter(e, ex -> {
+            뒷단.incrementAndGet();
+            return 답한다(ex, "모두 같은 목록");
+        }).block());
 
         assertThat(뒷단).as("뒷단 호출").hasValue(1);
+        // **본문까지 본다.** 호출 수만 세면 "한 번 부르고 빈 것을 준다" 가 통과한다.
+        assertThat(사람들).allSatisfy(e ->
+                assertThat(e.getResponse().getBodyAsString().block())
+                        .isEqualTo("모두 같은 목록"));
+    }
+
+    /**
+     * <b>뒷단이 쓴 캐시 지시어가 클라이언트까지 그대로 나갑니다.</b>
+     *
+     * <p>같은 헤더가 두 청중에게 쓰입니다 — 게이트웨이에게는 "모아도 된다", 브라우저
+     * 에게는 "담아도 된다". 뒷단이 {@code max-age} 를 얹으면 브라우저가 쿠폰 목록을
+     * 그만큼 담고, <b>매진을 게이트웨이가 종결한다</b>(R3)가 클라이언트에서 낡습니다.
+     */
+    // 지금은 그대로 흘리는 것이 사실이다. 고쳐야 할지는 발급 계층과 정할 일이라
+    // 여기서는 상태를 못 박아 두기만 한다 (CY-684).
+    @Test
+    @DisplayName("뒷단의_캐시_지시어가_클라이언트까지_간다")
+    void 뒷단의_캐시_지시어가_클라이언트까지_간다() {
+        MockServerWebExchange e = 조회("사람1");
+
+        filter.filter(e, ex -> {
+            ex.getResponse().getHeaders().setCacheControl("public, max-age=60");
+            return 그냥_답한다(ex, "목록");
+        }).block();
+
+        assertThat(e.getResponse().getHeaders().getCacheControl())
+                .as("게이트웨이가 다시 쓰지 않는다")
+                .isEqualTo("public, max-age=60");
+    }
+
+    /**
+     * <b>{@code max-age} 만으로는 허락이 아닙니다.</b>
+     *
+     * <p>표준으로는 공유 캐시가 담아도 되는 값이지만, 여기서 필요한 것은 "이 응답에
+     * 회원별 값이 없다" 는 선언입니다. 발급 계층이 표준대로 보내고 조용히 안 모이는
+     * 경로가 생기므로 값으로 못 박습니다.
+     */
+    @Test
+    @DisplayName("max_age만으로는_허락이_아니다")
+    void max_age만으로는_허락이_아니다() {
+        AtomicInteger 뒷단 = new AtomicInteger();
+
+        IntStream.range(0, 3).forEach(i ->
+                filter.filter(조회("사람" + i), ex -> {
+                    뒷단.incrementAndGet();
+                    ex.getResponse().getHeaders().setCacheControl("max-age=60, s-maxage=30");
+                    return 그냥_답한다(ex, "목록");
+                }).block());
+
+        assertThat(뒷단).as("담아도 된다와 나눠도 된다는 다른 말이다").hasValue(3);
     }
 }

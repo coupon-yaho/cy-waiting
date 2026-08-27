@@ -424,17 +424,19 @@ class AdmissionDeciderTest {
     }
 
     /**
-     * <b>credit 은 전 노드가 나눠 쓰는 값이다.</b> 그대로 쓰면 노드마다 전체
-     * 몫을 들고 있게 되어 실제 동시 건수가 노드 수만큼 부풀려진다.
+     * <b>2번 줄은 쿠폰별 상한을 안 건다</b> (B-14). 배분 시점에 이미 크레딧을 썼기
+     * 때문이다. 여기서 쿠폰 몫을 돌려주면 격벽이 사다리가 안 건 상한을 새로 걸어,
+     * 차례가 온 사람이 자기 차례에 다시 막힌다.
      */
     @Test
-    @DisplayName("토큰_통과가_쓴_예산은_노드_몫이다")
-    void 토큰_통과가_쓴_예산은_노드_몫이다() {
+    @DisplayName("토큰_통과가_쓴_예산은_노드_예산이다")
+    void 토큰_통과가_쓴_예산은_노드_예산이다() {
         CouponState 줄선_것 = CouponStates.queueing(100, 500, 3000);
 
         assertThat(decider().admittedRatePerSec(AdmissionDecision.PASS_TOKEN, 줄선_것, META))
-                .isEqualTo(줄선_것.contendedCap(META.effectiveGatewayCount()))
-                .isEqualTo(10);
+                .isEqualTo(AdmissionDecider.globalCap(META))
+                // 쿠폰 몫과 다른 값이어야 한다. 같으면 무엇을 재는지 알 수 없다.
+                .isNotEqualTo(줄선_것.contendedCap(META.effectiveGatewayCount()));
     }
 
     /**

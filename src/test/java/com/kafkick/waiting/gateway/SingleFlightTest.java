@@ -67,14 +67,15 @@ class SingleFlightTest {
     @Test
     @DisplayName("끝나면_다음_요청은_다시_부른다")
     void 끝나면_다음_요청은_다시_부른다() {
+        SingleFlight<Integer> 센다 = SingleFlight.create();
         AtomicInteger 호출 = new AtomicInteger();
 
-        StepVerifier.create(flight.join("k", () -> Mono.fromSupplier(호출::incrementAndGet)))
+        StepVerifier.create(센다.join("k", () -> Mono.fromSupplier(호출::incrementAndGet)))
                 .expectNext(1).verifyComplete();
-        StepVerifier.create(flight.join("k", () -> Mono.fromSupplier(호출::incrementAndGet)))
+        StepVerifier.create(센다.join("k", () -> Mono.fromSupplier(호출::incrementAndGet)))
                 .expectNext(2).verifyComplete();
 
-        assertThat(flight.inFlight()).isZero();
+        assertThat(센다.inFlight()).isZero();
     }
 
     /**
@@ -118,9 +119,9 @@ class SingleFlightTest {
     @Test
     @DisplayName("상한을_넘으면_모으지_않고_그냥_부른다")
     void 상한을_넘으면_모으지_않고_그냥_부른다() {
-        SingleFlight<String> 좁은_것 = SingleFlight.withMaxKeys(2);
+        SingleFlight<Integer> 좁은_것 = SingleFlight.withMaxKeys(2);
         AtomicInteger 호출 = new AtomicInteger();
-        Sinks.One<String> 안_끝남 = Sinks.one();
+        Sinks.One<Integer> 안_끝남 = Sinks.one();
         좁은_것.join("a", 안_끝남::asMono).subscribe();
         좁은_것.join("b", 안_끝남::asMono).subscribe();
 
@@ -132,7 +133,7 @@ class SingleFlightTest {
                 .expectNext(2).verifyComplete();
 
         assertThat(좁은_것.inFlight()).isEqualTo(2);
-        안_끝남.tryEmitValue("끝");
+        안_끝남.tryEmitValue(0);
     }
 
     @Test

@@ -112,6 +112,18 @@ public class ControlPlaneConfig {
     }
 
     /**
+     * 불변식의 선행 지표.
+     *
+     * <p>초과 발급 자체는 발급 계층만 안다. 게이트웨이는 스스로 계산한 값으로
+     * 대신 본다 (6.9.1).
+     */
+    @Bean
+    InvariantMetrics invariantMetrics(AllocationRound round, AllocationRedisPort port,
+            MeterRegistry meters) {
+        return InvariantMetrics.bind(round, port.clockSkew(), meters);
+    }
+
+    /**
      * 운영 값 읽기. <b>배분 판 밖이다</b> — 판 안에서 읽으면 발행이 그 왕복에
      * 매달려, 레디스가 조금 느려지는 것만으로 스냅샷이 아예 안 나간다.
      */

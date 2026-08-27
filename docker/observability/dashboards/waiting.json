@@ -235,6 +235,36 @@
           "legendFormat": "{{instance}} — 걸림 시간(초)"
         }
       ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "불변식 선행 지표",
+      "description": "초과 발급과 순번 역행은 게이트웨이가 직접 못 본다. 스스로 계산한 값으로 대신 본다",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 32
+      },
+      "targets": [
+        {
+          "expr": "increase(waiting_allocation_budget_overshoot_total[5m])",
+          "legendFormat": "{{instance}} — 예산 초과(평활 지연·하한)"
+        },
+        {
+          "expr": "increase(waiting_allocation_entered_overshoot_total[5m])",
+          "legendFormat": "{{instance}} — 초과 입장(직접 증거)"
+        },
+        {
+          "expr": "increase(waiting_snapshot_clock_floor_applied_total[5m])",
+          "legendFormat": "{{instance}} — 재료 시각 역행"
+        }
+      ]
     }
   ]
 }

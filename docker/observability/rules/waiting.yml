@@ -71,6 +71,31 @@ groups:
         annotations:
           summary: "5분째 초당 {{ $value }} 건이 보호 장치에서 끊기고 있다"
 
+      # **초과 발급의 선행 지표다** (불변식 2). 뒷단이 받는다는 것보다 많이
+      # 나눠 주는 구간이다 — 평활 지연과 하한이 만든다.
+      - alert: 배분예산초과
+        expr: increase(waiting_allocation_budget_overshoot_total[5m]) > 0
+        for: 2m
+        labels: { severity: ticket }
+        annotations:
+          summary: "5분 사이 관측한 가용량보다 {{ $value }} 만큼 더 나눠 줬다"
+
+      # **초과 발급의 직접 증거다.** 한 번이라도 나면 그 자체가 사고다.
+      - alert: 초과입장
+        expr: increase(waiting_allocation_entered_overshoot_total[5m]) > 0
+        for: 0m
+        labels: { severity: page }
+        annotations:
+          summary: "예산보다 {{ $value }} 명을 더 들여보냈다"
+
+      # 재료를 읽을 때 시각이 뒤로 갔다. 큐의 바닥값과는 다른 값이다.
+      - alert: 재료시각역행
+        expr: increase(waiting_snapshot_clock_floor_applied_total[5m]) > 0
+        for: 0m
+        labels: { severity: ticket }
+        annotations:
+          summary: "5분 사이 재료 읽기에서 시각이 {{ $value }}회 뒤로 갔다"
+
       # **노드 하나의 fetchStale 은 안 건다.** 부하 분산기가 이미 뺀다 —
       # 사람이 할 일이 없으면 알리지 않는다 (6.9.4). 전 노드가 동시에 그런
       # 것은 위의 재료 규칙이 잡는다.

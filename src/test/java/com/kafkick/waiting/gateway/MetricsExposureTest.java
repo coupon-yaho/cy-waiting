@@ -130,4 +130,5 @@ class MetricsExposureTest {
                 .containsPattern("waiting_snapshot_age\\{[^}]*\\} [0-9.E-]+\\n")
                 .doesNotContain("NaN");
     }
+
 }

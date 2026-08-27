@@ -115,7 +115,7 @@
       "description": "진입과 해제가 쌍으로 남는다 (LG-2). 지표는 초 단위로 뭉개져 '몇 시 몇 분에 열려 얼마나 갔는가' 를 못 답한다.",
       "gridPos": {
         "h": 8,
-        "w": 24,
+        "w": 12,
         "x": 0,
         "y": 16
       },
@@ -136,9 +136,9 @@
       "description": "사람을 부르는 줄만 남는다. 자동으로 걷히는 전이는 WARN 이라 여기 안 온다 (LG-7).",
       "gridPos": {
         "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 24
+        "w": 12,
+        "x": 12,
+        "y": 16
       },
       "datasource": {
         "type": "loki",
@@ -153,6 +153,36 @@
     {
       "id": 7,
       "type": "timeseries",
+      "title": "조회 모으기",
+      "description": "모은 것과 못 모은 것. cause 가 왜 안 모였는지를 답한다",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "targets": [
+        {
+          "expr": "sum by (outcome, cause) (rate(waiting_coalescing_total[1m]))",
+          "legendFormat": "{{outcome}}/{{cause}}"
+        },
+        {
+          "expr": "waiting_coalescing_cached",
+          "legendFormat": "담고 있는 키 수 (상한에 닿으면 모으기가 멎는다)"
+        },
+        {
+          "expr": "waiting_coalescing_bytes",
+          "legendFormat": "담고 있는 바이트 (예산에 닿으면 모으기가 멎는다)"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
       "title": "격벽 포화",
       "description": "막은 횟수는 이미 막힌 뒤에야 오른다. 차오르는 중인지를 본다",
       "datasource": {
@@ -161,9 +191,9 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 32
+        "w": 12,
+        "x": 12,
+        "y": 24
       },
       "targets": [
         {

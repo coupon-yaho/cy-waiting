@@ -117,7 +117,7 @@ public class GatewayRoutes {
 
     @Bean
     public RouteLocator routes(RouteLocatorBuilder builder, Backend backend,
-            AdmissionGatewayFilter admission,
+            AdmissionGatewayFilter admission, QueryCoalescingFilter coalescing,
             SpringCloudCircuitBreakerFilterFactory breakers) {
         return builder.routes()
                 .route("issue", r -> r
@@ -139,7 +139,15 @@ public class GatewayRoutes {
                         .method(HttpMethod.GET)
                         .and().path("/api/v1/coupons", "/api/v1/coupons/" + COUPON_ID)
                         .and().predicate(rawPathIsPlain())
-                        .filters(this::stripSpoofableClientIp)
+                        // **조회에만 붙인다.** 발급에 붙이면 같은 응답을 여럿이
+                        // 받고, 그건 곧 초과 발급이다.
+                        .filters(f -> stripSpoofableClientIp(f)
+                                .filter(coalescing, FilterOrder.ROUTE_COALESCING))
+                        // **여기도 끊는 자리가 있어야 한다.** 모으기가 붙은 뒤로는
+                        // 멎은 요청 하나가 그 키를 영구히 잠근다 — 뒤이어 오는
+                        // 모든 조회가 끝나지 않는 것에 붙고, 뒷단이 살아나도
+                        // 게이트웨이를 재시작해야 풀린다.
+                        .metadata(RESPONSE_TIMEOUT_ATTR, backend.responseTimeout().toMillis())
                         .uri(backend.uri()))
                 .build();
     }

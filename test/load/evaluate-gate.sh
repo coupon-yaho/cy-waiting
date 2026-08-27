@@ -309,10 +309,10 @@ case "$scenario" in
   overhead)
     checks=$(read_metric '.metrics.checks.value' '.metrics.checks.values.rate')
     reqs=$(read_metric '.metrics.http_reqs.count' '.metrics.http_reqs.values.count')
-    gw99=$(read_metric '.metrics.gateway_total_ms["p(99)"]' \
-                       '.metrics.gateway_total_ms.values["p(99)"]')
-    gw50=$(read_metric '.metrics.gateway_total_ms.med' \
-                       '.metrics.gateway_total_ms.values.med')
+    gw99=$(read_metric '.metrics.gateway_own_ms["p(99)"]' \
+                       '.metrics.gateway_own_ms.values["p(99)"]')
+    gw50=$(read_metric '.metrics.gateway_own_ms.med' \
+                       '.metrics.gateway_own_ms.values.med')
     base99=$(read_metric '.metrics.harness_baseline_ms["p(99)"]' \
                          '.metrics.harness_baseline_ms.values["p(99)"]')
     base50=$(read_metric '.metrics.harness_baseline_ms.med' \
@@ -321,6 +321,8 @@ case "$scenario" in
                          '.metrics.soldout_ms.values["p(99)"]')
     measured=$(read_metric '.metrics.overhead_measured.count' \
                            '.metrics.overhead_measured.values.count')
+    sold_measured=$(read_metric '.metrics.soldout_measured.count' \
+                                '.metrics.soldout_measured.values.count')
     unmeasured=$(read_metric '.metrics.overhead_unmeasured.count' \
                              '.metrics.overhead_unmeasured.values.count')
     clamped=$(read_metric '.metrics.overhead_clamped.count' \
@@ -328,19 +330,30 @@ case "$scenario" in
 
     report "요청 수" "${reqs:-없음}"
     report "센 표본 수" "${measured:-0}"
-    report "게이트웨이 왕복 p50/p99(ms)" "${gw50:-없음} / ${gw99:-없음}"
-    report "대조군 왕복 p50/p99(ms)" "${base50:-없음} / ${base99:-없음}"
+    report "매진 갈래 표본 수" "${sold_measured:-0}"
+    # **왕복이 아니다.** 둘 다 뒷단이 실어 준 자기 시간을 뺀 잔차라, 왕복으로
+    # 읽으면 게이트웨이가 실제보다 느려 보인다.
+    report "게이트웨이 잔차 p50/p99(ms)" "${gw50:-없음} / ${gw99:-없음}"
+    report "대조군 잔차 p50/p99(ms)" "${base50:-없음} / ${base99:-없음}"
     report "매진 단락 p99(ms)" "${sold99:-없음}"
     report "검사 통과율" "${checks:-없음}"
 
     # 100rps 두 갈래와 20rps 한 갈래를 90초. 하한이 1 이면 한 건 보낸 판도 통과한다.
     delivered "${reqs:-}" 300 15000 "요청 수"
     at_least "${checks:-}" 0.99 "검사 통과율"
-    # **빈 Trend 는 요약에서 사라지지 않고 전부 0 으로 남는다.** 0 은 상한을
-    # 넘지 않으므로, 표본 수를 따로 못 박지 않으면 아무것도 안 잰 판이 통과한다.
+    # **임계가 달린 Trend 는 표본이 없어도 요약에서 안 사라지고 전부 0 으로
+    # 남는다.** 0 은 상한을 안 넘으므로, 표본 수를 따로 못 박지 않으면
+    # 아무것도 안 잰 판이 통과한다.
     at_least "${measured:-0}" 12000 "센 표본 수"
+    # 매진 갈래는 뺄 값이 없어 위 카운터를 안 거친다. 따로 못 박지 않으면
+    # 이 갈래만 통째로 안 돌아도 나머지 셋이 요청 수 하한을 채운다.
+    at_least "${sold_measured:-0}" 1000 "매진 갈래 표본 수"
     # **표본이 빠지면 p99 가 낙관적이다.** 뒷단이 자기 시간을 안 실어 준 응답을
     # 안 세면, 그만큼 느린 표본이 빠진 채로 판정한다.
+    #
+    # 비율이 아니라 0 인 것은 이 헤더가 붙거나 안 붙거나 둘 중 하나라서다.
+    # 하나라도 빠졌으면 스텁이 바뀐 것이고, 그 판의 숫자는 무엇을 뺀 값인지
+    # 모르는 값이다. 허용치를 두면 그 사실이 허용치 안에 숨는다.
     at_most "${unmeasured:-0}" 0 "못 잰 응답"
     # 뺀 값이 음수면 시계나 단위가 어긋난 것이다. 그 판의 숫자는 못 믿는다.
     at_most "${clamped:-0}" 0 "음수로 나온 응답"
@@ -353,6 +366,9 @@ case "$scenario" in
       own99=$(awk -v g="$gw99" -v b="$base99" 'BEGIN { printf "%.3f", g - b }')
       report "게이트웨이 오버헤드 p99(ms)" "$own99"
       at_most "$own99" 5 "게이트웨이 오버헤드 p99(ms)"
+      # **음수는 좋은 소식이 아니다.** 대조군이 게이트웨이보다 느리게 나왔다는
+      # 뜻이고, 그건 성능이 아니라 배선이 바뀐 것이다.
+      at_least "$own99" 0 "게이트웨이 오버헤드 p99(ms)"
     else
       violate "두 갈래 중 한쪽이 안 나왔다 — 차이로 판정할 수 없다: ${gw99:-없음} / ${base99:-없음}"
     fi

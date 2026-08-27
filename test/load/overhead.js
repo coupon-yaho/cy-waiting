@@ -32,11 +32,15 @@ const RATE = 100;
 const WARMUP = '12s';
 const MEASURE = '90s';
 
-const arm = (exec, rate, extra) => Object.assign({
+// 매진 단락은 뒷단을 안 거치니 스텁에 부하를 안 얹는다. 두 갈래의 차이를
+// 흔들지 않을 만큼만 넣고, 90초에 1,800 표본이면 p99 를 보기에 족하다.
+const SOLDOUT_RATE = 20;
+
+const arm = (exec, rate) => ({
   executor: 'constant-arrival-rate',
   rate, timeUnit: '1s', duration: MEASURE, startTime: WARMUP,
   preAllocatedVUs: 40, maxVUs: 200, exec,
-}, extra || {});
+});
 
 export const options = {
   scenarios: {
@@ -47,16 +51,19 @@ export const options = {
     },
     gateway: arm('viaGateway', RATE),
     direct: arm('viaStub', RATE),
-    soldout: arm('soldOut', 20),
+    soldout: arm('soldOut', SOLDOUT_RATE),
   },
   thresholds: {
     checks: ['rate>0.99'],
     // **여기서 판정하지 않는다.** 게이트 기준은 두 갈래의 차이라 임계로
     // 못 쓴다 (6.6.6). 이 둘은 판이 통째로 어긋났을 때 일찍 끊는 용도다.
-    gateway_total_ms: ['p(99)<50'],
+    gateway_own_ms: ['p(99)<50'],
     soldout_ms: ['p(99)<50'],
     overhead_unmeasured: ['count==0'],
     overhead_clamped: ['count==0'],
+    // **갈래가 아예 안 돈 경우를 잡는다.** exec 이름이 어긋나면 검사도 안
+    // 찍히므로 통과율로는 안 걸리고, 요청 수 하한은 나머지 셋이 채운다.
+    soldout_measured: ['count>0'],
   },
   // **요약에 p99 를 실어야 게이트가 읽는다.** 기본은 p95 까지라, 없으면
   // 판정이 "숫자가 아니다" 로 떨어진다 — 실제로 그렇게 한 번 떨어뜨렸다.
@@ -64,7 +71,7 @@ export const options = {
 };
 
 /** 게이트웨이를 지난 왕복에서 뒷단 몫을 뺀 값. */
-const viaGw = new Trend('gateway_total_ms');
+const viaGw = new Trend('gateway_own_ms');
 
 /** 스텁을 직접 친 왕복에서 같은 빼기를 한 값. 하네스의 바닥이다. */
 const viaDirect = new Trend('harness_baseline_ms');
@@ -79,10 +86,14 @@ const missing = new Counter('overhead_unmeasured');
 const clamped = new Counter('overhead_clamped');
 
 /**
- * 실제로 센 표본 수. **없으면 표본 0 건인 판이 통과한다** — 빈 Trend 는
- * 요약에서 사라지지 않고 모든 통계가 0 인 채로 남고, 0 은 상한을 넘지 않는다.
+ * 실제로 센 표본 수. **없으면 표본 0 건인 판이 통과한다** — 임계가 달린 Trend 는
+ * 표본이 없어도 요약에서 안 사라지고 모든 통계가 0 으로 남는다. 0 은 상한을
+ * 안 넘으므로 "아무것도 안 쟀다" 가 "아주 빨랐다" 로 읽힌다.
  */
 const measured = new Counter('overhead_measured');
+
+/** 매진 갈래의 표본 수. 저쪽은 뺄 값이 없어 {@code record} 를 안 거친다. */
+const soldOutMeasured = new Counter('soldout_measured');
 
 // 주소를 VU 로 만들면 안 된다. 5ms 응답에 100rps 면 필요한 동시성이 한 자리라
 // 실제로 도는 VU 가 한둘뿐이고, 주소도 그만큼만 생겨 남용 상한에 붙는다.
@@ -184,6 +195,7 @@ export function soldOut() {
   }
   if (ok) {
     soldOutMs.add(r.timings.duration);
+    soldOutMeasured.add(1);
   }
   check(r, { '매진은 게이트웨이가 종결한다': () => ok });
 }

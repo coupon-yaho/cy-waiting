@@ -74,7 +74,12 @@ jobs:
           changed=$(git diff --name-only "$BASE..$HEAD")
           # 빌드에 영향이 없는 것은 코드로 세지 않는다. 세면 설정 한 줄에
           # 전 테스트가 돈다. journal 검사의 제외 목록과 같은 범위다.
-          if grep -qvE '^(plan|ai|\.claude|\.github)/|^[A-Z]+\.md$|^\.(coderabbit\.yaml|gitignore|gitattributes)$' <<<"$changed"; then
+          #
+          # **게이트를 적은 계획서는 예외다.** 그 문서를 읽어 게이트와 시험이
+          # 이어져 있는지 보는 시험이 있는데, 문서라고 건너뛰면 게이트를 지우는
+          # PR 에서 정확히 그 시험이 안 돈다 — 막으려던 것을 그 PR 이 한다.
+          if grep -qvE '^(plan|ai|\.claude|\.github)/|^[A-Z]+\.md$|^\.(coderabbit\.yaml|gitignore|gitattributes)$' <<<"$changed" \
+              || grep -qE '^plan/0[456]-' <<<"$changed"; then
             echo "code=true" >> "$GITHUB_OUTPUT"
           else
             echo "code=false" >> "$GITHUB_OUTPUT"

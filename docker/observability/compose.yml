@@ -4,6 +4,10 @@
 # 그 사실을 사고가 난 뒤에야 안다.
 #
 # 부하 하네스(`test/load/compose.yml`)와 같은 네트워크에 붙여 쓴다.
+#
+# **포트는 루프백에만 묶는다.** 그라파나는 익명 Admin 으로 열려 있고 프로메테우스와
+# Loki 에는 인증이 없다. 짧은 형식으로 적으면 같은 망의 아무나 지표와 로그를 읽고
+# 대시보드를 고칠 수 있다 — 카페 와이파이에서 띄우는 순간 그렇게 된다.
 services:
   prometheus:
     image: prom/prometheus:v3.1.0
@@ -19,7 +23,7 @@ services:
     extra_hosts:
       - "gateway:host-gateway"
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/healthy"]
       interval: 2s
@@ -30,7 +34,7 @@ services:
     image: grafana/loki:3.3.2
     command: ["-config.file=/etc/loki/local-config.yaml"]
     ports:
-      - "3100:3100"
+      - "127.0.0.1:3100:3100"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3100/ready"]
       interval: 2s
@@ -62,7 +66,7 @@ services:
       - ./grafana-dashboards.yml:/etc/grafana/provisioning/dashboards/dash.yml:ro
       - ./dashboards:/etc/grafana/provisioning/dashboards/files:ro
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       prometheus:
         condition: service_healthy

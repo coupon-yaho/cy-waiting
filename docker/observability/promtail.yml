@@ -32,7 +32,11 @@ scrape_configs:
     pipeline_stages:
       # **레벨을 라벨로 뽑는다.** 안 뽑으면 ERROR 만 보는 패널이 영원히 비고,
       # 사고 중에 그 사실을 안다. 레벨은 여섯 가지뿐이라 스트림이 안 늘어난다.
+      #
+      # 시각은 한 토큰이다 — Boot 4 의 기본 파일 패턴이 ISO-8601 이라 날짜와
+      # 시각이 안 갈린다. 두 토큰으로 읽으면 레벨 자리에 PID 가 와서 아무것도
+      # 안 붙고, 그런데도 Promtail 은 조용히 통과시킨다.
       - regex:
-          expression: '^\S+\s+\S+\s+(?P<level>[A-Z]+)\s'
+          expression: '^\S+\s+(?P<level>[A-Z]+)\s'
       - labels:
           level:

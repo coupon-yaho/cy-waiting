@@ -84,4 +84,45 @@ if [[ $found -eq 0 ]]; then
     fail=1
 fi
 
+
+# **정규식이 실제 로그 형식을 먹는지 본다.** Promtail 의 regex 스테이지는 안 맞으면
+# 조용히 통과시킨다 — 라벨이 한 번도 안 붙는데 아무 데도 안 드러나고, ERROR 만 보는
+# 패널이 영원히 빈 채로 남는다. 형식은 Boot 의 기본 파일 패턴(ISO-8601)이다.
+python3 - <<'PY' || fail=1
+import pathlib, re, sys
+
+try:
+    import yaml
+except ImportError:
+    print("::error::PyYAML 이 없어 정규식을 못 잰다", file=sys.stderr)
+    sys.exit(1)
+
+doc = yaml.safe_load(pathlib.Path('docker/observability/promtail.yml').read_text())
+stages = [s for c in doc.get('scrape_configs', [])
+          for s in c.get('pipeline_stages', []) if 'regex' in s]
+if not stages:
+    sys.exit(0)
+
+SAMPLES = {
+    '2026-08-25T10:00:00.123+09:00  INFO 1 --- [nio-2] c.k.w.Foo : 떴다': 'INFO',
+    '2026-08-25T10:00:00.123+09:00 ERROR 1 --- [nio-2] c.k.w.Foo : 터졌다': 'ERROR',
+    '2026-08-25T10:00:00.123+09:00  WARN 1 --- [nio-2] c.k.w.Foo : 서킷 열림': 'WARN',
+}
+
+bad = 0
+for stage in stages:
+    expr = stage['regex']['expression']
+    if 'level' not in expr:
+        continue
+    for line, want in SAMPLES.items():
+        match = re.search(expr, line)
+        got = match.group('level') if match else None
+        if got != want:
+            print("::error file=docker/observability/promtail.yml::"
+                  "레벨 정규식이 로그 형식을 못 먹는다: %r 에서 %r 을 기대했는데 %r"
+                  % (line[:40], want, got))
+            bad = 1
+sys.exit(bad)
+PY
+
 exit $fail

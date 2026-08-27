@@ -39,7 +39,7 @@
       },
       "targets": [
         {
-          "expr": "waiting_queue_waiting and on() (waiting_snapshot_age >= 0 and waiting_snapshot_age <= 5)",
+          "expr": "waiting_queue_waiting and on(instance) (waiting_snapshot_age >= 0 and waiting_snapshot_age <= 5)",
           "legendFormat": "대기 인원 (재료가 신선할 때만)"
         },
         {
@@ -87,8 +87,8 @@
           "legendFormat": "폴백 {{state}}"
         },
         {
-          "expr": "sum(rate(waiting_admission_total{outcome=\"bulkhead-full\"}[1m]))",
-          "legendFormat": "격벽 포화"
+          "expr": "sum(rate(waiting_admission_total{outcome=~\"bulkhead-full|bulkhead-timeout\"}[1m]))",
+          "legendFormat": "격벽 (참 + 시한)"
         }
       ]
     },

@@ -40,11 +40,11 @@ export const options = {
 const queuedResponses = new Counter('queued_responses');
 const admittedResponses = new Counter('admitted_responses');
 
-// **막힌 이유를 남긴다.** 실패율만 보면 "무언가 막았다" 까지만 알 수 있고,
-// 그게 다른 쿠폰의 부하 때문인지 이 쿠폰의 상한 때문인지 안 갈린다 — R1 이
-// 뒤집혔는지를 가르는 것이 정확히 그 구별이다.
+// **막힌 건수를 센다.** 실패율만 보면 "무언가 막았다" 까지만 알 수 있는데,
+// 그게 다른 쿠폰의 부하 때문인지 이 쿠폰의 상한 때문인지를 가르는 것이 R1
+// 판정의 전부다. 이유까지는 게이트웨이 지표(`waiting_abuse_total` 의 `key`
+// 태그)가 답한다 — 여기서 맵으로 모으면 VU 마다 따로 도는 값이라 안 합쳐진다.
 const rejectedResponses = new Counter('rejected_responses');
-const rejectedByCode = {};
 
 const memberHeaders = (id) => ({
   'X-Member-Id': String(id),
@@ -75,13 +75,6 @@ export default function () {
     queuedResponses.add(1);
   } else if (issue.status !== 200) {
     rejectedResponses.add(1);
-    let code = `HTTP-${issue.status}`;
-    try {
-      code = issue.json().error.code || code;
-    } catch (e) {
-      // 봉투가 없으면 상태 코드로 센다.
-    }
-    rejectedByCode[code] = (rejectedByCode[code] || 0) + 1;
   }
   const passed = servedByBackend(issue, path);
   if (passed) {
@@ -95,16 +88,4 @@ export default function () {
   });
 
   sleep(1);
-}
-
-// **막힌 이유를 요약에 남긴다.** VU 마다 따로 세므로 여기서 합쳐 찍는다.
-export function teardown() {
-  // teardown 은 다른 VU 의 집계를 못 본다. 각 VU 가 끝날 때 찍게 둔다.
-}
-
-export function handleSummary(data) {
-  return {
-    stdout: `\n막힌 이유: ${JSON.stringify(rejectedByCode)}\n`,
-    'stdout-default': '',
-  };
 }

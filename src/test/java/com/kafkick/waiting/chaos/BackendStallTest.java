@@ -9,6 +9,7 @@ import com.kafkick.waiting.control.SnapshotCodec;
 import com.kafkick.waiting.control.SnapshotSource;
 import com.kafkick.waiting.domain.coupon.CouponStates;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
+import com.kafkick.waiting.gateway.GatewayRoutes;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import java.time.Clock;
 import java.time.Duration;
@@ -151,17 +152,20 @@ class BackendStallTest {
                     .expectStatus().isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
         }
 
-        assertThat(circuits.getAllCircuitBreakers())
-                .as("서킷이 하나도 안 만들어졌으면 요청이 서킷을 안 지난 것이다")
-                .isNotEmpty()
-                .anySatisfy(circuit -> {
-                    var metrics = circuit.getMetrics();
-                    assertThat(metrics.getNumberOfBufferedCalls())
-                            .as("%s 의 창에 쌓인 표본", circuit.getName())
-                            .isPositive();
-                    assertThat(metrics.getNumberOfFailedCalls() + metrics.getNumberOfSlowCalls())
-                            .as("%s 가 센 실패·느림", circuit.getName())
-                            .isPositive();
-                });
+        // **이름으로 짚는다.** "아무 서킷이나 표본이 있으면" 으로 재면, 발급
+        // 라우트가 이 서킷을 안 지나도 다른 서킷의 표본으로 통과한다.
+        var backend = circuits.getAllCircuitBreakers().stream()
+                .filter(c -> GatewayRoutes.CIRCUIT.equals(c.getName()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError(
+                        "'" + GatewayRoutes.CIRCUIT + "' 서킷이 없다 — 요청이 서킷을 안 지났다"));
+
+        var metrics = backend.getMetrics();
+        assertThat(metrics.getNumberOfBufferedCalls())
+                .as("%s 의 창에 쌓인 표본", backend.getName())
+                .isPositive();
+        assertThat(metrics.getNumberOfFailedCalls() + metrics.getNumberOfSlowCalls())
+                .as("%s 가 센 실패·느림", backend.getName())
+                .isPositive();
     }
 }

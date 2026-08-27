@@ -50,6 +50,18 @@ at_most() {    # 값 상한 이름
     || violate "$3 $1 > $2"
 }
 
+# **덜 실린 판을 통과시키지 않는다.** 도착률 실행기는 VU 가 모자라면 반복을
+# 조용히 버린다. 검사 통과율은 실행된 반복만 세므로 그 사실을 못 본다 —
+# 하한이 1 이면 "거의 다 버려진 판" 이 초록으로 남는다.
+delivered() {   # 실측 최소 이름
+  local dropped
+  dropped=$(read_metric '.metrics.dropped_iterations.count' \
+                        '.metrics.dropped_iterations.values.count')
+  report "버려진 반복" "${dropped:-0}"
+  at_most "${dropped:-0}" "$2" "버려진 반복"
+  at_least "$1" "$3" "$4"
+}
+
 case "$scenario" in
   smoke)
     checks=$(read_metric '.metrics.checks.value' '.metrics.checks.values.rate')
@@ -206,9 +218,11 @@ case "$scenario" in
     report "콜드가 지나간 수" "${cold_p:-없음}"
     report "검사 통과율" "${checks:-없음}"
 
-    # **핫이 몰려야 이 판이 혼합이다.** 안 몰리면 격리를 안 잰 것이다.
-    at_least "${hot:-}" 1 "핫이 줄 선 수"
-    at_least "${cold_p:-}" 1 "콜드가 지나간 수"
+    # **핫이 몰려야 이 판이 혼합이다.** 시나리오는 초당 800 을 20초 보낸다 —
+    # 하한이 1 이면 거의 다 버려진 판도 통과하고, 그때 격리를 안 잰 것이다.
+    delivered "${hot:-}" 1000 14000 "핫이 줄 선 수"
+    # 콜드는 초당 5 를 18초. 넉넉히 잡아도 여든은 넘어야 한다.
+    at_least "${cold_p:-}" 80 "콜드가 지나간 수"
     # **콜드가 한 번이라도 줄을 서면 격리가 깨진 것이다** (R1).
     at_most "${cold_q:-}" 0 "콜드가 줄 선 수"
     at_least "${checks:-}" 0.99 "검사 통과율"
@@ -224,13 +238,26 @@ case "$scenario" in
     report "다시 온 수" "${polled:-없음}"
     report "검사 통과율" "${checks:-없음}"
 
-    at_least "${joined:-}" 1 "줄 선 수"
+    # 시나리오는 초당 300 을 20초 보낸다. 하한이 1 이면 거의 다 버려진 판도
+    # 통과하고, 그때 이탈률은 아무 뜻이 없다.
+    delivered "${joined:-}" 600 5000 "줄 선 수"
     # **이탈자가 있어야 잴 수 있다.** 없으면 이 시나리오가 이탈을 안 만든 것이다.
     at_least "${left:-}" 1 "이탈한 수"
     # **안 이탈한 사람은 다시 와야 한다.** 안 오면 이탈률이 100% 로 보이고,
     # 그때는 이탈이 아니라 배선 오류를 재는 것이다.
     at_least "${polled:-}" 1 "다시 온 수"
     at_least "${checks:-}" 0.99 "검사 통과율"
+
+    # **줄 선 사람은 이탈했거나 다시 왔거나 둘 중 하나다.** 합이 안 맞으면 그
+    # 차이만큼이 어느 쪽으로도 안 세어진 것이고, 그때 이탈률은 틀린 값이다 —
+    # 폴링이 일부만 실패해도 여기가 벌어진다.
+    if numeric "${joined:-}" && numeric "${left:-}" && numeric "${polled:-}"; then
+      report "합이 맞는가" "$(awk -v j="$joined" -v a="$left" -v p="$polled" \
+          'BEGIN { printf "%d = %d + %d", j, a, p }')"
+      awk -v j="$joined" -v a="$left" -v p="$polled" \
+          'BEGIN { exit (j == a + p) ? 0 : 1 }' \
+          || violate "줄 선 수가 이탈과 재방문의 합과 다르다 — 어느 쪽으로도 안 세어진 요청이 있다"
+    fi
 
     # **크레딧 낭비는 아직 못 잰다.** 큐에서 나가는 경로가 Phase 7 이라, 지금은
     # 이탈자가 그냥 줄에 남는다 — 낭비율을 여기서 판정하면 없는 기능을 재는 것이다.

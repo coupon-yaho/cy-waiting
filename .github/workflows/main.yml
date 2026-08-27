@@ -119,7 +119,7 @@ jobs:
     permissions:
       contents: write      # 그래프 제출에 필요한 최소 권한
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
@@ -128,7 +128,7 @@ jobs:
       - uses: ./.github/actions/setup-gradle
 
       # setup-gradle 과 같은 SHA 다 — 판을 섞으면 캐시 형식이 어긋난다.
-      - uses: gradle/actions/dependency-submission@ed408507eac070d1f99cc633dbcf757c94c7933a  # v4
+      - uses: gradle/actions/dependency-submission@0723195856401067f7a2779048b490ace7a47d7c  # v5.0.2
         with:
           dependency-resolution-task: dependencies
           dependency-graph: generate-and-submit
@@ -170,7 +170,7 @@ jobs:
         ${{ secrets.CONFLUENCE_SPACE_KEY != '' && secrets.ATLASSIAN_BASE_URL != ''
             && secrets.ATLASSIAN_USER_EMAIL != '' && secrets.ATLASSIAN_API_TOKEN != '' }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 

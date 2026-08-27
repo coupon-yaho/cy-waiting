@@ -53,12 +53,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     /** 응답을 쓰는 쪽이 읽는다. 다시 판정하면 두 번 세고 답이 갈릴 수 있다. */
     public static final String DECISION = "waiting.admission.decision";
 
-    /**
-     * 이 요청을 <b>재료를 갖고 판정했는가</b>. SLI 가 이 값만 읽는다 (O-7).
-     *
-     * <p>운영 카운터를 더해 만들지 않는다 — 한 요청이 여러 사유를 지날 수 있어
-     * 실패율이 100% 를 넘고, 라벨을 리네임하면 그 항이 조용히 빠진다.
-     */
+    /** 이 요청을 <b>재료를 갖고 판정했는가</b>. SLI 가 이 값만 읽는다 (O-7). */
+    // 운영 카운터를 더해 만들지 않는다 — 한 요청이 여러 사유를 지날 수 있어
+    // 실패율이 100% 를 넘고, 라벨을 리네임하면 그 항이 조용히 빠진다.
     public static final String JUDGEMENT = "waiting.judgement";
 
     /** 재료 없이 판정한 요청. {@link #JUDGEMENT} 가 이 표시를 읽는다. */
@@ -545,7 +542,6 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                 // 판단을 여기서 한 번 더 하면 두 곳이 갈릴 수 있다.
                 .onErrorResume(TimeoutException.class, e -> {
                     count("bulkhead-timeout", "timeout");
-                    degraded(exchange);
                     return shed(exchange);
                 })
                 // **어느 쪽으로 끝나도 돌려준다.** 안 돌려주면 격벽이 한 번 차고
@@ -553,12 +549,8 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                 .doFinally(signal -> bulkhead.exit(couponId));
     }
 
-    /**
-     * 재료 없이 판정했다고 표시합니다.
-     *
-     * <p>한 요청이 여러 사유를 지날 수 있으므로 <b>표시만 남기고 세는 것은 끝에서
-     * 한 번</b> 합니다. 여기서 세면 같은 요청이 여러 번 실패로 잡힙니다.
-     */
+    /** 재료 없이 판정했다고 표시합니다. <b>세는 것은 끝에서 한 번</b> 합니다. */
+    // 한 요청이 여러 사유를 지날 수 있어, 여기서 세면 같은 요청이 여러 번 잡힌다.
     private void degraded(ServerWebExchange exchange) {
         exchange.getAttributes().put(DEGRADED, true);
     }

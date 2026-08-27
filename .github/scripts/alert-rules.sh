@@ -57,11 +57,13 @@ rules = 0
 
 # **라벨 값도 코드에 있어야 한다.** 이름만 보면 outcome 을 리네임했을 때 그 항이
 # 분자에서 조용히 빠지고, SLO 는 좋아지고 검사는 초록이다.
-OUTCOMES = set()
+LABELS = set()
 for src in pathlib.Path('src/main/java').rglob('*.java'):
     text = src.read_text()
-    OUTCOMES |= set(re.findall(r'count\("([a-z0-9-]+)"', text))
-    OUTCOMES |= set(re.findall(r'^\s+([A-Z][A-Z_]+)[,;(]', text, re.M))
+    # 라벨 값으로 쓸 만한 문자열 리터럴을 통째로 모은다. 이름만 좁게 모으면
+    # 새 지표가 생길 때마다 검사가 그 지표를 모른다.
+    LABELS |= set(re.findall(r'"([a-z][a-z0-9-]*)"', text))
+    LABELS |= set(re.findall(r'^\s+([A-Z][A-Z_]+)[,;(]', text, re.M))
 
 # **기록 규칙이 만든 이름도 지표다.** 모르면 그것을 쓰는 알람이 "없는 지표를
 # 본다" 로 걸리고, 그러면 소진율처럼 식이 긴 것을 한 곳에서 못 만든다.
@@ -91,12 +93,15 @@ for path in sorted(DIR.glob('*.yml')):
                 print("::error file=%s::%s 에 summary 가 없다" % (path, name))
                 bad = 1
             raw = rule.get('expr', '')
-            for group in re.findall(r'outcome=~"([^"]+)"', raw):
-                for token in group.split('|'):
+            # `=` 와 `=~` 를 다 본다. 공백도 허용한다 — 한쪽만 보면 그쪽이
+            # 아닌 표기로 쓴 오타가 조용히 빈 시계열이 된다.
+            for label, op, group in re.findall(
+                    r'(outcome|quality)\s*(=~|=)\s*"([^"]+)"', raw):
+                for token in (group.split('|') if op == '=~' else [group]):
                     # 정규식 조각은 못 본다. 리터럴만 확인한다.
-                    if re.fullmatch(r'[A-Za-z0-9_-]+', token) and token not in OUTCOMES:
-                        print("::error file=%s::%s 가 없는 outcome 을 본다: %s"
-                              % (path, name, token))
+                    if re.fullmatch(r'[A-Za-z0-9_-]+', token) and token not in LABELS:
+                        print("::error file=%s::%s 가 없는 %s 를 본다: %s"
+                              % (path, name, label, token))
                         bad = 1
             expr = re.sub(r'\{[^}]*\}', ' ', raw)
             expr = re.sub(r'\b(?:by|without|on|ignoring|group_left|group_right)'

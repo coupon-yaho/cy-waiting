@@ -28,6 +28,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.function.DoubleSupplier;
 import java.util.function.Function;
 import java.util.Random;
 import java.util.stream.Collectors;
@@ -1251,9 +1252,12 @@ class AdmissionGatewayFilterTest {
      */
     private final MutableClock 격벽_시계 = MutableClock.at(지금);
 
+    /** 흔들림을 고정한다. 안 고정하면 Retry-After 가 매번 달라 값을 못 잰다 (TS-4). */
+    private static final DoubleSupplier 고정_난수 = () -> 0.5;
+
     private final AdmissionGatewayFilter 격벽_필터 = AdmissionGatewayFilter.of(
             holder, AdmissionDecider.of(limiter, IDLE_RATIO),
-            격벽_시계, meters, 줄, tokens, limiter, entryTokens, 멱등키);
+            격벽_시계, meters, 고정_난수, 줄, tokens, limiter, entryTokens, 멱등키);
 
     /**
      * 자리를 놓게 하는 시한. <b>구현과 같은 값이어야 한다</b> — 여기 손으로 적은
@@ -1432,6 +1436,63 @@ class AdmissionGatewayFilterTest {
 
         assertThat(다음_초에_한_건("사람" + 초당_통과 * 3, e -> Mono.empty()).getResponse().getStatusCode())
                 .isNull();
+    }
+
+    /**
+     * <b>차례가 온 사람을 멀리 보내면 그의 자리가 사라집니다.</b> 그는 이미 줄에서
+     * 빠졌고 손에 든 것은 수명 180초짜리 입장 토큰뿐입니다. 30초 뒤로 보내면 그
+     * 사이 그의 몫이 남에게 가고, 세 번째 시도에서 토큰이 죽어 줄 맨 뒤로 다시
+     * 섭니다 — 장애 중에 공정성이 깨지는 자리입니다 (불변식 4).
+     */
+    @Test
+    @DisplayName("격벽이_끊어도_차례가_온_사람은_가까이_부른다")
+    void 격벽이_끊어도_차례가_온_사람은_가까이_부른다() {
+        스냅샷을_심는다(CouponStates.queueing(CREDIT, 1_000_000, 10), 좁은_META);
+        붙잡아_채운다(초당_통과 * 3);
+
+        MockServerWebExchange 차례가_온_사람 = 다음_초에_한_건(
+                "사람" + 초당_통과 * 3, e -> Mono.empty());
+
+        assertThat(차례가_온_사람.getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        // 폴백이 같은 장애에 쓰는 갈래와 같은 값이어야 한다. 밴드만 보면
+        // 정책이 통째로 바뀌어도 통과하므로 값으로 못 박는다.
+        assertThat(차례가_온_사람.getResponse().getHeaders().getFirst("Retry-After"))
+                .isEqualTo(String.valueOf(
+                        AdmissionGatewayFilter.retryAfterSec(
+                                AdmissionDecision.RETRY_TOKEN, 고정_난수)));
+        풀어_준다();
+    }
+
+    /**
+     * <b>줄에 안 선 사람은 멀리 보냅니다.</b> 둘을 같은 밴드로 부르면, 차례를
+     * 기다린 사람과 방금 온 사람이 같은 간격으로 다시 옵니다 — 기다린 쪽이
+     * 손해입니다.
+     */
+    @Test
+    @DisplayName("차례가_없으면_먼_밴드로_부른다")
+    void 차례가_없으면_먼_밴드로_부른다() {
+        스냅샷을_심는다(CouponStates.off(1_000), new SnapshotMeta(1, 1));
+        List<Sinks.Empty<Void>> 잡은_것 = new ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            Sinks.Empty<Void> 안_끝남 = Sinks.empty();
+            잡은_것.add(안_끝남);
+            붙잡은_자리.add(안_끝남);
+            격벽_필터.filter(요청(COUPON, "사람" + i), e -> 안_끝남.asMono()).subscribe();
+        }
+
+        MockServerWebExchange 막힌_것 = 요청(COUPON, "사람9");
+        격벽_필터.filter(막힌_것, e -> Mono.empty()).block();
+
+        assertThat(막힌_것.getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(막힌_것.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .isEqualTo(AdmissionDecision.REJECT_OVERLOAD);
+        assertThat(막힌_것.getResponse().getHeaders().getFirst("Retry-After"))
+                .isEqualTo(String.valueOf(
+                        AdmissionGatewayFilter.retryAfterSec(
+                                AdmissionDecision.REJECT_OVERLOAD, 고정_난수)));
+        풀어_준다();
     }
 
     /**

@@ -3,6 +3,8 @@ package com.kafkick.waiting.control;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.function.IntSupplier;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
@@ -16,6 +18,10 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 @EnableConfigurationProperties(ShutdownProperties.class)
 public class HealthConfig {
+
+
+    /** 걸려 있는 건수를 내는 빈의 이름. 타입만으로는 다른 것과 안 갈린다. */
+    public static final String IN_FLIGHT = "waitingInFlightRequests";
 
     /** 이 노드의 루프가 멎었다고 볼 임계. 스냅샷 주기의 몇 배로 둔다. */
     private static final Duration FETCH_STALE_AFTER = Duration.ofSeconds(3);
@@ -63,6 +69,18 @@ public class HealthConfig {
     @Bean
     DrainWait drainWait(ShutdownState shutdown, ShutdownProperties properties) {
         return DrainWait.of(shutdown, properties.lbRemovalWait());
+    }
+
+    /**
+     * 드레인이 상한 안에 끝났는지 남깁니다 (6.4.2).
+     *
+     * <p>세는 대상은 <b>이름이 아니라 값으로</b> 받습니다. 게이트웨이 타입을 여기서
+     * 참조하면 제어 평면이 요청 경로를 알게 되고, 그 방향은 되돌리기 어렵습니다.
+     */
+    @Bean
+    DrainOutcome drainOutcome(@Qualifier(IN_FLIGHT) IntSupplier inFlight,
+            ShutdownProperties properties) {
+        return DrainOutcome.of(inFlight, properties.drainLimit());
     }
 
 }

@@ -407,4 +407,57 @@ class AdmissionDeciderTest {
 
         assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.ENQUEUE_ALWAYS);
     }
+
+    /**
+     * <b>한산 통과의 밑변은 쿠폰 credit 이 아니다.</b> 9번이 통과시키는 것은
+     * IDLE 쿠폰뿐이고 IDLE 이면 credit 이 0 이다 (I1). credit 으로 재는 순간
+     * 한산한 쿠폰일수록 조여진다 — 이전 구현의 핵심 버그다.
+     */
+    @Test
+    @DisplayName("한산_통과가_쓴_예산은_한산_몫이다")
+    void 한산_통과가_쓴_예산은_한산_몫이다() {
+        CouponState 한산 = CouponStates.idle(500);
+
+        assertThat(decider().admittedRatePerSec(AdmissionDecision.PASS_UNDER_CAP, 한산, META))
+                .isEqualTo(한산.idleCap(META, IDLE_RATIO))
+                .isGreaterThan(한산.credit());
+    }
+
+    /**
+     * <b>credit 은 전 노드가 나눠 쓰는 값이다.</b> 그대로 쓰면 노드마다 전체
+     * 몫을 들고 있게 되어 실제 동시 건수가 노드 수만큼 부풀려진다.
+     */
+    @Test
+    @DisplayName("토큰_통과가_쓴_예산은_노드_몫이다")
+    void 토큰_통과가_쓴_예산은_노드_몫이다() {
+        CouponState 줄선_것 = CouponStates.queueing(100, 500, 3000);
+
+        assertThat(decider().admittedRatePerSec(AdmissionDecision.PASS_TOKEN, 줄선_것, META))
+                .isEqualTo(줄선_것.contendedCap(META.effectiveGatewayCount()))
+                .isEqualTo(10);
+    }
+
+    /**
+     * 4·5번은 쿠폰별 예산을 안 거친다. 노드 예산이 그 경로의 정직한 상한이다 —
+     * 여기서 0 을 돌려주면 낡음 구간의 통과가 통째로 막힌다.
+     */
+    @Test
+    @DisplayName("우회와_장애_개방이_쓴_예산은_노드_예산이다")
+    void 우회와_장애_개방이_쓴_예산은_노드_예산이다() {
+        assertThat(decider().admittedRatePerSec(
+                AdmissionDecision.PASS_BYPASS, CouponStates.off(500), META))
+                .isEqualTo(AdmissionDecider.globalCap(META));
+        assertThat(decider().admittedRatePerSec(
+                AdmissionDecision.PASS_FAIL_OPEN, CouponStates.idle(500), META))
+                .isEqualTo(AdmissionDecider.globalCap(META));
+    }
+
+    /** 통과가 아닌 판정에 예산을 물으면 부르는 쪽이 틀린 것이다. 조용히 0 을 주면 전면 차단이다. */
+    @Test
+    @DisplayName("통과가_아닌_판정에는_예산이_없다")
+    void 통과가_아닌_판정에는_예산이_없다() {
+        assertThatThrownBy(() -> decider().admittedRatePerSec(
+                AdmissionDecision.ENQUEUE_BACKLOG, CouponStates.queueing(1, 10, 5), META))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
 }

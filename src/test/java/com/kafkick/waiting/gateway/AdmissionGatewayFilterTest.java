@@ -24,6 +24,7 @@ import tools.jackson.databind.ObjectMapper;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -42,6 +43,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 
 /**
  * 판정 재료를 <b>로컬 스냅샷에서만</b> 읽는다.
@@ -1213,5 +1215,180 @@ class AdmissionGatewayFilterTest {
             return Mono.empty();
         }).block();
         return 키.get();
+    }
+
+    /** 차례가 온 사람의 요청. 격벽 상한이 배분된 몫에서 나오는지는 이 경로로 잰다. */
+    private MockServerWebExchange 토큰_요청(String memberId) {
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.method(HttpMethod.POST,
+                        "/api/v1/coupons/" + COUPON + "/issue")
+                        .header("X-Member-Id", memberId)
+                        .header("Entry-Token", entryTokens.issue(COUPON, memberId, 지금)));
+        exchange.getAttributes().put(
+                ServerWebExchangeUtils.URI_TEMPLATE_VARIABLES_ATTRIBUTE,
+                Map.of("couponId", COUPON));
+        return exchange;
+    }
+
+    /** 안 끝나는 요청이 쥐고 있는 자리. 시험 끝에 {@link #풀어_준다} 로 돌려준다. */
+    private final List<Sinks.Empty<Void>> 붙잡은_자리 = new ArrayList<>();
+
+    /** 안 끝나는 요청을 태워 격벽을 채운다. 반환값은 그때 태운 요청들이다. */
+    private List<MockServerWebExchange> 붙잡아_채운다(int 건수) {
+        List<MockServerWebExchange> 태운_것 = new ArrayList<>();
+        for (int i = 0; i < 건수; i++) {
+            Sinks.Empty<Void> 안_끝남 = Sinks.empty();
+            붙잡은_자리.add(안_끝남);
+            MockServerWebExchange exchange = 토큰_요청("사람" + i);
+            태운_것.add(exchange);
+            filter.filter(exchange, e -> 안_끝남.asMono()).subscribe();
+        }
+        return 태운_것;
+    }
+
+    private void 풀어_준다() {
+        붙잡은_자리.forEach(Sinks.Empty::tryEmitEmpty);
+    }
+
+    /**
+     * <b>초당 건수로는 못 막는 것이 있습니다.</b> 상한은 이 노드 몫(credit)에
+     * 한 건이 걸려 있을 수 있는 시간을 곱한 값입니다 — 3 × 3초 = 동시 9건.
+     */
+    @Test
+    @DisplayName("동시_건수가_배분된_몫의_세_배를_넘으면_막는다")
+    void 동시_건수가_배분된_몫의_세_배를_넘으면_막는다() {
+        스냅샷을_심는다(CouponStates.queueing(CREDIT, 1_000_000, 10), META);
+        List<MockServerWebExchange> 태운_것 = 붙잡아_채운다((int) CREDIT * 3);
+
+        MockServerWebExchange 한_건_더 = 토큰_요청("사람9");
+        filter.filter(한_건_더, e -> Mono.empty()).block();
+
+        // **상한 직전까지는 통과해야 한다.** 넘긴 것만 보면 늘 막아도 통과한다.
+        assertThat(태운_것.getLast().getResponse().getStatusCode()).isNull();
+        assertThat(한_건_더.getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        풀어_준다();
+    }
+
+    /**
+     * <b>한산한 쿠폰은 credit 이 0 입니다</b> (I1). 그 값으로 상한을 재면 한산한
+     * 쿠폰일수록 조여져 R1 이 뒤집힙니다 — 이전 구현의 핵심 버그입니다.
+     */
+    @Test
+    @DisplayName("한산한_쿠폰은_배분_전_폴백으로_안_조여진다")
+    void 한산한_쿠폰은_배분_전_폴백으로_안_조여진다() {
+        스냅샷을_심는다(CouponStates.idle(1_000_000), META);
+        // 최소 배수 속도(1)로 잰 상한은 3 이다. 한산 몫으로 재야 그 위가 열린다.
+        for (int i = 0; i < 20; i++) {
+            Sinks.Empty<Void> 안_끝남 = Sinks.empty();
+            붙잡은_자리.add(안_끝남);
+            filter.filter(요청(COUPON, "사람" + i), e -> 안_끝남.asMono()).subscribe();
+        }
+
+        MockServerWebExchange 스물한번째 = 요청(COUPON, "사람20");
+        filter.filter(스물한번째, e -> Mono.empty()).block();
+
+        assertThat(스물한번째.getResponse().getStatusCode()).isNull();
+        풀어_준다();
+    }
+
+    /**
+     * <b>곱이 넘치면 음수가 되고, 음수 상한은 전면 차단입니다.</b> 예산은 밖에서
+     * 오는 값이라, 판이 커지는 방향으로 잘못 실리면 격벽이 정반대로 동작합니다.
+     */
+    @Test
+    @DisplayName("예산이_아무리_커도_격벽이_안_뒤집힌다")
+    void 예산이_아무리_커도_격벽이_안_뒤집힌다() {
+        // 세 배가 정확히 음수로 넘어가는 판. 큰 값이면 아무거나 되는 것이 아니다.
+        스냅샷을_심는다(CouponStates.off(1_000_000), new SnapshotMeta(1L << 62, 1));
+
+        MockServerWebExchange exchange = 요청(COUPON, "사람0");
+        filter.filter(exchange, e -> Mono.empty()).block();
+
+        assertThat(exchange.getResponse().getStatusCode()).isNull();
+    }
+
+    /**
+     * <b>연 예산이 곧 격벽의 밑변입니다.</b> 여기서 최소 배수 속도로 떨어지면
+     * 상한을 두고 연 몫의 대부분이 격벽에서 다시 막힙니다 — 레디스가 흔들리는
+     * 구간에 그게 곧 전면 차단입니다.
+     */
+    @Test
+    @DisplayName("장애_개방은_연_예산만큼_격벽도_연다")
+    void 장애_개방은_연_예산만큼_격벽도_연다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000_000, 5_000), META);
+        줄.터진다(new IllegalStateException("레디스가 죽었다"));
+        for (int i = 0; i < 10; i++) {
+            Sinks.Empty<Void> 안_끝남 = Sinks.empty();
+            붙잡은_자리.add(안_끝남);
+            filter.filter(요청(COUPON, "사람" + i), e -> 안_끝남.asMono()).subscribe();
+        }
+
+        MockServerWebExchange 열한번째 = 요청(COUPON, "사람10");
+        filter.filter(열한번째, e -> Mono.empty()).block();
+
+        assertThat(열한번째.getResponse().getStatusCode()).isNull();
+        풀어_준다();
+    }
+
+    /**
+     * <b>끝나면 자리가 돌아와야 합니다.</b> 안 돌려주면 격벽이 한 번 차고 나서
+     * 영영 안 열리고, 그 쿠폰은 뒷단이 멀쩡해져도 계속 막힙니다.
+     */
+    @Test
+    @DisplayName("끝나면_자리가_돌아온다")
+    void 끝나면_자리가_돌아온다() {
+        스냅샷을_심는다(CouponStates.queueing(CREDIT, 1_000_000, 10), META);
+        붙잡아_채운다((int) CREDIT * 3);
+        풀어_준다();
+
+        MockServerWebExchange 다음_사람 = 토큰_요청("사람9");
+        filter.filter(다음_사람, e -> Mono.empty()).block();
+
+        assertThat(다음_사람.getResponse().getStatusCode()).isNull();
+    }
+
+    /**
+     * <b>실패로 끝나도 자리가 돌아와야 합니다.</b> 뒷단이 터지는 구간이 곧 격벽이
+     * 가장 필요한 구간인데, 거기서 자리가 새면 그때부터 아무도 못 지나갑니다.
+     */
+    @Test
+    @DisplayName("터져서_끝나도_자리가_돌아온다")
+    void 터져서_끝나도_자리가_돌아온다() {
+        스냅샷을_심는다(CouponStates.queueing(CREDIT, 1_000_000, 10), META);
+        for (int i = 0; i < CREDIT * 3; i++) {
+            filter.filter(토큰_요청("사람" + i),
+                    e -> Mono.error(new IllegalStateException("뒷단이 터졌다")))
+                    .onErrorResume(e -> Mono.empty()).block();
+        }
+
+        MockServerWebExchange 다음_사람 = 토큰_요청("사람9");
+        filter.filter(다음_사람, e -> Mono.empty()).block();
+
+        assertThat(다음_사람.getResponse().getStatusCode()).isNull();
+    }
+
+    /**
+     * <b>핫 쿠폰이 콜드 쿠폰의 통로를 막으면 안 됩니다.</b> 하나로 세면 몰리는
+     * 쿠폰이 자리를 다 쓰고 한산한 쿠폰이 그 뒤에 밀립니다 — R1 이 뒤집힙니다.
+     */
+    @Test
+    @DisplayName("핫_쿠폰이_차도_콜드_쿠폰은_지나간다")
+    void 핫_쿠폰이_차도_콜드_쿠폰은_지나간다() {
+        holder.replace(new GatewaySnapshot(
+                Map.of(COUPON, CouponStates.queueing(CREDIT, 1_000_000, 10),
+                        "c2", CouponStates.idle(1_000_000)),
+                META, 지금));
+        붙잡아_채운다((int) CREDIT * 3);
+
+        // 핫 쿠폰이 실제로 찼는지 먼저 본다. 안 찼으면 아래 단언은 아무것도 못 말한다.
+        MockServerWebExchange 핫 = 토큰_요청("사람9");
+        filter.filter(핫, e -> Mono.empty()).block();
+        MockServerWebExchange 콜드 = 요청("c2", "사람9");
+        filter.filter(콜드, e -> Mono.empty()).block();
+
+        assertThat(핫.getResponse().getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(콜드.getResponse().getStatusCode()).isNull();
+        풀어_준다();
     }
 }

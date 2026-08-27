@@ -7,6 +7,7 @@ import com.kafkick.waiting.control.SnapshotHolder;
 import com.kafkick.waiting.domain.admission.AdmissionDecider;
 import com.kafkick.waiting.domain.admission.AdmissionDecision;
 import com.kafkick.waiting.domain.admission.AdmissionRequest;
+import com.kafkick.waiting.domain.admission.Bulkhead;
 import com.kafkick.waiting.domain.admission.EnqueueLatch;
 import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
 import com.kafkick.waiting.domain.coupon.CouponState;
@@ -74,8 +75,23 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      */
     private static final double FAIL_OPEN_SHARE = 0.5;
 
-    /** 쿠폰 2,000개를 상정한 값. 넘으면 통째로 비운다 — 판정이 한 틱 헐거워질 뿐이다. */
-    private static final int LATCH_MAX_KEYS = 10_000;
+    /**
+     * 쿠폰별 표를 들고 있는 자리들이 담을 수 있는 쿠폰 수. 2,000개를 상정한 값이다.
+     *
+     * <p><b>쿠폰 식별자는 밖에서 오는 값이라 가짓수에 상한이 없다.</b> 넘었을 때
+     * 무엇을 하는지는 자리마다 다르다 — 래치는 통째로 비우고(판정이 한 틱
+     * 헐거워질 뿐이다), 격벽은 새 쿠폰을 안 받는다.
+     */
+    private static final int MAX_COUPON_KEYS = 10_000;
+
+    /**
+     * 한 건이 뒷단에 걸려 있을 수 있는 시간(초). 상한은 초당 예산 × 이 값이다.
+     *
+     * <p>유입은 같은 예산이 이미 조이므로 걸려 있는 수는 <b>예산 × 지연</b>이고,
+     * 이 값이 곧 격벽이 막기 시작하는 지연이다. 서킷의 느림 임계보다 커야
+     * 느린 뒷단이 서킷에 집계된 뒤에 막힌다 — 6.8.1 에서 튜너블로 뺀다.
+     */
+    private static final long MAX_IN_FLIGHT_SEC = 3;
 
     private final SnapshotHolder holder;
     private final AdmissionDecider decider;
@@ -90,6 +106,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
 
     /** 뒷단의 멱등성이 작동할 근거. 같은 시도에 같은 값을 준다 (A-10). */
     private final IdempotencyKey idempotency;
+
+    /** 동시에 걸려 있는 건수를 센다. 리미터가 세는 초당 건수와 단위가 다르다. */
+    private final Bulkhead bulkhead = Bulkhead.withMaxKeys(MAX_COUPON_KEYS);
     private final ApiError error;
     private final QueueResponse waiting = QueueResponse.create();
 
@@ -123,7 +142,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         // **래치 수명을 여기서 정하지 않는다.** 스냅샷을 아직 믿는 한계보다 짧으면
         // 그 차이가 그대로 추월 창이 된다. 두 값이 다른 클래스에 있으면 조용히
         // 갈라지므로, 한계를 정한 쪽에서 끌어온다.
-        this.latch = EnqueueLatch.covering(LATCH_MAX_KEYS, holder.dataStaleAfter());
+        this.latch = EnqueueLatch.covering(MAX_COUPON_KEYS, holder.dataStaleAfter());
         this.idempotency = Objects.requireNonNull(idempotency, "idempotency 는 필수다");
         this.error = ApiError.of(clock);
     }
@@ -238,7 +257,8 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         // 상한이 0 이 되고, 그건 전면 차단이다. 이 구간은 준비성 판정이 막는다.
         if (view.isBeforeFirstTick()) {
             count("deferred-no-material");
-            return forward(exchange, chain, couponId);
+            // 재료가 없어 크레딧을 모른다. 폴백으로 최소 배수 속도를 가정한다.
+            return forward(exchange, chain, couponId, 0);
         }
         // **모른다는 것이 무제한의 사유는 아니다.** 사다리 4번은 같은 무지에서
         // 노드 몫 안에서만 여는데, 여기만 열어 두면 아무 문자열 쿠폰이나 그
@@ -254,7 +274,10 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     private Mono<Void> route(ServerWebExchange exchange, GatewayFilterChain chain,
             AdmissionDecision decision, String couponId, CouponState state, SnapshotMeta meta) {
         if (decision.isPass()) {
-            return forward(exchange, chain, couponId);
+            // **판정이 쓴 예산을 그대로 받는다.** 여기서 credit 을 다시 꺼내면
+            // 한산 통과가 0 을 받고, 0 은 상한으로 쓰이는 순간 전면 차단이다 (I1).
+            return forward(exchange, chain, couponId,
+                    decider.admittedRatePerSec(decision, state, meta));
         }
         if (decision.isEnqueue()) {
             return enqueue(exchange, chain, couponId, state, meta);
@@ -345,7 +368,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                 log.warn("fail-open 진입 — 줄 등록이 안 돼 통과시킨다, 상한={}", cap);
             }
             count("enqueue-failed-open");
-            return forward(exchange, chain, couponId);
+            // **연 예산이 곧 격벽의 밑변이다.** 여기서 0 을 넘기면 최소 배수
+            // 속도로 떨어져, 상한을 두고 연 몫의 대부분이 격벽에서 다시 막힌다.
+            return forward(exchange, chain, couponId, cap);
         }
         count("enqueue-failed-shed");
         return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
@@ -414,7 +439,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      * 먼저 태워 그 사람의 진짜 시도를 재생으로 버리게 만들 수 있다.
      */
     private Mono<Void> forward(ServerWebExchange exchange, GatewayFilterChain chain,
-            String couponId) {
+            String couponId, long ratePerSec) {
         HttpHeaders headers = exchange.getRequest().getHeaders();
         String memberId = headers.getFirst(MEMBER_ID);
         if (memberId == null) {
@@ -422,11 +447,40 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             // "null" 로 뭉개면 전원이 같은 키를 받아 서로의 발급을 지운다.
             return error.write(exchange, ApiError.Code.INVALID_REQUEST);
         }
+        // **초당 건수로는 못 막는 것이 있다.** 초당 100건이어도 각각 10초 걸리면
+        // 동시 1,000건이다. 느려진 뒷단이 커넥션을 다 붙잡으면 한산한 쿠폰의
+        // 통과 경로까지 같이 죽는다.
+        if (!bulkhead.tryEnter(couponId, inFlightCap(ratePerSec))) {
+            count("bulkhead-full");
+            return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
+                    retryAfterSec(AdmissionDecision.REJECT_OVERLOAD, random));
+        }
         String key = idempotency.of(couponId, memberId,
                 headers.getFirst(IdempotencyKey.HEADER));
         return chain.filter(exchange.mutate()
-                .request(r -> r.headers(h -> h.set(IdempotencyKey.HEADER, key)))
-                .build());
+                        .request(r -> r.headers(h -> h.set(IdempotencyKey.HEADER, key)))
+                        .build())
+                // **어느 쪽으로 끝나도 돌려준다.** 안 돌려주면 격벽이 한 번 차고
+                // 나서 영영 안 열리고, 그 쿠폰은 뒷단이 멀쩡해져도 계속 막힌다.
+                .doFinally(signal -> bulkhead.exit(couponId));
+    }
+
+    /**
+     * 이 쿠폰이 동시에 걸어 둘 수 있는 건수.
+     *
+     * <p>이 통과를 낸 <b>초당 예산</b>에 한 건이 걸려 있을 수 있는 시간을 곱한다.
+     * 예산이 줄면 격벽도 같이 조여진다 (6.3.3).
+     *
+     * <p><b>예산이 0 인 구간에는 폴백을 쓴다.</b> 재료가 아직 없는 기동 직후가
+     * 그렇고, 0 을 상한으로 쓰면 전면 차단이다 — 등록 경로와 같은 폴백이다.
+     */
+    private long inFlightCap(long ratePerSec) {
+        long perSecond = ratePerSec > 0 ? ratePerSec : AdmissionDecider.MIN_CREDIT;
+        // **곱이 넘치면 음수가 되고, 음수 상한은 전면 차단이다.** 예산은 밖에서
+        // 오는 globalCredit 에서 나오므로 여기서 막는다.
+        return perSecond > Long.MAX_VALUE / MAX_IN_FLIGHT_SEC
+                ? Long.MAX_VALUE
+                : perSecond * MAX_IN_FLIGHT_SEC;
     }
 
     private String pathVariable(ServerWebExchange exchange) {

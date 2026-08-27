@@ -271,17 +271,64 @@ public final class QueryCoalescingFilter implements GatewayFilter {
         AtomicLong held = new AtomicLong();
         AtomicBoolean tooBig = new AtomicBoolean();
         ServerHttpResponse original = exchange.getResponse();
+        AtomicBoolean stored = new AtomicBoolean();
         ServerHttpResponseDecorator tee = new ServerHttpResponseDecorator(original) {
             @Override
             public Mono<Void> writeWith(Publisher<? extends DataBuffer> body) {
-                return super.writeWith(Flux.from(body).doOnNext(buffer -> capture(
-                        buffer, chunks, held, tooBig)));
+                // **마지막 조각을 본 자리에서 담는다.** 체인이 다 끝난 뒤에 담으면
+                // 부른 쪽이 응답을 다 쓴 다음이라, 그 사이에 오는 요청이 헛되이
+                // 뒷단을 친다 — 오픈 순간에는 그 창에 수천 건이 들어온다.
+                return super.writeWith(Flux.from(body)
+                        .doOnNext(buffer -> capture(buffer, chunks, held, tooBig))
+                        .doOnComplete(() -> store(original, chunks, tooBig, ttl, path,
+                                exchange, stored)));
             }
         };
         count("miss", FailureCause.NONE);
         return chain.filter(exchange.mutate().response(tee).build())
-                .then(Mono.fromSupplier(() ->
-                        finish(original, chunks, tooBig, ttl, key, path, exchange)));
+                .then(Mono.fromSupplier(() -> {
+                    // 본문이 아예 없는 응답은 위 콜백이 안 돈다. 그때는 여기서 담는다.
+                    store(original, chunks, tooBig, ttl, path, exchange, stored);
+                    return finish(original, chunks, tooBig, ttl, key, path, exchange);
+                }));
+    }
+
+    /**
+     * 헤더를 값으로 복사합니다.
+     *
+     * <p>뷰를 들고 있으면 다음 요청이 그 응답의 헤더를 고칠 때 담아 둔 것까지
+     * 같이 바뀝니다.
+     */
+    private Map<String, List<String>> headers(ServerHttpResponse response) {
+        Map<String, List<String>> copy = new LinkedHashMap<>();
+        response.getHeaders().forEach((name, values) -> copy.put(name, List.copyOf(values)));
+        return copy;
+    }
+
+    /**
+     * 담을 수 있으면 담습니다. <b>한 번만 담습니다.</b>
+     *
+     * <p>부른 쪽이 응답을 다 쓰기 <b>전에</b> 부르는 것이 요점입니다. 뒤에 두면
+     * 담기까지의 틈이 그대로 뒷단을 헛되이 치는 창이 됩니다.
+     */
+    private void store(ServerHttpResponse response, List<byte[]> chunks,
+            AtomicBoolean tooBig, Duration ttl, String path, ServerWebExchange exchange,
+            AtomicBoolean stored) {
+        if (tooBig.get() || !stored.compareAndSet(false, true)) {
+            return;
+        }
+        int code = response.getStatusCode() == null
+                ? HttpStatus.OK.value() : response.getStatusCode().value();
+        Set<String> directives = directives(response.getHeaders().getCacheControl());
+        if (code >= 400 || refusal(response.getHeaders(), directives) != null
+                || keys.learn(path, response.getHeaders()).contains(CoalescingKeys.ALL)) {
+            return;
+        }
+        cache.put(keys.of(exchange, path).value(),
+                new ResponseCache.Entry(code, headers(response), join(chunks)), ttl);
+        if (cache.isFull()) {
+            count("skipped", "cache-full");
+        }
     }
 
     /**
@@ -311,10 +358,7 @@ public final class QueryCoalescingFilter implements GatewayFilter {
             ServerWebExchange exchange) {
         HttpStatusCode status = response.getStatusCode();
         int code = status == null ? 200 : status.value();
-        // 헤더를 값으로 복사한다. 뷰를 들고 있으면 다음 요청이 그 응답의
-        // 헤더를 고칠 때 담아 둔 것까지 같이 바뀐다.
-        Map<String, List<String>> headers = new LinkedHashMap<>();
-        response.getHeaders().forEach((name, values) -> headers.put(name, List.copyOf(values)));
+        Map<String, List<String>> headers = headers(response);
         if (tooBig.get()) {
             return new Captured(code, headers, new byte[0], false, "oversize", null);
         }
@@ -323,7 +367,6 @@ public final class QueryCoalescingFilter implements GatewayFilter {
         // **한 번만 만든다.** 응답마다 소문자 사본과 집합을 두세 번 짓는 것은
         // 5ms 예산(G6.11)을 쓰는 자리다.
         Set<String> directives = directives(response.getHeaders().getCacheControl());
-        learnDeclaration(path, directives, code);
 
         // **담는 것과 나눠 주는 것은 다른 판단이다.** 담을 때는 방금 배운 것으로
         // 다시 만든 키를 쓰므로 늘 안전하다. 안 담으면 경로마다 뒷단을 한 번씩
@@ -334,12 +377,8 @@ public final class QueryCoalescingFilter implements GatewayFilter {
         String refusal = code < 400 ? refusal(response.getHeaders(), directives) : null;
         boolean shareable = code < 400 && refusal == null
                 && !learned.contains(CoalescingKeys.ALL);
-        if (shareable) {
-            cache.put(storeKey, new ResponseCache.Entry(code, headers, body), ttl);
-            if (cache.isFull()) {
-                count("skipped", "cache-full");
-            }
-        }
+        // **담기는 store 가 이미 했다.** 여기서 또 담으면 같은 것을 두 번 쓴다.
+        learnDeclaration(path, directives, code);
 
         // **배우기 전의 첫 무리가 가장 위험하다.** 그때는 갈림 헤더를 몰라 회원이
         // 서로 다른 요청들이 한 키에 붙어 있다. 응답이 "이 헤더로 갈린다" 고

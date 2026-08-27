@@ -122,7 +122,9 @@ class Phase6GateTest {
         // 남고, 그걸 아무도 모른다.
         Matcher matcher = Pattern.compile("\\|\\s*\\*{0,2}(G6\\.\\d+)\\*{0,2}\\s*\\|")
                 .matcher(Files.readString(PLAN));
-        List<String> 계획서의_게이트 = matcher.results().map(r -> r.group(1)).distinct().toList();
+        // **중복을 지우지 않는다.** 지우면 같은 게이트가 두 줄 있는 계획서가
+        // 그대로 통과하고, "정확히 같다" 는 주장이 거짓이 된다.
+        List<String> 계획서의_게이트 = matcher.results().map(r -> r.group(1)).toList();
 
         // 정규식이 계획서 서식 변경에 밀리면 여기서 먼저 드러난다.
         assertThat(계획서의_게이트).hasSize(20);

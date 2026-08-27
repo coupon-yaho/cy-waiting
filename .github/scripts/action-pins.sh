@@ -68,16 +68,23 @@ if not targets:
     sys.exit(1)
 
 
-def walk(node, out):
-    """`uses` 키의 값 노드만 모은다. 위치를 알아야 주석을 읽을 수 있다."""
+def walk(node, out, in_steps=False):
+    """스텝의 `uses` 만 모은다. 위치를 알아야 그 줄에서 주석을 읽을 수 있다.
+
+    **이름이 `uses` 인 것을 다 모으면 안 된다.** composite action 의 `inputs`
+    아래에 그 이름의 입력을 둘 수 있고, 그건 액션 참조가 아니라 값이다.
+    """
     if isinstance(node, yaml.MappingNode):
         for key, value in node.value:
-            if getattr(key, 'value', None) == 'uses' and isinstance(value, yaml.ScalarNode):
+            name = getattr(key, 'value', None)
+            if in_steps and name == 'uses' and isinstance(value, yaml.ScalarNode):
                 out.append((value.start_mark.line, value.value))
-            walk(value, out)
+            # `steps` 아래의 항목만 스텝이다. `inputs`·`outputs` 로 내려가면 끈다.
+            walk(value, out, name == 'steps' or (in_steps and name not in
+                                                 ('inputs', 'outputs', 'env', 'with')))
     elif isinstance(node, yaml.SequenceNode):
         for child in node.value:
-            walk(child, out)
+            walk(child, out, in_steps)
 
 
 found = []
@@ -92,7 +99,7 @@ for path in targets:
         continue
     lines = text.splitlines()
     seen = []
-    walk(root, seen)
+    walk(root, seen, False)
     for index, ref in seen:
         raw = lines[index] if index < len(lines) else ''
         # 주석은 YAML 이 버리므로 그 줄에서 직접 읽는다. 값 뒤의 `#` 부터가 주석이다.
@@ -158,7 +165,13 @@ if [[ "${1:-}" == "--refresh" ]]; then
         echo "::error::어긋난 핀이 있어 락파일을 안 고쳤다" >&2
         exit 1
     fi
-    sort -u "$LOCK.tmp" >"$LOCK"
+    # **쓰기 실패를 성공으로 보고하지 않는다.** 여기서 조용히 넘어가면 갱신했다고
+    # 믿은 채로 옛 락파일이 남고, 다음 검사가 새 핀을 막는다.
+    if ! sort -u "$LOCK.tmp" >"$LOCK"; then
+        rm -f "$LOCK.tmp"
+        echo "::error::$LOCK 을 못 썼다" >&2
+        exit 1
+    fi
     rm -f "$LOCK.tmp"
     echo "락파일 갱신: $(wc -l <"$LOCK") 건"
     exit 0

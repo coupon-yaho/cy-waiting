@@ -1,0 +1,20 @@
+# 게이트웨이 지표를 긁어 온다.
+#
+# **관리 포트를 긁는다** (8081). 서비스 포트에는 이 경로가 없고, 그것이 의도다 —
+# 밖에서 진단 정보와 종료 조작이 닿으면 안 된다.
+global:
+  # 스케줄러 틱이 1초라, 그보다 촘촘히 긁어도 새 값이 없다.
+  scrape_interval: 5s
+  scrape_timeout: 3s
+
+# 알람 규칙. **증상에만 건다** (6.9). 문법은 `.github/scripts/alert-rules.sh` 가 본다.
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+scrape_configs:
+  - job_name: waiting
+    metrics_path: /actuator/prometheus
+    static_configs:
+      # 노드를 가르는 것은 여기서 붙는 `instance` 라벨이다. 애플리케이션이
+      # 붙이는 `application` 태그는 스무 대가 같은 값이라 노드를 못 가른다.
+      - targets: ['gateway:8081']

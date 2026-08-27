@@ -376,6 +376,9 @@ for check in \
     "문서 링크:.github/scripts/doc-links.sh" \
     "작업 로그:.github/scripts/journal-index.sh --check" \
     "워크플로 셸:.github/scripts/workflow-shell.sh" \
+    "Loki 라벨:.github/scripts/loki-labels.sh" \
+    "대시보드 지표:.github/scripts/dashboard-queries.sh" \
+    "알람 규칙:.github/scripts/alert-rules.sh" \
     "액션 핀:.github/scripts/action-pins.sh"
 do
     name="${check%%:*}"

@@ -1,0 +1,154 @@
+{
+  "title": "waiting — 게이트웨이",
+  "uid": "waiting-gateway",
+  "timezone": "browser",
+  "refresh": "10s",
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "판정 분포",
+      "description": "무엇이 통과하고 무엇이 줄로 갔는지. 한산한 쿠폰이 줄로 가기 시작하면 R1 이 뒤집힌 것이다.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "sum by (outcome) (rate(waiting_admission_total[1m]))",
+          "legendFormat": "{{outcome}}"
+        }
+      ],
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "대기 인원과 재료 나이",
+      "description": "둘을 함께 본다. 대기 인원은 갱신에 실패해도 마지막 값을 계속 내므로, 나이가 없으면 '안정적으로 2만 명' 과 '몇 분째 못 보고 있음' 이 같은 그림이 된다. 나이가 -1 이면 재료를 한 번도 못 받은 것이다.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "waiting_queue_waiting and on(instance) (waiting_snapshot_age >= 0 and waiting_snapshot_age <= 5)",
+          "legendFormat": "대기 인원 (재료가 신선할 때만)"
+        },
+        {
+          "expr": "waiting_snapshot_age",
+          "legendFormat": "재료 나이(초)"
+        }
+      ],
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "뒷단 유입 RPS",
+      "description": "게이트웨이가 실제로 뒷단에 흘린 양. 배분된 크레딧과 나란히 보면 조절이 도는지 알 수 있다.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(spring_cloud_gateway_requests_seconds_count{routeId=\"issue\"}[1m]))",
+          "legendFormat": "발급 유입"
+        },
+        {
+          "expr": "waiting_capacity_credit",
+          "legendFormat": "전역 크레딧"
+        }
+      ],
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "보호 장치가 막은 양",
+      "description": "서킷·격벽·fail-open 이 각각 얼마나 막았는지. 폴백은 서킷이 열렸을 때만 오는 것이 아니므로 상태 라벨과 함께 본다.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "targets": [
+        {
+          "expr": "sum by (state) (rate(waiting_backend_fallback_total[1m]))",
+          "legendFormat": "폴백 {{state}}"
+        },
+        {
+          "expr": "sum(rate(waiting_admission_total{outcome=~\"bulkhead-full|bulkhead-timeout\"}[1m]))",
+          "legendFormat": "격벽 (참 + 시한)"
+        }
+      ],
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      }
+    },
+    {
+      "id": 5,
+      "type": "logs",
+      "title": "장애 전이 타임라인",
+      "description": "진입과 해제가 쌍으로 남는다 (LG-2). 지표는 초 단위로 뭉개져 '몇 시 몇 분에 열려 얼마나 갔는가' 를 못 답한다.",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 16
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "targets": [
+        {
+          "expr": "{app=\"waiting\"} |~ `서킷 (열림|닫힘)|fail-open (진입|해제)|종료 시작` "
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "logs",
+      "title": "ERROR",
+      "description": "사람을 부르는 줄만 남는다. 자동으로 걷히는 전이는 WARN 이라 여기 안 온다 (LG-7).",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 24
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "targets": [
+        {
+          "expr": "{app=\"waiting\", level=\"ERROR\"}"
+        }
+      ]
+    }
+  ]
+}

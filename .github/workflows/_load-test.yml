@@ -92,6 +92,11 @@ jobs:
         if: always()
         env:
           SCENARIO: ${{ inputs.scenario }}
+          # **레디스를 직접 본다.** 응답만 보면 게이트웨이가 줄에 올려 놓고 통과
+          # 응답을 내도 통과한다 — 요청 경로에서 레디스를 안 친다는 것(불변식 1)의
+          # 유일한 직접 증거가 키를 보는 것이다.
+          REDIS_CLI: >-
+            docker compose -f test/load/compose.yml exec -T redis redis-cli
         run: |
           set -uo pipefail
           if [[ "${{ steps.probe.outputs.ready }}" != "true" ]]; then

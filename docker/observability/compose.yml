@@ -1,0 +1,86 @@
+# 지표와 로그를 로컬에서 본다.
+#
+# **대시보드가 없으면 지표를 만든 의미가 없다.** 값은 나가는데 보는 곳이 없으면
+# 그 사실을 사고가 난 뒤에야 안다.
+#
+# 부하 하네스(`test/load/compose.yml`)와 같은 네트워크에 붙여 쓴다.
+#
+# **포트는 루프백에만 묶는다.** 그라파나는 익명 Admin 으로 열려 있고 프로메테우스와
+# Loki 에는 인증이 없다. 짧은 형식으로 적으면 같은 망의 아무나 지표와 로그를 읽고
+# 대시보드를 고칠 수 있다 — 카페 와이파이에서 띄우는 순간 그렇게 된다.
+services:
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./rules:/etc/prometheus/rules:ro
+    # **`gateway` 가 어디인지 알려 준다.** 이 스택만으로는 그런 이름의 컨테이너가
+    # 없어서 `gateway:8081` 이 안 풀리고, 프로메테우스는 대상이 없다고 조용히
+    # 표시할 뿐이다 — 대시보드는 그냥 비어 보인다.
+    #
+    # 여기서는 게이트웨이가 호스트에서 도는 경우(`bootRun`)를 기본으로 잡는다.
+    # 컨테이너로 띄운다면 이 줄을 지운다. `/etc/hosts` 항목이 DNS 보다 앞서서,
+    # 두면 같은 네트워크의 `gateway` 컨테이너를 가린다.
+    extra_hosts:
+      - "gateway:host-gateway"
+    ports:
+      - "127.0.0.1:9090:9090"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/healthy"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  loki:
+    image: grafana/loki:3.3.2
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    ports:
+      - "127.0.0.1:3100:3100"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3100/ready"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  promtail:
+    image: grafana/promtail:3.3.2
+    command: ["-config.file=/etc/promtail/promtail.yml"]
+    volumes:
+      - ./promtail.yml:/etc/promtail/promtail.yml:ro
+      # **읽을 파일을 실제로 붙인다.** 설정만 있고 마운트가 없으면 Promtail 은
+      # 빈 디렉터리를 지켜보며 아무 불평 없이 돈다. 게이트웨이는
+      # `observability` 프로필일 때 이 경로에 쓴다.
+      - ../../build/logs:/var/log/waiting:ro
+      # **어디까지 읽었는지를 남긴다.** 컨테이너 안 `/tmp` 에만 두면 재시작할
+      # 때마다 오프셋이 사라져 같은 로그를 다시 보낸다 — Loki 에 중복이 쌓이고,
+      # 사고 시각의 로그 건수를 세는 순간 그 값이 거짓이 된다.
+      - promtail-positions:/var/lib/promtail
+    depends_on:
+      loki:
+        condition: service_healthy
+
+  grafana:
+    image: grafana/grafana:11.5.1
+    environment:
+      # 로컬 전용이다. 대시보드를 보려고 매번 로그인하지 않는다.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_SECURITY_ALLOW_EMBEDDING: "true"
+    volumes:
+      - ./grafana-datasources.yml:/etc/grafana/provisioning/datasources/ds.yml:ro
+      - ./grafana-dashboards.yml:/etc/grafana/provisioning/dashboards/dash.yml:ro
+      - ./dashboards:/etc/grafana/provisioning/dashboards/files:ro
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+
+volumes:
+  promtail-positions:
+
+networks:
+  default:
+    # **부하 하네스와 같은 네트워크에 붙는다.** 게이트웨이를 컨테이너로 띄울
+    # 때 그쪽 compose 가 이 이름을 `external: true` 로 참조한다.
+    name: waiting

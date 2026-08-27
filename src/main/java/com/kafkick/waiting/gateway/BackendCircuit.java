@@ -2,6 +2,8 @@ package com.kafkick.waiting.gateway;
 
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import io.github.resilience4j.micrometer.tagged.TaggedCircuitBreakerMetrics;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.util.Objects;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -59,9 +61,15 @@ public class BackendCircuit {
      * 서킷에 닿는 호출이 0 이라, 요청 쪽 지표만으로는 열린 사실조차 안 보인다.
      */
     @Bean
-    public CircuitBreakerRegistry backendCircuitRegistry(BackendCircuitProperties props) {
+    public CircuitBreakerRegistry backendCircuitRegistry(BackendCircuitProperties props,
+            MeterRegistry meters) {
         CircuitBreakerRegistry registry = registry(props);
         CircuitTransitionLog.create().watch(registry);
+        // **직접 묶는다.** 레지스트리를 손으로 만들면 자동 구성이 묶어 주던
+        // 계량기가 빠진다. 라이브러리가 클래스패스에 있어도 그렇고, 그 사실은
+        // 지표를 실제로 긁어 보기 전까지 아무 데도 안 드러난다 — 서킷이 열려도
+        // 알람과 대시보드는 조용하다.
+        TaggedCircuitBreakerMetrics.ofCircuitBreakerRegistry(registry).bindTo(meters);
         return registry;
     }
 }

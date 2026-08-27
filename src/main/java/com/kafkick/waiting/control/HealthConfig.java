@@ -1,5 +1,6 @@
 package com.kafkick.waiting.control;
 
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.time.Duration;
 import org.springframework.context.annotation.Bean;
@@ -26,8 +27,12 @@ public class HealthConfig {
     private static final Duration FETCH_INTERVAL = Duration.ofMillis(500);
 
     @Bean
-    SnapshotHolder snapshotHolder(Clock clock) {
-        return SnapshotHolder.of(FETCH_STALE_AFTER, DATA_STALE_AFTER, clock);
+    SnapshotHolder snapshotHolder(Clock clock, MeterRegistry meters) {
+        SnapshotHolder holder = SnapshotHolder.of(FETCH_STALE_AFTER, DATA_STALE_AFTER, clock);
+        // **만들어 두고 안 걸면 지표가 안 나온다.** 대시보드는 비어 있고, 사고
+        // 중에야 그 사실을 안다.
+        SnapshotMetrics.bind(holder, meters);
+        return holder;
     }
 
     /**

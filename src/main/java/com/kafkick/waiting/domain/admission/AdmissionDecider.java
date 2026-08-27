@@ -214,6 +214,34 @@ public class AdmissionDecider {
         return meta.globalCredit() / meta.effectiveGatewayCount();
     }
 
+    /**
+     * 이 통과가 <b>이 노드에서</b> 차감한 초당 예산. 격벽 상한이 여기서 나온다.
+     *
+     * @throws IllegalArgumentException 통과 판정이 아닐 때 — 부르는 쪽이 틀린 것이다
+     */
+    public long admittedRatePerSec(AdmissionDecision decision, CouponState state,
+            SnapshotMeta meta) {
+        // **쿠폰 credit 을 그대로 쓰지 않는다.** 사다리 4·5·9번이 통과시키는 것은
+        // 전부 IDLE 쿠폰이고 IDLE 이면 credit 이 0 이다 (I1). 그 값으로 재면
+        // 한산한 쿠폰일수록 조여진다 — 이전 구현의 핵심 버그가 층만 바꿔 재발한다.
+        // 각 줄이 실제로 차감한 예산을 그대로 돌려준다.
+        return switch (decision) {
+            // 2번 — 쿠폰별 상한을 안 걸고 노드 예산만 봤다 (B-14). 여기서 쿠폰
+            // 몫을 돌려주면 격벽이 사다리가 안 건 상한을 새로 거는 셈이다.
+            case PASS_TOKEN -> globalCap(meta);
+            // 9번 — 한산 몫이 이 경로를 막는 값이다.
+            case PASS_UNDER_CAP -> state.idleCap(meta, idleCreditRatio);
+            // 4·5번 — 쿠폰별 예산을 안 거친다. 노드 예산이 정직한 상한이다.
+            case PASS_BYPASS, PASS_FAIL_OPEN -> globalCap(meta);
+            // **전부 열거한다.** default 로 두면 새 통과값이 조용히 0 을 받고,
+            // 0 은 상한으로 쓰이는 순간 전면 차단이다.
+            case RETRY_TOKEN, REJECT_SOLD_OUT, REJECT_QUEUE_FULL, REJECT_OVERLOAD,
+                 ENQUEUE_STALE, ENQUEUE_ALWAYS, ENQUEUE_BACKLOG,
+                 ENQUEUE_RATE_COUPON, ENQUEUE_RATE_GLOBAL, ENQUEUE_KEY_SATURATED ->
+                    throw new IllegalArgumentException("통과가 아니다: " + decision);
+        };
+    }
+
     private long globalCap(AdmissionRequest req) {
         return globalCap(req.meta());
     }

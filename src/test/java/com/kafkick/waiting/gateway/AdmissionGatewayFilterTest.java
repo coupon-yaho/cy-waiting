@@ -1019,7 +1019,9 @@ class AdmissionGatewayFilterTest {
         //
         // `cause` 는 늘 실린다 — 같은 이름에 태그 키 집합이 둘이면 프로메테우스
         // 레지스트리가 등록을 거절한다.
+        // 격벽 게이지는 판정과 무관하게 늘 있다. 판정 지표만 골라서 본다.
         assertThat(meters.getMeters())
+                .filteredOn(m -> m.getId().getName().equals("waiting.admission"))
                 .singleElement()
                 .satisfies(m -> assertThat(m.getId().getTags())
                         .containsExactly(Tag.of("cause", "none"),

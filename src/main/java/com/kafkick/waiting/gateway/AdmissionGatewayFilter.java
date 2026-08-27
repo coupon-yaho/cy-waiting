@@ -144,6 +144,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         // 갈라지므로, 한계를 정한 쪽에서 끌어온다.
         this.latch = EnqueueLatch.covering(MAX_COUPON_KEYS, holder.dataStaleAfter());
         this.idempotency = Objects.requireNonNull(idempotency, "idempotency 는 필수다");
+        // **만들어 두고 안 걸면 지표가 안 나온다.** 격벽이 차오르는 중인지는
+        // 막힌 뒤에야 오르는 카운터로는 못 본다.
+        BulkheadMetrics.bind(bulkhead, meters);
         this.error = ApiError.of(clock);
     }
 

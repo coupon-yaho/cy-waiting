@@ -123,6 +123,8 @@ class MetricsExposureTest {
         assertThat(registry.scrape())
                 .containsPattern("waiting_queue_waiting\\{[^}]*\\} [0-9.E-]+\\n")
                 .containsPattern("waiting_snapshot_coupons\\{[^}]*\\} [0-9.E-]+\\n")
+                .containsPattern("waiting_bulkhead_in_flight\\{[^}]*\\} [0-9.E-]+\\n")
+                .containsPattern("waiting_bulkhead_coupons\\{[^}]*\\} [0-9.E-]+\\n")
                 .containsPattern("waiting_snapshot_age\\{[^}]*\\} [0-9.E-]+\\n")
                 .doesNotContain("NaN");
     }

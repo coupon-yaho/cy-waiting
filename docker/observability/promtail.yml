@@ -4,6 +4,11 @@
 # 쿠폰 식별자처럼 가짓수에 상한이 없는 값을 넣으면 인덱스가 무너진다. 목록을
 # 늘리려면 그 값의 가짓수에 상한이 있는지 먼저 따진다.
 # 검사는 `.github/scripts/loki-labels.sh` 가 한다.
+#
+# **읽을 파일이 실제로 있어야 한다.** 게이트웨이는 기본으로 표준 출력에만 쓰므로
+# `observability` 프로필로 띄워야 여기 경로에 파일이 생긴다. 없으면 Promtail 은
+# 아무 불평 없이 빈 채로 돈다 — 그 조용함이 이 설정의 가장 나쁜 실패다.
+#   ./gradlew bootRun --args='--spring.profiles.active=observability'
 server:
   http_listen_port: 9080
 
@@ -24,3 +29,10 @@ scrape_configs:
           # 상황을 못 본다.
           instance: gateway-local
           __path__: /var/log/waiting/*.log
+    pipeline_stages:
+      # **레벨을 라벨로 뽑는다.** 안 뽑으면 ERROR 만 보는 패널이 영원히 비고,
+      # 사고 중에 그 사실을 안다. 레벨은 여섯 가지뿐이라 스트림이 안 늘어난다.
+      - regex:
+          expression: '^\S+\s+\S+\s+(?P<level>[A-Z]+)\s'
+      - labels:
+          level:

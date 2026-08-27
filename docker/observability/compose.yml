@@ -9,6 +9,15 @@ services:
     image: prom/prometheus:v3.1.0
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    # **`gateway` 가 어디인지 알려 준다.** 이 스택만으로는 그런 이름의 컨테이너가
+    # 없어서 `gateway:8081` 이 안 풀리고, 프로메테우스는 대상이 없다고 조용히
+    # 표시할 뿐이다 — 대시보드는 그냥 비어 보인다.
+    #
+    # 여기서는 게이트웨이가 호스트에서 도는 경우(`bootRun`)를 기본으로 잡는다.
+    # 컨테이너로 띄운다면 이 줄을 지운다. `/etc/hosts` 항목이 DNS 보다 앞서서,
+    # 두면 같은 네트워크의 `gateway` 컨테이너를 가린다.
+    extra_hosts:
+      - "gateway:host-gateway"
     ports:
       - "9090:9090"
     healthcheck:
@@ -33,6 +42,10 @@ services:
     command: ["-config.file=/etc/promtail/promtail.yml"]
     volumes:
       - ./promtail.yml:/etc/promtail/promtail.yml:ro
+      # **읽을 파일을 실제로 붙인다.** 설정만 있고 마운트가 없으면 Promtail 은
+      # 빈 디렉터리를 지켜보며 아무 불평 없이 돈다. 게이트웨이는
+      # `observability` 프로필일 때 이 경로에 쓴다.
+      - ../../build/logs:/var/log/waiting:ro
     depends_on:
       loki:
         condition: service_healthy
@@ -56,4 +69,6 @@ services:
 
 networks:
   default:
-    name: waiting-observability
+    # **부하 하네스와 같은 네트워크에 붙는다.** 게이트웨이를 컨테이너로 띄울
+    # 때 그쪽 compose 가 이 이름을 `external: true` 로 참조한다.
+    name: waiting

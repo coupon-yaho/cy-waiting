@@ -44,6 +44,7 @@ import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
+import reactor.test.StepVerifier;
 
 /**
  * 판정 재료를 <b>로컬 스냅샷에서만</b> 읽는다.
@@ -1346,6 +1347,54 @@ class AdmissionGatewayFilterTest {
         filter.filter(다음_사람, e -> Mono.empty()).block();
 
         assertThat(다음_사람.getResponse().getStatusCode()).isNull();
+    }
+
+    /**
+     * <b>안 끝나는 요청은 자리를 영영 쥡니다.</b> {@code doFinally} 는 끝나는
+     * 것만 돌려주지 끝나지 않는 것을 끝내지 못합니다. 멈춘 뒷단 한 대가 그
+     * 쿠폰의 격벽을 영구히 닫는 것을 상한이 막아야 합니다.
+     */
+    @Test
+    @DisplayName("안_끝나는_요청도_자리를_내놓는다")
+    void 안_끝나는_요청도_자리를_내놓는다() {
+        스냅샷을_심는다(CouponStates.queueing(CREDIT, 1_000_000, 10), META);
+        List<MockServerWebExchange> 태운_것 = new ArrayList<>();
+        StepVerifier.withVirtualTime(() -> {
+            for (int i = 0; i < CREDIT * 3; i++) {
+                MockServerWebExchange 멈춘_것 = 토큰_요청("사람" + i);
+                태운_것.add(멈춘_것);
+                filter.filter(멈춘_것, e -> Mono.never()).subscribe();
+            }
+            return Mono.empty();
+        }).thenAwait(Duration.ofSeconds(13)).verifyComplete();
+
+        // 상한이 실제로 끊었는지부터 본다. 안 끊고 자리만 돌려주면 격벽이
+        // 세는 것이고, 그때는 동시 건수가 상한을 넘어도 아무도 안 막는다.
+        assertThat(태운_것.getFirst().getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+
+        MockServerWebExchange 다음_사람 = 토큰_요청("사람9");
+        filter.filter(다음_사람, e -> Mono.empty()).block();
+
+        assertThat(다음_사람.getResponse().getStatusCode()).isNull();
+    }
+
+    /**
+     * <b>상한은 격벽보다 넉넉해야 합니다.</b> 정상적으로 느린 요청까지 끊으면
+     * 격벽이 하려던 것과 정반대로, 뒷단이 멀쩡한데도 응답을 버립니다.
+     */
+    @Test
+    @DisplayName("격벽이_재는_시간_안에는_안_끊는다")
+    void 격벽이_재는_시간_안에는_안_끊는다() {
+        스냅샷을_심는다(CouponStates.queueing(CREDIT, 1_000_000, 10), META);
+        MockServerWebExchange 느린_것 = 토큰_요청("사람0");
+
+        StepVerifier.withVirtualTime(() ->
+                        filter.filter(느린_것, e -> Mono.delay(Duration.ofSeconds(3)).then()))
+                .thenAwait(Duration.ofSeconds(4))
+                .verifyComplete();
+
+        assertThat(느린_것.getResponse().getStatusCode()).isNull();
     }
 
     /**

@@ -46,6 +46,11 @@ services:
         set -eu
         redis-cli -h redis SADD coupons:active c1
         redis-cli -h redis SET 'stock:{c1}' 1000000
+        # **대조군 쿠폰.** 같은 하네스에서 줄이 실제로 서는 것까지 봐야
+        # "한산할 때만 안 선다" 가 성립한다 (6.7.2). 하나만 두면 대기열을
+        # 통째로 꺼도 R1 시나리오가 통과한다.
+        redis-cli -h redis SADD coupons:active c2
+        redis-cli -h redis SET 'stock:{c2}' 1000000
         while :; do
           redis-cli -h redis HSET capacity:coupon-svc:v1 stub-1 \
             "{\"addr\":\"backend:8090\",\"credits\":300,\"ts\":$(date +%s)}" > /dev/null
@@ -59,7 +64,9 @@ services:
         - -c
         - |
           [ "$$(redis-cli -h redis SISMEMBER coupons:active c1)" = 1 ] &&
+          [ "$$(redis-cli -h redis SISMEMBER coupons:active c2)" = 1 ] &&
           [ "$$(redis-cli -h redis EXISTS 'stock:{c1}')" = 1 ] &&
+          [ "$$(redis-cli -h redis EXISTS 'stock:{c2}')" = 1 ] &&
           [ "$$(redis-cli -h redis HEXISTS capacity:coupon-svc:v1 stub-1)" = 1 ]
       interval: 1s
       timeout: 2s
@@ -102,6 +109,13 @@ services:
       WAITING_CORS_ALLOWED_0: http://localhost:5173
       # 하네스용 값. 운영 키는 배포에서 온다 — 여기 든 값은 시험 부하에만 쓴다.
       WAITING_TOKEN_SECRET: load-harness-not-a-real-secret-0123456789
+      # **앞단을 믿게 한다.** 안 넣으면 전달 헤더를 통째로 무시하고 도커 브리지
+      # 주소 하나로 전부 센다 — 시나리오가 VU 마다 다른 주소를 붙여도 아무 소용이
+      # 없고, 한 시나리오의 부하가 다른 시나리오의 주소 몫을 먹는다. 그러면
+      # 격리를 재려던 시험이 하네스의 모양을 잰다.
+      WAITING_PROXY_CIDRS_0: 172.16.0.0/12
+      WAITING_PROXY_CIDRS_1: 10.0.0.0/8
+      WAITING_PROXY_CIDRS_2: 192.168.0.0/16
     ports:
       # 시나리오가 이 주소를 쓴다. 관리 포트는 안 연다 — 밖에서 닿으면 안 된다.
       - "18080:8080"

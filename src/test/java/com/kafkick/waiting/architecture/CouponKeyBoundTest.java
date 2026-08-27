@@ -19,11 +19,11 @@ import org.junit.jupiter.api.Test;
  *
  * <p>쿠폰별 표를 들고 있는 자리가 셋이다 — 판정 리미터, 격벽, 등록 래치. 상한을
  * 자리마다 적으면 사본이 갈라지고, 그때 한쪽만 찬 상태에서 판정이 어긋난다.
- *
- * <p><b>자리 목록을 손으로 들지 않는다.</b> 사본이 갈라지는 것을 막겠다는 시험이
- * 자기 목록을 사본으로 들면, 네 번째 자리가 생겼을 때 아무도 모른다. 소스 전체를
- * 훑고 <b>예외만</b> 이름으로 뺀다.
  */
+// **자리 목록을 손으로 들지 않는다.** 사본이 갈라지는 것을 막겠다는 시험이 자기
+// 목록을 사본으로 들면, 네 번째 자리가 생겼을 때 아무도 모른다. 소스 전체를 훑고
+// 예외만 이름으로 뺀다.
+
 class CouponKeyBoundTest {
 
     private static final Path MAIN = Path.of("src/main/java");
@@ -61,10 +61,9 @@ class CouponKeyBoundTest {
     void 쿠폰으로_세는_자리는_모두_같은_상한을_쓴다() throws IOException {
         List<Passed> found = allCallSites();
 
-        assertThat(found)
-                .describedAs("쿠폰별 표를 만드는 자리를 하나도 못 찾았다 — "
-                        + "이름이 바뀌었고 이 시험은 아무것도 안 보고 있다")
-                .isNotEmpty();
+        // **셋 다 실재하는지 먼저 본다.** 하나라도 이름이 바뀌면 그 자리는 조용히
+        // 검사 밖으로 나가고, 남은 둘이 통과시키므로 초록이 그대로 뜬다.
+        assertThat(found).extracting(Passed::call).containsAll(CALLS);
         assertThat(found)
                 .describedAs("쿠폰 키 상한은 %s 한 곳에서만 정한다. 새 자리라면 그것을 "
                         + "넘기고, 쿠폰으로 안 세는 자리라면 근거와 함께 예외에 넣는다", HOME)

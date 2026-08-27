@@ -109,6 +109,74 @@ class CoalescingPersonalizationTest {
     }
 
     /**
+     * <b>쿠키를 심는 응답은 안 나눠 줍니다.</b>
+     *
+     * <p>{@code Cache-Control: public} 은 "공유 캐시가 저장해도 된다" 이지 "이 응답에
+     * 개인 자격 증명이 없다" 가 아닙니다. 뒷단 프레임워크가 세션을 부트스트랩하며
+     * 쿠키를 붙이면 그 사이로 지나갑니다 — 받는 브라우저는 남의 세션을 자기 것으로
+     * 저장합니다.
+     */
+    @Test
+    @DisplayName("쿠키를_심는_응답은_안_나눠_준다")
+    void 쿠키를_심는_응답은_안_나눠_준다() {
+        AtomicInteger 뒷단 = new AtomicInteger();
+        Set<String> 받은_쿠키 = ConcurrentHashMap.newKeySet();
+
+        List<MockServerWebExchange> 사람들 = IntStream.range(0, 5)
+                .mapToObj(i -> 조회("사람" + i))
+                .toList();
+        사람들.forEach(e -> filter.filter(e, ex -> {
+            String 회원 = ex.getRequest().getHeaders().getFirst("X-Member-Id");
+            뒷단.incrementAndGet();
+            ex.getResponse().getHeaders().add("Set-Cookie", "SESSION=" + 회원 + "; Path=/");
+            return 답한다(ex, "목록");
+        }).block());
+        사람들.forEach(e -> 받은_쿠키.addAll(
+                e.getResponse().getHeaders().getOrEmpty("Set-Cookie")));
+
+        assertThat(뒷단).as("쿠키가 실린 응답은 안 나눠 준다").hasValue(5);
+        assertThat(받은_쿠키).as("각자 자기 쿠키를 받는다").hasSize(5);
+    }
+
+    /**
+     * <b>{@code public} 은 토큰이어야 합니다.</b>
+     *
+     * <p>부분 문자열로 보면 {@code no-public} 이라고 <b>거절한</b> 뒷단이 허락한
+     * 것으로 읽힙니다. 확장 지시어에 그 여섯 글자가 들어가는 것도 마찬가지입니다.
+     */
+    @Test
+    @DisplayName("public이_토큰이_아니면_안_모은다")
+    void public이_토큰이_아니면_안_모은다() {
+        List.of("max-age=300, no-public", "community=\"public-catalog\"").forEach(지시어 -> {
+            AtomicInteger 뒷단 = new AtomicInteger();
+            IntStream.range(0, 3).forEach(i ->
+                    filter.filter(조회("사람" + i), ex -> {
+                        뒷단.incrementAndGet();
+                        ex.getResponse().getHeaders().setCacheControl(지시어);
+                        return 그냥_답한다(ex, "목록");
+                    }).block());
+
+            assertThat(뒷단).as("%s 는 허락이 아니다", 지시어).hasValue(3);
+        });
+    }
+
+    /** 진짜 허락은 다른 지시어와 같이 와도 알아본다. */
+    @Test
+    @DisplayName("다른_지시어와_같이_와도_알아본다")
+    void 다른_지시어와_같이_와도_알아본다() {
+        AtomicInteger 뒷단 = new AtomicInteger();
+
+        IntStream.range(0, 3).forEach(i ->
+                filter.filter(조회("사람" + i), ex -> {
+                    뒷단.incrementAndGet();
+                    ex.getResponse().getHeaders().setCacheControl("PUBLIC, max-age=60");
+                    return 그냥_답한다(ex, "목록");
+                }).block());
+
+        assertThat(뒷단).as("대소문자와 나머지 지시어는 상관없다").hasValue(1);
+    }
+
+    /**
      * <b>같은 것을 답하면 모여야 합니다.</b> 위 시험이 "늘 안 모인다" 로도 통과하면
      * 안전장치가 아니라 기능 정지 확인이 됩니다.
      */

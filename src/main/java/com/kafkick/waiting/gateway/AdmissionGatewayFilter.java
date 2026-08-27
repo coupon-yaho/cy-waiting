@@ -466,6 +466,14 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             // "null" 로 뭉개면 전원이 같은 키를 받아 서로의 발급을 지운다.
             return error.write(exchange, ApiError.Code.INVALID_REQUEST);
         }
+        // **자리를 잡기 전에 만든다.** 잡은 뒤에 두면 여기서 던지는 순간 반납이
+        // 아직 안 걸려 그 자리가 영영 안 돌아온다. 막는 방법이 둘인데 — 잡고
+        // 나서 감싸거나, 잡기 전으로 옮기거나 — 뒤엣것은 그 구간 자체를 없앤다.
+        //
+        // 끊길 요청 몫으로 서명 한 번이 더 나가지만, 새는 자리를 손으로 지키는
+        // 것보다 싸다. 손으로 지키는 것은 다음에 한 줄이 끼어드는 순간 깨진다.
+        String key = idempotency.of(couponId, memberId,
+                headers.getFirst(IdempotencyKey.HEADER));
         // **초당 건수로는 못 막는 것이 있다.** 초당 100건이어도 각각 10초 걸리면
         // 동시 1,000건이다. 느려진 뒷단이 커넥션을 다 붙잡으면 한산한 쿠폰의
         // 통과 경로까지 같이 죽는다.
@@ -473,13 +481,12 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             count("bulkhead-full");
             return shed(exchange);
         }
-        String key = idempotency.of(couponId, memberId,
-                headers.getFirst(IdempotencyKey.HEADER));
         // 뒷단으로 넘어가는 건이 생겼으면 끊던 구간이 끝난 것이다. 쌍으로 안
         // 남기면 로그에 진입만 있고 언제 닫혔는지가 없다 (LG-2).
         shedWindow.exited().ifPresent(r -> log.warn(
                 "보호 차단 해제 — {}초 동안 {}건 끊었다",
                 NANOSECONDS.toSeconds(r.elapsedNanos()), r.swallowed()));
+        // **여기부터 반납이 걸릴 때까지 던질 수 있는 것을 두지 않는다.**
         return chain.filter(exchange.mutate()
                         .request(r -> r.headers(h -> h.set(IdempotencyKey.HEADER, key)))
                         .build())

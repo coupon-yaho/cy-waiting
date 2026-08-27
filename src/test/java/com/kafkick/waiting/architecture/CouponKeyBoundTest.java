@@ -37,18 +37,24 @@ class CouponKeyBoundTest {
             "EnqueueLatch.covering(",
             "SecondWindowLimiter.withMaxKeys(");
 
-    /**
-     * 쿠폰으로 세지 <b>않는</b> 자리. 여기 들려면 근거가 있어야 한다.
-     *
-     * <p>남용 리미터는 클라이언트 식별자로 센다. 키 공간이 다르고 상한도 열 배
-     * 넓다 — 쿠폰 상한으로 묶으면 주소를 바꿔가며 밀어 넣는 것에 좁은 상한을 준다.
-     *
-     * <p>{@code SingleFlight} 는 여기 안 든다. 그쪽 키는 경로와 {@code Vary} 헤더로
-     * 만들고 팩토리 이름도 달라 위 호출 목록에 애초에 안 걸린다.
-     */
-    private static final Set<String> EXCUSED = Set.of("AbuseLimitFilter.java");
+    /** 쿠폰으로 세지 <b>않는</b> 호출. 파일이 아니라 <b>넘긴 값까지</b> 적는다. */
+    private static final Set<String> EXCUSED = Set.of("AbuseLimitFilter.java#MAX_KEYS");
+    // **파일째로 빼면 안 된다.** 그 파일에 쿠폰으로 세는 호출이 새로 생겨도 같이
+    // 빠지고, "모든 자리를 본다" 는 이 시험의 주장이 그 순간 거짓이 된다.
+    //
+    // 남용 리미터는 클라이언트 식별자로 센다. 키 공간이 다르고 상한도 열 배 넓다 —
+    // 쿠폰 상한으로 묶으면 주소를 바꿔가며 밀어 넣는 것에 좁은 상한을 준다.
+    //
+    // SingleFlight 는 여기 안 든다. 그쪽 키는 경로와 Vary 헤더로 만들고 팩토리
+    // 이름도 달라 위 호출 목록에 애초에 안 걸린다.
+
 
     private record Passed(String file, String call, String argument) {
+
+        /** 예외 목록이 보는 이름. 파일만으로는 그 파일의 다른 호출까지 빠진다. */
+        String site() {
+            return file + "#" + argument;
+        }
 
         @Override
         public String toString() {
@@ -67,7 +73,7 @@ class CouponKeyBoundTest {
         assertThat(found)
                 .describedAs("쿠폰 키 상한은 %s 한 곳에서만 정한다. 새 자리라면 그것을 "
                         + "넘기고, 쿠폰으로 안 세는 자리라면 근거와 함께 예외에 넣는다", HOME)
-                .filteredOn(p -> !EXCUSED.contains(p.file()))
+                .filteredOn(p -> !EXCUSED.contains(p.site()))
                 .allSatisfy(p -> assertThat(p.argument()).isEqualTo(HOME));
     }
 
@@ -75,9 +81,27 @@ class CouponKeyBoundTest {
     @Test
     @DisplayName("예외로_둔_자리가_실재한다")
     void 예외로_둔_자리가_실재한다() throws IOException {
-        List<String> files = allCallSites().stream().map(Passed::file).distinct().toList();
+        List<String> sites = allCallSites().stream().map(Passed::site).distinct().toList();
 
-        assertThat(files).containsAll(EXCUSED);
+        assertThat(sites).containsAll(EXCUSED);
+    }
+
+    /**
+     * 예외로 둔 <b>파일</b>에 다른 호출이 생기면 그것은 검사한다.
+     *
+     * <p>파일째로 빼면 그 순간 이 시험이 안 보는 자리가 생기고, 하필 그 파일이
+     * 리미터를 만드는 자리다.
+     */
+    @Test
+    @DisplayName("예외_파일의_다른_호출은_그대로_검사한다")
+    void 예외_파일의_다른_호출은_그대로_검사한다() {
+        Passed 남용_리미터 = new Passed("AbuseLimitFilter.java",
+                "SecondWindowLimiter.withMaxKeys(", "MAX_KEYS");
+        Passed 같은_파일의_새_호출 = new Passed("AbuseLimitFilter.java",
+                "SecondWindowLimiter.withMaxKeys(", "10_000");
+
+        assertThat(EXCUSED).contains(남용_리미터.site());
+        assertThat(EXCUSED).doesNotContain(같은_파일의_새_호출.site());
     }
 
     private List<Passed> allCallSites() throws IOException {

@@ -152,6 +152,13 @@ jobs:
     uses: ./.github/workflows/_load-test.yml
     with: { scenario: idle-coupon, timeout-minutes: 25 }
 
+  # **조회를 안 때리면 모으기가 만들어져도 효과를 못 잰다** — 재지 못하는 보호
+  # 장치는 없는 것과 같다 (6.6.6). 뒷단 도달 수는 뒷단에게 직접 묻는다.
+  load-read-burst:
+    needs: build
+    uses: ./.github/workflows/_load-test.yml
+    with: { scenario: read-burst, timeout-minutes: 25 }
+
   # 취소를 통과로 세지 않기 위해 별도 잡으로 뺐다. 규칙은 verdict 액션에 있다.
   # 작업 로그 색인은 생성물이라 저장소에 없다 (CY-303). PR 에서는 잡 요약으로
   # 보고, main 에 들어갈 때 여기서 위키를 갱신한다 — 사람이 링크로 공유하는 자리다.

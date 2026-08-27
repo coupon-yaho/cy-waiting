@@ -41,7 +41,7 @@ jobs:
           ONLY: ${{ github.event.inputs.scenario }}
         run: |
           set -uo pipefail
-          all='["idle-coupon","open-spike","mixed","abandonment"]'
+          all='["idle-coupon","contended-coupon","read-burst","read-window","open-spike","mixed","abandonment"]'
           if [[ -n "$ONLY" ]]; then
             echo "scenarios=[\"$ONLY\"]" >> "$GITHUB_OUTPUT"
             echo "::notice::시나리오 '$ONLY' 만 실행"

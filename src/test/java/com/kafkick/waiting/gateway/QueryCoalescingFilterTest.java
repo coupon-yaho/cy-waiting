@@ -173,17 +173,13 @@ class QueryCoalescingFilterTest {
         assertThat(뒷단).hasValue(3);
     }
 
-    /**
-     * <b>이 기능의 안전장치입니다.</b> 지금 조회 응답에 개인화는 없습니다. 그런데
-     * "내가 발급받았는지" 필드가 하나 붙는 순간 남의 응답을 받게 되고, 사람
-     * 리뷰로는 그 한 줄을 못 막습니다.
-     */
+    /** 자격 증명이 실려 오면 안 모은다. 하나로 모으면 남의 응답을 받는다. */
     @Test
-    @DisplayName("응답을_가르는_헤더가_있으면_안_모은다")
-    void 응답을_가르는_헤더가_있으면_안_모은다() {
+    @DisplayName("자격_증명이_실려_오면_안_모은다")
+    void 자격_증명이_실려_오면_안_모은다() {
         AtomicInteger 뒷단 = new AtomicInteger();
 
-        for (String 헤더 : List.of("X-Member-Id", "Authorization", "Cookie")) {
+        for (String 헤더 : List.of("Authorization", "Cookie")) {
             for (int i = 0; i < 2; i++) {
                 MockServerWebExchange e = MockServerWebExchange.from(
                         MockServerHttpRequest.method(HttpMethod.GET, PATH)
@@ -192,7 +188,89 @@ class QueryCoalescingFilterTest {
             }
         }
 
-        assertThat(뒷단).as("헤더 세 종류 × 두 번").hasValue(6);
+        assertThat(뒷단).as("헤더 두 종류 × 두 번").hasValue(4);
+    }
+
+    /**
+     * <b>회원 헤더는 있다는 것만으로 못 거릅니다.</b> 신원 필터가 모든 조회에
+     * 요구하는 값이라, 그것으로 걸러 내면 이 기능이 한 번도 안 돕니다 — 실제로
+     * 그렇게 만들어 놓고 부하를 돌려서야 알았습니다.
+     */
+    @Test
+    @DisplayName("회원_헤더가_있어도_모은다")
+    void 회원_헤더가_있어도_모은다() {
+        AtomicInteger 뒷단 = new AtomicInteger();
+
+        for (int i = 0; i < 3; i++) {
+            MockServerWebExchange e = MockServerWebExchange.from(
+                    MockServerHttpRequest.method(HttpMethod.GET, PATH)
+                            .header("X-Member-Id", "81293" + i)
+                            .header("X-Member-Grade", "GOLD"));
+            filter.filter(e, ex -> 답한다(ex, "목록" + 뒷단.incrementAndGet())).block();
+        }
+
+        assertThat(뒷단).as("뒷단 호출").hasValue(1);
+    }
+
+    /**
+     * <b>이 기능의 안전장치입니다.</b> 지금 조회 응답에 개인화는 없습니다. 그런데
+     * "내가 발급받았는지" 필드가 하나 붙는 순간 남의 응답을 받게 되고, 사람
+     * 리뷰로는 그 한 줄을 못 막습니다. 뒷단이 그 사실을 말하는 자리가 Vary 입니다.
+     */
+    @Test
+    @DisplayName("Vary_가_지목한_헤더가_다르면_따로_묻는다")
+    void Vary_가_지목한_헤더가_다르면_따로_묻는다() {
+        AtomicInteger 뒷단 = new AtomicInteger();
+
+        for (int i = 0; i < 3; i++) {
+            MockServerWebExchange e = MockServerWebExchange.from(
+                    MockServerHttpRequest.method(HttpMethod.GET, PATH)
+                            .header("X-Member-Id", "사람" + i));
+            filter.filter(e, ex -> {
+                ex.getResponse().getHeaders().set("Vary", "X-Member-Id");
+                return 답한다(ex, "개인" + 뒷단.incrementAndGet());
+            }).block();
+        }
+
+        assertThat(뒷단).as("갈리는 값이 다르면 각자 물어야 한다").hasValue(3);
+    }
+
+    /**
+     * <b>같은 값이면 모읍니다.</b> CORS 필터가 모든 응답에 {@code Vary: Origin} 을
+     * 다는데, 그것까지 거부하면 이 기능이 한 번도 안 돕니다 — 실제로 그랬습니다.
+     */
+    @Test
+    @DisplayName("Vary_가_있어도_값이_같으면_모은다")
+    void Vary_가_있어도_값이_같으면_모은다() {
+        AtomicInteger 뒷단 = new AtomicInteger();
+
+        for (int i = 0; i < 3; i++) {
+            MockServerWebExchange e = 조회(PATH);
+            filter.filter(e, ex -> {
+                ex.getResponse().getHeaders().set("Vary", "Origin");
+                return 답한다(ex, "목록" + 뒷단.incrementAndGet());
+            }).block();
+        }
+
+        // 첫 요청은 Vary 를 배우기 전이라 못 담는다. 그 뒤로는 모인다.
+        assertThat(뒷단.get()).as("뒷단 호출").isLessThanOrEqualTo(2);
+    }
+
+    /** 전부 갈린다는 뜻은 키로 못 만든다. 그때는 나눠 주지도 담지도 않는다. */
+    @Test
+    @DisplayName("Vary_별표면_안_모은다")
+    void Vary_별표면_안_모은다() {
+        AtomicInteger 뒷단 = new AtomicInteger();
+
+        for (int i = 0; i < 3; i++) {
+            MockServerWebExchange e = 조회(PATH);
+            filter.filter(e, ex -> {
+                ex.getResponse().getHeaders().set("Vary", "*");
+                return 답한다(ex, "전부 갈림" + 뒷단.incrementAndGet());
+            }).block();
+        }
+
+        assertThat(뒷단).hasValue(3);
     }
 
     /**

@@ -18,8 +18,8 @@ groups:
   # **줄을 못 세워 끊은 것은 실패가 아니다.** 열어 준 것만 실패다 — 그것이 줄 선
   # 사람을 추월시킨 것이다. 등록 오류 자체를 세면 끊기도 같이 세게 된다.
   #
-  # clamp_min 은 0/0 을 막는 가드일 뿐이다. 저트래픽 오탐은 못 막는다 —
-  # 그건 알람에 건 절대 바닥이 한다.
+  # clamp_min 은 0/0 을 막는 가드일 뿐이다. 저트래픽 오탐은 알람에 건 실패 건수
+  # 바닥이 막는다 — 요청률로 걸면 한산한 시간대의 진짜 장애를 통째로 덮는다.
   #
   # 분모는 판정 결과 이름과 판정을 못 한 사유의 합이다. 격벽·큐 사유는 판정 뒤에
   # 한 번 더 세므로 분모에 넣으면 두 번 센다.
@@ -28,39 +28,42 @@ groups:
     rules:
       - record: waiting:judgement_error_budget_burn:ratio_rate5m
         expr: >-
-          sum(rate(waiting_admission_total{outcome=~"deferred-.*|enqueue-failed-open|bulkhead-timeout|no-path-variable|PASS_FAIL_OPEN|ENQUEUE_STALE|REJECT_OVERLOAD"}[5m]))
+          sum(rate(waiting_judgement_total{quality="degraded"}[5m]))
           /
-          clamp_min(sum(rate(waiting_admission_total{outcome=~"[A-Z_]+|deferred-.*|no-path-variable"}[5m])), 0.001)
+          clamp_min(sum(rate(waiting_judgement_total{}[5m])), 0.001)
           / 0.001
       - record: waiting:judgement_error_budget_burn:ratio_rate30m
         expr: >-
-          sum(rate(waiting_admission_total{outcome=~"deferred-.*|enqueue-failed-open|bulkhead-timeout|no-path-variable|PASS_FAIL_OPEN|ENQUEUE_STALE|REJECT_OVERLOAD"}[30m]))
+          sum(rate(waiting_judgement_total{quality="degraded"}[30m]))
           /
-          clamp_min(sum(rate(waiting_admission_total{outcome=~"[A-Z_]+|deferred-.*|no-path-variable"}[30m])), 0.001)
+          clamp_min(sum(rate(waiting_judgement_total{}[30m])), 0.001)
           / 0.001
       - record: waiting:judgement_error_budget_burn:ratio_rate1h
         expr: >-
-          sum(rate(waiting_admission_total{outcome=~"deferred-.*|enqueue-failed-open|bulkhead-timeout|no-path-variable|PASS_FAIL_OPEN|ENQUEUE_STALE|REJECT_OVERLOAD"}[1h]))
+          sum(rate(waiting_judgement_total{quality="degraded"}[1h]))
           /
-          clamp_min(sum(rate(waiting_admission_total{outcome=~"[A-Z_]+|deferred-.*|no-path-variable"}[1h])), 0.001)
+          clamp_min(sum(rate(waiting_judgement_total{}[1h])), 0.001)
           / 0.001
       # 저트래픽 오탐을 막는 바닥. clamp_min 은 0/0 을 막을 뿐 이 일을 못 한다 —
       # 1시간에 69건 미만이면 실패 한 건이 호출 임계를 넘긴다.
-      - record: waiting:judgement_attempts:rate1h
-        expr: sum(rate(waiting_admission_total{outcome=~"[A-Z_]+|deferred-.*|no-path-variable"}[1h]))
-      - record: waiting:judgement_attempts:rate6h
-        expr: sum(rate(waiting_admission_total{outcome=~"[A-Z_]+|deferred-.*|no-path-variable"}[6h]))
+      # **바닥은 실패 건수로 건다.** 요청률로 걸면 트래픽이 적은 시간대에 전부
+      # 실패해도 알람이 안 뜬다 — 초당 0.5 는 시간당 1,800건이라, 그 아래의
+      # 진짜 장애를 통째로 덮는다. 세 건 이하의 우발적 실패만 걸러 내면 된다.
+      - record: waiting:judgement_degraded:increase1h
+        expr: sum(increase(waiting_judgement_total{quality="degraded"}[1h]))
+      - record: waiting:judgement_degraded:increase6h
+        expr: sum(increase(waiting_judgement_total{quality="degraded"}[6h]))
       - record: waiting:judgement_error_budget_burn:ratio_rate3d
         expr: >-
-          sum(rate(waiting_admission_total{outcome=~"deferred-.*|enqueue-failed-open|bulkhead-timeout|no-path-variable|PASS_FAIL_OPEN|ENQUEUE_STALE|REJECT_OVERLOAD"}[3d]))
+          sum(rate(waiting_judgement_total{quality="degraded"}[3d]))
           /
-          clamp_min(sum(rate(waiting_admission_total{outcome=~"[A-Z_]+|deferred-.*|no-path-variable"}[3d])), 0.001)
+          clamp_min(sum(rate(waiting_judgement_total{}[3d])), 0.001)
           / 0.001
       - record: waiting:judgement_error_budget_burn:ratio_rate6h
         expr: >-
-          sum(rate(waiting_admission_total{outcome=~"deferred-.*|enqueue-failed-open|bulkhead-timeout|no-path-variable|PASS_FAIL_OPEN|ENQUEUE_STALE|REJECT_OVERLOAD"}[6h]))
+          sum(rate(waiting_judgement_total{quality="degraded"}[6h]))
           /
-          clamp_min(sum(rate(waiting_admission_total{outcome=~"[A-Z_]+|deferred-.*|no-path-variable"}[6h])), 0.001)
+          clamp_min(sum(rate(waiting_judgement_total{}[6h])), 0.001)
           / 0.001
 
   - name: waiting-page
@@ -160,7 +163,7 @@ groups:
           and
           waiting:judgement_error_budget_burn:ratio_rate5m > 14.4
           and
-          waiting:judgement_attempts:rate1h > 0.5
+          waiting:judgement_degraded:increase1h >= 5
         for: 2m
         labels: { severity: page }
         annotations:
@@ -174,7 +177,7 @@ groups:
           and
           waiting:judgement_error_budget_burn:ratio_rate30m > 6
           and
-          waiting:judgement_attempts:rate6h > 0.5
+          waiting:judgement_degraded:increase6h >= 5
         for: 15m
         labels: { severity: page }
         annotations:
@@ -188,7 +191,7 @@ groups:
           and
           waiting:judgement_error_budget_burn:ratio_rate6h > 1
           and
-          waiting:judgement_attempts:rate6h > 0.5
+          waiting:judgement_degraded:increase6h >= 5
         for: 1h
         labels: { severity: ticket }
         annotations:

@@ -1072,6 +1072,60 @@ class AdmissionGatewayFilterTest {
         assertThat(시계가_흐른_뒤.isPass()).as("윈도가 넘어간 뒤").isTrue();
     }
 
+    /**
+     * 판정 품질은 <b>요청마다 한 번만</b> 세어집니다 (O-7).
+     *
+     * <p>운영 카운터를 여럿 더해 만들면 한 요청이 여러 사유를 지날 때 여러 번
+     * 세어져 실패율이 100% 를 넘습니다.
+     */
+    @Test
+    @DisplayName("요청마다_판정_품질을_한_번만_센다")
+    void 요청마다_판정_품질을_한_번만_센다() {
+        스냅샷을_심는다(CouponStates.idle(100));
+
+        태운다(COUPON);
+
+        assertThat(품질_합계()).as("요청 하나에 한 건").isEqualTo(1.0);
+    }
+
+    /** 재료가 낡으면 그 사실이 품질에 남습니다. 안 남기면 그 구간이 성공으로 잡힙니다. */
+    @Test
+    @DisplayName("낡은_재료로_판정하면_품질이_떨어진_것으로_센다")
+    void 낡은_재료로_판정하면_품질이_떨어진_것으로_센다() {
+        Instant 낡은_발행 = 지금.minusSeconds(3_600);
+        holder.replace(new GatewaySnapshot(
+                Map.of(COUPON, CouponStates.idle(1_000_000)),
+                new SnapshotMeta(1, 1), 낡은_발행));
+
+        태운다(COUPON);
+
+        assertThat(품질("degraded")).as("재료 없이 판정한 건").isEqualTo(1.0);
+        assertThat(품질("fresh")).as("재료를 갖고 판정한 건").isZero();
+    }
+
+    /** 재료가 신선하면 신선한 것으로 셉니다. 위 시험이 "늘 degraded" 로도 통과하면 안 됩니다. */
+    @Test
+    @DisplayName("신선한_재료로_판정하면_그대로_센다")
+    void 신선한_재료로_판정하면_그대로_센다() {
+        스냅샷을_심는다(CouponStates.idle(100));
+
+        태운다(COUPON);
+
+        assertThat(품질("fresh")).as("재료를 갖고 판정한 건").isEqualTo(1.0);
+        assertThat(품질("degraded")).as("재료 없이 판정한 건").isZero();
+    }
+
+    private double 품질(String 라벨) {
+        var counter = meters.find(AdmissionGatewayFilter.JUDGEMENT)
+                .tag("quality", 라벨).counter();
+        return counter == null ? 0 : counter.count();
+    }
+
+    private double 품질_합계() {
+        return meters.find(AdmissionGatewayFilter.JUDGEMENT).counters().stream()
+                .mapToDouble(c -> c.count()).sum();
+    }
+
     @Test
     @DisplayName("판정값을_요청에_남긴다")
     void 판정값을_요청에_남긴다() {

@@ -260,12 +260,27 @@ case "$scenario" in
 
     # **다시 올 시각이 흩어져야 한다** (F7 · G6.20). 한 값으로 몰리면 그 초에
     # 같은 스파이크가 다시 오고, 회복이 곧 두 번째 사고가 된다.
+    #
+    # 폭만 보면 부족하다 — 만 건 중 9,999 건이 한 값이고 하나만 멀리 있어도
+    # 폭은 넓다. 분위수가 서로 떨어져 있는지까지 본다.
+    retry_med=$(read_metric '.metrics.retry_after_seconds.med' \
+                            '.metrics.retry_after_seconds.values.med')
+    retry_p90=$(read_metric '.metrics.retry_after_seconds["p(90)"]' \
+                            '.metrics.retry_after_seconds.values["p(90)"]')
     if [[ -n "${shed:-}" ]] && awk -v v="${shed:-0}" 'BEGIN { exit (v + 0 > 0) ? 0 : 1 }'; then
-      if numeric "${retry_min:-}" && numeric "${retry_max:-}"; then
+      if numeric "${retry_min:-}" && numeric "${retry_max:-}" \
+          && numeric "${retry_med:-}" && numeric "${retry_p90:-}"; then
+        report "다시 올 시각 분포" "${retry_min} / ${retry_med} / ${retry_p90} / ${retry_max}"
         at_least "$(awk -v a="${retry_max}" -v b="${retry_min}" \
-            'BEGIN { printf "%.2f", a - b }')" 0.5 "다시 올 시각의 폭"
+            'BEGIN { print a - b }')" 0.5 "다시 올 시각의 폭"
+        # 중앙값이 최소와 붙어 있으면 절반 넘게 한 값에 몰린 것이다.
+        at_least "$(awk -v a="${retry_med}" -v b="${retry_min}" \
+            'BEGIN { print a - b }')" 0.5 "최소와 중앙값의 거리"
+        # 위쪽도 본다. 중앙값과 p90 이 같으면 꼬리가 없다.
+        at_least "$(awk -v a="${retry_p90}" -v b="${retry_med}" \
+            'BEGIN { print a - b }')" 0.5 "중앙값과 p90 의 거리"
       else
-        violate "막힌 응답이 있는데 Retry-After 를 못 읽었다"
+        violate "막힌 응답이 있는데 Retry-After 분포를 못 읽었다"
       fi
     fi
     ;;

@@ -55,6 +55,14 @@ KEYWORDS = {
 bad = 0
 rules = 0
 
+# **라벨 값도 코드에 있어야 한다.** 이름만 보면 outcome 을 리네임했을 때 그 항이
+# 분자에서 조용히 빠지고, SLO 는 좋아지고 검사는 초록이다.
+OUTCOMES = set()
+for src in pathlib.Path('src/main/java').rglob('*.java'):
+    text = src.read_text()
+    OUTCOMES |= set(re.findall(r'count\("([a-z0-9-]+)"', text))
+    OUTCOMES |= set(re.findall(r'^\s+([A-Z][A-Z_]+)[,;(]', text, re.M))
+
 # **기록 규칙이 만든 이름도 지표다.** 모르면 그것을 쓰는 알람이 "없는 지표를
 # 본다" 로 걸리고, 그러면 소진율처럼 식이 긴 것을 한 곳에서 못 만든다.
 recorded = set()
@@ -63,6 +71,12 @@ for path in sorted(DIR.glob('*.yml')):
     for group in doc.get('groups', []):
         for rule in group.get('rules', []):
             if rule.get('record'):
+                # **콜론을 요구한다.** 없으면 지표 이름과 구분이 안 되고, 오타로
+                # 만든 기록 규칙이 그 오타를 그대로 "있는 지표" 로 만든다.
+                if ':' not in rule['record']:
+                    print("::error file=%s::기록 규칙 이름에 콜론이 없다: %s"
+                          % (path, rule['record']))
+                    bad = 1
                 recorded.add(rule['record'])
 
 for path in sorted(DIR.glob('*.yml')):
@@ -76,7 +90,15 @@ for path in sorted(DIR.glob('*.yml')):
             if rule.get('alert') and not rule.get('annotations', {}).get('summary'):
                 print("::error file=%s::%s 에 summary 가 없다" % (path, name))
                 bad = 1
-            expr = re.sub(r'\{[^}]*\}', ' ', rule.get('expr', ''))
+            raw = rule.get('expr', '')
+            for group in re.findall(r'outcome=~"([^"]+)"', raw):
+                for token in group.split('|'):
+                    # 정규식 조각은 못 본다. 리터럴만 확인한다.
+                    if re.fullmatch(r'[A-Za-z0-9_-]+', token) and token not in OUTCOMES:
+                        print("::error file=%s::%s 가 없는 outcome 을 본다: %s"
+                              % (path, name, token))
+                        bad = 1
+            expr = re.sub(r'\{[^}]*\}', ' ', raw)
             expr = re.sub(r'\b(?:by|without|on|ignoring|group_left|group_right)'
                           r'\s*\([^)]*\)', ' ', expr)
             # 콜론을 이름의 일부로 읽는다. 안 그러면 기록 규칙 이름이 조각으로

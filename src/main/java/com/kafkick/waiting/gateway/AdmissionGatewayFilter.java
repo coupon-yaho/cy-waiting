@@ -356,7 +356,12 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                             NANOSECONDS.toSeconds(r.elapsedNanos()), r.swallowed()));
                     if (!entry.accepted()) {
                         // 2차 방어에 걸렸다. 판정은 자리가 있다고 봤지만 실제로는 없다.
-                        count(AdmissionDecision.REJECT_QUEUE_FULL.name());
+                        //
+                        // **판정 이름으로 안 센다.** 이 요청은 위에서 이미 판정
+                        // 결과를 하나 받았고, 여기서 또 그 이름으로 세면 한 요청이
+                        // 판정 카운터를 두 번 올린다. SLI 의 분모가 그 이름들의
+                        // 합이라, 두 번 세면 분모가 부풀고 비율이 좋아 보인다.
+                        count("queue-full-2nd");
                         return error.write(exchange, ApiError.Code.QUEUE_FULL,
                                 retryAfterSec(AdmissionDecision.REJECT_QUEUE_FULL, random));
                     }

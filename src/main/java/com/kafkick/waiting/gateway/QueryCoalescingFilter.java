@@ -58,6 +58,16 @@ public final class QueryCoalescingFilter implements GatewayFilter {
     /** 전부 갈린다는 뜻. 이건 키로 못 만든다. */
     private static final String VARY_ALL = "*";
 
+    /**
+     * 연결에 매인 헤더. <b>다시 쓸 때 옮기면 안 됩니다.</b>
+     *
+     * <p>담아 둔 값은 그때의 연결에 대한 것이라, 다른 연결에 그대로 실으면 길이와
+     * 인코딩이 어긋나 응답이 안 끝납니다 — 클라이언트는 영원히 기다립니다.
+     */
+    private static final List<String> HOP_BY_HOP = List.of(
+            "connection", "keep-alive", "transfer-encoding", "content-length",
+            "te", "trailer", "upgrade", "proxy-authenticate", "proxy-authorization");
+
     private final CoalescingProperties props;
 
     private final ResponseCache cache;
@@ -241,7 +251,14 @@ public final class QueryCoalescingFilter implements GatewayFilter {
             return response.setComplete();
         }
         response.setRawStatusCode(entry.status());
-        entry.headers().forEach((name, values) -> response.getHeaders().put(name, values));
+        // **연결에 매인 헤더는 안 옮긴다.** 담아 둔 값은 그때의 연결에 대한
+        // 것이라, 다른 연결에 그대로 실으면 길이와 인코딩이 어긋나 응답이 안
+        // 끝난다 — 클라이언트는 영원히 기다린다.
+        entry.headers().forEach((name, values) -> {
+            if (!HOP_BY_HOP.contains(name.toLowerCase(java.util.Locale.ROOT))) {
+                response.getHeaders().put(name, values);
+            }
+        });
         return response.writeWith(Mono.just(
                 response.bufferFactory().wrap(entry.body())));
     }

@@ -98,6 +98,14 @@ jobs:
           REDIS_CLI: >-
             docker compose -f test/load/compose.yml exec -T redis redis-cli
         run: |
+          # **뒷단이 몇 번 받았는지를 뒷단에게 묻는다.** 게이트웨이 지표로 재면
+          # 모으기가 자기 성적을 자기가 매기는 셈이다.
+          if [[ "$SCENARIO" == "read-burst" ]]; then
+            STUB_SERVED=$(docker compose -f test/load/compose.yml exec -T backend \
+                wget -qO- http://localhost:8090/stub/health 2>/dev/null \
+                | sed -n 's/.*"served":\([0-9]*\).*/\1/p')
+            export STUB_SERVED
+          fi
           set -uo pipefail
           if [[ "${{ steps.probe.outputs.ready }}" != "true" ]]; then
             echo "passed=skipped" >> "$GITHUB_OUTPUT"

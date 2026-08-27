@@ -149,6 +149,36 @@
           "expr": "{app=\"waiting\", level=\"ERROR\"}"
         }
       ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "격벽 포화",
+      "description": "막은 횟수는 이미 막힌 뒤에야 오른다. 차오르는 중인지를 본다",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 32
+      },
+      "targets": [
+        {
+          "expr": "waiting_bulkhead_inflight",
+          "legendFormat": "걸려 있는 요청"
+        },
+        {
+          "expr": "waiting_bulkhead_coupons",
+          "legendFormat": "자리를 쥔 쿠폰"
+        },
+        {
+          "expr": "waiting_bulkhead_max_coupons",
+          "legendFormat": "담을 수 있는 쿠폰 (분모)"
+        }
+      ]
     }
   ]
 }

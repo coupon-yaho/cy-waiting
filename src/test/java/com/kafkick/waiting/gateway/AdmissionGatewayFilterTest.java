@@ -1036,6 +1036,13 @@ class AdmissionGatewayFilterTest {
                 .satisfies(m -> assertThat(m.getId().getTags())
                         .containsExactly(Tag.of("cause", "none"),
                                 Tag.of("outcome", "PASS_UNDER_CAP")));
+        // **좁혀 본 만큼 넓게도 본다.** 위에서 판정 지표만 골라 보면, 이 필터가
+        // 거는 다른 계량기에 식별자가 실려도 안 걸린다 — 실제로 격벽 게이지가
+        // 붙으면서 그 구멍이 생겼다.
+        assertThat(meters.getMeters())
+                .allSatisfy(m -> assertThat(m.getId().getTags())
+                        .as("%s 의 라벨", m.getId().getName())
+                        .noneMatch(tag -> tag.getValue().equals(COUPON)));
     }
 
     @Test

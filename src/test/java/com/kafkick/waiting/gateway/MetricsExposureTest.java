@@ -123,8 +123,10 @@ class MetricsExposureTest {
         assertThat(registry.scrape())
                 .containsPattern("waiting_queue_waiting\\{[^}]*\\} [0-9.E-]+\\n")
                 .containsPattern("waiting_snapshot_coupons\\{[^}]*\\} [0-9.E-]+\\n")
-                .containsPattern("waiting_bulkhead_in_flight\\{[^}]*\\} [0-9.E-]+\\n")
-                .containsPattern("waiting_bulkhead_coupons\\{[^}]*\\} [0-9.E-]+\\n")
+                // **라벨이 비어 있어야 한다.** 아무 태그나 받으면 쿠폰 식별자가
+                // 실려도 안 걸린다 (LG-4).
+                .containsPattern("waiting_bulkhead_inflight\\{application=\"[^\"]*\"\\} [0-9.E-]+\\n")
+                .containsPattern("waiting_bulkhead_coupons\\{application=\"[^\"]*\"\\} [0-9.E-]+\\n")
                 .containsPattern("waiting_snapshot_age\\{[^}]*\\} [0-9.E-]+\\n")
                 .doesNotContain("NaN");
     }

@@ -16,23 +16,25 @@ final class TunableValues {
     }
 
     /**
-     * <b>1 이상이면 안 됩니다.</b> 한산 통과가 노드 예산 전체를 쓰면 토큰을 든
-     * 사람이 밀립니다. 0 은 그 경로를 끄는 값이라 그대로 받습니다.
+     * <b>보호를 끄는 값은 안 받습니다.</b> 0 이면 한산 통과가 통째로 막혀 피크
+     * 전량이 큐 등록으로 가고, 1 에 가까우면 차례가 온 사람이 밀립니다.
      */
     double ratio(String json, String key, double fallback) {
         Double value = number(json, key);
-        return value != null && value >= 0 && value < 1 ? value : fallback;
+        return value != null && value >= Tunables.MIN_IDLE_RATIO
+                && value <= Tunables.MAX_IDLE_RATIO ? value : fallback;
     }
 
     /**
-     * <b>long 안의 정수만 받습니다.</b> {@code 1e309} 는 무한대가 되고, 좁히면
-     * {@code Long.MAX_VALUE} 라는 멀쩡해 보이는 값으로 저장됩니다.
+     * <b>서킷보다 짧거나 격벽을 끄는 값은 안 받습니다.</b> 짧으면 느려진 뒷단이
+     * 서킷에 집계되기 전에 격벽이 먼저 끊어, 서킷이 영영 안 열립니다.
      */
     long seconds(String json, String key, long fallback) {
         Double value = number(json, key);
-        // 2^63 이상은 좁히면 Long.MAX_VALUE 로 눌려, 터무니없는 값이 멀쩡한
-        // 값으로 저장된다. 무한대도 같은 길로 들어온다.
-        return value != null && value >= 1 && value < 0x1p63 ? (long) (double) value : fallback;
+        return value != null && value >= Tunables.MIN_INFLIGHT_SECONDS
+                && value <= Tunables.MAX_INFLIGHT_SECONDS
+                ? (long) (double) value
+                : fallback;
     }
 
     /**

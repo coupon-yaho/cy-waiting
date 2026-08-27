@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.micrometer.core.instrument.Gauge;
+import com.kafkick.waiting.domain.coupon.Tunables;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import java.time.Duration;
@@ -265,5 +266,17 @@ class GatewayWiringTest {
                 .isNotNull()
                 .extracting(Gauge::value)
                 .isEqualTo(1.0);
+    }
+
+    /**
+     * <b>운영 값의 하한이 서킷의 느림 임계보다 뒤여야 합니다.</b> 앞이면 느려진
+     * 뒷단의 요청이 서킷에 집계되기 전에 격벽이 먼저 끊고, 그러면 서킷이 영영
+     * 안 열려 회복 경로 자체가 사라집니다 (F3).
+     */
+    @Test
+    @DisplayName("걸림_시간_하한이_서킷_느림_임계보다_뒤다")
+    void 걸림_시간_하한이_서킷_느림_임계보다_뒤다() {
+        assertThat(Duration.ofSeconds(Tunables.MIN_INFLIGHT_SECONDS))
+                .isGreaterThan(circuit.slowCallDurationThreshold());
     }
 }

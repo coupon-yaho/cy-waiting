@@ -213,6 +213,32 @@
     {
       "id": 9,
       "type": "timeseries",
+      "title": "적용 중인 운영 값",
+      "description": "배포 없이 바꾼 값이 닿았는지를 본다. -1 은 안 실려 온 것 (기동값으로 도는 중)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 32
+      },
+      "targets": [
+        {
+          "expr": "waiting_tunable_idle_ratio",
+          "legendFormat": "{{instance}} — 한산 몫"
+        },
+        {
+          "expr": "waiting_tunable_inflight_seconds",
+          "legendFormat": "{{instance}} — 걸림 시간(초)"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
       "title": "불변식 선행 지표",
       "description": "초과 발급과 순번 역행은 게이트웨이가 직접 못 본다. 스스로 계산한 값으로 대신 본다",
       "datasource": {
@@ -222,7 +248,7 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 0,
+        "x": 12,
         "y": 32
       },
       "targets": [

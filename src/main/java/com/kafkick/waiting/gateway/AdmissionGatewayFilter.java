@@ -285,7 +285,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         if (view.isBeforeFirstTick()) {
             count("deferred-no-material");
             // 재료가 없어 크레딧을 모른다. 폴백으로 최소 배수 속도를 가정한다.
-            return forward(exchange, chain, couponId, 0);
+            return forward(exchange, chain, couponId, 0, view.snapshot().meta());
         }
         // **모른다는 것이 무제한의 사유는 아니다.** 사다리 4번은 같은 무지에서
         // 노드 몫 안에서만 여는데, 여기만 열어 두면 아무 문자열 쿠폰이나 그
@@ -304,7 +304,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             // **판정이 쓴 예산을 그대로 받는다.** 여기서 credit 을 다시 꺼내면
             // 한산 통과가 0 을 받고, 0 은 상한으로 쓰이는 순간 전면 차단이다 (I1).
             return forward(exchange, chain, couponId,
-                    decider.admittedRatePerSec(decision, state, meta));
+                    decider.admittedRatePerSec(decision, state, meta), meta);
         }
         if (decision.isEnqueue()) {
             return enqueue(exchange, chain, couponId, state, meta);
@@ -397,7 +397,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             count("enqueue-failed-open");
             // **연 예산이 곧 격벽의 밑변이다.** 여기서 0 을 넘기면 최소 배수
             // 속도로 떨어져, 상한을 두고 연 몫의 대부분이 격벽에서 다시 막힌다.
-            return forward(exchange, chain, couponId, cap);
+            return forward(exchange, chain, couponId, cap, meta);
         }
         count("enqueue-failed-shed");
         return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
@@ -466,7 +466,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      * 먼저 태워 그 사람의 진짜 시도를 재생으로 버리게 만들 수 있다.
      */
     private Mono<Void> forward(ServerWebExchange exchange, GatewayFilterChain chain,
-            String couponId, long ratePerSec) {
+            String couponId, long ratePerSec, SnapshotMeta meta) {
         HttpHeaders headers = exchange.getRequest().getHeaders();
         String memberId = headers.getFirst(MEMBER_ID);
         if (memberId == null) {
@@ -477,7 +477,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         // **초당 건수로는 못 막는 것이 있다.** 초당 100건이어도 각각 10초 걸리면
         // 동시 1,000건이다. 느려진 뒷단이 커넥션을 다 붙잡으면 한산한 쿠폰의
         // 통과 경로까지 같이 죽는다.
-        if (!bulkhead.tryEnter(couponId, inFlightCap(ratePerSec))) {
+        if (!bulkhead.tryEnter(couponId, inFlightCap(ratePerSec, meta))) {
             count("bulkhead-full");
             return shed(exchange);
         }
@@ -540,13 +540,16 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      * <p><b>예산이 0 인 구간에는 폴백을 쓴다.</b> 재료가 아직 없는 기동 직후가
      * 그렇고, 0 을 상한으로 쓰면 전면 차단이다 — 등록 경로와 같은 폴백이다.
      */
-    private long inFlightCap(long ratePerSec) {
+    private long inFlightCap(long ratePerSec, SnapshotMeta meta) {
         long perSecond = ratePerSec > 0 ? ratePerSec : AdmissionDecider.MIN_CREDIT;
+        // **재료에 실려 온 값을 먼저 본다** (P-1). 배포 없이 되돌릴 수 있어야
+        // 롤백이 성립하고, 그 전파 경로가 스냅샷이다.
+        long seconds = meta.inFlightSecondsOr(MAX_IN_FLIGHT_SEC);
         // **곱이 넘치면 음수가 되고, 음수 상한은 전면 차단이다.** 예산은 밖에서
         // 오는 globalCredit 에서 나오므로 여기서 막는다.
-        return perSecond > Long.MAX_VALUE / MAX_IN_FLIGHT_SEC
+        return perSecond > Long.MAX_VALUE / seconds
                 ? Long.MAX_VALUE
-                : perSecond * MAX_IN_FLIGHT_SEC;
+                : perSecond * seconds;
     }
 
     private String pathVariable(ServerWebExchange exchange) {

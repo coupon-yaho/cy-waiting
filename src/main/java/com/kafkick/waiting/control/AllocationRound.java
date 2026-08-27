@@ -7,11 +7,13 @@ import com.kafkick.waiting.domain.allocation.FairShareAllocator;
 import com.kafkick.waiting.domain.allocation.Grant;
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
+import com.kafkick.waiting.domain.coupon.Tunables;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -58,6 +60,14 @@ public final class AllocationRound {
     private final AtomicReference<CreditSmoother> smoother = new AtomicReference<>();
     private final Supplier<Mono<CreditSmoother>> restore;
     private final FairShareAllocator allocator = FairShareAllocator.create();
+    /**
+     * 지금 걸린 운영 값. <b>판 밖에서 읽은 것을 그대로 씁니다.</b>
+     *
+     * <p>판 안에서 읽으면 발행이 그 왕복에 매달립니다 — 레디스가 500ms 느려지는
+     * 것만으로 틱 예산을 넘겨 스냅샷이 아예 안 나갑니다.
+     */
+    private final Supplier<Optional<Tunables>> tunables;
+
     private final FailureWindow failures;
 
     /** 초과 구간. 틱마다 찍으면 정작 조사가 필요한 순간에 묻힌다 (LG-2). */
@@ -74,7 +84,8 @@ public final class AllocationRound {
             IntSupplier gatewayCount, Function<Grant, Mono<Long>> apply,
             Function<Map<String, String>, Mono<Void>> publish, Supplier<Instant> clock,
             Supplier<Mono<CreditSmoother>> restore, SnapshotCodec codec,
-            LongSupplier creditFloor) {
+            LongSupplier creditFloor, Supplier<Optional<Tunables>> tunables) {
+        this.tunables = Objects.requireNonNull(tunables, "tunables 는 필수다");
         this.stillLeader = Objects.requireNonNull(stillLeader, "stillLeader 는 필수다");
         this.demands = Objects.requireNonNull(demands, "demands 는 필수다");
         this.globalCredit = Objects.requireNonNull(globalCredit, "globalCredit 은 필수다");
@@ -98,9 +109,20 @@ public final class AllocationRound {
             LongSupplier globalCredit, IntSupplier gatewayCount, Function<Grant, Mono<Long>> apply,
             Function<Map<String, String>, Mono<Void>> publish, Supplier<Instant> clock,
             Supplier<Mono<CreditSmoother>> restore, SnapshotCodec codec,
-            LongSupplier creditFloor) {
+            LongSupplier creditFloor, Supplier<Optional<Tunables>> tunables) {
         return new AllocationRound(stillLeader, demands, globalCredit, gatewayCount, apply, publish,
-                clock, restore, codec, creditFloor);
+                clock, restore, codec, creditFloor, tunables);
+    }
+
+    /** 튜너블을 안 읽던 자리. 늘 기본값으로 돈다. */
+    public static AllocationRound of(BooleanSupplier stillLeader,
+            Supplier<Mono<TimedDemands>> demands,
+            LongSupplier globalCredit, IntSupplier gatewayCount, Function<Grant, Mono<Long>> apply,
+            Function<Map<String, String>, Mono<Void>> publish, Supplier<Instant> clock,
+            Supplier<Mono<CreditSmoother>> restore, SnapshotCodec codec,
+            LongSupplier creditFloor) {
+        return of(stillLeader, demands, globalCredit, gatewayCount, apply, publish, clock,
+                restore, codec, creditFloor, Optional::empty);
     }
 
     public Mono<Void> run() {
@@ -192,7 +214,9 @@ public final class AllocationRound {
                         // 히스테리시스를 안 돌려서 실을 상태가 없다 (CY-324).
                         // 돌리기 시작하면 여기가 매 틱 이월을 지우는 자리가
                         // 되므로, 기본값에 숨기지 않고 눈에 보이게 둔다.
-                        : publish.apply(codec.encode(snapshot(collected, granted, credit, readAt),
+                        : publish.apply(codec.encode(
+                                snapshot(collected, granted, credit, readAt,
+                                        tunables.get().orElse(null)),
                                 current.snapshot(),
                                 QueueingHysteresis.Snapshot.empty()))));
     }
@@ -302,11 +326,12 @@ public final class AllocationRound {
     }
 
     private GatewaySnapshot snapshot(List<CouponDemand> collected, Map<String, Long> granted,
-            long credit, Instant readAt) {
+            long credit, Instant readAt, Tunables applied) {
         Map<String, CouponState> coupons = new LinkedHashMap<>();
         collected.forEach(demand ->
                 coupons.put(demand.couponId(), stateOf(demand, granted)));
         return new GatewaySnapshot(coupons,
-                new SnapshotMeta(credit, gatewayCount.getAsInt()), readAt);
+                new SnapshotMeta(credit, gatewayCount.getAsInt(), applied), readAt);
     }
+
 }

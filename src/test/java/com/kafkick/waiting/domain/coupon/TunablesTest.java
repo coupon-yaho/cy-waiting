@@ -3,6 +3,7 @@ package com.kafkick.waiting.domain.coupon;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -110,19 +111,25 @@ class TunablesTest {
     }
 
     /**
-     * <b>1 은 안 받고 0 은 받습니다.</b> 1 이면 한산 통과가 노드 예산을 다 써
-     * 토큰을 든 사람이 밀립니다. 0 은 그 경로를 끄겠다는 뜻이라 유효한 값입니다 —
-     * 기본값으로 되돌리면 운영자가 그 경로를 못 끕니다.
+     * <b>보호를 끄는 값은 안 받습니다.</b> 0 이면 부하가 없는 쿠폰의 요청이 전부
+     * 큐 등록으로 가고, 그게 요청 경로에서 레디스를 치는 유일한 예외 경로입니다 —
+     * 값 하나로 피크 전량이 그리로 들어가고, 되돌리려면 그 레디스에 써야 합니다.
+     *
+     * <p>1 에 가까워도 안 됩니다. 한산과 토큰이 같은 노드 예산을 쓰므로, 한산이
+     * 거의 다 긁으면 차례가 온 사람이 밀립니다 (불변식 3).
      */
     @Test
-    @DisplayName("비율_1_은_안_받고_0_은_받는다")
-    void 비율_1_은_안_받고_0_은_받는다() {
-        assertThat(Tunables.parse("{\"idleCreditRatio\":1}").idleCreditRatio())
-                .isEqualTo(Tunables.defaults().idleCreditRatio());
-        assertThat(Tunables.parse("{\"idleCreditRatio\":0}").idleCreditRatio()).isZero();
-        // 음수는 값이 아니다. 그대로 실으면 상한 계산이 음수가 되고 전면 차단이다.
-        assertThat(Tunables.parse("{\"idleCreditRatio\":-0.5}").idleCreditRatio())
-                .isEqualTo(Tunables.defaults().idleCreditRatio());
+    @DisplayName("보호를_끄는_비율은_안_받는다")
+    void 보호를_끄는_비율은_안_받는다() {
+        double 기본 = Tunables.defaults().idleCreditRatio();
+
+        for (String 값 : List.of("0", "0.05", "-0.5", "0.95", "1", "2")) {
+            assertThat(Tunables.parse("{\"idleCreditRatio\":" + 값 + "}").idleCreditRatio())
+                    .as("비율 %s", 값).isEqualTo(기본);
+        }
+        // 문턱 안은 그대로 받는다. 안 그러면 운영자가 아무것도 못 바꾼다.
+        assertThat(Tunables.parse("{\"idleCreditRatio\":0.4}").idleCreditRatio())
+                .isEqualTo(0.4);
     }
 
     /**
@@ -138,7 +145,11 @@ class TunablesTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new Tunables(-0.1, 3))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new Tunables(0.7, 0))
+        assertThatThrownBy(() -> new Tunables(0.0, 3))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new Tunables(0.7, 1))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new Tunables(0.7, 61))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -157,15 +168,20 @@ class TunablesTest {
                 .isEqualTo(기본);
     }
 
-    /** 걸려 있을 수 있는 시간이 1 초 미만이면 격벽이 아무도 안 들여보낸다. */
+    /**
+     * <b>서킷보다 짧으면 안 됩니다.</b> 느려진 뒷단의 요청이 서킷에 집계되기 전에
+     * 격벽이 먼저 끊으면 서킷이 영영 안 열리고, 그러면 회복 경로 자체가 사라집니다.
+     */
     @Test
-    @DisplayName("초가_1_미만이면_기본값이_된다")
-    void 초가_1_미만이면_기본값이_된다() {
-        assertThat(Tunables.parse("{\"inFlightSeconds\":0}").inFlightSeconds())
-                .isEqualTo(Tunables.defaults().inFlightSeconds());
-        // **1 은 받아야 한다.** 못 받으면 가장 조인 격벽이 조용히 기본값으로
-        // 되돌아가고, 장애 중에 조인 운영자는 그 사실을 모른다.
-        assertThat(Tunables.parse("{\"inFlightSeconds\":1}").inFlightSeconds()).isEqualTo(1);
+    @DisplayName("서킷보다_짧거나_격벽을_끄는_초는_안_받는다")
+    void 서킷보다_짧거나_격벽을_끄는_초는_안_받는다() {
+        long 기본 = Tunables.defaults().inFlightSeconds();
+
+        for (String 값 : List.of("0", "1", "61", "100000")) {
+            assertThat(Tunables.parse("{\"inFlightSeconds\":" + 값 + "}").inFlightSeconds())
+                    .as("초 %s", 값).isEqualTo(기본);
+        }
+        assertThat(Tunables.parse("{\"inFlightSeconds\":2}").inFlightSeconds()).isEqualTo(2);
     }
 
     /**

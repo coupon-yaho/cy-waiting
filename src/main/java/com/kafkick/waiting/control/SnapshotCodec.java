@@ -7,6 +7,7 @@ import com.kafkick.waiting.domain.coupon.RuntimeState;
 import com.kafkick.waiting.domain.allocation.CreditSmoother;
 import com.kafkick.waiting.domain.allocation.QueueingHysteresis;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
+import com.kafkick.waiting.domain.coupon.Tunables;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Locale;
@@ -31,6 +32,14 @@ public final class SnapshotCodec {
     private static final String CREDIT = "#credit";
     private static final String NODES = "#nodes";
     private static final String PUBLISHED = "#published";
+
+    /**
+     * 운영자가 배포 없이 고치는 값 (P-1).
+     *
+     * <p>리더가 매 틱 읽어 여기 실어 보냅니다. 스냅샷은 이미 매 틱 전 노드에
+     * 닿으므로 설정 서버를 따로 붙이지 않습니다.
+     */
+    private static final String TUNABLES = "#tunables";
 
     /**
      * 평활화 상태. <b>리더만 읽고 쓴다.</b>
@@ -80,6 +89,11 @@ public final class SnapshotCodec {
         hash.put(CREDIT, Long.toString(snapshot.meta().globalCredit()));
         hash.put(NODES, Integer.toString(snapshot.meta().gatewayCount()));
         hash.put(PUBLISHED, Long.toString(snapshot.publishedAt().getEpochSecond()));
+        // **안 실린 것은 안 싣는다.** 기본값으로 채워 보내면 읽는 쪽이 그것을
+        // "운영자가 정한 값" 으로 읽고, 각 노드의 기동 설정을 덮어쓴다.
+        if (snapshot.meta().tunables() != null) {
+            hash.put(TUNABLES, snapshot.meta().tunables().toJson());
+        }
         hash.put(EWMA, Double.toString(smoothing.value()));
         hash.put(EWMA_SEEDED, smoothing.seeded() ? "1" : "0");
         hash.put(QUEUEING, hysteresis.queueing() ? "1" : "0");
@@ -186,7 +200,29 @@ public final class SnapshotCodec {
         // long→int 축소는 조용히 0 을 만든다. 그러면 전 노드가 "내가 유일하다"
         // 고 믿어 크레딧을 노드 수만큼 초과 배분한다.
         int nodeCount = (nodes >= 1 && nodes <= Integer.MAX_VALUE) ? (int) nodes : 1;
-        return new SnapshotMeta(credit, nodeCount);
+        // **안 실려 왔으면 null 이다.** 기본값으로 채우면 그 값이 기동 설정을
+        // 덮어써서, 운영자가 아무것도 안 바꿨는데 값이 바뀐다. 실려 왔는데 못
+        // 읽는 것은 다른 얘기라, 그때는 파서가 값별로 기본값으로 떨어뜨린다.
+        return new SnapshotMeta(credit, nodeCount, tunablesOf(hash));
+    }
+
+    /**
+     * 실려 온 운영 값.
+     *
+     * <p><b>여기서 던지면 안 된다.</b> 값 하나가 전 노드의 디코드를 동시에
+     * 멈추고, 그러면 재시작한 노드가 빈 스냅샷에 갇힌다 — 쿠폰 항목에 지킨
+     * 격리를 여기도 지킨다. 안 실려 온 것은 {@code null} 이다.
+     */
+    private Tunables tunablesOf(Map<String, String> hash) {
+        String raw = hash.get(TUNABLES);
+        if (raw == null) {
+            return null;
+        }
+        try {
+            return Tunables.parse(raw);
+        } catch (RuntimeException e) {
+            return Tunables.defaults();
+        }
     }
 
     /** 발행 시각이 없거나 말이 안 되면 EPOCH — 어떤 임계로도 낡음이다. */

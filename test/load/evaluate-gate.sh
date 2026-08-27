@@ -306,6 +306,61 @@ case "$scenario" in
     # 이탈자가 그냥 줄에 남는다 — 낭비율을 여기서 판정하면 없는 기능을 재는 것이다.
     report "크레딧 낭비 판정" "Phase 7 에서 (G7.5)"
     ;;
+  overhead)
+    checks=$(read_metric '.metrics.checks.value' '.metrics.checks.values.rate')
+    reqs=$(read_metric '.metrics.http_reqs.count' '.metrics.http_reqs.values.count')
+    gw99=$(read_metric '.metrics.gateway_total_ms["p(99)"]' \
+                       '.metrics.gateway_total_ms.values["p(99)"]')
+    gw50=$(read_metric '.metrics.gateway_total_ms.med' \
+                       '.metrics.gateway_total_ms.values.med')
+    base99=$(read_metric '.metrics.harness_baseline_ms["p(99)"]' \
+                         '.metrics.harness_baseline_ms.values["p(99)"]')
+    base50=$(read_metric '.metrics.harness_baseline_ms.med' \
+                         '.metrics.harness_baseline_ms.values.med')
+    sold99=$(read_metric '.metrics.soldout_ms["p(99)"]' \
+                         '.metrics.soldout_ms.values["p(99)"]')
+    measured=$(read_metric '.metrics.overhead_measured.count' \
+                           '.metrics.overhead_measured.values.count')
+    unmeasured=$(read_metric '.metrics.overhead_unmeasured.count' \
+                             '.metrics.overhead_unmeasured.values.count')
+    clamped=$(read_metric '.metrics.overhead_clamped.count' \
+                          '.metrics.overhead_clamped.values.count')
+
+    report "요청 수" "${reqs:-없음}"
+    report "센 표본 수" "${measured:-0}"
+    report "게이트웨이 왕복 p50/p99(ms)" "${gw50:-없음} / ${gw99:-없음}"
+    report "대조군 왕복 p50/p99(ms)" "${base50:-없음} / ${base99:-없음}"
+    report "매진 단락 p99(ms)" "${sold99:-없음}"
+    report "검사 통과율" "${checks:-없음}"
+
+    # 100rps 두 갈래와 20rps 한 갈래를 90초. 하한이 1 이면 한 건 보낸 판도 통과한다.
+    delivered "${reqs:-}" 300 15000 "요청 수"
+    at_least "${checks:-}" 0.99 "검사 통과율"
+    # **빈 Trend 는 요약에서 사라지지 않고 전부 0 으로 남는다.** 0 은 상한을
+    # 넘지 않으므로, 표본 수를 따로 못 박지 않으면 아무것도 안 잰 판이 통과한다.
+    at_least "${measured:-0}" 12000 "센 표본 수"
+    # **표본이 빠지면 p99 가 낙관적이다.** 뒷단이 자기 시간을 안 실어 준 응답을
+    # 안 세면, 그만큼 느린 표본이 빠진 채로 판정한다.
+    at_most "${unmeasured:-0}" 0 "못 잰 응답"
+    # 뺀 값이 음수면 시계나 단위가 어긋난 것이다. 그 판의 숫자는 못 믿는다.
+    at_most "${clamped:-0}" 0 "음수로 나온 응답"
+
+    # **G6.11 이다.** 두 갈래의 차이가 게이트웨이가 더 쓴 시간이다. k6 자신의
+    # 비용도, 루프백 왕복도, 스텁이 헤더를 내보낸 뒤 응답을 쓰는 시간도 양쪽에
+    # 똑같이 들어 있어 빼면 사라진다. 왕복값을 그대로 판정하면 그 셋이 전부
+    # 게이트웨이 몫으로 청구된다 — 실측으로 p99 의 절반 가까이였다.
+    if numeric "${gw99:-}" && numeric "${base99:-}"; then
+      own99=$(awk -v g="$gw99" -v b="$base99" 'BEGIN { printf "%.3f", g - b }')
+      report "게이트웨이 오버헤드 p99(ms)" "$own99"
+      at_most "$own99" 5 "게이트웨이 오버헤드 p99(ms)"
+    else
+      violate "두 갈래 중 한쪽이 안 나왔다 — 차이로 판정할 수 없다: ${gw99:-없음} / ${base99:-없음}"
+    fi
+
+    # 매진 단락은 뒷단도 Redis 도 안 거친다 (R3). 뺄 것이 없으니 왕복 그대로가
+    # 게이트웨이 몫이고, G6.11 이 가장 정직하게 걸리는 자리다.
+    at_most "${sold99:-}" 5 "매진 단락 p99(ms)"
+    ;;
   *)
     # **모르는 시나리오를 통과로 안 센다.** 기본이 통과면 시나리오가 늘 때마다
     # 아무 기준 없는 잡이 하나씩 생기고, 그 초록은 아무 뜻이 없다.

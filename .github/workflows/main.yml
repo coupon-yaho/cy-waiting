@@ -159,6 +159,13 @@ jobs:
     uses: ./.github/workflows/_load-test.yml
     with: { scenario: read-burst, timeout-minutes: 25 }
 
+  # **오버헤드는 게이트웨이만의 몫이다** (G6.11). 뒷단이 자기가 쓴 시간을 실어
+  # 주므로 요청마다 그것을 뺀다 — 상수를 빼면 스케줄링 흔들림이 우리 몫이 된다.
+  load-overhead:
+    needs: build
+    uses: ./.github/workflows/_load-test.yml
+    with: { scenario: overhead, timeout-minutes: 25 }
+
   # 취소를 통과로 세지 않기 위해 별도 잡으로 뺐다. 규칙은 verdict 액션에 있다.
   # 작업 로그 색인은 생성물이라 저장소에 없다 (CY-303). PR 에서는 잡 요약으로
   # 보고, main 에 들어갈 때 여기서 위키를 갱신한다 — 사람이 링크로 공유하는 자리다.
@@ -208,7 +215,7 @@ jobs:
 
   verdict:
     name: 판정
-    needs: [context, conventions, build, test-unit, test-integration, test-context, test-chaos, test-coverage, test-mutation, security, load-idle, load-read-burst]
+    needs: [context, conventions, build, test-unit, test-integration, test-context, test-chaos, test-coverage, test-mutation, security, load-idle, load-read-burst, load-overhead]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -227,7 +234,7 @@ jobs:
   report:
     name: 리포트
     needs: [context, conventions, build, test-unit, test-integration, test-context,
-            test-chaos, test-coverage, test-mutation, security, load-idle, load-read-burst, verdict]
+            test-chaos, test-coverage, test-mutation, security, load-idle, load-read-burst, load-overhead, verdict]
     if: ${{ !cancelled() }}
     uses: ./.github/workflows/_report.yml
     with:

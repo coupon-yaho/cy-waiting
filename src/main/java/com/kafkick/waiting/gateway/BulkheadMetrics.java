@@ -15,18 +15,8 @@ public final class BulkheadMetrics {
 
     private final Bulkhead bulkhead;
 
-    /**
-     * 담을 수 있는 쿠폰 수.
-     *
-     * <p><b>분자만 내면 판단이 안 됩니다.</b> 800 이라는 값만 보고는 여유인지
-     * 임박인지 모릅니다 — 분모가 코드 상수로만 있으면 알람이 그 숫자를 베껴
-     * 적고, 상수를 바꾸는 날 조용히 갈라집니다.
-     */
-    private final int maxCoupons;
-
-    private BulkheadMetrics(Bulkhead bulkhead, int maxCoupons) {
+    private BulkheadMetrics(Bulkhead bulkhead) {
         this.bulkhead = Objects.requireNonNull(bulkhead, "bulkhead 는 필수다");
-        this.maxCoupons = maxCoupons;
     }
 
     /**
@@ -35,9 +25,9 @@ public final class BulkheadMetrics {
      * <p><b>강한 참조로 등록합니다.</b> 약한 참조면 첫 GC 에 수거되어 영원히
      * {@code NaN} 을 내는데, 스크레이프에는 줄이 그대로 나갑니다.
      */
-    public static void bind(Bulkhead bulkhead, int maxCoupons, MeterRegistry meters) {
+    public static void bind(Bulkhead bulkhead, MeterRegistry meters) {
         Objects.requireNonNull(meters, "meters 는 필수다");
-        BulkheadMetrics metrics = new BulkheadMetrics(bulkhead, maxCoupons);
+        BulkheadMetrics metrics = new BulkheadMetrics(bulkhead);
 
         metrics.gauge(meters, "waiting.bulkhead.inflight", BulkheadMetrics::inFlight,
                 "지금 뒷단에 걸려 있는 요청 수");
@@ -69,7 +59,12 @@ public final class BulkheadMetrics {
         return bulkhead.size();
     }
 
+    /**
+     * <b>분자만 내면 판단이 안 됩니다.</b> 800 이라는 값만 보고는 여유인지 임박인지
+     * 모릅니다. 격벽에게 직접 묻습니다 — 여기서 따로 들면 상수를 바꾸는 날 조용히
+     * 갈라지고, 알람은 갈라진 쪽을 봅니다.
+     */
     private double maxCoupons() {
-        return maxCoupons;
+        return bulkhead.maxKeys();
     }
 }

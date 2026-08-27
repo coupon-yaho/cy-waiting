@@ -1,6 +1,7 @@
 package com.kafkick.waiting.gateway;
 
 import com.kafkick.waiting.domain.admission.AdmissionDecider;
+import com.kafkick.waiting.domain.admission.CouponKeys;
 import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
 import com.kafkick.waiting.domain.queue.EntryToken;
 import com.kafkick.waiting.domain.queue.QueueToken;
@@ -20,9 +21,6 @@ import org.springframework.context.annotation.Configuration;
 @EnableConfigurationProperties({QueueTokenProperties.class, ProxyProperties.class,
         CoalescingProperties.class})
 public class IdentityConfig {
-
-    /** 쿠폰 2,000개를 상정한 값. 넘으면 판정이 그 사실을 따로 알린다. */
-    private static final int MAX_LIMITER_KEYS = 10_000;
 
     /**
      * 한산한 쿠폰이 쓸 수 있는 노드 예산 비율 (B-13).
@@ -79,10 +77,13 @@ public class IdentityConfig {
     /**
      * <b>리미터는 하나다.</b> 판정과 장애 개방이 각자 들면 한 초에 두 예산이
      * 겹쳐 나가고, 경로를 나누지 말라는 규칙이 막으려던 버스트가 그대로 난다.
+     *
+     * <p>이 인스턴스는 <b>쿠폰으로 센다.</b> 그래서 격벽·래치와 같은 상한을 쓴다
+     * (6.3.5). 클라이언트 식별자로 세는 남용 리미터는 키 공간이 달라 별개다.
      */
     @Bean
     public SecondWindowLimiter admissionLimiter() {
-        return SecondWindowLimiter.withMaxKeys(MAX_LIMITER_KEYS);
+        return SecondWindowLimiter.withMaxKeys(CouponKeys.MAX);
     }
 
     /**

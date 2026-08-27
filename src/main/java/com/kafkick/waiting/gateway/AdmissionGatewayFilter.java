@@ -8,6 +8,7 @@ import com.kafkick.waiting.domain.admission.AdmissionDecider;
 import com.kafkick.waiting.domain.admission.AdmissionDecision;
 import com.kafkick.waiting.domain.admission.AdmissionRequest;
 import com.kafkick.waiting.domain.admission.Bulkhead;
+import com.kafkick.waiting.domain.admission.CouponKeys;
 import com.kafkick.waiting.domain.admission.EnqueueLatch;
 import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
 import com.kafkick.waiting.domain.coupon.CouponState;
@@ -78,15 +79,6 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     private static final double FAIL_OPEN_SHARE = 0.5;
 
     /**
-     * 쿠폰별 표를 들고 있는 자리들이 담을 수 있는 쿠폰 수. 2,000개를 상정한 값이다.
-     *
-     * <p><b>쿠폰 식별자는 밖에서 오는 값이라 가짓수에 상한이 없다.</b> 넘었을 때
-     * 무엇을 하는지는 자리마다 다르다 — 래치는 통째로 비우고(판정이 한 틱
-     * 헐거워질 뿐이다), 격벽은 새 쿠폰을 안 받는다.
-     */
-    private static final int MAX_COUPON_KEYS = 10_000;
-
-    /**
      * 한 건이 뒷단에 걸려 있을 수 있는 시간(초). 상한은 초당 예산 × 이 값이다.
      *
      * <p>유입은 같은 예산이 이미 조이므로 걸려 있는 수는 <b>예산 × 지연</b>이고,
@@ -123,7 +115,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     private final IdempotencyKey idempotency;
 
     /** 동시에 걸려 있는 건수를 센다. 리미터가 세는 초당 건수와 단위가 다르다. */
-    private final Bulkhead bulkhead = Bulkhead.withMaxKeys(MAX_COUPON_KEYS);
+    private final Bulkhead bulkhead = Bulkhead.withMaxKeys(CouponKeys.MAX);
     private final ApiError error;
     private final QueueResponse waiting = QueueResponse.create();
 
@@ -166,11 +158,11 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         // **래치 수명을 여기서 정하지 않는다.** 스냅샷을 아직 믿는 한계보다 짧으면
         // 그 차이가 그대로 추월 창이 된다. 두 값이 다른 클래스에 있으면 조용히
         // 갈라지므로, 한계를 정한 쪽에서 끌어온다.
-        this.latch = EnqueueLatch.covering(MAX_COUPON_KEYS, holder.dataStaleAfter());
+        this.latch = EnqueueLatch.covering(CouponKeys.MAX, holder.dataStaleAfter());
         this.idempotency = Objects.requireNonNull(idempotency, "idempotency 는 필수다");
         // **만들어 두고 안 걸면 지표가 안 나온다.** 격벽이 차오르는 중인지는
         // 막힌 뒤에야 오르는 카운터로는 못 본다.
-        BulkheadMetrics.bind(bulkhead, MAX_COUPON_KEYS, meters);
+        BulkheadMetrics.bind(bulkhead, meters);
         this.error = ApiError.of(clock);
     }
 
@@ -474,6 +466,14 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             // "null" 로 뭉개면 전원이 같은 키를 받아 서로의 발급을 지운다.
             return error.write(exchange, ApiError.Code.INVALID_REQUEST);
         }
+        // **자리를 잡기 전에 만든다.** 잡은 뒤에 두면 여기서 던지는 순간 반납이
+        // 아직 안 걸려 그 자리가 영영 안 돌아온다. 막는 방법이 둘인데 — 잡고
+        // 나서 감싸거나, 잡기 전으로 옮기거나 — 뒤엣것은 그 구간 자체를 없앤다.
+        //
+        // 끊길 요청 몫으로 서명 한 번이 더 나가지만, 새는 자리를 손으로 지키는
+        // 것보다 싸다. 손으로 지키는 것은 다음에 한 줄이 끼어드는 순간 깨진다.
+        String key = idempotency.of(couponId, memberId,
+                headers.getFirst(IdempotencyKey.HEADER));
         // **초당 건수로는 못 막는 것이 있다.** 초당 100건이어도 각각 10초 걸리면
         // 동시 1,000건이다. 느려진 뒷단이 커넥션을 다 붙잡으면 한산한 쿠폰의
         // 통과 경로까지 같이 죽는다.
@@ -481,13 +481,12 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             count("bulkhead-full");
             return shed(exchange);
         }
-        String key = idempotency.of(couponId, memberId,
-                headers.getFirst(IdempotencyKey.HEADER));
         // 뒷단으로 넘어가는 건이 생겼으면 끊던 구간이 끝난 것이다. 쌍으로 안
         // 남기면 로그에 진입만 있고 언제 닫혔는지가 없다 (LG-2).
         shedWindow.exited().ifPresent(r -> log.warn(
                 "보호 차단 해제 — {}초 동안 {}건 끊었다",
                 NANOSECONDS.toSeconds(r.elapsedNanos()), r.swallowed()));
+        // **여기부터 반납이 걸릴 때까지 던질 수 있는 것을 두지 않는다.**
         return chain.filter(exchange.mutate()
                         .request(r -> r.headers(h -> h.set(IdempotencyKey.HEADER, key)))
                         .build())

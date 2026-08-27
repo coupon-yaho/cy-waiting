@@ -23,7 +23,7 @@ class BulkheadMetricsTest {
     private final Bulkhead bulkhead = Bulkhead.withMaxKeys(10);
 
     private void 지표를_건다() {
-        BulkheadMetrics.bind(bulkhead, 10, meters);
+        BulkheadMetrics.bind(bulkhead, meters);
     }
 
     /** 지금 걸려 있는 수. 이 값이 상한에 붙으면 곧 막히기 시작합니다. */
@@ -94,7 +94,7 @@ class BulkheadMetricsTest {
     void 게이지에_라벨을_안_붙인다() {
         Bulkhead bulkhead = Bulkhead.withMaxKeys(10);
         bulkhead.tryEnter("c1", 5);
-        BulkheadMetrics.bind(bulkhead, 10, meters);
+        BulkheadMetrics.bind(bulkhead, meters);
 
         assertThat(meters.getMeters())
                 .filteredOn(m -> m.getId().getName().startsWith("waiting.bulkhead"))
@@ -107,12 +107,12 @@ class BulkheadMetricsTest {
     /**
      * <b>분자만 내면 판단이 안 됩니다.</b> 800 이라는 값만 보고는 여유인지 임박인지
      * 모릅니다. 분모가 코드 상수로만 있으면 알람이 그 숫자를 베껴 적고, 상수를
-     * 바꾸는 날 조용히 갈라집니다.
+     * 바꾸는 날 조용히 갈라집니다. 그래서 격벽에게 직접 묻습니다.
      */
     @Test
     @DisplayName("담을_수_있는_쿠폰_수도_낸다")
     void 담을_수_있는_쿠폰_수도_낸다() {
-        BulkheadMetrics.bind(Bulkhead.withMaxKeys(7), 7, meters);
+        BulkheadMetrics.bind(Bulkhead.withMaxKeys(7), meters);
 
         assertThat(meters.get("waiting.bulkhead.max.coupons").gauge().value())
                 .isEqualTo(7.0);
@@ -127,17 +127,21 @@ class BulkheadMetricsTest {
     @DisplayName("두_번_걸면_두_번째는_버려진다")
     void 두_번_걸면_두_번째는_버려진다() {
         Bulkhead 첫째 = Bulkhead.withMaxKeys(10);
-        Bulkhead 둘째 = Bulkhead.withMaxKeys(10);
+        // **상한을 다르게 준다.** 같은 값이면 분모가 어느 격벽에서 왔는지 못 가른다.
+        Bulkhead 둘째 = Bulkhead.withMaxKeys(99);
         둘째.tryEnter("c1", 5);
         둘째.tryEnter("c2", 5);
 
-        BulkheadMetrics.bind(첫째, 10, meters);
-        BulkheadMetrics.bind(둘째, 10, meters);
+        BulkheadMetrics.bind(첫째, meters);
+        BulkheadMetrics.bind(둘째, meters);
 
         assertThat(meters.get("waiting.bulkhead.inflight").gauges()).hasSize(1);
         assertThat(meters.get("waiting.bulkhead.inflight").gauge().value())
                 .as("첫 격벽을 계속 읽는다")
                 .isZero();
+        assertThat(meters.get("waiting.bulkhead.max.coupons").gauge().value())
+                .as("분모도 첫 격벽에서 온다")
+                .isEqualTo(10.0);
     }
 
     /**

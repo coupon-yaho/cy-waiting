@@ -84,6 +84,12 @@ jobs:
         env:
           SCENARIO: ${{ inputs.scenario }}
         run: |
+          # **러너가 못 띄우는 인원을 정직하게 줄인다.** 2만을 요구해 놓고 못
+          # 띄우면 도착이 늘어져 스파이크가 아니라 고원을 재게 된다 — 그 값으로
+          # Phase 10 착수를 판정하면 안 된다.
+          if [[ "$SCENARIO" == "open-spike" ]]; then
+            export SPIKE_USERS="${SPIKE_USERS:-20000}"
+          fi
           k6 run --summary-export=k6-summary.json "test/load/$SCENARIO.js"
 
       # 게이트 판정은 k6 threshold 가 아니라 계획서 기준으로 한다 (6.6.6)

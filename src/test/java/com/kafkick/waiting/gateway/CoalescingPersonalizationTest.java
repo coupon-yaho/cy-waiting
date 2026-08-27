@@ -44,7 +44,15 @@ class CoalescingPersonalizationTest {
                 .header("X-Member-Grade", "GOLD"));
     }
 
+    /** 뒷단이 <b>공유해도 된다고 말한</b> 응답. 계약을 지킨 쪽이다. */
     private static Mono<Void> 답한다(org.springframework.web.server.ServerWebExchange e,
+            String body) {
+        e.getResponse().getHeaders().setCacheControl("public");
+        return 그냥_답한다(e, body);
+    }
+
+    /** 아무 말도 안 한 응답. 개인화됐는지 게이트웨이는 알 방법이 없다. */
+    private static Mono<Void> 그냥_답한다(org.springframework.web.server.ServerWebExchange e,
             String body) {
         e.getResponse().setStatusCode(org.springframework.http.HttpStatus.OK);
         return e.getResponse().writeWith(Mono.just(
@@ -52,15 +60,14 @@ class CoalescingPersonalizationTest {
     }
 
     /**
-     * <b>화이트리스트는 "이 경로는 누구에게나 같다" 는 선언입니다.</b> 거짓이면
-     * 남의 응답이 나갑니다 — 이 시험이 그 사실을 숨기지 않고 적어 둡니다.
+     * <b>계약을 어기면 남의 응답이 나갑니다.</b> 공유해도 된다고 말해 놓고 회원마다
+     * 다르게 답하는 뒷단은 게이트웨이가 못 막습니다 — 이 시험이 그 사실을 적어 둡니다.
      *
-     * <p>발급 계층이 조회 응답에 회원별 필드를 붙이는 날, 이 경로를 목록에서
-     * 빼야 합니다 (6.10.5).
+     * <p>막을 수 있는 것은 <b>말 안 한 응답</b>까지입니다. 그 위는 계약입니다 (6.10.5).
      */
     @Test
-    @DisplayName("화이트리스트가_거짓이면_남의_응답이_나간다")
-    void 화이트리스트가_거짓이면_남의_응답이_나간다() {
+    @DisplayName("공유해도_된다고_해_놓고_개인화하면_남의_응답이_나간다")
+    void 공유해도_된다고_해_놓고_개인화하면_남의_응답이_나간다() {
         Set<String> 받은_것 = ConcurrentHashMap.newKeySet();
 
         List<MockServerWebExchange> 사람들 = IntStream.range(0, 5)
@@ -76,6 +83,29 @@ class CoalescingPersonalizationTest {
         assertThat(받은_것)
                 .as("화이트리스트에 올린 경로가 개인화되면 이렇게 된다")
                 .hasSize(1);
+    }
+
+    /**
+     * <b>말 안 하면 안 모읍니다.</b> 게이트웨이는 응답이 개인화됐는지 알 방법이
+     * 없습니다. 아는 것은 뒷단뿐이라, <b>뒷단이 말한 것만</b> 나눠 줍니다.
+     */
+    @Test
+    @DisplayName("공유해도_된다고_안_하면_안_모은다")
+    void 공유해도_된다고_안_하면_안_모은다() {
+        AtomicInteger 뒷단 = new AtomicInteger();
+        Set<String> 받은_것 = ConcurrentHashMap.newKeySet();
+
+        List<MockServerWebExchange> 사람들 = IntStream.range(0, 5)
+                .mapToObj(i -> 조회("사람" + i))
+                .toList();
+        사람들.forEach(e -> filter.filter(e, ex -> {
+            뒷단.incrementAndGet();
+            return 그냥_답한다(ex, "이력:" + ex.getRequest().getHeaders().getFirst("X-Member-Id"));
+        }).block());
+        사람들.forEach(e -> 받은_것.add(e.getResponse().getBodyAsString().block()));
+
+        assertThat(뒷단).as("말 안 한 응답은 안 나눠 준다").hasValue(5);
+        assertThat(받은_것).as("각자 자기 것을 받는다").hasSize(5);
     }
 
     /**

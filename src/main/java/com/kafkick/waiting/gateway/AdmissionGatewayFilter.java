@@ -544,9 +544,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         long perSecond = ratePerSec > 0 ? ratePerSec : AdmissionDecider.MIN_CREDIT;
         // **재료에 실려 온 값을 먼저 본다** (P-1). 배포 없이 되돌릴 수 있어야
         // 롤백이 성립하고, 그 전파 경로가 스냅샷이다.
-        long seconds = meta.tunables() == null
-                ? MAX_IN_FLIGHT_SEC
-                : meta.tunables().inFlightSeconds();
+        long seconds = meta.inFlightSecondsOr(MAX_IN_FLIGHT_SEC);
         // **곱이 넘치면 음수가 되고, 음수 상한은 전면 차단이다.** 예산은 밖에서
         // 오는 globalCredit 에서 나오므로 여기서 막는다.
         return perSecond > Long.MAX_VALUE / seconds

@@ -12,17 +12,54 @@ package com.kafkick.waiting.domain.coupon;
 public record Tunables(double idleCreditRatio, long inFlightSeconds) {
 
     /**
+     * 한산 몫의 하한.
+     *
+     * <p><b>0 은 못 받습니다.</b> 그러면 부하가 없는 쿠폰의 요청이 전부 큐 등록으로
+     * 가고, 그게 요청 경로에서 레디스를 치는 유일한 예외 경로입니다 — 값 하나로
+     * 피크 전량이 그리로 들어가고, 되돌리려면 그 레디스에 써야 합니다.
+     */
+    public static final double MIN_IDLE_RATIO = 0.1;
+
+    /**
+     * 한산 몫의 상한.
+     *
+     * <p><b>1 에 가까우면 안 됩니다.</b> 한산 통과와 토큰 통과가 같은 노드 예산을
+     * 쓰므로, 한산이 거의 다 긁으면 차례가 온 사람이 밀립니다. 토큰 수명이 지나면
+     * 줄 맨 뒤로 다시 서고, 그건 순번 역행입니다 (불변식 3).
+     */
+    public static final double MAX_IDLE_RATIO = 0.9;
+
+    /**
+     * 걸림 시간의 하한.
+     *
+     * <p><b>서킷의 느림 임계(1.5초)보다 커야 합니다.</b> 작으면 느려진 뒷단의
+     * 요청이 서킷에 집계되기 전에 격벽이 먼저 끊고, 그러면 서킷이 영영 안 열려
+     * 회복 경로 자체가 사라집니다.
+     */
+    public static final long MIN_INFLIGHT_SECONDS = 2;
+
+    /**
+     * 걸림 시간의 상한.
+     *
+     * <p><b>자리를 놓게 하는 시한과 같은 값입니다.</b> 그보다 길게 잡으면 존재할
+     * 수 없는 동시 건수를 상한으로 삼는 셈입니다 — 자리는 시한에서 강제로
+     * 반납되므로 그 인원은 절대 안 모입니다.
+     */
+    public static final long MAX_INFLIGHT_SECONDS = 15;
+
+    /**
      * <b>여기서도 막습니다.</b> {@code parse} 만 거르면 직접 만드는 경로로 NaN 이나
      * 1 이상의 비율이 들어오고, 그 값은 상한 계산을 통째로 뒤집습니다.
      */
     public Tunables {
-        if (!Double.isFinite(idleCreditRatio) || idleCreditRatio < 0 || idleCreditRatio >= 1) {
-            throw new IllegalArgumentException(
-                    "idleCreditRatio 는 0 이상 1 미만이어야 한다: " + idleCreditRatio);
+        if (!Double.isFinite(idleCreditRatio)
+                || idleCreditRatio < MIN_IDLE_RATIO || idleCreditRatio > MAX_IDLE_RATIO) {
+            throw new IllegalArgumentException("idleCreditRatio 는 %s 이상 %s 이하여야 한다: %s"
+                    .formatted(MIN_IDLE_RATIO, MAX_IDLE_RATIO, idleCreditRatio));
         }
-        if (inFlightSeconds < 1) {
-            throw new IllegalArgumentException(
-                    "inFlightSeconds 는 1 이상이어야 한다: " + inFlightSeconds);
+        if (inFlightSeconds < MIN_INFLIGHT_SECONDS || inFlightSeconds > MAX_INFLIGHT_SECONDS) {
+            throw new IllegalArgumentException("inFlightSeconds 는 %d 이상 %d 이하여야 한다: %d"
+                    .formatted(MIN_INFLIGHT_SECONDS, MAX_INFLIGHT_SECONDS, inFlightSeconds));
         }
     }
 

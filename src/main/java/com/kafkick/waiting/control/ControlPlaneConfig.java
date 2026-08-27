@@ -56,13 +56,14 @@ public class ControlPlaneConfig {
      */
     @Bean
     AllocationRound allocationRound(DemandCollector collector, AllocationRedisPort port,
-            GatewayRegistry registry, CapacityCollector capacity, Leadership leadership) {
+            GatewayRegistry registry, CapacityCollector capacity, Leadership leadership,
+            TunablesRefresh tunables) {
         SnapshotCodec codec = SnapshotCodec.create();
         return AllocationRound.of(leadership::isLeader, collector::collect, capacity::lastKnown,
                 registry::count, port::apply, port::publish, Instant::now,
                 () -> port.load().map(hash ->
                         CreditSmoother.restore(SMOOTHING_ALPHA, codec.smoothing(hash))),
-                codec, capacity::lastFloor, port::readTunables);
+                codec, capacity::lastFloor, tunables::current);
     }
 
     /**
@@ -108,11 +109,22 @@ public class ControlPlaneConfig {
                 properties.scheduler().tick().dividedBy(4), allocationScheduler, meters);
     }
 
+    /**
+     * 운영 값 읽기. <b>배분 판 밖이다</b> — 판 안에서 읽으면 발행이 그 왕복에
+     * 매달려, 레디스가 조금 느려지는 것만으로 스냅샷이 아예 안 나간다.
+     */
+    @Bean
+    TunablesRefresh tunablesRefresh(AllocationRedisPort port,
+            ControlPlaneProperties properties, Scheduler allocationScheduler) {
+        return TunablesRefresh.of(port::readTunables,
+                properties.scheduler().tick().dividedBy(4), allocationScheduler);
+    }
+
     /** 배분 틱. <b>재료를 먼저 읽고 배분한다</b> — 안 읽으면 크레딧이 첫 하한에 머문다. */
     @Bean
     AllocationScheduler allocationLoop(ControlPlaneProperties properties, Leadership leadership,
             AllocationRound round, CapacityRefresh capacity, CapacityCollector collector,
-            Scheduler allocationScheduler) {
+            TunablesRefresh tunables, Scheduler allocationScheduler) {
         return AllocationScheduler.of(properties.scheduler().tick(),
                 properties.scheduler().firstTickDelay(),
                 // **승계는 유예를 처음부터 준다.** 비리더 구간에 얼어 있던 실패
@@ -123,7 +135,9 @@ public class ControlPlaneConfig {
                             capacity.leadershipChanged();
                         },
                         capacity::leadershipChanged),
-                () -> capacity.refresh().then(round.run()),
+                // **운영 값을 먼저 읽고 배분한다.** 순서가 뒤면 방금 바꾼 값이
+                // 한 틱 늦게 나가고, 장애 중의 한 틱은 길다.
+                () -> capacity.refresh().then(tunables.refresh()).then(round.run()),
                 nanos -> { }, allocationScheduler);
     }
 }

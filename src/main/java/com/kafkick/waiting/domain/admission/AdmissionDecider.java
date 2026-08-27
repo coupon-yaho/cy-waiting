@@ -249,7 +249,7 @@ public class AdmissionDecider {
      * 롤백이 성립하고, 그 전파 경로가 스냅샷입니다. 안 실려 왔으면 기동값입니다.
      */
     private double idleRatio(SnapshotMeta meta) {
-        return meta.tunables() == null ? idleCreditRatio : meta.tunables().idleCreditRatio();
+        return meta.idleCreditRatioOr(idleCreditRatio);
     }
 
     private long globalCap(AdmissionRequest req) {

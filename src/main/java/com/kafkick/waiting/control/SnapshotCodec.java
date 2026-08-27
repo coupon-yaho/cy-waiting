@@ -203,8 +203,26 @@ public final class SnapshotCodec {
         // **안 실려 왔으면 null 이다.** 기본값으로 채우면 그 값이 기동 설정을
         // 덮어써서, 운영자가 아무것도 안 바꿨는데 값이 바뀐다. 실려 왔는데 못
         // 읽는 것은 다른 얘기라, 그때는 파서가 값별로 기본값으로 떨어뜨린다.
+        return new SnapshotMeta(credit, nodeCount, tunablesOf(hash));
+    }
+
+    /**
+     * 실려 온 운영 값.
+     *
+     * <p><b>여기서 던지면 안 된다.</b> 값 하나가 전 노드의 디코드를 동시에
+     * 멈추고, 그러면 재시작한 노드가 빈 스냅샷에 갇힌다 — 쿠폰 항목에 지킨
+     * 격리를 여기도 지킨다. 안 실려 온 것은 {@code null} 이다.
+     */
+    private Tunables tunablesOf(Map<String, String> hash) {
         String raw = hash.get(TUNABLES);
-        return new SnapshotMeta(credit, nodeCount, raw == null ? null : Tunables.parse(raw));
+        if (raw == null) {
+            return null;
+        }
+        try {
+            return Tunables.parse(raw);
+        } catch (RuntimeException e) {
+            return Tunables.defaults();
+        }
     }
 
     /** 발행 시각이 없거나 말이 안 되면 EPOCH — 어떤 임계로도 낡음이다. */

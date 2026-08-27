@@ -1582,16 +1582,16 @@ class AdmissionGatewayFilterTest {
     @Test
     @DisplayName("실려_온_걸림_시간이_격벽_상한을_바꾼다")
     void 실려_온_걸림_시간이_격벽_상한을_바꾼다() {
-        // 걸림 시간을 1초로 줄이면 상한이 세 배에서 한 배로 조여진다.
+        // 걸림 시간을 2초로 줄이면 상한이 세 배에서 두 배로 조여진다.
         holder.replace(new GatewaySnapshot(
                 Map.of(COUPON, CouponStates.queueing(CREDIT, 1_000_000, 10)),
-                new SnapshotMeta(CREDIT, 1, new Tunables(0.7, 1)), 지금));
-        붙잡아_채운다(초당_통과);
+                new SnapshotMeta(CREDIT, 1, new Tunables(0.7, 2)), 지금));
+        붙잡아_채운다(초당_통과 * 2);
 
         MockServerWebExchange 한_건_더 = 다음_초에_한_건("사람" + 초당_통과, e -> Mono.empty());
 
         assertThat(한_건_더.getResponse().getStatusCode())
-                .as("걸림 시간 1초면 상한도 1배다")
+                .as("걸림 시간 2초면 상한도 2배다")
                 .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
         풀어_준다();
     }
@@ -1604,9 +1604,9 @@ class AdmissionGatewayFilterTest {
     @DisplayName("안_실려_오면_기동값으로_돈다")
     void 안_실려_오면_기동값으로_돈다() {
         스냅샷을_심는다(CouponStates.queueing(CREDIT, 1_000_000, 10), 좁은_META);
-        붙잡아_채운다(초당_통과);
+        붙잡아_채운다(초당_통과 * 2);
 
-        // 기동값은 3초라 상한이 세 배다. 한 배 치를 채운 것으로는 안 막힌다.
+        // 기동값은 3초라 상한이 세 배다. 두 배 치를 채운 것으로는 안 막힌다.
         MockServerWebExchange 한_건_더 = 다음_초에_한_건("사람" + 초당_통과, e -> Mono.empty());
 
         assertThat(한_건_더.getResponse().getStatusCode()).isNull();

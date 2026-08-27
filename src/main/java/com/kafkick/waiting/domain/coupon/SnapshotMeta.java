@@ -37,4 +37,21 @@ public record SnapshotMeta(long globalCredit, int gatewayCount, Tunables tunable
     public int effectiveGatewayCount() {
         return Math.max(1, gatewayCount);
     }
+
+    /**
+     * 실려 온 한산 몫, 없으면 기동값.
+     *
+     * <p><b>규칙을 한 곳에 둡니다.</b> 부르는 쪽마다 널 검사를 다시 쓰면 같은
+     * 규칙을 새로 구현하게 되고, 그중 하나가 조용히 달라집니다.
+     */
+    // 기동값은 튜너블 문턱에 안 가둔다. 배포로 정하는 값은 사람이 판을 보고
+    // 넣지만 운영 값은 장애 중에 눌린 채로 넣는다 — 그래서 그쪽만 좁게 막는다.
+    public double idleCreditRatioOr(double startup) {
+        return tunables == null ? startup : tunables.idleCreditRatio();
+    }
+
+    /** 실려 온 걸림 시간, 없으면 기동값. */
+    public long inFlightSecondsOr(long startup) {
+        return tunables == null ? startup : tunables.inFlightSeconds();
+    }
 }

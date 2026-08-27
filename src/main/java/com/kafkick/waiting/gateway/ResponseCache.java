@@ -97,4 +97,9 @@ public final class ResponseCache {
     public synchronized int size() {
         return held.size();
     }
+
+    /** 상한에 닿았는가. 닿으면 새 키가 조용히 버려진다 — 부르는 쪽이 그것을 센다. */
+    public synchronized boolean isFull() {
+        return held.size() >= maxKeys;
+    }
 }

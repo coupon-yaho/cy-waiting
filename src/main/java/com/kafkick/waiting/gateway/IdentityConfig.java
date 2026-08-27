@@ -42,7 +42,11 @@ public class IdentityConfig {
     @Bean
     public QueryCoalescingFilter queryCoalescingFilter(CoalescingProperties props,
             Clock clock, MeterRegistry meters) {
-        return QueryCoalescingFilter.of(props, clock, meters);
+        QueryCoalescingFilter filter = QueryCoalescingFilter.of(props, clock, meters);
+        // **상한에 닿으면 모으기가 조용히 멎는다.** 뒷단 도달 수만 원상복귀하고
+        // 그림에는 아무것도 안 남으므로 게이지로 낸다 (6.10.9 · 6.10.10).
+        filter.bindMetrics(meters);
+        return filter;
     }
 
     /** 못 읽는 대역은 여기서 버린다. 요청 경로에서 다시 풀면 그 파싱이 거기 붙는다. */

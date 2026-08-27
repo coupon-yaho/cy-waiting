@@ -143,6 +143,11 @@ public class GatewayRoutes {
                         // 받고, 그건 곧 초과 발급이다.
                         .filters(f -> stripSpoofableClientIp(f)
                                 .filter(coalescing, FilterOrder.ROUTE_COALESCING))
+                        // **여기도 끊는 자리가 있어야 한다.** 모으기가 붙은 뒤로는
+                        // 멎은 요청 하나가 그 키를 영구히 잠근다 — 뒤이어 오는
+                        // 모든 조회가 끝나지 않는 것에 붙고, 뒷단이 살아나도
+                        // 게이트웨이를 재시작해야 풀린다.
+                        .metadata(RESPONSE_TIMEOUT_ATTR, backend.responseTimeout().toMillis())
                         .uri(backend.uri()))
                 .build();
     }

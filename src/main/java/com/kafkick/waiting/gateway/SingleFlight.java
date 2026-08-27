@@ -85,4 +85,14 @@ public final class SingleFlight<T> {
     public synchronized int inFlight() {
         return flights.size();
     }
+
+    /**
+     * 상한에 닿았는가.
+     *
+     * <p><b>닿으면 모으기가 조용히 멎습니다.</b> 뒷단 도달 수만 원상복귀하고
+     * 그림에는 아무것도 안 남으므로, 부르는 쪽이 그 사실을 남깁니다.
+     */
+    public synchronized boolean isFull() {
+        return flights.size() >= maxKeys;
+    }
 }

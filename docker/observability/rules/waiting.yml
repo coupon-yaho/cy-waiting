@@ -4,6 +4,42 @@
 # 게이트웨이가 실제로 볼 수 있는 것에만 건다 — 초과 발급 여부는 재고를 가진
 # 발급 계층만 안다. 그래서 불변식 2 는 게이트웨이 쪽 선행 지표로 대신 본다.
 groups:
+  # **소진율을 한 곳에서 만든다** (O-7).
+  #
+  # SLI 는 "재료를 갖고 판정한 요청의 비율" 이다. 성공 응답 비율이 아니다 —
+  # 끊는 것도 줄 세우는 것도 정상 동작이라, 2xx 로 재면 보호가 동작할수록
+  # 지표가 나빠지고 그 지표로 할 수 있는 개선은 보호를 끄는 것뿐이다.
+  #
+  # 분모는 판정 결과 이름과 deferred-* 의 합이다. 격벽·큐 사유는 판정 뒤에
+  # 한 번 더 세므로 분모에 넣으면 두 번 센다.
+  - name: waiting-slo
+    interval: 30s
+    rules:
+      - record: waiting:judgement_error_budget_burn:ratio_rate5m
+        expr: >-
+          sum(rate(waiting_admission_total{outcome=~"deferred-.*|enqueue-error|enqueue-failed-open|bulkhead-timeout"}[5m]))
+          /
+          clamp_min(sum(rate(waiting_admission_total{outcome=~"[A-Z_]+|deferred-.*"}[5m])), 0.001)
+          / 0.001
+      - record: waiting:judgement_error_budget_burn:ratio_rate30m
+        expr: >-
+          sum(rate(waiting_admission_total{outcome=~"deferred-.*|enqueue-error|enqueue-failed-open|bulkhead-timeout"}[30m]))
+          /
+          clamp_min(sum(rate(waiting_admission_total{outcome=~"[A-Z_]+|deferred-.*"}[30m])), 0.001)
+          / 0.001
+      - record: waiting:judgement_error_budget_burn:ratio_rate1h
+        expr: >-
+          sum(rate(waiting_admission_total{outcome=~"deferred-.*|enqueue-error|enqueue-failed-open|bulkhead-timeout"}[1h]))
+          /
+          clamp_min(sum(rate(waiting_admission_total{outcome=~"[A-Z_]+|deferred-.*"}[1h])), 0.001)
+          / 0.001
+      - record: waiting:judgement_error_budget_burn:ratio_rate6h
+        expr: >-
+          sum(rate(waiting_admission_total{outcome=~"deferred-.*|enqueue-error|enqueue-failed-open|bulkhead-timeout"}[6h]))
+          /
+          clamp_min(sum(rate(waiting_admission_total{outcome=~"[A-Z_]+|deferred-.*"}[6h])), 0.001)
+          / 0.001
+
   - name: waiting-page
     interval: 15s
     rules:
@@ -87,6 +123,34 @@ groups:
         labels: { severity: page }
         annotations:
           summary: "예산보다 {{ $value }} 명을 더 들여보냈다"
+
+      # **예산을 얼마나 빨리 태우고 있는가** (6.9.2 · O-7).
+      #
+      # 한 창만 보면 둘 중 하나가 된다 — 짧으면 순간 스파이크로 울리고, 길면
+      # 느린 소진이 몇 시간 조용하다. 짧은 창과 긴 창이 동시에 넘을 때만 울린다.
+      #
+      # 14.4배는 "1시간에 30일 예산의 2% 를 태우는 속도" 다. 그 속도가 이어지면
+      # 이틀 반이면 예산이 없다.
+      - alert: SLO소진빠름
+        expr: >-
+          waiting:judgement_error_budget_burn:ratio_rate1h > 14.4
+          and
+          waiting:judgement_error_budget_burn:ratio_rate5m > 14.4
+        for: 2m
+        labels: { severity: page }
+        annotations:
+          summary: "판정 오류 예산을 정상의 {{ $value | printf \"%.1f\" }}배로 태우고 있다"
+
+      # 느린 소진. 호출할 일은 아니지만 두면 예산이 조용히 사라진다.
+      - alert: SLO소진느림
+        expr: >-
+          waiting:judgement_error_budget_burn:ratio_rate6h > 6
+          and
+          waiting:judgement_error_budget_burn:ratio_rate30m > 6
+        for: 15m
+        labels: { severity: ticket }
+        annotations:
+          summary: "6시간째 판정 오류 예산을 정상의 {{ $value | printf \"%.1f\" }}배로 태우고 있다"
 
       # 재료를 읽을 때 시각이 뒤로 갔다. 큐의 바닥값과는 다른 값이다.
       - alert: 재료시각역행

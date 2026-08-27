@@ -54,6 +54,17 @@ KEYWORDS = {
 
 bad = 0
 rules = 0
+
+# **기록 규칙이 만든 이름도 지표다.** 모르면 그것을 쓰는 알람이 "없는 지표를
+# 본다" 로 걸리고, 그러면 소진율처럼 식이 긴 것을 한 곳에서 못 만든다.
+recorded = set()
+for path in sorted(DIR.glob('*.yml')):
+    doc = yaml.safe_load(path.read_text())
+    for group in doc.get('groups', []):
+        for rule in group.get('rules', []):
+            if rule.get('record'):
+                recorded.add(rule['record'])
+
 for path in sorted(DIR.glob('*.yml')):
     doc = yaml.safe_load(path.read_text())
     for group in doc.get('groups', []):
@@ -68,9 +79,13 @@ for path in sorted(DIR.glob('*.yml')):
             expr = re.sub(r'\{[^}]*\}', ' ', rule.get('expr', ''))
             expr = re.sub(r'\b(?:by|without|on|ignoring|group_left|group_right)'
                           r'\s*\([^)]*\)', ' ', expr)
-            for match in re.finditer(r'\b[a-z_][a-z0-9_]*\b', expr):
+            # 콜론을 이름의 일부로 읽는다. 안 그러면 기록 규칙 이름이 조각으로
+            # 갈려, 있는 지표가 없는 것으로 나온다.
+            for match in re.finditer(r'\b[a-z_][a-z0-9_:]*\b', expr):
                 metric = match.group()
                 if expr[match.end():match.end() + 1] == '(' or metric in KEYWORDS:
+                    continue
+                if metric in recorded:
                     continue
                 if metric.startswith('waiting_'):
                     dotted = metric.removesuffix('_total').replace('_', '.')

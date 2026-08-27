@@ -6,6 +6,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
+import io.micrometer.core.instrument.MeterRegistry;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import java.time.Duration;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -48,6 +49,9 @@ class GatewayWiringTest {
 
     @Autowired
     private CircuitBreakerRegistry circuitRegistry;
+
+    @Autowired
+    private MeterRegistry meters;
 
     /**
      * <b>라이브러리가 실제로 바인딩한 값을 본다.</b> yml 문자열을 {@code @Value} 로
@@ -234,5 +238,26 @@ class GatewayWiringTest {
     void 느림_기준은_뒷단_응답_상한보다_앞이다() {
         assertThat(circuit.slowCallDurationThreshold())
                 .isLessThan(backend.responseTimeout());
+    }
+
+    /**
+     * <b>서킷 상태가 밖에서 보여야 합니다.</b> 안 보이면 서킷이 열린 사실을 아무도
+     * 모릅니다 — 판정이 OPEN 에서 유입을 조이면(F3) 요청 쪽 지표는 조용해지고,
+     * 알람도 대시보드도 걸 곳이 없습니다.
+     *
+     * <p>라이브러리를 넣는 것만으로는 안 붙습니다. 레지스트리를 직접 만들면
+     * 자동 구성이 묶어 주던 것이 빠지고, 그 사실은 아무 데도 안 드러납니다.
+     */
+    @Test
+    @DisplayName("서킷_상태가_지표로_나간다")
+    void 서킷_상태가_지표로_나간다() {
+        // 이름이 붙은 서킷이 하나는 있어야 계량기가 생긴다.
+        circuitRegistry.circuitBreaker(GatewayRoutes.CIRCUIT);
+
+        assertThat(meters.find("resilience4j.circuitbreaker.state")
+                .tag("name", GatewayRoutes.CIRCUIT)
+                .gauges())
+                .as("서킷 상태 게이지")
+                .isNotEmpty();
     }
 }

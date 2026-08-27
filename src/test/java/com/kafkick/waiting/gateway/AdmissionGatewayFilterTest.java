@@ -28,6 +28,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 import java.util.Random;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -42,6 +43,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
+import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.test.StepVerifier;
@@ -65,6 +67,12 @@ class AdmissionGatewayFilterTest {
 
     /** 스냅샷이 싣는 노드 예산. 심는 자리와 같은 값이어야 한다. */
     private static final SnapshotMeta META = new SnapshotMeta(1_000, 1);
+
+    /**
+     * 격벽을 재는 판. <b>2번 줄은 노드 예산을 상한으로 쓴다</b> (B-14) — 쿠폰 몫이
+     * 아니다. 노드 예산을 작게 잡아야 상한이 시험 안에서 닿는다.
+     */
+    private static final SnapshotMeta 좁은_META = new SnapshotMeta(CREDIT, 1);
 
     /** 판정기에 주는 유휴 몫 비율. 운영 배선과 같은 값이다 (B-13). */
     private static final double IDLE_RATIO = 0.7;
@@ -1234,17 +1242,51 @@ class AdmissionGatewayFilterTest {
     /** 안 끝나는 요청이 쥐고 있는 자리. 시험 끝에 {@link #풀어_준다} 로 돌려준다. */
     private final List<Sinks.Empty<Void>> 붙잡은_자리 = new ArrayList<>();
 
+    /**
+     * 격벽을 재는 시계.
+     *
+     * <p><b>초를 넘겨야 격벽에 닿는다.</b> 사다리 2번 줄이 초당 노드 예산만큼만
+     * 통과시키고 격벽은 그 세 배(3초 치)라, 한 초에 몰아 보내면 늘 리미터가 먼저
+     * 막는다. 격벽은 걸린 요청이 여러 초에 걸쳐 쌓일 때 비로소 상한이 된다.
+     */
+    private final MutableClock 격벽_시계 = MutableClock.at(지금);
+
+    private final AdmissionGatewayFilter 격벽_필터 = AdmissionGatewayFilter.of(
+            holder, AdmissionDecider.of(limiter, IDLE_RATIO),
+            격벽_시계, meters, 줄, tokens, limiter, entryTokens, 멱등키);
+
+    /**
+     * 자리를 놓게 하는 시한. <b>구현과 같은 값이어야 한다</b> — 여기 손으로 적은
+     * 수를 두면 상수가 움직여도 시험은 옛 값만 잰다.
+     */
+    private static final Duration 격벽_시한 = AdmissionGatewayFilter.MAX_IN_FLIGHT;
+
+    /** 한 초에 사다리를 지나갈 수 있는 건수. 좁은 판의 노드 예산 그대로다. */
+    private static final int 초당_통과 = (int) CREDIT;
+
     /** 안 끝나는 요청을 태워 격벽을 채운다. 반환값은 그때 태운 요청들이다. */
     private List<MockServerWebExchange> 붙잡아_채운다(int 건수) {
         List<MockServerWebExchange> 태운_것 = new ArrayList<>();
         for (int i = 0; i < 건수; i++) {
+            if (i % 초당_통과 == 0) {
+                격벽_시계.앞으로(Duration.ofSeconds(1));
+            }
             Sinks.Empty<Void> 안_끝남 = Sinks.empty();
             붙잡은_자리.add(안_끝남);
             MockServerWebExchange exchange = 토큰_요청("사람" + i);
             태운_것.add(exchange);
-            filter.filter(exchange, e -> 안_끝남.asMono()).subscribe();
+            격벽_필터.filter(exchange, e -> 안_끝남.asMono()).subscribe();
         }
         return 태운_것;
+    }
+
+    /** 다음 초의 요청 하나. 리미터가 아니라 격벽에 걸리는지를 본다. */
+    private MockServerWebExchange 다음_초에_한_건(String memberId,
+            Function<ServerWebExchange, Mono<Void>> 뒷단) {
+        격벽_시계.앞으로(Duration.ofSeconds(1));
+        MockServerWebExchange exchange = 토큰_요청(memberId);
+        격벽_필터.filter(exchange, e -> 뒷단.apply(e)).block();
+        return exchange;
     }
 
     private void 풀어_준다() {
@@ -1252,22 +1294,25 @@ class AdmissionGatewayFilterTest {
     }
 
     /**
-     * <b>초당 건수로는 못 막는 것이 있습니다.</b> 상한은 이 노드 몫(credit)에
-     * 한 건이 걸려 있을 수 있는 시간을 곱한 값입니다 — 3 × 3초 = 동시 9건.
+     * <b>초당 건수로는 못 막는 것이 있습니다.</b> 상한은 이 통과가 실제로 차감한
+     * 예산에 한 건이 걸려 있을 수 있는 시간을 곱한 값입니다 — 3 × 3초 = 동시 9건.
      */
     @Test
     @DisplayName("동시_건수가_배분된_몫의_세_배를_넘으면_막는다")
     void 동시_건수가_배분된_몫의_세_배를_넘으면_막는다() {
-        스냅샷을_심는다(CouponStates.queueing(CREDIT, 1_000_000, 10), META);
-        List<MockServerWebExchange> 태운_것 = 붙잡아_채운다((int) CREDIT * 3);
+        스냅샷을_심는다(CouponStates.queueing(CREDIT, 1_000_000, 10), 좁은_META);
+        List<MockServerWebExchange> 태운_것 = 붙잡아_채운다(초당_통과 * 3);
 
-        MockServerWebExchange 한_건_더 = 토큰_요청("사람9");
-        filter.filter(한_건_더, e -> Mono.empty()).block();
+        MockServerWebExchange 한_건_더 = 다음_초에_한_건("사람" + 초당_통과 * 3, e -> Mono.empty());
 
         // **상한 직전까지는 통과해야 한다.** 넘긴 것만 보면 늘 막아도 통과한다.
         assertThat(태운_것.getLast().getResponse().getStatusCode()).isNull();
         assertThat(한_건_더.getResponse().getStatusCode())
                 .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        // 리미터가 아니라 격벽이 막았는지 못 박는다. 둘 다 거절이라 상태만
+        // 보면 사다리가 막아도 이 시험은 통과한다.
+        assertThat(한_건_더.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .isEqualTo(AdmissionDecision.REJECT_OVERLOAD);
         풀어_준다();
     }
 
@@ -1306,6 +1351,11 @@ class AdmissionGatewayFilterTest {
         MockServerWebExchange exchange = 요청(COUPON, "사람0");
         filter.filter(exchange, e -> Mono.empty()).block();
 
+        // **어느 판정에 닿았는지 못 박는다.** PASS_UNDER_CAP 으로 바뀌면 밑변이
+        // 한산 몫이라 곱이 안 넘치고, 그때도 상태는 null 이다 — 오버플로 방어가
+        // 사라진 것을 아무도 모른 채 이 시험만 초록으로 남는다.
+        assertThat(exchange.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .isEqualTo(AdmissionDecision.PASS_BYPASS);
         assertThat(exchange.getResponse().getStatusCode()).isNull();
     }
 
@@ -1339,14 +1389,12 @@ class AdmissionGatewayFilterTest {
     @Test
     @DisplayName("끝나면_자리가_돌아온다")
     void 끝나면_자리가_돌아온다() {
-        스냅샷을_심는다(CouponStates.queueing(CREDIT, 1_000_000, 10), META);
-        붙잡아_채운다((int) CREDIT * 3);
+        스냅샷을_심는다(CouponStates.queueing(CREDIT, 1_000_000, 10), 좁은_META);
+        붙잡아_채운다(초당_통과 * 3);
         풀어_준다();
 
-        MockServerWebExchange 다음_사람 = 토큰_요청("사람9");
-        filter.filter(다음_사람, e -> Mono.empty()).block();
-
-        assertThat(다음_사람.getResponse().getStatusCode()).isNull();
+        assertThat(다음_초에_한_건("사람" + 초당_통과 * 3, e -> Mono.empty()).getResponse().getStatusCode())
+                .isNull();
     }
 
     /**
@@ -1357,44 +1405,59 @@ class AdmissionGatewayFilterTest {
     @Test
     @DisplayName("안_끝나는_요청도_자리를_내놓는다")
     void 안_끝나는_요청도_자리를_내놓는다() {
-        스냅샷을_심는다(CouponStates.queueing(CREDIT, 1_000_000, 10), META);
+        스냅샷을_심는다(CouponStates.queueing(CREDIT, 1_000_000, 10), 좁은_META);
         List<MockServerWebExchange> 태운_것 = new ArrayList<>();
         StepVerifier.withVirtualTime(() -> {
-            for (int i = 0; i < CREDIT * 3; i++) {
+            for (int i = 0; i < 초당_통과 * 3; i++) {
+                if (i % 초당_통과 == 0) {
+                    격벽_시계.앞으로(Duration.ofSeconds(1));
+                }
                 MockServerWebExchange 멈춘_것 = 토큰_요청("사람" + i);
                 태운_것.add(멈춘_것);
-                filter.filter(멈춘_것, e -> Mono.never()).subscribe();
+                격벽_필터.filter(멈춘_것, e -> Mono.never()).subscribe();
             }
             return Mono.empty();
-        }).thenAwait(Duration.ofSeconds(13)).verifyComplete();
+        }).thenAwait(Duration.ofSeconds(20)).verifyComplete();
 
         // 상한이 실제로 끊었는지부터 본다. 안 끊고 자리만 돌려주면 격벽이
         // 세는 것이고, 그때는 동시 건수가 상한을 넘어도 아무도 안 막는다.
-        assertThat(태운_것.getFirst().getResponse().getStatusCode())
-                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(태운_것).allSatisfy(끊긴_것 ->
+                assertThat(끊긴_것.getResponse().getStatusCode())
+                        .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE));
+        // 건수를 못 박는다. 하나만 보면 일부만 끊기고 나머지가 자리를 쥔 채
+        // 남는 경우를 못 잡는다.
+        assertThat(meters.counter("waiting.admission",
+                "outcome", "bulkhead-timeout", "cause", "timeout").count())
+                .isEqualTo(초당_통과 * 3);
 
-        MockServerWebExchange 다음_사람 = 토큰_요청("사람9");
-        filter.filter(다음_사람, e -> Mono.empty()).block();
-
-        assertThat(다음_사람.getResponse().getStatusCode()).isNull();
+        assertThat(다음_초에_한_건("사람" + 초당_통과 * 3, e -> Mono.empty()).getResponse().getStatusCode())
+                .isNull();
     }
 
     /**
-     * <b>상한은 격벽보다 넉넉해야 합니다.</b> 정상적으로 느린 요청까지 끊으면
-     * 격벽이 하려던 것과 정반대로, 뒷단이 멀쩡한데도 응답을 버립니다.
+     * <b>시한의 양쪽을 잽니다.</b> 위쪽만 재면 값이 커지는 방향으로는 아무 값이나
+     * 통과하고, 아래쪽만 재면 정상적으로 느린 요청까지 끊는 것을 못 잡습니다 —
+     * 그때 격벽은 하려던 것과 정반대로 뒷단이 멀쩡한데도 응답을 버립니다.
      */
     @Test
-    @DisplayName("격벽이_재는_시간_안에는_안_끊는다")
-    void 격벽이_재는_시간_안에는_안_끊는다() {
-        스냅샷을_심는다(CouponStates.queueing(CREDIT, 1_000_000, 10), META);
-        MockServerWebExchange 느린_것 = 토큰_요청("사람0");
-
-        StepVerifier.withVirtualTime(() ->
-                        filter.filter(느린_것, e -> Mono.delay(Duration.ofSeconds(3)).then()))
-                .thenAwait(Duration.ofSeconds(4))
+    @DisplayName("시한_직전은_끝까지_가고_직후는_끊는다")
+    void 시한_직전은_끝까지_가고_직후는_끊는다() {
+        스냅샷을_심는다(CouponStates.queueing(CREDIT, 1_000_000, 10), 좁은_META);
+        MockServerWebExchange 직전 = 토큰_요청("사람0");
+        StepVerifier.withVirtualTime(() -> 격벽_필터.filter(직전,
+                        e -> Mono.delay(격벽_시한.minusSeconds(1)).then()))
+                .thenAwait(격벽_시한)
                 .verifyComplete();
 
-        assertThat(느린_것.getResponse().getStatusCode()).isNull();
+        MockServerWebExchange 직후 = 토큰_요청("사람1");
+        StepVerifier.withVirtualTime(() -> 격벽_필터.filter(직후,
+                        e -> Mono.delay(격벽_시한.plusSeconds(1)).then()))
+                .thenAwait(격벽_시한.plusSeconds(2))
+                .verifyComplete();
+
+        assertThat(직전.getResponse().getStatusCode()).as("시한 직전").isNull();
+        assertThat(직후.getResponse().getStatusCode()).as("시한 직후")
+                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
     }
 
     /**
@@ -1404,17 +1467,18 @@ class AdmissionGatewayFilterTest {
     @Test
     @DisplayName("터져서_끝나도_자리가_돌아온다")
     void 터져서_끝나도_자리가_돌아온다() {
-        스냅샷을_심는다(CouponStates.queueing(CREDIT, 1_000_000, 10), META);
-        for (int i = 0; i < CREDIT * 3; i++) {
-            filter.filter(토큰_요청("사람" + i),
+        스냅샷을_심는다(CouponStates.queueing(CREDIT, 1_000_000, 10), 좁은_META);
+        for (int i = 0; i < 초당_통과 * 3; i++) {
+            if (i % 초당_통과 == 0) {
+                격벽_시계.앞으로(Duration.ofSeconds(1));
+            }
+            격벽_필터.filter(토큰_요청("사람" + i),
                     e -> Mono.error(new IllegalStateException("뒷단이 터졌다")))
                     .onErrorResume(e -> Mono.empty()).block();
         }
 
-        MockServerWebExchange 다음_사람 = 토큰_요청("사람9");
-        filter.filter(다음_사람, e -> Mono.empty()).block();
-
-        assertThat(다음_사람.getResponse().getStatusCode()).isNull();
+        assertThat(다음_초에_한_건("사람" + 초당_통과 * 3, e -> Mono.empty()).getResponse().getStatusCode())
+                .isNull();
     }
 
     /**
@@ -1427,14 +1491,13 @@ class AdmissionGatewayFilterTest {
         holder.replace(new GatewaySnapshot(
                 Map.of(COUPON, CouponStates.queueing(CREDIT, 1_000_000, 10),
                         "c2", CouponStates.idle(1_000_000)),
-                META, 지금));
-        붙잡아_채운다((int) CREDIT * 3);
+                좁은_META, 지금));
+        붙잡아_채운다(초당_통과 * 3);
 
         // 핫 쿠폰이 실제로 찼는지 먼저 본다. 안 찼으면 아래 단언은 아무것도 못 말한다.
-        MockServerWebExchange 핫 = 토큰_요청("사람9");
-        filter.filter(핫, e -> Mono.empty()).block();
+        MockServerWebExchange 핫 = 다음_초에_한_건("사람" + 초당_통과 * 3, e -> Mono.empty());
         MockServerWebExchange 콜드 = 요청("c2", "사람9");
-        filter.filter(콜드, e -> Mono.empty()).block();
+        격벽_필터.filter(콜드, e -> Mono.empty()).block();
 
         assertThat(핫.getResponse().getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
         assertThat(콜드.getResponse().getStatusCode()).isNull();

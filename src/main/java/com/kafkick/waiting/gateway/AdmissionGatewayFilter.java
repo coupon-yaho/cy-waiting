@@ -98,10 +98,15 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     /**
      * 자리를 놓게 하는 상한의 여유 배수.
      *
-     * <p>격벽이 막기 시작하는 지연보다 넉넉해야 합니다. 같으면 정상적으로 느린
-     * 요청까지 끊어, 격벽이 하려던 것과 반대로 동작합니다.
+     * <p>뒷단 응답 상한(12초)보다 뒤여야 합니다. 여기가 먼저 끊으면 서킷에 가는
+     * 것이 오류가 아니라 취소가 되고, 취소는 창에 안 쌓입니다 — 멎은 뒷단의
+     * 서킷이 영영 안 열립니다. 여기는 그 상한이 안 걸렸을 때의 마지막 그물입니다.
      */
-    private static final long IN_FLIGHT_GRACE = 4;
+    private static final long IN_FLIGHT_GRACE = 5;
+
+    /** 자리를 놓게 하는 시한. 시험이 손으로 베끼지 않게 여기서 한 번만 정한다. */
+    static final Duration MAX_IN_FLIGHT =
+            Duration.ofSeconds(MAX_IN_FLIGHT_SEC * IN_FLIGHT_GRACE);
 
     private final SnapshotHolder holder;
     private final AdmissionDecider decider;
@@ -134,12 +139,21 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      */
     private final FailureWindow failOpenWindow;
 
+    /**
+     * 보호 장치가 끊는 구간.
+     *
+     * <p>카운터만 두면 사후에 "몇 시부터 몇 시까지, 몇 건을 끊었나" 를 못 답합니다.
+     * 그 답이 필요한 때는 늘 사고가 끝난 뒤입니다 (LG-2).
+     */
+    private final FailureWindow shedWindow;
+
     private AdmissionGatewayFilter(SnapshotHolder holder, AdmissionDecider decider,
             Clock clock, MeterRegistry meters, DoubleSupplier random,
             QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter,
             EntryToken entryTokens, IdempotencyKey idempotency, LongSupplier ticker) {
         this.holder = Objects.requireNonNull(holder, "holder 는 필수다");
         this.failOpenWindow = FailureWindow.of(ticker);
+        this.shedWindow = FailureWindow.of(ticker);
         this.decider = Objects.requireNonNull(decider, "decider 는 필수다");
         this.clock = Objects.requireNonNull(clock, "clock 은 필수다");
         this.meters = Objects.requireNonNull(meters, "meters 는 필수다");
@@ -462,11 +476,15 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         // 통과 경로까지 같이 죽는다.
         if (!bulkhead.tryEnter(couponId, inFlightCap(ratePerSec))) {
             count("bulkhead-full");
-            return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
-                    retryAfterSec(AdmissionDecision.REJECT_OVERLOAD, random));
+            return shed(exchange);
         }
         String key = idempotency.of(couponId, memberId,
                 headers.getFirst(IdempotencyKey.HEADER));
+        // 뒷단으로 넘어가는 건이 생겼으면 끊던 구간이 끝난 것이다. 쌍으로 안
+        // 남기면 로그에 진입만 있고 언제 닫혔는지가 없다 (LG-2).
+        shedWindow.exited().ifPresent(r -> log.warn(
+                "보호 차단 해제 — {}초 동안 {}건 끊었다",
+                NANOSECONDS.toSeconds(r.elapsedNanos()), r.swallowed()));
         return chain.filter(exchange.mutate()
                         .request(r -> r.headers(h -> h.set(IdempotencyKey.HEADER, key)))
                         .build())
@@ -476,21 +494,38 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                 //
                 // 뒷단 응답 타임아웃(6.2)과는 다른 자리다. 그쪽은 응답을 얼마나
                 // 기다릴지이고, 여기는 자리를 얼마나 쥐고 있게 둘지다.
-                .timeout(Duration.ofSeconds(MAX_IN_FLIGHT_SEC * IN_FLIGHT_GRACE))
+                .timeout(MAX_IN_FLIGHT)
+                // 헤더가 이미 나간 뒤라면 ApiError 가 조용히 비켜선다 — 그
+                // 판단을 여기서 한 번 더 하면 두 곳이 갈릴 수 있다.
                 .onErrorResume(TimeoutException.class, e -> {
                     count("bulkhead-timeout", "timeout");
-                    // 뒷단이 응답을 쓰기 시작한 뒤 멎었으면 상태줄이 이미 나갔다.
-                    // 거기에 오류 본문을 덧쓰면 클라이언트가 받는 것은 잘린
-                    // 응답이 아니라 깨진 응답이다. 끊는 데서 끝낸다.
-                    if (exchange.getResponse().isCommitted()) {
-                        return exchange.getResponse().setComplete();
-                    }
-                    return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
-                            retryAfterSec(AdmissionDecision.REJECT_OVERLOAD, random));
+                    return shed(exchange);
                 })
                 // **어느 쪽으로 끝나도 돌려준다.** 안 돌려주면 격벽이 한 번 차고
                 // 나서 영영 안 열리고, 그 쿠폰은 뒷단이 멀쩡해져도 계속 막힌다.
                 .doFinally(signal -> bulkhead.exit(couponId));
+    }
+
+    /**
+     * 보호 장치가 끊는다. <b>판정도 같이 고쳐 적는다.</b>
+     *
+     * <p>사다리가 통과라고 적어 둔 값을 그대로 두면, 응답을 쓰는 쪽과 뒤이어
+     * 읽는 계층에는 이 요청이 통과로 보인다. 실제로 나가는 것은 503 이다.
+     */
+    private Mono<Void> shed(ServerWebExchange exchange) {
+        // 매 요청 찍으면 정작 조사가 필요한 순간에 묻힌다. 구간의 시작만 찍는다.
+        if (shedWindow.entered()) {
+            log.warn("보호 차단 진입 — 뒷단이 못 받아 끊는다");
+        }
+        // **차례가 온 사람은 가까운 밴드로 부른다.** 그는 이미 줄에서 빠졌고
+        // 손에 든 것은 수명이 있는 입장 토큰뿐이다. 30초 뒤로 보내면 그 사이
+        // 그의 몫이 남에게 가고, 토큰이 죽으면 줄 맨 뒤로 다시 선다.
+        // 폴백이 같은 장애에 쓰는 갈래와 같아야 한다 (BackendFallback).
+        boolean hasToken = exchange.<AdmissionDecision>getAttribute(DECISION)
+                == AdmissionDecision.PASS_TOKEN;
+        exchange.getAttributes().put(DECISION, AdmissionDecision.REJECT_OVERLOAD);
+        return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
+                (int) POLL.intervalSec(hasToken ? 0 : EtaPolicy.UNKNOWN, random));
     }
 
     /**

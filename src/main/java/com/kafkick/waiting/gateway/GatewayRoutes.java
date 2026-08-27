@@ -9,6 +9,7 @@ import org.springframework.cloud.gateway.route.builder.GatewayFilterSpec;
 import org.springframework.cloud.gateway.route.builder.RouteLocatorBuilder;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import java.time.Duration;
 import java.util.function.Predicate;
 import org.springframework.http.HttpMethod;
 import org.springframework.web.server.ServerWebExchange;
@@ -26,6 +27,9 @@ public class GatewayRoutes {
      * 값과 뒷단이 받는 값이 갈리고, 그 값이 레디스 키·캐시 키·리미터 키가 된다.
      */
     private static final String COUPON_ID = "{couponId:[A-Za-z0-9_-]{1,64}}";
+
+    /** 프레임워크가 라우트별 응답 상한을 읽는 키. 이름을 틀리면 조용히 안 걸린다. */
+    private static final String RESPONSE_TIMEOUT_ATTR = "response-timeout";
 
     /**
      * 서킷이 열렸을 때 넘길 주소.
@@ -74,12 +78,16 @@ public class GatewayRoutes {
 
     /** 뒷단 쿠폰 서비스. 가용량 기반 분배는 Phase 9 다 — 여기서는 하나만 본다. */
     @ConfigurationProperties("waiting.backend")
-    public record Backend(String uri) {
+    public record Backend(String uri, Duration responseTimeout) {
 
         // 검증은 밖에 둔다. 압축 생성자에서 부를 수 있는 것은 정적뿐이라,
         // 안에 두면 그 자리에서만 쓰이는 정적 메서드가 생긴다.
         public Backend {
             ConfigUris.create().backend(uri);
+            if (responseTimeout == null || responseTimeout.toMillis() < 1) {
+                throw new IllegalArgumentException(
+                        "responseTimeout 은 1ms 이상이어야 한다: " + responseTimeout);
+            }
         }
     }
 
@@ -113,6 +121,10 @@ public class GatewayRoutes {
                         .filters(f -> stripSpoofableClientIp(f)
                                 .filter(admission, FilterOrder.ROUTE_ADMISSION)
                                 .filter(circuit(breakers), FilterOrder.ROUTE_CIRCUIT))
+                        // **끊는 자리가 서킷 안쪽이어야 한다.** 밖에서 끊으면
+                        // 서킷에 가는 것은 오류가 아니라 취소이고, 취소는 창에
+                        // 안 쌓인다 — 멎은 뒷단의 서킷이 영영 안 열린다.
+                        .metadata(RESPONSE_TIMEOUT_ATTR, backend.responseTimeout().toMillis())
                         .uri(backend.uri()))
                 .route("coupons", r -> r
                         .method(HttpMethod.GET)

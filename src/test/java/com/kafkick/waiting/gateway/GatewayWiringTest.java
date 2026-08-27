@@ -211,4 +211,28 @@ class GatewayWiringTest {
 
         assertThat(routerFunctionMapping.getHandler(직접).block()).isNull();
     }
+
+    /**
+     * <b>끊는 자리의 앞뒤가 값으로 정해져 있어야 합니다.</b> 격벽 시한이 뒷단 응답
+     * 상한보다 먼저 오면, 서킷에 가는 것이 오류가 아니라 취소가 됩니다. 취소는
+     * 창에 안 쌓이므로 멎은 뒷단의 서킷이 영영 안 열리고, 그동안 게이트웨이는
+     * 죽은 뒷단에 계속 밀어 넣습니다.
+     */
+    @Test
+    @DisplayName("격벽_시한은_뒷단_응답_상한보다_뒤다")
+    void 격벽_시한은_뒷단_응답_상한보다_뒤다() {
+        assertThat(AdmissionGatewayFilter.MAX_IN_FLIGHT)
+                .isGreaterThan(backend.responseTimeout());
+    }
+
+    /**
+     * <b>느림의 기준은 상한보다 앞이어야 합니다.</b> 뒤에 있으면 상한 직전까지
+     * 느려진 인스턴스가 전부 성공으로 집계되어 서킷이 안 열립니다 (6.1.8).
+     */
+    @Test
+    @DisplayName("느림_기준은_뒷단_응답_상한보다_앞이다")
+    void 느림_기준은_뒷단_응답_상한보다_앞이다() {
+        assertThat(circuit.slowCallDurationThreshold())
+                .isLessThan(backend.responseTimeout());
+    }
 }

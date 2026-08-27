@@ -147,7 +147,12 @@ tasks.named('test') {
     // **계획서도 시험의 입력이다.** 게이트와 시험을 잇는 표를 계획서에서 읽는
     // 시험이 있는데, 그레이들이 이 경로를 모르면 계획서만 고친 판에서 그 시험이
     // 안 돈다 — 게이트를 지워도 로컬은 초록이다.
-    inputs.dir('plan').withPropertyName('plan').withPathSensitivity(PathSensitivity.RELATIVE)
+    // **읽는 문서만 건다.** `plan/` 전체를 걸면 어느 계획서를 고쳐도 단위 시험
+    // 천 개가 다시 돈다 — 저널이나 결정 문서를 고치는 흐름에서 매번 걸린다.
+    inputs.files('plan/04-control-plane.md', 'plan/05-data-plane.md',
+                    'plan/06-protection.md')
+            .withPropertyName('gatePlans')
+            .withPathSensitivity(PathSensitivity.RELATIVE)
     finalizedBy jacocoTestReport
 }
 

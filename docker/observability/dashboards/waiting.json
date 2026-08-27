@@ -24,7 +24,11 @@
           "expr": "sum by (outcome) (rate(waiting_admission_total[1m]))",
           "legendFormat": "{{outcome}}"
         }
-      ]
+      ],
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      }
     },
     {
       "id": 2,
@@ -46,7 +50,11 @@
           "expr": "waiting_snapshot_age",
           "legendFormat": "재료 나이(초)"
         }
-      ]
+      ],
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      }
     },
     {
       "id": 3,
@@ -68,7 +76,11 @@
           "expr": "waiting_capacity_credit",
           "legendFormat": "전역 크레딧"
         }
-      ]
+      ],
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      }
     },
     {
       "id": 4,
@@ -90,7 +102,11 @@
           "expr": "sum(rate(waiting_admission_total{outcome=~\"bulkhead-full|bulkhead-timeout\"}[1m]))",
           "legendFormat": "격벽 (참 + 시한)"
         }
-      ]
+      ],
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      }
     },
     {
       "id": 5,
@@ -104,7 +120,8 @@
         "y": 16
       },
       "datasource": {
-        "type": "loki"
+        "type": "loki",
+        "uid": "loki"
       },
       "targets": [
         {
@@ -124,7 +141,8 @@
         "y": 24
       },
       "datasource": {
-        "type": "loki"
+        "type": "loki",
+        "uid": "loki"
       },
       "targets": [
         {

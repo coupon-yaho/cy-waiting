@@ -50,6 +50,10 @@ services:
       # 빈 디렉터리를 지켜보며 아무 불평 없이 돈다. 게이트웨이는
       # `observability` 프로필일 때 이 경로에 쓴다.
       - ../../build/logs:/var/log/waiting:ro
+      # **어디까지 읽었는지를 남긴다.** 컨테이너 안 `/tmp` 에만 두면 재시작할
+      # 때마다 오프셋이 사라져 같은 로그를 다시 보낸다 — Loki 에 중복이 쌓이고,
+      # 사고 시각의 로그 건수를 세는 순간 그 값이 거짓이 된다.
+      - promtail-positions:/var/lib/promtail
     depends_on:
       loki:
         condition: service_healthy
@@ -70,6 +74,9 @@ services:
     depends_on:
       prometheus:
         condition: service_healthy
+
+volumes:
+  promtail-positions:
 
 networks:
   default:

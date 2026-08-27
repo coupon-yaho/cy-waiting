@@ -13,7 +13,8 @@ server:
   http_listen_port: 9080
 
 positions:
-  filename: /tmp/positions.yaml
+  # 볼륨에 남긴다. `/tmp` 는 재시작마다 비어 같은 로그를 다시 보낸다.
+  filename: /var/lib/promtail/positions.yaml
 
 clients:
   - url: http://loki:3100/loki/api/v1/push

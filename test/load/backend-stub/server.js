@@ -54,6 +54,14 @@ function error(res, status, code, message) {
 
 /** 공유 선언을 붙일 것인가. 기본은 붙임 — 기존 게이트가 그 상태를 잰다. */
 const SHARED_HEADER = process.env.SHARED_HEADER !== 'false';
+/**
+ * 본문을 이 간격으로 끝없이 흘린다 (0 이면 안 한다).
+ *
+ * **헤더는 빠르고 본문이 느린 뒷단**을 만든다. 응답 상한은 읽기 사이의 간격을
+ * 보므로 그 상한보다 촘촘히 흘리면 영영 안 걸리고, 그 요청이 격벽 자리를 계속
+ * 쥔다. 그 상태를 재려면 그런 뒷단이 하나 있어야 한다.
+ */
+const SLOW_BODY_MS = Number(process.env.SLOW_BODY_MS || 0);
 
 const server = createServer((req, res) => {
   // 스텁 자신의 상태. compose 의 healthcheck 와 시나리오의 사후 확인이 쓴다.
@@ -86,6 +94,13 @@ const server = createServer((req, res) => {
     if (SHARED_HEADER) {
       res.setHeader('Cache-Control', 'public');
     }
+    if (SLOW_BODY_MS > 0) {
+      // 헤더는 곧바로, 본문은 끝없이. 끊는 것은 게이트웨이 몫이다.
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      const tick = setInterval(() => res.write(' '), SLOW_BODY_MS);
+      res.on('close', () => clearInterval(tick));
+      return;
+    }
     // 발급이든 조회든 형태만 맞으면 된다. 내용은 게이트웨이가 안 본다.
     json(res, 200, {
       success: true,
@@ -96,5 +111,6 @@ const server = createServer((req, res) => {
 });
 
 server.listen(PORT, () => {
-  process.stdout.write(`stub up :${PORT} latency=${LATENCY_MS}ms maxInflight=${MAX_INFLIGHT} shared=${SHARED_HEADER}\n`);
+  process.stdout.write(`stub up :${PORT} latency=${LATENCY_MS}ms `
+    + `maxInflight=${MAX_INFLIGHT} shared=${SHARED_HEADER} slowBody=${SLOW_BODY_MS}ms\n`);
 });

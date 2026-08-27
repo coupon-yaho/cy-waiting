@@ -58,6 +58,17 @@ public final class FilterOrder {
     public static final int ROUTE_COALESCING =
             NettyWriteResponseFilter.WRITE_RESPONSE_FILTER_ORDER - 1;
 
+    /**
+     * 본문 쓰기 상한.
+     *
+     * <p><b>서킷 안쪽에 못 둔다.</b> 응답을 감싸려면 프레임워크의 쓰기 필터보다
+     * 앞이어야 하는데, 그 자리는 서킷보다 바깥이다. 그래서 여기서 끊은 것은
+     * 서킷의 창에 안 쌓인다 — 헤더 단계의 지연은 응답 상한이 잡고, 여기는
+     * 커넥션이 영영 붙잡히는 것만 막는다.
+     */
+    public static final int ROUTE_BODY =
+            NettyWriteResponseFilter.WRITE_RESPONSE_FILTER_ORDER - 2;
+
     private FilterOrder() {
     }
 }

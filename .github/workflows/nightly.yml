@@ -41,7 +41,7 @@ jobs:
           ONLY: ${{ github.event.inputs.scenario }}
         run: |
           set -uo pipefail
-          all='["idle-coupon","contended-coupon","read-burst","read-window","open-spike","mixed","abandonment","overhead"]'
+          all='["idle-coupon","contended-coupon","read-burst","read-window","open-spike","mixed","abandonment","overhead","no-shared-marker"]'
           if [[ -n "$ONLY" ]]; then
             echo "scenarios=[\"$ONLY\"]" >> "$GITHUB_OUTPUT"
             echo "::notice::시나리오 '$ONLY' 만 실행"
@@ -117,7 +117,7 @@ jobs:
       status: ${{ needs.verdict.outputs.ok == 'true' && 'success' || 'warning' }}
       title: 야간 검증 — ${{ needs.verdict.outputs.ok == 'true' && '이상 없음' || '주의 필요' }}
       summary: |
-        전 계층 테스트 · 8개 부하 시나리오 · CVE 전체 스캔
+        전 계층 테스트 · 9개 부하 시나리오 · CVE 전체 스캔
       fields: |
         테스트=${{ needs.test.result }}
         부하=${{ needs.load.result }}
@@ -129,7 +129,7 @@ jobs:
         <table>
           <tr><th>항목</th><th>결과</th></tr>
           <tr><td>테스트 (전 계층)</td><td>${{ needs.test.result }}</td></tr>
-          <tr><td>부하 (8 시나리오)</td><td>${{ needs.load.result }}</td></tr>
+          <tr><td>부하 (9 시나리오)</td><td>${{ needs.load.result }}</td></tr>
           <tr><td>보안 (LOW 포함)</td><td>${{ needs.security.result }}</td></tr>
         </table>
         <p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">상세</a></p>

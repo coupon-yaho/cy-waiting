@@ -501,13 +501,29 @@ public final class QueryCoalescingFilter implements GatewayFilter {
         if (control == null) {
             return Set.of();
         }
+        // **따옴표 안의 콤마로는 안 자른다.** 자르면 `community="catalog, public"`
+        // 같은 확장 지시어가 `public` 이라는 조각을 만들고, 아무 말도 안 한 응답이
+        // 허락한 것으로 읽힌다.
         Set<String> names = new HashSet<>();
-        for (String part : control.toLowerCase(Locale.ROOT).split(",")) {
-            // 값은 안 본다. 따옴표 안에 콤마가 있으면 조각이 갈리지만, 갈린
-            // 조각이 지시어 이름과 같아질 일은 없다.
-            int eq = part.indexOf('=');
-            names.add((eq < 0 ? part : part.substring(0, eq)).strip());
+        String lower = control.toLowerCase(Locale.ROOT);
+        StringBuilder name = new StringBuilder();
+        boolean quoted = false;
+        boolean afterEquals = false;
+        for (int i = 0; i < lower.length(); i++) {
+            char c = lower.charAt(i);
+            if (c == '"') {
+                quoted = !quoted;
+            } else if (c == ',' && !quoted) {
+                names.add(name.toString().strip());
+                name.setLength(0);
+                afterEquals = false;
+            } else if (c == '=' && !quoted) {
+                afterEquals = true;
+            } else if (!afterEquals) {
+                name.append(c);
+            }
         }
+        names.add(name.toString().strip());
         return names;
     }
 

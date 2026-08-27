@@ -38,10 +38,21 @@ class CoalescingPersonalizationTest {
 
     private final SimpleMeterRegistry meters = new SimpleMeterRegistry();
 
-    private final QueryCoalescingFilter filter = QueryCoalescingFilter.of(
-            new CoalescingProperties(true, 1024, 1 << 20, 100,
-                    List.of(new CoalescingProperties.Route(PATH, Duration.ofMillis(200)))),
-            시계, meters);
+    private final QueryCoalescingFilter filter = 새_필터();
+
+    /**
+     * 상태를 안 물려받는 필터.
+     *
+     * <p><b>안 붙기는 경로에 남는다.</b> 한 판에서 선언 없는 응답을 한 번 보면 그
+     * 뒤로는 무엇을 보내든 안 붙으므로, 값마다 새 필터로 재지 않으면 첫 값 하나만
+     * 재고 나머지는 항진명제가 된다.
+     */
+    private QueryCoalescingFilter 새_필터() {
+        return QueryCoalescingFilter.of(
+                new CoalescingProperties(true, 1024, 1 << 20, 100,
+                        List.of(new CoalescingProperties.Route(PATH, Duration.ofMillis(200)))),
+                시계, meters);
+    }
 
     /** 왜 안 모았는지. <b>사유가 갈려야 계약이 안 선 것을 다른 거절과 구분한다.</b> */
     private double 센다(String 결과, String 사유) {
@@ -169,16 +180,21 @@ class CoalescingPersonalizationTest {
     @Test
     @DisplayName("public이_토큰이_아니면_안_모은다")
     void public이_토큰이_아니면_안_모은다() {
-        List.of("max-age=300, no-public", "community=\"public-catalog\"").forEach(지시어 -> {
+        List.of("max-age=300, no-public", "community=\"public-catalog\"",
+                // 따옴표 안의 콤마로 자르면 여기서 public 조각이 나온다.
+                "community=\"catalog, public, personalized\"").forEach(지시어 -> {
+            QueryCoalescingFilter 새것 = 새_필터();
             AtomicInteger 뒷단 = new AtomicInteger();
-            IntStream.range(0, 3).forEach(i ->
-                    filter.filter(조회("사람" + i), ex -> {
+            // **첫 두 건으로 판정한다.** 세 번째부터는 안 붙기가 이미 배워져 있어
+            // 무엇을 보내든 뒷단이 불린다 — 그 상태로 세면 항진명제다.
+            IntStream.range(0, 2).forEach(i ->
+                    새것.filter(조회("사람" + i), ex -> {
                         뒷단.incrementAndGet();
                         ex.getResponse().getHeaders().setCacheControl(지시어);
                         return 그냥_답한다(ex, "목록");
                     }).block());
 
-            assertThat(뒷단).as("%s 는 허락이 아니다", 지시어).hasValue(3);
+            assertThat(뒷단).as("%s 는 허락이 아니다", 지시어).hasValue(2);
         });
     }
 

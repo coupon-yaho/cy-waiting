@@ -134,6 +134,67 @@ case "$scenario" in
       violate "REDIS_CLI 가 없어 줄 키를 못 봤다 — 이 시나리오의 핵심 증거다"
     fi
     ;;
+  read-burst)
+    checks=$(read_metric '.metrics.checks.value' '.metrics.checks.values.rate')
+    served=$(read_metric '.metrics.served_responses.count' \
+                         '.metrics.served_responses.values.count')
+    reqs=$(read_metric '.metrics.http_reqs.count' '.metrics.http_reqs.values.count')
+
+    report "검사 통과율" "${checks:-없음}"
+    report "온전한 응답" "${served:-없음}"
+    report "요청 수" "${reqs:-없음}"
+
+    # **목표 부하를 실제로 넣었는지 본다.** 하한이 1 이면 10건에 뒷단 1건도
+    # 배수 10 을 만족해 통과한다. 시나리오는 초당 2,000 을 10초 보낸다.
+    at_least "${reqs:-}" 18000 "요청 수"
+    at_least "${checks:-}" 0.99 "검사 통과율"
+
+    # **뒷단이 몇 번 받았는지가 이 시나리오의 전부다.** 응답만 보면 코얼레싱이
+    # 통째로 꺼져 있어도 통과한다 — 재지 못하는 보호 장치는 없는 것과 같다.
+    if [[ -n "${STUB_SERVED:-}" ]]; then
+      report "뒷단 도달" "${STUB_SERVED}"
+      report "병합 배수" "$(awk -v a="${reqs:-0}" -v b="${STUB_SERVED:-1}" \
+          'BEGIN { printf "%.1f", (b + 0 == 0) ? 0 : (a + 0) / (b + 0) }')"
+      # **0 을 통과로 세지 않는다.** 하한이 없으면 "완벽히 모았다" 와 "정규식이
+      # 안 맞았다 / 요청이 뒷단에 하나도 안 갔다" 가 같은 초록이 된다.
+      at_least "${STUB_SERVED}" 1 "뒷단 도달"
+      # 수명이 300ms 이므로 10초 동안 뒷단은 많아야 수십 번 받아야 한다.
+      # 요청 수만큼 받았으면 하나도 안 모인 것이다.
+      at_most "${STUB_SERVED}" 200 "뒷단 도달"
+      # 배수도 판정에 쓴다. 출력만 하면 그 값이 1 이어도 통과한다.
+      at_least "$(awk -v a="${reqs:-0}" -v b="${STUB_SERVED:-1}" \
+          'BEGIN { printf "%.1f", (b + 0 == 0) ? 0 : (a + 0) / (b + 0) }')" \
+          10 "병합 배수"
+    else
+      violate "STUB_SERVED 가 없어 뒷단 도달 수를 못 봤다 — 이 시나리오의 핵심 증거다"
+    fi
+    ;;
+  read-window)
+    checks=$(read_metric '.metrics.checks.value' '.metrics.checks.values.rate')
+    reqs=$(read_metric '.metrics.http_reqs.count' '.metrics.http_reqs.values.count')
+
+    report "검사 통과율" "${checks:-없음}"
+    report "요청 수" "${reqs:-없음}"
+
+    at_least "${reqs:-}" 9000 "요청 수"
+    at_least "${checks:-}" 0.99 "검사 통과율"
+
+    # **"동시 1만" 을 하네스가 못 만든다.** 1만 VU 를 띄우는 데만 십수 초가
+    # 걸려서 도착이 수명 창 수십 개에 흩어진다. 그래서 뒷단 도달 수를 절대값으로
+    # 재는 대신 병합 배수로 잰다 — 재려던 것(같은 조회가 뒷단에 한 번만 간다)은
+    # 그 값이 답한다.
+    if [[ -n "${STUB_SERVED:-}" ]]; then
+      report "뒷단 도달" "${STUB_SERVED}"
+      report "병합 배수" "$(awk -v a="${reqs:-0}" -v b="${STUB_SERVED:-1}" \
+          'BEGIN { printf "%.0f", (b + 0 == 0) ? 0 : (a + 0) / (b + 0) }')"
+      at_least "${STUB_SERVED}" 1 "뒷단 도달"
+      at_least "$(awk -v a="${reqs:-0}" -v b="${STUB_SERVED:-1}" \
+          'BEGIN { printf "%.0f", (b + 0 == 0) ? 0 : (a + 0) / (b + 0) }')" \
+          500 "병합 배수"
+    else
+      violate "STUB_SERVED 가 없어 뒷단 도달 수를 못 봤다 — 이 시나리오의 핵심 증거다"
+    fi
+    ;;
   *)
     # **모르는 시나리오를 통과로 안 센다.** 기본이 통과면 시나리오가 늘 때마다
     # 아무 기준 없는 잡이 하나씩 생기고, 그 초록은 아무 뜻이 없다.

@@ -5,6 +5,8 @@ import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
 import com.kafkick.waiting.domain.queue.EntryToken;
 import com.kafkick.waiting.domain.queue.QueueToken;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import java.time.Clock;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -15,7 +17,8 @@ import org.springframework.context.annotation.Configuration;
  * (DS-1) — 값을 주고 만들어 주는 자리가 필요하다.
  */
 @Configuration
-@EnableConfigurationProperties({QueueTokenProperties.class, ProxyProperties.class})
+@EnableConfigurationProperties({QueueTokenProperties.class, ProxyProperties.class,
+        CoalescingProperties.class})
 public class IdentityConfig {
 
     /** 쿠폰 2,000개를 상정한 값. 넘으면 판정이 그 사실을 따로 알린다. */
@@ -29,6 +32,22 @@ public class IdentityConfig {
      */
     private static final double IDLE_CREDIT_RATIO = 0.7;
 
+
+    /**
+     * 조회를 모으는 필터.
+     *
+     * <p><b>화이트리스트로만 켠다.</b> 목록에 없는 경로는 그대로 프록시한다 —
+     * 기본이 켜짐이면 개인화된 응답이 붙는 순간 남의 응답을 받는다.
+     */
+    @Bean
+    public QueryCoalescingFilter queryCoalescingFilter(CoalescingProperties props,
+            Clock clock, MeterRegistry meters) {
+        QueryCoalescingFilter filter = QueryCoalescingFilter.of(props, clock, meters);
+        // **상한에 닿으면 모으기가 조용히 멎는다.** 뒷단 도달 수만 원상복귀하고
+        // 그림에는 아무것도 안 남으므로 게이지로 낸다 (6.10.9 · 6.10.10).
+        filter.bindMetrics(meters);
+        return filter;
+    }
 
     /** 못 읽는 대역은 여기서 버린다. 요청 경로에서 다시 풀면 그 파싱이 거기 붙는다. */
     @Bean

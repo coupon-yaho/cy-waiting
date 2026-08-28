@@ -17,9 +17,11 @@ import com.kafkick.waiting.domain.queue.EntryToken;
 import com.kafkick.waiting.domain.queue.EtaPolicy;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import com.kafkick.waiting.domain.queue.QueueToken;
+import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.http.HttpHeaders;
 import java.time.Clock;
+import java.time.Instant;
 import java.time.Duration;
 import java.util.EnumSet;
 import java.util.Map;
@@ -69,7 +71,8 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
 
     private static final Logger log = LoggerFactory.getLogger(AdmissionGatewayFilter.class);
 
-    private static final String COUPON_ID = "couponId";
+    /** 경로 변수 이름. **관찰자도 이것을 읽는다** — 갈리면 담는 키와 읽는 키가 갈린다. */
+    static final String COUPON_ID = "couponId";
 
     /** 판정 결과를 사유별로 센다. <b>요청마다 로그를 남기지 않는다</b> — 낡음
      * 구간에서 로그가 폭주하고, 그때 정작 봐야 할 것이 묻힌다. */
@@ -155,10 +158,19 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      */
     private final FailureWindow shedWindow;
 
+    /** 재료가 아직 재고를 말하는 창에서 이것이 유일한 근거다 (7.2 · B-10). */
+    private final SoldOutCache soldOutCache;
+
+    /** 캐시가 끊은 건수. */
+    // `cause` 축에 안 싣는다 — 그 축은 실패 원인의 닫힌 집합이라(LG-4), 판정
+    // 출처를 넣으면 "실패율 = cause != none" 이 정상적인 매진 단락을 다 잡는다.
+    private final Counter soldOutHits;
+
     private AdmissionGatewayFilter(SnapshotHolder holder, AdmissionDecider decider,
             Clock clock, MeterRegistry meters, DoubleSupplier random,
             QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter,
-            EntryToken entryTokens, IdempotencyKey idempotency, LongSupplier ticker) {
+            EntryToken entryTokens, IdempotencyKey idempotency, LongSupplier ticker,
+            SoldOutCache soldOutCache) {
         this.holder = Objects.requireNonNull(holder, "holder 는 필수다");
         this.failOpenWindow = FailureWindow.of(ticker);
         this.shedWindow = FailureWindow.of(ticker);
@@ -180,34 +192,55 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         // 막힌 뒤에야 오르는 카운터로는 못 본다.
         BulkheadMetrics.bind(bulkhead, meters);
         this.error = ApiError.of(clock);
+        this.soldOutCache = Objects.requireNonNull(soldOutCache, "soldOutCache 는 필수다");
+        this.soldOutHits = meters.counter("waiting.soldout.cache.hit");
     }
 
     /** 흔들림의 난수원은 스레드마다 따로 둔다 — 공유하면 그 자체가 경합점이다. */
+    // 캐시는 주입받는다. 여기서 만들면 담는 쪽과 읽는 쪽이 다른 것을 보고,
+    // 뒷단이 낸 매진을 판정이 영영 못 본다.
     @Autowired
     AdmissionGatewayFilter(SnapshotHolder holder, AdmissionDecider decider, Clock clock,
             MeterRegistry meters, QueuePort queue, QueueToken tokens,
             SecondWindowLimiter limiter, EntryToken entryTokens,
-            IdempotencyKey idempotency) {
+            IdempotencyKey idempotency, SoldOutCache soldOutCache) {
         this(holder, decider, clock, meters,
                 () -> ThreadLocalRandom.current().nextDouble(), queue, tokens, limiter,
-                entryTokens, idempotency, System::nanoTime);
+                entryTokens, idempotency, System::nanoTime, soldOutCache);
     }
 
-    public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider,
+    /**
+     * <b>이 필터만 쓰는 캐시</b>를 안에서 만든다. 아무도 안 담으므로 아무것도
+     * 안 막는다 — 배선이 이쪽을 고르면 매진 보호가 신호 없이 사라진다.
+     */
+    public static AdmissionGatewayFilter withIsolatedSoldOutCache(SnapshotHolder holder,
+            AdmissionDecider decider,
             Clock clock, MeterRegistry meters, QueuePort queue, QueueToken tokens,
             SecondWindowLimiter limiter, EntryToken entryTokens,
             IdempotencyKey idempotency) {
         return new AdmissionGatewayFilter(holder, decider, clock, meters, queue, tokens, limiter,
-                entryTokens, idempotency);
+                entryTokens, idempotency, SoldOutCache.standard());
+    }
+
+    /** 매진 캐시를 함께 받는다 (7.2.3). 담는 쪽과 읽는 쪽이 같은 것이라야 한다. */
+    public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider,
+            Clock clock, MeterRegistry meters, QueuePort queue, QueueToken tokens,
+            SecondWindowLimiter limiter, EntryToken entryTokens,
+            IdempotencyKey idempotency, SoldOutCache soldOutCache) {
+        return new AdmissionGatewayFilter(holder, decider, clock, meters,
+                () -> ThreadLocalRandom.current().nextDouble(), queue, tokens, limiter,
+                entryTokens, idempotency, System::nanoTime, soldOutCache);
     }
 
     /** 난수원을 받는다. 고정하지 못하면 흔들림이 실제로 붙었는지 못 잰다 (TS-4). */
-    public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider,
+    public static AdmissionGatewayFilter withIsolatedSoldOutCache(SnapshotHolder holder,
+            AdmissionDecider decider,
             Clock clock, MeterRegistry meters, DoubleSupplier random,
             QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter,
             EntryToken entryTokens, IdempotencyKey idempotency) {
         return new AdmissionGatewayFilter(holder, decider, clock, meters, random, queue,
-                tokens, limiter, entryTokens, idempotency, System::nanoTime);
+                tokens, limiter, entryTokens, idempotency, System::nanoTime,
+                SoldOutCache.standard());
     }
 
     /**
@@ -217,12 +250,13 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      * <p>고정하지 못하면 fail-open 이 얼마나 이어졌는지를 재는 계산 자체가
      * 시험에서 늘 0 이 되어, 단위를 틀려도 통과한다 (TS-4).
      */
-    public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider,
+    public static AdmissionGatewayFilter withIsolatedSoldOutCache(SnapshotHolder holder,
+            AdmissionDecider decider,
             Clock clock, MeterRegistry meters, DoubleSupplier random,
             QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter,
             EntryToken entryTokens, IdempotencyKey idempotency, LongSupplier ticker) {
         return new AdmissionGatewayFilter(holder, decider, clock, meters, random, queue,
-                tokens, limiter, entryTokens, idempotency, ticker);
+                tokens, limiter, entryTokens, idempotency, ticker, SoldOutCache.standard());
     }
 
     /**
@@ -288,6 +322,14 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         // **지금 시각이다.** 스냅샷 발행 시각을 넘기면 배분이 멎는 순간 윈도가
         // 영영 안 넘어가고, 상한만큼 쓴 뒤부터 전부 막힌다.
         long nowSec = clock.instant().getEpochSecond();
+        releaseIfRestocked(couponId, state, view);
+        if (soldOutCache.soldOut(couponId)) {
+            AdmissionDecision cached = AdmissionDecision.REJECT_SOLD_OUT;
+            exchange.getAttributes().put(DECISION, cached);
+            count(cached.name());
+            soldOutHits.increment();
+            return route(exchange, chain, cached, couponId, state, view.snapshot().meta());
+        }
         AdmissionDecision decision = decider.decide(new AdmissionRequest(
                 couponId, state, view.snapshot().meta(),
                 // **방금 줄로 보낸 쿠폰인가.** 스냅샷은 한 틱 늦어 아직 한산하다고
@@ -306,6 +348,22 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             degraded(exchange);
         }
         return route(exchange, chain, decision, couponId, state, view.snapshot().meta());
+    }
+
+    /** 관찰보다 나중에 발행된 재료가 재고를 말하면 푼다 (7.2.4). */
+    // 낡은 재료로는 안 푼다. 낡음은 못 믿겠다는 뜻인데 못 믿는 재료로 방패를
+    // 부수는 것만 허용하면 비대칭이다 — 집행은 사다리 1번처럼 낡음을 견딘다.
+    private void releaseIfRestocked(String couponId, CouponState state,
+            SnapshotHolder.View view) {
+        if (state.soldOut() || holder.isDataStale(view)) {
+            return;
+        }
+        soldOutCache.restocked(couponId, view.snapshot().publishedAt())
+                // **쌍으로 남긴다** (LG-2). 쿠폰 ID 는 라벨로 못 쓰므로
+                // (LG-4), 어느 쿠폰이 몇 초 동안 몇 건을 끊었는지는 로그만이
+                // 답할 수 있는 자리다.
+                .ifPresent(r -> log.info("매진 해제 — 쿠폰 {} 를 {}초 동안 끊었고 {}건이었다",
+                        couponId, r.elapsed().toSeconds(), r.blocked()));
     }
 
     /**

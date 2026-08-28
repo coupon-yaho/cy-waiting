@@ -49,14 +49,23 @@ public final class FilterOrder {
     public static final int ROUTE_CIRCUIT = ROUTE_ADMISSION + 1;
 
     /**
-     * 조회 라우트의 코얼레싱.
+     * <b>응답 본문을 보려면 여기여야 한다.</b>
      *
-     * <p><b>응답을 쓰는 필터보다 앞이어야 한다.</b> 본문은 프레임워크의 쓰기
-     * 필터가 쓰는데, 그건 우리보다 바깥이라 우리가 감싼 응답을 안 본다 — 뒤에
-     * 서면 담는 것이 늘 빈 본문이고, 상태만 보는 검사로는 안 드러난다.
+     * <p>본문은 프레임워크의 쓰기 필터가 쓰는데, 그건 <b>자기가 받은</b>
+     * exchange 에 쓴다. 뒤에 서면 우리가 감싼 것을 아무도 안 쓰고, 담는 것이
+     * 늘 빈 본문이다 — 상태만 보는 검사로는 안 드러난다.
      */
-    public static final int ROUTE_COALESCING =
+    private static final int BEFORE_WRITE_RESPONSE =
             NettyWriteResponseFilter.WRITE_RESPONSE_FILTER_ORDER - 1;
+
+    /** 뒷단의 매진 응답을 본다. */
+    // 그러면 판정·서킷보다도 바깥이 되므로, 관찰자가 CLIENT_RESPONSE_ATTR 로
+    // "정말 뒷단에 닿은 응답인가" 를 가른다. 안 가르면 게이트웨이 자신이 낸
+    // 매진을 되먹여 뒷단이 살아나도 안 풀린다.
+    public static final int ROUTE_SOLD_OUT = BEFORE_WRITE_RESPONSE;
+
+    /** 조회 라우트의 코얼레싱. 같은 이유로 쓰기 필터보다 앞이다. */
+    public static final int ROUTE_COALESCING = BEFORE_WRITE_RESPONSE;
 
     private FilterOrder() {
     }

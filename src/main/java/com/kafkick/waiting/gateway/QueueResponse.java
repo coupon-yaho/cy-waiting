@@ -71,12 +71,7 @@ public final class QueueResponse {
                 {"success":true,"data":%s}""".formatted(data), pollAfterSec);
     }
 
-    /**
-     * 매진이라고 알린다. <b>다시 오라고 하지 않는다.</b>
-     *
-     * <p>재고가 다시 생기지 않는데 재시도를 유도하면, 끝난 캠페인이 폴링을 계속
-     * 만들어 냅니다.
-     */
+    /** 끝난 캠페인이 폴링을 계속 만들어 내지 않게, 다시 올 시각을 안 준다. */
     public Mono<Void> soldOut(ServerWebExchange exchange) {
         return write(exchange, HttpStatus.OK,
                 """

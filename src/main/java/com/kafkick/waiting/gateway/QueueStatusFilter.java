@@ -172,12 +172,7 @@ public final class QueueStatusFilter implements WebFilter {
                 });
     }
 
-    /**
-     * 재료가 매진이라고 말하는가.
-     *
-     * <p><b>재료가 없거나 낡으면 매진으로 안 본다.</b> 모른다는 것이 끝났다는
-     * 뜻은 아니고, 여기서 잘못 말하면 기다리던 사람이 줄을 잃는다.
-     */
+    /** 잘못 말하면 기다리던 사람이 줄을 잃으므로, 모르는 것을 끝난 것으로 안 읽는다. */
     private boolean soldOut(String couponId) {
         SnapshotHolder.View view = holder.view();
         // 첫 틱 전은 지금 `isDataStale` 이 **먼저** 참이 된다 — 재료가 없으면

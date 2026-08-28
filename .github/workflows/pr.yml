@@ -52,9 +52,12 @@ jobs:
             echo "key=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if ! grep -qE '^(feature|bugfix|hotfix|release)/CY-[0-9]+-[a-z0-9-]+$' <<<"$BRANCH"; then
+          # `integration` 은 여러 하위 작업을 묶어 한 PR 로 올리는 자리이고,
+          # `chore` 는 코드가 아닌 배선을 고치는 자리다. 둘 다 WF-3 이 이름으로
+          # 드러내라고 정한 형태다.
+          if ! grep -qE '^(feature|bugfix|hotfix|release|integration|chore)/CY-[0-9]+-[a-z0-9-]+$' <<<"$BRANCH"; then
             echo "::error title=WF-3::브랜치명이 규칙에 맞지 않는다: '$BRANCH'"
-            echo "::error::형식: <feature|bugfix|hotfix|release>/CY-<번호>-<영문-kebab-슬러그>"
+            echo "::error::형식: <feature|bugfix|hotfix|release|integration|chore>/CY-<번호>-<영문-kebab-슬러그>"
             exit 1
           fi
           key=$(grep -oE 'CY-[0-9]+' <<<"$BRANCH" | head -1)
@@ -71,7 +74,12 @@ jobs:
           changed=$(git diff --name-only "$BASE..$HEAD")
           # 빌드에 영향이 없는 것은 코드로 세지 않는다. 세면 설정 한 줄에
           # 전 테스트가 돈다. journal 검사의 제외 목록과 같은 범위다.
-          if grep -qvE '^(plan|ai|\.claude|\.github)/|^[A-Z]+\.md$|^\.(coderabbit\.yaml|gitignore|gitattributes)$' <<<"$changed"; then
+          #
+          # **게이트를 적은 계획서는 예외다.** 그 문서를 읽어 게이트와 시험이
+          # 이어져 있는지 보는 시험이 있는데, 문서라고 건너뛰면 게이트를 지우는
+          # PR 에서 정확히 그 시험이 안 돈다 — 막으려던 것을 그 PR 이 한다.
+          if grep -qvE '^(plan|ai|\.claude|\.github)/|^[A-Z]+\.md$|^\.(coderabbit\.yaml|gitignore|gitattributes)$' <<<"$changed" \
+              || grep -qE '^plan/0[456]-' <<<"$changed"; then
             echo "code=true" >> "$GITHUB_OUTPUT"
           else
             echo "code=false" >> "$GITHUB_OUTPUT"

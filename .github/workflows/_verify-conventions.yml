@@ -47,6 +47,28 @@ jobs:
           chmod +x .claude/hooks/*.sh
           .claude/hooks/self-test.sh
 
+      # 심판이 헐거우면 하네스가 무엇을 재든 초록이다. 실제로 게이트웨이를 안
+      # 띄운 판과 표본 0 건인 판이 통과한 적이 있다 (TS-9).
+      - name: 부하 게이트 자기검증
+        run: |
+          chmod +x test/load/*.sh
+          test/load/gate-selftest.sh
+
+      # 리포트가 "4개 시나리오" 라고 적은 채 여덟 개를 돌고 있었다. 사본이
+      # 생기면 갈라지고, 갈라진 쪽을 보는 사람은 안 돈 것을 돌았다고 읽는다.
+      - name: nightly 시나리오 수가 리포트와 맞는가
+        run: |
+          python3 - <<'EOF'
+          import json, pathlib, re, sys
+          t = pathlib.Path('.github/workflows/nightly.yml').read_text()
+          n = len(json.loads(re.search(r"all='(\[[^\]]*\])'", t).group(1)))
+          bad = [m for m in re.findall(r'부하 \((\d+) 시나리오\)|(\d+)개 부하 시나리오', t)
+                 for m in m if m and int(m) != n]
+          for m in bad:
+              print(f'::error title=시나리오 수 불일치::리포트는 {m}, 목록은 {n}')
+          sys.exit(1 if bad else 0)
+          EOF
+
       # 존재하지 않는 태스크를 가리키는 게이트는 판정할 수 없다. ID 가 겹치면
       # 두 작업이 한 번호를 쓴다. 번호를 바꿀 때 조용히 깨진다.
       - name: 게이트·태스크 ID 중복
@@ -230,6 +252,37 @@ jobs:
       # 돌리고, 못 돌리면 파일을 지우고 링크를 안 고친 PR 이 여기서야 걸린다.
       - name: 문서 링크 검사
         run: .github/scripts/doc-links.sh
+
+      # **사람이 리뷰로 막을 수 없다.** 라벨 하나 추가는 한 줄이고, 그 한 줄이
+      # 무엇을 뜻하는지는 운영에서 인덱스가 죽고 나서야 드러난다 (LG-4).
+      - name: Loki 라벨 검사
+        run: .github/scripts/loki-labels.sh
+
+      # **없는 지표를 보는 패널은 영원히 빈 화면이다.** 대시보드를 열어 보기
+      # 전까지 아무도 모르고, 지표 이름을 바꾸면 특히 그렇다 (LG-11).
+      - name: 대시보드 지표 검사
+        run: .github/scripts/dashboard-queries.sh
+
+      # **문법이 깨진 규칙 파일은 조용히 건너뛰어진다.** 알람이 하나도 안 걸린
+      # 채로 초록이고, 그 사실은 장애가 나서 아무도 안 불릴 때 드러난다 (6.9.5).
+      - name: promtool 설치
+        run: |
+          set -euo pipefail
+          ver=3.1.0
+          url="https://github.com/prometheus/prometheus/releases/download/v${ver}/prometheus-${ver}.linux-amd64.tar.gz"
+          curl -fsSL "$url" -o /tmp/prom.tgz
+          tar -xzf /tmp/prom.tgz -C /tmp
+          sudo install "/tmp/prometheus-${ver}.linux-amd64/promtool" /usr/local/bin/promtool
+          promtool --version
+
+      - name: 알람 규칙 검사
+        run: .github/scripts/alert-rules.sh
+
+      # **핀 옆 주석이 거짓말하면 핀이 무의미하다.** 실제로 `download-artifact` 는
+      # 주석이 `v7.0.0` 인데 `v6.0.0` 을 핀하고 있었고, `gradle/actions` 는 커밋이
+      # 아니라 태그 객체를 핀했다. 리뷰어는 주석을 믿고 넘어간다.
+      - name: 액션 핀 검사
+        run: .github/scripts/action-pins.sh
 
       # 파일만 확인하면 `](other.md#anchor)` 의 앵커가 사라져도 통과한다.
       # 링크는 열리는데 엉뚱한 위치로 가므로 읽는 사람만 손해다.

@@ -9,7 +9,7 @@ on:
   workflow_call:
     inputs:
       scenario:
-        description: smoke | idle-coupon | open-spike | mixed | abandonment
+        description: smoke | idle-coupon | contended-coupon | read-burst | read-window | open-spike | mixed | abandonment | overhead | no-shared-marker
         type: string
         required: true
       timeout-minutes:
@@ -63,7 +63,7 @@ jobs:
       # 두 번 만들면 부하가 때리는 산출물과 검사를 통과한 산출물이 갈릴 수 있다.
       - name: 빌드 산출물 받기
         if: steps.probe.outputs.ready == 'true'
-        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53  # v7.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           name: build-libs
           path: build/libs/
@@ -72,10 +72,19 @@ jobs:
       # setup-gradle 은 두지 않는다 — 여기서 gradlew 를 쓰지 않는다.
       - name: compose 기동 (게이트웨이 · Redis · 스텁)
         if: steps.probe.outputs.ready == 'true'
-        run: docker compose -f test/load/compose.yml up -d --wait
+        env:
+          SCENARIO: ${{ inputs.scenario }}
+        run: |
+          # **계약이 안 선 상태를 재는 판은 스텁의 선언을 끈다.** 늘 붙이면
+          # 하네스가 그 상태를 한 번도 안 지나고, 그러면 "발급 계층이 안 붙이면
+          # 어떻게 되는가" 를 아무도 못 본다.
+          if [[ "$SCENARIO" == "no-shared-marker" ]]; then
+            export SHARED_HEADER=false
+          fi
+          docker compose -f test/load/compose.yml up -d --wait
 
       - if: steps.probe.outputs.ready == 'true'
-        uses: grafana/setup-k6-action@db07bd9765aac508ef18982e52ab937fe633a065  # v1
+        uses: grafana/setup-k6-action@db07bd9765aac508ef18982e52ab937fe633a065  # v1.2.1
 
       - name: k6 실행
         id: run
@@ -84,6 +93,12 @@ jobs:
         env:
           SCENARIO: ${{ inputs.scenario }}
         run: |
+          # **러너가 못 띄우는 인원을 정직하게 줄인다.** 2만을 요구해 놓고 못
+          # 띄우면 도착이 늘어져 스파이크가 아니라 고원을 재게 된다 — 그 값으로
+          # Phase 10 착수를 판정하면 안 된다.
+          if [[ "$SCENARIO" == "open-spike" ]]; then
+            export SPIKE_USERS="${SPIKE_USERS:-20000}"
+          fi
           k6 run --summary-export=k6-summary.json "test/load/$SCENARIO.js"
 
       # 게이트 판정은 k6 threshold 가 아니라 계획서 기준으로 한다 (6.6.6)
@@ -92,7 +107,21 @@ jobs:
         if: always()
         env:
           SCENARIO: ${{ inputs.scenario }}
+          # **레디스를 직접 본다.** 응답만 보면 게이트웨이가 줄에 올려 놓고 통과
+          # 응답을 내도 통과한다 — 요청 경로에서 레디스를 안 친다는 것(불변식 1)의
+          # 유일한 직접 증거가 키를 보는 것이다.
+          REDIS_CLI: >-
+            docker compose -f test/load/compose.yml exec -T redis redis-cli
         run: |
+          # **뒷단이 몇 번 받았는지를 뒷단에게 묻는다.** 게이트웨이 지표로 재면
+          # 모으기가 자기 성적을 자기가 매기는 셈이다.
+          if [[ "$SCENARIO" == "read-burst" || "$SCENARIO" == "read-window" \
+                || "$SCENARIO" == "no-shared-marker" ]]; then
+            STUB_SERVED=$(docker compose -f test/load/compose.yml exec -T backend \
+                wget -qO- http://localhost:8090/stub/health 2>/dev/null \
+                | sed -n 's/.*"served":\([0-9]*\).*/\1/p')
+            export STUB_SERVED
+          fi
           set -uo pipefail
           if [[ "${{ steps.probe.outputs.ready }}" != "true" ]]; then
             echo "passed=skipped" >> "$GITHUB_OUTPUT"

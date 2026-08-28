@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.CouponStates;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
+import com.kafkick.waiting.domain.coupon.Tunables;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -407,4 +408,77 @@ class AdmissionDeciderTest {
 
         assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.ENQUEUE_ALWAYS);
     }
+
+    /**
+     * <b>한산 통과의 밑변은 쿠폰 credit 이 아니다.</b> 9번이 통과시키는 것은
+     * IDLE 쿠폰뿐이고 IDLE 이면 credit 이 0 이다 (I1). credit 으로 재는 순간
+     * 한산한 쿠폰일수록 조여진다 — 이전 구현의 핵심 버그다.
+     */
+    @Test
+    @DisplayName("한산_통과가_쓴_예산은_한산_몫이다")
+    void 한산_통과가_쓴_예산은_한산_몫이다() {
+        CouponState 한산 = CouponStates.idle(500);
+
+        assertThat(decider().admittedRatePerSec(AdmissionDecision.PASS_UNDER_CAP, 한산, META))
+                .isEqualTo(한산.idleCap(META, IDLE_RATIO))
+                .isGreaterThan(한산.credit());
+    }
+
+    /**
+     * <b>2번 줄은 쿠폰별 상한을 안 건다</b> (B-14). 배분 시점에 이미 크레딧을 썼기
+     * 때문이다. 여기서 쿠폰 몫을 돌려주면 격벽이 사다리가 안 건 상한을 새로 걸어,
+     * 차례가 온 사람이 자기 차례에 다시 막힌다.
+     */
+    @Test
+    @DisplayName("토큰_통과가_쓴_예산은_노드_예산이다")
+    void 토큰_통과가_쓴_예산은_노드_예산이다() {
+        CouponState 줄선_것 = CouponStates.queueing(100, 500, 3000);
+
+        assertThat(decider().admittedRatePerSec(AdmissionDecision.PASS_TOKEN, 줄선_것, META))
+                .isEqualTo(AdmissionDecider.globalCap(META))
+                // 쿠폰 몫과 다른 값이어야 한다. 같으면 무엇을 재는지 알 수 없다.
+                .isNotEqualTo(줄선_것.contendedCap(META.effectiveGatewayCount()));
+    }
+
+    /**
+     * 4·5번은 쿠폰별 예산을 안 거친다. 노드 예산이 그 경로의 정직한 상한이다 —
+     * 여기서 0 을 돌려주면 낡음 구간의 통과가 통째로 막힌다.
+     */
+    @Test
+    @DisplayName("우회와_장애_개방이_쓴_예산은_노드_예산이다")
+    void 우회와_장애_개방이_쓴_예산은_노드_예산이다() {
+        assertThat(decider().admittedRatePerSec(
+                AdmissionDecision.PASS_BYPASS, CouponStates.off(500), META))
+                .isEqualTo(AdmissionDecider.globalCap(META));
+        assertThat(decider().admittedRatePerSec(
+                AdmissionDecision.PASS_FAIL_OPEN, CouponStates.idle(500), META))
+                .isEqualTo(AdmissionDecider.globalCap(META));
+    }
+
+    /** 통과가 아닌 판정에 예산을 물으면 부르는 쪽이 틀린 것이다. 조용히 0 을 주면 전면 차단이다. */
+    @Test
+    @DisplayName("통과가_아닌_판정에는_예산이_없다")
+    void 통과가_아닌_판정에는_예산이_없다() {
+        assertThatThrownBy(() -> decider().admittedRatePerSec(
+                AdmissionDecision.ENQUEUE_BACKLOG, CouponStates.queueing(1, 10, 5), META))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /**
+     * <b>배포 없이 되돌릴 수 있어야 롤백이 성립합니다</b> (P-1). 재료에 실려 온
+     * 한산 몫이 기동 설정을 이깁니다 — 그 전파 경로가 스냅샷입니다.
+     */
+    @Test
+    @DisplayName("실려_온_한산_몫이_기동값을_이긴다")
+    void 실려_온_한산_몫이_기동값을_이긴다() {
+        CouponState 한산 = CouponStates.idle(500);
+        SnapshotMeta 실려_온_것 = new SnapshotMeta(META.globalCredit(), META.gatewayCount(),
+                new Tunables(0.2, 3));
+
+        assertThat(decider().admittedRatePerSec(
+                AdmissionDecision.PASS_UNDER_CAP, 한산, 실려_온_것))
+                .isEqualTo(한산.idleCap(실려_온_것, 0.2))
+                .isNotEqualTo(한산.idleCap(META, IDLE_RATIO));
+    }
+
 }

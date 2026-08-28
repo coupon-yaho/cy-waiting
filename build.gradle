@@ -16,7 +16,7 @@ plugins {
 }
 
 group = 'com.kafkick'
-version = '0.2.0'
+version = '0.3.0'
 
 java {
     toolchain {
@@ -78,11 +78,15 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-webflux'
     implementation 'org.springframework.cloud:spring-cloud-starter-gateway-server-webflux'
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    // 지표를 밖에서 긁어 갈 자리 (Phase 6.5). 판은 부트 BOM 이 관리한다.
+    implementation 'io.micrometer:micrometer-registry-prometheus'
 
     // 요청 경로는 레디스를 치지 않는다 (RD-4). 그래도 제어 평면 — 스케줄러와
     // 큐 — 은 쳐야 한다. reactive 쪽만 쓴다. Jedis 는 블로킹이라 배경 루프를
     // 멎게 한다 (RX-1).
     implementation 'org.springframework.boot:spring-boot-starter-data-redis-reactive'
+    // 서킷·타임아웃 (Phase 6.1·6.2). 판은 spring-cloud BOM 이 관리한다.
+    implementation 'org.springframework.cloud:spring-cloud-starter-circuitbreaker-reactor-resilience4j'
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     // 도메인 순수성은 리뷰로 못 지킨다. 한 번 깨지면 조용히 번진다.
@@ -140,6 +144,15 @@ tasks.named('test') {
     useJUnitPlatform {
         excludeTags 'integration', 'context', 'chaos'
     }
+    // **계획서도 시험의 입력이다.** 게이트와 시험을 잇는 표를 계획서에서 읽는
+    // 시험이 있는데, 그레이들이 이 경로를 모르면 계획서만 고친 판에서 그 시험이
+    // 안 돈다 — 게이트를 지워도 로컬은 초록이다.
+    // **읽는 문서만 건다.** `plan/` 전체를 걸면 어느 계획서를 고쳐도 단위 시험
+    // 천 개가 다시 돈다 — 저널이나 결정 문서를 고치는 흐름에서 매번 걸린다.
+    inputs.files('plan/04-control-plane.md', 'plan/05-data-plane.md',
+                    'plan/06-protection.md')
+            .withPropertyName('gatePlans')
+            .withPathSensitivity(PathSensitivity.RELATIVE)
     finalizedBy jacocoTestReport
 }
 

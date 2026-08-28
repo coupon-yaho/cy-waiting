@@ -7,6 +7,7 @@ import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.web.server.context.WebServerApplicationContext;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
 import org.springframework.context.ApplicationListener;
@@ -37,6 +38,12 @@ public final class SnapshotRefreshLifecycle
 
     private final SnapshotRefresher refresher;
     private final ShutdownState shutdown;
+
+    /** readiness 를 내리고 부하 분산기가 뺄 때까지 기다린다 (6.4.1·6.4.2). */
+    private final DrainWait drainWait;
+
+    /** 드레인이 상한 안에 끝났는지 남긴다. 없으면 안 남긴다 — 시험 배선을 위해서다. */
+    private DrainOutcome drainOutcome;
     private final Duration interval;
 
     /**
@@ -56,7 +63,7 @@ public final class SnapshotRefreshLifecycle
     private volatile long drainingAt;
 
     private SnapshotRefreshLifecycle(SnapshotRefresher refresher, ShutdownState shutdown,
-            Duration interval, Supplier<Scheduler> schedulers) {
+            Duration interval, Supplier<Scheduler> schedulers, DrainWait drainWait) {
         if (interval == null || interval.isZero() || interval.isNegative()) {
             throw new IllegalArgumentException("interval 은 양수여야 한다: %s".formatted(interval));
         }
@@ -64,17 +71,18 @@ public final class SnapshotRefreshLifecycle
         this.shutdown = Objects.requireNonNull(shutdown, "shutdown 은 필수다");
         this.interval = interval;
         this.schedulers = Objects.requireNonNull(schedulers, "schedulers 는 필수다");
+        this.drainWait = Objects.requireNonNull(drainWait, "drainWait 는 필수다");
     }
 
     public static SnapshotRefreshLifecycle of(SnapshotRefresher refresher, ShutdownState shutdown,
-            Duration interval) {
-        return of(refresher, shutdown, interval, SnapshotRefresher::dedicatedScheduler);
+            Duration interval, DrainWait drainWait) {
+        return of(refresher, shutdown, interval, SnapshotRefresher::dedicatedScheduler, drainWait);
     }
 
     /** 스케줄러를 밖에서 준다. 시험이 가상 시계를 넣는 자리다. */
     public static SnapshotRefreshLifecycle of(SnapshotRefresher refresher, ShutdownState shutdown,
-            Duration interval, Supplier<Scheduler> schedulers) {
-        return new SnapshotRefreshLifecycle(refresher, shutdown, interval, schedulers);
+            Duration interval, Supplier<Scheduler> schedulers, DrainWait drainWait) {
+        return new SnapshotRefreshLifecycle(refresher, shutdown, interval, schedulers, drainWait);
     }
 
     @Override
@@ -117,7 +125,20 @@ public final class SnapshotRefreshLifecycle
         // **여기서 시각을 잡는다.** 정지 로그가 드레이닝을 얼마나 버텼는지 말하려면
         // 시작점이 필요한데, 그 시작점을 아는 것은 이 사건뿐이다.
         drainingAt = System.nanoTime();
-        shutdown.draining();
+        // **readiness 를 내리고 부하 분산기가 뺄 시간을 준다.** 곧바로 드레인하면
+        // 그 사이 도착한 요청이 커넥션째 끊긴다. 이 사건이 웹 서버 정지보다
+        // 먼저 오므로, 여기서 막는 것이 곧 유입을 멎게 하는 일이다.
+        //
+        // **여기에 등록 해제를 붙이지 않는다.** 아직 요청을 받는 노드를 분모에서
+        // 빼면 남은 노드가 크레딧을 다 쓰고 그 위에 이 노드의 통과분이 더해진다.
+        // 그 일은 드레인이 끝난 뒤 GatewayHeartbeatLoop 가 한다 (6.4.4).
+        drainWait.beforeDrain();
+        // **빠졌는지까지 남긴다.** 안 남기면 오케스트레이터가 진행 중인 요청째
+        // 죽인 판과 곱게 빠진 판이 로그에서 같다 — 롤링 배포마다 사용자가 오류를
+        // 보는데 그 사실이 어디에도 안 드러난다.
+        if (drainOutcome != null) {
+            drainOutcome.await();
+        }
     }
 
     private void disposeScheduler() {
@@ -131,6 +152,12 @@ public final class SnapshotRefreshLifecycle
     @Override
     public void setApplicationContext(ApplicationContext context) {
         this.owner = context;
+    }
+
+    /** 드레인 결과를 남길 자리를 받습니다. 배선이 안 되면 안 남깁니다. */
+    @Autowired(required = false)
+    public void setDrainOutcome(DrainOutcome drainOutcome) {
+        this.drainOutcome = drainOutcome;
     }
 
     @Override

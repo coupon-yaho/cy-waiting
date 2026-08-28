@@ -1,10 +1,13 @@
 package com.kafkick.waiting.gateway;
 
 import com.kafkick.waiting.domain.admission.AdmissionDecider;
+import com.kafkick.waiting.domain.admission.CouponKeys;
 import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
 import com.kafkick.waiting.domain.queue.EntryToken;
 import com.kafkick.waiting.domain.queue.QueueToken;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import java.time.Clock;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -15,11 +18,9 @@ import org.springframework.context.annotation.Configuration;
  * (DS-1) — 값을 주고 만들어 주는 자리가 필요하다.
  */
 @Configuration
-@EnableConfigurationProperties({QueueTokenProperties.class, ProxyProperties.class})
+@EnableConfigurationProperties({QueueTokenProperties.class, ProxyProperties.class,
+        CoalescingProperties.class})
 public class IdentityConfig {
-
-    /** 쿠폰 2,000개를 상정한 값. 넘으면 판정이 그 사실을 따로 알린다. */
-    private static final int MAX_LIMITER_KEYS = 10_000;
 
     /**
      * 한산한 쿠폰이 쓸 수 있는 노드 예산 비율 (B-13).
@@ -29,6 +30,22 @@ public class IdentityConfig {
      */
     private static final double IDLE_CREDIT_RATIO = 0.7;
 
+
+    /**
+     * 조회를 모으는 필터.
+     *
+     * <p><b>화이트리스트로만 켠다.</b> 목록에 없는 경로는 그대로 프록시한다 —
+     * 기본이 켜짐이면 개인화된 응답이 붙는 순간 남의 응답을 받는다.
+     */
+    @Bean
+    public QueryCoalescingFilter queryCoalescingFilter(CoalescingProperties props,
+            Clock clock, MeterRegistry meters) {
+        QueryCoalescingFilter filter = QueryCoalescingFilter.of(props, clock, meters);
+        // **상한에 닿으면 모으기가 조용히 멎는다.** 뒷단 도달 수만 원상복귀하고
+        // 그림에는 아무것도 안 남으므로 게이지로 낸다 (6.10.9 · 6.10.10).
+        filter.bindMetrics(meters);
+        return filter;
+    }
 
     /** 못 읽는 대역은 여기서 버린다. 요청 경로에서 다시 풀면 그 파싱이 거기 붙는다. */
     @Bean
@@ -60,9 +77,21 @@ public class IdentityConfig {
     /**
      * <b>리미터는 하나다.</b> 판정과 장애 개방이 각자 들면 한 초에 두 예산이
      * 겹쳐 나가고, 경로를 나누지 말라는 규칙이 막으려던 버스트가 그대로 난다.
+     *
+     * <p>이 인스턴스는 <b>쿠폰으로 센다.</b> 그래서 격벽·래치와 같은 상한을 쓴다
+     * (6.3.5). 클라이언트 식별자로 세는 남용 리미터는 키 공간이 달라 별개다.
      */
     @Bean
     public SecondWindowLimiter admissionLimiter() {
-        return SecondWindowLimiter.withMaxKeys(MAX_LIMITER_KEYS);
+        return SecondWindowLimiter.withMaxKeys(CouponKeys.MAX);
+    }
+
+    /**
+     * 멱등 키도 <b>같은 비밀키</b>로 만든다. 나누면 운영자가 하나만 넣고 다른
+     * 하나는 안 넣은 채로 나가는데, 그때 기동은 성공한다.
+     */
+    @Bean
+    public IdempotencyKey idempotencyKey(QueueTokenProperties properties) {
+        return IdempotencyKey.of(properties.secret());
     }
 }

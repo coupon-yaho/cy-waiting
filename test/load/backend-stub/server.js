@@ -52,6 +52,9 @@ function error(res, status, code, message) {
   json(res, status, { success: false, data: null, error: { status, code, message } });
 }
 
+/** 공유 선언을 붙일 것인가. 기본은 붙임 — 기존 게이트가 그 상태를 잰다. */
+const SHARED_HEADER = process.env.SHARED_HEADER !== 'false';
+
 const server = createServer((req, res) => {
   // 스텁 자신의 상태. compose 의 healthcheck 와 시나리오의 사후 확인이 쓴다.
   if (req.url === '/stub/health') {
@@ -64,9 +67,25 @@ const server = createServer((req, res) => {
   }
 
   inflight += 1;
+  const startedAt = process.hrtime.bigint();
   setTimeout(() => {
     inflight -= 1;
     served += 1;
+    // **자기가 쓴 시간을 실어 보낸다.** 게이트웨이 오버헤드를 재려면 뒷단 몫을
+    // 빼야 하는데, 설정값(LATENCY_MS)을 빼면 스케줄링 흔들림이 우리 몫으로
+    // 넘어온다 — 그 오차가 그대로 판정에 들어간다.
+    const spentMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+    res.setHeader('X-Stub-Service-Ms', spentMs.toFixed(3));
+    // **공유해도 된다고 말한다.** 게이트웨이는 응답이 개인화됐는지 모르므로
+    // 말 안 한 응답은 안 모은다. 안 붙이면 조회 폭주 시나리오의 병합 배수가
+    // 조용히 1 이 되고, 그 판은 모으기를 재는 게 아니라 끈 것을 잰다.
+    //
+    // 끌 수 있게 둔 것은 **계약이 안 선 상태를 재기 위해서**다. 늘 붙이면
+    // 하네스가 그 상태를 한 번도 안 지나고, 그러면 "붙기 전까지 어떻게 되는가"
+    // 를 아무도 못 본다.
+    if (SHARED_HEADER) {
+      res.setHeader('Cache-Control', 'public');
+    }
     // 발급이든 조회든 형태만 맞으면 된다. 내용은 게이트웨이가 안 본다.
     json(res, 200, {
       success: true,
@@ -77,5 +96,5 @@ const server = createServer((req, res) => {
 });
 
 server.listen(PORT, () => {
-  process.stdout.write(`stub up :${PORT} latency=${LATENCY_MS}ms maxInflight=${MAX_INFLIGHT}\n`);
+  process.stdout.write(`stub up :${PORT} latency=${LATENCY_MS}ms maxInflight=${MAX_INFLIGHT} shared=${SHARED_HEADER}\n`);
 });

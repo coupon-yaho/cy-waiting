@@ -7,6 +7,8 @@ import com.kafkick.waiting.control.SnapshotHolder;
 import com.kafkick.waiting.domain.admission.AdmissionDecider;
 import com.kafkick.waiting.domain.admission.AdmissionDecision;
 import com.kafkick.waiting.domain.admission.AdmissionRequest;
+import com.kafkick.waiting.domain.admission.Bulkhead;
+import com.kafkick.waiting.domain.admission.CouponKeys;
 import com.kafkick.waiting.domain.admission.EnqueueLatch;
 import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
 import com.kafkick.waiting.domain.coupon.CouponState;
@@ -16,9 +18,14 @@ import com.kafkick.waiting.domain.queue.EtaPolicy;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import com.kafkick.waiting.domain.queue.QueueToken;
 import io.micrometer.core.instrument.MeterRegistry;
+import org.springframework.http.HttpHeaders;
 import java.time.Clock;
+import java.time.Duration;
+import java.util.EnumSet;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.DoubleSupplier;
@@ -45,6 +52,20 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
 
     /** 응답을 쓰는 쪽이 읽는다. 다시 판정하면 두 번 세고 답이 갈릴 수 있다. */
     public static final String DECISION = "waiting.admission.decision";
+
+    /** 이 요청을 <b>재료를 갖고 판정했는가</b>. SLI 가 이 값만 읽는다 (O-7). */
+    // 운영 카운터를 더해 만들지 않는다 — 한 요청이 여러 사유를 지날 수 있어
+    // 실패율이 100% 를 넘고, 라벨을 리네임하면 그 항이 조용히 빠진다.
+    public static final String JUDGEMENT = "waiting.judgement";
+
+    /** 재료 없이 판정한 요청. {@link #JUDGEMENT} 가 이 표시를 읽는다. */
+    private static final String DEGRADED = "waiting.judgement.degraded";
+
+    /** 낡은 재료에서만 나오는 판정. 사다리 4·7번의 결과다. */
+    private static final Set<AdmissionDecision> STALE_DECISIONS = EnumSet.of(
+            AdmissionDecision.PASS_FAIL_OPEN,
+            AdmissionDecision.ENQUEUE_STALE,
+            AdmissionDecision.REJECT_OVERLOAD);
 
     private static final Logger log = LoggerFactory.getLogger(AdmissionGatewayFilter.class);
 
@@ -73,8 +94,27 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      */
     private static final double FAIL_OPEN_SHARE = 0.5;
 
-    /** 쿠폰 2,000개를 상정한 값. 넘으면 통째로 비운다 — 판정이 한 틱 헐거워질 뿐이다. */
-    private static final int LATCH_MAX_KEYS = 10_000;
+    /**
+     * 한 건이 뒷단에 걸려 있을 수 있는 시간(초). 상한은 초당 예산 × 이 값이다.
+     *
+     * <p>유입은 같은 예산이 이미 조이므로 걸려 있는 수는 <b>예산 × 지연</b>이고,
+     * 이 값이 곧 격벽이 막기 시작하는 지연이다. 서킷의 느림 임계보다 커야
+     * 느린 뒷단이 서킷에 집계된 뒤에 막힌다 — 6.8.1 에서 튜너블로 뺀다.
+     */
+    private static final long MAX_IN_FLIGHT_SEC = 3;
+
+    /**
+     * 자리를 놓게 하는 상한의 여유 배수.
+     *
+     * <p>뒷단 응답 상한(12초)보다 뒤여야 합니다. 여기가 먼저 끊으면 서킷에 가는
+     * 것이 오류가 아니라 취소가 되고, 취소는 창에 안 쌓입니다 — 멎은 뒷단의
+     * 서킷이 영영 안 열립니다. 여기는 그 상한이 안 걸렸을 때의 마지막 그물입니다.
+     */
+    private static final long IN_FLIGHT_GRACE = 5;
+
+    /** 자리를 놓게 하는 시한. 시험이 손으로 베끼지 않게 여기서 한 번만 정한다. */
+    static final Duration MAX_IN_FLIGHT =
+            Duration.ofSeconds(MAX_IN_FLIGHT_SEC * IN_FLIGHT_GRACE);
 
     private final SnapshotHolder holder;
     private final AdmissionDecider decider;
@@ -86,6 +126,12 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     private final EntryToken entryTokens;
     private final SecondWindowLimiter limiter;
     private final EnqueueLatch latch;
+
+    /** 뒷단의 멱등성이 작동할 근거. 같은 시도에 같은 값을 준다 (A-10). */
+    private final IdempotencyKey idempotency;
+
+    /** 동시에 걸려 있는 건수를 센다. 리미터가 세는 초당 건수와 단위가 다르다. */
+    private final Bulkhead bulkhead = Bulkhead.withMaxKeys(CouponKeys.MAX);
     private final ApiError error;
     private final QueueResponse waiting = QueueResponse.create();
 
@@ -101,12 +147,21 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      */
     private final FailureWindow failOpenWindow;
 
+    /**
+     * 보호 장치가 끊는 구간.
+     *
+     * <p>카운터만 두면 사후에 "몇 시부터 몇 시까지, 몇 건을 끊었나" 를 못 답합니다.
+     * 그 답이 필요한 때는 늘 사고가 끝난 뒤입니다 (LG-2).
+     */
+    private final FailureWindow shedWindow;
+
     private AdmissionGatewayFilter(SnapshotHolder holder, AdmissionDecider decider,
             Clock clock, MeterRegistry meters, DoubleSupplier random,
             QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter,
-            EntryToken entryTokens, LongSupplier ticker) {
+            EntryToken entryTokens, IdempotencyKey idempotency, LongSupplier ticker) {
         this.holder = Objects.requireNonNull(holder, "holder 는 필수다");
         this.failOpenWindow = FailureWindow.of(ticker);
+        this.shedWindow = FailureWindow.of(ticker);
         this.decider = Objects.requireNonNull(decider, "decider 는 필수다");
         this.clock = Objects.requireNonNull(clock, "clock 은 필수다");
         this.meters = Objects.requireNonNull(meters, "meters 는 필수다");
@@ -119,7 +174,11 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         // **래치 수명을 여기서 정하지 않는다.** 스냅샷을 아직 믿는 한계보다 짧으면
         // 그 차이가 그대로 추월 창이 된다. 두 값이 다른 클래스에 있으면 조용히
         // 갈라지므로, 한계를 정한 쪽에서 끌어온다.
-        this.latch = EnqueueLatch.covering(LATCH_MAX_KEYS, holder.dataStaleAfter());
+        this.latch = EnqueueLatch.covering(CouponKeys.MAX, holder.dataStaleAfter());
+        this.idempotency = Objects.requireNonNull(idempotency, "idempotency 는 필수다");
+        // **만들어 두고 안 걸면 지표가 안 나온다.** 격벽이 차오르는 중인지는
+        // 막힌 뒤에야 오르는 카운터로는 못 본다.
+        BulkheadMetrics.bind(bulkhead, meters);
         this.error = ApiError.of(clock);
     }
 
@@ -127,26 +186,28 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     @Autowired
     AdmissionGatewayFilter(SnapshotHolder holder, AdmissionDecider decider, Clock clock,
             MeterRegistry meters, QueuePort queue, QueueToken tokens,
-            SecondWindowLimiter limiter, EntryToken entryTokens) {
+            SecondWindowLimiter limiter, EntryToken entryTokens,
+            IdempotencyKey idempotency) {
         this(holder, decider, clock, meters,
                 () -> ThreadLocalRandom.current().nextDouble(), queue, tokens, limiter,
-                entryTokens, System::nanoTime);
+                entryTokens, idempotency, System::nanoTime);
     }
 
     public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider,
             Clock clock, MeterRegistry meters, QueuePort queue, QueueToken tokens,
-            SecondWindowLimiter limiter, EntryToken entryTokens) {
+            SecondWindowLimiter limiter, EntryToken entryTokens,
+            IdempotencyKey idempotency) {
         return new AdmissionGatewayFilter(holder, decider, clock, meters, queue, tokens, limiter,
-                entryTokens);
+                entryTokens, idempotency);
     }
 
     /** 난수원을 받는다. 고정하지 못하면 흔들림이 실제로 붙었는지 못 잰다 (TS-4). */
     public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider,
             Clock clock, MeterRegistry meters, DoubleSupplier random,
             QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter,
-            EntryToken entryTokens) {
+            EntryToken entryTokens, IdempotencyKey idempotency) {
         return new AdmissionGatewayFilter(holder, decider, clock, meters, random, queue,
-                tokens, limiter, entryTokens, System::nanoTime);
+                tokens, limiter, entryTokens, idempotency, System::nanoTime);
     }
 
     /**
@@ -159,9 +220,19 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider,
             Clock clock, MeterRegistry meters, DoubleSupplier random,
             QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter,
-            EntryToken entryTokens, LongSupplier ticker) {
+            EntryToken entryTokens, IdempotencyKey idempotency, LongSupplier ticker) {
         return new AdmissionGatewayFilter(holder, decider, clock, meters, random, queue,
-                tokens, limiter, entryTokens, ticker);
+                tokens, limiter, entryTokens, idempotency, ticker);
+    }
+
+    /**
+     * 지금 뒷단에 걸려 있는 건수.
+     *
+     * <p>종료할 때 이 값이 0 이 되기를 기다립니다 — 안 되면 그만큼이 강제 종료로
+     * 끊깁니다. 격벽이 세는 값이라 뒷단으로 넘어간 것만 셉니다.
+     */
+    public int inFlight() {
+        return bulkhead.inFlight();
     }
 
     /**
@@ -183,6 +254,16 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
 
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
+        // **품질은 요청마다 한 번만 센다.** 운영 카운터를 여럿 더해 만들면 한
+        // 요청이 여러 번 세어져 실패율이 100% 를 넘고, 라벨 하나를 리네임하면
+        // 그 항이 조용히 빠진다 (O-7).
+        return judge(exchange, chain)
+                .doFinally(signal -> meters.counter(JUDGEMENT, "quality",
+                        exchange.getAttributeOrDefault(DEGRADED, false)
+                                ? "degraded" : "fresh").increment());
+    }
+
+    private Mono<Void> judge(ServerWebExchange exchange, GatewayFilterChain chain) {
         String couponId = pathVariable(exchange);
         if (couponId == null) {
             // 라우트에서 변수 이름을 빼면 판정할 쿠폰이 없다. 그대로 흘리면
@@ -194,6 +275,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                 log.error("라우트에 {} 경로변수가 없다 — 판정할 대상을 못 정한다", COUPON_ID);
             }
             count("no-path-variable");
+            degraded(exchange);
             return error.write(exchange, ApiError.Code.INVALID_REQUEST);
         }
 
@@ -217,6 +299,12 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                 nowSec, MAX_ETA_SEC));
         exchange.getAttributes().put(DECISION, decision);
         count(decision.name());
+        // **낡은 재료로 내린 판정도 재료 없이 판정한 것이다.** 사다리 4·7번이
+        // 그 자리다 — 스냅샷에 있는 쿠폰은 deferred-* 를 안 지나므로, 여기서
+        // 표시하지 않으면 스냅샷이 멎은 구간이 통째로 성공으로 잡힌다.
+        if (STALE_DECISIONS.contains(decision)) {
+            degraded(exchange);
+        }
         return route(exchange, chain, decision, couponId, state, view.snapshot().meta());
     }
 
@@ -231,14 +319,17 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         // 상한이 0 이 되고, 그건 전면 차단이다. 이 구간은 준비성 판정이 막는다.
         if (view.isBeforeFirstTick()) {
             count("deferred-no-material");
-            return chain.filter(exchange);
+            degraded(exchange);
+            // 재료가 없어 크레딧을 모른다. 폴백으로 최소 배수 속도를 가정한다.
+            return forward(exchange, chain, couponId, 0, view.snapshot().meta());
         }
         // **모른다는 것이 무제한의 사유는 아니다.** 사다리 4번은 같은 무지에서
         // 노드 몫 안에서만 여는데, 여기만 열어 두면 아무 문자열 쿠폰이나 그
         // 상한 밖으로 나간다. 같은 예산에 태운다.
         if (holder.isDataStale(view)) {
             count("deferred-stale-material");
-            return failOpen(exchange, chain, view.snapshot().meta());
+            degraded(exchange);
+            return failOpen(exchange, chain, view.snapshot().meta(), couponId);
         }
         count("unknown-coupon");
         return error.write(exchange, ApiError.Code.UNKNOWN_COUPON);
@@ -247,7 +338,10 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     private Mono<Void> route(ServerWebExchange exchange, GatewayFilterChain chain,
             AdmissionDecision decision, String couponId, CouponState state, SnapshotMeta meta) {
         if (decision.isPass()) {
-            return chain.filter(exchange);
+            // **판정이 쓴 예산을 그대로 받는다.** 여기서 credit 을 다시 꺼내면
+            // 한산 통과가 0 을 받고, 0 은 상한으로 쓰이는 순간 전면 차단이다 (I1).
+            return forward(exchange, chain, couponId,
+                    decider.admittedRatePerSec(decision, state, meta), meta);
         }
         if (decision.isEnqueue()) {
             return enqueue(exchange, chain, couponId, state, meta);
@@ -285,7 +379,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                     return Mono.empty();
                 })
                 .switchIfEmpty(Mono.defer(() ->
-                        failOpen(exchange, chain, meta).then(Mono.empty())))
+                        failOpen(exchange, chain, meta, couponId).then(Mono.empty())))
                 .flatMap(entry -> {
                     // 이 노드가 방금 이 쿠폰의 줄을 봤다. 다음 창의 신규 유입이
                     // 여기 선 사람을 넘지 않게 한 구간 붙잡는다.
@@ -307,7 +401,12 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                             NANOSECONDS.toSeconds(r.elapsedNanos()), r.swallowed()));
                     if (!entry.accepted()) {
                         // 2차 방어에 걸렸다. 판정은 자리가 있다고 봤지만 실제로는 없다.
-                        count(AdmissionDecision.REJECT_QUEUE_FULL.name());
+                        //
+                        // **판정 이름으로 안 센다.** 이 요청은 위에서 이미 판정
+                        // 결과를 하나 받았고, 여기서 또 그 이름으로 세면 한 요청이
+                        // 판정 카운터를 두 번 올린다. SLI 의 분모가 그 이름들의
+                        // 합이라, 두 번 세면 분모가 부풀고 비율이 좋아 보인다.
+                        count("queue-full-2nd");
                         return error.write(exchange, ApiError.Code.QUEUE_FULL,
                                 retryAfterSec(AdmissionDecision.REJECT_QUEUE_FULL, random));
                     }
@@ -327,7 +426,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      * 전부 열면 뒷단이 그대로 무너진다. 상한을 넘은 몫은 되돌려 보낸다.
      */
     private Mono<Void> failOpen(ServerWebExchange exchange, GatewayFilterChain chain,
-            SnapshotMeta meta) {
+            SnapshotMeta meta, String couponId) {
         // **판정과 같은 리미터·같은 키다.** 따로 들면 한 초에 두 예산이 겹쳐
         // 나가고, 리미터를 하나로 두라는 규칙이 막으려던 버스트가 그대로 난다.
         long cap = (long) (AdmissionDecider.globalCap(meta) * FAIL_OPEN_SHARE);
@@ -338,7 +437,10 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                 log.warn("fail-open 진입 — 줄 등록이 안 돼 통과시킨다, 상한={}", cap);
             }
             count("enqueue-failed-open");
-            return chain.filter(exchange);
+            degraded(exchange);
+            // **연 예산이 곧 격벽의 밑변이다.** 여기서 0 을 넘기면 최소 배수
+            // 속도로 떨어져, 상한을 두고 연 몫의 대부분이 격벽에서 다시 막힌다.
+            return forward(exchange, chain, couponId, cap, meta);
         }
         count("enqueue-failed-shed");
         return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
@@ -397,6 +499,113 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         return entryTokens.verify(presented, couponId, clock.instant())
                 .filter(owner -> owner.equals(memberId))
                 .isPresent();
+    }
+
+    /**
+     * 뒷단으로 넘긴다. <b>통과하는 모든 길이 여기를 지난다.</b>
+     *
+     * <p>한 갈래만 키를 실으면 나머지에서는 클라이언트가 준 값이 그대로 뒷단에
+     * 닿는다. 그러면 매 시도 다른 값을 넣어 멱등성을 우회하거나, 남의 키를 주워
+     * 먼저 태워 그 사람의 진짜 시도를 재생으로 버리게 만들 수 있다.
+     */
+    private Mono<Void> forward(ServerWebExchange exchange, GatewayFilterChain chain,
+            String couponId, long ratePerSec, SnapshotMeta meta) {
+        HttpHeaders headers = exchange.getRequest().getHeaders();
+        String memberId = headers.getFirst(MEMBER_ID);
+        if (memberId == null) {
+            // 신원 필터가 앞에서 막으므로 여기 오면 배선이 바뀐 것이다.
+            // "null" 로 뭉개면 전원이 같은 키를 받아 서로의 발급을 지운다.
+            return error.write(exchange, ApiError.Code.INVALID_REQUEST);
+        }
+        // **자리를 잡기 전에 만든다.** 잡은 뒤에 두면 여기서 던지는 순간 반납이
+        // 아직 안 걸려 그 자리가 영영 안 돌아온다. 막는 방법이 둘인데 — 잡고
+        // 나서 감싸거나, 잡기 전으로 옮기거나 — 뒤엣것은 그 구간 자체를 없앤다.
+        //
+        // 끊길 요청 몫으로 서명 한 번이 더 나가지만, 새는 자리를 손으로 지키는
+        // 것보다 싸다. 손으로 지키는 것은 다음에 한 줄이 끼어드는 순간 깨진다.
+        String key = idempotency.of(couponId, memberId,
+                headers.getFirst(IdempotencyKey.HEADER));
+        // **초당 건수로는 못 막는 것이 있다.** 초당 100건이어도 각각 10초 걸리면
+        // 동시 1,000건이다. 느려진 뒷단이 커넥션을 다 붙잡으면 한산한 쿠폰의
+        // 통과 경로까지 같이 죽는다.
+        if (!bulkhead.tryEnter(couponId, inFlightCap(ratePerSec, meta))) {
+            count("bulkhead-full");
+            return shed(exchange);
+        }
+        // 뒷단으로 넘어가는 건이 생겼으면 끊던 구간이 끝난 것이다. 쌍으로 안
+        // 남기면 로그에 진입만 있고 언제 닫혔는지가 없다 (LG-2).
+        shedWindow.exited().ifPresent(r -> log.warn(
+                "보호 차단 해제 — {}초 동안 {}건 끊었다",
+                NANOSECONDS.toSeconds(r.elapsedNanos()), r.swallowed()));
+        // **여기부터 반납이 걸릴 때까지 던질 수 있는 것을 두지 않는다.**
+        return chain.filter(exchange.mutate()
+                        .request(r -> r.headers(h -> h.set(IdempotencyKey.HEADER, key)))
+                        .build())
+                // **안 끝나는 요청을 끝내 준다.** `doFinally` 는 끝나는 것만
+                // 돌려주지 끝나지 않는 것을 끝내지 못한다. 멈춘 뒷단 하나가 그
+                // 쿠폰의 격벽을 영구히 닫는 것을 이 상한이 막는다.
+                //
+                // 뒷단 응답 타임아웃(6.2)과는 다른 자리다. 그쪽은 응답을 얼마나
+                // 기다릴지이고, 여기는 자리를 얼마나 쥐고 있게 둘지다.
+                .timeout(MAX_IN_FLIGHT)
+                // 헤더가 이미 나간 뒤라면 ApiError 가 조용히 비켜선다 — 그
+                // 판단을 여기서 한 번 더 하면 두 곳이 갈릴 수 있다.
+                .onErrorResume(TimeoutException.class, e -> {
+                    count("bulkhead-timeout", "timeout");
+                    return shed(exchange);
+                })
+                // **어느 쪽으로 끝나도 돌려준다.** 안 돌려주면 격벽이 한 번 차고
+                // 나서 영영 안 열리고, 그 쿠폰은 뒷단이 멀쩡해져도 계속 막힌다.
+                .doFinally(signal -> bulkhead.exit(couponId));
+    }
+
+    /** 재료 없이 판정했다고 표시합니다. <b>세는 것은 끝에서 한 번</b> 합니다. */
+    // 한 요청이 여러 사유를 지날 수 있어, 여기서 세면 같은 요청이 여러 번 잡힌다.
+    private void degraded(ServerWebExchange exchange) {
+        exchange.getAttributes().put(DEGRADED, true);
+    }
+
+    /**
+     * 보호 장치가 끊는다. <b>판정도 같이 고쳐 적는다.</b>
+     *
+     * <p>사다리가 통과라고 적어 둔 값을 그대로 두면, 응답을 쓰는 쪽과 뒤이어
+     * 읽는 계층에는 이 요청이 통과로 보인다. 실제로 나가는 것은 503 이다.
+     */
+    private Mono<Void> shed(ServerWebExchange exchange) {
+        // 매 요청 찍으면 정작 조사가 필요한 순간에 묻힌다. 구간의 시작만 찍는다.
+        if (shedWindow.entered()) {
+            log.warn("보호 차단 진입 — 뒷단이 못 받아 끊는다");
+        }
+        // **차례가 온 사람은 가까운 밴드로 부른다.** 그는 이미 줄에서 빠졌고
+        // 손에 든 것은 수명이 있는 입장 토큰뿐이다. 30초 뒤로 보내면 그 사이
+        // 그의 몫이 남에게 가고, 토큰이 죽으면 줄 맨 뒤로 다시 선다.
+        // 폴백이 같은 장애에 쓰는 갈래와 같아야 한다 (BackendFallback).
+        boolean hasToken = exchange.<AdmissionDecision>getAttribute(DECISION)
+                == AdmissionDecision.PASS_TOKEN;
+        exchange.getAttributes().put(DECISION, AdmissionDecision.REJECT_OVERLOAD);
+        return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
+                (int) POLL.intervalSec(hasToken ? 0 : EtaPolicy.UNKNOWN, random));
+    }
+
+    /**
+     * 이 쿠폰이 동시에 걸어 둘 수 있는 건수.
+     *
+     * <p>이 통과를 낸 <b>초당 예산</b>에 한 건이 걸려 있을 수 있는 시간을 곱한다.
+     * 예산이 줄면 격벽도 같이 조여진다 (6.3.3).
+     *
+     * <p><b>예산이 0 인 구간에는 폴백을 쓴다.</b> 재료가 아직 없는 기동 직후가
+     * 그렇고, 0 을 상한으로 쓰면 전면 차단이다 — 등록 경로와 같은 폴백이다.
+     */
+    private long inFlightCap(long ratePerSec, SnapshotMeta meta) {
+        long perSecond = ratePerSec > 0 ? ratePerSec : AdmissionDecider.MIN_CREDIT;
+        // **재료에 실려 온 값을 먼저 본다** (P-1). 배포 없이 되돌릴 수 있어야
+        // 롤백이 성립하고, 그 전파 경로가 스냅샷이다.
+        long seconds = meta.inFlightSecondsOr(MAX_IN_FLIGHT_SEC);
+        // **곱이 넘치면 음수가 되고, 음수 상한은 전면 차단이다.** 예산은 밖에서
+        // 오는 globalCredit 에서 나오므로 여기서 막는다.
+        return perSecond > Long.MAX_VALUE / seconds
+                ? Long.MAX_VALUE
+                : perSecond * seconds;
     }
 
     private String pathVariable(ServerWebExchange exchange) {

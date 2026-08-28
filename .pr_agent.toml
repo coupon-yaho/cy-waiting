@@ -1,0 +1,117 @@
+# Qodo Merge (PR-Agent) 설정 — https://qodo-merge-docs.qodo.ai/usage-guide/configuration_options/
+#
+# 이 저장소의 규칙은 ai/rules/ 에 있다. 규칙을 여기에 복사하지 않는다 —
+# 사본이 생기는 순간 둘이 갈라지고, 그때부터 아무도 믿지 않는다.
+# 여기에는 **어디를 어떤 눈으로 볼지**만 적는다.
+#
+# 리뷰는 자동이 아니라 `.github/workflows/qodo-review.yml` 이 부른다.
+# 사용량이 유한하므로 언제 쓸지를 사람이 정한다.
+
+[config]
+model = "gpt-4o"
+response_language = "ko-KR"
+# 산문을 줄이고 지적만 남긴다. 설명이 길면 진짜 지적이 그 안에 묻힌다.
+verbosity_level = 0
+# 커밋 사이의 변화만 보지 않는다. 이 저장소는 한 PR 이 여러 하위 작업을 묶는다.
+publish_output_progress = false
+
+[pr_reviewer]
+# **정합성 요구가 강한 저장소다.** 놓치는 것보다 많이 지적하는 쪽이 낫다.
+extra_instructions = """
+한국어로 답한다. 지적마다 **무엇이 깨지는지**를 구체적인 입력과 결과로 적는다.
+"이렇게 하는 것이 좋다" 는 지적이 아니다.
+
+**규칙 전문은 저장소에 있다.** 아래는 요약이 아니라 어디를 볼지 가리키는 것이다.
+판단이 필요하면 해당 파일을 열어 읽어라 — 여기 적힌 것만으로 판정하지 마라.
+
+| 무엇 | 어디 |
+|---|---|
+| 규칙 색인 (MUST 목록 전부) | `ai/rules/00-index.md` |
+| 자바 스타일 (JS-*) | `ai/rules/10-java-style.md` |
+| 설계 (DS-*) | `ai/rules/20-design.md` |
+| 리액티브 (RX-*) | `ai/rules/30-reactive.md` |
+| 시험 (TS-*) | `ai/rules/40-testing.md` |
+| 작업 흐름 (WF-*) | `ai/rules/60-workflow.md` |
+| 패키지별 (PK-*) | `ai/rules/70-packages.md` |
+| 로깅 (LG-*) | `ai/rules/80-logging.md` |
+| 예외 (EX-*) | `ai/rules/90-errors.md` |
+| 판정 사다리·불변식 | `plan/02-domain-core.md` |
+| 결정과 근거 | `plan/90-decisions.md` |
+
+이 저장소의 타협 불가 불변식 넷을 먼저 본다 (CLAUDE.md 2절):
+1. 요청 경로에서 Redis 를 치지 않는다 — 줄 등록만 예외다
+2. 초과 발급 0
+3. 순번 역행 0
+4. 줄 선 사람을 추월시키지 않는다. 장애 중에도
+
+특히 다음을 의심한다.
+- **시험이 통과하는데 버그가 있는 경우.** 픽스처가 도달 불가능한 상태를 만들거나,
+  단언이 약해서 회귀를 못 잡는 경우다. "이 시험을 어떻게 고장 내면 여전히
+  통과하는가" 를 물어라
+- **만들어 두고 안 건 배선.** 코드에 보이지만 아무도 부르지 않아 운영에서는
+  동작하지 않는 것
+- **라이브러리가 대신 정해 주는 값.** 설정에 안 적었다고 그 장치가 꺼져 있는
+  것이 아니다. 켜져 있는데 값을 아무도 안 정한 상태가 가장 나쁘다
+- **주석이 사실과 다른 경우.** 근거가 틀리면 다음 사람이 그것을 믿는다
+"""
+require_score_review = false
+require_tests_review = true
+require_estimate_effort_to_review = false
+require_can_be_split_review = false
+require_security_review = true
+require_ticket_analysis_review = false
+# 인라인으로 달아야 어느 줄인지 보인다.
+inline_code_comments = true
+num_code_suggestions = 0
+
+[pr_code_suggestions]
+extra_instructions = """
+한국어로 답한다. 규칙 위반은 규칙 ID 를 함께 적는다 (예: JS-13, RX-1, TS-11).
+
+**규칙 전문은 `ai/rules/00-index.md` 와 그것이 가리키는 파일들에 있다.** 아래는
+자주 걸리는 것을 추린 것일 뿐이고, 여기 없다고 규칙이 아닌 것은 아니다. 바뀐
+파일이 속한 계층의 규칙 파일을 열어 읽고 판정하라.
+
+계층마다 보는 눈이 다르다.
+- `src/main/java/**/domain/**` — 순수해야 한다 (DS-1). Spring·Reactor·Redis import,
+  `Instant.now()`, `Math.random()` 이 있으면 지적한다. 불변식 I1 을 확인한다:
+  `runtime == IDLE` 이면 `credit == 0` 이다. 그 값으로 통과 상한을 계산하면
+  한산한 쿠폰이 전부 큐로 간다 — 이전 구현의 핵심 버그다
+- `src/main/java/**/admission/**` — 판정 순서가 곧 우선순위다. 순서를 바꾸는
+  변경이면 계획서 3.5절 표도 함께 고쳤는지 본다 (PK-A4). 상한 계산에
+  `max(1, ...)` 을 쓰지 않는지 확인한다 (B-2)
+- `**/*.lua` — `KEYS[]` 에 선언되지 않은 키를 만지면 클러스터가 거부한다 (RD-1).
+  한 스크립트가 두 슬롯을 만지지 않는지 본다 (RD-2)
+- `src/main/java/**` — FQDN 금지(JS-1), `private static` 메서드 금지(JS-13),
+  Javadoc 최대 5줄(JS-6), 블로킹 호출 금지(RX-1), 요청당 로그 금지(LG-1),
+  상태 전이는 진입·해제 쌍(LG-2), 정상 실패를 예외로 만들지 않음(EX-1)
+- `src/test/java/**`·`src/testFixtures/java/**` — 픽스처가 도달 불가능한 상태를
+  만들 수 있으면 지적한다 (TS-3). 약한 단언(TS-11), 실제 시계 의존(TS-4),
+  `@Disabled`·재시도로 덮은 불안정 시험(TS-7)
+- `.github/**` — 서드파티 액션은 SHA 로 핀한다. 시크릿이 로그로 새는 경로와
+  최소 권한을 확인한다
+"""
+num_code_suggestions_per_chunk = 6
+rank_suggestions = true
+
+[pr_description]
+publish_labels = false
+# 본문은 사람이 쓴다. 자동 요약이 그것을 덮으면 왜 그렇게 했는지가 사라진다.
+generate_ai_title = false
+
+[github_action_config]
+auto_review = false
+auto_describe = false
+auto_improve = false
+
+[ignore]
+# 문서는 리뷰하지 않는다. 한글 산문에 대한 오탈자·문체 지적이 쌓이면
+# 코드에 대한 진짜 지적이 그 안에 묻힌다.
+glob = [
+    "**/*.md",
+    "**/*.mdx",
+    "**/build/**",
+    "**/.gradle/**",
+    "**/*.lock",
+    "waiting-legacy/**",
+]

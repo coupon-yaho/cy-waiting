@@ -37,7 +37,7 @@ runs:
         fi
 
     - if: steps.probe.outputs.buildable == 'true'
-      uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3  # v4.9.1
+      uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961  # v5.7.0
       with:
         distribution: temurin
         java-version: ${{ inputs.java-version }}
@@ -45,7 +45,7 @@ runs:
     # 브랜치가 아니라 역할로 가른다. PR 의 ref 는 refs/pull/N/merge 라
     # 브랜치로 가르면 PR 에서는 아무도 캐시를 못 쓴다.
     - if: steps.probe.outputs.buildable == 'true'
-      uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d  # v4
+      uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c  # v5.0.2
       with:
         cache-read-only: ${{ inputs.cache-write != 'true' }}
 

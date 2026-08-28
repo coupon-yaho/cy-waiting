@@ -1,0 +1,214 @@
+# 알람은 **증상에만** 건다 (6.9).
+#
+# 원인마다 걸면 장애 하나가 열 개를 울리고, 그러면 아무도 안 본다. 그리고
+# 게이트웨이가 실제로 볼 수 있는 것에만 건다 — 초과 발급 여부는 재고를 가진
+# 발급 계층만 안다. 그래서 불변식 2 는 게이트웨이 쪽 선행 지표로 대신 본다.
+groups:
+  # **소진율을 한 곳에서 만든다** (O-7).
+  #
+  # SLI 는 "재료를 갖고 판정한 요청의 비율" 이다. 성공 응답 비율이 아니다 —
+  # 끊는 것도 줄 세우는 것도 정상 동작이라, 2xx 로 재면 보호가 동작할수록
+  # 지표가 나빠지고 그 지표로 할 수 있는 개선은 보호를 끄는 것뿐이다.
+  #
+  # **뒷단이 느린 것은 여기 안 든다.** 격벽 시한을 넘긴 요청도 판정은 신선한
+  # 재료로 했다. 그것까지 세면 뒷단 지연만으로 판정 예산이 타고, 사람이 깨어나
+  # 볼 것은 이 지표가 아니라 서킷과 보호 차단 알람이다.
+  #
+  # **재료 없이 판정한 것도 실패다.** 낡은 재료로 연 것(PASS_FAIL_OPEN), 낡아서
+  # 줄 세운 것(ENQUEUE_STALE), 낡은 채로 상한을 물린 것(REJECT_OVERLOAD)이 전부
+  # "재료를 갖고 판정" 이 아니다. 이것을 빼면 스냅샷이 멎은 구간이 100% 성공으로
+  # 잡힌다 — 실트래픽의 재료 낡음은 deferred-* 를 안 올린다.
+  #
+  # **줄을 못 세워 끊은 것은 실패가 아니다.** 열어 준 것만 실패다 — 그것이 줄 선
+  # 사람을 추월시킨 것이다. 등록 오류 자체를 세면 끊기도 같이 세게 된다.
+  #
+  # clamp_min 은 0/0 을 막는 가드일 뿐이다. 저트래픽 오탐은 알람에 건 실패 건수
+  # 바닥이 막는다 — 요청률로 걸면 한산한 시간대의 진짜 장애를 통째로 덮는다.
+  #
+  # 분모는 판정 결과 이름과 판정을 못 한 사유의 합이다. 격벽·큐 사유는 판정 뒤에
+  # 한 번 더 세므로 분모에 넣으면 두 번 센다.
+  - name: waiting-slo
+    interval: 30s
+    rules:
+      - record: waiting:judgement_error_budget_burn:ratio_rate5m
+        expr: >-
+          sum(rate(waiting_judgement_total{quality="degraded"}[5m]))
+          /
+          clamp_min(sum(rate(waiting_judgement_total{}[5m])), 0.001)
+          / 0.001
+      - record: waiting:judgement_error_budget_burn:ratio_rate30m
+        expr: >-
+          sum(rate(waiting_judgement_total{quality="degraded"}[30m]))
+          /
+          clamp_min(sum(rate(waiting_judgement_total{}[30m])), 0.001)
+          / 0.001
+      - record: waiting:judgement_error_budget_burn:ratio_rate1h
+        expr: >-
+          sum(rate(waiting_judgement_total{quality="degraded"}[1h]))
+          /
+          clamp_min(sum(rate(waiting_judgement_total{}[1h])), 0.001)
+          / 0.001
+      # 저트래픽 오탐을 막는 바닥. clamp_min 은 0/0 을 막을 뿐 이 일을 못 한다 —
+      # 1시간에 69건 미만이면 실패 한 건이 호출 임계를 넘긴다.
+      # **바닥은 실패 건수로 건다.** 요청률로 걸면 트래픽이 적은 시간대에 전부
+      # 실패해도 알람이 안 뜬다 — 초당 0.5 는 시간당 1,800건이라, 그 아래의
+      # 진짜 장애를 통째로 덮는다. 세 건 이하의 우발적 실패만 걸러 내면 된다.
+      - record: waiting:judgement_degraded:increase1h
+        expr: sum(increase(waiting_judgement_total{quality="degraded"}[1h]))
+      - record: waiting:judgement_degraded:increase6h
+        expr: sum(increase(waiting_judgement_total{quality="degraded"}[6h]))
+      - record: waiting:judgement_error_budget_burn:ratio_rate3d
+        expr: >-
+          sum(rate(waiting_judgement_total{quality="degraded"}[3d]))
+          /
+          clamp_min(sum(rate(waiting_judgement_total{}[3d])), 0.001)
+          / 0.001
+      - record: waiting:judgement_error_budget_burn:ratio_rate6h
+        expr: >-
+          sum(rate(waiting_judgement_total{quality="degraded"}[6h]))
+          /
+          clamp_min(sum(rate(waiting_judgement_total{}[6h])), 0.001)
+          / 0.001
+
+  - name: waiting-page
+    interval: 15s
+    rules:
+      # **재료가 아예 없다.** 나이가 음수인 것은 낡음이 아니라 "한 번도 못 받음"
+      # 이라, 임계 초과 규칙 하나로는 영영 안 걸린다. 그 구간에는 판정이 상한을
+      # 못 걸고 뒷단으로 그대로 흘린다 — 가장 나쁜 상태가 가장 조용하다.
+      - alert: 판정재료없음
+        expr: waiting_snapshot_age < 0
+        for: 1m
+        labels: { severity: page }
+        annotations:
+          summary: "{{ $labels.instance }} 가 판정 재료를 한 번도 못 받았다"
+          description: >-
+            나이가 음수다. 낡은 것이 아니라 없는 것이라, 이 노드는 상한 없이
+            뒷단으로 흘리고 있다. 레디스 연결과 리더 배분 틱을 본다.
+
+      # **낡음은 없음과 따로 건다.** 둘을 한 규칙으로 묶으면 음수가 임계를 안 넘어
+      # 조용해진다.
+      - alert: 판정재료낡음
+        expr: waiting_snapshot_age >= 0 and waiting_snapshot_age > 300
+        for: 5m
+        labels: { severity: ticket }
+        annotations:
+          summary: "{{ $labels.instance }} 의 판정 재료가 5분째 낡았다"
+
+      # 대기 인원. **재료가 신선할 때만 읽는다** — 게이지는 갱신이 실패해도
+      # 마지막 값을 계속 내므로, 이 조건이 없으면 "2만 명이 서 있다" 와 "4분째
+      # 아무것도 못 보고 있다" 가 같은 그림이다.
+      #
+      # 18,000 은 R4 의 한계 20,000 에서 역산했다. 한계에 닿은 뒤 알리면 늦다.
+      - alert: 대기열포화임박
+        expr: >-
+          waiting_queue_waiting > 18000
+          and on(instance) (waiting_snapshot_age >= 0 and waiting_snapshot_age <= 5)
+        for: 2m
+        labels: { severity: ticket }
+        annotations:
+          summary: "대기 인원이 {{ $value }} 명 — 한계(20,000)에 근접"
+
+      # 서킷이 계속 열려 있다. **한 번 열리는 것은 알리지 않는다** — 그건 서킷이
+      # 일하는 것이다. 안 닫히는 것이 사람이 볼 일이다.
+      - alert: 서킷지속오픈
+        expr: resilience4j_circuitbreaker_state{state="open"} == 1
+        for: 5m
+        labels: { severity: ticket }
+        annotations:
+          summary: "{{ $labels.name }} 서킷이 5분째 열려 있다"
+
+      # 뒷단 폴백이 계속 답하고 있다. 사용자에게 나가는 것이 발급이 아니라
+      # 안내문이라는 뜻이다.
+      - alert: 폴백지속
+        expr: sum(rate(waiting_backend_fallback_total[5m])) > 1
+        for: 5m
+        labels: { severity: page }
+        annotations:
+          summary: "5분째 초당 {{ $value }} 건이 폴백으로 나가고 있다"
+
+      # 보호 장치가 계속 끊고 있다. 격벽이 굳었는지 뒷단이 죽었는지는 서킷
+      # 알람과 함께 봐야 갈린다.
+      - alert: 보호차단지속
+        expr: >-
+          sum(rate(waiting_admission_total{outcome=~"bulkhead-full|bulkhead-timeout"}[5m])) > 1
+        for: 5m
+        labels: { severity: ticket }
+        annotations:
+          summary: "5분째 초당 {{ $value }} 건이 보호 장치에서 끊기고 있다"
+
+      # **초과 발급의 선행 지표다** (불변식 2). 뒷단이 받는다는 것보다 많이
+      # 나눠 주는 구간이다 — 평활 지연과 하한이 만든다.
+      - alert: 배분예산초과
+        expr: increase(waiting_allocation_budget_overshoot_total[5m]) > 0
+        for: 2m
+        labels: { severity: ticket }
+        annotations:
+          summary: "5분 사이 관측한 가용량보다 {{ $value }} 만큼 더 나눠 줬다"
+
+      # **초과 발급의 직접 증거다.** 한 번이라도 나면 그 자체가 사고다.
+      - alert: 초과입장
+        expr: increase(waiting_allocation_entered_overshoot_total[5m]) > 0
+        for: 0m
+        labels: { severity: page }
+        annotations:
+          summary: "예산보다 {{ $value }} 명을 더 들여보냈다"
+
+      # **예산을 얼마나 빨리 태우고 있는가** (6.9.2 · O-7).
+      #
+      # 한 창만 보면 둘 중 하나가 된다 — 짧으면 순간 스파이크로 울리고, 길면
+      # 느린 소진이 몇 시간 조용하다. 짧은 창과 긴 창이 동시에 넘을 때만 울린다.
+      #
+      # 14.4배는 "1시간에 30일 예산의 2% 를 태우는 속도" 다. 그 속도가 이어지면
+      # 이틀이면 예산이 없다.
+      - alert: SLO소진빠름
+        expr: >-
+          waiting:judgement_error_budget_burn:ratio_rate1h > 14.4
+          and
+          waiting:judgement_error_budget_burn:ratio_rate5m > 14.4
+          and
+          waiting:judgement_degraded:increase1h >= 5
+        for: 2m
+        labels: { severity: page }
+        annotations:
+          summary: "판정 오류 예산을 정상의 {{ $value | printf \"%.1f\" }}배로 태우고 있다"
+
+      # **워크북은 이것도 호출이다** — 6시간에 예산의 5% 면 닷새에 다 쓴다.
+      # 등급을 내리지 않는다. 내리면 무엇을 기준으로 내렸는지가 남지 않는다.
+      - alert: SLO소진보통
+        expr: >-
+          waiting:judgement_error_budget_burn:ratio_rate6h > 6
+          and
+          waiting:judgement_error_budget_burn:ratio_rate30m > 6
+          and
+          waiting:judgement_degraded:increase6h >= 5
+        for: 15m
+        labels: { severity: page }
+        annotations:
+          summary: "6시간째 판정 오류 예산을 정상의 {{ $value | printf \"%.1f\" }}배로 태우고 있다"
+
+      # **진짜 느린 소진.** 6배는 닷새면 예산이 없어지니 느린 게 아니다.
+      # 2배(15일 소진)는 위 둘 어디에도 안 걸린다 — 조용히 사라지는 구간이 여기다.
+      - alert: SLO소진느림
+        expr: >-
+          waiting:judgement_error_budget_burn:ratio_rate3d > 1
+          and
+          waiting:judgement_error_budget_burn:ratio_rate6h > 1
+          and
+          waiting:judgement_degraded:increase6h >= 5
+        for: 1h
+        labels: { severity: ticket }
+        annotations:
+          summary: "사흘째 판정 오류 예산을 정상의 {{ $value | printf \"%.1f\" }}배로 태우고 있다"
+
+      # 재료를 읽을 때 시각이 뒤로 갔다. 큐의 바닥값과는 다른 값이다.
+      - alert: 재료시각역행
+        expr: increase(waiting_snapshot_clock_floor_applied_total[5m]) > 0
+        for: 0m
+        labels: { severity: ticket }
+        annotations:
+          summary: "5분 사이 재료 읽기에서 시각이 {{ $value }}회 뒤로 갔다"
+
+      # **노드 하나의 fetchStale 은 안 건다.** 부하 분산기가 이미 뺀다 —
+      # 사람이 할 일이 없으면 알리지 않는다 (6.9.4). 전 노드가 동시에 그런
+      # 것은 위의 재료 규칙이 잡는다.

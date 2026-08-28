@@ -1,6 +1,7 @@
 package com.kafkick.waiting.gateway;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.kafkick.waiting.control.SnapshotHolder;
@@ -25,12 +26,18 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.springframework.cloud.gateway.filter.GatewayFilter;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.OrderedGatewayFilter;
+import org.springframework.cloud.gateway.filter.NettyWriteResponseFilter;
 import org.springframework.cloud.gateway.route.Route;
 import org.springframework.cloud.gateway.support.ServerWebExchangeUtils;
 import org.springframework.cloud.gateway.route.RouteLocator;
 import org.springframework.cloud.gateway.route.builder.RouteLocatorBuilder;
 import org.springframework.boot.webflux.autoconfigure.WebFluxProperties;
+import io.github.resilience4j.timelimiter.TimeLimiterRegistry;
+import org.springframework.cloud.client.circuitbreaker.ReactiveCircuitBreakerFactory;
+import org.springframework.cloud.circuitbreaker.resilience4j.ReactiveResilience4JCircuitBreakerFactory;
+import org.springframework.cloud.circuitbreaker.resilience4j.Resilience4JConfigurationProperties;
 import org.springframework.cloud.gateway.filter.factory.RemoveRequestHeaderGatewayFilterFactory;
+import org.springframework.cloud.gateway.filter.factory.SpringCloudCircuitBreakerResilience4JFilterFactory;
 import org.springframework.cloud.gateway.handler.predicate.MethodRoutePredicateFactory;
 import org.springframework.cloud.gateway.handler.predicate.PathRoutePredicateFactory;
 import org.springframework.context.support.GenericApplicationContext;
@@ -52,9 +59,15 @@ class GatewayRoutesTest {
     private static final SecondWindowLimiter 공유_리미터 = SecondWindowLimiter.withMaxKeys(10);
 
     // 띄운다 — 애플리케이션을 통째로 세우면 라우트 하나 보려고 레디스까지 붙는다.
+    /** 검증 시험이 주소만 보게 하는 유효한 값. 여기가 초점이 아니다. */
+    private static final Duration 응답_상한 = Duration.ofSeconds(12);
+
+    private static final GenericApplicationContext 컨텍스트 = 술어만_있는_컨텍스트();
+
+    // 띄운다 — 애플리케이션을 통째로 세우면 라우트 하나 보려고 레디스까지 붙는다.
     private final RouteLocator locator = new GatewayRoutes().routes(
-            new RouteLocatorBuilder(술어만_있는_컨텍스트()),
-            new GatewayRoutes.Backend("http://backend:8080"),
+            new RouteLocatorBuilder(컨텍스트),
+            new GatewayRoutes.Backend("http://backend:8080", 응답_상한),
             AdmissionGatewayFilter.of(재료_없는_홀더(),
                     AdmissionDecider.of(공유_리미터, 0.7),
                     Clock.systemUTC(), new SimpleMeterRegistry(),
@@ -62,7 +75,14 @@ class GatewayRoutesTest {
                     QueueToken.of("not-a-real-secret-0123456789abcdef"),
                     // **판정과 같은 인스턴스다.** 따로 만들면 한 초에 두 예산이 나간다.
                     공유_리미터,
-                    EntryToken.of("not-a-real-secret-0123456789abcdef")));
+                    EntryToken.of("not-a-real-secret-0123456789abcdef"),
+                    IdempotencyKey.of("not-a-real-secret-0123456789abcdef")),
+            // 이 시험은 배선을 본다. 켜고 끄는 것은 필터 안에서 갈리므로
+            // 여기서는 꺼 두어도 라우트에 실리는 것은 같다.
+            QueryCoalescingFilter.of(
+                    new CoalescingProperties(false, 1024, 1 << 20, 100, List.of()),
+                    Clock.systemUTC(), new SimpleMeterRegistry()),
+            컨텍스트.getBean(SpringCloudCircuitBreakerResilience4JFilterFactory.class));
 
     /**
      * 재료를 한 번도 못 받은 홀더. 이 시험은 <b>라우트가 무엇을 잡는가</b>만 보므로
@@ -73,12 +93,30 @@ class GatewayRoutesTest {
                 Clock.systemUTC());
     }
 
+    /** 라우트가 무엇을 잡는지만 보는 시험이라 값 자체는 안 잰다. 온전하면 된다. */
+    private static BackendCircuitProperties 서킷_설정() {
+        return new BackendCircuitProperties(Duration.ofSeconds(10), 20, 50f,
+                Duration.ofMillis(1500), 50f, Duration.ofSeconds(5),
+                Duration.ofSeconds(30), 10);
+    }
+
     private static GenericApplicationContext 술어만_있는_컨텍스트() {
         GenericApplicationContext context = new GenericApplicationContext();
         context.registerBean(WebFluxProperties.class);
         context.registerBean(RemoveRequestHeaderGatewayFilterFactory.class);
         context.registerBean(MethodRoutePredicateFactory.class);
         context.registerBean(PathRoutePredicateFactory.class);
+        // 서킷 필터도 컨텍스트에서 꺼낸다. 안 넣으면 라우트 정의가 통째로 못
+        // 만들어져, 이 시험이 "라우트가 무엇을 잡는가" 를 아예 못 재게 된다.
+        //
+        // 전달 핸들러는 안 넣는다. 이 시험은 무엇이 붙었는지만 보고 실제로
+        // 넘기지 않는다 — 넘기는 것은 컨텍스트 시험이 본다.
+        context.registerBean(ReactiveCircuitBreakerFactory.class,
+                () -> new ReactiveResilience4JCircuitBreakerFactory(
+                        BackendCircuit.registry(서킷_설정()),
+                        TimeLimiterRegistry.ofDefaults(), null,
+                        new Resilience4JConfigurationProperties()));
+        context.registerBean(SpringCloudCircuitBreakerResilience4JFilterFactory.class);
         context.refresh();
         return context;
     }
@@ -100,31 +138,81 @@ class GatewayRoutesTest {
     @DisplayName("뒷단_주소가_없으면_기동을_막는다")
     void 뒷단_주소가_없으면_기동을_막는다() {
         // 주소가 없으면 프록시가 어디로 갈지 정해지지 않는다.
-        assertThatThrownBy(() -> new GatewayRoutes.Backend("  "))
+        assertThatThrownBy(() -> new GatewayRoutes.Backend("  ", 응답_상한))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new GatewayRoutes.Backend(null))
+        assertThatThrownBy(() -> new GatewayRoutes.Backend(null, 응답_상한))
                 .isInstanceOf(IllegalArgumentException.class);
         // 스킴이 빠진 값은 기동에 성공하고 모든 프록시가 실패한다.
-        assertThatThrownBy(() -> new GatewayRoutes.Backend("backend:8080"))
+        assertThatThrownBy(() -> new GatewayRoutes.Backend("backend:8080", 응답_상한))
                 .isInstanceOf(IllegalArgumentException.class);
         // 경로를 붙이면 그 경로만 조용히 버려진다.
-        assertThatThrownBy(() -> new GatewayRoutes.Backend("http://backend:8080/api"))
+        assertThatThrownBy(() -> new GatewayRoutes.Backend("http://backend:8080/api", 응답_상한))
                 .isInstanceOf(IllegalArgumentException.class);
         // 호스트가 없으면 스킴만 맞고 프록시가 갈 곳이 없다.
-        assertThatThrownBy(() -> new GatewayRoutes.Backend("http://"))
+        assertThatThrownBy(() -> new GatewayRoutes.Backend("http://", 응답_상한))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new GatewayRoutes.Backend("http://:8080"))
+        assertThatThrownBy(() -> new GatewayRoutes.Backend("http://:8080", 응답_상한))
                 .isInstanceOf(IllegalArgumentException.class);
         // 주소로 읽히지 않는 값.
-        assertThatThrownBy(() -> new GatewayRoutes.Backend("http://back end"))
+        assertThatThrownBy(() -> new GatewayRoutes.Backend("http://back end", 응답_상한))
                 .isInstanceOf(IllegalArgumentException.class);
         // 프록시는 스킴·호스트·포트만 가져간다. 나머지는 조용히 버려진다.
         for (String 군더더기 : List.of("http://backend?trace=1", "http://u:p@backend",
                 "http://backend#x")) {
-            assertThatThrownBy(() -> new GatewayRoutes.Backend(군더더기))
+            assertThatThrownBy(() -> new GatewayRoutes.Backend(군더더기, 응답_상한))
                     .as("뒷단 %s", 군더더기)
                     .isInstanceOf(IllegalArgumentException.class);
         }
+    }
+
+    /**
+     * <b>상한이 없으면 무한입니다.</b> 무한이면 멎은 뒷단에 걸린 요청이 격벽 자리를
+     * 영영 쥐고, 서킷은 표본이 없어 안 열립니다 — 기동은 성공하고 장애 때만 압니다.
+     */
+    /**
+     * <b>끊는 자리가 서킷 안쪽이어야 합니다.</b> 밖에서 끊으면 서킷에 가는 것이
+     * 오류가 아니라 취소이고, 취소는 창에 안 쌓입니다 — 멎은 뒷단의 서킷이 영영
+     * 안 열리고, 그동안 게이트웨이는 죽은 뒷단에 계속 밀어 넣습니다.
+     */
+    @Test
+    @DisplayName("발급_라우트가_응답_상한을_들고_있다")
+    void 발급_라우트가_응답_상한을_들고_있다() {
+        Route 발급 = 라우트().stream()
+                .filter(r -> "issue".equals(r.getId()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("issue 라우트가 없다"));
+
+        assertThat(발급.getMetadata()).containsEntry("response-timeout", 응답_상한.toMillis());
+    }
+
+    @Test
+    @DisplayName("응답_상한이_없으면_기동을_막는다")
+    void 응답_상한이_없으면_기동을_막는다() {
+        assertThatThrownBy(() -> new GatewayRoutes.Backend("http://backend:8080", null))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() ->
+                new GatewayRoutes.Backend("http://backend:8080", Duration.ZERO))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /**
+     * <b>순서를 시험으로만 두면 배포 설정 한 줄이 뒤집습니다.</b> 격벽이 먼저
+     * 끊으면 서킷이 받는 것은 오류가 아니라 취소이고, 멎은 뒷단의 서킷이 영영
+     * 안 열립니다. 기동에서 막아야 그 설정이 운영에 못 나갑니다.
+     */
+    @Test
+    @DisplayName("응답_상한이_격벽_시한_뒤면_기동을_막는다")
+    void 응답_상한이_격벽_시한_뒤면_기동을_막는다() {
+        assertThatThrownBy(() -> new GatewayRoutes.Backend("http://backend:8080",
+                AdmissionGatewayFilter.MAX_IN_FLIGHT))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new GatewayRoutes.Backend("http://backend:8080",
+                AdmissionGatewayFilter.MAX_IN_FLIGHT.plusSeconds(1)))
+                .isInstanceOf(IllegalArgumentException.class);
+        // 바로 앞은 받아야 한다. 안 그러면 상한을 못 올린다.
+        assertThatCode(() -> new GatewayRoutes.Backend("http://backend:8080",
+                AdmissionGatewayFilter.MAX_IN_FLIGHT.minusMillis(1)))
+                .doesNotThrowAnyException();
     }
 
     @Test
@@ -289,6 +377,8 @@ class GatewayRoutesTest {
             HttpMethod method = route.endsWith("/issue") ? HttpMethod.POST : HttpMethod.GET;
             MockServerWebExchange exchange = MockServerWebExchange.from(
                     MockServerHttpRequest.method(method, route)
+                            // 신원 필터가 앞에서 보장한다. 없으면 판정이 끊는다.
+                            .header("X-Member-Id", "812934")
                             .header("X-Real-IP", "1.2.3.4")
                             .header("True-Client-IP", "1.2.3.4")
                             .header("X-Client-IP", "1.2.3.4")
@@ -330,5 +420,129 @@ class GatewayRoutesTest {
     void 발급은_POST_만_잡는다() {
         assertThat(잡는_라우트(HttpMethod.GET,
                 "/api/v1/coupons/c1/issue")).isNull();
+    }
+
+    /**
+     * <b>발급 라우트에 서킷이 걸려 있어야 한다.</b> 안 걸면 뒷단이 멎었을 때
+     * 게이트웨이의 커넥션이 통째로 그 뒷단을 기다리며 물리고, 한산한 쿠폰의
+     * 통과 경로까지 같이 죽는다.
+     */
+    @Test
+    @DisplayName("발급_라우트에_서킷이_걸려_있다")
+    void 발급_라우트에_서킷이_걸려_있다() {
+        // **이름과 넘길 주소까지 본다.** 붙었는지만 보면 엉뚱한 서킷에 물리거나
+        // fallback 이 빠져도 초록이고, 그때 서킷이 열리면 404 가 나간다.
+        assertThat(필터_이름(잡는_라우트(HttpMethod.POST, "/api/v1/coupons/c1/issue")))
+                .anySatisfy(name -> assertThat(name)
+                        .contains("CircuitBreaker")
+                        .contains("name = 'backend'")
+                        .contains("fallback = " + GatewayRoutes.FALLBACK_URI));
+    }
+
+    /**
+     * <b>넘길 주소가 받는 주소와 같아야 한다.</b> 갈리면 기동은 되고 장애 때만
+     * 404 가 드러난다 — 사용자에게는 매진으로 읽힌다.
+     */
+    @Test
+    @DisplayName("서킷이_넘길_주소가_받는_주소와_같다")
+    void 서킷이_넘길_주소가_받는_주소와_같다() {
+        assertThat(GatewayRoutes.FALLBACK_URI)
+                .isEqualTo("forward:" + BackendFallbackRoutes.FALLBACK_ISSUE);
+    }
+
+    /** 라우트에 걸린 필터의 이름들. 어떤 것이 붙었는지는 이걸로만 볼 수 있다. */
+    private List<String> 필터_이름(Route route) {
+        return route.getFilters().stream()
+                .map(f -> f instanceof OrderedGatewayFilter o
+                        ? o.getDelegate().toString() : f.toString())
+                .toList();
+    }
+
+    /**
+     * 필터에 <b>실제로 실린 order</b>. 프레임워크는 선언 위치가 아니라 이 값으로
+     * 정렬하므로, 여기를 안 보면 순서를 본 것이 아니다.
+     */
+    private int 실린_순서(Route route, String 이름) {
+        return route.getFilters().stream()
+                .filter(f -> 끝까지_벗긴다(f).toString().contains(이름))
+                .map(f -> {
+                    assertThat(f).as("%s 필터에 order 가 안 실렸다", 이름)
+                            .isInstanceOf(OrderedGatewayFilter.class);
+                    return ((OrderedGatewayFilter) f).getOrder();
+                })
+                // **못 찾으면 실패다.** 없는 것을 -1 같은 값으로 대신하면 필터가
+                // 통째로 빠져도, 이름이 바뀌어도 이 시험이 조용히 통과한다.
+                .findFirst()
+                .orElseThrow(() -> new AssertionError(이름 + " 필터가 발급 라우트에 없다"));
+    }
+
+    /**
+     * <b>판정이 서킷보다 앞이어야 한다.</b> 뒤로 가면 서킷이 열린 동안 판정이
+     * 안 돌아 래치가 표식을 못 받고, 다음 창의 신규 유입이 방금 줄 선 사람을
+     * 추월한다 (불변식 4).
+     *
+     * <p><b>목록의 자리가 아니라 실린 order 를 본다</b> — 프레임워크가 그 값으로
+     * 다시 정렬한다. 자리만 보면 두 인자를 서로 바꿔 단 회귀를 못 잡는다.
+     */
+    @Test
+    @DisplayName("판정이_서킷보다_앞이다")
+    void 판정이_서킷보다_앞이다() {
+        Route 발급 = 잡는_라우트(HttpMethod.POST, "/api/v1/coupons/c1/issue");
+
+        assertThat(실린_순서(발급, "Admission"))
+                .isLessThan(실린_순서(발급, "CircuitBreaker"));
+    }
+
+    /**
+     * <b>모으기는 응답을 쓰는 필터보다 앞이어야 한다.</b> 뒤에 서면 우리가 감싼
+     * 응답을 아무도 안 쓰고, 담는 것이 늘 빈 본문이 된다.
+     *
+     * <p>상수끼리 비교하면 항진명제다 — 라우트에서 order 인자를 지워도 통과한다.
+     * <b>실제로 실린 값</b>을 봐야 그 회귀가 잡힌다.
+     */
+    @Test
+    @DisplayName("조회_라우트가_모으기를_쓰기_필터보다_앞에_단다")
+    void 조회_라우트가_모으기를_쓰기_필터보다_앞에_단다() {
+        Route 조회 = 잡는_라우트(HttpMethod.GET, "/api/v1/coupons");
+
+        assertThat(실린_순서(조회, "QueryCoalescing"))
+                .isEqualTo(FilterOrder.ROUTE_COALESCING)
+                .isLessThan(NettyWriteResponseFilter.WRITE_RESPONSE_FILTER_ORDER);
+    }
+
+    /**
+     * <b>조회에도 끊는 자리가 있어야 한다.</b> 모으기가 붙은 뒤로는 멎은 요청
+     * 하나가 그 키를 영구히 잠근다 — 뒤이어 오는 모든 조회가 끝나지 않는 것에
+     * 붙고, 뒷단이 살아나도 게이트웨이를 재시작해야 풀린다.
+     */
+    @Test
+    @DisplayName("조회_라우트도_응답_상한을_들고_있다")
+    void 조회_라우트도_응답_상한을_들고_있다() {
+        Route 조회 = 라우트().stream()
+                .filter(r -> "coupons".equals(r.getId()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("coupons 라우트가 없다"));
+
+        assertThat(조회.getMetadata()).containsEntry("response-timeout", 응답_상한.toMillis());
+    }
+
+    /**
+     * 값이 계약에서 나와야 한다. 라우트가 우연히 맞는 숫자를 직접 적으면
+     * {@link FilterOrder} 를 고쳐도 라우트는 안 따라오고, 둘이 갈린 채로 돈다.
+     */
+    @Test
+    @DisplayName("라우트가_계약에_적힌_순서를_그대로_단다")
+    void 라우트가_계약에_적힌_순서를_그대로_단다() {
+        Route 발급 = 잡는_라우트(HttpMethod.POST, "/api/v1/coupons/c1/issue");
+
+        assertThat(실린_순서(발급, "Admission")).isEqualTo(FilterOrder.ROUTE_ADMISSION);
+        assertThat(실린_순서(발급, "CircuitBreaker")).isEqualTo(FilterOrder.ROUTE_CIRCUIT);
+    }
+
+    /** 값 자체도 못 박는다. 순서만 보면 둘 다 0 으로 되돌려도 이번엔 통과한다. */
+    @Test
+    @DisplayName("판정과_서킷의_앞뒤가_값으로_정해져_있다")
+    void 판정과_서킷의_앞뒤가_값으로_정해져_있다() {
+        assertThat(FilterOrder.ROUTE_ADMISSION).isLessThan(FilterOrder.ROUTE_CIRCUIT);
     }
 }

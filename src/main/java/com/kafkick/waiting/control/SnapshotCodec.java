@@ -73,17 +73,6 @@ public final class SnapshotCodec {
      */
     private static final int MIN_FIELDS = 5;
 
-    /**
-     * 여섯 번째 자리를 지키는 채움값.
-     *
-     * <p>배수는 전역 항목으로 옮겼고 읽는 쪽은 이 자리를 안 본다. 그래도 싣는다 —
-     * 아직 여섯을 기대하는 노드가 다섯 필드짜리 값을 통째로 버린다.
-     */
-    // **롤아웃 구간의 옛 노드는 이 자리를 배수로 읽는다.** 그래서 그 노드들은
-    // 예산이 빠듯해도 배수 1.0 으로 돈다 — 자리를 지키는 대가로 받아들이는 것이고,
-    // 관대한 디코더가 전 노드에 깔린 것이 확인되면 그때 지운다 (CY-736).
-    private static final String LEGACY_POLL_SCALE_PAD = "1.0";
-
     /** {@link Instant#MAX} 를 넘으면 생성자가 던진다 — 넘기지 않고 걸러낸다. */
     private static final long MAX_EPOCH_SECOND = Instant.MAX.getEpochSecond();
 
@@ -106,7 +95,7 @@ public final class SnapshotCodec {
         snapshot.coupons().forEach((couponId, state) -> {
             // 예약 접두사를 단 쿠폰 하나로 전 쿠폰의 몫이 0 이 된다.
             if (!couponId.startsWith(RESERVED)) {
-                hash.put(couponId, encodeCoupon(state));
+                hash.put(couponId, encodeCoupon(state, snapshot.meta().pollScale()));
             }
         });
         hash.put(CREDIT, Long.toString(snapshot.meta().globalCredit()));
@@ -125,9 +114,21 @@ public final class SnapshotCodec {
         return hash;
     }
 
-    private String encodeCoupon(CouponState state) {
+    /**
+     * 쿠폰 하나의 값. <b>여섯 번째 자리에 전역 배수를 싣는다.</b>
+     *
+     * <p>읽는 쪽은 이 자리를 안 보지만 아직 여섯을 기대하는 노드가 있고, 그
+     * 노드는 이 자리를 <b>그 쿠폰의 배수</b>로 읽는다. 전역값을 그대로 실으면
+     * 그 노드의 계산이 새 노드와 같아진다 — 읽는 자리가 달라도 답은 같다.
+     */
+    // 상수를 박으면 롤아웃 구간 내내 옛 파드 전부가 배수 없이 폴링한다. 파드
+    // 대부분이 아직 옛것인 구간이 있으므로, 새 리더가 보호가 걸렸다고 보고하는
+    // 동안 클러스터는 예산을 한참 넘긴 채로 돈다.
+    //
+    // 관대한 디코더가 전 노드에 깔린 것이 확인되면 이 자리를 지운다 (CY-736).
+    private String encodeCoupon(CouponState state, double pollScale) {
         return "%s:%s:%d:%d:%d:%s".formatted(state.mode(), state.runtime(), state.credit(),
-                state.remainingStock(), state.waiting(), LEGACY_POLL_SCALE_PAD);
+                state.remainingStock(), state.waiting(), pollScale);
     }
 
     /**

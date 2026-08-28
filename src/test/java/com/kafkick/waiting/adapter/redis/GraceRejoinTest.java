@@ -9,6 +9,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
@@ -21,6 +22,7 @@ import org.springframework.data.redis.core.script.RedisScript;
  * 사실은 알려</b> 클라이언트가 "줄이 사라졌다" 와 구분할 수 있게 합니다.
  */
 @Tag("integration")
+@SpringBootTest
 class GraceRejoinTest extends RedisContainerSupport {
 
     private static final Duration WAIT = Duration.ofSeconds(10);

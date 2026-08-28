@@ -4,6 +4,7 @@
 -- KEYS[2]  maxscore:{cid}       시계 역행 방어용 바닥값
 -- KEYS[3]  alive:{cid}       생존 신호 ZSET. score 는 만료 시각(초)
 -- KEYS[4]  admitted:{cid}       배분이 올린 임계. 이 값 이하는 이미 들여보낸 사람
+-- KEYS[5]  grace:{cid}          이탈 기록 해시. 돌아온 사람을 알아보는 자리
 -- ARGV[1]  memberId
 -- ARGV[2]  maxscore TTL(초). 양의 정수
 -- ARGV[3]  alive TTL(초). 양의 정수. 폴링 간격에서 나온 값이라 주입받는다
@@ -19,11 +20,15 @@
 --          줄이 무한히 자란다 — 갇힌 사람만 늘어난다
 -- ARGV[5]  지금 시각(초). 생존 신호의 만료 시각을 계산한다
 --
--- 반환  {score, floorApplied, alreadyQueued, rank}
+-- 반환  {score, floorApplied, alreadyQueued, rank, rejoined}
 --   score          이 사람의 순번. 거부되면 '-1'
 --   floorApplied   바닥값이 적용됐는가. 1 이면 시계가 뒤로 갔다는 뜻이다
 --   alreadyQueued  이미 줄에 있었는가. 1 이면 순번을 그대로 돌려준 것이다
 --   rank           내 앞의 인원. 거부되면 -1
+--   rejoined       자리를 비웠다 돌아왔는가 (7.5.1)
+--
+-- **돌아와도 순번은 안 돌려준다** (D-11). 비운 사이에 온 사람을 뒤로 밀면
+-- 그건 추월이다. 알려 주기만 하고 줄은 맨 뒤에 선다.
 --
 -- **rank 를 여기서 함께 낸다.** 등록하고 따로 물으면 그 사이 앞사람이 빠져
 -- 자기 순번보다 작은 수를 받는다 — 사용자가 보기엔 줄이 뒤로 간 것이다.
@@ -70,7 +75,7 @@ end
 local existing = redis.call('ZSCORE', KEYS[1], ARGV[1])
 if existing then
     redis.call('ZADD', KEYS[3], now + aliveTtl, ARGV[1])
-    return {existing, 0, 1, redis.call('ZCOUNT', KEYS[1], '-inf', '(' .. existing)}
+    return {existing, 0, 1, redis.call('ZCOUNT', KEYS[1], '-inf', '(' .. existing), 0}
 end
 
 -- 2차 방어다. 1차는 도메인이 낡은 스냅샷으로 판정하므로 여기서 한 번 더 본다.
@@ -90,7 +95,7 @@ if maxLen >= 0 then
     end
     local from = admitted >= 0 and ('(' .. string.format('%.0f', admitted)) or '-inf'
     if redis.call('ZCOUNT', KEYS[1], from, '+inf') >= maxLen then
-        return {'-1', 0, 0, -1}
+        return {'-1', 0, 0, -1, 0}
     end
 end
 
@@ -128,4 +133,16 @@ redis.call('ZADD', KEYS[3], now + aliveTtl, ARGV[1])
 -- **개수를 세지 순위를 저장하지 않는다.** 저장하면 앞사람이 빠질 때마다
 -- 전원을 갱신해야 한다.
 local rank = redis.call('ZCOUNT', KEYS[1], '-inf', '(' .. string.format('%.0f', score))
-return {string.format('%.0f', score), applied, 0, rank}
+-- **이탈 기록을 소비한다** (7.5.2). 안 지우면 다음에 또 재방문으로 나오고,
+-- 유예 만료를 기다려야 정상으로 돌아온다.
+--
+-- **입장 표시는 안 건드린다.** 같은 해시에 종류가 둘이고, `a:` 는 차례가 왔던
+-- 사람을 지키는 표시다 — 지우면 입장 복구가 통째로 없어진다.
+local rejoined = 0
+local record = redis.call('HGET', KEYS[5], ARGV[1])
+if record and string.sub(record, 1, 2) == 'd:' then
+    rejoined = 1
+    redis.call('HDEL', KEYS[5], ARGV[1])
+end
+
+return {string.format('%.0f', score), applied, 0, rank, rejoined}

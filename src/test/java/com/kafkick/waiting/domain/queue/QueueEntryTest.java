@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test;
 class QueueEntryTest {
 
     private QueueEntry 줄에_있는(QueueState state) {
-        return new QueueEntry(state, 0, 1, false, false);
+        return new QueueEntry(state, 0, 1, false, false, false);
     }
 
     @Test
@@ -35,7 +35,7 @@ class QueueEntryTest {
     @DisplayName("상태_없이는_안_만들어진다")
     void 상태_없이는_안_만들어진다() {
         // 상태가 비면 읽는 쪽이 저마다 다르게 해석한다.
-        assertThatThrownBy(() -> new QueueEntry(null, 0, 1, false, false))
+        assertThatThrownBy(() -> new QueueEntry(null, 0, 1, false, false, false))
                 .isInstanceOf(NullPointerException.class);
     }
 
@@ -46,21 +46,21 @@ class QueueEntryTest {
     @Test
     @DisplayName("줄에_없는데_자리를_들면_안_만들어진다")
     void 줄에_없는데_자리를_들면_안_만들어진다() {
-        assertThatThrownBy(() -> new QueueEntry(QueueState.NOT_QUEUED, 0, 1, false, false))
+        assertThatThrownBy(() -> new QueueEntry(QueueState.NOT_QUEUED, 0, 1, false, false, false))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new QueueEntry(QueueState.REJECTED, 3, -1, false, false))
+        assertThatThrownBy(() -> new QueueEntry(QueueState.REJECTED, 3, -1, false, false, false))
                 .isInstanceOf(IllegalArgumentException.class);
         // 순번만 들고 있어도 마찬가지다. 둘 중 하나만 보면 나머지가 새어 나간다.
-        assertThatThrownBy(() -> new QueueEntry(QueueState.NOT_QUEUED, -1, 5, false, false))
+        assertThatThrownBy(() -> new QueueEntry(QueueState.NOT_QUEUED, -1, 5, false, false, false))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
     @DisplayName("줄에_있는데_자리가_없으면_안_만들어진다")
     void 줄에_있는데_자리가_없으면_안_만들어진다() {
-        assertThatThrownBy(() -> new QueueEntry(QueueState.WAITING, -1, -1, false, false))
+        assertThatThrownBy(() -> new QueueEntry(QueueState.WAITING, -1, -1, false, false, false))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new QueueEntry(QueueState.WAITING, 0, -1, false, false))
+        assertThatThrownBy(() -> new QueueEntry(QueueState.WAITING, 0, -1, false, false, false))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -71,13 +71,13 @@ class QueueEntryTest {
     @Test
     @DisplayName("입장은_순번을_몰라도_된다")
     void 입장은_순번을_몰라도_된다() {
-        assertThat(new QueueEntry(QueueState.ADMITTED, 0, QueueEntry.NONE, true, false).admitted())
+        assertThat(new QueueEntry(QueueState.ADMITTED, 0, QueueEntry.NONE, true, false, false).admitted())
                 .isTrue();
         // 앞에 사람이 있는 입장은 없다.
-        assertThatThrownBy(() -> new QueueEntry(QueueState.ADMITTED, 3, 1, false, false))
+        assertThatThrownBy(() -> new QueueEntry(QueueState.ADMITTED, 3, 1, false, false, false))
                 .isInstanceOf(IllegalArgumentException.class);
         // 모른다는 뜻의 값이 아니면 음수도 안 된다.
-        assertThatThrownBy(() -> new QueueEntry(QueueState.ADMITTED, 0, -5, false, false))
+        assertThatThrownBy(() -> new QueueEntry(QueueState.ADMITTED, 0, -5, false, false, false))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 }

@@ -14,7 +14,7 @@ import java.util.Objects;
  * @param clockWentBack 바닥값이 적용됐는가. 참이면 시계가 뒤로 갔다는 뜻이다
  */
 public record QueueEntry(QueueState state, long rank, long score,
-        boolean alreadyQueued, boolean clockWentBack) {
+        boolean alreadyQueued, boolean clockWentBack, boolean rejoined) {
 
     /** 줄에 없다는 뜻. 0번째와 구분하려면 음수여야 한다. */
     public static final long NONE = -1;
@@ -40,12 +40,12 @@ public record QueueEntry(QueueState state, long rank, long score,
 
     /** 줄에 없다. 아직 안 섰거나 이탈로 지워졌다. */
     public static QueueEntry notQueued() {
-        return new QueueEntry(QueueState.NOT_QUEUED, NONE, NONE, false, false);
+        return new QueueEntry(QueueState.NOT_QUEUED, NONE, NONE, false, false, false);
     }
 
     /** 줄이 꽉 차 못 섰다. */
     public static QueueEntry rejected() {
-        return new QueueEntry(QueueState.REJECTED, NONE, NONE, false, false);
+        return new QueueEntry(QueueState.REJECTED, NONE, NONE, false, false, false);
     }
 
     /** 줄에 자리가 있는가. 거절은 상한에 걸린 것뿐이다. */

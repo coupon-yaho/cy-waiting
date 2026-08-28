@@ -93,7 +93,7 @@ public final class FakeQueuePort implements QueuePort {
         }
         queued.putIfAbsent(memberId, (long) queued.size() + 1);
         return Mono.just(new QueueEntry(QueueState.WAITING, rankOf(couponId, memberId),
-                queued.get(memberId), 있던_사람, false));
+                queued.get(memberId), 있던_사람, false, false));
     }
 
     @Override
@@ -111,10 +111,10 @@ public final class FakeQueuePort implements QueuePort {
         long rank = rankOf(couponId, memberId);
         if (차례가_옴 && rank == 0) {
             return Mono.just(new QueueEntry(QueueState.ADMITTED, 0,
-                    queued.get(memberId), true, false));
+                    queued.get(memberId), true, false, false));
         }
         return Mono.just(new QueueEntry(QueueState.WAITING, rank,
-                queued.get(memberId), true, false));
+                queued.get(memberId), true, false, false));
     }
 
     private long rankOf(String couponId, String memberId) {

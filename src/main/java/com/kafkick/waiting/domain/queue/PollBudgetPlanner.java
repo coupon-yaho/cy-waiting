@@ -19,6 +19,18 @@ public final class PollBudgetPlanner {
     private static final double[] BAND_INTERVALS = {1, 3, 10, 30};
 
     /**
+     * 노드 한 대가 감당할 폴링(초당).
+     *
+     * <p>폴링은 레디스를 안 치고 그 노드의 메모리에서 끝난다 — 그래서 예산의
+     * 단위가 노드다. 20 대면 4,000 으로 계획서 3.3 절의 예산과 같다.
+     */
+    // **아직 가정이다.** 계획서의 4,000 을 20 으로 나눠 역산한 값이지 실측이
+    // 아니다. 반증하는 것은 한 노드에서 폴링만 걸었을 때의 CPU·지연 실측이고,
+    // 그것이 이 값보다 낮으면 배수는 예산을 지키는 시늉만 하게 된다.
+    // Phase 10 의 부하 게이트에서 채운다.
+    private static final double BUDGET_RPS_PER_NODE = 200;
+
+    /**
      * 이 큐가 만드는 초당 폴링 수.
      *
      * <p>{@code drainRate} 가 0 이면 전원의 ETA 가 무한이라 가장 먼 밴드다.
@@ -61,14 +73,6 @@ public final class PollBudgetPlanner {
                         d.waiting(), drainRateOf.applyAsDouble(d.couponId())))
                 .sum();
     }
-
-    /**
-     * 노드 한 대가 감당할 폴링(초당).
-     *
-     * <p>폴링은 레디스를 안 치고 그 노드의 메모리에서 끝난다 — 그래서 예산의
-     * 단위가 노드다. 20 대면 4,000 으로 계획서 3.3 절의 예산과 같다.
-     */
-    private static final double BUDGET_RPS_PER_NODE = 200;
 
     /**
      * 이 규모에서 감당할 폴링(초당).

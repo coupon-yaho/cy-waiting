@@ -7,8 +7,8 @@ import com.kafkick.waiting.domain.allocation.FairShareAllocator;
 import com.kafkick.waiting.domain.allocation.Grant;
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
-import com.kafkick.waiting.domain.queue.PollBudgetPlanner;
 import com.kafkick.waiting.domain.coupon.Tunables;
+import com.kafkick.waiting.domain.queue.PollBudgetPlanner;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import java.time.Duration;
@@ -90,6 +90,8 @@ public final class AllocationRound {
     private final FailureWindow overshoot = FailureWindow.create();
 
     /** 폴링 예산을 넘긴 구간. 진입과 해제를 쌍으로 남긴다 (LG-2). */
+    // **쌍이 끊기는 경우가 있다.** 초과 중 리더십을 잃으면 새 리더의 창은
+    // 비어 있어 해제가 안 나온다 (CY-735). 창이 리더 메모리라 그렇다.
     private final FailureWindow pollOvershoot = FailureWindow.create();
 
     /**
@@ -102,11 +104,6 @@ public final class AllocationRound {
 
     /** 뒷단이 받을 수 있다고 한 것보다 더 나눠 준 누적량. */
     private final AtomicLong budgetOvershoot = new AtomicLong();
-
-    /** 폴링 예산을 넘긴 누적 틱 수. 0 이면 배수가 한 번도 안 걸렸다. */
-    public double pollBudgetOvershootTicks() {
-        return pollBudgetOvershootTicks.get();
-    }
 
     /** 예산보다 더 들여보낸 누적 인원. */
     private final AtomicLong enteredOvershoot = new AtomicLong();
@@ -390,6 +387,11 @@ public final class AllocationRound {
         return enteredOvershoot.get();
     }
 
+    /** 폴링 예산을 넘긴 누적 틱 수. 0 이면 배수가 한 번도 안 걸렸다. */
+    public double pollBudgetOvershootTicks() {
+        return pollBudgetOvershootTicks.get();
+    }
+
     /**
      * <b>적용이 실패해도 그 쿠폰을 빼지 않는다.</b> 빠지면 판정에서 없는 쿠폰이
      * 되어 매진으로 보이는데, 적용이 안 된 것과 매진은 전혀 다른 상태다.
@@ -503,7 +505,10 @@ public final class AllocationRound {
         if (pollOvershoot.entered()) {
             log.warn("폴링 예산 초과 — 예상 {}rps, 노드 {}대 예산 {}rps, 배수 {}. "
                     + "죽은 큐 정리와 노드 증설을 검토하세요",
-                    Math.round(expected), nodes, Math.round(budget), scale);
+                    Math.round(expected), nodes, Math.round(budget),
+                    // 같은 줄의 형제 값이 다 정수다. 여기만 17.583333333333332 가
+                    // 나오면 읽는 사람이 그 자릿수에 의미가 있다고 읽는다.
+                    Math.round(scale * 10) / 10.0);
         }
     }
 

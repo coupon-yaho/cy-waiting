@@ -153,9 +153,12 @@ public final class QueueStatusFilter implements WebFilter {
         long nowSec = clock.instant().getEpochSecond();
         if (!limiter.tryAcquire(POLL_KEY, pollCap(), nowSec)) {
             count("rate-limited");
-            // **여기야말로 배수를 걸어야 한다.** 이 갈래가 도는 조건이 곧
-            // 폴링이 이 노드의 상한을 넘었다는 것이다. 거절만 배수를 빼면
-            // 과부하일수록 거절 비중이 커져, 예산을 건다는 말이 절반만 맞다.
+            // **여기야말로 배수를 걸어야 한다.** 거절만 배수를 빼면 과부하일수록
+            // 거절 비중이 커져, 예산을 건다는 말이 절반만 맞다.
+            //
+            // 다만 이 상한(2만)은 폴링 예산(노드당 200)과 다른 값이다. 배수는
+            // 이 갈래가 돌기 한참 전에 걸리므로, 여기 오는 것은 예산을 넘긴
+            // 정도가 아니라 노드가 통째로 밀린 상황이다 (CY-728).
             return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
                     (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random,
                             pollScale(holder.view())));

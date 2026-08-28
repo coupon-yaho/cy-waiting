@@ -66,8 +66,23 @@ public final class SnapshotCodec {
     private static final String QUEUEING = "#queueing";
     private static final String BELOW_EXIT = "#belowExitTicks";
 
-    /** {@code mode:runtime:credit:stock:waiting} */
-    private static final int FIELDS = 5;
+    /**
+     * 디코더가 요구하는 <b>최소</b> 필드 수 — {@code mode:runtime:credit:stock:waiting}.
+     *
+     * <p>발행은 여섯을 쓴다. 이것은 와이어 포맷이 아니라 관대함의 경계다.
+     */
+    private static final int MIN_FIELDS = 5;
+
+    /**
+     * 여섯 번째 자리를 지키는 채움값.
+     *
+     * <p>배수는 전역 항목으로 옮겼고 읽는 쪽은 이 자리를 안 본다. 그래도 싣는다 —
+     * 아직 여섯을 기대하는 노드가 다섯 필드짜리 값을 통째로 버린다.
+     */
+    // **롤아웃 구간의 옛 노드는 이 자리를 배수로 읽는다.** 그래서 그 노드들은
+    // 예산이 빠듯해도 배수 1.0 으로 돈다 — 자리를 지키는 대가로 받아들이는 것이고,
+    // 관대한 디코더가 전 노드에 깔린 것이 확인되면 그때 지운다 (CY-736).
+    private static final String LEGACY_POLL_SCALE_PAD = "1.0";
 
     /** {@link Instant#MAX} 를 넘으면 생성자가 던진다 — 넘기지 않고 걸러낸다. */
     private static final long MAX_EPOCH_SECOND = Instant.MAX.getEpochSecond();
@@ -110,18 +125,9 @@ public final class SnapshotCodec {
         return hash;
     }
 
-    /**
-     * <b>줄이는 것은 다음 릴리스다.</b> 읽는 쪽만 관대하게 만들면 절반만 열린다 —
-     * 이미 떠 있는 노드는 여섯 필드를 기대하므로, 새 리더가 다섯을 발행하는
-     * 순간 그 노드가 전 쿠폰을 떨구고 낡음으로 넘어간다.
-     */
-    // 여섯 번째는 자리만 지키는 값이다. 배수는 전역 항목으로 옮겼고 읽는 쪽은
-    // 이 자리를 안 본다. 관대한 디코더가 배포된 뒤에 지운다 (CY-736).
-    private static final String LEGACY_POLL_SCALE = "1.0";
-
     private String encodeCoupon(CouponState state) {
         return "%s:%s:%d:%d:%d:%s".formatted(state.mode(), state.runtime(), state.credit(),
-                state.remainingStock(), state.waiting(), LEGACY_POLL_SCALE);
+                state.remainingStock(), state.waiting(), LEGACY_POLL_SCALE_PAD);
     }
 
     /**
@@ -188,7 +194,7 @@ public final class SnapshotCodec {
         // 100만 원소를 먼저 만들고 버려진다 — 갱신 스레드가 OOM 으로 죽으면
         // "실패해도 옛 값을 유지한다" 는 설계가 통째로 무력해진다.
         // 남는 필드는 마지막 원소에 뭉쳐 길이가 하나 늘므로 판정은 같다.
-        String[] parts = raw.split(":", FIELDS + 1);
+        String[] parts = raw.split(":", MIN_FIELDS + 1);
         // **모르는 필드는 무시한다** (E-12). 배포는 한 순간에 안 끝나므로,
         // 구·신 버전이 섞이는 구간에 형식이 갈리면 신버전이 옛 재료를 통째로
         // 버린다 — 그 노드는 발행된 스냅샷을 하나도 못 받아 준비가 안 되고
@@ -196,7 +202,7 @@ public final class SnapshotCodec {
         //
         // **관대함은 한 방향뿐이다.** 모자란 것은 받아 주지 않는다. 받으면
         // 자리가 밀린 값을 그대로 믿게 되고, 그건 판정을 바꾼다.
-        if (parts.length < FIELDS) {
+        if (parts.length < MIN_FIELDS) {
             return null;
         }
         try {

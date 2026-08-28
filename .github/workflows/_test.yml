@@ -47,7 +47,18 @@ jobs:
             integration) ./gradlew --no-daemon integrationTest ;;
             context)     ./gradlew --no-daemon contextTest ;;
             chaos)       ./gradlew --no-daemon chaosTest ;;
-            mutation)    ./gradlew --no-daemon pitest ;;
+            # **미니언이 죽으면 그 판의 뮤턴트가 통째로 유실된다.** 그런데도
+            # PIT 는 남은 것만으로 비율을 내고 임계를 통과시킨다 — 게이트가
+            # 초록인데 무엇을 지켰는지 말할 수 없는 상태가 된다. 로그를 남겨
+            # 두고 검사한다.
+            mutation)
+              ./gradlew --no-daemon pitest 2>&1 | tee pitest.log
+              if grep -q 'Minion exited abnormally' pitest.log; then
+                echo "::error::미니언이 비정상 종료했다 — 그 판의 뮤턴트가 안 세어졌다"
+                grep -c 'Minion exited abnormally' pitest.log
+                exit 1
+              fi
+              ;;
             # 어댑터는 단위·통합 양쪽에서, 게이트웨이는 단위·컨텍스트 양쪽에서
             # 덮인다. 계층이 잡으로 갈려 exec 가 한자리에 안 모이므로 여기서
             # 셋을 함께 돌려 합쳐 잰다 — 빠뜨리면 임계가 안 도는데 잰 것으로

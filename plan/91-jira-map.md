@@ -2,9 +2,13 @@
 
 **계획서 태스크 ID와 Jira 이슈 키의 대응은 여기서만 관리한다.**
 
-계획 문서(`plan/0N-*.md`)에는 Jira 번호를 쓰지 않는다.
 계획서 ID는 우리가 소유해 안정적이고, Jira 키는 발번 시점에 정해진다.
 둘을 분리해 두면 Jira를 재구성해도 계획 문서를 손대지 않는다.
+
+**페이즈 안쪽은 그 페이즈 문서가 진다.** 이 표는 페이즈 수준의 키만 든다.
+절 단위 키를 여기까지 끌고 오면 두 곳이 같은 것을 적게 되고, 실제로 Phase 4·5·6
+에서 이 표가 뒤처진 채 페이즈 문서만 갱신됐다 — 사본은 언제나 그렇게 갈라진다.
+아래 옛 절 단위 항목은 이력으로 남긴다.
 
 ---
 
@@ -222,6 +226,7 @@ CI 가 브랜치명에서 CY-42 를 뽑아
 | `phase-3` | [`CY-227`](https://shseol.atlassian.net/browse/CY-227) |
 | `phase-5` | [`CY-22`](https://shseol.atlassian.net/browse/CY-22) |
 | `phase-6` | [`CY-612`](https://shseol.atlassian.net/browse/CY-612) |
+| `phase-7` | [`CY-691`](https://shseol.atlassian.net/browse/CY-691) |
 | `phase-8` | [`CY-24`](https://shseol.atlassian.net/browse/CY-24) |
 | `phase-9` | [`CY-25`](https://shseol.atlassian.net/browse/CY-25) |
 | `phase-10` | [`CY-26`](https://shseol.atlassian.net/browse/CY-26) |

@@ -115,6 +115,57 @@ class SoldOutObserverTest {
     }
 
     /**
+     * <b>봉투가 쪼개져 와도 봅니다.</b>
+     *
+     * <p>뒷단이 본문을 잘게 보내면 코드가 첫 조각에 안 들어올 수 있습니다.
+     * 첫 조각만 보면 그때 관찰을 놓치고, 매진 순간의 부하가 그대로 뒷단으로
+     * 갑니다 — 이 기능이 있는 이유가 통째로 사라집니다.
+     */
+    @Test
+    @DisplayName("본문이_쪼개져_와도_관찰한다")
+    void 본문이_쪼개져_와도_관찰한다() {
+        String 봉투 = 매진봉투();
+        // **코드 한가운데를 자른다.** 아무 데나 자르면 코드가 한쪽에 온전히
+        // 들어가 "첫 조각만 본다" 로도 통과한다.
+        int 반 = 봉투.indexOf("COUPON-306") + 4;
+        MockServerWebExchange exchange =
+                MockServerWebExchange.from(MockServerHttpRequest.post(PATH));
+        observer.filter(exchange, e -> {
+            e.getResponse().setStatusCode(HttpStatus.CONFLICT);
+            return e.getResponse().writeWith(Flux.just(
+                    조각(e, 봉투.substring(0, 반)), 조각(e, 봉투.substring(반))));
+        }).block();
+
+        assertThat(캐시.soldOut(COUPON, 지금)).isTrue();
+        assertThat(exchange.getResponse().getBodyAsString().block()).isEqualTo(봉투);
+    }
+
+    /**
+     * <b>앞부분까지만 봅니다.</b>
+     *
+     * <p>상한이 없으면 뒷단이 큰 본문을 409 로 낼 때 그 전부를 들고 있게 됩니다.
+     * 못 보는 쪽은 안전한 방향입니다 — 못 막을 뿐 잘못 막지는 않습니다.
+     */
+    @Test
+    @DisplayName("앞부분_밖의_코드는_안_본다")
+    void 앞부분_밖의_코드는_안_본다() {
+        String 패딩 = "x".repeat(600);
+        MockServerWebExchange exchange =
+                MockServerWebExchange.from(MockServerHttpRequest.post(PATH));
+        observer.filter(exchange, e -> {
+            e.getResponse().setStatusCode(HttpStatus.CONFLICT);
+            return e.getResponse().writeWith(Flux.just(
+                    조각(e, "{\"pad\":\"" + 패딩 + "\",\"code\":\"COUPON-306\"}")));
+        }).block();
+
+        assertThat(캐시.soldOut(COUPON, 지금)).isFalse();
+    }
+
+    private DataBuffer 조각(org.springframework.web.server.ServerWebExchange e, String text) {
+        return e.getResponse().bufferFactory().wrap(text.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
      * <b>경로에서 쿠폰을 못 뽑으면 아무것도 안 합니다.</b> 못 뽑은 것을 한
      * 자리에 몰아 담으면 그 이름이 매진으로 굳고, 다음 판정이 그것을 읽습니다.
      */

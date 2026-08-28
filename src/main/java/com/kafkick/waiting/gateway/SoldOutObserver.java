@@ -60,16 +60,14 @@ public final class SoldOutObserver implements GatewayFilter {
             return chain.filter(exchange);
         }
         ServerHttpResponse original = exchange.getResponse();
+        Prefix prefix = new Prefix();
         ServerHttpResponseDecorator watched = new ServerHttpResponseDecorator(original) {
             @Override
             public Mono<Void> writeWith(Publisher<? extends DataBuffer> body) {
                 // **흘려보내면서 본다.** 삼켰다가 다시 쓰면 상한을 넘긴 응답을
                 // 되돌릴 방법이 없고, 그때는 이 관찰이 사고의 원인이 된다.
-                //
-                // 첫 조각만 본다. 코드는 봉투 앞에 있고, 조각을 모으면 그것이
-                // 곧 버퍼링이다.
                 return super.writeWith(Flux.from(body)
-                        .doOnNext(buffer -> inspect(original, buffer, couponId)));
+                        .doOnNext(buffer -> inspect(original, buffer, couponId, prefix)));
             }
         };
         return chain.filter(exchange.mutate().response(watched).build());
@@ -81,15 +79,49 @@ public final class SoldOutObserver implements GatewayFilter {
      * <p><b>상태와 사유를 함께 본다.</b> 상태만 보면 중복 발급 같은 다른 409 가
      * 그 쿠폰을 끊고, 본문만 보면 매진을 설명하는 200 이 같은 일을 한다.
      */
-    private void inspect(ServerHttpResponse response, DataBuffer buffer, String couponId) {
+    private void inspect(ServerHttpResponse response, DataBuffer buffer, String couponId,
+            Prefix prefix) {
         if (!HttpStatus.CONFLICT.equals(response.getStatusCode())) {
             return;
         }
-        // 읽기 위치를 안 옮긴다. 옮기면 뒷사람이 빈 조각을 받는다.
-        int length = Math.min(buffer.readableByteCount(), PREFIX);
-        String head = buffer.toString(buffer.readPosition(), length, StandardCharsets.UTF_8);
-        if (head.contains(SOLD_OUT_CODE)) {
+        if (prefix.append(buffer) && prefix.contains(SOLD_OUT_CODE)) {
             cache.observed(couponId, clock.instant());
+        }
+    }
+
+    /**
+     * 앞부분만 모은다.
+     *
+     * <p><b>조각 하나만 보면 코드가 경계에 걸려 안 보인다.</b> 그렇다고 전부
+     * 모으면 그것이 곧 버퍼링이다. 상한까지만 이어 붙인다.
+     */
+    private static final class Prefix {
+
+        private final StringBuilder head = new StringBuilder(PREFIX);
+        private boolean done;
+
+        /** 더 모았으면 참. 이미 상한을 채웠거나 답이 난 뒤면 거짓이다. */
+        boolean append(DataBuffer buffer) {
+            if (done || head.length() >= PREFIX) {
+                return false;
+            }
+            // 읽기 위치를 안 옮긴다. 옮기면 뒷사람이 빈 조각을 받는다.
+            int take = Math.min(buffer.readableByteCount(), PREFIX - head.length());
+            if (take <= 0) {
+                return false;
+            }
+            // 조각 경계가 여러 바이트 문자를 가를 수 있다. 찾는 것이 아스키라
+            // 잘린 꼬리가 치환 문자가 되어도 검색에는 영향이 없다.
+            head.append(buffer.toString(buffer.readPosition(), take, StandardCharsets.UTF_8));
+            return true;
+        }
+
+        boolean contains(String needle) {
+            if (head.indexOf(needle) >= 0) {
+                done = true;
+                return true;
+            }
+            return false;
         }
     }
 

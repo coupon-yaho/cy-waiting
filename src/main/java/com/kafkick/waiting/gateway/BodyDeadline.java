@@ -40,6 +40,9 @@ public final class BodyDeadline implements GatewayFilter {
      */
     private final Counter cuts;
 
+    /** 구간 수. 건수가 만이어도 구간이 하나면 장애는 한 번이다. */
+    private final Counter episodes;
+
     /** 구간의 진입·해제를 쌍으로 남긴다 (LG-2). 해제는 부르는 쪽이 훑는다. */
     private final FailureWindow window = FailureWindow.create();
 
@@ -53,6 +56,7 @@ public final class BodyDeadline implements GatewayFilter {
         }
         this.limit = limit;
         this.cuts = meters.counter("waiting.backend.body.cut");
+        this.episodes = meters.counter("waiting.backend.body.episode");
     }
 
     /**
@@ -91,7 +95,8 @@ public final class BodyDeadline implements GatewayFilter {
                         // **이쪽도 덮는다.** 쓰기 필터는 미디어 타입이 스트리밍이면
                         // 여기로 온다 — 안 덮으면 `text/event-stream` 헤더 하나로
                         // 이 보호 장치가 통째로 무효가 된다.
-                        return cut(super.writeAndFlushWith(body));
+                        return cut(super.writeAndFlushWith(body))
+                        .doOnSuccess(v -> recovered());
                     }
 
                     @Override
@@ -129,6 +134,9 @@ public final class BodyDeadline implements GatewayFilter {
                     // **구간의 시작만 찍는다** (LG-3). 요청마다 찍으면 그 자체가
                     // 폭포다 — 이 실패는 유입률만큼 한꺼번에 난다.
                     if (window.entered()) {
+                        // **구간 수는 건수와 다른 질문에 답한다.** 만 건이 한
+                        // 번의 장애인지 천 번인지를 건수로는 못 가른다.
+                        episodes.increment();
                         log.warn("본문 시한 발동 — 뒷단이 {} 안에 본문을 안 끝낸다", limit);
                     }
                 });

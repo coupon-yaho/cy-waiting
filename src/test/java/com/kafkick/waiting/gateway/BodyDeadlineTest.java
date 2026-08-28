@@ -111,6 +111,47 @@ class BodyDeadlineTest {
         assertThat(끊은_건수()).as("끊은 건수").isEqualTo(1);
     }
 
+    /**
+     * <b>스트리밍으로 회복해도 구간이 닫혀야 합니다.</b>
+     *
+     * <p>안 닫히면 다음 구간의 진입 로그가 영영 안 찍히고, 해제 요약도 안
+     * 나옵니다 — 사고 관측이 첫 판 이후로 통째로 멎습니다.
+     */
+    @Test
+    @DisplayName("스트리밍으로_회복해도_구간이_닫힌다")
+    void 스트리밍으로_회복해도_구간이_닫힌다() {
+        BodyDeadline deadline = BodyDeadline.of(상한, 응답, meters);
+        StepVerifier.withVirtualTime(() -> deadline.filter(조회(), ex ->
+                        ex.getResponse().writeAndFlushWith(Flux.interval(Duration.ofMillis(200))
+                                .map(i -> Flux.just(ex.getResponse().bufferFactory()
+                                        .wrap("x".getBytes()))))))
+                .thenAwait(상한.plusSeconds(1))
+                .expectError(TimeoutException.class)
+                .verify();
+
+        // 스트리밍으로 정상 응답 하나가 지나면 구간이 닫힌다.
+        MockServerWebExchange 회복 = 조회();
+        StepVerifier.create(deadline.filter(회복, ex ->
+                        ex.getResponse().writeAndFlushWith(Flux.just(Flux.just(
+                                ex.getResponse().bufferFactory().wrap("목록".getBytes()))))))
+                .verifyComplete();
+
+        // 닫혔으면 다음 끊김이 다시 새 구간이 된다 — 건수가 1 부터 다시 센다.
+        StepVerifier.withVirtualTime(() -> deadline.filter(조회(), ex ->
+                        ex.getResponse().writeAndFlushWith(Flux.interval(Duration.ofMillis(200))
+                                .map(i -> Flux.just(ex.getResponse().bufferFactory()
+                                        .wrap("x".getBytes()))))))
+                .thenAwait(상한.plusSeconds(1))
+                .expectError(TimeoutException.class)
+                .verify();
+
+        assertThat(끊은_건수()).as("끊은 건수").isEqualTo(2);
+        // **구간이 닫혔어야 둘로 센다.** 안 닫히면 두 번째 끊김이 같은 구간에
+        // 묻히고, 그때부터 진입 로그도 해제 요약도 안 나온다.
+        assertThat(meters.counter("waiting.backend.body.episode").count())
+                .as("구간 수").isEqualTo(2);
+    }
+
     /** 상한이 0 이하면 끊는 것이 아니다. 값으로 끄면 그 사실이 안 드러난다. */
     @Test
     @DisplayName("상한이_0_이하면_거절한다")

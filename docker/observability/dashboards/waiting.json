@@ -299,6 +299,32 @@
           "legendFormat": "상한 (닿으면 새 관찰을 못 받는다)"
         }
       ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "본문 시한",
+      "description": "헤더는 왔는데 본문이 안 끝나는 뒷단. 구간 수와 끊은 건수를 같이 본다 — 만 건이 한 번의 장애인지 천 번인지는 건수로 못 가른다",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 48
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(waiting_backend_body_cut_total[1m]))",
+          "legendFormat": "끊은 건수"
+        },
+        {
+          "expr": "sum(increase(waiting_backend_body_episode_total[5m]))",
+          "legendFormat": "구간 수 (5분)"
+        }
+      ]
     }
   ]
 }

@@ -102,14 +102,28 @@ const server = createServer((req, res) => {
       res.setHeader('Cache-Control', 'public');
     }
     if (SLOW_BODY_MS > 0) {
+      // **이미 끊겼으면 시작도 안 한다.** 아래 핸들러는 이 시점에 다는데,
+      // 그 전에 닫혔으면 close 를 못 받아 인터벌이 영영 안 멎고 inflight 가
+      // 안 돌아온다 — MAX_INFLIGHT 가 차서 하네스가 통째로 죽는다.
+      if (res.writableEnded || res.destroyed) {
+        inflight -= 1;
+        return;
+      }
       // 헤더는 곧바로, 본문은 끝없이. 끊는 것은 게이트웨이 몫이다.
       res.writeHead(200, { 'Content-Type': 'application/json' });
       const tick = setInterval(() => res.write(' '), SLOW_BODY_MS);
-      res.on('close', () => {
+      let done = false;
+      const finish = () => {
+        if (done) {
+          return;
+        }
+        done = true;
         clearInterval(tick);
         inflight -= 1;
         served += 1;
-      });
+      };
+      res.on('close', finish);
+      res.on('error', finish);
       return;
     }
     // 발급이든 조회든 형태만 맞으면 된다. 내용은 게이트웨이가 안 본다.

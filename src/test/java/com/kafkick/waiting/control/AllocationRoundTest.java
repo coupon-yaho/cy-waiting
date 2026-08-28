@@ -22,6 +22,7 @@ import com.kafkick.waiting.domain.coupon.CouponStates;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import java.time.Duration;
 import java.util.List;
+import java.util.function.Supplier;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -222,9 +223,15 @@ class AllocationRoundTest {
     }
 
     private AllocationRound round(List<CouponDemand> 수요, long 전역_크레딧, int 노드_수) {
+        return round(() -> 수요, 전역_크레딧, 노드_수);
+    }
+
+    /** 판마다 수요가 바뀌는 시험용. 복붙하면 헬퍼가 바뀔 때 그 시험만 옛 배선을 잰다. */
+    private AllocationRound round(Supplier<List<CouponDemand>> 수요,
+            long 전역_크레딧, int 노드_수) {
         return AllocationRound.of(
                 () -> true,
-                () -> Mono.just(new TimedDemands(수요, 읽은_시각)),
+                () -> Mono.just(new TimedDemands(수요.get(), 읽은_시각)),
                 () -> 전역_크레딧,
                 () -> 노드_수,
                 grant -> {
@@ -321,18 +328,7 @@ class AllocationRoundTest {
         // 있는데(초과 창) 회복 전이를 아무도 안 밟는 것이다.
         AtomicReference<List<CouponDemand>> 수요 = new AtomicReference<>(
                 List.of(new CouponDemand("c1", 100_000, 1_000_000)));
-        AllocationRound round = AllocationRound.of(
-                () -> true,
-                () -> Mono.just(new TimedDemands(수요.get(), 읽은_시각)),
-                () -> 10L, () -> 1,
-                grant -> Mono.just(grant.credit()),
-                hash -> {
-                    발행.put("last", hash);
-                    return Mono.empty();
-                },
-                () -> Instant.ofEpochSecond(읽은_시각),
-                () -> Mono.just(CreditSmoother.of(1.0)),
-                SnapshotCodec.create(), () -> 0L);
+        AllocationRound round = round(수요::get, 10, 1);
 
         round.run().block();
         assertThat(발행된_배수()).as("진입").isGreaterThan(1.0);
@@ -725,6 +721,11 @@ class AllocationRoundTest {
 
         assertThat(적용).containsExactly("c1");
         assertThat(발행).isEmpty();
+        // **셈도 같이 멎어야 한다.** 배수의 계산이 재료를 만드는 자리에 묻혀
+        // 있어서, 발행을 안 하는 판에서도 그 자리가 돌면 이 노드는 걸지도 않은
+        // 배수를 걸었다고 기록한다.
+        assertThat(round.pollBudgetOvershootTicks()).as("안 발행한 판은 안 센다")
+                .isZero();
     }
 
     @Test

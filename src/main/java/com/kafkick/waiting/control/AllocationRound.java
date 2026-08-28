@@ -268,11 +268,13 @@ public final class AllocationRound {
                         // 히스테리시스를 안 돌려서 실을 상태가 없다 (CY-324).
                         // 돌리기 시작하면 여기가 매 틱 이월을 지우는 자리가
                         // 되므로, 기본값에 숨기지 않고 눈에 보이게 둔다.
-                        : publish.apply(codec.encode(
+                        // **여기서 만든다.** 인자로 부르면 자바가 먼저 평가해서,
+                        // 배수의 셈과 그 계측이 리더십을 잃은 뒤에도 돈다.
+                        : Mono.defer(() -> publish.apply(codec.encode(
                                 snapshot(collected, granted, credit, readAt,
                                         tunables.get().orElse(null)),
                                 current.snapshot(),
-                                QueueingHysteresis.Snapshot.empty()))
+                                QueueingHysteresis.Snapshot.empty())))
                         // **발행 뒤에 지운다** (7.3). 앞에 두면 방금 지운 큐가
                         // 이번 재료에는 아직 대기자로 실려, 그 판의 크레딧이
                         // 없는 줄에 나간다.
@@ -461,6 +463,13 @@ public final class AllocationRound {
         return coupons;
     }
 
+    /**
+     * 발행할 재료 한 판.
+     *
+     * <p><b>부르는 것이 곧 계측이다.</b> 배수의 셈이 여기 묻어 있어 한 판에 세 번
+     * 부르면 누적 틱이 틱당 3씩 오른다 — 실제로 그랬다. 정리·청소가
+     * {@link #couponsOf} 만 쓰는 이유다.
+     */
     private GatewaySnapshot snapshot(List<CouponDemand> collected, Map<String, Long> granted,
             long credit, Instant readAt, Tunables applied) {
         Map<String, CouponState> coupons = couponsOf(collected, granted);

@@ -84,7 +84,7 @@ public class AdmissionDecider {
 
         // 1 — 재고가 없으면 나머지를 볼 필요가 없다. 맨 앞이어야 매진 쿠폰이
         //     fail-open 상한을 갉아먹지 않는다.
-        if (s.remainingStock() <= 0) {
+        if (s.soldOut()) {
             return AdmissionDecision.REJECT_SOLD_OUT;
         }
 

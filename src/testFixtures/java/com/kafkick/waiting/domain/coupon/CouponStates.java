@@ -9,7 +9,14 @@ package com.kafkick.waiting.domain.coupon;
  */
 public final class CouponStates {
 
-    /** 한산한 쿠폰. R1 의 주인공 — 줄 없이 통과해야 한다. */
+    /**
+     * 한산한 쿠폰. R1 의 주인공 — 줄 없이 통과해야 한다.
+     *
+     * <p><b>재고 0 짜리도 발행 경로가 만든다.</b> {@code AllocationRound.stateOf}
+     * 는 {@code stock<=0 && waiting==0} 에서 {@code CLOSED} 가 아니라 이것을
+     * 낸다. 세 가지가 같은 자리로 접힌다 — 시작 전, 완판 뒤 큐 정리가 끝난 뒤,
+     * 그리고 재고 키 유실(CY-702). 가운데가 매진 쿠폰의 정상 종착점이다.
+     */
     public static CouponState idle(long remainingStock) {
         return CouponState.idle(remainingStock);
     }

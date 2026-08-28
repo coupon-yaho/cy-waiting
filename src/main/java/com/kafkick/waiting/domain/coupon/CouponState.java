@@ -198,6 +198,18 @@ public record CouponState(
                 QueueMode.ADAPTIVE, RuntimeState.DRAINING, credit, remainingStock, waiting, 1.0);
     }
 
+    /**
+     * 매진인가. <b>발급 판정과 순번 조회가 같이 부른다.</b>
+     *
+     * <p>각자 재고를 해석하면 같은 쿠폰에 정반대로 답하는 순간이 생긴다.
+     */
+    // 런타임 상태로 안 읽는 이유: CLOSED 는 대기자가 남았을 때만 만들어지므로,
+    // 큐를 정리해 대기자가 0 이 된 매진 쿠폰은 IDLE 로 떨어져 매진이 아닌 것이
+    // 된다. 그 자리가 매진 쿠폰의 정상 종착점이다.
+    public boolean soldOut() {
+        return remainingStock <= 0;
+    }
+
     /** 재고가 소진됐는데 대기자가 남았다. 스케줄러가 이 전이를 만든다. */
     public static CouponState closed(long waiting) {
         return closed(QueueMode.ADAPTIVE, waiting);

@@ -3,7 +3,6 @@ package com.kafkick.waiting.gateway;
 import com.kafkick.waiting.control.SnapshotHolder;
 import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
 import com.kafkick.waiting.domain.coupon.CouponState;
-import com.kafkick.waiting.domain.coupon.RuntimeState;
 import com.kafkick.waiting.domain.queue.EntryToken;
 import com.kafkick.waiting.domain.queue.EtaPolicy;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
@@ -181,14 +180,17 @@ public final class QueueStatusFilter implements WebFilter {
      */
     private boolean soldOut(String couponId) {
         SnapshotHolder.View view = holder.view();
+        // 첫 틱 전은 지금 `isDataStale` 이 **먼저** 참이 된다 — 재료가 없으면
+        // 나이가 거대해지기 때문이다. 그래도 남긴 것은 둘의 뜻이 다르고, 낡음
+        // 기준이 바뀌면 갈라지기 때문이다.
         if (view.isBeforeFirstTick() || holder.isDataStale(view)) {
             return false;
         }
         CouponState state = view.snapshot().coupons().get(couponId);
-        // **재고 숫자가 아니라 상태를 본다.** 숫자를 여기서 다시 해석하면 판정이
-        // 두 곳에 생기고, 재고 0 이라도 줄이 빈 쿠폰(IDLE)까지 종결해 버린다.
-        // 상태 기계는 `stock<=0 && waiting>0` 일 때만 CLOSED 를 만든다.
-        return state != null && state.runtime() == RuntimeState.CLOSED;
+        // **발급 판정과 같은 함수를 부른다.** 여기서 재고를 다시 해석하면 판정이
+        // 두 곳에 생기고, 같은 쿠폰에 조회는 "다시 서라" 등록은 409 로 답하는
+        // 순간이 생긴다.
+        return state != null && state.soldOut();
     }
 
     private Mono<Void> answer(ServerWebExchange exchange, String couponId, String memberId,

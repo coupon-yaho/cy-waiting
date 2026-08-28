@@ -131,6 +131,27 @@ class GraceRejoinTest extends RedisContainerSupport {
     }
 
     /**
+     * <b>재입장이 남은 대기자의 순위를 안 늘립니다</b> (G7.8).
+     *
+     * <p>돌아온 사람이 맨 뒤에 서므로 앞사람의 순번은 그대로입니다. 앞에
+     * 끼워 넣으면 그건 이미 줄 선 사람 전원을 한 칸씩 미는 것입니다.
+     */
+    @Test
+    @DisplayName("재입장이_남은_대기자의_순위를_안_늘린다")
+    void 재입장이_남은_대기자의_순위를_안_늘린다() {
+        등록("m2");
+        등록("m3");
+        long 이전 = Long.parseLong(String.valueOf(등록("m3").get(3)));
+        redis.opsForHash().put(GRACE, "m1", "d:" + (NOW - 60)).block(WAIT);
+
+        등록("m1");
+
+        // m3 을 다시 물어도 앞 인원이 그대로다.
+        assertThat(Long.parseLong(String.valueOf(등록("m3").get(3))))
+                .as("앞사람 수").isEqualTo(이전);
+    }
+
+    /**
      * <b>거절당하면 기록을 안 지웁니다.</b>
      *
      * <p>줄도 못 서고 기록도 잃으면 그 사람은 다음에 신규로 옵니다 — 자리를

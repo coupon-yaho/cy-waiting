@@ -8,39 +8,26 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * 스위퍼가 <b>돌면 안 되는 구간</b>을 정한다 (7.4.8·7.4.9 · 5.4절).
- *
- * <p>잘못 쓸면 되돌릴 수 없다 — 성실히 줄 선 사람을 이탈자로 판정하면
- * 재입장이 새 score 이고, 그건 순번 역행이다.
- */
+/** 잘못 쓸면 되돌릴 수 없다 — 이탈자로 잘못 판정하면 재입장이 새 score 다 (7.4.8·7.4.9). */
 public final class SweepGate {
 
-    /**
-     * 멈춘 쿠폰과, 다시 쓸 수 있게 되는 틱.
-     *
-     * <p><b>한 틱이 아니다.</b> 생존 신호는 마지막 폴링에서 TTL 만큼 살고,
-     * 그 폴링은 최대 간격만큼 늦게 온다. 그 합보다 짧게 재개하면 아직 신호를
-     * 못 채운 사람을 이탈자로 판정한다.
-     */
-    private final Map<String, Integer> resumeAt = new HashMap<>();
+    /** 멈춘 쿠폰과 다시 쓸 수 있게 되는 틱. <b>한 틱이 아니다</b> — 아래 팩토리 참조. */
+    private final Map<String, Long> resumeAt = new HashMap<>();
 
-    private int tick;
+    // **`long` 이다.** 1ms 틱이면 `int` 는 25일 만에 넘치고, 그 경계에서
+    // 더한 값이 음수가 되어 유예가 통째로 풀린다.
+    private long tick;
 
-    private final int resumeDelayTicks;
+    private final long resumeDelayTicks;
 
-    private SweepGate(int resumeDelayTicks) {
+    private SweepGate(long resumeDelayTicks) {
         if (resumeDelayTicks < 1) {
             throw new IllegalArgumentException("재개 유예는 양수여야 한다: " + resumeDelayTicks);
         }
         this.resumeDelayTicks = resumeDelayTicks;
     }
 
-    /**
-     * 재개 유예를 <b>생존 신호 수명과 폴링 간격에서 끌어온다.</b>
-     *
-     * <p>따로 적으면 한쪽만 고쳤을 때 갈리고, 그때 나는 일이 순번 역행이다.
-     */
+    /** 재개 유예를 신호 수명과 폴링 간격에서 끌어온다 — 따로 적으면 갈린다. */
     public static SweepGate of(Duration tick, Duration aliveTtl) {
         // **밀리초로 잰다.** 초로 나누면 1초 미만 틱이 0 이 되고, 나눗셈이
         // 무한이 되어 유예가 사실상 영원이 된다 — 청소가 조용히 멎는다.
@@ -49,8 +36,7 @@ public final class SweepGate {
         if (tickMillis <= 0) {
             throw new IllegalArgumentException("틱은 1ms 이상이어야 한다: " + tick);
         }
-        return new SweepGate((int) Math.min(Integer.MAX_VALUE,
-                Math.ceilDiv(delayMillis, tickMillis)));
+        return new SweepGate(Math.ceilDiv(delayMillis, tickMillis));
     }
 
     /**
@@ -73,7 +59,7 @@ public final class SweepGate {
             }
             // **풀린 뒤 유예만큼 건너뛴다** (7.4.9). 그 구간은 밀렸던 폴링이
             // 아직 안 왔다. 한 틱만 쉬면 신호를 못 채운 사람을 걷는다.
-            Integer at = resumeAt.get(couponId);
+            Long at = resumeAt.get(couponId);
             if (at != null && tick < at) {
                 return;
             }

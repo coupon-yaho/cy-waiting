@@ -22,8 +22,12 @@ class SweepGateTest {
 
     private static final String COUPON = "c1";
 
-    /** 틱 1초, 생존 신호 90초 → 재개 유예 150틱. */
-    private static final int 재개_유예 = 150;
+    /**
+     * 재개 유예. <b>리터럴로 두지 않는다</b> — 정책이 간격이나 수명을 바꾸면
+     * 이 값도 같이 움직여야 하고, 안 그러면 관계가 깨진 채로 통과한다.
+     */
+    private static final int 재개_유예 = (int) PollIntervalPolicy.aliveTtl()
+            .plus(PollIntervalPolicy.maxInterval()).toSeconds();
 
     private SweepGate 게이트() {
         return SweepGate.of(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl());

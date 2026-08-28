@@ -84,7 +84,12 @@ public final class AllocationRedisPort implements SnapshotSource {
     private static final RedisScript<List> SWEEP =
             RedisScript.of(new ClassPathResource("redis/sweep.lua"), List.class);
 
-    /** 쿠폰별 HSCAN 커서. 매 판 0 에서 시작하면 해시 뒤쪽이 영영 안 걷힌다. */
+    /**
+     * 쿠폰별 HSCAN 커서. 매 판 0 에서 시작하면 해시 뒤쪽이 영영 안 걷힌다.
+     *
+     * <p><b>이번 판에 쓴 쿠폰만 남긴다.</b> 안 그러면 끝난 쿠폰의 항목이 JVM
+     * 수명 내내 쌓인다 — 회차가 계속 열리는 제품이라 실제로 자란다.
+     */
     private final Map<String, String> sweepCursors = new ConcurrentHashMap<>();
 
     private final int shards;
@@ -454,6 +459,7 @@ public final class AllocationRedisPort implements SnapshotSource {
         if (couponIds.isEmpty()) {
             return Mono.just(QueueSweeper.SweepResult.NOTHING);
         }
+        sweepCursors.keySet().retainAll(couponIds);
         return Flux.fromIterable(couponIds)
                 // **한 쿠폰이 실패해도 나머지는 쓴다.** 청소가 배분을 막으면
                 // 안 걷힌 것 하나가 그 틱 전체를 세운다.

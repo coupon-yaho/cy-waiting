@@ -60,7 +60,7 @@ class SweepTest extends RedisContainerSupport {
     void 준비() {
         enqueueScript = RedisScript.of(new ClassPathResource("redis/enqueue.lua"), List.class);
         sweepScript = RedisScript.of(new ClassPathResource("redis/sweep.lua"), List.class);
-        redis.delete(QUEUE, MAX_SCORE, GRACE, ALIVE).block(WAIT);
+        redis.delete(QUEUE, MAX_SCORE, GRACE, ALIVE, ADMITTED).block(WAIT);
     }
 
     private void enqueue(String memberId) {

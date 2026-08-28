@@ -117,7 +117,7 @@ services:
       args:
         # 실행 JAR 이름을 정확히 짚는다. 여럿과 맞으면 무엇이 들어갈지
         # 순서에 달린다. 판이 바뀌면 여기 한 줄만 고친다.
-        JAR: build/libs/waiting-0.2.0.jar
+        JAR: build/libs/waiting-0.3.0.jar
     depends_on:
       redis: { condition: service_healthy }
       backend: { condition: service_healthy }

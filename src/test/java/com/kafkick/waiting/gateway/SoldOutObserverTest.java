@@ -2,7 +2,15 @@ package com.kafkick.waiting.gateway;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.kafkick.waiting.control.GatewaySnapshot;
+import com.kafkick.waiting.control.SnapshotHolder;
+import com.kafkick.waiting.domain.coupon.CouponStates;
+import com.kafkick.waiting.domain.coupon.SnapshotMeta;
+import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.ZoneOffset;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
@@ -221,6 +229,84 @@ class SoldOutObserverTest {
         }).block();
 
         assertThat(캐시.soldOut(COUPON)).isTrue();
+    }
+
+    /**
+     * <b>무장 시각을 재료의 발행 시각에서 뽑습니다.</b>
+     *
+     * <p>노드 시계로 찍으면 해제(발행 시각 비교)와 축이 달라, 시계 스큐만큼
+     * 판정이 어긋납니다. 손에 든 그 재료로는 안 풀리고 그보다 나중 재료로는
+     * 풀리는 것이 그 증거입니다.
+     */
+    @Test
+    @DisplayName("무장_시각을_재료에서_뽑는다")
+    void 무장_시각을_재료에서_뽑는다() {
+        Instant 발행 = 지금.minusSeconds(30);
+        SnapshotHolder holder = SnapshotHolder.of(
+                Duration.ofSeconds(3), Duration.ofSeconds(10),
+                Clock.fixed(지금, ZoneOffset.UTC));
+        holder.replace(new GatewaySnapshot(
+                Map.of(COUPON, CouponStates.idle(1_000)), new SnapshotMeta(1, 1), 발행));
+        SoldOutCache 캐시 = SoldOutCache.of(Duration.ofSeconds(30), 100);
+        SoldOutObserver 관찰자 =
+                SoldOutObserver.ofSnapshot(캐시, holder, new SimpleMeterRegistry());
+
+        MockServerWebExchange exchange = 라우트를_탄다(PATH);
+        관찰자.filter(exchange, e -> {
+            e.getResponse().setStatusCode(HttpStatus.CONFLICT);
+            return e.getResponse().writeWith(Flux.just(조각(e, 매진봉투())));
+        }).block();
+
+        assertThat(캐시.restocked(COUPON, 발행)).as("손에 들었던 그 재료로는 안 푼다").isEmpty();
+        assertThat(캐시.restocked(COUPON, 발행.plusSeconds(1)))
+                .as("나중 재료로는 푼다").isPresent();
+    }
+
+    /**
+     * <b>코드를 찾은 뒤에도 조각이 오면 두 번 세면 안 됩니다.</b>
+     *
+     * <p>노드당 1건이라는 전제가 깨지면 <code>result</code> 태그로 새는 것을
+     * 가리는 일이 무의미해집니다.
+     */
+    @Test
+    @DisplayName("코드를_찾은_뒤의_조각은_다시_안_센다")
+    void 코드를_찾은_뒤의_조각은_다시_안_센다() {
+        MeterRegistry meters = new SimpleMeterRegistry();
+        SoldOutObserver 관찰자 = SoldOutObserver.ofPublishedAt(캐시, () -> 지금, meters);
+        String 봉투 = 매진봉투();
+        int 가운데 = 봉투.indexOf("COUPON-306") + "COUPON-306".length();
+
+        MockServerWebExchange exchange = 라우트를_탄다(PATH);
+        관찰자.filter(exchange, e -> {
+            e.getResponse().setStatusCode(HttpStatus.CONFLICT);
+            return e.getResponse().writeWith(Flux.just(
+                    조각(e, 봉투.substring(0, 가운데)), 조각(e, 봉투.substring(가운데)),
+                    조각(e, "")));
+        }).block();
+
+        assertThat(meters.counter("waiting.soldout.observed", "result", "armed").count())
+                .as("한 응답은 한 번만").isEqualTo(1);
+    }
+
+    /**
+     * <b>쿠폰 이름이 문자열이 아니면 안 담습니다.</b> 못 뽑은 것을 한 자리에
+     * 몰아 담으면 그 이름이 매진으로 굳고 다음 판정이 그것을 읽습니다.
+     */
+    @Test
+    @DisplayName("쿠폰_이름이_문자열이_아니면_기록하지_않는다")
+    void 쿠폰_이름이_문자열이_아니면_기록하지_않는다() {
+        MockServerWebExchange exchange =
+                MockServerWebExchange.from(MockServerHttpRequest.post(PATH));
+        exchange.getAttributes().put(
+                ServerWebExchangeUtils.URI_TEMPLATE_VARIABLES_ATTRIBUTE, Map.of("couponId", 7));
+        exchange.getAttributes().put(ServerWebExchangeUtils.CLIENT_RESPONSE_ATTR, "뒷단 응답");
+
+        observer.filter(exchange, e -> {
+            e.getResponse().setStatusCode(HttpStatus.CONFLICT);
+            return e.getResponse().writeWith(Flux.just(조각(e, 매진봉투())));
+        }).block();
+
+        assertThat(캐시.size()).isZero();
     }
 
     /**

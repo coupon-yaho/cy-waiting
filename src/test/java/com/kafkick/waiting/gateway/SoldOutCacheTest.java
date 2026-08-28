@@ -173,6 +173,42 @@ class SoldOutCacheTest {
         assertThat(캐시.soldOut("c2")).isTrue();
     }
 
+    /**
+     * <b>만료된 뒤에는 같은 쿠폰도 다시 무장합니다.</b>
+     *
+     * <p>다시 무장을 못 하면 TTL 이 지난 매진 쿠폰이 영영 안 막히고, 그 뒤로
+     * 그 쿠폰의 요청이 전부 뒷단으로 갑니다.
+     */
+    @Test
+    @DisplayName("만료된_뒤에는_같은_쿠폰도_다시_무장한다")
+    void 만료된_뒤에는_같은_쿠폰도_다시_무장한다() {
+        SoldOutCache 캐시 = 캐시();
+        캐시.observed("c1", 발행);
+        흐른다(TTL.plusSeconds(1));
+
+        assertThat(캐시.observed("c1", 발행.plusSeconds(1))).as("새 무장").isTrue();
+
+        assertThat(캐시.soldOut("c1")).isTrue();
+    }
+
+    /**
+     * <b>만료된 항목은 읽는 자리에서 걷습니다.</b>
+     *
+     * <p>상한 훑기에만 맡기면 상한에 안 닿는 동안 죽은 항목이 쌓이고, 담긴
+     * 수가 실제로 막고 있는 쿠폰 수와 어긋납니다.
+     */
+    @Test
+    @DisplayName("만료된_항목은_읽을_때_걷힌다")
+    void 만료된_항목은_읽을_때_걷힌다() {
+        SoldOutCache 캐시 = 캐시();
+        캐시.observed("c1", 발행);
+        흐른다(TTL.plusSeconds(1));
+
+        캐시.soldOut("c1");
+
+        assertThat(캐시.size()).isZero();
+    }
+
     /** 0 이하 상한은 상한이 아닙니다. 값으로 끄면 그 사실이 설정 어디에도 안 드러납니다. */
     @Test
     @DisplayName("상한이_없는_캐시는_만들_수_없다")

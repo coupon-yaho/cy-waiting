@@ -47,13 +47,14 @@ class SoldOutCacheAdmissionTest {
             Duration.ofSeconds(3), Duration.ofSeconds(10), Clock.fixed(지금, ZoneOffset.UTC));
     private final SecondWindowLimiter limiter = SecondWindowLimiter.withMaxKeys(10_000);
     private final SoldOutCache 캐시 = SoldOutCache.of(Duration.ofSeconds(10), 100);
+    private final EntryToken entryTokens = EntryToken.of("not-a-real-secret-0123456789abcdef");
     private final AtomicInteger 뒷단_횟수 = new AtomicInteger();
 
     private final AdmissionGatewayFilter filter = AdmissionGatewayFilter.of(
             holder, AdmissionDecider.of(limiter, IDLE_RATIO),
             Clock.fixed(지금, ZoneOffset.UTC), meters, 줄,
             QueueToken.of("not-a-real-secret-0123456789abcdef"), limiter,
-            EntryToken.of("not-a-real-secret-0123456789abcdef"),
+            entryTokens,
             IdempotencyKey.of("not-a-real-secret-0123456789abcdef"), 캐시);
 
     private MockServerWebExchange 태운다() {
@@ -104,6 +105,61 @@ class SoldOutCacheAdmissionTest {
         assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
         assertThat(exchange.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
                 .isEqualTo(AdmissionDecision.REJECT_SOLD_OUT);
+        // **판정 분포에도 잡혀야 한다.** 뒷단 유입이 0 인데 판정 카운터에도
+        // 안 잡히면, 사고 때 어디서 끊겼는지를 못 찾는다.
+        assertThat(meters.counter("waiting.admission", "outcome", "REJECT_SOLD_OUT",
+                "cause", "none").count()).as("판정 계수").isEqualTo(1);
+        assertThat(meters.counter("waiting.soldout.cache.hit").count())
+                .as("캐시 적중").isEqualTo(1);
+    }
+
+    /**
+     * <b>입장 토큰을 들고 와도 끊습니다.</b>
+     *
+     * <p>관찰은 사다리 1번 자리라 토큰 검사(2번)보다 위입니다. 뒤로 내리면 장애
+     * 구간에 쌓인 토큰이 한꺼번에 오는 F8 구간에서 매진 쿠폰의 뒷단이 그대로
+     * 열립니다 — R3 이 존재하는 이유가 정확히 그 트래픽입니다.
+     */
+    @Test
+    @DisplayName("입장_토큰을_들고_와도_매진이면_끊는다")
+    void 입장_토큰을_들고_와도_매진이면_끊는다() {
+        재고가_있다고_심는다();
+        캐시.observed(COUPON, 지금);
+        String 입장 = entryTokens.issue(COUPON, MEMBER, 지금);
+
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.method(HttpMethod.POST,
+                        "/api/v1/coupons/" + COUPON + "/issue?entryToken=" + 입장)
+                        .header("X-Member-Id", MEMBER));
+        exchange.getAttributes().put(
+                ServerWebExchangeUtils.URI_TEMPLATE_VARIABLES_ATTRIBUTE,
+                Map.of("couponId", COUPON));
+        filter.filter(exchange, e -> {
+            뒷단_횟수.incrementAndGet();
+            return Mono.empty();
+        }).block();
+
+        assertThat(뒷단_횟수).as("뒷단 도달").hasValue(0);
+        assertThat(exchange.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .isEqualTo(AdmissionDecision.REJECT_SOLD_OUT);
+    }
+
+    /**
+     * <b>항상 대기 모드여도 끊습니다.</b> 3번(`ALWAYS`)이 관찰보다 위로 가면
+     * 그 모드를 건 쿠폰만 매진 뒤에도 줄이 계속 자랍니다.
+     */
+    @Test
+    @DisplayName("항상_대기_모드여도_매진이면_끊는다")
+    void 항상_대기_모드여도_매진이면_끊는다() {
+        holder.replace(new GatewaySnapshot(
+                Map.of(COUPON, CouponStates.always(1_000)), new SnapshotMeta(1, 1), 지금));
+        캐시.observed(COUPON, 지금);
+
+        MockServerWebExchange exchange = 태운다();
+
+        assertThat(뒷단_횟수).as("뒷단 도달").hasValue(0);
+        assertThat(exchange.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .isEqualTo(AdmissionDecision.REJECT_SOLD_OUT);
     }
 
     /**
@@ -141,7 +197,9 @@ class SoldOutCacheAdmissionTest {
     void 재료가_매진이면_관찰을_안_푼다() {
         holder.replace(new GatewaySnapshot(
                 Map.of(COUPON, CouponStates.closed(100)), new SnapshotMeta(1, 1), 지금));
-        캐시.observed(COUPON, 지금);
+        // **한 판 앞선 재료로 무장한다.** 같은 시각으로 두면 발행 시각 비교에서
+        // 먼저 걸려, 재고 가드는 한 번도 안 불린다 — 지워도 통과한다.
+        캐시.observed(COUPON, 지금.minusSeconds(1));
 
         태운다();
 
@@ -160,12 +218,12 @@ class SoldOutCacheAdmissionTest {
     @Test
     @DisplayName("재료가_낡아도_매진은_계속_끊는다")
     void 재료가_낡아도_매진은_계속_끊는다() {
-        재고가_있다고_심는다();
-        캐시.observed(COUPON, 지금);
-        // 낡음 한계를 넘긴 재료. 재고는 여전히 있다고 말한다.
+        // **낡은 재료 하나만 손에 든 상태다.** 발행 시각은 단조 증가하므로
+        // 새 재료가 옛 판으로 갈리는 일은 제어 평면이 안 만든다.
         holder.replace(new GatewaySnapshot(
                 Map.of(COUPON, CouponStates.idle(1_000)), new SnapshotMeta(1, 1),
                 지금.minusSeconds(60)));
+        캐시.observed(COUPON, 지금.minusSeconds(60));
 
         MockServerWebExchange exchange = 태운다();
 
@@ -183,11 +241,10 @@ class SoldOutCacheAdmissionTest {
     @Test
     @DisplayName("낡은_재료로는_관찰을_안_푼다")
     void 낡은_재료로는_관찰을_안_푼다() {
-        재고가_있다고_심는다();
-        캐시.observed(COUPON, 지금.minusSeconds(120));
         holder.replace(new GatewaySnapshot(
                 Map.of(COUPON, CouponStates.idle(1_000)), new SnapshotMeta(1, 1),
                 지금.minusSeconds(60)));
+        캐시.observed(COUPON, 지금.minusSeconds(120));
 
         태운다();
 

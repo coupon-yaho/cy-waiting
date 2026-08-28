@@ -33,13 +33,19 @@ class SoldOutCacheBudgetTest {
     }
 
     /**
-     * <b>낡음 한계보다 충분히 길어야 합니다.</b> 짧으면 안전판이 정상 경로를
-     * 앞질러, 재입고를 보기도 전에 방패가 풀립니다.
+     * <b>양쪽을 다 겁니다.</b>
+     *
+     * <p>짧으면 안전판이 정상 경로를 앞질러 재입고를 보기도 전에 방패가
+     * 풀립니다. 길면 해제 신호를 놓쳤을 때 재입고된 쿠폰이 그만큼 이 노드에서만
+     * 안 팔립니다 — B-11 이 경고하는 방향이 그쪽입니다. 하한만 걸면 값이 위로
+     * 새는 것을 아무도 안 막습니다.
      */
     @Test
-    @DisplayName("TTL_이_낡음_한계보다_길다")
-    void TTL_이_낡음_한계보다_길다() throws IOException {
-        assertThat(값().ttl()).isGreaterThan(Duration.ofSeconds(5));
+    @DisplayName("TTL_이_낡음_한계와_그_스무_배_사이다")
+    void TTL_이_낡음_한계와_그_스무_배_사이다() throws IOException {
+        assertThat(값().ttl())
+                .isGreaterThan(Duration.ofSeconds(5))
+                .isLessThanOrEqualTo(Duration.ofSeconds(100));
     }
 
     /** 키가 클라이언트 입력에서 옵니다. 쿠폰 키 상한과 같은 값이라야 합니다. */

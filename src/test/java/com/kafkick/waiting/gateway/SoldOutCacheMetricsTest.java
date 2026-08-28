@@ -30,6 +30,26 @@ class SoldOutCacheMetricsTest {
 
     private final MeterRegistry meters = new SimpleMeterRegistry();
 
+    /** 라우트를 탄 요청에 뒷단이 매진을 답한다. */
+    private void 매진을_답한다(SoldOutObserver observer) {
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.post("/api/v1/coupons/c1/issue"));
+        // 라우팅 필터가 심는 값 둘. 없으면 관찰자가 아무것도 안 한다.
+        exchange.getAttributes().put(
+                ServerWebExchangeUtils.URI_TEMPLATE_VARIABLES_ATTRIBUTE,
+                Map.of("couponId", "c1"));
+        exchange.getAttributes().put(ServerWebExchangeUtils.CLIENT_RESPONSE_ATTR, "뒷단 응답");
+
+        observer.filter(exchange, e -> {
+            e.getResponse().setStatusCode(HttpStatus.CONFLICT);
+            return e.getResponse().writeWith(Flux.just(
+                    e.getResponse().bufferFactory().wrap(
+                            """
+                            {"success":false,"error":{"code":"COUPON-306"}}"""
+                                    .getBytes(StandardCharsets.UTF_8))));
+        }).block();
+    }
+
     private double 게이지(String name) {
         return meters.get(name).gauge().value();
     }
@@ -60,30 +80,36 @@ class SoldOutCacheMetricsTest {
     void 관찰_횟수를_따로_센다() {
         SoldOutCache 캐시 = SoldOutCache.of(Duration.ofSeconds(10), 7);
         SoldOutObserver observer = SoldOutObserver.ofPublishedAt(캐시, () -> 지금, meters);
-        MockServerWebExchange exchange = MockServerWebExchange.from(
-                MockServerHttpRequest.post("/api/v1/coupons/c1/issue"));
-        // 라우팅 필터가 심는 값 둘. 없으면 관찰자가 아무것도 안 한다.
-        exchange.getAttributes().put(
-                ServerWebExchangeUtils.URI_TEMPLATE_VARIABLES_ATTRIBUTE,
-                Map.of("couponId", "c1"));
-        exchange.getAttributes().put(
-                ServerWebExchangeUtils.CLIENT_RESPONSE_ATTR, "뒷단 응답");
+        매진을_답한다(observer);
 
-        observer.filter(exchange, e -> {
-            e.getResponse().setStatusCode(HttpStatus.CONFLICT);
-            return e.getResponse().writeWith(Flux.just(
-                    e.getResponse().bufferFactory().wrap(
-                            """
-                            {"success":false,"error":{"code":"COUPON-306"}}"""
-                                    .getBytes(StandardCharsets.UTF_8))));
-        }).block();
+        // **존재 검사로 재지 않는다.** `counter(...)` 는 없으면 만들어 주므로,
+        // 프로덕션이 그 태그를 한 번도 안 써도 0 이 나온다 (TS-11).
+        assertThat(meters.find("waiting.soldout.observed").tag("result", "armed")
+                .counter().count()).as("새 무장").isEqualTo(1);
+        assertThat(meters.find("waiting.soldout.observed").tag("result", "already").counter())
+                .as("아직 안 샜다").isNull();
+    }
 
-        // **태그로 가른다.** 무장한 뒤로는 노드당 1건만 새야 하므로, `already`
-        // 가 계속 오르는 것이 곧 방패가 안 듣는다는 신호다.
-        assertThat(meters.counter("waiting.soldout.observed", "result", "armed").count())
-                .as("새 무장").isEqualTo(1);
-        assertThat(meters.counter("waiting.soldout.observed", "result", "already").count())
-                .as("이미 무장 중").isZero();
+    /**
+     * <b>무장 뒤에 새는 것을 값으로 봅니다.</b>
+     *
+     * <p>무장한 뒤로는 노드당 1건만 새야 합니다. <code>already</code> 가 계속
+     * 오르는 것이 곧 방패가 안 듣는다는 신호인데, 태그를 안 가르면 그 둘이 한
+     * 수치에 뭉쳐 구별이 안 됩니다.
+     */
+    @Test
+    @DisplayName("두_번째_관찰은_새는_것으로_센다")
+    void 두_번째_관찰은_새는_것으로_센다() {
+        SoldOutCache 캐시 = SoldOutCache.of(Duration.ofSeconds(10), 7);
+        SoldOutObserver observer = SoldOutObserver.ofPublishedAt(캐시, () -> 지금, meters);
+
+        매진을_답한다(observer);
+        매진을_답한다(observer);
+
+        assertThat(meters.find("waiting.soldout.observed").tag("result", "armed")
+                .counter().count()).as("새 무장").isEqualTo(1);
+        assertThat(meters.find("waiting.soldout.observed").tag("result", "already")
+                .counter().count()).as("새는 중").isEqualTo(1);
     }
 
     /** 게이지는 살아 있는 값이어야 합니다. 등록 시점 값이 박히면 늘 그 값입니다. */

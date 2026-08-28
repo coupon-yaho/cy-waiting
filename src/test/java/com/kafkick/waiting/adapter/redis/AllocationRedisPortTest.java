@@ -52,6 +52,77 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         }
     }
 
+    /**
+     * <b>줄과 생존 신호만 지웁니다</b> (7.3.1).
+     *
+     * <p>나머지는 지우면 되돌릴 수 없는 손해가 납니다. 입장 임계는 단조여야
+     * 하고(A-7), 입장 표시는 차례가 왔던 사람이 종료를 안 받게 막는 유일한
+     * 장치이며, 활성 목록에서 빼면 <b>매진 종결이 통째로 꺼집니다.</b>
+     */
+    @Test
+    @DisplayName("매진_큐는_줄과_생존_신호만_지운다")
+    void 매진_큐는_줄과_생존_신호만_지운다() {
+        redis.opsForSet().add(RedisKeys.ACTIVE_COUPONS, "c1", "c2").block(WAIT);
+        줄_세운다("c1", 1, 2);
+        줄_세운다("c2", 3);
+        redis.opsForZSet().add(RedisKeys.alive("c1", SHARDS, 0), "m1", 100).block(WAIT);
+        redis.opsForHash().put(RedisKeys.grace("c1", SHARDS, 0), "m1", "a:5").block(WAIT);
+        redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "7").block(WAIT);
+
+        assertThat(port.dropSoldOutQueues(List.of("c1")).block(WAIT))
+                .as("지운 쿠폰을 돌려준다").containsExactly("c1");
+
+        assertThat(redis.hasKey(RedisKeys.queue("c1", SHARDS, 0)).block(WAIT)).isFalse();
+        assertThat(redis.hasKey(RedisKeys.alive("c1", SHARDS, 0)).block(WAIT)).isFalse();
+        // **입장 임계는 안 지운다.** 지우면 임계가 뒤로 가고, 이미 입장한
+        // 사람이 두 번째 토큰을 받을 수 있다 (A-7).
+        assertThat(redis.opsForValue().get(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT))
+                .as("입장 임계").isEqualTo("7");
+        // **입장 표시도 안 지운다.** 차례가 왔던 사람이 종료를 안 받게 막는
+        // 유일한 장치이고 보관이 5분이다.
+        assertThat(redis.opsForHash().get(RedisKeys.grace("c1", SHARDS, 0), "m1").block(WAIT))
+                .as("입장 표시").isEqualTo("a:5");
+        // **활성 목록에 남긴다.** 빼면 그 쿠폰이 스냅샷에서 사라져 조회는
+        // 레디스로 내려가고, 발급은 404 가 되며, 재료가 낡으면 미지 쿠폰
+        // 경로가 fail-open 으로 뒷단에 흘린다 — 사다리 1번을 우회한다.
+        assertThat(redis.opsForSet().members(RedisKeys.ACTIVE_COUPONS)
+                .collectList().block(WAIT)).containsExactlyInAnyOrder("c1", "c2");
+        // 지목 안 한 쿠폰은 그대로다. 한 쿠폰의 정리가 옆 줄을 지우면 안 된다.
+        assertThat(redis.hasKey(RedisKeys.queue("c2", SHARDS, 0)).block(WAIT)).isTrue();
+    }
+
+    /**
+     * <b>시계 역행 바닥값은 살아남습니다.</b>
+     *
+     * <p>지우면 승격된 복제본의 시계가 뒤처졌을 때 새 score 가 앞으로 가고,
+     * 줄 선 사람이 통째로 추월당합니다 (A-9).
+     */
+    @Test
+    @DisplayName("정리해도_시계_바닥값은_남는다")
+    void 정리해도_시계_바닥값은_남는다() {
+        redis.opsForSet().add(RedisKeys.ACTIVE_COUPONS, "c1").block(WAIT);
+        줄_세운다("c1", 1);
+        redis.opsForValue().set(RedisKeys.maxScore("c1", SHARDS, 0), "1700000000000000")
+                .block(WAIT);
+
+        port.dropSoldOutQueues(List.of("c1")).block(WAIT);
+
+        assertThat(redis.opsForValue().get(RedisKeys.maxScore("c1", SHARDS, 0)).block(WAIT))
+                .isEqualTo("1700000000000000");
+    }
+
+    /** 지울 것이 없으면 아무 명령도 안 냅니다. 빈 목록에 왕복을 쓰면 틱이 밀립니다. */
+    @Test
+    @DisplayName("지울_것이_없으면_왕복하지_않는다")
+    void 지울_것이_없으면_왕복하지_않는다() {
+        redis.opsForSet().add(RedisKeys.ACTIVE_COUPONS, "c1").block(WAIT);
+
+        assertThat(port.dropSoldOutQueues(List.of()).block(WAIT)).isEmpty();
+
+        assertThat(redis.opsForSet().members(RedisKeys.ACTIVE_COUPONS)
+                .collectList().block(WAIT)).containsExactly("c1");
+    }
+
     @Test
     @DisplayName("배분_대상만_읽는다")
     void 배분_대상만_읽는다() {

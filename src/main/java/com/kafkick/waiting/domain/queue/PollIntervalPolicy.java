@@ -21,13 +21,15 @@ public class PollIntervalPolicy {
     private static final long MIN_INTERVAL_SEC = 1;
     private static final long MAX_INTERVAL_SEC = 60;
 
-    /** 한두 번 놓쳐도 안 지워지려면 이만큼 봐준다. */
+    /** 백그라운드 탭이 분당 1회로 스로틀돼도 안 지워지려면 이만큼 봐준다. */
     private static final long MISSED_POLLS = 3;
 
-    /** 서버가 시킨 간격을 지키는 사람이 놓쳐도 되는 횟수. */
-    public static long missedPolls() {
-        return MISSED_POLLS;
-    }
+    /**
+     * 마지막 폴링의 왕복과 클라이언트 타이머 드리프트를 덮는 여유(초).
+     *
+     * <p>이것이 없으면 약속한 횟수가 실제로는 하나 적다 — 아래 참조.
+     */
+    private static final long TTL_MARGIN_SEC = 10;
 
     /**
      * 생존 신호 수명.
@@ -40,9 +42,14 @@ public class PollIntervalPolicy {
     // (k+1)·간격이다. 그냥 MISSED_POLLS 를 곱하면 마지막 한 번은 초 단위로
     // 정확해야 하고, 늦으면 걷힌다 — 재입장은 새 순번이라 순번 역행이다.
     //
+    // **여유를 더한다.** 곱만 하면 세 번 놓친 사람이 키가 만료되는 바로 그
+    // 순간에 도착한다. 경계가 붙어 있으면 왕복 한 번이 곧 순번 역행이라,
+    // 실제로 보장되는 것은 두 번뿐이다.
+    //
     // 배수가 붙기 전에는 서버가 말하는 최대 간격이 36초라 이 경계가 안 보였다.
     public static Duration aliveTtl() {
-        return maxInterval().multipliedBy(MISSED_POLLS + 1);
+        return maxInterval().multipliedBy(MISSED_POLLS + 1)
+                .plusSeconds(TTL_MARGIN_SEC);
     }
 
     /** 매진 큐 정리가 이 값을 넘겨 기다려야 한다 — 마지막 폴링을 이것이 정한다. */

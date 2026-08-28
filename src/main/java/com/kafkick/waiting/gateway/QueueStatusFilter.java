@@ -227,7 +227,7 @@ public final class QueueStatusFilter implements WebFilter {
      */
     // 전역 값이라 쿠폰이 스냅샷에서 빠져도 남는다. 쿠폰별 필드에 두면 그
     // 쿠폰이 떨어지는 순간 그 줄 전체가 예산 밖으로 나갔다.
-    private static double pollScale(SnapshotHolder.View view) {
+    private double pollScale(SnapshotHolder.View view) {
         return view.snapshot().meta().pollScale();
     }
 

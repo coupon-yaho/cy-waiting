@@ -385,6 +385,42 @@ public final class AllocationRedisPort implements SnapshotSource {
                 .reduce(0L, Long::sum);
     }
 
+    /**
+     * 매진된 쿠폰의 줄과 딸린 키를 지운다 (7.3.1·7.3.3).
+     *
+     * <p><b>한 쿠폰이 실패해도 나머지는 지운다.</b> 정리가 배분을 막으면
+     * 안 지워진 것 하나가 그 틱 전체를 세운다 (7.3.4).
+     */
+    public Mono<Long> dropSoldOutQueues(List<String> couponIds) {
+        if (couponIds.isEmpty()) {
+            return Mono.just(0L);
+        }
+        return Flux.fromIterable(couponIds)
+                .flatMap(this::dropOne, MAX_CONCURRENT_READS)
+                .reduce(0L, Long::sum);
+    }
+
+    private Mono<Long> dropOne(String couponId) {
+        List<String> keys = new ArrayList<>();
+        for (int shard = 0; shard < shards; shard++) {
+            // **딸린 것을 같이 지운다.** 줄만 지우면 생존 신호와 유예 기록이
+            // 남아, 다음 회차가 남의 기록을 자기 것으로 읽는다.
+            keys.add(RedisKeys.queue(couponId, shards, shard));
+            keys.add(RedisKeys.alive(couponId, shards, shard));
+            keys.add(RedisKeys.grace(couponId, shards, shard));
+            keys.add(RedisKeys.admitted(couponId, shards, shard));
+        }
+        return redis.delete(Flux.fromIterable(keys))
+                .then(redis.opsForSet().remove(RedisKeys.ACTIVE_COUPONS, couponId))
+                .onErrorResume(e -> {
+                    // **다음 틱에 다시 온다.** 여기서 터뜨리면 안 지워진 것
+                    // 하나가 그 틱의 배분을 통째로 세운다 (7.3.4).
+                    log.warn("매진 큐 정리 실패 — 다음 틱에 다시 한다: 쿠폰={} {}",
+                            couponId, e.toString());
+                    return Mono.just(0L);
+                });
+    }
+
     /** 쿠폰별 재고. <b>없으면 담지 않는다</b> — 부르는 쪽이 "모른다" 를 0 으로 접는다. */
     public Mono<Map<String, Long>> stocks(List<String> couponIds) {
         List<String> keys = couponIds.stream().map(RedisKeys::stock).toList();

@@ -59,13 +59,17 @@ public class ControlPlaneConfig {
     @Bean
     AllocationRound allocationRound(DemandCollector collector, AllocationRedisPort port,
             GatewayRegistry registry, CapacityCollector capacity, Leadership leadership,
-            TunablesRefresh tunables) {
+            TunablesRefresh tunables, ControlPlaneProperties properties) {
         SnapshotCodec codec = SnapshotCodec.create();
         return AllocationRound.of(leadership::isLeader, collector::collect, capacity::lastKnown,
                 registry::count, port::apply, port::publish, Instant::now,
                 () -> port.load().map(hash ->
                         CreditSmoother.restore(SMOOTHING_ALPHA, codec.smoothing(hash))),
-                codec, capacity::lastFloor, tunables::current);
+                codec, capacity::lastFloor, tunables::current,
+                // **유예를 값으로 정한다** (7.3.2). 스냅샷 낡음 한계보다 충분히
+                // 커야 마지막 폴링이 줄을 안 잃는다.
+                SoldOutCleanup.of(properties.scheduler().soldOutGraceTicks()),
+                port::dropSoldOutQueues);
     }
 
     /**

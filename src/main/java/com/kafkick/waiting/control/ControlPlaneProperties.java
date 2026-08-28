@@ -36,7 +36,8 @@ public record ControlPlaneProperties(Scheduler scheduler, Leader leader, Capacit
 
     public static ControlPlaneProperties defaults() {
         return new ControlPlaneProperties(
-                new Scheduler(Duration.ofSeconds(1), Duration.ofSeconds(3), 1),
+                // 유예 10틱 = 10초. 낡음 한계 5초의 두 배다 (7.3.2).
+                new Scheduler(Duration.ofSeconds(1), Duration.ofSeconds(3), 1, 10),
                 new Leader(Duration.ofSeconds(2), Duration.ofMillis(300), Duration.ofMillis(100)),
                 new Capacity(Duration.ofSeconds(60), Duration.ofSeconds(3), 5, 10_000, 3, 1));
     }
@@ -87,7 +88,8 @@ public record ControlPlaneProperties(Scheduler scheduler, Leader leader, Capacit
      * @param firstTickDelay 첫 판을 미루는 시간. 가용량 보고가 모이기를 기다린다
      * @param shards         큐 샤드 수
      */
-    public record Scheduler(Duration tick, Duration firstTickDelay, int shards) {
+    public record Scheduler(Duration tick, Duration firstTickDelay, int shards,
+            int soldOutGraceTicks) {
 
         public Scheduler {
             Durations.requirePositive(tick, "tick");
@@ -104,6 +106,13 @@ public record ControlPlaneProperties(Scheduler scheduler, Leader leader, Capacit
             if (shards != 1) {
                 throw new IllegalArgumentException(
                         "shards 는 아직 1 만 지원한다 — 샤드별 적용이 없다: %d".formatted(shards));
+            }
+            // **낡음 한계보다 길어야 한다** (7.3.2). 짧으면 마지막 폴링이
+            // 아직 오는 중에 줄이 사라져, 그 사람이 매진이 아니라 "줄에 없다"
+            // 를 받는다. 틱이 1초이므로 틱 수가 곧 초다.
+            if (soldOutGraceTicks < 1) {
+                throw new IllegalArgumentException(
+                        "매진 유예 틱은 양수여야 한다: %d".formatted(soldOutGraceTicks));
             }
         }
     }

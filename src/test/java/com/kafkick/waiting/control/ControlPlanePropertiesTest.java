@@ -91,16 +91,21 @@ class ControlPlanePropertiesTest {
     @DisplayName("스케줄러_값이_잘못되면_안_뜬다")
     void 스케줄러_값이_잘못되면_안_뜬다() {
         assertThatCode(() -> new ControlPlaneProperties.Scheduler(Duration.ofSeconds(1),
-                Duration.ofSeconds(3), 1)).doesNotThrowAnyException();
+                Duration.ofSeconds(3), 1, 10)).doesNotThrowAnyException();
         assertThatThrownBy(() -> new ControlPlaneProperties.Scheduler(Duration.ZERO,
-                Duration.ofSeconds(3), 1))
+                Duration.ofSeconds(3), 1, 10))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageStartingWith("tick");
         assertThatThrownBy(() -> new ControlPlaneProperties.Scheduler(Duration.ofSeconds(1),
-                Duration.ofSeconds(-1), 1))
+                Duration.ofSeconds(-1), 1, 10))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageStartingWith("firstTickDelay");
         assertThatThrownBy(() -> new ControlPlaneProperties.Scheduler(Duration.ofSeconds(1),
-                Duration.ofSeconds(3), 0))
+                Duration.ofSeconds(3), 0, 10))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageStartingWith("shards");
+        // **유예가 0 이면 유예가 아니다.** 마지막 폴링이 아직 오는 중에 줄이
+        // 사라지면, 그 사람은 매진이 아니라 "줄에 없다" 를 받는다 (7.3.2).
+        assertThatThrownBy(() -> new ControlPlaneProperties.Scheduler(Duration.ofSeconds(1),
+                Duration.ofSeconds(3), 1, 0))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageStartingWith("매진 유예");
     }
 
     @Test
@@ -112,12 +117,30 @@ class ControlPlanePropertiesTest {
         // **등호가 이 검사의 이유다.** 엄격히 작은 값만 쓰면 경계를 한 칸
         // 옮겨도 안 죽는다.
         ControlPlaneProperties.Scheduler scheduler =
-                new ControlPlaneProperties.Scheduler(Duration.ofSeconds(1), Duration.ofSeconds(3), 1);
+                new ControlPlaneProperties.Scheduler(
+                        Duration.ofSeconds(1), Duration.ofSeconds(3), 1, 10);
 
         assertThatThrownBy(() -> new ControlPlaneProperties(scheduler,
                 leader(Duration.ofSeconds(1), Duration.ofMillis(100), Duration.ofMillis(50)),
                 ControlPlaneProperties.defaults().capacity()))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("리스");
+    }
+
+    /**
+     * <b>유예가 낡음 한계보다 길어야 합니다</b> (7.3.2).
+     *
+     * <p>짧으면 마지막 폴링이 아직 오는 중에 줄이 사라져, 매진이 아니라
+     * "줄에 없다" 를 받습니다.
+     */
+    @Test
+    @DisplayName("기본_유예가_낡음_한계보다_길다")
+    void 기본_유예가_낡음_한계보다_길다() {
+        ControlPlaneProperties.Scheduler scheduler =
+                ControlPlaneProperties.defaults().scheduler();
+
+        java.time.Duration 유예 = scheduler.tick().multipliedBy(scheduler.soldOutGraceTicks());
+
+        assertThat(유예).isGreaterThan(java.time.Duration.ofSeconds(5));
     }
 
     @Test
@@ -126,7 +149,8 @@ class ControlPlanePropertiesTest {
         // 신선도가 틱보다 짧으면 한 틱만 밀려도 전 인스턴스가 낡음이 된다.
         // 그러면 하한으로 떨어져 아무 문제 없는 쿠폰까지 줄을 세운다.
         ControlPlaneProperties.Scheduler scheduler =
-                new ControlPlaneProperties.Scheduler(Duration.ofSeconds(1), Duration.ofSeconds(3), 1);
+                new ControlPlaneProperties.Scheduler(
+                        Duration.ofSeconds(1), Duration.ofSeconds(3), 1, 10);
 
         assertThatThrownBy(() -> new ControlPlaneProperties(scheduler,
                 ControlPlaneProperties.defaults().leader(),

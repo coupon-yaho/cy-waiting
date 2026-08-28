@@ -9,14 +9,17 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import org.reactivestreams.Publisher;
 import org.slf4j.Logger;
@@ -26,6 +29,7 @@ import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.server.reactive.ServerHttpResponse;
 import org.springframework.http.server.reactive.ServerHttpResponseDecorator;
@@ -45,6 +49,25 @@ public final class QueryCoalescingFilter implements GatewayFilter {
     private static final Logger log = LoggerFactory.getLogger(QueryCoalescingFilter.class);
 
     private static final String METRIC = "waiting.coalescing";
+
+    /**
+     * 뒷단이 <b>공유해도 된다고 말하는</b> 지시어.
+     *
+     * <p>표준 의미 그대로다 — 공유 캐시가 나눠 줘도 되는 응답. 자체 헤더를 만들면
+     * 그 뜻을 두 팀이 각자 해석하게 되고, 발급 계층이 안 붙이는 날 조용히 나뉜다.
+     */
+    private static final String SHARED = "public";
+
+    /** 계약이 아직 안 섰다는 신호. <b>거절과는 다른 사건이다.</b> */
+    private static final String NO_SHARED_MARKER = "no-shared-marker";
+
+    /**
+     * 되돌리기 전에 연속으로 봐야 하는 선언 수.
+     *
+     * <p><b>뒷단이 여럿이면 롤링 배포 중 절반만 헤더를 붙인다.</b> 응답 하나로
+     * 되돌리면 그 구간 내내 켜졌다 꺼졌다 하고, 진입·복귀 로그가 요청마다 나간다.
+     */
+    private static final int RECOVERY_STREAK = 20;
 
     /**
      * 자격 증명. <b>이게 실려 오면 안 모읍니다.</b>
@@ -86,6 +109,25 @@ public final class QueryCoalescingFilter implements GatewayFilter {
     private final MeterRegistry meters;
 
     private final CoalescingKeys keys = CoalescingKeys.create();
+
+    /**
+     * 공유 선언을 안 하는 경로.
+     *
+     * <p><b>가짓수가 유계다</b> — {@code filter} 의 {@code ttlByPath.containsKey}
+     * 가드를 지난 경로만 들어온다. 밖에서 오는 값이 아니라 상한이 필요 없다.
+     */
+    private final Set<String> declined = ConcurrentHashMap.newKeySet();
+
+    /** 연속으로 본 선언 수. 한 번이라도 안 오면 0 으로 돌아간다. */
+    private final Map<String, AtomicInteger> declaring = new ConcurrentHashMap<>();
+
+    /**
+     * 계약이 안 선 구간을 <b>경로마다</b> 쌍으로 남긴다.
+     *
+     * <p>하나로 두면 두 경로가 잇달아 멎을 때 두 번째는 진입 로그가 안 나가고,
+     * 첫 번째만 회복해도 창이 닫혀 "복귀" 가 찍힌다 — 아직 안 모으는 경로를 두고.
+     */
+    private final Map<String, FailureWindow> contracts = new ConcurrentHashMap<>();
 
     /** 키 상한에 닿아 모으기가 멎은 구간. 카운터만 두면 사후에 못 답한다 (LG-2). */
     private final FailureWindow saturation;
@@ -139,6 +181,17 @@ public final class QueryCoalescingFilter implements GatewayFilter {
         if (isSpecialRequest(exchange)) {
             count("skipped", "request-directive");
             return chain.filter(exchange);
+        }
+
+        // **선언을 안 하는 뒷단에는 붙지 않는다.** 붙으면 리더의 왕복이 끝난 뒤
+        // 각자 다시 부르므로, 뒷단 부하는 필터가 없을 때와 같고 지연만 두 배가
+        // 된다 — 없느니만 못한 상태다. 응답을 보면 배우므로 붙지 않아도 회복된다.
+        if (declined.contains(path)) {
+            count("skipped", NO_SHARED_MARKER);
+            // **요청을 센다.** 창을 여는 자리에서 세면 경로 수가 되어, 세 시간짜리
+            // 구간에도 "1건을 못 모았다" 로 찍힌다.
+            contracts.computeIfAbsent(path, p -> FailureWindow.create()).entered();
+            return passThrough(exchange, chain, path);
         }
 
         CoalescingKeys.Key key = keys.of(exchange, path);
@@ -218,17 +271,64 @@ public final class QueryCoalescingFilter implements GatewayFilter {
         AtomicLong held = new AtomicLong();
         AtomicBoolean tooBig = new AtomicBoolean();
         ServerHttpResponse original = exchange.getResponse();
+        AtomicBoolean stored = new AtomicBoolean();
         ServerHttpResponseDecorator tee = new ServerHttpResponseDecorator(original) {
             @Override
             public Mono<Void> writeWith(Publisher<? extends DataBuffer> body) {
-                return super.writeWith(Flux.from(body).doOnNext(buffer -> capture(
-                        buffer, chunks, held, tooBig)));
+                // **마지막 조각을 본 자리에서 담는다.** 체인이 다 끝난 뒤에 담으면
+                // 부른 쪽이 응답을 다 쓴 다음이라, 그 사이에 오는 요청이 헛되이
+                // 뒷단을 친다 — 오픈 순간에는 그 창에 수천 건이 들어온다.
+                return super.writeWith(Flux.from(body)
+                        .doOnNext(buffer -> capture(buffer, chunks, held, tooBig))
+                        .doOnComplete(() -> store(original, chunks, tooBig, ttl, path,
+                                exchange, stored)));
             }
         };
         count("miss", FailureCause.NONE);
         return chain.filter(exchange.mutate().response(tee).build())
-                .then(Mono.fromSupplier(() ->
-                        finish(original, chunks, tooBig, ttl, key, path, exchange)));
+                .then(Mono.fromSupplier(() -> {
+                    // 본문이 아예 없는 응답은 위 콜백이 안 돈다. 그때는 여기서 담는다.
+                    store(original, chunks, tooBig, ttl, path, exchange, stored);
+                    return finish(original, chunks, tooBig, ttl, key, path, exchange);
+                }));
+    }
+
+    /**
+     * 헤더를 값으로 복사합니다.
+     *
+     * <p>뷰를 들고 있으면 다음 요청이 그 응답의 헤더를 고칠 때 담아 둔 것까지
+     * 같이 바뀝니다.
+     */
+    private Map<String, List<String>> headers(ServerHttpResponse response) {
+        Map<String, List<String>> copy = new LinkedHashMap<>();
+        response.getHeaders().forEach((name, values) -> copy.put(name, List.copyOf(values)));
+        return copy;
+    }
+
+    /**
+     * 담을 수 있으면 담습니다. <b>한 번만 담습니다.</b>
+     *
+     * <p>부른 쪽이 응답을 다 쓰기 <b>전에</b> 부르는 것이 요점입니다. 뒤에 두면
+     * 담기까지의 틈이 그대로 뒷단을 헛되이 치는 창이 됩니다.
+     */
+    private void store(ServerHttpResponse response, List<byte[]> chunks,
+            AtomicBoolean tooBig, Duration ttl, String path, ServerWebExchange exchange,
+            AtomicBoolean stored) {
+        if (tooBig.get() || !stored.compareAndSet(false, true)) {
+            return;
+        }
+        int code = response.getStatusCode() == null
+                ? HttpStatus.OK.value() : response.getStatusCode().value();
+        Set<String> directives = directives(response.getHeaders().getCacheControl());
+        if (code >= 400 || refusal(response.getHeaders(), directives) != null
+                || keys.learn(path, response.getHeaders()).contains(CoalescingKeys.ALL)) {
+            return;
+        }
+        cache.put(keys.of(exchange, path).value(),
+                new ResponseCache.Entry(code, headers(response), join(chunks)), ttl);
+        if (cache.isFull()) {
+            count("skipped", "cache-full");
+        }
     }
 
     /**
@@ -258,15 +358,15 @@ public final class QueryCoalescingFilter implements GatewayFilter {
             ServerWebExchange exchange) {
         HttpStatusCode status = response.getStatusCode();
         int code = status == null ? 200 : status.value();
-        // 헤더를 값으로 복사한다. 뷰를 들고 있으면 다음 요청이 그 응답의
-        // 헤더를 고칠 때 담아 둔 것까지 같이 바뀐다.
-        Map<String, List<String>> headers = new LinkedHashMap<>();
-        response.getHeaders().forEach((name, values) -> headers.put(name, List.copyOf(values)));
+        Map<String, List<String>> headers = headers(response);
         if (tooBig.get()) {
             return new Captured(code, headers, new byte[0], false, "oversize", null);
         }
         byte[] body = join(chunks);
         List<String> learned = keys.learn(path, response.getHeaders());
+        // **한 번만 만든다.** 응답마다 소문자 사본과 집합을 두세 번 짓는 것은
+        // 5ms 예산(G6.11)을 쓰는 자리다.
+        Set<String> directives = directives(response.getHeaders().getCacheControl());
 
         // **담는 것과 나눠 주는 것은 다른 판단이다.** 담을 때는 방금 배운 것으로
         // 다시 만든 키를 쓰므로 늘 안전하다. 안 담으면 경로마다 뒷단을 한 번씩
@@ -274,14 +374,11 @@ public final class QueryCoalescingFilter implements GatewayFilter {
         String storeKey = keys.of(exchange, path).value();
         // **장애 응답은 안 담는다.** 담으면 그 수명 동안 장애가 고정되고,
         // 뒷단이 멀쩡해져도 계속 실패를 돌려준다.
-        boolean shareable = code < 400 && !unshareable(response.getHeaders())
+        String refusal = code < 400 ? refusal(response.getHeaders(), directives) : null;
+        boolean shareable = code < 400 && refusal == null
                 && !learned.contains(CoalescingKeys.ALL);
-        if (shareable) {
-            cache.put(storeKey, new ResponseCache.Entry(code, headers, body), ttl);
-            if (cache.isFull()) {
-                count("skipped", "cache-full");
-            }
-        }
+        // **담기는 store 가 이미 했다.** 여기서 또 담으면 같은 것을 두 번 쓴다.
+        learnDeclaration(path, directives, code);
 
         // **배우기 전의 첫 무리가 가장 위험하다.** 그때는 갈림 헤더를 몰라 회원이
         // 서로 다른 요청들이 한 키에 붙어 있다. 응답이 "이 헤더로 갈린다" 고
@@ -290,8 +387,13 @@ public final class QueryCoalescingFilter implements GatewayFilter {
             // **담기만 막으면 안 된다.** 지금 모여 있는 사람들이 그대로 그 응답을
             // 받는다 — no-store 를 낸 뒷단이 막으려던 것이 정확히 그것이다.
             // 키를 안 실어 보내 아무도 되받지 못하게 한다.
-            return new Captured(code, headers, new byte[0], false,
-                    learned.contains(CoalescingKeys.ALL) ? "vary-all" : "not-shareable", null);
+            String cause = learned.contains(CoalescingKeys.ALL) ? "vary-all"
+                    : code >= 400 ? "error-status" : refusal;
+            // **부른 쪽에서도 센다.** 뒤에 모인 사람 경로에서만 세면 순차 트래픽
+            // — 프로덕션의 보통 상태 — 에서 이 카운터가 아예 안 오른다. 그러면
+            // "계약이 안 서서 모으기가 꺼졌다" 는 사실의 신호가 하나도 없다.
+            count("refused", cause);
+            return new Captured(code, headers, new byte[0], false, cause, null);
         }
         if (!keys.shareable(key, learned)) {
             // 배우기 전에 모인 무리다. 갈리는 값이 같은 사람은 이 키로 되찾아 간다.
@@ -301,19 +403,137 @@ public final class QueryCoalescingFilter implements GatewayFilter {
     }
 
     /**
-     * 뒷단이 나눠 쓰지 말라고 했는가.
+     * 붙지 않고 그대로 흘리되 <b>응답은 본다.</b>
      *
-     * <p>지시어는 대소문자를 안 가립니다. {@code private} 와 {@code no-cache} 도
-     * 공유 캐시에서는 못 씁니다 — {@code no-store} 만 보면 그 둘이 새 나갑니다.
+     * <p>안 보면 한 번의 누락이 영구가 됩니다 — 안 붙으니 응답을 못 보고, 못 보니
+     * 선언이 돌아온 것을 모릅니다. 본문은 안 건드리고 헤더만 읽습니다.
      */
-    private boolean unshareable(HttpHeaders headers) {
-        String control = headers.getCacheControl();
-        if (control == null) {
-            return false;
+    // **커밋될 때만 돕니다.** 클라이언트가 중간에 끊으면 콜백이 아예 안 돌고,
+    // 오류 응답은 커밋되더라도 학습에서 걸러진다. 그래서 실제 회복 조건은
+    // "커밋된 정상 응답이 연속으로 와야 한다" 이고, 그동안 이 경로는 계속 안 붙는다.
+    // 안 붙는 동안에는 Vary 학습도 같이 멎는다.
+    //
+    // 체인보다 먼저 등록하므로 뒤 필터가 Cache-Control 을 덧붙이면 그것은 못 본다.
+    // 지금 그런 필터는 없고, 스모크 시나리오가 "우리만 달면 게이트웨이가 드러난다"
+    // 로 그 전제를 지킨다.
+    private Mono<Void> passThrough(ServerWebExchange exchange, GatewayFilterChain chain,
+            String path) {
+        exchange.getResponse().beforeCommit(() -> {
+            ServerHttpResponse response = exchange.getResponse();
+            HttpStatusCode status = response.getStatusCode();
+            learnDeclaration(path, directives(response.getHeaders().getCacheControl()),
+                    status == null ? HttpStatus.OK.value() : status.value());
+            return Mono.empty();
+        });
+        return chain.filter(exchange);
+    }
+
+    /**
+     * 이 경로의 뒷단이 <b>공유를 선언하는가</b>를 응답에서 배웁니다.
+     *
+     * <p>선언을 안 하면 다음부터는 안 붙습니다. 붙으면 지연만 두 배가 되고 뒷단
+     * 부하는 그대로라 없느니만 못합니다. 선언이 오면 곧바로 되돌립니다.
+     *
+     * <p>실패 응답으로는 안 배웁니다 — 장애 구간의 5xx 에 헤더가 없다고 계약이
+     * 깨진 것으로 읽으면, 뒷단이 살아난 뒤에도 안 모읍니다.
+     */
+    private void learnDeclaration(String path, Set<String> directives, int code) {
+        if (code >= 400) {
+            return;
         }
+        FailureWindow window = contracts.computeIfAbsent(path, p -> FailureWindow.create());
+        AtomicInteger streak = declaring.computeIfAbsent(path, p -> new AtomicInteger());
+        if (directives.contains(SHARED)) {
+            // **한 건으로 안 되돌린다.** 뒷단 절반만 헤더를 붙인 롤링 구간에서
+            // 켜졌다 꺼졌다 하며 로그가 요청마다 나간다 (LG-3).
+            if (streak.incrementAndGet() >= RECOVERY_STREAK && declined.remove(path)) {
+                window.exited().ifPresent(r -> log.warn(
+                        "공유 선언 복귀 — {} 에서 {}초 동안 {}건을 못 모았다",
+                        path, NANOSECONDS.toSeconds(r.elapsedNanos()), r.swallowed()));
+            }
+            return;
+        }
+        streak.set(0);
+        if (declined.add(path) && window.entered()) {
+            log.warn("공유 선언 없음 — {} 의 응답에 Cache-Control: public 이 없어 "
+                    + "모으기를 멈춘다. 발급 계층이 붙이기 전까지 뒷단 도달이 안 줄어든다", path);
+        }
+    }
+
+    /**
+     * 왜 못 나누는가. {@code null} 이면 나눠도 된다.
+     *
+     * <p><b>"거절했다" 와 "말한 적이 없다" 를 가릅니다.</b> 뒤엣것은 발급 계층과의
+     * 계약이 아직 안 섰다는 신호라, 한 라벨에 묶으면 언제 닫을 수 있는지를 못 봅니다.
+     */
+    private String refusal(HttpHeaders headers) {
+        return refusal(headers, directives(headers.getCacheControl()));
+    }
+
+    private String refusal(HttpHeaders headers, Set<String> directives) {
+        if (!headers.getOrEmpty(HttpHeaders.SET_COOKIE).isEmpty()) {
+            return "set-cookie";
+        }
+        if (directives.contains("no-store") || directives.contains("private")
+                || directives.contains("no-cache")) {
+            return "not-shareable";
+        }
+        return directives.contains(SHARED) ? null : NO_SHARED_MARKER;
+    }
+
+    // **쿠키를 심는 응답은 못 나눈다.** `public` 은 "공유 캐시가 저장해도 된다"
+    // 이지 "개인 자격 증명이 없다" 가 아니다. 뒷단 프레임워크가 세션을 부트스트랩
+    // 하며 붙이면 그 사이로 지나가고, 받는 브라우저는 남의 세션을 자기 것으로
+    // 저장한다.
+    //
+    // 헤더만 벗기지 않는다. 벗기면 뒷단이 심으려던 쿠키가 리더에게만 가고
+    // 나머지는 조용히 못 받아, 증상이 인증 실패로 나타난다.
+    //
+    // **말이 없어도 못 나눈다.** 개인화됐는지 아는 것은 뒷단뿐이고, 기본이
+    // 나눔이면 필드 하나가 붙는 날 남의 응답이 나간다.
+    /**
+     * 지시어를 <b>토큰으로</b> 가릅니다.
+     *
+     * <p>부분 문자열로 보면 {@code no-public} 이라고 거절한 뒷단이 허락한 것으로
+     * 읽히고, {@code community="public-catalog"} 같은 확장 지시어도 허락이 됩니다.
+     */
+    private Set<String> directives(String control) {
+        if (control == null) {
+            return Set.of();
+        }
+        // **따옴표 안의 콤마로는 안 자른다.** 자르면 `community="catalog, public"`
+        // 같은 확장 지시어가 `public` 이라는 조각을 만들고, 아무 말도 안 한 응답이
+        // 허락한 것으로 읽힌다.
+        Set<String> names = new HashSet<>();
         String lower = control.toLowerCase(Locale.ROOT);
-        return lower.contains("no-store") || lower.contains("private")
-                || lower.contains("no-cache");
+        StringBuilder name = new StringBuilder();
+        boolean quoted = false;
+        boolean afterEquals = false;
+        for (int i = 0; i < lower.length(); i++) {
+            char c = lower.charAt(i);
+            // 이스케이프된 따옴표는 따옴표를 안 닫는다. 안 보면 그 자리에서 인용이
+            // 끝난 것으로 읽혀 뒤의 콤마가 다시 구분자가 된다.
+            if (quoted && c == '\\' && i + 1 < lower.length()) {
+                i++;
+            } else if (c == '"') {
+                quoted = !quoted;
+            } else if (c == ',' && !quoted) {
+                names.add(name.toString().strip());
+                name.setLength(0);
+                afterEquals = false;
+            } else if (c == '=' && !quoted) {
+                afterEquals = true;
+            } else if (!afterEquals) {
+                name.append(c);
+            }
+        }
+        if (quoted) {
+            // **닫히지 않은 따옴표는 못 읽은 것이다.** 읽다 만 값으로 허락을
+            // 판단하면, 헤더를 비틀어 넣는 것만으로 나눔이 켜진다.
+            return Set.of();
+        }
+        names.add(name.toString().strip());
+        return names;
     }
 
     private byte[] join(List<byte[]> chunks) {

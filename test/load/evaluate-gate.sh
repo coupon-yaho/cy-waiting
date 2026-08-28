@@ -351,6 +351,34 @@ case "$scenario" in
     # 이탈자가 그냥 줄에 남는다 — 낭비율을 여기서 판정하면 없는 기능을 재는 것이다.
     report "크레딧 낭비 판정" "Phase 7 에서 (G7.5)"
     ;;
+  no-shared-marker)
+    # **계약이 안 선 상태를 잰다.** 스텁이 공유 선언을 안 하면 게이트웨이가
+    # 안 모으고, 그때 뒷단 도달이 요청 수와 같아야 한다. 이 판이 없으면
+    # "붙이기 전까지 어떻게 되는가" 를 아무도 안 본다.
+    checks=$(read_metric '.metrics.checks.value' '.metrics.checks.values.rate')
+    reqs=$(read_metric '.metrics.http_reqs.count' '.metrics.http_reqs.values.count')
+
+    report "요청 수" "${reqs:-없음}"
+    report "검사 통과율" "${checks:-없음}"
+
+    delivered "${reqs:-}" 100 2000 "요청 수"
+    at_least "${checks:-}" 0.99 "검사 통과율"
+
+    if [[ -n "${STUB_SERVED:-}" ]]; then
+      # **반올림한 값으로 판정하지 않는다.** 1.054 가 1.05 가 되어 통과한다.
+      ratio=$(awk -v a="${reqs:-0}" -v b="${STUB_SERVED:-1}" \
+          'BEGIN { print (b + 0 == 0) ? 0 : (a + 0) / (b + 0) }')
+      report "뒷단 도달" "${STUB_SERVED}"
+      report "병합 배수" "$(awk -v r="$ratio" 'BEGIN { printf "%.2f", r }')"
+      at_least "${STUB_SERVED}" 1 "뒷단 도달"
+      # **1 이어야 한다.** 1 보다 크면 선언을 안 한 응답을 나눠 준 것이고,
+      # 그것이 이 변경이 막으려던 것이다. 반대로 모으기가 통째로 꺼져 있어도
+      # 1 이므로, 같은 하네스의 read-window 가 짝으로 500 배 이상을 요구한다.
+      at_most "$ratio" 1.05 "병합 배수"
+    else
+      violate "STUB_SERVED 가 없어 뒷단 도달 수를 못 봤다 — 이 시나리오의 핵심 증거다"
+    fi
+    ;;
   overhead)
     checks=$(read_metric '.metrics.checks.value' '.metrics.checks.values.rate')
     reqs=$(read_metric '.metrics.http_reqs.count' '.metrics.http_reqs.values.count')

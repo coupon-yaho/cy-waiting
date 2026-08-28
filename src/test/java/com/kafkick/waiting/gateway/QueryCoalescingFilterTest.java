@@ -68,6 +68,11 @@ class QueryCoalescingFilterTest {
     /** 뒷단이 답하는 척한다. 몇 번 불렸는지가 이 시험의 값이다. */
     private static Mono<Void> 답한다(org.springframework.web.server.ServerWebExchange e,
             String body) {
+        // **계약을 지킨 뒷단.** 이미 다른 말을 한 응답은 그대로 둔다 — 덮으면
+        // 그 시험이 무엇을 재는지 바뀐다.
+        if (e.getResponse().getHeaders().getCacheControl() == null) {
+            e.getResponse().getHeaders().setCacheControl("public");
+        }
         e.getResponse().setStatusCode(HttpStatus.OK);
         return e.getResponse().writeWith(Mono.just(
                 e.getResponse().bufferFactory().wrap(body.getBytes(StandardCharsets.UTF_8))));
@@ -339,6 +344,9 @@ class QueryCoalescingFilterTest {
         MockServerWebExchange 첫째 = 조회(PATH);
         filter.filter(첫째, ex -> {
             뒷단.incrementAndGet();
+            // 캐시 헤더를 일괄로 붙이는 뒷단은 오류 응답에도 붙인다. 그때도
+            // 안 담아야 장애가 수명 동안 고정되지 않는다.
+            ex.getResponse().getHeaders().setCacheControl("public, max-age=60");
             ex.getResponse().setStatusCode(HttpStatus.INTERNAL_SERVER_ERROR);
             return ex.getResponse().setComplete();
         }).block();
@@ -358,7 +366,9 @@ class QueryCoalescingFilterTest {
         for (int i = 0; i < 2; i++) {
             MockServerWebExchange e = 조회(PATH);
             filter.filter(e, ex -> {
-                ex.getResponse().getHeaders().setCacheControl("no-store");
+                // **공유 선언과 같이 보낸다.** 지시어만 보내면 "선언이 없다" 에서
+                // 먼저 걸려, 정작 재려던 no-store 처리가 한 번도 안 돈다.
+                ex.getResponse().getHeaders().setCacheControl("public, no-store");
                 return 답한다(ex, "안 담김" + 뒷단.incrementAndGet());
             }).block();
         }
@@ -456,7 +466,9 @@ class QueryCoalescingFilterTest {
     @Test
     @DisplayName("나눠_쓰지_말라는_응답은_모여_있어도_안_준다")
     void 나눠_쓰지_말라는_응답은_모여_있어도_안_준다() {
-        for (String 지시어 : List.of("No-Store", "private", "no-cache")) {
+        // 공유 선언과 같이 보낸다 — 안 그러면 선언 없음에서 먼저 걸린다.
+        for (String 지시어 : List.of("public, No-Store", "public, private",
+                "public, no-cache")) {
             AtomicInteger 뒷단 = new AtomicInteger();
             Sinks.Empty<Void> 아직 = Sinks.empty();
             List<MockServerWebExchange> 사람들 = IntStream.range(0, 3)

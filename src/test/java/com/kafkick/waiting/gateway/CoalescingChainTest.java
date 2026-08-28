@@ -49,11 +49,17 @@ class CoalescingChainTest {
     /** 몇 번 불렸는지가 이 시험의 값이다. */
     private static final AtomicInteger 뒷단_호출 = new AtomicInteger();
 
-    /** 매번 다른 본문을 낸다. 담아 둔 것을 받았는지가 본문으로 갈린다. */
+    /**
+     * 매번 다른 본문을 낸다. 담아 둔 것을 받았는지가 본문으로 갈린다.
+     *
+     * <p><b>공유해도 된다고 말한다.</b> 안 말하면 게이트웨이가 안 모으고, 그러면
+     * 이 시험은 배선이 아니라 계약 거절을 재게 된다 (6.10.5).
+     */
     private static final DisposableServer 뒷단 = HttpServer.create()
             .port(0)
             .handle((request, response) -> response
                     .header("Content-Type", "application/json")
+                    .header("Cache-Control", "public")
                     .sendString(Mono.fromSupplier(
                             () -> "{\"n\":" + 뒷단_호출.incrementAndGet() + "}")))
             .bindNow();

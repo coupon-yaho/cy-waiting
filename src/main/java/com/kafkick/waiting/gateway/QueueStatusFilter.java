@@ -3,6 +3,7 @@ package com.kafkick.waiting.gateway;
 import com.kafkick.waiting.control.SnapshotHolder;
 import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
 import com.kafkick.waiting.domain.coupon.CouponState;
+import com.kafkick.waiting.domain.coupon.RuntimeState;
 import com.kafkick.waiting.domain.queue.EntryToken;
 import com.kafkick.waiting.domain.queue.EtaPolicy;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
@@ -132,6 +133,21 @@ public final class QueueStatusFilter implements WebFilter {
             count("no-token");
             return error.write(exchange, ApiError.Code.INVALID_REQUEST);
         }
+        // **매진이면 줄을 안 친다** (R3 · 7.1.4). 재고가 없으면 답이 정해져
+        // 있는데, 그런데도 물으러 가면 매진 순간 몰리는 폴링이 그대로 레디스
+        // 부하가 된다 — 정작 그때 줄을 정리해야 한다.
+        //
+        // **조회 상한보다 앞이다.** 상한은 노드 전역 키 하나라 쿠폰별 격리가
+        // 없다. 뒤에 두면 죽은 쿠폰의 폴링이 살아 있는 쿠폰의 예산을 먹고, 매진
+        // 폴러 자신도 상한에 걸려 `Retry-After` 가 붙은 503 을 받는다 — 이
+        // 변경이 없애려던 폴링 재생산이 정확히 그 경로로 돌아온다.
+        //
+        // 상한을 안 써도 되는 것은 여기서 레디스를 안 치기 때문이다. 남용은
+        // 앞단의 주소·회원 상한이 이미 막는다.
+        if (soldOut(couponId)) {
+            count("sold-out");
+            return response.soldOut(exchange);
+        }
         // **폴링은 읽기가 아니라 쓰기다.** 생존 신호를 갱신하고 차례가 오면 큐에서
         // 뺀다. 토큰은 줄을 서면 누구나 받고 한 시간 사니, 상한이 없으면 토큰 몇
         // 개로 공유 레디스에 무제한 쓰기를 넣을 수 있다.
@@ -140,13 +156,6 @@ public final class QueueStatusFilter implements WebFilter {
             count("rate-limited");
             return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
                     (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random));
-        }
-        // **매진이면 줄을 안 친다** (R3 · 7.1.4). 재고가 없으면 답이 정해져
-        // 있는데, 그런데도 물으러 가면 매진 순간 몰리는 폴링이 그대로 레디스
-        // 부하가 된다 — 정작 그때 줄을 정리해야 한다.
-        if (soldOut(couponId)) {
-            count("sold-out");
-            return response.soldOut(exchange);
         }
         return queue.status(couponId, member.get(), clock.instant())
                 .flatMap(entry -> answer(exchange, couponId, member.get(), entry))
@@ -176,7 +185,10 @@ public final class QueueStatusFilter implements WebFilter {
             return false;
         }
         CouponState state = view.snapshot().coupons().get(couponId);
-        return state != null && state.remainingStock() <= 0;
+        // **재고 숫자가 아니라 상태를 본다.** 숫자를 여기서 다시 해석하면 판정이
+        // 두 곳에 생기고, 재고 0 이라도 줄이 빈 쿠폰(IDLE)까지 종결해 버린다.
+        // 상태 기계는 `stock<=0 && waiting>0` 일 때만 CLOSED 를 만든다.
+        return state != null && state.runtime() == RuntimeState.CLOSED;
     }
 
     private Mono<Void> answer(ServerWebExchange exchange, String couponId, String memberId,

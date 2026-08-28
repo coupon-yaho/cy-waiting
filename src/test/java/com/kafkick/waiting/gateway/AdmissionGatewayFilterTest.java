@@ -524,6 +524,26 @@ class AdmissionGatewayFilterTest {
     }
 
     /**
+     * <b>등록 응답도 전역 배수를 지킨다</b> (7.3.3).
+     *
+     * <p>조회에만 배수를 걸면 방금 줄에 선 사람이 예산 밖에서 두드린다. 매진
+     * 파도에서 새로 서는 사람이 가장 많으므로, 빠지면 정확히 그때 샌다.
+     */
+    @Test
+    @DisplayName("등록_응답이_전역_배수를_지킨다")
+    void 등록_응답이_전역_배수를_지킨다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100).withPollScale(3.0));
+        태운다(COUPON, "앞사람");
+
+        MockServerWebExchange exchange = 태운다(COUPON, "뒷사람");
+
+        // 앞에 한 명이라 ETA 는 0.1 초 — 가장 좁은 밴드(1초)에 배수만 걸린다.
+        // 지터는 0.5 를 받아 상쇄된다.
+        assertThat(exchange.getResponse().getHeaders().getFirst("Retry-After"))
+                .as("배수가 걸린 다음 폴링").isEqualTo("3");
+    }
+
+    /**
      * <b>도메인 시험만으로는 배선이 안 잠긴다.</b> 배분 전이라 배수 속도를 모르는데
      * 0 이 나가면 앞에 사람이 남았는데 곧 입장이라고 말하는 셈이다.
      */

@@ -206,7 +206,20 @@ public final class QueueStatusFilter implements WebFilter {
         }
         double etaSec = EtaPolicy.etaSec(entry.rank(), credit(couponId));
         return response.status(exchange, entry.state(), entry.rank(),
-                EtaPolicy.reportSec(etaSec), POLL.intervalSec(etaSec, random));
+                EtaPolicy.reportSec(etaSec),
+                POLL.intervalSec(etaSec, random, pollScale(couponId)));
+    }
+
+    /**
+     * 제어 평면이 정한 전역 폴링 배수.
+     *
+     * <p><b>낡았다고 1.0 으로 안 되돌린다.</b> 되돌리면 제어 평면이 멎은 순간
+     * 전원의 간격이 한꺼번에 짧아진다 — 이미 흔들리는 노드에 폴링이 몰린다.
+     * 모르면 마지막으로 알던 값을 지킨다.
+     */
+    private double pollScale(String couponId) {
+        CouponState state = holder.view().snapshot().coupons().get(couponId);
+        return state == null ? 1.0 : state.pollScale();
     }
 
     /** 배분 속도를 모르면 ETA 도 모른다. 모를수록 자주 묻게 하지 않는다. */

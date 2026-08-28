@@ -7,6 +7,7 @@ import com.kafkick.waiting.domain.allocation.FairShareAllocator;
 import com.kafkick.waiting.domain.allocation.Grant;
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
+import com.kafkick.waiting.domain.queue.PollBudgetPlanner;
 import com.kafkick.waiting.domain.coupon.Tunables;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
@@ -57,6 +58,14 @@ public final class AllocationRound {
     private final Function<List<String>, Mono<List<String>>> dropQueues;
 
     private final BooleanSupplier stillLeader;
+    /**
+     * 노드 한 대가 감당할 폴링(초당). 20 대면 4,000 으로, 계획서 3.3 절의 예산과 같다.
+     *
+     * <p>폴링은 레디스를 안 치고 이 노드의 메모리에서 끝난다 — 그래서 예산의
+     * 단위가 노드다.
+     */
+    private static final double POLL_BUDGET_RPS_PER_NODE = 200;
+
     private final Supplier<Mono<TimedDemands>> demands;
     private final LongSupplier globalCredit;
     private final LongSupplier creditFloor;
@@ -435,11 +444,26 @@ public final class AllocationRound {
 
     private GatewaySnapshot snapshot(List<CouponDemand> collected, Map<String, Long> granted,
             long credit, Instant readAt, Tunables applied) {
+        int nodes = gatewayCount.getAsInt();
+        double scale = pollScale(collected, granted, nodes);
         Map<String, CouponState> coupons = new LinkedHashMap<>();
         collected.forEach(demand ->
-                coupons.put(demand.couponId(), stateOf(demand, granted)));
+                coupons.put(demand.couponId(), stateOf(demand, granted).withPollScale(scale)));
         return new GatewaySnapshot(coupons,
-                new SnapshotMeta(credit, gatewayCount.getAsInt(), applied), readAt);
+                new SnapshotMeta(credit, nodes, applied), readAt);
+    }
+
+    /**
+     * 이번 틱의 전역 폴링 배수.
+     *
+     * <p>예산의 출처는 노드 수다 — 폴링은 게이트웨이가 메모리에서 종결하므로
+     * 병목이 레디스가 아니라 게이트웨이 CPU 다. 상수 하나로 고정하면 증설이
+     * 폴링 간격을 못 줄인다.
+     */
+    private double pollScale(List<CouponDemand> collected, Map<String, Long> granted, int nodes) {
+        double expected = PollBudgetPlanner.expectedPollRps(collected,
+                couponId -> granted.getOrDefault(couponId, 0L));
+        return PollBudgetPlanner.pollScale(expected, POLL_BUDGET_RPS_PER_NODE * Math.max(1, nodes));
     }
 
 }

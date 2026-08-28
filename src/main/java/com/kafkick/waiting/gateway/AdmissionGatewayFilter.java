@@ -473,7 +473,10 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                             tokens.issue(couponId, memberId, clock.instant()),
                             entry.rank(), EtaPolicy.reportSec(etaSec),
                             state.mode().name(),
-                            POLL.intervalSec(etaSec, random), entry.rejoined());
+                            // 전역 배수를 여기서도 지킨다. 등록 응답만 배수를
+                            // 빼면 방금 줄에 선 사람이 예산 밖에서 두드린다.
+                            POLL.intervalSec(etaSec, random, state.pollScale()),
+                            entry.rejoined());
                 });
     }
 

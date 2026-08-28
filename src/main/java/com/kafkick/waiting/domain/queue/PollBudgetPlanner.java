@@ -63,6 +63,24 @@ public final class PollBudgetPlanner {
     }
 
     /**
+     * 노드 한 대가 감당할 폴링(초당).
+     *
+     * <p>폴링은 레디스를 안 치고 그 노드의 메모리에서 끝난다 — 그래서 예산의
+     * 단위가 노드다. 20 대면 4,000 으로 계획서 3.3 절의 예산과 같다.
+     */
+    private static final double BUDGET_RPS_PER_NODE = 200;
+
+    /**
+     * 이 규모에서 감당할 폴링(초당).
+     *
+     * <p><b>상수 하나로 고정하면 증설이 폴링 간격을 못 줄인다.</b> 노드를
+     * 늘리는 것이 곧 예산을 늘리는 것이다.
+     */
+    public static double budgetRps(int nodes) {
+        return BUDGET_RPS_PER_NODE * Math.max(1, nodes);
+    }
+
+    /**
      * 예산을 넘은 비율. 이 배수만큼 모두의 간격을 함께 늘린다.
      *
      * <p><b>1 미만으로 내려가지 않는다.</b> 한산하다고 더 자주 두드리게 하면

@@ -64,6 +64,19 @@ class QueueStatusFilterTest {
         holder.replace(new GatewaySnapshot(Map.of(COUPON, state), new SnapshotMeta(1, 1), 지금));
     }
 
+    /** 자리를 다 쓴 리미터. 축출이 아니라 거절이어야 이 갈래가 돈다. */
+    private SecondWindowLimiter 꽉_찬_리미터() {
+        SecondWindowLimiter 꽉_찬 = SecondWindowLimiter.withMaxKeys(1);
+        꽉_찬.tryAcquire("다른-키", 1, 지금.getEpochSecond());
+        return 꽉_찬;
+    }
+
+    /** 배수는 판 전체를 보고 나온 전역 값이라 쿠폰이 아니라 메타에 실린다. */
+    private void 스냅샷을_심는다(CouponState state, double 배수) {
+        holder.replace(new GatewaySnapshot(Map.of(COUPON, state),
+                new SnapshotMeta(1, 1, null, 배수), 지금));
+    }
+
     private MockServerWebExchange 조회한다(String path) {
         return 조회한다(filter, path);
     }
@@ -217,14 +230,69 @@ class QueueStatusFilterTest {
     @Test
     @DisplayName("전역_배수만큼_다음_폴링이_늦춰진다")
     void 전역_배수만큼_다음_폴링이_늦춰진다() {
-        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100).withPollScale(3.0));
+        // **밴드가 1초가 아닌 자리에서 잰다.** 1초 밴드에서 재면 `밴드 × 배수` 와
+        // 배수만 돌려주는 구현이 같은 값을 내서, 곱셈이 관측되지 않는다.
+        // 상한 60초에도 안 닿아야 곱한 값이 그대로 보인다.
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100), 3.0);
+        for (int i = 0; i < 60; i++) {
+            줄.enqueue(COUPON, "앞사람" + i, NO_LIMIT, 지금).block();
+        }
         줄.enqueue(COUPON, MEMBER, NO_LIMIT, 지금).block();
 
         MockServerWebExchange exchange = 토큰으로_조회한다(tokens.issue(COUPON, MEMBER, 지금));
 
-        // 지터는 0.5 를 받아 상쇄된다. 배수만 남는다.
+        // 앞에 60명, 초당 10명이라 ETA 6초 — 3초 밴드다. 지터는 0.5 를 받아
+        // 상쇄되므로 3 × 3 = 9 만 남는다.
         assertThat(exchange.getResponse().getHeaders().getFirst("Retry-After"))
-                .as("배수가 걸린 다음 폴링").isEqualTo("3");
+                .as("밴드에 배수가 곱해진 다음 폴링").isEqualTo("9");
+    }
+
+    /**
+     * <b>재료가 낡아도 배수는 안 되돌립니다.</b>
+     *
+     * <p>1.0 으로 되돌리면 제어 평면이 멎는 순간 전원의 간격이 한꺼번에
+     * 짧아집니다 — 이미 흔들리는 노드에 폴링이 두 배로 몰립니다.
+     */
+    @Test
+    @DisplayName("재료가_낡아도_배수를_안_되돌린다")
+    void 재료가_낡아도_배수를_안_되돌린다() {
+        holder.replace(new GatewaySnapshot(Map.of(COUPON, CouponStates.queueing(10, 1_000, 100)),
+                new SnapshotMeta(1, 1, null, 3.0), 지금.minusSeconds(3_600)));
+        // 맨 앞 사람은 ETA 가 정말 0 이라 배수 속도를 안 본다. 앞에 한 명을
+        // 세워야 낡음이 ETA 로 흘러 가장 먼 밴드가 된다.
+        줄.enqueue(COUPON, "앞사람", NO_LIMIT, 지금).block();
+        줄.enqueue(COUPON, MEMBER, NO_LIMIT, 지금).block();
+
+        MockServerWebExchange exchange = 토큰으로_조회한다(tokens.issue(COUPON, MEMBER, 지금));
+
+        // 낡으면 배수 속도를 모르므로 ETA 는 가장 먼 밴드(30초)다. 배수 3 을
+        // 걸면 90초라 상한 60 으로 잘린다. 1.0 으로 되돌리는 구현이면 30 이다.
+        assertThat(exchange.getResponse().getHeaders().getFirst("Retry-After"))
+                .as("낡아도 지키는 배수").isEqualTo("60");
+    }
+
+    /**
+     * <b>거절에도 배수를 겁니다.</b>
+     *
+     * <p>이 갈래가 도는 조건이 곧 폴링이 이 노드의 상한을 넘었다는 것입니다.
+     * 거절만 배수를 빼면 과부하일수록 거절 비중이 커져, 예산을 건다는 말이
+     * 절반만 맞게 됩니다.
+     */
+    @Test
+    @DisplayName("상한에_걸린_거절도_배수를_지킨다")
+    void 상한에_걸린_거절도_배수를_지킨다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100), 3.0);
+        String 토큰 = tokens.issue(COUPON, MEMBER, 지금);
+        QueueStatusFilter 상한이_찬_필터 = QueueStatusFilter.of(
+                holder, 줄, tokens, Clock.fixed(지금, ZoneOffset.UTC), meters, () -> 0.5,
+                꽉_찬_리미터(), entryTokens);
+
+        MockServerWebExchange exchange = 조회한다(
+                상한이_찬_필터, "/api/v1/coupons/" + COUPON + "/queue?queueToken=" + 토큰);
+
+        // ETA 를 모르는 갈래라 30초 밴드다. 배수 3 이면 90 → 상한 60.
+        assertThat(exchange.getResponse().getHeaders().getFirst("Retry-After"))
+                .as("거절에도 걸리는 배수").isEqualTo("60");
     }
 
     /**

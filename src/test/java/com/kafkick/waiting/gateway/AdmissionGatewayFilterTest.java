@@ -194,6 +194,11 @@ class AdmissionGatewayFilterTest {
         스냅샷을_심는다(state, META);
     }
 
+    /** 배수는 판 전체를 보고 나온 전역 값이라 쿠폰이 아니라 메타에 실린다. */
+    private static SnapshotMeta 배수가_실린_메타(double 배수) {
+        return new SnapshotMeta(META.globalCredit(), META.gatewayCount(), META.tunables(), 배수);
+    }
+
     /** 판 크기를 바꿔 심는다. 한산 통과 상한을 0 으로 만들어야 배분 전 등록을 잰다. */
     private void 스냅샷을_심는다(CouponState state, SnapshotMeta meta) {
         holder.replace(new GatewaySnapshot(
@@ -532,7 +537,7 @@ class AdmissionGatewayFilterTest {
     @Test
     @DisplayName("등록_응답이_전역_배수를_지킨다")
     void 등록_응답이_전역_배수를_지킨다() {
-        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100).withPollScale(3.0));
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100), 배수가_실린_메타(3.0));
         태운다(COUPON, "앞사람");
 
         MockServerWebExchange exchange = 태운다(COUPON, "뒷사람");

@@ -58,14 +58,6 @@ public final class AllocationRound {
     private final Function<List<String>, Mono<List<String>>> dropQueues;
 
     private final BooleanSupplier stillLeader;
-    /**
-     * 노드 한 대가 감당할 폴링(초당). 20 대면 4,000 으로, 계획서 3.3 절의 예산과 같다.
-     *
-     * <p>폴링은 레디스를 안 치고 이 노드의 메모리에서 끝난다 — 그래서 예산의
-     * 단위가 노드다.
-     */
-    private static final double POLL_BUDGET_RPS_PER_NODE = 200;
-
     private final Supplier<Mono<TimedDemands>> demands;
     private final LongSupplier globalCredit;
     private final LongSupplier creditFloor;
@@ -97,8 +89,24 @@ public final class AllocationRound {
     /** 초과 구간. 틱마다 찍으면 정작 조사가 필요한 순간에 묻힌다 (LG-2). */
     private final FailureWindow overshoot = FailureWindow.create();
 
+    /** 폴링 예산을 넘긴 구간. 진입과 해제를 쌍으로 남긴다 (LG-2). */
+    private final FailureWindow pollOvershoot = FailureWindow.create();
+
+    /**
+     * 폴링 예산을 넘긴 틱 수.
+     *
+     * <p><b>마지막 배수를 게이지로 안 낸다.</b> 리더십을 잃는 순간 그 값이 굳고,
+     * 15초 스크레이프가 짧은 초과 구간을 통째로 놓친다 — 누적이라야 남는다.
+     */
+    private final AtomicLong pollBudgetOvershootTicks = new AtomicLong();
+
     /** 뒷단이 받을 수 있다고 한 것보다 더 나눠 준 누적량. */
     private final AtomicLong budgetOvershoot = new AtomicLong();
+
+    /** 폴링 예산을 넘긴 누적 틱 수. 0 이면 배수가 한 번도 안 걸렸다. */
+    public double pollBudgetOvershootTicks() {
+        return pollBudgetOvershootTicks.get();
+    }
 
     /** 예산보다 더 들여보낸 누적 인원. */
     private final AtomicLong enteredOvershoot = new AtomicLong();
@@ -444,26 +452,51 @@ public final class AllocationRound {
 
     private GatewaySnapshot snapshot(List<CouponDemand> collected, Map<String, Long> granted,
             long credit, Instant readAt, Tunables applied) {
-        int nodes = gatewayCount.getAsInt();
-        double scale = pollScale(collected, granted, nodes);
         Map<String, CouponState> coupons = new LinkedHashMap<>();
-        collected.forEach(demand ->
-                coupons.put(demand.couponId(), stateOf(demand, granted).withPollScale(scale)));
+        collected.forEach(demand -> coupons.put(demand.couponId(), stateOf(demand, granted)));
+        // **노드 수 방어를 여기서 다시 쓰지 않는다.** 사본이 생기면 둘 중 하나만
+        // 시험이 붙고, 하트비트가 다 만료돼 0 으로 보이는 순간 — 즉 클러스터가
+        // 흔들리는 바로 그 순간 — 예산이 0 이 되어 배수가 통째로 꺼진다.
+        SnapshotMeta meta = new SnapshotMeta(credit, gatewayCount.getAsInt(), applied);
         return new GatewaySnapshot(coupons,
-                new SnapshotMeta(credit, nodes, applied), readAt);
+                meta.withPollScale(
+                        pollScale(collected, granted, meta.effectiveGatewayCount())),
+                readAt);
     }
 
     /**
      * 이번 틱의 전역 폴링 배수.
      *
-     * <p>예산의 출처는 노드 수다 — 폴링은 게이트웨이가 메모리에서 종결하므로
-     * 병목이 레디스가 아니라 게이트웨이 CPU 다. 상수 하나로 고정하면 증설이
-     * 폴링 간격을 못 줄인다.
+     * <p>예산은 도메인이 소유한다 — 밴드도 하한도 거기 있는데 예산만 제어
+     * 평면에 두면, 운영자가 실제로 만질 유일한 숫자만 시험이 안 닿는 곳에 남는다.
      */
     private double pollScale(List<CouponDemand> collected, Map<String, Long> granted, int nodes) {
         double expected = PollBudgetPlanner.expectedPollRps(collected,
                 couponId -> granted.getOrDefault(couponId, 0L));
-        return PollBudgetPlanner.pollScale(expected, POLL_BUDGET_RPS_PER_NODE * Math.max(1, nodes));
+        double budget = PollBudgetPlanner.budgetRps(nodes);
+        double scale = PollBudgetPlanner.pollScale(expected, budget);
+        watchPollBudget(expected, budget, scale, nodes);
+        return scale;
+    }
+
+    /**
+     * 배수가 1 을 넘는 것은 상태 전이다.
+     *
+     * <p>전 대기자의 다음 폴링이 한꺼번에 늘어나는데, 남기지 않으면 운영자
+     * 눈에는 원인 없이 폴링이 뜸해진 것으로만 보인다.
+     */
+    private void watchPollBudget(double expected, double budget, double scale, int nodes) {
+        if (scale <= 1.0) {
+            pollOvershoot.exited().ifPresent(r -> log.info(
+                    "폴링 예산 초과 해제 — {}초 동안 {}틱", r.elapsedSeconds(), r.swallowed()));
+            return;
+        }
+        pollBudgetOvershootTicks.incrementAndGet();
+        if (pollOvershoot.entered()) {
+            log.warn("폴링 예산 초과 — 예상 {}rps, 노드 {}대 예산 {}rps, 배수 {}. "
+                    + "죽은 큐 정리와 노드 증설을 검토하세요",
+                    Math.round(expected), nodes, Math.round(budget), scale);
+        }
     }
 
 }

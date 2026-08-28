@@ -376,11 +376,11 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     @Test
     @DisplayName("발행한_것을_그대로_읽는다")
     void 발행한_것을_그대로_읽는다() {
-        port.publish(Map.of("c1", "OFF:QUEUEING:1:10:5:1.0", "#credit", "7")).block(WAIT);
+        port.publish(Map.of("c1", "OFF:QUEUEING:1:10:5", "#credit", "7")).block(WAIT);
 
         assertThat(port.load().block(WAIT))
                 .containsEntry("#credit", "7")
-                .containsEntry("c1", "OFF:QUEUEING:1:10:5:1.0");
+                .containsEntry("c1", "OFF:QUEUEING:1:10:5");
     }
 
     @Test

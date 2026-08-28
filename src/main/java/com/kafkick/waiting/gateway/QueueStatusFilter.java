@@ -153,8 +153,12 @@ public final class QueueStatusFilter implements WebFilter {
         long nowSec = clock.instant().getEpochSecond();
         if (!limiter.tryAcquire(POLL_KEY, pollCap(), nowSec)) {
             count("rate-limited");
+            // **여기야말로 배수를 걸어야 한다.** 이 갈래가 도는 조건이 곧
+            // 폴링이 이 노드의 상한을 넘었다는 것이다. 거절만 배수를 빼면
+            // 과부하일수록 거절 비중이 커져, 예산을 건다는 말이 절반만 맞다.
             return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
-                    (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random));
+                    (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random,
+                            pollScale(holder.view())));
         }
         return queue.status(couponId, member.get(), clock.instant())
                 .flatMap(entry -> answer(exchange, couponId, member.get(), entry))
@@ -168,7 +172,8 @@ public final class QueueStatusFilter implements WebFilter {
                     // 문자열이다 — 라벨 값 집합을 우리가 안 소유하게 된다.
                     count("unavailable", FailureCause.of(e));
                     return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
-                            (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random));
+                            (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random,
+                                    pollScale(holder.view())));
                 });
     }
 
@@ -204,10 +209,14 @@ public final class QueueStatusFilter implements WebFilter {
             return response.admitted(exchange,
                     entryTokens.issue(couponId, memberId, clock.instant()), EntryToken.TTL_SEC);
         }
-        double etaSec = EtaPolicy.etaSec(entry.rank(), credit(couponId));
+        // **한 View 에서 둘 다 뽑는다.** 따로 읽으면 그 사이 갱신이 들어와
+        // ETA 는 판 N, 배수는 판 N+1 에서 나온다 — SnapshotHolder 가 View 를
+        // 두는 이유가 그것이다.
+        SnapshotHolder.View view = holder.view();
+        double etaSec = EtaPolicy.etaSec(entry.rank(), credit(view, couponId));
         return response.status(exchange, entry.state(), entry.rank(),
                 EtaPolicy.reportSec(etaSec),
-                POLL.intervalSec(etaSec, random, pollScale(couponId)));
+                POLL.intervalSec(etaSec, random, pollScale(view)));
     }
 
     /**
@@ -215,16 +224,15 @@ public final class QueueStatusFilter implements WebFilter {
      *
      * <p><b>낡았다고 1.0 으로 안 되돌린다.</b> 되돌리면 제어 평면이 멎은 순간
      * 전원의 간격이 한꺼번에 짧아진다 — 이미 흔들리는 노드에 폴링이 몰린다.
-     * 모르면 마지막으로 알던 값을 지킨다.
      */
-    private double pollScale(String couponId) {
-        CouponState state = holder.view().snapshot().coupons().get(couponId);
-        return state == null ? 1.0 : state.pollScale();
+    // 전역 값이라 쿠폰이 스냅샷에서 빠져도 남는다. 쿠폰별 필드에 두면 그
+    // 쿠폰이 떨어지는 순간 그 줄 전체가 예산 밖으로 나갔다.
+    private static double pollScale(SnapshotHolder.View view) {
+        return view.snapshot().meta().pollScale();
     }
 
     /** 배분 속도를 모르면 ETA 도 모른다. 모를수록 자주 묻게 하지 않는다. */
-    private double credit(String couponId) {
-        SnapshotHolder.View view = holder.view();
+    private double credit(SnapshotHolder.View view, String couponId) {
         CouponState state = view.snapshot().coupons().get(couponId);
         return state == null || holder.isDataStale(view)
                 ? EtaPolicy.UNKNOWN

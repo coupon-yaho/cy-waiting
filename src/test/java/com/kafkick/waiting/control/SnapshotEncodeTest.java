@@ -213,15 +213,15 @@ class SnapshotEncodeTest {
     @DisplayName("모드와_상태를_그대로_싣는다")
     void 모드와_상태를_그대로_싣는다() {
         GatewaySnapshot 원본 = new GatewaySnapshot(
-                Map.of("c1", new CouponState(QueueMode.ALWAYS, RuntimeState.DRAINING, 9, 100, 5, 2.0)),
-                new SnapshotMeta(9, 1), Instant.ofEpochSecond(1_700_000_000L));
+                Map.of("c1", new CouponState(QueueMode.ALWAYS, RuntimeState.DRAINING, 9, 100, 5)),
+                new SnapshotMeta(9, 1, null, 2.0), Instant.ofEpochSecond(1_700_000_000L));
 
-        CouponState 되읽음 = codec.decode(codec.encode(원본, CreditSmoother.Snapshot.empty(),
-                QueueingHysteresis.Snapshot.empty()))
-                .coupons().get("c1");
+        GatewaySnapshot 되읽은_판 = codec.decode(codec.encode(원본,
+                CreditSmoother.Snapshot.empty(), QueueingHysteresis.Snapshot.empty()));
+        CouponState 되읽음 = 되읽은_판.coupons().get("c1");
 
         assertThat(되읽음.mode()).isEqualTo(QueueMode.ALWAYS);
         assertThat(되읽음.runtime()).isEqualTo(RuntimeState.DRAINING);
-        assertThat(되읽음.pollScale()).isEqualTo(2.0);
+        assertThat(되읽은_판.meta().pollScale()).isEqualTo(2.0);
     }
 }

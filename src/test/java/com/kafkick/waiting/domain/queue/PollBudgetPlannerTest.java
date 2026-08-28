@@ -82,6 +82,52 @@ class PollBudgetPlannerTest {
         assertThat(withDead).isCloseTo(PollBudgetPlanner.expectedPollRps(1000, 10), within(0.1));
     }
 
+    /**
+     * <b>설계점에서 예산이 실제로 지켜진다.</b>
+     *
+     * <p>배수를 값으로 못 박기만 하면 그 배수가 간격에 닿아 부하를 실제로
+     * 줄이는지는 안 재진다. 상한 60초에 잘려 예산의 여덟 배가 나가는 구간이
+     * 있는데, 그 구간에서만 재면 기구가 도는 것처럼 보인다.
+     */
+    @Test
+    @DisplayName("설계_규모에서_배수를_지키면_예산_안에_든다")
+    void 설계_규모에서_배수를_지키면_예산_안에_든다() {
+        // R4 의 설계점 — 노드 20 대, 동시 대기 20,000, 초당 배수 4,000.
+        long 대기 = 20_000;
+        double 배수율 = 4_000;
+        double 예산 = PollBudgetPlanner.budgetRps(20);
+
+        double 예상 = PollBudgetPlanner.expectedPollRps(대기, 배수율);
+        double 배수 = PollBudgetPlanner.pollScale(예상, 예산);
+        // 전원이 5초 안이라 1초 밴드다. 배수만큼 곧장 늘어난다. 줄 한가운데
+        // 사람으로 잰다 — 맨 끝은 ETA 가 정확히 경계라 한 밴드 위로 넘어가고,
+        // 그 사람은 더 느리게 물으므로 아래 부등식을 느슨하게 만든다.
+        PollIntervalPolicy 정책 = PollIntervalPolicy.of(0);
+        long 간격 = 정책.intervalSec(대기 / 2 / 배수율, () -> 0.5, 배수);
+
+        assertThat(배수).as("예산 초과 배수").isEqualTo(5.0);
+        assertThat(간격).as("그 사람이 받는 간격").isEqualTo(5);
+        // **여기가 요점이다.** 배수가 간격에 닿아 실제 부하가 예산 안으로 든다.
+        assertThat((double) 대기 / 간격).as("실측 폴링").isLessThanOrEqualTo(예산);
+    }
+
+    /**
+     * <b>상한 60초가 배수의 실효 천장이다.</b>
+     *
+     * <p>가장 먼 밴드에서는 배수 2 를 넘는 순간 전부 같은 값이 된다. 배수가
+     * 17 이어도 실제 간격은 60초고, 그 위는 증설로만 해결된다 — 계획서에
+     * 이 경계를 안 적으면 다음 사람이 배수를 올려 해결하려 든다.
+     */
+    @Test
+    @DisplayName("가장_먼_밴드에서는_배수가_상한에_잘린다")
+    void 가장_먼_밴드에서는_배수가_상한에_잘린다() {
+        PollIntervalPolicy 정책 = PollIntervalPolicy.of(0);
+        long 먼_밴드_eta = 1_000;
+
+        assertThat(정책.intervalSec(먼_밴드_eta, () -> 0.5, 2.0)).isEqualTo(60);
+        assertThat(정책.intervalSec(먼_밴드_eta, () -> 0.5, 17.58)).isEqualTo(60);
+    }
+
     @Test
     @DisplayName("살아_있는_쿠폰이_여럿이면_합산한다")
     void 살아_있는_쿠폰이_여럿이면_합산한다() {

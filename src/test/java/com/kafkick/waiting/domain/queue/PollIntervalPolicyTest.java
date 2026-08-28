@@ -93,6 +93,25 @@ class PollIntervalPolicyTest {
     }
 
     @Test
+    @DisplayName("가장_긴_간격을_지켜도_약속한_횟수만큼_놓칠_수_있다")
+    void 가장_긴_간격을_지켜도_약속한_횟수만큼_놓칠_수_있다() {
+        // 서버가 시킨 간격 I 를 지키는 사람이 k 번 놓치고 오는 시각은
+        // (k+1)·I 다. 그러니 TTL 이 MISSED_POLLS·I 면 놓칠 수 있는 것은
+        // MISSED_POLLS-1 번뿐이고, 마지막 한 번은 초 단위로 정확해야 한다.
+        //
+        // **배수가 붙기 전에는 이 경계가 안 보였다.** 서버가 말할 수 있는
+        // 최대 간격이 36초라 180초 TTL 에 여유가 넉넉했다. 배수가 간격을
+        // 상한 60초까지 밀어 올리면서 여유가 0 이 됐고, 그 자리에서 걷히면
+        // 재입장은 새 순번이라 **순번 역행**이 된다 (불변식 3·4).
+        long 최대_간격 = PollIntervalPolicy.maxInterval().toSeconds();
+        long ttl = PollIntervalPolicy.aliveTtl().toSeconds();
+
+        assertThat(ttl)
+                .as("약속한 횟수를 놓치고 와도 살아 있어야 한다")
+                .isGreaterThanOrEqualTo((PollIntervalPolicy.missedPolls() + 1) * 최대_간격);
+    }
+
+    @Test
     @DisplayName("생존_TTL은_하한_아래로_내려가지_않는다")
     void 생존_TTL은_하한_아래로_내려가지_않는다() {
         // 백그라운드 탭은 분당 한 번으로 스로틀된다. 간격만 보고 TTL 을

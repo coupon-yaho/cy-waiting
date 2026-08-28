@@ -1,6 +1,7 @@
 package com.kafkick.waiting.control;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -246,6 +247,10 @@ class AllocationRoundTest {
                 .map(ILoggingEvent::getArgumentArray).findFirst().orElseThrow();
     }
 
+    private double 발행된_배수() {
+        return SnapshotCodec.create().decode(발행.get("last")).meta().pollScale();
+    }
+
     private CouponState 발행된(String couponId) {
         return SnapshotCodec.create().decode(발행.get("last")).coupons().get(couponId);
     }
@@ -259,7 +264,10 @@ class AllocationRoundTest {
 
         round.run().block();
 
-        assertThat(발행된("c1").pollScale()).as("예산 초과 배수").isGreaterThan(1.0);
+        // **값으로 못 박는다.** 시계도 크레딧도 고정이라 결정적인 값인데
+        // 부등호로 두면 예산 상수가 열 배 틀려도 통과한다.
+        // 밴드별로 50 + 250/3 + 90 + 98800/30 = 3516.67 rps, 예산 200.
+        assertThat(발행된_배수()).as("예산 초과 배수").isCloseTo(17.583, within(0.001));
     }
 
     @Test
@@ -272,23 +280,37 @@ class AllocationRoundTest {
                 new CouponDemand("live", 10, 100)), 100, 1);
 
         round.run().block();
+        double 매진일_때 = 발행된_배수();
 
-        assertThat(발행된("live").pollScale()).as("살아 있는 쿠폰의 배수").isEqualTo(1.0);
+        // **음성 대조를 붙인다.** 1.0 은 배수 배선을 통째로 지웠을 때도 나오는
+        // 값이라, 이것만 보면 걸러 낸 것을 증명하지 못한다. 같은 판에서 재고만
+        // 채우면 배수가 크게 오른다 — 두 값을 가르는 것이 `isActive` 필터뿐이다.
+        round(List.of(
+                new CouponDemand("dead", 100_000, 1_000_000),
+                new CouponDemand("live", 10, 100)), 100, 1).run().block();
+
+        assertThat(매진일_때).as("살아 있는 쿠폰의 배수").isEqualTo(1.0);
+        assertThat(발행된_배수()).as("같은 줄이 살아 있으면 예산을 먹는다")
+                .isGreaterThan(20.0);
     }
 
     @Test
-    @DisplayName("노드가_늘면_폴링_예산도_같이_늘어난다")
-    void 노드가_늘면_폴링_예산도_같이_늘어난다() {
+    @DisplayName("노드가_두_배면_배수가_절반이다")
+    void 노드가_두_배면_배수가_절반이다() {
         // 폴링은 게이트웨이가 메모리에서 종결한다. 그래서 예산의 출처는 노드 수다.
         // 상수 하나로 고정하면 증설이 폴링 간격을 못 줄인다.
+        //
+        // **하한에 붙지 않는 구간에서 잰다.** 배수는 1.0 아래로 안 내려가므로,
+        // 클램프 구간에서 비교하면 예산이 어떻게 바뀌든 통과한다.
         List<CouponDemand> 수요 = List.of(new CouponDemand("c1", 100_000, 1_000_000));
 
         round(수요, 10, 1).run().block();
-        double 한_대 = 발행된("c1").pollScale();
-        round(수요, 10, 20).run().block();
-        double 스무_대 = 발행된("c1").pollScale();
+        double 한_대 = 발행된_배수();
+        round(수요, 10, 2).run().block();
+        double 두_대 = 발행된_배수();
 
-        assertThat(스무_대).as("증설하면 배수가 내려간다").isLessThan(한_대);
+        assertThat(두_대).as("증설한 만큼 정확히 내려간다").isCloseTo(한_대 / 2, within(0.001));
+        assertThat(두_대).as("하한에 붙지 않았다").isGreaterThan(1.0);
     }
 
     @Test

@@ -42,6 +42,14 @@ public final class SnapshotCodec {
     private static final String TUNABLES = "#tunables";
 
     /**
+     * 전역 폴링 배수.
+     *
+     * <p>쿠폰 항목이 아니라 전역 항목이다 — 판 전체를 보고 나온 값 하나라,
+     * 쿠폰별로 실으면 그 쿠폰이 빠질 때 배수도 같이 사라진다.
+     */
+    private static final String POLL_SCALE = "#pollScale";
+
+    /**
      * 평활화 상태. <b>리더만 읽고 쓴다.</b>
      *
      * <p>판정 재료가 아니라 다음 리더에게 넘기는 장부다. 도메인 메타에 넣으면
@@ -58,8 +66,8 @@ public final class SnapshotCodec {
     private static final String QUEUEING = "#queueing";
     private static final String BELOW_EXIT = "#belowExitTicks";
 
-    /** {@code mode:runtime:credit:stock:waiting:pollScale} */
-    private static final int FIELDS = 6;
+    /** {@code mode:runtime:credit:stock:waiting} */
+    private static final int FIELDS = 5;
 
     /** {@link Instant#MAX} 를 넘으면 생성자가 던진다 — 넘기지 않고 걸러낸다. */
     private static final long MAX_EPOCH_SECOND = Instant.MAX.getEpochSecond();
@@ -88,6 +96,7 @@ public final class SnapshotCodec {
         });
         hash.put(CREDIT, Long.toString(snapshot.meta().globalCredit()));
         hash.put(NODES, Integer.toString(snapshot.meta().gatewayCount()));
+        hash.put(POLL_SCALE, Double.toString(snapshot.meta().pollScale()));
         hash.put(PUBLISHED, Long.toString(snapshot.publishedAt().getEpochSecond()));
         // **안 실린 것은 안 싣는다.** 기본값으로 채워 보내면 읽는 쪽이 그것을
         // "운영자가 정한 값" 으로 읽고, 각 노드의 기동 설정을 덮어쓴다.
@@ -102,8 +111,8 @@ public final class SnapshotCodec {
     }
 
     private String encodeCoupon(CouponState state) {
-        return "%s:%s:%d:%d:%d:%s".formatted(state.mode(), state.runtime(), state.credit(),
-                state.remainingStock(), state.waiting(), Double.toString(state.pollScale()));
+        return "%s:%s:%d:%d:%d".formatted(state.mode(), state.runtime(), state.credit(),
+                state.remainingStock(), state.waiting());
     }
 
     /**
@@ -180,8 +189,7 @@ public final class SnapshotCodec {
                     RuntimeState.valueOf(parts[1].toUpperCase(Locale.ROOT)),
                     Long.parseLong(parts[2]),
                     Long.parseLong(parts[3]),
-                    Long.parseLong(parts[4]),
-                    Double.parseDouble(parts[5]));
+                    Long.parseLong(parts[4]));
         } catch (IllegalArgumentException e) {
             return null;   // 모르는 열거값·깨진 수·불변식 위반이 다 여기로 온다
         }
@@ -203,7 +211,23 @@ public final class SnapshotCodec {
         // **안 실려 왔으면 null 이다.** 기본값으로 채우면 그 값이 기동 설정을
         // 덮어써서, 운영자가 아무것도 안 바꿨는데 값이 바뀐다. 실려 왔는데 못
         // 읽는 것은 다른 얘기라, 그때는 파서가 값별로 기본값으로 떨어뜨린다.
-        return new SnapshotMeta(credit, nodeCount, tunablesOf(hash));
+        // **배수는 못 읽으면 1.0 이다.** 크게 잡으면 예산이 멀쩡한데도 전원이
+        // 뜸하게 묻고, 그만큼 차례가 온 사실을 늦게 안다.
+        return new SnapshotMeta(credit, nodeCount, tunablesOf(hash),
+                parseScaleOr(hash.get(POLL_SCALE)));
+    }
+
+    /** 못 읽거나 말이 안 되면 배수 없음이다. 여기서 던지면 갱신이 통째로 멎는다. */
+    private double parseScaleOr(String raw) {
+        if (raw == null) {
+            return 1.0;
+        }
+        try {
+            double parsed = Double.parseDouble(raw);
+            return Double.isFinite(parsed) ? parsed : 1.0;
+        } catch (NumberFormatException e) {
+            return 1.0;
+        }
     }
 
     /**

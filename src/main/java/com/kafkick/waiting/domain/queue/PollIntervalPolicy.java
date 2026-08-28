@@ -24,6 +24,11 @@ public class PollIntervalPolicy {
     /** 한두 번 놓쳐도 안 지워지려면 이만큼 봐준다. */
     private static final long MISSED_POLLS = 3;
 
+    /** 서버가 시킨 간격을 지키는 사람이 놓쳐도 되는 횟수. */
+    public static long missedPolls() {
+        return MISSED_POLLS;
+    }
+
     /**
      * 생존 신호 수명.
      *
@@ -31,8 +36,13 @@ public class PollIntervalPolicy {
      * 그러면 한 번만 놓쳐도 다음 신호가 120초 뒤다 — 90초로 두면 성실히 줄 선
      * 사람의 신호가 먼저 만료되고 청소가 그를 이탈자로 판정한다.
      */
+    // **곱하는 수가 놓치는 횟수보다 하나 많다.** k 번 놓친 사람이 오는 시각은
+    // (k+1)·간격이다. 그냥 MISSED_POLLS 를 곱하면 마지막 한 번은 초 단위로
+    // 정확해야 하고, 늦으면 걷힌다 — 재입장은 새 순번이라 순번 역행이다.
+    //
+    // 배수가 붙기 전에는 서버가 말하는 최대 간격이 36초라 이 경계가 안 보였다.
     public static Duration aliveTtl() {
-        return maxInterval().multipliedBy(MISSED_POLLS);
+        return maxInterval().multipliedBy(MISSED_POLLS + 1);
     }
 
     /** 매진 큐 정리가 이 값을 넘겨 기다려야 한다 — 마지막 폴링을 이것이 정한다. */

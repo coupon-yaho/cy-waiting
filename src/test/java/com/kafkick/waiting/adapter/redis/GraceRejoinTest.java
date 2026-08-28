@@ -23,6 +23,7 @@ import org.springframework.data.redis.core.script.RedisScript;
  */
 @Tag("integration")
 @SpringBootTest
+@SuppressWarnings("unchecked")
 class GraceRejoinTest extends RedisContainerSupport {
 
     private static final Duration WAIT = Duration.ofSeconds(10);
@@ -127,6 +128,28 @@ class GraceRejoinTest extends RedisContainerSupport {
         assertThat(재방문(등록("m1"))).isZero();
         assertThat(redis.opsForHash().get(GRACE, "m1").block(WAIT))
                 .as("입장 표시가 살아남는다").isEqualTo("a:" + (NOW - 60));
+    }
+
+    /**
+     * <b>거절당하면 기록을 안 지웁니다.</b>
+     *
+     * <p>줄도 못 서고 기록도 잃으면 그 사람은 다음에 신규로 옵니다 — 자리를
+     * 비웠던 사실이 사라지고, 유예 재입장이 그때만 통째로 없어집니다.
+     */
+    @Test
+    @DisplayName("거절당하면_이탈_기록이_남는다")
+    void 거절당하면_이탈_기록이_남는다() {
+        redis.opsForHash().put(GRACE, "m1", "d:" + (NOW - 60)).block(WAIT);
+
+        // 상한 0 — 신규 등록을 전원 거절한다.
+        List<Object> 결과 = (List<Object>) redis.execute(ENQUEUE,
+                        List.of(QUEUE, MAX_SCORE, ALIVE, ADMITTED, GRACE),
+                        List.of("m1", "86400", "3600", "0", String.valueOf(NOW)))
+                .next().block(WAIT);
+
+        assertThat(String.valueOf(결과.get(0))).as("거절").isEqualTo("-1");
+        assertThat(redis.opsForHash().get(GRACE, "m1").block(WAIT))
+                .as("기록이 남는다").isEqualTo("d:" + (NOW - 60));
     }
 
     /** 이미 줄에 선 사람은 재방문이 아닙니다. 그 분기는 순번을 그대로 돌려줍니다. */

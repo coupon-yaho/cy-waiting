@@ -74,6 +74,31 @@ class PollIntervalPolicyTest {
         assertThat(p.intervalSec(1000, () -> 1.0)).isEqualTo(60);
     }
 
+    /**
+     * <b>배수가 걸린 순간에만 지터가 죽으면 안 된다.</b>
+     *
+     * <p>흔든 뒤에 자르면 상한 위로 흩어진 값이 전부 상한 하나로 모인다. 배수 2
+     * 이상에서 가장 먼 밴드는 전원이 정확히 같은 초에 돌아온다는 뜻이고, 그것이
+     * 조회 상한을 다시 밀어 올려 같은 파도가 주기마다 재생산된다.
+     *
+     * <p>지터가 필요한 구간이 정확히 배수가 걸린 구간이라, 여기서 꺼지면 장치가
+     * 있으나 마나다. 평균은 정확히 맞으므로 부하 시험으로는 안 잡힌다.
+     */
+    @Test
+    @DisplayName("상한에_닿아도_지터가_살아_있다")
+    void 상한에_닿아도_지터가_살아_있다() {
+        PollIntervalPolicy p = PollIntervalPolicy.of(0.2);
+
+        // 가장 먼 밴드(30초)에 배수 5 — 150 초라 흔들기 전에 이미 상한 위다
+        long 아래 = p.intervalSec(1000, () -> 0.0, 5.0);
+        long 가운데 = p.intervalSec(1000, () -> 0.5, 5.0);
+        long 위 = p.intervalSec(1000, () -> 1.0, 5.0);
+
+        assertThat(위).as("상한은 지킨다").isEqualTo(60);
+        assertThat(아래).as("흔들림의 아래쪽이 상한에 안 먹힌다").isLessThan(위);
+        assertThat(가운데).isStrictlyBetween(아래, 위);
+    }
+
     @Test
     @DisplayName("배수가_적용되면_간격이_늘어난다")
     void 배수가_적용되면_간격이_늘어난다() {

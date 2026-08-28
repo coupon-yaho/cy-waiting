@@ -3,6 +3,8 @@ package com.kafkick.waiting.gateway;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.cloud.gateway.filter.GatewayFilter;
+import com.kafkick.waiting.control.HealthConfig;
+import java.util.function.IntSupplier;
 import org.springframework.cloud.gateway.filter.factory.SpringCloudCircuitBreakerFilterFactory;
 import org.springframework.cloud.gateway.route.RouteLocator;
 import org.springframework.cloud.gateway.route.builder.GatewayFilterSpec;
@@ -113,6 +115,17 @@ public class GatewayRoutes {
         config.setFallbackUri(FALLBACK_URI);
         config.setRouteId("issue");
         return breakers.apply(config);
+    }
+
+    /**
+     * 걸려 있는 건수를 값으로 냅니다.
+     *
+     * <p>제어 평면이 종료할 때 이 값을 봅니다. <b>타입이 아니라 값으로 냅니다</b> —
+     * 게이트웨이 타입을 그쪽에서 참조하면 제어 평면이 요청 경로를 알게 됩니다.
+     */
+    @Bean(HealthConfig.IN_FLIGHT)
+    public IntSupplier inFlightRequests(AdmissionGatewayFilter admission) {
+        return admission::inFlight;
     }
 
     @Bean

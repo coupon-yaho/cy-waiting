@@ -7,6 +7,7 @@ import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.web.server.context.WebServerApplicationContext;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
 import org.springframework.context.ApplicationListener;
@@ -40,6 +41,9 @@ public final class SnapshotRefreshLifecycle
 
     /** readiness 를 내리고 부하 분산기가 뺄 때까지 기다린다 (6.4.1·6.4.2). */
     private final DrainWait drainWait;
+
+    /** 드레인이 상한 안에 끝났는지 남긴다. 없으면 안 남긴다 — 시험 배선을 위해서다. */
+    private DrainOutcome drainOutcome;
     private final Duration interval;
 
     /**
@@ -129,6 +133,12 @@ public final class SnapshotRefreshLifecycle
         // 빼면 남은 노드가 크레딧을 다 쓰고 그 위에 이 노드의 통과분이 더해진다.
         // 그 일은 드레인이 끝난 뒤 GatewayHeartbeatLoop 가 한다 (6.4.4).
         drainWait.beforeDrain();
+        // **빠졌는지까지 남긴다.** 안 남기면 오케스트레이터가 진행 중인 요청째
+        // 죽인 판과 곱게 빠진 판이 로그에서 같다 — 롤링 배포마다 사용자가 오류를
+        // 보는데 그 사실이 어디에도 안 드러난다.
+        if (drainOutcome != null) {
+            drainOutcome.await();
+        }
     }
 
     private void disposeScheduler() {
@@ -142,6 +152,12 @@ public final class SnapshotRefreshLifecycle
     @Override
     public void setApplicationContext(ApplicationContext context) {
         this.owner = context;
+    }
+
+    /** 드레인 결과를 남길 자리를 받습니다. 배선이 안 되면 안 남깁니다. */
+    @Autowired(required = false)
+    public void setDrainOutcome(DrainOutcome drainOutcome) {
+        this.drainOutcome = drainOutcome;
     }
 
     @Override

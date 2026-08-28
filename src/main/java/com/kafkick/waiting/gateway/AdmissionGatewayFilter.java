@@ -210,6 +210,16 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     }
 
     /**
+     * 지금 뒷단에 걸려 있는 건수.
+     *
+     * <p>종료할 때 이 값이 0 이 되기를 기다립니다 — 안 되면 그만큼이 강제 종료로
+     * 끊깁니다. 격벽이 세는 값이라 뒷단으로 넘어간 것만 셉니다.
+     */
+    public int inFlight() {
+        return bulkhead.inFlight();
+    }
+
+    /**
      * 사유별로 센다. <b>쿠폰 ID 를 라벨에 안 넣는다</b> — 인증이 없어 아무 문자열이나
      * 들어오고, 그러면 지표 하나가 메모리를 밀어낸다.
      */

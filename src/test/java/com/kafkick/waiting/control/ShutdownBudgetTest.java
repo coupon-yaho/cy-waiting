@@ -34,6 +34,19 @@ class ShutdownBudgetTest {
     }
 
     /**
+     * 드레인 상한은 <b>컨테이너의 단계별 상한과 같아야</b> 합니다.
+     *
+     * <p>크면 우리가 기다리는 동안 컨테이너가 먼저 끊고, 작으면 아직 빠질 수 있는
+     * 요청을 두고 "상한 초과" 라고 적습니다 — 어느 쪽이든 로그가 사실과 어긋납니다.
+     */
+    @Test
+    @DisplayName("드레인_상한이_컨테이너_상한과_같다")
+    void 드레인_상한이_컨테이너_상한과_같다() throws IOException {
+        assertThat(값("waiting.shutdown.drain-limit"))
+                .isEqualTo(값("spring.lifecycle.timeout-per-shutdown-phase"));
+    }
+
+    /**
      * <b>앞단 설정과 짝이다.</b> 앞단 체크가 2초 간격에 2회 실패로 제외하므로 4초,
      * 여기에 여유 2초다. 한쪽만 바꾸면 어긋난다.
      */

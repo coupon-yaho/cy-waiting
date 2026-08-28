@@ -46,7 +46,7 @@ public final class AllocationRound {
     private final SoldOutCleanup cleanup;
 
     /** 지울 쿠폰들을 넘긴다. 지운 키 수를 돌려준다. */
-    private final Function<List<String>, Mono<Long>> dropQueues;
+    private final Function<List<String>, Mono<List<String>>> dropQueues;
 
     private final BooleanSupplier stillLeader;
     private final Supplier<Mono<TimedDemands>> demands;
@@ -92,7 +92,7 @@ public final class AllocationRound {
             Function<Map<String, String>, Mono<Void>> publish, Supplier<Instant> clock,
             Supplier<Mono<CreditSmoother>> restore, SnapshotCodec codec,
             LongSupplier creditFloor, Supplier<Optional<Tunables>> tunables,
-            SoldOutCleanup cleanup, Function<List<String>, Mono<Long>> dropQueues) {
+            SoldOutCleanup cleanup, Function<List<String>, Mono<List<String>>> dropQueues) {
         this.cleanup = Objects.requireNonNull(cleanup, "cleanup 은 필수다");
         this.dropQueues = Objects.requireNonNull(dropQueues, "dropQueues 는 필수다");
         this.tunables = Objects.requireNonNull(tunables, "tunables 는 필수다");
@@ -120,7 +120,7 @@ public final class AllocationRound {
             Function<Map<String, String>, Mono<Void>> publish, Supplier<Instant> clock,
             Supplier<Mono<CreditSmoother>> restore, SnapshotCodec codec,
             LongSupplier creditFloor, Supplier<Optional<Tunables>> tunables,
-            SoldOutCleanup cleanup, Function<List<String>, Mono<Long>> dropQueues) {
+            SoldOutCleanup cleanup, Function<List<String>, Mono<List<String>>> dropQueues) {
         return new AllocationRound(stillLeader, demands, globalCredit, gatewayCount, apply, publish,
                 clock, restore, codec, creditFloor, tunables, cleanup, dropQueues);
     }
@@ -135,7 +135,7 @@ public final class AllocationRound {
         return new AllocationRound(stillLeader, demands, globalCredit, gatewayCount, apply, publish,
                 clock, restore, codec, creditFloor, tunables,
                 SoldOutCleanup.of(Integer.MAX_VALUE, new SimpleMeterRegistry()),
-                ids -> Mono.just(0L));
+                ids -> Mono.just(List.of()));
     }
 
     /** 튜너블을 안 읽던 자리. 늘 기본값으로 돈다. */
@@ -276,17 +276,19 @@ public final class AllocationRound {
         // 쿠폰 ID 가 수백 개 들어간다 (LG-3). 어느 쿠폰인지는 지운 뒤에 남긴다.
         log.info("매진 큐 정리 — 쿠폰 {}개를 지운다", due.size());
         return dropQueues.apply(due)
-                .doOnSuccess(dropped -> {
-                    // **지운 것이 확인된 뒤에 표시한다.** 앞에서 표시하면
-                    // 부분 실패가 "다음 틱에 다시 온다" 가 아니라 영구 누수다.
-                    cleanup.dropped(due);
-                    log.info("매진 큐 정리 끝 — 쿠폰 {}개, 키 {}개: {}",
-                            due.size(), dropped, due);
+                .doOnNext(dropped -> {
+                    // **지운 것만 표시한다.** 요청한 것 전부를 표시하면 실패한
+                    // 쿠폰이 다음 틱에 다시 안 오고, 지표는 지웠다고 말한다.
+                    cleanup.dropped(dropped);
+                    cleanup.failed(due.stream().filter(id -> !dropped.contains(id)).toList());
+                    if (!dropped.isEmpty()) {
+                        log.info("매진 큐 정리 끝 — 쿠폰 {}개: {}", dropped.size(), dropped);
+                    }
                 })
                 .doOnError(e -> cleanup.failed(due))
                 .onErrorResume(e -> {
                     log.warn("매진 큐 정리 실패 — 다음 틱에 다시 한다: {}", e.toString());
-                    return Mono.just(0L);
+                    return Mono.just(List.<String>of());
                 })
                 .then();
     }

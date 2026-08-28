@@ -69,7 +69,8 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         redis.opsForHash().put(RedisKeys.grace("c1", SHARDS, 0), "m1", "a:5").block(WAIT);
         redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "7").block(WAIT);
 
-        port.dropSoldOutQueues(List.of("c1")).block(WAIT);
+        assertThat(port.dropSoldOutQueues(List.of("c1")).block(WAIT))
+                .as("지운 쿠폰을 돌려준다").containsExactly("c1");
 
         assertThat(redis.hasKey(RedisKeys.queue("c1", SHARDS, 0)).block(WAIT)).isFalse();
         assertThat(redis.hasKey(RedisKeys.alive("c1", SHARDS, 0)).block(WAIT)).isFalse();
@@ -116,7 +117,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     void 지울_것이_없으면_왕복하지_않는다() {
         redis.opsForSet().add(RedisKeys.ACTIVE_COUPONS, "c1").block(WAIT);
 
-        assertThat(port.dropSoldOutQueues(List.of()).block(WAIT)).isZero();
+        assertThat(port.dropSoldOutQueues(List.of()).block(WAIT)).isEmpty();
 
         assertThat(redis.opsForSet().members(RedisKeys.ACTIVE_COUPONS)
                 .collectList().block(WAIT)).containsExactly("c1");

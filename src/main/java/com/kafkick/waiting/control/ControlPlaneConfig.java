@@ -5,6 +5,7 @@ import com.kafkick.waiting.adapter.redis.LeaderRedisPort;
 import com.kafkick.waiting.domain.allocation.CreditSmoother;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
+import java.util.List;
 import reactor.core.publisher.Mono;
 import java.time.Instant;
 import java.util.Optional;
@@ -78,7 +79,11 @@ public class ControlPlaneConfig {
                 //
                 // 판단은 그대로 돌려 지표로 먼저 관찰한다. 7.3 의 근거(죽은
                 // 큐가 폴링 예산의 83%)를 실측으로 확인한 뒤 배선을 잇는다.
-                ids -> Mono.just(0L));
+                //
+                // **빈 목록을 돌려준다.** 요청한 것을 돌려주면 판단이 "지웠다"
+                // 로 읽어 지표가 거짓이 된다 — 관찰하려고 끊어 둔 배선이
+                // 관찰 대상을 망친다.
+                ids -> Mono.just(List.of()));
     }
 
     /**
@@ -159,12 +164,7 @@ public class ControlPlaneConfig {
         return refresh;
     }
 
-    /**
-     * 매진 큐 정리 판단 (7.3).
-     *
-     * <p>배분 라운드와 리더십 경계가 <b>같은 것</b>을 봐야 한다 — 따로 만들면
-     * 승계에서 셈이 안 버려진다.
-     */
+    /** 배분 라운드와 리더십 경계가 같은 것을 봐야 한다 — 따로 만들면 승계에서 셈이 안 버려진다. */
     @Bean
     SoldOutCleanup soldOutCleanup(ControlPlaneProperties properties, MeterRegistry meters) {
         return SoldOutCleanup.of(properties.scheduler().soldOutGraceTicks(), meters);

@@ -92,7 +92,7 @@ class AllocationRoundTest {
                 SnapshotCodec.create(), () -> 0L, Optional::empty,
                 cleanup, ids -> {
                     지운_것.addAll(ids);
-                    return Mono.just((long) ids.size());
+                    return Mono.just(ids);
                 });
 
         for (int i = 0; i < 5; i++) {
@@ -132,7 +132,7 @@ class AllocationRoundTest {
                 SnapshotCodec.create(), () -> 0L, Optional::empty,
                 cleanup, ids -> {
                     지운_것.addAll(ids);
-                    return Mono.just((long) ids.size());
+                    return Mono.just(ids);
                 });
 
         for (int i = 0; i < 5; i++) {
@@ -140,6 +140,37 @@ class AllocationRoundTest {
         }
 
         assertThat(지운_것).as("리더가 아닌 채로 지우지 않는다").isEmpty();
+    }
+
+    /**
+     * <b>못 지운 쿠폰은 다음 틱에 다시 옵니다.</b>
+     *
+     * <p>요청한 것 전부를 지운 것으로 표시하면 실패한 쿠폰이 대상에서 영영
+     * 빠지고, 지표는 지웠다고 말합니다 — 죽은 줄이 남는데 로그가 거짓입니다.
+     */
+    @Test
+    @DisplayName("못_지운_쿠폰은_다음_틱에_다시_온다")
+    void 못_지운_쿠폰은_다음_틱에_다시_온다() {
+        SoldOutCleanup cleanup = SoldOutCleanup.of(1, new SimpleMeterRegistry());
+        AllocationRound round = AllocationRound.of(
+                () -> true,
+                () -> Mono.just(new TimedDemands(
+                        List.of(new CouponDemand("c1", 0, 0, QueueMode.ADAPTIVE)), 읽은_시각)),
+                () -> 1_000, () -> 1,
+                grant -> Mono.just(grant.credit()),
+                hash -> Mono.empty(),
+                () -> Instant.ofEpochSecond(읽은_시각),
+                () -> Mono.just(CreditSmoother.of(1.0)),
+                SnapshotCodec.create(), () -> 0L, Optional::empty,
+                // 하나도 못 지웠다고 답한다.
+                cleanup, ids -> Mono.just(List.of()));
+
+        for (int i = 0; i < 5; i++) {
+            round.run().block();
+        }
+
+        assertThat(cleanup.due(Map.of("c1", CouponStates.closed(0))))
+                .as("여전히 대상이다").containsExactly("c1");
     }
 
     private AllocationRound round(List<CouponDemand> 수요, long 전역_크레딧, int 노드_수) {

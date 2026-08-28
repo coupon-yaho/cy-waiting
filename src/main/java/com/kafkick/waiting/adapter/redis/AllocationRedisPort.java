@@ -391,15 +391,17 @@ public final class AllocationRedisPort implements SnapshotSource {
      * <p><b>한 쿠폰이 실패해도 나머지는 지운다.</b> 정리가 배분을 막으면
      * 안 지워진 것 하나가 그 틱 전체를 세운다 (7.3.4).
      */
-    public Mono<Long> dropSoldOutQueues(List<String> couponIds) {
+    public Mono<List<String>> dropSoldOutQueues(List<String> couponIds) {
         if (couponIds.isEmpty()) {
-            return Mono.just(0L);
+            return Mono.just(List.of());
         }
         return Flux.fromIterable(couponIds)
-                // **한 쿠폰이 실패해도 나머지는 지운다.** 실패한 것은 표시를
-                // 안 남기므로 다음 틱에 다시 온다 (7.3.4).
-                .flatMap(id -> dropOne(id).onErrorReturn(0L), MAX_CONCURRENT_READS)
-                .reduce(0L, Long::sum);
+                // **쿠폰별 결과를 그대로 돌려준다.** 합으로 접으면 한 쿠폰이
+                // 실패해도 전체가 성공으로 보이고, 실패한 것까지 지운 것으로
+                // 표시돼 다음 틱에 다시 안 온다 (7.3.4).
+                .flatMap(id -> dropOne(id).thenReturn(id)
+                        .onErrorResume(e -> Mono.empty()), MAX_CONCURRENT_READS)
+                .collectList();
     }
 
     /**

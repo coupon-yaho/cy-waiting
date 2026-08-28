@@ -329,6 +329,11 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         }
 
         SnapshotHolder.View view = holder.view();
+        // **분기 전에 심는다.** 뒤에 두면 판정을 못 거치는 갈래(첫 틱 전·낡은
+        // 재료)가 배수 없이 뒷단으로 가고, 폴백은 그것을 못 찾아 1.0 으로 답한다
+        // — 같은 요청·같은 장애에 보호 차단은 배수를 걸고 폴백은 안 거는 것이다.
+        // 갈래가 하나 더 생겨도 여기서는 안 빠진다.
+        exchange.getAttributes().put(POLL_SCALE, view.snapshot().meta().pollScale());
         CouponState state = view.snapshot().coupons().get(couponId);
         if (state == null) {
             return unknownCoupon(exchange, chain, view, couponId);
@@ -341,7 +346,6 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         if (soldOutCache.soldOut(couponId)) {
             AdmissionDecision cached = AdmissionDecision.REJECT_SOLD_OUT;
             exchange.getAttributes().put(DECISION, cached);
-            exchange.getAttributes().put(POLL_SCALE, view.snapshot().meta().pollScale());
             count(cached.name());
             soldOutHits.increment();
             return route(exchange, chain, cached, couponId, state, view.snapshot().meta());
@@ -356,7 +360,6 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                 latch.latched(couponId, nowSec),
                 nowSec, MAX_ETA_SEC));
         exchange.getAttributes().put(DECISION, decision);
-        exchange.getAttributes().put(POLL_SCALE, view.snapshot().meta().pollScale());
         count(decision.name());
         // **낡은 재료로 내린 판정도 재료 없이 판정한 것이다.** 사다리 4·7번이
         // 그 자리다 — 스냅샷에 있는 쿠폰은 deferred-* 를 안 지나므로, 여기서

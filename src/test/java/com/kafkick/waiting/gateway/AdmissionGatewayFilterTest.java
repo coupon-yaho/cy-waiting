@@ -1055,6 +1055,39 @@ class AdmissionGatewayFilterTest {
                 .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
     }
 
+    /**
+     * <b>판정을 못 거친 갈래도 배수를 들고 가야 한다.</b>
+     *
+     * <p>안 실으면 폴백이 배수를 못 찾아 1.0 으로 답한다. 같은 요청·같은 장애에
+     * 보호 차단은 배수를 걸고 폴백은 안 거는 상태가 되고, 낡음이 곧 배수가 커진
+     * 구간이라 하필 그때 갈린다.
+     */
+    @Test
+    @DisplayName("모르는_쿠폰도_판의_배수를_들고_간다")
+    void 모르는_쿠폰도_판의_배수를_들고_간다() {
+        holder.replace(new GatewaySnapshot(Map.of(COUPON, CouponStates.idle(1_000)),
+                new SnapshotMeta(META.globalCredit(), 1, null, 1.5), 지금.minusSeconds(60)));
+
+        MockServerWebExchange exchange = 태운다("없는쿠폰", "회원");
+
+        assertThat(exchange.<Double>getAttribute(AdmissionGatewayFilter.POLL_SCALE))
+                .as("낡아 이연된 갈래도 자기 판의 배수를 남긴다").isEqualTo(1.5);
+    }
+
+    /**
+     * <b>첫 틱 전도 마찬가지다.</b> 값은 1.0 이지만 "안 실렸다" 와 "1.0 이다" 는
+     * 다른 상태다 — 폴백이 둘을 구분 못 하면 다음에 기본값이 바뀔 때 조용히 갈린다.
+     */
+    @Test
+    @DisplayName("첫_틱_전_통과도_배수를_들고_간다")
+    void 첫_틱_전_통과도_배수를_들고_간다() {
+        // 스냅샷을 안 심는다. 홀더가 첫 틱 전이다.
+        MockServerWebExchange exchange = 태운다("없는쿠폰", "회원");
+
+        assertThat(exchange.<Double>getAttribute(AdmissionGatewayFilter.POLL_SCALE))
+                .as("재료가 없어도 자리는 채운다").isEqualTo(1.0);
+    }
+
     @Test
     @DisplayName("미지_쿠폰을_만_번_불러도_줄을_안_만든다")
     void 미지_쿠폰을_만_번_불러도_줄을_안_만든다() {

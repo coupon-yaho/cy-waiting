@@ -138,9 +138,9 @@ class ControlPlanePropertiesTest {
         ControlPlaneProperties.Scheduler scheduler =
                 ControlPlaneProperties.defaults().scheduler();
 
-        java.time.Duration 유예 = scheduler.tick().multipliedBy(scheduler.soldOutGraceTicks());
+        Duration 유예 = scheduler.tick().multipliedBy(scheduler.soldOutGraceTicks());
 
-        assertThat(유예).isGreaterThan(java.time.Duration.ofSeconds(5));
+        assertThat(유예).isGreaterThan(Duration.ofSeconds(5));
     }
 
     @Test

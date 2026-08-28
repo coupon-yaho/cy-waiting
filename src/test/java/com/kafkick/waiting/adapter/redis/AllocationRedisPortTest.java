@@ -52,6 +52,47 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         }
     }
 
+    /**
+     * <b>딸린 키를 같이 지웁니다</b> (7.3.1).
+     *
+     * <p>줄만 지우면 생존 신호와 유예 기록이 남고, 다음 회차가 남의 기록을
+     * 자기 것으로 읽습니다.
+     */
+    @Test
+    @DisplayName("매진_큐를_딸린_키까지_지운다")
+    void 매진_큐를_딸린_키까지_지운다() {
+        redis.opsForSet().add(RedisKeys.ACTIVE_COUPONS, "c1", "c2").block(WAIT);
+        줄_세운다("c1", 1, 2);
+        줄_세운다("c2", 3);
+        redis.opsForZSet().add(RedisKeys.alive("c1", SHARDS, 0), "m1", 100).block(WAIT);
+        redis.opsForHash().put(RedisKeys.grace("c1", SHARDS, 0), "m1", "d:5").block(WAIT);
+        redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "7").block(WAIT);
+
+        port.dropSoldOutQueues(List.of("c1")).block(WAIT);
+
+        assertThat(redis.hasKey(RedisKeys.queue("c1", SHARDS, 0)).block(WAIT)).isFalse();
+        assertThat(redis.hasKey(RedisKeys.alive("c1", SHARDS, 0)).block(WAIT)).isFalse();
+        assertThat(redis.hasKey(RedisKeys.grace("c1", SHARDS, 0)).block(WAIT)).isFalse();
+        assertThat(redis.hasKey(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT)).isFalse();
+        // **활성 목록에서도 뺀다.** 안 빼면 다음 틱이 없는 줄을 세러 간다.
+        assertThat(redis.opsForSet().members(RedisKeys.ACTIVE_COUPONS)
+                .collectList().block(WAIT)).containsExactly("c2");
+        // 지목 안 한 쿠폰은 그대로다. 한 쿠폰의 정리가 옆 줄을 지우면 안 된다.
+        assertThat(redis.hasKey(RedisKeys.queue("c2", SHARDS, 0)).block(WAIT)).isTrue();
+    }
+
+    /** 지울 것이 없으면 아무 명령도 안 냅니다. 빈 목록에 왕복을 쓰면 틱이 밀립니다. */
+    @Test
+    @DisplayName("지울_것이_없으면_왕복하지_않는다")
+    void 지울_것이_없으면_왕복하지_않는다() {
+        redis.opsForSet().add(RedisKeys.ACTIVE_COUPONS, "c1").block(WAIT);
+
+        assertThat(port.dropSoldOutQueues(List.of()).block(WAIT)).isZero();
+
+        assertThat(redis.opsForSet().members(RedisKeys.ACTIVE_COUPONS)
+                .collectList().block(WAIT)).containsExactly("c1");
+    }
+
     @Test
     @DisplayName("배분_대상만_읽는다")
     void 배분_대상만_읽는다() {

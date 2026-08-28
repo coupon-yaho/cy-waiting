@@ -187,6 +187,16 @@ public final class SoldOutCache {
     public record Released(Duration elapsed, long blocked) {
     }
 
+    /** 이 캐시의 수명. 배포 값과 같은지를 시험이 여기서 본다. */
+    public Duration ttl() {
+        return ttl;
+    }
+
+    /** 담을 수 있는 쿠폰 수. 배포 값과 같은지를 시험이 여기서 본다. */
+    public int maxKeys() {
+        return maxKeys;
+    }
+
     /** 담고 있는 항목 수. 계측이 이 값을 싣는다. */
     public int size() {
         return armedCount.get();

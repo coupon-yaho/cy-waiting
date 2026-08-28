@@ -88,7 +88,7 @@ public final class SoldOutObserver implements GatewayFilter {
                 // **흘려보내면서 본다.** 삼켰다가 다시 쓰면 상한을 넘긴 응답을
                 // 되돌릴 방법이 없고, 그때는 이 관찰이 사고의 원인이 된다.
                 return super.writeWith(Flux.from(body)
-                        .doOnNext(buffer -> inspect(exchange, buffer, couponId, prefix)));
+                        .doOnNext(buffer -> observe(exchange, buffer, couponId, prefix)));
             }
 
             @Override
@@ -98,10 +98,27 @@ public final class SoldOutObserver implements GatewayFilter {
                 // 온다 — 안 덮으면 그 응답의 관찰이 통째로 지나간다.
                 return super.writeAndFlushWith(Flux.from(body)
                         .map(part -> Flux.from(part)
-                                .doOnNext(buffer -> inspect(exchange, buffer, couponId, prefix))));
+                                .doOnNext(buffer -> observe(exchange, buffer, couponId, prefix))));
             }
         };
         return chain.filter(exchange.mutate().response(watched).build());
+    }
+
+    /**
+     * 관찰이 응답을 죽이지 않게 한다.
+     *
+     * <p><b>이건 곁다리다.</b> 여기서 던지면 `doOnNext` 가 그 오류를 응답
+     * 스트림에 실어, 관찰 실패가 곧 응답 실패가 된다.
+     */
+    private void observe(ServerWebExchange exchange, DataBuffer buffer, String couponId,
+            Prefix prefix) {
+        try {
+            inspect(exchange, buffer, couponId, prefix);
+        } catch (RuntimeException e) {
+            // 삼킨 것을 남긴다. 조용히 넘기면 관찰이 멎은 것을 아무도 못 본다.
+            meters.counter(METRIC, "result", "error").increment();
+            log.warn("매진 관찰 실패 — 응답은 그대로 보낸다: {}", e.toString());
+        }
     }
 
     /**
@@ -193,6 +210,7 @@ public final class SoldOutObserver implements GatewayFilter {
         if (!(vars instanceof Map<?, ?> byName)) {
             return null;
         }
-        return byName.get("couponId") instanceof String id ? id : null;
+        return byName.get(AdmissionGatewayFilter.COUPON_ID) instanceof String id
+                ? id : null;
     }
 }

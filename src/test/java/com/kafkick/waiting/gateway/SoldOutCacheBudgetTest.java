@@ -55,6 +55,22 @@ class SoldOutCacheBudgetTest {
         assertThat(값().maxKeys()).isEqualTo(CouponKeys.MAX);
     }
 
+    /**
+     * <b>`standard()` 가 배포 값과 같아야 합니다.</b>
+     *
+     * <p>운영 빈은 설정에서 만들지만 시험 편의 팩토리는 `standard()` 를 씁니다.
+     * 둘이 갈리면 시험이 배포되는 숫자를 안 재고, 그 사실이 아무 데도 안
+     * 드러납니다 — 범위 검사만으로는 못 잡습니다.
+     */
+    @Test
+    @DisplayName("standard_가_배포_값과_같다")
+    void standard_가_배포_값과_같다() throws IOException {
+        SoldOutCacheProperties props = 값();
+
+        assertThat(SoldOutCache.standard().ttl()).as("TTL").isEqualTo(props.ttl());
+        assertThat(SoldOutCache.standard().maxKeys()).as("키 상한").isEqualTo(props.maxKeys());
+    }
+
     /** 배포 값이 코드가 거부하지 않는 값이어야 합니다. 안 그러면 기동에서 터집니다. */
     @Test
     @DisplayName("배포되는_값으로_캐시를_만들_수_있다")

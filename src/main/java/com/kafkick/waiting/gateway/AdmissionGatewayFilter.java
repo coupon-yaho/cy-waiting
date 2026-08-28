@@ -71,7 +71,8 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
 
     private static final Logger log = LoggerFactory.getLogger(AdmissionGatewayFilter.class);
 
-    private static final String COUPON_ID = "couponId";
+    /** 경로 변수 이름. **관찰자도 이것을 읽는다** — 갈리면 담는 키와 읽는 키가 갈린다. */
+    static final String COUPON_ID = "couponId";
 
     /** 판정 결과를 사유별로 센다. <b>요청마다 로그를 남기지 않는다</b> — 낡음
      * 구간에서 로그가 폭주하고, 그때 정작 봐야 할 것이 묻힌다. */

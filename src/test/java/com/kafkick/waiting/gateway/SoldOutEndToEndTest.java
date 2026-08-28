@@ -73,24 +73,27 @@ class SoldOutEndToEndTest {
         return exchange;
     }
 
-    /** 판정을 태우고, 통과하면 뒷단이 매진을 답하는 것까지 이어 붙인다. */
+    /**
+     * <b>실린 순서 그대로 태운다</b> — 관찰자가 판정보다 <b>바깥</b>이다.
+     *
+     * <p>안팎을 뒤집으면 게이트웨이 자신이 낸 <code>COUPON-306</code> 을 관찰자가
+     * 보는지를 아예 못 잽니다. 그 되먹임이 이 기능의 가장 나쁜 실패 모드입니다.
+     */
     private MockServerWebExchange 태운다(boolean 뒷단이_매진) {
         MockServerWebExchange exchange = 요청();
-        admission.filter(exchange, e -> {
+        observer.filter(exchange, 밖 -> admission.filter(밖, e -> {
             뒷단_횟수.incrementAndGet();
             if (!뒷단이_매진) {
                 return Mono.empty();
             }
             // 라우팅 필터가 심는 표시. 이게 있어야 관찰자가 뒷단 응답으로 본다.
             e.getAttributes().put(ServerWebExchangeUtils.CLIENT_RESPONSE_ATTR, "뒷단 응답");
-            return observer.filter(e, e2 -> {
-                e2.getResponse().setStatusCode(HttpStatus.CONFLICT);
-                return e2.getResponse().writeWith(Flux.just(e2.getResponse().bufferFactory()
-                        .wrap("""
-                                {"success":false,"error":{"code":"COUPON-306"}}"""
-                                .getBytes(StandardCharsets.UTF_8))));
-            });
-        }).block();
+            e.getResponse().setStatusCode(HttpStatus.CONFLICT);
+            return e.getResponse().writeWith(Flux.just(e.getResponse().bufferFactory()
+                    .wrap("""
+                            {"success":false,"error":{"code":"COUPON-306"}}"""
+                            .getBytes(StandardCharsets.UTF_8))));
+        })).block();
         return exchange;
     }
 
@@ -118,6 +121,41 @@ class SoldOutEndToEndTest {
         assertThat(두번째.getResponse().getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
         assertThat(두번째.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
                 .isEqualTo(AdmissionDecision.REJECT_SOLD_OUT);
+    }
+
+    /**
+     * <b>게이트웨이 자신이 낸 매진은 관찰이 아닙니다.</b>
+     *
+     * <p>관찰자가 판정보다 바깥이라, 캐시가 끊은 응답이 관찰자를 그대로 지나갑니다.
+     * 그것을 다시 담으면 자기 급전 루프가 됩니다 — 뒷단이 살아나고 재입고가
+     * 보여도 무장이 매 요청 갱신돼 영영 안 풀립니다.
+     */
+    @Test
+    @DisplayName("캐시가_끊은_응답은_무장을_갱신하지_않는다")
+    void 캐시가_끊은_응답은_무장을_갱신하지_않는다() {
+        holder.replace(new GatewaySnapshot(
+                Map.of(COUPON, CouponStates.idle(1_000)), new SnapshotMeta(1_000, 1),
+                지금.minusSeconds(1)));
+        태운다(true);
+        assertThat(뒷단_횟수).hasValue(1);
+
+        double 관찰 = meters.counter("waiting.soldout.observed", "result", "armed").count()
+                + meters.counter("waiting.soldout.observed", "result", "already").count();
+
+        // 캐시가 끊는다. 이 응답도 COUPON-306 이고 관찰자를 지난다.
+        태운다(true);
+        태운다(true);
+
+        assertThat(meters.counter("waiting.soldout.observed", "result", "armed").count()
+                + meters.counter("waiting.soldout.observed", "result", "already").count())
+                .as("자기 응답은 안 센다").isEqualTo(관찰);
+
+        // 나중에 발행된 재료가 재고를 말하면 풀려야 한다. 자기 응답으로 무장이
+        // 갱신됐다면 발행 시각이 밀려 안 풀린다.
+        재고가_있다고_심는다();
+        태운다(false);
+
+        assertThat(뒷단_횟수).as("재입고 뒤에는 간다").hasValue(2);
     }
 
     /** 대조 — 뒷단이 매진을 안 답하면 계속 간다. 없으면 "늘 막는다" 로도 통과한다. */

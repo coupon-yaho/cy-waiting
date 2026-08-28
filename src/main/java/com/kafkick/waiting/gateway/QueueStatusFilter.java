@@ -141,6 +141,13 @@ public final class QueueStatusFilter implements WebFilter {
             return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
                     (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random));
         }
+        // **매진이면 줄을 안 친다** (R3 · 7.1.4). 재고가 없으면 답이 정해져
+        // 있는데, 그런데도 물으러 가면 매진 순간 몰리는 폴링이 그대로 레디스
+        // 부하가 된다 — 정작 그때 줄을 정리해야 한다.
+        if (soldOut(couponId)) {
+            count("sold-out");
+            return response.soldOut(exchange);
+        }
         return queue.status(couponId, member.get(), clock.instant())
                 .flatMap(entry -> answer(exchange, couponId, member.get(), entry))
                 // 조회가 실패해도 순번은 레디스에 남는다. 다시 물으면 된다.
@@ -155,6 +162,21 @@ public final class QueueStatusFilter implements WebFilter {
                     return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
                             (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random));
                 });
+    }
+
+    /**
+     * 재료가 매진이라고 말하는가.
+     *
+     * <p><b>재료가 없거나 낡으면 매진으로 안 본다.</b> 모른다는 것이 끝났다는
+     * 뜻은 아니고, 여기서 잘못 말하면 기다리던 사람이 줄을 잃는다.
+     */
+    private boolean soldOut(String couponId) {
+        SnapshotHolder.View view = holder.view();
+        if (view.isBeforeFirstTick() || holder.isDataStale(view)) {
+            return false;
+        }
+        CouponState state = view.snapshot().coupons().get(couponId);
+        return state != null && state.remainingStock() <= 0;
     }
 
     private Mono<Void> answer(ServerWebExchange exchange, String couponId, String memberId,

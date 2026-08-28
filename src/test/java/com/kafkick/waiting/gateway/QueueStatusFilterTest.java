@@ -152,8 +152,26 @@ class QueueStatusFilterTest {
 
         assertThat(exchange.getResponse().getHeaders().getFirst("Retry-After"))
                 .as("재시도 유도").isNull();
-        assertThat(exchange.getResponse().getBodyAsString().block())
-                .as("다음 폴링까지의 시간").contains("\"nextPollMs\":0");
+    }
+
+    /**
+     * <b>재료가 낡으면 매진으로 안 봅니다.</b>
+     *
+     * <p>모른다는 것이 끝났다는 뜻은 아닙니다. 여기서 잘못 말하면 기다리던 사람이
+     * 줄을 잃고, 회복 뒤에는 맨 뒤로 갑니다 — 순번 역행이 됩니다.
+     */
+    @Test
+    @DisplayName("재료가_낡으면_매진으로_안_본다")
+    void 재료가_낡으면_매진으로_안_본다() {
+        holder.replace(new GatewaySnapshot(Map.of(COUPON, CouponStates.closed(1_000)),
+                new SnapshotMeta(1, 1), 지금.minusSeconds(3_600)));
+        줄.enqueue(COUPON, MEMBER, NO_LIMIT, 지금).block();
+        String 토큰 = tokens.issue(COUPON, MEMBER, 지금);
+        int 이전 = 줄.왕복();
+
+        조회한다("/api/v1/coupons/" + COUPON + "/queue?queueToken=" + 토큰);
+
+        assertThat(줄.왕복()).as("낡은 재료로는 단락 안 한다").isGreaterThan(이전);
     }
 
     /** 매진이 아니면 그대로 물으러 갑니다. 위 시험이 "늘 안 친다" 로도 통과하면 안 됩니다. */

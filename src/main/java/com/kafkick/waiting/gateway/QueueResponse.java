@@ -67,6 +67,19 @@ public final class QueueResponse {
     }
 
     /**
+     * 매진이라고 알린다. <b>다시 오라고 하지 않는다.</b>
+     *
+     * <p>재고가 다시 생기지 않는데 재시도를 유도하면, 끝난 캠페인이 폴링을 계속
+     * 만들어 냅니다.
+     */
+    public Mono<Void> soldOut(ServerWebExchange exchange) {
+        return write(exchange, HttpStatus.OK,
+                """
+                {"success":true,"data":{"status":"SOLD_OUT","reason":"STOCK_EXHAUSTED"}}""",
+                0);
+    }
+
+    /**
      * 차례가 왔다고 알린다. <b>토큰을 여기서 준다</b> — 폴링해 온 사람에게 그
      * 자리에서 주면 안 돌아온 사람 몫이 안 버려진다.
      */

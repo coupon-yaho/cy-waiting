@@ -252,3 +252,16 @@ Refs: CY-<phase-7-gate>
 ## 지라 티켓
 
 아직 발번하지 않았다. 이 페이즈에 진입할 때 만든다.
+
+---
+
+## 티켓
+
+| 절 | 티켓 | 무엇 |
+|---|---|---|
+| `7` | [`CY-691`](https://shseol.atlassian.net/browse/CY-691) | **대기열 — 큐 생명주기** |
+| `7.1` | [`CY-692`](https://shseol.atlassian.net/browse/CY-692) | 매진 상태 모델과 종결 |
+| `7.2` | [`CY-693`](https://shseol.atlassian.net/browse/CY-693) | 매진 negative cache |
+| `7.3` | [`CY-694`](https://shseol.atlassian.net/browse/CY-694) | 매진 큐 정리 |
+| `7.4` | [`CY-695`](https://shseol.atlassian.net/browse/CY-695) | 이탈자 스위퍼 |
+| `7.5` | [`CY-696`](https://shseol.atlassian.net/browse/CY-696) | 유예 재입장 |

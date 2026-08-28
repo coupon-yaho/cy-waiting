@@ -51,7 +51,7 @@ class GraceRejoinTest extends RedisContainerSupport {
     private List<Object> 등록(String memberId) {
         return (List<Object>) redis.execute(ENQUEUE,
                         List.of(QUEUE, MAX_SCORE, ALIVE, ADMITTED, GRACE),
-                        List.of(memberId, "86400", "3600", "-1", String.valueOf(NOW)))
+                        List.of(memberId, "86400", "3600", "-1", String.valueOf(NOW), "300"))
                 .next().block(WAIT);
     }
 
@@ -131,6 +131,42 @@ class GraceRejoinTest extends RedisContainerSupport {
     }
 
     /**
+     * <b>순번과 재방문을 한 자리에서 함께 봅니다.</b>
+     *
+     * <p>둘을 다른 시험에서 각각 1 로만 재면 <b>반환 배열의 두 자리를 서로
+     * 바꿔도 전부 통과합니다.</b> 값이 다른 조합을 한 번에 봐야 자리가 못
+     * 박힙니다 — 이 어댑터는 뮤테이션 범위 밖이라 여기가 유일한 방어입니다.
+     */
+    @Test
+    @DisplayName("순번과_재방문을_함께_못_박는다")
+    void 순번과_재방문을_함께_못_박는다() {
+        등록("m2");
+        등록("m3");
+        redis.opsForHash().put(GRACE, "m1", "d:" + (NOW - 60)).block(WAIT);
+
+        List<Object> 결과 = 등록("m1");
+
+        assertThat(Long.parseLong(String.valueOf(결과.get(3)))).as("앞 인원").isEqualTo(2);
+        assertThat(재방문(결과)).as("재방문").isOne();
+    }
+
+    /**
+     * <b>보관 기간이 지난 기록은 재방문이 아닙니다</b> (7.5.4).
+     *
+     * <p>만료 판정을 청소에만 맡기면, 그 스크립트가 안 도는 구간에서 몇 시간
+     * 전에 떠난 사람이 재방문자로 나옵니다.
+     */
+    @Test
+    @DisplayName("보관_기간이_지난_기록은_재방문이_아니다")
+    void 보관_기간이_지난_기록은_재방문이_아니다() {
+        redis.opsForHash().put(GRACE, "m1", "d:" + (NOW - 1_000)).block(WAIT);
+
+        assertThat(재방문(등록("m1"))).isZero();
+        // 낡았어도 지운다 — 어차피 걷을 것이고, 안 지우면 같은 판정을 또 받는다.
+        assertThat(redis.opsForHash().hasKey(GRACE, "m1").block(WAIT)).isFalse();
+    }
+
+    /**
      * <b>재입장이 남은 대기자의 순위를 안 늘립니다</b> (G7.8).
      *
      * <p>돌아온 사람이 맨 뒤에 서므로 앞사람의 순번은 그대로입니다. 앞에
@@ -165,7 +201,7 @@ class GraceRejoinTest extends RedisContainerSupport {
         // 상한 0 — 신규 등록을 전원 거절한다.
         List<Object> 결과 = (List<Object>) redis.execute(ENQUEUE,
                         List.of(QUEUE, MAX_SCORE, ALIVE, ADMITTED, GRACE),
-                        List.of("m1", "86400", "3600", "0", String.valueOf(NOW)))
+                        List.of("m1", "86400", "3600", "0", String.valueOf(NOW), "300"))
                 .next().block(WAIT);
 
         assertThat(String.valueOf(결과.get(0))).as("거절").isEqualTo("-1");

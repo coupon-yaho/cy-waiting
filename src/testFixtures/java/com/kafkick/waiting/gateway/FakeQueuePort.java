@@ -21,7 +21,7 @@ public final class FakeQueuePort implements QueuePort {
     private final AtomicInteger 등록_호출 = new AtomicInteger();
     private final AtomicInteger 조회_호출 = new AtomicInteger();
 
-    /** 자리를 비웠다 돌아온 사람. 등록 한 번에 소비된다 — 실제 계약과 같다. */
+    /** 자리를 비웠다 돌아온 사람. <b>새로 서는 등록 한 번에만</b> 소비된다. */
     private final Set<String> 돌아온_사람 = ConcurrentHashMap.newKeySet();
 
     /** 이 사람을 재방문자로 만든다. */
@@ -103,7 +103,10 @@ public final class FakeQueuePort implements QueuePort {
         }
         queued.putIfAbsent(memberId, (long) queued.size() + 1);
         return Mono.just(new QueueEntry(QueueState.WAITING, rankOf(couponId, memberId),
-                queued.get(memberId), 있던_사람, false, 돌아온_사람.remove(memberId)));
+                queued.get(memberId), 있던_사람, false,
+                // **이미 줄에 선 사람은 기록을 안 본다.** 실물이 그 분기에서
+                // 먼저 돌아가므로, 여기서 소비하면 픽스처가 실제와 달라진다.
+                !있던_사람 && 돌아온_사람.remove(memberId)));
     }
 
     @Override

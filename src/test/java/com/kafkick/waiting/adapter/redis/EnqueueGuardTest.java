@@ -54,7 +54,7 @@ class EnqueueGuardTest extends RedisContainerSupport {
                         script,
                         List.of(QUEUE, MAX_SCORE, RedisKeys.alive(COUPON, 1, 0), ADMITTED,
                                 RedisKeys.grace(COUPON, 1, 0)),
-                        List.of(memberId, "86400", aliveTtl, cap, NOW))
+                        List.of(memberId, "86400", aliveTtl, cap, NOW, "300"))
                 .blockFirst(WAIT);
     }
 

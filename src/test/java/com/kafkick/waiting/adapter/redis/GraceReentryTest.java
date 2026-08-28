@@ -48,7 +48,7 @@ class GraceReentryTest extends RedisContainerSupport {
         redis.execute(enqueueScript,
                         List.of(QUEUE, MAX_SCORE, RedisKeys.alive(COUPON, 1, 0),
                                 RedisKeys.admitted(COUPON, 1, 0), GRACE),
-                        List.of(memberId, "86400", "30", "-1", NOW))
+                        List.of(memberId, "86400", "30", "-1", NOW, "300"))
                 .blockFirst(WAIT);
     }
 
@@ -67,7 +67,7 @@ class GraceReentryTest extends RedisContainerSupport {
 
         // 이탈 — 자리를 잃고 유예 기록만 남는다
         redis.opsForZSet().remove(QUEUE, "leaver").block(WAIT);
-        redis.opsForHash().put(GRACE, "leaver", "left").block(WAIT);
+        redis.opsForHash().put(GRACE, "leaver", "d:" + NOW).block(WAIT);
         enqueue("waiter");
 
         enqueue("leaver");
@@ -84,7 +84,7 @@ class GraceReentryTest extends RedisContainerSupport {
         enqueue("waiter2");
 
         redis.opsForZSet().remove(QUEUE, "leaver").block(WAIT);
-        redis.opsForHash().put(GRACE, "leaver", "left").block(WAIT);
+        redis.opsForHash().put(GRACE, "leaver", "d:" + NOW).block(WAIT);
         long before1 = rankOf("waiter1");
         long before2 = rankOf("waiter2");
 
@@ -117,12 +117,14 @@ class GraceReentryTest extends RedisContainerSupport {
         // 기록은 재방문자 식별용이지 자리 보관용이 아니다.
         enqueue("leaver");
         redis.opsForZSet().remove(QUEUE, "leaver").block(WAIT);
-        redis.opsForHash().put(GRACE, "leaver", "left").block(WAIT);
+        redis.opsForHash().put(GRACE, "leaver", "d:" + NOW).block(WAIT);
         enqueue("newcomer");
 
         enqueue("leaver");
 
         assertThat(rankOf("leaver")).isEqualTo(1);
-        assertThat(redis.opsForHash().get(GRACE, "leaver").block(WAIT)).isEqualTo("left");
+        // **기록은 소비된다** (7.5.2). 한 번 알리고 지운다 — 안 지우면 다음에
+        // 또 재방문으로 나오고, 유예 만료를 기다려야 정상으로 돌아온다.
+        assertThat(redis.opsForHash().hasKey(GRACE, "leaver").block(WAIT)).isFalse();
     }
 }

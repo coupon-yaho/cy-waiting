@@ -65,7 +65,7 @@ class ConcurrentEnqueueTest extends RedisContainerSupport {
 
     private void enqueue(String memberId) {
         redis.execute(script, List.of(QUEUE, MAX_SCORE, alive(memberId), ADMITTED, GRACE),
-                        List.of(memberId, String.valueOf(TTL_SECONDS), ALIVE_TTL, NO_CAP, NOW))
+                        List.of(memberId, String.valueOf(TTL_SECONDS), ALIVE_TTL, NO_CAP, NOW, "300"))
                 .blockFirst(WAIT);
     }
 

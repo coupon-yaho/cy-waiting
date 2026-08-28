@@ -151,7 +151,7 @@ class ClusterModeScriptTest {
 
     private static List<String> argsFor(String script) {
         return switch (script) {
-            case "enqueue.lua" -> List.of("m1", "60", "30", "-1", "1000");
+            case "enqueue.lua" -> List.of("m1", "60", "30", "-1", "1000", "300");
             case "queue_status.lua" -> List.of("m1", "30", "1000");
             case "sweep.lua" -> List.of("10", "1000", "300", "50", "0");
             case "allocation_apply.lua" -> List.of("1");

@@ -4,6 +4,7 @@ import com.kafkick.waiting.adapter.redis.AllocationRedisPort;
 import com.kafkick.waiting.adapter.redis.LeaderRedisPort;
 import com.kafkick.waiting.domain.allocation.CreditSmoother;
 import io.micrometer.core.instrument.Gauge;
+import com.kafkick.waiting.domain.queue.GraceRetention;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.util.List;
@@ -32,8 +33,8 @@ public class ControlPlaneConfig {
     /** 평활화 계수. 클수록 최근 값을 빨리 따라간다. */
     private static final double SMOOTHING_ALPHA = 0.3;
 
-    /** 이탈 기록 보관. 재방문자를 알아볼 수 있는 구간이다 (5.4절). */
-    private static final long GRACE_SEC = 300;
+    /** 이탈 기록 보관. <b>등록도 같은 값을 읽는다</b> — 갈리면 판정이 갈린다. */
+    private static final long GRACE_SEC = GraceRetention.SECONDS;
 
     /** 한 판이 지우는 상한. 스크립트가 `unpack` 한계로 더 좁힌다. */
     private static final int SWEEP_BUDGET = 1_000;

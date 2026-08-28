@@ -221,6 +221,28 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     }
 
     /**
+     * <b>입장 표시를 이탈 기록으로 덮지 않습니다.</b>
+     *
+     * <p>같은 자리에 종류가 둘입니다. 덮으면 차례가 왔던 사람이 다음 폴링에서
+     * 종료를 받고, 다시 서면 그동안 온 사람 뒤로 갑니다 — `queue_status` 가
+     * 그 표시 하나로 막고 있는 것이 그것입니다.
+     */
+    @Test
+    @DisplayName("입장_표시를_이탈_기록으로_안_덮는다")
+    void 입장_표시를_이탈_기록으로_안_덮는다() {
+        long 지금 = 1_700_000_000L;
+        줄_세운다("c1", 1, 5);
+        // m5 는 살아 있어 "신호 전무" 가드를 지나고, m1 은 만료됐다.
+        redis.opsForZSet().add(RedisKeys.alive("c1", SHARDS, 0), "m5", 지금 + 60).block(WAIT);
+        redis.opsForHash().put(RedisKeys.grace("c1", SHARDS, 0), "m1", "a:" + 지금).block(WAIT);
+
+        port.sweep(List.of("c1"), 지금, 100, 300, 100).block(WAIT);
+
+        assertThat(redis.opsForHash().get(RedisKeys.grace("c1", SHARDS, 0), "m1").block(WAIT))
+                .as("입장 표시가 살아남는다").isEqualTo("a:" + 지금);
+    }
+
+    /**
      * <b>보관 기간 안의 입장 표시는 청소를 견딥니다.</b>
      *
      * <p>같은 해시에 writer 가 둘입니다. 종류를 안 가르면 청소가 입장 표시를

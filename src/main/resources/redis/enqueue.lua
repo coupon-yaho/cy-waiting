@@ -19,6 +19,7 @@
 --          0 을 상한 없음으로 읽으면 그 뜻이 정반대가 되고, 배수가 멎은 쿠폰의
 --          줄이 무한히 자란다 — 갇힌 사람만 늘어난다
 -- ARGV[5]  지금 시각(초). 생존 신호의 만료 시각을 계산한다
+-- ARGV[6]  이탈 기록 보관 기간(초). 이보다 낡은 기록은 재방문으로 안 본다
 --
 -- 반환  {score, floorApplied, alreadyQueued, rank, rejoined}
 --   score          이 사람의 순번. 거부되면 '-1'
@@ -61,6 +62,10 @@ local now = tonumber(ARGV[5])
 if now == nil or now < 0 then
     return redis.error_reply('시각은 0 이상이어야 한다: ' .. tostring(ARGV[5]))
 end
+
+local retention
+retention, err = positive_int(ARGV[6], '유예 보관 기간')
+if not retention then return redis.error_reply(err) end
 
 local maxLen = tonumber(ARGV[4])
 if maxLen == nil or maxLen < -1 or maxLen ~= math.floor(maxLen) then
@@ -138,10 +143,19 @@ local rank = redis.call('ZCOUNT', KEYS[1], '-inf', '(' .. string.format('%.0f', 
 --
 -- **입장 표시는 안 건드린다.** 같은 해시에 종류가 둘이고, `a:` 는 차례가 왔던
 -- 사람을 지키는 표시다 — 지우면 입장 복구가 통째로 없어진다.
+-- **보관 기간을 여기서도 잰다.** 만료 판정을 스위퍼에만 맡기면, 그 스크립트가
+-- 안 도는 구간(매진 중·장애 중, 그리고 줄이 빈 쿠폰)에서는 낡은 기록이 영영
+-- 남아 몇 시간 전에 떠난 사람이 재방문자로 나온다.
+--
+-- 낡았어도 지우기는 한다 — 어차피 걷을 것이고, 여기서 안 지우면 그 사람은
+-- 다음에도 같은 판정을 받는다.
 local rejoined = 0
 local record = redis.call('HGET', KEYS[5], ARGV[1])
 if record and string.sub(record, 1, 2) == 'd:' then
-    rejoined = 1
+    local at = tonumber(string.sub(record, 3))
+    if at ~= nil and at >= now - retention then
+        rejoined = 1
+    end
     redis.call('HDEL', KEYS[5], ARGV[1])
 end
 

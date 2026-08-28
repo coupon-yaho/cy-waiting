@@ -95,7 +95,7 @@ class ReplicaPromotionTest {
                 ScriptOutputType.MULTI,
                 new String[] {QUEUE, MAX_SCORE, ALIVE, ADMITTED, GRACE},
                 // 상한 없음. 0 은 이 뜻이 아니다 — 0 은 한 명도 안 받는다는 뜻이다.
-                member, "86400", "30", "-1", String.valueOf(NOW));
+                member, "86400", "30", "-1", String.valueOf(NOW), "300");
     }
 
     /** 컨테이너의 시계. 호스트 시계를 못 돌리므로 여기서 기준을 얻는다. */

@@ -11,6 +11,7 @@ import java.util.Objects;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
+import com.kafkick.waiting.domain.queue.GraceRetention;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Component;
@@ -96,7 +97,8 @@ public final class QueueRedisPort implements QueuePort {
                                 RedisKeys.admitted(couponId, shards, shard),
                                 RedisKeys.grace(couponId, shards, shard)),
                         List.of(memberId, MAX_SCORE_TTL_SEC, ALIVE_TTL_SEC,
-                                Long.toString(maxLen), Long.toString(now.getEpochSecond())))
+                                Long.toString(maxLen), Long.toString(now.getEpochSecond()),
+                                Long.toString(GraceRetention.SECONDS)))
                 .next()
                 // **빈 결과를 성공으로 안 본다.** 그대로 두면 등록도 거절도 아닌
                 // 채로 200 이 나가고, 실패 경로가 통째로 안 돈다.

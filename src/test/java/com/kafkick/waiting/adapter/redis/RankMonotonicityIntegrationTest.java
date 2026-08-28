@@ -115,7 +115,7 @@ class RankMonotonicityIntegrationTest {
         redis.execute(enqueueScript,
                 List.of(QUEUE, MAX_SCORE, RedisKeys.alive(COUPON, 1, 0),
                         RedisKeys.admitted(COUPON, 1, 0), RedisKeys.grace(COUPON, 1, 0)),
-                memberId, "86400", "30", "-1", NOW);
+                memberId, "86400", "30", "-1", NOW, "300");
     }
 
     /** 큐 전체를 순서대로 한 번에 읽는다. 사람마다 왕복하면 10만 회가 안 끝난다. */

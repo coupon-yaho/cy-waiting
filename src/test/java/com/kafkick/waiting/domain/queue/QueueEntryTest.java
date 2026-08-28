@@ -1,6 +1,7 @@
 package com.kafkick.waiting.domain.queue;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.junit.jupiter.api.DisplayName;
@@ -79,5 +80,28 @@ class QueueEntryTest {
         // 모른다는 뜻의 값이 아니면 음수도 안 된다.
         assertThatThrownBy(() -> new QueueEntry(QueueState.ADMITTED, 0, -5, false, false, false))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /**
+     * <b>재방문은 새로 선 대기자만입니다.</b>
+     *
+     * <p>이미 줄에 있던 사람은 스크립트가 먼저 돌아가 기록을 안 보고, 조회는
+     * 그 사실을 아예 안 싣습니다. 조합을 안 막으면 그것을 전제로 통과하는
+     * 시험이 생기고, 운영이 못 만드는 상태를 재게 됩니다.
+     */
+    @Test
+    @DisplayName("재방문은_새로_선_대기자만이다")
+    void 재방문은_새로_선_대기자만이다() {
+        assertThatCode(() -> new QueueEntry(QueueState.WAITING, 0, 1, false, false, true))
+                .doesNotThrowAnyException();
+
+        // **던지지 않고 낮춘다.** 등록 결과를 만들다 던지면 부르는 쪽이 그것을
+        // 삼켜 fail-open 으로 흘린다 — 보고용 값 하나 때문에 줄이 통째로 열린다.
+        assertThat(new QueueEntry(QueueState.WAITING, 0, 1, true, false, true).rejoined())
+                .as("이미 서 있던 사람").isFalse();
+        assertThat(new QueueEntry(QueueState.NOT_QUEUED, -1, -1, false, false, true).rejoined())
+                .as("줄에 없는 사람").isFalse();
+        assertThat(new QueueEntry(QueueState.ADMITTED, 0, 1, true, false, true).rejoined())
+                .as("차례가 온 사람").isFalse();
     }
 }

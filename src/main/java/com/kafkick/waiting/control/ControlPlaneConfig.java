@@ -32,9 +32,6 @@ public class ControlPlaneConfig {
     /** 평활화 계수. 클수록 최근 값을 빨리 따라간다. */
     private static final double SMOOTHING_ALPHA = 0.3;
 
-    /** 큐 앞에서 볼 인원. 전수 검사는 틱마다 불가능하다 — 배수 인원 근처만 정확하면 된다. */
-    private static final int SWEEP_SCAN_LIMIT = 1_000;
-
     /** 이탈 기록 보관. 재방문자를 알아볼 수 있는 구간이다 (5.4절). */
     private static final long GRACE_SEC = 300;
 
@@ -72,7 +69,7 @@ public class ControlPlaneConfig {
     AllocationRound allocationRound(DemandCollector collector, AllocationRedisPort port,
             GatewayRegistry registry, CapacityCollector capacity, Leadership leadership,
             TunablesRefresh tunables, ControlPlaneProperties properties,
-            SoldOutCleanup cleanup, QueueSweeper sweeper) {
+            SoldOutCleanup cleanup, QueueSweeper sweeper, SnapshotHolder holder) {
         SnapshotCodec codec = SnapshotCodec.create();
         return AllocationRound.of(leadership::isLeader, collector::collect, capacity::lastKnown,
                 registry::count, port::apply, port::publish, Instant::now,
@@ -94,7 +91,10 @@ public class ControlPlaneConfig {
                 // 로 읽어 지표가 거짓이 된다 — 관찰하려고 끊어 둔 배선이
                 // 관찰 대상을 망친다.
                 ids -> Mono.just(List.of()),
-                sweeper);
+                sweeper,
+                // 이 노드도 게이트웨이다. 자기가 든 재료의 나이가 노드들의
+                // 폴링 상태에 가장 가까운 신호다.
+                holder::isDataStale);
     }
 
     /**
@@ -186,8 +186,8 @@ public class ControlPlaneConfig {
     QueueSweeper queueSweeper(AllocationRedisPort port, ControlPlaneProperties properties,
             MeterRegistry meters) {
         return QueueSweeper.of(SweepGate.of(properties.scheduler().tick(), PollIntervalPolicy.aliveTtl()),
-                ids -> port.sweep(ids, Instant.now().getEpochSecond(),
-                        SWEEP_SCAN_LIMIT, GRACE_SEC, SWEEP_BUDGET),
+                (ids, scanLimit) -> port.sweep(ids, Instant.now().getEpochSecond(),
+                        scanLimit, GRACE_SEC, SWEEP_BUDGET),
                 meters);
     }
 

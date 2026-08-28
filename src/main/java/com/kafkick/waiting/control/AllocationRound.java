@@ -48,6 +48,9 @@ public final class AllocationRound {
     /** 이탈자 청소 (7.4). <b>멈추는 판단을 안에 들고 있다.</b> */
     private final QueueSweeper sweeper;
 
+    /** 이 노드가 든 재료가 낡았는가. <b>값으로 받는다</b> — 상수로 두면 가드가 안 걸린다. */
+    private final BooleanSupplier dataStale;
+
     private final SoldOutCleanup cleanup;
 
     /** 지울 쿠폰들을 넘긴다. 지운 키 수를 돌려준다. */
@@ -98,8 +101,9 @@ public final class AllocationRound {
             Supplier<Mono<CreditSmoother>> restore, SnapshotCodec codec,
             LongSupplier creditFloor, Supplier<Optional<Tunables>> tunables,
             SoldOutCleanup cleanup, Function<List<String>, Mono<List<String>>> dropQueues,
-            QueueSweeper sweeper) {
+            QueueSweeper sweeper, BooleanSupplier dataStale) {
         this.sweeper = Objects.requireNonNull(sweeper, "sweeper 는 필수다");
+        this.dataStale = Objects.requireNonNull(dataStale, "dataStale 은 필수다");
         this.cleanup = Objects.requireNonNull(cleanup, "cleanup 은 필수다");
         this.dropQueues = Objects.requireNonNull(dropQueues, "dropQueues 는 필수다");
         this.tunables = Objects.requireNonNull(tunables, "tunables 는 필수다");
@@ -128,9 +132,10 @@ public final class AllocationRound {
             Supplier<Mono<CreditSmoother>> restore, SnapshotCodec codec,
             LongSupplier creditFloor, Supplier<Optional<Tunables>> tunables,
             SoldOutCleanup cleanup, Function<List<String>, Mono<List<String>>> dropQueues,
-            QueueSweeper sweeper) {
+            QueueSweeper sweeper, BooleanSupplier dataStale) {
         return new AllocationRound(stillLeader, demands, globalCredit, gatewayCount, apply, publish,
-                clock, restore, codec, creditFloor, tunables, cleanup, dropQueues, sweeper);
+                clock, restore, codec, creditFloor, tunables, cleanup, dropQueues, sweeper,
+                dataStale);
     }
 
     /** 정리를 안 붙이는 자리. <b>아무것도 안 지운다</b> — 시험 편의다. */
@@ -145,7 +150,8 @@ public final class AllocationRound {
                 SoldOutCleanup.of(Integer.MAX_VALUE, new SimpleMeterRegistry()),
                 ids -> Mono.just(List.of()),
                 QueueSweeper.of(SweepGate.of(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
-                        ids -> Mono.just(QueueSweeper.SweepResult.NOTHING)));
+                        (ids, limit) -> Mono.just(QueueSweeper.SweepResult.NOTHING)),
+                () -> false);
     }
 
     /** 튜너블을 안 읽던 자리. 늘 기본값으로 돈다. */
@@ -313,10 +319,14 @@ public final class AllocationRound {
         if (lostLeadership()) {
             return Mono.empty();
         }
-        // 리더가 방금 읽어 발행한 재료다. 이 판이 도는 것 자체가 안 낡았다는 뜻이다.
         return sweeper.run(
                 snapshot(collected, granted, credit, readAt, tunables.get().orElse(null))
-                        .coupons(), false).then();
+                        .coupons(),
+                // **리더가 신선한 것과 노드들이 신선한 것은 다른 이야기다.**
+                // 생존 신호를 갱신하는 것은 노드 쪽 폴링이라, 그쪽이 멎어도
+                // 리더의 수요 읽기는 성공할 수 있다. 이 노드도 게이트웨이이므로
+                // 자기가 든 재료의 나이가 그 신호에 가장 가깝다.
+                dataStale.getAsBoolean()).then();
     }
 
     /**

@@ -171,7 +171,7 @@ class SweepGateTest {
     @Test
     @DisplayName("판단_없이는_스위퍼를_못_만든다")
     void 판단_없이는_스위퍼를_못_만든다() {
-        assertThatThrownBy(() -> QueueSweeper.of(null, ids -> null))
+        assertThatThrownBy(() -> QueueSweeper.of(null, (ids, limit) -> null))
                 .isInstanceOf(NullPointerException.class)
                 .hasMessageContaining("gate");
     }

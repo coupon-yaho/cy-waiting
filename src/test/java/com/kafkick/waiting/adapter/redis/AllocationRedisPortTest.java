@@ -150,6 +150,32 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     }
 
     /**
+     * <b>전부 만료된 신호는 "살아 있다" 가 아닙니다.</b>
+     *
+     * <p>만료된 항목은 정리가 걷기 전까지 물리적으로 남아 있습니다. 개수만
+     * 보면 회복 첫 판이 "신호가 있다" 로 읽히고, 그 판에서 앞줄이 통째로 걷힙니다.
+     */
+    @Test
+    @DisplayName("전부_만료된_신호로는_앞줄을_안_걷는다")
+    void 전부_만료된_신호로는_앞줄을_안_걷는다() {
+        long 지금 = 1_700_000_000L;
+        줄_세운다("c1", 1, 2, 3);
+        for (int i = 1; i <= 3; i++) {
+            redis.opsForZSet().add(RedisKeys.alive("c1", SHARDS, 0), "m" + i, 지금 - 10)
+                    .block(WAIT);
+        }
+
+        QueueSweeper.SweepResult 결과 =
+                port.sweep(List.of("c1"), 지금, 100, 300, 100).block(WAIT);
+
+        assertThat(결과.swept()).as("걷은 수").isZero();
+        assertThat(redis.opsForZSet().size(RedisKeys.queue("c1", SHARDS, 0)).block(WAIT))
+                .as("줄이 그대로").isEqualTo(3);
+        // **정리까지 건너뛰지는 않습니다.** 앞줄 제거만 접고 만료 신호는 걷습니다.
+        assertThat(결과.expiredSignals()).as("만료 신호는 걷는다").isEqualTo(3);
+    }
+
+    /**
      * <b>신호가 통째로 없으면 아무것도 안 걷습니다.</b>
      *
      * <p>줄에 사람이 있는데 생존 신호가 하나도 없다는 것은 "전원이 떠났다" 가

@@ -461,12 +461,15 @@ public final class AllocationRedisPort implements SnapshotSource {
                         .onErrorResume(e -> {
                             log.warn("이탈자 청소 실패 — 다음 틱에 다시 한다: 쿠폰={} {}",
                                     id, e.toString());
-                            return Mono.just(QueueSweeper.SweepResult.NOTHING);
+                            // **실패로 센다.** 성공으로 접으면 청소가 멎은 것이
+                            // "걷을 게 없었다" 와 같은 값이 된다.
+                            return Mono.just(QueueSweeper.SweepResult.FAILED);
                         }), MAX_CONCURRENT_READS)
                 .reduce(QueueSweeper.SweepResult.NOTHING, (a, b) -> new QueueSweeper.SweepResult(
                         a.swept() + b.swept(),
                         a.expiredSignals() + b.expiredSignals(),
-                        a.expiredGrace() + b.expiredGrace()));
+                        a.expiredGrace() + b.expiredGrace(),
+                        a.failed() + b.failed()));
     }
 
     private Mono<QueueSweeper.SweepResult> sweepOne(String couponId, long nowSec,
@@ -485,7 +488,7 @@ public final class AllocationRedisPort implements SnapshotSource {
                     List<?> values = (List<?>) raw;
                     sweepCursors.put(couponId, String.valueOf(values.get(3)));
                     return new QueueSweeper.SweepResult(toLongOrZero(values.get(0)),
-                            toLongOrZero(values.get(1)), toLongOrZero(values.get(2)));
+                            toLongOrZero(values.get(1)), toLongOrZero(values.get(2)), 0);
                 });
     }
 

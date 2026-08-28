@@ -95,7 +95,7 @@ class AllocationRoundTest {
                 cleanup, ids -> {
                     지운_것.addAll(ids);
                     return Mono.just(ids);
-                }, 안_걷는_스위퍼());
+                }, 안_걷는_스위퍼(), () -> false);
 
         for (int i = 0; i < 5; i++) {
             round.run().onErrorResume(e -> Mono.empty()).block();
@@ -135,7 +135,7 @@ class AllocationRoundTest {
                 cleanup, ids -> {
                     지운_것.addAll(ids);
                     return Mono.just(ids);
-                }, 안_걷는_스위퍼());
+                }, 안_걷는_스위퍼(), () -> false);
 
         for (int i = 0; i < 5; i++) {
             round.run().onErrorResume(e -> Mono.empty()).block();
@@ -165,7 +165,7 @@ class AllocationRoundTest {
                 () -> Mono.just(CreditSmoother.of(1.0)),
                 SnapshotCodec.create(), () -> 0L, Optional::empty,
                 // 하나도 못 지웠다고 답한다.
-                cleanup, ids -> Mono.just(List.of()), 안_걷는_스위퍼());
+                cleanup, ids -> Mono.just(List.of()), 안_걷는_스위퍼(), () -> false);
 
         for (int i = 0; i < 5; i++) {
             round.run().block();
@@ -201,10 +201,10 @@ class AllocationRoundTest {
                 ids -> Mono.just(List.of()),
                 QueueSweeper.of(
                         SweepGate.of(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
-                        ids -> {
+                        (ids, limit) -> {
                             쓴_쿠폰.addAll(ids);
                             return Mono.just(QueueSweeper.SweepResult.NOTHING);
-                        }));
+                        }), () -> false);
 
         round.run().block();
 
@@ -215,7 +215,7 @@ class AllocationRoundTest {
     private static QueueSweeper 안_걷는_스위퍼() {
         return QueueSweeper.of(
                 SweepGate.of(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
-                ids -> Mono.just(QueueSweeper.SweepResult.NOTHING));
+                (ids, limit) -> Mono.just(QueueSweeper.SweepResult.NOTHING));
     }
 
     private AllocationRound round(List<CouponDemand> 수요, long 전역_크레딧, int 노드_수) {

@@ -42,8 +42,15 @@ public final class SweepGate {
      * <p>따로 적으면 한쪽만 고쳤을 때 갈리고, 그때 나는 일이 순번 역행이다.
      */
     public static SweepGate of(Duration tick, Duration aliveTtl) {
-        long delay = aliveTtl.plus(PollIntervalPolicy.maxInterval()).toSeconds();
-        return new SweepGate((int) Math.ceil((double) delay / tick.toSeconds()));
+        // **밀리초로 잰다.** 초로 나누면 1초 미만 틱이 0 이 되고, 나눗셈이
+        // 무한이 되어 유예가 사실상 영원이 된다 — 청소가 조용히 멎는다.
+        long delayMillis = aliveTtl.plus(PollIntervalPolicy.maxInterval()).toMillis();
+        long tickMillis = tick.toMillis();
+        if (tickMillis <= 0) {
+            throw new IllegalArgumentException("틱은 1ms 이상이어야 한다: " + tick);
+        }
+        return new SweepGate((int) Math.min(Integer.MAX_VALUE,
+                Math.ceilDiv(delayMillis, tickMillis)));
     }
 
     /**

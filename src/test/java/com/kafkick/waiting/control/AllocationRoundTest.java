@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.within;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import com.kafkick.waiting.adapter.redis.ClockSkewTracker;
 import com.kafkick.waiting.domain.allocation.CouponDemand;
 import com.kafkick.waiting.domain.allocation.CreditSmoother;
 import com.kafkick.waiting.domain.coupon.CouponState;
@@ -348,12 +349,64 @@ class AllocationRoundTest {
     @Test
     @DisplayName("예산_안이면_틱을_안_센다")
     void 예산_안이면_틱을_안_센다() {
-        round(List.of(new CouponDemand("c1", 10, 100)), 100, 1).run().block();
-
         AllocationRound round = round(List.of(new CouponDemand("c1", 10, 100)), 100, 1);
         round.run().block();
 
         assertThat(round.pollBudgetOvershootTicks()).as("초과 없음").isZero();
+    }
+
+    /**
+     * <b>지표가 어느 값을 읽는지 못 박는다.</b>
+     *
+     * <p>이름이 스크레이프에 있는지만 보면 네 지표가 서로의 값을 읽어도 통과한다 —
+     * 이름 넷이 다 보이는데 둘이 같은 숫자를 내는, 조사할 때 정확히 헷갈리는 모양이다.
+     */
+    @Test
+    @DisplayName("선행_지표가_각자의_값을_읽는다")
+    void 선행_지표가_각자의_값을_읽는다() {
+        AllocationRound round = round(
+                List.of(new CouponDemand("c1", 100_000, 1_000_000)), 10, 1);
+        round.run().block();
+        SimpleMeterRegistry meters = new SimpleMeterRegistry();
+
+        InvariantMetrics.bind(round, ClockSkewTracker.create(), meters);
+
+        assertThat(round.pollBudgetOvershootTicks()).as("전제 — 이 판은 예산을 넘겼다")
+                .isEqualTo(1);
+        assertThat(meters.get("waiting.poll.budget.overshoot.ticks")
+                .functionCounter().count()).as("폴링 예산 초과 틱").isEqualTo(1);
+        // 나머지 셋은 이 판에서 안 움직인다. 값이 갈려야 서로를 읽는 배선이 잡힌다.
+        assertThat(meters.get("waiting.allocation.budget.overshoot")
+                .functionCounter().count()).as("배분 초과량").isZero();
+        assertThat(meters.get("waiting.allocation.entered.overshoot")
+                .functionCounter().count()).as("초과 입장 인원").isZero();
+        assertThat(meters.get("waiting.snapshot.clock.floor.applied")
+                .functionCounter().count()).as("시계 바닥값").isZero();
+    }
+
+    /**
+     * <b>하트비트가 다 만료돼 0 으로 보이는 순간 배수가 꺼지면 안 된다.</b>
+     *
+     * <p>클러스터가 흔들리는 바로 그 순간이라, 예산이 0 이 되면 배수가 통째로
+     * 꺼지고 전원의 폴링이 한꺼번에 짧아진다. 방어를 한 곳에 모은 근거가 이것인데
+     * 부르는 쪽이 그 메서드를 쓰는지는 아무도 안 재고 있었다.
+     */
+    @Test
+    @DisplayName("노드가_0으로_보여도_한_대로_친다")
+    void 노드가_0으로_보여도_한_대로_친다() {
+        List<CouponDemand> 수요 = List.of(new CouponDemand("c1", 100_000, 1_000_000));
+
+        round(수요, 10, 1).run().block();
+        double 한_대 = 발행된_배수();
+        round(수요, 10, 0).run().block();
+        double 영_대 = 발행된_배수();
+        round(수요, 10, -3).run().block();
+        double 음수 = 발행된_배수();
+
+        assertThat(한_대).as("하한에 붙지 않았다 — 붙으면 셋이 다 1.0 이라 못 가린다")
+                .isGreaterThan(1.0);
+        assertThat(영_대).as("0 은 1 대로 친다").isEqualTo(한_대);
+        assertThat(음수).as("음수도 1 대로 친다").isEqualTo(한_대);
     }
 
     @Test

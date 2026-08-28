@@ -3,6 +3,7 @@ package com.kafkick.waiting.control;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
+import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -22,6 +23,13 @@ class InvariantMetricsWiringTest {
     @Autowired
     private PrometheusMeterRegistry registry;
 
+    /** 이름을 한 곳에 둔다 — 두 시험이 각자 나열하면 하나만 늘어난다. */
+    private static final List<String> 선행_지표 = List.of(
+            "waiting.allocation.budget.overshoot",
+            "waiting.allocation.entered.overshoot",
+            "waiting.poll.budget.overshoot.ticks",
+            "waiting.snapshot.clock.floor.applied");
+
     @Test
     @DisplayName("선행_지표_넷이_스크레이프에_나온다")
     void 선행_지표_넷이_스크레이프에_나온다() {
@@ -34,18 +42,17 @@ class InvariantMetricsWiringTest {
 
     /**
      * <b>라벨을 안 붙인다.</b> 쿠폰 식별자는 가짓수에 상한이 없다 (LG-4).
-     *
-     * <p>프리픽스를 하나만 훑으면 다른 이름으로 들어온 지표가 검사를 통째로
-     * 비껴간다 — 실제로 폴링 예산 지표가 그 상태로 들어왔다.
      */
+    // 프리픽스를 나열하면 네 번째 이름 공간으로 들어온 지표가 또 비껴간다 —
+    // 실제로 폴링 예산 지표가 그 상태로 들어왔고, 프리픽스를 하나 더 적는
+    // 방식으로 고치면 다음 번에 같은 일이 난다. `waiting.` 하나로 넓힌다.
     @Test
     @DisplayName("선행_지표에_라벨을_안_붙인다")
     void 선행_지표에_라벨을_안_붙인다() {
         assertThat(registry.getMeters())
-                .filteredOn(m -> m.getId().getName().startsWith("waiting.allocation.")
-                        || m.getId().getName().startsWith("waiting.poll.")
-                        || m.getId().getName().startsWith("waiting.snapshot.clock."))
-                .isNotEmpty()
+                .filteredOn(m -> 선행_지표.contains(m.getId().getName()))
+                .as("이름이 바뀌면 여기가 먼저 빈다")
+                .hasSize(선행_지표.size())
                 .allSatisfy(m -> assertThat(m.getId().getTags())
                         .as("%s 의 라벨", m.getId().getName())
                         .allMatch(tag -> tag.getKey().equals("application")));

@@ -143,7 +143,8 @@ public class GatewayRoutes {
     @Bean
     public RouteLocator routes(RouteLocatorBuilder builder, Backend backend,
             AdmissionGatewayFilter admission, QueryCoalescingFilter coalescing,
-            SpringCloudCircuitBreakerFilterFactory breakers, MeterRegistry meters) {
+            SoldOutObserver soldOut, SpringCloudCircuitBreakerFilterFactory breakers,
+            MeterRegistry meters) {
         BodyDeadline bodyDeadline = bodyDeadline(backend, meters);
         return builder.routes()
                 .route("issue", r -> r
@@ -156,6 +157,9 @@ public class GatewayRoutes {
                         .filters(f -> stripSpoofableClientIp(f)
                                 .filter(admission, FilterOrder.ROUTE_ADMISSION)
                                 .filter(circuit(breakers), FilterOrder.ROUTE_CIRCUIT)
+                                // **발급에만 붙인다.** 조회 응답에는 매진 코드가
+                                // 재고 정보로 실릴 수 있고, 그건 관찰이 아니다.
+                                .filter(soldOut, FilterOrder.ROUTE_SOLD_OUT)
                                 // **본문이 안 끝나는 뒷단을 끊는다.** 응답 상한은
                                 // 헤더가 오기까지만 재므로 그 뒤로는 아무것도
                                 // 안 걸리고, 헤더가 나간 뒤라 판정 쪽 시한도

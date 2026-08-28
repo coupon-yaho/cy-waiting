@@ -11,6 +11,7 @@ import com.kafkick.waiting.domain.queue.EntryToken;
 import com.kafkick.waiting.domain.queue.QueueToken;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Clock;
+import java.time.Instant;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -68,7 +69,7 @@ class GatewayRoutesTest {
     private final RouteLocator locator = new GatewayRoutes().routes(
             new RouteLocatorBuilder(컨텍스트),
             new GatewayRoutes.Backend("http://backend:8080", 응답_상한),
-            AdmissionGatewayFilter.of(재료_없는_홀더(),
+            AdmissionGatewayFilter.withIsolatedSoldOutCache(재료_없는_홀더(),
                     AdmissionDecider.of(공유_리미터, 0.7),
                     Clock.systemUTC(), new SimpleMeterRegistry(),
                     FakeQueuePort.create(),
@@ -82,6 +83,8 @@ class GatewayRoutesTest {
             QueryCoalescingFilter.of(
                     new CoalescingProperties(false, 1024, 1 << 20, 100, List.of()),
                     Clock.systemUTC(), new SimpleMeterRegistry()),
+            SoldOutObserver.ofPublishedAt(
+                    SoldOutCache.standard(), Instant::now, new SimpleMeterRegistry()),
             컨텍스트.getBean(SpringCloudCircuitBreakerResilience4JFilterFactory.class),
             new SimpleMeterRegistry());
 
@@ -514,7 +517,7 @@ class GatewayRoutesTest {
     /**
      * <b>본문 상한이 두 라우트에 다 붙어야 한다.</b>
      *
-     * <p>지우면 헤더가 나간 뒤 끝없이 느린 뒷단이 커넥션을 영영 붙잡습니다.
+     * <p>지우면 헤더가 나간 뒤 본문이 안 끝나는 뒷단이 커넥션을 영영 붙잡습니다.
      * 필터 자체를 아무리 잘 시험해도, <b>안 붙어 있으면 아무것도 안 막습니다.</b>
      */
     @Test
@@ -529,6 +532,44 @@ class GatewayRoutesTest {
         assertThat(실린_순서(조회, "BodyDeadline"))
                 .isEqualTo(FilterOrder.ROUTE_BODY)
                 .isLessThan(NettyWriteResponseFilter.WRITE_RESPONSE_FILTER_ORDER);
+    }
+
+    /**
+     * <b>매진 관찰도 쓰기 필터보다 앞이어야 한다.</b>
+     *
+     * <p>뒤에 서면 응답을 쓰는 것은 바깥의 쓰기 필터이고 그쪽은 자기가 받은
+     * exchange 를 씁니다 — 우리가 감싼 것은 한 번도 안 불리고, 캐시가 영원히
+     * 비어 있으면서 지표는 "매진이 없었다" 와 구별되지 않습니다.
+     */
+    @Test
+    @DisplayName("발급_라우트가_매진_관찰을_쓰기_필터보다_앞에_단다")
+    void 발급_라우트가_매진_관찰을_쓰기_필터보다_앞에_단다() {
+        Route 발급 = 잡는_라우트(HttpMethod.POST, "/api/v1/coupons/c1/issue");
+
+        assertThat(실린_순서(발급, "SoldOut"))
+                .isEqualTo(FilterOrder.ROUTE_SOLD_OUT)
+                .isLessThan(NettyWriteResponseFilter.WRITE_RESPONSE_FILTER_ORDER);
+    }
+
+    /**
+     * <b>조회에는 안 단다.</b> 조회 응답의 매진 코드는 재고 정보이지 뒷단이
+     * 발급을 거절한 사실이 아닙니다 — 그걸 관찰로 담으면 팔고 있는 쿠폰이 막힙니다.
+     */
+    @Test
+    @DisplayName("조회_라우트에는_매진_관찰을_안_단다")
+    void 조회_라우트에는_매진_관찰을_안_단다() {
+        Route 조회 = 잡는_라우트(HttpMethod.GET, "/api/v1/coupons");
+
+        // **빈 목록에서도 통과하면 안 된다.** 필터가 통째로 빠져도 "안 달렸다"
+        // 는 참이 되므로, 달려야 할 것이 달렸다는 것을 같이 본다.
+        assertThat(이름들(조회))
+                .anySatisfy(이름 -> assertThat(이름).contains("QueryCoalescing"))
+                .noneSatisfy(이름 -> assertThat(이름).contains("SoldOut"));
+    }
+
+    /** 실린 필터의 이름들. <b>이미 있는 벗기기를 쓴다</b> — 두 벗기기가 갈리면 안 된다. */
+    private static List<String> 이름들(Route route) {
+        return 벗긴_필터(route).stream().map(Object::toString).toList();
     }
 
     /**

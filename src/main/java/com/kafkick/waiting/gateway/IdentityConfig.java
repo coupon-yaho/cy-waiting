@@ -7,6 +7,7 @@ import com.kafkick.waiting.domain.queue.EntryToken;
 import com.kafkick.waiting.domain.queue.QueueToken;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import java.time.Clock;
+import com.kafkick.waiting.control.SnapshotHolder;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -19,7 +20,7 @@ import org.springframework.context.annotation.Configuration;
  */
 @Configuration
 @EnableConfigurationProperties({QueueTokenProperties.class, ProxyProperties.class,
-        CoalescingProperties.class})
+        CoalescingProperties.class, SoldOutCacheProperties.class})
 public class IdentityConfig {
 
     /**
@@ -45,6 +46,28 @@ public class IdentityConfig {
         // 그림에는 아무것도 안 남으므로 게이지로 낸다 (6.10.9 · 6.10.10).
         filter.bindMetrics(meters);
         return filter;
+    }
+
+    /**
+     * 매진 관찰을 담는 곳 (7.2 · B-10).
+     *
+     * <p><b>담는 쪽과 읽는 쪽이 같은 것을 봐야 한다</b> — 각자 만들면 뒷단이
+     * 낸 매진을 판정이 영영 못 본다. 그래서 빈 하나로 둔다.
+     */
+    @Bean
+    public SoldOutCache soldOutCache(SoldOutCacheProperties props, MeterRegistry meters) {
+        SoldOutCache cache = SoldOutCache.of(props.ttl(), props.maxKeys());
+        // **차오르는 중인지는 막힌 뒤에 오르는 카운터로 못 본다.** 상한에 닿아
+        // 새 관찰을 못 받기 시작하면 그때부터 뒷단이 다시 다 맞는다.
+        cache.bindMetrics(meters);
+        return cache;
+    }
+
+    /** 뒷단이 낸 매진을 관찰만 한다. 응답은 안 바꾼다 (7.2.2). */
+    @Bean
+    public SoldOutObserver soldOutObserver(SoldOutCache cache, SnapshotHolder holder,
+            MeterRegistry meters) {
+        return SoldOutObserver.ofSnapshot(cache, holder, meters);
     }
 
     /** 못 읽는 대역은 여기서 버린다. 요청 경로에서 다시 풀면 그 파싱이 거기 붙는다. */

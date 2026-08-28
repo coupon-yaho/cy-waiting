@@ -251,6 +251,47 @@ class AllocationRoundTest {
     }
 
     @Test
+    @DisplayName("예산을_넘는_폴링_수요면_배수가_스냅샷에_실린다")
+    void 예산을_넘는_폴링_수요면_배수가_스냅샷에_실린다() {
+        // 배수를 안 실으면 게이트웨이가 늘 1.0 으로 답하고, 폴링 예산이라는
+        // 계산은 아무 데도 안 닿는 순수 함수로 남는다.
+        AllocationRound round = round(List.of(new CouponDemand("c1", 100_000, 1_000_000)), 10, 1);
+
+        round.run().block();
+
+        assertThat(발행된("c1").pollScale()).as("예산 초과 배수").isGreaterThan(1.0);
+    }
+
+    @Test
+    @DisplayName("매진_큐의_대기자는_배수를_안_올린다")
+    void 매진_큐의_대기자는_배수를_안_올린다() {
+        // 3.3 절. 죽은 큐 10만 명이 예산을 먹으면 **살아 있는 쿠폰의** 대기자까지
+        // 폴링 간격이 늘어난다 — 배분에서 막아 둔 기아가 폴링으로 되살아난다.
+        AllocationRound round = round(List.of(
+                new CouponDemand("dead", 100_000, 0),
+                new CouponDemand("live", 10, 100)), 100, 1);
+
+        round.run().block();
+
+        assertThat(발행된("live").pollScale()).as("살아 있는 쿠폰의 배수").isEqualTo(1.0);
+    }
+
+    @Test
+    @DisplayName("노드가_늘면_폴링_예산도_같이_늘어난다")
+    void 노드가_늘면_폴링_예산도_같이_늘어난다() {
+        // 폴링은 게이트웨이가 메모리에서 종결한다. 그래서 예산의 출처는 노드 수다.
+        // 상수 하나로 고정하면 증설이 폴링 간격을 못 줄인다.
+        List<CouponDemand> 수요 = List.of(new CouponDemand("c1", 100_000, 1_000_000));
+
+        round(수요, 10, 1).run().block();
+        double 한_대 = 발행된("c1").pollScale();
+        round(수요, 10, 20).run().block();
+        double 스무_대 = 발행된("c1").pollScale();
+
+        assertThat(스무_대).as("증설하면 배수가 내려간다").isLessThan(한_대);
+    }
+
+    @Test
     @DisplayName("요구가_있는_쿠폰에_크레딧이_간다")
     void 요구가_있는_쿠폰에_크레딧이_간다() {
         AllocationRound round = round(

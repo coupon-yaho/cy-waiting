@@ -209,6 +209,25 @@ class QueueStatusFilterTest {
     }
 
     /**
+     * <b>전역 폴링 배수를 그대로 지킵니다</b> (7.3.3).
+     *
+     * <p>제어 평면이 예산 초과를 알아내도 조회가 그 값을 안 보면, 배수는 아무
+     * 데도 안 닿는 계산으로 남습니다 — 예산이 모자란 채로 간격만 그대로입니다.
+     */
+    @Test
+    @DisplayName("전역_배수만큼_다음_폴링이_늦춰진다")
+    void 전역_배수만큼_다음_폴링이_늦춰진다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100).withPollScale(3.0));
+        줄.enqueue(COUPON, MEMBER, NO_LIMIT, 지금).block();
+
+        MockServerWebExchange exchange = 토큰으로_조회한다(tokens.issue(COUPON, MEMBER, 지금));
+
+        // 지터는 0.5 를 받아 상쇄된다. 배수만 남는다.
+        assertThat(exchange.getResponse().getHeaders().getFirst("Retry-After"))
+                .as("배수가 걸린 다음 폴링").isEqualTo("3");
+    }
+
+    /**
      * <b>재료가 낡으면 매진으로 안 봅니다.</b>
      *
      * <p>모른다는 것이 끝났다는 뜻은 아닙니다. 여기서 잘못 말하면 기다리던 사람이

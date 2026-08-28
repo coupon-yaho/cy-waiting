@@ -100,6 +100,16 @@ public record CouponState(
     }
 
     /**
+     * 전역 폴링 배수를 갈아 끼운 사본.
+     *
+     * <p>배수는 <b>쿠폰 하나가 아니라 판 전체를 보고</b> 나온다. 팩토리마다
+     * 인자를 하나씩 늘리면 그 값이 어디서 왔는지가 열 군데로 흩어진다.
+     */
+    public CouponState withPollScale(double scale) {
+        return new CouponState(mode, runtime, credit, remainingStock, waiting, scale);
+    }
+
+    /**
      * 경합 쿠폰이 이 노드에서 쓸 수 있는 몫. 노드 번호를 모를 때 쓴다.
      *
      * <p>나머지를 버리므로 총합이 {@code credit} 을 넘지 않는다. 대신 나머지만큼

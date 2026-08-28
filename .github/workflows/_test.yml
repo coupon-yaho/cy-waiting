@@ -47,7 +47,30 @@ jobs:
             integration) ./gradlew --no-daemon integrationTest ;;
             context)     ./gradlew --no-daemon contextTest ;;
             chaos)       ./gradlew --no-daemon chaosTest ;;
-            mutation)    ./gradlew --no-daemon pitest ;;
+            # **미니언이 죽으면 그 판의 뮤턴트가 통째로 유실된다.** 그런데도
+            # PIT 는 남은 것만으로 비율을 내고 임계를 통과시킨다 — 게이트가
+            # 초록인데 무엇을 지켰는지 말할 수 없는 상태가 된다. 로그를 남겨
+            # 두고 검사한다.
+            mutation)
+              # **그레이들이 죽어도 검사를 먼저 돈다.** 미니언 유실로 임계가
+              # 미달해 실패하는 경우가 정확히 우리가 짚어야 할 케이스인데,
+              # 여기서 같이 죽으면 일반 그레이들 실패만 남는다.
+              rc=0
+              mkdir -p build   # 첫 실행이면 아직 없다. tee 가 먼저 죽는다
+              ./gradlew --no-daemon pitest 2>&1 | tee build/pitest.log || rc=$?
+              # **로그가 우리가 아는 그 로그인지 먼저 본다.** 문구가 바뀌면
+              # 아래 검사는 영영 조용히 통과한다 — 이 잡이 고치려던 병이다.
+              if ! grep -qE 'Generated [0-9]+ mutations' build/pitest.log; then
+                echo "::error::PIT 요약 줄이 없다 — 로그 형식이 바뀌었거나 로그가 비었다"
+                exit 1
+              fi
+              dead=$(grep -c 'Minion exited abnormally' build/pitest.log || true)
+              if [ "$dead" -gt 0 ]; then
+                echo "::error::미니언 ${dead}개가 비정상 종료했다 — 그 판의 뮤턴트가 안 세어졌다"
+                exit 1
+              fi
+              [ "$rc" -eq 0 ] || exit "$rc"
+              ;;
             # 어댑터는 단위·통합 양쪽에서, 게이트웨이는 단위·컨텍스트 양쪽에서
             # 덮인다. 계층이 잡으로 갈려 exec 가 한자리에 안 모이므로 여기서
             # 셋을 함께 돌려 합쳐 잰다 — 빠뜨리면 임계가 안 도는데 잰 것으로
@@ -67,6 +90,7 @@ jobs:
             build/reports/tests/
             build/reports/jacoco/
             build/reports/pitest/
+            build/pitest.log
           retention-days: 2      # 무료 한도. 실패는 당일에 본다
           if-no-files-found: ignore
 

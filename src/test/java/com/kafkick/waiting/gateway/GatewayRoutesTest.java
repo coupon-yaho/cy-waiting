@@ -11,6 +11,7 @@ import com.kafkick.waiting.domain.queue.EntryToken;
 import com.kafkick.waiting.domain.queue.QueueToken;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Clock;
+import java.time.Instant;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -82,7 +83,7 @@ class GatewayRoutesTest {
             QueryCoalescingFilter.of(
                     new CoalescingProperties(false, 1024, 1 << 20, 100, List.of()),
                     Clock.systemUTC(), new SimpleMeterRegistry()),
-            SoldOutObserver.of(SoldOutCache.standard(), Clock.systemUTC()),
+            SoldOutObserver.of(SoldOutCache.standard(), Instant::now, new SimpleMeterRegistry()),
             컨텍스트.getBean(SpringCloudCircuitBreakerResilience4JFilterFactory.class));
 
     /**

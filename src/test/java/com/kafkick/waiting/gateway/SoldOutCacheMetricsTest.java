@@ -59,8 +59,7 @@ class SoldOutCacheMetricsTest {
     @DisplayName("관찰_횟수를_따로_센다")
     void 관찰_횟수를_따로_센다() {
         SoldOutCache 캐시 = SoldOutCache.of(Duration.ofSeconds(10), 7);
-        SoldOutObserver observer = SoldOutObserver.of(
-                캐시, Clock.fixed(지금, ZoneOffset.UTC), meters);
+        SoldOutObserver observer = SoldOutObserver.of(캐시, () -> 지금, meters);
         MockServerWebExchange exchange = MockServerWebExchange.from(
                 MockServerHttpRequest.post("/api/v1/coupons/c1/issue"));
         // 라우팅 필터가 심는 값 둘. 없으면 관찰자가 아무것도 안 한다.

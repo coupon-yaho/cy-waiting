@@ -2,11 +2,10 @@ package com.kafkick.waiting.gateway;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.nio.charset.StandardCharsets;
-import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
-import java.time.ZoneOffset;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import java.util.Map;
@@ -33,7 +32,7 @@ class SoldOutObserverTest {
 
     private final SoldOutCache 캐시 = SoldOutCache.of(Duration.ofSeconds(10), 100);
     private final SoldOutObserver observer =
-            SoldOutObserver.of(캐시, Clock.fixed(지금, ZoneOffset.UTC));
+            SoldOutObserver.of(캐시, () -> 지금, new SimpleMeterRegistry());
 
     /**
      * 라우트를 탄 요청.

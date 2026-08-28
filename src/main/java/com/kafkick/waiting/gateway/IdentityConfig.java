@@ -7,6 +7,7 @@ import com.kafkick.waiting.domain.queue.EntryToken;
 import com.kafkick.waiting.domain.queue.QueueToken;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import java.time.Clock;
+import com.kafkick.waiting.control.SnapshotHolder;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -64,9 +65,9 @@ public class IdentityConfig {
 
     /** 뒷단이 낸 매진을 관찰만 한다. 응답은 안 바꾼다 (7.2.2). */
     @Bean
-    public SoldOutObserver soldOutObserver(SoldOutCache cache, Clock clock,
+    public SoldOutObserver soldOutObserver(SoldOutCache cache, SnapshotHolder holder,
             MeterRegistry meters) {
-        return SoldOutObserver.of(cache, clock, meters);
+        return SoldOutObserver.of(cache, holder, meters);
     }
 
     /** 못 읽는 대역은 여기서 버린다. 요청 경로에서 다시 풀면 그 파싱이 거기 붙는다. */

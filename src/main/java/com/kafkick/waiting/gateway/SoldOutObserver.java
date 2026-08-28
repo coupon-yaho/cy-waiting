@@ -1,12 +1,15 @@
 package com.kafkick.waiting.gateway;
 
+import com.kafkick.waiting.control.SnapshotHolder;
 import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.nio.charset.StandardCharsets;
-import java.time.Clock;
+import java.time.Instant;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.Supplier;
 import org.reactivestreams.Publisher;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.cloud.gateway.filter.GatewayFilter;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.support.ServerWebExchangeUtils;
@@ -39,23 +42,34 @@ public final class SoldOutObserver implements GatewayFilter {
 
     private static final String METRIC = "waiting.soldout.observed";
 
+    private static final Logger log = LoggerFactory.getLogger(SoldOutObserver.class);
+
     private final SoldOutCache cache;
-    private final Clock clock;
+    private final Supplier<Instant> publishedAt;
     private final MeterRegistry meters;
 
-    private SoldOutObserver(SoldOutCache cache, Clock clock, MeterRegistry meters) {
+    private SoldOutObserver(SoldOutCache cache, Supplier<Instant> publishedAt,
+            MeterRegistry meters) {
         this.cache = Objects.requireNonNull(cache, "cache 는 필수다");
-        this.clock = Objects.requireNonNull(clock, "clock 은 필수다");
+        this.publishedAt = Objects.requireNonNull(publishedAt, "publishedAt 은 필수다");
         this.meters = Objects.requireNonNull(meters, "meters 는 필수다");
     }
 
-    public static SoldOutObserver of(SoldOutCache cache, Clock clock, MeterRegistry meters) {
-        return new SoldOutObserver(cache, clock, meters);
+    /**
+     * <b>노드 시계가 아니라 재료의 발행 시각을 심는다.</b>
+     *
+     * <p>해제가 발행 시각끼리 비교하므로, 무장도 같은 시계 영역이라야 한다 —
+     * 섞으면 두 시계의 차가 그대로 판정에 실린다.
+     */
+    public static SoldOutObserver of(SoldOutCache cache, SnapshotHolder holder,
+            MeterRegistry meters) {
+        return new SoldOutObserver(cache, () -> holder.view().snapshot().publishedAt(), meters);
     }
 
-    /** 계측 없이 만든다. <b>시험 편의다</b> — 운영은 위 팩토리를 쓴다. */
-    public static SoldOutObserver of(SoldOutCache cache, Clock clock) {
-        return new SoldOutObserver(cache, clock, new SimpleMeterRegistry());
+    /** 발행 시각원을 직접 받는다. 고정하지 못하면 해제 비교를 못 잰다 (TS-4). */
+    public static SoldOutObserver of(SoldOutCache cache, Supplier<Instant> publishedAt,
+            MeterRegistry meters) {
+        return new SoldOutObserver(cache, publishedAt, meters);
     }
 
     @Override
@@ -109,11 +123,17 @@ public final class SoldOutObserver implements GatewayFilter {
         if (exchange.getAttribute(ServerWebExchangeUtils.CLIENT_RESPONSE_ATTR) == null) {
             return;
         }
-        if (prefix.append(buffer) && prefix.contains(SOLD_OUT_CODE)) {
-            // **관찰이 언제 시작됐는지가 곧 매진 시각이다.** 담긴 수만 보면
-            // 언제 채워졌는지는 못 본다.
-            meters.counter(METRIC).increment();
-            cache.observed(couponId, clock.instant());
+        if (!prefix.append(buffer) || !prefix.contains(SOLD_OUT_CODE)) {
+            return;
+        }
+        // **관찰이 언제 시작됐는지가 곧 매진 시각이다.** 담긴 수만 보면 언제
+        // 채워졌는지는 못 본다.
+        meters.counter(METRIC).increment();
+        if (cache.observed(couponId, publishedAt.get())) {
+            // **쌍의 앞쪽이다** (LG-2). 뒤쪽은 판정이 풀 때 찍는다. 쿠폰당 한
+            // 번만 찍히므로 매진이 몰려도 로그가 안 넘친다 (LG-3).
+            log.info("매진 관찰 — 쿠폰 {} 의 발급을 뒷단이 거절했다. 이 노드는 끊는다",
+                    couponId);
         }
     }
 

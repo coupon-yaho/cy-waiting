@@ -124,7 +124,8 @@ class ClusterModeScriptTest {
                     RedisKeys.queue("c1", 1, 0),
                     RedisKeys.maxScore("c1", 1, 0),
                     RedisKeys.alive("c1", 1, 0),
-                    RedisKeys.admitted("c1", 1, 0));
+                    RedisKeys.admitted("c1", 1, 0),
+                    RedisKeys.grace("c1", 1, 0));
             case "queue_status.lua" -> List.of(
                     RedisKeys.queue("c1", 1, 0),
                     RedisKeys.admitted("c1", 1, 0),

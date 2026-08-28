@@ -35,6 +35,7 @@ class ReplicaPromotionTest {
     private static final String COUPON = "c1";
     private static final String QUEUE = RedisKeys.queue(COUPON, 1, 0);
     private static final String MAX_SCORE = RedisKeys.maxScore(COUPON, 1, 0);
+    private static final String GRACE = RedisKeys.grace(COUPON, 1, 0);
     private static final String ADMITTED = RedisKeys.admitted(COUPON, 1, 0);
     private static final String ALIVE = RedisKeys.alive(COUPON, 1, 0);
 
@@ -92,7 +93,7 @@ class ReplicaPromotionTest {
             StatefulRedisConnection<String, String> redis, String member) {
         return (List<Object>) redis.sync().eval(LuaScripts.of("enqueue.lua"),
                 ScriptOutputType.MULTI,
-                new String[] {QUEUE, MAX_SCORE, ALIVE, ADMITTED},
+                new String[] {QUEUE, MAX_SCORE, ALIVE, ADMITTED, GRACE},
                 // 상한 없음. 0 은 이 뜻이 아니다 — 0 은 한 명도 안 받는다는 뜻이다.
                 member, "86400", "30", "-1", String.valueOf(NOW));
     }

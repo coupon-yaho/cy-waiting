@@ -52,7 +52,8 @@ class EnqueueGuardTest extends RedisContainerSupport {
     private List<Object> enqueue(String memberId, String aliveTtl, String cap) {
         return (List<Object>) redis.execute(
                         script,
-                        List.of(QUEUE, MAX_SCORE, RedisKeys.alive(COUPON, 1, 0), ADMITTED),
+                        List.of(QUEUE, MAX_SCORE, RedisKeys.alive(COUPON, 1, 0), ADMITTED,
+                                RedisKeys.grace(COUPON, 1, 0)),
                         List.of(memberId, "86400", aliveTtl, cap, NOW))
                 .blockFirst(WAIT);
     }

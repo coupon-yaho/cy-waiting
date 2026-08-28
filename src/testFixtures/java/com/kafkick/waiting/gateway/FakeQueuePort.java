@@ -4,6 +4,8 @@ import com.kafkick.waiting.domain.queue.QueueEntry;
 import com.kafkick.waiting.domain.queue.QueueState;
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import reactor.core.publisher.Mono;
@@ -18,6 +20,14 @@ public final class FakeQueuePort implements QueuePort {
     private final Map<String, Map<String, Long>> queues = new LinkedHashMap<>();
     private final AtomicInteger 등록_호출 = new AtomicInteger();
     private final AtomicInteger 조회_호출 = new AtomicInteger();
+
+    /** 자리를 비웠다 돌아온 사람. 등록 한 번에 소비된다 — 실제 계약과 같다. */
+    private final Set<String> 돌아온_사람 = ConcurrentHashMap.newKeySet();
+
+    /** 이 사람을 재방문자로 만든다. */
+    public void 돌아온_사람으로_만든다(String memberId) {
+        돌아온_사람.add(memberId);
+    }
 
     private RuntimeException 터뜨릴_것;
     private boolean 가득_참;
@@ -93,7 +103,7 @@ public final class FakeQueuePort implements QueuePort {
         }
         queued.putIfAbsent(memberId, (long) queued.size() + 1);
         return Mono.just(new QueueEntry(QueueState.WAITING, rankOf(couponId, memberId),
-                queued.get(memberId), 있던_사람, false, false));
+                queued.get(memberId), 있던_사람, false, 돌아온_사람.remove(memberId)));
     }
 
     @Override

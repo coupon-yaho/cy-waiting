@@ -56,7 +56,7 @@ class GraceRecordTest extends RedisContainerSupport {
 
     private void 등록한다(String memberId) {
         redis.execute(enqueueScript,
-                        List.of(QUEUE, MAX_SCORE, ALIVE, ADMITTED),
+                        List.of(QUEUE, MAX_SCORE, ALIVE, ADMITTED, GRACE),
                         List.of(memberId, "86400", "3600", "-1", String.valueOf(NOW)))
                 .blockFirst(WAIT);
     }

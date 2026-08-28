@@ -132,6 +132,21 @@ public final class QueueStatusFilter implements WebFilter {
             count("no-token");
             return error.write(exchange, ApiError.Code.INVALID_REQUEST);
         }
+        // **매진이면 줄을 안 친다** (R3 · 7.1.4). 재고가 없으면 답이 정해져
+        // 있는데, 그런데도 물으러 가면 매진 순간 몰리는 폴링이 그대로 레디스
+        // 부하가 된다 — 정작 그때 줄을 정리해야 한다.
+        //
+        // **조회 상한보다 앞이다.** 상한은 노드 전역 키 하나라 쿠폰별 격리가
+        // 없다. 뒤에 두면 죽은 쿠폰의 폴링이 살아 있는 쿠폰의 예산을 먹고, 매진
+        // 폴러 자신도 상한에 걸려 `Retry-After` 가 붙은 503 을 받는다 — 이
+        // 변경이 없애려던 폴링 재생산이 정확히 그 경로로 돌아온다.
+        //
+        // 상한을 안 써도 되는 것은 여기서 레디스를 안 치기 때문이다. 남용은
+        // 앞단의 주소·회원 상한이 이미 막는다.
+        if (soldOut(couponId)) {
+            count("sold-out");
+            return response.soldOut(exchange);
+        }
         // **폴링은 읽기가 아니라 쓰기다.** 생존 신호를 갱신하고 차례가 오면 큐에서
         // 뺀다. 토큰은 줄을 서면 누구나 받고 한 시간 사니, 상한이 없으면 토큰 몇
         // 개로 공유 레디스에 무제한 쓰기를 넣을 수 있다.
@@ -155,6 +170,22 @@ public final class QueueStatusFilter implements WebFilter {
                     return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
                             (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random));
                 });
+    }
+
+    /** 잘못 말하면 기다리던 사람이 줄을 잃으므로, 모르는 것을 끝난 것으로 안 읽는다. */
+    private boolean soldOut(String couponId) {
+        SnapshotHolder.View view = holder.view();
+        // 첫 틱 전은 지금 `isDataStale` 이 **먼저** 참이 된다 — 재료가 없으면
+        // 나이가 거대해지기 때문이다. 그래도 남긴 것은 둘의 뜻이 다르고, 낡음
+        // 기준이 바뀌면 갈라지기 때문이다.
+        if (view.isBeforeFirstTick() || holder.isDataStale(view)) {
+            return false;
+        }
+        CouponState state = view.snapshot().coupons().get(couponId);
+        // **발급 판정과 같은 함수를 부른다.** 여기서 재고를 다시 해석하면 판정이
+        // 두 곳에 생기고, 같은 쿠폰에 조회는 "다시 서라" 등록은 409 로 답하는
+        // 순간이 생긴다.
+        return state != null && state.soldOut();
     }
 
     private Mono<Void> answer(ServerWebExchange exchange, String couponId, String memberId,

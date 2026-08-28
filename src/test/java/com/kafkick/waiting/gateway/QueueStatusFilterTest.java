@@ -65,9 +65,14 @@ class QueueStatusFilterTest {
     }
 
     private MockServerWebExchange 조회한다(String path) {
+        return 조회한다(filter, path);
+    }
+
+    /** 필터를 받는다. 안 그러면 자체 exchange 를 만드는 시험이 `다음으로_감` 을 못 본다. */
+    private MockServerWebExchange 조회한다(QueueStatusFilter 대상, String path) {
         MockServerWebExchange exchange = MockServerWebExchange.from(
                 MockServerHttpRequest.get(path).header("X-Member-Id", MEMBER));
-        filter.filter(exchange, e -> {
+        대상.filter(exchange, e -> {
             다음으로_감.set(true);
             return Mono.empty();
         }).block();
@@ -112,6 +117,268 @@ class QueueStatusFilterTest {
         assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(줄.왕복()).isZero();
         assertThat(다음으로_감).isFalse();
+    }
+
+    /**
+     * <b>매진이면 줄을 안 칩니다</b> (R3 · 7.1.4).
+     *
+     * <p>재고가 없으면 답이 정해져 있습니다. 그런데도 물으러 가면, 매진 순간
+     * 몰리는 폴링이 그대로 레디스 부하가 됩니다 — 정작 그때 줄을 정리해야 합니다.
+     */
+    @Test
+    @DisplayName("매진이면_줄을_안_친다")
+    void 매진이면_줄을_안_친다() {
+        스냅샷을_심는다(CouponStates.closed(1_000));
+        String 토큰 = tokens.issue(COUPON, MEMBER, 지금);
+
+        MockServerWebExchange exchange =
+                조회한다("/api/v1/coupons/" + COUPON + "/queue?queueToken=" + 토큰);
+
+        // R3 은 "레디스·백엔드를 거치지 않고" 다. 둘 다 봐야 한다 — 응답을 쓴 뒤
+        // 체인을 이어 붙여도 왕복만 보면 통과하고, 그러면 매진 순간의 폴링
+        // 파도가 그대로 뒷단으로 간다.
+        assertThat(줄.왕복()).as("레디스 왕복").isZero();
+        assertThat(다음으로_감).as("뒷단 도달").isFalse();
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.OK);
+        JsonNode data = 본문(exchange).get("data");
+        assertThat(data.get("status").asText()).as("상태").isEqualTo("SOLD_OUT");
+        assertThat(data.get("reason").asText()).as("사유").isEqualTo("STOCK_EXHAUSTED");
+        // 태그가 안 잠기면 대시보드에서 매진 단락과 상한 거절이 뭉쳐도 안 문다.
+        assertThat(meters.counter("waiting.queue.status", "outcome", "sold-out",
+                "cause", "none").count()).as("매진 단락 계수").isEqualTo(1);
+    }
+
+    /**
+     * <b>스냅샷에 없는 쿠폰은 매진으로 안 봅니다.</b>
+     *
+     * <p>모른다는 것이 끝났다는 뜻은 아닙니다. 지금 이 분기를 뒤집으면 ETA 시험이
+     * 대신 빨개져서, 매진 오판이 엉뚱한 이름으로 보고됩니다.
+     */
+    @Test
+    @DisplayName("스냅샷에_없는_쿠폰은_매진으로_안_본다")
+    void 스냅샷에_없는_쿠폰은_매진으로_안_본다() {
+        holder.replace(new GatewaySnapshot(Map.of("남의-쿠폰", CouponStates.closed(1_000)),
+                new SnapshotMeta(1, 1), 지금));
+        줄.enqueue(COUPON, MEMBER, NO_LIMIT, 지금).block();
+        String 토큰 = tokens.issue(COUPON, MEMBER, 지금);
+        int 이전 = 줄.왕복();
+
+        조회한다("/api/v1/coupons/" + COUPON + "/queue?queueToken=" + 토큰);
+
+        assertThat(줄.왕복()).as("레디스 왕복").isGreaterThan(이전);
+    }
+
+    /**
+     * <b>줄에 없는 것과 매진은 다른 사유입니다.</b>
+     *
+     * <p>이탈로 걷혔거나 큐가 정리돼 줄에 없는 사람에게 "다 팔렸다" 고 답하면,
+     * 다시 설 수 있는데도 안 섭니다. 매진은 앞에서 이미 끝나므로 여기까지 오는
+     * 것은 재고와 무관한 이유입니다.
+     */
+    @Test
+    @DisplayName("줄에_없으면_매진과_다른_사유로_답한다")
+    void 줄에_없으면_매진과_다른_사유로_답한다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100));
+        String 토큰 = tokens.issue(COUPON, MEMBER, 지금);
+
+        MockServerWebExchange exchange =
+                조회한다("/api/v1/coupons/" + COUPON + "/queue?queueToken=" + 토큰);
+
+        JsonNode data = 본문(exchange).get("data");
+        assertThat(data.get("status").asText()).as("상태").isEqualTo("CLOSED");
+        assertThat(data.get("reason").asText()).as("사유").isEqualTo("NOT_IN_QUEUE");
+    }
+
+    /**
+     * <b>다시 오라고 안 합니다</b> (7.1.5).
+     *
+     * <p>재고가 다시 생기지 않는데 재시도를 유도하면, 끝난 캠페인이 폴링을 계속
+     * 만들어 냅니다.
+     */
+    @Test
+    @DisplayName("매진에는_다시_올_시각을_안_준다")
+    void 매진에는_다시_올_시각을_안_준다() {
+        스냅샷을_심는다(CouponStates.closed(1_000));
+        String 토큰 = tokens.issue(COUPON, MEMBER, 지금);
+
+        MockServerWebExchange exchange =
+                조회한다("/api/v1/coupons/" + COUPON + "/queue?queueToken=" + 토큰);
+
+        assertThat(exchange.getResponse().getHeaders().getFirst("Retry-After"))
+                .as("재시도 유도").isNull();
+    }
+
+    /**
+     * <b>재료가 낡으면 매진으로 안 봅니다.</b>
+     *
+     * <p>모른다는 것이 끝났다는 뜻은 아닙니다. 여기서 잘못 말하면 기다리던 사람이
+     * 줄을 잃고, 회복 뒤에는 맨 뒤로 갑니다 — 순번 역행이 됩니다.
+     */
+    @Test
+    @DisplayName("재료가_낡으면_매진으로_안_본다")
+    void 재료가_낡으면_매진으로_안_본다() {
+        holder.replace(new GatewaySnapshot(Map.of(COUPON, CouponStates.closed(1_000)),
+                new SnapshotMeta(1, 1), 지금.minusSeconds(3_600)));
+        줄.enqueue(COUPON, MEMBER, NO_LIMIT, 지금).block();
+        String 토큰 = tokens.issue(COUPON, MEMBER, 지금);
+        int 이전 = 줄.왕복();
+
+        조회한다("/api/v1/coupons/" + COUPON + "/queue?queueToken=" + 토큰);
+
+        assertThat(줄.왕복()).as("낡은 재료로는 단락 안 한다").isGreaterThan(이전);
+    }
+
+    /**
+     * <b>조회 상한이 찼어도 매진은 종결합니다.</b>
+     *
+     * <p>상한은 노드 전역 키 하나라 쿠폰별 격리가 없습니다. 매진 단락이 그 뒤에
+     * 있으면 매진 폴러가 상한에 걸려 <b>재시도를 유도하는 503</b> 을 받고, 이
+     * 변경이 없애려던 폴링 재생산이 그대로 돌아옵니다.
+     */
+    @Test
+    @DisplayName("조회_상한이_찼어도_매진은_종결한다")
+    void 조회_상한이_찼어도_매진은_종결한다() {
+        스냅샷을_심는다(CouponStates.closed(1_000));
+        String 토큰 = tokens.issue(COUPON, MEMBER, 지금);
+        // 자리를 하나만 둔 리미터의 그 한 자리를 다른 키가 차지하면, 조회 키는
+        // 상한과 무관하게 거절된다. 상한값을 시험이 알 필요가 없다.
+        SecondWindowLimiter 꽉_찬 = SecondWindowLimiter.withMaxKeys(1);
+        꽉_찬.tryAcquire("다른-키", 1, 지금.getEpochSecond());
+        // **전제를 시험 안에서 확인한다** (TS-9). 리미터가 자리 없음을 거절이
+        // 아니라 축출로 바꾸면 이 시험은 조용히 `매진이면_줄을_안_친다` 의
+        // 사본이 되고, 그때 순서를 되돌려도 아무것도 안 문다.
+        assertThat(꽉_찬.tryAcquire("아무-새-키", 1_000, 지금.getEpochSecond()))
+                .as("자리가 없으면 거절한다 — 이 전제가 깨지면 아래가 무의미하다").isFalse();
+        QueueStatusFilter 상한이_찬_필터 = QueueStatusFilter.of(
+                holder, 줄, tokens, Clock.fixed(지금, ZoneOffset.UTC), meters, () -> 0.5,
+                꽉_찬, entryTokens);
+
+        MockServerWebExchange exchange = 조회한다(
+                상한이_찬_필터, "/api/v1/coupons/" + COUPON + "/queue?queueToken=" + 토큰);
+
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(exchange.getResponse().getHeaders().getFirst("Retry-After"))
+                .as("재시도 유도").isNull();
+        assertThat(줄.왕복()).as("레디스 왕복").isZero();
+        assertThat(다음으로_감).as("뒷단 도달").isFalse();
+    }
+
+    /**
+     * <b>음성 대조 — 같은 상한에서 매진이 아니면 거절합니다.</b>
+     *
+     * <p>위 시험만 있으면 "상한이 원래 안 걸렸다" 로도 통과합니다. 같은 리미터로
+     * 매진이 아닌 쿠폰을 물어 503 이 나오는 것을 봐야, 위에서 200 이 난 것이
+     * <b>단락이 상한보다 앞이라서</b> 라고 말할 수 있습니다.
+     */
+    @Test
+    @DisplayName("같은_상한에서_매진이_아니면_거절한다")
+    void 같은_상한에서_매진이_아니면_거절한다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100));
+        String 토큰 = tokens.issue(COUPON, MEMBER, 지금);
+        SecondWindowLimiter 꽉_찬 = SecondWindowLimiter.withMaxKeys(1);
+        꽉_찬.tryAcquire("다른-키", 1, 지금.getEpochSecond());
+        QueueStatusFilter 상한이_찬_필터 = QueueStatusFilter.of(
+                holder, 줄, tokens, Clock.fixed(지금, ZoneOffset.UTC), meters, () -> 0.5,
+                꽉_찬, entryTokens);
+
+        MockServerWebExchange exchange = 조회한다(
+                상한이_찬_필터, "/api/v1/coupons/" + COUPON + "/queue?queueToken=" + 토큰);
+
+        assertThat(exchange.getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        // 값까지 본다. 있기만 하면 되는 헤더가 아니라, 흔들림이 붙은 재시도
+        // 간격이 실려야 같은 밴드가 한꺼번에 안 돌아온다.
+        assertThat(exchange.getResponse().getHeaders().getFirst("Retry-After"))
+                .as("다시 올 시각").isEqualTo("30");
+        assertThat(줄.왕복()).as("레디스 왕복").isZero();
+    }
+
+    /**
+     * <b>마지막 한 장은 아직 매진이 아닙니다.</b> 경계를 <code>&lt;=</code> 로 잘못
+     * 쓰면 남은 재고를 두고 줄을 끊습니다 — 그 한 장이 영영 안 나갑니다.
+     */
+    @Test
+    @DisplayName("재고가_한_장_남았으면_종결하지_않는다")
+    void 재고가_한_장_남았으면_종결하지_않는다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1, 100));
+        줄.enqueue(COUPON, MEMBER, NO_LIMIT, 지금).block();
+        String 토큰 = tokens.issue(COUPON, MEMBER, 지금);
+        int 이전 = 줄.왕복();
+
+        조회한다("/api/v1/coupons/" + COUPON + "/queue?queueToken=" + 토큰);
+
+        assertThat(줄.왕복()).as("레디스 왕복").isGreaterThan(이전);
+    }
+
+    /**
+     * <b>줄이 비어도 매진은 매진입니다.</b>
+     *
+     * <p>큐를 정리해 대기자가 0 이 되면 상태 기계는 <code>CLOSED</code> 를 안
+     * 만들고 <code>IDLE</code> 로 떨어뜨립니다. 그 자리를 매진이 아닌 것으로
+     * 읽으면, 같은 쿠폰에 조회는 "다시 서라" 등록은 409 로 답합니다 — 그리고
+     * 그 상태가 매진 쿠폰의 <b>정상 종착점</b>입니다.
+     */
+    @Test
+    @DisplayName("줄이_비어도_재고가_0_이면_종결한다")
+    void 줄이_비어도_재고가_0_이면_종결한다() {
+        스냅샷을_심는다(CouponStates.idle(0));
+        String 토큰 = tokens.issue(COUPON, MEMBER, 지금);
+
+        MockServerWebExchange exchange =
+                조회한다("/api/v1/coupons/" + COUPON + "/queue?queueToken=" + 토큰);
+
+        assertThat(줄.왕복()).as("레디스 왕복").isZero();
+        assertThat(본문(exchange).get("data").get("status").asText()).isEqualTo("SOLD_OUT");
+    }
+
+    /**
+     * <b>배수 중이면 아직 매진이 아닙니다.</b> 경계가 열거값이 아니라 재고
+     * 숫자이므로, 무는 자리는 <code>QUEUEING</code> 이 아니라 <code>DRAINING</code>
+     * 입니다 — 둘 다 재고가 남은 상태인데 런타임만 다릅니다.
+     */
+    @Test
+    @DisplayName("배수_중이면_종결하지_않는다")
+    void 배수_중이면_종결하지_않는다() {
+        스냅샷을_심는다(CouponStates.draining(200, 50, 100));
+        줄.enqueue(COUPON, MEMBER, NO_LIMIT, 지금).block();
+        String 토큰 = tokens.issue(COUPON, MEMBER, 지금);
+        int 이전 = 줄.왕복();
+
+        조회한다("/api/v1/coupons/" + COUPON + "/queue?queueToken=" + 토큰);
+
+        assertThat(줄.왕복()).as("레디스 왕복").isGreaterThan(이전);
+    }
+
+    /**
+     * <b>매진이어도 토큰이 먼저입니다.</b>
+     *
+     * <p>단락을 토큰 검증 위로 올리면, 인증 없이 아무 쿠폰의 매진 여부를 캐는
+     * 오라클이 열립니다. 순서가 곧 정책인 자리라 값으로 못 박습니다.
+     */
+    @Test
+    @DisplayName("매진이어도_토큰이_없으면_거절한다")
+    void 매진이어도_토큰이_없으면_거절한다() {
+        스냅샷을_심는다(CouponStates.closed(1_000));
+
+        MockServerWebExchange exchange = 조회한다("/api/v1/coupons/" + COUPON + "/queue");
+
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(exchange.getResponse().getBodyAsString().block())
+                .as("매진 여부를 흘리지 않는다").doesNotContain("SOLD_OUT");
+    }
+
+    /** 매진이 아니면 그대로 물으러 갑니다. 위 시험이 "늘 안 친다" 로도 통과하면 안 됩니다. */
+    @Test
+    @DisplayName("매진이_아니면_그대로_묻는다")
+    void 매진이_아니면_그대로_묻는다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100));
+        줄.enqueue(COUPON, MEMBER, NO_LIMIT, 지금).block();
+        String 토큰 = tokens.issue(COUPON, MEMBER, 지금);
+        int 이전 = 줄.왕복();
+
+        조회한다("/api/v1/coupons/" + COUPON + "/queue?queueToken=" + 토큰);
+
+        assertThat(줄.왕복()).as("레디스 왕복").isGreaterThan(이전);
     }
 
     @Test
@@ -163,9 +430,14 @@ class QueueStatusFilterTest {
         MockServerWebExchange exchange = 토큰으로_조회한다(tokens.issue(COUPON, MEMBER, 지금));
 
         assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.OK);
-        assertThat(exchange.getResponse().getBodyAsString().block())
-                .contains("\"status\":\"WAITING\"")
-                .contains("\"position\":1");
+        JsonNode data = 본문(exchange).get("data");
+        assertThat(data.get("status").asText()).isEqualTo("WAITING");
+        assertThat(data.get("position").asLong()).isEqualTo(1);
+        // **ETA 도 값으로 잰다.** 안 재면 credit 을 0 으로 만드는 변종이 산다 —
+        // 아는 credit 으로 계산한 ETA 를 이 클래스에서 아무도 안 보게 된다.
+        // credit 10 에 앞사람 하나면 이번 틱에 빠지므로 0 이다. credit 을 0 으로
+        // 만드는 변종은 "모른다" 구간으로 넘어가 이 값이 달라진다.
+        assertThat(data.get("etaSeconds").asLong()).as("남은 시각").isZero();
         assertThat(exchange.getResponse().getHeaders().getCacheControl()).isEqualTo("no-store");
     }
 

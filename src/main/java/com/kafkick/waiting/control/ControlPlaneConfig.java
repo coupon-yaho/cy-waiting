@@ -4,6 +4,7 @@ import com.kafkick.waiting.adapter.redis.AllocationRedisPort;
 import com.kafkick.waiting.adapter.redis.LeaderRedisPort;
 import com.kafkick.waiting.domain.allocation.CreditSmoother;
 import io.micrometer.core.instrument.Gauge;
+import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.util.List;
 import reactor.core.publisher.Mono;
@@ -30,6 +31,12 @@ public class ControlPlaneConfig {
 
     /** 평활화 계수. 클수록 최근 값을 빨리 따라간다. */
     private static final double SMOOTHING_ALPHA = 0.3;
+
+    /** 이탈 기록 보관. 재방문자를 알아볼 수 있는 구간이다 (5.4절). */
+    private static final long GRACE_SEC = 300;
+
+    /** 한 판이 지우는 상한. 스크립트가 `unpack` 한계로 더 좁힌다. */
+    private static final int SWEEP_BUDGET = 1_000;
 
     @Bean
     Leadership leadership(LeaderRedisPort port, ControlPlaneProperties properties) {
@@ -62,7 +69,7 @@ public class ControlPlaneConfig {
     AllocationRound allocationRound(DemandCollector collector, AllocationRedisPort port,
             GatewayRegistry registry, CapacityCollector capacity, Leadership leadership,
             TunablesRefresh tunables, ControlPlaneProperties properties,
-            SoldOutCleanup cleanup) {
+            SoldOutCleanup cleanup, QueueSweeper sweeper, SnapshotHolder holder) {
         SnapshotCodec codec = SnapshotCodec.create();
         return AllocationRound.of(leadership::isLeader, collector::collect, capacity::lastKnown,
                 registry::count, port::apply, port::publish, Instant::now,
@@ -83,7 +90,11 @@ public class ControlPlaneConfig {
                 // **빈 목록을 돌려준다.** 요청한 것을 돌려주면 판단이 "지웠다"
                 // 로 읽어 지표가 거짓이 된다 — 관찰하려고 끊어 둔 배선이
                 // 관찰 대상을 망친다.
-                ids -> Mono.just(List.of()));
+                ids -> Mono.just(List.of()),
+                sweeper,
+                // 이 노드도 게이트웨이다. 자기가 든 재료의 나이가 노드들의
+                // 폴링 상태에 가장 가까운 신호다.
+                holder::isDataStale);
     }
 
     /**
@@ -168,6 +179,16 @@ public class ControlPlaneConfig {
     @Bean
     SoldOutCleanup soldOutCleanup(ControlPlaneProperties properties, MeterRegistry meters) {
         return SoldOutCleanup.of(properties.scheduler().soldOutGraceTicks(), meters);
+    }
+
+    /** 멈추는 판단을 생성자가 필수로 받는다 — 빠뜨리면 컴파일이 안 된다 (7.4). */
+    @Bean
+    QueueSweeper queueSweeper(AllocationRedisPort port, ControlPlaneProperties properties,
+            MeterRegistry meters) {
+        return QueueSweeper.of(SweepGate.of(properties.scheduler().tick(), PollIntervalPolicy.aliveTtl()),
+                (ids, scanLimit) -> port.sweep(ids, Instant.now().getEpochSecond(),
+                        scanLimit, GRACE_SEC, SWEEP_BUDGET),
+                meters);
     }
 
     /** 배분 틱. <b>재료를 먼저 읽고 배분한다</b> — 안 읽으면 크레딧이 첫 하한에 머문다. */

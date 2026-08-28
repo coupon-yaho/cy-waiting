@@ -11,6 +11,7 @@ import java.util.Objects;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
+import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
@@ -50,7 +51,9 @@ public final class QueueRedisPort implements QueuePort {
      * 모른다. 가장 긴 폴링 간격(30초)의 세 배를 쓴다 — 백그라운드 탭이
      * 스로틀돼도 이탈자로 안 지워지는 값이다.
      */
-    private static final String ALIVE_TTL_SEC = "90";
+    /** <b>정책에서 끌어온다.</b> 스위퍼의 재개 유예가 이 값에 걸려 있어, 갈리면 순번이 깨진다. */
+    private static final String ALIVE_TTL_SEC =
+            Long.toString(PollIntervalPolicy.aliveTtl().toSeconds());
 
     private final ReactiveStringRedisTemplate redis;
     private final int shards;

@@ -30,6 +30,7 @@ class SweepWriteOrderTest {
     private static final String QUEUE = RedisKeys.queue(COUPON, 1, 0);
     private static final String GRACE = RedisKeys.grace(COUPON, 1, 0);
     private static final String ALIVE = RedisKeys.alive(COUPON, 1, 0);
+    private static final String ADMITTED = RedisKeys.admitted(COUPON, 1, 0);
 
     private RedisClient client;
     private StatefulRedisConnection<String, String> connection;
@@ -40,12 +41,12 @@ class SweepWriteOrderTest {
                 RedisContainerSupport.REDIS.getHost(),
                 RedisContainerSupport.REDIS.getFirstMappedPort()));
         connection = client.connect();
-        connection.sync().del(QUEUE, GRACE, ALIVE);
+        connection.sync().del(QUEUE, GRACE, ALIVE, ADMITTED);
     }
 
     @AfterEach
     void 정리() {
-        connection.sync().del(QUEUE, GRACE, ALIVE);
+        connection.sync().del(QUEUE, GRACE, ALIVE, ADMITTED);
         connection.close();
         client.shutdown();
     }
@@ -73,8 +74,19 @@ class SweepWriteOrderTest {
 
     private Object 청소한다(int limit) {
         return connection.sync().eval(LuaScripts.of("sweep.lua"), ScriptOutputType.MULTI,
-                new String[] {QUEUE, GRACE, ALIVE},
+                new String[] {QUEUE, GRACE, ALIVE, ADMITTED},
                 String.valueOf(limit), "1800000000", "300", "50", "0");
+    }
+
+    /**
+     * 줄 밖에 살아 있는 표시를 하나 둔다.
+     *
+     * <p>살아 있는 신호가 하나도 없으면 스크립트가 앞줄을 안 걷는다 — 그건
+     * 전원 이탈이 아니라 저장소를 잃었다는 뜻이기 때문이다. 이 시험들이 재는
+     * 것은 쓰기 순서라, 그 가드를 지나게만 해 둔다.
+     */
+    private void 지킴이를_둔다() {
+        connection.sync().zadd(ALIVE, 1_800_003_600.0, "keeper");
     }
 
     @Test
@@ -107,6 +119,7 @@ class SweepWriteOrderTest {
     void 담을_수_있는_인원은_자리와_기록이_함께_움직인다() {
         int 인원 = MAX_SCAN;
         이탈자를_채운다(인원);
+        지킴이를_둔다();
 
         청소한다(인원);
 

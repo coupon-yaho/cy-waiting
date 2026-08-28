@@ -64,7 +64,9 @@ class SoldOutCacheConcurrencyTest {
             }
         });
 
-        assertThat(캐시.size()).as("상한을 크게 안 넘는다").isBetween(상한, 상한 + 스레드);
+        // **정확히 상한이다.** "크게 안 넘는다" 로 받으면 그 초과가 스레드 수에
+        // 비례해 자라도 안 걸린다 — 키가 클라이언트 입력에서 오는 자리다.
+        assertThat(캐시.size()).as("상한을 안 넘는다").isEqualTo(상한);
     }
 
     /**
@@ -87,14 +89,33 @@ class SoldOutCacheConcurrencyTest {
                 캐시.restocked("c1", 발행.plusSeconds(1));
                 캐시.observed("c1", 발행.plusSeconds(2));
             });
-            // 나중 발행으로 무장했으므로, 그 앞의 재료로는 못 푼다.
-            if (!캐시.soldOut("c1") && 캐시.restocked("c1", 발행.plusSeconds(1)).isEmpty()) {
+            if (!캐시.soldOut("c1")) {
                 잃음.incrementAndGet();
             }
             캐시.restocked("c1", 발행.plusSeconds(99));
         }
 
+        // **더 나중 관찰이 남아야 한다.** 순서가 어떻든, 발행 +2 로 온 관찰은
+        // 발행 +1 짜리 해제보다 새 사실이다. 지워지면 그 창의 요청이 전부
+        // 뒷단으로 간다.
         assertThat(잃음).as("무장이 통째로 사라진 회차").hasValue(0);
+    }
+
+    /** 자리를 세는 것과 지우는 것이 갈리면 상한이 거짓말합니다. */
+    @Test
+    @DisplayName("담고_비우기를_섞어도_담긴_수가_맞는다")
+    void 담고_비우기를_섞어도_담긴_수가_맞는다() throws InterruptedException {
+        SoldOutCache 캐시 = SoldOutCache.of(Duration.ofSeconds(10), 1_000, 나노::get);
+
+        동시에(8, () -> {
+            for (int i = 0; i < 100; i++) {
+                캐시.observed("c" + i, 발행);
+                캐시.restocked("c" + i, 발행.plusSeconds(1));
+            }
+        });
+
+        assertThat(캐시.size()).as("다 비웠다").isZero();
+        assertThat(캐시.observed("새-쿠폰", 발행)).as("자리가 돌아왔다").isTrue();
     }
 
     /** 끊은 건수가 새지 않습니다. `LongAdder` 를 쓰는 이유가 여기 있습니다. */

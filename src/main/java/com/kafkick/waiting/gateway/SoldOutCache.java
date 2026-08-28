@@ -9,6 +9,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.function.LongSupplier;
 
@@ -38,6 +39,14 @@ public final class SoldOutCache {
     private final int maxKeys;
     private final LongSupplier ticker;
     private final Map<String, Armed> observed = new ConcurrentHashMap<>();
+
+    /**
+     * 담긴 수.
+     *
+     * <p><b>맵 크기를 안 쓴다.</b> 검사와 넣기가 나뉘면 동시 기록자 수만큼
+     * 상한을 넘는다 — 키가 클라이언트 입력에서 오는 자리에서는 그게 곧 구멍이다.
+     */
+    private final AtomicInteger armedCount = new AtomicInteger();
 
     private SoldOutCache(Duration ttl, int maxKeys, LongSupplier ticker) {
         // **값으로 끄지 못하게 한다.** 0 을 받으면 그 사실이 설정 어디에도 안
@@ -80,22 +89,58 @@ public final class SoldOutCache {
      *         한 번만 찍게 하려는 것이다 (LG-3)
      */
     public boolean observed(String couponId, Instant publishedAt) {
-        Armed existing = observed.get(couponId);
-        if (existing != null && !expired(existing)) {
-            return false;
-        }
-        if (existing == null && observed.size() >= maxKeys) {
+        if (armedCount.get() >= maxKeys) {
             // 죽은 항목이 자리를 잡고 있으면 상한이 "아무것도 못 받는다" 가
             // 된다. 자리가 모자랄 때만 훑는다 — 평소 경로에 비용을 안 얹는다.
-            observed.values().removeIf(this::expired);
-            if (observed.size() >= maxKeys) {
+            sweepExpired();
+        }
+        boolean[] armed = {false};
+        // **검사와 넣기를 한 번에 한다.** 나눠 하면 두 가지가 샌다 — 상한이
+        // 동시 기록자 수만큼 넘고, 잠깐 멈춘 요청이 자기보다 나중에 들어온
+        // 관찰을 옛 재료로 덮는다. 뒤엣것은 해제가 그 옛 재료로 풀리게 만든다.
+        observed.compute(couponId, (key, existing) -> {
+            if (existing != null && !expired(existing)) {
+                // 이미 무장 중이다. **더 나중 재료로 온 것만** 발행 시각을
+                // 올린다 — 수명과 끊은 건수는 그대로 이어 간다.
+                return publishedAt.isAfter(existing.publishedAt())
+                        ? new Armed(publishedAt, existing.armedNanos(), existing.blocked())
+                        : existing;
+            }
+            if (existing == null && !reserve()) {
                 // **밀어내지 않는다.** 밀어내면 클라이언트가 고른 키로 이미
                 // 들어온 관찰을 지울 수 있다.
-                return false;
+                return null;
             }
+            armed[0] = true;
+            return new Armed(publishedAt, ticker.getAsLong(), new LongAdder());
+        });
+        return armed[0];
+    }
+
+    /** 자리를 하나 잡는다. <b>세는 것이 곧 상한이다</b> — 검사와 증가가 한 번이다. */
+    private boolean reserve() {
+        if (armedCount.incrementAndGet() > maxKeys) {
+            armedCount.decrementAndGet();
+            return false;
         }
-        observed.put(couponId, new Armed(publishedAt, ticker.getAsLong(), new LongAdder()));
         return true;
+    }
+
+    /** 만료된 것을 걷는다. <b>지우는 자리를 한 곳으로 모은다</b> — 세는 것이 갈리면 상한이 거짓말한다. */
+    private void sweepExpired() {
+        observed.forEach((key, armed) -> {
+            if (expired(armed)) {
+                drop(key, armed);
+            }
+        });
+    }
+
+    private boolean drop(String couponId, Armed armed) {
+        if (observed.remove(couponId, armed)) {
+            armedCount.decrementAndGet();
+            return true;
+        }
+        return false;
     }
 
     /** 지금 이 쿠폰을 매진으로 봐야 하는가. 참이면 끊은 건수를 하나 올린다. */
@@ -105,7 +150,7 @@ public final class SoldOutCache {
             return false;
         }
         if (expired(armed)) {
-            observed.remove(couponId, armed);
+            drop(couponId, armed);
             return false;
         }
         // **`LongAdder` 다.** 한 쿠폰에 100K 가 몰리는 것이 전제라, 셀 하나에
@@ -131,7 +176,7 @@ public final class SoldOutCache {
         if (armed == null || !publishedAt.isAfter(armed.publishedAt())) {
             return Optional.empty();
         }
-        return observed.remove(couponId, armed)
+        return drop(couponId, armed)
                 ? Optional.of(new Released(
                         Duration.ofNanos(ticker.getAsLong() - armed.armedNanos()),
                         armed.blocked().sum()))
@@ -144,7 +189,7 @@ public final class SoldOutCache {
 
     /** 담고 있는 항목 수. 계측이 이 값을 싣는다. */
     public int size() {
-        return observed.size();
+        return armedCount.get();
     }
 
     /**

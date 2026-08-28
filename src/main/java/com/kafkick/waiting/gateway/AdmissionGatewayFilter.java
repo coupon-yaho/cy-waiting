@@ -157,20 +157,12 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      */
     private final FailureWindow shedWindow;
 
-    /**
-     * 뒷단이 낸 매진을 기억한다 (7.2 · B-10).
-     *
-     * <p>재료가 아직 재고를 말하는 창에서 이것이 유일한 근거다.
-     */
+    /** 재료가 아직 재고를 말하는 창에서 이것이 유일한 근거다 (7.2 · B-10). */
     private final SoldOutCache soldOutCache;
 
-    /**
-     * 캐시가 끊은 건수.
-     *
-     * <p><b>`cause` 축에 안 싣는다.</b> 그 축은 실패 원인의 닫힌 집합이라
-     * (LG-4), 판정의 출처를 넣으면 "실패율 = cause != none" 을 쓰는 순간
-     * 정상적인 매진 단락이 전부 실패로 잡힌다.
-     */
+    /** 캐시가 끊은 건수. */
+    // `cause` 축에 안 싣는다 — 그 축은 실패 원인의 닫힌 집합이라(LG-4), 판정
+    // 출처를 넣으면 "실패율 = cause != none" 이 정상적인 매진 단락을 다 잡는다.
     private final Counter soldOutHits;
 
     private AdmissionGatewayFilter(SnapshotHolder holder, AdmissionDecider decider,
@@ -203,12 +195,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         this.soldOutHits = meters.counter("waiting.soldout.cache.hit");
     }
 
-    /**
-     * 흔들림의 난수원은 스레드마다 따로 둔다 — 공유하면 그 자체가 경합점이다.
-     *
-     * <p><b>캐시는 주입받는다.</b> 여기서 만들면 관찰을 담는 쪽과 읽는 쪽이
-     * 다른 것을 보게 되고, 뒷단이 낸 매진을 판정이 영영 못 본다.
-     */
+    /** 흔들림의 난수원은 스레드마다 따로 둔다 — 공유하면 그 자체가 경합점이다. */
+    // 캐시는 주입받는다. 여기서 만들면 담는 쪽과 읽는 쪽이 다른 것을 보고,
+    // 뒷단이 낸 매진을 판정이 영영 못 본다.
     @Autowired
     AdmissionGatewayFilter(SnapshotHolder holder, AdmissionDecider decider, Clock clock,
             MeterRegistry meters, QueuePort queue, QueueToken tokens,
@@ -232,12 +221,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                 entryTokens, idempotency, SoldOutCache.standard());
     }
 
-    /**
-     * 매진 캐시를 함께 받는다 (7.2.3).
-     *
-     * <p><b>담는 쪽과 읽는 쪽이 같은 것을 봐야 한다.</b> 각자 만들면 뒷단이
-     * 낸 매진을 판정이 영영 못 본다.
-     */
+    /** 매진 캐시를 함께 받는다 (7.2.3). 담는 쪽과 읽는 쪽이 같은 것이라야 한다. */
     public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider,
             Clock clock, MeterRegistry meters, QueuePort queue, QueueToken tokens,
             SecondWindowLimiter limiter, EntryToken entryTokens,
@@ -365,13 +349,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         return route(exchange, chain, decision, couponId, state, view.snapshot().meta());
     }
 
-    /**
-     * 관찰보다 나중에 발행된 재료가 재고를 말하면 푼다 (7.2.4).
-     *
-     * <p><b>낡은 재료로는 안 푼다.</b> 낡음은 못 믿겠다는 뜻인데, 못 믿는
-     * 재료로 방패를 부수는 것만 허용하면 비대칭이다. 집행은 사다리 1번과 같이
-     * 낡음을 견디므로, 여기서 새는 쪽만 막으면 양쪽이 맞는다.
-     */
+    /** 관찰보다 나중에 발행된 재료가 재고를 말하면 푼다 (7.2.4). */
+    // 낡은 재료로는 안 푼다. 낡음은 못 믿겠다는 뜻인데 못 믿는 재료로 방패를
+    // 부수는 것만 허용하면 비대칭이다 — 집행은 사다리 1번처럼 낡음을 견딘다.
     private void releaseIfRestocked(String couponId, CouponState state,
             SnapshotHolder.View view) {
         if (state.soldOut() || holder.isDataStale(view)) {

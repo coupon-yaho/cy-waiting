@@ -133,6 +133,48 @@ class SoldOutCacheTest {
         assertThat(캐시.soldOut("c1")).isTrue();
     }
 
+    /**
+     * <b>옛 재료로 온 관찰이 새 관찰을 덮으면 안 됩니다.</b>
+     *
+     * <p>잠깐 멈춘 요청이 자기보다 나중에 들어온 관찰을 옛 발행 시각으로
+     * 덮으면, 바로 다음 판정이 그 옛 재료를 근거로 캐시를 풀어 버립니다.
+     * 더 새로운 매진 증거를 잃고 수명과 끊은 건수까지 초기화됩니다.
+     */
+    @Test
+    @DisplayName("옛_재료로_온_관찰이_새_관찰을_안_덮는다")
+    void 옛_재료로_온_관찰이_새_관찰을_안_덮는다() {
+        SoldOutCache 캐시 = 캐시();
+        캐시.observed("c1", 발행.plusSeconds(10));
+        캐시.soldOut("c1");
+
+        캐시.observed("c1", 발행);
+
+        assertThat(캐시.restocked("c1", 발행.plusSeconds(5)))
+                .as("옛 재료로는 못 푼다").isEmpty();
+        SoldOutCache.Released 푼_것 =
+                캐시.restocked("c1", 발행.plusSeconds(11)).orElseThrow();
+        assertThat(푼_것.blocked()).as("끊은 건수가 초기화되지 않는다").isEqualTo(1);
+    }
+
+    /**
+     * <b>더 나중 재료로 온 관찰은 발행 시각을 올립니다.</b>
+     *
+     * <p>안 올리면 그 사이에 발행된 재료 하나로 캐시가 풀립니다 — 뒷단은 방금
+     * 다시 매진이라고 답했는데.
+     */
+    @Test
+    @DisplayName("나중_재료로_온_관찰은_발행_시각을_올린다")
+    void 나중_재료로_온_관찰은_발행_시각을_올린다() {
+        SoldOutCache 캐시 = 캐시();
+        캐시.observed("c1", 발행);
+
+        캐시.observed("c1", 발행.plusSeconds(10));
+
+        assertThat(캐시.restocked("c1", 발행.plusSeconds(5)))
+                .as("올라간 시각보다 앞선 재료로는 못 푼다").isEmpty();
+        assertThat(캐시.soldOut("c1")).isTrue();
+    }
+
     /** 무장하지 않은 쿠폰을 푸는 것은 아무 일도 아닙니다. 로그도 안 찍습니다. */
     @Test
     @DisplayName("무장하지_않았으면_풀_것이_없다")

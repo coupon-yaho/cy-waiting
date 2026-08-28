@@ -540,8 +540,16 @@ class GatewayRoutesTest {
     void 조회_라우트에는_매진_관찰을_안_단다() {
         Route 조회 = 잡는_라우트(HttpMethod.GET, "/api/v1/coupons");
 
-        assertThat(조회.getFilters()).noneSatisfy(f ->
-                assertThat(f.toString()).contains("SoldOut"));
+        // **빈 목록에서도 통과하면 안 된다.** 필터가 통째로 빠져도 "안 달렸다"
+        // 는 참이 되므로, 달려야 할 것이 달렸다는 것을 같이 본다.
+        assertThat(이름들(조회))
+                .anySatisfy(이름 -> assertThat(이름).contains("QueryCoalescing"))
+                .noneSatisfy(이름 -> assertThat(이름).contains("SoldOut"));
+    }
+
+    /** 실린 필터의 이름들. <b>이미 있는 벗기기를 쓴다</b> — 두 벗기기가 갈리면 안 된다. */
+    private static List<String> 이름들(Route route) {
+        return 벗긴_필터(route).stream().map(Object::toString).toList();
     }
 
     /**

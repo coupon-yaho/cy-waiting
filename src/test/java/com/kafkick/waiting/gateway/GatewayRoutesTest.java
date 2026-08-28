@@ -82,7 +82,8 @@ class GatewayRoutesTest {
             QueryCoalescingFilter.of(
                     new CoalescingProperties(false, 1024, 1 << 20, 100, List.of()),
                     Clock.systemUTC(), new SimpleMeterRegistry()),
-            컨텍스트.getBean(SpringCloudCircuitBreakerResilience4JFilterFactory.class));
+            컨텍스트.getBean(SpringCloudCircuitBreakerResilience4JFilterFactory.class),
+            new SimpleMeterRegistry());
 
     /**
      * 재료를 한 번도 못 받은 홀더. 이 시험은 <b>라우트가 무엇을 잡는가</b>만 보므로
@@ -507,6 +508,26 @@ class GatewayRoutesTest {
 
         assertThat(실린_순서(조회, "QueryCoalescing"))
                 .isEqualTo(FilterOrder.ROUTE_COALESCING)
+                .isLessThan(NettyWriteResponseFilter.WRITE_RESPONSE_FILTER_ORDER);
+    }
+
+    /**
+     * <b>본문 상한이 두 라우트에 다 붙어야 한다.</b>
+     *
+     * <p>지우면 헤더가 나간 뒤 끝없이 느린 뒷단이 커넥션을 영영 붙잡습니다.
+     * 필터 자체를 아무리 잘 시험해도, <b>안 붙어 있으면 아무것도 안 막습니다.</b>
+     */
+    @Test
+    @DisplayName("두_라우트가_본문_상한을_쓰기_필터보다_앞에_단다")
+    void 두_라우트가_본문_상한을_쓰기_필터보다_앞에_단다() {
+        Route 발급 = 잡는_라우트(HttpMethod.POST, "/api/v1/coupons/c1/issue");
+        Route 조회 = 잡는_라우트(HttpMethod.GET, "/api/v1/coupons");
+
+        assertThat(실린_순서(발급, "BodyDeadline"))
+                .isEqualTo(FilterOrder.ROUTE_BODY)
+                .isLessThan(NettyWriteResponseFilter.WRITE_RESPONSE_FILTER_ORDER);
+        assertThat(실린_순서(조회, "BodyDeadline"))
+                .isEqualTo(FilterOrder.ROUTE_BODY)
                 .isLessThan(NettyWriteResponseFilter.WRITE_RESPONSE_FILTER_ORDER);
     }
 

@@ -61,7 +61,7 @@ const SHARED_HEADER = process.env.SHARED_HEADER !== 'false';
  * 보므로 그 상한보다 촘촘히 흘리면 영영 안 걸리고, 그 요청이 격벽 자리를 계속
  * 쥔다. 그 상태를 재려면 그런 뒷단이 하나 있어야 한다.
  */
-const SLOW_BODY_MS = Number(process.env.SLOW_BODY_MS || 0);
+const SLOW_BODY_MS = num('SLOW_BODY_MS', 0);
 
 const server = createServer((req, res) => {
   // 스텁 자신의 상태. compose 의 healthcheck 와 시나리오의 사후 확인이 쓴다.

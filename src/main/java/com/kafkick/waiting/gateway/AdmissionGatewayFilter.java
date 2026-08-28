@@ -404,7 +404,8 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         if (decision.isEnqueue()) {
             return enqueue(exchange, chain, couponId, state, meta);
         }
-        return error.write(exchange, codeOf(decision), retryAfterSec(decision, random));
+        return error.write(exchange, codeOf(decision),
+                retryAfterSec(decision, random, meta.pollScale()));
     }
 
     /**
@@ -466,7 +467,8 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                         // 합이라, 두 번 세면 분모가 부풀고 비율이 좋아 보인다.
                         count("queue-full-2nd");
                         return error.write(exchange, ApiError.Code.QUEUE_FULL,
-                                retryAfterSec(AdmissionDecision.REJECT_QUEUE_FULL, random));
+                                retryAfterSec(AdmissionDecision.REJECT_QUEUE_FULL, random,
+                                        meta.pollScale()));
                     }
                     double etaSec = EtaPolicy.etaSec(entry.rank(), state.credit());
                     return waiting.waiting(exchange,
@@ -505,7 +507,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         }
         count("enqueue-failed-shed");
         return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
-                retryAfterSec(AdmissionDecision.REJECT_OVERLOAD, random));
+                retryAfterSec(AdmissionDecision.REJECT_OVERLOAD, random, meta.pollScale()));
     }
 
     /**
@@ -530,15 +532,18 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      * 다시 와도 되는 때. <b>같은 값을 주면 다 같이 돌아온다</b> — 흔들어서
      * 되돌아오는 파도를 흩는다.
      */
-    static int retryAfterSec(AdmissionDecision decision, DoubleSupplier random) {
+    // **배수를 인자로 받는다.** 안 받는 판을 남겨 두면 거절 갈래가 조용히
+    // 그쪽을 쓰고, 과부하일수록 거절 비중이 커져 예산이 절반만 걸린다.
+    static int retryAfterSec(AdmissionDecision decision, DoubleSupplier random,
+            double pollScale) {
         return switch (decision) {
             // 차례가 온 사람이다. 멀리 보내면 그 사이 몫이 남에게 간다.
             //
             // 가장 가까운 밴드(1초)라 흔들림은 반올림에 통째로 흡수된다. 여기서
             // 흩을 대상은 몇 초 뒤에 몰릴 사람들이 아니라 30초 뒤의 파도다.
-            case RETRY_TOKEN -> (int) POLL.intervalSec(0, random);
+            case RETRY_TOKEN -> (int) POLL.intervalSec(0, random, pollScale);
             case REJECT_QUEUE_FULL, REJECT_OVERLOAD ->
-                    (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random);
+                    (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random, pollScale);
             // 매진은 안 싣는다. 다시 와도 소용없는데 시각을 주면 재시도를 부른다.
             case REJECT_SOLD_OUT -> ApiError.NO_RETRY;
             case PASS_TOKEN, PASS_BYPASS, PASS_FAIL_OPEN, PASS_UNDER_CAP,

@@ -106,20 +106,14 @@ class PollIntervalPolicyTest {
         long 최대_간격 = PollIntervalPolicy.maxInterval().toSeconds();
         long ttl = PollIntervalPolicy.aliveTtl().toSeconds();
 
+        // **약속한 횟수 자체도 못 박는다.** 관계만 재면 이 값이 0 이 돼도
+        // 부등식이 성립해, 봐주는 횟수가 사라진 판이 초록으로 남는다.
+        assertThat(PollIntervalPolicy.missedPolls())
+                .as("백그라운드 탭이 스로틀돼도 안 지워질 만큼").isEqualTo(3);
+
         assertThat(ttl)
                 .as("약속한 횟수를 놓치고 와도 살아 있어야 한다")
                 .isGreaterThanOrEqualTo((PollIntervalPolicy.missedPolls() + 1) * 최대_간격);
-    }
-
-    @Test
-    @DisplayName("생존_TTL은_하한_아래로_내려가지_않는다")
-    void 생존_TTL은_하한_아래로_내려가지_않는다() {
-        // 백그라운드 탭은 분당 한 번으로 스로틀된다. 간격만 보고 TTL 을
-        // 잡으면 탭을 내려둔 사람이 이탈자로 지워진다.
-        PollIntervalPolicy p = noJitter();
-
-        assertThat(p.aliveTtlSec(1)).isEqualTo(30);
-        assertThat(p.aliveTtlSec(30)).isEqualTo(90);
     }
 
     @Test

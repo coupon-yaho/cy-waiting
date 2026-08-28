@@ -297,9 +297,7 @@ public final class AllocationRound {
      */
     private Mono<Void> cleanUp(List<CouponDemand> collected, Map<String, Long> granted,
             long credit, Instant readAt) {
-        List<String> due = cleanup.due(
-                snapshot(collected, granted, credit, readAt, tunables.get().orElse(null))
-                        .coupons());
+        List<String> due = cleanup.due(couponsOf(collected, granted));
         if (due.isEmpty()) {
             return Mono.empty();
         }
@@ -336,9 +334,7 @@ public final class AllocationRound {
         if (lostLeadership()) {
             return Mono.empty();
         }
-        return sweeper.run(
-                snapshot(collected, granted, credit, readAt, tunables.get().orElse(null))
-                        .coupons(),
+        return sweeper.run(couponsOf(collected, granted),
                 // **리더가 신선한 것과 노드들이 신선한 것은 다른 이야기다.**
                 // 생존 신호를 갱신하는 것은 노드 쪽 폴링이라, 그쪽이 멎어도
                 // 리더의 수요 읽기는 성공할 수 있다. 이 노드도 게이트웨이이므로
@@ -450,10 +446,22 @@ public final class AllocationRound {
                 demand.stock(), demand.waiting());
     }
 
-    private GatewaySnapshot snapshot(List<CouponDemand> collected, Map<String, Long> granted,
-            long credit, Instant readAt, Tunables applied) {
+    /**
+     * 쿠폰별 상태만. <b>정리와 청소는 이것만 쓴다.</b>
+     *
+     * <p>스냅샷을 통째로 만들면 배수 계산과 그 계측이 한 판에 세 번 돈다 —
+     * 누적 틱이 3배로 오르고 해제 로그의 지속 시간도 3배가 된다.
+     */
+    private Map<String, CouponState> couponsOf(
+            List<CouponDemand> collected, Map<String, Long> granted) {
         Map<String, CouponState> coupons = new LinkedHashMap<>();
         collected.forEach(demand -> coupons.put(demand.couponId(), stateOf(demand, granted)));
+        return coupons;
+    }
+
+    private GatewaySnapshot snapshot(List<CouponDemand> collected, Map<String, Long> granted,
+            long credit, Instant readAt, Tunables applied) {
+        Map<String, CouponState> coupons = couponsOf(collected, granted);
         // **노드 수 방어를 여기서 다시 쓰지 않는다.** 사본이 생기면 둘 중 하나만
         // 시험이 붙고, 하트비트가 다 만료돼 0 으로 보이는 순간 — 즉 클러스터가
         // 흔들리는 바로 그 순간 — 예산이 0 이 되어 배수가 통째로 꺼진다.

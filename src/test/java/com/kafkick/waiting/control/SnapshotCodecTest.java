@@ -76,8 +76,9 @@ class SnapshotCodecTest {
                 "#credit", "1000", "#nodes", "1", "#published", "1787184000",
                 "깨짐", "이건:숫자가:아니다",
                 "필드부족", "ADAPTIVE:IDLE",
-                "필드초과", "ADAPTIVE:IDLE:0:500:0:뒷판이_늘린_필드",
-                "모르는모드", "그런모드:IDLE:0:1:0:1.0",
+                // 필드가 남는 것은 여기 없다 — 옛 배포가 실은 재료라
+                // 받아 준다 (E-12). `쿠폰에_모르는_필드가_붙어_와도_읽는다`.
+                "모르는모드", "그런모드:IDLE:0:1:0",
                 "불변식위반", "ADAPTIVE:IDLE:999:500:0",
                 // **배분기가 두 값을 다른 시점에 재면 이 조합이 나온다.**
                 // credit 을 잰 뒤 waiting 을 재는 사이에 사람이 빠지면
@@ -164,6 +165,61 @@ class SnapshotCodecTest {
                 .isFalse();
         assertThat(SnapshotCodec.create().isPublished(해시(
                 "#published", "1787184000", "c1", "ADAPTIVE:IDLE:0:9:0"))).isTrue();
+    }
+
+    /**
+     * <b>옛 배포가 실은 재료도 읽는다.</b>
+     *
+     * <p>배포는 한 순간에 안 끝난다. 구·신 버전이 섞이는 구간에 형식이 갈리면
+     * 신버전이 옛 재료를 통째로 버리고, 그 노드는 발행된 스냅샷을 하나도
+     * 못 받아 준비 상태가 안 된다 — 롤아웃이 그 자리에서 멈춘다.
+     *
+     * <p>E-12 가 같은 결함을 정책 값에서 이미 겪었다. 모르는 필드는 무시한다.
+     */
+    @Test
+    @DisplayName("쿠폰에_모르는_필드가_붙어_와도_읽는다")
+    void 쿠폰에_모르는_필드가_붙어_와도_읽는다() {
+        // 배수를 쿠폰마다 싣던 옛 형식이다. 여섯 번째를 무시하고 읽어야 한다.
+        GatewaySnapshot s = SnapshotCodec.create().decode(해시(
+                "#credit", "1000", "#nodes", "3", "#published", "1787184000",
+                "c1", "ADAPTIVE:QUEUEING:100:500:2000:2.5"));
+
+        assertThat(s.coupons()).containsOnlyKeys("c1");
+        assertThat(s.coupons().get("c1")).isEqualTo(new CouponState(
+                QueueMode.ADAPTIVE, RuntimeState.QUEUEING, 100, 500, 2000));
+        // 쿠폰에 실려 온 배수는 안 읽는다. 전역 항목이 없으면 배수는 없는 것이다.
+        assertThat(s.meta().pollScale()).isEqualTo(1.0);
+    }
+
+    @Test
+    @DisplayName("필드가_모자라면_그_쿠폰만_뺀다")
+    void 필드가_모자라면_그_쿠폰만_뺀다() {
+        // 관대함이 한 방향이라는 것을 못 박는다. 모자란 것은 깨진 값이라
+        // 뺀다 — 여기까지 받아 주면 자리가 밀린 값을 그대로 믿게 된다.
+        GatewaySnapshot s = SnapshotCodec.create().decode(해시(
+                "#credit", "1000", "#nodes", "3", "#published", "1787184000",
+                "c1", "ADAPTIVE:QUEUEING:100:500",
+                "c2", "ADAPTIVE:QUEUEING:100:500:2000"));
+
+        assertThat(s.coupons()).containsOnlyKeys("c2");
+    }
+
+    @Test
+    @DisplayName("배수가_깨져_있으면_없는_것으로_읽는다")
+    void 배수가_깨져_있으면_없는_것으로_읽는다() {
+        // 여기서 던지면 그 필드가 고쳐질 때까지 전 노드의 갱신이 멎는다.
+        // 크게 잡아도 안 된다 — 예산이 멀쩡한데 전원이 뜸하게 묻고, 그만큼
+        // 차례가 온 사실을 늦게 안다.
+        SnapshotCodec codec = SnapshotCodec.create();
+
+        assertThat(codec.decode(해시("#pollScale", "열둘", "c1", "ADAPTIVE:IDLE:0:500:0"))
+                .meta().pollScale()).as("숫자가 아님").isEqualTo(1.0);
+        assertThat(codec.decode(해시("#pollScale", "NaN", "c1", "ADAPTIVE:IDLE:0:500:0"))
+                .meta().pollScale()).as("NaN").isEqualTo(1.0);
+        assertThat(codec.decode(해시("#pollScale", "Infinity", "c1", "ADAPTIVE:IDLE:0:500:0"))
+                .meta().pollScale()).as("무한").isEqualTo(1.0);
+        assertThat(codec.decode(해시("c1", "ADAPTIVE:IDLE:0:500:0"))
+                .meta().pollScale()).as("안 실려 옴").isEqualTo(1.0);
     }
 
     @Test

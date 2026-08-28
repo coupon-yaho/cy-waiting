@@ -295,6 +295,32 @@ class AllocationRoundTest {
     }
 
     @Test
+    @DisplayName("예산을_넘긴_틱을_한_판에_한_번만_센다")
+    void 예산을_넘긴_틱을_한_판에_한_번만_센다() {
+        // 한 판이 쿠폰 상태를 세 번 만든다 — 발행·정리·청소. 배수 계산이
+        // 거기 묻어 있으면 누적 틱이 3배로 오르고, "틱 수" 라고 적힌 지표가
+        // 틱이 아닌 것을 센다. 해제 로그의 지속 시간도 같이 부푼다.
+        AllocationRound round = round(List.of(new CouponDemand("c1", 100_000, 1_000_000)), 10, 1);
+
+        round.run().block();
+        assertThat(round.pollBudgetOvershootTicks()).as("한 판").isEqualTo(1);
+
+        round.run().block();
+        assertThat(round.pollBudgetOvershootTicks()).as("두 판").isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("예산_안이면_틱을_안_센다")
+    void 예산_안이면_틱을_안_센다() {
+        round(List.of(new CouponDemand("c1", 10, 100)), 100, 1).run().block();
+
+        AllocationRound round = round(List.of(new CouponDemand("c1", 10, 100)), 100, 1);
+        round.run().block();
+
+        assertThat(round.pollBudgetOvershootTicks()).as("초과 없음").isZero();
+    }
+
+    @Test
     @DisplayName("노드가_두_배면_배수가_절반이다")
     void 노드가_두_배면_배수가_절반이다() {
         // 폴링은 게이트웨이가 메모리에서 종결한다. 그래서 예산의 출처는 노드 수다.

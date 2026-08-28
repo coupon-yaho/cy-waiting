@@ -51,9 +51,7 @@ public class PollIntervalPolicy {
     }
 
     /** 백그라운드 탭이 분당 1회로 스로틀돼도 살아 있다고 봐야 한다. */
-    private static final long MIN_ALIVE_TTL_SEC = 30;
 
-    private static final long ALIVE_TTL_FACTOR = 3;
 
     private final double jitterRatio;
 
@@ -88,15 +86,6 @@ public class PollIntervalPolicy {
         // [-jitter, +jitter] 로 흔들어 같은 밴드가 동시에 두드리지 않게 한다
         double jittered = scaled * (1 + jitterRatio * (2 * random.getAsDouble() - 1));
         return Math.clamp(Math.round(jittered), MIN_INTERVAL_SEC, MAX_INTERVAL_SEC);
-    }
-
-    /**
-     * 이 간격으로 폴링하는 사람의 생존 TTL.
-     *
-     * <p>간격만 보고 잡으면 백그라운드 탭이 스로틀된 사람이 이탈자로 지워진다.
-     */
-    public long aliveTtlSec(long intervalSec) {
-        return Math.max(MIN_ALIVE_TTL_SEC, intervalSec * ALIVE_TTL_FACTOR);
     }
 
     /** ETA 를 모르면 가장 먼 밴드다 — 모를수록 자주 묻게 하면 안 된다. */

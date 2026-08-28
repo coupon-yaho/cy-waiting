@@ -529,6 +529,23 @@ class AdmissionGatewayFilterTest {
     }
 
     /**
+     * <b>거절도 전역 배수를 지킨다.</b>
+     *
+     * <p>과부하가 심할수록 거절의 비중이 커진다. 거절만 배수를 빼면 예산을
+     * 건다는 말이 절반만 맞게 된다 — 줄 선 사람은 60초, 못 선 사람은 30초다.
+     */
+    @Test
+    @DisplayName("줄이_꽉_차_거절해도_배수를_지킨다")
+    void 줄이_꽉_차_거절해도_배수를_지킨다() {
+        assertThat(AdmissionGatewayFilter.retryAfterSec(
+                AdmissionDecision.REJECT_QUEUE_FULL, () -> 0.5, 3.0))
+                .as("ETA 를 모르는 밴드(30초)에 배수 3 — 상한 60").isEqualTo(60);
+        assertThat(AdmissionGatewayFilter.retryAfterSec(
+                AdmissionDecision.RETRY_TOKEN, () -> 0.5, 3.0))
+                .as("가장 가까운 밴드(1초)에 배수 3").isEqualTo(3);
+    }
+
+    /**
      * <b>등록 응답도 전역 배수를 지킨다</b> (7.3.3).
      *
      * <p>조회에만 배수를 걸면 방금 줄에 선 사람이 예산 밖에서 두드린다. 매진
@@ -783,7 +800,7 @@ class AdmissionGatewayFilterTest {
         assertThatThrownBy(() -> AdmissionGatewayFilter.codeOf(AdmissionDecision.PASS_UNDER_CAP))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() ->
-                AdmissionGatewayFilter.retryAfterSec(AdmissionDecision.ENQUEUE_ALWAYS, () -> 0.5))
+                AdmissionGatewayFilter.retryAfterSec(AdmissionDecision.ENQUEUE_ALWAYS, () -> 0.5, 1.0))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -843,9 +860,9 @@ class AdmissionGatewayFilterTest {
         //
         // 폭까지 본다. 다르기만 하면 흔들림이 얼마든 통과한다.
         assertThat(AdmissionGatewayFilter.retryAfterSec(
-                AdmissionDecision.REJECT_QUEUE_FULL, () -> 0)).isEqualTo(24);
+                AdmissionDecision.REJECT_QUEUE_FULL, () -> 0, 1.0)).isEqualTo(24);
         assertThat(AdmissionGatewayFilter.retryAfterSec(
-                AdmissionDecision.REJECT_QUEUE_FULL, () -> 1)).isEqualTo(36);
+                AdmissionDecision.REJECT_QUEUE_FULL, () -> 1, 1.0)).isEqualTo(36);
     }
 
     /**
@@ -859,7 +876,7 @@ class AdmissionGatewayFilterTest {
         double[] 값 = new double[10_000];
         for (int i = 0; i < 값.length; i++) {
             값[i] = AdmissionGatewayFilter.retryAfterSec(
-                    AdmissionDecision.REJECT_QUEUE_FULL, 난수::nextDouble);
+                    AdmissionDecision.REJECT_QUEUE_FULL, 난수::nextDouble, 1.0);
         }
 
         double 평균 = Arrays.stream(값).average().orElseThrow();
@@ -877,9 +894,9 @@ class AdmissionGatewayFilterTest {
         // 자기 몫이 남에게 간다.
         //
         // 가장 가까운 밴드라 흔들림이 반올림에 흡수된다 — 그것도 못 박는다.
-        assertThat(AdmissionGatewayFilter.retryAfterSec(AdmissionDecision.RETRY_TOKEN, () -> 0))
+        assertThat(AdmissionGatewayFilter.retryAfterSec(AdmissionDecision.RETRY_TOKEN, () -> 0, 1.0))
                 .isEqualTo(1);
-        assertThat(AdmissionGatewayFilter.retryAfterSec(AdmissionDecision.RETRY_TOKEN, () -> 1))
+        assertThat(AdmissionGatewayFilter.retryAfterSec(AdmissionDecision.RETRY_TOKEN, () -> 1, 1.0))
                 .isEqualTo(1);
     }
 
@@ -887,7 +904,7 @@ class AdmissionGatewayFilterTest {
     @DisplayName("매진에는_안내를_안_싣는다")
     void 매진에는_안내를_안_싣는다() {
         assertThat(AdmissionGatewayFilter.retryAfterSec(AdmissionDecision.REJECT_SOLD_OUT,
-                () -> 0.5)).isEqualTo(ApiError.NO_RETRY);
+                () -> 0.5, 1.0)).isEqualTo(ApiError.NO_RETRY);
     }
 
     @Test
@@ -1579,7 +1596,7 @@ class AdmissionGatewayFilterTest {
         assertThat(차례가_온_사람.getResponse().getHeaders().getFirst("Retry-After"))
                 .isEqualTo(String.valueOf(
                         AdmissionGatewayFilter.retryAfterSec(
-                                AdmissionDecision.RETRY_TOKEN, 고정_난수)));
+                                AdmissionDecision.RETRY_TOKEN, 고정_난수, 1.0)));
         풀어_준다();
     }
 
@@ -1610,7 +1627,7 @@ class AdmissionGatewayFilterTest {
         assertThat(막힌_것.getResponse().getHeaders().getFirst("Retry-After"))
                 .isEqualTo(String.valueOf(
                         AdmissionGatewayFilter.retryAfterSec(
-                                AdmissionDecision.REJECT_OVERLOAD, 고정_난수)));
+                                AdmissionDecision.REJECT_OVERLOAD, 고정_난수, 1.0)));
         풀어_준다();
     }
 

@@ -21,8 +21,10 @@ import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.http.HttpHeaders;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.EnumSet;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -50,6 +52,20 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
 
     /** 응답을 쓰는 쪽이 읽는다. 다시 판정하면 두 번 세고 답이 갈릴 수 있다. */
     public static final String DECISION = "waiting.admission.decision";
+
+    /** 이 요청을 <b>재료를 갖고 판정했는가</b>. SLI 가 이 값만 읽는다 (O-7). */
+    // 운영 카운터를 더해 만들지 않는다 — 한 요청이 여러 사유를 지날 수 있어
+    // 실패율이 100% 를 넘고, 라벨을 리네임하면 그 항이 조용히 빠진다.
+    public static final String JUDGEMENT = "waiting.judgement";
+
+    /** 재료 없이 판정한 요청. {@link #JUDGEMENT} 가 이 표시를 읽는다. */
+    private static final String DEGRADED = "waiting.judgement.degraded";
+
+    /** 낡은 재료에서만 나오는 판정. 사다리 4·7번의 결과다. */
+    private static final Set<AdmissionDecision> STALE_DECISIONS = EnumSet.of(
+            AdmissionDecision.PASS_FAIL_OPEN,
+            AdmissionDecision.ENQUEUE_STALE,
+            AdmissionDecision.REJECT_OVERLOAD);
 
     private static final Logger log = LoggerFactory.getLogger(AdmissionGatewayFilter.class);
 
@@ -238,6 +254,16 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
 
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
+        // **품질은 요청마다 한 번만 센다.** 운영 카운터를 여럿 더해 만들면 한
+        // 요청이 여러 번 세어져 실패율이 100% 를 넘고, 라벨 하나를 리네임하면
+        // 그 항이 조용히 빠진다 (O-7).
+        return judge(exchange, chain)
+                .doFinally(signal -> meters.counter(JUDGEMENT, "quality",
+                        exchange.getAttributeOrDefault(DEGRADED, false)
+                                ? "degraded" : "fresh").increment());
+    }
+
+    private Mono<Void> judge(ServerWebExchange exchange, GatewayFilterChain chain) {
         String couponId = pathVariable(exchange);
         if (couponId == null) {
             // 라우트에서 변수 이름을 빼면 판정할 쿠폰이 없다. 그대로 흘리면
@@ -249,6 +275,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                 log.error("라우트에 {} 경로변수가 없다 — 판정할 대상을 못 정한다", COUPON_ID);
             }
             count("no-path-variable");
+            degraded(exchange);
             return error.write(exchange, ApiError.Code.INVALID_REQUEST);
         }
 
@@ -272,6 +299,12 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                 nowSec, MAX_ETA_SEC));
         exchange.getAttributes().put(DECISION, decision);
         count(decision.name());
+        // **낡은 재료로 내린 판정도 재료 없이 판정한 것이다.** 사다리 4·7번이
+        // 그 자리다 — 스냅샷에 있는 쿠폰은 deferred-* 를 안 지나므로, 여기서
+        // 표시하지 않으면 스냅샷이 멎은 구간이 통째로 성공으로 잡힌다.
+        if (STALE_DECISIONS.contains(decision)) {
+            degraded(exchange);
+        }
         return route(exchange, chain, decision, couponId, state, view.snapshot().meta());
     }
 
@@ -286,6 +319,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         // 상한이 0 이 되고, 그건 전면 차단이다. 이 구간은 준비성 판정이 막는다.
         if (view.isBeforeFirstTick()) {
             count("deferred-no-material");
+            degraded(exchange);
             // 재료가 없어 크레딧을 모른다. 폴백으로 최소 배수 속도를 가정한다.
             return forward(exchange, chain, couponId, 0, view.snapshot().meta());
         }
@@ -294,6 +328,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         // 상한 밖으로 나간다. 같은 예산에 태운다.
         if (holder.isDataStale(view)) {
             count("deferred-stale-material");
+            degraded(exchange);
             return failOpen(exchange, chain, view.snapshot().meta(), couponId);
         }
         count("unknown-coupon");
@@ -366,7 +401,12 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                             NANOSECONDS.toSeconds(r.elapsedNanos()), r.swallowed()));
                     if (!entry.accepted()) {
                         // 2차 방어에 걸렸다. 판정은 자리가 있다고 봤지만 실제로는 없다.
-                        count(AdmissionDecision.REJECT_QUEUE_FULL.name());
+                        //
+                        // **판정 이름으로 안 센다.** 이 요청은 위에서 이미 판정
+                        // 결과를 하나 받았고, 여기서 또 그 이름으로 세면 한 요청이
+                        // 판정 카운터를 두 번 올린다. SLI 의 분모가 그 이름들의
+                        // 합이라, 두 번 세면 분모가 부풀고 비율이 좋아 보인다.
+                        count("queue-full-2nd");
                         return error.write(exchange, ApiError.Code.QUEUE_FULL,
                                 retryAfterSec(AdmissionDecision.REJECT_QUEUE_FULL, random));
                     }
@@ -397,6 +437,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                 log.warn("fail-open 진입 — 줄 등록이 안 돼 통과시킨다, 상한={}", cap);
             }
             count("enqueue-failed-open");
+            degraded(exchange);
             // **연 예산이 곧 격벽의 밑변이다.** 여기서 0 을 넘기면 최소 배수
             // 속도로 떨어져, 상한을 두고 연 몫의 대부분이 격벽에서 다시 막힌다.
             return forward(exchange, chain, couponId, cap, meta);
@@ -516,6 +557,12 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                 // **어느 쪽으로 끝나도 돌려준다.** 안 돌려주면 격벽이 한 번 차고
                 // 나서 영영 안 열리고, 그 쿠폰은 뒷단이 멀쩡해져도 계속 막힌다.
                 .doFinally(signal -> bulkhead.exit(couponId));
+    }
+
+    /** 재료 없이 판정했다고 표시합니다. <b>세는 것은 끝에서 한 번</b> 합니다. */
+    // 한 요청이 여러 사유를 지날 수 있어, 여기서 세면 같은 요청이 여러 번 잡힌다.
+    private void degraded(ServerWebExchange exchange) {
+        exchange.getAttributes().put(DEGRADED, true);
     }
 
     /**

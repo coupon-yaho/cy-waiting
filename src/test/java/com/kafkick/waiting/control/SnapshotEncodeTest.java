@@ -230,6 +230,29 @@ class SnapshotEncodeTest {
         assertThat(실린_값).isEqualTo("ALWAYS:DRAINING:9:100:5:1.0");
     }
 
+    /**
+     * <b>옛 노드도 배수를 지킨다.</b>
+     *
+     * <p>여섯 번째 자리에 상수를 박으면 롤아웃 구간 내내 옛 파드 전부가 배수 없이
+     * 폴링한다. 파드 대부분이 아직 옛것인 구간이 있으므로, 새 리더가 "보호가
+     * 걸렸다" 고 보고하는 동안 클러스터는 예산을 한참 넘긴 채로 돈다.
+     */
+    // 옛 노드는 이 자리를 그 쿠폰의 배수로 읽는다. 전역값을 그대로 실으면 그
+    // 노드의 계산이 새 노드와 같아진다 — 읽는 쪽이 달라도 답은 같다.
+    @Test
+    @DisplayName("옛_자리에_실제_배수를_싣는다")
+    void 옛_자리에_실제_배수를_싣는다() {
+        GatewaySnapshot 배수가_걸린_판 = new GatewaySnapshot(
+                Map.of("c1", new CouponState(QueueMode.ALWAYS, RuntimeState.QUEUEING, 9, 100, 50)),
+                new SnapshotMeta(9, 1, null, 3.5), Instant.ofEpochSecond(1_700_000_000L));
+
+        String 실린_값 = codec.encode(배수가_걸린_판, CreditSmoother.Snapshot.empty(),
+                QueueingHysteresis.Snapshot.empty()).get("c1");
+
+        assertThat(실린_값).as("여섯 번째 자리가 전역 배수와 같다")
+                .isEqualTo("ALWAYS:QUEUEING:9:100:50:3.5");
+    }
+
     @Test
     @DisplayName("모드와_상태를_그대로_싣는다")
     void 모드와_상태를_그대로_싣는다() {

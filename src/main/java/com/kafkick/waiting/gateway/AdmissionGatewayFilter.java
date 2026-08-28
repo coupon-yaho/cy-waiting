@@ -84,6 +84,13 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     /** 재시도 안내의 흔들림 폭. 폴링 간격과 같은 정책을 쓴다. */
     private static final PollIntervalPolicy POLL = PollIntervalPolicy.of(0.2);
 
+    /**
+     * 배수를 안 거는 갈래. <b>예산이 안 세는 요청에는 안 건다.</b>
+     *
+     * <p>{@code 1.0} 을 그대로 쓰면 배수를 깜빡한 것과 구분이 안 된다.
+     */
+    private static final double NO_SCALE = 1.0;
+
     private static final String MEMBER_ID = "X-Member-Id";
 
     /** 발급 계층 명세가 정한 이름. 조회가 준 토큰을 여기 실어 온다. */
@@ -537,11 +544,18 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     static int retryAfterSec(AdmissionDecision decision, DoubleSupplier random,
             double pollScale) {
         return switch (decision) {
-            // 차례가 온 사람이다. 멀리 보내면 그 사이 몫이 남에게 간다.
+            // **차례가 온 사람은 배수에서 뺀다.** 그는 이미 줄에서 빠졌고 손에
+            // 든 것은 수명 있는 입장 토큰뿐이다. 배수만큼 멀리 보내면 그 사이
+            // 몫이 남에게 가고, 토큰이 죽으면 줄 맨 뒤에 새 순번으로 다시 선다
+            // — 순번 역행이자 추월당함이다 (불변식 3·4).
+            //
+            // 예산이 이 요청을 안 센다. expectedPollRps 는 조회 폴링만 세므로
+            // 늘려도 예산은 안 줄고 토큰만 죽는다. 폴백도 같은 갈래를 쓴다
+            // (BackendFallback).
             //
             // 가장 가까운 밴드(1초)라 흔들림은 반올림에 통째로 흡수된다. 여기서
             // 흩을 대상은 몇 초 뒤에 몰릴 사람들이 아니라 30초 뒤의 파도다.
-            case RETRY_TOKEN -> (int) POLL.intervalSec(0, random, pollScale);
+            case RETRY_TOKEN -> (int) POLL.intervalSec(0, random, NO_SCALE);
             case REJECT_QUEUE_FULL, REJECT_OVERLOAD ->
                     (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random, pollScale);
             // 매진은 안 싣는다. 다시 와도 소용없는데 시각을 주면 재시도를 부른다.
@@ -596,7 +610,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         // 통과 경로까지 같이 죽는다.
         if (!bulkhead.tryEnter(couponId, inFlightCap(ratePerSec, meta))) {
             count("bulkhead-full");
-            return shed(exchange);
+            return shed(exchange, meta);
         }
         // 뒷단으로 넘어가는 건이 생겼으면 끊던 구간이 끝난 것이다. 쌍으로 안
         // 남기면 로그에 진입만 있고 언제 닫혔는지가 없다 (LG-2).
@@ -618,7 +632,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                 // 판단을 여기서 한 번 더 하면 두 곳이 갈릴 수 있다.
                 .onErrorResume(TimeoutException.class, e -> {
                     count("bulkhead-timeout", "timeout");
-                    return shed(exchange);
+                    return shed(exchange, meta);
                 })
                 // **어느 쪽으로 끝나도 돌려준다.** 안 돌려주면 격벽이 한 번 차고
                 // 나서 영영 안 열리고, 그 쿠폰은 뒷단이 멀쩡해져도 계속 막힌다.
@@ -637,7 +651,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      * <p>사다리가 통과라고 적어 둔 값을 그대로 두면, 응답을 쓰는 쪽과 뒤이어
      * 읽는 계층에는 이 요청이 통과로 보인다. 실제로 나가는 것은 503 이다.
      */
-    private Mono<Void> shed(ServerWebExchange exchange) {
+    // **판정에 쓴 재료를 그대로 받는다.** 여기서 홀더를 다시 읽으면 시한
+    // 갈래는 수 초 뒤에 도는 자리라 판정과 다른 판의 배수가 나간다.
+    private Mono<Void> shed(ServerWebExchange exchange, SnapshotMeta meta) {
         // 매 요청 찍으면 정작 조사가 필요한 순간에 묻힌다. 구간의 시작만 찍는다.
         if (shedWindow.entered()) {
             log.warn("보호 차단 진입 — 뒷단이 못 받아 끊는다");
@@ -649,11 +665,14 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         boolean hasToken = exchange.<AdmissionDecision>getAttribute(DECISION)
                 == AdmissionDecision.PASS_TOKEN;
         exchange.getAttributes().put(DECISION, AdmissionDecision.REJECT_OVERLOAD);
-        // 보호 차단도 배수를 지킨다. 이 갈래가 도는 순간이 곧 예산이 빠듯한
-        // 순간이라, 여기만 빼면 과부하일수록 예산이 덜 걸린다.
+        // **줄에 안 선 쪽만 배수를 지킨다.** 이 갈래가 도는 순간이 곧 예산이
+        // 빠듯한 순간이라 거기만 빼면 과부하일수록 예산이 덜 걸린다. 토큰
+        // 보유자는 반대다 — 그 순간이 곧 그가 가장 멀리 밀리는 순간이다.
         return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
-                (int) POLL.intervalSec(hasToken ? 0 : EtaPolicy.UNKNOWN, random,
-                        holder.view().snapshot().meta().pollScale()));
+                hasToken
+                        ? (int) POLL.intervalSec(0, random, NO_SCALE)
+                        : (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random,
+                                meta.pollScale()));
     }
 
     /**

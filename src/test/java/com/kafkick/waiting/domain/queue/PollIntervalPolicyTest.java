@@ -131,17 +131,17 @@ class PollIntervalPolicyTest {
         long 최대_간격 = PollIntervalPolicy.maxInterval().toSeconds();
         long ttl = PollIntervalPolicy.aliveTtl().toSeconds();
 
-        // **약속한 횟수 자체도 못 박는다.** 관계만 재면 이 값이 0 이 돼도
-        // 부등식이 성립해, 봐주는 횟수가 사라진 판이 초록으로 남는다.
-        assertThat(PollIntervalPolicy.missedPolls())
-                .as("백그라운드 탭이 스로틀돼도 안 지워질 만큼").isEqualTo(3);
+        // **경계에 여유가 있어야 한다.** 정확히 (k+1)·I 로 두면 세 번 놓친
+        // 사람은 키가 만료되는 바로 그 순간에 도착한다. 왕복 지연이나 클라이언트
+        // 타이머 드리프트가 조금만 밀어도 걷히므로, 실제로 보장되는 것은 두
+        // 번뿐이고 약속한 세 번은 지켜지지 않는다.
+        assertThat(ttl).as("세 번 놓친 사람이 오는 시각(240초)보다 뒤")
+                .isGreaterThan(4 * 최대_간격);
 
-        // **하한만 재면 길어지는 쪽이 열린다.** 수명이 길수록 죽은 줄이 오래
-        // 남아 폴링 예산을 먹고, 청소 재개 유예도 같이 늘어난다 — 이 변경이
-        // 없애려는 문제와 같은 것이다. 값으로 못 박는다.
-        assertThat(ttl)
-                .as("놓쳐도 되는 횟수만큼, 그 이상은 아니게")
-                .isEqualTo((PollIntervalPolicy.missedPolls() + 1) * 최대_간격);
+        // **위쪽도 값으로 못 박는다.** 수명이 길수록 죽은 줄이 오래 남아 폴링
+        // 예산을 먹고, 청소 재개 유예도 같이 늘어난다 — 이 변경이 없애려는
+        // 문제와 같은 것이다. 관계식으로 재면 늘어나는 쪽이 열린다.
+        assertThat(ttl).as("여유는 왕복과 드리프트를 덮을 만큼만").isEqualTo(250);
     }
 
     @Test

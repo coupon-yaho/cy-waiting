@@ -114,6 +114,62 @@ class QueueStatusFilterTest {
         assertThat(다음으로_감).isFalse();
     }
 
+    /**
+     * <b>매진이면 줄을 안 칩니다</b> (R3 · 7.1.4).
+     *
+     * <p>재고가 없으면 답이 정해져 있습니다. 그런데도 물으러 가면, 매진 순간
+     * 몰리는 폴링이 그대로 레디스 부하가 됩니다 — 정작 그때 줄을 정리해야 합니다.
+     */
+    @Test
+    @DisplayName("매진이면_줄을_안_친다")
+    void 매진이면_줄을_안_친다() {
+        스냅샷을_심는다(CouponStates.closed(1_000));
+        String 토큰 = tokens.issue(COUPON, MEMBER, 지금);
+
+        MockServerWebExchange exchange =
+                조회한다("/api/v1/coupons/" + COUPON + "/queue?queueToken=" + 토큰);
+
+        assertThat(줄.왕복()).as("레디스 왕복").isZero();
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(exchange.getResponse().getBodyAsString().block())
+                .as("매진을 그대로 말한다").contains("SOLD_OUT");
+    }
+
+    /**
+     * <b>다시 오라고 안 합니다</b> (7.1.5).
+     *
+     * <p>재고가 다시 생기지 않는데 재시도를 유도하면, 끝난 캠페인이 폴링을 계속
+     * 만들어 냅니다.
+     */
+    @Test
+    @DisplayName("매진에는_다시_올_시각을_안_준다")
+    void 매진에는_다시_올_시각을_안_준다() {
+        스냅샷을_심는다(CouponStates.closed(1_000));
+        String 토큰 = tokens.issue(COUPON, MEMBER, 지금);
+
+        MockServerWebExchange exchange =
+                조회한다("/api/v1/coupons/" + COUPON + "/queue?queueToken=" + 토큰);
+
+        assertThat(exchange.getResponse().getHeaders().getFirst("Retry-After"))
+                .as("재시도 유도").isNull();
+        assertThat(exchange.getResponse().getBodyAsString().block())
+                .as("다음 폴링까지의 시간").contains("\"nextPollMs\":0");
+    }
+
+    /** 매진이 아니면 그대로 물으러 갑니다. 위 시험이 "늘 안 친다" 로도 통과하면 안 됩니다. */
+    @Test
+    @DisplayName("매진이_아니면_그대로_묻는다")
+    void 매진이_아니면_그대로_묻는다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100));
+        줄.enqueue(COUPON, MEMBER, NO_LIMIT, 지금).block();
+        String 토큰 = tokens.issue(COUPON, MEMBER, 지금);
+        int 이전 = 줄.왕복();
+
+        조회한다("/api/v1/coupons/" + COUPON + "/queue?queueToken=" + 토큰);
+
+        assertThat(줄.왕복()).as("레디스 왕복").isGreaterThan(이전);
+    }
+
     @Test
     @DisplayName("헤더만_바꿔서는_남의_순번을_못_본다")
     void 헤더만_바꿔서는_남의_순번을_못_본다() {

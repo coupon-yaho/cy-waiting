@@ -50,9 +50,6 @@ public class PollIntervalPolicy {
         return Duration.ofSeconds(MAX_INTERVAL_SEC);
     }
 
-    /** 백그라운드 탭이 분당 1회로 스로틀돼도 살아 있다고 봐야 한다. */
-
-
     private final double jitterRatio;
 
     private PollIntervalPolicy(double jitterRatio) {
@@ -82,7 +79,18 @@ public class PollIntervalPolicy {
      */
     public long intervalSec(double etaSec, DoubleSupplier random, double pollScale) {
         long base = bandInterval(etaSec);
-        double scaled = base * Math.max(1.0, pollScale);
+        // **자르고 나서 흔든다.** 흔든 뒤에 자르면 상한 위로 흩어진 값이 전부
+        // 상한 하나로 모여, 배수가 걸린 밴드에서 지터가 정확히 0 이 된다 —
+        // 그러면 그 밴드 전원이 같은 초에 돌아오고, 그것이 조회 상한을 다시
+        // 밀어 올려 같은 파도가 주기마다 재생산된다. 지터가 필요한 구간이
+        // 곧 배수가 걸린 구간이라 거기서 꺼지면 장치가 있으나 마나다.
+        //
+        // **천장은 흔들림의 위쪽 끝에 건다.** 그래서 실제 평균은 상한이 아니라
+        // 상한/(1+지터) 다 — 배선값 0.2 에서 60 이 아니라 50. 그만큼 예산
+        // 보호가 덜 걸리는 대가로 파도를 흩는다. 클라이언트가 받는 값은
+        // 여전히 60 을 안 넘으므로 생존 신호 수명의 유도는 그대로다.
+        double ceiling = MAX_INTERVAL_SEC / (1 + jitterRatio);
+        double scaled = Math.min(base * Math.max(1.0, pollScale), ceiling);
         // [-jitter, +jitter] 로 흔들어 같은 밴드가 동시에 두드리지 않게 한다
         double jittered = scaled * (1 + jitterRatio * (2 * random.getAsDouble() - 1));
         return Math.clamp(Math.round(jittered), MIN_INTERVAL_SEC, MAX_INTERVAL_SEC);

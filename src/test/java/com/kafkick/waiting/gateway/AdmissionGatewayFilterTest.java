@@ -539,7 +539,7 @@ class AdmissionGatewayFilterTest {
     void 줄이_꽉_차_거절해도_배수를_지킨다() {
         assertThat(AdmissionGatewayFilter.retryAfterSec(
                 AdmissionDecision.REJECT_QUEUE_FULL, () -> 0.5, 3.0))
-                .as("ETA 를 모르는 밴드(30초)에 배수 3 — 상한 60").isEqualTo(60);
+                .as("ETA 를 모르는 밴드(30초)에 배수 3 — 흔들림 천장 50").isEqualTo(50);
     }
 
     /**

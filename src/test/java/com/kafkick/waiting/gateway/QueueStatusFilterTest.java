@@ -274,9 +274,9 @@ class QueueStatusFilterTest {
         MockServerWebExchange exchange = 토큰으로_조회한다(tokens.issue(COUPON, MEMBER, 지금));
 
         // 낡으면 배수 속도를 모르므로 ETA 는 가장 먼 밴드(30초)다. 배수 3 을
-        // 걸면 90초라 상한 60 으로 잘린다. 1.0 으로 되돌리는 구현이면 30 이다.
+        // 걸면 90초라 흔들림 천장 50 으로 잘린다. 1.0 으로 되돌리는 구현이면 30 이다.
         assertThat(exchange.getResponse().getHeaders().getFirst("Retry-After"))
-                .as("낡아도 지키는 배수").isEqualTo("60");
+                .as("낡아도 지키는 배수").isEqualTo("50");
     }
 
     /**
@@ -298,9 +298,10 @@ class QueueStatusFilterTest {
         MockServerWebExchange exchange = 조회한다(
                 상한이_찬_필터, "/api/v1/coupons/" + COUPON + "/queue?queueToken=" + 토큰);
 
-        // ETA 를 모르는 갈래라 30초 밴드다. 배수 3 이면 90 → 상한 60.
+        // ETA 를 모르는 갈래라 30초 밴드다. 배수 3 이면 90 인데, 흔들림의
+        // 위쪽 끝이 상한 60 에 닿도록 가운데를 60/1.2 = 50 으로 자른다.
         assertThat(exchange.getResponse().getHeaders().getFirst("Retry-After"))
-                .as("거절에도 걸리는 배수").isEqualTo("60");
+                .as("거절에도 걸리는 배수").isEqualTo("50");
     }
 
     /**
@@ -629,7 +630,7 @@ class QueueStatusFilterTest {
         assertThat(exchange.getResponse().getStatusCode())
                 .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
         assertThat(exchange.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER))
-                .as("ETA 를 모르는 밴드(30초)에 배수 3 — 상한 60").isEqualTo("60");
+                .as("ETA 를 모르는 밴드(30초)에 배수 3 — 흔들림 천장 50").isEqualTo("50");
     }
 
     @Test

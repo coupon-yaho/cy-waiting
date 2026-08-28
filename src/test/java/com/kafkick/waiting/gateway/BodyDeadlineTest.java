@@ -20,9 +20,9 @@ import reactor.test.StepVerifier;
 /**
  * 본문이 <b>끝없이 느린</b> 뒷단을 끊습니다 (6.2 · CY-633).
  *
- * <p>응답 상한은 읽기 사이의 간격을 봅니다. 그 상한보다 촘촘히 흘리면 영영 안 걸리고,
- * 헤더가 이미 나간 뒤라 판정 쪽 시한도 커넥션을 못 끊습니다 — 실측으로 40초를
- * 기다려도 안 끝났습니다.
+ * <p><b>응답 상한은 헤더가 오기까지만 잽니다.</b> 그 뒤로는 아무것도 안 재므로
+ * 본문을 한 바이트도 안 보내도 안 걸리고, 헤더가 나간 뒤라 판정 쪽 시한도 커넥션을
+ * 못 끊습니다 — 실측으로 40초를 기다려도 안 끝났습니다.
  */
 class BodyDeadlineTest {
 
@@ -84,6 +84,31 @@ class BodyDeadlineTest {
         assertThat(흘렀다).isTrue();
         assertThat(exchange.getResponse().getBodyAsString().block()).isEqualTo("목록");
         assertThat(끊은_건수()).as("안 끊었으면 안 센다").isZero();
+    }
+
+    /**
+     * <b>스트리밍 응답도 끊습니다.</b>
+     *
+     * <p>쓰기 필터는 미디어 타입이 스트리밍이면 <code>writeAndFlushWith</code> 로
+     * 갑니다. 한쪽만 덮으면 <code>text/event-stream</code> 헤더 하나로 이 보호
+     * 장치가 통째로 무효가 됩니다 — 뒷단이 잘못된 상태로 무너지면 그 모양입니다.
+     */
+    @Test
+    @DisplayName("스트리밍_본문도_상한에서_끊는다")
+    void 스트리밍_본문도_상한에서_끊는다() {
+        MockServerWebExchange exchange = 조회();
+        BodyDeadline deadline = BodyDeadline.of(상한, 응답, meters);
+
+        StepVerifier.withVirtualTime(() -> deadline.filter(exchange, ex ->
+                        ex.getResponse().writeAndFlushWith(
+                                Flux.interval(Duration.ofMillis(200))
+                                        .map(i -> Flux.just(ex.getResponse().bufferFactory()
+                                                .wrap("x".getBytes()))))))
+                .thenAwait(상한.plusSeconds(1))
+                .expectError(TimeoutException.class)
+                .verify();
+
+        assertThat(끊은_건수()).as("끊은 건수").isEqualTo(1);
     }
 
     /** 상한이 0 이하면 끊는 것이 아니다. 값으로 끄면 그 사실이 안 드러난다. */

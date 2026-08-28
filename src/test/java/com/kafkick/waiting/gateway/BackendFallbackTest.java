@@ -330,6 +330,42 @@ class BackendFallbackTest {
         assertThat(줄_초).isEqualTo(30);
     }
 
+    /**
+     * <b>줄에 선 쪽은 전역 배수를 지킨다.</b>
+     *
+     * <p>서킷이 열린 구간이 곧 배수가 커져 있는 구간이다. 판정 경로의 보호 차단은
+     * 같은 사람에게 배수를 거는데 여기만 빼면, 같은 장애에 두 값이 나가고 하필
+     * 그때 폴백으로 간 사람만 예산 밖에서 돌아온다.
+     */
+    @Test
+    @DisplayName("줄에_선_사람에게_전역_배수를_건다")
+    void 줄에_선_사람에게_전역_배수를_건다() {
+        MockServerWebExchange exchange = 게이트웨이가_넘긴_요청();
+        exchange.getAttributes().put(AdmissionGatewayFilter.POLL_SCALE, 1.5);
+
+        답한다(fallback, exchange);
+
+        // 30초 밴드에 배수 1.5 — 천장(50) 아래라 배수가 값으로 보인다.
+        assertThat(exchange.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER))
+                .as("폴백에도 걸리는 배수").isEqualTo("45");
+    }
+
+    /**
+     * <b>차례가 온 사람은 그래도 안 건다.</b> 그는 이미 줄에서 빠졌고 손에 든 것은
+     * 수명 있는 토큰뿐이라, 배수만큼 멀리 보내면 토큰이 죽어 줄 맨 뒤에 다시 선다.
+     */
+    @Test
+    @DisplayName("차례가_온_사람에게는_배수를_안_건다")
+    void 차례가_온_사람에게는_배수를_안_건다() {
+        MockServerWebExchange exchange = 차례가_온_요청();
+        exchange.getAttributes().put(AdmissionGatewayFilter.POLL_SCALE, 50.0);
+
+        답한다(fallback, exchange);
+
+        assertThat(exchange.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER))
+                .as("배수 50 이 곱해지면 상한에 붙는다").isEqualTo("1");
+    }
+
     private MockServerWebExchange 차례가_온_요청() {
         MockServerWebExchange exchange = 게이트웨이가_넘긴_요청();
         exchange.getAttributes().put(

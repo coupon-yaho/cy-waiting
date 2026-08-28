@@ -140,8 +140,8 @@ class SnapshotMetricsTest {
     @Test
     @DisplayName("적용_중인_튜너블을_낸다")
     void 적용_중인_튜너블을_낸다() {
-        holder.replace(new GatewaySnapshot(Map.of(), new SnapshotMeta(1_000, 1,
-                new Tunables(0.35, 9)), 지금));
+        holder.replace(new GatewaySnapshot(Map.of(),
+                SnapshotMeta.withoutPollScale(1_000, 1, new Tunables(0.35, 9)), 지금));
         SnapshotMetrics.bind(holder, meters);
 
         assertThat(meters.get("waiting.tunable.idle.ratio").gauge().value()).isEqualTo(0.35);

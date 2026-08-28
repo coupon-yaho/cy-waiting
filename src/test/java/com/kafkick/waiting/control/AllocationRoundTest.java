@@ -1,10 +1,12 @@
 package com.kafkick.waiting.control;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import com.kafkick.waiting.adapter.redis.ClockSkewTracker;
 import com.kafkick.waiting.domain.allocation.CouponDemand;
 import com.kafkick.waiting.domain.allocation.CreditSmoother;
 import com.kafkick.waiting.domain.coupon.CouponState;
@@ -17,13 +19,16 @@ import java.util.ArrayList;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.util.Optional;
 import com.kafkick.waiting.domain.coupon.CouponStates;
+import com.kafkick.waiting.domain.queue.PollBudgetPlanner;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import java.time.Duration;
 import java.util.List;
+import java.util.function.Supplier;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -219,9 +224,15 @@ class AllocationRoundTest {
     }
 
     private AllocationRound round(List<CouponDemand> 수요, long 전역_크레딧, int 노드_수) {
+        return round(() -> 수요, 전역_크레딧, 노드_수);
+    }
+
+    /** 판마다 수요가 바뀌는 시험용. 복붙하면 헬퍼가 바뀔 때 그 시험만 옛 배선을 잰다. */
+    private AllocationRound round(Supplier<List<CouponDemand>> 수요,
+            long 전역_크레딧, int 노드_수) {
         return AllocationRound.of(
                 () -> true,
-                () -> Mono.just(new TimedDemands(수요, 읽은_시각)),
+                () -> Mono.just(new TimedDemands(수요.get(), 읽은_시각)),
                 () -> 전역_크레딧,
                 () -> 노드_수,
                 grant -> {
@@ -246,8 +257,209 @@ class AllocationRoundTest {
                 .map(ILoggingEvent::getArgumentArray).findFirst().orElseThrow();
     }
 
+    private double 발행된_배수() {
+        return SnapshotCodec.create().decode(발행.get("last")).meta().pollScale();
+    }
+
     private CouponState 발행된(String couponId) {
         return SnapshotCodec.create().decode(발행.get("last")).coupons().get(couponId);
+    }
+
+    @Test
+    @DisplayName("예산을_넘는_폴링_수요면_배수가_스냅샷에_실린다")
+    void 예산을_넘는_폴링_수요면_배수가_스냅샷에_실린다() {
+        // 배수를 안 실으면 게이트웨이가 늘 1.0 으로 답하고, 폴링 예산이라는
+        // 계산은 아무 데도 안 닿는 순수 함수로 남는다.
+        AllocationRound round = round(List.of(new CouponDemand("c1", 100_000, 1_000_000)), 10, 1);
+
+        round.run().block();
+
+        // **값으로 못 박는다.** 시계도 크레딧도 고정이라 결정적인 값인데
+        // 부등호로 두면 예산 상수가 열 배 틀려도 통과한다.
+        // 밴드별로 50 + 250/3 + 90 + 98800/30 = 3516.67 rps, 예산 200.
+        assertThat(발행된_배수()).as("예산 초과 배수").isCloseTo(17.583, within(0.001));
+    }
+
+    @Test
+    @DisplayName("매진_큐의_대기자는_배수를_안_올린다")
+    void 매진_큐의_대기자는_배수를_안_올린다() {
+        // 3.3 절. 죽은 큐 10만 명이 예산을 먹으면 **살아 있는 쿠폰의** 대기자까지
+        // 폴링 간격이 늘어난다 — 배분에서 막아 둔 기아가 폴링으로 되살아난다.
+        AllocationRound round = round(List.of(
+                new CouponDemand("dead", 100_000, 0),
+                new CouponDemand("live", 10, 100)), 100, 1);
+
+        round.run().block();
+        double 매진일_때 = 발행된_배수();
+
+        // **음성 대조를 붙인다.** 1.0 은 배수 배선을 통째로 지웠을 때도 나오는
+        // 값이라, 이것만 보면 걸러 낸 것을 증명하지 못한다. 같은 판에서 재고만
+        // 채우면 배수가 크게 오른다 — 두 값을 가르는 것이 `isActive` 필터뿐이다.
+        round(List.of(
+                new CouponDemand("dead", 100_000, 1_000_000),
+                new CouponDemand("live", 10, 100)), 100, 1).run().block();
+
+        assertThat(매진일_때).as("살아 있는 쿠폰의 배수").isEqualTo(1.0);
+        // 형제 시험처럼 값으로 못 박는다. dead 가 90, live 가 10 을 받아
+        // 4,983.33 + 10 rps, 예산 200.
+        assertThat(발행된_배수()).as("같은 줄이 살아 있으면 예산을 먹는다")
+                .isCloseTo(24.967, within(0.001));
+    }
+
+    @Test
+    @DisplayName("예산을_넘긴_틱을_한_판에_한_번만_센다")
+    void 예산을_넘긴_틱을_한_판에_한_번만_센다() {
+        // 한 판이 쿠폰 상태를 세 번 만든다 — 발행·정리·청소. 배수 계산이
+        // 거기 묻어 있으면 누적 틱이 3배로 오르고, "틱 수" 라고 적힌 지표가
+        // 틱이 아닌 것을 센다. 해제 로그의 지속 시간도 같이 부푼다.
+        AllocationRound round = round(List.of(new CouponDemand("c1", 100_000, 1_000_000)), 10, 1);
+
+        round.run().block();
+        assertThat(round.pollBudgetOvershootTicks()).as("한 판").isEqualTo(1);
+
+        round.run().block();
+        assertThat(round.pollBudgetOvershootTicks()).as("두 판").isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("배수가_풀리면_해제를_남긴다")
+    void 배수가_풀리면_해제를_남긴다() {
+        // **같은 인스턴스 위에서 오름과 내림을 잰다.** 판마다 새 인스턴스를
+        // 만들면 진입만 돌고 해제 갈래는 한 번도 안 돈다 — 그 자리에 상태가
+        // 있는데(초과 창) 회복 전이를 아무도 안 밟는 것이다.
+        AtomicReference<List<CouponDemand>> 수요 = new AtomicReference<>(
+                List.of(new CouponDemand("c1", 100_000, 1_000_000)));
+        AllocationRound round = round(수요::get, 10, 1);
+
+        round.run().block();
+        double 배수 = 발행된_배수();
+        assertThat(배수).as("진입").isGreaterThan(1.0);
+        assertThat(로그_메시지()).anyMatch(m -> m.contains("폴링 예산 초과 —"));
+        // **인자를 값으로 못 박는다.** 문구만 보면 예상과 예산이 뒤바뀌어
+        // 찍혀도 초록이다. 쿠폰 ID 를 라벨로 못 쓰므로(LG-4) 어느 규모에서
+        // 배수가 걸렸는지는 이 로그만이 답한다.
+        assertThat(로그_인자("폴링 예산 초과 —"))
+                .as("예상 rps · 노드 수 · 예산 rps · 소수 한 자리로 자른 배수")
+                .containsExactly(Math.round(PollBudgetPlanner.expectedPollRps(100_000, 10)),
+                        1, Math.round(PollBudgetPlanner.budgetRps(1)),
+                        Math.round(배수 * 10) / 10.0);
+
+        // 재고가 마르면 그 줄은 예산에서 빠진다. 배수가 풀리는 전이다.
+        수요.set(List.of(new CouponDemand("c1", 100_000, 0)));
+        round.run().block();
+
+        assertThat(발행된_배수()).as("해제").isEqualTo(1.0);
+        assertThat(로그_메시지()).anyMatch(m -> m.contains("폴링 예산 초과 해제 —"));
+    }
+
+    @Test
+    @DisplayName("예산_안이면_틱을_안_센다")
+    void 예산_안이면_틱을_안_센다() {
+        AllocationRound round = round(List.of(new CouponDemand("c1", 10, 100)), 100, 1);
+        round.run().block();
+
+        assertThat(round.pollBudgetOvershootTicks()).as("초과 없음").isZero();
+    }
+
+    /**
+     * <b>지표가 어느 값을 읽는지 못 박는다.</b>
+     *
+     * <p>이름이 스크레이프에 있는지만 보면 네 지표가 서로의 값을 읽어도 통과한다 —
+     * 이름 넷이 다 보이는데 둘이 같은 숫자를 내는, 조사할 때 정확히 헷갈리는 모양이다.
+     */
+    @Test
+    @DisplayName("선행_지표가_각자의_값을_읽는다")
+    void 선행_지표가_각자의_값을_읽는다() {
+        AllocationRound round = round(
+                List.of(new CouponDemand("c1", 100_000, 1_000_000)), 10, 1);
+        round.run().block();
+        SimpleMeterRegistry meters = new SimpleMeterRegistry();
+
+        InvariantMetrics.bind(round, ClockSkewTracker.create(), meters);
+
+        assertThat(round.pollBudgetOvershootTicks()).as("전제 — 이 판은 예산을 넘겼다")
+                .isEqualTo(1);
+        assertThat(meters.get("waiting.poll.budget.overshoot.ticks")
+                .functionCounter().count()).as("폴링 예산 초과 틱").isEqualTo(1);
+        // 나머지 셋은 이 판에서 안 움직인다. 값이 갈려야 서로를 읽는 배선이 잡힌다.
+        assertThat(meters.get("waiting.allocation.budget.overshoot")
+                .functionCounter().count()).as("배분 초과량").isZero();
+        assertThat(meters.get("waiting.allocation.entered.overshoot")
+                .functionCounter().count()).as("초과 입장 인원").isZero();
+        assertThat(meters.get("waiting.snapshot.clock.floor.applied")
+                .functionCounter().count()).as("시계 바닥값").isZero();
+    }
+
+    /**
+     * <b>하트비트가 다 만료돼 0 으로 보이는 순간 배수가 꺼지면 안 된다.</b>
+     *
+     * <p>클러스터가 흔들리는 바로 그 순간이라, 예산이 0 이 되면 배수가 통째로
+     * 꺼지고 전원의 폴링이 한꺼번에 짧아진다. 방어를 한 곳에 모은 근거가 이것인데
+     * 부르는 쪽이 그 메서드를 쓰는지는 아무도 안 재고 있었다.
+     */
+    /**
+     * <b>발행이 실패하면 배수도 안 센다.</b>
+     *
+     * <p>스냅샷 샤드만 죽은 구간이 여기다. 리더는 배수 17 을 계산하는데 전 노드는
+     * 옛 재료로 1.0 을 쓰고 있으므로, 그 틱을 세면 없었던 부하를 보고하는 셈이다.
+     * 운영자는 그 지표를 보고 노드를 늘린다.
+     */
+    @Test
+    @DisplayName("발행이_실패하면_배수를_안_센다")
+    void 발행이_실패하면_배수를_안_센다() {
+        AllocationRound round = AllocationRound.of(
+                () -> true,
+                () -> Mono.just(new TimedDemands(
+                        List.of(new CouponDemand("c1", 100_000, 1_000_000)), 읽은_시각)),
+                () -> 10L, () -> 1,
+                grant -> Mono.just(grant.credit()),
+                hash -> Mono.error(new IllegalStateException("스냅샷 샤드가 끊겼다")),
+                () -> Instant.ofEpochSecond(읽은_시각),
+                () -> Mono.just(CreditSmoother.of(1.0)),
+                SnapshotCodec.create(), () -> 0L);
+
+        round.run().onErrorResume(e -> Mono.empty()).block();
+
+        assertThat(round.pollBudgetOvershootTicks()).as("안 닿은 배수는 안 센다").isZero();
+        assertThat(로그_메시지()).as("없었던 초과를 보고하지 않는다")
+                .noneMatch(m -> m.contains("폴링 예산 초과 —"));
+    }
+
+    @Test
+    @DisplayName("노드가_0으로_보여도_한_대로_친다")
+    void 노드가_0으로_보여도_한_대로_친다() {
+        List<CouponDemand> 수요 = List.of(new CouponDemand("c1", 100_000, 1_000_000));
+
+        round(수요, 10, 1).run().block();
+        double 한_대 = 발행된_배수();
+        round(수요, 10, 0).run().block();
+        double 영_대 = 발행된_배수();
+        round(수요, 10, -3).run().block();
+        double 음수 = 발행된_배수();
+
+        assertThat(한_대).as("하한에 붙지 않았다 — 붙으면 셋이 다 1.0 이라 못 가린다")
+                .isGreaterThan(1.0);
+        assertThat(영_대).as("0 은 1 대로 친다").isEqualTo(한_대);
+        assertThat(음수).as("음수도 1 대로 친다").isEqualTo(한_대);
+    }
+
+    @Test
+    @DisplayName("노드가_두_배면_배수가_절반이다")
+    void 노드가_두_배면_배수가_절반이다() {
+        // 폴링은 게이트웨이가 메모리에서 종결한다. 그래서 예산의 출처는 노드 수다.
+        // 상수 하나로 고정하면 증설이 폴링 간격을 못 줄인다.
+        //
+        // **하한에 붙지 않는 구간에서 잰다.** 배수는 1.0 아래로 안 내려가므로,
+        // 클램프 구간에서 비교하면 예산이 어떻게 바뀌든 통과한다.
+        List<CouponDemand> 수요 = List.of(new CouponDemand("c1", 100_000, 1_000_000));
+
+        round(수요, 10, 1).run().block();
+        double 한_대 = 발행된_배수();
+        round(수요, 10, 2).run().block();
+        double 두_대 = 발행된_배수();
+
+        assertThat(두_대).as("증설한 만큼 정확히 내려간다").isCloseTo(한_대 / 2, within(0.001));
+        assertThat(두_대).as("하한에 붙지 않았다").isGreaterThan(1.0);
     }
 
     @Test
@@ -547,6 +759,12 @@ class AllocationRoundTest {
 
         assertThat(적용).containsExactly("c1");
         assertThat(발행).isEmpty();
+        // **셈도 같이 멎어야 한다.** 발행을 안 하는 판에서 배수의 계산이 돌면
+        // 이 노드는 걸지도 않은 배수를 걸었다고 기록한다. 지금은 삼항의
+        // 짧은-회로가 그것을 막지만, 셈이 재료를 만드는 자리로 다시 들어가면
+        // 그 보호가 사라진다 — 그때 여기가 붉어진다.
+        assertThat(round.pollBudgetOvershootTicks()).as("안 발행한 판은 안 센다")
+                .isZero();
     }
 
     @Test

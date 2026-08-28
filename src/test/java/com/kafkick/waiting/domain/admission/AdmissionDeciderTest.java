@@ -472,8 +472,8 @@ class AdmissionDeciderTest {
     @DisplayName("실려_온_한산_몫이_기동값을_이긴다")
     void 실려_온_한산_몫이_기동값을_이긴다() {
         CouponState 한산 = CouponStates.idle(500);
-        SnapshotMeta 실려_온_것 = new SnapshotMeta(META.globalCredit(), META.gatewayCount(),
-                new Tunables(0.2, 3));
+        SnapshotMeta 실려_온_것 = SnapshotMeta.withoutPollScale(
+                META.globalCredit(), META.gatewayCount(), new Tunables(0.2, 3));
 
         assertThat(decider().admittedRatePerSec(
                 AdmissionDecision.PASS_UNDER_CAP, 한산, 실려_온_것))

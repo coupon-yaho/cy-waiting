@@ -8,6 +8,7 @@ import com.kafkick.waiting.domain.allocation.Grant;
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import com.kafkick.waiting.domain.coupon.Tunables;
+import com.kafkick.waiting.domain.queue.PollBudgetPlanner;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import java.time.Duration;
@@ -87,6 +88,19 @@ public final class AllocationRound {
 
     /** 초과 구간. 틱마다 찍으면 정작 조사가 필요한 순간에 묻힌다 (LG-2). */
     private final FailureWindow overshoot = FailureWindow.create();
+
+    /** 폴링 예산을 넘긴 구간. 진입과 해제를 쌍으로 남긴다 (LG-2). */
+    // **쌍이 끊기는 경우가 있다.** 초과 중 리더십을 잃으면 새 리더의 창은
+    // 비어 있어 해제가 안 나온다 (CY-735). 창이 리더 메모리라 그렇다.
+    private final FailureWindow pollOvershoot = FailureWindow.create();
+
+    /**
+     * 폴링 예산을 넘긴 틱 수.
+     *
+     * <p><b>마지막 배수를 게이지로 안 낸다.</b> 리더십을 잃는 순간 그 값이 굳고,
+     * 15초 스크레이프가 짧은 초과 구간을 통째로 놓친다 — 누적이라야 남는다.
+     */
+    private final AtomicLong pollBudgetOvershootTicks = new AtomicLong();
 
     /** 뒷단이 받을 수 있다고 한 것보다 더 나눠 준 누적량. */
     private final AtomicLong budgetOvershoot = new AtomicLong();
@@ -254,23 +268,17 @@ public final class AllocationRound {
                         // 히스테리시스를 안 돌려서 실을 상태가 없다 (CY-324).
                         // 돌리기 시작하면 여기가 매 틱 이월을 지우는 자리가
                         // 되므로, 기본값에 숨기지 않고 눈에 보이게 둔다.
-                        : publish.apply(codec.encode(
-                                snapshot(collected, granted, credit, readAt,
-                                        tunables.get().orElse(null)),
-                                current.snapshot(),
-                                QueueingHysteresis.Snapshot.empty()))
+                        : publishRound(collected, granted, credit, readAt, current)
                         // **발행 뒤에 지운다** (7.3). 앞에 두면 방금 지운 큐가
                         // 이번 재료에는 아직 대기자로 실려, 그 판의 크레딧이
                         // 없는 줄에 나간다.
                         // **미룬다.** 인자로 부르면 자바가 먼저 평가해서, 셈과
                         // 표시와 로그가 발행이 구독되기도 전에 일어난다 —
                         // 발행이 터져도 지운 것으로 기록된다.
-                        .then(Mono.defer(() ->
-                                cleanUp(collected, granted, credit, readAt)))
+                        .then(Mono.defer(() -> cleanUp(collected, granted)))
                         // **정리 뒤에 쓴다.** 앞에 두면 곧 지울 줄을 훑느라
                         // 예산을 쓴다.
-                        .then(Mono.defer(() ->
-                                sweepUp(collected, granted, credit, readAt)))));
+                        .then(Mono.defer(() -> sweepUp(collected, granted)))));
     }
 
     /**
@@ -278,11 +286,8 @@ public final class AllocationRound {
      *
      * <p><b>정리 실패가 배분을 막지 않는다</b> (7.3.4). 다음 틱에 다시 온다.
      */
-    private Mono<Void> cleanUp(List<CouponDemand> collected, Map<String, Long> granted,
-            long credit, Instant readAt) {
-        List<String> due = cleanup.due(
-                snapshot(collected, granted, credit, readAt, tunables.get().orElse(null))
-                        .coupons());
+    private Mono<Void> cleanUp(List<CouponDemand> collected, Map<String, Long> granted) {
+        List<String> due = cleanup.due(couponsOf(collected, granted));
         if (due.isEmpty()) {
             return Mono.empty();
         }
@@ -314,14 +319,11 @@ public final class AllocationRound {
     }
 
     /** 이탈자를 걷어 낸다 (7.4). 멈춰야 할 구간은 스위퍼가 안다. */
-    private Mono<Void> sweepUp(List<CouponDemand> collected, Map<String, Long> granted,
-            long credit, Instant readAt) {
+    private Mono<Void> sweepUp(List<CouponDemand> collected, Map<String, Long> granted) {
         if (lostLeadership()) {
             return Mono.empty();
         }
-        return sweeper.run(
-                snapshot(collected, granted, credit, readAt, tunables.get().orElse(null))
-                        .coupons(),
+        return sweeper.run(couponsOf(collected, granted),
                 // **리더가 신선한 것과 노드들이 신선한 것은 다른 이야기다.**
                 // 생존 신호를 갱신하는 것은 노드 쪽 폴링이라, 그쪽이 멎어도
                 // 리더의 수요 읽기는 성공할 수 있다. 이 노드도 게이트웨이이므로
@@ -375,6 +377,11 @@ public final class AllocationRound {
     /** 예산보다 더 들여보낸 누적 인원. */
     public double enteredOvershoot() {
         return enteredOvershoot.get();
+    }
+
+    /** 폴링 예산을 넘긴 누적 틱 수. 0 이면 배수가 한 번도 안 걸렸다. */
+    public double pollBudgetOvershootTicks() {
+        return pollBudgetOvershootTicks.get();
     }
 
     /**
@@ -433,13 +440,95 @@ public final class AllocationRound {
                 demand.stock(), demand.waiting());
     }
 
-    private GatewaySnapshot snapshot(List<CouponDemand> collected, Map<String, Long> granted,
-            long credit, Instant readAt, Tunables applied) {
+    /**
+     * 쿠폰별 상태만. <b>정리와 청소는 이것만 쓴다.</b>
+     *
+     * <p>스냅샷을 통째로 만들면 배수 계산과 그 계측이 한 판에 세 번 돈다 —
+     * 누적 틱이 3배로 오르고 해제 로그의 지속 시간도 3배가 된다.
+     */
+    private Map<String, CouponState> couponsOf(
+            List<CouponDemand> collected, Map<String, Long> granted) {
         Map<String, CouponState> coupons = new LinkedHashMap<>();
-        collected.forEach(demand ->
-                coupons.put(demand.couponId(), stateOf(demand, granted)));
-        return new GatewaySnapshot(coupons,
-                new SnapshotMeta(credit, gatewayCount.getAsInt(), applied), readAt);
+        collected.forEach(demand -> coupons.put(demand.couponId(), stateOf(demand, granted)));
+        return coupons;
+    }
+
+    /** 발행할 재료 한 판. <b>순수하다</b> — 몇 번을 만들어도 세는 값이 안 는다. */
+    private GatewaySnapshot snapshot(List<CouponDemand> collected, Map<String, Long> granted,
+            long credit, Instant readAt, Tunables applied, double pollScale) {
+        return new GatewaySnapshot(couponsOf(collected, granted),
+                meta(credit, applied).withPollScale(pollScale), readAt);
+    }
+
+    // **노드 수 방어를 여기서 다시 쓰지 않는다.** 사본이 생기면 둘 중 하나만
+    // 시험이 붙고, 하트비트가 다 만료돼 0 으로 보이는 순간 — 즉 클러스터가
+    // 흔들리는 바로 그 순간 — 예산이 0 이 되어 배수가 통째로 꺼진다.
+    private SnapshotMeta meta(long credit, Tunables applied) {
+        return SnapshotMeta.withoutPollScale(credit, gatewayCount.getAsInt(), applied);
+    }
+
+    /**
+     * 배수를 실어 발행한다.
+     *
+     * <p><b>센 것은 발행이 끝난 뒤에 남긴다.</b> 인자로 부르면 자바가 먼저
+     * 평가해서, 발행이 터져도 배수를 걸었다고 기록한다 — 스냅샷 샤드만 죽은
+     * 구간이 정확히 그렇다. 그때 전 노드는 옛 재료로 배수 1.0 을 쓰고 있다.
+     */
+    private Mono<Void> publishRound(List<CouponDemand> collected, Map<String, Long> granted,
+            long credit, Instant readAt, CreditSmoother current) {
+        PollBudget budget = pollBudget(collected, granted, credit);
+        // **히스테리시스는 아직 빈 값을 싣는다.** 제품이 아직 히스테리시스를
+        // 안 돌려서 실을 상태가 없다 (CY-324). 돌리기 시작하면 여기가 매 틱
+        // 이월을 지우는 자리가 되므로, 기본값에 숨기지 않고 눈에 보이게 둔다.
+        return publish.apply(codec.encode(
+                        snapshot(collected, granted, credit, readAt,
+                                tunables.get().orElse(null), budget.scale()),
+                        current.snapshot(), QueueingHysteresis.Snapshot.empty()))
+                .doOnSuccess(done -> watchPollBudget(budget));
+    }
+
+    /** 이번 틱의 폴링 예산과 그 결과. <b>순수하다</b> — 세는 것은 발행 뒤다. */
+    private record PollBudget(double expected, double budget, double scale, int nodes) {
+    }
+
+    /**
+     * 이번 틱의 전역 폴링 배수.
+     *
+     * <p>예산은 도메인이 소유한다 — 밴드도 하한도 거기 있는데 예산만 제어
+     * 평면에 두면, 운영자가 실제로 만질 유일한 숫자만 시험이 안 닿는 곳에 남는다.
+     */
+    private PollBudget pollBudget(List<CouponDemand> collected, Map<String, Long> granted,
+            long credit) {
+        int nodes = meta(credit, null).effectiveGatewayCount();
+        double expected = PollBudgetPlanner.expectedPollRps(collected,
+                couponId -> granted.getOrDefault(couponId, 0L));
+        double budget = PollBudgetPlanner.budgetRps(nodes);
+        return new PollBudget(expected, budget,
+                PollBudgetPlanner.pollScale(expected, budget), nodes);
+    }
+
+    /**
+     * 배수가 1 을 넘는 것은 상태 전이다.
+     *
+     * <p>전 대기자의 다음 폴링이 한꺼번에 늘어나는데, 남기지 않으면 운영자
+     * 눈에는 원인 없이 폴링이 뜸해진 것으로만 보인다.
+     */
+    private void watchPollBudget(PollBudget round) {
+        double scale = round.scale();
+        if (scale <= 1.0) {
+            pollOvershoot.exited().ifPresent(r -> log.info(
+                    "폴링 예산 초과 해제 — {}초 동안 {}틱", r.elapsedSeconds(), r.swallowed()));
+            return;
+        }
+        pollBudgetOvershootTicks.incrementAndGet();
+        if (pollOvershoot.entered()) {
+            log.warn("폴링 예산 초과 — 예상 {}rps, 노드 {}대 예산 {}rps, 배수 {}. "
+                    + "죽은 큐 정리와 노드 증설을 검토하세요",
+                    Math.round(round.expected()), round.nodes(), Math.round(round.budget()),
+                    // 같은 줄의 형제 값이 다 정수다. 여기만 17.583333333333332 가
+                    // 나오면 읽는 사람이 그 자릿수에 의미가 있다고 읽는다.
+                    Math.round(scale * 10) / 10.0);
+        }
     }
 
 }

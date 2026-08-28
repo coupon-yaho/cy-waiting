@@ -46,13 +46,12 @@ public final class QueueRedisPort implements QueuePort {
     private static final String MAX_SCORE_TTL_SEC = "86400";
 
     /**
-     * 생존 신호가 사는 시간.
+     * 생존 신호가 사는 시간. <b>정책에서 끌어온다.</b>
      *
-     * <p>폴링 간격에서 나오는 값이지만, 등록 시점에는 그 사람의 ETA 를 아직
-     * 모른다. 가장 긴 폴링 간격(30초)의 세 배를 쓴다 — 백그라운드 탭이
-     * 스로틀돼도 이탈자로 안 지워지는 값이다.
+     * <p>등록 시점에는 그 사람의 ETA 를 아직 모르므로 가장 긴 간격을 기준으로
+     * 잡는다. 여기 값을 박으면 정책과 갈리고, 스위퍼의 재개 유예가 이 값에
+     * 걸려 있어 갈리는 순간 순번이 깨진다.
      */
-    /** <b>정책에서 끌어온다.</b> 스위퍼의 재개 유예가 이 값에 걸려 있어, 갈리면 순번이 깨진다. */
     private static final String ALIVE_TTL_SEC =
             Long.toString(PollIntervalPolicy.aliveTtl().toSeconds());
 

@@ -209,19 +209,63 @@ class SnapshotEncodeTest {
         assertThat(codec.decode(Map.of("#nodes", "열둘")).meta().gatewayCount()).isEqualTo(1);
     }
 
+    /**
+     * <b>옛 노드가 읽을 수 있는 모양으로 싣는다.</b>
+     *
+     * <p>읽는 쪽만 관대하게 만들면 절반만 열린다. 이미 떠 있는 노드는 여섯
+     * 필드를 기대하므로, 새 리더가 다섯을 발행하면 그 노드가 전 쿠폰을 떨군다.
+     * 관대한 디코더가 먼저 배포된 뒤에 줄인다.
+     */
+    @Test
+    @DisplayName("쿠폰_값이_옛_필드_수를_지킨다")
+    void 쿠폰_값이_옛_필드_수를_지킨다() {
+        GatewaySnapshot 원본 = new GatewaySnapshot(
+                Map.of("c1", new CouponState(QueueMode.ALWAYS, RuntimeState.DRAINING, 9, 100, 5)),
+                new SnapshotMeta(9, 1), Instant.ofEpochSecond(1_700_000_000L));
+
+        String 실린_값 = codec.encode(원본, CreditSmoother.Snapshot.empty(),
+                QueueingHysteresis.Snapshot.empty()).get("c1");
+
+        assertThat(실린_값.split(":")).as("옛 노드가 기대하는 필드 수").hasSize(6);
+        assertThat(실린_값).isEqualTo("ALWAYS:DRAINING:9:100:5:1.0");
+    }
+
+    /**
+     * <b>옛 노드도 배수를 지킨다.</b>
+     *
+     * <p>여섯 번째 자리에 상수를 박으면 롤아웃 구간 내내 옛 파드 전부가 배수 없이
+     * 폴링한다. 파드 대부분이 아직 옛것인 구간이 있으므로, 새 리더가 "보호가
+     * 걸렸다" 고 보고하는 동안 클러스터는 예산을 한참 넘긴 채로 돈다.
+     */
+    // 옛 노드는 이 자리를 그 쿠폰의 배수로 읽는다. 전역값을 그대로 실으면 그
+    // 노드의 계산이 새 노드와 같아진다 — 읽는 쪽이 달라도 답은 같다.
+    @Test
+    @DisplayName("옛_자리에_실제_배수를_싣는다")
+    void 옛_자리에_실제_배수를_싣는다() {
+        GatewaySnapshot 배수가_걸린_판 = new GatewaySnapshot(
+                Map.of("c1", new CouponState(QueueMode.ALWAYS, RuntimeState.QUEUEING, 9, 100, 50)),
+                new SnapshotMeta(9, 1, null, 3.5), Instant.ofEpochSecond(1_700_000_000L));
+
+        String 실린_값 = codec.encode(배수가_걸린_판, CreditSmoother.Snapshot.empty(),
+                QueueingHysteresis.Snapshot.empty()).get("c1");
+
+        assertThat(실린_값).as("여섯 번째 자리가 전역 배수와 같다")
+                .isEqualTo("ALWAYS:QUEUEING:9:100:50:3.5");
+    }
+
     @Test
     @DisplayName("모드와_상태를_그대로_싣는다")
     void 모드와_상태를_그대로_싣는다() {
         GatewaySnapshot 원본 = new GatewaySnapshot(
-                Map.of("c1", new CouponState(QueueMode.ALWAYS, RuntimeState.DRAINING, 9, 100, 5, 2.0)),
-                new SnapshotMeta(9, 1), Instant.ofEpochSecond(1_700_000_000L));
+                Map.of("c1", new CouponState(QueueMode.ALWAYS, RuntimeState.DRAINING, 9, 100, 5)),
+                new SnapshotMeta(9, 1, null, 2.0), Instant.ofEpochSecond(1_700_000_000L));
 
-        CouponState 되읽음 = codec.decode(codec.encode(원본, CreditSmoother.Snapshot.empty(),
-                QueueingHysteresis.Snapshot.empty()))
-                .coupons().get("c1");
+        GatewaySnapshot 되읽은_판 = codec.decode(codec.encode(원본,
+                CreditSmoother.Snapshot.empty(), QueueingHysteresis.Snapshot.empty()));
+        CouponState 되읽음 = 되읽은_판.coupons().get("c1");
 
         assertThat(되읽음.mode()).isEqualTo(QueueMode.ALWAYS);
         assertThat(되읽음.runtime()).isEqualTo(RuntimeState.DRAINING);
-        assertThat(되읽음.pollScale()).isEqualTo(2.0);
+        assertThat(되읽은_판.meta().pollScale()).isEqualTo(2.0);
     }
 }

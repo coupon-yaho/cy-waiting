@@ -12,15 +12,13 @@ package com.kafkick.waiting.domain.coupon;
  * @param credit         이 쿠폰에 배분된 초당 통과 몫
  * @param remainingStock 남은 재고. <b>발급 계층이 소유</b>하고 게이트웨이는 읽기만 한다
  * @param waiting        줄 서 있는 사람 수
- * @param pollScale      폴링 간격 배수. 예산이 빠듯하면 커진다
  */
 public record CouponState(
         QueueMode mode,
         RuntimeState runtime,
         long credit,
         long remainingStock,
-        long waiting,
-        double pollScale) {
+        long waiting) {
 
     public CouponState {
         if (mode == null || runtime == null) {
@@ -87,16 +85,6 @@ public record CouponState(
                     "[I3'] QUEUEING 이면 credit < waiting 이어야 한다: credit=%d, waiting=%d"
                             .formatted(credit, waiting));
         }
-
-        // NaN 은 비교가 전부 false 라 Math.max 를 그냥 통과한다. 그대로 두면
-        // 폴링 간격 계산이 조용히 NaN 이 되어 대기자가 폴링을 멈춘다.
-        if (Double.isNaN(pollScale)) {
-            throw new IllegalArgumentException("pollScale 이 NaN 이다");
-        }
-
-        // I6 — 거부가 아니라 정규화다. 1 미만은 폴링을 더 자주 하라는 뜻이
-        // 되는데 그건 예산을 늘리는 방향이라 의미가 없다.
-        pollScale = Math.max(1.0, pollScale);
     }
 
     /**
@@ -183,19 +171,19 @@ public record CouponState(
 
     /** 아무도 줄을 서지 않았다. 배분을 못 받았으므로 credit 은 0 이다. */
     public static CouponState idle(long remainingStock) {
-        return new CouponState(QueueMode.ADAPTIVE, RuntimeState.IDLE, 0, remainingStock, 0, 1.0);
+        return new CouponState(QueueMode.ADAPTIVE, RuntimeState.IDLE, 0, remainingStock, 0);
     }
 
     /** 줄이 생겼다. 상한을 넘은 초과분이 큐로 들어가면서 이 상태가 된다. */
     public static CouponState queueing(long credit, long remainingStock, long waiting) {
         return new CouponState(
-                QueueMode.ADAPTIVE, RuntimeState.QUEUEING, credit, remainingStock, waiting, 1.0);
+                QueueMode.ADAPTIVE, RuntimeState.QUEUEING, credit, remainingStock, waiting);
     }
 
     /** 이번 틱에 남은 대기자를 다 빼줄 수 있다. 배분이 대기자를 따라잡으면 여기로 온다. */
     public static CouponState draining(long credit, long remainingStock, long waiting) {
         return new CouponState(
-                QueueMode.ADAPTIVE, RuntimeState.DRAINING, credit, remainingStock, waiting, 1.0);
+                QueueMode.ADAPTIVE, RuntimeState.DRAINING, credit, remainingStock, waiting);
     }
 
     /**
@@ -221,7 +209,7 @@ public record CouponState(
      * 거짓말을 한다 — 대기 응답이 이미 모드를 싣는다.
      */
     public static CouponState closed(QueueMode mode, long waiting) {
-        return new CouponState(mode, RuntimeState.CLOSED, 0, 0, waiting, 1.0);
+        return new CouponState(mode, RuntimeState.CLOSED, 0, 0, waiting);
     }
 
     /**
@@ -251,12 +239,12 @@ public record CouponState(
         RuntimeState runtime = credit >= waiting
                 ? RuntimeState.DRAINING
                 : RuntimeState.QUEUEING;
-        return new CouponState(mode, runtime, credit, remainingStock, waiting, 1.0);
+        return new CouponState(mode, runtime, credit, remainingStock, waiting);
     }
 
     /** 줄이 빈 쿠폰. 배분을 못 받았으므로 credit 은 0 이다 (I1). */
     public static CouponState noQueue(QueueMode mode, long remainingStock) {
-        return new CouponState(mode, RuntimeState.IDLE, 0, remainingStock, 0, 1.0);
+        return new CouponState(mode, RuntimeState.IDLE, 0, remainingStock, 0);
     }
 
     /**
@@ -280,12 +268,12 @@ public record CouponState(
 
     /** 운영자가 무조건 줄을 세우기로 했다. 한산해도 대기열을 태운다. */
     public static CouponState always(long remainingStock) {
-        return new CouponState(QueueMode.ALWAYS, RuntimeState.IDLE, 0, remainingStock, 0, 1.0);
+        return new CouponState(QueueMode.ALWAYS, RuntimeState.IDLE, 0, remainingStock, 0);
     }
 
     /** 운영자가 대기열을 껐다. 줄이 비어 있는 동안 줄을 세우지 않는다. */
     public static CouponState off(long remainingStock) {
-        return new CouponState(QueueMode.OFF, RuntimeState.IDLE, 0, remainingStock, 0, 1.0);
+        return new CouponState(QueueMode.OFF, RuntimeState.IDLE, 0, remainingStock, 0);
     }
 
     /**
@@ -293,6 +281,6 @@ public record CouponState(
      * 통과시키려는 게 아니다 — 미지 쿠폰은 요청 경로에서 404 로 끊는다.
      */
     public static CouponState unknown() {
-        return new CouponState(QueueMode.ADAPTIVE, RuntimeState.CLOSED, 0, 0, 0, 1.0);
+        return new CouponState(QueueMode.ADAPTIVE, RuntimeState.CLOSED, 0, 0, 0);
     }
 }

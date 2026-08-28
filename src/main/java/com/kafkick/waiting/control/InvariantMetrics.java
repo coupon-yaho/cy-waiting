@@ -40,6 +40,9 @@ public final class InvariantMetrics {
         metrics.count(meters, "waiting.allocation.entered.overshoot",
                 InvariantMetrics::enteredOvershoot,
                 "예산보다 더 들여보낸 누적 인원. 초과 발급의 직접 증거다");
+        metrics.count(meters, "waiting.poll.budget.overshoot.ticks",
+                InvariantMetrics::pollBudgetOvershootTicks,
+                "폴링 예산을 넘겨 전원의 간격을 늘린 누적 틱 수");
         metrics.count(meters, "waiting.snapshot.clock.floor.applied",
                 InvariantMetrics::floorApplied,
                 "재료를 읽을 때 시각이 뒤로 가 바닥값이 걸린 횟수");
@@ -57,6 +60,11 @@ public final class InvariantMetrics {
     /** 평활 지연과 하한이 만드는 초과. 배분기 자체는 준 예산을 안 넘긴다. */
     private double budgetOvershoot() {
         return round.budgetOvershoot();
+    }
+
+    /** 죽은 큐가 예산을 먹거나 노드가 모자라면 여기가 올라간다. */
+    private double pollBudgetOvershootTicks() {
+        return round.pollBudgetOvershootTicks();
     }
 
     /** 동점 score 로 임계 하나에 여럿이 걸리면 준 몫보다 많이 들어간다. */

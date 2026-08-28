@@ -25,6 +25,7 @@ import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -290,8 +291,10 @@ class AllocationRoundTest {
                 new CouponDemand("live", 10, 100)), 100, 1).run().block();
 
         assertThat(매진일_때).as("살아 있는 쿠폰의 배수").isEqualTo(1.0);
+        // 형제 시험처럼 값으로 못 박는다. dead 가 90, live 가 10 을 받아
+        // 4,983.33 + 10 rps, 예산 200.
         assertThat(발행된_배수()).as("같은 줄이 살아 있으면 예산을 먹는다")
-                .isGreaterThan(20.0);
+                .isCloseTo(24.967, within(0.001));
     }
 
     @Test
@@ -307,6 +310,39 @@ class AllocationRoundTest {
 
         round.run().block();
         assertThat(round.pollBudgetOvershootTicks()).as("두 판").isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("배수가_풀리면_해제를_남긴다")
+    void 배수가_풀리면_해제를_남긴다() {
+        // **같은 인스턴스 위에서 오름과 내림을 잰다.** 판마다 새 인스턴스를
+        // 만들면 진입만 돌고 해제 갈래는 한 번도 안 돈다 — 그 자리에 상태가
+        // 있는데(초과 창) 회복 전이를 아무도 안 밟는 것이다.
+        AtomicReference<List<CouponDemand>> 수요 = new AtomicReference<>(
+                List.of(new CouponDemand("c1", 100_000, 1_000_000)));
+        AllocationRound round = AllocationRound.of(
+                () -> true,
+                () -> Mono.just(new TimedDemands(수요.get(), 읽은_시각)),
+                () -> 10L, () -> 1,
+                grant -> Mono.just(grant.credit()),
+                hash -> {
+                    발행.put("last", hash);
+                    return Mono.empty();
+                },
+                () -> Instant.ofEpochSecond(읽은_시각),
+                () -> Mono.just(CreditSmoother.of(1.0)),
+                SnapshotCodec.create(), () -> 0L);
+
+        round.run().block();
+        assertThat(발행된_배수()).as("진입").isGreaterThan(1.0);
+        assertThat(로그_메시지()).anyMatch(m -> m.contains("폴링 예산 초과 —"));
+
+        // 재고가 마르면 그 줄은 예산에서 빠진다. 배수가 풀리는 전이다.
+        수요.set(List.of(new CouponDemand("c1", 100_000, 0)));
+        round.run().block();
+
+        assertThat(발행된_배수()).as("해제").isEqualTo(1.0);
+        assertThat(로그_메시지()).anyMatch(m -> m.contains("폴링 예산 초과 해제 —"));
     }
 
     @Test

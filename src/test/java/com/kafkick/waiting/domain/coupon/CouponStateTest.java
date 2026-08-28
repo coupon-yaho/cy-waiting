@@ -117,13 +117,6 @@ class CouponStateTest {
 
     // 규칙의 근거는 바깥 인스턴스 누수인데, 테스트 인스턴스는 실행 후 버려져 해당 없다.
     @Nested
-    @DisplayName("I6 — 폴링 배수는 1 미만으로 내려가지 않는다")
-    class I6 {
-
-    }
-
-    // 규칙의 근거는 바깥 인스턴스 누수인데, 테스트 인스턴스는 실행 후 버려져 해당 없다.
-    @Nested
     @DisplayName("IDLE 은 줄이 없다")
     class IdleHasNoQueue {
 
@@ -137,13 +130,6 @@ class CouponStateTest {
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("[I1']");
         }
-    }
-
-    // 규칙의 근거는 바깥 인스턴스 누수인데, 테스트 인스턴스는 실행 후 버려져 해당 없다.
-    @Nested
-    @DisplayName("pollScale 유한값")
-    class PollScaleFinite {
-
     }
 
     // 규칙의 근거는 바깥 인스턴스 누수인데, 테스트 인스턴스는 실행 후 버려져 해당 없다.

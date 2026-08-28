@@ -23,20 +23,28 @@ class InvariantMetricsWiringTest {
     private PrometheusMeterRegistry registry;
 
     @Test
-    @DisplayName("선행_지표_셋이_스크레이프에_나온다")
-    void 선행_지표_셋이_스크레이프에_나온다() {
+    @DisplayName("선행_지표_넷이_스크레이프에_나온다")
+    void 선행_지표_넷이_스크레이프에_나온다() {
         assertThat(registry.scrape())
                 .contains("waiting_allocation_budget_overshoot_total")
                 .contains("waiting_allocation_entered_overshoot_total")
+                .contains("waiting_poll_budget_overshoot_ticks_total")
                 .contains("waiting_snapshot_clock_floor_applied_total");
     }
 
-    /** <b>라벨을 안 붙인다.</b> 쿠폰 식별자는 가짓수에 상한이 없다 (LG-4). */
+    /**
+     * <b>라벨을 안 붙인다.</b> 쿠폰 식별자는 가짓수에 상한이 없다 (LG-4).
+     *
+     * <p>프리픽스를 하나만 훑으면 다른 이름으로 들어온 지표가 검사를 통째로
+     * 비껴간다 — 실제로 폴링 예산 지표가 그 상태로 들어왔다.
+     */
     @Test
     @DisplayName("선행_지표에_라벨을_안_붙인다")
     void 선행_지표에_라벨을_안_붙인다() {
         assertThat(registry.getMeters())
-                .filteredOn(m -> m.getId().getName().startsWith("waiting.allocation."))
+                .filteredOn(m -> m.getId().getName().startsWith("waiting.allocation.")
+                        || m.getId().getName().startsWith("waiting.poll.")
+                        || m.getId().getName().startsWith("waiting.snapshot.clock."))
                 .isNotEmpty()
                 .allSatisfy(m -> assertThat(m.getId().getTags())
                         .as("%s 의 라벨", m.getId().getName())

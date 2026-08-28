@@ -21,7 +21,7 @@ class SnapshotCodecTest {
 
     private static final Instant publishedAtOf = Instant.parse("2026-08-20T00:00:00Z");
 
-    /** 쿠폰 하나: {@code mode:runtime:credit:stock:waiting:pollScale} */
+    /** 쿠폰 하나: {@code mode:runtime:credit:stock:waiting} */
     private static Map<String, String> 해시(String... pairs) {
         Map<String, String> m = new LinkedHashMap<>();
         for (int i = 0; i < pairs.length; i += 2) {

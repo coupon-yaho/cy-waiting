@@ -649,8 +649,11 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         boolean hasToken = exchange.<AdmissionDecision>getAttribute(DECISION)
                 == AdmissionDecision.PASS_TOKEN;
         exchange.getAttributes().put(DECISION, AdmissionDecision.REJECT_OVERLOAD);
+        // 보호 차단도 배수를 지킨다. 이 갈래가 도는 순간이 곧 예산이 빠듯한
+        // 순간이라, 여기만 빼면 과부하일수록 예산이 덜 걸린다.
         return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
-                (int) POLL.intervalSec(hasToken ? 0 : EtaPolicy.UNKNOWN, random));
+                (int) POLL.intervalSec(hasToken ? 0 : EtaPolicy.UNKNOWN, random,
+                        holder.view().snapshot().meta().pollScale()));
     }
 
     /**

@@ -111,9 +111,12 @@ class PollIntervalPolicyTest {
         assertThat(PollIntervalPolicy.missedPolls())
                 .as("백그라운드 탭이 스로틀돼도 안 지워질 만큼").isEqualTo(3);
 
+        // **하한만 재면 길어지는 쪽이 열린다.** 수명이 길수록 죽은 줄이 오래
+        // 남아 폴링 예산을 먹고, 청소 재개 유예도 같이 늘어난다 — 이 변경이
+        // 없애려는 문제와 같은 것이다. 값으로 못 박는다.
         assertThat(ttl)
-                .as("약속한 횟수를 놓치고 와도 살아 있어야 한다")
-                .isGreaterThanOrEqualTo((PollIntervalPolicy.missedPolls() + 1) * 최대_간격);
+                .as("놓쳐도 되는 횟수만큼, 그 이상은 아니게")
+                .isEqualTo((PollIntervalPolicy.missedPolls() + 1) * 최대_간격);
     }
 
     @Test

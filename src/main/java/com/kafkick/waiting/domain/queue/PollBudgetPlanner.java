@@ -76,8 +76,11 @@ public final class PollBudgetPlanner {
      * <p><b>상수 하나로 고정하면 증설이 폴링 간격을 못 줄인다.</b> 노드를
      * 늘리는 것이 곧 예산을 늘리는 것이다.
      */
+    // 0 이하 방어를 여기서 다시 하지 않는다 — 사본이 생기면 양쪽 다 뮤테이션이
+    // 살아남는다. 한쪽을 지워도 다른 쪽이 막아 주기 때문이다. 방어는
+    // SnapshotMeta.effectiveGatewayCount() 하나가 쥔다.
     public static double budgetRps(int nodes) {
-        return BUDGET_RPS_PER_NODE * Math.max(1, nodes);
+        return BUDGET_RPS_PER_NODE * nodes;
     }
 
     /**

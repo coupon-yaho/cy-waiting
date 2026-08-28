@@ -64,10 +64,18 @@ class QueueStatusFilterTest {
         holder.replace(new GatewaySnapshot(Map.of(COUPON, state), new SnapshotMeta(1, 1), 지금));
     }
 
-    /** 자리를 다 쓴 리미터. 축출이 아니라 거절이어야 이 갈래가 돈다. */
+    /**
+     * 자리를 다 쓴 리미터.
+     *
+     * <p><b>전제를 여기서 확인한다</b> (TS-9). 리미터가 자리 없음을 거절이
+     * 아니라 축출로 바꾸면 이 픽스처를 쓰는 시험이 조용히 다른 것을 재게 된다.
+     */
     private SecondWindowLimiter 꽉_찬_리미터() {
         SecondWindowLimiter 꽉_찬 = SecondWindowLimiter.withMaxKeys(1);
         꽉_찬.tryAcquire("다른-키", 1, 지금.getEpochSecond());
+        assertThat(꽉_찬.tryAcquire("아무-새-키", 1_000, 지금.getEpochSecond()))
+                .as("자리가 없으면 거절한다 — 이 전제가 깨지면 부르는 쪽이 무의미하다")
+                .isFalse();
         return 꽉_찬;
     }
 
@@ -609,7 +617,11 @@ class QueueStatusFilterTest {
     @DisplayName("조회가_실패해도_다시_오라고_한다")
     void 조회가_실패해도_다시_오라고_한다() {
         // 순번은 레디스에 남아 있다. 다시 물으면 되므로 줄에서 빼지 않는다.
-        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100));
+        //
+        // **배수를 실은 판에서 잰다.** 배수 1.0 인 판에서 재면 이 갈래의 배수를
+        // 지워도 아무것도 안 문다 — 레디스가 흔들리는 구간이 곧 배수가 커져
+        // 있는 구간이라, 하필 그때 거절받은 사람만 예산 밖으로 돌아간다.
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100), 3.0);
         줄.터진다(new IllegalStateException("레디스가 죽었다"));
 
         MockServerWebExchange exchange = 토큰으로_조회한다(tokens.issue(COUPON, MEMBER, 지금));
@@ -617,7 +629,7 @@ class QueueStatusFilterTest {
         assertThat(exchange.getResponse().getStatusCode())
                 .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
         assertThat(exchange.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER))
-                .isEqualTo("30");
+                .as("ETA 를 모르는 밴드(30초)에 배수 3 — 상한 60").isEqualTo("60");
     }
 
     @Test

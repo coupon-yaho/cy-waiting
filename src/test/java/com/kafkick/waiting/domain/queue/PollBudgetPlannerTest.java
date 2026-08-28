@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.within;
 
 import com.kafkick.waiting.domain.allocation.CouponDemand;
 import java.util.List;
+import java.util.Random;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -90,8 +91,8 @@ class PollBudgetPlannerTest {
      * 있는데, 그 구간에서만 재면 기구가 도는 것처럼 보인다.
      */
     @Test
-    @DisplayName("설계_규모에서_배수를_지키면_예산_안에_든다")
-    void 설계_규모에서_배수를_지키면_예산_안에_든다() {
+    @DisplayName("설계_규모에서_배수를_지키면_예산_언저리로_든다")
+    void 설계_규모에서_배수를_지키면_예산_언저리로_든다() {
         // R4 의 설계점 — 노드 20 대, 동시 대기 20,000, 초당 배수 4,000.
         long 대기 = 20_000;
         double 배수율 = 4_000;
@@ -99,16 +100,26 @@ class PollBudgetPlannerTest {
 
         double 예상 = PollBudgetPlanner.expectedPollRps(대기, 배수율);
         double 배수 = PollBudgetPlanner.pollScale(예상, 예산);
-        // 전원이 5초 안이라 1초 밴드다. 배수만큼 곧장 늘어난다. 줄 한가운데
-        // 사람으로 잰다 — 맨 끝은 ETA 가 정확히 경계라 한 밴드 위로 넘어가고,
-        // 그 사람은 더 느리게 물으므로 아래 부등식을 느슨하게 만든다.
-        PollIntervalPolicy 정책 = PollIntervalPolicy.of(0);
-        long 간격 = 정책.intervalSec(대기 / 2 / 배수율, () -> 0.5, 배수);
+
+        // **줄 전체의 실측 부하를 잰다.** 대표 한 명의 간격만 보면 지터가
+        // 부하에 주는 영향이 안 보인다 — 간격을 흔들면 짧아진 쪽이 길어진
+        // 쪽보다 더 많이 두드려서(1/x 가 볼록하다) 총 부하가 위로 샌다.
+        //
+        // **프로덕션 지터로 잰다.** 배선은 전부 0.2 다. 0 으로 재면 예산이
+        // 정확히 닫히는 것처럼 보이는데, 그 설정은 어디에도 없다.
+        PollIntervalPolicy 정책 = PollIntervalPolicy.of(0.2);
+        Random 고정_씨앗 = new Random(42);
+        double 실측 = 0;
+        for (long i = 0; i < 대기; i++) {
+            실측 += 1.0 / 정책.intervalSec(i / 배수율, 고정_씨앗::nextDouble, 배수);
+        }
 
         assertThat(배수).as("예산 초과 배수").isEqualTo(5.0);
-        assertThat(간격).as("그 사람이 받는 간격").isEqualTo(5);
-        // **여기가 요점이다.** 배수가 간격에 닿아 실제 부하가 예산 안으로 든다.
-        assertThat((double) 대기 / 간격).as("실측 폴링").isLessThanOrEqualTo(예산);
+        // 지터가 몇 %를 얹는다. 동기화된 파도를 흩는 값이 그 몇 %보다 크므로
+        // 감수하되, 얼마인지는 못 박는다 — 모르면 다음 사람이 지터를 키운다.
+        assertThat(실측).as("실측 폴링").isLessThanOrEqualTo(예산 * 1.03);
+        assertThat(실측).as("지터가 얹는 몫이 사라지면 이 시험이 거짓말이 된다")
+                .isGreaterThan(예산);
     }
 
     /**
@@ -126,6 +137,24 @@ class PollBudgetPlannerTest {
 
         assertThat(정책.intervalSec(먼_밴드_eta, () -> 0.5, 2.0)).isEqualTo(60);
         assertThat(정책.intervalSec(먼_밴드_eta, () -> 0.5, 17.58)).isEqualTo(60);
+    }
+
+    /**
+     * <b>짧은 밴드에는 반올림 하한이 있다.</b>
+     *
+     * <p>상한 60초가 먼 밴드에서 배수를 먹는 것과 대칭이다. 1초 밴드에서는
+     * 배수 1.5 미만이 반올림에 통째로 흡수된다 — 그리고 설계 규모에서는
+     * 전원이 1초 밴드다. 완만한 초과에서는 배수가 숫자로만 존재한다.
+     */
+    @Test
+    @DisplayName("짧은_밴드에서는_완만한_배수가_반올림에_먹힌다")
+    void 짧은_밴드에서는_완만한_배수가_반올림에_먹힌다() {
+        PollIntervalPolicy 정책 = PollIntervalPolicy.of(0);
+        double 첫_밴드_eta = 0.5;
+
+        assertThat(정책.intervalSec(첫_밴드_eta, () -> 0.5, 1.49)).as("먹힌다").isEqualTo(1);
+        assertThat(정책.intervalSec(첫_밴드_eta, () -> 0.5, 1.5)).as("여기서 처음 는다")
+                .isEqualTo(2);
     }
 
     @Test

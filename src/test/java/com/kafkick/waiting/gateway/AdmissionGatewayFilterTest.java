@@ -105,9 +105,18 @@ class AdmissionGatewayFilterTest {
     private final IdempotencyKey 멱등키 =
             IdempotencyKey.of("not-a-real-secret-0123456789abcdef");
 
+    /**
+     * 흔들림을 고정한다. <b>안 고정하면 값을 못 잰다</b> (TS-4).
+     *
+     * <p>주입 안 하는 판을 쓰면 {@code ThreadLocalRandom} 이 들어가, 배수를 재는
+     * 시험이 6 번에 한 번 다른 값을 받는다.
+     */
+    private static final DoubleSupplier 고정_난수 = () -> 0.5;
+
     private final AdmissionGatewayFilter filter = AdmissionGatewayFilter.withIsolatedSoldOutCache(
             holder, AdmissionDecider.of(limiter, IDLE_RATIO),
-            Clock.fixed(지금, ZoneOffset.UTC), meters, 줄, tokens, limiter, entryTokens, 멱등키);
+            Clock.fixed(지금, ZoneOffset.UTC), meters, 고정_난수,
+            줄, tokens, limiter, entryTokens, 멱등키);
 
     private final AtomicReference<Boolean> 뒷단에_닿음 = new AtomicReference<>(false);
 
@@ -537,9 +546,11 @@ class AdmissionGatewayFilterTest {
     @Test
     @DisplayName("줄이_꽉_차_거절해도_배수를_지킨다")
     void 줄이_꽉_차_거절해도_배수를_지킨다() {
+        // **천장 안쪽에서 잰다.** 배수 3 이면 90 이라 천장 50 에 잘리는데, 그러면
+        // 배수 2 를 넘는 어떤 값을 넘겨도 같은 답이라 곱셈이 안 관측된다.
         assertThat(AdmissionGatewayFilter.retryAfterSec(
-                AdmissionDecision.REJECT_QUEUE_FULL, () -> 0.5, 3.0))
-                .as("ETA 를 모르는 밴드(30초)에 배수 3 — 흔들림 천장 50").isEqualTo(50);
+                AdmissionDecision.REJECT_QUEUE_FULL, () -> 0.5, 1.5))
+                .as("ETA 를 모르는 밴드(30초)에 배수 1.5").isEqualTo(45);
     }
 
     /**
@@ -561,6 +572,74 @@ class AdmissionGatewayFilterTest {
                 AdmissionDecision.RETRY_TOKEN, () -> 0.5, 50.0))
                 .as("배수 50 이면 상한 60초 — 토큰 최소 수명 150초의 절반이 날아간다")
                 .isEqualTo(1);
+    }
+
+    /**
+     * <b>정적 함수의 산수만으로는 배선이 안 잠긴다.</b>
+     *
+     * <p>거절 갈래 넷이 각각 {@code meta.pollScale()} 을 넘기는데, 그것을 {@code 1.0}
+     * 으로 바꿔도 기대값을 같은 함수로 만드는 시험은 전부 초록이다 — 동어반복이다.
+     * 이 티켓이 발견한 결함이 정확히 그 모양이라, 넷 다 값으로 못 박는다.
+     */
+    // 30초 밴드에 배수 1.5 라 45 다. 천장(50) 아래여서 배수가 값으로 보인다.
+    private static final String 배수가_걸린_거절 = "45";
+
+    @Test
+    @DisplayName("판정_거절이_전역_배수를_지킨다")
+    void 판정_거절이_전역_배수를_지킨다() {
+        스냅샷을_심는다(CouponStates.queueing(1, 1_000, 5_000), 배수가_실린_메타(1.5));
+
+        MockServerWebExchange exchange = 요청(COUPON);
+        filter.filter(exchange, e -> Mono.empty()).block();
+
+        assertThat(exchange.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .isEqualTo(AdmissionDecision.REJECT_QUEUE_FULL);
+        assertThat(exchange.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER))
+                .as("판정 거절에 걸리는 배수").isEqualTo(배수가_걸린_거절);
+    }
+
+    /**
+     * <b>2차 방어의 거절도 지킨다.</b>
+     *
+     * <p>판정은 자리가 있다고 봤는데 실제로는 없던 갈래다. 재료가 낡을수록 이 갈래로
+     * 새고, 낡음과 배수는 같이 커진다 — 빠지면 정확히 그때 예산 밖으로 돌아간다.
+     */
+    @Test
+    @DisplayName("이차_거절이_전역_배수를_지킨다")
+    void 이차_거절이_전역_배수를_지킨다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100), 배수가_실린_메타(1.5));
+        줄.가득_찼다();
+
+        MockServerWebExchange exchange = 요청(COUPON);
+        filter.filter(exchange, e -> Mono.empty()).block();
+
+        assertThat(exchange.getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        assertThat(exchange.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER))
+                .as("2차 거절에 걸리는 배수").isEqualTo(배수가_걸린_거절);
+    }
+
+    /**
+     * <b>장애 개방의 상한을 넘은 몫도 지킨다.</b>
+     *
+     * <p>레디스가 흔들려 줄을 못 세우는 구간이 곧 배수가 커져 있는 구간이다.
+     * 여기만 빼면 하필 그때 되돌려 보낸 사람이 예산 밖에서 두드린다.
+     */
+    @Test
+    @DisplayName("장애_개방_상한_초과가_전역_배수를_지킨다")
+    void 장애_개방_상한_초과가_전역_배수를_지킨다() {
+        // 전역 몫이 0 이라 fail-open 상한도 0 이다 — 첫 요청부터 되돌려 보낸다.
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100),
+                new SnapshotMeta(0, 1, null, 1.5));
+        줄.터진다(new IllegalStateException("레디스가 죽었다"));
+
+        MockServerWebExchange exchange = 요청(COUPON);
+        filter.filter(exchange, e -> Mono.empty()).block();
+
+        assertThat(exchange.getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(exchange.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER))
+                .as("장애 개방 상한 초과에 걸리는 배수").isEqualTo(배수가_걸린_거절);
     }
 
     /**
@@ -1406,9 +1485,6 @@ class AdmissionGatewayFilterTest {
      */
     private final MutableClock 격벽_시계 = MutableClock.at(지금);
 
-    /** 흔들림을 고정한다. 안 고정하면 Retry-After 가 매번 달라 값을 못 잰다 (TS-4). */
-    private static final DoubleSupplier 고정_난수 = () -> 0.5;
-
     private final AdmissionGatewayFilter 격벽_필터 = AdmissionGatewayFilter.withIsolatedSoldOutCache(
             holder, AdmissionDecider.of(limiter, IDLE_RATIO),
             격벽_시계, meters, 고정_난수, 줄, tokens, limiter, entryTokens, 멱등키);
@@ -1619,6 +1695,32 @@ class AdmissionGatewayFilterTest {
     }
 
     /**
+     * <b>줄에 안 선 쪽은 배수를 지킨다.</b>
+     *
+     * <p>보호 차단이 도는 순간이 곧 예산이 빠듯한 순간이다. 여기만 빼면 과부하가
+     * 심할수록 거절 비중이 커져 예산을 건다는 말이 절반만 맞게 된다.
+     */
+    @Test
+    @DisplayName("보호_차단의_거절이_전역_배수를_지킨다")
+    void 보호_차단의_거절이_전역_배수를_지킨다() {
+        스냅샷을_심는다(CouponStates.off(1_000), new SnapshotMeta(1, 1, null, 1.5));
+        for (int i = 0; i < 3; i++) {
+            Sinks.Empty<Void> 안_끝남 = Sinks.empty();
+            붙잡은_자리.add(안_끝남);
+            격벽_필터.filter(요청(COUPON, "사람" + i), e -> 안_끝남.asMono()).subscribe();
+        }
+
+        MockServerWebExchange 막힌_것 = 요청(COUPON, "사람9");
+        격벽_필터.filter(막힌_것, e -> Mono.empty()).block();
+
+        assertThat(막힌_것.getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(막힌_것.getResponse().getHeaders().getFirst("Retry-After"))
+                .as("30초 밴드에 배수 1.5").isEqualTo(배수가_걸린_거절);
+        풀어_준다();
+    }
+
+    /**
      * <b>배수가 걸려 있어도 마찬가지다.</b>
      *
      * <p>보호 차단이 도는 순간이 곧 배수가 큰 순간이라, 여기에 배수를 곱하면
@@ -1668,10 +1770,11 @@ class AdmissionGatewayFilterTest {
                 .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
         assertThat(막힌_것.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
                 .isEqualTo(AdmissionDecision.REJECT_OVERLOAD);
+        // **기대값을 같은 함수로 만들지 않는다.** 그러면 호출부가 배수를 안
+        // 넘겨도 좌우가 같이 움직여 초록이다.
         assertThat(막힌_것.getResponse().getHeaders().getFirst("Retry-After"))
-                .isEqualTo(String.valueOf(
-                        AdmissionGatewayFilter.retryAfterSec(
-                                AdmissionDecision.REJECT_OVERLOAD, 고정_난수, 1.0)));
+                .as("ETA 를 모르는 밴드(30초). 배수가 안 실린 판이라 그대로 30")
+                .isEqualTo("30");
         풀어_준다();
     }
 

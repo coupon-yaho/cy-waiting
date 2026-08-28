@@ -265,7 +265,7 @@ class QueueStatusFilterTest {
     @DisplayName("재료가_낡아도_배수를_안_되돌린다")
     void 재료가_낡아도_배수를_안_되돌린다() {
         holder.replace(new GatewaySnapshot(Map.of(COUPON, CouponStates.queueing(10, 1_000, 100)),
-                new SnapshotMeta(1, 1, null, 3.0), 지금.minusSeconds(3_600)));
+                new SnapshotMeta(1, 1, null, 1.5), 지금.minusSeconds(3_600)));
         // 맨 앞 사람은 ETA 가 정말 0 이라 배수 속도를 안 본다. 앞에 한 명을
         // 세워야 낡음이 ETA 로 흘러 가장 먼 밴드가 된다.
         줄.enqueue(COUPON, "앞사람", NO_LIMIT, 지금).block();
@@ -273,10 +273,10 @@ class QueueStatusFilterTest {
 
         MockServerWebExchange exchange = 토큰으로_조회한다(tokens.issue(COUPON, MEMBER, 지금));
 
-        // 낡으면 배수 속도를 모르므로 ETA 는 가장 먼 밴드(30초)다. 배수 3 을
-        // 걸면 90초라 흔들림 천장 50 으로 잘린다. 1.0 으로 되돌리는 구현이면 30 이다.
+        // 낡으면 배수 속도를 모르므로 ETA 는 가장 먼 밴드(30초)다. 30 × 1.5 = 45
+        // — 천장 아래라 배수가 값으로 보인다. 1.0 으로 되돌리는 구현이면 30 이다.
         assertThat(exchange.getResponse().getHeaders().getFirst("Retry-After"))
-                .as("낡아도 지키는 배수").isEqualTo("50");
+                .as("낡아도 지키는 배수").isEqualTo("45");
     }
 
     /**
@@ -289,7 +289,9 @@ class QueueStatusFilterTest {
     @Test
     @DisplayName("상한에_걸린_거절도_배수를_지킨다")
     void 상한에_걸린_거절도_배수를_지킨다() {
-        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100), 3.0);
+        // **천장 안쪽에서 잰다.** 배수 3 이면 90 이라 천장 50 에 잘리는데,
+        // 그러면 배수 2 를 넘는 어떤 값을 넘겨도 같은 답이라 배선이 안 잠긴다.
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100), 1.5);
         String 토큰 = tokens.issue(COUPON, MEMBER, 지금);
         QueueStatusFilter 상한이_찬_필터 = QueueStatusFilter.of(
                 holder, 줄, tokens, Clock.fixed(지금, ZoneOffset.UTC), meters, () -> 0.5,
@@ -298,10 +300,9 @@ class QueueStatusFilterTest {
         MockServerWebExchange exchange = 조회한다(
                 상한이_찬_필터, "/api/v1/coupons/" + COUPON + "/queue?queueToken=" + 토큰);
 
-        // ETA 를 모르는 갈래라 30초 밴드다. 배수 3 이면 90 인데, 흔들림의
-        // 위쪽 끝이 상한 60 에 닿도록 가운데를 60/1.2 = 50 으로 자른다.
+        // ETA 를 모르는 갈래라 30초 밴드다. 30 × 1.5 = 45 — 천장 50 아래다.
         assertThat(exchange.getResponse().getHeaders().getFirst("Retry-After"))
-                .as("거절에도 걸리는 배수").isEqualTo("50");
+                .as("거절에도 걸리는 배수").isEqualTo("45");
     }
 
     /**
@@ -622,7 +623,7 @@ class QueueStatusFilterTest {
         // **배수를 실은 판에서 잰다.** 배수 1.0 인 판에서 재면 이 갈래의 배수를
         // 지워도 아무것도 안 문다 — 레디스가 흔들리는 구간이 곧 배수가 커져
         // 있는 구간이라, 하필 그때 거절받은 사람만 예산 밖으로 돌아간다.
-        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100), 3.0);
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100), 1.5);
         줄.터진다(new IllegalStateException("레디스가 죽었다"));
 
         MockServerWebExchange exchange = 토큰으로_조회한다(tokens.issue(COUPON, MEMBER, 지금));
@@ -630,7 +631,8 @@ class QueueStatusFilterTest {
         assertThat(exchange.getResponse().getStatusCode())
                 .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
         assertThat(exchange.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER))
-                .as("ETA 를 모르는 밴드(30초)에 배수 3 — 흔들림 천장 50").isEqualTo("50");
+                .as("ETA 를 모르는 밴드(30초)에 배수 1.5 — 천장 아래라 값이 보인다")
+                .isEqualTo("45");
     }
 
     @Test

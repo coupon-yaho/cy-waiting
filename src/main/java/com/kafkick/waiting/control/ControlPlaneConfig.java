@@ -29,6 +29,20 @@ public class ControlPlaneConfig {
     /** 평활화 계수. 클수록 최근 값을 빨리 따라간다. */
     private static final double SMOOTHING_ALPHA = 0.3;
 
+    /**
+     * 큐 앞에서 볼 인원.
+     *
+     * <p><b>전수 검사는 틱마다 불가능하다.</b> 이번 틱에 배수할 인원 근처만
+     * 정확하면 크레딧 낭비는 막힌다. 뒤에 남는 유령은 D-Q1 이 다룬다.
+     */
+    private static final int SWEEP_SCAN_LIMIT = 1_000;
+
+    /** 이탈 기록 보관. 재방문자를 알아볼 수 있는 구간이다 (5.4절). */
+    private static final long GRACE_SEC = 300;
+
+    /** 한 판이 지우는 상한. 스크립트가 `unpack` 한계로 더 좁힌다. */
+    private static final int SWEEP_BUDGET = 1_000;
+
     @Bean
     Leadership leadership(LeaderRedisPort port, ControlPlaneProperties properties) {
         String ownerId = Leadership.newOwnerId();
@@ -59,13 +73,26 @@ public class ControlPlaneConfig {
     @Bean
     AllocationRound allocationRound(DemandCollector collector, AllocationRedisPort port,
             GatewayRegistry registry, CapacityCollector capacity, Leadership leadership,
-            TunablesRefresh tunables) {
+            TunablesRefresh tunables, QueueSweeper sweeper) {
         SnapshotCodec codec = SnapshotCodec.create();
         return AllocationRound.of(leadership::isLeader, collector::collect, capacity::lastKnown,
                 registry::count, port::apply, port::publish, Instant::now,
                 () -> port.load().map(hash ->
                         CreditSmoother.restore(SMOOTHING_ALPHA, codec.smoothing(hash))),
-                codec, capacity::lastFloor, tunables::current);
+                codec, capacity::lastFloor, tunables::current, sweeper);
+    }
+
+    /**
+     * 이탈자 청소 (7.4).
+     *
+     * <p><b>멈추는 판단을 생성자가 필수로 받는다.</b> 계획이 산문으로 적어 둔
+     * "매진·장애 중에는 멈춘다" 를 기계로 만드는 자리다.
+     */
+    @Bean
+    QueueSweeper queueSweeper(AllocationRedisPort port, ControlPlaneProperties properties) {
+        return QueueSweeper.of(SweepGate.create(),
+                ids -> port.sweep(ids, Instant.now().getEpochSecond(),
+                        SWEEP_SCAN_LIMIT, GRACE_SEC, SWEEP_BUDGET));
     }
 
     /**

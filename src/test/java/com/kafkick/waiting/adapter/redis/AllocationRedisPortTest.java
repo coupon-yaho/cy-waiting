@@ -7,6 +7,7 @@ import static org.assertj.core.api.Assertions.entry;
 import com.kafkick.waiting.domain.allocation.Grant;
 import com.kafkick.waiting.domain.coupon.QueueMode;
 import java.time.Duration;
+import com.kafkick.waiting.control.QueueSweeper;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
@@ -42,6 +43,8 @@ class AllocationRedisPortTest extends RedisContainerSupport {
                 RedisKeys.queue("c1", SHARDS, 0), RedisKeys.admitted("c1", SHARDS, 0),
                 RedisKeys.queue("c2", SHARDS, 0), RedisKeys.admitted("c2", SHARDS, 0),
                 RedisKeys.stock("c1"), RedisKeys.stock("c2"),
+                RedisKeys.alive("c1", SHARDS, 0), RedisKeys.grace("c1", SHARDS, 0),
+                RedisKeys.maxScore("c1", SHARDS, 0),
                 RedisKeys.COUPON_POLICY).block(WAIT);
     }
 
@@ -50,6 +53,81 @@ class AllocationRedisPortTest extends RedisContainerSupport {
             redis.opsForZSet().add(RedisKeys.queue(couponId, SHARDS, 0), "m" + score, score)
                     .block(WAIT);
         }
+    }
+
+    /**
+     * <b>생존 신호가 없는 사람을 걷습니다</b> (7.4.4).
+     *
+     * <p>이탈자가 줄에 남으면 배분이 그 자리에 크레딧을 허공에 발행합니다.
+     */
+    @Test
+    @DisplayName("생존_신호가_없으면_걷는다")
+    void 생존_신호가_없으면_걷는다() {
+        long 지금 = 1_700_000_000L;
+        줄_세운다("c1", 1, 2, 3);
+        // m1 만 살아 있다고 말한다. 나머지 둘은 신호가 없다.
+        redis.opsForZSet().add(RedisKeys.alive("c1", SHARDS, 0), "m1", 지금 + 60).block(WAIT);
+
+        QueueSweeper.SweepResult 결과 =
+                port.sweep(List.of("c1"), 지금, 100, 300, 100).block(WAIT);
+
+        assertThat(결과.swept()).as("걷은 수").isEqualTo(2);
+        assertThat(redis.opsForZSet().size(RedisKeys.queue("c1", SHARDS, 0)).block(WAIT))
+                .as("남은 줄").isEqualTo(1);
+        // **이탈 기록을 남깁니다.** 안 남기면 돌아온 사람을 알아볼 방법이 없고,
+        // 유예 재입장(7.5)이 설 자리가 없습니다.
+        assertThat(redis.opsForHash().size(RedisKeys.grace("c1", SHARDS, 0)).block(WAIT))
+                .as("이탈 기록").isEqualTo(2);
+    }
+
+    /**
+     * <b>보관 기간 안의 입장 표시는 청소를 견딥니다.</b>
+     *
+     * <p>같은 해시에 writer 가 둘입니다. 종류를 안 가르면 청소가 입장 표시를
+     * 숫자로 못 읽어 낡은 것으로 보고 지우고, <b>입장한 사람이 다음 폴링에서
+     * 종료를 받습니다.</b>
+     */
+    @Test
+    @DisplayName("보관_기간_안의_입장_표시는_청소를_견딘다")
+    void 보관_기간_안의_입장_표시는_청소를_견딘다() {
+        long 지금 = 1_700_000_000L;
+        줄_세운다("c1", 1);
+        redis.opsForHash().put(RedisKeys.grace("c1", SHARDS, 0), "m9", "a:" + 지금).block(WAIT);
+
+        // 보관 300초 안이다. 종류를 못 읽으면 여기서 지워진다.
+        port.sweep(List.of("c1"), 지금 + 100, 100, 300, 100).block(WAIT);
+
+        assertThat(redis.opsForHash().get(RedisKeys.grace("c1", SHARDS, 0), "m9").block(WAIT))
+                .isEqualTo("a:" + 지금);
+    }
+
+    /**
+     * <b>보관 기간이 지난 기록은 걷습니다</b> (7.4.5).
+     *
+     * <p>안 걷으면 해시가 한 방향으로만 자랍니다. 입장 표시도 예외가 아닙니다 —
+     * 그 사람은 이미 발급을 마쳤거나 토큰이 만료됐습니다.
+     */
+    @Test
+    @DisplayName("보관_기간이_지난_기록은_걷는다")
+    void 보관_기간이_지난_기록은_걷는다() {
+        long 지금 = 1_700_000_000L;
+        줄_세운다("c1", 1);
+        redis.opsForHash().put(RedisKeys.grace("c1", SHARDS, 0), "m9", "d:" + 지금).block(WAIT);
+
+        QueueSweeper.SweepResult 결과 =
+                port.sweep(List.of("c1"), 지금 + 1_000, 100, 300, 100).block(WAIT);
+
+        assertThat(결과.expiredGrace()).as("걷은 기록").isEqualTo(1);
+        assertThat(redis.opsForHash().hasKey(RedisKeys.grace("c1", SHARDS, 0), "m9").block(WAIT))
+                .isFalse();
+    }
+
+    /** 쓸 것이 없으면 아무 명령도 안 냅니다. 틱마다 도는 자리입니다. */
+    @Test
+    @DisplayName("쓸_것이_없으면_왕복하지_않는다")
+    void 쓸_것이_없으면_왕복하지_않는다() {
+        assertThat(port.sweep(List.of(), 1_700_000_000L, 100, 300, 100).block(WAIT))
+                .isEqualTo(QueueSweeper.SweepResult.NOTHING);
     }
 
     @Test

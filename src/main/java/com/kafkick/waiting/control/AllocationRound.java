@@ -41,6 +41,9 @@ public final class AllocationRound {
     /** 이월을 못 받았을 때의 계수. 이월받으면 그쪽 계수를 따른다. */
     private static final double DEFAULT_ALPHA = 0.3;
 
+    /** 이탈자 청소 (7.4). <b>멈추는 판단을 안에 들고 있다.</b> */
+    private final QueueSweeper sweeper;
+
     private final BooleanSupplier stillLeader;
     private final Supplier<Mono<TimedDemands>> demands;
     private final LongSupplier globalCredit;
@@ -84,7 +87,9 @@ public final class AllocationRound {
             IntSupplier gatewayCount, Function<Grant, Mono<Long>> apply,
             Function<Map<String, String>, Mono<Void>> publish, Supplier<Instant> clock,
             Supplier<Mono<CreditSmoother>> restore, SnapshotCodec codec,
-            LongSupplier creditFloor, Supplier<Optional<Tunables>> tunables) {
+            LongSupplier creditFloor, Supplier<Optional<Tunables>> tunables,
+            QueueSweeper sweeper) {
+        this.sweeper = Objects.requireNonNull(sweeper, "sweeper 는 필수다");
         this.tunables = Objects.requireNonNull(tunables, "tunables 는 필수다");
         this.stillLeader = Objects.requireNonNull(stillLeader, "stillLeader 는 필수다");
         this.demands = Objects.requireNonNull(demands, "demands 는 필수다");
@@ -109,9 +114,23 @@ public final class AllocationRound {
             LongSupplier globalCredit, IntSupplier gatewayCount, Function<Grant, Mono<Long>> apply,
             Function<Map<String, String>, Mono<Void>> publish, Supplier<Instant> clock,
             Supplier<Mono<CreditSmoother>> restore, SnapshotCodec codec,
+            LongSupplier creditFloor, Supplier<Optional<Tunables>> tunables,
+            QueueSweeper sweeper) {
+        return new AllocationRound(stillLeader, demands, globalCredit, gatewayCount, apply, publish,
+                clock, restore, codec, creditFloor, tunables, sweeper);
+    }
+
+    /** 청소를 안 붙이는 자리. <b>아무것도 안 걷는다</b> — 시험 편의다. */
+    public static AllocationRound withoutSweeper(BooleanSupplier stillLeader,
+            Supplier<Mono<TimedDemands>> demands,
+            LongSupplier globalCredit, IntSupplier gatewayCount, Function<Grant, Mono<Long>> apply,
+            Function<Map<String, String>, Mono<Void>> publish, Supplier<Instant> clock,
+            Supplier<Mono<CreditSmoother>> restore, SnapshotCodec codec,
             LongSupplier creditFloor, Supplier<Optional<Tunables>> tunables) {
         return new AllocationRound(stillLeader, demands, globalCredit, gatewayCount, apply, publish,
-                clock, restore, codec, creditFloor, tunables);
+                clock, restore, codec, creditFloor, tunables,
+                QueueSweeper.of(SweepGate.create(),
+                        ids -> Mono.just(QueueSweeper.SweepResult.NOTHING)));
     }
 
     /** 튜너블을 안 읽던 자리. 늘 기본값으로 돈다. */
@@ -121,8 +140,8 @@ public final class AllocationRound {
             Function<Map<String, String>, Mono<Void>> publish, Supplier<Instant> clock,
             Supplier<Mono<CreditSmoother>> restore, SnapshotCodec codec,
             LongSupplier creditFloor) {
-        return of(stillLeader, demands, globalCredit, gatewayCount, apply, publish, clock,
-                restore, codec, creditFloor, Optional::empty);
+        return withoutSweeper(stillLeader, demands, globalCredit, gatewayCount, apply, publish,
+                clock, restore, codec, creditFloor, Optional::empty);
     }
 
     public Mono<Void> run() {
@@ -219,6 +238,22 @@ public final class AllocationRound {
                                         tunables.get().orElse(null)),
                                 current.snapshot(),
                                 QueueingHysteresis.Snapshot.empty()))));
+    }
+
+    /**
+     * 이탈자를 걷어 낸다 (7.4).
+     *
+     * <p><b>멈춰야 할 구간은 스위퍼가 안다.</b> 여기서 되풀이하면 두 곳이 갈린다.
+     */
+    private Mono<Void> sweepUp(List<CouponDemand> collected, Map<String, Long> granted,
+            long credit, Instant readAt) {
+        if (lostLeadership()) {
+            return Mono.empty();
+        }
+        // 리더가 방금 읽어 발행한 재료다. 이 판이 도는 것 자체가 안 낡았다는 뜻이다.
+        return sweeper.run(
+                snapshot(collected, granted, credit, readAt, tunables.get().orElse(null))
+                        .coupons(), false).then();
     }
 
     /**

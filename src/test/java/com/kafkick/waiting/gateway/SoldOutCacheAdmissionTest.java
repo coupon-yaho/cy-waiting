@@ -115,20 +115,21 @@ class SoldOutCacheAdmissionTest {
     @Test
     @DisplayName("재료가_재고를_말하면_관찰이_풀린다")
     void 재료가_재고를_말하면_관찰이_풀린다() {
-        재고가_있다고_심는다();
-        캐시.observed(COUPON, 지금);
+        // 관찰 당시 손에 들고 있던 재료.
+        holder.replace(new GatewaySnapshot(
+                Map.of(COUPON, CouponStates.idle(1_000)), new SnapshotMeta(1, 1),
+                지금.minusSeconds(1)));
+        캐시.observed(COUPON, 지금.minusSeconds(1));
         태운다();
         assertThat(뒷단_횟수).as("관찰 뒤 첫 요청은 막힌다").hasValue(0);
 
         // **나중에 발행된 재료**가 재고를 말한다. 같은 재료로 풀면 캐시가
         // 존재하는 창에서 스스로 지워져 아무것도 안 막는다.
-        holder.replace(new GatewaySnapshot(
-                Map.of(COUPON, CouponStates.idle(1_000)), new SnapshotMeta(2, 1),
-                지금.plusSeconds(1)));
+        재고가_있다고_심는다();
         태운다();
 
         assertThat(뒷단_횟수).as("재입고 뒤에는 간다").hasValue(1);
-        assertThat(캐시.soldOut(COUPON, 지금)).isFalse();
+        assertThat(캐시.soldOut(COUPON)).isFalse();
     }
 
     /**
@@ -144,6 +145,52 @@ class SoldOutCacheAdmissionTest {
 
         태운다();
 
-        assertThat(캐시.soldOut(COUPON, 지금)).isTrue();
+        assertThat(캐시.soldOut(COUPON)).isTrue();
+    }
+
+    /**
+     * <b>재료가 낡아도 매진은 계속 끊습니다.</b>
+     *
+     * <p>사다리 1번(스냅샷 `stock<=0`)은 낡음을 견딥니다. 뒷단이 낸 409 는 그보다
+     * 훨씬 직접적인 증거인데, 약한 증거만 낡음을 견디면 비대칭입니다.
+     *
+     * <p>그리고 낡음이 뜨는 순간은 전 노드가 <b>같은 초에</b> 뒤집힙니다 — 그때
+     * 매진 보호가 통째로 꺼지면 뒷단 유입이 0 에서 노드 상한으로 한 번에 뜁니다.
+     */
+    @Test
+    @DisplayName("재료가_낡아도_매진은_계속_끊는다")
+    void 재료가_낡아도_매진은_계속_끊는다() {
+        재고가_있다고_심는다();
+        캐시.observed(COUPON, 지금);
+        // 낡음 한계를 넘긴 재료. 재고는 여전히 있다고 말한다.
+        holder.replace(new GatewaySnapshot(
+                Map.of(COUPON, CouponStates.idle(1_000)), new SnapshotMeta(1, 1),
+                지금.minusSeconds(60)));
+
+        MockServerWebExchange exchange = 태운다();
+
+        assertThat(뒷단_횟수).as("뒷단 도달").hasValue(0);
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+    }
+
+    /**
+     * <b>낡은 재료로는 풀지도 않습니다.</b>
+     *
+     * <p>낡음은 못 믿겠다는 뜻인데, 못 믿는 재료로 방패를 부수는 것만 허용하면
+     * 비대칭입니다. 특히 회복 첫 판에 도착한 스냅샷이 장애 중 쌓인 관찰을 전부
+     * 지우면, 회복 순간에 다시 한 번 뒷단으로 몰립니다.
+     */
+    @Test
+    @DisplayName("낡은_재료로는_관찰을_안_푼다")
+    void 낡은_재료로는_관찰을_안_푼다() {
+        재고가_있다고_심는다();
+        캐시.observed(COUPON, 지금.minusSeconds(120));
+        holder.replace(new GatewaySnapshot(
+                Map.of(COUPON, CouponStates.idle(1_000)), new SnapshotMeta(1, 1),
+                지금.minusSeconds(60)));
+
+        태운다();
+
+        assertThat(캐시.soldOut(COUPON)).as("낡은 재료가 방패를 부수지 않는다").isTrue();
     }
 }

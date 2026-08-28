@@ -172,6 +172,9 @@ public final class QueueStatusFilter implements WebFilter {
                 });
     }
 
+    // **매진 관찰 캐시는 안 본다** (계획 7.2 5.2.1). 그 관찰은 발급을 시도했다가
+    // 거절당한 사실이고, 줄 선 사람에게 "네 차례에 못 받는다" 를 뜻하지 않는다.
+    // 여기서 읽으면 관찰 하나가 5만 명의 줄을 끊는다.
     /** 잘못 말하면 기다리던 사람이 줄을 잃으므로, 모르는 것을 끝난 것으로 안 읽는다. */
     private boolean soldOut(String couponId) {
         SnapshotHolder.View view = holder.view();

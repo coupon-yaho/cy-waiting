@@ -51,10 +51,14 @@ public final class FilterOrder {
     /**
      * 뒷단의 매진 응답을 본다.
      *
-     * <p><b>서킷 안쪽이다.</b> 밖에 두면 서킷이 연 뒤의 폴백 응답까지 보게
-     * 되고, 그 폴백에 매진 코드가 실리면 뒷단이 멀쩡한 쿠폰이 막힌다.
+     * <p><b>쓰기 필터보다 앞이어야 한다.</b> 뒤에 서면 우리가 감싼 응답을
+     * 아무도 안 쓴다 — 모으기와 같은 함정이다.
      */
-    public static final int ROUTE_SOLD_OUT = ROUTE_CIRCUIT + 1;
+    // 그러면 판정·서킷보다도 바깥이 되므로, 관찰자가 CLIENT_RESPONSE_ATTR 로
+    // "정말 뒷단에 닿은 응답인가" 를 가른다. 안 가르면 게이트웨이 자신이 낸
+    // 매진을 되먹여 뒷단이 살아나도 안 풀린다.
+    public static final int ROUTE_SOLD_OUT =
+            NettyWriteResponseFilter.WRITE_RESPONSE_FILTER_ORDER - 1;
 
     /**
      * 조회 라우트의 코얼레싱.

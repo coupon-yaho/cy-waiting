@@ -170,6 +170,7 @@ tryAcquireAll(tier1, tier2):
 ### 3.5 판정 순서
 
 ```
+ 0. 뒷단 매진 관찰 (게이트웨이 계층)   → REJECT_SOLD_OUT     ← 사다리 밖. 아래 참조
  1. stock <= 0                        → REJECT_SOLD_OUT
  2. hasValidToken                     → tier2 통과 시 PASS_TOKEN, 초과 시 RETRY_TOKEN
  3. mode == ALWAYS && !queueFull      → ENQUEUE_ALWAYS       ← 낡음보다 앞
@@ -185,6 +186,16 @@ tryAcquireAll(tier1, tier2):
                                           ENQUEUE_RATE_GLOBAL / ENQUEUE_KEY_SATURATED
 10.                                   → PASS_UNDER_CAP
 ```
+
+> **0번은 도메인이 아니라 게이트웨이가 판정한다** (Phase 7 5.2절). 뒷단이 낸
+> `409` + `COUPON-306` 을 노드가 기억한 것이라 재료가 아니라 관찰이고, 도메인은
+> 라이브러리도 시계도 안 쓰므로(DS-1) 여기 넣을 수 없다. 사다리에 적어 두는 것은
+> **같은 입력에서 왜 `REJECT_SOLD_OUT` 이 나오는지** 이 표만 보고는 재현할 수
+> 없기 때문이다 — `stock=1000` 인데 매진이 나오는 자리가 여기다.
+>
+> 1번과 같은 답을 내고 같은 응답 계약(`COUPON-306` · 재시도 없음)을 쓴다. 낡은
+> 재료에서도 1번처럼 계속 끊는다 — 뒷단이 낸 409 는 스냅샷보다 직접적인 증거라,
+> 약한 증거만 낡음을 견디면 비대칭이다. 대신 **해제**를 낡은 재료로는 안 한다.
 
 > **`hasQueue` 는 `waiting > 0 || justEnqueued` 다.** 한 번 정의하고 세 줄이
 > 같은 것을 쓴다 — 풀어 쓰면 한 줄만 고쳐지고 나머지가 갈라진다.

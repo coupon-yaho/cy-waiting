@@ -4,13 +4,19 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.nio.charset.StandardCharsets;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.cloud.gateway.support.ServerWebExchangeUtils;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
+import reactor.core.publisher.Flux;
 
 /**
  * 캐시가 차오르는 중인지를 <b>막히기 전에</b> 본다 (7.2.7).
@@ -54,17 +60,23 @@ class SoldOutCacheMetricsTest {
     void 관찰_횟수를_따로_센다() {
         SoldOutCache 캐시 = SoldOutCache.of(Duration.ofSeconds(10), 7);
         SoldOutObserver observer = SoldOutObserver.of(
-                캐시, java.time.Clock.fixed(지금, java.time.ZoneOffset.UTC), meters);
+                캐시, Clock.fixed(지금, ZoneOffset.UTC), meters);
         MockServerWebExchange exchange = MockServerWebExchange.from(
                 MockServerHttpRequest.post("/api/v1/coupons/c1/issue"));
+        // 라우팅 필터가 심는 값 둘. 없으면 관찰자가 아무것도 안 한다.
+        exchange.getAttributes().put(
+                ServerWebExchangeUtils.URI_TEMPLATE_VARIABLES_ATTRIBUTE,
+                Map.of("couponId", "c1"));
+        exchange.getAttributes().put(
+                ServerWebExchangeUtils.CLIENT_RESPONSE_ATTR, "뒷단 응답");
 
         observer.filter(exchange, e -> {
             e.getResponse().setStatusCode(HttpStatus.CONFLICT);
-            return e.getResponse().writeWith(reactor.core.publisher.Flux.just(
+            return e.getResponse().writeWith(Flux.just(
                     e.getResponse().bufferFactory().wrap(
                             """
                             {"success":false,"error":{"code":"COUPON-306"}}"""
-                                    .getBytes(java.nio.charset.StandardCharsets.UTF_8))));
+                                    .getBytes(StandardCharsets.UTF_8))));
         }).block();
 
         assertThat(meters.counter("waiting.soldout.observed").count()).isEqualTo(1);

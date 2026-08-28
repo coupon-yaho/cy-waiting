@@ -9,13 +9,12 @@ import java.util.Objects;
 import org.reactivestreams.Publisher;
 import org.springframework.cloud.gateway.filter.GatewayFilter;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
+import org.springframework.cloud.gateway.support.ServerWebExchangeUtils;
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.server.reactive.ServerHttpResponse;
 import org.springframework.http.server.reactive.ServerHttpResponseDecorator;
 import org.springframework.web.server.ServerWebExchange;
-import org.springframework.web.util.pattern.PathPattern;
-import org.springframework.web.util.pattern.PathPatternParser;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -37,9 +36,6 @@ public final class SoldOutObserver implements GatewayFilter {
      * 409 로 낼 때 그 전부를 문자열로 만든다.
      */
     private static final int PREFIX = 512;
-
-    private static final PathPattern PATH = new PathPatternParser()
-            .parse("/api/v1/coupons/{couponId}/**");
 
     private static final String METRIC = "waiting.soldout.observed";
 
@@ -78,7 +74,17 @@ public final class SoldOutObserver implements GatewayFilter {
                 // **흘려보내면서 본다.** 삼켰다가 다시 쓰면 상한을 넘긴 응답을
                 // 되돌릴 방법이 없고, 그때는 이 관찰이 사고의 원인이 된다.
                 return super.writeWith(Flux.from(body)
-                        .doOnNext(buffer -> inspect(original, buffer, couponId, prefix)));
+                        .doOnNext(buffer -> inspect(exchange, buffer, couponId, prefix)));
+            }
+
+            @Override
+            public Mono<Void> writeAndFlushWith(
+                    Publisher<? extends Publisher<? extends DataBuffer>> body) {
+                // **이쪽도 덮는다.** 스트리밍 미디어 타입이면 쓰기 필터가 여기로
+                // 온다 — 안 덮으면 그 응답의 관찰이 통째로 지나간다.
+                return super.writeAndFlushWith(Flux.from(body)
+                        .map(part -> Flux.from(part)
+                                .doOnNext(buffer -> inspect(exchange, buffer, couponId, prefix))));
             }
         };
         return chain.filter(exchange.mutate().response(watched).build());
@@ -90,9 +96,17 @@ public final class SoldOutObserver implements GatewayFilter {
      * <p><b>상태와 사유를 함께 본다.</b> 상태만 보면 중복 발급 같은 다른 409 가
      * 그 쿠폰을 끊고, 본문만 보면 매진을 설명하는 200 이 같은 일을 한다.
      */
-    private void inspect(ServerHttpResponse response, DataBuffer buffer, String couponId,
+    private void inspect(ServerWebExchange exchange, DataBuffer buffer, String couponId,
             Prefix prefix) {
-        if (!HttpStatus.CONFLICT.equals(response.getStatusCode())) {
+        if (!HttpStatus.CONFLICT.equals(exchange.getResponse().getStatusCode())) {
+            return;
+        }
+        // **정말로 뒷단에 닿은 응답인가.** 이 필터는 쓰기 필터보다 바깥이라
+        // 판정·서킷보다도 바깥이다. 안 가르면 게이트웨이 자신이 낸 매진
+        // (사다리 1번의 `COUPON-306`)을 되먹여, 뒷단이 살아나도 안 풀린다.
+        //
+        // 이 표시는 라우팅 필터만 심고, 서킷 폴백은 재디스패치 전에 지운다.
+        if (exchange.getAttribute(ServerWebExchangeUtils.CLIENT_RESPONSE_ATTR) == null) {
             return;
         }
         if (prefix.append(buffer) && prefix.contains(SOLD_OUT_CODE)) {
@@ -111,22 +125,27 @@ public final class SoldOutObserver implements GatewayFilter {
      */
     private static final class Prefix {
 
-        private final StringBuilder head = new StringBuilder(PREFIX);
+        private final StringBuilder head = new StringBuilder();
+        private int bytes;
         private boolean done;
 
         /** 더 모았으면 참. 이미 상한을 채웠거나 답이 난 뒤면 거짓이다. */
         boolean append(DataBuffer buffer) {
-            if (done || head.length() >= PREFIX) {
+            if (done || bytes >= PREFIX) {
                 return false;
             }
-            // 읽기 위치를 안 옮긴다. 옮기면 뒷사람이 빈 조각을 받는다.
-            int take = Math.min(buffer.readableByteCount(), PREFIX - head.length());
+            // **바이트로 센다.** 글자 수로 세면 한글 봉투에서 창이 세 배로
+            // 늘어, 상한이 뜻하는 바가 코드마다 달라진다.
+            int take = Math.min(buffer.readableByteCount(), PREFIX - bytes);
             if (take <= 0) {
                 return false;
             }
+            // 읽기 위치를 안 옮긴다. 옮기면 뒷사람이 빈 조각을 받는다.
+            //
             // 조각 경계가 여러 바이트 문자를 가를 수 있다. 찾는 것이 아스키라
             // 잘린 꼬리가 치환 문자가 되어도 검색에는 영향이 없다.
             head.append(buffer.toString(buffer.readPosition(), take, StandardCharsets.UTF_8));
+            bytes += take;
             return true;
         }
 
@@ -139,13 +158,19 @@ public final class SoldOutObserver implements GatewayFilter {
         }
     }
 
+    /**
+     * 쿠폰 이름을 <b>판정과 같은 출처에서</b> 뽑는다.
+     *
+     * <p>경로를 다시 파면 담는 키와 읽는 키의 출처가 둘이 된다 — 라우트 술어가
+     * 한 번만 느슨해지면 캐시가 조용히 0% 적중이 되고, 상한을 클라이언트가 고른
+     * 문자열로 채울 수 있다. 라우트를 안 탄 요청이 자동으로 걸러지는 것은 덤이다.
+     */
     private String couponOf(ServerWebExchange exchange) {
-        PathPattern.PathMatchInfo vars =
-                PATH.matchAndExtract(exchange.getRequest().getPath().pathWithinApplication());
-        if (vars == null) {
+        Object vars = exchange.getAttribute(
+                ServerWebExchangeUtils.URI_TEMPLATE_VARIABLES_ATTRIBUTE);
+        if (!(vars instanceof Map<?, ?> byName)) {
             return null;
         }
-        Map<String, String> byName = vars.getUriVariables();
-        return byName.get("couponId");
+        return byName.get("couponId") instanceof String id ? id : null;
     }
 }

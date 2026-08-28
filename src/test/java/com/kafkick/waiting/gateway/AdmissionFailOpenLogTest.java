@@ -61,7 +61,7 @@ class AdmissionFailOpenLogTest {
     /** 구간 시계. 고정하지 못하면 지속 시간 계산이 시험에서 늘 0 이다 (TS-4). */
     private final AtomicLong 나노 = new AtomicLong();
 
-    private final AdmissionGatewayFilter filter = AdmissionGatewayFilter.of(
+    private final AdmissionGatewayFilter filter = AdmissionGatewayFilter.withoutSoldOutCache(
             holder, AdmissionDecider.of(limiter, 0.7),
             Clock.fixed(지금, ZoneOffset.UTC), meters, () -> 0.5, 줄,
             QueueToken.of("not-a-real-secret-0123456789abcdef"), limiter,

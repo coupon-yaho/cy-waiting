@@ -17,6 +17,7 @@ import com.kafkick.waiting.domain.queue.EntryToken;
 import com.kafkick.waiting.domain.queue.EtaPolicy;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import com.kafkick.waiting.domain.queue.QueueToken;
+import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.http.HttpHeaders;
 import java.time.Clock;
@@ -163,12 +164,22 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      */
     private final SoldOutCache soldOutCache;
 
+    /**
+     * 캐시가 끊은 건수.
+     *
+     * <p><b>`cause` 축에 안 싣는다.</b> 그 축은 실패 원인의 닫힌 집합이라
+     * (LG-4), 판정의 출처를 넣으면 "실패율 = cause != none" 을 쓰는 순간
+     * 정상적인 매진 단락이 전부 실패로 잡힌다.
+     */
+    private final Counter soldOutHits;
+
     private AdmissionGatewayFilter(SnapshotHolder holder, AdmissionDecider decider,
             Clock clock, MeterRegistry meters, DoubleSupplier random,
             QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter,
             EntryToken entryTokens, IdempotencyKey idempotency, LongSupplier ticker,
             SoldOutCache soldOutCache) {
         this.soldOutCache = Objects.requireNonNull(soldOutCache, "soldOutCache 는 필수다");
+        this.soldOutHits = meters.counter("waiting.soldout.cache.hit");
         this.holder = Objects.requireNonNull(holder, "holder 는 필수다");
         this.failOpenWindow = FailureWindow.of(ticker);
         this.shedWindow = FailureWindow.of(ticker);
@@ -208,8 +219,12 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                 entryTokens, idempotency, System::nanoTime, soldOutCache);
     }
 
-    /** 캐시를 안 받는 자리. <b>빈 캐시라 아무것도 안 막는다</b> — 시험 편의다. */
-    public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider,
+    /**
+     * 매진 캐시 없이 만든다. <b>이름으로 드러낸다</b> — 같은 이름의 오버로드로
+     * 두면 배선 한 줄이 이쪽을 골라 매진 보호가 신호 없이 사라진다.
+     */
+    public static AdmissionGatewayFilter withoutSoldOutCache(SnapshotHolder holder,
+            AdmissionDecider decider,
             Clock clock, MeterRegistry meters, QueuePort queue, QueueToken tokens,
             SecondWindowLimiter limiter, EntryToken entryTokens,
             IdempotencyKey idempotency) {
@@ -233,7 +248,8 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     }
 
     /** 난수원을 받는다. 고정하지 못하면 흔들림이 실제로 붙었는지 못 잰다 (TS-4). */
-    public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider,
+    public static AdmissionGatewayFilter withoutSoldOutCache(SnapshotHolder holder,
+            AdmissionDecider decider,
             Clock clock, MeterRegistry meters, DoubleSupplier random,
             QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter,
             EntryToken entryTokens, IdempotencyKey idempotency) {
@@ -249,7 +265,8 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      * <p>고정하지 못하면 fail-open 이 얼마나 이어졌는지를 재는 계산 자체가
      * 시험에서 늘 0 이 되어, 단위를 틀려도 통과한다 (TS-4).
      */
-    public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider,
+    public static AdmissionGatewayFilter withoutSoldOutCache(SnapshotHolder holder,
+            AdmissionDecider decider,
             Clock clock, MeterRegistry meters, DoubleSupplier random,
             QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter,
             EntryToken entryTokens, IdempotencyKey idempotency, LongSupplier ticker) {
@@ -321,16 +338,12 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         // 영영 안 넘어가고, 상한만큼 쓴 뒤부터 전부 막힌다.
         Instant now = clock.instant();
         long nowSec = now.getEpochSecond();
-        // **재료가 재고를 말하는 것이 곧 해제 신호다** (7.2.4). TTL 을 기다리면
-        // 재입고된 쿠폰이 그 시간만큼 막힌다. 재고 0 에서는 안 푼다 — 풀면
-        // 캐시가 매 요청 스스로 지워져 아무것도 안 막는다.
-        if (!state.soldOut()) {
-            soldOutCache.restocked(couponId, view.snapshot().publishedAt());
-        }
-        AdmissionDecision cached = observedSoldOut(couponId, state, now);
-        if (cached != null) {
+        releaseIfRestocked(couponId, state, view);
+        if (soldOutCache.soldOut(couponId)) {
+            AdmissionDecision cached = AdmissionDecision.REJECT_SOLD_OUT;
             exchange.getAttributes().put(DECISION, cached);
-            count(cached.name(), "sold-out-cache");
+            count(cached.name());
+            soldOutHits.increment();
             return route(exchange, chain, cached, couponId, state, view.snapshot().meta());
         }
         AdmissionDecision decision = decider.decide(new AdmissionRequest(
@@ -354,25 +367,23 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     }
 
     /**
-     * 뒷단이 매진이라고 답한 것을 기억하고 있는가 (7.2.3).
+     * 관찰보다 나중에 발행된 재료가 재고를 말하면 푼다 (7.2.4).
      *
-     * <p><b>재료가 재고를 말하는 창에서만 뜻이 있다.</b> 스냅샷이 이미 매진을
-     * 말하면 사다리 1번이 같은 답을 내므로 여기서 볼 이유가 없다.
+     * <p><b>낡은 재료로는 안 푼다.</b> 낡음은 못 믿겠다는 뜻인데, 못 믿는
+     * 재료로 방패를 부수는 것만 허용하면 비대칭이다. 집행은 사다리 1번과 같이
+     * 낡음을 견디므로, 여기서 새는 쪽만 막으면 양쪽이 맞는다.
      */
-    private AdmissionDecision observedSoldOut(String couponId, CouponState state, Instant now) {
-        if (state.soldOut()) {
-            return null;
+    private void releaseIfRestocked(String couponId, CouponState state,
+            SnapshotHolder.View view) {
+        if (state.soldOut() || holder.isDataStale(view)) {
+            return;
         }
-        if (!soldOutCache.soldOut(couponId, now)) {
-            return null;
-        }
-        // **재료가 낡았으면 관찰을 못 믿는다.** 낡은 재료로는 재입고가 있었는지
-        // 알 수 없고, 그 구간은 사다리 4번이 노드 몫 안에서 여는 자리다.
-        // 여기서 끊으면 그 설계가 뒤집힌다.
-        if (holder.isDataStale(holder.view())) {
-            return null;
-        }
-        return AdmissionDecision.REJECT_SOLD_OUT;
+        soldOutCache.restocked(couponId, view.snapshot().publishedAt())
+                // **쌍으로 남긴다** (LG-2). 쿠폰 ID 는 라벨로 못 쓰므로
+                // (LG-4), 어느 쿠폰이 몇 초 동안 몇 건을 끊었는지는 로그만이
+                // 답할 수 있는 자리다.
+                .ifPresent(r -> log.info("매진 해제 — 쿠폰 {} 를 {}초 동안 끊었고 {}건이었다",
+                        couponId, r.elapsed().toSeconds(), r.blocked()));
     }
 
     /**

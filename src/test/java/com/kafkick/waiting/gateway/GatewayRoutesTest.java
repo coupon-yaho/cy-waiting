@@ -68,7 +68,7 @@ class GatewayRoutesTest {
     private final RouteLocator locator = new GatewayRoutes().routes(
             new RouteLocatorBuilder(컨텍스트),
             new GatewayRoutes.Backend("http://backend:8080", 응답_상한),
-            AdmissionGatewayFilter.of(재료_없는_홀더(),
+            AdmissionGatewayFilter.withoutSoldOutCache(재료_없는_홀더(),
                     AdmissionDecider.of(공유_리미터, 0.7),
                     Clock.systemUTC(), new SimpleMeterRegistry(),
                     FakeQueuePort.create(),
@@ -509,6 +509,38 @@ class GatewayRoutesTest {
         assertThat(실린_순서(조회, "QueryCoalescing"))
                 .isEqualTo(FilterOrder.ROUTE_COALESCING)
                 .isLessThan(NettyWriteResponseFilter.WRITE_RESPONSE_FILTER_ORDER);
+    }
+
+    /**
+     * <b>매진 관찰도 쓰기 필터보다 앞이어야 한다.</b>
+     *
+     * <p>뒤에 서면 응답을 쓰는 것은 바깥의 쓰기 필터이고 그쪽은 자기가 받은
+     * exchange 를 씁니다 — 우리가 감싼 것은 한 번도 안 불리고, 캐시가 영원히
+     * 비어 있으면서 지표는 "매진이 없었다" 와 구별되지 않습니다.
+     *
+     * <p>상수끼리 비교하면 항진명제입니다. <b>실제로 실린 값</b>을 봐야 합니다.
+     */
+    @Test
+    @DisplayName("발급_라우트가_매진_관찰을_쓰기_필터보다_앞에_단다")
+    void 발급_라우트가_매진_관찰을_쓰기_필터보다_앞에_단다() {
+        Route 발급 = 잡는_라우트(HttpMethod.POST, "/api/v1/coupons/c1/issue");
+
+        assertThat(실린_순서(발급, "SoldOut"))
+                .isEqualTo(FilterOrder.ROUTE_SOLD_OUT)
+                .isLessThan(NettyWriteResponseFilter.WRITE_RESPONSE_FILTER_ORDER);
+    }
+
+    /**
+     * <b>조회에는 안 단다.</b> 조회 응답의 매진 코드는 재고 정보이지 뒷단이
+     * 발급을 거절한 사실이 아닙니다 — 그걸 관찰로 담으면 팔고 있는 쿠폰이 막힙니다.
+     */
+    @Test
+    @DisplayName("조회_라우트에는_매진_관찰을_안_단다")
+    void 조회_라우트에는_매진_관찰을_안_단다() {
+        Route 조회 = 잡는_라우트(HttpMethod.GET, "/api/v1/coupons");
+
+        assertThat(조회.getFilters()).noneSatisfy(f ->
+                assertThat(f.toString()).contains("SoldOut"));
     }
 
     /**

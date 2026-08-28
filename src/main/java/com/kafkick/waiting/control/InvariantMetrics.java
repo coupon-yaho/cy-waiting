@@ -46,6 +46,9 @@ public final class InvariantMetrics {
         metrics.count(meters, "waiting.snapshot.clock.floor.applied",
                 InvariantMetrics::floorApplied,
                 "재료를 읽을 때 시각이 뒤로 가 바닥값이 걸린 횟수");
+        metrics.count(meters, "waiting.allocation.admitted",
+                InvariantMetrics::admitted,
+                "차례를 준 누적 인원. 크레딧 낭비의 분모다 (G7.5)");
         return metrics;
     }
 
@@ -60,6 +63,11 @@ public final class InvariantMetrics {
     /** 평활 지연과 하한이 만드는 초과. 배분기 자체는 준 예산을 안 넘긴다. */
     private double budgetOvershoot() {
         return round.budgetOvershoot();
+    }
+
+    /** 차례를 준 누적 인원. 실제로 받아 간 수와의 차이가 곧 낭비다. */
+    private double admitted() {
+        return round.admitted();
     }
 
     /** 죽은 큐가 예산을 먹거나 노드가 모자라면 여기가 올라간다. */

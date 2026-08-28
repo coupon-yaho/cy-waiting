@@ -388,6 +388,9 @@ class AllocationRoundTest {
                 .functionCounter().count()).as("초과 입장 인원").isZero();
         assertThat(meters.get("waiting.snapshot.clock.floor.applied")
                 .functionCounter().count()).as("시계 바닥값").isZero();
+        // 이 판은 줄이 10만인데 크레딧이 10 이라 열 명의 차례가 왔다.
+        assertThat(meters.get("waiting.allocation.admitted")
+                .functionCounter().count()).as("차례를 준 인원").isEqualTo(10);
     }
 
     /**

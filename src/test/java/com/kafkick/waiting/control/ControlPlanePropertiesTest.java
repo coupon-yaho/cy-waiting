@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.kafkick.waiting.domain.coupon.CouponStates;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
+import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import java.time.Duration;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -91,20 +92,24 @@ class ControlPlanePropertiesTest {
     @DisplayName("스케줄러_값이_잘못되면_안_뜬다")
     void 스케줄러_값이_잘못되면_안_뜬다() {
         assertThatCode(() -> new ControlPlaneProperties.Scheduler(Duration.ofSeconds(1),
-                Duration.ofSeconds(3), 1, 10)).doesNotThrowAnyException();
+                Duration.ofSeconds(3), 1, 90)).doesNotThrowAnyException();
         assertThatThrownBy(() -> new ControlPlaneProperties.Scheduler(Duration.ZERO,
-                Duration.ofSeconds(3), 1, 10))
+                Duration.ofSeconds(3), 1, 90))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageStartingWith("tick");
         assertThatThrownBy(() -> new ControlPlaneProperties.Scheduler(Duration.ofSeconds(1),
-                Duration.ofSeconds(-1), 1, 10))
+                Duration.ofSeconds(-1), 1, 90))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageStartingWith("firstTickDelay");
         assertThatThrownBy(() -> new ControlPlaneProperties.Scheduler(Duration.ofSeconds(1),
-                Duration.ofSeconds(3), 0, 10))
+                Duration.ofSeconds(3), 0, 90))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageStartingWith("shards");
         // **유예가 0 이면 유예가 아니다.** 마지막 폴링이 아직 오는 중에 줄이
         // 사라지면, 그 사람은 매진이 아니라 "줄에 없다" 를 받는다 (7.3.2).
         assertThatThrownBy(() -> new ControlPlaneProperties.Scheduler(Duration.ofSeconds(1),
                 Duration.ofSeconds(3), 1, 0))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageStartingWith("매진 유예");
+        // **관계를 값으로 막는다.** 주석으로만 두면 배포 설정 한 줄이 뒤집는다.
+        assertThatThrownBy(() -> new ControlPlaneProperties.Scheduler(Duration.ofSeconds(1),
+                Duration.ofSeconds(3), 1, 30))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageStartingWith("매진 유예");
     }
 
@@ -118,7 +123,7 @@ class ControlPlanePropertiesTest {
         // 옮겨도 안 죽는다.
         ControlPlaneProperties.Scheduler scheduler =
                 new ControlPlaneProperties.Scheduler(
-                        Duration.ofSeconds(1), Duration.ofSeconds(3), 1, 10);
+                        Duration.ofSeconds(1), Duration.ofSeconds(3), 1, 90);
 
         assertThatThrownBy(() -> new ControlPlaneProperties(scheduler,
                 leader(Duration.ofSeconds(1), Duration.ofMillis(100), Duration.ofMillis(50)),
@@ -133,14 +138,16 @@ class ControlPlanePropertiesTest {
      * "줄에 없다" 를 받습니다.
      */
     @Test
-    @DisplayName("기본_유예가_낡음_한계보다_길다")
-    void 기본_유예가_낡음_한계보다_길다() {
+    @DisplayName("기본_유예가_폴링_최대_간격보다_길다")
+    void 기본_유예가_폴링_최대_간격보다_길다() {
         ControlPlaneProperties.Scheduler scheduler =
                 ControlPlaneProperties.defaults().scheduler();
 
         Duration 유예 = scheduler.tick().multipliedBy(scheduler.soldOutGraceTicks());
 
-        assertThat(유예).isGreaterThan(Duration.ofSeconds(5));
+        // **리터럴을 안 쓴다.** 정책이 간격을 늘리면 이 시험이 같이 움직여야
+        // 한다 — 리터럴로 두면 관계가 깨진 채로 통과한다.
+        assertThat(유예).isGreaterThan(PollIntervalPolicy.maxInterval());
     }
 
     @Test
@@ -150,7 +157,7 @@ class ControlPlanePropertiesTest {
         // 그러면 하한으로 떨어져 아무 문제 없는 쿠폰까지 줄을 세운다.
         ControlPlaneProperties.Scheduler scheduler =
                 new ControlPlaneProperties.Scheduler(
-                        Duration.ofSeconds(1), Duration.ofSeconds(3), 1, 10);
+                        Duration.ofSeconds(1), Duration.ofSeconds(3), 1, 90);
 
         assertThatThrownBy(() -> new ControlPlaneProperties(scheduler,
                 ControlPlaneProperties.defaults().leader(),

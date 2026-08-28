@@ -1,5 +1,6 @@
 package com.kafkick.waiting.control;
 
+import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import java.time.Duration;
 
 /**
@@ -36,8 +37,8 @@ public record ControlPlaneProperties(Scheduler scheduler, Leader leader, Capacit
 
     public static ControlPlaneProperties defaults() {
         return new ControlPlaneProperties(
-                // 유예 10틱 = 10초. 낡음 한계 5초의 두 배다 (7.3.2).
-                new Scheduler(Duration.ofSeconds(1), Duration.ofSeconds(3), 1, 10),
+                // 유예 90틱 = 90초. 폴링 최대 간격 60초의 1.5배다 (7.3.2).
+                new Scheduler(Duration.ofSeconds(1), Duration.ofSeconds(3), 1, 90),
                 new Leader(Duration.ofSeconds(2), Duration.ofMillis(300), Duration.ofMillis(100)),
                 new Capacity(Duration.ofSeconds(60), Duration.ofSeconds(3), 5, 10_000, 3, 1));
     }
@@ -107,12 +108,16 @@ public record ControlPlaneProperties(Scheduler scheduler, Leader leader, Capacit
                 throw new IllegalArgumentException(
                         "shards 는 아직 1 만 지원한다 — 샤드별 적용이 없다: %d".formatted(shards));
             }
-            // **낡음 한계보다 길어야 한다** (7.3.2). 짧으면 마지막 폴링이
-            // 아직 오는 중에 줄이 사라져, 그 사람이 매진이 아니라 "줄에 없다"
-            // 를 받는다. 틱이 1초이므로 틱 수가 곧 초다.
-            if (soldOutGraceTicks < 1) {
+            // **폴링 최대 간격보다 길어야 한다** (7.3.2). 마지막 폴링이 언제
+            // 오는지를 정하는 것은 낡음 한계가 아니라 **우리가 클라이언트에게
+            // 준 간격**이다. 먼 밴드는 60초를 받으므로, 그보다 짧으면 그 사람이
+            // 다시 왔을 때 줄이 이미 없다.
+            if (tick.multipliedBy(soldOutGraceTicks)
+                    .compareTo(PollIntervalPolicy.maxInterval()) <= 0) {
                 throw new IllegalArgumentException(
-                        "매진 유예 틱은 양수여야 한다: %d".formatted(soldOutGraceTicks));
+                        "매진 유예는 폴링 최대 간격보다 길어야 한다: 유예=%s 간격=%s"
+                                .formatted(tick.multipliedBy(soldOutGraceTicks),
+                                        PollIntervalPolicy.maxInterval()));
             }
         }
     }

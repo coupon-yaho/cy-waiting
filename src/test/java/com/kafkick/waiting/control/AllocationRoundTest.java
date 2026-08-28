@@ -13,6 +13,10 @@ import com.kafkick.waiting.domain.coupon.RuntimeState;
 import java.time.Instant;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.ArrayList;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.util.Optional;
+import com.kafkick.waiting.domain.coupon.CouponStates;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -62,6 +66,81 @@ class AllocationRoundTest {
     private static final long 읽은_시각 = 1_700_000_000L;
 
     private final Map<String, Map<String, String>> 발행 = new LinkedHashMap<>();
+
+    /**
+     * <b>발행이 실패하면 지우지 않고 다음 틱에 다시 옵니다.</b>
+     *
+     * <p>정리 판단을 `.then()` 의 인자로 부르면 자바가 먼저 평가해서, 셈과
+     * 삭제 표시와 로그가 <b>발행이 구독되기도 전에</b> 일어납니다. 그러면
+     * 발행이 터져도 지운 것으로 기록되고, 죽은 줄이 영구히 남으면서 로그는
+     * 지웠다고 말합니다.
+     */
+    @Test
+    @DisplayName("발행이_실패하면_지우지_않고_다음_틱에_다시_온다")
+    void 발행이_실패하면_지우지_않고_다음_틱에_다시_온다() {
+        List<String> 지운_것 = new ArrayList<>();
+        SoldOutCleanup cleanup = SoldOutCleanup.of(1, new SimpleMeterRegistry());
+        AllocationRound round = AllocationRound.of(
+                () -> true,
+                () -> Mono.just(new TimedDemands(
+                        List.of(new CouponDemand("c1", 0, 0, QueueMode.ADAPTIVE)), 읽은_시각)),
+                () -> 1_000, () -> 1,
+                grant -> Mono.just(grant.credit()),
+                hash -> Mono.error(new IllegalStateException("레디스가 끊겼다")),
+                () -> Instant.ofEpochSecond(읽은_시각),
+                () -> Mono.just(CreditSmoother.of(1.0)),
+                SnapshotCodec.create(), () -> 0L, Optional::empty,
+                cleanup, ids -> {
+                    지운_것.addAll(ids);
+                    return Mono.just((long) ids.size());
+                });
+
+        for (int i = 0; i < 5; i++) {
+            round.run().onErrorResume(e -> Mono.empty()).block();
+        }
+
+        assertThat(지운_것).as("발행이 실패했으므로 아무것도 안 지운다").isEmpty();
+        // **셈도 안 올라야 한다.** 올라 있으면 발행이 살아난 첫 틱에 유예를
+        // 다 안 채우고 지운다.
+        assertThat(cleanup.due(Map.of("c1", CouponStates.closed(0))))
+                .as("첫 틱은 아직").isEmpty();
+    }
+
+    /**
+     * <b>리더가 아니면 안 지웁니다.</b>
+     *
+     * <p>판 안에서 유일하게 되돌릴 수 없는 쓰기입니다. 판이 도는 사이에 리스가
+     * 만료되고 다른 노드가 리더가 됐다면, 여기서 내는 삭제는 <b>남의 줄</b>을
+     * 지우는 것입니다 — 그 사이에 재입고돼 살아난 줄일 수도 있습니다.
+     */
+    @Test
+    @DisplayName("리더가_아니면_지우지_않는다")
+    void 리더가_아니면_지우지_않는다() {
+        List<String> 지운_것 = new ArrayList<>();
+        // 발행까지는 리더고, 정리 직전에 잃는다.
+        AtomicInteger 물어본_횟수 = new AtomicInteger();
+        SoldOutCleanup cleanup = SoldOutCleanup.of(1, new SimpleMeterRegistry());
+        AllocationRound round = AllocationRound.of(
+                () -> 물어본_횟수.incrementAndGet() < 3,
+                () -> Mono.just(new TimedDemands(
+                        List.of(new CouponDemand("c1", 0, 0, QueueMode.ADAPTIVE)), 읽은_시각)),
+                () -> 1_000, () -> 1,
+                grant -> Mono.just(grant.credit()),
+                hash -> Mono.empty(),
+                () -> Instant.ofEpochSecond(읽은_시각),
+                () -> Mono.just(CreditSmoother.of(1.0)),
+                SnapshotCodec.create(), () -> 0L, Optional::empty,
+                cleanup, ids -> {
+                    지운_것.addAll(ids);
+                    return Mono.just((long) ids.size());
+                });
+
+        for (int i = 0; i < 5; i++) {
+            round.run().onErrorResume(e -> Mono.empty()).block();
+        }
+
+        assertThat(지운_것).as("리더가 아닌 채로 지우지 않는다").isEmpty();
+    }
 
     private AllocationRound round(List<CouponDemand> 수요, long 전역_크레딧, int 노드_수) {
         return AllocationRound.of(

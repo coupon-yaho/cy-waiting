@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.kafkick.waiting.domain.coupon.CouponState;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.kafkick.waiting.domain.coupon.CouponStates;
 import java.util.List;
 import java.util.Map;
@@ -21,11 +23,18 @@ class SoldOutCleanupTest {
     private static final String COUPON = "c1";
     private static final int 유예_틱 = 3;
 
+    private final MeterRegistry meters = new SimpleMeterRegistry();
+
     private SoldOutCleanup 정리() {
-        return SoldOutCleanup.of(유예_틱);
+        return SoldOutCleanup.of(유예_틱, meters);
     }
 
+    /** <b>줄이 빈 매진 쿠폰.</b> 대기자가 남았으면 안 지운다 (7.3.3). */
     private Map<String, CouponState> 매진() {
+        return Map.of(COUPON, CouponStates.closed(0));
+    }
+
+    private Map<String, CouponState> 매진인데_줄이_남음() {
         return Map.of(COUPON, CouponStates.closed(100));
     }
 
@@ -61,14 +70,95 @@ class SoldOutCleanupTest {
      * 틱당 명령 수가 쿠폰 수만큼 늘고, 그게 곧 배분이 밀리는 이유가 됩니다.
      */
     @Test
-    @DisplayName("이미_지운_쿠폰은_다시_안_지운다")
-    void 이미_지운_쿠폰은_다시_안_지운다() {
+    @DisplayName("지운_것이_확인되면_다시_안_지운다")
+    void 지운_것이_확인되면_다시_안_지운다() {
         SoldOutCleanup 정리 = 정리();
         for (int i = 0; i <= 유예_틱; i++) {
             정리.due(매진());
         }
 
+        정리.dropped(List.of(COUPON));
+
         assertThat(정리.due(매진())).isEmpty();
+    }
+
+    /**
+     * <b>못 지웠으면 다음 틱에 다시 옵니다</b> (7.3.4).
+     *
+     * <p>시도 전에 표시하면 부분 실패가 "다시 온다" 가 아니라 영구 누수가
+     * 됩니다 — 활성 목록이 한 방향으로만 자랍니다.
+     */
+    @Test
+    @DisplayName("못_지웠으면_다음_틱에_다시_온다")
+    void 못_지웠으면_다음_틱에_다시_온다() {
+        SoldOutCleanup 정리 = 정리();
+        for (int i = 0; i <= 유예_틱; i++) {
+            정리.due(매진());
+        }
+
+        정리.failed(List.of(COUPON));
+
+        assertThat(정리.due(매진())).containsExactly(COUPON);
+    }
+
+    /**
+     * <b>줄이 남았을 때가 지울 때입니다.</b>
+     *
+     * <p>"줄이 빈 뒤에 지운다" 로 쓰면 영영 안 돕니다 — 매진 쿠폰은 크레딧이
+     * 0 이라 아무도 입장으로 안 빠지고, 폴링은 게이트웨이가 종결하므로 큐에서
+     * 빼는 스크립트가 안 돌고, 스위퍼는 매진 중 멈춥니다. <code>waiting</code>
+     * 을 줄이는 주체가 하나도 없습니다.
+     */
+    @Test
+    @DisplayName("줄이_남아_있어도_유예_뒤에_지운다")
+    void 줄이_남아_있어도_유예_뒤에_지운다() {
+        SoldOutCleanup 정리 = 정리();
+
+        for (int i = 0; i < 유예_틱; i++) {
+            assertThat(정리.due(매진인데_줄이_남음())).as("%d 번째 틱".formatted(i + 1)).isEmpty();
+        }
+
+        assertThat(정리.due(매진인데_줄이_남음())).containsExactly(COUPON);
+    }
+
+    /**
+     * <b>리더가 되면 셈을 처음부터 줍니다.</b>
+     *
+     * <p>비리더 구간에 얼어 있던 셈을 이어 쓰면 유예가 설정값이 아니라 "내가
+     * 리더였던 틱 수" 가 됩니다 — 그 둘은 장애 중에 완전히 갈립니다.
+     */
+    @Test
+    @DisplayName("리더가_되면_셈을_처음부터_준다")
+    void 리더가_되면_셈을_처음부터_준다() {
+        SoldOutCleanup 정리 = 정리();
+        for (int i = 0; i < 유예_틱; i++) {
+            정리.due(매진());
+        }
+
+        정리.leadershipAcquired();
+
+        for (int i = 0; i < 유예_틱; i++) {
+            assertThat(정리.due(매진())).as("%d 번째 틱".formatted(i + 1)).isEmpty();
+        }
+        assertThat(정리.due(매진())).containsExactly(COUPON);
+    }
+
+    /**
+     * <b>취소가 0 이면 안전 장치가 죽어 있다는 뜻입니다.</b> 쿠폰 ID 를 라벨로
+     * 못 쓰므로(LG-4) 그것을 알 방법이 이 계수뿐입니다.
+     */
+    @Test
+    @DisplayName("취소와_삭제를_따로_센다")
+    void 취소와_삭제를_따로_센다() {
+        SoldOutCleanup 정리 = 정리();
+        정리.due(매진());
+
+        정리.due(재고있음());
+
+        assertThat(meters.get("waiting.soldout.cleanup").tag("outcome", "cancelled")
+                .counter().count()).as("취소").isEqualTo(1);
+        assertThat(meters.find("waiting.soldout.cleanup").tag("outcome", "dropped")
+                .counter().count()).as("삭제").isZero();
     }
 
     /**
@@ -133,7 +223,7 @@ class SoldOutCleanupTest {
         }
 
         List<String> 지울_것 = 정리.due(Map.of(
-                COUPON, CouponStates.closed(100), "c2", CouponStates.closed(50)));
+                COUPON, CouponStates.closed(0), "c2", CouponStates.closed(0)));
 
         assertThat(지울_것).containsExactly(COUPON);
     }
@@ -142,7 +232,7 @@ class SoldOutCleanupTest {
     @Test
     @DisplayName("유예가_없는_정리는_만들_수_없다")
     void 유예가_없는_정리는_만들_수_없다() {
-        assertThatThrownBy(() -> SoldOutCleanup.of(0))
+        assertThatThrownBy(() -> SoldOutCleanup.of(0, meters))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("유예");
     }

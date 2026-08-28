@@ -396,28 +396,40 @@ public final class AllocationRedisPort implements SnapshotSource {
             return Mono.just(0L);
         }
         return Flux.fromIterable(couponIds)
-                .flatMap(this::dropOne, MAX_CONCURRENT_READS)
+                // **한 쿠폰이 실패해도 나머지는 지운다.** 실패한 것은 표시를
+                // 안 남기므로 다음 틱에 다시 온다 (7.3.4).
+                .flatMap(id -> dropOne(id).onErrorReturn(0L), MAX_CONCURRENT_READS)
                 .reduce(0L, Long::sum);
     }
 
+    /**
+     * 줄과 생존 신호만 지운다.
+     *
+     * <p>지우는 것을 좁힌 이유는 아래 셋이 전부 <b>되돌릴 수 없는 손해</b>를
+     * 만들기 때문이다.
+     */
+    // `admitted:` — 입장 임계다. 지우면 임계가 뒤로 가고, 그건 A-7 이 "두 번
+    //   적용돼도 안전하다" 로 세운 단조성을 깨는 이 저장소의 유일한 쓰기가 된다.
+    //   이미 입장한 사람이 두 번째 토큰을 받을 수 있다.
+    // `grace:` — `a:` 입장 표시가 여기 있다. 차례가 왔던 사람이 종료를 안 받게
+    //   막는 유일한 장치이고 보관이 5분이다. 정리가 그것을 앞질러 지우면 안 된다.
+    // `coupons:active` — 이 집합은 `cy-be` 소유다 (O-3). 게이트웨이는 읽기만
+    //   한다. 그리고 빼는 순간 그 쿠폰이 스냅샷에서 사라져 **매진 종결이 통째로
+    //   꺼진다** — 조회는 레디스로 내려가고, 발급은 404 가 되며, 재료가 낡으면
+    //   미지 쿠폰 경로가 fail-open 으로 뒷단에 흘린다. 사다리 1번을 우회하는 셈이다.
     private Mono<Long> dropOne(String couponId) {
         List<String> keys = new ArrayList<>();
         for (int shard = 0; shard < shards; shard++) {
-            // **딸린 것을 같이 지운다.** 줄만 지우면 생존 신호와 유예 기록이
-            // 남아, 다음 회차가 남의 기록을 자기 것으로 읽는다.
             keys.add(RedisKeys.queue(couponId, shards, shard));
             keys.add(RedisKeys.alive(couponId, shards, shard));
-            keys.add(RedisKeys.grace(couponId, shards, shard));
-            keys.add(RedisKeys.admitted(couponId, shards, shard));
         }
         return redis.delete(Flux.fromIterable(keys))
-                .then(redis.opsForSet().remove(RedisKeys.ACTIVE_COUPONS, couponId))
                 .onErrorResume(e -> {
                     // **다음 틱에 다시 온다.** 여기서 터뜨리면 안 지워진 것
                     // 하나가 그 틱의 배분을 통째로 세운다 (7.3.4).
                     log.warn("매진 큐 정리 실패 — 다음 틱에 다시 한다: 쿠폰={} {}",
                             couponId, e.toString());
-                    return Mono.just(0L);
+                    return Mono.error(e);
                 });
     }
 

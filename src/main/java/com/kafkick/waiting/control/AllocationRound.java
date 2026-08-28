@@ -8,6 +8,7 @@ import com.kafkick.waiting.domain.allocation.Grant;
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import com.kafkick.waiting.domain.coupon.Tunables;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -133,7 +134,8 @@ public final class AllocationRound {
             LongSupplier creditFloor, Supplier<Optional<Tunables>> tunables) {
         return new AllocationRound(stillLeader, demands, globalCredit, gatewayCount, apply, publish,
                 clock, restore, codec, creditFloor, tunables,
-                SoldOutCleanup.of(Integer.MAX_VALUE), ids -> Mono.just(0L));
+                SoldOutCleanup.of(Integer.MAX_VALUE, new SimpleMeterRegistry()),
+                ids -> Mono.just(0L));
     }
 
     /** 튜너블을 안 읽던 자리. 늘 기본값으로 돈다. */
@@ -244,7 +246,11 @@ public final class AllocationRound {
                         // **발행 뒤에 지운다** (7.3). 앞에 두면 방금 지운 큐가
                         // 이번 재료에는 아직 대기자로 실려, 그 판의 크레딧이
                         // 없는 줄에 나간다.
-                        .then(cleanUp(collected, granted, credit, readAt))));
+                        // **미룬다.** 인자로 부르면 자바가 먼저 평가해서, 셈과
+                        // 표시와 로그가 발행이 구독되기도 전에 일어난다 —
+                        // 발행이 터져도 지운 것으로 기록된다.
+                        .then(Mono.defer(() ->
+                                cleanUp(collected, granted, credit, readAt)))));
     }
 
     /**
@@ -260,10 +266,29 @@ public final class AllocationRound {
         if (due.isEmpty()) {
             return Mono.empty();
         }
-        // **어느 쿠폰을 지웠는지 남긴다.** 되돌릴 수 없는 일이라, 사후에
-        // "왜 그 줄이 없어졌나" 를 답할 자리가 로그뿐이다.
-        log.info("매진 큐 정리 — 쿠폰 {}개를 지운다: {}", due.size(), due);
-        return dropQueues.apply(due).then();
+        // **쓰기 직전에 다시 묻는다.** 판 안에서 유일하게 되돌릴 수 없는
+        // 쓰기라, 리더가 아닌 채로 내면 남의 줄을 지운다. 묻는 비용은
+        // 메모리 읽기 하나다.
+        if (lostLeadership()) {
+            return Mono.empty();
+        }
+        // **몇 개인지만 남긴다.** 목록을 통째로 찍으면 대량 매진에서 한 줄에
+        // 쿠폰 ID 가 수백 개 들어간다 (LG-3). 어느 쿠폰인지는 지운 뒤에 남긴다.
+        log.info("매진 큐 정리 — 쿠폰 {}개를 지운다", due.size());
+        return dropQueues.apply(due)
+                .doOnSuccess(dropped -> {
+                    // **지운 것이 확인된 뒤에 표시한다.** 앞에서 표시하면
+                    // 부분 실패가 "다음 틱에 다시 온다" 가 아니라 영구 누수다.
+                    cleanup.dropped(due);
+                    log.info("매진 큐 정리 끝 — 쿠폰 {}개, 키 {}개: {}",
+                            due.size(), dropped, due);
+                })
+                .doOnError(e -> cleanup.failed(due))
+                .onErrorResume(e -> {
+                    log.warn("매진 큐 정리 실패 — 다음 틱에 다시 한다: {}", e.toString());
+                    return Mono.just(0L);
+                })
+                .then();
     }
 
     /**

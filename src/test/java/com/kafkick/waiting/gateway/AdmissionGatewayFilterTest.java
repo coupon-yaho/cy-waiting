@@ -540,9 +540,28 @@ class AdmissionGatewayFilterTest {
         assertThat(AdmissionGatewayFilter.retryAfterSec(
                 AdmissionDecision.REJECT_QUEUE_FULL, () -> 0.5, 3.0))
                 .as("ETA 를 모르는 밴드(30초)에 배수 3 — 상한 60").isEqualTo(60);
+    }
+
+    /**
+     * <b>차례가 온 사람은 배수에서 뺀다.</b>
+     *
+     * <p>이 사람은 이미 줄에서 빠졌고 손에 든 것은 수명이 있는 입장 토큰뿐이다.
+     * 배수만큼 멀리 보내면 그 사이 몫이 남에게 가고, 토큰이 죽으면 줄 맨 뒤에
+     * 새 순번으로 다시 선다 — 순번 역행이자 추월당함이다 (불변식 3·4).
+     *
+     * <p>예산 모델도 이 요청을 안 센다. {@code expectedPollRps} 는 조회 폴링만
+     * 세므로 여기를 늘려도 예산은 안 줄고 토큰만 죽는다.
+     */
+    @Test
+    @DisplayName("차례가_온_사람의_재시도는_배수를_안_받는다")
+    void 차례가_온_사람의_재시도는_배수를_안_받는다() {
         assertThat(AdmissionGatewayFilter.retryAfterSec(
                 AdmissionDecision.RETRY_TOKEN, () -> 0.5, 3.0))
-                .as("가장 가까운 밴드(1초)에 배수 3").isEqualTo(3);
+                .as("가장 가까운 밴드(1초). 배수 3 이 곱해지면 안 된다").isEqualTo(1);
+        assertThat(AdmissionGatewayFilter.retryAfterSec(
+                AdmissionDecision.RETRY_TOKEN, () -> 0.5, 50.0))
+                .as("배수 50 이면 상한 60초 — 토큰 최소 수명 150초의 절반이 날아간다")
+                .isEqualTo(1);
     }
 
     /**
@@ -1597,6 +1616,32 @@ class AdmissionGatewayFilterTest {
                 .isEqualTo(String.valueOf(
                         AdmissionGatewayFilter.retryAfterSec(
                                 AdmissionDecision.RETRY_TOKEN, 고정_난수, 1.0)));
+        풀어_준다();
+    }
+
+    /**
+     * <b>배수가 걸려 있어도 마찬가지다.</b>
+     *
+     * <p>보호 차단이 도는 순간이 곧 배수가 큰 순간이라, 여기에 배수를 곱하면
+     * 정확히 장애 중에 토큰 보유자가 가장 멀리 밀린다. 배수 50 이면 상한 60초를
+     * 두 번 받는 사이 토큰 최소 수명 150초의 대부분이 날아간다.
+     *
+     * <p>예산 모델이 이 요청을 안 세므로 늘려도 얻는 것이 없다.
+     */
+    @Test
+    @DisplayName("배수가_걸려도_차례가_온_사람은_가까이_부른다")
+    void 배수가_걸려도_차례가_온_사람은_가까이_부른다() {
+        스냅샷을_심는다(CouponStates.queueing(CREDIT, 1_000_000, 10),
+                new SnapshotMeta(CREDIT, 1, 좁은_META.tunables(), 50.0));
+        붙잡아_채운다(초당_통과 * 3);
+
+        MockServerWebExchange 차례가_온_사람 = 다음_초에_한_건(
+                "사람" + 초당_통과 * 3, e -> Mono.empty());
+
+        assertThat(차례가_온_사람.getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(차례가_온_사람.getResponse().getHeaders().getFirst("Retry-After"))
+                .as("배수 50 이 곱해지면 상한 60 이 된다").isEqualTo("1");
         풀어_준다();
     }
 

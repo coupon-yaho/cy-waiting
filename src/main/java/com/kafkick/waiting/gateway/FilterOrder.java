@@ -67,6 +67,15 @@ public final class FilterOrder {
     /** 조회 라우트의 코얼레싱. 같은 이유로 쓰기 필터보다 앞이다. */
     public static final int ROUTE_COALESCING = BEFORE_WRITE_RESPONSE;
 
+    /**
+     * 본문 쓰기 상한. <b>서킷 안쪽에 못 둔다</b> — 그 자리가 쓰기 필터보다
+     * 앞이라 서킷보다 바깥이다. 여기서 끊은 것은 서킷 창에 안 쌓인다.
+     */
+    // 매진 관찰보다 한 칸 더 바깥이다. 관찰은 응답을 읽기만 하므로 시한이
+    // 그 바깥을 감싸도 읽는 것에 지장이 없고, 반대로 두면 시한이 끊은 뒤에
+    // 관찰이 도는 순서가 된다.
+    public static final int ROUTE_BODY = BEFORE_WRITE_RESPONSE - 1;
+
     private FilterOrder() {
     }
 }

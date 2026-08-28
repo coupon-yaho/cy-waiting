@@ -54,6 +54,16 @@ function error(res, status, code, message) {
 
 /** 공유 선언을 붙일 것인가. 기본은 붙임 — 기존 게이트가 그 상태를 잰다. */
 const SHARED_HEADER = process.env.SHARED_HEADER !== 'false';
+/**
+ * 본문을 이 간격으로 끝없이 흘린다 (0 이면 안 한다).
+ *
+ * **헤더는 빠르고 본문이 안 끝나는 뒷단**을 만든다. 응답 상한은 헤더가 오기까지만
+ * 재므로 그 뒤로는 아무것도 안 걸린다. 그 상태를 재려면 그런 뒷단이 하나 있어야
+ * 한다.
+ *
+ * 더 나쁜 모양 — **헤더 뒤 완전 침묵** — 은 이 노브로 못 만든다. 그쪽이 더 흔하다.
+ */
+const SLOW_BODY_MS = num('SLOW_BODY_MS', 0);
 
 const server = createServer((req, res) => {
   // 스텁 자신의 상태. compose 의 healthcheck 와 시나리오의 사후 확인이 쓴다.
@@ -69,8 +79,13 @@ const server = createServer((req, res) => {
   inflight += 1;
   const startedAt = process.hrtime.bigint();
   setTimeout(() => {
-    inflight -= 1;
-    served += 1;
+    // **슬로우 본문은 여기서 안 끝난다.** 미리 깎으면 /stub/health 가 0 을
+    // 보고하는데 실제로는 소켓이 수천 개 열려 있고, MAX_INFLIGHT 도 그 모드에서
+    // 죽는다 — 하네스가 재려던 것을 스스로 못 재게 된다.
+    if (SLOW_BODY_MS <= 0) {
+      inflight -= 1;
+      served += 1;
+    }
     // **자기가 쓴 시간을 실어 보낸다.** 게이트웨이 오버헤드를 재려면 뒷단 몫을
     // 빼야 하는데, 설정값(LATENCY_MS)을 빼면 스케줄링 흔들림이 우리 몫으로
     // 넘어온다 — 그 오차가 그대로 판정에 들어간다.
@@ -86,6 +101,31 @@ const server = createServer((req, res) => {
     if (SHARED_HEADER) {
       res.setHeader('Cache-Control', 'public');
     }
+    if (SLOW_BODY_MS > 0) {
+      // **이미 끊겼으면 시작도 안 한다.** 아래 핸들러는 이 시점에 다는데,
+      // 그 전에 닫혔으면 close 를 못 받아 인터벌이 영영 안 멎고 inflight 가
+      // 안 돌아온다 — MAX_INFLIGHT 가 차서 하네스가 통째로 죽는다.
+      if (res.writableEnded || res.destroyed) {
+        inflight -= 1;
+        return;
+      }
+      // 헤더는 곧바로, 본문은 끝없이. 끊는 것은 게이트웨이 몫이다.
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      const tick = setInterval(() => res.write(' '), SLOW_BODY_MS);
+      let done = false;
+      const finish = () => {
+        if (done) {
+          return;
+        }
+        done = true;
+        clearInterval(tick);
+        inflight -= 1;
+        served += 1;
+      };
+      res.on('close', finish);
+      res.on('error', finish);
+      return;
+    }
     // 발급이든 조회든 형태만 맞으면 된다. 내용은 게이트웨이가 안 본다.
     json(res, 200, {
       success: true,
@@ -96,5 +136,6 @@ const server = createServer((req, res) => {
 });
 
 server.listen(PORT, () => {
-  process.stdout.write(`stub up :${PORT} latency=${LATENCY_MS}ms maxInflight=${MAX_INFLIGHT} shared=${SHARED_HEADER}\n`);
+  process.stdout.write(`stub up :${PORT} latency=${LATENCY_MS}ms `
+    + `maxInflight=${MAX_INFLIGHT} shared=${SHARED_HEADER} slowBody=${SLOW_BODY_MS}ms\n`);
 });

@@ -93,9 +93,34 @@ class PollIntervalPolicyTest {
         long 가운데 = p.intervalSec(1000, () -> 0.5, 5.0);
         long 위 = p.intervalSec(1000, () -> 1.0, 5.0);
 
-        assertThat(위).as("상한은 지킨다").isEqualTo(60);
-        assertThat(아래).as("흔들림의 아래쪽이 상한에 안 먹힌다").isLessThan(위);
-        assertThat(가운데).isStrictlyBetween(아래, 위);
+        // **천장을 값으로 못 박는다.** 부등식만 재면 천장이 50 과 59 사이 어디든
+        // 통과하는데, 54.5 면 가장 먼 밴드의 27%가 다시 60 하나로 뭉친다 — 이
+        // 변경이 없앤 파도가 절반 규모로 되살아나도 초록이라는 뜻이다.
+        assertThat(가운데).as("천장 50 — 흔들림의 가운데").isEqualTo(50);
+        assertThat(아래).as("50 × 0.8").isEqualTo(40);
+        assertThat(위).as("50 × 1.2 — 위쪽 끝이 상한에 정확히 닿는다").isEqualTo(60);
+    }
+
+    /**
+     * <b>서버가 말하는 값은 상한을 안 넘는다.</b>
+     *
+     * <p>생존 신호 수명이 이 사실 하나에 통째로 기대고 있다. 천장을 먼저 걸면서
+     * 마지막 클램프가 도달 불가가 됐으므로, 지키는 것이 천장 계산 하나뿐이다.
+     */
+    @Test
+    @DisplayName("어떤_지터와_배수에서도_상한을_안_넘는다")
+    void 어떤_지터와_배수에서도_상한을_안_넘는다() {
+        long 상한 = PollIntervalPolicy.maxInterval().toSeconds();
+        for (double 지터 : new double[] {0.0, 0.05, 0.2, 0.5, 1.0, 5.0}) {
+            PollIntervalPolicy p = PollIntervalPolicy.of(지터);
+            for (double 배수 : new double[] {1.0, 1.5, 2.0, 17.6, 1_000.0}) {
+                for (double 난수 : new double[] {0.0, 0.25, 0.5, 0.75, 1.0}) {
+                    assertThat(p.intervalSec(1000, () -> 난수, 배수))
+                            .as("지터 %s · 배수 %s · 난수 %s", 지터, 배수, 난수)
+                            .isBetween(1L, 상한);
+                }
+            }
+        }
     }
 
     @Test

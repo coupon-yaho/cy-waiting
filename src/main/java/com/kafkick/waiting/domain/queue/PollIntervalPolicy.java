@@ -18,17 +18,33 @@ public class PollIntervalPolicy {
     /** 밴드별 기본 간격(초). 가장 먼 밴드가 30 이라 예산 식이 {@code waiting/30} 이다. */
     private static final long[] BAND_INTERVALS = {1, 3, 10, 30};
 
+    /**
+     * 배수를 안 거는 갈래가 넘기는 값.
+     *
+     * <p>{@code 1.0} 을 그대로 쓰면 배수를 깜빡한 것과 구분이 안 된다. 안 거는
+     * <b>이유</b>는 갈래마다 다르므로 그 자리에 주석으로 남긴다.
+     */
+    public static final double NO_SCALE = 1.0;
+
     private static final long MIN_INTERVAL_SEC = 1;
     private static final long MAX_INTERVAL_SEC = 60;
 
-    /** 백그라운드 탭이 분당 1회로 스로틀돼도 안 지워지려면 이만큼 봐준다. */
+    /**
+     * 서버가 시킨 간격을 지키는 사람이 <b>몇 번까지 놓쳐도 되는가</b>.
+     *
+     * <p>모바일 브라우저가 탭을 뒤로 보내면 타이머가 뭉텅이로 밀린다. 두 번은
+     * 흔하고 세 번은 드물다 — 그 위는 사람이 떠난 것으로 본다.
+     */
     private static final long MISSED_POLLS = 3;
 
     /**
-     * 마지막 폴링의 왕복과 클라이언트 타이머 드리프트를 덮는 여유(초).
+     * 마지막 폴링의 왕복과 타이머 드리프트를 덮는 여유(초).
      *
-     * <p>이것이 없으면 약속한 횟수가 실제로는 하나 적다 — 아래 참조.
+     * <p>이것이 없으면 약속한 횟수가 실제로는 하나 적다 — {@link #aliveTtl()} 참조.
      */
+    // **아직 가정이다.** 240초짜리 창의 4%로, 왕복 몇 회분인지를 재고 잡은 값이
+    // 아니다. 반증하는 것은 과부하 구간의 폴링 왕복 p99 이고, 그것이 2.5초를
+    // 넘으면 4회분을 못 덮는다. 상한이나 놓치는 횟수를 만지면 이 값도 같이 본다.
     private static final long TTL_MARGIN_SEC = 10;
 
     /**
@@ -92,6 +108,10 @@ public class PollIntervalPolicy {
         // 상한/(1+지터) 다 — 배선값 0.2 에서 60 이 아니라 50. 그만큼 예산
         // 보호가 덜 걸리는 대가로 파도를 흩는다. 클라이언트가 받는 값은
         // 여전히 60 을 안 넘으므로 생존 신호 수명의 유도는 그대로다.
+        // **하한을 여기서도 건다.** 재료에서 온 값은 SnapshotMeta 가 이미
+        // 정규화했지만(I6), 이 인자는 그냥 double 이라 계산해 넘기는 자리가
+        // 생기면 1 미만이 들어온다 — 그러면 한산할 때 오히려 부하를 만든다.
+        // 사본이 아니라 공개 API 의 방어이고, 양쪽 다 자기 시험이 있다.
         double ceiling = MAX_INTERVAL_SEC / (1 + jitterRatio);
         double scaled = Math.min(base * Math.max(1.0, pollScale), ceiling);
         // [-jitter, +jitter] 로 흔들어 같은 밴드가 동시에 두드리지 않게 한다

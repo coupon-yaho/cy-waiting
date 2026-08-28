@@ -27,7 +27,7 @@ class TunablesTransportTest {
     private Map<String, String> 실어_보낸다(Tunables 값) {
         return codec.encode(
                 new GatewaySnapshot(Map.of("c1", CouponState.idle(100)),
-                        new SnapshotMeta(1_000, 1, 값), 지금),
+                        SnapshotMeta.withoutPollScale(1_000, 1, 값), 지금),
                 CreditSmoother.Snapshot.empty(), QueueingHysteresis.Snapshot.empty());
     }
 

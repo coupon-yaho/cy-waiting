@@ -16,6 +16,7 @@ import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.CouponStates;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
+import com.kafkick.waiting.domain.coupon.SnapshotMetas;
 import com.kafkick.waiting.domain.coupon.Tunables;
 import com.kafkick.waiting.domain.queue.EntryToken;
 import com.kafkick.waiting.domain.queue.QueueToken;
@@ -205,7 +206,7 @@ class AdmissionGatewayFilterTest {
 
     /** 배수는 판 전체를 보고 나온 전역 값이라 쿠폰이 아니라 메타에 실린다. */
     private static SnapshotMeta 배수가_실린_메타(double 배수) {
-        return new SnapshotMeta(META.globalCredit(), META.gatewayCount(), META.tunables(), 배수);
+        return SnapshotMetas.overBudget(META.globalCredit(), META.gatewayCount(), 배수);
     }
 
     /** 판 크기를 바꿔 심는다. 한산 통과 상한을 0 으로 만들어야 배분 전 등록을 잰다. */
@@ -630,7 +631,7 @@ class AdmissionGatewayFilterTest {
     void 장애_개방_상한_초과가_전역_배수를_지킨다() {
         // 전역 몫이 0 이라 fail-open 상한도 0 이다 — 첫 요청부터 되돌려 보낸다.
         스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100),
-                new SnapshotMeta(0, 1, null, 1.5));
+                SnapshotMetas.overBudget(0, 1, 1.5));
         줄.터진다(new IllegalStateException("레디스가 죽었다"));
 
         MockServerWebExchange exchange = 요청(COUPON);
@@ -1066,7 +1067,7 @@ class AdmissionGatewayFilterTest {
     @DisplayName("모르는_쿠폰도_판의_배수를_들고_간다")
     void 모르는_쿠폰도_판의_배수를_들고_간다() {
         holder.replace(new GatewaySnapshot(Map.of(COUPON, CouponStates.idle(1_000)),
-                new SnapshotMeta(META.globalCredit(), 1, null, 1.5), 지금.minusSeconds(60)));
+                SnapshotMetas.overBudget(META.globalCredit(), 1, 1.5), 지금.minusSeconds(60)));
 
         MockServerWebExchange exchange = 태운다("없는쿠폰", "회원");
 
@@ -1258,7 +1259,8 @@ class AdmissionGatewayFilterTest {
         Instant 낡은_발행 = 지금.minusSeconds(3_600);
         MutableClock 시계 = MutableClock.at(지금);
         AdmissionGatewayFilter 시계를_쓰는_필터 = AdmissionGatewayFilter.withIsolatedSoldOutCache(
-                holder, AdmissionDecider.of(limiter, IDLE_RATIO), 시계, meters, 줄, tokens, limiter, entryTokens, 멱등키);
+                holder, AdmissionDecider.of(limiter, IDLE_RATIO), 시계, meters, 고정_난수,
+                줄, tokens, limiter, entryTokens, 멱등키);
         holder.replace(new GatewaySnapshot(
                 Map.of(COUPON, CouponStates.idle(1_000_000)),
                 new SnapshotMeta(1, 1), 낡은_발행));
@@ -1736,7 +1738,7 @@ class AdmissionGatewayFilterTest {
     @Test
     @DisplayName("보호_차단의_거절이_전역_배수를_지킨다")
     void 보호_차단의_거절이_전역_배수를_지킨다() {
-        스냅샷을_심는다(CouponStates.off(1_000), new SnapshotMeta(1, 1, null, 1.5));
+        스냅샷을_심는다(CouponStates.off(1_000), SnapshotMetas.overBudget(1, 1, 1.5));
         for (int i = 0; i < 3; i++) {
             Sinks.Empty<Void> 안_끝남 = Sinks.empty();
             붙잡은_자리.add(안_끝남);
@@ -1766,7 +1768,7 @@ class AdmissionGatewayFilterTest {
     @DisplayName("배수가_걸려도_차례가_온_사람은_가까이_부른다")
     void 배수가_걸려도_차례가_온_사람은_가까이_부른다() {
         스냅샷을_심는다(CouponStates.queueing(CREDIT, 1_000_000, 10),
-                new SnapshotMeta(CREDIT, 1, 좁은_META.tunables(), 50.0));
+                SnapshotMetas.overBudget(CREDIT, 1, 50.0));
         붙잡아_채운다(초당_통과 * 3);
 
         MockServerWebExchange 차례가_온_사람 = 다음_초에_한_건(
@@ -1891,7 +1893,7 @@ class AdmissionGatewayFilterTest {
         // 걸림 시간을 2초로 줄이면 상한이 세 배에서 두 배로 조여진다.
         holder.replace(new GatewaySnapshot(
                 Map.of(COUPON, CouponStates.queueing(CREDIT, 1_000_000, 10)),
-                new SnapshotMeta(CREDIT, 1, new Tunables(0.7, 2)), 지금));
+                SnapshotMeta.withoutPollScale(CREDIT, 1, new Tunables(0.7, 2)), 지금));
         태운_것 = 붙잡아_채운다(초당_통과 * 2);
 
         MockServerWebExchange 한_건_더 = 다음_초에_한_건("사람" + 초당_통과, e -> Mono.empty());

@@ -268,25 +268,31 @@ public final class AllocationRound {
                         // 히스테리시스를 안 돌려서 실을 상태가 없다 (CY-324).
                         // 돌리기 시작하면 여기가 매 틱 이월을 지우는 자리가
                         // 되므로, 기본값에 숨기지 않고 눈에 보이게 둔다.
-                        // **여기서 만든다.** 인자로 부르면 자바가 먼저 평가해서,
-                        // 배수의 셈과 그 계측이 리더십을 잃은 뒤에도 돈다.
-                        : Mono.defer(() -> publish.apply(codec.encode(
+                        // **배수는 여기서 한 번 센다.** 재료를 만드는 함수에
+                        // 두면 그 함수를 부르는 것이 곧 계측이 되어, 한 판에
+                        // 두 번 부르는 사람이 나오는 순간 누적이 부풀었다 —
+                        // 실제로 그랬다. 값으로 내려보내면 몇 번을 만들어도
+                        // 셈이 안 는다.
+                        //
+                        // 여기 다시 defer 를 두지 않는다. 삼항의 이 가지는 바깥
+                        // 공급자가 도는 순간에만 평가되므로 미룰 것이 없고,
+                        // 그런 defer 는 안 하는 일을 하는 것처럼 보이게 한다.
+                        : publish.apply(codec.encode(
                                 snapshot(collected, granted, credit, readAt,
-                                        tunables.get().orElse(null)),
+                                        tunables.get().orElse(null),
+                                        pollScale(collected, granted, credit)),
                                 current.snapshot(),
-                                QueueingHysteresis.Snapshot.empty())))
+                                QueueingHysteresis.Snapshot.empty()))
                         // **발행 뒤에 지운다** (7.3). 앞에 두면 방금 지운 큐가
                         // 이번 재료에는 아직 대기자로 실려, 그 판의 크레딧이
                         // 없는 줄에 나간다.
                         // **미룬다.** 인자로 부르면 자바가 먼저 평가해서, 셈과
                         // 표시와 로그가 발행이 구독되기도 전에 일어난다 —
                         // 발행이 터져도 지운 것으로 기록된다.
-                        .then(Mono.defer(() ->
-                                cleanUp(collected, granted, credit, readAt)))
+                        .then(Mono.defer(() -> cleanUp(collected, granted)))
                         // **정리 뒤에 쓴다.** 앞에 두면 곧 지울 줄을 훑느라
                         // 예산을 쓴다.
-                        .then(Mono.defer(() ->
-                                sweepUp(collected, granted, credit, readAt)))));
+                        .then(Mono.defer(() -> sweepUp(collected, granted)))));
     }
 
     /**
@@ -294,8 +300,7 @@ public final class AllocationRound {
      *
      * <p><b>정리 실패가 배분을 막지 않는다</b> (7.3.4). 다음 틱에 다시 온다.
      */
-    private Mono<Void> cleanUp(List<CouponDemand> collected, Map<String, Long> granted,
-            long credit, Instant readAt) {
+    private Mono<Void> cleanUp(List<CouponDemand> collected, Map<String, Long> granted) {
         List<String> due = cleanup.due(couponsOf(collected, granted));
         if (due.isEmpty()) {
             return Mono.empty();
@@ -328,8 +333,7 @@ public final class AllocationRound {
     }
 
     /** 이탈자를 걷어 낸다 (7.4). 멈춰야 할 구간은 스위퍼가 안다. */
-    private Mono<Void> sweepUp(List<CouponDemand> collected, Map<String, Long> granted,
-            long credit, Instant readAt) {
+    private Mono<Void> sweepUp(List<CouponDemand> collected, Map<String, Long> granted) {
         if (lostLeadership()) {
             return Mono.empty();
         }
@@ -463,33 +467,29 @@ public final class AllocationRound {
         return coupons;
     }
 
-    /**
-     * 발행할 재료 한 판.
-     *
-     * <p><b>부르는 것이 곧 계측이다.</b> 배수의 셈이 여기 묻어 있어 한 판에 세 번
-     * 부르면 누적 틱이 틱당 3씩 오른다 — 실제로 그랬다. 정리·청소가
-     * {@link #couponsOf} 만 쓰는 이유다.
-     */
+    /** 발행할 재료 한 판. <b>순수하다</b> — 몇 번을 만들어도 세는 값이 안 는다. */
     private GatewaySnapshot snapshot(List<CouponDemand> collected, Map<String, Long> granted,
-            long credit, Instant readAt, Tunables applied) {
-        Map<String, CouponState> coupons = couponsOf(collected, granted);
-        // **노드 수 방어를 여기서 다시 쓰지 않는다.** 사본이 생기면 둘 중 하나만
-        // 시험이 붙고, 하트비트가 다 만료돼 0 으로 보이는 순간 — 즉 클러스터가
-        // 흔들리는 바로 그 순간 — 예산이 0 이 되어 배수가 통째로 꺼진다.
-        SnapshotMeta meta = new SnapshotMeta(credit, gatewayCount.getAsInt(), applied);
-        return new GatewaySnapshot(coupons,
-                meta.withPollScale(
-                        pollScale(collected, granted, meta.effectiveGatewayCount())),
-                readAt);
+            long credit, Instant readAt, Tunables applied, double pollScale) {
+        return new GatewaySnapshot(couponsOf(collected, granted),
+                meta(credit, applied).withPollScale(pollScale), readAt);
+    }
+
+    // **노드 수 방어를 여기서 다시 쓰지 않는다.** 사본이 생기면 둘 중 하나만
+    // 시험이 붙고, 하트비트가 다 만료돼 0 으로 보이는 순간 — 즉 클러스터가
+    // 흔들리는 바로 그 순간 — 예산이 0 이 되어 배수가 통째로 꺼진다.
+    private SnapshotMeta meta(long credit, Tunables applied) {
+        return SnapshotMeta.withoutPollScale(credit, gatewayCount.getAsInt(), applied);
     }
 
     /**
-     * 이번 틱의 전역 폴링 배수.
+     * 이번 틱의 전역 폴링 배수. <b>한 판에 한 번만 부른다</b> — 계측이 붙어 있다.
      *
      * <p>예산은 도메인이 소유한다 — 밴드도 하한도 거기 있는데 예산만 제어
      * 평면에 두면, 운영자가 실제로 만질 유일한 숫자만 시험이 안 닿는 곳에 남는다.
      */
-    private double pollScale(List<CouponDemand> collected, Map<String, Long> granted, int nodes) {
+    private double pollScale(List<CouponDemand> collected, Map<String, Long> granted,
+            long credit) {
+        int nodes = meta(credit, null).effectiveGatewayCount();
         double expected = PollBudgetPlanner.expectedPollRps(collected,
                 couponId -> granted.getOrDefault(couponId, 0L));
         double budget = PollBudgetPlanner.budgetRps(nodes);

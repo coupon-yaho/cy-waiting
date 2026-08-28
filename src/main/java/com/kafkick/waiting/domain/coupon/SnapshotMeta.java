@@ -41,8 +41,9 @@ public record SnapshotMeta(long globalCredit, int gatewayCount, Tunables tunable
     }
 
     /** 배수를 안 실은 재료. 예산이 넉넉하면 이것이 정상이다. */
-    public SnapshotMeta(long globalCredit, int gatewayCount, Tunables tunables) {
-        this(globalCredit, gatewayCount, tunables, 1.0);
+    public static SnapshotMeta withoutPollScale(long globalCredit, int gatewayCount,
+            Tunables tunables) {
+        return new SnapshotMeta(globalCredit, gatewayCount, tunables, 1.0);
     }
 
     /**

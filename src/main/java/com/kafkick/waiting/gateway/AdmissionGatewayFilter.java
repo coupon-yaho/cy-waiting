@@ -97,7 +97,6 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      *
      * <p>{@code 1.0} 을 그대로 쓰면 배수를 깜빡한 것과 구분이 안 된다.
      */
-    private static final double NO_SCALE = 1.0;
 
     private static final String MEMBER_ID = "X-Member-Id";
 
@@ -568,7 +567,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             //
             // 가장 가까운 밴드(1초)라 흔들림은 반올림에 통째로 흡수된다. 여기서
             // 흩을 대상은 몇 초 뒤에 몰릴 사람들이 아니라 30초 뒤의 파도다.
-            case RETRY_TOKEN -> (int) POLL.intervalSec(0, random, NO_SCALE);
+            case RETRY_TOKEN -> (int) POLL.intervalSec(0, random, PollIntervalPolicy.NO_SCALE);
             case REJECT_QUEUE_FULL, REJECT_OVERLOAD ->
                     (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random, pollScale);
             // 매진은 안 싣는다. 다시 와도 소용없는데 시각을 주면 재시도를 부른다.
@@ -683,7 +682,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         // 보유자는 반대다 — 그 순간이 곧 그가 가장 멀리 밀리는 순간이다.
         return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
                 hasToken
-                        ? (int) POLL.intervalSec(0, random, NO_SCALE)
+                        ? (int) POLL.intervalSec(0, random, PollIntervalPolicy.NO_SCALE)
                         : (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random,
                                 meta.pollScale()));
     }

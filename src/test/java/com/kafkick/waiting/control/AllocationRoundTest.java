@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.util.Optional;
 import com.kafkick.waiting.domain.coupon.CouponStates;
+import com.kafkick.waiting.domain.queue.PollBudgetPlanner;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import java.time.Duration;
 import java.util.List;
@@ -331,8 +332,17 @@ class AllocationRoundTest {
         AllocationRound round = round(수요::get, 10, 1);
 
         round.run().block();
-        assertThat(발행된_배수()).as("진입").isGreaterThan(1.0);
+        double 배수 = 발행된_배수();
+        assertThat(배수).as("진입").isGreaterThan(1.0);
         assertThat(로그_메시지()).anyMatch(m -> m.contains("폴링 예산 초과 —"));
+        // **인자를 값으로 못 박는다.** 문구만 보면 예상과 예산이 뒤바뀌어
+        // 찍혀도 초록이다. 쿠폰 ID 를 라벨로 못 쓰므로(LG-4) 어느 규모에서
+        // 배수가 걸렸는지는 이 로그만이 답한다.
+        assertThat(로그_인자("폴링 예산 초과 —"))
+                .as("예상 rps · 노드 수 · 예산 rps · 소수 한 자리로 자른 배수")
+                .containsExactly(Math.round(PollBudgetPlanner.expectedPollRps(100_000, 10)),
+                        1, Math.round(PollBudgetPlanner.budgetRps(1)),
+                        Math.round(배수 * 10) / 10.0);
 
         // 재고가 마르면 그 줄은 예산에서 빠진다. 배수가 풀리는 전이다.
         수요.set(List.of(new CouponDemand("c1", 100_000, 0)));
@@ -721,9 +731,10 @@ class AllocationRoundTest {
 
         assertThat(적용).containsExactly("c1");
         assertThat(발행).isEmpty();
-        // **셈도 같이 멎어야 한다.** 배수의 계산이 재료를 만드는 자리에 묻혀
-        // 있어서, 발행을 안 하는 판에서도 그 자리가 돌면 이 노드는 걸지도 않은
-        // 배수를 걸었다고 기록한다.
+        // **셈도 같이 멎어야 한다.** 발행을 안 하는 판에서 배수의 계산이 돌면
+        // 이 노드는 걸지도 않은 배수를 걸었다고 기록한다. 지금은 삼항의
+        // 짧은-회로가 그것을 막지만, 셈이 재료를 만드는 자리로 다시 들어가면
+        // 그 보호가 사라진다 — 그때 여기가 붉어진다.
         assertThat(round.pollBudgetOvershootTicks()).as("안 발행한 판은 안 센다")
                 .isZero();
     }

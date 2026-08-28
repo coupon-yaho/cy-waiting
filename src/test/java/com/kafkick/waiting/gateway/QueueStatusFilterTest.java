@@ -13,6 +13,7 @@ import com.kafkick.waiting.domain.coupon.CouponStates;
 import com.kafkick.waiting.domain.admission.AdmissionDecider;
 import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
+import com.kafkick.waiting.domain.coupon.SnapshotMetas;
 import com.kafkick.waiting.domain.queue.EntryToken;
 import com.kafkick.waiting.domain.queue.QueueState;
 import com.kafkick.waiting.domain.queue.QueueToken;
@@ -82,7 +83,7 @@ class QueueStatusFilterTest {
     /** 배수는 판 전체를 보고 나온 전역 값이라 쿠폰이 아니라 메타에 실린다. */
     private void 스냅샷을_심는다(CouponState state, double 배수) {
         holder.replace(new GatewaySnapshot(Map.of(COUPON, state),
-                new SnapshotMeta(1, 1, null, 배수), 지금));
+                SnapshotMetas.overBudget(1, 1, 배수), 지금));
     }
 
     private MockServerWebExchange 조회한다(String path) {
@@ -265,7 +266,7 @@ class QueueStatusFilterTest {
     @DisplayName("재료가_낡아도_배수를_안_되돌린다")
     void 재료가_낡아도_배수를_안_되돌린다() {
         holder.replace(new GatewaySnapshot(Map.of(COUPON, CouponStates.queueing(10, 1_000, 100)),
-                new SnapshotMeta(1, 1, null, 1.5), 지금.minusSeconds(3_600)));
+                SnapshotMetas.overBudget(1, 1, 1.5), 지금.minusSeconds(3_600)));
         // 맨 앞 사람은 ETA 가 정말 0 이라 배수 속도를 안 본다. 앞에 한 명을
         // 세워야 낡음이 ETA 로 흘러 가장 먼 밴드가 된다.
         줄.enqueue(COUPON, "앞사람", NO_LIMIT, 지금).block();

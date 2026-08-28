@@ -28,8 +28,6 @@ public final class BackendFallback {
     /** 재시도를 흩는 폭. 판정 경로와 같은 값이라야 두 안내가 안 갈린다. */
     private static final PollIntervalPolicy POLL = PollIntervalPolicy.of(0.2);
 
-    /** 배수를 안 거는 갈래. {@code 1.0} 을 그대로 쓰면 깜빡한 것과 구분이 안 된다. */
-    private static final double NO_SCALE = 1.0;
 
     /**
      * <b>줄에 선 사람에게 자리가 그대로라고 말한다.</b> 안 그러면 다시 줄을
@@ -139,7 +137,7 @@ public final class BackendFallback {
     // 모르는 상태다. 모를 때 늘리면 근거 없이 전원을 멀리 보내는 것이다.
     private double pollScale(ServerRequest request) {
         Double scale = request.exchange().getAttribute(AdmissionGatewayFilter.POLL_SCALE);
-        return scale == null ? NO_SCALE : scale;
+        return scale == null ? PollIntervalPolicy.NO_SCALE : scale;
     }
 
     /**
@@ -152,7 +150,7 @@ public final class BackendFallback {
     // 답한다 — 배수만큼 멀리 보내면 토큰이 죽어 줄 맨 뒤에 다시 선다.
     private int retryAfterSec(boolean admitted, double pollScale) {
         return admitted
-                ? (int) POLL.intervalSec(0, random, NO_SCALE)
+                ? (int) POLL.intervalSec(0, random, PollIntervalPolicy.NO_SCALE)
                 : (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random, pollScale);
     }
 }

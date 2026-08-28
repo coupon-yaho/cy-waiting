@@ -20,6 +20,7 @@ import com.kafkick.waiting.domain.queue.QueueToken;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.http.HttpHeaders;
 import java.time.Clock;
+import java.time.Instant;
 import java.time.Duration;
 import java.util.EnumSet;
 import java.util.Map;
@@ -155,10 +156,19 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      */
     private final FailureWindow shedWindow;
 
+    /**
+     * 뒷단이 낸 매진을 기억한다 (7.2 · B-10).
+     *
+     * <p>재료가 아직 재고를 말하는 창에서 이것이 유일한 근거다.
+     */
+    private final SoldOutCache soldOutCache;
+
     private AdmissionGatewayFilter(SnapshotHolder holder, AdmissionDecider decider,
             Clock clock, MeterRegistry meters, DoubleSupplier random,
             QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter,
-            EntryToken entryTokens, IdempotencyKey idempotency, LongSupplier ticker) {
+            EntryToken entryTokens, IdempotencyKey idempotency, LongSupplier ticker,
+            SoldOutCache soldOutCache) {
+        this.soldOutCache = Objects.requireNonNull(soldOutCache, "soldOutCache 는 필수다");
         this.holder = Objects.requireNonNull(holder, "holder 는 필수다");
         this.failOpenWindow = FailureWindow.of(ticker);
         this.shedWindow = FailureWindow.of(ticker);
@@ -182,23 +192,44 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         this.error = ApiError.of(clock);
     }
 
-    /** 흔들림의 난수원은 스레드마다 따로 둔다 — 공유하면 그 자체가 경합점이다. */
+    /**
+     * 흔들림의 난수원은 스레드마다 따로 둔다 — 공유하면 그 자체가 경합점이다.
+     *
+     * <p><b>캐시는 주입받는다.</b> 여기서 만들면 관찰을 담는 쪽과 읽는 쪽이
+     * 다른 것을 보게 되고, 뒷단이 낸 매진을 판정이 영영 못 본다.
+     */
     @Autowired
     AdmissionGatewayFilter(SnapshotHolder holder, AdmissionDecider decider, Clock clock,
             MeterRegistry meters, QueuePort queue, QueueToken tokens,
             SecondWindowLimiter limiter, EntryToken entryTokens,
-            IdempotencyKey idempotency) {
+            IdempotencyKey idempotency, SoldOutCache soldOutCache) {
         this(holder, decider, clock, meters,
                 () -> ThreadLocalRandom.current().nextDouble(), queue, tokens, limiter,
-                entryTokens, idempotency, System::nanoTime);
+                entryTokens, idempotency, System::nanoTime, soldOutCache);
     }
 
+    /** 캐시를 안 받는 자리. <b>빈 캐시라 아무것도 안 막는다</b> — 시험 편의다. */
     public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider,
             Clock clock, MeterRegistry meters, QueuePort queue, QueueToken tokens,
             SecondWindowLimiter limiter, EntryToken entryTokens,
             IdempotencyKey idempotency) {
         return new AdmissionGatewayFilter(holder, decider, clock, meters, queue, tokens, limiter,
-                entryTokens, idempotency);
+                entryTokens, idempotency, SoldOutCache.standard());
+    }
+
+    /**
+     * 매진 캐시를 함께 받는다 (7.2.3).
+     *
+     * <p><b>담는 쪽과 읽는 쪽이 같은 것을 봐야 한다.</b> 각자 만들면 뒷단이
+     * 낸 매진을 판정이 영영 못 본다.
+     */
+    public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider,
+            Clock clock, MeterRegistry meters, QueuePort queue, QueueToken tokens,
+            SecondWindowLimiter limiter, EntryToken entryTokens,
+            IdempotencyKey idempotency, SoldOutCache soldOutCache) {
+        return new AdmissionGatewayFilter(holder, decider, clock, meters,
+                () -> ThreadLocalRandom.current().nextDouble(), queue, tokens, limiter,
+                entryTokens, idempotency, System::nanoTime, soldOutCache);
     }
 
     /** 난수원을 받는다. 고정하지 못하면 흔들림이 실제로 붙었는지 못 잰다 (TS-4). */
@@ -207,7 +238,8 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter,
             EntryToken entryTokens, IdempotencyKey idempotency) {
         return new AdmissionGatewayFilter(holder, decider, clock, meters, random, queue,
-                tokens, limiter, entryTokens, idempotency, System::nanoTime);
+                tokens, limiter, entryTokens, idempotency, System::nanoTime,
+                SoldOutCache.standard());
     }
 
     /**
@@ -222,7 +254,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter,
             EntryToken entryTokens, IdempotencyKey idempotency, LongSupplier ticker) {
         return new AdmissionGatewayFilter(holder, decider, clock, meters, random, queue,
-                tokens, limiter, entryTokens, idempotency, ticker);
+                tokens, limiter, entryTokens, idempotency, ticker, SoldOutCache.standard());
     }
 
     /**
@@ -287,7 +319,20 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
 
         // **지금 시각이다.** 스냅샷 발행 시각을 넘기면 배분이 멎는 순간 윈도가
         // 영영 안 넘어가고, 상한만큼 쓴 뒤부터 전부 막힌다.
-        long nowSec = clock.instant().getEpochSecond();
+        Instant now = clock.instant();
+        long nowSec = now.getEpochSecond();
+        // **재료가 재고를 말하는 것이 곧 해제 신호다** (7.2.4). TTL 을 기다리면
+        // 재입고된 쿠폰이 그 시간만큼 막힌다. 재고 0 에서는 안 푼다 — 풀면
+        // 캐시가 매 요청 스스로 지워져 아무것도 안 막는다.
+        if (!state.soldOut()) {
+            soldOutCache.restocked(couponId, view.snapshot().publishedAt());
+        }
+        AdmissionDecision cached = observedSoldOut(couponId, state, now);
+        if (cached != null) {
+            exchange.getAttributes().put(DECISION, cached);
+            count(cached.name(), "sold-out-cache");
+            return route(exchange, chain, cached, couponId, state, view.snapshot().meta());
+        }
         AdmissionDecision decision = decider.decide(new AdmissionRequest(
                 couponId, state, view.snapshot().meta(),
                 // **방금 줄로 보낸 쿠폰인가.** 스냅샷은 한 틱 늦어 아직 한산하다고
@@ -306,6 +351,28 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             degraded(exchange);
         }
         return route(exchange, chain, decision, couponId, state, view.snapshot().meta());
+    }
+
+    /**
+     * 뒷단이 매진이라고 답한 것을 기억하고 있는가 (7.2.3).
+     *
+     * <p><b>재료가 재고를 말하는 창에서만 뜻이 있다.</b> 스냅샷이 이미 매진을
+     * 말하면 사다리 1번이 같은 답을 내므로 여기서 볼 이유가 없다.
+     */
+    private AdmissionDecision observedSoldOut(String couponId, CouponState state, Instant now) {
+        if (state.soldOut()) {
+            return null;
+        }
+        if (!soldOutCache.soldOut(couponId, now)) {
+            return null;
+        }
+        // **재료가 낡았으면 관찰을 못 믿는다.** 낡은 재료로는 재입고가 있었는지
+        // 알 수 없고, 그 구간은 사다리 4번이 노드 몫 안에서 여는 자리다.
+        // 여기서 끊으면 그 설계가 뒤집힌다.
+        if (holder.isDataStale(holder.view())) {
+            return null;
+        }
+        return AdmissionDecision.REJECT_SOLD_OUT;
     }
 
     /**

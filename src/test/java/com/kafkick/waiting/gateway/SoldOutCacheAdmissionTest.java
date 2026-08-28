@@ -118,11 +118,16 @@ class SoldOutCacheAdmissionTest {
         재고가_있다고_심는다();
         캐시.observed(COUPON, 지금);
         태운다();
+        assertThat(뒷단_횟수).as("관찰 뒤 첫 요청은 막힌다").hasValue(0);
 
-        // 두 번째 요청은 첫 요청이 푼 뒤라 그대로 간다.
+        // **나중에 발행된 재료**가 재고를 말한다. 같은 재료로 풀면 캐시가
+        // 존재하는 창에서 스스로 지워져 아무것도 안 막는다.
+        holder.replace(new GatewaySnapshot(
+                Map.of(COUPON, CouponStates.idle(1_000)), new SnapshotMeta(2, 1),
+                지금.plusSeconds(1)));
         태운다();
 
-        assertThat(뒷단_횟수).as("두 번째는 간다").hasValue(1);
+        assertThat(뒷단_횟수).as("재입고 뒤에는 간다").hasValue(1);
         assertThat(캐시.soldOut(COUPON, 지금)).isFalse();
     }
 

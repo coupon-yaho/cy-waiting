@@ -47,6 +47,27 @@ public class IdentityConfig {
         return filter;
     }
 
+    /**
+     * 매진 관찰을 담는 곳 (7.2 · B-10).
+     *
+     * <p><b>담는 쪽과 읽는 쪽이 같은 것을 봐야 한다</b> — 각자 만들면 뒷단이
+     * 낸 매진을 판정이 영영 못 본다. 그래서 빈 하나로 둔다.
+     */
+    @Bean
+    public SoldOutCache soldOutCache(MeterRegistry meters) {
+        SoldOutCache cache = SoldOutCache.standard();
+        // **차오르는 중인지는 막힌 뒤에 오르는 카운터로 못 본다.** 상한에 닿아
+        // 새 관찰을 못 받기 시작하면 그때부터 뒷단이 다시 다 맞는다.
+        cache.bindMetrics(meters);
+        return cache;
+    }
+
+    /** 뒷단이 낸 매진을 관찰만 한다. 응답은 안 바꾼다 (7.2.2). */
+    @Bean
+    public SoldOutObserver soldOutObserver(SoldOutCache cache, Clock clock) {
+        return SoldOutObserver.of(cache, clock);
+    }
+
     /** 못 읽는 대역은 여기서 버린다. 요청 경로에서 다시 풀면 그 파싱이 거기 붙는다. */
     @Bean
     public TrustedProxies trustedProxies(ProxyProperties properties) {

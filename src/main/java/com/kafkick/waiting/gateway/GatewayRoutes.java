@@ -131,7 +131,7 @@ public class GatewayRoutes {
     @Bean
     public RouteLocator routes(RouteLocatorBuilder builder, Backend backend,
             AdmissionGatewayFilter admission, QueryCoalescingFilter coalescing,
-            SpringCloudCircuitBreakerFilterFactory breakers) {
+            SoldOutObserver soldOut, SpringCloudCircuitBreakerFilterFactory breakers) {
         return builder.routes()
                 .route("issue", r -> r
                         .method(HttpMethod.POST)
@@ -142,7 +142,10 @@ public class GatewayRoutes {
                         // 가면 래치가 죽는다 (FilterOrder).
                         .filters(f -> stripSpoofableClientIp(f)
                                 .filter(admission, FilterOrder.ROUTE_ADMISSION)
-                                .filter(circuit(breakers), FilterOrder.ROUTE_CIRCUIT))
+                                .filter(circuit(breakers), FilterOrder.ROUTE_CIRCUIT)
+                                // **발급에만 붙인다.** 조회 응답에는 매진 코드가
+                                // 재고 정보로 실릴 수 있고, 그건 관찰이 아니다.
+                                .filter(soldOut, FilterOrder.ROUTE_SOLD_OUT))
                         // **끊는 자리가 서킷 안쪽이어야 한다.** 밖에서 끊으면
                         // 서킷에 가는 것은 오류가 아니라 취소이고, 취소는 창에
                         // 안 쌓인다 — 멎은 뒷단의 서킷이 영영 안 열린다.

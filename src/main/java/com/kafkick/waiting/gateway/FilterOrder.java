@@ -49,6 +49,14 @@ public final class FilterOrder {
     public static final int ROUTE_CIRCUIT = ROUTE_ADMISSION + 1;
 
     /**
+     * 뒷단의 매진 응답을 본다.
+     *
+     * <p><b>서킷 안쪽이다.</b> 밖에 두면 서킷이 연 뒤의 폴백 응답까지 보게
+     * 되고, 그 폴백에 매진 코드가 실리면 뒷단이 멀쩡한 쿠폰이 막힌다.
+     */
+    public static final int ROUTE_SOLD_OUT = ROUTE_CIRCUIT + 1;
+
+    /**
      * 조회 라우트의 코얼레싱.
      *
      * <p><b>응답을 쓰는 필터보다 앞이어야 한다.</b> 본문은 프레임워크의 쓰기

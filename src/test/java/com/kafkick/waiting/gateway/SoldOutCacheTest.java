@@ -75,20 +75,37 @@ class SoldOutCacheTest {
     }
 
     /**
-     * <b>재입고를 보면 즉시 풉니다</b> (7.2.4).
+     * <b>나중에 발행된 재료가 재고를 말하면 풉니다</b> (7.2.4).
      *
-     * <p>TTL 을 기다리면 재고가 돌아온 쿠폰이 그 시간만큼 막힙니다. 스냅샷이
-     * <code>stock&gt;0</code> 이라고 말하는 순간이 곧 해제 신호입니다.
+     * <p>TTL 을 기다리면 재고가 돌아온 쿠폰이 그 시간만큼 막힙니다.
      */
     @Test
-    @DisplayName("재입고를_보면_TTL_전에_풀린다")
-    void 재입고를_보면_TTL_전에_풀린다() {
+    @DisplayName("나중_재료가_재고를_말하면_TTL_전에_풀린다")
+    void 나중_재료가_재고를_말하면_TTL_전에_풀린다() {
         SoldOutCache 캐시 = 캐시();
         캐시.observed("c1", 지금);
 
-        캐시.restocked("c1");
+        캐시.restocked("c1", 지금.plusSeconds(1));
 
         assertThat(캐시.soldOut("c1", 지금)).isFalse();
+    }
+
+    /**
+     * <b>같은 재료로는 안 풉니다.</b>
+     *
+     * <p>캐시가 존재하는 창이 바로 "재료는 아직 재고를 말하는데 뒷단은 이미
+     * 매진" 인 창입니다. 발행 시각을 안 보면 그 재료가 곧바로 관찰을 지워,
+     * 캐시가 아무것도 안 막습니다.
+     */
+    @Test
+    @DisplayName("관찰보다_먼저_발행된_재료로는_안_푼다")
+    void 관찰보다_먼저_발행된_재료로는_안_푼다() {
+        SoldOutCache 캐시 = 캐시();
+        캐시.observed("c1", 지금);
+
+        캐시.restocked("c1", 지금);
+
+        assertThat(캐시.soldOut("c1", 지금)).isTrue();
     }
 
     /**

@@ -82,6 +82,7 @@ class GatewayRoutesTest {
             QueryCoalescingFilter.of(
                     new CoalescingProperties(false, 1024, 1 << 20, 100, List.of()),
                     Clock.systemUTC(), new SimpleMeterRegistry()),
+            SoldOutObserver.of(SoldOutCache.standard(), Clock.systemUTC()),
             컨텍스트.getBean(SpringCloudCircuitBreakerResilience4JFilterFactory.class));
 
     /**

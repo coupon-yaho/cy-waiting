@@ -1,5 +1,8 @@
 package com.kafkick.waiting.gateway;
 
+import com.kafkick.waiting.domain.admission.CouponKeys;
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
@@ -35,6 +38,16 @@ public final class SoldOutCache {
     }
 
     /**
+     * 운영 기본값.
+     *
+     * <p>TTL 은 스냅샷 낡음 한계(3초)의 몇 배로 잡는다 — 재입고 해제 신호를
+     * 놓쳐도 그만큼만 막힌다. 키 상한은 쿠폰 키 상한과 같은 값을 쓴다.
+     */
+    public static SoldOutCache standard() {
+        return new SoldOutCache(Duration.ofSeconds(30), CouponKeys.MAX);
+    }
+
+    /**
      * 뒷단이 매진이라고 답한 것을 기록한다.
      *
      * <p><b>자리가 없으면 안 받는다.</b> 밀어내면 클라이언트가 고른 키로
@@ -65,14 +78,33 @@ public final class SoldOutCache {
         return true;
     }
 
-    /** 재고가 돌아온 것을 봤다. TTL 을 안 기다리고 푼다 (7.2.4). */
-    public void restocked(String couponId) {
-        observed.remove(couponId);
+    /**
+     * 관찰보다 <b>나중에 발행된</b> 재료가 재고를 말한다. TTL 을 안 기다리고 푼다.
+     *
+     * <p>발행 시각을 안 보면 관찰과 같은 재료가 곧바로 관찰을 지운다 — 캐시가
+     * 존재하는 창이 바로 그 창이라, 그러면 아무것도 안 막는다.
+     */
+    public void restocked(String couponId, Instant publishedAt) {
+        observed.computeIfPresent(couponId,
+                (key, at) -> publishedAt.isAfter(at) ? null : at);
     }
 
     /** 담고 있는 항목 수. 계측이 이 값을 싣는다. */
     public int size() {
         return observed.size();
+    }
+
+    /**
+     * 담긴 수와 상한을 게이지로 낸다 (7.2.7).
+     *
+     * <p>상한에 닿으면 새 관찰을 못 받고, 그때부터 뒷단이 다시 다 맞는다.
+     * 막힌 뒤에 오르는 카운터로는 그 순간을 못 본다.
+     */
+    public void bindMetrics(MeterRegistry meters) {
+        Gauge.builder("waiting.soldout.cache.size", this, SoldOutCache::size)
+                .description("매진 관찰을 담고 있는 쿠폰 수").register(meters);
+        Gauge.builder("waiting.soldout.cache.capacity", this, c -> c.maxKeys)
+                .description("담을 수 있는 상한").register(meters);
     }
 
     private boolean expired(Instant at, Instant now) {

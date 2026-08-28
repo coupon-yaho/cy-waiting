@@ -132,9 +132,15 @@ if #front > 0 and anyAlive then
         local rank = tonumber(redis.call('ZSCORE', KEYS[1], front[i]))
         if (at == nil or at < now) and (rank == nil or rank > admitted) then
             gone[#gone + 1] = front[i]
-            -- 자리는 안 보관한다. 재방문자로 식별만 한다 (D-11).
-            records[#records + 1] = front[i]
-            records[#records + 1] = 'd:' .. string.format('%.0f', now)
+            -- **입장 표시는 안 덮는다.** 같은 자리에 종류가 둘이고, `a:` 는
+            -- 차례가 왔던 사람을 지키는 표시다. 덮으면 그 사람이 다음 폴링에서
+            -- 종료를 받고, 다시 서면 그동안 온 사람 뒤로 간다 (불변식 4).
+            local kept = redis.call('HGET', KEYS[2], front[i])
+            if not (kept and string.sub(kept, 1, 2) == 'a:') then
+                -- 자리는 안 보관한다. 재방문자로 식별만 한다 (D-11).
+                records[#records + 1] = front[i]
+                records[#records + 1] = 'd:' .. string.format('%.0f', now)
+            end
         end
     end
 
@@ -150,7 +156,12 @@ if #front > 0 and anyAlive then
         -- **메모리 상한에서도 이 순서가 산다.** HSET 은 거부 대상이라
         -- 첫 쓰기에서 통째로 막히는데, ZREM 은 거부 대상이 아니라 먼저
         -- 두면 아무도 하트비트를 못 하는 동안 큐만 계속 지운다.
-        redis.call('HSET', KEYS[2], unpack(records))
+        -- **비면 안 부른다.** 걷을 사람이 전부 입장 표시를 들고 있으면 쓸
+        -- 기록이 없는데, 인자 없는 HSET 은 오류다 — 그러면 ZREM 앞에서
+        -- 스크립트가 죽고 그 쿠폰의 청소가 매 틱 같은 자리에서 실패한다.
+        if #records > 0 then
+            redis.call('HSET', KEYS[2], unpack(records))
+        end
         redis.call('ZREM', KEYS[1], unpack(gone))
         swept = #gone
     end

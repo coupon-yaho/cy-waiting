@@ -54,6 +54,31 @@ class QueueRedisPortTest extends RedisContainerSupport {
                 RedisKeys.grace(COUPON, SHARDS, 0)).block(WAIT);
     }
 
+    /**
+     * <b>어댑터가 재방문 자리를 제대로 읽습니다.</b>
+     *
+     * <p>스크립트를 직접 치는 시험만 있으면 <b>반환 배열의 자리를 바꿔도</b>
+     * 전부 통과합니다. 이 패키지는 뮤테이션 범위 밖이라 여기가 유일한 방어이고,
+     * 자리를 바꾸면 처음 온 사람이 "돌아오신 걸 환영합니다" 를 받습니다.
+     */
+    @Test
+    @DisplayName("재방문_여부를_자리에서_제대로_읽는다")
+    void 재방문_여부를_자리에서_제대로_읽는다() {
+        redis.opsForHash().put(RedisKeys.grace(COUPON, SHARDS, 0), "m1",
+                "d:" + 지금.getEpochSecond()).block(WAIT);
+        // **앞에 둘을 세운다.** 한 명이면 rank 가 1 이라 자리를 바꿔도 같은
+        // 답이 나온다 — 두 값이 실제로 달라야 자리가 못 박힌다.
+        등록("m0");
+        등록("m9");
+
+        QueueEntry 돌아온_사람 = port.enqueue(COUPON, "m1", QueuePort.NO_LIMIT, 지금).block(WAIT);
+        QueueEntry 처음_온_사람 = port.enqueue(COUPON, "m2", QueuePort.NO_LIMIT, 지금).block(WAIT);
+
+        assertThat(돌아온_사람.rejoined()).as("재방문").isTrue();
+        assertThat(돌아온_사람.rank()).as("앞 인원").isEqualTo(2);
+        assertThat(처음_온_사람.rejoined()).as("처음 온 사람").isFalse();
+    }
+
     /** 조회가 보는 키를 다 비운다. 하나라도 남으면 앞선 시험의 상태가 답을 바꾼다. */
     private void 비운다(int 샤드수, int 샤드) {
         redis.delete(RedisKeys.queue(COUPON, 샤드수, 샤드),

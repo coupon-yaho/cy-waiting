@@ -153,6 +153,36 @@ class AdmissionGatewayFilterTest {
         return exchange;
     }
 
+    /**
+     * <b>재방문 여부를 응답에 싣습니다</b> (7.5.1).
+     *
+     * <p>클라이언트가 "내 줄이 사라졌다" 와 "내가 자리를 비웠다" 를 구분할 수
+     * 있어야 합니다. 순번은 안 돌려주므로(D-11) 알려 주는 것이 전부입니다.
+     */
+    @Test
+    @DisplayName("재방문_여부를_응답에_싣는다")
+    void 재방문_여부를_응답에_싣는다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100));
+        줄.돌아온_사람으로_만든다(MEMBER);
+
+        MockServerWebExchange exchange = 태운다(COUPON);
+
+        assertThat(exchange.getResponse().getBodyAsString().block())
+                .contains("\"rejoined\":true");
+    }
+
+    /** 처음 온 사람은 재방문이 아닙니다. 안 두면 "늘 참" 으로도 통과합니다. */
+    @Test
+    @DisplayName("처음_온_사람은_재방문이_아니다")
+    void 처음_온_사람은_재방문이_아니다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100));
+
+        MockServerWebExchange exchange = 태운다(COUPON);
+
+        assertThat(exchange.getResponse().getBodyAsString().block())
+                .contains("\"rejoined\":false");
+    }
+
     /** 한산한 쿠폰 여럿을 심는다. 쿠폰별 상한에 먼저 걸리지 않고 노드 예산을 채우려면 필요하다. */
     private void 한산한_쿠폰_여럿을_심는다(int 수) {
         Map<String, CouponState> coupons = IntStream.range(0, 수).boxed()

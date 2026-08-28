@@ -33,6 +33,7 @@ class ClockMonotonicTest extends RedisContainerSupport {
     private static final String COUPON = "c1";
     private static final String QUEUE = RedisKeys.queue(COUPON, 1, 0);
     private static final String MAX_SCORE = RedisKeys.maxScore(COUPON, 1, 0);
+    private static final String GRACE = RedisKeys.grace(COUPON, 1, 0);
     private static final String ADMITTED = RedisKeys.admitted(COUPON, 1, 0);
     private static final String ALIVE_TTL = "30";
     /** 상한 없음. 0 은 이 뜻이 아니다 — 0 은 한 명도 안 받는다는 뜻이다. */
@@ -57,8 +58,8 @@ class ClockMonotonicTest extends RedisContainerSupport {
     private List<Object> enqueue(String memberId) {
         return (List<Object>) redis.execute(
                         script,
-                        List.of(QUEUE, MAX_SCORE, alive(memberId), ADMITTED),
-                        List.of(memberId, String.valueOf(TTL_SECONDS), ALIVE_TTL, NO_CAP, NOW))
+                        List.of(QUEUE, MAX_SCORE, alive(memberId), ADMITTED, GRACE),
+                        List.of(memberId, String.valueOf(TTL_SECONDS), ALIVE_TTL, NO_CAP, NOW, "300"))
                 .blockFirst(WAIT);
     }
 
@@ -84,7 +85,7 @@ class ClockMonotonicTest extends RedisContainerSupport {
         List<Object> result = enqueue("m1");
 
         // score · floorApplied · alreadyQueued · rank
-        assertThat(result).hasSize(4);
+        assertThat(result).hasSize(5);
         assertThat(appliedFlag(result)).isZero();
         assertThat(alreadyQueued(result)).isZero();
         assertThat(scoreOf("m1")).isPositive();
@@ -187,8 +188,8 @@ class ClockMonotonicTest extends RedisContainerSupport {
         // Lua 는 중간 오류를 되돌리지 않는다. 쓰기 전에 막지 않으면
         // maxscore 없는 ZSET 이 남아 "같이 남거나 같이 사라진다" 가 깨진다.
         org.assertj.core.api.Assertions.assertThatThrownBy(() ->
-                redis.execute(script, List.of(QUEUE, MAX_SCORE, alive("m1"), ADMITTED),
-                                List.of("m1", "0", ALIVE_TTL, NO_CAP, NOW))
+                redis.execute(script, List.of(QUEUE, MAX_SCORE, alive("m1"), ADMITTED, GRACE),
+                                List.of("m1", "0", ALIVE_TTL, NO_CAP, NOW, "300"))
                         .blockFirst(WAIT))
                 .rootCause()
                 .hasMessageContaining("TTL");

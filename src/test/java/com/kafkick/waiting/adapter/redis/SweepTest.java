@@ -65,8 +65,8 @@ class SweepTest extends RedisContainerSupport {
 
     private void enqueue(String memberId) {
         redis.execute(enqueueScript,
-                        List.of(QUEUE, MAX_SCORE, ALIVE, ADMITTED),
-                        List.of(memberId, "86400", "3600", "-1", String.valueOf(NOW)))
+                        List.of(QUEUE, MAX_SCORE, ALIVE, ADMITTED, GRACE),
+                        List.of(memberId, "86400", "3600", "-1", String.valueOf(NOW), "300"))
                 .blockFirst(WAIT);
     }
 

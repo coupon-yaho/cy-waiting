@@ -11,6 +11,7 @@ import java.util.Objects;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
+import com.kafkick.waiting.domain.queue.GraceRetention;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Component;
@@ -93,9 +94,11 @@ public final class QueueRedisPort implements QueuePort {
                         List.of(RedisKeys.queue(couponId, shards, shard),
                                 RedisKeys.maxScore(couponId, shards, shard),
                                 RedisKeys.alive(couponId, shards, shard),
-                                RedisKeys.admitted(couponId, shards, shard)),
+                                RedisKeys.admitted(couponId, shards, shard),
+                                RedisKeys.grace(couponId, shards, shard)),
                         List.of(memberId, MAX_SCORE_TTL_SEC, ALIVE_TTL_SEC,
-                                Long.toString(maxLen), Long.toString(now.getEpochSecond())))
+                                Long.toString(maxLen), Long.toString(now.getEpochSecond()),
+                                Long.toString(GraceRetention.SECONDS)))
                 .next()
                 // **빈 결과를 성공으로 안 본다.** 그대로 두면 등록도 거절도 아닌
                 // 채로 200 이 나가고, 실패 경로가 통째로 안 돈다.
@@ -128,7 +131,7 @@ public final class QueueRedisPort implements QueuePort {
             return QueueEntry.rejected();
         }
         return new QueueEntry(QueueState.WAITING, globalRank(number(raw.get(3))), score,
-                number(raw.get(2)) == 1, number(raw.get(1)) == 1);
+                number(raw.get(2)) == 1, number(raw.get(1)) == 1, number(raw.get(4)) == 1);
     }
 
     private QueueEntry toStatus(List<?> raw) {
@@ -136,8 +139,9 @@ public final class QueueRedisPort implements QueuePort {
         if (state == QueueState.NOT_QUEUED) {
             return QueueEntry.notQueued();
         }
+        // 조회는 재방문을 안 말한다 — 그것은 등록 결과에만 있는 사실이다.
         return new QueueEntry(state, globalRank(number(raw.get(1))),
-                number(raw.get(2)), true, false);
+                number(raw.get(2)), true, false, false);
     }
 
     /**

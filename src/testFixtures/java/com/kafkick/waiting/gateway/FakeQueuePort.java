@@ -4,6 +4,8 @@ import com.kafkick.waiting.domain.queue.QueueEntry;
 import com.kafkick.waiting.domain.queue.QueueState;
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import reactor.core.publisher.Mono;
@@ -18,6 +20,14 @@ public final class FakeQueuePort implements QueuePort {
     private final Map<String, Map<String, Long>> queues = new LinkedHashMap<>();
     private final AtomicInteger 등록_호출 = new AtomicInteger();
     private final AtomicInteger 조회_호출 = new AtomicInteger();
+
+    /** 자리를 비웠다 돌아온 사람. <b>새로 서는 등록 한 번에만</b> 소비된다. */
+    private final Set<String> 돌아온_사람 = ConcurrentHashMap.newKeySet();
+
+    /** 이 사람을 재방문자로 만든다. */
+    public void 돌아온_사람으로_만든다(String memberId) {
+        돌아온_사람.add(memberId);
+    }
 
     private RuntimeException 터뜨릴_것;
     private boolean 가득_참;
@@ -93,7 +103,10 @@ public final class FakeQueuePort implements QueuePort {
         }
         queued.putIfAbsent(memberId, (long) queued.size() + 1);
         return Mono.just(new QueueEntry(QueueState.WAITING, rankOf(couponId, memberId),
-                queued.get(memberId), 있던_사람, false));
+                queued.get(memberId), 있던_사람, false,
+                // **이미 줄에 선 사람은 기록을 안 본다.** 실물이 그 분기에서
+                // 먼저 돌아가므로, 여기서 소비하면 픽스처가 실제와 달라진다.
+                !있던_사람 && 돌아온_사람.remove(memberId)));
     }
 
     @Override
@@ -111,10 +124,10 @@ public final class FakeQueuePort implements QueuePort {
         long rank = rankOf(couponId, memberId);
         if (차례가_옴 && rank == 0) {
             return Mono.just(new QueueEntry(QueueState.ADMITTED, 0,
-                    queued.get(memberId), true, false));
+                    queued.get(memberId), true, false, false));
         }
         return Mono.just(new QueueEntry(QueueState.WAITING, rank,
-                queued.get(memberId), true, false));
+                queued.get(memberId), true, false, false));
     }
 
     private long rankOf(String couponId, String memberId) {

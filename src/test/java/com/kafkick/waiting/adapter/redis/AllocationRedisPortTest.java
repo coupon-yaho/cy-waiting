@@ -221,6 +221,54 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     }
 
     /**
+     * <b>입장 표시를 이탈 기록으로 덮지 않습니다.</b>
+     *
+     * <p>같은 자리에 종류가 둘입니다. 덮으면 차례가 왔던 사람이 다음 폴링에서
+     * 종료를 받고, 다시 서면 그동안 온 사람 뒤로 갑니다 — `queue_status` 가
+     * 그 표시 하나로 막고 있는 것이 그것입니다.
+     */
+    @Test
+    @DisplayName("입장_표시를_이탈_기록으로_안_덮는다")
+    void 입장_표시를_이탈_기록으로_안_덮는다() {
+        long 지금 = 1_700_000_000L;
+        줄_세운다("c1", 1, 5);
+        // m5 는 살아 있어 "신호 전무" 가드를 지나고, m1 은 만료됐다.
+        redis.opsForZSet().add(RedisKeys.alive("c1", SHARDS, 0), "m5", 지금 + 60).block(WAIT);
+        redis.opsForHash().put(RedisKeys.grace("c1", SHARDS, 0), "m1", "a:" + 지금).block(WAIT);
+
+        port.sweep(List.of("c1"), 지금, 100, 300, 100).block(WAIT);
+
+        assertThat(redis.opsForHash().get(RedisKeys.grace("c1", SHARDS, 0), "m1").block(WAIT))
+                .as("입장 표시가 살아남는다").isEqualTo("a:" + 지금);
+    }
+
+    /**
+     * <b>걷을 사람이 전부 입장 표시를 들고 있어도 안 죽습니다.</b>
+     *
+     * <p>쓸 기록이 없는데 인자 없는 <code>HSET</code> 을 부르면 오류입니다 —
+     * 그러면 큐에서 빼기 전에 스크립트가 죽고, 그 쿠폰의 청소가 매 틱 같은
+     * 자리에서 실패합니다.
+     */
+    @Test
+    @DisplayName("걷을_사람이_전부_입장_표시여도_안_죽는다")
+    void 걷을_사람이_전부_입장_표시여도_안_죽는다() {
+        long 지금 = 1_700_000_000L;
+        줄_세운다("c1", 1, 5);
+        // m5 만 살아 있다. m1 은 만료됐고 입장 표시를 들고 있다.
+        redis.opsForZSet().add(RedisKeys.alive("c1", SHARDS, 0), "m5", 지금 + 60).block(WAIT);
+        redis.opsForHash().put(RedisKeys.grace("c1", SHARDS, 0), "m1", "a:" + 지금).block(WAIT);
+
+        QueueSweeper.SweepResult 결과 =
+                port.sweep(List.of("c1"), 지금, 100, 300, 100).block(WAIT);
+
+        // 실패로 안 센다 — 스크립트가 살아서 돌아왔다는 뜻이다.
+        assertThat(결과.failed()).as("실패").isZero();
+        assertThat(결과.swept()).as("걷은 수").isOne();
+        assertThat(redis.opsForHash().get(RedisKeys.grace("c1", SHARDS, 0), "m1").block(WAIT))
+                .as("입장 표시는 그대로").isEqualTo("a:" + 지금);
+    }
+
+    /**
      * <b>보관 기간 안의 입장 표시는 청소를 견딥니다.</b>
      *
      * <p>같은 해시에 writer 가 둘입니다. 종류를 안 가르면 청소가 입장 표시를

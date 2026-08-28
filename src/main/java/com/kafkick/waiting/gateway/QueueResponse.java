@@ -32,13 +32,15 @@ public final class QueueResponse {
      * 줄에 세웠다고 알린다.
      *
      * @param pollAfterSec 다음에 물을 때까지의 초. 흔들어서 파도를 흩는다
+     * @param rejoined 자리를 비웠다 돌아왔는가. <b>순번은 안 돌려준다</b> —
+     *                 클라이언트가 "줄이 사라졌다" 와 구분하라고 알릴 뿐이다
      */
     public Mono<Void> waiting(ServerWebExchange exchange, String queueToken, long position,
-            long etaSec, String queueMode, long pollAfterSec) {
+            long etaSec, String queueMode, long pollAfterSec, boolean rejoined) {
         return write(exchange, HttpStatus.ACCEPTED, """
                 {"success":true,"data":{"admitted":false,"queueToken":"%s",\
-                "position":%d,"etaSeconds":%d,"queueMode":"%s"}}"""
-                .formatted(queueToken, position, etaSec, queueMode), pollAfterSec);
+                "position":%d,"etaSeconds":%d,"queueMode":"%s","rejoined":%b}}"""
+                .formatted(queueToken, position, etaSec, queueMode, rejoined), pollAfterSec);
     }
 
     /**

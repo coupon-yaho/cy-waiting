@@ -9,8 +9,6 @@ import com.kafkick.waiting.control.FailureWindow;
 import com.kafkick.waiting.control.SnapshotSource;
 import com.kafkick.waiting.domain.allocation.Grant;
 import com.kafkick.waiting.domain.coupon.QueueMode;
-import com.kafkick.waiting.control.QueueSweeper;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -81,17 +79,6 @@ public final class AllocationRedisPort implements SnapshotSource {
     private static final Logger log = LoggerFactory.getLogger(AllocationRedisPort.class);
 
     private final ReactiveStringRedisTemplate redis;
-    private static final RedisScript<List> SWEEP =
-            RedisScript.of(new ClassPathResource("redis/sweep.lua"), List.class);
-
-    /**
-     * 쿠폰별 HSCAN 커서.
-     *
-     * <p><b>이어 가야 한다.</b> 매번 0 에서 시작하면 해시 앞쪽만 계속 훑고
-     * 뒤쪽 기록은 영영 안 지워져, 유예 해시가 한 방향으로만 자란다.
-     */
-    private final Map<String, String> sweepCursors = new ConcurrentHashMap<>();
-
     private final int shards;
     private final FailureWindow rejected = FailureWindow.create();
     private final FailureWindow malformed = FailureWindow.create();
@@ -399,52 +386,53 @@ public final class AllocationRedisPort implements SnapshotSource {
     }
 
     /**
-     * 이탈자를 걷어 낸다 (7.4).
+     * 매진된 쿠폰의 줄과 딸린 키를 지운다 (7.3.1·7.3.3).
      *
-     * <p><b>커서를 쿠폰별로 이어 간다.</b> 매번 0 에서 시작하면 해시 앞쪽만
-     * 계속 훑고 뒤쪽 기록은 영영 안 지워진다.
+     * <p><b>한 쿠폰이 실패해도 나머지는 지운다.</b> 정리가 배분을 막으면
+     * 안 지워진 것 하나가 그 틱 전체를 세운다 (7.3.4).
      */
-    public Mono<QueueSweeper.SweepResult> sweep(List<String> couponIds, long nowSec,
-            int scanLimit, long graceSec, int budget) {
+    public Mono<List<String>> dropSoldOutQueues(List<String> couponIds) {
         if (couponIds.isEmpty()) {
-            return Mono.just(QueueSweeper.SweepResult.NOTHING);
+            return Mono.just(List.of());
         }
         return Flux.fromIterable(couponIds)
-                .flatMap(id -> sweepOne(id, nowSec, scanLimit, graceSec, budget)
-                        // **한 쿠폰이 실패해도 나머지는 쓴다.** 청소가 배분을
-                        // 막으면 안 걷힌 것 하나가 그 틱 전체를 세운다.
-                        .onErrorResume(e -> {
-                            log.warn("이탈자 청소 실패 — 다음 틱에 다시 한다: 쿠폰={} {}",
-                                    id, e.toString());
-                            return Mono.just(QueueSweeper.SweepResult.NOTHING);
-                        }), MAX_CONCURRENT_READS)
-                .reduce(QueueSweeper.SweepResult.NOTHING, (a, b) -> new QueueSweeper.SweepResult(
-                        a.swept() + b.swept(),
-                        a.expiredSignals() + b.expiredSignals(),
-                        a.expiredGrace() + b.expiredGrace()));
+                // **쿠폰별 결과를 그대로 돌려준다.** 합으로 접으면 한 쿠폰이
+                // 실패해도 전체가 성공으로 보이고, 실패한 것까지 지운 것으로
+                // 표시돼 다음 틱에 다시 안 온다 (7.3.4).
+                .flatMap(id -> dropOne(id).thenReturn(id)
+                        .onErrorResume(e -> Mono.empty()), MAX_CONCURRENT_READS)
+                .collectList();
     }
 
-    private Mono<QueueSweeper.SweepResult> sweepOne(String couponId, long nowSec,
-            int scanLimit, long graceSec, int budget) {
-        String cursor = sweepCursors.getOrDefault(couponId, "0");
-        return redis.execute(SWEEP,
-                        List.of(RedisKeys.queue(couponId, shards, 0),
-                                RedisKeys.grace(couponId, shards, 0),
-                                RedisKeys.alive(couponId, shards, 0)),
-                        List.of(Integer.toString(scanLimit), Long.toString(nowSec),
-                                Long.toString(graceSec), Integer.toString(budget), cursor))
-                .next()
-                .switchIfEmpty(Mono.error(new IllegalStateException("청소 결과가 비었다")))
-                .map(raw -> {
-                    List<?> values = (List<?>) raw;
-                    sweepCursors.put(couponId, String.valueOf(values.get(3)));
-                    return new QueueSweeper.SweepResult(toLongOrZero(values.get(0)),
-                            toLongOrZero(values.get(1)), toLongOrZero(values.get(2)));
+    /**
+     * 줄과 생존 신호만 지운다.
+     *
+     * <p>지우는 것을 좁힌 이유는 아래 셋이 전부 <b>되돌릴 수 없는 손해</b>를
+     * 만들기 때문이다.
+     */
+    // `admitted:` — 입장 임계다. 지우면 임계가 뒤로 가고, 그건 A-7 이 "두 번
+    //   적용돼도 안전하다" 로 세운 단조성을 깨는 이 저장소의 유일한 쓰기가 된다.
+    //   이미 입장한 사람이 두 번째 토큰을 받을 수 있다.
+    // `grace:` — `a:` 입장 표시가 여기 있다. 차례가 왔던 사람이 종료를 안 받게
+    //   막는 유일한 장치이고 보관이 5분이다. 정리가 그것을 앞질러 지우면 안 된다.
+    // `coupons:active` — 이 집합은 `cy-be` 소유다 (O-3). 게이트웨이는 읽기만
+    //   한다. 그리고 빼는 순간 그 쿠폰이 스냅샷에서 사라져 **매진 종결이 통째로
+    //   꺼진다** — 조회는 레디스로 내려가고, 발급은 404 가 되며, 재료가 낡으면
+    //   미지 쿠폰 경로가 fail-open 으로 뒷단에 흘린다. 사다리 1번을 우회하는 셈이다.
+    private Mono<Long> dropOne(String couponId) {
+        List<String> keys = new ArrayList<>();
+        for (int shard = 0; shard < shards; shard++) {
+            keys.add(RedisKeys.queue(couponId, shards, shard));
+            keys.add(RedisKeys.alive(couponId, shards, shard));
+        }
+        return redis.delete(Flux.fromIterable(keys))
+                .onErrorResume(e -> {
+                    // **다음 틱에 다시 온다.** 여기서 터뜨리면 안 지워진 것
+                    // 하나가 그 틱의 배분을 통째로 세운다 (7.3.4).
+                    log.warn("매진 큐 정리 실패 — 다음 틱에 다시 한다: 쿠폰={} {}",
+                            couponId, e.toString());
+                    return Mono.error(e);
                 });
-    }
-
-    private long toLongOrZero(Object value) {
-        return value instanceof Number n ? n.longValue() : 0;
     }
 
     /** 쿠폰별 재고. <b>없으면 담지 않는다</b> — 부르는 쪽이 "모른다" 를 0 으로 접는다. */

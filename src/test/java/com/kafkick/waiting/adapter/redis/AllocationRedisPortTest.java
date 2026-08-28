@@ -7,7 +7,6 @@ import static org.assertj.core.api.Assertions.entry;
 import com.kafkick.waiting.domain.allocation.Grant;
 import com.kafkick.waiting.domain.coupon.QueueMode;
 import java.time.Duration;
-import com.kafkick.waiting.control.QueueSweeper;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
@@ -43,8 +42,6 @@ class AllocationRedisPortTest extends RedisContainerSupport {
                 RedisKeys.queue("c1", SHARDS, 0), RedisKeys.admitted("c1", SHARDS, 0),
                 RedisKeys.queue("c2", SHARDS, 0), RedisKeys.admitted("c2", SHARDS, 0),
                 RedisKeys.stock("c1"), RedisKeys.stock("c2"),
-                RedisKeys.alive("c1", SHARDS, 0), RedisKeys.grace("c1", SHARDS, 0),
-                RedisKeys.maxScore("c1", SHARDS, 0),
                 RedisKeys.COUPON_POLICY).block(WAIT);
     }
 
@@ -56,78 +53,74 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     }
 
     /**
-     * <b>생존 신호가 없는 사람을 걷습니다</b> (7.4.4).
+     * <b>줄과 생존 신호만 지웁니다</b> (7.3.1).
      *
-     * <p>이탈자가 줄에 남으면 배분이 그 자리에 크레딧을 허공에 발행합니다.
+     * <p>나머지는 지우면 되돌릴 수 없는 손해가 납니다. 입장 임계는 단조여야
+     * 하고(A-7), 입장 표시는 차례가 왔던 사람이 종료를 안 받게 막는 유일한
+     * 장치이며, 활성 목록에서 빼면 <b>매진 종결이 통째로 꺼집니다.</b>
      */
     @Test
-    @DisplayName("생존_신호가_없으면_걷는다")
-    void 생존_신호가_없으면_걷는다() {
-        long 지금 = 1_700_000_000L;
-        줄_세운다("c1", 1, 2, 3);
-        // m1 만 살아 있다고 말한다. 나머지 둘은 신호가 없다.
-        redis.opsForZSet().add(RedisKeys.alive("c1", SHARDS, 0), "m1", 지금 + 60).block(WAIT);
+    @DisplayName("매진_큐는_줄과_생존_신호만_지운다")
+    void 매진_큐는_줄과_생존_신호만_지운다() {
+        redis.opsForSet().add(RedisKeys.ACTIVE_COUPONS, "c1", "c2").block(WAIT);
+        줄_세운다("c1", 1, 2);
+        줄_세운다("c2", 3);
+        redis.opsForZSet().add(RedisKeys.alive("c1", SHARDS, 0), "m1", 100).block(WAIT);
+        redis.opsForHash().put(RedisKeys.grace("c1", SHARDS, 0), "m1", "a:5").block(WAIT);
+        redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "7").block(WAIT);
 
-        QueueSweeper.SweepResult 결과 =
-                port.sweep(List.of("c1"), 지금, 100, 300, 100).block(WAIT);
+        assertThat(port.dropSoldOutQueues(List.of("c1")).block(WAIT))
+                .as("지운 쿠폰을 돌려준다").containsExactly("c1");
 
-        assertThat(결과.swept()).as("걷은 수").isEqualTo(2);
-        assertThat(redis.opsForZSet().size(RedisKeys.queue("c1", SHARDS, 0)).block(WAIT))
-                .as("남은 줄").isEqualTo(1);
-        // **이탈 기록을 남깁니다.** 안 남기면 돌아온 사람을 알아볼 방법이 없고,
-        // 유예 재입장(7.5)이 설 자리가 없습니다.
-        assertThat(redis.opsForHash().size(RedisKeys.grace("c1", SHARDS, 0)).block(WAIT))
-                .as("이탈 기록").isEqualTo(2);
+        assertThat(redis.hasKey(RedisKeys.queue("c1", SHARDS, 0)).block(WAIT)).isFalse();
+        assertThat(redis.hasKey(RedisKeys.alive("c1", SHARDS, 0)).block(WAIT)).isFalse();
+        // **입장 임계는 안 지운다.** 지우면 임계가 뒤로 가고, 이미 입장한
+        // 사람이 두 번째 토큰을 받을 수 있다 (A-7).
+        assertThat(redis.opsForValue().get(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT))
+                .as("입장 임계").isEqualTo("7");
+        // **입장 표시도 안 지운다.** 차례가 왔던 사람이 종료를 안 받게 막는
+        // 유일한 장치이고 보관이 5분이다.
+        assertThat(redis.opsForHash().get(RedisKeys.grace("c1", SHARDS, 0), "m1").block(WAIT))
+                .as("입장 표시").isEqualTo("a:5");
+        // **활성 목록에 남긴다.** 빼면 그 쿠폰이 스냅샷에서 사라져 조회는
+        // 레디스로 내려가고, 발급은 404 가 되며, 재료가 낡으면 미지 쿠폰
+        // 경로가 fail-open 으로 뒷단에 흘린다 — 사다리 1번을 우회한다.
+        assertThat(redis.opsForSet().members(RedisKeys.ACTIVE_COUPONS)
+                .collectList().block(WAIT)).containsExactlyInAnyOrder("c1", "c2");
+        // 지목 안 한 쿠폰은 그대로다. 한 쿠폰의 정리가 옆 줄을 지우면 안 된다.
+        assertThat(redis.hasKey(RedisKeys.queue("c2", SHARDS, 0)).block(WAIT)).isTrue();
     }
 
     /**
-     * <b>보관 기간 안의 입장 표시는 청소를 견딥니다.</b>
+     * <b>시계 역행 바닥값은 살아남습니다.</b>
      *
-     * <p>같은 해시에 writer 가 둘입니다. 종류를 안 가르면 청소가 입장 표시를
-     * 숫자로 못 읽어 낡은 것으로 보고 지우고, <b>입장한 사람이 다음 폴링에서
-     * 종료를 받습니다.</b>
+     * <p>지우면 승격된 복제본의 시계가 뒤처졌을 때 새 score 가 앞으로 가고,
+     * 줄 선 사람이 통째로 추월당합니다 (A-9).
      */
     @Test
-    @DisplayName("보관_기간_안의_입장_표시는_청소를_견딘다")
-    void 보관_기간_안의_입장_표시는_청소를_견딘다() {
-        long 지금 = 1_700_000_000L;
+    @DisplayName("정리해도_시계_바닥값은_남는다")
+    void 정리해도_시계_바닥값은_남는다() {
+        redis.opsForSet().add(RedisKeys.ACTIVE_COUPONS, "c1").block(WAIT);
         줄_세운다("c1", 1);
-        redis.opsForHash().put(RedisKeys.grace("c1", SHARDS, 0), "m9", "a:" + 지금).block(WAIT);
+        redis.opsForValue().set(RedisKeys.maxScore("c1", SHARDS, 0), "1700000000000000")
+                .block(WAIT);
 
-        // 보관 300초 안이다. 종류를 못 읽으면 여기서 지워진다.
-        port.sweep(List.of("c1"), 지금 + 100, 100, 300, 100).block(WAIT);
+        port.dropSoldOutQueues(List.of("c1")).block(WAIT);
 
-        assertThat(redis.opsForHash().get(RedisKeys.grace("c1", SHARDS, 0), "m9").block(WAIT))
-                .isEqualTo("a:" + 지금);
+        assertThat(redis.opsForValue().get(RedisKeys.maxScore("c1", SHARDS, 0)).block(WAIT))
+                .isEqualTo("1700000000000000");
     }
 
-    /**
-     * <b>보관 기간이 지난 기록은 걷습니다</b> (7.4.5).
-     *
-     * <p>안 걷으면 해시가 한 방향으로만 자랍니다. 입장 표시도 예외가 아닙니다 —
-     * 그 사람은 이미 발급을 마쳤거나 토큰이 만료됐습니다.
-     */
+    /** 지울 것이 없으면 아무 명령도 안 냅니다. 빈 목록에 왕복을 쓰면 틱이 밀립니다. */
     @Test
-    @DisplayName("보관_기간이_지난_기록은_걷는다")
-    void 보관_기간이_지난_기록은_걷는다() {
-        long 지금 = 1_700_000_000L;
-        줄_세운다("c1", 1);
-        redis.opsForHash().put(RedisKeys.grace("c1", SHARDS, 0), "m9", "d:" + 지금).block(WAIT);
+    @DisplayName("지울_것이_없으면_왕복하지_않는다")
+    void 지울_것이_없으면_왕복하지_않는다() {
+        redis.opsForSet().add(RedisKeys.ACTIVE_COUPONS, "c1").block(WAIT);
 
-        QueueSweeper.SweepResult 결과 =
-                port.sweep(List.of("c1"), 지금 + 1_000, 100, 300, 100).block(WAIT);
+        assertThat(port.dropSoldOutQueues(List.of()).block(WAIT)).isEmpty();
 
-        assertThat(결과.expiredGrace()).as("걷은 기록").isEqualTo(1);
-        assertThat(redis.opsForHash().hasKey(RedisKeys.grace("c1", SHARDS, 0), "m9").block(WAIT))
-                .isFalse();
-    }
-
-    /** 쓸 것이 없으면 아무 명령도 안 냅니다. 틱마다 도는 자리입니다. */
-    @Test
-    @DisplayName("쓸_것이_없으면_왕복하지_않는다")
-    void 쓸_것이_없으면_왕복하지_않는다() {
-        assertThat(port.sweep(List.of(), 1_700_000_000L, 100, 300, 100).block(WAIT))
-                .isEqualTo(QueueSweeper.SweepResult.NOTHING);
+        assertThat(redis.opsForSet().members(RedisKeys.ACTIVE_COUPONS)
+                .collectList().block(WAIT)).containsExactly("c1");
     }
 
     @Test

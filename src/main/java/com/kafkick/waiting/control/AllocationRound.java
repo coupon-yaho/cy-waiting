@@ -8,6 +8,7 @@ import com.kafkick.waiting.domain.allocation.Grant;
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import com.kafkick.waiting.domain.coupon.Tunables;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -41,8 +42,11 @@ public final class AllocationRound {
     /** 이월을 못 받았을 때의 계수. 이월받으면 그쪽 계수를 따른다. */
     private static final double DEFAULT_ALPHA = 0.3;
 
-    /** 이탈자 청소 (7.4). <b>멈추는 판단을 안에 들고 있다.</b> */
-    private final QueueSweeper sweeper;
+    /** 매진 큐 정리 판단 (7.3). 지우는 것은 어댑터가 한다. */
+    private final SoldOutCleanup cleanup;
+
+    /** 지울 쿠폰들을 넘긴다. 지운 키 수를 돌려준다. */
+    private final Function<List<String>, Mono<List<String>>> dropQueues;
 
     private final BooleanSupplier stillLeader;
     private final Supplier<Mono<TimedDemands>> demands;
@@ -88,8 +92,9 @@ public final class AllocationRound {
             Function<Map<String, String>, Mono<Void>> publish, Supplier<Instant> clock,
             Supplier<Mono<CreditSmoother>> restore, SnapshotCodec codec,
             LongSupplier creditFloor, Supplier<Optional<Tunables>> tunables,
-            QueueSweeper sweeper) {
-        this.sweeper = Objects.requireNonNull(sweeper, "sweeper 는 필수다");
+            SoldOutCleanup cleanup, Function<List<String>, Mono<List<String>>> dropQueues) {
+        this.cleanup = Objects.requireNonNull(cleanup, "cleanup 은 필수다");
+        this.dropQueues = Objects.requireNonNull(dropQueues, "dropQueues 는 필수다");
         this.tunables = Objects.requireNonNull(tunables, "tunables 는 필수다");
         this.stillLeader = Objects.requireNonNull(stillLeader, "stillLeader 는 필수다");
         this.demands = Objects.requireNonNull(demands, "demands 는 필수다");
@@ -115,13 +120,13 @@ public final class AllocationRound {
             Function<Map<String, String>, Mono<Void>> publish, Supplier<Instant> clock,
             Supplier<Mono<CreditSmoother>> restore, SnapshotCodec codec,
             LongSupplier creditFloor, Supplier<Optional<Tunables>> tunables,
-            QueueSweeper sweeper) {
+            SoldOutCleanup cleanup, Function<List<String>, Mono<List<String>>> dropQueues) {
         return new AllocationRound(stillLeader, demands, globalCredit, gatewayCount, apply, publish,
-                clock, restore, codec, creditFloor, tunables, sweeper);
+                clock, restore, codec, creditFloor, tunables, cleanup, dropQueues);
     }
 
-    /** 청소를 안 붙이는 자리. <b>아무것도 안 걷는다</b> — 시험 편의다. */
-    public static AllocationRound withoutSweeper(BooleanSupplier stillLeader,
+    /** 정리를 안 붙이는 자리. <b>아무것도 안 지운다</b> — 시험 편의다. */
+    public static AllocationRound withoutCleanup(BooleanSupplier stillLeader,
             Supplier<Mono<TimedDemands>> demands,
             LongSupplier globalCredit, IntSupplier gatewayCount, Function<Grant, Mono<Long>> apply,
             Function<Map<String, String>, Mono<Void>> publish, Supplier<Instant> clock,
@@ -129,8 +134,8 @@ public final class AllocationRound {
             LongSupplier creditFloor, Supplier<Optional<Tunables>> tunables) {
         return new AllocationRound(stillLeader, demands, globalCredit, gatewayCount, apply, publish,
                 clock, restore, codec, creditFloor, tunables,
-                QueueSweeper.of(SweepGate.create(),
-                        ids -> Mono.just(QueueSweeper.SweepResult.NOTHING)));
+                SoldOutCleanup.of(Integer.MAX_VALUE, new SimpleMeterRegistry()),
+                ids -> Mono.just(List.of()));
     }
 
     /** 튜너블을 안 읽던 자리. 늘 기본값으로 돈다. */
@@ -140,7 +145,7 @@ public final class AllocationRound {
             Function<Map<String, String>, Mono<Void>> publish, Supplier<Instant> clock,
             Supplier<Mono<CreditSmoother>> restore, SnapshotCodec codec,
             LongSupplier creditFloor) {
-        return withoutSweeper(stillLeader, demands, globalCredit, gatewayCount, apply, publish,
+        return withoutCleanup(stillLeader, demands, globalCredit, gatewayCount, apply, publish,
                 clock, restore, codec, creditFloor, Optional::empty);
     }
 
@@ -237,23 +242,55 @@ public final class AllocationRound {
                                 snapshot(collected, granted, credit, readAt,
                                         tunables.get().orElse(null)),
                                 current.snapshot(),
-                                QueueingHysteresis.Snapshot.empty()))));
+                                QueueingHysteresis.Snapshot.empty()))
+                        // **발행 뒤에 지운다** (7.3). 앞에 두면 방금 지운 큐가
+                        // 이번 재료에는 아직 대기자로 실려, 그 판의 크레딧이
+                        // 없는 줄에 나간다.
+                        // **미룬다.** 인자로 부르면 자바가 먼저 평가해서, 셈과
+                        // 표시와 로그가 발행이 구독되기도 전에 일어난다 —
+                        // 발행이 터져도 지운 것으로 기록된다.
+                        .then(Mono.defer(() ->
+                                cleanUp(collected, granted, credit, readAt)))));
     }
 
     /**
-     * 이탈자를 걷어 낸다 (7.4).
+     * 매진된 지 오래된 쿠폰의 줄을 지운다 (7.3).
      *
-     * <p><b>멈춰야 할 구간은 스위퍼가 안다.</b> 여기서 되풀이하면 두 곳이 갈린다.
+     * <p><b>정리 실패가 배분을 막지 않는다</b> (7.3.4). 다음 틱에 다시 온다.
      */
-    private Mono<Void> sweepUp(List<CouponDemand> collected, Map<String, Long> granted,
+    private Mono<Void> cleanUp(List<CouponDemand> collected, Map<String, Long> granted,
             long credit, Instant readAt) {
+        List<String> due = cleanup.due(
+                snapshot(collected, granted, credit, readAt, tunables.get().orElse(null))
+                        .coupons());
+        if (due.isEmpty()) {
+            return Mono.empty();
+        }
+        // **쓰기 직전에 다시 묻는다.** 판 안에서 유일하게 되돌릴 수 없는
+        // 쓰기라, 리더가 아닌 채로 내면 남의 줄을 지운다. 묻는 비용은
+        // 메모리 읽기 하나다.
         if (lostLeadership()) {
             return Mono.empty();
         }
-        // 리더가 방금 읽어 발행한 재료다. 이 판이 도는 것 자체가 안 낡았다는 뜻이다.
-        return sweeper.run(
-                snapshot(collected, granted, credit, readAt, tunables.get().orElse(null))
-                        .coupons(), false).then();
+        // **몇 개인지만 남긴다.** 목록을 통째로 찍으면 대량 매진에서 한 줄에
+        // 쿠폰 ID 가 수백 개 들어간다 (LG-3). 어느 쿠폰인지는 지운 뒤에 남긴다.
+        log.info("매진 큐 정리 — 쿠폰 {}개를 지운다", due.size());
+        return dropQueues.apply(due)
+                .doOnNext(dropped -> {
+                    // **지운 것만 표시한다.** 요청한 것 전부를 표시하면 실패한
+                    // 쿠폰이 다음 틱에 다시 안 오고, 지표는 지웠다고 말한다.
+                    cleanup.dropped(dropped);
+                    cleanup.failed(due.stream().filter(id -> !dropped.contains(id)).toList());
+                    if (!dropped.isEmpty()) {
+                        log.info("매진 큐 정리 끝 — 쿠폰 {}개: {}", dropped.size(), dropped);
+                    }
+                })
+                .doOnError(e -> cleanup.failed(due))
+                .onErrorResume(e -> {
+                    log.warn("매진 큐 정리 실패 — 다음 틱에 다시 한다: {}", e.toString());
+                    return Mono.just(List.<String>of());
+                })
+                .then();
     }
 
     /**

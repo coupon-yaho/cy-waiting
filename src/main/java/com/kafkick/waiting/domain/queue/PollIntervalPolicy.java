@@ -1,5 +1,7 @@
 package com.kafkick.waiting.domain.queue;
 
+import java.time.Duration;
+
 import java.util.function.DoubleSupplier;
 
 /**
@@ -18,6 +20,11 @@ public class PollIntervalPolicy {
 
     private static final long MIN_INTERVAL_SEC = 1;
     private static final long MAX_INTERVAL_SEC = 60;
+
+    /** 매진 큐 정리가 이 값을 넘겨 기다려야 한다 — 마지막 폴링을 이것이 정한다. */
+    public static Duration maxInterval() {
+        return Duration.ofSeconds(MAX_INTERVAL_SEC);
+    }
 
     /** 백그라운드 탭이 분당 1회로 스로틀돼도 살아 있다고 봐야 한다. */
     private static final long MIN_ALIVE_TTL_SEC = 30;

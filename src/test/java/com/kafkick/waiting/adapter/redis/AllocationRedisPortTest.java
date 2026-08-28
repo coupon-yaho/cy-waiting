@@ -7,6 +7,7 @@ import static org.assertj.core.api.Assertions.entry;
 import com.kafkick.waiting.domain.allocation.Grant;
 import com.kafkick.waiting.domain.coupon.QueueMode;
 import java.time.Duration;
+import com.kafkick.waiting.control.QueueSweeper;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
@@ -42,7 +43,8 @@ class AllocationRedisPortTest extends RedisContainerSupport {
                 RedisKeys.queue("c1", SHARDS, 0), RedisKeys.admitted("c1", SHARDS, 0),
                 RedisKeys.queue("c2", SHARDS, 0), RedisKeys.admitted("c2", SHARDS, 0),
                 RedisKeys.stock("c1"), RedisKeys.stock("c2"),
-                RedisKeys.COUPON_POLICY).block(WAIT);
+                RedisKeys.COUPON_POLICY,
+                RedisKeys.alive("c1", SHARDS, 0), RedisKeys.grace("c1", SHARDS, 0)).block(WAIT);
     }
 
     private void 줄_세운다(String couponId, long... scores) {
@@ -121,6 +123,103 @@ class AllocationRedisPortTest extends RedisContainerSupport {
 
         assertThat(redis.opsForSet().members(RedisKeys.ACTIVE_COUPONS)
                 .collectList().block(WAIT)).containsExactly("c1");
+    }
+
+    /**
+     * <b>생존 신호가 없는 사람을 걷습니다</b> (7.4.4).
+     *
+     * <p>이탈자가 줄에 남으면 배분이 그 자리에 크레딧을 허공에 발행합니다.
+     */
+    @Test
+    @DisplayName("생존_신호가_없으면_걷는다")
+    void 생존_신호가_없으면_걷는다() {
+        long 지금 = 1_700_000_000L;
+        줄_세운다("c1", 1, 2, 3);
+        redis.opsForZSet().add(RedisKeys.alive("c1", SHARDS, 0), "m1", 지금 + 60).block(WAIT);
+
+        QueueSweeper.SweepResult 결과 =
+                port.sweep(List.of("c1"), 지금, 100, 300, 100).block(WAIT);
+
+        assertThat(결과.swept()).as("걷은 수").isEqualTo(2);
+        assertThat(redis.opsForZSet().size(RedisKeys.queue("c1", SHARDS, 0)).block(WAIT))
+                .as("남은 줄").isEqualTo(1);
+        // **이탈 기록을 남깁니다.** 안 남기면 돌아온 사람을 알아볼 방법이 없고
+        // 유예 재입장(7.5)이 설 자리가 없습니다.
+        assertThat(redis.opsForHash().size(RedisKeys.grace("c1", SHARDS, 0)).block(WAIT))
+                .as("이탈 기록").isEqualTo(2);
+    }
+
+    /**
+     * <b>신호가 통째로 없으면 아무것도 안 걷습니다.</b>
+     *
+     * <p>줄에 사람이 있는데 생존 신호가 하나도 없다는 것은 "전원이 떠났다" 가
+     * 아니라 <b>그 저장소를 잃었다</b> 는 뜻입니다 — 승격된 복제본, AOF 유실,
+     * 매진 구간이 길어져 폴링이 멎은 뒤의 회복이 전부 이 모양입니다.
+     */
+    @Test
+    @DisplayName("생존_신호가_통째로_없으면_안_걷는다")
+    void 생존_신호가_통째로_없으면_안_걷는다() {
+        long 지금 = 1_700_000_000L;
+        줄_세운다("c1", 1, 2, 3);
+
+        QueueSweeper.SweepResult 결과 =
+                port.sweep(List.of("c1"), 지금, 100, 300, 100).block(WAIT);
+
+        assertThat(결과.swept()).as("걷은 수").isZero();
+        assertThat(redis.opsForZSet().size(RedisKeys.queue("c1", SHARDS, 0)).block(WAIT))
+                .as("줄이 그대로").isEqualTo(3);
+    }
+
+    /**
+     * <b>차례가 온 사람은 안 걷습니다.</b>
+     *
+     * <p>배분은 임계만 올리고 큐에서 빼지 않습니다 — 빼는 것은 그 사람이
+     * 폴링할 때입니다. 그래서 앞줄에는 "입장 확정인데 아직 안 걷어간 사람" 이
+     * 섞이고, 걷으면 그가 다음 폴링에서 종료를 받습니다 (불변식 4).
+     */
+    @Test
+    @DisplayName("입장_임계_안의_사람은_안_걷는다")
+    void 입장_임계_안의_사람은_안_걷는다() {
+        long 지금 = 1_700_000_000L;
+        줄_세운다("c1", 1, 5);
+        // 한 명은 살아 있다고 말해 "신호가 통째로 없다" 가드를 지납니다.
+        redis.opsForZSet().add(RedisKeys.alive("c1", SHARDS, 0), "m5", 지금 + 60).block(WAIT);
+        redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "1").block(WAIT);
+
+        QueueSweeper.SweepResult 결과 =
+                port.sweep(List.of("c1"), 지금, 100, 300, 100).block(WAIT);
+
+        assertThat(결과.swept()).as("걷은 수").isZero();
+        assertThat(redis.opsForZSet().score(RedisKeys.queue("c1", SHARDS, 0), "m1").block(WAIT))
+                .as("입장 확정자가 줄에 남는다").isEqualTo(1.0);
+    }
+
+    /**
+     * <b>보관 기간 안의 입장 표시는 청소를 견딥니다.</b>
+     *
+     * <p>같은 해시에 writer 가 둘입니다. 종류를 안 가르면 청소가 입장 표시를
+     * 낡은 것으로 보고 지우고, 입장한 사람이 다음 폴링에서 종료를 받습니다.
+     */
+    @Test
+    @DisplayName("보관_기간_안의_입장_표시는_청소를_견딘다")
+    void 보관_기간_안의_입장_표시는_청소를_견딘다() {
+        long 지금 = 1_700_000_000L;
+        줄_세운다("c1", 1);
+        redis.opsForZSet().add(RedisKeys.alive("c1", SHARDS, 0), "m1", 지금 + 60).block(WAIT);
+        redis.opsForHash().put(RedisKeys.grace("c1", SHARDS, 0), "m9", "a:" + 지금).block(WAIT);
+
+        port.sweep(List.of("c1"), 지금 + 100, 100, 300, 100).block(WAIT);
+
+        assertThat(redis.opsForHash().get(RedisKeys.grace("c1", SHARDS, 0), "m9").block(WAIT))
+                .isEqualTo("a:" + 지금);
+    }
+
+    /** 쓸 것이 없으면 아무 명령도 안 냅니다. 틱마다 도는 자리입니다. */
+    @Test
+    @DisplayName("쓸_것이_없으면_왕복하지_않는다")
+    void 쓸_것이_없으면_왕복하지_않는다() {
+        assertThat(port.sweep(List.of(), 1_700_000_000L, 100, 300, 100).block(WAIT))
+                .isEqualTo(QueueSweeper.SweepResult.NOTHING);
     }
 
     @Test
@@ -299,7 +398,8 @@ class AllocationRedisPortTest extends RedisContainerSupport {
 
     /** 읽기를 실패시킨다. 형이 다른 키를 놓으면 HMGET 이 WRONGTYPE 을 낸다. */
     private void 정책_읽기를_깨뜨린다() {
-        redis.delete(RedisKeys.COUPON_POLICY).block(WAIT);
+        redis.delete(RedisKeys.COUPON_POLICY,
+                RedisKeys.alive("c1", SHARDS, 0), RedisKeys.grace("c1", SHARDS, 0)).block(WAIT);
         redis.opsForValue().set(RedisKeys.COUPON_POLICY, "해시가-아니다").block(WAIT);
     }
 

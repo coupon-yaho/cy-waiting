@@ -1,6 +1,9 @@
 package com.kafkick.waiting.control;
 
 import com.kafkick.waiting.domain.coupon.CouponState;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -21,14 +24,34 @@ public final class QueueSweeper {
 
     private final SweepGate gate;
     private final Function<List<String>, Mono<SweepResult>> sweep;
+    private final Counter swept;
+    private final Counter expiredSignals;
+    private final Counter expiredGrace;
+    private final Counter failed;
 
-    private QueueSweeper(SweepGate gate, Function<List<String>, Mono<SweepResult>> sweep) {
+    private QueueSweeper(SweepGate gate, Function<List<String>, Mono<SweepResult>> sweep,
+            MeterRegistry meters) {
         this.gate = Objects.requireNonNull(gate, "gate 는 필수다 — 멈추는 판단 없이 쓸면 안 된다");
         this.sweep = Objects.requireNonNull(sweep, "sweep 은 필수다");
+        Objects.requireNonNull(meters, "meters 는 필수다");
+        // **걷은 수가 곧 우리 오판일 수도 있다.** 그 값이 튈 때 장애인지 버그인지
+        // 가르려면 평시 값을 먼저 알아야 하고, 재려면 자리가 있어야 한다 (7.4.6).
+        this.swept = meters.counter("waiting.sweep", "kind", "swept");
+        this.expiredSignals = meters.counter("waiting.sweep", "kind", "expired-signal");
+        this.expiredGrace = meters.counter("waiting.sweep", "kind", "expired-grace");
+        // **"걷을 게 없어서 0" 과 "전부 죽어서 0" 을 가른다.** 안 가르면 청소가
+        // 멎은 것이 정상으로 보인다.
+        this.failed = meters.counter("waiting.sweep", "kind", "failed");
     }
 
+    public static QueueSweeper of(SweepGate gate, Function<List<String>, Mono<SweepResult>> sweep,
+            MeterRegistry meters) {
+        return new QueueSweeper(gate, sweep, meters);
+    }
+
+    /** 계측 없이 만든다. <b>시험 편의다</b> — 운영은 위 팩토리를 쓴다. */
     public static QueueSweeper of(SweepGate gate, Function<List<String>, Mono<SweepResult>> sweep) {
-        return new QueueSweeper(gate, sweep);
+        return new QueueSweeper(gate, sweep, new SimpleMeterRegistry());
     }
 
     /** 쓸어 낸 결과. 무엇을 몇 개 걷었는지 부르는 쪽이 센다. */
@@ -49,6 +72,9 @@ public final class QueueSweeper {
         }
         return sweep.apply(targets)
                 .doOnNext(r -> {
+                    swept.increment(r.swept());
+                    expiredSignals.increment(r.expiredSignals());
+                    expiredGrace.increment(r.expiredGrace());
                     if (r.swept() > 0) {
                         // **걷은 수를 남긴다.** 이탈자와 우리 오판이 같은
                         // 수치로 보이므로, 이 값이 튀는 것이 유일한 신호다.
@@ -57,6 +83,7 @@ public final class QueueSweeper {
                     }
                 })
                 .onErrorResume(e -> {
+                    failed.increment();
                     log.warn("이탈자 청소 실패 — 다음 틱에 다시 한다: {}", e.toString());
                     return Mono.just(SweepResult.NOTHING);
                 });

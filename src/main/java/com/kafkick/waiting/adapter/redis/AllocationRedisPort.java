@@ -9,6 +9,8 @@ import com.kafkick.waiting.control.FailureWindow;
 import com.kafkick.waiting.control.SnapshotSource;
 import com.kafkick.waiting.domain.allocation.Grant;
 import com.kafkick.waiting.domain.coupon.QueueMode;
+import com.kafkick.waiting.control.QueueSweeper;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -79,6 +81,12 @@ public final class AllocationRedisPort implements SnapshotSource {
     private static final Logger log = LoggerFactory.getLogger(AllocationRedisPort.class);
 
     private final ReactiveStringRedisTemplate redis;
+    private static final RedisScript<List> SWEEP =
+            RedisScript.of(new ClassPathResource("redis/sweep.lua"), List.class);
+
+    /** 쿠폰별 HSCAN 커서. 매 판 0 에서 시작하면 해시 뒤쪽이 영영 안 걷힌다. */
+    private final Map<String, String> sweepCursors = new ConcurrentHashMap<>();
+
     private final int shards;
     private final FailureWindow rejected = FailureWindow.create();
     private final FailureWindow malformed = FailureWindow.create();
@@ -433,6 +441,56 @@ public final class AllocationRedisPort implements SnapshotSource {
                             couponId, e.toString());
                     return Mono.error(e);
                 });
+    }
+
+    /**
+     * 이탈자를 걷어 낸다 (7.4).
+     *
+     * <p><b>커서를 쿠폰별로 이어 간다.</b> 매번 0 에서 시작하면 해시 앞쪽만
+     * 계속 훑고 뒤쪽 기록은 영영 안 지워진다.
+     */
+    public Mono<QueueSweeper.SweepResult> sweep(List<String> couponIds, long nowSec,
+            int scanLimit, long graceSec, int budget) {
+        if (couponIds.isEmpty()) {
+            return Mono.just(QueueSweeper.SweepResult.NOTHING);
+        }
+        return Flux.fromIterable(couponIds)
+                // **한 쿠폰이 실패해도 나머지는 쓴다.** 청소가 배분을 막으면
+                // 안 걷힌 것 하나가 그 틱 전체를 세운다.
+                .flatMap(id -> sweepOne(id, nowSec, scanLimit, graceSec, budget)
+                        .onErrorResume(e -> {
+                            log.warn("이탈자 청소 실패 — 다음 틱에 다시 한다: 쿠폰={} {}",
+                                    id, e.toString());
+                            return Mono.just(QueueSweeper.SweepResult.NOTHING);
+                        }), MAX_CONCURRENT_READS)
+                .reduce(QueueSweeper.SweepResult.NOTHING, (a, b) -> new QueueSweeper.SweepResult(
+                        a.swept() + b.swept(),
+                        a.expiredSignals() + b.expiredSignals(),
+                        a.expiredGrace() + b.expiredGrace()));
+    }
+
+    private Mono<QueueSweeper.SweepResult> sweepOne(String couponId, long nowSec,
+            int scanLimit, long graceSec, int budget) {
+        String cursor = sweepCursors.getOrDefault(couponId, "0");
+        return redis.execute(SWEEP,
+                        List.of(RedisKeys.queue(couponId, shards, 0),
+                                RedisKeys.grace(couponId, shards, 0),
+                                RedisKeys.alive(couponId, shards, 0),
+                                RedisKeys.admitted(couponId, shards, 0)),
+                        List.of(Integer.toString(scanLimit), Long.toString(nowSec),
+                                Long.toString(graceSec), Integer.toString(budget), cursor))
+                .next()
+                .switchIfEmpty(Mono.error(new IllegalStateException("청소 결과가 비었다")))
+                .map(raw -> {
+                    List<?> values = (List<?>) raw;
+                    sweepCursors.put(couponId, String.valueOf(values.get(3)));
+                    return new QueueSweeper.SweepResult(toLongOrZero(values.get(0)),
+                            toLongOrZero(values.get(1)), toLongOrZero(values.get(2)));
+                });
+    }
+
+    private long toLongOrZero(Object value) {
+        return value instanceof Number n ? n.longValue() : 0;
     }
 
     /** 쿠폰별 재고. <b>없으면 담지 않는다</b> — 부르는 쪽이 "모른다" 를 0 으로 접는다. */

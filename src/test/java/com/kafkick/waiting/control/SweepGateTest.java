@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.CouponStates;
+import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
@@ -20,6 +22,20 @@ class SweepGateTest {
 
     private static final String COUPON = "c1";
 
+    /** 틱 1초, 생존 신호 90초 → 재개 유예 150틱. */
+    private static final int 재개_유예 = 150;
+
+    private SweepGate 게이트() {
+        return SweepGate.of(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl());
+    }
+
+    /** 유예만큼 틱을 흘린다. */
+    private void 유예를_흘린다(SweepGate gate, Map<String, CouponState> coupons) {
+        for (int i = 0; i < 재개_유예; i++) {
+            gate.sweepable(coupons, false);
+        }
+    }
+
     private Map<String, CouponState> 줄이_선_쿠폰() {
         return Map.of(COUPON, CouponStates.queueing(10, 1_000, 100));
     }
@@ -32,7 +48,7 @@ class SweepGateTest {
     @Test
     @DisplayName("평시에는_쓸어낸다")
     void 평시에는_쓸어낸다() {
-        assertThat(SweepGate.create().sweepable(줄이_선_쿠폰(), false)).containsExactly(COUPON);
+        assertThat(게이트().sweepable(줄이_선_쿠폰(), false)).containsExactly(COUPON);
     }
 
     /**
@@ -45,7 +61,7 @@ class SweepGateTest {
     @Test
     @DisplayName("재료가_낡으면_안_쓴다")
     void 재료가_낡으면_안_쓴다() {
-        assertThat(SweepGate.create().sweepable(줄이_선_쿠폰(), true)).isEmpty();
+        assertThat(게이트().sweepable(줄이_선_쿠폰(), true)).isEmpty();
     }
 
     /**
@@ -55,13 +71,20 @@ class SweepGateTest {
      * 장애 중 안 쓴 것이 회복 첫 틱에 한꺼번에 나갑니다.
      */
     @Test
-    @DisplayName("회복_직후_한_틱은_건너뛴다")
-    void 회복_직후_한_틱은_건너뛴다() {
-        SweepGate gate = SweepGate.create();
+    @DisplayName("회복_뒤_유예만큼_건너뛴다")
+    void 회복_뒤_유예만큼_건너뛴다() {
+        SweepGate gate = 게이트();
         gate.sweepable(줄이_선_쿠폰(), true);
 
-        assertThat(gate.sweepable(줄이_선_쿠폰(), false)).as("회복 첫 틱").isEmpty();
-        assertThat(gate.sweepable(줄이_선_쿠폰(), false)).as("그 다음 틱").containsExactly(COUPON);
+        // **한 틱이 아니다.** 생존 신호는 마지막 폴링에서 90초 살고 그 폴링은
+        // 최대 60초 뒤에 온다. 그 합보다 짧게 재개하면 아직 신호를 못 채운
+        // 사람을 이탈자로 판정한다.
+        for (int i = 0; i < 재개_유예 - 1; i++) {
+            assertThat(gate.sweepable(줄이_선_쿠폰(), false))
+                    .as("%d 번째 틱".formatted(i + 1)).isEmpty();
+        }
+
+        assertThat(gate.sweepable(줄이_선_쿠폰(), false)).as("유예 뒤").containsExactly(COUPON);
     }
 
     /**
@@ -74,7 +97,7 @@ class SweepGateTest {
     @Test
     @DisplayName("매진_중에는_안_쓴다")
     void 매진_중에는_안_쓴다() {
-        assertThat(SweepGate.create().sweepable(매진(), false)).isEmpty();
+        assertThat(게이트().sweepable(매진(), false)).isEmpty();
     }
 
     /**
@@ -83,20 +106,45 @@ class SweepGateTest {
      * <p>재입고된 그 순간도 폴링이 아직 안 왔습니다 — 낡음 회복과 같은 이유입니다.
      */
     @Test
-    @DisplayName("매진이_풀려도_한_틱은_건너뛴다")
-    void 매진이_풀려도_한_틱은_건너뛴다() {
-        SweepGate gate = SweepGate.create();
+    @DisplayName("매진이_풀려도_유예만큼_건너뛴다")
+    void 매진이_풀려도_유예만큼_건너뛴다() {
+        SweepGate gate = 게이트();
         gate.sweepable(매진(), false);
 
         assertThat(gate.sweepable(줄이_선_쿠폰(), false)).as("재입고 첫 틱").isEmpty();
-        assertThat(gate.sweepable(줄이_선_쿠폰(), false)).as("그 다음 틱").containsExactly(COUPON);
+
+        유예를_흘린다(gate, 줄이_선_쿠폰());
+
+        assertThat(gate.sweepable(줄이_선_쿠폰(), false)).as("유예 뒤").containsExactly(COUPON);
+    }
+
+    /**
+     * <b>재개 유예를 값으로 못 박습니다.</b>
+     *
+     * <p>생존 신호 수명이나 폴링 간격이 바뀌면 이 값도 같이 움직여야 합니다 —
+     * 리터럴로 두면 관계가 깨진 채로 통과합니다.
+     */
+    @Test
+    @DisplayName("재개_유예가_신호_수명과_폴링_간격의_합이다")
+    void 재개_유예가_신호_수명과_폴링_간격의_합이다() {
+        SweepGate gate = SweepGate.of(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl());
+        gate.sweepable(매진(), false);
+
+        long 필요 = PollIntervalPolicy.aliveTtl().plus(PollIntervalPolicy.maxInterval())
+                .toSeconds();
+        for (int i = 0; i < 필요 - 1; i++) {
+            assertThat(gate.sweepable(줄이_선_쿠폰(), false))
+                    .as("%d 번째 틱".formatted(i + 1)).isEmpty();
+        }
+
+        assertThat(gate.sweepable(줄이_선_쿠폰(), false)).containsExactly(COUPON);
     }
 
     /** 쿠폰마다 따로 셉니다. 한 쿠폰의 매진이 다른 쿠폰의 청소를 멈추면 안 됩니다. */
     @Test
     @DisplayName("쿠폰마다_따로_센다")
     void 쿠폰마다_따로_센다() {
-        SweepGate gate = SweepGate.create();
+        SweepGate gate = 게이트();
 
         List<String> 쓸_것 = gate.sweepable(Map.of(
                 COUPON, CouponStates.closed(100),
@@ -109,7 +157,7 @@ class SweepGateTest {
     @Test
     @DisplayName("줄이_비면_쓸_것이_없다")
     void 줄이_비면_쓸_것이_없다() {
-        assertThat(SweepGate.create().sweepable(Map.of(COUPON, CouponStates.idle(1_000)), false))
+        assertThat(게이트().sweepable(Map.of(COUPON, CouponStates.idle(1_000)), false))
                 .isEmpty();
     }
 

@@ -133,7 +133,8 @@ class ClusterModeScriptTest {
             case "sweep.lua" -> List.of(
                     RedisKeys.queue("c1", 1, 0),
                     RedisKeys.grace("c1", 1, 0),
-                    RedisKeys.alive("c1", 1, 0));
+                    RedisKeys.alive("c1", 1, 0),
+                    RedisKeys.admitted("c1", 1, 0));
             case "snapshot_publish.lua" -> List.of(RedisKeys.SNAPSHOT);
             case "capacity_read.lua" -> List.of(RedisKeys.CAPACITY);
             case "snapshot_read.lua" -> List.of(RedisKeys.SNAPSHOT);

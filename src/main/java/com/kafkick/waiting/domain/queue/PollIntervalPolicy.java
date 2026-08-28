@@ -21,6 +21,11 @@ public class PollIntervalPolicy {
     private static final long MIN_INTERVAL_SEC = 1;
     private static final long MAX_INTERVAL_SEC = 60;
 
+    /** 생존 신호 수명. <b>폴링 간격의 여러 배</b>라 한두 번 놓쳐도 안 지워진다. */
+    public static Duration aliveTtl() {
+        return Duration.ofSeconds(90);
+    }
+
     /** 매진 큐 정리가 이 값을 넘겨 기다려야 한다 — 마지막 폴링을 이것이 정한다. */
     public static Duration maxInterval() {
         return Duration.ofSeconds(MAX_INTERVAL_SEC);

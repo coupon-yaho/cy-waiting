@@ -74,7 +74,7 @@ class SweepTest extends RedisContainerSupport {
     private List<Object> sweep(String limit, String budget, String cursor) {
         return (List<Object>) redis.execute(
                         sweepScript,
-                        List.of(QUEUE, GRACE, ALIVE),
+                        List.of(QUEUE, GRACE, ALIVE, ADMITTED),
                         List.of(limit, String.valueOf(NOW), RETENTION, budget, cursor))
                 .blockFirst(WAIT);
     }
@@ -124,6 +124,14 @@ class SweepTest extends RedisContainerSupport {
         assertThat(redis.opsForZSet().size(QUEUE).block(WAIT)).isEqualTo(2);
     }
 
+    /**
+     * 신호가 통째로 없으면 스크립트가 아무것도 안 한다. 줄 밖에 살아 있는
+     * 표시를 하나 둬 그 가드를 지난다 — 검사 범위 밖이라 판정에는 안 섞인다.
+     */
+    private void 살아있다(String memberId) {
+        redis.opsForZSet().add(ALIVE, memberId, NOW + 3_600).block(WAIT);
+    }
+
     @Test
     @DisplayName("검사_범위_밖은_보지_않는다")
     void 검사_범위_밖은_보지_않는다() {
@@ -131,6 +139,9 @@ class SweepTest extends RedisContainerSupport {
             enqueue("m" + i);
             redis.opsForZSet().remove(ALIVE, "m" + i).block(WAIT);
         }
+        // **한 명은 살려 둔다.** 신호가 통째로 없으면 스크립트가 아무것도 안
+        // 한다 — 그건 전원 이탈이 아니라 저장소 유실이기 때문이다.
+        살아있다("keeper");
 
         double kept2 = redis.opsForZSet().score(QUEUE, "m2").block(WAIT);
         double kept4 = redis.opsForZSet().score(QUEUE, "m4").block(WAIT);
@@ -152,6 +163,7 @@ class SweepTest extends RedisContainerSupport {
             enqueue("m" + i);
             redis.opsForZSet().remove(ALIVE, "m" + i).block(WAIT);
         }
+        살아있다("keeper");
 
         assertThat(swept(sweep("1"))).isOne();
         assertThat(swept(sweep("4"))).isEqualTo(4);
@@ -164,6 +176,7 @@ class SweepTest extends RedisContainerSupport {
         // 사람이 생긴다. 같은 스크립트 안에서 한다.
         enqueue("m0");
         redis.opsForZSet().remove(ALIVE, "m0").block(WAIT);
+        살아있다("keeper");
 
         sweep("10");
 

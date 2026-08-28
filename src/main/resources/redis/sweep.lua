@@ -156,7 +156,12 @@ if #front > 0 and anyAlive then
         -- **메모리 상한에서도 이 순서가 산다.** HSET 은 거부 대상이라
         -- 첫 쓰기에서 통째로 막히는데, ZREM 은 거부 대상이 아니라 먼저
         -- 두면 아무도 하트비트를 못 하는 동안 큐만 계속 지운다.
-        redis.call('HSET', KEYS[2], unpack(records))
+        -- **비면 안 부른다.** 걷을 사람이 전부 입장 표시를 들고 있으면 쓸
+        -- 기록이 없는데, 인자 없는 HSET 은 오류다 — 그러면 ZREM 앞에서
+        -- 스크립트가 죽고 그 쿠폰의 청소가 매 틱 같은 자리에서 실패한다.
+        if #records > 0 then
+            redis.call('HSET', KEYS[2], unpack(records))
+        end
         redis.call('ZREM', KEYS[1], unpack(gone))
         swept = #gone
     end

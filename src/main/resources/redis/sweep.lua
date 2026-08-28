@@ -3,6 +3,7 @@
 -- KEYS[1]  queue:{cid}   ZSET
 -- KEYS[2]  grace:{cid}   이탈 기록 해시
 -- KEYS[3]  alive:{cid}   생존 신호 ZSET. score 는 만료 시각(초)
+-- KEYS[4]  admitted:{cid} 입장 임계. 이 값 이하의 score 는 안 걷는다
 -- ARGV[1]  검사 범위 K. 큐 앞에서 이만큼만 본다. 1..3999
 -- ARGV[2]  지금 시각(초). 도메인처럼 주입받는다
 -- ARGV[3]  유예 보관 기간(초)
@@ -98,17 +99,38 @@ end
 local front = redis.call('ZRANGE', KEYS[1], 0, limit - 1)
 local swept = 0
 
-if #front > 0 then
+-- **살아 있는 신호가 하나도 없으면 앞줄을 안 걷는다.**
+--
+-- 줄에 사람이 있는데 아무도 살아 있지 않다는 것은 "전원이 떠났다" 가 아니라
+-- **그 저장소를 잃었다** 는 뜻이다. 뒤처진 복제본 승격, AOF 유실, 매진 구간이
+-- 길어져 폴링이 멎은 뒤의 회복 — 전부 이 모양이다.
+--
+-- **`ZCARD` 가 아니라 `ZCOUNT` 다.** 만료된 신호는 아래 정리가 걷기 전까지
+-- 물리적으로 남아 있어, 개수만 보면 "전부 만료" 를 "살아 있다" 로 읽는다 —
+-- 회복 첫 판이 정확히 그 상태다.
+--
+-- **정리까지 건너뛰지는 않는다.** 앞줄 제거만 접고 만료 신호와 낡은 기록은
+-- 그대로 걷는다. 안 그러면 이 구간이 길어질 때 해시가 한 방향으로만 자라고
+-- 커서도 전진을 못 한다.
+local anyAlive = redis.call('ZCOUNT', KEYS[3], now, '+inf') > 0
+
+if #front > 0 and anyAlive then
     -- **앞부분의 score 만 묻는다.** ZRANGEBYSCORE 로 살아 있는 쪽을 다 받으면
     -- K 를 1 로 줘도 alive 전체 크기에 비례해 이벤트 루프를 잡는다.
     local scores = redis.call('ZMSCORE', KEYS[3], unpack(front))
+    -- **차례가 온 사람은 안 건드린다.** 배분은 임계만 올리고 큐에서 빼지
+    -- 않는다 — 빼는 것은 그 사람이 폴링할 때다. 그래서 앞줄에는 "입장
+    -- 확정인데 아직 안 걷어간 사람" 이 섞인다. 걷으면 그가 다음 폴링에서
+    -- 종료를 받고, 다시 서면 그동안 온 사람 뒤로 간다 (불변식 4).
+    local admitted = tonumber(redis.call('GET', KEYS[4])) or -1
 
     local gone = {}
     local records = {}
     for i = 1, #front do
         -- score 가 없거나 이미 지난 것은 폴링이 끊긴 것이다
         local at = tonumber(scores[i])
-        if at == nil or at < now then
+        local rank = tonumber(redis.call('ZSCORE', KEYS[1], front[i]))
+        if (at == nil or at < now) and (rank == nil or rank > admitted) then
             gone[#gone + 1] = front[i]
             -- 자리는 안 보관한다. 재방문자로 식별만 한다 (D-11).
             records[#records + 1] = front[i]

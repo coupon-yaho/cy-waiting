@@ -21,6 +21,20 @@ public class PollIntervalPolicy {
     private static final long MIN_INTERVAL_SEC = 1;
     private static final long MAX_INTERVAL_SEC = 60;
 
+    /** 한두 번 놓쳐도 안 지워지려면 이만큼 봐준다. */
+    private static final long MISSED_POLLS = 3;
+
+    /**
+     * 생존 신호 수명.
+     *
+     * <p><b>상수로 두면 안 된다.</b> 예산이 빠듯할 때 간격이 60초까지 늘어나는데,
+     * 그러면 한 번만 놓쳐도 다음 신호가 120초 뒤다 — 90초로 두면 성실히 줄 선
+     * 사람의 신호가 먼저 만료되고 청소가 그를 이탈자로 판정한다.
+     */
+    public static Duration aliveTtl() {
+        return maxInterval().multipliedBy(MISSED_POLLS);
+    }
+
     /** 매진 큐 정리가 이 값을 넘겨 기다려야 한다 — 마지막 폴링을 이것이 정한다. */
     public static Duration maxInterval() {
         return Duration.ofSeconds(MAX_INTERVAL_SEC);

@@ -17,6 +17,8 @@ import java.util.ArrayList;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.util.Optional;
 import com.kafkick.waiting.domain.coupon.CouponStates;
+import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -93,7 +95,7 @@ class AllocationRoundTest {
                 cleanup, ids -> {
                     지운_것.addAll(ids);
                     return Mono.just(ids);
-                });
+                }, 안_걷는_스위퍼(), () -> false);
 
         for (int i = 0; i < 5; i++) {
             round.run().onErrorResume(e -> Mono.empty()).block();
@@ -133,7 +135,7 @@ class AllocationRoundTest {
                 cleanup, ids -> {
                     지운_것.addAll(ids);
                     return Mono.just(ids);
-                });
+                }, 안_걷는_스위퍼(), () -> false);
 
         for (int i = 0; i < 5; i++) {
             round.run().onErrorResume(e -> Mono.empty()).block();
@@ -163,7 +165,7 @@ class AllocationRoundTest {
                 () -> Mono.just(CreditSmoother.of(1.0)),
                 SnapshotCodec.create(), () -> 0L, Optional::empty,
                 // 하나도 못 지웠다고 답한다.
-                cleanup, ids -> Mono.just(List.of()));
+                cleanup, ids -> Mono.just(List.of()), 안_걷는_스위퍼(), () -> false);
 
         for (int i = 0; i < 5; i++) {
             round.run().block();
@@ -171,6 +173,49 @@ class AllocationRoundTest {
 
         assertThat(cleanup.due(Map.of("c1", CouponStates.closed(0))))
                 .as("여전히 대상이다").containsExactly("c1");
+    }
+
+    /**
+     * <b>한 판이 스위퍼를 실제로 부릅니다.</b>
+     *
+     * <p>이것이 없으면 스위퍼가 통째로 죽은 코드여도 빌드가 초록입니다 —
+     * 게이트도 커서도 스크립트도 전부 안 도는데 지표는 조용합니다. 실제로
+     * 그 상태로 리뷰까지 갔습니다.
+     */
+    @Test
+    @DisplayName("한_판이_스위퍼를_부른다")
+    void 한_판이_스위퍼를_부른다() {
+        List<String> 쓴_쿠폰 = new ArrayList<>();
+        AllocationRound round = AllocationRound.of(
+                () -> true,
+                () -> Mono.just(new TimedDemands(
+                        List.of(new CouponDemand("c1", 100, 1_000, QueueMode.ADAPTIVE)),
+                        읽은_시각)),
+                () -> 1_000, () -> 1,
+                grant -> Mono.just(grant.credit()),
+                hash -> Mono.empty(),
+                () -> Instant.ofEpochSecond(읽은_시각),
+                () -> Mono.just(CreditSmoother.of(1.0)),
+                SnapshotCodec.create(), () -> 0L, Optional::empty,
+                SoldOutCleanup.of(1, new SimpleMeterRegistry()),
+                ids -> Mono.just(List.of()),
+                QueueSweeper.of(
+                        SweepGate.of(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
+                        (ids, limit) -> {
+                            쓴_쿠폰.addAll(ids);
+                            return Mono.just(QueueSweeper.SweepResult.NOTHING);
+                        }), () -> false);
+
+        round.run().block();
+
+        assertThat(쓴_쿠폰).as("줄이 선 쿠폰을 쓸러 간다").containsExactly("c1");
+    }
+
+    /** 판단은 돌되 아무것도 안 걷는 스위퍼. 이 시험들의 초점이 아니다. */
+    private static QueueSweeper 안_걷는_스위퍼() {
+        return QueueSweeper.of(
+                SweepGate.of(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
+                (ids, limit) -> Mono.just(QueueSweeper.SweepResult.NOTHING));
     }
 
     private AllocationRound round(List<CouponDemand> 수요, long 전역_크레딧, int 노드_수) {

@@ -80,7 +80,7 @@ class GraceRecordTest extends RedisContainerSupport {
     @SuppressWarnings("unchecked")
     private List<Object> 청소한다(String now) {
         return (List<Object>) redis.execute(sweepScript,
-                        List.of(QUEUE, GRACE, ALIVE),
+                        List.of(QUEUE, GRACE, ALIVE, ADMITTED),
                         List.of("100", now, RETENTION, "1000", "0"))
                 .blockFirst(WAIT);
     }
@@ -217,6 +217,9 @@ class GraceRecordTest extends RedisContainerSupport {
         등록한다("m1");
         // 생존 신호를 지우면 다음 청소가 이탈로 본다.
         redis.opsForZSet().remove(ALIVE, "m1").block(WAIT);
+        // **한 명은 살려 둔다.** 신호가 통째로 없으면 청소가 아무것도 안 한다 —
+        // 그건 전원 이탈이 아니라 저장소 유실이기 때문이다.
+        redis.opsForZSet().add(ALIVE, "keeper", NOW + 3_600).block(WAIT);
         청소한다(NOW + 1);
         assertThat(redis.opsForHash().hasKey(GRACE, "m1").block(WAIT)).isTrue();
 

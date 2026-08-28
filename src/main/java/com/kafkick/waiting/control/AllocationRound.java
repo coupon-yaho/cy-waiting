@@ -9,6 +9,8 @@ import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import com.kafkick.waiting.domain.coupon.Tunables;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -43,6 +45,12 @@ public final class AllocationRound {
     private static final double DEFAULT_ALPHA = 0.3;
 
     /** 매진 큐 정리 판단 (7.3). 지우는 것은 어댑터가 한다. */
+    /** 이탈자 청소 (7.4). <b>멈추는 판단을 안에 들고 있다.</b> */
+    private final QueueSweeper sweeper;
+
+    /** 이 노드가 든 재료가 낡았는가. <b>값으로 받는다</b> — 상수로 두면 가드가 안 걸린다. */
+    private final BooleanSupplier dataStale;
+
     private final SoldOutCleanup cleanup;
 
     /** 지울 쿠폰들을 넘긴다. 지운 키 수를 돌려준다. */
@@ -92,7 +100,10 @@ public final class AllocationRound {
             Function<Map<String, String>, Mono<Void>> publish, Supplier<Instant> clock,
             Supplier<Mono<CreditSmoother>> restore, SnapshotCodec codec,
             LongSupplier creditFloor, Supplier<Optional<Tunables>> tunables,
-            SoldOutCleanup cleanup, Function<List<String>, Mono<List<String>>> dropQueues) {
+            SoldOutCleanup cleanup, Function<List<String>, Mono<List<String>>> dropQueues,
+            QueueSweeper sweeper, BooleanSupplier dataStale) {
+        this.sweeper = Objects.requireNonNull(sweeper, "sweeper 는 필수다");
+        this.dataStale = Objects.requireNonNull(dataStale, "dataStale 은 필수다");
         this.cleanup = Objects.requireNonNull(cleanup, "cleanup 은 필수다");
         this.dropQueues = Objects.requireNonNull(dropQueues, "dropQueues 는 필수다");
         this.tunables = Objects.requireNonNull(tunables, "tunables 는 필수다");
@@ -120,9 +131,11 @@ public final class AllocationRound {
             Function<Map<String, String>, Mono<Void>> publish, Supplier<Instant> clock,
             Supplier<Mono<CreditSmoother>> restore, SnapshotCodec codec,
             LongSupplier creditFloor, Supplier<Optional<Tunables>> tunables,
-            SoldOutCleanup cleanup, Function<List<String>, Mono<List<String>>> dropQueues) {
+            SoldOutCleanup cleanup, Function<List<String>, Mono<List<String>>> dropQueues,
+            QueueSweeper sweeper, BooleanSupplier dataStale) {
         return new AllocationRound(stillLeader, demands, globalCredit, gatewayCount, apply, publish,
-                clock, restore, codec, creditFloor, tunables, cleanup, dropQueues);
+                clock, restore, codec, creditFloor, tunables, cleanup, dropQueues, sweeper,
+                dataStale);
     }
 
     /** 정리를 안 붙이는 자리. <b>아무것도 안 지운다</b> — 시험 편의다. */
@@ -135,7 +148,10 @@ public final class AllocationRound {
         return new AllocationRound(stillLeader, demands, globalCredit, gatewayCount, apply, publish,
                 clock, restore, codec, creditFloor, tunables,
                 SoldOutCleanup.of(Integer.MAX_VALUE, new SimpleMeterRegistry()),
-                ids -> Mono.just(List.of()));
+                ids -> Mono.just(List.of()),
+                QueueSweeper.of(SweepGate.of(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
+                        (ids, limit) -> Mono.just(QueueSweeper.SweepResult.NOTHING)),
+                () -> false);
     }
 
     /** 튜너블을 안 읽던 자리. 늘 기본값으로 돈다. */
@@ -250,7 +266,11 @@ public final class AllocationRound {
                         // 표시와 로그가 발행이 구독되기도 전에 일어난다 —
                         // 발행이 터져도 지운 것으로 기록된다.
                         .then(Mono.defer(() ->
-                                cleanUp(collected, granted, credit, readAt)))));
+                                cleanUp(collected, granted, credit, readAt)))
+                        // **정리 뒤에 쓴다.** 앞에 두면 곧 지울 줄을 훑느라
+                        // 예산을 쓴다.
+                        .then(Mono.defer(() ->
+                                sweepUp(collected, granted, credit, readAt)))));
     }
 
     /**
@@ -291,6 +311,22 @@ public final class AllocationRound {
                     return Mono.just(List.<String>of());
                 })
                 .then();
+    }
+
+    /** 이탈자를 걷어 낸다 (7.4). 멈춰야 할 구간은 스위퍼가 안다. */
+    private Mono<Void> sweepUp(List<CouponDemand> collected, Map<String, Long> granted,
+            long credit, Instant readAt) {
+        if (lostLeadership()) {
+            return Mono.empty();
+        }
+        return sweeper.run(
+                snapshot(collected, granted, credit, readAt, tunables.get().orElse(null))
+                        .coupons(),
+                // **리더가 신선한 것과 노드들이 신선한 것은 다른 이야기다.**
+                // 생존 신호를 갱신하는 것은 노드 쪽 폴링이라, 그쪽이 멎어도
+                // 리더의 수요 읽기는 성공할 수 있다. 이 노드도 게이트웨이이므로
+                // 자기가 든 재료의 나이가 그 신호에 가장 가깝다.
+                dataStale.getAsBoolean()).then();
     }
 
     /**

@@ -64,8 +64,9 @@ public class IdentityConfig {
 
     /** 뒷단이 낸 매진을 관찰만 한다. 응답은 안 바꾼다 (7.2.2). */
     @Bean
-    public SoldOutObserver soldOutObserver(SoldOutCache cache, Clock clock) {
-        return SoldOutObserver.of(cache, clock);
+    public SoldOutObserver soldOutObserver(SoldOutCache cache, Clock clock,
+            MeterRegistry meters) {
+        return SoldOutObserver.of(cache, clock, meters);
     }
 
     /** 못 읽는 대역은 여기서 버린다. 요청 경로에서 다시 풀면 그 파싱이 거기 붙는다. */

@@ -265,6 +265,40 @@
           "legendFormat": "{{instance}} — 재료 시각 역행"
         }
       ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "매진 관찰",
+      "description": "뒷단이 낸 매진을 노드가 기억한 횟수. 상한에 닿으면 새 관찰을 못 받고 그때부터 뒷단이 다시 다 맞는다",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 40
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(waiting_soldout_observed_total[1m]))",
+          "legendFormat": "관찰 (뒷단이 낸 매진)"
+        },
+        {
+          "expr": "sum(rate(waiting_admission_total{cause=\"sold-out-cache\"}[1m]))",
+          "legendFormat": "캐시가 끊은 것"
+        },
+        {
+          "expr": "waiting_soldout_cache_size",
+          "legendFormat": "담고 있는 쿠폰 수"
+        },
+        {
+          "expr": "waiting_soldout_cache_capacity",
+          "legendFormat": "상한 (닿으면 새 관찰을 못 받는다)"
+        }
+      ]
     }
   ]
 }

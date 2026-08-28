@@ -1,5 +1,7 @@
 package com.kafkick.waiting.gateway;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.util.Map;
@@ -39,16 +41,25 @@ public final class SoldOutObserver implements GatewayFilter {
     private static final PathPattern PATH = new PathPatternParser()
             .parse("/api/v1/coupons/{couponId}/**");
 
+    private static final String METRIC = "waiting.soldout.observed";
+
     private final SoldOutCache cache;
     private final Clock clock;
+    private final MeterRegistry meters;
 
-    private SoldOutObserver(SoldOutCache cache, Clock clock) {
+    private SoldOutObserver(SoldOutCache cache, Clock clock, MeterRegistry meters) {
         this.cache = Objects.requireNonNull(cache, "cache 는 필수다");
         this.clock = Objects.requireNonNull(clock, "clock 은 필수다");
+        this.meters = Objects.requireNonNull(meters, "meters 는 필수다");
     }
 
+    public static SoldOutObserver of(SoldOutCache cache, Clock clock, MeterRegistry meters) {
+        return new SoldOutObserver(cache, clock, meters);
+    }
+
+    /** 계측 없이 만든다. <b>시험 편의다</b> — 운영은 위 팩토리를 쓴다. */
     public static SoldOutObserver of(SoldOutCache cache, Clock clock) {
-        return new SoldOutObserver(cache, clock);
+        return new SoldOutObserver(cache, clock, new SimpleMeterRegistry());
     }
 
     @Override
@@ -85,6 +96,9 @@ public final class SoldOutObserver implements GatewayFilter {
             return;
         }
         if (prefix.append(buffer) && prefix.contains(SOLD_OUT_CODE)) {
+            // **관찰이 언제 시작됐는지가 곧 매진 시각이다.** 담긴 수만 보면
+            // 언제 채워졌는지는 못 본다.
+            meters.counter(METRIC).increment();
             cache.observed(couponId, clock.instant());
         }
     }

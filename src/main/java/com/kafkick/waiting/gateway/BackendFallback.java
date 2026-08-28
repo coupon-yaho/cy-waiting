@@ -28,6 +28,9 @@ public final class BackendFallback {
     /** 재시도를 흩는 폭. 판정 경로와 같은 값이라야 두 안내가 안 갈린다. */
     private static final PollIntervalPolicy POLL = PollIntervalPolicy.of(0.2);
 
+    /** 배수를 안 거는 갈래. {@code 1.0} 을 그대로 쓰면 깜빡한 것과 구분이 안 된다. */
+    private static final double NO_SCALE = 1.0;
+
     /**
      * <b>줄에 선 사람에게 자리가 그대로라고 말한다.</b> 안 그러면 다시 줄을
      * 서려 하고, 그건 자기 자리를 버리는 일이다.
@@ -106,7 +109,8 @@ public final class BackendFallback {
         boolean admitted = admitted(request);
         ApiError.Envelope envelope = error.render(request.exchange(),
                 HttpStatus.SERVICE_UNAVAILABLE, CODE,
-                admitted ? ADMITTED : QUEUED, retryAfterSec(admitted), false);
+                admitted ? ADMITTED : QUEUED,
+                retryAfterSec(admitted, pollScale(request)), false);
         return ServerResponse.status(envelope.status())
                 .headers(headers -> headers.putAll(envelope.headers()))
                 .bodyValue(envelope.body());
@@ -128,12 +132,27 @@ public final class BackendFallback {
     }
 
     /**
+     * 이 요청을 판정한 판의 배수. <b>홀더를 다시 안 읽는다</b> — 서킷을 지나
+     * 나중에 도는 자리라 그러면 다른 판의 값이 나간다.
+     */
+    // 없으면 1.0 이다. 판정을 안 거친 요청이거나 첫 틱 전이고, 둘 다 배수를
+    // 모르는 상태다. 모를 때 늘리면 근거 없이 전원을 멀리 보내는 것이다.
+    private double pollScale(ServerRequest request) {
+        Double scale = request.exchange().getAttribute(AdmissionGatewayFilter.POLL_SCALE);
+        return scale == null ? NO_SCALE : scale;
+    }
+
+    /**
      * 다시 올 시각.
      *
      * <p>차례가 온 사람은 <b>가장 가까운 밴드</b>로 부른다. 멀리 보내면 그 사이
      * 그의 몫이 남에게 가고, 토큰 수명이 다하면 줄 맨 뒤로 다시 선다.
      */
-    private int retryAfterSec(boolean admitted) {
-        return (int) POLL.intervalSec(admitted ? 0 : EtaPolicy.UNKNOWN, random);
+    // **차례가 온 쪽은 배수도 안 받는다.** 판정 경로가 같은 사람에게 그렇게
+    // 답한다 — 배수만큼 멀리 보내면 토큰이 죽어 줄 맨 뒤에 다시 선다.
+    private int retryAfterSec(boolean admitted, double pollScale) {
+        return admitted
+                ? (int) POLL.intervalSec(0, random, NO_SCALE)
+                : (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random, pollScale);
     }
 }

@@ -69,6 +69,9 @@ public final class AbuseLimitFilter implements WebFilter {
     /** 키 상한. 식별자를 바꿔가며 메모리를 밀어내는 것을 막는다. */
     private static final int MAX_KEYS = 100_000;
 
+    /** 배수를 안 거는 갈래. {@code 1.0} 을 그대로 쓰면 깜빡한 것과 구분이 안 된다. */
+    private static final double NO_SCALE = 1.0;
+
     private static final PollIntervalPolicy BACKOFF = PollIntervalPolicy.of(0.2);
 
     private final SecondWindowLimiter limiter = SecondWindowLimiter.withMaxKeys(MAX_KEYS);
@@ -184,9 +187,12 @@ public final class AbuseLimitFilter implements WebFilter {
      * <b>큐에 안 넣는다.</b> 넣으면 공격자가 자리를 차지하고, 그 자리는 정상
      * 사용자의 것이다.
      */
+    // **배수를 명시적으로 안 건다.** 이 갈래는 판정보다 앞이라 재료를 아직 안
+    // 봤고, 여기서 홀더를 읽으면 요청 경로에 판정과 무관한 의존이 하나 는다.
+    // 남용 요청을 예산에 맞춰 배려할 이유도 없다.
     private Mono<Void> reject(ServerWebExchange exchange, String kind) {
         meters.counter(METRIC, "key", kind).increment();
         return error.write(exchange, ApiError.Code.RATE_LIMITED,
-                (int) BACKOFF.intervalSec(EtaPolicy.UNKNOWN, random));
+                (int) BACKOFF.intervalSec(EtaPolicy.UNKNOWN, random, NO_SCALE));
     }
 }

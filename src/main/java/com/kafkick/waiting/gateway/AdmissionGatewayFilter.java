@@ -55,6 +55,14 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     /** 응답을 쓰는 쪽이 읽는다. 다시 판정하면 두 번 세고 답이 갈릴 수 있다. */
     public static final String DECISION = "waiting.admission.decision";
 
+    /**
+     * 이 요청을 판정한 판의 전역 폴링 배수.
+     *
+     * <p><b>속성으로 넘긴다.</b> 폴백은 서킷을 지나 나중에 도는 자리라 홀더를
+     * 다시 읽으면 다른 판의 값이 나간다 — 같은 장애에 두 값이 나가는 것이다.
+     */
+    public static final String POLL_SCALE = "waiting.admission.poll-scale";
+
     /** 이 요청을 <b>재료를 갖고 판정했는가</b>. SLI 가 이 값만 읽는다 (O-7). */
     // 운영 카운터를 더해 만들지 않는다 — 한 요청이 여러 사유를 지날 수 있어
     // 실패율이 100% 를 넘고, 라벨을 리네임하면 그 항이 조용히 빠진다.
@@ -333,6 +341,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         if (soldOutCache.soldOut(couponId)) {
             AdmissionDecision cached = AdmissionDecision.REJECT_SOLD_OUT;
             exchange.getAttributes().put(DECISION, cached);
+            exchange.getAttributes().put(POLL_SCALE, view.snapshot().meta().pollScale());
             count(cached.name());
             soldOutHits.increment();
             return route(exchange, chain, cached, couponId, state, view.snapshot().meta());
@@ -347,6 +356,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                 latch.latched(couponId, nowSec),
                 nowSec, MAX_ETA_SEC));
         exchange.getAttributes().put(DECISION, decision);
+        exchange.getAttributes().put(POLL_SCALE, view.snapshot().meta().pollScale());
         count(decision.name());
         // **낡은 재료로 내린 판정도 재료 없이 판정한 것이다.** 사다리 4·7번이
         // 그 자리다 — 스냅샷에 있는 쿠폰은 deferred-* 를 안 지나므로, 여기서

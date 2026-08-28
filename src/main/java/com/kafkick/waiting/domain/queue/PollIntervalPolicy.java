@@ -72,10 +72,6 @@ public class PollIntervalPolicy {
         return new PollIntervalPolicy(jitterRatio);
     }
 
-    public long intervalSec(double etaSec, DoubleSupplier random) {
-        return intervalSec(etaSec, random, 1.0);
-    }
-
     /**
      * 이 사람의 폴링 간격.
      *

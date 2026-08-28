@@ -23,10 +23,10 @@ class PollIntervalPolicyTest {
     void ETA_밴드마다_기본_간격이_다르다() {
         PollIntervalPolicy p = noJitter();
 
-        assertThat(p.intervalSec(1, () -> 0.5)).isEqualTo(1);
-        assertThat(p.intervalSec(20, () -> 0.5)).isEqualTo(3);
-        assertThat(p.intervalSec(100, () -> 0.5)).isEqualTo(10);
-        assertThat(p.intervalSec(1000, () -> 0.5)).isEqualTo(30);
+        assertThat(p.intervalSec(1, () -> 0.5, 1.0)).isEqualTo(1);
+        assertThat(p.intervalSec(20, () -> 0.5, 1.0)).isEqualTo(3);
+        assertThat(p.intervalSec(100, () -> 0.5, 1.0)).isEqualTo(10);
+        assertThat(p.intervalSec(1000, () -> 0.5, 1.0)).isEqualTo(30);
     }
 
     @Test
@@ -36,9 +36,9 @@ class PollIntervalPolicyTest {
         // 다른 간격을 받는다.
         PollIntervalPolicy p = noJitter();
 
-        assertThat(p.intervalSec(5, () -> 0.5)).isEqualTo(3);
-        assertThat(p.intervalSec(30, () -> 0.5)).isEqualTo(10);
-        assertThat(p.intervalSec(120, () -> 0.5)).isEqualTo(30);
+        assertThat(p.intervalSec(5, () -> 0.5, 1.0)).isEqualTo(3);
+        assertThat(p.intervalSec(30, () -> 0.5, 1.0)).isEqualTo(10);
+        assertThat(p.intervalSec(120, () -> 0.5, 1.0)).isEqualTo(30);
     }
 
     @Test
@@ -47,8 +47,8 @@ class PollIntervalPolicyTest {
         // 모를 때 자주 물어보게 하면 모르는 상황일수록 부하가 커진다.
         PollIntervalPolicy p = noJitter();
 
-        assertThat(p.intervalSec(Double.POSITIVE_INFINITY, () -> 0.5)).isEqualTo(30);
-        assertThat(p.intervalSec(Double.NaN, () -> 0.5)).isEqualTo(30);
+        assertThat(p.intervalSec(Double.POSITIVE_INFINITY, () -> 0.5, 1.0)).isEqualTo(30);
+        assertThat(p.intervalSec(Double.NaN, () -> 0.5, 1.0)).isEqualTo(30);
     }
 
     @Test
@@ -58,9 +58,9 @@ class PollIntervalPolicyTest {
         PollIntervalPolicy p = PollIntervalPolicy.of(0.2);
 
         // 난수원을 주입해 결정적으로 본다 (DS-1 — 직접 호출 금지)
-        assertThat(p.intervalSec(1000, () -> 0.0)).isEqualTo(24);
-        assertThat(p.intervalSec(1000, () -> 0.5)).isEqualTo(30);
-        assertThat(p.intervalSec(1000, () -> 1.0)).isEqualTo(36);
+        assertThat(p.intervalSec(1000, () -> 0.0, 1.0)).isEqualTo(24);
+        assertThat(p.intervalSec(1000, () -> 0.5, 1.0)).isEqualTo(30);
+        assertThat(p.intervalSec(1000, () -> 1.0, 1.0)).isEqualTo(36);
     }
 
     @Test
@@ -70,8 +70,8 @@ class PollIntervalPolicyTest {
         // 상한이 없으면 이탈 판정 TTL 을 넘겨 멀쩡한 사람이 지워진다.
         PollIntervalPolicy p = PollIntervalPolicy.of(5.0);
 
-        assertThat(p.intervalSec(1, () -> 0.0)).isEqualTo(1);
-        assertThat(p.intervalSec(1000, () -> 1.0)).isEqualTo(60);
+        assertThat(p.intervalSec(1, () -> 0.0, 1.0)).isEqualTo(1);
+        assertThat(p.intervalSec(1000, () -> 1.0, 1.0)).isEqualTo(60);
     }
 
     /**

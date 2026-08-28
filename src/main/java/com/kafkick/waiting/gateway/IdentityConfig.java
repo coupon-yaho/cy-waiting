@@ -20,7 +20,7 @@ import org.springframework.context.annotation.Configuration;
  */
 @Configuration
 @EnableConfigurationProperties({QueueTokenProperties.class, ProxyProperties.class,
-        CoalescingProperties.class})
+        CoalescingProperties.class, SoldOutCacheProperties.class})
 public class IdentityConfig {
 
     /**
@@ -55,8 +55,8 @@ public class IdentityConfig {
      * 낸 매진을 판정이 영영 못 본다. 그래서 빈 하나로 둔다.
      */
     @Bean
-    public SoldOutCache soldOutCache(MeterRegistry meters) {
-        SoldOutCache cache = SoldOutCache.standard();
+    public SoldOutCache soldOutCache(SoldOutCacheProperties props, MeterRegistry meters) {
+        SoldOutCache cache = SoldOutCache.of(props.ttl(), props.maxKeys());
         // **차오르는 중인지는 막힌 뒤에 오르는 카운터로 못 본다.** 상한에 닿아
         // 새 관찰을 못 받기 시작하면 그때부터 뒷단이 다시 다 맞는다.
         cache.bindMetrics(meters);
@@ -67,7 +67,7 @@ public class IdentityConfig {
     @Bean
     public SoldOutObserver soldOutObserver(SoldOutCache cache, SnapshotHolder holder,
             MeterRegistry meters) {
-        return SoldOutObserver.of(cache, holder, meters);
+        return SoldOutObserver.ofSnapshot(cache, holder, meters);
     }
 
     /** 못 읽는 대역은 여기서 버린다. 요청 경로에서 다시 풀면 그 파싱이 거기 붙는다. */

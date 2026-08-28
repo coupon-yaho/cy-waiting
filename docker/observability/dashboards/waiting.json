@@ -283,8 +283,8 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(waiting_soldout_observed_total[1m]))",
-          "legendFormat": "관찰 (뒷단이 낸 매진)"
+          "expr": "sum by (result) (rate(waiting_soldout_observed_total[1m]))",
+          "legendFormat": "관찰 {{result}} (already 가 계속 오르면 방패가 안 듣는다)"
         },
         {
           "expr": "sum(rate(waiting_soldout_cache_hit_total[1m]))",

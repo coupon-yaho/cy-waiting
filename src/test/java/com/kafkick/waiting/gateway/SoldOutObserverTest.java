@@ -32,7 +32,7 @@ class SoldOutObserverTest {
 
     private final SoldOutCache 캐시 = SoldOutCache.of(Duration.ofSeconds(10), 100);
     private final SoldOutObserver observer =
-            SoldOutObserver.of(캐시, () -> 지금, new SimpleMeterRegistry());
+            SoldOutObserver.ofPublishedAt(캐시, () -> 지금, new SimpleMeterRegistry());
 
     /**
      * 라우트를 탄 요청.

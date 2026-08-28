@@ -61,14 +61,14 @@ public final class SoldOutObserver implements GatewayFilter {
      * <p>해제가 발행 시각끼리 비교하므로, 무장도 같은 시계 영역이라야 한다 —
      * 섞으면 두 시계의 차가 그대로 판정에 실린다.
      */
-    public static SoldOutObserver of(SoldOutCache cache, SnapshotHolder holder,
+    public static SoldOutObserver ofSnapshot(SoldOutCache cache, SnapshotHolder holder,
             MeterRegistry meters) {
         return new SoldOutObserver(cache, () -> holder.view().snapshot().publishedAt(), meters);
     }
 
     /** 발행 시각원을 직접 받는다. 고정하지 못하면 해제 비교를 못 잰다 (TS-4). */
-    public static SoldOutObserver of(SoldOutCache cache, Supplier<Instant> publishedAt,
-            MeterRegistry meters) {
+    public static SoldOutObserver ofPublishedAt(SoldOutCache cache,
+            Supplier<Instant> publishedAt, MeterRegistry meters) {
         return new SoldOutObserver(cache, publishedAt, meters);
     }
 
@@ -126,10 +126,12 @@ public final class SoldOutObserver implements GatewayFilter {
         if (!prefix.append(buffer) || !prefix.contains(SOLD_OUT_CODE)) {
             return;
         }
-        // **관찰이 언제 시작됐는지가 곧 매진 시각이다.** 담긴 수만 보면 언제
-        // 채워졌는지는 못 본다.
-        meters.counter(METRIC).increment();
-        if (cache.observed(couponId, publishedAt.get())) {
+        boolean armed = cache.observed(couponId, publishedAt.get());
+        // **새 무장과 새는 것을 가른다.** 무장한 뒤로는 노드당 1건만 새야
+        // 하므로, `already` 가 계속 오르는 것이 곧 방패가 안 듣는다는 신호다.
+        // 태그를 안 달면 그 둘이 한 수치에 뭉쳐 구별이 안 된다.
+        meters.counter(METRIC, "result", armed ? "armed" : "already").increment();
+        if (armed) {
             // **쌍의 앞쪽이다** (LG-2). 뒤쪽은 판정이 풀 때 찍는다. 쿠폰당 한
             // 번만 찍히므로 매진이 몰려도 로그가 안 넘친다 (LG-3).
             log.info("매진 관찰 — 쿠폰 {} 의 발급을 뒷단이 거절했다. 이 노드는 끊는다",

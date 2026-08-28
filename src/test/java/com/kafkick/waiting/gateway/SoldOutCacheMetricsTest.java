@@ -59,7 +59,7 @@ class SoldOutCacheMetricsTest {
     @DisplayName("관찰_횟수를_따로_센다")
     void 관찰_횟수를_따로_센다() {
         SoldOutCache 캐시 = SoldOutCache.of(Duration.ofSeconds(10), 7);
-        SoldOutObserver observer = SoldOutObserver.of(캐시, () -> 지금, meters);
+        SoldOutObserver observer = SoldOutObserver.ofPublishedAt(캐시, () -> 지금, meters);
         MockServerWebExchange exchange = MockServerWebExchange.from(
                 MockServerHttpRequest.post("/api/v1/coupons/c1/issue"));
         // 라우팅 필터가 심는 값 둘. 없으면 관찰자가 아무것도 안 한다.
@@ -78,7 +78,12 @@ class SoldOutCacheMetricsTest {
                                     .getBytes(StandardCharsets.UTF_8))));
         }).block();
 
-        assertThat(meters.counter("waiting.soldout.observed").count()).isEqualTo(1);
+        // **태그로 가른다.** 무장한 뒤로는 노드당 1건만 새야 하므로, `already`
+        // 가 계속 오르는 것이 곧 방패가 안 듣는다는 신호다.
+        assertThat(meters.counter("waiting.soldout.observed", "result", "armed").count())
+                .as("새 무장").isEqualTo(1);
+        assertThat(meters.counter("waiting.soldout.observed", "result", "already").count())
+                .as("이미 무장 중").isZero();
     }
 
     /** 게이지는 살아 있는 값이어야 합니다. 등록 시점 값이 박히면 늘 그 값입니다. */

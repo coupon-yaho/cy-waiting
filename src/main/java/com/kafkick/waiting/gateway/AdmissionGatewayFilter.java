@@ -178,8 +178,6 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter,
             EntryToken entryTokens, IdempotencyKey idempotency, LongSupplier ticker,
             SoldOutCache soldOutCache) {
-        this.soldOutCache = Objects.requireNonNull(soldOutCache, "soldOutCache 는 필수다");
-        this.soldOutHits = meters.counter("waiting.soldout.cache.hit");
         this.holder = Objects.requireNonNull(holder, "holder 는 필수다");
         this.failOpenWindow = FailureWindow.of(ticker);
         this.shedWindow = FailureWindow.of(ticker);
@@ -201,6 +199,8 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         // 막힌 뒤에야 오르는 카운터로는 못 본다.
         BulkheadMetrics.bind(bulkhead, meters);
         this.error = ApiError.of(clock);
+        this.soldOutCache = Objects.requireNonNull(soldOutCache, "soldOutCache 는 필수다");
+        this.soldOutHits = meters.counter("waiting.soldout.cache.hit");
     }
 
     /**
@@ -220,10 +220,10 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     }
 
     /**
-     * 매진 캐시 없이 만든다. <b>이름으로 드러낸다</b> — 같은 이름의 오버로드로
-     * 두면 배선 한 줄이 이쪽을 골라 매진 보호가 신호 없이 사라진다.
+     * <b>이 필터만 쓰는 캐시</b>를 안에서 만든다. 아무도 안 담으므로 아무것도
+     * 안 막는다 — 배선이 이쪽을 고르면 매진 보호가 신호 없이 사라진다.
      */
-    public static AdmissionGatewayFilter withoutSoldOutCache(SnapshotHolder holder,
+    public static AdmissionGatewayFilter withIsolatedSoldOutCache(SnapshotHolder holder,
             AdmissionDecider decider,
             Clock clock, MeterRegistry meters, QueuePort queue, QueueToken tokens,
             SecondWindowLimiter limiter, EntryToken entryTokens,
@@ -248,7 +248,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     }
 
     /** 난수원을 받는다. 고정하지 못하면 흔들림이 실제로 붙었는지 못 잰다 (TS-4). */
-    public static AdmissionGatewayFilter withoutSoldOutCache(SnapshotHolder holder,
+    public static AdmissionGatewayFilter withIsolatedSoldOutCache(SnapshotHolder holder,
             AdmissionDecider decider,
             Clock clock, MeterRegistry meters, DoubleSupplier random,
             QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter,
@@ -265,7 +265,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      * <p>고정하지 못하면 fail-open 이 얼마나 이어졌는지를 재는 계산 자체가
      * 시험에서 늘 0 이 되어, 단위를 틀려도 통과한다 (TS-4).
      */
-    public static AdmissionGatewayFilter withoutSoldOutCache(SnapshotHolder holder,
+    public static AdmissionGatewayFilter withIsolatedSoldOutCache(SnapshotHolder holder,
             AdmissionDecider decider,
             Clock clock, MeterRegistry meters, DoubleSupplier random,
             QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter,
@@ -336,8 +336,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
 
         // **지금 시각이다.** 스냅샷 발행 시각을 넘기면 배분이 멎는 순간 윈도가
         // 영영 안 넘어가고, 상한만큼 쓴 뒤부터 전부 막힌다.
-        Instant now = clock.instant();
-        long nowSec = now.getEpochSecond();
+        long nowSec = clock.instant().getEpochSecond();
         releaseIfRestocked(couponId, state, view);
         if (soldOutCache.soldOut(couponId)) {
             AdmissionDecision cached = AdmissionDecision.REJECT_SOLD_OUT;

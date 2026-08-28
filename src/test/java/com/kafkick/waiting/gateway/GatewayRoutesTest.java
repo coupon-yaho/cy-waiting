@@ -69,7 +69,7 @@ class GatewayRoutesTest {
     private final RouteLocator locator = new GatewayRoutes().routes(
             new RouteLocatorBuilder(컨텍스트),
             new GatewayRoutes.Backend("http://backend:8080", 응답_상한),
-            AdmissionGatewayFilter.withoutSoldOutCache(재료_없는_홀더(),
+            AdmissionGatewayFilter.withIsolatedSoldOutCache(재료_없는_홀더(),
                     AdmissionDecider.of(공유_리미터, 0.7),
                     Clock.systemUTC(), new SimpleMeterRegistry(),
                     FakeQueuePort.create(),
@@ -83,7 +83,7 @@ class GatewayRoutesTest {
             QueryCoalescingFilter.of(
                     new CoalescingProperties(false, 1024, 1 << 20, 100, List.of()),
                     Clock.systemUTC(), new SimpleMeterRegistry()),
-            SoldOutObserver.of(SoldOutCache.standard(), Instant::now, new SimpleMeterRegistry()),
+            SoldOutObserver.ofPublishedAt(SoldOutCache.standard(), Instant::now, new SimpleMeterRegistry()),
             컨텍스트.getBean(SpringCloudCircuitBreakerResilience4JFilterFactory.class));
 
     /**

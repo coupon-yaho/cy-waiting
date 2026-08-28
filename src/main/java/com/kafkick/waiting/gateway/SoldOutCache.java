@@ -9,7 +9,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.function.LongSupplier;
 
 /**
@@ -27,7 +27,11 @@ public final class SoldOutCache {
      * @param armedNanos  무장 시각. <b>단조 시계</b>다 — 수명은 벽시계로 안 잰다
      * @param blocked     그동안 끊은 건수. 해제 로그가 이 값을 싣는다
      */
-    private record Armed(Instant publishedAt, long armedNanos, AtomicLong blocked) {
+    // **`equals` 가 동일성으로 떨어진다** — `LongAdder` 가 재정의를 안 하기
+    // 때문이다. 아래 CAS 제거(`remove(key, armed)`)가 "이 무장을 지운다" 로
+    // 도는 것이 그 덕이다. 값 비교가 되는 형으로 바꾸면 뜻이 "같은 무장을
+    // 지운다" 로 바뀌어 새 무장을 지울 수 있다.
+    private record Armed(Instant publishedAt, long armedNanos, LongAdder blocked) {
     }
 
     private final Duration ttl;
@@ -59,9 +63,8 @@ public final class SoldOutCache {
     }
 
     /**
-     * 운영 기본값.
-     *
-     * <p>TTL 은 낡음 한계의 여러 배로 잡는다 — 해제 신호를 놓쳐도 그만큼만 막힌다.
+     * 배포 값과 같은 모양으로 만든다. <b>정본은 `application.yml` 이다</b> —
+     * 여기 값이 갈리면 시험이 배포되는 숫자를 안 재게 된다.
      */
     public static SoldOutCache standard() {
         return of(Duration.ofSeconds(30), CouponKeys.MAX);
@@ -91,7 +94,7 @@ public final class SoldOutCache {
                 return false;
             }
         }
-        observed.put(couponId, new Armed(publishedAt, ticker.getAsLong(), new AtomicLong()));
+        observed.put(couponId, new Armed(publishedAt, ticker.getAsLong(), new LongAdder()));
         return true;
     }
 
@@ -105,7 +108,10 @@ public final class SoldOutCache {
             observed.remove(couponId, armed);
             return false;
         }
-        armed.blocked().incrementAndGet();
+        // **`LongAdder` 다.** 한 쿠폰에 100K 가 몰리는 것이 전제라, 셀 하나에
+        // CAS 를 걸면 그 자체가 경합점이 된다 (RX-11). 값은 해제할 때 한 번만
+        // 읽으므로 정합한 읽기 비용을 낼 이유가 없다.
+        armed.blocked().increment();
         return true;
     }
 
@@ -128,7 +134,7 @@ public final class SoldOutCache {
         return observed.remove(couponId, armed)
                 ? Optional.of(new Released(
                         Duration.ofNanos(ticker.getAsLong() - armed.armedNanos()),
-                        armed.blocked().get()))
+                        armed.blocked().sum()))
                 : Optional.empty();
     }
 

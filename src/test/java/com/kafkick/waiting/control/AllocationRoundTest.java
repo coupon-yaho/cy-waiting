@@ -398,6 +398,41 @@ class AllocationRoundTest {
      * 부르는 쪽이 그 메서드를 쓰는지는 아무도 안 재고 있었다.
      */
     /**
+     * <b>들인 인원을 누적으로 남긴다</b> (G7.5).
+     *
+     * <p>크레딧 낭비는 <b>차례를 준 인원</b>에서 <b>실제로 받아 간 인원</b>을 뺀
+     * 값이다. 뒤엣것은 판정 지표가 세지만 앞엣것을 아무도 안 세고 있어서, 낭비율을
+     * 잴 방법이 없었다 — 이탈 30%에서 낭비 5% 미만이라는 기준이 측정 수단 없이
+     * 계획서에만 있었다.
+     */
+    @Test
+    @DisplayName("들인_인원을_누적으로_센다")
+    void 들인_인원을_누적으로_센다() {
+        // 크레딧 8 에 줄이 100 명이라 여덟 명의 차례가 온다.
+        AllocationRound round = round(List.of(new CouponDemand("c1", 100, 1_000)), 8, 1);
+
+        round.run().block();
+        assertThat(round.admitted()).as("첫 판").isEqualTo(8);
+
+        round.run().block();
+        assertThat(round.admitted()).as("판을 넘어 누적된다").isEqualTo(16);
+    }
+
+    /**
+     * <b>줄이 몫보다 짧으면 남는다.</b> 그 남은 몫은 차례를 준 것이 아니므로 안
+     * 센다 — 세면 낭비율의 분모가 부풀어 실제보다 좋아 보인다.
+     */
+    @Test
+    @DisplayName("줄이_짧으면_남은_몫은_안_센다")
+    void 줄이_짧으면_남은_몫은_안_센다() {
+        AllocationRound round = round(List.of(new CouponDemand("c1", 3, 1_000)), 100, 1);
+
+        round.run().block();
+
+        assertThat(round.admitted()).as("줄에 있던 셋만").isEqualTo(3);
+    }
+
+    /**
      * <b>발행이 실패하면 배수도 안 센다.</b>
      *
      * <p>스냅샷 샤드만 죽은 구간이 여기다. 리더는 배수 17 을 계산하는데 전 노드는

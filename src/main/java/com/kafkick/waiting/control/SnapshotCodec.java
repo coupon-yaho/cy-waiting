@@ -110,9 +110,18 @@ public final class SnapshotCodec {
         return hash;
     }
 
+    /**
+     * <b>줄이는 것은 다음 릴리스다.</b> 읽는 쪽만 관대하게 만들면 절반만 열린다 —
+     * 이미 떠 있는 노드는 여섯 필드를 기대하므로, 새 리더가 다섯을 발행하는
+     * 순간 그 노드가 전 쿠폰을 떨구고 낡음으로 넘어간다.
+     */
+    // 여섯 번째는 자리만 지키는 값이다. 배수는 전역 항목으로 옮겼고 읽는 쪽은
+    // 이 자리를 안 본다. 관대한 디코더가 배포된 뒤에 지운다 (CY-736).
+    private static final String LEGACY_POLL_SCALE = "1.0";
+
     private String encodeCoupon(CouponState state) {
-        return "%s:%s:%d:%d:%d".formatted(state.mode(), state.runtime(), state.credit(),
-                state.remainingStock(), state.waiting());
+        return "%s:%s:%d:%d:%d:%s".formatted(state.mode(), state.runtime(), state.credit(),
+                state.remainingStock(), state.waiting(), LEGACY_POLL_SCALE);
     }
 
     /**

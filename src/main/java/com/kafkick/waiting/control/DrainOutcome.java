@@ -26,6 +26,9 @@ public final class DrainOutcome {
     private final LongConsumer sleeper;
     private final Consumer<String> recorder;
 
+    /** 기다림이 끊겼는가. 끊겼으면 상한까지 안 기다린 것이라 그 사실을 같이 남긴다. */
+    private volatile boolean interrupted;
+
     private DrainOutcome(IntSupplier inFlight, Duration limit, LongConsumer sleeper,
             Consumer<String> recorder) {
         this.inFlight = Objects.requireNonNull(inFlight, "inFlight 는 필수다");
@@ -58,15 +61,17 @@ public final class DrainOutcome {
     public boolean await() {
         long deadline = System.nanoTime() + limit.toNanos();
         int left = inFlight.getAsInt();
-        while (left > 0 && System.nanoTime() < deadline) {
+        while (left > 0 && !interrupted && System.nanoTime() < deadline) {
             sleeper.accept(TICK_MILLIS);
             left = inFlight.getAsInt();
         }
         if (left > 0) {
             // **건수를 같이 남깁니다.** 그 숫자가 곧 강제 종료로 끊길 요청 수이고,
             // 없으면 롤링 배포의 오류가 이것 때문인지 못 가립니다.
-            recorder.accept("드레인 상한 초과 — %d초를 기다렸는데 %d건이 남았다. "
-                    .formatted(limit.toSeconds(), left)
+            recorder.accept((interrupted
+                    ? "드레인 대기가 끊겼다 — %d건이 남았다. ".formatted(left)
+                    : "드레인 상한 초과 — %d초를 기다렸는데 %d건이 남았다. "
+                            .formatted(limit.toSeconds(), left))
                     + "오케스트레이터가 이 요청들을 끊는다");
             return false;
         }
@@ -74,14 +79,22 @@ public final class DrainOutcome {
         return true;
     }
 
+    /**
+     * 한 판만 잔다.
+     *
+     * <p><b>끊긴 표시를 다시 세우지 않고 던지지도 않는다.</b> 이 스레드는 곧바로
+     * 컨테이너의 단계별 정지로 들어가 드레인을 기다리는데, 표시가 서 있으면 그
+     * 기다림이 즉시 깨진다 — 지켜 주려던 진행 중인 요청이 바로 그때 끊긴다.
+     * 던지면 종료 리스너가 통째로 중단돼 같은 일이 난다.
+     */
     private void sleep(long millis) {
         try {
             // RULE-EXCEPTION(RX-1): 종료 경로다. 여기서 막는 것이 목적이고,
             // 상한은 생성자가 양수로 강제한다.
             Thread.sleep(millis);
         } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("드레인 대기가 끊겼다", e);
+            // 덜 기다린 채로 돌아간다. 남은 건수는 부르는 쪽이 그대로 센다.
+            interrupted = true;
         }
     }
 }

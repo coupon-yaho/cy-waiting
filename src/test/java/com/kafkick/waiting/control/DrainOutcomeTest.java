@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -68,12 +69,53 @@ class DrainOutcomeTest {
         assertThat(지켜보기.await()).isTrue();
     }
 
+    /**
+     * <b>끊겨도 던지지 않습니다.</b>
+     *
+     * <p>이 스레드는 곧바로 컨테이너의 단계별 정지로 들어가 드레인을 기다립니다.
+     * 여기서 던지면 종료 리스너가 통째로 중단되고, 끊긴 표시를 세우면 그 기다림이
+     * 즉시 깨집니다 — 지켜 주려던 진행 중인 요청이 바로 그때 끊깁니다.
+     */
+    @Test
+    @DisplayName("기다림이_끊겨도_던지지_않는다")
+    void 기다림이_끊겨도_던지지_않는다() {
+        남은_요청.set(5);
+        AtomicBoolean 던졌다 = new AtomicBoolean();
+
+        // **실제로 끊어 본다.** 상한을 30초로 두었으니, 끊김을 안 먹으면 시험이
+        // 그만큼 매달린다 — 그 자체가 이 시험이 재려는 것이다.
+        Thread 기다리는_쪽 = new Thread(() -> {
+            try {
+                DrainOutcome.of(남은_요청::get, Duration.ofSeconds(30), null, 남긴_것::add)
+                        .await();
+            } catch (RuntimeException e) {
+                던졌다.set(true);
+            }
+        });
+        기다리는_쪽.start();
+        기다리는_쪽.interrupt();
+        기다린다(기다리는_쪽);
+
+        assertThat(기다리는_쪽.isAlive()).as("상한까지 안 붙들고 돌아온다").isFalse();
+        assertThat(던졌다).as("던지면 종료 리스너가 통째로 중단된다").isFalse();
+        assertThat(남긴_것).singleElement().asString().contains("끊겼다").contains("5");
+    }
+
     /** 상한이 0 이하면 지켜보는 것이 아니다. 값으로 끄면 그 사실이 안 드러난다. */
     @Test
     @DisplayName("상한이_0이하면_기동을_막는다")
     void 상한이_0이하면_기동을_막는다() {
         assertThat(catchThrowable(() -> 지켜본다(Duration.ZERO)))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    private void 기다린다(Thread thread) {
+        try {
+            thread.join(Duration.ofSeconds(5).toMillis());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("시험이 끊겼다", e);
+        }
     }
 
     private static Throwable catchThrowable(Runnable r) {

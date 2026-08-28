@@ -268,21 +268,7 @@ public final class AllocationRound {
                         // 히스테리시스를 안 돌려서 실을 상태가 없다 (CY-324).
                         // 돌리기 시작하면 여기가 매 틱 이월을 지우는 자리가
                         // 되므로, 기본값에 숨기지 않고 눈에 보이게 둔다.
-                        // **배수는 여기서 한 번 센다.** 재료를 만드는 함수에
-                        // 두면 그 함수를 부르는 것이 곧 계측이 되어, 한 판에
-                        // 두 번 부르는 사람이 나오는 순간 누적이 부풀었다 —
-                        // 실제로 그랬다. 값으로 내려보내면 몇 번을 만들어도
-                        // 셈이 안 는다.
-                        //
-                        // 여기 다시 defer 를 두지 않는다. 삼항의 이 가지는 바깥
-                        // 공급자가 도는 순간에만 평가되므로 미룰 것이 없고,
-                        // 그런 defer 는 안 하는 일을 하는 것처럼 보이게 한다.
-                        : publish.apply(codec.encode(
-                                snapshot(collected, granted, credit, readAt,
-                                        tunables.get().orElse(null),
-                                        pollScale(collected, granted, credit)),
-                                current.snapshot(),
-                                QueueingHysteresis.Snapshot.empty()))
+                        : publishRound(collected, granted, credit, readAt, current)
                         // **발행 뒤에 지운다** (7.3). 앞에 두면 방금 지운 큐가
                         // 이번 재료에는 아직 대기자로 실려, 그 판의 크레딧이
                         // 없는 줄에 나간다.
@@ -482,20 +468,43 @@ public final class AllocationRound {
     }
 
     /**
-     * 이번 틱의 전역 폴링 배수. <b>한 판에 한 번만 부른다</b> — 계측이 붙어 있다.
+     * 배수를 실어 발행한다.
+     *
+     * <p><b>센 것은 발행이 끝난 뒤에 남긴다.</b> 인자로 부르면 자바가 먼저
+     * 평가해서, 발행이 터져도 배수를 걸었다고 기록한다 — 스냅샷 샤드만 죽은
+     * 구간이 정확히 그렇다. 그때 전 노드는 옛 재료로 배수 1.0 을 쓰고 있다.
+     */
+    private Mono<Void> publishRound(List<CouponDemand> collected, Map<String, Long> granted,
+            long credit, Instant readAt, CreditSmoother current) {
+        PollBudget budget = pollBudget(collected, granted, credit);
+        // **히스테리시스는 아직 빈 값을 싣는다.** 제품이 아직 히스테리시스를
+        // 안 돌려서 실을 상태가 없다 (CY-324). 돌리기 시작하면 여기가 매 틱
+        // 이월을 지우는 자리가 되므로, 기본값에 숨기지 않고 눈에 보이게 둔다.
+        return publish.apply(codec.encode(
+                        snapshot(collected, granted, credit, readAt,
+                                tunables.get().orElse(null), budget.scale()),
+                        current.snapshot(), QueueingHysteresis.Snapshot.empty()))
+                .doOnSuccess(done -> watchPollBudget(budget));
+    }
+
+    /** 이번 틱의 폴링 예산과 그 결과. <b>순수하다</b> — 세는 것은 발행 뒤다. */
+    private record PollBudget(double expected, double budget, double scale, int nodes) {
+    }
+
+    /**
+     * 이번 틱의 전역 폴링 배수.
      *
      * <p>예산은 도메인이 소유한다 — 밴드도 하한도 거기 있는데 예산만 제어
      * 평면에 두면, 운영자가 실제로 만질 유일한 숫자만 시험이 안 닿는 곳에 남는다.
      */
-    private double pollScale(List<CouponDemand> collected, Map<String, Long> granted,
+    private PollBudget pollBudget(List<CouponDemand> collected, Map<String, Long> granted,
             long credit) {
         int nodes = meta(credit, null).effectiveGatewayCount();
         double expected = PollBudgetPlanner.expectedPollRps(collected,
                 couponId -> granted.getOrDefault(couponId, 0L));
         double budget = PollBudgetPlanner.budgetRps(nodes);
-        double scale = PollBudgetPlanner.pollScale(expected, budget);
-        watchPollBudget(expected, budget, scale, nodes);
-        return scale;
+        return new PollBudget(expected, budget,
+                PollBudgetPlanner.pollScale(expected, budget), nodes);
     }
 
     /**
@@ -504,7 +513,8 @@ public final class AllocationRound {
      * <p>전 대기자의 다음 폴링이 한꺼번에 늘어나는데, 남기지 않으면 운영자
      * 눈에는 원인 없이 폴링이 뜸해진 것으로만 보인다.
      */
-    private void watchPollBudget(double expected, double budget, double scale, int nodes) {
+    private void watchPollBudget(PollBudget round) {
+        double scale = round.scale();
         if (scale <= 1.0) {
             pollOvershoot.exited().ifPresent(r -> log.info(
                     "폴링 예산 초과 해제 — {}초 동안 {}틱", r.elapsedSeconds(), r.swallowed()));
@@ -514,7 +524,7 @@ public final class AllocationRound {
         if (pollOvershoot.entered()) {
             log.warn("폴링 예산 초과 — 예상 {}rps, 노드 {}대 예산 {}rps, 배수 {}. "
                     + "죽은 큐 정리와 노드 증설을 검토하세요",
-                    Math.round(expected), nodes, Math.round(budget),
+                    Math.round(round.expected()), round.nodes(), Math.round(round.budget()),
                     // 같은 줄의 형제 값이 다 정수다. 여기만 17.583333333333332 가
                     // 나오면 읽는 사람이 그 자릿수에 의미가 있다고 읽는다.
                     Math.round(scale * 10) / 10.0);

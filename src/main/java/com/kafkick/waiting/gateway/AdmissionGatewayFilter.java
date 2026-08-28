@@ -92,12 +92,6 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     /** 재시도 안내의 흔들림 폭. 폴링 간격과 같은 정책을 쓴다. */
     private static final PollIntervalPolicy POLL = PollIntervalPolicy.of(0.2);
 
-    /**
-     * 배수를 안 거는 갈래. <b>예산이 안 세는 요청에는 안 건다.</b>
-     *
-     * <p>{@code 1.0} 을 그대로 쓰면 배수를 깜빡한 것과 구분이 안 된다.
-     */
-
     private static final String MEMBER_ID = "X-Member-Id";
 
     /** 발급 계층 명세가 정한 이름. 조회가 준 토큰을 여기 실어 온다. */
@@ -565,8 +559,10 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             // 늘려도 예산은 안 줄고 토큰만 죽는다. 폴백도 같은 갈래를 쓴다
             // (BackendFallback).
             //
-            // 가장 가까운 밴드(1초)라 흔들림은 반올림에 통째로 흡수된다. 여기서
-            // 흩을 대상은 몇 초 뒤에 몰릴 사람들이 아니라 30초 뒤의 파도다.
+            // **이 갈래는 흔들림이 0 이다.** 밴드가 1초라 ±20% 가 전부 반올림에
+            // 흡수되어 예외 없이 1 이 나간다. 차단된 토큰 보유자가 쌓였다가
+            // 매초 같은 순간에 통째로 돌아오므로, 서킷이 닫히려는 순간을
+            // 되밀 수 있다 (CY-741). 값을 바꾸면 C18 의 판정이 같이 움직인다.
             case RETRY_TOKEN -> (int) POLL.intervalSec(0, random, PollIntervalPolicy.NO_SCALE);
             case REJECT_QUEUE_FULL, REJECT_OVERLOAD ->
                     (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random, pollScale);

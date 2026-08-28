@@ -69,7 +69,6 @@ public final class AbuseLimitFilter implements WebFilter {
     /** 키 상한. 식별자를 바꿔가며 메모리를 밀어내는 것을 막는다. */
     private static final int MAX_KEYS = 100_000;
 
-
     private static final PollIntervalPolicy BACKOFF = PollIntervalPolicy.of(0.2);
 
     private final SecondWindowLimiter limiter = SecondWindowLimiter.withMaxKeys(MAX_KEYS);

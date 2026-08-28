@@ -397,6 +397,34 @@ class AllocationRoundTest {
      * 꺼지고 전원의 폴링이 한꺼번에 짧아진다. 방어를 한 곳에 모은 근거가 이것인데
      * 부르는 쪽이 그 메서드를 쓰는지는 아무도 안 재고 있었다.
      */
+    /**
+     * <b>발행이 실패하면 배수도 안 센다.</b>
+     *
+     * <p>스냅샷 샤드만 죽은 구간이 여기다. 리더는 배수 17 을 계산하는데 전 노드는
+     * 옛 재료로 1.0 을 쓰고 있으므로, 그 틱을 세면 없었던 부하를 보고하는 셈이다.
+     * 운영자는 그 지표를 보고 노드를 늘린다.
+     */
+    @Test
+    @DisplayName("발행이_실패하면_배수를_안_센다")
+    void 발행이_실패하면_배수를_안_센다() {
+        AllocationRound round = AllocationRound.of(
+                () -> true,
+                () -> Mono.just(new TimedDemands(
+                        List.of(new CouponDemand("c1", 100_000, 1_000_000)), 읽은_시각)),
+                () -> 10L, () -> 1,
+                grant -> Mono.just(grant.credit()),
+                hash -> Mono.error(new IllegalStateException("스냅샷 샤드가 끊겼다")),
+                () -> Instant.ofEpochSecond(읽은_시각),
+                () -> Mono.just(CreditSmoother.of(1.0)),
+                SnapshotCodec.create(), () -> 0L);
+
+        round.run().onErrorResume(e -> Mono.empty()).block();
+
+        assertThat(round.pollBudgetOvershootTicks()).as("안 닿은 배수는 안 센다").isZero();
+        assertThat(로그_메시지()).as("없었던 초과를 보고하지 않는다")
+                .noneMatch(m -> m.contains("폴링 예산 초과 —"));
+    }
+
     @Test
     @DisplayName("노드가_0으로_보여도_한_대로_친다")
     void 노드가_0으로_보여도_한_대로_친다() {

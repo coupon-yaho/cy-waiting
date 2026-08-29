@@ -51,6 +51,16 @@ public final class CouponStates {
         return CouponState.unknown();
     }
 
+    /**
+     * 재고 키를 못 읽은 쿠폰 (CY-702). <b>매진도 아니고 재고를 아는 것도 아니다.</b>
+     *
+     * <p>발행 경로가 실제로 내는 상태다 — {@code AllocationRound.stateOf} 가
+     * 재고 미상인 수요를 이것으로 만든다.
+     */
+    public static CouponState stockUnknown(long credit, long waiting) {
+        return CouponState.unknownStock(QueueMode.ADAPTIVE, credit, waiting);
+    }
+
 
     /** 운영자가 껐는데 줄이 아직 남아 있다 — 붐비는 쿠폰을 끄면 생긴다. */
     public static CouponState offWithQueue(long credit, long remainingStock, long waiting) {

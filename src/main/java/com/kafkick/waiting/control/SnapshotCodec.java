@@ -73,6 +73,9 @@ public final class SnapshotCodec {
      */
     private static final int MIN_FIELDS = 5;
 
+    /** 재고 자리에 미상 대신 싣는 값. 양수라는 것 말고는 뜻이 없다. */
+    private static final long NOT_SOLD_OUT = 1;
+
     /** {@link Instant#MAX} 를 넘으면 생성자가 던진다 — 넘기지 않고 걸러낸다. */
     private static final long MAX_EPOCH_SECOND = Instant.MAX.getEpochSecond();
 
@@ -128,7 +131,22 @@ public final class SnapshotCodec {
     // 관대한 디코더가 전 노드에 깔린 것이 확인되면 이 자리를 지운다 (CY-736).
     private String encodeCoupon(CouponState state, double pollScale) {
         return "%s:%s:%d:%d:%d:%s".formatted(state.mode(), state.runtime(), state.credit(),
-                state.remainingStock(), state.waiting(), pollScale);
+                wireStock(state), state.waiting(), pollScale);
+    }
+
+    /**
+     * 재고 자리에 실을 수. <b>미상은 매진이 아니라는 뜻의 양수로 나간다.</b>
+     *
+     * <p>미상을 그대로 실으면 옛 노드의 생성자가 음수 재고를 거부해 그 항목이
+     * 통째로 빠지고, 없는 쿠폰은 판정에서 매진으로 보인다 — 접힘을 없애려던
+     * 변경이 롤아웃 구간에 같은 종결을 되살린다.
+     *
+     * <p>읽는 쪽은 이 수를 {@link CouponState#soldOut()} 으로만 쓰고 셈에 안
+     * 넣는다. 미상인 것을 알아야 하는 곳은 리더의 정리 판단뿐이고, 그 경로는
+     * 이 값을 안 거친다 (3.1).
+     */
+    private long wireStock(CouponState state) {
+        return state.stockKnown() ? state.remainingStock() : NOT_SOLD_OUT;
     }
 
     /**

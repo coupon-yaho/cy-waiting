@@ -76,10 +76,20 @@ public final class DemandCollector {
         List<CouponDemand> demands = new ArrayList<>(coupons.size());
         // **정책이 없는 쿠폰은 적응형이다.** 여기만은 빠진 자리를 채워도 된다 —
         // 안 걸었다는 것이 곧 기본값이지, 못 읽은 것이 아니다.
-        coupons.forEach(couponId -> demands.add(new CouponDemand(couponId,
-                orZero(sizes.get(couponId)), orZero(stockValues.get(couponId)),
+        coupons.forEach(couponId -> demands.add(demandOf(couponId,
+                orZero(sizes.get(couponId)), stockValues.get(couponId),
                 modes.getOrDefault(couponId, QueueMode.ADAPTIVE))));
         return demands;
+    }
+
+    /**
+     * <b>못 읽은 재고를 0 으로 안 접는다.</b> 접으면 재고 키를 잃은 쿠폰이
+     * 매진으로 보이고, 다음 판도 이것을 안 되돌린다.
+     */
+    private CouponDemand demandOf(String couponId, long waiting, Long stock, QueueMode mode) {
+        return stock == null
+                ? CouponDemand.stockUnknown(couponId, waiting, mode)
+                : new CouponDemand(couponId, waiting, stock, mode);
     }
 
     private long orZero(Long value) {

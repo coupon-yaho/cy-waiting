@@ -49,6 +49,9 @@ public final class InvariantMetrics {
         metrics.count(meters, "waiting.allocation.admitted",
                 InvariantMetrics::admitted,
                 "차례를 준 누적 인원. 크레딧 낭비의 분모다 (G7.5)");
+        metrics.count(meters, "waiting.allocation.stock.unknown",
+                InvariantMetrics::stockUnknown,
+                "재고를 못 읽은 채 발행한 누적 쿠폰 수. 0 이 아니면 재고 키를 잃었다");
         return metrics;
     }
 
@@ -63,6 +66,11 @@ public final class InvariantMetrics {
     /** 평활 지연과 하한이 만드는 초과. 배분기 자체는 준 예산을 안 넘긴다. */
     private double budgetOvershoot() {
         return round.budgetOvershoot();
+    }
+
+    /** 재고를 못 읽은 채 발행한 누적 쿠폰 수. 매진 오판의 선행 지표다. */
+    private double stockUnknown() {
+        return round.stockUnknown();
     }
 
     /** 차례를 준 누적 인원. 실제로 받아 간 수와의 차이가 곧 낭비다. */

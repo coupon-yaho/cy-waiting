@@ -152,10 +152,11 @@ jobs:
       status: ${{ needs.verdict.outputs.ok == 'true' && 'success' || 'warning' }}
       title: 야간 검증 — ${{ needs.verdict.outputs.ok == 'true' && '이상 없음' || '주의 필요' }}
       summary: |
-        전 계층 테스트 · 9개 부하 시나리오 · CVE 전체 스캔
+        전 계층 테스트 · 9개 부하 시나리오 · 크레딧 낭비(G7.5) · CVE 전체 스캔
       fields: |
         테스트=${{ needs.test.result }}
         부하=${{ needs.load.result }}
+        크레딧 낭비=${{ needs.waste.result }}
         보안=${{ needs.security.result }}
       link-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       confluence-title: 야간 검증 리포트

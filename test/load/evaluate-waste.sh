@@ -16,6 +16,7 @@
 #   $4  걷은 수
 #   $5  이탈한 수
 #   $6  생존 신호 수명(초)
+#   $7  시계 바닥값이 걸린 횟수 (선택). 0 이 아니면 미판정
 set -uo pipefail
 
 samples="${1:?임계 표본 파일}"
@@ -24,6 +25,7 @@ admitted_total="${3:?차례를 준 인원}"
 swept="${4:?걷은 수}"
 abandoned="${5:?이탈한 수}"
 alive_ttl="${6:?생존 신호 수명}"
+clock_floor="${7:-0}"
 
 WASTE_MAX="${WASTE_MAX:-0.05}"
 MIN_ADMITTED="${MIN_ADMITTED:-300}"
@@ -57,6 +59,15 @@ done
 [ "$alive_ttl" -gt 0 ] || fail "생존 신호 수명이 0 이다"
 [ -s "$samples" ] || fail "임계 표본이 비었다 — 유령이 언제 차례를 받았는지 모른다"
 [ -f "$ghosts" ] || fail "유령 파일이 없다: $ghosts"
+
+# **시계가 뒤로 갔으면 score 가 시각이 아니다.** `enqueue.lua` 가 바닥값+1 을
+# 쓰므로(A-9) 그 항목의 score 는 줄 선 시각보다 크고, 되짚으면 기다린 시간이
+# 짧게 나와 결함이 못 피하는 것으로 넘어간다 — 통과 쪽으로 틀린다.
+#
+# 추측하지 않고 잰다. 바닥값이 걸린 횟수는 게이트웨이가 지표로 낸다.
+whole "$clock_floor" || fail "시계 바닥값 횟수가 정수가 아니다: $clock_floor"
+[ "$clock_floor" -eq 0 ] \
+    || fail "시계 바닥값이 $clock_floor 번 걸렸다 — 줄 score 가 줄 선 시각이 아니다"
 
 # 유령 하나의 기다린 시간 = (임계가 그를 지난 시각) − (그가 줄 선 시각).
 # 줄 score 가 곧 줄 선 시각(μs)이라 둘 다 실측이다.

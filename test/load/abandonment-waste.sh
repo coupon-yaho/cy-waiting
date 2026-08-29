@@ -88,6 +88,8 @@ final=$(scrape)
 admitted_total=$(metric 'waiting_allocation_admitted_total' "$final")
 swept=$(metric 'waiting_sweep_total.*kind="swept"' "$final")
 claimed=$(metric 'waiting_admission_total.*outcome="PASS_TOKEN"' "$final")
+# 시계가 뒤로 갔으면 줄 score 가 줄 선 시각이 아니다 — 되짚을 수 없다.
+clock_floor=$(metric 'waiting_snapshot_clock_floor_applied_total' "$final")
 
 # **유령의 천장도 마지막 표본이다.** 최종 임계를 쓰면 표본 밖에서 지나간
 # 사람까지 유령에 들어와 되짚을 수 없는 것만 는다.
@@ -101,7 +103,7 @@ joined=$(jq -r '.metrics.joined.count // .metrics.joined.values.count // empty' 
 abandoned=$(jq -r '.metrics.abandoned.count // .metrics.abandoned.values.count // empty' \
     "$work/summary.json" 2>/dev/null)
 
-for v in admitted_total swept claimed joined abandoned; do
+for v in admitted_total swept claimed clock_floor joined abandoned; do
   if [ -z "${!v:-}" ]; then
     echo "::error title=G7.5 미판정::$v 를 못 읽었다 — 배선이 끊겼거나 이름이 바뀌었다"
     exit 1
@@ -118,7 +120,8 @@ printf '  %-26s %s\n' "받아 간 인원" "$claimed"
 # **판정은 갈라 둔다.** 드라이버 안에 있으면 그것을 검증하려고 매번 도커와
 # k6 를 15분씩 돌려야 하고, 그러면 아무도 안 고친다.
 TICK_SEC="$TICK_SEC" ./test/load/evaluate-waste.sh "$work/threshold.log" \
-    "$work/ghosts.tsv" "$admitted_total" "$swept" "$abandoned" "$ALIVE_TTL_SEC"
+    "$work/ghosts.tsv" "$admitted_total" "$swept" "$abandoned" "$ALIVE_TTL_SEC" \
+    "${clock_floor%%.*}"
 failed=$?
 
 [ "$k6_rc" -eq 0 ] || { echo "::error::k6 가 실패했다"; tail -20 "$work/k6.log"; failed=1; }

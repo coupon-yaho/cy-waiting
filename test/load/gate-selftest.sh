@@ -204,6 +204,14 @@ printf '50 10000000\n300 200000000\n100 60000000\n' > "$work/dip.log"
 피할_수_있었던 20 > "$work/g20.tsv"
 run_waste "표본이 중간에 뒤로 가면 미판정" 1 "$work/dip.log" "$work/g20.tsv" 1000 100 200 "$TTL"
 
+# **시계가 뒤로 갔으면 score 가 시각이 아니다.** `enqueue.lua` 가 바닥값+1 을
+# 쓰므로 되짚으면 기다린 시간이 짧게 나오고, 결함이 못 피하는 것으로 넘어간다.
+# 추측하지 않고 게이트웨이 지표로 판정한다.
+run_waste "시계가 뒤로 갔으면 미판정" 1 \
+    "$work/s.log" "$work/g30.tsv" 1000 100 200 "$TTL" 3
+run_waste "시계가 안 갔으면 그대로 판정한다" 0 \
+    "$work/s.log" "$work/g30.tsv" 1000 100 200 "$TTL" 0
+
 # 입력이 깨진 판은 통과로 안 센다.
 : > "$work/nosample.log"
 run_waste "표본이 비면 미판정" 1 "$work/nosample.log" "$work/g30.tsv" 1000 100 200 "$TTL"

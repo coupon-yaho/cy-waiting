@@ -19,8 +19,8 @@ import org.springframework.data.redis.core.script.RedisScript;
 /**
  * 이탈자 청소.
  *
- * <p><b>앞부분만 훑는다.</b> 2만 명 큐에서 전체를 보면 청소 자체가 부하다.
- * 뒤엣사람은 아직 폴링할 차례가 안 왔을 뿐 죽은 것이 아니다.
+ * <p><b>입장 임계 위에서 앞부분만 훑는다.</b> 2만 명 큐에서 전체를 보면 청소
+ * 자체가 부하다. 뒤엣사람은 아직 폴링할 차례가 안 왔을 뿐 죽은 것이 아니다.
  */
 @Tag("integration")
 @SpringBootTest
@@ -124,29 +124,38 @@ class SweepTest extends RedisContainerSupport {
         assertThat(redis.opsForZSet().size(QUEUE).block(WAIT)).isEqualTo(2);
     }
 
-    /**
-     * 신호가 통째로 없으면 스크립트가 아무것도 안 한다. 줄 밖에 살아 있는
-     * 표시를 하나 둬 그 가드를 지난다 — 검사 범위 밖이라 판정에는 안 섞인다.
-     */
+    /** 이 사람의 생존 신호를 살려 둔다. */
     private void 살아있다(String memberId) {
         redis.opsForZSet().add(ALIVE, memberId, NOW + 3_600).block(WAIT);
+    }
+
+    /**
+     * 창 안에 살아 있는 사람을 하나 세운다.
+     *
+     * <p><b>줄 안이어야 한다.</b> 창 안이 통째로 조용하면 스크립트가 아무것도
+     * 안 한다 — 그건 전원 이탈이 아니라 저장소 유실이기 때문이다. 줄 밖에
+     * 세우면 그 가드를 못 지난다.
+     */
+    private void 창_안에_살아있는_사람() {
+        enqueue("keeper");
+        살아있다("keeper");
     }
 
     @Test
     @DisplayName("검사_범위_밖은_보지_않는다")
     void 검사_범위_밖은_보지_않는다() {
+        // **맨 앞에 살려 둔다.** 창 안이 통째로 조용하면 아무것도 안 한다.
+        창_안에_살아있는_사람();
         for (int i = 0; i < 5; i++) {
             enqueue("m" + i);
             redis.opsForZSet().remove(ALIVE, "m" + i).block(WAIT);
         }
-        // **한 명은 살려 둔다.** 신호가 통째로 없으면 스크립트가 아무것도 안
-        // 한다 — 그건 전원 이탈이 아니라 저장소 유실이기 때문이다.
-        살아있다("keeper");
 
         double kept2 = redis.opsForZSet().score(QUEUE, "m2").block(WAIT);
         double kept4 = redis.opsForZSet().score(QUEUE, "m4").block(WAIT);
 
-        assertThat(swept(sweep("2"))).isEqualTo(2);
+        // 창은 keeper·m0·m1 이다. 살아 있는 keeper 는 안 걷힌다.
+        assertThat(swept(sweep("3"))).isEqualTo(2);
 
         // 앞 둘만 빠지고 범위 밖은 **순번까지 그대로** 남는다
         assertThat(redis.opsForZSet().score(QUEUE, "m0").block(WAIT)).isNull();
@@ -155,18 +164,177 @@ class SweepTest extends RedisContainerSupport {
         assertThat(redis.opsForZSet().score(QUEUE, "m4").block(WAIT)).isEqualTo(kept4);
     }
 
+    /**
+     * <b>임계 아래의 유령이 검사 범위를 막지 않는다</b> (G7.5).
+     *
+     * <p>차례가 왔는데 안 걷어 간 사람은 큐에 남고, 걷지도 않는다 (7.4.11). 그런
+     * 사람이 검사 범위만큼 쌓이면 앞에서 K 명을 보는 방식은 그들만 보고 끝난다 —
+     * 살아 있는 구간에는 영영 안 닿는다.
+     *
+     */
+    // 부하 실측에서 드러났다. 이탈 30% 에 크레딧 낭비가 36.9% 였고, 걷은 수가
+    // 0 이었다 — 스위퍼가 매 틱 도는데 아무도 안 걷히고 있었다.
+    @Test
+    @DisplayName("임계_아래_유령이_검사_범위를_막지_않는다")
+    void 임계_아래_유령이_검사_범위를_막지_않는다() {
+        // 앞 둘은 차례가 온 유령이다 — 신호가 없어도 안 걷힌다.
+        enqueue("유령0");
+        enqueue("유령1");
+        redis.opsForZSet().remove(ALIVE, "유령0").block(WAIT);
+        redis.opsForZSet().remove(ALIVE, "유령1").block(WAIT);
+        double 임계 = redis.opsForZSet().score(QUEUE, "유령1").block(WAIT);
+        redis.opsForValue().set(ADMITTED, String.valueOf((long) 임계)).block(WAIT);
+        // 그 뒤에 이탈자와 성실한 사람이 선다.
+        enqueue("이탈자");
+        redis.opsForZSet().remove(ALIVE, "이탈자").block(WAIT);
+        enqueue("성실이");
+        살아있다("성실이");
+        double 유령0_순번 = redis.opsForZSet().score(QUEUE, "유령0").block(WAIT);
+        double 성실이_순번 = redis.opsForZSet().score(QUEUE, "성실이").block(WAIT);
+
+        // **검사 범위를 둘로 준다.** 앞에서 세는 방식이면 유령 둘만 보고 끝난다.
+        assertThat(swept(sweep("2"))).as("살아 있는 구간까지 닿는다").isEqualTo(1);
+
+        assertThat(redis.opsForZSet().score(QUEUE, "이탈자").block(WAIT))
+                .as("임계 위의 이탈자는 걷힌다").isNull();
+        assertThat(redis.opsForZSet().score(QUEUE, "유령0").block(WAIT))
+                .as("임계 아래는 순번까지 그대로 둔다 (7.4.11)").isEqualTo(유령0_순번);
+        assertThat(redis.opsForZSet().score(QUEUE, "성실이").block(WAIT))
+                .as("살아 있는 사람은 순번까지 그대로다").isEqualTo(성실이_순번);
+    }
+
+    /**
+     * <b>임계를 지수 표기로 만들지 않는다.</b>
+     *
+     * <p>큐 score 는 마이크로초 시각이라 열여섯 자리다. Lua 의 기본 수→문자열
+     * 변환은 유효숫자 열넷까지만 남기므로, 임계를 그대로 이어 붙이면
+     * {@code 1.7879388228153e+15} 가 되어 실제 임계보다 <b>위</b>로 접힌다.
+     */
+    // 그러면 검사 창이 임계 바로 위의 사람들을 건너뛴다 — 하필 곧 차례가 올
+    // 사람들이다.
+    @Test
+    @DisplayName("마이크로초_임계를_정밀하게_읽는다")
+    void 마이크로초_임계를_정밀하게_읽는다() {
+        // **반올림이 위로 가는 값을 고른다.** 아래로 접히는 값은 창이 넓어질
+        // 뿐이라 어떤 사람도 안 빠지고, 그러면 이 시험이 아무것도 안 잡는다.
+        // 이 값은 %.14g 에서 …815300 으로 35µs 위로 접힌다.
+        long 임계값 = 1_787_938_822_815_265L;
+        redis.opsForValue().set(ADMITTED, String.valueOf(임계값)).block(WAIT);
+        // 접힌 폭 안쪽에 세운다. 밖에 세우면 접히든 말든 창에 들어온다.
+        redis.opsForZSet().add(QUEUE, "이탈자", 임계값 + 10).block(WAIT);
+        redis.opsForZSet().add(QUEUE, "성실이", 임계값 + 20).block(WAIT);
+        살아있다("성실이");
+
+        assertThat(swept(sweep("100"))).as("임계 바로 위도 창에 든다").isEqualTo(1);
+
+        assertThat(redis.opsForZSet().score(QUEUE, "이탈자").block(WAIT))
+                .as("임계 위의 이탈자는 걷힌다").isNull();
+        assertThat(redis.opsForZSet().score(QUEUE, "성실이").block(WAIT))
+                .as("살아 있는 사람은 순번까지 그대로다").isEqualTo(임계값 + 20);
+    }
+
+    /**
+     * <b>입장 표시는 이탈 기록으로 덮고 걷는다.</b>
+     *
+     * <p>큐에서만 빼고 표시를 남기면 다음 폴링에 조회가 <b>입장</b>이라고 답한다 —
+     * 차례가 안 왔는데 입장이므로 줄 전체를 추월하고 초과 발급이 된다.
+     */
+    // 건너뛰는 것도 답이 아니다. 표시는 보관 기간에 걷히지만 그 사이 임계가
+    // 그를 지나가 창 밖이 되고, 그 뒤로 영영 안 걷혀 줄 길이가 영구히 부푼다.
+    @Test
+    @DisplayName("입장_표시는_이탈_기록으로_덮고_걷는다")
+    void 입장_표시는_이탈_기록으로_덮고_걷는다() {
+        enqueue("돌아온사람");
+        redis.opsForZSet().remove(ALIVE, "돌아온사람").block(WAIT);
+        // 차례가 왔던 표시. 재등록이 이것을 안 지우므로 임계 위에 남는다.
+        redis.opsForHash().put(GRACE, "돌아온사람", "a:" + 신선한_시각).block(WAIT);
+        enqueue("성실이");
+        살아있다("성실이");
+
+        assertThat(swept(sweep("10"))).as("걷는다").isOne();
+
+        assertThat(redis.opsForZSet().score(QUEUE, "돌아온사람").block(WAIT))
+                .as("큐에서 빠진다").isNull();
+        // **표시가 남으면 다음 폴링이 입장이라고 답한다.** 이탈 기록으로 덮어야
+        // 그 사람이 재방문자로 다시 선다.
+        assertThat(redis.opsForHash().get(GRACE, "돌아온사람").block(WAIT))
+                .as("이탈 기록으로 덮인다").isEqualTo("d:" + NOW);
+    }
+
+    /**
+     * <b>임계가 깨졌으면 앞줄을 안 걷는다.</b>
+     *
+     * <p>이 스크립트에서 {@code -1} 은 보수적인 값이 아니라 <b>가장 공격적인</b>
+     * 값이다 — 창이 큐 전체로 열리고 임계 검사도 전원에 대해 참이 된다. 깨진
+     * 값을 그리로 접으면 차례가 왔던 사람까지 통째로 걷힌다 (불변식 4).
+     */
+    // 없는 것과 깨진 것은 다르다. 없으면 새 쿠폰이라 -1 이 맞고, 깨졌으면
+    // 앞줄 제거만 접는다 — 정리까지 멈추면 해시가 한 방향으로만 자란다.
+    @Test
+    @DisplayName("임계가_깨졌으면_앞줄을_안_걷는다")
+    void 임계가_깨졌으면_앞줄을_안_걷는다() {
+        for (String 깨진_값 : List.of("nan", "inf", "-inf", "없는수")) {
+            redis.delete(QUEUE, GRACE, ALIVE, ADMITTED).block(WAIT);
+            enqueue("이탈자");
+            redis.opsForZSet().remove(ALIVE, "이탈자").block(WAIT);
+            enqueue("성실이");
+            살아있다("성실이");
+            redis.opsForHash().put(GRACE, "낡은기록", "d:" + 만료된_시각).block(WAIT);
+            double 이탈자_순번 = redis.opsForZSet().score(QUEUE, "이탈자").block(WAIT);
+            redis.opsForValue().set(ADMITTED, 깨진_값).block(WAIT);
+
+            List<Object> 결과 = sweep("100");
+
+            assertThat(swept(결과)).as("%s — 앞줄은 안 걷는다", 깨진_값).isZero();
+            assertThat(redis.opsForZSet().score(QUEUE, "이탈자").block(WAIT))
+                    .as("%s — 순번까지 그대로", 깨진_값).isEqualTo(이탈자_순번);
+            // **정리까지 멈추지는 않는다.** 멈추면 해시가 한 방향으로만 자란다.
+            assertThat(expired(결과)).as("%s — 낡은 기록은 걷는다", 깨진_값).isOne();
+        }
+    }
+
+    /**
+     * <b>소수점 임계는 내림으로 적는다.</b>
+     *
+     * <p>반올림이 위로 가면 임계보다 실제로 위인 사람이 창에서 빠진다. 임계가
+     * 더 안 오르면 그 사람은 어떤 판에서도 창에 안 들어와 영영 안 걷힌다.
+     */
+    // 내려서 적으면 창이 한 칸 넓어질 뿐이고, 임계 이하인 사람은 아래의 정확한
+    // 비교가 되잡는다 — 그 검사가 남아 있어야 하는 이유가 여기다.
+    @Test
+    @DisplayName("소수점_임계에서_바로_위를_안_빠뜨린다")
+    void 소수점_임계에서_바로_위를_안_빠뜨린다() {
+        long 임계값 = 1_787_938_822_815_265L;
+        // 정상 경로는 정수로 적지만, 깨진 쓰기가 소수를 남길 수 있다.
+        redis.opsForValue().set(ADMITTED, 임계값 + ".75").block(WAIT);
+        // 임계보다 위인데, 올림으로 적으면 창에서 빠지는 자리다.
+        redis.opsForZSet().add(QUEUE, "이탈자", 임계값 + 1).block(WAIT);
+        redis.opsForZSet().add(QUEUE, "성실이", 임계값 + 2).block(WAIT);
+        살아있다("성실이");
+
+        assertThat(swept(sweep("100"))).as("임계 바로 위도 창에 든다").isOne();
+
+        assertThat(redis.opsForZSet().score(QUEUE, "이탈자").block(WAIT))
+                .as("걷힌다").isNull();
+        assertThat(redis.opsForZSet().score(QUEUE, "성실이").block(WAIT))
+                .as("살아 있는 사람은 순번까지 그대로").isEqualTo(임계값 + 2);
+    }
+
     @Test
     @DisplayName("검사_범위가_인자로_주어진다")
     void 검사_범위가_인자로_주어진다() {
         // 부하와 정확도의 맞바꿈이라 배포 없이 조절할 수 있어야 한다 (P-1).
+        창_안에_살아있는_사람();
         for (int i = 0; i < 5; i++) {
             enqueue("m" + i);
             redis.opsForZSet().remove(ALIVE, "m" + i).block(WAIT);
         }
-        살아있다("keeper");
 
-        assertThat(swept(sweep("1"))).isOne();
-        assertThat(swept(sweep("4"))).isEqualTo(4);
+        // 창이 keeper 하나면 걷을 사람이 없고, 둘이면 m0 하나가 걷힌다.
+        // **앞의 판이 이미 걷었다.** 다섯을 보면 남은 m1~m4 가 걷힌다.
+        assertThat(swept(sweep("1"))).as("창에 살아 있는 사람만 든다").isZero();
+        assertThat(swept(sweep("2"))).as("창이 넓어지면 하나 걷는다").isOne();
+        assertThat(swept(sweep("5"))).as("남은 넷").isEqualTo(4);
     }
 
     @Test
@@ -174,9 +342,9 @@ class SweepTest extends RedisContainerSupport {
     void 제거된_사람이_유예_기록에_남는다() {
         // 제거와 기록이 갈리면 자리도 잃고 재방문자로도 식별 안 되는
         // 사람이 생긴다. 같은 스크립트 안에서 한다.
+        창_안에_살아있는_사람();
         enqueue("m0");
         redis.opsForZSet().remove(ALIVE, "m0").block(WAIT);
-        살아있다("keeper");
 
         sweep("10");
 

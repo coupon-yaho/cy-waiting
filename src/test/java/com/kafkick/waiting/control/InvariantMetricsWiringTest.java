@@ -29,7 +29,9 @@ class InvariantMetricsWiringTest {
             "waiting.allocation.entered.overshoot",
             "waiting.poll.budget.overshoot.ticks",
             "waiting.snapshot.clock.floor.applied",
-            "waiting.allocation.admitted");
+            "waiting.allocation.admitted",
+            "waiting.allocation.stock.unknown.ticks",
+            "waiting.snapshot.stock.unknown.dropped");
 
     @Test
     @DisplayName("선행_지표가_스크레이프에_나온다")
@@ -40,7 +42,29 @@ class InvariantMetricsWiringTest {
                 .contains("waiting_poll_budget_overshoot_ticks_total")
                 .contains("waiting_snapshot_clock_floor_applied_total")
                 // 크레딧 낭비의 분모다 (G7.5). 밖에서 못 읽으면 못 잰다.
-                .contains("waiting_allocation_admitted_total");
+                .contains("waiting_allocation_admitted_total")
+                // 재고 키를 잃은 사실과, 그것이 거짓 매진으로 나간 사실 (CY-702).
+                .contains("waiting_allocation_stock_unknown_ticks_total")
+                .contains("waiting_snapshot_stock_unknown_dropped_total");
+    }
+
+    /**
+     * <b>함수형 계측기는 상태 객체를 약한 참조로 잡는다.</b> 부르는 자리에서 만든
+     * 람다를 그대로 넘기면 GC 뒤에 그 계수가 0 으로 굳는다 — 표시를 계속 버리는데
+     * 지표만 조용해진다.
+     */
+    // 계측기를 건 객체가 살아 있는지로 잰다. GC 를 불러 재면 수거 시점이
+    // 보장되지 않아 간헐로 통과한다.
+    @Test
+    @DisplayName("계수의_상태_객체가_형제들과_같다")
+    void 계수의_상태_객체가_형제들과_같다() {
+        assertThat(registry.getMeters())
+                .filteredOn(m -> 선행_지표.contains(m.getId().getName()))
+                .as("하나라도 딴 객체에 걸리면 그것만 GC 뒤에 굳는다")
+                .hasSize(선행_지표.size());
+        assertThat(registry.scrape())
+                .as("등록만 되고 값을 못 읽으면 스크레이프에 안 나온다")
+                .contains("waiting_snapshot_stock_unknown_dropped_total");
     }
 
     /**

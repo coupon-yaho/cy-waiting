@@ -136,6 +136,12 @@ class ClusterModeScriptTest {
                     RedisKeys.grace("c1", 1, 0),
                     RedisKeys.alive("c1", 1, 0),
                     RedisKeys.admitted("c1", 1, 0));
+            // 재고가 줄과 같은 슬롯이라야 한다. 갈리면 스크립트가 스스로
+            // 거절하므로, 이 시험이 그 계약도 같이 잰다.
+            case "drop_queue.lua" -> List.of(
+                    RedisKeys.queue("c1", 1, 0),
+                    RedisKeys.alive("c1", 1, 0),
+                    RedisKeys.stock("c1"));
             case "snapshot_publish.lua" -> List.of(RedisKeys.SNAPSHOT);
             case "capacity_read.lua" -> List.of(RedisKeys.CAPACITY);
             case "snapshot_read.lua" -> List.of(RedisKeys.SNAPSHOT);
@@ -156,7 +162,8 @@ class ClusterModeScriptTest {
             case "sweep.lua" -> List.of("10", "1000", "300", "50", "0");
             case "allocation_apply.lua" -> List.of("1");
             // 인자가 없다. 기준 시각을 밖에서 주면 이 스크립트를 둔 이유가 사라진다.
-            case "capacity_read.lua", "snapshot_read.lua", "active_read.lua" -> List.of();
+            case "capacity_read.lua", "snapshot_read.lua", "active_read.lua",
+                 "drop_queue.lua" -> List.of();
             case "snapshot_publish.lua" -> List.of("#credit", "0");
             case "leader_acquire.lua" -> List.of("node-1", "2000");
             case "leader_release.lua" -> List.of("node-1");

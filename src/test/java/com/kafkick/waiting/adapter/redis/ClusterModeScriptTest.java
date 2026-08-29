@@ -136,8 +136,8 @@ class ClusterModeScriptTest {
                     RedisKeys.grace("c1", 1, 0),
                     RedisKeys.alive("c1", 1, 0),
                     RedisKeys.admitted("c1", 1, 0));
-            // 재고가 줄과 같은 슬롯이라야 한다. 갈리면 스크립트가 스스로
-            // 거절하므로, 이 시험이 그 계약도 같이 잰다.
+            // 재고가 줄과 같은 슬롯이라야 한다. 갈리면 클러스터가 본문을
+            // 태우기 전에 거절하므로, 이 시험은 그 라우팅만 잰다.
             case "drop_queue.lua" -> List.of(
                     RedisKeys.queue("c1", 1, 0),
                     RedisKeys.alive("c1", 1, 0),

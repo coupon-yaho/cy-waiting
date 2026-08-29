@@ -11,7 +11,9 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
+import org.springframework.data.redis.core.script.RedisScript;
 
 /**
  * 매진 큐의 실제 삭제 (7.3 · 5.3.1).
@@ -83,6 +85,10 @@ class DropQueueTest extends RedisContainerSupport {
         assertThat(있나(RedisKeys.admitted(COUPON, 1, 0))).as("입장 임계").isTrue();
         assertThat(있나(RedisKeys.grace(COUPON, 1, 0))).as("유예 기록").isTrue();
         assertThat(있나(RedisKeys.maxScore(COUPON, 1, 0))).as("시계 바닥값").isTrue();
+        // **재고 키는 발급 계층 소유다.** 여기서 지우면 그 뒤로 재고가 영영
+        // 미상이 되고 매진 종결이 통째로 꺼진다. 값으로 봐야 잡힌다.
+        assertThat(redis.opsForValue().get(RedisKeys.stock(COUPON)).block(WAIT))
+                .as("남의 키를 안 건드린다").isEqualTo("0");
     }
 
     /**
@@ -129,7 +135,8 @@ class DropQueueTest extends RedisContainerSupport {
     @Test
     @DisplayName("재고가_수가_아니면_안_지운다")
     void 재고가_수가_아니면_안_지운다() {
-        for (String 못_읽는_값 : List.of("몇 개더라", "-1e20", "-0.5", "-inf", "", " ", "0x10")) {
+        for (String 못_읽는_값 : List.of("몇 개더라", "-1e20", "-0.5", "-inf", "", " ", "0x10",
+                "-99999999999999999999")) {
             줄을_세운다();
             redis.opsForValue().set(RedisKeys.stock(COUPON), 못_읽는_값).block(WAIT);
 
@@ -173,6 +180,49 @@ class DropQueueTest extends RedisContainerSupport {
 
         assertThatThrownBy(() -> 샤딩.dropSoldOutQueues(List.of(COUPON)).block(WAIT))
                 .hasMessageContaining("샤드");
+    }
+
+    /**
+     * <b>거절과 고장을 가른다.</b> 포트는 스크립트 오류를 삼켜 "안 지웠다" 로
+     * 바꾸므로, 포트를 거쳐서는 둘이 완전히 같아 보인다 — 스크립트가 통째로
+     * 깨져도 정리가 조용히 멎고 시험은 초록이다.
+     */
+    @Test
+    @DisplayName("안_지울_때는_터지지_않고_0을_돌려준다")
+    void 안_지울_때는_터지지_않고_0을_돌려준다() {
+        줄을_세운다();
+        RedisScript<Long> script =
+                RedisScript.of(new ClassPathResource("redis/drop_queue.lua"), Long.class);
+        List<String> keys = List.of(RedisKeys.queue(COUPON, 1, 0),
+                RedisKeys.alive(COUPON, 1, 0), RedisKeys.stock(COUPON));
+
+        // 재고 키가 없다 — 못 읽은 것이라 안 지운다.
+        assertThat(redis.execute(script, keys, List.of()).blockFirst(WAIT))
+                .as("키가 없을 때").isZero();
+
+        redis.opsForValue().set(RedisKeys.stock(COUPON), "몇 개더라").block(WAIT);
+        assertThat(redis.execute(script, keys, List.of()).blockFirst(WAIT))
+                .as("수가 아닐 때").isZero();
+
+        redis.opsForValue().set(RedisKeys.stock(COUPON), "5").block(WAIT);
+        assertThat(redis.execute(script, keys, List.of()).blockFirst(WAIT))
+                .as("재입고됐을 때").isZero();
+    }
+
+    /** 한 판에 여럿을 지운다. 하나만 지우는 구현도 한 쿠폰짜리 시험은 통과한다. */
+    @Test
+    @DisplayName("한_판에_여러_줄을_지운다")
+    void 한_판에_여러_줄을_지운다() {
+        줄을_세운다();
+        redis.opsForValue().set(RedisKeys.stock(COUPON), "0").block(WAIT);
+        redis.opsForZSet().add(RedisKeys.queue(OTHER, 1, 0), "m1", 100).block(WAIT);
+        redis.opsForValue().set(RedisKeys.stock(OTHER), "0").block(WAIT);
+
+        assertThat(port.dropSoldOutQueues(List.of(OTHER, COUPON)).block(WAIT))
+                .containsExactlyInAnyOrder(OTHER, COUPON);
+
+        assertThat(있나(RedisKeys.queue(OTHER, 1, 0))).isFalse();
+        assertThat(있나(RedisKeys.queue(COUPON, 1, 0))).isFalse();
     }
 
     /** 한 쿠폰이 살아나도 나머지는 지운다. 판 하나가 통째로 멎으면 안 된다. */

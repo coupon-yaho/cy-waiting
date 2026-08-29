@@ -16,13 +16,21 @@ cd "$(git rev-parse --show-toplevel)" || exit 1
 COMPOSE="docker compose -f test/load/compose.yml -f test/load/compose.waste.yml"
 BASE_URL="${BASE_URL:-http://localhost:18080}"
 
-# 창을 여는 시각. 생존 수명 + 스위퍼 재개 유예보다 뒤라야 걷힌 뒤를 잰다.
-WINDOW_OPEN_SEC="${WINDOW_OPEN_SEC:-420}"
-WINDOW_CLOSE_SEC="${WINDOW_CLOSE_SEC:-660}"
-WASTE_MAX="${WASTE_MAX:-0.05}"
+# **창을 여는 시각.** 줄 세우기가 끝나고, 이탈자의 생존 신호가 만료되고, 청소가
+# 재개할 때까지 기다린 뒤다. 그래야 이 뒤의 모든 입장이 "기구가 손 쓸 시간이
+# 있었던" 구간에 든다 — 판이 시작되자마자 차례가 온 사람은 어떤 구현으로도
+# 못 걷는다. 계획서 6절이 기준을 이 구간으로 한정한 이유다.
+WINDOW_OPEN_SEC="${WINDOW_OPEN_SEC:-380}"
 
 # 차례가 온 것을 아는 데 걸리는 시간. 서버가 말할 수 있는 가장 먼 간격이다.
+# 받아 가는 쪽 창만 이만큼 늦게 연다 — 창이 열리기 직전에 차례를 받은 사람이
+# 그 뒤에 오는 것을 우리 몫으로 세면 안 된다.
 CLAIM_LAG_SEC="${CLAIM_LAG_SEC:-60}"
+
+# 판이 끝나고 마지막 사람들이 받아 갈 때까지 기다리는 시간.
+SETTLE_SEC="${SETTLE_SEC:-90}"
+
+WASTE_MAX="${WASTE_MAX:-0.05}"
 
 work=$(mktemp -d) || exit 1
 trap 'rm -rf "$work"; $COMPOSE down -v >/dev/null 2>&1' EXIT
@@ -42,39 +50,36 @@ metric() {
 # **매번 다시 짓는다.** 이미지가 남아 있으면 compose 가 그것을 그대로 쓰고,
 # 그러면 지표를 새로 넣은 판에서도 옛 바이너리를 재게 된다 — 실제로 그랬다.
 echo "== 하네스를 띄운다 =="
-$COMPOSE up -d --build --wait || { echo "::error::하네스가 안 떴다"; exit 1; }
+CREDITS="${CREDITS:-2}" $COMPOSE up -d --build --wait || { echo "::error::하네스가 안 떴다"; exit 1; }
 
 echo "== 부하를 시작한다 =="
 k6 run --quiet --summary-export="$work/summary.json" \
     test/load/abandonment-waste.js >"$work/k6.log" 2>&1 &
 k6_pid=$!
 
-# **받아 가는 쪽 창을 한 간격 뒤로 민다.** 차례가 왔다는 것을 그 사람은 다음
-# 폴링에서야 안다. 두 창을 같은 시각에 두면 창 끝에서 차례를 받은 사람이 아직
-# 안 왔을 뿐인데 낭비로 잡히고, 그 몫이 `간격 / 창_길이` 만큼 그대로 얹힌다 —
-# 실측에서 18.7% 중 대부분이 그것이었다. 최대 폴링 간격만큼 밀면 그 사람들이
-# 올 시간을 준다.
+# **닫는 쪽은 판이 다 끝난 뒤다.** 창을 둘 다 중간에 두면 차례를 받은 것과
+# 받아 간 것 사이의 지연이 그대로 낭비로 잡힌다 — 그 지연은 폴링 간격만큼이라
+# 창을 어디에 두든 몇십 %가 얹힌다.
 sleep "$WINDOW_OPEN_SEC"
 open_admitted=$(metric 'waiting_allocation_admitted_total' "$(scrape)")
 
 sleep "$CLAIM_LAG_SEC"
 open_claimed=$(metric 'waiting_admission_total.*outcome="PASS_TOKEN"' "$(scrape)")
 
-sleep $((WINDOW_CLOSE_SEC - WINDOW_OPEN_SEC - CLAIM_LAG_SEC))
-close_admitted=$(metric 'waiting_allocation_admitted_total' "$(scrape)")
-
-sleep "$CLAIM_LAG_SEC"
-close_claimed=$(metric 'waiting_admission_total.*outcome="PASS_TOKEN"' "$(scrape)")
-
 wait "$k6_pid"
 k6_rc=$?
 
+echo "== 마지막 사람들이 받아 갈 때까지 기다린다 =="
+sleep "$SETTLE_SEC"
+
+final=$(scrape)
+close_admitted=$(metric 'waiting_allocation_admitted_total' "$final")
+close_claimed=$(metric 'waiting_admission_total.*outcome="PASS_TOKEN"' "$final")
+
 # **못 잰 판에서도 무엇을 봤는지 남긴다.** 값 없이 미판정만 나오면 원인이
 # 배선인지 판 설계인지 안 갈리고, 그때 다음 사람은 판을 처음부터 다시 짠다.
-printf '  %-24s %s\n' "차례를 준 인원(창 열림)" "${open_admitted:-못 읽음}"
-printf '  %-24s %s\n' "차례를 준 인원(창 닫힘)" "${close_admitted:-못 읽음}"
-printf '  %-24s %s\n' "받아 간 인원(창 열림)" "${open_claimed:-못 읽음}"
-printf '  %-24s %s\n' "받아 간 인원(창 닫힘)" "${close_claimed:-못 읽음}"
+printf '  %-24s %s\n' "차례를 준 인원(열림/닫힘)" "${open_admitted:-?} / ${close_admitted:-?}"
+printf '  %-24s %s\n' "받아 간 인원(열림/닫힘)" "${open_claimed:-?} / ${close_claimed:-?}"
 for name in joined abandoned admittedHere; do
   printf '  %-24s %s\n' "$name" \
       "$(jq -r ".metrics.${name}.count // .metrics.${name}.values.count // \"없음\"" \
@@ -82,7 +87,6 @@ for name in joined abandoned admittedHere; do
 done
 # **스위퍼가 돌았는지 먼저 본다.** 낭비율만 보면 "기구가 약한 것" 과 "기구가
 # 아예 안 돈 것" 이 같은 숫자로 나온다.
-final=$(scrape)
 for kind in swept expired-signal failed; do
   printf '  %-24s %s\n' "sweep($kind)" \
       "$(metric "waiting_sweep_total.*kind=\"$kind\"" "$final" || echo 없음)"
@@ -102,15 +106,15 @@ read -r admitted claimed waste < <(awk -v oa="$open_admitted" -v ca="$close_admi
     -v oc="$open_claimed" -v cc="$close_claimed" \
     'BEGIN { a = ca - oa; c = cc - oc; printf "%.0f %.0f %.6f", a, c, (a > 0 ? (a - c) / a : -1) }')
 
-printf '  %-24s %s\n' "창 안 차례를 준 인원" "$admitted"
-printf '  %-24s %s\n' "창 안 받아 간 인원" "$claimed"
+printf '  %-24s %s\n' "차례를 준 인원(합)" "$admitted"
+printf '  %-24s %s\n' "받아 간 인원(합)" "$claimed"
 printf '  %-24s %s\n' "크레딧 낭비율" "$waste"
 
 failed=0
 # **차례가 충분히 지나가야 잰 것이다.** 몇 명뿐이면 한 사람이 낭비율을 통째로
 # 흔들어, 통과든 미달이든 그 수에 뜻이 없다.
 if awk -v a="$admitted" 'BEGIN { exit (a >= 100) ? 0 : 1 }'; then :; else
-  echo "::error title=G7.5 미판정::창 안 차례가 $admitted 명뿐이다 — 판이 짧거나 크레딧이 안 나갔다"
+  echo "::error title=G7.5 미판정::차례가 $admitted 명뿐이다 — 판이 짧거나 크레딧이 안 나갔다"
   failed=1
 fi
 if awk -v w="$waste" 'BEGIN { exit (w >= 0) ? 0 : 1 }'; then :; else
@@ -118,7 +122,7 @@ if awk -v w="$waste" 'BEGIN { exit (w >= 0) ? 0 : 1 }'; then :; else
   failed=1
 fi
 if awk -v w="$waste" -v m="$WASTE_MAX" 'BEGIN { exit (w <= m) ? 0 : 1 }'; then
-  echo "G7.5 통과 — 정상 구간 크레딧 낭비 $waste <= $WASTE_MAX"
+  echo "G7.5 통과 — 대기 시간이 수명을 넘은 구간의 크레딧 낭비 $waste <= $WASTE_MAX"
 else
   echo "::error title=G7.5 미달::크레딧 낭비 $waste > $WASTE_MAX"
   failed=1

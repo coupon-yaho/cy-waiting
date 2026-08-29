@@ -19,7 +19,7 @@ const COUPON = __ENV.COUPON || 'c2';
 const ABANDON_RATE = Number(__ENV.ABANDON_RATE || '0.3');
 
 /** 줄에 세울 인원. 임계가 이만큼을 지나가는 데 생존 수명보다 오래 걸려야 한다. */
-const POPULATION = Number(__ENV.POPULATION || '2400');
+const POPULATION = Number(__ENV.POPULATION || '1600');
 
 /**
  * 줄을 세우는 시간(초). 이 뒤로는 아무도 안 들어오고 줄이 빠지기만 한다.
@@ -28,7 +28,7 @@ const POPULATION = Number(__ENV.POPULATION || '2400');
  * 두든 "아직 수명이 안 지난 이탈자" 가 섞인다 — 그러면 재는 것이 기구가 아니라
  * 창의 위치가 된다. 한 번에 넣으면 수명이 다 같은 시각에 지나간다.
  */
-const JOIN_SEC = Number(__ENV.JOIN_SEC || '60');
+const JOIN_SEC = Number(__ENV.JOIN_SEC || '40');
 
 /** 판 전체 길이(초). 정상 구간이 남을 만큼 길어야 한다. */
 const RUN_SEC = Number(__ENV.RUN_SEC || '900');

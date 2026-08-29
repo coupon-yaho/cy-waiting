@@ -14,7 +14,7 @@ services:
         redis-cli -h redis SET 'stock:{c2}' 1000000
         while :; do
           redis-cli -h redis HSET capacity:coupon-svc:v1 stub-1 \
-            "{\"addr\":\"backend:8090\",\"credits\":3,\"ts\":$(date +%s)}" > /dev/null
+            "{\"addr\":\"backend:8090\",\"credits\":${CREDITS:-3},\"ts\":$(date +%s)}" > /dev/null
           sleep 1
         done
     healthcheck:

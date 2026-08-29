@@ -100,6 +100,60 @@ case_is "음수 카운터가 없으면 깨진 판으로 본다" 1 \
 # 요약이 깨진 판. 숫자가 아닌 값을 통과로 세면 판정이 아니라 파싱을 재는 셈이다.
 case_is "깨진 요약은 통과로 안 센다" 1 '.metrics.gateway_overhead_ms = {}'
 
+# ── G7.5 낭비 판정 (evaluate-waste.sh) ──────────────────────────────────────
+#
+# **심판이 틀리면 아무도 안 본다.** 이 판정은 실제로 상수 하나 때문에 같은
+# 측정에서 통과와 미달이 갈렸다. 조작한 입력으로 그 갈래들을 못 박는다.
+waste="$here/evaluate-waste.sh"
+
+# 표본: 100초에 임계가 60,000,000 μs 자리, 200초에 200,000,000 자리.
+waste_samples() {
+  printf '100 60000000\n200 200000000\n'
+}
+
+# 유령 하나. score 가 곧 줄 선 시각(μs)이라 50초에 줄을 섰고, 임계는 100초에
+# 그를 지났다 — **기다린 시간 50초.**
+waste_ghost() { printf 'm1\t50000000\n'; }
+
+run_waste() {  # 이름 기대코드 [인자...]
+  local name="$1" want="$2"; shift 2
+  "$waste" "$@" >"$work/waste.log" 2>&1
+  local rc=$?
+  if [ "$rc" -ne "$want" ]; then
+    echo "  ✗ $name — 기대 $want, 실제 $rc"
+    sed 's/^/      /' "$work/waste.log"
+    failed=1
+  else
+    echo "  ✓ $name"
+  fi
+}
+
+echo "== G7.5 낭비 판정 =="
+waste_samples > "$work/s.log"
+
+# 수명 40초: 50초를 기다렸으니 걷었어야 한다 → 피할 수 있었던 낭비
+waste_ghost > "$work/g.tsv"
+run_waste "피할 수 있었던 유령을 잡는다" 1 "$work/s.log" "$work/g.tsv" 1000 10 20 40
+
+# 수명 60초: 50초는 수명 안이라 못 피한다 → 통과
+run_waste "수명 안의 유령은 안 센다" 0 "$work/s.log" "$work/g.tsv" 1000 10 20 60
+
+# 유령이 없으면 "기구를 안 잰 판" 이라 미판정이어야 한다 — 통과로 읽으면
+# 이탈이 안 일어난 판이 매번 초록이 된다
+: > "$work/empty.tsv"
+run_waste "유령이 없으면 미판정" 1 "$work/s.log" "$work/empty.tsv" 1000 10 20 60
+
+# 차례가 몇 명뿐이면 비율에 뜻이 없다
+run_waste "차례가 적으면 미판정" 1 "$work/s.log" "$work/g.tsv" 10 10 20 60
+
+# **과잉 청소.** 걷은 수가 이탈한 수를 넘으면 살아 있는 사람을 걷은 것이다
+run_waste "과잉 청소를 미달로 잡는다" 1 "$work/s.log" "$work/g.tsv" 1000 30 20 60
+
+# 표본이 비면 유령이 언제 차례를 받았는지 모른다
+: > "$work/nosample.log"
+run_waste "표본이 비면 미판정" 1 "$work/nosample.log" "$work/g.tsv" 1000 10 20 60
+
+
 if [[ "$failed" == 0 ]]; then
   printf '\033[1m게이트 자기검사 통과\033[0m\n'
 else

@@ -120,16 +120,35 @@ class DropQueueTest extends RedisContainerSupport {
         assertThat(있나(RedisKeys.queue(COUPON, 1, 0))).as("줄이 살아 있다").isTrue();
     }
 
-    /** 수가 아닌 재고도 못 읽은 것이다. 0 으로 읽으면 그 줄이 사라진다. */
+    /**
+     * <b>재고를 읽는 두 곳이 같은 답을 내야 한다.</b> 재고를 담는 쪽은
+     * {@code Long.parseLong} 이라 지수 표기나 소수를 못 읽는데, Lua 의
+     * {@code tonumber} 는 읽는다. 갈리면 수집이 "미상" 이라 부른 값으로
+     * 삭제가 "매진" 이라 판단해 그 줄을 영영 지운다.
+     */
     @Test
     @DisplayName("재고가_수가_아니면_안_지운다")
     void 재고가_수가_아니면_안_지운다() {
+        for (String 못_읽는_값 : List.of("몇 개더라", "-1e20", "-0.5", "-inf", "", " ", "0x10")) {
+            줄을_세운다();
+            redis.opsForValue().set(RedisKeys.stock(COUPON), 못_읽는_값).block(WAIT);
+
+            assertThat(port.dropSoldOutQueues(List.of(COUPON)).block(WAIT))
+                    .as("못 읽는 값: %s", 못_읽는_값).isEmpty();
+            assertThat(있나(RedisKeys.queue(COUPON, 1, 0)))
+                    .as("줄이 남아야 한다: %s", 못_읽는_값).isTrue();
+        }
+    }
+
+    /** 읽히는 음수는 매진으로 본다. 수집도 0 으로 눌러 같은 결론을 낸다. */
+    @Test
+    @DisplayName("읽히는_음수_재고는_지운다")
+    void 읽히는_음수_재고는_지운다() {
         줄을_세운다();
-        redis.opsForValue().set(RedisKeys.stock(COUPON), "몇 개더라").block(WAIT);
+        redis.opsForValue().set(RedisKeys.stock(COUPON), "-3").block(WAIT);
 
-        assertThat(port.dropSoldOutQueues(List.of(COUPON)).block(WAIT)).isEmpty();
-
-        assertThat(있나(RedisKeys.queue(COUPON, 1, 0))).isTrue();
+        assertThat(port.dropSoldOutQueues(List.of(COUPON)).block(WAIT))
+                .containsExactly(COUPON);
     }
 
     /**

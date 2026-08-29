@@ -366,9 +366,13 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     /** 관찰보다 나중에 발행된 재료가 재고를 말하면 푼다 (7.2.4). */
     // 낡은 재료로는 안 푼다. 낡음은 못 믿겠다는 뜻인데 못 믿는 재료로 방패를
     // 부수는 것만 허용하면 비대칭이다 — 집행은 사다리 1번처럼 낡음을 견딘다.
+    //
+    // **재고를 모르는 재료로도 안 푼다** (CY-702). 해제는 재입고를 본 것이
+    // 근거인데 못 읽은 것은 본 것이 아니다. 뒷단이 409 를 내는 것과 재고 키를
+    // 잃는 것은 같이 오므로, 여기서 풀면 하필 그때 방패가 매 틱 열린다.
     private void releaseIfRestocked(String couponId, CouponState state,
             SnapshotHolder.View view) {
-        if (state.soldOut() || holder.isDataStale(view)) {
+        if (state.soldOut() || !state.stockKnown() || holder.isDataStale(view)) {
             return;
         }
         soldOutCache.restocked(couponId, view.snapshot().publishedAt())

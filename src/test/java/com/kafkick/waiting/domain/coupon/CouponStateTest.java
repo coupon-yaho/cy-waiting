@@ -157,10 +157,11 @@ class CouponStateTest {
     @DisplayName("음수 방어")
     class NegativeValues {
 
+        /** 미상을 뜻하는 한 값 말고는 음수를 안 받는다. 열어 두면 오타가 값이 된다. */
         @Test
-        @DisplayName("재고가_음수면_생성에_실패한다")
-        void 재고가_음수면_생성에_실패한다() {
-            assertThatThrownBy(() -> new CouponState(QueueMode.ADAPTIVE, RuntimeState.IDLE, 0, -1, 0))
+        @DisplayName("뜻_없는_음수_재고면_생성에_실패한다")
+        void 뜻_없는_음수_재고면_생성에_실패한다() {
+            assertThatThrownBy(() -> new CouponState(QueueMode.ADAPTIVE, RuntimeState.IDLE, 0, -2, 0))
                     .isInstanceOf(IllegalArgumentException.class);
         }
 
@@ -177,5 +178,91 @@ class CouponStateTest {
             assertThatThrownBy(() -> new CouponState(QueueMode.ADAPTIVE, RuntimeState.QUEUEING, -1, 500, 10))
                     .isInstanceOf(IllegalArgumentException.class);
         }
+    }
+
+    /**
+     * <b>재고를 못 읽은 것은 매진이 아니다.</b> 매진으로 읽으면 게이트웨이가
+     * 그 쿠폰을 종결하고 정리가 큐를 지운다 — 자동으로 안 낫는 오판이
+     * 되돌릴 수 없는 삭제가 된다 (3.1).
+     */
+    @Test
+    @DisplayName("재고_미상은_매진이_아니다")
+    void 재고_미상은_매진이_아니다() {
+        CouponState 미상 = CouponState.stockUnknown(QueueMode.ADAPTIVE, 7, 100);
+
+        assertThat(미상.stockKnown()).as("모른다는 것이 값으로 남는다").isFalse();
+        assertThat(미상.soldOut()).as("종결도 삭제도 이 값에 달렸다").isFalse();
+    }
+
+    /** 읽은 0 은 그대로 매진이다. 미상을 들이면서 이것이 흔들리면 R3 이 죽는다. */
+    @Test
+    @DisplayName("읽은_재고_0은_그대로_매진이다")
+    void 읽은_재고_0은_그대로_매진이다() {
+        assertThat(CouponState.closed(QueueMode.ADAPTIVE, 5).soldOut()).isTrue();
+        assertThat(CouponState.noQueue(QueueMode.ADAPTIVE, 0).soldOut()).isTrue();
+        assertThat(CouponState.withQueue(QueueMode.ADAPTIVE, 3, 10, 20).soldOut()).isFalse();
+        // **경계는 0 이다.** 미상만 빠져나가게 열었으므로, 읽은 0 이 같이
+        // 빠져나가면 아무것도 못 받을 줄에 사람을 계속 세우는 상태가 생긴다.
+        assertThatThrownBy(() -> CouponState.withQueue(QueueMode.ADAPTIVE, 3, 0, 20))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("closed");
+    }
+
+    /**
+     * <b>미상도 배수 중이 될 수 있다.</b> 런타임을 유도하는 팩토리라 결과가
+     * 셋인데, 이 갈래를 안 재면 I3 경계가 미상에서만 어긋나도 안 드러난다.
+     */
+    @Test
+    @DisplayName("미상인데_이번_틱에_다_뺄_수_있으면_배수다")
+    void 미상인데_이번_틱에_다_뺄_수_있으면_배수다() {
+        CouponState 미상 = CouponState.stockUnknown(QueueMode.ADAPTIVE, 30, 30);
+
+        assertThat(미상.runtime()).as("몫이 대기와 같으면 배수다").isEqualTo(RuntimeState.DRAINING);
+        assertThat(미상.stockKnown()).isFalse();
+    }
+
+    /**
+     * 적용이 실패하면 몫이 0 으로 접힌다. <b>그 판의 미상 쿠폰이 이 상태다</b> —
+     * 줄은 남았는데 아무도 못 들어간다. 매진과 갈리는 것이 여기서도 유지돼야 한다.
+     */
+    @Test
+    @DisplayName("미상인데_몫이_0이면_줄_서는_중이다")
+    void 미상인데_몫이_0이면_줄_서는_중이다() {
+        CouponState 미상 = CouponState.stockUnknown(QueueMode.ADAPTIVE, 0, 30);
+
+        assertThat(미상.runtime()).isEqualTo(RuntimeState.QUEUEING);
+        assertThat(미상.soldOut()).as("몫이 0 이라고 매진은 아니다").isFalse();
+    }
+
+    /**
+     * 미상인데 줄이 비었으면 한산이다. <b>줄 없이 큐 상태를 만들면 I4 가 막는다</b> —
+     * 경계가 밀리면 재고를 못 읽는 쿠폰이 줄이 빌 때마다 발행에서 터진다.
+     */
+    @Test
+    @DisplayName("미상인데_줄이_비면_한산이다")
+    void 미상인데_줄이_비면_한산이다() {
+        CouponState 미상 = CouponState.stockUnknown(QueueMode.ADAPTIVE, 0, 0);
+
+        assertThat(미상.runtime()).isEqualTo(RuntimeState.IDLE);
+        assertThat(미상.stockKnown()).isFalse();
+        assertThat(미상.soldOut()).as("줄이 비었다고 매진은 아니다").isFalse();
+        // **몫을 조용히 안 버린다.** 형제 팩토리가 던지는 자리를 이것만 삼키면
+        // I1 이 잡으려던 갈라짐이 안 드러난다.
+        assertThatThrownBy(() -> CouponState.stockUnknown(QueueMode.ADAPTIVE, 5, 0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("I1");
+    }
+
+    /**
+     * <b>미상이면 종결로 못 간다.</b> I2 가 종결에 재고 0 을 요구하므로 미상은
+     * 애초에 그 자리에 못 선다 — 삭제로 가는 길이 자료형에서 막힌다.
+     */
+    @Test
+    @DisplayName("미상은_종결_상태가_될_수_없다")
+    void 미상은_종결_상태가_될_수_없다() {
+        assertThatThrownBy(() -> new CouponState(
+                QueueMode.ADAPTIVE, RuntimeState.CLOSED, 0, CouponState.STOCK_UNKNOWN, 5))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("I2");
     }
 }

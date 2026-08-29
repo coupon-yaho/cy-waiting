@@ -6,6 +6,7 @@ import com.kafkick.waiting.control.TimedCoupons;
 import com.kafkick.waiting.control.TimedSnapshot;
 import com.kafkick.waiting.control.ControlPlaneProperties;
 import com.kafkick.waiting.control.FailureWindow;
+import com.kafkick.waiting.control.SnapshotCodec;
 import com.kafkick.waiting.control.SnapshotSource;
 import com.kafkick.waiting.domain.allocation.Grant;
 import com.kafkick.waiting.domain.coupon.QueueMode;
@@ -17,6 +18,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.slf4j.Logger;
@@ -96,6 +98,15 @@ public final class AllocationRedisPort implements SnapshotSource {
     private final FailureWindow rejected = FailureWindow.create();
     private final FailureWindow malformed = FailureWindow.create();
     private final FailureWindow badPolicy = FailureWindow.create();
+    private final FailureWindow publishTrim = FailureWindow.create();
+
+    /**
+     * 상한을 넘겨 버린 미상 표시의 누적 수. <b>0 이 아니면 거짓 매진이 나갔다.</b>
+     *
+     * <p>미상인 채 발행한 수만 세면 실제로 해를 내는 사건이 안 잡힌다 — 무해한
+     * 쪽만 세는 셈이다.
+     */
+    private final AtomicLong markersDropped = new AtomicLong();
     /** 신선도의 기준 시각. 뒤로 가는 것을 여기서 막는다 (A-9). */
     private final ServerClock serverClock = ServerClock.create();
 
@@ -122,6 +133,11 @@ public final class AllocationRedisPort implements SnapshotSource {
 
     public static AllocationRedisPort of(ReactiveStringRedisTemplate redis, int shards) {
         return new AllocationRedisPort(redis, shards);
+    }
+
+    /** 상한을 넘겨 버린 미상 표시의 누적 수. 0 이 아니면 거짓 매진이 나갔다. */
+    public double markersDropped() {
+        return markersDropped.get();
     }
 
     /** 시계가 뒤로 간 사실을 남긴다. 조용히 보정하면 왜 그랬는지를 영영 못 밝힌다. */
@@ -502,7 +518,12 @@ public final class AllocationRedisPort implements SnapshotSource {
         return value instanceof Number n ? n.longValue() : 0;
     }
 
-    /** 쿠폰별 재고. <b>없으면 담지 않는다</b> — 부르는 쪽이 "모른다" 를 0 으로 접는다. */
+    /**
+     * 쿠폰별 재고. <b>못 읽으면 담지 않는다</b> — 키가 없거나 수가 아닐 때다.
+     *
+     * <p>빠진 자리를 0 으로 접으면 재고 키를 잃은 쿠폰이 매진이 된다. 부르는
+     * 쪽이 그 빈자리를 미상으로 싣는다 (3.1).
+     */
     public Mono<Map<String, Long>> stocks(List<String> couponIds) {
         List<String> keys = couponIds.stream().map(RedisKeys::stock).toList();
         return redis.opsForValue().multiGet(keys).map(values -> {
@@ -552,17 +573,102 @@ public final class AllocationRedisPort implements SnapshotSource {
         if (hash.isEmpty()) {
             return Mono.error(new IllegalArgumentException("빈 스냅샷은 발행하지 않는다"));
         }
-        if (hash.size() > MAX_PUBLISH_FIELDS) {
+        Map<String, String> toPublish = withinLimit(hash);
+        if (toPublish.size() > MAX_PUBLISH_FIELDS) {
             return Mono.error(new IllegalStateException(
                     "한 번에 실을 수 있는 필드를 넘었다: %d > %d"
-                            .formatted(hash.size(), MAX_PUBLISH_FIELDS)));
+                            .formatted(toPublish.size(), MAX_PUBLISH_FIELDS)));
         }
-        List<String> args = new ArrayList<>(hash.size() * 2);
-        hash.forEach((field, value) -> {
+        List<String> args = new ArrayList<>(toPublish.size() * 2);
+        toPublish.forEach((field, value) -> {
             args.add(field);
             args.add(value);
         });
-        return redis.execute(PUBLISH, List.of(RedisKeys.SNAPSHOT), args).next().then();
+        int dropped = hash.size() - toPublish.size();
+        return redis.execute(PUBLISH, List.of(RedisKeys.SNAPSHOT), args).next()
+                .doOnSuccess(done -> watchTrim(dropped))
+                .then();
+    }
+
+    /**
+     * 상한을 넘으면 <b>미상 표시부터 버린다</b>.
+     *
+     * <p>표시는 쿠폰마다 필드를 하나 더 쓰므로 실을 수 있는 쿠폰이 절반이 된다.
+     * 그런데 그 두 배가 되는 순간은 재고를 통째로 못 읽는 순간이라, 하필 그때
+     * 발행이 죽는다 — 전 노드가 낡음으로 넘어가고 정리도 청소도 같이 멎는다.
+     */
+    // 표시를 잃으면 그 쿠폰이 거짓 매진으로 읽힌다. 나쁘지만 스냅샷이 아예
+    // 안 나가는 것보다 낫다 — 옛 노드가 오늘 하는 것과 같은 자리다.
+    private Map<String, String> withinLimit(Map<String, String> hash) {
+        if (hash.size() <= MAX_PUBLISH_FIELDS) {
+            return hash;
+        }
+        // **필요한 만큼만 버린다.** 하나를 넘었다고 전부 버리면 안 버려도 될
+        // 쿠폰까지 거짓 매진이 되고, 그 하나하나가 줄을 잃는 경로를 탄다.
+        Map<String, String> trimmed = new LinkedHashMap<>(hash);
+        int over = hash.size() - MAX_PUBLISH_FIELDS;
+        for (String marker : droppableMarkers(hash)) {
+            if (over <= 0) {
+                break;
+            }
+            trimmed.remove(marker);
+            over--;
+        }
+        return trimmed;
+    }
+
+    /**
+     * 버린 사실을 남긴다. <b>발행이 끝난 뒤에만 부른다.</b>
+     *
+     * <p>앞에서 세면 지표가 "거짓 매진이 된 쿠폰 수" 가 아니라 "버리려고 시도한
+     * 횟수" 가 된다. 같은 판이 매 틱 실패하는 구간에서 그 수가 끝없이 부푼다.
+     */
+    private void watchTrim(int dropped) {
+        if (dropped <= 0) {
+            return;
+        }
+        markersDropped.addAndGet(dropped);
+        // **몇 개인지만 남긴다.** 쿠폰 ID 는 라벨로도 로그로도 못 쏟는다 (LG-3).
+        if (publishTrim.entered()) {
+            log.warn("발행 필드가 상한을 넘어 재고 미상 표시 {}개를 버렸다 — 그 쿠폰들이 매진으로 읽힌다",
+                    dropped);
+        }
+    }
+
+    /**
+     * 버려도 덜 아픈 표시부터. <b>줄이 빈 쿠폰이 먼저다.</b>
+     *
+     * <p>줄이 빈 쿠폰의 표시를 잃으면 신규 유입만 거절되고 다음 판이 되돌린다.
+     * 줄이 선 쿠폰의 표시를 잃으면 그 줄이 통째로 종결로 읽힌다.
+     */
+    private List<String> droppableMarkers(Map<String, String> hash) {
+        List<String> empty = new ArrayList<>();
+        List<String> queued = new ArrayList<>();
+        hash.forEach((field, value) -> {
+            if (!field.startsWith(SnapshotCodec.STOCK_UNKNOWN_FIELD)) {
+                return;
+            }
+            String coupon = field.substring(SnapshotCodec.STOCK_UNKNOWN_FIELD.length());
+            (waitingOf(hash.get(coupon)) > 0 ? queued : empty).add(field);
+        });
+        empty.addAll(queued);
+        return empty;
+    }
+
+    /** 쿠폰 값의 대기 수. <b>못 읽으면 줄이 선 것으로 본다</b> — 덜 버리는 쪽이다. */
+    private long waitingOf(String raw) {
+        if (raw == null) {
+            return 1;
+        }
+        String[] parts = raw.split(":");
+        if (parts.length < 5) {
+            return 1;
+        }
+        try {
+            return Long.parseLong(parts[4]);
+        } catch (NumberFormatException e) {
+            return 1;
+        }
     }
 
     /**

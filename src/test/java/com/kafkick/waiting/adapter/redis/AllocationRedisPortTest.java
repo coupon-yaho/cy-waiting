@@ -7,6 +7,8 @@ import static org.assertj.core.api.Assertions.entry;
 import com.kafkick.waiting.domain.allocation.Grant;
 import com.kafkick.waiting.domain.coupon.QueueMode;
 import java.time.Duration;
+import com.kafkick.waiting.control.SnapshotCodec;
+import java.util.LinkedHashMap;
 import com.kafkick.waiting.control.QueueSweeper;
 import java.util.List;
 import java.util.Map;
@@ -367,8 +369,15 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         // 재고는 샤드 무관 키라 큐와 슬롯이 갈린다. 같은 스크립트에서 못 읽는다.
         redis.opsForValue().set(RedisKeys.stock("c1"), "70").block(WAIT);
 
-        // 없는 재고는 아예 안 담는다. 부르는 쪽이 "모른다" 를 0 으로 접는다.
-        assertThat(port.stocks(List.of("c1", "c2")).block(WAIT))
+        // **못 읽으면 아예 안 담는다.** 부르는 쪽이 그 빈자리를 미상으로 싣는다
+        // — 0 으로 접으면 재고 키를 잃은 쿠폰이 매진이 된다 (CY-702).
+        //
+        // 수가 아닌 값도 여기서 빠진다. 그건 대개 안 낫는 손상이라 그 쿠폰이
+        // 영영 미상으로 남는다 — 종결도 정리도 청소 재개도 안 온다. 지금은
+        // 그것을 감수한다. 잘못 읽은 수로 재고를 판단하는 쪽이 더 나쁘다.
+        redis.opsForValue().set(RedisKeys.stock("c3"), "몇 개더라").block(WAIT);
+
+        assertThat(port.stocks(List.of("c1", "c2", "c3")).block(WAIT))
                 .containsOnly(entry("c1", 70L));
     }
 
@@ -406,6 +415,123 @@ class AllocationRedisPortTest extends RedisContainerSupport {
                 .isInstanceOf(IllegalArgumentException.class);
 
         assertThat(port.load().block(WAIT)).containsEntry("c1", "a");
+    }
+
+    /**
+     * <b>상한을 넘으면 미상 표시부터 버리고 발행한다.</b>
+     *
+     * <p>표시는 쿠폰마다 필드를 하나 더 쓰므로 실을 수 있는 쿠폰이 절반이 된다.
+     * 그런데 그 두 배가 되는 순간은 재고를 통째로 못 읽는 순간이라, 하필 그때
+     * 발행이 죽는다 — 전 노드가 낡음으로 넘어가고 정리도 청소도 같이 멎는다.
+     */
+    // 표시를 잃으면 그 쿠폰이 거짓 매진으로 읽힌다. 나쁘지만 스냅샷이 아예
+    // 안 나가는 것보다 낫다 — 옛 노드가 오늘 하는 것과 같은 자리다.
+    @Test
+    @DisplayName("상한을_넘으면_미상_표시부터_버린다")
+    void 상한을_넘으면_미상_표시부터_버린다() {
+        Map<String, String> 큰_판 = new LinkedHashMap<>();
+        for (int i = 0; i < 1_600; i++) {
+            큰_판.put("c" + i, "OFF:QUEUEING:1:0:5:1.0");
+            큰_판.put(SnapshotCodec.STOCK_UNKNOWN_FIELD + "c" + i, "1");
+        }
+
+        port.publish(큰_판).block(WAIT);
+
+        Map<String, String> 실린것 = port.load().block(WAIT);
+        assertThat(실린것).as("쿠폰은 다 실린다").containsKey("c1599");
+        assertThat(실린것).as("상한까지 채워 싣는다").hasSize(3_000);
+        // **필요한 만큼만 버린다.** 하나를 넘었다고 전부 버리면 안 버려도 될
+        // 쿠폰까지 거짓 매진이 되고, 그 하나하나가 줄을 잃는 경로를 탄다.
+        assertThat(실린것.keySet().stream()
+                .filter(f -> f.startsWith(SnapshotCodec.STOCK_UNKNOWN_FIELD)).count())
+                .as("남길 수 있는 표시는 남긴다").isEqualTo(1_400);
+        assertThat(port.markersDropped()).as("버린 사실이 지표로 남는다").isEqualTo(200);
+    }
+
+    /**
+     * <b>줄이 빈 쿠폰의 표시부터 버린다.</b> 그 표시를 잃으면 신규 유입만
+     * 거절되고 다음 판이 되돌린다. 줄이 선 쿠폰의 표시를 잃으면 그 줄이 통째로
+     * 종결로 읽히고, 되돌릴 방법이 없다.
+     */
+    @Test
+    @DisplayName("줄이_빈_쿠폰의_표시부터_버린다")
+    void 줄이_빈_쿠폰의_표시부터_버린다() {
+        Map<String, String> 큰_판 = new LinkedHashMap<>();
+        for (int i = 0; i < 1_600; i++) {
+            // 짝수만 줄이 서 있다. 버릴 것은 홀수 쪽에서 다 나와야 한다.
+            큰_판.put("c" + i, "OFF:QUEUEING:1:0:" + (i % 2 == 0 ? 5 : 0) + ":1.0");
+            큰_판.put(SnapshotCodec.STOCK_UNKNOWN_FIELD + "c" + i, "1");
+        }
+
+        port.publish(큰_판).block(WAIT);
+
+        Map<String, String> 실린것 = port.load().block(WAIT);
+        assertThat(실린것.keySet().stream()
+                .filter(f -> f.startsWith(SnapshotCodec.STOCK_UNKNOWN_FIELD))
+                .filter(f -> Integer.parseInt(f.substring(4)) % 2 == 0).count())
+                .as("줄이 선 쿠폰의 표시는 하나도 안 버린다").isEqualTo(800);
+    }
+
+    /** 표시를 다 버려도 안 되면 그때는 실패다. 잘라 실으면 원자성이 깨진다. */
+    @Test
+    @DisplayName("표시를_버려도_상한을_넘으면_실패한다")
+    void 표시를_버려도_상한을_넘으면_실패한다() {
+        // **표시를 다 달아 둔다.** 표시가 없으면 버릴 것이 없어서 실패하는
+        // 것이라, 이 시험이 말하는 "다 버려도 안 된다" 를 한 번도 안 밟는다.
+        Map<String, String> 큰_판 = new LinkedHashMap<>();
+        for (int i = 0; i < 3_100; i++) {
+            큰_판.put("c" + i, "OFF:QUEUEING:1:0:5:1.0");
+            큰_판.put(SnapshotCodec.STOCK_UNKNOWN_FIELD + "c" + i, "1");
+        }
+
+        assertThatThrownBy(() -> port.publish(큰_판).block(WAIT))
+                .isInstanceOf(IllegalStateException.class);
+
+        // **안 나간 판은 거짓 매진을 안 만든다.** 여기서 세면 지표가 "표시를
+        // 버려 매진으로 읽힌 쿠폰" 이 아니라 "버리려고 시도한 횟수" 가 되고,
+        // 같은 판이 매 틱 실패하는 구간에서 그 수가 끝없이 부푼다.
+        assertThat(port.markersDropped()).as("안 나간 판은 안 센다").isZero();
+    }
+
+    /** 상한과 같으면 그대로 싣는다. 하나 넘어야 버리기 시작한다. */
+    @Test
+    @DisplayName("상한과_같으면_표시를_안_버린다")
+    void 상한과_같으면_표시를_안_버린다() {
+        Map<String, String> 판 = new LinkedHashMap<>();
+        for (int i = 0; i < 1_500; i++) {
+            판.put("c" + i, "OFF:QUEUEING:1:0:5:1.0");
+            판.put(SnapshotCodec.STOCK_UNKNOWN_FIELD + "c" + i, "1");
+        }
+
+        port.publish(판).block(WAIT);
+
+        assertThat(port.load().block(WAIT)).hasSize(3_000);
+        assertThat(port.markersDropped()).isZero();
+    }
+
+    /**
+     * <b>짝 없는 표시가 와도 안 터진다.</b> 발행은 아무 맵이나 받으므로 쿠폰
+     * 값이 없는 표시가 들어올 수 있다. 그때는 줄이 선 것으로 보고 덜 버린다.
+     */
+    @Test
+    @DisplayName("짝_없는_표시는_덜_버리는_쪽으로_친다")
+    void 짝_없는_표시는_덜_버리는_쪽으로_친다() {
+        Map<String, String> 판 = new LinkedHashMap<>();
+        판.put(SnapshotCodec.STOCK_UNKNOWN_FIELD + "orphan", "1");
+        판.put("broken", "OFF:QUEUEING");
+        판.put(SnapshotCodec.STOCK_UNKNOWN_FIELD + "broken", "1");
+        for (int i = 0; i < 1_500; i++) {
+            판.put("c" + i, "OFF:QUEUEING:1:0:0:1.0");
+            판.put(SnapshotCodec.STOCK_UNKNOWN_FIELD + "c" + i, "1");
+        }
+
+        port.publish(판).block(WAIT);
+
+        Map<String, String> 실린것 = port.load().block(WAIT);
+        assertThat(실린것).as("줄이 빈 쪽부터 버려 상한을 맞춘다").hasSize(3_000);
+        assertThat(실린것).as("짝 없는 표시는 남긴다")
+                .containsKey(SnapshotCodec.STOCK_UNKNOWN_FIELD + "orphan")
+                .containsKey(SnapshotCodec.STOCK_UNKNOWN_FIELD + "broken");
     }
 
     @Test

@@ -4,6 +4,7 @@ import com.kafkick.waiting.adapter.redis.ClockSkewTracker;
 import io.micrometer.core.instrument.FunctionCounter;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.util.Objects;
+import java.util.function.DoubleSupplier;
 import java.util.function.ToDoubleFunction;
 
 /**
@@ -18,9 +19,19 @@ public final class InvariantMetrics {
 
     private final ClockSkewTracker skew;
 
-    private InvariantMetrics(AllocationRound round, ClockSkewTracker skew) {
+    /**
+     * 발행이 버린 미상 표시를 읽는 함수.
+     *
+     * <p><b>여기 붙들어 둔다.</b> 함수형 계측기는 상태 객체를 약한 참조로 잡으므로,
+     * 부르는 자리에서 만든 람다를 그대로 넘기면 GC 뒤에 그 계수가 0 으로 굳는다.
+     */
+    private final DoubleSupplier markersDropped;
+
+    private InvariantMetrics(AllocationRound round, ClockSkewTracker skew,
+            DoubleSupplier markersDropped) {
         this.round = Objects.requireNonNull(round, "round 는 필수다");
         this.skew = Objects.requireNonNull(skew, "skew 는 필수다");
+        this.markersDropped = Objects.requireNonNull(markersDropped, "markersDropped 는 필수다");
     }
 
     /**
@@ -31,9 +42,21 @@ public final class InvariantMetrics {
      */
     public static InvariantMetrics bind(AllocationRound round, ClockSkewTracker skew,
             MeterRegistry meters) {
-        Objects.requireNonNull(meters, "meters 는 필수다");
-        InvariantMetrics metrics = new InvariantMetrics(round, skew);
+        return bind(round, skew, meters, () -> 0);
+    }
 
+    /**
+     * 발행이 버린 미상 표시까지 건다. <b>그 수가 거짓 매진의 직접 증거다.</b>
+     */
+    public static InvariantMetrics bind(AllocationRound round, ClockSkewTracker skew,
+            MeterRegistry meters, DoubleSupplier markersDropped) {
+        Objects.requireNonNull(meters, "meters 는 필수다");
+        InvariantMetrics metrics = new InvariantMetrics(round, skew, markersDropped);
+        // **형제들과 같은 상태 객체를 쓴다.** 여기만 딴 객체를 넘기면 그것만
+        // 약한 참조로 남아, GC 뒤에 이 계수가 조용히 0 으로 굳는다.
+        metrics.count(meters, "waiting.snapshot.stock.unknown.dropped",
+                InvariantMetrics::markersDropped,
+                "상한을 넘겨 버린 재고 미상 표시 수. 0 이 아니면 거짓 매진이 나갔다");
         metrics.count(meters, "waiting.allocation.budget.overshoot",
                 InvariantMetrics::budgetOvershoot,
                 "뒷단이 받는다는 것보다 더 나눠 준 누적량. 초과 발급의 선행 지표다");
@@ -49,6 +72,9 @@ public final class InvariantMetrics {
         metrics.count(meters, "waiting.allocation.admitted",
                 InvariantMetrics::admitted,
                 "차례를 준 누적 인원. 크레딧 낭비의 분모다 (G7.5)");
+        metrics.count(meters, "waiting.allocation.stock.unknown.ticks",
+                InvariantMetrics::stockUnknownTicks,
+                "재고를 못 읽은 채 발행한 누적 쿠폰·틱. 0 이 아니면 재고 키를 잃었다");
         return metrics;
     }
 
@@ -63,6 +89,16 @@ public final class InvariantMetrics {
     /** 평활 지연과 하한이 만드는 초과. 배분기 자체는 준 예산을 안 넘긴다. */
     private double budgetOvershoot() {
         return round.budgetOvershoot();
+    }
+
+    /** 발행이 버린 미상 표시 수. 거짓 매진이 나간 직접 증거다. */
+    private double markersDropped() {
+        return markersDropped.getAsDouble();
+    }
+
+    /** 재고를 못 읽은 채 발행한 누적 쿠폰·틱. 매진 오판의 선행 지표다. */
+    private double stockUnknownTicks() {
+        return round.stockUnknownTicks();
     }
 
     /** 차례를 준 누적 인원. 실제로 받아 간 수와의 차이가 곧 낭비다. */

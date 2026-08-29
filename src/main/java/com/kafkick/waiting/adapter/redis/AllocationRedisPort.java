@@ -584,7 +584,10 @@ public final class AllocationRedisPort implements SnapshotSource {
             args.add(field);
             args.add(value);
         });
-        return redis.execute(PUBLISH, List.of(RedisKeys.SNAPSHOT), args).next().then();
+        int dropped = hash.size() - toPublish.size();
+        return redis.execute(PUBLISH, List.of(RedisKeys.SNAPSHOT), args).next()
+                .doOnSuccess(done -> watchTrim(dropped))
+                .then();
     }
 
     /**
@@ -611,14 +614,25 @@ public final class AllocationRedisPort implements SnapshotSource {
             trimmed.remove(marker);
             over--;
         }
-        int dropped = hash.size() - trimmed.size();
+        return trimmed;
+    }
+
+    /**
+     * 버린 사실을 남긴다. <b>발행이 끝난 뒤에만 부른다.</b>
+     *
+     * <p>앞에서 세면 지표가 "거짓 매진이 된 쿠폰 수" 가 아니라 "버리려고 시도한
+     * 횟수" 가 된다. 같은 판이 매 틱 실패하는 구간에서 그 수가 끝없이 부푼다.
+     */
+    private void watchTrim(int dropped) {
+        if (dropped <= 0) {
+            return;
+        }
         markersDropped.addAndGet(dropped);
         // **몇 개인지만 남긴다.** 쿠폰 ID 는 라벨로도 로그로도 못 쏟는다 (LG-3).
         if (publishTrim.entered()) {
             log.warn("발행 필드가 상한을 넘어 재고 미상 표시 {}개를 버렸다 — 그 쿠폰들이 매진으로 읽힌다",
                     dropped);
         }
-        return trimmed;
     }
 
     /**

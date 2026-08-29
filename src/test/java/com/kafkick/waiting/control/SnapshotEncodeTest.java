@@ -268,4 +268,34 @@ class SnapshotEncodeTest {
         assertThat(되읽음.runtime()).isEqualTo(RuntimeState.DRAINING);
         assertThat(되읽은_판.meta().pollScale()).isEqualTo(2.0);
     }
+    /**
+     * <b>미상을 그대로 실으면 옛 노드가 그 쿠폰을 통째로 버린다.</b>
+     *
+     * <p>옛 디코더의 생성자는 음수 재고를 거부하므로 그 항목이 {@code null} 이
+     * 되어 스냅샷에서 빠진다. 그리고 없는 쿠폰은 판정에서 매진으로 보인다 —
+     * 접힘을 없애려던 변경이 롤아웃 구간에 같은 종결을 되살린다.
+     *
+     * <p>그래서 자리에는 <b>매진이 아니라는 뜻의 양수</b>를 싣는다. 읽는 쪽은
+     * 이 수를 {@link CouponState#soldOut()} 으로만 쓰고 셈에 안 넣는다.
+     * 미상을 아는 것이 필요한 곳은 리더뿐이고, 거기는 이 값을 안 거친다.
+     */
+    @Test
+    @DisplayName("미상은_매진이_아닌_값으로_실린다")
+    void 미상은_매진이_아닌_값으로_실린다() {
+        GatewaySnapshot 원본 = new GatewaySnapshot(
+                Map.of("c1", CouponState.unknownStock(QueueMode.ADAPTIVE, 3, 10)),
+                new SnapshotMeta(50, 4),
+                Instant.ofEpochSecond(1_700_000_000L));
+
+        Map<String, String> 실린것 = codec.encode(원본, CreditSmoother.Snapshot.empty(),
+                QueueingHysteresis.Snapshot.empty());
+
+        // **자리를 직접 본다.** 되읽기만 보면 새 디코더가 음수를 받아 주는
+        // 지금은 통과하고, 정작 옛 노드가 버리는 것을 못 잡는다.
+        assertThat(실린것.get("c1").split(":")[3])
+                .as("옛 노드의 생성자가 받는 값이어야 한다")
+                .isEqualTo("1");
+        assertThat(codec.decode(실린것).coupons().get("c1").soldOut())
+                .as("어느 쪽으로 읽어도 매진이 아니다").isFalse();
+    }
 }

@@ -157,10 +157,11 @@ class CouponStateTest {
     @DisplayName("음수 방어")
     class NegativeValues {
 
+        /** 미상을 뜻하는 한 값 말고는 음수를 안 받는다. 열어 두면 오타가 값이 된다. */
         @Test
-        @DisplayName("재고가_음수면_생성에_실패한다")
-        void 재고가_음수면_생성에_실패한다() {
-            assertThatThrownBy(() -> new CouponState(QueueMode.ADAPTIVE, RuntimeState.IDLE, 0, -1, 0))
+        @DisplayName("뜻_없는_음수_재고면_생성에_실패한다")
+        void 뜻_없는_음수_재고면_생성에_실패한다() {
+            assertThatThrownBy(() -> new CouponState(QueueMode.ADAPTIVE, RuntimeState.IDLE, 0, -2, 0))
                     .isInstanceOf(IllegalArgumentException.class);
         }
 
@@ -178,6 +179,7 @@ class CouponStateTest {
                     .isInstanceOf(IllegalArgumentException.class);
         }
     }
+
     /**
      * <b>재고를 못 읽은 것은 매진이 아니다.</b> 매진으로 읽으면 게이트웨이가
      * 그 쿠폰을 종결하고 정리가 큐를 지운다 — 자동으로 안 낫는 오판이
@@ -199,14 +201,6 @@ class CouponStateTest {
         assertThat(CouponState.closed(QueueMode.ADAPTIVE, 5).soldOut()).isTrue();
         assertThat(CouponState.noQueue(QueueMode.ADAPTIVE, 0).soldOut()).isTrue();
         assertThat(CouponState.withQueue(QueueMode.ADAPTIVE, 3, 10, 20).soldOut()).isFalse();
-    }
-
-    /** 미상을 뜻하는 한 값 말고는 음수를 안 받는다. 열어 두면 오타가 값이 된다. */
-    @Test
-    @DisplayName("뜻_없는_음수_재고는_거부한다")
-    void 뜻_없는_음수_재고는_거부한다() {
-        assertThatThrownBy(() -> new CouponState(QueueMode.ADAPTIVE, RuntimeState.IDLE, 0, -2, 0))
-                .isInstanceOf(IllegalArgumentException.class);
     }
 
     /**

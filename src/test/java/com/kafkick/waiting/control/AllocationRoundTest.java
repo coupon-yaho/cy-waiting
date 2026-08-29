@@ -782,6 +782,46 @@ class AllocationRoundTest {
         assertThat(발행된("c1").runtime()).isEqualTo(RuntimeState.CLOSED);
     }
 
+    /**
+     * <b>재고를 못 읽은 쿠폰을 종결로 발행하지 않는다.</b> 종결로 실으면 그
+     * 쿠폰이 매진으로 읽히고, 정리가 유예 틱을 채운 뒤 큐를 지운다 — 자동으로
+     * 안 낫는 오판이 되돌릴 수 없는 삭제가 된다 (3.1).
+     */
+    @Test
+    @DisplayName("재고를_모르면_종결로_발행하지_않는다")
+    void 재고를_모르면_종결로_발행하지_않는다() {
+        AllocationRound round = round(
+                List.of(CouponDemand.stockUnknown("c1", 30, QueueMode.ADAPTIVE)), 10, 1);
+
+        round.run().block();
+
+        CouponState 발행 = 발행된("c1");
+        assertThat(발행.runtime()).as("줄은 그대로 돈다").isNotEqualTo(RuntimeState.CLOSED);
+        assertThat(발행.soldOut()).as("정리가 이 값으로 지울지를 정한다").isFalse();
+        assertThat(발행.credit()).as("굶기지 않는다").isPositive();
+    }
+
+    /**
+     * 미상은 계측된다. 안 세면 재고 키를 잃은 것을 아무도 모른다 — 판정이
+     * 조용히 비켜 가는 종류라 사건 자체가 안 드러난다.
+     */
+    @Test
+    @DisplayName("재고를_모르면_계측한다")
+    void 재고를_모르면_계측한다() {
+        AllocationRound round = round(List.of(
+                CouponDemand.stockUnknown("c1", 30, QueueMode.ADAPTIVE),
+                new CouponDemand("c2", 30, 100)), 10, 1);
+        SimpleMeterRegistry 계기 = new SimpleMeterRegistry();
+        InvariantMetrics.bind(round, ClockSkewTracker.create(), 계기);
+
+        round.run().block();
+
+        // **판마다 한 번이다.** 상태를 만드는 자리에서 세면 정리·청소·발행이
+        // 같은 판을 세 번 훑어 셋이 된다. 아는 쿠폰을 같이 둬야 그 구분이 잡힌다.
+        assertThat(계기.get("waiting.allocation.stock.unknown").functionCounter().count())
+                .isEqualTo(1);
+    }
+
     @Test
     @DisplayName("매진에_줄도_없으면_한산이다")
     void 매진에_줄도_없으면_한산이다() {

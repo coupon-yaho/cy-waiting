@@ -10,6 +10,9 @@ import com.kafkick.waiting.domain.coupon.CouponStates;
 import com.kafkick.waiting.domain.queue.EntryToken;
 import com.kafkick.waiting.domain.queue.QueueToken;
 import com.kafkick.waiting.control.GatewaySnapshot;
+import com.kafkick.waiting.control.SnapshotCodec;
+import com.kafkick.waiting.domain.allocation.CreditSmoother;
+import com.kafkick.waiting.domain.allocation.QueueingHysteresis;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -200,8 +203,11 @@ class SoldOutCacheAdmissionTest {
     @Test
     @DisplayName("재료가_재고를_모르면_관찰을_안_푼다")
     void 재료가_재고를_모르면_관찰을_안_푼다() {
-        holder.replace(new GatewaySnapshot(
-                Map.of(COUPON, CouponStates.stockUnknown(5, 100)), new SnapshotMeta(1, 1), 지금));
+        // **선을 거쳐 꽂는다.** 상태를 손으로 꽂으면 리더 메모리에만 있는
+        // 모양을 재게 된다 — 게이트웨이가 상태를 얻는 길은 디코더 하나뿐이라,
+        // 인코더가 미상을 못 실으면 이 가드는 프로덕션에서 한 번도 안 불린다.
+        holder.replace(선을_거친다(new GatewaySnapshot(
+                Map.of(COUPON, CouponStates.stockUnknown(5, 100)), new SnapshotMeta(1, 1), 지금)));
         // **한 판 앞선 재료로 무장한다.** 같은 시각으로 두면 발행 시각 비교에서
         // 먼저 걸려, 재고 가드는 한 번도 안 불린다 — 지워도 통과한다.
         캐시.observed(COUPON, 지금.minusSeconds(1));
@@ -210,6 +216,13 @@ class SoldOutCacheAdmissionTest {
 
         assertThat(캐시.soldOut(COUPON)).as("모른다는 것이 재입고의 증거가 아니다").isTrue();
         assertThat(뒷단_횟수).as("뒷단 도달").hasValue(0);
+    }
+
+    /** 리더가 발행한 것을 노드가 읽는 그대로 만든다. */
+    private GatewaySnapshot 선을_거친다(GatewaySnapshot 원본) {
+        SnapshotCodec codec = SnapshotCodec.create();
+        return codec.decode(codec.encode(원본, CreditSmoother.Snapshot.empty(),
+                QueueingHysteresis.Snapshot.empty()));
     }
 
     /**

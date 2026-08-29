@@ -790,15 +790,109 @@ class AllocationRoundTest {
     @Test
     @DisplayName("재고를_모르면_종결로_발행하지_않는다")
     void 재고를_모르면_종결로_발행하지_않는다() {
+        // **운영자가 끈 쿠폰으로 잰다.** 적응형으로 재면 미상 갈래가 모드를
+        // 버려도 안 드러난다 — 끈 쿠폰의 재고 키가 사라지면 그 쿠폰이 되살아나
+        // 줄을 세운다.
         AllocationRound round = round(
-                List.of(CouponDemand.stockUnknown("c1", 30, QueueMode.ADAPTIVE)), 10, 1);
+                List.of(CouponDemand.stockUnknown("c1", 30, QueueMode.OFF)), 10, 1);
 
         round.run().block();
 
         CouponState 발행 = 발행된("c1");
-        assertThat(발행.runtime()).as("줄은 그대로 돈다").isNotEqualTo(RuntimeState.CLOSED);
-        assertThat(발행.soldOut()).as("정리가 이 값으로 지울지를 정한다").isFalse();
-        assertThat(발행.credit()).as("굶기지 않는다").isPositive();
+        // **값으로 못 박는다.** 크레딧 10 에 대기 30 이라 답이 하나다.
+        assertThat(발행.runtime()).isEqualTo(RuntimeState.QUEUEING);
+        assertThat(발행.credit()).as("미상이라고 몫을 깎지 않는다").isEqualTo(10);
+        assertThat(발행.mode()).as("운영자가 정한 모드가 한 틱을 넘는다")
+                .isEqualTo(QueueMode.OFF);
+        assertThat(발행.stockKnown()).as("모른다는 것이 선을 건넌다").isFalse();
+        assertThat(발행.soldOut()).as("매진이 아니라야 종결도 삭제도 안 온다").isFalse();
+    }
+
+    /**
+     * <b>미상은 아는 쿠폰과 같은 자리에서 나눈다.</b> 재고를 못 읽는 것이
+     * 우대도 홀대도 아니다 — 미상은 "재고가 넉넉하다" 와 같은 요구를 낸다.
+     *
+     * <p>대가가 있다. 재고 키를 잃은 큰 줄은 실제로 매진이어도 살아 있는 것처럼
+     * 몫을 가져가므로, 옆 쿠폰의 몫이 그만큼 준다. 값으로 못 박아 두지 않으면
+     * 이것이 결정인지 사고인지 아무도 모른다.
+     */
+    @Test
+    @DisplayName("미상은_아는_쿠폰과_몫을_나눠_가진다")
+    void 미상은_아는_쿠폰과_몫을_나눠_가진다() {
+        AllocationRound round = round(List.of(
+                CouponDemand.stockUnknown("lost", 100_000, QueueMode.ADAPTIVE),
+                new CouponDemand("live", 100, 100, QueueMode.ADAPTIVE)), 100, 1);
+
+        round.run().block();
+
+        assertThat(적용).containsExactlyInAnyOrder("lost=50", "live=50");
+    }
+
+    /**
+     * <b>미상인 줄의 폴링은 예산에 든다.</b> 접혀 있을 때 그 사람들은 종료를
+     * 받고 폴링을 멈췄다. 안 접으면 계속 폴링하므로 예산이 그만큼 커지고,
+     * 배수가 올라 전원의 간격이 늘어난다.
+     *
+     * <p>이것은 고칠 회귀가 아니라 <b>10만 명을 안 끊은 값</b>이다. 예산에서
+     * 빼면 실제로 폴링하는 사람을 안 세는 것이라 레디스가 그만큼 더 맞는다.
+     */
+    @Test
+    @DisplayName("미상인_줄의_폴링도_예산에_든다")
+    void 미상인_줄의_폴링도_예산에_든다() {
+        AllocationRound 접힌_판 = round(
+                List.of(new CouponDemand("lost", 100_000, 0, QueueMode.ADAPTIVE)), 100, 1);
+        접힌_판.run().block();
+        double 접었을_때 = 발행된_배수();
+
+        AllocationRound 미상_판 = round(
+                List.of(CouponDemand.stockUnknown("lost", 100_000, QueueMode.ADAPTIVE)), 100, 1);
+        미상_판.run().block();
+
+        assertThat(접었을_때).as("종료를 받은 줄은 안 센다").isEqualTo(1.0);
+        assertThat(발행된_배수()).as("안 끊었으니 그 폴링이 예산에 든다").isGreaterThan(1.0);
+    }
+
+    /**
+     * <b>미상은 정리 대상이 아니다.</b> 발행 값만 보면 정리가 실제로 무엇을
+     * 지우는지 못 잰다 — 정리는 코덱을 안 거친 리더 메모리의 상태를 받는다.
+     */
+    @Test
+    @DisplayName("미상인_쿠폰의_줄은_안_지운다")
+    void 미상인_쿠폰의_줄은_안_지운다() {
+        List<String> 지운_쿠폰 = new ArrayList<>();
+        AllocationRound round = 정리하는_판(
+                List.of(CouponDemand.stockUnknown("lost", 30, QueueMode.ADAPTIVE),
+                        new CouponDemand("gone", 30, 0, QueueMode.ADAPTIVE)),
+                지운_쿠폰);
+
+        // 유예 틱이 1 이라 한 판으로는 아무것도 안 지운다. 두 판을 돌려야
+        // "미상이라서 안 지웠다" 와 "아직 유예 중이라 안 지웠다" 가 갈린다.
+        round.run().block();
+        round.run().block();
+
+        assertThat(지운_쿠폰).as("매진만 지우고 미상은 안 지운다").containsExactly("gone");
+    }
+
+    /** 유예 틱 1 짜리 정리를 붙인 판. 지운 쿠폰을 받아 적는다. */
+    private AllocationRound 정리하는_판(List<CouponDemand> 수요, List<String> 지운_쿠폰) {
+        return AllocationRound.of(
+                () -> true,
+                () -> Mono.just(new TimedDemands(수요, 읽은_시각)),
+                () -> 100, () -> 1,
+                grant -> Mono.just(grant.credit()),
+                hash -> {
+                    발행.put("last", hash);
+                    return Mono.empty();
+                },
+                () -> Instant.ofEpochSecond(읽은_시각),
+                () -> Mono.just(CreditSmoother.of(1.0)),
+                SnapshotCodec.create(), () -> 0L, Optional::empty,
+                SoldOutCleanup.of(1, new SimpleMeterRegistry()),
+                ids -> {
+                    지운_쿠폰.addAll(ids);
+                    return Mono.just(List.copyOf(ids));
+                },
+                안_걷는_스위퍼(), () -> false);
     }
 
     /**
@@ -810,16 +904,20 @@ class AllocationRoundTest {
     void 재고를_모르면_계측한다() {
         AllocationRound round = round(List.of(
                 CouponDemand.stockUnknown("c1", 30, QueueMode.ADAPTIVE),
-                new CouponDemand("c2", 30, 100)), 10, 1);
+                CouponDemand.stockUnknown("c2", 30, QueueMode.ADAPTIVE),
+                new CouponDemand("c3", 30, 100)), 10, 1);
         SimpleMeterRegistry 계기 = new SimpleMeterRegistry();
         InvariantMetrics.bind(round, ClockSkewTracker.create(), 계기);
 
+        // **두 판을 돌린다.** 한 판만 보면 누적과 대입이 구분이 안 되고, 미상이
+        // 둘인데 하나만 세는 구현도 통과한다. 아는 쿠폰을 같이 둬야 판마다
+        // 한 번이라는 것까지 잡힌다 — 상태를 만드는 자리에서 세면 정리·청소·
+        // 발행이 같은 판을 세 번 훑어 셋이 된다.
+        round.run().block();
         round.run().block();
 
-        // **판마다 한 번이다.** 상태를 만드는 자리에서 세면 정리·청소·발행이
-        // 같은 판을 세 번 훑어 셋이 된다. 아는 쿠폰을 같이 둬야 그 구분이 잡힌다.
-        assertThat(계기.get("waiting.allocation.stock.unknown").functionCounter().count())
-                .isEqualTo(1);
+        assertThat(계기.get("waiting.allocation.stock.unknown.ticks").functionCounter().count())
+                .isEqualTo(4);
     }
 
     @Test

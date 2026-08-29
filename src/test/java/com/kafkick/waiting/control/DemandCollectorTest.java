@@ -124,6 +124,26 @@ class DemandCollectorTest {
         });
     }
 
+    /**
+     * <b>재고 키의 음수는 미상이 아니다.</b> 그 값은 발급 계층이 소유하고,
+     * 차감이 0 을 지나치면 실제로 음수가 된다. 게이트웨이의 미상 표시와 값이
+     * 겹친다고 그것을 미상으로 읽으면, 이 티켓이 막으려던 종결이 반대 방향에서
+     * 그대로 돌아온다 — 다 팔린 줄이 영영 안 닫힌다.
+     */
+    @Test
+    @DisplayName("재고_키의_음수는_매진으로_본다")
+    void 재고_키의_음수는_매진으로_본다() {
+        DemandCollector collector = collector(List.of("c1"),
+                Map.of("c1", List.of(9L, 0L, 0L, 0L)), Map.of("c1", -1L));
+
+        List<CouponDemand> 수요 = collector.collect().block().demands();
+
+        assertThat(수요).singleElement().satisfies(d -> {
+            assertThat(d.stockKnown()).as("읽었으면 아는 것이다").isTrue();
+            assertThat(d.stock()).as("음수는 다 팔린 것으로 본다").isZero();
+        });
+    }
+
     /** 읽은 0 은 그대로 0 이다. 미상을 들이면서 진짜 매진이 흐려지면 안 된다. */
     @Test
     @DisplayName("읽은_재고_0은_그대로_매진이다")

@@ -336,7 +336,7 @@ class SnapshotEncodeTest {
 
     private Map<String, String> 미상을_싣는다() {
         return codec.encode(new GatewaySnapshot(
-                        Map.of("c1", CouponState.unknownStock(QueueMode.ADAPTIVE, 3, 10)),
+                        Map.of("c1", CouponState.stockUnknown(QueueMode.ADAPTIVE, 3, 10)),
                         new SnapshotMeta(50, 4), Instant.ofEpochSecond(1_700_000_000L)),
                 CreditSmoother.Snapshot.empty(), QueueingHysteresis.Snapshot.empty());
     }

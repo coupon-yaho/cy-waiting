@@ -58,7 +58,7 @@ public final class CouponStates {
      * 재고 미상인 수요를 이것으로 만든다.
      */
     public static CouponState stockUnknown(long credit, long waiting) {
-        return CouponState.unknownStock(QueueMode.ADAPTIVE, credit, waiting);
+        return CouponState.stockUnknown(QueueMode.ADAPTIVE, credit, waiting);
     }
 
 

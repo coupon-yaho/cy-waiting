@@ -114,6 +114,13 @@ public final class AllocationRound {
      * <p><b>크레딧 낭비의 분모다</b> (G7.5). 실제로 받아 간 인원은 판정 지표가
      * 세는데 이 값이 없으면 그 비율을 못 낸다.
      */
+    // **응답을 잃으면 적게 센다.** 스크립트가 임계를 올린 뒤 응답이 유실되면
+    // 적용이 0 을 돌려주고, 다시 불러도 임계가 이미 올라가 있어 0 이다. 그
+    // 판의 입장은 영영 이 값에 안 들어온다.
+    //
+    // 되찾는 길은 임계의 증분을 레디스에서 직접 읽는 것인데, 그러면 이 값이
+    // 리더 메모리가 아니라 왕복이 된다. 대신 **틀리는 방향이 안전하다** —
+    // 분모가 작아지면 낭비율이 커져 게이트가 통과가 아니라 미달 쪽으로 기운다.
     private final AtomicLong admitted = new AtomicLong();
 
     private AllocationRound(BooleanSupplier stillLeader,

@@ -155,6 +155,72 @@ class SweepTest extends RedisContainerSupport {
         assertThat(redis.opsForZSet().score(QUEUE, "m4").block(WAIT)).isEqualTo(kept4);
     }
 
+    /**
+     * <b>임계 아래의 유령이 검사 범위를 막지 않는다</b> (G7.5).
+     *
+     * <p>차례가 왔는데 안 걷어 간 사람은 큐에 남고, 걷지도 않는다 (7.4.11). 그런
+     * 사람이 검사 범위만큼 쌓이면 앞에서 K 명을 보는 방식은 그들만 보고 끝난다 —
+     * 살아 있는 구간에는 영영 안 닿는다.
+     *
+     */
+    // 부하 실측에서 드러났다. 이탈 30% 에 크레딧 낭비가 36.9% 였고, 걷은 수가
+    // 0 이었다 — 스위퍼가 매 틱 도는데 아무도 안 걷히고 있었다.
+    @Test
+    @DisplayName("임계_아래_유령이_검사_범위를_막지_않는다")
+    void 임계_아래_유령이_검사_범위를_막지_않는다() {
+        // 앞 둘은 차례가 온 유령이다 — 신호가 없어도 안 걷힌다.
+        enqueue("유령0");
+        enqueue("유령1");
+        redis.opsForZSet().remove(ALIVE, "유령0").block(WAIT);
+        redis.opsForZSet().remove(ALIVE, "유령1").block(WAIT);
+        double 임계 = redis.opsForZSet().score(QUEUE, "유령1").block(WAIT);
+        redis.opsForValue().set(ADMITTED, String.valueOf((long) 임계)).block(WAIT);
+        // 그 뒤에 이탈자와 성실한 사람이 선다.
+        enqueue("이탈자");
+        redis.opsForZSet().remove(ALIVE, "이탈자").block(WAIT);
+        enqueue("성실이");
+        살아있다("성실이");
+        double 유령0_순번 = redis.opsForZSet().score(QUEUE, "유령0").block(WAIT);
+        double 성실이_순번 = redis.opsForZSet().score(QUEUE, "성실이").block(WAIT);
+
+        // **검사 범위를 둘로 준다.** 앞에서 세는 방식이면 유령 둘만 보고 끝난다.
+        assertThat(swept(sweep("2"))).as("살아 있는 구간까지 닿는다").isEqualTo(1);
+
+        assertThat(redis.opsForZSet().score(QUEUE, "이탈자").block(WAIT))
+                .as("임계 위의 이탈자는 걷힌다").isNull();
+        assertThat(redis.opsForZSet().score(QUEUE, "유령0").block(WAIT))
+                .as("임계 아래는 순번까지 그대로 둔다 (7.4.11)").isEqualTo(유령0_순번);
+        assertThat(redis.opsForZSet().score(QUEUE, "성실이").block(WAIT))
+                .as("살아 있는 사람은 순번까지 그대로다").isEqualTo(성실이_순번);
+    }
+
+    /**
+     * <b>임계를 지수 표기로 만들지 않는다.</b>
+     *
+     * <p>큐 score 는 마이크로초 시각이라 열여섯 자리다. Lua 의 기본 수→문자열
+     * 변환은 유효숫자 열넷까지만 남기므로, 임계를 그대로 이어 붙이면
+     * {@code 1.7879388228172e+15} 가 되어 실제 임계보다 <b>위</b>로 반올림된다.
+     */
+    // 그러면 검사 창이 임계 바로 위의 사람들을 건너뛴다 — 하필 곧 차례가 올
+    // 사람들이다.
+    @Test
+    @DisplayName("마이크로초_임계를_정밀하게_읽는다")
+    void 마이크로초_임계를_정밀하게_읽는다() {
+        // 실제 큐와 같은 자릿수. 1 µs 간격이라 반올림이 곧바로 드러난다.
+        long 임계값 = 1_787_938_822_815_215L;
+        redis.opsForValue().set(ADMITTED, String.valueOf(임계값)).block(WAIT);
+        redis.opsForZSet().add(QUEUE, "이탈자", 임계값 + 1_000).block(WAIT);
+        redis.opsForZSet().add(QUEUE, "성실이", 임계값 + 2_000).block(WAIT);
+        살아있다("성실이");
+
+        assertThat(swept(sweep("100"))).as("임계 바로 위도 창에 든다").isEqualTo(1);
+
+        assertThat(redis.opsForZSet().score(QUEUE, "이탈자").block(WAIT))
+                .as("임계 위의 이탈자는 걷힌다").isNull();
+        assertThat(redis.opsForZSet().score(QUEUE, "성실이").block(WAIT))
+                .as("살아 있는 사람은 순번까지 그대로다").isEqualTo(임계값 + 2_000);
+    }
+
     @Test
     @DisplayName("검사_범위가_인자로_주어진다")
     void 검사_범위가_인자로_주어진다() {

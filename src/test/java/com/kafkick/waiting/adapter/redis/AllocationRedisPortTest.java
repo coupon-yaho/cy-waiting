@@ -249,6 +249,8 @@ class AllocationRedisPortTest extends RedisContainerSupport {
      * 그러면 큐에서 빼기 전에 스크립트가 죽고, 그 쿠폰의 청소가 매 틱 같은
      * 자리에서 실패합니다.
      */
+    // **표시를 든 사람은 큐에서도 안 뺍니다.** 빼면 표시만 남아 다음 폴링이
+    // 입장이라고 답합니다 — 차례가 안 왔는데 입장이라 줄 전체를 추월합니다.
     @Test
     @DisplayName("걷을_사람이_전부_입장_표시여도_안_죽는다")
     void 걷을_사람이_전부_입장_표시여도_안_죽는다() {
@@ -263,7 +265,9 @@ class AllocationRedisPortTest extends RedisContainerSupport {
 
         // 실패로 안 센다 — 스크립트가 살아서 돌아왔다는 뜻이다.
         assertThat(결과.failed()).as("실패").isZero();
-        assertThat(결과.swept()).as("걷은 수").isOne();
+        assertThat(결과.swept()).as("표시를 든 사람은 안 센다").isZero();
+        assertThat(redis.opsForZSet().score(RedisKeys.queue("c1", SHARDS, 0), "m1").block(WAIT))
+                .as("큐에도 남는다").isNotNull();
         assertThat(redis.opsForHash().get(RedisKeys.grace("c1", SHARDS, 0), "m1").block(WAIT))
                 .as("입장 표시는 그대로").isEqualTo("a:" + 지금);
     }

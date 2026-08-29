@@ -214,12 +214,13 @@ class GraceRecordTest extends RedisContainerSupport {
     @Test
     @DisplayName("이탈_기록은_보관_기간이_지나면_걷힌다")
     void 이탈_기록은_보관_기간이_지나면_걷힌다() {
+        // **살아 있는 사람을 줄 안에 먼저 세운다.** 검사 창 안이 통째로
+        // 조용하면 청소가 아무것도 안 한다 — 그건 전원 이탈이 아니라 저장소
+        // 유실이기 때문이다. 줄 밖에 세우면 그 가드를 못 지난다.
+        등록한다("keeper");
         등록한다("m1");
         // 생존 신호를 지우면 다음 청소가 이탈로 본다.
         redis.opsForZSet().remove(ALIVE, "m1").block(WAIT);
-        // **한 명은 살려 둔다.** 신호가 통째로 없으면 청소가 아무것도 안 한다 —
-        // 그건 전원 이탈이 아니라 저장소 유실이기 때문이다.
-        redis.opsForZSet().add(ALIVE, "keeper", NOW + 3_600).block(WAIT);
         청소한다(NOW + 1);
         assertThat(redis.opsForHash().hasKey(GRACE, "m1").block(WAIT)).isTrue();
 

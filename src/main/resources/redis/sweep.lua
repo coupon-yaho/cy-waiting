@@ -3,8 +3,8 @@
 -- KEYS[1]  queue:{cid}   ZSET
 -- KEYS[2]  grace:{cid}   이탈 기록 해시
 -- KEYS[3]  alive:{cid}   생존 신호 ZSET. score 는 만료 시각(초)
--- KEYS[4]  admitted:{cid} 입장 임계. 이 값 이하의 score 는 안 걷는다
--- ARGV[1]  검사 범위 K. 큐 앞에서 이만큼만 본다. 1..3999
+-- KEYS[4]  admitted:{cid} 입장 임계. **창의 시작점**이고, 이 값 이하는 안 걷는다
+-- ARGV[1]  검사 범위 K. **입장 임계 위에서** 이만큼만 본다. 1..3999
 -- ARGV[2]  지금 시각(초). 도메인처럼 주입받는다
 -- ARGV[3]  유예 보관 기간(초)
 -- ARGV[4]  정리 예산. 만료 신호와 유예 기록을 각각 이만큼까지 지운다. 1..7999
@@ -99,6 +99,13 @@ end
 -- 빼는 것은 그 사람이 폴링할 때다. 안 걷어 간 사람은 큐에 남고, 걷으면 그가
 -- 다음 폴링에서 종료를 받아 다시 서게 된다 (불변식 4).
 local admitted = tonumber(redis.call('GET', KEYS[4])) or -1
+-- **nan 을 접는다.** 형제 스크립트들이 이미 하는 방어인데 여기만 없었다.
+-- 전에는 비교에만 써서 무해했지만 이제 범위 인자로 나가므로, nan 이 오면
+-- ZRANGEBYSCORE 가 거부해 스크립트가 통째로 죽는다 — 그러면 아래의 만료
+-- 신호·낡은 기록 정리에 영영 못 닿고 그 쿠폰의 청소가 멎는다.
+if admitted ~= admitted then
+    admitted = -1
+end
 
 -- **임계 위에서 K 명을 센다.** 순번 0 부터 세면 안 걷어 간 사람이 쌓인 만큼
 -- 창이 막히고, 그러면 살아 있는 구간에 영영 안 닿는다 — 스위퍼가 도는데도
@@ -127,31 +134,52 @@ local swept = 0
 -- **정리까지 건너뛰지는 않는다.** 앞줄 제거만 접고 만료 신호와 낡은 기록은
 -- 그대로 걷는다. 안 그러면 이 구간이 길어질 때 해시가 한 방향으로만 자라고
 -- 커서도 전진을 못 한다.
-local anyAlive = redis.call('ZCOUNT', KEYS[3], now, '+inf') > 0
-
-if #front > 0 and anyAlive then
+if #front > 0 then
     -- **앞부분의 score 만 묻는다.** ZRANGEBYSCORE 로 살아 있는 쪽을 다 받으면
     -- K 를 1 로 줘도 alive 전체 크기에 비례해 이벤트 루프를 잡는다.
     local scores = redis.call('ZMSCORE', KEYS[3], unpack(front))
-    -- 임계는 위에서 이미 읽었다. 창을 그 위로 옮겼으므로 아래 검사는
-    -- 마지막 방벽이다 — 임계가 그 사이 올라갔으면 여기서 한 번 더 걸린다.
+
+    -- **창 안에 살아 있는 신호가 하나도 없으면 앞줄을 안 걷는다.**
+    --
+    -- 줄에 사람이 있는데 아무도 살아 있지 않다는 것은 "전원이 떠났다" 가
+    -- 아니라 **그 저장소를 잃었다** 는 뜻이다. 뒤처진 복제본 승격, AOF 유실,
+    -- 매진 구간이 길어져 폴링이 멎은 뒤의 회복 — 전부 이 모양이다.
+    --
+    -- **창 안을 본다.** 줄 전체를 보면 창 밖에 한 명만 살아 있어도 열리는데,
+    -- 창은 이제 곧 차례가 올 사람들을 정확히 가리키므로 그 한 명이 창 안
+    -- 전원을 걷게 한다. 창 밖의 생존은 창 안에 대해 아무것도 말하지 않는다.
+    local anyAlive = false
+    for i = 1, #front do
+        local at = tonumber(scores[i])
+        if at ~= nil and at >= now then
+            anyAlive = true
+            break
+        end
+    end
+    -- 임계는 위에서 이미 읽었다. 창이 이미 임계 위라 아래의 rank 검사는
+    -- 대개 참인데, 지우면 안 된다 — 범위 인자가 문자열을 거치며 임계가
+    -- 아래로 접힐 때 임계 이하인 사람을 되잡는 것이 그 검사다.
     local gone = {}
     local records = {}
-    for i = 1, #front do
+    for i = 1, anyAlive and #front or 0 do
         -- score 가 없거나 이미 지난 것은 폴링이 끊긴 것이다
         local at = tonumber(scores[i])
         local rank = tonumber(redis.call('ZSCORE', KEYS[1], front[i]))
-        if (at == nil or at < now) and (rank == nil or rank > admitted) then
+        -- **입장 표시를 든 사람은 통째로 건너뛴다.** 차례가 왔던 사람이 다시
+        -- 줄을 서면 그 표시가 남은 채로 임계 위에 선다. 큐에서만 빼면 표시가
+        -- 남아 다음 폴링에 조회가 입장이라고 답한다 — 차례가 안 왔는데
+        -- 입장이므로 줄 전체를 추월하고 초과 발급이 된다 (불변식 2·4).
+        --
+        -- 대가는 그 사람이 보관 기간이 지날 때까지 줄에 남는 것이다. 줄
+        -- 길이가 그만큼 부풀지만, 잘못 들여보내는 것보다 싸다.
+        local kept = redis.call('HGET', KEYS[2], front[i])
+        local admittedMark = kept and string.sub(kept, 1, 2) == 'a:'
+        if (at == nil or at < now) and (rank == nil or rank > admitted)
+                and not admittedMark then
             gone[#gone + 1] = front[i]
-            -- **입장 표시는 안 덮는다.** 같은 자리에 종류가 둘이고, `a:` 는
-            -- 차례가 왔던 사람을 지키는 표시다. 덮으면 그 사람이 다음 폴링에서
-            -- 종료를 받고, 다시 서면 그동안 온 사람 뒤로 간다 (불변식 4).
-            local kept = redis.call('HGET', KEYS[2], front[i])
-            if not (kept and string.sub(kept, 1, 2) == 'a:') then
-                -- 자리는 안 보관한다. 재방문자로 식별만 한다 (D-11).
-                records[#records + 1] = front[i]
-                records[#records + 1] = 'd:' .. string.format('%.0f', now)
-            end
+            -- 자리는 안 보관한다. 재방문자로 식별만 한다 (D-11).
+            records[#records + 1] = front[i]
+            records[#records + 1] = 'd:' .. string.format('%.0f', now)
         end
     end
 

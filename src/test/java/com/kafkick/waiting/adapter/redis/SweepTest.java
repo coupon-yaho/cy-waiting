@@ -19,8 +19,8 @@ import org.springframework.data.redis.core.script.RedisScript;
 /**
  * 이탈자 청소.
  *
- * <p><b>앞부분만 훑는다.</b> 2만 명 큐에서 전체를 보면 청소 자체가 부하다.
- * 뒤엣사람은 아직 폴링할 차례가 안 왔을 뿐 죽은 것이 아니다.
+ * <p><b>입장 임계 위에서 앞부분만 훑는다.</b> 2만 명 큐에서 전체를 보면 청소
+ * 자체가 부하다. 뒤엣사람은 아직 폴링할 차례가 안 왔을 뿐 죽은 것이 아니다.
  */
 @Tag("integration")
 @SpringBootTest
@@ -124,29 +124,38 @@ class SweepTest extends RedisContainerSupport {
         assertThat(redis.opsForZSet().size(QUEUE).block(WAIT)).isEqualTo(2);
     }
 
-    /**
-     * 신호가 통째로 없으면 스크립트가 아무것도 안 한다. 줄 밖에 살아 있는
-     * 표시를 하나 둬 그 가드를 지난다 — 검사 범위 밖이라 판정에는 안 섞인다.
-     */
+    /** 이 사람의 생존 신호를 살려 둔다. */
     private void 살아있다(String memberId) {
         redis.opsForZSet().add(ALIVE, memberId, NOW + 3_600).block(WAIT);
+    }
+
+    /**
+     * 창 안에 살아 있는 사람을 하나 세운다.
+     *
+     * <p><b>줄 안이어야 한다.</b> 창 안이 통째로 조용하면 스크립트가 아무것도
+     * 안 한다 — 그건 전원 이탈이 아니라 저장소 유실이기 때문이다. 줄 밖에
+     * 세우면 그 가드를 못 지난다.
+     */
+    private void 창_안에_살아있는_사람() {
+        enqueue("keeper");
+        살아있다("keeper");
     }
 
     @Test
     @DisplayName("검사_범위_밖은_보지_않는다")
     void 검사_범위_밖은_보지_않는다() {
+        // **맨 앞에 살려 둔다.** 창 안이 통째로 조용하면 아무것도 안 한다.
+        창_안에_살아있는_사람();
         for (int i = 0; i < 5; i++) {
             enqueue("m" + i);
             redis.opsForZSet().remove(ALIVE, "m" + i).block(WAIT);
         }
-        // **한 명은 살려 둔다.** 신호가 통째로 없으면 스크립트가 아무것도 안
-        // 한다 — 그건 전원 이탈이 아니라 저장소 유실이기 때문이다.
-        살아있다("keeper");
 
         double kept2 = redis.opsForZSet().score(QUEUE, "m2").block(WAIT);
         double kept4 = redis.opsForZSet().score(QUEUE, "m4").block(WAIT);
 
-        assertThat(swept(sweep("2"))).isEqualTo(2);
+        // 창은 keeper·m0·m1 이다. 살아 있는 keeper 는 안 걷힌다.
+        assertThat(swept(sweep("3"))).isEqualTo(2);
 
         // 앞 둘만 빠지고 범위 밖은 **순번까지 그대로** 남는다
         assertThat(redis.opsForZSet().score(QUEUE, "m0").block(WAIT)).isNull();
@@ -280,14 +289,17 @@ class SweepTest extends RedisContainerSupport {
     @DisplayName("검사_범위가_인자로_주어진다")
     void 검사_범위가_인자로_주어진다() {
         // 부하와 정확도의 맞바꿈이라 배포 없이 조절할 수 있어야 한다 (P-1).
+        창_안에_살아있는_사람();
         for (int i = 0; i < 5; i++) {
             enqueue("m" + i);
             redis.opsForZSet().remove(ALIVE, "m" + i).block(WAIT);
         }
-        살아있다("keeper");
 
-        assertThat(swept(sweep("1"))).isOne();
-        assertThat(swept(sweep("4"))).isEqualTo(4);
+        // 창이 keeper 하나면 걷을 사람이 없고, 둘이면 m0 하나가 걷힌다.
+        // **앞의 판이 이미 걷었다.** 다섯을 보면 남은 m1~m4 가 걷힌다.
+        assertThat(swept(sweep("1"))).as("창에 살아 있는 사람만 든다").isZero();
+        assertThat(swept(sweep("2"))).as("창이 넓어지면 하나 걷는다").isOne();
+        assertThat(swept(sweep("5"))).as("남은 넷").isEqualTo(4);
     }
 
     @Test
@@ -295,9 +307,9 @@ class SweepTest extends RedisContainerSupport {
     void 제거된_사람이_유예_기록에_남는다() {
         // 제거와 기록이 갈리면 자리도 잃고 재방문자로도 식별 안 되는
         // 사람이 생긴다. 같은 스크립트 안에서 한다.
+        창_안에_살아있는_사람();
         enqueue("m0");
         redis.opsForZSet().remove(ALIVE, "m0").block(WAIT);
-        살아있다("keeper");
 
         sweep("10");
 

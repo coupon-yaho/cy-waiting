@@ -1,6 +1,7 @@
 package com.kafkick.waiting.adapter.redis;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Duration;
 import java.util.List;
@@ -35,8 +36,12 @@ class DropQueueTest extends RedisContainerSupport {
         port = AllocationRedisPort.of(redis, 1);
         redis.delete(RedisKeys.queue(COUPON, 1, 0), RedisKeys.alive(COUPON, 1, 0),
                 RedisKeys.stock(COUPON), RedisKeys.admitted(COUPON, 1, 0),
-                RedisKeys.grace(COUPON, 1, 0), RedisKeys.maxScore(COUPON, 1, 0)).block(WAIT);
+                RedisKeys.grace(COUPON, 1, 0), RedisKeys.maxScore(COUPON, 1, 0),
+                RedisKeys.queue(OTHER, 1, 0), RedisKeys.stock(OTHER)).block(WAIT);
     }
+
+    /** 다른 쿠폰 키도 준비에서 지운다 — 시험 끝에 지우면 실패한 판이 찌꺼기를 남긴다. */
+    private static final String OTHER = "alive-one";
 
     private void 줄을_세운다() {
         redis.opsForZSet().add(RedisKeys.queue(COUPON, 1, 0), "m1", 100).block(WAIT);
@@ -127,12 +132,30 @@ class DropQueueTest extends RedisContainerSupport {
         assertThat(있나(RedisKeys.queue(COUPON, 1, 0))).isTrue();
     }
 
+    /**
+     * <b>샤드가 여럿이면 지우지 않는다.</b>
+     *
+     * <p>재고는 샤드 무관 키라 샤딩을 켜면 줄과 슬롯이 갈린다 — 클러스터는
+     * 이 스크립트를 실행 전에 거절하고, 단독 배치는 받아 주지만 그때는 샤드
+     * 0 만 지워 나머지 샤드의 줄이 영구 고아가 된다.
+     *
+     * <p>둘 다 조용하다. 그래서 여기서 소리 나게 막는다 — 재고 세대를 두는
+     * 형태로 갈아탄 뒤에 푼다 (5.3.1).
+     */
+    @Test
+    @DisplayName("샤드가_여럿이면_지우지_않는다")
+    void 샤드가_여럿이면_지우지_않는다() {
+        AllocationRedisPort 샤딩 = AllocationRedisPort.of(redis, 2);
+
+        assertThatThrownBy(() -> 샤딩.dropSoldOutQueues(List.of(COUPON)).block(WAIT))
+                .hasMessageContaining("샤드");
+    }
+
     /** 한 쿠폰이 살아나도 나머지는 지운다. 판 하나가 통째로 멎으면 안 된다. */
     @Test
     @DisplayName("살아난_쿠폰만_건너뛴다")
     void 살아난_쿠폰만_건너뛴다() {
-        String 산것 = "alive-one";
-        redis.delete(RedisKeys.queue(산것, 1, 0), RedisKeys.stock(산것)).block(WAIT);
+        String 산것 = OTHER;
         redis.opsForZSet().add(RedisKeys.queue(산것, 1, 0), "m1", 100).block(WAIT);
         redis.opsForValue().set(RedisKeys.stock(산것), "7").block(WAIT);
         줄을_세운다();
@@ -142,6 +165,5 @@ class DropQueueTest extends RedisContainerSupport {
                 .containsExactly(COUPON);
 
         assertThat(있나(RedisKeys.queue(산것, 1, 0))).as("살아난 쪽은 그대로").isTrue();
-        redis.delete(RedisKeys.queue(산것, 1, 0), RedisKeys.stock(산것)).block(WAIT);
     }
 }

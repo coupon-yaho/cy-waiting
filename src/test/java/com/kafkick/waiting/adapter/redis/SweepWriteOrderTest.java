@@ -79,13 +79,15 @@ class SweepWriteOrderTest {
     }
 
     /**
-     * 줄 밖에 살아 있는 표시를 하나 둔다.
+     * 살아 있는 사람을 <b>줄 맨 앞에</b> 세운다.
      *
-     * <p>살아 있는 신호가 하나도 없으면 스크립트가 앞줄을 안 걷는다 — 그건
-     * 전원 이탈이 아니라 저장소를 잃었다는 뜻이기 때문이다. 이 시험들이 재는
-     * 것은 쓰기 순서라, 그 가드를 지나게만 해 둔다.
+     * <p>검사 창 안이 통째로 조용하면 스크립트가 아무것도 안 한다 — 그건 전원
+     * 이탈이 아니라 저장소 유실이기 때문이다. 줄 밖에 두면 그 가드를 못 지난다.
      */
     private void 지킴이를_둔다() {
+        // 임계가 없으면 -1 로 접히고 창은 그보다 **위**만 본다. 정확히 -1 에
+        // 두면 창 밖이라 가드를 못 지난다.
+        connection.sync().zadd(QUEUE, -0.5, "keeper");
         connection.sync().zadd(ALIVE, 1_800_003_600.0, "keeper");
     }
 
@@ -117,13 +119,16 @@ class SweepWriteOrderTest {
     @Test
     @DisplayName("담을_수_있는_인원은_자리와_기록이_함께_움직인다")
     void 담을_수_있는_인원은_자리와_기록이_함께_움직인다() {
-        int 인원 = MAX_SCAN;
-        이탈자를_채운다(인원);
+        // 지킴이까지 넣어 창이 정확히 상한을 채우게 한다 — 기록이 쌍이라
+        // 인자가 7,996 개가 되고, 그 경계가 이 시험이 재려는 자리다.
+        int 이탈자 = MAX_SCAN - 1;
+        이탈자를_채운다(이탈자);
         지킴이를_둔다();
 
-        청소한다(인원);
+        청소한다(MAX_SCAN);
 
-        assertThat(connection.sync().zcard(QUEUE)).isZero();
-        assertThat(connection.sync().hlen(GRACE)).isEqualTo(인원);
+        assertThat(connection.sync().zcard(QUEUE))
+                .as("지킴이만 남는다").isEqualTo(1);
+        assertThat(connection.sync().hlen(GRACE)).isEqualTo(이탈자);
     }
 }

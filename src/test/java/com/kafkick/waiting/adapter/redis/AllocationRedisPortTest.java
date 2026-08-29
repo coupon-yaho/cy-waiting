@@ -267,7 +267,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         assertThat(결과.failed()).as("실패").isZero();
         assertThat(결과.swept()).as("표시를 든 사람은 안 센다").isZero();
         assertThat(redis.opsForZSet().score(RedisKeys.queue("c1", SHARDS, 0), "m1").block(WAIT))
-                .as("큐에도 남는다").isNotNull();
+                .as("큐에 순번까지 그대로 남는다").isEqualTo(1.0);
         assertThat(redis.opsForHash().get(RedisKeys.grace("c1", SHARDS, 0), "m1").block(WAIT))
                 .as("입장 표시는 그대로").isEqualTo("a:" + 지금);
     }

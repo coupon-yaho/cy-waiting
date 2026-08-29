@@ -486,6 +486,11 @@ class AllocationRedisPortTest extends RedisContainerSupport {
 
         assertThatThrownBy(() -> port.publish(큰_판).block(WAIT))
                 .isInstanceOf(IllegalStateException.class);
+
+        // **안 나간 판은 거짓 매진을 안 만든다.** 여기서 세면 지표가 "표시를
+        // 버려 매진으로 읽힌 쿠폰" 이 아니라 "버리려고 시도한 횟수" 가 되고,
+        // 같은 판이 매 틱 실패하는 구간에서 그 수가 끝없이 부푼다.
+        assertThat(port.markersDropped()).as("안 나간 판은 안 센다").isZero();
     }
 
     /** 상한과 같으면 그대로 싣는다. 하나 넘어야 버리기 시작한다. */

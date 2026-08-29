@@ -100,17 +100,43 @@ class DemandCollectorTest {
                         Tuple.tuple("c2", 10L, 7L));
     }
 
+    /**
+     * <b>재고를 못 읽은 것을 0 으로 접지 않는다.</b>
+     *
+     * <p>접으면 재고 키를 잃은 쿠폰이 매진으로 보이고, 줄에 사람이 남아 있어도
+     * 종결된다. 재고가 실제로 돌아오는 것이 아니라서 다음 스냅샷도 이것을
+     * 안 되돌린다 — 자동으로 안 낫는 유일한 오판 방향이다 (3.1 절).
+     */
+    // **초과 발급으로 가지 않는다.** 게이트웨이는 재고를 안 깎는다. 진짜 상한은
+    // 뒷단이 원자적으로 지키고, 넘겨 보낸 몫은 409 로 돌아와 매진 관찰이
+    // 받는다 — 뒷단이 판단하게 두는 것이 게이트웨이가 찍는 것보다 낫다.
     @Test
-    @DisplayName("재고를_모르면_없는_것으로_본다")
-    void 재고를_모르면_없는_것으로_본다() {
-        // 재고 키가 없는 것은 아직 안 실렸거나 지워진 것이다. 모르는 값을 크게
-        // 잡으면 재고보다 많이 통과시킨다 — 초과 발급은 되돌릴 수 없다.
+    @DisplayName("재고를_못_읽으면_미상으로_싣는다")
+    void 재고를_못_읽으면_미상으로_싣는다() {
         DemandCollector collector = collector(List.of("c1"),
                 Map.of("c1", List.of(9L, 0L, 0L, 0L)), Collections.emptyMap());
 
         List<CouponDemand> 수요 = collector.collect().block().demands();
 
-        assertThat(수요).singleElement().satisfies(d -> assertThat(d.stock()).isZero());
+        assertThat(수요).singleElement().satisfies(d -> {
+            assertThat(d.stockKnown()).as("모른다는 것이 값으로 남는다").isFalse();
+            assertThat(d.stock()).as("0 이면 매진과 같아진다").isNotEqualTo(0L);
+        });
+    }
+
+    /** 읽은 0 은 그대로 0 이다. 미상을 들이면서 진짜 매진이 흐려지면 안 된다. */
+    @Test
+    @DisplayName("읽은_재고_0은_그대로_매진이다")
+    void 읽은_재고_0은_그대로_매진이다() {
+        DemandCollector collector = collector(List.of("c1"),
+                Map.of("c1", List.of(9L, 0L, 0L, 0L)), Map.of("c1", 0L));
+
+        List<CouponDemand> 수요 = collector.collect().block().demands();
+
+        assertThat(수요).singleElement().satisfies(d -> {
+            assertThat(d.stockKnown()).isTrue();
+            assertThat(d.stock()).isZero();
+        });
     }
 
     @Test

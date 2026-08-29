@@ -178,4 +178,47 @@ class CouponStateTest {
                     .isInstanceOf(IllegalArgumentException.class);
         }
     }
+    /**
+     * <b>재고를 못 읽은 것은 매진이 아니다.</b> 매진으로 읽으면 게이트웨이가
+     * 그 쿠폰을 종결하고 정리가 큐를 지운다 — 자동으로 안 낫는 오판이
+     * 되돌릴 수 없는 삭제가 된다 (3.1).
+     */
+    @Test
+    @DisplayName("재고_미상은_매진이_아니다")
+    void 재고_미상은_매진이_아니다() {
+        CouponState 미상 = CouponState.unknownStock(QueueMode.ADAPTIVE, 7, 100);
+
+        assertThat(미상.stockKnown()).as("모른다는 것이 값으로 남는다").isFalse();
+        assertThat(미상.soldOut()).as("종결도 삭제도 이 값에 달렸다").isFalse();
+    }
+
+    /** 읽은 0 은 그대로 매진이다. 미상을 들이면서 이것이 흔들리면 R3 이 죽는다. */
+    @Test
+    @DisplayName("읽은_재고_0은_그대로_매진이다")
+    void 읽은_재고_0은_그대로_매진이다() {
+        assertThat(CouponState.closed(QueueMode.ADAPTIVE, 5).soldOut()).isTrue();
+        assertThat(CouponState.noQueue(QueueMode.ADAPTIVE, 0).soldOut()).isTrue();
+        assertThat(CouponState.withQueue(QueueMode.ADAPTIVE, 3, 10, 20).soldOut()).isFalse();
+    }
+
+    /** 미상을 뜻하는 한 값 말고는 음수를 안 받는다. 열어 두면 오타가 값이 된다. */
+    @Test
+    @DisplayName("뜻_없는_음수_재고는_거부한다")
+    void 뜻_없는_음수_재고는_거부한다() {
+        assertThatThrownBy(() -> new CouponState(QueueMode.ADAPTIVE, RuntimeState.IDLE, 0, -2, 0))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /**
+     * <b>미상이면 종결로 못 간다.</b> I2 가 종결에 재고 0 을 요구하므로 미상은
+     * 애초에 그 자리에 못 선다 — 삭제로 가는 길이 자료형에서 막힌다.
+     */
+    @Test
+    @DisplayName("미상은_종결_상태가_될_수_없다")
+    void 미상은_종결_상태가_될_수_없다() {
+        assertThatThrownBy(() -> new CouponState(
+                QueueMode.ADAPTIVE, RuntimeState.CLOSED, 0, CouponState.STOCK_UNKNOWN, 5))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("I2");
+    }
 }

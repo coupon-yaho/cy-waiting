@@ -9,6 +9,7 @@ import com.kafkick.waiting.domain.coupon.QueueMode;
 import com.kafkick.waiting.domain.coupon.RuntimeState;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -311,7 +312,7 @@ class SnapshotEncodeTest {
     @Test
     @DisplayName("재고_자리의_음수는_그_쿠폰만_버린다")
     void 재고_자리의_음수는_그_쿠폰만_버린다() {
-        Map<String, String> 손상 = new java.util.HashMap<>(미상을_싣는다());
+        Map<String, String> 손상 = new HashMap<>(미상을_싣는다());
         손상.put("c1", "ADAPTIVE:QUEUEING:3:-1:10:1.0");
 
         assertThat(codec.decode(손상).coupons()).doesNotContainKey("c1");
@@ -325,7 +326,7 @@ class SnapshotEncodeTest {
     @Test
     @DisplayName("예약_자리가_없으면_아는_것으로_읽는다")
     void 예약_자리가_없으면_아는_것으로_읽는다() {
-        Map<String, String> 옛판 = new java.util.HashMap<>(미상을_싣는다());
+        Map<String, String> 옛판 = new HashMap<>(미상을_싣는다());
         옛판.keySet().removeIf(f -> f.startsWith("#u:"));
 
         CouponState 되읽음 = codec.decode(옛판).coupons().get("c1");

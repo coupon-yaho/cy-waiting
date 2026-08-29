@@ -10,9 +10,8 @@ package com.kafkick.waiting.domain.coupon;
  * @param mode           운영자가 정한 대기열 정책
  * @param runtime        기계가 관측한 현재 상태
  * @param credit         이 쿠폰에 배분된 초당 통과 몫
- * @param remainingStock 남은 재고. <b>발급 계층이 소유</b>하고 게이트웨이는 읽기만 한다.
- *     못 읽었으면 {@link #STOCK_UNKNOWN} 이다 — 이 수를 사용자에게 보이거나 셈에
- *     넣으면 안 된다. 매진인지만 {@link #soldOut()} 으로 묻는다
+ * @param remainingStock 남은 재고. 못 읽었으면 {@link #STOCK_UNKNOWN} 이다 —
+ *     사용자에게 보이거나 셈에 넣지 않는다. 매진인지만 {@link #soldOut()} 으로 묻는다
  * @param waiting        줄 서 있는 사람 수
  */
 public record CouponState(

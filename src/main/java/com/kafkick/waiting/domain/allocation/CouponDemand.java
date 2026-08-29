@@ -25,9 +25,28 @@ public record CouponDemand(String couponId, long waiting, long stock, QueueMode 
         if (waiting < 0) {
             throw new IllegalArgumentException("waiting 은 0 이상이어야 한다: " + waiting);
         }
-        if (stock < 0) {
-            throw new IllegalArgumentException("stock 은 0 이상이어야 한다: " + stock);
+        if (stock < 0 && stock != STOCK_UNKNOWN) {
+            throw new IllegalArgumentException("stock 은 0 이상이거나 미상이어야 한다: " + stock);
         }
+    }
+
+    /**
+     * 재고를 못 읽었다.
+     *
+     * <p><b>0 과 갈라야 한다.</b> 접으면 재고 키를 잃은 쿠폰이 매진으로 보이고,
+     * 줄에 사람이 남아 있어도 종결된다 — 재고가 실제로 돌아오는 것이 아니라서
+     * 다음 스냅샷도 안 되돌리는, 자동으로 안 낫는 유일한 오판이다.
+     */
+    public static final long STOCK_UNKNOWN = -1;
+
+    /** 재고 키가 안 온 쿠폰. 매진이 아니라 <b>모르는 것</b>이다. */
+    public static CouponDemand stockUnknown(String couponId, long waiting, QueueMode mode) {
+        return new CouponDemand(couponId, waiting, STOCK_UNKNOWN, mode);
+    }
+
+    /** 재고를 아는가. 모르면 매진 판정에 쓰면 안 된다. */
+    public boolean stockKnown() {
+        return stock != STOCK_UNKNOWN;
     }
 
     /** 정책을 안 적은 쿠폰. <b>정책이 없다는 것이 곧 적응형이다</b> — 기본값이다. */
@@ -35,9 +54,15 @@ public record CouponDemand(String couponId, long waiting, long stock, QueueMode 
         this(couponId, waiting, stock, QueueMode.ADAPTIVE);
     }
 
-    /** 재고를 넘겨 주면 그 몫은 뒷단이 거절하고, 다른 쿠폰이 못 쓴 채 사라진다. */
+    /**
+     * 재고를 넘겨 주면 그 몫은 뒷단이 거절하고, 다른 쿠폰이 못 쓴 채 사라진다.
+     *
+     * <p><b>미상이면 안 깎는다.</b> 깎으면 재고를 못 읽는 동안 그 줄이 통째로
+     * 굶는다. 진짜 상한은 뒷단이 원자적으로 지키므로(불변식 2) 여기서 모르는
+     * 값을 0 으로 가정할 이유가 없다.
+     */
     public long want() {
-        return Math.min(waiting, stock);
+        return stockKnown() ? Math.min(waiting, stock) : waiting;
     }
 
     /** 여기가 {@code IDLE ⟹ credit == 0}(I1)의 출처다 — 요구량이 0 이면 못 받는다. */

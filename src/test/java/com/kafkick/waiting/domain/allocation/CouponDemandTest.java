@@ -47,12 +47,13 @@ class CouponDemandTest {
         assertThat(new CouponDemand("c1", 500, 10).isActive()).isTrue();
     }
 
+    /** 미상을 뜻하는 한 값 말고는 음수를 안 받는다. 열어 두면 오타가 값이 된다. */
     @Test
-    @DisplayName("음수_대기자나_음수_재고는_거부한다")
-    void 음수_대기자나_음수_재고는_거부한다() {
+    @DisplayName("음수_대기자나_뜻_없는_음수_재고는_거부한다")
+    void 음수_대기자나_뜻_없는_음수_재고는_거부한다() {
         assertThatThrownBy(() -> new CouponDemand("c1", -1, 10))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new CouponDemand("c1", 10, -1))
+        assertThatThrownBy(() -> new CouponDemand("c1", 10, -2))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 

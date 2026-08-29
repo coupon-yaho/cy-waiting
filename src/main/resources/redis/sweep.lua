@@ -132,8 +132,13 @@ end
 -- 올 사람들이다.
 -- **순번을 같이 받는다.** 멤버당 ZSCORE 를 다시 부르면 K 번의 왕복이 되고,
 -- K 는 3,000 까지 간다 — 그 루프가 창 읽기보다 비싸다.
+--
+-- **내림으로 적는다.** 반올림이 위로 가면 임계보다 실제로 위인 사람이 창에서
+-- 빠지고, 임계가 더 안 오르면 그 사람은 어떤 판에서도 창에 안 들어온다.
+-- 내리면 창이 한 칸 넓어질 뿐이고, 임계 이하인 사람은 아래의 정확한 비교가
+-- 되잡는다 — 그 검사가 남아 있어야 하는 이유가 여기다.
 local flat = usableAdmitted and redis.call('ZRANGEBYSCORE', KEYS[1],
-        '(' .. string.format('%.0f', admitted), '+inf', 'WITHSCORES',
+        '(' .. string.format('%.0f', math.floor(admitted)), '+inf', 'WITHSCORES',
         'LIMIT', 0, limit) or {}
 local front = {}
 local ranks = {}

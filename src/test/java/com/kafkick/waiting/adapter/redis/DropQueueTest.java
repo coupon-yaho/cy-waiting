@@ -159,8 +159,10 @@ class DropQueueTest extends RedisContainerSupport {
         줄을_세운다();
         redis.opsForValue().set(RedisKeys.stock(COUPON), "0").block(WAIT);
 
+        // **순서를 안 본다.** 구현이 동시에 여러 쿠폰을 태우므로 순서가
+        // 보장되지 않는다 — 지금은 원소가 하나라 우연히 결정적일 뿐이다.
         assertThat(port.dropSoldOutQueues(List.of(산것, COUPON)).block(WAIT))
-                .containsExactly(COUPON);
+                .containsExactlyInAnyOrder(COUPON);
 
         assertThat(있나(RedisKeys.queue(산것, 1, 0))).as("살아난 쪽은 그대로").isTrue();
     }

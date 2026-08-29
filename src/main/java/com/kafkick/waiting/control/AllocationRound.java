@@ -121,14 +121,14 @@ public final class AllocationRound {
     // 되찾는 길은 임계의 증분을 레디스에서 직접 읽는 것인데, 그러면 이 값이
     // 리더 메모리가 아니라 왕복이 된다. 대신 **틀리는 방향이 안전하다** —
     // 분모가 작아지면 낭비율이 커져 게이트가 통과가 아니라 미달 쪽으로 기운다.
+    private final AtomicLong admitted = new AtomicLong();
+
     /**
-     * 재고를 못 읽은 채 발행한 누적 쿠폰 수. <b>0 이 아니면 재고 키를 잃었다.</b>
+     * 재고를 못 읽은 채 발행한 누적 쿠폰·틱. <b>0 이 아니면 재고 키를 잃었다.</b>
      *
      * <p>안 세면 그 쿠폰이 매진 판정을 아슬아슬하게 비켜 가는 것을 아무도 모른다.
      */
-    private final AtomicLong stockUnknown = new AtomicLong();
-
-    private final AtomicLong admitted = new AtomicLong();
+    private final AtomicLong stockUnknownTicks = new AtomicLong();
 
     private AllocationRound(BooleanSupplier stillLeader,
             Supplier<Mono<TimedDemands>> demands, LongSupplier globalCredit,
@@ -412,9 +412,9 @@ public final class AllocationRound {
         return admitted.get();
     }
 
-    /** 재고를 못 읽은 채 발행한 누적 쿠폰 수. 0 이 아니면 재고 키를 잃었다. */
-    public double stockUnknown() {
-        return stockUnknown.get();
+    /** 재고를 못 읽은 채 발행한 누적 쿠폰·틱. 0 이 아니면 재고 키를 잃었다. */
+    public double stockUnknownTicks() {
+        return stockUnknownTicks.get();
     }
 
     /** 폴링 예산을 넘긴 누적 틱 수. 0 이면 배수가 한 번도 안 걸렸다. */
@@ -464,7 +464,7 @@ public final class AllocationRound {
         // 정리가 유예 틱을 채운 뒤 큐를 지운다 — 자동으로 안 낫는 오판이
         // 되돌릴 수 없는 삭제가 된다. 진짜 상한은 뒷단이 원자적으로 지킨다.
         if (!demand.stockKnown()) {
-            return CouponState.unknownStock(demand.mode(),
+            return CouponState.stockUnknown(demand.mode(),
                     granted.getOrDefault(demand.couponId(), 0L), demand.waiting());
         }
         if (demand.stock() <= 0) {
@@ -524,7 +524,7 @@ public final class AllocationRound {
         PollBudget budget = pollBudget(collected, granted, credit);
         // **판마다 한 번 센다.** 상태를 만드는 자리에서 세면 정리·청소·발행이
         // 같은 판을 세 번 훑어 셋으로 부푼다.
-        stockUnknown.addAndGet(collected.stream().filter(d -> !d.stockKnown()).count());
+        long unknown = collected.stream().filter(d -> !d.stockKnown()).count();
         // **히스테리시스는 아직 빈 값을 싣는다.** 제품이 아직 히스테리시스를
         // 안 돌려서 실을 상태가 없다 (CY-324). 돌리기 시작하면 여기가 매 틱
         // 이월을 지우는 자리가 되므로, 기본값에 숨기지 않고 눈에 보이게 둔다.
@@ -532,7 +532,13 @@ public final class AllocationRound {
                         snapshot(collected, granted, credit, readAt,
                                 tunables.get().orElse(null), budget.scale()),
                         current.snapshot(), QueueingHysteresis.Snapshot.empty()))
-                .doOnSuccess(done -> watchPollBudget(budget));
+                // **발행이 끝난 뒤에 센다.** 앞에서 세면 스냅샷 샤드가 죽어
+                // 발행이 매 틱 터지는 구간 — 재고 키를 잃기 가장 쉬운 구간 —
+                // 에서 발행 안 된 판이 발행된 것으로 잡힌다.
+                .doOnSuccess(done -> {
+                    watchPollBudget(budget);
+                    stockUnknownTicks.addAndGet(unknown);
+                });
     }
 
     /** 이번 틱의 폴링 예산과 그 결과. <b>순수하다</b> — 세는 것은 발행 뒤다. */

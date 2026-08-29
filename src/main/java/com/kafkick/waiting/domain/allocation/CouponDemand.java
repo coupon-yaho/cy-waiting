@@ -19,9 +19,10 @@ public record CouponDemand(String couponId, long waiting, long stock, QueueMode 
      * 재고를 못 읽었다.
      *
      * <p><b>0 과 갈라야 한다.</b> 접으면 재고 키를 잃은 쿠폰이 매진으로 보이고,
-     * 줄에 사람이 남아 있어도 종결된다 — 재고가 실제로 돌아오는 것이 아니라서
-     * 다음 스냅샷도 안 되돌리는, 자동으로 안 낫는 유일한 오판이다.
+     * 줄에 사람이 남아 있어도 종결된다 — 다음 스냅샷도 안 되돌린다.
      */
+    // 상태 쪽에도 같은 뜻의 값이 따로 있다. 경계를 넘는 것은 값이 아니라
+    // stockKnown() 이라, 둘이 같은 수일 필요는 없다.
     public static final long STOCK_UNKNOWN = -1;
 
     public CouponDemand {
@@ -35,7 +36,8 @@ public record CouponDemand(String couponId, long waiting, long stock, QueueMode 
             throw new IllegalArgumentException("waiting 은 0 이상이어야 한다: " + waiting);
         }
         if (stock < 0 && stock != STOCK_UNKNOWN) {
-            throw new IllegalArgumentException("stock 은 0 이상이거나 미상이어야 한다: " + stock);
+            throw new IllegalArgumentException(
+                    "stock 은 0 이상이어야 한다. 못 읽었으면 stockUnknown 을 쓴다: " + stock);
         }
     }
 

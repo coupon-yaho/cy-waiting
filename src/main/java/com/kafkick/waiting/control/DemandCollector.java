@@ -86,10 +86,13 @@ public final class DemandCollector {
      * <b>못 읽은 재고를 0 으로 안 접는다.</b> 접으면 재고 키를 잃은 쿠폰이
      * 매진으로 보이고, 다음 판도 이것을 안 되돌린다.
      */
+    // **읽은 음수는 미상이 아니다.** 재고 값은 발급 계층이 소유하고, 차감이 0 을
+    // 지나치면 실제로 음수가 된다. 미상 표시와 값이 겹친다고 그것을 미상으로
+    // 읽으면 다 팔린 줄이 영영 안 닫힌다 — 이 자리가 막으려던 것의 반대다.
     private CouponDemand demandOf(String couponId, long waiting, Long stock, QueueMode mode) {
         return stock == null
                 ? CouponDemand.stockUnknown(couponId, waiting, mode)
-                : new CouponDemand(couponId, waiting, stock, mode);
+                : new CouponDemand(couponId, waiting, Math.max(0, stock), mode);
     }
 
     private long orZero(Long value) {

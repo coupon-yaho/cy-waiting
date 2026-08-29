@@ -171,7 +171,7 @@ tryAcquireAll(tier1, tier2):
 
 ```
  0. 뒷단 매진 관찰 (게이트웨이 계층)   → REJECT_SOLD_OUT     ← 사다리 밖. 아래 참조
- 1. stock <= 0                        → REJECT_SOLD_OUT
+ 1. 재고를 알고 stock <= 0            → REJECT_SOLD_OUT     ← 미상은 여기 안 걸린다 (CY-702)
  2. hasValidToken                     → tier2 통과 시 PASS_TOKEN, 초과 시 RETRY_TOKEN
  3. mode == ALWAYS && !queueFull      → ENQUEUE_ALWAYS       ← 낡음보다 앞
  4. dataStale && !hasQueue            → failOpen (상한 내 PASS, 초과 시 REJECT_OVERLOAD)
@@ -328,8 +328,13 @@ t=0.6s  B 도착 → 스냅샷은 아직 IDLE → 8번 통과 → 버킷 리필�
 | I3 | `runtime == DRAINING ⟹ credit >= waiting` | 컴팩트 생성자 |
 | I3' | `runtime == QUEUEING ⟹ credit < waiting` (**I4 뒤에 검사**) | 컴팩트 생성자 |
 | I4 | `waiting == 0 ⟹ runtime ∈ {IDLE, CLOSED}` | 컴팩트 생성자 |
+| I7 | `remainingStock >= 0 ∨ remainingStock == STOCK_UNKNOWN` | 컴팩트 생성자 — 뜻 없는 음수를 열면 오타가 값이 된다 |
 | I5 | 표시 순위는 단조 비증가 | 속성 테스트 |
 | I6 | `pollScale >= 1.0` | `SnapshotMeta` 생성자 정규화 — 전역값이라 쿠폰이 아니라 메타에 산다 |
+
+**I2 가 미상을 막는다.** 재고를 못 읽은 쿠폰은 `remainingStock` 이 0 이 아니라서
+`CLOSED` 가 될 수 없다 — 종결로 가는 길이 자료형에서 막힌다 (CY-702). 매진 판정도
+"재고를 알고 0 이하" 라야 서므로 미상은 3.5 의 1번을 안 지난다.
 
 **I1이 가장 중요하다.** `IDLE`과 `credit==0`은 독립 값이 아니라 같은 원인
 (`waiting == 0`)에서 나온다.

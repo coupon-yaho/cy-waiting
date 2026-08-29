@@ -502,7 +502,12 @@ public final class AllocationRedisPort implements SnapshotSource {
         return value instanceof Number n ? n.longValue() : 0;
     }
 
-    /** 쿠폰별 재고. <b>없으면 담지 않는다</b> — 부르는 쪽이 "모른다" 를 0 으로 접는다. */
+    /**
+     * 쿠폰별 재고. <b>못 읽으면 담지 않는다</b> — 키가 없거나 수가 아닐 때다.
+     *
+     * <p>빠진 자리를 0 으로 접으면 재고 키를 잃은 쿠폰이 매진이 된다. 부르는
+     * 쪽이 그 빈자리를 미상으로 싣는다 (3.1).
+     */
     public Mono<Map<String, Long>> stocks(List<String> couponIds) {
         List<String> keys = couponIds.stream().map(RedisKeys::stock).toList();
         return redis.opsForValue().multiGet(keys).map(values -> {

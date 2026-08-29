@@ -33,6 +33,15 @@ const JOIN_SEC = Number(__ENV.JOIN_SEC || '40');
 /** 판 전체 길이(초). 정상 구간이 남을 만큼 길어야 한다. */
 const RUN_SEC = Number(__ENV.RUN_SEC || '900');
 
+/**
+ * 줄을 다 비울 때까지 더 도는 시간(초).
+ *
+ * <b>여기서 멈추면 안 된다.</b> 판이 끝나는 순간 폴링이 통째로 멎는데, 서버가
+ * 시킨 간격이 최대 60초라 **직전 60초에 차례를 받은 성실한 사람이 전원 줄에
+ * 남는다.** 그들은 이탈자가 아닌데 유령으로 잡혀 기구의 결함으로 세어진다.
+ */
+const DRAIN_SEC = Number(__ENV.DRAIN_SEC || '120');
+
 export const options = {
   scenarios: {
     // **한 사람이 한 반복이다.** 줄에 서고, 이탈하거나 차례가 올 때까지 묻는다.
@@ -42,7 +51,7 @@ export const options = {
       executor: 'per-vu-iterations',
       vus: POPULATION,
       iterations: 1,
-      maxDuration: `${RUN_SEC}s`,
+      maxDuration: `${RUN_SEC + DRAIN_SEC}s`,
     },
   },
   thresholds: {
@@ -65,6 +74,7 @@ const headers = (member) => ({
 export default function () {
   // **줄 세우는 시간에 고르게 편다.** 한꺼번에 넣으면 앞부분이 통째로 같은
   // 초에 들어와, 임계가 지나가는 시각과 이탈 시각의 관계가 뭉개진다.
+  // 줄 세우는 시간에 고르게 편다. 배수 구간에는 아무도 새로 안 선다.
   sleep((JOIN_SEC * (__VU - 1)) / POPULATION);
 
   // **숫자여야 한다.** 신원 필터가 형식을 검사해서, 문자열을 섞으면 전건
@@ -94,8 +104,9 @@ export default function () {
     return;
   }
 
-  // 차례가 올 때까지 서버가 시킨 간격으로 묻는다. 판이 끝나면 그만둔다.
-  const deadline = Date.now() + RUN_SEC * 1000;
+  // 차례가 올 때까지 서버가 시킨 간격으로 묻는다. **배수 구간까지 묻는다** —
+  // 여기서 멈추면 차례를 받고 아직 안 온 사람이 유령으로 잡힌다.
+  const deadline = Date.now() + (RUN_SEC + DRAIN_SEC) * 1000;
   while (Date.now() < deadline) {
     const status = http.get(`${BASE}/api/v1/coupons/${COUPON}/queue`,
         { headers: Object.assign(headers(member), { 'Queue-Token': token }) });

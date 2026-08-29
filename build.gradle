@@ -422,3 +422,27 @@ tasks.register('codenarcBuildScripts', org.gradle.api.plugins.quality.CodeNarc) 
     compilationClasspath = files()
 }
 tasks.named('check') { dependsOn 'codenarcBuildScripts' }
+
+/**
+ * 생존 신호 수명을 부하 하네스에 알려 준다.
+ *
+ * <b>손으로 옮겨 적지 않게 한다.</b> G7.5 판정이 이 값에 걸려 있는데, 사본을
+ * 두면 정책이 움직일 때 판정만 옛 값을 쓴다 — 실제로 그 상수 하나가 같은
+ * 측정에서 통과와 미달을 뒤집었다.
+ *
+ * <b>도메인에 main 을 두지 않는다.</b> 부하 하네스 편의를 위해 프로덕션
+ * 클래스에 진입점을 만들면 그 자리가 계속 는다. 컴파일된 것을 읽는다.
+ */
+tasks.register('printAliveTtlSeconds') {
+    description = '생존 신호 수명(초). test/load/abandonment-waste.sh 가 읽는다'
+    group = 'verification'
+    dependsOn 'classes'
+    ext.policy = 'com.kafkick.waiting.domain.queue.PollIntervalPolicy'
+    doLast {
+        def urls = sourceSets.main.runtimeClasspath.collect { it.toURI().toURL() }
+        new URLClassLoader(urls as URL[]).withCloseable { loader ->
+            def seconds = loader.loadClass(policy).getMethod('aliveTtl').invoke(null).toSeconds()
+            println seconds
+        }
+    }
+}

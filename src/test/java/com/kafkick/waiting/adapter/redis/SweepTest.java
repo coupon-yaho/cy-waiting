@@ -285,6 +285,37 @@ class SweepTest extends RedisContainerSupport {
                 .as("순번까지 그대로").isEqualTo(대기자0_순번);
     }
 
+    /**
+     * <b>임계가 깨졌으면 앞줄을 안 걷는다.</b>
+     *
+     * <p>이 스크립트에서 {@code -1} 은 보수적인 값이 아니라 <b>가장 공격적인</b>
+     * 값이다 — 창이 큐 전체로 열리고 임계 검사도 전원에 대해 참이 된다. 깨진
+     * 값을 그리로 접으면 차례가 왔던 사람까지 통째로 걷힌다 (불변식 4).
+     */
+    // 없는 것과 깨진 것은 다르다. 없으면 새 쿠폰이라 -1 이 맞고, 깨졌으면
+    // 앞줄 제거만 접는다 — 정리까지 멈추면 해시가 한 방향으로만 자란다.
+    @Test
+    @DisplayName("임계가_깨졌으면_앞줄을_안_걷는다")
+    void 임계가_깨졌으면_앞줄을_안_걷는다() {
+        for (String 깨진_값 : List.of("nan", "inf", "-inf", "없는수")) {
+            redis.delete(QUEUE, GRACE, ALIVE, ADMITTED).block(WAIT);
+            enqueue("이탈자");
+            redis.opsForZSet().remove(ALIVE, "이탈자").block(WAIT);
+            enqueue("성실이");
+            살아있다("성실이");
+            redis.opsForHash().put(GRACE, "낡은기록", "d:" + 만료된_시각).block(WAIT);
+            redis.opsForValue().set(ADMITTED, 깨진_값).block(WAIT);
+
+            List<Object> 결과 = sweep("100");
+
+            assertThat(swept(결과)).as("%s — 앞줄은 안 걷는다", 깨진_값).isZero();
+            assertThat(redis.opsForZSet().score(QUEUE, "이탈자").block(WAIT))
+                    .as("%s — 줄이 그대로", 깨진_값).isNotNull();
+            // **정리까지 멈추지는 않는다.** 멈추면 해시가 한 방향으로만 자란다.
+            assertThat(expired(결과)).as("%s — 낡은 기록은 걷는다", 깨진_값).isOne();
+        }
+    }
+
     @Test
     @DisplayName("검사_범위가_인자로_주어진다")
     void 검사_범위가_인자로_주어진다() {

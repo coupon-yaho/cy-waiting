@@ -23,6 +23,13 @@ class InvariantMetricsWiringTest {
     @Autowired
     private PrometheusMeterRegistry registry;
 
+    // **약한 참조는 여기서 못 잡는다.** 함수형 계측기는 상태 객체를 약한 참조로
+    // 잡으므로, 부르는 자리에서 만든 람다를 넘기면 GC 뒤에 그 계수가 0 으로
+    // 굳는다. 그런데 굳기 전에는 등록도 스크레이프도 정상이라 아래 시험들이
+    // 통과하고, GC 를 불러 재면 수거 시점이 안 보장돼 간헐로 통과한다.
+    // 막는 것은 시험이 아니라 InvariantMetrics 가 형제와 같은 상태 객체를
+    // 쓰는 구조다 — 그 근거는 그 필드의 주석에 있다.
+
     /** 이름을 한 곳에 둔다 — 두 시험이 각자 나열하면 하나만 늘어난다. */
     private static final List<String> 선행_지표 = List.of(
             "waiting.allocation.budget.overshoot",
@@ -45,25 +52,6 @@ class InvariantMetricsWiringTest {
                 .contains("waiting_allocation_admitted_total")
                 // 재고 키를 잃은 사실과, 그것이 거짓 매진으로 나간 사실 (CY-702).
                 .contains("waiting_allocation_stock_unknown_ticks_total")
-                .contains("waiting_snapshot_stock_unknown_dropped_total");
-    }
-
-    /**
-     * <b>함수형 계측기는 상태 객체를 약한 참조로 잡는다.</b> 부르는 자리에서 만든
-     * 람다를 그대로 넘기면 GC 뒤에 그 계수가 0 으로 굳는다 — 표시를 계속 버리는데
-     * 지표만 조용해진다.
-     */
-    // 계측기를 건 객체가 살아 있는지로 잰다. GC 를 불러 재면 수거 시점이
-    // 보장되지 않아 간헐로 통과한다.
-    @Test
-    @DisplayName("계수의_상태_객체가_형제들과_같다")
-    void 계수의_상태_객체가_형제들과_같다() {
-        assertThat(registry.getMeters())
-                .filteredOn(m -> 선행_지표.contains(m.getId().getName()))
-                .as("하나라도 딴 객체에 걸리면 그것만 GC 뒤에 굳는다")
-                .hasSize(선행_지표.size());
-        assertThat(registry.scrape())
-                .as("등록만 되고 값을 못 읽으면 스크레이프에 안 나온다")
                 .contains("waiting_snapshot_stock_unknown_dropped_total");
     }
 

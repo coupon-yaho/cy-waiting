@@ -103,17 +103,34 @@ case_is "깨진 요약은 통과로 안 센다" 1 '.metrics.gateway_overhead_ms 
 # ── G7.5 낭비 판정 (evaluate-waste.sh) ──────────────────────────────────────
 #
 # **심판이 틀리면 아무도 안 본다.** 이 판정은 실제로 상수 하나 때문에 같은
-# 측정에서 통과와 미달이 갈렸다. 조작한 입력으로 그 갈래들을 못 박는다.
+# 측정에서 통과와 미달이 갈렸다. 그리고 첫 판 자기검사는 **판정식을 통째로
+# 지워도 초록**이었다 — 어느 사례도 낭비 비율이 문턱을 넘지 않아서다.
+# 여기서는 문턱의 양쪽을 다 밟는다.
 waste="$here/evaluate-waste.sh"
 
-# 표본: 100초에 임계가 60,000,000 μs 자리, 200초에 200,000,000 자리.
-waste_samples() {
-  printf '100 60000000\n200 200000000\n'
+# 표본 셋. **첫 표본은 낮게 둔다** — 첫 표본에서 이미 지나가 있는 유령은
+# 언제 지났는지 모르므로 판정에서 빠지고, 그러면 사례가 재려던 것을 못 잰다.
+#
+#   t=50  임계 10,000,000    t=100 임계 60,000,000    t=300 임계 200,000,000
+#
+# 되짚을 때 **직전 표본**을 하한으로 쓰므로 간격을 넉넉히 벌려 둔다 — 붙여
+# 두면 여유(틱)를 조금만 바꿔도 사례가 갈래를 넘나든다.
+waste_samples() { printf '50 10000000\n100 60000000\n300 200000000\n'; }
+
+# 유령 n 명. score 가 곧 줄 선 시각(μs)이다.
+#   50,000,000 → 50초에 줄 서서 100초에 차례. 직전 표본 50 이라 **하한 0초**
+#   90,000,000 → 90초에 줄 서서 300초에 차례. 직전 표본 100 이라 **하한 10초**
+waste_ghosts() {
+  local n="$1" us="$2"
+  for ((i = 0; i < n; i++)); do printf 'm%d_%d\t%d\n' "$us" "$i" "$us"; done
 }
 
-# 유령 하나. score 가 곧 줄 선 시각(μs)이라 50초에 줄을 섰고, 임계는 100초에
-# 그를 지났다 — **기다린 시간 50초.**
-waste_ghost() { printf 'm1\t50000000\n'; }
+# 수명 5 에 틱 1 이면 하한 0초는 못 피하는 것, 10초는 피할 수 있었던 것이다.
+못_피하는() { waste_ghosts "$1" 50000000; }
+피할_수_있었던() { waste_ghosts "$1" 90000000; }
+
+# 사례들이 쓰는 수명. 위 두 갈래를 가르는 값이다.
+TTL=5
 
 run_waste() {  # 이름 기대코드 [인자...]
   local name="$1" want="$2"; shift 2
@@ -131,28 +148,73 @@ run_waste() {  # 이름 기대코드 [인자...]
 echo "== G7.5 낭비 판정 =="
 waste_samples > "$work/s.log"
 
-# 수명 40초: 50초를 기다렸으니 걷었어야 한다 → 피할 수 있었던 낭비
-waste_ghost > "$work/g.tsv"
-run_waste "피할 수 있었던 유령을 잡는다" 1 "$work/s.log" "$work/g.tsv" 1000 10 20 40
+# **문턱의 양쪽을 밟는다.** 못 피하는 것 20명(정족수)에 피할 수 있었던 것을
+# 얹어 비율을 만든다. 차례를 준 인원 1,000 이라 50명이면 정확히 5% 다.
+{ 못_피하는 20; 피할_수_있었던 50; } > "$work/edge-pass.tsv"
+{ 못_피하는 20; 피할_수_있었던 51; } > "$work/edge-fail.tsv"
+run_waste "문턱과 같은 값은 통과한다" 0 "$work/s.log" "$work/edge-pass.tsv" 1000 100 200 "$TTL"
+run_waste "문턱을 넘으면 미달이다" 1 "$work/s.log" "$work/edge-fail.tsv" 1000 100 200 "$TTL"
 
-# 수명 60초: 50초는 수명 안이라 못 피한다 → 통과
-run_waste "수명 안의 유령은 안 센다" 0 "$work/s.log" "$work/g.tsv" 1000 10 20 60
+# 수명을 바꾸면 같은 유령이 갈래를 옮긴다. 경계가 `>=` 인 것도 같이 못 박는다.
+못_피하는 30 > "$work/g30.tsv"
+run_waste "수명 안의 유령은 안 센다" 0 "$work/s.log" "$work/g30.tsv" 1000 100 200 "$TTL"
+# 하한이 정확히 `수명 + 틱` 인 유령은 피할 수 있었던 것이다 (`>=`).
+{ 피할_수_있었던 51; 못_피하는 20; } > "$work/exact.tsv"
+run_waste "수명과 같으면 피할 수 있었던 것이다" 1 "$work/s.log" "$work/exact.tsv" 1000 100 200 9
+# 한 칸만 늘리면 같은 유령이 못 피하는 쪽으로 넘어간다.
+run_waste "수명보다 짧게 기다렸으면 안 센다" 0 "$work/s.log" "$work/exact.tsv" 1000 100 200 10
 
-# 유령이 없으면 "기구를 안 잰 판" 이라 미판정이어야 한다 — 통과로 읽으면
-# 이탈이 안 일어난 판이 매번 초록이 된다
+# 판이 기구를 안 잰 경우는 통과도 미달도 아니다.
 : > "$work/empty.tsv"
-run_waste "유령이 없으면 미판정" 1 "$work/s.log" "$work/empty.tsv" 1000 10 20 60
+# 걷은 것도 걷었어야 하는 것도 없으면 기구에 기회가 없던 판이다.
+run_waste "기회가 없던 판은 미판정" 1 "$work/s.log" "$work/empty.tsv" 1000 0 200 "$TTL"
+못_피하는 1 > "$work/alibi.tsv"
+run_waste "알리바이 한 명은 정족수가 아니다" 1 "$work/s.log" "$work/alibi.tsv" 1000 0 200 "$TTL"
+run_waste "차례가 적으면 미판정" 1 "$work/s.log" "$work/g30.tsv" 10 100 200 "$TTL"
 
-# 차례가 몇 명뿐이면 비율에 뜻이 없다
-run_waste "차례가 적으면 미판정" 1 "$work/s.log" "$work/g.tsv" 10 10 20 60
+# **못 되짚은 유령이 판을 덮으면 미판정.** 알리바이 하나만 두고 나머지가 전부
+# 표본 밖이면, 스위퍼가 한 명도 안 걷은 판이 통과한다.
+{ 못_피하는 20; waste_ghosts 500 900000000; } > "$work/unknown.tsv"
+run_waste "못 되짚은 것이 많으면 미판정" 1 "$work/s.log" "$work/unknown.tsv" 1000 100 500 "$TTL"
 
-# **과잉 청소.** 걷은 수가 이탈한 수를 넘으면 살아 있는 사람을 걷은 것이다
-run_waste "과잉 청소를 미달로 잡는다" 1 "$work/s.log" "$work/g.tsv" 1000 30 20 60
+# **과잉 청소.** 걷은 수가 이탈한 수를 넘으면 살아 있는 사람을 걷은 것이다.
+run_waste "과잉 청소를 미달로 잡는다" 1 "$work/s.log" "$work/g30.tsv" 1000 300 200 "$TTL"
 
-# 표본이 비면 유령이 언제 차례를 받았는지 모른다
+# **표본 밖을 아는 쪽으로 접으면 안 된다.** 상한 안쪽이라 미판정은 아니지만,
+# 그것을 피할 수 있었던 것으로 세면 문턱을 넘는다.
+{ 못_피하는 20; 피할_수_있었던 50; waste_ghosts 3 900000000; } > "$work/edge-unknown.tsv"
+run_waste "표본 밖은 피할 수 있었던 것이 아니다" 0 \
+    "$work/s.log" "$work/edge-unknown.tsv" 1000 100 200 "$TTL"
+
+# **임계와 같은 score 는 그 표본에서 지나간 것이다.** 등호를 빼면 다음 표본이
+# 채택되어 기다린 시간이 늘고, 못 피하는 것이 피할 수 있었던 것으로 넘어간다.
+{ 못_피하는 20; waste_ghosts 51 60000000; } > "$work/edge-eq.tsv"
+run_waste "임계와 같은 score 는 그 표본에서 지난다" 0 \
+    "$work/s.log" "$work/edge-eq.tsv" 1000 100 200 "$TTL"
+
+# **첫 표본에서 이미 지나가 있으면 언제 지났는지 모른다.** 아는 척하면 그
+# 유령들이 못 피하는 것으로 세어져 판이 통과한다.
+waste_ghosts 60 5000000 > "$work/edge-left.tsv"
+run_waste "첫 표본 앞의 유령은 못 되짚는다" 1 \
+    "$work/s.log" "$work/edge-left.tsv" 1000 100 200 "$TTL"
+
+# **표본이 뒤로 가면 되짚을 수 없다.** 다른 가드가 아니라 단조성이 잡아야 한다 —
+# 아래 입력은 그것을 빼면 통과로 나온다.
+printf '50 10000000\n300 200000000\n100 60000000\n' > "$work/dip.log"
+피할_수_있었던 20 > "$work/g20.tsv"
+run_waste "표본이 중간에 뒤로 가면 미판정" 1 "$work/dip.log" "$work/g20.tsv" 1000 100 200 "$TTL"
+
+# 입력이 깨진 판은 통과로 안 센다.
 : > "$work/nosample.log"
-run_waste "표본이 비면 미판정" 1 "$work/nosample.log" "$work/g.tsv" 1000 10 20 60
-
+run_waste "표본이 비면 미판정" 1 "$work/nosample.log" "$work/g30.tsv" 1000 100 200 "$TTL"
+run_waste "유령 파일이 없으면 미판정" 1 "$work/s.log" "$work/없는파일.tsv" 1000 100 200 "$TTL"
+printf '300 200000000\n100 60000000\n' > "$work/back.log"
+run_waste "임계가 뒤로 가면 미판정" 1 "$work/back.log" "$work/g30.tsv" 1000 100 200 "$TTL"
+printf 'm1\tERR_WRONGTYPE\n' > "$work/badscore.tsv"
+run_waste "score 가 숫자가 아니면 미판정" 1 "$work/s.log" "$work/badscore.tsv" 1000 100 200 "$TTL"
+run_waste "수명이 0 이면 미판정" 1 "$work/s.log" "$work/g30.tsv" 1000 100 200 0
+run_waste "차례를 준 인원이 숫자가 아니면 미판정" 1 \
+    "$work/s.log" "$work/g30.tsv" 없음 100 200 "$TTL"
 
 if [[ "$failed" == 0 ]]; then
   printf '\033[1m게이트 자기검사 통과\033[0m\n'

@@ -27,8 +27,13 @@ COUPON="${COUPON:-c2}"
 # **코드에서 끌어온다.** 손으로 적으면 정책이 움직일 때 판정만 옛 값을 쓴다.
 ALIVE_TTL_SEC="${ALIVE_TTL_SEC:-$(./gradlew -q printAliveTtlSeconds 2>/dev/null | tail -1)}"
 
-WASTE_MAX="${WASTE_MAX:-0.05}"
-SETTLE_SEC="${SETTLE_SEC:-90}"
+# **크레딧을 명시로 넘긴다.** 안 넘기면 compose 기본값이 걸려 줄이 더 빨리
+# 빠지고, 수명을 넘겨 기다리는 인원이 줄어 판정이 조용히 쉬워진다.
+CREDITS="${CREDITS:-2}"
+
+# 배분 틱. 임계가 유령을 지나는 틱에는 이미 창 밖이라 스위퍼는 그 **이전**
+# 틱에 걷었어야 한다. 결함이라고 주장하는 쪽에 이만큼 여유를 준다.
+TICK_SEC="${TICK_SEC:-1}"
 
 work=$(mktemp -d) || exit 1
 trap 'rm -rf "$work"; $COMPOSE down -v >/dev/null 2>&1' EXIT
@@ -55,7 +60,7 @@ fi
 echo "== 하네스를 띄운다 (생존 신호 수명 ${ALIVE_TTL_SEC}초) =="
 # **매번 다시 짓는다.** 이미지가 남아 있으면 compose 가 그것을 그대로 쓰고,
 # 지표를 새로 넣은 판에서도 옛 바이너리를 재게 된다.
-$COMPOSE up -d --build --wait || { echo "::error::하네스가 안 떴다"; exit 1; }
+CREDITS="$CREDITS" $COMPOSE up -d --build --wait || { echo "::error::하네스가 안 떴다"; exit 1; }
 
 echo "== 부하를 시작한다 =="
 k6 run --quiet --summary-export="$work/summary.json" \
@@ -76,16 +81,19 @@ wait "$k6_pid"
 k6_rc=$?
 kill "$sampler" 2>/dev/null
 
-echo "== 마지막 사람들이 받아 갈 때까지 기다린다 =="
-sleep "$SETTLE_SEC"
-
+# **분자와 분모를 같은 창에서 잰다.** 표본이 끝난 뒤에도 배분은 계속 돈다.
+# 그 구간의 입장을 분모에만 더하면, 기다리는 시간을 늘리는 것만으로 낭비율이
+# 내려간다 — 이 하네스가 없앴다는 병이 자리만 옮겨 되살아난다.
 final=$(scrape)
 admitted_total=$(metric 'waiting_allocation_admitted_total' "$final")
 swept=$(metric 'waiting_sweep_total.*kind="swept"' "$final")
-threshold=$(redis GET "admitted:{$COUPON}")
+claimed=$(metric 'waiting_admission_total.*outcome="PASS_TOKEN"' "$final")
 
-# **판이 끝난 뒤 임계 아래에 남은 줄 항목이 곧 낭비다.** 차례가 왔는데 안 왔다.
-redis ZRANGEBYSCORE "queue:{$COUPON}" -inf "$threshold" WITHSCORES \
+# **유령의 천장도 마지막 표본이다.** 최종 임계를 쓰면 표본 밖에서 지나간
+# 사람까지 유령에 들어와 되짚을 수 없는 것만 는다.
+last_threshold=$(tail -1 "$work/threshold.log" 2>/dev/null | awk '{print $2}')
+[ -n "${last_threshold:-}" ] || { echo "::error title=G7.5 미판정::임계 표본이 없다"; exit 1; }
+redis ZRANGEBYSCORE "queue:{$COUPON}" -inf "$last_threshold" WITHSCORES \
     | paste - - > "$work/ghosts.tsv"
 
 joined=$(jq -r '.metrics.joined.count // .metrics.joined.values.count // empty' \
@@ -93,7 +101,7 @@ joined=$(jq -r '.metrics.joined.count // .metrics.joined.values.count // empty' 
 abandoned=$(jq -r '.metrics.abandoned.count // .metrics.abandoned.values.count // empty' \
     "$work/summary.json" 2>/dev/null)
 
-for v in admitted_total swept threshold joined abandoned; do
+for v in admitted_total swept claimed joined abandoned; do
   if [ -z "${!v:-}" ]; then
     echo "::error title=G7.5 미판정::$v 를 못 읽었다 — 배선이 끊겼거나 이름이 바뀌었다"
     exit 1
@@ -103,11 +111,14 @@ done
 printf '  %-26s %s\n' "줄 선 수 / 이탈한 수" "$joined / $abandoned"
 printf '  %-26s %s\n' "차례를 준 인원" "$admitted_total"
 printf '  %-26s %s\n' "걷은 수" "$swept"
+# **값싼 대조.** 차례를 준 인원에서 받아 간 인원을 뺀 것이 유령 수와 크게
+# 어긋나면 유령의 정의부터 틀린 것이다.
+printf '  %-26s %s\n' "받아 간 인원" "$claimed"
 
 # **판정은 갈라 둔다.** 드라이버 안에 있으면 그것을 검증하려고 매번 도커와
 # k6 를 15분씩 돌려야 하고, 그러면 아무도 안 고친다.
-./test/load/evaluate-waste.sh "$work/threshold.log" "$work/ghosts.tsv" \
-    "$admitted_total" "$swept" "$abandoned" "$ALIVE_TTL_SEC"
+TICK_SEC="$TICK_SEC" ./test/load/evaluate-waste.sh "$work/threshold.log" \
+    "$work/ghosts.tsv" "$admitted_total" "$swept" "$abandoned" "$ALIVE_TTL_SEC"
 failed=$?
 
 [ "$k6_rc" -eq 0 ] || { echo "::error::k6 가 실패했다"; tail -20 "$work/k6.log"; failed=1; }

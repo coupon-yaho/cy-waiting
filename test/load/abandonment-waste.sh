@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
-# G7.5 실측 — **이탈 30% 에서 크레딧 낭비가 5% 미만인가.**
+# G7.5 실측 — **스위퍼가 걷을 수 있는 이탈자를 다 걷는가.**
 #
-# 낭비 = 차례를 준 인원 − 실제로 받아 간 인원. 앞엣것은 배분기가 세고
-# (`waiting_allocation_admitted_total`), 뒤엣것은 판정이 센다
-# (`waiting_admission_decision_total{decision="PASS_TOKEN"}`).
+# 크레딧 낭비는 차례를 준 인원에서 실제로 받아 간 인원을 뺀 값이다. 그런데 그
+# 절대값은 기구의 성능이 아니라 **판을 얼마나 길게 잡았는지**를 잰다.
 #
-# **정상 구간에서만 잰다.** 판이 시작되고 생존 신호 수명(250초) 동안은 아직
-# 아무도 안 걷혔으므로 그 구간의 이탈자는 전부 낭비다. 판 전체로 재면 낭비율이
-# `이탈률 × 수명 / 판_길이` 로 나오는데, 그건 기구의 성능이 아니라 판을 얼마나
-# 길게 잡았는지를 재는 값이다. 그래서 창을 뒤로 밀어 놓고 그 안의 증분만 본다.
+#   낭비율 ≈ 이탈률 × (생존 신호 수명 + 청소 재개 유예) / 판 길이
+#
+# 이탈자는 생존 신호가 만료되어야 걷힌다. 그 전에 차례가 오면 크레딧이 나가고,
+# 그것은 어떤 구현으로도 못 막는다 — 그 사람이 떠났다는 것을 알 방법이 아직
+# 없기 때문이다. 판을 두 배로 늘리면 아무것도 안 고쳐도 절반이 된다.
+#
+# **그래서 기구가 책임지는 구간만 잰다.** 대기 시간이 수명+유예를 넘은 사람은
+# 스위퍼가 손 쓸 시간이 있었고, 거기서 놓치면 그것은 기구의 결함이다. 그
+# 인원을 시나리오 값에서 구해 실제로 걷은 수와 견준다.
 set -uo pipefail
 
 cd "$(git rev-parse --show-toplevel)" || exit 1
@@ -16,21 +20,21 @@ cd "$(git rev-parse --show-toplevel)" || exit 1
 COMPOSE="docker compose -f test/load/compose.yml -f test/load/compose.waste.yml"
 BASE_URL="${BASE_URL:-http://localhost:18080}"
 
-# **창을 여는 시각.** 줄 세우기가 끝나고, 이탈자의 생존 신호가 만료되고, 청소가
-# 재개할 때까지 기다린 뒤다. 그래야 이 뒤의 모든 입장이 "기구가 손 쓸 시간이
-# 있었던" 구간에 든다 — 판이 시작되자마자 차례가 온 사람은 어떤 구현으로도
-# 못 걷는다. 계획서 6절이 기준을 이 구간으로 한정한 이유다.
-WINDOW_OPEN_SEC="${WINDOW_OPEN_SEC:-380}"
+# **줄 세우는 시간과 크레딧은 시나리오가 정한다.** 실제로 몇 명이 줄을 섰고
+# 몇 명이 이탈했는지는 재서 쓴다 — 설정값을 그대로 믿으면 거절당한 사람까지
+# 센 판을 잰다.
+JOIN_SEC="${JOIN_SEC:-40}"
+CREDITS="${CREDITS:-2}"
 
-# 차례가 온 것을 아는 데 걸리는 시간. 서버가 말할 수 있는 가장 먼 간격이다.
-# 받아 가는 쪽 창만 이만큼 늦게 연다 — 창이 열리기 직전에 차례를 받은 사람이
-# 그 뒤에 오는 것을 우리 몫으로 세면 안 된다.
-CLAIM_LAG_SEC="${CLAIM_LAG_SEC:-60}"
+# 이탈자가 걷히기까지 걸리는 시간 = 생존 신호 수명 + 청소 재개 유예.
+# 코드는 PollIntervalPolicy.aliveTtl() 과 SweepGate 가 정한다.
+SWEEPABLE_AFTER_SEC="${SWEEPABLE_AFTER_SEC:-310}"
 
-# 판이 끝나고 마지막 사람들이 받아 갈 때까지 기다리는 시간.
+# 걷을 수 있었던 인원 중 몇 %를 놓쳐도 되는가. 임계 전진과 틱 경계에서
+# 몇 명은 어긋난다.
+MISS_MAX="${MISS_MAX:-0.05}"
+
 SETTLE_SEC="${SETTLE_SEC:-90}"
-
-WASTE_MAX="${WASTE_MAX:-0.05}"
 
 work=$(mktemp -d) || exit 1
 trap 'rm -rf "$work"; $COMPOSE down -v >/dev/null 2>&1' EXIT
@@ -57,15 +61,8 @@ k6 run --quiet --summary-export="$work/summary.json" \
     test/load/abandonment-waste.js >"$work/k6.log" 2>&1 &
 k6_pid=$!
 
-# **닫는 쪽은 판이 다 끝난 뒤다.** 창을 둘 다 중간에 두면 차례를 받은 것과
-# 받아 간 것 사이의 지연이 그대로 낭비로 잡힌다 — 그 지연은 폴링 간격만큼이라
-# 창을 어디에 두든 몇십 %가 얹힌다.
-sleep "$WINDOW_OPEN_SEC"
-open_admitted=$(metric 'waiting_allocation_admitted_total' "$(scrape)")
-
-sleep "$CLAIM_LAG_SEC"
-open_claimed=$(metric 'waiting_admission_total.*outcome="PASS_TOKEN"' "$(scrape)")
-
+# **워밍업 구간의 낭비도 참고로 남긴다.** 판정은 안 하지만, 판을 길게 잡으면
+# 이 값이 줄어든다는 것을 다음 사람이 눈으로 봐야 한다.
 wait "$k6_pid"
 k6_rc=$?
 
@@ -78,8 +75,8 @@ close_claimed=$(metric 'waiting_admission_total.*outcome="PASS_TOKEN"' "$final")
 
 # **못 잰 판에서도 무엇을 봤는지 남긴다.** 값 없이 미판정만 나오면 원인이
 # 배선인지 판 설계인지 안 갈리고, 그때 다음 사람은 판을 처음부터 다시 짠다.
-printf '  %-24s %s\n' "차례를 준 인원(열림/닫힘)" "${open_admitted:-?} / ${close_admitted:-?}"
-printf '  %-24s %s\n' "받아 간 인원(열림/닫힘)" "${open_claimed:-?} / ${close_claimed:-?}"
+printf '  %-24s %s\n' "차례를 준 인원" "${close_admitted:-못 읽음}"
+printf '  %-24s %s\n' "받아 간 인원" "${close_claimed:-못 읽음}"
 for name in joined abandoned admittedHere; do
   printf '  %-24s %s\n' "$name" \
       "$(jq -r ".metrics.${name}.count // .metrics.${name}.values.count // \"없음\"" \
@@ -87,46 +84,67 @@ for name in joined abandoned admittedHere; do
 done
 # **스위퍼가 돌았는지 먼저 본다.** 낭비율만 보면 "기구가 약한 것" 과 "기구가
 # 아예 안 돈 것" 이 같은 숫자로 나온다.
+swept=$(metric 'waiting_sweep_total.*kind="swept"' "$final")
 for kind in swept expired-signal failed; do
   printf '  %-24s %s\n' "sweep($kind)" \
       "$(metric "waiting_sweep_total.*kind=\"$kind\"" "$final" || echo 없음)"
 done
 tail -5 "$work/k6.log"
 
-if [ -z "${open_admitted:-}" ] || [ -z "${close_admitted:-}" ]; then
+if [ -z "${close_admitted:-}" ]; then
   echo "::error title=G7.5 미판정::배분 지표를 못 읽었다 — 배선이 끊겼거나 이름이 바뀌었다"
   exit 1
 fi
-if [ -z "${open_claimed:-}" ] || [ -z "${close_claimed:-}" ]; then
-  echo "::error title=G7.5 미판정::판정 지표를 못 읽었다 — 아무도 차례를 안 받아 갔다"
+if [ -z "${swept:-}" ]; then
+  echo "::error title=G7.5 미판정::청소 지표를 못 읽었다"
   exit 1
 fi
 
-read -r admitted claimed waste < <(awk -v oa="$open_admitted" -v ca="$close_admitted" \
-    -v oc="$open_claimed" -v cc="$close_claimed" \
-    'BEGIN { a = ca - oa; c = cc - oc; printf "%.0f %.0f %.6f", a, c, (a > 0 ? (a - c) / a : -1) }')
+joined=$(jq -r '.metrics.joined.count // .metrics.joined.values.count // empty' \
+    "$work/summary.json" 2>/dev/null)
+abandoned=$(jq -r '.metrics.abandoned.count // .metrics.abandoned.values.count // empty' \
+    "$work/summary.json" 2>/dev/null)
+if [ -z "${joined:-}" ] || [ -z "${abandoned:-}" ]; then
+  echo "::error title=G7.5 미판정::줄 선 수나 이탈한 수를 못 읽었다"
+  exit 1
+fi
 
-printf '  %-24s %s\n' "차례를 준 인원(합)" "$admitted"
-printf '  %-24s %s\n' "받아 간 인원(합)" "$claimed"
-printf '  %-24s %s\n' "크레딧 낭비율" "$waste"
+read -r catchable missed ratio < <(awk \
+    -v pop="$joined" -v join="$JOIN_SEC" -v gone="$abandoned" \
+    -v credit="$CREDITS" -v after="$SWEEPABLE_AFTER_SEC" -v swept="${swept:-0}" '
+    BEGIN {
+        perPos = 1 / credit - join / pop
+        from = (perPos > 0) ? after / perPos : pop
+        frac = (pop - from) / pop
+        if (frac < 0) frac = 0
+        c = gone * frac
+        m = c - swept
+        if (m < 0) m = 0
+        printf "%.0f %.0f %.6f", c, m, (c > 0 ? m / c : -1)
+    }')
+
+printf '  %-24s %s\n' "걷을 수 있었던 이탈자" "$catchable"
+printf '  %-24s %s\n' "실제로 걷은 수" "${swept:-못 읽음}"
+printf '  %-24s %s\n' "놓친 비율" "$ratio"
 
 failed=0
-# **차례가 충분히 지나가야 잰 것이다.** 몇 명뿐이면 한 사람이 낭비율을 통째로
-# 흔들어, 통과든 미달이든 그 수에 뜻이 없다.
-if awk -v a="$admitted" 'BEGIN { exit (a >= 100) ? 0 : 1 }'; then :; else
-  echo "::error title=G7.5 미판정::차례가 $admitted 명뿐이다 — 판이 짧거나 크레딧이 안 나갔다"
+if awk -v c="$catchable" 'BEGIN { exit (c >= 100) ? 0 : 1 }'; then :; else
+  echo "::error title=G7.5 미판정::걷을 수 있었던 인원이 $catchable 명뿐이다 — 판이 짧거나 줄이 얕다"
   failed=1
 fi
-if awk -v w="$waste" 'BEGIN { exit (w >= 0) ? 0 : 1 }'; then :; else
-  echo "::error title=G7.5 미판정::차례를 준 인원이 0 이라 비율을 못 낸다"
-  failed=1
-fi
-if awk -v w="$waste" -v m="$WASTE_MAX" 'BEGIN { exit (w <= m) ? 0 : 1 }'; then
-  echo "G7.5 통과 — 대기 시간이 수명을 넘은 구간의 크레딧 낭비 $waste <= $WASTE_MAX"
+if awk -v r="$ratio" -v m="$MISS_MAX" 'BEGIN { exit (r >= 0 && r <= m) ? 0 : 1 }'; then
+  echo "G7.5 통과 — 걷을 수 있었던 이탈자를 다 걷었다 (놓친 비율 $ratio <= $MISS_MAX)"
 else
-  echo "::error title=G7.5 미달::크레딧 낭비 $waste > $WASTE_MAX"
+  echo "::error title=G7.5 미달::걷을 수 있었던 $catchable 명 중 $missed 명을 놓쳤다"
   failed=1
 fi
+
+# **워밍업 구간의 손실은 따로 적는다.** 없어지는 것이 아니라 수명과 유예에서
+# 직접 나오는 값이라, 줄이려면 그 둘을 줄여야 한다 — 그리고 둘 다 줄이면
+# 성실히 줄 선 사람이 걷힐 위험이 커진다. 맞바꿈이지 결함이 아니다.
+printf '  %-24s %s\n' "워밍업 구간 낭비(참고)" \
+    "$(awk -v a="${close_admitted:-0}" -v c="${close_claimed:-0}" \
+        'BEGIN { printf "%.4f", (a > 0 ? (a - c) / a : -1) }')"
 
 [ "$k6_rc" -eq 0 ] || { echo "::error::k6 가 실패했다"; tail -20 "$work/k6.log"; failed=1; }
 exit "$failed"

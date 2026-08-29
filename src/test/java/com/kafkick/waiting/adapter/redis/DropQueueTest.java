@@ -140,15 +140,22 @@ class DropQueueTest extends RedisContainerSupport {
         }
     }
 
-    /** 읽히는 음수는 매진으로 본다. 수집도 0 으로 눌러 같은 결론을 낸다. */
+    /**
+     * 담는 쪽이 읽는 모양은 <b>전부</b> 여기서도 읽혀야 한다.
+     *
+     * <p>한쪽만 못 읽으면 그 쿠폰이 매진으로 보이면서 영영 안 지워진다 —
+     * 죽은 줄이 폴링 예산을 계속 먹는다.
+     */
     @Test
-    @DisplayName("읽히는_음수_재고는_지운다")
-    void 읽히는_음수_재고는_지운다() {
-        줄을_세운다();
-        redis.opsForValue().set(RedisKeys.stock(COUPON), "-3").block(WAIT);
+    @DisplayName("담는_쪽이_읽는_모양은_다_지운다")
+    void 담는_쪽이_읽는_모양은_다_지운다() {
+        for (String 읽히는_값 : List.of("0", "-3", "+0", " 0 ")) {
+            줄을_세운다();
+            redis.opsForValue().set(RedisKeys.stock(COUPON), 읽히는_값).block(WAIT);
 
-        assertThat(port.dropSoldOutQueues(List.of(COUPON)).block(WAIT))
-                .containsExactly(COUPON);
+            assertThat(port.dropSoldOutQueues(List.of(COUPON)).block(WAIT))
+                    .as("읽히는 값: %s", 읽히는_값).containsExactly(COUPON);
+        }
     }
 
     /**

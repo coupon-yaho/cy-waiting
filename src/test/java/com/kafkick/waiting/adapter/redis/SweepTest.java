@@ -234,55 +234,31 @@ class SweepTest extends RedisContainerSupport {
     }
 
     /**
-     * <b>입장 표시를 든 사람은 큐에서 빼지 않는다.</b>
+     * <b>입장 표시는 이탈 기록으로 덮고 걷는다.</b>
      *
-     * <p>차례가 왔던 사람이 다시 줄을 서면 그 표시가 남은 채로 임계 위에 선다.
-     * 거기서 걷으면 표시만 남아, 다음 폴링에 조회가 <b>입장</b>이라고 답한다 —
+     * <p>큐에서만 빼고 표시를 남기면 다음 폴링에 조회가 <b>입장</b>이라고 답한다 —
      * 차례가 안 왔는데 입장이므로 줄 전체를 추월하고 초과 발급이 된다.
      */
+    // 건너뛰는 것도 답이 아니다. 표시는 보관 기간에 걷히지만 그 사이 임계가
+    // 그를 지나가 창 밖이 되고, 그 뒤로 영영 안 걷혀 줄 길이가 영구히 부푼다.
     @Test
-    @DisplayName("입장_표시를_든_사람은_안_걷는다")
-    void 입장_표시를_든_사람은_안_걷는다() {
+    @DisplayName("입장_표시는_이탈_기록으로_덮고_걷는다")
+    void 입장_표시는_이탈_기록으로_덮고_걷는다() {
         enqueue("돌아온사람");
         redis.opsForZSet().remove(ALIVE, "돌아온사람").block(WAIT);
         // 차례가 왔던 표시. 재등록이 이것을 안 지우므로 임계 위에 남는다.
         redis.opsForHash().put(GRACE, "돌아온사람", "a:" + 신선한_시각).block(WAIT);
         enqueue("성실이");
         살아있다("성실이");
-        double 돌아온사람_순번 = redis.opsForZSet().score(QUEUE, "돌아온사람").block(WAIT);
 
-        assertThat(swept(sweep("10"))).as("표시를 든 사람은 안 센다").isZero();
+        assertThat(swept(sweep("10"))).as("걷는다").isOne();
 
         assertThat(redis.opsForZSet().score(QUEUE, "돌아온사람").block(WAIT))
-                .as("큐에 남는다 — 빼면 표시만 남아 입장으로 읽힌다")
-                .isEqualTo(돌아온사람_순번);
+                .as("큐에서 빠진다").isNull();
+        // **표시가 남으면 다음 폴링이 입장이라고 답한다.** 이탈 기록으로 덮어야
+        // 그 사람이 재방문자로 다시 선다.
         assertThat(redis.opsForHash().get(GRACE, "돌아온사람").block(WAIT))
-                .as("표시도 그대로 둔다").isEqualTo("a:" + 신선한_시각);
-    }
-
-    /**
-     * <b>창 안이 통째로 조용하면 아무도 안 걷는다.</b>
-     *
-     * <p>줄 밖에 살아 있는 사람이 하나라도 있으면 열리는 가드는 창을 임계 위로
-     * 옮긴 뒤로 뜻이 약해졌다. 창이 곧 "곧 차례가 올 사람들" 을 가리키므로,
-     * 매진이 길어져 그 구간의 신호가 일제히 멎은 판에서 K 명이 통째로 걷힌다.
-     */
-    @Test
-    @DisplayName("창_안이_전부_조용하면_안_걷는다")
-    void 창_안이_전부_조용하면_안_걷는다() {
-        for (int i = 0; i < 4; i++) {
-            enqueue("대기자" + i);
-            redis.opsForZSet().remove(ALIVE, "대기자" + i).block(WAIT);
-        }
-        // 창 밖에 한 명만 살아 있다. 전역 가드는 이걸로 열린다.
-        enqueue("멀리있는사람");
-        살아있다("멀리있는사람");
-        double 대기자0_순번 = redis.opsForZSet().score(QUEUE, "대기자0").block(WAIT);
-
-        assertThat(swept(sweep("4"))).as("창 안에 살아 있는 신호가 없다").isZero();
-
-        assertThat(redis.opsForZSet().score(QUEUE, "대기자0").block(WAIT))
-                .as("순번까지 그대로").isEqualTo(대기자0_순번);
+                .as("이탈 기록으로 덮인다").isEqualTo("d:" + NOW);
     }
 
     /**

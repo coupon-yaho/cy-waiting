@@ -26,9 +26,15 @@ BASE_URL="${BASE_URL:-http://localhost:18080}"
 JOIN_SEC="${JOIN_SEC:-40}"
 CREDITS="${CREDITS:-2}"
 
-# 이탈자가 걷히기까지 걸리는 시간 = 생존 신호 수명 + 청소 재개 유예.
-# 코드는 PollIntervalPolicy.aliveTtl() 과 SweepGate 가 정한다.
-SWEEPABLE_AFTER_SEC="${SWEEPABLE_AFTER_SEC:-310}"
+# 이탈자가 걷힐 수 있게 되는 시각 = **자기 생존 신호가 만료되는 때**.
+# `PollIntervalPolicy.aliveTtl()` 하나가 정한다.
+#
+# **청소 재개 유예를 더하지 않는다.** 그 유예는 `SweepGate` 가 낡음이나 매진을
+# 본 쿠폰에만 거는 것이고 정상 구간에서는 0 이다. 게다가 기준점이 리더의 틱
+# 카운터라 부하 시작 시각과 무관하다. 더하면 창이 60초만큼 뒤로 밀려, 그
+# 사이에 놓친 사람이 판정에서 통째로 빠진다 — 통과와 미달이 그 상수 하나로
+# 갈린다.
+SWEEPABLE_AFTER_SEC="${SWEEPABLE_AFTER_SEC:-250}"
 
 # 걷을 수 있었던 인원 중 몇 %를 놓쳐도 되는가. 임계 전진과 틱 경계에서
 # 몇 명은 어긋난다.
@@ -119,7 +125,6 @@ read -r catchable missed ratio < <(awk \
         if (frac < 0) frac = 0
         c = gone * frac
         m = c - swept
-        if (m < 0) m = 0
         printf "%.0f %.0f %.6f", c, m, (c > 0 ? m / c : -1)
     }')
 
@@ -132,7 +137,12 @@ if awk -v c="$catchable" 'BEGIN { exit (c >= 100) ? 0 : 1 }'; then :; else
   echo "::error title=G7.5 미판정::걷을 수 있었던 인원이 $catchable 명뿐이다 — 판이 짧거나 줄이 얕다"
   failed=1
 fi
-if awk -v r="$ratio" -v m="$MISS_MAX" 'BEGIN { exit (r >= 0 && r <= m) ? 0 : 1 }'; then
+# **양쪽으로 본다.** 0 으로 접으면 살아 있는 사람을 걷은 판이 "완벽" 으로
+# 읽힌다 — 그건 순번 역행이라 놓치는 것보다 나쁘다 (불변식 4).
+if awk -v r="$ratio" -v m="$MISS_MAX" 'BEGIN { exit (r < -m) ? 0 : 1 }'; then
+  echo "::error title=G7.5 미판정::셈보다 $((0 - missed)) 명을 더 걷었다 — 살아 있는 사람을 걷었거나 셈이 틀렸다"
+  failed=1
+elif awk -v r="$ratio" -v m="$MISS_MAX" 'BEGIN { exit (r <= m) ? 0 : 1 }'; then
   echo "G7.5 통과 — 걷을 수 있었던 이탈자를 다 걷었다 (놓친 비율 $ratio <= $MISS_MAX)"
 else
   echo "::error title=G7.5 미달::걷을 수 있었던 $catchable 명 중 $missed 명을 놓쳤다"

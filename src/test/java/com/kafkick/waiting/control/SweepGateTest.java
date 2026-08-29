@@ -48,6 +48,11 @@ class SweepGateTest {
         return Map.of(COUPON, CouponStates.closed(100));
     }
 
+    /** 재고 키를 못 읽은 쿠폰. 줄은 남아 있다. */
+    private Map<String, CouponState> 미상() {
+        return Map.of(COUPON, CouponStates.stockUnknown(10, 100));
+    }
+
     /** 평시에는 쓴다. 안 그러면 이탈자가 영영 줄에 남아 크레딧을 허공에 발행한다. */
     @Test
     @DisplayName("평시에는_쓸어낸다")
@@ -102,6 +107,22 @@ class SweepGateTest {
     @DisplayName("매진_중에는_안_쓴다")
     void 매진_중에는_안_쓴다() {
         assertThat(게이트().sweepable(매진(), false)).isEmpty();
+    }
+
+    /**
+     * <b>재고를 모르는 동안에도 안 씁니다</b> (CY-702).
+     *
+     * <p>표시가 노드에 안 닿는 구간이 있습니다 — 발행이 상한을 넘어 표시를
+     * 버렸거나, 롤아웃 중 옛 노드가 예약 자리를 통째로 건너뛸 때입니다. 그
+     * 노드들은 그 쿠폰을 매진으로 읽고 폴링을 종결하므로 생존 신호가 멎는데,
+     * 리더만 미상으로 보면 여기서 안 멈춰 줄 선 전원을 이탈자로 걷습니다.
+     */
+    // 매진과 같은 사슬이다. 리더와 노드의 판단이 갈리는 구간이라 더 나쁘다 —
+    // 걷힌 사람은 새 score 로 다시 서므로 순번이 뒤로 간다 (불변식 3).
+    @Test
+    @DisplayName("재고를_모르는_동안에는_안_쓴다")
+    void 재고를_모르는_동안에는_안_쓴다() {
+        assertThat(게이트().sweepable(미상(), false)).isEmpty();
     }
 
     /**

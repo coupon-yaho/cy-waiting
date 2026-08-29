@@ -73,8 +73,17 @@ public final class SnapshotCodec {
      */
     private static final int MIN_FIELDS = 5;
 
-    /** 재고 자리에 미상 대신 싣는 값. 양수라는 것 말고는 뜻이 없다. */
-    private static final long NOT_SOLD_OUT = 1;
+    /**
+     * 재고 미상을 싣는 자리. 쿠폰마다 {@code #u:<쿠폰>} 하나다.
+     *
+     * <p><b>쿠폰 값에는 못 싣는다.</b> 재고 자리에 음수를 넣으면 옛 생성자가
+     * 거부해 그 쿠폰이 통째로 빠지고, 양수를 넣으면 옛 노드가 재입고로 읽어
+     * 매진 방패를 푼다 (7.2.4). 필드를 덧붙이는 것도 안 된다 — 옛 디코더는
+     * 여섯에서 끊어 쪼개므로 일곱째가 여섯째 자리에 뭉쳐 그 값이 깨진다.
+     */
+    // 예약 자리는 옛 노드가 이미 통째로 건너뛴다. 그래서 이것만이 옛 노드의
+    // 오늘 동작을 안 건드리면서 새 노드에 사실을 전하는 길이다 (E-12).
+    private static final String STOCK_UNKNOWN = "#u:";
 
     /** {@link Instant#MAX} 를 넘으면 생성자가 던진다 — 넘기지 않고 걸러낸다. */
     private static final long MAX_EPOCH_SECOND = Instant.MAX.getEpochSecond();
@@ -99,6 +108,9 @@ public final class SnapshotCodec {
             // 예약 접두사를 단 쿠폰 하나로 전 쿠폰의 몫이 0 이 된다.
             if (!couponId.startsWith(RESERVED)) {
                 hash.put(couponId, encodeCoupon(state, snapshot.meta().pollScale()));
+                if (!state.stockKnown()) {
+                    hash.put(STOCK_UNKNOWN + couponId, "1");
+                }
             }
         });
         hash.put(CREDIT, Long.toString(snapshot.meta().globalCredit()));
@@ -130,21 +142,10 @@ public final class SnapshotCodec {
     //
     // 관대한 디코더가 전 노드에 깔린 것이 확인되면 이 자리를 지운다 (CY-736).
     private String encodeCoupon(CouponState state, double pollScale) {
+        // **미상이면 재고 자리에 0 이 나간다** — 옛 노드가 오늘 하던 그대로
+        // 한다. 미상이라는 사실은 예약 자리로 따로 간다.
         return "%s:%s:%d:%d:%d:%s".formatted(state.mode(), state.runtime(), state.credit(),
-                wireStock(state), state.waiting(), pollScale);
-    }
-
-    /**
-     * 재고 자리에 실을 수. <b>미상은 매진이 아니라는 뜻의 양수로 나간다.</b>
-     *
-     * <p>미상을 그대로 실으면 옛 노드의 생성자가 음수 재고를 거부해 그 항목이
-     * 통째로 빠지고, 없는 쿠폰은 판정에서 매진으로 보인다 — 접힘을 없애려던
-     * 변경이 롤아웃 구간에 같은 종결을 되살린다 (3.1).
-     */
-    // 읽는 쪽은 이 수를 soldOut() 으로만 쓰고 셈에 안 넣는다. 미상인 것을
-    // 알아야 하는 곳은 리더의 정리 판단뿐이고, 그 경로는 이 값을 안 거친다.
-    private long wireStock(CouponState state) {
-        return state.stockKnown() ? state.remainingStock() : NOT_SOLD_OUT;
+                state.stockKnown() ? state.remainingStock() : 0, state.waiting(), pollScale);
     }
 
     /**
@@ -192,7 +193,10 @@ public final class SnapshotCodec {
             if (field.startsWith(RESERVED)) {
                 return;   // 전역값이다. 쿠폰으로 세면 없는 쿠폰이 매진으로 보인다
             }
-            CouponState state = toCouponState(raw);
+            // **안 실려 왔으면 아는 것으로 본다.** 옛 리더는 이 자리를 안 싣고
+            // 미상을 0 으로 접어 보낸다. 그 판을 미상으로 읽으면 그 리더가
+            // 말한 매진이 전부 무시된다.
+            CouponState state = toCouponState(raw, hash.containsKey(STOCK_UNKNOWN + field));
             if (state != null) {
                 coupons.put(field, state);
             }
@@ -206,7 +210,7 @@ public final class SnapshotCodec {
      * <p>여기서 던지면 뒷단 하나의 버그가 <b>게이트웨이 전체를 세운다.</b>
      * 불변식 위반도 같다 — 생성자가 거부하는 조합이 스냅샷에 실려 올 수 있다.
      */
-    private CouponState toCouponState(String raw) {
+    private CouponState toCouponState(String raw, boolean stockUnknown) {
         // **상한을 걸어 쪼갠다.** 뒤에서 길이를 보면 콜론 100만 개짜리 값이
         // 100만 원소를 먼저 만들고 버려진다 — 갱신 스레드가 OOM 으로 죽으면
         // "실패해도 옛 값을 유지한다" 는 설계가 통째로 무력해진다.
@@ -223,11 +227,18 @@ public final class SnapshotCodec {
             return null;
         }
         try {
+            long stock = Long.parseLong(parts[3]);
+            // **선에서 미상을 받지는 않는다.** 발행이 안 내보내는 모양이라
+            // 그 값의 출처는 손상뿐이고, 받아 주면 아무도 안 검증한 값이
+            // 판정을 바꾼다. 관대함은 한 방향뿐이라는 위 규칙과 같은 자리다.
+            if (stock < 0) {
+                return null;
+            }
             return new CouponState(
                     QueueMode.valueOf(parts[0].toUpperCase(Locale.ROOT)),
                     RuntimeState.valueOf(parts[1].toUpperCase(Locale.ROOT)),
                     Long.parseLong(parts[2]),
-                    Long.parseLong(parts[3]),
+                    stockUnknown ? CouponState.STOCK_UNKNOWN : stock,
                     Long.parseLong(parts[4]));
         } catch (IllegalArgumentException e) {
             return null;   // 모르는 열거값·깨진 수·불변식 위반이 다 여기로 온다

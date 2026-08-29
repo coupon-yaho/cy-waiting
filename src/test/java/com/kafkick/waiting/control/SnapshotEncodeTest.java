@@ -270,31 +270,74 @@ class SnapshotEncodeTest {
     }
 
     /**
-     * <b>미상을 그대로 실으면 옛 노드가 그 쿠폰을 통째로 버린다.</b>
+     * <b>미상은 옛 자리에 안 싣고 새 자리에 싣는다.</b>
      *
      * <p>옛 디코더의 생성자는 음수 재고를 거부하므로 그 항목이 {@code null} 이
-     * 되어 스냅샷에서 빠지고, 없는 쿠폰은 판정에서 매진으로 보인다 — 접힘을
-     * 없애려던 변경이 롤아웃 구간에 같은 종결을 되살린다.
+     * 되어 스냅샷에서 빠지고, 없는 쿠폰은 판정에서 매진으로 보인다. 그렇다고
+     * 양수를 실으면 옛 노드가 그것을 재입고로 읽어 매진 방패를 푼다.
      */
-    // 그래서 자리에는 매진이 아니라는 뜻의 양수를 싣는다. 미상을 아는 것이
-    // 필요한 곳은 리더뿐이고, 거기는 이 값을 안 거친다.
+    // 옛 자리에는 0 을 싣는다 — 옛 노드가 오늘 하던 그대로 한다. 미상이라는
+    // 사실은 남는 자리에 싣고, 새 노드만 그것을 읽는다 (E-12).
     @Test
-    @DisplayName("미상은_매진이_아닌_값으로_실린다")
-    void 미상은_매진이_아닌_값으로_실린다() {
-        GatewaySnapshot 원본 = new GatewaySnapshot(
-                Map.of("c1", CouponState.unknownStock(QueueMode.ADAPTIVE, 3, 10)),
-                new SnapshotMeta(50, 4),
-                Instant.ofEpochSecond(1_700_000_000L));
+    @DisplayName("미상은_옛_노드가_오늘처럼_읽을_값으로_실린다")
+    void 미상은_옛_노드가_오늘처럼_읽을_값으로_실린다() {
+        Map<String, String> 실린것 = 미상을_싣는다();
 
-        Map<String, String> 실린것 = codec.encode(원본, CreditSmoother.Snapshot.empty(),
-                QueueingHysteresis.Snapshot.empty());
-
-        // **자리를 직접 본다.** 되읽기만 보면 새 디코더가 음수를 받아 주는
-        // 지금은 통과하고, 정작 옛 노드가 버리는 것을 못 잡는다.
+        // **자리를 직접 본다.** 되읽기만 보면 새 디코더가 새 자리를 읽어
+        // 통과하고, 정작 옛 노드가 무엇을 보는지는 못 잡는다.
+        assertThat(실린것.get("c1").split(":"))
+                .as("옛 디코더는 여섯에서 끊어 쪼갠다 — 일곱째는 여섯째를 깨뜨린다")
+                .hasSize(6);
         assertThat(실린것.get("c1").split(":")[3])
-                .as("옛 노드의 생성자가 받는 값이어야 한다")
-                .isEqualTo("1");
-        assertThat(codec.decode(실린것).coupons().get("c1").soldOut())
-                .as("어느 쪽으로 읽어도 매진이 아니다").isFalse();
+                .as("양수면 옛 노드가 재입고로 읽어 매진 방패를 푼다")
+                .isEqualTo("0");
+    }
+
+    /** 새 노드는 미상을 미상으로 되읽는다. 못 읽으면 방패도 못 지킨다. */
+    @Test
+    @DisplayName("미상은_미상으로_되읽힌다")
+    void 미상은_미상으로_되읽힌다() {
+        CouponState 되읽음 = codec.decode(미상을_싣는다()).coupons().get("c1");
+
+        assertThat(되읽음.stockKnown()).as("해제 가드가 이것을 본다").isFalse();
+        assertThat(되읽음.soldOut()).as("모르는 것은 매진이 아니다").isFalse();
+        assertThat(되읽음.credit()).as("몫은 그대로 온다").isEqualTo(3);
+    }
+
+    /**
+     * <b>선에서 미상을 받지는 않는다.</b> 인코더가 안 싣는 모양을 디코더가 받아
+     * 주면 계약이 한쪽으로만 열린다 — 그 자리로 들어온 값은 아무도 안 검증한다.
+     */
+    @Test
+    @DisplayName("재고_자리의_음수는_그_쿠폰만_버린다")
+    void 재고_자리의_음수는_그_쿠폰만_버린다() {
+        Map<String, String> 손상 = new java.util.HashMap<>(미상을_싣는다());
+        손상.put("c1", "ADAPTIVE:QUEUEING:3:-1:10:1.0");
+
+        assertThat(codec.decode(손상).coupons()).doesNotContainKey("c1");
+    }
+
+    /**
+     * <b>옛 리더의 판을 미상으로 읽지 않는다.</b> 옛 리더는 미상을 0 으로 접어
+     * 보내고 예약 자리를 안 싣는다. 그 판을 미상으로 읽으면 그 리더가 말한
+     * 매진이 전부 무시되고, 매진 방패가 통째로 안 걸린다.
+     */
+    @Test
+    @DisplayName("예약_자리가_없으면_아는_것으로_읽는다")
+    void 예약_자리가_없으면_아는_것으로_읽는다() {
+        Map<String, String> 옛판 = new java.util.HashMap<>(미상을_싣는다());
+        옛판.keySet().removeIf(f -> f.startsWith("#u:"));
+
+        CouponState 되읽음 = codec.decode(옛판).coupons().get("c1");
+
+        assertThat(되읽음.stockKnown()).isTrue();
+        assertThat(되읽음.soldOut()).as("옛 리더가 말한 매진이 그대로 선다").isTrue();
+    }
+
+    private Map<String, String> 미상을_싣는다() {
+        return codec.encode(new GatewaySnapshot(
+                        Map.of("c1", CouponState.unknownStock(QueueMode.ADAPTIVE, 3, 10)),
+                        new SnapshotMeta(50, 4), Instant.ofEpochSecond(1_700_000_000L)),
+                CreditSmoother.Snapshot.empty(), QueueingHysteresis.Snapshot.empty());
     }
 }

@@ -108,6 +108,21 @@ public final class AllocationRound {
     /** 예산보다 더 들여보낸 누적 인원. */
     private final AtomicLong enteredOvershoot = new AtomicLong();
 
+    /**
+     * 차례를 준 누적 인원.
+     *
+     * <p><b>크레딧 낭비의 분모다</b> (G7.5). 실제로 받아 간 인원은 판정 지표가
+     * 세는데 이 값이 없으면 그 비율을 못 낸다.
+     */
+    // **응답을 잃으면 적게 센다.** 스크립트가 임계를 올린 뒤 응답이 유실되면
+    // 적용이 0 을 돌려주고, 다시 불러도 임계가 이미 올라가 있어 0 이다. 그
+    // 판의 입장은 영영 이 값에 안 들어온다.
+    //
+    // 되찾는 길은 임계의 증분을 레디스에서 직접 읽는 것인데, 그러면 이 값이
+    // 리더 메모리가 아니라 왕복이 된다. 대신 **틀리는 방향이 안전하다** —
+    // 분모가 작아지면 낭비율이 커져 게이트가 통과가 아니라 미달 쪽으로 기운다.
+    private final AtomicLong admitted = new AtomicLong();
+
     private AllocationRound(BooleanSupplier stillLeader,
             Supplier<Mono<TimedDemands>> demands, LongSupplier globalCredit,
             IntSupplier gatewayCount, Function<Grant, Mono<Long>> apply,
@@ -247,7 +262,13 @@ public final class AllocationRound {
                 // **실제로 들어온 수는 나눠 준 수와 다르다.** 큐가 몫보다 짧으면
                 // 남고, 적용이 실패하면 0 이다. 안 남기면 크레딧이 어디서 새는지
                 // 사후에 못 가린다.
-                .doOnNext(admitted -> watchEntered(admitted, credit))
+                .doOnNext(entered -> {
+                    // **나눠 준 몫이 아니라 실제로 들인 수를 센다.** 줄이 몫보다
+                    // 짧으면 남고, 그 남은 몫은 차례를 준 것이 아니다 — 세면
+                    // 낭비율의 분모가 부풀어 실제보다 좋아 보인다.
+                    admitted.addAndGet(entered);
+                    watchEntered(entered, credit);
+                })
                 .doOnNext(admitted -> {
                     // **판이 통째로 성공해야 걷힌 것이다.** 쿠폰 하나가 계속
                     // 실패하고 다른 쿠폰이 성공하는 동안 매 판 복귀를 찍으면,
@@ -377,6 +398,11 @@ public final class AllocationRound {
     /** 예산보다 더 들여보낸 누적 인원. */
     public double enteredOvershoot() {
         return enteredOvershoot.get();
+    }
+
+    /** 차례를 준 누적 인원. 크레딧 낭비의 분모다 (G7.5). */
+    public double admitted() {
+        return admitted.get();
     }
 
     /** 폴링 예산을 넘긴 누적 틱 수. 0 이면 배수가 한 번도 안 걸렸다. */

@@ -9,6 +9,7 @@ import ch.qos.logback.core.read.ListAppender;
 import com.kafkick.waiting.adapter.redis.ClockSkewTracker;
 import com.kafkick.waiting.domain.allocation.CouponDemand;
 import com.kafkick.waiting.domain.allocation.CreditSmoother;
+import com.kafkick.waiting.domain.allocation.Grant;
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.QueueMode;
 import com.kafkick.waiting.domain.coupon.RuntimeState;
@@ -23,6 +24,7 @@ import com.kafkick.waiting.domain.queue.PollBudgetPlanner;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import java.time.Duration;
 import java.util.List;
+import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -230,15 +232,27 @@ class AllocationRoundTest {
     /** 판마다 수요가 바뀌는 시험용. 복붙하면 헬퍼가 바뀔 때 그 시험만 옛 배선을 잰다. */
     private AllocationRound round(Supplier<List<CouponDemand>> 수요,
             long 전역_크레딧, int 노드_수) {
+        return round(수요, 전역_크레딧, 노드_수, grant -> {
+            적용.add(grant.couponId() + "=" + grant.credit());
+            return Mono.just(grant.credit());
+        });
+    }
+
+    /**
+     * 적용이 돌려주는 수를 갈아 끼운다.
+     *
+     * <p><b>기본 픽스처는 몫을 그대로 돌려준다.</b> 그러면 들인 수와 나눠 준
+     * 몫이 항등식이라, 둘을 가르는 시험이 아무것도 못 잡는다.
+     */
+    private AllocationRound round(Supplier<List<CouponDemand>> 수요,
+            long 전역_크레딧, int 노드_수,
+            Function<Grant, Mono<Long>> 적용_결과) {
         return AllocationRound.of(
                 () -> true,
                 () -> Mono.just(new TimedDemands(수요.get(), 읽은_시각)),
                 () -> 전역_크레딧,
                 () -> 노드_수,
-                grant -> {
-                    적용.add(grant.couponId() + "=" + grant.credit());
-                    return Mono.just(grant.credit());
-                },
+                적용_결과,
                 hash -> {
                     발행.put("last", hash);
                     return Mono.empty();
@@ -388,6 +402,9 @@ class AllocationRoundTest {
                 .functionCounter().count()).as("초과 입장 인원").isZero();
         assertThat(meters.get("waiting.snapshot.clock.floor.applied")
                 .functionCounter().count()).as("시계 바닥값").isZero();
+        // 이 판은 줄이 10만인데 크레딧이 10 이라 열 명의 차례가 왔다.
+        assertThat(meters.get("waiting.allocation.admitted")
+                .functionCounter().count()).as("차례를 준 인원").isEqualTo(10);
     }
 
     /**
@@ -397,6 +414,49 @@ class AllocationRoundTest {
      * 꺼지고 전원의 폴링이 한꺼번에 짧아진다. 방어를 한 곳에 모은 근거가 이것인데
      * 부르는 쪽이 그 메서드를 쓰는지는 아무도 안 재고 있었다.
      */
+    /**
+     * <b>들인 인원을 누적으로 남긴다</b> (G7.5).
+     *
+     * <p>크레딧 낭비는 <b>차례를 준 인원</b>에서 <b>실제로 받아 간 인원</b>을 뺀
+     * 값이다. 뒤엣것은 판정 지표가 세지만 앞엣것을 아무도 안 세고 있어서, 낭비율을
+     * 잴 방법이 없었다 — 이탈 30%에서 낭비 5% 미만이라는 기준이 측정 수단 없이
+     * 계획서에만 있었다.
+     */
+    @Test
+    @DisplayName("들인_인원을_누적으로_센다")
+    void 들인_인원을_누적으로_센다() {
+        // **몫과 다른 수를 돌려준다.** 같으면 나눠 준 몫을 세는 구현도 통과한다 —
+        // 그 구현은 낭비율의 분모를 부풀려 실제보다 좋아 보이게 만든다.
+        AllocationRound round = round(
+                () -> List.of(new CouponDemand("c1", 100, 1_000)), 8, 1,
+                grant -> Mono.just(3L));
+
+        round.run().block();
+        assertThat(round.admitted()).as("몫 8 인데 셋만 들어왔다").isEqualTo(3);
+
+        round.run().block();
+        assertThat(round.admitted()).as("판을 넘어 누적된다").isEqualTo(6);
+    }
+
+    /**
+     * <b>몫보다 많이 들어온 판도 그대로 센다.</b>
+     *
+     * <p>동점 score 로 임계 하나에 여럿이 걸리면 준 몫보다 많이 들어간다. 그것을
+     * 몫으로 깎아 세면 초과 발급의 직접 증거가 지표에서 사라진다.
+     */
+    @Test
+    @DisplayName("몫보다_많이_들어와도_그대로_센다")
+    void 몫보다_많이_들어와도_그대로_센다() {
+        AllocationRound round = round(
+                () -> List.of(new CouponDemand("c1", 100, 1_000)), 8, 1,
+                grant -> Mono.just(grant.credit() + 2));
+
+        round.run().block();
+
+        assertThat(round.admitted()).as("실제로 들어온 수").isEqualTo(10);
+        assertThat(round.enteredOvershoot()).as("몫을 넘은 몫").isEqualTo(2);
+    }
+
     /**
      * <b>발행이 실패하면 배수도 안 센다.</b>
      *

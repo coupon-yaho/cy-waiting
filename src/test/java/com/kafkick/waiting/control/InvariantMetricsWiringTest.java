@@ -28,16 +28,19 @@ class InvariantMetricsWiringTest {
             "waiting.allocation.budget.overshoot",
             "waiting.allocation.entered.overshoot",
             "waiting.poll.budget.overshoot.ticks",
-            "waiting.snapshot.clock.floor.applied");
+            "waiting.snapshot.clock.floor.applied",
+            "waiting.allocation.admitted");
 
     @Test
-    @DisplayName("선행_지표_넷이_스크레이프에_나온다")
-    void 선행_지표_넷이_스크레이프에_나온다() {
+    @DisplayName("선행_지표가_스크레이프에_나온다")
+    void 선행_지표가_스크레이프에_나온다() {
         assertThat(registry.scrape())
                 .contains("waiting_allocation_budget_overshoot_total")
                 .contains("waiting_allocation_entered_overshoot_total")
                 .contains("waiting_poll_budget_overshoot_ticks_total")
-                .contains("waiting_snapshot_clock_floor_applied_total");
+                .contains("waiting_snapshot_clock_floor_applied_total")
+                // 크레딧 낭비의 분모다 (G7.5). 밖에서 못 읽으면 못 잰다.
+                .contains("waiting_allocation_admitted_total");
     }
 
     /**

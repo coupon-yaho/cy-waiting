@@ -201,6 +201,25 @@ class CouponStateTest {
         assertThat(CouponState.closed(QueueMode.ADAPTIVE, 5).soldOut()).isTrue();
         assertThat(CouponState.noQueue(QueueMode.ADAPTIVE, 0).soldOut()).isTrue();
         assertThat(CouponState.withQueue(QueueMode.ADAPTIVE, 3, 10, 20).soldOut()).isFalse();
+        // **경계는 0 이다.** 미상만 빠져나가게 열었으므로, 읽은 0 이 같이
+        // 빠져나가면 아무것도 못 받을 줄에 사람을 계속 세우는 상태가 생긴다.
+        assertThatThrownBy(() -> CouponState.withQueue(QueueMode.ADAPTIVE, 3, 0, 20))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("closed");
+    }
+
+    /**
+     * 미상인데 줄이 비었으면 한산이다. <b>줄 없이 큐 상태를 만들면 I4 가 막는다</b> —
+     * 경계가 밀리면 재고를 못 읽는 쿠폰이 줄이 빌 때마다 발행에서 터진다.
+     */
+    @Test
+    @DisplayName("미상인데_줄이_비면_한산이다")
+    void 미상인데_줄이_비면_한산이다() {
+        CouponState 미상 = CouponState.unknownStock(QueueMode.ADAPTIVE, 0, 0);
+
+        assertThat(미상.runtime()).isEqualTo(RuntimeState.IDLE);
+        assertThat(미상.stockKnown()).isFalse();
+        assertThat(미상.soldOut()).as("줄이 비었다고 매진은 아니다").isFalse();
     }
 
     /**

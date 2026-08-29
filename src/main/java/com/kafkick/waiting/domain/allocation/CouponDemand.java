@@ -15,6 +15,15 @@ import com.kafkick.waiting.domain.coupon.QueueMode;
  */
 public record CouponDemand(String couponId, long waiting, long stock, QueueMode mode) {
 
+    /**
+     * 재고를 못 읽었다.
+     *
+     * <p><b>0 과 갈라야 한다.</b> 접으면 재고 키를 잃은 쿠폰이 매진으로 보이고,
+     * 줄에 사람이 남아 있어도 종결된다 — 재고가 실제로 돌아오는 것이 아니라서
+     * 다음 스냅샷도 안 되돌리는, 자동으로 안 낫는 유일한 오판이다.
+     */
+    public static final long STOCK_UNKNOWN = -1;
+
     public CouponDemand {
         if (couponId == null || couponId.isBlank()) {
             throw new IllegalArgumentException("couponId 는 필수다");
@@ -29,15 +38,6 @@ public record CouponDemand(String couponId, long waiting, long stock, QueueMode 
             throw new IllegalArgumentException("stock 은 0 이상이거나 미상이어야 한다: " + stock);
         }
     }
-
-    /**
-     * 재고를 못 읽었다.
-     *
-     * <p><b>0 과 갈라야 한다.</b> 접으면 재고 키를 잃은 쿠폰이 매진으로 보이고,
-     * 줄에 사람이 남아 있어도 종결된다 — 재고가 실제로 돌아오는 것이 아니라서
-     * 다음 스냅샷도 안 되돌리는, 자동으로 안 낫는 유일한 오판이다.
-     */
-    public static final long STOCK_UNKNOWN = -1;
 
     /** 재고 키가 안 온 쿠폰. 매진이 아니라 <b>모르는 것</b>이다. */
     public static CouponDemand stockUnknown(String couponId, long waiting, QueueMode mode) {

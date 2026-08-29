@@ -32,8 +32,14 @@ local raw = redis.call('GET', KEYS[3])
 if raw == false then
     return 0
 end
+-- **담는 쪽과 같은 모양만 읽는다.** 재고를 스냅샷에 담는 쪽은 정수 파싱이라
+-- 지수 표기(`-1e20`)나 소수를 못 읽고 미상으로 넘긴다. 여기서 `tonumber` 로
+-- 관대하게 읽으면, 수집이 미상이라 부른 값으로 삭제가 매진이라 판단해 그 줄을
+-- 영영 지운다 — 두 판단이 갈리는 자리가 하필 되돌릴 수 없는 쓰기다.
+if string.match(raw, '^%s*%-?%d+%s*$') == nil then
+    return 0
+end
 local stock = tonumber(raw)
--- 수가 아니면 못 읽은 것과 같다. 0 으로 읽으면 그 줄이 사라진다.
 if stock == nil or stock ~= stock then
     return 0
 end

@@ -3,6 +3,7 @@
 -- KEYS[1]  queue:{cid}
 -- KEYS[2]  alive:{cid}
 -- KEYS[3]  stock:{cid}
+-- ARGV     없다 — 지울지 말지는 전부 키의 사실로 정한다
 --
 -- 반환  1 이면 지웠다, 0 이면 안 지웠다
 --

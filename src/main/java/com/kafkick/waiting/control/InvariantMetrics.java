@@ -4,6 +4,7 @@ import com.kafkick.waiting.adapter.redis.ClockSkewTracker;
 import io.micrometer.core.instrument.FunctionCounter;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.util.Objects;
+import java.util.function.DoubleSupplier;
 import java.util.function.ToDoubleFunction;
 
 /**
@@ -31,8 +32,21 @@ public final class InvariantMetrics {
      */
     public static InvariantMetrics bind(AllocationRound round, ClockSkewTracker skew,
             MeterRegistry meters) {
+        return bind(round, skew, meters, () -> 0);
+    }
+
+    /**
+     * 발행이 버린 미상 표시까지 건다. <b>그 수가 거짓 매진의 직접 증거다.</b>
+     */
+    public static InvariantMetrics bind(AllocationRound round, ClockSkewTracker skew,
+            MeterRegistry meters, DoubleSupplier markersDropped) {
         Objects.requireNonNull(meters, "meters 는 필수다");
+        Objects.requireNonNull(markersDropped, "markersDropped 는 필수다");
         InvariantMetrics metrics = new InvariantMetrics(round, skew);
+        FunctionCounter.builder("waiting.snapshot.stock.unknown.dropped", markersDropped,
+                        DoubleSupplier::getAsDouble)
+                .description("상한을 넘겨 버린 재고 미상 표시 수. 0 이 아니면 거짓 매진이 나갔다")
+                .register(meters);
 
         metrics.count(meters, "waiting.allocation.budget.overshoot",
                 InvariantMetrics::budgetOvershoot,

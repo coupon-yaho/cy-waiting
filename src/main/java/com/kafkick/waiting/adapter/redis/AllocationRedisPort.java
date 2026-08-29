@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.slf4j.Logger;
@@ -97,6 +98,15 @@ public final class AllocationRedisPort implements SnapshotSource {
     private final FailureWindow rejected = FailureWindow.create();
     private final FailureWindow malformed = FailureWindow.create();
     private final FailureWindow badPolicy = FailureWindow.create();
+    private final FailureWindow publishTrim = FailureWindow.create();
+
+    /**
+     * 상한을 넘겨 버린 미상 표시의 누적 수. <b>0 이 아니면 거짓 매진이 나갔다.</b>
+     *
+     * <p>미상인 채 발행한 수만 세면 실제로 해를 내는 사건이 안 잡힌다 — 무해한
+     * 쪽만 세는 셈이다.
+     */
+    private final AtomicLong markersDropped = new AtomicLong();
     /** 신선도의 기준 시각. 뒤로 가는 것을 여기서 막는다 (A-9). */
     private final ServerClock serverClock = ServerClock.create();
 
@@ -123,6 +133,11 @@ public final class AllocationRedisPort implements SnapshotSource {
 
     public static AllocationRedisPort of(ReactiveStringRedisTemplate redis, int shards) {
         return new AllocationRedisPort(redis, shards);
+    }
+
+    /** 상한을 넘겨 버린 미상 표시의 누적 수. 0 이 아니면 거짓 매진이 나갔다. */
+    public double markersDropped() {
+        return markersDropped.get();
     }
 
     /** 시계가 뒤로 간 사실을 남긴다. 조용히 보정하면 왜 그랬는지를 영영 못 밝힌다. */
@@ -585,16 +600,61 @@ public final class AllocationRedisPort implements SnapshotSource {
         if (hash.size() <= MAX_PUBLISH_FIELDS) {
             return hash;
         }
-        Map<String, String> trimmed = new LinkedHashMap<>();
+        // **필요한 만큼만 버린다.** 하나를 넘었다고 전부 버리면 안 버려도 될
+        // 쿠폰까지 거짓 매진이 되고, 그 하나하나가 줄을 잃는 경로를 탄다.
+        Map<String, String> trimmed = new LinkedHashMap<>(hash);
+        int over = hash.size() - MAX_PUBLISH_FIELDS;
+        for (String marker : droppableMarkers(hash)) {
+            if (over <= 0) {
+                break;
+            }
+            trimmed.remove(marker);
+            over--;
+        }
+        int dropped = hash.size() - trimmed.size();
+        markersDropped.addAndGet(dropped);
+        // **몇 개인지만 남긴다.** 쿠폰 ID 는 라벨로도 로그로도 못 쏟는다 (LG-3).
+        if (publishTrim.entered()) {
+            log.warn("발행 필드가 상한을 넘어 재고 미상 표시 {}개를 버렸다 — 그 쿠폰들이 매진으로 읽힌다",
+                    dropped);
+        }
+        return trimmed;
+    }
+
+    /**
+     * 버려도 덜 아픈 표시부터. <b>줄이 빈 쿠폰이 먼저다.</b>
+     *
+     * <p>줄이 빈 쿠폰의 표시를 잃으면 신규 유입만 거절되고 다음 판이 되돌린다.
+     * 줄이 선 쿠폰의 표시를 잃으면 그 줄이 통째로 종결로 읽힌다.
+     */
+    private List<String> droppableMarkers(Map<String, String> hash) {
+        List<String> empty = new ArrayList<>();
+        List<String> queued = new ArrayList<>();
         hash.forEach((field, value) -> {
             if (!field.startsWith(SnapshotCodec.STOCK_UNKNOWN_FIELD)) {
-                trimmed.put(field, value);
+                return;
             }
+            String coupon = field.substring(SnapshotCodec.STOCK_UNKNOWN_FIELD.length());
+            (waitingOf(hash.get(coupon)) > 0 ? queued : empty).add(field);
         });
-        // **몇 개인지만 남긴다.** 쿠폰 ID 는 라벨로도 로그로도 못 쏟는다 (LG-3).
-        log.warn("발행 필드가 상한을 넘어 재고 미상 표시 {}개를 버렸다 — 그 쿠폰들이 매진으로 읽힌다",
-                hash.size() - trimmed.size());
-        return trimmed;
+        empty.addAll(queued);
+        return empty;
+    }
+
+    /** 쿠폰 값의 대기 수. <b>못 읽으면 줄이 선 것으로 본다</b> — 덜 버리는 쪽이다. */
+    private long waitingOf(String raw) {
+        if (raw == null) {
+            return 1;
+        }
+        String[] parts = raw.split(":");
+        if (parts.length < 5) {
+            return 1;
+        }
+        try {
+            return Long.parseLong(parts[4]);
+        } catch (NumberFormatException e) {
+            return 1;
+        }
     }
 
     /**

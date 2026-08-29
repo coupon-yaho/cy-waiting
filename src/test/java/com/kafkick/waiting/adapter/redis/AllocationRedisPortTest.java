@@ -432,9 +432,37 @@ class AllocationRedisPortTest extends RedisContainerSupport {
 
         Map<String, String> 실린것 = port.load().block(WAIT);
         assertThat(실린것).as("쿠폰은 다 실린다").containsKey("c1599");
+        assertThat(실린것).as("상한까지 채워 싣는다").hasSize(3_000);
+        // **필요한 만큼만 버린다.** 하나를 넘었다고 전부 버리면 안 버려도 될
+        // 쿠폰까지 거짓 매진이 되고, 그 하나하나가 줄을 잃는 경로를 탄다.
         assertThat(실린것.keySet().stream()
-                .noneMatch(f -> f.startsWith(SnapshotCodec.STOCK_UNKNOWN_FIELD)))
-                .as("표시는 버린다").isTrue();
+                .filter(f -> f.startsWith(SnapshotCodec.STOCK_UNKNOWN_FIELD)).count())
+                .as("남길 수 있는 표시는 남긴다").isEqualTo(1_400);
+        assertThat(port.markersDropped()).as("버린 사실이 지표로 남는다").isEqualTo(200);
+    }
+
+    /**
+     * <b>줄이 빈 쿠폰의 표시부터 버린다.</b> 그 표시를 잃으면 신규 유입만
+     * 거절되고 다음 판이 되돌린다. 줄이 선 쿠폰의 표시를 잃으면 그 줄이 통째로
+     * 종결로 읽히고, 되돌릴 방법이 없다.
+     */
+    @Test
+    @DisplayName("줄이_빈_쿠폰의_표시부터_버린다")
+    void 줄이_빈_쿠폰의_표시부터_버린다() {
+        Map<String, String> 큰_판 = new LinkedHashMap<>();
+        for (int i = 0; i < 1_600; i++) {
+            // 짝수만 줄이 서 있다. 버릴 것은 홀수 쪽에서 다 나와야 한다.
+            큰_판.put("c" + i, "OFF:QUEUEING:1:0:" + (i % 2 == 0 ? 5 : 0) + ":1.0");
+            큰_판.put(SnapshotCodec.STOCK_UNKNOWN_FIELD + "c" + i, "1");
+        }
+
+        port.publish(큰_판).block(WAIT);
+
+        Map<String, String> 실린것 = port.load().block(WAIT);
+        assertThat(실린것.keySet().stream()
+                .filter(f -> f.startsWith(SnapshotCodec.STOCK_UNKNOWN_FIELD))
+                .filter(f -> Integer.parseInt(f.substring(4)) % 2 == 0).count())
+                .as("줄이 선 쿠폰의 표시는 하나도 안 버린다").isEqualTo(800);
     }
 
     /** 표시를 다 버려도 안 되면 그때는 실패다. 잘라 실으면 원자성이 깨진다. */

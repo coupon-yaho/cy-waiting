@@ -80,10 +80,10 @@ public class ControlPlaneConfig {
                 // **유예를 값으로 정한다** (7.3.2). 스냅샷 낡음 한계보다 충분히
                 // 커야 마지막 폴링이 줄을 안 잃는다.
                 cleanup,
-                // **아직 안 지운다.** 재고 미상이 재고 0 으로 접히는 문제가
-                // 열려 있는 동안(CY-702), 자동으로 안 낫는 오판이 자동으로
-                // 되돌릴 수 없는 삭제가 된다 — `coupons:active` 에 다시 넣는
-                // 코드가 이 저장소에 없어 복구 경로 자체가 없다.
+                // **아직 안 지운다.** 삭제 직전의 재고 확인(CY-765)과 리더십
+                // 울타리(CY-766)가 없으면 살아난 줄이나 남의 줄을 지운다 —
+                // `coupons:active` 에 다시 넣는 코드가 이 저장소에 없어 복구
+                // 경로 자체가 없다. 재고 미상은 CY-702 로 닫혔다.
                 //
                 // 판단은 그대로 돌려 지표로 먼저 관찰한다. 7.3 의 근거(죽은
                 // 큐가 폴링 예산의 83%)를 실측으로 확인한 뒤 배선을 잇는다.
@@ -150,7 +150,7 @@ public class ControlPlaneConfig {
     @Bean
     InvariantMetrics invariantMetrics(AllocationRound round, AllocationRedisPort port,
             MeterRegistry meters) {
-        return InvariantMetrics.bind(round, port.clockSkew(), meters);
+        return InvariantMetrics.bind(round, port.clockSkew(), meters, port::markersDropped);
     }
 
     /**

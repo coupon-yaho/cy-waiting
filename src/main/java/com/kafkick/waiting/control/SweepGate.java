@@ -53,7 +53,12 @@ public final class SweepGate {
             // 종결하면서 그 쿠폰의 폴링은 생존 신호를 안 갱신한다. 갱신처가
             // 거기 하나뿐이라, 매진으로 보이는 동안 줄 선 전원의 신호가
             // 일제히 멎는다 — 장애 문단과 글자 그대로 같은 사슬이다.
-            if (dataStale || state.soldOut()) {
+            //
+            // **재고를 모르는 동안도 같다** (CY-702). 표시가 노드에 안 닿는
+            // 구간이 있다 — 발행이 상한을 넘어 버렸거나, 롤아웃 중 옛 노드가
+            // 예약 자리를 건너뛸 때다. 그 노드는 매진으로 읽고 종결하므로
+            // 신호가 멎는데, 리더만 미상으로 보면 여기서 안 멈춘다.
+            if (dataStale || state.soldOut() || !state.stockKnown()) {
                 resumeAt.put(couponId, tick + resumeDelayTicks);
                 return;
             }

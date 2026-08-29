@@ -369,8 +369,15 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         // 재고는 샤드 무관 키라 큐와 슬롯이 갈린다. 같은 스크립트에서 못 읽는다.
         redis.opsForValue().set(RedisKeys.stock("c1"), "70").block(WAIT);
 
-        // 없는 재고는 아예 안 담는다. 부르는 쪽이 "모른다" 를 0 으로 접는다.
-        assertThat(port.stocks(List.of("c1", "c2")).block(WAIT))
+        // **못 읽으면 아예 안 담는다.** 부르는 쪽이 그 빈자리를 미상으로 싣는다
+        // — 0 으로 접으면 재고 키를 잃은 쿠폰이 매진이 된다 (CY-702).
+        //
+        // 수가 아닌 값도 여기서 빠진다. 그건 대개 안 낫는 손상이라 그 쿠폰이
+        // 영영 미상으로 남는다 — 종결도 정리도 청소 재개도 안 온다. 지금은
+        // 그것을 감수한다. 잘못 읽은 수로 재고를 판단하는 쪽이 더 나쁘다.
+        redis.opsForValue().set(RedisKeys.stock("c3"), "몇 개더라").block(WAIT);
+
+        assertThat(port.stocks(List.of("c1", "c2", "c3")).block(WAIT))
                 .containsOnly(entry("c1", 70L));
     }
 
@@ -469,13 +476,57 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     @Test
     @DisplayName("표시를_버려도_상한을_넘으면_실패한다")
     void 표시를_버려도_상한을_넘으면_실패한다() {
+        // **표시를 다 달아 둔다.** 표시가 없으면 버릴 것이 없어서 실패하는
+        // 것이라, 이 시험이 말하는 "다 버려도 안 된다" 를 한 번도 안 밟는다.
         Map<String, String> 큰_판 = new LinkedHashMap<>();
         for (int i = 0; i < 3_100; i++) {
             큰_판.put("c" + i, "OFF:QUEUEING:1:0:5:1.0");
+            큰_판.put(SnapshotCodec.STOCK_UNKNOWN_FIELD + "c" + i, "1");
         }
 
         assertThatThrownBy(() -> port.publish(큰_판).block(WAIT))
                 .isInstanceOf(IllegalStateException.class);
+    }
+
+    /** 상한과 같으면 그대로 싣는다. 하나 넘어야 버리기 시작한다. */
+    @Test
+    @DisplayName("상한과_같으면_표시를_안_버린다")
+    void 상한과_같으면_표시를_안_버린다() {
+        Map<String, String> 판 = new LinkedHashMap<>();
+        for (int i = 0; i < 1_500; i++) {
+            판.put("c" + i, "OFF:QUEUEING:1:0:5:1.0");
+            판.put(SnapshotCodec.STOCK_UNKNOWN_FIELD + "c" + i, "1");
+        }
+
+        port.publish(판).block(WAIT);
+
+        assertThat(port.load().block(WAIT)).hasSize(3_000);
+        assertThat(port.markersDropped()).isZero();
+    }
+
+    /**
+     * <b>짝 없는 표시가 와도 안 터진다.</b> 발행은 아무 맵이나 받으므로 쿠폰
+     * 값이 없는 표시가 들어올 수 있다. 그때는 줄이 선 것으로 보고 덜 버린다.
+     */
+    @Test
+    @DisplayName("짝_없는_표시는_덜_버리는_쪽으로_친다")
+    void 짝_없는_표시는_덜_버리는_쪽으로_친다() {
+        Map<String, String> 판 = new LinkedHashMap<>();
+        판.put(SnapshotCodec.STOCK_UNKNOWN_FIELD + "orphan", "1");
+        판.put("broken", "OFF:QUEUEING");
+        판.put(SnapshotCodec.STOCK_UNKNOWN_FIELD + "broken", "1");
+        for (int i = 0; i < 1_500; i++) {
+            판.put("c" + i, "OFF:QUEUEING:1:0:0:1.0");
+            판.put(SnapshotCodec.STOCK_UNKNOWN_FIELD + "c" + i, "1");
+        }
+
+        port.publish(판).block(WAIT);
+
+        Map<String, String> 실린것 = port.load().block(WAIT);
+        assertThat(실린것).as("줄이 빈 쪽부터 버려 상한을 맞춘다").hasSize(3_000);
+        assertThat(실린것).as("짝 없는 표시는 남긴다")
+                .containsKey(SnapshotCodec.STOCK_UNKNOWN_FIELD + "orphan")
+                .containsKey(SnapshotCodec.STOCK_UNKNOWN_FIELD + "broken");
     }
 
     @Test

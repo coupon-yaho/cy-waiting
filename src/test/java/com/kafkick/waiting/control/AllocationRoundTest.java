@@ -469,8 +469,12 @@ class AllocationRoundTest {
     void 발행이_실패하면_배수를_안_센다() {
         AllocationRound round = AllocationRound.of(
                 () -> true,
+                // **미상을 같이 넣는다.** 아는 쿠폰만 두면 "발행한 쿠폰·틱" 을
+                // 발행 앞에서 세는 구현이 그대로 통과한다.
                 () -> Mono.just(new TimedDemands(
-                        List.of(new CouponDemand("c1", 100_000, 1_000_000)), 읽은_시각)),
+                        List.of(new CouponDemand("c1", 100_000, 1_000_000),
+                                CouponDemand.stockUnknown("c2", 30, QueueMode.ADAPTIVE)),
+                        읽은_시각)),
                 () -> 10L, () -> 1,
                 grant -> Mono.just(grant.credit()),
                 hash -> Mono.error(new IllegalStateException("스냅샷 샤드가 끊겼다")),
@@ -481,6 +485,7 @@ class AllocationRoundTest {
         round.run().onErrorResume(e -> Mono.empty()).block();
 
         assertThat(round.pollBudgetOvershootTicks()).as("안 닿은 배수는 안 센다").isZero();
+        assertThat(round.stockUnknownTicks()).as("안 나간 판을 발행한 것으로 안 센다").isZero();
         assertThat(로그_메시지()).as("없었던 초과를 보고하지 않는다")
                 .noneMatch(m -> m.contains("폴링 예산 초과 —"));
     }
@@ -819,13 +824,21 @@ class AllocationRoundTest {
     @Test
     @DisplayName("미상은_아는_쿠폰과_몫을_나눠_가진다")
     void 미상은_아는_쿠폰과_몫을_나눠_가진다() {
+        // **음성 대조가 대가를 보인다.** 균등 배분이라 미상의 줄 길이는 결과를
+        // 안 바꾼다 — 접었을 때와 비교해야 얼마를 뺏겼는지가 드러난다.
+        round(List.of(new CouponDemand("lost", 100_000, 0, QueueMode.ADAPTIVE),
+                new CouponDemand("live", 100, 100, QueueMode.ADAPTIVE)), 100, 1)
+                .run().block();
+        assertThat(적용).as("접으면 산 쿠폰이 다 가져간다").containsExactly("live=100");
+        적용.clear();
+
         AllocationRound round = round(List.of(
                 CouponDemand.stockUnknown("lost", 100_000, QueueMode.ADAPTIVE),
                 new CouponDemand("live", 100, 100, QueueMode.ADAPTIVE)), 100, 1);
 
         round.run().block();
 
-        assertThat(적용).containsExactlyInAnyOrder("lost=50", "live=50");
+        assertThat(적용).as("안 접으면 절반으로 준다").containsExactlyInAnyOrder("lost=50", "live=50");
     }
 
     /**
@@ -849,7 +862,11 @@ class AllocationRoundTest {
         미상_판.run().block();
 
         assertThat(접었을_때).as("종료를 받은 줄은 안 센다").isEqualTo(1.0);
-        assertThat(발행된_배수()).as("안 끊었으니 그 폴링이 예산에 든다").isGreaterThan(1.0);
+        // 밴드별로 500 + 2500/3 + 900 + 88000/30 = 5166.67 rps, 예산 200.
+        // **값으로 못 박는다.** 부등호로 두면 미상의 배수율을 0 으로 넣는
+        // 구현도 통과하는데, 이 수가 전원의 폴링 간격에 그대로 곱해진다.
+        assertThat(발행된_배수()).as("안 끊었으니 그 폴링이 예산에 든다")
+                .isCloseTo(25.833, within(0.001));
     }
 
     /**

@@ -171,6 +171,26 @@ class QueueStatusFilterTest {
     }
 
     /**
+     * <b>재고를 모르면 폴링을 안 끊습니다</b> (CY-702).
+     *
+     * <p>끊으면 그 줄의 생존 신호가 멎습니다. 갱신처가 폴링 하나뿐이라, 신호가
+     * 멎은 사람들은 청소가 이탈자로 걷어 갑니다 — 재입장은 새 순번입니다.
+     */
+    @Test
+    @DisplayName("재고를_모르면_폴링을_안_끊는다")
+    void 재고를_모르면_폴링을_안_끊는다() {
+        스냅샷을_심는다(CouponStates.stockUnknown(10, 1_000));
+        String 토큰 = tokens.issue(COUPON, MEMBER, 지금);
+
+        MockServerWebExchange exchange =
+                조회한다("/api/v1/coupons/" + COUPON + "/queue?queueToken=" + 토큰);
+
+        assertThat(본문(exchange).get("data").get("status").asText())
+                .as("모른다고 종결하지 않는다").isNotEqualTo("SOLD_OUT");
+        assertThat(줄.왕복()).as("줄을 쳐야 생존 신호가 갱신된다").isPositive();
+    }
+
+    /**
      * <b>스냅샷에 없는 쿠폰은 매진으로 안 봅니다.</b>
      *
      * <p>모른다는 것이 끝났다는 뜻은 아닙니다. 지금 이 분기를 뒤집으면 ETA 시험이

@@ -125,6 +125,18 @@ class SweepGateTest {
         assertThat(게이트().sweepable(미상(), false)).isEmpty();
     }
 
+    /** 미상이 풀려도 같다. 밀렸던 폴링이 아직 안 왔으므로 유예만큼 건너뛴다. */
+    @Test
+    @DisplayName("미상이_풀려도_유예만큼_건너뛴다")
+    void 미상이_풀려도_유예만큼_건너뛴다() {
+        SweepGate gate = 게이트();
+        gate.sweepable(미상(), false);
+
+        assertThat(gate.sweepable(줄이_선_쿠폰(), false)).as("풀린 직후").isEmpty();
+        유예를_흘린다(gate, 줄이_선_쿠폰());
+        assertThat(gate.sweepable(줄이_선_쿠폰(), false)).as("유예가 지난 뒤").containsExactly(COUPON);
+    }
+
     /**
      * <b>매진이 풀려도 한 틱을 건너뜁니다.</b>
      *

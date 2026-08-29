@@ -139,12 +139,10 @@ public final class SnapshotCodec {
      *
      * <p>미상을 그대로 실으면 옛 노드의 생성자가 음수 재고를 거부해 그 항목이
      * 통째로 빠지고, 없는 쿠폰은 판정에서 매진으로 보인다 — 접힘을 없애려던
-     * 변경이 롤아웃 구간에 같은 종결을 되살린다.
-     *
-     * <p>읽는 쪽은 이 수를 {@link CouponState#soldOut()} 으로만 쓰고 셈에 안
-     * 넣는다. 미상인 것을 알아야 하는 곳은 리더의 정리 판단뿐이고, 그 경로는
-     * 이 값을 안 거친다 (3.1).
+     * 변경이 롤아웃 구간에 같은 종결을 되살린다 (3.1).
      */
+    // 읽는 쪽은 이 수를 soldOut() 으로만 쓰고 셈에 안 넣는다. 미상인 것을
+    // 알아야 하는 곳은 리더의 정리 판단뿐이고, 그 경로는 이 값을 안 거친다.
     private long wireStock(CouponState state) {
         return state.stockKnown() ? state.remainingStock() : NOT_SOLD_OUT;
     }

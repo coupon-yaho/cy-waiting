@@ -98,13 +98,26 @@ end
 -- **차례가 온 사람은 안 건드린다.** 배분은 임계만 올리고 큐에서 빼지 않는다 —
 -- 빼는 것은 그 사람이 폴링할 때다. 안 걷어 간 사람은 큐에 남고, 걷으면 그가
 -- 다음 폴링에서 종료를 받아 다시 서게 된다 (불변식 4).
-local admitted = tonumber(redis.call('GET', KEYS[4])) or -1
--- **nan 을 접는다.** 형제 스크립트들이 이미 하는 방어인데 여기만 없었다.
--- 전에는 비교에만 써서 무해했지만 이제 범위 인자로 나가므로, nan 이 오면
--- ZRANGEBYSCORE 가 거부해 스크립트가 통째로 죽는다 — 그러면 아래의 만료
--- 신호·낡은 기록 정리에 영영 못 닿고 그 쿠폰의 청소가 멎는다.
-if admitted ~= admitted then
-    admitted = -1
+-- **없는 것과 깨진 것을 가른다.** 여기서 -1 은 보수적인 값이 아니라 **가장
+-- 공격적인** 값이다 — 창이 큐 전체로 열리고 아래 임계 검사도 전원에 대해
+-- 참이 된다. 없으면 새 쿠폰이라 그게 맞지만, 깨진 값을 그리로 접으면 차례가
+-- 왔던 사람까지 통째로 걷힌다 (불변식 4).
+--
+-- 깨진 값은 앞줄 제거만 접고 아래 정리는 그대로 돈다. 통째로 던지면 그
+-- 쿠폰의 해시가 한 방향으로만 자라고 커서도 전진을 못 한다.
+--
+-- nan 은 비교가 전부 거짓이고, inf 는 `(inf` 로 나가 Redis 가 오류 없이 빈
+-- 집합을 준다 — 뒤엣것이 더 나쁘다. 아무 신호 없이 청소만 멎는다.
+local rawAdmitted = redis.call('GET', KEYS[4])
+local admitted = -1
+local usableAdmitted = rawAdmitted == false
+if rawAdmitted then
+    admitted = tonumber(rawAdmitted)
+    usableAdmitted = admitted ~= nil and admitted == admitted
+            and admitted ~= math.huge and admitted ~= -math.huge
+    if not usableAdmitted then
+        admitted = -1
+    end
 end
 
 -- **임계 위에서 K 명을 센다.** 순번 0 부터 세면 안 걷어 간 사람이 쌓인 만큼
@@ -117,8 +130,17 @@ end
 -- `1.7879388228152e+15` 로 쓰는데, 큐 score 는 마이크로초라 열여섯 자리다.
 -- 반올림이 위로 가면 임계 바로 위의 사람들이 창에서 빠진다 — 하필 곧 차례가
 -- 올 사람들이다.
-local front = redis.call('ZRANGEBYSCORE', KEYS[1],
-        '(' .. string.format('%.0f', admitted), '+inf', 'LIMIT', 0, limit)
+-- **순번을 같이 받는다.** 멤버당 ZSCORE 를 다시 부르면 K 번의 왕복이 되고,
+-- K 는 3,000 까지 간다 — 그 루프가 창 읽기보다 비싸다.
+local flat = usableAdmitted and redis.call('ZRANGEBYSCORE', KEYS[1],
+        '(' .. string.format('%.0f', admitted), '+inf', 'WITHSCORES',
+        'LIMIT', 0, limit) or {}
+local front = {}
+local ranks = {}
+for i = 1, #flat, 2 do
+    front[#front + 1] = flat[i]
+    ranks[#ranks + 1] = tonumber(flat[i + 1])
+end
 local swept = 0
 
 -- **살아 있는 신호가 하나도 없으면 앞줄을 안 걷는다.**
@@ -138,6 +160,14 @@ if #front > 0 then
     -- **앞부분의 score 만 묻는다.** ZRANGEBYSCORE 로 살아 있는 쪽을 다 받으면
     -- K 를 1 로 줘도 alive 전체 크기에 비례해 이벤트 루프를 잡는다.
     local scores = redis.call('ZMSCORE', KEYS[3], unpack(front))
+    -- **기록도 한 번에 받는다.** 창 안 전원에게 HGET 을 따로 부르면 K 번의
+    -- 왕복이 된다. 없는 자리는 false 로 와서 아래 판정이 그대로 산다.
+    local keptAll = redis.call('HMGET', KEYS[2], unpack(front))
+    -- 만료 시각을 한 번만 푼다. 가드와 본 루프가 같은 배열을 쓴다.
+    local aliveAt = {}
+    for i = 1, #front do
+        aliveAt[i] = tonumber(scores[i])
+    end
 
     -- **창 안에 살아 있는 신호가 하나도 없으면 앞줄을 안 걷는다.**
     --
@@ -150,8 +180,7 @@ if #front > 0 then
     -- 전원을 걷게 한다. 창 밖의 생존은 창 안에 대해 아무것도 말하지 않는다.
     local anyAlive = false
     for i = 1, #front do
-        local at = tonumber(scores[i])
-        if at ~= nil and at >= now then
+        if aliveAt[i] ~= nil and aliveAt[i] >= now then
             anyAlive = true
             break
         end
@@ -163,8 +192,8 @@ if #front > 0 then
     local records = {}
     for i = 1, anyAlive and #front or 0 do
         -- score 가 없거나 이미 지난 것은 폴링이 끊긴 것이다
-        local at = tonumber(scores[i])
-        local rank = tonumber(redis.call('ZSCORE', KEYS[1], front[i]))
+        local at = aliveAt[i]
+        local rank = ranks[i]
         -- **입장 표시를 든 사람은 통째로 건너뛴다.** 차례가 왔던 사람이 다시
         -- 줄을 서면 그 표시가 남은 채로 임계 위에 선다. 큐에서만 빼면 표시가
         -- 남아 다음 폴링에 조회가 입장이라고 답한다 — 차례가 안 왔는데
@@ -172,8 +201,9 @@ if #front > 0 then
         --
         -- 대가는 그 사람이 보관 기간이 지날 때까지 줄에 남는 것이다. 줄
         -- 길이가 그만큼 부풀지만, 잘못 들여보내는 것보다 싸다.
-        local kept = redis.call('HGET', KEYS[2], front[i])
-        local admittedMark = kept and string.sub(kept, 1, 2) == 'a:'
+        local kept = keptAll[i]
+        local admittedMark = kept and kept ~= false
+                and string.sub(kept, 1, 2) == 'a:'
         if (at == nil or at < now) and (rank == nil or rank > admitted)
                 and not admittedMark then
             gone[#gone + 1] = front[i]

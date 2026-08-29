@@ -95,8 +95,23 @@ if cursor == nil or not string.match(cursor, '^%d+$') then
     return redis.error_reply('커서는 숫자여야 한다: ' .. tostring(cursor))
 end
 
--- 앞에서 K 명. 뒤는 아직 볼 때가 아니다.
-local front = redis.call('ZRANGE', KEYS[1], 0, limit - 1)
+-- **차례가 온 사람은 안 건드린다.** 배분은 임계만 올리고 큐에서 빼지 않는다 —
+-- 빼는 것은 그 사람이 폴링할 때다. 안 걷어 간 사람은 큐에 남고, 걷으면 그가
+-- 다음 폴링에서 종료를 받아 다시 서게 된다 (불변식 4).
+local admitted = tonumber(redis.call('GET', KEYS[4])) or -1
+
+-- **임계 위에서 K 명을 센다.** 순번 0 부터 세면 안 걷어 간 사람이 쌓인 만큼
+-- 창이 막히고, 그러면 살아 있는 구간에 영영 안 닿는다 — 스위퍼가 도는데도
+-- 아무도 안 걷히는 상태가 된다. 실측에서 이탈 30% 에 낭비 36.9% 로 나왔다.
+--
+-- 창의 크기는 그대로다. 자리만 살아 있는 쪽으로 옮긴다.
+--
+-- **임계를 정수로 적는다.** 그냥 이어 붙이면 Lua 가 유효숫자 열넷으로 줄여
+-- `1.7879388228152e+15` 로 쓰는데, 큐 score 는 마이크로초라 열여섯 자리다.
+-- 반올림이 위로 가면 임계 바로 위의 사람들이 창에서 빠진다 — 하필 곧 차례가
+-- 올 사람들이다.
+local front = redis.call('ZRANGEBYSCORE', KEYS[1],
+        '(' .. string.format('%.0f', admitted), '+inf', 'LIMIT', 0, limit)
 local swept = 0
 
 -- **살아 있는 신호가 하나도 없으면 앞줄을 안 걷는다.**
@@ -118,12 +133,8 @@ if #front > 0 and anyAlive then
     -- **앞부분의 score 만 묻는다.** ZRANGEBYSCORE 로 살아 있는 쪽을 다 받으면
     -- K 를 1 로 줘도 alive 전체 크기에 비례해 이벤트 루프를 잡는다.
     local scores = redis.call('ZMSCORE', KEYS[3], unpack(front))
-    -- **차례가 온 사람은 안 건드린다.** 배분은 임계만 올리고 큐에서 빼지
-    -- 않는다 — 빼는 것은 그 사람이 폴링할 때다. 그래서 앞줄에는 "입장
-    -- 확정인데 아직 안 걷어간 사람" 이 섞인다. 걷으면 그가 다음 폴링에서
-    -- 종료를 받고, 다시 서면 그동안 온 사람 뒤로 간다 (불변식 4).
-    local admitted = tonumber(redis.call('GET', KEYS[4])) or -1
-
+    -- 임계는 위에서 이미 읽었다. 창을 그 위로 옮겼으므로 아래 검사는
+    -- 마지막 방벽이다 — 임계가 그 사이 올라갔으면 여기서 한 번 더 걸린다.
     local gone = {}
     local records = {}
     for i = 1, #front do

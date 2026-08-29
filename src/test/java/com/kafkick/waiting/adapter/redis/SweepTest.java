@@ -304,13 +304,14 @@ class SweepTest extends RedisContainerSupport {
             enqueue("성실이");
             살아있다("성실이");
             redis.opsForHash().put(GRACE, "낡은기록", "d:" + 만료된_시각).block(WAIT);
+            double 이탈자_순번 = redis.opsForZSet().score(QUEUE, "이탈자").block(WAIT);
             redis.opsForValue().set(ADMITTED, 깨진_값).block(WAIT);
 
             List<Object> 결과 = sweep("100");
 
             assertThat(swept(결과)).as("%s — 앞줄은 안 걷는다", 깨진_값).isZero();
             assertThat(redis.opsForZSet().score(QUEUE, "이탈자").block(WAIT))
-                    .as("%s — 줄이 그대로", 깨진_값).isNotNull();
+                    .as("%s — 순번까지 그대로", 깨진_값).isEqualTo(이탈자_순번);
             // **정리까지 멈추지는 않는다.** 멈추면 해시가 한 방향으로만 자란다.
             assertThat(expired(결과)).as("%s — 낡은 기록은 걷는다", 깨진_값).isOne();
         }

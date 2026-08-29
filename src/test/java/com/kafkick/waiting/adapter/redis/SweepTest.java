@@ -293,6 +293,33 @@ class SweepTest extends RedisContainerSupport {
         }
     }
 
+    /**
+     * <b>소수점 임계는 내림으로 적는다.</b>
+     *
+     * <p>반올림이 위로 가면 임계보다 실제로 위인 사람이 창에서 빠진다. 임계가
+     * 더 안 오르면 그 사람은 어떤 판에서도 창에 안 들어와 영영 안 걷힌다.
+     */
+    // 내려서 적으면 창이 한 칸 넓어질 뿐이고, 임계 이하인 사람은 아래의 정확한
+    // 비교가 되잡는다 — 그 검사가 남아 있어야 하는 이유가 여기다.
+    @Test
+    @DisplayName("소수점_임계에서_바로_위를_안_빠뜨린다")
+    void 소수점_임계에서_바로_위를_안_빠뜨린다() {
+        long 임계값 = 1_787_938_822_815_265L;
+        // 정상 경로는 정수로 적지만, 깨진 쓰기가 소수를 남길 수 있다.
+        redis.opsForValue().set(ADMITTED, 임계값 + ".75").block(WAIT);
+        // 임계보다 위인데, 올림으로 적으면 창에서 빠지는 자리다.
+        redis.opsForZSet().add(QUEUE, "이탈자", 임계값 + 1).block(WAIT);
+        redis.opsForZSet().add(QUEUE, "성실이", 임계값 + 2).block(WAIT);
+        살아있다("성실이");
+
+        assertThat(swept(sweep("100"))).as("임계 바로 위도 창에 든다").isOne();
+
+        assertThat(redis.opsForZSet().score(QUEUE, "이탈자").block(WAIT))
+                .as("걷힌다").isNull();
+        assertThat(redis.opsForZSet().score(QUEUE, "성실이").block(WAIT))
+                .as("살아 있는 사람은 순번까지 그대로").isEqualTo(임계값 + 2);
+    }
+
     @Test
     @DisplayName("검사_범위가_인자로_주어진다")
     void 검사_범위가_인자로_주어진다() {

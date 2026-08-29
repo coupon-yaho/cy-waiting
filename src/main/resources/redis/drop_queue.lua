@@ -1,0 +1,46 @@
+-- 매진된 쿠폰의 줄을 지운다 (7.3 · 5.3.1).
+--
+-- KEYS[1]  queue:{cid}
+-- KEYS[2]  alive:{cid}
+-- KEYS[3]  stock:{cid}
+--
+-- 반환  1 이면 지웠다, 0 이면 안 지웠다
+--
+-- **이 저장소에서 되돌릴 수 없는 유일한 쓰기다.** 지운 줄을 되살리는 코드가
+-- 없다 — `coupons:active` 는 발급 계층 소유라 여기서 다시 넣지 못한다. 그래서
+-- 판단이 아니라 **쓰기 직전의 사실**로 한 번 더 막는다.
+--
+-- **지우는 것을 줄과 생존 신호로 좁힌다.** 임계를 지우면 임계가 뒤로 가 이미
+-- 입장한 사람이 두 번째 토큰을 받고, 바닥값을 지우면 승격된 복제본에서 새
+-- score 가 앞으로 가 줄 선 사람이 통째로 추월당한다. 유예에는 입장 표시가
+-- 있어 차례가 왔던 사람이 종료를 안 받게 막는다.
+
+-- **재고와 줄이 같은 슬롯이어야 한다.** 샤딩을 켜면 태그가 갈려 이 읽기가
+-- 클러스터에서 거부된다. 그때는 큐와 같은 슬롯에 재고 세대를 두고 그것을
+-- 비교하는 형태라야 한다 — 조용히 틀리지 않게 여기서 먼저 막는다.
+local function tag(key)
+    return string.match(key, '{(.-)}')
+end
+if tag(KEYS[1]) ~= tag(KEYS[3]) then
+    return redis.error_reply('줄과 재고가 다른 슬롯이다: ' .. KEYS[1] .. ' vs ' .. KEYS[3])
+end
+
+local raw = redis.call('GET', KEYS[3])
+-- **못 읽으면 안 지운다.** 못 읽은 것은 매진이 아니다 (CY-702). 여기서 지우면
+-- 재고 키를 잃은 쿠폰의 줄이 통째로 사라지고 되살릴 방법이 없다.
+if raw == false then
+    return 0
+end
+local stock = tonumber(raw)
+-- 수가 아니면 못 읽은 것과 같다. 0 으로 읽으면 그 줄이 사라진다.
+if stock == nil or stock ~= stock then
+    return 0
+end
+-- **재입고됐으면 안 지운다.** 수집과 삭제 사이에 돌아온 재고는 메모리 안의
+-- 취소가 다음 스냅샷을 기다리는 동안 이 쓰기를 못 막는다.
+if stock > 0 then
+    return 0
+end
+
+redis.call('DEL', KEYS[1], KEYS[2])
+return 1

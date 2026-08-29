@@ -15,6 +15,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Optional;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
@@ -86,6 +87,9 @@ public final class AllocationRedisPort implements SnapshotSource {
     private static final RedisScript<List> SWEEP =
             RedisScript.of(new ClassPathResource("redis/sweep.lua"), List.class);
 
+    private static final RedisScript<Long> DROP_QUEUE =
+            RedisScript.of(new ClassPathResource("redis/drop_queue.lua"), Long.class);
+
     /**
      * 쿠폰별 HSCAN 커서. 매 판 0 에서 시작하면 해시 뒤쪽이 영영 안 걷힌다.
      *
@@ -99,6 +103,7 @@ public final class AllocationRedisPort implements SnapshotSource {
     private final FailureWindow malformed = FailureWindow.create();
     private final FailureWindow badPolicy = FailureWindow.create();
     private final FailureWindow publishTrim = FailureWindow.create();
+    private final FailureWindow dropFailed = FailureWindow.create();
 
     /**
      * 상한을 넘겨 버린 미상 표시의 누적 수. <b>0 이 아니면 거짓 매진이 나갔다.</b>
@@ -428,7 +433,11 @@ public final class AllocationRedisPort implements SnapshotSource {
                 // **쿠폰별 결과를 그대로 돌려준다.** 합으로 접으면 한 쿠폰이
                 // 실패해도 전체가 성공으로 보이고, 실패한 것까지 지운 것으로
                 // 표시돼 다음 틱에 다시 안 온다 (7.3.4).
-                .flatMap(id -> dropOne(id).thenReturn(id)
+                // **지운 것만 남긴다.** 살아나서 안 지운 쿠폰까지 돌려주면
+                // 판단이 "지웠다" 로 읽어 다음 판에 다시 안 온다.
+                .flatMap(id -> dropOne(id)
+                        .filter(Boolean::booleanValue)
+                        .map(dropped -> id)
                         .onErrorResume(e -> Mono.empty()), MAX_CONCURRENT_READS)
                 .collectList();
     }
@@ -448,18 +457,26 @@ public final class AllocationRedisPort implements SnapshotSource {
     //   한다. 그리고 빼는 순간 그 쿠폰이 스냅샷에서 사라져 **매진 종결이 통째로
     //   꺼진다** — 조회는 레디스로 내려가고, 발급은 404 가 되며, 재료가 낡으면
     //   미지 쿠폰 경로가 fail-open 으로 뒷단에 흘린다. 사다리 1번을 우회하는 셈이다.
-    private Mono<Long> dropOne(String couponId) {
-        List<String> keys = new ArrayList<>();
-        for (int shard = 0; shard < shards; shard++) {
-            keys.add(RedisKeys.queue(couponId, shards, shard));
-            keys.add(RedisKeys.alive(couponId, shards, shard));
-        }
-        return redis.delete(Flux.fromIterable(keys))
+    // **쓰기 직전에 재고를 다시 본다** (5.3.1 · CY-765). 수집과 삭제 사이에
+    //   재입고되면 살아난 줄을 지운다 — 메모리 안의 취소는 다음 스냅샷이 와야
+    //   도는데 삭제는 그 전에 나간다. 그 검사가 스크립트 안에 있어야 읽고
+    //   지우는 사이가 안 벌어진다.
+    private Mono<Boolean> dropOne(String couponId) {
+        return redis.execute(DROP_QUEUE,
+                        List.of(RedisKeys.queue(couponId, shards, 0),
+                                RedisKeys.alive(couponId, shards, 0),
+                                RedisKeys.stock(couponId)),
+                        List.of())
+                .next()
+                .map(dropped -> dropped != null && dropped == 1L)
+                .defaultIfEmpty(false)
                 .onErrorResume(e -> {
                     // **다음 틱에 다시 온다.** 여기서 터뜨리면 안 지워진 것
                     // 하나가 그 틱의 배분을 통째로 세운다 (7.3.4).
-                    log.warn("매진 큐 정리 실패 — 다음 틱에 다시 한다: 쿠폰={} {}",
-                            couponId, e.toString());
+                    if (dropFailed.entered()) {
+                        log.warn("매진 큐 정리 실패 — 다음 틱에 다시 한다: 쿠폰={} {}",
+                                couponId, e.toString());
+                    }
                     return Mono.error(e);
                 });
     }

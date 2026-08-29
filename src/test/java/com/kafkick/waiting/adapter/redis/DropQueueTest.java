@@ -56,7 +56,7 @@ class DropQueueTest extends RedisContainerSupport {
         줄을_세운다();
         redis.opsForValue().set(RedisKeys.stock(COUPON), "0").block(WAIT);
 
-        assertThat(port.dropQueues(List.of(COUPON)).block(WAIT)).containsExactly(COUPON);
+        assertThat(port.dropSoldOutQueues(List.of(COUPON)).block(WAIT)).containsExactly(COUPON);
 
         assertThat(있나(RedisKeys.queue(COUPON, 1, 0))).as("줄").isFalse();
         assertThat(있나(RedisKeys.alive(COUPON, 1, 0))).as("생존 신호").isFalse();
@@ -73,7 +73,7 @@ class DropQueueTest extends RedisContainerSupport {
         줄을_세운다();
         redis.opsForValue().set(RedisKeys.stock(COUPON), "0").block(WAIT);
 
-        port.dropQueues(List.of(COUPON)).block(WAIT);
+        port.dropSoldOutQueues(List.of(COUPON)).block(WAIT);
 
         assertThat(있나(RedisKeys.admitted(COUPON, 1, 0))).as("입장 임계").isTrue();
         assertThat(있나(RedisKeys.grace(COUPON, 1, 0))).as("유예 기록").isTrue();
@@ -93,7 +93,7 @@ class DropQueueTest extends RedisContainerSupport {
         // 판이 시작될 때는 매진이었고, 지우기 직전에 재고가 돌아왔다.
         redis.opsForValue().set(RedisKeys.stock(COUPON), "5").block(WAIT);
 
-        assertThat(port.dropQueues(List.of(COUPON)).block(WAIT))
+        assertThat(port.dropSoldOutQueues(List.of(COUPON)).block(WAIT))
                 .as("지운 것만 돌려준다").isEmpty();
 
         assertThat(있나(RedisKeys.queue(COUPON, 1, 0))).as("줄이 살아 있다").isTrue();
@@ -110,7 +110,7 @@ class DropQueueTest extends RedisContainerSupport {
         줄을_세운다();
         // 재고 키가 없다.
 
-        assertThat(port.dropQueues(List.of(COUPON)).block(WAIT)).isEmpty();
+        assertThat(port.dropSoldOutQueues(List.of(COUPON)).block(WAIT)).isEmpty();
 
         assertThat(있나(RedisKeys.queue(COUPON, 1, 0))).as("줄이 살아 있다").isTrue();
     }
@@ -122,7 +122,7 @@ class DropQueueTest extends RedisContainerSupport {
         줄을_세운다();
         redis.opsForValue().set(RedisKeys.stock(COUPON), "몇 개더라").block(WAIT);
 
-        assertThat(port.dropQueues(List.of(COUPON)).block(WAIT)).isEmpty();
+        assertThat(port.dropSoldOutQueues(List.of(COUPON)).block(WAIT)).isEmpty();
 
         assertThat(있나(RedisKeys.queue(COUPON, 1, 0))).isTrue();
     }
@@ -138,7 +138,7 @@ class DropQueueTest extends RedisContainerSupport {
         줄을_세운다();
         redis.opsForValue().set(RedisKeys.stock(COUPON), "0").block(WAIT);
 
-        assertThat(port.dropQueues(List.of(산것, COUPON)).block(WAIT))
+        assertThat(port.dropSoldOutQueues(List.of(산것, COUPON)).block(WAIT))
                 .containsExactly(COUPON);
 
         assertThat(있나(RedisKeys.queue(산것, 1, 0))).as("살아난 쪽은 그대로").isTrue();

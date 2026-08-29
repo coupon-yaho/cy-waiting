@@ -7,6 +7,8 @@ import static org.assertj.core.api.Assertions.entry;
 import com.kafkick.waiting.domain.allocation.Grant;
 import com.kafkick.waiting.domain.coupon.QueueMode;
 import java.time.Duration;
+import com.kafkick.waiting.control.SnapshotCodec;
+import java.util.LinkedHashMap;
 import com.kafkick.waiting.control.QueueSweeper;
 import java.util.List;
 import java.util.Map;
@@ -406,6 +408,46 @@ class AllocationRedisPortTest extends RedisContainerSupport {
                 .isInstanceOf(IllegalArgumentException.class);
 
         assertThat(port.load().block(WAIT)).containsEntry("c1", "a");
+    }
+
+    /**
+     * <b>상한을 넘으면 미상 표시부터 버리고 발행한다.</b>
+     *
+     * <p>표시는 쿠폰마다 필드를 하나 더 쓰므로 실을 수 있는 쿠폰이 절반이 된다.
+     * 그런데 그 두 배가 되는 순간은 재고를 통째로 못 읽는 순간이라, 하필 그때
+     * 발행이 죽는다 — 전 노드가 낡음으로 넘어가고 정리도 청소도 같이 멎는다.
+     */
+    // 표시를 잃으면 그 쿠폰이 거짓 매진으로 읽힌다. 나쁘지만 스냅샷이 아예
+    // 안 나가는 것보다 낫다 — 옛 노드가 오늘 하는 것과 같은 자리다.
+    @Test
+    @DisplayName("상한을_넘으면_미상_표시부터_버린다")
+    void 상한을_넘으면_미상_표시부터_버린다() {
+        Map<String, String> 큰_판 = new LinkedHashMap<>();
+        for (int i = 0; i < 1_600; i++) {
+            큰_판.put("c" + i, "OFF:QUEUEING:1:0:5:1.0");
+            큰_판.put(SnapshotCodec.STOCK_UNKNOWN_FIELD + "c" + i, "1");
+        }
+
+        port.publish(큰_판).block(WAIT);
+
+        Map<String, String> 실린것 = port.load().block(WAIT);
+        assertThat(실린것).as("쿠폰은 다 실린다").containsKey("c1599");
+        assertThat(실린것.keySet().stream()
+                .noneMatch(f -> f.startsWith(SnapshotCodec.STOCK_UNKNOWN_FIELD)))
+                .as("표시는 버린다").isTrue();
+    }
+
+    /** 표시를 다 버려도 안 되면 그때는 실패다. 잘라 실으면 원자성이 깨진다. */
+    @Test
+    @DisplayName("표시를_버려도_상한을_넘으면_실패한다")
+    void 표시를_버려도_상한을_넘으면_실패한다() {
+        Map<String, String> 큰_판 = new LinkedHashMap<>();
+        for (int i = 0; i < 3_100; i++) {
+            큰_판.put("c" + i, "OFF:QUEUEING:1:0:5:1.0");
+        }
+
+        assertThatThrownBy(() -> port.publish(큰_판).block(WAIT))
+                .isInstanceOf(IllegalStateException.class);
     }
 
     @Test

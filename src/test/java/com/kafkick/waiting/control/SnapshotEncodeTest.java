@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.kafkick.waiting.domain.allocation.QueueingHysteresis;
 import com.kafkick.waiting.domain.allocation.CreditSmoother;
 import com.kafkick.waiting.domain.coupon.CouponState;
+import com.kafkick.waiting.domain.coupon.CouponStates;
 import com.kafkick.waiting.domain.coupon.QueueMode;
 import com.kafkick.waiting.domain.coupon.RuntimeState;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
@@ -333,6 +334,27 @@ class SnapshotEncodeTest {
 
         assertThat(되읽음.stockKnown()).isTrue();
         assertThat(되읽음.soldOut()).as("옛 리더가 말한 매진이 그대로 선다").isTrue();
+    }
+
+    /**
+     * <b>전역 자리가 미상 표시를 흉내 내면 안 된다.</b> {@code #u:total} 같은
+     * 전역이 생기면 {@code total} 이라는 쿠폰이 영구히 미상으로 읽히고, 그
+     * 쿠폰만 매진 방패가 영영 안 걸린다 — 아무 오류 없이 조용히.
+     */
+    @Test
+    @DisplayName("전역_자리는_미상_표시로_시작하지_않는다")
+    void 전역_자리는_미상_표시로_시작하지_않는다() {
+        GatewaySnapshot 원본 = new GatewaySnapshot(
+                Map.of("c1", CouponStates.queueing(3, 100, 10)),
+                new SnapshotMeta(50, 4), Instant.ofEpochSecond(1_700_000_000L));
+
+        Map<String, String> 실린것 = codec.encode(원본, new CreditSmoother.Snapshot(1.0, true),
+                new QueueingHysteresis.Snapshot(true, 2));
+
+        assertThat(실린것.keySet())
+                .filteredOn(f -> f.startsWith(SnapshotCodec.STOCK_UNKNOWN_FIELD))
+                .as("미상 표시는 쿠폰마다 하나뿐이고, 이 판에는 미상이 없다")
+                .isEmpty();
     }
 
     private Map<String, String> 미상을_싣는다() {

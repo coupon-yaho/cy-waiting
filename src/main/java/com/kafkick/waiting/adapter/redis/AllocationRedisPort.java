@@ -6,6 +6,7 @@ import com.kafkick.waiting.control.TimedCoupons;
 import com.kafkick.waiting.control.TimedSnapshot;
 import com.kafkick.waiting.control.ControlPlaneProperties;
 import com.kafkick.waiting.control.FailureWindow;
+import com.kafkick.waiting.control.SnapshotCodec;
 import com.kafkick.waiting.control.SnapshotSource;
 import com.kafkick.waiting.domain.allocation.Grant;
 import com.kafkick.waiting.domain.coupon.QueueMode;
@@ -557,17 +558,43 @@ public final class AllocationRedisPort implements SnapshotSource {
         if (hash.isEmpty()) {
             return Mono.error(new IllegalArgumentException("빈 스냅샷은 발행하지 않는다"));
         }
-        if (hash.size() > MAX_PUBLISH_FIELDS) {
+        Map<String, String> toPublish = withinLimit(hash);
+        if (toPublish.size() > MAX_PUBLISH_FIELDS) {
             return Mono.error(new IllegalStateException(
                     "한 번에 실을 수 있는 필드를 넘었다: %d > %d"
-                            .formatted(hash.size(), MAX_PUBLISH_FIELDS)));
+                            .formatted(toPublish.size(), MAX_PUBLISH_FIELDS)));
         }
-        List<String> args = new ArrayList<>(hash.size() * 2);
-        hash.forEach((field, value) -> {
+        List<String> args = new ArrayList<>(toPublish.size() * 2);
+        toPublish.forEach((field, value) -> {
             args.add(field);
             args.add(value);
         });
         return redis.execute(PUBLISH, List.of(RedisKeys.SNAPSHOT), args).next().then();
+    }
+
+    /**
+     * 상한을 넘으면 <b>미상 표시부터 버린다</b>.
+     *
+     * <p>표시는 쿠폰마다 필드를 하나 더 쓰므로 실을 수 있는 쿠폰이 절반이 된다.
+     * 그런데 그 두 배가 되는 순간은 재고를 통째로 못 읽는 순간이라, 하필 그때
+     * 발행이 죽는다 — 전 노드가 낡음으로 넘어가고 정리도 청소도 같이 멎는다.
+     */
+    // 표시를 잃으면 그 쿠폰이 거짓 매진으로 읽힌다. 나쁘지만 스냅샷이 아예
+    // 안 나가는 것보다 낫다 — 옛 노드가 오늘 하는 것과 같은 자리다.
+    private Map<String, String> withinLimit(Map<String, String> hash) {
+        if (hash.size() <= MAX_PUBLISH_FIELDS) {
+            return hash;
+        }
+        Map<String, String> trimmed = new LinkedHashMap<>();
+        hash.forEach((field, value) -> {
+            if (!field.startsWith(SnapshotCodec.STOCK_UNKNOWN_FIELD)) {
+                trimmed.put(field, value);
+            }
+        });
+        // **몇 개인지만 남긴다.** 쿠폰 ID 는 라벨로도 로그로도 못 쏟는다 (LG-3).
+        log.warn("발행 필드가 상한을 넘어 재고 미상 표시 {}개를 버렸다 — 그 쿠폰들이 매진으로 읽힌다",
+                hash.size() - trimmed.size());
+        return trimmed;
     }
 
     /**

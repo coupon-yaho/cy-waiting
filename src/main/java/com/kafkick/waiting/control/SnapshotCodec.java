@@ -83,7 +83,12 @@ public final class SnapshotCodec {
      */
     // 예약 자리는 옛 노드가 이미 통째로 건너뛴다. 그래서 이것만이 옛 노드의
     // 오늘 동작을 안 건드리면서 새 노드에 사실을 전하는 길이다 (E-12).
-    private static final String STOCK_UNKNOWN = "#u:";
+    //
+    // **있는 것이 곧 미상이다** — 값은 계약이 아니다. 그리고 쿠폰 값과 이
+    // 표시는 **같은 키에 같은 읽기로** 와야 한다. 스냅샷을 쪼개거나 부분
+    // 읽기로 바꾸면 표시만 잃는 판이 생기고, 그 쿠폰은 재고 자리의 0 때문에
+    // 거짓 매진이 된다 — 해제 가드도 그 방향은 못 막는다 (10 절 참조).
+    public static final String STOCK_UNKNOWN_FIELD = "#u:";
 
     /** {@link Instant#MAX} 를 넘으면 생성자가 던진다 — 넘기지 않고 걸러낸다. */
     private static final long MAX_EPOCH_SECOND = Instant.MAX.getEpochSecond();
@@ -109,7 +114,7 @@ public final class SnapshotCodec {
             if (!couponId.startsWith(RESERVED)) {
                 hash.put(couponId, encodeCoupon(state, snapshot.meta().pollScale()));
                 if (!state.stockKnown()) {
-                    hash.put(STOCK_UNKNOWN + couponId, "1");
+                    hash.put(STOCK_UNKNOWN_FIELD + couponId, "1");
                 }
             }
         });
@@ -196,7 +201,7 @@ public final class SnapshotCodec {
             // **안 실려 왔으면 아는 것으로 본다.** 옛 리더는 이 자리를 안 싣고
             // 미상을 0 으로 접어 보낸다. 그 판을 미상으로 읽으면 그 리더가
             // 말한 매진이 전부 무시된다.
-            CouponState state = toCouponState(raw, hash.containsKey(STOCK_UNKNOWN + field));
+            CouponState state = toCouponState(raw, hash.containsKey(STOCK_UNKNOWN_FIELD + field));
             if (state != null) {
                 coupons.put(field, state);
             }

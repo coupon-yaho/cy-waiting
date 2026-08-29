@@ -103,7 +103,6 @@ public final class AllocationRedisPort implements SnapshotSource {
     private final FailureWindow malformed = FailureWindow.create();
     private final FailureWindow badPolicy = FailureWindow.create();
     private final FailureWindow publishTrim = FailureWindow.create();
-    private final FailureWindow dropFailed = FailureWindow.create();
 
     /**
      * 상한을 넘겨 버린 미상 표시의 누적 수. <b>0 이 아니면 거짓 매진이 나갔다.</b>
@@ -429,6 +428,16 @@ public final class AllocationRedisPort implements SnapshotSource {
         if (couponIds.isEmpty()) {
             return Mono.just(List.of());
         }
+        // **샤딩을 켜면 지울 수 없다.** 재고는 샤드 무관 키라 줄과 슬롯이
+        // 갈린다 — 클러스터는 스크립트를 실행 전에 거절하고, 단독 배치는 받아
+        // 주지만 그때는 아래가 샤드 0 만 지워 나머지 샤드의 줄이 영구 고아가
+        // 된다. 그 줄의 `waiting` 을 0 으로 만드는 주체가 삭제뿐이라 폴링
+        // 예산을 영원히 먹는다. 둘 다 조용해서 여기서 소리 나게 막는다.
+        if (shards != 1) {
+            return Mono.error(new IllegalStateException(
+                    "샤드가 여럿이면 매진 큐를 못 지운다 — 재고 세대가 있어야 한다: %d"
+                            .formatted(shards)));
+        }
         return Flux.fromIterable(couponIds)
                 // **쿠폰별 결과를 그대로 돌려준다.** 합으로 접으면 한 쿠폰이
                 // 실패해도 전체가 성공으로 보이고, 실패한 것까지 지운 것으로
@@ -473,10 +482,11 @@ public final class AllocationRedisPort implements SnapshotSource {
                 .onErrorResume(e -> {
                     // **다음 틱에 다시 온다.** 여기서 터뜨리면 안 지워진 것
                     // 하나가 그 틱의 배분을 통째로 세운다 (7.3.4).
-                    if (dropFailed.entered()) {
-                        log.warn("매진 큐 정리 실패 — 다음 틱에 다시 한다: 쿠폰={} {}",
-                                couponId, e.toString());
-                    }
+                    // **억제하지 않는다.** 이 저장소의 유일한 비가역 쓰기이고,
+                    // 실패는 부르는 쪽에서 삼켜져 아무 신호도 안 간다. 창을
+                    // 걸면 프로세스 수명에 한 줄만 남고 정리가 멎어도 조용하다.
+                    log.warn("매진 큐 정리 실패 — 다음 틱에 다시 한다: 쿠폰={} {}",
+                            couponId, e.toString());
                     return Mono.error(e);
                 });
     }

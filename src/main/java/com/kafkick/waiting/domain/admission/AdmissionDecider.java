@@ -78,6 +78,17 @@ public class AdmissionDecider {
         return s.waiting() > 0 && s.waiting() >= queueCapacity(s, req.maxEtaSec());
     }
 
+    /**
+     * 반쯤 열린 서킷이 초당 허용하는 시험 요청 수.
+     *
+     * <p><b>작아야 한다.</b> 회복 판정의 표본이지 트래픽이 아니다 — 크게 잡으면
+     * 약한 뒷단이 그 수만큼 맞고 다시 열린다.
+     */
+    private static final long PROBE_CAP = 3;
+
+    /** 시험 요청의 예산 키. 쿠폰과 무관하다 — 뒷단은 하나다. */
+    private static final String PROBE_KEY = "circuit-probe";
+
     /** 판정 사다리 10줄. 위에서부터 처음 걸리는 줄이 답이다. */
     public AdmissionDecision decide(AdmissionRequest req) {
         CouponState s = req.state();
@@ -94,6 +105,29 @@ public class AdmissionDecider {
             return limiter.tryAcquire(GLOBAL_KEY, globalCap(req), req.epochSecond())
                     ? AdmissionDecision.PASS_TOKEN
                     : AdmissionDecision.RETRY_TOKEN;
+        }
+
+        // 3 — 서킷이 열렸다 (F3). **뒷단이 못 받는다는 가장 직접적인 증거다.**
+        //
+        //     **낡음보다 앞이다.** 낡음은 "모른다" 지만 서킷은 "못 받는다" 를
+        //     아는 것이다. 모르는 쪽이 아는 쪽을 이기면 fail-open 상한이 있으나
+        //     마나가 되고, 서킷이 지키려던 뒷단에 그 상한만큼 계속 꽂힌다.
+        //
+        //     **fallback 이 아니라 줄로 보낸다.** 통과를 내면 서킷이 가로채
+        //     503 을 주는데, 그러면 사용자는 순번도 못 받고 뒷단도 안 쉰다.
+        //     줄로 보내면 회복 뒤 크레딧이 돌아올 때 그 줄이 자연히 빠진다.
+        if (req.circuit() == CircuitState.OPEN) {
+            return AdmissionDecision.ENQUEUE_CIRCUIT_OPEN;
+        }
+
+        // 3' — 반쯤 열렸다. **소량만 닿아야 회복 판정이 공정하다.**
+        //
+        //      전량을 흘리면 그 순간 도착한 트래픽이 약한 뒷단에 꽂혀 즉시
+        //      재포화하고 서킷이 다시 열린다 — 회복이 영영 안 된다.
+        if (req.circuit() == CircuitState.HALF_OPEN) {
+            return limiter.tryAcquire(PROBE_KEY, PROBE_CAP, req.epochSecond())
+                    ? AdmissionDecision.PASS_CIRCUIT_PROBE
+                    : AdmissionDecision.ENQUEUE_CIRCUIT_OPEN;
         }
 
         // **줄의 존재는 정책보다 먼저 본다.** mode 는 사람이 고른 값이고
@@ -233,11 +267,15 @@ public class AdmissionDecider {
             case PASS_UNDER_CAP -> state.idleCap(meta, idleRatio(meta));
             // 4·5번 — 쿠폰별 예산을 안 거친다. 노드 예산이 정직한 상한이다.
             case PASS_BYPASS, PASS_FAIL_OPEN -> globalCap(meta);
+            // 3'번 — 시험 요청이다. **제 예산이 곧 상한이다** — 노드 예산을
+            // 돌려주면 격벽이 서킷보다 넓어져, 조여 둔 수가 그 층에서 풀린다.
+            case PASS_CIRCUIT_PROBE -> PROBE_CAP;
             // **전부 열거한다.** default 로 두면 새 통과값이 조용히 0 을 받고,
             // 0 은 상한으로 쓰이는 순간 전면 차단이다.
             case RETRY_TOKEN, REJECT_SOLD_OUT, REJECT_QUEUE_FULL, REJECT_OVERLOAD,
                  ENQUEUE_STALE, ENQUEUE_ALWAYS, ENQUEUE_BACKLOG,
-                 ENQUEUE_RATE_COUPON, ENQUEUE_RATE_GLOBAL, ENQUEUE_KEY_SATURATED ->
+                 ENQUEUE_RATE_COUPON, ENQUEUE_RATE_GLOBAL, ENQUEUE_KEY_SATURATED,
+                 ENQUEUE_CIRCUIT_OPEN ->
                     throw new IllegalArgumentException("통과가 아니다: " + decision);
         };
     }

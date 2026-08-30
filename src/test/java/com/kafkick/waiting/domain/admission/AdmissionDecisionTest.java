@@ -26,19 +26,21 @@ class AdmissionDecisionTest {
     }
 
     @Test
-    @DisplayName("통과_판정은_넷이다")
-    void 통과_판정은_넷이다() {
+    @DisplayName("통과_판정은_다섯이다")
+    void 통과_판정은_다섯이다() {
         assertThat(Arrays.stream(AdmissionDecision.values()).filter(AdmissionDecision::isPass))
                 .containsExactlyInAnyOrder(
                         AdmissionDecision.PASS_TOKEN,
                         AdmissionDecision.PASS_BYPASS,
                         AdmissionDecision.PASS_FAIL_OPEN,
-                        AdmissionDecision.PASS_UNDER_CAP);
+                        AdmissionDecision.PASS_UNDER_CAP,
+                        // 반쯤 열린 서킷의 시험 트래픽. 실제로 뒷단에 닿는다.
+                        AdmissionDecision.PASS_CIRCUIT_PROBE);
     }
 
     @Test
-    @DisplayName("큐_판정은_여섯이다")
-    void 큐_판정은_여섯이다() {
+    @DisplayName("큐_판정은_일곱이다")
+    void 큐_판정은_일곱이다() {
         assertThat(Arrays.stream(AdmissionDecision.values()).filter(AdmissionDecision::isEnqueue))
                 .containsExactlyInAnyOrder(
                         AdmissionDecision.ENQUEUE_STALE,
@@ -46,7 +48,9 @@ class AdmissionDecisionTest {
                         AdmissionDecision.ENQUEUE_BACKLOG,
                         AdmissionDecision.ENQUEUE_RATE_COUPON,
                         AdmissionDecision.ENQUEUE_RATE_GLOBAL,
-                        AdmissionDecision.ENQUEUE_KEY_SATURATED);
+                        AdmissionDecision.ENQUEUE_KEY_SATURATED,
+                        // 서킷이 열렸다. fallback 이 아니라 줄로 보낸다 (F3).
+                        AdmissionDecision.ENQUEUE_CIRCUIT_OPEN);
     }
 
     @Test

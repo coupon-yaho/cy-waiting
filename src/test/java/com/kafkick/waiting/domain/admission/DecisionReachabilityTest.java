@@ -36,12 +36,17 @@ class DecisionReachabilityTest {
         seen.add(decide(CouponStates.always(500), r -> r));
         seen.add(decide(CouponStates.queueing(100, 500, 3000), r -> r));
         seen.add(decide(CouponStates.idle(500), r -> r));
+        // 서킷 갈래 둘 (F3). 반쯤 열린 쪽은 시험 예산을 말려야 큐 갈래가 나온다.
+        seen.add(decide(CouponStates.idle(500), r -> r.withCircuit(CircuitState.OPEN)));
+        seen.add(decide(CouponStates.idle(500), r -> r.withCircuit(CircuitState.HALF_OPEN)));
 
         // 상한을 말려야 나오는 넷은 같은 리미터를 반복해서 두드린다
         seen.add(drain(CouponStates.queueing(100, 500, 3000), r -> r.withValidToken(true), 0.7));
         seen.add(drain(CouponStates.idle(500), r -> r.withDataStale(true), 0.7));
         seen.add(drain(CouponStates.idle(500), r -> r, 0.7));
         seen.add(drain(CouponStates.idle(500), r -> r, 5.0));
+        // 시험 예산이 마르면 반쯤 열린 갈래도 줄로 간다
+        seen.add(drain(CouponStates.idle(500), r -> r.withCircuit(CircuitState.HALF_OPEN), 0.7));
 
         // 자리가 하나뿐이면 쿠폰·전역 두 키를 함께 못 넣는다
         AdmissionDecider tight = AdmissionDecider.of(SecondWindowLimiter.withMaxKeys(1), 0.7);

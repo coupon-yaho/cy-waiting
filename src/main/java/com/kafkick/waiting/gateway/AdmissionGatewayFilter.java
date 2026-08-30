@@ -539,8 +539,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             // 차례가 온 사람을 큐 뒤로 안 돌린다. 되돌리면 허가가 "아마도" 가 된다.
             case RETRY_TOKEN -> ApiError.Code.RETRY_TOKEN;
             case PASS_TOKEN, PASS_BYPASS, PASS_FAIL_OPEN, PASS_UNDER_CAP,
-                 ENQUEUE_STALE, ENQUEUE_ALWAYS, ENQUEUE_BACKLOG,
-                 ENQUEUE_RATE_COUPON, ENQUEUE_RATE_GLOBAL, ENQUEUE_KEY_SATURATED ->
+                 PASS_CIRCUIT_PROBE, ENQUEUE_STALE, ENQUEUE_ALWAYS, ENQUEUE_BACKLOG,
+                 ENQUEUE_RATE_COUPON, ENQUEUE_RATE_GLOBAL, ENQUEUE_KEY_SATURATED,
+                 ENQUEUE_CIRCUIT_OPEN ->
                     throw new IllegalArgumentException("거절이 아니다: " + decision);
         };
     }
@@ -573,8 +574,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             // 매진은 안 싣는다. 다시 와도 소용없는데 시각을 주면 재시도를 부른다.
             case REJECT_SOLD_OUT -> ApiError.NO_RETRY;
             case PASS_TOKEN, PASS_BYPASS, PASS_FAIL_OPEN, PASS_UNDER_CAP,
-                 ENQUEUE_STALE, ENQUEUE_ALWAYS, ENQUEUE_BACKLOG,
-                 ENQUEUE_RATE_COUPON, ENQUEUE_RATE_GLOBAL, ENQUEUE_KEY_SATURATED ->
+                 PASS_CIRCUIT_PROBE, ENQUEUE_STALE, ENQUEUE_ALWAYS, ENQUEUE_BACKLOG,
+                 ENQUEUE_RATE_COUPON, ENQUEUE_RATE_GLOBAL, ENQUEUE_KEY_SATURATED,
+                 ENQUEUE_CIRCUIT_OPEN ->
                     throw new IllegalArgumentException("거절이 아니다: " + decision);
         };
     }

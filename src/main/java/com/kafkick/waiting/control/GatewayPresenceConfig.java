@@ -4,6 +4,7 @@ import com.kafkick.waiting.adapter.redis.GatewayRedisPort;
 import com.kafkick.waiting.adapter.redis.GatewayRedisPort.Presence;
 import com.kafkick.waiting.domain.admission.CircuitState;
 import com.kafkick.waiting.gateway.CircuitStateReader;
+import java.time.Duration;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import org.springframework.context.annotation.Bean;
@@ -47,10 +48,7 @@ public class GatewayPresenceConfig {
             CircuitStateReader circuit) {
         String instanceId = Leadership.newOwnerId();
         long reapAfterSec = properties.capacity().freshness().toSeconds();
-        // **실효값을 한 자리에서 낸다.** 상한을 호출부에 숨기면 이 변수와
-        // 스크립트가 받는 값이 달라져, 로그로 본 값이 실제와 어긋난다.
-        long voteFreshSec = Math.clamp(
-                properties.scheduler().tick().toSeconds() * VOTE_FRESH_TICKS, 1, reapAfterSec);
+        long voteFreshSec = voteFreshSec(properties.scheduler().tick(), reapAfterSec);
         return GatewayHeartbeatLoop.of(
                 beatStep(state -> port.beat(instanceId, reapAfterSec, voteFreshSec, state),
                         circuit::now, registry),
@@ -60,6 +58,19 @@ public class GatewayPresenceConfig {
                 () -> registry.circuitMissed(circuit.now()),
                 properties.scheduler().tick(),
                 properties.leader().attempt());
+    }
+
+    /**
+     * 표를 인정할 초. <b>곱한 뒤에 초로 바꾼다.</b>
+     *
+     * <p>먼저 초로 바꾸면 1초 미만 틱이 0 으로 잘려 하한 1초가 나간다. 그러면
+     * 하트비트 한 판이 오는 사이에 남의 표가 낡아, 리더가 자기 표만 들고
+     * 판단한다 — 클러스터 다수결이 이름만 남는다.
+     */
+    // 올림한다. 내리면 간격과 같아져 왕복 지연만큼 늘 모자란다.
+    static long voteFreshSec(Duration tick, long reapAfterSec) {
+        long millis = tick.multipliedBy(VOTE_FRESH_TICKS).toMillis();
+        return Math.clamp(Math.ceilDiv(millis, 1000L), 1, reapAfterSec);
     }
 
     /**

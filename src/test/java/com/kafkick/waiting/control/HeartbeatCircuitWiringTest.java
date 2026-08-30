@@ -129,4 +129,26 @@ class HeartbeatCircuitWiringTest {
     void 관측_전에는_닫힌_것으로_본다() {
         assertThat(등록부().circuit()).isEqualTo(CircuitState.CLOSED);
     }
+
+    /**
+     * <b>틱이 1초 미만이어도 신선도가 안 잘린다.</b>
+     *
+     * <p>초로 먼저 바꾸면 900ms 틱이 0 이 되고, 곱해도 0 이라 하한 1초가 나간다.
+     * 그러면 하트비트 한 판이 오는 사이에 남의 표가 낡아, 리더가 자기 표만
+     * 들고 판단하게 된다. 클러스터 다수결이 이름만 남는다.
+     */
+    @Test
+    @DisplayName("틱이_일초_미만이어도_신선도가_안_잘린다")
+    void 틱이_일초_미만이어도_신선도가_안_잘린다() {
+        long 신선도 = GatewayPresenceConfig.voteFreshSec(Duration.ofMillis(900), 60);
+
+        assertThat(신선도).as("0.9초 × 5 = 4.5초, 올림하면 5초").isEqualTo(5);
+    }
+
+    /** 분모의 임계보다 길 수 없다. 스크립트가 거절하는 값을 보내면 안 된다. */
+    @Test
+    @DisplayName("신선도는_분모의_임계를_안_넘는다")
+    void 신선도는_분모의_임계를_안_넘는다() {
+        assertThat(GatewayPresenceConfig.voteFreshSec(Duration.ofSeconds(10), 3)).isEqualTo(3);
+    }
 }

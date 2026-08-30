@@ -19,6 +19,9 @@ class FailureAgeTest {
     private static final Instant 시작 = Instant.parse("2026-08-30T00:00:00Z");
     private static final Duration 단위 = Duration.ofSeconds(2);
 
+    /** 이만큼 실패 없이 성공해야 푼다. 성공 하나로 풀면 부분 장애에서 안 걸린다. */
+    private static final Duration 해제_유예 = Duration.ofSeconds(5);
+
     @Test
     @DisplayName("첫_실패는_첫_단계다")
     void 첫_실패는_첫_단계다() {
@@ -49,17 +52,41 @@ class FailureAgeTest {
                 .isEqualTo(3);
     }
 
-    /** 성공하면 처음으로 돌아간다. 안 그러면 회복한 뒤에도 멀리 보낸다. */
+    /** 성공이 이어지면 처음으로 돌아간다. 안 그러면 회복한 뒤에도 멀리 보낸다. */
     @Test
-    @DisplayName("성공하면_처음으로_돌아간다")
-    void 성공하면_처음으로_돌아간다() {
+    @DisplayName("성공이_이어지면_처음으로_돌아간다")
+    void 성공이_이어지면_처음으로_돌아간다() {
         FailureAge age = new FailureAge();
         age.stepAt(시작, 단위);
         age.stepAt(시작.plusSeconds(10), 단위);
 
-        age.cleared();
+        age.cleared(시작.plusSeconds(10 + 해제_유예.toSeconds()), 해제_유예);
 
-        assertThat(age.stepAt(시작.plusSeconds(11), 단위)).isEqualTo(1);
+        assertThat(age.stepAt(시작.plusSeconds(30), 단위)).isEqualTo(1);
+    }
+
+    /**
+     * <b>성공 하나가 실패 이력을 지우면 안 된다.</b>
+     *
+     * <p>샤드 하나가 죽으면 사용자의 일부만 실패한다. 피크에서는 성공이 초당
+     * 수천 건이라, 성공마다 지우면 실패 사이에 반드시 성공이 끼어 단계가 영원히
+     * 1 에 머문다. 백오프가 전면 장애에서만 도는 셈이고, 현장에서 더 흔한 것은
+     * 부분 장애다.
+     */
+    @Test
+    @DisplayName("성공_하나로는_안_지운다")
+    void 성공_하나로는_안_지운다() {
+        FailureAge age = new FailureAge();
+        age.stepAt(시작, 단위);
+
+        // 실패와 성공이 섞이는 구간을 그대로 만든다.
+        for (int i = 1; i <= 10; i++) {
+            age.cleared(시작.plusSeconds(i), 해제_유예);
+            age.stepAt(시작.plusSeconds(i), 단위);
+        }
+
+        assertThat(age.stepAt(시작.plusSeconds(10), 단위))
+                .as("실패가 이어지는 동안은 단계가 유지된다").isGreaterThan(1);
     }
 
     /**

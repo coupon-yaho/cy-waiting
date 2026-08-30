@@ -3,6 +3,8 @@ package com.kafkick.waiting.domain.queue;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.random.RandomGenerator;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -19,9 +21,9 @@ class ErrorBackoffTest {
     /** 기본 간격과 상한. 정책이 바뀌면 이 시험도 같이 움직인다. */
     private static final ErrorBackoff 정책 = ErrorBackoff.defaults();
 
-    /** 흔들림을 뺀 중앙값. 난수가 0.5 면 흔들림이 0 이다. */
-    private long 중앙값(int streak) {
-        return 정책.retryAfterSec(streak, () -> 0.5);
+    /** 흔들림을 뺀 바닥값. 위로만 흔들므로 난수 0 이 그 계단의 시작이다. */
+    private long 계단(int streak) {
+        return 정책.retryAfterSec(streak, () -> 0.0);
     }
 
     /**
@@ -41,10 +43,21 @@ class ErrorBackoffTest {
     @Test
     @DisplayName("난수가_양_끝이면_폭만큼_벌어진다")
     void 난수가_양_끝이면_폭만큼_벌어진다() {
-        long 아래 = 정책.retryAfterSec(1, () -> 0.0);
-        long 위 = 정책.retryAfterSec(1, () -> 1.0);
+        long 아래 = 정책.retryAfterSec(4, () -> 0.0);
+        long 위 = 정책.retryAfterSec(4, () -> 1.0);
 
         assertThat(위 - 아래).as("한 칸에 갇히면 흩어지지 않는다").isGreaterThanOrEqualTo(2);
+    }
+
+    /** 아래로는 안 흔든다. 흔들면 바닥보다 빨리 불러 폴링 예산이 깨진다. */
+    @Test
+    @DisplayName("바닥_아래로는_안_내려간다")
+    void 바닥_아래로는_안_내려간다() {
+        for (double r = 0; r <= 1; r += 0.05) {
+            double 난수 = r;
+            assertThat(정책.retryAfterSec(1, 30, () -> 난수))
+                    .as("난수 %.2f".formatted(난수)).isGreaterThanOrEqualTo(30);
+        }
     }
 
     /**
@@ -56,9 +69,9 @@ class ErrorBackoffTest {
     @Test
     @DisplayName("연속_실패에_백오프가_붙는다")
     void 연속_실패에_백오프가_붙는다() {
-        assertThat(중앙값(2)).isGreaterThan(중앙값(1));
-        assertThat(중앙값(3)).isGreaterThan(중앙값(2));
-        assertThat(중앙값(4)).isGreaterThan(중앙값(3));
+        assertThat(계단(2)).isGreaterThan(계단(1));
+        assertThat(계단(3)).isGreaterThan(계단(2));
+        assertThat(계단(4)).isGreaterThan(계단(3));
     }
 
     /**
@@ -70,18 +83,21 @@ class ErrorBackoffTest {
     @Test
     @DisplayName("백오프에_상한이_있다")
     void 백오프에_상한이_있다() {
-        assertThat(중앙값(50)).isEqualTo(ErrorBackoff.MAX_SEC);
-        assertThat(중앙값(Integer.MAX_VALUE)).isEqualTo(ErrorBackoff.MAX_SEC);
+        assertThat(정책.retryAfterSec(50, () -> 1.0)).isEqualTo(ErrorBackoff.MAX_SEC);
+        assertThat(정책.retryAfterSec(Integer.MAX_VALUE, () -> 1.0))
+                .isEqualTo(ErrorBackoff.MAX_SEC);
+        assertThat(계단(50)).as("계단의 시작은 상한 아래다")
+                .isLessThan(ErrorBackoff.MAX_SEC);
     }
 
     /** 첫 실패도 기본 간격을 받는다. 0 이나 음수가 와도 마찬가지다. */
     @Test
     @DisplayName("첫_실패는_기본_간격이다")
     void 첫_실패는_기본_간격이다() {
-        assertThat(중앙값(1)).isEqualTo(ErrorBackoff.BASE_SEC);
-        assertThat(중앙값(0)).as("아직 안 센 것도 첫 실패로 본다")
+        assertThat(계단(1)).isEqualTo(ErrorBackoff.BASE_SEC);
+        assertThat(계단(0)).as("아직 안 센 것도 첫 실패로 본다")
                 .isEqualTo(ErrorBackoff.BASE_SEC);
-        assertThat(중앙값(-5)).isEqualTo(ErrorBackoff.BASE_SEC);
+        assertThat(계단(-5)).isEqualTo(ErrorBackoff.BASE_SEC);
     }
 
     /** 0 초는 안 준다. 즉시 재시도는 흩어짐이 없다. */
@@ -108,8 +124,10 @@ class ErrorBackoffTest {
         double 제곱합 = 0;
         int 개수 = 10_000;
 
+        // **배선이 실제로 넘기는 바닥으로 잰다.** 바닥 없이 재면 프로덕션이 한
+        // 번도 안 내는 값의 분산을 재는 셈이다.
         for (int i = 0; i < 개수; i++) {
-            long v = 정책.retryAfterSec(1, 난수::nextDouble);
+            long v = 정책.retryAfterSec(1, 30, 난수::nextDouble);
             합 += v;
             제곱합 += (double) v * v;
         }
@@ -146,8 +164,8 @@ class ErrorBackoffTest {
     @Test
     @DisplayName("바닥보다_빨리_안_부른다")
     void 바닥보다_빨리_안_부른다() {
-        assertThat(정책.retryAfterSec(1, 45, () -> 0.5)).isEqualTo(45);
-        assertThat(정책.retryAfterSec(1, 0, () -> 0.5)).as("바닥이 없으면 기본 간격")
+        assertThat(정책.retryAfterSec(1, 45, () -> 0.0)).isEqualTo(45);
+        assertThat(정책.retryAfterSec(1, 0, () -> 0.0)).as("바닥이 없으면 기본 간격")
                 .isEqualTo(ErrorBackoff.BASE_SEC);
     }
 
@@ -155,6 +173,75 @@ class ErrorBackoffTest {
     @Test
     @DisplayName("바닥이_커도_상한을_안_넘는다")
     void 바닥이_커도_상한을_안_넘는다() {
-        assertThat(정책.retryAfterSec(1, 9_999, () -> 0.5)).isEqualTo(ErrorBackoff.MAX_SEC);
+        assertThat(정책.retryAfterSec(1, 9_999, () -> 0.0)).isEqualTo(ErrorBackoff.MAX_SEC);
+    }
+
+    /**
+     * <b>상한에서 흔들림이 무너지면 안 된다.</b>
+     *
+     * <p>흔든 뒤에 자르면 상한 위로 흩어진 값이 전부 상한 하나로 모인다. 그
+     * 지점이 바로 장애가 길어진 구간이라, 하필 F7 이 막으려던 파도가 거기서
+     * 그대로 다시 생긴다. {@code PollIntervalPolicy} 가 이미 푼 문제다.
+     */
+    @Test
+    @DisplayName("상한_구간에서도_흩어진다")
+    void 상한_구간에서도_흩어진다() {
+        RandomGenerator 난수 = RandomGenerator.of("L64X128MixRandom");
+        Map<Long, Integer> 분포 = new HashMap<>();
+        int 개수 = 100_000;
+
+        for (int i = 0; i < 개수; i++) {
+            분포.merge(정책.retryAfterSec(20, 난수::nextDouble), 1, Integer::sum);
+        }
+
+        int 최빈 = 분포.values().stream().mapToInt(Integer::intValue).max().orElseThrow();
+        assertThat((double) 최빈 / 개수).as("한 값에 몰리면 흩어진 것이 아니다")
+                .isLessThan(0.10);
+    }
+
+    /**
+     * <b>바닥이 상한 가까이 와도 안 몰린다.</b>
+     *
+     * <p>폴링 배수가 커진 구간이 곧 바닥이 높아지는 구간이고, 그때가 장애와
+     * 겹친다. 위 끝을 자르는 대신 폭을 줄여야 그 구간에서도 흩어진다.
+     */
+    @Test
+    @DisplayName("바닥이_높아도_흩어진다")
+    void 바닥이_높아도_흩어진다() {
+        RandomGenerator 난수 = RandomGenerator.of("L64X128MixRandom");
+        Map<Long, Integer> 분포 = new HashMap<>();
+        int 개수 = 100_000;
+
+        for (int i = 0; i < 개수; i++) {
+            분포.merge(정책.retryAfterSec(1, 45, 난수::nextDouble), 1, Integer::sum);
+        }
+
+        int 최빈 = 분포.values().stream().mapToInt(Integer::intValue).max().orElseThrow();
+        assertThat((double) 최빈 / 개수).isLessThan(0.10);
+    }
+
+    /**
+     * <b>배선이 실제로 그리는 곡선을 못 박는다.</b>
+     *
+     * <p>조회 경로는 폴링 예산이 정한 바닥 30초를 함께 넘긴다. 그래서 앞쪽
+     * 계단들은 바닥에 가려 안 보이고, 관측되는 상승은 바닥을 넘어선 뒤부터다.
+     * 이걸 안 적어 두면 "기본 2초에 배로 는다" 는 문서가 프로덕션에서 한 번도
+     * 안 일어나는 동작을 말하게 된다.
+     */
+    @Test
+    @DisplayName("바닥이_있으면_앞_계단은_안_보인다")
+    void 바닥이_있으면_앞_계단은_안_보인다() {
+        long 바닥 = 30;
+
+        for (int streak = 1; streak <= 4; streak++) {
+            assertThat(정책.retryAfterSec(streak, 바닥, () -> 0.0))
+                    .as("%d 번째 계단은 바닥에 가린다".formatted(streak)).isEqualTo(바닥);
+        }
+        assertThat(정책.retryAfterSec(5, 바닥, () -> 0.0))
+                .as("다섯째부터 바닥을 넘어선다").isGreaterThan(바닥);
+        // 천장이 있으므로 그 위로는 안 는다. 늘면 상한 위로 나가거나 상한 한
+        // 점에 몰린다.
+        assertThat(정책.retryAfterSec(20, 바닥, () -> 0.0))
+                .isEqualTo(정책.retryAfterSec(6, 바닥, () -> 0.0));
     }
 }

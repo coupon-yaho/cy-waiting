@@ -10,6 +10,7 @@ import com.kafkick.waiting.control.GatewaySnapshot;
 import com.kafkick.waiting.control.SnapshotHolder;
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.CouponStates;
+import com.kafkick.waiting.domain.queue.ErrorBackoff;
 import com.kafkick.waiting.domain.admission.AdmissionDecider;
 import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
@@ -29,6 +30,7 @@ import java.time.ZoneOffset;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.DoubleSupplier;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
@@ -673,6 +675,31 @@ class QueueStatusFilterTest {
     }
 
     /**
+     * <b>오류 경로의 폭이 실제로 넓다.</b>
+     *
+     * <p>상수 둘을 비교하는 것으로는 배선이 안 잠긴다. 난수를 양 끝으로 고정해
+     * 실제로 나가는 값의 폭을 재야, 오류 경로를 정상 경로 정책으로 되돌린 판이
+     * 빨개진다. 이 티켓의 존재 이유가 바로 그 폭이다.
+     */
+    @Test
+    @DisplayName("오류_경로의_폭이_정상_경로보다_넓다")
+    void 오류_경로의_폭이_정상_경로보다_넓다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100));
+        줄.터진다(new IllegalStateException("레디스가 죽었다"));
+
+        int 아래 = Integer.parseInt(물러날_초(필터(() -> 0.0)));
+        int 위 = Integer.parseInt(물러날_초(필터(() -> 1.0)));
+
+        // 바닥 30초에 폭 0.5 면 [30, 45] 다. 정상 경로 폭 0.2 였다면 [30, 36] 이라
+        // 이 차이가 못 나온다.
+        assertThat(위 - 아래).as("오류 경로의 폭").isGreaterThanOrEqualTo(10);
+    }
+
+    private QueueStatusFilter 필터(DoubleSupplier 난수) {
+        return QueueStatusFilter.of(holder, 줄, tokens, 흐름, meters, 난수, limiter, entryTokens);
+    }
+
+    /**
      * <b>장애가 이어지면 더 멀리 보낸다</b> (F7 · 8.2.5).
      *
      * <p>같은 간격으로 계속 두드리면 그 요청들이 회복하려는 뒷단의 자리를 계속
@@ -696,10 +723,15 @@ class QueueStatusFilterTest {
                 .isGreaterThan(Integer.parseInt(첫_실패));
     }
 
-    /** 한 번이라도 답하면 처음으로 돌아간다. 안 그러면 회복한 뒤에도 멀리 보낸다. */
+    /**
+     * <b>조용해지면 백오프가 풀린다.</b>
+     *
+     * <p>한 번 답한 것만으로는 안 푼다. 샤드 하나가 죽으면 일부만 실패하는데,
+     * 성공마다 풀면 그 사이에 성공이 끼어 백오프가 영원히 안 걸린다.
+     */
     @Test
-    @DisplayName("한_번_답하면_백오프가_풀린다")
-    void 한_번_답하면_백오프가_풀린다() {
+    @DisplayName("조용해지면_백오프가_풀린다")
+    void 조용해지면_백오프가_풀린다() {
         스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100));
         QueueStatusFilter 흐르는_시계 = QueueStatusFilter.of(holder, 줄, tokens,
                 흐름, meters, () -> 0.5, limiter, entryTokens);
@@ -709,8 +741,10 @@ class QueueStatusFilterTest {
         String 장애_중 = 물러날_초(흐르는_시계);
 
         줄.나았다();
-        줄.enqueue(COUPON, MEMBER, NO_LIMIT, 지금).block();
-        토큰으로_조회한다(흐르는_시계, tokens.issue(COUPON, MEMBER, 지금));
+        줄.enqueue(COUPON, MEMBER, NO_LIMIT, 흐르는_지금.get()).block();
+        // **유예가 지나야 푼다.** 답한 직후에 풀면 부분 장애에서 안 걸린다.
+        시계를_민다(ErrorBackoff.quiet());
+        토큰으로_조회한다(흐르는_시계, tokens.issue(COUPON, MEMBER, 흐르는_지금.get()));
         줄.터진다(new IllegalStateException("다시 죽었다"));
 
         assertThat(Integer.parseInt(물러날_초(흐르는_시계)))
@@ -733,9 +767,13 @@ class QueueStatusFilterTest {
 
         assertThat(exchange.getResponse().getStatusCode())
                 .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
-        assertThat(exchange.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER))
-                .as("ETA 를 모르는 밴드(30초)에 배수 1.5 — 천장 아래라 값이 보인다")
-                .isEqualTo("45");
+        // 바닥은 ETA 를 모르는 밴드(30초)에 배수 1.5 를 건 45 초다. 오류 경로는
+        // 거기서 위로만 흔들므로 [45, 60] 안이다. 아래로 흔들면 하필 배수가
+        // 커진 구간에만 예산이 안 걸린다.
+        assertThat(Integer.parseInt(
+                exchange.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER)))
+                .as("배수가 정한 바닥을 지킨다")
+                .isBetween(45, (int) ErrorBackoff.MAX_SEC);
     }
 
     @Test

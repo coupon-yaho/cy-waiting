@@ -68,23 +68,31 @@ if not targets:
     sys.exit(1)
 
 
-def walk(node, out, in_steps=False):
-    """스텝의 `uses` 만 모은다. 위치를 알아야 그 줄에서 주석을 읽을 수 있다.
+def walk(node, out, in_steps=False, in_jobs=False):
+    """스텝과 잡의 `uses` 를 모은다. 위치를 알아야 그 줄에서 주석을 읽을 수 있다.
 
     **이름이 `uses` 인 것을 다 모으면 안 된다.** composite action 의 `inputs`
     아래에 그 이름의 입력을 둘 수 있고, 그건 액션 참조가 아니라 값이다.
+
+    **재사용 워크플로 호출은 `jobs.<id>.uses` 라 `steps` 아래가 아니다.** 스텝만
+    보면 그 줄이 통째로 검사 밖이고, 거기에 `secrets: inherit` 를 붙이면 저장소
+    시크릿이 남의 저장소가 정하는 코드로 넘어간다.
     """
     if isinstance(node, yaml.MappingNode):
         for key, value in node.value:
             name = getattr(key, 'value', None)
-            if in_steps and name == 'uses' and isinstance(value, yaml.ScalarNode):
+            if (in_steps or in_jobs) and name == 'uses' \
+                    and isinstance(value, yaml.ScalarNode):
                 out.append((value.start_mark.line, value.value))
             # `steps` 아래의 항목만 스텝이다. `inputs`·`outputs` 로 내려가면 끈다.
-            walk(value, out, name == 'steps' or (in_steps and name not in
-                                                 ('inputs', 'outputs', 'env', 'with')))
+            walk(value, out,
+                 name == 'steps' or (in_steps and name not in
+                                     ('inputs', 'outputs', 'env', 'with')),
+                 name == 'jobs' or (in_jobs and name not in
+                                    ('steps', 'with', 'env', 'secrets')))
     elif isinstance(node, yaml.SequenceNode):
         for child in node.value:
-            walk(child, out, in_steps)
+            walk(child, out, in_steps, in_jobs)
 
 
 found = []

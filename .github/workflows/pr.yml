@@ -78,8 +78,14 @@ jobs:
           # **게이트를 적은 계획서는 예외다.** 그 문서를 읽어 게이트와 시험이
           # 이어져 있는지 보는 시험이 있는데, 문서라고 건너뛰면 게이트를 지우는
           # PR 에서 정확히 그 시험이 안 돈다 — 막으려던 것을 그 PR 이 한다.
+          #
+          # **빌드 배선도 예외다.** 액션 판올림은 `.github/` 만 건드려서 빌드가
+          # 통째로 건너뛰어졌다. 그래서 메이저 버전이 한 번도 안 돌아 본 채
+          # 머지되고, 처음 실행되는 곳은 다음 사람의 코드 PR 이다 — 그 사람이
+          # 남의 판올림을 디버깅한다. 빌드를 바꾸면 빌드로 검증한다.
           if grep -qvE '^(plan|ai|\.claude|\.github)/|^[A-Z]+\.md$|^\.(coderabbit\.yaml|gitignore|gitattributes)$' <<<"$changed" \
-              || grep -qE '^plan/0[456]-' <<<"$changed"; then
+              || grep -qE '^plan/0[456]-' <<<"$changed" \
+              || grep -qE '^\.github/(actions/|workflows/_(build|test)\.yml$)' <<<"$changed"; then
             echo "code=true" >> "$GITHUB_OUTPUT"
           else
             echo "code=false" >> "$GITHUB_OUTPUT"

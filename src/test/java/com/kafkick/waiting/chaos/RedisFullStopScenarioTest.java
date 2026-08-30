@@ -58,6 +58,9 @@ class RedisFullStopScenarioTest {
     /** 회복까지 걸린 시간. 시나리오 안에서 재고 판정에 넘긴다. */
     private Duration 회복까지_걸린_시간;
 
+    /** 회복 순간에 시험이 보낸 수. 그 구간 도착과의 비가 증폭률이다. */
+    private long 회복_순간_보낸_수;
+
     /** 장애 구간에 줄을 쳤을 때의 상태. 레디스가 정말 죽었는지의 증거다. */
     private int 줄을_친_결과;
 
@@ -96,7 +99,15 @@ class RedisFullStopScenarioTest {
     /** 장애 구간에 보내는 요청 수. 예산 안이라 통과가 곧 정상이다. */
     private static final int 장애중_보낼_수 = 20;
 
-    private static final int 보낼_수 = 5;
+    /**
+     * 정상 구간과 버스트 창의 표본 수. <b>해상도가 곧 한계다</b> — 5 건이면
+     * 비율이 0.2 단위로 양자화돼 실효 임계가 1.4 배가 된다. 계획서가 요구하는
+     * 1.2 배를 재려면 도착 수 기준으로 이만큼이 필요하다.
+     */
+    private static final int 보낼_수 = 30;
+
+    /** 회복을 기다리는 한 판. 이 구간은 표본에서 빠지므로 작게 둔다. */
+    private static final int 대기_한_판 = 5;
 
     /** 재고. 이 시나리오가 보내는 전체보다 커야 미달이 위반으로 안 읽힌다. */
     private static final long 재고 = 1_000;
@@ -227,6 +238,79 @@ class RedisFullStopScenarioTest {
         return 본_것;
     }
 
+    /**
+     * <b>판정이 살아 있는지를 시험이 스스로 확인한다.</b>
+     *
+     */
+    // RC4 는 창을 어디에 두느냐로 통째로 죽을 수 있고, 죽어도 시나리오는
+    // 초록이다. 실제로 한 번 그렇게 죽었다 — 회복 순간을 표본에서 빼자 뒷단
+    // 유입이 21 배로 튀는 판이 통과했다. 통과가 근거가 못 되는 자리라서,
+    // 몰아침을 직접 흉내 내 판정이 반응하는지 본다.
+    //
+    // 대조군을 같이 둔다. 빨개지는 것만 보면 항상 빨간 판정도 통과한다.
+    @Test
+    @DisplayName("회복_순간의_몰아침을_판정이_잡는다")
+    void 회복_순간의_몰아침을_판정이_잡는다() {
+        long 보낸_수 = 장애중_보낼_수 + 대기_한_판;
+
+        assertThat(회복_유입을_판정한다(유입을_흉내낸다(보낸_수), 보낸_수))
+                .as("대조군 — 도착이 보낸 수만큼이면 증폭이 아니다")
+                .isEmpty();
+
+        assertThat(회복_유입을_판정한다(유입을_흉내낸다(보낸_수 * 20), 보낸_수))
+                .as("회복 순간에 20 배가 몰아쳤다")
+                .anySatisfy(깨진_것 -> assertThat(깨진_것).contains("RC4"));
+    }
+
+    /**
+     * 시나리오와 같은 순서로 표집한 기록기를 만든다.
+     *
+     * @param 회복_순간_도착 회복을 기다리는 구간에 뒷단이 받은 수
+     */
+    private static BackendRpsRecorder 유입을_흉내낸다(long 회복_순간_도착) {
+        AtomicLong 뒷단 = new AtomicLong();
+        BackendRpsRecorder 유입 = new BackendRpsRecorder(뒷단::get);
+        유입.sample(지금);
+        뒷단.addAndGet(보낼_수);
+        유입.sample(지금.plusSeconds(1));
+        뒷단.addAndGet(회복_순간_도착);
+        유입.sample(지금.plusSeconds(2));
+        뒷단.addAndGet(보낼_수);
+        유입.sample(지금.plusSeconds(3));
+        return 유입;
+    }
+
+    /**
+     * <b>RC4 의 창 배치를 한 자리에 모은다.</b>
+     *
+     * <p>회복 순간과 확인 뒤는 서로 다른 창이고, 어느 창을 어디에 두는지가 이
+     * 판정의 전부다. 시나리오 본문에 흩어 놓으면 창이 조용히 어긋나도 아무도
+     * 모른다 — {@link #회복_순간의_몰아침을_판정이_잡는다()} 가 이 함수를 그대로
+     * 불러 살아 있는지 확인한다.
+     *
+     * @param 보낸_수 회복을 기다리는 동안 시험이 보낸 요청 수
+     */
+    private static List<String> 회복_유입을_판정한다(BackendRpsRecorder 유입, long 보낸_수) {
+        return RecoveryCriteria.violations(
+                // **차분은 표집 시각이 아니라 그것이 온 초에 쌓인다.**
+                // 표집과 표집 사이에 온 것이므로 앞 초의 몫이다.
+                RecoveryCriteria.recoveryBurst(
+                        유입.averageRps(지금, 지금.plusSeconds(1)),
+                        유입.peakRps(지금.plusSeconds(2), 지금.plusSeconds(3))),
+                // **회복 순간의 몰아침.** 위 창은 회복이 확인된 뒤만 보므로
+                // 이것 없이는 돌아온 순간의 봉우리를 아무도 안 읽는다.
+                RecoveryCriteria.amplified(보낸_수,
+                        유입.peakRps(지금.plusSeconds(1), 지금.plusSeconds(2))));
+    }
+
+    @SafeVarargs
+    private static List<String> 회복을_판정한다(BackendRpsRecorder 유입, long 보낸_수,
+            Optional<String>... 판정) {
+        List<String> 깨진_것 = new ArrayList<>(RecoveryCriteria.violations(판정));
+        깨진_것.addAll(회복_유입을_판정한다(유입, 보낸_수));
+        return 깨진_것;
+    }
+
     /** 줄을 치는 요청. 레디스가 죽어 있으면 5xx 가 온다. */
     private int 순번을_묻는다(int member) {
         return 클라이언트().get()
@@ -261,6 +345,7 @@ class RedisFullStopScenarioTest {
         List<Integer> 정상_상태 = new ArrayList<>();
         List<Integer> 장애중_상태 = new ArrayList<>();
         List<Integer> 회복_상태 = new ArrayList<>();
+        List<Integer> 확인_뒤_상태 = new ArrayList<>();
 
         ChaosScenario.named("C1 Redis 완전 정지")
                 .baseline(() -> {
@@ -290,12 +375,20 @@ class RedisFullStopScenarioTest {
                     // 것은 "즉시" 가 아니라 "한계 안에" 다.
                     회복까지_걸린_시간 = 판정이_돌아올_때까지_기다린다(회복_상태, 벽시계);
                     회복_뒤_자리 = 자리들();
-                    // **버스트는 회복을 확인한 뒤에 잰다.** 대기 루프가 보낸
-                    // 요청까지 세면, 회복이 늦을수록 시험이 더 많이 보내므로
-                    // 버스트가 커진다 — 재는 도구가 재는 대상을 오염시킨다.
-                    // 정상 구간과 같은 수만 보내고 그 창에서 봉우리를 본다.
+
+                    // **회복 순간은 창으로 못 자른다.** 몰아침은 정의상 레디스가
+                    // 돌아온 그 순간의 봉우리인데, 그 순간까지 걸리는 시간은
+                    // 판마다 다르다. 창을 그 순간에 맞추면 대기 루프가 보낸
+                    // 요청까지 세고, 창을 뒤로 밀면 몰아침이 통째로 표본 밖으로
+                    // 나간다. 그래서 창 대신 **보낸 수로 나눈다** — 대기 길이가
+                    // 상쇄되고, 게이트웨이가 스스로 만든 유입만 남는다.
                     유입.sample(지금.plusSeconds(2));
-                    여러_번_시도한다(보낼_수, 5_000);
+                    회복_순간_보낸_수 = 장애중_보낼_수 + 회복_상태.size();
+
+                    // 확인된 뒤의 정상 창. 회복이 한 번 돌아왔다가 다시 무너지는
+                    // 회귀는 여기서만 보인다 — 응답도 판정에 넣는다.
+                    확인_뒤_상태.addAll(여러_번_시도한다(보낼_수, 5_000));
+                    회복_상태.addAll(확인_뒤_상태);
                     유입.sample(지금.plusSeconds(3));
                 })
                 // **진입 판정은 주입 직후, 유지 구간이 시작되기 전이다.**
@@ -308,7 +401,7 @@ class RedisFullStopScenarioTest {
                 // 전원이 202 로 끝나 RC4 를 못 잰다 — 재료가 둘 필요하다.
                 .assertDuring(() -> RecoveryCriteria.violations(
                         오백이_안_샌다(장애중_상태), 레디스가_정말_죽었다()))
-                .assertRecovery(() -> RecoveryCriteria.violations(
+                .assertRecovery(() -> 회복을_판정한다(유입, 회복_순간_보낸_수,
                         RecoveryCriteria.slowVerdictReturn(회복까지_걸린_시간, 회복_한계),
                         // RC1 — 뒷단이 받은 수가 재고를 안 넘는다. 이 시나리오는
                         // 발급만 때리므로 수신 수가 곧 발급 시도다.
@@ -316,11 +409,6 @@ class RedisFullStopScenarioTest {
                         // RC6 — 회복 뒤 유입이 정상 수준으로 돌아온다.
                         RecoveryCriteria.notConverged("판정 통과 비율",
                                 통과_비율(정상_상태), 통과_비율(회복_상태)),
-                        // **차분은 표집 시각이 아니라 그것이 온 초에 쌓인다.**
-                        // 표집과 표집 사이에 온 것이므로 앞 초의 몫이다.
-                        RecoveryCriteria.recoveryBurst(
-                                유입.averageRps(지금, 지금.plusSeconds(1)),
-                                유입.peakRps(지금.plusSeconds(2), 지금.plusSeconds(3))),
                         // **RC5 는 여기서 못 잰다** (CY-809). 픽스처가
                         // `--appendonly no` 로 띄우므로 컨테이너를 끊었다 붙이면
                         // 줄이 통째로 사라진다. 계획서가 요구하는 "큐 순번 전원
@@ -328,13 +416,21 @@ class RedisFullStopScenarioTest {
                         //
                         // 대신 **줄이 정말 사라졌는지**를 못 박는다. 나중에
                         // 영속성을 켜면 이 단언이 빨개져 그때 RC5 로 바꾼다.
+                        //
+                        // **RC2 도 같은 이유로 없다.** 순번 역행은 회복 전후의
+                        // 순번을 이어 봐야 하는데, 줄이 통째로 사라지므로 비교할
+                        // 뒤쪽이 없다. 빠뜨린 것이 아니라 못 재는 것이고, 위
+                        // 단언이 빨개지는 날 RC5 와 함께 들어온다.
                         줄이_영속성_없이_사라졌다()))
                 .run();
 
-        assertThat(회복_상태).as("회복 뒤에는 5xx 없이 답한다")
+        // **확인 뒤의 배치만 본다.** 대기 루프의 응답에는 5xx 가 섞여 있는 것이
+        // 정상이고, 그 마지막 원소는 루프의 종료 조건이라 정의상 500 미만이다 —
+        // 거기 단언을 걸면 항진명제다. 회복이 돌아왔다가 다시 무너지는 회귀는
+        // 확인 뒤에 보낸 이 배치에서만 보인다.
+        assertThat(확인_뒤_상태).as("회복이 확인된 뒤에는 5xx 가 없다")
                 .isNotEmpty()
-                .last(org.assertj.core.api.InstanceOfAssertFactories.INTEGER)
-                .isLessThan(500);
+                .noneMatch(status -> status >= 500);
     }
 
     /**
@@ -399,7 +495,10 @@ class RedisFullStopScenarioTest {
     private Duration 판정이_돌아올_때까지_기다린다(List<Integer> 회복_상태, Supplier<Instant> 지금) {
         Instant 시작 = 지금.get();
         while (Duration.between(시작, 지금.get()).compareTo(회복_한계) < 0) {
-            List<Integer> 한_판 = 여러_번_시도한다(보낼_수, 3_000 + 회복_상태.size());
+            List<Integer> 한_판 = 여러_번_시도한다(대기_한_판, 3_000 + 회복_상태.size());
+            // **순서가 중요하다.** 줄 조회 상태는 이 뒤에 붙으므로 `회복_상태`
+            // 에 안 들어간다 — RC6 이 정상 구간(발급만)과 같은 재료끼리 비교하게
+            // 하려는 것이다. 두 줄을 바꾸면 정상값과 회복값의 재료가 조용히 갈린다.
             회복_상태.addAll(한_판);
             // **줄을 치는 경로까지 돌아와야 회복이다.** 발급 경로는 레디스를
             // 안 치므로 죽은 채로도 통과한다 — 그것만 보면 복구를 안 해도

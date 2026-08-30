@@ -106,9 +106,42 @@ public final class RecoveryCriteria {
         if (!Double.isFinite(peakRps) || peakRps < 0) {
             return Optional.of("RC4 회복 구간 RPS 를 못 쟀다: %s".formatted(peakRps));
         }
+        // **0 은 버스트가 없는 것이 아니라 뒷단이 하나도 못 받은 것이다.**
+        // 나눗셈만 두면 0 이 가장 조용히 통과한다 — 아직 안 돌아온 판이
+        // 가장 잘 돌아온 판으로 읽힌다.
+        if (peakRps == 0) {
+            return Optional.of("RC4 회복 구간에 뒷단이 하나도 안 받았다");
+        }
         double ratio = peakRps / baselineRps;
         return ratio <= BURST_LIMIT ? Optional.empty()
                 : Optional.of("RC4 회복 버스트 %.2f 배 (한계 %.1f)".formatted(ratio, BURST_LIMIT));
+    }
+
+    /**
+     * RC4 — <b>뒷단 도착이 클라이언트가 보낸 수를 넘으면 게이트웨이가 스스로
+     * 만든 유입이다.</b>
+     *
+     * @param sent    시험이 그 구간에 보낸 요청 수
+     * @param arrived 같은 구간에 뒷단이 받은 수
+     */
+    // **고정 창의 봉우리로는 회복 몰아침을 못 잡는다.** 몰아침은 정의상 회복
+    // 순간의 일시적 봉우리인데, 그 순간까지 기다리는 데 걸린 시간은 판마다
+    // 다르다. 창을 그 순간에 맞추면 대기 루프가 보낸 요청까지 세고, 창을 뒤로
+    // 밀면 몰아침이 통째로 표본 밖으로 나간다. 어느 쪽도 안 맞다.
+    //
+    // 보낸 수로 나누면 대기 길이가 상쇄된다. 창을 옮길 필요가 없고, 재는 도구가
+    // 재는 대상을 밀어 올리지도 않는다.
+    public static Optional<String> amplified(long sent, long arrived) {
+        if (sent <= 0) {
+            return Optional.of("RC4 보낸 수를 못 쟀다 — 증폭을 판정할 수 없다");
+        }
+        if (arrived < 0) {
+            return Optional.of("RC4 뒷단 도착 수를 못 쟀다: %d".formatted(arrived));
+        }
+        double ratio = (double) arrived / sent;
+        return ratio <= BURST_LIMIT ? Optional.empty()
+                : Optional.of("RC4 회복 증폭 %.2f 배 — 보낸 %d, 도착 %d (한계 %.1f)"
+                        .formatted(ratio, sent, arrived, BURST_LIMIT));
     }
 
     /**

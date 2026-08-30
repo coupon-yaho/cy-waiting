@@ -23,6 +23,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -30,6 +31,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.springframework.http.HttpStatus;
+import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.reactive.server.WebTestClient;
@@ -52,16 +54,30 @@ class RedisLatencyScenarioTest {
     private static final Instant 지금 = Instant.parse("2026-08-31T00:00:00Z");
     private static final String COUPON = "c1";
 
-    /** 주입할 지연. 판정이 레디스를 치면 이만큼 그대로 느려진다. */
-    private static final Duration 지연 = Duration.ofMillis(500);
+    /** 레디스 명령 상한. 이 위로 넣으면 지연이 아니라 정지가 된다. */
+    private static final Duration 명령_상한 = Duration.ofMillis(500);
 
     /**
-     * 허용 배수. 지연을 500ms 넣었는데 판정이 그 절반만큼도 안 느려지면,
-     * 그 경로가 레디스를 안 친다는 뜻이다.
+     * 주입할 지연. <b>상한의 0.6 배다.</b>
+     *
+     * <p>상한과 같은 값을 넣으면 러너가 조금만 느려져도 전건 타임아웃으로
+     * 뒤집혀, 지연 시나리오가 말없이 정지 시나리오가 된다. 실측으로 520ms
+     * 에서 이미 같은 배치 안에서 성공과 타임아웃이 갈렸다.
      */
-    private static final double 허용_배수 = 3.0;
+    private static final Duration 지연 = Duration.ofMillis(300);
 
-    private static final int 보낼_수 = 10;
+    /**
+     * 판정이 늦어져도 되는 폭. <b>주입량에 묶는다.</b>
+     *
+     * <p>정상 대비 배수로 두면 문턱이 장비 소음 대역(수 ms)에 들어앉아, 잡아야
+     * 할 신호(수백 ms)와 무관해진다.
+     */
+    private static final Duration 허용_증가 = 지연.dividedBy(2);
+
+    /** 버리는 워밍업 라운드. 첫 요청은 커넥션 수립과 JIT 을 같이 먹는다. */
+    private static final int 워밍업 = 5;
+
+    private static final int 보낼_수 = 15;
 
     private static final AtomicLong 뒷단이_받은_수 = new AtomicLong();
 
@@ -115,6 +131,10 @@ class RedisLatencyScenarioTest {
     @LocalServerPort
     private int port;
 
+    /** 카나리를 치는 자리. 앱과 같은 프록시를 지난다. */
+    @Autowired
+    private ReactiveStringRedisTemplate redis;
+
     private WebTestClient 클라이언트() {
         return WebTestClient.bindToServer()
                 .baseUrl("http://localhost:" + port)
@@ -123,30 +143,59 @@ class RedisLatencyScenarioTest {
     }
 
     /**
-     * 발급 한 번의 걸린 시간(ms). 판정 경로의 지연을 여기서 잰다.
+     * 발급 한 번의 걸린 시간(ms). <b>상태가 200 이 아니면 안 센다.</b>
      *
-     * <p><b>여기서는 실시계를 쓴다.</b> 재려는 것이 시각이 아니라 경과이고,
-     * 그것이 이 시나리오의 관측 대상이다. 판정이 보는 시계는 여전히 고정이다.
+     * <p>거절은 뒷단 홉을 건너뛰어 정상보다 빠르다. 상태를 안 보면 전 요청을
+     * 거절하는 판이 "안 느려졌다" 로 기록된다.
      */
+    // 여기서는 실시계를 쓴다. 재려는 것이 시각이 아니라 경과이고, 그것이 이
+    // 시나리오의 관측 대상이다. 판정이 보는 시계는 여전히 고정이다.
     private long 발급_지연(int member) {
         long 시작 = System.nanoTime();
-        클라이언트().post()
+        int 상태 = 클라이언트().post()
                 .uri("/api/v1/coupons/" + COUPON + "/issue")
                 .header("X-Member-Id", String.valueOf(member))
                 .header("X-Member-Grade", "GOLD")
                 .exchange()
-                .returnResult(Void.class);
-        return Duration.ofNanos(System.nanoTime() - 시작).toMillis();
+                .returnResult(Void.class)
+                .getStatus()
+                .value();
+        long 걸린_시간 = Duration.ofNanos(System.nanoTime() - 시작).toMillis();
+        if (상태 != 200) {
+            throw new IllegalStateException(
+                    "발급이 %d 로 끝났다 — 지연을 잴 수 없다".formatted(상태));
+        }
+        return 걸린_시간;
     }
 
-    /** 여러 번 재서 중앙값을 낸다. 한 번은 JIT 과 커넥션 수립에 흔들린다. */
-    private long 중앙값_지연(int 시작_회원) {
-        List<Long> 잰_것 = new ArrayList<>();
-        for (int i = 0; i < 보낼_수; i++) {
-            잰_것.add(발급_지연(시작_회원 + i));
+    /**
+     * <b>꼬리로 판정한다.</b>
+     *
+     * <p>중앙값은 소수 요청만 레디스를 치는 결함에 눈이 먼다. 모르는 자리에서
+     * 새로 치기 시작하는 형태는 본질적으로 소수 요청이다.
+     */
+    private long 최대_지연(int 시작_회원) {
+        // 워밍업은 버린다. 콜드 표본이 분모를 키워 문턱을 관대하게 만든다.
+        for (int i = 0; i < 워밍업; i++) {
+            발급_지연(시작_회원 + i);
         }
-        잰_것.sort(Long::compare);
-        return 잰_것.get(잰_것.size() / 2);
+        long 최대 = 0;
+        for (int i = 0; i < 보낼_수; i++) {
+            최대 = Math.max(최대, 발급_지연(시작_회원 + 워밍업 + i));
+        }
+        return 최대;
+    }
+
+    /**
+     * 같은 프록시를 지나는 카나리. <b>주입이 정말 걸렸는지를 여기서 본다.</b>
+     *
+     * <p>이것이 없으면 "판정이 레디스를 안 친다" 와 "주입이 안 걸렸다" 를 영영
+     * 못 가린다. 둘 다 발급 지연이 안 변한 그림으로 나온다.
+     */
+    private long 카나리_지연() {
+        long 시작 = System.nanoTime();
+        redis.opsForValue().get("chaos:canary").block(명령_상한.multipliedBy(4));
+        return Duration.ofNanos(System.nanoTime() - 시작).toMillis();
     }
 
     /**
@@ -161,19 +210,49 @@ class RedisLatencyScenarioTest {
         long[] 정상 = new long[1];
         long[] 장애중 = new long[1];
         long[] 회복 = new long[1];
+        long[] 카나리 = new long[3];
+        BackendRpsRecorder 유입 = new BackendRpsRecorder(뒷단이_받은_수::get);
 
         ChaosScenario.named("C2 Redis 지연 %s".formatted(지연))
-                .baseline(() -> 정상[0] = 중앙값_지연(1_000))
+                .baseline(() -> {
+                    유입.sample(지금);
+                    카나리[0] = 카나리_지연();
+                    정상[0] = 최대_지연(1_000);
+                    유입.sample(지금.plusSeconds(1));
+                })
                 .inject(() -> 지연을_넣는다(지연))
-                .duringFault(() -> 장애중[0] = 중앙값_지연(2_000))
+                .duringFault(() -> {
+                    // **주입이 걸렸는지 먼저 본다.** 이것이 안 느려졌으면 뒤의
+                    // 모든 판정이 아무것도 안 잰 것이다.
+                    카나리[1] = 카나리_지연();
+                    장애중[0] = 최대_지연(2_000);
+                })
                 .recover(this::지연을_걷는다)
-                .afterRecovery(() -> 회복[0] = 중앙값_지연(3_000))
+                .afterRecovery(() -> {
+                    유입.sample(지금.plusSeconds(2));
+                    // **지연이 걷혔는지도 카나리로 본다.** 발급 경로는 레디스를
+                    // 안 치므로 안 걷혀도 안 느려진다 — 그것만 보면 복구를 안
+                    // 해도 회복으로 읽힌다.
+                    카나리[2] = 카나리_지연();
+                    회복[0] = 최대_지연(3_000);
+                    유입.sample(지금.plusSeconds(3));
+                })
                 .assertEntry(ChaosScenario.Verdict.none())
-                .assertDuring(() -> RecoveryCriteria.violations(판정이_안_느려졌다(정상[0], 장애중[0])))
-                .assertRecovery(() -> RecoveryCriteria.violations(판정이_안_느려졌다(정상[0], 회복[0])))
+                .assertDuring(() -> RecoveryCriteria.violations(
+                        주입이_걸렸다(카나리[0], 카나리[1]),
+                        판정이_안_느려졌다("장애 중", 정상[0], 장애중[0])))
+                .assertRecovery(() -> RecoveryCriteria.violations(
+                        지연이_걷혔다(카나리[0], 카나리[2]),
+                        판정이_안_느려졌다("회복 뒤", 정상[0], 회복[0]),
+                        // RC4 — 눌린 것이 같은 초에 방출되면 회복이 곧 2차 장애다.
+                        // 재료를 모아 놓고 안 읽으면 그 자리가 비어 있는 것이다.
+                        RecoveryCriteria.recoveryBurst(
+                                유입.averageRps(지금, 지금.plusSeconds(1)),
+                                유입.peakRps(지금.plusSeconds(2), 지금.plusSeconds(3)))))
                 .run();
 
-        assertThat(장애중[0]).as("전제 — 장애 구간을 실제로 쟀다").isNotNegative();
+        assertThat(카나리[1]).as("전제 — 주입이 실제로 걸렸다")
+                .isGreaterThanOrEqualTo(지연.dividedBy(2).toMillis());
     }
 
     private void 지연을_넣는다(Duration 만큼) {
@@ -193,18 +272,41 @@ class RedisLatencyScenarioTest {
     }
 
     /**
-     * 판정 지연이 정상의 허용 배수를 안 넘는지 본다.
+     * 주입이 실제로 걸렸는가.
      *
-     * <p>정상을 못 쟀으면 통과가 아니다 — 비교 대상이 없으면 이 기준은 아무것도
-     * 안 재는 것이다.
+     * <p>이것이 없으면 "판정이 레디스를 안 친다" 와 "주입이 안 걸렸다" 를 영영
+     * 못 가린다. 둘 다 발급 지연이 안 변한 그림으로 나온다.
      */
-    private Optional<String> 판정이_안_느려졌다(long 정상, long 지금_지연) {
-        if (정상 <= 0) {
-            return Optional.of("정상 구간 지연을 못 쟀다 — 비교할 것이 없다");
-        }
-        double 배수 = (double) 지금_지연 / 정상;
-        return 배수 <= 허용_배수 ? Optional.empty()
-                : Optional.of("판정이 %.1f 배 느려졌다 (%dms → %dms) — 통과 경로가 레디스를 친다"
-                        .formatted(배수, 정상, 지금_지연));
+    private Optional<String> 주입이_걸렸다(long 정상_카나리, long 장애중_카나리) {
+        long 늘어난_것 = 장애중_카나리 - 정상_카나리;
+        return 늘어난_것 >= 허용_증가.toMillis() ? Optional.empty()
+                : Optional.of("카나리가 %dms 밖에 안 느려졌다 (%dms → %dms) — 주입이 안 걸렸다"
+                        .formatted(늘어난_것, 정상_카나리, 장애중_카나리));
+    }
+
+    /**
+     * 지연이 실제로 걷혔는가.
+     *
+     * <p>발급 경로는 레디스를 안 치므로 안 걷혀도 안 느려진다. 그것만 보면
+     * 복구를 안 해도 회복으로 읽힌다.
+     */
+    private Optional<String> 지연이_걷혔다(long 정상_카나리, long 회복_카나리) {
+        long 남은_것 = 회복_카나리 - 정상_카나리;
+        return 남은_것 <= 허용_증가.toMillis() ? Optional.empty()
+                : Optional.of("카나리가 아직 %dms 느리다 (%dms → %dms) — 지연이 안 걷혔다"
+                        .formatted(남은_것, 정상_카나리, 회복_카나리));
+    }
+
+    /**
+     * 판정 지연의 증가가 주입량의 절반을 안 넘는지 본다.
+     *
+     * <p>배수가 아니라 절대 증가분이다. 배수로 두면 문턱이 장비 소음 대역에
+     * 들어앉아 잡아야 할 신호와 무관해진다.
+     */
+    private Optional<String> 판정이_안_느려졌다(String 구간, long 정상, long 지금_지연) {
+        long 늘어난_것 = 지금_지연 - 정상;
+        return 늘어난_것 <= 허용_증가.toMillis() ? Optional.empty()
+                : Optional.of("%s 판정이 %dms 느려졌다 (%dms → %dms) — 통과 경로가 레디스를 친다"
+                        .formatted(구간, 늘어난_것, 정상, 지금_지연));
     }
 }

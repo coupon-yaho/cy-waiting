@@ -52,7 +52,7 @@ public final class QueueStatusFilter implements WebFilter {
     private static final String METRIC = "waiting.queue.status";
 
     /** 폴링 간격의 흔들림. 같은 밴드가 한꺼번에 두드리지 않게 한다. */
-    private static final PollIntervalPolicy POLL = PollIntervalPolicy.of(0.2);
+    private static final PollIntervalPolicy POLL = PollIntervalPolicy.of(PollIntervalPolicy.NORMAL_JITTER_RATIO);
 
     /** 조회 예산의 키. <b>판정과 나눈다</b> — 폴링이 발급 예산을 갉아먹으면 안 된다. */
     private static final String POLL_KEY = "poll:";

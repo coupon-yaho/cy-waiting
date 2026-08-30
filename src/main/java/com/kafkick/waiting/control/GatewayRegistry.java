@@ -4,6 +4,8 @@ import com.kafkick.waiting.domain.admission.CircuitState;
 
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * 배분의 분모가 되는 <b>게이트웨이 수</b>를 들고 있다.
@@ -15,6 +17,8 @@ import java.util.concurrent.atomic.AtomicReference;
  * 판정한다. 여기서 또 재면 임계도 시계도 둘이 된다.
  */
 public final class GatewayRegistry {
+
+    private static final Logger log = LoggerFactory.getLogger(GatewayRegistry.class);
 
     /**
      * 분모와 연속 감소 횟수. <b>한 덩어리로 바꾼다.</b>
@@ -80,7 +84,8 @@ public final class GatewayRegistry {
      */
     public void circuitObserved(int alive, int open, int halfOpen) {
         circuitMisses.set(0);
-        apply(ClusterCircuit.of(alive, open, halfOpen));
+        apply(ClusterCircuit.of(alive, open, halfOpen),
+                "클러스터 %d대 중 열림 %d 반쯤열림 %d".formatted(alive, open, halfOpen));
     }
 
     /**
@@ -93,19 +98,38 @@ public final class GatewayRegistry {
      * @param local 이 노드가 지금 보고 있는 서킷
      */
     public void circuitMissed(CircuitState local) {
-        if (circuitMisses.incrementAndGet() >= rampDownTicks) {
-            apply(local);
+        int missed = circuitMisses.incrementAndGet();
+        if (missed >= rampDownTicks) {
+            apply(local, "하트비트를 %d번 놓쳐 이 노드의 관측을 쓴다".formatted(missed));
         }
     }
 
-    private void apply(CircuitState seen) {
-        clusterCircuit.updateAndGet(now -> {
+    /**
+     * <b>조이는 방향은 즉시, 푸는 방향은 연속 관측 뒤.</b>
+     *
+     * <p>한 계단씩만 푼다. 안 그러면 OPEN 에서 CLOSED 로 건너뛰어, 그 사이를 한
+     * 번도 확인하지 않은 채 전면 개방이 일어난다.
+     */
+    private void apply(CircuitState seen, String source) {
+        Vote before = clusterCircuit.getAndUpdate(now -> {
             if (ClusterCircuit.severity(seen) >= ClusterCircuit.severity(now.state())) {
                 return new Vote(seen, 0);
             }
             int streak = now.easingStreak() + 1;
-            return streak >= rampDownTicks ? new Vote(seen, 0) : new Vote(now.state(), streak);
+            return streak >= rampDownTicks
+                    ? new Vote(ClusterCircuit.eased(now.state()), 0)
+                    : new Vote(now.state(), streak);
         });
+        // **람다 밖에서 찍는다.** CAS 가 재시도하면 같은 줄이 두 번 난다.
+        CircuitState now = clusterCircuit.get().state();
+        if (now == before.state()) {
+            return;
+        }
+        if (ClusterCircuit.severity(now) > ClusterCircuit.severity(before.state())) {
+            log.warn("배분 게이트를 조인다 — {} → {}, 근거 {}", before.state(), now, source);
+        } else {
+            log.info("배분 게이트를 푼다 — {} → {}, 근거 {}", before.state(), now, source);
+        }
     }
 
     /** 배분이 읽는 값. 관측이 오기 전에는 닫힌 것으로 본다. */

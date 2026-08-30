@@ -58,9 +58,9 @@ public final class GatewayRedisPort {
     private static final int BEAT_FIELDS = 5;
 
     /**
-     * <b>칸 수를 검증한다.</b> 모자란 칸을 0 으로 메우면 표가 영영 0 이고,
-     * 클러스터는 항상 닫힌 것으로 보인다 — 기능이 조용히 꺼진 채 돌다가 다음
-     * 장애 때에야 드러난다.
+     * <b>칸 수를 검증한다.</b> 스크립트와 이 파서가 갈린 것을 기동 직후에
+     * 드러내는 자물쇠다. 모자란 칸을 0 으로 메우면 표가 영영 0 이고 클러스터는
+     * 항상 닫힌 것으로 보인다 — 기능이 조용히 꺼진 채 다음 장애를 맞는다.
      */
     static Presence presence(Object raw) {
         List<?> v = (List<?>) raw;
@@ -73,7 +73,7 @@ public final class GatewayRedisPort {
 
     // RULE-EXCEPTION(JS-13): presence 가 static 이라 인스턴스 메서드로 못 쓴다.
     // presence 를 static 으로 둔 것은 파싱만 하는 계산이라 레디스 없이 시험하기
-    // 위해서다 — 롤백 구간의 짧은 응답이 그 시험의 대상이다.
+    // 위해서다.
     private static int count(List<?> values, int index) {
         return (int) ((Number) values.get(index)).longValue();
     }
@@ -85,7 +85,9 @@ public final class GatewayRedisPort {
      * @param alive    살아 있는 노드 수
      * @param open     그중 서킷이 열렸다고 말한 수
      * @param halfOpen 그중 반쯤 열렸다고 말한 수
-     * @param reported 표를 낸 수. <b>alive 보다 작으면 롤아웃 중이다</b>
+     * @param reported 표를 낸 수. <b>아직 읽는 곳이 없다</b> — alive 보다 작으면
+     *                 롤아웃 중이라는 뜻이라 게이지로 낼 재료이고, 판정의 분모로
+     *                 쓰면 안 된다 ({@code ClusterCircuit.of} 참조)
      */
     public record Presence(int alive, int open, int halfOpen, int reported) {
     }

@@ -223,7 +223,30 @@ class GatewayRegistryTest {
         assertThat(registry.circuit()).as("둘째 관측").isEqualTo(CircuitState.OPEN);
 
         registry.circuitObserved(20, 0, 0);
-        assertThat(registry.circuit()).as("셋째 관측에 푼다").isEqualTo(CircuitState.CLOSED);
+        assertThat(registry.circuit()).as("셋째 관측에 한 계단 푼다")
+                .isEqualTo(CircuitState.HALF_OPEN);
+    }
+
+    /**
+     * <b>한 계단씩만 푼다.</b>
+     *
+     * <p>연속으로 세었다고 전면 정지에서 평시로 곧장 가면, 그 사이 단계를 한
+     * 번도 확인하지 않은 채 전면 개방이 일어난다. 조이는 방향과 무게가 다르다는
+     * 것이 이 비대칭의 이유인데, 건너뛰면 그 무게가 사라진다.
+     */
+    @Test
+    @DisplayName("푸는_방향은_한_계단씩만_간다")
+    void 푸는_방향은_한_계단씩만_간다() {
+        GatewayRegistry registry = GatewayRegistry.of(2, 1);
+        registry.circuitObserved(20, 11, 0);
+
+        registry.circuitObserved(20, 0, 0);
+        registry.circuitObserved(20, 0, 0);
+        assertThat(registry.circuit()).as("한 계단").isEqualTo(CircuitState.HALF_OPEN);
+
+        registry.circuitObserved(20, 0, 0);
+        registry.circuitObserved(20, 0, 0);
+        assertThat(registry.circuit()).as("두 계단").isEqualTo(CircuitState.CLOSED);
     }
 
     /** 푸는 도중에 다시 조이면 연속이 끊긴다. 안 끊으면 진동이 그대로 통과한다. */

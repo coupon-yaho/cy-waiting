@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.kafkick.waiting.adapter.redis.GatewayRedisPort.Presence;
 import com.kafkick.waiting.domain.admission.CircuitState;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
@@ -11,6 +12,7 @@ import java.util.function.Supplier;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Mono;
+import reactor.test.scheduler.VirtualTimeScheduler;
 
 /**
  * 하트비트가 <b>서킷을 실어 보내고 클러스터 판정을 받아 적는지</b> 본다 (CY-791).
@@ -23,6 +25,8 @@ class HeartbeatCircuitWiringTest {
 
     /** 감소를 확정하기까지의 연속 관측 수. 서킷을 푸는 방향도 같은 수를 쓴다. */
     private static final int 등록부_감소_틱 = 3;
+
+    private static final Duration 간격 = Duration.ofSeconds(1);
 
     private GatewayRegistry 등록부() {
         return GatewayRegistry.of(등록부_감소_틱, 1);
@@ -74,38 +78,49 @@ class HeartbeatCircuitWiringTest {
     }
 
     /**
-     * <b>하트비트가 못 돌면 로컬 관측으로 돌아간다.</b>
+     * <b>무응답도 놓친 것이다</b> — 오류만 세면 절반만 지킨다.
      *
-     * <p>안 그러면 마지막 판정에 얼어붙는다. 조인 채로 얼면 레디스가 회복될
-     * 때까지 배분이 0 이고, 푼 채로 얼면 뒷단이 무너져도 안 조인다 — 원래
-     * 메모리 안에 있던 판단이 레디스 가용성에 묶인다.
+     * <p>레디스 장애에서 더 흔한 쪽은 오류가 아니라 무응답이다. 상한이 걸리면
+     * 리액터는 상류를 취소하지 오류를 흘리지 않으므로, 놓침을 세는 자리가 상한
+     * 안쪽에 있으면 그 구간을 통째로 못 본다.
      */
     @Test
-    @DisplayName("하트비트가_끊기면_로컬로_돌아간다")
-    void 하트비트가_끊기면_로컬로_돌아간다() {
+    @DisplayName("무응답도_놓친_것으로_센다")
+    void 무응답도_놓친_것으로_센다() {
         GatewayRegistry registry = 등록부();
-        Supplier<Mono<Integer>> step = GatewayPresenceConfig.beatStep(
-                circuit -> Mono.error(new IllegalStateException("레디스가 죽었다")),
-                () -> CircuitState.OPEN, registry);
 
-        for (int i = 0; i < 등록부_감소_틱; i++) {
-            step.get().onErrorResume(e -> Mono.empty()).block();
-        }
+        루프를_돌린다(Mono::never, registry);
 
         assertThat(registry.circuit()).isEqualTo(CircuitState.OPEN);
     }
 
-    /** 분모는 그대로 첫 칸이다. 서킷을 실었다고 세던 것이 바뀌면 안 된다. */
+    /** 오류도 마찬가지다. 둘 다 같은 자리에서 세어야 한 쪽만 지켜지지 않는다. */
     @Test
-    @DisplayName("분모는_첫_칸_그대로다")
-    void 분모는_첫_칸_그대로다() {
-        AtomicReference<Integer> 관측 = new AtomicReference<>();
+    @DisplayName("오류도_놓친_것으로_센다")
+    void 오류도_놓친_것으로_센다() {
+        GatewayRegistry registry = 등록부();
 
-        Integer alive = GatewayPresenceConfig.beatStep(circuit -> Mono.just(new Presence(4, 1, 0, 4)),
-                () -> CircuitState.CLOSED, 등록부()).get().block();
-        관측.set(alive);
+        루프를_돌린다(() -> Mono.error(new IllegalStateException("레디스가 죽었다")), registry);
 
-        assertThat(관측.get()).isEqualTo(4);
+        assertThat(registry.circuit()).isEqualTo(CircuitState.OPEN);
+    }
+
+    /**
+     * 배선된 것과 같은 모양으로 루프를 돌린다. 놓침을 세는 자리가 상한 바깥인지를
+     * 재는 것이므로, 루프를 빼고 재면 그 자리를 못 본다.
+     */
+    private void 루프를_돌린다(Supplier<Mono<Integer>> beat, GatewayRegistry registry) {
+        VirtualTimeScheduler 가상 = VirtualTimeScheduler.create();
+        GatewayHeartbeatLoop loop = GatewayHeartbeatLoop.of(beat, Mono::empty,
+                registry::observed, () -> registry.circuitMissed(CircuitState.OPEN),
+                간격, Duration.ofSeconds(1), 가상);
+
+        loop.start(가상);
+        try {
+            가상.advanceTimeBy(간격.multipliedBy(등록부_감소_틱 * 2L + 1));
+        } finally {
+            loop.stop();
+        }
     }
 
     /** 관측이 오기 전에는 닫힌 것으로 본다. 모른다고 배분을 멈추면 평시가 죽는다. */

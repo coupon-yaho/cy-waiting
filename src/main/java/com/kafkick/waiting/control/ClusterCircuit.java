@@ -21,9 +21,14 @@ public final class ClusterCircuit {
      * @param open     그중 서킷이 열렸다고 말한 수
      * @param halfOpen 그중 반쯤 열렸다고 말한 수
      */
-    // **관측이 없으면 닫힌 것으로 본다.** 모른다고 조이면 기동 직후에 배분이
-    // 안 돌고, 그 상태가 첫 하트비트까지 이어진다 — 없는 장애를 만든다.
+    // **분모는 표를 낸 수가 아니라 살아 있는 수다.** 표를 안 낸 노드는 안 조이는
+    // 쪽으로 접힌다. 롤아웃 중에는 옛 노드가 표를 안 내는데, 그때 표를 낸 소수만
+    // 분모로 쓰면 두 대 중 두 대가 열린 것만으로 서른 대 클러스터가 멈춘다.
     public static CircuitState of(int alive, int open, int halfOpen) {
+        // **여기는 기동 직후가 아니다.** 기동 직후는 등록부의 초기값이 맡는다.
+        // 스크립트가 자기 자신을 먼저 쓰므로 정상이면 alive 는 최소 1 이고,
+        // 0 이 왔다는 것은 관측이 망가졌다는 뜻이다. 망가진 관측으로 조이면
+        // 없는 장애를 만들므로 안 조이는 쪽으로 접는다.
         if (alive < 1) {
             return CircuitState.CLOSED;
         }
@@ -32,8 +37,10 @@ public final class ClusterCircuit {
         // 시험에 쓸 호출이 하나도 안 나간다 — 서킷이 표본을 못 채워 다시 닫힐
         // 길이 없어진다. 진입만 있고 해제가 없는 상태를 우리가 만드는 셈이다.
         //
-        // 전 노드가 동시에 반쯤 열리는 것은 예외가 아니라 정상이다. 열린 시각이
-        // 거의 같으면 대기 시간도 같이 끝난다.
+        // 뒤집어 말하면 OPEN 은 **클러스터 어디에도 프로브가 없을 때만** 나온다.
+        // 열린 노드는 어차피 호출을 안 내보내므로, 그때의 크레딧 0 은 아무것도
+        // 굶기지 않는다. 대신 노드들의 대기 시간이 어긋나 있으면 장애 내내
+        // 누군가는 시험 중이라 OPEN 에 잘 도달하지 않는다 — 의도한 방향이다.
         if (halfOpen > 0) {
             return CircuitState.HALF_OPEN;
         }
@@ -45,6 +52,14 @@ public final class ClusterCircuit {
         }
         // 소수는 조인다. 평소 속도로 두면 그 노드들 뒤의 약한 뒷단이 계속 맞는다.
         return open > 0 ? CircuitState.HALF_OPEN : CircuitState.CLOSED;
+    }
+
+    /**
+     * 한 계단만 푼다. <b>건너뛰지 않는다</b> — OPEN 에서 바로 CLOSED 로 가면
+     * 그 사이를 한 번도 확인하지 않은 채 전면 개방이 일어난다.
+     */
+    static CircuitState eased(CircuitState from) {
+        return from == CircuitState.OPEN ? CircuitState.HALF_OPEN : CircuitState.CLOSED;
     }
 
     /** 조이는 정도. 큰 쪽이 더 조인다 — 방향을 비교하는 자리마다 다시 적지 않는다. */

@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.kafkick.waiting.control.AllocationRound;
 import com.kafkick.waiting.control.ControlPlaneProperties;
+import com.kafkick.waiting.domain.admission.CircuitState;
 import com.kafkick.waiting.control.GatewayRegistry;
 import com.kafkick.waiting.control.Leadership;
 import java.time.Duration;
@@ -67,12 +68,20 @@ class CircuitSourceIntegrationTest extends RedisContainerSupport {
         닫혔다고_알린다();
     }
 
-    /** 푸는 방향은 연속 관측 뒤에 움직인다. 설정값만큼 알린다. */
+    /**
+     * 푸는 방향은 연속 관측 뒤에 <b>한 계단씩</b> 움직인다.
+     *
+     * <p>그래서 OPEN 에서 CLOSED 까지는 두 계단, 곧 설정값의 두 배만큼 알려야
+     * 한다. 한 번만 돌리면 HALF_OPEN 에 멈추고, 컨텍스트를 함께 쓰는 뒤 시험이
+     * 그 상태를 읽는다.
+     */
     private void 닫혔다고_알린다() {
         int 필요 = ControlPlaneProperties.defaults().capacity().rampDownTicks();
-        for (int i = 0; i < 필요; i++) {
+        for (int i = 0; i < 필요 * 2; i++) {
             registry.circuitObserved(1, 0, 0);
         }
+        assertThat(registry.circuit()).as("전제 — 완전히 풀렸다")
+                .isEqualTo(CircuitState.CLOSED);
     }
 
     /**

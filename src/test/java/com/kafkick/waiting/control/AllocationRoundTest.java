@@ -23,6 +23,7 @@ import java.util.Optional;
 import com.kafkick.waiting.domain.coupon.CouponStates;
 import com.kafkick.waiting.domain.queue.PollBudgetPlanner;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
+import java.lang.ref.Reference;
 import java.time.Duration;
 import java.util.List;
 import java.util.function.Function;
@@ -392,12 +393,16 @@ class AllocationRoundTest {
         round.run().block();
         SimpleMeterRegistry meters = new SimpleMeterRegistry();
 
-        InvariantMetrics.bind(round, ClockSkewTracker.create(), meters);
+        // **반환값을 붙잡는다.** FunctionCounter 는 상태 객체를 약한 참조로
+        // 잡으므로, 버리면 GC 뒤에 계수가 0 으로 굳는다.
+        InvariantMetrics 지표 = InvariantMetrics.bind(round, ClockSkewTracker.create(), meters);
+        System.gc();
 
         assertThat(round.pollBudgetOvershootTicks()).as("전제 — 이 판은 예산을 넘겼다")
                 .isEqualTo(1);
         assertThat(meters.get("waiting.poll.budget.overshoot.ticks")
                 .functionCounter().count()).as("폴링 예산 초과 틱").isEqualTo(1);
+        Reference.reachabilityFence(지표);
         // 나머지 셋은 이 판에서 안 움직인다. 값이 갈려야 서로를 읽는 배선이 잡힌다.
         assertThat(meters.get("waiting.allocation.budget.overshoot")
                 .functionCounter().count()).as("배분 초과량").isZero();
@@ -1044,7 +1049,9 @@ class AllocationRoundTest {
                 CouponDemand.stockUnknown("c2", 30, QueueMode.ADAPTIVE),
                 new CouponDemand("c3", 30, 100)), 10, 1);
         SimpleMeterRegistry 계기 = new SimpleMeterRegistry();
-        InvariantMetrics.bind(round, ClockSkewTracker.create(), 계기);
+        // **반환값을 붙잡는다.** 버리면 GC 뒤에 계수가 0 으로 굳는다 — 로컬에서는
+        // 안 나고 세 계층을 한 JVM 에 돌리는 CI 에서만 났다.
+        InvariantMetrics 지표 = InvariantMetrics.bind(round, ClockSkewTracker.create(), 계기);
 
         // **두 판을 돌린다.** 한 판만 보면 누적과 대입이 구분이 안 되고, 미상이
         // 둘인데 하나만 세는 구현도 통과한다. 아는 쿠폰을 같이 둬야 판마다
@@ -1052,9 +1059,15 @@ class AllocationRoundTest {
         // 발행이 같은 판을 세 번 훑어 셋이 된다.
         round.run().block();
         round.run().block();
+        // **GC 를 강제한다.** 이것이 없으면 이 시험은 장비와 부하에 따라 갈린다.
+        // 실제로 로컬은 초록이고 CI 만 빨갰다.
+        System.gc();
 
         assertThat(계기.get("waiting.allocation.stock.unknown.ticks").functionCounter().count())
                 .isEqualTo(4);
+        // **여기까지 살아 있어야 한다.** 단언 뒤에 두는 것이 핵심이다 — 변수만
+        // 두면 JIT 이 마지막 사용 뒤로 수거를 앞당길 수 있다.
+        Reference.reachabilityFence(지표);
     }
 
     @Test

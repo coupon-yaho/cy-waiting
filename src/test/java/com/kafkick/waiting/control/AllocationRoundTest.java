@@ -872,6 +872,30 @@ class AllocationRoundTest {
         assertThat(발행된("c1").credit()).isEqualTo(1);
     }
 
+    /**
+     * <b>배분을 조인 사실이 로그로 남는다</b> (LG-2).
+     *
+     * <p>안 남기면 배분이 왜 멎었는지 알 방법이 서킷 로그뿐인데, 그건 리더가
+     * 아닌 노드에서 날 수도 있다. 두 로그를 시각으로 맞춰 붙여야 한다.
+     */
+    @Test
+    @DisplayName("배분을_조인_것이_쌍으로_남는다")
+    void 배분을_조인_것이_쌍으로_남는다() {
+        AtomicReference<CircuitState> 서킷 = new AtomicReference<>(CircuitState.OPEN);
+        AllocationRound round = 서킷_있는_판(서킷, 7_300, 40);
+
+        round.run().block();
+        round.run().block();
+        assertThat(로그_메시지()).as("진입은 한 번만").filteredOn(m -> m.contains("배분을 조인다"))
+                .hasSize(1);
+
+        서킷.set(CircuitState.CLOSED);
+        round.run().block();
+
+        assertThat(로그_메시지()).as("해제도 남는다")
+                .anyMatch(m -> m.contains("서킷 회복"));
+    }
+
     /** 초과 배분 지표는 게이트 전 값으로 잰다. 아니면 서킷이 열린 시간에 비례해 오른다. */
     @Test
     @DisplayName("배분_정지가_초과_지표를_안_올린다")

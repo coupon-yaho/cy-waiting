@@ -112,6 +112,9 @@ public final class AllocationRound {
     /** 뒷단이 받을 수 있다고 한 것보다 더 나눠 준 누적량. */
     private final AtomicLong budgetOvershoot = new AtomicLong();
 
+    /** 서킷 때문에 배분을 조인 구간. <b>진입과 해제를 쌍으로 남긴다</b> (LG-2). */
+    private final FailureWindow paused = FailureWindow.create();
+
     /** 예산보다 더 들여보낸 누적 인원. */
     private final AtomicLong enteredOvershoot = new AtomicLong();
 
@@ -267,14 +270,24 @@ public final class AllocationRound {
      * 자리는 이미 없다. 반쯤 열렸을 때 <b>0 으로 막지는 않는다</b>: 뒷단에 닿는
      * 호출이 없으면 서킷이 표본을 못 채워 영영 안 닫힌다.
      */
-    private long gated(long credit) {
-        return switch (circuit.get()) {
-            case CLOSED -> credit;
-            case OPEN -> 0;
-            // 노드당 초당 한 건. 서킷이 제 창을 채울 만큼이면서, 약한 뒷단이
-            // 그 수만큼만 맞는다.
-            case HALF_OPEN -> Math.min(credit, Math.max(1, gatewayCount.getAsInt()));
-        };
+    private long gated(long credit, CircuitState now) {
+        if (now == CircuitState.CLOSED) {
+            paused.exited().ifPresent(r -> log.info(
+                    "서킷 회복 — {}초 동안 {}틱을 배분 없이 보냈다. 임계가 그만큼 안 올라갔다",
+                    r.elapsedSeconds(), r.swallowed()));
+            return credit;
+        }
+        if (paused.entered()) {
+            // **진입을 남긴다** (LG-2). 안 남기면 배분이 왜 멎었는지 알 방법이
+            // 서킷 로그뿐인데, 그건 리더가 아닌 노드에서 날 수도 있다.
+            log.warn("서킷 때문에 배분을 조인다 — 상태 {}, 원래 몫 {}. "
+                    + "임계를 올리면 큐에서 나온 사람이 503 을 받고 자리를 잃는다", now, credit);
+        }
+        // 노드당 초당 한 건. 서킷이 제 창을 채울 만큼이면서, 약한 뒷단이 그
+        // 수만큼만 맞는다. 0 으로 막으면 표본이 없어 영영 안 닫힌다.
+        return now == CircuitState.OPEN
+                ? 0
+                : Math.min(credit, Math.max(1, gatewayCount.getAsInt()));
     }
 
     private Mono<Void> allocate(List<CouponDemand> collected, Instant readAt) {
@@ -288,14 +301,17 @@ public final class AllocationRound {
         // 천천히 내려 첫 판에 수천이 그대로 나가고, 하한이 그 뒤로도 계속
         // 임계를 올린다. 하한은 관측이 아니라 정책이라 평활 뒤인데, 서킷은
         // 관측이 아니라 **사실**이라 그보다도 뒤라야 한다.
-        long credit = gated(Math.max(smoothed, Math.max(0, creditFloor.getAsLong())));
+        // **판마다 한 번 읽는다.** 두 번 읽으면 그 사이에 상태가 뒤집혀 같은
+        // 판이 자기모순인 값 둘로 판단한다 — 5초 창에 1초 틱이면 실제로 걸린다.
+        CircuitState circuitNow = circuit.get();
+        long credit = gated(Math.max(smoothed, Math.max(0, creditFloor.getAsLong())), circuitNow);
         Map<String, Long> granted = new LinkedHashMap<>();
         allocator.allocate(credit, collected).forEach(g -> granted.put(g.couponId(), g.credit()));
 
         if (lostLeadership()) {
             return Mono.empty();
         }
-        watchBudget(credit);
+        watchBudget(credit, observed);
         AtomicBoolean anyFailed = new AtomicBoolean();
         return Flux.fromIterable(collected)
                 .concatMap(demand -> applyOne(demand, granted, anyFailed))
@@ -414,8 +430,9 @@ public final class AllocationRound {
      */
     // 뒷단이 1,000 으로 떨어졌다고 보고해도 평활은 열 틱 넘게 7,300 을 나눠 준다.
     // 그 구간이 초과 발급 직전 상태이고, 이 값이 그것을 센다.
-    private void watchBudget(long credit) {
-        long observed = Math.max(0, globalCredit.getAsLong());
+    // **관측치를 인자로 받는다.** 여기서 다시 읽으면 한 판이 두 값을 보게 되고,
+    // 그 사이에 가용량이 바뀌면 나눠 준 몫과 비교 대상이 서로 다른 판의 것이 된다.
+    private void watchBudget(long credit, long observed) {
         long over = credit - observed;
         if (over <= 0) {
             overshoot.exited().ifPresent(r -> log.info(

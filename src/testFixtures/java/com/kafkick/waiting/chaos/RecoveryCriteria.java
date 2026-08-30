@@ -21,6 +21,12 @@ public final class RecoveryCriteria {
     /** 회복 버스트의 허용 배수. 이보다 크면 회복이 곧 2차 장애다. */
     public static final double BURST_LIMIT = 1.2;
 
+    /**
+     * 중복 발신의 한계. <b>버스트와 다른 기준이라 상수를 안 나눠 쓴다</b> —
+     * 여기서 1 건 초과는 발급 요청 1 건 중복이고, 그건 곧 초과 발급이다.
+     */
+    public static final double DUPLICATE_LIMIT = 1.0;
+
     /** 지표가 돌아왔다고 볼 오차. 정확히 같기를 요구하면 EWMA 가 영영 못 닿는다. */
     public static final double CONVERGENCE_TOLERANCE = 0.10;
 
@@ -118,19 +124,19 @@ public final class RecoveryCriteria {
     }
 
     /**
-     * RC4 — <b>뒷단 도착이 클라이언트가 보낸 수를 넘으면 게이트웨이가 스스로
-     * 만든 유입이다.</b>
+     * <b>뒷단 도착이 클라이언트가 보낸 수를 넘으면 게이트웨이가 스스로 만든
+     * 유입이다.</b> 발급 경로에서는 그 1 건이 곧 초과 발급이다.
      *
      * @param sent    시험이 그 구간에 보낸 요청 수
      * @param arrived 같은 구간에 뒷단이 받은 수
      */
-    // **고정 창의 봉우리로는 회복 몰아침을 못 잡는다.** 몰아침은 정의상 회복
-    // 순간의 일시적 봉우리인데, 그 순간까지 기다리는 데 걸린 시간은 판마다
-    // 다르다. 창을 그 순간에 맞추면 대기 루프가 보낸 요청까지 세고, 창을 뒤로
-    // 밀면 몰아침이 통째로 표본 밖으로 나간다. 어느 쪽도 안 맞다.
+    // **버스트가 아니라 중복을 잰다.** 닫힌 루프로 부하를 만드는 하네스에서는
+    // 발신 속도가 게이트웨이 지연으로 정해지므로, 게이트웨이가 몰아쳐도 시험이
+    // 같이 빨라질 뿐 비율이 안 움직인다. 버스트를 재려면 고정 속도로 쏘는
+    // 열린 루프가 필요하다.
     //
-    // 보낸 수로 나누면 대기 길이가 상쇄된다. 창을 옮길 필요가 없고, 재는 도구가
-    // 재는 대상을 밀어 올리지도 않는다.
+    // 대신 이 비는 재전송·풀 재시도로 요청이 불어나는 것을 잡는다. 한계가
+    // 1.0 인 이유이자, 분모가 커져도 감도가 안 떨어지는 이유다.
     public static Optional<String> amplified(long sent, long arrived) {
         if (sent <= 0) {
             return Optional.of("RC4 보낸 수를 못 쟀다 — 증폭을 판정할 수 없다");
@@ -145,9 +151,9 @@ public final class RecoveryCriteria {
                     .formatted(sent));
         }
         double ratio = (double) arrived / sent;
-        return ratio <= BURST_LIMIT ? Optional.empty()
+        return ratio <= DUPLICATE_LIMIT ? Optional.empty()
                 : Optional.of("RC4 회복 증폭 %.2f 배 — 보낸 %d, 도착 %d (한계 %.1f)"
-                        .formatted(ratio, sent, arrived, BURST_LIMIT));
+                        .formatted(ratio, sent, arrived, DUPLICATE_LIMIT));
     }
 
     /**

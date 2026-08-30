@@ -167,13 +167,15 @@ class RecoveryCriteriaTest {
     @Test
     @DisplayName("증폭을_잡는다")
     void 증폭을_잡는다() {
-        assertThat(RecoveryCriteria.amplified(100, 118)).isEmpty();
-        assertThat(RecoveryCriteria.amplified(100, 121))
+        assertThat(RecoveryCriteria.amplified(100, 100))
+                .as("보낸 만큼 닿은 것은 중복이 아니다").isEmpty();
+        // **한 건이면 충분하다.** 발급 경로에서 도착 1 건 초과는 요청 1 건
+        // 중복이고, 그건 곧 초과 발급이다. 버스트 한계 1.2 를 같이 쓰면
+        // 100 건에 18 건 중복이 통과한다.
+        assertThat(RecoveryCriteria.amplified(100, 101))
                 .hasValueSatisfying(v -> assertThat(v).contains("RC4"));
-        assertThat(RecoveryCriteria.amplified(100, 120))
-                .as("정확히 한계면 통과다").isEmpty();
-        assertThat(RecoveryCriteria.amplified(1_000, 1_201))
-                .as("한계를 조금이라도 넘으면 위반이다").isPresent();
+        assertThat(RecoveryCriteria.amplified(100, 118))
+                .as("버스트 한계를 같이 쓰면 여기가 통과한다").isPresent();
     }
 
     /** 재전송이 없으면 도착이 보낸 수보다 적을 수 있다. 그건 증폭이 아니다. */

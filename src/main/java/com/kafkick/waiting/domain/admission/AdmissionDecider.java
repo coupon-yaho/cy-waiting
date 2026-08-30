@@ -78,7 +78,7 @@ public class AdmissionDecider {
         return s.waiting() > 0 && s.waiting() >= queueCapacity(s, req.maxEtaSec());
     }
 
-    /** 판정 사다리 10줄. 위에서부터 처음 걸리는 줄이 답이다. */
+    /** 판정 사다리 11줄. 위에서부터 처음 걸리는 줄이 답이다. */
     public AdmissionDecision decide(AdmissionRequest req) {
         CouponState s = req.state();
 
@@ -150,6 +150,26 @@ public class AdmissionDecider {
         //     크레딧보다 많으면 몫이 0 으로 떨어진다. 그때도 거절이 맞다.
         if (queueFull(s, req)) {
             return AdmissionDecision.REJECT_QUEUE_FULL;
+        }
+
+        // 6' — 서킷이 열렸다 (F3). **뒷단이 못 받는다는 가장 직접적인 증거다.**
+        //
+        //      통과를 내면 서킷이 가로채 503 을 주므로, 사용자는 순번도 못 받고
+        //      뒷단도 안 쉰다. 줄로 보내면 회복 뒤 크레딧이 돌아올 때 빠진다.
+        //
+        //      **줄 관련 가드를 전부 지난 뒤다.** 위로 올리면 셋이 한꺼번에
+        //      깨진다 — 줄이 찬 쿠폰에서 등록이 매 요청 레디스를 치고(그 왕복이
+        //      타임아웃하면 fail-open 이 죽은 뒷단으로 흘린다), 한산한 쿠폰과
+        //      운영자가 끈 쿠폰에 없던 줄이 생겨 회복 뒤에도 스스로 유지되며,
+        //      무엇보다 **줄에 선 적 없는 사람이 줄 선 사람을 추월한다**
+        //      (불변식 4). 서킷이 그것을 정당화하지 않는다.
+        //
+        //      **낡음보다는 앞이다.** 낡음은 "모른다" 지만 서킷은 "못 받는다"
+        //      를 아는 것이라, 모르는 쪽이 아는 쪽을 이기면 fail-open 상한이
+        //      있으나 마나가 된다.
+        if (req.circuit() == CircuitState.OPEN
+                || req.circuit() == CircuitState.HALF_OPEN) {
+            return AdmissionDecision.ENQUEUE_CIRCUIT_OPEN;
         }
 
         // 7 — 낡았는데 줄에 사람이 있다. 모른다는 것이 추월의 사유가 아니다 (F1).
@@ -237,7 +257,8 @@ public class AdmissionDecider {
             // 0 은 상한으로 쓰이는 순간 전면 차단이다.
             case RETRY_TOKEN, REJECT_SOLD_OUT, REJECT_QUEUE_FULL, REJECT_OVERLOAD,
                  ENQUEUE_STALE, ENQUEUE_ALWAYS, ENQUEUE_BACKLOG,
-                 ENQUEUE_RATE_COUPON, ENQUEUE_RATE_GLOBAL, ENQUEUE_KEY_SATURATED ->
+                 ENQUEUE_RATE_COUPON, ENQUEUE_RATE_GLOBAL, ENQUEUE_KEY_SATURATED,
+                 ENQUEUE_CIRCUIT_OPEN ->
                     throw new IllegalArgumentException("통과가 아니다: " + decision);
         };
     }

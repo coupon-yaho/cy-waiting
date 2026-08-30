@@ -18,7 +18,9 @@ import com.kafkick.waiting.domain.queue.EtaPolicy;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import com.kafkick.waiting.domain.queue.QueueToken;
 import io.micrometer.core.instrument.Counter;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.micrometer.core.instrument.MeterRegistry;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpHeaders;
 import java.time.Clock;
 import java.time.Instant;
@@ -129,6 +131,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
 
     private final SnapshotHolder holder;
     private final AdmissionDecider decider;
+
+    /** 뒷단 서킷의 상태. <b>판정의 입력이다</b> (F3). */
+    private final CircuitStateReader circuit;
     private final Clock clock;
     private final MeterRegistry meters;
     private final DoubleSupplier random;
@@ -178,7 +183,10 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             Clock clock, MeterRegistry meters, DoubleSupplier random,
             QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter,
             EntryToken entryTokens, IdempotencyKey idempotency, LongSupplier ticker,
-            SoldOutCache soldOutCache) {
+            SoldOutCache soldOutCache, CircuitStateReader circuit) {
+        // **안 주면 안 보는 것으로 친다.** 모른다고 줄로 보내면 서킷을 안 붙인
+        // 배치에서 전 요청이 큐로 간다 — 없는 장애를 만든다.
+        this.circuit = circuit == null ? CircuitStateReader.of(null, "") : circuit;
         this.holder = Objects.requireNonNull(holder, "holder 는 필수다");
         this.failOpenWindow = FailureWindow.of(ticker);
         this.shedWindow = FailureWindow.of(ticker);
@@ -211,10 +219,13 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     AdmissionGatewayFilter(SnapshotHolder holder, AdmissionDecider decider, Clock clock,
             MeterRegistry meters, QueuePort queue, QueueToken tokens,
             SecondWindowLimiter limiter, EntryToken entryTokens,
-            IdempotencyKey idempotency, SoldOutCache soldOutCache) {
+            IdempotencyKey idempotency, SoldOutCache soldOutCache,
+            ObjectProvider<CircuitBreakerRegistry> circuits) {
         this(holder, decider, clock, meters,
                 () -> ThreadLocalRandom.current().nextDouble(), queue, tokens, limiter,
-                entryTokens, idempotency, System::nanoTime, soldOutCache);
+                entryTokens, idempotency, System::nanoTime, soldOutCache,
+                // **없으면 안 보는 것으로 친다.** 서킷을 안 붙인 배치가 있다.
+                CircuitStateReader.of(circuits.getIfAvailable(), GatewayRoutes.CIRCUIT));
     }
 
     /**
@@ -226,8 +237,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             Clock clock, MeterRegistry meters, QueuePort queue, QueueToken tokens,
             SecondWindowLimiter limiter, EntryToken entryTokens,
             IdempotencyKey idempotency) {
-        return new AdmissionGatewayFilter(holder, decider, clock, meters, queue, tokens, limiter,
-                entryTokens, idempotency, SoldOutCache.standard());
+        return new AdmissionGatewayFilter(holder, decider, clock, meters,
+                () -> ThreadLocalRandom.current().nextDouble(), queue, tokens, limiter,
+                entryTokens, idempotency, System::nanoTime, SoldOutCache.standard(), null);
     }
 
     /** 매진 캐시를 함께 받는다 (7.2.3). 담는 쪽과 읽는 쪽이 같은 것이라야 한다. */
@@ -237,7 +249,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             IdempotencyKey idempotency, SoldOutCache soldOutCache) {
         return new AdmissionGatewayFilter(holder, decider, clock, meters,
                 () -> ThreadLocalRandom.current().nextDouble(), queue, tokens, limiter,
-                entryTokens, idempotency, System::nanoTime, soldOutCache);
+                entryTokens, idempotency, System::nanoTime, soldOutCache, null);
     }
 
     /** 난수원을 받는다. 고정하지 못하면 흔들림이 실제로 붙었는지 못 잰다 (TS-4). */
@@ -248,7 +260,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             EntryToken entryTokens, IdempotencyKey idempotency) {
         return new AdmissionGatewayFilter(holder, decider, clock, meters, random, queue,
                 tokens, limiter, entryTokens, idempotency, System::nanoTime,
-                SoldOutCache.standard());
+                SoldOutCache.standard(), null);
     }
 
     /**
@@ -264,7 +276,8 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter,
             EntryToken entryTokens, IdempotencyKey idempotency, LongSupplier ticker) {
         return new AdmissionGatewayFilter(holder, decider, clock, meters, random, queue,
-                tokens, limiter, entryTokens, idempotency, ticker, SoldOutCache.standard());
+                tokens, limiter, entryTokens, idempotency, ticker, SoldOutCache.standard(),
+                null);
     }
 
     /**
@@ -351,7 +364,10 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                 // 기다린 사람과 안 기다린 사람이 같아진다.
                 holder.isDataStale(view), hasEntryToken(exchange, couponId), 
                 latch.latched(couponId, nowSec),
-                nowSec, MAX_ETA_SEC));
+                // **서킷을 여기서 읽는다** (F3). 메모리 안의 값이라 왕복이 없다.
+                // 안 실으면 판정이 서킷을 영영 안 보고, 열린 동안 계속 통과를
+                // 내 전량이 fallback 으로 간다.
+                nowSec, MAX_ETA_SEC, circuit.now()));
         exchange.getAttributes().put(DECISION, decision);
         count(decision.name());
         // **낡은 재료로 내린 판정도 재료 없이 판정한 것이다.** 사다리 4·7번이
@@ -540,7 +556,8 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             case RETRY_TOKEN -> ApiError.Code.RETRY_TOKEN;
             case PASS_TOKEN, PASS_BYPASS, PASS_FAIL_OPEN, PASS_UNDER_CAP,
                  ENQUEUE_STALE, ENQUEUE_ALWAYS, ENQUEUE_BACKLOG,
-                 ENQUEUE_RATE_COUPON, ENQUEUE_RATE_GLOBAL, ENQUEUE_KEY_SATURATED ->
+                 ENQUEUE_RATE_COUPON, ENQUEUE_RATE_GLOBAL, ENQUEUE_KEY_SATURATED,
+                 ENQUEUE_CIRCUIT_OPEN ->
                     throw new IllegalArgumentException("거절이 아니다: " + decision);
         };
     }
@@ -574,7 +591,8 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             case REJECT_SOLD_OUT -> ApiError.NO_RETRY;
             case PASS_TOKEN, PASS_BYPASS, PASS_FAIL_OPEN, PASS_UNDER_CAP,
                  ENQUEUE_STALE, ENQUEUE_ALWAYS, ENQUEUE_BACKLOG,
-                 ENQUEUE_RATE_COUPON, ENQUEUE_RATE_GLOBAL, ENQUEUE_KEY_SATURATED ->
+                 ENQUEUE_RATE_COUPON, ENQUEUE_RATE_GLOBAL, ENQUEUE_KEY_SATURATED,
+                 ENQUEUE_CIRCUIT_OPEN ->
                     throw new IllegalArgumentException("거절이 아니다: " + decision);
         };
     }

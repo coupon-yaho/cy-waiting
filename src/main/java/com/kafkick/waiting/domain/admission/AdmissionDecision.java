@@ -43,6 +43,14 @@ public enum AdmissionDecision {
      */
     ENQUEUE_KEY_SATURATED,
 
+    /**
+     * 서킷이 열렸다 (F3). <b>fallback 이 아니라 줄로 보낸다.</b>
+     *
+     * <p>사용자는 503 대신 순번을 받고, 뒷단은 완전히 쉰다. 회복 뒤 크레딧이
+     * 정상으로 돌아오면 그 줄이 자연히 배수된다.
+     */
+    ENQUEUE_CIRCUIT_OPEN,
+
     /** 재고가 없다. Redis 도 뒷단도 치지 않고 여기서 끝낸다. */
     REJECT_SOLD_OUT,
 
@@ -71,6 +79,7 @@ public enum AdmissionDecision {
     /** 줄을 세운다. */
     public boolean isEnqueue() {
         return this == ENQUEUE_STALE
+                || this == ENQUEUE_CIRCUIT_OPEN
                 || this == ENQUEUE_ALWAYS
                 || this == ENQUEUE_BACKLOG
                 || this == ENQUEUE_RATE_COUPON

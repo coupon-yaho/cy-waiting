@@ -169,6 +169,14 @@ tryAcquireAll(tier1, tier2):
 
 ### 3.5 판정 순서
 
+> **서킷 줄(6')은 줄 관련 가드를 전부 지난 뒤다** (F3 · CY-786). 위로 올리면
+> 셋이 한꺼번에 깨진다 — 줄이 찬 쿠폰에서 등록이 매 요청 레디스를 치고, 한산한
+> 쿠폰과 꺼 둔 쿠폰에 없던 줄이 생겨 회복 뒤에도 스스로 유지되며, 무엇보다
+> **줄에 선 적 없는 사람이 줄 선 사람을 추월한다** (불변식 4).
+>
+> 회복 표본은 2번이 낸다. 차례를 받은 사람이 계속 뒷단에 닿고 그 결과가
+> 서킷의 판정 재료다 — 신규 유입에서 시험 트래픽을 뽑을 이유가 없다.
+
 ```
  0. 뒷단 매진 관찰 (게이트웨이 계층)   → REJECT_SOLD_OUT     ← 사다리 밖. 아래 참조
  1. 재고를 알고 stock <= 0            → REJECT_SOLD_OUT     ← 미상은 여기 안 걸린다 (CY-702)
@@ -178,6 +186,7 @@ tryAcquireAll(tier1, tier2):
  5. mode == OFF && !hasQueue          → PASS_BYPASS
  6. waiting > 0 && waiting >= queueCapacity
                                       → REJECT_QUEUE_FULL    ← 큐로 가는 경로보다 앞
+ 6'. circuit != CLOSED                → ENQUEUE_CIRCUIT_OPEN  ← 낡음보다 앞 (F3)
  7. dataStale && (waiting > 0 || justEnqueued)
                                       → ENQUEUE_STALE        (F1)
  8. runtime != IDLE || justEnqueued    → ENQUEUE_BACKLOG      (새치기 방지)

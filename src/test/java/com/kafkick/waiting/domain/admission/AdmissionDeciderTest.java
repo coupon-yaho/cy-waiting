@@ -1,6 +1,9 @@
 package com.kafkick.waiting.domain.admission;
 
 import static org.assertj.core.api.Assertions.assertThat;
+
+import java.util.ArrayList;
+import java.util.List;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.kafkick.waiting.domain.coupon.CouponState;
@@ -51,6 +54,118 @@ class AdmissionDeciderTest {
         AdmissionRequest req = request(CouponStates.stockUnknown(10, 30));
 
         assertThat(decider().decide(req)).isNotEqualTo(AdmissionDecision.REJECT_SOLD_OUT);
+    }
+
+    /**
+     * <b>서킷이 열리면 fallback 이 아니라 줄로 보낸다</b> (F3).
+     *
+     * <p>계속 통과를 내면 서킷이 그것을 가로채 전량이 503 이 된다. 사용자는
+     * 순번 대신 오류를 받고, 뒷단은 쉬지도 못한다.
+     */
+    @Test
+    @DisplayName("서킷이_열리면_줄로_보낸다")
+    void 서킷이_열리면_줄로_보낸다() {
+        AdmissionRequest req = request(CouponStates.queueing(100, 500, 3000))
+                .withCircuit(CircuitState.OPEN);
+
+        assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.ENQUEUE_CIRCUIT_OPEN);
+    }
+
+    /**
+     * <b>매진은 서킷보다 먼저 끊는다.</b> 재고가 없으면 뒷단이 살아나도 답이
+     * 같다 — 줄을 세우면 아무것도 못 받을 사람을 세우는 것이다.
+     */
+    @Test
+    @DisplayName("매진은_서킷보다_먼저_끊는다")
+    void 매진은_서킷보다_먼저_끊는다() {
+        AdmissionRequest req = request(CouponStates.closed(100))
+                .withCircuit(CircuitState.OPEN);
+
+        assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.REJECT_SOLD_OUT);
+    }
+
+    /**
+     * <b>서킷이 열렸으면 낡아도 fail-open 하지 않는다.</b>
+     *
+     * <p>낡음은 "모른다" 지만 서킷은 "뒷단이 못 받는다" 는 직접 증거다. 모르는
+     * 쪽이 아는 쪽을 이기면 안 된다 — 그 상한이 있으나 마나가 된다.
+     */
+    @Test
+    @DisplayName("서킷이_열리면_낡아도_통과시키지_않는다")
+    void 서킷이_열리면_낡아도_통과시키지_않는다() {
+        AdmissionRequest req = request(CouponStates.queueing(100, 500, 3000))
+                .withDataStale(true)
+                .withCircuit(CircuitState.OPEN);
+
+        assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.ENQUEUE_CIRCUIT_OPEN);
+    }
+
+    /**
+     * <b>차례를 받은 사람은 서킷보다 앞이다.</b> 배분이 이미 크레딧을 썼고,
+     * 여기서 되돌리면 줄 선 사람이 뒤로 밀린다 (불변식 3).
+     */
+    @Test
+    @DisplayName("토큰을_든_사람은_서킷보다_앞이다")
+    void 토큰을_든_사람은_서킷보다_앞이다() {
+        AdmissionRequest req = request(CouponStates.queueing(100, 500, 3000))
+                .withValidToken(true)
+                .withCircuit(CircuitState.OPEN);
+
+        assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.PASS_TOKEN);
+    }
+
+    /**
+     * <b>서킷을 안 실으면 안 만들어진다.</b> 모르는 것을 정상으로 접으면 그
+     * 경로가 서킷을 영영 안 보는데, 그게 F3 이 막으려던 상태다.
+     */
+    @Test
+    @DisplayName("서킷을_안_실으면_안_만들어진다")
+    void 서킷을_안_실으면_안_만들어진다() {
+        assertThatThrownBy(() -> new AdmissionRequest("c1", CouponStates.idle(500),
+                META, false, false, false, 0, 100, null))
+                .isInstanceOf(NullPointerException.class);
+    }
+
+    /**
+     * <b>반쯤 열린 것도 줄로 보낸다.</b> 회복 표본은 사다리 2번이 낸다 — 차례를
+     * 받은 사람이 계속 뒷단에 닿고, 그 결과가 서킷의 판정 재료다.
+     *
+     * <p>여기서 신규 유입을 시험 트래픽으로 뽑으면 <b>줄에 선 적 없는 사람이
+     * 줄 선 사람을 추월한다</b> (불변식 4). 서킷이 그것을 정당화하지 않는다.
+     */
+    @Test
+    @DisplayName("반쯤_열려도_신규_유입은_줄로_간다")
+    void 반쯤_열려도_신규_유입은_줄로_간다() {
+        AdmissionRequest req = request(CouponStates.queueing(100, 500, 3000))
+                .withCircuit(CircuitState.HALF_OPEN);
+
+        assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.ENQUEUE_CIRCUIT_OPEN);
+    }
+
+    /**
+     * <b>줄이 꽉 찼으면 서킷이 열려도 거절한다.</b>
+     *
+     * <p>안 걸면 거절 대상 하나하나가 요청 경로 레디스 왕복을 시도하고, 그
+     * 왕복이 실패하면 fail-open 이 <b>서킷이 지키려던 그 뒷단으로</b> 흘린다.
+     */
+    @Test
+    @DisplayName("줄이_꽉_차면_서킷이_열려도_거절한다")
+    void 줄이_꽉_차면_서킷이_열려도_거절한다() {
+        AdmissionRequest req = new AdmissionRequest("c1",
+                CouponStates.queueing(1, 500, 3000), META, false, false, false, 0, 1,
+                CircuitState.OPEN);
+
+        assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.REJECT_QUEUE_FULL);
+    }
+
+    /** 운영자가 끈 쿠폰에는 없던 줄을 안 만든다. 한 번 생기면 스스로 유지된다. */
+    @Test
+    @DisplayName("꺼_둔_쿠폰에는_줄을_안_만든다")
+    void 꺼_둔_쿠폰에는_줄을_안_만든다() {
+        AdmissionRequest req = request(CouponStates.off(500))
+                .withCircuit(CircuitState.OPEN);
+
+        assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.PASS_BYPASS);
     }
 
     @Test

@@ -1020,7 +1020,7 @@ class AdmissionGatewayFilterTest {
         // 필터는 통과·대기·거절 셋으로만 가른다. 어디에도 안 걸리는 값이 생기면
         // 거절 경로로 떨어져 봉투를 못 찾고 500 이 나간다.
         // 개수를 정확히 못 박는다. 넘기만 하면 통과하면 값이 줄어도 안 걸린다.
-        assertThat(AdmissionDecision.values()).hasSize(14);
+        assertThat(AdmissionDecision.values()).hasSize(15);
         assertThat(AdmissionDecision.values()).allSatisfy(d -> {
             int 해당 = (d.isPass() ? 1 : 0) + (d.isEnqueue() ? 1 : 0) + (d.isReject() ? 1 : 0);
             assertThat(해당).as("판정 %s", d).isEqualTo(1);

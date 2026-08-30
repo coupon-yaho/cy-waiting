@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.kafkick.waiting.domain.admission.CircuitState;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -113,5 +114,43 @@ class CircuitStateReaderTest {
         for (int i = 0; i < 10_000; i++) {
             assertThat(reader.now()).isEqualTo(CircuitState.OPEN);
         }
+    }
+    /**
+     * <b>안 보는 것과 닫혀 있는 것을 가른다</b> (CY-788).
+     *
+     * <p>둘이 같은 값을 내므로, 배선이 빠지면 판정도 배분도 조용히 평소대로
+     * 돈다 — F3 이 통째로 꺼진 것을 다음 장애 때야 안다.
+     */
+    @Test
+    @DisplayName("서킷을_보고_있는지_지표로_낸다")
+    void 서킷을_보고_있는지_지표로_낸다() {
+        SimpleMeterRegistry 계기 = new SimpleMeterRegistry();
+        CircuitBreakerRegistry registry = registry();
+        registry.circuitBreaker(NAME);
+        reader(registry).bind(계기);
+
+        assertThat(계기.get(CircuitStateReader.WIRED).gauge().value()).isEqualTo(1);
+    }
+
+    /** 레지스트리가 없으면 0 이다. 그 상태가 곧 F3 이 꺼진 상태다. */
+    @Test
+    @DisplayName("배선이_없으면_지표가_0이다")
+    void 배선이_없으면_지표가_0이다() {
+        SimpleMeterRegistry 계기 = new SimpleMeterRegistry();
+        reader(null).bind(계기);
+
+        assertThat(계기.get(CircuitStateReader.WIRED).gauge().value()).isZero();
+    }
+
+    /** 이름이 어긋나도 0 이다. 유령을 안 만드니 그 이름은 영영 안 생긴다. */
+    @Test
+    @DisplayName("이름이_어긋나면_지표가_0이다")
+    void 이름이_어긋나면_지표가_0이다() {
+        SimpleMeterRegistry 계기 = new SimpleMeterRegistry();
+        CircuitBreakerRegistry registry = registry();
+        registry.circuitBreaker("딴이름");
+        reader(registry).bind(계기);
+
+        assertThat(계기.get(CircuitStateReader.WIRED).gauge().value()).isZero();
     }
 }

@@ -2,6 +2,8 @@ package com.kafkick.waiting.gateway;
 
 import com.kafkick.waiting.domain.admission.CircuitState;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
 
 /**
  * 뒷단 서킷의 상태를 판정에 넘긴다 (F3).
@@ -10,6 +12,14 @@ import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
  * 있으므로 요청 경로에서 읽어도 레디스를 안 친다 (불변식 1).
  */
 public final class CircuitStateReader {
+
+    /**
+     * 서킷을 보고 있는가. <b>1 이 아니면 F3 이 꺼져 있다.</b>
+     *
+     * <p>안 보는 것과 닫혀 있는 것이 같은 값을 내므로, 배선이 빠지면 판정도
+     * 배분도 조용히 평소대로 돈다 — 다음 장애 때만 드러난다.
+     */
+    public static final String WIRED = "waiting.circuit.wired";
 
     private final CircuitBreakerRegistry circuits;
     private final String circuitName;
@@ -22,6 +32,24 @@ public final class CircuitStateReader {
     /** 레지스트리가 없으면 <b>안 본 것으로</b> 친다 — 시험과 서킷을 안 붙인 배치다. */
     public static CircuitStateReader of(CircuitBreakerRegistry circuits, String circuitName) {
         return new CircuitStateReader(circuits, circuitName);
+    }
+
+    /**
+     * 서킷을 보고 있는가. <b>이름이 없으면 안 보는 것이다.</b>
+     *
+     * <p>레지스트리가 없거나 그 이름의 서킷이 아직 없으면 이 리더는 영원히
+     * 닫힘을 낸다. 그 사실이 밖에서 보여야 한다.
+     */
+    public boolean wired() {
+        return circuits != null && circuits.find(circuitName).isPresent();
+    }
+
+    /** 지표에 건다. <b>게이지다</b> — 지금 보고 있는지가 알고 싶은 것이다. */
+    public CircuitStateReader bind(MeterRegistry meters) {
+        Gauge.builder(WIRED, this, r -> r.wired() ? 1 : 0)
+                .description("서킷을 판정·배분이 보고 있는가. 1 이 아니면 F3 이 꺼져 있다")
+                .register(meters);
+        return this;
     }
 
     /**

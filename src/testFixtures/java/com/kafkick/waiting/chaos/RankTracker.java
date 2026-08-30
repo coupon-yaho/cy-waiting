@@ -38,6 +38,13 @@ public final class RankTracker {
                     "대기 중인 응답은 순번과 자리가 0 이상이다: rank=%d score=%d"
                             .formatted(rank, score));
         }
+        // **떠난 뒤의 관측은 옛 세션과 안 잇는다.** 이으면 새로 선 줄의 순번이
+        // 옛 순번보다 크다는 이유로 역행이 되고, 새 자리는 자리 상실이 된다.
+        // 둘 다 실제로는 다른 사람의 다른 줄이다.
+        if (done.contains(memberId)) {
+            throw new IllegalStateException(
+                    "이미 줄을 떠난 사람이다 — 새 세션은 다른 이름으로 센다: " + memberId);
+        }
         byMember.computeIfAbsent(memberId, id -> new ArrayList<>()).add(new Seen(rank, score));
     }
 

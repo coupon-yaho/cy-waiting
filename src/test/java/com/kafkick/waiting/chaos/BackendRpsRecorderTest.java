@@ -115,22 +115,43 @@ class BackendRpsRecorderTest {
         assertThat(기록.total()).isEqualTo(스텁이_센_수.get());
     }
 
-    /** 되돌아간 누적값은 안 센다. 스텁이 재시작하면 0 부터 다시 오른다. */
+    /**
+     * <b>되돌아간 누적값이 총합을 안 깎는다.</b>
+     *
+     * <p>스텁이 재시작하면 0 부터 다시 오른다. 그 차분을 그대로 더하면 총합이
+     * 줄고 봉우리가 사라진다.
+     */
     @Test
-    @DisplayName("누적값이_되돌아가면_안_센다")
-    void 누적값이_되돌아가면_안_센다() {
+    @DisplayName("누적값이_되돌아가도_총합이_안_줄어든다")
+    void 누적값이_되돌아가도_총합이_안_줄어든다() {
         BackendRpsRecorder 기록 = 기록기();
         기록.sample(시작);
         초가_지난다(기록, 시작.plusSeconds(1), 10);
         스텁이_센_수.set(0);
         기록.sample(시작.plusSeconds(2));
 
-        assertThat(기록.peakRps(시작, 시작.plusSeconds(3))).isEqualTo(10);
-        // **총합까지 본다.** 봉우리만 보면 음수가 다른 버킷에 얹혀도 안 잡힌다 —
-        // 그러면 되돌아간 값이 조용히 총합을 깎는다.
         assertThat(기록.total()).as("음수 차분이 총합을 안 깎는다").isEqualTo(10);
-        assertThat(기록.averageRps(시작, 시작.plusSeconds(3)))
-                .as("평균도 음수에 안 끌린다").isCloseTo(10.0 / 3, offset(1e-9));
+    }
+
+    /**
+     * <b>재시작 뒤에 온 것을 안 버린다.</b>
+     *
+     * <p>되돌아간 판을 통째로 0 으로 치면, 재시작과 다음 표집 사이에 도착한
+     * 것이 사라진다. 하필 그 구간이 회복 직후라 버스트를 통째로 놓친다.
+     */
+    @Test
+    @DisplayName("재시작_뒤에_온_것은_센다")
+    void 재시작_뒤에_온_것은_센다() {
+        BackendRpsRecorder 기록 = 기록기();
+        기록.sample(시작);
+        초가_지난다(기록, 시작.plusSeconds(1), 1_000);
+
+        // 스텁이 재시작하고 그 사이에 100 건이 왔다.
+        스텁이_센_수.set(100);
+        기록.sample(시작.plusSeconds(2));
+
+        assertThat(기록.peakRps(시작.plusSeconds(1), 시작.plusSeconds(2)))
+                .as("재시작 뒤 100 건이 살아 있다").isEqualTo(100);
     }
 
     /** RC4 판정에 그대로 넘길 수 있어야 한다. 여기서 다시 계산하면 기준이 갈린다. */

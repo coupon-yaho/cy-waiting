@@ -107,35 +107,46 @@ public final class ChaosScenario {
         if (entry == null || during == null || recovery == null) {
             throw new IllegalStateException("판정을 안 건 구간이 있다: " + name);
         }
+        // **어느 단계에서 터져도 모은 위반을 안 잃는다.** 스텝 예외가 그대로
+        // 나가면 초과 발급이 "부하 스텝이 불안정하다" 로 읽힌다. 예외도 위반의
+        // 하나로 담고, 판정은 끝까지 돈다.
         List<String> broken = new ArrayList<>();
-        baseline.run();
+        step(broken, "정상", baseline);
         try {
             if (inject != null) {
-                inject.run();
+                step(broken, "주입", inject);
             }
             // **판정은 그 구간이 살아 있는 동안 돈다.** 복구 뒤로 미루면 이미
             // 걷힌 상태를 읽는다 — dataStale 진입도, 서킷이 열린 동안의 유입도
             // 그때는 정상으로 보인다. 유지 구간 판정이 통째로 이름만 남는다.
             label(broken, "진입", entry);
-            duringFault.run();
+            step(broken, "유지", duringFault);
             label(broken, "유지", during);
         } finally {
             if (recover != null) {
-                // **복구가 터져도 모은 위반을 안 잃는다.** 여기서 예외가 나가면
-                // 아래 throw 에 못 닿고, 초과 발급이 "복구 스텝이 불안정하다" 로
-                // 읽힌다.
-                try {
-                    recover.run();
-                } catch (RuntimeException e) {
-                    broken.add("  복구 — 장애를 걷다가 터졌다: " + e);
-                }
+                step(broken, "복구", recover);
             }
         }
-        afterRecovery.run();
+        step(broken, "회복", afterRecovery);
         label(broken, "회복", recovery);
         if (!broken.isEmpty()) {
             throw new AssertionError("[%s] 깨진 기준 %d 건%n%s"
                     .formatted(name, broken.size(), String.join(System.lineSeparator(), broken)));
+        }
+    }
+
+    /**
+     * 한 단계를 돌리고, 터지면 그것도 위반으로 담는다.
+     *
+     * <p><b>{@code Throwable} 을 잡는다.</b> {@code RuntimeException} 만 잡으면
+     * 시험용 콜백이 던진 {@code AssertionError} 가 그대로 나가, 이미 모은 기준
+     * 위반을 전부 가린다.
+     */
+    private void step(List<String> into, String phase, Runnable body) {
+        try {
+            body.run();
+        } catch (Throwable e) {
+            into.add("  " + phase + " — 단계가 터졌다: " + e);
         }
     }
 

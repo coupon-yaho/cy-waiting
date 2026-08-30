@@ -47,26 +47,42 @@ jobs:
             integration) ./gradlew --no-daemon integrationTest ;;
             context)     ./gradlew --no-daemon contextTest ;;
             chaos)       ./gradlew --no-daemon chaosTest ;;
-            # **미니언이 죽으면 그 판의 뮤턴트가 통째로 유실된다.** 그런데도
-            # PIT 는 남은 것만으로 비율을 내고 임계를 통과시킨다 — 게이트가
-            # 초록인데 무엇을 지켰는지 말할 수 없는 상태가 된다. 로그를 남겨
-            # 두고 검사한다.
+            # **비율이 무엇 위에서 나온 값인지 검사한다.** 판정 못 한 뮤턴트가
+            # 있는 채로 남은 것만 세면, 게이트가 초록인데 무엇을 지켰는지 말할
+            # 수 없다. 요약이 말한 수와 리포트에 기록된 수를 맞춰 본다.
             mutation)
-              # **그레이들이 죽어도 검사를 먼저 돈다.** 미니언 유실로 임계가
-              # 미달해 실패하는 경우가 정확히 우리가 짚어야 할 케이스인데,
-              # 여기서 같이 죽으면 일반 그레이들 실패만 남는다.
+              # **그레이들이 죽어도 검사를 먼저 돈다.** 유실로 임계가 미달해
+              # 실패하는 경우가 정확히 우리가 짚어야 할 케이스인데, 여기서 같이
+              # 죽으면 일반 그레이들 실패만 남는다.
               rc=0
               mkdir -p build   # 첫 실행이면 아직 없다. tee 가 먼저 죽는다
               ./gradlew --no-daemon pitest 2>&1 | tee build/pitest.log || rc=$?
               # **로그가 우리가 아는 그 로그인지 먼저 본다.** 문구가 바뀌면
               # 아래 검사는 영영 조용히 통과한다 — 이 잡이 고치려던 병이다.
-              if ! grep -qE 'Generated [0-9]+ mutations' build/pitest.log; then
+              generated=$(grep -oE 'Generated [0-9]+ mutations' build/pitest.log \
+                            | grep -oE '[0-9]+' | tail -1)
+              if [ -z "$generated" ]; then
                 echo "::error::PIT 요약 줄이 없다 — 로그 형식이 바뀌었거나 로그가 비었다"
                 exit 1
               fi
-              dead=$(grep -c 'Minion exited abnormally' build/pitest.log || true)
-              if [ "$dead" -gt 0 ]; then
-                echo "::error::미니언 ${dead}개가 비정상 종료했다 — 그 판의 뮤턴트가 안 세어졌다"
+              report=build/reports/pitest/mutations.xml
+              if [ ! -f "$report" ]; then
+                echo "::error::뮤턴트 리포트가 없다 — 경로가 바뀌었는지 본다"
+                exit 1
+              fi
+              # **여기가 유실을 잡는 자리다.** 미니언이 죽는 것 자체는 유실이
+              # 아니다. PIT 는 시간을 넘긴 뮤턴트를 TIMED_OUT 으로 기록하고 그것을
+              # 죽인 것으로 센다 — 실측으로 두 수가 정확히 맞았다. 정말로 잃는
+              # 경우는 판정이 안 붙은 채 끝나는 것이고, 그건 아래 둘이 잡는다.
+              counted=$(grep -c '<mutation ' "$report" || true)
+              if [ "$generated" != "$counted" ]; then
+                echo "::error::뮤턴트 ${generated}개를 만들었는데 ${counted}개만 기록됐다"
+                exit 1
+              fi
+              unresolved=$(grep -coE \
+                "status='(RUN_ERROR|MEMORY_ERROR|NOT_STARTED|STARTED)'" "$report" || true)
+              if [ "$unresolved" -gt 0 ]; then
+                echo "::error::판정이 안 붙은 뮤턴트가 ${unresolved}개다 — 비율이 근거를 잃었다"
                 exit 1
               fi
               [ "$rc" -eq 0 ] || exit "$rc"

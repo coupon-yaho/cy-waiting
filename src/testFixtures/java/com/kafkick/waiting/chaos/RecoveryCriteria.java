@@ -36,6 +36,11 @@ public final class RecoveryCriteria {
         if (stock < 0) {
             throw new IllegalArgumentException("재고는 0 이상이어야 한다: %d".formatted(stock));
         }
+        // **음수는 관측이 아니다.** 재고보다 작다는 이유로 통과시키면 세다가
+        // 깨진 판이 "초과 발급 0" 으로 기록된다.
+        if (issued < 0) {
+            return Optional.of("RC1 발급 수를 못 쟀다: %d".formatted(issued));
+        }
         // 미달은 지연이지 사고가 아니다. 넘은 것만 본다.
         return issued <= stock ? Optional.empty()
                 : Optional.of("RC1 초과 발급 — 재고 %d 인데 %d 건 나갔다".formatted(stock, issued));
@@ -86,8 +91,14 @@ public final class RecoveryCriteria {
     public static Optional<String> recoveryBurst(double baselineRps, double peakRps) {
         // **못 잰 것을 통과로 넘기지 않는다.** 비교 대상이 없으면 이 기준은
         // 아무것도 안 재는 것이고, 그러면 게이트가 사라진 채로 초록이다.
-        if (baselineRps <= 0) {
+        //
+        // 양쪽을 다 본다. 정상값만 막으면 음수 봉우리가 음수 비율을 내어 한계
+        // 아래로 통과하고, 무한대 정상값은 어떤 봉우리도 0 으로 보이게 한다.
+        if (!Double.isFinite(baselineRps) || baselineRps <= 0) {
             return Optional.of("RC4 정상 구간 RPS 를 못 쟀다 — 버스트를 판정할 수 없다");
+        }
+        if (!Double.isFinite(peakRps) || peakRps < 0) {
+            return Optional.of("RC4 회복 구간 RPS 를 못 쟀다: %s".formatted(peakRps));
         }
         double ratio = peakRps / baselineRps;
         return ratio <= BURST_LIMIT ? Optional.empty()

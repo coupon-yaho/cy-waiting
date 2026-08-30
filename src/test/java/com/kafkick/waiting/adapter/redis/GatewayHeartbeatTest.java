@@ -50,6 +50,12 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
     }
 
     @SuppressWarnings("unchecked")
+    private List<Object> beat(String instanceId, String reapAfter, String circuit) {
+        return (List<Object>) redis.execute(heartbeat, List.of(INSTANCES),
+                        List.of(instanceId, reapAfter, circuit))
+                .blockFirst(WAIT);
+    }
+
     private List<Object> beat(String instanceId, String reapAfter) {
         return (List<Object>) redis.execute(heartbeat, List.of(INSTANCES), List.of(instanceId, reapAfter))
                 .blockFirst(WAIT);
@@ -253,5 +259,58 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
                 .hasRootCauseMessage("임계는 1..86400 의 정수여야 한다: 0");
         assertThatThrownBy(() -> beat("a", "1.5"))
                 .hasRootCauseMessage("임계는 1..86400 의 정수여야 한다: 1.5");
+    }
+    /**
+     * <b>노드마다 자기 서킷을 싣는다</b> (CY-791).
+     *
+     * <p>안 실으면 배분이 리더 한 대의 로컬 관측으로 전 클러스터의 크레딧을
+     * 정한다 — 리더만 정상이면 나머지가 다 열려 있어도 평소 속도로 돌고,
+     * 리더만 열려 있으면 멀쩡한 노드들의 배분까지 0 이 된다.
+     */
+    @Test
+    @DisplayName("노드별_서킷을_세어_돌려준다")
+    void 노드별_서킷을_세어_돌려준다() {
+        beat("a", "30", "CLOSED");
+        beat("b", "30", "OPEN");
+        List<Object> r = beat("c", "30", "OPEN");
+
+        assertThat(alive(r)).isEqualTo(3);
+        assertThat(notClosed(r)).as("닫히지 않은 노드 수").isEqualTo(2);
+    }
+
+    /**
+     * <b>옛 형식도 읽는다.</b> 롤아웃 구간에는 서킷을 안 싣는 노드가 섞인다.
+     * 못 읽고 죽은 것으로 치면 그 노드들이 분모에서 빠져 남은 노드가 큰 몫을 쓴다.
+     */
+    @Test
+    @DisplayName("서킷을_안_실은_옛_항목도_산다")
+    void 서킷을_안_실은_옛_항목도_산다() {
+        redis.<String, String>opsForHash()
+                .put(INSTANCES, "old", String.valueOf(서버시각())).block(WAIT);
+
+        List<Object> r = beat("a", "30", "OPEN");
+
+        assertThat(alive(r)).as("옛 노드도 센다").isEqualTo(2);
+        assertThat(notClosed(r)).as("모르는 것은 닫힌 것으로 본다").isEqualTo(1);
+    }
+
+    /** 죽은 항목의 서킷은 안 센다. 세면 이미 없는 노드가 배분을 계속 멈춘다. */
+    @Test
+    @DisplayName("죽은_항목의_서킷은_안_센다")
+    void 죽은_항목의_서킷은_안_센다() {
+        redis.<String, String>opsForHash().put(INSTANCES, "dead", "1|OPEN").block(WAIT);
+
+        List<Object> r = beat("a", "30", "CLOSED");
+
+        assertThat(alive(r)).isEqualTo(1);
+        assertThat(notClosed(r)).isZero();
+    }
+
+    private long 서버시각() {
+        return Long.parseLong(String.valueOf(beat("probe", "30", "CLOSED").get(1)));
+    }
+
+    private int notClosed(List<Object> r) {
+        return Integer.parseInt(String.valueOf(r.get(2)));
     }
 }

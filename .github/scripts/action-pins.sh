@@ -68,7 +68,7 @@ if not targets:
     sys.exit(1)
 
 
-def walk(node, out, in_steps=False, job_depth=0):
+def walk(node, out, in_steps=False, job_depth=0, at_root=True):
     """스텝과 잡의 `uses` 를 모은다. 위치를 알아야 그 줄에서 주석을 읽을 수 있다.
 
     **이름이 `uses` 인 것을 다 모으면 안 된다.** composite action 의 `inputs`
@@ -90,13 +90,18 @@ def walk(node, out, in_steps=False, job_depth=0):
             # 겹이라 깊이로 표현된다. 거부목록으로 두면 `outputs` 나
             # `strategy.matrix` 아래의 `uses` 라는 이름을 액션으로 잘못 읽고,
             # 그건 MUST 게이트의 오탐이라 우회를 부른다.
+            #
+            # **뿌리에서만 잡 컨테이너로 친다.** 아무 데서나 `jobs` 라는 이름에
+            # 깊이를 되돌리면, `jobs` 라는 이름의 잡이 자기 참조를 검사 밖으로
+            # 밀어낸다 — 게이트를 우회하는 이름을 짓기만 하면 된다.
             walk(value, out,
                  name == 'steps' or (in_steps and name not in
                                      ('inputs', 'outputs', 'env', 'with')),
-                 2 if name == 'jobs' else max(job_depth - 1, 0))
+                 2 if (at_root and name == 'jobs') else max(job_depth - 1, 0),
+                 False)
     elif isinstance(node, yaml.SequenceNode):
         for child in node.value:
-            walk(child, out, in_steps, job_depth)
+            walk(child, out, in_steps, job_depth, False)
 
 
 found = []

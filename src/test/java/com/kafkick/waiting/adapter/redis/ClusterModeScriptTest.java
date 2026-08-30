@@ -168,7 +168,7 @@ class ClusterModeScriptTest {
             case "snapshot_publish.lua" -> List.of("#credit", "0");
             case "leader_acquire.lua" -> List.of("node-1", "2000");
             case "leader_release.lua" -> List.of("node-1");
-            case "gateway_heartbeat.lua" -> List.of("node-1", "30");
+            case "gateway_heartbeat.lua" -> List.of("node-1", "30", "CLOSED", "5");
             case "gateway_leave.lua" -> List.of("node-1");
             default -> throw new IllegalStateException("인자를 안 정한 스크립트: " + script);
         };

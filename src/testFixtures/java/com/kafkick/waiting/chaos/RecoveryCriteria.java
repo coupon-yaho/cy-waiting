@@ -21,6 +21,12 @@ public final class RecoveryCriteria {
     /** 회복 버스트의 허용 배수. 이보다 크면 회복이 곧 2차 장애다. */
     public static final double BURST_LIMIT = 1.2;
 
+    /**
+     * 중복 발신의 한계. <b>버스트와 다른 기준이라 상수를 안 나눠 쓴다</b> —
+     * 여기서 1 건 초과는 발급 요청 1 건 중복이고, 그건 곧 초과 발급이다.
+     */
+    public static final double DUPLICATE_LIMIT = 1.0;
+
     /** 지표가 돌아왔다고 볼 오차. 정확히 같기를 요구하면 EWMA 가 영영 못 닿는다. */
     public static final double CONVERGENCE_TOLERANCE = 0.10;
 
@@ -106,9 +112,48 @@ public final class RecoveryCriteria {
         if (!Double.isFinite(peakRps) || peakRps < 0) {
             return Optional.of("RC4 회복 구간 RPS 를 못 쟀다: %s".formatted(peakRps));
         }
+        // **0 은 버스트가 없는 것이 아니라 뒷단이 하나도 못 받은 것이다.**
+        // 나눗셈만 두면 0 이 가장 조용히 통과한다 — 아직 안 돌아온 판이
+        // 가장 잘 돌아온 판으로 읽힌다.
+        if (peakRps == 0) {
+            return Optional.of("RC4 회복 구간에 뒷단이 하나도 안 받았다");
+        }
         double ratio = peakRps / baselineRps;
         return ratio <= BURST_LIMIT ? Optional.empty()
                 : Optional.of("RC4 회복 버스트 %.2f 배 (한계 %.1f)".formatted(ratio, BURST_LIMIT));
+    }
+
+    /**
+     * <b>뒷단 도착이 클라이언트가 보낸 수를 넘으면 게이트웨이가 스스로 만든
+     * 유입이다.</b> 발급 경로에서는 그 1 건이 곧 초과 발급이다.
+     *
+     * @param sent    시험이 그 구간에 보낸 요청 수
+     * @param arrived 같은 구간에 뒷단이 받은 수
+     */
+    // **버스트가 아니라 중복을 잰다.** 닫힌 루프로 부하를 만드는 하네스에서는
+    // 발신 속도가 게이트웨이 지연으로 정해지므로, 게이트웨이가 몰아쳐도 시험이
+    // 같이 빨라질 뿐 비율이 안 움직인다. 버스트를 재려면 고정 속도로 쏘는
+    // 열린 루프가 필요하다.
+    //
+    // 대신 이 비는 재전송·풀 재시도로 요청이 불어나는 것을 잡는다. 한계가
+    // 1.0 인 이유이자, 분모가 커져도 감도가 안 떨어지는 이유다.
+    public static Optional<String> amplified(long sent, long arrived) {
+        if (sent <= 0) {
+            return Optional.of("RC4 보낸 수를 못 쟀다 — 증폭을 판정할 수 없다");
+        }
+        if (arrived < 0) {
+            return Optional.of("RC4 뒷단 도착 수를 못 쟀다: %d".formatted(arrived));
+        }
+        // **보냈는데 하나도 안 닿았으면 위반이다.** 비율 0 은 "증폭 없음" 으로
+        // 읽혀 가장 조용히 통과한다 — 봉우리 0 을 막은 것과 같은 상황이다.
+        if (arrived == 0) {
+            return Optional.of("RC4 회복 구간에 보낸 %d 건이 뒷단에 하나도 안 닿았다"
+                    .formatted(sent));
+        }
+        double ratio = (double) arrived / sent;
+        return ratio <= DUPLICATE_LIMIT ? Optional.empty()
+                : Optional.of("RC4 회복 증폭 %.2f 배 — 보낸 %d, 도착 %d (한계 %.1f)"
+                        .formatted(ratio, sent, arrived, DUPLICATE_LIMIT));
     }
 
     /**

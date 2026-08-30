@@ -215,4 +215,69 @@ class ChaosScenarioTest {
                 .hasMessageContaining("RC1")
                 .hasMessageContaining("토식을 못 걷었다");
     }
+
+    /**
+     * <b>어느 단계에서 터져도 모은 위반을 안 잃는다.</b>
+     *
+     * <p>스텝 예외가 그대로 나가면 초과 발급이 "부하 스텝이 불안정하다" 로
+     * 읽힌다. 그리고 뒤의 판정이 아예 안 돈다.
+     */
+    @Test
+    @DisplayName("유지_단계가_터져도_판정이_돈다")
+    void 유지_단계가_터져도_판정이_돈다() {
+        assertThatThrownBy(() -> ChaosScenario.named("유지가 터진다")
+                .inject(() -> { })
+                .duringFault(() -> {
+                    throw new IllegalStateException("부하를 못 걸었다");
+                })
+                .recover(() -> { })
+                .assertEntry(() -> List.of("RC1 초과 발급"))
+                .assertDuring(ChaosScenario.Verdict.none())
+                .assertRecovery(() -> List.of("RC4 회복 버스트"))
+                .run())
+                .isInstanceOf(AssertionError.class)
+                .hasMessageContaining("RC1")
+                .hasMessageContaining("RC4")
+                .hasMessageContaining("부하를 못 걸었다");
+    }
+
+    /** 회복 단계가 터져도 회복 판정은 돈다. 안 돌면 그 구간이 통째로 안 재어진다. */
+    @Test
+    @DisplayName("회복_단계가_터져도_판정이_돈다")
+    void 회복_단계가_터져도_판정이_돈다() {
+        assertThatThrownBy(() -> ChaosScenario.named("회복이 터진다")
+                .inject(() -> { })
+                .recover(() -> { })
+                .afterRecovery(() -> {
+                    throw new IllegalStateException("회복 트래픽을 못 걸었다");
+                })
+                .assertEntry(() -> List.of("RC1 초과 발급"))
+                .assertDuring(ChaosScenario.Verdict.none())
+                .assertRecovery(() -> List.of("RC4 회복 버스트"))
+                .run())
+                .hasMessageContaining("RC1")
+                .hasMessageContaining("RC4");
+    }
+
+    /**
+     * <b>복구가 단언 오류를 던져도 위반을 안 잃는다.</b>
+     *
+     * <p>시험용 콜백은 {@code AssertionError} 를 던진다. 런타임 예외만 잡으면
+     * 그것이 그대로 나가 이미 모은 기준 위반을 전부 가린다.
+     */
+    @Test
+    @DisplayName("복구가_단언_오류를_던져도_위반이_남는다")
+    void 복구가_단언_오류를_던져도_위반이_남는다() {
+        assertThatThrownBy(() -> ChaosScenario.named("복구가 단언으로 터진다")
+                .inject(() -> { })
+                .recover(() -> {
+                    throw new AssertionError("정리 단언이 깨졌다");
+                })
+                .assertEntry(() -> List.of("RC1 초과 발급"))
+                .assertDuring(ChaosScenario.Verdict.none())
+                .assertRecovery(ChaosScenario.Verdict.none())
+                .run())
+                .hasMessageContaining("RC1")
+                .hasMessageContaining("정리 단언이 깨졌다");
+    }
 }

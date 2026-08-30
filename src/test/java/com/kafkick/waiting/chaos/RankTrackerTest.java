@@ -147,4 +147,35 @@ class RankTrackerTest {
         assertThatThrownBy(() -> tracker.waiting("a", 10, -1L))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    /**
+     * <b>떠난 뒤의 관측을 옛 세션과 안 잇는다.</b>
+     *
+     * <p>이으면 새로 선 줄의 순번이 옛 순번보다 크다는 이유로 역행이 되고, 새
+     * 자리는 자리 상실이 된다. 둘 다 실제로는 다른 줄의 일이다. 늦게 도착한
+     * 옛 응답도 같은 모양으로 들어온다.
+     */
+    @Test
+    @DisplayName("떠난_뒤의_관측은_거절한다")
+    void 떠난_뒤의_관측은_거절한다() {
+        RankTracker tracker = new RankTracker();
+        tracker.waiting("a", 10, 5L);
+        tracker.admitted("a");
+
+        assertThatThrownBy(() -> tracker.waiting("a", 400, 99L))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("떠난");
+    }
+
+    /** 줄에서 걷힌 뒤도 마찬가지다. 재입장은 새 순번이라 옛 것과 비교할 수 없다. */
+    @Test
+    @DisplayName("걷힌_뒤의_관측도_거절한다")
+    void 걷힌_뒤의_관측도_거절한다() {
+        RankTracker tracker = new RankTracker();
+        tracker.waiting("a", 10, 5L);
+        tracker.leftQueue("a");
+
+        assertThatThrownBy(() -> tracker.waiting("a", 20, 7L))
+                .isInstanceOf(IllegalStateException.class);
+    }
 }

@@ -51,7 +51,10 @@ public final class BackendRpsRecorder {
     // 걸친 초에 고르게 나눠 담으면 주기가 흔들려도 봉우리가 안 흔들린다.
     public void sample(Instant at) {
         long now = cumulative.getAsLong();
-        long delta = now - lastSeen;
+        // **되돌아갔으면 새 기준부터 센다.** 스텁이 재시작하면 누적이 0 부터
+        // 다시 오르는데, 그 판의 차분을 통째로 버리면 재시작 뒤에 도착한 것이
+        // 사라진다. 하필 그 구간이 회복 직후라 버스트를 놓친다.
+        long delta = now < lastSeen ? now : now - lastSeen;
         lastSeen = now;
         Instant from = lastSampledAt == null ? at : lastSampledAt;
         lastSampledAt = at;

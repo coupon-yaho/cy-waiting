@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.kafkick.waiting.control.SnapshotCodec;
 import com.kafkick.waiting.domain.allocation.CreditSmoother;
+import com.kafkick.waiting.adapter.redis.RedisKeys;
 import com.kafkick.waiting.control.GatewaySnapshot;
 import com.kafkick.waiting.domain.queue.QueueToken;
 import com.kafkick.waiting.domain.allocation.QueueingHysteresis;
@@ -15,6 +16,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -32,6 +34,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.springframework.http.HttpStatus;
+import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.reactive.server.WebTestClient;
@@ -58,6 +61,11 @@ class RedisFullStopScenarioTest {
     /** 장애 구간에 줄을 쳤을 때의 상태. 레디스가 정말 죽었는지의 증거다. */
     private int 줄을_친_결과;
 
+    /** 장애 전후의 자리. RC5 가 이 둘을 비교한다. */
+    private Map<String, Double> 장애_전_자리 = Map.of();
+
+    private Map<String, Double> 회복_뒤_자리 = Map.of();
+
     /**
      * 회복을 기다리는 동안 볼 시계.
      *
@@ -69,6 +77,12 @@ class RedisFullStopScenarioTest {
 
     private static final Instant 지금 = Instant.parse("2026-08-30T00:00:00Z");
     private static final String COUPON = "c1";
+
+    /** 줄이 서는 쿠폰. RC2·RC5 는 줄에 사람이 있어야 잴 수 있다. */
+    private static final String QUEUED = "c2";
+
+    /** 장애 전에 줄을 세울 인원. */
+    private static final int 줄_선_사람 = 5;
 
     /**
      * 전역 크레딧. <b>고정 시계라 초당 예산이 안 채워진다</b> — 시험 전체가 한
@@ -142,7 +156,12 @@ class RedisFullStopScenarioTest {
                             // 202 로 끝나 뒷단에 아무것도 안 닿고, 그러면 회복
                             // 버스트를 비교할 정상값이 없다. 크레딧을 작게 둬서
                             // 한산해도 상한이 물리게 한다.
-                            Map.of(COUPON, CouponStates.idle(1_000)),
+                            Map.of(COUPON, CouponStates.idle(1_000),
+                                    // **용량이 대기 인원보다 넉넉해야 한다.**
+                                    // 용량은 크레딧에 비례하므로, 크레딧이 작으면
+                                    // 줄이 꽉 찬 것으로 판정돼 전원이 429 를 받는다.
+                                    // 배분 스케줄러는 꺼 뒀으므로 선 줄은 유지된다.
+                                    QUEUED, CouponStates.queueing(100, 1_000, 101)),
                             new SnapshotMeta(크레딧, 1), 지금),
                     CreditSmoother.Snapshot.empty(), QueueingHysteresis.Snapshot.empty());
             return () -> Mono.just(재료);
@@ -158,6 +177,10 @@ class RedisFullStopScenarioTest {
      */
     @Autowired
     private QueueToken tokens;
+
+    /** 자리는 응답에 안 실린다. RC5 를 재려면 줄을 직접 봐야 한다. */
+    @Autowired
+    private ReactiveStringRedisTemplate redis;
 
     private WebTestClient 클라이언트() {
         return WebTestClient.bindToServer()
@@ -176,6 +199,32 @@ class RedisFullStopScenarioTest {
                 .returnResult(Void.class)
                 .getStatus()
                 .value();
+    }
+
+    /** 줄에 세운다. 장애 전에 불러 자리를 만든다. */
+    private void 줄에_세운다() {
+        for (int i = 0; i < 줄_선_사람; i++) {
+            클라이언트().post()
+                    .uri("/api/v1/coupons/" + QUEUED + "/issue")
+                    .header("X-Member-Id", String.valueOf(7_000 + i))
+                    .header("X-Member-Grade", "GOLD")
+                    .exchange()
+                    .returnResult(Void.class);
+        }
+    }
+
+    /** 줄에 선 사람들의 자리. 응답에 안 실리므로 줄을 직접 읽는다. */
+    private Map<String, Double> 자리들() {
+        String key = RedisKeys.queue(QUEUED, 1, 0);
+        Map<String, Double> 본_것 = new LinkedHashMap<>();
+        for (int i = 0; i < 줄_선_사람; i++) {
+            String member = String.valueOf(7_000 + i);
+            Double score = redis.opsForZSet().score(key, member).block(Duration.ofSeconds(5));
+            if (score != null) {
+                본_것.put(member, score);
+            }
+        }
+        return 본_것;
     }
 
     /** 줄을 치는 요청. 레디스가 죽어 있으면 5xx 가 온다. */
@@ -215,6 +264,8 @@ class RedisFullStopScenarioTest {
 
         ChaosScenario.named("C1 Redis 완전 정지")
                 .baseline(() -> {
+                    줄에_세운다();
+                    장애_전_자리 = 자리들();
                     유입.sample(지금);
                     정상_상태.addAll(여러_번_시도한다(보낼_수, 1_000));
                     유입.sample(지금.plusSeconds(1));
@@ -239,6 +290,7 @@ class RedisFullStopScenarioTest {
                     // 막 돌아온 순간은 연결이 다시 맺히는 중이다. RC3 가 재는
                     // 것은 "즉시" 가 아니라 "한계 안에" 다.
                     회복까지_걸린_시간 = 판정이_돌아올_때까지_기다린다(회복_상태, 벽시계);
+                    회복_뒤_자리 = 자리들();
                     유입.sample(지금.plusSeconds(3));
                 })
                 // **진입 판정은 주입 직후, 유지 구간이 시작되기 전이다.**
@@ -263,7 +315,15 @@ class RedisFullStopScenarioTest {
                         // 표집과 표집 사이에 온 것이므로 앞 초의 몫이다.
                         RecoveryCriteria.recoveryBurst(
                                 유입.averageRps(지금, 지금.plusSeconds(1)),
-                                유입.peakRps(지금.plusSeconds(2), 지금.plusSeconds(3)))))
+                                유입.peakRps(지금.plusSeconds(2), 지금.plusSeconds(3))),
+                        // **RC5 는 여기서 못 잰다** (CY-809). 픽스처가
+                        // `--appendonly no` 로 띄우므로 컨테이너를 끊었다 붙이면
+                        // 줄이 통째로 사라진다. 계획서가 요구하는 "큐 순번 전원
+                        // 유지" 를 구조적으로 만족할 수 없다.
+                        //
+                        // 대신 **줄이 정말 사라졌는지**를 못 박는다. 나중에
+                        // 영속성을 켜면 이 단언이 빨개져 그때 RC5 로 바꾼다.
+                        줄이_영속성_없이_사라졌다()))
                 .run();
 
         assertThat(회복_상태).as("회복 뒤에는 5xx 없이 답한다")
@@ -301,6 +361,20 @@ class RedisFullStopScenarioTest {
                 ? Optional.of("장애 구간인데 줄 조회가 %d 로 성공했다 — 레디스가 안 죽었다"
                         .formatted(줄을_친_결과))
                 : Optional.empty();
+    }
+
+    /**
+     * 영속성이 없는 판에서 줄이 사라진 사실을 못 박는다 (CY-809).
+     *
+     * <p>이 시나리오는 RC5 를 아직 못 잰다. 그 사실을 주석으로만 두면 다음
+     * 사람이 "재고 있다" 고 믿는다. 영속성을 켜면 여기가 빨개져 손이 간다.
+     */
+    private Optional<String> 줄이_영속성_없이_사라졌다() {
+        if (장애_전_자리.isEmpty()) {
+            return Optional.of("장애 전에 줄이 비어 있었다 — 전제가 안 섰다");
+        }
+        return 회복_뒤_자리.isEmpty() ? Optional.empty()
+                : Optional.of("줄이 살아남았다 — 영속성이 켜졌다면 이제 RC5 로 잰다 (CY-809)");
     }
 
     /** 통과 비율. RC6 이 이것으로 판정 분포의 수렴을 본다. */

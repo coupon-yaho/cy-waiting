@@ -24,8 +24,10 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -60,6 +62,36 @@ class QueueStatusFilterTest {
 
     private final QueueStatusFilter filter = QueueStatusFilter.of(
             holder, 줄, tokens, Clock.fixed(지금, ZoneOffset.UTC), meters, () -> 0.5, limiter, entryTokens);
+
+    /** 밀 수 있는 시계. 백오프는 실패가 이어진 시간으로 오르므로 시각이 흘러야 잰다. */
+    private final AtomicReference<Instant> 흐르는_지금 = new AtomicReference<>(지금);
+
+    private final Clock 흐름 = new Clock() {
+        @Override
+        public ZoneId getZone() {
+            return ZoneOffset.UTC;
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            return this;
+        }
+
+        @Override
+        public Instant instant() {
+            return 흐르는_지금.get();
+        }
+    };
+
+    private void 시계를_민다(Duration 만큼) {
+        흐르는_지금.updateAndGet(now -> now.plus(만큼));
+    }
+
+    private String 물러날_초(QueueStatusFilter 대상) {
+        MockServerWebExchange exchange =
+                토큰으로_조회한다(대상, tokens.issue(COUPON, MEMBER, 흐르는_지금.get()));
+        return exchange.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER);
+    }
 
     private void 스냅샷을_심는다(CouponState state) {
         holder.replace(new GatewaySnapshot(Map.of(COUPON, state), new SnapshotMeta(1, 1), 지금));
@@ -102,11 +134,15 @@ class QueueStatusFilterTest {
     }
 
     private MockServerWebExchange 토큰으로_조회한다(String token) {
+        return 토큰으로_조회한다(filter, token);
+    }
+
+    private MockServerWebExchange 토큰으로_조회한다(QueueStatusFilter 대상, String token) {
         MockServerWebExchange exchange = MockServerWebExchange.from(
                 MockServerHttpRequest.get("/api/v1/coupons/" + COUPON + "/queue")
                         .header("X-Member-Id", MEMBER)
                         .header("Queue-Token", token));
-        filter.filter(exchange, e -> {
+        대상.filter(exchange, e -> {
             다음으로_감.set(true);
             return Mono.empty();
         }).block();
@@ -634,6 +670,52 @@ class QueueStatusFilterTest {
 
         assertThat(exchange.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER))
                 .isEqualTo("1");
+    }
+
+    /**
+     * <b>장애가 이어지면 더 멀리 보낸다</b> (F7 · 8.2.5).
+     *
+     * <p>같은 간격으로 계속 두드리면 그 요청들이 회복하려는 뒷단의 자리를 계속
+     * 차지한다. 단계는 요청 수가 아니라 실패가 이어진 시간으로 오른다 — 피크에서
+     * 요청 수로 세면 밀리초 만에 상한에 닿아 백오프가 있으나 마나가 된다.
+     */
+    @Test
+    @DisplayName("장애가_이어지면_더_멀리_보낸다")
+    void 장애가_이어지면_더_멀리_보낸다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100));
+        줄.터진다(new IllegalStateException("레디스가 죽었다"));
+        QueueStatusFilter 흐르는_시계 = QueueStatusFilter.of(holder, 줄, tokens,
+                흐름, meters, () -> 0.5, limiter, entryTokens);
+
+        String 첫_실패 = 물러날_초(흐르는_시계);
+        시계를_민다(Duration.ofSeconds(30));
+        String 삼십초_뒤 = 물러날_초(흐르는_시계);
+
+        assertThat(Integer.parseInt(삼십초_뒤))
+                .as("이어진 시간만큼 멀어진다")
+                .isGreaterThan(Integer.parseInt(첫_실패));
+    }
+
+    /** 한 번이라도 답하면 처음으로 돌아간다. 안 그러면 회복한 뒤에도 멀리 보낸다. */
+    @Test
+    @DisplayName("한_번_답하면_백오프가_풀린다")
+    void 한_번_답하면_백오프가_풀린다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100));
+        QueueStatusFilter 흐르는_시계 = QueueStatusFilter.of(holder, 줄, tokens,
+                흐름, meters, () -> 0.5, limiter, entryTokens);
+        줄.터진다(new IllegalStateException("레디스가 죽었다"));
+        물러날_초(흐르는_시계);
+        시계를_민다(Duration.ofSeconds(60));
+        String 장애_중 = 물러날_초(흐르는_시계);
+
+        줄.나았다();
+        줄.enqueue(COUPON, MEMBER, NO_LIMIT, 지금).block();
+        토큰으로_조회한다(흐르는_시계, tokens.issue(COUPON, MEMBER, 지금));
+        줄.터진다(new IllegalStateException("다시 죽었다"));
+
+        assertThat(Integer.parseInt(물러날_초(흐르는_시계)))
+                .as("회복 뒤 첫 실패는 처음 단계다")
+                .isLessThan(Integer.parseInt(장애_중));
     }
 
     @Test

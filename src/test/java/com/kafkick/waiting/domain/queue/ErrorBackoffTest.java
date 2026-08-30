@@ -130,5 +130,31 @@ class ErrorBackoffTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> ErrorBackoff.of(2, 30, -0.1))
                 .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> ErrorBackoff.of(2, 30, 1.5))
+                .as("1 을 넘으면 음수가 나온다")
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> ErrorBackoff.of(2, 30, Double.NaN))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /**
+     * <b>바닥을 받으면 그보다 빨리 안 부른다.</b>
+     *
+     * <p>장애 구간이 곧 폴링 예산이 빠듯한 구간이다. 바닥을 무시하면 하필 그때
+     * 거절받은 사람만 예산 밖으로 돌아온다.
+     */
+    @Test
+    @DisplayName("바닥보다_빨리_안_부른다")
+    void 바닥보다_빨리_안_부른다() {
+        assertThat(정책.retryAfterSec(1, 45, () -> 0.5)).isEqualTo(45);
+        assertThat(정책.retryAfterSec(1, 0, () -> 0.5)).as("바닥이 없으면 기본 간격")
+                .isEqualTo(ErrorBackoff.BASE_SEC);
+    }
+
+    /** 바닥이 있어도 상한은 넘지 않는다. 넘으면 회복 뒤에도 아무도 안 돌아온다. */
+    @Test
+    @DisplayName("바닥이_커도_상한을_안_넘는다")
+    void 바닥이_커도_상한을_안_넘는다() {
+        assertThat(정책.retryAfterSec(1, 9_999, () -> 0.5)).isEqualTo(ErrorBackoff.MAX_SEC);
     }
 }

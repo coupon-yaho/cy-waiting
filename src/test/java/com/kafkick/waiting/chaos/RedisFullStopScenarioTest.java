@@ -283,7 +283,7 @@ class RedisFullStopScenarioTest {
     @Test
     @DisplayName("회복_순간의_몰아침을_판정이_잡는다")
     void 회복_순간의_몰아침을_판정이_잡는다() {
-        long 보낸_수 = 대기_한_판;
+        long 대기_보낸 = 대기_한_판;
         // **순서 방어가 살아 있는지부터 본다.** 아무것도 안 보낸 채로 창을
         // 닫는 것은 대기 루프 앞에서 닫은 것이다.
         assertThatThrownBy(() -> 회복_순간을_닫는다(
@@ -293,26 +293,36 @@ class RedisFullStopScenarioTest {
 
         // **분모는 창을 닫는 함수가 준 것을 그대로 쓴다.** 시험이 따로 세면
         // 계산식이 바뀌어도 양쪽이 같이 움직여 아무것도 안 잡힌다.
-        BackendRpsRecorder 정상 = 유입을_흉내낸다(보낸_수, 보낸_수, 정상_도착);
-        assertThat(회복_유입을_판정한다(정상, 마지막_분모))
+        BackendRpsRecorder 정상 = 유입을_흉내낸다(정상_도착, 대기_보낸, 대기_보낸, 정상_도착);
+        assertThat(회복_유입을_판정한다(정상, 마지막_분모, 정상_도착))
                 .as("대조군 — 도착이 보낸 수만큼이면 아무 창도 안 울린다")
                 .isEmpty();
 
         // **한 건만 울려야 한다.** 둘 다 울리면 두 창이 겹친 것이고, 그때는
         // 어느 쪽도 자기 구간을 안 보고 있다.
-        BackendRpsRecorder 몰아침 = 유입을_흉내낸다(보낸_수, 보낸_수 * 20, 정상_도착);
-        assertThat(회복_유입을_판정한다(몰아침, 마지막_분모))
-                .as("회복 순간에 20 배가 몰아쳤다")
+        BackendRpsRecorder 대기_몰아침 = 유입을_흉내낸다(정상_도착, 대기_보낸, 대기_보낸 * 20, 정상_도착);
+        assertThat(회복_유입을_판정한다(대기_몰아침, 마지막_분모, 정상_도착))
+                .as("회복을 기다리는 동안 20 배가 몰아쳤다")
                 .singleElement(InstanceOfAssertFactories.STRING)
                 .contains("RC4 회복 증폭");
 
         // 확인 뒤 창이 정상 창과 구분되는지. 둘 다 정상 구간과 같은 수를
-        // 보내므로 값으로는 티가 안 난다 — 여기만 다르게 두어 잡는다.
-        BackendRpsRecorder 재붕괴 = 유입을_흉내낸다(보낸_수, 보낸_수, 정상_도착 * 2);
-        assertThat(회복_유입을_판정한다(재붕괴, 마지막_분모))
+        // 보내므로 값으로는 티가 안 난다 — 정상 구간만 낮춰 잡는다.
+        BackendRpsRecorder 재붕괴 = 유입을_흉내낸다(정상_도착 / 2, 대기_보낸, 대기_보낸, 정상_도착);
+        assertThat(회복_유입을_판정한다(재붕괴, 마지막_분모, 정상_도착))
                 .as("확인 뒤에 봉우리가 섰다")
                 .singleElement(InstanceOfAssertFactories.STRING)
                 .contains("RC4 회복 버스트");
+
+        // **확인 뒤 창에도 증폭을 건다.** 중복 계수는 같은 요청이 두 번 올 때만
+        // 운다. 다른 번호로 여분이 나가면 그건 못 보고, 봉우리 한계 1.2 안에
+        // 들어오면 버스트도 안 운다 — 그 사이가 비어 있었다.
+        BackendRpsRecorder 확인_뒤_여분 = 유입을_흉내낸다(정상_도착 + 5, 대기_보낸, 대기_보낸,
+                정상_도착 + 5);
+        assertThat(회복_유입을_판정한다(확인_뒤_여분, 마지막_분모, 정상_도착))
+                .as("확인 뒤에 보낸 것보다 많이 갔다")
+                .singleElement(InstanceOfAssertFactories.STRING)
+                .contains("RC4 회복 증폭");
     }
 
     /**
@@ -321,12 +331,12 @@ class RedisFullStopScenarioTest {
      * @param 회복_순간_도착 회복을 기다리는 구간에 뒷단이 받은 수
      * @param 확인_뒤_도착   회복이 확인된 뒤 창에 뒷단이 받은 수
      */
-    private static BackendRpsRecorder 유입을_흉내낸다(long 보낸_수, long 회복_순간_도착,
-            long 확인_뒤_도착) {
+    private static BackendRpsRecorder 유입을_흉내낸다(long 정상_구간_도착, long 보낸_수,
+            long 회복_순간_도착, long 확인_뒤_도착) {
         AtomicLong 뒷단 = new AtomicLong();
         BackendRpsRecorder 유입 = new BackendRpsRecorder(뒷단::get);
         유입.sample(지금);
-        뒷단.addAndGet(정상_도착);
+        뒷단.addAndGet(정상_구간_도착);
         유입.sample(지금.plusSeconds(1));
         뒷단.addAndGet(장애중_보낼_수);
         유입.sample(지금.plusSeconds(2));
@@ -368,7 +378,8 @@ class RedisFullStopScenarioTest {
      *
      * @param 보낸_수 회복을 기다리는 동안 시험이 보낸 요청 수
      */
-    private static List<String> 회복_유입을_판정한다(BackendRpsRecorder 유입, long 보낸_수) {
+    private static List<String> 회복_유입을_판정한다(BackendRpsRecorder 유입, long 보낸_수,
+            long 확인_뒤_보낸_수) {
         return RecoveryCriteria.violations(
                 // **차분은 표집 시각이 아니라 그것이 온 초에 쌓인다.**
                 // 표집과 표집 사이에 온 것이므로 앞 초의 몫이다.
@@ -377,7 +388,11 @@ class RedisFullStopScenarioTest {
                         유입.peakRps(지금.plusSeconds(3), 지금.plusSeconds(4))),
                 // 회복을 기다린 구간. 총량으로 나눈다 — 근거는 amplified 에 있다.
                 RecoveryCriteria.amplified(보낸_수,
-                        유입.sumIn(지금.plusSeconds(2), 지금.plusSeconds(3))));
+                        유입.sumIn(지금.plusSeconds(2), 지금.plusSeconds(3))),
+                // 확인 뒤 창도 본다. 중복 계수는 같은 요청이 두 번 올 때만 울고,
+                // 봉우리 한계 안에 들어오는 여분은 아무도 못 봤다.
+                RecoveryCriteria.amplified(확인_뒤_보낸_수,
+                        유입.sumIn(지금.plusSeconds(3), 지금.plusSeconds(4))));
     }
 
     /** 회복 판정 전부. RC4 두 창은 이 안에서 붙으므로 호출부에 안 보인다. */
@@ -385,7 +400,7 @@ class RedisFullStopScenarioTest {
     private static List<String> 회복을_판정한다(BackendRpsRecorder 유입, long 보낸_수,
             Optional<String>... 판정) {
         List<String> 깨진_것 = new ArrayList<>(RecoveryCriteria.violations(판정));
-        깨진_것.addAll(회복_유입을_판정한다(유입, 보낸_수));
+        깨진_것.addAll(회복_유입을_판정한다(유입, 보낸_수, 보낼_수));
         return 깨진_것;
     }
 

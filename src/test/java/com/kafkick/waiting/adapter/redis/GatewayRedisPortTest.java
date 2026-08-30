@@ -2,6 +2,7 @@ package com.kafkick.waiting.adapter.redis;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.kafkick.waiting.control.GatewayHeartbeatLoop;
 import java.time.Duration;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -31,8 +32,19 @@ class GatewayRedisPortTest extends RedisContainerSupport {
 
     private GatewayRedisPort port;
 
+    /**
+     * <b>살아 있는 하트비트 루프를 멈춘다.</b>
+     *
+     * <p>이 컨텍스트에는 매 틱 자기를 등록하는 루프가 있고, 그 노드가 이
+     * 시험이 세는 수에 섞인다 — 지운 뒤 단언 사이에 한 번만 찍혀도 깨진다.
+     * 운영 키를 쓰는 시험이라 자리를 가를 수 없으니 원을 멈춘다.
+     */
+    @Autowired
+    private GatewayHeartbeatLoop 하트비트;
+
     @BeforeEach
     void 준비() {
+        하트비트.stop();
         port = GatewayRedisPort.of(redis);
         redis.delete(RedisKeys.INSTANCES).block(WAIT);
     }

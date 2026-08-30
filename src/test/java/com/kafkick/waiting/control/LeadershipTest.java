@@ -7,6 +7,7 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import java.time.Duration;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -95,7 +96,7 @@ class LeadershipTest {
     }
 
     private static Mono<LeaderLock> 내_락() {
-        return Mono.just(LeaderLock.mine("node-1", LEASE.toMillis()));
+        return Mono.just(LeaderLock.mine("node-1", LEASE.toMillis(), 1));
     }
 
     private Leadership 리더가_된다(Supplier<Mono<LeaderLock>> 그다음) {
@@ -353,7 +354,7 @@ class LeadershipTest {
         leadership.renew().subscribe();
         시간을_흘린다(절반);
         leadership.renew().block(BLOCK);
-        옛_판.tryEmitValue(LeaderLock.mine("node-1", 긴_리스.toMillis()));
+        옛_판.tryEmitValue(LeaderLock.mine("node-1", 긴_리스.toMillis(), 1));
 
         시간을_흘린다(절반);
 
@@ -673,7 +674,84 @@ class LeadershipTest {
     void 소유자를_모르는_락은_만들_수_없다() {
         // 못 잡았어도 누가 쥐었는지는 사실이다. 버리면 "그럼 누가 리더였나" 에
         // 답할 수 없다.
-        assertThatThrownBy(() -> new LeaderLock(false, null, ONE_SECOND_MILLIS))
+        assertThatThrownBy(() -> new LeaderLock(false, null, ONE_SECOND_MILLIS, 0))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+    /**
+     * <b>판 번호는 리더일 때만 나간다</b> (CY-766).
+     *
+     * <p>되돌릴 수 없는 쓰기가 이 번호를 들고 나간다. 리더가 아닌데 옛 번호를
+     * 그대로 내주면 강등된 노드가 자기가 쥐었던 판인 척 줄을 지운다.
+     */
+    @Test
+    @DisplayName("리더가_아니면_판_번호가_0이다")
+    void 리더가_아니면_판_번호가_0이다() {
+        AtomicBoolean 내것 = new AtomicBoolean(true);
+        Leadership leadership = Leadership.of("node-1", LEASE, ATTEMPT,
+                () -> Mono.just(내것.get()
+                        ? LeaderLock.mine("node-1", LEASE.toMillis(), 777)
+                        : LeaderLock.heldBy("node-2", LEASE.toMillis())),
+                () -> Mono.empty());
+
+        leadership.renew().block();
+        assertThat(leadership.fence()).as("리더일 때").isEqualTo(777);
+
+        내것.set(false);
+        leadership.renew().block();
+
+        assertThat(leadership.isLeader()).isFalse();
+        assertThat(leadership.fence()).as("강등되면 번호를 안 내준다").isZero();
+    }
+
+    /**
+     * <b>리스가 지나면 판 번호를 안 내준다</b> (CY-766).
+     *
+     * <p>울타리가 막으려던 주 시나리오다 — 갱신 루프가 멎거나 STW 로 리스가
+     * 지났는데 아직 강등 신호를 못 받은 노드. 그때 옛 번호를 그대로 내주면
+     * 그 노드가 새 리더의 줄을 지운다.
+     */
+    @Test
+    @DisplayName("리스가_지나면_판_번호를_안_내준다")
+    void 리스가_지나면_판_번호를_안_내준다() {
+        Leadership leadership = 리더가_된다(Mono::never);
+        assertThat(leadership.fence()).as("전제 — 잡았을 때는 번호가 있다").isPositive();
+
+        시간을_흘린다(LEASE.plusSeconds(1));
+
+        assertThat(leadership.isLeader()).isFalse();
+        assertThat(leadership.fence()).as("확인 없이 늙은 번호는 안 내준다").isZero();
+    }
+
+    /**
+     * <b>늦게 온 옛 판의 응답이 번호를 되돌리지 않는다</b> (CY-766).
+     *
+     * <p>되돌아가면 멀쩡한 리더가 비가역 쓰기를 옛 번호로 내보낸다. 확인 시각을
+     * 안 미는 것과 같은 이유인데, 번호만 무방비였다.
+     */
+    @Test
+    @DisplayName("늦게_온_응답이_판_번호를_안_되돌린다")
+    void 늦게_온_응답이_판_번호를_안_되돌린다() {
+        AtomicInteger 호출 = new AtomicInteger();
+        Leadership leadership = leadership(() -> switch (호출.incrementAndGet()) {
+            case 1 -> Mono.just(LeaderLock.mine("node-1", LEASE.toMillis(), 500));
+            // 겹친 판 중 늦게 도착한 옛 판이 작은 번호를 들고 온다.
+            default -> Mono.just(LeaderLock.mine("node-1", LEASE.toMillis(), 100));
+        });
+
+        leadership.renew().block(BLOCK);
+        leadership.renew().block(BLOCK);
+
+        assertThat(leadership.fence()).as("뒤로 안 민다").isEqualTo(500);
+    }
+
+    /** 잡기 전에는 번호가 없다. 0 이면 울타리가 전부 거절한다 — 안전한 쪽이다. */
+    @Test
+    @DisplayName("잡기_전에는_판_번호가_0이다")
+    void 잡기_전에는_판_번호가_0이다() {
+        Leadership leadership = Leadership.of("node-1", LEASE, ATTEMPT,
+                () -> Mono.just(LeaderLock.mine("node-1", LEASE.toMillis(), 5)),
+                () -> Mono.empty());
+
+        assertThat(leadership.fence()).isZero();
     }
 }

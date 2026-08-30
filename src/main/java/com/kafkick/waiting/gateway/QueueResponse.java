@@ -32,13 +32,15 @@ public final class QueueResponse {
      * 줄에 세웠다고 알린다.
      *
      * @param pollAfterSec 다음에 물을 때까지의 초. 흔들어서 파도를 흩는다
+     * @param rejoined 자리를 비웠다 돌아왔는가. <b>순번은 안 돌려준다</b> —
+     *                 클라이언트가 "줄이 사라졌다" 와 구분하라고 알릴 뿐이다
      */
     public Mono<Void> waiting(ServerWebExchange exchange, String queueToken, long position,
-            long etaSec, String queueMode, long pollAfterSec) {
+            long etaSec, String queueMode, long pollAfterSec, boolean rejoined) {
         return write(exchange, HttpStatus.ACCEPTED, """
                 {"success":true,"data":{"admitted":false,"queueToken":"%s",\
-                "position":%d,"etaSeconds":%d,"queueMode":"%s"}}"""
-                .formatted(queueToken, position, etaSec, queueMode), pollAfterSec);
+                "position":%d,"etaSeconds":%d,"queueMode":"%s","rejoined":%b}}"""
+                .formatted(queueToken, position, etaSec, queueMode, rejoined), pollAfterSec);
     }
 
     /**
@@ -55,15 +57,28 @@ public final class QueueResponse {
                     .formatted(position, etaSec);
             // 입장은 토큰을 실어야 하므로 여기로 안 온다.
             case ADMITTED -> throw new IllegalArgumentException("입장은 따로 쓴다: " + state);
-            // 줄에 없다. 매진으로 지워졌거나 이탈로 빠졌다 — 어느 쪽이든 다시 서야 한다.
+            // 줄에 없다. 이탈로 걷혔거나 큐가 정리됐다 — 어느 쪽이든 다시 서야 한다.
+            //
+            // **매진과 사유를 갈라 쓴다.** 매진은 앞에서 `SOLD_OUT` 으로 끝나므로
+            // 여기까지 오는 것은 재고와 무관한 이유다. 둘이 같은 사유를 쓰면
+            // 이탈로 지워진 사람이 "다 팔렸다" 는 말을 듣고, 다시 설 수 있는데도
+            // 안 선다.
             case NOT_QUEUED -> """
-                    {"status":"CLOSED","reason":"STOCK_EXHAUSTED"}""";
+                    {"status":"CLOSED","reason":"NOT_IN_QUEUE"}""";
             // 조회로는 안 나온다. 등록 결과에만 있는 상태다.
             case REJECTED -> throw new IllegalArgumentException("조회 결과가 아니다: " + state);
         };
         return write(exchange, HttpStatus.OK,
                 """
                 {"success":true,"data":%s}""".formatted(data), pollAfterSec);
+    }
+
+    /** 끝난 캠페인이 폴링을 계속 만들어 내지 않게, 다시 올 시각을 안 준다. */
+    public Mono<Void> soldOut(ServerWebExchange exchange) {
+        return write(exchange, HttpStatus.OK,
+                """
+                {"success":true,"data":{"status":"SOLD_OUT","reason":"STOCK_EXHAUSTED"}}""",
+                0);
     }
 
     /**

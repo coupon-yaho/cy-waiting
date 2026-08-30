@@ -172,7 +172,7 @@ class HealthUnderWireFaultsTest {
     void 회선이_돌아오면_재료가_다시_찬다() throws IOException {
         // **회복이 빠지면 3단계 중 둘만 잰 것이다.** 장애 중에 버티는 것과
         // 걷힌 뒤 돌아오는 것은 다른 문제다 — 돌아오지 않으면 버틴 의미가 없다.
-        redis.opsForHash().put("gw:snapshot", 쿠폰, "ADAPTIVE:IDLE:0:100:0:1.0").block(WAIT);
+        redis.opsForHash().put("gw:snapshot", 쿠폰, "ADAPTIVE:IDLE:0:100:0").block(WAIT);
         redis.opsForHash().put("gw:snapshot", "#published",
                 String.valueOf(지금.getEpochSecond())).block(WAIT);
 

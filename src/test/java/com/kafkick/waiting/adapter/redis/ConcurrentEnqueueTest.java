@@ -42,6 +42,7 @@ class ConcurrentEnqueueTest extends RedisContainerSupport {
     private static final String COUPON = "c1";
     private static final String QUEUE = RedisKeys.queue(COUPON, 1, 0);
     private static final String MAX_SCORE = RedisKeys.maxScore(COUPON, 1, 0);
+    private static final String GRACE = RedisKeys.grace(COUPON, 1, 0);
     private static final String ADMITTED = RedisKeys.admitted(COUPON, 1, 0);
     private static final String ALIVE_TTL = "30";
     /** 상한 없음. 0 은 이 뜻이 아니다 — 0 은 한 명도 안 받는다는 뜻이다. */
@@ -63,8 +64,8 @@ class ConcurrentEnqueueTest extends RedisContainerSupport {
     }
 
     private void enqueue(String memberId) {
-        redis.execute(script, List.of(QUEUE, MAX_SCORE, alive(memberId), ADMITTED),
-                        List.of(memberId, String.valueOf(TTL_SECONDS), ALIVE_TTL, NO_CAP, NOW))
+        redis.execute(script, List.of(QUEUE, MAX_SCORE, alive(memberId), ADMITTED, GRACE),
+                        List.of(memberId, String.valueOf(TTL_SECONDS), ALIVE_TTL, NO_CAP, NOW, "300"))
                 .blockFirst(WAIT);
     }
 

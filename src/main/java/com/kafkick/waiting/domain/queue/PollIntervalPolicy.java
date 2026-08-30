@@ -1,5 +1,7 @@
 package com.kafkick.waiting.domain.queue;
 
+import java.time.Duration;
+
 import java.util.function.DoubleSupplier;
 
 /**
@@ -16,13 +18,60 @@ public class PollIntervalPolicy {
     /** 밴드별 기본 간격(초). 가장 먼 밴드가 30 이라 예산 식이 {@code waiting/30} 이다. */
     private static final long[] BAND_INTERVALS = {1, 3, 10, 30};
 
+    /**
+     * 배수를 안 거는 갈래가 넘기는 값.
+     *
+     * <p>{@code 1.0} 을 그대로 쓰면 배수를 깜빡한 것과 구분이 안 된다. 안 거는
+     * <b>이유</b>는 갈래마다 다르므로 그 자리에 주석으로 남긴다.
+     */
+    public static final double NO_SCALE = 1.0;
+
     private static final long MIN_INTERVAL_SEC = 1;
     private static final long MAX_INTERVAL_SEC = 60;
 
-    /** 백그라운드 탭이 분당 1회로 스로틀돼도 살아 있다고 봐야 한다. */
-    private static final long MIN_ALIVE_TTL_SEC = 30;
+    /**
+     * 서버가 시킨 간격을 지키는 사람이 <b>몇 번까지 놓쳐도 되는가</b>.
+     *
+     * <p>모바일 브라우저가 탭을 뒤로 보내면 타이머가 뭉텅이로 밀린다. 두 번은
+     * 흔하고 세 번은 드물다 — 그 위는 사람이 떠난 것으로 본다.
+     */
+    private static final long MISSED_POLLS = 3;
 
-    private static final long ALIVE_TTL_FACTOR = 3;
+    /**
+     * 마지막 폴링의 왕복과 타이머 드리프트를 덮는 여유(초).
+     *
+     * <p>이것이 없으면 약속한 횟수가 실제로는 하나 적다 — {@link #aliveTtl()} 참조.
+     */
+    // **아직 가정이다.** 240초짜리 창의 4%로, 왕복 몇 회분인지를 재고 잡은 값이
+    // 아니다. 반증하는 것은 과부하 구간의 폴링 왕복 p99 이고, 그것이 2.5초를
+    // 넘으면 4회분을 못 덮는다. 상한이나 놓치는 횟수를 만지면 이 값도 같이 본다.
+    private static final long TTL_MARGIN_SEC = 10;
+
+    /**
+     * 생존 신호 수명.
+     *
+     * <p><b>상수로 두면 안 된다.</b> 예산이 빠듯할 때 간격이 60초까지 늘어나는데,
+     * 그러면 한 번만 놓쳐도 다음 신호가 120초 뒤다 — 90초로 두면 성실히 줄 선
+     * 사람의 신호가 먼저 만료되고 청소가 그를 이탈자로 판정한다.
+     */
+    // **곱하는 수가 놓치는 횟수보다 하나 많다.** k 번 놓친 사람이 오는 시각은
+    // (k+1)·간격이다. 그냥 MISSED_POLLS 를 곱하면 마지막 한 번은 초 단위로
+    // 정확해야 하고, 늦으면 걷힌다 — 재입장은 새 순번이라 순번 역행이다.
+    //
+    // **여유를 더한다.** 곱만 하면 세 번 놓친 사람이 키가 만료되는 바로 그
+    // 순간에 도착한다. 경계가 붙어 있으면 왕복 한 번이 곧 순번 역행이라,
+    // 실제로 보장되는 것은 두 번뿐이다.
+    //
+    // 배수가 붙기 전에는 서버가 말하는 최대 간격이 36초라 이 경계가 안 보였다.
+    public static Duration aliveTtl() {
+        return maxInterval().multipliedBy(MISSED_POLLS + 1)
+                .plusSeconds(TTL_MARGIN_SEC);
+    }
+
+    /** 매진 큐 정리가 이 값을 넘겨 기다려야 한다 — 마지막 폴링을 이것이 정한다. */
+    public static Duration maxInterval() {
+        return Duration.ofSeconds(MAX_INTERVAL_SEC);
+    }
 
     private final double jitterRatio;
 
@@ -39,10 +88,6 @@ public class PollIntervalPolicy {
         return new PollIntervalPolicy(jitterRatio);
     }
 
-    public long intervalSec(double etaSec, DoubleSupplier random) {
-        return intervalSec(etaSec, random, 1.0);
-    }
-
     /**
      * 이 사람의 폴링 간격.
      *
@@ -53,19 +98,25 @@ public class PollIntervalPolicy {
      */
     public long intervalSec(double etaSec, DoubleSupplier random, double pollScale) {
         long base = bandInterval(etaSec);
-        double scaled = base * Math.max(1.0, pollScale);
+        // **자르고 나서 흔든다.** 흔든 뒤에 자르면 상한 위로 흩어진 값이 전부
+        // 상한 하나로 모여, 배수가 걸린 밴드에서 지터가 정확히 0 이 된다 —
+        // 그러면 그 밴드 전원이 같은 초에 돌아오고, 그것이 조회 상한을 다시
+        // 밀어 올려 같은 파도가 주기마다 재생산된다. 지터가 필요한 구간이
+        // 곧 배수가 걸린 구간이라 거기서 꺼지면 장치가 있으나 마나다.
+        //
+        // **천장은 흔들림의 위쪽 끝에 건다.** 그래서 실제 평균은 상한이 아니라
+        // 상한/(1+지터) 다 — 배선값 0.2 에서 60 이 아니라 50. 그만큼 예산
+        // 보호가 덜 걸리는 대가로 파도를 흩는다. 클라이언트가 받는 값은
+        // 여전히 60 을 안 넘으므로 생존 신호 수명의 유도는 그대로다.
+        // **하한을 여기서도 건다.** 재료에서 온 값은 SnapshotMeta 가 이미
+        // 정규화했지만(I6), 이 인자는 그냥 double 이라 계산해 넘기는 자리가
+        // 생기면 1 미만이 들어온다 — 그러면 한산할 때 오히려 부하를 만든다.
+        // 사본이 아니라 공개 API 의 방어이고, 양쪽 다 자기 시험이 있다.
+        double ceiling = MAX_INTERVAL_SEC / (1 + jitterRatio);
+        double scaled = Math.min(base * Math.max(1.0, pollScale), ceiling);
         // [-jitter, +jitter] 로 흔들어 같은 밴드가 동시에 두드리지 않게 한다
         double jittered = scaled * (1 + jitterRatio * (2 * random.getAsDouble() - 1));
         return Math.clamp(Math.round(jittered), MIN_INTERVAL_SEC, MAX_INTERVAL_SEC);
-    }
-
-    /**
-     * 이 간격으로 폴링하는 사람의 생존 TTL.
-     *
-     * <p>간격만 보고 잡으면 백그라운드 탭이 스로틀된 사람이 이탈자로 지워진다.
-     */
-    public long aliveTtlSec(long intervalSec) {
-        return Math.max(MIN_ALIVE_TTL_SEC, intervalSec * ALIVE_TTL_FACTOR);
     }
 
     /** ETA 를 모르면 가장 먼 밴드다 — 모를수록 자주 묻게 하면 안 된다. */

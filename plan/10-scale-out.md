@@ -37,11 +37,16 @@ R4 는 축이 둘이다. **20,000 은 큐에 서 있는 사람 수**(Redis 쪽 �
 계산상으로는 샤딩이 필요하다:
 
 ```
-enqueue.lua ≈ 8 ops
+enqueue.lua ≈ 11 ops
   ZSCORE(멱등 확인) + TIME + GET(maxscore) + ZADD + SET(maxscore)
-  + SET(alive) + GET(admitted) + ZCOUNT(순위)
+  + SET(alive) + GET(admitted) + ZCOUNT(상한) + ZCOUNT(순위)
+  + HGET(이탈 기록) + HDEL(재방문자만)
 
-S=1:  20,000명 / 1초  →  160,000 ops/s가 단일 슬롯 = 단일 노드
+S=1:  20,000명 / 1초  →  220,000 ops/s가 단일 슬롯 = 단일 노드
+
+> **이 수는 스크립트가 자라면 같이 자란다.** 7.5 가 유예 재입장을 붙이며 셋이
+> 늘었다 — 왕복은 그대로지만 슬롯이 지는 일이 늘었다. 착수 게이트를 계산이
+> 아니라 측정으로 정한 이유가 이것이다.
       단일 노드 현실 한계 ~80–120K ops/s (Lua는 EVALSHA 오버헤드로 더 낮음)
       선착순 오픈은 1초 균등이 아니라 200ms 스파이크  →  실효 800K ops/s 요구
       →  무너진다

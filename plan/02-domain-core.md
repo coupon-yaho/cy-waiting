@@ -170,7 +170,8 @@ tryAcquireAll(tier1, tier2):
 ### 3.5 판정 순서
 
 ```
- 1. stock <= 0                        → REJECT_SOLD_OUT
+ 0. 뒷단 매진 관찰 (게이트웨이 계층)   → REJECT_SOLD_OUT     ← 사다리 밖. 아래 참조
+ 1. 재고를 알고 stock <= 0            → REJECT_SOLD_OUT     ← 미상은 여기 안 걸린다 (CY-702)
  2. hasValidToken                     → tier2 통과 시 PASS_TOKEN, 초과 시 RETRY_TOKEN
  3. mode == ALWAYS && !queueFull      → ENQUEUE_ALWAYS       ← 낡음보다 앞
  4. dataStale && !hasQueue            → failOpen (상한 내 PASS, 초과 시 REJECT_OVERLOAD)
@@ -185,6 +186,16 @@ tryAcquireAll(tier1, tier2):
                                           ENQUEUE_RATE_GLOBAL / ENQUEUE_KEY_SATURATED
 10.                                   → PASS_UNDER_CAP
 ```
+
+> **0번은 도메인이 아니라 게이트웨이가 판정한다** (Phase 7 5.2절). 뒷단이 낸
+> `409` + `COUPON-306` 을 노드가 기억한 것이라 재료가 아니라 관찰이고, 도메인은
+> 라이브러리도 시계도 안 쓰므로(DS-1) 여기 넣을 수 없다. 사다리에 적어 두는 것은
+> **같은 입력에서 왜 `REJECT_SOLD_OUT` 이 나오는지** 이 표만 보고는 재현할 수
+> 없기 때문이다 — `stock=1000` 인데 매진이 나오는 자리가 여기다.
+>
+> 1번과 같은 답을 내고 같은 응답 계약(`COUPON-306` · 재시도 없음)을 쓴다. 낡은
+> 재료에서도 1번처럼 계속 끊는다 — 뒷단이 낸 409 는 스냅샷보다 직접적인 증거라,
+> 약한 증거만 낡음을 견디면 비대칭이다. 대신 **해제**를 낡은 재료로는 안 한다.
 
 > **`hasQueue` 는 `waiting > 0 || justEnqueued` 다.** 한 번 정의하고 세 줄이
 > 같은 것을 쓴다 — 풀어 쓰면 한 줄만 고쳐지고 나머지가 갈라진다.
@@ -317,8 +328,13 @@ t=0.6s  B 도착 → 스냅샷은 아직 IDLE → 8번 통과 → 버킷 리필�
 | I3 | `runtime == DRAINING ⟹ credit >= waiting` | 컴팩트 생성자 |
 | I3' | `runtime == QUEUEING ⟹ credit < waiting` (**I4 뒤에 검사**) | 컴팩트 생성자 |
 | I4 | `waiting == 0 ⟹ runtime ∈ {IDLE, CLOSED}` | 컴팩트 생성자 |
+| I7 | `remainingStock >= 0 ∨ remainingStock == STOCK_UNKNOWN` | 컴팩트 생성자 — 뜻 없는 음수를 열면 오타가 값이 된다 |
 | I5 | 표시 순위는 단조 비증가 | 속성 테스트 |
-| I6 | `pollScale >= 1.0` | 생성자 정규화 |
+| I6 | `pollScale >= 1.0` | `SnapshotMeta` 생성자 정규화 — 전역값이라 쿠폰이 아니라 메타에 산다 |
+
+**I2 가 미상을 막는다.** 재고를 못 읽은 쿠폰은 `remainingStock` 이 0 이 아니라서
+`CLOSED` 가 될 수 없다 — 종결로 가는 길이 자료형에서 막힌다 (CY-702). 매진 판정도
+"재고를 알고 0 이하" 라야 서므로 미상은 3.5 의 1번을 안 지난다.
 
 **I1이 가장 중요하다.** `IDLE`과 `credit==0`은 독립 값이 아니라 같은 원인
 (`waiting == 0`)에서 나온다.
@@ -343,7 +359,7 @@ t=0.6s  B 도착 → 스냅샷은 아직 IDLE → 8번 통과 → 버킷 리필�
 
 ```java
 // 금지 — 불변식을 어긴 조합을 만들 수 있다
-new CouponState(mode, runtime, credit, stock, waiting, scale)
+new CouponState(mode, runtime, credit, stock, waiting)
 
 // 허용 — 각 팩토리가 도달 가능한 상황 하나씩만 만든다
 CouponStates.idle(stock)
@@ -377,16 +393,18 @@ CouponStates.unknown()
 #### T2.1.2 · `CouponState` 와 불변식 ★
 
 - **산출물** `domain/coupon/CouponState.java`
-- **근거** 3.6절 (I1~I4, I6) · 3.7절 · [AIJ-0001](../ai/journal/2026/08/AIJ-0001-analyze-legacy-admission-logic.md)
+- **근거** 3.6절 (I1~I4) · 3.7절 · [AIJ-0001](../ai/journal/2026/08/AIJ-0001-analyze-legacy-admission-logic.md)
 - **선행** T2.1.1
 
 1. **RED** `IDLE_상태에서_credit이_0이_아니면_생성에_실패한다` (I1)
 2. **GREEN** 컴팩트 생성자에서 I1 검증, `IllegalArgumentException`
 3. **RED** I2·I3·I4 각각에 대해 위반 케이스 (3 사이클)
 4. **GREEN** 각 검증 추가
-5. **RED** `pollScale이_1미만이면_1로_정규화된다` (I6)
-6. **GREEN** 정규화
-7. **완료** I1~I4·I6 위반 조합을 **생성자로 만들 수 없다**
+5. **완료** I1~I4 위반 조합을 **생성자로 만들 수 없다**
+
+> **I6(`pollScale`)은 여기 없다.** 전역 값이라 쿠폰 항목에 두면 그 쿠폰이
+> 스냅샷에서 빠질 때 배수도 같이 사라진다 — T2.1.5 로 옮겼다
+> ([AIJ-0143](../ai/journal/2026/08/AIJ-0143-poll-scale-wiring.md)).
 
 #### T2.1.3 · 정적 팩토리 ★
 
@@ -422,7 +440,9 @@ CouponStates.unknown()
 
 1. **RED** `게이트웨이_수가_0이면_1로_취급한다`
 2. **GREEN** `effectiveGatewayCount()`
-3. **완료** 0·음수에서 나눗셈이 터지지 않는다
+3. **RED** `배수가_1미만이면_1로_정규화된다` (I6)
+4. **GREEN** 생성자 정규화. NaN·무한도 같이 막는다
+5. **완료** 0·음수에서 나눗셈이 안 터지고, I6 위반 조합을 생성자로 못 만든다
 
 #### T2.1.6 · 통과 상한 계산 ★
 
@@ -698,20 +718,27 @@ CouponStates.unknown()
 4. **GREEN** 난수원 주입 (DS-1 — 직접 호출 금지)
 5. **RED** `min과_max로_클램프된다`
 6. **GREEN** 클램프
-7. **완료** 같은 밴드가 동기화되지 않는다
+7. **RED** `상한에_닿아도_지터가_살아_있다`
+8. **GREEN** 자르고 나서 흔든다 — 천장을 흔들림의 위쪽 끝에 건다
+9. **완료** 같은 밴드가 동기화되지 않는다. **배수가 걸린 밴드에서도** 그렇다
 
 #### T2.5.2 · 생존 TTL
 
-- **산출물** `PollIntervalPolicy.aliveTtl(...)`
+- **산출물** `PollIntervalPolicy.aliveTtl()`
 - **근거** 백그라운드 탭 분당 1회 스로틀
 
-1. **RED** `생존_TTL은_하한_아래로_내려가지_않는다`
-2. **GREEN** `max(minAliveTtl, interval × factor)`
-3. **완료** 30초 간격에서도 TTL 하한이 지켜진다
+1. **RED** `가장_긴_간격을_지켜도_약속한_횟수만큼_놓칠_수_있다`
+2. **GREEN** `최대 간격 × (놓쳐도 되는 횟수 + 1) + 경계 여유`
+3. **완료** 서버가 시킨 간격을 지키는 사람이 약속한 횟수를 놓쳐도 안 걷힌다
+
+> **하한 상수가 아니라 최대 간격에서 유도한다.** 상수로 두면 배수가 간격을
+> 밀어 올릴 때 성실히 줄 선 사람의 신호가 먼저 만료된다. 곱하는 수가 놓치는
+> 횟수보다 하나 많아야 하고, 거기에 왕복과 드리프트를 덮는 여유가 더 붙는다
+> — 경계가 붙어 있으면 실제로 보장되는 것이 하나 적다.
 
 #### T2.5.3 · 폴링 예산 계획
 
-- **산출물** `domain/queue/PollBudgetPlanner.java`
+- **산출물** `domain/queue/PollBudgetPlanner.java` (`budgetRps(int)` 포함 — 예산의 단위는 노드다)
 - **근거** D-2 (큐의 시간 깊이가 부하를 정한다)
 
 1. **RED** `큐를_훑지_않고_닫힌_식으로_예상_폴링을_구한다`
@@ -850,7 +877,8 @@ Goal 의 수치를 항목별로 판정한다. 하나라도 미달이면 Phase 4�
 | G2.4 | F8 — 토큰 통과가 tier2 상한을 넘지 않음 | T2.3.3 |
 | **G2.16** | **큐 등록 직후 스냅샷 갱신 전에도 추월이 생기지 않는다** ([래치](#latch)) | T2.3.4 · T2.3.6 |
 | **G2.17** | **`justEnqueued=false` 면 같은 상태에서 무대기 통과가 복귀한다** — 래치가 죽은 분기를 만들지 않는다 | T2.3.6 |
-| G2.5 | 불변식 I1~I6 위반을 픽스처로 만들 수 **없다** | T2.1.4 |
+| G2.5 | 불변식 I1~I4 위반을 픽스처로 만들 수 **없다** | T2.1.4 |
+| G2.5' | I6 위반을 생성자로 만들 수 **없다** — 배수는 쿠폰이 아니라 메타에 산다 | T2.1.5 |
 | G2.6 | 순수 도메인 **브랜치 커버리지 100%** | JaCoCo |
 | G2.7 | **뮤테이션 생존율 ≤ 10%** | PIT |
 | G2.8 | **크레딧 초과 배분 0** — 무작위 10만 회 | T2.4.3 |

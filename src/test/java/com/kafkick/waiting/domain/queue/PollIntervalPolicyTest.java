@@ -23,10 +23,10 @@ class PollIntervalPolicyTest {
     void ETA_밴드마다_기본_간격이_다르다() {
         PollIntervalPolicy p = noJitter();
 
-        assertThat(p.intervalSec(1, () -> 0.5)).isEqualTo(1);
-        assertThat(p.intervalSec(20, () -> 0.5)).isEqualTo(3);
-        assertThat(p.intervalSec(100, () -> 0.5)).isEqualTo(10);
-        assertThat(p.intervalSec(1000, () -> 0.5)).isEqualTo(30);
+        assertThat(p.intervalSec(1, () -> 0.5, 1.0)).isEqualTo(1);
+        assertThat(p.intervalSec(20, () -> 0.5, 1.0)).isEqualTo(3);
+        assertThat(p.intervalSec(100, () -> 0.5, 1.0)).isEqualTo(10);
+        assertThat(p.intervalSec(1000, () -> 0.5, 1.0)).isEqualTo(30);
     }
 
     @Test
@@ -36,9 +36,9 @@ class PollIntervalPolicyTest {
         // 다른 간격을 받는다.
         PollIntervalPolicy p = noJitter();
 
-        assertThat(p.intervalSec(5, () -> 0.5)).isEqualTo(3);
-        assertThat(p.intervalSec(30, () -> 0.5)).isEqualTo(10);
-        assertThat(p.intervalSec(120, () -> 0.5)).isEqualTo(30);
+        assertThat(p.intervalSec(5, () -> 0.5, 1.0)).isEqualTo(3);
+        assertThat(p.intervalSec(30, () -> 0.5, 1.0)).isEqualTo(10);
+        assertThat(p.intervalSec(120, () -> 0.5, 1.0)).isEqualTo(30);
     }
 
     @Test
@@ -47,8 +47,8 @@ class PollIntervalPolicyTest {
         // 모를 때 자주 물어보게 하면 모르는 상황일수록 부하가 커진다.
         PollIntervalPolicy p = noJitter();
 
-        assertThat(p.intervalSec(Double.POSITIVE_INFINITY, () -> 0.5)).isEqualTo(30);
-        assertThat(p.intervalSec(Double.NaN, () -> 0.5)).isEqualTo(30);
+        assertThat(p.intervalSec(Double.POSITIVE_INFINITY, () -> 0.5, 1.0)).isEqualTo(30);
+        assertThat(p.intervalSec(Double.NaN, () -> 0.5, 1.0)).isEqualTo(30);
     }
 
     @Test
@@ -58,9 +58,9 @@ class PollIntervalPolicyTest {
         PollIntervalPolicy p = PollIntervalPolicy.of(0.2);
 
         // 난수원을 주입해 결정적으로 본다 (DS-1 — 직접 호출 금지)
-        assertThat(p.intervalSec(1000, () -> 0.0)).isEqualTo(24);
-        assertThat(p.intervalSec(1000, () -> 0.5)).isEqualTo(30);
-        assertThat(p.intervalSec(1000, () -> 1.0)).isEqualTo(36);
+        assertThat(p.intervalSec(1000, () -> 0.0, 1.0)).isEqualTo(24);
+        assertThat(p.intervalSec(1000, () -> 0.5, 1.0)).isEqualTo(30);
+        assertThat(p.intervalSec(1000, () -> 1.0, 1.0)).isEqualTo(36);
     }
 
     @Test
@@ -70,8 +70,57 @@ class PollIntervalPolicyTest {
         // 상한이 없으면 이탈 판정 TTL 을 넘겨 멀쩡한 사람이 지워진다.
         PollIntervalPolicy p = PollIntervalPolicy.of(5.0);
 
-        assertThat(p.intervalSec(1, () -> 0.0)).isEqualTo(1);
-        assertThat(p.intervalSec(1000, () -> 1.0)).isEqualTo(60);
+        assertThat(p.intervalSec(1, () -> 0.0, 1.0)).isEqualTo(1);
+        assertThat(p.intervalSec(1000, () -> 1.0, 1.0)).isEqualTo(60);
+    }
+
+    /**
+     * <b>배수가 걸린 순간에만 지터가 죽으면 안 된다.</b>
+     *
+     * <p>흔든 뒤에 자르면 상한 위로 흩어진 값이 전부 상한 하나로 모인다. 배수 2
+     * 이상에서 가장 먼 밴드는 전원이 정확히 같은 초에 돌아온다는 뜻이다.
+     */
+    // 그것이 조회 상한을 다시 밀어 올려 같은 파도가 주기마다 재생산된다. 지터가
+    // 필요한 구간이 정확히 배수가 걸린 구간이라 여기서 꺼지면 장치가 있으나
+    // 마나고, 평균은 정확히 맞으므로 부하 시험으로는 안 잡힌다.
+    @Test
+    @DisplayName("상한에_닿아도_지터가_살아_있다")
+    void 상한에_닿아도_지터가_살아_있다() {
+        PollIntervalPolicy p = PollIntervalPolicy.of(0.2);
+
+        // 가장 먼 밴드(30초)에 배수 5 — 150 초라 흔들기 전에 이미 상한 위다
+        long 아래 = p.intervalSec(1000, () -> 0.0, 5.0);
+        long 가운데 = p.intervalSec(1000, () -> 0.5, 5.0);
+        long 위 = p.intervalSec(1000, () -> 1.0, 5.0);
+
+        // **천장을 값으로 못 박는다.** 부등식만 재면 천장이 50 과 59 사이 어디든
+        // 통과하는데, 54.5 면 가장 먼 밴드의 27%가 다시 60 하나로 뭉친다 — 이
+        // 변경이 없앤 파도가 절반 규모로 되살아나도 초록이라는 뜻이다.
+        assertThat(가운데).as("천장 50 — 흔들림의 가운데").isEqualTo(50);
+        assertThat(아래).as("50 × 0.8").isEqualTo(40);
+        assertThat(위).as("50 × 1.2 — 위쪽 끝이 상한에 정확히 닿는다").isEqualTo(60);
+    }
+
+    /**
+     * <b>서버가 말하는 값은 상한을 안 넘는다.</b>
+     *
+     * <p>생존 신호 수명이 이 사실 하나에 통째로 기대고 있다. 천장을 먼저 걸면서
+     * 마지막 클램프가 도달 불가가 됐으므로, 지키는 것이 천장 계산 하나뿐이다.
+     */
+    @Test
+    @DisplayName("어떤_지터와_배수에서도_상한을_안_넘는다")
+    void 어떤_지터와_배수에서도_상한을_안_넘는다() {
+        long 상한 = PollIntervalPolicy.maxInterval().toSeconds();
+        for (double 지터 : new double[] {0.0, 0.05, 0.2, 0.5, 1.0, 5.0}) {
+            PollIntervalPolicy p = PollIntervalPolicy.of(지터);
+            for (double 배수 : new double[] {1.0, 1.5, 2.0, 17.6, 1_000.0}) {
+                for (double 난수 : new double[] {0.0, 0.25, 0.5, 0.75, 1.0}) {
+                    assertThat(p.intervalSec(1000, () -> 난수, 배수))
+                            .as("지터 %s · 배수 %s · 난수 %s", 지터, 배수, 난수)
+                            .isBetween(1L, 상한);
+                }
+            }
+        }
     }
 
     @Test
@@ -93,14 +142,30 @@ class PollIntervalPolicyTest {
     }
 
     @Test
-    @DisplayName("생존_TTL은_하한_아래로_내려가지_않는다")
-    void 생존_TTL은_하한_아래로_내려가지_않는다() {
-        // 백그라운드 탭은 분당 한 번으로 스로틀된다. 간격만 보고 TTL 을
-        // 잡으면 탭을 내려둔 사람이 이탈자로 지워진다.
-        PollIntervalPolicy p = noJitter();
+    @DisplayName("가장_긴_간격을_지켜도_약속한_횟수만큼_놓칠_수_있다")
+    void 가장_긴_간격을_지켜도_약속한_횟수만큼_놓칠_수_있다() {
+        // 서버가 시킨 간격 I 를 지키는 사람이 k 번 놓치고 오는 시각은
+        // (k+1)·I 다. 그러니 TTL 이 MISSED_POLLS·I 면 놓칠 수 있는 것은
+        // MISSED_POLLS-1 번뿐이고, 마지막 한 번은 초 단위로 정확해야 한다.
+        //
+        // **배수가 붙기 전에는 이 경계가 안 보였다.** 서버가 말할 수 있는
+        // 최대 간격이 36초라 180초 TTL 에 여유가 넉넉했다. 배수가 간격을
+        // 상한 60초까지 밀어 올리면서 여유가 0 이 됐고, 그 자리에서 걷히면
+        // 재입장은 새 순번이라 **순번 역행**이 된다 (불변식 3·4).
+        long 최대_간격 = PollIntervalPolicy.maxInterval().toSeconds();
+        long ttl = PollIntervalPolicy.aliveTtl().toSeconds();
 
-        assertThat(p.aliveTtlSec(1)).isEqualTo(30);
-        assertThat(p.aliveTtlSec(30)).isEqualTo(90);
+        // **경계에 여유가 있어야 한다.** 정확히 (k+1)·I 로 두면 세 번 놓친
+        // 사람은 키가 만료되는 바로 그 순간에 도착한다. 왕복 지연이나 클라이언트
+        // 타이머 드리프트가 조금만 밀어도 걷히므로, 실제로 보장되는 것은 두
+        // 번뿐이고 약속한 세 번은 지켜지지 않는다.
+        assertThat(ttl).as("세 번 놓친 사람이 오는 시각(240초)보다 뒤")
+                .isGreaterThan(4 * 최대_간격);
+
+        // **위쪽도 값으로 못 박는다.** 수명이 길수록 죽은 줄이 오래 남아 폴링
+        // 예산을 먹고, 청소 재개 유예도 같이 늘어난다 — 이 변경이 없애려는
+        // 문제와 같은 것이다. 관계식으로 재면 늘어나는 쪽이 열린다.
+        assertThat(ttl).as("여유는 왕복과 드리프트를 덮을 만큼만").isEqualTo(250);
     }
 
     @Test

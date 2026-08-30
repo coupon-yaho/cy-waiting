@@ -10,25 +10,35 @@ package com.kafkick.waiting.domain.coupon;
  * @param mode           운영자가 정한 대기열 정책
  * @param runtime        기계가 관측한 현재 상태
  * @param credit         이 쿠폰에 배분된 초당 통과 몫
- * @param remainingStock 남은 재고. <b>발급 계층이 소유</b>하고 게이트웨이는 읽기만 한다
+ * @param remainingStock 남은 재고. 못 읽었으면 {@link #STOCK_UNKNOWN} 이다 —
+ *     사용자에게 보이거나 셈에 넣지 않는다. 매진인지만 {@link #soldOut()} 으로 묻는다
  * @param waiting        줄 서 있는 사람 수
- * @param pollScale      폴링 간격 배수. 예산이 빠듯하면 커진다
  */
 public record CouponState(
         QueueMode mode,
         RuntimeState runtime,
         long credit,
         long remainingStock,
-        long waiting,
-        double pollScale) {
+        long waiting) {
+
+    /**
+     * 재고를 <b>못 읽었다</b>는 뜻. 다 팔린 것(0)과 다른 값이라야 한다 — 같은
+     * 값이면 재고 키를 잃은 쿠폰이 종결되고 큐까지 지워진다 (3.1).
+     */
+    // 수요 쪽에도 같은 뜻의 값이 따로 있다. 경계를 넘는 것은 값이 아니라
+    // stockKnown() 이라, 둘이 같은 수일 필요는 없다.
+    public static final long STOCK_UNKNOWN = -1;
 
     public CouponState {
         if (mode == null || runtime == null) {
             throw new IllegalArgumentException("mode 와 runtime 은 필수다");
         }
-        if (credit < 0 || remainingStock < 0 || waiting < 0) {
+        // 미상을 뜻하는 한 값 말고는 음수를 안 받는다. 열어 두면 오타가 값이 된다.
+        if (credit < 0 || waiting < 0
+                || (remainingStock < 0 && remainingStock != STOCK_UNKNOWN)) {
             throw new IllegalArgumentException(
-                    "음수가 될 수 없다: credit=%d, remainingStock=%d, waiting=%d"
+                    "음수가 될 수 없다. 재고를 못 읽었으면 stockUnknown 을 쓴다: "
+                            + "credit=%d, remainingStock=%d, waiting=%d"
                             .formatted(credit, remainingStock, waiting));
         }
 
@@ -87,16 +97,6 @@ public record CouponState(
                     "[I3'] QUEUEING 이면 credit < waiting 이어야 한다: credit=%d, waiting=%d"
                             .formatted(credit, waiting));
         }
-
-        // NaN 은 비교가 전부 false 라 Math.max 를 그냥 통과한다. 그대로 두면
-        // 폴링 간격 계산이 조용히 NaN 이 되어 대기자가 폴링을 멈춘다.
-        if (Double.isNaN(pollScale)) {
-            throw new IllegalArgumentException("pollScale 이 NaN 이다");
-        }
-
-        // I6 — 거부가 아니라 정규화다. 1 미만은 폴링을 더 자주 하라는 뜻이
-        // 되는데 그건 예산을 늘리는 방향이라 의미가 없다.
-        pollScale = Math.max(1.0, pollScale);
     }
 
     /**
@@ -183,19 +183,36 @@ public record CouponState(
 
     /** 아무도 줄을 서지 않았다. 배분을 못 받았으므로 credit 은 0 이다. */
     public static CouponState idle(long remainingStock) {
-        return new CouponState(QueueMode.ADAPTIVE, RuntimeState.IDLE, 0, remainingStock, 0, 1.0);
+        return new CouponState(QueueMode.ADAPTIVE, RuntimeState.IDLE, 0, remainingStock, 0);
     }
 
     /** 줄이 생겼다. 상한을 넘은 초과분이 큐로 들어가면서 이 상태가 된다. */
     public static CouponState queueing(long credit, long remainingStock, long waiting) {
         return new CouponState(
-                QueueMode.ADAPTIVE, RuntimeState.QUEUEING, credit, remainingStock, waiting, 1.0);
+                QueueMode.ADAPTIVE, RuntimeState.QUEUEING, credit, remainingStock, waiting);
     }
 
     /** 이번 틱에 남은 대기자를 다 빼줄 수 있다. 배분이 대기자를 따라잡으면 여기로 온다. */
     public static CouponState draining(long credit, long remainingStock, long waiting) {
         return new CouponState(
-                QueueMode.ADAPTIVE, RuntimeState.DRAINING, credit, remainingStock, waiting, 1.0);
+                QueueMode.ADAPTIVE, RuntimeState.DRAINING, credit, remainingStock, waiting);
+    }
+
+    /**
+     * 매진인가. <b>발급 판정과 순번 조회가 같이 부른다.</b>
+     *
+     * <p>각자 재고를 해석하면 같은 쿠폰에 정반대로 답하는 순간이 생긴다.
+     */
+    // 런타임 상태로 안 읽는 이유: CLOSED 는 대기자가 남았을 때만 만들어지므로,
+    // 큐를 정리해 대기자가 0 이 된 매진 쿠폰은 IDLE 로 떨어져 매진이 아닌 것이
+    // 된다. 그 자리가 매진 쿠폰의 정상 종착점이다.
+    public boolean soldOut() {
+        return stockKnown() && remainingStock <= 0;
+    }
+
+    /** 재고를 읽었는가. <b>미상은 매진이 아니다</b> — 그 구분이 여기서 난다. */
+    public boolean stockKnown() {
+        return remainingStock != STOCK_UNKNOWN;
     }
 
     /** 재고가 소진됐는데 대기자가 남았다. 스케줄러가 이 전이를 만든다. */
@@ -209,7 +226,7 @@ public record CouponState(
      * 거짓말을 한다 — 대기 응답이 이미 모드를 싣는다.
      */
     public static CouponState closed(QueueMode mode, long waiting) {
-        return new CouponState(mode, RuntimeState.CLOSED, 0, 0, waiting, 1.0);
+        return new CouponState(mode, RuntimeState.CLOSED, 0, 0, waiting);
     }
 
     /**
@@ -228,7 +245,10 @@ public record CouponState(
         }
         // 재고가 없는데 줄이 남았으면 그건 매진이다. 여기서 만들면 아무것도 못
         // 받을 줄에 사람을 계속 세우는 상태가 되고, 발행 경로에는 그 길이 없다.
-        if (remainingStock <= 0) {
+        //
+        // **미상은 여기 안 걸린다.** 못 읽은 것을 매진으로 접으면 그 줄이 종결되고
+        // 큐까지 지워진다. 진짜 상한은 뒷단이 원자적으로 지킨다 (불변식 2).
+        if (remainingStock != STOCK_UNKNOWN && remainingStock <= 0) {
             throw new IllegalArgumentException(
                     "재고가 없으면 매진이다. closed 를 쓴다: remainingStock=%d"
                             .formatted(remainingStock));
@@ -239,12 +259,26 @@ public record CouponState(
         RuntimeState runtime = credit >= waiting
                 ? RuntimeState.DRAINING
                 : RuntimeState.QUEUEING;
-        return new CouponState(mode, runtime, credit, remainingStock, waiting, 1.0);
+        return new CouponState(mode, runtime, credit, remainingStock, waiting);
+    }
+
+    /**
+     * 재고를 못 읽은 쿠폰. 줄은 그대로 돌리고 <b>매진으로는 안 접는다.</b>
+     *
+     * <p>재고를 못 읽는 동안 굶기지 않으려면 몫을 깎지 않아야 하고, 종결하지
+     * 않으려면 매진이 아니어야 한다. 둘 다 이 한 값에서 나온다.
+     */
+    // **줄이 비면 몫도 0 이라야 한다.** 여기서 조용히 버리면 형제 팩토리가
+    // 던지는 자리를 이것만 삼켜, I1 이 잡으려던 갈라짐이 안 드러난다.
+    public static CouponState stockUnknown(QueueMode mode, long credit, long waiting) {
+        return waiting > 0
+                ? withQueue(mode, credit, STOCK_UNKNOWN, waiting)
+                : new CouponState(mode, RuntimeState.IDLE, credit, STOCK_UNKNOWN, 0);
     }
 
     /** 줄이 빈 쿠폰. 배분을 못 받았으므로 credit 은 0 이다 (I1). */
     public static CouponState noQueue(QueueMode mode, long remainingStock) {
-        return new CouponState(mode, RuntimeState.IDLE, 0, remainingStock, 0, 1.0);
+        return new CouponState(mode, RuntimeState.IDLE, 0, remainingStock, 0);
     }
 
     /**
@@ -268,12 +302,12 @@ public record CouponState(
 
     /** 운영자가 무조건 줄을 세우기로 했다. 한산해도 대기열을 태운다. */
     public static CouponState always(long remainingStock) {
-        return new CouponState(QueueMode.ALWAYS, RuntimeState.IDLE, 0, remainingStock, 0, 1.0);
+        return new CouponState(QueueMode.ALWAYS, RuntimeState.IDLE, 0, remainingStock, 0);
     }
 
     /** 운영자가 대기열을 껐다. 줄이 비어 있는 동안 줄을 세우지 않는다. */
     public static CouponState off(long remainingStock) {
-        return new CouponState(QueueMode.OFF, RuntimeState.IDLE, 0, remainingStock, 0, 1.0);
+        return new CouponState(QueueMode.OFF, RuntimeState.IDLE, 0, remainingStock, 0);
     }
 
     /**
@@ -281,6 +315,6 @@ public record CouponState(
      * 통과시키려는 게 아니다 — 미지 쿠폰은 요청 경로에서 404 로 끊는다.
      */
     public static CouponState unknown() {
-        return new CouponState(QueueMode.ADAPTIVE, RuntimeState.CLOSED, 0, 0, 0, 1.0);
+        return new CouponState(QueueMode.ADAPTIVE, RuntimeState.CLOSED, 0, 0, 0);
     }
 }

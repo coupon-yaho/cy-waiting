@@ -28,7 +28,7 @@ class SnapshotRefresherTest {
     private static final Instant 지금 = Instant.parse("2026-08-20T00:00:00Z");
     private static final Map<String, String> 정상 = Map.of(
             "#credit", "1000", "#nodes", "2", "#published", "1787184000",
-            "c1", "ADAPTIVE:QUEUEING:100:500:2000:1.0");
+            "c1", "ADAPTIVE:QUEUEING:100:500:2000");
 
     private static final Duration FETCH_STALE = Duration.ofSeconds(2);
 
@@ -153,7 +153,7 @@ class SnapshotRefresherTest {
         AtomicInteger 호출 = new AtomicInteger();
         Map<String, String> 판이_갈린_스냅샷 = Map.of(
                 "#credit", "1000", "#nodes", "2", "#published", "1787184000",
-                "c1", "ADAPTIVE:QUEUEING:100:500:2000:1.0:뒷판이_늘린_필드");
+                "c1", "ADAPTIVE:QUEUEING:100:500:2000:뒷판이_늘린_필드");
         SnapshotRefresher refresher = SnapshotRefresher.of(holder,
                 () -> Mono.just(호출.incrementAndGet() == 1 ? 정상 : 판이_갈린_스냅샷));
 
@@ -196,7 +196,7 @@ class SnapshotRefresherTest {
         AtomicInteger 호출 = new AtomicInteger();
         Map<String, String> 판이_다른_스냅샷 = Map.of(
                 "#credit", "1000", "#nodes", "2", "#published", "1787184000",
-                "c1", "ADAPTIVE:QUEUEING:100:500:2000:1.0:뒷판이_늘린_필드");
+                "c1", "ADAPTIVE:QUEUEING:100:500:2000:뒷판이_늘린_필드");
         SnapshotRefresher refresher = SnapshotRefresher.of(holder,
                 () -> 호출.incrementAndGet() == 1 ? Mono.just(정상)
                         : Mono.just(판이_다른_스냅샷));

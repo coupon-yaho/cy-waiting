@@ -184,9 +184,12 @@ public final class AbuseLimitFilter implements WebFilter {
      * <b>큐에 안 넣는다.</b> 넣으면 공격자가 자리를 차지하고, 그 자리는 정상
      * 사용자의 것이다.
      */
+    // **배수를 명시적으로 안 건다.** 이 갈래는 판정보다 앞이라 재료를 아직 안
+    // 봤고, 여기서 홀더를 읽으면 요청 경로에 판정과 무관한 의존이 하나 는다.
+    // 남용 요청을 예산에 맞춰 배려할 이유도 없다.
     private Mono<Void> reject(ServerWebExchange exchange, String kind) {
         meters.counter(METRIC, "key", kind).increment();
         return error.write(exchange, ApiError.Code.RATE_LIMITED,
-                (int) BACKOFF.intervalSec(EtaPolicy.UNKNOWN, random));
+                (int) BACKOFF.intervalSec(EtaPolicy.UNKNOWN, random, PollIntervalPolicy.NO_SCALE));
     }
 }

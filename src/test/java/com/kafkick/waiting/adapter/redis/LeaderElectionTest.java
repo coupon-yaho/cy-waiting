@@ -84,6 +84,90 @@ class LeaderElectionTest extends RedisContainerSupport {
         return String.valueOf(r.get(1));
     }
 
+    /**
+     * 락에 적힌 소유자. <b>형식을 아는 곳을 한 군데로 모은다</b> — 값은
+     * {@code <판 번호>|<ownerId>} 이고, 옛 형식에는 번호가 없다.
+     */
+    private String storedOwner() {
+        String raw = redis.opsForValue().get(LEADER).block(WAIT);
+        if (raw == null) {
+            return null;
+        }
+        int sep = raw.indexOf('|');
+        return sep < 0 ? raw : raw.substring(sep + 1);
+    }
+
+    private long fence(List<Object> r) {
+        return Long.parseLong(String.valueOf(r.get(3)));
+    }
+
+    /**
+     * <b>판 번호는 리더가 바뀔 때마다 커진다</b> (CY-766).
+     *
+     * <p>되돌릴 수 없는 쓰기는 이 번호를 들고 나가고, 줄 옆의 울타리가 그것으로
+     * 옛 리더를 가려낸다. 안 커지면 옛 명령과 새 명령을 구분할 방법이 없다.
+     */
+    @Test
+    @DisplayName("리더가_바뀌면_판_번호가_커진다")
+    void 리더가_바뀌면_판_번호가_커진다() {
+        long 첫판 = fence(tryAcquire("node-1"));
+        releaseBy("node-1");
+
+        long 다음판 = fence(tryAcquire("node-2"));
+
+        assertThat(첫판).as("잡았으면 번호가 있다").isPositive();
+        assertThat(다음판).as("다음 리더가 더 크다").isGreaterThan(첫판);
+    }
+
+    /** 연장은 같은 판이다. 매 틱 새로 매기면 자기 자신을 옛 리더로 만든다. */
+    @Test
+    @DisplayName("연장은_판_번호를_안_바꾼다")
+    void 연장은_판_번호를_안_바꾼다() {
+        long 처음 = fence(tryAcquire("node-1"));
+
+        assertThat(fence(tryAcquire("node-1"))).isEqualTo(처음);
+    }
+
+    /** 못 잡았으면 번호가 없다. 남의 번호를 들고 나가면 그 리더를 흉내 낸다. */
+    @Test
+    @DisplayName("못_잡으면_판_번호가_없다")
+    void 못_잡으면_판_번호가_없다() {
+        tryAcquire("node-1");
+
+        assertThat(fence(tryAcquire("node-2"))).isZero();
+    }
+
+    /**
+     * <b>옛 형식의 값도 알아보고, 번호를 그 자리에서 매긴다.</b>
+     *
+     * <p>롤아웃 구간에 옛 노드가 남긴 락은 판 번호가 없다. 못 읽으면 그 락을
+     * 남의 것으로 보고 리더가 둘이 된다. 그렇다고 0 을 그대로 쓰면 울타리가
+     * 전부 거절해 그 노드의 매진 큐 정리가 무기한 죽는다 — 연장은 번호를 안
+     * 바꾸므로 리스가 끊길 때까지 스스로 못 빠져나온다.
+     */
+    @Test
+    @DisplayName("판_번호_없는_옛_락은_번호를_받는다")
+    void 판_번호_없는_옛_락은_번호를_받는다() {
+        redis.opsForValue().set(LEADER, "node-1").block(WAIT);
+
+        List<Object> r = tryAcquire("node-1");
+
+        assertThat(acquired(r)).as("내 락으로 알아본다").isTrue();
+        assertThat(owner(r)).isEqualTo("node-1");
+        assertThat(fence(r)).as("0 으로 두면 정리가 무기한 죽는다").isPositive();
+        assertThat(storedOwner()).as("주인은 그대로다").isEqualTo("node-1");
+    }
+
+    /** 옛 형식의 자기 락도 해제한다. 못 알아보면 안 지우고 나간다. */
+    @Test
+    @DisplayName("판_번호_없는_옛_락도_해제한다")
+    void 판_번호_없는_옛_락도_해제한다() {
+        redis.opsForValue().set(LEADER, "node-1").block(WAIT);
+
+        assertThat(releaseBy("node-1")).isEqualTo(1);
+        assertThat(redis.hasKey(LEADER).block(WAIT)).isFalse();
+    }
+
     @Test
     @DisplayName("아무도_안_잡았으면_획득한다")
     void 아무도_안_잡았으면_획득한다() {
@@ -91,7 +175,7 @@ class LeaderElectionTest extends RedisContainerSupport {
 
         assertThat(acquired(result)).isTrue();
         assertThat(owner(result)).isEqualTo("node-1");
-        assertThat(redis.opsForValue().get(LEADER).block(WAIT)).isEqualTo("node-1");
+        assertThat(storedOwner()).isEqualTo("node-1");
     }
 
     @Test
@@ -106,7 +190,7 @@ class LeaderElectionTest extends RedisContainerSupport {
         // **연장 경로를 탔는지부터 본다.** 그 사이 리스가 끝나면 두 번째 획득이
         // 신규 분기를 타는데, 그쪽도 성공을 돌려주고 리스도 새로 걸어 준다 —
         // 연장이 통째로 사라져도 시험은 조용히 초록이다.
-        assertThat(redis.opsForValue().get(LEADER).block(WAIT))
+        assertThat(storedOwner())
                 .as("연장하려면 아직 내 락이어야 한다").isEqualTo("node-1");
 
         assertThat(acquired(tryAcquire("node-1"))).isTrue();
@@ -127,7 +211,7 @@ class LeaderElectionTest extends RedisContainerSupport {
 
         assertThat(acquired(result)).isFalse();
         assertThat(owner(result)).isEqualTo("node-1");
-        assertThat(redis.opsForValue().get(LEADER).block(WAIT)).isEqualTo("node-1");
+        assertThat(storedOwner()).isEqualTo("node-1");
     }
 
     @Test
@@ -189,7 +273,7 @@ class LeaderElectionTest extends RedisContainerSupport {
         tryAcquire("node-2");
 
         assertThat(releaseBy("node-1")).isZero();
-        assertThat(redis.opsForValue().get(LEADER).block(WAIT)).isEqualTo("node-2");
+        assertThat(storedOwner()).isEqualTo("node-2");
     }
 
     @Test
@@ -200,7 +284,7 @@ class LeaderElectionTest extends RedisContainerSupport {
         Duration 짧은_리스 = Duration.ofSeconds(1);
         redis.opsForValue().set(LEADER, "dead-node", 짧은_리스).block(WAIT);
         // 애초에 안 걸렸으면 "만료돼서 잡았다" 가 아니라 "원래 없었다" 를 재게 된다.
-        assertThat(redis.opsForValue().get(LEADER).block(WAIT)).isEqualTo("dead-node");
+        assertThat(storedOwner()).isEqualTo("dead-node");
 
         리스_만료를_기다린다(짧은_리스);
 
@@ -240,6 +324,6 @@ class LeaderElectionTest extends RedisContainerSupport {
                 .rootCause()
                 .hasMessageContaining("ownerId");
 
-        assertThat(redis.opsForValue().get(LEADER).block(WAIT)).isEqualTo("node-1");
+        assertThat(storedOwner()).isEqualTo("node-1");
     }
 }

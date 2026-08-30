@@ -25,7 +25,7 @@ class CouponStateTest {
         @Test
         @DisplayName("IDLE_상태에서_credit이_0이_아니면_생성에_실패한다")
         void IDLE_상태에서_credit이_0이_아니면_생성에_실패한다() {
-            assertThatThrownBy(() -> new CouponState(QueueMode.ADAPTIVE, RuntimeState.IDLE, 1000, 500, 0, 1.0))
+            assertThatThrownBy(() -> new CouponState(QueueMode.ADAPTIVE, RuntimeState.IDLE, 1000, 500, 0))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("[I1]");
         }
@@ -33,7 +33,7 @@ class CouponStateTest {
         @Test
         @DisplayName("IDLE_이고_credit이_0이면_생성된다")
         void IDLE_이고_credit이_0이면_생성된다() {
-            CouponState s = new CouponState(QueueMode.ADAPTIVE, RuntimeState.IDLE, 0, 500, 0, 1.0);
+            CouponState s = new CouponState(QueueMode.ADAPTIVE, RuntimeState.IDLE, 0, 500, 0);
 
             assertThat(s.runtime()).isEqualTo(RuntimeState.IDLE);
             assertThat(s.credit()).isZero();
@@ -48,7 +48,7 @@ class CouponStateTest {
         @Test
         @DisplayName("CLOSED_인데_재고가_남아_있으면_생성에_실패한다")
         void CLOSED_인데_재고가_남아_있으면_생성에_실패한다() {
-            assertThatThrownBy(() -> new CouponState(QueueMode.ADAPTIVE, RuntimeState.CLOSED, 0, 10, 5, 1.0))
+            assertThatThrownBy(() -> new CouponState(QueueMode.ADAPTIVE, RuntimeState.CLOSED, 0, 10, 5))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("[I2]");
         }
@@ -62,7 +62,7 @@ class CouponStateTest {
         @Test
         @DisplayName("DRAINING_인데_credit이_대기자보다_적으면_생성에_실패한다")
         void DRAINING_인데_credit이_대기자보다_적으면_생성에_실패한다() {
-            assertThatThrownBy(() -> new CouponState(QueueMode.ADAPTIVE, RuntimeState.DRAINING, 10, 500, 100, 1.0))
+            assertThatThrownBy(() -> new CouponState(QueueMode.ADAPTIVE, RuntimeState.DRAINING, 10, 500, 100))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("[I3]");
         }
@@ -74,7 +74,7 @@ class CouponStateTest {
             // waiting) 조합이 DRAINING 으로도 QUEUEING 으로도 만들어진다.
             // 판정기는 runtime != IDLE 을 ENQUEUE_BACKLOG 로 보므로, 이번 틱에
             // 다 뺄 수 있는 줄인데도 계속 줄을 세운다.
-            assertThatThrownBy(() -> new CouponState(QueueMode.ADAPTIVE, RuntimeState.QUEUEING, 500, 10_000, 100, 1.0))
+            assertThatThrownBy(() -> new CouponState(QueueMode.ADAPTIVE, RuntimeState.QUEUEING, 500, 10_000, 100))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("[I3']");
         }
@@ -84,9 +84,9 @@ class CouponStateTest {
         void 경계는_같을_때다_생성자는_DRAINING만_받는다() {
             // 같으면 다 뺄 수 있다. 그러니 QUEUEING 이 아니다 — 경계를 어디에
             // 두는지가 두 방향에서 같아야 한 조합이 한 상태만 갖는다.
-            assertThatCode(() -> new CouponState(QueueMode.ADAPTIVE, RuntimeState.DRAINING, 100, 500, 100, 1.0))
+            assertThatCode(() -> new CouponState(QueueMode.ADAPTIVE, RuntimeState.DRAINING, 100, 500, 100))
                     .doesNotThrowAnyException();
-            assertThatThrownBy(() -> new CouponState(QueueMode.ADAPTIVE, RuntimeState.QUEUEING, 100, 500, 100, 1.0))
+            assertThatThrownBy(() -> new CouponState(QueueMode.ADAPTIVE, RuntimeState.QUEUEING, 100, 500, 100))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("[I3']");
         }
@@ -100,7 +100,7 @@ class CouponStateTest {
         @Test
         @DisplayName("대기자가_0인데_QUEUEING이면_생성에_실패한다")
         void 대기자가_0인데_QUEUEING이면_생성에_실패한다() {
-            assertThatThrownBy(() -> new CouponState(QueueMode.ADAPTIVE, RuntimeState.QUEUEING, 100, 500, 0, 1.0))
+            assertThatThrownBy(() -> new CouponState(QueueMode.ADAPTIVE, RuntimeState.QUEUEING, 100, 500, 0))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("[I4]");
         }
@@ -108,32 +108,10 @@ class CouponStateTest {
         @Test
         @DisplayName("대기자가_0이고_CLOSED면_생성된다")
         void 대기자가_0이고_CLOSED면_생성된다() {
-            CouponState s = new CouponState(QueueMode.ADAPTIVE, RuntimeState.CLOSED, 0, 0, 0, 1.0);
+            CouponState s = new CouponState(QueueMode.ADAPTIVE, RuntimeState.CLOSED, 0, 0, 0);
 
             assertThat(s.runtime()).isEqualTo(RuntimeState.CLOSED);
             assertThat(s.waiting()).isZero();
-        }
-    }
-
-    // 규칙의 근거는 바깥 인스턴스 누수인데, 테스트 인스턴스는 실행 후 버려져 해당 없다.
-    @Nested
-    @DisplayName("I6 — 폴링 배수는 1 미만으로 내려가지 않는다")
-    class I6 {
-
-        @Test
-        @DisplayName("pollScale이_1미만이면_1로_정규화된다")
-        void pollScale이_1미만이면_1로_정규화된다() {
-            // 거부가 아니라 정규화다. 1 미만은 폴링을 더 자주 하라는 뜻이 되는데
-            // 그건 예산을 늘리는 방향이라 의미가 없다.
-            assertThat(new CouponState(QueueMode.ADAPTIVE, RuntimeState.IDLE, 0, 500, 0, 0.3).pollScale())
-                    .isEqualTo(1.0);
-        }
-
-        @Test
-        @DisplayName("pollScale이_1이상이면_그대로_둔다")
-        void pollScale이_1이상이면_그대로_둔다() {
-            assertThat(new CouponState(QueueMode.ADAPTIVE, RuntimeState.IDLE, 0, 500, 0, 2.5).pollScale())
-                    .isEqualTo(2.5);
         }
     }
 
@@ -148,25 +126,9 @@ class CouponStateTest {
             // I4 의 대우로는 이 조합이 안 막힌다. 그대로 두면 판정 8번이
             // 통과시켜 줄 선 사람을 추월한다.
             assertThatThrownBy(
-                            () -> new CouponState(QueueMode.ADAPTIVE, RuntimeState.IDLE, 0, 500, 5000, 1.0))
+                            () -> new CouponState(QueueMode.ADAPTIVE, RuntimeState.IDLE, 0, 500, 5000))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("[I1']");
-        }
-    }
-
-    // 규칙의 근거는 바깥 인스턴스 누수인데, 테스트 인스턴스는 실행 후 버려져 해당 없다.
-    @Nested
-    @DisplayName("pollScale 유한값")
-    class PollScaleFinite {
-
-        @Test
-        @DisplayName("pollScale이_NaN이면_생성에_실패한다")
-        void pollScale이_NaN이면_생성에_실패한다() {
-            // NaN 은 비교가 전부 false 라 Math.max 를 그냥 통과한다.
-            assertThatThrownBy(
-                            () -> new CouponState(
-                                    QueueMode.ADAPTIVE, RuntimeState.IDLE, 0, 500, 0, Double.NaN))
-                    .isInstanceOf(IllegalArgumentException.class);
         }
     }
 
@@ -178,14 +140,14 @@ class CouponStateTest {
         @Test
         @DisplayName("mode가_null이면_생성에_실패한다")
         void mode가_null이면_생성에_실패한다() {
-            assertThatThrownBy(() -> new CouponState(null, RuntimeState.IDLE, 0, 500, 0, 1.0))
+            assertThatThrownBy(() -> new CouponState(null, RuntimeState.IDLE, 0, 500, 0))
                     .isInstanceOf(IllegalArgumentException.class);
         }
 
         @Test
         @DisplayName("runtime이_null이면_생성에_실패한다")
         void runtime이_null이면_생성에_실패한다() {
-            assertThatThrownBy(() -> new CouponState(QueueMode.ADAPTIVE, null, 0, 500, 0, 1.0))
+            assertThatThrownBy(() -> new CouponState(QueueMode.ADAPTIVE, null, 0, 500, 0))
                     .isInstanceOf(IllegalArgumentException.class);
         }
     }
@@ -195,25 +157,112 @@ class CouponStateTest {
     @DisplayName("음수 방어")
     class NegativeValues {
 
+        /** 미상을 뜻하는 한 값 말고는 음수를 안 받는다. 열어 두면 오타가 값이 된다. */
         @Test
-        @DisplayName("재고가_음수면_생성에_실패한다")
-        void 재고가_음수면_생성에_실패한다() {
-            assertThatThrownBy(() -> new CouponState(QueueMode.ADAPTIVE, RuntimeState.IDLE, 0, -1, 0, 1.0))
+        @DisplayName("뜻_없는_음수_재고면_생성에_실패한다")
+        void 뜻_없는_음수_재고면_생성에_실패한다() {
+            assertThatThrownBy(() -> new CouponState(QueueMode.ADAPTIVE, RuntimeState.IDLE, 0, -2, 0))
                     .isInstanceOf(IllegalArgumentException.class);
         }
 
         @Test
         @DisplayName("대기자가_음수면_생성에_실패한다")
         void 대기자가_음수면_생성에_실패한다() {
-            assertThatThrownBy(() -> new CouponState(QueueMode.ADAPTIVE, RuntimeState.IDLE, 0, 500, -1, 1.0))
+            assertThatThrownBy(() -> new CouponState(QueueMode.ADAPTIVE, RuntimeState.IDLE, 0, 500, -1))
                     .isInstanceOf(IllegalArgumentException.class);
         }
 
         @Test
         @DisplayName("credit이_음수면_생성에_실패한다")
         void credit이_음수면_생성에_실패한다() {
-            assertThatThrownBy(() -> new CouponState(QueueMode.ADAPTIVE, RuntimeState.QUEUEING, -1, 500, 10, 1.0))
+            assertThatThrownBy(() -> new CouponState(QueueMode.ADAPTIVE, RuntimeState.QUEUEING, -1, 500, 10))
                     .isInstanceOf(IllegalArgumentException.class);
         }
+    }
+
+    /**
+     * <b>재고를 못 읽은 것은 매진이 아니다.</b> 매진으로 읽으면 게이트웨이가
+     * 그 쿠폰을 종결하고 정리가 큐를 지운다 — 자동으로 안 낫는 오판이
+     * 되돌릴 수 없는 삭제가 된다 (3.1).
+     */
+    @Test
+    @DisplayName("재고_미상은_매진이_아니다")
+    void 재고_미상은_매진이_아니다() {
+        CouponState 미상 = CouponState.stockUnknown(QueueMode.ADAPTIVE, 7, 100);
+
+        assertThat(미상.stockKnown()).as("모른다는 것이 값으로 남는다").isFalse();
+        assertThat(미상.soldOut()).as("종결도 삭제도 이 값에 달렸다").isFalse();
+    }
+
+    /** 읽은 0 은 그대로 매진이다. 미상을 들이면서 이것이 흔들리면 R3 이 죽는다. */
+    @Test
+    @DisplayName("읽은_재고_0은_그대로_매진이다")
+    void 읽은_재고_0은_그대로_매진이다() {
+        assertThat(CouponState.closed(QueueMode.ADAPTIVE, 5).soldOut()).isTrue();
+        assertThat(CouponState.noQueue(QueueMode.ADAPTIVE, 0).soldOut()).isTrue();
+        assertThat(CouponState.withQueue(QueueMode.ADAPTIVE, 3, 10, 20).soldOut()).isFalse();
+        // **경계는 0 이다.** 미상만 빠져나가게 열었으므로, 읽은 0 이 같이
+        // 빠져나가면 아무것도 못 받을 줄에 사람을 계속 세우는 상태가 생긴다.
+        assertThatThrownBy(() -> CouponState.withQueue(QueueMode.ADAPTIVE, 3, 0, 20))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("closed");
+    }
+
+    /**
+     * <b>미상도 배수 중이 될 수 있다.</b> 런타임을 유도하는 팩토리라 결과가
+     * 셋인데, 이 갈래를 안 재면 I3 경계가 미상에서만 어긋나도 안 드러난다.
+     */
+    @Test
+    @DisplayName("미상인데_이번_틱에_다_뺄_수_있으면_배수다")
+    void 미상인데_이번_틱에_다_뺄_수_있으면_배수다() {
+        CouponState 미상 = CouponState.stockUnknown(QueueMode.ADAPTIVE, 30, 30);
+
+        assertThat(미상.runtime()).as("몫이 대기와 같으면 배수다").isEqualTo(RuntimeState.DRAINING);
+        assertThat(미상.stockKnown()).isFalse();
+    }
+
+    /**
+     * 적용이 실패하면 몫이 0 으로 접힌다. <b>그 판의 미상 쿠폰이 이 상태다</b> —
+     * 줄은 남았는데 아무도 못 들어간다. 매진과 갈리는 것이 여기서도 유지돼야 한다.
+     */
+    @Test
+    @DisplayName("미상인데_몫이_0이면_줄_서는_중이다")
+    void 미상인데_몫이_0이면_줄_서는_중이다() {
+        CouponState 미상 = CouponState.stockUnknown(QueueMode.ADAPTIVE, 0, 30);
+
+        assertThat(미상.runtime()).isEqualTo(RuntimeState.QUEUEING);
+        assertThat(미상.soldOut()).as("몫이 0 이라고 매진은 아니다").isFalse();
+    }
+
+    /**
+     * 미상인데 줄이 비었으면 한산이다. <b>줄 없이 큐 상태를 만들면 I4 가 막는다</b> —
+     * 경계가 밀리면 재고를 못 읽는 쿠폰이 줄이 빌 때마다 발행에서 터진다.
+     */
+    @Test
+    @DisplayName("미상인데_줄이_비면_한산이다")
+    void 미상인데_줄이_비면_한산이다() {
+        CouponState 미상 = CouponState.stockUnknown(QueueMode.ADAPTIVE, 0, 0);
+
+        assertThat(미상.runtime()).isEqualTo(RuntimeState.IDLE);
+        assertThat(미상.stockKnown()).isFalse();
+        assertThat(미상.soldOut()).as("줄이 비었다고 매진은 아니다").isFalse();
+        // **몫을 조용히 안 버린다.** 형제 팩토리가 던지는 자리를 이것만 삼키면
+        // I1 이 잡으려던 갈라짐이 안 드러난다.
+        assertThatThrownBy(() -> CouponState.stockUnknown(QueueMode.ADAPTIVE, 5, 0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("I1");
+    }
+
+    /**
+     * <b>미상이면 종결로 못 간다.</b> I2 가 종결에 재고 0 을 요구하므로 미상은
+     * 애초에 그 자리에 못 선다 — 삭제로 가는 길이 자료형에서 막힌다.
+     */
+    @Test
+    @DisplayName("미상은_종결_상태가_될_수_없다")
+    void 미상은_종결_상태가_될_수_없다() {
+        assertThatThrownBy(() -> new CouponState(
+                QueueMode.ADAPTIVE, RuntimeState.CLOSED, 0, CouponState.STOCK_UNKNOWN, 5))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("I2");
     }
 }

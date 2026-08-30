@@ -124,7 +124,8 @@ class ClusterModeScriptTest {
                     RedisKeys.queue("c1", 1, 0),
                     RedisKeys.maxScore("c1", 1, 0),
                     RedisKeys.alive("c1", 1, 0),
-                    RedisKeys.admitted("c1", 1, 0));
+                    RedisKeys.admitted("c1", 1, 0),
+                    RedisKeys.grace("c1", 1, 0));
             case "queue_status.lua" -> List.of(
                     RedisKeys.queue("c1", 1, 0),
                     RedisKeys.admitted("c1", 1, 0),
@@ -133,7 +134,15 @@ class ClusterModeScriptTest {
             case "sweep.lua" -> List.of(
                     RedisKeys.queue("c1", 1, 0),
                     RedisKeys.grace("c1", 1, 0),
-                    RedisKeys.alive("c1", 1, 0));
+                    RedisKeys.alive("c1", 1, 0),
+                    RedisKeys.admitted("c1", 1, 0));
+            // 재고와 울타리가 줄과 같은 슬롯이라야 한다. 갈리면 클러스터가
+            // 본문을 태우기 전에 거절하므로, 이 시험이 그 라우팅을 잰다.
+            case "drop_queue.lua" -> List.of(
+                    RedisKeys.queue("c1", 1, 0),
+                    RedisKeys.alive("c1", 1, 0),
+                    RedisKeys.stock("c1"),
+                    RedisKeys.dropFence("c1", 1, 0));
             case "snapshot_publish.lua" -> List.of(RedisKeys.SNAPSHOT);
             case "capacity_read.lua" -> List.of(RedisKeys.CAPACITY);
             case "snapshot_read.lua" -> List.of(RedisKeys.SNAPSHOT);
@@ -149,10 +158,11 @@ class ClusterModeScriptTest {
 
     private static List<String> argsFor(String script) {
         return switch (script) {
-            case "enqueue.lua" -> List.of("m1", "60", "30", "-1", "1000");
+            case "enqueue.lua" -> List.of("m1", "60", "30", "-1", "1000", "300");
             case "queue_status.lua" -> List.of("m1", "30", "1000");
             case "sweep.lua" -> List.of("10", "1000", "300", "50", "0");
             case "allocation_apply.lua" -> List.of("1");
+            case "drop_queue.lua" -> List.of("1", "1", "60000");
             // 인자가 없다. 기준 시각을 밖에서 주면 이 스크립트를 둔 이유가 사라진다.
             case "capacity_read.lua", "snapshot_read.lua", "active_read.lua" -> List.of();
             case "snapshot_publish.lua" -> List.of("#credit", "0");

@@ -12,9 +12,11 @@ import java.util.Objects;
  * @param score 이 사람의 순번(마이크로초). 줄에 없으면 {@code -1}
  * @param alreadyQueued 이미 서 있던 사람인가. 새로고침 연타를 가른다
  * @param clockWentBack 바닥값이 적용됐는가. 참이면 시계가 뒤로 갔다는 뜻이다
+ * @param rejoined <b>등록 결과에만 있는 사실이다.</b> 조회는 항상 거짓을 싣는다 —
+ *                 자리를 비웠다는 것은 다시 설 때 한 번만 알려 줄 수 있다
  */
 public record QueueEntry(QueueState state, long rank, long score,
-        boolean alreadyQueued, boolean clockWentBack) {
+        boolean alreadyQueued, boolean clockWentBack, boolean rejoined) {
 
     /** 줄에 없다는 뜻. 0번째와 구분하려면 음수여야 한다. */
     public static final long NONE = -1;
@@ -36,16 +38,23 @@ public record QueueEntry(QueueState state, long rank, long score,
             throw new IllegalArgumentException(
                     "%s 가 가질 수 없는 값이다: rank=%d score=%d".formatted(state, rank, score));
         }
+        // **재방문은 새로 선 사람에게만 있다.** 이미 줄에 있던 사람은 스크립트가
+        // 먼저 돌아가 기록을 안 보고, 조회는 그 사실을 아예 안 싣는다.
+        //
+        // **던지지 않고 낮춘다.** 등록 결과를 만들다 던지면 부르는 쪽이 그것을
+        // 삼켜 fail-open 으로 흘리고, 그러면 줄에 5만 명이 서 있어도 신규가
+        // 뒷단 직행이 된다 — 보고용 값 하나 때문에 줄이 통째로 열린다.
+        rejoined = rejoined && state == QueueState.WAITING && !alreadyQueued;
     }
 
     /** 줄에 없다. 아직 안 섰거나 이탈로 지워졌다. */
     public static QueueEntry notQueued() {
-        return new QueueEntry(QueueState.NOT_QUEUED, NONE, NONE, false, false);
+        return new QueueEntry(QueueState.NOT_QUEUED, NONE, NONE, false, false, false);
     }
 
     /** 줄이 꽉 차 못 섰다. */
     public static QueueEntry rejected() {
-        return new QueueEntry(QueueState.REJECTED, NONE, NONE, false, false);
+        return new QueueEntry(QueueState.REJECTED, NONE, NONE, false, false, false);
     }
 
     /** 줄에 자리가 있는가. 거절은 상한에 걸린 것뿐이다. */

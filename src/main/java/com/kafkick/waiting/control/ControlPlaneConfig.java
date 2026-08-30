@@ -4,7 +4,11 @@ import com.kafkick.waiting.adapter.redis.AllocationRedisPort;
 import com.kafkick.waiting.adapter.redis.LeaderRedisPort;
 import com.kafkick.waiting.domain.allocation.CreditSmoother;
 import io.micrometer.core.instrument.Gauge;
+import com.kafkick.waiting.domain.queue.GraceRetention;
+import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import io.micrometer.core.instrument.MeterRegistry;
+import java.util.List;
+import reactor.core.publisher.Mono;
 import java.time.Instant;
 import java.util.Optional;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -28,6 +32,12 @@ public class ControlPlaneConfig {
 
     /** 평활화 계수. 클수록 최근 값을 빨리 따라간다. */
     private static final double SMOOTHING_ALPHA = 0.3;
+
+    /** 이탈 기록 보관. <b>등록도 같은 값을 읽는다</b> — 갈리면 판정이 갈린다. */
+    private static final long GRACE_SEC = GraceRetention.SECONDS;
+
+    /** 한 판이 지우는 상한. 스크립트가 `unpack` 한계로 더 좁힌다. */
+    private static final int SWEEP_BUDGET = 1_000;
 
     @Bean
     Leadership leadership(LeaderRedisPort port, ControlPlaneProperties properties) {
@@ -59,13 +69,32 @@ public class ControlPlaneConfig {
     @Bean
     AllocationRound allocationRound(DemandCollector collector, AllocationRedisPort port,
             GatewayRegistry registry, CapacityCollector capacity, Leadership leadership,
-            TunablesRefresh tunables) {
+            TunablesRefresh tunables, ControlPlaneProperties properties,
+            SoldOutCleanup cleanup, QueueSweeper sweeper, SnapshotHolder holder) {
         SnapshotCodec codec = SnapshotCodec.create();
         return AllocationRound.of(leadership::isLeader, collector::collect, capacity::lastKnown,
                 registry::count, port::apply, port::publish, Instant::now,
                 () -> port.load().map(hash ->
                         CreditSmoother.restore(SMOOTHING_ALPHA, codec.smoothing(hash))),
-                codec, capacity::lastFloor, tunables::current);
+                codec, capacity::lastFloor, tunables::current,
+                // **유예를 값으로 정한다** (7.3.2). 스냅샷 낡음 한계보다 충분히
+                // 커야 마지막 폴링이 줄을 안 잃는다.
+                cleanup,
+                // **이제 실제로 지운다** (5.3.1). 선결 조건 셋이 다 닫혔다 —
+                // 재고 미상과 0 을 가르고(CY-702), 지우기 직전에 재고를 다시
+                // 보고(CY-765), 옛 리더의 명령을 울타리가 거른다(CY-766).
+                //
+                // **판 번호를 그때그때 읽는다.** 붙잡아 두면 강등된 뒤에도 옛
+                // 번호로 나가고, 그건 울타리를 우회하는 일이다. 리더가 아니면
+                // 0 이 나가고 스크립트가 전부 거절한다 — 안전한 방향이다.
+                ids -> port.dropSoldOutQueues(ids, leadership.fence()),
+                // 세기 시작한 줄에 표만 세운다. 지웠을 때만 세우면 한 번도 안
+                // 지운 줄에 표가 없어, 얼었다 깨어난 옛 리더를 못 막는다.
+                ids -> port.claimSoldOutQueues(ids, leadership.fence()),
+                sweeper,
+                // 이 노드도 게이트웨이다. 자기가 든 재료의 나이가 노드들의
+                // 폴링 상태에 가장 가까운 신호다.
+                holder::isDataStale);
     }
 
     /**
@@ -120,7 +149,7 @@ public class ControlPlaneConfig {
     @Bean
     InvariantMetrics invariantMetrics(AllocationRound round, AllocationRedisPort port,
             MeterRegistry meters) {
-        return InvariantMetrics.bind(round, port.clockSkew(), meters);
+        return InvariantMetrics.bind(round, port.clockSkew(), meters, port::markersDropped);
     }
 
     /**
@@ -146,11 +175,27 @@ public class ControlPlaneConfig {
         return refresh;
     }
 
+    /** 배분 라운드와 리더십 경계가 같은 것을 봐야 한다 — 따로 만들면 승계에서 셈이 안 버려진다. */
+    @Bean
+    SoldOutCleanup soldOutCleanup(ControlPlaneProperties properties, MeterRegistry meters) {
+        return SoldOutCleanup.of(properties.scheduler().soldOutGraceTicks(), meters);
+    }
+
+    /** 멈추는 판단을 생성자가 필수로 받는다 — 빠뜨리면 컴파일이 안 된다 (7.4). */
+    @Bean
+    QueueSweeper queueSweeper(AllocationRedisPort port, ControlPlaneProperties properties,
+            MeterRegistry meters) {
+        return QueueSweeper.of(SweepGate.of(properties.scheduler().tick(), PollIntervalPolicy.aliveTtl()),
+                (ids, scanLimit) -> port.sweep(ids, Instant.now().getEpochSecond(),
+                        scanLimit, GRACE_SEC, SWEEP_BUDGET),
+                meters);
+    }
+
     /** 배분 틱. <b>재료를 먼저 읽고 배분한다</b> — 안 읽으면 크레딧이 첫 하한에 머문다. */
     @Bean
     AllocationScheduler allocationLoop(ControlPlaneProperties properties, Leadership leadership,
             AllocationRound round, CapacityRefresh capacity, CapacityCollector collector,
-            TunablesRefresh tunables, Scheduler allocationScheduler) {
+            TunablesRefresh tunables, Scheduler allocationScheduler, SoldOutCleanup cleanup) {
         return AllocationScheduler.of(properties.scheduler().tick(),
                 properties.scheduler().firstTickDelay(),
                 // **승계는 유예를 처음부터 준다.** 비리더 구간에 얼어 있던 실패
@@ -159,6 +204,10 @@ public class ControlPlaneConfig {
                         () -> {
                             collector.leadershipAcquired();
                             capacity.leadershipChanged();
+                            // **매진 유예도 처음부터 준다.** 얼어 있던 셈을
+                            // 이어 쓰면 유예가 설정값이 아니라 "내가 리더였던
+                            // 틱 수" 가 되고, 그 둘은 장애 중에 갈린다.
+                            cleanup.leadershipAcquired();
                         },
                         capacity::leadershipChanged),
                 // **운영 값을 먼저 읽고 배분한다.** 순서가 뒤면 방금 바꾼 값이

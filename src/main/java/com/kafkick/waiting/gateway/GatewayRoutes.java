@@ -2,6 +2,7 @@ package com.kafkick.waiting.gateway;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.cloud.gateway.filter.GatewayFilter;
 import com.kafkick.waiting.control.HealthConfig;
 import java.util.function.IntSupplier;
@@ -128,10 +129,23 @@ public class GatewayRoutes {
         return admission::inFlight;
     }
 
+    /**
+     * 본문 쓰기 상한. <b>응답 상한의 배수</b>라 배포 없이 같이 움직인다.
+     *
+     * <p>따로 적으면 응답 상한만 고쳤을 때 두 값이 갈리고, 그때 어느 쪽이 먼저
+     * 끊는지가 바뀐다.
+     */
+    private BodyDeadline bodyDeadline(Backend backend, MeterRegistry meters) {
+        return BodyDeadline.of(backend.responseTimeout().multipliedBy(2),
+                backend.responseTimeout(), meters);
+    }
+
     @Bean
     public RouteLocator routes(RouteLocatorBuilder builder, Backend backend,
             AdmissionGatewayFilter admission, QueryCoalescingFilter coalescing,
-            SpringCloudCircuitBreakerFilterFactory breakers) {
+            SoldOutObserver soldOut, SpringCloudCircuitBreakerFilterFactory breakers,
+            MeterRegistry meters) {
+        BodyDeadline bodyDeadline = bodyDeadline(backend, meters);
         return builder.routes()
                 .route("issue", r -> r
                         .method(HttpMethod.POST)
@@ -142,7 +156,15 @@ public class GatewayRoutes {
                         // 가면 래치가 죽는다 (FilterOrder).
                         .filters(f -> stripSpoofableClientIp(f)
                                 .filter(admission, FilterOrder.ROUTE_ADMISSION)
-                                .filter(circuit(breakers), FilterOrder.ROUTE_CIRCUIT))
+                                .filter(circuit(breakers), FilterOrder.ROUTE_CIRCUIT)
+                                // **발급에만 붙인다.** 조회 응답에는 매진 코드가
+                                // 재고 정보로 실릴 수 있고, 그건 관찰이 아니다.
+                                .filter(soldOut, FilterOrder.ROUTE_SOLD_OUT)
+                                // **본문이 안 끝나는 뒷단을 끊는다.** 응답 상한은
+                                // 헤더가 오기까지만 재므로 그 뒤로는 아무것도
+                                // 안 걸리고, 헤더가 나간 뒤라 판정 쪽 시한도
+                                // 커넥션을 못 끊는다.
+                                .filter(bodyDeadline, FilterOrder.ROUTE_BODY))
                         // **끊는 자리가 서킷 안쪽이어야 한다.** 밖에서 끊으면
                         // 서킷에 가는 것은 오류가 아니라 취소이고, 취소는 창에
                         // 안 쌓인다 — 멎은 뒷단의 서킷이 영영 안 열린다.
@@ -155,7 +177,8 @@ public class GatewayRoutes {
                         // **조회에만 붙인다.** 발급에 붙이면 같은 응답을 여럿이
                         // 받고, 그건 곧 초과 발급이다.
                         .filters(f -> stripSpoofableClientIp(f)
-                                .filter(coalescing, FilterOrder.ROUTE_COALESCING))
+                                .filter(coalescing, FilterOrder.ROUTE_COALESCING)
+                                .filter(bodyDeadline, FilterOrder.ROUTE_BODY))
                         // **여기도 끊는 자리가 있어야 한다.** 모으기가 붙은 뒤로는
                         // 멎은 요청 하나가 그 키를 영구히 잠근다 — 뒤이어 오는
                         // 모든 조회가 끝나지 않는 것에 붙고, 뒷단이 살아나도

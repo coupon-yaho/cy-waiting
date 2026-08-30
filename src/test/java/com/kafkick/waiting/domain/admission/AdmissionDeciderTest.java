@@ -39,6 +39,20 @@ class AdmissionDeciderTest {
         assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.REJECT_SOLD_OUT);
     }
 
+    /**
+     * <b>재고를 모르면 매진으로 종결하지 않는다</b> (CY-702).
+     *
+     * <p>여기서 종결하면 재고 키를 잃은 쿠폰이 사다리 1번에서 끊긴다 — 다음
+     * 스냅샷이 안 되돌리는 오판이라 그 줄이 영영 못 들어온다.
+     */
+    @Test
+    @DisplayName("재고를_모르면_매진으로_종결하지_않는다")
+    void 재고를_모르면_매진으로_종결하지_않는다() {
+        AdmissionRequest req = request(CouponStates.stockUnknown(10, 30));
+
+        assertThat(decider().decide(req)).isNotEqualTo(AdmissionDecision.REJECT_SOLD_OUT);
+    }
+
     @Test
     @DisplayName("토큰을_든_사람은_상태와_무관하게_통과한다")
     void 토큰을_든_사람은_상태와_무관하게_통과한다() {
@@ -472,8 +486,8 @@ class AdmissionDeciderTest {
     @DisplayName("실려_온_한산_몫이_기동값을_이긴다")
     void 실려_온_한산_몫이_기동값을_이긴다() {
         CouponState 한산 = CouponStates.idle(500);
-        SnapshotMeta 실려_온_것 = new SnapshotMeta(META.globalCredit(), META.gatewayCount(),
-                new Tunables(0.2, 3));
+        SnapshotMeta 실려_온_것 = SnapshotMeta.withoutPollScale(
+                META.globalCredit(), META.gatewayCount(), new Tunables(0.2, 3));
 
         assertThat(decider().admittedRatePerSec(
                 AdmissionDecision.PASS_UNDER_CAP, 한산, 실려_온_것))

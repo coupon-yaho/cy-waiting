@@ -16,7 +16,7 @@ plugins {
 }
 
 group = 'com.kafkick'
-version = '0.3.0'
+version = '0.4.0'
 
 java {
     toolchain {
@@ -365,6 +365,20 @@ pitest {
     // 1.25.9 는 1.15.0 보다 뮤턴트를 44개 더 만든다 (285 → 329, 실측).
     pitestVersion = '1.25.9'
     junit5PluginVersion = '1.2.3'
+    // **시한을 스프링 판에 맞춘다.** 기본 4초는 단위 시험 기준이라, 컨텍스트를
+    // 띄우는 시험(느린 것이 6.3초)이 그 안에 못 끝난다. 그러면 미니언이 시간
+    // 초과로 죽고 그 판의 뮤턴트가 통째로 유실된다 — main 파이프라인에서
+    // `Minion exited abnormally due to TIMED_OUT` 이 열네 번 났다.
+    //
+    // **그 시험들을 빼는 쪽은 안 골랐다.** 빼 보니 뮤테이션이 91%에서 85%로
+    // 떨어졌다 — 실제로 뮤턴트를 죽이고 있었다. 느리다고 빼면 게이트가 지키던
+    // 것을 잃는다.
+    //
+    // 20000 은 **상수**다. PIT 의 실효 시한은 이 값에 `timeoutFactor × 기준
+    // 시간` 이 더해진 것이라, "가장 느린 시험의 세 배" 같은 셈으로 읽으면
+    // 안 된다. 늘리면 무한 루프 뮤턴트의 판정도 그만큼 늦어져 전체 실행이
+    // 길어진다 — 실측 14분, 잡 상한 40분.
+    timeoutConstInMillis = 20000
     // 미니언이 코어 수만큼 뜨면 그것만으로 장비가 넘어간다. 상한을 건다.
     threads = 2
     // **시험 태스크와 같은 프로파일을 준다.** 안 주면 컨텍스트 시험이 운영
@@ -408,3 +422,27 @@ tasks.register('codenarcBuildScripts', org.gradle.api.plugins.quality.CodeNarc) 
     compilationClasspath = files()
 }
 tasks.named('check') { dependsOn 'codenarcBuildScripts' }
+
+/**
+ * 생존 신호 수명을 부하 하네스에 알려 준다.
+ *
+ * <b>손으로 옮겨 적지 않게 한다.</b> G7.5 판정이 이 값에 걸려 있는데, 사본을
+ * 두면 정책이 움직일 때 판정만 옛 값을 쓴다 — 실제로 그 상수 하나가 같은
+ * 측정에서 통과와 미달을 뒤집었다.
+ *
+ * <b>도메인에 main 을 두지 않는다.</b> 부하 하네스 편의를 위해 프로덕션
+ * 클래스에 진입점을 만들면 그 자리가 계속 는다. 컴파일된 것을 읽는다.
+ */
+tasks.register('printAliveTtlSeconds') {
+    description = '생존 신호 수명(초). test/load/abandonment-waste.sh 가 읽는다'
+    group = 'verification'
+    dependsOn 'classes'
+    ext.policy = 'com.kafkick.waiting.domain.queue.PollIntervalPolicy'
+    doLast {
+        def urls = sourceSets.main.runtimeClasspath.collect { it.toURI().toURL() }
+        new URLClassLoader(urls as URL[]).withCloseable { loader ->
+            def seconds = loader.loadClass(policy).getMethod('aliveTtl').invoke(null).toSeconds()
+            println seconds
+        }
+    }
+}

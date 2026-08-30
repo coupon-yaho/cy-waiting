@@ -106,7 +106,8 @@ public final class BackendFallback {
         boolean admitted = admitted(request);
         ApiError.Envelope envelope = error.render(request.exchange(),
                 HttpStatus.SERVICE_UNAVAILABLE, CODE,
-                admitted ? ADMITTED : QUEUED, retryAfterSec(admitted), false);
+                admitted ? ADMITTED : QUEUED,
+                retryAfterSec(admitted, pollScale(request)), false);
         return ServerResponse.status(envelope.status())
                 .headers(headers -> headers.putAll(envelope.headers()))
                 .bodyValue(envelope.body());
@@ -128,12 +129,27 @@ public final class BackendFallback {
     }
 
     /**
+     * 이 요청을 판정한 판의 배수. <b>홀더를 다시 안 읽는다</b> — 서킷을 지나
+     * 나중에 도는 자리라 그러면 다른 판의 값이 나간다.
+     */
+    // 없으면 1.0 이다. 판정을 안 거친 요청이거나 첫 틱 전이고, 둘 다 배수를
+    // 모르는 상태다. 모를 때 늘리면 근거 없이 전원을 멀리 보내는 것이다.
+    private double pollScale(ServerRequest request) {
+        Double scale = request.exchange().getAttribute(AdmissionGatewayFilter.POLL_SCALE);
+        return scale == null ? PollIntervalPolicy.NO_SCALE : scale;
+    }
+
+    /**
      * 다시 올 시각.
      *
      * <p>차례가 온 사람은 <b>가장 가까운 밴드</b>로 부른다. 멀리 보내면 그 사이
      * 그의 몫이 남에게 가고, 토큰 수명이 다하면 줄 맨 뒤로 다시 선다.
      */
-    private int retryAfterSec(boolean admitted) {
-        return (int) POLL.intervalSec(admitted ? 0 : EtaPolicy.UNKNOWN, random);
+    // **차례가 온 쪽은 배수도 안 받는다.** 판정 경로가 같은 사람에게 그렇게
+    // 답한다 — 배수만큼 멀리 보내면 토큰이 죽어 줄 맨 뒤에 다시 선다.
+    private int retryAfterSec(boolean admitted, double pollScale) {
+        return admitted
+                ? (int) POLL.intervalSec(0, random, PollIntervalPolicy.NO_SCALE)
+                : (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random, pollScale);
     }
 }

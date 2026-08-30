@@ -132,14 +132,36 @@ public final class QueueStatusFilter implements WebFilter {
             count("no-token");
             return error.write(exchange, ApiError.Code.INVALID_REQUEST);
         }
+        // **매진이면 줄을 안 친다** (R3 · 7.1.4). 재고가 없으면 답이 정해져
+        // 있는데, 그런데도 물으러 가면 매진 순간 몰리는 폴링이 그대로 레디스
+        // 부하가 된다 — 정작 그때 줄을 정리해야 한다.
+        //
+        // **조회 상한보다 앞이다.** 상한은 노드 전역 키 하나라 쿠폰별 격리가
+        // 없다. 뒤에 두면 죽은 쿠폰의 폴링이 살아 있는 쿠폰의 예산을 먹고, 매진
+        // 폴러 자신도 상한에 걸려 `Retry-After` 가 붙은 503 을 받는다 — 이
+        // 변경이 없애려던 폴링 재생산이 정확히 그 경로로 돌아온다.
+        //
+        // 상한을 안 써도 되는 것은 여기서 레디스를 안 치기 때문이다. 남용은
+        // 앞단의 주소·회원 상한이 이미 막는다.
+        if (soldOut(couponId)) {
+            count("sold-out");
+            return response.soldOut(exchange);
+        }
         // **폴링은 읽기가 아니라 쓰기다.** 생존 신호를 갱신하고 차례가 오면 큐에서
         // 뺀다. 토큰은 줄을 서면 누구나 받고 한 시간 사니, 상한이 없으면 토큰 몇
         // 개로 공유 레디스에 무제한 쓰기를 넣을 수 있다.
         long nowSec = clock.instant().getEpochSecond();
         if (!limiter.tryAcquire(POLL_KEY, pollCap(), nowSec)) {
             count("rate-limited");
+            // **여기야말로 배수를 걸어야 한다.** 거절만 배수를 빼면 과부하일수록
+            // 거절 비중이 커져, 예산을 건다는 말이 절반만 맞다.
+            //
+            // 다만 MAX_POLL_PER_SEC 은 PollBudgetPlanner 의 노드당 예산과 다른
+            // 값이다. 배수는 이 갈래가 돌기 한참 전에 걸리므로, 여기 오는 것은
+            // 예산을 넘긴 정도가 아니라 노드가 통째로 밀린 상황이다 (CY-728).
             return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
-                    (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random));
+                    (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random,
+                            pollScale(holder.view())));
         }
         return queue.status(couponId, member.get(), clock.instant())
                 .flatMap(entry -> answer(exchange, couponId, member.get(), entry))
@@ -153,8 +175,28 @@ public final class QueueStatusFilter implements WebFilter {
                     // 문자열이다 — 라벨 값 집합을 우리가 안 소유하게 된다.
                     count("unavailable", FailureCause.of(e));
                     return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
-                            (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random));
+                            (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random,
+                                    pollScale(holder.view())));
                 });
+    }
+
+    /** 잘못 말하면 기다리던 사람이 줄을 잃으므로, 모르는 것을 끝난 것으로 안 읽는다. */
+    private boolean soldOut(String couponId) {
+        // **매진 관찰 캐시는 안 본다** (계획 7.2 5.2.1). 그 관찰은 발급을
+        // 시도했다가 거절당한 사실이고, 줄 선 사람에게 "네 차례에 못 받는다" 를
+        // 뜻하지 않는다. 여기서 읽으면 관찰 하나가 5만 명의 줄을 끊는다.
+        SnapshotHolder.View view = holder.view();
+        // 첫 틱 전은 지금 `isDataStale` 이 **먼저** 참이 된다 — 재료가 없으면
+        // 나이가 거대해지기 때문이다. 그래도 남긴 것은 둘의 뜻이 다르고, 낡음
+        // 기준이 바뀌면 갈라지기 때문이다.
+        if (view.isBeforeFirstTick() || holder.isDataStale(view)) {
+            return false;
+        }
+        CouponState state = view.snapshot().coupons().get(couponId);
+        // **발급 판정과 같은 함수를 부른다.** 여기서 재고를 다시 해석하면 판정이
+        // 두 곳에 생기고, 같은 쿠폰에 조회는 "다시 서라" 등록은 409 로 답하는
+        // 순간이 생긴다.
+        return state != null && state.soldOut();
     }
 
     private Mono<Void> answer(ServerWebExchange exchange, String couponId, String memberId,
@@ -170,14 +212,30 @@ public final class QueueStatusFilter implements WebFilter {
             return response.admitted(exchange,
                     entryTokens.issue(couponId, memberId, clock.instant()), EntryToken.TTL_SEC);
         }
-        double etaSec = EtaPolicy.etaSec(entry.rank(), credit(couponId));
+        // **한 View 에서 둘 다 뽑는다.** 따로 읽으면 그 사이 갱신이 들어와
+        // ETA 는 판 N, 배수는 판 N+1 에서 나온다 — SnapshotHolder 가 View 를
+        // 두는 이유가 그것이다.
+        SnapshotHolder.View view = holder.view();
+        double etaSec = EtaPolicy.etaSec(entry.rank(), credit(view, couponId));
         return response.status(exchange, entry.state(), entry.rank(),
-                EtaPolicy.reportSec(etaSec), POLL.intervalSec(etaSec, random));
+                EtaPolicy.reportSec(etaSec),
+                POLL.intervalSec(etaSec, random, pollScale(view)));
+    }
+
+    /**
+     * 제어 평면이 정한 전역 폴링 배수.
+     *
+     * <p><b>낡았다고 1.0 으로 안 되돌린다.</b> 되돌리면 제어 평면이 멎은 순간
+     * 전원의 간격이 한꺼번에 짧아진다 — 이미 흔들리는 노드에 폴링이 몰린다.
+     */
+    // 전역 값이라 쿠폰이 스냅샷에서 빠져도 남는다. 쿠폰별 필드에 두면 그
+    // 쿠폰이 떨어지는 순간 그 줄 전체가 예산 밖으로 나갔다.
+    private double pollScale(SnapshotHolder.View view) {
+        return view.snapshot().meta().pollScale();
     }
 
     /** 배분 속도를 모르면 ETA 도 모른다. 모를수록 자주 묻게 하지 않는다. */
-    private double credit(String couponId) {
-        SnapshotHolder.View view = holder.view();
+    private double credit(SnapshotHolder.View view, String couponId) {
         CouponState state = view.snapshot().coupons().get(couponId);
         return state == null || holder.isDataStale(view)
                 ? EtaPolicy.UNKNOWN

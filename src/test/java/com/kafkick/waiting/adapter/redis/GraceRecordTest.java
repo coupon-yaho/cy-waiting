@@ -56,8 +56,8 @@ class GraceRecordTest extends RedisContainerSupport {
 
     private void 등록한다(String memberId) {
         redis.execute(enqueueScript,
-                        List.of(QUEUE, MAX_SCORE, ALIVE, ADMITTED),
-                        List.of(memberId, "86400", "3600", "-1", String.valueOf(NOW)))
+                        List.of(QUEUE, MAX_SCORE, ALIVE, ADMITTED, GRACE),
+                        List.of(memberId, "86400", "3600", "-1", String.valueOf(NOW), "300"))
                 .blockFirst(WAIT);
     }
 
@@ -80,7 +80,7 @@ class GraceRecordTest extends RedisContainerSupport {
     @SuppressWarnings("unchecked")
     private List<Object> 청소한다(String now) {
         return (List<Object>) redis.execute(sweepScript,
-                        List.of(QUEUE, GRACE, ALIVE),
+                        List.of(QUEUE, GRACE, ALIVE, ADMITTED),
                         List.of("100", now, RETENTION, "1000", "0"))
                 .blockFirst(WAIT);
     }
@@ -214,6 +214,10 @@ class GraceRecordTest extends RedisContainerSupport {
     @Test
     @DisplayName("이탈_기록은_보관_기간이_지나면_걷힌다")
     void 이탈_기록은_보관_기간이_지나면_걷힌다() {
+        // **살아 있는 사람을 줄 안에 먼저 세운다.** 검사 창 안이 통째로
+        // 조용하면 청소가 아무것도 안 한다 — 그건 전원 이탈이 아니라 저장소
+        // 유실이기 때문이다. 줄 밖에 세우면 그 가드를 못 지난다.
+        등록한다("keeper");
         등록한다("m1");
         // 생존 신호를 지우면 다음 청소가 이탈로 본다.
         redis.opsForZSet().remove(ALIVE, "m1").block(WAIT);

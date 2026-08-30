@@ -3,7 +3,8 @@
 -- KEYS[1]  queue:{cid}
 -- KEYS[2]  alive:{cid}
 -- KEYS[3]  stock:{cid}
--- ARGV     없다 — 지울지 말지는 전부 키의 사실로 정한다
+-- KEYS[4]  dropfence:{cid}
+-- ARGV[1]  판 번호. 리더가 리스를 새로 잡을 때 받은 값
 --
 -- 반환  1 이면 지웠다, 0 이면 안 지웠다
 --
@@ -20,6 +21,26 @@
 -- 계산해 갈리면 CROSSSLOT 으로 거절하므로 그 코드는 클러스터에서 영영 안 돈다.
 -- 단독 배치는 슬롯 개념이 없어 갈려도 문제가 없는데, 거기서만 정리가 멎는다.
 -- 부르는 쪽이 샤드 수로 막는다.
+
+-- **옛 리더의 명령은 안 듣는다** (CY-766). 지역 검사는 울타리가 아니다 —
+-- 검사와 삭제 사이에 리스가 끝나면 옛 리더가 새 리더의 줄을 지운다. 리더 키는
+-- 줄과 다른 슬롯이라 여기서 같이 못 읽으므로, 줄과 같은 슬롯에 마지막으로 지운
+-- 판 번호를 남기고 그것보다 옛 판이면 거절한다.
+--
+-- **같은 판의 재시도는 막지 않는다.** 막으면 실패한 삭제가 영영 안 된다.
+-- **0 은 리더가 아니라는 뜻이다.** 강등된 노드가 그 값을 들고 나오므로 여기서
+-- 거절해야 한다. 안 막으면 울타리 표가 아직 없는 쿠폰이 그대로 지워진다.
+local fence = tonumber(ARGV[1])
+if fence == nil or fence ~= fence or fence ~= math.floor(fence) then
+    return redis.error_reply('판 번호는 정수여야 한다: ' .. tostring(ARGV[1]))
+end
+if fence <= 0 then
+    return 0
+end
+local seen = tonumber(redis.call('GET', KEYS[4]))
+if seen ~= nil and seen == seen and fence < seen then
+    return 0
+end
 
 local raw = redis.call('GET', KEYS[3])
 -- **못 읽으면 안 지운다.** 못 읽은 것은 매진이 아니다 (CY-702). 여기서 지우면
@@ -49,5 +70,8 @@ if stock > 0 then
     return 0
 end
 
+-- **표를 먼저 남긴다.** 지우고 나서 남기면 그 사이에 죽었을 때 옛 리더가
+-- 같은 줄을 다시 지울 수 있다. 표만 남고 안 지워지는 쪽이 안전하다.
+redis.call('SET', KEYS[4], fence)
 redis.call('DEL', KEYS[1], KEYS[2])
 return 1

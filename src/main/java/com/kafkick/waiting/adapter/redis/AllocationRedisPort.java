@@ -423,7 +423,7 @@ public final class AllocationRedisPort implements SnapshotSource {
      * <p><b>한 쿠폰이 실패해도 나머지는 지운다.</b> 정리가 배분을 막으면
      * 안 지워진 것 하나가 그 틱 전체를 세운다 (7.3.4).
      */
-    public Mono<List<String>> dropSoldOutQueues(List<String> couponIds) {
+    public Mono<List<String>> dropSoldOutQueues(List<String> couponIds, long fence) {
         if (couponIds.isEmpty()) {
             return Mono.just(List.of());
         }
@@ -443,7 +443,7 @@ public final class AllocationRedisPort implements SnapshotSource {
                 // 표시돼 다음 틱에 다시 안 온다 (7.3.4).
                 // **지운 것만 남긴다.** 살아나서 안 지운 쿠폰까지 돌려주면
                 // 판단이 "지웠다" 로 읽어 다음 판에 다시 안 온다.
-                .flatMap(id -> dropOne(id)
+                .flatMap(id -> dropOne(id, fence)
                         .filter(Boolean::booleanValue)
                         .map(dropped -> id)
                         .onErrorResume(e -> Mono.empty()), MAX_CONCURRENT_READS)
@@ -469,12 +469,13 @@ public final class AllocationRedisPort implements SnapshotSource {
     //   재입고되면 살아난 줄을 지운다 — 메모리 안의 취소는 다음 스냅샷이 와야
     //   도는데 삭제는 그 전에 나간다. 그 검사가 스크립트 안에 있어야 읽고
     //   지우는 사이가 안 벌어진다.
-    private Mono<Boolean> dropOne(String couponId) {
+    private Mono<Boolean> dropOne(String couponId, long fence) {
         return redis.execute(DROP_QUEUE,
                         List.of(RedisKeys.queue(couponId, shards, 0),
                                 RedisKeys.alive(couponId, shards, 0),
-                                RedisKeys.stock(couponId)),
-                        List.of())
+                                RedisKeys.stock(couponId),
+                                RedisKeys.dropFence(couponId, shards, 0)),
+                        List.of(Long.toString(fence)))
                 .next()
                 .map(dropped -> dropped != null && dropped == 1L)
                 .defaultIfEmpty(false)

@@ -80,7 +80,10 @@ public class BackendCircuit {
      * 아니라고 보는 구간이 생기고, 그 어긋남이 하필 회복 구간에 난다.
      */
     @Bean
-    public CircuitStateReader circuitStateReader(CircuitBreakerRegistry circuits) {
-        return CircuitStateReader.of(circuits, GatewayRoutes.CIRCUIT);
+    public CircuitStateReader circuitStateReader(CircuitBreakerRegistry circuits,
+            MeterRegistry meters) {
+        // **보고 있는지를 지표로 낸다.** 안 보는 것과 닫혀 있는 것이 같은 값을
+        // 내므로, 배선이 빠지면 F3 이 통째로 꺼진 채 조용히 돈다.
+        return CircuitStateReader.of(circuits, GatewayRoutes.CIRCUIT).bind(meters);
     }
 }

@@ -3,6 +3,7 @@ package com.kafkick.waiting.control;
 import com.kafkick.waiting.adapter.redis.AllocationRedisPort;
 import com.kafkick.waiting.adapter.redis.LeaderRedisPort;
 import com.kafkick.waiting.domain.allocation.CreditSmoother;
+import com.kafkick.waiting.gateway.CircuitStateReader;
 import io.micrometer.core.instrument.Gauge;
 import com.kafkick.waiting.domain.queue.GraceRetention;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
@@ -70,9 +71,14 @@ public class ControlPlaneConfig {
     AllocationRound allocationRound(DemandCollector collector, AllocationRedisPort port,
             GatewayRegistry registry, CapacityCollector capacity, Leadership leadership,
             TunablesRefresh tunables, ControlPlaneProperties properties,
-            SoldOutCleanup cleanup, QueueSweeper sweeper, SnapshotHolder holder) {
+            SoldOutCleanup cleanup, QueueSweeper sweeper, SnapshotHolder holder,
+            CircuitStateReader circuit) {
         SnapshotCodec codec = SnapshotCodec.create();
-        return AllocationRound.of(leadership::isLeader, collector::collect, capacity::lastKnown,
+        return AllocationRound.of(leadership::isLeader, collector::collect,
+                // **서킷이 열리면 배분도 멈춘다** (CY-787). 판정만 조이면 절반이다 —
+                // 가용량에 하한이 있어 임계가 계속 올라가고, 임계를 넘은 사람은
+                // 큐에서 빠져 토큰을 받은 뒤 서킷에 막혀 503 을 받는다.
+                CircuitAwareCredit.of(capacity::lastKnown, circuit::now),
                 registry::count, port::apply, port::publish, Instant::now,
                 () -> port.load().map(hash ->
                         CreditSmoother.restore(SMOOTHING_ALPHA, codec.smoothing(hash))),

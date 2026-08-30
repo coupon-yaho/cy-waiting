@@ -18,7 +18,6 @@ import com.kafkick.waiting.domain.queue.EtaPolicy;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import com.kafkick.waiting.domain.queue.QueueToken;
 import io.micrometer.core.instrument.Counter;
-import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpHeaders;
@@ -220,12 +219,13 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             MeterRegistry meters, QueuePort queue, QueueToken tokens,
             SecondWindowLimiter limiter, EntryToken entryTokens,
             IdempotencyKey idempotency, SoldOutCache soldOutCache,
-            ObjectProvider<CircuitBreakerRegistry> circuits) {
+            ObjectProvider<CircuitStateReader> circuit) {
         this(holder, decider, clock, meters,
                 () -> ThreadLocalRandom.current().nextDouble(), queue, tokens, limiter,
                 entryTokens, idempotency, System::nanoTime, soldOutCache,
-                // **없으면 안 보는 것으로 친다.** 서킷을 안 붙인 배치가 있다.
-                CircuitStateReader.of(circuits.getIfAvailable(), GatewayRoutes.CIRCUIT));
+                // **배분과 같은 것을 쓴다.** 각자 만들면 판정은 열렸다고 보는데
+                // 배분은 아니라고 보는 구간이 생긴다.
+                circuit.getIfAvailable());
     }
 
     /**

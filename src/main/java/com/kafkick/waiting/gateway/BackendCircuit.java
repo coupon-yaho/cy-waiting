@@ -72,4 +72,15 @@ public class BackendCircuit {
         TaggedCircuitBreakerMetrics.ofCircuitBreakerRegistry(registry).bindTo(meters);
         return registry;
     }
+
+    /**
+     * 서킷 상태를 판정과 배분이 함께 읽는 자리 (F3).
+     *
+     * <p><b>하나를 나눠 쓴다.</b> 각자 만들면 판정은 열렸다고 보는데 배분은
+     * 아니라고 보는 구간이 생기고, 그 어긋남이 하필 회복 구간에 난다.
+     */
+    @Bean
+    public CircuitStateReader circuitStateReader(CircuitBreakerRegistry circuits) {
+        return CircuitStateReader.of(circuits, GatewayRoutes.CIRCUIT);
+    }
 }

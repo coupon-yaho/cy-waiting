@@ -57,8 +57,8 @@ public final class AllocationRound {
     /** 지울 쿠폰들을 넘긴다. 지운 키 수를 돌려준다. */
     private final Function<List<String>, Mono<List<String>>> dropQueues;
 
-    /** 세기 시작한 줄에 울타리 표만 세운다 (CY-766). */
-    private final Function<List<String>, Mono<Void>> claimQueues;
+    /** 세기 시작한 줄에 울타리 표만 세운다. <b>선 것을 돌려준다</b> (CY-766). */
+    private final Function<List<String>, Mono<List<String>>> claimQueues;
 
     private final BooleanSupplier stillLeader;
     private final Supplier<Mono<TimedDemands>> demands;
@@ -140,7 +140,7 @@ public final class AllocationRound {
             Supplier<Mono<CreditSmoother>> restore, SnapshotCodec codec,
             LongSupplier creditFloor, Supplier<Optional<Tunables>> tunables,
             SoldOutCleanup cleanup, Function<List<String>, Mono<List<String>>> dropQueues,
-            Function<List<String>, Mono<Void>> claimQueues,
+            Function<List<String>, Mono<List<String>>> claimQueues,
             QueueSweeper sweeper, BooleanSupplier dataStale) {
         this.sweeper = Objects.requireNonNull(sweeper, "sweeper 는 필수다");
         this.dataStale = Objects.requireNonNull(dataStale, "dataStale 은 필수다");
@@ -173,7 +173,7 @@ public final class AllocationRound {
             Supplier<Mono<CreditSmoother>> restore, SnapshotCodec codec,
             LongSupplier creditFloor, Supplier<Optional<Tunables>> tunables,
             SoldOutCleanup cleanup, Function<List<String>, Mono<List<String>>> dropQueues,
-            Function<List<String>, Mono<Void>> claimQueues,
+            Function<List<String>, Mono<List<String>>> claimQueues,
             QueueSweeper sweeper, BooleanSupplier dataStale) {
         return new AllocationRound(stillLeader, demands, globalCredit, gatewayCount, apply, publish,
                 clock, restore, codec, creditFloor, tunables, cleanup, dropQueues, claimQueues,
@@ -192,7 +192,7 @@ public final class AllocationRound {
                 clock, restore, codec, creditFloor, tunables,
                 SoldOutCleanup.of(Integer.MAX_VALUE, new SimpleMeterRegistry()),
                 ids -> Mono.just(List.of()),
-                ids -> Mono.empty(),
+                ids -> Mono.just(List.of()),
                 QueueSweeper.of(SweepGate.of(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
                         (ids, limit) -> Mono.just(QueueSweeper.SweepResult.NOTHING)),
                 () -> false);
@@ -338,7 +338,11 @@ public final class AllocationRound {
         // 생기므로 한 번도 안 지운 줄에는 표가 없고, 그건 울타리가 지키려던
         // 바로 그 경우다 — 얼었다 깨어난 옛 리더가 새 리더가 아직 지울 생각이
         // 없는 줄을 지운다.
-        Mono<Void> claim = claimQueues.apply(claimed);
+        Mono<Void> claim = claimQueues.apply(claimed)
+                // **선 것만 확인으로 친다.** 실패한 것을 확인으로 치면 그 줄은
+                // 표 없이 유예를 보내고, 옛 판이 그대로 지운다.
+                .doOnNext(cleanup::fenceConfirmed)
+                .then();
         if (due.isEmpty()) {
             return claim;
         }

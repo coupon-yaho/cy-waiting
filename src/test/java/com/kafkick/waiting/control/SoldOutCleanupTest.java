@@ -236,4 +236,38 @@ class SoldOutCleanupTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("유예");
     }
+    /**
+     * <b>표가 선 뒤로는 다시 안 알린다</b> (CY-766).
+     *
+     * <p>매 판 알리면 유예 길이만큼 같은 쓰기를 되풀이한다 — 기본 유예가
+     * 아흔 틱이라 그만큼 부푼다. 확인될 때까지만 알린다.
+     */
+    @Test
+    @DisplayName("표가_선_뒤로는_다시_안_알린다")
+    void 표가_선_뒤로는_다시_안_알린다() {
+        SoldOutCleanup cleanup = SoldOutCleanup.of(5, new SimpleMeterRegistry());
+        Map<String, CouponState> 매진 = Map.of("c1", CouponStates.closed(100));
+
+        cleanup.due(매진);
+        assertThat(cleanup.claimed()).as("아직 못 세웠다").containsExactly("c1");
+        cleanup.fenceConfirmed(List.of("c1"));
+
+        cleanup.due(매진);
+
+        assertThat(cleanup.claimed()).as("선 뒤로는 안 알린다").isEmpty();
+    }
+
+    /** 못 세웠으면 다음 판에 다시 알린다. 한 번 실패하면 유예 내내 표가 없다. */
+    @Test
+    @DisplayName("표를_못_세우면_다시_알린다")
+    void 표를_못_세우면_다시_알린다() {
+        SoldOutCleanup cleanup = SoldOutCleanup.of(5, new SimpleMeterRegistry());
+        Map<String, CouponState> 매진 = Map.of("c1", CouponStates.closed(100));
+
+        cleanup.due(매진);
+        // 확인이 안 왔다 — 쓰기가 실패했다는 뜻이다.
+        cleanup.due(매진);
+
+        assertThat(cleanup.claimed()).containsExactly("c1");
+    }
 }

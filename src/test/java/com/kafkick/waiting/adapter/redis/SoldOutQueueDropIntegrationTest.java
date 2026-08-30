@@ -94,7 +94,7 @@ class SoldOutQueueDropIntegrationTest extends RedisContainerSupport {
                 SnapshotCodec.create(), () -> 0L, Optional::empty,
                 SoldOutCleanup.of(1, new SimpleMeterRegistry()),
                 ids -> port.dropSoldOutQueues(ids, fence),
-                ids -> Mono.empty(),
+                ids -> Mono.just(List.of()),
                 QueueSweeper.of(
                         SweepGate.of(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
                         (ids, limit) -> Mono.just(QueueSweeper.SweepResult.NOTHING)),

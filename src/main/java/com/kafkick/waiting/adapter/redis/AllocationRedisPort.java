@@ -79,12 +79,16 @@ public final class AllocationRedisPort implements SnapshotSource {
     private static final int MAX_CONCURRENT_READS = 16;
 
     /**
-     * 울타리 표의 수명. <b>옛 리더가 살아 있을 수 있는 최대 시간</b>보다 길면 된다.
+     * 울타리 표 수명의 <b>하한</b>. 실제 값은 리스에서 유도한다.
      *
      * <p>안 주면 쿠폰이 활성에서 빠진 뒤에도 표가 남아, 시계가 뒤로 간 리더는
-     * 스큐가 걷혀도 안 풀리고 자기 시각이 그 옛 표를 넘어야 풀린다.
+     * 스큐가 걷혀도 안 풀리고 자기 시각이 그 옛 표를 넘어야 풀린다. 반대로
+     * 리스보다 짧으면 옛 리더가 아직 유효한 동안 표가 사라져 울타리가 없어진다.
      */
-    private static final Duration FENCE_TTL = Duration.ofHours(1);
+    private static final Duration MIN_FENCE_TTL = Duration.ofHours(1);
+
+    /** 표가 견뎌야 하는 리스의 배수. 지연된 명령이 도착할 여유까지 본다. */
+    private static final int FENCE_TTL_LEASES = 4;
 
     /** 값이 JSON 인 것은 계약이다 — 위치 기반 문자열은 필드가 늘면 깨진다 (D-C3). */
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -107,6 +111,9 @@ public final class AllocationRedisPort implements SnapshotSource {
     private final Map<String, String> sweepCursors = new ConcurrentHashMap<>();
 
     private final int shards;
+
+    /** 울타리 표의 수명. 리스보다 넉넉히 길어야 옛 리더가 사라지기 전에 안 걷힌다. */
+    private final Duration fenceTtl;
     private final FailureWindow rejected = FailureWindow.create();
     private final FailureWindow malformed = FailureWindow.create();
     private final FailureWindow badPolicy = FailureWindow.create();
@@ -132,10 +139,20 @@ public final class AllocationRedisPort implements SnapshotSource {
      */
     @Autowired
     AllocationRedisPort(ReactiveStringRedisTemplate redis, ControlPlaneProperties properties) {
-        this(redis, properties.scheduler().shards());
+        // **표 수명을 리스에서 유도한다.** 고정값으로 두면 리스를 늘렸을 때
+        // 옛 리더가 아직 유효한 동안 표가 사라져 울타리가 통째로 없어진다.
+        this(redis, properties.scheduler().shards(),
+                MIN_FENCE_TTL.compareTo(
+                                properties.leader().lease().multipliedBy(FENCE_TTL_LEASES)) > 0
+                        ? MIN_FENCE_TTL
+                        : properties.leader().lease().multipliedBy(FENCE_TTL_LEASES));
     }
 
-    private AllocationRedisPort(ReactiveStringRedisTemplate redis, int shards) {
+
+
+    private AllocationRedisPort(ReactiveStringRedisTemplate redis, int shards,
+            Duration fenceTtl) {
+        this.fenceTtl = Objects.requireNonNull(fenceTtl, "fenceTtl 은 필수다");
         if (shards < 1) {
             throw new IllegalArgumentException("shards 는 1 이상이어야 한다: %d".formatted(shards));
         }
@@ -144,7 +161,7 @@ public final class AllocationRedisPort implements SnapshotSource {
     }
 
     public static AllocationRedisPort of(ReactiveStringRedisTemplate redis, int shards) {
-        return new AllocationRedisPort(redis, shards);
+        return new AllocationRedisPort(redis, shards, MIN_FENCE_TTL);
     }
 
     /** 상한을 넘겨 버린 미상 표시의 누적 수. 0 이 아니면 거짓 매진이 나갔다. */
@@ -438,16 +455,18 @@ public final class AllocationRedisPort implements SnapshotSource {
      * <p>표는 지웠을 때만 생기므로 한 번도 안 지운 줄에는 표가 없다. 후보로
      * 올리는 순간 세워야 그 뒤에 오는 옛 판이 걸린다.
      */
-    public Mono<Void> claimSoldOutQueues(List<String> couponIds, long fence) {
+    public Mono<List<String>> claimSoldOutQueues(List<String> couponIds, long fence) {
         if (couponIds.isEmpty() || shards != 1) {
-            return Mono.empty();
+            return Mono.just(List.of());
         }
         return Flux.fromIterable(couponIds)
-                // **실패해도 조용히 넘어간다.** 표를 못 세우면 울타리가 약해질
-                // 뿐이고, 여기서 터뜨리면 그 판의 정리가 통째로 멎는다.
-                .flatMap(id -> runDrop(id, fence, false).onErrorResume(e -> Mono.empty()),
-                        MAX_CONCURRENT_READS)
-                .then();
+                // **선 것만 돌려준다.** 실패한 것을 확인으로 치면 그 줄은 표
+                // 없이 유예를 보내고, 옛 판이 그대로 지운다.
+                .flatMap(id -> runDrop(id, fence, false)
+                        .map(ignored -> id)
+                        .onErrorResume(e -> Mono.empty()), MAX_CONCURRENT_READS)
+                .collectList()
+                .map(List::copyOf);
     }
 
     public Mono<List<String>> dropSoldOutQueues(List<String> couponIds, long fence) {
@@ -503,7 +522,7 @@ public final class AllocationRedisPort implements SnapshotSource {
                                 RedisKeys.stock(couponId),
                                 RedisKeys.dropFence(couponId, shards, 0)),
                         List.of(Long.toString(fence), delete ? "1" : "0",
-                                Long.toString(FENCE_TTL.toMillis())))
+                                Long.toString(fenceTtl.toMillis())))
                 .next()
                 .defaultIfEmpty(0L);
     }

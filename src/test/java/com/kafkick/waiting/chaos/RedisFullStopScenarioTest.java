@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.kafkick.waiting.control.SnapshotCodec;
 import com.kafkick.waiting.domain.allocation.CreditSmoother;
 import com.kafkick.waiting.control.GatewaySnapshot;
+import com.kafkick.waiting.domain.queue.QueueToken;
 import com.kafkick.waiting.domain.allocation.QueueingHysteresis;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import com.kafkick.waiting.domain.coupon.CouponStates;
@@ -23,6 +24,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -53,6 +55,9 @@ class RedisFullStopScenarioTest {
     /** 회복까지 걸린 시간. 시나리오 안에서 재고 판정에 넘긴다. */
     private Duration 회복까지_걸린_시간;
 
+    /** 장애 구간에 줄을 쳤을 때의 상태. 레디스가 정말 죽었는지의 증거다. */
+    private int 줄을_친_결과;
+
     /**
      * 회복을 기다리는 동안 볼 시계.
      *
@@ -69,20 +74,18 @@ class RedisFullStopScenarioTest {
      * 전역 크레딧. <b>고정 시계라 초당 예산이 안 채워진다</b> — 시험 전체가 한
      * 초 안에 일어나므로, 보낼 요청 수를 다 덮을 만큼 크게 잡는다.
      */
-    private static final int 크레딧 = 40;
+    // **시험 전체가 보내는 것보다 훨씬 크게 잡는다.** 고정 시계라 초당 예산이
+    // 한 번만 채워지므로, 예산이 물리면 그 뒤의 503 이 전부 "레디스를 기다렸다"
+    // 로 읽힌다. 여기서 재려는 것은 예산이 아니라 판정이 레디스를 치는가다.
+    private static final int 크레딧 = 10_000;
 
-    /**
-     * 한 초에 통과할 수 있는 몫. 노드가 하나이므로 전역 크레딧과 같다.
-     *
-     * <p>한산한 쿠폰은 fail-open 을 안 거치고 정상 경로로 통과한다. 그래서
-     * 비교 대상은 fail-open 몫이 아니라 이 예산이다.
-     */
-    private static final long 노드_예산 = 크레딧;
-
-    /** 장애 구간에 보내는 요청 수. 예산보다 커야 넘치는지를 잰다. */
-    private static final int 장애중_보낼_수 = (int) 노드_예산 + 8;
+    /** 장애 구간에 보내는 요청 수. 예산 안이라 통과가 곧 정상이다. */
+    private static final int 장애중_보낼_수 = 20;
 
     private static final int 보낼_수 = 5;
+
+    /** 재고. 이 시나리오가 보내는 전체보다 커야 미달이 위반으로 안 읽힌다. */
+    private static final long 재고 = 1_000;
 
     /** RC3 의 한계. 이 안에 판정이 정상으로 돌아와야 한다. */
     private static final Duration 회복_한계 = Duration.ofSeconds(30);
@@ -149,6 +152,13 @@ class RedisFullStopScenarioTest {
     @LocalServerPort
     private int port;
 
+    /**
+     * 순번 조회 토큰. <b>이 경로는 레디스를 친다</b> — 발급 경로가 안 치는 것과
+     * 대조가 되어, 레디스가 정말 죽었는지·정말 돌아왔는지를 여기서 본다.
+     */
+    @Autowired
+    private QueueToken tokens;
+
     private WebTestClient 클라이언트() {
         return WebTestClient.bindToServer()
                 .baseUrl("http://localhost:" + port)
@@ -162,6 +172,19 @@ class RedisFullStopScenarioTest {
                 .uri("/api/v1/coupons/" + COUPON + "/issue")
                 .header("X-Member-Id", String.valueOf(member))
                 .header("X-Member-Grade", "GOLD")
+                .exchange()
+                .returnResult(Void.class)
+                .getStatus()
+                .value();
+    }
+
+    /** 줄을 치는 요청. 레디스가 죽어 있으면 5xx 가 온다. */
+    private int 순번을_묻는다(int member) {
+        return 클라이언트().get()
+                .uri("/api/v1/coupons/" + COUPON + "/queue")
+                .header("X-Member-Id", String.valueOf(member))
+                .header("X-Member-Grade", "GOLD")
+                .header("Queue-Token", tokens.issue(COUPON, String.valueOf(member), 지금))
                 .exchange()
                 .returnResult(Void.class)
                 .getStatus()
@@ -203,7 +226,12 @@ class RedisFullStopScenarioTest {
                             .anyMatch(status -> status < 300);
                 })
                 .inject(() -> faults.끊는다())
-                .duringFault(() -> 장애중_상태.addAll(여러_번_시도한다(장애중_보낼_수, 2_000)))
+                .duringFault(() -> {
+                    장애중_상태.addAll(여러_번_시도한다(장애중_보낼_수, 2_000));
+                    // **레디스가 정말 죽었는지 확인한다.** 안 죽었으면 이 시나리오
+                    // 전체가 아무것도 안 잰 것이다.
+                    줄을_친_결과 = 순번을_묻는다(8_000);
+                })
                 .recover(() -> faults.붙인다())
                 .afterRecovery(() -> {
                     유입.sample(지금.plusSeconds(2));
@@ -218,15 +246,24 @@ class RedisFullStopScenarioTest {
                 .assertEntry(ChaosScenario.Verdict.none())
                 // **유지 판정이 장애가 살아 있는 동안 돈다.** 복구 뒤로 미루면
                 // 이미 걷힌 상태를 읽어 전면 차단도 무제한 통과도 안 보인다.
+                // **fail-open 상한은 여기서 안 잰다.** 한산한 쿠폰은 그 경로를
+                // 안 거친다. 상한을 재려면 줄이 선 재료가 필요하고, 그러면
+                // 전원이 202 로 끝나 RC4 를 못 잰다 — 재료가 둘 필요하다.
                 .assertDuring(() -> RecoveryCriteria.violations(
-                        전면_차단이_아니다(장애중_상태), 무제한_통과가_아니다(장애중_상태)))
+                        오백이_안_샌다(장애중_상태), 레디스가_정말_죽었다()))
                 .assertRecovery(() -> RecoveryCriteria.violations(
                         RecoveryCriteria.slowVerdictReturn(회복까지_걸린_시간, 회복_한계),
-                        // **차분은 뒤 표본의 시각에 쌓인다.** 앞 표본의 초로
-                        // 창을 잡으면 정상 구간이 통째로 0 으로 보인다.
+                        // RC1 — 뒷단이 받은 수가 재고를 안 넘는다. 이 시나리오는
+                        // 발급만 때리므로 수신 수가 곧 발급 시도다.
+                        RecoveryCriteria.overIssued(유입.total(), 재고),
+                        // RC6 — 회복 뒤 유입이 정상 수준으로 돌아온다.
+                        RecoveryCriteria.notConverged("판정 통과 비율",
+                                통과_비율(정상_상태), 통과_비율(회복_상태)),
+                        // **차분은 표집 시각이 아니라 그것이 온 초에 쌓인다.**
+                        // 표집과 표집 사이에 온 것이므로 앞 초의 몫이다.
                         RecoveryCriteria.recoveryBurst(
-                                유입.averageRps(지금.plusSeconds(1), 지금.plusSeconds(2)),
-                                유입.peakRps(지금.plusSeconds(3), 지금.plusSeconds(4)))))
+                                유입.averageRps(지금, 지금.plusSeconds(1)),
+                                유입.peakRps(지금.plusSeconds(2), 지금.plusSeconds(3)))))
                 .run();
 
         assertThat(회복_상태).as("회복 뒤에는 5xx 없이 답한다")
@@ -235,23 +272,41 @@ class RedisFullStopScenarioTest {
                 .isLessThan(500);
     }
 
-    /** 전부 5xx 면 한산한 쿠폰까지 죽은 것이다. 판정은 레디스를 안 친다. */
-    private Optional<String> 전면_차단이_아니다(List<Integer> 상태) {
+    /**
+     * <b>503 이 하나도 새면 안 된다.</b>
+     *
+     * <p>한산한 쿠폰의 판정은 레디스를 안 치므로, 레디스가 죽어도 통과해야 한다.
+     * 하나라도 5xx 면 그 요청은 레디스를 기다린 것이다. "전부 5xx 인가" 만 보면
+     * 한 건이라도 성공하는 순간 임의의 유출이 통과한다.
+     */
+    private Optional<String> 오백이_안_샌다(List<Integer> 상태) {
         if (상태.isEmpty()) {
             return Optional.of("장애 구간에서 아무것도 안 봤다 — 판정할 것이 없다");
         }
-        return 상태.stream().allMatch(s -> s >= 500)
-                ? Optional.of("진입에서 전면 차단이 일어났다: " + 상태)
+        long 샌_것 = 상태.stream().filter(s -> s >= 500).count();
+        return 샌_것 > 0
+                ? Optional.of("장애 구간에서 503 이 %d 건 샜다 — 판정이 레디스를 기다렸다"
+                        .formatted(샌_것))
                 : Optional.empty();
     }
 
-    /** 통과가 예산을 넘으면 상한이 사라진 것이다. */
-    private Optional<String> 무제한_통과가_아니다(List<Integer> 상태) {
-        long 통과 = 상태.stream().filter(s -> s < 300).count();
-        return 통과 > 노드_예산
-                ? Optional.of("진입에서 예산 %d 를 넘겨 %d 건이 통과했다"
-                        .formatted(노드_예산, 통과))
+    /**
+     * 장애 구간에 줄을 치면 실패해야 한다.
+     *
+     * <p>성공하면 레디스가 안 죽은 것이고, 그러면 이 시나리오 전체가 아무것도
+     * 안 잰 것이다. 전제를 판정으로 못 박아 둔다.
+     */
+    private Optional<String> 레디스가_정말_죽었다() {
+        return 줄을_친_결과 < 500
+                ? Optional.of("장애 구간인데 줄 조회가 %d 로 성공했다 — 레디스가 안 죽었다"
+                        .formatted(줄을_친_결과))
                 : Optional.empty();
+    }
+
+    /** 통과 비율. RC6 이 이것으로 판정 분포의 수렴을 본다. */
+    private double 통과_비율(List<Integer> 상태) {
+        return 상태.isEmpty() ? 0
+                : (double) 상태.stream().filter(s -> s < 300).count() / 상태.size();
     }
 
     /**
@@ -267,6 +322,12 @@ class RedisFullStopScenarioTest {
         while (Duration.between(시작, 지금.get()).compareTo(회복_한계) < 0) {
             List<Integer> 한_판 = 여러_번_시도한다(보낼_수, 3_000 + 회복_상태.size());
             회복_상태.addAll(한_판);
+            // **줄을 치는 경로까지 돌아와야 회복이다.** 발급 경로는 레디스를
+            // 안 치므로 죽은 채로도 통과한다 — 그것만 보면 복구를 안 해도
+            // 회복으로 읽힌다.
+            한_판.add(순번을_묻는다(9_000 + 회복_상태.size()));
+            // **202 를 회복으로 안 읽는다.** 정상 구간이 통과였는데 회복 뒤에
+            // 줄에 서기 시작했다면 판정 분포가 아직 안 돌아온 것이다.
             if (한_판.stream().noneMatch(s -> s >= 500)) {
                 return Duration.between(시작, 지금.get());
             }

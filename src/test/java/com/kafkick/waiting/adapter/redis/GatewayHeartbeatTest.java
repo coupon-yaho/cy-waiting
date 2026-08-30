@@ -31,8 +31,9 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
      * 같은 키에 자기를 등록한다 — 그러면 이 시험이 센 수에 남이 섞여 간헐로
      * 깨진다. 스크립트는 키를 인자로 받으므로 자리를 갈라 주면 된다.
      */
-    // 키 이름의 모양은 그대로 둔다. 해시태그가 슬롯을 정하므로 다른 모양을
-    // 쓰면 클러스터에서 이 시험만 다른 슬롯을 보게 된다.
+    // 접두사를 그대로 두는 것은 이 키가 무엇인지 이름으로 알아보기 위해서다.
+    // 슬롯은 어차피 갈린다 — 해시태그가 없는 키는 이름 전체로 슬롯이 정해지므로
+    // 운영 키와 이 키는 같은 슬롯일 수 없다. 스크립트가 키를 하나만 쓰니 무방하다.
     private static final String INSTANCES = RedisKeys.INSTANCES + ":heartbeat-test";
     private static final String REAP_AFTER = "30";
 
@@ -50,15 +51,22 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
     }
 
     @SuppressWarnings("unchecked")
+    /** 표를 인정하는 신선도. 분모의 임계보다 짧다. */
+    private static final String VOTE_FRESH = "5";
+
     private List<Object> beat(String instanceId, String reapAfter, String circuit) {
+        return beat(instanceId, reapAfter, circuit, VOTE_FRESH);
+    }
+
+    private List<Object> beat(String instanceId, String reapAfter, String circuit,
+            String voteFresh) {
         return (List<Object>) redis.execute(heartbeat, List.of(INSTANCES),
-                        List.of(instanceId, reapAfter, circuit))
+                        List.of(instanceId, reapAfter, circuit, voteFresh))
                 .blockFirst(WAIT);
     }
 
     private List<Object> beat(String instanceId, String reapAfter) {
-        return (List<Object>) redis.execute(heartbeat, List.of(INSTANCES), List.of(instanceId, reapAfter))
-                .blockFirst(WAIT);
+        return beat(instanceId, reapAfter, "CLOSED");
     }
 
     private List<Object> beat(String instanceId) {
@@ -258,31 +266,51 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
                 .hasRootCauseMessage("임계는 1..86400 의 정수여야 한다: 1.5");
     }
     /**
-     * <b>노드마다 자기 서킷을 싣는다</b> (CY-791).
+     * <b>노드마다 자기 서킷을 싣고, 갈래를 나눠 센다</b> (CY-791).
      *
-     * <p>안 실으면 배분이 리더 한 대의 로컬 관측으로 전 클러스터의 크레딧을
-     * 정한다 — 리더만 정상이면 나머지가 다 열려 있어도 평소 속도로 돌고,
-     * 리더만 열려 있으면 멀쩡한 노드들의 배분까지 0 이 된다.
+     * <p>안 실으면 배분이 리더 한 대의 관측으로 전 클러스터의 크레딧을 정한다.
      */
+    // 열린 것과 반쯤 열린 것을 합치면 전 노드가 동시에 반쯤 열린 순간이 과반으로
+    // 접혀 배분이 0 이 되고, 그러면 서킷이 시험할 호출이 없어 영영 안 닫힌다.
     @Test
-    @DisplayName("노드별_서킷을_세어_돌려준다")
-    void 노드별_서킷을_세어_돌려준다() {
+    @DisplayName("표를_갈래별로_세어_돌려준다")
+    void 표를_갈래별로_세어_돌려준다() {
         beat("a", "30", "CLOSED");
         beat("b", "30", "OPEN");
-        List<Object> r = beat("c", "30", "OPEN");
+        List<Object> r = beat("c", "30", "HALF_OPEN");
 
         assertThat(alive(r)).isEqualTo(3);
-        assertThat(notClosed(r)).as("닫히지 않은 노드 수").isEqualTo(2);
+        assertThat(at(r, 2)).as("열린 수").isEqualTo(1);
+        assertThat(at(r, 3)).as("반쯤 열린 수").isEqualTo(1);
+        assertThat(at(r, 4)).as("표를 낸 수").isEqualTo(3);
     }
 
     /**
-     * <b>옛 형식도 읽는다.</b> 롤아웃 구간에는 서킷을 안 싣는 노드가 섞인다.
+     * <b>생존 값에 서킷을 붙이지 않는다.</b>
+     *
+     * <p>붙이면 롤아웃 중 옛 노드의 {@code tonumber} 가 nil 을 내고 새 노드를
+     * 죽은 것으로 판정해 <b>지운다.</b> 옛 리더가 보는 분모가 줄어 남은 노드가
+     * 각자 큰 몫을 쓰므로 총 통과가 전역 크레딧을 넘는다 — 초과 발급 방향이다.
+     * 롤백은 더 나쁘다. 전 노드가 옛 파서로 돌아가 서로를 계속 지운다.
+     */
+    @Test
+    @DisplayName("생존_값은_초만_담아_옛_노드가_읽는다")
+    void 생존_값은_초만_담아_옛_노드가_읽는다() {
+        beat("a", "30", "OPEN");
+
+        String raw = redis.<String, String>opsForHash().get(INSTANCES, "a").block(WAIT);
+
+        assertThat(raw).containsOnlyDigits();
+        assertThat(Long.parseLong(raw)).isPositive();
+    }
+
+    /**
+     * <b>옛 노드의 항목도 센다.</b> 롤아웃 구간에는 표를 안 싣는 노드가 섞인다.
      * 못 읽고 죽은 것으로 치면 그 노드들이 분모에서 빠져 남은 노드가 큰 몫을 쓴다.
      */
     @Test
-    @DisplayName("서킷을_안_실은_옛_항목도_산다")
-    void 서킷을_안_실은_옛_항목도_산다() {
-        // 서버 시각을 먼저 받아 둔다 — 이 판이 곧 "a" 의 등록이기도 하다.
+    @DisplayName("표를_안_낸_옛_항목도_산다")
+    void 표를_안_낸_옛_항목도_산다() {
         long now = stamped(beat("a", "30", "OPEN"));
         redis.<String, String>opsForHash()
                 .put(INSTANCES, "old", String.valueOf(now)).block(WAIT);
@@ -290,29 +318,80 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
         List<Object> r = beat("a", "30", "OPEN");
 
         assertThat(alive(r)).as("옛 노드도 센다").isEqualTo(2);
-        assertThat(notClosed(r)).as("모르는 것은 닫힌 것으로 본다").isEqualTo(1);
+        assertThat(at(r, 2)).as("모르는 것은 닫힌 것으로 본다").isEqualTo(1);
+        assertThat(at(r, 4)).as("표를 낸 것은 하나뿐이다").isEqualTo(1);
     }
 
-    /** 죽은 항목의 서킷은 안 센다. 세면 이미 없는 노드가 배분을 계속 멈춘다. */
+    /** 죽은 항목의 표는 안 센다. 세면 이미 없는 노드가 배분을 계속 멈춘다. */
     @Test
-    @DisplayName("죽은_항목의_서킷은_안_센다")
-    void 죽은_항목의_서킷은_안_센다() {
-        redis.<String, String>opsForHash().put(INSTANCES, "dead", "1|OPEN").block(WAIT);
+    @DisplayName("죽은_항목의_표는_안_센다")
+    void 죽은_항목의_표는_안_센다() {
+        redis.<String, String>opsForHash().put(INSTANCES, "dead", "1").block(WAIT);
+        redis.<String, String>opsForHash().put(INSTANCES, "#c:dead", "OPEN").block(WAIT);
 
         List<Object> r = beat("a", "30", "CLOSED");
 
         assertThat(alive(r)).isEqualTo(1);
-        assertThat(notClosed(r)).isZero();
+        assertThat(at(r, 2)).isZero();
     }
 
-    /** 저장된 값에서 시각만. <b>형식을 아는 곳을 한 군데로 모은다</b> — `<초>|<서킷>` 이다. */
+    /**
+     * <b>낡은 표는 산 노드의 것이어도 안 센다.</b>
+     *
+     * <p>표의 신선도를 분모의 임계와 같이 두면, 죽어 가는 노드의 마지막 표가
+     * 그 임계(운영 기본 60초)만큼 살아 있다. 시체 하나가 멀쩡한 클러스터를
+     * 그 시간 내내 조인다 — 30초 안에 회복해야 한다는 기준을 못 지킨다.
+     */
+    @Test
+    @DisplayName("낡은_표는_안_센다")
+    void 낡은_표는_안_센다() {
+        long now = stamped(beat("a", "30", "CLOSED"));
+        // 아직 산 노드다 — 임계 30초 안이다. 그러나 표로는 낡았다.
+        redis.<String, String>opsForHash()
+                .put(INSTANCES, "stale", String.valueOf(now - 10)).block(WAIT);
+        redis.<String, String>opsForHash().put(INSTANCES, "#c:stale", "OPEN").block(WAIT);
+
+        List<Object> r = beat("a", "30", "CLOSED", "5");
+
+        assertThat(alive(r)).as("분모에는 들어간다").isEqualTo(2);
+        assertThat(at(r, 2)).as("표로는 안 센다").isZero();
+        assertThat(at(r, 4)).as("표를 낸 것은 자기뿐이다").isEqualTo(1);
+    }
+
+    /** 항목이 사라진 표는 지운다. 안 지우면 해시가 배포 이력만큼 자란다. */
+    @Test
+    @DisplayName("주인_없는_표는_지운다")
+    void 주인_없는_표는_지운다() {
+        redis.<String, String>opsForHash().put(INSTANCES, "#c:gone", "OPEN").block(WAIT);
+
+        beat("a", "30", "CLOSED");
+
+        assertThat(redis.opsForHash().hasKey(INSTANCES, "#c:gone").block(WAIT)).isFalse();
+    }
+
+    /** 모르는 상태는 거절한다. 받아 두면 표로 세어져 전 클러스터의 배분이 멎는다. */
+    @Test
+    @DisplayName("모르는_서킷_상태는_거절한다")
+    void 모르는_서킷_상태는_거절한다() {
+        assertThatThrownBy(() -> beat("a", "30", "BANANA"))
+                .hasRootCauseMessage("모르는 서킷 상태다: BANANA");
+    }
+
+    /** 표 신선도도 임계와 같은 자로 검사한다. 분모의 임계보다 길 수 없다. */
+    @Test
+    @DisplayName("표_신선도가_임계보다_길_수_없다")
+    void 표_신선도가_임계보다_길_수_없다() {
+        assertThatThrownBy(() -> beat("a", "30", "CLOSED", "31"))
+                .hasRootCauseMessage("표 신선도는 1..30 의 정수여야 한다: 31");
+    }
+
+    /** 저장된 값에서 시각만. <b>형식을 아는 곳을 한 군데로 모은다</b> — 초만 담는다. */
     private long storedSeen(String instanceId) {
-        String raw = redis.<String, String>opsForHash().get(INSTANCES, instanceId).block(WAIT);
-        int sep = raw.indexOf('|');
-        return Long.parseLong(sep < 0 ? raw : raw.substring(0, sep));
+        return Long.parseLong(
+                redis.<String, String>opsForHash().get(INSTANCES, instanceId).block(WAIT));
     }
 
-    private int notClosed(List<Object> r) {
-        return Integer.parseInt(String.valueOf(r.get(2)));
+    private int at(List<Object> r, int index) {
+        return Integer.parseInt(String.valueOf(r.get(index)));
     }
 }

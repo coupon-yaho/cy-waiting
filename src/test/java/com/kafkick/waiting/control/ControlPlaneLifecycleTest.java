@@ -73,8 +73,8 @@ class ControlPlaneLifecycleTest {
     }
 
     @Test
-    @DisplayName("멈추면_락을_놓는다")
-    void 멈추면_락을_놓는다() {
+    @DisplayName("끝나면_락을_놓는다")
+    void 끝나면_락을_놓는다() {
         // 안 놓으면 다음 리더가 리스 만료를 기다린다. 배포마다 그만큼 배분이 빈다.
         VirtualTimeScheduler timer = VirtualTimeScheduler.create();
         ControlPlaneLifecycle lifecycle = lifecycle(timer);
@@ -82,6 +82,7 @@ class ControlPlaneLifecycleTest {
 
         AtomicInteger 콜백 = new AtomicInteger();
         lifecycle.stop(콜백::incrementAndGet);
+        lifecycle.destroy();
 
         assertThat(해제).hasValue(1);
         assertThat(콜백).hasValue(1);
@@ -164,6 +165,7 @@ class ControlPlaneLifecycleTest {
 
         AtomicInteger 콜백 = new AtomicInteger();
         lifecycle.stop(콜백::incrementAndGet);
+        lifecycle.destroy();
 
         assertThat(콜백).hasValue(1);
         // 왜 못 놓았는지 안 남기면, 다음 리더가 리스를 기다린 이유를 못 찾는다.
@@ -203,5 +205,62 @@ class ControlPlaneLifecycleTest {
         assertThat(lifecycle(VirtualTimeScheduler.create()).getPhase())
                 .isGreaterThan(커넥션_팩토리)
                 .isLessThan(웹_서버);
+    }
+
+    /**
+     * <b>일시정지는 종료가 아니다.</b>
+     *
+     * <p>루프를 멈추는 것은 맞다. 놓는 것은 정말 끝날 때다.
+     */
+    // 스프링은 캐시된 컨텍스트를 전환할 때 이전 것을 멈춘다. pause() 가
+    // SmartLifecycle.stop() 을 부른다. 거기서 락을 놓으면 리더십이 종단 상태가
+    // 되어 다시 시작해도 영영 리더가 못 되고, 시험 스위트에서는 무관한 시험이
+    // 리더를 못 잡고 빨개지는 형태로 나타난다.
+    @Test
+    @DisplayName("멈췄다_다시_시작하면_안_놓는다")
+    void 멈췄다_다시_시작하면_안_놓는다() {
+        VirtualTimeScheduler timer = VirtualTimeScheduler.create();
+        ControlPlaneLifecycle lifecycle = lifecycle(timer);
+
+        lifecycle.start();
+        lifecycle.stop();
+        timer.advanceTimeBy(Duration.ofSeconds(1));
+
+        assertThat(해제).as("멈춘 것만으로는 안 놓는다").hasValue(0);
+
+        int 다시_켜기_전 = 배분.get();
+        lifecycle.start();
+        timer.advanceTimeBy(TICK);
+        assertThat(배분.get()).as("다시 돈다").isGreaterThan(다시_켜기_전);
+    }
+
+    /** 컨테이너가 빈을 버릴 때 놓는다. 그때가 정말 끝나는 자리다. */
+    @Test
+    @DisplayName("빈이_버려질_때_놓는다")
+    void 빈이_버려질_때_놓는다() {
+        VirtualTimeScheduler timer = VirtualTimeScheduler.create();
+        ControlPlaneLifecycle lifecycle = lifecycle(timer);
+
+        lifecycle.start();
+        lifecycle.stop();
+        lifecycle.destroy();
+        timer.advanceTimeBy(Duration.ofSeconds(1));
+
+        assertThat(해제).hasValue(1);
+    }
+
+    /** 두 번 버려도 한 번만 놓는다. 두 번 놓으면 남의 락을 지울 수 있다. */
+    @Test
+    @DisplayName("두_번_버려도_한_번만_놓는다")
+    void 두_번_버려도_한_번만_놓는다() {
+        VirtualTimeScheduler timer = VirtualTimeScheduler.create();
+        ControlPlaneLifecycle lifecycle = lifecycle(timer);
+
+        lifecycle.start();
+        lifecycle.destroy();
+        lifecycle.destroy();
+        timer.advanceTimeBy(Duration.ofSeconds(1));
+
+        assertThat(해제).hasValue(1);
     }
 }

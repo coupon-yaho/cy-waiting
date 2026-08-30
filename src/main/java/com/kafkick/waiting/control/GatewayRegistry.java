@@ -1,5 +1,7 @@
 package com.kafkick.waiting.control;
 
+import com.kafkick.waiting.domain.admission.CircuitState;
+
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -26,6 +28,15 @@ public final class GatewayRegistry {
     private final int rampDownTicks;
     private final AtomicReference<Denominator> current;
 
+    /**
+     * 클러스터가 본 서킷 (CY-791). <b>하트비트가 실어 온 것으로 판단한다.</b>
+     *
+     * <p>리더 한 대의 로컬 관측을 쓰면 두 방향으로 틀린다 — 리더만 정상이면
+     * 나머지가 다 열려 있어도 배분이 평소 속도로 돈다.
+     */
+    private final AtomicReference<CircuitState> clusterCircuit =
+            new AtomicReference<>(CircuitState.CLOSED);
+
     private GatewayRegistry(int rampDownTicks, int initial) {
         this.rampDownTicks = rampDownTicks;
         this.current = new AtomicReference<>(new Denominator(initial, 0));
@@ -46,6 +57,16 @@ public final class GatewayRegistry {
                     "initial 은 1 이상이어야 한다: %d".formatted(initial));
         }
         return new GatewayRegistry(rampDownTicks, initial);
+    }
+
+    /** 하트비트가 센 것을 그대로 받는다. 둘을 나눠 받으면 다른 판의 것이 섞인다. */
+    public void circuitObserved(int alive, int notClosed) {
+        clusterCircuit.set(ClusterCircuit.of(alive, notClosed));
+    }
+
+    /** 배분이 읽는 값. 관측이 오기 전에는 닫힌 것으로 본다. */
+    public CircuitState circuit() {
+        return clusterCircuit.get();
     }
 
     /**

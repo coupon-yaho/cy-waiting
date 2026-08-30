@@ -1,8 +1,14 @@
 package com.kafkick.waiting.control;
 
 import com.kafkick.waiting.adapter.redis.GatewayRedisPort;
+import com.kafkick.waiting.adapter.redis.GatewayRedisPort.Presence;
+import com.kafkick.waiting.domain.admission.CircuitState;
+import com.kafkick.waiting.gateway.CircuitStateReader;
+import java.util.function.Function;
+import java.util.function.Supplier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import reactor.core.publisher.Mono;
 
 /**
  * 노드가 자기 존재를 알리는 배선. <b>배분 토글 밖이다</b> — 요청만 받는 노드도
@@ -28,14 +34,30 @@ public class GatewayPresenceConfig {
      */
     @Bean
     GatewayHeartbeatLoop gatewayHeartbeatLoop(GatewayRedisPort port,
-            GatewayRegistry registry, ControlPlaneProperties properties) {
+            GatewayRegistry registry, ControlPlaneProperties properties,
+            CircuitStateReader circuit) {
         String instanceId = Leadership.newOwnerId();
         long reapAfterSec = properties.capacity().freshness().toSeconds();
         return GatewayHeartbeatLoop.of(
-                () -> port.beat(instanceId, reapAfterSec),
+                beatStep(state -> port.beat(instanceId, reapAfterSec, state), circuit::now,
+                        registry),
                 () -> port.leave(instanceId),
                 registry::observed,
                 properties.scheduler().tick(),
                 properties.leader().attempt());
+    }
+
+    /**
+     * 한 번의 하트비트. <b>서킷을 싣고, 클러스터 판정을 받아 적는다</b> (CY-791).
+     *
+     * <p>배선을 여기 따로 뺀 것은, 이 두 줄이 빠져도 하트비트가 초록으로 돌기
+     * 때문이다. 그러면 배분은 리더 한 대의 로컬 서킷으로 전 클러스터의 크레딧을
+     * 정한다 — 리더만 멀쩡하면 나머지가 다 열려 있어도 평소 속도로 돈다.
+     */
+    static Supplier<Mono<Integer>> beatStep(Function<CircuitState, Mono<Presence>> beat,
+            Supplier<CircuitState> local, GatewayRegistry registry) {
+        return () -> beat.apply(local.get())
+                .doOnNext(seen -> registry.circuitObserved(seen.alive(), seen.notClosed()))
+                .map(Presence::alive);
     }
 }

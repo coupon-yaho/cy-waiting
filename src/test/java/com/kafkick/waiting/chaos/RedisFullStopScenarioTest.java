@@ -1,6 +1,7 @@
 package com.kafkick.waiting.chaos;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.kafkick.waiting.control.SnapshotCodec;
 import com.kafkick.waiting.domain.allocation.CreditSmoother;
@@ -58,8 +59,17 @@ class RedisFullStopScenarioTest {
     /** 회복까지 걸린 시간. 시나리오 안에서 재고 판정에 넘긴다. */
     private Duration 회복까지_걸린_시간;
 
+    /** 창이 열린 시점의 발신 계수. 회복 순간 창의 분모는 이 뒤에 보낸 것이다. */
+    private long 창이_열린_수;
+
     /** 회복 순간에 시험이 보낸 수. 그 구간 도착과의 비가 증폭률이다. */
     private long 회복_순간_보낸_수;
+
+    /**
+     * 지금까지 보낸 발급 요청 수. <b>리스트 크기로 세지 않는다</b> — 리스트에
+     * 무엇이 들어가느냐가 바뀌면 증폭률의 분모가 조용히 부푼다.
+     */
+    private long 발급_보낸_수;
 
     /** 장애 구간에 줄을 쳤을 때의 상태. 레디스가 정말 죽었는지의 증거다. */
     private int 줄을_친_결과;
@@ -254,12 +264,13 @@ class RedisFullStopScenarioTest {
     @Test
     @DisplayName("회복_순간의_몰아침을_판정이_잡는다")
     void 회복_순간의_몰아침을_판정이_잡는다() {
-        // **상수로 다시 센다.** 판정 함수가 계산해 준 값을 그대로 받으면
-        // 그 계산식이 바뀌어도 양쪽이 같이 움직여 아무것도 안 잡힌다.
         long 보낸_수 = 장애중_보낼_수 + 대기_한_판;
-        assertThat(회복_순간을_닫는다(new BackendRpsRecorder(new AtomicLong()::get), 대기_한_판))
-                .as("보낸 수의 계산식")
-                .isEqualTo(보낸_수);
+        // **순서 방어가 살아 있는지부터 본다.** 장애 구간분밖에 안 보낸 채로
+        // 창을 닫는 것은 대기 루프 앞에서 닫은 것이다.
+        assertThatThrownBy(() -> 회복_순간을_닫는다(
+                new BackendRpsRecorder(new AtomicLong()::get), 장애중_보낼_수))
+                .isInstanceOf(AssertionError.class)
+                .hasMessageContaining("기다리기 전에");
 
         assertThat(회복_유입을_판정한다(유입을_흉내낸다(보낸_수, 정상_도착), 보낸_수))
                 .as("대조군 — 도착이 보낸 수만큼이면 아무 창도 안 울린다")
@@ -291,7 +302,7 @@ class RedisFullStopScenarioTest {
         유입.sample(지금.plusSeconds(1));
         뒷단.addAndGet(회복_순간_도착);
         // 시나리오가 여기서 창을 닫는다. 같은 함수를 불러 순서를 공유한다.
-        회복_순간을_닫는다(유입, 0);
+        회복_순간을_닫는다(유입, 회복_순간_도착);
         뒷단.addAndGet(확인_뒤_도착);
         유입.sample(지금.plusSeconds(3));
         return 유입;
@@ -306,9 +317,15 @@ class RedisFullStopScenarioTest {
      *
      * @param 대기중_보낸_수 회복을 기다리며 보낸 발급 요청 수
      */
-    private static long 회복_순간을_닫는다(BackendRpsRecorder 유입, int 대기중_보낸_수) {
+    private static long 회복_순간을_닫는다(BackendRpsRecorder 유입, long 창에_보낸_수) {
+        // **기다리기 전에는 못 닫는다.** 창을 대기 루프 앞으로 옮기면 분자는
+        // 장애 구간만 담고 대기 루프 도착은 다음 창으로 샌다. 그 판이 한계
+        // 안에 우연히 들어오면 판정이 죽은 채로 초록이다 — 숫자가 아니라
+        // 구조로 막는다. 장애 구간분에 최소 한 판이 더 얹혀야 정상이다.
+        assertThat(창에_보낸_수).as("회복을 기다리기 전에 창을 닫았다")
+                .isGreaterThan(장애중_보낼_수);
         유입.sample(지금.plusSeconds(2));
-        return 장애중_보낼_수 + (long) 대기중_보낸_수;
+        return 창에_보낸_수;
     }
 
     /**
@@ -362,6 +379,7 @@ class RedisFullStopScenarioTest {
         List<Integer> 상태 = new ArrayList<>();
         for (int i = 0; i < 횟수; i++) {
             상태.add(발급을_시도한다(시작_회원 + i));
+            발급_보낸_수++;
         }
         return 상태;
     }
@@ -395,7 +413,10 @@ class RedisFullStopScenarioTest {
                     assertThat(정상_상태).as("전제 — 뒷단까지 간 요청이 있다")
                             .anyMatch(status -> status < 300);
                 })
-                .inject(() -> faults.끊는다())
+                .inject(() -> {
+                    창이_열린_수 = 발급_보낸_수;
+                    faults.끊는다();
+                })
                 .duringFault(() -> {
                     장애중_상태.addAll(여러_번_시도한다(장애중_보낼_수, 2_000));
                     // **레디스가 정말 죽었는지 확인한다.** 안 죽었으면 이 시나리오
@@ -416,7 +437,7 @@ class RedisFullStopScenarioTest {
                     // 요청까지 세고, 창을 뒤로 밀면 몰아침이 통째로 표본 밖으로
                     // 나간다. 그래서 창 대신 **보낸 수로 나눈다** — 대기 길이가
                     // 상쇄되고, 게이트웨이가 스스로 만든 유입만 남는다.
-                    회복_순간_보낸_수 = 회복_순간을_닫는다(유입, 회복_상태.size());
+                    회복_순간_보낸_수 = 회복_순간을_닫는다(유입, 발급_보낸_수 - 창이_열린_수);
 
                     // 확인된 뒤의 정상 창. 회복이 한 번 돌아왔다가 다시 무너지는
                     // 회귀는 여기서만 보인다 — 응답도 판정에 넣는다.

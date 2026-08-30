@@ -138,6 +138,12 @@ public final class RecoveryCriteria {
         if (arrived < 0) {
             return Optional.of("RC4 뒷단 도착 수를 못 쟀다: %d".formatted(arrived));
         }
+        // **보냈는데 하나도 안 닿았으면 위반이다.** 비율 0 은 "증폭 없음" 으로
+        // 읽혀 가장 조용히 통과한다 — 봉우리 0 을 막은 것과 같은 상황이다.
+        if (arrived == 0) {
+            return Optional.of("RC4 회복 구간에 보낸 %d 건이 뒷단에 하나도 안 닿았다"
+                    .formatted(sent));
+        }
         double ratio = (double) arrived / sent;
         return ratio <= BURST_LIMIT ? Optional.empty()
                 : Optional.of("RC4 회복 증폭 %.2f 배 — 보낸 %d, 도착 %d (한계 %.1f)"

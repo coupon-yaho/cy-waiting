@@ -104,9 +104,7 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
         // 영영 신선하거나 즉시 만료된다.
         List<Object> r = beat("a");
         long stamped = Long.parseLong(String.valueOf(r.get(1)));
-        String stored = redis.<String, String>opsForHash().get(INSTANCES, "a").block(WAIT);
-
-        assertThat(Long.parseLong(stored)).isEqualTo(stamped);
+        assertThat(storedSeen("a")).isEqualTo(stamped);
         assertThat(stamped).isGreaterThan(1_700_000_000L);
     }
 
@@ -168,8 +166,7 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
 
         beat("a");
 
-        long stored = Long.parseLong(redis.<String, String>opsForHash().get(INSTANCES, "a").block(WAIT));
-        assertThat(stored).isGreaterThanOrEqualTo(first);
+        assertThat(storedSeen("a")).isGreaterThanOrEqualTo(first);
     }
 
     @Test
@@ -285,8 +282,10 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
     @Test
     @DisplayName("서킷을_안_실은_옛_항목도_산다")
     void 서킷을_안_실은_옛_항목도_산다() {
+        // 서버 시각을 먼저 받아 둔다 — 이 판이 곧 "a" 의 등록이기도 하다.
+        long now = stamped(beat("a", "30", "OPEN"));
         redis.<String, String>opsForHash()
-                .put(INSTANCES, "old", String.valueOf(서버시각())).block(WAIT);
+                .put(INSTANCES, "old", String.valueOf(now)).block(WAIT);
 
         List<Object> r = beat("a", "30", "OPEN");
 
@@ -306,8 +305,11 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
         assertThat(notClosed(r)).isZero();
     }
 
-    private long 서버시각() {
-        return Long.parseLong(String.valueOf(beat("probe", "30", "CLOSED").get(1)));
+    /** 저장된 값에서 시각만. <b>형식을 아는 곳을 한 군데로 모은다</b> — `<초>|<서킷>` 이다. */
+    private long storedSeen(String instanceId) {
+        String raw = redis.<String, String>opsForHash().get(INSTANCES, instanceId).block(WAIT);
+        int sep = raw.indexOf('|');
+        return Long.parseLong(sep < 0 ? raw : raw.substring(0, sep));
     }
 
     private int notClosed(List<Object> r) {

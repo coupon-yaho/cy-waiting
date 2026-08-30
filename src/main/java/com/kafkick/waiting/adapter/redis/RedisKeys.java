@@ -95,6 +95,8 @@ public final class RedisKeys {
      * 남은 재고. <b>발급 계층이 소유하고 샤드와 무관하다.</b>
      *
      * <p>샤딩하면 슬롯이 갈리므로 <b>Lua 에서 만지지 않는다</b> — 별도로 읽는다.
+     * 예외는 매진 큐 삭제 하나다 (E-3 · CY-765). 되돌릴 수 없어서 쓰기 직전의
+     * 사실이 필요하고, 샤드가 하나면 줄과 태그가 같다. 여럿이면 거절한다.
      */
     public static String stock(String couponId) {
         return "stock:{" + validated(couponId, "couponId") + "}";

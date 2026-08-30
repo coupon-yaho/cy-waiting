@@ -46,7 +46,8 @@ class AllocationRedisPortTest extends RedisContainerSupport {
                 RedisKeys.queue("c2", SHARDS, 0), RedisKeys.admitted("c2", SHARDS, 0),
                 RedisKeys.stock("c1"), RedisKeys.stock("c2"),
                 RedisKeys.COUPON_POLICY,
-                RedisKeys.alive("c1", SHARDS, 0), RedisKeys.grace("c1", SHARDS, 0)).block(WAIT);
+                RedisKeys.alive("c1", SHARDS, 0), RedisKeys.grace("c1", SHARDS, 0),
+                RedisKeys.stock("c3"), RedisKeys.maxScore("c1", SHARDS, 0)).block(WAIT);
     }
 
     private void 줄_세운다(String couponId, long... scores) {
@@ -72,6 +73,8 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         redis.opsForZSet().add(RedisKeys.alive("c1", SHARDS, 0), "m1", 100).block(WAIT);
         redis.opsForHash().put(RedisKeys.grace("c1", SHARDS, 0), "m1", "a:5").block(WAIT);
         redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "7").block(WAIT);
+        // 삭제가 재고를 직접 본다 (CY-765). 안 심으면 못 읽은 것이라 안 지운다.
+        redis.opsForValue().set(RedisKeys.stock("c1"), "0").block(WAIT);
 
         assertThat(port.dropSoldOutQueues(List.of("c1")).block(WAIT))
                 .as("지운 쿠폰을 돌려준다").containsExactly("c1");
@@ -108,6 +111,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         줄_세운다("c1", 1);
         redis.opsForValue().set(RedisKeys.maxScore("c1", SHARDS, 0), "1700000000000000")
                 .block(WAIT);
+        redis.opsForValue().set(RedisKeys.stock("c1"), "0").block(WAIT);
 
         port.dropSoldOutQueues(List.of("c1")).block(WAIT);
 
@@ -610,7 +614,8 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     /** 읽기를 실패시킨다. 형이 다른 키를 놓으면 HMGET 이 WRONGTYPE 을 낸다. */
     private void 정책_읽기를_깨뜨린다() {
         redis.delete(RedisKeys.COUPON_POLICY,
-                RedisKeys.alive("c1", SHARDS, 0), RedisKeys.grace("c1", SHARDS, 0)).block(WAIT);
+                RedisKeys.alive("c1", SHARDS, 0), RedisKeys.grace("c1", SHARDS, 0),
+                RedisKeys.stock("c3"), RedisKeys.maxScore("c1", SHARDS, 0)).block(WAIT);
         redis.opsForValue().set(RedisKeys.COUPON_POLICY, "해시가-아니다").block(WAIT);
     }
 

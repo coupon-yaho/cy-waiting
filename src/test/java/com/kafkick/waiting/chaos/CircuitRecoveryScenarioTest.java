@@ -1,0 +1,259 @@
+package com.kafkick.waiting.chaos;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import com.kafkick.waiting.control.GatewaySnapshot;
+import com.kafkick.waiting.control.SnapshotCodec;
+import com.kafkick.waiting.control.SnapshotSource;
+import com.kafkick.waiting.domain.allocation.CreditSmoother;
+import com.kafkick.waiting.domain.allocation.QueueingHysteresis;
+import com.kafkick.waiting.domain.coupon.CouponStates;
+import com.kafkick.waiting.domain.coupon.SnapshotMeta;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Supplier;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
+import org.springframework.http.HttpStatus;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.web.reactive.server.WebTestClient;
+import reactor.core.publisher.Mono;
+import reactor.netty.DisposableServer;
+import reactor.netty.http.server.HttpServer;
+
+/**
+ * C8 — 뒷단 지연 → 서킷 오픈 → half-open 회복 (8.3.4 · 5절).
+ *
+ * <p>게이트 G8.12 를 직접 잰다 — <b>회복 시도가 두 번을 넘으면 안 된다.</b>
+ */
+// 반복 실패는 유입 억제가 안 걸린다는 뜻이다. half-open 순간 그때 도착한 모든
+// 트래픽이 약한 뒷단에 꽂혀 다시 열리고, 그러면 회복이 영영 안 온다.
+@Tag("chaos")
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+        properties = "waiting.scheduler.enabled=false")
+@Import(CircuitRecoveryScenarioTest.TogglingBackend.class)
+class CircuitRecoveryScenarioTest {
+
+    private static final Instant 지금 = Instant.parse("2026-08-31T00:00:00Z");
+    private static final String COUPON = "c1";
+
+    /** 뒷단이 멎었는가. 이 스위치로 장애를 넣고 걷는다. */
+    private static final AtomicBoolean 멎었다 = new AtomicBoolean();
+
+    private static final AtomicLong 뒷단이_받은_수 = new AtomicLong();
+
+    /** 짧게 잡는다. 운영값으로 재면 시험 하나가 그만큼 걸린다. */
+    private static final Duration 응답_상한 = Duration.ofMillis(300);
+
+    private static final DisposableServer 뒷단 = HttpServer.create()
+            .port(0)
+            .handle((request, response) -> {
+                뒷단이_받은_수.incrementAndGet();
+                return 멎었다.get() ? Mono.never()
+                        : response.status(HttpStatus.OK.value()).send();
+            })
+            .bindNow();
+
+    @DynamicPropertySource
+    static void 배선(DynamicPropertyRegistry registry) {
+        registry.add("waiting.backend.uri", () -> "http://localhost:" + 뒷단.port());
+        registry.add("waiting.backend.response-timeout", () -> 응답_상한);
+        // 표본 하한을 낮춘다. 운영값 20 건을 여기서 채우면 몇 초가 걸린다.
+        registry.add("waiting.backend.circuit.minimum-number-of-calls", () -> 3);
+        registry.add("waiting.backend.circuit.sliding-window-size", () -> "2s");
+        registry.add("waiting.backend.circuit.wait-duration-in-open-state", () -> "1s");
+        registry.add("waiting.backend.circuit.permitted-number-of-calls-in-half-open-state",
+                () -> 2);
+    }
+
+    @AfterAll
+    static void 내린다() {
+        뒷단.disposeNow();
+    }
+
+    @TestConfiguration
+    static class TogglingBackend {
+
+        @Bean
+        @Primary
+        Clock 고정_시계() {
+            return Clock.fixed(지금, ZoneOffset.UTC);
+        }
+
+        /** 한산한 쿠폰. 요청이 뒷단까지 가야 서킷이 표본을 얻는다. */
+        @Bean
+        @Primary
+        SnapshotSource 한산한_재료() {
+            Map<String, String> 재료 = SnapshotCodec.create().encode(
+                    new GatewaySnapshot(Map.of(COUPON, CouponStates.idle(1_000_000)),
+                            new SnapshotMeta(10_000, 1), 지금),
+                    CreditSmoother.Snapshot.empty(), QueueingHysteresis.Snapshot.empty());
+            return () -> Mono.just(재료);
+        }
+    }
+
+    @LocalServerPort
+    private int port;
+
+    @Autowired
+    private CircuitBreakerRegistry circuits;
+
+    /** 열린 횟수. <b>두 번을 넘으면 회복이 반복 실패한 것이다</b> (G8.12). */
+    private final AtomicInteger 열린_횟수 = new AtomicInteger();
+
+    /**
+     * 회복을 기다리는 동안 볼 시계.
+     *
+     * <p>판정이 보는 시계는 고정이라 여기 못 쓴다 — 안 흐르면 대기 시간이 영영
+     * 안 지난다. 주입해 두면 시험이 그것을 바꿀 수 있다.
+     */
+    private final Supplier<Instant> 벽시계 = Instant::now;
+
+    /** 회복을 포기하는 한계. 서킷의 대기 시간보다 넉넉해야 한다. */
+    private static final Duration 회복_한계 = Duration.ofSeconds(20);
+
+    private WebTestClient 클라이언트() {
+        return WebTestClient.bindToServer()
+                .baseUrl("http://localhost:" + port)
+                .responseTimeout(응답_상한.multipliedBy(30))
+                .build();
+    }
+
+    private void 발급을_시도한다(int member) {
+        클라이언트().post()
+                .uri("/api/v1/coupons/" + COUPON + "/issue")
+                .header("X-Member-Id", String.valueOf(member))
+                .header("X-Member-Grade", "GOLD")
+                .exchange()
+                .returnResult(Void.class);
+    }
+
+    private void 여러_번_시도한다(int 횟수, int 시작_회원) {
+        for (int i = 0; i < 횟수; i++) {
+            발급을_시도한다(시작_회원 + i);
+        }
+    }
+
+    private CircuitBreaker 서킷() {
+        return circuits.find("backend").orElseThrow(
+                () -> new IllegalStateException("서킷이 없다 — 이름이 바뀌었는지 본다"));
+    }
+
+    /**
+     * <b>서킷이 열렸다가 두 번 안에 닫힌다</b> (G8.12).
+     *
+     * <p>반복 실패는 유입 억제가 안 걸린다는 뜻이다. half-open 순간 그때 도착한
+     * 모든 트래픽이 약한 뒷단에 꽂혀 다시 열린다.
+     */
+    @Test
+    @DisplayName("C8_서킷이_열렸다가_두_번_안에_닫힌다")
+    void C8_서킷이_열렸다가_두_번_안에_닫힌다() {
+        long[] 유지중_유입 = new long[1];
+
+        ChaosScenario.named("C8 뒷단 지연 → 서킷 오픈")
+                .baseline(() -> {
+                    // **서킷은 첫 요청이 만든다.** 그 전에 잡으려 하면 없다.
+                    여러_번_시도한다(3, 1_000);
+                    서킷().getEventPublisher().onStateTransition(e -> {
+                        if (e.getStateTransition().getToState() == CircuitBreaker.State.OPEN) {
+                            열린_횟수.incrementAndGet();
+                        }
+                    });
+                })
+                .inject(() -> 멎었다.set(true))
+                .duringFault(() -> {
+                    여러_번_시도한다(5, 2_000);
+                    long 열린_뒤 = 뒷단이_받은_수.get();
+                    여러_번_시도한다(5, 2_100);
+                    유지중_유입[0] = 뒷단이_받은_수.get() - 열린_뒤;
+                })
+                .recover(() -> 멎었다.set(false))
+                .afterRecovery(this::닫힐_때까지_두드린다)
+                .assertEntry(ChaosScenario.Verdict.none())
+                .assertDuring(() -> RecoveryCriteria.violations(서킷이_열렸다(), 유입이_멎었다(유지중_유입[0])))
+                // **닫히는 것까지는 여기서 못 잰다** (CY-813). HALF_OPEN 이면
+                // 판정이 전원을 줄에 세우므로, 뒷단으로 가는 유일한 길이 배분이
+                // 차례를 준 사람이다. 이 시험은 스케줄러를 꺼 뒀고, 켜면 리더
+                // 락을 두고 다른 시험과 겹친다.
+                //
+                // 대신 **대기 시간이 지나 시도에 들어갔는지**를 잰다. 거기까지가
+                // 서킷의 몫이고, 그 뒤는 배분의 몫이다.
+                .assertRecovery(() -> RecoveryCriteria.violations(
+                        시도에_들어갔다(), 회복_시도가_적다()))
+                .run();
+
+        assertThat(서킷().getState())
+                .as("닫히려면 배분이 프로브를 보내야 한다 (CY-813)")
+                .isEqualTo(CircuitBreaker.State.HALF_OPEN);
+    }
+
+    /**
+     * 열린 상태를 벗어날 때까지 눌러 본다.
+     *
+     * <p>열린 뒤 대기 시간이 지나야 반쯤 열리므로, 횟수가 아니라 <b>시각</b>으로
+     * 끊는다 — 요청이 빨라지면 마흔 번이 대기 시간보다 짧게 끝난다.
+     */
+    private void 닫힐_때까지_두드린다() {
+        Instant 시작 = 벽시계.get();
+        int 회차 = 0;
+        while (서킷().getState() == CircuitBreaker.State.OPEN
+                && Duration.between(시작, 벽시계.get()).compareTo(회복_한계) < 0) {
+            여러_번_시도한다(2, 3_000 + 회차 * 10);
+            회차++;
+        }
+    }
+
+    private Optional<String> 서킷이_열렸다() {
+        CircuitBreaker.State 지금_상태 = 서킷().getState();
+        return 지금_상태 == CircuitBreaker.State.OPEN || 열린_횟수.get() > 0
+                ? Optional.empty()
+                : Optional.of("장애 구간인데 서킷이 안 열렸다 — 상태 %s".formatted(지금_상태));
+    }
+
+    /** 서킷이 열렸으면 뒷단으로 가는 것이 거의 없어야 한다. */
+    private Optional<String> 유입이_멎었다(long 유입) {
+        return 유입 > 1
+                ? Optional.of("서킷이 열렸는데 뒷단이 %d 건을 더 받았다".formatted(유입))
+                : Optional.empty();
+    }
+
+    /**
+     * 대기 시간이 지나 회복을 시도하는 상태로 들어갔는가.
+     *
+     * <p>닫히는 것은 프로브가 뒷단에 닿아야 하는데, 그 길이 배분뿐이다
+     * (CY-813). 여기서는 서킷이 <b>스스로 열린 채로 안 굳는지</b>까지 본다.
+     */
+    private Optional<String> 시도에_들어갔다() {
+        CircuitBreaker.State 지금_상태 = 서킷().getState();
+        return 지금_상태 == CircuitBreaker.State.OPEN
+                ? Optional.of("대기 시간이 지났는데 서킷이 열린 채로 굳었다")
+                : Optional.empty();
+    }
+
+    /** G8.12 — 회복 시도가 두 번을 넘으면 안 된다. */
+    private Optional<String> 회복_시도가_적다() {
+        int 시도 = 열린_횟수.get();
+        return 시도 <= 2 ? Optional.empty()
+                : Optional.of("서킷이 %d 번 열렸다 — 회복이 반복 실패했다 (G8.12)".formatted(시도));
+    }
+}

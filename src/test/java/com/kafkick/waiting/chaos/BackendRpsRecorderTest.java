@@ -1,6 +1,7 @@
 package com.kafkick.waiting.chaos;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.offset;
 
 import java.time.Instant;
 import java.util.concurrent.atomic.AtomicLong;
@@ -72,7 +73,9 @@ class BackendRpsRecorderTest {
             초가_지난다(기록, 시작.plusSeconds(i), 1);
         }
 
-        assertThat(기록.averageRps(시작.plusSeconds(1), 시작.plusSeconds(5))).isEqualTo(1.0);
+        // **차분은 그것이 온 초에 쌓인다.** 표집 시각이 아니다 — 표집과 표집
+        // 사이에 온 것이므로 앞 초의 몫이다.
+        assertThat(기록.averageRps(시작, 시작.plusSeconds(4))).isEqualTo(1.0);
     }
 
     /** 아무것도 안 받은 구간의 평균은 0 이다. 나눗셈이 터지면 시나리오가 못 끝난다. */
@@ -127,7 +130,7 @@ class BackendRpsRecorderTest {
         // 그러면 되돌아간 값이 조용히 총합을 깎는다.
         assertThat(기록.total()).as("음수 차분이 총합을 안 깎는다").isEqualTo(10);
         assertThat(기록.averageRps(시작, 시작.plusSeconds(3)))
-                .as("평균도 음수에 안 끌린다").isGreaterThan(0);
+                .as("평균도 음수에 안 끌린다").isCloseTo(10.0 / 3, offset(1e-9));
     }
 
     /** RC4 판정에 그대로 넘길 수 있어야 한다. 여기서 다시 계산하면 기준이 갈린다. */
@@ -142,8 +145,66 @@ class BackendRpsRecorderTest {
         초가_지난다(기록, 시작.plusSeconds(11), 30);
 
         assertThat(RecoveryCriteria.recoveryBurst(
-                기록.averageRps(시작.plusSeconds(1), 시작.plusSeconds(11)),
-                기록.peakRps(시작.plusSeconds(11), 시작.plusSeconds(12))))
+                기록.averageRps(시작, 시작.plusSeconds(10)),
+                기록.peakRps(시작.plusSeconds(10), 시작.plusSeconds(11))))
                 .hasValueSatisfying(v -> assertThat(v).contains("RC4"));
+    }
+
+    /**
+     * <b>표집이 늦어도 봉우리가 안 부푼다.</b>
+     *
+     * <p>늦게 부른 판의 차분을 한 초에 몰아넣으면, 균일한 트래픽에도 봉우리가
+     * 늦은 만큼 배로 잡혀 거짓 RC4 위반이 난다. 스케줄러가 한 틱 밀리는 것만으로
+     * 시나리오가 빨개진다.
+     */
+    @Test
+    @DisplayName("표집이_늦어도_봉우리가_안_부푼다")
+    void 표집이_늦어도_봉우리가_안_부푼다() {
+        BackendRpsRecorder 제때 = 기록기();
+        제때.sample(시작);
+        for (int i = 1; i <= 4; i++) {
+            초가_지난다(제때, 시작.plusSeconds(i), 100);
+        }
+
+        스텁이_센_수.set(0);
+        BackendRpsRecorder 늦게 = 기록기();
+        늦게.sample(시작);
+        초가_지난다(늦게, 시작.plusSeconds(2), 200);
+        초가_지난다(늦게, 시작.plusSeconds(4), 200);
+
+        assertThat(늦게.peakRps(시작, 시작.plusSeconds(4)))
+                .as("같은 100 rps 인데 표집 주기 때문에 봉우리가 달라지면 안 된다")
+                .isEqualTo(제때.peakRps(시작, 시작.plusSeconds(4)));
+    }
+
+    /**
+     * <b>첫 표집이 이전 이력을 안 센다.</b>
+     *
+     * <p>0 에서 시작하면 첫 표집이 그때까지의 누적을 통째로 한 버킷에 몰아넣는다.
+     * 그 버킷이 정상 구간에 있으면 평균이 부풀어 RC4 비율이 작아지고, 진짜
+     * 버스트를 놓친다.
+     */
+    @Test
+    @DisplayName("첫_표집은_이전_이력을_안_센다")
+    void 첫_표집은_이전_이력을_안_센다() {
+        스텁이_센_수.set(1_000);
+        BackendRpsRecorder 기록 = 기록기();
+
+        기록.sample(시작);
+
+        assertThat(기록.total()).isZero();
+    }
+
+    /** 봉우리는 구간 끝을 안 센다. 경계를 안 고정하면 늦은 표집이 그 틈으로 샌다. */
+    @Test
+    @DisplayName("봉우리는_구간_끝을_안_센다")
+    void 봉우리는_구간_끝을_안_센다() {
+        BackendRpsRecorder 기록 = 기록기();
+        기록.sample(시작);
+        초가_지난다(기록, 시작.plusSeconds(1), 5);
+        초가_지난다(기록, 시작.plusSeconds(2), 500);
+
+        assertThat(기록.peakRps(시작, 시작.plusSeconds(1)))
+                .as("끝 초는 반개구간 밖이다").isEqualTo(5);
     }
 }

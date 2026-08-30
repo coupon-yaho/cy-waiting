@@ -24,6 +24,13 @@ class ChaosScenarioTest {
     private final List<String> 발자국 = new ArrayList<>();
 
     private ChaosScenario 시나리오() {
+        return 판정을_안_거는_시나리오()
+                .assertEntry(ChaosScenario.Verdict.none())
+                .assertDuring(ChaosScenario.Verdict.none())
+                .assertRecovery(ChaosScenario.Verdict.none());
+    }
+
+    private ChaosScenario 판정을_안_거는_시나리오() {
         return ChaosScenario.named("시험용")
                 .baseline(() -> 발자국.add("정상"))
                 .inject(() -> 발자국.add("주입"))
@@ -65,8 +72,10 @@ class ChaosScenarioTest {
                 })
                 .run();
 
-        assertThat(발자국).containsExactly("정상", "주입", "유지", "진입판정",
-                "복구", "회복", "유지판정", "회복판정");
+        // **판정이 그 구간 안에서 돈다.** 복구 뒤로 미루면 이미 걷힌 상태를
+        // 읽어, 유지 구간 판정이 건강한 시스템을 보고 통과한다.
+        assertThat(발자국).containsExactly("정상", "주입", "진입판정", "유지",
+                "유지판정", "복구", "회복", "회복판정");
     }
 
     /**
@@ -111,7 +120,7 @@ class ChaosScenarioTest {
                 .run())
                 .isInstanceOf(AssertionError.class);
 
-        assertThat(발자국).contains("복구");
+        assertThat(발자국).containsOnlyOnce("복구");
     }
 
     /** 깨진 것이 여럿이면 다 보여야 한다. 하나만 보이면 나머지를 또 돌려야 한다. */
@@ -122,7 +131,8 @@ class ChaosScenarioTest {
                 .assertRecovery(() -> List.of("RC1 초과 발급", "RC4 회복 버스트"))
                 .run())
                 .hasMessageContaining("RC1")
-                .hasMessageContaining("RC4");
+                .hasMessageContaining("RC4")
+                .hasMessageContaining("2 건");
     }
 
     /** 판정기를 그대로 받는다. 뼈대가 기준을 다시 쓰면 만든 뜻이 사라진다. */
@@ -154,5 +164,55 @@ class ChaosScenarioTest {
                 .run())
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("복구");
+    }
+
+    /**
+     * <b>판정을 안 건 구간이 있으면 거절한다.</b>
+     *
+     * <p>기본값을 통과로 두면 아무것도 안 재는 시나리오가 초록이 된다. 스물한
+     * 개를 쓰다 하나를 빠뜨려도 아무도 모른다.
+     */
+    @Test
+    @DisplayName("판정을_안_건_구간이_있으면_거절한다")
+    void 판정을_안_건_구간이_있으면_거절한다() {
+        assertThatThrownBy(() -> 판정을_안_거는_시나리오().run())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("판정을 안 건 구간");
+    }
+
+    /** 일부러 안 재는 것은 적어서 밝힌다. 빠뜨린 것과 구분되어야 한다. */
+    @Test
+    @DisplayName("일부러_안_재는_것은_적어서_밝힌다")
+    void 일부러_안_재는_것은_적어서_밝힌다() {
+        판정을_안_거는_시나리오()
+                .assertEntry(ChaosScenario.Verdict.none())
+                .assertDuring(ChaosScenario.Verdict.none())
+                .assertRecovery(ChaosScenario.Verdict.none())
+                .run();
+
+        assertThat(발자국).contains("복구");
+    }
+
+    /**
+     * <b>복구가 터져도 모은 위반을 안 잃는다.</b>
+     *
+     * <p>여기서 예외가 그대로 나가면 초과 발급이 "복구 스텝이 불안정하다" 로
+     * 읽힌다. 불변식이 그렇게 사라진다.
+     */
+    @Test
+    @DisplayName("복구가_터져도_모은_위반이_남는다")
+    void 복구가_터져도_모은_위반이_남는다() {
+        assertThatThrownBy(() -> ChaosScenario.named("복구가 터진다")
+                .inject(() -> { })
+                .recover(() -> {
+                    throw new IllegalStateException("토식을 못 걷었다");
+                })
+                .assertEntry(() -> List.of("RC1 초과 발급 500 건"))
+                .assertDuring(ChaosScenario.Verdict.none())
+                .assertRecovery(ChaosScenario.Verdict.none())
+                .run())
+                .isInstanceOf(AssertionError.class)
+                .hasMessageContaining("RC1")
+                .hasMessageContaining("토식을 못 걷었다");
     }
 }

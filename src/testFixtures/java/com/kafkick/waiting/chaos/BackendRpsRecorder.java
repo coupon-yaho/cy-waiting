@@ -26,30 +26,52 @@ public final class BackendRpsRecorder {
     private long lastSeen;
     private long total;
 
+    /** 직전 표집 시각. 차분이 걸친 초들을 여기서부터 센다. */
+    private Instant lastSampledAt;
+
     /**
      * @param cumulative 뒷단 스텁의 누적 수신 수. 마이크로미터 계수라면
      *                   {@code () -> (long) counter.count()} 를 넘긴다
      */
     public BackendRpsRecorder(LongSupplier cumulative) {
         this.cumulative = Objects.requireNonNull(cumulative, "cumulative 는 필수다");
+        // **여기서 지금 값을 읽어 둔다.** 0 에서 시작하면 첫 표집이 그때까지의
+        // 이력을 통째로 한 버킷에 몰아넣는다. 그 버킷이 정상 구간에 있으면
+        // 평균이 부풀어 RC4 비율이 작아지고, 진짜 버스트를 놓친다.
+        this.lastSeen = cumulative.getAsLong();
     }
 
     /**
-     * 지금 누적값을 읽어 직전 표본과의 차분을 기록한다.
+     * 지금 누적값을 읽어 직전 표본과의 차분을 <b>지난 초들에 나눠</b> 담는다.
      *
-     * <p><b>1초마다 부른다.</b> 더 자주 부르면 같은 초에 여러 번 더해지고, 더
-     * 드물게 부르면 봉우리가 평탄해져 버스트를 놓친다.
+     * <p>한 스레드에서만 부른다.
      */
+    // **1초마다 부르는 것을 가정하지 않는다.** 늦게 부르면 그 사이의 전량이 한
+    // 버킷에 실려 봉우리가 부풀고, 균일한 트래픽에도 거짓 RC4 위반이 난다.
+    // 걸친 초에 고르게 나눠 담으면 주기가 흔들려도 봉우리가 안 흔들린다.
     public void sample(Instant at) {
         long now = cumulative.getAsLong();
         long delta = now - lastSeen;
         lastSeen = now;
+        Instant from = lastSampledAt == null ? at : lastSampledAt;
+        lastSampledAt = at;
         // **양수만 센다.** 스텁이 재시작하면 누적이 0 부터 다시 오르는데, 그
         // 음수 차분을 더하면 총합이 줄고 봉우리가 사라진다. 여기서 걸러지므로
         // 앞에 또 막지 않는다 — 죽은 방어는 방어처럼 보여서 더 나쁘다.
-        if (delta > 0) {
-            perSecond.merge(at.getEpochSecond(), delta, Long::sum);
-            total += delta;
+        if (delta <= 0) {
+            return;
+        }
+        total += delta;
+        long first = from.getEpochSecond();
+        // **반개구간이다.** 차분은 직전 표집과 이번 표집 **사이**에 온 것이라,
+        // 이번 표집의 초는 아직 안 지났다. 포함하면 1초 간격 표집도 두 초에
+        // 나뉘어 봉우리가 절반이 된다.
+        long last = Math.max(first, at.minusNanos(1).getEpochSecond());
+        long buckets = last - first + 1;
+        // 나머지는 마지막 초에 몰아 준다. 버리면 총합과 버킷 합이 갈린다.
+        long each = delta / buckets;
+        for (long s = first; s <= last; s++) {
+            perSecond.merge(s, s == last ? delta - each * (buckets - 1) : each, Long::sum);
         }
     }
 

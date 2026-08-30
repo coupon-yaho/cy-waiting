@@ -20,6 +20,11 @@ public final class ChaosScenario {
     public interface Verdict {
 
         List<String> judge();
+
+        /** 이 구간은 일부러 안 잰다. <b>빠뜨린 것과 구분하려고 적는다.</b> */
+        static Verdict none() {
+            return List::of;
+        }
     }
 
     private final String name;
@@ -30,9 +35,9 @@ public final class ChaosScenario {
     private Runnable recover;
     private Runnable afterRecovery = () -> { };
 
-    private Verdict entry = List::of;
-    private Verdict during = List::of;
-    private Verdict recovery = List::of;
+    private Verdict entry;
+    private Verdict during;
+    private Verdict recovery;
 
     private ChaosScenario(String name) {
         this.name = name;
@@ -97,21 +102,36 @@ public final class ChaosScenario {
         if (inject != null && recover == null) {
             throw new IllegalStateException("장애를 주입하면 복구도 정해야 한다: " + name);
         }
+        // **판정을 안 건 구간이 있으면 거절한다.** 기본값을 통과로 두면 아무것도
+        // 안 재는 시나리오가 초록이 된다 — 이 뼈대가 막겠다던 실패 모드다.
+        if (entry == null || during == null || recovery == null) {
+            throw new IllegalStateException("판정을 안 건 구간이 있다: " + name);
+        }
         List<String> broken = new ArrayList<>();
         baseline.run();
         try {
             if (inject != null) {
                 inject.run();
             }
-            duringFault.run();
+            // **판정은 그 구간이 살아 있는 동안 돈다.** 복구 뒤로 미루면 이미
+            // 걷힌 상태를 읽는다 — dataStale 진입도, 서킷이 열린 동안의 유입도
+            // 그때는 정상으로 보인다. 유지 구간 판정이 통째로 이름만 남는다.
             label(broken, "진입", entry);
+            duringFault.run();
+            label(broken, "유지", during);
         } finally {
             if (recover != null) {
-                recover.run();
+                // **복구가 터져도 모은 위반을 안 잃는다.** 여기서 예외가 나가면
+                // 아래 throw 에 못 닿고, 초과 발급이 "복구 스텝이 불안정하다" 로
+                // 읽힌다.
+                try {
+                    recover.run();
+                } catch (RuntimeException e) {
+                    broken.add("  복구 — 장애를 걷다가 터졌다: " + e);
+                }
             }
         }
         afterRecovery.run();
-        label(broken, "유지", during);
         label(broken, "회복", recovery);
         if (!broken.isEmpty()) {
             throw new AssertionError("[%s] 깨진 기준 %d 건%n%s"

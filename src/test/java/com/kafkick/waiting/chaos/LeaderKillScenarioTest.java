@@ -7,8 +7,10 @@ import com.kafkick.waiting.control.Leadership;
 import com.kafkick.waiting.control.SnapshotHolder;
 import com.kafkick.waiting.domain.queue.QueueToken;
 import io.lettuce.core.api.StatefulRedisConnection;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -40,6 +42,12 @@ import reactor.netty.http.server.HttpServer;
  */
 // 이 시나리오가 C1 과 다른 점은 **제어 평면을 실제로 돌린다**는 것이다.
 // 스케줄러를 켜고 진짜 레디스를 쓴다 — 스텁으로는 리더가 없다.
+//
+// **이름과 달리 승계 자체는 못 잰다** (CY-821). 낡음 임계가 리스보다 길어,
+// 대기 노드가 있는 정상 승계에서는 낡음이 아예 안 열리는 것이 설계 의도다.
+// 여기서는 죽은 리스를 길게 잡아 대기 노드가 없는 상태를 만들어 강제로 열었다.
+// 그래서 재는 것은 **리더가 없는 동안의 판정**이고, 회복도 승계가 아니라 같은
+// 노드의 재획득이다. 진짜 승계는 노드 둘짜리 하네스가 있어야 한다.
 @Tag("chaos")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = "waiting.scheduler.enabled=true")
@@ -68,6 +76,12 @@ class LeaderKillScenarioTest {
 
     /** 각 구간에 보내는 요청 수. 정상 구간과 같아야 비교가 성립한다. */
     private static final int 보낼_수 = 20;
+
+    /** 낡은 재료로 줄에 세웠을 때의 결정 이름. 사다리 7번이 밟혔다는 증거다. */
+    private static final String 낡은_결정 = "ENQUEUE_STALE";
+
+    /** 승계 한계. 계획은 3틱을 요구하고 틱은 1초다. */
+    private static final Duration 승계_한계 = Duration.ofSeconds(3);
 
     /** 대조군에 보내는 수. <b>크레딧 안쪽이어야 한다.</b> */
     // 뒷단 가용량 보고가 없으면 크레딧은 바닥값이고, 넘겨 보내면 한산한 쿠폰에도
@@ -142,6 +156,21 @@ class LeaderKillScenarioTest {
     @Autowired
     private Clock clock;
 
+    @Autowired
+    private MeterRegistry meters;
+
+    /** 장애 전후의 자리. RC5 가 이 둘을 비교한다. */
+    private Map<String, Double> 장애_전_자리 = Map.of();
+
+    private Map<String, Double> 회복_뒤_자리 = Map.of();
+
+    /** 낡음이 열린 직후의 결정 수. 유지 구간의 증가분이 사다리 7번의 몫이다. */
+    private long 낡음_직후_결정;
+
+    private Instant 승계를_기다린_시각;
+
+    private Duration 승계까지;
+
     private WebTestClient 클라이언트() {
         return WebTestClient.bindToServer()
                 .baseUrl("http://localhost:" + port)
@@ -198,17 +227,9 @@ class LeaderKillScenarioTest {
         return 자리;
     }
 
-    /**
-     * <b>죽은 리더가 락을 쥔다.</b>
-     *
-     * <p>이 노드가 락을 놓는 순간과 죽은 리더가 잡는 순간 사이는 경합이다 —
-     * 이 노드가 먼저 잡으면 다시 만료시키고 다시 시도한다.
-     */
+    /** 죽은 리더가 락을 넘겨받는다. 만료와 획득이 한 판이라 앱이 못 끼어든다. */
     private void 죽은_리더가_락을_쥔다(LeaderFaults 락) {
-        Awaitility.await().atMost(기다림).until(() -> {
-            락.lease를_만료시킨다(Duration.ofMillis(1));
-            return 락.리더로_만든다(죽은_리더, 죽은_리스);
-        });
+        assertThat(락.죽은_리더가_넘겨받는다(죽은_리더, 죽은_리스)).isTrue();
         // **아무것도 안 한다. 그것이 죽음이다** — 갱신도 해제도 없다.
         락.프로세스를_죽인다(죽은_리더);
     }
@@ -231,13 +252,21 @@ class LeaderKillScenarioTest {
             List<Integer> 정상_상태 = new ArrayList<>();
             List<Integer> 장애중_상태 = new ArrayList<>();
             List<Integer> 회복_상태 = new ArrayList<>();
+            // **줄 선 쿠폰의 응답도 든다.** 안 들면 그 20 명이 전원 503 을
+            // 맞아도 초록이다 — 도착이 0 인 것은 추월이 없다는 뜻도 되고
+            // 아무도 답을 못 받았다는 뜻도 된다.
+            List<Integer> 진입_줄_상태 = new ArrayList<>();
+            List<Integer> 장애중_줄_상태 = new ArrayList<>();
+            List<Integer> 회복_줄_상태 = new ArrayList<>();
             long[] 줄_쿠폰_도착 = new long[3];
             long[] 한산한_쿠폰_도착 = new long[3];
 
             ChaosScenario.named("C4 리더 강제 종료")
                     .baseline(() -> {
+                        장애_전_자리 = 자리들();
                         정상_상태.addAll(여러_번_시도한다(한산한_쿠폰, 한산한_보낼_수, 1_000));
-                        줄_쿠폰_도착[0] = 잰다(COUPON, () -> 여러_번_시도한다(COUPON, 보낼_수, 1_500));
+                        줄_쿠폰_도착[0] = 잰다(COUPON,
+                                () -> 여러_번_시도한다(COUPON, 보낼_수, 1_500));
                         한산한_쿠폰_도착[0] = 받은_수(한산한_쿠폰);
                         assertThat(정상_상태).as("전제 — 한산한 쿠폰은 5xx 없이 답한다")
                                 .noneMatch(status -> status >= 500);
@@ -246,40 +275,81 @@ class LeaderKillScenarioTest {
                         assertThat(줄_쿠폰_도착[0]).as("전제 — 줄이 선 쿠폰은 평시에도 안 간다")
                                 .isZero();
                     })
-                    .inject(() -> 죽은_리더가_락을_쥔다(락))
+                    .inject(() -> {
+                        죽은_리더가_락을_쥔다(락);
+                        // **진입 구간이 여기다.** 배분은 이미 멎었는데 재료는
+                        // 아직 안 낡았다. 계획이 "판정 중단 0" 을 요구하는
+                        // 구간이 정확히 이 몇 초다 — 낡음을 기다린 뒤에 재면
+                        // 이 구간을 통째로 건너뛴다.
+                        assertThat(holder.isDataStale()).as("전제 — 아직 안 낡았다")
+                                .isFalse();
+                        진입_줄_상태.addAll(여러_번_시도한다(COUPON, 보낼_수, 1_800));
+                    })
                     .duringFault(() -> {
                         // **재료가 정말 낡을 때까지 기다린다.** 안 낡았으면 이
                         // 시나리오는 fail-open 갈래를 한 번도 안 밟은 것이다.
                         Awaitility.await().atMost(기다림).until(holder::isDataStale);
+                        낡음_직후_결정 = 결정_수(낡은_결정);
                         long 낡기_전 = 받은_수(한산한_쿠폰);
                         장애중_상태.addAll(여러_번_시도한다(한산한_쿠폰, 한산한_보낼_수, 2_000));
                         한산한_쿠폰_도착[1] = 받은_수(한산한_쿠폰) - 낡기_전;
-                        줄_쿠폰_도착[1] = 잰다(COUPON, () -> 여러_번_시도한다(COUPON, 보낼_수, 2_500));
+                        줄_쿠폰_도착[1] = 잰다(COUPON,
+                                () -> 장애중_줄_상태.addAll(
+                                        여러_번_시도한다(COUPON, 보낼_수, 2_500)));
                     })
-                    .recover(() -> 락.lease를_만료시킨다(Duration.ofMillis(1)))
+                    .recover(() -> {
+                        승계를_기다린_시각 = clock.instant();
+                        락.lease를_만료시킨다(Duration.ofMillis(1));
+                    })
                     .afterRecovery(() -> {
                         Awaitility.await().atMost(기다림).until(leadership::isLeader);
+                        승계까지 = Duration.between(승계를_기다린_시각, clock.instant());
                         Awaitility.await().atMost(기다림).until(() -> !holder.isDataStale());
                         long 회복_전 = 받은_수(한산한_쿠폰);
                         회복_상태.addAll(여러_번_시도한다(한산한_쿠폰, 한산한_보낼_수, 3_000));
+                        회복_뒤_자리 = 자리들();
                         한산한_쿠폰_도착[2] = 받은_수(한산한_쿠폰) - 회복_전;
-                        줄_쿠폰_도착[2] = 잰다(COUPON, () -> 여러_번_시도한다(COUPON, 보낼_수, 3_500));
+                        줄_쿠폰_도착[2] = 잰다(COUPON,
+                                () -> 회복_줄_상태.addAll(
+                                        여러_번_시도한다(COUPON, 보낼_수, 3_500)));
                     })
                     // **진입 판정은 주입 직후다.** 아직 아무것도 안 보냈으므로
                     // 여기서 잴 것이 없다 — 유지 구간이 그것을 잰다.
-                    .assertEntry(ChaosScenario.Verdict.none())
+                    // **진입 — 배분은 멎었는데 재료는 아직 신선하다.**
+                    // 계획이 요구하는 "판정 중단 0" 이 이 구간이다.
+                    .assertEntry(() -> RecoveryCriteria.violations(
+                            줄에_세웠다(진입_줄_상태, "진입")))
                     .assertDuring(() -> RecoveryCriteria.violations(
                             판정이_멈추지_않았다(장애중_상태),
                             // 양성 대조 — 낡음 중에도 한산한 쿠폰은 통과해야
                             // 한다. 안 통과하면 전면 차단이고, 그러면 아래
                             // "추월 0" 은 아무것도 안 잰 것이다.
-                            열려_있었다(한산한_쿠폰_도착[1]),
-                            줄을_추월하지_않았다(줄_쿠폰_도착[1])))
+                            열려_있었다(한산한_쿠폰_도착[1], 한산한_쿠폰_도착[0]),
+                            줄을_추월하지_않았다(줄_쿠폰_도착[1]),
+                            // 줄로 보냈는가. 도착 0 만 보면 전원 503 도 통과다.
+                            줄에_세웠다(장애중_줄_상태, "유지"),
+                            // **낡음 갈래를 실제로 밟았는가.** 상태 코드는
+                            // 평시와 같은 202 라, 어느 줄이 답했는지는 결정
+                            // 계수로만 보인다.
+                            낡은_갈래를_밟았다()))
                     .assertRecovery(() -> RecoveryCriteria.violations(
                             판정이_멈추지_않았다(회복_상태),
-                            열려_있었다(한산한_쿠폰_도착[2]),
+                            열려_있었다(한산한_쿠폰_도착[2], 한산한_쿠폰_도착[0]),
                             줄을_추월하지_않았다(줄_쿠폰_도착[2]),
-                            자리가_그대로다()))
+                            줄에_세웠다(회복_줄_상태, "회복"),
+                            // 승계가 늦으면 그만큼 낡음이 길어진다.
+                            RecoveryCriteria.slowVerdictReturn(승계까지, 승계_한계),
+                            // RC5 — 줄 선 사람이 자기 자리를 지켰다.
+                            RecoveryCriteria.seatLost(장애_전_자리, 회복_뒤_자리)))
+                    // **RC1·RC2·RC4·RC6 은 여기서 안 잰다.** 이 시나리오는
+                    // 레디스가 살아 있어 줄이 안 사라지므로 RC2 를 잴 수 있지만,
+                    // 줄 선 쿠폰은 전 구간 202 라 순번이 안 나온다 — 폴링을
+                    // 붙여야 하고 그건 이 시나리오의 대상이 아니다. RC1·RC4 는
+                    // 뒷단 도착이 대조군 몇 건뿐이라 잴 표본이 없다.
+                    //
+                    // **EWMA 이월(F9)과 진동 0 도 못 잰다** (CY-820). 이월은
+                    // 기동 직후 한 번만 일어나는데 여기 회복은 같은 JVM 의
+                    // 재획득이라 그 코드를 아예 안 밟는다.
                     .run();
         } finally {
             연결.close();
@@ -322,25 +392,47 @@ class LeaderKillScenarioTest {
      * <b>전면 차단이 아니다.</b> 한산한 쿠폰까지 막히면 게이트웨이가 존재할
      * 이유가 없고, 그때 위의 "추월 0" 은 아무것도 안 잰 것이 된다.
      */
-    private Optional<String> 열려_있었다(long 뒷단에_닿은_수) {
-        return 뒷단에_닿은_수 > 0 ? Optional.empty()
-                : Optional.of("한산한 쿠폰이 한 건도 뒷단에 못 갔다 — 전면 차단이다");
+    // **0 보다 큰가로 안 본다.** 그러면 절반만 통과해도 초록이라, 상한을
+    // 반으로 깎는 회귀가 그대로 지나간다. 평시와 같은 수가 가야 정상이다.
+    private Optional<String> 열려_있었다(long 뒷단에_닿은_수, long 평시_도착) {
+        return 뒷단에_닿은_수 == 평시_도착 ? Optional.empty()
+                : Optional.of("한산한 쿠폰이 %d 건만 뒷단에 갔다 (평시 %d)"
+                        .formatted(뒷단에_닿은_수, 평시_도착));
     }
 
-    /** 줄에 선 사람들의 자리가 그대로다 (RC5). 재입장은 새 score 라 역행이다. */
-    private Optional<String> 자리가_그대로다() {
-        Map<String, Double> 지금 = 자리들();
-        if (지금.size() < 줄_선_사람) {
-            return Optional.of("줄에서 %d 명이 사라졌다".formatted(줄_선_사람 - 지금.size()));
+    /**
+     * <b>줄로 보냈는가.</b> 추월을 도착 수로만 보면 전원 5xx 도 통과한다 —
+     * 아무도 안 갔다는 점에서 같기 때문이다. 자리를 받았는지를 따로 본다.
+     */
+    private Optional<String> 줄에_세웠다(List<Integer> 상태, String 구간) {
+        if (상태.size() != 보낼_수) {
+            return Optional.of("%s — %d 건만 답을 받았다 (보낸 %d)"
+                    .formatted(구간, 상태.size(), 보낼_수));
         }
-        for (int i = 0; i < 줄_선_사람; i++) {
-            double 기대 = 100 + i;
-            Double 실제 = 지금.get("q" + i);
-            if (실제 == null || Double.compare(실제, 기대) != 0) {
-                return Optional.of("q%d 의 자리가 %s 로 바뀌었다 (원래 %.0f)"
-                        .formatted(i, 실제, 기대));
-            }
-        }
-        return Optional.empty();
+        long 자리를_못_받은_수 = 상태.stream().filter(status -> status != 202).count();
+        return 자리를_못_받은_수 == 0 ? Optional.empty()
+                : Optional.of("%s — %d 건이 줄에 못 섰다: %s"
+                        .formatted(구간, 자리를_못_받은_수, 상태));
     }
+
+    /**
+     * <b>낡은 갈래를 실제로 밟았는가.</b>
+     *
+     * <p>상태 코드는 평시와 같은 202 다. 백로그로 줄을 선 것과 재료가 낡아
+     * 줄을 선 것이 겉으로 구분이 안 되므로, 결정 계수로만 보인다.
+     */
+    private Optional<String> 낡은_갈래를_밟았다() {
+        long 증가 = 결정_수(낡은_결정) - 낡음_직후_결정;
+        return 증가 >= 보낼_수 ? Optional.empty()
+                : Optional.of("낡은 재료로 줄에 세운 것이 %d 건뿐이다 (보낸 %d)"
+                        .formatted(증가, 보낼_수));
+    }
+
+    /** 그 결정이 지금까지 몇 번 나왔는가. */
+    private long 결정_수(String outcome) {
+        return (long) meters.find("waiting.admission").tag("outcome", outcome)
+                .counters().stream().mapToDouble(c -> c.count()).sum();
+    }
+
+
 }

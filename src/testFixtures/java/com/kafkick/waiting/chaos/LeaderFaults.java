@@ -16,6 +16,16 @@ import java.util.Optional;
  */
 public final class LeaderFaults {
 
+    /** 지금 소유자를 밀어내고 죽은 리더를 앉힌다. 한 판이라 앱이 못 끼어든다. */
+    private static final String TAKE_OVER = """
+            local t = redis.call('TIME')
+            local fence = tonumber(t[1]) * 1000000 + tonumber(t[2])
+            redis.call('SET', KEYS[1],
+                    string.format('%.0f', fence) .. '|' .. ARGV[1],
+                    'PX', tonumber(ARGV[2]))
+            return 1
+            """;
+
     /** 자기 락일 때만 지운다. GET 과 DEL 사이에 소유자가 바뀌면 남의 락을 지운다. */
     private static final String RELEASE =
             "if redis.call('GET', KEYS[1]) == ARGV[1] then "
@@ -58,6 +68,25 @@ public final class LeaderFaults {
                 SetArgs.Builder.nx().px(lease.toMillis())));
     }
 
+    /**
+     * <b>죽은 리더가 락을 넘겨받는다 — 만료와 획득을 한 판에 한다.</b>
+     *
+     * @return 넘겨받았으면 {@code true}
+     */
+    // **나눠 던지면 앱이 그 틈에 들어온다.** 리더 루프는 100ms 마다 재획득을
+    // 시도하는데, 시험도 같은 주기로 폴하면 두 루프의 위상이 고정돼 시작이
+    // 나쁘면 200번을 내리 진다. 그때 나오는 것은 "회복이 늦었다" 가 아니라
+    // "주입을 못 했다" 라, 회복 검증에 거짓 신호가 붙는다.
+    //
+    // 값은 **지금 형식으로** 쓴다. 번호 없는 옛 형식으로 쓰면 승계가 롤아웃
+    // 호환 갈래로 빠져, 지금 리더가 죽어 남기는 락을 물려받는 경로를 안 밟는다.
+    public boolean 죽은_리더가_넘겨받는다(String ownerId, Duration lease) {
+        Long taken = redis.sync().eval(TAKE_OVER, ScriptOutputType.INTEGER,
+                new String[] {RedisKeys.LEADER}, 소유자로_쓸_수_있는가(ownerId),
+                String.valueOf(lease.toMillis()));
+        return taken != null && taken == 1L;
+    }
+
     /** 프로세스만 사라진다. 락은 그대로 남는다 — 해제 절차를 못 밟았기 때문이다. */
     public void 프로세스를_죽인다(String ownerId) {
         if (!소유자로_쓸_수_있는가(ownerId).equals(현재_소유자())) {
@@ -95,8 +124,14 @@ public final class LeaderFaults {
         redis.sync().pexpire(RedisKeys.LEADER, 남길_시간.toMillis());
     }
 
+    /** 지금 소유자. <b>판 번호가 붙어 있으면 떼고 준다</b> — 값 형식은 프로덕션 몫이다. */
     public String 현재_소유자() {
-        return redis.sync().get(RedisKeys.LEADER);
+        String value = redis.sync().get(RedisKeys.LEADER);
+        if (value == null) {
+            return null;
+        }
+        int 구분 = value.indexOf('|');
+        return 구분 < 0 ? value : value.substring(구분 + 1);
     }
 
     /**

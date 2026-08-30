@@ -89,8 +89,10 @@ class FailureAgeTest {
             age.failed(시작.plusSeconds(i));
         }
 
+        // 10초가 지났고 계단 폭이 2초이므로 정확히 여섯째다. 범위로 두면
+        // 잘못 오른 단계도 통과한다.
         assertThat(age.stepAt(시작.plusSeconds(10), 단위))
-                .as("실패가 이어지는 동안은 단계가 유지된다").isGreaterThan(1);
+                .as("실패가 이어지는 동안은 단계가 유지된다").isEqualTo(6);
     }
 
     /**
@@ -126,7 +128,7 @@ class FailureAgeTest {
         // 마지막 실패는 10초 지점이므로, 그로부터 유예가 지나야 풀린다.
         age.cleared(시작.plusSeconds(12), 해제_유예);
         assertThat(age.stepAt(시작.plusSeconds(12), 단위)).as("아직 안 풀렸다")
-                .isGreaterThan(1);
+                .isEqualTo(7);
 
         age.cleared(시작.plusSeconds(16), 해제_유예);
         assertThat(age.stepAt(시작.plusSeconds(16), 단위)).isEqualTo(1);

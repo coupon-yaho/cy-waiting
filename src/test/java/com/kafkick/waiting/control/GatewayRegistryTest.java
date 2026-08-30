@@ -7,6 +7,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import com.kafkick.waiting.domain.admission.CircuitState;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -183,5 +184,118 @@ class GatewayRegistryTest {
         registry.observed(2);
 
         assertThat(registry.count()).isEqualTo(10);
+    }
+
+    /**
+     * <b>조이는 방향은 즉시.</b> 분모와 같은 비대칭이다 — 늦게 조이면 그동안
+     * 이미 넘어진 뒷단으로 몫이 계속 간다.
+     */
+    @Test
+    @DisplayName("서킷은_조이는_방향으로_즉시_움직인다")
+    void 서킷은_조이는_방향으로_즉시_움직인다() {
+        GatewayRegistry registry = GatewayRegistry.of(3, 1);
+
+        registry.circuitObserved(20, 0, 1);
+        assertThat(registry.circuit()).as("한 대만 시험 중이어도 바로 조인다")
+                .isEqualTo(CircuitState.HALF_OPEN);
+
+        registry.circuitObserved(20, 11, 0);
+        assertThat(registry.circuit()).as("과반이 열리면 바로 멈춘다")
+                .isEqualTo(CircuitState.OPEN);
+    }
+
+    /**
+     * <b>푸는 방향은 연속 관측 뒤.</b>
+     *
+     * <p>한 틱 만에 풀면 표 하나가 늦거나 시체가 만료되는 것만으로 전면 개방이
+     * 일어난다. 과반 경계에서는 매 틱 뒤집혀 배분이 0 과 평시를 오가고, 0 인
+     * 틱마다 서킷의 시험 호출이 끊겨 회복 시도가 늘어난다.
+     */
+    @Test
+    @DisplayName("서킷은_푸는_방향으로_연속_관측_뒤에_움직인다")
+    void 서킷은_푸는_방향으로_연속_관측_뒤에_움직인다() {
+        GatewayRegistry registry = GatewayRegistry.of(3, 1);
+        registry.circuitObserved(20, 11, 0);
+
+        registry.circuitObserved(20, 0, 0);
+        assertThat(registry.circuit()).as("첫 관측").isEqualTo(CircuitState.OPEN);
+        registry.circuitObserved(20, 0, 0);
+        assertThat(registry.circuit()).as("둘째 관측").isEqualTo(CircuitState.OPEN);
+
+        registry.circuitObserved(20, 0, 0);
+        assertThat(registry.circuit()).as("셋째 관측에 한 계단 푼다")
+                .isEqualTo(CircuitState.HALF_OPEN);
+    }
+
+    /**
+     * <b>한 계단씩만 푼다.</b>
+     *
+     * <p>연속으로 세었다고 전면 정지에서 평시로 곧장 가면, 그 사이 단계를 한
+     * 번도 확인하지 않은 채 전면 개방이 일어난다. 조이는 방향과 무게가 다르다는
+     * 것이 이 비대칭의 이유인데, 건너뛰면 그 무게가 사라진다.
+     */
+    @Test
+    @DisplayName("푸는_방향은_한_계단씩만_간다")
+    void 푸는_방향은_한_계단씩만_간다() {
+        GatewayRegistry registry = GatewayRegistry.of(2, 1);
+        registry.circuitObserved(20, 11, 0);
+
+        registry.circuitObserved(20, 0, 0);
+        registry.circuitObserved(20, 0, 0);
+        assertThat(registry.circuit()).as("한 계단").isEqualTo(CircuitState.HALF_OPEN);
+
+        registry.circuitObserved(20, 0, 0);
+        registry.circuitObserved(20, 0, 0);
+        assertThat(registry.circuit()).as("두 계단").isEqualTo(CircuitState.CLOSED);
+    }
+
+    /** 푸는 도중에 다시 조이면 연속이 끊긴다. 안 끊으면 진동이 그대로 통과한다. */
+    @Test
+    @DisplayName("푸는_도중에_조이면_연속이_끊긴다")
+    void 푸는_도중에_조이면_연속이_끊긴다() {
+        GatewayRegistry registry = GatewayRegistry.of(3, 1);
+        registry.circuitObserved(20, 11, 0);
+
+        registry.circuitObserved(20, 0, 0);
+        registry.circuitObserved(20, 0, 0);
+        registry.circuitObserved(20, 11, 0);
+        registry.circuitObserved(20, 0, 0);
+
+        assertThat(registry.circuit()).isEqualTo(CircuitState.OPEN);
+    }
+
+    /**
+     * <b>하트비트가 연속으로 끊기면 로컬 관측으로 돌아간다.</b>
+     *
+     * <p>안 그러면 마지막 판정에 얼어붙어, 원래 메모리 안에 있던 판단이 레디스
+     * 가용성에 묶인다.
+     */
+    @Test
+    @DisplayName("관측이_연속으로_끊기면_로컬로_돌아간다")
+    void 관측이_연속으로_끊기면_로컬로_돌아간다() {
+        GatewayRegistry registry = GatewayRegistry.of(3, 1);
+        registry.circuitObserved(20, 0, 0);
+
+        registry.circuitMissed(CircuitState.OPEN);
+        registry.circuitMissed(CircuitState.OPEN);
+        assertThat(registry.circuit()).as("두 번까지는 지킨다").isEqualTo(CircuitState.CLOSED);
+
+        registry.circuitMissed(CircuitState.OPEN);
+        assertThat(registry.circuit()).as("세 번째에 로컬을 쓴다").isEqualTo(CircuitState.OPEN);
+    }
+
+    /** 한 번이라도 관측이 오면 놓친 횟수가 리셋된다. 안 그러면 한 번 끊긴 뒤 계속 로컬이다. */
+    @Test
+    @DisplayName("관측이_돌아오면_놓친_횟수가_리셋된다")
+    void 관측이_돌아오면_놓친_횟수가_리셋된다() {
+        GatewayRegistry registry = GatewayRegistry.of(3, 1);
+
+        registry.circuitMissed(CircuitState.OPEN);
+        registry.circuitMissed(CircuitState.OPEN);
+        registry.circuitObserved(20, 0, 0);
+        registry.circuitMissed(CircuitState.OPEN);
+        registry.circuitMissed(CircuitState.OPEN);
+
+        assertThat(registry.circuit()).isEqualTo(CircuitState.CLOSED);
     }
 }

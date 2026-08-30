@@ -5,6 +5,7 @@ import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.queue.EntryToken;
 import com.kafkick.waiting.domain.queue.EtaPolicy;
+import com.kafkick.waiting.domain.queue.ErrorBackoff;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import com.kafkick.waiting.domain.queue.QueueEntry;
 import com.kafkick.waiting.domain.queue.QueueState;
@@ -52,7 +53,16 @@ public final class QueueStatusFilter implements WebFilter {
     private static final String METRIC = "waiting.queue.status";
 
     /** 폴링 간격의 흔들림. 같은 밴드가 한꺼번에 두드리지 않게 한다. */
-    private static final PollIntervalPolicy POLL = PollIntervalPolicy.of(0.2);
+    private static final PollIntervalPolicy POLL =
+            PollIntervalPolicy.of(PollIntervalPolicy.NORMAL_JITTER_RATIO);
+
+    /**
+     * 오류 경로의 안내 (F7). <b>정상 경로와 다른 정책이다.</b>
+     *
+     * <p>정상 경로는 사람마다 폴링 시점이 이미 흩어져 있다. 오류는 전원이 같은
+     * 초에 받으므로 더 넓게 흩고, 장애가 이어지면 더 멀리 보낸다.
+     */
+    private static final ErrorBackoff BACKOFF = ErrorBackoff.defaults();
 
     /** 조회 예산의 키. <b>판정과 나눈다</b> — 폴링이 발급 예산을 갉아먹으면 안 된다. */
     private static final String POLL_KEY = "poll:";
@@ -79,6 +89,9 @@ public final class QueueStatusFilter implements WebFilter {
     private final SecondWindowLimiter limiter;
     private final ApiError error;
     private final QueueResponse response = QueueResponse.create();
+
+    /** 실패가 이어진 시간. 요청 수로 세면 피크에서 밀리초 만에 상한에 닿는다. */
+    private final FailureAge failing = new FailureAge();
 
     private QueueStatusFilter(SnapshotHolder holder, QueuePort queue, QueueToken tokens,
             Clock clock, MeterRegistry meters, DoubleSupplier random,
@@ -163,7 +176,14 @@ public final class QueueStatusFilter implements WebFilter {
                     (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random,
                             pollScale(holder.view())));
         }
+        // **조회의 성패만 뒷단 장애로 센다.** 아래 flatMap 은 응답을 쓰는데,
+        // 거기서 나는 오류는 클라이언트가 끊은 것이다. 그것까지 세면 남이 끊은
+        // 일이 뒷단 장애 타이머를 올려, 그다음 진짜 장애의 단계가 이미 높다.
         return queue.status(couponId, member.get(), clock.instant())
+                // **한 번으로는 안 푼다.** 샤드 하나가 죽으면 일부만 실패하는데,
+                // 성공마다 풀면 그 사이에 성공이 끼어 백오프가 영원히 안 걸린다.
+                .doOnNext(ignored -> failing.cleared(clock.instant(), ErrorBackoff.quiet()))
+                .doOnError(e -> failing.failed(clock.instant()))
                 .flatMap(entry -> answer(exchange, couponId, member.get(), entry))
                 // 조회가 실패해도 순번은 레디스에 남는다. 다시 물으면 된다.
                 .onErrorResume(e -> {
@@ -175,9 +195,23 @@ public final class QueueStatusFilter implements WebFilter {
                     // 문자열이다 — 라벨 값 집합을 우리가 안 소유하게 된다.
                     count("unavailable", FailureCause.of(e));
                     return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
-                            (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random,
-                                    pollScale(holder.view())));
+                            backoffSec());
                 });
+    }
+
+    /**
+     * 오류에 실어 보낼 초 (F7).
+     *
+     * <p>정상 경로의 밴드를 그대로 쓰면 안 된다. 오류는 전원이 같은 초에 받으므로
+     * 같은 폭으로는 안 흩어지고, 장애가 이어지는 동안 같은 간격으로 계속
+     * 두드리면 회복하려는 뒷단의 자리를 그 요청들이 계속 차지한다.
+     */
+    // **예산이 정한 바닥을 함께 넘긴다.** 장애 구간이 곧 배수가 커져 있는
+    // 구간이라, 무시하면 하필 그때 거절받은 사람만 예산 밖으로 돌아온다.
+    private int backoffSec() {
+        int step = failing.stepAt(clock.instant(), ErrorBackoff.step());
+        long floor = POLL.intervalSec(EtaPolicy.UNKNOWN, () -> 0.5, pollScale(holder.view()));
+        return (int) BACKOFF.retryAfterSec(step, floor, random);
     }
 
     /** 잘못 말하면 기다리던 사람이 줄을 잃으므로, 모르는 것을 끝난 것으로 안 읽는다. */

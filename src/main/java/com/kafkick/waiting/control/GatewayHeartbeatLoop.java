@@ -1,6 +1,7 @@
 package com.kafkick.waiting.control;
 
 import java.time.Duration;
+import java.util.Objects;
 import java.time.Instant;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -28,6 +29,13 @@ public final class GatewayHeartbeatLoop implements SmartLifecycle {
     private final Supplier<Mono<Integer>> beat;
     private final Supplier<Mono<Void>> leave;
     private final IntConsumer observed;
+
+    /**
+     * 한 판을 놓쳤을 때 부른다. <b>상한 바깥에 둔다</b> — 상한이 걸리면
+     * 리액터는 상류를 취소하지 오류를 흘리지 않아, 안쪽에 두면 무응답
+     * 구간을 통째로 못 본다. 레디스 장애에서 더 흔한 쪽이 무응답이다.
+     */
+    private final Runnable onMiss;
     private final Duration interval;
     private final Duration leaveTimeout;
 
@@ -53,24 +61,28 @@ public final class GatewayHeartbeatLoop implements SmartLifecycle {
     private volatile Scheduler owned;
 
     private GatewayHeartbeatLoop(Supplier<Mono<Integer>> beat, Supplier<Mono<Void>> leave,
-            IntConsumer observed, Duration interval, Duration leaveTimeout, Scheduler leaveTimer) {
+            IntConsumer observed, Runnable onMiss, Duration interval, Duration leaveTimeout,
+            Scheduler leaveTimer) {
         this.beat = beat;
         this.leave = leave;
         this.observed = observed;
+        this.onMiss = Objects.requireNonNull(onMiss, "onMiss 는 필수다");
         this.interval = interval;
         this.leaveTimeout = leaveTimeout;
         this.leaveTimer = leaveTimer;
     }
 
     public static GatewayHeartbeatLoop of(Supplier<Mono<Integer>> beat, Supplier<Mono<Void>> leave,
-            IntConsumer observed, Duration interval, Duration leaveTimeout) {
-        return of(beat, leave, observed, interval, leaveTimeout, Schedulers.parallel());
+            IntConsumer observed, Runnable onMiss, Duration interval, Duration leaveTimeout) {
+        return of(beat, leave, observed, onMiss, interval, leaveTimeout, Schedulers.parallel());
     }
 
     /** 종료 경로 타임아웃 스케줄러를 밖에서 준다 — 시험이 결정적으로 재려면 필요하다. */
     public static GatewayHeartbeatLoop of(Supplier<Mono<Integer>> beat, Supplier<Mono<Void>> leave,
-            IntConsumer observed, Duration interval, Duration leaveTimeout, Scheduler leaveTimer) {
-        return new GatewayHeartbeatLoop(beat, leave, observed, interval, leaveTimeout, leaveTimer);
+            IntConsumer observed, Runnable onMiss, Duration interval, Duration leaveTimeout,
+            Scheduler leaveTimer) {
+        return new GatewayHeartbeatLoop(beat, leave, observed, onMiss, interval, leaveTimeout,
+                leaveTimer);
     }
 
     @Override
@@ -105,7 +117,14 @@ public final class GatewayHeartbeatLoop implements SmartLifecycle {
                 })
                 // **한 판이 터져도 루프는 돈다.** 여기서 멎으면 그 노드가 영영
                 // 분모에서 빠지고, 남은 노드가 큰 몫을 쓴다.
-                .doOnError(this::enterFailing)
+                //
+                // **여기가 상한 바깥이다.** 상한이 걸리면 상류는 취소되지 오류를
+                // 안 흘리므로, 놓침을 상한 안쪽에서 세면 무응답 구간을 통째로
+                // 못 본다. 레디스 장애에서 더 흔한 쪽이 무응답이다.
+                .doOnError(e -> {
+                    enterFailing(e);
+                    onMiss.run();
+                })
                 .onErrorResume(e -> Mono.empty())
                 .then()
                 .repeatWhen(done -> done.delayElements(interval, scheduler))

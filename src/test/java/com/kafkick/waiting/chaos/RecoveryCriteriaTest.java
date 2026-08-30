@@ -109,6 +109,12 @@ class RecoveryCriteriaTest {
         assertThat(RecoveryCriteria.recoveryBurst(100, 118)).isEmpty();
         assertThat(RecoveryCriteria.recoveryBurst(100, 121))
                 .hasValueSatisfying(v -> assertThat(v).contains("RC4"));
+        // **경계를 밟는다.** 1.18 과 1.21 만 보면 `<=` 를 `<` 로 바꿔도 아무도
+        // 모른다 — 이 브랜치의 근거가 "실효 임계가 문서와 달랐다" 였다.
+        assertThat(RecoveryCriteria.recoveryBurst(100, 120))
+                .as("정확히 한계면 통과다").isEmpty();
+        assertThat(RecoveryCriteria.recoveryBurst(1_000, 1_201))
+                .as("한계를 조금이라도 넘으면 위반이다").isPresent();
     }
 
     /**
@@ -164,6 +170,10 @@ class RecoveryCriteriaTest {
         assertThat(RecoveryCriteria.amplified(100, 118)).isEmpty();
         assertThat(RecoveryCriteria.amplified(100, 121))
                 .hasValueSatisfying(v -> assertThat(v).contains("RC4"));
+        assertThat(RecoveryCriteria.amplified(100, 120))
+                .as("정확히 한계면 통과다").isEmpty();
+        assertThat(RecoveryCriteria.amplified(1_000, 1_201))
+                .as("한계를 조금이라도 넘으면 위반이다").isPresent();
     }
 
     /** 재전송이 없으면 도착이 보낸 수보다 적을 수 있다. 그건 증폭이 아니다. */
@@ -171,6 +181,19 @@ class RecoveryCriteriaTest {
     @DisplayName("도착이_적은_것은_증폭이_아니다")
     void 도착이_적은_것은_증폭이_아니다() {
         assertThat(RecoveryCriteria.amplified(100, 3)).isEmpty();
+    }
+
+    /**
+     * <b>보냈는데 하나도 안 닿았으면 위반이다.</b>
+     *
+     * <p>비율 0 은 "증폭 없음" 으로 읽혀 가장 조용히 통과한다. 봉우리 0 을
+     * 위반으로 돌린 것과 같은 상황이라 여기만 다르면 앞뒤가 안 맞는다.
+     */
+    @Test
+    @DisplayName("하나도_안_닿으면_잡는다")
+    void 하나도_안_닿으면_잡는다() {
+        assertThat(RecoveryCriteria.amplified(100, 0))
+                .hasValueSatisfying(v -> assertThat(v).contains("RC4"));
     }
 
     /** 보낸 수를 모르면 비교가 성립하지 않는다. 통과로 안 넘긴다. */

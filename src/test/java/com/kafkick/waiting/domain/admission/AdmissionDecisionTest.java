@@ -26,16 +26,14 @@ class AdmissionDecisionTest {
     }
 
     @Test
-    @DisplayName("통과_판정은_다섯이다")
-    void 통과_판정은_다섯이다() {
+    @DisplayName("통과_판정은_넷이다")
+    void 통과_판정은_넷이다() {
         assertThat(Arrays.stream(AdmissionDecision.values()).filter(AdmissionDecision::isPass))
                 .containsExactlyInAnyOrder(
                         AdmissionDecision.PASS_TOKEN,
                         AdmissionDecision.PASS_BYPASS,
                         AdmissionDecision.PASS_FAIL_OPEN,
-                        AdmissionDecision.PASS_UNDER_CAP,
-                        // 반쯤 열린 서킷의 시험 트래픽. 실제로 뒷단에 닿는다.
-                        AdmissionDecision.PASS_CIRCUIT_PROBE);
+                        AdmissionDecision.PASS_UNDER_CAP);
     }
 
     @Test

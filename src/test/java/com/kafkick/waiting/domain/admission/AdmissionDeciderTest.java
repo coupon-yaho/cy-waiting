@@ -65,7 +65,7 @@ class AdmissionDeciderTest {
     @Test
     @DisplayName("서킷이_열리면_줄로_보낸다")
     void 서킷이_열리면_줄로_보낸다() {
-        AdmissionRequest req = request(CouponStates.idle(1_000))
+        AdmissionRequest req = request(CouponStates.queueing(100, 500, 3000))
                 .withCircuit(CircuitState.OPEN);
 
         assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.ENQUEUE_CIRCUIT_OPEN);
@@ -93,7 +93,7 @@ class AdmissionDeciderTest {
     @Test
     @DisplayName("서킷이_열리면_낡아도_통과시키지_않는다")
     void 서킷이_열리면_낡아도_통과시키지_않는다() {
-        AdmissionRequest req = request(CouponStates.idle(1_000))
+        AdmissionRequest req = request(CouponStates.queueing(100, 500, 3000))
                 .withDataStale(true)
                 .withCircuit(CircuitState.OPEN);
 
@@ -126,25 +126,46 @@ class AdmissionDeciderTest {
                 .isInstanceOf(NullPointerException.class);
     }
 
-    /** 반쯤 열렸으면 소량만 닿는다. 전량이 꽂히면 약한 뒷단이 즉시 재포화한다. */
+    /**
+     * <b>반쯤 열린 것도 줄로 보낸다.</b> 회복 표본은 사다리 2번이 낸다 — 차례를
+     * 받은 사람이 계속 뒷단에 닿고, 그 결과가 서킷의 판정 재료다.
+     *
+     * <p>여기서 신규 유입을 시험 트래픽으로 뽑으면 <b>줄에 선 적 없는 사람이
+     * 줄 선 사람을 추월한다</b> (불변식 4). 서킷이 그것을 정당화하지 않는다.
+     */
     @Test
-    @DisplayName("반쯤_열리면_소량만_통과한다")
-    void 반쯤_열리면_소량만_통과한다() {
-        AdmissionDecider decider = decider();
-        AdmissionRequest req = request(CouponStates.idle(1_000))
+    @DisplayName("반쯤_열려도_신규_유입은_줄로_간다")
+    void 반쯤_열려도_신규_유입은_줄로_간다() {
+        AdmissionRequest req = request(CouponStates.queueing(100, 500, 3000))
                 .withCircuit(CircuitState.HALF_OPEN);
 
-        List<AdmissionDecision> 결과 = new ArrayList<>();
-        for (int i = 0; i < 20; i++) {
-            결과.add(decider.decide(req));
-        }
+        assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.ENQUEUE_CIRCUIT_OPEN);
+    }
 
-        assertThat(결과).as("시험 트래픽은 통과한다")
-                .contains(AdmissionDecision.PASS_CIRCUIT_PROBE);
-        assertThat(결과).as("나머지는 줄로 간다")
-                .contains(AdmissionDecision.ENQUEUE_CIRCUIT_OPEN);
-        assertThat(결과.stream().filter(AdmissionDecision.PASS_CIRCUIT_PROBE::equals).count())
-                .as("소량이라야 회복 판정이 공정하다").isLessThan(20);
+    /**
+     * <b>줄이 꽉 찼으면 서킷이 열려도 거절한다.</b>
+     *
+     * <p>안 걸면 거절 대상 하나하나가 요청 경로 레디스 왕복을 시도하고, 그
+     * 왕복이 실패하면 fail-open 이 <b>서킷이 지키려던 그 뒷단으로</b> 흘린다.
+     */
+    @Test
+    @DisplayName("줄이_꽉_차면_서킷이_열려도_거절한다")
+    void 줄이_꽉_차면_서킷이_열려도_거절한다() {
+        AdmissionRequest req = new AdmissionRequest("c1",
+                CouponStates.queueing(1, 500, 3000), META, false, false, false, 0, 1,
+                CircuitState.OPEN);
+
+        assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.REJECT_QUEUE_FULL);
+    }
+
+    /** 운영자가 끈 쿠폰에는 없던 줄을 안 만든다. 한 번 생기면 스스로 유지된다. */
+    @Test
+    @DisplayName("꺼_둔_쿠폰에는_줄을_안_만든다")
+    void 꺼_둔_쿠폰에는_줄을_안_만든다() {
+        AdmissionRequest req = request(CouponStates.off(500))
+                .withCircuit(CircuitState.OPEN);
+
+        assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.PASS_BYPASS);
     }
 
     @Test
@@ -561,23 +582,6 @@ class AdmissionDeciderTest {
         assertThat(decider().admittedRatePerSec(
                 AdmissionDecision.PASS_FAIL_OPEN, CouponStates.idle(500), META))
                 .isEqualTo(AdmissionDecider.globalCap(META));
-    }
-
-    /**
-     * <b>시험 요청의 예산은 제 것이다</b> (F3).
-     *
-     * <p>노드 예산을 돌려주면 격벽이 서킷보다 넓어져, 반쯤 열린 구간에 조여 둔
-     * 수가 그 층에서 풀린다 — 약한 뒷단이 그만큼 맞는다.
-     */
-    @Test
-    @DisplayName("시험_요청의_예산은_노드_예산이_아니다")
-    void 시험_요청의_예산은_노드_예산이_아니다() {
-        long 예산 = decider().admittedRatePerSec(
-                AdmissionDecision.PASS_CIRCUIT_PROBE, CouponStates.idle(500), META);
-
-        assertThat(예산).as("소량이라야 한다").isPositive();
-        assertThat(예산).as("노드 예산보다 훨씬 작다")
-                .isLessThan(AdmissionDecider.globalCap(META));
     }
 
     /** 통과가 아닌 판정에 예산을 물으면 부르는 쪽이 틀린 것이다. 조용히 0 을 주면 전면 차단이다. */

@@ -41,14 +41,33 @@ class CircuitStateReaderTest {
         assertThat(reader(registry).now()).isEqualTo(CircuitState.OPEN);
     }
 
-    /** 운영자가 강제로 연 것도 열린 것이다. 뒷단에 보내면 안 되는 것은 같다. */
+    /**
+     * <b>강제 개방은 라우팅을 안 바꾼다.</b>
+     *
+     * <p>그 상태에는 해제 조건이 없다 — 사람이 풀기 전까지 영원하다. 줄로
+     * 돌리면 전 쿠폰이 무기한 큐에 갇히고, 한산한 쿠폰에도 없던 줄이 생겨
+     * 스스로 유지된다. 킬스위치는 기존 폴백이 받는 것이 맞다.
+     */
     @Test
-    @DisplayName("강제로_연_것도_열린_것이다")
-    void 강제로_연_것도_열린_것이다() {
+    @DisplayName("강제_개방은_라우팅을_안_바꾼다")
+    void 강제_개방은_라우팅을_안_바꾼다() {
         CircuitBreakerRegistry registry = registry();
         registry.circuitBreaker(NAME).transitionToForcedOpenState();
 
-        assertThat(reader(registry).now()).isEqualTo(CircuitState.OPEN);
+        assertThat(reader(registry).now()).isEqualTo(CircuitState.CLOSED);
+    }
+
+    /**
+     * <b>없는 이름을 만들지 않는다.</b> 만들면 그 유령은 영원히 닫혀 있어,
+     * 이름이 어긋나도 F3 이 켜진 것처럼 보이면서 실제로는 죽는다.
+     */
+    @Test
+    @DisplayName("이름이_없으면_유령을_안_만든다")
+    void 이름이_없으면_유령을_안_만든다() {
+        CircuitBreakerRegistry registry = registry();
+
+        assertThat(reader(registry).now()).isEqualTo(CircuitState.CLOSED);
+        assertThat(registry.getAllCircuitBreakers()).as("읽었다고 생기지 않는다").isEmpty();
     }
 
     @Test

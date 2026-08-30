@@ -51,14 +51,6 @@ public enum AdmissionDecision {
      */
     ENQUEUE_CIRCUIT_OPEN,
 
-    /**
-     * 반쯤 열린 서킷의 <b>시험 트래픽</b>이다 (F3).
-     *
-     * <p>이 자리를 통과 취급하는 것은 맞다 — 실제로 뒷단에 닿는다. 다만 그
-     * 수를 조여야 회복 판정이 공정해진다.
-     */
-    PASS_CIRCUIT_PROBE,
-
     /** 재고가 없다. Redis 도 뒷단도 치지 않고 여기서 끝낸다. */
     REJECT_SOLD_OUT,
 
@@ -79,7 +71,6 @@ public enum AdmissionDecision {
     /** 뒷단으로 흘려보낸다. */
     public boolean isPass() {
         return this == PASS_TOKEN
-                || this == PASS_CIRCUIT_PROBE
                 || this == PASS_BYPASS
                 || this == PASS_FAIL_OPEN
                 || this == PASS_UNDER_CAP;

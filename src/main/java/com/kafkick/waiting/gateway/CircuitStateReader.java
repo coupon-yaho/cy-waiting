@@ -1,7 +1,6 @@
 package com.kafkick.waiting.gateway;
 
 import com.kafkick.waiting.domain.admission.CircuitState;
-import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 
 /**
@@ -35,17 +34,22 @@ public final class CircuitStateReader {
         if (circuits == null) {
             return CircuitState.CLOSED;
         }
-        return switch (circuits.circuitBreaker(circuitName).getState()) {
-            case OPEN, FORCED_OPEN -> CircuitState.OPEN;
-            case HALF_OPEN -> CircuitState.HALF_OPEN;
-            // **DISABLED 도 정상이다.** 운영자가 서킷을 끈 것이지 뒷단이 죽은
-            // 것이 아니다. 여기서 조이면 끄는 것이 곧 조이는 것이 된다.
-            case CLOSED, DISABLED, METRICS_ONLY -> CircuitState.CLOSED;
-        };
-    }
-
-    /** 서킷 상태를 읽는 이름. 폴백이 쓰는 것과 같아야 한다. */
-    public static CircuitBreaker.State stateOf(CircuitBreakerRegistry circuits, String name) {
-        return circuits.circuitBreaker(name).getState();
+        // **없는 이름을 만들지 않는다.** `circuitBreaker(name)` 은 없으면
+        // 새로 만드는데, 그 유령은 영원히 닫혀 있다 — 이름이 어긋나면 F3 이
+        // 켜진 것처럼 보이면서 실제로는 죽는다.
+        return circuits.find(circuitName)
+                .map(breaker -> switch (breaker.getState()) {
+                    case OPEN -> CircuitState.OPEN;
+                    case HALF_OPEN -> CircuitState.HALF_OPEN;
+                    // **DISABLED 도 정상이다.** 운영자가 서킷을 끈 것이지 뒷단이
+                    // 죽은 것이 아니다. 여기서 조이면 끄는 것이 곧 조이는 것이 된다.
+                    //
+                    // **FORCED_OPEN 도 여기다.** 그 상태에는 해제 조건이 없다 —
+                    // 사람이 풀기 전까지 영원하다. 줄로 돌리면 전 쿠폰이 무기한
+                    // 큐에 갇히고, 한산한 쿠폰에도 없던 줄이 생겨 스스로 유지된다.
+                    // 킬스위치는 기존 폴백이 받는 것이 맞다.
+                    case CLOSED, DISABLED, METRICS_ONLY, FORCED_OPEN -> CircuitState.CLOSED;
+                })
+                .orElse(CircuitState.CLOSED);
     }
 }

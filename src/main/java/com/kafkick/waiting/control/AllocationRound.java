@@ -1,6 +1,7 @@
 package com.kafkick.waiting.control;
 
 import com.kafkick.waiting.domain.allocation.QueueingHysteresis;
+import com.kafkick.waiting.domain.admission.CircuitState;
 import com.kafkick.waiting.domain.allocation.CouponDemand;
 import com.kafkick.waiting.domain.allocation.CreditSmoother;
 import com.kafkick.waiting.domain.allocation.FairShareAllocator;
@@ -51,6 +52,9 @@ public final class AllocationRound {
 
     /** 이 노드가 든 재료가 낡았는가. <b>값으로 받는다</b> — 상수로 두면 가드가 안 걸린다. */
     private final BooleanSupplier dataStale;
+
+    /** 뒷단 서킷. <b>판마다 한 번 읽는다</b> — 두 번 읽으면 한 판이 자기모순이 된다. */
+    private final Supplier<CircuitState> circuit;
 
     private final SoldOutCleanup cleanup;
 
@@ -108,6 +112,9 @@ public final class AllocationRound {
     /** 뒷단이 받을 수 있다고 한 것보다 더 나눠 준 누적량. */
     private final AtomicLong budgetOvershoot = new AtomicLong();
 
+    /** 서킷 때문에 배분을 조인 구간. <b>진입과 해제를 쌍으로 남긴다</b> (LG-2). */
+    private final FailureWindow paused = FailureWindow.create();
+
     /** 예산보다 더 들여보낸 누적 인원. */
     private final AtomicLong enteredOvershoot = new AtomicLong();
 
@@ -141,7 +148,8 @@ public final class AllocationRound {
             LongSupplier creditFloor, Supplier<Optional<Tunables>> tunables,
             SoldOutCleanup cleanup, Function<List<String>, Mono<List<String>>> dropQueues,
             Function<List<String>, Mono<List<String>>> claimQueues,
-            QueueSweeper sweeper, BooleanSupplier dataStale) {
+            QueueSweeper sweeper, BooleanSupplier dataStale, Supplier<CircuitState> circuit) {
+        this.circuit = Objects.requireNonNull(circuit, "circuit 은 필수다");
         this.sweeper = Objects.requireNonNull(sweeper, "sweeper 는 필수다");
         this.dataStale = Objects.requireNonNull(dataStale, "dataStale 은 필수다");
         this.cleanup = Objects.requireNonNull(cleanup, "cleanup 은 필수다");
@@ -174,11 +182,10 @@ public final class AllocationRound {
             LongSupplier creditFloor, Supplier<Optional<Tunables>> tunables,
             SoldOutCleanup cleanup, Function<List<String>, Mono<List<String>>> dropQueues,
             Function<List<String>, Mono<List<String>>> claimQueues,
-            QueueSweeper sweeper, BooleanSupplier dataStale) {
+            QueueSweeper sweeper, BooleanSupplier dataStale, Supplier<CircuitState> circuit) {
         return new AllocationRound(stillLeader, demands, globalCredit, gatewayCount, apply, publish,
                 clock, restore, codec, creditFloor, tunables, cleanup, dropQueues, claimQueues,
-                sweeper,
-                dataStale);
+                sweeper, dataStale, circuit);
     }
 
     /** 정리를 안 붙이는 자리. <b>아무것도 안 지운다</b> — 시험 편의다. */
@@ -195,7 +202,7 @@ public final class AllocationRound {
                 ids -> Mono.just(List.of()),
                 QueueSweeper.of(SweepGate.of(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
                         (ids, limit) -> Mono.just(QueueSweeper.SweepResult.NOTHING)),
-                () -> false);
+                () -> false, () -> CircuitState.CLOSED);
     }
 
     /** 튜너블을 안 읽던 자리. 늘 기본값으로 돈다. */
@@ -256,20 +263,55 @@ public final class AllocationRound {
         return true;
     }
 
+    /**
+     * 서킷이 열린 동안 배분을 조인다 (F3 · CY-787).
+     *
+     * <p>임계를 올리면 큐에서 빠져나온 사람이 토큰을 쥐고 503 을 받는다 —
+     * 자리는 이미 없다. 반쯤 열렸을 때 <b>0 으로 막지는 않는다</b>: 뒷단에 닿는
+     * 호출이 없으면 서킷이 표본을 못 채워 영영 안 닫힌다.
+     */
+    private long gated(long credit, CircuitState now) {
+        if (now == CircuitState.CLOSED) {
+            paused.exited().ifPresent(r -> log.info(
+                    "서킷 회복 — {}초 동안 {}틱을 배분 없이 보냈다. 임계가 그만큼 안 올라갔다",
+                    r.elapsedSeconds(), r.swallowed()));
+            return credit;
+        }
+        if (paused.entered()) {
+            // **진입을 남긴다** (LG-2). 안 남기면 배분이 왜 멎었는지 알 방법이
+            // 서킷 로그뿐인데, 그건 리더가 아닌 노드에서 날 수도 있다.
+            log.warn("서킷 때문에 배분을 조인다 — 상태 {}, 원래 몫 {}. "
+                    + "임계를 올리면 큐에서 나온 사람이 503 을 받고 자리를 잃는다", now, credit);
+        }
+        // 노드당 초당 한 건. 서킷이 제 창을 채울 만큼이면서, 약한 뒷단이 그
+        // 수만큼만 맞는다. 0 으로 막으면 표본이 없어 영영 안 닫힌다.
+        return now == CircuitState.OPEN
+                ? 0
+                : Math.min(credit, Math.max(1, gatewayCount.getAsInt()));
+    }
+
     private Mono<Void> allocate(List<CouponDemand> collected, Instant readAt) {
         CreditSmoother current = smoother.get();
         // **하한은 평활 뒤에 건다.** 하한은 관측이 아니라 정책이다. 평활을 거치면
         // 앞선 낮은 값에서 올라오는 데 열 틱이 넘고, 그동안 노드당 몫이 유휴 비율
         // 아래에 머물러 한산 통과 상한이 0 이다 — 하한을 둔 이유가 사라진다 (R1).
-        long smoothed = Math.round(current.observe(Math.max(0, globalCredit.getAsLong())));
-        long credit = Math.max(smoothed, Math.max(0, creditFloor.getAsLong()));
+        long observed = Math.max(0, globalCredit.getAsLong());
+        long smoothed = Math.round(current.observe(observed));
+        // **서킷은 평활과 하한 뒤에 건다.** 앞에 걸면 두 번 샌다 — 평활이 0 을
+        // 천천히 내려 첫 판에 수천이 그대로 나가고, 하한이 그 뒤로도 계속
+        // 임계를 올린다. 하한은 관측이 아니라 정책이라 평활 뒤인데, 서킷은
+        // 관측이 아니라 **사실**이라 그보다도 뒤라야 한다.
+        // **판마다 한 번 읽는다.** 두 번 읽으면 그 사이에 상태가 뒤집혀 같은
+        // 판이 자기모순인 값 둘로 판단한다 — 5초 창에 1초 틱이면 실제로 걸린다.
+        CircuitState circuitNow = circuit.get();
+        long credit = gated(Math.max(smoothed, Math.max(0, creditFloor.getAsLong())), circuitNow);
         Map<String, Long> granted = new LinkedHashMap<>();
         allocator.allocate(credit, collected).forEach(g -> granted.put(g.couponId(), g.credit()));
 
         if (lostLeadership()) {
             return Mono.empty();
         }
-        watchBudget(credit);
+        watchBudget(credit, observed);
         AtomicBoolean anyFailed = new AtomicBoolean();
         return Flux.fromIterable(collected)
                 .concatMap(demand -> applyOne(demand, granted, anyFailed))
@@ -388,8 +430,9 @@ public final class AllocationRound {
      */
     // 뒷단이 1,000 으로 떨어졌다고 보고해도 평활은 열 틱 넘게 7,300 을 나눠 준다.
     // 그 구간이 초과 발급 직전 상태이고, 이 값이 그것을 센다.
-    private void watchBudget(long credit) {
-        long observed = Math.max(0, globalCredit.getAsLong());
+    // **관측치를 인자로 받는다.** 여기서 다시 읽으면 한 판이 두 값을 보게 되고,
+    // 그 사이에 가용량이 바뀌면 나눠 준 몫과 비교 대상이 서로 다른 판의 것이 된다.
+    private void watchBudget(long credit, long observed) {
         long over = credit - observed;
         if (over <= 0) {
             overshoot.exited().ifPresent(r -> log.info(

@@ -3,6 +3,7 @@ package com.kafkick.waiting.control;
 import com.kafkick.waiting.adapter.redis.AllocationRedisPort;
 import com.kafkick.waiting.adapter.redis.LeaderRedisPort;
 import com.kafkick.waiting.domain.allocation.CreditSmoother;
+import com.kafkick.waiting.gateway.CircuitStateReader;
 import io.micrometer.core.instrument.Gauge;
 import com.kafkick.waiting.domain.queue.GraceRetention;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
@@ -70,9 +71,11 @@ public class ControlPlaneConfig {
     AllocationRound allocationRound(DemandCollector collector, AllocationRedisPort port,
             GatewayRegistry registry, CapacityCollector capacity, Leadership leadership,
             TunablesRefresh tunables, ControlPlaneProperties properties,
-            SoldOutCleanup cleanup, QueueSweeper sweeper, SnapshotHolder holder) {
+            SoldOutCleanup cleanup, QueueSweeper sweeper, SnapshotHolder holder,
+            CircuitStateReader circuit) {
         SnapshotCodec codec = SnapshotCodec.create();
-        return AllocationRound.of(leadership::isLeader, collector::collect, capacity::lastKnown,
+        return AllocationRound.of(leadership::isLeader, collector::collect,
+                capacity::lastKnown,
                 registry::count, port::apply, port::publish, Instant::now,
                 () -> port.load().map(hash ->
                         CreditSmoother.restore(SMOOTHING_ALPHA, codec.smoothing(hash))),
@@ -94,7 +97,10 @@ public class ControlPlaneConfig {
                 sweeper,
                 // 이 노드도 게이트웨이다. 자기가 든 재료의 나이가 노드들의
                 // 폴링 상태에 가장 가까운 신호다.
-                holder::isDataStale);
+                holder::isDataStale,
+                // **판마다 한 번 읽는다.** 한 판에서 두 번 읽으면 그 사이에
+                // 상태가 뒤집혀 같은 판이 자기모순인 값 둘로 판단한다.
+                circuit::now);
     }
 
     /**

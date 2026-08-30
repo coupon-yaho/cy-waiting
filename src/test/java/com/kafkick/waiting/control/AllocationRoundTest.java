@@ -7,6 +7,7 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.kafkick.waiting.adapter.redis.ClockSkewTracker;
+import com.kafkick.waiting.domain.admission.CircuitState;
 import com.kafkick.waiting.domain.allocation.CouponDemand;
 import com.kafkick.waiting.domain.allocation.CreditSmoother;
 import com.kafkick.waiting.domain.allocation.Grant;
@@ -102,7 +103,7 @@ class AllocationRoundTest {
                 cleanup, ids -> {
                     지운_것.addAll(ids);
                     return Mono.just(ids);
-                }, ids -> Mono.just(List.of()), 안_걷는_스위퍼(), () -> false);
+                }, ids -> Mono.just(List.of()), 안_걷는_스위퍼(), () -> false, () -> CircuitState.CLOSED);
 
         for (int i = 0; i < 5; i++) {
             round.run().onErrorResume(e -> Mono.empty()).block();
@@ -142,7 +143,7 @@ class AllocationRoundTest {
                 cleanup, ids -> {
                     지운_것.addAll(ids);
                     return Mono.just(ids);
-                }, ids -> Mono.just(List.of()), 안_걷는_스위퍼(), () -> false);
+                }, ids -> Mono.just(List.of()), 안_걷는_스위퍼(), () -> false, () -> CircuitState.CLOSED);
 
         for (int i = 0; i < 5; i++) {
             round.run().onErrorResume(e -> Mono.empty()).block();
@@ -173,7 +174,7 @@ class AllocationRoundTest {
                 SnapshotCodec.create(), () -> 0L, Optional::empty,
                 // 하나도 못 지웠다고 답한다.
                 cleanup, ids -> Mono.just(List.of()), ids -> Mono.just(List.of()),
-                안_걷는_스위퍼(), () -> false);
+                안_걷는_스위퍼(), () -> false, () -> CircuitState.CLOSED);
 
         for (int i = 0; i < 5; i++) {
             round.run().block();
@@ -213,7 +214,7 @@ class AllocationRoundTest {
                         (ids, limit) -> {
                             쓴_쿠폰.addAll(ids);
                             return Mono.just(QueueSweeper.SweepResult.NOTHING);
-                        }), () -> false);
+                        }), () -> false, () -> CircuitState.CLOSED);
 
         round.run().block();
 
@@ -816,6 +817,122 @@ class AllocationRoundTest {
     }
 
     /**
+     * <b>서킷이 열리면 임계가 안 올라간다</b> (CY-787).
+     *
+     * <p>래퍼가 0 을 내는 것만 봐서는 못 잡는다. 그 값이 평활을 거치고 하한과
+     * max 를 취하므로, 감싼 자리 뒤에서 두 번 샌다.
+     */
+    @Test
+    @DisplayName("서킷이_열리면_임계가_안_올라간다")
+    void 서킷이_열리면_임계가_안_올라간다() {
+        AtomicReference<CircuitState> 서킷 = new AtomicReference<>(CircuitState.CLOSED);
+        AllocationRound round = 서킷_있는_판(서킷, 7_300, 40);
+
+        // 정상 판을 몇 번 돌려 평활을 채운다 — 그래야 0 이 들어와도 천천히
+        // 내려오는 누수가 드러난다.
+        for (int i = 0; i < 5; i++) {
+            round.run().block();
+        }
+        적용.clear();
+        서킷.set(CircuitState.OPEN);
+
+        round.run().block();
+
+        assertThat(적용).as("첫 판부터 아무 몫도 안 나간다").isEmpty();
+    }
+
+    /** 하한이 걸려 있어도 안 나간다. 하한은 평활 뒤라 감싼 자리를 비켜 간다. */
+    @Test
+    @DisplayName("하한이_있어도_서킷이_열리면_안_나간다")
+    void 하한이_있어도_서킷이_열리면_안_나간다() {
+        AtomicReference<CircuitState> 서킷 = new AtomicReference<>(CircuitState.OPEN);
+        AllocationRound round = 서킷_있는_판(서킷, 0, 40);
+
+        round.run().block();
+
+        assertThat(적용).isEmpty();
+    }
+
+    /**
+     * <b>반쯤 열렸으면 소량은 나간다.</b> 0 으로 막으면 뒷단에 닿는 호출이 없어
+     * 서킷이 표본을 못 채우고, 반쯤 열림과 열림을 무한히 오간다 — 회복이 영영
+     * 안 된다.
+     */
+    @Test
+    @DisplayName("반쯤_열리면_소량은_나간다")
+    void 반쯤_열리면_소량은_나간다() {
+        AtomicReference<CircuitState> 서킷 = new AtomicReference<>(CircuitState.HALF_OPEN);
+        AllocationRound round = 서킷_있는_판(서킷, 7_300, 40);
+
+        round.run().block();
+
+        // 노드가 하나이므로 노드당 한 건 = 전역 한 건이다. 값으로 못 박아야
+        // 소량이 조용히 커지는 것을 잡는다.
+        assertThat(적용).as("표본이 나올 만큼은 나간다").containsExactly("c1=1");
+        assertThat(발행된("c1").credit()).isEqualTo(1);
+    }
+
+    /**
+     * <b>배분을 조인 사실이 로그로 남는다</b> (LG-2).
+     *
+     * <p>안 남기면 배분이 왜 멎었는지 알 방법이 서킷 로그뿐인데, 그건 리더가
+     * 아닌 노드에서 날 수도 있다. 두 로그를 시각으로 맞춰 붙여야 한다.
+     */
+    @Test
+    @DisplayName("배분을_조인_것이_쌍으로_남는다")
+    void 배분을_조인_것이_쌍으로_남는다() {
+        AtomicReference<CircuitState> 서킷 = new AtomicReference<>(CircuitState.OPEN);
+        AllocationRound round = 서킷_있는_판(서킷, 7_300, 40);
+
+        round.run().block();
+        round.run().block();
+        assertThat(로그_메시지()).as("진입은 한 번만").filteredOn(m -> m.contains("배분을 조인다"))
+                .hasSize(1);
+
+        서킷.set(CircuitState.CLOSED);
+        round.run().block();
+
+        assertThat(로그_메시지()).as("해제도 남는다")
+                .anyMatch(m -> m.contains("서킷 회복"));
+    }
+
+    /** 초과 배분 지표는 게이트 전 값으로 잰다. 아니면 서킷이 열린 시간에 비례해 오른다. */
+    @Test
+    @DisplayName("배분_정지가_초과_지표를_안_올린다")
+    void 배분_정지가_초과_지표를_안_올린다() {
+        AtomicReference<CircuitState> 서킷 = new AtomicReference<>(CircuitState.OPEN);
+        AllocationRound round = 서킷_있는_판(서킷, 7_300, 40);
+
+        round.run().block();
+
+        assertThat(round.budgetOvershoot()).isZero();
+    }
+
+    /** 서킷을 보는 판. 하한을 0 이 아니게 둬야 누수가 드러난다. */
+    private AllocationRound 서킷_있는_판(AtomicReference<CircuitState> 서킷,
+            long 가용량, long 하한) {
+        return AllocationRound.of(
+                () -> true,
+                () -> Mono.just(new TimedDemands(
+                        List.of(new CouponDemand("c1", 20_000, 1_000_000)), 읽은_시각)),
+                () -> 가용량, () -> 1,
+                grant -> {
+                    적용.add(grant.couponId() + "=" + grant.credit());
+                    return Mono.just(grant.credit());
+                },
+                hash -> {
+                    발행.put("last", hash);
+                    return Mono.empty();
+                },
+                () -> Instant.ofEpochSecond(읽은_시각),
+                () -> Mono.just(CreditSmoother.of(1.0)),
+                SnapshotCodec.create(), () -> 하한, Optional::empty,
+                SoldOutCleanup.of(Integer.MAX_VALUE, new SimpleMeterRegistry()),
+                ids -> Mono.just(List.of()), ids -> Mono.just(List.of()),
+                안_걷는_스위퍼(), () -> false, 서킷::get);
+    }
+
+    /**
      * <b>미상은 아는 쿠폰과 같은 자리에서 나눈다.</b> 재고를 못 읽는 것이
      * 우대도 홀대도 아니다 — 미상은 "재고가 넉넉하다" 와 같은 요구를 낸다.
      *
@@ -912,7 +1029,7 @@ class AllocationRoundTest {
                     return Mono.just(List.copyOf(ids));
                 },
                 ids -> Mono.just(List.of()),
-                안_걷는_스위퍼(), () -> false);
+                안_걷는_스위퍼(), () -> false, () -> CircuitState.CLOSED);
     }
 
     /**

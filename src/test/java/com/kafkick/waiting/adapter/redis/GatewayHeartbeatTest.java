@@ -26,7 +26,14 @@ import org.springframework.data.redis.core.script.RedisScript;
 class GatewayHeartbeatTest extends RedisContainerSupport {
 
     private static final Duration WAIT = Duration.ofSeconds(5);
-    private static final String INSTANCES = RedisKeys.INSTANCES;
+    /**
+     * <b>운영 키를 안 쓴다.</b> 이 컨텍스트에는 살아 있는 하트비트 루프가 있어
+     * 같은 키에 자기를 등록한다 — 그러면 이 시험이 센 수에 남이 섞여 간헐로
+     * 깨진다. 스크립트는 키를 인자로 받으므로 자리를 갈라 주면 된다.
+     */
+    // 키 이름의 모양은 그대로 둔다. 해시태그가 슬롯을 정하므로 다른 모양을
+    // 쓰면 클러스터에서 이 시험만 다른 슬롯을 보게 된다.
+    private static final String INSTANCES = RedisKeys.INSTANCES + ":heartbeat-test";
     private static final String REAP_AFTER = "30";
 
     @Autowired

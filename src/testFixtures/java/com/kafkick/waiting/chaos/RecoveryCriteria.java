@@ -4,6 +4,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -74,6 +75,11 @@ public final class RecoveryCriteria {
         if (returnedAfter == null) {
             return Optional.of("RC3 판정 분포가 끝내 안 돌아왔다");
         }
+        // 음수 경과는 측정이 깨진 것이다. 한계보다 작다고 통과시키면 못 잰
+        // 판이 "빨리 돌아왔다" 로 기록된다.
+        if (returnedAfter.isNegative()) {
+            return Optional.of("RC3 복귀 시간을 못 쟀다: %s".formatted(returnedAfter));
+        }
         return returnedAfter.compareTo(limit) <= 0 ? Optional.empty()
                 : Optional.of("RC3 판정 복귀가 늦다 — %s 걸렸다 (한계 %s)"
                         .formatted(returnedAfter, limit));
@@ -109,17 +115,21 @@ public final class RecoveryCriteria {
      * RC5 — 장애 중 줄에 있던 사람이 자기 자리를 지킨다.
      *
      * @param before 장애 전 사용자별 score
-     * @param after  회복 뒤 같은 순서의 score
+     * @param after  회복 뒤 사용자별 score
      */
-    public static Optional<String> seatLost(List<Double> before, List<Double> after) {
-        // 수가 줄었으면 누군가 걷힌 것이다. 재입장은 새 score 라 순번 역행이다.
-        if (after.size() < before.size()) {
-            return Optional.of("RC5 줄에서 %d 명이 사라졌다".formatted(before.size() - after.size()));
-        }
-        for (int i = 0; i < before.size(); i++) {
-            if (!before.get(i).equals(after.get(i))) {
-                return Optional.of("RC5 자리를 잃었다 — %d 번째가 %s 에서 %s 로 바뀌었다"
-                        .formatted(i, before.get(i), after.get(i)));
+    // **사람으로 짚는다.** score 목록만 비교하면, 같은 값을 가진 사람이 여럿일 때
+    // 목록은 같은데 주인이 바뀐 것을 못 본다. 새 사람이 느는 것은 기존 사람의
+    // 자리와 무관하므로 위반이 아니다.
+    public static Optional<String> seatLost(Map<String, Double> before,
+            Map<String, Double> after) {
+        for (Map.Entry<String, Double> was : before.entrySet()) {
+            Double now = after.get(was.getKey());
+            if (now == null) {
+                return Optional.of("RC5 줄에서 사라졌다 — %s".formatted(was.getKey()));
+            }
+            if (!now.equals(was.getValue())) {
+                return Optional.of("RC5 자리를 잃었다 — %s 가 %s 에서 %s 로 옮겨졌다"
+                        .formatted(was.getKey(), was.getValue(), now));
             }
         }
         return Optional.empty();

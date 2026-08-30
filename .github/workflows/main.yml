@@ -128,7 +128,7 @@ jobs:
       - uses: ./.github/actions/setup-gradle
 
       # setup-gradle 과 같은 SHA 다 — 판을 섞으면 캐시 형식이 어긋난다.
-      - uses: gradle/actions/dependency-submission@0723195856401067f7a2779048b490ace7a47d7c  # v5.0.2
+      - uses: gradle/actions/dependency-submission@9c971963bec38e04b3d30dcc455b5382be2fdbfb  # v6.3.0
         with:
           dependency-resolution-task: dependencies
           dependency-graph: generate-and-submit

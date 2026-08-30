@@ -15,13 +15,11 @@ import reactor.core.scheduler.Scheduler;
  * 제어 평면을 켜고 끈다.
  *
  * <p><b>순서가 전부다.</b> 연장을 먼저 멈추지 않으면 방금 비운 락을 죽는 노드가
- * 다시 잡고, 커넥션이 닫힌 뒤에 놓으려 하면 매번 실패한다. 둘 다 다음 리더가
- * 리스 만료를 기다리게 만든다.
- *
- * <p><b>멈추는 것과 끝나는 것을 가른다</b> (CY-794). 컨테이너는 종료가 아닐 때도
- * {@code stop()} 을 부른다. 그 자리에서 락을 놓으면 리더십이 종단 상태가 되어,
- * 다시 시작해도 영영 리더가 못 된다.
+ * 다시 잡고, 커넥션이 닫힌 뒤에 놓으려 하면 매번 실패한다.
  */
+// **멈추는 것과 끝나는 것을 가른다.** 컨테이너는 종료가 아닐 때도 stop() 을
+// 부른다. 그 자리에서 락을 놓으면 리더십이 종단 상태가 되어, 다시 시작해도
+// 영영 리더가 못 된다.
 public final class ControlPlaneLifecycle implements SmartLifecycle, DisposableBean {
 
     private static final Logger log = LoggerFactory.getLogger(ControlPlaneLifecycle.class);

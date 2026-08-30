@@ -208,16 +208,14 @@ class ControlPlaneLifecycleTest {
     }
 
     /**
-     * <b>일시정지는 종료가 아니다</b> (CY-794).
+     * <b>일시정지는 종료가 아니다.</b>
      *
-     * <p>스프링은 캐시된 컨텍스트를 전환할 때 이전 컨텍스트를 멈춘다 —
-     * {@code AbstractApplicationContext.pause()} 가 {@code SmartLifecycle.stop()}
-     * 을 부른다. 그 자리에서 락을 놓으면 리더십이 종단 상태가 되어, 다시
-     * 시작해도 영영 리더가 못 된다. 시험 스위트에서 무관한 시험이 리더를 못
-     * 잡고 빨개지는 형태로 나타났다.
-     *
-     * <p>루프를 멈추는 것은 맞다. 놓는 것은 <b>정말 끝날 때</b>다.
+     * <p>루프를 멈추는 것은 맞다. 놓는 것은 정말 끝날 때다.
      */
+    // 스프링은 캐시된 컨텍스트를 전환할 때 이전 것을 멈춘다. pause() 가
+    // SmartLifecycle.stop() 을 부른다. 거기서 락을 놓으면 리더십이 종단 상태가
+    // 되어 다시 시작해도 영영 리더가 못 되고, 시험 스위트에서는 무관한 시험이
+    // 리더를 못 잡고 빨개지는 형태로 나타난다.
     @Test
     @DisplayName("멈췄다_다시_시작하면_안_놓는다")
     void 멈췄다_다시_시작하면_안_놓는다() {
@@ -230,9 +228,10 @@ class ControlPlaneLifecycleTest {
 
         assertThat(해제).as("멈춘 것만으로는 안 놓는다").hasValue(0);
 
+        int 다시_켜기_전 = 배분.get();
         lifecycle.start();
         timer.advanceTimeBy(TICK);
-        assertThat(배분).as("다시 돈다").isNotNull();
+        assertThat(배분.get()).as("다시 돈다").isGreaterThan(다시_켜기_전);
     }
 
     /** 컨테이너가 빈을 버릴 때 놓는다. 그때가 정말 끝나는 자리다. */

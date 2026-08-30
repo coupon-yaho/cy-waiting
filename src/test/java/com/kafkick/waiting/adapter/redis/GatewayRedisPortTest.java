@@ -3,6 +3,7 @@ package com.kafkick.waiting.adapter.redis;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.kafkick.waiting.control.GatewayHeartbeatLoop;
+import com.kafkick.waiting.domain.admission.CircuitState;
 import java.time.Duration;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -11,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
+import reactor.core.publisher.Mono;
 
 /**
  * 하트비트 어댑터.
@@ -49,25 +51,50 @@ class GatewayRedisPortTest extends RedisContainerSupport {
         redis.delete(RedisKeys.INSTANCES).block(WAIT);
     }
 
+    /** 한 노드가 평시 서킷으로 찍는다. 분모만 본다. */
+    private Mono<Integer> 노드(String id) {
+        return port.beat(id, REAP_AFTER_SEC, CircuitState.CLOSED).map(GatewayRedisPort.Presence::alive);
+    }
+
     @Test
     @DisplayName("자기를_세고_남도_센다")
     void 자기를_세고_남도_센다() {
-        assertThat(port.beat("gw-a", REAP_AFTER_SEC).block(WAIT)).isEqualTo(1);
+        assertThat(노드("gw-a").block(WAIT)).isEqualTo(1);
 
-        assertThat(port.beat("gw-b", REAP_AFTER_SEC).block(WAIT)).isEqualTo(2);
+        assertThat(노드("gw-b").block(WAIT)).isEqualTo(2);
         // 같은 노드가 다시 찍어도 늘지 않는다. 늘면 배포마다 분모가 부푼다.
-        assertThat(port.beat("gw-a", REAP_AFTER_SEC).block(WAIT)).isEqualTo(2);
+        assertThat(노드("gw-a").block(WAIT)).isEqualTo(2);
     }
 
     @Test
     @DisplayName("나간_노드는_즉시_빠진다")
     void 나간_노드는_즉시_빠진다() {
-        port.beat("gw-a", REAP_AFTER_SEC).block(WAIT);
-        port.beat("gw-b", REAP_AFTER_SEC).block(WAIT);
+        노드("gw-a").block(WAIT);
+        노드("gw-b").block(WAIT);
 
         port.leave("gw-b").block(WAIT);
 
         // 임계를 안 기다린다. 기다리면 배포마다 그 시간 동안 전 노드가 몫을 덜 쓴다.
-        assertThat(port.beat("gw-a", REAP_AFTER_SEC).block(WAIT)).isEqualTo(1);
+        assertThat(노드("gw-a").block(WAIT)).isEqualTo(1);
+    }
+
+    /**
+     * <b>서킷을 같이 세어 돌려준다</b> (CY-791).
+     *
+     * <p>배분이 리더 한 대의 로컬 관측으로 전 클러스터의 크레딧을 정하지
+     * 않으려면, 분모와 열린 수가 <b>같은 왕복</b>에서 나와야 한다. 나눠 읽으면
+     * 그 사이에 노드가 드나들어 서로 다른 판의 값이 섞인다.
+     */
+    @Test
+    @DisplayName("살아있는_수와_열린_수를_같이_돌려준다")
+    void 살아있는_수와_열린_수를_같이_돌려준다() {
+        port.beat("gw-a", REAP_AFTER_SEC, CircuitState.OPEN).block(WAIT);
+        port.beat("gw-b", REAP_AFTER_SEC, CircuitState.CLOSED).block(WAIT);
+
+        GatewayRedisPort.Presence seen = port.beat("gw-c", REAP_AFTER_SEC, CircuitState.HALF_OPEN).block(WAIT);
+
+        // 열린 것도 반쯤 열린 것도 닫히지 않은 것이다. 반만 세면 회복 구간에서
+        // 다시 전속력으로 밀어 넣는다.
+        assertThat(seen).isEqualTo(new GatewayRedisPort.Presence(3, 2));
     }
 }

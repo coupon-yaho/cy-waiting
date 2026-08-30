@@ -36,14 +36,12 @@ public final class GatewayRedisPort {
     }
 
     /**
-     * 하트비트를 남기고 <b>이 노드가 본 서킷을 같이 싣는다</b> (CY-791).
-     *
-     * <p>안 실으면 배분이 리더 한 대의 로컬 관측으로 전 클러스터의 크레딧을
-     * 정한다 — 리더만 정상이면 나머지가 다 열려 있어도 평소 속도로 돈다.
+     * 하트비트를 남기고 <b>이 노드가 본 서킷을 같이 싣는다</b>.
      *
      * @param reapAfterSec 이보다 오래된 항목은 지운다. 시각은 레디스가 찍는다
      * @param voteFreshSec 표를 인정하는 신선도. 분모의 임계보다 훨씬 짧다
      */
+    // 안 실으면 배분이 리더 한 대의 관측으로 전 클러스터의 크레딧을 정한다.
     public Mono<Presence> beat(String instanceId, long reapAfterSec, long voteFreshSec,
             CircuitState circuit) {
         return redis.execute(BEAT, List.of(RedisKeys.INSTANCES),
@@ -59,23 +57,22 @@ public final class GatewayRedisPort {
 
     /**
      * <b>칸 수를 검증한다.</b> 스크립트와 이 파서가 갈린 것을 기동 직후에
-     * 드러내는 자물쇠다. 모자란 칸을 0 으로 메우면 표가 영영 0 이고 클러스터는
-     * 항상 닫힌 것으로 보인다 — 기능이 조용히 꺼진 채 다음 장애를 맞는다.
+     * 드러내는 자물쇠다.
      */
+    // 모자란 칸을 0 으로 메우면 표가 영영 0 이고 클러스터는 항상 닫힌 것으로
+    // 보인다 — 기능이 조용히 꺼진 채 다음 장애를 맞는다.
     static Presence presence(Object raw) {
         List<?> v = (List<?>) raw;
         if (v.size() != BEAT_FIELDS) {
             throw new IllegalStateException(
                     "하트비트가 %d 칸을 줘야 한다: %d".formatted(BEAT_FIELDS, v.size()));
         }
-        return new Presence(count(v, 0), count(v, 2), count(v, 3), count(v, 4));
-    }
-
-    // RULE-EXCEPTION(JS-13): presence 가 static 이라 인스턴스 메서드로 못 쓴다.
-    // presence 를 static 으로 둔 것은 파싱만 하는 계산이라 레디스 없이 시험하기
-    // 위해서다.
-    private static int count(List<?> values, int index) {
-        return (int) ((Number) values.get(index)).longValue();
+        int[] at = new int[BEAT_FIELDS];
+        for (int i = 0; i < BEAT_FIELDS; i++) {
+            at[i] = (int) ((Number) v.get(i)).longValue();
+        }
+        // 둘째 칸은 서버 시각이라 여기서 안 쓴다.
+        return new Presence(at[0], at[2], at[3], at[4]);
     }
 
     /**
@@ -85,10 +82,10 @@ public final class GatewayRedisPort {
      * @param alive    살아 있는 노드 수
      * @param open     그중 서킷이 열렸다고 말한 수
      * @param halfOpen 그중 반쯤 열렸다고 말한 수
-     * @param reported 표를 낸 수. <b>아직 읽는 곳이 없다</b> — alive 보다 작으면
-     *                 롤아웃 중이라는 뜻이라 게이지로 낼 재료이고, 판정의 분모로
-     *                 쓰면 안 된다 ({@code ClusterCircuit.of} 참조)
+     * @param reported 표를 낸 수. 아직 읽는 곳이 없다
      */
+    // reported 가 alive 보다 작으면 롤아웃 중이라는 뜻이라 게이지로 낼 재료다.
+    // 판정의 분모로 쓰면 안 된다 — ClusterCircuit.of 의 주석을 본다.
     public record Presence(int alive, int open, int halfOpen, int reported) {
     }
 

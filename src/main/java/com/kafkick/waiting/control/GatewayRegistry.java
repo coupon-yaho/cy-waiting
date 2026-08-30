@@ -1,5 +1,7 @@
 package com.kafkick.waiting.control;
 
+import static java.util.concurrent.TimeUnit.NANOSECONDS;
+
 import com.kafkick.waiting.domain.admission.CircuitState;
 
 import java.util.concurrent.atomic.AtomicInteger;
@@ -39,7 +41,7 @@ public final class GatewayRegistry {
      * <p>한 덩어리로 바꾼다. 분모와 같은 이유다 — 따로 두면 읽고·비교하고·쓰는
      * 사이에 다른 관측이 끼어 조인 값이 푼 값에 덮인다.
      */
-    private record Vote(CircuitState state, int easingStreak) {
+    private record Vote(CircuitState state, int easingStreak, long enteredAt) {
     }
 
     /**
@@ -47,7 +49,7 @@ public final class GatewayRegistry {
      * 나머지가 다 열려 있어도 배분이 평소 속도로 돈다.
      */
     private final AtomicReference<Vote> clusterCircuit =
-            new AtomicReference<>(new Vote(CircuitState.CLOSED, 0));
+            new AtomicReference<>(new Vote(CircuitState.CLOSED, 0, System.nanoTime()));
 
     /** 하트비트가 연속으로 못 돈 횟수. 표가 낡았는지를 이걸로 안다. */
     private final AtomicInteger circuitMisses = new AtomicInteger();
@@ -111,24 +113,31 @@ public final class GatewayRegistry {
      * 번도 확인하지 않은 채 전면 개방이 일어난다.
      */
     private void apply(CircuitState seen, String source) {
+        long at = System.nanoTime();
         Vote before = clusterCircuit.getAndUpdate(now -> {
             if (ClusterCircuit.severity(seen) >= ClusterCircuit.severity(now.state())) {
-                return new Vote(seen, 0);
+                // **연속은 끊되 진입 시각은 지킨다.** 같은 상태를 다시 봤다고
+                // 시각을 밀면 해제 로그의 지속 시간이 매 관측마다 0 으로 리셋된다.
+                return new Vote(seen, 0, seen == now.state() ? now.enteredAt() : at);
             }
             int streak = now.easingStreak() + 1;
             return streak >= rampDownTicks
-                    ? new Vote(ClusterCircuit.eased(now.state()), 0)
-                    : new Vote(now.state(), streak);
+                    ? new Vote(ClusterCircuit.eased(now.state()), 0, at)
+                    : new Vote(now.state(), streak, now.enteredAt());
         });
         // **람다 밖에서 찍는다.** CAS 가 재시도하면 같은 줄이 두 번 난다.
         CircuitState now = clusterCircuit.get().state();
         if (now == before.state()) {
             return;
         }
+        // **해제 로그에 지속 시간을 담는다** (LG-2). 얼마나 조여 있었는지를
+        // 안 남기면 회복 판정을 사후에 못 한다.
+        long heldSec = NANOSECONDS.toSeconds(at - before.enteredAt());
         if (ClusterCircuit.severity(now) > ClusterCircuit.severity(before.state())) {
             log.warn("배분 게이트를 조인다 — {} → {}, 근거 {}", before.state(), now, source);
         } else {
-            log.info("배분 게이트를 푼다 — {} → {}, 근거 {}", before.state(), now, source);
+            log.info("배분 게이트를 푼다 — {} → {}, {}초 동안 조였다, 근거 {}",
+                    before.state(), now, heldSec, source);
         }
     }
 

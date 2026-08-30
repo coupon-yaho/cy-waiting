@@ -722,6 +722,28 @@ class LeadershipTest {
         assertThat(leadership.fence()).as("확인 없이 늙은 번호는 안 내준다").isZero();
     }
 
+    /**
+     * <b>늦게 온 옛 판의 응답이 번호를 되돌리지 않는다</b> (CY-766).
+     *
+     * <p>되돌아가면 멀쩡한 리더가 비가역 쓰기를 옛 번호로 내보낸다. 확인 시각을
+     * 안 미는 것과 같은 이유인데, 번호만 무방비였다.
+     */
+    @Test
+    @DisplayName("늦게_온_응답이_판_번호를_안_되돌린다")
+    void 늦게_온_응답이_판_번호를_안_되돌린다() {
+        AtomicInteger 호출 = new AtomicInteger();
+        Leadership leadership = leadership(() -> switch (호출.incrementAndGet()) {
+            case 1 -> Mono.just(LeaderLock.mine("node-1", LEASE.toMillis(), 500));
+            // 겹친 판 중 늦게 도착한 옛 판이 작은 번호를 들고 온다.
+            default -> Mono.just(LeaderLock.mine("node-1", LEASE.toMillis(), 100));
+        });
+
+        leadership.renew().block(BLOCK);
+        leadership.renew().block(BLOCK);
+
+        assertThat(leadership.fence()).as("뒤로 안 민다").isEqualTo(500);
+    }
+
     /** 잡기 전에는 번호가 없다. 0 이면 울타리가 전부 거절한다 — 안전한 쪽이다. */
     @Test
     @DisplayName("잡기_전에는_판_번호가_0이다")

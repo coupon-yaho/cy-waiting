@@ -251,8 +251,13 @@ public final class Leadership {
             case CLOSED -> s;
             // **뒤로 밀지 않는다.** 겹친 두 판 중 늦게 도착한 옛 판이 확인 시각을
             // 되돌리면, 멀쩡한 리더가 헛강등되고 거짓 경고가 찍힌다.
+            // **판 번호도 뒤로 안 민다.** 늦게 도착한 옛 판의 응답이 번호를
+            // 되돌리면, 멀쩡한 리더가 비가역 쓰기를 옛 번호로 내보낸다.
+            // 임기 안에서는 연장이 같은 번호를 돌려주므로 이 최댓값은 그
+            // 겹침에만 걸리고, 새 임기는 아래 FOLLOWER 갈래로 들어온다.
             case LEADER -> new Standing(State.LEADER,
-                    Math.max(s.confirmedAt(), startedAt), s.leaderSince(), lock.fence());
+                    Math.max(s.confirmedAt(), startedAt), s.leaderSince(),
+                    Math.max(s.fence(), lock.fence()));
             case FOLLOWER -> new Standing(State.LEADER, startedAt, startedAt, lock.fence());
         });
 

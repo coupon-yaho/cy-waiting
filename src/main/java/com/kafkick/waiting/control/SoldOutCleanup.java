@@ -76,13 +76,14 @@ public final class SoldOutCleanup {
                 return;
             }
             int ticks = seen.merge(couponId, 1, Integer::sum);
-            if (ticks == 1) {
-                // **세기 시작한 것을 줄 옆에 알린다** (CY-766). 울타리 표는
-                // 지웠을 때만 생기므로, 아직 한 번도 안 지운 줄에는 표가 없다 —
-                // 얼었다 깨어난 옛 리더가 그 줄을 지우는 것을 못 막는다. 후보로
-                // 올리는 순간 표를 세워야 그 뒤의 옛 판이 걸린다.
-                claimed.add(couponId);
-            }
+            // **세는 동안 매 판 알린다** (CY-766). 울타리 표는 지웠을 때만
+            // 생기므로 아직 한 번도 안 지운 줄에는 표가 없다 — 얼었다 깨어난
+            // 옛 리더가 그 줄을 지우는 것을 못 막는다.
+            //
+            // **첫 판에만 알리면 그 한 번이 실패했을 때 유예 내내 표가 없다.**
+            // 쓰기는 같은 값이라 몇 번을 다시 해도 결과가 같고, 대상은 지울
+            // 후보로 세는 쿠폰뿐이라 몇 개 안 된다.
+            claimed.add(couponId);
             if (ticks > graceTicks) {
                 due.add(couponId);
             }

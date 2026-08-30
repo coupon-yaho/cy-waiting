@@ -3,7 +3,6 @@ package com.kafkick.waiting.control;
 import com.kafkick.waiting.adapter.redis.AllocationRedisPort;
 import com.kafkick.waiting.adapter.redis.LeaderRedisPort;
 import com.kafkick.waiting.domain.allocation.CreditSmoother;
-import com.kafkick.waiting.gateway.CircuitStateReader;
 import io.micrometer.core.instrument.Gauge;
 import com.kafkick.waiting.domain.queue.GraceRetention;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
@@ -71,8 +70,7 @@ public class ControlPlaneConfig {
     AllocationRound allocationRound(DemandCollector collector, AllocationRedisPort port,
             GatewayRegistry registry, CapacityCollector capacity, Leadership leadership,
             TunablesRefresh tunables, ControlPlaneProperties properties,
-            SoldOutCleanup cleanup, QueueSweeper sweeper, SnapshotHolder holder,
-            CircuitStateReader circuit) {
+            SoldOutCleanup cleanup, QueueSweeper sweeper, SnapshotHolder holder) {
         SnapshotCodec codec = SnapshotCodec.create();
         return AllocationRound.of(leadership::isLeader, collector::collect,
                 capacity::lastKnown,
@@ -98,9 +96,14 @@ public class ControlPlaneConfig {
                 // 이 노드도 게이트웨이다. 자기가 든 재료의 나이가 노드들의
                 // 폴링 상태에 가장 가까운 신호다.
                 holder::isDataStale,
+                // **클러스터가 본 것으로 조인다** (CY-791). 리더의 로컬 서킷을
+                // 쓰면 리더만 멀쩡할 때 나머지가 다 열려 있어도 평소 속도로
+                // 돌고, 그 몫은 이미 넘어진 뒷단으로 간다. 하트비트가 노드마다
+                // 실어 온 것을 등록부가 다수결로 접어 둔다.
+                //
                 // **판마다 한 번 읽는다.** 한 판에서 두 번 읽으면 그 사이에
                 // 상태가 뒤집혀 같은 판이 자기모순인 값 둘로 판단한다.
-                circuit::now);
+                registry::circuit);
     }
 
     /**

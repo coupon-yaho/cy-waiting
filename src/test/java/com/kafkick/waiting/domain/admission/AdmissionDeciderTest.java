@@ -114,6 +114,18 @@ class AdmissionDeciderTest {
         assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.PASS_TOKEN);
     }
 
+    /**
+     * <b>서킷을 안 실으면 안 만들어진다.</b> 모르는 것을 정상으로 접으면 그
+     * 경로가 서킷을 영영 안 보는데, 그게 F3 이 막으려던 상태다.
+     */
+    @Test
+    @DisplayName("서킷을_안_실으면_안_만들어진다")
+    void 서킷을_안_실으면_안_만들어진다() {
+        assertThatThrownBy(() -> new AdmissionRequest("c1", CouponStates.idle(500),
+                META, false, false, false, 0, 100, null))
+                .isInstanceOf(NullPointerException.class);
+    }
+
     /** 반쯤 열렸으면 소량만 닿는다. 전량이 꽂히면 약한 뒷단이 즉시 재포화한다. */
     @Test
     @DisplayName("반쯤_열리면_소량만_통과한다")
@@ -549,6 +561,23 @@ class AdmissionDeciderTest {
         assertThat(decider().admittedRatePerSec(
                 AdmissionDecision.PASS_FAIL_OPEN, CouponStates.idle(500), META))
                 .isEqualTo(AdmissionDecider.globalCap(META));
+    }
+
+    /**
+     * <b>시험 요청의 예산은 제 것이다</b> (F3).
+     *
+     * <p>노드 예산을 돌려주면 격벽이 서킷보다 넓어져, 반쯤 열린 구간에 조여 둔
+     * 수가 그 층에서 풀린다 — 약한 뒷단이 그만큼 맞는다.
+     */
+    @Test
+    @DisplayName("시험_요청의_예산은_노드_예산이_아니다")
+    void 시험_요청의_예산은_노드_예산이_아니다() {
+        long 예산 = decider().admittedRatePerSec(
+                AdmissionDecision.PASS_CIRCUIT_PROBE, CouponStates.idle(500), META);
+
+        assertThat(예산).as("소량이라야 한다").isPositive();
+        assertThat(예산).as("노드 예산보다 훨씬 작다")
+                .isLessThan(AdmissionDecider.globalCap(META));
     }
 
     /** 통과가 아닌 판정에 예산을 물으면 부르는 쪽이 틀린 것이다. 조용히 0 을 주면 전면 차단이다. */

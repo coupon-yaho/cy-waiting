@@ -402,7 +402,6 @@ class AllocationRoundTest {
                 .isEqualTo(1);
         assertThat(meters.get("waiting.poll.budget.overshoot.ticks")
                 .functionCounter().count()).as("폴링 예산 초과 틱").isEqualTo(1);
-        Reference.reachabilityFence(지표);
         // 나머지 셋은 이 판에서 안 움직인다. 값이 갈려야 서로를 읽는 배선이 잡힌다.
         assertThat(meters.get("waiting.allocation.budget.overshoot")
                 .functionCounter().count()).as("배분 초과량").isZero();
@@ -413,6 +412,9 @@ class AllocationRoundTest {
         // 이 판은 줄이 10만인데 크레딧이 10 이라 열 명의 차례가 왔다.
         assertThat(meters.get("waiting.allocation.admitted")
                 .functionCounter().count()).as("차례를 준 인원").isEqualTo(10);
+        // **마지막 단언 뒤에 둔다.** 앞에 두면 그 뒤 계수들이 수거된 객체를 읽어
+        // 0 이 나올 수 있다 — 붙잡은 뜻이 절반만 산다.
+        Reference.reachabilityFence(지표);
     }
 
     /**

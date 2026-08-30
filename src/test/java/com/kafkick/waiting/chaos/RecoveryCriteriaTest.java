@@ -136,6 +136,58 @@ class RecoveryCriteriaTest {
                 .hasValueSatisfying(v -> assertThat(v).contains("RC4"));
     }
 
+    /**
+     * <b>봉우리가 0 인데 정상 구간이 0 이 아니면 위반이다.</b>
+     *
+     * <p>나눗셈만 두면 0 은 "버스트가 없다" 로 읽혀 가장 조용히 통과한다.
+     * 실제로는 회복 구간에 뒷단이 하나도 못 받은 것이고, 그건 아직 안 돌아온
+     * 것이지 잘 돌아온 것이 아니다. 못 잰 것을 통과로 넘기지 않는 원칙이
+     * 여기에도 걸린다.
+     */
+    @Test
+    @DisplayName("회복_구간이_비면_잡는다")
+    void 회복_구간이_비면_잡는다() {
+        assertThat(RecoveryCriteria.recoveryBurst(100, 0))
+                .hasValueSatisfying(v -> assertThat(v).contains("RC4"));
+    }
+
+    /**
+     * <b>증폭률 — 뒷단 도착이 클라이언트가 보낸 수를 넘으면 게이트웨이가 스스로
+     * 만든 유입이다.</b>
+     *
+     * <p>고정 창으로 버스트를 재면 창 밖에서 몰아친 것을 못 본다. 회복을
+     * 기다리는 동안 보낸 수를 알고 있으면, 도착을 그 수로 나누어 대기 길이를
+     * 상쇄할 수 있다. 창을 옮길 필요가 없으므로 재는 도구가 재는 대상을
+     * 밀어 올리지 않는다.
+     */
+    @Test
+    @DisplayName("증폭을_잡는다")
+    void 증폭을_잡는다() {
+        assertThat(RecoveryCriteria.amplified(100, 118)).isEmpty();
+        assertThat(RecoveryCriteria.amplified(100, 121))
+                .hasValueSatisfying(v -> assertThat(v).contains("RC4"));
+    }
+
+    /** 재전송이 없으면 도착이 보낸 수보다 적을 수 있다. 그건 증폭이 아니다. */
+    @Test
+    @DisplayName("도착이_적은_것은_증폭이_아니다")
+    void 도착이_적은_것은_증폭이_아니다() {
+        assertThat(RecoveryCriteria.amplified(100, 3)).isEmpty();
+    }
+
+    /** 보낸 수를 모르면 비교가 성립하지 않는다. 통과로 안 넘긴다. */
+    @Test
+    @DisplayName("보낸_수를_모르면_잡는다")
+    void 보낸_수를_모르면_잡는다() {
+        assertThat(RecoveryCriteria.amplified(0, 50))
+                .hasValueSatisfying(v -> assertThat(v).contains("RC4"));
+        assertThat(RecoveryCriteria.amplified(-10, 50))
+                .hasValueSatisfying(v -> assertThat(v).contains("RC4"));
+        assertThat(RecoveryCriteria.amplified(100, -1))
+                .as("음수 도착은 관측이 아니다")
+                .hasValueSatisfying(v -> assertThat(v).contains("RC4"));
+    }
+
     /** RC5 — 장애 중 줄에 있던 사람이 자기 자리를 지켜야 한다. */
     @Test
     @DisplayName("자리를_잃은_것을_잡는다")

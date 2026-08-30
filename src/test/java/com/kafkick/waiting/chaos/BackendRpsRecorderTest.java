@@ -228,4 +228,33 @@ class BackendRpsRecorderTest {
         assertThat(기록.peakRps(시작, 시작.plusSeconds(1)))
                 .as("끝 초는 반개구간 밖이다").isEqualTo(5);
     }
+
+    /**
+     * <b>구간 총량. 증폭률은 봉우리가 아니라 총량 비다.</b>
+     */
+    // 창이 1 초면 봉우리와 총량이 같아 구분이 안 되지만, 창을 넓히는 순간
+    // 봉우리는 가장 바쁜 한 초만 돌려주고 분모는 전 구간을 센다.
+    @Test
+    @DisplayName("구간_총량을_센다")
+    void 구간_총량을_센다() {
+        BackendRpsRecorder 기록 = 기록기();
+        기록.sample(시작);
+        초가_지난다(기록, 시작.plusSeconds(1), 3);
+        초가_지난다(기록, 시작.plusSeconds(2), 7);
+
+        assertThat(기록.sumIn(시작, 시작.plusSeconds(2))).isEqualTo(10);
+        assertThat(기록.peakRps(시작, 시작.plusSeconds(2)))
+                .as("봉우리는 가장 바쁜 한 초만 본다").isEqualTo(7);
+    }
+
+    /** 빈 구간은 0 이다. 없는 초를 세다 터지면 안 된다. */
+    @Test
+    @DisplayName("빈_구간은_영이다")
+    void 빈_구간은_영이다() {
+        BackendRpsRecorder 기록 = 기록기();
+        기록.sample(시작);
+
+        assertThat(기록.sumIn(시작.plusSeconds(9), 시작.plusSeconds(10))).isZero();
+        assertThat(기록.sumIn(시작.plusSeconds(2), 시작)).as("역구간").isZero();
+    }
 }

@@ -24,6 +24,9 @@ public final class SoldOutCleanup {
     /** 이미 지운 쿠폰. <b>지운 것이 확인된 뒤에</b> 들어온다. */
     private final Set<String> deleted = new HashSet<>();
 
+    /** 이번 판에 세기 시작한 쿠폰. 줄 옆에 울타리 표를 세울 대상이다. */
+    private final List<String> claimed = new ArrayList<>();
+
     private final int graceTicks;
     private final Counter dropped;
     private final Counter cancelled;
@@ -57,6 +60,7 @@ public final class SoldOutCleanup {
     public List<String> due(Map<String, CouponState> coupons) {
         seen.keySet().retainAll(coupons.keySet());
         deleted.retainAll(coupons.keySet());
+        claimed.clear();
         List<String> due = new ArrayList<>();
         coupons.forEach((couponId, state) -> {
             if (!state.soldOut()) {
@@ -71,11 +75,29 @@ public final class SoldOutCleanup {
             if (deleted.contains(couponId)) {
                 return;
             }
-            if (seen.merge(couponId, 1, Integer::sum) > graceTicks) {
+            int ticks = seen.merge(couponId, 1, Integer::sum);
+            if (ticks == 1) {
+                // **세기 시작한 것을 줄 옆에 알린다** (CY-766). 울타리 표는
+                // 지웠을 때만 생기므로, 아직 한 번도 안 지운 줄에는 표가 없다 —
+                // 얼었다 깨어난 옛 리더가 그 줄을 지우는 것을 못 막는다. 후보로
+                // 올리는 순간 표를 세워야 그 뒤의 옛 판이 걸린다.
+                claimed.add(couponId);
+            }
+            if (ticks > graceTicks) {
                 due.add(couponId);
             }
         });
         return List.copyOf(due);
+    }
+
+    /**
+     * 이번 판에 <b>세기 시작한</b> 쿠폰들. {@link #due} 뒤에 읽는다.
+     *
+     * <p>울타리 표는 지웠을 때만 생기므로, 한 번도 안 지운 줄에는 표가 없다.
+     * 후보로 올리는 순간 표를 세워야 그 뒤에 오는 옛 판이 걸린다.
+     */
+    public List<String> claimed() {
+        return List.copyOf(claimed);
     }
 
     /**

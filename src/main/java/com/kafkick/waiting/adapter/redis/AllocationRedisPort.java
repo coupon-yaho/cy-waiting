@@ -12,6 +12,7 @@ import com.kafkick.waiting.domain.allocation.Grant;
 import com.kafkick.waiting.domain.coupon.QueueMode;
 import com.kafkick.waiting.control.QueueSweeper;
 import java.util.concurrent.ConcurrentHashMap;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -76,6 +77,14 @@ public final class AllocationRedisPort implements SnapshotSource {
 
     /** 한 판이 동시에 낼 수 있는 읽기. 무제한이면 한 판이 커넥션을 독점한다. */
     private static final int MAX_CONCURRENT_READS = 16;
+
+    /**
+     * 울타리 표의 수명. <b>옛 리더가 살아 있을 수 있는 최대 시간</b>보다 길면 된다.
+     *
+     * <p>안 주면 쿠폰이 활성에서 빠진 뒤에도 표가 남아, 시계가 뒤로 간 리더는
+     * 스큐가 걷혀도 안 풀리고 자기 시각이 그 옛 표를 넘어야 풀린다.
+     */
+    private static final Duration FENCE_TTL = Duration.ofHours(1);
 
     /** 값이 JSON 인 것은 계약이다 — 위치 기반 문자열은 필드가 늘면 깨진다 (D-C3). */
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -423,6 +432,24 @@ public final class AllocationRedisPort implements SnapshotSource {
      * <p><b>한 쿠폰이 실패해도 나머지는 지운다.</b> 정리가 배분을 막으면
      * 안 지워진 것 하나가 그 틱 전체를 세운다 (7.3.4).
      */
+    /**
+     * 세기 시작한 쿠폰의 줄 옆에 <b>울타리 표만</b> 세운다 (CY-766).
+     *
+     * <p>표는 지웠을 때만 생기므로 한 번도 안 지운 줄에는 표가 없다. 후보로
+     * 올리는 순간 세워야 그 뒤에 오는 옛 판이 걸린다.
+     */
+    public Mono<Void> claimSoldOutQueues(List<String> couponIds, long fence) {
+        if (couponIds.isEmpty() || shards != 1) {
+            return Mono.empty();
+        }
+        return Flux.fromIterable(couponIds)
+                // **실패해도 조용히 넘어간다.** 표를 못 세우면 울타리가 약해질
+                // 뿐이고, 여기서 터뜨리면 그 판의 정리가 통째로 멎는다.
+                .flatMap(id -> runDrop(id, fence, false).onErrorResume(e -> Mono.empty()),
+                        MAX_CONCURRENT_READS)
+                .then();
+    }
+
     public Mono<List<String>> dropSoldOutQueues(List<String> couponIds, long fence) {
         if (couponIds.isEmpty()) {
             return Mono.just(List.of());
@@ -469,16 +496,21 @@ public final class AllocationRedisPort implements SnapshotSource {
     //   재입고되면 살아난 줄을 지운다 — 메모리 안의 취소는 다음 스냅샷이 와야
     //   도는데 삭제는 그 전에 나간다. 그 검사가 스크립트 안에 있어야 읽고
     //   지우는 사이가 안 벌어진다.
-    private Mono<Boolean> dropOne(String couponId, long fence) {
+    private Mono<Long> runDrop(String couponId, long fence, boolean delete) {
         return redis.execute(DROP_QUEUE,
                         List.of(RedisKeys.queue(couponId, shards, 0),
                                 RedisKeys.alive(couponId, shards, 0),
                                 RedisKeys.stock(couponId),
                                 RedisKeys.dropFence(couponId, shards, 0)),
-                        List.of(Long.toString(fence)))
+                        List.of(Long.toString(fence), delete ? "1" : "0",
+                                Long.toString(FENCE_TTL.toMillis())))
                 .next()
-                .map(dropped -> dropped != null && dropped == 1L)
-                .defaultIfEmpty(false)
+                .defaultIfEmpty(0L);
+    }
+
+    private Mono<Boolean> dropOne(String couponId, long fence) {
+        return runDrop(couponId, fence, true)
+                .map(dropped -> dropped == 1L)
                 .onErrorResume(e -> {
                     // **다음 틱에 다시 온다.** 여기서 터뜨리면 안 지워진 것
                     // 하나가 그 틱의 배분을 통째로 세운다 (7.3.4).

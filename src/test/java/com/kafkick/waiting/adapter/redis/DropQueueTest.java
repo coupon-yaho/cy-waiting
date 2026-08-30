@@ -68,7 +68,7 @@ class DropQueueTest extends RedisContainerSupport {
         줄을_세운다();
         redis.opsForValue().set(RedisKeys.stock(COUPON), "0").block(WAIT);
 
-        assertThat(port.dropSoldOutQueues(List.of(COUPON), 100).block(WAIT)).containsExactly(COUPON);
+        assertThat(port.dropSoldOutQueues(List.of(COUPON), FENCE).block(WAIT)).containsExactly(COUPON);
 
         assertThat(있나(RedisKeys.queue(COUPON, 1, 0))).as("줄").isFalse();
         assertThat(있나(RedisKeys.alive(COUPON, 1, 0))).as("생존 신호").isFalse();
@@ -85,7 +85,7 @@ class DropQueueTest extends RedisContainerSupport {
         줄을_세운다();
         redis.opsForValue().set(RedisKeys.stock(COUPON), "0").block(WAIT);
 
-        port.dropSoldOutQueues(List.of(COUPON), 100).block(WAIT);
+        port.dropSoldOutQueues(List.of(COUPON), FENCE).block(WAIT);
 
         assertThat(있나(RedisKeys.admitted(COUPON, 1, 0))).as("입장 임계").isTrue();
         assertThat(있나(RedisKeys.grace(COUPON, 1, 0))).as("유예 기록").isTrue();
@@ -109,7 +109,7 @@ class DropQueueTest extends RedisContainerSupport {
         // 판이 시작될 때는 매진이었고, 지우기 직전에 재고가 돌아왔다.
         redis.opsForValue().set(RedisKeys.stock(COUPON), "5").block(WAIT);
 
-        assertThat(port.dropSoldOutQueues(List.of(COUPON), 100).block(WAIT))
+        assertThat(port.dropSoldOutQueues(List.of(COUPON), FENCE).block(WAIT))
                 .as("지운 것만 돌려준다").isEmpty();
 
         assertThat(있나(RedisKeys.queue(COUPON, 1, 0))).as("줄이 살아 있다").isTrue();
@@ -126,7 +126,7 @@ class DropQueueTest extends RedisContainerSupport {
         줄을_세운다();
         // 재고 키가 없다.
 
-        assertThat(port.dropSoldOutQueues(List.of(COUPON), 100).block(WAIT)).isEmpty();
+        assertThat(port.dropSoldOutQueues(List.of(COUPON), FENCE).block(WAIT)).isEmpty();
 
         assertThat(있나(RedisKeys.queue(COUPON, 1, 0))).as("줄이 살아 있다").isTrue();
     }
@@ -201,7 +201,7 @@ class DropQueueTest extends RedisContainerSupport {
         List<String> keys = List.of(RedisKeys.queue(COUPON, 1, 0),
                 RedisKeys.alive(COUPON, 1, 0), RedisKeys.stock(COUPON),
                 RedisKeys.dropFence(COUPON, 1, 0));
-        List<String> args = List.of(Long.toString(FENCE));
+        List<String> args = List.of(Long.toString(FENCE), "1", "60000");
 
         // 재고 키가 없다 — 못 읽은 것이라 안 지운다.
         assertThat(redis.execute(script, keys, args).blockFirst(WAIT))
@@ -251,9 +251,78 @@ class DropQueueTest extends RedisContainerSupport {
         줄을_세운다();
 
         // 리스가 끝난 줄 모르는 옛 리더가 뒤늦게 같은 명령을 낸다.
-        assertThat(port.dropSoldOutQueues(List.of(COUPON), 100).block(WAIT))
+        assertThat(port.dropSoldOutQueues(List.of(COUPON), FENCE).block(WAIT))
                 .as("옛 판의 명령은 안 듣는다").isEmpty();
         assertThat(있나(RedisKeys.queue(COUPON, 1, 0))).as("줄이 살아 있다").isTrue();
+    }
+
+    /**
+     * <b>한 번도 안 지운 줄도 막는다</b> (CY-766).
+     *
+     * <p>표를 지웠을 때만 세우면 아직 안 지운 줄에는 표가 없고, 그건 울타리가
+     * 지키려던 바로 그 경우다 — 얼었다 깨어난 옛 리더가 새 리더가 아직 지울
+     * 생각이 없는 줄을 지운다. 후보로 올리는 순간 표를 세워야 걸린다.
+     */
+    @Test
+    @DisplayName("새_리더가_세운_표가_옛_판을_막는다")
+    void 새_리더가_세운_표가_옛_판을_막는다() {
+        줄을_세운다();
+        redis.opsForValue().set(RedisKeys.stock(COUPON), "0").block(WAIT);
+
+        // 새 리더가 유예를 세기 시작했다 — 아직 안 지웠고 표만 세웠다.
+        port.claimSoldOutQueues(List.of(COUPON), 200).block(WAIT);
+        assertThat(있나(RedisKeys.queue(COUPON, 1, 0))).as("표만 세운다").isTrue();
+
+        // 얼었다 깨어난 옛 리더가 자기 유예를 다 세고 지우러 온다.
+        assertThat(port.dropSoldOutQueues(List.of(COUPON), FENCE).block(WAIT))
+                .as("옛 판은 못 지운다").isEmpty();
+        assertThat(있나(RedisKeys.queue(COUPON, 1, 0))).as("줄이 살아 있다").isTrue();
+
+        // 새 리더가 유예를 다 세면 지운다.
+        assertThat(port.dropSoldOutQueues(List.of(COUPON), 200).block(WAIT))
+                .containsExactly(COUPON);
+    }
+
+    /**
+     * <b>판 번호 0 은 리더가 아니라는 뜻이다.</b> 강등된 노드가 그 값을 들고
+     * 나오므로 지우지도, 표를 세우지도 않는다.
+     */
+    @Test
+    @DisplayName("판_번호가_0이면_안_지운다")
+    void 판_번호가_0이면_안_지운다() {
+        줄을_세운다();
+        redis.opsForValue().set(RedisKeys.stock(COUPON), "0").block(WAIT);
+
+        assertThat(port.dropSoldOutQueues(List.of(COUPON), 0).block(WAIT)).isEmpty();
+
+        assertThat(있나(RedisKeys.queue(COUPON, 1, 0))).as("줄이 살아 있다").isTrue();
+        assertThat(있나(RedisKeys.dropFence(COUPON, 1, 0))).as("표도 안 세운다").isFalse();
+    }
+
+    /** 큰 판 번호도 자리 수 그대로 남는다. 지수 표기로 굳으면 비교가 흔들린다. */
+    @Test
+    @DisplayName("큰_판_번호도_그대로_남는다")
+    void 큰_판_번호도_그대로_남는다() {
+        줄을_세운다();
+        redis.opsForValue().set(RedisKeys.stock(COUPON), "0").block(WAIT);
+
+        port.claimSoldOutQueues(List.of(COUPON), 1_756_500_123_456_789L).block(WAIT);
+
+        assertThat(redis.opsForValue().get(RedisKeys.dropFence(COUPON, 1, 0)).block(WAIT))
+                .isEqualTo("1756500123456789");
+    }
+
+    /** 표에는 수명이 있다. 없으면 쿠폰이 끝난 뒤에도 남아 새 리더를 막는다. */
+    @Test
+    @DisplayName("표에는_수명이_있다")
+    void 표에는_수명이_있다() {
+        줄을_세운다();
+        redis.opsForValue().set(RedisKeys.stock(COUPON), "0").block(WAIT);
+
+        port.claimSoldOutQueues(List.of(COUPON), 200).block(WAIT);
+
+        assertThat(redis.getExpire(RedisKeys.dropFence(COUPON, 1, 0)).block(WAIT))
+                .as("주인도 만료도 없는 키를 안 남긴다").isPositive();
     }
 
     /** 같은 리더가 다시 내는 것은 막지 않는다. 막으면 재시도가 영영 안 된다. */

@@ -138,19 +138,24 @@ class LeaderElectionTest extends RedisContainerSupport {
     }
 
     /**
-     * <b>옛 형식의 값도 알아본다.</b> 롤아웃 구간에 옛 노드가 남긴 락은 판
-     * 번호가 없다. 못 읽으면 그 락을 남의 것으로 보고 리더가 둘이 된다.
+     * <b>옛 형식의 값도 알아보고, 번호를 그 자리에서 매긴다.</b>
+     *
+     * <p>롤아웃 구간에 옛 노드가 남긴 락은 판 번호가 없다. 못 읽으면 그 락을
+     * 남의 것으로 보고 리더가 둘이 된다. 그렇다고 0 을 그대로 쓰면 울타리가
+     * 전부 거절해 그 노드의 매진 큐 정리가 무기한 죽는다 — 연장은 번호를 안
+     * 바꾸므로 리스가 끊길 때까지 스스로 못 빠져나온다.
      */
     @Test
-    @DisplayName("판_번호_없는_옛_락도_연장한다")
-    void 판_번호_없는_옛_락도_연장한다() {
+    @DisplayName("판_번호_없는_옛_락은_번호를_받는다")
+    void 판_번호_없는_옛_락은_번호를_받는다() {
         redis.opsForValue().set(LEADER, "node-1").block(WAIT);
 
         List<Object> r = tryAcquire("node-1");
 
         assertThat(acquired(r)).as("내 락으로 알아본다").isTrue();
         assertThat(owner(r)).isEqualTo("node-1");
-        assertThat(fence(r)).as("옛 락에는 번호가 없다").isZero();
+        assertThat(fence(r)).as("0 으로 두면 정리가 무기한 죽는다").isPositive();
+        assertThat(storedOwner()).as("주인은 그대로다").isEqualTo("node-1");
     }
 
     /** 옛 형식의 자기 락도 해제한다. 못 알아보면 안 지우고 나간다. */

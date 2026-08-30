@@ -5,6 +5,8 @@
 -- KEYS[3]  stock:{cid}
 -- KEYS[4]  dropfence:{cid}
 -- ARGV[1]  판 번호. 리더가 리스를 새로 잡을 때 받은 값
+-- ARGV[2]  1 이면 지운다, 0 이면 표만 세운다
+-- ARGV[3]  표의 수명(밀리초)
 --
 -- 반환  1 이면 지웠다, 0 이면 안 지웠다
 --
@@ -42,6 +44,17 @@ if seen ~= nil and seen == seen and fence < seen then
     return 0
 end
 
+-- **표를 먼저 세운다.** 지웠을 때만 세우면 한 번도 안 지운 줄에는 표가 없고,
+-- 그건 울타리가 지키려던 바로 그 경우다 — 얼었다 깨어난 옛 리더가 새 리더가
+-- 아직 지울 생각이 없는 줄을 지운다. 후보로 올리는 순간 세워야 걸린다.
+--
+-- **수명을 준다.** 안 주면 쿠폰이 활성에서 빠진 뒤에도 남아, 시계가 뒤로 간
+-- 리더는 스큐가 걷혀도 안 풀리고 자기 시각이 옛 표를 넘어야 풀린다.
+redis.call('SET', KEYS[4], string.format('%.0f', fence), 'PX', tonumber(ARGV[3]))
+if ARGV[2] ~= '1' then
+    return 0
+end
+
 local raw = redis.call('GET', KEYS[3])
 -- **못 읽으면 안 지운다.** 못 읽은 것은 매진이 아니다 (CY-702). 여기서 지우면
 -- 재고 키를 잃은 쿠폰의 줄이 통째로 사라지고 되살릴 방법이 없다.
@@ -70,8 +83,5 @@ if stock > 0 then
     return 0
 end
 
--- **표를 먼저 남긴다.** 지우고 나서 남기면 그 사이에 죽었을 때 옛 리더가
--- 같은 줄을 다시 지울 수 있다. 표만 남고 안 지워지는 쪽이 안전하다.
-redis.call('SET', KEYS[4], fence)
 redis.call('DEL', KEYS[1], KEYS[2])
 return 1

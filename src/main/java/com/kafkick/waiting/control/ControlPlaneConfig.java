@@ -88,6 +88,9 @@ public class ControlPlaneConfig {
                 // 번호로 나가고, 그건 울타리를 우회하는 일이다. 리더가 아니면
                 // 0 이 나가고 스크립트가 전부 거절한다 — 안전한 방향이다.
                 ids -> port.dropSoldOutQueues(ids, leadership.fence()),
+                // 세기 시작한 줄에 표만 세운다. 지웠을 때만 세우면 한 번도 안
+                // 지운 줄에 표가 없어, 얼었다 깨어난 옛 리더를 못 막는다.
+                ids -> port.claimSoldOutQueues(ids, leadership.fence()),
                 sweeper,
                 // 이 노드도 게이트웨이다. 자기가 든 재료의 나이가 노드들의
                 // 폴링 상태에 가장 가까운 신호다.

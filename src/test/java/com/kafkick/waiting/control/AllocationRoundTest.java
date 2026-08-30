@@ -102,7 +102,7 @@ class AllocationRoundTest {
                 cleanup, ids -> {
                     지운_것.addAll(ids);
                     return Mono.just(ids);
-                }, 안_걷는_스위퍼(), () -> false);
+                }, ids -> Mono.empty(), 안_걷는_스위퍼(), () -> false);
 
         for (int i = 0; i < 5; i++) {
             round.run().onErrorResume(e -> Mono.empty()).block();
@@ -142,7 +142,7 @@ class AllocationRoundTest {
                 cleanup, ids -> {
                     지운_것.addAll(ids);
                     return Mono.just(ids);
-                }, 안_걷는_스위퍼(), () -> false);
+                }, ids -> Mono.empty(), 안_걷는_스위퍼(), () -> false);
 
         for (int i = 0; i < 5; i++) {
             round.run().onErrorResume(e -> Mono.empty()).block();
@@ -172,7 +172,8 @@ class AllocationRoundTest {
                 () -> Mono.just(CreditSmoother.of(1.0)),
                 SnapshotCodec.create(), () -> 0L, Optional::empty,
                 // 하나도 못 지웠다고 답한다.
-                cleanup, ids -> Mono.just(List.of()), 안_걷는_스위퍼(), () -> false);
+                cleanup, ids -> Mono.just(List.of()), ids -> Mono.empty(),
+                안_걷는_스위퍼(), () -> false);
 
         for (int i = 0; i < 5; i++) {
             round.run().block();
@@ -206,6 +207,7 @@ class AllocationRoundTest {
                 SnapshotCodec.create(), () -> 0L, Optional::empty,
                 SoldOutCleanup.of(1, new SimpleMeterRegistry()),
                 ids -> Mono.just(List.of()),
+                ids -> Mono.empty(),
                 QueueSweeper.of(
                         SweepGate.of(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
                         (ids, limit) -> {
@@ -909,6 +911,7 @@ class AllocationRoundTest {
                     지운_쿠폰.addAll(ids);
                     return Mono.just(List.copyOf(ids));
                 },
+                ids -> Mono.empty(),
                 안_걷는_스위퍼(), () -> false);
     }
 

@@ -68,6 +68,18 @@ local owner, fence = ownerOf(current)
 if owner == ARGV[1] then
     -- 내 락이다. 연장한다 — 새로 잡으려 하면 그 틈에 남이 가져간다.
     -- **판 번호는 그대로 둔다.** 매 틱 새로 매기면 자기 자신을 옛 리더로 만든다.
+    --
+    -- **번호가 없으면 그때는 매긴다.** 롤아웃 구간에 옛 형식으로 잡아 둔 락을
+    -- 물려받으면 번호가 0 인데, 0 은 울타리가 전부 거절하는 값이라 그 노드의
+    -- 매진 큐 정리가 리스가 끊길 때까지 무기한 죽는다. 연장이 번호를 안
+    -- 바꾸므로 스스로 못 빠져나온다.
+    if fence <= 0 then
+        local t = redis.call('TIME')
+        fence = tonumber(t[1]) * 1000000 + tonumber(t[2])
+        redis.call('SET', KEYS[1], string.format('%.0f', fence) .. '|' .. ARGV[1],
+                'PX', lease)
+        return {1, ARGV[1], lease, fence}
+    end
     redis.call('PEXPIRE', KEYS[1], lease)
     return {1, ARGV[1], lease, fence}
 end

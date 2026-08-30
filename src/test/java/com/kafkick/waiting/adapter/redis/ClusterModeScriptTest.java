@@ -162,7 +162,7 @@ class ClusterModeScriptTest {
             case "queue_status.lua" -> List.of("m1", "30", "1000");
             case "sweep.lua" -> List.of("10", "1000", "300", "50", "0");
             case "allocation_apply.lua" -> List.of("1");
-            case "drop_queue.lua" -> List.of("1");
+            case "drop_queue.lua" -> List.of("1", "1", "60000");
             // 인자가 없다. 기준 시각을 밖에서 주면 이 스크립트를 둔 이유가 사라진다.
             case "capacity_read.lua", "snapshot_read.lua", "active_read.lua" -> List.of();
             case "snapshot_publish.lua" -> List.of("#credit", "0");

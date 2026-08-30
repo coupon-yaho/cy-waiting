@@ -703,6 +703,25 @@ class LeadershipTest {
         assertThat(leadership.fence()).as("강등되면 번호를 안 내준다").isZero();
     }
 
+    /**
+     * <b>리스가 지나면 판 번호를 안 내준다</b> (CY-766).
+     *
+     * <p>울타리가 막으려던 주 시나리오다 — 갱신 루프가 멎거나 STW 로 리스가
+     * 지났는데 아직 강등 신호를 못 받은 노드. 그때 옛 번호를 그대로 내주면
+     * 그 노드가 새 리더의 줄을 지운다.
+     */
+    @Test
+    @DisplayName("리스가_지나면_판_번호를_안_내준다")
+    void 리스가_지나면_판_번호를_안_내준다() {
+        Leadership leadership = 리더가_된다(Mono::never);
+        assertThat(leadership.fence()).as("전제 — 잡았을 때는 번호가 있다").isPositive();
+
+        시간을_흘린다(LEASE.plusSeconds(1));
+
+        assertThat(leadership.isLeader()).isFalse();
+        assertThat(leadership.fence()).as("확인 없이 늙은 번호는 안 내준다").isZero();
+    }
+
     /** 잡기 전에는 번호가 없다. 0 이면 울타리가 전부 거절한다 — 안전한 쪽이다. */
     @Test
     @DisplayName("잡기_전에는_판_번호가_0이다")

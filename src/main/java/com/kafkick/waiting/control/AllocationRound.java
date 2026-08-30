@@ -57,6 +57,9 @@ public final class AllocationRound {
     /** 지울 쿠폰들을 넘긴다. 지운 키 수를 돌려준다. */
     private final Function<List<String>, Mono<List<String>>> dropQueues;
 
+    /** 세기 시작한 줄에 울타리 표만 세운다 (CY-766). */
+    private final Function<List<String>, Mono<Void>> claimQueues;
+
     private final BooleanSupplier stillLeader;
     private final Supplier<Mono<TimedDemands>> demands;
     private final LongSupplier globalCredit;
@@ -137,11 +140,13 @@ public final class AllocationRound {
             Supplier<Mono<CreditSmoother>> restore, SnapshotCodec codec,
             LongSupplier creditFloor, Supplier<Optional<Tunables>> tunables,
             SoldOutCleanup cleanup, Function<List<String>, Mono<List<String>>> dropQueues,
+            Function<List<String>, Mono<Void>> claimQueues,
             QueueSweeper sweeper, BooleanSupplier dataStale) {
         this.sweeper = Objects.requireNonNull(sweeper, "sweeper 는 필수다");
         this.dataStale = Objects.requireNonNull(dataStale, "dataStale 은 필수다");
         this.cleanup = Objects.requireNonNull(cleanup, "cleanup 은 필수다");
         this.dropQueues = Objects.requireNonNull(dropQueues, "dropQueues 는 필수다");
+        this.claimQueues = Objects.requireNonNull(claimQueues, "claimQueues 는 필수다");
         this.tunables = Objects.requireNonNull(tunables, "tunables 는 필수다");
         this.stillLeader = Objects.requireNonNull(stillLeader, "stillLeader 는 필수다");
         this.demands = Objects.requireNonNull(demands, "demands 는 필수다");
@@ -168,9 +173,11 @@ public final class AllocationRound {
             Supplier<Mono<CreditSmoother>> restore, SnapshotCodec codec,
             LongSupplier creditFloor, Supplier<Optional<Tunables>> tunables,
             SoldOutCleanup cleanup, Function<List<String>, Mono<List<String>>> dropQueues,
+            Function<List<String>, Mono<Void>> claimQueues,
             QueueSweeper sweeper, BooleanSupplier dataStale) {
         return new AllocationRound(stillLeader, demands, globalCredit, gatewayCount, apply, publish,
-                clock, restore, codec, creditFloor, tunables, cleanup, dropQueues, sweeper,
+                clock, restore, codec, creditFloor, tunables, cleanup, dropQueues, claimQueues,
+                sweeper,
                 dataStale);
     }
 
@@ -185,6 +192,7 @@ public final class AllocationRound {
                 clock, restore, codec, creditFloor, tunables,
                 SoldOutCleanup.of(Integer.MAX_VALUE, new SimpleMeterRegistry()),
                 ids -> Mono.just(List.of()),
+                ids -> Mono.empty(),
                 QueueSweeper.of(SweepGate.of(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
                         (ids, limit) -> Mono.just(QueueSweeper.SweepResult.NOTHING)),
                 () -> false);
@@ -316,7 +324,8 @@ public final class AllocationRound {
      */
     private Mono<Void> cleanUp(List<CouponDemand> collected, Map<String, Long> granted) {
         List<String> due = cleanup.due(couponsOf(collected, granted));
-        if (due.isEmpty()) {
+        List<String> claimed = cleanup.claimed();
+        if (due.isEmpty() && claimed.isEmpty()) {
             return Mono.empty();
         }
         // **쓰기 직전에 다시 묻는다.** 판 안에서 유일하게 되돌릴 수 없는
@@ -325,10 +334,18 @@ public final class AllocationRound {
         if (lostLeadership()) {
             return Mono.empty();
         }
+        // **세기 시작한 줄에 먼저 표를 세운다** (CY-766). 표는 지웠을 때만
+        // 생기므로 한 번도 안 지운 줄에는 표가 없고, 그건 울타리가 지키려던
+        // 바로 그 경우다 — 얼었다 깨어난 옛 리더가 새 리더가 아직 지울 생각이
+        // 없는 줄을 지운다.
+        Mono<Void> claim = claimQueues.apply(claimed);
+        if (due.isEmpty()) {
+            return claim;
+        }
         // **몇 개인지만 남긴다.** 목록을 통째로 찍으면 대량 매진에서 한 줄에
         // 쿠폰 ID 가 수백 개 들어간다 (LG-3). 어느 쿠폰인지는 지운 뒤에 남긴다.
         log.info("매진 큐 정리 — 쿠폰 {}개를 지운다", due.size());
-        return dropQueues.apply(due)
+        return claim.then(dropQueues.apply(due)
                 .doOnNext(dropped -> {
                     // **지운 것만 표시한다.** 요청한 것 전부를 표시하면 실패한
                     // 쿠폰이 다음 틱에 다시 안 오고, 지표는 지웠다고 말한다.
@@ -343,7 +360,7 @@ public final class AllocationRound {
                     log.warn("매진 큐 정리 실패 — 다음 틱에 다시 한다: {}", e.toString());
                     return Mono.just(List.<String>of());
                 })
-                .then();
+                .then());
     }
 
     /** 이탈자를 걷어 낸다 (7.4). 멈춰야 할 구간은 스위퍼가 안다. */

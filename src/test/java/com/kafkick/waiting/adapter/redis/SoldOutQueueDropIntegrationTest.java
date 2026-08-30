@@ -3,6 +3,8 @@ package com.kafkick.waiting.adapter.redis;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.kafkick.waiting.control.AllocationRound;
+import com.kafkick.waiting.control.ControlPlaneProperties;
+import com.kafkick.waiting.control.Leadership;
 import com.kafkick.waiting.control.QueueSweeper;
 import com.kafkick.waiting.control.SnapshotCodec;
 import com.kafkick.waiting.control.SoldOutCleanup;
@@ -33,7 +35,7 @@ import reactor.core.publisher.Mono;
  * 키가 없어지므로, 어느 한 곳이 끊기면 여기가 빨개진다.
  */
 @Tag("integration")
-@SpringBootTest
+@SpringBootTest(properties = "waiting.scheduler.enabled=true")
 class SoldOutQueueDropIntegrationTest extends RedisContainerSupport {
 
     private static final Duration WAIT = Duration.ofSeconds(5);
@@ -43,6 +45,16 @@ class SoldOutQueueDropIntegrationTest extends RedisContainerSupport {
 
     @Autowired
     private ReactiveStringRedisTemplate redis;
+
+    /**
+     * <b>실제로 배선된 판을 돌린다.</b> 손으로 조립하면 삭제를 스텁으로 되돌린
+     * 변경이 그대로 통과한다 — 이 티켓이 이은 바로 그 자리가 시험 밖에 남는다.
+     */
+    @Autowired
+    private AllocationRound wired;
+
+    @Autowired
+    private Leadership leadership;
 
     private AllocationRedisPort port;
 
@@ -82,6 +94,7 @@ class SoldOutQueueDropIntegrationTest extends RedisContainerSupport {
                 SnapshotCodec.create(), () -> 0L, Optional::empty,
                 SoldOutCleanup.of(1, new SimpleMeterRegistry()),
                 ids -> port.dropSoldOutQueues(ids, fence),
+                ids -> Mono.empty(),
                 QueueSweeper.of(
                         SweepGate.of(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
                         (ids, limit) -> Mono.just(QueueSweeper.SweepResult.NOTHING)),
@@ -89,10 +102,38 @@ class SoldOutQueueDropIntegrationTest extends RedisContainerSupport {
     }
 
     /**
+     * <b>G7.9 — 배선까지 포함해 잰다.</b>
+     *
+     * <p>실제 빈을 돌린다. 삭제를 스텁으로 되돌리면 여기가 빨개진다.
+     */
+    @Test
+    @DisplayName("배선된_판이_매진_줄을_지운다")
+    void 배선된_판이_매진_줄을_지운다() {
+        redis.opsForSet().add(RedisKeys.ACTIVE_COUPONS, SOLD_OUT).block(WAIT);
+        // **락을 비우고 잡는다.** 리더 시험들이 같은 키를 남기므로, 안 비우면
+        // 이 판이 리더가 못 되어 정리가 아예 안 돈다.
+        redis.delete(RedisKeys.LEADER).block(WAIT);
+        leadership.renew().block(WAIT);
+        assertThat(leadership.isLeader()).as("전제 — 이 노드가 리더다").isTrue();
+
+        // **설정한 유예만큼 돈다.** 설정을 시험에서 못 줄인다 — 속성 빈이
+        // 기본값을 박아 만든다. 유예 자체는 폴링 최대 간격에 묶여 있어
+        // 짧게 잡을 수도 없다.
+        int 유예 = ControlPlaneProperties.defaults().scheduler().soldOutGraceTicks();
+        for (int i = 0; i <= 유예; i++) {
+            wired.run().block(WAIT);
+        }
+
+        assertThat(줄이_있나(SOLD_OUT)).as("배선이 이어져야 사라진다").isFalse();
+        redis.opsForSet().remove(RedisKeys.ACTIVE_COUPONS, SOLD_OUT).block(WAIT);
+    }
+
+    /**
      * <b>G7.9.</b> 매진된 쿠폰의 줄이 유예를 넘기면 키가 없어진다.
      *
-     * <p>살아 있는 쿠폰을 나란히 둔다. 둘 다 지우는 구현도 매진 쪽만 보면
-     * 통과하므로, 안 지워야 하는 것이 남는지까지 봐야 판정이 된다.
+     * <p>살아 있는 쿠폰을 나란히 둔다. 다만 그 대조는 <b>스크립트의 재고
+     * 재확인이 먼저 막아 준다</b> — 판정 계층이 모든 쿠폰을 후보로 올려도
+     * 여기는 통과한다. 판정 자체는 {@code SoldOutCleanupTest} 가 잰다.
      */
     @Test
     @DisplayName("매진된_줄은_유예_뒤_레디스에서_사라진다")

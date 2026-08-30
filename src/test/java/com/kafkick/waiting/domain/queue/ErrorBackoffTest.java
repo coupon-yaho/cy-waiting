@@ -244,4 +244,28 @@ class ErrorBackoffTest {
         assertThat(정책.retryAfterSec(20, 바닥, () -> 0.0))
                 .isEqualTo(정책.retryAfterSec(6, 바닥, () -> 0.0));
     }
+
+    /**
+     * <b>큰 기본 간격에서도 안 넘친다.</b>
+     *
+     * <p>시프트로 키우면 기본 간격이 클 때 열여섯 번 미만에도 넘쳐 음수가 된다.
+     * 그러면 상한을 씌우기 전에 값이 이미 뒤집혀, 장애가 길어질수록 오히려
+     * 즉시 재시도를 부른다.
+     */
+    @Test
+    @DisplayName("큰_기본_간격에서도_안_넘친다")
+    void 큰_기본_간격에서도_안_넘친다() {
+        ErrorBackoff 큰_정책 = ErrorBackoff.of(Long.MAX_VALUE / 4, Long.MAX_VALUE / 2, 0.5);
+
+        // **양수인지만 보면 안 잡힌다.** 넘쳐서 음수가 되면 하한 1 로 잘려 1 초가
+        // 나가는데 그것도 양수다. 장애가 길어질수록 오히려 즉시 재시도를 부르는
+        // 것이 이 결함의 실제 모양이라, 단조성으로 잰다.
+        long 직전 = 0;
+        for (int streak = 1; streak <= 40; streak++) {
+            long 지금 = 큰_정책.retryAfterSec(streak, () -> 0.0);
+            assertThat(지금).as("%d 번째 계단이 뒤로 갔다".formatted(streak))
+                    .isGreaterThanOrEqualTo(직전);
+            직전 = 지금;
+        }
+    }
 }

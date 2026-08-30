@@ -6,9 +6,9 @@ import java.util.function.DoubleSupplier;
 /**
  * 오류 경로의 재시도 안내 (F7).
  *
- * <p>장애 중 503 을 받은 대기자는 <b>전원이 같은 초에 오류를 받는다.</b> 같은
- * 값을 주면 전원이 같은 초에 돌아오고, 그 파도가 회복을 2차 장애로 만든다.
+ * <p>장애 중 503 을 받은 대기자는 <b>전원이 같은 초에 오류를 받는다.</b>
  */
+// 같은 값을 주면 전원이 같은 초에 돌아오고, 그 파도가 회복을 2차 장애로 만든다.
 public final class ErrorBackoff {
 
     /**
@@ -119,7 +119,13 @@ public final class ErrorBackoff {
         // 하필 그 구간이 장애가 길어진 때라, F7 이 막으려던 파도가 거기서 그대로
         // 다시 생긴다. 정상 경로가 이미 같은 방식으로 푼 문제다.
         long ceiling = Math.round(maxSec / (1 + jitterRatio));
-        long grown = Math.min(baseSec << (streak - 1), ceiling);
+        // **시프트로 안 키운다.** 기본 간격이 크면 열여섯 번 미만에도 넘쳐
+        // 음수가 되고, 그러면 상한을 씌우기 전에 값이 이미 뒤집힌다. 천장에
+        // 닿으면 멈추는 곱셈이 넘칠 수 없다.
+        long grown = baseSec;
+        for (int i = 1; i < streak && grown < ceiling; i++) {
+            grown = grown > ceiling / 2 ? ceiling : grown * 2;
+        }
         // **바닥은 천장보다 세다.** 바닥은 폴링 예산이 정한 최소 간격이라, 그보다
         // 빨리 부르면 장애 구간에만 예산이 안 걸린다. 상한까지만 따른다.
         long base = Math.clamp(Math.max(grown, floorSec), 1, maxSec);

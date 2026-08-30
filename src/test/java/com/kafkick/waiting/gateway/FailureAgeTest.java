@@ -25,7 +25,10 @@ class FailureAgeTest {
     @Test
     @DisplayName("첫_실패는_첫_단계다")
     void 첫_실패는_첫_단계다() {
-        assertThat(new FailureAge().stepAt(시작, 단위)).isEqualTo(1);
+        FailureAge age = new FailureAge();
+        age.failed(시작);
+
+        assertThat(age.stepAt(시작, 단위)).isEqualTo(1);
     }
 
     /** 같은 순간에 만 건이 실패해도 단계는 안 오른다. 오르면 요청 수로 세는 셈이다. */
@@ -35,6 +38,7 @@ class FailureAgeTest {
         FailureAge age = new FailureAge();
 
         for (int i = 0; i < 10_000; i++) {
+            age.failed(시작);
             assertThat(age.stepAt(시작, 단위)).isEqualTo(1);
         }
     }
@@ -44,7 +48,7 @@ class FailureAgeTest {
     @DisplayName("이어진_시간만큼_단계가_오른다")
     void 이어진_시간만큼_단계가_오른다() {
         FailureAge age = new FailureAge();
-        age.stepAt(시작, 단위);
+        age.failed(시작);
 
         assertThat(age.stepAt(시작.plusSeconds(2), 단위)).isEqualTo(2);
         assertThat(age.stepAt(시작.plusSeconds(4), 단위)).isEqualTo(3);
@@ -57,8 +61,8 @@ class FailureAgeTest {
     @DisplayName("성공이_이어지면_처음으로_돌아간다")
     void 성공이_이어지면_처음으로_돌아간다() {
         FailureAge age = new FailureAge();
-        age.stepAt(시작, 단위);
-        age.stepAt(시작.plusSeconds(10), 단위);
+        age.failed(시작);
+        age.failed(시작.plusSeconds(10));
 
         age.cleared(시작.plusSeconds(10 + 해제_유예.toSeconds()), 해제_유예);
 
@@ -77,12 +81,12 @@ class FailureAgeTest {
     @DisplayName("성공_하나로는_안_지운다")
     void 성공_하나로는_안_지운다() {
         FailureAge age = new FailureAge();
-        age.stepAt(시작, 단위);
+        age.failed(시작);
 
         // 실패와 성공이 섞이는 구간을 그대로 만든다.
         for (int i = 1; i <= 10; i++) {
             age.cleared(시작.plusSeconds(i), 해제_유예);
-            age.stepAt(시작.plusSeconds(i), 단위);
+            age.failed(시작.plusSeconds(i));
         }
 
         assertThat(age.stepAt(시작.plusSeconds(10), 단위))
@@ -99,8 +103,49 @@ class FailureAgeTest {
     @DisplayName("시계가_뒤로_가도_첫_단계를_지킨다")
     void 시계가_뒤로_가도_첫_단계를_지킨다() {
         FailureAge age = new FailureAge();
-        age.stepAt(시작, 단위);
+        age.failed(시작);
 
         assertThat(age.stepAt(시작.minusSeconds(30), 단위)).isEqualTo(1);
+    }
+
+    /**
+     * <b>늦게 도착한 옛 표본이 마지막 실패를 뒤로 밀면 안 된다.</b>
+     *
+     * <p>동시에 들어온 실패들은 각자 다른 순간을 들고 온다. 늦게 처리된 옛
+     * 것이 새 것을 덮으면 해제 유예가 실제보다 일찍 차고, 그러면 장애가
+     * 이어지는데도 백오프가 풀린다.
+     */
+    @Test
+    @DisplayName("옛_실패가_마지막_실패를_안_민다")
+    void 옛_실패가_마지막_실패를_안_민다() {
+        FailureAge age = new FailureAge();
+        age.failed(시작);
+        age.failed(시작.plusSeconds(10));
+        age.failed(시작.plusSeconds(3));
+
+        // 마지막 실패는 10초 지점이므로, 그로부터 유예가 지나야 풀린다.
+        age.cleared(시작.plusSeconds(12), 해제_유예);
+        assertThat(age.stepAt(시작.plusSeconds(12), 단위)).as("아직 안 풀렸다")
+                .isGreaterThan(1);
+
+        age.cleared(시작.plusSeconds(16), 해제_유예);
+        assertThat(age.stepAt(시작.plusSeconds(16), 단위)).isEqualTo(1);
+    }
+
+    /**
+     * <b>읽는 것과 적는 것을 가른다.</b>
+     *
+     * <p>단계를 읽는 것만으로 실패가 시작되면, 조회는 성공했는데 응답을 쓰다
+     * 끊긴 경우까지 뒷단 장애로 기록된다. 클라이언트가 끊은 것이 뒷단 타이머를
+     * 오염시키면 그다음 진짜 장애의 단계가 이미 올라가 있다.
+     */
+    @Test
+    @DisplayName("읽기만_해서는_실패가_시작되지_않는다")
+    void 읽기만_해서는_실패가_시작되지_않는다() {
+        FailureAge age = new FailureAge();
+
+        assertThat(age.stepAt(시작, 단위)).isEqualTo(1);
+        assertThat(age.stepAt(시작.plusSeconds(60), 단위))
+                .as("한참 뒤에 읽어도 첫 단계다").isEqualTo(1);
     }
 }

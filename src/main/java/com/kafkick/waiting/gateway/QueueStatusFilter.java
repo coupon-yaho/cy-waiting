@@ -176,12 +176,15 @@ public final class QueueStatusFilter implements WebFilter {
                     (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random,
                             pollScale(holder.view())));
         }
+        // **조회의 성패만 뒷단 장애로 센다.** 아래 flatMap 은 응답을 쓰는데,
+        // 거기서 나는 오류는 클라이언트가 끊은 것이다. 그것까지 세면 남이 끊은
+        // 일이 뒷단 장애 타이머를 올려, 그다음 진짜 장애의 단계가 이미 높다.
         return queue.status(couponId, member.get(), clock.instant())
-                .flatMap(entry -> answer(exchange, couponId, member.get(), entry))
                 // **한 번으로는 안 푼다.** 샤드 하나가 죽으면 일부만 실패하는데,
                 // 성공마다 풀면 그 사이에 성공이 끼어 백오프가 영원히 안 걸린다.
-                // 마지막 실패로부터 유예가 지나야 푼다.
-                .doOnSuccess(ignored -> failing.cleared(clock.instant(), ErrorBackoff.quiet()))
+                .doOnNext(ignored -> failing.cleared(clock.instant(), ErrorBackoff.quiet()))
+                .doOnError(e -> failing.failed(clock.instant()))
+                .flatMap(entry -> answer(exchange, couponId, member.get(), entry))
                 // 조회가 실패해도 순번은 레디스에 남는다. 다시 물으면 된다.
                 .onErrorResume(e -> {
                     // **무엇이 실패했는지는 남긴다.** 라벨이 하나면 레디스가 끊긴

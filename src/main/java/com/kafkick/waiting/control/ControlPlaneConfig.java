@@ -75,10 +75,7 @@ public class ControlPlaneConfig {
             CircuitStateReader circuit) {
         SnapshotCodec codec = SnapshotCodec.create();
         return AllocationRound.of(leadership::isLeader, collector::collect,
-                // **서킷이 열리면 배분도 멈춘다** (CY-787). 판정만 조이면 절반이다 —
-                // 가용량에 하한이 있어 임계가 계속 올라가고, 임계를 넘은 사람은
-                // 큐에서 빠져 토큰을 받은 뒤 서킷에 막혀 503 을 받는다.
-                CircuitAwareCredit.of(capacity::lastKnown, circuit::now),
+                capacity::lastKnown,
                 registry::count, port::apply, port::publish, Instant::now,
                 () -> port.load().map(hash ->
                         CreditSmoother.restore(SMOOTHING_ALPHA, codec.smoothing(hash))),
@@ -100,7 +97,10 @@ public class ControlPlaneConfig {
                 sweeper,
                 // 이 노드도 게이트웨이다. 자기가 든 재료의 나이가 노드들의
                 // 폴링 상태에 가장 가까운 신호다.
-                holder::isDataStale);
+                holder::isDataStale,
+                // **판마다 한 번 읽는다.** 한 판에서 두 번 읽으면 그 사이에
+                // 상태가 뒤집혀 같은 판이 자기모순인 값 둘로 판단한다.
+                circuit::now);
     }
 
     /**

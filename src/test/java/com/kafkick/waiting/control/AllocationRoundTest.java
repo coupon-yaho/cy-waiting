@@ -103,7 +103,7 @@ class AllocationRoundTest {
                 cleanup, ids -> {
                     지운_것.addAll(ids);
                     return Mono.just(ids);
-                }, ids -> Mono.just(List.of()), 안_걷는_스위퍼(), () -> false);
+                }, ids -> Mono.just(List.of()), 안_걷는_스위퍼(), () -> false, () -> CircuitState.CLOSED);
 
         for (int i = 0; i < 5; i++) {
             round.run().onErrorResume(e -> Mono.empty()).block();
@@ -143,7 +143,7 @@ class AllocationRoundTest {
                 cleanup, ids -> {
                     지운_것.addAll(ids);
                     return Mono.just(ids);
-                }, ids -> Mono.just(List.of()), 안_걷는_스위퍼(), () -> false);
+                }, ids -> Mono.just(List.of()), 안_걷는_스위퍼(), () -> false, () -> CircuitState.CLOSED);
 
         for (int i = 0; i < 5; i++) {
             round.run().onErrorResume(e -> Mono.empty()).block();
@@ -174,7 +174,7 @@ class AllocationRoundTest {
                 SnapshotCodec.create(), () -> 0L, Optional::empty,
                 // 하나도 못 지웠다고 답한다.
                 cleanup, ids -> Mono.just(List.of()), ids -> Mono.just(List.of()),
-                안_걷는_스위퍼(), () -> false);
+                안_걷는_스위퍼(), () -> false, () -> CircuitState.CLOSED);
 
         for (int i = 0; i < 5; i++) {
             round.run().block();
@@ -214,7 +214,7 @@ class AllocationRoundTest {
                         (ids, limit) -> {
                             쓴_쿠폰.addAll(ids);
                             return Mono.just(QueueSweeper.SweepResult.NOTHING);
-                        }), () -> false);
+                        }), () -> false, () -> CircuitState.CLOSED);
 
         round.run().block();
 
@@ -866,8 +866,10 @@ class AllocationRoundTest {
 
         round.run().block();
 
-        assertThat(적용).as("표본이 나올 만큼은 나간다").isNotEmpty();
-        assertThat(발행된("c1").credit()).as("정상 크레딧보다 훨씬 작다").isLessThan(100);
+        // 노드가 하나이므로 노드당 한 건 = 전역 한 건이다. 값으로 못 박아야
+        // 소량이 조용히 커지는 것을 잡는다.
+        assertThat(적용).as("표본이 나올 만큼은 나간다").containsExactly("c1=1");
+        assertThat(발행된("c1").credit()).isEqualTo(1);
     }
 
     /** 초과 배분 지표는 게이트 전 값으로 잰다. 아니면 서킷이 열린 시간에 비례해 오른다. */
@@ -1003,7 +1005,7 @@ class AllocationRoundTest {
                     return Mono.just(List.copyOf(ids));
                 },
                 ids -> Mono.just(List.of()),
-                안_걷는_스위퍼(), () -> false);
+                안_걷는_스위퍼(), () -> false, () -> CircuitState.CLOSED);
     }
 
     /**

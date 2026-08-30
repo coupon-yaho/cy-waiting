@@ -57,33 +57,55 @@ jobs:
               rc=0
               mkdir -p build   # 첫 실행이면 아직 없다. tee 가 먼저 죽는다
               ./gradlew --no-daemon pitest 2>&1 | tee build/pitest.log || rc=$?
-              # **로그가 우리가 아는 그 로그인지 먼저 본다.** 문구가 바뀌면
-              # 아래 검사는 영영 조용히 통과한다 — 이 잡이 고치려던 병이다.
-              generated=$(grep -oE 'Generated [0-9]+ mutations' build/pitest.log \
-                            | grep -oE '[0-9]+' | tail -1)
-              if [ -z "$generated" ]; then
-                echo "::error::PIT 요약 줄이 없다 — 로그 형식이 바뀌었거나 로그가 비었다"
+              # **그레이들의 종료 코드를 잃지 않는다.** 여기서 그냥 exit 1 하면
+              # OOM 킬(137)이 1 로 뭉개져, 왜 빨간지 로그를 다 읽어야 안다.
+              die() {
+                echo "::error::$1"
+                if [ "$rc" -ne 0 ]; then exit "$rc"; fi
                 exit 1
+              }
+              # **파이프라인에 || true 를 붙인다.** pipefail 아래에서 grep 이
+              # 0건이면 대입 자체가 실패해 set -e 가 그 자리에서 셸을 죽인다.
+              # 그러면 아래 안내가 한 줄도 안 나온다 — 로그 형식이 바뀌었을 때
+              # 정확히 그 사실을 말해야 하는 자리인데 침묵하게 된다.
+              generated=$(grep -oE 'Generated [0-9]+ mutations' build/pitest.log \
+                            | grep -oE '[0-9]+' | tail -1 || true)
+              if [ -z "$generated" ]; then
+                die "PIT 요약 줄이 없다 — 로그 형식이 바뀌었거나 로그가 비었다"
               fi
               report=build/reports/pitest/mutations.xml
               if [ ! -f "$report" ]; then
-                echo "::error::뮤턴트 리포트가 없다 — 경로가 바뀌었는지 본다"
-                exit 1
+                die "뮤턴트 리포트가 없다 — 경로가 바뀌었는지 본다"
               fi
               # **여기가 유실을 잡는 자리다.** 미니언이 죽는 것 자체는 유실이
               # 아니다. PIT 는 시간을 넘긴 뮤턴트를 TIMED_OUT 으로 기록하고 그것을
               # 죽인 것으로 센다 — 실측으로 두 수가 정확히 맞았다. 정말로 잃는
-              # 경우는 판정이 안 붙은 채 끝나는 것이고, 그건 아래 둘이 잡는다.
+              # 경우는 판정이 안 붙은 채 끝나는 것이고, 그건 아래가 잡는다.
               counted=$(grep -c '<mutation ' "$report" || true)
               if [ "$generated" != "$counted" ]; then
-                echo "::error::뮤턴트 ${generated}개를 만들었는데 ${counted}개만 기록됐다"
-                exit 1
+                die "뮤턴트 ${generated}개를 만들었는데 ${counted}개만 기록됐다"
               fi
-              unresolved=$(grep -coE \
-                "status='(RUN_ERROR|MEMORY_ERROR|NOT_STARTED|STARTED)'" "$report" || true)
+              # **상태를 읽었는지부터 확인한다.** 따옴표나 속성 이름이 바뀌면
+              # 아래 검사가 0건을 내는데, 그 0 은 "판정이 다 붙었다" 가 아니라
+              # "아무것도 못 읽었다" 다. 둘을 구분 못 하면 이 검사가 조용히
+              # 사라진다 — 이 잡이 없애려던 병의 다른 얼굴이다.
+              #
+              # grep -c 에 -o 를 같이 주지 않는다. GNU 는 줄을, 다른 구현은
+              # 매치를 세어 같은 명령이 러너와 로컬에서 다른 값을 낸다.
+              parsed=$(grep -oE "status='[A-Z_]+'" "$report" | wc -l | tr -d ' ' || true)
+              if [ "$parsed" != "$counted" ]; then
+                die "status 속성을 못 읽었다 — 리포트 형식이 바뀌었다"
+              fi
+              unresolved=$(grep -oE \
+                "status='(RUN_ERROR|MEMORY_ERROR|NOT_STARTED|STARTED)'" "$report" \
+                | wc -l | tr -d ' ' || true)
+              # **못 셌으면 실패한다.** 빈 값으로 두면 [ "" -gt 0 ] 이 오류를
+              # 내면서도 거짓으로 떨어져 가드가 통과한다. 방향이 반대다.
+              case "$unresolved" in
+                ''|*[!0-9]*) die "판정 상태를 셀 수 없었다 — 리포트를 못 읽었다" ;;
+              esac
               if [ "$unresolved" -gt 0 ]; then
-                echo "::error::판정이 안 붙은 뮤턴트가 ${unresolved}개다 — 비율이 근거를 잃었다"
-                exit 1
+                die "판정이 안 붙은 뮤턴트가 ${unresolved}개다 — 비율이 근거를 잃었다"
               fi
               [ "$rc" -eq 0 ] || exit "$rc"
               ;;

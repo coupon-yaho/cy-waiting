@@ -68,7 +68,7 @@ if not targets:
     sys.exit(1)
 
 
-def walk(node, out, in_steps=False, in_jobs=False):
+def walk(node, out, in_steps=False, job_depth=0):
     """스텝과 잡의 `uses` 를 모은다. 위치를 알아야 그 줄에서 주석을 읽을 수 있다.
 
     **이름이 `uses` 인 것을 다 모으면 안 된다.** composite action 의 `inputs`
@@ -81,18 +81,22 @@ def walk(node, out, in_steps=False, in_jobs=False):
     if isinstance(node, yaml.MappingNode):
         for key, value in node.value:
             name = getattr(key, 'value', None)
-            if (in_steps or in_jobs) and name == 'uses' \
+            if (in_steps or job_depth == 1) and name == 'uses' \
                     and isinstance(value, yaml.ScalarNode):
                 out.append((value.start_mark.line, value.value))
             # `steps` 아래의 항목만 스텝이다. `inputs`·`outputs` 로 내려가면 끈다.
+            #
+            # **잡은 거부목록으로 안 가른다.** 잡 참조는 `jobs.<id>.uses` 딱 한
+            # 겹이라 깊이로 표현된다. 거부목록으로 두면 `outputs` 나
+            # `strategy.matrix` 아래의 `uses` 라는 이름을 액션으로 잘못 읽고,
+            # 그건 MUST 게이트의 오탐이라 우회를 부른다.
             walk(value, out,
                  name == 'steps' or (in_steps and name not in
                                      ('inputs', 'outputs', 'env', 'with')),
-                 name == 'jobs' or (in_jobs and name not in
-                                    ('steps', 'with', 'env', 'secrets')))
+                 2 if name == 'jobs' else max(job_depth - 1, 0))
     elif isinstance(node, yaml.SequenceNode):
         for child in node.value:
-            walk(child, out, in_steps, in_jobs)
+            walk(child, out, in_steps, job_depth)
 
 
 found = []

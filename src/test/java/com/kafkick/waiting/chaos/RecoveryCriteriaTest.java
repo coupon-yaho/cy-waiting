@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -36,6 +37,19 @@ class RecoveryCriteriaTest {
     @DisplayName("미달은_위반이_아니다")
     void 미달은_위반이_아니다() {
         assertThat(RecoveryCriteria.overIssued(40, 100)).isEmpty();
+    }
+
+    /**
+     * <b>음수 발급 수는 통과가 아니다.</b>
+     *
+     * <p>발급 수가 음수라는 것은 세다가 깨졌다는 뜻이다. 재고보다 작으니
+     * 통과시키면, 못 잰 판이 초과 발급 0 으로 기록된다.
+     */
+    @Test
+    @DisplayName("음수_발급은_못_잰_것이다")
+    void 음수_발급은_못_잰_것이다() {
+        assertThat(RecoveryCriteria.overIssued(-1, 100))
+                .hasValueSatisfying(v -> assertThat(v).contains("RC1"));
     }
 
     /**
@@ -77,6 +91,14 @@ class RecoveryCriteriaTest {
                 .hasValueSatisfying(v -> assertThat(v).contains("RC3"));
     }
 
+    /** 음수 경과는 측정이 깨진 것이다. 한계보다 작다고 통과하면 안 된다. */
+    @Test
+    @DisplayName("음수_복귀_시간은_못_잰_것이다")
+    void 음수_복귀_시간은_못_잰_것이다() {
+        assertThat(RecoveryCriteria.slowVerdictReturn(Duration.ofSeconds(-1), 회복_한계))
+                .hasValueSatisfying(v -> assertThat(v).contains("RC3"));
+    }
+
     /**
      * RC4 — <b>가장 중요하다.</b> 나머지가 다 통과해도 이것이 깨지면 회복이 곧
      * 2차 장애다.
@@ -101,7 +123,16 @@ class RecoveryCriteriaTest {
         assertThat(RecoveryCriteria.recoveryBurst(0, 50))
                 .hasValueSatisfying(v -> assertThat(v).contains("RC4"));
         assertThat(RecoveryCriteria.recoveryBurst(-100, 50))
-                .as("음수는 관측이 아니다")
+                .as("음수 정상값은 관측이 아니다")
+                .hasValueSatisfying(v -> assertThat(v).contains("RC4"));
+        assertThat(RecoveryCriteria.recoveryBurst(100, -50))
+                .as("음수 봉우리도 관측이 아니다")
+                .hasValueSatisfying(v -> assertThat(v).contains("RC4"));
+        assertThat(RecoveryCriteria.recoveryBurst(Double.POSITIVE_INFINITY, 50))
+                .as("무한대 정상값이면 어떤 봉우리도 작아 보인다")
+                .hasValueSatisfying(v -> assertThat(v).contains("RC4"));
+        assertThat(RecoveryCriteria.recoveryBurst(100, Double.NaN))
+                .as("셀 수 없는 값은 비교가 성립하지 않는다")
                 .hasValueSatisfying(v -> assertThat(v).contains("RC4"));
     }
 
@@ -109,18 +140,39 @@ class RecoveryCriteriaTest {
     @Test
     @DisplayName("자리를_잃은_것을_잡는다")
     void 자리를_잃은_것을_잡는다() {
-        assertThat(RecoveryCriteria.seatLost(List.of(10.0, 10.0), List.of(10.0, 10.0)))
-                .isEmpty();
-        assertThat(RecoveryCriteria.seatLost(List.of(10.0, 10.0), List.of(10.0, 99.0)))
-                .hasValueSatisfying(v -> assertThat(v).contains("RC5"));
+        assertThat(RecoveryCriteria.seatLost(Map.of("a", 10.0), Map.of("a", 10.0))).isEmpty();
+        assertThat(RecoveryCriteria.seatLost(Map.of("a", 10.0), Map.of("a", 99.0)))
+                .hasValueSatisfying(v -> assertThat(v).contains("RC5").contains("a"));
     }
 
-    /** 사람이 사라진 것도 자리를 잃은 것이다. 수가 줄면 누군가 걷혔다. */
+    /** 사람이 사라진 것도 자리를 잃은 것이다. 걷힌 사람은 새 순번으로 다시 선다. */
     @Test
     @DisplayName("줄에서_사라진_것도_잡는다")
     void 줄에서_사라진_것도_잡는다() {
-        assertThat(RecoveryCriteria.seatLost(List.of(10.0, 20.0), List.of(10.0)))
-                .hasValueSatisfying(v -> assertThat(v).contains("RC5"));
+        assertThat(RecoveryCriteria.seatLost(Map.of("a", 10.0, "b", 20.0), Map.of("a", 10.0)))
+                .hasValueSatisfying(v -> assertThat(v).contains("RC5").contains("b"));
+    }
+
+    /**
+     * <b>score 만 비교하면 안 된다.</b>
+     *
+     * <p>같은 score 를 가진 사람이 여럿이면 값의 목록은 같은데 주인이 바뀔 수
+     * 있다. 사람이 바뀌었는데 목록이 같으면 자리를 잃은 것을 못 본다.
+     */
+    @Test
+    @DisplayName("같은_score_라도_주인이_바뀌면_잡는다")
+    void 같은_score_라도_주인이_바뀌면_잡는다() {
+        assertThat(RecoveryCriteria.seatLost(
+                Map.of("a", 10.0, "b", 10.0), Map.of("a", 10.0, "c", 10.0)))
+                .hasValueSatisfying(v -> assertThat(v).contains("RC5").contains("b"));
+    }
+
+    /** 새 사람이 끼어드는 것은 기존 사람의 자리와 무관하다. 거짓 위반을 만들면 안 된다. */
+    @Test
+    @DisplayName("새_사람이_늘어난_것은_위반이_아니다")
+    void 새_사람이_늘어난_것은_위반이_아니다() {
+        assertThat(RecoveryCriteria.seatLost(
+                Map.of("a", 10.0), Map.of("a", 10.0, "b", 20.0))).isEmpty();
     }
 
     /** RC6 — 지표가 장애 이전 값으로 돌아와야 한다. */

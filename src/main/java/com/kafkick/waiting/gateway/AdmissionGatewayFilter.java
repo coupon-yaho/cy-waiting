@@ -91,7 +91,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     static final long MAX_ETA_SEC = 600;
 
     /** 재시도 안내의 흔들림 폭. 폴링 간격과 같은 정책을 쓴다. */
-    private static final PollIntervalPolicy POLL = PollIntervalPolicy.of(0.2);
+    private static final PollIntervalPolicy POLL = PollIntervalPolicy.of(PollIntervalPolicy.NORMAL_JITTER_RATIO);
 
     private static final String MEMBER_ID = "X-Member-Id";
 

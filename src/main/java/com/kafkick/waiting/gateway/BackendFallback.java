@@ -26,7 +26,7 @@ public final class BackendFallback {
     private static final String METRIC = "waiting.backend.fallback";
 
     /** 재시도를 흩는 폭. 판정 경로와 같은 값이라야 두 안내가 안 갈린다. */
-    private static final PollIntervalPolicy POLL = PollIntervalPolicy.of(0.2);
+    private static final PollIntervalPolicy POLL = PollIntervalPolicy.of(PollIntervalPolicy.NORMAL_JITTER_RATIO);
 
     /**
      * <b>줄에 선 사람에게 자리가 그대로라고 말한다.</b> 안 그러면 다시 줄을

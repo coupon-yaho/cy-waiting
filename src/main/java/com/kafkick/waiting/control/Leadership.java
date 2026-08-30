@@ -43,10 +43,10 @@ public final class Leadership {
      *
      * @param confirmedAt 확인된 시각. 응답이 아니라 <b>물으러 간</b> 시각이다
      */
-    private record Standing(State state, long confirmedAt, long leaderSince) {
+    private record Standing(State state, long confirmedAt, long leaderSince, long fence) {
 
         Standing closed() {
-            return new Standing(State.CLOSED, confirmedAt, leaderSince);
+            return new Standing(State.CLOSED, confirmedAt, leaderSince, fence);
         }
     }
 
@@ -63,7 +63,7 @@ public final class Leadership {
     private final LongSupplier ticker;
 
     private final AtomicReference<Standing> standing =
-            new AtomicReference<>(new Standing(State.FOLLOWER, 0, 0));
+            new AtomicReference<>(new Standing(State.FOLLOWER, 0, 0, 0));
     /**
      * 억제 구간. {@code null} 이면 지금은 실패 중이 아니다.
      *
@@ -137,6 +137,16 @@ public final class Leadership {
      * STW, 루프 정지 — 는 저마다 다른 모양이라 하나씩 막을 수 없다. 나이로 재면
      * 전부 한 자리에서 접힌다.
      */
+    /**
+     * 내 판 번호. <b>리더가 아니면 0 이다</b> (CY-766).
+     *
+     * <p>되돌릴 수 없는 쓰기가 이 번호를 들고 나간다. 0 이면 줄 옆의 울타리가
+     * 전부 거절한다 — 안 지우는 쪽이라 안전한 방향이다.
+     */
+    public long fence() {
+        return isLeader() ? standing.get().fence() : 0;
+    }
+
     public boolean isLeader() {
         Standing now = standing.get();
         if (now.state() != State.LEADER) {
@@ -147,8 +157,9 @@ public final class Leadership {
         }
         // **강등을 여기서 한다.** 연장 루프의 끝에 달면 루프가 멎었을 때 안 돌고,
         // 하필 그때가 이 기록이 유일한 신호인 순간이다. 배분 틱은 매초 묻는다.
+        // 판 번호도 같이 버린다 — 리스가 지난 노드의 번호는 이제 옛 판이다.
         if (standing.compareAndSet(now, new Standing(State.FOLLOWER,
-                now.confirmedAt(), now.leaderSince()))) {
+                now.confirmedAt(), now.leaderSince(), 0))) {
             log.warn("확인 없이 리스가 지나 리더에서 내려왔다 — {}초 동안 리더였다, owner={}",
                     heldSeconds(now), ownerId);
         }
@@ -224,8 +235,10 @@ public final class Leadership {
         exitFailing();
         if (!lock.acquired()) {
             // 사실을 알았다 — 리스를 기다릴 이유가 없다.
+            // **판 번호도 같이 버린다.** 남겨 두면 강등된 노드가 자기가 쥐었던
+            // 판인 척 되돌릴 수 없는 쓰기를 낸다.
             Standing before = standing.getAndUpdate(s -> s.state() == State.LEADER
-                    ? new Standing(State.FOLLOWER, s.confirmedAt(), s.leaderSince())
+                    ? new Standing(State.FOLLOWER, s.confirmedAt(), s.leaderSince(), 0)
                     : s);
             if (before.state() == State.LEADER) {
                 log.info("리더를 잃었다 — {}초 동안 리더였다, 지금 소유자는 {}, 남은 리스 {}ms, owner={}",
@@ -238,9 +251,14 @@ public final class Leadership {
             case CLOSED -> s;
             // **뒤로 밀지 않는다.** 겹친 두 판 중 늦게 도착한 옛 판이 확인 시각을
             // 되돌리면, 멀쩡한 리더가 헛강등되고 거짓 경고가 찍힌다.
+            // **판 번호도 뒤로 안 민다.** 늦게 도착한 옛 판의 응답이 번호를
+            // 되돌리면, 멀쩡한 리더가 비가역 쓰기를 옛 번호로 내보낸다.
+            // 임기 안에서는 연장이 같은 번호를 돌려주므로 이 최댓값은 그
+            // 겹침에만 걸리고, 새 임기는 아래 FOLLOWER 갈래로 들어온다.
             case LEADER -> new Standing(State.LEADER,
-                    Math.max(s.confirmedAt(), startedAt), s.leaderSince());
-            case FOLLOWER -> new Standing(State.LEADER, startedAt, startedAt);
+                    Math.max(s.confirmedAt(), startedAt), s.leaderSince(),
+                    Math.max(s.fence(), lock.fence()));
+            case FOLLOWER -> new Standing(State.LEADER, startedAt, startedAt, lock.fence());
         });
 
         if (before.state() == State.CLOSED) {

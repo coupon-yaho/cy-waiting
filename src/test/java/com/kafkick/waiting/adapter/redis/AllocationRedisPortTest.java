@@ -47,7 +47,8 @@ class AllocationRedisPortTest extends RedisContainerSupport {
                 RedisKeys.stock("c1"), RedisKeys.stock("c2"),
                 RedisKeys.COUPON_POLICY,
                 RedisKeys.alive("c1", SHARDS, 0), RedisKeys.grace("c1", SHARDS, 0),
-                RedisKeys.stock("c3"), RedisKeys.maxScore("c1", SHARDS, 0)).block(WAIT);
+                RedisKeys.stock("c3"), RedisKeys.maxScore("c1", SHARDS, 0),
+                RedisKeys.dropFence("c1", SHARDS, 0)).block(WAIT);
     }
 
     private void 줄_세운다(String couponId, long... scores) {
@@ -76,7 +77,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         // 삭제가 재고를 직접 본다 (CY-765). 안 심으면 못 읽은 것이라 안 지운다.
         redis.opsForValue().set(RedisKeys.stock("c1"), "0").block(WAIT);
 
-        assertThat(port.dropSoldOutQueues(List.of("c1")).block(WAIT))
+        assertThat(port.dropSoldOutQueues(List.of("c1"), 1).block(WAIT))
                 .as("지운 쿠폰을 돌려준다").containsExactly("c1");
 
         assertThat(redis.hasKey(RedisKeys.queue("c1", SHARDS, 0)).block(WAIT)).isFalse();
@@ -113,7 +114,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
                 .block(WAIT);
         redis.opsForValue().set(RedisKeys.stock("c1"), "0").block(WAIT);
 
-        port.dropSoldOutQueues(List.of("c1")).block(WAIT);
+        port.dropSoldOutQueues(List.of("c1"), 1).block(WAIT);
 
         assertThat(redis.opsForValue().get(RedisKeys.maxScore("c1", SHARDS, 0)).block(WAIT))
                 .isEqualTo("1700000000000000");
@@ -125,7 +126,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     void 지울_것이_없으면_왕복하지_않는다() {
         redis.opsForSet().add(RedisKeys.ACTIVE_COUPONS, "c1").block(WAIT);
 
-        assertThat(port.dropSoldOutQueues(List.of()).block(WAIT)).isEmpty();
+        assertThat(port.dropSoldOutQueues(List.of(), 1).block(WAIT)).isEmpty();
 
         assertThat(redis.opsForSet().members(RedisKeys.ACTIVE_COUPONS)
                 .collectList().block(WAIT)).containsExactly("c1");
@@ -615,7 +616,8 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     private void 정책_읽기를_깨뜨린다() {
         redis.delete(RedisKeys.COUPON_POLICY,
                 RedisKeys.alive("c1", SHARDS, 0), RedisKeys.grace("c1", SHARDS, 0),
-                RedisKeys.stock("c3"), RedisKeys.maxScore("c1", SHARDS, 0)).block(WAIT);
+                RedisKeys.stock("c3"), RedisKeys.maxScore("c1", SHARDS, 0),
+                RedisKeys.dropFence("c1", SHARDS, 0)).block(WAIT);
         redis.opsForValue().set(RedisKeys.COUPON_POLICY, "해시가-아니다").block(WAIT);
     }
 

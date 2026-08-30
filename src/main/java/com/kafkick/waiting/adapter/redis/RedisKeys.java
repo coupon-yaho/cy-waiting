@@ -92,6 +92,16 @@ public final class RedisKeys {
     }
 
     /**
+     * 매진 큐 삭제의 <b>울타리 표</b>. 마지막으로 지운 리더의 판 번호다 (5.3.1).
+     *
+     * <p>리더 키는 줄과 다른 슬롯이라 삭제 스크립트가 같이 못 읽는다. 그래서
+     * 소유권을 <b>줄과 같은 슬롯</b>에서 확인한다 — 옛 판의 명령은 안 듣는다.
+     */
+    public static String dropFence(String couponId, int shards, int shard) {
+        return "dropfence:{" + tag(couponId, shards, shard) + "}";
+    }
+
+    /**
      * 남은 재고. <b>발급 계층이 소유하고 샤드와 무관하다.</b>
      *
      * <p>샤딩하면 슬롯이 갈리므로 <b>Lua 에서 만지지 않는다</b> — 별도로 읽는다.

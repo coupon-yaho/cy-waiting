@@ -65,11 +65,11 @@ class ControlPlaneGateTest {
                 if (현재 == null) {
                     owner.set(ownerId);
                     만료.set(now + LEASE.toNanos());
-                    return LeaderLock.mine(ownerId, LEASE.toMillis());
+                    return LeaderLock.mine(ownerId, LEASE.toMillis(), 1);
                 }
                 if (현재.equals(ownerId)) {
                     만료.set(now + LEASE.toNanos());
-                    return LeaderLock.mine(ownerId, LEASE.toMillis());
+                    return LeaderLock.mine(ownerId, LEASE.toMillis(), 1);
                 }
                 return LeaderLock.heldBy(현재, (만료.get() - now) / 1_000_000);
             });

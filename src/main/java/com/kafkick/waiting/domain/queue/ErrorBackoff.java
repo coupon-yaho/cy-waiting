@@ -1,5 +1,6 @@
 package com.kafkick.waiting.domain.queue;
 
+import java.time.Duration;
 import java.util.function.DoubleSupplier;
 
 /**
@@ -52,6 +53,11 @@ public final class ErrorBackoff {
         this.jitterRatio = jitterRatio;
     }
 
+    /** 한 계단의 폭. 실패가 이 시간만큼 이어질 때마다 한 계단 멀어진다. */
+    public static Duration step() {
+        return Duration.ofSeconds(BASE_SEC);
+    }
+
     public static ErrorBackoff defaults() {
         return of(BASE_SEC, MAX_SEC, JITTER_RATIO);
     }
@@ -83,10 +89,21 @@ public final class ErrorBackoff {
      * @param random              [0, 1) 난수
      */
     public long retryAfterSec(int consecutiveFailures, DoubleSupplier random) {
+        return retryAfterSec(consecutiveFailures, 0, random);
+    }
+
+    /**
+     * 바닥을 함께 받는다.
+     *
+     * @param floorSec 이보다 빨리 부르지 않는다. 폴링 예산이 정한 값이다 —
+     *                 장애 구간이 곧 예산이 빠듯한 구간이라, 무시하면 하필
+     *                 그때 거절받은 사람만 예산 밖으로 돌아온다
+     */
+    public long retryAfterSec(int consecutiveFailures, long floorSec, DoubleSupplier random) {
         int streak = Math.min(Math.max(consecutiveFailures, 1), MAX_DOUBLINGS);
         // **상한을 먼저 씌운다.** 곱한 뒤에 흔들면 상한을 넘는 값이 나가고,
         // 그러면 회복한 뒤에도 그만큼 아무도 안 돌아온다.
-        long base = Math.min(baseSec << (streak - 1), maxSec);
+        long base = Math.min(Math.max(baseSec << (streak - 1), floorSec), maxSec);
         double jittered = base * (1 + jitterRatio * (2 * random.getAsDouble() - 1));
         // 0 은 안 준다. 즉시 재시도는 흩어짐이 없어 파도를 그대로 되돌린다.
         return Math.clamp(Math.round(jittered), 1, maxSec);

@@ -10,6 +10,7 @@ import com.kafkick.waiting.control.QueueSweeper;
 import com.kafkick.waiting.control.SnapshotCodec;
 import com.kafkick.waiting.control.SoldOutCleanup;
 import com.kafkick.waiting.control.SweepGate;
+import com.kafkick.waiting.control.SweepGates;
 import com.kafkick.waiting.control.TimedDemands;
 import com.kafkick.waiting.domain.allocation.CouponDemand;
 import com.kafkick.waiting.domain.allocation.CreditSmoother;
@@ -97,8 +98,8 @@ class SoldOutQueueDropIntegrationTest extends RedisContainerSupport {
                 ids -> port.dropSoldOutQueues(ids, fence),
                 ids -> Mono.just(List.of()),
                 QueueSweeper.of(
-                        SweepGate.of(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
-                        (ids, limit) -> Mono.just(QueueSweeper.SweepResult.NOTHING)),
+                        SweepGates.warmed(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
+                        (ids, limit, removeFront) -> Mono.just(QueueSweeper.SweepResult.NOTHING)),
                 () -> false, () -> CircuitState.CLOSED);
     }
 

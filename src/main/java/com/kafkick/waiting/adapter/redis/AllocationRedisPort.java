@@ -550,6 +550,15 @@ public final class AllocationRedisPort implements SnapshotSource {
      */
     public Mono<QueueSweeper.SweepResult> sweep(List<String> couponIds, long nowSec,
             int scanLimit, long graceSec, int budget) {
+        return sweep(couponIds, nowSec, scanLimit, graceSec, budget, true);
+    }
+
+    /**
+     * @param removeFront 앞줄에서 빼도 되는가. <b>거짓이어도 정리는 돈다</b> —
+     *                    승계 유예 구간이 그 자리다
+     */
+    public Mono<QueueSweeper.SweepResult> sweep(List<String> couponIds, long nowSec,
+            int scanLimit, long graceSec, int budget, boolean removeFront) {
         if (couponIds.isEmpty()) {
             return Mono.just(QueueSweeper.SweepResult.NOTHING);
         }
@@ -557,7 +566,7 @@ public final class AllocationRedisPort implements SnapshotSource {
         return Flux.fromIterable(couponIds)
                 // **한 쿠폰이 실패해도 나머지는 쓴다.** 청소가 배분을 막으면
                 // 안 걷힌 것 하나가 그 틱 전체를 세운다.
-                .flatMap(id -> sweepOne(id, nowSec, scanLimit, graceSec, budget)
+                .flatMap(id -> sweepOne(id, nowSec, scanLimit, graceSec, budget, removeFront)
                         .onErrorResume(e -> {
                             log.warn("이탈자 청소 실패 — 다음 틱에 다시 한다: 쿠폰={} {}",
                                     id, e.toString());
@@ -573,7 +582,7 @@ public final class AllocationRedisPort implements SnapshotSource {
     }
 
     private Mono<QueueSweeper.SweepResult> sweepOne(String couponId, long nowSec,
-            int scanLimit, long graceSec, int budget) {
+            int scanLimit, long graceSec, int budget, boolean removeFront) {
         String cursor = sweepCursors.getOrDefault(couponId, "0");
         return redis.execute(SWEEP,
                         List.of(RedisKeys.queue(couponId, shards, 0),
@@ -581,7 +590,8 @@ public final class AllocationRedisPort implements SnapshotSource {
                                 RedisKeys.alive(couponId, shards, 0),
                                 RedisKeys.admitted(couponId, shards, 0)),
                         List.of(Integer.toString(scanLimit), Long.toString(nowSec),
-                                Long.toString(graceSec), Integer.toString(budget), cursor))
+                                Long.toString(graceSec), Integer.toString(budget), cursor,
+                                removeFront ? "1" : "0"))
                 .next()
                 .switchIfEmpty(Mono.error(new IllegalStateException("청소 결과가 비었다")))
                 .map(raw -> {

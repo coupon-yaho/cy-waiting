@@ -157,6 +157,31 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     }
 
     /**
+     * <b>제거를 접어도 정리는 돕니다</b> (CY-822).
+     *
+     * <p>승계 유예 구간이 그 자리입니다. 대상까지 비우면 만료 신호와 유예
+     * 기록이 한 방향으로만 자라고 커서가 전진을 못 합니다 — 승계가 유예보다
+     * 잦으면 청소가 영영 안 돕니다.
+     */
+    @Test
+    @DisplayName("제거를_접어도_만료_신호는_걷는다")
+    void 제거를_접어도_만료_신호는_걷는다() {
+        long 지금 = 1_700_000_000L;
+        줄_세운다("c1", 1, 2, 3);
+        redis.opsForZSet().add(RedisKeys.alive("c1", SHARDS, 0), "m1", 지금 + 60).block(WAIT);
+        // 만료된 신호를 심는다. 정리가 걷어야 할 것이다.
+        redis.opsForZSet().add(RedisKeys.alive("c1", SHARDS, 0), "old", 지금 - 10).block(WAIT);
+
+        QueueSweeper.SweepResult 결과 =
+                port.sweep(List.of("c1"), 지금, 100, 300, 100, false).block(WAIT);
+
+        assertThat(결과.swept()).as("앞줄은 안 걷는다").isZero();
+        assertThat(redis.opsForZSet().size(RedisKeys.queue("c1", SHARDS, 0)).block(WAIT))
+                .as("줄이 그대로").isEqualTo(3);
+        assertThat(결과.expiredSignals()).as("만료 신호는 걷는다").isPositive();
+    }
+
+    /**
      * <b>전부 만료된 신호는 "살아 있다" 가 아닙니다.</b>
      *
      * <p>만료된 항목은 정리가 걷기 전까지 물리적으로 남아 있습니다. 개수만

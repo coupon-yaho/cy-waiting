@@ -2,7 +2,6 @@ package com.kafkick.waiting.control;
 
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.CouponStates;
-import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import java.time.Duration;
 import java.util.Map;
 
@@ -24,9 +23,10 @@ public final class SweepGates {
     public static SweepGate warmed(Duration tick, Duration aliveTtl) {
         SweepGate gate = SweepGate.of(tick, aliveTtl);
         Map<String, CouponState> 아무_쿠폰 = Map.of("__warmup", CouponStates.idle(1));
-        long 유예 = Math.ceilDiv(
-                aliveTtl.plus(PollIntervalPolicy.maxInterval()).toMillis(), tick.toMillis());
-        for (long i = 0; i <= 유예; i++) {
+        // **산식을 여기서 다시 쓰지 않는다.** 두 벌이 되면 저쪽이 커질 때
+        // 이쪽이 덜 흘려 차가운 게이트를 주고, 그때 "안 쓸어야 한다" 를 재는
+        // 시험들이 엉뚱한 이유로 통과한다.
+        for (long i = 0; i <= gate.resumeDelayTicks(); i++) {
             gate.sweepable(아무_쿠폰, false);
         }
         return gate;

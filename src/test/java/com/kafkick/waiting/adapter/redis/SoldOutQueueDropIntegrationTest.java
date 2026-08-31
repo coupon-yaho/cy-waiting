@@ -99,7 +99,7 @@ class SoldOutQueueDropIntegrationTest extends RedisContainerSupport {
                 ids -> Mono.just(List.of()),
                 QueueSweeper.of(
                         SweepGates.warmed(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
-                        (ids, limit) -> Mono.just(QueueSweeper.SweepResult.NOTHING)),
+                        (ids, limit, removeFront) -> Mono.just(QueueSweeper.SweepResult.NOTHING)),
                 () -> false, () -> CircuitState.CLOSED);
     }
 

@@ -32,7 +32,7 @@ class QueueSweeperMetricsTest {
     private QueueSweeper sweeper(QueueSweeper.SweepResult r) {
         return QueueSweeper.of(
                 SweepGates.warmed(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
-                (ids, limit) -> Mono.just(r), meters);
+                (ids, limit, removeFront) -> Mono.just(r), meters);
     }
 
     private double 계수(String kind) {
@@ -63,7 +63,7 @@ class QueueSweeperMetricsTest {
     void 터지면_실패로_세고_걷은_수는_안_올린다() {
         QueueSweeper 터지는_것 = QueueSweeper.of(
                 SweepGates.warmed(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
-                (ids, limit) -> Mono.error(new IllegalStateException("레디스가 끊겼다")),
+                (ids, limit, removeFront) -> Mono.error(new IllegalStateException("레디스가 끊겼다")),
                 meters);
 
         assertThat(터지는_것.run(줄이_있는_쿠폰(), false).block())

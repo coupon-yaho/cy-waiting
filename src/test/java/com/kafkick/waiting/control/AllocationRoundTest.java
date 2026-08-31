@@ -212,7 +212,7 @@ class AllocationRoundTest {
                 ids -> Mono.just(List.of()),
                 QueueSweeper.of(
                         SweepGates.warmed(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
-                        (ids, limit) -> {
+                        (ids, limit, removeFront) -> {
                             쓴_쿠폰.addAll(ids);
                             return Mono.just(QueueSweeper.SweepResult.NOTHING);
                         }), () -> false, () -> CircuitState.CLOSED);
@@ -226,7 +226,7 @@ class AllocationRoundTest {
     private static QueueSweeper 안_걷는_스위퍼() {
         return QueueSweeper.of(
                 SweepGates.warmed(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
-                (ids, limit) -> Mono.just(QueueSweeper.SweepResult.NOTHING));
+                (ids, limit, removeFront) -> Mono.just(QueueSweeper.SweepResult.NOTHING));
     }
 
     private AllocationRound round(List<CouponDemand> 수요, long 전역_크레딧, int 노드_수) {

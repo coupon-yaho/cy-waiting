@@ -158,6 +158,9 @@ class SweepGateTest {
     void 유예가_지나면_제거가_열린다() {
         SweepGate gate = 게이트();
         유예를_흘린다(gate, 줄이_선_쿠폰());
+        assertThat(gate.removalHeld()).as("마지막 유예 틱까지는 잠겨 있다").isTrue();
+
+        gate.sweepable(줄이_선_쿠폰(), false);
 
         assertThat(gate.removalHeld()).isFalse();
     }
@@ -311,7 +314,7 @@ class SweepGateTest {
     @Test
     @DisplayName("판단_없이는_스위퍼를_못_만든다")
     void 판단_없이는_스위퍼를_못_만든다() {
-        assertThatThrownBy(() -> QueueSweeper.of(null, (ids, limit) -> null))
+        assertThatThrownBy(() -> QueueSweeper.of(null, (ids, limit, removeFront) -> null))
                 .isInstanceOf(NullPointerException.class)
                 .hasMessageContaining("gate");
     }

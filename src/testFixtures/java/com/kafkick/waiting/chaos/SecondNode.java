@@ -1,0 +1,106 @@
+package com.kafkick.waiting.chaos;
+
+import com.kafkick.waiting.control.Leadership;
+import reactor.core.scheduler.Scheduler;
+import org.springframework.boot.WebApplicationType;
+import org.springframework.boot.builder.SpringApplicationBuilder;
+import org.springframework.context.ConfigurableApplicationContext;
+
+/**
+ * 같은 레디스를 보는 <b>두 번째 게이트웨이</b>를 같은 JVM 에 띄운다 (CY-858).
+ *
+ * <p>하트비트 항목만 심는 것으로는 분모밖에 못 흔든다. 리더 승계·유령 리더의
+ * 배분·시계 스큐는 두 번째 제어 평면이 실제로 돌아야 만들어진다.
+ */
+public final class SecondNode implements AutoCloseable {
+
+    private final ConfigurableApplicationContext context;
+
+    private SecondNode(ConfigurableApplicationContext context) {
+        this.context = context;
+    }
+
+    /**
+     * 띄운다. 포트는 0 이라 겹치지 않고, 노드 식별자는 제어 평면이 스스로
+     * 만들므로 첫 노드와 자연히 갈린다.
+     *
+     * @param 주인 진입점 클래스. 픽스처가 프로덕션 패키지를 안 가져오게 받는다
+     */
+    public static SecondNode 띄운다(Class<?> 주인, String redisUrl, String backendUri,
+            boolean 스케줄러) {
+        ConfigurableApplicationContext context = new SpringApplicationBuilder(주인)
+                .web(WebApplicationType.REACTIVE)
+                .profiles("test")
+                // **명령줄 인자로 준다.** properties() 는 기본 프로퍼티라
+                // 우선순위가 가장 낮아, test 프로파일의 yml 이 그대로 이긴다 —
+                // 스케줄러를 켰다고 믿는 채로 제어 평면이 없는 노드가 뜬다.
+                .run(
+                        "--server.port=0",
+                        "--management.server.port=0",
+                        "--spring.data.redis.url=" + redisUrl,
+                        "--waiting.backend.uri=" + backendUri,
+                        "--waiting.scheduler.enabled=" + 스케줄러);
+        return new SecondNode(context);
+    }
+
+    /**
+     * 이 노드가 리더인가. 두 노드가 동시에 참이면 그 구간이 스플릿 브레인이다.
+     *
+     * <p><b>죽이는 것은 여기서 안 만든다.</b> 컨텍스트를 닫으면 종료 훅이 락을
+     * 놓으러 가고, 그건 장애 경로가 아니다. 리스가 남는 판은 리더의 제어 평면만
+     * 세워서 만든다 — 그때 락은 만료까지 남는다.
+     */
+    public boolean 리더인가() {
+        return 리더십().isLeader();
+    }
+
+    /**
+     * 내린다. <b>배분 스케줄러를 손으로 버린다</b> — 그 빈은 소멸 메서드를 일부러
+     * 끄고 있어(리더 루프가 종료 중에도 돌아야 한다) 컨텍스트를 닫아도 안 죽는다.
+     * 프로덕션은 프로세스가 한 번 죽으면 끝이지만, 여기서는 띄울 때마다 하나씩 샌다.
+     */
+    @Override
+    public void close() {
+        if (!context.isActive()) {
+            return;
+        }
+        Scheduler 배분 = context.getBeanProvider(Scheduler.class).getIfAvailable();
+        context.close();
+        if (배분 != null) {
+            배분.dispose();
+        }
+    }
+
+    /** 컨텍스트에서 빈을 꺼낸다. 픽스처가 프로덕션 타입을 안 가져오게 이름으로 짚는다. */
+    public <T> T 빈(String 이름, Class<T> 타입) {
+        return context.containsBean(이름) ? context.getBean(이름, 타입) : null;
+    }
+
+    /**
+     * 이 노드가 <b>리더 락에 쓰는</b> 주인 이름. 하트비트의 식별자는 이것과
+     * 별개로 발급되므로 분모를 볼 때 쓰면 영영 안 맞는다.
+     */
+    public String ownerId() {
+        return 리더십().ownerId();
+    }
+
+    private Leadership 리더십() {
+        return context.getBean(Leadership.class);
+    }
+
+    /**
+     * 이 노드의 서비스 포트. 요청을 이쪽으로 보낼 때 쓴다.
+     *
+     * <p>{@code local.server.port} 는 시험 컨텍스트에만 있는 값이라 여기서는
+     * 안 잡힌다. 웹 서버에 직접 묻는다.
+     */
+    public int port() {
+        try {
+            Object server = context.getClass().getMethod("getWebServer").invoke(context);
+            return (int) server.getClass().getMethod("getPort").invoke(server);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("두 번째 노드의 포트를 못 읽었다", e);
+        }
+    }
+
+}

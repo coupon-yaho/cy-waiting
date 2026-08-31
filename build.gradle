@@ -116,6 +116,12 @@ dependencies {
     // 뒷단 스텁도 픽스처다. 시나리오마다 다시 쓰면 "전 시나리오 중복 0" 같은
     // 게이트가 시나리오마다 다른 것을 재게 된다.
     testFixturesApi 'io.projectreactor.netty:reactor-netty-http'
+    // **두 번째 노드를 같은 JVM 에 띄운다** (CY-858). 하트비트 항목만 심는
+    // 것으로는 분모밖에 못 흔들어, 승계를 못 만든다.
+    //
+    // **스타터가 아니라 코어만 넣는다.** 스타터는 로깅까지 얹어 픽스처의 api 로
+    // 시험 런타임에 전파된다 — 필요한 것은 SpringApplicationBuilder 하나다.
+    testFixturesApi 'org.springframework.boot:spring-boot'
 }
 
 // ── 테스트 계층 ──────────────────────────────────────────────────────────────

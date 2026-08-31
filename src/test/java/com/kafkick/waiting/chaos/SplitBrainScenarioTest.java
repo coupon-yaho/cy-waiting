@@ -187,7 +187,6 @@ class SplitBrainScenarioTest {
             long[] 낡음_직후 = new long[2];
             long[] 분단중_도착 = new long[1];
             List<Integer> 분단중_상태 = new ArrayList<>();
-            boolean[] 창이_열렸다 = new boolean[1];
             long[] 인계_시각 = new long[1];
             Duration[] 강등까지 = new Duration[1];
             List<Integer> 한산한_장애중 = new ArrayList<>();
@@ -212,13 +211,18 @@ class SplitBrainScenarioTest {
                     .inject(() -> {
                         // **갈라진 쪽이 락을 가져간다.** 우리 노드는 아직 자기가
                         // 리더라고 믿는다 — 그 창이 스플릿 브레인이다.
+                        //
+                        // **믿었는지를 판정하지는 않는다.** 인계는 원자적인데
+                        // 연장 루프는 따로 돈다. 그 사이에 루프가 먼저 사실을
+                        // 보면 옳은 구현인데도 "창이 없었다" 가 되어, 판정이
+                        // 프로덕션이 아니라 스케줄러 타이밍을 잰다. 겹친 창
+                        // 자체는 노드 둘짜리 하네스라야 확정한다 (CY-821).
                         assertThat(락.죽은_리더가_넘겨받는다(갈라진_리더,
                                 Duration.ofSeconds(30))).isTrue();
                         // **그 창 안에서 재고 넘어간다.** 강등을 기다린 뒤에만
                         // 재면 남는 것은 "팔로워 + 낡은 재료" 라, C4 가 이미
                         // 재는 상태다. 이 시나리오만의 자리는 여기뿐이다.
                         인계_시각[0] = System.nanoTime();
-                        창이_열렸다[0] = leadership.isLeader();
                         분단중_도착[0] = 뒷단까지_센다(COUPON, () -> 분단중_상태.addAll(
                                 여러_번_시도한다(COUPON, 보낼_수, 4_000)));
                     })
@@ -263,7 +267,6 @@ class SplitBrainScenarioTest {
                         회복_뒤_자리.putAll(QueueSeed.자리들(연결, COUPON, 줄_선_사람));
                     })
                     .assertEntry(() -> RecoveryCriteria.violations(
-                            창이_실제로_열렸다(창이_열렸다[0]),
                             // **믿음이 추월을 정당화하지 않는다** (불변식 4).
                             줄에_세웠다("진입", 분단중_상태, 보낼_수),
                             줄을_추월하지_않았다("진입", 분단중_도착[0]),
@@ -315,16 +318,6 @@ class SplitBrainScenarioTest {
         return 걸린_시간.compareTo(강등_한계) < 0 ? Optional.empty()
                 : Optional.of("강등에 %dms 가 걸렸다 (한계 %dms) — 리스 만료를 기다린 것이다"
                         .formatted(걸린_시간.toMillis(), 강등_한계.toMillis()));
-    }
-
-    /**
-     * <b>창이 실제로 열렸는가.</b> 넘겨받은 직후에도 이 노드가 리더라고 믿어야
-     * 스플릿 브레인이다. 안 믿었으면 이 판은 그냥 승계라, 아래 판정들이 C5 가
-     * 아닌 것을 재고 있는 셈이다.
-     */
-    private Optional<String> 창이_실제로_열렸다(boolean 리더로_믿었다) {
-        return 리더로_믿었다 ? Optional.empty()
-                : Optional.of("전제 — 넘겨받은 직후 이미 강등돼 있었다. 겹친 창이 없다");
     }
 
     /** 평시가 성립해야 나머지 구간의 값에 뜻이 생긴다. */

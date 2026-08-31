@@ -87,17 +87,79 @@ class SweepGateTest {
     /**
      * <b>승계 유예는 쿠폰마다가 아니라 노드 전체다.</b>
      *
-     * <p>새 리더가 모르는 것은 이 쿠폰 하나가 아니라 모든 쿠폰의 사정이다.
-     * 쿠폰별로 걸면 그 틱에 처음 보이는 쿠폰만 막히고 나머지는 그냥 나간다.
+     * <p>나중에 처음 등장하는 쿠폰도 같이 막혀야 한다 — 쿠폰별 최초 목격으로
+     * 걸면 그 쿠폰만 자기 유예를 새로 받고 나머지는 이미 풀려 있다.
      */
     @Test
-    @DisplayName("승계_유예는_모든_쿠폰에_걸린다")
-    void 승계_유예는_모든_쿠폰에_걸린다() {
+    @DisplayName("나중에_등장한_쿠폰도_같은_유예에_걸린다")
+    void 나중에_등장한_쿠폰도_같은_유예에_걸린다() {
+        SweepGate gate = 게이트();
+        Map<String, CouponState> 하나 = 줄이_선_쿠폰();
+        Map<String, CouponState> 둘 = Map.of(
+                COUPON, CouponStates.queueing(10, 1_000, 100),
+                "c2", CouponStates.queueing(10, 1_000, 100));
+
+        // 절반쯤 흘린 뒤에 c2 가 처음 나타난다.
+        for (int i = 0; i < 재개_유예 / 2; i++) {
+            gate.sweepable(하나, false);
+        }
+        assertThat(gate.sweepable(둘, false)).as("아직 유예 안이다").isEmpty();
+
+        for (int i = 0; i < 재개_유예 / 2; i++) {
+            gate.sweepable(둘, false);
+        }
+
+        assertThat(gate.sweepable(둘, false)).as("유예가 지나면 둘 다 나온다")
+                .containsExactlyInAnyOrder(COUPON, "c2");
+    }
+
+    /**
+     * <b>리더가 되면 유예를 처음부터 준다</b> (CY-822).
+     *
+     * <p>객체가 얼마나 살았느냐로 걸면 같은 프로세스가 리더십을 잃었다 되찾는
+     * 판에서 방어가 아예 안 걸린다 — 그때 틱은 이미 유예를 훌쩍 넘었다.
+     * 그리고 그 판이야말로 재개 표시가 남의 것이라 못 믿는 자리다.
+     */
+    @Test
+    @DisplayName("다시_리더가_되면_유예를_처음부터_준다")
+    void 다시_리더가_되면_유예를_처음부터_준다() {
+        SweepGate gate = 게이트();
+        유예를_흘린다(gate, 줄이_선_쿠폰());
+        assertThat(gate.sweepable(줄이_선_쿠폰(), false)).as("전제 — 이미 풀렸다")
+                .containsExactly(COUPON);
+
+        gate.leadershipAcquired();
+
+        assertThat(gate.sweepable(줄이_선_쿠폰(), false)).as("다시 잡은 직후").isEmpty();
+        유예를_흘린다(gate, 줄이_선_쿠폰());
+        assertThat(gate.sweepable(줄이_선_쿠폰(), false)).as("유예 뒤").containsExactly(COUPON);
+    }
+
+    /**
+     * <b>유예 중에도 정리는 돈다.</b>
+     *
+     * <p>앞줄 제거만 접는다. 대상까지 비우면 만료 신호와 유예 기록이 한 방향
+     * 으로만 자라고 커서가 전진을 못 한다 — 승계가 유예보다 잦으면 청소가
+     * 영영 안 돌고, 그때 대가는 "승계 뒤 5분" 이 아니라 무한이다.
+     */
+    @Test
+    @DisplayName("유예_중에도_정리_대상은_넘긴다")
+    void 유예_중에도_정리_대상은_넘긴다() {
         SweepGate gate = 게이트();
 
-        assertThat(gate.sweepable(Map.of(
-                COUPON, CouponStates.queueing(10, 1_000, 100),
-                "c2", CouponStates.queueing(10, 1_000, 100)), false)).isEmpty();
+        assertThat(gate.sweepable(줄이_선_쿠폰(), false)).as("앞줄은 안 건드린다").isEmpty();
+        assertThat(gate.cleanable(줄이_선_쿠폰())).as("정리는 돈다").containsExactly(COUPON);
+        assertThat(gate.removalHeld()).isTrue();
+    }
+
+    /** 유예가 지나면 제거를 다시 연다. */
+    @Test
+    @DisplayName("유예가_지나면_제거가_열린다")
+    void 유예가_지나면_제거가_열린다() {
+        SweepGate gate = 게이트();
+        유예를_흘린다(gate, 줄이_선_쿠폰());
+
+        assertThat(gate.removalHeld()).isFalse();
     }
 
     /**

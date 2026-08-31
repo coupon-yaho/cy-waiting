@@ -197,14 +197,21 @@ class BackendFailureScenarioTest {
         return 자리;
     }
 
-    /** 판정이 멈추지 않는다. 뒷단이 망가진 것이 이 노드 응답의 일이 아니다. */
-    private Optional<String> 판정이_멈추지_않았다(String 구간, List<Integer> 상태) {
-        if (상태.isEmpty()) {
-            return Optional.of("%s — 보낸 것이 없다".formatted(구간));
+    /**
+     * 대조군이 <b>성공 응답을 받았는가.</b>
+     *
+     * <p>5xx 만 세면 429 나 410 이 통과한다 — 뒷단까지 갔다는 것과 사용자가 쓸
+     * 수 있는 응답을 받았다는 것은 다르다. 뒷단이 살아 있는 구간이므로 200 이다.
+     */
+    private Optional<String> 대조군이_받았다(String 구간, List<Integer> 상태) {
+        if (상태.size() != 한산한_보낼_수) {
+            return Optional.of("%s — %d 건을 보냈는데 %d 건만 관측됐다"
+                    .formatted(구간, 한산한_보낼_수, 상태.size()));
         }
-        long 멈춘_것 = 상태.stream().filter(status -> status >= 500).count();
-        return 멈춘_것 == 0 ? Optional.empty()
-                : Optional.of("%s — %d 건이 5xx 다 (보낸 %d)".formatted(구간, 멈춘_것, 상태.size()));
+        long 못_받은_것 = 상태.stream().filter(status -> status != 200).count();
+        return 못_받은_것 == 0 ? Optional.empty()
+                : Optional.of("%s — %d 건이 200 이 아니다 (보낸 %d): %s"
+                        .formatted(구간, 못_받은_것, 상태.size(), 상태));
     }
 
     @Test
@@ -294,7 +301,7 @@ class BackendFailureScenarioTest {
                         새로고침_뒤_자리.putAll(등록된_자리들(1_000, 보낼_수));
                     })
                     .assertEntry(() -> RecoveryCriteria.violations(
-                            판정이_멈추지_않았다("정상", 정상_상태),
+                            대조군이_받았다("정상", 정상_상태),
                             // 정상 구간에도 건다. 여기에 없으면 줄이 선 쿠폰이
                             // 평시에 뒷단으로 새도 아무 판정이 안 깨진다.
                             줄에_세웠다("정상", 정상_줄_상태, 보낼_수),
@@ -323,7 +330,7 @@ class BackendFailureScenarioTest {
                             줄을_추월하지_않았다("새로고침", 새로고침_도착[0])))
                     .assertRecovery(() -> RecoveryCriteria.violations(
                             뒷단이_돌아왔다(뒷단_상태[2]),
-                            판정이_멈추지_않았다("회복", 회복_상태),
+                            대조군이_받았다("회복", 회복_상태),
                             // **통과 경로가 되살아났는가.** 이것이 없으면
                             // 서킷이 영영 안 닫히는 게이트웨이가 통과한다 —
                             // 전 요청이 줄에 서서 뒷단 도착이 0 이 되는데,

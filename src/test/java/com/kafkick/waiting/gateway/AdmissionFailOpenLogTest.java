@@ -66,7 +66,7 @@ class AdmissionFailOpenLogTest {
             Clock.fixed(지금, ZoneOffset.UTC), meters, () -> 0.5, 줄,
             QueueToken.of("not-a-real-secret-0123456789abcdef"), limiter,
             EntryToken.of("not-a-real-secret-0123456789abcdef"),
-            IdempotencyKey.of("not-a-real-secret-0123456789abcdef"), 나노::get);
+            IdempotencyKey.passThrough(), 나노::get);
 
     private ListAppender<ILoggingEvent> 로그;
     private Level 원래_수준;

@@ -195,29 +195,46 @@ public class ControlPlaneConfig {
     QueueSweeper queueSweeper(AllocationRedisPort port, ControlPlaneProperties properties,
             MeterRegistry meters) {
         return QueueSweeper.of(SweepGate.of(properties.scheduler().tick(), PollIntervalPolicy.aliveTtl()),
-                (ids, scanLimit) -> port.sweep(ids, Instant.now().getEpochSecond(),
-                        scanLimit, GRACE_SEC, SWEEP_BUDGET),
+                (ids, scanLimit, removeFront) -> port.sweep(ids, Instant.now().getEpochSecond(),
+                        scanLimit, GRACE_SEC, SWEEP_BUDGET, removeFront),
                 meters);
     }
 
     /** 배분 틱. <b>재료를 먼저 읽고 배분한다</b> — 안 읽으면 크레딧이 첫 하한에 머문다. */
+    /**
+     * 리더가 된 순간에 처음부터 줘야 하는 것들.
+     *
+     * <p><b>람다로 묻어 두지 않는다.</b> 여기 한 줄을 빠뜨리면 그 셈만 얼어
+     * 있던 값을 이어 쓰는데, 그건 전 시험이 초록인 채로 일어난다.
+     */
+    static Runnable onLeadershipGained(CapacityCollector collector, CapacityRefresh capacity,
+            SoldOutCleanup cleanup, QueueSweeper sweeper) {
+        return () -> {
+            collector.leadershipAcquired();
+            capacity.leadershipChanged();
+            // **매진 유예를 처음부터 준다.** 얼어 있던 셈을 이어 쓰면 유예가
+            // 설정값이 아니라 "내가 리더였던 틱 수" 가 되고, 그 둘은 장애
+            // 중에 갈린다.
+            cleanup.leadershipAcquired();
+            // **이탈자 청소의 재개 유예도 같다** (CY-822). 그 표시는 리더
+            // 메모리라 승계에서 사라지고, 새 리더는 신호가 얼마나 오래 멎어
+            // 있었는지 모른다. 모른다는 것이 걷을 이유가 되면 안 된다 —
+            // 걷힌 사람은 새 score 로 다시 서므로 순번이 뒤로 간다.
+            sweeper.leadershipAcquired();
+        };
+    }
+
     @Bean
     AllocationScheduler allocationLoop(ControlPlaneProperties properties, Leadership leadership,
             AllocationRound round, CapacityRefresh capacity, CapacityCollector collector,
-            TunablesRefresh tunables, Scheduler allocationScheduler, SoldOutCleanup cleanup) {
+            TunablesRefresh tunables, Scheduler allocationScheduler, SoldOutCleanup cleanup,
+            QueueSweeper sweeper) {
         return AllocationScheduler.of(properties.scheduler().tick(),
                 properties.scheduler().firstTickDelay(),
                 // **승계는 유예를 처음부터 준다.** 비리더 구간에 얼어 있던 실패
                 // 횟수를 이어 쓰면 재승계 첫 판이 곧바로 크레딧을 깎는다.
                 LeadershipEdge.of(leadership::isLeader,
-                        () -> {
-                            collector.leadershipAcquired();
-                            capacity.leadershipChanged();
-                            // **매진 유예도 처음부터 준다.** 얼어 있던 셈을
-                            // 이어 쓰면 유예가 설정값이 아니라 "내가 리더였던
-                            // 틱 수" 가 되고, 그 둘은 장애 중에 갈린다.
-                            cleanup.leadershipAcquired();
-                        },
+                        onLeadershipGained(collector, capacity, cleanup, sweeper),
                         capacity::leadershipChanged),
                 // **운영 값을 먼저 읽고 배분한다.** 순서가 뒤면 방금 바꾼 값이
                 // 한 틱 늦게 나가고, 장애 중의 한 틱은 길다.

@@ -91,6 +91,18 @@ public final class BackendRpsRecorder {
         return peak;
     }
 
+    /**
+     * 구간 총량. <b>증폭률은 봉우리가 아니라 총량 비다</b> — 보낸 것보다
+     * 많이 갔는가를 보므로 한 초만 떼면 분자가 줄어 과소평가된다.
+     */
+    public long sumIn(Instant from, Instant toExclusive) {
+        long sum = 0;
+        for (long s = from.getEpochSecond(); s < toExclusive.getEpochSecond(); s++) {
+            sum += perSecond.getOrDefault(s, 0L);
+        }
+        return sum;
+    }
+
     /** 구간 평균. 정상 구간은 이걸로 본다 — 봉우리로 보면 기준이 부푼다. */
     public double averageRps(Instant from, Instant toExclusive) {
         long seconds = Duration.between(from, toExclusive).toSeconds();

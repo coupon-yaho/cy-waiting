@@ -109,6 +109,12 @@ class RecoveryCriteriaTest {
         assertThat(RecoveryCriteria.recoveryBurst(100, 118)).isEmpty();
         assertThat(RecoveryCriteria.recoveryBurst(100, 121))
                 .hasValueSatisfying(v -> assertThat(v).contains("RC4"));
+        // **경계를 밟는다.** 1.18 과 1.21 만 보면 `<=` 를 `<` 로 바꿔도 아무도
+        // 모른다 — 이 브랜치의 근거가 "실효 임계가 문서와 달랐다" 였다.
+        assertThat(RecoveryCriteria.recoveryBurst(100, 120))
+                .as("정확히 한계면 통과다").isEmpty();
+        assertThat(RecoveryCriteria.recoveryBurst(1_000, 1_201))
+                .as("한계를 조금이라도 넘으면 위반이다").isPresent();
     }
 
     /**
@@ -133,6 +139,75 @@ class RecoveryCriteriaTest {
                 .hasValueSatisfying(v -> assertThat(v).contains("RC4"));
         assertThat(RecoveryCriteria.recoveryBurst(100, Double.NaN))
                 .as("셀 수 없는 값은 비교가 성립하지 않는다")
+                .hasValueSatisfying(v -> assertThat(v).contains("RC4"));
+    }
+
+    /**
+     * <b>봉우리가 0 인데 정상 구간이 0 이 아니면 위반이다.</b>
+     *
+     * <p>나눗셈만 두면 0 은 "버스트가 없다" 로 읽혀 가장 조용히 통과한다.
+     * 실제로는 회복 구간에 뒷단이 하나도 못 받은 것이고, 그건 아직 안 돌아온
+     * 것이지 잘 돌아온 것이 아니다. 못 잰 것을 통과로 넘기지 않는 원칙이
+     * 여기에도 걸린다.
+     */
+    @Test
+    @DisplayName("회복_구간이_비면_잡는다")
+    void 회복_구간이_비면_잡는다() {
+        assertThat(RecoveryCriteria.recoveryBurst(100, 0))
+                .hasValueSatisfying(v -> assertThat(v).contains("RC4"));
+    }
+
+    /**
+     * <b>증폭률 — 뒷단 도착이 클라이언트가 보낸 수를 넘으면 게이트웨이가 스스로
+     * 만든 유입이다.</b>
+     */
+    // 고정 창으로 버스트를 재면 창 밖에서 몰아친 것을 못 본다. 회복을 기다리는
+    // 동안 보낸 수를 알고 있으면 도착을 그 수로 나누어 대기 길이를 상쇄할 수
+    // 있다. 창을 옮길 필요가 없으므로 재는 도구가 재는 대상을 안 밀어 올린다.
+    @Test
+    @DisplayName("증폭을_잡는다")
+    void 증폭을_잡는다() {
+        assertThat(RecoveryCriteria.amplified(100, 100))
+                .as("보낸 만큼 닿은 것은 중복이 아니다").isEmpty();
+        // **한 건이면 충분하다.** 발급 경로에서 도착 1 건 초과는 요청 1 건
+        // 중복이고, 그건 곧 초과 발급이다. 버스트 한계 1.2 를 같이 쓰면
+        // 100 건에 18 건 중복이 통과한다.
+        assertThat(RecoveryCriteria.amplified(100, 101))
+                .hasValueSatisfying(v -> assertThat(v).contains("RC4"));
+        assertThat(RecoveryCriteria.amplified(100, 118))
+                .as("버스트 한계를 같이 쓰면 여기가 통과한다").isPresent();
+    }
+
+    /** 재전송이 없으면 도착이 보낸 수보다 적을 수 있다. 그건 증폭이 아니다. */
+    @Test
+    @DisplayName("도착이_적은_것은_증폭이_아니다")
+    void 도착이_적은_것은_증폭이_아니다() {
+        assertThat(RecoveryCriteria.amplified(100, 3)).isEmpty();
+    }
+
+    /**
+     * <b>보냈는데 하나도 안 닿았으면 위반이다.</b>
+     *
+     * <p>비율 0 은 "증폭 없음" 으로 읽혀 가장 조용히 통과한다. 봉우리 0 을
+     * 위반으로 돌린 것과 같은 상황이라 여기만 다르면 앞뒤가 안 맞는다.
+     */
+    @Test
+    @DisplayName("하나도_안_닿으면_잡는다")
+    void 하나도_안_닿으면_잡는다() {
+        assertThat(RecoveryCriteria.amplified(100, 0))
+                .hasValueSatisfying(v -> assertThat(v).contains("RC4"));
+    }
+
+    /** 보낸 수를 모르면 비교가 성립하지 않는다. 통과로 안 넘긴다. */
+    @Test
+    @DisplayName("보낸_수를_모르면_잡는다")
+    void 보낸_수를_모르면_잡는다() {
+        assertThat(RecoveryCriteria.amplified(0, 50))
+                .hasValueSatisfying(v -> assertThat(v).contains("RC4"));
+        assertThat(RecoveryCriteria.amplified(-10, 50))
+                .hasValueSatisfying(v -> assertThat(v).contains("RC4"));
+        assertThat(RecoveryCriteria.amplified(100, -1))
+                .as("음수 도착은 관측이 아니다")
                 .hasValueSatisfying(v -> assertThat(v).contains("RC4"));
     }
 

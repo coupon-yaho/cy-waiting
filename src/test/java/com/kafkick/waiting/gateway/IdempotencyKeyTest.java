@@ -82,9 +82,14 @@ class IdempotencyKeyTest {
     @Test
     @DisplayName("늘_UUID_형식을_낸다")
     void 늘_UUID_형식을_낸다() {
-        assertThat(UUID.fromString(keys.of("c1", "m1", CLIENT))).isNotNull();
-        assertThat(UUID.fromString(keys.of("c1", "m1", null))).isNotNull();
-        assertThat(keys.of("c1", "m1", null)).hasSize(36);
+        // **되읽어 같은 값인지까지 본다.** 파싱만 보면 대소문자나 표기가
+        // 달라져도 통과하고, 그때 뒷단은 두 건으로 센다.
+        String 그대로 = keys.of("c1", "m1", CLIENT);
+        assertThat(UUID.fromString(그대로)).hasToString(그대로);
+
+        String 떨어진_것 = keys.of("c1", "m1", null);
+        assertThat(UUID.fromString(떨어진_것)).hasToString(떨어진_것);
+        assertThat(떨어진_것).hasSize(36);
     }
 
     /**

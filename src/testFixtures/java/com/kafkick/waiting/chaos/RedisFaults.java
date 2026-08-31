@@ -39,9 +39,11 @@ public final class RedisFaults implements AutoCloseable {
     }
 
     /**
-     * 영속을 켜고 띄운다. <b>everysec 이라 최대 1초 분량이 증발한다</b>(E-6) —
-     * 그 부분 유실이 C12 의 전제다. 영속이 없으면 통째로 날아가 "일부만 증발" 을
-     * 못 만들고, 남은 대기자를 재등록자가 추월하는지가 아예 안 재진다.
+     * 영속을 켜고 띄운다 (everysec).
+     *
+     * <p><b>이걸 켜도 {@link #끊는다()} 로는 한 바이트도 안 잃는다.</b> everysec 은
+     * 매 루프마다 커널에 넘기고 fsync 만 미루는데, 프로세스만 죽으면 페이지
+     * 캐시가 남는다. 부분 유실을 만들려면 시험이 따로 손을 대야 한다.
      */
     public static RedisFaults 영속으로_시작한다() {
         return 시작한다(true);

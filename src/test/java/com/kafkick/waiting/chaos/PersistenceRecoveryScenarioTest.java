@@ -12,6 +12,7 @@ import java.util.Optional;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.DisplayName;
@@ -66,6 +67,12 @@ class PersistenceRecoveryScenarioTest {
 
     private static final ScheduledExecutorService 보고 =
             Executors.newSingleThreadScheduledExecutor();
+
+    /** 보고가 터진 수. 장애 구간에는 터지는 것이 정상이라 세기만 한다. */
+    private static final AtomicLong 뛰다_터진_수 = new AtomicLong();
+
+    /** 심어 둔 줄의 자리. 가장 확실한 생존자라 회복 판정에 그대로 쓴다. */
+    private static final Map<String, Double> 심은_자리 = new LinkedHashMap<>();
 
     private static RedisFaults faults;
 
@@ -147,7 +154,7 @@ class PersistenceRecoveryScenarioTest {
             redis.opsForSet().add(RedisKeys.ACTIVE_COUPONS, 쿠폰).block(기다림);
             redis.opsForValue().set(RedisKeys.stock(쿠폰), "100000").block(기다림);
         }
-        QueueSeed.줄을_세운다(연결, COUPON, 줄_선_사람, 생존_수명);
+        심은_자리.putAll(QueueSeed.줄을_세운다(연결, COUPON, 줄_선_사람, 생존_수명));
     }
 
     @Test
@@ -164,16 +171,29 @@ class PersistenceRecoveryScenarioTest {
             Map<String, Double> 회복_뒤_자리 = new LinkedHashMap<>();
             Map<String, Double> 재등록_자리 = new LinkedHashMap<>();
             Map<String, Double> 증발_뒤_자리 = new LinkedHashMap<>();
+            Map<String, Double> 심은_뒤_자리 = new LinkedHashMap<>();
             long[] 한산한_도착 = new long[2];
             long[] 줄_도착 = new long[3];
+            long[] 진입_임계 = new long[1];
+            BackendReports[] 보고기 = new BackendReports[1];
+            long[] 회복_임계 = new long[1];
 
             ChaosScenario.named("C12 영속 복구")
                     .baseline(() -> {
                         재료를_심는다(연결);
-                        BackendReports 보고서 = BackendReports.실시계로(연결,
-                                Duration.ofSeconds(3));
-                        보고.scheduleAtFixedRate(() -> 보고서.보고한다("c12-be", 가용량),
-                                0, 500, TimeUnit.MILLISECONDS);
+                        보고기[0] = BackendReports.실시계로(연결, Duration.ofSeconds(3));
+                        BackendReports 보고서 = 보고기[0];
+                        // **조용히 죽지 않는다.** 한 번 던지면 그 뒤로 영영
+                        // 안 뛴다. 레디스를 죽이는 시나리오라 반드시 던지고,
+                        // 그러면 회복 구간이 하한 크레딧에서 돌아 진입 구간과
+                        // 다른 판이 된다 — 비교 자체가 성립하지 않는다.
+                        보고.scheduleAtFixedRate(() -> {
+                            try {
+                                보고서.보고한다("c12-be", 가용량);
+                            } catch (RuntimeException e) {
+                                뛰다_터진_수.incrementAndGet();
+                            }
+                        }, 0, 500, TimeUnit.MILLISECONDS);
                         Awaitility.await().alias("첫 스냅샷이 닿아 재료가 신선해진다")
                                 .atMost(기다림).until(() -> !holder.isDataStale());
                         한산한_도착[0] = 뒷단까지_센다(한산한_쿠폰[0], () -> 정상_상태.addAll(
@@ -185,8 +205,17 @@ class PersistenceRecoveryScenarioTest {
                         // 이 시험이 재는 것이 통째 유실(C1)이 되어 버린다.
                         디스크에_내려쓴다();
                         살아남을_자리.putAll(자리들(살아남을_회원, 보낼_수));
+                        진입_임계[0] = 임계를_읽는다();
                     })
                     .inject(() -> {
+                        // **생존 신호를 지운다.** 폴링마다 나가는 가장 잦은
+                        // 쓰기라 유실 꼬리에 가장 많이 걸린다 — 줄에는 사람이
+                        // 있는데 살아 있는 신호가 하나도 없는 상태가 되고,
+                        // 그게 스위프 스크립트가 막으려는 바로 그 판이다.
+                        //
+                        // 덧붙이기를 멈추기 전에 지운다. 뒤에 지우면 그 삭제
+                        // 자체가 파일에 안 남아 회복 뒤에 도로 살아난다.
+                        생존_신호를_지운다();
                         // **마지막 창을 결정적으로 만든다.** 그냥 등록하고
                         // 죽이면 everysec 이 이미 내려쓴 뒤라 열에 열이 살아남고,
                         // 그러면 "증발한 사람이 다시 선다" 는 이 시나리오의
@@ -199,14 +228,19 @@ class PersistenceRecoveryScenarioTest {
                         여러_번_시도한다(COUPON, 보낼_수, 증발할_회원);
                         faults.끊는다();
                     })
-                    .duringFault(() -> 줄_도착[1] = 뒷단까지_센다(COUPON,
-                            () -> 장애중_줄_상태.addAll(
-                                    여러_번_시도한다(COUPON, 보낼_수, 3_000))))
+                    .duringFault(() -> {
+                        Awaitility.await().alias("레디스가 죽어 재료가 낡는다")
+                                .atMost(기다림).until(holder::isDataStale);
+                        줄_도착[1] = 뒷단까지_센다(COUPON, () -> 장애중_줄_상태.addAll(
+                                여러_번_시도한다(COUPON, 보낼_수, 3_000)));
+                    })
                     .recover(() -> faults.붙인다())
                     .afterRecovery(() -> {
                         Awaitility.await().alias("스냅샷이 다시 닿는다")
                                 .atMost(기다림).until(() -> !holder.isDataStale());
                         회복_뒤_자리.putAll(자리들(살아남을_회원, 보낼_수));
+                        심은_뒤_자리.putAll(QueueSeed.자리들(연결, COUPON, 줄_선_사람));
+                        회복_임계[0] = 임계를_읽는다();
                         증발_뒤_자리.putAll(자리들(증발할_회원, 보낼_수));
                         한산한_도착[1] = 뒷단까지_센다(한산한_쿠폰[1], () -> 회복_상태.addAll(
                                 여러_번_시도한다(한산한_쿠폰[1], 한산한_보낼_수, 200)));
@@ -218,6 +252,7 @@ class PersistenceRecoveryScenarioTest {
                     })
                     .assertEntry(() -> RecoveryCriteria.violations(
                             대조군이_받았다("정상", 정상_상태),
+                            대조군이_뒷단까지_갔다("정상", 한산한_도착[0]),
                             줄에_세웠다("정상", 정상_줄_상태, 보낼_수),
                             줄을_추월하지_않았다("정상", 줄_도착[0]),
                             줄이_서_있었다(살아남을_자리)))
@@ -230,9 +265,17 @@ class PersistenceRecoveryScenarioTest {
                             // 이 시나리오가 유지 구간에 요구하는 것은 하나다 —
                             // 판정이 멎지 않는다. 전원 5xx 면 회복 구간의 관측이
                             // 무엇을 뜻하는지 알 수 없다.
-                            전면_차단이_아니었다(장애중_줄_상태)))
+                            전면_차단이_아니었다(장애중_줄_상태),
+                            낡음에_들어갔다()))
                     .assertRecovery(() -> RecoveryCriteria.violations(
                             대조군이_받았다("회복", 회복_상태),
+                            대조군이_뒷단까지_갔다("회복", 한산한_도착[1]),
+                            // **임계는 뒤로 안 간다.** 유실 꼬리에 배분의
+                            // 마지막 상승이 걸리면 되돌아갈 수 있고, 그러면
+                            // 이미 통과한 사람이 다시 대기가 된다.
+                            임계가_뒤로_안_갔다(진입_임계[0], 회복_임계[0]),
+                            줄을_추월하지_않았다("재등록", 줄_도착[2]),
+                            보고가_다시_돈다(보고기[0]),
                             // **영속이 실제로 일했는가.** 아무도 안 남았으면
                             // 통째로 날아간 것이라 C1 을 다시 잰 것이다.
                             영속이_일했다(살아남을_자리, 회복_뒤_자리),
@@ -241,8 +284,12 @@ class PersistenceRecoveryScenarioTest {
                             // 추월 판정이 재는 척하는 자리가 된다.
                             증발이_일어났다(증발_뒤_자리),
                             // RC5 — 남은 사람의 자리는 안 움직인다.
-                            RecoveryCriteria.seatLost(회복_뒤_자리,
-                                    자리만_추린다(살아남을_자리, 회복_뒤_자리)),
+                            //
+                            // **추리지 않는다.** 사라진 사람을 비교 집합에서
+                            // 빼면 이 판정이 정의상 안 깨진다. 내려쓴 무리와
+                            // 심어 둔 줄은 전원 생존이 요구사항이다.
+                            RecoveryCriteria.seatLost(살아남을_자리, 회복_뒤_자리),
+                            RecoveryCriteria.seatLost(심은_자리, 심은_뒤_자리),
                             줄에_세웠다("재등록", 재등록_상태, 보낼_수),
                             // **추월 0.** 재등록자의 자리는 남은 사람보다 뒤다.
                             재등록자가_추월하지_않았다(회복_뒤_자리, 재등록_자리),
@@ -267,6 +314,53 @@ class PersistenceRecoveryScenarioTest {
             Awaitility.await().alias("AOF 재작성이 끝난다").atMost(기다림).until(() ->
                     !연결.sync().info("persistence").contains("aof_rewrite_in_progress:1"));
         }
+    }
+
+    /** 배분이 올린 임계. 없으면 0 이다. */
+    private long 임계를_읽는다() {
+        String 값 = redis.opsForValue()
+                .get(RedisKeys.admitted(COUPON, 1, 0)).block(기다림);
+        return 값 == null ? 0 : (long) Double.parseDouble(값);
+    }
+
+    /** 살아 있는 신호를 통째로 지운다. 유실 꼬리가 실제로 만드는 모양이다. */
+    private void 생존_신호를_지운다() {
+        try (StatefulRedisConnection<String, String> 연결 = faults.연결한다()) {
+            연결.sync().del(RedisKeys.alive(COUPON, 1, 0));
+        }
+    }
+
+    /** 낡음에 안 들어갔으면 회복을 기다린 적도 없다 — 이 판은 장애가 아니다. */
+    private Optional<String> 낡음에_들어갔다() {
+        return holder.isDataStale() ? Optional.empty()
+                : Optional.of("전제 — 유지 구간에 재료가 낡지 않았다");
+    }
+
+    /** 상태 코드만 보면 뒷단에 안 가고 200 을 낸 판을 못 가른다. */
+    private Optional<String> 대조군이_뒷단까지_갔다(String 구간, long 도착) {
+        return 도착 == 한산한_보낼_수 ? Optional.empty()
+                : Optional.of("%s — 대조 쿠폰이 %d 건만 뒷단까지 갔다 (보낸 %d)"
+                        .formatted(구간, 도착, 한산한_보낼_수));
+    }
+
+    /** 되돌아간 임계 위에서는 이미 통과한 사람이 다시 대기가 된다 (불변식 3). */
+    private Optional<String> 임계가_뒤로_안_갔다(long 진입, long 회복) {
+        if (진입 <= 0) {
+            return Optional.of("전제 — 진입 구간에 임계가 안 올랐다 (%d)".formatted(진입));
+        }
+        return 회복 >= 진입 ? Optional.empty()
+                : Optional.of("임계가 %d 에서 %d 로 뒤로 갔다".formatted(진입, 회복));
+    }
+
+    /**
+     * 보고가 다시 도는가. <b>멎으면 회복 구간이 하한 크레딧에서 돈다</b> — 진입
+     * 구간과 다른 판이 되어 두 구간을 비교하는 것 자체가 성립하지 않는다.
+     * 장애 중에 터지는 것은 정상이라 수를 안 본다. 회복 뒤에 값이 있는지를 본다.
+     */
+    private Optional<String> 보고가_다시_돈다(BackendReports 보고서) {
+        return 보고서.신선한_보고().containsKey("c12-be") ? Optional.empty()
+                : Optional.of("전제 — 회복 뒤에 신선한 가용량 보고가 없다 (터진 판 %d)"
+                        .formatted(뛰다_터진_수.get()));
     }
 
     private Optional<String> 대조군이_받았다(String 구간, List<Integer> 상태) {
@@ -317,14 +411,12 @@ class PersistenceRecoveryScenarioTest {
     }
 
     /**
-     * 영속이 실제로 일했는가. <b>한 명도 안 남았으면 통째로 날아간 것</b>이고,
-     * 그건 C1 이 재는 판이다 — 이 시나리오의 전제가 없어진다.
+     * 영속이 실제로 일했는가. <b>내려쓴 무리는 전원 남아야 한다</b> — 한 명이라도
+     * 없으면 파일에 있던 것을 잃은 것이고, 그건 증발이 아니라 유실이다.
      */
     private Optional<String> 영속이_일했다(Map<String, Double> 전, Map<String, Double> 후) {
-        return 후.isEmpty()
-                ? Optional.of("전제 — 내려쓴 %d 명이 한 명도 안 남았다. 통째로 날아갔다"
-                        .formatted(전.size()))
-                : Optional.empty();
+        return 후.size() == 전.size() ? Optional.empty()
+                : Optional.of("내려쓴 %d 명 중 %d 명만 남았다".formatted(전.size(), 후.size()));
     }
 
     /**
@@ -335,18 +427,6 @@ class PersistenceRecoveryScenarioTest {
         return 증발_뒤.isEmpty() ? Optional.empty()
                 : Optional.of("전제 — 마지막 창의 %d 명이 그대로 남았다. 증발이 없다"
                         .formatted(증발_뒤.size()));
-    }
-
-    /** 남은 사람들의 장애 전 자리만 추린다. 증발한 사람은 비교 대상이 아니다. */
-    private Map<String, Double> 자리만_추린다(Map<String, Double> 전, Map<String, Double> 후) {
-        Map<String, Double> 추린_것 = new LinkedHashMap<>();
-        후.keySet().forEach(member -> {
-            Double 자리 = 전.get(member);
-            if (자리 != null) {
-                추린_것.put(member, 자리);
-            }
-        });
-        return 추린_것;
     }
 
     /**

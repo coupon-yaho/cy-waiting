@@ -280,4 +280,28 @@ class ChaosScenarioTest {
                 .hasMessageContaining("RC1")
                 .hasMessageContaining("정리 단언이 깨졌다");
     }
+
+    /**
+     * <b>판정이 던져도 앞의 위반을 안 잃는다.</b>
+     */
+    // 단계와 같은 이유다. 판정 하나가 터지면 그때까지 모은 것이 통째로 가려지고,
+    // 보고서에 그 예외만 남아 원인이 엉뚱한 곳을 가리킨다.
+    @Test
+    @DisplayName("판정이_터져도_앞의_위반이_남는다")
+    void 판정이_터져도_앞의_위반이_남는다() {
+        assertThatThrownBy(() -> ChaosScenario.named("판정 사고")
+                .baseline(() -> { })
+                .inject(() -> { })
+                .duringFault(() -> { })
+                .recover(() -> { })
+                .afterRecovery(() -> { })
+                .assertEntry(() -> List.of("앞에서 깨진 것"))
+                .assertDuring(() -> {
+                    throw new IllegalStateException("판정이 못 셌다");
+                })
+                .assertRecovery(ChaosScenario.Verdict.none())
+                .run())
+                .hasMessageContaining("앞에서 깨진 것")
+                .hasMessageContaining("판정이 터졌다");
+    }
 }

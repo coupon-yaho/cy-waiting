@@ -33,7 +33,7 @@ class SweepGateTest {
         return SweepGate.of(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl());
     }
 
-    /** 유예만큼 틱을 흘린다. */
+    /** 유예만큼 틱을 흘린다. 갓 만든 게이트의 승계 유예를 푸는 데도 쓴다. */
     private void 유예를_흘린다(SweepGate gate, Map<String, CouponState> coupons) {
         for (int i = 0; i < 재개_유예; i++) {
             gate.sweepable(coupons, false);
@@ -57,7 +57,47 @@ class SweepGateTest {
     @Test
     @DisplayName("평시에는_쓸어낸다")
     void 평시에는_쓸어낸다() {
-        assertThat(게이트().sweepable(줄이_선_쿠폰(), false)).containsExactly(COUPON);
+        SweepGate gate = 게이트();
+        유예를_흘린다(gate, 줄이_선_쿠폰());
+
+        assertThat(gate.sweepable(줄이_선_쿠폰(), false)).containsExactly(COUPON);
+    }
+
+    /**
+     * <b>갓 만들어진 게이트는 안 씁니다</b> (CY-822).
+     *
+     * <p>이 상태는 <b>리더가 바뀐 직후</b>입니다. 유예는 리더 메모리라 승계에서
+     * 사라지고, 새 리더는 그 쿠폰의 신호가 얼마나 오래 멎어 있었는지 모릅니다.
+     * 모른다는 것이 걷을 이유가 되면 안 됩니다 — 걷힌 사람은 새 score 로 다시
+     * 서므로 순번이 뒤로 갑니다 (불변식 3).
+     */
+    @Test
+    @DisplayName("갓_만든_게이트는_유예만큼_안_쓴다")
+    void 갓_만든_게이트는_유예만큼_안_쓴다() {
+        SweepGate gate = 게이트();
+
+        for (int i = 0; i < 재개_유예; i++) {
+            assertThat(gate.sweepable(줄이_선_쿠폰(), false))
+                    .as("%d 번째 틱".formatted(i + 1)).isEmpty();
+        }
+
+        assertThat(gate.sweepable(줄이_선_쿠폰(), false)).as("유예 뒤").containsExactly(COUPON);
+    }
+
+    /**
+     * <b>승계 유예는 쿠폰마다가 아니라 노드 전체다.</b>
+     *
+     * <p>새 리더가 모르는 것은 이 쿠폰 하나가 아니라 모든 쿠폰의 사정이다.
+     * 쿠폰별로 걸면 그 틱에 처음 보이는 쿠폰만 막히고 나머지는 그냥 나간다.
+     */
+    @Test
+    @DisplayName("승계_유예는_모든_쿠폰에_걸린다")
+    void 승계_유예는_모든_쿠폰에_걸린다() {
+        SweepGate gate = 게이트();
+
+        assertThat(gate.sweepable(Map.of(
+                COUPON, CouponStates.queueing(10, 1_000, 100),
+                "c2", CouponStates.queueing(10, 1_000, 100)), false)).isEmpty();
     }
 
     /**

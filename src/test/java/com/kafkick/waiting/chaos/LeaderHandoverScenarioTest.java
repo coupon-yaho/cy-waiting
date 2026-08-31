@@ -251,19 +251,29 @@ class LeaderHandoverScenarioTest {
                         Awaitility.await().alias("두 노드가 다 하트비트를 남긴다")
                                 .atMost(기다림).until(() -> 노드.살아있는_수() >= 2);
                         // **첫 노드가 리더여야 한다.** 둘째가 쥔 채로 첫 노드의
-                        // 제어 평면을 세우면 리더십에 아무 일도 안 일어나, 승계
-                        // 없이 전 구간이 통과한다. 아니면 락을 비워 다시 뽑는다.
+                        // 제어 평면을 세우면 리더십에 아무 일도 안 일어나,
+                        // 승계 없이 전 구간이 통과한다.
+                        //
+                        // **락을 지워 다시 뽑지 않는다.** 소유자 확인을 건너뛰는
+                        // 일이라, 지운 노드는 자기가 리더라고 믿는 채로 키가 없는
+                        // 구간에 들어간다 — 두 노드가 잠깐 다 리더로 읽히고,
+                        // 그 오염된 평시 위에서 승계를 재게 된다.
+                        //
+                        // 첫 노드가 먼저 뜨므로 락도 먼저 잡는다. 아니면 그
+                        // 사실을 전제 위반으로 보고한다.
                         Awaitility.await().alias("첫 노드가 리더를 쥔다")
-                                .atMost(기다림).pollInterval(Duration.ofMillis(300))
-                                .until(() -> {
-                                    if (첫_노드.isLeader()) {
-                                        return true;
-                                    }
-                                    연결.sync().del(RedisKeys.LEADER);
-                                    return false;
-                                });
+                                .atMost(기다림).until(첫_노드::isLeader);
                         Awaitility.await().alias("첫 스냅샷이 닿아 재료가 신선해진다")
                                 .atMost(기다림).until(() -> !holder.isDataStale());
+                        // **둘째의 홀더도 신선해질 때까지 기다린다.** 홀더는
+                        // 노드마다 따로 돌고 기동 직후에는 비어 있어 낡음으로
+                        // 읽힌다. 안 기다리고 감시를 켜면 그 기동 낡음이 승계
+                        // 실패로 영영 기록된다.
+                        Awaitility.await().alias("둘째의 재료도 신선해진다")
+                                .atMost(기다림).until(() -> {
+                                    SnapshotHolder 둘째_홀더 = 둘째_홀더();
+                                    return 둘째_홀더 != null && !둘째_홀더.isDataStale();
+                                });
                         // **스냅샷이 이 쿠폰을 줄 선 상태로 볼 때까지 기다린다.**
                         // 신선하기만 하면 심기 전에 발행된 판으로도 만족되고,
                         // 그 창에 걸리면 아직 한산해서 200 이 나간다.

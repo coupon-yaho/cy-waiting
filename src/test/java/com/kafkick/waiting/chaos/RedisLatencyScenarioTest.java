@@ -52,7 +52,7 @@ import reactor.netty.http.server.HttpServer;
 @Tag("chaos")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = "waiting.scheduler.enabled=false")
-@Import(RedisLatencyScenarioTest.StubbedBackend.class)
+@Import(RedisLatencyScenarioTest.FixedClock.class)
 class RedisLatencyScenarioTest {
 
     private static final Instant 지금 = Instant.parse("2026-08-31T00:00:00Z");
@@ -83,30 +83,7 @@ class RedisLatencyScenarioTest {
 
     private static final int 보낼_수 = 15;
 
-    private static final AtomicLong 뒷단이_받은_수 = new AtomicLong();
-
-    /**
-     * 뒷단이 같은 회원을 두 번 받은 횟수.
-     */
-    // **비율로 중복을 재면 늘 여유가 생긴다.** 로컬에서 끝난 요청은 분모에만
-    // 들어가고, 그만큼 중복이 숨는다. 요청을 짚어 세면 그 여유가 없다.
-    private static final AtomicLong 뒷단이_두_번_받은_수 = new AtomicLong();
-
-    private static final Set<String> 뒷단이_본_회원 = ConcurrentHashMap.newKeySet();
-
-    private static final DisposableServer 뒷단 = HttpServer.create()
-            .port(0)
-            .handle((request, response) -> {
-                뒷단이_받은_수.incrementAndGet();
-                // 회원 번호는 시험 전체에서 안 겹치게 발급한다. 겹쳐 도착하면
-                // 게이트웨이가 한 요청을 두 번 보낸 것이다.
-                String member = request.requestHeaders().get("X-Member-Id");
-                if (member != null && !뒷단이_본_회원.add(member)) {
-                    뒷단이_두_번_받은_수.incrementAndGet();
-                }
-                return response.status(HttpStatus.OK.value()).send();
-            })
-            .bindNow();
+    private static final BackendStub 뒷단 = BackendStub.항상_받는다();
 
     private static RedisWireFaults 선;
 
@@ -120,14 +97,14 @@ class RedisLatencyScenarioTest {
 
     @AfterAll
     static void 내린다() {
-        뒷단.disposeNow();
+        뒷단.close();
         if (선 != null) {
             선.close();
         }
     }
 
     @TestConfiguration
-    static class StubbedBackend {
+    static class FixedClock {
 
         @Bean
         @Primary
@@ -172,7 +149,9 @@ class RedisLatencyScenarioTest {
     // 그대로 터져 나가 기다리질 않는다 — 재료가 아직 안 실린 순간에 걸리면
     // 그 판이 죽고, 그건 결함이 아니라 시험이 너무 일찍 물어본 것이다.
     private void 재료가_닿기를_기다린다() {
-        AtomicLong 회원 = new AtomicLong(800);
+        // **구간과 못 겹치는 대역을 쓴다.** 폴이 이백 번이면 번호가 천까지
+        // 올라가 정상 구간과 부딪히고, 그때 뒷단이 중복 수신으로 센다.
+        AtomicLong 회원 = new AtomicLong(9_000);
         Awaitility.await().atMost(Duration.ofSeconds(20))
                 .until(() -> 발급_상태((int) 회원.incrementAndGet()) == 200);
     }
@@ -259,35 +238,33 @@ class RedisLatencyScenarioTest {
         long[] 회복 = new long[1];
         long[] 카나리 = new long[3];
         long[] 도착 = new long[3];
-        BackendRpsRecorder 유입 = new BackendRpsRecorder(뒷단이_받은_수::get);
 
         ChaosScenario.named("C2 Redis 지연 %s".formatted(지연))
                 .baseline(() -> {
                     재료를_심는다();
                     재료가_닿기를_기다린다();
-                    유입.sample(지금);
                     카나리[0] = 카나리_지연();
-                    도착[0] = 잰다(() -> 정상[0] = 최대_지연(1_000));
-                    유입.sample(지금.plusSeconds(1));
+                    도착[0] = 뒷단_도착을_센다(() -> 정상[0] = 최대_지연(1_000));
                 })
                 .inject(() -> 지연을_넣는다(지연))
                 .duringFault(() -> {
                     // **주입이 걸렸는지 먼저 본다.** 이것이 안 느려졌으면 뒤의
                     // 모든 판정이 아무것도 안 잰 것이다.
                     카나리[1] = 카나리_지연();
-                    도착[1] = 잰다(() -> 장애중[0] = 최대_지연(2_000));
+                    도착[1] = 뒷단_도착을_센다(() -> 장애중[0] = 최대_지연(2_000));
                 })
                 .recover(this::지연을_걷는다)
                 .afterRecovery(() -> {
-                    유입.sample(지금.plusSeconds(2));
                     // **지연이 걷혔는지도 카나리로 본다.** 발급 경로는 레디스를
                     // 안 치므로 안 걷혀도 안 느려진다 — 그것만 보면 복구를 안
                     // 해도 회복으로 읽힌다.
                     카나리[2] = 카나리_지연();
-                    도착[2] = 잰다(() -> 회복[0] = 최대_지연(3_000));
-                    유입.sample(지금.plusSeconds(3));
+                    도착[2] = 뒷단_도착을_센다(() -> 회복[0] = 최대_지연(3_000));
                 })
-                .assertEntry(ChaosScenario.Verdict.none())
+                // **진입 — 주입 직후, 정상 구간의 관측이 여기서 읽힌다.**
+                // 비워 두면 그 구간에 모은 도착 수를 아무도 안 본다.
+                .assertEntry(() -> RecoveryCriteria.violations(
+                        다_뒷단까지_갔다("정상", 도착[0])))
                 .assertDuring(() -> RecoveryCriteria.violations(
                         주입이_걸렸다(카나리[0], 카나리[1]),
                         판정이_안_느려졌다("장애 중", 정상[0], 장애중[0]),
@@ -311,16 +288,9 @@ class RedisLatencyScenarioTest {
                         // **중복은 짚어서 센다.** 지연이 걷히는 순간 재전송이
                         // 겹치면 발급 요청이 불어나는데, 비율로는 로컬에서 끝난
                         // 요청만큼 여유가 생겨 그 안에 숨는다.
-                        중복_수신이_없다()))
+                        뒷단.중복_수신이_없다()))
                 .run();
 
-    }
-
-    /** 뒷단이 같은 요청을 두 번 받았는가. 발급 경로에서 그건 초과 발급이다. */
-    private Optional<String> 중복_수신이_없다() {
-        long 중복 = 뒷단이_두_번_받은_수.get();
-        return 중복 == 0 ? Optional.empty()
-                : Optional.of("RC4 뒷단이 같은 요청을 %d 건 두 번 받았다".formatted(중복));
     }
 
     /**
@@ -337,21 +307,26 @@ class RedisLatencyScenarioTest {
         assertThat(판정이_안_느려졌다("가짜", 10, 10 + 문턱 + 1))
                 .hasValueSatisfying(v -> assertThat(v).contains("레디스를 친다"));
 
-        assertThat(주입이_걸렸다(10, 10 + 지연.dividedBy(2).toMillis())).as("문턱까지는 통과")
-                .isEmpty();
-        assertThat(주입이_걸렸다(10, 11))
+        assertThat(주입이_걸렸다(10, 10 + 문턱)).as("문턱까지는 통과").isEmpty();
+        assertThat(주입이_걸렸다(10, 11)).as("덜 느려지면 주입이 안 걸린 것이다")
                 .hasValueSatisfying(v -> assertThat(v).contains("카나리"));
 
-        assertThat(다_뒷단까지_갔다("가짜", (long) 워밍업 + 보낼_수)).isEmpty();
-        assertThat(다_뒷단까지_갔다("가짜", 워밍업 + 보낼_수 - 1L))
+        long 보낸_수 = (long) 워밍업 + 보낼_수;
+        assertThat(다_뒷단까지_갔다("가짜", 보낸_수)).as("다 가면 통과").isEmpty();
+        assertThat(다_뒷단까지_갔다("가짜", 보낸_수 - 1)).as("미달은 잡는다")
                 .hasValueSatisfying(v -> assertThat(v).contains("뒷단에 갔다"));
+        // **초과는 증폭이 맡는다.** 도착 판정이 그것까지 막으면 증폭이 먹힌다.
+        assertThat(다_뒷단까지_갔다("가짜", 보낸_수 + 1)).as("초과는 여기 몫이 아니다")
+                .isEmpty();
+        assertThat(RecoveryCriteria.amplified(보낸_수, 보낸_수 + 1)).as("초과는 증폭이 잡는다")
+                .isPresent();
     }
 
     /** 한 배치가 뒷단에 몇 건 닿았는지 잰다. 가짜 성공은 홉을 건너뛴다. */
-    private long 잰다(Runnable 배치) {
-        long 전 = 뒷단이_받은_수.get();
+    private long 뒷단_도착을_센다(Runnable 배치) {
+        long 전 = 뒷단.받은_수();
         배치.run();
-        return 뒷단이_받은_수.get() - 전;
+        return 뒷단.받은_수() - 전;
     }
 
     /**
@@ -361,9 +336,11 @@ class RedisLatencyScenarioTest {
      * 그것도 뒷단 홉을 건너뛰므로 정상보다 빠르고, 그러면 "안 느려졌다" 로
      * 기록된다 — 서킷 폴백 회귀가 실제로 취하는 모양이다.
      */
+    // **미달만 본다.** 초과까지 여기서 막으면 증폭 판정이 통째로 먹혀 감지력이
+    // 0 이 된다 — 앞이 통과하면 뒤는 반드시 통과한다.
     private Optional<String> 다_뒷단까지_갔다(String 구간, long 실제) {
         long 보낸_수 = (long) 워밍업 + 보낼_수;
-        return 실제 == 보낸_수 ? Optional.empty()
+        return 실제 >= 보낸_수 ? Optional.empty()
                 : Optional.of("%s — %d 건만 뒷단에 갔다 (보낸 %d)"
                         .formatted(구간, 실제, 보낸_수));
     }

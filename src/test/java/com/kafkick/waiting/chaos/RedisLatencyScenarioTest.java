@@ -2,6 +2,7 @@ package com.kafkick.waiting.chaos;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.kafkick.waiting.adapter.redis.RedisKeys;
 import com.kafkick.waiting.control.GatewaySnapshot;
 import com.kafkick.waiting.control.SnapshotCodec;
 import com.kafkick.waiting.control.SnapshotSource;
@@ -22,6 +23,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.AfterAll;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -133,24 +135,47 @@ class RedisLatencyScenarioTest {
             return Clock.fixed(지금, ZoneOffset.UTC);
         }
 
-        /** 한산한 쿠폰. 통과 경로가 레디스를 치는지 재는 것이 목적이다. */
-        @Bean
-        @Primary
-        SnapshotSource 한산한_재료() {
-            Map<String, String> 재료 = SnapshotCodec.create().encode(
-                    new GatewaySnapshot(Map.of(COUPON, CouponStates.idle(1_000_000)),
-                            new SnapshotMeta(10_000, 1), 지금),
-                    CreditSmoother.Snapshot.empty(), QueueingHysteresis.Snapshot.empty());
-            return () -> Mono.just(재료);
-        }
+        // **재료 스텁을 두지 않는다.** 두면 어댑터가 가려져 레디스 왕복이
+        // 애초에 안 생기고, 그러면 "요청마다 재료를 다시 읽는다" 는 회귀가
+        // — 불변식 1 이 무너지는 가장 그럴듯한 형태가 — 계측 밖에 남는다.
+        // 재료는 실제 레디스에 심는다.
     }
 
     @LocalServerPort
     private int port;
 
-    /** 카나리를 치는 자리. 앱과 같은 프록시를 지난다. */
+    /** 카나리를 치는 자리이자 재료를 심는 자리. 앱과 같은 프록시를 지난다. */
     @Autowired
     private ReactiveStringRedisTemplate redis;
+
+    /**
+     * <b>재료를 실제 레디스에 심는다.</b>
+     *
+     * <p>앱은 이것을 자기 어댑터로 읽는다 — 그래야 판정 경로가 새로 왕복을
+     * 내기 시작하는 순간 지연에 잡힌다.
+     */
+    private void 재료를_심는다() {
+        Map<String, String> 재료 = SnapshotCodec.create().encode(
+                new GatewaySnapshot(Map.of(COUPON, CouponStates.idle(1_000_000)),
+                        new SnapshotMeta(10_000, 1), 지금),
+                CreditSmoother.Snapshot.empty(), QueueingHysteresis.Snapshot.empty());
+        redis.opsForHash().putAll(RedisKeys.SNAPSHOT, 재료).block(명령_상한.multipliedBy(4));
+    }
+
+    /**
+     * 재료가 앱에 닿을 때까지 기다린다. 안 닿았으면 전 구간이 거절이다.
+     */
+    // **폴마다 회원을 새로 쓴다.** 같은 번호로 두 번 치면 뒷단이 그것을 중복
+    // 수신으로 세고, 시험 자신이 만든 중복이 판정을 빨갛게 만든다.
+    //
+    // **상태로 기다린다.** 지연 재는 함수로 폴하면 첫 프로브가 거절일 때 예외가
+    // 그대로 터져 나가 기다리질 않는다 — 재료가 아직 안 실린 순간에 걸리면
+    // 그 판이 죽고, 그건 결함이 아니라 시험이 너무 일찍 물어본 것이다.
+    private void 재료가_닿기를_기다린다() {
+        AtomicLong 회원 = new AtomicLong(800);
+        Awaitility.await().atMost(Duration.ofSeconds(20))
+                .until(() -> 발급_상태((int) 회원.incrementAndGet()) == 200);
+    }
 
     private WebTestClient 클라이언트() {
         return WebTestClient.bindToServer()
@@ -169,7 +194,18 @@ class RedisLatencyScenarioTest {
     // 시나리오의 관측 대상이다. 판정이 보는 시계는 여전히 고정이다.
     private long 발급_지연(int member) {
         long 시작 = System.nanoTime();
-        int 상태 = 클라이언트().post()
+        int 상태 = 발급_상태(member);
+        long 걸린_시간 = Duration.ofNanos(System.nanoTime() - 시작).toMillis();
+        if (상태 != 200) {
+            throw new IllegalStateException(
+                    "발급이 %d 로 끝났다 — 지연을 잴 수 없다".formatted(상태));
+        }
+        return 걸린_시간;
+    }
+
+    /** 발급 한 번의 상태 코드. 기다리는 자리는 거절을 예외로 안 만든다. */
+    private int 발급_상태(int member) {
+        return 클라이언트().post()
                 .uri("/api/v1/coupons/" + COUPON + "/issue")
                 .header("X-Member-Id", String.valueOf(member))
                 .header("X-Member-Grade", "GOLD")
@@ -177,12 +213,6 @@ class RedisLatencyScenarioTest {
                 .returnResult(Void.class)
                 .getStatus()
                 .value();
-        long 걸린_시간 = Duration.ofNanos(System.nanoTime() - 시작).toMillis();
-        if (상태 != 200) {
-            throw new IllegalStateException(
-                    "발급이 %d 로 끝났다 — 지연을 잴 수 없다".formatted(상태));
-        }
-        return 걸린_시간;
     }
 
     /**
@@ -228,13 +258,16 @@ class RedisLatencyScenarioTest {
         long[] 장애중 = new long[1];
         long[] 회복 = new long[1];
         long[] 카나리 = new long[3];
+        long[] 도착 = new long[3];
         BackendRpsRecorder 유입 = new BackendRpsRecorder(뒷단이_받은_수::get);
 
         ChaosScenario.named("C2 Redis 지연 %s".formatted(지연))
                 .baseline(() -> {
+                    재료를_심는다();
+                    재료가_닿기를_기다린다();
                     유입.sample(지금);
                     카나리[0] = 카나리_지연();
-                    정상[0] = 최대_지연(1_000);
+                    도착[0] = 잰다(() -> 정상[0] = 최대_지연(1_000));
                     유입.sample(지금.plusSeconds(1));
                 })
                 .inject(() -> 지연을_넣는다(지연))
@@ -242,7 +275,7 @@ class RedisLatencyScenarioTest {
                     // **주입이 걸렸는지 먼저 본다.** 이것이 안 느려졌으면 뒤의
                     // 모든 판정이 아무것도 안 잰 것이다.
                     카나리[1] = 카나리_지연();
-                    장애중[0] = 최대_지연(2_000);
+                    도착[1] = 잰다(() -> 장애중[0] = 최대_지연(2_000));
                 })
                 .recover(this::지연을_걷는다)
                 .afterRecovery(() -> {
@@ -251,29 +284,36 @@ class RedisLatencyScenarioTest {
                     // 안 치므로 안 걷혀도 안 느려진다 — 그것만 보면 복구를 안
                     // 해도 회복으로 읽힌다.
                     카나리[2] = 카나리_지연();
-                    회복[0] = 최대_지연(3_000);
+                    도착[2] = 잰다(() -> 회복[0] = 최대_지연(3_000));
                     유입.sample(지금.plusSeconds(3));
                 })
                 .assertEntry(ChaosScenario.Verdict.none())
                 .assertDuring(() -> RecoveryCriteria.violations(
                         주입이_걸렸다(카나리[0], 카나리[1]),
-                        판정이_안_느려졌다("장애 중", 정상[0], 장애중[0])))
+                        판정이_안_느려졌다("장애 중", 정상[0], 장애중[0]),
+                        다_뒷단까지_갔다("유지", 도착[1])))
+                // **"갱신 루프 정지 0" 은 여기서 못 잰다** (CY-827). 고정
+                // 시계라 재료 나이가 안 자라 낡음이 영영 안 뜨고, 유지 구간이
+                // 표본 도는 시간뿐이라 배경 루프가 그 창에 한 번도 안 들어온다.
+                //
+                // **RC1·RC2·RC5·RC6 도 없다.** 이 시나리오는 줄이 안 서는
+                // 한산한 쿠폰만 때린다 — 순번도 자리도 생기지 않는다.
                 .assertRecovery(() -> RecoveryCriteria.violations(
                         지연이_걷혔다(카나리[0], 카나리[2]),
                         판정이_안_느려졌다("회복 뒤", 정상[0], 회복[0]),
-                        // RC4 — 눌린 것이 같은 초에 방출되면 회복이 곧 2차 장애다.
-                        // 재료를 모아 놓고 안 읽으면 그 자리가 비어 있는 것이다.
-                        RecoveryCriteria.recoveryBurst(
-                                유입.averageRps(지금, 지금.plusSeconds(1)),
-                                유입.peakRps(지금.plusSeconds(2), 지금.plusSeconds(3))),
+                        // **RC4 의 버스트 쪽은 이 하네스로 못 잰다** (CY-817).
+                        // 부하 생성기가 닫힌 루프라 발신 속도가 게이트웨이
+                        // 지연으로 정해진다 — 구간마다 같은 수를 보내므로
+                        // 비율이 구조적으로 1.00 이다. 대신 아래 둘이 실제로
+                        // 잡는 것을 본다.
+                        RecoveryCriteria.amplified((long) 워밍업 + 보낼_수, 도착[2]),
+                        다_뒷단까지_갔다("회복", 도착[2]),
                         // **중복은 짚어서 센다.** 지연이 걷히는 순간 재전송이
                         // 겹치면 발급 요청이 불어나는데, 비율로는 로컬에서 끝난
                         // 요청만큼 여유가 생겨 그 안에 숨는다.
                         중복_수신이_없다()))
                 .run();
 
-        assertThat(카나리[1]).as("전제 — 주입이 실제로 걸렸다")
-                .isGreaterThanOrEqualTo(지연.dividedBy(2).toMillis());
     }
 
     /** 뒷단이 같은 요청을 두 번 받았는가. 발급 경로에서 그건 초과 발급이다. */
@@ -281,6 +321,51 @@ class RedisLatencyScenarioTest {
         long 중복 = 뒷단이_두_번_받은_수.get();
         return 중복 == 0 ? Optional.empty()
                 : Optional.of("RC4 뒷단이 같은 요청을 %d 건 두 번 받았다".formatted(중복));
+    }
+
+    /**
+     * <b>판정이 살아 있는지를 시험이 스스로 확인한다.</b>
+     */
+    // 이 시나리오의 판정은 전부 "안 변했다" 를 본다. 그런 판정은 아무것도 안
+    // 재도 통과하므로, 변한 값을 넣어 실제로 우는지를 따로 본다.
+    @Test
+    @DisplayName("판정이_변화를_실제로_잡는다")
+    void 판정이_변화를_실제로_잡는다() {
+        long 문턱 = 허용_증가.toMillis();
+        assertThat(판정이_안_느려졌다("가짜", 10, 10 + 문턱)).as("문턱까지는 통과")
+                .isEmpty();
+        assertThat(판정이_안_느려졌다("가짜", 10, 10 + 문턱 + 1))
+                .hasValueSatisfying(v -> assertThat(v).contains("레디스를 친다"));
+
+        assertThat(주입이_걸렸다(10, 10 + 지연.dividedBy(2).toMillis())).as("문턱까지는 통과")
+                .isEmpty();
+        assertThat(주입이_걸렸다(10, 11))
+                .hasValueSatisfying(v -> assertThat(v).contains("카나리"));
+
+        assertThat(다_뒷단까지_갔다("가짜", (long) 워밍업 + 보낼_수)).isEmpty();
+        assertThat(다_뒷단까지_갔다("가짜", 워밍업 + 보낼_수 - 1L))
+                .hasValueSatisfying(v -> assertThat(v).contains("뒷단에 갔다"));
+    }
+
+    /** 한 배치가 뒷단에 몇 건 닿았는지 잰다. 가짜 성공은 홉을 건너뛴다. */
+    private long 잰다(Runnable 배치) {
+        long 전 = 뒷단이_받은_수.get();
+        배치.run();
+        return 뒷단이_받은_수.get() - 전;
+    }
+
+    /**
+     * <b>다 뒷단까지 갔는가.</b>
+     *
+     * <p>상태 코드만 보면 게이트웨이가 로컬에서 낸 가짜 200 을 못 가린다.
+     * 그것도 뒷단 홉을 건너뛰므로 정상보다 빠르고, 그러면 "안 느려졌다" 로
+     * 기록된다 — 서킷 폴백 회귀가 실제로 취하는 모양이다.
+     */
+    private Optional<String> 다_뒷단까지_갔다(String 구간, long 실제) {
+        long 보낸_수 = (long) 워밍업 + 보낼_수;
+        return 실제 == 보낸_수 ? Optional.empty()
+                : Optional.of("%s — %d 건만 뒷단에 갔다 (보낸 %d)"
+                        .formatted(구간, 실제, 보낸_수));
     }
 
     private void 지연을_넣는다(Duration 만큼) {

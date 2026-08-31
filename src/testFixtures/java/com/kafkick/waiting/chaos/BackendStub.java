@@ -20,6 +20,7 @@ import reactor.netty.http.server.HttpServer;
 public final class BackendStub implements AutoCloseable {
 
     private final AtomicLong received = new AtomicLong();
+    private final ConcurrentHashMap<String, AtomicLong> perCoupon = new ConcurrentHashMap<>();
     private final AtomicLong duplicated = new AtomicLong();
     private final Set<String> seen = ConcurrentHashMap.newKeySet();
     private final DisposableServer server;
@@ -29,6 +30,8 @@ public final class BackendStub implements AutoCloseable {
                 .port(0)
                 .handle((request, response) -> {
                     received.incrementAndGet();
+                    perCoupon.computeIfAbsent(쿠폰을_뽑는다(request.uri()),
+                            key -> new AtomicLong()).incrementAndGet();
                     // 회원 번호는 시험 전체에서 안 겹치게 발급한다. 겹쳐
                     // 도착하면 게이트웨이가 한 요청을 두 번 보낸 것이다.
                     String member = request.requestHeaders().get("X-Member-Id");
@@ -67,6 +70,27 @@ public final class BackendStub implements AutoCloseable {
 
     public long 받은_수() {
         return received.get();
+    }
+
+    /**
+     * 그 쿠폰으로 온 수. <b>추월 판정은 이걸로 센다</b> — 전역 차분은 배치 밖
+     * 도착 한 건을 "줄을 추월했다" 로 읽어, 계수 오류가 불변식 위반으로 보고된다.
+     */
+    public long 받은_수(String couponId) {
+        AtomicLong 계수 = perCoupon.get(couponId);
+        return 계수 == null ? 0 : 계수.get();
+    }
+
+    // /api/v1/coupons/{id}/issue 에서 {id} 를 뗀다. 모양이 다르면 통째로 한
+    // 바구니에 담는다 — 못 뗀 것을 조용히 버리면 계수가 소리 없이 샌다.
+    private static String 쿠폰을_뽑는다(String uri) {
+        String[] 조각 = uri.split("/");
+        for (int i = 0; i < 조각.length - 1; i++) {
+            if ("coupons".equals(조각[i])) {
+                return 조각[i + 1];
+            }
+        }
+        return "";
     }
 
     /** 뒷단이 같은 요청을 두 번 받았는가. 발급 경로에서 그건 초과 발급이다. */

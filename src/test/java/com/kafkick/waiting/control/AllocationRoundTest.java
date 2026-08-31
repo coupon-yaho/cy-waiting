@@ -87,53 +87,50 @@ class AllocationRoundTest {
      * 지웠다고 말합니다.
      */
     /**
-     * <b>리더십을 잃었다 되찾으면 이월을 다시 받는다</b> (F9 · CY-859).
+     * <b>이월 실패는 곧바로 포기가 아니다</b> (CY-859).
      *
-     * <p>안 그러면 남이 리더였던 동안 움직인 값을 못 보고 제 옛 값을 이어 쓴다.
-     * 뒷단이 열화해 새 리더가 크레딧을 크게 내려 발행했는데, 돌아온 노드가 옛
-     * 값에서 평활화를 시작하면 뒷단이 감당 못 할 수를 들여보낸다.
+     * <p>폴백을 그 자리에 설치하면 다음 판이 아예 안 시도한다. 그 폴백은
+     * 미관측이라 첫 관측치를 평활 없이 그대로 발행하는데, 승계 직후에는 그것이
+     * 뒷단이 감당 못 할 수다.
      */
     @Test
-    @DisplayName("리더십을_되찾으면_이월을_다시_받는다")
-    void 리더십을_되찾으면_이월을_다시_받는다() {
-        List<Double> 이월_요청 = new ArrayList<>();
-        AtomicBoolean 리더 = new AtomicBoolean(true);
-        AtomicReference<Double> 저장된_이월 = new AtomicReference<>(7_300.0);
+    @DisplayName("이월이_실패하면_다음_판에_다시_받는다")
+    void 이월이_실패하면_다음_판에_다시_받는다() {
+        AtomicInteger 시도 = new AtomicInteger();
+        AtomicBoolean 터진다 = new AtomicBoolean(true);
+        List<Long> 발행된_크레딧 = new ArrayList<>();
         AllocationRound round = AllocationRound.of(
-                리더::get,
+                () -> true,
                 () -> Mono.just(new TimedDemands(
-                        List.of(new CouponDemand("c1", 0, 0, QueueMode.ADAPTIVE)), 읽은_시각)),
+                        List.of(new CouponDemand("c1", 5, 100, QueueMode.ADAPTIVE)), 읽은_시각)),
                 () -> 1_000, () -> 1,
                 grant -> Mono.just(grant.credit()),
-                hash -> Mono.empty(),
+                hash -> {
+                    발행된_크레딧.add(Long.parseLong(hash.get("#credit")));
+                    return Mono.empty();
+                },
                 () -> Instant.ofEpochSecond(읽은_시각),
                 () -> {
-                    이월_요청.add(저장된_이월.get());
-                    return Mono.just(CreditSmoother.restore(0.3,
-                            new CreditSmoother.Snapshot(저장된_이월.get(), true)));
+                    시도.incrementAndGet();
+                    return 터진다.get()
+                            ? Mono.error(new IllegalStateException("레디스가 흔들린다"))
+                            : Mono.just(CreditSmoother.restore(0.3,
+                                    new CreditSmoother.Snapshot(200.0, true)));
                 },
-                SnapshotCodec.create(), () -> 0L, Optional::empty,
-                SoldOutCleanup.of(1, new SimpleMeterRegistry()),
-                ids -> Mono.just(List.of()), ids -> Mono.just(List.of()),
-                안_걷는_스위퍼(), () -> false, () -> CircuitState.CLOSED);
+                SnapshotCodec.create(), () -> 0L);
 
         round.run().block();
-        assertThat(이월_요청).as("첫 판에 한 번 받는다").hasSize(1);
+        assertThat(시도.get()).as("한 판 실패했다").isEqualTo(1);
 
-        round.run().block();
-        assertThat(이월_요청).as("리더인 동안은 다시 안 받는다 — 방금 쓴 값을 되읽으면 평활화가 무의미하다")
-                .hasSize(1);
-
-        // 남이 리더였던 동안 뒷단이 열화해 값이 크게 내려갔다.
-        리더.set(false);
-        round.run().block();
-        저장된_이월.set(800.0);
-        리더.set(true);
-
+        터진다.set(false);
         round.run().block();
 
-        assertThat(이월_요청).as("되찾은 뒤에는 다시 받는다").hasSize(2);
-        assertThat(이월_요청.get(1)).as("남이 남긴 값에서 이어 간다").isEqualTo(800.0);
+        assertThat(시도.get()).as("다음 판에 다시 받는다 — 폴백을 그 자리에 설치하면 안 받는다")
+                .isEqualTo(2);
+        // 이월값 200 과 관측 1,000 사이. 알파가 0.3 이라 440 이 나온다 —
+        // 관측치를 생으로 내보내면 1,000 이다.
+        assertThat(발행된_크레딧).as("이월을 받은 판은 평활한 값을 낸다")
+                .containsExactly(1_000L, 440L);
     }
 
     @Test

@@ -20,7 +20,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.DisplayName;
@@ -38,8 +37,6 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Mono;
-import reactor.netty.DisposableServer;
-import reactor.netty.http.server.HttpServer;
 
 /**
  * C8 — 뒷단 지연 → 서킷 오픈 → half-open 회복 (8.3.4 · 5절).
@@ -60,19 +57,10 @@ class CircuitRecoveryScenarioTest {
     /** 뒷단이 멎었는가. 이 스위치로 장애를 넣고 걷는다. */
     private static final AtomicBoolean 멎었다 = new AtomicBoolean();
 
-    private static final AtomicLong 뒷단이_받은_수 = new AtomicLong();
-
     /** 짧게 잡는다. 운영값으로 재면 시험 하나가 그만큼 걸린다. */
     private static final Duration 응답_상한 = Duration.ofMillis(300);
 
-    private static final DisposableServer 뒷단 = HttpServer.create()
-            .port(0)
-            .handle((request, response) -> {
-                뒷단이_받은_수.incrementAndGet();
-                return 멎었다.get() ? Mono.never()
-                        : response.status(HttpStatus.OK.value()).send();
-            })
-            .bindNow();
+    private static final BackendStub 뒷단 = BackendStub.멎을_수_있다(멎었다::get);
 
     @DynamicPropertySource
     static void 배선(DynamicPropertyRegistry registry) {
@@ -88,7 +76,7 @@ class CircuitRecoveryScenarioTest {
 
     @AfterAll
     static void 내린다() {
-        뒷단.disposeNow();
+        뒷단.close();
     }
 
     @TestConfiguration
@@ -183,9 +171,9 @@ class CircuitRecoveryScenarioTest {
                 .inject(() -> 멎었다.set(true))
                 .duringFault(() -> {
                     여러_번_시도한다(5, 2_000);
-                    long 열린_뒤 = 뒷단이_받은_수.get();
+                    long 열린_뒤 = 뒷단.받은_수();
                     여러_번_시도한다(5, 2_100);
-                    유지중_유입[0] = 뒷단이_받은_수.get() - 열린_뒤;
+                    유지중_유입[0] = 뒷단.받은_수() - 열린_뒤;
                 })
                 .recover(() -> 멎었다.set(false))
                 .afterRecovery(this::닫힐_때까지_두드린다)
@@ -205,7 +193,10 @@ class CircuitRecoveryScenarioTest {
                 // 요구하는 것은 성공하면 닫히는 것이고, 여기서 재는 것은
                 // 열린 채로 굳지 않는 것이다.
                 .assertRecovery(() -> RecoveryCriteria.violations(
-                        시도에_들어갔다(), 회복_시도가_적다()))
+                        시도에_들어갔다(), 회복_시도가_적다(),
+                        // 반쯤 열린 구간의 시험 요청이 불어나면 뒷단이 같은
+                        // 요청을 두 번 받는다. 발급 경로에서 그건 초과 발급이다.
+                        뒷단.중복_수신이_없다()))
                 .run();
     }
 

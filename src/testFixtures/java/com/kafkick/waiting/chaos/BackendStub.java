@@ -1,9 +1,11 @@
 package com.kafkick.waiting.chaos;
 
 import java.util.Optional;
+import java.util.function.BooleanSupplier;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import reactor.core.publisher.Mono;
 import reactor.netty.DisposableServer;
 import reactor.netty.http.server.HttpServer;
 
@@ -22,7 +24,7 @@ public final class BackendStub implements AutoCloseable {
     private final Set<String> seen = ConcurrentHashMap.newKeySet();
     private final DisposableServer server;
 
-    private BackendStub(int status) {
+    private BackendStub(BooleanSupplier stalled) {
         this.server = HttpServer.create()
                 .port(0)
                 .handle((request, response) -> {
@@ -33,14 +35,22 @@ public final class BackendStub implements AutoCloseable {
                     if (member != null && !seen.add(member)) {
                         duplicated.incrementAndGet();
                     }
-                    return response.status(status).send();
+                    // **멎은 것은 느린 것이지 거절이 아니다.** 상태를 돌려주면
+                    // 서킷이 실패로 안 세고, 그러면 열리는 갈래를 못 밟는다.
+                    return stalled.getAsBoolean() ? Mono.never()
+                            : response.status(200).send();
                 })
                 .bindNow();
     }
 
     /** 늘 200 을 내는 뒷단. */
     public static BackendStub 항상_받는다() {
-        return new BackendStub(200);
+        return new BackendStub(() -> false);
+    }
+
+    /** 스위치가 켜지면 응답을 안 내는 뒷단. 서킷이 열리는 갈래를 만든다. */
+    public static BackendStub 멎을_수_있다(BooleanSupplier 멎었나) {
+        return new BackendStub(멎었나);
     }
 
     public int port() {

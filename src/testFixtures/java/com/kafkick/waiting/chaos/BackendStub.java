@@ -65,8 +65,8 @@ public final class BackendStub implements AutoCloseable {
     }
 
     /**
-     * 그 쿠폰으로 온 수. <b>전역 차분은 이름대로 안 잰다</b> — 배치 밖 도착 한
-     * 건이 "줄을 추월했다" 로 읽히고, 그건 불변식 위반으로 보고되는 계수 오류다.
+     * 그 쿠폰으로 온 수. <b>추월 판정은 이걸로 센다</b> — 전역 차분은 배치 밖
+     * 도착 한 건을 "줄을 추월했다" 로 읽어, 계수 오류가 불변식 위반으로 보고된다.
      */
     public long 받은_수(String couponId) {
         AtomicLong 계수 = perCoupon.get(couponId);

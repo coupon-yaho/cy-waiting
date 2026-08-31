@@ -177,7 +177,7 @@ class SplitBrainScenarioTest {
         try {
             LeaderFaults 락 = LeaderFaults.of(연결);
             List<Integer> 정상_상태 = new ArrayList<>();
-            List<Integer> 장애중_상태 = new ArrayList<>();
+            List<Integer> 장애중_줄_상태 = new ArrayList<>();
             List<Integer> 회복_상태 = new ArrayList<>();
             List<Integer> 회복_줄_상태 = new ArrayList<>();
             List<Integer> 정상_줄_상태 = new ArrayList<>();
@@ -188,6 +188,8 @@ class SplitBrainScenarioTest {
             long[] 분단중_도착 = new long[1];
             List<Integer> 분단중_상태 = new ArrayList<>();
             boolean[] 창이_열렸다 = new boolean[1];
+            long[] 인계_시각 = new long[1];
+            Duration[] 강등까지 = new Duration[1];
             List<Integer> 한산한_장애중 = new ArrayList<>();
             Map<String, Double> 장애_전_자리 = new LinkedHashMap<>();
             Map<String, Double> 회복_뒤_자리 = new LinkedHashMap<>();
@@ -215,6 +217,7 @@ class SplitBrainScenarioTest {
                         // **그 창 안에서 재고 넘어간다.** 강등을 기다린 뒤에만
                         // 재면 남는 것은 "팔로워 + 낡은 재료" 라, C4 가 이미
                         // 재는 상태다. 이 시나리오만의 자리는 여기뿐이다.
+                        인계_시각[0] = System.nanoTime();
                         창이_열렸다[0] = leadership.isLeader();
                         분단중_도착[0] = 뒷단까지_센다(COUPON, () -> 분단중_상태.addAll(
                                 여러_번_시도한다(COUPON, 보낼_수, 4_000)));
@@ -226,7 +229,11 @@ class SplitBrainScenarioTest {
                         Awaitility.await()
                                 .alias("사실 기반 강등 — 남이 락을 쥔 것을 다음 갱신에서 알고 "
                                         + "내려와야 한다. 리스 만료를 기다려 내려오면 이 한계를 넘는다")
-                                .atMost(강등_한계).until(() -> !leadership.isLeader());
+                                .atMost(전이_한계).until(() -> !leadership.isLeader());
+                        // **인계 시각부터 잰다.** 대기 예산으로만 걸면 그 앞의
+                        // 배치가 길어진 만큼 한계가 조용히 늘어나, 사실 기반
+                        // 강등을 들어내도 초록이 된다.
+                        강등까지[0] = Duration.ofNanos(System.nanoTime() - 인계_시각[0]);
                         펜스[1] = leadership.fence();
                         // **분단을 낡음 너머로 끌고 간다.** 200ms 만에 걷으면
                         // 배분 틱 하나도 안 놓치고 낡음도 안 열려, 줄을 심어 둔
@@ -239,7 +246,7 @@ class SplitBrainScenarioTest {
                         낡음_직후[1] = 결정_수(낡아서_줄섬);
                         한산한_도착[1] = 뒷단까지_센다(한산한_쿠폰, () -> 한산한_장애중.addAll(
                                 여러_번_시도한다(한산한_쿠폰, 한산한_보낼_수, 2_100)));
-                        줄_도착[0] = 뒷단까지_센다(COUPON, () -> 장애중_상태.addAll(
+                        줄_도착[0] = 뒷단까지_센다(COUPON, () -> 장애중_줄_상태.addAll(
                                 여러_번_시도한다(COUPON, 보낼_수, 2_000)));
                     })
                     .recover(() -> 락.lease를_만료시킨다(Duration.ofMillis(1)))
@@ -262,16 +269,17 @@ class SplitBrainScenarioTest {
                             줄을_추월하지_않았다("진입", 분단중_도착[0]),
                             // 전제를 여기서 본다. run() 뒤에 두면 다른 사유로
                             // 던졌을 때 영영 안 돌고, 깨진 전제가 안 보인다.
-                            평시에_섰다(정상_줄_상태, 한산한_도착[0])))
+                            평시에_섰다(정상_줄_상태, 정상_상태, 한산한_도착[0])))
                     .assertDuring(() -> RecoveryCriteria.violations(
                             // 양성 대조 — 한산한 쪽이 계속 통과해야 아래
                             // "추월 0" 이 무언가를 잰 것이 된다.
                             열려_있었다("유지", 한산한_도착[1], 한산한_도착[0], 한산한_장애중),
+                            사실로_강등했다(강등까지[0]),
                             낡은_갈래를_밟았다(낡음_직후[0], 낡음_직후[1]),
                             판정이_멈추지_않았다("유지 한산", 한산한_장애중),
-                            판정이_멈추지_않았다("유지", 장애중_상태),
+                            판정이_멈추지_않았다("유지", 장애중_줄_상태),
                             // 5xx 만 보면 전원이 429 로 거절돼도 통과한다.
-                            줄에_세웠다("유지", 장애중_상태, 보낼_수),
+                            줄에_세웠다("유지", 장애중_줄_상태, 보낼_수),
                             // **줄이 있으면 추월 금지** (불변식 4). 갈라진 동안
                             // 크레딧이 두 배여도 줄 선 사람을 건너뛰면 안 된다.
                             줄을_추월하지_않았다("유지", 줄_도착[0])))
@@ -286,17 +294,27 @@ class SplitBrainScenarioTest {
                             // 증거가 아니라, 재는 척하는 자리다.
                             RecoveryCriteria.seatLost(장애_전_자리, 회복_뒤_자리),
                             줄을_추월하지_않았다("회복", 줄_도착[1]),
-                            // **틱 번호가 역행하지 않는다.** 구 리더가 물러난 뒤
-                            // 다시 잡으면 번호가 앞선 값 이상이어야 한다.
                             리더십이_실제로_갈라졌다(펜스[0], 펜스[1], 펜스[2]),
                             뒷단.중복_수신이_없다()))
                     .run();
-
-            assertThat(판정이_멈추지_않았다("정상", 정상_상태)).isEmpty();
         } finally {
             연결.sync().del(RedisKeys.LEADER);
             연결.close();
         }
+    }
+
+    /**
+     * <b>사실로 내려왔는가.</b> 리스 만료를 기다려 내려오면 그동안 두 노드가
+     * 함께 배분을 돈다. 한계는 리스에서 시도 예산을 뺀 값이라, 만료 경로는
+     * 여기 못 든다.
+     */
+    private Optional<String> 사실로_강등했다(Duration 걸린_시간) {
+        if (걸린_시간 == null) {
+            return Optional.of("전제 — 강등까지의 시간을 못 쟀다");
+        }
+        return 걸린_시간.compareTo(강등_한계) < 0 ? Optional.empty()
+                : Optional.of("강등에 %dms 가 걸렸다 (한계 %dms) — 리스 만료를 기다린 것이다"
+                        .formatted(걸린_시간.toMillis(), 강등_한계.toMillis()));
     }
 
     /**
@@ -310,10 +328,15 @@ class SplitBrainScenarioTest {
     }
 
     /** 평시가 성립해야 나머지 구간의 값에 뜻이 생긴다. */
-    private Optional<String> 평시에_섰다(List<Integer> 줄_상태, long 한산한_도착) {
+    private Optional<String> 평시에_섰다(List<Integer> 줄_상태, List<Integer> 한산한_상태,
+            long 한산한_도착) {
         Optional<String> 줄 = 줄에_세웠다("정상", 줄_상태, 보낼_수);
         if (줄.isPresent()) {
             return 줄;
+        }
+        Optional<String> 멈춤 = 판정이_멈추지_않았다("정상", 한산한_상태);
+        if (멈춤.isPresent()) {
+            return 멈춤;
         }
         return 한산한_도착 == 한산한_보낼_수 ? Optional.empty()
                 : Optional.of("전제 — 평시에 한산한 쿠폰이 %d 건만 갔다 (보낸 %d)"

@@ -11,7 +11,7 @@ USER app
 WORKDIR /app
 # **이름을 정확히 짚는다.** 여럿과 맞으면 무엇이 들어갈지 순서에 달리고,
 # 픽스처가 든 것이 실릴 수도 있다. 무시 목록에 기대면 새 산출물이 생길 때 샌다.
-ARG JAR=build/libs/waiting-0.4.1.jar
+ARG JAR=build/libs/waiting-0.4.2.jar
 COPY --chown=app:app ${JAR} app.jar
 
 # 컨테이너 메모리에 맞춘다. 안 걸면 JVM 이 호스트 램의 1/4 을 잡으려 든다.

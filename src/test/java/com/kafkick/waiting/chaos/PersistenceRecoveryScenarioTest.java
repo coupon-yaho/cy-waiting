@@ -2,6 +2,7 @@ package com.kafkick.waiting.chaos;
 
 import com.kafkick.waiting.adapter.redis.RedisKeys;
 import com.kafkick.waiting.control.SnapshotHolder;
+import io.lettuce.core.RedisException;
 import io.lettuce.core.api.StatefulRedisConnection;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -310,13 +311,14 @@ class PersistenceRecoveryScenarioTest {
     }
 
     /**
-     * 신선한 보고가 있는가. <b>첫 명령이 터지는 것은 실패가 아니다</b> — 죽기
-     * 전에 연 연결이라 다시 붙는 동안 한 번 재설정된다. 다음 판에 다시 본다.
+     * 신선한 보고가 있는가. <b>연결이 끊긴 것만 삼킨다</b> — 죽기 전에 연
+     * 연결이라 다시 붙는 동안 한 번 재설정된다. 그 밖의 오류까지 삼키면 진짜
+     * 원인이 30초짜리 대기 실패로 뭉개져, 무엇이 틀렸는지 안 보인다.
      */
     private boolean 신선한_보고가_있다(BackendReports 보고서) {
         try {
             return 보고서.신선한_보고().containsKey("c12-be");
-        } catch (RuntimeException e) {
+        } catch (RedisException e) {
             return false;
         }
     }

@@ -55,6 +55,9 @@ class BackendFailureScenarioTest {
 
     private static final Duration 기다림 = Duration.ofSeconds(20);
 
+    /** 심어 둔 줄의 생존 신호 수명. 시험 수명보다 길어야 스위퍼가 살아 있다고 읽는다. */
+    private static final Duration 생존_수명 = Duration.ofMinutes(5);
+
     /** 뒷단이 5xx 를 내는가. 이 스위치로 장애를 넣고 걷는다. */
     private static final AtomicBoolean 실패한다 = new AtomicBoolean();
 
@@ -125,14 +128,11 @@ class BackendFailureScenarioTest {
                 .returnResult(Void.class).getStatus().value();
     }
 
-    private void 재료를_심는다() {
+    private void 재료를_심는다(StatefulRedisConnection<String, String> 연결) {
         redis.opsForSet().add(RedisKeys.ACTIVE_COUPONS, COUPON, 한산한_쿠폰).block(기다림);
         redis.opsForValue().set(RedisKeys.stock(COUPON), "50").block(기다림);
         redis.opsForValue().set(RedisKeys.stock(한산한_쿠폰), "100000").block(기다림);
-        for (int i = 0; i < 줄_선_사람; i++) {
-            redis.opsForZSet().add(RedisKeys.queue(COUPON, 1, 0), "q" + i, 100 + i)
-                    .block(기다림);
-        }
+        QueueSeed.줄을_세운다(연결, COUPON, 줄_선_사람, 생존_수명);
     }
 
     /**
@@ -146,20 +146,6 @@ class BackendFailureScenarioTest {
         Map<String, Double> 자리 = new LinkedHashMap<>();
         for (int i = 0; i < 수; i++) {
             String member = String.valueOf(시작_회원 + i);
-            Double score = redis.opsForZSet()
-                    .score(RedisKeys.queue(COUPON, 1, 0), member).block(기다림);
-            if (score != null) {
-                자리.put(member, score);
-            }
-        }
-        return 자리;
-    }
-
-    /** 줄에 선 사람들의 자리. 이름으로 짚어야 같은 값을 가진 둘이 안 섞인다. */
-    private Map<String, Double> 자리들() {
-        Map<String, Double> 자리 = new LinkedHashMap<>();
-        for (int i = 0; i < 줄_선_사람; i++) {
-            String member = "q" + i;
             Double score = redis.opsForZSet()
                     .score(RedisKeys.queue(COUPON, 1, 0), member).block(기다림);
             if (score != null) {
@@ -202,9 +188,9 @@ class BackendFailureScenarioTest {
 
             ChaosScenario.named("C9 뒷단 5xx")
                     .baseline(() -> {
-                        재료를_심는다();
+                        재료를_심는다(연결);
                         Awaitility.await().atMost(기다림).until(() -> !holder.isDataStale());
-                        장애_전_자리.putAll(자리들());
+                        장애_전_자리.putAll(QueueSeed.자리들(연결, COUPON, 줄_선_사람));
                         뒷단_상태[0] = 뒷단이_직접_답한다();
                         한산한_도착[0] = 뒷단까지_센다(() -> 정상_상태.addAll(
                                 여러_번_시도한다(한산한_쿠폰, 한산한_보낼_수, 1_100)));
@@ -232,7 +218,7 @@ class BackendFailureScenarioTest {
                                 여러_번_시도한다(한산한_쿠폰, 한산한_보낼_수, 3_100)));
                         도착[1] = 뒷단까지_센다(() -> 회복_줄_상태.addAll(
                                 여러_번_시도한다(COUPON, 보낼_수, 3_000)));
-                        회복_뒤_자리.putAll(자리들());
+                        회복_뒤_자리.putAll(QueueSeed.자리들(연결, COUPON, 줄_선_사람));
                         새로고침_뒤_자리.putAll(등록된_자리들(1_000, 보낼_수));
                     })
                     .assertEntry(() -> RecoveryCriteria.violations(

@@ -240,12 +240,15 @@ class PersistenceRecoveryScenarioTest {
                         // 갱신기가 돌아온 것만 말한다. 보고는 시험 쪽의 다른
                         // 스케줄러라, 순서를 보장하는 것이 아무것도 없다.
                         Awaitility.await().alias("가용량 보고가 다시 닿는다")
-                                .atMost(기다림)
-                                .until(() -> 보고기[0].신선한_보고().containsKey("c12-be"));
+                                .atMost(기다림).until(() -> 신선한_보고가_있다(보고기[0]));
                         Awaitility.await().alias("스냅샷이 다시 닿는다")
                                 .atMost(기다림).until(() -> !holder.isDataStale());
                         회복_뒤_자리.putAll(자리들(살아남을_회원, 보낼_수));
-                        심은_뒤_자리.putAll(QueueSeed.자리들(연결, COUPON, 줄_선_사람));
+                        // **새 연결로 읽는다.** 죽이기 전에 연 것은 컨테이너와
+                        // 함께 끊겼고, 다시 켠 뒤 첫 명령이 연결 재설정으로
+                        // 터진다 — 시나리오가 아니라 하네스가 터진 것인데
+                        // 회복 단계 실패로 보고된다 (CY-867).
+                        심은_뒤_자리.putAll(살아난_뒤_자리들());
                         회복_임계[0] = 임계를_읽는다();
                         증발_뒤_자리.putAll(자리들(증발할_회원, 보낼_수));
                         한산한_도착[1] = 뒷단까지_센다(한산한_쿠폰[1], () -> 회복_상태.addAll(
@@ -303,6 +306,25 @@ class PersistenceRecoveryScenarioTest {
                     .run();
         } finally {
             연결.close();
+        }
+    }
+
+    /**
+     * 신선한 보고가 있는가. <b>첫 명령이 터지는 것은 실패가 아니다</b> — 죽기
+     * 전에 연 연결이라 다시 붙는 동안 한 번 재설정된다. 다음 판에 다시 본다.
+     */
+    private boolean 신선한_보고가_있다(BackendReports 보고서) {
+        try {
+            return 보고서.신선한_보고().containsKey("c12-be");
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    /** 살아난 레디스에 새로 붙어 읽는다. 죽기 전에 연 것은 못 쓴다. */
+    private Map<String, Double> 살아난_뒤_자리들() {
+        try (StatefulRedisConnection<String, String> 연결 = faults.연결한다()) {
+            return QueueSeed.자리들(연결, COUPON, 줄_선_사람);
         }
     }
 
@@ -366,7 +388,7 @@ class PersistenceRecoveryScenarioTest {
      * 주기와의 경합이라, 멀쩡한 판이 빠른 순간에 떨어진다.
      */
     private Optional<String> 보고가_다시_돈다(BackendReports 보고서) {
-        return 보고서.신선한_보고().containsKey("c12-be") ? Optional.empty()
+        return 신선한_보고가_있다(보고서) ? Optional.empty()
                 : Optional.of("전제 — 회복 뒤에 신선한 가용량 보고가 없다 (터진 판 %d)"
                         .formatted(뛰다_터진_수.get()));
     }

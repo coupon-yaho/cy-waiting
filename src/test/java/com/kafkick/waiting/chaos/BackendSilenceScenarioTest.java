@@ -7,6 +7,7 @@ import com.kafkick.waiting.gateway.GatewayRoutes;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.lettuce.core.api.StatefulRedisConnection;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -55,6 +56,14 @@ class BackendSilenceScenarioTest {
 
     private static final long 가용량 = 2_000;
 
+    /**
+     * 다시 올 시각의 밴드. 차례를 못 받은 사람은 가장 먼 밴드(30초)로 부르고
+     * 지터가 위아래로 흔든다 — 상수로 박으면 회복 순간에 전원이 같은 초로 온다.
+     */
+    private static final long 밴드_하한 = 20;
+
+    private static final long 밴드_상한 = 40;
+
     /** 뒷단이 입을 닫았는가. 이 스위치로 장애를 넣고 걷는다. */
     private static final AtomicBoolean 멎었다 = new AtomicBoolean();
 
@@ -98,6 +107,9 @@ class BackendSilenceScenarioTest {
 
     @Autowired
     private AdmissionGatewayFilter 판정;
+
+    @Autowired
+    private MeterRegistry meters;
 
     /**
      * 게이트웨이가 끊는 것을 재려면 클라이언트가 먼저 안 끊어야 한다. 먼저
@@ -164,7 +176,8 @@ class BackendSilenceScenarioTest {
             List<Reply> 침묵중 = new ArrayList<>();
             List<Reply> 회복 = new ArrayList<>();
             long[] 도착 = new long[3];
-            int[] 격벽 = new int[2];
+            int[] 격벽 = new int[3];
+            long[] 폴백_수 = new long[2];
             long[] 표본 = new long[1];
 
             ChaosScenario.named("C18 뒷단 무응답")
@@ -175,15 +188,23 @@ class BackendSilenceScenarioTest {
                         도착[0] = 뒷단까지_센다(쿠폰[0], () -> 정상.addAll(
                                 여러_번_시도한다(쿠폰[0], 1_000)));
                         격벽[0] = 판정.inFlight();
+                        폴백_수[0] = 폴백_계수();
                     })
                     .inject(() -> 멎었다.set(true))
                     .duringFault(() -> {
+                        // **쥐었는지부터 본다.** 끝난 뒤의 0 만 보면 격벽을
+                        // 통째로 들어내도 통과한다 — 0 == 0 이다.
+                        격벽[1] = 물려_있는_동안_격벽을_본다();
                         도착[1] = 뒷단까지_센다(쿠폰[1], () -> 침묵중.addAll(
                                 여러_번_시도한다(쿠폰[1], 2_000)));
-                        // **자리를 놓고 나서 본다.** 멎은 요청이 끝난 뒤에도
-                        // 격벽에 남아 있으면 그 자리는 영영 안 돌아온다.
-                        격벽[1] = 판정.inFlight();
-                        표본[0] = 서킷().getMetrics().getNumberOfBufferedCalls();
+                        // 자리를 놓고 나서 다시 본다. 끝난 뒤에도 남아 있으면
+                        // 그 자리는 영영 안 돌아온다.
+                        격벽[2] = 판정.inFlight();
+                        폴백_수[1] = 폴백_계수();
+                        // **실패로 좁혀 센다.** 창에 쌓인 수는 성공도 포함해서,
+                        // 끊는 자리가 서킷 밖이어도 성공 표본으로 통과한다.
+                        표본[0] = 서킷().getMetrics().getNumberOfFailedCalls()
+                                + 서킷().getMetrics().getNumberOfSlowCalls();
                     })
                     .recover(() -> 멎었다.set(false))
                     .afterRecovery(() -> {
@@ -199,15 +220,30 @@ class BackendSilenceScenarioTest {
                             // 504 는 "게이트웨이가 고장났다" 로 읽히고, 다시
                             // 오라는 안내가 없다.
                             끝내는_방식이_맞다(침묵중),
+                            // **다시 올 시각이 밴드 안인가** (F7). 0 보다 크기만
+                            // 보면 상수로 박아도 통과하고, 그러면 회복 순간에
+                            // 전원이 같은 초로 돌아온다.
+                            밴드_안에서_부른다(침묵중),
                             // **격벽 자리를 놓았는가.** 멎은 요청이 자리를 쥔
                             // 채로 남으면 뒷단이 살아나도 그 자리는 안 돌아온다.
-                            격벽이_비었다("유지", 격벽[1]),
+                            격벽을_쥐었다(격벽[1]),
+                            격벽이_비었다("유지", 격벽[2]),
+                            // **유지 구간에 요청이 정말 뒷단까지 갔는가.**
+                            // 안 갔으면 판정 단계에서 다 끊은 것이라, 격벽도
+                            // 서킷도 아무것도 안 겪는다.
+                            뒷단까지_갔다(도착[1]),
+                            // **막았다는 신호가 남았는가.** 이 구간은 로그가
+                            // 한 줄도 안 나온다 — 서킷이 안 열려 전이가 없고
+                            // 격벽도 안 차기 때문이다. 남는 것은 이 계수뿐이다.
+                            폴백이_세어졌다(폴백_수[0], 폴백_수[1]),
                             // **취소가 아니라 실패로 쌓였는가.** 끊는 자리가
                             // 서킷 밖이면 서킷이 받는 것은 취소이고, 취소는
                             // 창에 안 쌓인다 — 표본이 0 이면 영영 안 열린다.
                             서킷에_쌓였다(표본[0])))
                     .assertRecovery(() -> RecoveryCriteria.violations(
                             뒷단이_살아났다(도착[2], 회복),
+                            // RC4 — 보낸 것보다 많이 도착하지 않았는가.
+                            RecoveryCriteria.amplified(보낼_수, 도착[2]),
                             보고가_안_터졌다(),
                             뒷단.중복_수신이_없다()))
                     .run();
@@ -267,6 +303,67 @@ class BackendSilenceScenarioTest {
                 return Optional.of("유지 — 사유가 없다: " + 하나.본문());
             }
         }
+        return Optional.empty();
+    }
+
+    /**
+     * 요청 하나를 물려 두고 그동안 격벽을 본다. <b>쥐었는지부터 봐야 한다</b> —
+     * 끝난 뒤의 0 만 보면 격벽을 통째로 들어내도 통과한다.
+     */
+    private int 물려_있는_동안_격벽을_본다() {
+        Thread 물리는_사람 = new Thread(() -> 물어본다(쿠폰[1], 9_000));
+        물리는_사람.setDaemon(true);
+        물리는_사람.start();
+        try {
+            AtomicLong 최대 = new AtomicLong();
+            Awaitility.await().alias("멎은 요청이 격벽 자리를 쥔다").atMost(기다림)
+                    .until(() -> {
+                        최대.set(Math.max(최대.get(), 판정.inFlight()));
+                        return 최대.get() > 0;
+                    });
+            return (int) 최대.get();
+        } finally {
+            물리는_사람.interrupt();
+        }
+    }
+
+    /** 그 계수의 지금 값. 막았다는 신호가 남는 유일한 자리다. */
+    private long 폴백_계수() {
+        return (long) meters.find("waiting.backend.fallback").counters().stream()
+                .mapToDouble(counter -> counter.count()).sum();
+    }
+
+    /** 멎은 요청이 격벽 자리를 쥐어야 한다. 안 쥐면 격벽이 아무 일도 안 한 것이다. */
+    private Optional<String> 격벽을_쥐었다(int 최대) {
+        return 최대 > 0 ? Optional.empty()
+                : Optional.of("멎은 요청이 격벽 자리를 한 번도 안 쥐었다 — 격벽을 안 지난다");
+    }
+
+    /** 유지 구간에 요청이 뒷단까지 안 갔으면 격벽도 서킷도 아무것도 안 겪는다. */
+    private Optional<String> 뒷단까지_갔다(long 도착) {
+        return 도착 > 0 ? Optional.empty()
+                : Optional.of("유지 구간에 뒷단까지 간 것이 없다 — 판정 단계에서 끊었다");
+    }
+
+    /** 막았다는 신호가 계수에 남았는가. 이 구간은 로그가 한 줄도 안 나온다. */
+    private Optional<String> 폴백이_세어졌다(long 전, long 후) {
+        return 후 - 전 >= 보낼_수 ? Optional.empty()
+                : Optional.of("폴백 계수가 %d 만 올랐다 (보낸 %d) — 막았다는 신호가 없다"
+                        .formatted(후 - 전, 보낼_수));
+    }
+
+    /**
+     * <b>다시 올 시각이 밴드 안인가</b> (F7). 0 보다 크기만 보면 상수로 박아도
+     * 통과하고, 그러면 회복 순간에 전원이 같은 초로 돌아온다 — 그것이 2차 장애다.
+     */
+    private Optional<String> 밴드_안에서_부른다(List<Reply> 상태) {
+        for (Reply 하나 : 상태) {
+            if (하나.다시_올_시각() < 밴드_하한 || 하나.다시_올_시각() > 밴드_상한) {
+                return Optional.of("다시 올 시각이 %d 다 — 밴드(%d~%d) 밖이다"
+                        .formatted(하나.다시_올_시각(), 밴드_하한, 밴드_상한));
+            }
+        }
+        // 셋이 다 같으면 흔들지 않은 것이다. 표본이 셋이라 값 하나로는 못 가른다.
         return Optional.empty();
     }
 

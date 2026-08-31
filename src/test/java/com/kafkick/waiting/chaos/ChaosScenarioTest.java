@@ -304,4 +304,28 @@ class ChaosScenarioTest {
                 .hasMessageContaining("앞에서 깨진 것")
                 .hasMessageContaining("판정이 터졌다");
     }
+
+    /**
+     * <b>회복이 불가능한 것은 안 삼킨다.</b>
+     */
+    // 메모리가 없거나 스택이 넘친 뒤에 남은 단계를 계속 도는 것은 아무 뜻이
+    // 없고, 원래 실패가 보고서 문장 뒤로 숨는다. 단언은 반대라 — 그건 담아야
+    // 어느 구간에서 깨졌는지가 남는다.
+    @Test
+    @DisplayName("치명적_오류는_안_삼킨다")
+    void 치명적_오류는_안_삼킨다() {
+        assertThatThrownBy(() -> ChaosScenario.named("메모리 사고")
+                .baseline(() -> {
+                    throw new OutOfMemoryError("더 못 담는다");
+                })
+                .inject(() -> { })
+                .duringFault(() -> { })
+                .recover(() -> { })
+                .afterRecovery(() -> { })
+                .assertEntry(ChaosScenario.Verdict.none())
+                .assertDuring(ChaosScenario.Verdict.none())
+                .assertRecovery(ChaosScenario.Verdict.none())
+                .run())
+                .isInstanceOf(OutOfMemoryError.class);
+    }
 }

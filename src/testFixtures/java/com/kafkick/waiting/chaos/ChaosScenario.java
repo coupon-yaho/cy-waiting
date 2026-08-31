@@ -146,7 +146,22 @@ public final class ChaosScenario {
         try {
             body.run();
         } catch (Throwable e) {
+            치명적이면_다시_던진다(e);
             into.add("  " + phase + " — 단계가 터졌다: " + e);
+        }
+    }
+
+    /**
+     * <b>회복이 불가능한 것은 안 삼킨다.</b>
+     *
+     * <p>메모리가 없거나 스택이 넘친 뒤에 남은 단계를 계속 도는 것은 아무 뜻이
+     * 없고, 원래 실패가 보고서 문장 뒤로 숨는다.
+     */
+    // **`Error` 를 통째로 던지면 안 된다.** `AssertionError` 도 `Error` 인데,
+    // 단계 안의 단언을 위반으로 담는 것이 이 자리의 존재 이유다.
+    private static void 치명적이면_다시_던진다(Throwable e) {
+        if (e instanceof VirtualMachineError || e instanceof LinkageError) {
+            throw (Error) e;
         }
     }
 
@@ -160,6 +175,7 @@ public final class ChaosScenario {
         try {
             verdict.judge().forEach(one -> into.add("  " + phase + " — " + one));
         } catch (Throwable e) {
+            치명적이면_다시_던진다(e);
             into.add("  " + phase + " — 판정이 터졌다: " + e);
         }
     }

@@ -2,6 +2,7 @@ package com.kafkick.waiting.gateway;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.Locale;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -20,6 +21,7 @@ class IdempotencyKeyTest {
 
     private final IdempotencyKey keys = IdempotencyKey.passThrough();
 
+    /** 뒷단 계약이 v4 다. 판 자리가 4, 변종 자리가 8~b 여야 한다. */
     private static final String CLIENT = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
 
     /** 클라이언트가 준 값을 그대로 넘긴다. 시도를 가르는 것은 클라이언트다 (C-11). */
@@ -64,24 +66,40 @@ class IdempotencyKeyTest {
     }
 
     /**
-     * <b>UUID 가 아니면 안 준 것으로 본다.</b>
-     *
-     * <p>그대로 넘기면 뒷단이 형식으로 거절해 사용자가 발급을 못 받는다.
-     * 게이트웨이가 뒷단 계약을 아는 유일한 자리라 여기서 막는다.
+     * <b>UUID v4 가 아니면 안 준 것으로 본다.</b> 그대로 넘기면 뒷단이 형식으로
+     * 거절해 사용자가 발급을 못 받는다. 게이트웨이가 뒷단 계약을 아는 유일한
+     * 자리라 여기서 막는다.
      */
     @Test
-    @DisplayName("UUID_가_아니면_안_준_것으로_본다")
-    void UUID_가_아니면_안_준_것으로_본다() {
-        assertThat(keys.of("c1", "m1", "attempt-1")).isEqualTo(keys.of("c1", "m1", null));
+    @DisplayName("UUID_v4_가_아니면_안_준_것으로_본다")
+    void UUID_v4_가_아니면_안_준_것으로_본다() {
+        String 떨어진_것 = keys.of("c1", "m1", null);
+
+        assertThat(keys.of("c1", "m1", "attempt-1")).isEqualTo(떨어진_것);
         assertThat(keys.of("c1", "m1", "3f2504e04f8941d39a0c0305e82c3301"))
-                .as("하이픈이 없으면 UUID 표기가 아니다")
-                .isEqualTo(keys.of("c1", "m1", null));
+                .as("하이픈이 없으면 UUID 표기가 아니다").isEqualTo(떨어진_것);
+        // 모양만 보면 이것들이 그대로 나가 뒷단에서 죽는다.
+        assertThat(keys.of("c1", "m1", "3f2504e0-4f89-11d3-9a0c-0305e82c3301"))
+                .as("v1 은 뒷단이 안 받는다").isEqualTo(떨어진_것);
+        assertThat(keys.of("c1", "m1", "3f2504e0-4f89-31d3-9a0c-0305e82c3301"))
+                .as("v3 도 안 받는다").isEqualTo(떨어진_것);
+        assertThat(keys.of("c1", "m1", "3f2504e0-4f89-41d3-1a0c-0305e82c3301"))
+                .as("변종 자리가 틀리면 RFC 4122 가 아니다").isEqualTo(떨어진_것);
     }
 
-    /** 내는 값은 늘 UUID 다. 뒷단이 그 형식만 받는다 (CY-830). */
+    /**
+     * 내는 값은 늘 UUID <b>v4</b> 다. 뒷단이 그 판만 받는다 (CY-830).
+     */
     @Test
-    @DisplayName("늘_UUID_형식을_낸다")
-    void 늘_UUID_형식을_낸다() {
+    @DisplayName("늘_UUID_v4_를_낸다")
+    void 늘_UUID_v4_를_낸다() {
+        // 떨어진 자리가 v3 이면 뒷단이 거절한다. 모양만 보는 단언은 그것을
+        // 못 잡는다 — 판 자리를 직접 읽는다.
+        assertThat(UUID.fromString(keys.of("c1", "m1", null)).version())
+                .as("떨어진 키의 판").isEqualTo(4);
+        assertThat(UUID.fromString(keys.of("c1", "m1", null)).variant())
+                .as("RFC 4122 변종").isEqualTo(2);
+
         // **되읽어 같은 값인지까지 본다.** 파싱만 보면 대소문자나 표기가
         // 달라져도 통과하고, 그때 뒷단은 두 건으로 센다.
         String 그대로 = keys.of("c1", "m1", CLIENT);
@@ -102,5 +120,37 @@ class IdempotencyKeyTest {
     @DisplayName("떨어진_키는_회원마다_다르다")
     void 떨어진_키는_회원마다_다르다() {
         assertThat(keys.of("c1", "m1", null)).isNotEqualTo(keys.of("c1", "m2", null));
+    }
+
+    /**
+     * <b>재기동해도 같은 값이 나온다.</b> 나머지 시험은 같은 JVM 안에서
+     * 자기끼리 비교하므로 재료가 바뀌어도 로케일이 바뀌어도 다 통과한다 —
+     * 값을 박아야 그것을 잡는다. 근거는 AIJ-0165.
+     */
+    @Test
+    @DisplayName("떨어진_키를_값으로_못_박는다")
+    void 떨어진_키를_값으로_못_박는다() {
+        assertThat(keys.of("c1", "m1", null))
+                .isEqualTo("f833a946-0ff8-42e0-ac22-8d0ed635a47a");
+        assertThat(keys.of("c1", "m2", null))
+                .isEqualTo("4df40ba4-ebec-4db4-a078-72eb5e9261f7");
+    }
+
+    /**
+     * 숫자 표기가 다른 로케일에서도 같은 값이 나온다. 노드마다 로케일이
+     * 다르면 같은 사람의 재시도가 두 키로 갈라져 이중 발급이 난다.
+     */
+    @Test
+    @DisplayName("로케일이_달라도_같은_키다")
+    void 로케일이_달라도_같은_키다() {
+        Locale 원래 = Locale.getDefault(Locale.Category.FORMAT);
+        try {
+            Locale.setDefault(Locale.Category.FORMAT,
+                    Locale.forLanguageTag("hi-IN-u-nu-deva"));
+            assertThat(keys.of("c1", "m1", null))
+                    .isEqualTo("f833a946-0ff8-42e0-ac22-8d0ed635a47a");
+        } finally {
+            Locale.setDefault(Locale.Category.FORMAT, 원래);
+        }
     }
 }

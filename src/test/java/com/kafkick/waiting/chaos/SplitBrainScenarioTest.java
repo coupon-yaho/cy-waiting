@@ -151,9 +151,13 @@ class SplitBrainScenarioTest {
                                 Duration.ofSeconds(30))).isTrue();
                     })
                     .duringFault(() -> {
+                        // **강등을 기다린다.** 다음 갱신이 실패해야 이 노드가
+                        // 리더가 아님을 안다. 기회를 봐서 읽으면 갱신 주기와
+                        // 요청 속도의 경합이라, 빠른 판에서는 아직 리더로 읽힌다.
+                        Awaitility.await().atMost(기다림).until(() -> !leadership.isLeader());
+                        펜스[1] = leadership.fence();
                         줄_도착[0] = 뒷단까지_센다(() -> 장애중_상태.addAll(
                                 여러_번_시도한다(보낼_수, 2_000)));
-                        펜스[1] = leadership.fence();
                     })
                     .recover(() -> 락.lease를_만료시킨다(Duration.ofMillis(1)))
                     .afterRecovery(() -> {

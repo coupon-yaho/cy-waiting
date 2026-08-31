@@ -9,6 +9,9 @@
 -- ARGV[3]  유예 보관 기간(초)
 -- ARGV[4]  정리 예산. 만료 신호와 유예 기록을 각각 이만큼까지 지운다. 1..7999
 -- ARGV[5]  HSCAN 커서. 첫 호출은 '0'. 반환된 값을 다음에 넘긴다
+-- ARGV[6]  앞줄에서 빼도 되는가 (1/0). **0 이어도 정리는 돈다** — 승계 유예
+--          구간에 대상까지 비우면 만료 신호와 유예 기록이 한 방향으로만 자라고
+--          커서가 전진을 못 한다
 --
 -- 반환  {swept, expiredSignals, expiredGrace, nextCursor}
 --
@@ -90,6 +93,12 @@ end
 
 -- **커서도 쓰기 전에 본다.** 형식이 틀리면 HSCAN 이 오류를 내는데, 그때는
 -- 이미 앞의 쓰기가 끝나 있다. Lua 는 롤백하지 않는다.
+-- 기본은 1 이다. 안 넘기면 이 스크립트를 부르던 자리가 그대로 돈다.
+local removeFront = ARGV[6] == nil and 1 or tonumber(ARGV[6])
+if removeFront ~= 0 and removeFront ~= 1 then
+    return redis.error_reply('제거 여부는 0 또는 1 이어야 한다: ' .. tostring(ARGV[6]))
+end
+
 local cursor = ARGV[5]
 if cursor == nil or not string.match(cursor, '^%d+$') then
     return redis.error_reply('커서는 숫자여야 한다: ' .. tostring(cursor))
@@ -197,7 +206,7 @@ if #front > 0 then
     -- 아래로 접힐 때 임계 이하인 사람을 되잡는 것이 그 검사다.
     local gone = {}
     local records = {}
-    for i = 1, anyAlive and #front or 0 do
+    for i = 1, (anyAlive and removeFront == 1) and #front or 0 do
         -- score 가 없거나 이미 지난 것은 폴링이 끊긴 것이다
         local at = aliveAt[i]
         local rank = ranks[i]

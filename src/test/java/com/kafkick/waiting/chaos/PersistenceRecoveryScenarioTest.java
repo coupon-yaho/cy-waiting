@@ -236,6 +236,12 @@ class PersistenceRecoveryScenarioTest {
                     })
                     .recover(() -> faults.붙인다())
                     .afterRecovery(() -> {
+                        // **보고를 따로 기다린다.** 스냅샷 신선도는 애플리케이션
+                        // 갱신기가 돌아온 것만 말한다. 보고는 시험 쪽의 다른
+                        // 스케줄러라, 순서를 보장하는 것이 아무것도 없다.
+                        Awaitility.await().alias("가용량 보고가 다시 닿는다")
+                                .atMost(기다림)
+                                .until(() -> 보고기[0].신선한_보고().containsKey("c12-be"));
                         Awaitility.await().alias("스냅샷이 다시 닿는다")
                                 .atMost(기다림).until(() -> !holder.isDataStale());
                         회복_뒤_자리.putAll(자리들(살아남을_회원, 보낼_수));
@@ -355,7 +361,9 @@ class PersistenceRecoveryScenarioTest {
     /**
      * 보고가 다시 도는가. <b>멎으면 회복 구간이 하한 크레딧에서 돈다</b> — 진입
      * 구간과 다른 판이 되어 두 구간을 비교하는 것 자체가 성립하지 않는다.
-     * 장애 중에 터지는 것은 정상이라 수를 안 본다. 회복 뒤에 값이 있는지를 본다.
+     *
+     * <p>위에서 기다린 뒤라 여기서는 확정만 한다. 안 기다리고 읽으면 갱신
+     * 주기와의 경합이라, 멀쩡한 판이 빠른 순간에 떨어진다.
      */
     private Optional<String> 보고가_다시_돈다(BackendReports 보고서) {
         return 보고서.신선한_보고().containsKey("c12-be") ? Optional.empty()

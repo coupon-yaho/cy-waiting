@@ -135,6 +135,26 @@ class BackendFailureScenarioTest {
         }
     }
 
+    /**
+     * 게이트웨이를 지나 실제로 줄에 선 사람들의 자리.
+     *
+     * <p><b>심어 둔 값이 아니라 등록 스크립트가 매긴 값을 본다.</b> 심은 쪽은
+     * 이 시험 내내 어떤 프로덕션 코드도 안 읽어, 자리 유실 판정이 레디스를
+     * 시험하는 자리가 된다.
+     */
+    private Map<String, Double> 등록된_자리들(int 시작_회원, int 수) {
+        Map<String, Double> 자리 = new LinkedHashMap<>();
+        for (int i = 0; i < 수; i++) {
+            String member = String.valueOf(시작_회원 + i);
+            Double score = redis.opsForZSet()
+                    .score(RedisKeys.queue(COUPON, 1, 0), member).block(기다림);
+            if (score != null) {
+                자리.put(member, score);
+            }
+        }
+        return 자리;
+    }
+
     /** 줄에 선 사람들의 자리. 이름으로 짚어야 같은 값을 가진 둘이 안 섞인다. */
     private Map<String, Double> 자리들() {
         Map<String, Double> 자리 = new LinkedHashMap<>();
@@ -167,9 +187,15 @@ class BackendFailureScenarioTest {
             List<Integer> 정상_상태 = new ArrayList<>();
             List<Integer> 장애중_상태 = new ArrayList<>();
             List<Integer> 회복_상태 = new ArrayList<>();
+            List<Integer> 회복_줄_상태 = new ArrayList<>();
+            List<Integer> 정상_줄_상태 = new ArrayList<>();
             Map<String, Double> 장애_전_자리 = new LinkedHashMap<>();
             Map<String, Double> 회복_뒤_자리 = new LinkedHashMap<>();
             long[] 도착 = new long[2];
+            long[] 줄_평시_도착 = new long[1];
+            List<Integer> 새로고침_상태 = new ArrayList<>();
+            Map<String, Double> 등록_전_자리 = new LinkedHashMap<>();
+            Map<String, Double> 새로고침_뒤_자리 = new LinkedHashMap<>();
             long[] 한산한_도착 = new long[3];
             int[] 뒷단_상태 = new int[3];
             List<Integer> 한산한_장애중 = new ArrayList<>();
@@ -182,11 +208,18 @@ class BackendFailureScenarioTest {
                         뒷단_상태[0] = 뒷단이_직접_답한다();
                         한산한_도착[0] = 뒷단까지_센다(() -> 정상_상태.addAll(
                                 여러_번_시도한다(한산한_쿠폰, 한산한_보낼_수, 1_100)));
-                        여러_번_시도한다(COUPON, 보낼_수, 1_000);
+                        줄_평시_도착[0] = 뒷단까지_센다(() -> 정상_줄_상태.addAll(
+                                여러_번_시도한다(COUPON, 보낼_수, 1_000)));
+                        등록_전_자리.putAll(등록된_자리들(1_000, 보낼_수));
                     })
                     .inject(() -> 실패한다.set(true))
                     .duringFault(() -> {
                         뒷단_상태[1] = 뒷단이_직접_답한다();
+                        // **장애 중 새로고침 연타.** 프로덕션에서 가장 흔한
+                        // 행동이고, 등록 스크립트의 재등록 갈래를 밟는 유일한
+                        // 길이다. 자리를 그대로 돌려주지 않으면 그 사람은
+                        // 맨 뒤로 밀린다 — 순번 역행이다.
+                        새로고침_상태.addAll(여러_번_시도한다(COUPON, 보낼_수, 1_000));
                         한산한_도착[1] = 뒷단까지_센다(() -> 한산한_장애중.addAll(
                                 여러_번_시도한다(한산한_쿠폰, 한산한_보낼_수, 2_100)));
                         도착[0] = 뒷단까지_센다(() -> 장애중_상태.addAll(
@@ -197,11 +230,20 @@ class BackendFailureScenarioTest {
                         뒷단_상태[2] = 뒷단이_직접_답한다();
                         한산한_도착[2] = 뒷단까지_센다(() -> 회복_상태.addAll(
                                 여러_번_시도한다(한산한_쿠폰, 한산한_보낼_수, 3_100)));
-                        도착[1] = 뒷단까지_센다(
-                                () -> 여러_번_시도한다(COUPON, 보낼_수, 3_000));
+                        도착[1] = 뒷단까지_센다(() -> 회복_줄_상태.addAll(
+                                여러_번_시도한다(COUPON, 보낼_수, 3_000)));
                         회복_뒤_자리.putAll(자리들());
+                        새로고침_뒤_자리.putAll(등록된_자리들(1_000, 보낼_수));
                     })
-                    .assertEntry(ChaosScenario.Verdict.none())
+                    .assertEntry(() -> RecoveryCriteria.violations(
+                            판정이_멈추지_않았다("정상", 정상_상태),
+                            // 정상 구간에도 건다. 여기에 없으면 줄이 선 쿠폰이
+                            // 평시에 뒷단으로 새도 아무 판정이 안 깨진다.
+                            줄에_세웠다("정상", 정상_줄_상태, 보낼_수),
+                            줄을_추월하지_않았다("정상", 줄_평시_도착[0]),
+                            줄이_서_있었다(등록_전_자리, 보낼_수, "등록"),
+                            줄이_서_있었다(장애_전_자리, 줄_선_사람, "심은"),
+                            한산한_쿠폰이_평시에_통했다(한산한_도착[0])))
                     .assertDuring(() -> RecoveryCriteria.violations(
                             // **주입이 정말 걸렸는가.** 없으면 주입을 안 해도
                             // 전 판정이 통과한다 — 줄이 선 쿠폰은 뒷단에 아예
@@ -216,23 +258,22 @@ class BackendFailureScenarioTest {
                             // **줄에 세웠는가.** 5xx 만 보면 전원이 429 로
                             // 거절돼도 통과한다 — 아무도 자리를 못 받은 판과
                             // 모두가 받은 판이 같은 초록이 된다.
-                            줄에_세웠다("유지", 장애중_상태),
+                            줄에_세웠다("유지", 장애중_상태, 보낼_수),
                             // **줄이 선 쿠폰이라 뒷단까지 가면 추월이다.**
                             줄을_추월하지_않았다("유지", 도착[0])))
                     .assertRecovery(() -> RecoveryCriteria.violations(
                             뒷단이_돌아왔다(뒷단_상태[2]),
                             판정이_멈추지_않았다("회복", 회복_상태),
-                            줄에_세웠다("회복", 회복_상태),
+                            줄에_세웠다("회복", 회복_줄_상태, 보낼_수),
+                            줄에_세웠다("새로고침", 새로고침_상태, 보낼_수),
+                            // RC5 — 장애 중 새로고침한 사람이 자리를 지켰는가.
+                            RecoveryCriteria.seatLost(등록_전_자리, 새로고침_뒤_자리),
                             줄을_추월하지_않았다("회복", 도착[1]),
                             // RC5 — 뒷단이 망가져도 자리는 레디스에 있다.
                             RecoveryCriteria.seatLost(장애_전_자리, 회복_뒤_자리),
                             뒷단.중복_수신이_없다()))
                     .run();
 
-            assertThat(판정이_멈추지_않았다("정상", 정상_상태)).isEmpty();
-            assertThat(장애_전_자리).as("전제 — 줄이 서 있었다").hasSize(줄_선_사람);
-            assertThat(한산한_도착[0]).as("전제 — 한산한 쿠폰은 평시에 뒷단까지 간다")
-                    .isEqualTo(한산한_보낼_수);
         } finally {
             실패한다.set(false);
             연결.close();
@@ -262,12 +303,35 @@ class BackendFailureScenarioTest {
                         .formatted(회복));
     }
 
-    /** 줄이 선 쿠폰이면 202 로 자리를 받아야 한다. 그 밖은 못 선 것이다. */
-    private Optional<String> 줄에_세웠다(String 구간, List<Integer> 상태) {
+    /**
+     * 줄이 선 쿠폰이면 202 로 자리를 받아야 한다. 그 밖은 못 선 것이다.
+     *
+     * <p>보낸 수를 함께 받는다. 단계가 중간에 터져 목록이 비면 "위반 없음" 과
+     * 구분이 안 되는데, 뼈대가 예외를 삼키므로 그 경로는 실제로 열려 있다.
+     */
+    private Optional<String> 줄에_세웠다(String 구간, List<Integer> 상태, int 보낸_수) {
+        if (상태.size() != 보낸_수) {
+            return Optional.of("%s — %d 건을 보냈는데 %d 건만 관측됐다"
+                    .formatted(구간, 보낸_수, 상태.size()));
+        }
         long 못_선_것 = 상태.stream().filter(status -> status != 202).count();
         return 못_선_것 == 0 ? Optional.empty()
                 : Optional.of("%s — %d 건이 줄에 못 섰다 (보낸 %d): %s"
                         .formatted(구간, 못_선_것, 상태.size(), 상태));
+    }
+
+    /** 줄이 서 있어야 이 시나리오의 표제가 성립한다. */
+    private Optional<String> 줄이_서_있었다(Map<String, Double> 자리, int 기대, String 이름) {
+        return 자리.size() == 기대 ? Optional.empty()
+                : Optional.of("전제 — %s 줄에 %d 명만 서 있다 (기대 %d)"
+                        .formatted(이름, 자리.size(), 기대));
+    }
+
+    /** 길이 애초에 막혀 있으면 나머지 구간의 도착 수에 뜻이 없다. */
+    private Optional<String> 한산한_쿠폰이_평시에_통했다(long 도착) {
+        return 도착 == 한산한_보낼_수 ? Optional.empty()
+                : Optional.of("전제 — 평시에 한산한 쿠폰이 %d 건만 갔다 (보낸 %d)"
+                        .formatted(도착, 한산한_보낼_수));
     }
 
     private Optional<String> 줄을_추월하지_않았다(String 구간, long 도착) {

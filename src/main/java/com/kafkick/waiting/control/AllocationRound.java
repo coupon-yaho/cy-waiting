@@ -88,6 +88,14 @@ public final class AllocationRound {
 
     /** 이만큼 이어서 못 받으면 한 번 경고한다. 판마다 찍으면 로그가 뒤덮인다. */
     private static final int CARRYOVER_WARN_AFTER = 3;
+
+    /** 못 받다가 받았으면 그 사실을 한 번 남긴다. 억제한 판 수를 같이 싣는다. */
+    private void carryoverReturned() {
+        int missed = carryoverMisses.getAndSet(0);
+        if (missed > 0) {
+            log.info("평활화 이월이 돌아왔다 — {}판 못 받았다", missed);
+        }
+    }
     private final Supplier<Mono<CreditSmoother>> restore;
     private final FairShareAllocator allocator = FairShareAllocator.create();
     /**
@@ -245,7 +253,14 @@ public final class AllocationRound {
                 // **실패하면 다음 판에 다시 시도한다.** 리더가 되는 순간은 대개
                 // 직전 리더가 죽은 직후라 레디스가 가장 흔들려 있을 때다. 여기서
                 // 포기하면 이월 장치가 정확히 필요한 조건에서만 꺼진다.
-                .doOnError(e -> log.warn("평활화 이월 실패 — 다음 판에 다시 받는다", e))
+                // **판마다 안 찍는다.** 재시도로 바꾸면서 한 번뿐이던 로그가
+                // 흔들림이 이어지는 내내 매 틱 나오게 됐다. 처음과, 한동안
+                // 못 받았다는 사실 한 번만 남긴다.
+                .doOnError(e -> {
+                    if (carryoverMisses.get() == 0) {
+                        log.warn("평활화 이월 실패 — 다음 판에 다시 받는다", e);
+                    }
+                })
                 // **실패하자마자 포기하지 않는다.** 폴백을 그 자리에 설치하면
                 // 다음 판이 이월을 아예 안 시도해, 주석이 약속한 재시도가 없다.
                 // 게다가 그 폴백은 미관측이라 첫 관측치를 평활 없이 그대로
@@ -260,8 +275,8 @@ public final class AllocationRound {
                     }
                     return Mono.empty();
                 })
+                .doOnNext(restored -> carryoverReturned())
                 .doOnNext(restored -> {
-                    carryoverMisses.set(0);
                     if (smoother.compareAndSet(null, restored)) {
                         log.info("평활화 이월 완료");
                     }

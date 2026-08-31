@@ -31,7 +31,7 @@ class QueueSweeperMetricsTest {
 
     private QueueSweeper sweeper(QueueSweeper.SweepResult r) {
         return QueueSweeper.of(
-                SweepGate.of(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
+                SweepGates.warmed(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
                 (ids, limit) -> Mono.just(r), meters);
     }
 
@@ -62,7 +62,7 @@ class QueueSweeperMetricsTest {
     @DisplayName("터지면_실패로_세고_걷은_수는_안_올린다")
     void 터지면_실패로_세고_걷은_수는_안_올린다() {
         QueueSweeper 터지는_것 = QueueSweeper.of(
-                SweepGate.of(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
+                SweepGates.warmed(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
                 (ids, limit) -> Mono.error(new IllegalStateException("레디스가 끊겼다")),
                 meters);
 

@@ -211,7 +211,7 @@ class AllocationRoundTest {
                 ids -> Mono.just(List.of()),
                 ids -> Mono.just(List.of()),
                 QueueSweeper.of(
-                        SweepGate.of(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
+                        SweepGates.warmed(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
                         (ids, limit) -> {
                             쓴_쿠폰.addAll(ids);
                             return Mono.just(QueueSweeper.SweepResult.NOTHING);
@@ -225,7 +225,7 @@ class AllocationRoundTest {
     /** 판단은 돌되 아무것도 안 걷는 스위퍼. 이 시험들의 초점이 아니다. */
     private static QueueSweeper 안_걷는_스위퍼() {
         return QueueSweeper.of(
-                SweepGate.of(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
+                SweepGates.warmed(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
                 (ids, limit) -> Mono.just(QueueSweeper.SweepResult.NOTHING));
     }
 

@@ -222,6 +222,7 @@ class SweepGateTest {
     @DisplayName("쿠폰마다_따로_센다")
     void 쿠폰마다_따로_센다() {
         SweepGate gate = 게이트();
+        유예를_흘린다(gate, 줄이_선_쿠폰());
 
         List<String> 쓸_것 = gate.sweepable(Map.of(
                 COUPON, CouponStates.closed(100),

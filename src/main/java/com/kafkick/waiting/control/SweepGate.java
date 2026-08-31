@@ -47,6 +47,18 @@ public final class SweepGate {
      */
     public List<String> sweepable(Map<String, CouponState> coupons, boolean dataStale) {
         tick++;
+        // **갓 만들어진 게이트는 승계 직후다** (CY-822). 유예는 이 객체 안에만
+        // 있어 리더가 바뀌면 사라지고, 새 리더는 그 쿠폰의 신호가 얼마나 오래
+        // 멎어 있었는지 모른다. 모른다는 것이 걷을 이유가 되면 안 된다 —
+        // 걷힌 사람은 새 score 로 다시 서므로 순번이 뒤로 간다.
+        //
+        // **쿠폰별이 아니라 노드 전체에 건다.** 모르는 것이 이 쿠폰 하나가
+        // 아니기 때문이다. 그동안 이탈자가 줄에 남아 크레딧이 허공에 나가지만,
+        // 그건 되돌릴 수 있고 순번 역행은 못 되돌린다.
+        if (tick <= resumeDelayTicks) {
+            resumeAt.keySet().retainAll(coupons.keySet());
+            return List.of();
+        }
         List<String> sweepable = new ArrayList<>();
         coupons.forEach((couponId, state) -> {
             // **매진 중에는 멈춘다.** 7.1 이 매진 조회를 게이트웨이에서

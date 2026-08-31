@@ -7,7 +7,7 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.function.BiFunction;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Mono;
@@ -32,13 +32,19 @@ public final class QueueSweeper {
     private static final int MAX_SCAN = 3_000;
 
     private final SweepGate gate;
-    private final BiFunction<List<String>, Integer, Mono<SweepResult>> sweep;
+    private final SweepCall sweep;
+
+    /** 청소 한 판. 앞줄 제거 여부까지 받아야 유예 구간에도 정리가 돈다. */
+    @FunctionalInterface
+    public interface SweepCall {
+        Mono<SweepResult> apply(List<String> couponIds, int scanLimit, boolean removeFront);
+    }
     private final Counter swept;
     private final Counter expiredSignals;
     private final Counter expiredGrace;
     private final Counter failed;
 
-    private QueueSweeper(SweepGate gate, BiFunction<List<String>, Integer, Mono<SweepResult>> sweep,
+    private QueueSweeper(SweepGate gate, SweepCall sweep,
             MeterRegistry meters) {
         this.gate = Objects.requireNonNull(gate, "gate 는 필수다 — 멈추는 판단 없이 쓸면 안 된다");
         this.sweep = Objects.requireNonNull(sweep, "sweep 은 필수다");
@@ -53,13 +59,13 @@ public final class QueueSweeper {
         this.failed = meters.counter("waiting.sweep", "kind", "failed");
     }
 
-    public static QueueSweeper of(SweepGate gate, BiFunction<List<String>, Integer, Mono<SweepResult>> sweep,
+    public static QueueSweeper of(SweepGate gate, SweepCall sweep,
             MeterRegistry meters) {
         return new QueueSweeper(gate, sweep, meters);
     }
 
     /** 계측 없이 만든다. <b>시험 편의다</b> — 운영은 위 팩토리를 쓴다. */
-    public static QueueSweeper of(SweepGate gate, BiFunction<List<String>, Integer, Mono<SweepResult>> sweep) {
+    public static QueueSweeper of(SweepGate gate, SweepCall sweep) {
         return new QueueSweeper(gate, sweep, new SimpleMeterRegistry());
     }
 
@@ -95,14 +101,32 @@ public final class QueueSweeper {
      *
      * <p><b>청소 실패가 배분을 막지 않는다.</b> 다음 틱에 다시 온다.
      */
+    /**
+     * 리더가 됐다. <b>재개 유예를 처음부터 준다</b> (CY-822).
+     *
+     * <p>재개 표시는 리더 메모리라 승계에서 사라진다. 새 리더는 그 쿠폰의
+     * 생존 신호가 얼마나 오래 멎어 있었는지 모른다.
+     */
+    public void leadershipAcquired() {
+        gate.leadershipAcquired();
+    }
+
     public Mono<SweepResult> run(Map<String, CouponState> coupons, boolean dataStale) {
         List<String> targets = gate.sweepable(coupons, dataStale);
+        // **승계 유예 중에도 정리는 돈다** (CY-822). 앞줄 제거만 접는다 —
+        // 대상까지 비우면 만료 신호와 유예 기록이 한 방향으로만 자라고 커서가
+        // 전진을 못 한다. 승계가 유예보다 잦으면 청소가 영영 안 돈다.
+        boolean removeFront = !targets.isEmpty();
+        if (!removeFront) {
+            targets = gate.removalHeld() ? gate.cleanable(coupons) : List.of();
+        }
         if (targets.isEmpty()) {
             return Mono.just(SweepResult.NOTHING);
         }
+        List<String> chosen = targets;
         // **이번 판에 들일 인원만큼 본다** (7.4.3). 상수로 두면 뜨거운 쿠폰은
         // 배수 대상 안의 유령을 못 걷고, 한산한 쿠폰에는 매 틱 과한 왕복을 낸다.
-        return sweep.apply(targets, scanLimit(coupons, targets))
+        return sweep.apply(chosen, scanLimit(coupons, chosen), removeFront)
                 .doOnNext(r -> {
                     swept.increment(r.swept());
                     expiredSignals.increment(r.expiredSignals());
@@ -112,7 +136,7 @@ public final class QueueSweeper {
                         // **걷은 수를 남긴다.** 이탈자와 우리 오판이 같은
                         // 수치로 보이므로, 이 값이 튀는 것이 유일한 신호다.
                         log.info("이탈자 청소 — 쿠폰 {}개에서 {}명을 걷었다",
-                                targets.size(), r.swept());
+                                chosen.size(), r.swept());
                     }
                 })
                 .onErrorResume(e -> {

@@ -146,13 +146,37 @@ public final class ChaosScenario {
         try {
             body.run();
         } catch (Throwable e) {
+            치명적이면_다시_던진다(e);
             into.add("  " + phase + " — 단계가 터졌다: " + e);
+        }
+    }
+
+    /**
+     * <b>회복이 불가능한 것은 안 삼킨다.</b>
+     *
+     * <p>메모리가 없거나 스택이 넘친 뒤에 남은 단계를 계속 도는 것은 아무 뜻이
+     * 없고, 원래 실패가 보고서 문장 뒤로 숨는다.
+     */
+    // **`Error` 를 통째로 던지면 안 된다.** `AssertionError` 도 `Error` 인데,
+    // 단계 안의 단언을 위반으로 담는 것이 이 자리의 존재 이유다.
+    private static void 치명적이면_다시_던진다(Throwable e) {
+        if (e instanceof VirtualMachineError || e instanceof LinkageError) {
+            throw (Error) e;
         }
     }
 
     // 어느 구간에서 깨졌는지를 붙인다. 사유만 있으면 같은 값이 세 구간 중
     // 어디서 나왔는지 못 가린다.
+    //
+    // **판정이 던져도 앞의 위반을 안 잃는다.** 단계와 같은 이유다 — 판정 하나가
+    // NPE 를 내면 그때까지 모은 것이 통째로 가려지고, 보고서에는 그 예외만
+    // 남아 원인이 엉뚱한 곳을 가리킨다.
     private void label(List<String> into, String phase, Verdict verdict) {
-        verdict.judge().forEach(one -> into.add("  " + phase + " — " + one));
+        try {
+            verdict.judge().forEach(one -> into.add("  " + phase + " — " + one));
+        } catch (Throwable e) {
+            치명적이면_다시_던진다(e);
+            into.add("  " + phase + " — 판정이 터졌다: " + e);
+        }
     }
 }

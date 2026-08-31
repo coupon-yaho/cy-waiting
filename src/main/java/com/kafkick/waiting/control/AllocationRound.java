@@ -201,7 +201,7 @@ public final class AllocationRound {
                 ids -> Mono.just(List.of()),
                 ids -> Mono.just(List.of()),
                 QueueSweeper.of(SweepGate.of(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
-                        (ids, limit) -> Mono.just(QueueSweeper.SweepResult.NOTHING)),
+                        (ids, limit, removeFront) -> Mono.just(QueueSweeper.SweepResult.NOTHING)),
                 () -> false, () -> CircuitState.CLOSED);
     }
 

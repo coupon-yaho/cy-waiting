@@ -77,7 +77,7 @@ class GatewayRoutesTest {
                     // **판정과 같은 인스턴스다.** 따로 만들면 한 초에 두 예산이 나간다.
                     공유_리미터,
                     EntryToken.of("not-a-real-secret-0123456789abcdef"),
-                    IdempotencyKey.of("not-a-real-secret-0123456789abcdef")),
+                    IdempotencyKey.passThrough()),
             // 이 시험은 배선을 본다. 켜고 끄는 것은 필터 안에서 갈리므로
             // 여기서는 꺼 두어도 라우트에 실리는 것은 같다.
             QueryCoalescingFilter.of(

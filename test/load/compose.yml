@@ -119,10 +119,12 @@ services:
       dockerfile: Dockerfile
       args:
         # 실행 JAR 이름을 정확히 짚는다. 여럿과 맞으면 무엇이 들어갈지
-        # 순서에 달린다. 판이 바뀌면 여기 한 줄만 고친다.
-        # **판을 안 박는다.** 산출물 이름이 판을 따라가므로, 박아 두면 판을
-        # 올릴 때마다 여기서 컨테이너 빌드가 깨진다.
-        JAR: ${WAITING_JAR:-build/libs/waiting-0.4.0.jar}
+        # 순서에 달린다.
+        #
+        # **CI 는 WAITING_JAR 를 실물에서 뽑아 넣는다.** 아래 기본값은 로컬용
+        # 이고 판을 따라가므로, 판을 올릴 때 같이 고쳐야 한다 — 안 고치면
+        # 로컬 부하 실행만 조용히 깨진다.
+        JAR: ${WAITING_JAR:-build/libs/waiting-0.4.1.jar}
     depends_on:
       redis: { condition: service_healthy }
       backend: { condition: service_healthy }

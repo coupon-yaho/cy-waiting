@@ -58,7 +58,7 @@ class SoldOutCacheAdmissionTest {
             Clock.fixed(지금, ZoneOffset.UTC), meters, 줄,
             QueueToken.of("not-a-real-secret-0123456789abcdef"), limiter,
             entryTokens,
-            IdempotencyKey.of("not-a-real-secret-0123456789abcdef"), 캐시);
+            IdempotencyKey.passThrough(), 캐시);
 
     private MockServerWebExchange 태운다() {
         MockServerWebExchange exchange = MockServerWebExchange.from(

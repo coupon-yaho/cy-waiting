@@ -110,11 +110,13 @@ public class IdentityConfig {
     }
 
     /**
-     * 멱등 키도 <b>같은 비밀키</b>로 만든다. 나누면 운영자가 하나만 넣고 다른
-     * 하나는 안 넣은 채로 나가는데, 그때 기동은 성공한다.
+     * 멱등 키는 <b>비밀키를 안 쓴다</b> (CY-830).
+     *
+     * <p>클라이언트가 준 UUID 를 그대로 넘긴다. 뒷단이 그 형식만 받고, 도용
+     * 방어는 뒷단이 회원과 키의 쌍으로 저장해서 진다.
      */
     @Bean
-    public IdempotencyKey idempotencyKey(QueueTokenProperties properties) {
-        return IdempotencyKey.of(properties.secret());
+    public IdempotencyKey idempotencyKey() {
+        return IdempotencyKey.passThrough();
     }
 }

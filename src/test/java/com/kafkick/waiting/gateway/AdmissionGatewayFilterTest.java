@@ -104,7 +104,7 @@ class AdmissionGatewayFilterTest {
 
     /** 입장 토큰과 같은 비밀키다. 나누면 운영자가 하나만 넣은 채로 나간다. */
     private final IdempotencyKey 멱등키 =
-            IdempotencyKey.of("not-a-real-secret-0123456789abcdef");
+            IdempotencyKey.passThrough();
 
     /**
      * 흔들림을 고정한다. <b>안 고정하면 값을 못 잰다</b> (TS-4).
@@ -1444,11 +1444,22 @@ class AdmissionGatewayFilterTest {
      * <b>첫 틱 전 통과도 마찬가지다.</b> 기동 직후라 판정 재료가 없을 뿐,
      * 뒷단으로 가는 것은 같다.
      */
+    // **UUID 가 아니면 안 준 것으로 본다.** 그대로 넘기면 뒷단이 형식으로
+    // 거절해 사용자가 발급을 못 받는다 (CY-830).
     @Test
-    @DisplayName("첫_틱_전_통과에도_멱등_키를_덮는다")
-    void 첫_틱_전_통과에도_멱등_키를_덮는다() {
+    @DisplayName("첫_틱_전_통과에도_UUID_가_아니면_안_싣는다")
+    void 첫_틱_전_통과에도_UUID_가_아니면_안_싣는다() {
         // 스냅샷을 안 심는다. 홀더가 첫 틱 전이다.
         assertThat(실린_키(요청_with_키("내가-정한-값"))).isNotEqualTo("내가-정한-값");
+    }
+
+    /** 클라이언트가 준 UUID 는 그대로 간다. 시도를 가르는 것은 클라이언트다. */
+    @Test
+    @DisplayName("클라이언트_UUID_는_그대로_실린다")
+    void 클라이언트_UUID_는_그대로_실린다() {
+        스냅샷을_심는다(CouponStates.idle(1_000), META);
+
+        assertThat(실린_키(요청_with_키(시도_1))).isEqualTo(시도_1);
     }
 
     /**
@@ -1460,8 +1471,8 @@ class AdmissionGatewayFilterTest {
     void 클라이언트_값이_다르면_다른_키가_나간다() {
         스냅샷을_심는다(CouponStates.idle(1_000), META);
 
-        assertThat(실린_키(요청_with_키("시도-1")))
-                .isNotEqualTo(실린_키(요청_with_키("시도-2")));
+        assertThat(실린_키(요청_with_키(시도_1)))
+                .isNotEqualTo(실린_키(요청_with_키(시도_2)));
     }
 
     /** 같은 값을 다시 주면 같은 키다. 아니면 끊긴 발급의 재시도가 새 시도가 된다. */
@@ -1470,9 +1481,14 @@ class AdmissionGatewayFilterTest {
     void 같은_클라이언트_값은_같은_키가_나간다() {
         스냅샷을_심는다(CouponStates.idle(1_000), META);
 
-        assertThat(실린_키(요청_with_키("시도-1")))
-                .isEqualTo(실린_키(요청_with_키("시도-1")));
+        assertThat(실린_키(요청_with_키(시도_1)))
+                .isEqualTo(실린_키(요청_with_키(시도_1)));
     }
+
+    /** 뒷단이 UUID 만 받는다. 시험도 그 형식으로 준다. */
+    private static final String 시도_1 = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+
+    private static final String 시도_2 = "3f2504e0-4f89-41d3-9a0c-0305e82c3302";
 
     private MockServerWebExchange 요청_with_키(String 클라이언트_값) {
         MockServerWebExchange exchange = MockServerWebExchange.from(

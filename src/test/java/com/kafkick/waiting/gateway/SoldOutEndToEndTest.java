@@ -59,7 +59,7 @@ class SoldOutEndToEndTest {
     private final AdmissionGatewayFilter admission = AdmissionGatewayFilter.of(
             holder, AdmissionDecider.of(limiter, 0.5), Clock.fixed(지금, ZoneOffset.UTC),
             meters, 줄, QueueToken.of(SECRET), limiter, EntryToken.of(SECRET),
-            IdempotencyKey.of(SECRET), 캐시);
+            IdempotencyKey.passThrough(), 캐시);
 
     private final AtomicInteger 뒷단_횟수 = new AtomicInteger();
 

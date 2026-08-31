@@ -213,10 +213,12 @@ class NodeLossScenarioTest {
                         살아있는_이웃.addAll(이웃);
                         // 이 노드까지 셋이다. 자기 하트비트는 앱이 넣는다.
                         분모가_된다(이웃.size() + 1, 기다림);
-                        // 크레딧이 바닥값 위로 올라와야 줄이 안 선다.
+                        // **노드당 몫으로 센다.** 전역 크레딧을 보면 분모와
+                        // 한산 비율이 빠져, 셋으로 나눈 뒤 0.7 을 곱한 값이
+                        // 보낼 수보다 작아도 통과한다 — 그때 절반이 줄에 서고
+                        // 뒷단 도착이 한 건이라 양성 대조도 통과한다.
                         Awaitility.await().atMost(기다림)
-                                .until(() -> holder.view().snapshot().meta()
-                                        .globalCredit() >= 보낼_수 * 2L);
+                                .until(() -> 한산한_몫() >= 보낼_수);
                         분모[0] = 스냅샷_분모();
                         도착[0] = 뒷단까지_센다(() -> 정상_상태.addAll(
                                 여러_번_시도한다(보낼_수, 1_000)));
@@ -228,6 +230,16 @@ class NodeLossScenarioTest {
                         노드.해제한다(이웃.get(0));
                     })
                     .duringFault(() -> {
+                        // **감소는 즉시가 아니다** (F5). 연속 관측을 채우기 전에
+                        // 떨어지면 죽은 줄 알았던 노드가 살아 있을 때 남은
+                        // 노드가 몫을 키운다 — 그게 초과 발급 방향이다.
+                        // **등록부에서 잰다.** 지연은 거기서 일어나고, 스냅샷은
+                        // 발행·폴링 왕복만큼 늦어 그 창을 못 가른다.
+                        Awaitility.await().pollDelay(하트비트.multipliedBy(감소_확정_틱 - 1))
+                                .atMost(기다림).until(() -> true);
+                        assertThat(registry.count())
+                                .as("관측 %d 번까지는 안 줄어야 한다".formatted(감소_확정_틱 - 1))
+                                .isEqualTo(이웃.size() + 1);
                         분모가_된다(이웃.size(), 기다림);
                         분모[1] = 스냅샷_분모();
                         도착[1] = 뒷단까지_센다(() -> 장애중_상태.addAll(
@@ -270,6 +282,22 @@ class NodeLossScenarioTest {
     }
 
     private static final int 보낼_수 = 5;
+
+    /** 하트비트 주기. 배분 틱과 같다 — 배분이 매 틱 분모를 읽는다. */
+    private static final Duration 하트비트 =
+            ControlPlaneProperties.defaults().scheduler().tick();
+
+    /** 감소를 확정하기까지의 연속 관측 수. 설정에서 끌어온다 — 따로 적으면 갈린다. */
+    private static final int 감소_확정_틱 =
+            ControlPlaneProperties.defaults().capacity().rampDownTicks();
+
+    /**
+     * 한산한 쿠폰의 노드당 몫. 요청이 실제로 걸리는 상한이다.
+     */
+    private long 한산한_몫() {
+        var meta = holder.view().snapshot().meta();
+        return (long) (meta.globalCredit() / Math.max(1, meta.gatewayCount()) * 0.7);
+    }
 
     /** 늘어난 분모가 닿기까지의 예산. 배분 한 틱과 재료 받아 오기가 든다. */
     private static final Duration 즉시_예산 = Duration.ofSeconds(3);

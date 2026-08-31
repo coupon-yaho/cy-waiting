@@ -1,6 +1,6 @@
 package com.kafkick.waiting.chaos;
 
-import java.time.Duration;
+import com.kafkick.waiting.control.Leadership;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -46,29 +46,11 @@ public final class SecondNode implements AutoCloseable {
      * 이 노드가 리더인가. 두 노드가 동시에 참이면 그 구간이 스플릿 브레인이다.
      *
      * <p><b>죽이는 것은 여기서 안 만든다.</b> 컨텍스트를 닫으면 종료 훅이 락을
-     * 곱게 놓아 승계가 즉시 일어난다 — 그건 장애 경로가 아니다. 리스가 남는
-     * 판은 {@link LeaderFaults} 가 만든다.
+     * 놓으러 가고, 그건 장애 경로가 아니다. 리스가 남는 판은 리더의 제어 평면만
+     * 세워서 만든다 — 그때 락은 만료까지 남는다.
      */
     public boolean 리더인가() {
-        return 리더_여부();
-    }
-
-    /** 이 노드가 쥔 판 번호. 리더가 아니면 0 이다. */
-    public long 판_번호() {
-        return (long) 메서드를_부른다("fence");
-    }
-
-    /**
-     * <b>곱게 내린다.</b> 락이 즉시 풀려 다음 리더가 바로 선다 — 죽는 것과
-     * 다르므로 장애 경로를 재려면 {@link #죽인다()} 를 쓴다.
-     */
-    public void 내린다() {
-        context.close();
-    }
-
-    /** 기동이 끝나 제어 평면이 실제로 도는지. 안 기다리면 분모가 아직 1 이다. */
-    public boolean 준비됐나() {
-        return context.isRunning();
+        return 리더십().isLeader();
     }
 
     @Override
@@ -83,22 +65,16 @@ public final class SecondNode implements AutoCloseable {
         return context.containsBean(이름) ? context.getBean(이름, 타입) : null;
     }
 
-    private boolean 리더_여부() {
-        return (boolean) 메서드를_부른다("isLeader");
-    }
-
-    /** 이 노드가 쓴 하트비트의 주인 이름. 분모에 실제로 들어갔는지 볼 때 쓴다. */
+    /**
+     * 이 노드가 <b>리더 락에 쓰는</b> 주인 이름. 하트비트의 식별자는 이것과
+     * 별개로 발급되므로 분모를 볼 때 쓰면 영영 안 맞는다.
+     */
     public String ownerId() {
-        return (String) 메서드를_부른다("ownerId");
+        return 리더십().ownerId();
     }
 
-    private Object 메서드를_부른다(String 이름) {
-        Object leadership = context.getBean("leadership");
-        try {
-            return leadership.getClass().getMethod(이름).invoke(leadership);
-        } catch (ReflectiveOperationException e) {
-            throw new IllegalStateException("리더십에서 %s 를 못 불렀다".formatted(이름), e);
-        }
+    private Leadership 리더십() {
+        return context.getBean(Leadership.class);
     }
 
     /**
@@ -116,8 +92,4 @@ public final class SecondNode implements AutoCloseable {
         }
     }
 
-    /** 기동 예산. 두 번째 컨텍스트는 첫 것보다 빠르지만 여유를 둔다. */
-    public static Duration 기동_예산() {
-        return Duration.ofSeconds(60);
-    }
 }

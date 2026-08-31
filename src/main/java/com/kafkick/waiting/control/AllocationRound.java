@@ -21,6 +21,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
@@ -75,12 +76,26 @@ public final class AllocationRound {
     private final SnapshotCodec codec;
 
     /**
-     * 평활화 상태. <b>첫 판에서 이월받는다.</b>
+     * 평활화 상태. <b>리더가 된 뒤 첫 판에서 이월받는다.</b>
      *
      * <p>빈을 만들 때 읽으면 레디스가 안 뜬 상태에서 앱이 통째로 안 뜬다.
      * 이월은 있으면 좋은 것이지 기동의 전제가 아니다.
      */
     private final AtomicReference<CreditSmoother> smoother = new AtomicReference<>();
+
+    /** 이월을 이어서 몇 판 못 받았나. 임기가 바뀌면 0 부터 다시 센다. */
+    private final AtomicInteger carryoverMisses = new AtomicInteger();
+
+    /** 이만큼 이어서 못 받으면 한 번 경고한다. 판마다 찍으면 로그가 뒤덮인다. */
+    private static final int CARRYOVER_WARN_AFTER = 3;
+
+    /** 못 받다가 받았으면 그 사실을 한 번 남긴다. 억제한 판 수를 같이 싣는다. */
+    private void carryoverReturned() {
+        int missed = carryoverMisses.getAndSet(0);
+        if (missed > 0) {
+            log.info("평활화 이월이 돌아왔다 — {}판 못 받았다", missed);
+        }
+    }
     private final Supplier<Mono<CreditSmoother>> restore;
     private final FairShareAllocator allocator = FairShareAllocator.create();
     /**
@@ -226,8 +241,9 @@ public final class AllocationRound {
     }
 
     /**
-     * 이월은 <b>한 번만</b> 받는다. 매 판 받으면 방금 쓴 값을 되읽어 평활화가
-     * 아무 일도 안 하게 된다. 못 받아도 판은 돈다.
+     * 이월은 <b>임기마다 한 번</b> 받는다. 매 판 받으면 방금 쓴 값을 되읽어
+     * 평활화가 아무 일도 안 하게 되고, 프로세스당 한 번만 받으면 남이 리더였던
+     * 동안 움직인 값을 못 보고 제 옛 값을 이어 쓴다 (F9 · CY-859).
      */
     private Mono<Void> seeded() {
         if (smoother.get() != null) {
@@ -237,16 +253,46 @@ public final class AllocationRound {
                 // **실패하면 다음 판에 다시 시도한다.** 리더가 되는 순간은 대개
                 // 직전 리더가 죽은 직후라 레디스가 가장 흔들려 있을 때다. 여기서
                 // 포기하면 이월 장치가 정확히 필요한 조건에서만 꺼진다.
-                .doOnError(e -> log.warn("평활화 이월 실패 — 다음 판에 다시 받는다", e))
-                .onErrorResume(e -> Mono.just(CreditSmoother.of(DEFAULT_ALPHA))
-                        .doOnNext(fallback -> smoother.compareAndSet(null, fallback))
-                        .then(Mono.empty()))
+                // **판마다 안 찍는다.** 재시도로 바꾸면서 한 번뿐이던 로그가
+                // 흔들림이 이어지는 내내 매 틱 나오게 됐다. 처음과, 한동안
+                // 못 받았다는 사실 한 번만 남긴다.
+                .doOnError(e -> {
+                    if (carryoverMisses.get() == 0) {
+                        log.warn("평활화 이월 실패 — 다음 판에 다시 받는다", e);
+                    }
+                })
+                // **실패하자마자 포기하지 않는다.** 폴백을 그 자리에 설치하면
+                // 다음 판이 이월을 아예 안 시도해, 주석이 약속한 재시도가 없다.
+                // 게다가 그 폴백은 미관측이라 첫 관측치를 평활 없이 그대로
+                // 발행한다 — 승계 직후에 뒷단이 감당 못 할 수가 나간다.
+                //
+                // 임기 내내 다시 시도한다. 그동안 판은 콜드 스무더로 돌되
+                // 그것을 저장하지 않으므로, 흔들림이 지나가면 바로 이어받는다.
+                .onErrorResume(e -> {
+                    if (carryoverMisses.incrementAndGet() == CARRYOVER_WARN_AFTER) {
+                        log.warn("평활화 이월을 {}판 못 받았다 — 그동안 콜드로 돈다",
+                                CARRYOVER_WARN_AFTER);
+                    }
+                    return Mono.empty();
+                })
+                .doOnNext(restored -> carryoverReturned())
                 .doOnNext(restored -> {
                     if (smoother.compareAndSet(null, restored)) {
                         log.info("평활화 이월 완료");
                     }
                 })
                 .then();
+    }
+
+    /**
+     * 리더가 됐다. <b>평활화 이월을 버린다</b> — 다음 판이 그때의 스냅샷에서
+     * 다시 받는다. 안 버리면 남이 리더였던 동안 움직인 값을 못 보고 제 옛 값을
+     * 이어 쓴다 (F9 · CY-859). 판 도중에 잃어 발행 안 된 채 전진한 값도 여기서
+     * 정리된다.
+     */
+    public void leadershipAcquired() {
+        smoother.set(null);
+        carryoverMisses.set(0);
     }
 
     /**
@@ -291,7 +337,14 @@ public final class AllocationRound {
     }
 
     private Mono<Void> allocate(List<CouponDemand> collected, Instant readAt) {
-        CreditSmoother current = smoother.get();
+        // **이월을 아직 못 받았어도 판은 돈다.** 이월은 있으면 좋은 것이지
+        // 배분의 전제가 아니다 — 여기서 멈추면 레디스가 흔들릴 때 배분이
+        // 통째로 안 시작한다.
+        //
+        // 다만 그 스무더를 **저장하지는 않는다.** 저장하면 다음 판이 이월을
+        // 아예 안 시도해, 흔들림이 지나가도 그 임기 내내 콜드로 남는다.
+        CreditSmoother carried = smoother.get();
+        CreditSmoother current = carried == null ? CreditSmoother.of(DEFAULT_ALPHA) : carried;
         // **하한은 평활 뒤에 건다.** 하한은 관측이 아니라 정책이다. 평활을 거치면
         // 앞선 낮은 값에서 올라오는 데 열 틱이 넘고, 그동안 노드당 몫이 유휴 비율
         // 아래에 머물러 한산 통과 상한이 0 이다 — 하한을 둔 이유가 사라진다 (R1).

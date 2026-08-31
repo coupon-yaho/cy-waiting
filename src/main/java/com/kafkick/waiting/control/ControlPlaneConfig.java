@@ -208,10 +208,14 @@ public class ControlPlaneConfig {
      * 있던 값을 이어 쓰는데, 그건 전 시험이 초록인 채로 일어난다.
      */
     static Runnable onLeadershipGained(CapacityCollector collector, CapacityRefresh capacity,
-            SoldOutCleanup cleanup, QueueSweeper sweeper) {
+            SoldOutCleanup cleanup, QueueSweeper sweeper, AllocationRound round) {
         return () -> {
             collector.leadershipAcquired();
             capacity.leadershipChanged();
+            // **평활화 이월도 여기서 버린다** (F9 · CY-859). 판 안에서 버리려
+            // 하면 그 판은 리더일 때만 도므로 비리더 구간을 한 번도 못 본다 —
+            // 되찾은 노드가 남이 움직인 값을 못 보고 옛 값을 이어 쓴다.
+            round.leadershipAcquired();
             // **매진 유예를 처음부터 준다.** 얼어 있던 셈을 이어 쓰면 유예가
             // 설정값이 아니라 "내가 리더였던 틱 수" 가 되고, 그 둘은 장애
             // 중에 갈린다.
@@ -234,7 +238,7 @@ public class ControlPlaneConfig {
                 // **승계는 유예를 처음부터 준다.** 비리더 구간에 얼어 있던 실패
                 // 횟수를 이어 쓰면 재승계 첫 판이 곧바로 크레딧을 깎는다.
                 LeadershipEdge.of(leadership::isLeader,
-                        onLeadershipGained(collector, capacity, cleanup, sweeper),
+                        onLeadershipGained(collector, capacity, cleanup, sweeper, round),
                         capacity::leadershipChanged),
                 // **운영 값을 먼저 읽고 배분한다.** 순서가 뒤면 방금 바꾼 값이
                 // 한 틱 늦게 나가고, 장애 중의 한 틱은 길다.

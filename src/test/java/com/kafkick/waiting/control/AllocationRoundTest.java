@@ -86,6 +86,53 @@ class AllocationRoundTest {
      * 발행이 터져도 지운 것으로 기록되고, 죽은 줄이 영구히 남으면서 로그는
      * 지웠다고 말합니다.
      */
+    /**
+     * <b>이월 실패는 곧바로 포기가 아니다</b> (CY-859).
+     *
+     * <p>폴백을 그 자리에 설치하면 다음 판이 아예 안 시도한다. 그 폴백은
+     * 미관측이라 첫 관측치를 평활 없이 그대로 발행하는데, 승계 직후에는 그것이
+     * 뒷단이 감당 못 할 수다.
+     */
+    @Test
+    @DisplayName("이월이_실패하면_다음_판에_다시_받는다")
+    void 이월이_실패하면_다음_판에_다시_받는다() {
+        AtomicInteger 시도 = new AtomicInteger();
+        AtomicBoolean 터진다 = new AtomicBoolean(true);
+        List<Long> 발행된_크레딧 = new ArrayList<>();
+        AllocationRound round = AllocationRound.of(
+                () -> true,
+                () -> Mono.just(new TimedDemands(
+                        List.of(new CouponDemand("c1", 5, 100, QueueMode.ADAPTIVE)), 읽은_시각)),
+                () -> 1_000, () -> 1,
+                grant -> Mono.just(grant.credit()),
+                hash -> {
+                    발행된_크레딧.add(Long.parseLong(hash.get("#credit")));
+                    return Mono.empty();
+                },
+                () -> Instant.ofEpochSecond(읽은_시각),
+                () -> {
+                    시도.incrementAndGet();
+                    return 터진다.get()
+                            ? Mono.error(new IllegalStateException("레디스가 흔들린다"))
+                            : Mono.just(CreditSmoother.restore(0.3,
+                                    new CreditSmoother.Snapshot(200.0, true)));
+                },
+                SnapshotCodec.create(), () -> 0L);
+
+        round.run().block();
+        assertThat(시도.get()).as("한 판 실패했다").isEqualTo(1);
+
+        터진다.set(false);
+        round.run().block();
+
+        assertThat(시도.get()).as("다음 판에 다시 받는다 — 폴백을 그 자리에 설치하면 안 받는다")
+                .isEqualTo(2);
+        // 이월값 200 과 관측 1,000 사이. 알파가 0.3 이라 440 이 나온다 —
+        // 관측치를 생으로 내보내면 1,000 이다.
+        assertThat(발행된_크레딧).as("이월을 받은 판은 평활한 값을 낸다")
+                .containsExactly(1_000L, 440L);
+    }
+
     @Test
     @DisplayName("발행이_실패하면_지우지_않고_다음_틱에_다시_온다")
     void 발행이_실패하면_지우지_않고_다음_틱에_다시_온다() {

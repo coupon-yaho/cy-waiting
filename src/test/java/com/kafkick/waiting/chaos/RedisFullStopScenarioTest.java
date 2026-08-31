@@ -131,32 +131,7 @@ class RedisFullStopScenarioTest {
     /** RC3 의 한계. 이 안에 판정이 정상으로 돌아와야 한다. */
     private static final Duration 회복_한계 = Duration.ofSeconds(30);
 
-    /** 뒷단이 받은 누적 수. 기록기가 1초마다 이걸 읽어 차분을 낸다. */
-    private static final AtomicLong 뒷단이_받은_수 = new AtomicLong();
-
-    /**
-     * <b>뒷단이 같은 회원을 두 번 받은 횟수.</b>
-     *
-     * <p>비율로 중복을 재면 늘 여유가 생긴다 — 로컬에서 끝난 요청은 분모에만
-     * 들어가고, 그만큼 중복이 숨는다. 요청을 짚어 세면 그 여유가 사라진다.
-     */
-    private static final AtomicLong 뒷단이_두_번_받은_수 = new AtomicLong();
-
-    private static final Set<String> 뒷단이_본_회원 = ConcurrentHashMap.newKeySet();
-
-    private static final DisposableServer 뒷단 = HttpServer.create()
-            .port(0)
-            .handle((request, response) -> {
-                뒷단이_받은_수.incrementAndGet();
-                // 회원 번호는 시험 전체에서 안 겹치게 발급한다. 겹쳐 도착하면
-                // 게이트웨이가 한 요청을 두 번 보낸 것이다.
-                String member = request.requestHeaders().get("X-Member-Id");
-                if (member != null && !뒷단이_본_회원.add(member)) {
-                    뒷단이_두_번_받은_수.incrementAndGet();
-                }
-                return response.status(HttpStatus.OK.value()).send();
-            })
-            .bindNow();
+    private static final BackendStub 뒷단 = BackendStub.항상_받는다();
 
     private static RedisFaults faults;
 
@@ -169,7 +144,7 @@ class RedisFullStopScenarioTest {
 
     @AfterAll
     static void 내린다() {
-        뒷단.disposeNow();
+        뒷단.close();
         if (faults != null) {
             faults.close();
         }
@@ -435,7 +410,7 @@ class RedisFullStopScenarioTest {
     @Test
     @DisplayName("C1_레디스가_죽었다_살아난다")
     void C1_레디스가_죽었다_살아난다() {
-        BackendRpsRecorder 유입 = new BackendRpsRecorder(뒷단이_받은_수::get);
+        BackendRpsRecorder 유입 = new BackendRpsRecorder(뒷단::받은_수);
         List<Integer> 정상_상태 = new ArrayList<>();
         List<Integer> 장애중_상태 = new ArrayList<>();
         List<Integer> 회복_상태 = new ArrayList<>();
@@ -520,7 +495,7 @@ class RedisFullStopScenarioTest {
                         줄이_영속성_없이_사라졌다(),
                         // **중복은 짚어서 센다.** 비율은 로컬에서 끝난 요청만큼
                         // 여유가 생겨 그 안에 중복이 숨는다. 창 밖도 못 본다.
-                        중복_수신이_없다(),
+                        뒷단.중복_수신이_없다(),
                         // **RC4 의 버스트 쪽은 이 하네스로 못 잰다** (CY-817).
                         // 부하 생성기가 닫힌 루프라 발신 속도가 게이트웨이
                         // 지연으로 정해진다 — 게이트웨이가 몰아쳐도 시험이 같이
@@ -578,13 +553,6 @@ class RedisFullStopScenarioTest {
         }
         return 회복_뒤_자리.isEmpty() ? Optional.empty()
                 : Optional.of("줄이 살아남았다 — 영속성이 켜졌다면 이제 RC5 로 잰다 (CY-809)");
-    }
-
-    /** 뒷단이 같은 요청을 두 번 받았는가. 발급 경로에서 그건 초과 발급이다. */
-    private Optional<String> 중복_수신이_없다() {
-        long 중복 = 뒷단이_두_번_받은_수.get();
-        return 중복 == 0 ? Optional.empty()
-                : Optional.of("RC4 뒷단이 같은 요청을 %d 건 두 번 받았다".formatted(중복));
     }
 
     /** 통과 비율. RC6 이 이것으로 판정 분포의 수렴을 본다. */

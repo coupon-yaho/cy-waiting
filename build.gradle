@@ -16,7 +16,7 @@ plugins {
 }
 
 group = 'com.kafkick'
-version = '0.4.0'
+version = '0.4.1'
 
 java {
     toolchain {
@@ -113,6 +113,9 @@ dependencies {
     // 않고 확장하도록** 픽스처 소스셋에 둔다 (04-control-plane 6.0).
     testFixturesApi 'org.testcontainers:testcontainers'
     testFixturesApi 'io.lettuce:lettuce-core'
+    // 뒷단 스텁도 픽스처다. 시나리오마다 다시 쓰면 "전 시나리오 중복 0" 같은
+    // 게이트가 시나리오마다 다른 것을 재게 된다.
+    testFixturesApi 'io.projectreactor.netty:reactor-netty-http'
 }
 
 // ── 테스트 계층 ──────────────────────────────────────────────────────────────

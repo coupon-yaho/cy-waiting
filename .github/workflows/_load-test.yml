@@ -81,6 +81,18 @@ jobs:
           if [[ "$SCENARIO" == "no-shared-marker" ]]; then
             export SHARED_HEADER=false
           fi
+          # **판을 박지 않는다.** 산출물 이름이 판을 따라가므로 박아 두면 판을
+          # 올릴 때마다 여기서 컨테이너 빌드가 깨진다 — 실제로 v0.4.1 에서 그랬다.
+          # `-plain` 과 `-test-fixtures` 는 실행 JAR 이 아니다. 실행 JAR 만
+          # 분류자가 없다.
+          jar=$(find build/libs -maxdepth 1 -name 'waiting-*.jar' \
+                  ! -name '*-plain.jar' ! -name '*-test-fixtures.jar')
+          if [[ $(wc -l <<<"$jar") -ne 1 || -z "$jar" ]]; then
+            echo "::error::실행 JAR 을 하나로 못 짚었다: ${jar:-없음}"
+            exit 1
+          fi
+          export WAITING_JAR="$jar"
+          echo "실행 JAR — $WAITING_JAR"
           docker compose -f test/load/compose.yml up -d --wait
 
       - if: steps.probe.outputs.ready == 'true'

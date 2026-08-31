@@ -25,7 +25,7 @@ public final class BackendStub implements AutoCloseable {
     private final Set<String> seen = ConcurrentHashMap.newKeySet();
     private final DisposableServer server;
 
-    private BackendStub(BooleanSupplier stalled) {
+    private BackendStub(BooleanSupplier stalled, BooleanSupplier failing) {
         this.server = HttpServer.create()
                 .port(0)
                 .handle((request, response) -> {
@@ -38,22 +38,30 @@ public final class BackendStub implements AutoCloseable {
                     if (member != null && !seen.add(member)) {
                         duplicated.incrementAndGet();
                     }
-                    // **멎은 것은 느린 것이지 거절이 아니다.** 상태를 돌려주면
-                    // 서킷이 실패로 안 세고, 그러면 열리는 갈래를 못 밟는다.
-                    return stalled.getAsBoolean() ? Mono.never()
-                            : response.status(200).send();
+                    // **멎은 것과 5xx 는 다른 갈래다.** 앞엣것은 응답이 아예
+                    // 안 오는 것이고 뒤엣것은 오긴 오는데 실패인 것이다.
+                    // 서킷이 여는 근거가 갈리므로 스텁이 둘을 구분해야 한다.
+                    if (stalled.getAsBoolean()) {
+                        return Mono.never();
+                    }
+                    return response.status(failing.getAsBoolean() ? 500 : 200).send();
                 })
                 .bindNow();
     }
 
     /** 늘 200 을 내는 뒷단. */
     public static BackendStub 항상_받는다() {
-        return new BackendStub(() -> false);
+        return new BackendStub(() -> false, () -> false);
     }
 
-    /** 스위치가 켜지면 응답을 안 내는 뒷단. 서킷이 열리는 갈래를 만든다. */
+    /** 스위치가 켜지면 응답을 안 내는 뒷단. 무응답 갈래를 만든다. */
     public static BackendStub 멎을_수_있다(BooleanSupplier 멎었나) {
-        return new BackendStub(멎었나);
+        return new BackendStub(멎었나, () -> false);
+    }
+
+    /** 스위치가 켜지면 5xx 를 내는 뒷단. 응답은 오는데 실패인 갈래다. */
+    public static BackendStub 실패할_수_있다(BooleanSupplier 실패하나) {
+        return new BackendStub(() -> false, 실패하나);
     }
 
     public int port() {

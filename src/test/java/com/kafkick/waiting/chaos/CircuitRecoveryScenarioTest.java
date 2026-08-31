@@ -198,13 +198,15 @@ class CircuitRecoveryScenarioTest {
                 //
                 // 대신 **대기 시간이 지나 시도에 들어갔는지**를 잰다. 거기까지가
                 // 서킷의 몫이고, 그 뒤는 배분의 몫이다.
+                //
+                // **닫힌 것을 실패로 안 읽는다.** 앞선 판은 끝에서 HALF_OPEN 을
+                // 못 박았는데, 그건 "닫히지 못한다" 를 요구하는 것이라 실제로
+                // 닫히면 시험이 깨졌다 — 넷 중 셋이 그렇게 죽었다. 계획이
+                // 요구하는 것은 성공하면 닫히는 것이고, 여기서 재는 것은
+                // 열린 채로 굳지 않는 것이다.
                 .assertRecovery(() -> RecoveryCriteria.violations(
                         시도에_들어갔다(), 회복_시도가_적다()))
                 .run();
-
-        assertThat(서킷().getState())
-                .as("닫히려면 배분이 프로브를 보내야 한다 (CY-813)")
-                .isEqualTo(CircuitBreaker.State.HALF_OPEN);
     }
 
     /**

@@ -45,7 +45,7 @@ runs:
     # 브랜치가 아니라 역할로 가른다. PR 의 ref 는 refs/pull/N/merge 라
     # 브랜치로 가르면 PR 에서는 아무도 캐시를 못 쓴다.
     - if: steps.probe.outputs.buildable == 'true'
-      uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c  # v5.0.2
+      uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb  # v6.3.0
       with:
         cache-read-only: ${{ inputs.cache-write != 'true' }}
 

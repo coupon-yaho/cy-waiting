@@ -80,8 +80,14 @@ class LeaderKillScenarioTest {
     /** 낡은 재료로 줄에 세웠을 때의 결정 이름. 사다리 7번이 밟혔다는 증거다. */
     private static final String 낡은_결정 = "ENQUEUE_STALE";
 
-    /** 승계 한계. 계획은 3틱을 요구하고 틱은 1초다. */
-    private static final Duration 승계_한계 = Duration.ofSeconds(3);
+    /**
+     * 낡음이 걷힐 때까지의 한계. 계획의 3틱을 여기에 건다.
+     */
+    // **락을 줍는 시간에 걸면 아무것도 안 조인다.** 리스를 시험이 직접 걷어
+    // 냈으므로 그건 100~300ms 로 끝나고, 갱신 주기를 열 배로 늘리는 회귀도
+    // 통과한다. 재야 할 것은 게이트웨이가 fail-open 을 그만두기까지다 —
+    // 갱신에 배분 한 틱과 재료 받아 오기가 얹혀 예산이 실제로 빠듯하다.
+    private static final Duration 낡음이_걷힐_한계 = Duration.ofSeconds(3);
 
     /** 대조군에 보내는 수. <b>크레딧 안쪽이어야 한다.</b> */
     // 뒷단 가용량 보고가 없으면 크레딧은 바닥값이고, 넘겨 보내면 한산한 쿠폰에도
@@ -148,7 +154,12 @@ class LeaderKillScenarioTest {
     @Autowired
     private SnapshotHolder holder;
 
-    /** 순번 조회 토큰. 발급 요청에도 실어 보낸다. */
+    /**
+     * 순번 조회 토큰.
+     */
+    // **발급 경로는 이걸 안 읽는다** — 거기가 보는 것은 `Entry-Token` 이다.
+    // 그래서 이 시나리오는 사다리 2번(토큰 통과)을 한 번도 안 밟고, "추월 0"
+    // 은 아무도 토큰을 안 든 체제에서만 잰 값이다 (CY-826).
     @Autowired
     private QueueToken tokens;
 
@@ -169,7 +180,7 @@ class LeaderKillScenarioTest {
 
     private Instant 승계를_기다린_시각;
 
-    private Duration 승계까지;
+    private Duration 낡음이_걷히기까지;
 
     private WebTestClient 클라이언트() {
         return WebTestClient.bindToServer()
@@ -264,10 +275,11 @@ class LeaderKillScenarioTest {
             ChaosScenario.named("C4 리더 강제 종료")
                     .baseline(() -> {
                         장애_전_자리 = 자리들();
-                        정상_상태.addAll(여러_번_시도한다(한산한_쿠폰, 한산한_보낼_수, 1_000));
+                        한산한_쿠폰_도착[0] = 잰다(한산한_쿠폰,
+                                () -> 정상_상태.addAll(
+                                        여러_번_시도한다(한산한_쿠폰, 한산한_보낼_수, 1_100)));
                         줄_쿠폰_도착[0] = 잰다(COUPON,
                                 () -> 여러_번_시도한다(COUPON, 보낼_수, 1_500));
-                        한산한_쿠폰_도착[0] = 받은_수(한산한_쿠폰);
                         assertThat(정상_상태).as("전제 — 한산한 쿠폰은 5xx 없이 답한다")
                                 .noneMatch(status -> status >= 500);
                         assertThat(한산한_쿠폰_도착[0]).as("전제 — 한산한 쿠폰은 뒷단까지 간다")
@@ -281,7 +293,10 @@ class LeaderKillScenarioTest {
                         // 아직 안 낡았다. 계획이 "판정 중단 0" 을 요구하는
                         // 구간이 정확히 이 몇 초다 — 낡음을 기다린 뒤에 재면
                         // 이 구간을 통째로 건너뛴다.
-                        assertThat(holder.isDataStale()).as("전제 — 아직 안 낡았다")
+                        // 실패하면 왜인지가 보여야 한다. 불리언만 보면 러너가
+                        // 느려 틱을 놓친 것이 제품 결함처럼 읽힌다.
+                        assertThat(holder.isDataStale())
+                                .as("전제 — 아직 안 낡았다 (나이 %s)", holder.dataAge())
                                 .isFalse();
                         진입_줄_상태.addAll(여러_번_시도한다(COUPON, 보낼_수, 1_800));
                     })
@@ -303,8 +318,8 @@ class LeaderKillScenarioTest {
                     })
                     .afterRecovery(() -> {
                         Awaitility.await().atMost(기다림).until(leadership::isLeader);
-                        승계까지 = Duration.between(승계를_기다린_시각, clock.instant());
                         Awaitility.await().atMost(기다림).until(() -> !holder.isDataStale());
+                        낡음이_걷히기까지 = Duration.between(승계를_기다린_시각, clock.instant());
                         long 회복_전 = 받은_수(한산한_쿠폰);
                         회복_상태.addAll(여러_번_시도한다(한산한_쿠폰, 한산한_보낼_수, 3_000));
                         회복_뒤_자리 = 자리들();
@@ -337,9 +352,13 @@ class LeaderKillScenarioTest {
                             열려_있었다(한산한_쿠폰_도착[2], 한산한_쿠폰_도착[0]),
                             줄을_추월하지_않았다(줄_쿠폰_도착[2]),
                             줄에_세웠다(회복_줄_상태, "회복"),
-                            // 승계가 늦으면 그만큼 낡음이 길어진다.
-                            RecoveryCriteria.slowVerdictReturn(승계까지, 승계_한계),
-                            // RC5 — 줄 선 사람이 자기 자리를 지켰다.
+                            // 낡음이 오래 남으면 그동안 fail-open 이 열려 있다.
+                            RecoveryCriteria.slowVerdictReturn(
+                                    낡음이_걷히기까지, 낡음이_걷힐_한계),
+                            // **RC5 는 여기서 깨질 수 없다** (CY-822). 자리를
+                            // 걷는 것은 스위퍼인데, 기동 첫 틱의 낡음이 재개
+                            // 유예를 시험 수명보다 길게 걸어 한 번도 안 돈다.
+                            // 초록이지만 증거가 아니라, 재는 척하는 자리다.
                             RecoveryCriteria.seatLost(장애_전_자리, 회복_뒤_자리)))
                     // **RC1·RC2·RC4·RC6 은 여기서 안 잰다.** 이 시나리오는
                     // 레디스가 살아 있어 줄이 안 사라지므로 RC2 를 잴 수 있지만,

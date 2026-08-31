@@ -16,20 +16,43 @@ import java.util.Optional;
  */
 public final class LeaderFaults {
 
-    /** 지금 소유자를 밀어내고 죽은 리더를 앉힌다. 한 판이라 앱이 못 끼어든다. */
+    /**
+     * 리스가 만료되고 죽은 리더가 그 자리를 잡는다. 한 판이라 앱이 못 끼어든다.
+     */
+    // **NX 로 잡는다.** 통째로 덮으면 살아 있는 남의 락이 주인을 바꾸는데,
+    // 실제 획득 스크립트는 그러지 않는다. 그 상태에서는 방금 확인에 성공한
+    // 노드가 남의 키를 마주하게 되고, 다음 갱신까지 락 없이 리더라고 믿는다 —
+    // 프로덕션에 없는 상태 위에 세운 시험은 아무것도 증명하지 못한다.
     private static final String TAKE_OVER = """
+            redis.call('DEL', KEYS[1])
             local t = redis.call('TIME')
             local fence = tonumber(t[1]) * 1000000 + tonumber(t[2])
-            redis.call('SET', KEYS[1],
+            if redis.call('SET', KEYS[1],
                     string.format('%.0f', fence) .. '|' .. ARGV[1],
-                    'PX', tonumber(ARGV[2]))
-            return 1
+                    'NX', 'PX', tonumber(ARGV[2])) then
+                return 1
+            end
+            return 0
             """;
 
-    /** 자기 락일 때만 지운다. GET 과 DEL 사이에 소유자가 바뀌면 남의 락을 지운다. */
-    private static final String RELEASE =
-            "if redis.call('GET', KEYS[1]) == ARGV[1] then "
-                    + "return redis.call('DEL', KEYS[1]) else return 0 end";
+    /**
+     * 자기 락일 때만 지운다. GET 과 DEL 사이에 소유자가 바뀌면 남의 락을 지운다.
+     */
+    // 값의 형식은 `<판 번호>|<ownerId>` 다. 통짜로 비교하면 지금 형식으로 잡은
+    // 락을 자기 것으로 못 알아보고 안 지운 채 나간다 — 프로덕션 스크립트가
+    // 구분자를 파싱하는 것과 같은 이유다.
+    private static final String RELEASE = """
+            local current = redis.call('GET', KEYS[1])
+            if not current then
+                return 0
+            end
+            local sep = string.find(current, '|', 1, true)
+            local owner = sep == nil and current or string.sub(current, sep + 1)
+            if owner == ARGV[1] then
+                return redis.call('DEL', KEYS[1])
+            end
+            return 0
+            """;
 
     private final StatefulRedisConnection<String, String> redis;
 

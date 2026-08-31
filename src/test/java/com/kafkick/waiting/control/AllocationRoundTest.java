@@ -86,6 +86,56 @@ class AllocationRoundTest {
      * 발행이 터져도 지운 것으로 기록되고, 죽은 줄이 영구히 남으면서 로그는
      * 지웠다고 말합니다.
      */
+    /**
+     * <b>리더십을 잃었다 되찾으면 이월을 다시 받는다</b> (F9 · CY-859).
+     *
+     * <p>안 그러면 남이 리더였던 동안 움직인 값을 못 보고 제 옛 값을 이어 쓴다.
+     * 뒷단이 열화해 새 리더가 크레딧을 크게 내려 발행했는데, 돌아온 노드가 옛
+     * 값에서 평활화를 시작하면 뒷단이 감당 못 할 수를 들여보낸다.
+     */
+    @Test
+    @DisplayName("리더십을_되찾으면_이월을_다시_받는다")
+    void 리더십을_되찾으면_이월을_다시_받는다() {
+        List<Double> 이월_요청 = new ArrayList<>();
+        AtomicBoolean 리더 = new AtomicBoolean(true);
+        AtomicReference<Double> 저장된_이월 = new AtomicReference<>(7_300.0);
+        AllocationRound round = AllocationRound.of(
+                리더::get,
+                () -> Mono.just(new TimedDemands(
+                        List.of(new CouponDemand("c1", 0, 0, QueueMode.ADAPTIVE)), 읽은_시각)),
+                () -> 1_000, () -> 1,
+                grant -> Mono.just(grant.credit()),
+                hash -> Mono.empty(),
+                () -> Instant.ofEpochSecond(읽은_시각),
+                () -> {
+                    이월_요청.add(저장된_이월.get());
+                    return Mono.just(CreditSmoother.restore(0.3,
+                            new CreditSmoother.Snapshot(저장된_이월.get(), true)));
+                },
+                SnapshotCodec.create(), () -> 0L, Optional::empty,
+                SoldOutCleanup.of(1, new SimpleMeterRegistry()),
+                ids -> Mono.just(List.of()), ids -> Mono.just(List.of()),
+                안_걷는_스위퍼(), () -> false, () -> CircuitState.CLOSED);
+
+        round.run().block();
+        assertThat(이월_요청).as("첫 판에 한 번 받는다").hasSize(1);
+
+        round.run().block();
+        assertThat(이월_요청).as("리더인 동안은 다시 안 받는다 — 방금 쓴 값을 되읽으면 평활화가 무의미하다")
+                .hasSize(1);
+
+        // 남이 리더였던 동안 뒷단이 열화해 값이 크게 내려갔다.
+        리더.set(false);
+        round.run().block();
+        저장된_이월.set(800.0);
+        리더.set(true);
+
+        round.run().block();
+
+        assertThat(이월_요청).as("되찾은 뒤에는 다시 받는다").hasSize(2);
+        assertThat(이월_요청.get(1)).as("남이 남긴 값에서 이어 간다").isEqualTo(800.0);
+    }
+
     @Test
     @DisplayName("발행이_실패하면_지우지_않고_다음_틱에_다시_온다")
     void 발행이_실패하면_지우지_않고_다음_틱에_다시_온다() {

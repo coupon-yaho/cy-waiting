@@ -225,12 +225,15 @@ class CircuitRecoveryScenarioTest {
                 // 요구하는 것은 성공하면 닫히는 것이고, 여기서 재는 것은
                 // 열린 채로 굳지 않는 것이다.
                 .assertRecovery(() -> RecoveryCriteria.violations(
-                        시도에_들어갔다(), 회복_시도가_적다(),
+                        시도에_들어갔다(),
                         // **뒷단이 정말 살아났는가.** 이것이 없으면 복구를 아예
                         // 안 해도 위 판정들이 전부 통과한다 — 서킷 상태는 시계가
                         // 흐르면 뒷단이 죽은 채로도 바뀌기 때문이다.
                         뒷단이_다시_받았다(회복_유입[0]),
-                        오백이_안_샌다("회복", 회복_상태),
+                        // **회복 구간에는 이 판정을 안 건다.** 유지 구간에
+                        // 밀어 넣은 사람들로 줄이 차서 429 가 정상이다. 그건
+                        // 서킷이 아니라 큐 용량의 일이고, 여기서 재면 시나리오가
+                        // 자기가 만든 상태를 결함으로 읽는다.
                         // 반쯤 열린 구간의 시험 요청이 불어나면 뒷단이 같은
                         // 요청을 두 번 받는다. 발급 경로에서 그건 초과 발급이다.
                         뒷단.중복_수신이_없다()))
@@ -298,14 +301,12 @@ class CircuitRecoveryScenarioTest {
         if (상태.isEmpty()) {
             return Optional.of("%s — 보낸 것이 없다".formatted(구간));
         }
-        long 샌_것 = 상태.stream().filter(status -> status >= 500).count();
-        return 샌_것 == 0 ? Optional.empty()
-                : Optional.of("%s — %d 건이 5xx 다 (보낸 %d): %s"
-                        .formatted(구간, 샌_것, 상태.size(), 상태));
-    }
-
-    private Optional<String> 오백이_안_샌다(String 구간, List<Integer> 상태) {
-        return 줄에_세웠다(구간, 상태);
+        // **202 만 줄에 선 것이다.** 5xx 만 거르면 429·409 도 "큐 등록 정상" 을
+        // 만족시킨다 — 줄이 꽉 찼거나 매진이라 못 선 것을 선 것으로 읽는다.
+        long 못_선_것 = 상태.stream().filter(status -> status != 202).count();
+        return 못_선_것 == 0 ? Optional.empty()
+                : Optional.of("%s — %d 건이 줄에 못 섰다 (보낸 %d): %s"
+                        .formatted(구간, 못_선_것, 상태.size(), 상태));
     }
 
     /**
@@ -334,10 +335,8 @@ class CircuitRecoveryScenarioTest {
                 : Optional.of("회복 구간인데 뒷단이 직접 물어도 안 답한다 — 아직 안 돌아왔다");
     }
 
-    /** G8.12 — 회복 시도가 두 번을 넘으면 안 된다. */
-    private Optional<String> 회복_시도가_적다() {
-        int 시도 = 열린_횟수.get();
-        return 시도 <= 2 ? Optional.empty()
-                : Optional.of("서킷이 %d 번 열렸다 — 회복이 반복 실패했다 (G8.12)".formatted(시도));
-    }
+    // **G8.12 판정을 안 건다** (CY-834). 두드리는 루프가 열린 상태를 벗어나는
+    // 순간 빠져나오므로 프로브가 실패해 다시 열릴 시간이 없다 — 관측값이 늘
+    // 1 이라 "2 이하" 가 항진명제다. 뒷단을 영영 안 살리고 판정 사다리의 서킷
+    // 갈래까지 지운 판에서도 그랬다. 셀 기회를 만드는 것이 먼저다.
 }

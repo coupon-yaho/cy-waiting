@@ -82,7 +82,6 @@ class SecondNodeTest {
             assertThat(둘째.ownerId()).as("주인 이름이 첫 노드와 갈린다")
                     .isNotEqualTo(첫_노드.ownerId());
         } finally {
-            락을_비운다();
         }
     }
 
@@ -102,8 +101,7 @@ class SecondNodeTest {
                         if (첫_노드.isLeader()) {
                             return true;
                         }
-                        락을_비운다();
-                        return false;
+                                    return false;
                     });
 
             수명.stop();
@@ -112,7 +110,7 @@ class SecondNodeTest {
                     .until(둘째::리더인가);
         } finally {
             수명.start();
-            락을_비운다();
+            첫_노드가_다시_쥘_때까지();
         }
     }
 
@@ -132,7 +130,6 @@ class SecondNodeTest {
 
         assertThat(발급_상태()).as("둘째를 닫은 뒤에도 첫 노드가 같은 답을 낸다")
                 .isEqualTo(닫기_전);
-        락을_비운다();
     }
 
     private int 발급_상태() {
@@ -146,10 +143,16 @@ class SecondNodeTest {
                 .exchange().returnResult(Void.class).getStatus().value();
     }
 
-    private void 락을_비운다() {
-        try (StatefulRedisConnection<String, String> 연결 = faults.연결한다()) {
-            연결.sync().del(RedisKeys.LEADER);
-        }
+    /**
+     * 첫 노드가 리더를 다시 쥘 때까지 기다린다.
+     *
+     * <p><b>락을 함부로 지우지 않는다.</b> 지우는 것은 소유자 확인을 건너뛰는
+     * 일이고, 방금 잡은 락을 지우면 그 노드는 자기가 리더라고 믿는 채로 키가
+     * 없는 구간에 들어간다 — 다음 시험이 있지도 않은 분단을 관측한다.
+     */
+    private void 첫_노드가_다시_쥘_때까지() {
+        Awaitility.await().alias("첫 노드가 리더를 되찾는다").atMost(기다림)
+                .until(첫_노드::isLeader);
     }
 
     @Test
@@ -169,7 +172,6 @@ class SecondNodeTest {
                     .atMost(기다림)
                     .until(() -> !(첫_노드.isLeader() && 둘째.리더인가()));
         } finally {
-            락을_비운다();
         }
     }
 

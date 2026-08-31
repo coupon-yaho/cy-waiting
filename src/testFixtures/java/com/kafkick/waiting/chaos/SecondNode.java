@@ -1,6 +1,7 @@
 package com.kafkick.waiting.chaos;
 
 import com.kafkick.waiting.control.Leadership;
+import reactor.core.scheduler.Scheduler;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -53,10 +54,20 @@ public final class SecondNode implements AutoCloseable {
         return 리더십().isLeader();
     }
 
+    /**
+     * 내린다. <b>배분 스케줄러를 손으로 버린다</b> — 그 빈은 소멸 메서드를 일부러
+     * 끄고 있어(리더 루프가 종료 중에도 돌아야 한다) 컨텍스트를 닫아도 안 죽는다.
+     * 프로덕션은 프로세스가 한 번 죽으면 끝이지만, 여기서는 띄울 때마다 하나씩 샌다.
+     */
     @Override
     public void close() {
-        if (context.isActive()) {
-            context.close();
+        if (!context.isActive()) {
+            return;
+        }
+        Scheduler 배분 = context.getBeanProvider(Scheduler.class).getIfAvailable();
+        context.close();
+        if (배분 != null) {
+            배분.dispose();
         }
     }
 

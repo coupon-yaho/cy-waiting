@@ -56,7 +56,7 @@ class CapacityReadSlowScenarioTest {
     private final AtomicBoolean 느리다 = new AtomicBoolean();
 
     /** 수집기·재료 읽기·지표를 한 묶음으로 든다. 지표를 따로 들면 짝이 어긋난다. */
-    private record 판(CapacityCollector 수집기, CapacityRefresh 읽기, MeterRegistry 지표) {
+    private record Rig(CapacityCollector 수집기, CapacityRefresh 읽기, MeterRegistry 지표) {
 
         void 한_판() {
             읽기.refresh().block();
@@ -82,7 +82,7 @@ class CapacityReadSlowScenarioTest {
         }
     }
 
-    private 판 판을_짠다(long 보고할_여유) {
+    private Rig 판을_짠다(long 보고할_여유) {
         CapacityCollector 수집기 = CapacityCollector.of(램프, 신선도, 하한, 100_000);
         MeterRegistry 지표 = new SimpleMeterRegistry();
         CapacityRefresh 읽기 = CapacityRefresh.of(
@@ -93,7 +93,7 @@ class CapacityReadSlowScenarioTest {
                                 List.of(new CapacityReport("i1", 보고할_여유, NOW)), NOW)),
                 수집기, () -> 노드, Duration.ofMillis(50),
                 Schedulers.immediate(), 지표);
-        return new 판(수집기, 읽기, 지표);
+        return new Rig(수집기, 읽기, 지표);
     }
 
     /**
@@ -106,8 +106,8 @@ class CapacityReadSlowScenarioTest {
     @Test
     @DisplayName("C16_가용량_읽기만_느릴_때_바닥이_받치고_회복에_유예가_다시_찬다")
     void C16_가용량_읽기만_느릴_때_바닥이_받치고_회복에_유예가_다시_찬다() {
-        판 여유있는 = 판을_짠다(여유);
-        판 여유없는 = 판을_짠다(0);
+        Rig 여유있는 = 판을_짠다(여유);
+        Rig 여유없는 = 판을_짠다(0);
         long[] 정상 = new long[2];
         long[] 유예중 = new long[2];
         double[] 못_읽은_판 = new double[2];

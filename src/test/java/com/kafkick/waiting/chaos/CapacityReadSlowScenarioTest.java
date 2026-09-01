@@ -112,6 +112,7 @@ class CapacityReadSlowScenarioTest {
         long[] 유예중 = new long[2];
         double[] 못_읽은_판 = new double[2];
         long[] 유지 = new long[2];
+        long[] 유예_직후 = new long[1];
         double[] 유지_게이지 = new double[1];
         long[] 회복 = new long[2];
 
@@ -135,6 +136,11 @@ class CapacityReadSlowScenarioTest {
                         못_읽은_판[1] = 여유있는.못_읽은_판();
                     })
                     .duringFault(() -> {
+                        // **유예를 한 판 넘긴 자리를 먼저 본다.** 여기를 안 보면
+                        // 유예를 3 에서 13 으로 늘려도 아무 판정이 안 문다 —
+                        // 진입은 3판만 보고 유지는 100판 뒤를 보기 때문이다.
+                        여유있는.한_판();
+                        유예_직후[0] = 여유있는.크레딧();
                         여유있는.여러_판(유지_판);
                         여유없는.여러_판(유지_판);
                         유지[0] = 여유있는.크레딧();
@@ -162,6 +168,10 @@ class CapacityReadSlowScenarioTest {
                             유예_안에서_안_깎였다(정상[0], 유예중[0]),
                             유예_안에서_안_깎였다(정상[1], 유예중[1])))
                     .assertDuring(() -> RecoveryCriteria.violations(
+                            // **유예가 끝나는 자리가 정확한가.** 한 판 더 돌면
+                            // 딱 한 번 반토막이어야 한다. 늘어난 유예는 사고 이전
+                            // 관측치로 그만큼 더 배분한다는 뜻이다 (불변식 2).
+                            유예가_한_판_뒤에_끝났다(정상[0], 유예_직후[0]),
                             // **감쇠가 실제로 돌았는가.** 안 돌면 아래 바닥 판정이
                             // 정상값을 바닥으로 착각해 통과한다.
                             감쇠가_돌았다(정상[0], 유지[0]),
@@ -190,6 +200,9 @@ class CapacityReadSlowScenarioTest {
     /**
      * RC1·RC2·RC4·RC5 는 여기서 안 잰다. 이 시나리오는 제어 평면의 재료 읽기만
      * 흔들고 줄도 뒷단 유입도 만들지 않는다 — 재는 척하면 그 게이트가 이름만 남는다.
+     *
+     * <p>수집기에서 끝나므로 <b>평활화·하한 재적용·게이팅은 밖이다</b>. 리더십도
+     * 안 갈린다. 그 둘이 무엇을 가리는지는 계획서 C16 절에 적어 뒀다.
      */
     private Optional<String> 평시에_관측이_실렸다(long 정상) {
         return 정상 > 바닥 ? Optional.empty()
@@ -207,6 +220,13 @@ class CapacityReadSlowScenarioTest {
     private Optional<String> 유예_안에서_안_깎였다(long 정상, long 유예중) {
         return 정상 == 유예중 ? Optional.empty()
                 : Optional.of("유예 안에서 깎였다 — %d 에서 %d 로".formatted(정상, 유예중));
+    }
+
+    private Optional<String> 유예가_한_판_뒤에_끝났다(long 정상, long 유예_직후) {
+        long 기대 = Math.max(Math.max(하한, 바닥), 정상 / 2);
+        return 유예_직후 == 기대 ? Optional.empty()
+                : Optional.of("유예 %d 판을 한 판 넘겼는데 크레딧이 %d 다 — %d 여야 한다"
+                        .formatted(CapacityCollector.HOLD_ROUNDS, 유예_직후, 기대));
     }
 
     private Optional<String> 감쇠가_돌았다(long 정상, long 유지) {

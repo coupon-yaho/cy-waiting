@@ -62,23 +62,21 @@ class PollScaleDropScenarioTest {
     /**
      * 노드 하나가 예산 안에 담을 수 있는 대기자 수의 상한.
      *
-     * <p>간격이 천장을 못 넘으므로 한 사람이 만드는 부하는 <b>1/천장 아래로 못
-     * 내려간다.</b> 그래서 담을 수 있는 인원이 `예산 × 천장` 으로 닫힌다 —
-     * 배수를 아무리 올려도 이 선을 못 넘는다.
+     * <p>한 사람이 만드는 부하가 1/천장 아래로 못 내려가서 닫히는 값이다.
      */
-    private static final long 담을_수_있는_대기자 = 10_000;
+    private static final long 담을_수_있는_대기자 = (long) (예산 * 천장);
+
+    /** 배수를 올려도 부하가 더 안 내려가는 것을 보려고 넣는 값. 실제의 1,200 배다. */
+    private static final double 터무니없는_배수 = 10_000;
 
     private static final DoubleSupplier 흔들지_않는다 = () -> 0.5;
 
     private final PollIntervalPolicy 폴링 = PollIntervalPolicy.of(지터);
 
-    /** 매진된 쿠폰은 배분을 못 받는다. 배분 맵을 수요에서 유도해 그 상태를 지킨다. */
     private double 배수를_낸다(List<CouponDemand> 수요) {
         Map<String, Double> 배분 = Map.of(A, A_배분, B, B_배분);
-        double 기대 = PollBudgetPlanner.expectedPollRps(수요,
-                couponId -> 수요.stream()
-                        .anyMatch(d -> d.couponId().equals(couponId) && d.isActive())
-                        ? 배분.getOrDefault(couponId, 0.0) : 0.0);
+        double 기대 = PollBudgetPlanner.expectedPollRps(
+                수요, couponId -> 배분.getOrDefault(couponId, 0.0));
         return PollBudgetPlanner.pollScale(기대, PollBudgetPlanner.budgetRps(노드));
     }
 
@@ -87,10 +85,7 @@ class PollScaleDropScenarioTest {
         return 폴링.intervalSec(EtaPolicy.etaSec(순번, 배분율), 흔들지_않는다, scale);
     }
 
-    /**
-     * 줄 전체의 실측 부하. <b>대표 한 명으로는 못 잰다</b> — 간격을 흔들면 짧아진
-     * 쪽이 길어진 쪽보다 더 많이 두드려 총 부하가 위로 샌다.
-     */
+    /** 줄 전체의 실측 부하. 대표 한 명으로는 지터가 부하에 주는 영향이 안 보인다. */
     private double 실측_부하(double scale) {
         Random 고정_씨앗 = new Random(42);
         double 합 = 0;
@@ -143,8 +138,7 @@ class PollScaleDropScenarioTest {
                     흔들림[1] = 먼_밴드_간격(0.5, 걸린_배수[1]);
                     흔들림[2] = 먼_밴드_간격(1, 걸린_배수[1]);
                     부하[0] = 실측_부하(걸린_배수[1]);
-                    // 배수를 터무니없이 올려도 부하가 어디까지 내려가는지 본다.
-                    부하[1] = 실측_부하(10_000);
+                    부하[1] = 실측_부하(터무니없는_배수);
                 })
                 .recover(() -> 회복_배수[0] = 배수를_낸다(List.of(
                         new CouponDemand(A, A_대기, 0), new CouponDemand(B, B_대기, B_대기))))
@@ -154,15 +148,12 @@ class PollScaleDropScenarioTest {
                         평시_간격이_밴드_그대로다(정상_간격),
                         배수가_예산_초과분만큼_오른다(걸린_배수[0])))
                 .assertDuring(() -> RecoveryCriteria.violations(
-                        // 배수에 상태가 없다는 것이 이 시나리오의 전제다.
                         배수가_틱마다_같다(걸린_배수[0], 걸린_배수[1]),
                         // B 의 앞은 배수를 그대로 받고 꼬리는 천장에 붙는다.
                         걸린_간격이_밴드에_배수를_곱한_값이다(걸린_간격),
-                        // **천장이 지터를 살리려고 있다.** 흔들림이 죽으면 상한 한
-                        // 점에 전원이 모여 그 파도가 주기마다 재생산된다.
+                        // 천장에 붙어도 흔들림이 죽지 않는다 — 천장이 있는 이유다.
                         천장에_붙어도_흔들린다(흔들림),
-                        // **배수를 아무리 올려도 이 바닥 아래로 안 내려간다.**
-                        // 한 사람의 부하가 1/천장 밑으로 못 가기 때문이다.
+                        부하가_예산을_넘긴다(부하[0]),
                         부하가_천장이_정한_바닥에_멎는다(부하[0], 부하[1]),
                         노드_하나가_담을_수_있는_수를_넘었다(부하[1])))
                 .assertRecovery(() -> RecoveryCriteria.violations(
@@ -205,7 +196,7 @@ class PollScaleDropScenarioTest {
 
     private Optional<String> 배수가_틱마다_같다(double 진입, double 유지) {
         return 진입 == 유지 ? Optional.empty()
-                : Optional.of("같은 수요에서 배수가 %.3f 에서 %.3f 로 갈렸다"
+                : Optional.of("전제 — 같은 수요에서 배수가 %.3f 에서 %.3f 로 갈렸다"
                         .formatted(진입, 유지));
     }
 
@@ -234,10 +225,9 @@ class PollScaleDropScenarioTest {
     }
 
     /**
-     * 배수를 천 배로 올려도 부하가 바닥에서 멎는다. 그 바닥은 `대기자 / 천장` 이다.
+     * 배수를 아무리 올려도 부하가 `대기자 / 천장` 에서 멎는다.
      *
-     * <p>지터가 부하를 조금 위로 민다 — 짧아진 쪽이 길어진 쪽보다 더 많이 두드린다.
-     * 그래서 5% 를 준다.
+     * <p>지터가 부하를 조금 위로 밀어 5% 를 준다.
      */
     private Optional<String> 부하가_천장이_정한_바닥에_멎는다(double 걸린, double 무한대) {
         double 바닥 = (double) (A_대기 + B_대기) / 천장;
@@ -250,12 +240,7 @@ class PollScaleDropScenarioTest {
                         .formatted(무한대, 바닥));
     }
 
-    /**
-     * 이 줄은 노드 하나로 예산 안에 못 담는다. <b>배수의 문제가 아니라 규모다.</b>
-     *
-     * <p>담을 수 있는 상한이 `예산 × 천장` 으로 닫혀 있어, 그보다 많은 사람이 서면
-     * 어떤 배수로도 예산 안에 못 들어온다.
-     */
+    /** 이 줄은 노드 하나로 예산 안에 못 담는다. <b>배수가 아니라 규모의 문제다.</b> */
     private Optional<String> 노드_하나가_담을_수_있는_수를_넘었다(double 무한대) {
         if (A_대기 + B_대기 <= 담을_수_있는_대기자) {
             return Optional.of("전제 — 대기자 %d 명이 상한 %d 이하다. 이 픽스처로는 "
@@ -264,6 +249,18 @@ class PollScaleDropScenarioTest {
         return 무한대 > 예산 ? Optional.empty()
                 : Optional.of("대기자 %d 명인데 부하가 %.0f 로 예산 %.0f 안에 들어왔다"
                         .formatted(A_대기 + B_대기, 무한대, 예산));
+    }
+
+    /**
+     * 배수가 걸린 뒤에도 부하가 예산 밖이다. 계획서가 값으로 적은 자리다.
+     *
+     * <p>밴드로 본다. 정확 일치는 지터 씨앗에 묶여 쓸모없이 깨진다.
+     */
+    private Optional<String> 부하가_예산을_넘긴다(double 걸린) {
+        double 비 = 걸린 / 예산;
+        return 비 >= 2.2 && 비 <= 2.4 ? Optional.empty()
+                : Optional.of("배수 걸린 부하가 예산의 %.2f 배다 — 2.2~2.4 배여야 한다"
+                        .formatted(비));
     }
 
     private Optional<String> 매진되면_배수가_풀린다(double 회복) {

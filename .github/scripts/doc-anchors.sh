@@ -7,13 +7,21 @@
 # **앵커는 `<a id="...">` 만 센다.** 제목에서 슬러그를 유추하지 않는다 — 유추
 # 규칙이 렌더러마다 달라서, 맞춰 봐야 어느 한쪽에서 깨진다. 걸어야 하면 그
 # 자리에 `<a id="...">` 를 박는다.
+#
+# **대상은 추적 중인 파일이다.** 훑어서 모으면 CI 는 깨끗한 체크아웃을 보는데
+# 로컬은 `build/` 산출물과 아직 안 올린 초안까지 본다 — 같은 스크립트를 부르고도
+# 결과가 갈린다. `doc-links.sh` 와 같은 목록을 쓴다.
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
+# 목록을 환경으로 넘긴다 — 표준입력은 heredoc 이 이미 쓰고 있다.
+TRACKED_MD=$(git ls-files '*.md')
+export TRACKED_MD
+
 python3 - <<'EOF'
-import pathlib, re, sys
+import os, pathlib, re, sys
 root = pathlib.Path('.').resolve()
-md = [f for f in pathlib.Path('.').rglob('*.md') if '.git' not in f.parts]
+md = [pathlib.Path(p) for p in os.environ['TRACKED_MD'].splitlines() if p]
 anchors = {f: set(re.findall(r'<a id="([^"]+)"', f.read_text())) for f in md}
 bad = 0
 for f in md:

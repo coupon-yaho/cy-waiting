@@ -87,12 +87,15 @@ class ClockBackAndGhostScenarioTest {
                     역행_폭[0] = 시계.skew().maxSkewMicros();
                 })
                 .duringFault(() -> {
+                    // **두 갈래를 다 걷는다.** 보정값으로 걷는 쪽과 생 값으로 걷는
+                    // 쪽이다. 지금 프로덕션은 **뒤쪽**이다 — 가용량 경로가 단조
+                    // 가드의 반환값을 안 쓴다. 계획서 C17 절에 그 사실을 적었다.
                     유지[0] = 주_수집기.collect(보고("i1", NOW + 1), 승격_직후[0], 노드);
-                    // 대조군. **보정만 뺀다** — 같은 평시를 태우고 같은 식별자를 쓰고
-                    // 기준 시각만 생 값이다. 셋이 같이 다르면 차이가 시계 탓인지 모른다.
-                    CapacityCollector 보정_없는_판 = 수집기();
-                    보정_없는_판.collect(보고("i1", NOW), NOW, 노드);
-                    유지[1] = 보정_없는_판.collect(보고("i1", NOW + 1), NOW - 역행초, 노드);
+                    // 같은 평시를 태우고 같은 식별자를 쓰고 기준 시각만 다르다.
+                    // 셋이 같이 다르면 차이가 시계 탓인지 모른다.
+                    CapacityCollector 생_시각_판 = 수집기();
+                    생_시각_판.collect(보고("i1", NOW), NOW, 노드);
+                    유지[1] = 생_시각_판.collect(보고("i1", NOW + 1), NOW - 역행초, 노드);
                 })
                 .recover(() -> 회복[0] = 시계.observe(NOW + 1))
                 .afterRecovery(() -> {
@@ -130,8 +133,8 @@ class ClockBackAndGhostScenarioTest {
                         보정이_한_번_기록됐다(보정_횟수[0], 보정_횟수[1]),
                         역행_폭이_남았다(역행_폭[0])))
                 .assertDuring(() -> RecoveryCriteria.violations(
-                        크레딧이_유지됐다(정상[0], 유지[0]),
-                        보정_없이는_하한이다(유지[1])))
+                        보정한_시각으로_걷으면_유지된다(정상[0], 유지[0]),
+                        생_시각으로_걷으면_하한이다(유지[1])))
                 .assertRecovery(() -> RecoveryCriteria.violations(
                         바닥값을_놓았다(회복[0]),
                         // **RC6 를 밴드로 안 잰다.** 이 시나리오는 보정이 먹히면
@@ -179,15 +182,22 @@ class ClockBackAndGhostScenarioTest {
                         .formatted(마이크로초, 기대));
     }
 
-    private Optional<String> 크레딧이_유지됐다(long 정상, long 유지) {
+    /** 설계가 의도한 갈래다 (A-9). <b>지금 프로덕션은 이 값을 안 쓴다.</b> */
+    private Optional<String> 보정한_시각으로_걷으면_유지된다(long 정상, long 유지) {
         return 정상 == 유지 ? Optional.empty()
-                : Optional.of("승격 뒤 크레딧이 %d 에서 %d 로 갈렸다".formatted(정상, 유지));
+                : Optional.of("보정한 시각으로 걷었는데 크레딧이 %d 에서 %d 로 갈렸다"
+                        .formatted(정상, 유지));
     }
 
-    private Optional<String> 보정_없이는_하한이다(long 대조) {
-        return 대조 == 바닥 ? Optional.empty()
-                : Optional.of(("전제 — 보정 없는 판이 %d 다. 바닥 %d 이 아니면 이 "
-                        + "시나리오는 차이가 없는 것을 재고 있다").formatted(대조, 바닥));
+    /**
+     * <b>지금 프로덕션이 걷는 갈래다.</b> 역행 폭만큼 전면 억제가 이어진다.
+     *
+     * <p>고쳐지면 여기가 빨개진다. 그때 이 판정과 계획서 C17 절을 같이 고친다.
+     */
+    private Optional<String> 생_시각으로_걷으면_하한이다(long 생_시각_판) {
+        return 생_시각_판 == 바닥 ? Optional.empty()
+                : Optional.of("생 시각으로 걷은 판이 %d 다 — 바닥 %d 여야 한다"
+                        .formatted(생_시각_판, 바닥));
     }
 
     private Optional<String> 바닥값을_놓았다(long 회복) {

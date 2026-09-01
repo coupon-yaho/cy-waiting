@@ -14,6 +14,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -63,6 +64,12 @@ class BackendSilenceScenarioTest {
     private static final long 밴드_하한 = 20;
 
     private static final long 밴드_상한 = 40;
+
+    /**
+     * 흔들림을 보는 표본 수. <b>보낸 수와 같다</b> — 여기서 더 늘리려면 한 건에
+     * 응답 상한만큼을 더 치러야 한다. 열두 건으로 늘려 보니 한 판이 3분이 됐다.
+     */
+    private static final int 흔들림_표본 = 보낼_수;
 
     /** 뒷단이 입을 닫았는가. 이 스위치로 장애를 넣고 걷는다. */
     private static final AtomicBoolean 멎었다 = new AtomicBoolean();
@@ -178,6 +185,7 @@ class BackendSilenceScenarioTest {
             long[] 도착 = new long[3];
             int[] 격벽 = new int[3];
             long[] 폴백_수 = new long[2];
+            List<Long> 다시_올_시각들 = new ArrayList<>();
             long[] 표본 = new long[1];
 
             ChaosScenario.named("C18 뒷단 무응답")
@@ -197,6 +205,8 @@ class BackendSilenceScenarioTest {
                         격벽[1] = 물려_있는_동안_격벽을_본다();
                         도착[1] = 뒷단까지_센다(쿠폰[1], () -> 침묵중.addAll(
                                 여러_번_시도한다(쿠폰[1], 2_000)));
+                        다시_올_시각들.addAll(침묵중.stream().map(Reply::다시_올_시각)
+                                .toList());
                         // 자리를 놓고 나서 다시 본다. 끝난 뒤에도 남아 있으면
                         // 그 자리는 영영 안 돌아온다.
                         격벽[2] = 판정.inFlight();
@@ -223,7 +233,7 @@ class BackendSilenceScenarioTest {
                             // **다시 올 시각이 밴드 안인가** (F7). 0 보다 크기만
                             // 보면 상수로 박아도 통과하고, 그러면 회복 순간에
                             // 전원이 같은 초로 돌아온다.
-                            밴드_안에서_부른다(침묵중),
+                            밴드_안에서_부른다(다시_올_시각들),
                             // **격벽 자리를 놓았는가.** 멎은 요청이 자리를 쥔
                             // 채로 남으면 뒷단이 살아나도 그 자리는 안 돌아온다.
                             격벽을_쥐었다(격벽[1]),
@@ -353,18 +363,31 @@ class BackendSilenceScenarioTest {
     }
 
     /**
-     * <b>다시 올 시각이 밴드 안인가</b> (F7). 0 보다 크기만 보면 상수로 박아도
-     * 통과하고, 그러면 회복 순간에 전원이 같은 초로 돌아온다 — 그것이 2차 장애다.
+     * <b>다시 올 시각이 밴드 안에서 흔들리는가</b> (F7).
+     *
+     * <p>밴드만 보면 그 안의 상수로 박아도 통과한다. 그러면 회복 순간에 전원이
+     * 같은 초로 돌아오고, 그 파도가 주기마다 재생산된다 — 지터가 필요한 구간이
+     * 바로 여기다. 값이 갈리는지까지 본다.
      */
-    private Optional<String> 밴드_안에서_부른다(List<Reply> 상태) {
-        for (Reply 하나 : 상태) {
-            if (하나.다시_올_시각() < 밴드_하한 || 하나.다시_올_시각() > 밴드_상한) {
-                return Optional.of("다시 올 시각이 %d 다 — 밴드(%d~%d) 밖이다"
-                        .formatted(하나.다시_올_시각(), 밴드_하한, 밴드_상한));
+    private Optional<String> 밴드_안에서_부른다(List<Long> 시각들) {
+        if (시각들.size() < 흔들림_표본) {
+            return Optional.of("전제 — 다시 올 시각을 %d 개만 봤다 (필요 %d)"
+                    .formatted(시각들.size(), 흔들림_표본));
+        }
+        for (long 하나 : 시각들) {
+            if (하나 < 밴드_하한 || 하나 > 밴드_상한) {
+                return Optional.of("다시 올 시각이 %d 다 — 밴드(%d~%d) 밖이다: %s"
+                        .formatted(하나, 밴드_하한, 밴드_상한, 시각들));
             }
         }
-        // 셋이 다 같으면 흔들지 않은 것이다. 표본이 셋이라 값 하나로는 못 가른다.
-        return Optional.empty();
+        // **셋이 다 같으면 흔들지 않은 것으로 본다.** 지터가 20% 라 24~36 에
+        // 흩어지므로 셋이 우연히 겹칠 확률은 낮다. 다만 0 은 아니라, 이 판정은
+        // 밴드 안 상수를 "대개" 잡는다 — 확실히 잡으려면 표본이 필요한데 그
+        // 비용이 한 건당 응답 상한이다. 서킷이 열리면 폴백이 곧바로 답해
+        // 싸지는데, 이 시험은 서킷을 못 연다 (CY-871).
+        return Set.copyOf(시각들).size() > 1 ? Optional.empty()
+                : Optional.of("다시 올 시각이 %d 개 다 %d 로 같다 — 흔들지 않는다"
+                        .formatted(시각들.size(), 시각들.get(0)));
     }
 
     /** 멎은 요청이 자리를 쥔 채로 남으면 뒷단이 살아나도 그 자리는 안 돌아온다. */

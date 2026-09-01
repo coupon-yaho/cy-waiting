@@ -174,8 +174,8 @@ class ClockBackAndGhostScenarioTest {
 
     private Optional<String> 보정_없이는_하한이다(long 대조) {
         return 대조 == 바닥 ? Optional.empty()
-                : Optional.of("전제 — 보정 없는 판이 %d 다. 바닥 %d 이 아니면 이 시나리오는 "
-                        + "차이가 없는 것을 재고 있다".formatted(대조, 바닥));
+                : Optional.of(("전제 — 보정 없는 판이 %d 다. 바닥 %d 이 아니면 이 "
+                        + "시나리오는 차이가 없는 것을 재고 있다").formatted(대조, 바닥));
     }
 
     private Optional<String> 바닥값을_놓았다(long 회복) {
@@ -185,8 +185,8 @@ class ClockBackAndGhostScenarioTest {
 
     private Optional<String> 유령이_창_안에서_세어진다(long 창_안) {
         return 창_안 == 여유 ? Optional.empty()
-                : Optional.of("전제 — 유령이 창 안에서 안 세어졌다 (%d). 사라지는 판정이 "
-                        + "정의상 통과한다".formatted(창_안));
+                : Optional.of(("전제 — 유령이 창 안에서 안 세어졌다 (%d). 사라지는 "
+                        + "판정이 정의상 통과한다").formatted(창_안));
     }
 
     private Optional<String> 유령이_창_밖에서_사라진다(long 창_밖) {

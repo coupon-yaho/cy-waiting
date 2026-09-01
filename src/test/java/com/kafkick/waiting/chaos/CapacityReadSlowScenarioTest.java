@@ -9,63 +9,91 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
 /**
- * C16 — 가용량 읽기만 예산을 넘는다 (8.3.5 · 5절).
+ * C16 — 가용량 읽기만 예산을 넘는다.
  *
- * <p>수요 읽기와 발행은 멀쩡하다. 읽기 예산이 틱의 1/4 이라 이것이 가장 흔한 부분
- * 장애이고, <b>감쇠가 실제로 도는 구간은 여기뿐이다</b> — 레디스가 통째로 죽으면
- * 판 자체가 실패해 감쇠값이 배분에 닿지도 않는다.
+ * <p>무엇을 왜 재는지는 {@code plan/08-resilience.md} 의 C16 절이 든다. 여기는
+ * 그것을 어떻게 판정하는가만 든다.
  */
 @Tag("chaos")
 class CapacityReadSlowScenarioTest {
 
-    private static final long NOW = 1_800_000_000L;
+    private static final long 시작_시각 = 1_800_000_000L;
+
+    /** 판 하나가 지나는 시간. <b>시계가 멎어 있으면 신선도도 램프도 안 밟힌다.</b> */
+    private static final Duration 틱 = Duration.ofSeconds(1);
 
     private static final Duration 램프 = Duration.ofSeconds(60);
 
     private static final Duration 신선도 = Duration.ofSeconds(3);
 
     /**
-     * 설정 하한과 노드 수.
+     * 설정 하한과 노드 수. <b>둘을 일부러 갈라 놓는다.</b>
      *
-     * <p><b>둘을 일부러 갈라 놓는다.</b> 노드 몫(8 × 2 = 16)이 설정 하한(10)보다
-     * 커야, 바닥에서 노드 수를 빼먹은 구현이 판정에 걸린다. 같게 잡으면 두 식이
-     * 같은 값을 내어 그 갈래가 안 재진다.
+     * <p>노드 몫(16)이 설정 하한(10)보다 커야 바닥에서 노드 수를 빼먹은 구현이
+     * 걸린다. 이 쌍은 기동 설정으로는 안 서고 — 프로퍼티 생성자가 던진다 — 노드
+     * 다섯을 기대하고 뜬 클러스터가 여덟 대로 늘어난 판이 정확히 이 상태다.
      */
     private static final long 하한 = 10;
 
     private static final int 노드 = 8;
 
     /** 바닥. 살아 있는 분모에 맞춘 값이지 설정값이 아니다. */
-    private static final long 바닥 = (long) 노드 * CapacityCollector.IDLE_DIVISOR;
+    private static final long 바닥 = Math.max(하한, (long) 노드 * CapacityCollector.IDLE_DIVISOR);
+
+    /** 가용량 읽기의 예산. 배분 틱의 1/4 을 흉내 낸다. */
+    private static final Duration 예산 = Duration.ofMillis(50);
 
     /** 감쇠가 바닥까지 닿고도 남는 판 수. 10,000 에서 절반씩이면 열 판이면 닿는다. */
-    private static final int 유지_판 = 100;
+    private static final int 유지_판 = 20;
+
+    /**
+     * 램프 창을 넘기는 장애의 길이.
+     *
+     * <p>수집기는 램프 창만큼 안 보인 인스턴스를 지우는데, 그 청소가 <b>걷는 루프
+     * 뒤에</b> 돈다. 그래서 장애가 창보다 길어도 회복 첫 판은 옛 램프 기록을 그대로
+     * 써 실측으로 돌아온다. 청소를 앞으로 옮기면 그 판이 바닥이 되고 창만큼 재램프한다.
+     */
+    private static final int 긴_유지_판 = (int) 램프.dividedBy(틱) + 10;
 
     /** 뒷단이 보고하는 여유. 바닥보다 훨씬 커야 감쇠가 내려온 것이 보인다. */
     private static final long 여유 = 10_000;
 
-    /** 가용량 읽기가 예산을 넘는가. 이 스위치로 장애를 넣고 걷는다. */
-    private final AtomicBoolean 느리다 = new AtomicBoolean();
+    /** 지연을 거는 곳. 예산 판정이 실제 시간을 재므로 즉시 스케줄러를 못 쓴다. */
+    private static final Scheduler 배분 = Schedulers.newSingle("c16-배분");
 
-    /** 수집기·재료 읽기·지표를 한 묶음으로 든다. 지표를 따로 들면 짝이 어긋난다. */
-    private record Rig(CapacityCollector 수집기, CapacityRefresh 읽기, MeterRegistry 지표) {
+    @AfterAll
+    static void 내린다() {
+        배분.dispose();
+    }
+
+    /** 수집기·재료 읽기·지표·시계를 한 묶음으로 든다. 따로 들면 짝이 어긋난다. */
+    private record Rig(CapacityCollector 수집기, CapacityRefresh 읽기, MeterRegistry 지표,
+            AtomicLong 시각, AtomicReference<Duration> 지연) {
 
         void 한_판() {
             읽기.refresh().block();
+            시각.addAndGet(틱.toSeconds());
         }
 
         void 여러_판(int 수) {
             for (int i = 0; i < 수; i++) {
                 한_판();
             }
+        }
+
+        void 느리게(Duration d) {
+            지연.set(d);
         }
 
         long 크레딧() {
@@ -85,15 +113,20 @@ class CapacityReadSlowScenarioTest {
     private Rig 판을_짠다(long 보고할_여유) {
         CapacityCollector 수집기 = CapacityCollector.of(램프, 신선도, 하한, 100_000);
         MeterRegistry 지표 = new SimpleMeterRegistry();
+        AtomicLong 시각 = new AtomicLong(시작_시각);
+        AtomicReference<Duration> 지연 = new AtomicReference<>(Duration.ZERO);
         CapacityRefresh 읽기 = CapacityRefresh.of(
-                () -> 느리다.get()
-                        // 예산을 넘긴다. 수요 읽기는 이 경로와 무관하다.
-                        ? Mono.<CapacitySample>never()
-                        : Mono.just(new CapacitySample(
-                                List.of(new CapacityReport("i1", 보고할_여유, NOW)), NOW)),
-                수집기, () -> 노드, Duration.ofMillis(50),
-                Schedulers.immediate(), 지표);
-        return new Rig(수집기, 읽기, 지표);
+                () -> {
+                    long 지금 = 시각.get();
+                    Mono<CapacitySample> 표본 = Mono.fromSupplier(() -> new CapacitySample(
+                            List.of(new CapacityReport("i1", 보고할_여유, 지금)), 지금));
+                    Duration d = 지연.get();
+                    // **끊는 것이 아니라 늦춘다.** 즉시 오류로 끝내면 이 시나리오가
+                    // 재는 것이 C1 과 같아지고, 예산 값이 어떤 판정에도 안 걸린다.
+                    return d.isZero() ? 표본 : 표본.delayElement(d, Schedulers.parallel());
+                },
+                수집기, () -> 노드, 예산, 배분, 지표);
+        return new Rig(수집기, 읽기, 지표, 시각, 지연);
     }
 
     /**
@@ -108,106 +141,164 @@ class CapacityReadSlowScenarioTest {
     void C16_가용량_읽기만_느릴_때_바닥이_받치고_회복에_유예가_다시_찬다() {
         Rig 여유있는 = 판을_짠다(여유);
         Rig 여유없는 = 판을_짠다(0);
+        Rig 긴장애 = 판을_짠다(여유);
+        Rig 예산_판 = 판을_짠다(여유);
         long[] 정상 = new long[2];
-        long[] 유예중 = new long[2];
+        double[] 정상_게이지 = new double[1];
+        long[] 예산_경계 = new long[2];
+        double[] 예산_실패 = new double[2];
+        long[] 유예중 = new long[1];
         double[] 못_읽은_판 = new double[2];
-        long[] 유지 = new long[2];
         long[] 유예_직후 = new long[1];
+        long[] 유지 = new long[2];
         double[] 유지_게이지 = new double[1];
         long[] 회복 = new long[2];
+        double[] 회복_게이지 = new double[1];
+        long[] 긴_회복 = new long[2];
 
-        try {
-            ChaosScenario.named("C16 가용량 읽기만 느리다")
-                    .baseline(() -> {
-                        여유있는.한_판();
-                        여유없는.한_판();
-                        정상[0] = 여유있는.크레딧();
-                        정상[1] = 여유없는.크레딧();
-                        못_읽은_판[0] = 여유있는.못_읽은_판();
-                    })
-                    .inject(() -> {
-                        느리다.set(true);
-                        // **유예만큼만 돈다.** 진입 판정이 보는 것은 "한 판
-                        // 느렸다고 조이지 않는가" 다 — 더 돌면 감쇠가 섞인다.
-                        여유있는.여러_판(CapacityCollector.HOLD_ROUNDS);
-                        여유없는.여러_판(CapacityCollector.HOLD_ROUNDS);
-                        유예중[0] = 여유있는.크레딧();
-                        유예중[1] = 여유없는.크레딧();
-                        못_읽은_판[1] = 여유있는.못_읽은_판();
-                    })
-                    .duringFault(() -> {
-                        // **유예를 한 판 넘긴 자리를 먼저 본다.** 여기를 안 보면
-                        // 유예를 3 에서 13 으로 늘려도 아무 판정이 안 문다 —
-                        // 진입은 3판만 보고 유지는 100판 뒤를 보기 때문이다.
-                        여유있는.한_판();
-                        유예_직후[0] = 여유있는.크레딧();
-                        여유있는.여러_판(유지_판);
-                        여유없는.여러_판(유지_판);
-                        유지[0] = 여유있는.크레딧();
-                        유지[1] = 여유없는.크레딧();
-                        유지_게이지[0] = 여유있는.게이지();
-                    })
-                    .recover(() -> 느리다.set(false))
-                    .afterRecovery(() -> {
-                        여유있는.한_판();
-                        회복[0] = 여유있는.크레딧();
-                        // 유예가 다시 찼는지는 **다시 실패시켜야** 보인다.
-                        느리다.set(true);
-                        여유있는.여러_판(CapacityCollector.HOLD_ROUNDS);
-                        회복[1] = 여유있는.크레딧();
-                    })
-                    .assertEntry(() -> RecoveryCriteria.violations(
-                            // 전제 — 평시에 관측이 실제로 실렸는가. 안 실렸으면
-                            // 뒤의 모든 구간이 하한끼리 비교하는 판이 된다.
-                            평시에_관측이_실렸다(정상[0]),
-                            // **장애가 정말 들어갔는가.** 안 들어갔으면 유예 판정이
-                            // "안 깎였다" 로 자동 통과한다 — 아무것도 안 재는 자리다.
-                            읽기가_실제로_실패했다(못_읽은_판[0], 못_읽은_판[1]),
-                            // 유예 안에서는 직전 값 그대로다. 한 판 느렸다고 조이면
-                            // 순단마다 흔들린다.
-                            유예_안에서_안_깎였다(정상[0], 유예중[0]),
-                            유예_안에서_안_깎였다(정상[1], 유예중[1])))
-                    .assertDuring(() -> RecoveryCriteria.violations(
-                            // **유예가 끝나는 자리가 정확한가.** 한 판 더 돌면
-                            // 딱 한 번 반토막이어야 한다. 늘어난 유예는 사고 이전
-                            // 관측치로 그만큼 더 배분한다는 뜻이다 (불변식 2).
-                            유예가_한_판_뒤에_끝났다(정상[0], 유예_직후[0]),
-                            // **감쇠가 실제로 돌았는가.** 안 돌면 아래 바닥 판정이
-                            // 정상값을 바닥으로 착각해 통과한다.
-                            감쇠가_돌았다(정상[0], 유지[0]),
-                            // 바닥이 노드를 받친다 (R1). 노드당 몫이 유휴 역수
-                            // 아래면 한산한 쿠폰이 전 노드에서 막힌다.
-                            바닥이_노드를_받친다(유지[0]),
-                            // **뒷단이 스스로 말한 0 은 안 올린다.** 죽었다고 말한
-                            // 뒷단에 바닥만큼 다시 밀어넣으면, 서킷이 half-open
-                            // 으로 갈 때 시험 트래픽이 아니라 상시 유입이 닿는다.
-                            보고한_0은_안_올라간다(유지[1]),
-                            // **게이지가 배분값을 따라가는가.** 성공 판에서만
-                            // 갱신하면 지표는 장애 직전 값에 얼어 있고 배분은 다른
-                            // 값으로 돈다 — RC6 이 "아무 일도 없었다" 로 통과한다.
-                            게이지가_배분값을_따라간다(유지[0], 유지_게이지[0])))
-                    .assertRecovery(() -> RecoveryCriteria.violations(
-                            // RC6 — 첫 성공 판에 실측으로 돌아온다.
-                            RecoveryCriteria.notConverged("가용량 크레딧", 정상[0], 회복[0]),
-                            // 유예가 다시 차서 바로 다음 실패에 안 깎인다.
-                            유예가_다시_찼다(회복[0], 회복[1])))
-                    .run();
-        } finally {
-            느리다.set(false);
-        }
+        ChaosScenario.named("C16 가용량 읽기만 느리다")
+                .baseline(() -> {
+                    여유있는.한_판();
+                    여유없는.한_판();
+                    긴장애.한_판();
+                    정상[0] = 여유있는.크레딧();
+                    정상[1] = 여유없는.크레딧();
+                    정상_게이지[0] = 여유있는.게이지();
+                    못_읽은_판[0] = 여유있는.못_읽은_판();
+                })
+                .inject(() -> {
+                    // **예산 경계를 따로 잰다.** 이 판만 흔들어야 아래 유예 세기가
+                    // 안 밀린다. 예산 안의 지연은 성공해야 하고, 밖은 실패해야 한다.
+                    예산_실패[0] = 예산_판.못_읽은_판();
+                    예산_판.느리게(예산.dividedBy(2));
+                    예산_판.한_판();
+                    예산_경계[0] = 예산_판.크레딧();
+                    예산_판.느리게(예산.multipliedBy(4));
+                    예산_판.한_판();
+                    예산_경계[1] = 예산_판.크레딧();
+                    예산_실패[1] = 예산_판.못_읽은_판();
+
+                    여유있는.느리게(예산.multipliedBy(4));
+                    여유없는.느리게(예산.multipliedBy(4));
+                    긴장애.느리게(예산.multipliedBy(4));
+                    // **유예만큼만 돈다.** 진입 판정이 보는 것은 "한 판 느렸다고
+                    // 조이지 않는가" 다 — 더 돌면 감쇠가 섞인다.
+                    여유있는.여러_판(CapacityCollector.HOLD_ROUNDS);
+                    유예중[0] = 여유있는.크레딧();
+                    못_읽은_판[1] = 여유있는.못_읽은_판();
+                })
+                .duringFault(() -> {
+                    // **유예를 한 판 넘긴 자리를 먼저 본다.** 여기를 안 보면 유예를
+                    // 3 에서 13 으로 늘려도 아무 판정이 안 문다 — 진입은 3판만 보고
+                    // 유지는 그 한참 뒤를 보기 때문이다.
+                    여유있는.한_판();
+                    유예_직후[0] = 여유있는.크레딧();
+                    여유있는.여러_판(유지_판);
+                    여유없는.여러_판(CapacityCollector.HOLD_ROUNDS + 유지_판);
+                    긴장애.여러_판(긴_유지_판);
+                    유지[0] = 여유있는.크레딧();
+                    유지[1] = 여유없는.크레딧();
+                    유지_게이지[0] = 여유있는.게이지();
+                })
+                .recover(() -> {
+                    여유있는.느리게(Duration.ZERO);
+                    여유없는.느리게(Duration.ZERO);
+                    긴장애.느리게(Duration.ZERO);
+                    예산_판.느리게(Duration.ZERO);
+                })
+                .afterRecovery(() -> {
+                    여유있는.한_판();
+                    회복[0] = 여유있는.크레딧();
+                    회복_게이지[0] = 여유있는.게이지();
+                    긴장애.한_판();
+                    긴_회복[0] = 긴장애.크레딧();
+                    긴장애.한_판();
+                    긴_회복[1] = 긴장애.크레딧();
+                    // 유예가 다시 찼는지는 **다시 실패시켜야** 보인다.
+                    여유있는.느리게(예산.multipliedBy(4));
+                    여유있는.여러_판(CapacityCollector.HOLD_ROUNDS);
+                    회복[1] = 여유있는.크레딧();
+                    여유있는.느리게(Duration.ZERO);
+                })
+                .assertEntry(() -> RecoveryCriteria.violations(
+                        // 전제 — 평시에 관측이 실제로 실렸는가. 안 실렸으면 뒤의
+                        // 모든 구간이 하한끼리 비교하는 판이 된다.
+                        평시에_관측이_실렸다(정상[0]),
+                        // 전제 — 여유 0 도 평시에 0 으로 실렸는가. 이걸 안 걸면
+                        // 유지 구간의 0 판정이 다른 결함을 제 것으로 보고한다.
+                        평시에_0이_실렸다(정상[1]),
+                        // 성공 판에서 게이지를 안 맞추면 여기가 문다.
+                        게이지가_배분값을_따라간다("정상", 정상[0], 정상_게이지[0]),
+                        // **예산이 어디서 끊는가.** 안 재면 예산 값을 60배로 틀리게
+                        // 줘도 통과한다 — 제어 틱이 판마다 멎는 설정이 그냥 나간다.
+                        예산_안에서는_성공한다(예산_경계[0]),
+                        예산_밖에서는_실패한다(예산_경계[1], 예산_실패[0], 예산_실패[1]),
+                        // **장애가 정말 들어갔는가.** 안 들어갔으면 유예 판정이
+                        // "안 깎였다" 로 자동 통과한다.
+                        읽기가_실제로_실패했다(못_읽은_판[0], 못_읽은_판[1]),
+                        // 유예 안에서는 직전 값 그대로다. 한 판 느렸다고 조이면
+                        // 순단마다 흔들린다.
+                        유예_안에서_안_깎였다(정상[0], 유예중[0])))
+                .assertDuring(() -> RecoveryCriteria.violations(
+                        // **유예가 끝나는 자리가 정확한가.** 한 판 더 돌면 딱 한 번
+                        // 반토막이어야 한다. 늘어난 유예는 사고 이전 관측치로 그만큼
+                        // 더 배분한다는 뜻이다 (불변식 2).
+                        유예가_한_판_뒤에_끝났다(정상[0], 유예_직후[0]),
+                        // 바닥이 노드를 받친다 (R1). 노드당 몫이 유휴 역수 아래면
+                        // 한산한 쿠폰이 전 노드에서 막힌다.
+                        바닥이_노드를_받친다(유지[0]),
+                        // 감쇠의 0 갈래를 지우면 여기가 문다. 왜 안 올리는지는
+                        // observationFailed 의 주석이 든다.
+                        보고한_0은_안_올라간다(유지[1]),
+                        // 실패 판에서 게이지를 안 맞추면 여기가 문다.
+                        게이지가_배분값을_따라간다("유지", 유지[0], 유지_게이지[0])))
+                .assertRecovery(() -> RecoveryCriteria.violations(
+                        // **정확히 돌아온다.** 인메모리라 결정적이다 — 밴드로만 보면
+                        // 10% 어긋난 회복이 통과한다.
+                        실측으로_정확히_돌아왔다(정상[0], 회복[0]),
+                        // RC6 은 게이트가 전 시나리오를 같은 자로 재는 자리다.
+                        RecoveryCriteria.notConverged("가용량 크레딧", 정상[0], 회복[0]),
+                        게이지가_배분값을_따라간다("회복", 회복[0], 회복_게이지[0]),
+                        // 유예가 다시 차서 바로 다음 실패에 안 깎인다.
+                        유예가_다시_찼다(회복[0], 회복[1]),
+                        // **램프 창을 넘긴 장애도 첫 판에 실측이다.** 청소가 걷는
+                        // 루프 뒤에 돌아 옛 램프 기록이 남기 때문이다. 앞으로 옮기면
+                        // 여기가 바닥이 되고 창만큼 재램프한다 — 그 회복이 훨씬 느리다.
+                        램프_창을_넘겨도_실측이다(긴_회복[0], 긴_회복[1])))
+                // **RC1~RC6 은 여기서 안 잰다.** 이 시나리오는 제어 평면의 재료
+                // 읽기만 흔들고 줄도 뒷단 유입도 만들지 않는다 — 재는 척하면 그
+                // 게이트가 이름만 남는다. 수렴(RC6)만 회복 구간에 걸어 둔다.
+                //
+                // 수집기에서 끝나므로 평활화·하한 재적용·게이팅도 밖이고, 리더십도
+                // 안 갈린다. 그 둘이 무엇을 가리는지는 계획서 C16 절에 있다.
+                .run();
     }
 
-    /**
-     * RC1·RC2·RC4·RC5 는 여기서 안 잰다. 이 시나리오는 제어 평면의 재료 읽기만
-     * 흔들고 줄도 뒷단 유입도 만들지 않는다 — 재는 척하면 그 게이트가 이름만 남는다.
-     *
-     * <p>수집기에서 끝나므로 <b>평활화·하한 재적용·게이팅은 밖이다</b>. 리더십도
-     * 안 갈린다. 그 둘이 무엇을 가리는지는 계획서 C16 절에 적어 뒀다.
-     */
     private Optional<String> 평시에_관측이_실렸다(long 정상) {
-        return 정상 > 바닥 ? Optional.empty()
-                : Optional.of("전제 — 평시 크레딧 %d 가 바닥 %d 이하다. 관측이 안 실렸다"
-                        .formatted(정상, 바닥));
+        return 정상 == 여유 ? Optional.empty()
+                : Optional.of("전제 — 평시 크레딧이 %d 가 아니라 %d 다. 관측이 안 실렸다"
+                        .formatted(여유, 정상));
+    }
+
+    private Optional<String> 평시에_0이_실렸다(long 정상) {
+        return 정상 == 0 ? Optional.empty()
+                : Optional.of("전제 — 여유 0 을 보고했는데 평시 크레딧이 %d 다".formatted(정상));
+    }
+
+    private Optional<String> 예산_안에서는_성공한다(long 크레딧) {
+        return 크레딧 == 여유 ? Optional.empty()
+                : Optional.of("예산 %s 의 절반만 늦췄는데 못 읽었다 — 크레딧 %d"
+                        .formatted(예산, 크레딧));
+    }
+
+    private Optional<String> 예산_밖에서는_실패한다(long 크레딧, double 전, double 후) {
+        if (Math.round(후 - 전) != 1) {
+            return Optional.of("예산 밖 지연에서 못 읽은 판이 %d 건 늘었다 — 1 이어야 한다"
+                    .formatted(Math.round(후 - 전)));
+        }
+        return 크레딧 == 여유 ? Optional.empty()
+                : Optional.of("예산 밖인데 크레딧이 %d 로 바뀌었다 — 유예 안이라 그대로여야 한다"
+                        .formatted(크레딧));
     }
 
     private Optional<String> 읽기가_실제로_실패했다(double 전, double 후) {
@@ -223,22 +314,15 @@ class CapacityReadSlowScenarioTest {
     }
 
     private Optional<String> 유예가_한_판_뒤에_끝났다(long 정상, long 유예_직후) {
-        long 기대 = Math.max(Math.max(하한, 바닥), 정상 / 2);
+        long 기대 = Math.max(바닥, 정상 / 2);
         return 유예_직후 == 기대 ? Optional.empty()
                 : Optional.of("유예 %d 판을 한 판 넘겼는데 크레딧이 %d 다 — %d 여야 한다"
                         .formatted(CapacityCollector.HOLD_ROUNDS, 유예_직후, 기대));
     }
 
-    private Optional<String> 감쇠가_돌았다(long 정상, long 유지) {
-        return 유지 < 정상 ? Optional.empty()
-                : Optional.of("감쇠가 안 돌았다 — %d 판을 못 읽었는데 크레딧이 %d 그대로다"
-                        .formatted(유지_판, 유지));
-    }
-
     private Optional<String> 바닥이_노드를_받친다(long 유지) {
-        if (유지 != Math.max(하한, 바닥)) {
-            return Optional.of("바닥이 %d 가 아니다 — %d 까지 내려갔다"
-                    .formatted(Math.max(하한, 바닥), 유지));
+        if (유지 != 바닥) {
+            return Optional.of("바닥이 %d 가 아니다 — %d 까지 내려갔다".formatted(바닥, 유지));
         }
         long 노드당 = 유지 / 노드;
         return 노드당 >= CapacityCollector.IDLE_DIVISOR ? Optional.empty()
@@ -252,15 +336,30 @@ class CapacityReadSlowScenarioTest {
                         .formatted(유지));
     }
 
-    private Optional<String> 게이지가_배분값을_따라간다(long 배분값, double 게이지) {
+    private Optional<String> 게이지가_배분값을_따라간다(String 구간, long 배분값, double 게이지) {
         return Math.round(게이지) == 배분값 ? Optional.empty()
-                : Optional.of("게이지가 배분값을 안 따라간다 — 배분 %d, 게이지 %.0f"
-                        .formatted(배분값, 게이지));
+                : Optional.of("%s 구간 게이지가 배분값을 안 따라간다 — 배분 %d, 게이지 %.0f"
+                        .formatted(구간, 배분값, 게이지));
+    }
+
+    private Optional<String> 실측으로_정확히_돌아왔다(long 정상, long 회복) {
+        return 회복 == 정상 ? Optional.empty()
+                : Optional.of("첫 성공 판이 실측이 아니다 — %d 여야 하는데 %d 다"
+                        .formatted(정상, 회복));
     }
 
     private Optional<String> 유예가_다시_찼다(long 회복, long 다시_실패한_뒤) {
         return 회복 == 다시_실패한_뒤 ? Optional.empty()
                 : Optional.of("유예가 안 찼다 — 회복 %d 인데 %d 판 만에 %d 로 깎였다"
                         .formatted(회복, CapacityCollector.HOLD_ROUNDS, 다시_실패한_뒤));
+    }
+
+    private Optional<String> 램프_창을_넘겨도_실측이다(long 첫_판, long 둘째_판) {
+        if (첫_판 != 여유) {
+            return Optional.of("램프 창(%s)을 넘긴 장애의 첫 회복 판이 %d 다 — %d 여야 한다"
+                    .formatted(램프, 첫_판, 여유));
+        }
+        return 둘째_판 == 여유 ? Optional.empty()
+                : Optional.of("둘째 판이 %d 로 떨어졌다 — 재램프가 돌고 있다".formatted(둘째_판));
     }
 }

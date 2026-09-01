@@ -29,9 +29,18 @@ class ClockBackAndGhostScenarioTest {
 
     private static final int 노드 = 1;
 
-    /** 신선한 보고가 하나도 없을 때 답이 되는 값. */
-    private static final long 바닥 =
-            Math.max(하한, (long) 노드 * CapacityCollector.IDLE_DIVISOR);
+    /**
+     * 신선한 보고가 하나도 없을 때 답이 되는 값. <b>리터럴로 둔다.</b>
+     *
+     * <p>프로덕션 식을 베끼면 그 식의 상수를 바꿔도 기대값이 같이 움직여 아무것도
+     * 안 잰다. 노드 하나에 하한 10 이면 노드 몫(2)이 못 이긴다.
+     */
+    private static final long 바닥 = 10;
+
+    /**
+     * 램프 4초째의 몫. 손으로 잰 값이다 — 10,000 을 60초에 걸쳐 여는 곡선 위의 점이다.
+     */
+    private static final long 램프_4초 = 666;
 
     /** 승격한 복제본이 뒤로 가는 폭. */
     private static final long 역행초 = 30;
@@ -79,8 +88,11 @@ class ClockBackAndGhostScenarioTest {
                 })
                 .duringFault(() -> {
                     유지[0] = 주_수집기.collect(보고("i1", NOW + 1), 승격_직후[0], 노드);
-                    // 대조군. 보정을 안 하면 어떻게 되는지를 값으로 남긴다.
-                    유지[1] = 수집기().collect(보고("i2", NOW + 1), NOW - 역행초, 노드);
+                    // 대조군. **보정만 뺀다** — 같은 평시를 태우고 같은 식별자를 쓰고
+                    // 기준 시각만 생 값이다. 셋이 같이 다르면 차이가 시계 탓인지 모른다.
+                    CapacityCollector 보정_없는_판 = 수집기();
+                    보정_없는_판.collect(보고("i1", NOW), NOW, 노드);
+                    유지[1] = 보정_없는_판.collect(보고("i1", NOW + 1), NOW - 역행초, 노드);
                 })
                 .recover(() -> 회복[0] = 시계.observe(NOW + 1))
                 .afterRecovery(() -> {
@@ -104,9 +116,11 @@ class ClockBackAndGhostScenarioTest {
                     CapacityCollector 유령_없는_판 = 수집기();
                     유령_없는_판.collect(보고("유령", 마지막_보고), NOW, 노드);
                     겹친_판[1] = 유령_없는_판.collect(보고("갓_뜬", NOW + 1), NOW + 1, 노드);
-                    // 창을 넘기면 그 몫이 빠진다. 부풀림이 얼마나 오래 가는지가 여기 있다.
+                    // 창을 넘기면 유령의 몫이 빠진다. **갓 뜬 쪽은 계속 보고한다** —
+                    // 그 보고까지 낡히면 재는 것이 "유령이 만료됐다" 가 아니라
+                    // "전부 낡았다" 가 되고, 그 상태는 프로덕션에 없다.
                     겹친_판[2] = 겹침.collect(
-                            List.of(하나("유령", 마지막_보고), 하나("갓_뜬", NOW + 1)),
+                            List.of(하나("유령", 마지막_보고), 하나("갓_뜬", 창_끝 + 1)),
                             창_끝 + 1, 노드);
                 })
                 .assertEntry(() -> RecoveryCriteria.violations(
@@ -120,14 +134,15 @@ class ClockBackAndGhostScenarioTest {
                         보정_없이는_하한이다(유지[1])))
                 .assertRecovery(() -> RecoveryCriteria.violations(
                         바닥값을_놓았다(회복[0]),
-                        // 결정적인 판이라 밴드로만 보면 어긋난 회복이 통과한다.
+                        // **RC6 를 밴드로 안 잰다.** 이 시나리오는 보정이 먹히면
+                        // 크레딧이 안 떨어져 저하되는 대상이 없다 — 밴드로 재면
+                        // X == X 다. 정확 일치가 그 기준을 포함한다.
                         실측으로_정확히_돌아왔다(정상[0], 회복[1]),
-                        RecoveryCriteria.notConverged("가용량 크레딧", 정상[0], 회복[1]),
                         유령이_창_안에서_세어진다(유령[0]),
                         유령이_창_밖에서_사라진다(유령[1]),
                         허용치를_넘는_앞섬은_안_받는다(유령[2]),
                         유령이_콜드_램프에_겹쳐_실린다(겹친_판[0], 겹친_판[1]),
-                        겹침이_창_안에서_끝난다(겹친_판[0], 겹친_판[2])))
+                        겹침이_창_안에서_끝난다(겹친_판[2])))
                 // **RC1~RC5 는 여기서 안 잰다.** 줄도 뒷단 유입도 안 만든다. 수렴(RC6)만
                 // 회복 구간에 걸어 둔다.
                 .run();
@@ -215,10 +230,14 @@ class ClockBackAndGhostScenarioTest {
                         .formatted(겹친_판, 여유));
     }
 
-    /** 그 부풀림이 무기한이면 유령 몫이 램프 내내 실린다. 창 + 허용치에서 끝나야 한다. */
-    private Optional<String> 겹침이_창_안에서_끝난다(long 겹친_판, long 창_밖) {
-        return 창_밖 < 겹친_판 ? Optional.empty()
-                : Optional.of("창을 넘겼는데 겹친 판이 %d 에서 %d 로 안 줄었다"
-                        .formatted(겹친_판, 창_밖));
+    /**
+     * 부풀림이 무기한이면 유령 몫이 램프 내내 실린다. 창 + 허용치에서 끝나야 한다.
+     *
+     * <p>범위가 아니라 값으로 본다. "줄었다" 만 보면 하한까지 떨어진 판도 통과한다.
+     */
+    private Optional<String> 겹침이_창_안에서_끝난다(long 창_밖) {
+        return 창_밖 == 램프_4초 ? Optional.empty()
+                : Optional.of("창을 넘긴 판이 %d 다 — 갓 뜬 뒷단의 램프 몫 %d 여야 한다"
+                        .formatted(창_밖, 램프_4초));
     }
 }

@@ -9,15 +9,15 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Scheduler;
-import reactor.core.scheduler.Schedulers;
+import reactor.test.scheduler.VirtualTimeScheduler;
 
 /**
  * C16 — 가용량 읽기만 예산을 넘는다.
@@ -69,20 +69,28 @@ class CapacityReadSlowScenarioTest {
     /** 뒷단이 보고하는 여유. 바닥보다 훨씬 커야 감쇠가 내려온 것이 보인다. */
     private static final long 여유 = 10_000;
 
-    /** 지연을 거는 곳. 예산 판정이 실제 시간을 재므로 즉시 스케줄러를 못 쓴다. */
-    private static final Scheduler 배분 = Schedulers.newSingle("c16-배분");
-
-    @AfterAll
-    static void 내린다() {
-        배분.dispose();
-    }
+    /** 판 하나가 실제로 안 끝나면 시험이 멎는다. 가상 시간이라 이 값에 안 닿는다. */
+    private static final long 안전_상한_초 = 10;
 
     /** 수집기·재료 읽기·지표·시계를 한 묶음으로 든다. 따로 들면 짝이 어긋난다. */
     private record Rig(CapacityCollector 수집기, CapacityRefresh 읽기, MeterRegistry 지표,
-            AtomicLong 시각, AtomicReference<Duration> 지연) {
+            AtomicLong 시각, AtomicReference<Duration> 지연, VirtualTimeScheduler 가상시계) {
 
+        /**
+         * 한 판. <b>기다리지 않고 시간을 민다.</b>
+         *
+         * <p>실제 지연으로 예산을 재면 러너가 밀릴 때 예산 안의 읽기가 밖으로 나간다.
+         * 지연도 시한도 같은 가상 시계에 걸어 판정이 기계 속도와 무관하게 선다.
+         */
         void 한_판() {
-            읽기.refresh().block();
+            CompletableFuture<Void> 끝 = 읽기.refresh().toFuture();
+            // 지연과 예산 중 먼저 오는 쪽이 이긴다. 둘을 합친 만큼 밀면 어느 쪽이든 끝난다.
+            가상시계.advanceTimeBy(지연.get().plus(예산));
+            try {
+                끝.get(안전_상한_초, TimeUnit.SECONDS);
+            } catch (Exception e) {
+                throw new IllegalStateException("판이 안 끝났다", e);
+            }
             시각.addAndGet(틱.toSeconds());
         }
 
@@ -115,6 +123,7 @@ class CapacityReadSlowScenarioTest {
         MeterRegistry 지표 = new SimpleMeterRegistry();
         AtomicLong 시각 = new AtomicLong(시작_시각);
         AtomicReference<Duration> 지연 = new AtomicReference<>(Duration.ZERO);
+        VirtualTimeScheduler 가상시계 = VirtualTimeScheduler.create();
         CapacityRefresh 읽기 = CapacityRefresh.of(
                 () -> {
                     long 지금 = 시각.get();
@@ -123,10 +132,10 @@ class CapacityReadSlowScenarioTest {
                     Duration d = 지연.get();
                     // **끊는 것이 아니라 늦춘다.** 즉시 오류로 끝내면 이 시나리오가
                     // 재는 것이 C1 과 같아지고, 예산 값이 어떤 판정에도 안 걸린다.
-                    return d.isZero() ? 표본 : 표본.delayElement(d, Schedulers.parallel());
+                    return d.isZero() ? 표본 : 표본.delayElement(d, 가상시계);
                 },
-                수집기, () -> 노드, 예산, 배분, 지표);
-        return new Rig(수집기, 읽기, 지표, 시각, 지연);
+                수집기, () -> 노드, 예산, 가상시계, 지표);
+        return new Rig(수집기, 읽기, 지표, 시각, 지연, 가상시계);
     }
 
     /**

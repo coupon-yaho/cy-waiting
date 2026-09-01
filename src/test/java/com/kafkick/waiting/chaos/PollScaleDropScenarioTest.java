@@ -1,18 +1,20 @@
 package com.kafkick.waiting.chaos;
 
 import com.kafkick.waiting.domain.allocation.CouponDemand;
+import com.kafkick.waiting.domain.queue.EtaPolicy;
 import com.kafkick.waiting.domain.queue.PollBudgetPlanner;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Random;
 import java.util.function.DoubleSupplier;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 /**
- * C19 — 전역 폴링 배수가 한 틱에 떨어진다.
+ * C19 — 전역 폴링 배수가 걸리고 한 틱에 풀린다.
  *
  * <p>무엇을 왜 재는지는 {@code plan/08-resilience.md} 의 C19 절이 든다. 여기는
  * 그것을 어떻게 판정하는가만 든다.
@@ -20,7 +22,13 @@ import org.junit.jupiter.api.Test;
 @Tag("chaos")
 class PollScaleDropScenarioTest {
 
-    /** 노드 하나. 노드당 예산이 200 이라 이 값이 곧 전역 예산이다. */
+    /**
+     * 노드 하나. 예산이 200 이고 그것이 곧 전역 예산이다.
+     *
+     * <p><b>진입 조건을 만드는 것이 부하가 아니라 이 값이다.</b> 같은 줄을 설계
+     * 규모(20대)에 두면 예산이 4,000 이라 배수가 아예 안 걸린다 — 이 시나리오가
+     * 걷는 것은 축소·열화 배포다.
+     */
     private static final int 노드 = 1;
 
     private static final double 예산 = 200;
@@ -39,143 +47,223 @@ class PollScaleDropScenarioTest {
 
     private static final double B_배분 = 5;
 
-    /** 지터 폭. 천장이 60/(1+폭) 이라 이 값이 먼 밴드의 상한을 정한다. */
-    private static final double 지터 = 0.2;
-
-    /** 흔들림을 죽인다. 배수의 효과만 보려면 지터가 상수여야 한다. */
-    private static final DoubleSupplier 흔들지_않는다 = () -> 0.5;
+    /** <b>배선값을 쓴다.</b> 리터럴로 두면 배선이 바뀌어도 이 시나리오가 안 문다. */
+    private static final double 지터 = PollIntervalPolicy.NORMAL_JITTER_RATIO;
 
     /**
      * 손으로 잰 기대값이다 — 프로덕션 식을 베끼면 상수를 바꿔도 같이 움직여
-     * 아무것도 안 잰다.
-     *
-     * <p>둘을 합치면 초당 1,655 건이고 예산이 200 이라 배수가 8.275 다.
+     * 아무것도 안 잰다. 둘을 합치면 초당 1,655 건이고 예산이 200 이다.
      */
     private static final double 배수 = 8.275;
 
-    /** 배수가 걸린 뒤 가장 가까운 밴드(1초)가 받는 간격. 1 × 8.275 를 반올림한다. */
-    private static final long 가까운_밴드 = 8;
+    /** 폴링 간격의 천장. 60/(1+0.2) 이고, 흔들림의 위쪽 끝이 60 에 닿게 잡은 값이다. */
+    private static final long 천장 = 50;
 
     /**
-     * 가장 먼 밴드(30초)가 받는 간격. <b>30 × 8.275 = 248 이 아니다</b> —
-     * 천장 50 에 막힌다.
+     * 노드 하나가 예산 안에 담을 수 있는 대기자 수의 상한.
+     *
+     * <p>간격이 천장을 못 넘으므로 한 사람이 만드는 부하는 <b>1/천장 아래로 못
+     * 내려간다.</b> 그래서 담을 수 있는 인원이 `예산 × 천장` 으로 닫힌다 —
+     * 배수를 아무리 올려도 이 선을 못 넘는다.
      */
-    private static final long 먼_밴드 = 50;
+    private static final long 담을_수_있는_대기자 = 10_000;
+
+    private static final DoubleSupplier 흔들지_않는다 = () -> 0.5;
 
     private final PollIntervalPolicy 폴링 = PollIntervalPolicy.of(지터);
 
+    /** 매진된 쿠폰은 배분을 못 받는다. 배분 맵을 수요에서 유도해 그 상태를 지킨다. */
     private double 배수를_낸다(List<CouponDemand> 수요) {
         Map<String, Double> 배분 = Map.of(A, A_배분, B, B_배분);
-        double 기대 = PollBudgetPlanner.expectedPollRps(
-                수요, couponId -> 배분.getOrDefault(couponId, 0.0));
+        double 기대 = PollBudgetPlanner.expectedPollRps(수요,
+                couponId -> 수요.stream()
+                        .anyMatch(d -> d.couponId().equals(couponId) && d.isActive())
+                        ? 배분.getOrDefault(couponId, 0.0) : 0.0);
         return PollBudgetPlanner.pollScale(기대, PollBudgetPlanner.budgetRps(노드));
     }
 
-    private long 간격(double etaSec, double scale) {
-        return 폴링.intervalSec(etaSec, 흔들지_않는다, scale);
+    /** 순번으로 간격을 낸다. ETA 를 손으로 주면 그 줄에 없는 사람을 재게 된다. */
+    private long 간격(long 순번, double 배분율, double scale) {
+        return 폴링.intervalSec(EtaPolicy.etaSec(순번, 배분율), 흔들지_않는다, scale);
+    }
+
+    /**
+     * 줄 전체의 실측 부하. <b>대표 한 명으로는 못 잰다</b> — 간격을 흔들면 짧아진
+     * 쪽이 길어진 쪽보다 더 많이 두드려 총 부하가 위로 샌다.
+     */
+    private double 실측_부하(double scale) {
+        Random 고정_씨앗 = new Random(42);
+        double 합 = 0;
+        for (long i = 0; i < A_대기; i++) {
+            합 += 1.0 / 폴링.intervalSec(EtaPolicy.etaSec(i, A_배분), 고정_씨앗::nextDouble, scale);
+        }
+        for (long i = 0; i < B_대기; i++) {
+            합 += 1.0 / 폴링.intervalSec(EtaPolicy.etaSec(i, B_배분), 고정_씨앗::nextDouble, scale);
+        }
+        return 합;
+    }
+
+    private long 먼_밴드_간격(double 난수, double scale) {
+        return 폴링.intervalSec(EtaPolicy.etaSec(B_대기 - 1, B_배분), () -> 난수, scale);
     }
 
     /**
      * 세 구간을 한 판정으로 잇는다.
      *
-     * <p>배수는 매 틱 처음부터 다시 계산된다. 그래서 진입도 회복도 한 틱이고,
-     * 이 시나리오가 재는 것은 <b>그 한 틱이 대기자에게 무엇을 하는가</b>다.
+     * <p>배수는 매 틱 처음부터 다시 계산된다. 그래서 유지 구간에서도 <b>다시
+     * 계산해서</b> 같은 값이 나오는지 본다 — 진입의 값을 다시 포맷하면 그 구간이
+     * 새로 재는 것이 없다.
      */
     @Test
     @DisplayName("C19_큰_쿠폰이_매진되면_폴링_배수가_한_틱에_풀린다")
     void C19_큰_쿠폰이_매진되면_폴링_배수가_한_틱에_풀린다() {
         double[] 정상 = new double[1];
-        double[] 걸린_배수 = new double[1];
-        long[] 정상_간격 = new long[2];
-        long[] 걸린_간격 = new long[2];
+        long[] 정상_간격 = new long[3];
+        double[] 걸린_배수 = new double[2];
+        long[] 걸린_간격 = new long[3];
+        long[] 흔들림 = new long[3];
+        double[] 부하 = new double[2];
         double[] 회복_배수 = new double[1];
-        long[] 회복_간격 = new long[2];
+        long[] 회복_간격 = new long[3];
+
+        List<CouponDemand> 둘_다 = List.of(
+                new CouponDemand(A, A_대기, A_대기), new CouponDemand(B, B_대기, B_대기));
 
         ChaosScenario.named("C19 전역 폴링 배수 하강")
                 .baseline(() -> {
-                    // 작은 쿠폰만 있으면 예산 안이라 배수가 안 걸린다.
                     정상[0] = 배수를_낸다(List.of(new CouponDemand(B, B_대기, B_대기)));
-                    정상_간격[0] = 간격(1, 정상[0]);
-                    정상_간격[1] = 간격(300, 정상[0]);
+                    B_의_앞뒤를_잰다(정상_간격, 정상[0]);
                 })
-                .inject(() -> 걸린_배수[0] = 배수를_낸다(List.of(
-                        new CouponDemand(A, A_대기, A_대기),
-                        new CouponDemand(B, B_대기, B_대기))))
+                .inject(() -> 걸린_배수[0] = 배수를_낸다(둘_다))
                 .duringFault(() -> {
-                    걸린_간격[0] = 간격(1, 걸린_배수[0]);
-                    걸린_간격[1] = 간격(300, 걸린_배수[0]);
+                    // **다시 계산한다.** 배수는 상태가 없어 매 틱 새로 나온다.
+                    걸린_배수[1] = 배수를_낸다(둘_다);
+                    B_의_앞뒤를_잰다(걸린_간격, 걸린_배수[1]);
+                    흔들림[0] = 먼_밴드_간격(0, 걸린_배수[1]);
+                    흔들림[1] = 먼_밴드_간격(0.5, 걸린_배수[1]);
+                    흔들림[2] = 먼_밴드_간격(1, 걸린_배수[1]);
+                    부하[0] = 실측_부하(걸린_배수[1]);
+                    // 배수를 터무니없이 올려도 부하가 어디까지 내려가는지 본다.
+                    부하[1] = 실측_부하(10_000);
                 })
-                // 재고가 0 이면 요구량이 0 이라 예산 계산에서 빠진다. 한 틱이다.
                 .recover(() -> 회복_배수[0] = 배수를_낸다(List.of(
-                        new CouponDemand(A, A_대기, 0),
-                        new CouponDemand(B, B_대기, B_대기))))
-                .afterRecovery(() -> {
-                    회복_간격[0] = 간격(1, 회복_배수[0]);
-                    회복_간격[1] = 간격(300, 회복_배수[0]);
-                })
+                        new CouponDemand(A, A_대기, 0), new CouponDemand(B, B_대기, B_대기))))
+                .afterRecovery(() -> B_의_앞뒤를_잰다(회복_간격, 회복_배수[0]))
                 .assertEntry(() -> RecoveryCriteria.violations(
-                        // 전제 — 평시에 배수가 안 걸려 있었나. 걸려 있었으면 아래가
-                        // 무엇 때문에 오른 것인지 모른다.
                         평시에_배수가_안_걸렸다(정상[0]),
-                        평시_간격이_밴드_그대로다(정상_간격[0], 정상_간격[1]),
-                        // 계획서가 요구하는 진입 조건이다. 5 미만이면 이 시나리오가
-                        // 재려는 구간에 아예 못 들어간다.
-                        배수가_다섯을_넘는다(걸린_배수[0])))
+                        평시_간격이_밴드_그대로다(정상_간격),
+                        배수가_예산_초과분만큼_오른다(걸린_배수[0])))
                 .assertDuring(() -> RecoveryCriteria.violations(
-                        // 가까운 밴드는 배수를 그대로 받는다.
-                        가까운_밴드가_배수를_받는다(걸린_간격[0]),
-                        // **먼 밴드는 천장에 막힌다.** 배수를 그대로 받으면 248초인데
-                        // 50 에서 잘린다 — 의도된 동작이고, 그 대가는 계획서에 있다.
-                        먼_밴드가_천장에_막힌다(걸린_간격[1])))
+                        // 배수에 상태가 없다는 것이 이 시나리오의 전제다.
+                        배수가_틱마다_같다(걸린_배수[0], 걸린_배수[1]),
+                        // B 의 앞은 배수를 그대로 받고 꼬리는 천장에 붙는다.
+                        걸린_간격이_밴드에_배수를_곱한_값이다(걸린_간격),
+                        // **천장이 지터를 살리려고 있다.** 흔들림이 죽으면 상한 한
+                        // 점에 전원이 모여 그 파도가 주기마다 재생산된다.
+                        천장에_붙어도_흔들린다(흔들림),
+                        // **배수를 아무리 올려도 이 바닥 아래로 안 내려간다.**
+                        // 한 사람의 부하가 1/천장 밑으로 못 가기 때문이다.
+                        부하가_천장이_정한_바닥에_멎는다(부하[0], 부하[1]),
+                        노드_하나가_담을_수_있는_수를_넘었다(부하[1])))
                 .assertRecovery(() -> RecoveryCriteria.violations(
-                        // 매진된 쿠폰의 줄은 예산에서 빠진다. 안 빠지면 죽은 큐가
-                        // 예산을 먹고 산 쿠폰의 폴링이 영영 뜸해진다.
                         매진되면_배수가_풀린다(회복_배수[0]),
-                        // 간격이 밴드로 돌아온다.
-                        평시_간격이_밴드_그대로다(회복_간격[0], 회복_간격[1])))
-                // **RC1~RC6 은 여기서 안 잰다.** 줄도 뒷단 유입도 안 만든다. 하강이
-                // 만드는 회복 버스트는 열린 루프가 있어야 재진다 (CY-817).
+                        평시_간격이_밴드_그대로다(회복_간격)))
+                // **RC1~RC6 은 여기서 안 잰다.** 이 판은 예산 계산과 폴링 정책만
+                // 걷는다 — 줄도 뒷단 유입도 세우지 않는다.
                 .run();
+    }
+
+    /** B 의 맨 앞·한가운데·맨 뒤. 셋이 서로 다른 밴드에 있어야 밴드표가 재진다. */
+    private void B_의_앞뒤를_잰다(long[] 담을_곳, double scale) {
+        담을_곳[0] = 간격(0, B_배분, scale);
+        담을_곳[1] = 간격(100, B_배분, scale);
+        담을_곳[2] = 간격(B_대기 - 1, B_배분, scale);
     }
 
     private Optional<String> 평시에_배수가_안_걸렸다(double 정상) {
         return 정상 == 1.0 ? Optional.empty()
-                : Optional.of("전제 — 평시 배수가 %.3f 다. 1.0 이 아니면 작은 쿠폰만으로도 "
-                        .formatted(정상) + "예산을 넘긴 것이라 비교 기준이 없다");
+                : Optional.of(("전제 — 평시 배수가 %.3f 다. 1.0 이 아니면 작은 쿠폰만으로도 "
+                        + "예산을 넘긴 것이라 비교 기준이 없다").formatted(정상));
     }
 
-    private Optional<String> 평시_간격이_밴드_그대로다(long 가까운, long 먼) {
-        if (가까운 != 1) {
-            return Optional.of("가장 가까운 밴드가 %d초다 — 1초여야 한다".formatted(가까운));
+    /** 순번 0·100·199 는 ETA 0·20·39.8 이라 밴드 1·3·10 초에 하나씩 걸린다. */
+    private Optional<String> 평시_간격이_밴드_그대로다(long[] 간격) {
+        long[] 기대 = {1, 3, 10};
+        for (int i = 0; i < 기대.length; i++) {
+            if (간격[i] != 기대[i]) {
+                return Optional.of("배수 없는 간격이 %d초다 — %d초여야 한다"
+                        .formatted(간격[i], 기대[i]));
+            }
         }
-        return 먼 == 30 ? Optional.empty()
-                : Optional.of("가장 먼 밴드가 %d초다 — 30초여야 한다".formatted(먼));
+        return Optional.empty();
     }
 
-    private Optional<String> 배수가_다섯을_넘는다(double 걸린) {
-        if (Math.abs(걸린 - 배수) > 0.001) {
-            return Optional.of("배수가 %.3f 다 — %.3f 여야 한다".formatted(걸린, 배수));
+    private Optional<String> 배수가_예산_초과분만큼_오른다(double 걸린) {
+        return Math.abs(걸린 - 배수) <= 0.001 ? Optional.empty()
+                : Optional.of("배수가 %.3f 다 — %.3f 여야 한다".formatted(걸린, 배수));
+    }
+
+    private Optional<String> 배수가_틱마다_같다(double 진입, double 유지) {
+        return 진입 == 유지 ? Optional.empty()
+                : Optional.of("같은 수요에서 배수가 %.3f 에서 %.3f 로 갈렸다"
+                        .formatted(진입, 유지));
+    }
+
+    /** 앞의 둘은 밴드×배수를 그대로 받고, 꼬리는 82.75 가 아니라 천장이다. */
+    private Optional<String> 걸린_간격이_밴드에_배수를_곱한_값이다(long[] 간격) {
+        long[] 기대 = {8, 25, 천장};
+        for (int i = 0; i < 기대.length; i++) {
+            if (간격[i] != 기대[i]) {
+                return Optional.of("배수 걸린 간격이 %d초다 — %d초여야 한다"
+                        .formatted(간격[i], 기대[i]));
+            }
         }
-        return 걸린 >= 5 ? Optional.empty()
-                : Optional.of("배수가 %.3f 라 계획서의 진입 조건(5 이상)에 못 든다"
-                        .formatted(걸린));
+        return Optional.empty();
     }
 
-    private Optional<String> 가까운_밴드가_배수를_받는다(long 간격) {
-        return 간격 == 가까운_밴드 ? Optional.empty()
-                : Optional.of("가까운 밴드가 %d초다 — 1초 × 배수 = %d초여야 한다"
-                        .formatted(간격, 가까운_밴드));
+    /** 천장에 붙은 밴드도 지터 폭만큼 흩어져야 한다. 40·50·60 이다. */
+    private Optional<String> 천장에_붙어도_흔들린다(long[] 흔들림) {
+        long[] 기대 = {40, 천장, 60};
+        for (int i = 0; i < 기대.length; i++) {
+            if (흔들림[i] != 기대[i]) {
+                return Optional.of("천장에서 흔들림이 %d초다 — %d초여야 한다"
+                        .formatted(흔들림[i], 기대[i]));
+            }
+        }
+        return Optional.empty();
     }
 
     /**
-     * 먼 밴드는 배수를 다 못 받는다. 천장이 그 위에 있기 때문이다.
+     * 배수를 천 배로 올려도 부하가 바닥에서 멎는다. 그 바닥은 `대기자 / 천장` 이다.
      *
-     * <p>범위가 아니라 값으로 본다. "늘었다" 만 보면 천장을 걷어내도 통과한다.
+     * <p>지터가 부하를 조금 위로 민다 — 짧아진 쪽이 길어진 쪽보다 더 많이 두드린다.
+     * 그래서 5% 를 준다.
      */
-    private Optional<String> 먼_밴드가_천장에_막힌다(long 간격) {
-        return 간격 == 먼_밴드 ? Optional.empty()
-                : Optional.of("먼 밴드가 %d초다 — 천장 %d초에 막혀야 한다"
-                        .formatted(간격, 먼_밴드));
+    private Optional<String> 부하가_천장이_정한_바닥에_멎는다(double 걸린, double 무한대) {
+        double 바닥 = (double) (A_대기 + B_대기) / 천장;
+        if (무한대 > 걸린) {
+            return Optional.of("배수를 올렸는데 부하가 %.0f 에서 %.0f 로 늘었다"
+                    .formatted(걸린, 무한대));
+        }
+        return Math.abs(무한대 - 바닥) / 바닥 <= 0.05 ? Optional.empty()
+                : Optional.of("무한대 배수의 부하가 %.0f 다 — 대기자/천장 = %.0f 여야 한다"
+                        .formatted(무한대, 바닥));
+    }
+
+    /**
+     * 이 줄은 노드 하나로 예산 안에 못 담는다. <b>배수의 문제가 아니라 규모다.</b>
+     *
+     * <p>담을 수 있는 상한이 `예산 × 천장` 으로 닫혀 있어, 그보다 많은 사람이 서면
+     * 어떤 배수로도 예산 안에 못 들어온다.
+     */
+    private Optional<String> 노드_하나가_담을_수_있는_수를_넘었다(double 무한대) {
+        if (A_대기 + B_대기 <= 담을_수_있는_대기자) {
+            return Optional.of("전제 — 대기자 %d 명이 상한 %d 이하다. 이 픽스처로는 "
+                    .formatted(A_대기 + B_대기, 담을_수_있는_대기자) + "규모 한계가 안 드러난다");
+        }
+        return 무한대 > 예산 ? Optional.empty()
+                : Optional.of("대기자 %d 명인데 부하가 %.0f 로 예산 %.0f 안에 들어왔다"
+                        .formatted(A_대기 + B_대기, 무한대, 예산));
     }
 
     private Optional<String> 매진되면_배수가_풀린다(double 회복) {

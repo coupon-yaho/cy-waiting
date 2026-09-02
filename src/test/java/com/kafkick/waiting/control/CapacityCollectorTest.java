@@ -3,6 +3,8 @@ package com.kafkick.waiting.control;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.kafkick.waiting.domain.routing.InstanceAddress;
+import com.kafkick.waiting.domain.routing.InstanceRouting;
 import java.time.Duration;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
@@ -801,5 +803,77 @@ class CapacityCollectorTest {
 
         // 창의 59/60 만큼 데웠다. 범위로 두면 0 이나 하한도 통과한다.
         assertThat(credit).isEqualTo(590);
+    }
+
+    private static CapacityReport 주소_있는_보고(String id, String addr, long credits, long at) {
+        return new CapacityReport(id, credits, at,
+                InstanceAddress.parse(addr).orElseThrow());
+    }
+
+    /**
+     * <b>라우팅 목록을 합산과 같은 판에서 만든다.</b> 따로 돌면 합산에 든
+     * 인스턴스와 보낼 인스턴스가 갈리고, 그 갈림은 램프 구간에만 나타난다.
+     */
+    @Test
+    @DisplayName("주소가_있는_신선한_보고만_라우팅에_실린다")
+    void 주소가_있는_신선한_보고만_라우팅에_실린다() {
+        CapacityCollector collector = collector();
+        long warmed = warm(collector, "a", 100);
+
+        collector.collect(List.of(
+                주소_있는_보고("a", "10.0.1.7:8080", 100, warmed),
+                // 주소를 안 실었다 — 크레딧에는 들고 라우팅에서만 빠진다.
+                report("b", 200, warmed),
+                // 낡았다 — 어느 쪽에도 안 든다.
+                주소_있는_보고("c", "10.0.1.9:8080", 300, warmed - 100)), warmed, 1);
+
+        assertThat(collector.routable()).extracting(InstanceRouting::instanceId)
+                .containsExactly("a");
+    }
+
+    /**
+     * <b>램프가 깎은 몫이 라우팅에도 실린다</b> (F6 · G9.12). 갓 뜬 인스턴스로
+     * 정상 비율만큼 보내면 그 대가 그대로 무너진다.
+     */
+    @Test
+    @DisplayName("갓_뜬_인스턴스는_적은_몫으로_실린다")
+    void 갓_뜬_인스턴스는_적은_몫으로_실린다() {
+        CapacityCollector collector = collector();
+        long warmed = warm(collector, "old", 100);
+
+        collector.collect(List.of(
+                주소_있는_보고("old", "10.0.1.7:8080", 100, warmed),
+                주소_있는_보고("new", "10.0.1.8:8080", 100, warmed)), warmed, 1);
+
+        assertThat(collector.routable())
+                .filteredOn(i -> i.instanceId().equals("new"))
+                .singleElement()
+                .extracting(InstanceRouting::credits)
+                .satisfies(credits -> assertThat((long) credits).isLessThan(100));
+        assertThat(collector.routable())
+                .filteredOn(i -> i.instanceId().equals("old"))
+                .singleElement()
+                .extracting(InstanceRouting::credits)
+                .isEqualTo(100L);
+    }
+
+    /** 한 판도 안 돌았으면 비어 있다. 없는 목록으로 라우팅하면 보낼 곳이 없다. */
+    @Test
+    @DisplayName("아직_안_돌았으면_비어_있다")
+    void 아직_안_돌았으면_비어_있다() {
+        assertThat(collector().routable()).isEmpty();
+    }
+
+    /** 신선한 보고가 하나도 없으면 목록도 빈다 — 낡은 주소로 보내면 안 된다. */
+    @Test
+    @DisplayName("전부_낡으면_목록도_빈다")
+    void 전부_낡으면_목록도_빈다() {
+        CapacityCollector collector = collector();
+        long warmed = warm(collector, "a", 100);
+        collector.collect(List.of(주소_있는_보고("a", "10.0.1.7:8080", 100, warmed)), warmed, 1);
+
+        collector.collect(List.of(), warmed + 100, 1);
+
+        assertThat(collector.routable()).isEmpty();
     }
 }

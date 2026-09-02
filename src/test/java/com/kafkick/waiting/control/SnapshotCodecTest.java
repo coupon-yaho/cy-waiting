@@ -2,7 +2,13 @@ package com.kafkick.waiting.control;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.kafkick.waiting.domain.allocation.CreditSmoother;
+import com.kafkick.waiting.domain.allocation.QueueingHysteresis;
 import com.kafkick.waiting.domain.coupon.CouponState;
+import com.kafkick.waiting.domain.coupon.SnapshotMeta;
+import com.kafkick.waiting.domain.routing.InstanceAddress;
+import com.kafkick.waiting.domain.routing.InstanceRouting;
+import java.util.List;
 import com.kafkick.waiting.domain.coupon.QueueMode;
 import com.kafkick.waiting.domain.coupon.RuntimeState;
 import java.time.Instant;
@@ -232,5 +238,91 @@ class SnapshotCodecTest {
 
         assertThat(s.coupons().get("c1").mode()).isEqualTo(QueueMode.ALWAYS);
         assertThat(s.coupons().get("c1").runtime()).isEqualTo(RuntimeState.IDLE);
+    }
+
+    private static final InstanceAddress 주소 =
+            InstanceAddress.parse("10.0.1.7:8080").orElseThrow();
+
+    /**
+     * <b>라우팅 목록이 스냅샷에 실린다.</b> 보고는 리더만 읽으므로, 요청 경로가
+     * 레디스를 안 치려면(불변식 1) 판정 재료에 실어 보내야 한다.
+     */
+    @Test
+    @DisplayName("라우팅_목록을_싣고_읽는다")
+    void 라우팅_목록을_싣고_읽는다() {
+        SnapshotCodec codec = SnapshotCodec.create();
+        GatewaySnapshot 원본 = new GatewaySnapshot(
+                Map.of("c1", CouponState.idle(500)), new SnapshotMeta(10, 1),
+                Instant.ofEpochSecond(1_787_184_000L),
+                List.of(new InstanceRouting("be-1", 주소, 200),
+                        new InstanceRouting("be-2",
+                                InstanceAddress.parse("10.0.1.8:9000").orElseThrow(), 40)));
+
+        GatewaySnapshot 되돌린 = codec.decode(codec.encode(원본,
+                CreditSmoother.Snapshot.empty(), QueueingHysteresis.Snapshot.empty()));
+
+        assertThat(되돌린.instances()).containsExactly(
+                new InstanceRouting("be-1", 주소, 200),
+                new InstanceRouting("be-2",
+                        InstanceAddress.parse("10.0.1.8:9000").orElseThrow(), 40));
+    }
+
+    /** 옛 리더는 이 자리를 안 싣는다. 없으면 없는 것으로 본다 (E-12). */
+    @Test
+    @DisplayName("라우팅_목록이_없으면_비어_있다")
+    void 라우팅_목록이_없으면_비어_있다() {
+        GatewaySnapshot s = SnapshotCodec.create().decode(해시(
+                "#credit", "10", "#nodes", "1", "#published", "1787184000",
+                "c1", "ADAPTIVE:IDLE:0:500:0"));
+
+        assertThat(s.instances()).isEmpty();
+    }
+
+    /**
+     * <b>깨진 줄 하나가 목록을 못 죽인다.</b> 통째로 버리면 뒷단 하나의 버그가
+     * 전 인스턴스를 후보에서 지운다 — 그러면 보낼 곳이 없다.
+     */
+    @Test
+    @DisplayName("깨진_줄만_빼고_읽는다")
+    void 깨진_줄만_빼고_읽는다() {
+        GatewaySnapshot s = SnapshotCodec.create().decode(해시(
+                "#credit", "10", "#nodes", "1", "#published", "1787184000",
+                "#instances", "be-1|10.0.1.7:8080|200,깨진줄,be-2|http://x/y|40,"
+                        + "be-3|10.0.1.9:8080|abc,be-4|10.0.1.9:8080|-1,"
+                        + "be-5|10.0.1.9:8080|10",
+                "c1", "ADAPTIVE:IDLE:0:500:0"));
+
+        assertThat(s.instances()).extracting(InstanceRouting::instanceId)
+                .containsExactly("be-1", "be-5");
+    }
+
+    /** 식별자에 구분자가 섞이면 그 줄이 통째로 어긋난다. 실을 때 뺀다. */
+    @Test
+    @DisplayName("구분자가_섞인_식별자는_안_싣는다")
+    void 구분자가_섞인_식별자는_안_싣는다() {
+        SnapshotCodec codec = SnapshotCodec.create();
+        GatewaySnapshot 원본 = new GatewaySnapshot(
+                Map.of("c1", CouponState.idle(500)), new SnapshotMeta(10, 1),
+                Instant.ofEpochSecond(1_787_184_000L),
+                List.of(new InstanceRouting("be,1", 주소, 200),
+                        new InstanceRouting("be-2", 주소, 40)));
+
+        GatewaySnapshot 되돌린 = codec.decode(codec.encode(원본,
+                CreditSmoother.Snapshot.empty(), QueueingHysteresis.Snapshot.empty()));
+
+        assertThat(되돌린.instances()).extracting(InstanceRouting::instanceId)
+                .containsExactly("be-2");
+    }
+
+    /** 실을 것이 하나도 없으면 자리를 아예 안 만든다. 빈 값은 옛 노드를 헷갈리게 한다. */
+    @Test
+    @DisplayName("실을_것이_없으면_자리를_안_만든다")
+    void 실을_것이_없으면_자리를_안_만든다() {
+        Map<String, String> hash = SnapshotCodec.create().encode(
+                new GatewaySnapshot(Map.of("c1", CouponState.idle(500)),
+                        new SnapshotMeta(10, 1), Instant.ofEpochSecond(1_787_184_000L)),
+                CreditSmoother.Snapshot.empty(), QueueingHysteresis.Snapshot.empty());
+
+        assertThat(hash).doesNotContainKey("#instances");
     }
 }

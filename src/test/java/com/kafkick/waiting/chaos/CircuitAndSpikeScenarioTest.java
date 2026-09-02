@@ -1,0 +1,414 @@
+package com.kafkick.waiting.chaos;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import com.kafkick.waiting.control.GatewaySnapshot;
+import com.kafkick.waiting.control.SnapshotCodec;
+import com.kafkick.waiting.control.SnapshotSource;
+import com.kafkick.waiting.domain.allocation.CreditSmoother;
+import com.kafkick.waiting.domain.allocation.QueueingHysteresis;
+import com.kafkick.waiting.domain.coupon.CouponStates;
+import com.kafkick.waiting.domain.coupon.SnapshotMeta;
+import com.kafkick.waiting.domain.queue.EntryToken;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import org.awaitility.Awaitility;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.web.reactive.server.WebTestClient;
+import reactor.core.publisher.Mono;
+
+/**
+ * X3 — 서킷이 열린 채 억눌린 트래픽이 회복 순간에 몰린다 (8.3.6 · 5절).
+ *
+ * <p><b>토큰을 든 사람은 서킷이 안 막는다.</b> 사다리 2번이 6' 번보다 앞이라,
+ * 서킷이 열려 있어도 차례를 받은 사람은 뒷단으로 간다. 그래서 회복 순간에
+ * 밀려 있던 그 사람들이 갓 살아난 뒷단으로 한꺼번에 간다 — RC4 가 정의하는 판이다.
+ */
+// **C8 과 다른 점은 재료다.** 저쪽은 한산한 쿠폰 하나로 서킷의 열림·닫힘을 잰다.
+// 여기는 줄이 선 쿠폰에 토큰을 든 사람을 두어, 서킷이 못 막는 경로로 회복
+// 버스트가 어떻게 나오는지를 잰다.
+@Tag("chaos")
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+        properties = "waiting.scheduler.enabled=false")
+@Import(CircuitAndSpikeScenarioTest.StallingBackend.class)
+class CircuitAndSpikeScenarioTest {
+
+    private static final String COUPON = "x3";
+
+    /**
+     * 줄이 없는 쿠폰.
+     *
+     * <p><b>사다리 6' 번이 여기서만 보인다.</b> 줄이 선 쿠폰은 서킷이 없어도
+     * 백로그로 줄에 세우므로, 그 쿠폰으로 재면 이 규칙을 통째로 들어내도 답이
+     * 같다 — 실제로 그렇게 재다가 뮤턴트가 살아남는 것을 봤다.
+     */
+    private static final String 한산한_쿠폰 = "x3-idle";
+
+    /** 뒷단이 멎었는가. 이 스위치로 장애를 넣고 걷는다. */
+    private static final AtomicBoolean 멎었다 = new AtomicBoolean();
+
+    /** 짧게 잡는다. 운영값으로 재면 시험 하나가 그만큼 걸린다. */
+    private static final Duration 응답_상한 = Duration.ofMillis(300);
+
+    /**
+     * 한 번에 몰아치는 수. <b>억눌린 트래픽이다.</b>
+     *
+     * <p>정상 구간과 회복 구간에 같은 모양으로 쏜다 — 입력이 같아야 나온 봉우리의
+     * 차이가 게이트웨이의 것이 된다.
+     */
+    private static final int 몰아칠_수 = 30;
+
+    /**
+     * 줄 선 사람 수.
+     *
+     * <p><b>용량 안이어야 한다.</b> 용량은 크레딧에 비례하므로 줄을 크게 잡으면
+     * 줄이 꽉 찬 것으로 판정돼 토큰 없는 신규가 전부 429 를 받는다 — 서킷이
+     * 무엇을 막았는지가 안 보인다. 계획서의 2 만은 규모의 스파이크이고,
+     * 그 규모는 k6 부하 게이트(Phase 10)의 몫이다. 여기서 재는 것은 모양이다.
+     */
+    private static final long 줄_선_사람 = 100;
+
+    /** 재고. RC1 이 이 값을 천장으로 본다. */
+    private static final long 재고 = 100_000;
+
+    /** 이 쿠폰이 한 틱에 뺄 수 있는 양. 토큰 통과의 상한이 여기서 나온다. */
+    private static final long 크레딧 = 20;
+
+    private static final Duration 기다림 = Duration.ofSeconds(30);
+
+    private static final BackendStub 뒷단 = BackendStub.멎을_수_있다(멎었다::get);
+
+    private static RedisFaults faults;
+
+    @DynamicPropertySource
+    static void 배선(DynamicPropertyRegistry registry) {
+        // 줄 등록이 되어야 토큰 없는 신규가 큐로 간다. 안 띄우면 전량이
+        // fail-open 으로 새서 이 시험이 재는 것이 통째로 바뀐다.
+        faults = RedisFaults.시작한다();
+        registry.add("spring.data.redis.url", faults::주소);
+        registry.add("waiting.backend.uri", () -> "http://localhost:" + 뒷단.port());
+        registry.add("waiting.backend.response-timeout", () -> 응답_상한);
+        registry.add("waiting.backend.circuit.minimum-number-of-calls", () -> 3);
+        registry.add("waiting.backend.circuit.sliding-window-size", () -> "2s");
+        registry.add("waiting.backend.circuit.wait-duration-in-open-state", () -> "1s");
+        registry.add("waiting.backend.circuit.permitted-number-of-calls-in-half-open-state",
+                () -> 2);
+    }
+
+    @AfterAll
+    static void 내린다() {
+        뒷단.close();
+        if (faults != null) {
+            faults.close();
+        }
+    }
+
+    @TestConfiguration
+    static class StallingBackend {
+
+        /**
+         * 줄이 선 쿠폰. <b>토큰을 든 사람과 안 든 사람이 갈리는 재료다.</b>
+         *
+         * <p>한산한 쿠폰으로 재면 토큰 없는 사람도 통과해 서킷이 무엇을 막았는지
+         * 안 보인다.
+         */
+        // **부를 때마다 새로 찍는다.** 한 번 만들어 두면 시나리오가 도는 동안
+        // 재료가 늙어 낡음이 열리고, 그러면 한산한 쿠폰이 사다리 4번(fail-open)
+        // 으로 빠져 서킷 갈래를 한 번도 안 밟는다. 실제로 그렇게 재다가
+        // 한산한 쿠폰이 503 을 받는 것을 봤다.
+        @Bean
+        @Primary
+        SnapshotSource 몰리는_재료() {
+            return () -> Mono.fromSupplier(() -> SnapshotCodec.create().encode(
+                    new GatewaySnapshot(
+                            Map.of(COUPON, CouponStates.queueing(크레딧, 재고, 줄_선_사람),
+                                    한산한_쿠폰, CouponStates.idle(재고)),
+                            new SnapshotMeta(크레딧, 1), Instant.now()),
+                    CreditSmoother.Snapshot.empty(), QueueingHysteresis.Snapshot.empty()));
+        }
+    }
+
+    @LocalServerPort
+    private int port;
+
+    @Autowired
+    private CircuitBreakerRegistry circuits;
+
+    @Autowired
+    private EntryToken entryTokens;
+
+    private WebTestClient 클라이언트() {
+        return WebTestClient.bindToServer()
+                .baseUrl("http://localhost:" + port)
+                .responseTimeout(응답_상한.multipliedBy(30))
+                .build();
+    }
+
+    /** 차례를 받은 사람. 사다리 2번을 밟아 서킷을 지나친다. */
+    private int 토큰으로_시도한다(int member) {
+        return 클라이언트().post()
+                .uri("/api/v1/coupons/" + COUPON + "/issue")
+                .header("X-Member-Id", String.valueOf(member))
+                .header("X-Member-Grade", "GOLD")
+                .header("Entry-Token",
+                        entryTokens.issue(COUPON, String.valueOf(member), Instant.now()))
+                .exchange()
+                .returnResult(Void.class)
+                .getStatus()
+                .value();
+    }
+
+    /** 차례를 못 받은 사람. 서킷이 열려 있으면 한산한 쿠폰이어도 줄로 가야 한다. */
+    private int 토큰_없이_시도한다(String couponId, int member) {
+        return 클라이언트().post()
+                .uri("/api/v1/coupons/" + couponId + "/issue")
+                .header("X-Member-Id", String.valueOf(member))
+                .header("X-Member-Grade", "GOLD")
+                .exchange()
+                .returnResult(Void.class)
+                .getStatus()
+                .value();
+    }
+
+    private List<Integer> 여러_번_시도한다(String couponId, int 횟수, int 시작_회원) {
+        List<Integer> 상태 = new ArrayList<>();
+        for (int i = 0; i < 횟수; i++) {
+            상태.add(토큰_없이_시도한다(couponId, 시작_회원 + i));
+        }
+        return 상태;
+    }
+
+    /**
+     * 같은 순간에 몰아친다 — <b>열린 루프여야 버스트가 잡힌다.</b>
+     *
+     * <p>순서대로 보내면 발신 속도가 게이트웨이 지연으로 정해져, 게이트웨이가
+     * 몰아쳐도 시험이 같이 빨라질 뿐 봉우리가 안 움직인다.
+     */
+    private List<Integer> 한꺼번에_토큰으로(int 횟수, int 시작_회원) {
+        ExecutorService 일꾼 = Executors.newFixedThreadPool(횟수);
+        CountDownLatch 출발 = new CountDownLatch(1);
+        try {
+            List<Future<Integer>> 결과 = new ArrayList<>();
+            for (int i = 0; i < 횟수; i++) {
+                int member = 시작_회원 + i;
+                결과.add(일꾼.submit(() -> {
+                    출발.await();
+                    return 토큰으로_시도한다(member);
+                }));
+            }
+            출발.countDown();
+            List<Integer> 상태 = new ArrayList<>();
+            for (Future<Integer> 하나 : 결과) {
+                상태.add(하나.get(기다림.toSeconds(), TimeUnit.SECONDS));
+            }
+            return 상태;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("몰아치기가 끊겼다", e);
+        } catch (ExecutionException | TimeoutException e) {
+            throw new IllegalStateException("몰아치기가 실패했다", e);
+        } finally {
+            일꾼.shutdownNow();
+        }
+    }
+
+    private CircuitBreaker 서킷() {
+        return circuits.find("backend").orElseThrow(
+                () -> new IllegalStateException("서킷이 없다 — 이름이 바뀌었는지 본다"));
+    }
+
+    /**
+     * X3 — 서킷이 열린 채 억눌린 트래픽이 회복 순간에 몰린다.
+     *
+     * <p>회복이 곧 2차 장애가 되면 안 된다 (RC4).
+     */
+    @Test
+    @DisplayName("X3_서킷이_열린_뒤_억눌린_트래픽이_회복_순간에_몰린다")
+    void X3_서킷이_열린_뒤_억눌린_트래픽이_회복_순간에_몰린다() {
+        BackendRpsRecorder 유입 = new BackendRpsRecorder(뒷단::받은_수);
+        List<Integer> 정상_토큰_상태 = new ArrayList<>();
+        List<Integer> 장애중_토큰_상태 = new ArrayList<>();
+        List<Integer> 장애중_무토큰_상태 = new ArrayList<>();
+        List<Integer> 회복_토큰_상태 = new ArrayList<>();
+        long[] 정상_도착 = new long[1];
+        long[] 유지중_도착 = new long[1];
+        long[] 회복_도착 = new long[1];
+        double[] 정상_봉우리 = new double[1];
+        double[] 회복_봉우리 = new double[1];
+        long[] 한산한_쿠폰_도착 = new long[1];
+
+        ChaosScenario.named("X3 서킷 + 억눌린 트래픽")
+                .baseline(() -> {
+                    // 서킷은 첫 요청이 만든다. 그 전에 잡으려 하면 없다.
+                    토큰으로_시도한다(900);
+                    다음_초를_기다린다();
+                    유입.sample(Instant.now());
+                    Instant 시작 = Instant.now();
+                    long 전 = 뒷단.받은_수();
+                    정상_토큰_상태.addAll(한꺼번에_토큰으로(몰아칠_수, 1_000));
+                    정상_도착[0] = 뒷단.받은_수() - 전;
+                    // **봉우리는 초 단위 버킷이라 한 초를 넘겨야 읽힌다.**
+                    // 같은 초 안에서 물으면 구간이 비어 늘 0 이 나온다.
+                    다음_초를_기다린다();
+                    유입.sample(Instant.now());
+                    정상_봉우리[0] = 유입.peakRps(시작, Instant.now());
+                    assertThat(정상_도착[0]).as("전제 — 평시에 토큰 보유자는 뒷단까지 간다")
+                            .isPositive();
+                    assertThat(정상_봉우리[0]).as("전제 — 평시 봉우리를 쟀다").isPositive();
+                })
+                .inject(() -> 멎었다.set(true))
+                .duringFault(() -> {
+                    // **두드리면서 기다린다.** 창이 시간 기반이라 한 번 쏘고
+                    // 기다리면 실패가 창 밖으로 나가 영영 안 열린다. 게다가
+                    // 토큰 통과에는 초당 상한이 있어 한꺼번에 쏘면 대부분이
+                    // 429 로 끊겨 뒷단까지 안 간다 — 서킷이 표본을 못 얻는다.
+                    열릴_때까지_두드린다();
+                    // **한산한 쿠폰을 먼저, 새 초에 잰다.** 토큰 배치가 초당
+                    // 예산을 먹은 뒤에 물으면 사다리 9번(초당 상한)이 줄에
+                    // 세워, 서킷이 세운 것과 구분이 안 된다. 실제로 그렇게
+                    // 재다가 서킷 갈래를 들어낸 뮤턴트가 살아남았다.
+                    다음_초를_기다린다();
+                    long 한산_전 = 뒷단.받은_수(한산한_쿠폰);
+                    장애중_무토큰_상태.addAll(여러_번_시도한다(한산한_쿠폰, 3, 2_500));
+                    한산한_쿠폰_도착[0] = 뒷단.받은_수(한산한_쿠폰) - 한산_전;
+
+                    다음_초를_기다린다();
+                    long 전 = 뒷단.받은_수();
+                    장애중_토큰_상태.addAll(한꺼번에_토큰으로(몰아칠_수, 2_100));
+                    유지중_도착[0] = 뒷단.받은_수() - 전;
+                })
+                .recover(() -> 멎었다.set(false))
+                .afterRecovery(() -> {
+                    닫힐_때까지_기다린다();
+                    다음_초를_기다린다();
+                    유입.sample(Instant.now());
+                    Instant 시작 = Instant.now();
+                    long 전 = 뒷단.받은_수();
+                    회복_토큰_상태.addAll(한꺼번에_토큰으로(몰아칠_수, 3_000));
+                    회복_도착[0] = 뒷단.받은_수() - 전;
+                    다음_초를_기다린다();
+                    유입.sample(Instant.now());
+                    회복_봉우리[0] = 유입.peakRps(시작, Instant.now());
+                })
+                .assertEntry(ChaosScenario.Verdict.none())
+                .assertDuring(() -> RecoveryCriteria.violations(
+                        서킷이_열렸다(),
+                        // 토큰을 든 사람은 서킷이 안 막는다 — 그래서 답을 받는다.
+                        전부_답을_받았다("유지", 장애중_토큰_상태),
+                        // 토큰 없는 신규는 줄로 간다 (F3).
+                        줄에_세웠다(장애중_무토큰_상태),
+                        // 답만 보면 못 가른다. 뒷단까지 갔는지를 따로 본다 —
+                        // 202 를 주고 뒤에서 흘려도 답은 같다.
+                        한산한_쿠폰이_뒷단에_안_갔다(한산한_쿠폰_도착[0])))
+                .assertRecovery(() -> RecoveryCriteria.violations(
+                        전부_답을_받았다("회복", 회복_토큰_상태),
+                        // RC1 — 뒷단 도착이 재고를 안 넘는다.
+                        RecoveryCriteria.overIssued(뒷단.받은_수(), 재고),
+                        // **닫힌 루프라 증폭으로도 본다.** 재전송이나 풀 재시도로
+                        // 요청이 불어나면 보낸 것보다 많이 도착한다.
+                        RecoveryCriteria.amplified(몰아칠_수, 회복_도착[0]),
+                        // RC4 — 같은 모양으로 쐈는데 봉우리가 커졌다면 그것은
+                        // 게이트웨이가 억눌러 둔 것을 한꺼번에 푼 것이다.
+                        RecoveryCriteria.recoveryBurst(정상_봉우리[0], 회복_봉우리[0]),
+                        중복_수신이_없다()))
+                // **RC2·RC3·RC5·RC6 은 여기서 안 잰다.** 순번을 안 돌려주고,
+                // 배분을 안 돌리므로 자리가 안 움직인다.
+                .run();
+    }
+
+    /** 초 경계를 넘긴다. 토큰 통과의 상한이 초 단위라 앞 배치와 예산을 안 섞는다. */
+    private void 다음_초를_기다린다() {
+        long 지금 = Instant.now().getEpochSecond();
+        Awaitility.await().atMost(기다림)
+                .pollInterval(Duration.ofMillis(20))
+                .until(() -> Instant.now().getEpochSecond() > 지금);
+    }
+
+    /** 서킷이 열릴 때까지 두드린다. 창이 시간 기반이라 계속 실패를 넣어야 한다. */
+    private void 열릴_때까지_두드린다() {
+        Awaitility.await().atMost(기다림)
+                .pollInterval(Duration.ofMillis(100))
+                .until(() -> {
+                    토큰으로_시도한다(2_000 + (int) (System.nanoTime() % 1000));
+                    return 서킷().getState() == CircuitBreaker.State.OPEN;
+                });
+    }
+
+    /** 서킷이 닫힐 때까지 두드린다. 토큰 보유자만이 반쯤 열린 구간을 지난다. */
+    private void 닫힐_때까지_기다린다() {
+        Awaitility.await().atMost(기다림)
+                .pollInterval(Duration.ofMillis(200))
+                .until(() -> {
+                    토큰으로_시도한다(4_000 + (int) (System.nanoTime() % 1000));
+                    return 서킷().getState() == CircuitBreaker.State.CLOSED;
+                });
+    }
+
+    private Optional<String> 서킷이_열렸다() {
+        CircuitBreaker.State 상태 = 서킷().getState();
+        return 상태 == CircuitBreaker.State.OPEN || 상태 == CircuitBreaker.State.HALF_OPEN
+                ? Optional.empty()
+                : Optional.of("서킷이 %s 다 — 뒷단이 멎었는데 안 열렸다".formatted(상태));
+    }
+
+    /**
+     * <b>답을 받는가.</b> 도착 수만 보면 전원이 끊긴 판과 구분이 안 된다.
+     */
+    private Optional<String> 전부_답을_받았다(String 구간, List<Integer> 상태) {
+        if (상태.size() != 몰아칠_수) {
+            return Optional.of("%s — %d 건만 답을 받았다 (보낸 %d)"
+                    .formatted(구간, 상태.size(), 몰아칠_수));
+        }
+        return Optional.empty();
+    }
+
+    /** 토큰 없는 신규는 줄로 간다 (F3). 뒷단으로 흘리면 약한 뒷단이 다시 무너진다. */
+    private Optional<String> 줄에_세웠다(List<Integer> 상태) {
+        long 자리를_못_받은_수 = 상태.stream().filter(status -> status != 202).count();
+        return 자리를_못_받은_수 == 0 ? Optional.empty()
+                : Optional.of("서킷이 열렸는데 %d 건이 줄에 안 섰다: %s"
+                        .formatted(자리를_못_받은_수, 상태));
+    }
+
+    /**
+     * <b>서킷이 열린 동안 한산한 쿠폰도 뒷단에 안 간다</b> (F3).
+     *
+     * <p>약한 뒷단에 신규를 흘리면 half-open 이 반복 실패하고, 회복이 영영 안 온다.
+     */
+    private Optional<String> 한산한_쿠폰이_뒷단에_안_갔다(long 도착) {
+        return 도착 == 0 ? Optional.empty()
+                : Optional.of("서킷이 열렸는데 한산한 쿠폰에서 %d 건이 뒷단까지 갔다"
+                        .formatted(도착));
+    }
+
+    /** 같은 사람이 두 번 발급되면 그것이 곧 초과 발급이다. */
+    private Optional<String> 중복_수신이_없다() {
+        return 뒷단.중복_수신이_없다();
+    }
+}

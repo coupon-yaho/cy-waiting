@@ -72,7 +72,7 @@ public final class SnapshotCodec {
      * 라우팅에 쓸 뒷단 목록. {@code id|host:port|credits} 를 쉼표로 잇는다.
      *
      * <p><b>없으면 없는 것으로 본다</b> (E-12). 옛 리더는 이 자리를 안 싣고,
-     * 그 판에서는 라우팅이 단일 주소로 돌아간다.
+     * 그 구간에는 라우팅이 단일 주소로 돌아간다.
      */
     private static final String INSTANCES = "#instances";
 

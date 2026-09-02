@@ -70,7 +70,7 @@ public final class CapacityCollector {
      * 기동 시각이 실리면 그때 이 추정을 버린다 (A-13).
      */
     /**
-     * 마지막 판의 라우팅 목록. <b>합산에 든 값 그대로다</b> — 램프가 깎은 몫이
+     * 마지막 회차의 라우팅 목록. <b>합산에 든 값 그대로다</b> — 램프가 깎은 몫이
      * 여기에도 실려, 갓 뜬 인스턴스로 정상 비율만큼 안 간다 (F6).
      */
     private volatile List<InstanceRouting> lastRoutable = List.of();
@@ -178,7 +178,7 @@ public final class CapacityCollector {
      * <p><b>관측치가 아닐 수 있다.</b> 못 읽는 회차가 이어지면 감쇠한 값이다 —
      * 호출부가 관측이라고 믿고 쓰면 그 차이를 못 본다.
      */
-    /** 마지막 판에서 보낼 수 있던 인스턴스들. 스냅샷에 실어 전 노드에 보낸다. */
+    /** 마지막 회차에서 보낼 수 있던 인스턴스들. 스냅샷에 실어 전 노드에 보낸다. */
     public List<InstanceRouting> routable() {
         return lastRoutable;
     }
@@ -208,7 +208,7 @@ public final class CapacityCollector {
                     (a, b) -> a.reportedAt() >= b.reportedAt() ? a : b);
         }
 
-        // **라우팅 목록을 같은 판에서 만든다.** 따로 돌면 합산에 든 인스턴스와
+        // **라우팅 목록을 같은 회차에서 만든다.** 따로 돌면 합산에 든 인스턴스와
         // 보낼 인스턴스가 갈리고, 그 갈림은 램프 구간에만 나타난다.
         List<InstanceRouting> routable = new ArrayList<>();
         long total = 0;

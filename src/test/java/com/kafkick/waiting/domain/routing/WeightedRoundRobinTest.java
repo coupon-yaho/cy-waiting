@@ -1,6 +1,7 @@
 package com.kafkick.waiting.domain.routing;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.HashMap;
 import java.util.List;
@@ -86,6 +87,23 @@ class WeightedRoundRobinTest {
     @Nested
     @DisplayName("후보가 바뀔 때")
     class Changing {
+
+        /**
+         * <b>넘치면 배분이 뒤집힌다.</b>
+         *
+         * <p>부호가 바뀌면 가장 여유 있는 대가 가장 안 뽑히는 대가 되고, 그 배포
+         * 내내 조용히 그렇게 돈다. 조용히 도는 것보다 터지는 편이 낫다.
+         */
+        @Test
+        @DisplayName("크레딧_합이_넘치면_터진다")
+        void 크레딧_합이_넘치면_터진다() {
+            List<RoutingCandidate> 큰_후보 = List.of(
+                    RoutingCandidate.of("a", Long.MAX_VALUE, 0),
+                    RoutingCandidate.of("b", Long.MAX_VALUE, 0));
+
+            assertThatThrownBy(() -> WeightedRoundRobin.create().choose(큰_후보))
+                    .isInstanceOf(ArithmeticException.class);
+        }
 
         /** <b>여유 0 은 후보가 아니다</b> (9.3.6). */
         @Test

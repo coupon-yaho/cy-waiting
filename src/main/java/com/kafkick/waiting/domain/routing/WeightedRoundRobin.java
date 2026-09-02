@@ -37,7 +37,9 @@ public final class WeightedRoundRobin implements InstanceChooser {
             present.add(c.instanceId());
             if (c.eligible()) {
                 eligible.add(c);
-                total += c.credits();
+                // **넘치면 배분이 뒤집힌다.** 부호가 바뀌면 가장 여유 있는 대가
+                // 가장 안 뽑히는 대가 되고, 그 배포 내내 조용히 그렇게 돈다.
+                total = Math.addExact(total, c.credits());
             }
         }
         credit.keySet().retainAll(present);
@@ -48,13 +50,13 @@ public final class WeightedRoundRobin implements InstanceChooser {
         RoutingCandidate chosen = null;
         long leading = Long.MIN_VALUE;
         for (RoutingCandidate c : eligible) {
-            long value = credit.merge(c.instanceId(), c.credits(), Long::sum);
+            long value = credit.merge(c.instanceId(), c.credits(), Math::addExact);
             if (value > leading) {
                 leading = value;
                 chosen = c;
             }
         }
-        credit.merge(chosen.instanceId(), -total, Long::sum);
+        credit.merge(chosen.instanceId(), -total, Math::addExact);
         return Optional.of(chosen);
     }
 

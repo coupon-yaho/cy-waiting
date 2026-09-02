@@ -4,6 +4,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
@@ -50,10 +51,32 @@ public final class InFlightRegistry {
         return new Ticket(자리, 열쇠);
     }
 
+    /**
+     * 인스턴스별 동시 상한 안에서만 자리를 준다 (G9.13).
+     *
+     * <p>느려진 한 대로 간 요청이 무한정 쌓이면 그 한 대가 게이트웨이의 커넥션을
+     * 다 붙잡는다. 자리가 없으면 비어 있는 값을 돌려주고, 부르는 쪽이 다른
+     * 인스턴스를 고른다.
+     */
+    public Optional<Ticket> tryStarted(String 인스턴스, int 상한) {
+        Objects.requireNonNull(인스턴스, "인스턴스");
+        if (상한 <= 0) {
+            throw new IllegalArgumentException("상한은 양수여야 한다: " + 상한);
+        }
+        Slot 자리 = 칸.computeIfAbsent(인스턴스, k -> new Slot());
+        Key 열쇠 = new Key(시계.millis(), 일련.incrementAndGet());
+        return 자리.넣어본다(열쇠, 상한, 기준()) ? Optional.of(new Ticket(자리, 열쇠)) : Optional.empty();
+    }
+
     /** 지금 물려 있는 요청 수. 부르는 김에 수명이 지난 항목을 회수한다. */
     public int count(String 인스턴스) {
         Slot 자리 = 칸.get(인스턴스);
-        return 자리 == null ? 0 : 자리.센다(시계.millis() - 수명.toMillis());
+        return 자리 == null ? 0 : 자리.센다(기준());
+    }
+
+    /** 이보다 먼저 시작한 항목은 감소를 놓친 것으로 본다. */
+    private long 기준() {
+        return 시계.millis() - 수명.toMillis();
     }
 
     /** 목록에 없는 인스턴스의 카운터를 버린다. 재기동마다 식별자가 새로 오므로 안 버리면 자란다. */
@@ -92,6 +115,16 @@ public final class InFlightRegistry {
 
         /** {@link ConcurrentSkipListMap#size()} 는 훑는다. 셀 때마다 훑을 수는 없다. */
         private final AtomicInteger 수 = new AtomicInteger();
+
+        boolean 넣어본다(Key 열쇠, int 상한, long 기준) {
+            for (int 지금 = 센다(기준); 지금 < 상한; 지금 = 센다(기준)) {
+                if (수.compareAndSet(지금, 지금 + 1)) {
+                    산것.put(열쇠, Boolean.TRUE);
+                    return true;
+                }
+            }
+            return false;
+        }
 
         void 넣는다(Key 열쇠) {
             산것.put(열쇠, Boolean.TRUE);

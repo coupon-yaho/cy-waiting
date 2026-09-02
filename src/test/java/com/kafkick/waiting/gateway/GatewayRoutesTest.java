@@ -717,13 +717,15 @@ class GatewayRoutesTest {
     }
 
     /**
-     * <b>서킷 안쪽이다.</b> 바깥에 두면 재시도가 만든 시도 하나하나가 서킷 창에
-     * 안 쌓여, 뒷단이 통째로 넘어져도 서킷이 안 열린다.
+     * <b>서킷 바깥이다.</b>
+     *
+     * <p>안쪽에 두면 서킷이 요청 하나에 결과 하나만 보게 되어, 재시도가 만든
+     * 시도가 창에 안 쌓인다 — 관측 실패율이 절반이라 서킷이 늦게 열린다.
      */
     @Test
-    @DisplayName("재시도가_서킷_안쪽이다")
-    void 재시도가_서킷_안쪽이다() {
-        assertThat(FilterOrder.ROUTE_RETRY).isGreaterThan(FilterOrder.ROUTE_CIRCUIT);
+    @DisplayName("재시도가_서킷_바깥이다")
+    void 재시도가_서킷_바깥이다() {
+        assertThat(FilterOrder.ROUTE_RETRY).isLessThan(FilterOrder.ROUTE_CIRCUIT);
     }
 
     /**

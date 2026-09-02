@@ -158,6 +158,8 @@ jobs:
       summary: |
         전 계층 테스트 · 9개 부하 시나리오 · 크레딧 낭비(G7.5) · CVE 전체 스캔
       fields: |
+        계획=${{ needs.plan.result }}
+        빌드=${{ needs.build.result }}
         테스트=${{ needs.test.result }}
         부하=${{ needs.load.result }}
         크레딧 낭비=${{ needs.waste.result }}
@@ -168,6 +170,8 @@ jobs:
         <p>최근 실행: <code>${{ github.sha }}</code></p>
         <table>
           <tr><th>항목</th><th>결과</th></tr>
+          <tr><td>계획</td><td>${{ needs.plan.result }}</td></tr>
+          <tr><td>빌드</td><td>${{ needs.build.result }}</td></tr>
           <tr><td>테스트 (전 계층)</td><td>${{ needs.test.result }}</td></tr>
           <tr><td>부하 (9 시나리오)</td><td>${{ needs.load.result }}</td></tr>
           <tr><td>크레딧 낭비 (G7.5)</td><td>${{ needs.waste.result }}</td></tr>

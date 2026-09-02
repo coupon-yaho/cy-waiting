@@ -80,7 +80,11 @@ class InstanceCountWarningTest {
     }
 
     private CapacityAwareLoadBalancer 균형기(int 대수) {
-        return CapacityAwareLoadBalancer.of(목록(대수),
+        return 균형기(목록(대수));
+    }
+
+    private CapacityAwareLoadBalancer 균형기(ServiceInstanceListSupplier 목록) {
+        return CapacityAwareLoadBalancer.of(목록,
                 candidates -> candidates.stream().findFirst(),
                 InFlightRegistry.of(Duration.ofSeconds(30)), () -> 지금, 1_000);
     }
@@ -138,9 +142,31 @@ class InstanceCountWarningTest {
                 .anyMatch(m -> m.contains("가정 안으로 돌아왔다"));
     }
 
+    /**
+     * <b>밖에서 밖으로 건너뛰어도 다시 알린다.</b>
+     *
+     * <p>하나로 묶어 세면 처방이 정반대가 됐는데 알람이 조용하고, 운영자는 처음
+     * 받은 안내를 그대로 들고 있는다 — 대를 늘리라는 말과 줄이라는 말이 뒤바뀐다.
+     */
+    @Test
+    @DisplayName("적음에서_많음으로_뒤집히면_다시_알린다")
+    void 적음에서_많음으로_뒤집히면_다시_알린다() {
+        CapacityAwareLoadBalancer 균형기 = 균형기(번갈아_주는_목록(3, 50));
+
+        균형기.choose((Request<?>) null).block();
+        균형기.choose((Request<?>) null).block();
+
+        assertThat(경고들()).hasSize(2);
+        assertThat(경고들().getLast()).asString().contains("50 대");
+    }
+
     /** 첫 회차는 3 대, 다음 회차는 15 대. 대수가 바뀌는 것이 실제 배포의 모양이다. */
     private static ServiceInstanceListSupplier 번갈아_주는_목록() {
-        List<Integer> 대수 = new ArrayList<>(List.of(3, 15));
+        return 번갈아_주는_목록(3, 15);
+    }
+
+    private static ServiceInstanceListSupplier 번갈아_주는_목록(int 첫째, int 둘째) {
+        List<Integer> 대수 = new ArrayList<>(List.of(첫째, 둘째));
         return new ServiceInstanceListSupplier() {
             @Override
             public String getServiceId() {
@@ -150,7 +176,7 @@ class InstanceCountWarningTest {
             @Override
             public Flux<List<ServiceInstance>> get() {
                 return Flux.defer(() ->
-                        목록(대수.isEmpty() ? 15 : 대수.remove(0)).get());
+                        목록(대수.isEmpty() ? 둘째 : 대수.remove(0)).get());
             }
         };
     }

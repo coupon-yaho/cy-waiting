@@ -15,6 +15,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -50,6 +51,10 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
 
     /** 가정 밖 구간의 시작과 끝만 남긴다 (LG-2). */
     private final FailureWindow outsideAssumption = FailureWindow.create();
+
+    /** 마지막으로 본 구간. 밖에서 밖으로 건너뛰는 것을 잡는다. */
+    private final AtomicReference<InstanceCountBand> lastBand =
+            new AtomicReference<>(InstanceCountBand.EXPECTED);
 
     private CapacityAwareLoadBalancer(ServiceInstanceListSupplier instances,
             InstanceChooser chooser, InFlightRegistry inFlight, LongSupplier nowMillis,
@@ -142,12 +147,17 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
     private void watchInstanceCount(int instances) {
         InstanceCountBand band = InstanceCountBand.of(instances);
         if (band.withinAssumption()) {
+            lastBand.set(band);
             outsideAssumption.exited().ifPresent(r -> log.info(
                     "인스턴스 수가 가정 안으로 돌아왔다 — {}초 동안 {}건",
                     NANOSECONDS.toSeconds(r.elapsedNanos()), r.swallowed()));
             return;
         }
-        if (outsideAssumption.entered()) {
+        // **아래에서 위로 뒤집히는 것도 새 사건이다.** 하나로 묶어 세면 처방이
+        // 정반대가 됐는데 알람이 조용하고, 운영자는 처음 받은 안내를 그대로 들고
+        // 있는다 — 대를 늘리라는 말과 줄이라는 말이 뒤바뀐 채로다.
+        boolean crossed = lastBand.getAndSet(band) != band;
+        if (outsideAssumption.entered() || crossed) {
             log.warn("라우팅 가정 밖 — {}", band.describe(instances));
         }
     }

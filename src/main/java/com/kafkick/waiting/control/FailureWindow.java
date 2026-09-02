@@ -16,7 +16,7 @@ import java.util.function.LongSupplier;
 public final class FailureWindow {
 
     /** 따로 두면 비우는 것과 읽는 것 사이에 들어온 실패가 어느 쪽에도 안 들어간다. */
-    private record Failing(long since, int swallowed) {
+    private record Failing(long since, long swallowed) {
     }
 
     private final AtomicReference<Failing> state = new AtomicReference<>();
@@ -54,9 +54,10 @@ public final class FailureWindow {
 
     /**
      * @param elapsedNanos 실패가 이어진 시간
-     * @param swallowed    그동안 삼킨 시도의 수
+     * @param swallowed    그동안 삼킨 시도의 수. <b>{@code long} 이다</b> — 요청마다
+     *                     세는 자리가 있어 {@code int} 면 하루도 안 되어 넘친다
      */
-    public record Recovered(long elapsedNanos, int swallowed) {
+    public record Recovered(long elapsedNanos, long swallowed) {
 
         public long elapsedSeconds() {
             return NANOSECONDS.toSeconds(elapsedNanos);

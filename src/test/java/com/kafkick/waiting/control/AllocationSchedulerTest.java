@@ -194,7 +194,7 @@ class AllocationSchedulerTest {
                 .satisfies(e -> {
                     // 지속 시간도 가상 시계를 타야 잰다. 실시간이면 0 만 나온다.
                     assertThat(e.getArgumentArray()[0]).isEqualTo(3L);
-                    assertThat(e.getArgumentArray()[1]).isEqualTo(3);
+                    assertThat(e.getArgumentArray()[1]).isEqualTo(3L);
                 });
         ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger(AllocationScheduler.class))
                 .detachAppender(로그);

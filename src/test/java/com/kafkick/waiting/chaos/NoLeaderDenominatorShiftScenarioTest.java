@@ -1,12 +1,22 @@
 package com.kafkick.waiting.chaos;
 
+import com.kafkick.waiting.control.AllocationRound;
 import com.kafkick.waiting.control.GatewayRegistry;
+import com.kafkick.waiting.control.SnapshotCodec;
+import com.kafkick.waiting.control.TimedDemands;
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.CouponStates;
+import com.kafkick.waiting.domain.allocation.CouponDemand;
+import com.kafkick.waiting.domain.allocation.CreditSmoother;
+import com.kafkick.waiting.domain.coupon.QueueMode;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 import com.kafkick.waiting.control.LeaderLock;
 import com.kafkick.waiting.control.Leadership;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -39,6 +49,9 @@ class NoLeaderDenominatorShiftScenarioTest {
 
     /** 나눠 볼 전역 크레딧. 두 분모 모두로 나누어떨어져야 나머지가 판정을 흐리지 않는다. */
     private static final long 전역_크레딧 = 20_000;
+
+    /** 발행이 쓰는 고정 시각. 벽시계를 쓰면 스냅샷 나이가 실행마다 달라진다. */
+    private static final Instant 기준_시각 = Instant.ofEpochSecond(1_700_000_000L);
 
     private final AtomicBoolean 느리다 = new AtomicBoolean();
 
@@ -85,6 +98,7 @@ class NoLeaderDenominatorShiftScenarioTest {
         long[] 회복_펜스번호 = new long[1];
         long[] 평시_노드몫 = new long[1];
         long[] 회복_노드몫 = new long[1];
+        int[] 발행된_노드_수 = new int[1];
 
         ChaosScenario.named("X4 리더 없는 동안 분모 급변")
                 .baseline(() -> {
@@ -114,6 +128,7 @@ class NoLeaderDenominatorShiftScenarioTest {
                     회복_리더수[0] = 리더_수(갑, 을);
                     회복_분모[0] = 분모.count();
                     회복_노드몫[0] = 노드몫(분모.count());
+                    발행된_노드_수[0] = 돌아온_리더가_발행한다(갑);
                     회복_펜스번호[0] = Math.max(갑.fence(), 을.fence());
                 })
                 .assertEntry(() -> RecoveryCriteria.violations(
@@ -133,6 +148,10 @@ class NoLeaderDenominatorShiftScenarioTest {
                         // 것만으로는 그 값을 실제로 쓰는지를 못 잰다 — 몫이
                         // 노드 수에 반비례해 커져야 한다.
                         줄어든_분모만큼_노드몫이_커진다(평시_노드몫[0], 회복_노드몫[0]),
+                        // **돌아온 리더가 실제로 발행해 본다.** 위 둘은 시험이
+                        // 직접 나눈 값이라, 배분이 장애 전 분모를 쥔 채 발행하는
+                        // 회귀는 그 둘로 안 잡힌다.
+                        발행이_지금_분모를_싣는다(발행된_노드_수[0]),
                         // 펜스 번호를 새로 받는다. 0 이면 울타리가 전부 거절한다.
                         펜스_번호가_앞선다(평시_펜스번호[0], 회복_펜스번호[0])))
                 // **RC1~RC6 은 여기서 안 잰다.** 리더십과 분모만 걷는다.
@@ -149,6 +168,40 @@ class NoLeaderDenominatorShiftScenarioTest {
     private long 노드몫(int 노드_수) {
         CouponState 쿠폰 = CouponStates.queueing(전역_크레딧, 100_000, 50_000);
         return 쿠폰.contendedCap(new SnapshotMeta(전역_크레딧, 노드_수).effectiveGatewayCount());
+    }
+
+    /**
+     * <b>돌아온 리더로 배분 한 회차를 실제로 돌린다.</b>
+     *
+     * <p>노드 수를 {@code 분모::count} 로 넣어, 발행되는 스냅샷에 어느 값이
+     *실리는지 본다 — 배분이 장애 전 분모를 쥔 채 발행하는 회귀는 여기서만 걸린다.
+     *
+     * <p>평활 계수를 1.0 으로 둔다. 여기서 재는 것은 분모지 평활이 아니고,
+     * 기본 계수를 쓰면 한 회차로는 크레딧이 안 따라와 판정이 흐려진다.
+     *
+     * @return 발행된 스냅샷이 싣고 있는 노드 수
+     */
+    private int 돌아온_리더가_발행한다(Leadership 리더) {
+        AtomicReference<Map<String, String>> 발행 = new AtomicReference<>();
+        SnapshotCodec 코덱 = SnapshotCodec.create();
+        AllocationRound 회차 = AllocationRound.withoutCleanup(
+                리더::isLeader,
+                () -> Mono.just(new TimedDemands(
+                        List.of(new CouponDemand("c1", 전역_크레딧, 50_000, QueueMode.ADAPTIVE)),
+                        기준_시각.getEpochSecond())),
+                () -> 전역_크레딧,
+                분모::count,
+                grant -> Mono.just(grant.credit()),
+                hash -> {
+                    발행.set(hash);
+                    return Mono.empty();
+                },
+                () -> 기준_시각,
+                () -> Mono.just(CreditSmoother.of(1.0)),
+                코덱, () -> 0L, Optional::empty);
+        회차.run().block(Duration.ofSeconds(5));
+        Map<String, String> 실린_것 = 발행.get();
+        return 실린_것 == null ? -1 : 코덱.decode(실린_것).meta().gatewayCount();
     }
 
     private long 리더_수(Leadership... 노드들) {
@@ -189,6 +242,19 @@ class NoLeaderDenominatorShiftScenarioTest {
         return 회복 == 기대 ? Optional.empty()
                 : Optional.of("노드당 몫이 %d 다 — 분모가 %d 에서 %d 로 줄었으니 %d 여야 한다"
                         .formatted(회복, 처음_노드, 줄어든_노드, 기대));
+    }
+
+    /**
+     * <b>발행이 지금 분모를 싣는다.</b> -1 은 아예 발행을 안 했다는 뜻이라 따로 가른다 —
+     * 안 가르면 "리더가 아니라 아무것도 안 했다" 가 조용히 통과한다.
+     */
+    private Optional<String> 발행이_지금_분모를_싣는다(int 실린_노드_수) {
+        if (실린_노드_수 < 0) {
+            return Optional.of("돌아온 리더가 아무것도 발행하지 않았다 — 리더십을 못 되찾았다");
+        }
+        return 실린_노드_수 == 줄어든_노드 ? Optional.empty()
+                : Optional.of("발행된 스냅샷이 노드 수 %d 를 싣는다 — 지금 값 %d 여야 한다"
+                        .formatted(실린_노드_수, 줄어든_노드));
     }
 
     private Optional<String> 돌아온_리더가_지금_분모를_쓴다(int 분모값) {

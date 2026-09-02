@@ -1,6 +1,8 @@
 package com.kafkick.waiting.gateway;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import com.kafkick.waiting.routing.RoutingProperties;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.cloud.gateway.filter.GatewayFilter;
@@ -140,12 +142,25 @@ public class GatewayRoutes {
                 backend.responseTimeout(), meters);
     }
 
+    /**
+     * 뒷단으로 가는 주소.
+     *
+     * <p>라우팅이 켜지면 {@code lb://} 로 보낸다 — 균형기가 인스턴스를 고른다.
+     * <b>끄면 단일 주소로 돌아간다</b>: 설정 한 줄이 롤백 수단이다 (Phase 9 5절).
+     */
+    private String backendUri(Backend backend, ObjectProvider<RoutingProperties> routing) {
+        RoutingProperties properties = routing.getIfAvailable();
+        return properties == null || !properties.enabled()
+                ? backend.uri() : "lb://" + properties.serviceId();
+    }
+
     @Bean
     public RouteLocator routes(RouteLocatorBuilder builder, Backend backend,
             AdmissionGatewayFilter admission, QueryCoalescingFilter coalescing,
             SoldOutObserver soldOut, SpringCloudCircuitBreakerFilterFactory breakers,
-            MeterRegistry meters) {
+            MeterRegistry meters, ObjectProvider<RoutingProperties> routing) {
         BodyDeadline bodyDeadline = bodyDeadline(backend, meters);
+        String uri = backendUri(backend, routing);
         return builder.routes()
                 .route("issue", r -> r
                         .method(HttpMethod.POST)
@@ -169,7 +184,7 @@ public class GatewayRoutes {
                         // 서킷에 가는 것은 오류가 아니라 취소이고, 취소는 창에
                         // 안 쌓인다 — 멎은 뒷단의 서킷이 영영 안 열린다.
                         .metadata(RESPONSE_TIMEOUT_ATTR, backend.responseTimeout().toMillis())
-                        .uri(backend.uri()))
+                        .uri(uri))
                 .route("coupons", r -> r
                         .method(HttpMethod.GET)
                         .and().path("/api/v1/coupons", "/api/v1/coupons/" + COUPON_ID)
@@ -184,7 +199,7 @@ public class GatewayRoutes {
                         // 모든 조회가 끝나지 않는 것에 붙고, 뒷단이 살아나도
                         // 게이트웨이를 재시작해야 풀린다.
                         .metadata(RESPONSE_TIMEOUT_ATTR, backend.responseTimeout().toMillis())
-                        .uri(backend.uri()))
+                        .uri(uri))
                 .build();
     }
 }

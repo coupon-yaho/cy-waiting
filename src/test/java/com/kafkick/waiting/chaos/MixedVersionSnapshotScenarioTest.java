@@ -10,6 +10,7 @@ import com.kafkick.waiting.domain.coupon.RuntimeState;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
@@ -30,14 +31,16 @@ class MixedVersionSnapshotScenarioTest {
     private final SnapshotCodec 코덱 = SnapshotCodec.create();
 
     /**
-     * 옛 판이 내던 모양. <b>쿠폰 값이 다섯 자리다</b> — 전역 배수가 붙기 전이다.
+     * 옛 판이 내던 모양. <b>여섯째 자리에 쿠폰마다의 배수를 실었다</b>.
      *
-     * <p>실제 옛 판을 못 부르므로 그 판이 냈던 필드 수로 손수 만든다. 새 판이
-     * 이것을 못 읽으면 롤아웃 구간에 새 노드가 재료를 하나도 못 받는다.
+     * <p>다섯 자리로 두었더니 그건 더 옛 형식이었다 — `SnapshotCodecTest` 의
+     * `쿠폰에_모르는_필드가_붙어_와도_읽는다` 가 직전 판의 모양을 여섯 자리로
+     * 못 박아 두었다. 롤아웃에서 실제로 섞이는 판을 안 쓰면 이 시나리오가
+     * 겨냥한 구간을 안 밟는다.
      */
     private Map<String, String> 옛_판이_낸_것() {
         Map<String, String> hash = new LinkedHashMap<>();
-        hash.put(쿠폰, "ADAPTIVE:QUEUEING:100:500:2000");
+        hash.put(쿠폰, "ADAPTIVE:QUEUEING:100:500:2000:2.5");
         hash.put("#credit", "1000");
         hash.put("#nodes", "4");
         // **이름이 틀리면 프로덕션이 이 해시를 통째로 버린다.** 발행 시각을 못
@@ -76,15 +79,26 @@ class MixedVersionSnapshotScenarioTest {
             return false;
         }
         try {
+            // **옛 디코더가 하던 그대로 여섯 자리를 다 읽는다.** 자리 수와 두
+            // 숫자만 보면 모드·상태가 뒤바뀌거나 크레딧이 깨져도 통과한다 —
+            // 그 판에서 옛 노드는 쿠폰을 통째로 버리거나 엉뚱한 값으로 판정한다.
+            QueueMode.valueOf(parts[0].toUpperCase(Locale.ROOT));
+            RuntimeState.valueOf(parts[1].toUpperCase(Locale.ROOT));
+            if (Long.parseLong(parts[2]) < 0) {
+                return false;
+            }
             // 옛 노드는 넷째 자리를 재고로 읽는다. 미상일 때 양수가 실리면
             // 재입고로 읽어 매진 방패를 푼다.
             if (Long.parseLong(parts[3]) < 0) {
                 return false;
             }
-            // 여섯째 자리는 전역 배수다. 안 실으면 옛 파드가 배수 없이 폴링해
+            if (Long.parseLong(parts[4]) < 0) {
+                return false;
+            }
+            // 여섯째 자리는 배수다. 안 실으면 옛 파드가 배수 없이 폴링해
             // 롤아웃 구간 내내 예산을 넘긴다.
             return Double.parseDouble(parts[5]) > 0;
-        } catch (NumberFormatException e) {
+        } catch (IllegalArgumentException e) {
             return false;
         }
     }

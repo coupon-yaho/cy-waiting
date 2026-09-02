@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.kafkick.waiting.control.SnapshotHolder;
+import com.kafkick.waiting.routing.RoutingProperties;
+import org.springframework.beans.factory.ObjectProvider;
 import com.kafkick.waiting.domain.admission.AdmissionDecider;
 import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
 import com.kafkick.waiting.domain.queue.EntryToken;
@@ -86,7 +88,37 @@ class GatewayRoutesTest {
             SoldOutObserver.ofPublishedAt(
                     SoldOutCache.standard(), Instant::now, new SimpleMeterRegistry()),
             컨텍스트.getBean(SpringCloudCircuitBreakerResilience4JFilterFactory.class),
-            new SimpleMeterRegistry());
+            new SimpleMeterRegistry(), 라우팅_없음());
+
+    /** 라우팅을 안 켠 판. 기존 시험들이 보는 것은 단일 주소 그대로다. */
+    private static ObjectProvider<RoutingProperties> 라우팅_없음() {
+        return 라우팅(null);
+    }
+
+    /** 배선만 넘긴다. 컨텍스트를 띄우지 않고 켠 판과 끈 판을 나란히 본다. */
+    private static ObjectProvider<RoutingProperties> 라우팅(RoutingProperties properties) {
+        return new ObjectProvider<>() {
+            @Override
+            public RoutingProperties getObject() {
+                return properties;
+            }
+
+            @Override
+            public RoutingProperties getObject(Object... args) {
+                return properties;
+            }
+
+            @Override
+            public RoutingProperties getIfAvailable() {
+                return properties;
+            }
+
+            @Override
+            public RoutingProperties getIfUnique() {
+                return properties;
+            }
+        };
+    }
 
     /**
      * 재료를 한 번도 못 받은 홀더. 이 시험은 <b>라우트가 무엇을 잡는가</b>만 보므로
@@ -606,5 +638,64 @@ class GatewayRoutesTest {
     @DisplayName("판정과_서킷의_앞뒤가_값으로_정해져_있다")
     void 판정과_서킷의_앞뒤가_값으로_정해져_있다() {
         assertThat(FilterOrder.ROUTE_ADMISSION).isLessThan(FilterOrder.ROUTE_CIRCUIT);
+    }
+
+    private RouteLocator 라우터(RoutingProperties routing) {
+        return new GatewayRoutes().routes(
+                new RouteLocatorBuilder(컨텍스트),
+                new GatewayRoutes.Backend("http://backend:8080", 응답_상한),
+                AdmissionGatewayFilter.withIsolatedSoldOutCache(재료_없는_홀더(),
+                        AdmissionDecider.of(공유_리미터, 0.7),
+                        Clock.systemUTC(), new SimpleMeterRegistry(),
+                        FakeQueuePort.create(),
+                        QueueToken.of("not-a-real-secret-0123456789abcdef"),
+                        공유_리미터,
+                        EntryToken.of("not-a-real-secret-0123456789abcdef"),
+                        IdempotencyKey.passThrough()),
+                QueryCoalescingFilter.of(
+                        new CoalescingProperties(false, 1024, 1 << 20, 100, List.of()),
+                        Clock.systemUTC(), new SimpleMeterRegistry()),
+                SoldOutObserver.ofPublishedAt(
+                        SoldOutCache.standard(), Instant::now, new SimpleMeterRegistry()),
+                컨텍스트.getBean(SpringCloudCircuitBreakerResilience4JFilterFactory.class),
+                new SimpleMeterRegistry(), 라우팅(routing));
+    }
+
+    private static List<String> 주소들(RouteLocator locator) {
+        return locator.getRoutes().collectList().block().stream()
+                .map(r -> r.getUri().toString()).toList();
+    }
+
+    /**
+     * <b>켜면 균형기를 거친다.</b> 단일 주소로 두면 인스턴스를 고를 자리가
+     * 아예 없어, 이 페이즈가 만든 것이 한 번도 안 돈다.
+     */
+    @Test
+    @DisplayName("라우팅을_켜면_lb_로_보낸다")
+    void 라우팅을_켜면_lb_로_보낸다() {
+        RouteLocator locator = 라우터(new RoutingProperties(
+                true, "coupon-service", null, null, null));
+
+        assertThat(주소들(locator)).allMatch("lb://coupon-service"::equals);
+    }
+
+    /**
+     * <b>끄면 단일 주소로 돌아간다.</b> 설정 한 줄이 롤백 수단이다 —
+     * 코드가 남아 있어도 무해해야 그 롤백이 성립한다.
+     */
+    @Test
+    @DisplayName("라우팅을_끄면_단일_주소다")
+    void 라우팅을_끄면_단일_주소다() {
+        RouteLocator locator = 라우터(new RoutingProperties(
+                false, "coupon-service", null, null, null));
+
+        assertThat(주소들(locator)).allMatch("http://backend:8080"::equals);
+    }
+
+    /** 배선이 아예 없으면 단일 주소다. 라우팅을 안 넣은 배포가 그 자리다. */
+    @Test
+    @DisplayName("배선이_없으면_단일_주소다")
+    void 배선이_없으면_단일_주소다() {
+        assertThat(주소들(locator)).allMatch("http://backend:8080"::equals);
     }
 }

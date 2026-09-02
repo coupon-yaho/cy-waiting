@@ -70,7 +70,7 @@ public final class CapacityCollector {
 
     private final AtomicLong lastKnown;
 
-    /** 연속으로 못 읽은 회차의 수. 한 회차가라도 성공하면 다시 0 이다. */
+    /** 연속으로 못 읽은 회차의 수. 한 회차라도 성공하면 다시 0 이다. */
     private final AtomicLong failedRounds = new AtomicLong();
 
     /**
@@ -158,7 +158,7 @@ public final class CapacityCollector {
         lastKnown.updateAndGet(known -> known == 0 ? 0 : Math.max(bottom, known / 2));
     }
 
-    /** 리더가 됐다. <b>유예를 처음부터 준다</b> — 비리더 구간의 실패는 남의 회차가다. */
+    /** 리더가 됐다. <b>유예를 처음부터 준다</b> — 비리더 구간의 실패는 남의 회차다. */
     public void leadershipAcquired() {
         failedRounds.set(0);
     }
@@ -238,7 +238,7 @@ public final class CapacityCollector {
         long credit = fresh == 0 || rampMadeIt ? minimum : total;
         lastFloor.set(fresh == 0 || rampMadeIt ? minimum : 0);
         lastKnown.set(credit);
-        // 한 회차가라도 성공하면 유예가 다시 찬다. 안 그러면 드문 순단이 쌓여
+        // 한 회차라도 성공하면 유예가 다시 찬다. 안 그러면 드문 순단이 쌓여
         // 멀쩡한 구간에서도 조여진다.
         failedRounds.set(0);
         return credit;

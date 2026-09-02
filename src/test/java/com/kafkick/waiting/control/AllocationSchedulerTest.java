@@ -172,7 +172,7 @@ class AllocationSchedulerTest {
     @Test
     @DisplayName("실패가_이어져도_경고는_한_번만_찍는다")
     void 실패가_이어져도_경고는_한_번만_찍는다() {
-        // 초당 한 회차가라 매번 찍으면 몇 분짜리 단절에 수백 줄이고, 정작 조사가
+        // 초당 한 회차라 매번 찍으면 몇 분짜리 단절에 수백 줄이고, 정작 조사가
         // 필요한 순간에 원인이 묻힌다.
         ListAppender<ILoggingEvent> 로그 = new ListAppender<>();
         로그.start();

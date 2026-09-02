@@ -24,7 +24,7 @@ import reactor.core.publisher.Mono;
 class RedisLatencyHeldScenarioTest {
 
     /**
-     * 리스와 시도 상한. <b>배선값의 축소회차가다</b> — 비가 같다(5:1).
+     * 리스와 시도 상한. <b>배선값의 축소판이다</b> — 비가 같다(5:1).
      *
      * <p>운영값(2초·300ms)으로 재면 한 회차가 수십 초다. <b>시계를 주입하므로</b>
      * 실시간은 안 태우고, 이 값들은 리스 경계를 정확히 밟기 위한 눈금이다 —

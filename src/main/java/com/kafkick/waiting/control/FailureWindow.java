@@ -8,7 +8,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongSupplier;
 
 /**
- * 이어지는 실패를 한 번만 알리고, 걷힐 때 얼마나 오래 몇 회차가었는지 남긴다.
+ * 이어지는 실패를 한 번만 알리고, 걷힐 때 얼마나 오래 몇 회차였는지 남긴다.
  *
  * <p>매 회차 찍으면 <b>정작 조사가 필요한 순간에 로그가 묻힌다.</b> 그렇다고
  * 지속 시간만 남기면 한 회차가 실패한 것인지 수백 회차인지 사후에 못 가린다.

@@ -104,7 +104,7 @@ public final class AllocationScheduler {
     /**
      * 실패가 이어지는 동안 경고는 한 번만 찍는다.
      *
-     * <p>초당 한 회차가라 매번 찍으면 몇 분짜리 단절에 수백 줄이고, 정작 조사가
+     * <p>초당 한 회차라 매번 찍으면 몇 분짜리 단절에 수백 줄이고, 정작 조사가
      * 필요한 순간에 원인이 묻힌다.
      */
     private void failed(Throwable cause) {

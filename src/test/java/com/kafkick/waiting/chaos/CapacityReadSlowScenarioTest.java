@@ -54,7 +54,7 @@ class CapacityReadSlowScenarioTest {
     /** 가용량 읽기의 예산. 배분 틱의 1/4 을 흉내 낸다. */
     private static final Duration 예산 = Duration.ofMillis(50);
 
-    /** 감쇠가 바닥까지 닿고도 남는 회차 수. 10,000 에서 절반씩이면 열 회차가면 닿는다. */
+    /** 감쇠가 바닥까지 닿고도 남는 회차 수. 10,000 에서 절반씩이면 열 회차면 닿는다. */
     private static final int 유지_회차 = 20;
 
     /**

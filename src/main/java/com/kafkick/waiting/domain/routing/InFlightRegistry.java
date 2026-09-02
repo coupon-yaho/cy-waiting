@@ -47,9 +47,14 @@ public final class InFlightRegistry {
     /** 요청 하나가 시작했다. 돌려준 표를 <b>어느 경로로 끝나든</b> 놓아야 한다. */
     public Ticket started(String instanceId, long nowMillis) {
         Objects.requireNonNull(instanceId, "instanceId");
-        Slot slot = slots.computeIfAbsent(instanceId, id -> new Slot());
         Key key = new Key(nowMillis, sequence.incrementAndGet());
-        slot.add(key);
+        // **맵의 키 잠금 안에서 넣는다.** 밖에서 넣으면 정리가 "비었다" 로 보고
+        // 지우는 사이에 끼어들어, 산 요청이 든 칸이 맵에서 통째로 빠진다.
+        Slot slot = slots.compute(instanceId, (id, existing) -> {
+            Slot target = existing == null ? new Slot() : existing;
+            target.add(key);
+            return target;
+        });
         return new Ticket(slot, key);
     }
 
@@ -64,10 +69,17 @@ public final class InFlightRegistry {
         if (cap <= 0) {
             throw new IllegalArgumentException("상한은 양수여야 한다: " + cap);
         }
-        Slot slot = slots.computeIfAbsent(instanceId, id -> new Slot());
         Key key = new Key(nowMillis, sequence.incrementAndGet());
-        return slot.addIfUnder(key, cap, cutoff(nowMillis))
-                ? Optional.of(new Ticket(slot, key)) : Optional.empty();
+        long cutoff = cutoff(nowMillis);
+        boolean[] taken = new boolean[1];
+        // 위와 같은 이유로 키 잠금 안에서 넣는다. 새로 만든 칸이 남는 경우는
+        // 없다 — 빈 칸은 상한이 1 이상이면 늘 자리가 있고, 0 이하는 위에서 막았다.
+        Slot slot = slots.compute(instanceId, (id, existing) -> {
+            Slot target = existing == null ? new Slot() : existing;
+            taken[0] = target.addIfUnder(key, cap, cutoff);
+            return target;
+        });
+        return taken[0] ? Optional.of(new Ticket(slot, key)) : Optional.empty();
     }
 
     /** 지금 물려 있는 요청 수. 부르는 김에 수명이 지난 항목을 회수한다. */
@@ -113,8 +125,14 @@ public final class InFlightRegistry {
     public void retain(Set<String> live, long nowMillis) {
         Objects.requireNonNull(live, "live");
         long cutoff = cutoff(nowMillis);
-        slots.entrySet().removeIf(e ->
-                !live.contains(e.getKey()) && e.getValue().size(cutoff) == 0);
+        // **키마다 잠금 안에서 지운다.** 밖에서 비었는지 보고 지우면, 그 사이에
+        // 들어온 요청이 든 칸을 지우게 된다 — 그 요청은 어느 카운터에도 안 든다.
+        for (String id : Set.copyOf(slots.keySet())) {
+            if (live.contains(id)) {
+                continue;
+            }
+            slots.computeIfPresent(id, (k, slot) -> slot.size(cutoff) == 0 ? null : slot);
+        }
     }
 
     /** 지금 카운터를 들고 있는 인스턴스들. 게이지가 훑는 자리다. */

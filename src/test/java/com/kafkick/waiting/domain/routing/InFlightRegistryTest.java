@@ -386,4 +386,5 @@ class InFlightRegistryTest {
             assertThat(레지스트리.count(을, 지금)).isZero();
         }
     }
+
 }

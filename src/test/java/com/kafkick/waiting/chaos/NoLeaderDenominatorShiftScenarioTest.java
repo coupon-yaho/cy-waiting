@@ -1,6 +1,9 @@
 package com.kafkick.waiting.chaos;
 
 import com.kafkick.waiting.control.GatewayRegistry;
+import com.kafkick.waiting.domain.coupon.CouponState;
+import com.kafkick.waiting.domain.coupon.CouponStates;
+import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import com.kafkick.waiting.control.LeaderLock;
 import com.kafkick.waiting.control.Leadership;
 import java.time.Duration;
@@ -33,6 +36,9 @@ class NoLeaderDenominatorShiftScenarioTest {
     private static final int 처음_노드 = 20;
 
     private static final int 줄어든_노드 = 10;
+
+    /** 나눠 볼 전역 크레딧. 두 분모 모두로 나누어떨어져야 나머지가 판정을 흐리지 않는다. */
+    private static final long 전역_크레딧 = 20_000;
 
     private final AtomicBoolean 느리다 = new AtomicBoolean();
 
@@ -77,6 +83,8 @@ class NoLeaderDenominatorShiftScenarioTest {
         int[] 회복_분모 = new int[1];
         long[] 평시_펜스번호 = new long[1];
         long[] 회복_펜스번호 = new long[1];
+        long[] 평시_노드몫 = new long[1];
+        long[] 회복_노드몫 = new long[1];
 
         ChaosScenario.named("X4 리더 없는 동안 분모 급변")
                 .baseline(() -> {
@@ -84,6 +92,7 @@ class NoLeaderDenominatorShiftScenarioTest {
                     을.renew().block(Duration.ofSeconds(5));
                     분모.observed(처음_노드);
                     정상_분모[0] = 분모.count();
+                    평시_노드몫[0] = 노드몫(분모.count());
                     평시_펜스번호[0] = Math.max(갑.fence(), 을.fence());
                 })
                 .inject(() -> 느리다.set(true))
@@ -104,6 +113,7 @@ class NoLeaderDenominatorShiftScenarioTest {
                     을.renew().block(Duration.ofSeconds(5));
                     회복_리더수[0] = 리더_수(갑, 을);
                     회복_분모[0] = 분모.count();
+                    회복_노드몫[0] = 노드몫(분모.count());
                     회복_펜스번호[0] = Math.max(갑.fence(), 을.fence());
                 })
                 .assertEntry(() -> RecoveryCriteria.violations(
@@ -119,10 +129,26 @@ class NoLeaderDenominatorShiftScenarioTest {
                         // **돌아온 리더가 줄어든 분모를 그대로 쓴다.** 옛 값을 들고
                         // 오면 남은 노드가 죽은 노드의 몫까지 쓴다 — 초과 방향이다.
                         돌아온_리더가_지금_분모를_쓴다(회복_분모[0]),
+                        // **세는 것으로 그치지 않고 나눠 본다.** 분모를 다시 읽는
+                        // 것만으로는 그 값을 실제로 쓰는지를 못 잰다 — 몫이
+                        // 노드 수에 반비례해 커져야 한다.
+                        줄어든_분모만큼_노드몫이_커진다(평시_노드몫[0], 회복_노드몫[0]),
                         // 펜스 번호를 새로 받는다. 0 이면 울타리가 전부 거절한다.
                         펜스_번호가_앞선다(평시_펜스번호[0], 회복_펜스번호[0])))
                 // **RC1~RC6 은 여기서 안 잰다.** 리더십과 분모만 걷는다.
                 .run();
+    }
+
+    /**
+     * 이 노드가 쓸 수 있는 몫. <b>프로덕션이 나누는 자리를 그대로 부른다.</b>
+     *
+     * <p>분모를 다시 읽어 값만 견주면 "세는 쪽" 만 재고 <b>쓰는 쪽</b>은 못 잰다.
+     * 판정이 실제로 부르는 것은 {@link CouponState#contendedCap(int)} 이고,
+     * 노드 수는 {@link SnapshotMeta#effectiveGatewayCount()} 를 거쳐 들어간다.
+     */
+    private long 노드몫(int 노드_수) {
+        CouponState 쿠폰 = CouponStates.queueing(전역_크레딧, 100_000, 50_000);
+        return 쿠폰.contendedCap(new SnapshotMeta(전역_크레딧, 노드_수).effectiveGatewayCount());
     }
 
     private long 리더_수(Leadership... 노드들) {
@@ -151,6 +177,18 @@ class NoLeaderDenominatorShiftScenarioTest {
     private Optional<String> 리더가_하나로_돌아온다(long 수) {
         return 수 == 1 ? Optional.empty()
                 : Optional.of("회복 뒤 리더가 %d 대다 — 정확히 하나여야 한다".formatted(수));
+    }
+
+    /**
+     * <b>노드 수가 반이면 노드당 몫은 두 배다.</b>
+     *
+     * <p>비를 본다 — 절대값을 박으면 크레딧을 바꾸는 날 뜻 없이 빨개진다.
+     */
+    private Optional<String> 줄어든_분모만큼_노드몫이_커진다(long 평시, long 회복) {
+        long 기대 = 평시 * 처음_노드 / 줄어든_노드;
+        return 회복 == 기대 ? Optional.empty()
+                : Optional.of("노드당 몫이 %d 다 — 분모가 %d 에서 %d 로 줄었으니 %d 여야 한다"
+                        .formatted(회복, 처음_노드, 줄어든_노드, 기대));
     }
 
     private Optional<String> 돌아온_리더가_지금_분모를_쓴다(int 분모값) {

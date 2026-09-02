@@ -47,7 +47,11 @@ public record RoutingCandidate(String instanceId, long credits, int inFlight, do
     // 로컬 관측이 쌓일수록 무게를 선형으로 뺀다. 램프가 끝나면 식이 원래대로
     // 돌아가고, 그때부터는 진단용이라는 원칙이 그대로다.
     public static double seed(double reportedInFlight, Duration elapsed, Duration ramp) {
-        if (ramp.isZero() || ramp.isNegative() || !(reportedInFlight > 0)) {
+        // **밀리초로 재므로 1ms 미만은 램프가 없는 것과 같다.** 안 가르면 분모가
+        // 0 이 되어 NaN 이 나오고, 그 값이 후보 생성에서 터져 라우팅이 통째로 멎는다.
+        //
+        // 음수도 이 한 줄이 덮는다 — 따로 검사하면 밟을 수 없는 갈래가 된다.
+        if (ramp.toMillis() <= 0 || !(reportedInFlight > 0)) {
             return 0;
         }
         double remaining = 1 - (double) elapsed.toMillis() / ramp.toMillis();

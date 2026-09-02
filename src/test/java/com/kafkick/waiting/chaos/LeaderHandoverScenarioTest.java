@@ -136,7 +136,7 @@ class LeaderHandoverScenarioTest {
 
         private final Set<String> 낡았던 = ConcurrentHashMap.newKeySet();
 
-        private final AtomicLong 본_판 = new AtomicLong();
+        private final AtomicLong 본_회차 = new AtomicLong();
 
         void 본다(String 이름, Supplier<SnapshotHolder> 홀더) {
             볼_곳.put(이름, 홀더);
@@ -145,7 +145,7 @@ class LeaderHandoverScenarioTest {
         void 시작한다() {
             폴러 = Executors.newSingleThreadScheduledExecutor();
             폴러.scheduleAtFixedRate(() -> {
-                본_판.incrementAndGet();
+                본_회차.incrementAndGet();
                 볼_곳.forEach((이름, 홀더) -> {
                     SnapshotHolder 지금 = 홀더.get();
                     if (지금 != null && 지금.isDataStale()) {
@@ -161,8 +161,8 @@ class LeaderHandoverScenarioTest {
             }
         }
 
-        long 본_판() {
-            return 본_판.get();
+        long 본_회차() {
+            return 본_회차.get();
         }
 
         String 낡았던_노드() {
@@ -229,7 +229,7 @@ class LeaderHandoverScenarioTest {
             List<Integer> 회복_줄_상태 = new ArrayList<>();
             long[] 한산한_도착 = new long[3];
             long[] 줄_도착 = new long[3];
-            long[] 판_번호 = new long[2];
+            long[] 펜스_번호 = new long[2];
 
             String[] 주인 = new String[2];
             BackendReports[] 보고기 = new BackendReports[1];
@@ -275,12 +275,12 @@ class LeaderHandoverScenarioTest {
                                     return 둘째_홀더 != null && !둘째_홀더.isDataStale();
                                 });
                         // **스냅샷이 이 쿠폰을 줄 선 상태로 볼 때까지 기다린다.**
-                        // 신선하기만 하면 심기 전에 발행된 판으로도 만족되고,
+                        // 신선하기만 하면 심기 전에 발행된 스냅샷으로도 만족되고,
                         // 그 창에 걸리면 아직 한산해서 200 이 나간다.
                         Awaitility.await().alias("스냅샷이 이 쿠폰의 줄을 본다")
                                 .atMost(기다림)
                                 .until(() -> 발급_상태(COUPON, 999_000) == 202);
-                        판_번호[0] = 판_번호를_읽는다();
+                        펜스_번호[0] = 펜스_번호를_읽는다();
                         주인[0] = 주인을_읽는다();
                         한산한_도착[0] = 뒷단까지_센다(한산한_쿠폰[0], () -> 정상_상태.addAll(
                                 여러_번_시도한다(한산한_쿠폰[0], 한산한_보낼_수, 100)));
@@ -315,7 +315,7 @@ class LeaderHandoverScenarioTest {
                                 .atMost(기다림)
                                 .until(() -> !holder.isDataStale() && !둘째가_낡았나());
                         낡음_감시.멈춘다();
-                        판_번호[1] = 판_번호를_읽는다();
+                        펜스_번호[1] = 펜스_번호를_읽는다();
                         주인[1] = 주인을_읽는다();
                         한산한_도착[2] = 뒷단까지_센다(한산한_쿠폰[2], () -> 회복_상태.addAll(
                                 여러_번_시도한다(한산한_쿠폰[2], 한산한_보낼_수, 300)));
@@ -330,7 +330,7 @@ class LeaderHandoverScenarioTest {
                             노드가_둘이었다(노드),
                             // **둘째가 이어받을 수 있는 노드인가.** 하트비트만
                             // 세면 제어 평면이 없는 노드도 둘로 세어져, 이어받을
-                            // 수 없는 판을 승계로 읽는다.
+                            // 수 없는 경우를 승계로 읽는다.
                             둘째가_이어받을_수_있다(둘째)))
                     .assertDuring(() -> RecoveryCriteria.violations(
                             // **승계 중에도 판정이 선다.** 리더가 바뀌는 것이
@@ -345,8 +345,8 @@ class LeaderHandoverScenarioTest {
                             대조군이_뒷단까지_갔다("회복", 한산한_도착[2]),
                             줄에_세웠다("회복", 회복_줄_상태, 보낼_수),
                             줄을_추월하지_않았다("회복", 줄_도착[2]),
-                            // **판 번호는 앞선다.** 같으면 승계가 없었던 것이다.
-                            판_번호가_앞섰다(판_번호[0], 판_번호[1]),
+                            // **펜스 번호는 앞선다.** 같으면 승계가 없었던 것이다.
+                            펜스_번호가_앞섰다(펜스_번호[0], 펜스_번호[1]),
                             // **둘째가 이어받았는가.** 후보가 하나뿐이라
                             // 결정적이다 — 첫 노드가 다시 잡았으면 제어 평면을
                             // 세운 것이 안 먹은 것이다.
@@ -373,8 +373,8 @@ class LeaderHandoverScenarioTest {
         }
     }
 
-    /** 지금 락에 적힌 판 번호. 없으면 0 이다. */
-    private long 판_번호를_읽는다() {
+    /** 지금 락에 적힌 펜스 번호. 없으면 0 이다. */
+    private long 펜스_번호를_읽는다() {
         String 값 = redis.opsForValue().get(RedisKeys.LEADER).block(기다림);
         if (값 == null) {
             return 0;
@@ -383,7 +383,7 @@ class LeaderHandoverScenarioTest {
         return 구분 < 0 ? 0 : Long.parseLong(값.substring(0, 구분));
     }
 
-    /** 지금 락의 주인. 값의 형식은 판 번호와 주인을 구분자로 이은 것이다. */
+    /** 지금 락의 주인. 값의 형식은 펜스 번호와 주인을 구분자로 이은 것이다. */
     private String 주인을_읽는다() {
         String 값 = redis.opsForValue().get(RedisKeys.LEADER).block(기다림);
         if (값 == null) {
@@ -407,7 +407,7 @@ class LeaderHandoverScenarioTest {
     private Optional<String> 보고가_안_터졌다() {
         long 터진 = 뛰다_터진_수.get();
         return 터진 == 0 ? Optional.empty()
-                : Optional.of("가용량 보고가 %d 판 터졌다 — 크레딧이 구간마다 다르다"
+                : Optional.of("가용량 보고가 %d 회차 터졌다 — 크레딧이 구간마다 다르다"
                         .formatted(터진));
     }
 
@@ -426,7 +426,7 @@ class LeaderHandoverScenarioTest {
         }
     }
 
-    /** 한 대만 서 있으면 이건 승계가 아니라 리더 부재다 — C4 가 재는 판이다. */
+    /** 한 대만 서 있으면 이건 승계가 아니라 리더 부재다 — C4 가 재는 경우다. */
     private Optional<String> 노드가_둘이었다(GatewayNodes 노드) {
         int 산_노드 = 노드.살아있는_수();
         return 산_노드 >= 2 ? Optional.empty()
@@ -442,7 +442,7 @@ class LeaderHandoverScenarioTest {
      * 적는 셈이다 — 나이는 새 리더의 첫 발행 직전에 가장 크다.
      */
     private Optional<String> 낡음이_안_열렸다() {
-        if (낡음_감시.본_판() == 0) {
+        if (낡음_감시.본_회차() == 0) {
             return Optional.of("전제 — 승계 구간을 한 번도 안 봤다");
         }
         return 낡음_감시.낡았던_노드().isEmpty() ? Optional.empty()
@@ -455,13 +455,13 @@ class LeaderHandoverScenarioTest {
         return 둘째_홀더 != null && 둘째_홀더.isDataStale();
     }
 
-    /** 판 번호가 안 앞서면 락을 한 번도 안 놓은 것이라 승계가 없었다. */
-    private Optional<String> 판_번호가_앞섰다(long 전, long 후) {
+    /** 펜스 번호가 안 앞서면 락을 한 번도 안 놓은 것이라 승계가 없었다. */
+    private Optional<String> 펜스_번호가_앞섰다(long 전, long 후) {
         if (전 <= 0) {
-            return Optional.of("전제 — 정상 구간에 판 번호가 없었다");
+            return Optional.of("전제 — 정상 구간에 펜스 번호가 없었다");
         }
         return 후 > 전 ? Optional.empty()
-                : Optional.of("판 번호가 %d 에서 %d 로 안 늘었다 — 승계가 없었다"
+                : Optional.of("펜스 번호가 %d 에서 %d 로 안 늘었다 — 승계가 없었다"
                         .formatted(전, 후));
     }
 

@@ -73,7 +73,7 @@ class QueueSweeperMetricsTest {
         assertThat(계수("swept")).as("걷은 수").isZero();
     }
 
-    /** 쓸 대상이 없으면 왕복도 계수도 없다. 그 판을 세면 평시 값이 부푼다. */
+    /** 쓸 대상이 없으면 왕복도 계수도 없다. 그 회차를 세면 평시 값이 부푼다. */
     @Test
     @DisplayName("쓸_대상이_없으면_아무것도_안_센다")
     void 쓸_대상이_없으면_아무것도_안_센다() {

@@ -297,7 +297,7 @@ class SweepTest extends RedisContainerSupport {
      * <b>소수점 임계는 내림으로 적는다.</b>
      *
      * <p>반올림이 위로 가면 임계보다 실제로 위인 사람이 창에서 빠진다. 임계가
-     * 더 안 오르면 그 사람은 어떤 판에서도 창에 안 들어와 영영 안 걷힌다.
+     * 더 안 오르면 그 사람은 어떤 회차에서도 창에 안 들어와 영영 안 걷힌다.
      */
     // 내려서 적으면 창이 한 칸 넓어질 뿐이고, 임계 이하인 사람은 아래의 정확한
     // 비교가 되잡는다 — 그 검사가 남아 있어야 하는 이유가 여기다.
@@ -331,7 +331,7 @@ class SweepTest extends RedisContainerSupport {
         }
 
         // 창이 keeper 하나면 걷을 사람이 없고, 둘이면 m0 하나가 걷힌다.
-        // **앞의 판이 이미 걷었다.** 다섯을 보면 남은 m1~m4 가 걷힌다.
+        // **앞의 회차가 이미 걷었다.** 다섯을 보면 남은 m1~m4 가 걷힌다.
         assertThat(swept(sweep("1"))).as("창에 살아 있는 사람만 든다").isZero();
         assertThat(swept(sweep("2"))).as("창이 넓어지면 하나 걷는다").isOne();
         assertThat(swept(sweep("5"))).as("남은 넷").isEqualTo(4);

@@ -8,11 +8,14 @@ import com.kafkick.waiting.domain.routing.InstanceCountBand;
 import com.kafkick.waiting.domain.routing.InstanceChooser;
 import com.kafkick.waiting.domain.routing.RoutingCandidate;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -49,6 +52,10 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
     /** 가정 밖 구간의 시작과 끝만 남긴다 (LG-2). */
     private final FailureWindow outsideAssumption = FailureWindow.create();
 
+    /** 마지막으로 본 구간. 밖에서 밖으로 건너뛰는 것을 잡는다. */
+    private final AtomicReference<InstanceCountBand> lastBand =
+            new AtomicReference<>(InstanceCountBand.EXPECTED);
+
     private CapacityAwareLoadBalancer(ServiceInstanceListSupplier instances,
             InstanceChooser chooser, InFlightRegistry inFlight, LongSupplier nowMillis,
             int perInstanceCap) {
@@ -78,35 +85,52 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
     private Response<ServiceInstance> pick(List<ServiceInstance> available) {
         long now = nowMillis.getAsLong();
         watchInstanceCount(available.size());
-        // **사라진 인스턴스의 카운터를 지운다** (9.2.5). 식별자가 재기동마다
-        // 새로 오므로(R-3) 안 지우면 배포를 거듭할수록 자란다.
+        // **사라지고 비어 있는 인스턴스의 카운터를 지운다.** 식별자가 재기동마다
+        // 새로 오므로 안 지우면 배포를 거듭할수록 자란다. 다만 목록에서 잠깐
+        // 빠진 대에 요청이 아직 물려 있으면 안 지운다 — 지우면 돌아온 순간
+        // 부하가 0 으로 보여 그 대로 몰아 보낸다.
         Set<String> present = new HashSet<>();
         for (ServiceInstance instance : available) {
             present.add(instance.getInstanceId());
         }
-        inFlight.retain(present);
+        inFlight.retain(present, now);
 
+        Map<String, ServiceInstance> byId = new LinkedHashMap<>();
         List<RoutingCandidate> candidates = new ArrayList<>();
         for (ServiceInstance instance : available) {
             String id = instance.getInstanceId();
             int busy = inFlight.count(id, now);
-            // **상한에 닿은 대는 후보가 아니다** (G9.13). 느려진 한 대로 간
-            // 요청이 무한정 쌓이면 그 한 대가 게이트웨이 커넥션을 다 붙잡는다.
+            // **상한에 닿은 대는 후보가 아니다.** 느려진 한 대로 간 요청이
+            // 무한정 쌓이면 그 한 대가 게이트웨이 커넥션을 다 붙잡는다.
             if (busy >= perInstanceCap) {
                 continue;
             }
+            byId.put(id, instance);
             candidates.add(RoutingCandidate.of(id, creditsOf(instance), busy));
         }
-        Optional<RoutingCandidate> chosen = chooser.choose(candidates);
-        if (chosen.isEmpty()) {
-            // **명확한 실패다** (9.3.4). 아무 대나 고르면 여유 0 인 대가 무너진다.
-            return new EmptyResponse();
-        }
-        String id = chosen.orElseThrow().instanceId();
-        for (ServiceInstance instance : available) {
-            if (instance.getInstanceId().equals(id)) {
-                return new DefaultResponse(instance);
+
+        // **고르는 자리에서 자리를 잡는다.** 읽고 나중에 세면 동시 요청이 다 같이
+        // 빈자리를 보고 같은 대를 고른 뒤에야 세어져, 상한 1 인 대에 둘이 들어간다.
+        // 잡는 데 실패했다는 것은 그 사이에 찼다는 뜻이라 그 대를 빼고 다시 고른다.
+        while (!candidates.isEmpty()) {
+            Optional<RoutingCandidate> chosen = chooser.choose(candidates);
+            if (chosen.isEmpty()) {
+                break;
             }
+            String id = chosen.orElseThrow().instanceId();
+            // **목록에 없는 것을 돌려주면 빈 답이다.** 그대로 믿으면 없는 주소로
+            // 보낸다. 자리를 잡기 전에 본다 — 잡고 나면 놓을 사람이 없다.
+            ServiceInstance instance = byId.get(id);
+            if (instance == null) {
+                break;
+            }
+            Optional<InFlightRegistry.Ticket> ticket =
+                    inFlight.tryStarted(id, perInstanceCap, now);
+            if (ticket.isPresent()) {
+                return new DefaultResponse(
+                        ReservedInstance.of(instance, ticket.orElseThrow()));
+            }
+            candidates.removeIf(c -> c.instanceId().equals(id));
         }
         return new EmptyResponse();
     }
@@ -123,12 +147,17 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
     private void watchInstanceCount(int instances) {
         InstanceCountBand band = InstanceCountBand.of(instances);
         if (band.withinAssumption()) {
+            lastBand.set(band);
             outsideAssumption.exited().ifPresent(r -> log.info(
                     "인스턴스 수가 가정 안으로 돌아왔다 — {}초 동안 {}건",
                     NANOSECONDS.toSeconds(r.elapsedNanos()), r.swallowed()));
             return;
         }
-        if (outsideAssumption.entered()) {
+        // **아래에서 위로 뒤집히는 것도 새 사건이다.** 하나로 묶어 세면 처방이
+        // 정반대가 됐는데 알람이 조용하고, 운영자는 처음 받은 안내를 그대로 들고
+        // 있는다 — 대를 늘리라는 말과 줄이라는 말이 뒤바뀐 채로다.
+        boolean crossed = lastBand.getAndSet(band) != band;
+        if (outsideAssumption.entered() || crossed) {
             log.warn("라우팅 가정 밖 — {}", band.describe(instances));
         }
     }

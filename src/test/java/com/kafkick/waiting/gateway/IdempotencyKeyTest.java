@@ -16,12 +16,12 @@ import org.junit.jupiter.api.Test;
  */
 // **뒷단은 UUID 만 받는다.** 그래서 게이트웨이가 값을 바꾸지 않는다 — 클라이언트가
 // 준 UUID 를 그대로 넘기고, 도용 방어는 뒷단이 회원과 키의 쌍으로 저장해서 한다.
-// 서명해서 덮던 앞 판은 형식이 안 맞아 발급 경로가 통째로 거절됐다 (CY-830).
+// 서명해서 덮던 앞 버전은 형식이 안 맞아 발급 경로가 통째로 거절됐다 (CY-830).
 class IdempotencyKeyTest {
 
     private final IdempotencyKey keys = IdempotencyKey.passThrough();
 
-    /** 뒷단 계약이 v4 다. 판 자리가 4, 변종 자리가 8~b 여야 한다. */
+    /** 뒷단 계약이 v4 다. 버전 자리가 4, 변종 자리가 8~b 여야 한다. */
     private static final String CLIENT = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
 
     /** 클라이언트가 준 값을 그대로 넘긴다. 시도를 가르는 것은 클라이언트다 (C-11). */
@@ -88,15 +88,15 @@ class IdempotencyKeyTest {
     }
 
     /**
-     * 내는 값은 늘 UUID <b>v4</b> 다. 뒷단이 그 판만 받는다 (CY-830).
+     * 내는 값은 늘 UUID <b>v4</b> 다. 뒷단이 그 회차만 받는다 (CY-830).
      */
     @Test
     @DisplayName("늘_UUID_v4_를_낸다")
     void 늘_UUID_v4_를_낸다() {
         // 떨어진 자리가 v3 이면 뒷단이 거절한다. 모양만 보는 단언은 그것을
-        // 못 잡는다 — 판 자리를 직접 읽는다.
+        // 못 잡는다 — 버전 자리를 직접 읽는다.
         assertThat(UUID.fromString(keys.of("c1", "m1", null)).version())
-                .as("떨어진 키의 판").isEqualTo(4);
+                .as("떨어진 키의 버전").isEqualTo(4);
         assertThat(UUID.fromString(keys.of("c1", "m1", null)).variant())
                 .as("RFC 4122 변종").isEqualTo(2);
 

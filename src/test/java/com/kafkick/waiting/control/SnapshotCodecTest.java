@@ -42,7 +42,7 @@ class SnapshotCodecTest {
 
         assertThat(s.meta().globalCredit()).isEqualTo(1000);
         assertThat(s.meta().gatewayCount()).isEqualTo(3);
-        // 배수는 판 전체를 보고 나온 값 하나라 전역 항목에 실린다.
+        // 배수는 스냅샷 전체를 보고 나온 값 하나라 전역 항목에 실린다.
         assertThat(s.meta().pollScale()).isEqualTo(2.5);
         assertThat(s.publishedAt()).isEqualTo(publishedAtOf);
         // **레코드 전체를 본다.** 두 필드만 보면 credit·stock 이 조용히
@@ -62,7 +62,7 @@ class SnapshotCodecTest {
                 // **값이 쿠폰 모양인 예약 필드**여야 가드를 가른다. 값이
                 // 안 읽히면 어차피 버려져서 가드를 지워도 통과한다.
                 "#기본값", "ADAPTIVE:IDLE:0:500:0",
-                "#뒷판이_추가한_필드", "무엇이든",
+                "#뒷버전이_추가한_필드", "무엇이든",
                 "c1", "ADAPTIVE:IDLE:0:500:0"));
 
         assertThat(s.coupons()).containsOnlyKeys("c1");

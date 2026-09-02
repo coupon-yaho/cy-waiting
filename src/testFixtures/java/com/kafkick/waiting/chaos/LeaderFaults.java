@@ -17,7 +17,7 @@ import java.util.Optional;
 public final class LeaderFaults {
 
     /**
-     * 리스가 만료되고 죽은 리더가 그 자리를 잡는다. 한 판이라 앱이 못 끼어든다.
+     * 리스가 만료되고 죽은 리더가 그 자리를 잡는다. 한 회차가라 앱이 못 끼어든다.
      */
     // **NX 로 잡는다.** 통째로 덮으면 살아 있는 남의 락이 주인을 바꾸는데,
     // 실제 획득 스크립트는 그러지 않는다. 그 상태에서는 방금 확인에 성공한
@@ -38,7 +38,7 @@ public final class LeaderFaults {
     /**
      * 자기 락일 때만 지운다. GET 과 DEL 사이에 소유자가 바뀌면 남의 락을 지운다.
      */
-    // 값의 형식은 `<판 번호>|<ownerId>` 다. 통짜로 비교하면 지금 형식으로 잡은
+    // 값의 형식은 `<펜스 번호>|<ownerId>` 다. 통짜로 비교하면 지금 형식으로 잡은
     // 락을 자기 것으로 못 알아보고 안 지운 채 나간다 — 프로덕션 스크립트가
     // 구분자를 파싱하는 것과 같은 이유다.
     private static final String RELEASE = """
@@ -92,7 +92,7 @@ public final class LeaderFaults {
     }
 
     /**
-     * <b>죽은 리더가 락을 넘겨받는다 — 만료와 획득을 한 판에 한다.</b>
+     * <b>죽은 리더가 락을 넘겨받는다 — 만료와 획득을 한 회차에 한다.</b>
      *
      * @return 넘겨받았으면 {@code true}
      */
@@ -147,7 +147,7 @@ public final class LeaderFaults {
         redis.sync().pexpire(RedisKeys.LEADER, 남길_시간.toMillis());
     }
 
-    /** 지금 소유자. <b>판 번호가 붙어 있으면 떼고 준다</b> — 값 형식은 프로덕션 몫이다. */
+    /** 지금 소유자. <b>펜스 번호가 붙어 있으면 떼고 준다</b> — 값 형식은 프로덕션 몫이다. */
     public String 현재_소유자() {
         String value = redis.sync().get(RedisKeys.LEADER);
         if (value == null) {

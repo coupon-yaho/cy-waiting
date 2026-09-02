@@ -105,7 +105,7 @@ class ControlPlaneLifecycleTest {
 
         assertThat(연장).hasValue(멈추기_직전);
         // **배분도 같이 멎어야 한다.** 락은 놓았는데 루프가 계속 돌면 다음
-        // 리더와 같은 판을 겹쳐 쓴다.
+        // 리더와 같은 회차를 겹쳐 쓴다.
         assertThat(배분).hasValue(배분_직전);
     }
 

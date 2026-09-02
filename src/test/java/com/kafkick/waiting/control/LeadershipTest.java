@@ -212,8 +212,8 @@ class LeadershipTest {
     }
 
     @Test
-    @DisplayName("응답이_멈추면_한_판_안에_끝난다")
-    void 응답이_멈추면_한_판_안에_끝난다() {
+    @DisplayName("응답이_멈추면_한_회차_안에_끝난다")
+    void 응답이_멈추면_한_회차_안에_끝난다() {
         // 멈춤은 오류가 아니라서 오류 처리에 안 걸린다. 이게 없으면 루프가 조용히
         // 멎고, 그 사이 리스가 만료돼 다른 노드가 잡는데도 이 노드는 참으로 얼어붙는다.
         Leadership leadership = leadership(Mono::never);
@@ -339,22 +339,22 @@ class LeadershipTest {
     }
 
     @Test
-    @DisplayName("늦게_도착한_옛_판이_확인_시각을_되돌리지_않는다")
-    void 늦게_도착한_옛_판이_확인_시각을_되돌리지_않는다() {
-        // **두 판이 겹쳐야 이걸 잰다.** 한 판씩 순서대로 돌리면 옛 판이라는 것이
+    @DisplayName("늦게_도착한_옛_임기가_확인_시각을_되돌리지_않는다")
+    void 늦게_도착한_옛_임기가_확인_시각을_되돌리지_않는다() {
+        // **두 임기가 겹쳐야 이걸 잰다.** 한 임기씩 순서대로 돌리면 옛 임기가라는 것이
         // 성립하지 않아, 되돌려도 안 죽는 시험이 된다.
         Duration 긴_리스 = Duration.ofMinutes(10);
         Duration 절반 = Duration.ofMinutes(5);
-        Sinks.One<LeaderLock> 옛_판 = Sinks.one();
+        Sinks.One<LeaderLock> 옛_임기 = Sinks.one();
         AtomicInteger 호출 = new AtomicInteger();
         Leadership leadership = Leadership.of("node-1", 긴_리스, Duration.ofMinutes(2),
-                () -> 호출.incrementAndGet() == 1 ? 옛_판.asMono() : 내_락(),
+                () -> 호출.incrementAndGet() == 1 ? 옛_임기.asMono() : 내_락(),
                 Mono::empty, ticker::get);
 
         leadership.renew().subscribe();
         시간을_흘린다(절반);
         leadership.renew().block(BLOCK);
-        옛_판.tryEmitValue(LeaderLock.mine("node-1", 긴_리스.toMillis(), 1));
+        옛_임기.tryEmitValue(LeaderLock.mine("node-1", 긴_리스.toMillis(), 1));
 
         시간을_흘린다(절반);
 
@@ -445,8 +445,8 @@ class LeadershipTest {
     }
 
     @Test
-    @DisplayName("성공한_판은_실패로_안_찍힌다")
-    void 성공한_판은_실패로_안_찍힌다() {
+    @DisplayName("성공한_회차는_실패로_안_찍힌다")
+    void 성공한_회차는_실패로_안_찍힌다() {
         // 오류를 전부 삼켜 루프를 살리는 구조라, 성공 경로에 버그가 생겨도
         // "리더 확인 실패" 한 줄로 조용히 지나간다. 그 한 줄이 유일한 구별점이다.
         Leadership leadership = leadership(LeadershipTest::내_락);
@@ -460,7 +460,7 @@ class LeadershipTest {
     @Test
     @DisplayName("연장_실패_경고는_이어지는_동안_한_번만_찍는다")
     void 연장_실패_경고는_이어지는_동안_한_번만_찍는다() {
-        // 연장은 리스의 1/4 마다 돈다. 매 판 찍으면 5분 단절에 노드마다 수백 줄이고,
+        // 연장은 리스의 1/4 마다 돈다. 매 회차 찍으면 5분 단절에 노드마다 수백 줄이고,
         // 여러 노드가 동시에 겪는 일이라 그만큼 곱해진다.
         Leadership leadership = leadership(() -> Mono.error(new IllegalStateException("끊겼다")));
 
@@ -474,7 +474,7 @@ class LeadershipTest {
     @Test
     @DisplayName("실패가_걷히면_복구를_찍고_다시_경고할_수_있다")
     void 실패가_걷히면_복구를_찍고_다시_경고할_수_있다() {
-        // **두 판 이상 실패해야 판 수를 잴 수 있다.** 한 판이면 어떤 값을 찍어도
+        // **두 임기 이상 실패해야 회차 수를 잴 수 있다.** 한 회차가면 어떤 값을 찍어도
         // 1 이라 세는 것과 안 세는 것이 같아 보인다. 그리고 **두 번 회복해야**
         // 세고 나서 비우는지를 잰다. 안 비우면 다음 번에 누적치를 찍는다.
         AtomicInteger 호출 = new AtomicInteger();
@@ -491,7 +491,7 @@ class LeadershipTest {
         시간을_흘린다(Duration.ofSeconds(1));
         leadership.renew().block(BLOCK);
 
-        // 지속 시간만 남기면 한 판이 실패한 것인지 수백 판인지 사후에 못 가린다.
+        // 지속 시간만 남기면 한 회차가 실패한 것인지 수백 회차인지 사후에 못 가린다.
         assertThat(로그_인자(Level.INFO, "리더 확인 복구")).hasSize(2)
                 .satisfies(목록 -> {
                     assertThat(목록.get(0)).containsExactly(3L, 2, "node-1");
@@ -538,7 +538,7 @@ class LeadershipTest {
     @Test
     @DisplayName("종료_뒤에는_레디스를_더_치지_않는다")
     void 종료_뒤에는_레디스를_더_치지_않는다() {
-        // 종료 검사를 빼도 뒤처리가 정합성은 살린다. 대신 매 판 레디스를 치고
+        // 종료 검사를 빼도 뒤처리가 정합성은 살린다. 대신 매 회차 레디스를 치고
         // 경고가 폭포가 된다 — 죽은 노드가 남기는 소음이 진짜 장애를 가린다.
         AtomicInteger 획득 = new AtomicInteger();
         Leadership leadership = leadership(() -> {
@@ -569,7 +569,7 @@ class LeadershipTest {
     @Test
     @DisplayName("리더였던_적_없으면_남이_쥐어도_잃었다고_안_찍는다")
     void 리더였던_적_없으면_남이_쥐어도_잃었다고_안_찍는다() {
-        // 팔로워는 매 판 이 응답을 받는다. 무조건 찍으면 노드마다 분당 수백 줄이다.
+        // 팔로워는 매 회차 이 응답을 받는다. 무조건 찍으면 노드마다 분당 수백 줄이다.
         Leadership leadership = leadership(() -> Mono.just(LeaderLock.heldBy("node-2", 1_500)));
 
         leadership.renew().block(BLOCK);
@@ -582,7 +582,7 @@ class LeadershipTest {
     @Test
     @DisplayName("종료_뒤_남이_쥐었다는_응답이_종료를_지우지_않는다")
     void 종료_뒤_남이_쥐었다는_응답이_종료를_지우지_않는다() {
-        // 종료와 겹친 판이 "남이 쥐었다" 로 돌아올 때 상태를 통째로 덮으면
+        // 종료와 겹친 임기가 "남이 쥐었다" 로 돌아올 때 상태를 통째로 덮으면
         // **종료 표시가 지워진다.** 그 뒤 연장이 죽는 노드를 다시 리더로 만든다.
         AtomicReference<Leadership> 자기 = new AtomicReference<>();
         AtomicInteger 호출 = new AtomicInteger();
@@ -654,11 +654,11 @@ class LeadershipTest {
     }
 
     @Test
-    @DisplayName("한_판이_리스의_오분의_일을_넘으면_안_뜬다")
-    void 한_판이_리스의_오분의_일을_넘으면_안_뜬다() {
+    @DisplayName("한_회차가_리스의_오분의_일을_넘으면_안_뜬다")
+    void 한_회차가_리스의_오분의_일을_넘으면_안_뜬다() {
         // 명령 타임아웃이 리스보다 길면 성공해도 도착할 때 이미 만료다. 아무도
         // 리더가 못 되고, 예외도 로그도 안 난다.
-        // 회복하는 판까지 넣으면 시도는 다섯 번 들어간다. 넷으로 세면 계획서가
+        // 회복하는 회차까지 넣으면 시도는 다섯 번 들어간다. 넷으로 세면 계획서가
         // 깨진다고 못박은 값을 생성자가 통과시킨다.
         Duration 딱_맞음 = LEASE.dividedBy(5);
         assertThat(Leadership.of("node-1", LEASE, 딱_맞음, LeadershipTest::내_락, Mono::empty)
@@ -678,14 +678,14 @@ class LeadershipTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
     /**
-     * <b>판 번호는 리더일 때만 나간다</b> (CY-766).
+     * <b>펜스 번호는 리더일 때만 나간다</b> (CY-766).
      *
      * <p>되돌릴 수 없는 쓰기가 이 번호를 들고 나간다. 리더가 아닌데 옛 번호를
-     * 그대로 내주면 강등된 노드가 자기가 쥐었던 판인 척 줄을 지운다.
+     * 그대로 내주면 강등된 노드가 자기가 쥐었던 임기인 척 줄을 지운다.
      */
     @Test
-    @DisplayName("리더가_아니면_판_번호가_0이다")
-    void 리더가_아니면_판_번호가_0이다() {
+    @DisplayName("리더가_아니면_펜스_번호가_0이다")
+    void 리더가_아니면_펜스_번호가_0이다() {
         AtomicBoolean 내것 = new AtomicBoolean(true);
         Leadership leadership = Leadership.of("node-1", LEASE, ATTEMPT,
                 () -> Mono.just(내것.get()
@@ -704,15 +704,15 @@ class LeadershipTest {
     }
 
     /**
-     * <b>리스가 지나면 판 번호를 안 내준다</b> (CY-766).
+     * <b>리스가 지나면 펜스 번호를 안 내준다</b> (CY-766).
      *
      * <p>울타리가 막으려던 주 시나리오다 — 갱신 루프가 멎거나 STW 로 리스가
      * 지났는데 아직 강등 신호를 못 받은 노드. 그때 옛 번호를 그대로 내주면
      * 그 노드가 새 리더의 줄을 지운다.
      */
     @Test
-    @DisplayName("리스가_지나면_판_번호를_안_내준다")
-    void 리스가_지나면_판_번호를_안_내준다() {
+    @DisplayName("리스가_지나면_펜스_번호를_안_내준다")
+    void 리스가_지나면_펜스_번호를_안_내준다() {
         Leadership leadership = 리더가_된다(Mono::never);
         assertThat(leadership.fence()).as("전제 — 잡았을 때는 번호가 있다").isPositive();
 
@@ -723,18 +723,18 @@ class LeadershipTest {
     }
 
     /**
-     * <b>늦게 온 옛 판의 응답이 번호를 되돌리지 않는다</b> (CY-766).
+     * <b>늦게 온 옛 임기의 응답이 번호를 되돌리지 않는다</b> (CY-766).
      *
      * <p>되돌아가면 멀쩡한 리더가 비가역 쓰기를 옛 번호로 내보낸다. 확인 시각을
      * 안 미는 것과 같은 이유인데, 번호만 무방비였다.
      */
     @Test
-    @DisplayName("늦게_온_응답이_판_번호를_안_되돌린다")
-    void 늦게_온_응답이_판_번호를_안_되돌린다() {
+    @DisplayName("늦게_온_응답이_펜스_번호를_안_되돌린다")
+    void 늦게_온_응답이_펜스_번호를_안_되돌린다() {
         AtomicInteger 호출 = new AtomicInteger();
         Leadership leadership = leadership(() -> switch (호출.incrementAndGet()) {
             case 1 -> Mono.just(LeaderLock.mine("node-1", LEASE.toMillis(), 500));
-            // 겹친 판 중 늦게 도착한 옛 판이 작은 번호를 들고 온다.
+            // 겹친 임기 중 늦게 도착한 옛 임기가 작은 번호를 들고 온다.
             default -> Mono.just(LeaderLock.mine("node-1", LEASE.toMillis(), 100));
         });
 
@@ -746,8 +746,8 @@ class LeadershipTest {
 
     /** 잡기 전에는 번호가 없다. 0 이면 울타리가 전부 거절한다 — 안전한 쪽이다. */
     @Test
-    @DisplayName("잡기_전에는_판_번호가_0이다")
-    void 잡기_전에는_판_번호가_0이다() {
+    @DisplayName("잡기_전에는_펜스_번호가_0이다")
+    void 잡기_전에는_펜스_번호가_0이다() {
         Leadership leadership = Leadership.of("node-1", LEASE, ATTEMPT,
                 () -> Mono.just(LeaderLock.mine("node-1", LEASE.toMillis(), 5)),
                 () -> Mono.empty());

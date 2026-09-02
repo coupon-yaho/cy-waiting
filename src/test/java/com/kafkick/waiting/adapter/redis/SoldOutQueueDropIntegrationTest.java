@@ -49,7 +49,7 @@ class SoldOutQueueDropIntegrationTest extends RedisContainerSupport {
     private ReactiveStringRedisTemplate redis;
 
     /**
-     * <b>실제로 배선된 판을 돌린다.</b> 손으로 조립하면 삭제를 스텁으로 되돌린
+     * <b>실제로 배선된 회차를 돌린다.</b> 손으로 조립하면 삭제를 스텁으로 되돌린
      * 변경이 그대로 통과한다 — 이 티켓이 이은 바로 그 자리가 시험 밖에 남는다.
      */
     @Autowired
@@ -80,8 +80,8 @@ class SoldOutQueueDropIntegrationTest extends RedisContainerSupport {
         return Boolean.TRUE.equals(redis.hasKey(RedisKeys.queue(couponId, 1, 0)).block(WAIT));
     }
 
-    /** 유예 틱 1 짜리로 판을 만든다. 실제 유예는 폴링 상한보다 길어 시험에 못 쓴다. */
-    private AllocationRound 판(long fence) {
+    /** 유예 틱 1 짜리로 회차를 만든다. 실제 유예는 폴링 상한보다 길어 시험에 못 쓴다. */
+    private AllocationRound 회차(long fence) {
         return AllocationRound.of(
                 () -> true,
                 () -> Mono.just(new TimedDemands(List.of(
@@ -109,11 +109,11 @@ class SoldOutQueueDropIntegrationTest extends RedisContainerSupport {
      * <p>실제 빈을 돌린다. 삭제를 스텁으로 되돌리면 여기가 빨개진다.
      */
     @Test
-    @DisplayName("배선된_판이_매진_줄을_지운다")
-    void 배선된_판이_매진_줄을_지운다() {
+    @DisplayName("배선된_회차가_매진_줄을_지운다")
+    void 배선된_회차가_매진_줄을_지운다() {
         redis.opsForSet().add(RedisKeys.ACTIVE_COUPONS, SOLD_OUT).block(WAIT);
         // **락을 비우고 잡는다.** 리더 시험들이 같은 키를 남기므로, 안 비우면
-        // 이 판이 리더가 못 되어 정리가 아예 안 돈다.
+        // 이 회차가 리더가 못 되어 정리가 아예 안 돈다.
         redis.delete(RedisKeys.LEADER).block(WAIT);
         leadership.renew().block(WAIT);
         assertThat(leadership.isLeader()).as("전제 — 이 노드가 리더다").isTrue();
@@ -140,7 +140,7 @@ class SoldOutQueueDropIntegrationTest extends RedisContainerSupport {
     @Test
     @DisplayName("매진된_줄은_유예_뒤_레디스에서_사라진다")
     void 매진된_줄은_유예_뒤_레디스에서_사라진다() {
-        AllocationRound round = 판(FENCE);
+        AllocationRound round = 회차(FENCE);
 
         round.run().block(WAIT);
         assertThat(줄이_있나(SOLD_OUT)).as("유예 안에서는 안 지운다").isTrue();
@@ -152,13 +152,13 @@ class SoldOutQueueDropIntegrationTest extends RedisContainerSupport {
     }
 
     /**
-     * <b>리더가 아니면 아무것도 안 지운다.</b> 판 번호 0 은 강등된 노드가
+     * <b>리더가 아니면 아무것도 안 지운다.</b> 펜스 번호 0 은 강등된 노드가
      * 들고 나가는 값이다 — 울타리가 전부 거절해야 한다.
      */
     @Test
-    @DisplayName("판_번호가_없으면_안_지운다")
-    void 판_번호가_없으면_안_지운다() {
-        AllocationRound round = 판(0);
+    @DisplayName("펜스_번호가_없으면_안_지운다")
+    void 펜스_번호가_없으면_안_지운다() {
+        AllocationRound round = 회차(0);
 
         round.run().block(WAIT);
         round.run().block(WAIT);

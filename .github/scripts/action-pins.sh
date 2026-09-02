@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 서드파티 액션이 커밋 SHA 로 핀됐고, 그 SHA 가 락파일이 적은 판과 맞는지 본다.
+# 서드파티 액션이 커밋 SHA 로 핀됐고, 그 SHA 가 락파일이 적은 버전과 맞는지 본다.
 #
 # **모든 `uses:` 를 열거해서 규격에 안 맞는 것을 잡는다.** 규격에 맞는 것만
 # 정규식으로 찾으면 그물이 거꾸로 걸린다 — `@v1`, `@main`, 따옴표를 씌운 핀,
@@ -19,7 +19,7 @@
 # 곧바로 가짜 저장소가 통과했다.
 #
 # 그래서 **원격에 묻는 일을 검사에서 떼어 `--refresh` 로 옮겼다.** 결과는
-# 락파일에 커밋되고, 그 파일의 diff 가 곧 "이 SHA 는 이 판이다" 라는 주장이 되어
+# 락파일에 커밋되고, 그 파일의 diff 가 곧 "이 SHA 는 이 버전이다" 라는 주장이 되어
 # 사람이 리뷰한다. `go.sum` 이 하는 일과 같다 — 처음 볼 때 확인하고, 그 뒤로는
 # 바뀌었는지만 본다.
 set -uo pipefail
@@ -29,7 +29,7 @@ cd "$root" || exit 1
 
 readonly LOCK=.github/action-pins.lock
 
-# 우리 조직 액션은 **판 주석·락파일 규칙만** 면제한다. 판을 우리가 올리므로
+# 우리 조직 액션은 **버전 주석·락파일 규칙만** 면제한다. 버전을 우리가 올리므로
 # 주석이 뒤처지는 것은 사고가 아니다. 핀 자체는 그대로 요구한다 — 그 잡에
 # Atlassian 토큰이 붙는데, `@v1` 로 바꿔도 아무 말 안 하면 제외가 구멍이 된다.
 readonly OURS='coupon-yaho/'
@@ -136,7 +136,7 @@ refs=$(list_uses) || exit 1
 [[ -z "$refs" ]] && exit 0
 
 
-# ── 판을 원격에 물어 락파일을 다시 쓴다 ──────────────────────────────────────
+# ── 버전을 원격에 물어 락파일을 다시 쓴다 ──────────────────────────────────────
 # 검사가 아니라 갱신이다. 결과는 커밋되어 사람이 diff 로 본다.
 if [[ "${1:-}" == "--refresh" ]]; then
     fail=0
@@ -237,14 +237,14 @@ while IFS=$'\t' read -r file line ref version; do
     [[ "$path" == "$OURS"* ]] && continue
 
     if [[ -z "$version" ]]; then
-        echo "::error file=$file,line=$line::$path — 핀 옆에 판 주석이 없다." \
+        echo "::error file=$file,line=$line::$path — 핀 옆에 버전 주석이 없다." \
              "없으면 무엇이 핀됐는지 사람도 Dependabot 도 모른다"
         fail=1
         continue
     fi
 
     if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        echo "::error file=$file,line=$line::$path — 주석이 정확한 판이 아니다: '$version'." \
+        echo "::error file=$file,line=$line::$path — 주석이 정확한 회차가 아니다: '$version'." \
              "메이저만 적으면 Dependabot 이 그 메이저에 묶는다"
         fail=1
         continue

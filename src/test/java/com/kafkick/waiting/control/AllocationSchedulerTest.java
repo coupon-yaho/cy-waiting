@@ -19,7 +19,7 @@ import reactor.core.scheduler.Scheduler;
 import reactor.test.scheduler.VirtualTimeScheduler;
 
 /**
- * 배분은 리더 한 대만 돈다. 이 루프가 그 판을 만든다.
+ * 배분은 리더 한 대만 돈다. 이 루프가 그 회차를 만든다.
  *
  * <p>주기를 고정 간격으로 잡으면 레디스가 느려질 때 틱이 큐에 쌓였다가 회복하는
  * 순간 한꺼번에 터진다. 크레딧이 몰려 나가면 뒷단이 그 순간 다시 넘어진다.
@@ -37,8 +37,8 @@ class AllocationSchedulerTest {
         return scheduler(timer, () -> Mono.fromRunnable(배분::incrementAndGet));
     }
 
-    private AllocationScheduler scheduler(Scheduler timer, Supplier<Mono<Void>> 한_판) {
-        return AllocationScheduler.of(TICK, FIRST, 리더::get, 한_판, 잰_지연::add, timer);
+    private AllocationScheduler scheduler(Scheduler timer, Supplier<Mono<Void>> 한_회차) {
+        return AllocationScheduler.of(TICK, FIRST, 리더::get, 한_회차, 잰_지연::add, timer);
     }
 
     @Test
@@ -52,7 +52,7 @@ class AllocationSchedulerTest {
         timer.advanceTimeBy(FIRST.plus(TICK.multipliedBy(5)));
         assertThat(배분).hasValue(0);
 
-        // **루프가 살아 있어야 한다.** 리더가 아닌 판이 루프를 죽이면, 리더가
+        // **루프가 살아 있어야 한다.** 리더가 아닌 회차가 루프를 죽이면, 리더가
         // 된 뒤에도 배분이 영영 안 돈다 — 그 노드는 조용히 아무것도 안 한다.
         리더.set(true);
         timer.advanceTimeBy(TICK.multipliedBy(2));
@@ -62,8 +62,8 @@ class AllocationSchedulerTest {
     }
 
     @Test
-    @DisplayName("첫_판을_미룬다")
-    void 첫_판을_미룬다() {
+    @DisplayName("첫_회차를_미룬다")
+    void 첫_회차를_미룬다() {
         // 기동 직후에는 가용량 보고가 아직 안 모여 있다. 그때 배분하면 하한으로
         // 나가서, 아무 문제 없는 쿠폰까지 줄을 세운다.
         VirtualTimeScheduler timer = VirtualTimeScheduler.create();
@@ -79,16 +79,16 @@ class AllocationSchedulerTest {
     }
 
     @Test
-    @DisplayName("한_판이_끝나야_다음_지연이_시작된다")
-    void 한_판이_끝나야_다음_지연이_시작된다() {
+    @DisplayName("한_회차가_끝나야_다음_지연이_시작된다")
+    void 한_회차가_끝나야_다음_지연이_시작된다() {
         // 고정 간격이면 느린 구간에 틱이 쌓였다가 회복하는 순간 한꺼번에 터진다.
-        // 한 판이 0.6틱 걸리면 완료 후 지연은 1.6틱마다 도는데, 고정 간격은
+        // 한 회차가 0.6틱 걸리면 완료 후 지연은 1.6틱마다 도는데, 고정 간격은
         // 그대로 1틱마다 돈다 — 3틱을 흘리면 2번과 3번으로 갈린다.
         VirtualTimeScheduler timer = VirtualTimeScheduler.create();
-        Duration 한_판_길이 = TICK.multipliedBy(6).dividedBy(10);
+        Duration 한_회차_길이 = TICK.multipliedBy(6).dividedBy(10);
         AllocationScheduler scheduler = scheduler(timer, () -> Mono.defer(() -> {
             배분.incrementAndGet();
-            return Mono.<Void>empty().delaySubscription(한_판_길이, timer);
+            return Mono.<Void>empty().delaySubscription(한_회차_길이, timer);
         }));
         scheduler.start();
 
@@ -99,8 +99,8 @@ class AllocationSchedulerTest {
     }
 
     @Test
-    @DisplayName("한_판이_터져도_루프는_돈다")
-    void 한_판이_터져도_루프는_돈다() {
+    @DisplayName("한_회차가_터져도_루프는_돈다")
+    void 한_회차가_터져도_루프는_돈다() {
         // 여기서 멎으면 배분이 영영 안 돈다. 크레딧이 갱신되지 않으면 전 노드가
         // 낡은 값으로 판정하다 결국 fail-open 한다.
         VirtualTimeScheduler timer = VirtualTimeScheduler.create();
@@ -117,8 +117,8 @@ class AllocationSchedulerTest {
     }
 
     @Test
-    @DisplayName("한_판이_멈춰도_다음_판이_돈다")
-    void 한_판이_멈춰도_다음_판이_돈다() {
+    @DisplayName("한_회차가_멈춰도_다음_회차가_돈다")
+    void 한_회차가_멈춰도_다음_회차가_돈다() {
         // 무응답은 오류가 아니라서 오류 처리에 안 걸린다. 상한이 없으면 루프가
         // 조용히 멎고, 멎었다는 신호조차 안 나온다.
         VirtualTimeScheduler timer = VirtualTimeScheduler.create();
@@ -128,7 +128,7 @@ class AllocationSchedulerTest {
                 : Mono.fromRunnable(배분::incrementAndGet));
         scheduler.start();
 
-        // 첫 판이 상한에서 잘리고, 그 뒤로 매 틱 한 판씩 돈다.
+        // 첫 회차가 상한에서 잘리고, 그 뒤로 매 틱 한 회차씩 돈다.
         timer.advanceTimeBy(FIRST.plus(TICK.multipliedBy(4)));
 
         assertThat(배분).hasValue(3);
@@ -136,8 +136,8 @@ class AllocationSchedulerTest {
     }
 
     @Test
-    @DisplayName("멈추면_다음_판이_안_돈다")
-    void 멈추면_다음_판이_안_돈다() {
+    @DisplayName("멈추면_다음_회차가_안_돈다")
+    void 멈추면_다음_회차가_안_돈다() {
         VirtualTimeScheduler timer = VirtualTimeScheduler.create();
         AllocationScheduler scheduler = scheduler(timer);
         scheduler.start();
@@ -151,28 +151,28 @@ class AllocationSchedulerTest {
     }
 
     @Test
-    @DisplayName("판마다_지연을_잰다")
-    void 판마다_지연을_잰다() {
+    @DisplayName("회차마다_지연을_잰다")
+    void 회차마다_지연을_잰다() {
         // 이 값이 임계에 붙으면 스케줄러를 따로 떼야 한다는 신호다. 안 재면
         // 떼야 할 시점을 사고로 알게 된다.
         // **값을 정확히 잰다.** 0 보다 크다는 것만 보면 두 시각을 더해도 통과한다.
         VirtualTimeScheduler timer = VirtualTimeScheduler.create();
-        Duration 한_판_길이 = Duration.ofMillis(300);
+        Duration 한_회차_길이 = Duration.ofMillis(300);
         AllocationScheduler scheduler = scheduler(timer,
-                () -> Mono.<Void>empty().delaySubscription(한_판_길이, timer));
+                () -> Mono.<Void>empty().delaySubscription(한_회차_길이, timer));
         scheduler.start();
 
         timer.advanceTimeBy(FIRST.plus(TICK));
 
         assertThat(잰_지연).hasSize(1)
-                .allSatisfy(잰 -> assertThat(잰).isEqualTo(한_판_길이.toNanos()));
+                .allSatisfy(잰 -> assertThat(잰).isEqualTo(한_회차_길이.toNanos()));
         scheduler.stop(() -> { });
     }
 
     @Test
     @DisplayName("실패가_이어져도_경고는_한_번만_찍는다")
     void 실패가_이어져도_경고는_한_번만_찍는다() {
-        // 초당 한 판이라 매번 찍으면 몇 분짜리 단절에 수백 줄이고, 정작 조사가
+        // 초당 한 회차가라 매번 찍으면 몇 분짜리 단절에 수백 줄이고, 정작 조사가
         // 필요한 순간에 원인이 묻힌다.
         ListAppender<ILoggingEvent> 로그 = new ListAppender<>();
         로그.start();
@@ -188,7 +188,7 @@ class AllocationSchedulerTest {
         timer.advanceTimeBy(FIRST.plus(TICK.multipliedBy(5)));
 
         assertThat(로그.list).filteredOn(e -> e.getMessage().contains("배분 실패")).hasSize(1);
-        // 지속 시간만 남기면 한 판이 실패한 것인지 수백 판인지 못 가린다.
+        // 지속 시간만 남기면 한 회차가 실패한 것인지 수백 회차인지 못 가린다.
         assertThat(로그.list).filteredOn(e -> e.getMessage().contains("배분 복귀"))
                 .singleElement()
                 .satisfies(e -> {
@@ -228,8 +228,8 @@ class AllocationSchedulerTest {
     }
 
     @Test
-    @DisplayName("두_번_시작해도_판은_하나만_돈다")
-    void 두_번_시작해도_판은_하나만_돈다() {
+    @DisplayName("두_번_시작해도_회차는_하나만_돈다")
+    void 두_번_시작해도_회차는_하나만_돈다() {
         VirtualTimeScheduler timer = VirtualTimeScheduler.create();
         AllocationScheduler scheduler = scheduler(timer);
         scheduler.start();

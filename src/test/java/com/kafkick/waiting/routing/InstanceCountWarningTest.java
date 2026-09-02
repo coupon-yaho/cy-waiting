@@ -138,7 +138,7 @@ class InstanceCountWarningTest {
                 .anyMatch(m -> m.contains("가정 안으로 돌아왔다"));
     }
 
-    /** 첫 판은 3 대, 다음 판은 15 대. 대수가 바뀌는 것이 실제 배포의 모양이다. */
+    /** 첫 회차는 3 대, 다음 회차는 15 대. 대수가 바뀌는 것이 실제 배포의 모양이다. */
     private static ServiceInstanceListSupplier 번갈아_주는_목록() {
         List<Integer> 대수 = new ArrayList<>(List.of(3, 15));
         return new ServiceInstanceListSupplier() {

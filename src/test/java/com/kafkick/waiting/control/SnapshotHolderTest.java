@@ -151,7 +151,7 @@ class SnapshotHolderTest {
     @DisplayName("아직_안_돈_것과_돌다_멎은_것은_갈라진다")
     void 아직_안_돈_것과_돌다_멎은_것은_갈라진다() {
         // 둘 다 tickAge 로는 낡음이다. **그런데 대응이 반대다** — 아직 안 돈
-        // 것을 재기동 신호로 쓰면 첫 판을 못 돈 파드가 죽고, 다시 떠도 또 첫 판
+        // 것을 재기동 신호로 쓰면 첫 회차를 못 돈 파드가 죽고, 다시 떠도 또 첫 회차
         // 전이라 또 죽는다. 크래시 루프다. 그래서 갈라 볼 수단이 있어야 한다.
         MutableClock clock = MutableClock.at(지금);
         SnapshotHolder holder = SnapshotHolder.of(FETCH_STALE, DATA_STALE, clock);

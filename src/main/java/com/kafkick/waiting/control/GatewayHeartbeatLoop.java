@@ -31,7 +31,7 @@ public final class GatewayHeartbeatLoop implements SmartLifecycle {
     private final IntConsumer observed;
 
     /**
-     * 한 판을 놓쳤을 때 부른다. <b>상한 바깥에 둔다</b> — 상한이 걸리면
+     * 한 회차를 놓쳤을 때 부른다. <b>상한 바깥에 둔다</b> — 상한이 걸리면
      * 리액터는 상류를 취소하지 오류를 흘리지 않아, 안쪽에 두면 무응답
      * 구간을 통째로 못 본다. 레디스 장애에서 더 흔한 쪽이 무응답이다.
      */
@@ -52,7 +52,7 @@ public final class GatewayHeartbeatLoop implements SmartLifecycle {
     /**
      * 하트비트를 못 쓰기 시작한 시각. 성공하면 지운다.
      *
-     * <p><b>매 판 찍으면 로그가 폭발한다.</b> 틱 2초·5분 단절·30대면 4,500줄이다.
+     * <p><b>매 회차 찍으면 로그가 폭발한다.</b> 틱 2초·5분 단절·30대면 4,500줄이다.
      * 진입에 한 번, 해제에 지속 시간과 함께 한 번만 남긴다.
      */
     private final AtomicReference<Instant> failingSince = new AtomicReference<>();
@@ -106,7 +106,7 @@ public final class GatewayHeartbeatLoop implements SmartLifecycle {
 
     private Flux<Void> loop(Scheduler scheduler) {
         return Mono.defer(beat)
-                // **타임아웃이 없으면 루프가 조용히 멎는다.** 한 판이 안 끝나면
+                // **타임아웃이 없으면 루프가 조용히 멎는다.** 한 회차가 안 끝나면
                 // 다음 지연이 시작되지 않는데, 오류가 아니라 무응답이라 아래
                 // 로그도 안 나온다. 그동안 이 노드는 하트비트를 못 쓰면서
                 // 요청은 계속 받아, 리더가 분모에서 뺀 뒤에도 통과를 만든다.
@@ -115,7 +115,7 @@ public final class GatewayHeartbeatLoop implements SmartLifecycle {
                     exitFailing();
                     observed.accept(count);
                 })
-                // **한 판이 터져도 루프는 돈다.** 여기서 멎으면 그 노드가 영영
+                // **한 회차가 터져도 루프는 돈다.** 여기서 멎으면 그 노드가 영영
                 // 분모에서 빠지고, 남은 노드가 큰 몫을 쓴다.
                 //
                 // **여기가 상한 바깥이다.** 상한이 걸리면 상류는 취소되지 오류를

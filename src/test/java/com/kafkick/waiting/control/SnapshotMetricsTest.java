@@ -160,4 +160,32 @@ class SnapshotMetricsTest {
         assertThat(meters.get("waiting.tunable.inflight.seconds").gauge().value())
                 .isEqualTo(-1);
     }
+
+    /**
+     * <b>받아 오는 것과 배분이 도는 것은 다른 고장이다.</b>
+     *
+     * <p>배분이 멎어도 재료는 계속 받아 오므로 응답은 정상으로 보인다. 그동안
+     * 줄은 안 빠진다 — 나이 하나로 합쳐 두면 그 구간이 안 보인다 (8.4.4).
+     */
+    @Test
+    @DisplayName("받아_온_나이와_틱_나이를_따로_낸다")
+    void 받아_온_나이와_틱_나이를_따로_낸다() {
+        지표를_건다();
+        스냅샷을_심는다(100);
+
+        holder.loopTicked();
+
+        assertThat(meters.get("waiting.snapshot.fetch.age").gauge().value()).isZero();
+        assertThat(meters.get("waiting.snapshot.tick.age").gauge().value()).isZero();
+    }
+
+    /** 아직 아무것도 못 받았으면 -1 이다. 0 으로 내면 "방금 받았다" 와 같아진다. */
+    @Test
+    @DisplayName("못_받았으면_나이가_음수다")
+    void 못_받았으면_나이가_음수다() {
+        지표를_건다();
+
+        assertThat(meters.get("waiting.snapshot.fetch.age").gauge().value()).isNegative();
+        assertThat(meters.get("waiting.snapshot.tick.age").gauge().value()).isNegative();
+    }
 }

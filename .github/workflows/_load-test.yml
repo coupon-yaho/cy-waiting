@@ -111,7 +111,7 @@ jobs:
           if [[ "$SCENARIO" == "open-spike" ]]; then
             export SPIKE_USERS="${SPIKE_USERS:-20000}"
             # **레디스가 얼마나 바빴는지를 같이 잰다** (10.0.2). 응답만 보면
-            # 게이트웨이가 빨리 답해도 레디스가 한계에 닿아 있는 판을 못 본다 —
+            # 게이트웨이가 빨리 답해도 레디스가 한계에 닿아 있는 것을 못 본다 —
             # Phase 10 착수를 정하는 것은 그쪽 수치다.
             test/load/redis-probe.sh redis-ops.txt &
             probe_pid=$!
@@ -209,7 +209,7 @@ jobs:
         with:
           name: load-${{ inputs.scenario }}
           # **레디스 쪽 값도 같이 남긴다.** Phase 10 착수는 응답이 아니라 이
-          # 수치가 정한다 — 나중에 다시 재려면 판이 같아야 한다.
+          # 수치가 정한다 — 나중에 다시 재려면 구성이 같아야 한다.
           path: |
             k6-summary.json
             redis-ops.txt

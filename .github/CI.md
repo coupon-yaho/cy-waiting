@@ -52,8 +52,8 @@ TypeScript 액션을 쓴다. 재시도와 형식 변환처럼 테스트가 필�
 
 ## 액션 핀
 
-서드파티 액션은 커밋 SHA 로 핀하고 옆에 정확한 판을 적는다 (`# v7.0.1`).
-`.github/action-pins.lock` 이 그 SHA 가 어느 판인지를 적어 두고,
+서드파티 액션은 커밋 SHA 로 핀하고 옆에 정확한 버전을 적는다 (`# v7.0.1`).
+`.github/action-pins.lock` 이 그 SHA 가 어느 버전인지를 적어 두고,
 `.github/scripts/action-pins.sh` 가 워크플로와 락파일이 맞는지 본다.
 
 **검사는 네트워크를 안 탄다.** 원격에 물어 판정하면 조직이 IP 허용 목록을 걸어
@@ -67,7 +67,7 @@ TypeScript 액션을 쓴다. 재시도와 형식 변환처럼 테스트가 필�
 .github/scripts/action-pins.sh --refresh   # 락파일 갱신
 ```
 
-**락파일 diff 가 곧 "이 SHA 는 이 판이다" 라는 주장이다.** 그 줄을 사람이 리뷰한다.
+**락파일 diff 가 곧 "이 SHA 는 이 버전이다" 라는 주장이다.** 그 줄을 사람이 리뷰한다.
 
 ## PR 리뷰
 

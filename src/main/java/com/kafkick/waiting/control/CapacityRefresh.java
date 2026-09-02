@@ -17,8 +17,8 @@ import reactor.core.scheduler.Scheduler;
 /**
  * 배분 재료를 읽어 수집기에 넣는다.
  *
- * <p><b>자기 예산을 갖는다.</b> 배분과 한 예산을 나눠 쓰면 읽기가 느려질 때 판이
- * 통째로 안 끝나고, 그러면 임계가 안 올라가 큐가 자라 다음 판이 더 무거워진다.
+ * <p><b>자기 예산을 갖는다.</b> 배분과 한 예산을 나눠 쓰면 읽기가 느려질 때 회차가
+ * 통째로 안 끝나고, 그러면 임계가 안 올라가 큐가 자라 다음 회차가 더 무거워진다.
  */
 public final class CapacityRefresh {
 
@@ -52,7 +52,7 @@ public final class CapacityRefresh {
         // **게이지로 둔다.** 판정의 분자와 분모라 지금 값이 궁금하지 누적이 아니다.
         meters.gauge("waiting.capacity.credit", credit, AtomicLong::get);
         meters.gauge("waiting.capacity.nodes", observed, AtomicInteger::get);
-        // 못 읽은 판은 누적이 맞다 — 구간의 길이를 이 값으로 잰다.
+        // 못 읽은 회차는 누적이 맞다 — 구간의 길이를 이 값으로 잰다.
         this.readFailed = meters.counter("waiting.capacity.read.failed");
     }
 
@@ -63,7 +63,7 @@ public final class CapacityRefresh {
     }
 
     /**
-     * 한 판. <b>실패해도 완료로 끝난다</b> — 재료를 못 읽은 것이 배분을 막을 이유는
+     * 한 회차. <b>실패해도 완료로 끝난다</b> — 재료를 못 읽은 것이 배분을 막을 이유는
      * 아니다. 직전 값으로 돈다.
      */
     public Mono<Void> refresh() {
@@ -98,14 +98,14 @@ public final class CapacityRefresh {
             }
         } else {
             pinned.exited().ifPresent(recovered ->
-                    log.info("가용량 보고가 다시 온다 — {}초 만에, 그동안 {}판 하한이었다",
+                    log.info("가용량 보고가 다시 온다 — {}초 만에, 그동안 {}회차 하한이었다",
                             recovered.elapsedSeconds(), recovered.swallowed()));
         }
         failures.exited().ifPresent(recovered ->
-                log.info("가용량을 다시 읽는다 — {}초 만에, 그동안 {}판 걸렀다",
+                log.info("가용량을 다시 읽는다 — {}초 만에, 그동안 {}회차 걸렀다",
                         recovered.elapsedSeconds(), recovered.swallowed()));
         decaying.exited().ifPresent(recovered ->
-                log.info("크레딧을 다시 관측으로 낸다 — {}초 만에, 그동안 {}판 깎았다. 지금 {}",
+                log.info("크레딧을 다시 관측으로 낸다 — {}초 만에, 그동안 {}회차 깎았다. 지금 {}",
                         recovered.elapsedSeconds(), recovered.swallowed(), value));
     }
 
@@ -117,13 +117,13 @@ public final class CapacityRefresh {
      */
     public void leadershipChanged() {
         pinned.exited().ifPresent(recovered ->
-                log.info("리더십이 갈렸다 — 하한 고정 창을 닫는다. {}초 동안 {}판 하한이었다",
+                log.info("리더십이 갈렸다 — 하한 고정 창을 닫는다. {}초 동안 {}회차 하한이었다",
                         recovered.elapsedSeconds(), recovered.swallowed()));
         failures.exited().ifPresent(recovered ->
-                log.info("리더십이 갈렸다 — 읽기 실패 창을 닫는다. 그동안 {}판 걸렀다",
+                log.info("리더십이 갈렸다 — 읽기 실패 창을 닫는다. 그동안 {}회차 걸렀다",
                         recovered.swallowed()));
         decaying.exited().ifPresent(recovered ->
-                log.info("리더십이 갈렸다 — 감쇠 창을 닫는다. 그동안 {}판 깎았다",
+                log.info("리더십이 갈렸다 — 감쇠 창을 닫는다. 그동안 {}회차 깎았다",
                         recovered.swallowed()));
     }
 
@@ -135,7 +135,7 @@ public final class CapacityRefresh {
         long before = collector.lastKnown();
         collector.observationFailed(nodes.getAsInt());
         long after = collector.lastKnown();
-        // **게이지가 배분값을 따라가야 한다.** 성공 판에서만 갱신하면 감쇠가 도는
+        // **게이지가 배분값을 따라가야 한다.** 성공 회차에서만 갱신하면 감쇠가 도는
         // 동안 지표는 장애 직전 값에 얼어 있고, 배분은 그와 다른 값으로 돈다 —
         // 회복 판정이 "아무 일도 없었다" 로 자동 통과한다 (RC6).
         credit.set(after);

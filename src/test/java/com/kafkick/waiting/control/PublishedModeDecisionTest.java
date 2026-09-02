@@ -31,7 +31,7 @@ class PublishedModeDecisionTest {
 
     private final Map<String, Map<String, String>> 발행 = new LinkedHashMap<>();
 
-    private CouponState 한_판_돌린다(CouponDemand 수요, long 전역_크레딧) {
+    private CouponState 한_회차_돌린다(CouponDemand 수요, long 전역_크레딧) {
         AllocationRound.of(
                         () -> true,
                         () -> Mono.just(new TimedDemands(List.of(수요), 1_700_000_000L)),
@@ -62,7 +62,7 @@ class PublishedModeDecisionTest {
     @DisplayName("꺼진_쿠폰의_빈_줄은_우회로_간다")
     void 꺼진_쿠폰의_빈_줄은_우회로_간다() {
         CouponState 실린_것 =
-                한_판_돌린다(new CouponDemand("c1", 0, 10_000, QueueMode.OFF), 10_000);
+                한_회차_돌린다(new CouponDemand("c1", 0, 10_000, QueueMode.OFF), 10_000);
 
         assertThat(신규유입(실린_것)).isEqualTo(AdmissionDecision.PASS_BYPASS);
     }
@@ -72,7 +72,7 @@ class PublishedModeDecisionTest {
     @DisplayName("항상_대기_쿠폰은_한산해도_줄을_세운다")
     void 항상_대기_쿠폰은_한산해도_줄을_세운다() {
         CouponState 실린_것 =
-                한_판_돌린다(new CouponDemand("c1", 0, 10_000, QueueMode.ALWAYS), 10_000);
+                한_회차_돌린다(new CouponDemand("c1", 0, 10_000, QueueMode.ALWAYS), 10_000);
 
         assertThat(신규유입(실린_것)).isEqualTo(AdmissionDecision.ENQUEUE_ALWAYS);
     }
@@ -82,25 +82,25 @@ class PublishedModeDecisionTest {
     @DisplayName("꺼진_쿠폰도_줄이_남으면_뒤에_세운다")
     void 꺼진_쿠폰도_줄이_남으면_뒤에_세운다() {
         CouponState 실린_것 =
-                한_판_돌린다(new CouponDemand("c1", 500, 10_000, QueueMode.OFF), 10_000);
+                한_회차_돌린다(new CouponDemand("c1", 500, 10_000, QueueMode.OFF), 10_000);
 
         assertThat(신규유입(실린_것)).isEqualTo(AdmissionDecision.ENQUEUE_BACKLOG);
     }
 
     /**
-     * <b>줄이 빠지는 그 판이 이 티켓의 실제 위험이다.</b> 같은 쿠폰이 한 틱 만에
+     * <b>줄이 빠지는 그 회차가 이 티켓의 실제 위험이다.</b> 같은 쿠폰이 한 틱 만에
      * "뒤에 서라" 에서 "그냥 지나가라" 로 바뀐다. 그 전이가 실제로 일어나는지를
      * 여기서 본다 — 노드 사이의 공백은 CY-582 로 따로 뗐다.
      */
     @Test
-    @DisplayName("줄이_빠지면_다음_판에_우회가_열린다")
-    void 줄이_빠지면_다음_판에_우회가_열린다() {
+    @DisplayName("줄이_빠지면_다음_회차에_우회가_열린다")
+    void 줄이_빠지면_다음_회차에_우회가_열린다() {
         CouponState 줄_있음 =
-                한_판_돌린다(new CouponDemand("c1", 500, 10_000, QueueMode.OFF), 10_000);
+                한_회차_돌린다(new CouponDemand("c1", 500, 10_000, QueueMode.OFF), 10_000);
         assertThat(신규유입(줄_있음)).isEqualTo(AdmissionDecision.ENQUEUE_BACKLOG);
 
         CouponState 줄_빠짐 =
-                한_판_돌린다(new CouponDemand("c1", 0, 10_000, QueueMode.OFF), 10_000);
+                한_회차_돌린다(new CouponDemand("c1", 0, 10_000, QueueMode.OFF), 10_000);
 
         assertThat(신규유입(줄_빠짐)).isEqualTo(AdmissionDecision.PASS_BYPASS);
     }

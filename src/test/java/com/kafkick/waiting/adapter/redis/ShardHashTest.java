@@ -27,7 +27,7 @@ class ShardHashTest {
     @Test
     @DisplayName("JVM_해시에_의존하지_않는다")
     void JVM_해시에_의존하지_않는다() {
-        // String.hashCode() 는 판이 바뀌면 값이 달라질 수 있다. 그 순간
+        // String.hashCode() 는 자바 버전이 바뀌면 값이 달라질 수 있다. 그 순간
         // 전원이 다른 샤드로 옮겨 가고 진행 중인 큐가 통째로 어긋난다.
         // CRC16-CCITT(XMODEM) 의 알려진 값으로 못 박는다.
         assertThat(ShardHash.crc16("")).isZero();

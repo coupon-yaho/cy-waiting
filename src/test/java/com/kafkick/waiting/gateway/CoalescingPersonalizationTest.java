@@ -44,7 +44,7 @@ class CoalescingPersonalizationTest {
     /**
      * 상태를 안 물려받는 필터.
      *
-     * <p><b>안 붙기는 경로에 남는다.</b> 한 판에서 선언 없는 응답을 한 번 보면 그
+     * <p><b>안 붙기는 경로에 남는다.</b> 한 회차에서 선언 없는 응답을 한 번 보면 그
      * 뒤로는 무엇을 보내든 안 붙으므로, 값마다 새 필터로 재지 않으면 첫 값 하나만
      * 재고 나머지는 항진명제가 된다.
      */
@@ -255,7 +255,7 @@ class CoalescingPersonalizationTest {
     }
 
     /**
-     * 값이 다르면 각자 부릅니다. 위와 같은 판인데 갈림 헤더 값만 다릅니다.
+     * 값이 다르면 각자 부릅니다. 위와 같은 경우인데 갈림 헤더 값만 다릅니다.
      */
     @Test
     @DisplayName("배우는_순간_모여_있던_다른_값의_무리는_각자_부른다")
@@ -347,10 +347,10 @@ class CoalescingPersonalizationTest {
     @Test
     @DisplayName("선언을_안_하면_다음부터는_안_붙는다")
     void 선언을_안_하면_다음부터는_안_붙는다() {
-        // 첫 판이 가르친다. 뒷단 호출 수로는 못 가른다 — 붙든 안 붙든 요청
+        // 첫 회차가 가르친다. 뒷단 호출 수로는 못 가른다 — 붙든 안 붙든 요청
         // 하나면 뒷단은 한 번 불린다. 왜 건너뛰었는지를 사유로 본다.
         filter.filter(조회("먼저"), ex -> 그냥_답한다(ex, "목록")).block();
-        assertThat(건너뛴("no-shared-marker")).as("가르치는 판은 아직 붙는다").isZero();
+        assertThat(건너뛴("no-shared-marker")).as("가르치는 갈래는 아직 붙는다").isZero();
 
         filter.filter(조회("나중"), ex -> 그냥_답한다(ex, "목록")).block();
 

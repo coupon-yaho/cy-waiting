@@ -14,16 +14,16 @@ import reactor.core.scheduler.Schedulers;
 import reactor.test.StepVerifier;
 
 /**
- * 운영자가 적은 값을 <b>배분 판 밖에서</b> 읽습니다 (P-1 · 6.8.2).
+ * 운영자가 적은 값을 <b>배분 회차 밖에서</b> 읽습니다 (P-1 · 6.8.2).
  *
- * <p>판 안에서 읽으면 발행이 그 왕복에 매달립니다 — 레디스가 조금 느려지는 것만
+ * <p>회차 안에서 읽으면 발행이 그 왕복에 매달립니다 — 레디스가 조금 느려지는 것만
  * 으로 틱 예산을 넘겨 스냅샷이 아예 안 나가고, 전 노드가 동시에 낡음으로 빠집니다.
  */
 class TunablesRefreshTest {
 
     private final AtomicReference<Mono<String>> 응답 = new AtomicReference<>(Mono.empty());
 
-    /** 재료에 실려 있던 값. 승계 첫 판이 이걸 이어 싣는다. */
+    /** 재료에 실려 있던 값. 승계 첫 회차가 이걸 이어 싣는다. */
     private final AtomicReference<Optional<Tunables>> 재료 =
             new AtomicReference<>(Optional.empty());
 
@@ -73,7 +73,7 @@ class TunablesRefreshTest {
 
     /**
      * <b>멎은 읽기가 배분을 멈추면 안 됩니다.</b> 오류는 잡아도 멈춤은 못 잡는
-     * 구조였고, 그때 판 전체가 틱 상한에 잘려 스냅샷이 아예 안 나갔습니다.
+     * 구조였고, 그때 회차 전체가 틱 상한에 잘려 스냅샷이 아예 안 나갔습니다.
      */
     @Test
     @DisplayName("안_끝나는_읽기도_제_시간에_끝난다")
@@ -92,7 +92,7 @@ class TunablesRefreshTest {
     }
 
     /**
-     * <b>승계 첫 판이 위험합니다.</b> 새 리더의 캐시는 비어 있는데, 그 상태로
+     * <b>승계 첫 회차가 위험합니다.</b> 새 리더의 캐시는 비어 있는데, 그 상태로
      * 발행하면 앞 리더가 싣던 값이 지워집니다.
      */
     @Test

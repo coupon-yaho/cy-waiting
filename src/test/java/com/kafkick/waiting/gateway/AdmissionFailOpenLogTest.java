@@ -150,7 +150,7 @@ class AdmissionFailOpenLogTest {
         List<ILoggingEvent> 해제 = 남은것("fail-open 해제");
         assertThat(해제).hasSize(1);
         // **인자까지 본다.** 건수를 안 보면 삼킨 수를 0 으로 적어도 통과한다.
-        assertThat(해제.getFirst().getArgumentArray()).containsExactly(7L, 2);
+        assertThat(해제.getFirst().getArgumentArray()).containsExactly(7L, 2L);
     }
 
     /** 장애가 없으면 아무것도 안 남는다. 늘 찍히면 전이 로그가 아니다. */

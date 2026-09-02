@@ -30,7 +30,7 @@ import reactor.core.publisher.Mono;
 @Tag("context")
 class SnapshotRefreshDrainOrderTest {
 
-    /** 드레이닝을 흉내내는 창. 이 안에서 루프가 몇 판 도는지를 본다. */
+    /** 드레이닝을 흉내내는 창. 이 안에서 루프가 몇 회차 도는지를 본다. */
     private static final Duration 드레이닝 = Duration.ofSeconds(2);
 
     private static final Duration 주기 = Duration.ofMillis(20);
@@ -91,7 +91,7 @@ class SnapshotRefreshDrainOrderTest {
         public void stop() {
             드레이닝_시작에_살아있었나.set(관찰_대상.isRunning());
             int 시작 = 받아옴.get();
-            // **고정 대기가 아니라 판 수를 기다린다.** 이 시험이 재려는 것은
+            // **고정 대기가 아니라 회차 수를 기다린다.** 이 시험이 재려는 것은
             // 몇 밀리초가 아니라 그동안 루프가 일했는가다. 루프가 이미 죽었으면
             // 여기서 못 기다리고 나가는데, 판정은 아래 단언이 한다.
             try {
@@ -120,7 +120,7 @@ class SnapshotRefreshDrainOrderTest {
         try (AnnotationConfigApplicationContext context =
                 new AnnotationConfigApplicationContext(Wiring.class)) {
             context.getBean(SnapshotRefreshLifecycle.class);
-            // 몇 판은 돌게 둔다. 안 그러면 시작 자체를 못 재고 통과한다.
+            // 몇 회차는 돌게 둔다. 안 그러면 시작 자체를 못 재고 통과한다.
             await().atMost(Duration.ofSeconds(5)).untilAtomic(받아옴, greaterThan(2));
 
             context.close();

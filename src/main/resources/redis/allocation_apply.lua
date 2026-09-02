@@ -2,7 +2,7 @@
 --
 -- KEYS[1]  queue:{cid}          ZSET
 -- KEYS[2]  admitted:{cid}       입장 임계. 개수가 아니라 score 값이다 (D-8)
--- ARGV[1]  이번 판에 들일 인원. 0 이상의 정수
+-- ARGV[1]  이번 회차에 들일 인원. 0 이상의 정수
 --
 -- 반환  {임계, 들인 인원}
 --   임계      새 입장 임계. 안 바뀌었으면 이전 값
@@ -30,7 +30,7 @@ if admit == nil or admit ~= admit or admit < 0 or admit ~= math.floor(admit)
 end
 
 -- **없는 것과 깨진 것을 가른다.** 둘 다 -1 로 접으면 큐 맨 앞부터 다시 세어
--- 임계가 뒤로 가고, 그 판에서 이미 통과한 사람이 대기로 되돌아간다.
+-- 임계가 뒤로 가고, 그 회차에서 이미 통과한 사람이 대기로 되돌아간다.
 -- 없는 것은 새 쿠폰이라 -1 이 맞지만, 깨진 것은 소리를 내야 한다.
 local raw = redis.call('GET', KEYS[2])
 local current = -1

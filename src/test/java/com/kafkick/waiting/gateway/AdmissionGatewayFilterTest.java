@@ -199,6 +199,24 @@ class AdmissionGatewayFilterTest {
         assertThat(meters.counter("waiting.queue.clock.back").count()).isEqualTo(1);
     }
 
+    /**
+     * <b>사건이 나기 전에 이미 등록돼 있습니다.</b>
+     *
+     * <p>첫 증가 때 만들면 그 앞에 0 표본이 없어, 프로메테우스가 {@code increase}
+     * 를 낼 기준을 못 잡습니다. 드물게 한 번 나는 사건이 정확히 그 첫 사건이라,
+     * 이 지표가 겨눈 신호가 통째로 사라집니다.
+     *
+     * <p><b>{@code find} 로 봅니다.</b> {@code counter(...)} 로 물으면 그 호출이
+     * 만들어 버려, 등록이 안 돼 있어도 통과합니다 — 위 두 시험이 그렇습니다.
+     */
+    @Test
+    @DisplayName("시계_역행_계수는_사건_전에_이미_등록된다")
+    void 시계_역행_계수는_사건_전에_이미_등록된다() {
+        assertThat(meters.find("waiting.queue.clock.back").counter())
+                .as("사건 전에도 0 을 내보내야 한다")
+                .isNotNull();
+    }
+
     /** 안 뒤집혔으면 안 셉니다. 안 두면 "늘 센다" 로도 통과합니다. */
     @Test
     @DisplayName("시계가_멀쩡하면_안_센다")

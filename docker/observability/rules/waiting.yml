@@ -203,13 +203,14 @@ groups:
 
       # **배분이 멎으면 줄이 안 빠지는데 응답은 정상이다** (8.4.4).
       #
-      # 재료 나이 하나로는 이 고장이 안 보인다. 받아 오는 것은 멀쩡하므로
-      # `waiting_snapshot_age` 가 안 오르고, 대기자는 순번이 그대로인 채로
-      # 계속 기다린다 — 아무 지표도 빨개지지 않는다.
+      # **두 나이를 안 헷갈린다.** `waiting_snapshot_tick_age` 는 이 노드의 조회
+      # 루프가 마지막으로 돈 뒤다 — 리더가 죽어도 계속 돌므로 그걸 보면 정작 이
+      # 고장에 안 울린다. 배분이 멎은 것을 보는 값은 리더가 **발행한** 뒤 흐른
+      # 시간, 곧 `waiting_snapshot_age` 다.
       #
       # 지속 시간을 틱보다 길게 둔다. 한 틱을 놓친 것은 고장이 아니다.
       - alert: 배분정지
-        expr: waiting_snapshot_tick_age >= 0 and waiting_snapshot_tick_age > 30
+        expr: waiting_snapshot_age >= 0 and waiting_snapshot_age > 30
         for: 1m
         labels: { severity: page }
         annotations:

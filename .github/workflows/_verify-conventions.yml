@@ -291,3 +291,8 @@ jobs:
       # 쉽고, 넓히는 순간 시험 실패가 재시도로 덮인다 (TS-7·TS-9).
       - name: 재시도 자기검증
         run: .github/scripts/gradle-retry-selftest.sh
+
+      # **병합을 막는 유일한 검사가 판정이다.** 개별 잡은 브랜치 보호의 요구
+      # 목록에 없어, 여기서 0 으로 끝나면 카오스가 빨개져도 병합이 열린다.
+      - name: 판정 자기검증
+        run: .github/scripts/verdict-selftest.sh

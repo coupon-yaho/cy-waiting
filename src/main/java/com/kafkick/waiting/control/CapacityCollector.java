@@ -2,7 +2,10 @@ package com.kafkick.waiting.control;
 
 import java.time.Duration;
 import java.util.Collection;
+import com.kafkick.waiting.domain.routing.InstanceRouting;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
@@ -66,6 +69,12 @@ public final class CapacityCollector {
      * 아직 한 회차도 안 걷었다. <b>승계와 신규 기동을 못 가른다</b> — 보고에
      * 기동 시각이 실리면 그때 이 추정을 버린다 (A-13).
      */
+    /**
+     * 마지막 회차의 라우팅 목록. <b>합산에 든 값 그대로다</b> — 램프가 깎은 몫이
+     * 여기에도 실려, 갓 뜬 인스턴스로 정상 비율만큼 안 간다 (F6).
+     */
+    private volatile List<InstanceRouting> lastRoutable = List.of();
+
     private boolean firstRound = true;
 
     private final AtomicLong lastKnown;
@@ -169,6 +178,11 @@ public final class CapacityCollector {
      * <p><b>관측치가 아닐 수 있다.</b> 못 읽는 회차가 이어지면 감쇠한 값이다 —
      * 호출부가 관측이라고 믿고 쓰면 그 차이를 못 본다.
      */
+    /** 마지막 회차에서 보낼 수 있던 인스턴스들. 스냅샷에 실어 전 노드에 보낸다. */
+    public List<InstanceRouting> routable() {
+        return lastRoutable;
+    }
+
     public long lastKnown() {
         return lastKnown.get();
     }
@@ -194,6 +208,9 @@ public final class CapacityCollector {
                     (a, b) -> a.reportedAt() >= b.reportedAt() ? a : b);
         }
 
+        // **라우팅 목록을 같은 회차에서 만든다.** 따로 돌면 합산에 든 인스턴스와
+        // 보낼 인스턴스가 갈리고, 그 갈림은 램프 구간에만 나타난다.
+        List<InstanceRouting> routable = new ArrayList<>();
         long total = 0;
         int fresh = 0;
         // **램프가 깎은 것과 뒷단이 못 가진 것은 다르다.** 앞엣것은 우리가 만든
@@ -219,7 +236,11 @@ public final class CapacityCollector {
             seen.put(report.instanceId(), new Seen(first, now));
             // 인스턴스가 많고 각자 상한에 가까우면 합이 넘친다. 넘치면 음수가
             // 되어 전역 크레딧이 0 이 된다 — 전면 차단이다.
-            total = saturatedAdd(total, usable(report, now));
+            long share = usable(report, now);
+            total = saturatedAdd(total, share);
+            // 주소를 안 실은 인스턴스는 크레딧에는 들고 라우팅에서만 빠진다.
+            report.routableAddress().ifPresent(address -> routable.add(
+                    new InstanceRouting(report.instanceId(), address, share)));
         }
         evictStale(now);
         firstRound = false;
@@ -237,6 +258,24 @@ public final class CapacityCollector {
         boolean rampMadeIt = total < minimum && total < reported;
         long credit = fresh == 0 || rampMadeIt ? minimum : total;
         lastFloor.set(fresh == 0 || rampMadeIt ? minimum : 0);
+        // **하한을 만들었으면 라우팅 몫에도 싣는다.** 램프가 전부를 0 으로 깎으면
+        // 판정은 하한으로 통과시키는데 보낼 곳이 하나도 없다 — 고르개가 여유 0 인
+        // 대를 후보로 안 보기 때문이다. 통과시켜 놓고 갈 곳이 없는 것이 가장 나쁘다.
+        //
+        // 램프 구간에는 전부 똑같이 데워지는 중이라 고르게 나눈다. 나머지는 앞에
+        // 준다 — 버리면 합이 발행한 크레딧보다 작아진다.
+        List<InstanceRouting> published = routable;
+        if (rampMadeIt && !routable.isEmpty()) {
+            published = new ArrayList<>();
+            long each = credit / routable.size();
+            long remainder = credit % routable.size();
+            for (int i = 0; i < routable.size(); i++) {
+                InstanceRouting r = routable.get(i);
+                published.add(new InstanceRouting(r.instanceId(), r.address(),
+                        each + (i < remainder ? 1 : 0)));
+            }
+        }
+        lastRoutable = List.copyOf(published);
         lastKnown.set(credit);
         // 한 회차라도 성공하면 유예가 다시 찬다. 안 그러면 드문 순단이 쌓여
         // 멀쩡한 구간에서도 조여진다.

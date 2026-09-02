@@ -100,7 +100,11 @@ public class ControlPlaneConfig {
                 //
                 // **회차마다 한 번 읽는다.** 한 회차에서 두 번 읽으면 그 사이에
                 // 상태가 뒤집혀 같은 회차가 자기모순인 값 둘로 판단한다.
-                registry::circuit);
+                registry::circuit,
+                // **라우팅 목록도 같이 싣는다** (Phase 9). 보고는 리더만 읽으므로,
+                // 요청 경로가 레디스를 안 치려면(불변식 1) 이 길밖에 없다.
+                // 합산에 든 값 그대로라 램프가 깎은 몫이 여기에도 실린다 (F6).
+                capacity::routable);
     }
 
     /**

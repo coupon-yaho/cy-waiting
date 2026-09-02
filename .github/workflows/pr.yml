@@ -228,6 +228,7 @@ jobs:
         *${{ github.event.pull_request.title }}*
         `${{ github.head_ref }}` → `${{ github.base_ref }}`
       fields: |
+        빌드=${{ needs.build.result }}
         규범=${{ needs.conventions.result }}
         단위=${{ needs.test-unit.result }}
         통합=${{ needs.test-integration.result }}

@@ -81,10 +81,19 @@ public final class InFlightRegistry {
         return nowMillis - ttlMillis;
     }
 
-    /** 목록에 없는 인스턴스의 카운터를 버린다. 재기동마다 식별자가 새로 오므로 안 버리면 자란다. */
-    public void retain(Set<String> live) {
+    /**
+     * 목록에 없고 <b>물려 있는 것도 없는</b> 인스턴스의 카운터를 버린다.
+     *
+     * <p>목록에서 잠깐 빠진 대에 아직 요청이 물려 있을 수 있다. 그때 카운터를
+     * 지우면 돌아온 순간 부하가 0 으로 보여 <b>그 대로 몰아 보낸다.</b>
+     */
+    // 안 버리면 재기동마다 새 식별자가 쌓인다. 비었는지를 같이 보므로 수명이
+    // 지나면 다음 호출에서 버려진다 — 유계다.
+    public void retain(Set<String> live, long nowMillis) {
         Objects.requireNonNull(live, "live");
-        slots.keySet().retainAll(live);
+        long cutoff = cutoff(nowMillis);
+        slots.entrySet().removeIf(e ->
+                !live.contains(e.getKey()) && e.getValue().size(cutoff) == 0);
     }
 
     /** 지금 카운터를 들고 있는 인스턴스들. 게이지가 훑는 자리다. */

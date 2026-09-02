@@ -156,24 +156,52 @@ class InFlightRegistryTest {
          * 새로 오므로 무제한으로 자란다.
          */
         @Test
-        @DisplayName("사라진_인스턴스는_지운다")
-        void 사라진_인스턴스는_지운다() {
-            레지스트리.started(갑, 지금);
+        @DisplayName("사라지고_비었으면_지운다")
+        void 사라지고_비었으면_지운다() {
+            레지스트리.started(갑, 지금).finished();
             레지스트리.started(을, 지금);
 
-            레지스트리.retain(Set.of(을));
+            레지스트리.retain(Set.of(을), 지금);
 
             assertThat(레지스트리.count(갑, 지금)).isZero();
             assertThat(레지스트리.count(을, 지금)).isEqualTo(1);
             assertThat(레지스트리.instances()).containsExactly(을);
         }
 
-        /** 빈 목록을 주면 전부 지운다 — 목록을 못 읽은 것과 구분은 부르는 쪽 몫이다. */
+        /**
+         * <b>물려 있으면 목록에 없어도 안 지운다.</b>
+         *
+         * <p>목록에서 잠깐 빠진 대에 아직 요청이 물려 있을 수 있다. 그때 지우면
+         * 돌아온 순간 부하가 0 으로 보여 그 대로 몰아 보낸다.
+         */
         @Test
-        @DisplayName("빈_목록이면_전부_지운다")
-        void 빈_목록이면_전부_지운다() {
+        @DisplayName("물려_있으면_목록에_없어도_안_지운다")
+        void 물려_있으면_목록에_없어도_안_지운다() {
             레지스트리.started(갑, 지금);
-            레지스트리.retain(Set.of());
+
+            레지스트리.retain(Set.of(을), 지금);
+
+            assertThat(레지스트리.count(갑, 지금)).as("돌아왔을 때 0 으로 보이면 안 된다")
+                    .isEqualTo(1);
+        }
+
+        /** 수명이 지나면 물려 있던 것도 비워져 다음 호출에서 지워진다 — 유계다. */
+        @Test
+        @DisplayName("수명이_지나면_지워진다")
+        void 수명이_지나면_지워진다() {
+            레지스트리.started(갑, 지금);
+
+            레지스트리.retain(Set.of(), 지금 + 수명.toMillis() + 1);
+
+            assertThat(레지스트리.instances()).isEmpty();
+        }
+
+        /** 빈 목록을 주면 비어 있는 것을 전부 지운다. */
+        @Test
+        @DisplayName("빈_목록이면_비어_있는_것을_지운다")
+        void 빈_목록이면_비어_있는_것을_지운다() {
+            레지스트리.started(갑, 지금).finished();
+            레지스트리.retain(Set.of(), 지금);
 
             assertThat(레지스트리.instances()).isEmpty();
         }
@@ -183,7 +211,7 @@ class InFlightRegistryTest {
         @DisplayName("지운_뒤_늦게_놓아도_안_되살아난다")
         void 지운_뒤_늦게_놓아도_안_되살아난다() {
             InFlightRegistry.Ticket 표 = 레지스트리.started(갑, 지금);
-            레지스트리.retain(Set.of());
+            레지스트리.retain(Set.of(), 지금 + 수명.toMillis() + 1);
             표.finished();
 
             assertThat(레지스트리.instances()).isEmpty();
@@ -288,7 +316,7 @@ class InFlightRegistryTest {
         void 인스턴스가_없으면_거절한다() {
             assertThatThrownBy(() -> 레지스트리.started(null, 지금))
                     .isInstanceOf(NullPointerException.class);
-            assertThatThrownBy(() -> 레지스트리.retain(null))
+            assertThatThrownBy(() -> 레지스트리.retain(null, 지금))
                     .isInstanceOf(NullPointerException.class);
         }
     }

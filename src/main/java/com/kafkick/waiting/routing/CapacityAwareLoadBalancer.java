@@ -55,13 +55,15 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
 
     private Response<ServiceInstance> pick(List<ServiceInstance> available) {
         long now = nowMillis.getAsLong();
-        // **사라진 인스턴스의 카운터를 지운다** (9.2.5). 식별자가 재기동마다
-        // 새로 오므로(R-3) 안 지우면 배포를 거듭할수록 자란다.
+        // **사라지고 비어 있는 인스턴스의 카운터를 지운다.** 식별자가 재기동마다
+        // 새로 오므로 안 지우면 배포를 거듭할수록 자란다. 다만 목록에서 잠깐
+        // 빠진 대에 요청이 아직 물려 있으면 안 지운다 — 지우면 돌아온 순간
+        // 부하가 0 으로 보여 그 대로 몰아 보낸다.
         Set<String> present = new HashSet<>();
         for (ServiceInstance instance : available) {
             present.add(instance.getInstanceId());
         }
-        inFlight.retain(present);
+        inFlight.retain(present, now);
 
         List<RoutingCandidate> candidates = new ArrayList<>();
         for (ServiceInstance instance : available) {

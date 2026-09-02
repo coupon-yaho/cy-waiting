@@ -99,7 +99,12 @@ public final class SnapshotMetrics {
         return view.snapshot().isPublished() ? view.fetchAge().toMillis() / 1000.0 : UNKNOWN;
     }
 
-    /** 배분 루프가 마지막으로 돈 뒤 지난 시간. <b>이것만 크면 배분이 멎은 것입니다.</b> */
+    /**
+     * 조회 루프가 마지막으로 돈 뒤 지난 시간.
+     *
+     * <p><b>널 검사를 안 겹칩니다.</b> 틱 시각이 없는 것은 초기값 하나뿐이고 그것은
+     * {@code EPOCH} 라 발행으로 안 읽힙니다 — 두 조건이 같이 설 수 없습니다.
+     */
     private double tickAgeSeconds() {
         SnapshotHolder.View view = holder.view();
         return view.snapshot().isPublished() ? view.tickAge().toMillis() / 1000.0 : UNKNOWN;

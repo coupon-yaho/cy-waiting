@@ -281,11 +281,17 @@ class CircuitAndSpikeScenarioTest {
     @DisplayName("X3_서킷이_열린_뒤_차례를_받은_사람들이_프로브_자리를_먹는다")
     void X3_서킷이_열린_뒤_차례를_받은_사람들이_프로브_자리를_먹는다() {
         AtomicInteger 열린_횟수 = new AtomicInteger();
+        // **서킷을 먼저 만들고 그 뒤에 기록기를 세운다.** 기록기는 세우는 순간의
+        // 누적값을 기준으로 잡으므로, 예열 요청이 그 앞에 있어야 평시 봉우리에
+        // 안 섞인다. 섞이면 RC4 의 분모가 부풀어 진짜 버스트가 한계 아래로 든다.
+        토큰으로_시도한다(900);
         BackendRpsRecorder 유입 = new BackendRpsRecorder(뒷단::받은_수);
         List<Integer> 정상_토큰_상태 = new ArrayList<>();
         List<Integer> 장애중_토큰_상태 = new ArrayList<>();
         List<Integer> 장애중_무토큰_상태 = new ArrayList<>();
         List<Integer> 회복_토큰_상태 = new ArrayList<>();
+        List<Integer> 반쯤열림_무토큰_상태 = new ArrayList<>();
+        long[] 반쯤열림_한산_도착 = new long[1];
         long[] 정상_도착 = new long[1];
         long[] 유지중_도착 = new long[1];
         long[] 회복_도착 = new long[1];
@@ -295,8 +301,7 @@ class CircuitAndSpikeScenarioTest {
 
         ChaosScenario.named("X3 서킷 + 억눌린 트래픽")
                 .baseline(() -> {
-                    // 서킷은 첫 요청이 만든다. 그 전에 잡으려 하면 없다.
-                    토큰으로_시도한다(900);
+                    // 서킷은 첫 요청이 만든다 — 위에서 이미 한 번 쐈다.
                     // **열린 횟수를 센다** (G8.12). 반복 실패는 유입 억제가 안
                     // 걸린다는 뜻이고, 이 시나리오가 그것을 볼 수 있는 유일한 자리다.
                     서킷().getEventPublisher().onStateTransition(e -> {
@@ -344,6 +349,21 @@ class CircuitAndSpikeScenarioTest {
                 })
                 .recover(() -> 멎었다.set(false))
                 .afterRecovery(() -> {
+                    // **가장 위험한 구간을 여기서 잰다.** 반쯤 열린 동안은 프로브
+                    // 자리가 몇 개뿐인데, 그 자리를 새 트래픽이 먹으면 약한 뒷단이
+                    // 다시 무너진다. 판정 규칙은 반쯤 열림을 열림과 똑같이 다루므로
+                    // 토큰 없는 신규는 여전히 줄로 가야 한다.
+                    //
+                    // **무는 범위를 실측했다.** 서킷 갈래를 통째로 들어내면 이
+                    // 배치가 200 을 받고 뒷단까지 간다 — 그건 잡는다. 다만 갈래에서
+                    // 반쯤 열림만 빼는 좁은 뮤턴트는 살아남는다. 그 경우에도 다른
+                    // 사다리가 줄에 세워, 서킷이 세운 것과 구분이 안 된다.
+                    반쯤_열릴_때까지_기다린다();
+                    다음_초를_기다린다();
+                    long 반쯤_한산_전 = 뒷단.받은_수(한산한_쿠폰);
+                    반쯤열림_무토큰_상태.addAll(여러_번_시도한다(한산한_쿠폰, 3, 4_500));
+                    반쯤열림_한산_도착[0] = 뒷단.받은_수(한산한_쿠폰) - 반쯤_한산_전;
+
                     닫힐_때까지_기다린다();
                     다음_초를_기다린다();
                     // RULE-EXCEPTION(TS-4): 봉우리는 벽시계 초 버킷으로만 잰다.
@@ -380,6 +400,10 @@ class CircuitAndSpikeScenarioTest {
                         // RC4 — 같은 모양으로 쐈는데 봉우리가 커졌다면 그것은
                         // 게이트웨이가 억눌러 둔 것을 한꺼번에 푼 것이다.
                         RecoveryCriteria.recoveryBurst(정상_봉우리[0], 회복_봉우리[0]),
+                        // **반쯤 열린 동안에도 신규는 줄에 남는다.** 이 구간이
+                        // 안 재지면, 프로브 자리를 새 트래픽이 먹는 회귀가 통과한다.
+                        줄에_세웠다(반쯤열림_무토큰_상태),
+                        한산한_쿠폰이_뒷단에_안_갔다(반쯤열림_한산_도착[0]),
                         // G8.12 — 회복까지 몇 번 열렸는가. C8 이 공허하다고 적어
                         // 둔 자리이고, 이 시나리오가 그것을 볼 수 있는 유일한 자리다.
                         반복해서_안_열렸다(열린_횟수.get()),
@@ -408,6 +432,19 @@ class CircuitAndSpikeScenarioTest {
     }
 
     /** 서킷이 닫힐 때까지 두드린다. 토큰 보유자만이 반쯤 열린 구간을 지난다. */
+    /**
+     * 반쯤 열릴 때까지 기다린다.
+     *
+     * <p><b>두드리지 않는다.</b> 열린 상태에서 반쯤 열림으로 가는 것은 시간이 하는
+     * 일이고(자동 전환), 여기서 두드리면 그 요청이 곧 프로브가 되어 재려는 구간을
+     * 스스로 지나가 버린다.
+     */
+    private void 반쯤_열릴_때까지_기다린다() {
+        Awaitility.await().atMost(기다림)
+                .pollInterval(Duration.ofMillis(100))
+                .until(() -> 서킷().getState() == CircuitBreaker.State.HALF_OPEN);
+    }
+
     private void 닫힐_때까지_기다린다() {
         Awaitility.await().atMost(기다림)
                 .pollInterval(Duration.ofMillis(200))

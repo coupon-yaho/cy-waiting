@@ -263,6 +263,7 @@ jobs:
         <h2>빌드 결과</h2>
         <table>
           <tr><th>항목</th><th>결과</th></tr>
+          <tr><td>빌드</td><td>${{ needs.build.result }}</td></tr>
           <tr><td>규범</td><td>${{ needs.conventions.result }}</td></tr>
           <tr><td>단위 테스트</td><td>${{ needs.test-unit.result }}</td></tr>
           <tr><td>통합 테스트</td><td>${{ needs.test-integration.result }}</td></tr>
@@ -271,6 +272,7 @@ jobs:
           <tr><td>어댑터 커버리지</td><td>${{ needs.test-coverage.result }}</td></tr>
           <tr><td>뮤테이션 테스트</td><td>${{ needs.test-mutation.result }}</td></tr>
           <tr><td>보안 스캔</td><td>${{ needs.security.result }}</td></tr>
+          <tr><td>의존성 그래프</td><td>${{ needs.dependency-graph.result }}</td></tr>
           <tr><td>부하 (R1 검증)</td><td>${{ needs.load-idle.result }}</td></tr>
           <tr><td>부하 (조회 폭주 · G6.16)</td><td>${{ needs.load-read-burst.result }}</td></tr>
         </table>

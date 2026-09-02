@@ -15,7 +15,7 @@ emit() {
 
 # **비어 있으면 실패다.** 결과를 못 받은 것은 "이상 없다" 가 아니라 "안 봤다" 다.
 # 통과로 넘기면 needs 를 잘못 엮는 순간 게이트가 조용히 사라진다.
-if [ -z "${results// /}" ]; then
+if [ -z "${results//[[:space:]]/}" ]; then
     emit "status=failure"
     emit "ok=false"
     echo "::error title=판정::결과 목록이 비었다 — 무엇을 봤는지 알 수 없다"

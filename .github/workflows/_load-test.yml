@@ -167,7 +167,11 @@ jobs:
           SCENARIO: ${{ inputs.scenario }}
           SUMMARY: ${{ steps.evaluate.outputs.summary }}
         run: |
-          echo "::error title=부하 시험::$SCENARIO 기준 미달 — $SUMMARY"
+          # **워크플로 명령 줄에 안 싣는다.** 개행이나 `%` 가 섞이면 그 값이
+          # 명령으로 읽혀 다음 줄을 만들어 낸다. 사람이 읽을 값은 평범한
+          # 출력으로 내고, 주석은 고정 문구만 쓴다.
+          printf '부하 시험 기준 미달 — %s: %s\n' "$SCENARIO" "$SUMMARY"
+          echo "::error title=부하 시험::기준 미달 — 위 로그를 본다"
           exit 1
 
       - name: compose 로그 수집

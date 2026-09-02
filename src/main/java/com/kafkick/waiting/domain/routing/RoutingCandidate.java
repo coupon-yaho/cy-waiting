@@ -50,8 +50,8 @@ public record RoutingCandidate(String instanceId, long credits, int inFlight, do
         if (ramp.isZero() || ramp.isNegative() || !(reportedInFlight > 0)) {
             return 0;
         }
-        double 남은 = 1 - (double) elapsed.toMillis() / ramp.toMillis();
-        return 남은 <= 0 ? 0 : reportedInFlight * 남은;
+        double remaining = 1 - (double) elapsed.toMillis() / ramp.toMillis();
+        return remaining <= 0 ? 0 : reportedInFlight * remaining;
     }
 
     /** 보낼 수 있는 대인가. <b>여유 0 은 후보가 아니다</b> — 0 으로 나누지 않는다. */

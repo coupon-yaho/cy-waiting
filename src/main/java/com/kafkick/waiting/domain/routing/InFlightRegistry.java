@@ -73,6 +73,27 @@ public final class InFlightRegistry {
         return slot == null ? 0 : slot.size(cutoff(nowMillis));
     }
 
+    /** 전 인스턴스의 합. 게이지가 인스턴스별 태그를 못 다는 자리에서 쓴다. */
+    // 식별자가 재기동마다 새로 오므로(R-3) 태그로 달면 시계열이 무한히 는다 (LG-4).
+    public int total(long nowMillis) {
+        long cutoff = cutoff(nowMillis);
+        int sum = 0;
+        for (Slot slot : slots.values()) {
+            sum += slot.size(cutoff);
+        }
+        return sum;
+    }
+
+    /** 가장 바쁜 인스턴스의 수. <b>합만으로는 쏠림이 안 보인다.</b> */
+    public int busiest(long nowMillis) {
+        long cutoff = cutoff(nowMillis);
+        int max = 0;
+        for (Slot slot : slots.values()) {
+            max = Math.max(max, slot.size(cutoff));
+        }
+        return max;
+    }
+
     /** 이보다 먼저 시작한 항목은 감소를 놓친 것으로 본다. */
     private long cutoff(long nowMillis) {
         return nowMillis - ttlMillis;

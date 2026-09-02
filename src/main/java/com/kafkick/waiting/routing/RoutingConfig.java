@@ -4,6 +4,7 @@ import com.kafkick.waiting.domain.routing.InFlightRegistry;
 import com.kafkick.waiting.domain.routing.InstanceChooser;
 import com.kafkick.waiting.domain.routing.WeightedP2c;
 import com.kafkick.waiting.domain.routing.WeightedRoundRobin;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.util.Random;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -40,6 +41,18 @@ public class RoutingConfig {
         // 무작위 씨앗을 안 고정한다. 고정하면 노드들이 같은 순서로 뽑아,
         // P2C 를 고른 이유인 쏠림 회피가 사라진다.
         return WeightedP2c.of(new Random()::nextInt);
+    }
+
+    /**
+     * 물려 있는 수를 지표로 낸다 (9.2.6).
+     *
+     * <p><b>누수는 값이 안 내려가는 것으로만 보인다.</b> 부하가 끝났는데 0 이
+     * 아니면 감소를 어디선가 놓친 것이다 (G9.3).
+     */
+    @Bean
+    InFlightMetrics.Binding inFlightMetrics(InFlightRegistry registry, MeterRegistry meters) {
+        InFlightMetrics.bind(registry, System::currentTimeMillis, meters);
+        return new InFlightMetrics.Binding();
     }
 
     /** 나간 요청을 세고 어느 경로로 끝나든 되돌린다 (G9.3). */

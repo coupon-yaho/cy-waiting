@@ -35,17 +35,28 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
 
     private final LongSupplier nowMillis;
 
+    /** 인스턴스 하나에 동시에 물릴 수 있는 수 (G9.13). */
+    private final int perInstanceCap;
+
     private CapacityAwareLoadBalancer(ServiceInstanceListSupplier instances,
-            InstanceChooser chooser, InFlightRegistry inFlight, LongSupplier nowMillis) {
+            InstanceChooser chooser, InFlightRegistry inFlight, LongSupplier nowMillis,
+            int perInstanceCap) {
         this.instances = Objects.requireNonNull(instances, "instances");
         this.chooser = Objects.requireNonNull(chooser, "chooser");
         this.inFlight = Objects.requireNonNull(inFlight, "inFlight");
         this.nowMillis = Objects.requireNonNull(nowMillis, "nowMillis");
+        if (perInstanceCap < 1) {
+            throw new IllegalArgumentException("perInstanceCap 은 1 이상이어야 한다: "
+                    + perInstanceCap);
+        }
+        this.perInstanceCap = perInstanceCap;
     }
 
     public static CapacityAwareLoadBalancer of(ServiceInstanceListSupplier instances,
-            InstanceChooser chooser, InFlightRegistry inFlight, LongSupplier nowMillis) {
-        return new CapacityAwareLoadBalancer(instances, chooser, inFlight, nowMillis);
+            InstanceChooser chooser, InFlightRegistry inFlight, LongSupplier nowMillis,
+            int perInstanceCap) {
+        return new CapacityAwareLoadBalancer(instances, chooser, inFlight, nowMillis,
+                perInstanceCap);
     }
 
     @Override
@@ -66,7 +77,13 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
         List<RoutingCandidate> candidates = new ArrayList<>();
         for (ServiceInstance instance : available) {
             String id = instance.getInstanceId();
-            candidates.add(RoutingCandidate.of(id, creditsOf(instance), inFlight.count(id, now)));
+            int busy = inFlight.count(id, now);
+            // **상한에 닿은 대는 후보가 아니다** (G9.13). 느려진 한 대로 간
+            // 요청이 무한정 쌓이면 그 한 대가 게이트웨이 커넥션을 다 붙잡는다.
+            if (busy >= perInstanceCap) {
+                continue;
+            }
+            candidates.add(RoutingCandidate.of(id, creditsOf(instance), busy));
         }
         Optional<RoutingCandidate> chosen = chooser.choose(candidates);
         if (chosen.isEmpty()) {

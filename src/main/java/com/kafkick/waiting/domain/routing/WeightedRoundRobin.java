@@ -17,6 +17,14 @@ import java.util.Set;
  */
 public final class WeightedRoundRobin implements InstanceChooser {
 
+    private WeightedRoundRobin() {
+    }
+
+    /** 새 순환을 연다. 누적을 들고 있으므로 인스턴스마다 하나여야 한다. */
+    public static WeightedRoundRobin create() {
+        return new WeightedRoundRobin();
+    }
+
     /** 인스턴스별 누적. 사라진 대는 지운다 — 식별자가 재기동마다 새로 온다 (R-3). */
     private final Map<String, Long> 누적 = new HashMap<>();
 

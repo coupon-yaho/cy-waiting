@@ -17,9 +17,13 @@ public final class WeightedP2c implements InstanceChooser {
 
     private final IntUnaryOperator random;
 
-    /** @param random 상한 미만의 자리를 하나 준다. {@code Random::nextInt} 를 넘긴다 */
-    public WeightedP2c(IntUnaryOperator random) {
+    private WeightedP2c(IntUnaryOperator random) {
         this.random = Objects.requireNonNull(random, "random");
+    }
+
+    /** @param random 상한 미만의 자리를 하나 준다. {@code Random::nextInt} 를 넘긴다 */
+    public static WeightedP2c of(IntUnaryOperator random) {
+        return new WeightedP2c(random);
     }
 
     @Override

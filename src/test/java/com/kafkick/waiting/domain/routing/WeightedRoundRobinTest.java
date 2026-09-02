@@ -42,7 +42,7 @@ class WeightedRoundRobinTest {
         @Test
         @DisplayName("한_바퀴에_여유만큼_정확히_간다")
         void 한_바퀴에_여유만큼_정확히_간다() {
-            Map<String, Integer> 받은 = 돌린다(new WeightedRoundRobin(), 후보(200, 40, 120), 360);
+            Map<String, Integer> 받은 = 돌린다(WeightedRoundRobin.create(), 후보(200, 40, 120), 360);
 
             assertThat(받은).containsExactlyInAnyOrderEntriesOf(
                     Map.of("a", 200, "b", 40, "c", 120));
@@ -52,7 +52,7 @@ class WeightedRoundRobinTest {
         @Test
         @DisplayName("세_바퀴를_돌아도_안_어긋난다")
         void 세_바퀴를_돌아도_안_어긋난다() {
-            Map<String, Integer> 받은 = 돌린다(new WeightedRoundRobin(), 후보(200, 40, 120), 1_080);
+            Map<String, Integer> 받은 = 돌린다(WeightedRoundRobin.create(), 후보(200, 40, 120), 1_080);
 
             assertThat(받은).containsExactlyInAnyOrderEntriesOf(
                     Map.of("a", 600, "b", 120, "c", 360));
@@ -65,7 +65,7 @@ class WeightedRoundRobinTest {
         @Test
         @DisplayName("같은_대를_연달아_몰지_않는다")
         void 같은_대를_연달아_몰지_않는다() {
-            InstanceChooser 고르개 = new WeightedRoundRobin();
+            InstanceChooser 고르개 = WeightedRoundRobin.create();
             List<RoutingCandidate> 후보 = 후보(200, 40, 120);
 
             String 앞 = null;
@@ -91,7 +91,7 @@ class WeightedRoundRobinTest {
         @Test
         @DisplayName("여유가_0_인_대는_안_뽑는다")
         void 여유가_0_인_대는_안_뽑는다() {
-            Map<String, Integer> 받은 = 돌린다(new WeightedRoundRobin(), 후보(100, 0, 100), 200);
+            Map<String, Integer> 받은 = 돌린다(WeightedRoundRobin.create(), 후보(100, 0, 100), 200);
 
             assertThat(받은).containsExactlyInAnyOrderEntriesOf(Map.of("a", 100, "c", 100));
         }
@@ -99,7 +99,7 @@ class WeightedRoundRobinTest {
         @Test
         @DisplayName("한_대도_없으면_비어_있다")
         void 한_대도_없으면_비어_있다() {
-            assertThat(new WeightedRoundRobin().choose(List.of())).isEmpty();
+            assertThat(WeightedRoundRobin.create().choose(List.of())).isEmpty();
         }
 
         /**
@@ -109,7 +109,7 @@ class WeightedRoundRobinTest {
         @Test
         @DisplayName("전부_막혔으면_비어_있다")
         void 전부_막혔으면_비어_있다() {
-            assertThat(new WeightedRoundRobin().choose(후보(0, 0, 0))).isEmpty();
+            assertThat(WeightedRoundRobin.create().choose(후보(0, 0, 0))).isEmpty();
         }
 
         /**
@@ -119,7 +119,7 @@ class WeightedRoundRobinTest {
         @Test
         @DisplayName("사라진_대의_누적은_지운다")
         void 사라진_대의_누적은_지운다() {
-            WeightedRoundRobin 고르개 = new WeightedRoundRobin();
+            WeightedRoundRobin 고르개 = WeightedRoundRobin.create();
             돌린다(고르개, 후보(100, 100, 100), 30);
 
             고르개.choose(List.of(RoutingCandidate.of("a", 100, 0)));
@@ -131,7 +131,7 @@ class WeightedRoundRobinTest {
         @Test
         @DisplayName("새_대가_몰아_받지_않는다")
         void 새_대가_몰아_받지_않는다() {
-            WeightedRoundRobin 고르개 = new WeightedRoundRobin();
+            WeightedRoundRobin 고르개 = WeightedRoundRobin.create();
             List<RoutingCandidate> 둘 = List.of(
                     RoutingCandidate.of("a", 100, 0), RoutingCandidate.of("b", 100, 0));
             돌린다(고르개, 둘, 20);

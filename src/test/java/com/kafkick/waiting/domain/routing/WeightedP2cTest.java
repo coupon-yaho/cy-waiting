@@ -48,7 +48,7 @@ class WeightedP2cTest {
                     RoutingCandidate.of("be-3", 100, 90));
 
             Optional<RoutingCandidate> 고른 =
-                    new WeightedP2c(정해진(0, 1)).choose(후보);
+                    WeightedP2c.of(정해진(0, 1)).choose(후보);
 
             assertThat(고른).map(RoutingCandidate::instanceId).contains("be-2");
         }
@@ -64,7 +64,7 @@ class WeightedP2cTest {
                     RoutingCandidate.of("작은", 40, 20),
                     RoutingCandidate.of("큰", 200, 20));
 
-            Optional<RoutingCandidate> 고른 = new WeightedP2c(정해진(0, 1)).choose(후보);
+            Optional<RoutingCandidate> 고른 = WeightedP2c.of(정해진(0, 1)).choose(후보);
 
             assertThat(고른).map(RoutingCandidate::instanceId).contains("큰");
         }
@@ -73,7 +73,7 @@ class WeightedP2cTest {
         @Test
         @DisplayName("한_대뿐이면_그_대다")
         void 한_대뿐이면_그_대다() {
-            Optional<RoutingCandidate> 고른 = new WeightedP2c(정해진(0, 0))
+            Optional<RoutingCandidate> 고른 = WeightedP2c.of(정해진(0, 0))
                     .choose(List.of(RoutingCandidate.of("be-1", 100, 0)));
 
             assertThat(고른).map(RoutingCandidate::instanceId).contains("be-1");
@@ -83,7 +83,7 @@ class WeightedP2cTest {
         @Test
         @DisplayName("한_대도_없으면_비어_있다")
         void 한_대도_없으면_비어_있다() {
-            assertThat(new WeightedP2c(정해진(0, 0)).choose(List.of())).isEmpty();
+            assertThat(WeightedP2c.of(정해진(0, 0)).choose(List.of())).isEmpty();
         }
 
         /** 같은 자리를 두 번 뽑아도 그 대다. 무작위가 겹치는 것은 흔하다. */
@@ -94,7 +94,7 @@ class WeightedP2cTest {
                     RoutingCandidate.of("be-1", 100, 50),
                     RoutingCandidate.of("be-2", 100, 5));
 
-            Optional<RoutingCandidate> 고른 = new WeightedP2c(정해진(0, 0)).choose(후보);
+            Optional<RoutingCandidate> 고른 = WeightedP2c.of(정해진(0, 0)).choose(후보);
 
             assertThat(고른).map(RoutingCandidate::instanceId).contains("be-1");
         }
@@ -112,7 +112,7 @@ class WeightedP2cTest {
                     RoutingCandidate.of("막힌", 0, 0),
                     RoutingCandidate.of("산", 100, 90));
 
-            Optional<RoutingCandidate> 고른 = new WeightedP2c(정해진(0, 1)).choose(후보);
+            Optional<RoutingCandidate> 고른 = WeightedP2c.of(정해진(0, 1)).choose(후보);
 
             assertThat(고른).map(RoutingCandidate::instanceId).contains("산");
         }
@@ -125,7 +125,7 @@ class WeightedP2cTest {
                     RoutingCandidate.of("막힌1", 0, 0),
                     RoutingCandidate.of("막힌2", 0, 0));
 
-            assertThat(new WeightedP2c(정해진(0, 1)).choose(후보)).isEmpty();
+            assertThat(WeightedP2c.of(정해진(0, 1)).choose(후보)).isEmpty();
         }
     }
 
@@ -146,7 +146,7 @@ class WeightedP2cTest {
                     Map.of("a", 0, "b", 0, "c", 0));
             Map<String, Long> 여유 = Map.of("a", 200L, "b", 40L, "c", 120L);
             Random random = new Random(20260902);
-            WeightedP2c 고르개 = new WeightedP2c(random::nextInt);
+            WeightedP2c 고르개 = WeightedP2c.of(random::nextInt);
             Map<String, Integer> 받은 = new HashMap<>(Map.of("a", 0, "b", 0, "c", 0));
 
             int 총_요청 = 3_600;

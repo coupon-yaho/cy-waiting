@@ -12,6 +12,7 @@ import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import com.kafkick.waiting.domain.queue.EntryToken;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -26,6 +27,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.DisplayName;
@@ -44,15 +46,21 @@ import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Mono;
 
 /**
- * X3 — 서킷이 열린 채 억눌린 트래픽이 회복 순간에 몰린다 (8.3.6 · 5절).
+ * X3 — 서킷이 열린 채 차례를 받은 사람들이 half-open 자리를 먹는다 (8.3.6 · 5절).
  *
- * <p><b>토큰을 든 사람은 서킷이 안 막는다.</b> 사다리 2번이 6' 번보다 앞이라,
- * 서킷이 열려 있어도 차례를 받은 사람은 뒷단으로 간다. 그래서 회복 순간에
- * 밀려 있던 그 사람들이 갓 살아난 뒷단으로 한꺼번에 간다 — RC4 가 정의하는 판이다.
+ * <p><b>사다리 2번이 6' 번보다 앞이라 판정은 토큰 보유자를 안 막는다.</b> 그런데
+ * 서킷 필터는 판정 <b>뒤</b>에 붙으므로 그 사람도 결국 서킷이 가로챈다 — 실측하면
+ * 유지 구간 30 건 중 뒷단에 닿은 것은 두 건이고 나머지는 503·429 다.
  */
+// **닿은 그 둘이 half-open 프로브 자리다.** 그리고 폴백이 토큰 보유자에게 가장
+// 가까운 밴드(1초)로 다시 오라고 답하므로, 열린 서킷 아래에서 그 사람들이 1 초마다
+// 되돌아온다 — half-open 으로 넘어가는 순간 프로브 자리가 그 재시도로 채워지고,
+// 아직 찬 뒷단이 그걸 떨어뜨려 곧바로 다시 열린다. F3 이 막으려던 그림이 토큰
+// 경로에 그대로 남아 있다 (G8.12).
+//
 // **C8 과 다른 점은 재료다.** 저쪽은 한산한 쿠폰 하나로 서킷의 열림·닫힘을 잰다.
-// 여기는 줄이 선 쿠폰에 토큰을 든 사람을 두어, 서킷이 못 막는 경로로 회복
-// 버스트가 어떻게 나오는지를 잰다.
+// 여기는 줄이 선 쿠폰에 토큰을 든 사람을 두어, 그 사람들이 프로브 자리를 어떻게
+// 먹는지를 잰다.
 @Tag("chaos")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = "waiting.scheduler.enabled=false")
@@ -102,6 +110,15 @@ class CircuitAndSpikeScenarioTest {
 
     private static final Duration 기다림 = Duration.ofSeconds(30);
 
+    /** 반쯤 열린 구간에 통과시키는 수. 배선과 같은 값이어야 판정이 뜻을 갖는다. */
+    private static final int 프로브_허용 = 2;
+
+    /**
+     * 두드릴 때 쓰는 회원 번호. <b>배치와 겹치면 안 된다</b> — 겹치면 스텁이 중복
+     * 수신으로 세고, 그건 회복 판정에서 초과 발급으로 보고된다.
+     */
+    private final AtomicInteger 두드림 = new AtomicInteger(900_000);
+
     private static final BackendStub 뒷단 = BackendStub.멎을_수_있다(멎었다::get);
 
     private static RedisFaults faults;
@@ -142,14 +159,17 @@ class CircuitAndSpikeScenarioTest {
         // 재료가 늙어 낡음이 열리고, 그러면 한산한 쿠폰이 사다리 4번(fail-open)
         // 으로 빠져 서킷 갈래를 한 번도 안 밟는다. 실제로 그렇게 재다가
         // 한산한 쿠폰이 503 을 받는 것을 봤다.
+        // RULE-EXCEPTION(TS-4): 나이를 실제로 늙게 두는 것이 이 판의 재료다.
+        // 시각을 고정하면 낡음이 영영 안 열리고, 열리는지 안 열리는지가 정확히
+        // 이 시나리오가 재는 것이다.
         @Bean
         @Primary
-        SnapshotSource 몰리는_재료() {
+        SnapshotSource 몰리는_재료(Clock clock) {
             return () -> Mono.fromSupplier(() -> SnapshotCodec.create().encode(
                     new GatewaySnapshot(
                             Map.of(COUPON, CouponStates.queueing(크레딧, 재고, 줄_선_사람),
                                     한산한_쿠폰, CouponStates.idle(재고)),
-                            new SnapshotMeta(크레딧, 1), Instant.now()),
+                            new SnapshotMeta(크레딧, 1), clock.instant()),
                     CreditSmoother.Snapshot.empty(), QueueingHysteresis.Snapshot.empty()));
         }
     }
@@ -163,6 +183,10 @@ class CircuitAndSpikeScenarioTest {
     @Autowired
     private EntryToken entryTokens;
 
+    /** 시험이 실시계를 직접 읽으면 앱과 갈릴 수 있다 (TS-4). 같은 시계를 쓴다. */
+    @Autowired
+    private Clock clock;
+
     private WebTestClient 클라이언트() {
         return WebTestClient.bindToServer()
                 .baseUrl("http://localhost:" + port)
@@ -170,14 +194,19 @@ class CircuitAndSpikeScenarioTest {
                 .build();
     }
 
-    /** 차례를 받은 사람. 사다리 2번을 밟아 서킷을 지나친다. */
+    /**
+     * 차례를 받은 사람. 사다리 2번을 밟는다 — 다만 서킷 필터가 판정 뒤라 결국
+     * 그쪽이 가로챈다.
+     */
+    // RULE-EXCEPTION(TS-4): 토큰의 서명이 실시계로 검증되므로 고정 시각을 실으면
+    // 만료로 거절된다. 이 판은 토큰이 통과하는 것을 전제로 한다.
     private int 토큰으로_시도한다(int member) {
         return 클라이언트().post()
                 .uri("/api/v1/coupons/" + COUPON + "/issue")
                 .header("X-Member-Id", String.valueOf(member))
                 .header("X-Member-Grade", "GOLD")
                 .header("Entry-Token",
-                        entryTokens.issue(COUPON, String.valueOf(member), Instant.now()))
+                        entryTokens.issue(COUPON, String.valueOf(member), clock.instant()))
                 .exchange()
                 .returnResult(Void.class)
                 .getStatus()
@@ -249,8 +278,9 @@ class CircuitAndSpikeScenarioTest {
      * <p>회복이 곧 2차 장애가 되면 안 된다 (RC4).
      */
     @Test
-    @DisplayName("X3_서킷이_열린_뒤_억눌린_트래픽이_회복_순간에_몰린다")
-    void X3_서킷이_열린_뒤_억눌린_트래픽이_회복_순간에_몰린다() {
+    @DisplayName("X3_서킷이_열린_뒤_차례를_받은_사람들이_프로브_자리를_먹는다")
+    void X3_서킷이_열린_뒤_차례를_받은_사람들이_프로브_자리를_먹는다() {
+        AtomicInteger 열린_횟수 = new AtomicInteger();
         BackendRpsRecorder 유입 = new BackendRpsRecorder(뒷단::받은_수);
         List<Integer> 정상_토큰_상태 = new ArrayList<>();
         List<Integer> 장애중_토큰_상태 = new ArrayList<>();
@@ -267,17 +297,26 @@ class CircuitAndSpikeScenarioTest {
                 .baseline(() -> {
                     // 서킷은 첫 요청이 만든다. 그 전에 잡으려 하면 없다.
                     토큰으로_시도한다(900);
+                    // **열린 횟수를 센다** (G8.12). 반복 실패는 유입 억제가 안
+                    // 걸린다는 뜻이고, 이 판이 그것을 볼 수 있는 유일한 자리다.
+                    서킷().getEventPublisher().onStateTransition(e -> {
+                        if (e.getStateTransition().getToState() == CircuitBreaker.State.OPEN) {
+                            열린_횟수.incrementAndGet();
+                        }
+                    });
                     다음_초를_기다린다();
-                    유입.sample(Instant.now());
-                    Instant 시작 = Instant.now();
+                    // RULE-EXCEPTION(TS-4): 봉우리는 벽시계 초 버킷으로만 잰다.
+                    // 고정 시각이면 모든 도착이 한 버킷에 들어가 봉우리가 사라진다.
+                    유입.sample(clock.instant());
+                    Instant 시작 = clock.instant();
                     long 전 = 뒷단.받은_수();
                     정상_토큰_상태.addAll(한꺼번에_토큰으로(몰아칠_수, 1_000));
                     정상_도착[0] = 뒷단.받은_수() - 전;
                     // **봉우리는 초 단위 버킷이라 한 초를 넘겨야 읽힌다.**
                     // 같은 초 안에서 물으면 구간이 비어 늘 0 이 나온다.
                     다음_초를_기다린다();
-                    유입.sample(Instant.now());
-                    정상_봉우리[0] = 유입.peakRps(시작, Instant.now());
+                    유입.sample(clock.instant());
+                    정상_봉우리[0] = 유입.peakRps(시작, clock.instant());
                     assertThat(정상_도착[0]).as("전제 — 평시에 토큰 보유자는 뒷단까지 간다")
                             .isPositive();
                     assertThat(정상_봉우리[0]).as("전제 — 평시 봉우리를 쟀다").isPositive();
@@ -307,19 +346,24 @@ class CircuitAndSpikeScenarioTest {
                 .afterRecovery(() -> {
                     닫힐_때까지_기다린다();
                     다음_초를_기다린다();
-                    유입.sample(Instant.now());
-                    Instant 시작 = Instant.now();
+                    // RULE-EXCEPTION(TS-4): 봉우리는 벽시계 초 버킷으로만 잰다.
+                    // 고정 시각이면 모든 도착이 한 버킷에 들어가 봉우리가 사라진다.
+                    유입.sample(clock.instant());
+                    Instant 시작 = clock.instant();
                     long 전 = 뒷단.받은_수();
                     회복_토큰_상태.addAll(한꺼번에_토큰으로(몰아칠_수, 3_000));
                     회복_도착[0] = 뒷단.받은_수() - 전;
                     다음_초를_기다린다();
-                    유입.sample(Instant.now());
-                    회복_봉우리[0] = 유입.peakRps(시작, Instant.now());
+                    유입.sample(clock.instant());
+                    회복_봉우리[0] = 유입.peakRps(시작, clock.instant());
                 })
                 .assertEntry(ChaosScenario.Verdict.none())
                 .assertDuring(() -> RecoveryCriteria.violations(
                         서킷이_열렸다(),
-                        // 토큰을 든 사람은 서킷이 안 막는다 — 그래서 답을 받는다.
+                        // **열린 동안 뒷단에 닿는 것은 프로브 자리뿐이다.** 판정은
+                        // 토큰 보유자를 안 막지만 서킷 필터가 뒤에서 가로챈다 —
+                        // 그 둘이 갈리는 자리를 값으로 못 박는다.
+                        프로브_자리만_닿았다(유지중_도착[0]),
                         전부_답을_받았다("유지", 장애중_토큰_상태),
                         // 토큰 없는 신규는 줄로 간다 (F3).
                         줄에_세웠다(장애중_무토큰_상태),
@@ -336,6 +380,9 @@ class CircuitAndSpikeScenarioTest {
                         // RC4 — 같은 모양으로 쐈는데 봉우리가 커졌다면 그것은
                         // 게이트웨이가 억눌러 둔 것을 한꺼번에 푼 것이다.
                         RecoveryCriteria.recoveryBurst(정상_봉우리[0], 회복_봉우리[0]),
+                        // G8.12 — 회복까지 몇 번 열렸는가. C8 이 공허하다고 적어
+                        // 둔 자리이고, 이 판이 그것을 볼 수 있는 유일한 자리다.
+                        반복해서_안_열렸다(열린_횟수.get()),
                         중복_수신이_없다()))
                 // **RC2·RC3·RC5·RC6 은 여기서 안 잰다.** 순번을 안 돌려주고,
                 // 배분을 안 돌리므로 자리가 안 움직인다.
@@ -344,10 +391,10 @@ class CircuitAndSpikeScenarioTest {
 
     /** 초 경계를 넘긴다. 토큰 통과의 상한이 초 단위라 앞 배치와 예산을 안 섞는다. */
     private void 다음_초를_기다린다() {
-        long 지금 = Instant.now().getEpochSecond();
+        long 지금 = clock.instant().getEpochSecond();
         Awaitility.await().atMost(기다림)
                 .pollInterval(Duration.ofMillis(20))
-                .until(() -> Instant.now().getEpochSecond() > 지금);
+                .until(() -> clock.instant().getEpochSecond() > 지금);
     }
 
     /** 서킷이 열릴 때까지 두드린다. 창이 시간 기반이라 계속 실패를 넣어야 한다. */
@@ -355,7 +402,7 @@ class CircuitAndSpikeScenarioTest {
         Awaitility.await().atMost(기다림)
                 .pollInterval(Duration.ofMillis(100))
                 .until(() -> {
-                    토큰으로_시도한다(2_000 + (int) (System.nanoTime() % 1000));
+                    토큰으로_시도한다(두드림.incrementAndGet());
                     return 서킷().getState() == CircuitBreaker.State.OPEN;
                 });
     }
@@ -365,7 +412,7 @@ class CircuitAndSpikeScenarioTest {
         Awaitility.await().atMost(기다림)
                 .pollInterval(Duration.ofMillis(200))
                 .until(() -> {
-                    토큰으로_시도한다(4_000 + (int) (System.nanoTime() % 1000));
+                    토큰으로_시도한다(두드림.incrementAndGet());
                     return 서킷().getState() == CircuitBreaker.State.CLOSED;
                 });
     }
@@ -380,12 +427,44 @@ class CircuitAndSpikeScenarioTest {
     /**
      * <b>답을 받는가.</b> 도착 수만 보면 전원이 끊긴 판과 구분이 안 된다.
      */
+    // **개수만 보면 전원이 500 이어도 초록이다.** 서킷 폴백(503)과 초당 상한(429)은
+    // 원인이 다르고, 회복 판정의 뜻이 거기서 갈린다.
     private Optional<String> 전부_답을_받았다(String 구간, List<Integer> 상태) {
         if (상태.size() != 몰아칠_수) {
             return Optional.of("%s — %d 건만 답을 받았다 (보낸 %d)"
                     .formatted(구간, 상태.size(), 몰아칠_수));
         }
-        return Optional.empty();
+        long 엉뚱한_답 = 상태.stream()
+                .filter(status -> status != 200 && status != 202
+                        && status != 429 && status != 503)
+                .count();
+        return 엉뚱한_답 == 0 ? Optional.empty()
+                : Optional.of("%s — %d 건이 200·202·429·503 이 아니다: %s"
+                        .formatted(구간, 엉뚱한_답, 상태));
+    }
+
+    /**
+     * <b>열린 동안 뒷단에 닿는 것은 half-open 프로브뿐이다.</b>
+     *
+     * <p>판정은 토큰 보유자를 안 막지만(사다리 2번이 6' 번보다 앞이다) 서킷
+     * 필터가 판정 뒤에 붙어 그 사람도 가로챈다. 닿은 것이 프로브 허용 수를
+     * 넘으면 서킷이 유입을 못 조인 것이다.
+     */
+    private Optional<String> 프로브_자리만_닿았다(long 도착) {
+        return 도착 <= 프로브_허용 ? Optional.empty()
+                : Optional.of("서킷이 열린 동안 %d 건이 뒷단에 닿았다 — 프로브 허용 %d 이내여야 한다"
+                        .formatted(도착, 프로브_허용));
+    }
+
+    /**
+     * <b>열린 횟수가 둘을 넘으면 회복이 반복 실패한 것이다</b> (G8.12).
+     *
+     * <p>half-open 순간 그때 도착한 트래픽이 약한 뒷단에 꽂혀 다시 열린다.
+     * 차례를 받은 사람들이 1 초 밴드로 되돌아오므로 이 판이 그 그림 그대로다.
+     */
+    private Optional<String> 반복해서_안_열렸다(int 열린_횟수) {
+        return 열린_횟수 <= 2 ? Optional.empty()
+                : Optional.of("서킷이 %d 번 열렸다 — 두 번 이내여야 한다".formatted(열린_횟수));
     }
 
     /** 토큰 없는 신규는 줄로 간다 (F3). 뒷단으로 흘리면 약한 뒷단이 다시 무너진다. */

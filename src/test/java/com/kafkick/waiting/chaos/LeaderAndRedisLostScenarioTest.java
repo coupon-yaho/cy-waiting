@@ -300,6 +300,9 @@ class LeaderAndRedisLostScenarioTest {
         long[] 한산한_쿠폰_도착 = new long[3];
         long[] 상한 = new long[1];
         long[] 걸린_초 = new long[1];
+        int[] 주입_직후_쿠폰 = new int[1];
+        boolean[] 주입_직후_낡음 = new boolean[1];
+        List<Integer> 회복_줄_상태 = new ArrayList<>();
 
         ChaosScenario.named("X1 리더 사망 + 레디스 정지")
                 .baseline(() -> {
@@ -320,6 +323,11 @@ class LeaderAndRedisLostScenarioTest {
                     // **리더는 이미 죽어 있다.** 여기서 레디스를 끊어 줄 등록까지
                     // 막는다 — 두 장애가 겹쳐야 F1 셋째 줄이 열린다.
                     faults.끊는다();
+                    // **스냅샷을 지우지 않는다** (C1 진입 기준). 레디스가 죽었다고
+                    // 재료를 버리면 판정이 그 자리에서 멎는다 — 낡은 재료로라도
+                    // 판정을 이어 가는 것이 이 설계의 전제다.
+                    주입_직후_쿠폰[0] = holder.current().coupons().size();
+                    주입_직후_낡음[0] = holder.isDataStale();
                 })
                 .duringFault(() -> {
                     Awaitility.await().atMost(기다림).until(holder::isDataStale);
@@ -359,10 +367,16 @@ class LeaderAndRedisLostScenarioTest {
                     한산한_쿠폰_도착[2] = 받은_수(한산한_쿠폰) - 회복_전;
                     회복_뒤_자리 = 자리들();
                     줄_쿠폰_도착[2] = 잰다(줄_선_쿠폰,
-                            () -> 여러_번_시도한다(줄_선_쿠폰, 한산한_보낼_수, 3_500));
+                            () -> 회복_줄_상태.addAll(
+                                    여러_번_시도한다(줄_선_쿠폰, 한산한_보낼_수, 3_500)));
                 })
                 // 진입 판정은 주입 직후다. 아직 아무것도 안 보냈으므로 잴 것이 없다.
-                .assertEntry(ChaosScenario.Verdict.none())
+                .assertEntry(() -> RecoveryCriteria.violations(
+                        // 레디스가 죽었다고 재료를 버리면 판정이 멎는다.
+                        스냅샷을_안_지웠다(주입_직후_쿠폰[0]),
+                        // 주입 직후는 아직 안 낡았다. 낡았으면 이 판이 재려는
+                        // 구간(신선한 재료 + 죽은 레디스)을 건너뛴 것이다.
+                        주입_직후에_안_낡았다(주입_직후_낡음[0])))
                 .assertDuring(() -> RecoveryCriteria.violations(
                         // 양성 대조 — 한산한 쿠폰은 평시만큼 간다.
                         열려_있었다(한산한_쿠폰_도착[1], 한산한_쿠폰_도착[0]),
@@ -380,6 +394,9 @@ class LeaderAndRedisLostScenarioTest {
                         열려_있었다(한산한_쿠폰_도착[2], 한산한_쿠폰_도착[0]),
                         // 레디스가 돌아오면 다시 줄에 세운다 — 추월이 끝난다.
                         줄을_추월하지_않았다(줄_쿠폰_도착[2]),
+                        // **도착 0 만 보면 전원 5xx 도 통과다.** 줄로 갔는지를
+                        // 응답으로 따로 본다.
+                        줄에_다시_세웠다(회복_줄_상태),
                         RecoveryCriteria.slowVerdictReturn(
                                 낡음이_걷히기까지, 낡음이_걷힐_한계),
                         // **RC5 — C1 이 구조적으로 못 잰 자리다.** 영속을 켰으므로
@@ -469,5 +486,34 @@ class LeaderAndRedisLostScenarioTest {
             return Optional.empty();
         }
         return Optional.of("레디스가 살아 있다 — 장애가 안 걸렸다");
+    }
+
+    /**
+     * <b>레디스가 죽었다고 재료를 버리지 않는다</b> (C1 진입 기준).
+     *
+     * <p>버리면 판정이 그 자리에서 멎는다 — 낡은 재료로라도 판정을 이어 가는
+     * 것이 이 설계의 전제다.
+     */
+    private Optional<String> 스냅샷을_안_지웠다(int 쿠폰_수) {
+        return 쿠폰_수 >= 2 ? Optional.empty()
+                : Optional.of("주입 직후 재료에 쿠폰이 %d 개다 — 둘이 그대로 있어야 한다"
+                        .formatted(쿠폰_수));
+    }
+
+    /** 주입 직후는 아직 안 낡았다. 낡았으면 재려는 구간을 건너뛴 것이다. */
+    private Optional<String> 주입_직후에_안_낡았다(boolean 낡음) {
+        return 낡음 ? Optional.of("주입 직후에 이미 낡았다 — 신선한 재료 구간을 건너뛰었다")
+                : Optional.empty();
+    }
+
+    /** 레디스가 돌아오면 줄로 간다. 202 가 아니면 그 사람은 줄에 못 선 것이다. */
+    private Optional<String> 줄에_다시_세웠다(List<Integer> 상태) {
+        if (상태.size() != 한산한_보낼_수) {
+            return Optional.of("회복 — %d 건만 답을 받았다 (보낸 %d)"
+                    .formatted(상태.size(), 한산한_보낼_수));
+        }
+        long 못_선_수 = 상태.stream().filter(status -> status != 202).count();
+        return 못_선_수 == 0 ? Optional.empty()
+                : Optional.of("회복 — %d 건이 줄에 못 섰다: %s".formatted(못_선_수, 상태));
     }
 }

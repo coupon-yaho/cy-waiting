@@ -1,6 +1,7 @@
 package com.kafkick.waiting.domain.queue;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.within;
 
 import com.kafkick.waiting.domain.allocation.CouponDemand;
@@ -229,5 +230,37 @@ class PollBudgetPlannerTest {
 
         assertThat(scale.nodes()).isEqualTo(1);
         assertThat(scale.budget()).isCloseTo(PollBudgetPlanner.budgetRps(1), within(0.1));
+    }
+
+    /**
+     * <b>어긋난 조합을 못 만들게 막는다.</b> 표준 생성자가 열려 있으면 배수만
+     * 1 로 박은 {@code Scale} 로 시험이 초록이 된다 — 재는 척하는 픽스처다.
+     */
+    @Test
+    @DisplayName("배수가_예상과_예산에_안_맞으면_거절한다")
+    void 배수가_예상과_예산에_안_맞으면_거절한다() {
+        assertThatThrownBy(() -> new PollBudgetPlanner.Scale(20_000, 4_000, 1.0, 20))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("노드가_0_이하면_거절한다")
+    void 노드가_0_이하면_거절한다() {
+        assertThatThrownBy(() -> new PollBudgetPlanner.Scale(0, 0, 1.0, 0))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("예상이_음수면_거절한다")
+    void 예상이_음수면_거절한다() {
+        assertThatThrownBy(() -> new PollBudgetPlanner.Scale(-1, 4_000, 1.0, 20))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("예산이_음수면_거절한다")
+    void 예산이_음수면_거절한다() {
+        assertThatThrownBy(() -> new PollBudgetPlanner.Scale(0, -1, 1.0, 20))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }

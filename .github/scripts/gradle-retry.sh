@@ -13,7 +13,12 @@ set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
 # 세 번이면 대개 넘어간다. 늘리면 정말 죽은 저장소에서 잡 상한을 다 태운다.
+#
+# **0 이나 쓰레기가 들어오면 되돌린다.** 안 그러면 루프가 한 번도 안 돌고 rc 가 0 인
+# 채로 끝난다 — 그레이들을 부르지 않고 잡이 초록이 된다. 재시도 장치가 스스로
+# 거짓 초록을 내는 것이 가장 나쁜 종류다.
 attempts=${GRADLE_RETRY_ATTEMPTS:-3}
+[ "$attempts" -ge 1 ] 2>/dev/null || attempts=3
 log=$(mktemp)
 trap 'rm -f "$log"' EXIT
 
@@ -26,12 +31,22 @@ for ((i = 1; i <= attempts; i++)); do
     fi
     # **자국이 없으면 그대로 실패시킨다.** 여기가 넓어지면 재시도가 시험 실패를
     # 삼키기 시작한다.
-    if ! grep -qE "Could not resolve|Could not get resource|is disabled due to earlier error|Too Many Requests" "$log"; then
+    #
+    # **`Could not resolve` 만 보면 안 된다.** 스프링의
+    # `Could not resolve placeholder` 와 잭슨의 `Could not resolve type id` 가 같은
+    # 문구로 난다 — 하필 이 저장소가 가장 무서워하는 조용한 배선 실패다. 그것이
+    # 여기 걸리면 결정적인 설정 결함이 "저장소가 죽었다" 로 보고되고 당직이
+    # 엉뚱한 데를 본다. 그레이들의 해결 실패 형태로 좁힌다.
+    #
+    # **도커 허브도 같이 본다.** 통합·카오스가 컨테이너를 받는데 그쪽 429 는
+    # 소문자 `toomanyrequests` 라 위 패턴에 하나도 안 걸린다. 네트워크를 제일
+    # 많이 쓰는 두 계층이 정작 무방비였다.
+    if ! grep -qE "Could not resolve (all|[a-zA-Z0-9_.-]+:)|Could not (GET|HEAD) 'http|toomanyrequests|pull rate limit" "$log"; then
         exit "$rc"
     fi
     if [ "$i" -lt "$attempts" ]; then
         echo "::warning::의존성 해결이 실패했다 (${i}/${attempts}) — 잠시 뒤 다시 시도한다"
-        sleep $((i * 15))
+        sleep $(( ${RETRY_SLEEP:-15} * i ))
     fi
 done
 echo "::error::의존성 해결이 ${attempts}회 연속 실패했다 — 저장소가 살아 있는지 본다"

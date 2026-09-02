@@ -167,6 +167,41 @@ class TunableValuesTest {
             assertThat(비율("{\"other\":\"a")).isEqualTo(-1);
         }
 
+        /**
+         * <b>찾는 키의 값 자리</b>가 안 닫힌 블록이어야 한다.
+         *
+         * <p>다른 이름의 블록이면 이 자리를 안 지난다 — 블록 끝을 -1 이 아니라
+         * 0 으로 내는 결함이 그 픽스처에서는 안 드러난다.
+         */
+        @Test
+        @DisplayName("찾는_키의_안_닫힌_블록도_대체값이다")
+        void 찾는_키의_안_닫힌_블록도_대체값이다() {
+            assertThat(비율("{\"idleCreditRatio\":{\"a\":1")).isEqualTo(-1);
+            assertThat(비율("{\"idleCreditRatio\":{\"a\":\"x}")).isEqualTo(-1);
+            assertThat(비율("{\"idleCreditRatio\":[1,2")).isEqualTo(-1);
+        }
+
+        /**
+         * <b>자바가 받아 주는 표기를 우리가 받으면 안 된다.</b>
+         *
+         * <p>{@code Double.valueOf} 는 리터럴 접미사와 16진 부동소수를 받는다.
+         * 글자 화이트리스트가 없으면 운영자가 못 쓴 값이 조용히 통과한다.
+         */
+        @Test
+        @DisplayName("자바_리터럴_표기는_버린다")
+        void 자바_리터럴_표기는_버린다() {
+            assertThat(비율("{\"idleCreditRatio\":0.5d}")).isEqualTo(-1);
+            assertThat(비율("{\"idleCreditRatio\":0.5f}")).isEqualTo(-1);
+            assertThat(비율("{\"idleCreditRatio\":0x1.8p-1}")).isEqualTo(-1);
+        }
+
+        /** 음의 지수는 받는다. 화이트리스트에서 빼면 이 표기가 조용히 안 먹는다. */
+        @Test
+        @DisplayName("음의_지수_표기를_받는다")
+        void 음의_지수_표기를_받는다() {
+            assertThat(비율("{\"idleCreditRatio\":5e-1}")).isEqualTo(0.5);
+        }
+
         /** 콜론이 없으면 이름과 값을 못 가른다. */
         @Test
         @DisplayName("콜론이_없으면_대체값이다")

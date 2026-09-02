@@ -189,22 +189,30 @@ class CoalescingPersonalizationTest {
                 .mapToObj(i -> 조회("사람" + i))
                 .toList();
         // 선두를 붙잡아 둔 채 나머지를 붙인다. 선두의 응답에는 쿠키가 실린다.
-        사람들.forEach(e -> filter.filter(e, ex -> {
-            String 회원 = ex.getRequest().getHeaders().getFirst("X-Member-Id");
-            뒷단.incrementAndGet();
-            ex.getResponse().getHeaders().add("Set-Cookie", "SESSION=" + 회원 + "; Path=/");
-            return 답한다(ex, "목록:" + 회원).then(아직.asMono());
-        }).subscribe());
+        // **게이트를 쓰기 앞에 건다.** 뒤에 걸면 선두가 이미 담고 배운 뒤라
+        // 뒤엣사람이 플라이트에 안 붙고 캐시에서 히트한다 — 재려던 갈래가 아니다.
+        List<Mono<Void>> 끝남 = 사람들.stream().map(e -> filter.filter(e, ex ->
+                아직.asMono().then(Mono.defer(() -> {
+                    String 회원 = ex.getRequest().getHeaders().getFirst("X-Member-Id");
+                    뒷단.incrementAndGet();
+                    ex.getResponse().getHeaders()
+                            .add("Set-Cookie", "SESSION=" + 회원 + "; Path=/");
+                    return 답한다(ex, "목록:" + 회원);
+                }))).cache()).toList();
+        끝남.forEach(Mono::subscribe);
         아직.tryEmitEmpty();
 
-        Set<String> 받은_쿠키 = ConcurrentHashMap.newKeySet();
-        사람들.forEach(e -> 받은_쿠키.addAll(
-                e.getResponse().getHeaders().getOrEmpty("Set-Cookie")));
-
         assertThat(뒷단).as("나눠 줄 수 없는 응답이라 각자 부른다").hasValue(5);
-        assertThat(받은_쿠키).as("남의 쿠키를 받는 사람이 없다").hasSize(5);
+        // **누가 누구 것을 받았는지까지 본다.** 개수만 보면 다섯이 서로 엉뚱한
+        // 남의 쿠키를 받아도 통과한다 — 이 시험이 막으려는 것이 정확히 그것이다.
+        assertThat(사람들).allSatisfy(e -> assertThat(
+                e.getResponse().getHeaders().getOrEmpty("Set-Cookie"))
+                .containsExactly("SESSION="
+                        + e.getRequest().getHeaders().getFirst("X-Member-Id") + "; Path=/"));
         assertThat(건너뛴("set-cookie"))
                 .as("왜 안 모았는지가 사유로 남는다").isEqualTo(4);
+        // 뒤엣사람의 응답이 끝났는가. 안 끝나면 클라이언트가 영원히 기다린다.
+        assertThat(Mono.when(끝남).block(java.time.Duration.ofSeconds(5))).isNull();
     }
 
     /**
@@ -225,17 +233,25 @@ class CoalescingPersonalizationTest {
         List<MockServerWebExchange> 사람들 = IntStream.range(0, 5)
                 .mapToObj(i -> 조회("같은사람"))
                 .toList();
-        사람들.forEach(e -> filter.filter(e, ex -> {
-            뒷단.incrementAndGet();
-            // 응답이 이 자리에서 처음으로 갈림 헤더를 말한다.
-            ex.getResponse().getHeaders().set("Vary", "X-Member-Id");
-            return 답한다(ex, "목록").then(아직.asMono());
-        }).subscribe());
+        List<Mono<Void>> 끝남 = 사람들.stream().map(e -> filter.filter(e, ex ->
+                아직.asMono().then(Mono.defer(() -> {
+                    뒷단.incrementAndGet();
+                    // 응답이 이 자리에서 처음으로 갈림 헤더를 말한다.
+                    ex.getResponse().getHeaders().set("Vary", "X-Member-Id");
+                    return 답한다(ex, "목록:"
+                            + ex.getRequest().getHeaders().getFirst("X-Member-Id"));
+                }))).cache()).toList();
+        끝남.forEach(Mono::subscribe);
         아직.tryEmitEmpty();
 
         assertThat(뒷단).as("값이 같으면 다시 안 부른다").hasValue(1);
+        assertThat(센다("hit", "flight-revalidated"))
+                .as("배우기 전에 모인 무리는 되찾아 간다").isEqualTo(4);
+        // **본문에 갈림 값을 싣는다.** 상수를 쓰면 남의 응답을 받아도 같은
+        // 문자열이라 유출이 정의상 안 드러난다.
         assertThat(사람들).allSatisfy(e ->
-                assertThat(e.getResponse().getBodyAsString().block()).isEqualTo("목록"));
+                assertThat(e.getResponse().getBodyAsString().block()).isEqualTo("목록:같은사람"));
+        assertThat(Mono.when(끝남).block(java.time.Duration.ofSeconds(5))).isNull();
     }
 
     /**
@@ -250,17 +266,23 @@ class CoalescingPersonalizationTest {
         List<MockServerWebExchange> 사람들 = IntStream.range(0, 5)
                 .mapToObj(i -> 조회("사람" + i))
                 .toList();
-        사람들.forEach(e -> filter.filter(e, ex -> {
-            뒷단.incrementAndGet();
-            ex.getResponse().getHeaders().set("Vary", "X-Member-Id");
-            return 답한다(ex, "목록:" + ex.getRequest().getHeaders().getFirst("X-Member-Id"))
-                    .then(아직.asMono());
-        }).subscribe());
+        List<Mono<Void>> 끝남 = 사람들.stream().map(e -> filter.filter(e, ex ->
+                아직.asMono().then(Mono.defer(() -> {
+                    뒷단.incrementAndGet();
+                    ex.getResponse().getHeaders().set("Vary", "X-Member-Id");
+                    return 답한다(ex, "목록:"
+                            + ex.getRequest().getHeaders().getFirst("X-Member-Id"));
+                }))).cache()).toList();
+        끝남.forEach(Mono::subscribe);
         아직.tryEmitEmpty();
 
         assertThat(뒷단).as("값이 다르면 각자 부른다").hasValue(5);
+        assertThat(건너뛴("vary-learned"))
+                .as("배운 뒤라 값이 다른 사람은 각자 간다").isEqualTo(4);
+        // **각자 자기 것을 받았는가.** 여기가 개인화 유출이 드러나는 자리다.
         assertThat(사람들).allSatisfy(e -> assertThat(e.getResponse().getBodyAsString().block())
                 .isEqualTo("목록:" + e.getRequest().getHeaders().getFirst("X-Member-Id")));
+        assertThat(Mono.when(끝남).block(java.time.Duration.ofSeconds(5))).isNull();
     }
 
     /**

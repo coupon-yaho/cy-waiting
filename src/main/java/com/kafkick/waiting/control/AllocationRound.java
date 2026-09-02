@@ -45,8 +45,6 @@ public final class AllocationRound {
     private static final Logger log = LoggerFactory.getLogger(AllocationRound.class);
 
     /** 이월을 못 받았을 때의 계수. 이월받으면 그쪽 계수를 따른다. */
-    private static final double DEFAULT_ALPHA = 0.3;
-
     /** 매진 큐 정리 판단 (7.3). 지우는 것은 어댑터가 한다. */
     /** 이탈자 청소 (7.4). <b>멈추는 판단을 안에 들고 있다.</b> */
     private final QueueSweeper sweeper;
@@ -344,7 +342,7 @@ public final class AllocationRound {
         // 다만 그 스무더를 **저장하지는 않는다.** 저장하면 다음 판이 이월을
         // 아예 안 시도해, 흔들림이 지나가도 그 임기 내내 콜드로 남는다.
         CreditSmoother carried = smoother.get();
-        CreditSmoother current = carried == null ? CreditSmoother.of(DEFAULT_ALPHA) : carried;
+        CreditSmoother current = carried == null ? CreditSmoother.of(CreditSmoother.DEFAULT_ALPHA) : carried;
         // **하한은 평활 뒤에 건다.** 하한은 관측이 아니라 정책이다. 평활을 거치면
         // 앞선 낮은 값에서 올라오는 데 열 틱이 넘고, 그동안 노드당 몫이 유휴 비율
         // 아래에 머물러 한산 통과 상한이 0 이다 — 하한을 둔 이유가 사라진다 (R1).

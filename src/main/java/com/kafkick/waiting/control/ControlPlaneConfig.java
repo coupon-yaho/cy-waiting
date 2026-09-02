@@ -30,9 +30,6 @@ import reactor.core.scheduler.Schedulers;
         matchIfMissing = true)
 public class ControlPlaneConfig {
 
-    /** 평활화 계수. 클수록 최근 값을 빨리 따라간다. */
-    private static final double SMOOTHING_ALPHA = 0.3;
-
     /** 이탈 기록 보관. <b>등록도 같은 값을 읽는다</b> — 갈리면 판정이 갈린다. */
     private static final long GRACE_SEC = GraceRetention.SECONDS;
 
@@ -76,7 +73,7 @@ public class ControlPlaneConfig {
                 capacity::lastKnown,
                 registry::count, port::apply, port::publish, Instant::now,
                 () -> port.load().map(hash ->
-                        CreditSmoother.restore(SMOOTHING_ALPHA, codec.smoothing(hash))),
+                        CreditSmoother.restore(CreditSmoother.DEFAULT_ALPHA, codec.smoothing(hash))),
                 codec, capacity::lastFloor, tunables::current,
                 // **유예를 값으로 정한다** (7.3.2). 스냅샷 낡음 한계보다 충분히
                 // 커야 마지막 폴링이 줄을 안 잃는다.

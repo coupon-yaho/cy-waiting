@@ -60,10 +60,20 @@ class BothReturnScenarioTest {
      * <p>수집기의 날값을 그대로 나누면 프로덕션이 실제로 발행하는 값과 다른 것을
      * 재게 된다 — 평활화나 이월이 깨져도 이 판이 초록이다.
      */
-    private final CreditSmoother 평활 = CreditSmoother.of(0.3);
+    /** 계수를 배선과 나눠 쓴다. 따로 적으면 기본값이 바뀌는 날 갈린다. */
+    private final CreditSmoother 평활 = CreditSmoother.of(CreditSmoother.DEFAULT_ALPHA);
 
-    /** 평활화가 가라앉는 데 드는 틱. 0.3 이면 마흔 틱에 0.1% 안이다. */
-    private static final int 수렴_틱 = 40;
+    /** 가라앉았다고 볼 남은 오차. 램프 끝 판정의 허용치와 같은 값이다. */
+    private static final double 허용_오차 = 0.01;
+
+    /**
+     * 평활화가 가라앉는 데 드는 틱.
+     *
+     * <p>남는 오차가 {@code (1 - alpha)^n} 이므로 계수에서 역산한다 — 상수로
+     * 두면 계수를 바꾸는 날 이 판이 덜 가라앉은 값을 정상값으로 읽는다.
+     */
+    private static final int 수렴_틱 = (int) Math.ceil(
+            Math.log(허용_오차) / Math.log(1 - CreditSmoother.DEFAULT_ALPHA));
 
     private final GatewayRegistry 분모 = GatewayRegistry.of(하강_지연_틱, 복귀_뒤_노드);
 
@@ -271,8 +281,8 @@ class BothReturnScenarioTest {
      */
     private Optional<String> 램프_끝에_평시로_돌아온다(long 평시, long 램프_끝) {
         long 오차 = Math.abs(램프_끝 - 평시);
-        return 오차 <= 평시 / 100 ? Optional.empty()
-                : Optional.of("램프가 끝났는데 노드당 몫이 %d 다 — 평시 %d 의 1%% 안이어야 한다"
-                        .formatted(램프_끝, 평시));
+        return 오차 <= (long) (평시 * 허용_오차) ? Optional.empty()
+                : Optional.of("램프가 끝났는데 노드당 몫이 %d 다 — 평시 %d 의 %.0f%% 안이어야 한다"
+                        .formatted(램프_끝, 평시, 허용_오차 * 100));
     }
 }

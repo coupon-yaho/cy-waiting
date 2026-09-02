@@ -1,6 +1,8 @@
 package com.kafkick.waiting.chaos;
 
 import com.kafkick.waiting.control.CapacityCollector;
+import com.kafkick.waiting.control.ControlPlaneProperties;
+import com.kafkick.waiting.domain.allocation.CreditSmoother;
 import com.kafkick.waiting.control.CapacityReport;
 import com.kafkick.waiting.control.GatewayRegistry;
 import java.time.Duration;
@@ -21,11 +23,20 @@ class BothReturnScenarioTest {
 
     private static final long NOW = 1_800_000_000L;
 
-    private static final Duration 램프 = Duration.ofSeconds(60);
+    /**
+     * 배선이 쓰는 값 그대로 읽는다.
+     *
+     * <p><b>손으로 적으면 배포 기본값이 바뀌어도 이 시험만 옛 눈금으로 초록이다</b> —
+     * 그러면 계획서가 "닫혔다" 고 적은 것이 다른 배포의 얘기가 된다.
+     */
+    private static final ControlPlaneProperties.Capacity 배선 =
+            ControlPlaneProperties.defaults().capacity();
 
-    private static final Duration 신선도 = Duration.ofSeconds(3);
+    private static final Duration 램프 = 배선.rampUp();
 
-    private static final long 하한 = 10;
+    private static final Duration 신선도 = 배선.freshness();
+
+    private static final long 하한 = 배선.floor();
 
     private static final int 남은_노드 = 4;
 
@@ -35,13 +46,24 @@ class BothReturnScenarioTest {
     private static final long 인스턴스_여유 = 5_000;
 
     /** 하강 지연. 노드가 줄어드는 쪽은 늦게 반영된다 (F5). */
-    private static final int 하강_지연_틱 = 3;
+    private static final int 하강_지연_틱 = 배선.rampDownTicks();
 
     /** 소실 첫 관측 뒤의 분모. 지연이 있으면 아직 안 내려간다. */
     private final int[] 첫_관측_뒤_분모 = new int[1];
 
     private final CapacityCollector 수집기 =
-            CapacityCollector.of(램프, 신선도, 하한, 100_000);
+            CapacityCollector.of(램프, 신선도, 하한, 배선.perInstanceCap());
+
+    /**
+     * 발행 전에 걸리는 평활화. <b>배선이 쓰는 계수와 같다.</b>
+     *
+     * <p>수집기의 날값을 그대로 나누면 프로덕션이 실제로 발행하는 값과 다른 것을
+     * 재게 된다 — 평활화나 이월이 깨져도 이 판이 초록이다.
+     */
+    private final CreditSmoother 평활 = CreditSmoother.of(0.3);
+
+    /** 평활화가 가라앉는 데 드는 틱. 0.3 이면 마흔 틱에 0.1% 안이다. */
+    private static final int 수렴_틱 = 40;
 
     private final GatewayRegistry 분모 = GatewayRegistry.of(하강_지연_틱, 복귀_뒤_노드);
 
@@ -59,9 +81,20 @@ class BothReturnScenarioTest {
                         new CapacityReport(둘째, 인스턴스_여유, 지금));
     }
 
-    /** 이 틱의 노드당 몫. 배분이 실제로 나누는 식과 같은 자리다. */
+    /**
+     * 이 수준이 <b>가라앉았을 때</b>의 노드당 몫.
+     *
+     * <p>수집기의 날값을 그대로 나누면 프로덕션이 발행하는 값과 다른 것을 재게
+     * 된다 — 발행 전에 평활화가 걸린다. 그렇다고 한 틱만 넣으면 평활화가 아직
+     * 따라오는 중이라 값이 흔들리므로, <b>같은 수준을 충분히 넣어 가라앉힌 뒤</b>
+     * 나눈다. 이 판이 견주는 것은 구간마다의 정상값이지 전이의 모양이 아니다.
+     */
     private long 노드당(long 크레딧) {
-        return 크레딧 / 분모.count();
+        double 가라앉은 = 크레딧;
+        for (int i = 0; i < 수렴_틱; i++) {
+            가라앉은 = 평활.observe(크레딧);
+        }
+        return (long) 가라앉은 / 분모.count();
     }
 
     /**
@@ -229,9 +262,17 @@ class BothReturnScenarioTest {
                         .formatted(소실중, 복귀_직후));
     }
 
+    /**
+     * 램프가 끝나면 평시로 돌아온다.
+     *
+     * <p><b>정확히 같기를 요구하지 않는다.</b> 발행 전 평활화가 지수 이동평균이라
+     * 몇 틱을 넣어도 마지막 한 자리가 남는다 — 그 한 자리를 요구하면 평활화
+     * 계수를 만지는 날 이 판이 뜻 없이 빨개진다.
+     */
     private Optional<String> 램프_끝에_평시로_돌아온다(long 평시, long 램프_끝) {
-        return 램프_끝 == 평시 ? Optional.empty()
-                : Optional.of("램프가 끝났는데 노드당 몫이 %d 다 — 평시 %d 여야 한다"
+        long 오차 = Math.abs(램프_끝 - 평시);
+        return 오차 <= 평시 / 100 ? Optional.empty()
+                : Optional.of("램프가 끝났는데 노드당 몫이 %d 다 — 평시 %d 의 1%% 안이어야 한다"
                         .formatted(램프_끝, 평시));
     }
 }

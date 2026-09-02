@@ -2,13 +2,11 @@ package com.kafkick.waiting.domain.routing;
 
 import java.time.Clock;
 import java.time.Duration;
-import java.util.Collections;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -69,23 +67,12 @@ public final class InFlightRegistry {
         return Set.copyOf(칸.keySet());
     }
 
-    /** 인스턴스별 현재 수. 게이지 한 번에 전부 읽으려고 둔다. */
-    public Map<String, Integer> snapshot() {
-        long 기준 = 시계.millis() - 수명.toMillis();
-        Map<String, Integer> 결과 = new ConcurrentHashMap<>();
-        칸.forEach((인스턴스, 자리) -> 결과.put(인스턴스, 자리.센다(기준)));
-        return Collections.unmodifiableMap(결과);
-    }
-
     /** 요청 하나의 자리를 잡아 둔 표. 놓기 전까지 그 인스턴스의 수에 든다. */
     public static final class Ticket {
 
         private final Slot 자리;
 
         private final Key 열쇠;
-
-        /** 두 번 놓으면 카운터가 음수가 되고, 그 인스턴스만 계속 뽑힌다. */
-        private final AtomicBoolean 놓았다 = new AtomicBoolean();
 
         private Ticket(Slot 자리, Key 열쇠) {
             this.자리 = 자리;
@@ -94,9 +81,7 @@ public final class InFlightRegistry {
 
         /** 완료·에러·타임아웃·취소 어느 쪽이든 여기로 온다. 두 번 불러도 한 번만 준다. */
         public void finished() {
-            if (놓았다.compareAndSet(false, true)) {
-                자리.뺀다(열쇠);
-            }
+            자리.뺀다(열쇠);
         }
     }
 
@@ -109,9 +94,8 @@ public final class InFlightRegistry {
         private final AtomicInteger 수 = new AtomicInteger();
 
         void 넣는다(Key 열쇠) {
-            if (산것.put(열쇠, Boolean.TRUE) == null) {
-                수.incrementAndGet();
-            }
+            산것.put(열쇠, Boolean.TRUE);
+            수.incrementAndGet();
         }
 
         void 뺀다(Key 열쇠) {
@@ -126,7 +110,7 @@ public final class InFlightRegistry {
                     머리 = 산것.firstEntry()) {
                 뺀다(머리.getKey());
             }
-            return Math.max(0, 수.get());
+            return 수.get();
         }
     }
 

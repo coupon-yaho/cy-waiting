@@ -1,6 +1,7 @@
 package com.kafkick.waiting.domain.routing;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.kafkick.waiting.MutableClock;
 import java.time.Duration;
@@ -182,6 +183,44 @@ class InFlightRegistryTest {
             표.finished();
 
             assertThat(레지스트리.instances()).isEmpty();
+        }
+    }
+
+    @Nested
+    @DisplayName("만들 때")
+    class Construction {
+
+        /** 수명이 0 이면 모든 항목이 즉시 만료돼 레지스트리가 늘 0 을 돌려준다. */
+        @Test
+        @DisplayName("수명이_양수가_아니면_거절한다")
+        void 수명이_양수가_아니면_거절한다() {
+            assertThatThrownBy(() -> InFlightRegistry.of(Duration.ZERO, 시계))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> InFlightRegistry.of(Duration.ofSeconds(-1), 시계))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        @DisplayName("시계가_없으면_거절한다")
+        void 시계가_없으면_거절한다() {
+            assertThatThrownBy(() -> InFlightRegistry.of(수명, null))
+                    .isInstanceOf(NullPointerException.class);
+        }
+
+        @Test
+        @DisplayName("수명이_없으면_거절한다")
+        void 수명이_없으면_거절한다() {
+            assertThatThrownBy(() -> InFlightRegistry.of(null, 시계))
+                    .isInstanceOf(NullPointerException.class);
+        }
+
+        @Test
+        @DisplayName("인스턴스가_없으면_거절한다")
+        void 인스턴스가_없으면_거절한다() {
+            assertThatThrownBy(() -> 레지스트리.started(null))
+                    .isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> 레지스트리.retain(null))
+                    .isInstanceOf(NullPointerException.class);
         }
     }
 

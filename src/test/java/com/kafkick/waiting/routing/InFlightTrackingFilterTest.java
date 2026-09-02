@@ -37,7 +37,7 @@ class InFlightTrackingFilterTest {
     private final InFlightTrackingFilter 필터 =
             InFlightTrackingFilter.of(레지스트리, () -> 지금);
 
-    private static ServerWebExchange 고른_판(String instanceId) {
+    private static ServerWebExchange 고른_요청(String instanceId) {
         MockServerWebExchange exchange = MockServerWebExchange.from(
                 MockServerHttpRequest.post("/api/v1/coupons/c1/issue"));
         ServiceInstance instance =
@@ -47,7 +47,7 @@ class InFlightTrackingFilterTest {
         return exchange;
     }
 
-    private static ServerWebExchange 안_고른_판() {
+    private static ServerWebExchange 안_고른_요청() {
         return MockServerWebExchange.from(MockServerHttpRequest.post("/api/v1/coupons/c1/issue"));
     }
 
@@ -55,11 +55,11 @@ class InFlightTrackingFilterTest {
     @Test
     @DisplayName("도는_동안_물린_것으로_센다")
     void 도는_동안_물린_것으로_센다() {
-        ServerWebExchange 판 = 고른_판("be-1");
+        ServerWebExchange 요청 = 고른_요청("be-1");
         GatewayFilterChain 사슬 = ex ->
                 Mono.fromRunnable(() -> assertThat(레지스트리.count("be-1", 지금)).isEqualTo(1));
 
-        StepVerifier.create(필터.filter(판, 사슬)).verifyComplete();
+        StepVerifier.create(필터.filter(요청, 사슬)).verifyComplete();
 
         assertThat(레지스트리.count("be-1", 지금)).isZero();
     }
@@ -70,7 +70,7 @@ class InFlightTrackingFilterTest {
     void 에러로_끝나도_되돌린다() {
         GatewayFilterChain 사슬 = ex -> Mono.error(new IllegalStateException("뒷단이 끊었다"));
 
-        StepVerifier.create(필터.filter(고른_판("be-1"), 사슬))
+        StepVerifier.create(필터.filter(고른_요청("be-1"), 사슬))
                 .verifyError(IllegalStateException.class);
 
         assertThat(레지스트리.count("be-1", 지금)).isZero();
@@ -82,7 +82,7 @@ class InFlightTrackingFilterTest {
     void 취소돼도_되돌린다() {
         GatewayFilterChain 사슬 = ex -> Mono.never();
 
-        필터.filter(고른_판("be-1"), 사슬).subscribe().dispose();
+        필터.filter(고른_요청("be-1"), 사슬).subscribe().dispose();
 
         assertThat(레지스트리.count("be-1", 지금)).isZero();
     }
@@ -91,21 +91,21 @@ class InFlightTrackingFilterTest {
     @Test
     @DisplayName("안_고른_요청은_안_센다")
     void 안_고른_요청은_안_센다() {
-        StepVerifier.create(필터.filter(안_고른_판(), ex -> Mono.empty())).verifyComplete();
+        StepVerifier.create(필터.filter(안_고른_요청(), ex -> Mono.empty())).verifyComplete();
 
         assertThat(레지스트리.instances()).isEmpty();
     }
 
-    /** 고를 대가 없었던 판도 안 센다. 빈 답에는 인스턴스가 없다. */
+    /** 고를 대가 없었던 경우도 안 센다. 빈 답에는 인스턴스가 없다. */
     @Test
-    @DisplayName("빈_답인_판은_안_센다")
-    void 빈_답인_판은_안_센다() {
-        MockServerWebExchange 판 = MockServerWebExchange.from(
+    @DisplayName("빈_답인_경우는_안_센다")
+    void 빈_답인_경우는_안_센다() {
+        MockServerWebExchange 요청 = MockServerWebExchange.from(
                 MockServerHttpRequest.post("/api/v1/coupons/c1/issue"));
-        판.getAttributes().put(ServerWebExchangeUtils.GATEWAY_LOADBALANCER_RESPONSE_ATTR,
+        요청.getAttributes().put(ServerWebExchangeUtils.GATEWAY_LOADBALANCER_RESPONSE_ATTR,
                 new EmptyResponse());
 
-        StepVerifier.create(필터.filter(판, ex -> Mono.empty())).verifyComplete();
+        StepVerifier.create(필터.filter(요청, ex -> Mono.empty())).verifyComplete();
 
         assertThat(레지스트리.instances()).isEmpty();
     }
@@ -126,7 +126,7 @@ class InFlightTrackingFilterTest {
     @DisplayName("전부_끝나면_0_으로_수렴한다")
     void 전부_끝나면_0_으로_수렴한다() {
         for (String id : List.of("be-1", "be-2", "be-1")) {
-            StepVerifier.create(필터.filter(고른_판(id), ex -> Mono.empty())).verifyComplete();
+            StepVerifier.create(필터.filter(고른_요청(id), ex -> Mono.empty())).verifyComplete();
         }
 
         assertThat(레지스트리.count("be-1", 지금)).isZero();

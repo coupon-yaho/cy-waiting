@@ -42,7 +42,7 @@ class RoutingWiringTest {
         assertThat(context.getBeansOfType(InFlightRegistry.class)).hasSize(1);
         assertThat(context.getBeansOfType(InFlightTrackingFilter.class)).hasSize(1);
         // 프레임워크가 제 기본 명세를 같이 올린다. 이름으로 짚어야 우리 것이
-        // 빠진 판과 구분된다.
+        // 빠진 경우와 구분된다.
         assertThat(context.getBeansOfType(LoadBalancerClientSpecification.class).values())
                 .anyMatch(spec -> "coupon-service".equals(spec.getName()));
         assertThat(context.getBean(InstanceChooser.class)).isInstanceOf(WeightedP2c.class);

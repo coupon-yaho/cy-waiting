@@ -125,4 +125,53 @@ class RoutingCandidateTest {
             assertThat(RoutingCandidate.seed(-5, Duration.ZERO, Duration.ofSeconds(60))).isZero();
         }
     }
+
+    @Nested
+    @DisplayName("만들 때")
+    class Construction {
+
+        /** 음수 여유는 부하율을 뒤집는다 — 그 대가 늘 가장 한가해 보인다. */
+        @Test
+        @DisplayName("음수_여유는_거절한다")
+        void 음수_여유는_거절한다() {
+            assertThatThrownBy(() -> RoutingCandidate.of("be-1", -1, 0))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        /** 음수 in-flight 도 같다. 물린 수가 음수인 상태는 없다. */
+        @Test
+        @DisplayName("음수_in_flight_는_거절한다")
+        void 음수_in_flight_는_거절한다() {
+            assertThatThrownBy(() -> RoutingCandidate.of("be-1", 100, -1))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        /** NaN 씨앗은 부하율을 통째로 NaN 으로 만들어 비교가 늘 거짓이 된다. */
+        @Test
+        @DisplayName("성한_값이_아닌_씨앗은_거절한다")
+        void 성한_값이_아닌_씨앗은_거절한다() {
+            assertThatThrownBy(() -> RoutingCandidate.of("be-1", 100, 0, Double.NaN))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> RoutingCandidate.of("be-1", 100, 0, -1))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(
+                    () -> RoutingCandidate.of("be-1", 100, 0, Double.POSITIVE_INFINITY))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        @DisplayName("식별자가_없으면_거절한다")
+        void 식별자가_없으면_거절한다() {
+            assertThatThrownBy(() -> RoutingCandidate.of(null, 100, 0))
+                    .isInstanceOf(NullPointerException.class);
+        }
+
+        /** 음수 램프는 설정 실수다. 나누면 씨앗이 커져 그 대가 영원히 배제된다. */
+        @Test
+        @DisplayName("음수_램프면_씨앗이_없다")
+        void 음수_램프면_씨앗이_없다() {
+            assertThat(RoutingCandidate.seed(40, Duration.ZERO, Duration.ofSeconds(-1)))
+                    .isZero();
+        }
+    }
 }

@@ -28,25 +28,25 @@ public final class WeightedP2c implements InstanceChooser {
 
     @Override
     public Optional<RoutingCandidate> choose(List<RoutingCandidate> candidates) {
-        List<RoutingCandidate> 살아있는 = new ArrayList<>();
+        List<RoutingCandidate> eligible = new ArrayList<>();
         for (RoutingCandidate c : candidates) {
             if (c.eligible()) {
-                살아있는.add(c);
+                eligible.add(c);
             }
         }
-        if (살아있는.isEmpty()) {
+        if (eligible.isEmpty()) {
             return Optional.empty();
         }
-        if (살아있는.size() == 1) {
-            return Optional.of(살아있는.get(0));
+        if (eligible.size() == 1) {
+            return Optional.of(eligible.get(0));
         }
-        RoutingCandidate 첫째 = 살아있는.get(자리(살아있는.size()));
-        RoutingCandidate 둘째 = 살아있는.get(자리(살아있는.size()));
-        return Optional.of(첫째.loadFactor() <= 둘째.loadFactor() ? 첫째 : 둘째);
+        RoutingCandidate first = eligible.get(pick(eligible.size()));
+        RoutingCandidate second = eligible.get(pick(eligible.size()));
+        return Optional.of(first.loadFactor() <= second.loadFactor() ? first : second);
     }
 
     /** 범위 밖 값이 오면 터지는 대신 접는다 — 라우팅이 무작위 구현에 안 걸린다. */
-    private int 자리(int 상한) {
-        return Math.floorMod(random.applyAsInt(상한), 상한);
+    private int pick(int bound) {
+        return Math.floorMod(random.applyAsInt(bound), bound);
     }
 }

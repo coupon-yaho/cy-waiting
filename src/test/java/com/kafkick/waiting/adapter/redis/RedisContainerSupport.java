@@ -18,7 +18,7 @@ public abstract class RedisContainerSupport {
      * 7.x 이상이어야 한다.
      *
      * <p>Lua 의 {@code TIME} 과 효과 기반 복제(5+), {@code ZRANDMEMBER}(6.2+) 를 쓴다.
-     * 낮은 판에서는 스크립트가 조용히 다르게 동작한다.
+     * 낮은 버전에서는 스크립트가 조용히 다르게 동작한다.
      */
     static final DockerImageName IMAGE = DockerImageName.parse("redis:7.4-alpine");
 

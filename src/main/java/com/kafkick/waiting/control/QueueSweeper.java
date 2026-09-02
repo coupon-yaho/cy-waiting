@@ -34,7 +34,7 @@ public final class QueueSweeper {
     private final SweepGate gate;
     private final SweepCall sweep;
 
-    /** 청소 한 판. 앞줄 제거 여부까지 받아야 유예 구간에도 정리가 돈다. */
+    /** 청소 한 회차. 앞줄 제거 여부까지 받아야 유예 구간에도 정리가 돈다. */
     @FunctionalInterface
     public interface SweepCall {
         Mono<SweepResult> apply(List<String> couponIds, int scanLimit, boolean removeFront);
@@ -124,7 +124,7 @@ public final class QueueSweeper {
             return Mono.just(SweepResult.NOTHING);
         }
         List<String> chosen = targets;
-        // **이번 판에 들일 인원만큼 본다** (7.4.3). 상수로 두면 뜨거운 쿠폰은
+        // **이번 회차에 들일 인원만큼 본다** (7.4.3). 상수로 두면 뜨거운 쿠폰은
         // 배수 대상 안의 유령을 못 걷고, 한산한 쿠폰에는 매 틱 과한 왕복을 낸다.
         return sweep.apply(chosen, scanLimit(coupons, chosen), removeFront)
                 .doOnNext(r -> {

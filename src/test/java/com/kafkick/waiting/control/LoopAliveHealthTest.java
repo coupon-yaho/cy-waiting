@@ -17,8 +17,8 @@ import org.springframework.boot.health.contributor.Status;
  * 루프가 멎었으면 이 프로세스의 결함이다 — 빼는 것이 아니라 재기동이다.
  *
  * <p><b>기동 직후를 루프 정지로 세면 크래시 루프다.</b> 아직 한 번도 안 돈 것과
- * 돌다 멎은 것은 나이로는 같은 값이라, 그대로 물리면 첫 판을 못 돈 파드가 죽고
- * 재기동해도 또 첫 판 전이라 또 죽는다.
+ * 돌다 멎은 것은 나이로는 같은 값이라, 그대로 물리면 첫 회차를 못 돈 파드가 죽고
+ * 재기동해도 또 첫 회차 전이라 또 죽는다.
  */
 class LoopAliveHealthTest {
 
@@ -57,9 +57,9 @@ class LoopAliveHealthTest {
     }
 
     @Test
-    @DisplayName("첫_판_전에는_살아_있는_것으로_본다")
-    void 첫_판_전에는_살아_있는_것으로_본다() {
-        // 여기서 죽이면 재기동해도 또 첫 판 전이라 또 죽는다. 크래시 루프다.
+    @DisplayName("첫_회차_전에는_살아_있는_것으로_본다")
+    void 첫_회차_전에는_살아_있는_것으로_본다() {
+        // 여기서 죽이면 재기동해도 또 첫 회차 전이라 또 죽는다. 크래시 루프다.
         시간을_흘린다(FETCH_STALE.multipliedBy(10));
 
         assertThat(판정()).isEqualTo(Status.UP);

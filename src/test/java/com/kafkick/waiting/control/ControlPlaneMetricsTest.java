@@ -45,8 +45,8 @@ class ControlPlaneMetricsTest {
     }
 
     @Test
-    @DisplayName("못_읽은_판을_센다")
-    void 못_읽은_판을_센다() {
+    @DisplayName("못_읽은_회차를_센다")
+    void 못_읽은_회차를_센다() {
         MeterRegistry meters = new SimpleMeterRegistry();
         CapacityCollector collector =
                 CapacityCollector.of(Duration.ofSeconds(60), Duration.ofSeconds(3), 5, 10_000);

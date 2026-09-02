@@ -60,7 +60,7 @@ class LeaderKillScenarioTest {
      *
      * <p>낡음 중에 이쪽이 계속 통과해야 fail-open 이 실제로 열린 것이고,
      * 그래야 저쪽이 안 통과한 것이 "추월을 안 했다" 는 뜻이 된다. 이게 없으면
-     * 둘 다 막힌 판과 구분이 안 간다.
+     * 둘 다 막힌 경우와 구분이 안 간다.
      */
     private static final String 한산한_쿠폰 = "c4-idle";
 
@@ -238,7 +238,7 @@ class LeaderKillScenarioTest {
         return 자리;
     }
 
-    /** 죽은 리더가 락을 넘겨받는다. 만료와 획득이 한 판이라 앱이 못 끼어든다. */
+    /** 죽은 리더가 락을 넘겨받는다. 만료와 획득이 한 회차라 앱이 못 끼어든다. */
     private void 죽은_리더가_락을_쥔다(LeaderFaults 락) {
         assertThat(락.죽은_리더가_넘겨받는다(죽은_리더, 죽은_리스)).isTrue();
         // **아무것도 안 한다. 그것이 죽음이다** — 갱신도 해제도 없다.

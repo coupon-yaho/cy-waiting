@@ -81,7 +81,7 @@ jobs:
       timeout-minutes: 45
 
   # **G7.5 는 시나리오 행렬에 못 넣는다.** 크레딧을 굶긴 겹침으로 스택을 띄우고
-  # 판 도중 임계를 표본해야 해서, k6 한 판 돌리고 요약을 보는 틀과 모양이 다르다.
+  # 실행 도중 임계를 표본해야 해서, k6 한 회차 돌리고 요약을 보는 틀과 모양이 다르다.
   # 판정 자체는 `gate-selftest.sh` 가 PR 마다 몇 초에 검증한다.
   waste:
     name: 부하 / 크레딧 낭비 (G7.5)
@@ -106,7 +106,7 @@ jobs:
           path: build/libs/
       - name: 실측
         run: ./test/load/abandonment-waste.sh
-      # 미달이든 미판정이든 왜 그런지는 로그에 있다. 실패한 판에서만 필요하다.
+      # 미달이든 미판정이든 왜 그런지는 로그에 있다. 실패한 회차에서만 필요하다.
       - name: 하네스 로그
         if: failure()
         run: docker compose -f test/load/compose.yml -f test/load/compose.waste.yml logs --tail 200

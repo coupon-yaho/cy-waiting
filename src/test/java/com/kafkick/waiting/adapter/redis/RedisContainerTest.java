@@ -35,7 +35,7 @@ class RedisContainerTest extends RedisContainerSupport {
     @Test
     @DisplayName("이미지_태그가_7_이상이다")
     void 이미지_태그가_7_이상이다() {
-        // TIME 과 효과 기반 복제를 쓴다. 낮은 판에서는 조용히 다르게 동작한다.
+        // TIME 과 효과 기반 복제를 쓴다. 낮은 버전에서는 조용히 다르게 동작한다.
         String tag = IMAGE.getVersionPart();
         int major = Integer.parseInt(tag.split("[.-]")[0]);
 

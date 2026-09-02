@@ -34,7 +34,7 @@ public final class SnapshotRefresher {
     /**
      * 언제부터 못 받고 있나. 비어 있으면 정상이다.
      *
-     * <p>진입과 해제를 쌍으로 남기고 해제에 지속 시간을 담는다 (LG-2). 매 판
+     * <p>진입과 해제를 쌍으로 남기고 해제에 지속 시간을 담는다 (LG-2). 매 회차
      * 찍으면 20노드 30초 단절에 수백 줄이 쏟아지고(LG-3), 걷힌 시점을 가리키는
      * 줄은 하나도 없다 — 사후에 얼마나 영향받았는지 답할 수 없다.
      */
@@ -80,14 +80,14 @@ public final class SnapshotRefresher {
         return of(holder, source, Clock.systemUTC());
     }
 
-    /** 한 판의 상한을 주입한다. 발행 주기보다 짧아야 다음 판이 제때 돈다. */
+    /** 한 회차의 상한을 주입한다. 발행 주기보다 짧아야 다음 회차가 제때 돈다. */
     public static SnapshotRefresher of(SnapshotHolder holder,
             Supplier<Mono<Map<String, String>>> source, Duration timeout) {
         return new SnapshotRefresher(holder, TimedSnapshot.untimed(source), timeout, Clock.systemUTC());
     }
 
     /**
-     * 한 판. <b>실패를 흘려보내지 않는다</b> — 흘리면 루프가 그 자리에서 멎고,
+     * 한 회차. <b>실패를 흘려보내지 않는다</b> — 흘리면 루프가 그 자리에서 멎고,
      * 한 번 멎으면 영영 멎는다.
      */
     public Mono<Void> once() {
@@ -95,7 +95,7 @@ public final class SnapshotRefresher {
     }
 
     /**
-     * 한 판. <b>타임아웃 타이머도 주어진 스케줄러에서 돈다</b> (RX-3).
+     * 한 회차. <b>타임아웃 타이머도 주어진 스케줄러에서 돈다</b> (RX-3).
      *
      * <p>공용 풀에 두면 부하로 그 풀이 밀릴 때 <b>포기 자체가 늦어져</b>
      * 나이가 임계를 넘는다 — 부하가 가장 높을 때 노드가 로테이션에서 빠진다.
@@ -109,7 +109,7 @@ public final class SnapshotRefresher {
                 // 성공 응답으로 온다 — 그대로 받으면 들고 있던 것이 지워지고
                 // 전 쿠폰이 매진으로 보인다.
                 // 발행 표시가 없으면 버리되 **조용히 버리지 않는다.** 필터는
-                // 오류가 아니라서 아무 흔적을 안 남기는데, 스케줄러 판이 그
+                // 오류가 아니라서 아무 흔적을 안 남기는데, 스케줄러 회차가 그
                 // 필드를 아직 안 쓰면 전 노드가 영영 갱신을 못 한다.
                 .map(read -> new Read(codec.decode(read.hash()), read.now()))
                 // **받아들일 수 있는 것만 받는다.** 발행 표시가 없으면 스케줄러가
@@ -117,7 +117,7 @@ public final class SnapshotRefresher {
                 // 둘 다 그대로 받으면 홀더가 비고 전 쿠폰이 매진으로 보인다.
                 //
                 // 조용히 버리지 않는다. 필터는 오류가 아니라 흔적을 안 남기는데,
-                // 스케줄러 판이 갈리면 전 노드가 영영 갱신을 못 한다.
+                // 스케줄러 회차가 갈리면 전 노드가 영영 갱신을 못 한다.
                 .doOnNext(read -> {
                     if (!isAcceptable(read.snapshot())) {
                         enterFailing("받아들일 수 없는 스냅샷 — 발행={} 쿠폰={}",
@@ -151,14 +151,14 @@ public final class SnapshotRefresher {
     }
 
     /**
-     * <b>완료한 뒤에 다음 판을 잡는다.</b> 고정 주기로 쏘면 한 판이 늦을 때
-     * 다음 판이 큐에 쌓이고, 회복되는 순간 밀린 것이 한꺼번에 나간다.
+     * <b>완료한 뒤에 다음 회차를 잡는다.</b> 고정 주기로 쏘면 한 회차가 늦을 때
+     * 다음 회차가 큐에 쌓이고, 회복되는 순간 밀린 것이 한꺼번에 나간다.
      *
      * <p>전용 스케줄러를 쓴다. 기본 풀에 얹으면 요청 처리 뒤에 줄을 선다.
      */
     public Flux<Void> loop(Duration interval, Scheduler scheduler) {
         // **defer 로 감싼다.** 안 감싸면 한번() 이 여기서 한 번만 평가되고,
-        // repeatWhen 은 그렇게 만들어진 같은 Mono 를 다시 구독한다 — 매 판
+        // repeatWhen 은 그렇게 만들어진 같은 Mono 를 다시 구독한다 — 매 회차
         // 새로 읽으라는 Supplier 의 계약이 깨진다.
         return Mono.defer(() -> once(scheduler))
                 .repeatWhen(done -> done.delayElements(interval, scheduler))

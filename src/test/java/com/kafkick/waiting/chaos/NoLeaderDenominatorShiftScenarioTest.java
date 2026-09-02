@@ -38,7 +38,7 @@ class NoLeaderDenominatorShiftScenarioTest {
 
     private final AtomicReference<String> 락주인 = new AtomicReference<>();
 
-    private final AtomicLong 판번호 = new AtomicLong();
+    private final AtomicLong 펜스번호 = new AtomicLong();
 
     private final GatewayRegistry 분모 = GatewayRegistry.of(하강_지연_틱, 처음_노드);
 
@@ -50,7 +50,7 @@ class NoLeaderDenominatorShiftScenarioTest {
             String 주인 = 락주인.compareAndSet(null, 나) ? 나 : 락주인.get();
             boolean 내것 = 나.equals(주인);
             return Mono.just(new LeaderLock(내것, 주인, 리스.toMillis(),
-                    내것 ? 판번호.incrementAndGet() : 0));
+                    내것 ? 펜스번호.incrementAndGet() : 0));
         });
     }
 
@@ -75,8 +75,8 @@ class NoLeaderDenominatorShiftScenarioTest {
         int[] 무리더_구간_분모 = new int[1];
         long[] 회복_리더수 = new long[1];
         int[] 회복_분모 = new int[1];
-        long[] 평시_판번호 = new long[1];
-        long[] 회복_판번호 = new long[1];
+        long[] 평시_펜스번호 = new long[1];
+        long[] 회복_펜스번호 = new long[1];
 
         ChaosScenario.named("X4 리더 없는 동안 분모 급변")
                 .baseline(() -> {
@@ -84,7 +84,7 @@ class NoLeaderDenominatorShiftScenarioTest {
                     을.renew().block(Duration.ofSeconds(5));
                     분모.observed(처음_노드);
                     정상_분모[0] = 분모.count();
-                    평시_판번호[0] = Math.max(갑.fence(), 을.fence());
+                    평시_펜스번호[0] = Math.max(갑.fence(), 을.fence());
                 })
                 .inject(() -> 느리다.set(true))
                 .duringFault(() -> {
@@ -104,7 +104,7 @@ class NoLeaderDenominatorShiftScenarioTest {
                     을.renew().block(Duration.ofSeconds(5));
                     회복_리더수[0] = 리더_수(갑, 을);
                     회복_분모[0] = 분모.count();
-                    회복_판번호[0] = Math.max(갑.fence(), 을.fence());
+                    회복_펜스번호[0] = Math.max(갑.fence(), 을.fence());
                 })
                 .assertEntry(() -> RecoveryCriteria.violations(
                         전제_평시_분모가_처음_값이다(정상_분모[0])))
@@ -119,8 +119,8 @@ class NoLeaderDenominatorShiftScenarioTest {
                         // **돌아온 리더가 줄어든 분모를 그대로 쓴다.** 옛 값을 들고
                         // 오면 남은 노드가 죽은 노드의 몫까지 쓴다 — 초과 방향이다.
                         돌아온_리더가_지금_분모를_쓴다(회복_분모[0]),
-                        // 판 번호를 새로 받는다. 0 이면 울타리가 전부 거절한다.
-                        판_번호가_앞선다(평시_판번호[0], 회복_판번호[0])))
+                        // 펜스 번호를 새로 받는다. 0 이면 울타리가 전부 거절한다.
+                        펜스_번호가_앞선다(평시_펜스번호[0], 회복_펜스번호[0])))
                 // **RC1~RC6 은 여기서 안 잰다.** 리더십과 분모만 걷는다.
                 .run();
     }
@@ -160,23 +160,23 @@ class NoLeaderDenominatorShiftScenarioTest {
     }
 
     /**
-     * <b>판 번호가 앞선다.</b> 0 만 막으면 정작 그 버그를 놓친다 — 프로덕션이
-     * 경고하는 사고는 "0 이 나간다" 가 아니라 <b>옛 판 번호가 나간다</b> 다 (CY-766).
+     * <b>펜스 번호가 앞선다.</b> 0 만 막으면 정작 그 버그를 놓친다 — 프로덕션이
+     * 경고하는 사고는 "0 이 나간다" 가 아니라 <b>옛 펜스 번호가 나간다</b> 다 (CY-766).
      * 옛 번호를 그대로 들고 오면 울타리를 우회하는 셈이다.
      */
-    private Optional<String> 판_번호가_앞선다(long 평시, long 회복) {
+    private Optional<String> 펜스_번호가_앞선다(long 평시, long 회복) {
         if (회복 <= 0) {
-            return Optional.of("돌아온 리더의 판 번호가 %d 다 — 울타리가 전부 거절한다"
+            return Optional.of("돌아온 리더의 펜스 번호가 %d 다 — 울타리가 전부 거절한다"
                     .formatted(회복));
         }
         return 회복 > 평시 ? Optional.empty()
-                : Optional.of("판 번호가 %d 에서 %d 다 — 옛 번호를 들고 돌아왔다"
+                : Optional.of("펜스 번호가 %d 에서 %d 다 — 옛 번호를 들고 돌아왔다"
                         .formatted(평시, 회복));
     }
 
-    private Optional<String> 판_번호를_들고_돌아온다(long 판번호) {
-        return 판번호 > 0 ? Optional.empty()
-                : Optional.of("돌아온 리더의 판 번호가 %d 다 — 0 이면 울타리가 거절한다"
-                        .formatted(판번호));
+    private Optional<String> 펜스_번호를_들고_돌아온다(long 펜스번호) {
+        return 펜스번호 > 0 ? Optional.empty()
+                : Optional.of("돌아온 리더의 펜스 번호가 %d 다 — 0 이면 울타리가 거절한다"
+                        .formatted(펜스번호));
     }
 }

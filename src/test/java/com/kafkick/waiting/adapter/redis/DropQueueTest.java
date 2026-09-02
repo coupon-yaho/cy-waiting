@@ -44,10 +44,10 @@ class DropQueueTest extends RedisContainerSupport {
                 .block(WAIT);
     }
 
-    /** 다른 쿠폰 키도 준비에서 지운다 — 시험 끝에 지우면 실패한 판이 찌꺼기를 남긴다. */
+    /** 다른 쿠폰 키도 준비에서 지운다 — 시험 끝에 지우면 실패한 회차가 찌꺼기를 남긴다. */
     private static final String OTHER = "alive-one";
 
-    /** 이 시험들이 쓰는 판 번호. 리더가 리스를 새로 잡을 때 받는 값이다. */
+    /** 이 시험들이 쓰는 펜스 번호. 리더가 리스를 새로 잡을 때 받는 값이다. */
     private static final long FENCE = 100;
 
     private void 줄을_세운다() {
@@ -106,7 +106,7 @@ class DropQueueTest extends RedisContainerSupport {
     @DisplayName("재입고됐으면_안_지운다")
     void 재입고됐으면_안_지운다() {
         줄을_세운다();
-        // 판이 시작될 때는 매진이었고, 지우기 직전에 재고가 돌아왔다.
+        // 회차가 시작될 때는 매진이었고, 지우기 직전에 재고가 돌아왔다.
         redis.opsForValue().set(RedisKeys.stock(COUPON), "5").block(WAIT);
 
         assertThat(port.dropSoldOutQueues(List.of(COUPON), FENCE).block(WAIT))
@@ -216,10 +216,10 @@ class DropQueueTest extends RedisContainerSupport {
                 .as("재입고됐을 때").isZero();
     }
 
-    /** 한 판에 여럿을 지운다. 하나만 지우는 구현도 한 쿠폰짜리 시험은 통과한다. */
+    /** 한 회차에 여럿을 지운다. 하나만 지우는 구현도 한 쿠폰짜리 시험은 통과한다. */
     @Test
-    @DisplayName("한_판에_여러_줄을_지운다")
-    void 한_판에_여러_줄을_지운다() {
+    @DisplayName("한_회차에_여러_줄을_지운다")
+    void 한_회차에_여러_줄을_지운다() {
         줄을_세운다();
         redis.opsForValue().set(RedisKeys.stock(COUPON), "0").block(WAIT);
         redis.opsForZSet().add(RedisKeys.queue(OTHER, 1, 0), "m1", 100).block(WAIT);
@@ -245,14 +245,14 @@ class DropQueueTest extends RedisContainerSupport {
         줄을_세운다();
         redis.opsForValue().set(RedisKeys.stock(COUPON), "0").block(WAIT);
 
-        // 새 리더가 먼저 지웠다 — 울타리가 그 판을 기억한다.
+        // 새 리더가 먼저 지웠다 — 울타리가 그 회차를 기억한다.
         assertThat(port.dropSoldOutQueues(List.of(COUPON), 200).block(WAIT))
                 .containsExactly(COUPON);
         줄을_세운다();
 
         // 리스가 끝난 줄 모르는 옛 리더가 뒤늦게 같은 명령을 낸다.
         assertThat(port.dropSoldOutQueues(List.of(COUPON), FENCE).block(WAIT))
-                .as("옛 판의 명령은 안 듣는다").isEmpty();
+                .as("옛 임기의 명령은 안 듣는다").isEmpty();
         assertThat(있나(RedisKeys.queue(COUPON, 1, 0))).as("줄이 살아 있다").isTrue();
     }
 
@@ -264,8 +264,8 @@ class DropQueueTest extends RedisContainerSupport {
      * 생각이 없는 줄을 지운다. 후보로 올리는 순간 표를 세워야 걸린다.
      */
     @Test
-    @DisplayName("새_리더가_세운_표가_옛_판을_막는다")
-    void 새_리더가_세운_표가_옛_판을_막는다() {
+    @DisplayName("새_리더가_세운_표가_옛_임기를_막는다")
+    void 새_리더가_세운_표가_옛_임기를_막는다() {
         줄을_세운다();
         redis.opsForValue().set(RedisKeys.stock(COUPON), "0").block(WAIT);
 
@@ -275,7 +275,7 @@ class DropQueueTest extends RedisContainerSupport {
 
         // 얼었다 깨어난 옛 리더가 자기 유예를 다 세고 지우러 온다.
         assertThat(port.dropSoldOutQueues(List.of(COUPON), FENCE).block(WAIT))
-                .as("옛 판은 못 지운다").isEmpty();
+                .as("옛 임기는 못 지운다").isEmpty();
         assertThat(있나(RedisKeys.queue(COUPON, 1, 0))).as("줄이 살아 있다").isTrue();
 
         // 새 리더가 유예를 다 세면 지운다.
@@ -284,12 +284,12 @@ class DropQueueTest extends RedisContainerSupport {
     }
 
     /**
-     * <b>판 번호 0 은 리더가 아니라는 뜻이다.</b> 강등된 노드가 그 값을 들고
+     * <b>펜스 번호 0 은 리더가 아니라는 뜻이다.</b> 강등된 노드가 그 값을 들고
      * 나오므로 지우지도, 표를 세우지도 않는다.
      */
     @Test
-    @DisplayName("판_번호가_0이면_안_지운다")
-    void 판_번호가_0이면_안_지운다() {
+    @DisplayName("펜스_번호가_0이면_안_지운다")
+    void 펜스_번호가_0이면_안_지운다() {
         줄을_세운다();
         redis.opsForValue().set(RedisKeys.stock(COUPON), "0").block(WAIT);
 
@@ -299,10 +299,10 @@ class DropQueueTest extends RedisContainerSupport {
         assertThat(있나(RedisKeys.dropFence(COUPON, 1, 0))).as("표도 안 세운다").isFalse();
     }
 
-    /** 큰 판 번호도 자리 수 그대로 남는다. 지수 표기로 굳으면 비교가 흔들린다. */
+    /** 큰 펜스 번호도 자리 수 그대로 남는다. 지수 표기로 굳으면 비교가 흔들린다. */
     @Test
-    @DisplayName("큰_판_번호도_그대로_남는다")
-    void 큰_판_번호도_그대로_남는다() {
+    @DisplayName("큰_펜스_번호도_그대로_남는다")
+    void 큰_펜스_번호도_그대로_남는다() {
         줄을_세운다();
         redis.opsForValue().set(RedisKeys.stock(COUPON), "0").block(WAIT);
 
@@ -327,8 +327,8 @@ class DropQueueTest extends RedisContainerSupport {
 
     /** 같은 리더가 다시 내는 것은 막지 않는다. 막으면 재시도가 영영 안 된다. */
     @Test
-    @DisplayName("같은_판의_재시도는_지운다")
-    void 같은_판의_재시도는_지운다() {
+    @DisplayName("같은_펜스_번호의_재시도는_지운다")
+    void 같은_펜스_번호의_재시도는_지운다() {
         줄을_세운다();
         redis.opsForValue().set(RedisKeys.stock(COUPON), "0").block(WAIT);
         port.dropSoldOutQueues(List.of(COUPON), 200).block(WAIT);
@@ -338,7 +338,7 @@ class DropQueueTest extends RedisContainerSupport {
                 .containsExactly(COUPON);
     }
 
-    /** 한 쿠폰이 살아나도 나머지는 지운다. 판 하나가 통째로 멎으면 안 된다. */
+    /** 한 쿠폰이 살아나도 나머지는 지운다. 회차 하나가 통째로 멎으면 안 된다. */
     @Test
     @DisplayName("살아난_쿠폰만_건너뛴다")
     void 살아난_쿠폰만_건너뛴다() {

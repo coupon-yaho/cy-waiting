@@ -8,7 +8,7 @@ package com.kafkick.waiting.domain.coupon;
  *
  * @param globalCredit  전 쿠폰 합산 초당 통과 몫
  * @param gatewayCount  신선한 게이트웨이 수. 스케줄러가 하트비트로 센다
- * @param pollScale     폴링 간격 배수. <b>판 전체를 보고 나온 값 하나다</b> —
+ * @param pollScale     폴링 간격 배수. <b>스냅샷 전체를 보고 나온 값 하나다</b> —
  *                      쿠폰별 필드에 담으면 그 쿠폰이 스냅샷에서 빠지는 순간
  *                      배수도 같이 사라져, 그 줄 전체가 예산 밖으로 나간다
  */
@@ -73,7 +73,7 @@ public record SnapshotMeta(long globalCredit, int gatewayCount, Tunables tunable
      * <p><b>규칙을 한 곳에 둡니다.</b> 부르는 쪽마다 널 검사를 다시 쓰면 같은
      * 규칙을 새로 구현하게 되고, 그중 하나가 조용히 달라집니다.
      */
-    // 기동값은 튜너블 문턱에 안 가둔다. 배포로 정하는 값은 사람이 판을 보고
+    // 기동값은 튜너블 문턱에 안 가둔다. 배포로 정하는 값은 사람이 전체를 보고
     // 넣지만 운영 값은 장애 중에 눌린 채로 넣는다 — 그래서 그쪽만 좁게 막는다.
     public double idleCreditRatioOr(double startup) {
         return tunables == null ? startup : tunables.idleCreditRatio();

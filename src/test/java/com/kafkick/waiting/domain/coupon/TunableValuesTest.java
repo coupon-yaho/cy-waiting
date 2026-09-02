@@ -142,7 +142,7 @@ class TunableValuesTest {
             assertThat(비율("{\"idleCreditRatio\":0.5oops}")).isEqualTo(-1);
         }
 
-        /** 수 글자만 있어도 수가 아닐 수 있다. 그 값만 버리고 판은 안 죽인다. */
+        /** 수 글자만 있어도 수가 아닐 수 있다. 그 값만 버리고 나머지는 안 죽인다. */
         @Test
         @DisplayName("수_글자로만_된_쓰레기도_버린다")
         void 수_글자로만_된_쓰레기도_버린다() {
@@ -156,7 +156,7 @@ class TunableValuesTest {
             assertThat(비율("{\"idleCreditRatio\":\"0.5\"}")).isEqualTo(-1);
         }
 
-        /** 닫히지 않은 것들. 여기서 무한 루프에 빠지면 판이 멎는다. */
+        /** 닫히지 않은 것들. 여기서 무한 루프에 빠지면 회차가 멎는다. */
         @Test
         @DisplayName("안_닫힌_입력은_대체값이다")
         void 안_닫힌_입력은_대체값이다() {

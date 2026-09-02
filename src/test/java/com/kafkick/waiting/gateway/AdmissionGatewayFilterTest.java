@@ -72,7 +72,7 @@ class AdmissionGatewayFilterTest {
     private static final SnapshotMeta META = new SnapshotMeta(1_000, 1);
 
     /**
-     * 격벽을 재는 판. <b>2번 줄은 노드 예산을 상한으로 쓴다</b> (B-14) — 쿠폰 몫이
+     * 격벽을 재는 픽스처. <b>2번 줄은 노드 예산을 상한으로 쓴다</b> (B-14) — 쿠폰 몫이
      * 아니다. 노드 예산을 작게 잡아야 상한이 시험 안에서 닿는다.
      */
     private static final SnapshotMeta 좁은_META = new SnapshotMeta(CREDIT, 1);
@@ -109,7 +109,7 @@ class AdmissionGatewayFilterTest {
     /**
      * 흔들림을 고정한다. <b>안 고정하면 값을 못 잰다</b> (TS-4).
      *
-     * <p>주입 안 하는 판을 쓰면 {@code ThreadLocalRandom} 이 들어가, 배수를 재는
+     * <p>주입 안 하는 갈래를 쓰면 {@code ThreadLocalRandom} 이 들어가, 배수를 재는
      * 시험이 6 번에 한 번 다른 값을 받는다.
      */
     private static final DoubleSupplier 고정_난수 = () -> 0.5;
@@ -233,12 +233,12 @@ class AdmissionGatewayFilterTest {
         스냅샷을_심는다(state, META);
     }
 
-    /** 배수는 판 전체를 보고 나온 전역 값이라 쿠폰이 아니라 메타에 실린다. */
+    /** 배수는 스냅샷 전체를 보고 나온 전역 값이라 쿠폰이 아니라 메타에 실린다. */
     private static SnapshotMeta 배수가_실린_메타(double 배수) {
         return SnapshotMetas.overBudget(META.globalCredit(), META.gatewayCount(), 배수);
     }
 
-    /** 판 크기를 바꿔 심는다. 한산 통과 상한을 0 으로 만들어야 배분 전 등록을 잰다. */
+    /** 스냅샷 크기를 바꿔 심는다. 한산 통과 상한을 0 으로 만들어야 배분 전 등록을 잰다. */
     private void 스냅샷을_심는다(CouponState state, SnapshotMeta meta) {
         holder.replace(new GatewaySnapshot(
                 state == null ? Map.of() : Map.of(COUPON, state),
@@ -748,10 +748,10 @@ class AdmissionGatewayFilterTest {
     @Test
     @DisplayName("배분_전에도_상한은_유한하다")
     void 배분_전에도_상한은_유한하다() {
-        // 배분 전 천장은 최소 배수 속도 × 최대 대기 시간이다. 판 크기와 무관하다.
+        // 배분 전 천장은 최소 배수 속도 × 최대 대기 시간이다. 스냅샷 크기와 무관하다.
         long CAP = AdmissionDecider.MIN_CREDIT * AdmissionGatewayFilter.MAX_ETA_SEC;
         // 한산 통과 상한이 0 이어야 첫 사람부터 줄로 간다. 노드 몫 자체가 0 인
-        // 판을 쓴다 — 몫이 1 이면 절삭 보정이 걸려 상한이 1 이 된다 (C-10).
+        // 스냅샷을 쓴다 — 몫이 1 이면 절삭 보정이 걸려 상한이 1 이 된다 (C-10).
         스냅샷을_심는다(CouponStates.idle(1_000_000), new SnapshotMeta(0, 1));
 
         MockServerWebExchange 첫_사람 = 태운다(COUPON, "대기자0");
@@ -1093,15 +1093,15 @@ class AdmissionGatewayFilterTest {
      * 구간이라 하필 그때 갈린다.
      */
     @Test
-    @DisplayName("모르는_쿠폰도_판의_배수를_들고_간다")
-    void 모르는_쿠폰도_판의_배수를_들고_간다() {
+    @DisplayName("모르는_쿠폰도_스냅샷의_배수를_들고_간다")
+    void 모르는_쿠폰도_스냅샷의_배수를_들고_간다() {
         holder.replace(new GatewaySnapshot(Map.of(COUPON, CouponStates.idle(1_000)),
                 SnapshotMetas.overBudget(META.globalCredit(), 1, 1.5), 지금.minusSeconds(60)));
 
         MockServerWebExchange exchange = 태운다("없는쿠폰", "회원");
 
         assertThat(exchange.<Double>getAttribute(AdmissionGatewayFilter.POLL_SCALE))
-                .as("낡아 이연된 갈래도 자기 판의 배수를 남긴다").isEqualTo(1.5);
+                .as("낡아 이연된 갈래도 자기 스냅샷의 배수를 남긴다").isEqualTo(1.5);
     }
 
     /**
@@ -1188,7 +1188,7 @@ class AdmissionGatewayFilterTest {
 
     /**
      * <b>줄이 보여도 표식은 찍는다.</b> 그 스냅샷은 방금 넣은 이 사람을 아직
-     * 모른다 — 다음 판에 줄이 다 빠져 한산으로 뒤집히면 그 사람이 통째로
+     * 모른다 — 다음 회차에 줄이 다 빠져 한산으로 뒤집히면 그 사람이 통째로
      * 추월당한다. 계획서가 "줄이 보이면 바로 풀어도 된다" 고 적은 것은 그 한
      * 명을 안 센 것이다.
      */
@@ -1219,7 +1219,7 @@ class AdmissionGatewayFilterTest {
     @DisplayName("줄이_찼어도_래치는_찍힌다")
     void 줄이_찼어도_래치는_찍힌다() {
         // 한산 통과 상한이 0 이어야 첫 사람부터 줄로 간다. 노드 몫 자체가 0 인
-        // 판을 쓴다 — 몫이 1 이면 절삭 보정이 걸려 상한이 1 이 된다 (C-10).
+        // 스냅샷을 쓴다 — 몫이 1 이면 절삭 보정이 걸려 상한이 1 이 된다 (C-10).
         스냅샷을_심는다(CouponStates.idle(1_000_000), new SnapshotMeta(0, 1));
         줄.가득_찼다();
 
@@ -1575,7 +1575,7 @@ class AdmissionGatewayFilterTest {
      */
     private static final Duration 격벽_시한 = AdmissionGatewayFilter.MAX_IN_FLIGHT;
 
-    /** 한 초에 사다리를 지나갈 수 있는 건수. 좁은 판의 노드 예산 그대로다. */
+    /** 한 초에 사다리를 지나갈 수 있는 건수. 좁은 스냅샷의 노드 예산 그대로다. */
     private static final int 초당_통과 = (int) CREDIT;
 
     /** 안 끝나는 요청을 태워 격벽을 채운다. 반환값은 그때 태운 요청들이다. */
@@ -1654,12 +1654,12 @@ class AdmissionGatewayFilterTest {
 
     /**
      * <b>곱이 넘치면 음수가 되고, 음수 상한은 전면 차단입니다.</b> 예산은 밖에서
-     * 오는 값이라, 판이 커지는 방향으로 잘못 실리면 격벽이 정반대로 동작합니다.
+     * 오는 값이라, 스냅샷이 커지는 방향으로 잘못 실리면 격벽이 정반대로 동작합니다.
      */
     @Test
     @DisplayName("예산이_아무리_커도_격벽이_안_뒤집힌다")
     void 예산이_아무리_커도_격벽이_안_뒤집힌다() {
-        // 세 배가 정확히 음수로 넘어가는 판. 큰 값이면 아무거나 되는 것이 아니다.
+        // 세 배가 정확히 음수로 넘어가는 값. 큰 값이면 아무거나 되는 것이 아니다.
         스냅샷을_심는다(CouponStates.off(1_000_000), new SnapshotMeta(1L << 62, 1));
 
         MockServerWebExchange exchange = 요청(COUPON, "사람0");
@@ -1853,7 +1853,7 @@ class AdmissionGatewayFilterTest {
         // **기대값을 같은 함수로 만들지 않는다.** 그러면 호출부가 배수를 안
         // 넘겨도 좌우가 같이 움직여 초록이다.
         assertThat(막힌_것.getResponse().getHeaders().getFirst("Retry-After"))
-                .as("ETA 를 모르는 밴드(30초). 배수가 안 실린 판이라 그대로 30")
+                .as("ETA 를 모르는 밴드(30초). 배수가 안 실린 스냅샷이라 그대로 30")
                 .isEqualTo("30");
         풀어_준다();
     }

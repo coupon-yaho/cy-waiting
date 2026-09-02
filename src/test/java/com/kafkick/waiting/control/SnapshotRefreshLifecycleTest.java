@@ -58,9 +58,9 @@ class SnapshotRefreshLifecycleTest {
         return DrainWait.of(shutdown, Duration.ofSeconds(6), ms -> { });
     }
 
-    /** 가상 시계를 이만큼 민다. 판이 도는 것은 여기서만 일어난다. */
-    private void 판을_돌린다(int 판수) {
-        시계.advanceTimeBy(INTERVAL.multipliedBy(판수));
+    /** 가상 시계를 이만큼 민다. 회차가 도는 것은 여기서만 일어난다. */
+    private void 회차를_돌린다(int 회차수) {
+        시계.advanceTimeBy(INTERVAL.multipliedBy(회차수));
     }
 
     @Test
@@ -72,7 +72,7 @@ class SnapshotRefreshLifecycleTest {
         lifecycle.start();
 
         try {
-            판을_돌린다(3);
+            회차를_돌린다(3);
             assertThat(받아옴).hasValue(4);
             assertThat(lifecycle.isRunning()).isTrue();
         } finally {
@@ -89,7 +89,7 @@ class SnapshotRefreshLifecycleTest {
         lifecycle.start();
 
         try {
-            판을_돌린다(3);
+            회차를_돌린다(3);
 
             // **두 줄기면 정확히 두 배다.** 가상 시계라 "언저리" 가 없다.
             assertThat(받아옴).hasValue(4);
@@ -103,12 +103,12 @@ class SnapshotRefreshLifecycleTest {
     void 멈추면_더_안_받아_온다() {
         SnapshotRefreshLifecycle lifecycle = lifecycle();
         lifecycle.start();
-        판을_돌린다(2);
+        회차를_돌린다(2);
 
         lifecycle.stop();
         int 멈춘_뒤 = 받아옴.get();
 
-        판을_돌린다(6);
+        회차를_돌린다(6);
         assertThat(받아옴).hasValue(멈춘_뒤);
         assertThat(lifecycle.isRunning()).isFalse();
     }
@@ -169,14 +169,14 @@ class SnapshotRefreshLifecycleTest {
         // 세우므로, 깃발만 보면 버린 스케줄러를 다시 써서 루프가 죽어도 초록이다.
         SnapshotRefreshLifecycle lifecycle = lifecycle();
         lifecycle.start();
-        판을_돌린다(2);
+        회차를_돌린다(2);
         lifecycle.stop();
         int 멈춘_뒤 = 받아옴.get();
 
         lifecycle.start();
 
         try {
-            판을_돌린다(2);
+            회차를_돌린다(2);
             assertThat(받아옴).hasValue(멈춘_뒤 + 3);
         } finally {
             lifecycle.stop();
@@ -263,7 +263,7 @@ class SnapshotRefreshLifecycleTest {
         lifecycle.start();
 
         try {
-            판을_돌린다(2);
+            회차를_돌린다(2);
             assertThat(받아옴).hasValue(3);
         } finally {
             lifecycle.stop();

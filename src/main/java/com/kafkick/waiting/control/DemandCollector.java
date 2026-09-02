@@ -51,7 +51,7 @@ public final class DemandCollector {
     public Mono<TimedDemands> collect() {
         return activeCoupons.get().flatMap(read -> {
             List<String> coupons = read.coupons();
-            // 빈 인자로 명령을 보내면 레디스가 오류를 낸다. 그 오류가 판을 죽이면
+            // 빈 인자로 명령을 보내면 레디스가 오류를 낸다. 그 오류가 회차를 죽이면
             // 대상이 생겨도 배분이 안 돈다.
             if (coupons.isEmpty()) {
                 return Mono.just(new TimedDemands(List.of(), read.now()));
@@ -63,7 +63,7 @@ public final class DemandCollector {
     }
 
     /**
-     * <b>안 온 쿠폰이 있으면 판을 버린다.</b> 빠진 자리를 0 으로 채우면 대기가
+     * <b>안 온 쿠폰이 있으면 회차를 버린다.</b> 빠진 자리를 0 으로 채우면 대기가
      * 0 인 쿠폰이 되어 크레딧이 안 나간다 — 줄 선 사람이 통째로 멈추는데 아무
      * 신호도 없다. 재고는 없을 수 있지만 대기 수는 언제나 온다.
      */
@@ -84,7 +84,7 @@ public final class DemandCollector {
 
     /**
      * <b>못 읽은 재고를 0 으로 안 접는다.</b> 접으면 재고 키를 잃은 쿠폰이
-     * 매진으로 보이고, 다음 판도 이것을 안 되돌린다.
+     * 매진으로 보이고, 다음 회차도 이것을 안 되돌린다.
      */
     // **읽은 음수는 미상이 아니다.** 재고 값은 발급 계층이 소유하고, 차감이 0 을
     // 지나치면 실제로 음수가 된다. 미상 표시와 값이 겹친다고 그것을 미상으로

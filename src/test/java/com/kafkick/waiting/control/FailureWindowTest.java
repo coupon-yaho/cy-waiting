@@ -10,8 +10,8 @@ import org.junit.jupiter.api.Test;
 /**
  * 이어지는 실패를 한 번만 알린다.
  *
- * <p>매 판 찍으면 정작 조사가 필요한 순간에 로그가 묻히고, 지속 시간만 남기면
- * 한 판이 실패한 것인지 수백 판인지 사후에 못 가린다.
+ * <p>매 회차 찍으면 정작 조사가 필요한 순간에 로그가 묻히고, 지속 시간만 남기면
+ * 한 회차가 실패한 것인지 수백 회차인지 사후에 못 가린다.
  */
 class FailureWindowTest {
 
@@ -32,8 +32,8 @@ class FailureWindowTest {
     }
 
     @Test
-    @DisplayName("걷히면_지속_시간과_삼킨_판을_준다")
-    void 걷히면_지속_시간과_삼킨_판을_준다() {
+    @DisplayName("걷히면_지속_시간과_삼킨_시도를_준다")
+    void 걷히면_지속_시간과_삼킨_시도를_준다() {
         window.entered();
         window.entered();
         window.entered();

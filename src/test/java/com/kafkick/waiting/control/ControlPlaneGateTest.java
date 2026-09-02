@@ -52,7 +52,7 @@ class ControlPlaneGateTest {
             if (죽은.contains(ownerId)) {
                 // 죽은 프로세스는 아무것도 안 돌려준다. 오류도 아니다.
                 //
-                // **기다리게 두면 판마다 실제 시간이 흐른다.** 빈 완료로 두면
+                // **기다리게 두면 회차마다 실제 시간이 흐른다.** 빈 완료로 두면
                 // 판정은 같으면서(확인 못 함 → 리스가 판단) 시험이 시계를 안 탄다.
                 return Mono.empty();
             }
@@ -312,7 +312,7 @@ class ControlPlaneGateTest {
     void 틱_지연이_임계_안에_있다() {
         // 이 값이 임계에 붙으면 스케줄러를 따로 떼야 한다는 신호다.
         //
-        // **가상 시계로는 못 잰다.** 판이 아무리 오래 걸려도 가상 시계는 안
+        // **가상 시계로는 못 잰다.** 회차가 아무리 오래 걸려도 가상 시계는 안
         // 움직이므로 잰 값이 항상 0 이다 — 그러면 이 시험은 공전한다.
         //
         // RULE-EXCEPTION(TS-4): 실제 경과가 곧 이 게이트의 판정 대상이다.
@@ -327,24 +327,24 @@ class ControlPlaneGateTest {
                 () -> Mono.just(CreditSmoother.of(0.3)),
                 SnapshotCodec.create(), () -> 0L);
 
-        // **예열한다.** 첫 판의 90% 는 클래스 로딩과 컴파일이라, 그걸 그대로
+        // **예열한다.** 첫 회차의 90% 는 클래스 로딩과 컴파일이라, 그걸 그대로
         // 재면 임계가 뜻하는 것이 배분 비용이 아니라 기동 비용이 된다.
         for (int i = 0; i < 5; i++) {
             round.run().block();
         }
 
-        Duration 가장_느린_판 = Duration.ZERO;
+        Duration 가장_느린_회차 = Duration.ZERO;
         for (int i = 0; i < 20; i++) {
             long 시작 = System.nanoTime();
             round.run().block();
-            Duration 한_판 = Duration.ofNanos(System.nanoTime() - 시작);
-            if (한_판.compareTo(가장_느린_판) > 0) {
-                가장_느린_판 = 한_판;
+            Duration 한_회차 = Duration.ofNanos(System.nanoTime() - 시작);
+            if (한_회차.compareTo(가장_느린_회차) > 0) {
+                가장_느린_회차 = 한_회차;
             }
         }
 
-        assertThat(가장_느린_판)
-                .as("쿠폰 %d 개를 엮는 판 스무 번 중 가장 느린 것", 쿠폰_수)
+        assertThat(가장_느린_회차)
+                .as("쿠폰 %d 개를 엮는 회차 스무 번 중 가장 느린 것", 쿠폰_수)
                 .isLessThan(임계);
     }
 

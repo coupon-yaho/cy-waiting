@@ -64,7 +64,7 @@ class CapacityCollectorTest {
         // **자기 상태를 가장 잘 아는 쪽이 먼저 램프를 건다.** 그래도 게이트웨이가
         // 한 겹 더 건다 — 상대 구현이 늦어도 보호가 남아야 한다.
         CapacityCollector collector = collector();
-        // **첫 판은 이미 돌던 무리다.** 승계 직후를 콜드로 보면 크레딧이 0 이 된다.
+        // **첫 회차는 이미 돌던 무리다.** 승계 직후를 콜드로 보면 크레딧이 0 이 된다.
         // 진짜 새 인스턴스는 그 뒤에 나타난 쪽이다.
         collector.collect(List.of(report("warm", 100, NOW)), NOW, 1);
         collector.collect(List.of(report("warm", 100, NOW), report("cold", 200, NOW)), NOW, 1);
@@ -84,7 +84,7 @@ class CapacityCollectorTest {
         // 관측됐다는 것이 곧 처음 본 시각이 있다는 뜻이라, 그 상태는 운영에
         // 존재할 수 없는데 시험만 만들 수 있게 된다.
         CapacityCollector collector = collector();
-        // 첫 판은 이미 돌던 무리로 본다. 진짜 새것은 그 뒤에 나타난 쪽이다.
+        // 첫 회차는 이미 돌던 무리로 본다. 진짜 새것은 그 뒤에 나타난 쪽이다.
         collector.collect(List.of(report("warm", 0, NOW)), NOW, 1);
 
         long first = collector.collect(
@@ -147,7 +147,7 @@ class CapacityCollectorTest {
     @Test
     @DisplayName("한_틱_빠져도_워밍업이_안_날아간다")
     void 한_틱_빠져도_워밍업이_안_날아간다() {
-        // 이번 판에 없다고 지우면 정상 인스턴스가 틱마다 램프를 다시 탄다.
+        // 이번 회차에 없다고 지우면 정상 인스턴스가 틱마다 램프를 다시 탄다.
         CapacityCollector collector = collector();
         long warmed = warm(collector, "a", 200);
 
@@ -306,7 +306,7 @@ class CapacityCollectorTest {
         CapacityCollector collector = CapacityCollector.of(
                 window, FRESHNESS, FLOOR, Long.MAX_VALUE);
         long half = window.toSeconds() / 2;
-        // 첫 판은 웜으로 잡히므로 램프를 재려면 그 뒤에 나타나야 한다.
+        // 첫 회차는 웜으로 잡히므로 램프를 재려면 그 뒤에 나타나야 한다.
         collector.collect(List.of(report("seed", 0, NOW)), NOW, 1);
         for (long t = NOW; t <= NOW + half; t += FRESHNESS.toSeconds()) {
             collector.collect(List.of(report("a", Long.MAX_VALUE, t)), t, 1);
@@ -374,7 +374,7 @@ class CapacityCollectorTest {
     void 처음_본_무리는_이미_돌던_것으로_본다() {
         CapacityCollector collector = collector();
 
-        // 승계 직후 첫 판. 뒷단 셋이 신선하게 보고한다.
+        // 승계 직후 첫 회차. 뒷단 셋이 신선하게 보고한다.
         long credit = collector.collect(
                 List.of(report("a", 100, NOW), report("b", 100, NOW), report("c", 100, NOW)),
                 NOW, 1);
@@ -383,7 +383,7 @@ class CapacityCollectorTest {
     }
 
     /**
-     * 첫 판 뒤에 나타난 인스턴스는 진짜 새것이다. 그때는 램프를 건다 — 콜드
+     * 첫 회차 뒤에 나타난 인스턴스는 진짜 새것이다. 그때는 램프를 건다 — 콜드
      * 인스턴스에 제 몫을 그대로 주면 뜨자마자 무너진다 (F6).
      */
     @Test
@@ -396,14 +396,14 @@ class CapacityCollectorTest {
                 List.of(report("a", 100, NOW + 1), report("b", 100, NOW + 1)), NOW + 1, 1);
 
         // a 는 온전히 100. b 는 처음 본 순간이라 데운 시간이 0 이므로 몫도 0 이다.
-        // **범위로 두지 않는다.** 콜드 인스턴스가 첫 판에 제 몫을 다 받는 결함이
+        // **범위로 두지 않는다.** 콜드 인스턴스가 첫 회차에 제 몫을 다 받는 결함이
         // 범위 안에 숨는다 — 그게 이 시험이 막으려는 바로 그것이다.
         assertThat(credit).isEqualTo(100);
     }
 
     /**
      * <b>못 본 것과 새로 뜬 것은 다르다.</b> 보고가 몇 초 끊겼다고 램프 기록을
-     * 지우면, 돌아오는 첫 판에 전원이 램프를 다시 타 크레딧이 하한보다도 낮아진다.
+     * 지우면, 돌아오는 첫 회차에 전원이 램프를 다시 타 크레딧이 하한보다도 낮아진다.
      * 정보가 없을 때보다 정보가 돌아온 순간이 더 나빠진다.
      */
     @Test
@@ -426,14 +426,14 @@ class CapacityCollectorTest {
     /**
      * <b>램프가 만든 0 은 관측이 아니다.</b> 뒷단이 정직하게 "여유 0" 을 보고한
      * 것과, 게이트웨이 자신의 램프 계수가 0 을 만든 것은 다르다. 뒤엣것에 하한을
-     * 안 걸면 복귀 첫 판이 하한보다 낮아진다 — 창을 아무리 늘려도 그 너머에서
+     * 안 걸면 복귀 첫 회차가 하한보다 낮아진다 — 창을 아무리 늘려도 그 너머에서
      * 같은 일이 난다.
      */
     @Test
     @DisplayName("램프가_만든_0_에는_하한을_쓴다")
     void 램프가_만든_0_에는_하한을_쓴다() {
         CapacityCollector collector = collector();
-        // 첫 판을 웜으로 안 보게 한 뒤, 처음 보는 인스턴스가 신선하게 보고한다.
+        // 첫 회차를 웜으로 안 보게 한 뒤, 처음 보는 인스턴스가 신선하게 보고한다.
         collector.collect(List.of(report("seed", 0, NOW)), NOW, 1);
 
         long credit = collector.collect(
@@ -468,7 +468,7 @@ class CapacityCollectorTest {
     @DisplayName("램프가_만든_부족분에도_하한을_쓴다")
     void 램프가_만든_부족분에도_하한을_쓴다() {
         CapacityCollector collector = collector();
-        // 첫 판을 웜으로 안 보게 한 뒤, 처음 보는 뒷단이 넉넉하게 보고한다.
+        // 첫 회차를 웜으로 안 보게 한 뒤, 처음 보는 뒷단이 넉넉하게 보고한다.
         collector.collect(List.of(report("seed", 0, NOW)), NOW, 8);
         collector.collect(
                 List.of(report("seed", 0, NOW + 1), report("fresh", 1_000, NOW + 1)), NOW + 1, 8);
@@ -518,7 +518,7 @@ class CapacityCollectorTest {
     }
 
     /**
-     * <b>못 읽은 값에는 시효가 있어야 한다.</b> 직전 값을 지키는 것은 한 판이
+     * <b>못 읽은 값에는 시효가 있어야 한다.</b> 직전 값을 지키는 것은 한 회차가
      * 실패했을 때 맞는 답이지만, 그것이 무기한이면 뒷단이 통째로 죽어도 옛
      * 크레딧으로 계속 민다. 분모(노드 수)는 유지가 과소 방향이라 안전하지만
      * 분자(크레딧)는 과다 방향이다.
@@ -529,7 +529,7 @@ class CapacityCollectorTest {
         CapacityCollector collector = collector();
         long 관측 = collector.collect(List.of(report("a", 10_000, NOW)), NOW, 1);
 
-        // 유예 안에서는 그대로다. 한 판 실패했다고 조이면 순단마다 흔들린다.
+        // 유예 안에서는 그대로다. 한 회차 실패했다고 조이면 순단마다 흔들린다.
         for (int i = 0; i < CapacityCollector.HOLD_ROUNDS; i++) {
             collector.observationFailed(1);
         }
@@ -582,7 +582,7 @@ class CapacityCollectorTest {
     }
 
     /**
-     * 비리더 구간의 실패는 남의 판이다. 이월하면 재승계 첫 판에 유예를 건너뛰고
+     * 비리더 구간의 실패는 남의 회차다. 이월하면 재승계 첫 회차에 유예를 건너뛰고
      * 곧바로 반토막을 내는데, 그 대상은 몇 분 전 관측치다.
      */
     @Test
@@ -590,7 +590,7 @@ class CapacityCollectorTest {
     void 리더를_다시_잡으면_유예가_처음부터다() {
         CapacityCollector collector = collector();
         long 관측 = collector.collect(List.of(report("a", 10_000, NOW)), NOW, 1);
-        // **성공 판을 사이에 두지 않는다.** 성공이 카운터를 되돌리므로, 그러면
+        // **성공 회차를 사이에 두지 않는다.** 성공이 카운터를 되돌리므로, 그러면
         // 승계 알림을 지워도 이 시험이 통과한다.
         for (int i = 0; i < CapacityCollector.HOLD_ROUNDS; i++) {
             collector.observationFailed(1);
@@ -629,10 +629,10 @@ class CapacityCollectorTest {
         assertThat(줄어든_쪽.lastKnown()).isEqualTo(FLOOR);
     }
 
-    /** 한 판이라도 성공하면 유예가 다시 찬다. 안 그러면 순단이 쌓여 조여진다. */
+    /** 한 회차라도 성공하면 유예가 다시 찬다. 안 그러면 순단이 쌓여 조여진다. */
     @Test
-    @DisplayName("한_판_성공하면_유예가_다시_찬다")
-    void 한_판_성공하면_유예가_다시_찬다() {
+    @DisplayName("한_회차_성공하면_유예가_다시_찬다")
+    void 한_회차_성공하면_유예가_다시_찬다() {
         CapacityCollector collector = collector();
         long 관측 = collector.collect(List.of(report("a", 10_000, NOW)), NOW, 1);
         for (int i = 0; i < CapacityCollector.HOLD_ROUNDS + 1; i++) {
@@ -749,10 +749,10 @@ class CapacityCollectorTest {
         assertThat(credit).isEqualTo(100);
     }
 
-    /** 하한이 답이 된 판만 기록한다. 안 걸린 판까지 남기면 배분이 매번 하한을 얹는다. */
+    /** 하한이 답이 된 회차만 기록한다. 안 걸린 회차까지 남기면 배분이 매번 하한을 얹는다. */
     @Test
-    @DisplayName("하한이_안_걸린_판은_0을_남긴다")
-    void 하한이_안_걸린_판은_0을_남긴다() {
+    @DisplayName("하한이_안_걸린_회차는_0을_남긴다")
+    void 하한이_안_걸린_회차는_0을_남긴다() {
         CapacityCollector collector = collector();
         collector.collect(List.of(report("seed", 0, NOW)), NOW, 1);
 
@@ -762,8 +762,8 @@ class CapacityCollectorTest {
     }
 
     @Test
-    @DisplayName("하한이_걸린_판은_그_값을_남긴다")
-    void 하한이_걸린_판은_그_값을_남긴다() {
+    @DisplayName("하한이_걸린_회차는_그_값을_남긴다")
+    void 하한이_걸린_회차는_그_값을_남긴다() {
         CapacityCollector collector = collector();
 
         collector.collect(List.of(), NOW, 3);

@@ -29,6 +29,11 @@ if not workflows.is_dir():
     sys.exit(0)
 
 files = sorted(workflows.glob('*.yml')) + sorted(workflows.glob('*.yaml'))
+# **composite action 의 run 도 셸이다.** 워크플로만 보면 그 블록은 문법 검사도
+# 안 받는다 — 판정 액션이 인라인이던 동안 아무도 안 봤다.
+actions = root / '.github' / 'actions'
+if actions.is_dir():
+    files += sorted(actions.glob('*/action.yml')) + sorted(actions.glob('*/action.yaml'))
 if not files:
     print("  워크플로 디렉터리가 비었다", file=sys.stderr)
     sys.exit(1)
@@ -42,7 +47,13 @@ for path in files:
         continue
     # 셸은 스텝 → 잡 → 워크플로 순으로 정해진다. 기본값은 러너의 bash 다.
     top = ((doc.get('defaults') or {}).get('run') or {}).get('shell')
-    for job, spec in (doc.get('jobs') or {}).items():
+    # **composite action 은 스텝을 `runs.steps` 에 둔다.** 잡만 훑으면 액션
+    # 파일을 목록에 넣어도 아무것도 안 본다 — 실제로 그렇게 돼 있었다.
+    jobs = dict(doc.get('jobs') or {})
+    runs = doc.get('runs') or {}
+    if runs.get('steps'):
+        jobs['runs'] = runs
+    for job, spec in jobs.items():
         job_shell = ((spec.get('defaults') or {}).get('run') or {}).get('shell') or top
         for i, step in enumerate(spec.get('steps') or []):
             run = step.get('run')

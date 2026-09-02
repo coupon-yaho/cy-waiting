@@ -34,7 +34,7 @@ public final class LoopAliveHealth implements HealthIndicator {
     /**
      * <b>한 번이라도 돈 뒤</b> 임계를 넘겼을 때만 죽는다.
      *
-     * <p>기동 직후를 정지로 세면 첫 판을 못 돈 파드가 죽고, 재기동해도 또 첫 판
+     * <p>기동 직후를 정지로 세면 첫 회차를 못 돈 파드가 죽고, 재기동해도 또 첫 회차
      * 전이라 또 죽는다. 그 구간은 받는 쪽과 기동 프로브가 맡는다.
      */
     @Override

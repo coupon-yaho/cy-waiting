@@ -857,6 +857,34 @@ class CapacityCollectorTest {
                 .isEqualTo(100L);
     }
 
+    /**
+     * <b>하한을 만들었으면 라우팅 몫에도 싣는다.</b>
+     *
+     * <p>램프가 전부를 0 으로 깎으면 판정은 하한으로 통과시키는데, 라우팅 몫이
+     * 전부 0 이면 고르개가 후보로 안 본다 — 통과시켜 놓고 갈 곳이 없다.
+     */
+    @Test
+    @DisplayName("램프가_전부_깎아도_보낼_곳이_남는다")
+    void 램프가_전부_깎아도_보낼_곳이_남는다() {
+        CapacityCollector collector = collector();
+        // 첫 회차를 지나야 새 인스턴스에 램프가 걸린다 — 첫 회차의 무리는
+        // 이미 돌던 것으로 보기 때문이다.
+        long 지금 = warm(collector, "old", 100);
+
+        long 크레딧 = collector.collect(List.of(
+                주소_있는_보고("a", "10.0.1.7:8080", 100, 지금),
+                주소_있는_보고("b", "10.0.1.8:8080", 100, 지금)), 지금, 1);
+
+        assertThat(크레딧).as("전제 — 하한이 걸렸다").isPositive();
+        assertThat(collector.routable())
+                .as("판정이 통과시키는데 보낼 곳이 없으면 안 된다")
+                .isNotEmpty()
+                .allSatisfy(i -> assertThat(i.credits()).isPositive());
+        assertThat(collector.routable().stream().mapToLong(InstanceRouting::credits).sum())
+                .as("실린 몫의 합이 발행한 크레딧과 같다")
+                .isEqualTo(크레딧);
+    }
+
     /** 한 회차도 안 돌았으면 비어 있다. 없는 목록으로 라우팅하면 보낼 곳이 없다. */
     @Test
     @DisplayName("아직_안_돌았으면_비어_있다")

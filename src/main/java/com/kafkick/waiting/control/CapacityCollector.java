@@ -242,7 +242,6 @@ public final class CapacityCollector {
             report.routableAddress().ifPresent(address -> routable.add(
                     new InstanceRouting(report.instanceId(), address, share)));
         }
-        lastRoutable = List.copyOf(routable);
         evictStale(now);
         firstRound = false;
 
@@ -259,6 +258,24 @@ public final class CapacityCollector {
         boolean rampMadeIt = total < minimum && total < reported;
         long credit = fresh == 0 || rampMadeIt ? minimum : total;
         lastFloor.set(fresh == 0 || rampMadeIt ? minimum : 0);
+        // **하한을 만들었으면 라우팅 몫에도 싣는다.** 램프가 전부를 0 으로 깎으면
+        // 판정은 하한으로 통과시키는데 보낼 곳이 하나도 없다 — 고르개가 여유 0 인
+        // 대를 후보로 안 보기 때문이다. 통과시켜 놓고 갈 곳이 없는 것이 가장 나쁘다.
+        //
+        // 램프 구간에는 전부 똑같이 데워지는 중이라 고르게 나눈다. 나머지는 앞에
+        // 준다 — 버리면 합이 발행한 크레딧보다 작아진다.
+        List<InstanceRouting> published = routable;
+        if (rampMadeIt && !routable.isEmpty()) {
+            published = new ArrayList<>();
+            long each = credit / routable.size();
+            long remainder = credit % routable.size();
+            for (int i = 0; i < routable.size(); i++) {
+                InstanceRouting r = routable.get(i);
+                published.add(new InstanceRouting(r.instanceId(), r.address(),
+                        each + (i < remainder ? 1 : 0)));
+            }
+        }
+        lastRoutable = List.copyOf(published);
         lastKnown.set(credit);
         // 한 회차라도 성공하면 유예가 다시 찬다. 안 그러면 드문 순단이 쌓여
         // 멀쩡한 구간에서도 조여진다.

@@ -14,7 +14,7 @@ import reactor.test.StepVerifier;
 import reactor.test.scheduler.VirtualTimeScheduler;
 
 /**
- * 재료 읽기 한 판.
+ * 재료 읽기 한 회차.
  *
  * <p><b>못 읽은 것이 배분을 막지 않는다.</b> 그리고 못 읽은 것을 "보고 0건" 으로
  * 접지도 않는다 — 접으면 하한으로 떨어져 전면 억제가 된다.
@@ -44,7 +44,7 @@ class CapacityRefreshTest {
 
         refresh.refresh().block();
 
-        // **초기값도 통과하는 단언은 아무것도 안 잰다.** 첫 판에 본 무리는 이미
+        // **초기값도 통과하는 단언은 아무것도 안 잰다.** 첫 회차에 본 무리는 이미
         // 돌던 것으로 보므로 보고한 값이 그대로 나온다 — 그 값을 못 박는다.
         assertThat(collector.lastKnown()).isEqualTo(500);
     }
@@ -68,8 +68,8 @@ class CapacityRefreshTest {
     }
 
     /**
-     * <b>느린 것은 오류가 아니다.</b> 자기 예산이 없으면 배분 예산을 먹고, 판이
-     * 통째로 안 끝나 임계가 안 올라간다 — 큐가 자라 다음 판이 더 무거워진다.
+     * <b>느린 것은 오류가 아니다.</b> 자기 예산이 없으면 배분 예산을 먹고, 회차가
+     * 통째로 안 끝나 임계가 안 올라간다 — 큐가 자라 다음 회차가 더 무거워진다.
      */
     @Test
     @DisplayName("느리면_예산_안에서_포기한다")
@@ -97,11 +97,11 @@ class CapacityRefreshTest {
 
     /**
      * <b>관측과 기준 시각은 같은 순간의 것이어야 한다.</b> 한 왕복으로 받으므로
-     * 그 왕복이 실패하면 판 전체가 걸러진다 — 반쪽 관측으로 도는 길은 없다.
+     * 그 왕복이 실패하면 회차 전체가 걸러진다 — 반쪽 관측으로 도는 길은 없다.
      */
     @Test
-    @DisplayName("한_왕복이_실패하면_판을_거른다")
-    void 한_왕복이_실패하면_판을_거른다() {
+    @DisplayName("한_왕복이_실패하면_회차를_거른다")
+    void 한_왕복이_실패하면_회차를_거른다() {
         CapacityCollector collector = collector();
         long 직전 = collector.lastKnown();
         CapacityRefresh refresh = CapacityRefresh.of(

@@ -35,7 +35,7 @@ class CircuitSourceIntegrationTest extends RedisContainerSupport {
     @Autowired
     private ReactiveStringRedisTemplate redis;
 
-    /** <b>실제로 배선된 판을 돌린다.</b> 손으로 조립하면 이 시험의 뜻이 사라진다. */
+    /** <b>실제로 배선된 회차를 돌린다.</b> 손으로 조립하면 이 시험의 뜻이 사라진다. */
     @Autowired
     private AllocationRound wired;
 

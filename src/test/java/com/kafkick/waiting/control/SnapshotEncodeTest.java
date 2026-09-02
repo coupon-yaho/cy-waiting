@@ -244,11 +244,11 @@ class SnapshotEncodeTest {
     @Test
     @DisplayName("옛_자리에_실제_배수를_싣는다")
     void 옛_자리에_실제_배수를_싣는다() {
-        GatewaySnapshot 배수가_걸린_판 = new GatewaySnapshot(
+        GatewaySnapshot 배수가_걸린_스냅샷 = new GatewaySnapshot(
                 Map.of("c1", new CouponState(QueueMode.ALWAYS, RuntimeState.QUEUEING, 9, 100, 50)),
                 new SnapshotMeta(9, 1, null, 3.5), Instant.ofEpochSecond(1_700_000_000L));
 
-        String 실린_값 = codec.encode(배수가_걸린_판, CreditSmoother.Snapshot.empty(),
+        String 실린_값 = codec.encode(배수가_걸린_스냅샷, CreditSmoother.Snapshot.empty(),
                 QueueingHysteresis.Snapshot.empty()).get("c1");
 
         assertThat(실린_값).as("여섯 번째 자리가 전역 배수와 같다")
@@ -262,13 +262,13 @@ class SnapshotEncodeTest {
                 Map.of("c1", new CouponState(QueueMode.ALWAYS, RuntimeState.DRAINING, 9, 100, 5)),
                 new SnapshotMeta(9, 1, null, 2.0), Instant.ofEpochSecond(1_700_000_000L));
 
-        GatewaySnapshot 되읽은_판 = codec.decode(codec.encode(원본,
+        GatewaySnapshot 되읽은_스냅샷 = codec.decode(codec.encode(원본,
                 CreditSmoother.Snapshot.empty(), QueueingHysteresis.Snapshot.empty()));
-        CouponState 되읽음 = 되읽은_판.coupons().get("c1");
+        CouponState 되읽음 = 되읽은_스냅샷.coupons().get("c1");
 
         assertThat(되읽음.mode()).isEqualTo(QueueMode.ALWAYS);
         assertThat(되읽음.runtime()).isEqualTo(RuntimeState.DRAINING);
-        assertThat(되읽은_판.meta().pollScale()).isEqualTo(2.0);
+        assertThat(되읽은_스냅샷.meta().pollScale()).isEqualTo(2.0);
     }
 
     /**
@@ -320,17 +320,17 @@ class SnapshotEncodeTest {
     }
 
     /**
-     * <b>옛 리더의 판을 미상으로 읽지 않는다.</b> 옛 리더는 미상을 0 으로 접어
-     * 보내고 예약 자리를 안 싣는다. 그 판을 미상으로 읽으면 그 리더가 말한
+     * <b>옛 리더의 스냅샷을 미상으로 읽지 않는다.</b> 옛 리더는 미상을 0 으로 접어
+     * 보내고 예약 자리를 안 싣는다. 그 회차를 미상으로 읽으면 그 리더가 말한
      * 매진이 전부 무시되고, 매진 방패가 통째로 안 걸린다.
      */
     @Test
     @DisplayName("예약_자리가_없으면_아는_것으로_읽는다")
     void 예약_자리가_없으면_아는_것으로_읽는다() {
-        Map<String, String> 옛판 = new HashMap<>(미상을_싣는다());
-        옛판.keySet().removeIf(f -> f.startsWith("#u:"));
+        Map<String, String> 옛_스냅샷 = new HashMap<>(미상을_싣는다());
+        옛_스냅샷.keySet().removeIf(f -> f.startsWith("#u:"));
 
-        CouponState 되읽음 = codec.decode(옛판).coupons().get("c1");
+        CouponState 되읽음 = codec.decode(옛_스냅샷).coupons().get("c1");
 
         assertThat(되읽음.stockKnown()).isTrue();
         assertThat(되읽음.soldOut()).as("옛 리더가 말한 매진이 그대로 선다").isTrue();
@@ -353,7 +353,7 @@ class SnapshotEncodeTest {
 
         assertThat(실린것.keySet())
                 .filteredOn(f -> f.startsWith(SnapshotCodec.STOCK_UNKNOWN_FIELD))
-                .as("미상 표시는 쿠폰마다 하나뿐이고, 이 판에는 미상이 없다")
+                .as("미상 표시는 쿠폰마다 하나뿐이고, 이 스냅샷에는 미상이 없다")
                 .isEmpty();
     }
 

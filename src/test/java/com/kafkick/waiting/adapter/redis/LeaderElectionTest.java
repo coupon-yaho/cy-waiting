@@ -86,7 +86,7 @@ class LeaderElectionTest extends RedisContainerSupport {
 
     /**
      * 락에 적힌 소유자. <b>형식을 아는 곳을 한 군데로 모은다</b> — 값은
-     * {@code <판 번호>|<ownerId>} 이고, 옛 형식에는 번호가 없다.
+     * {@code <펜스 번호>|<ownerId>} 이고, 옛 형식에는 번호가 없다.
      */
     private String storedOwner() {
         String raw = redis.opsForValue().get(LEADER).block(WAIT);
@@ -102,27 +102,27 @@ class LeaderElectionTest extends RedisContainerSupport {
     }
 
     /**
-     * <b>판 번호는 리더가 바뀔 때마다 커진다</b> (CY-766).
+     * <b>펜스 번호는 리더가 바뀔 때마다 커진다</b> (CY-766).
      *
      * <p>되돌릴 수 없는 쓰기는 이 번호를 들고 나가고, 줄 옆의 울타리가 그것으로
      * 옛 리더를 가려낸다. 안 커지면 옛 명령과 새 명령을 구분할 방법이 없다.
      */
     @Test
-    @DisplayName("리더가_바뀌면_판_번호가_커진다")
-    void 리더가_바뀌면_판_번호가_커진다() {
-        long 첫판 = fence(tryAcquire("node-1"));
+    @DisplayName("리더가_바뀌면_펜스_번호가_커진다")
+    void 리더가_바뀌면_펜스_번호가_커진다() {
+        long 첫_펜스 = fence(tryAcquire("node-1"));
         releaseBy("node-1");
 
-        long 다음판 = fence(tryAcquire("node-2"));
+        long 다음_펜스 = fence(tryAcquire("node-2"));
 
-        assertThat(첫판).as("잡았으면 번호가 있다").isPositive();
-        assertThat(다음판).as("다음 리더가 더 크다").isGreaterThan(첫판);
+        assertThat(첫_펜스).as("잡았으면 번호가 있다").isPositive();
+        assertThat(다음_펜스).as("다음 리더가 더 크다").isGreaterThan(첫_펜스);
     }
 
-    /** 연장은 같은 판이다. 매 틱 새로 매기면 자기 자신을 옛 리더로 만든다. */
+    /** 연장은 같은 임기다. 매 틱 새로 매기면 자기 자신을 옛 리더로 만든다. */
     @Test
-    @DisplayName("연장은_판_번호를_안_바꾼다")
-    void 연장은_판_번호를_안_바꾼다() {
+    @DisplayName("연장은_펜스_번호를_안_바꾼다")
+    void 연장은_펜스_번호를_안_바꾼다() {
         long 처음 = fence(tryAcquire("node-1"));
 
         assertThat(fence(tryAcquire("node-1"))).isEqualTo(처음);
@@ -130,8 +130,8 @@ class LeaderElectionTest extends RedisContainerSupport {
 
     /** 못 잡았으면 번호가 없다. 남의 번호를 들고 나가면 그 리더를 흉내 낸다. */
     @Test
-    @DisplayName("못_잡으면_판_번호가_없다")
-    void 못_잡으면_판_번호가_없다() {
+    @DisplayName("못_잡으면_펜스_번호가_없다")
+    void 못_잡으면_펜스_번호가_없다() {
         tryAcquire("node-1");
 
         assertThat(fence(tryAcquire("node-2"))).isZero();
@@ -140,14 +140,14 @@ class LeaderElectionTest extends RedisContainerSupport {
     /**
      * <b>옛 형식의 값도 알아보고, 번호를 그 자리에서 매긴다.</b>
      *
-     * <p>롤아웃 구간에 옛 노드가 남긴 락은 판 번호가 없다. 못 읽으면 그 락을
+     * <p>롤아웃 구간에 옛 노드가 남긴 락은 펜스 번호가 없다. 못 읽으면 그 락을
      * 남의 것으로 보고 리더가 둘이 된다. 그렇다고 0 을 그대로 쓰면 울타리가
      * 전부 거절해 그 노드의 매진 큐 정리가 무기한 죽는다 — 연장은 번호를 안
      * 바꾸므로 리스가 끊길 때까지 스스로 못 빠져나온다.
      */
     @Test
-    @DisplayName("판_번호_없는_옛_락은_번호를_받는다")
-    void 판_번호_없는_옛_락은_번호를_받는다() {
+    @DisplayName("펜스_번호_없는_옛_락은_번호를_받는다")
+    void 펜스_번호_없는_옛_락은_번호를_받는다() {
         redis.opsForValue().set(LEADER, "node-1").block(WAIT);
 
         List<Object> r = tryAcquire("node-1");
@@ -160,8 +160,8 @@ class LeaderElectionTest extends RedisContainerSupport {
 
     /** 옛 형식의 자기 락도 해제한다. 못 알아보면 안 지우고 나간다. */
     @Test
-    @DisplayName("판_번호_없는_옛_락도_해제한다")
-    void 판_번호_없는_옛_락도_해제한다() {
+    @DisplayName("펜스_번호_없는_옛_락도_해제한다")
+    void 펜스_번호_없는_옛_락도_해제한다() {
         redis.opsForValue().set(LEADER, "node-1").block(WAIT);
 
         assertThat(releaseBy("node-1")).isEqualTo(1);

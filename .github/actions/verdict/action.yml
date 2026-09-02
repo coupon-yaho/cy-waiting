@@ -3,6 +3,9 @@ description: 잡 결과 목록을 하나의 통과·실패로 판정한다
 
 # `contains(needs.*.result, 'failure')` 만 보면 취소가 통과로 집계되어
 # Jira 가 다음 상태로 넘어간다. 규칙을 한 곳에 두고 세 워크플로가 같이 쓴다.
+#
+# **규칙은 스크립트에 둔다.** 인라인으로 두면 자기검증을 못 걸고, 실제로 그
+# 사이에 "실패를 출력만 하고 잡은 성공으로 끝내는" 상태가 오래 있었다.
 
 inputs:
   results:
@@ -11,7 +14,7 @@ inputs:
 
 outputs:
   status:
-    description: success | failure
+    description: success | failure. **실패면 잡도 실패한다** — 그래야 병합이 막힌다
     value: ${{ steps.judge.outputs.status }}
   ok:
     description: 'true | false'
@@ -25,18 +28,4 @@ runs:
       shell: bash
       env:
         RESULTS: ${{ inputs.results }}
-      run: |
-        set -uo pipefail
-
-        # skipped 는 통과로 본다 — 문서 PR 에서 빌드·테스트를 건너뛰는 것은 정상이다.
-        # failure 와 cancelled 는 통과가 아니다. 취소는 "검사하지 않았다"는 뜻이지
-        # "이상 없다"가 아니다.
-        if grep -qE '(^| )(failure|cancelled)( |$)' <<<"$RESULTS"; then
-          echo "status=failure" >> "$GITHUB_OUTPUT"
-          echo "ok=false" >> "$GITHUB_OUTPUT"
-          echo "::notice title=판정::실패 — $RESULTS"
-        else
-          echo "status=success" >> "$GITHUB_OUTPUT"
-          echo "ok=true" >> "$GITHUB_OUTPUT"
-          echo "::notice title=판정::통과 — $RESULTS"
-        fi
+      run: "$GITHUB_ACTION_PATH/../../scripts/verdict.sh"

@@ -67,7 +67,7 @@ class BackendSilenceScenarioTest {
 
     /**
      * 흔들림을 보는 표본 수. <b>보낸 수와 같다</b> — 여기서 더 늘리려면 한 건에
-     * 응답 상한만큼을 더 치러야 한다. 열두 건으로 늘려 보니 한 판이 3분이 됐다.
+     * 응답 상한만큼을 더 치러야 한다. 열두 건으로 늘려 보니 한 회차가 3분이 됐다.
      */
     private static final int 흔들림_표본 = 보낼_수;
 
@@ -415,7 +415,7 @@ class BackendSilenceScenarioTest {
     private Optional<String> 보고가_안_터졌다() {
         long 터진 = 뛰다_터진_수.get();
         return 터진 == 0 ? Optional.empty()
-                : Optional.of("가용량 보고가 %d 판 터졌다 — 크레딧이 구간마다 다르다"
+                : Optional.of("가용량 보고가 %d 회차 터졌다 — 크레딧이 구간마다 다르다"
                         .formatted(터진));
     }
 }

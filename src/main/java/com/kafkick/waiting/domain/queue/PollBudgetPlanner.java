@@ -112,9 +112,11 @@ public final class PollBudgetPlanner {
             if (nodes < 1) {
                 throw new IllegalArgumentException("nodes 는 1 이상이어야 한다: " + nodes);
             }
-            if (expected < 0 || budget < 0) {
+            if (!Double.isFinite(expected) || !Double.isFinite(budget)
+                    || !Double.isFinite(scale) || expected < 0 || budget < 0) {
                 throw new IllegalArgumentException(
-                        "예상·예산은 음수가 될 수 없다: %f %f".formatted(expected, budget));
+                        "예상·예산·배수는 0 이상 유한값이어야 한다: %f %f %f"
+                                .formatted(expected, budget, scale));
             }
             if (scale != pollScale(expected, budget)) {
                 throw new IllegalArgumentException(

@@ -257,6 +257,24 @@ class PollBudgetPlannerTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    /**
+     * <b>무한대는 음수 검사를 그냥 지나간다.</b> 그 값이 실리면 배수가 무한이
+     * 되어 폴링 간격이 무한이 되고, 대기자가 영영 안 두드린다.
+     */
+    @Test
+    @DisplayName("유한값이_아니면_거절한다")
+    void 유한값이_아니면_거절한다() {
+        assertThatThrownBy(() -> new PollBudgetPlanner.Scale(
+                Double.POSITIVE_INFINITY, 4_000, 1.0, 20))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new PollBudgetPlanner.Scale(
+                20_000, Double.POSITIVE_INFINITY, 1.0, 20))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new PollBudgetPlanner.Scale(
+                0, 0, Double.NaN, 20))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
     @Test
     @DisplayName("예산이_음수면_거절한다")
     void 예산이_음수면_거절한다() {

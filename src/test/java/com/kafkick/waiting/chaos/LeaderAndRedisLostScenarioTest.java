@@ -32,6 +32,7 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.http.HttpStatus;
@@ -55,6 +56,10 @@ import reactor.netty.http.server.HttpServer;
 // **영속을 켜고 띄운다.** C1 은 `--appendonly no` 라 끊었다 붙이면 줄이 통째로
 // 사라져 RC5 를 구조적으로 못 쟀다. 여기서는 줄이 살아남으므로 자리 보존을 잰다.
 @Tag("chaos")
+// **컨텍스트를 캐시에 남기지 않는다.** 스케줄러를 켜고 띄우므로 제어 평면 루프가
+// 계속 도는데, `@AfterAll` 이 레디스와 뒷단을 내린 뒤에도 캐시된 컨텍스트는
+// 살아 있다 — 그 루프가 사라진 자원을 치면서 뒤 시험을 흔든다.
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = "waiting.scheduler.enabled=true")
 class LeaderAndRedisLostScenarioTest {

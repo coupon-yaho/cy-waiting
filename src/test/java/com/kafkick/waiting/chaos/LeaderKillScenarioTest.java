@@ -25,6 +25,7 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.http.HttpStatus;
@@ -49,6 +50,10 @@ import reactor.netty.http.server.HttpServer;
 // 그래서 재는 것은 **리더가 없는 동안의 판정**이고, 회복도 승계가 아니라 같은
 // 노드의 재획득이다. 진짜 승계는 노드 둘짜리 하네스가 있어야 한다.
 @Tag("chaos")
+// **컨텍스트를 캐시에 남기지 않는다.** 스케줄러를 켜고 띄우므로 제어 평면 루프가
+// 계속 도는데, 뒷정리가 자원을 내린 뒤에도 캐시된 컨텍스트는 살아 있다 — 그 루프가
+// 사라진 자원을 치면서 뒤 시험을 흔든다.
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = "waiting.scheduler.enabled=true")
 class LeaderKillScenarioTest {

@@ -159,7 +159,7 @@ class CircuitAndSpikeScenarioTest {
         // 재료가 늙어 낡음이 열리고, 그러면 한산한 쿠폰이 사다리 4번(fail-open)
         // 으로 빠져 서킷 갈래를 한 번도 안 밟는다. 실제로 그렇게 재다가
         // 한산한 쿠폰이 503 을 받는 것을 봤다.
-        // RULE-EXCEPTION(TS-4): 나이를 실제로 늙게 두는 것이 이 판의 재료다.
+        // RULE-EXCEPTION(TS-4): 나이를 실제로 늙게 두는 것이 이 시나리오의 재료다.
         // 시각을 고정하면 낡음이 영영 안 열리고, 열리는지 안 열리는지가 정확히
         // 이 시나리오가 재는 것이다.
         @Bean
@@ -199,7 +199,7 @@ class CircuitAndSpikeScenarioTest {
      * 그쪽이 가로챈다.
      */
     // RULE-EXCEPTION(TS-4): 토큰의 서명이 실시계로 검증되므로 고정 시각을 실으면
-    // 만료로 거절된다. 이 판은 토큰이 통과하는 것을 전제로 한다.
+    // 만료로 거절된다. 이 시나리오는 토큰이 통과하는 것을 전제로 한다.
     private int 토큰으로_시도한다(int member) {
         return 클라이언트().post()
                 .uri("/api/v1/coupons/" + COUPON + "/issue")
@@ -298,7 +298,7 @@ class CircuitAndSpikeScenarioTest {
                     // 서킷은 첫 요청이 만든다. 그 전에 잡으려 하면 없다.
                     토큰으로_시도한다(900);
                     // **열린 횟수를 센다** (G8.12). 반복 실패는 유입 억제가 안
-                    // 걸린다는 뜻이고, 이 판이 그것을 볼 수 있는 유일한 자리다.
+                    // 걸린다는 뜻이고, 이 시나리오가 그것을 볼 수 있는 유일한 자리다.
                     서킷().getEventPublisher().onStateTransition(e -> {
                         if (e.getStateTransition().getToState() == CircuitBreaker.State.OPEN) {
                             열린_횟수.incrementAndGet();
@@ -381,7 +381,7 @@ class CircuitAndSpikeScenarioTest {
                         // 게이트웨이가 억눌러 둔 것을 한꺼번에 푼 것이다.
                         RecoveryCriteria.recoveryBurst(정상_봉우리[0], 회복_봉우리[0]),
                         // G8.12 — 회복까지 몇 번 열렸는가. C8 이 공허하다고 적어
-                        // 둔 자리이고, 이 판이 그것을 볼 수 있는 유일한 자리다.
+                        // 둔 자리이고, 이 시나리오가 그것을 볼 수 있는 유일한 자리다.
                         반복해서_안_열렸다(열린_횟수.get()),
                         중복_수신이_없다()))
                 // **RC2·RC3·RC5·RC6 은 여기서 안 잰다.** 순번을 안 돌려주고,
@@ -425,7 +425,7 @@ class CircuitAndSpikeScenarioTest {
     }
 
     /**
-     * <b>답을 받는가.</b> 도착 수만 보면 전원이 끊긴 판과 구분이 안 된다.
+     * <b>답을 받는가.</b> 도착 수만 보면 전원이 끊긴 경우와 구분이 안 된다.
      */
     // **개수만 보면 전원이 500 이어도 초록이다.** 서킷 폴백(503)과 초당 상한(429)은
     // 원인이 다르고, 회복 판정의 뜻이 거기서 갈린다.
@@ -460,7 +460,7 @@ class CircuitAndSpikeScenarioTest {
      * <b>열린 횟수가 둘을 넘으면 회복이 반복 실패한 것이다</b> (G8.12).
      *
      * <p>half-open 순간 그때 도착한 트래픽이 약한 뒷단에 꽂혀 다시 열린다.
-     * 차례를 받은 사람들이 1 초 밴드로 되돌아오므로 이 판이 그 그림 그대로다.
+     * 차례를 받은 사람들이 1 초 밴드로 되돌아오므로 이 시나리오가 그 그림 그대로다.
      */
     private Optional<String> 반복해서_안_열렸다(int 열린_횟수) {
         return 열린_횟수 <= 2 ? Optional.empty()

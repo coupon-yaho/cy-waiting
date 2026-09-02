@@ -1,6 +1,7 @@
 package com.kafkick.waiting.routing;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.kafkick.waiting.domain.routing.InFlightRegistry;
 import com.kafkick.waiting.domain.routing.InstanceChooser;
@@ -69,11 +70,19 @@ class CapacityAwareLoadBalancerTest {
         };
     }
 
+    /** 상한이 안 물리는 값. 상한을 재는 시험만 따로 낮춰 쓴다. */
+    private static final int 상한 = 1_000;
+
+    private Response<ServiceInstance> 고른다(InstanceChooser chooser,
+            ServiceInstanceListSupplier 목록, int cap) {
+        return CapacityAwareLoadBalancer.of(목록, chooser, 레지스트리, () -> 지금, cap)
+                .choose((Request<?>) null).block();
+    }
+
     private Response<ServiceInstance> 고른다(
             InstanceChooser chooser,
             ServiceInstanceListSupplier 목록) {
-        return CapacityAwareLoadBalancer.of(목록, chooser, 레지스트리, () -> 지금)
-                .choose((Request<?>) null).block();
+        return 고른다(chooser, 목록, 상한);
     }
 
     @Test
@@ -171,7 +180,7 @@ class CapacityAwareLoadBalancerTest {
     void 라운드로빈도_붙는다() {
         CapacityAwareLoadBalancer 균형기 = CapacityAwareLoadBalancer.of(
                 목록(인스턴스("be-1", "3"), 인스턴스("be-2", "1")),
-                WeightedRoundRobin.create(), 레지스트리, () -> 지금);
+                WeightedRoundRobin.create(), 레지스트리, () -> 지금, 상한);
 
         List<String> 고른것 = new ArrayList<>();
         for (int i = 0; i < 4; i++) {
@@ -179,5 +188,59 @@ class CapacityAwareLoadBalancerTest {
         }
 
         assertThat(고른것).filteredOn("be-1"::equals).hasSize(3);
+    }
+
+    /**
+     * <b>상한에 닿은 대는 후보가 아니다</b> (G9.13).
+     *
+     * <p>느려진 한 대로 간 요청이 무한정 쌓이면 그 한 대가 게이트웨이의 커넥션을
+     * 다 붙잡는다 — 멀쩡한 대로 갈 커넥션까지 가져간다.
+     */
+    @Test
+    @DisplayName("상한에_닿은_대는_후보에서_뺀다")
+    void 상한에_닿은_대는_후보에서_뺀다() {
+        레지스트리.started("느린", 지금);
+        레지스트리.started("느린", 지금);
+        List<String> 본_후보 = new ArrayList<>();
+
+        고른다(candidates -> {
+            candidates.forEach(c -> 본_후보.add(c.instanceId()));
+            return candidates.stream().findFirst();
+        }, 목록(인스턴스("느린", "200"), 인스턴스("멀쩡", "200")), 2);
+
+        assertThat(본_후보).containsExactly("멀쩡");
+    }
+
+    /** 상한 아래면 그대로 후보다. 상한이 늘 물면 라우팅이 통째로 막힌다. */
+    @Test
+    @DisplayName("상한_아래면_후보다")
+    void 상한_아래면_후보다() {
+        레지스트리.started("느린", 지금);
+        List<String> 본_후보 = new ArrayList<>();
+
+        고른다(candidates -> {
+            candidates.forEach(c -> 본_후보.add(c.instanceId()));
+            return candidates.stream().findFirst();
+        }, 목록(인스턴스("느린", "200")), 2);
+
+        assertThat(본_후보).containsExactly("느린");
+    }
+
+    /** 전부 상한에 닿으면 빈 답이다 — 아무 대나 고르면 그 대가 무너진다. */
+    @Test
+    @DisplayName("전부_상한이면_빈_답이다")
+    void 전부_상한이면_빈_답이다() {
+        레지스트리.started("be-1", 지금);
+
+        assertThat(고른다(정해진("be-1"), 목록(인스턴스("be-1", "200")), 1).hasServer())
+                .isFalse();
+    }
+
+    @Test
+    @DisplayName("상한이_양수가_아니면_거절한다")
+    void 상한이_양수가_아니면_거절한다() {
+        assertThatThrownBy(() -> CapacityAwareLoadBalancer.of(
+                목록(), 정해진(), 레지스트리, () -> 지금, 0))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }

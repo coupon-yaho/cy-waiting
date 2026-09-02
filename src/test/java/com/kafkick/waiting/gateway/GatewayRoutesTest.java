@@ -674,7 +674,7 @@ class GatewayRoutesTest {
     @DisplayName("라우팅을_켜면_lb_로_보낸다")
     void 라우팅을_켜면_lb_로_보낸다() {
         RouteLocator locator = 라우터(new RoutingProperties(
-                true, "coupon-service", null, null, null));
+                true, "coupon-service", null, null, null, null));
 
         assertThat(주소들(locator)).allMatch("lb://coupon-service"::equals);
     }
@@ -687,7 +687,7 @@ class GatewayRoutesTest {
     @DisplayName("라우팅을_끄면_단일_주소다")
     void 라우팅을_끄면_단일_주소다() {
         RouteLocator locator = 라우터(new RoutingProperties(
-                false, "coupon-service", null, null, null));
+                false, "coupon-service", null, null, null, null));
 
         assertThat(주소들(locator)).allMatch("http://backend:8080"::equals);
     }

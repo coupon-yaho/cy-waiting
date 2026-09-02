@@ -191,6 +191,53 @@ class InFlightRegistryTest {
     }
 
     @Nested
+    @DisplayName("모아 보기")
+    class Aggregate {
+
+        /** 게이지가 인스턴스마다 태그를 못 단다 — 재기동마다 식별자가 새로 온다 (LG-4). */
+        @Test
+        @DisplayName("전체_합을_낸다")
+        void 전체_합을_낸다() {
+            레지스트리.started(갑, 지금);
+            레지스트리.started(갑, 지금);
+            레지스트리.started(을, 지금);
+
+            assertThat(레지스트리.total(지금)).isEqualTo(3);
+        }
+
+        /** 합만 보면 한 대에 몰린 것과 고루 퍼진 것이 구분이 안 된다. */
+        @Test
+        @DisplayName("가장_바쁜_인스턴스를_낸다")
+        void 가장_바쁜_인스턴스를_낸다() {
+            레지스트리.started(갑, 지금);
+            레지스트리.started(갑, 지금);
+            레지스트리.started(을, 지금);
+
+            assertThat(레지스트리.busiest(지금)).isEqualTo(2);
+        }
+
+        @Test
+        @DisplayName("비어_있으면_둘_다_0_이다")
+        void 비어_있으면_둘_다_0_이다() {
+            assertThat(레지스트리.total(지금)).isZero();
+            assertThat(레지스트리.busiest(지금)).isZero();
+        }
+
+        /** 만료된 항목은 어느 쪽에도 안 든다 — 안 그러면 게이지가 영영 안 내려온다. */
+        @Test
+        @DisplayName("만료된_항목은_안_센다")
+        void 만료된_항목은_안_센다() {
+            레지스트리.started(갑, 지금);
+            레지스트리.started(을, 지금);
+            앞으로(수명.plusSeconds(1));
+            레지스트리.started(을, 지금);
+
+            assertThat(레지스트리.total(지금)).isEqualTo(1);
+            assertThat(레지스트리.busiest(지금)).isEqualTo(1);
+        }
+    }
+
+    @Nested
     @DisplayName("동시 상한")
     class Cap {
 

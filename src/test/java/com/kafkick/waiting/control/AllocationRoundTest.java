@@ -7,6 +7,7 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.kafkick.waiting.adapter.redis.ClockSkewTracker;
+import com.kafkick.waiting.domain.admission.CircuitState;
 import com.kafkick.waiting.domain.allocation.CouponDemand;
 import com.kafkick.waiting.domain.allocation.CreditSmoother;
 import com.kafkick.waiting.domain.allocation.Grant;
@@ -22,6 +23,7 @@ import java.util.Optional;
 import com.kafkick.waiting.domain.coupon.CouponStates;
 import com.kafkick.waiting.domain.queue.PollBudgetPlanner;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
+import java.lang.ref.Reference;
 import java.time.Duration;
 import java.util.List;
 import java.util.function.Function;
@@ -39,7 +41,7 @@ import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Mono;
 
 /**
- * 한 판. 수요를 모아 크레딧을 나누고 적용한 뒤 발행한다.
+ * 한 회차. 수요를 모아 크레딧을 나누고 적용한 뒤 발행한다.
  *
  * <p><b>대기 수를 한 번만 읽는다.</b> 크레딧을 산출한 뒤 다시 읽으면 그 사이에
  * 사람이 빠져 도메인이 막는 조합이 발행되고, 코덱이 그 쿠폰만 떨군다. 떨어진
@@ -57,7 +59,7 @@ class AllocationRoundTest {
         로그.start();
         ch.qos.logback.classic.Logger logger =
                 (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(AllocationRound.class);
-        // 판마다 세는 값은 지표 자리라 낮은 수준으로 찍는다. 시험은 그걸 봐야 한다.
+        // 회차마다 세는 값은 지표 자리라 낮은 수준으로 찍는다. 시험은 그걸 봐야 한다.
         원래_수준 = logger.getLevel();
         logger.setLevel(Level.DEBUG);
         logger.addAppender(로그);
@@ -84,6 +86,53 @@ class AllocationRoundTest {
      * 발행이 터져도 지운 것으로 기록되고, 죽은 줄이 영구히 남으면서 로그는
      * 지웠다고 말합니다.
      */
+    /**
+     * <b>이월 실패는 곧바로 포기가 아니다</b> (CY-859).
+     *
+     * <p>폴백을 그 자리에 설치하면 다음 회차가 아예 안 시도한다. 그 폴백은
+     * 미관측이라 첫 관측치를 평활 없이 그대로 발행하는데, 승계 직후에는 그것이
+     * 뒷단이 감당 못 할 수다.
+     */
+    @Test
+    @DisplayName("이월이_실패하면_다음_회차에_다시_받는다")
+    void 이월이_실패하면_다음_회차에_다시_받는다() {
+        AtomicInteger 시도 = new AtomicInteger();
+        AtomicBoolean 터진다 = new AtomicBoolean(true);
+        List<Long> 발행된_크레딧 = new ArrayList<>();
+        AllocationRound round = AllocationRound.of(
+                () -> true,
+                () -> Mono.just(new TimedDemands(
+                        List.of(new CouponDemand("c1", 5, 100, QueueMode.ADAPTIVE)), 읽은_시각)),
+                () -> 1_000, () -> 1,
+                grant -> Mono.just(grant.credit()),
+                hash -> {
+                    발행된_크레딧.add(Long.parseLong(hash.get("#credit")));
+                    return Mono.empty();
+                },
+                () -> Instant.ofEpochSecond(읽은_시각),
+                () -> {
+                    시도.incrementAndGet();
+                    return 터진다.get()
+                            ? Mono.error(new IllegalStateException("레디스가 흔들린다"))
+                            : Mono.just(CreditSmoother.restore(0.3,
+                                    new CreditSmoother.Snapshot(200.0, true)));
+                },
+                SnapshotCodec.create(), () -> 0L);
+
+        round.run().block();
+        assertThat(시도.get()).as("한 회차 실패했다").isEqualTo(1);
+
+        터진다.set(false);
+        round.run().block();
+
+        assertThat(시도.get()).as("다음 회차에 다시 받는다 — 폴백을 그 자리에 설치하면 안 받는다")
+                .isEqualTo(2);
+        // 이월값 200 과 관측 1,000 사이. 알파가 0.3 이라 440 이 나온다 —
+        // 관측치를 생으로 내보내면 1,000 이다.
+        assertThat(발행된_크레딧).as("이월을 받은 회차는 평활한 값을 낸다")
+                .containsExactly(1_000L, 440L);
+    }
+
     @Test
     @DisplayName("발행이_실패하면_지우지_않고_다음_틱에_다시_온다")
     void 발행이_실패하면_지우지_않고_다음_틱에_다시_온다() {
@@ -102,7 +151,7 @@ class AllocationRoundTest {
                 cleanup, ids -> {
                     지운_것.addAll(ids);
                     return Mono.just(ids);
-                }, ids -> Mono.just(List.of()), 안_걷는_스위퍼(), () -> false);
+                }, ids -> Mono.just(List.of()), 안_걷는_스위퍼(), () -> false, () -> CircuitState.CLOSED);
 
         for (int i = 0; i < 5; i++) {
             round.run().onErrorResume(e -> Mono.empty()).block();
@@ -118,7 +167,7 @@ class AllocationRoundTest {
     /**
      * <b>리더가 아니면 안 지웁니다.</b>
      *
-     * <p>판 안에서 유일하게 되돌릴 수 없는 쓰기입니다. 판이 도는 사이에 리스가
+     * <p>회차 안에서 유일하게 되돌릴 수 없는 쓰기입니다. 회차가 도는 사이에 리스가
      * 만료되고 다른 노드가 리더가 됐다면, 여기서 내는 삭제는 <b>남의 줄</b>을
      * 지우는 것입니다 — 그 사이에 재입고돼 살아난 줄일 수도 있습니다.
      */
@@ -142,7 +191,7 @@ class AllocationRoundTest {
                 cleanup, ids -> {
                     지운_것.addAll(ids);
                     return Mono.just(ids);
-                }, ids -> Mono.just(List.of()), 안_걷는_스위퍼(), () -> false);
+                }, ids -> Mono.just(List.of()), 안_걷는_스위퍼(), () -> false, () -> CircuitState.CLOSED);
 
         for (int i = 0; i < 5; i++) {
             round.run().onErrorResume(e -> Mono.empty()).block();
@@ -173,7 +222,7 @@ class AllocationRoundTest {
                 SnapshotCodec.create(), () -> 0L, Optional::empty,
                 // 하나도 못 지웠다고 답한다.
                 cleanup, ids -> Mono.just(List.of()), ids -> Mono.just(List.of()),
-                안_걷는_스위퍼(), () -> false);
+                안_걷는_스위퍼(), () -> false, () -> CircuitState.CLOSED);
 
         for (int i = 0; i < 5; i++) {
             round.run().block();
@@ -184,15 +233,15 @@ class AllocationRoundTest {
     }
 
     /**
-     * <b>한 판이 스위퍼를 실제로 부릅니다.</b>
+     * <b>한 회차가 스위퍼를 실제로 부릅니다.</b>
      *
      * <p>이것이 없으면 스위퍼가 통째로 죽은 코드여도 빌드가 초록입니다 —
      * 게이트도 커서도 스크립트도 전부 안 도는데 지표는 조용합니다. 실제로
      * 그 상태로 리뷰까지 갔습니다.
      */
     @Test
-    @DisplayName("한_판이_스위퍼를_부른다")
-    void 한_판이_스위퍼를_부른다() {
+    @DisplayName("한_회차가_스위퍼를_부른다")
+    void 한_회차가_스위퍼를_부른다() {
         List<String> 쓴_쿠폰 = new ArrayList<>();
         AllocationRound round = AllocationRound.of(
                 () -> true,
@@ -209,11 +258,11 @@ class AllocationRoundTest {
                 ids -> Mono.just(List.of()),
                 ids -> Mono.just(List.of()),
                 QueueSweeper.of(
-                        SweepGate.of(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
-                        (ids, limit) -> {
+                        SweepGates.warmed(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
+                        (ids, limit, removeFront) -> {
                             쓴_쿠폰.addAll(ids);
                             return Mono.just(QueueSweeper.SweepResult.NOTHING);
-                        }), () -> false);
+                        }), () -> false, () -> CircuitState.CLOSED);
 
         round.run().block();
 
@@ -223,15 +272,15 @@ class AllocationRoundTest {
     /** 판단은 돌되 아무것도 안 걷는 스위퍼. 이 시험들의 초점이 아니다. */
     private static QueueSweeper 안_걷는_스위퍼() {
         return QueueSweeper.of(
-                SweepGate.of(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
-                (ids, limit) -> Mono.just(QueueSweeper.SweepResult.NOTHING));
+                SweepGates.warmed(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
+                (ids, limit, removeFront) -> Mono.just(QueueSweeper.SweepResult.NOTHING));
     }
 
     private AllocationRound round(List<CouponDemand> 수요, long 전역_크레딧, int 노드_수) {
         return round(() -> 수요, 전역_크레딧, 노드_수);
     }
 
-    /** 판마다 수요가 바뀌는 시험용. 복붙하면 헬퍼가 바뀔 때 그 시험만 옛 배선을 잰다. */
+    /** 회차마다 수요가 바뀌는 시험용. 복붙하면 헬퍼가 바뀔 때 그 시험만 옛 배선을 잰다. */
     private AllocationRound round(Supplier<List<CouponDemand>> 수요,
             long 전역_크레딧, int 노드_수) {
         return round(수요, 전역_크레딧, 노드_수, grant -> {
@@ -309,7 +358,7 @@ class AllocationRoundTest {
         double 매진일_때 = 발행된_배수();
 
         // **음성 대조를 붙인다.** 1.0 은 배수 배선을 통째로 지웠을 때도 나오는
-        // 값이라, 이것만 보면 걸러 낸 것을 증명하지 못한다. 같은 판에서 재고만
+        // 값이라, 이것만 보면 걸러 낸 것을 증명하지 못한다. 같은 회차에서 재고만
         // 채우면 배수가 크게 오른다 — 두 값을 가르는 것이 `isActive` 필터뿐이다.
         round(List.of(
                 new CouponDemand("dead", 100_000, 1_000_000),
@@ -323,24 +372,24 @@ class AllocationRoundTest {
     }
 
     @Test
-    @DisplayName("예산을_넘긴_틱을_한_판에_한_번만_센다")
-    void 예산을_넘긴_틱을_한_판에_한_번만_센다() {
-        // 한 판이 쿠폰 상태를 세 번 만든다 — 발행·정리·청소. 배수 계산이
+    @DisplayName("예산을_넘긴_틱을_한_회차에_한_번만_센다")
+    void 예산을_넘긴_틱을_한_회차에_한_번만_센다() {
+        // 한 회차가 쿠폰 상태를 세 번 만든다 — 발행·정리·청소. 배수 계산이
         // 거기 묻어 있으면 누적 틱이 3배로 오르고, "틱 수" 라고 적힌 지표가
         // 틱이 아닌 것을 센다. 해제 로그의 지속 시간도 같이 부푼다.
         AllocationRound round = round(List.of(new CouponDemand("c1", 100_000, 1_000_000)), 10, 1);
 
         round.run().block();
-        assertThat(round.pollBudgetOvershootTicks()).as("한 판").isEqualTo(1);
+        assertThat(round.pollBudgetOvershootTicks()).as("한 회차").isEqualTo(1);
 
         round.run().block();
-        assertThat(round.pollBudgetOvershootTicks()).as("두 판").isEqualTo(2);
+        assertThat(round.pollBudgetOvershootTicks()).as("두 회차").isEqualTo(2);
     }
 
     @Test
     @DisplayName("배수가_풀리면_해제를_남긴다")
     void 배수가_풀리면_해제를_남긴다() {
-        // **같은 인스턴스 위에서 오름과 내림을 잰다.** 판마다 새 인스턴스를
+        // **같은 인스턴스 위에서 오름과 내림을 잰다.** 회차마다 새 인스턴스를
         // 만들면 진입만 돌고 해제 갈래는 한 번도 안 돈다 — 그 자리에 상태가
         // 있는데(초과 창) 회복 전이를 아무도 안 밟는 것이다.
         AtomicReference<List<CouponDemand>> 수요 = new AtomicReference<>(
@@ -391,22 +440,28 @@ class AllocationRoundTest {
         round.run().block();
         SimpleMeterRegistry meters = new SimpleMeterRegistry();
 
-        InvariantMetrics.bind(round, ClockSkewTracker.create(), meters);
+        // **반환값을 붙잡는다.** FunctionCounter 는 상태 객체를 약한 참조로
+        // 잡으므로, 버리면 GC 뒤에 계수가 0 으로 굳는다.
+        InvariantMetrics 지표 = InvariantMetrics.bind(round, ClockSkewTracker.create(), meters);
+        System.gc();
 
-        assertThat(round.pollBudgetOvershootTicks()).as("전제 — 이 판은 예산을 넘겼다")
+        assertThat(round.pollBudgetOvershootTicks()).as("전제 — 이 회차는 예산을 넘겼다")
                 .isEqualTo(1);
         assertThat(meters.get("waiting.poll.budget.overshoot.ticks")
                 .functionCounter().count()).as("폴링 예산 초과 틱").isEqualTo(1);
-        // 나머지 셋은 이 판에서 안 움직인다. 값이 갈려야 서로를 읽는 배선이 잡힌다.
+        // 나머지 셋은 이 회차에서 안 움직인다. 값이 갈려야 서로를 읽는 배선이 잡힌다.
         assertThat(meters.get("waiting.allocation.budget.overshoot")
                 .functionCounter().count()).as("배분 초과량").isZero();
         assertThat(meters.get("waiting.allocation.entered.overshoot")
                 .functionCounter().count()).as("초과 입장 인원").isZero();
         assertThat(meters.get("waiting.snapshot.clock.floor.applied")
                 .functionCounter().count()).as("시계 바닥값").isZero();
-        // 이 판은 줄이 10만인데 크레딧이 10 이라 열 명의 차례가 왔다.
+        // 이 회차는 줄이 10만인데 크레딧이 10 이라 열 명의 차례가 왔다.
         assertThat(meters.get("waiting.allocation.admitted")
                 .functionCounter().count()).as("차례를 준 인원").isEqualTo(10);
+        // **마지막 단언 뒤에 둔다.** 앞에 두면 그 뒤 계수들이 수거된 객체를 읽어
+        // 0 이 나올 수 있다 — 붙잡은 뜻이 절반만 산다.
+        Reference.reachabilityFence(지표);
     }
 
     /**
@@ -437,11 +492,11 @@ class AllocationRoundTest {
         assertThat(round.admitted()).as("몫 8 인데 셋만 들어왔다").isEqualTo(3);
 
         round.run().block();
-        assertThat(round.admitted()).as("판을 넘어 누적된다").isEqualTo(6);
+        assertThat(round.admitted()).as("회차를 넘어 누적된다").isEqualTo(6);
     }
 
     /**
-     * <b>몫보다 많이 들어온 판도 그대로 센다.</b>
+     * <b>몫보다 많이 들어온 회차도 그대로 센다.</b>
      *
      * <p>동점 score 로 임계 하나에 여럿이 걸리면 준 몫보다 많이 들어간다. 그것을
      * 몫으로 깎아 세면 초과 발급의 직접 증거가 지표에서 사라진다.
@@ -487,7 +542,7 @@ class AllocationRoundTest {
         round.run().onErrorResume(e -> Mono.empty()).block();
 
         assertThat(round.pollBudgetOvershootTicks()).as("안 닿은 배수는 안 센다").isZero();
-        assertThat(round.stockUnknownTicks()).as("안 나간 판을 발행한 것으로 안 센다").isZero();
+        assertThat(round.stockUnknownTicks()).as("안 나간 회차를 발행한 것으로 안 센다").isZero();
         assertThat(로그_메시지()).as("없었던 초과를 보고하지 않는다")
                 .noneMatch(m -> m.contains("폴링 예산 초과 —"));
     }
@@ -601,8 +656,8 @@ class AllocationRoundTest {
         assertThat(발행.get("last")).containsKeys("c1", "c2");
         // 어느 쿠폰이 실패했는지 안 남기면, 임계가 안 움직인 이유를 사후에 못 찾는다.
         assertThat(로그_인자("배분 적용 실패")[0]).isEqualTo("c1");
-        // **한 쿠폰이 실패하고 다른 쿠폰이 성공한 판은 걷힌 것이 아니다.**
-        // 여기서 복귀를 찍으면 실패도 복귀도 아닌 두 줄이 매 판 반복된다.
+        // **한 쿠폰이 실패하고 다른 쿠폰이 성공한 회차는 걷힌 것이 아니다.**
+        // 여기서 복귀를 찍으면 실패도 복귀도 아닌 두 줄이 매 회차 반복된다.
         assertThat(로그_메시지()).noneMatch(m -> m.contains("배분 적용 복귀"));
         // 임계가 안 올라간 쿠폰에 몫을 실으면 노드들이 일어나지 않은 배수율로
         // 대기 시간을 계산한다.
@@ -611,13 +666,13 @@ class AllocationRoundTest {
     }
 
     /**
-     * <b>운영자가 정한 모드가 한 판을 넘겨야 한다.</b> 발행이 모드를 못 실으면
+     * <b>운영자가 정한 모드가 한 회차를 넘겨야 한다.</b> 발행이 모드를 못 실으면
      * 항상 대기로 둔 쿠폰이 다음 틱에 적응형으로 재발행되고, 줄이 빠지면 그냥
      * 통과가 된다. 꺼 둔 쿠폰의 우회도 같은 이유로 조용히 멈춘다.
      */
     @Test
-    @DisplayName("운영자가_정한_모드가_한_판을_넘긴다")
-    void 운영자가_정한_모드가_한_판을_넘긴다() {
+    @DisplayName("운영자가_정한_모드가_한_회차를_넘긴다")
+    void 운영자가_정한_모드가_한_회차를_넘긴다() {
         AllocationRound round = round(List.of(
                 new CouponDemand("always", 0, 10_000, QueueMode.ALWAYS),
                 new CouponDemand("off", 0, 10_000, QueueMode.OFF),
@@ -660,7 +715,7 @@ class AllocationRoundTest {
         assertThat(발행된("c1").mode()).isEqualTo(QueueMode.ADAPTIVE);
     }
 
-    /** 몫이 대기자보다 적은 쪽도 지난다. 넉넉한 판만 재면 QUEUEING 이 안 걸린다. */
+    /** 몫이 대기자보다 적은 쪽도 지난다. 넉넉한 회차만 재면 QUEUEING 이 안 걸린다. */
     @Test
     @DisplayName("몫이_모자라도_모드를_그대로_싣는다")
     void 몫이_모자라도_모드를_그대로_싣는다() {
@@ -687,15 +742,15 @@ class AllocationRoundTest {
     }
 
     /**
-     * <b>발행 시각은 재료를 읽은 시각이다.</b> 판이 끝난 시각으로 찍으면 스냅샷
-     * 나이가 판 지속 시간만큼 어리게 나온다. 그만큼 낡음 판정이 늦어지고, 이미
+     * <b>발행 시각은 재료를 읽은 시각이다.</b> 회차가 끝난 시각으로 찍으면 스냅샷
+     * 나이가 회차 지속 시간만큼 어리게 나온다. 그만큼 낡음 판정이 늦어지고, 이미
      * 늙은 대기 인원을 믿는 구간이 길어진다 — 그 구간이 추월 창이다 (불변식 4).
      */
     /** 리더 시계가 아니라 재료와 같이 온 시각이다. 리더가 옮겨 다녀도 안 흔들린다. */
     @Test
     @DisplayName("발행_시각은_재료를_읽은_시각이다")
     void 발행_시각은_재료를_읽은_시각이다() {
-        // 판이 도는 동안 시계가 흐른다. 적용 왕복이 쿠폰마다 순차로 일어난다.
+        // 회차가 도는 동안 시계가 흐른다. 적용 왕복이 쿠폰마다 순차로 일어난다.
         Iterator<Instant> 시계 = List.of(
                 Instant.ofEpochSecond(읽은_시각 + 2), Instant.ofEpochSecond(읽은_시각 + 3),
                 Instant.ofEpochSecond(읽은_시각 + 4)).iterator();
@@ -728,7 +783,7 @@ class AllocationRoundTest {
     @DisplayName("하한은_평활에_묻히지_않는다")
     void 하한은_평활에_묻히지_않는다() {
         CreditSmoother smoother = CreditSmoother.of(0.3);
-        // 앞선 판이 뒷단의 정직한 0 으로 굳어 있다.
+        // 앞선 회차가 뒷단의 정직한 0 으로 굳어 있다.
         smoother.observe(0);
         AllocationRound round = AllocationRound.of(
                 () -> true,
@@ -816,6 +871,122 @@ class AllocationRoundTest {
     }
 
     /**
+     * <b>서킷이 열리면 임계가 안 올라간다</b> (CY-787).
+     *
+     * <p>래퍼가 0 을 내는 것만 봐서는 못 잡는다. 그 값이 평활을 거치고 하한과
+     * max 를 취하므로, 감싼 자리 뒤에서 두 번 샌다.
+     */
+    @Test
+    @DisplayName("서킷이_열리면_임계가_안_올라간다")
+    void 서킷이_열리면_임계가_안_올라간다() {
+        AtomicReference<CircuitState> 서킷 = new AtomicReference<>(CircuitState.CLOSED);
+        AllocationRound round = 서킷_있는_회차(서킷, 7_300, 40);
+
+        // 정상 회차를 몇 번 돌려 평활을 채운다 — 그래야 0 이 들어와도 천천히
+        // 내려오는 누수가 드러난다.
+        for (int i = 0; i < 5; i++) {
+            round.run().block();
+        }
+        적용.clear();
+        서킷.set(CircuitState.OPEN);
+
+        round.run().block();
+
+        assertThat(적용).as("첫 회차부터 아무 몫도 안 나간다").isEmpty();
+    }
+
+    /** 하한이 걸려 있어도 안 나간다. 하한은 평활 뒤라 감싼 자리를 비켜 간다. */
+    @Test
+    @DisplayName("하한이_있어도_서킷이_열리면_안_나간다")
+    void 하한이_있어도_서킷이_열리면_안_나간다() {
+        AtomicReference<CircuitState> 서킷 = new AtomicReference<>(CircuitState.OPEN);
+        AllocationRound round = 서킷_있는_회차(서킷, 0, 40);
+
+        round.run().block();
+
+        assertThat(적용).isEmpty();
+    }
+
+    /**
+     * <b>반쯤 열렸으면 소량은 나간다.</b> 0 으로 막으면 뒷단에 닿는 호출이 없어
+     * 서킷이 표본을 못 채우고, 반쯤 열림과 열림을 무한히 오간다 — 회복이 영영
+     * 안 된다.
+     */
+    @Test
+    @DisplayName("반쯤_열리면_소량은_나간다")
+    void 반쯤_열리면_소량은_나간다() {
+        AtomicReference<CircuitState> 서킷 = new AtomicReference<>(CircuitState.HALF_OPEN);
+        AllocationRound round = 서킷_있는_회차(서킷, 7_300, 40);
+
+        round.run().block();
+
+        // 노드가 하나이므로 노드당 한 건 = 전역 한 건이다. 값으로 못 박아야
+        // 소량이 조용히 커지는 것을 잡는다.
+        assertThat(적용).as("표본이 나올 만큼은 나간다").containsExactly("c1=1");
+        assertThat(발행된("c1").credit()).isEqualTo(1);
+    }
+
+    /**
+     * <b>배분을 조인 사실이 로그로 남는다</b> (LG-2).
+     *
+     * <p>안 남기면 배분이 왜 멎었는지 알 방법이 서킷 로그뿐인데, 그건 리더가
+     * 아닌 노드에서 날 수도 있다. 두 로그를 시각으로 맞춰 붙여야 한다.
+     */
+    @Test
+    @DisplayName("배분을_조인_것이_쌍으로_남는다")
+    void 배분을_조인_것이_쌍으로_남는다() {
+        AtomicReference<CircuitState> 서킷 = new AtomicReference<>(CircuitState.OPEN);
+        AllocationRound round = 서킷_있는_회차(서킷, 7_300, 40);
+
+        round.run().block();
+        round.run().block();
+        assertThat(로그_메시지()).as("진입은 한 번만").filteredOn(m -> m.contains("배분을 조인다"))
+                .hasSize(1);
+
+        서킷.set(CircuitState.CLOSED);
+        round.run().block();
+
+        assertThat(로그_메시지()).as("해제도 남는다")
+                .anyMatch(m -> m.contains("서킷 회복"));
+    }
+
+    /** 초과 배분 지표는 게이트 전 값으로 잰다. 아니면 서킷이 열린 시간에 비례해 오른다. */
+    @Test
+    @DisplayName("배분_정지가_초과_지표를_안_올린다")
+    void 배분_정지가_초과_지표를_안_올린다() {
+        AtomicReference<CircuitState> 서킷 = new AtomicReference<>(CircuitState.OPEN);
+        AllocationRound round = 서킷_있는_회차(서킷, 7_300, 40);
+
+        round.run().block();
+
+        assertThat(round.budgetOvershoot()).isZero();
+    }
+
+    /** 서킷을 보는 회차. 하한을 0 이 아니게 둬야 누수가 드러난다. */
+    private AllocationRound 서킷_있는_회차(AtomicReference<CircuitState> 서킷,
+            long 가용량, long 하한) {
+        return AllocationRound.of(
+                () -> true,
+                () -> Mono.just(new TimedDemands(
+                        List.of(new CouponDemand("c1", 20_000, 1_000_000)), 읽은_시각)),
+                () -> 가용량, () -> 1,
+                grant -> {
+                    적용.add(grant.couponId() + "=" + grant.credit());
+                    return Mono.just(grant.credit());
+                },
+                hash -> {
+                    발행.put("last", hash);
+                    return Mono.empty();
+                },
+                () -> Instant.ofEpochSecond(읽은_시각),
+                () -> Mono.just(CreditSmoother.of(1.0)),
+                SnapshotCodec.create(), () -> 하한, Optional::empty,
+                SoldOutCleanup.of(Integer.MAX_VALUE, new SimpleMeterRegistry()),
+                ids -> Mono.just(List.of()), ids -> Mono.just(List.of()),
+                안_걷는_스위퍼(), () -> false, 서킷::get);
+    }
+
+    /**
      * <b>미상은 아는 쿠폰과 같은 자리에서 나눈다.</b> 재고를 못 읽는 것이
      * 우대도 홀대도 아니다 — 미상은 "재고가 넉넉하다" 와 같은 요구를 낸다.
      *
@@ -854,14 +1025,14 @@ class AllocationRoundTest {
     @Test
     @DisplayName("미상인_줄의_폴링도_예산에_든다")
     void 미상인_줄의_폴링도_예산에_든다() {
-        AllocationRound 접힌_판 = round(
+        AllocationRound 접힌_회차 = round(
                 List.of(new CouponDemand("lost", 100_000, 0, QueueMode.ADAPTIVE)), 100, 1);
-        접힌_판.run().block();
+        접힌_회차.run().block();
         double 접었을_때 = 발행된_배수();
 
-        AllocationRound 미상_판 = round(
+        AllocationRound 미상_회차 = round(
                 List.of(CouponDemand.stockUnknown("lost", 100_000, QueueMode.ADAPTIVE)), 100, 1);
-        미상_판.run().block();
+        미상_회차.run().block();
 
         assertThat(접었을_때).as("종료를 받은 줄은 안 센다").isEqualTo(1.0);
         // 밴드별로 500 + 2500/3 + 900 + 88000/30 = 5166.67 rps, 예산 200.
@@ -879,12 +1050,12 @@ class AllocationRoundTest {
     @DisplayName("미상인_쿠폰의_줄은_안_지운다")
     void 미상인_쿠폰의_줄은_안_지운다() {
         List<String> 지운_쿠폰 = new ArrayList<>();
-        AllocationRound round = 정리하는_판(
+        AllocationRound round = 정리하는_회차(
                 List.of(CouponDemand.stockUnknown("lost", 30, QueueMode.ADAPTIVE),
                         new CouponDemand("gone", 30, 0, QueueMode.ADAPTIVE)),
                 지운_쿠폰);
 
-        // 유예 틱이 1 이라 한 판으로는 아무것도 안 지운다. 두 판을 돌려야
+        // 유예 틱이 1 이라 한 회차로는 아무것도 안 지운다. 두 회차를 돌려야
         // "미상이라서 안 지웠다" 와 "아직 유예 중이라 안 지웠다" 가 갈린다.
         round.run().block();
         round.run().block();
@@ -892,8 +1063,8 @@ class AllocationRoundTest {
         assertThat(지운_쿠폰).as("매진만 지우고 미상은 안 지운다").containsExactly("gone");
     }
 
-    /** 유예 틱 1 짜리 정리를 붙인 판. 지운 쿠폰을 받아 적는다. */
-    private AllocationRound 정리하는_판(List<CouponDemand> 수요, List<String> 지운_쿠폰) {
+    /** 유예 틱 1 짜리 정리를 붙인 회차. 지운 쿠폰을 받아 적는다. */
+    private AllocationRound 정리하는_회차(List<CouponDemand> 수요, List<String> 지운_쿠폰) {
         return AllocationRound.of(
                 () -> true,
                 () -> Mono.just(new TimedDemands(수요, 읽은_시각)),
@@ -912,7 +1083,7 @@ class AllocationRoundTest {
                     return Mono.just(List.copyOf(ids));
                 },
                 ids -> Mono.just(List.of()),
-                안_걷는_스위퍼(), () -> false);
+                안_걷는_스위퍼(), () -> false, () -> CircuitState.CLOSED);
     }
 
     /**
@@ -927,17 +1098,25 @@ class AllocationRoundTest {
                 CouponDemand.stockUnknown("c2", 30, QueueMode.ADAPTIVE),
                 new CouponDemand("c3", 30, 100)), 10, 1);
         SimpleMeterRegistry 계기 = new SimpleMeterRegistry();
-        InvariantMetrics.bind(round, ClockSkewTracker.create(), 계기);
+        // **반환값을 붙잡는다.** 버리면 GC 뒤에 계수가 0 으로 굳는다 — 로컬에서는
+        // 안 나고 세 계층을 한 JVM 에 돌리는 CI 에서만 났다.
+        InvariantMetrics 지표 = InvariantMetrics.bind(round, ClockSkewTracker.create(), 계기);
 
-        // **두 판을 돌린다.** 한 판만 보면 누적과 대입이 구분이 안 되고, 미상이
-        // 둘인데 하나만 세는 구현도 통과한다. 아는 쿠폰을 같이 둬야 판마다
+        // **두 회차를 돌린다.** 한 회차만 보면 누적과 대입이 구분이 안 되고, 미상이
+        // 둘인데 하나만 세는 구현도 통과한다. 아는 쿠폰을 같이 둬야 회차마다
         // 한 번이라는 것까지 잡힌다 — 상태를 만드는 자리에서 세면 정리·청소·
-        // 발행이 같은 판을 세 번 훑어 셋이 된다.
+        // 발행이 같은 회차를 세 번 훑어 셋이 된다.
         round.run().block();
         round.run().block();
+        // **GC 를 강제한다.** 이것이 없으면 이 시험은 장비와 부하에 따라 갈린다.
+        // 실제로 로컬은 초록이고 CI 만 빨갰다.
+        System.gc();
 
         assertThat(계기.get("waiting.allocation.stock.unknown.ticks").functionCounter().count())
                 .isEqualTo(4);
+        // **여기까지 살아 있어야 한다.** 단언 뒤에 두는 것이 핵심이다 — 변수만
+        // 두면 JIT 이 마지막 사용 뒤로 수거를 앞당길 수 있다.
+        Reference.reachabilityFence(지표);
     }
 
     @Test
@@ -953,8 +1132,8 @@ class AllocationRoundTest {
     @Test
     @DisplayName("적용_뒤에_리더십을_잃으면_발행을_안_한다")
     void 적용_뒤에_리더십을_잃으면_발행을_안_한다() {
-        // 적용 루프가 한 틱을 꽉 채우면 그 사이 다음 리더가 자기 판을 돈다.
-        // 판 시작에서만 보면 둘이 같은 키에 쓴다.
+        // 적용 루프가 한 틱을 꽉 채우면 그 사이 다음 리더가 자기 회차를 돈다.
+        // 회차 시작에서만 보면 둘이 같은 키에 쓴다.
         AtomicBoolean 리더 = new AtomicBoolean(true);
         AllocationRound round = AllocationRound.of(
                 리더::get,
@@ -977,18 +1156,18 @@ class AllocationRoundTest {
 
         assertThat(적용).containsExactly("c1");
         assertThat(발행).isEmpty();
-        // **셈도 같이 멎어야 한다.** 발행을 안 하는 판에서 배수의 계산이 돌면
+        // **셈도 같이 멎어야 한다.** 발행을 안 하는 회차에서 배수의 계산이 돌면
         // 이 노드는 걸지도 않은 배수를 걸었다고 기록한다. 지금은 삼항의
         // 짧은-회로가 그것을 막지만, 셈이 재료를 만드는 자리로 다시 들어가면
         // 그 보호가 사라진다 — 그때 여기가 붉어진다.
-        assertThat(round.pollBudgetOvershootTicks()).as("안 발행한 판은 안 센다")
+        assertThat(round.pollBudgetOvershootTicks()).as("안 발행한 회차는 안 센다")
                 .isZero();
     }
 
     @Test
     @DisplayName("평활화를_한_번만_이월받는다")
     void 평활화를_한_번만_이월받는다() {
-        // 매 판 받으면 이 리더가 다듬어 온 값을 자기가 방금 쓴 값으로 덮어,
+        // 매 회차 받으면 이 리더가 다듬어 온 값을 자기가 방금 쓴 값으로 덮어,
         // 평활화가 아무 일도 안 하게 된다.
         AtomicInteger 이월 = new AtomicInteger();
         AllocationRound round = AllocationRound.of(
@@ -1015,8 +1194,8 @@ class AllocationRoundTest {
     }
 
     @Test
-    @DisplayName("이월을_못_받아도_판은_돈다")
-    void 이월을_못_받아도_판은_돈다() {
+    @DisplayName("이월을_못_받아도_회차는_돈다")
+    void 이월을_못_받아도_회차는_돈다() {
         // 이월은 있으면 좋은 것이지 배분의 전제가 아니다. 여기서 멈추면
         // 레디스가 흔들릴 때 배분이 통째로 안 시작한다.
         AllocationRound round = AllocationRound.of(
@@ -1085,14 +1264,14 @@ class AllocationRoundTest {
         round.run().block();
 
         assertThat(로그_메시지()).anyMatch(m -> m.contains("들인 인원"));
-        assertThat(로그_인자("배분 한 판")).satisfies(인자 -> assertThat(인자[1]).isEqualTo(3L));
+        assertThat(로그_인자("배분 한 회차")).satisfies(인자 -> assertThat(인자[1]).isEqualTo(3L));
     }
 
     @Test
-    @DisplayName("판_도중에_리더십을_잃으면_안_쓴다")
-    void 판_도중에_리더십을_잃으면_안_쓴다() {
-        // 리스가 10ms 남은 상태로 시작한 판은 한 틱을 꽉 채워 돌고, 그 사이
-        // 다음 리더가 자기 판을 돈다. 판 시작에서만 보면 둘이 같은 키에 쓴다.
+    @DisplayName("회차_도중에_리더십을_잃으면_안_쓴다")
+    void 회차_도중에_리더십을_잃으면_안_쓴다() {
+        // 리스가 10ms 남은 상태로 시작한 회차는 한 틱을 꽉 채워 돌고, 그 사이
+        // 다음 리더가 자기 회차를 돈다. 회차 시작에서만 보면 둘이 같은 키에 쓴다.
         AtomicBoolean 리더 = new AtomicBoolean(true);
         AllocationRound round = AllocationRound.of(
                 리더::get,
@@ -1120,8 +1299,8 @@ class AllocationRoundTest {
     }
 
     /**
-     * <b>쿠폰 사이에서 잃는 것이 실제 모습이다.</b> 판 진입에서만 보면, 첫 쿠폰을
-     * 쓰는 동안 리스가 끝난 판이 남은 쿠폰에 계속 임계를 쓴다.
+     * <b>쿠폰 사이에서 잃는 것이 실제 모습이다.</b> 회차 진입에서만 보면, 첫 쿠폰을
+     * 쓰는 동안 리스가 끝난 회차가 남은 쿠폰에 계속 임계를 쓴다.
      *
      * <p>둘째 쿠폰에 임계를 쓰면 새 리더가 쓴 값을 덮고, 발행까지 나가면 새 리더가
      * 이미 나눠 준 크레딧을 스냅샷이 한 번 더 광고한다 — 불변식 2 다.

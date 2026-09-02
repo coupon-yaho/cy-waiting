@@ -52,7 +52,10 @@ class InvariantMetricsWiringTest {
                 .contains("waiting_allocation_admitted_total")
                 // 재고 키를 잃은 사실과, 그것이 거짓 매진으로 나간 사실 (CY-702).
                 .contains("waiting_allocation_stock_unknown_ticks_total")
-                .contains("waiting_snapshot_stock_unknown_dropped_total");
+                .contains("waiting_snapshot_stock_unknown_dropped_total")
+                // 서킷을 보고 있는가 (F3 · CY-788). 안 보는 것과 닫혀 있는 것이
+                // 같은 값을 내므로, 이 게이지가 없으면 배선이 빠진 것을 못 안다.
+                .contains("waiting_circuit_wired");
     }
 
     /**

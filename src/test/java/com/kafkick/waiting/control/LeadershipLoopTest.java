@@ -44,8 +44,8 @@ class LeadershipLoopTest {
     }
 
     @Test
-    @DisplayName("한_판이_터져도_루프는_돈다")
-    void 한_판이_터져도_루프는_돈다() {
+    @DisplayName("한_회차가_터져도_루프는_돈다")
+    void 한_회차가_터져도_루프는_돈다() {
         // 여기서 멎으면 리스가 만료돼 리더가 없어지고, 그 뒤로 영영 안 돌아온다.
         VirtualTimeScheduler timer = VirtualTimeScheduler.create();
         AtomicInteger 호출 = new AtomicInteger();

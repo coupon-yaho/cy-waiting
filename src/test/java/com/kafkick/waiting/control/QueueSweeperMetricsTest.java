@@ -31,8 +31,8 @@ class QueueSweeperMetricsTest {
 
     private QueueSweeper sweeper(QueueSweeper.SweepResult r) {
         return QueueSweeper.of(
-                SweepGate.of(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
-                (ids, limit) -> Mono.just(r), meters);
+                SweepGates.warmed(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
+                (ids, limit, removeFront) -> Mono.just(r), meters);
     }
 
     private double 계수(String kind) {
@@ -62,8 +62,8 @@ class QueueSweeperMetricsTest {
     @DisplayName("터지면_실패로_세고_걷은_수는_안_올린다")
     void 터지면_실패로_세고_걷은_수는_안_올린다() {
         QueueSweeper 터지는_것 = QueueSweeper.of(
-                SweepGate.of(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
-                (ids, limit) -> Mono.error(new IllegalStateException("레디스가 끊겼다")),
+                SweepGates.warmed(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
+                (ids, limit, removeFront) -> Mono.error(new IllegalStateException("레디스가 끊겼다")),
                 meters);
 
         assertThat(터지는_것.run(줄이_있는_쿠폰(), false).block())
@@ -73,7 +73,7 @@ class QueueSweeperMetricsTest {
         assertThat(계수("swept")).as("걷은 수").isZero();
     }
 
-    /** 쓸 대상이 없으면 왕복도 계수도 없다. 그 판을 세면 평시 값이 부푼다. */
+    /** 쓸 대상이 없으면 왕복도 계수도 없다. 그 회차를 세면 평시 값이 부푼다. */
     @Test
     @DisplayName("쓸_대상이_없으면_아무것도_안_센다")
     void 쓸_대상이_없으면_아무것도_안_센다() {

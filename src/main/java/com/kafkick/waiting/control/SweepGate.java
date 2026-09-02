@@ -20,6 +20,11 @@ public final class SweepGate {
 
     private final long resumeDelayTicks;
 
+    /** 승계 유예의 길이. 픽스처가 산식을 두 벌 갖지 않게 열어 둔다. */
+    long resumeDelayTicks() {
+        return resumeDelayTicks;
+    }
+
     private SweepGate(long resumeDelayTicks) {
         if (resumeDelayTicks < 1) {
             throw new IllegalArgumentException("재개 유예는 양수여야 한다: " + resumeDelayTicks);
@@ -40,6 +45,40 @@ public final class SweepGate {
     }
 
     /**
+     * 리더가 됐다. <b>유예를 처음부터 준다</b> (CY-822).
+     *
+     * <p>재개 표시는 이 객체 안에만 있어 리더가 바뀌면 사라진다. 새 리더는 그
+     * 쿠폰의 생존 신호가 얼마나 오래 멎어 있었는지 모르고, <b>모른다는 것이
+     * 걷을 이유가 되면 안 된다</b> — 걷힌 사람은 새 score 로 다시 서므로 순번이
+     * 뒤로 간다 (불변식 3).
+     */
+    // **객체 수명으로 걸면 안 된다.** 같은 프로세스가 리더십을 잃었다 되찾는
+    // 그 회차에서 틱은 이미 유예를 훌쩍 넘어 있고, 남은 표시는 얼어 있던 틱 번호
+    // 기준이라 전부 만료돼 있다 — 방어가 통째로 없는 것과 같다.
+    public void leadershipAcquired() {
+        tick = 0;
+        resumeAt.clear();
+    }
+
+    /**
+     * 승계 유예 중인가. <b>앞줄 제거만 접는다</b> — 정리는 계속 돈다.
+     */
+    // 대상까지 비우면 만료 신호와 유예 기록이 한 방향으로만 자라고 커서가
+    // 전진을 못 한다. 승계가 유예보다 잦으면 청소가 영영 안 돌고, 그때 대가는
+    // 승계 뒤 몇 분이 아니라 무한이다.
+    public boolean removalHeld() {
+        return tick <= resumeDelayTicks;
+    }
+
+    /**
+     * 이번 틱에 정리할 쿠폰들. <b>유예와 무관하다</b> — 만료 신호와 유예 기록을
+     * 걷는 일은 줄에서 사람을 빼지 않으므로 승계에 안전하다.
+     */
+    public List<String> cleanable(Map<String, CouponState> coupons) {
+        return coupons.keySet().stream().sorted().toList();
+    }
+
+    /**
      * 이번 틱에 쓸어도 되는 쿠폰들.
      *
      * @param dataStale 재료가 낡았는가. <b>노드 전체에 걸리는 조건</b>이라
@@ -47,6 +86,9 @@ public final class SweepGate {
      */
     public List<String> sweepable(Map<String, CouponState> coupons, boolean dataStale) {
         tick++;
+        if (removalHeld()) {
+            return List.of();
+        }
         List<String> sweepable = new ArrayList<>();
         coupons.forEach((couponId, state) -> {
             // **매진 중에는 멈춘다.** 7.1 이 매진 조회를 게이트웨이에서

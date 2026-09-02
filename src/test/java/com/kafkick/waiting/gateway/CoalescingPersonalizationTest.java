@@ -17,6 +17,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 
 /**
  * <b>이 기능의 안전장치입니다</b> (6.10.5).
@@ -43,7 +44,7 @@ class CoalescingPersonalizationTest {
     /**
      * 상태를 안 물려받는 필터.
      *
-     * <p><b>안 붙기는 경로에 남는다.</b> 한 판에서 선언 없는 응답을 한 번 보면 그
+     * <p><b>안 붙기는 경로에 남는다.</b> 한 회차에서 선언 없는 응답을 한 번 보면 그
      * 뒤로는 무엇을 보내든 안 붙으므로, 값마다 새 필터로 재지 않으면 첫 값 하나만
      * 재고 나머지는 항진명제가 된다.
      */
@@ -172,6 +173,119 @@ class CoalescingPersonalizationTest {
     }
 
     /**
+     * <b>선두가 날고 있는 동안 붙은 사람들</b>에게도 개인 응답이 안 샙니다.
+     *
+     * <p>순차로 부르면 이 갈래를 안 밟습니다 — 뒤엣사람이 붙을 때 앞엣사람이 이미
+     * 끝나 있기 때문입니다. 그런데 이 기능이 값을 하는 순간이 바로 동시에 오는
+     * 때라, 안 밟히는 그 갈래가 정작 프로덕션에서 가장 자주 도는 자리입니다.
+     */
+    @Test
+    @DisplayName("날고_있는_선두가_개인화되면_뒤엣사람은_각자_부른다")
+    void 날고_있는_선두가_개인화되면_뒤엣사람은_각자_부른다() {
+        AtomicInteger 뒷단 = new AtomicInteger();
+        Sinks.Empty<Void> 아직 = Sinks.empty();
+
+        List<MockServerWebExchange> 사람들 = IntStream.range(0, 5)
+                .mapToObj(i -> 조회("사람" + i))
+                .toList();
+        // 선두를 붙잡아 둔 채 나머지를 붙인다. 선두의 응답에는 쿠키가 실린다.
+        // **게이트를 쓰기 앞에 건다.** 뒤에 걸면 선두가 이미 담고 배운 뒤라
+        // 뒤엣사람이 플라이트에 안 붙고 캐시에서 히트한다 — 재려던 갈래가 아니다.
+        List<Mono<Void>> 끝남 = 사람들.stream().map(e -> filter.filter(e, ex ->
+                아직.asMono().then(Mono.defer(() -> {
+                    String 회원 = ex.getRequest().getHeaders().getFirst("X-Member-Id");
+                    뒷단.incrementAndGet();
+                    ex.getResponse().getHeaders()
+                            .add("Set-Cookie", "SESSION=" + 회원 + "; Path=/");
+                    return 답한다(ex, "목록:" + 회원);
+                }))).cache()).toList();
+        끝남.forEach(Mono::subscribe);
+        아직.tryEmitEmpty();
+
+        assertThat(뒷단).as("나눠 줄 수 없는 응답이라 각자 부른다").hasValue(5);
+        // **누가 누구 것을 받았는지까지 본다.** 개수만 보면 다섯이 서로 엉뚱한
+        // 남의 쿠키를 받아도 통과한다 — 이 시험이 막으려는 것이 정확히 그것이다.
+        assertThat(사람들).allSatisfy(e -> assertThat(
+                e.getResponse().getHeaders().getOrEmpty("Set-Cookie"))
+                .containsExactly("SESSION="
+                        + e.getRequest().getHeaders().getFirst("X-Member-Id") + "; Path=/"));
+        assertThat(건너뛴("set-cookie"))
+                .as("왜 안 모았는지가 사유로 남는다").isEqualTo(4);
+        // 뒤엣사람의 응답이 끝났는가. 안 끝나면 클라이언트가 영원히 기다린다.
+        assertThat(Mono.when(끝남).block(Duration.ofSeconds(5))).isNull();
+    }
+
+    /**
+     * <b>배우는 순간 모여 있던 무리</b>가 어떻게 되는지.
+     *
+     * <p>갈림 헤더를 배우기 전에 한 키로 모였으므로, 응답이 "이 헤더로 갈린다" 고
+     * 말하는 순간 그 무리는 남의 응답을 받을 수 있는 자리에 있습니다. 그래서
+     * <b>값이 같은 사람에게만</b> 줍니다 — 통째로 돌려보내면 오픈 첫 버스트가
+     * 하나도 안 모입니다.
+     */
+    @Test
+    @DisplayName("배우는_순간_모여_있던_같은_값의_무리는_그대로_받는다")
+    void 배우는_순간_모여_있던_같은_값의_무리는_그대로_받는다() {
+        AtomicInteger 뒷단 = new AtomicInteger();
+        Sinks.Empty<Void> 아직 = Sinks.empty();
+
+        // 같은 회원이 동시에 다섯 번 묻는다. 갈림 헤더 값이 서로 같다.
+        List<MockServerWebExchange> 사람들 = IntStream.range(0, 5)
+                .mapToObj(i -> 조회("같은사람"))
+                .toList();
+        List<Mono<Void>> 끝남 = 사람들.stream().map(e -> filter.filter(e, ex ->
+                아직.asMono().then(Mono.defer(() -> {
+                    뒷단.incrementAndGet();
+                    // 응답이 이 자리에서 처음으로 갈림 헤더를 말한다.
+                    ex.getResponse().getHeaders().set("Vary", "X-Member-Id");
+                    return 답한다(ex, "목록:"
+                            + ex.getRequest().getHeaders().getFirst("X-Member-Id"));
+                }))).cache()).toList();
+        끝남.forEach(Mono::subscribe);
+        아직.tryEmitEmpty();
+
+        assertThat(뒷단).as("값이 같으면 다시 안 부른다").hasValue(1);
+        assertThat(센다("hit", "flight-revalidated"))
+                .as("배우기 전에 모인 무리는 되찾아 간다").isEqualTo(4);
+        // **본문에 갈림 값을 싣는다.** 상수를 쓰면 남의 응답을 받아도 같은
+        // 문자열이라 유출이 정의상 안 드러난다.
+        assertThat(사람들).allSatisfy(e ->
+                assertThat(e.getResponse().getBodyAsString().block()).isEqualTo("목록:같은사람"));
+        assertThat(Mono.when(끝남).block(Duration.ofSeconds(5))).isNull();
+    }
+
+    /**
+     * 값이 다르면 각자 부릅니다. 위와 같은 경우인데 갈림 헤더 값만 다릅니다.
+     */
+    @Test
+    @DisplayName("배우는_순간_모여_있던_다른_값의_무리는_각자_부른다")
+    void 배우는_순간_모여_있던_다른_값의_무리는_각자_부른다() {
+        AtomicInteger 뒷단 = new AtomicInteger();
+        Sinks.Empty<Void> 아직 = Sinks.empty();
+
+        List<MockServerWebExchange> 사람들 = IntStream.range(0, 5)
+                .mapToObj(i -> 조회("사람" + i))
+                .toList();
+        List<Mono<Void>> 끝남 = 사람들.stream().map(e -> filter.filter(e, ex ->
+                아직.asMono().then(Mono.defer(() -> {
+                    뒷단.incrementAndGet();
+                    ex.getResponse().getHeaders().set("Vary", "X-Member-Id");
+                    return 답한다(ex, "목록:"
+                            + ex.getRequest().getHeaders().getFirst("X-Member-Id"));
+                }))).cache()).toList();
+        끝남.forEach(Mono::subscribe);
+        아직.tryEmitEmpty();
+
+        assertThat(뒷단).as("값이 다르면 각자 부른다").hasValue(5);
+        assertThat(건너뛴("vary-learned"))
+                .as("배운 뒤라 값이 다른 사람은 각자 간다").isEqualTo(4);
+        // **각자 자기 것을 받았는가.** 여기가 개인화 유출이 드러나는 자리다.
+        assertThat(사람들).allSatisfy(e -> assertThat(e.getResponse().getBodyAsString().block())
+                .isEqualTo("목록:" + e.getRequest().getHeaders().getFirst("X-Member-Id")));
+        assertThat(Mono.when(끝남).block(Duration.ofSeconds(5))).isNull();
+    }
+
+    /**
      * <b>{@code public} 은 토큰이어야 합니다.</b>
      *
      * <p>부분 문자열로 보면 {@code no-public} 이라고 <b>거절한</b> 뒷단이 허락한
@@ -233,10 +347,10 @@ class CoalescingPersonalizationTest {
     @Test
     @DisplayName("선언을_안_하면_다음부터는_안_붙는다")
     void 선언을_안_하면_다음부터는_안_붙는다() {
-        // 첫 판이 가르친다. 뒷단 호출 수로는 못 가른다 — 붙든 안 붙든 요청
+        // 첫 회차가 가르친다. 뒷단 호출 수로는 못 가른다 — 붙든 안 붙든 요청
         // 하나면 뒷단은 한 번 불린다. 왜 건너뛰었는지를 사유로 본다.
         filter.filter(조회("먼저"), ex -> 그냥_답한다(ex, "목록")).block();
-        assertThat(건너뛴("no-shared-marker")).as("가르치는 판은 아직 붙는다").isZero();
+        assertThat(건너뛴("no-shared-marker")).as("가르치는 갈래는 아직 붙는다").isZero();
 
         filter.filter(조회("나중"), ex -> 그냥_답한다(ex, "목록")).block();
 

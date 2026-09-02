@@ -19,6 +19,7 @@ import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import com.kafkick.waiting.domain.queue.QueueToken;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpHeaders;
 import java.time.Clock;
 import java.time.Instant;
@@ -56,10 +57,10 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     public static final String DECISION = "waiting.admission.decision";
 
     /**
-     * 이 요청을 판정한 판의 전역 폴링 배수.
+     * 이 요청을 판정한 회차의 전역 폴링 배수.
      *
      * <p><b>속성으로 넘긴다.</b> 폴백은 서킷을 지나 나중에 도는 자리라 홀더를
-     * 다시 읽으면 다른 판의 값이 나간다 — 같은 장애에 두 값이 나가는 것이다.
+     * 다시 읽으면 다른 회차의 값이 나간다 — 같은 장애에 두 값이 나가는 것이다.
      */
     public static final String POLL_SCALE = "waiting.admission.poll-scale";
 
@@ -86,11 +87,21 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      * 구간에서 로그가 폭주하고, 그때 정작 봐야 할 것이 묻힌다. */
     private static final String METRIC = "waiting.admission";
 
+    /**
+     * 등록에서 순번 바닥값이 걸린 횟수. <b>순번 역행의 선행 신호다</b> (F2).
+     *
+     * <p>바닥값이 없었다면 추월이었다 — 이 값이 오르는 구간이 곧 방어 하나에
+     * 불변식 4 가 걸려 있는 구간이다.
+     */
+    // **판정 카운터에 안 섞는다.** SLI 의 분모가 그 이름들의 합이라, 한 요청이
+    // 거기서 두 번 세어지면 분모가 부풀고 실패율이 좋아 보인다 (O-7).
+    private static final String CLOCK_BACK = "waiting.queue.clock.back";
+
     /** 받아도 되는 최대 대기 시간. 넘으면 줄을 세우는 것이 되레 나쁘다. */
     static final long MAX_ETA_SEC = 600;
 
     /** 재시도 안내의 흔들림 폭. 폴링 간격과 같은 정책을 쓴다. */
-    private static final PollIntervalPolicy POLL = PollIntervalPolicy.of(0.2);
+    private static final PollIntervalPolicy POLL = PollIntervalPolicy.of(PollIntervalPolicy.NORMAL_JITTER_RATIO);
 
     private static final String MEMBER_ID = "X-Member-Id";
 
@@ -129,6 +140,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
 
     private final SnapshotHolder holder;
     private final AdmissionDecider decider;
+
+    /** 뒷단 서킷의 상태. <b>판정의 입력이다</b> (F3). */
+    private final CircuitStateReader circuit;
     private final Clock clock;
     private final MeterRegistry meters;
     private final DoubleSupplier random;
@@ -174,11 +188,17 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     // 출처를 넣으면 "실패율 = cause != none" 이 정상적인 매진 단락을 다 잡는다.
     private final Counter soldOutHits;
 
+    /** 레디스 시계가 뒤로 간 건수. 순번 역행의 선행 신호다 (F2). */
+    private final Counter clockBack;
+
     private AdmissionGatewayFilter(SnapshotHolder holder, AdmissionDecider decider,
             Clock clock, MeterRegistry meters, DoubleSupplier random,
             QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter,
             EntryToken entryTokens, IdempotencyKey idempotency, LongSupplier ticker,
-            SoldOutCache soldOutCache) {
+            SoldOutCache soldOutCache, CircuitStateReader circuit) {
+        // **안 주면 안 보는 것으로 친다.** 모른다고 줄로 보내면 서킷을 안 붙인
+        // 배치에서 전 요청이 큐로 간다 — 없는 장애를 만든다.
+        this.circuit = circuit == null ? CircuitStateReader.of(null, "") : circuit;
         this.holder = Objects.requireNonNull(holder, "holder 는 필수다");
         this.failOpenWindow = FailureWindow.of(ticker);
         this.shedWindow = FailureWindow.of(ticker);
@@ -202,6 +222,11 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         this.error = ApiError.of(clock);
         this.soldOutCache = Objects.requireNonNull(soldOutCache, "soldOutCache 는 필수다");
         this.soldOutHits = meters.counter("waiting.soldout.cache.hit");
+        // **여기서 만들어 0 을 내보낸다.** 첫 증가 때 만들면 그 앞에 0 표본이
+        // 없어, 프로메테우스가 `increase` 를 낼 기준을 못 잡는다 — 드물게 한 번
+        // 나는 사건이 정확히 그 첫 사건이라, 이 지표가 겨눈 신호가 통째로
+        // 사라진다. 이 카운터는 순번 역행의 선행 신호다.
+        this.clockBack = meters.counter(CLOCK_BACK);
     }
 
     /** 흔들림의 난수원은 스레드마다 따로 둔다 — 공유하면 그 자체가 경합점이다. */
@@ -211,10 +236,14 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     AdmissionGatewayFilter(SnapshotHolder holder, AdmissionDecider decider, Clock clock,
             MeterRegistry meters, QueuePort queue, QueueToken tokens,
             SecondWindowLimiter limiter, EntryToken entryTokens,
-            IdempotencyKey idempotency, SoldOutCache soldOutCache) {
+            IdempotencyKey idempotency, SoldOutCache soldOutCache,
+            ObjectProvider<CircuitStateReader> circuit) {
         this(holder, decider, clock, meters,
                 () -> ThreadLocalRandom.current().nextDouble(), queue, tokens, limiter,
-                entryTokens, idempotency, System::nanoTime, soldOutCache);
+                entryTokens, idempotency, System::nanoTime, soldOutCache,
+                // **배분과 같은 것을 쓴다.** 각자 만들면 판정은 열렸다고 보는데
+                // 배분은 아니라고 보는 구간이 생긴다.
+                circuit.getIfAvailable());
     }
 
     /**
@@ -226,8 +255,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             Clock clock, MeterRegistry meters, QueuePort queue, QueueToken tokens,
             SecondWindowLimiter limiter, EntryToken entryTokens,
             IdempotencyKey idempotency) {
-        return new AdmissionGatewayFilter(holder, decider, clock, meters, queue, tokens, limiter,
-                entryTokens, idempotency, SoldOutCache.standard());
+        return new AdmissionGatewayFilter(holder, decider, clock, meters,
+                () -> ThreadLocalRandom.current().nextDouble(), queue, tokens, limiter,
+                entryTokens, idempotency, System::nanoTime, SoldOutCache.standard(), null);
     }
 
     /** 매진 캐시를 함께 받는다 (7.2.3). 담는 쪽과 읽는 쪽이 같은 것이라야 한다. */
@@ -237,7 +267,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             IdempotencyKey idempotency, SoldOutCache soldOutCache) {
         return new AdmissionGatewayFilter(holder, decider, clock, meters,
                 () -> ThreadLocalRandom.current().nextDouble(), queue, tokens, limiter,
-                entryTokens, idempotency, System::nanoTime, soldOutCache);
+                entryTokens, idempotency, System::nanoTime, soldOutCache, null);
     }
 
     /** 난수원을 받는다. 고정하지 못하면 흔들림이 실제로 붙었는지 못 잰다 (TS-4). */
@@ -248,7 +278,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             EntryToken entryTokens, IdempotencyKey idempotency) {
         return new AdmissionGatewayFilter(holder, decider, clock, meters, random, queue,
                 tokens, limiter, entryTokens, idempotency, System::nanoTime,
-                SoldOutCache.standard());
+                SoldOutCache.standard(), null);
     }
 
     /**
@@ -264,7 +294,8 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter,
             EntryToken entryTokens, IdempotencyKey idempotency, LongSupplier ticker) {
         return new AdmissionGatewayFilter(holder, decider, clock, meters, random, queue,
-                tokens, limiter, entryTokens, idempotency, ticker, SoldOutCache.standard());
+                tokens, limiter, entryTokens, idempotency, ticker, SoldOutCache.standard(),
+                null);
     }
 
     /**
@@ -351,7 +382,10 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                 // 기다린 사람과 안 기다린 사람이 같아진다.
                 holder.isDataStale(view), hasEntryToken(exchange, couponId), 
                 latch.latched(couponId, nowSec),
-                nowSec, MAX_ETA_SEC));
+                // **서킷을 여기서 읽는다** (F3). 메모리 안의 값이라 왕복이 없다.
+                // 안 실으면 판정이 서킷을 영영 안 보고, 열린 동안 계속 통과를
+                // 내 전량이 fallback 으로 간다.
+                nowSec, MAX_ETA_SEC, circuit.now()));
         exchange.getAttributes().put(DECISION, decision);
         count(decision.name());
         // **낡은 재료로 내린 판정도 재료 없이 판정한 것이다.** 사다리 4·7번이
@@ -466,10 +500,13 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                     // 뒤집힌다 — 방금 줄 선 사람을 전원이 추월한다.
                     //
                     // **스냅샷이 줄을 보고 있어도 찍는다.** 그 스냅샷은 방금 넣은
-                    // 이 사람을 아직 모른다 — 다음 판에 줄이 다 빠져 한산으로
+                    // 이 사람을 아직 모른다 — 다음 회차에 줄이 다 빠져 한산으로
                     // 뒤집히면 그 사람이 통째로 추월당한다. 계획서가 "줄이 보이면
                     // 바로 풀어도 된다" 고 적은 것은 그 한 명을 안 센 것이다.
                     latch.mark(couponId, clock.instant().getEpochSecond());
+                    if (entry.clockWentBack()) {
+                        clockBack.increment();
+                    }
                     // 등록이 다시 되면 fail-open 구간이 끝난 것이다. 쌍으로 안
                     // 남기면 로그에 진입만 있고 언제 닫혔는지가 없다 (LG-2).
                     failOpenWindow.exited().ifPresent(r -> log.info(
@@ -540,7 +577,8 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             case RETRY_TOKEN -> ApiError.Code.RETRY_TOKEN;
             case PASS_TOKEN, PASS_BYPASS, PASS_FAIL_OPEN, PASS_UNDER_CAP,
                  ENQUEUE_STALE, ENQUEUE_ALWAYS, ENQUEUE_BACKLOG,
-                 ENQUEUE_RATE_COUPON, ENQUEUE_RATE_GLOBAL, ENQUEUE_KEY_SATURATED ->
+                 ENQUEUE_RATE_COUPON, ENQUEUE_RATE_GLOBAL, ENQUEUE_KEY_SATURATED,
+                 ENQUEUE_CIRCUIT_OPEN ->
                     throw new IllegalArgumentException("거절이 아니다: " + decision);
         };
     }
@@ -549,7 +587,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      * 다시 와도 되는 때. <b>같은 값을 주면 다 같이 돌아온다</b> — 흔들어서
      * 되돌아오는 파도를 흩는다.
      */
-    // **배수를 인자로 받는다.** 안 받는 판을 남겨 두면 거절 갈래가 조용히
+    // **배수를 인자로 받는다.** 안 받는 갈래를 남겨 두면 거절 갈래가 조용히
     // 그쪽을 쓰고, 과부하일수록 거절 비중이 커져 예산이 절반만 걸린다.
     static int retryAfterSec(AdmissionDecision decision, DoubleSupplier random,
             double pollScale) {
@@ -574,7 +612,8 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             case REJECT_SOLD_OUT -> ApiError.NO_RETRY;
             case PASS_TOKEN, PASS_BYPASS, PASS_FAIL_OPEN, PASS_UNDER_CAP,
                  ENQUEUE_STALE, ENQUEUE_ALWAYS, ENQUEUE_BACKLOG,
-                 ENQUEUE_RATE_COUPON, ENQUEUE_RATE_GLOBAL, ENQUEUE_KEY_SATURATED ->
+                 ENQUEUE_RATE_COUPON, ENQUEUE_RATE_GLOBAL, ENQUEUE_KEY_SATURATED,
+                 ENQUEUE_CIRCUIT_OPEN ->
                     throw new IllegalArgumentException("거절이 아니다: " + decision);
         };
     }

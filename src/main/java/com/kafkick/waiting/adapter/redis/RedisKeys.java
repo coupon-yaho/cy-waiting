@@ -29,7 +29,7 @@ public final class RedisKeys {
     /**
      * 뒷단 인스턴스의 가용량 자기보고.
      *
-     * <p><b>판을 키에 담는다.</b> 측정 방식을 바꿀 때 옛 보고가 섞이면 배분이
+     * <p><b>측정 버전을 키에 담는다.</b> 측정 방식을 바꿀 때 옛 보고가 섞이면 배분이
      * 두 기준을 합산한다 — 그건 어느 쪽도 아닌 값이다 (4.4.7).
      */
     public static final String CAPACITY = "capacity:coupon-svc:v1";
@@ -92,10 +92,10 @@ public final class RedisKeys {
     }
 
     /**
-     * 매진 큐 삭제의 <b>울타리 표</b>. 마지막으로 지운 리더의 판 번호다 (5.3.1).
+     * 매진 큐 삭제의 <b>울타리 표</b>. 마지막으로 지운 리더의 펜스 번호다 (5.3.1).
      *
      * <p>리더 키는 줄과 다른 슬롯이라 삭제 스크립트가 같이 못 읽는다. 그래서
-     * 소유권을 <b>줄과 같은 슬롯</b>에서 확인한다 — 옛 판의 명령은 안 듣는다.
+     * 소유권을 <b>줄과 같은 슬롯</b>에서 확인한다 — 옛 펜스 번호의 명령은 안 듣는다.
      */
     public static String dropFence(String couponId, int shards, int shard) {
         return "dropfence:{" + tag(couponId, shards, shard) + "}";

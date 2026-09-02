@@ -48,7 +48,7 @@ jobs:
           .claude/hooks/self-test.sh
 
       # 심판이 헐거우면 하네스가 무엇을 재든 초록이다. 실제로 게이트웨이를 안
-      # 띄운 판과 표본 0 건인 판이 통과한 적이 있다 (TS-9).
+      # 띄운 실행과 표본 0 건인 실행이 통과한 적이 있다 (TS-9).
       - name: 부하 게이트 자기검증
         run: |
           chmod +x test/load/*.sh
@@ -284,30 +284,15 @@ jobs:
       - name: 액션 핀 검사
         run: .github/scripts/action-pins.sh
 
-      # 파일만 확인하면 `](other.md#anchor)` 의 앵커가 사라져도 통과한다.
-      # 링크는 열리는데 엉뚱한 위치로 가므로 읽는 사람만 손해다.
       - name: 문서 앵커 검사
-        run: |
-          python3 - <<'EOF'
-          import pathlib, re, sys
-          root = pathlib.Path('.').resolve()
-          md = [f for f in pathlib.Path('.').rglob('*.md') if '.git' not in f.parts]
-          anchors = {f: set(re.findall(r'<a id="([^"]+)"', f.read_text())) for f in md}
-          bad = 0
-          for f in md:
-              body = re.sub(r'(?ms)^```.*?^```', '', f.read_text())
-              body = re.sub(r'`[^`]*`', '', body)
-              for m in re.finditer(r'\]\(([^)#]*)#([^)\s]+)\)', body):
-                  tgt, anc = m.group(1), m.group(2)
-                  if tgt.startswith(('http', 'mailto')):
-                      continue
-                  t = f if not tgt else (f.parent / tgt)
-                  try:
-                      t = pathlib.Path(t.resolve().relative_to(root))
-                  except ValueError:
-                      continue
-                  if t in anchors and anc not in anchors[t]:
-                      print(f'::error file={f}::없는 앵커 — {tgt or "(자기)"}#{anc}')
-                      bad += 1
-          sys.exit(1 if bad else 0)
-          EOF
+        run: .github/scripts/doc-anchors.sh
+
+      # **재시도가 무엇을 삼키는지는 정규식 한 줄에 걸려 있다.** 그 줄은 넓히기
+      # 쉽고, 넓히는 순간 시험 실패가 재시도로 덮인다 (TS-7·TS-9).
+      - name: 재시도 자기검증
+        run: .github/scripts/gradle-retry-selftest.sh
+
+      # **병합을 막는 유일한 검사가 판정이다.** 개별 잡은 브랜치 보호의 요구
+      # 목록에 없어, 여기서 0 으로 끝나면 카오스가 빨개져도 병합이 열린다.
+      - name: 판정 자기검증
+        run: .github/scripts/verdict-selftest.sh

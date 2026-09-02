@@ -127,8 +127,8 @@ jobs:
       # 있는 게 아니다 — 툴체인이 없으면 Gradle 이 못 돈다.
       - uses: ./.github/actions/setup-gradle
 
-      # setup-gradle 과 같은 SHA 다 — 판을 섞으면 캐시 형식이 어긋난다.
-      - uses: gradle/actions/dependency-submission@0723195856401067f7a2779048b490ace7a47d7c  # v5.0.2
+      # setup-gradle 과 같은 SHA 다 — 버전을 섞으면 캐시 형식이 어긋난다.
+      - uses: gradle/actions/dependency-submission@9c971963bec38e04b3d30dcc455b5382be2fdbfb  # v6.3.0
         with:
           dependency-resolution-task: dependencies
           dependency-graph: generate-and-submit
@@ -208,7 +208,7 @@ jobs:
 
   verdict:
     name: 판정
-    needs: [context, conventions, build, test-unit, test-integration, test-context, test-chaos, test-coverage, test-mutation, security, load-idle, load-read-burst]
+    needs: [context, conventions, build, test-unit, test-integration, test-context, test-chaos, test-coverage, test-mutation, security, dependency-graph, load-idle, load-read-burst]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -227,7 +227,8 @@ jobs:
   report:
     name: 리포트
     needs: [context, conventions, build, test-unit, test-integration, test-context,
-            test-chaos, test-coverage, test-mutation, security, load-idle, load-read-burst, verdict]
+            test-chaos, test-coverage, test-mutation, security, dependency-graph,
+            load-idle, load-read-burst, verdict]
     if: ${{ !cancelled() }}
     uses: ./.github/workflows/_report.yml
     with:
@@ -239,12 +240,15 @@ jobs:
         `${{ github.sha }}`
         ${{ github.event.head_commit.message }}
       fields: |
+        빌드=${{ needs.build.result }}
+        규범=${{ needs.conventions.result }}
         단위=${{ needs.test-unit.result }}
         통합=${{ needs.test-integration.result }}
         카오스=${{ needs.test-chaos.result }}
         커버리지=${{ needs.test-coverage.result }}
         뮤테이션=${{ needs.test-mutation.result }}
         보안=${{ needs.security.result }}
+        의존성=${{ needs.dependency-graph.result }}
         부하(R1)=${{ needs.load-idle.result }}
         부하(조회 폭주)=${{ needs.load-read-burst.result }}
       link-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -259,6 +263,7 @@ jobs:
         <h2>빌드 결과</h2>
         <table>
           <tr><th>항목</th><th>결과</th></tr>
+          <tr><td>빌드</td><td>${{ needs.build.result }}</td></tr>
           <tr><td>규범</td><td>${{ needs.conventions.result }}</td></tr>
           <tr><td>단위 테스트</td><td>${{ needs.test-unit.result }}</td></tr>
           <tr><td>통합 테스트</td><td>${{ needs.test-integration.result }}</td></tr>
@@ -267,6 +272,7 @@ jobs:
           <tr><td>어댑터 커버리지</td><td>${{ needs.test-coverage.result }}</td></tr>
           <tr><td>뮤테이션 테스트</td><td>${{ needs.test-mutation.result }}</td></tr>
           <tr><td>보안 스캔</td><td>${{ needs.security.result }}</td></tr>
+          <tr><td>의존성 그래프</td><td>${{ needs.dependency-graph.result }}</td></tr>
           <tr><td>부하 (R1 검증)</td><td>${{ needs.load-idle.result }}</td></tr>
           <tr><td>부하 (조회 폭주 · G6.16)</td><td>${{ needs.load-read-burst.result }}</td></tr>
         </table>

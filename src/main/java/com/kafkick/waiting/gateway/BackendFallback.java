@@ -26,7 +26,7 @@ public final class BackendFallback {
     private static final String METRIC = "waiting.backend.fallback";
 
     /** 재시도를 흩는 폭. 판정 경로와 같은 값이라야 두 안내가 안 갈린다. */
-    private static final PollIntervalPolicy POLL = PollIntervalPolicy.of(0.2);
+    private static final PollIntervalPolicy POLL = PollIntervalPolicy.of(PollIntervalPolicy.NORMAL_JITTER_RATIO);
 
     /**
      * <b>줄에 선 사람에게 자리가 그대로라고 말한다.</b> 안 그러면 다시 줄을
@@ -129,8 +129,8 @@ public final class BackendFallback {
     }
 
     /**
-     * 이 요청을 판정한 판의 배수. <b>홀더를 다시 안 읽는다</b> — 서킷을 지나
-     * 나중에 도는 자리라 그러면 다른 판의 값이 나간다.
+     * 이 요청을 판정한 회차의 배수. <b>홀더를 다시 안 읽는다</b> — 서킷을 지나
+     * 나중에 도는 자리라 그러면 다른 회차의 값이 나간다.
      */
     // 없으면 1.0 이다. 판정을 안 거친 요청이거나 첫 틱 전이고, 둘 다 배수를
     // 모르는 상태다. 모를 때 늘리면 근거 없이 전원을 멀리 보내는 것이다.

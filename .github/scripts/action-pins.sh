@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 서드파티 액션이 커밋 SHA 로 핀됐고, 그 SHA 가 락파일이 적은 판과 맞는지 본다.
+# 서드파티 액션이 커밋 SHA 로 핀됐고, 그 SHA 가 락파일이 적은 버전과 맞는지 본다.
 #
 # **모든 `uses:` 를 열거해서 규격에 안 맞는 것을 잡는다.** 규격에 맞는 것만
 # 정규식으로 찾으면 그물이 거꾸로 걸린다 — `@v1`, `@main`, 따옴표를 씌운 핀,
@@ -19,7 +19,7 @@
 # 곧바로 가짜 저장소가 통과했다.
 #
 # 그래서 **원격에 묻는 일을 검사에서 떼어 `--refresh` 로 옮겼다.** 결과는
-# 락파일에 커밋되고, 그 파일의 diff 가 곧 "이 SHA 는 이 판이다" 라는 주장이 되어
+# 락파일에 커밋되고, 그 파일의 diff 가 곧 "이 SHA 는 이 버전이다" 라는 주장이 되어
 # 사람이 리뷰한다. `go.sum` 이 하는 일과 같다 — 처음 볼 때 확인하고, 그 뒤로는
 # 바뀌었는지만 본다.
 set -uo pipefail
@@ -29,7 +29,7 @@ cd "$root" || exit 1
 
 readonly LOCK=.github/action-pins.lock
 
-# 우리 조직 액션은 **판 주석·락파일 규칙만** 면제한다. 판을 우리가 올리므로
+# 우리 조직 액션은 **버전 주석·락파일 규칙만** 면제한다. 버전을 우리가 올리므로
 # 주석이 뒤처지는 것은 사고가 아니다. 핀 자체는 그대로 요구한다 — 그 잡에
 # Atlassian 토큰이 붙는데, `@v1` 로 바꿔도 아무 말 안 하면 제외가 구멍이 된다.
 readonly OURS='coupon-yaho/'
@@ -68,23 +68,40 @@ if not targets:
     sys.exit(1)
 
 
-def walk(node, out, in_steps=False):
-    """스텝의 `uses` 만 모은다. 위치를 알아야 그 줄에서 주석을 읽을 수 있다.
+def walk(node, out, in_steps=False, job_depth=0, at_root=True):
+    """스텝과 잡의 `uses` 를 모은다. 위치를 알아야 그 줄에서 주석을 읽을 수 있다.
 
     **이름이 `uses` 인 것을 다 모으면 안 된다.** composite action 의 `inputs`
     아래에 그 이름의 입력을 둘 수 있고, 그건 액션 참조가 아니라 값이다.
+
+    **재사용 워크플로 호출은 `jobs.<id>.uses` 라 `steps` 아래가 아니다.** 스텝만
+    보면 그 줄이 통째로 검사 밖이고, 거기에 `secrets: inherit` 를 붙이면 저장소
+    시크릿이 남의 저장소가 정하는 코드로 넘어간다.
     """
     if isinstance(node, yaml.MappingNode):
         for key, value in node.value:
             name = getattr(key, 'value', None)
-            if in_steps and name == 'uses' and isinstance(value, yaml.ScalarNode):
+            if (in_steps or job_depth == 1) and name == 'uses' \
+                    and isinstance(value, yaml.ScalarNode):
                 out.append((value.start_mark.line, value.value))
             # `steps` 아래의 항목만 스텝이다. `inputs`·`outputs` 로 내려가면 끈다.
-            walk(value, out, name == 'steps' or (in_steps and name not in
-                                                 ('inputs', 'outputs', 'env', 'with')))
+            #
+            # **잡은 거부목록으로 안 가른다.** 잡 참조는 `jobs.<id>.uses` 딱 한
+            # 겹이라 깊이로 표현된다. 거부목록으로 두면 `outputs` 나
+            # `strategy.matrix` 아래의 `uses` 라는 이름을 액션으로 잘못 읽고,
+            # 그건 MUST 게이트의 오탐이라 우회를 부른다.
+            #
+            # **뿌리에서만 잡 컨테이너로 친다.** 아무 데서나 `jobs` 라는 이름에
+            # 깊이를 되돌리면, `jobs` 라는 이름의 잡이 자기 참조를 검사 밖으로
+            # 밀어낸다 — 게이트를 우회하는 이름을 짓기만 하면 된다.
+            walk(value, out,
+                 name == 'steps' or (in_steps and name not in
+                                     ('inputs', 'outputs', 'env', 'with')),
+                 2 if (at_root and name == 'jobs') else max(job_depth - 1, 0),
+                 False)
     elif isinstance(node, yaml.SequenceNode):
         for child in node.value:
-            walk(child, out, in_steps)
+            walk(child, out, in_steps, job_depth, False)
 
 
 found = []
@@ -119,7 +136,7 @@ refs=$(list_uses) || exit 1
 [[ -z "$refs" ]] && exit 0
 
 
-# ── 판을 원격에 물어 락파일을 다시 쓴다 ──────────────────────────────────────
+# ── 버전을 원격에 물어 락파일을 다시 쓴다 ──────────────────────────────────────
 # 검사가 아니라 갱신이다. 결과는 커밋되어 사람이 diff 로 본다.
 if [[ "${1:-}" == "--refresh" ]]; then
     fail=0
@@ -220,14 +237,14 @@ while IFS=$'\t' read -r file line ref version; do
     [[ "$path" == "$OURS"* ]] && continue
 
     if [[ -z "$version" ]]; then
-        echo "::error file=$file,line=$line::$path — 핀 옆에 판 주석이 없다." \
+        echo "::error file=$file,line=$line::$path — 핀 옆에 버전 주석이 없다." \
              "없으면 무엇이 핀됐는지 사람도 Dependabot 도 모른다"
         fail=1
         continue
     fi
 
     if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        echo "::error file=$file,line=$line::$path — 주석이 정확한 판이 아니다: '$version'." \
+        echo "::error file=$file,line=$line::$path — 주석이 정확한 버전이 아니다: '$version'." \
              "메이저만 적으면 Dependabot 이 그 메이저에 묶는다"
         fail=1
         continue

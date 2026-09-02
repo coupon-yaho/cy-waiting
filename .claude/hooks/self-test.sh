@@ -416,6 +416,15 @@ if ! cp "$ROOT/.github/scripts/"*.sh "$clean_repo/.github/scripts/" 2>/dev/null 
     printf '  FAIL 임시 저장소에 CI 스크립트를 못 넣었다 — 아래 검사가 무의미하다\n'
     fail=$((fail + 1))
 fi
+# **액션도 같이 넣는다.** 판정 자기검증이 액션이 스크립트를 부르는지까지 보므로,
+# 스크립트만 넣으면 깨끗한 케이스가 그 이유로 막힌다 — 재려던 것이 아니다.
+if [[ -d "$ROOT/.github/actions" ]]; then
+    mkdir -p "$clean_repo/.github/actions"
+    if ! cp -r "$ROOT/.github/actions/." "$clean_repo/.github/actions/" 2>/dev/null; then
+        printf '  FAIL 임시 저장소에 액션을 못 넣었다 — 아래 검사가 무의미하다\n'
+        fail=$((fail + 1))
+    fi
+fi
 cp "$HOOKS/review-branch.sh" "$HOOKS/check-java.sh" "$HOOKS/check-lua.sh" \
    "$clean_repo/.claude/hooks/" 2>/dev/null
 chmod +x "$clean_repo/.claude/hooks/"*.sh 2>/dev/null
@@ -654,6 +663,75 @@ else
     printf '  FAIL 워크플로에 중복 잡 이름: %s\n' "$(tr '\n' ' ' <<<"$wf_dups")"
     fail=$((fail + 1))
 fi
+
+# ── 액션 핀 게이트 ─────────────────────────────────────────────────────────
+# **재사용 워크플로 호출은 스텝이 아니다.** `jobs.<id>.uses` 라 스텝만 훑던
+# 판에서는 통째로 지나갔고, 거기에 `secrets: inherit` 를 붙이면 저장소 시크릿이
+# 남의 저장소가 정하는 코드로 넘어간다. 지금 이 저장소의 잡 참조는 전부 로컬
+# `./` 이라 검사 대상이 0건이다 — 프로브가 없으면 이 갈래는 되돌려도 초록이다.
+pins_case() {   # 워크플로내용 기대(block|allow) 설명
+    local content=$1 expect=$2 label=$3
+    local dir="$tmp/pins-$RANDOM"
+    mkdir -p "$dir/.github/workflows"
+    cp "$ROOT/.github/action-pins.lock" "$dir/.github/"
+    printf '%s\n' "$content" > "$dir/.github/workflows/probe.yml"
+    local out
+    out=$( cd "$dir" && "$ROOT/.github/scripts/action-pins.sh" 2>&1 )
+    local code=$?
+    rm -rf "$dir"
+    if [[ $expect == block && $code -ne 0 ]] || [[ $expect == allow && $code -eq 0 ]]; then
+        printf '  ok   %s\n' "$label"; pass=$((pass + 1))
+    else
+        printf '  FAIL %s (종료 %d)\n    %s\n' "$label" "$code" "${out:0:200}"
+        fail=$((fail + 1))
+    fi
+}
+
+echo
+printf '\033[1m액션 핀 게이트\033[0m\n'
+pins_case 'name: p
+on: push
+jobs:
+  evil:
+    uses: attacker/evil/.github/workflows/pwn.yml@main
+    secrets: inherit' block '잡 레벨의 안 핀된 재사용 워크플로를 막는다'
+
+# 핀된 서드파티를 하나 같이 둔다. 로컬 참조만 있으면 검사 대상이 0건이라
+# "검사가 헛돈다" 안전망이 먼저 물어, 재려던 것을 못 잰다.
+pins_case 'name: p
+on: push
+jobs:
+  ok:
+    uses: ./.github/workflows/_build.yml
+  step:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1' allow '로컬 재사용 워크플로는 통과시킨다'
+
+# 아무 데서나 `jobs` 라는 이름에 깊이를 되돌리면, 그 이름의 잡이 자기 참조를
+# 검사 밖으로 밀어낸다 — 게이트를 우회하는 이름을 짓기만 하면 된다.
+pins_case 'name: p
+on: push
+jobs:
+  jobs:
+    uses: attacker/evil/.github/workflows/pwn.yml@main
+    secrets: inherit' block '`jobs` 라는 이름의 잡도 검사한다'
+
+# 잡 레벨에는 사용자가 이름을 정하는 매핑이 있다. 거부목록으로 가르면 여기서
+# 샌다 — MUST 게이트의 오탐은 우회를 부르고, 우회된 게이트는 없는 것과 같다.
+pins_case 'name: p
+on: push
+jobs:
+  a:
+    outputs:
+      uses: ${{ steps.x.outputs.v }}
+    strategy:
+      matrix:
+        include:
+          - uses: something/not-an-action
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo hi' allow '잡의 outputs·matrix 안의 uses 는 액션이 아니다'
 
 echo
 printf '통과 %d · 실패 %d\n' "$pass" "$fail"

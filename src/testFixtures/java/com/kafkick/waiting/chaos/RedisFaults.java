@@ -35,10 +35,25 @@ public final class RedisFaults implements AutoCloseable {
      * 잡기까지의 경합은 없앨 수 없어 몇 번 다시 고른다.
      */
     public static RedisFaults 시작한다() {
+        return 시작한다(false);
+    }
+
+    /**
+     * 영속을 켜고 띄운다 (everysec).
+     *
+     * <p><b>이걸 켜도 {@link #끊는다()} 로는 한 바이트도 안 잃는다.</b> everysec 은
+     * 매 루프마다 커널에 넘기고 fsync 만 미루는데, 프로세스만 죽으면 페이지
+     * 캐시가 남는다. 부분 유실을 만들려면 시험이 따로 손을 대야 한다.
+     */
+    public static RedisFaults 영속으로_시작한다() {
+        return 시작한다(true);
+    }
+
+    private static RedisFaults 시작한다(boolean 영속) {
         RuntimeException 마지막 = null;
         for (int i = 0; i < 5; i++) {
             try {
-                return 한번_띄운다();
+                return 한번_띄운다(영속);
             } catch (RuntimeException e) {
                 // **포트 충돌만 다시 고른다.** 전부 재시도하면 도커 부재나
                 // 이미지 실패까지 다섯 번 반복한 뒤 "포트를 뺏겼다" 로
@@ -66,10 +81,15 @@ public final class RedisFaults implements AutoCloseable {
     }
 
     @SuppressWarnings("resource")   // close() 가 닫는다
-    private static RedisFaults 한번_띄운다() {
+    private static RedisFaults 한번_띄운다(boolean 영속) {
+        // **컨테이너를 지우지 않고 다시 켠다.** 죽였다 붙이는 것이 같은
+        // 컨테이너라 파일시스템이 남고, 그래서 볼륨 없이도 AOF 가 살아난다.
         GenericContainer<?> container = new GenericContainer<>(IMAGE)
                 .withExposedPorts(6379)
-                .withCommand("redis-server", "--appendonly", "no");
+                .withCommand(영속
+                        ? new String[] {"redis-server", "--appendonly", "yes",
+                                "--appendfsync", "everysec"}
+                        : new String[] {"redis-server", "--appendonly", "no"});
         container.setPortBindings(List.of(자유포트() + ":6379"));
         container.start();
         return new RedisFaults(container);

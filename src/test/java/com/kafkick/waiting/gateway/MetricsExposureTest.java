@@ -131,6 +131,10 @@ class MetricsExposureTest {
                 // (6.3.6). 값도 박아 배선이 실제로 CouponKeys.MAX 를 쓰는지 본다.
                 .containsPattern("waiting_bulkhead_max_coupons\\{application=\"[^\"]*\"\\} 10000\\.0\\n")
                 .containsPattern("waiting_snapshot_age\\{[^}]*\\} [0-9.E-]+\\n")
+                // **나이를 둘로 나눈 것이 실제로 긁히는가** (8.4.4). 배분이
+                // 멎었는데 받아 오기는 멀쩡한 구간은 이 둘을 갈라야 보인다.
+                .containsPattern("waiting_snapshot_fetch_age\\{[^}]*\\} [0-9.E-]+\\n")
+                .containsPattern("waiting_snapshot_tick_age\\{[^}]*\\} [0-9.E-]+\\n")
                 .doesNotContain("NaN");
     }
 

@@ -40,7 +40,7 @@ public final class LeadershipLoop {
         return new LeadershipLoop(renewDelay, renew, timer);
     }
 
-    /** <b>첫 판을 미루지 않는다.</b> 미루면 그동안 아무도 리더가 아니라 배분이 안 돈다. */
+    /** <b>첫 회차를 미루지 않는다.</b> 미루면 그동안 아무도 리더가 아니라 배분이 안 돈다. */
     public void start() {
         if (!running.compareAndSet(false, true)) {
             return;
@@ -59,7 +59,7 @@ public final class LeadershipLoop {
     }
 
     /**
-     * 한 판이 터져도 돈다. 여기서 멎으면 리스가 만료돼 리더가 없어지고, 그 뒤로
+     * 한 회차가 터져도 돈다. 여기서 멎으면 리스가 만료돼 리더가 없어지고, 그 뒤로
      * 영영 안 돌아온다.
      *
      * <p>상한은 {@code Leadership} 이 이미 건다 — 여기서 또 걸면 두 값이 갈릴 때

@@ -4,6 +4,8 @@ import com.kafkick.waiting.adapter.redis.RedisKeys;
 import io.lettuce.core.api.StatefulRedisConnection;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.OptionalLong;
@@ -87,7 +89,7 @@ public final class BackendReports {
         long 하한 = 지금() - 신선도.toSeconds();
         Map<String, Long> 결과 = new LinkedHashMap<>();
         redis.sync().hgetall(KEY).forEach((instanceId, raw) -> {
-            String[] parts = raw.split(":", 2);
+            String[] parts = 필드를_뽑는다(raw);
             if (parts.length != 2) {
                 return;   // 깨진 항목은 건너뛴다. 나머지 판정은 살린다
             }
@@ -109,7 +111,20 @@ public final class BackendReports {
     private void 심는다(String instanceId, long 가용량, long 시각) {
         // 모든 경로가 여기를 지난다 — 처음 관측 시각을 여기서만 채운다.
         처음_본_시각.putIfAbsent(instanceId, 시각);
-        redis.sync().hset(KEY, instanceId, "%d:%d".formatted(가용량, 시각));
+        // 형식은 프로덕션 파서가 정한다. 다르게 쓰면 이 픽스처 위에 세운
+        // 시험이 뒷단이 거절하는 상태를 재게 된다 (CY-837). 포트가 읽는 것과 갈리면 이 위에 세운 시험이 전부
+        // 뒷단이 거절하는 상태를 잰다.
+        redis.sync().hset(KEY, instanceId,
+                "{\"credits\":%d,\"ts\":%d}".formatted(가용량, 시각));
+    }
+
+    private static final Pattern FIELDS =
+            Pattern.compile("\\{\"credits\":(-?\\d+),\"ts\":(-?\\d+)\\}");
+
+    /** 프로덕션이 쓰는 JSON 에서 값과 시각을 뽑는다. 형식은 파서가 정한다. */
+    private static String[] 필드를_뽑는다(String raw) {
+        Matcher m = FIELDS.matcher(raw);
+        return m.matches() ? new String[] {m.group(1), m.group(2)} : new String[] {raw};
     }
 
     private long 지금() {

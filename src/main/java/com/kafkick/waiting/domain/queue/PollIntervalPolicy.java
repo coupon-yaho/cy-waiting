@@ -26,6 +26,14 @@ public class PollIntervalPolicy {
      */
     public static final double NO_SCALE = 1.0;
 
+    /**
+     * 정상 경로의 흔들림 폭.
+     *
+     * <p><b>배선값을 여기 둔다.</b> 오류 경로가 이보다 넓어야 한다는 관계를
+     * 시험이 재는데, 배선에만 있으면 그 관계가 리터럴 둘의 비교가 된다.
+     */
+    public static final double NORMAL_JITTER_RATIO = 0.2;
+
     private static final long MIN_INTERVAL_SEC = 1;
     private static final long MAX_INTERVAL_SEC = 60;
 

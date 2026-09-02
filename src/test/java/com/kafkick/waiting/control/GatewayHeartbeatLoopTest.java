@@ -28,13 +28,16 @@ class GatewayHeartbeatLoopTest {
     private static final Duration INTERVAL = Duration.ofMillis(100);
     private static final Duration LEAVE_TIMEOUT = Duration.ofMillis(200);
 
+    /** 한 회차를 놓친 횟수. 대부분의 시험은 안 보지만 인자로는 넘겨야 한다. */
+    private final AtomicInteger 놓침 = new AtomicInteger();
+
     @Test
     @DisplayName("돌_때마다_관측한_수를_레지스트리에_넘긴다")
     void 돌_때마다_관측한_수를_레지스트리에_넘긴다() {
         AtomicReference<Integer> 마지막 = new AtomicReference<>();
         VirtualTimeScheduler 가상 = VirtualTimeScheduler.create();
         GatewayHeartbeatLoop loop = GatewayHeartbeatLoop.of(
-                () -> Mono.just(3), () -> Mono.empty(), 마지막::set, INTERVAL, LEAVE_TIMEOUT);
+                () -> Mono.just(3), () -> Mono.empty(), 마지막::set, 놓침::incrementAndGet, INTERVAL, LEAVE_TIMEOUT);
 
         loop.start(가상);
         try {
@@ -49,7 +52,7 @@ class GatewayHeartbeatLoopTest {
     @DisplayName("관측이_실패해도_루프가_안_멎는다")
     void 관측이_실패해도_루프가_안_멎는다() {
         // 한 번 터지고 끝나면 그 노드는 영영 분모에서 빠지고, 남은 노드가
-        // 큰 몫을 쓴다. 실패는 그 판만 버린다.
+        // 큰 몫을 쓴다. 실패는 그 회차만 버린다.
         AtomicInteger 호출 = new AtomicInteger();
         AtomicReference<Integer> 마지막 = new AtomicReference<>();
         VirtualTimeScheduler 가상 = VirtualTimeScheduler.create();
@@ -57,7 +60,7 @@ class GatewayHeartbeatLoopTest {
                 () -> 호출.incrementAndGet() == 1
                         ? Mono.error(new IllegalStateException("레디스가 끊겼다"))
                         : Mono.just(2),
-                () -> Mono.empty(), 마지막::set, INTERVAL, LEAVE_TIMEOUT);
+                () -> Mono.empty(), 마지막::set, 놓침::incrementAndGet, INTERVAL, LEAVE_TIMEOUT);
 
         loop.start(가상);
         try {
@@ -77,7 +80,7 @@ class GatewayHeartbeatLoopTest {
         GatewayHeartbeatLoop loop = GatewayHeartbeatLoop.of(
                 () -> Mono.just(1),
                 () -> Mono.fromRunnable(해제::incrementAndGet),
-                n -> { }, INTERVAL, LEAVE_TIMEOUT);
+                n -> { }, 놓침::incrementAndGet, INTERVAL, LEAVE_TIMEOUT);
         loop.start(가상);
 
         loop.stop();
@@ -106,7 +109,7 @@ class GatewayHeartbeatLoopTest {
                 () -> Mono.<Void>never()
                         .doOnSubscribe(sub -> 구독됨.countDown())
                         .doOnCancel(() -> 취소됨.set(true)),
-                n -> { }, INTERVAL, LEAVE_TIMEOUT, 해제타이머);
+                n -> { }, 놓침::incrementAndGet, INTERVAL, LEAVE_TIMEOUT, 해제타이머);
         loop.start(가상);
 
         loop.stop(끝남::countDown);
@@ -126,7 +129,7 @@ class GatewayHeartbeatLoopTest {
         VirtualTimeScheduler 가상 = VirtualTimeScheduler.create();
         AtomicInteger 콜백 = new AtomicInteger();
         GatewayHeartbeatLoop loop = GatewayHeartbeatLoop.of(
-                () -> Mono.just(1), () -> Mono.empty(), n -> { },
+                () -> Mono.just(1), () -> Mono.empty(), n -> { }, 놓침::incrementAndGet,
                 INTERVAL, LEAVE_TIMEOUT, 해제타이머());
         loop.start(가상);
 
@@ -147,7 +150,7 @@ class GatewayHeartbeatLoopTest {
         GatewayHeartbeatLoop loop = GatewayHeartbeatLoop.of(
                 () -> Mono.just(1),
                 () -> Mono.error(new IllegalStateException("레디스가 끊겼다")),
-                n -> { }, INTERVAL, LEAVE_TIMEOUT);
+                n -> { }, 놓침::incrementAndGet, INTERVAL, LEAVE_TIMEOUT);
         loop.start(가상);
 
         loop.stop();
@@ -165,7 +168,7 @@ class GatewayHeartbeatLoopTest {
         GatewayHeartbeatLoop loop = GatewayHeartbeatLoop.of(
                 () -> Mono.just(1),
                 () -> Mono.fromRunnable(해제::incrementAndGet),
-                n -> { }, INTERVAL, LEAVE_TIMEOUT);
+                n -> { }, 놓침::incrementAndGet, INTERVAL, LEAVE_TIMEOUT);
         loop.start(가상);
 
         loop.stop();
@@ -175,9 +178,9 @@ class GatewayHeartbeatLoopTest {
     }
 
     @Test
-    @DisplayName("한_판이_안_끝나도_다음_판이_돈다")
-    void 한_판이_안_끝나도_다음_판이_돈다() {
-        // **타임아웃이 없으면 루프가 조용히 멎는다.** 한 판이 안 끝나면 다음
+    @DisplayName("한_회차가_안_끝나도_다음_회차가_돈다")
+    void 한_회차가_안_끝나도_다음_회차가_돈다() {
+        // **타임아웃이 없으면 루프가 조용히 멎는다.** 한 회차가 안 끝나면 다음
         // 지연이 시작되지 않는데, 오류가 아니라 무응답이라 로그도 안 나온다.
         // 그동안 이 노드는 하트비트를 못 쓰면서 요청은 계속 받는다.
         AtomicInteger 호출 = new AtomicInteger();
@@ -185,7 +188,7 @@ class GatewayHeartbeatLoopTest {
         VirtualTimeScheduler 가상 = VirtualTimeScheduler.create();
         GatewayHeartbeatLoop loop = GatewayHeartbeatLoop.of(
                 () -> 호출.incrementAndGet() == 1 ? Mono.never() : Mono.just(4),
-                () -> Mono.empty(), 마지막::set, INTERVAL, LEAVE_TIMEOUT);
+                () -> Mono.empty(), 마지막::set, 놓침::incrementAndGet, INTERVAL, LEAVE_TIMEOUT);
 
         loop.start(가상);
         try {
@@ -205,7 +208,7 @@ class GatewayHeartbeatLoopTest {
         AtomicInteger 호출 = new AtomicInteger();
         GatewayHeartbeatLoop loop = GatewayHeartbeatLoop.of(
                 () -> Mono.fromCallable(() -> { 호출.incrementAndGet(); return 1; }),
-                () -> Mono.empty(), n -> { }, INTERVAL, LEAVE_TIMEOUT);
+                () -> Mono.empty(), n -> { }, 놓침::incrementAndGet, INTERVAL, LEAVE_TIMEOUT);
 
         loop.start();
         try {
@@ -223,7 +226,7 @@ class GatewayHeartbeatLoopTest {
         // stop 을 아예 안 불러 등록 해제가 통째로 사라진다.
         VirtualTimeScheduler 가상 = VirtualTimeScheduler.create();
         GatewayHeartbeatLoop loop = GatewayHeartbeatLoop.of(
-                () -> Mono.just(1), () -> Mono.empty(), n -> { }, INTERVAL, LEAVE_TIMEOUT);
+                () -> Mono.just(1), () -> Mono.empty(), n -> { }, 놓침::incrementAndGet, INTERVAL, LEAVE_TIMEOUT);
 
         loop.start(가상);
         try {
@@ -243,12 +246,12 @@ class GatewayHeartbeatLoopTest {
         VirtualTimeScheduler 가상 = VirtualTimeScheduler.create();
         GatewayHeartbeatLoop loop = GatewayHeartbeatLoop.of(
                 () -> Mono.just(1).doOnSubscribe(sub -> 구독.incrementAndGet()),
-                () -> Mono.empty(), n -> { }, INTERVAL, LEAVE_TIMEOUT);
+                () -> Mono.empty(), n -> { }, 놓침::incrementAndGet, INTERVAL, LEAVE_TIMEOUT);
 
         loop.start(가상);
         loop.start(가상);
 
-        // 한 판만 돌렸으니 구독도 하나여야 한다. 둘이면 루프가 두 개다.
+        // 한 회차만 돌렸으니 구독도 하나여야 한다. 둘이면 루프가 두 개다.
         assertThat(구독.get()).isEqualTo(1);
         assertThat(loop.isRunning()).isTrue();
         loop.stop();
@@ -262,7 +265,7 @@ class GatewayHeartbeatLoopTest {
         // 0 이므로 그보다 커야 커넥션이 살아 있는 동안 등록을 뺄 수 있다.
         // 0 이하면 해제가 매번 실패해 유령 항목이 분모를 부풀린다.
         GatewayHeartbeatLoop loop = GatewayHeartbeatLoop.of(
-                () -> Mono.just(1), () -> Mono.empty(), n -> { }, INTERVAL, LEAVE_TIMEOUT);
+                () -> Mono.just(1), () -> Mono.empty(), n -> { }, 놓침::incrementAndGet, INTERVAL, LEAVE_TIMEOUT);
 
         assertThat(loop).isInstanceOf(SmartLifecycle.class);
         assertThat(loop.isAutoStartup()).isTrue();

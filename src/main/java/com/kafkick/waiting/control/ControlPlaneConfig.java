@@ -30,13 +30,10 @@ import reactor.core.scheduler.Schedulers;
         matchIfMissing = true)
 public class ControlPlaneConfig {
 
-    /** 평활화 계수. 클수록 최근 값을 빨리 따라간다. */
-    private static final double SMOOTHING_ALPHA = 0.3;
-
     /** 이탈 기록 보관. <b>등록도 같은 값을 읽는다</b> — 갈리면 판정이 갈린다. */
     private static final long GRACE_SEC = GraceRetention.SECONDS;
 
-    /** 한 판이 지우는 상한. 스크립트가 `unpack` 한계로 더 좁힌다. */
+    /** 한 회차가 지우는 상한. 스크립트가 `unpack` 한계로 더 좁힌다. */
     private static final int SWEEP_BUDGET = 1_000;
 
     @Bean
@@ -72,10 +69,11 @@ public class ControlPlaneConfig {
             TunablesRefresh tunables, ControlPlaneProperties properties,
             SoldOutCleanup cleanup, QueueSweeper sweeper, SnapshotHolder holder) {
         SnapshotCodec codec = SnapshotCodec.create();
-        return AllocationRound.of(leadership::isLeader, collector::collect, capacity::lastKnown,
+        return AllocationRound.of(leadership::isLeader, collector::collect,
+                capacity::lastKnown,
                 registry::count, port::apply, port::publish, Instant::now,
                 () -> port.load().map(hash ->
-                        CreditSmoother.restore(SMOOTHING_ALPHA, codec.smoothing(hash))),
+                        CreditSmoother.restore(CreditSmoother.DEFAULT_ALPHA, codec.smoothing(hash))),
                 codec, capacity::lastFloor, tunables::current,
                 // **유예를 값으로 정한다** (7.3.2). 스냅샷 낡음 한계보다 충분히
                 // 커야 마지막 폴링이 줄을 안 잃는다.
@@ -84,7 +82,7 @@ public class ControlPlaneConfig {
                 // 재고 미상과 0 을 가르고(CY-702), 지우기 직전에 재고를 다시
                 // 보고(CY-765), 옛 리더의 명령을 울타리가 거른다(CY-766).
                 //
-                // **판 번호를 그때그때 읽는다.** 붙잡아 두면 강등된 뒤에도 옛
+                // **회차 번호를 그때그때 읽는다.** 붙잡아 두면 강등된 뒤에도 옛
                 // 번호로 나가고, 그건 울타리를 우회하는 일이다. 리더가 아니면
                 // 0 이 나가고 스크립트가 전부 거절한다 — 안전한 방향이다.
                 ids -> port.dropSoldOutQueues(ids, leadership.fence()),
@@ -94,7 +92,15 @@ public class ControlPlaneConfig {
                 sweeper,
                 // 이 노드도 게이트웨이다. 자기가 든 재료의 나이가 노드들의
                 // 폴링 상태에 가장 가까운 신호다.
-                holder::isDataStale);
+                holder::isDataStale,
+                // **클러스터가 본 것으로 조인다** (CY-791). 리더의 로컬 서킷을
+                // 쓰면 리더만 멀쩡할 때 나머지가 다 열려 있어도 평소 속도로
+                // 돌고, 그 몫은 이미 넘어진 뒷단으로 간다. 하트비트가 노드마다
+                // 실어 온 것을 등록부가 다수결로 접어 둔다.
+                //
+                // **회차마다 한 번 읽는다.** 한 회차에서 두 번 읽으면 그 사이에
+                // 상태가 뒤집혀 같은 회차가 자기모순인 값 둘로 판단한다.
+                registry::circuit);
     }
 
     /**
@@ -130,7 +136,7 @@ public class ControlPlaneConfig {
      */
     /**
      * 재료 읽기. <b>배분 예산의 1/4 만 쓴다</b> — 한 예산을 나눠 쓰면 읽기가 느릴 때
-     * 판이 통째로 안 끝나고, 임계가 안 올라가 큐가 자라 다음 판이 더 무거워진다.
+     * 회차가 통째로 안 끝나고, 임계가 안 올라가 큐가 자라 다음 회차가 더 무거워진다.
      */
     @Bean
     CapacityRefresh capacityRefresh(AllocationRedisPort port, CapacityCollector capacity,
@@ -153,14 +159,14 @@ public class ControlPlaneConfig {
     }
 
     /**
-     * 운영 값 읽기. <b>배분 판 밖이다</b> — 판 안에서 읽으면 발행이 그 왕복에
+     * 운영 값 읽기. <b>배분 회차 밖이다</b> — 회차 안에서 읽으면 발행이 그 왕복에
      * 매달려, 레디스가 조금 느려지는 것만으로 스냅샷이 아예 안 나간다.
      */
     @Bean
     TunablesRefresh tunablesRefresh(AllocationRedisPort port, SnapshotHolder holder,
             ControlPlaneProperties properties, Scheduler allocationScheduler,
             MeterRegistry meters) {
-        // **승계 첫 판이 위험하다.** 새 리더의 캐시는 비어 있는데 그 상태로
+        // **승계 첫 회차가 위험하다.** 새 리더의 캐시는 비어 있는데 그 상태로
         // 발행하면 앞 리더가 싣던 값이 지워진다 — 재료에 있던 것을 이어 싣는다.
         TunablesRefresh refresh = TunablesRefresh.of(port::readTunables,
                 () -> Optional.ofNullable(holder.current().meta().tunables()),
@@ -186,29 +192,50 @@ public class ControlPlaneConfig {
     QueueSweeper queueSweeper(AllocationRedisPort port, ControlPlaneProperties properties,
             MeterRegistry meters) {
         return QueueSweeper.of(SweepGate.of(properties.scheduler().tick(), PollIntervalPolicy.aliveTtl()),
-                (ids, scanLimit) -> port.sweep(ids, Instant.now().getEpochSecond(),
-                        scanLimit, GRACE_SEC, SWEEP_BUDGET),
+                (ids, scanLimit, removeFront) -> port.sweep(ids, Instant.now().getEpochSecond(),
+                        scanLimit, GRACE_SEC, SWEEP_BUDGET, removeFront),
                 meters);
     }
 
     /** 배분 틱. <b>재료를 먼저 읽고 배분한다</b> — 안 읽으면 크레딧이 첫 하한에 머문다. */
+    /**
+     * 리더가 된 순간에 처음부터 줘야 하는 것들.
+     *
+     * <p><b>람다로 묻어 두지 않는다.</b> 여기 한 줄을 빠뜨리면 그 셈만 얼어
+     * 있던 값을 이어 쓰는데, 그건 전 시험이 초록인 채로 일어난다.
+     */
+    static Runnable onLeadershipGained(CapacityCollector collector, CapacityRefresh capacity,
+            SoldOutCleanup cleanup, QueueSweeper sweeper, AllocationRound round) {
+        return () -> {
+            collector.leadershipAcquired();
+            capacity.leadershipChanged();
+            // **평활화 이월도 여기서 버린다** (F9 · CY-859). 회차 안에서 버리려
+            // 하면 그 회차는 리더일 때만 도므로 비리더 구간을 한 번도 못 본다 —
+            // 되찾은 노드가 남이 움직인 값을 못 보고 옛 값을 이어 쓴다.
+            round.leadershipAcquired();
+            // **매진 유예를 처음부터 준다.** 얼어 있던 셈을 이어 쓰면 유예가
+            // 설정값이 아니라 "내가 리더였던 틱 수" 가 되고, 그 둘은 장애
+            // 중에 갈린다.
+            cleanup.leadershipAcquired();
+            // **이탈자 청소의 재개 유예도 같다** (CY-822). 그 표시는 리더
+            // 메모리라 승계에서 사라지고, 새 리더는 신호가 얼마나 오래 멎어
+            // 있었는지 모른다. 모른다는 것이 걷을 이유가 되면 안 된다 —
+            // 걷힌 사람은 새 score 로 다시 서므로 순번이 뒤로 간다.
+            sweeper.leadershipAcquired();
+        };
+    }
+
     @Bean
     AllocationScheduler allocationLoop(ControlPlaneProperties properties, Leadership leadership,
             AllocationRound round, CapacityRefresh capacity, CapacityCollector collector,
-            TunablesRefresh tunables, Scheduler allocationScheduler, SoldOutCleanup cleanup) {
+            TunablesRefresh tunables, Scheduler allocationScheduler, SoldOutCleanup cleanup,
+            QueueSweeper sweeper) {
         return AllocationScheduler.of(properties.scheduler().tick(),
                 properties.scheduler().firstTickDelay(),
                 // **승계는 유예를 처음부터 준다.** 비리더 구간에 얼어 있던 실패
-                // 횟수를 이어 쓰면 재승계 첫 판이 곧바로 크레딧을 깎는다.
+                // 횟수를 이어 쓰면 재승계 첫 회차가 곧바로 크레딧을 깎는다.
                 LeadershipEdge.of(leadership::isLeader,
-                        () -> {
-                            collector.leadershipAcquired();
-                            capacity.leadershipChanged();
-                            // **매진 유예도 처음부터 준다.** 얼어 있던 셈을
-                            // 이어 쓰면 유예가 설정값이 아니라 "내가 리더였던
-                            // 틱 수" 가 되고, 그 둘은 장애 중에 갈린다.
-                            cleanup.leadershipAcquired();
-                        },
+                        onLeadershipGained(collector, capacity, cleanup, sweeper, round),
                         capacity::leadershipChanged),
                 // **운영 값을 먼저 읽고 배분한다.** 순서가 뒤면 방금 바꾼 값이
                 // 한 틱 늦게 나가고, 장애 중의 한 틱은 길다.

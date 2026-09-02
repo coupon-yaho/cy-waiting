@@ -117,6 +117,9 @@ public final class AllocationRedisPort implements SnapshotSource {
     private final Duration fenceTtl;
     private final FailureWindow rejected = FailureWindow.create();
     private final FailureWindow malformed = FailureWindow.create();
+
+    /** 주소만 어긋난 경우. 보고 자체는 살므로 위 창과 따로 센다. */
+    private final FailureWindow addressMalformed = FailureWindow.create();
     private final FailureWindow badPolicy = FailureWindow.create();
     private final FailureWindow publishTrim = FailureWindow.create();
 
@@ -235,9 +238,17 @@ public final class AllocationRedisPort implements SnapshotSource {
             // 들고 라우팅 후보에서만 빠진다 — 버리면 그 몫만큼 전역 크레딧이
             // 조용히 줄어, 계약을 아직 안 따르는 판올림 구간에 전체가 조여진다.
             JsonNode addr = node.get("addr");
-            return new CapacityReport(instanceId, credits.longValue(), ts.longValue(),
-                    addr == null || !addr.isTextual()
-                            ? null : InstanceAddress.parse(addr.asText()).orElse(null));
+            InstanceAddress parsed = addr == null || !addr.isTextual()
+                    ? null : InstanceAddress.parse(addr.asText()).orElse(null);
+            // **모양이 어긋난 것만 남긴다.** 아예 없는 것은 계약을 아직 안 따르는
+            // 판올림 구간의 정상 상태라 시끄럽게 하면 안 되고, 있는데 못 읽는 것은
+            // 계약 위반이라 사람이 봐야 한다 — 안 남기면 그 대가 영영 라우팅에서
+            // 빠진 채로 아무도 모른다.
+            if (parsed == null && addr != null && addr.isTextual() && addressMalformed.entered()) {
+                log.warn("가용량 보고의 주소가 모양에 안 맞는다 — {}. 이 인스턴스는 "
+                        + "크레딧에는 들지만 라우팅 후보에서 빠진다", instanceId);
+            }
+            return new CapacityReport(instanceId, credits.longValue(), ts.longValue(), parsed);
         } catch (JacksonException e) {
             return drop(instanceId, e.getMessage(), dropped);
         }

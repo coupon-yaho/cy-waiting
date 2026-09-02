@@ -54,6 +54,11 @@ jobs:
           chmod +x test/load/*.sh
           test/load/gate-selftest.sh
 
+      # **이 판정 하나가 Phase 10 을 열고 닫는다.** 늘 "보류" 를 내면 샤딩이
+      # 필요한 판에서도 안 열리고, 늘 "착수" 를 내면 필요 없는 판을 연다.
+      - name: 샤딩 착수 판정 자기검증
+        run: test/load/shard-gate-selftest.sh
+
       # 리포트가 "4개 시나리오" 라고 적은 채 여덟 개를 돌고 있었다. 사본이
       # 생기면 갈라지고, 갈라진 쪽을 보는 사람은 안 돈 것을 돌았다고 읽는다.
       - name: nightly 시나리오 수가 리포트와 맞는가

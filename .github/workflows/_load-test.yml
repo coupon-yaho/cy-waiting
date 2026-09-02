@@ -110,8 +110,21 @@ jobs:
           # Phase 10 착수를 판정하면 안 된다.
           if [[ "$SCENARIO" == "open-spike" ]]; then
             export SPIKE_USERS="${SPIKE_USERS:-20000}"
+            # **레디스가 얼마나 바빴는지를 같이 잰다** (10.0.2). 응답만 보면
+            # 게이트웨이가 빨리 답해도 레디스가 한계에 닿아 있는 판을 못 본다 —
+            # Phase 10 착수를 정하는 것은 그쪽 수치다.
+            test/load/redis-probe.sh redis-ops.txt &
+            probe_pid=$!
           fi
           k6 run --summary-export=k6-summary.json "test/load/$SCENARIO.js"
+          rc=$?
+          if [[ -n "${probe_pid:-}" ]]; then
+            kill "$probe_pid" 2>/dev/null || true
+            # 느린 명령이 있었는지도 남긴다 (10.0.4). 판정에는 안 쓰고 기록만 한다.
+            docker compose -f test/load/compose.yml exec -T redis \
+                redis-cli SLOWLOG GET 25 > redis-slowlog.txt 2>&1 || true
+          fi
+          exit $rc
 
       # 게이트 판정은 k6 threshold 가 아니라 계획서 기준으로 한다 (6.6.6)
       - name: 게이트 기준 대조
@@ -164,6 +177,19 @@ jobs:
           echo "::error title=부하 시험::${{ inputs.scenario }} 기준 미달 — ${{ steps.evaluate.outputs.summary }}"
           exit 1
 
+      # **판정에 안 쓰고 기록만 한다.** 여기서 막으면 Phase 10 착수 판단이
+      # 야간 잡의 통과 조건이 되는데, 그 판단은 사람이 값을 보고 하는 일이다.
+      - name: 샤딩 착수 판정 기록
+        if: always() && inputs.scenario == 'open-spike'
+        continue-on-error: true
+        run: |
+          if [[ -s redis-ops.txt ]]; then
+            test/load/evaluate-shard-gate.sh redis-ops.txt k6-summary.json \
+                | tee /tmp/shard-gate.txt
+          else
+            echo "::notice title=샤딩 착수 판정::ops 표본이 없다 — 프로브가 안 돌았다"
+          fi
+
       - name: compose 로그 수집
         if: always() && steps.probe.outputs.ready == 'true'
         run: docker compose -f test/load/compose.yml logs --tail=200 || true
@@ -172,5 +198,10 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: load-${{ inputs.scenario }}
-          path: k6-summary.json
+          # **레디스 쪽 값도 같이 남긴다.** Phase 10 착수는 응답이 아니라 이
+          # 수치가 정한다 — 나중에 다시 재려면 판이 같아야 한다.
+          path: |
+            k6-summary.json
+            redis-ops.txt
+            redis-slowlog.txt
           retention-days: 7      # 수 KB JSON. 추세는 Confluence 리포트에 남는다

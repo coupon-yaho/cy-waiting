@@ -78,6 +78,14 @@ class CircuitAndSpikeScenarioTest {
      */
     private static final String 한산한_쿠폰 = "x3-idle";
 
+    /**
+     * 반쯤 열린 구간 전용 한산 쿠폰. <b>손이 안 닿은 것이라야 한다.</b>
+     *
+     * <p>유지 구간에서 이미 줄을 세운 쿠폰으로 재면 그 흔적(붐빔 래치·초당 예산)이
+     * 남아, 서킷이 세운 것과 다른 사다리가 세운 것을 구분할 수 없다.
+     */
+    private static final String 반쯤열림_쿠폰 = "x3-idle-half";
+
     /** 뒷단이 멎었는가. 이 스위치로 장애를 넣고 걷는다. */
     private static final AtomicBoolean 멎었다 = new AtomicBoolean();
 
@@ -168,7 +176,8 @@ class CircuitAndSpikeScenarioTest {
             return () -> Mono.fromSupplier(() -> SnapshotCodec.create().encode(
                     new GatewaySnapshot(
                             Map.of(COUPON, CouponStates.queueing(크레딧, 재고, 줄_선_사람),
-                                    한산한_쿠폰, CouponStates.idle(재고)),
+                                    한산한_쿠폰, CouponStates.idle(재고),
+                                    반쯤열림_쿠폰, CouponStates.idle(재고)),
                             new SnapshotMeta(크레딧, 1), clock.instant()),
                     CreditSmoother.Snapshot.empty(), QueueingHysteresis.Snapshot.empty()));
         }
@@ -354,15 +363,14 @@ class CircuitAndSpikeScenarioTest {
                     // 다시 무너진다. 판정 규칙은 반쯤 열림을 열림과 똑같이 다루므로
                     // 토큰 없는 신규는 여전히 줄로 가야 한다.
                     //
-                    // **무는 범위를 실측했다.** 서킷 갈래를 통째로 들어내면 이
-                    // 배치가 200 을 받고 뒷단까지 간다 — 그건 잡는다. 다만 갈래에서
-                    // 반쯤 열림만 빼는 좁은 뮤턴트는 살아남는다. 그 경우에도 다른
-                    // 사다리가 줄에 세워, 서킷이 세운 것과 구분이 안 된다.
+                    // **손이 안 닿은 쿠폰으로 잰다.** 유지 구간에서 이미 줄을 세운
+                    // 쿠폰을 다시 쓰면 그 흔적이 남아 다른 사다리가 먼저 문다 —
+                    // 실제로 그렇게 재다가 반쯤 열림만 도려낸 뮤턴트가 살아남았다.
                     반쯤_열릴_때까지_기다린다();
                     다음_초를_기다린다();
-                    long 반쯤_한산_전 = 뒷단.받은_수(한산한_쿠폰);
-                    반쯤열림_무토큰_상태.addAll(여러_번_시도한다(한산한_쿠폰, 3, 4_500));
-                    반쯤열림_한산_도착[0] = 뒷단.받은_수(한산한_쿠폰) - 반쯤_한산_전;
+                    long 반쯤_한산_전 = 뒷단.받은_수(반쯤열림_쿠폰);
+                    반쯤열림_무토큰_상태.addAll(여러_번_시도한다(반쯤열림_쿠폰, 1, 4_500));
+                    반쯤열림_한산_도착[0] = 뒷단.받은_수(반쯤열림_쿠폰) - 반쯤_한산_전;
 
                     닫힐_때까지_기다린다();
                     다음_초를_기다린다();

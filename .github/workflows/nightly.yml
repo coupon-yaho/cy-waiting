@@ -126,9 +126,13 @@ jobs:
       pull-requests: write
 
   # 취소를 통과로 세지 않기 위해 별도 잡으로 뺐다. 규칙은 verdict 액션에 있다.
+  #
+  # **빌드와 계획도 넣는다.** 아래 셋이 다 `needs: build` 라, 빌드가 깨지면 그
+  # 셋이 통째로 skipped 가 되고 `security` 만 남는다 — JAR 을 한 번도 못 만든
+  # 밤에 "이상 없음" 이 나간다. 실제로 그렇게 돼 있었다.
   verdict:
     name: 판정
-    needs: [test, load, waste, security]
+    needs: [plan, build, test, load, waste, security]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -145,7 +149,7 @@ jobs:
           results: ${{ join(needs.*.result, ' ') }}
 
   report:
-    needs: [test, load, waste, security, verdict]
+    needs: [plan, build, test, load, waste, security, verdict]
     if: ${{ !cancelled() }}
     uses: ./.github/workflows/_report.yml
     with:
@@ -154,6 +158,8 @@ jobs:
       summary: |
         전 계층 테스트 · 9개 부하 시나리오 · 크레딧 낭비(G7.5) · CVE 전체 스캔
       fields: |
+        계획=${{ needs.plan.result }}
+        빌드=${{ needs.build.result }}
         테스트=${{ needs.test.result }}
         부하=${{ needs.load.result }}
         크레딧 낭비=${{ needs.waste.result }}
@@ -164,6 +170,8 @@ jobs:
         <p>최근 실행: <code>${{ github.sha }}</code></p>
         <table>
           <tr><th>항목</th><th>결과</th></tr>
+          <tr><td>계획</td><td>${{ needs.plan.result }}</td></tr>
+          <tr><td>빌드</td><td>${{ needs.build.result }}</td></tr>
           <tr><td>테스트 (전 계층)</td><td>${{ needs.test.result }}</td></tr>
           <tr><td>부하 (9 시나리오)</td><td>${{ needs.load.result }}</td></tr>
           <tr><td>크레딧 낭비 (G7.5)</td><td>${{ needs.waste.result }}</td></tr>

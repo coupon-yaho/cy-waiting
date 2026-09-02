@@ -638,7 +638,7 @@ public final class AllocationRound {
      */
     private Mono<Void> publishRound(List<CouponDemand> collected, Map<String, Long> granted,
             long credit, Instant readAt, CreditSmoother current) {
-        PollBudget budget = pollBudget(collected, granted, credit);
+        PollBudgetPlanner.Scale budget = pollBudget(collected, granted, credit);
         // **판마다 한 번 센다.** 상태를 만드는 자리에서 세면 정리·청소·발행이
         // 같은 판을 세 번 훑어 셋으로 부푼다.
         long unknown = collected.stream().filter(d -> !d.stockKnown()).count();
@@ -658,24 +658,18 @@ public final class AllocationRound {
                 });
     }
 
-    /** 이번 틱의 폴링 예산과 그 결과. <b>순수하다</b> — 세는 것은 발행 뒤다. */
-    private record PollBudget(double expected, double budget, double scale, int nodes) {
-    }
-
     /**
      * 이번 틱의 전역 폴링 배수.
      *
      * <p>예산은 도메인이 소유한다 — 밴드도 하한도 거기 있는데 예산만 제어
      * 평면에 두면, 운영자가 실제로 만질 유일한 숫자만 시험이 안 닿는 곳에 남는다.
      */
-    private PollBudget pollBudget(List<CouponDemand> collected, Map<String, Long> granted,
-            long credit) {
-        int nodes = meta(credit, null).effectiveGatewayCount();
-        double expected = PollBudgetPlanner.expectedPollRps(collected,
+    private PollBudgetPlanner.Scale pollBudget(List<CouponDemand> collected,
+            Map<String, Long> granted, long credit) {
+        // **조립은 도메인이 쥔다.** 여기서 다시 조립하면 분모를 바꾸는 날 시나리오와
+        // 갈라져, 낡은 값을 초록으로 단언하는 시험이 남는다.
+        return PollBudgetPlanner.scaleFor(meta(credit, null), collected,
                 couponId -> granted.getOrDefault(couponId, 0L));
-        double budget = PollBudgetPlanner.budgetRps(nodes);
-        return new PollBudget(expected, budget,
-                PollBudgetPlanner.pollScale(expected, budget), nodes);
     }
 
     /**
@@ -684,7 +678,7 @@ public final class AllocationRound {
      * <p>전 대기자의 다음 폴링이 한꺼번에 늘어나는데, 남기지 않으면 운영자
      * 눈에는 원인 없이 폴링이 뜸해진 것으로만 보인다.
      */
-    private void watchPollBudget(PollBudget round) {
+    private void watchPollBudget(PollBudgetPlanner.Scale round) {
         double scale = round.scale();
         if (scale <= 1.0) {
             pollOvershoot.exited().ifPresent(r -> log.info(

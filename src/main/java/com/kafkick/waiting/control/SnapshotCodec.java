@@ -49,7 +49,7 @@ public final class SnapshotCodec {
     /**
      * 전역 폴링 배수.
      *
-     * <p>쿠폰 항목이 아니라 전역 항목이다 — 판 전체를 보고 나온 값 하나라,
+     * <p>쿠폰 항목이 아니라 전역 항목이다 — 스냅샷 전체를 보고 나온 값 하나라,
      * 쿠폰별로 실으면 그 쿠폰이 빠질 때 배수도 같이 사라진다.
      */
     private static final String POLL_SCALE = "#pollScale";
@@ -72,7 +72,7 @@ public final class SnapshotCodec {
      * 라우팅에 쓸 뒷단 목록. {@code id|host:port|credits} 를 쉼표로 잇는다.
      *
      * <p><b>없으면 없는 것으로 본다</b> (E-12). 옛 리더는 이 자리를 안 싣고,
-     * 그 판에서는 라우팅이 단일 주소로 돌아간다.
+     * 그 구간에는 라우팅이 단일 주소로 돌아간다.
      */
     private static final String INSTANCES = "#instances";
 
@@ -99,7 +99,7 @@ public final class SnapshotCodec {
     //
     // **있는 것이 곧 미상이다** — 값은 계약이 아니다. 그리고 쿠폰 값과 이
     // 표시는 **같은 키에 같은 읽기로** 와야 한다. 스냅샷을 쪼개거나 부분
-    // 읽기로 바꾸면 표시만 잃는 판이 생기고, 그 쿠폰은 재고 자리의 0 때문에
+    // 읽기로 바꾸면 표시만 잃는 쿠폰이 생기고, 그 쿠폰은 재고 자리의 0 때문에
     // 거짓 매진이 된다 — 해제 가드도 그 방향은 못 막는다 (10 절 참조).
     public static final String STOCK_UNKNOWN_FIELD = "#u:";
 
@@ -109,7 +109,7 @@ public final class SnapshotCodec {
     private SnapshotCodec() {
     }
 
-    /** 상태가 없지만 인스턴스다 — 판이 늘면 여기 필드가 생긴다 (JS-13). */
+    /** 상태가 없지만 인스턴스다 — 인스턴스가 늘면 여기 필드가 생긴다 (JS-13). */
     public static SnapshotCodec create() {
         return new SnapshotCodec();
     }
@@ -216,7 +216,7 @@ public final class SnapshotCodec {
                 return;   // 전역값이다. 쿠폰으로 세면 없는 쿠폰이 매진으로 보인다
             }
             // **안 실려 왔으면 아는 것으로 본다.** 옛 리더는 이 자리를 안 싣고
-            // 미상을 0 으로 접어 보낸다. 그 판을 미상으로 읽으면 그 리더가
+            // 미상을 0 으로 접어 보낸다. 그 회차를 미상으로 읽으면 그 리더가
             // 말한 매진이 전부 무시된다.
             CouponState state = toCouponState(raw, hash.containsKey(STOCK_UNKNOWN_FIELD + field));
             if (state != null) {

@@ -75,13 +75,13 @@ jobs:
         env:
           SCENARIO: ${{ inputs.scenario }}
         run: |
-          # **계약이 안 선 상태를 재는 판은 스텁의 선언을 끈다.** 늘 붙이면
+          # **계약이 안 선 상태를 재는 버전은 스텁의 선언을 끈다.** 늘 붙이면
           # 하네스가 그 상태를 한 번도 안 지나고, 그러면 "발급 계층이 안 붙이면
           # 어떻게 되는가" 를 아무도 못 본다.
           if [[ "$SCENARIO" == "no-shared-marker" ]]; then
             export SHARED_HEADER=false
           fi
-          # **판을 박지 않는다.** 산출물 이름이 판을 따라가므로 박아 두면 판을
+          # **버전을 박지 않는다.** 산출물 이름이 버전을 따라가므로 박아 두면 버전을
           # 올릴 때마다 여기서 컨테이너 빌드가 깨진다 — 실제로 v0.4.1 에서 그랬다.
           # `-plain` 과 `-test-fixtures` 는 실행 JAR 이 아니다. 실행 JAR 만
           # 분류자가 없다.
@@ -158,10 +158,20 @@ jobs:
 
       # k6 에 continue-on-error 가 걸려 있어 스텝만으로는 잡이 안 죽는다.
       # 여기서 닫지 않으면 부하가 깨져도 잡이 초록이다.
+      # **셸에 보간하지 않는다.** `scenario` 는 workflow_dispatch 입력에서
+      # 매트릭스를 타고 오는 값이라 우리가 정한 것이 아니다. env 로 넘기고
+      # 인용해 쓴다 — 저장소에서 신뢰할 수 없는 입력이 셸에 닿는 유일한 자리다.
       - name: 판정 반영
         if: steps.evaluate.outputs.passed == 'false'
+        env:
+          SCENARIO: ${{ inputs.scenario }}
+          SUMMARY: ${{ steps.evaluate.outputs.summary }}
         run: |
-          echo "::error title=부하 시험::${{ inputs.scenario }} 기준 미달 — ${{ steps.evaluate.outputs.summary }}"
+          # **워크플로 명령 줄에 안 싣는다.** 개행이나 `%` 가 섞이면 그 값이
+          # 명령으로 읽혀 다음 줄을 만들어 낸다. 사람이 읽을 값은 평범한
+          # 출력으로 내고, 주석은 고정 문구만 쓴다.
+          printf '부하 시험 기준 미달 — %s: %s\n' "$SCENARIO" "$SUMMARY"
+          echo "::error title=부하 시험::기준 미달 — 위 로그를 본다"
           exit 1
 
       - name: compose 로그 수집

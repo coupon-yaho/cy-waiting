@@ -6,7 +6,7 @@ import java.nio.charset.StandardCharsets;
  * 큐 샤드를 정한다. <b>반드시 sticky 여야 한다</b> (E-7).
  *
  * <p>같은 사람이 틱마다 다른 큐에 서면 순위가 앞뒤로 튀고 불변식 3(순번 역행 0)이
- * 깨진다. 그래서 {@code String.hashCode()} 를 쓰지 않는다 — 판이 바뀌면 값이
+ * 깨진다. 그래서 {@code String.hashCode()} 를 쓰지 않는다 — 자바 버전이 바뀌면 값이
  * 달라질 수 있고, 그 순간 전원이 다른 샤드로 옮겨 간다.
  */
 public final class ShardHash {

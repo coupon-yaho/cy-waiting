@@ -44,7 +44,7 @@ public final class RecoveryCriteria {
             throw new IllegalArgumentException("재고는 0 이상이어야 한다: %d".formatted(stock));
         }
         // **음수는 관측이 아니다.** 재고보다 작다는 이유로 통과시키면 세다가
-        // 깨진 판이 "초과 발급 0" 으로 기록된다.
+        // 깨진 실행이 "초과 발급 0" 으로 기록된다.
         if (issued < 0) {
             return Optional.of("RC1 발급 수를 못 쟀다: %d".formatted(issued));
         }
@@ -82,7 +82,7 @@ public final class RecoveryCriteria {
             return Optional.of("RC3 판정 분포가 끝내 안 돌아왔다");
         }
         // 음수 경과는 측정이 깨진 것이다. 한계보다 작다고 통과시키면 못 잰
-        // 판이 "빨리 돌아왔다" 로 기록된다.
+        // 실행이 "빨리 돌아왔다" 로 기록된다.
         if (returnedAfter.isNegative()) {
             return Optional.of("RC3 복귀 시간을 못 쟀다: %s".formatted(returnedAfter));
         }
@@ -113,8 +113,8 @@ public final class RecoveryCriteria {
             return Optional.of("RC4 회복 구간 RPS 를 못 쟀다: %s".formatted(peakRps));
         }
         // **0 은 버스트가 없는 것이 아니라 뒷단이 하나도 못 받은 것이다.**
-        // 나눗셈만 두면 0 이 가장 조용히 통과한다 — 아직 안 돌아온 판이
-        // 가장 잘 돌아온 판으로 읽힌다.
+        // 나눗셈만 두면 0 이 가장 조용히 통과한다 — 아직 안 돌아온 실행이
+        // 가장 잘 돌아온 실행으로 읽힌다.
         if (peakRps == 0) {
             return Optional.of("RC4 회복 구간에 뒷단이 하나도 안 받았다");
         }

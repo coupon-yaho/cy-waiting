@@ -19,7 +19,7 @@ BASE_URL="${BASE_URL:-http://localhost:18080}"
 export BASE_URL
 
 # **줄 키를 비우고 시작한다.** 앞선 실행이 남긴 원소가 있으면 이번 판정이
-# 지난 판을 잰다.
+# 지난 실행을 잰다.
 $REDIS_CLI DEL 'queue:{c1}' 'queue:{c2}' >/dev/null 2>&1
 
 echo "== 경합 쿠폰(c2)에 부하를 넣는 동안 한산 쿠폰(c1)을 잰다 =="

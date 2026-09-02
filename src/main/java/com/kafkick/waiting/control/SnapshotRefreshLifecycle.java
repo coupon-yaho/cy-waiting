@@ -47,7 +47,7 @@ public final class SnapshotRefreshLifecycle
     private final Duration interval;
 
     /**
-     * 판을 도는 스케줄러를 만든다.
+     * 회차를 도는 스케줄러를 만든다.
      *
      * <p><b>안에서 만들면 시험이 가상 시계를 못 넣는다</b> — 관용치로 흔들림을
      * 덮은 시험이 남는다 (TS-4).
@@ -134,7 +134,7 @@ public final class SnapshotRefreshLifecycle
         // 그 일은 드레인이 끝난 뒤 GatewayHeartbeatLoop 가 한다 (6.4.4).
         drainWait.beforeDrain();
         // **빠졌는지까지 남긴다.** 안 남기면 오케스트레이터가 진행 중인 요청째
-        // 죽인 판과 곱게 빠진 판이 로그에서 같다 — 롤링 배포마다 사용자가 오류를
+        // 죽인 것과 곱게 빠진 것이 로그에서 같다 — 롤링 배포마다 사용자가 오류를
         // 보는데 그 사실이 어디에도 안 드러난다.
         if (drainOutcome != null) {
             drainOutcome.await();

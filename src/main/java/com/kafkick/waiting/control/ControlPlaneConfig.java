@@ -30,13 +30,10 @@ import reactor.core.scheduler.Schedulers;
         matchIfMissing = true)
 public class ControlPlaneConfig {
 
-    /** 평활화 계수. 클수록 최근 값을 빨리 따라간다. */
-    private static final double SMOOTHING_ALPHA = 0.3;
-
     /** 이탈 기록 보관. <b>등록도 같은 값을 읽는다</b> — 갈리면 판정이 갈린다. */
     private static final long GRACE_SEC = GraceRetention.SECONDS;
 
-    /** 한 판이 지우는 상한. 스크립트가 `unpack` 한계로 더 좁힌다. */
+    /** 한 회차가 지우는 상한. 스크립트가 `unpack` 한계로 더 좁힌다. */
     private static final int SWEEP_BUDGET = 1_000;
 
     @Bean
@@ -76,7 +73,7 @@ public class ControlPlaneConfig {
                 capacity::lastKnown,
                 registry::count, port::apply, port::publish, Instant::now,
                 () -> port.load().map(hash ->
-                        CreditSmoother.restore(SMOOTHING_ALPHA, codec.smoothing(hash))),
+                        CreditSmoother.restore(CreditSmoother.DEFAULT_ALPHA, codec.smoothing(hash))),
                 codec, capacity::lastFloor, tunables::current,
                 // **유예를 값으로 정한다** (7.3.2). 스냅샷 낡음 한계보다 충분히
                 // 커야 마지막 폴링이 줄을 안 잃는다.
@@ -85,7 +82,7 @@ public class ControlPlaneConfig {
                 // 재고 미상과 0 을 가르고(CY-702), 지우기 직전에 재고를 다시
                 // 보고(CY-765), 옛 리더의 명령을 울타리가 거른다(CY-766).
                 //
-                // **판 번호를 그때그때 읽는다.** 붙잡아 두면 강등된 뒤에도 옛
+                // **회차 번호를 그때그때 읽는다.** 붙잡아 두면 강등된 뒤에도 옛
                 // 번호로 나가고, 그건 울타리를 우회하는 일이다. 리더가 아니면
                 // 0 이 나가고 스크립트가 전부 거절한다 — 안전한 방향이다.
                 ids -> port.dropSoldOutQueues(ids, leadership.fence()),
@@ -101,8 +98,8 @@ public class ControlPlaneConfig {
                 // 돌고, 그 몫은 이미 넘어진 뒷단으로 간다. 하트비트가 노드마다
                 // 실어 온 것을 등록부가 다수결로 접어 둔다.
                 //
-                // **판마다 한 번 읽는다.** 한 판에서 두 번 읽으면 그 사이에
-                // 상태가 뒤집혀 같은 판이 자기모순인 값 둘로 판단한다.
+                // **회차마다 한 번 읽는다.** 한 회차에서 두 번 읽으면 그 사이에
+                // 상태가 뒤집혀 같은 회차가 자기모순인 값 둘로 판단한다.
                 registry::circuit,
                 // **라우팅 목록도 같이 싣는다** (Phase 9). 보고는 리더만 읽으므로,
                 // 요청 경로가 레디스를 안 치려면(불변식 1) 이 길밖에 없다.
@@ -143,7 +140,7 @@ public class ControlPlaneConfig {
      */
     /**
      * 재료 읽기. <b>배분 예산의 1/4 만 쓴다</b> — 한 예산을 나눠 쓰면 읽기가 느릴 때
-     * 판이 통째로 안 끝나고, 임계가 안 올라가 큐가 자라 다음 판이 더 무거워진다.
+     * 회차가 통째로 안 끝나고, 임계가 안 올라가 큐가 자라 다음 회차가 더 무거워진다.
      */
     @Bean
     CapacityRefresh capacityRefresh(AllocationRedisPort port, CapacityCollector capacity,
@@ -166,14 +163,14 @@ public class ControlPlaneConfig {
     }
 
     /**
-     * 운영 값 읽기. <b>배분 판 밖이다</b> — 판 안에서 읽으면 발행이 그 왕복에
+     * 운영 값 읽기. <b>배분 회차 밖이다</b> — 회차 안에서 읽으면 발행이 그 왕복에
      * 매달려, 레디스가 조금 느려지는 것만으로 스냅샷이 아예 안 나간다.
      */
     @Bean
     TunablesRefresh tunablesRefresh(AllocationRedisPort port, SnapshotHolder holder,
             ControlPlaneProperties properties, Scheduler allocationScheduler,
             MeterRegistry meters) {
-        // **승계 첫 판이 위험하다.** 새 리더의 캐시는 비어 있는데 그 상태로
+        // **승계 첫 회차가 위험하다.** 새 리더의 캐시는 비어 있는데 그 상태로
         // 발행하면 앞 리더가 싣던 값이 지워진다 — 재료에 있던 것을 이어 싣는다.
         TunablesRefresh refresh = TunablesRefresh.of(port::readTunables,
                 () -> Optional.ofNullable(holder.current().meta().tunables()),
@@ -216,8 +213,8 @@ public class ControlPlaneConfig {
         return () -> {
             collector.leadershipAcquired();
             capacity.leadershipChanged();
-            // **평활화 이월도 여기서 버린다** (F9 · CY-859). 판 안에서 버리려
-            // 하면 그 판은 리더일 때만 도므로 비리더 구간을 한 번도 못 본다 —
+            // **평활화 이월도 여기서 버린다** (F9 · CY-859). 회차 안에서 버리려
+            // 하면 그 회차는 리더일 때만 도므로 비리더 구간을 한 번도 못 본다 —
             // 되찾은 노드가 남이 움직인 값을 못 보고 옛 값을 이어 쓴다.
             round.leadershipAcquired();
             // **매진 유예를 처음부터 준다.** 얼어 있던 셈을 이어 쓰면 유예가
@@ -240,7 +237,7 @@ public class ControlPlaneConfig {
         return AllocationScheduler.of(properties.scheduler().tick(),
                 properties.scheduler().firstTickDelay(),
                 // **승계는 유예를 처음부터 준다.** 비리더 구간에 얼어 있던 실패
-                // 횟수를 이어 쓰면 재승계 첫 판이 곧바로 크레딧을 깎는다.
+                // 횟수를 이어 쓰면 재승계 첫 회차가 곧바로 크레딧을 깎는다.
                 LeadershipEdge.of(leadership::isLeader,
                         onLeadershipGained(collector, capacity, cleanup, sweeper, round),
                         capacity::leadershipChanged),

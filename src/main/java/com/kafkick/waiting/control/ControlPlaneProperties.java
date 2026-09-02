@@ -26,8 +26,8 @@ public record ControlPlaneProperties(Scheduler scheduler, Leader leader, Capacit
                     "신선도는 틱보다 길어야 한다: freshness=%s tick=%s"
                             .formatted(capacity.freshness(), scheduler.tick()));
         }
-        // 리스가 한 틱도 못 버티면 판을 도는 도중에 리더십을 잃는다. 그 판의
-        // 배분은 나갔는데 다음 리더도 같은 판을 돌아 두 배가 나간다.
+        // 리스가 한 틱도 못 버티면 회차를 도는 도중에 리더십을 잃는다. 그 회차의
+        // 배분은 나갔는데 다음 리더도 같은 회차를 돌아 두 배가 나간다.
         if (leader.lease().compareTo(scheduler.tick()) <= 0) {
             throw new IllegalArgumentException(
                     "리스는 틱보다 길어야 한다: lease=%s tick=%s"
@@ -86,7 +86,7 @@ public record ControlPlaneProperties(Scheduler scheduler, Leader leader, Capacit
 
     /**
      * @param tick           배분 주기. 완료 후 지연이다
-     * @param firstTickDelay 첫 판을 미루는 시간. 가용량 보고가 모이기를 기다린다
+     * @param firstTickDelay 첫 회차를 미루는 시간. 가용량 보고가 모이기를 기다린다
      * @param shards         큐 샤드 수
      */
     public record Scheduler(Duration tick, Duration firstTickDelay, int shards,
@@ -123,17 +123,17 @@ public record ControlPlaneProperties(Scheduler scheduler, Leader leader, Capacit
     }
 
     /**
-     * 마지막 성공부터 회복하는 판이 끝날 때까지 들어가는 시도의 수.
+     * 마지막 성공부터 회복하는 회차가 끝날 때까지 들어가는 시도의 수.
      *
-     * <p>세 번 놓쳐도 락을 안 잃으려면 그 뒤에 오는 회복 판까지 리스 안에 들어와야
+     * <p>세 번 놓쳐도 락을 안 잃으려면 그 뒤에 오는 회복 회차까지 리스 안에 들어와야
      * 한다. 세 번째 실패가 끝나는 시점에서 끊으면 지연 하나와 시도 하나가 빠진다.
      */
     private static final int ATTEMPTS = 4;
 
     /**
      * @param lease      리더 락 수명
-     * @param attempt    연장 한 판의 상한. 멈춤을 오류로 바꾼다
-     * @param renewDelay 판이 끝난 뒤 다음 판까지의 지연
+     * @param attempt    연장 한 회차의 상한. 멈춤을 오류로 바꾼다
+     * @param renewDelay 회차가 끝난 뒤 다음 회차까지의 지연
      */
     public record Leader(Duration lease, Duration attempt, Duration renewDelay) {
 

@@ -8,6 +8,12 @@ package com.kafkick.waiting.domain.allocation;
  */
 public class CreditSmoother {
 
+    /**
+     * 배선이 쓰는 계수. <b>한 곳에 둔다</b> — 제어 평면 두 자리에 같은 수를 적어
+     * 두었더니 한쪽만 고칠 수 있는 상태였다.
+     */
+    public static final double DEFAULT_ALPHA = 0.3;
+
     private final double alpha;
 
     private double value;

@@ -32,7 +32,7 @@ class Phase6GateTest {
     private static final Path TESTS = Path.of("src/test/java");
 
     /**
-     * 부하 판이 재는 게이트. 짝을 안 요구하고 목록에 있다는 것만 본다.
+     * 부하 실행이 재는 게이트. 짝을 안 요구하고 목록에 있다는 것만 본다.
      *
      * <p>판정은 {@code test/load/evaluate-gate.sh} 가 하고, 그 판정이 헐거워지지
      * 않았는지는 {@code gate-selftest.sh} 가 본다.
@@ -76,7 +76,7 @@ class Phase6GateTest {
                     "GatewayRoutesTest#응답_상한이_없으면_기동을_막는다",
                     "GatewayRoutesTest#응답_상한이_격벽_시한_뒤면_기동을_막는다",
                     "GatewayWiringTest#격벽_시한은_뒷단_응답_상한보다_뒤다",
-                    // **값 검증만 이으면 상한이 라우트에 안 실린 판이 통과한다.**
+                    // **값 검증만 이으면 상한이 라우트에 안 실린 경우가 통과한다.**
                     "GatewayRoutesTest#발급_라우트가_응답_상한을_들고_있다",
                     "GatewayRoutesTest#조회_라우트도_응답_상한을_들고_있다")),
             Map.entry("G6.4", List.of(

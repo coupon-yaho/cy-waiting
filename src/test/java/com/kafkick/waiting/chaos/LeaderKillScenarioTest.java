@@ -25,6 +25,7 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.http.HttpStatus;
@@ -49,6 +50,10 @@ import reactor.netty.http.server.HttpServer;
 // 그래서 재는 것은 **리더가 없는 동안의 판정**이고, 회복도 승계가 아니라 같은
 // 노드의 재획득이다. 진짜 승계는 노드 둘짜리 하네스가 있어야 한다.
 @Tag("chaos")
+// **컨텍스트를 캐시에 남기지 않는다.** 스케줄러를 켜고 띄우므로 제어 평면 루프가
+// 계속 도는데, 뒷정리가 자원을 내린 뒤에도 캐시된 컨텍스트는 살아 있다 — 그 루프가
+// 사라진 자원을 치면서 뒤 시험을 흔든다.
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = "waiting.scheduler.enabled=true")
 class LeaderKillScenarioTest {
@@ -60,7 +65,7 @@ class LeaderKillScenarioTest {
      *
      * <p>낡음 중에 이쪽이 계속 통과해야 fail-open 이 실제로 열린 것이고,
      * 그래야 저쪽이 안 통과한 것이 "추월을 안 했다" 는 뜻이 된다. 이게 없으면
-     * 둘 다 막힌 판과 구분이 안 간다.
+     * 둘 다 막힌 경우와 구분이 안 간다.
      */
     private static final String 한산한_쿠폰 = "c4-idle";
 
@@ -238,7 +243,7 @@ class LeaderKillScenarioTest {
         return 자리;
     }
 
-    /** 죽은 리더가 락을 넘겨받는다. 만료와 획득이 한 판이라 앱이 못 끼어든다. */
+    /** 죽은 리더가 락을 넘겨받는다. 만료와 획득이 한 회차라 앱이 못 끼어든다. */
     private void 죽은_리더가_락을_쥔다(LeaderFaults 락) {
         assertThat(락.죽은_리더가_넘겨받는다(죽은_리더, 죽은_리스)).isTrue();
         // **아무것도 안 한다. 그것이 죽음이다** — 갱신도 해제도 없다.

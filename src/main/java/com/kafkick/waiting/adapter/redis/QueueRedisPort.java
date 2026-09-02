@@ -41,7 +41,7 @@ public final class QueueRedisPort implements QueuePort {
      * 바닥값이 사는 시간.
      *
      * <p>큐가 빈 동안의 시계 역행을 막는 값이라 <b>큐보다 오래 살아야 한다.</b>
-     * 하루로 둔다 — 선착순 한 판이 그보다 길면 그건 다른 문제다.
+     * 하루로 둔다 — 선착순 한 회차가 그보다 길면 그건 다른 문제다.
      */
     private static final String MAX_SCORE_TTL_SEC = "86400";
 

@@ -1,9 +1,11 @@
 package com.kafkick.waiting.domain.queue;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.within;
 
 import com.kafkick.waiting.domain.allocation.CouponDemand;
+import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import java.util.List;
 import java.util.Random;
 import org.junit.jupiter.api.DisplayName;
@@ -184,5 +186,99 @@ class PollBudgetPlannerTest {
         // 반올림하면 이 사람이 먼 밴드로 밀려 예산을 과소 추정하고,
         // pollScale 이 안 올라 실제 부하가 예산을 넘는다.
         assertThat(PollBudgetPlanner.expectedPollRps(1, 0.02)).isCloseTo(1.0, within(0.001));
+    }
+
+    /**
+     * <b>조립을 한 자리에 둔 것이 이 메서드다.</b> 예산의 분모가 무엇인지가 여기
+     * 있고, 부르는 쪽이 저마다 조립하면 분모를 바꾸는 날 한쪽만 따라간다.
+     */
+    @Test
+    @DisplayName("재료에서_배수를_조립한다")
+    void 재료에서_배수를_조립한다() {
+        List<CouponDemand> demands = List.of(new CouponDemand("a", 20_000, 40_000));
+
+        PollBudgetPlanner.Scale scale = PollBudgetPlanner.scaleFor(
+                new SnapshotMeta(1_000, 20), demands, id -> 4_000);
+
+        assertThat(scale.nodes()).isEqualTo(20);
+        assertThat(scale.expected()).isCloseTo(20_000, within(0.1));
+        assertThat(scale.budget()).isCloseTo(PollBudgetPlanner.budgetRps(20), within(0.1));
+        assertThat(scale.scale()).isCloseTo(20_000 / PollBudgetPlanner.budgetRps(20),
+                within(0.001));
+    }
+
+    /** 노드 수가 분모다. 절반이면 예산도 절반이고 배수는 두 배다. */
+    @Test
+    @DisplayName("노드가_줄면_배수가_오른다")
+    void 노드가_줄면_배수가_오른다() {
+        List<CouponDemand> demands = List.of(new CouponDemand("a", 20_000, 40_000));
+
+        double 스물 = PollBudgetPlanner.scaleFor(
+                new SnapshotMeta(1_000, 20), demands, id -> 4_000).scale();
+        double 열 = PollBudgetPlanner.scaleFor(
+                new SnapshotMeta(1_000, 10), demands, id -> 4_000).scale();
+
+        assertThat(열).isCloseTo(스물 * 2, within(0.001));
+    }
+
+    /** 노드 수가 0 으로 와도 0 으로 안 나눈다. 방어는 재료가 쥔다. */
+    @Test
+    @DisplayName("노드가_0_이면_하나로_본다")
+    void 노드가_0_이면_하나로_본다() {
+        PollBudgetPlanner.Scale scale = PollBudgetPlanner.scaleFor(
+                new SnapshotMeta(1_000, 0), List.of(new CouponDemand("a", 10, 100)), id -> 1);
+
+        assertThat(scale.nodes()).isEqualTo(1);
+        assertThat(scale.budget()).isCloseTo(PollBudgetPlanner.budgetRps(1), within(0.1));
+    }
+
+    /**
+     * <b>어긋난 조합을 못 만들게 막는다.</b> 표준 생성자가 열려 있으면 배수만
+     * 1 로 박은 {@code Scale} 로 시험이 초록이 된다 — 재는 척하는 픽스처다.
+     */
+    @Test
+    @DisplayName("배수가_예상과_예산에_안_맞으면_거절한다")
+    void 배수가_예상과_예산에_안_맞으면_거절한다() {
+        assertThatThrownBy(() -> new PollBudgetPlanner.Scale(20_000, 4_000, 1.0, 20))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("노드가_0_이하면_거절한다")
+    void 노드가_0_이하면_거절한다() {
+        assertThatThrownBy(() -> new PollBudgetPlanner.Scale(0, 0, 1.0, 0))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("예상이_음수면_거절한다")
+    void 예상이_음수면_거절한다() {
+        assertThatThrownBy(() -> new PollBudgetPlanner.Scale(-1, 4_000, 1.0, 20))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /**
+     * <b>무한대는 음수 검사를 그냥 지나간다.</b> 그 값이 실리면 배수가 무한이
+     * 되어 폴링 간격이 무한이 되고, 대기자가 영영 안 두드린다.
+     */
+    @Test
+    @DisplayName("유한값이_아니면_거절한다")
+    void 유한값이_아니면_거절한다() {
+        assertThatThrownBy(() -> new PollBudgetPlanner.Scale(
+                Double.POSITIVE_INFINITY, 4_000, 1.0, 20))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new PollBudgetPlanner.Scale(
+                20_000, Double.POSITIVE_INFINITY, 1.0, 20))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new PollBudgetPlanner.Scale(
+                0, 0, Double.NaN, 20))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("예산이_음수면_거절한다")
+    void 예산이_음수면_거절한다() {
+        assertThatThrownBy(() -> new PollBudgetPlanner.Scale(0, -1, 1.0, 20))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }

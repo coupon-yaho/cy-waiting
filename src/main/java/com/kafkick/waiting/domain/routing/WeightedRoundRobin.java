@@ -37,7 +37,9 @@ public final class WeightedRoundRobin implements InstanceChooser {
             present.add(c.instanceId());
             if (c.eligible()) {
                 eligible.add(c);
-                total += c.credits();
+                // **넘치면 배분이 뒤집힌다.** 부호가 바뀌면 가장 여유 있는 대가
+                // 가장 안 뽑히는 대가 되고, 그 배포 내내 조용히 그렇게 돈다.
+                total = Math.addExact(total, c.credits());
             }
         }
         credit.keySet().retainAll(present);
@@ -45,16 +47,27 @@ public final class WeightedRoundRobin implements InstanceChooser {
             return Optional.empty();
         }
 
+        // **다 셈한 뒤에 쓴다.** 누적을 그때그때 갱신하면 산술이 중간에 터졌을 때
+        // 앞엣것만 움직인 채로 아무것도 안 고르고 돌아간다 — 다음 호출이 그
+        // 유령 누적으로 고른다. 여기서 터지면 상태는 부른 적 없는 것과 같다.
+        //
+        // **지금은 그 경로를 못 만든다.** 위 합산이 같은 값을 먼저 더하므로,
+        // 누적이 넘칠 값이면 거기서 먼저 터진다. 다만 인스턴스가 드나들면
+        // 누적의 합이 0 이 아니게 되어 조금씩 밀릴 수 있고, 그때는 여기가
+        // 먼저 넘친다 — 그 경우를 시험으로 못 만들어서 방어만 둔다.
+        Map<String, Long> next = new HashMap<>();
         RoutingCandidate chosen = null;
         long leading = Long.MIN_VALUE;
         for (RoutingCandidate c : eligible) {
-            long value = credit.merge(c.instanceId(), c.credits(), Long::sum);
+            long value = Math.addExact(credit.getOrDefault(c.instanceId(), 0L), c.credits());
+            next.put(c.instanceId(), value);
             if (value > leading) {
                 leading = value;
                 chosen = c;
             }
         }
-        credit.merge(chosen.instanceId(), -total, Long::sum);
+        next.put(chosen.instanceId(), Math.subtractExact(leading, total));
+        credit.putAll(next);
         return Optional.of(chosen);
     }
 

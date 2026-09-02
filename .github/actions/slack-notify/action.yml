@@ -62,11 +62,18 @@ runs:
             '. + [{type:"section", text:{type:"mrkdwn", text:$t}}]' <<<"$blocks")
         fi
 
+        # **슬랙은 한 섹션에 필드 10 개까지다.** 잘라 내면 마지막 결과가
+        # 조용히 사라진다 — 그게 하필 실패한 검사면 아무도 못 본다.
+        # 열한 번째부터는 섹션을 하나 더 만든다.
         if [[ -n "$FIELDS" ]]; then
-          f=$(printf '%s\n' "$FIELDS" | grep -v '^[[:space:]]*$' | head -10 \
+          all=$(printf '%s\n' "$FIELDS" | grep -v '^[[:space:]]*$' \
               | jq -Rc '{type:"mrkdwn", text:("*" + (split("=")[0]) + "*\n" + (split("=")[1:] | join("=")))}' \
               | jq -sc .)
-          blocks=$(jq -c --argjson f "$f" '. + [{type:"section", fields:$f}]' <<<"$blocks")
+          n=$(jq 'length' <<<"$all")
+          for ((i = 0; i < n; i += 10)); do
+            f=$(jq -c --argjson i "$i" '.[$i:($i + 10)]' <<<"$all")
+            blocks=$(jq -c --argjson f "$f" '. + [{type:"section", fields:$f}]' <<<"$blocks")
+          done
         fi
 
         if [[ -n "$URL" ]]; then

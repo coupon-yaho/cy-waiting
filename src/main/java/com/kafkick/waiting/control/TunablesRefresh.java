@@ -17,9 +17,9 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
 
 /**
- * 운영자가 적은 값을 <b>배분 판 밖에서</b> 읽습니다 (P-1).
+ * 운영자가 적은 값을 <b>배분 회차 밖에서</b> 읽습니다 (P-1).
  *
- * <p>판 안에서 읽으면 발행이 그 왕복에 매달립니다. 레디스가 500ms 느려지는 것만
+ * <p>회차 안에서 읽으면 발행이 그 왕복에 매달립니다. 레디스가 500ms 느려지는 것만
  * 으로 틱 예산을 넘겨 스냅샷이 아예 안 나가고, 전 노드가 동시에 낡음으로 빠집니다.
  */
 public final class TunablesRefresh {
@@ -37,7 +37,7 @@ public final class TunablesRefresh {
     /**
      * 아직 한 번도 못 읽었을 때 쓸 값.
      *
-     * <p><b>승계 첫 판이 위험합니다.</b> 새 리더의 캐시는 비어 있는데, 그 상태로
+     * <p><b>승계 첫 회차가 위험합니다.</b> 새 리더의 캐시는 비어 있는데, 그 상태로
      * 발행하면 앞 리더가 싣던 값이 통째로 지워집니다 — 운영자가 걸어 둔 조치가
      * 리더 교체만으로 풀립니다.
      */
@@ -113,7 +113,7 @@ public final class TunablesRefresh {
      * 지금 실어 보낼 값.
      *
      * <p><b>한 번도 못 읽었으면 재료에 실려 있던 것을 그대로 이어 싣습니다.</b>
-     * 승계 첫 판에 빈 값을 실으면 앞 리더가 걸어 둔 조치가 지워집니다.
+     * 승계 첫 회차에 빈 값을 실으면 앞 리더가 걸어 둔 조치가 지워집니다.
      */
     public Optional<Tunables> current() {
         return everRead.get() ? applied.get() : seed.get();

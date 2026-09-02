@@ -29,6 +29,15 @@ public final class FakeQueuePort implements QueuePort {
         돌아온_사람.add(memberId);
     }
 
+    /** 등록에서 바닥값이 적용됐는가. 실물은 Lua 가 정하고 여기서는 시험이 정한다. */
+    private boolean 시계가_뒤로_감;
+
+    /** 다음 등록부터 시계 역행을 보고한다 (F2). */
+    public FakeQueuePort 시계가_뒤로_갔다() {
+        시계가_뒤로_감 = true;
+        return this;
+    }
+
     private RuntimeException 터뜨릴_것;
     private boolean 가득_참;
     private boolean 차례가_옴;
@@ -103,7 +112,7 @@ public final class FakeQueuePort implements QueuePort {
         }
         queued.putIfAbsent(memberId, (long) queued.size() + 1);
         return Mono.just(new QueueEntry(QueueState.WAITING, rankOf(couponId, memberId),
-                queued.get(memberId), 있던_사람, false,
+                queued.get(memberId), 있던_사람, 시계가_뒤로_감,
                 // **이미 줄에 선 사람은 기록을 안 본다.** 실물이 그 분기에서
                 // 먼저 돌아가므로, 여기서 소비하면 픽스처가 실제와 달라진다.
                 !있던_사람 && 돌아온_사람.remove(memberId)));

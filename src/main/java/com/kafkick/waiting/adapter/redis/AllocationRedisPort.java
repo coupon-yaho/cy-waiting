@@ -71,12 +71,12 @@ public final class AllocationRedisPort implements SnapshotSource {
     /**
      * 스크립트에 한 번에 넘기는 인자 상한.
      *
-     * <p>루아 스택이 넘치면 그 판이 통째로 실패한다. 쿠폰이 그만큼 많아지면
+     * <p>루아 스택이 넘치면 그 회차가 통째로 실패한다. 쿠폰이 그만큼 많아지면
      * 나눠 실어야 하는데, 그러면 원자성이 깨지므로 <b>그때는 설계를 다시 본다.</b>
      */
     private static final int MAX_PUBLISH_FIELDS = 3_000;
 
-    /** 한 판이 동시에 낼 수 있는 읽기. 무제한이면 한 판이 커넥션을 독점한다. */
+    /** 한 회차가 동시에 낼 수 있는 읽기. 무제한이면 한 회차가 커넥션을 독점한다. */
     private static final int MAX_CONCURRENT_READS = 16;
 
     /**
@@ -104,9 +104,9 @@ public final class AllocationRedisPort implements SnapshotSource {
             RedisScript.of(new ClassPathResource("redis/drop_queue.lua"), Long.class);
 
     /**
-     * 쿠폰별 HSCAN 커서. 매 판 0 에서 시작하면 해시 뒤쪽이 영영 안 걷힌다.
+     * 쿠폰별 HSCAN 커서. 매 회차 0 에서 시작하면 해시 뒤쪽이 영영 안 걷힌다.
      *
-     * <p><b>이번 판에 쓴 쿠폰만 남긴다.</b> 안 그러면 끝난 쿠폰의 항목이 JVM
+     * <p><b>이번 회차에 쓴 쿠폰만 남긴다.</b> 안 그러면 끝난 쿠폰의 항목이 JVM
      * 수명 내내 쌓인다 — 회차가 계속 열리는 제품이라 실제로 자란다.
      */
     private final Map<String, String> sweepCursors = new ConcurrentHashMap<>();
@@ -130,7 +130,7 @@ public final class AllocationRedisPort implements SnapshotSource {
     /** 신선도의 기준 시각. 뒤로 가는 것을 여기서 막는다 (A-9). */
     private final ServerClock serverClock = ServerClock.create();
 
-    /** 마지막으로 성공한 정책 판. 읽기가 실패하면 여기로 되돌아간다. */
+    /** 마지막으로 성공한 정책 회차. 읽기가 실패하면 여기로 되돌아간다. */
     private final AtomicReference<Map<String, QueueMode>> lastModes =
             new AtomicReference<>(Map.of());
 
@@ -178,7 +178,7 @@ public final class AllocationRedisPort implements SnapshotSource {
     /**
      * 뒷단이 스스로 적어 둔 여유를 읽는다.
      *
-     * <p><b>밖에서 쓰는 키라 아무 값이나 들어온다.</b> 깨진 값 하나가 판을 죽이면
+     * <p><b>밖에서 쓰는 키라 아무 값이나 들어온다.</b> 깨진 값 하나가 회차를 죽이면
      * 멀쩡한 인스턴스 몫까지 사라져 전역 크레딧이 하한으로 떨어진다 (4.4.6).
      */
     public Mono<CapacitySample> capacitySample() {
@@ -257,7 +257,7 @@ public final class AllocationRedisPort implements SnapshotSource {
      * 목록에 없는 쿠폰은 보지 않는다. 끝난 쿠폰까지 보면 매 틱 왕복만 늘어난다.
      *
      * <p><b>밖에서 쓰는 키라 아무 값이나 들어온다.</b> 키에 못 쓰는 멤버 하나가
-     * 판을 죽이면 멀쩡한 쿠폰 전부의 배분이 멎는데, 사람이 목록을 고치기 전에는
+     * 회차를 죽이면 멀쩡한 쿠폰 전부의 배분이 멎는데, 사람이 목록을 고치기 전에는
      * 안 풀린다. 그래서 걸러 내되 걸러 냈다는 사실을 남긴다.
      */
     /**
@@ -301,7 +301,7 @@ public final class AllocationRedisPort implements SnapshotSource {
                 .filter(couponId -> usable(couponId, dropped))
                 .sort()
                 .collectList()
-                // 걸러 낼 것이 없어진 판에서 창을 닫는다. 안 닫으면 나중에 다른
+                // 걸러 낼 것이 없어진 회차에서 창을 닫는다. 안 닫으면 나중에 다른
                 // 오염이 들어와도 아무 신호가 안 나온다.
                 .doOnNext(coupons -> {
                     if (!dropped.get()) {
@@ -315,7 +315,7 @@ public final class AllocationRedisPort implements SnapshotSource {
     /**
      * 운영자가 정한 쿠폰별 대기열 정책.
      *
-     * <p><b>밖에서 쓰는 키다.</b> 못 읽는 값이 하나 있다고 판을 죽이면 운영자의
+     * <p><b>밖에서 쓰는 키다.</b> 못 읽는 값이 하나 있다고 회차를 죽이면 운영자의
      * 오타가 전 쿠폰의 배분을 멈춘다. 그 쿠폰만 기본값(적응형)으로 두고 남긴다.
      */
     public Mono<Map<String, QueueMode>> queueModes(List<String> couponIds) {
@@ -344,12 +344,12 @@ public final class AllocationRedisPort implements SnapshotSource {
                                         recovered.elapsedSeconds(), recovered.swallowed()));
                     }
                 })
-                // **물어본 쿠폰만 갱신한다.** 판마다 통째로 갈아치우면, 이번 판에
-                // 안 물어본 쿠폰의 정책이 캐시에서 사라진다 — 그 쿠폰이 다음 판에
+                // **물어본 쿠폰만 갱신한다.** 회차마다 통째로 갈아치우면, 이번 회차에
+                // 안 물어본 쿠폰의 정책이 캐시에서 사라진다 — 그 쿠폰이 다음 회차에
                 // 돌아왔을 때 읽기가 실패하면 ALWAYS 가 조용히 적응형이 된다.
                 .doOnNext(modes -> remember(couponIds, modes))
-                // **정책은 부가 정보다.** 이것 하나 때문에 판이 죽으면 대기 수와
-                // 재고가 멀쩡해도 스냅샷이 안 나간다. 빈 판으로 접으면 전원이
+                // **정책은 부가 정보다.** 이것 하나 때문에 회차가 죽으면 대기 수와
+                // 재고가 멀쩡해도 스냅샷이 안 나간다. 빈 회차로 접으면 전원이
                 // 적응형이 되어 ALWAYS 가 조용히 풀리므로, 직전 값을 다시 쓴다.
                 .onErrorResume(e -> {
                     if (badPolicy.entered()) {
@@ -432,7 +432,7 @@ public final class AllocationRedisPort implements SnapshotSource {
      */
     public Mono<Map<String, Long>> queueSizes(List<String> couponIds) {
         // **쿠폰마다 순서대로 왕복하면 틱이 밀린다.** 결과를 쿠폰으로 짝지으므로
-        // 순서는 아무 뜻이 없다. 다만 무제한으로 풀면 한 판이 커넥션을 독점해
+        // 순서는 아무 뜻이 없다. 다만 무제한으로 풀면 한 회차가 커넥션을 독점해
         // 다른 명령이 뒤로 밀리므로 동시성에 상한을 둔다.
         return Flux.fromIterable(couponIds)
                 .flatMap(couponId -> shardSizes(couponId)
@@ -460,7 +460,7 @@ public final class AllocationRedisPort implements SnapshotSource {
      * 세기 시작한 쿠폰의 줄 옆에 <b>울타리 표만</b> 세운다 (CY-766).
      *
      * <p>표는 지웠을 때만 생기므로 한 번도 안 지운 줄에는 표가 없다. 후보로
-     * 올리는 순간 세워야 그 뒤에 오는 옛 판이 걸린다.
+     * 올리는 순간 세워야 그 뒤에 오는 옛 회차가 걸린다.
      */
     public Mono<List<String>> claimSoldOutQueues(List<String> couponIds, long fence) {
         if (couponIds.isEmpty() || shards != 1) {
@@ -468,7 +468,7 @@ public final class AllocationRedisPort implements SnapshotSource {
         }
         return Flux.fromIterable(couponIds)
                 // **선 것만 돌려준다.** 실패한 것을 확인으로 치면 그 줄은 표
-                // 없이 유예를 보내고, 옛 판이 그대로 지운다.
+                // 없이 유예를 보내고, 옛 회차가 그대로 지운다.
                 .flatMap(id -> runDrop(id, fence, false)
                         .map(ignored -> id)
                         .onErrorResume(e -> Mono.empty()), MAX_CONCURRENT_READS)
@@ -495,7 +495,7 @@ public final class AllocationRedisPort implements SnapshotSource {
                 // 실패해도 전체가 성공으로 보이고, 실패한 것까지 지운 것으로
                 // 표시돼 다음 틱에 다시 안 온다 (7.3.4).
                 // **지운 것만 남긴다.** 살아나서 안 지운 쿠폰까지 돌려주면
-                // 판단이 "지웠다" 로 읽어 다음 판에 다시 안 온다.
+                // 판단이 "지웠다" 로 읽어 다음 회차에 다시 안 온다.
                 .flatMap(id -> dropOne(id, fence)
                         .filter(Boolean::booleanValue)
                         .map(dropped -> id)
@@ -716,7 +716,7 @@ public final class AllocationRedisPort implements SnapshotSource {
      * 버린 사실을 남긴다. <b>발행이 끝난 뒤에만 부른다.</b>
      *
      * <p>앞에서 세면 지표가 "거짓 매진이 된 쿠폰 수" 가 아니라 "버리려고 시도한
-     * 횟수" 가 된다. 같은 판이 매 틱 실패하는 구간에서 그 수가 끝없이 부푼다.
+     * 횟수" 가 된다. 같은 회차가 매 틱 실패하는 구간에서 그 수가 끝없이 부푼다.
      */
     private void watchTrim(int dropped) {
         if (dropped <= 0) {
@@ -733,7 +733,7 @@ public final class AllocationRedisPort implements SnapshotSource {
     /**
      * 버려도 덜 아픈 표시부터. <b>줄이 빈 쿠폰이 먼저다.</b>
      *
-     * <p>줄이 빈 쿠폰의 표시를 잃으면 신규 유입만 거절되고 다음 판이 되돌린다.
+     * <p>줄이 빈 쿠폰의 표시를 잃으면 신규 유입만 거절되고 다음 회차가 되돌린다.
      * 줄이 선 쿠폰의 표시를 잃으면 그 줄이 통째로 종결로 읽힌다.
      */
     private List<String> droppableMarkers(Map<String, String> hash) {

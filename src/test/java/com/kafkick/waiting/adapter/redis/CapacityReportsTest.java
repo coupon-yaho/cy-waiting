@@ -18,7 +18,7 @@ import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 /**
  * 뒷단의 가용량 자기보고 읽기.
  *
- * <p><b>밖에서 쓰는 키라 아무 값이나 들어온다.</b> 한 인스턴스의 깨진 값이 판을
+ * <p><b>밖에서 쓰는 키라 아무 값이나 들어온다.</b> 한 인스턴스의 깨진 값이 회차를
  * 죽이면 멀쩡한 인스턴스의 몫까지 같이 사라지고, 그러면 전역 크레딧이 하한으로
  * 떨어져 대기열이 통째로 켜진다.
  */
@@ -98,8 +98,8 @@ class CapacityReportsTest extends RedisContainerSupport {
     }
 
     @Test
-    @DisplayName("깨진_값_하나가_판을_안_죽인다")
-    void 깨진_값_하나가_판을_안_죽인다() {
+    @DisplayName("깨진_값_하나가_회차를_안_죽인다")
+    void 깨진_값_하나가_회차를_안_죽인다() {
         보고("i1", "{\"credits\":180,\"ts\":1755000000}");
         보고("i2", "이건 JSON 이 아니다");
         // 필드가 빠진 것도 같다 — 없는 값을 0 으로 접으면 그 인스턴스가 죽은 것처럼 보인다.

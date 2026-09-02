@@ -262,6 +262,20 @@ class InFlightRegistryTest {
                     .isInstanceOf(IllegalArgumentException.class);
         }
 
+        /**
+         * <b>밀리초 미만은 0 으로 잘린다.</b>
+         *
+         * <p>양수라고 받아 두면 시작하자마자 회수 대상이 되어 카운터가 늘 0 이고,
+         * 그러면 상한도 부하율도 아무것도 안 막는다.
+         */
+        @Test
+        @DisplayName("수명이_1밀리초_미만이면_거절한다")
+        void 수명이_1밀리초_미만이면_거절한다() {
+            assertThatThrownBy(() -> InFlightRegistry.of(Duration.ofNanos(500_000)))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("1ms");
+        }
+
         @Test
         @DisplayName("수명이_없으면_거절한다")
         void 수명이_없으면_거절한다() {

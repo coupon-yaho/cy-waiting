@@ -24,10 +24,10 @@ public final class SoldOutCleanup {
     /** 이미 지운 쿠폰. <b>지운 것이 확인된 뒤에</b> 들어온다. */
     private final Set<String> deleted = new HashSet<>();
 
-    /** 이번 판에 표를 세워야 하는 쿠폰. 아직 확인 안 된 것만 담긴다. */
+    /** 이번 회차에 표를 세워야 하는 쿠폰. 아직 확인 안 된 것만 담긴다. */
     private final List<String> claimed = new ArrayList<>();
 
-    /** 표가 실제로 선 것이 확인된 쿠폰. 확인될 때까지 매 판 다시 시도한다. */
+    /** 표가 실제로 선 것이 확인된 쿠폰. 확인될 때까지 매 회차 다시 시도한다. */
     private final Set<String> fenced = new HashSet<>();
 
     private final int graceTicks;
@@ -85,8 +85,8 @@ public final class SoldOutCleanup {
             // 때만 생기므로 아직 한 번도 안 지운 줄에는 표가 없다 — 얼었다
             // 깨어난 옛 리더가 그 줄을 지우는 것을 못 막는다.
             //
-            // 첫 판에만 알리면 그 한 번이 실패했을 때 유예 내내 표가 없고,
-            // 매 판 알리면 유예 길이만큼 같은 쓰기를 되풀이한다. 확인될
+            // 첫 회차에만 알리면 그 한 번이 실패했을 때 유예 내내 표가 없고,
+            // 매 회차 알리면 유예 길이만큼 같은 쓰기를 되풀이한다. 확인될
             // 때까지만 알린다.
             if (!fenced.contains(couponId)) {
                 claimed.add(couponId);
@@ -99,10 +99,10 @@ public final class SoldOutCleanup {
     }
 
     /**
-     * 이번 판에 <b>세기 시작한</b> 쿠폰들. {@link #due} 뒤에 읽는다.
+     * 이번 회차에 <b>세기 시작한</b> 쿠폰들. {@link #due} 뒤에 읽는다.
      *
      * <p>울타리 표는 지웠을 때만 생기므로, 한 번도 안 지운 줄에는 표가 없다.
-     * 후보로 올리는 순간 표를 세워야 그 뒤에 오는 옛 판이 걸린다.
+     * 후보로 올리는 순간 표를 세워야 그 뒤에 오는 옛 임기가 걸린다.
      */
     public List<String> claimed() {
         return List.copyOf(claimed);

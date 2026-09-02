@@ -131,6 +131,14 @@ class RedisFullStopScenarioTest {
     /** RC3 의 한계. 이 안에 판정이 정상으로 돌아와야 한다. */
     private static final Duration 회복_한계 = Duration.ofSeconds(30);
 
+    /**
+     * 회복을 선언하기까지 이어져야 할 깨끗한 판.
+     *
+     * <p><b>하나로는 부족하다.</b> 커넥션 풀이 다시 맺히는 구간에 한 판이 우연히
+     * 통과할 수 있고, 그러면 그 뒤의 확인 배치가 아직 흔들리는 구간을 재게 된다.
+     */
+    private static final int 이어져야_할_깨끗한_판 = 2;
+
     private static final BackendStub 뒷단 = BackendStub.항상_받는다();
 
     private static RedisFaults faults;
@@ -571,6 +579,11 @@ class RedisFullStopScenarioTest {
      */
     private Duration 판정이_돌아올_때까지_기다린다(List<Integer> 회복_상태, Supplier<Instant> 지금) {
         Instant 시작 = 지금.get();
+        // **한 판이 깨끗한 것은 돌아왔다는 증거가 아니다.** 레디스가 막 살아난
+        // 구간에는 커넥션 풀이 다시 맺히는 중이라 한 판이 우연히 통과할 수 있고,
+        // 바로 다음 판이 5xx 를 낸다 — 그 뒤에 오는 확인 배치가 그것을 회귀로
+        // 보고한다. 실제로 느린 러너에서 그렇게 빨개졌다.
+        int 이어진_깨끗한_판 = 0;
         while (Duration.between(시작, 지금.get()).compareTo(회복_한계) < 0) {
             // **발급과 줄 조회를 다른 리스트로 나눈다.** RC6 은 정상 구간
             // (발급만) 과 같은 재료끼리 비교해야 한다. 한 리스트에 담고 순서로
@@ -584,7 +597,13 @@ class RedisFullStopScenarioTest {
             // **202 를 회복으로 안 읽는다.** 정상 구간이 통과였는데 회복 뒤에
             // 줄에 서기 시작했다면 판정 분포가 아직 안 돌아온 것이다.
             if (줄_조회 < 500 && 발급_한_판.stream().noneMatch(s -> s >= 500)) {
-                return Duration.between(시작, 지금.get());
+                // 이어서 둘이 깨끗해야 돌아온 것으로 본다. 하나로 끊으면
+                // 회복을 이르게 선언하고, 그 뒤 판정이 아직 흔들리는 구간을 잰다.
+                if (++이어진_깨끗한_판 >= 이어져야_할_깨끗한_판) {
+                    return Duration.between(시작, 지금.get());
+                }
+            } else {
+                이어진_깨끗한_판 = 0;
             }
         }
         return null;

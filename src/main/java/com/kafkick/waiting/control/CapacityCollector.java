@@ -47,10 +47,10 @@ public final class CapacityCollector {
     public static final int IDLE_DIVISOR = 2;
 
     /**
-     * 못 읽어도 직전 값을 그대로 쓰는 판의 수.
+     * 못 읽어도 직전 값을 그대로 쓰는 회차의 수.
      *
      * <p><b>R-2 의 "3회 연속 누락" 과 다른 값이다</b> — 저건 뒷단 하나를 벽시계로,
-     * 이건 우리 시야를 판으로 센다.
+     * 이건 우리 시야를 회차로 센다.
      */
     public static final int HOLD_ROUNDS = 3;
 
@@ -63,18 +63,18 @@ public final class CapacityCollector {
     private static final long AHEAD_TOLERANCE_SEC = 1;
 
     /**
-     * 아직 한 판도 안 걷었다. <b>승계와 신규 기동을 못 가른다</b> — 보고에
+     * 아직 한 회차도 안 걷었다. <b>승계와 신규 기동을 못 가른다</b> — 보고에
      * 기동 시각이 실리면 그때 이 추정을 버린다 (A-13).
      */
     private boolean firstRound = true;
 
     private final AtomicLong lastKnown;
 
-    /** 연속으로 못 읽은 판의 수. 한 판이라도 성공하면 다시 0 이다. */
+    /** 연속으로 못 읽은 회차의 수. 한 회차라도 성공하면 다시 0 이다. */
     private final AtomicLong failedRounds = new AtomicLong();
 
     /**
-     * 마지막 판에서 실제로 <b>하한이 답이 된</b> 값. 하한이 안 걸린 판에서는 0 이다.
+     * 마지막 회차에서 실제로 <b>하한이 답이 된</b> 값. 하한이 안 걸린 회차에서는 0 이다.
      *
      * <p>배분이 평활 뒤에 이것을 다시 건다. 하한은 관측이 아니라 정책이라
      * 평활에 묻히면 안 된다.
@@ -158,7 +158,7 @@ public final class CapacityCollector {
         lastKnown.updateAndGet(known -> known == 0 ? 0 : Math.max(bottom, known / 2));
     }
 
-    /** 리더가 됐다. <b>유예를 처음부터 준다</b> — 비리더 구간의 실패는 남의 판이다. */
+    /** 리더가 됐다. <b>유예를 처음부터 준다</b> — 비리더 구간의 실패는 남의 회차다. */
     public void leadershipAcquired() {
         failedRounds.set(0);
     }
@@ -166,14 +166,14 @@ public final class CapacityCollector {
     /**
      * 지금 배분이 쓰는 값.
      *
-     * <p><b>관측치가 아닐 수 있다.</b> 못 읽는 판이 이어지면 감쇠한 값이다 —
+     * <p><b>관측치가 아닐 수 있다.</b> 못 읽는 회차가 이어지면 감쇠한 값이다 —
      * 호출부가 관측이라고 믿고 쓰면 그 차이를 못 본다.
      */
     public long lastKnown() {
         return lastKnown.get();
     }
 
-    /** 마지막 판에서 하한이 답이 됐으면 그 값, 아니면 0. */
+    /** 마지막 회차에서 하한이 답이 됐으면 그 값, 아니면 0. */
     public long lastFloor() {
         return lastFloor.get();
     }
@@ -211,7 +211,7 @@ public final class CapacityCollector {
             fresh++;
             reported = saturatedAdd(reported, Math.min(report.credits(), perInstanceCap));
             Seen was = seen.get(report.instanceId());
-            // **첫 판에 본 무리는 이미 돌던 것으로 본다.** 리더가 바뀐 것이 뒷단이
+            // **첫 회차에 본 무리는 이미 돌던 것으로 본다.** 리더가 바뀐 것이 뒷단이
             // 새로 뜬 것은 아니다. 여기서 램프를 걸면 승계마다 크레딧이 0 으로
             // 떨어지고, 신선한 보고가 있어 하한도 안 걸린다.
             long first = was != null ? was.first()
@@ -238,7 +238,7 @@ public final class CapacityCollector {
         long credit = fresh == 0 || rampMadeIt ? minimum : total;
         lastFloor.set(fresh == 0 || rampMadeIt ? minimum : 0);
         lastKnown.set(credit);
-        // 한 판이라도 성공하면 유예가 다시 찬다. 안 그러면 드문 순단이 쌓여
+        // 한 회차라도 성공하면 유예가 다시 찬다. 안 그러면 드문 순단이 쌓여
         // 멀쩡한 구간에서도 조여진다.
         failedRounds.set(0);
         return credit;
@@ -270,7 +270,7 @@ public final class CapacityCollector {
      * 램프를 건너뛰게 하지 않는다 — 지우는 이유는 배포 이력만큼 쌓이는 것뿐이다.
      *
      * <p>그래서 램프 창만큼 산다. 그보다 짧게 잡으면 몇 초 못 본 인스턴스가 램프를
-     * 다시 타고, 돌아오는 첫 판에 크레딧이 하한보다도 낮아진다.
+     * 다시 타고, 돌아오는 첫 회차에 크레딧이 하한보다도 낮아진다.
      */
     private void evictStale(long now) {
         seen.values().removeIf(s -> now - s.last() > rampUp.toSeconds());

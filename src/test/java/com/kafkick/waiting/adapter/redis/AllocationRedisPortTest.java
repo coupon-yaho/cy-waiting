@@ -185,7 +185,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
      * <b>전부 만료된 신호는 "살아 있다" 가 아닙니다.</b>
      *
      * <p>만료된 항목은 정리가 걷기 전까지 물리적으로 남아 있습니다. 개수만
-     * 보면 회복 첫 판이 "신호가 있다" 로 읽히고, 그 판에서 앞줄이 통째로 걷힙니다.
+     * 보면 회복 첫 회차가 "신호가 있다" 로 읽히고, 그 회차에서 앞줄이 통째로 걷힙니다.
      */
     @Test
     @DisplayName("전부_만료된_신호로는_앞줄을_안_걷는다")
@@ -258,7 +258,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
      * <p>덮으면 그 사람이 다음 폴링에서 종료를 받고, 다시 서면 그동안 온 사람
      * 뒤로 갑니다 — `queue_status` 가 그 표시 하나로 막고 있는 것이 그것입니다.
      */
-    // **임계 아래여야 이 성질이 성립합니다.** 임계 위의 표시는 지난 판의 것이라
+    // **임계 아래여야 이 성질이 성립합니다.** 임계 위의 표시는 지난 회차의 것이라
     // 낡음이 증명되고, 그때는 덮는 것이 맞는 답입니다 — 안 덮고 건너뛰면 임계가
     // 그를 지나가 창 밖이 되고 그 뒤로 영영 안 걷힙니다.
     @Test
@@ -286,7 +286,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
      * <b>임계 위의 입장 표시는 낡은 값이라 덮고 걷습니다.</b>
      *
      * <p>지금 차례가 온 사람은 임계 아래라 창에 없습니다. 그러니 창 안의 표시는
-     * 지난 판의 것이고, 이탈 기록으로 덮는 것이 맞는 답입니다 — 그 사람이 다시
+     * 지난 회차의 것이고, 이탈 기록으로 덮는 것이 맞는 답입니다 — 그 사람이 다시
      * 오면 재방문자입니다.
      */
     // **표시는 이탈 기록으로 덮습니다.** 큐에서만 빼고 남기면 다음 폴링이
@@ -366,7 +366,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     @Test
     @DisplayName("키로_못_쓰는_대상은_그것만_뺀다")
     void 키로_못_쓰는_대상은_그것만_뺀다() {
-        // 밖에서 쓰는 키다. 못 쓰는 멤버 하나가 판을 죽이면 멀쩡한 쿠폰 전부의
+        // 밖에서 쓰는 키다. 못 쓰는 멤버 하나가 발행을 통째로 죽이면 멀쩡한 쿠폰 전부의
         // 배분이 멎고, 사람이 목록을 고치기 전에는 안 풀린다.
         redis.opsForSet().add(RedisKeys.ACTIVE_COUPONS, "c1", "#credit", "a:b", "{x}").block(WAIT);
 
@@ -459,13 +459,13 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     @Test
     @DisplayName("상한을_넘으면_미상_표시부터_버린다")
     void 상한을_넘으면_미상_표시부터_버린다() {
-        Map<String, String> 큰_판 = new LinkedHashMap<>();
+        Map<String, String> 큰_스냅샷 = new LinkedHashMap<>();
         for (int i = 0; i < 1_600; i++) {
-            큰_판.put("c" + i, "OFF:QUEUEING:1:0:5:1.0");
-            큰_판.put(SnapshotCodec.STOCK_UNKNOWN_FIELD + "c" + i, "1");
+            큰_스냅샷.put("c" + i, "OFF:QUEUEING:1:0:5:1.0");
+            큰_스냅샷.put(SnapshotCodec.STOCK_UNKNOWN_FIELD + "c" + i, "1");
         }
 
-        port.publish(큰_판).block(WAIT);
+        port.publish(큰_스냅샷).block(WAIT);
 
         Map<String, String> 실린것 = port.load().block(WAIT);
         assertThat(실린것).as("쿠폰은 다 실린다").containsKey("c1599");
@@ -480,20 +480,20 @@ class AllocationRedisPortTest extends RedisContainerSupport {
 
     /**
      * <b>줄이 빈 쿠폰의 표시부터 버린다.</b> 그 표시를 잃으면 신규 유입만
-     * 거절되고 다음 판이 되돌린다. 줄이 선 쿠폰의 표시를 잃으면 그 줄이 통째로
+     * 거절되고 다음 회차가 되돌린다. 줄이 선 쿠폰의 표시를 잃으면 그 줄이 통째로
      * 종결로 읽히고, 되돌릴 방법이 없다.
      */
     @Test
     @DisplayName("줄이_빈_쿠폰의_표시부터_버린다")
     void 줄이_빈_쿠폰의_표시부터_버린다() {
-        Map<String, String> 큰_판 = new LinkedHashMap<>();
+        Map<String, String> 큰_스냅샷 = new LinkedHashMap<>();
         for (int i = 0; i < 1_600; i++) {
             // 짝수만 줄이 서 있다. 버릴 것은 홀수 쪽에서 다 나와야 한다.
-            큰_판.put("c" + i, "OFF:QUEUEING:1:0:" + (i % 2 == 0 ? 5 : 0) + ":1.0");
-            큰_판.put(SnapshotCodec.STOCK_UNKNOWN_FIELD + "c" + i, "1");
+            큰_스냅샷.put("c" + i, "OFF:QUEUEING:1:0:" + (i % 2 == 0 ? 5 : 0) + ":1.0");
+            큰_스냅샷.put(SnapshotCodec.STOCK_UNKNOWN_FIELD + "c" + i, "1");
         }
 
-        port.publish(큰_판).block(WAIT);
+        port.publish(큰_스냅샷).block(WAIT);
 
         Map<String, String> 실린것 = port.load().block(WAIT);
         assertThat(실린것.keySet().stream()
@@ -508,32 +508,32 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     void 표시를_버려도_상한을_넘으면_실패한다() {
         // **표시를 다 달아 둔다.** 표시가 없으면 버릴 것이 없어서 실패하는
         // 것이라, 이 시험이 말하는 "다 버려도 안 된다" 를 한 번도 안 밟는다.
-        Map<String, String> 큰_판 = new LinkedHashMap<>();
+        Map<String, String> 큰_스냅샷 = new LinkedHashMap<>();
         for (int i = 0; i < 3_100; i++) {
-            큰_판.put("c" + i, "OFF:QUEUEING:1:0:5:1.0");
-            큰_판.put(SnapshotCodec.STOCK_UNKNOWN_FIELD + "c" + i, "1");
+            큰_스냅샷.put("c" + i, "OFF:QUEUEING:1:0:5:1.0");
+            큰_스냅샷.put(SnapshotCodec.STOCK_UNKNOWN_FIELD + "c" + i, "1");
         }
 
-        assertThatThrownBy(() -> port.publish(큰_판).block(WAIT))
+        assertThatThrownBy(() -> port.publish(큰_스냅샷).block(WAIT))
                 .isInstanceOf(IllegalStateException.class);
 
-        // **안 나간 판은 거짓 매진을 안 만든다.** 여기서 세면 지표가 "표시를
+        // **안 나간 스냅샷은 거짓 매진을 안 만든다.** 여기서 세면 지표가 "표시를
         // 버려 매진으로 읽힌 쿠폰" 이 아니라 "버리려고 시도한 횟수" 가 되고,
-        // 같은 판이 매 틱 실패하는 구간에서 그 수가 끝없이 부푼다.
-        assertThat(port.markersDropped()).as("안 나간 판은 안 센다").isZero();
+        // 같은 스냅샷이 매 틱 실패하는 구간에서 그 수가 끝없이 부푼다.
+        assertThat(port.markersDropped()).as("안 나간 스냅샷은 안 센다").isZero();
     }
 
     /** 상한과 같으면 그대로 싣는다. 하나 넘어야 버리기 시작한다. */
     @Test
     @DisplayName("상한과_같으면_표시를_안_버린다")
     void 상한과_같으면_표시를_안_버린다() {
-        Map<String, String> 판 = new LinkedHashMap<>();
+        Map<String, String> 스냅샷 = new LinkedHashMap<>();
         for (int i = 0; i < 1_500; i++) {
-            판.put("c" + i, "OFF:QUEUEING:1:0:5:1.0");
-            판.put(SnapshotCodec.STOCK_UNKNOWN_FIELD + "c" + i, "1");
+            스냅샷.put("c" + i, "OFF:QUEUEING:1:0:5:1.0");
+            스냅샷.put(SnapshotCodec.STOCK_UNKNOWN_FIELD + "c" + i, "1");
         }
 
-        port.publish(판).block(WAIT);
+        port.publish(스냅샷).block(WAIT);
 
         assertThat(port.load().block(WAIT)).hasSize(3_000);
         assertThat(port.markersDropped()).isZero();
@@ -546,16 +546,16 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     @Test
     @DisplayName("짝_없는_표시는_덜_버리는_쪽으로_친다")
     void 짝_없는_표시는_덜_버리는_쪽으로_친다() {
-        Map<String, String> 판 = new LinkedHashMap<>();
-        판.put(SnapshotCodec.STOCK_UNKNOWN_FIELD + "orphan", "1");
-        판.put("broken", "OFF:QUEUEING");
-        판.put(SnapshotCodec.STOCK_UNKNOWN_FIELD + "broken", "1");
+        Map<String, String> 스냅샷 = new LinkedHashMap<>();
+        스냅샷.put(SnapshotCodec.STOCK_UNKNOWN_FIELD + "orphan", "1");
+        스냅샷.put("broken", "OFF:QUEUEING");
+        스냅샷.put(SnapshotCodec.STOCK_UNKNOWN_FIELD + "broken", "1");
         for (int i = 0; i < 1_500; i++) {
-            판.put("c" + i, "OFF:QUEUEING:1:0:0:1.0");
-            판.put(SnapshotCodec.STOCK_UNKNOWN_FIELD + "c" + i, "1");
+            스냅샷.put("c" + i, "OFF:QUEUEING:1:0:0:1.0");
+            스냅샷.put(SnapshotCodec.STOCK_UNKNOWN_FIELD + "c" + i, "1");
         }
 
-        port.publish(판).block(WAIT);
+        port.publish(스냅샷).block(WAIT);
 
         Map<String, String> 실린것 = port.load().block(WAIT);
         assertThat(실린것).as("줄이 빈 쪽부터 버려 상한을 맞춘다").hasSize(3_000);
@@ -614,7 +614,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     @Test
     @DisplayName("못_읽는_정책은_그_쿠폰만_뺀다")
     void 못_읽는_정책은_그_쿠폰만_뺀다() {
-        // **판을 죽이지 않는다.** 운영자의 오타 하나가 전 쿠폰의 배분을 멈추면
+        // **발행을 통째로 죽이지 않는다.** 운영자의 오타 하나가 전 쿠폰의 배분을 멈추면
         // 안 된다. 넷 다 예외가 나는 모양이 달라 하나로 못 묶는다.
         정책을_건다("c1", "{{");
         정책을_건다("c2", "{\"mode\":\"NOPE\"}");
@@ -647,8 +647,8 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     }
 
     /**
-     * <b>정책은 부가 정보다.</b> 이것 하나 때문에 판이 죽으면 대기 수와 재고가
-     * 멀쩡해도 스냅샷이 안 나간다. 빈 판으로 접으면 전원이 적응형이 되어
+     * <b>정책은 부가 정보다.</b> 이것 하나 때문에 회차가 죽으면 대기 수와 재고가
+     * 멀쩡해도 스냅샷이 안 나간다. 빈 값으로 접으면 전원이 적응형이 되어
      * ALWAYS 가 조용히 풀리므로 직전 값을 다시 쓴다.
      */
     @Test
@@ -663,7 +663,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     }
 
     /**
-     * <b>이번 판에 안 물어본 쿠폰의 정책이 사라지면 안 된다.</b> 판마다 기억을
+     * <b>이번 회차에 안 물어본 쿠폰의 정책이 사라지면 안 된다.</b> 회차마다 기억을
      * 통째로 갈아치우면, 그 쿠폰이 돌아왔을 때 읽기가 실패하는 순간 ALWAYS 가
      * 조용히 적응형이 된다 — 운영자가 켠 대기열이 안 켜진다.
      */
@@ -673,7 +673,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         정책을_건다("c1", "{\"mode\":\"ALWAYS\"}");
         정책을_건다("c2", "{\"mode\":\"OFF\"}");
         정책("c1", "c2");
-        // c1 이 활성 목록에서 빠진 판이 한 번 지난다.
+        // c1 이 활성 목록에서 빠진 회차가 한 번 지난다.
         정책("c2");
 
         정책_읽기를_깨뜨린다();
@@ -700,7 +700,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     @Test
     @DisplayName("빈_목록이면_묻지_않는다")
     void 빈_목록이면_묻지_않는다() {
-        // 빈 인자로 명령을 보내면 레디스가 오류를 낸다. 그 오류가 판을 죽인다.
+        // 빈 인자로 명령을 보내면 레디스가 오류를 낸다. 그 오류가 회차를 죽인다.
         assertThat(port.queueModes(List.of()).block(WAIT)).isEmpty();
     }
 

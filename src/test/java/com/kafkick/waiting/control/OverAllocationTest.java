@@ -30,11 +30,11 @@ class OverAllocationTest {
     /** 뒷단이 받는다고 한 양. 평활과 하한이 이 값과 벌어지는 것이 선행 지표다. */
     private final AtomicLong 관측 = new AtomicLong();
 
-    /** 판 사이에 이월되는 평활 상태. 매번 새로 시작하면 지연이 안 쌓인다. */
+    /** 회차 사이에 이월되는 평활 상태. 매번 새로 시작하면 지연이 안 쌓인다. */
     private final AtomicReference<CreditSmoother.Snapshot> 평활 =
             new AtomicReference<>(CreditSmoother.Snapshot.empty());
 
-    private AllocationRound 판(long 크레딧, List<CouponDemand> 수요) {
+    private AllocationRound 회차(long 크레딧, List<CouponDemand> 수요) {
         관측.set(크레딧);
         return AllocationRound.of(() -> true,
                 () -> Mono.just(new TimedDemands(수요, 지금.getEpochSecond())),
@@ -52,11 +52,11 @@ class OverAllocationTest {
                 SnapshotCodec.create(), () -> 0);
     }
 
-    /** 정상 판에서는 0 이다. 0 이 아닌 것을 잡으려면 0 이 정상임을 먼저 못 박는다. */
+    /** 정상 회차에서는 0 이다. 0 이 아닌 것을 잡으려면 0 이 정상임을 먼저 못 박는다. */
     @Test
     @DisplayName("정상_배분에서는_초과가_0_이다")
     void 정상_배분에서는_초과가_0_이다() {
-        AllocationRound round = 판(1_000, List.of(
+        AllocationRound round = 회차(1_000, List.of(
                 new CouponDemand("c1", 100, 1_000_000, QueueMode.ADAPTIVE),
                 new CouponDemand("c2", 100, 1_000_000, QueueMode.ADAPTIVE)));
 
@@ -67,12 +67,12 @@ class OverAllocationTest {
 
     /**
      * <b>수요가 없으면 나눠 줄 것도 없습니다.</b> 이 경우에도 0 이어야 하고,
-     * 안 그러면 빈 판마다 알람이 울립니다.
+     * 안 그러면 빈 회차마다 알람이 울립니다.
      */
     @Test
     @DisplayName("수요가_없어도_초과가_0_이다")
     void 수요가_없어도_초과가_0_이다() {
-        AllocationRound round = 판(1_000, List.of());
+        AllocationRound round = 회차(1_000, List.of());
 
         round.run().block();
 
@@ -86,7 +86,7 @@ class OverAllocationTest {
     @Test
     @DisplayName("크레딧이_0_이면_아무도_못_받는다")
     void 크레딧이_0_이면_아무도_못_받는다() {
-        AllocationRound round = 판(0, List.of(
+        AllocationRound round = 회차(0, List.of(
                 new CouponDemand("c1", 0, 1_000_000, QueueMode.ADAPTIVE)));
 
         round.run().block();
@@ -101,10 +101,10 @@ class OverAllocationTest {
     @Test
     @DisplayName("뒷단이_줄었는데_평활이_옛_값을_나눠_주면_센다")
     void 뒷단이_줄었는데_평활이_옛_값을_나눠_주면_센다() {
-        AllocationRound round = 판(10_000, List.of(
+        AllocationRound round = 회차(10_000, List.of(
                 new CouponDemand("c1", 100_000, 1_000_000, QueueMode.ADAPTIVE)));
         round.run().block();
-        assertThat(round.budgetOvershoot()).as("첫 판은 관측과 같다").isZero();
+        assertThat(round.budgetOvershoot()).as("첫 회차는 관측과 같다").isZero();
 
         // 뒷단 여덟 대가 죽었다. 평활은 한 틱에 다 안 따라온다.
         관측.set(1_000);
@@ -119,7 +119,7 @@ class OverAllocationTest {
     @Test
     @DisplayName("관측이_그대로면_초과가_안_오른다")
     void 관측이_그대로면_초과가_안_오른다() {
-        AllocationRound round = 판(1_000, List.of(
+        AllocationRound round = 회차(1_000, List.of(
                 new CouponDemand("c1", 100, 1_000_000, QueueMode.ADAPTIVE)));
 
         round.run().block();
@@ -135,7 +135,7 @@ class OverAllocationTest {
     @Test
     @DisplayName("초과가_누적된다")
     void 초과가_누적된다() {
-        AllocationRound round = 판(10_000, List.of(
+        AllocationRound round = 회차(10_000, List.of(
                 new CouponDemand("c1", 100_000, 1_000_000, QueueMode.ADAPTIVE)));
         round.run().block();
 

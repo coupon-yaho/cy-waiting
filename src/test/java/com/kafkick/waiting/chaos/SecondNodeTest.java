@@ -24,7 +24,7 @@ import org.springframework.test.web.reactive.server.WebTestClient;
 /**
  * 하네스 자기검증 (CY-858). <b>두 노드가 서로를 못 보면</b> 승계도 스플릿
  * 브레인도 시계 스큐도 만들 수 없고, 그 위에 쌓은 시나리오는 전부 한 대짜리
- * 판을 다시 재게 된다.
+ * 한 대짜리를 다시 재게 된다.
  */
 @Tag("chaos")
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
@@ -88,7 +88,7 @@ class SecondNodeTest {
     /**
      * <b>둘째가 선거에 실제로 참가하는가.</b> 하트비트는 제어 평면과 무관하게
      * 돌아서, 노드 수만 보면 락을 못 잡는 노드도 둘로 세어진다 — 그 위에 승계
-     * 시나리오를 쌓으면 한 대짜리 판을 다시 재게 된다.
+     * 시나리오를 쌓으면 한 대짜리를 다시 재게 된다.
      */
     @Test
     @DisplayName("첫_노드의_제어_평면을_세우면_둘째가_이어받는다")

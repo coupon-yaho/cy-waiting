@@ -11,7 +11,7 @@ http.setResponseCallback(http.expectedStatuses(200, 202, 429, 503));
 const BASE = __ENV.BASE_URL || 'http://localhost:18080';
 
 // 핫 하나에 몰아치고, 콜드 하나를 저부하로 같이 때린다. 두 시나리오가 같은
-// 게이트웨이를 지나므로 격리가 실제로 서는지 한 판에서 보인다.
+// 게이트웨이를 지나므로 격리가 실제로 서는지 한 회차에서 보인다.
 export const options = {
   scenarios: {
     hot: {
@@ -31,7 +31,7 @@ export const options = {
   thresholds: {
     // **콜드가 한 번이라도 줄을 서면 격리가 깨진 것이다.**
     cold_queued: ['count==0'],
-    // 핫은 줄이 서야 한다. 안 서면 이 판이 혼합이 아니다.
+    // 핫은 줄이 서야 한다. 안 서면 이 실행이 혼합이 아니다.
     hot_queued: ['count>0'],
   },
 };

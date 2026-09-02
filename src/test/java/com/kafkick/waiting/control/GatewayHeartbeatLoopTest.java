@@ -28,7 +28,7 @@ class GatewayHeartbeatLoopTest {
     private static final Duration INTERVAL = Duration.ofMillis(100);
     private static final Duration LEAVE_TIMEOUT = Duration.ofMillis(200);
 
-    /** 한 판을 놓친 횟수. 대부분의 시험은 안 보지만 인자로는 넘겨야 한다. */
+    /** 한 회차를 놓친 횟수. 대부분의 시험은 안 보지만 인자로는 넘겨야 한다. */
     private final AtomicInteger 놓침 = new AtomicInteger();
 
     @Test
@@ -52,7 +52,7 @@ class GatewayHeartbeatLoopTest {
     @DisplayName("관측이_실패해도_루프가_안_멎는다")
     void 관측이_실패해도_루프가_안_멎는다() {
         // 한 번 터지고 끝나면 그 노드는 영영 분모에서 빠지고, 남은 노드가
-        // 큰 몫을 쓴다. 실패는 그 판만 버린다.
+        // 큰 몫을 쓴다. 실패는 그 회차만 버린다.
         AtomicInteger 호출 = new AtomicInteger();
         AtomicReference<Integer> 마지막 = new AtomicReference<>();
         VirtualTimeScheduler 가상 = VirtualTimeScheduler.create();
@@ -178,9 +178,9 @@ class GatewayHeartbeatLoopTest {
     }
 
     @Test
-    @DisplayName("한_판이_안_끝나도_다음_판이_돈다")
-    void 한_판이_안_끝나도_다음_판이_돈다() {
-        // **타임아웃이 없으면 루프가 조용히 멎는다.** 한 판이 안 끝나면 다음
+    @DisplayName("한_회차가_안_끝나도_다음_회차가_돈다")
+    void 한_회차가_안_끝나도_다음_회차가_돈다() {
+        // **타임아웃이 없으면 루프가 조용히 멎는다.** 한 회차가 안 끝나면 다음
         // 지연이 시작되지 않는데, 오류가 아니라 무응답이라 로그도 안 나온다.
         // 그동안 이 노드는 하트비트를 못 쓰면서 요청은 계속 받는다.
         AtomicInteger 호출 = new AtomicInteger();
@@ -251,7 +251,7 @@ class GatewayHeartbeatLoopTest {
         loop.start(가상);
         loop.start(가상);
 
-        // 한 판만 돌렸으니 구독도 하나여야 한다. 둘이면 루프가 두 개다.
+        // 한 회차만 돌렸으니 구독도 하나여야 한다. 둘이면 루프가 두 개다.
         assertThat(구독.get()).isEqualTo(1);
         assertThat(loop.isRunning()).isTrue();
         loop.stop();

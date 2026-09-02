@@ -26,7 +26,7 @@ public final class Leadership {
     private static final Logger log = LoggerFactory.getLogger(Leadership.class);
 
     /**
-     * 마지막 성공부터 회복하는 판이 끝날 때까지 들어가는 <b>시도의 수</b>.
+     * 마지막 성공부터 회복하는 회차가 끝날 때까지 들어가는 <b>시도의 수</b>.
      *
      * <p>실제 예산은 {@code 4 × (시도 + 지연) + 시도 ≤ lease} 인데 지연은 여기서
      * 모른다. 지연이 0 이상이므로 <b>{@code 5 × 시도 ≤ lease} 는 반드시 필요하다</b> —
@@ -67,7 +67,7 @@ public final class Leadership {
     /**
      * 억제 구간. {@code null} 이면 지금은 실패 중이 아니다.
      *
-     * <p>시작 시각과 삼킨 판 수를 따로 두면 비우는 것과 읽는 것 사이가 벌어져,
+     * <p>시작 시각과 삼킨 시도 수를 따로 두면 비우는 것과 읽는 것 사이가 벌어져,
      * 그때 들어온 실패가 이번 회복 로그에도 다음에도 안 들어간다.
      */
     private record Failing(long since, int swallowed) {
@@ -95,7 +95,7 @@ public final class Leadership {
         // 배분이 멎는 사고로 배운다.
         if (attemptTimeout.multipliedBy(ATTEMPTS_PER_LEASE).compareTo(lease) > 0) {
             throw new IllegalArgumentException(
-                    "attemptTimeout 이 리스의 1/%d 을 넘으면 회복하는 판 전에 리스가 끝난다: attemptTimeout=%s lease=%s"
+                    "attemptTimeout 이 리스의 1/%d 을 넘으면 회복하는 회차 전에 리스가 끝난다: attemptTimeout=%s lease=%s"
                             .formatted(ATTEMPTS_PER_LEASE, attemptTimeout, lease));
         }
         this.ownerId = ownerId;
@@ -138,7 +138,7 @@ public final class Leadership {
      * 전부 한 자리에서 접힌다.
      */
     /**
-     * 내 판 번호. <b>리더가 아니면 0 이다</b> (CY-766).
+     * 내 펜스 번호. <b>리더가 아니면 0 이다</b> (CY-766).
      *
      * <p>되돌릴 수 없는 쓰기가 이 번호를 들고 나간다. 0 이면 줄 옆의 울타리가
      * 전부 거절한다 — 안 지우는 쪽이라 안전한 방향이다.
@@ -157,7 +157,7 @@ public final class Leadership {
         }
         // **강등을 여기서 한다.** 연장 루프의 끝에 달면 루프가 멎었을 때 안 돌고,
         // 하필 그때가 이 기록이 유일한 신호인 순간이다. 배분 틱은 매초 묻는다.
-        // 판 번호도 같이 버린다 — 리스가 지난 노드의 번호는 이제 옛 판이다.
+        // 펜스 번호도 같이 버린다 — 리스가 지난 노드의 번호는 이제 옛 임기이다.
         if (standing.compareAndSet(now, new Standing(State.FOLLOWER,
                 now.confirmedAt(), now.leaderSince(), 0))) {
             log.warn("확인 없이 리스가 지나 리더에서 내려왔다 — {}초 동안 리더였다, owner={}",
@@ -171,7 +171,7 @@ public final class Leadership {
     }
 
     /**
-     * 락을 잡거나 연장한다. 모르는 채로 끝난 판은 아무것도 안 바꾼다 —
+     * 락을 잡거나 연장한다. 모르는 채로 끝난 시도는 아무것도 안 바꾼다 —
      * {@code confirmedAt} 이 안 움직이므로 리스가 지나면 저절로 내려온다.
      */
     // RULE-EXCEPTION(RX-6): 판정 재료를 유지하라는 규칙과 방향이 다르다. 낡은
@@ -235,8 +235,8 @@ public final class Leadership {
         exitFailing();
         if (!lock.acquired()) {
             // 사실을 알았다 — 리스를 기다릴 이유가 없다.
-            // **판 번호도 같이 버린다.** 남겨 두면 강등된 노드가 자기가 쥐었던
-            // 판인 척 되돌릴 수 없는 쓰기를 낸다.
+            // **펜스 번호도 같이 버린다.** 남겨 두면 강등된 노드가 자기가 쥐었던
+            // 지금 임기인 척 되돌릴 수 없는 쓰기를 낸다.
             Standing before = standing.getAndUpdate(s -> s.state() == State.LEADER
                     ? new Standing(State.FOLLOWER, s.confirmedAt(), s.leaderSince(), 0)
                     : s);
@@ -249,9 +249,9 @@ public final class Leadership {
 
         Standing before = standing.getAndUpdate(s -> switch (s.state()) {
             case CLOSED -> s;
-            // **뒤로 밀지 않는다.** 겹친 두 판 중 늦게 도착한 옛 판이 확인 시각을
+            // **뒤로 밀지 않는다.** 겹친 두 임기 중 늦게 도착한 옛 임기가 확인 시각을
             // 되돌리면, 멀쩡한 리더가 헛강등되고 거짓 경고가 찍힌다.
-            // **판 번호도 뒤로 안 민다.** 늦게 도착한 옛 판의 응답이 번호를
+            // **펜스 번호도 뒤로 안 민다.** 늦게 도착한 옛 임기의 응답이 번호를
             // 되돌리면, 멀쩡한 리더가 비가역 쓰기를 옛 번호로 내보낸다.
             // 임기 안에서는 연장이 같은 번호를 돌려주므로 이 최댓값은 그
             // 겹침에만 걸리고, 새 임기는 아래 FOLLOWER 갈래로 들어온다.
@@ -278,10 +278,10 @@ public final class Leadership {
     }
 
     /**
-     * 실패가 이어지는 동안 경고는 한 번만 찍고 <b>삼킨 판을 센다.</b>
+     * 실패가 이어지는 동안 경고는 한 번만 찍고 <b>삼킨 시도를 센다.</b>
      *
-     * <p>매 판 찍으면 몇 분짜리 단절에 노드마다 수백 줄이다. 그렇다고 지속 시간만
-     * 남기면 한 판이 실패한 것인지 수백 판인지 사후에 못 가린다.
+     * <p>매 회차 찍으면 몇 분짜리 단절에 노드마다 수백 줄이다. 그렇다고 지속 시간만
+     * 남기면 한 회차가 실패한 것인지 수백 회차인지 사후에 못 가린다.
      */
     private void enterFailing(Throwable cause) {
         long now = ticker.getAsLong();
@@ -298,7 +298,7 @@ public final class Leadership {
         if (before == null) {
             return;
         }
-        log.info("리더 확인 복구 — {}초 만에, 그동안 {}판 실패, owner={}",
+        log.info("리더 확인 복구 — {}초 만에, 그동안 {}회차 실패, owner={}",
                 NANOSECONDS.toSeconds(ticker.getAsLong() - before.since()), before.swallowed(), ownerId);
     }
 }

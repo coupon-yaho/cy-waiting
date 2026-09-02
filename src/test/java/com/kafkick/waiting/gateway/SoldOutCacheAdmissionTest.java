@@ -208,7 +208,7 @@ class SoldOutCacheAdmissionTest {
         // 인코더가 미상을 못 실으면 이 가드는 프로덕션에서 한 번도 안 불린다.
         holder.replace(선을_거친다(new GatewaySnapshot(
                 Map.of(COUPON, CouponStates.stockUnknown(5, 100)), new SnapshotMeta(1, 1), 지금)));
-        // **한 판 앞선 재료로 무장한다.** 같은 시각으로 두면 발행 시각 비교에서
+        // **한 회차 앞선 재료로 무장한다.** 같은 시각으로 두면 발행 시각 비교에서
         // 먼저 걸려, 재고 가드는 한 번도 안 불린다 — 지워도 통과한다.
         캐시.observed(COUPON, 지금.minusSeconds(1));
 
@@ -234,7 +234,7 @@ class SoldOutCacheAdmissionTest {
     void 재료가_매진이면_관찰을_안_푼다() {
         holder.replace(new GatewaySnapshot(
                 Map.of(COUPON, CouponStates.closed(100)), new SnapshotMeta(1, 1), 지금));
-        // **한 판 앞선 재료로 무장한다.** 같은 시각으로 두면 발행 시각 비교에서
+        // **한 회차 앞선 재료로 무장한다.** 같은 시각으로 두면 발행 시각 비교에서
         // 먼저 걸려, 재고 가드는 한 번도 안 불린다 — 지워도 통과한다.
         캐시.observed(COUPON, 지금.minusSeconds(1));
 
@@ -256,7 +256,7 @@ class SoldOutCacheAdmissionTest {
     @DisplayName("재료가_낡아도_매진은_계속_끊는다")
     void 재료가_낡아도_매진은_계속_끊는다() {
         // **낡은 재료 하나만 손에 든 상태다.** 발행 시각은 단조 증가하므로
-        // 새 재료가 옛 판으로 갈리는 일은 제어 평면이 안 만든다.
+        // 새 재료가 옛 임기으로 갈리는 일은 제어 평면이 안 만든다.
         holder.replace(new GatewaySnapshot(
                 Map.of(COUPON, CouponStates.idle(1_000)), new SnapshotMeta(1, 1),
                 지금.minusSeconds(60)));
@@ -272,7 +272,7 @@ class SoldOutCacheAdmissionTest {
      * <b>낡은 재료로는 풀지도 않습니다.</b>
      *
      * <p>낡음은 못 믿겠다는 뜻인데, 못 믿는 재료로 방패를 부수는 것만 허용하면
-     * 비대칭입니다. 특히 회복 첫 판에 도착한 스냅샷이 장애 중 쌓인 관찰을 전부
+     * 비대칭입니다. 특히 회복 첫 회차에 도착한 스냅샷이 장애 중 쌓인 관찰을 전부
      * 지우면, 회복 순간에 다시 한 번 뒷단으로 몰립니다.
      */
     @Test

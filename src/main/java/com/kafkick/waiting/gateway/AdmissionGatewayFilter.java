@@ -57,10 +57,10 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     public static final String DECISION = "waiting.admission.decision";
 
     /**
-     * 이 요청을 판정한 판의 전역 폴링 배수.
+     * 이 요청을 판정한 회차의 전역 폴링 배수.
      *
      * <p><b>속성으로 넘긴다.</b> 폴백은 서킷을 지나 나중에 도는 자리라 홀더를
-     * 다시 읽으면 다른 판의 값이 나간다 — 같은 장애에 두 값이 나가는 것이다.
+     * 다시 읽으면 다른 회차의 값이 나간다 — 같은 장애에 두 값이 나가는 것이다.
      */
     public static final String POLL_SCALE = "waiting.admission.poll-scale";
 
@@ -482,7 +482,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                     // 뒤집힌다 — 방금 줄 선 사람을 전원이 추월한다.
                     //
                     // **스냅샷이 줄을 보고 있어도 찍는다.** 그 스냅샷은 방금 넣은
-                    // 이 사람을 아직 모른다 — 다음 판에 줄이 다 빠져 한산으로
+                    // 이 사람을 아직 모른다 — 다음 회차에 줄이 다 빠져 한산으로
                     // 뒤집히면 그 사람이 통째로 추월당한다. 계획서가 "줄이 보이면
                     // 바로 풀어도 된다" 고 적은 것은 그 한 명을 안 센 것이다.
                     latch.mark(couponId, clock.instant().getEpochSecond());
@@ -566,7 +566,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      * 다시 와도 되는 때. <b>같은 값을 주면 다 같이 돌아온다</b> — 흔들어서
      * 되돌아오는 파도를 흩는다.
      */
-    // **배수를 인자로 받는다.** 안 받는 판을 남겨 두면 거절 갈래가 조용히
+    // **배수를 인자로 받는다.** 안 받는 갈래를 남겨 두면 거절 갈래가 조용히
     // 그쪽을 쓰고, 과부하일수록 거절 비중이 커져 예산이 절반만 걸린다.
     static int retryAfterSec(AdmissionDecision decision, DoubleSupplier random,
             double pollScale) {

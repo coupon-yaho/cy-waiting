@@ -71,7 +71,7 @@ public final class LeaderRedisPort {
         String owner = String.valueOf(raw.get(1));
         long ttlMillis = Long.parseLong(String.valueOf(raw.get(2)));
         // **옛 스크립트는 세 자리만 돌려준다.** 롤아웃 구간에 여기서 터지면
-        // 그 노드가 리더를 영영 못 잡는다 — 판 번호 없이 도는 편이 낫다.
+        // 그 노드가 리더를 영영 못 잡는다 — 펜스 번호 없이 도는 편이 낫다.
         long fence = raw.size() > 3 ? Long.parseLong(String.valueOf(raw.get(3))) : 0;
         return new LeaderLock(acquired, owner, ttlMillis, fence);
     }

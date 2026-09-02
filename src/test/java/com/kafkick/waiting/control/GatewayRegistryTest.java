@@ -109,7 +109,7 @@ class GatewayRegistryTest {
     @DisplayName("스크립트가_0을_주면_무시한다")
     void 스크립트가_0을_주면_무시한다() {
         // 스크립트는 자기 자신을 먼저 쓰므로 정상이면 최소 1 이다. 0 은
-        // 판이 갈렸거나 깨진 응답이라 분모로 삼으면 0 으로 나눈다.
+        // 버전이 갈렸거나 깨진 응답이라 분모로 삼으면 0 으로 나눈다.
         GatewayRegistry registry = registry();
 
         registry.observed(0);

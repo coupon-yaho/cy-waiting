@@ -41,6 +41,13 @@ public final class SnapshotMetrics {
                 "판정 재료의 나이(초). 아직 못 받았으면 -1");
         metrics.gauge(meters, "waiting.snapshot.coupons", SnapshotMetrics::couponCount,
                 "지금 보고 있는 쿠폰 수");
+        // **받아 오는 것과 배분이 도는 것은 다른 고장입니다** (8.4.4). 배분이
+        // 멎어도 재료는 계속 받아 오므로 응답은 정상으로 보이고, 그동안 줄은
+        // 안 빠집니다. 나이를 합쳐 두면 그 구간이 지표에서 안 보입니다.
+        metrics.gauge(meters, "waiting.snapshot.fetch.age", SnapshotMetrics::fetchAgeSeconds,
+                "재료를 마지막으로 받아 온 지 지난 시간(초). 아직 못 받았으면 -1");
+        metrics.gauge(meters, "waiting.snapshot.tick.age", SnapshotMetrics::tickAgeSeconds,
+                "배분이 마지막으로 돈 지 지난 시간(초). 아직 안 돌았으면 -1");
         // **지금 무엇이 걸려 있는지가 보여야 합니다** (6.8.4). 안 보이면 값을
         // 바꾸고도 그것이 닿았는지를 못 확인하고, 장애 중에 그 확인이 필요합니다.
         metrics.gauge(meters, "waiting.tunable.idle.ratio", SnapshotMetrics::idleRatio,
@@ -87,6 +94,22 @@ public final class SnapshotMetrics {
      * 입니다 — 실패해도 루프는 돌아서, 첫 틱으로 가르면 레디스가 죽은 채 뜬 노드가
      * 곧바로 17억을 냅니다. 헬스 지시자가 같은 기준을 씁니다.
      */
+    private double fetchAgeSeconds() {
+        SnapshotHolder.View view = holder.view();
+        return view.snapshot().isPublished() ? view.fetchAge().toMillis() / 1000.0 : UNKNOWN;
+    }
+
+    /**
+     * 조회 루프가 마지막으로 돈 뒤 지난 시간.
+     *
+     * <p><b>널 검사를 안 겹칩니다.</b> 틱 시각이 없는 것은 초기값 하나뿐이고 그것은
+     * {@code EPOCH} 라 발행으로 안 읽힙니다 — 두 조건이 같이 설 수 없습니다.
+     */
+    private double tickAgeSeconds() {
+        SnapshotHolder.View view = holder.view();
+        return view.snapshot().isPublished() ? view.tickAge().toMillis() / 1000.0 : UNKNOWN;
+    }
+
     private double ageSeconds() {
         SnapshotHolder.View view = holder.view();
         return view.snapshot().isPublished() ? view.dataAge().toMillis() / 1000.0 : UNKNOWN;

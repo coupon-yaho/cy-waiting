@@ -178,7 +178,7 @@ class DemandCollectorTest {
     @DisplayName("배분_대상이_없으면_아무것도_안_묻는다")
     void 배분_대상이_없으면_아무것도_안_묻는다() {
         // 대상이 없는데 빈 인자로 명령을 보내면 레디스가 오류를 낸다. 그 오류가
-        // 판을 죽이면 대상이 생겨도 배분이 안 돈다.
+        // 회차를 죽이면 대상이 생겨도 배분이 안 돈다.
         AtomicInteger 조회 = new AtomicInteger();
         DemandCollector collector = DemandCollector.of(
                 () -> Mono.just(new TimedCoupons(List.of(), 읽은_시각)),
@@ -202,8 +202,8 @@ class DemandCollectorTest {
     }
 
     @Test
-    @DisplayName("길이가_안_맞으면_판을_버린다")
-    void 길이가_안_맞으면_판을_버린다() {
+    @DisplayName("길이가_안_맞으면_회차를_버린다")
+    void 길이가_안_맞으면_회차를_버린다() {
         // 빠진 자리를 0 으로 채우면 대기가 0 인 쿠폰이 되어 크레딧이 안 나간다.
         // 줄 선 사람이 통째로 멈추는데 아무 신호도 없다.
         //

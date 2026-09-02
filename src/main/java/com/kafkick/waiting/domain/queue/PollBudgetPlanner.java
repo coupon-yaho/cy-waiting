@@ -1,6 +1,7 @@
 package com.kafkick.waiting.domain.queue;
 
 import com.kafkick.waiting.domain.allocation.CouponDemand;
+import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import java.util.List;
 import java.util.function.ToDoubleFunction;
 
@@ -85,6 +86,43 @@ public final class PollBudgetPlanner {
     // SnapshotMeta.effectiveGatewayCount() 하나가 쥔다.
     public static double budgetRps(int nodes) {
         return BUDGET_RPS_PER_NODE * nodes;
+    }
+
+    /**
+     * 이 재료로 걸리는 전역 폴링 배수. <b>조립을 한 자리에 둔다.</b>
+     */
+    // 어느 분모로 예산을 잡는지가 여기 있다. 부르는 쪽이 저마다 조립하면
+    // 분모를 바꾸는 날 한쪽만 따라가고, 그러면 시나리오가 낡은 값을 초록으로
+    // 단언한다.
+    public static Scale scaleFor(SnapshotMeta meta, List<CouponDemand> demands,
+            ToDoubleFunction<String> drainRateOf) {
+        int nodes = meta.effectiveGatewayCount();
+        double expected = expectedPollRps(demands, drainRateOf);
+        double budget = budgetRps(nodes);
+        return new Scale(expected, budget, pollScale(expected, budget), nodes);
+    }
+
+    /** 한 틱의 폴링 예산과 그 결과. */
+    // **직접 만들어도 값이 서로 맞아야 한다.** 표준 생성자가 열려 있어 네 값을
+    // 따로 넣을 수 있는데, 어긋난 조합을 받으면 그 자리가 곧 "재는 척하는
+    // 픽스처" 가 된다 — 배수만 1 로 박은 Scale 로 시험이 초록이 된다.
+    public record Scale(double expected, double budget, double scale, int nodes) {
+
+        public Scale {
+            if (nodes < 1) {
+                throw new IllegalArgumentException("nodes 는 1 이상이어야 한다: " + nodes);
+            }
+            if (!Double.isFinite(expected) || !Double.isFinite(budget)
+                    || !Double.isFinite(scale) || expected < 0 || budget < 0) {
+                throw new IllegalArgumentException(
+                        "예상·예산·배수는 0 이상 유한값이어야 한다: %f %f %f"
+                                .formatted(expected, budget, scale));
+            }
+            if (scale != pollScale(expected, budget)) {
+                throw new IllegalArgumentException(
+                        "배수가 예상·예산과 안 맞는다: %f".formatted(scale));
+            }
+        }
     }
 
     /**

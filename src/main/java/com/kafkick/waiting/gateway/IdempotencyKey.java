@@ -24,7 +24,7 @@ public final class IdempotencyKey {
             UUID.fromString("6ba7b810-9dad-11d1-80b4-00c04fd430c8");
 
     /**
-     * 받아 주는 표기. <b>판 자리와 변종 자리까지 본다</b> — 모양만 보면 v1·v3 을
+     * 받아 주는 표기. <b>버전 자리와 변종 자리까지 본다</b> — 모양만 보면 v1·v3 을
      * 그대로 넘겼다가 뒷단이 거절해 사용자가 발급을 못 받는다.
      */
     private static final Pattern UUID_V4 = Pattern.compile(
@@ -74,7 +74,7 @@ public final class IdempotencyKey {
         String material = String.format(Locale.ROOT, "%s:%d:%s:%d:%s", NAMESPACE,
                 couponId.length(), couponId, memberId.length(), memberId);
         // `nameUUIDFromBytes` 는 v3 을 내는데 뒷단 계약이 v4 라 거절당한다.
-        // 해시는 그대로 쓰고 판·변종 자리만 세운다 — 같은 재료에 같은 값이
+        // 해시는 그대로 쓰고 버전·변종 자리만 세운다 — 같은 재료에 같은 값이
         // 나오는 성질은 그대로다.
         byte[] hash = sha256(material);
         hash[6] = (byte) ((hash[6] & 0x0f) | 0x40);

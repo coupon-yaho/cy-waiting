@@ -18,17 +18,19 @@ import org.junit.jupiter.api.Test;
 @Tag("chaos")
 class NodeHalvingUnderScaleScenarioTest {
 
-    private static final int 처음_노드 = 20;
-
-    private static final int 남는_노드 = 10;
-
     /**
      * 노드 20 대가 실제로 설 수 있는 배선.
      *
      * <p>레코드를 거쳐 만든다 — {@code GatewayRegistry.of} 를 바로 부르면 검증을
-     * 건너뛰어, 어느 배포에서도 안 생기는 조합을 재게 된다 (TS-3).
+     * 건너뛰어, 어느 배포에서도 안 생기는 조합을 재게 된다 (TS-3). <b>노드 수도
+     * 하강 지연도 전부 여기서 읽는다</b> — 리터럴을 따로 두면 한 시나리오 안에
+     * 서로 배타적인 두 배포가 섞인다.
      */
     private static final ControlPlaneProperties.Capacity 배선 = 스무_대_배포();
+
+    private static final int 처음_노드 = 배선.expectedNodes();
+
+    private static final int 남는_노드 = 처음_노드 / 2;
 
     /** 감소를 확정하기까지의 연속 관측 수. <b>배선에서 읽는다</b> — 설정이 바뀌면 따라간다. */
     private static final int 하강_지연_틱 = 배선.rampDownTicks();
@@ -56,18 +58,22 @@ class NodeHalvingUnderScaleScenarioTest {
     private static final double 오차 = 1e-9;
 
     /**
-     * <b>분모를 1 에서 시작한다.</b> 배선 기본값이 그렇고, 그래야 평시 구간이
-     * {@code observed()} 를 실제로 밟는다 — 20 으로 띄우면 관측을 통째로
-     * 무력화해도 평시 전제가 통과한다.
+     * <b>배선이 띄우는 대로 띄운다.</b> 프로덕션은 {@code expectedNodes} 로 시작한다.
+     *
+     * <p>그래서 평시 관측(20)은 값을 안 움직인다 — {@code observed()} 를 통째로
+     * 무력화해도 평시 전제만은 통과한다. 그 뮤턴트는 주입·유지 판정이 문다.
+     * 다른 값에서 띄우면 평시에서도 죽지만, 그 배포는 존재하지 않는다.
      */
-    private final GatewayRegistry 분모 = GatewayRegistry.of(하강_지연_틱, 1);
+    private final GatewayRegistry 분모 =
+            GatewayRegistry.of(배선.rampDownTicks(), 배선.expectedNodes());
 
     private static ControlPlaneProperties.Capacity 스무_대_배포() {
         ControlPlaneProperties.Capacity 기본 = ControlPlaneProperties.defaults().capacity();
         // 하한을 같이 올려야 레코드가 받는다 — 노드 20 은 하한을 올린 배포에서만
         // 존재한다. 기본 하한 5 그대로면 여기서 터진다.
+        int 노드 = 20;
         return new ControlPlaneProperties.Capacity(기본.rampUp(), 기본.freshness(),
-                처음_노드 * 2L, 기본.perInstanceCap(), 기본.rampDownTicks(), 처음_노드);
+                노드 * 2L, 기본.perInstanceCap(), 기본.rampDownTicks(), 노드);
     }
 
     /**
@@ -130,6 +136,9 @@ class NodeHalvingUnderScaleScenarioTest {
                 })
                 .afterRecovery(() -> 회복_노드당[0] = 노드당_폴링(분모.count(), 처음_노드))
                 .assertEntry(() -> RecoveryCriteria.violations(
+                        // 전제 — 하강 지연이 1 이면 "한 틱에 안 내려간다" 가 올바른
+                        // 동작을 실패로 잡는다. 이 판이 성립하는 배포인지 먼저 본다.
+                        하강_지연이_둘_이상이다(),
                         // 전제 — 밴드표가 이 줄을 전원 첫 밴드로 놓는다. 이것이
                         // 깨지면 아래 노드당 값이 다른 판의 값이 된다.
                         손으로_잰_부하와_같다(기대_부하),
@@ -147,10 +156,10 @@ class NodeHalvingUnderScaleScenarioTest {
                         // 관측 실패는 "더 작게 봤다" 가 아니다. 노드가 절반 죽는
                         // 판이면 하트비트도 같이 실패한다.
                         실패가_연속을_끊는다(실패_끊긴_분모[0], 실패_뒤_분모[0]),
-                        // 지연 구간의 초과분에 상한을 둔다. **두 배를 통과 조건으로
-                        // 삼지 않는다** — CY-732 를 고치면 1 배가 되고 그때도 통과해야
-                        // 한다. 지금 값(2 배)은 G8.15 에 미충족으로 적혀 있다.
-                        지연_구간이_살아남은_비율을_안_넘는다(정상_노드당[0], 지연중_노드당[0])))
+                        // 지연 구간의 몫에 상한을 둔다. **두 배를 통과 조건으로
+                        // 삼지 않는다** — CY-732 를 고치면 설계값으로 내려오고 그때도
+                        // 통과한다. 지금 값(2 배)은 G8.15 에 미충족으로 적혀 있다.
+                        지연_구간이_설계_상한을_안_넘는다(지연중_노드당[0])))
                 .assertRecovery(() -> RecoveryCriteria.violations(
                         // 증가는 즉시다. 늦추면 기존 노드가 작은 분모로 나눈다.
                         분모가_즉시_올라간다(회복_분모[0]),
@@ -168,7 +177,8 @@ class NodeHalvingUnderScaleScenarioTest {
      * 안 보인다. 같은 배선의 분모를 따로 세운다.
      */
     private void 실패가_연속을_끊는_판(int[] 실패_끊긴_분모, int[] 실패_뒤_분모) {
-        GatewayRegistry 섞인 = GatewayRegistry.of(하강_지연_틱, 처음_노드);
+        GatewayRegistry 섞인 =
+                GatewayRegistry.of(배선.rampDownTicks(), 배선.expectedNodes());
         for (int 틱 = 1; 틱 < 하강_지연_틱; 틱++) {
             섞인.observed(남는_노드);
         }
@@ -203,8 +213,10 @@ class NodeHalvingUnderScaleScenarioTest {
                         .formatted(분모값, 처음_노드));
     }
 
+    // 첫 틱은 진입 판정이 이미 봤다. 여기서 또 보면 실패 보고서에 같은 사실이
+    // 두 줄로 난다.
     private Optional<String> 하강_직전까지_안_내려간다(int[] 틱별) {
-        for (int 틱 = 1; 틱 < 하강_지연_틱; 틱++) {
+        for (int 틱 = 2; 틱 < 하강_지연_틱; 틱++) {
             if (틱별[틱 - 1] != 처음_노드) {
                 return Optional.of("%d 번째 관측에 분모가 %d 로 내려갔다 — %d 틱째까지는 %d 여야 한다"
                         .formatted(틱, 틱별[틱 - 1], 하강_지연_틱 - 1, 처음_노드));
@@ -237,18 +249,27 @@ class NodeHalvingUnderScaleScenarioTest {
     }
 
     /**
-     * 지연 구간의 초과분에 상한을 둔다.
+     * 지연 구간의 몫에 상한을 둔다.
      *
-     * <p><b>두 배를 통과 조건으로 삼지 않는다.</b> 분모가 안 내려간 동안 살아남은
-     * 노드가 나눠 갖는 비율이 상한이고, CY-732 를 고치면 1 배로 내려와 그대로
-     * 통과한다. 회귀로 그보다 커지면 문다.
+     * <p><b>상한을 관측이 아니라 설계 상수에서 뽑는다.</b> 평시 값으로 나누면
+     * 분모가 양쪽에서 약분되어 무엇을 바꿔도 넘을 수 없는 항등식이 된다 — 처음에
+     * 그렇게 썼다가 예산 상수를 바꾼 뮤턴트에서 이 판정만 침묵했다.
+     *
+     * <p>CY-732 를 고치면 설계값으로 내려와 그대로 통과한다.
      */
-    private Optional<String> 지연_구간이_살아남은_비율을_안_넘는다(double 평시, double 지연중) {
-        double 배 = 지연중 / 평시;
-        double 상한 = (double) 처음_노드 / 남는_노드;
-        return 배 <= 상한 + 오차 ? Optional.empty()
-                : Optional.of("지연 구간의 노드당 몫이 평시의 %.2f 배다 — 살아남은 노드 비율 "
-                        .formatted(배) + "%.2f 배를 넘으면 안 된다".formatted(상한));
+    private Optional<String> 지연_구간이_설계_상한을_안_넘는다(double 지연중) {
+        double 상한 = 노드당_예산 * 처음_노드 / 남는_노드;
+        return 지연중 <= 상한 + 오차 ? Optional.empty()
+                : Optional.of("지연 구간의 노드당 폴링이 %.2f 다 — 설계값 %.2f 의 "
+                        .formatted(지연중, 노드당_예산) + "노드 비율 배인 %.2f 이내여야 한다"
+                        .formatted(상한));
+    }
+
+    /** 하강 지연이 1 인 배포에서는 "한 틱에 안 내려간다" 가 올바른 동작을 실패로 잡는다. */
+    private Optional<String> 하강_지연이_둘_이상이다() {
+        return 하강_지연_틱 >= 2 ? Optional.empty()
+                : Optional.of("전제 — 하강 지연이 %d 틱이다. 이 판은 2 틱 이상인 배포에서만 "
+                        .formatted(하강_지연_틱) + "뜻이 있다");
     }
 
     private Optional<String> 분모가_즉시_올라간다(int 분모값) {
@@ -257,6 +278,11 @@ class NodeHalvingUnderScaleScenarioTest {
                         .formatted(분모값));
     }
 
+    /**
+     * <b>새 보장이 아니라 산술이다.</b> 분모가 20 이라는 것과 노드당 예산이
+     * 200 이라는 것에서 바로 나온다 — 앞의 두 판정에 포함된다. 남겨 둔 것은
+     * 실패했을 때 어느 값이 틀어졌는지가 메시지에 바로 보이기 때문이다.
+     */
     private Optional<String> 회복_뒤_설계값을_받는다(double 노드당) {
         return 같다(노드당, 노드당_예산) ? Optional.empty()
                 : Optional.of("회복 뒤 노드당 폴링이 %.2f 다 — %.2f 로 돌아와야 한다"

@@ -49,6 +49,14 @@ public final class FilterOrder {
     public static final int ROUTE_CIRCUIT = ROUTE_ADMISSION + 1;
 
     /**
+     * 연결이 안 된 인스턴스를 다음 대로 넘긴다 (9.3.11).
+     *
+     * <p><b>서킷 안쪽이다.</b> 바깥에 두면 재시도가 만든 시도 하나하나가 서킷
+     * 창에 안 쌓여, 뒷단이 통째로 넘어져도 서킷이 안 열린다.
+     */
+    public static final int ROUTE_RETRY = ROUTE_CIRCUIT + 1;
+
+    /**
      * <b>응답 본문을 보려면 여기여야 한다.</b>
      *
      * <p>본문은 프레임워크의 쓰기 필터가 쓰는데, 그건 <b>자기가 받은</b>

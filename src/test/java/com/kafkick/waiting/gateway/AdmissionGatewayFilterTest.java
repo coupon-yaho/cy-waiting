@@ -181,6 +181,35 @@ class AdmissionGatewayFilterTest {
                 .contains("\"rejoined\":true");
     }
 
+    /**
+     * <b>순번 역행의 선행 신호를 셉니다</b> (F2 · 8.4.5).
+     *
+     * <p>바닥값이 적용됐다는 것은 레디스 시계가 뒤로 갔다는 뜻입니다. 그 자체로는
+     * 아직 추월이 아니지만, 바닥값이 없었다면 추월이었습니다 — 이 값이 오르면
+     * 그 방어가 지금 일하고 있다는 뜻이고, 방어가 빠지는 날 사고가 됩니다.
+     */
+    @Test
+    @DisplayName("시계가_뒤로_가면_센다")
+    void 시계가_뒤로_가면_센다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100));
+        줄.시계가_뒤로_갔다();
+
+        태운다(COUPON);
+
+        assertThat(meters.counter("waiting.queue.clock.back").count()).isEqualTo(1);
+    }
+
+    /** 안 뒤집혔으면 안 셉니다. 안 두면 "늘 센다" 로도 통과합니다. */
+    @Test
+    @DisplayName("시계가_멀쩡하면_안_센다")
+    void 시계가_멀쩡하면_안_센다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100));
+
+        태운다(COUPON);
+
+        assertThat(meters.counter("waiting.queue.clock.back").count()).isZero();
+    }
+
     /** 처음 온 사람은 재방문이 아닙니다. 안 두면 "늘 참" 으로도 통과합니다. */
     @Test
     @DisplayName("처음_온_사람은_재방문이_아니다")

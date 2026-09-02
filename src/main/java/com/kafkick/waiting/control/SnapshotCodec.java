@@ -9,7 +9,12 @@ import com.kafkick.waiting.domain.allocation.QueueingHysteresis;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import com.kafkick.waiting.domain.coupon.Tunables;
 import java.time.Instant;
+import com.kafkick.waiting.domain.routing.InstanceAddress;
+import com.kafkick.waiting.domain.routing.InstanceRouting;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Optional;
 import java.util.Locale;
 import java.util.Map;
 
@@ -63,6 +68,14 @@ public final class SnapshotCodec {
      *
      * <p>붙잡고 있던 대기열이 교체마다 한 틱 꺼졌다 켜지면 진동이 그대로 보인다.
      */
+    /**
+     * 라우팅에 쓸 뒷단 목록. {@code id|host:port|credits} 를 쉼표로 잇는다.
+     *
+     * <p><b>없으면 없는 것으로 본다</b> (E-12). 옛 리더는 이 자리를 안 싣고,
+     * 그 판에서는 라우팅이 단일 주소로 돌아간다.
+     */
+    private static final String INSTANCES = "#instances";
+
     private static final String QUEUEING = "#queueing";
     private static final String BELOW_EXIT = "#belowExitTicks";
 
@@ -129,6 +142,10 @@ public final class SnapshotCodec {
         }
         hash.put(EWMA, Double.toString(smoothing.value()));
         hash.put(EWMA_SEEDED, smoothing.seeded() ? "1" : "0");
+        String instances = encodeInstances(snapshot.instances());
+        if (!instances.isEmpty()) {
+            hash.put(INSTANCES, instances);
+        }
         hash.put(QUEUEING, hysteresis.queueing() ? "1" : "0");
         hash.put(BELOW_EXIT, Integer.toString(hysteresis.belowExitTicks()));
         return hash;
@@ -206,7 +223,54 @@ public final class SnapshotCodec {
                 coupons.put(field, state);
             }
         });
-        return new GatewaySnapshot(coupons, toMeta(hash), publishedAtOf(hash));
+        return new GatewaySnapshot(coupons, toMeta(hash), publishedAtOf(hash),
+                decodeInstances(hash.get(INSTANCES)));
+    }
+
+    /** 실을 수 없는 줄은 뺀다. 식별자에 구분자가 섞이면 그 줄이 통째로 어긋난다. */
+    private String encodeInstances(List<InstanceRouting> instances) {
+        StringBuilder sb = new StringBuilder();
+        for (InstanceRouting i : instances) {
+            if (!i.encodable()) {
+                continue;
+            }
+            if (sb.length() > 0) {
+                sb.append(',');
+            }
+            sb.append(i.instanceId()).append('|').append(i.address()).append('|')
+                    .append(i.credits());
+        }
+        return sb.toString();
+    }
+
+    /**
+     * <b>깨진 줄 하나가 목록을 못 죽인다.</b> 그 줄만 빼고 나머지로 라우팅한다 —
+     * 통째로 버리면 뒷단 하나의 버그가 전 인스턴스를 후보에서 지운다.
+     */
+    private List<InstanceRouting> decodeInstances(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return List.of();
+        }
+        List<InstanceRouting> instances = new ArrayList<>();
+        for (String row : raw.split(",")) {
+            String[] parts = row.split("\\|", 4);
+            if (parts.length != 3) {
+                continue;
+            }
+            Optional<InstanceAddress> address = InstanceAddress.parse(parts[1]);
+            if (parts[0].isBlank() || address.isEmpty()) {
+                continue;
+            }
+            try {
+                long credits = Long.parseLong(parts[2]);
+                if (credits >= 0) {
+                    instances.add(new InstanceRouting(parts[0], address.orElseThrow(), credits));
+                }
+            } catch (NumberFormatException e) {
+                // 그 줄만 뺀다. 이유는 남기지 않는다 — 구간 내내 같은 줄이 쌓인다.
+            }
+        }
+        return List.copyOf(instances);
     }
 
     /**

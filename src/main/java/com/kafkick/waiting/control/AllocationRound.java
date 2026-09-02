@@ -7,6 +7,7 @@ import com.kafkick.waiting.domain.allocation.CreditSmoother;
 import com.kafkick.waiting.domain.allocation.FairShareAllocator;
 import com.kafkick.waiting.domain.allocation.Grant;
 import com.kafkick.waiting.domain.coupon.CouponState;
+import com.kafkick.waiting.domain.routing.InstanceRouting;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import com.kafkick.waiting.domain.coupon.Tunables;
 import com.kafkick.waiting.domain.queue.PollBudgetPlanner;
@@ -67,6 +68,12 @@ public final class AllocationRound {
 
     private final BooleanSupplier stillLeader;
     private final Supplier<Mono<TimedDemands>> demands;
+    /**
+     * 라우팅에 쓸 뒷단 목록. <b>발행에 실어 전 노드에 보낸다</b> — 요청 경로가
+     * 레디스를 안 치므로(불변식 1) 이 길 말고는 닿을 방법이 없다.
+     */
+    private final Supplier<List<InstanceRouting>> routable;
+
     private final LongSupplier globalCredit;
     private final LongSupplier creditFloor;
     private final IntSupplier gatewayCount;
@@ -163,7 +170,9 @@ public final class AllocationRound {
             LongSupplier creditFloor, Supplier<Optional<Tunables>> tunables,
             SoldOutCleanup cleanup, Function<List<String>, Mono<List<String>>> dropQueues,
             Function<List<String>, Mono<List<String>>> claimQueues,
-            QueueSweeper sweeper, BooleanSupplier dataStale, Supplier<CircuitState> circuit) {
+            QueueSweeper sweeper, BooleanSupplier dataStale, Supplier<CircuitState> circuit,
+            Supplier<List<InstanceRouting>> routable) {
+        this.routable = Objects.requireNonNull(routable, "routable 은 필수다");
         this.circuit = Objects.requireNonNull(circuit, "circuit 은 필수다");
         this.sweeper = Objects.requireNonNull(sweeper, "sweeper 는 필수다");
         this.dataStale = Objects.requireNonNull(dataStale, "dataStale 은 필수다");
@@ -198,9 +207,26 @@ public final class AllocationRound {
             SoldOutCleanup cleanup, Function<List<String>, Mono<List<String>>> dropQueues,
             Function<List<String>, Mono<List<String>>> claimQueues,
             QueueSweeper sweeper, BooleanSupplier dataStale, Supplier<CircuitState> circuit) {
+        // 라우팅 목록을 안 싣던 자리. 발행은 그대로 돌고 목록만 빈다.
+        return of(stillLeader, demands, globalCredit, gatewayCount, apply, publish,
+                clock, restore, codec, creditFloor, tunables, cleanup, dropQueues, claimQueues,
+                sweeper, dataStale, circuit, List::of);
+    }
+
+    /** 라우팅 목록을 함께 싣는 자리 (Phase 9). */
+    public static AllocationRound of(BooleanSupplier stillLeader,
+            Supplier<Mono<TimedDemands>> demands,
+            LongSupplier globalCredit, IntSupplier gatewayCount, Function<Grant, Mono<Long>> apply,
+            Function<Map<String, String>, Mono<Void>> publish, Supplier<Instant> clock,
+            Supplier<Mono<CreditSmoother>> restore, SnapshotCodec codec,
+            LongSupplier creditFloor, Supplier<Optional<Tunables>> tunables,
+            SoldOutCleanup cleanup, Function<List<String>, Mono<List<String>>> dropQueues,
+            Function<List<String>, Mono<List<String>>> claimQueues,
+            QueueSweeper sweeper, BooleanSupplier dataStale, Supplier<CircuitState> circuit,
+            Supplier<List<InstanceRouting>> routable) {
         return new AllocationRound(stillLeader, demands, globalCredit, gatewayCount, apply, publish,
                 clock, restore, codec, creditFloor, tunables, cleanup, dropQueues, claimQueues,
-                sweeper, dataStale, circuit);
+                sweeper, dataStale, circuit, routable);
     }
 
     /** 정리를 안 붙이는 자리. <b>아무것도 안 지운다</b> — 시험 편의다. */
@@ -217,7 +243,7 @@ public final class AllocationRound {
                 ids -> Mono.just(List.of()),
                 QueueSweeper.of(SweepGate.of(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
                         (ids, limit, removeFront) -> Mono.just(QueueSweeper.SweepResult.NOTHING)),
-                () -> false, () -> CircuitState.CLOSED);
+                () -> false, () -> CircuitState.CLOSED, List::of);
     }
 
     /** 튜너블을 안 읽던 자리. 늘 기본값으로 돈다. */
@@ -619,7 +645,7 @@ public final class AllocationRound {
     private GatewaySnapshot snapshot(List<CouponDemand> collected, Map<String, Long> granted,
             long credit, Instant readAt, Tunables applied, double pollScale) {
         return new GatewaySnapshot(couponsOf(collected, granted),
-                meta(credit, applied).withPollScale(pollScale), readAt);
+                meta(credit, applied).withPollScale(pollScale), readAt, routable.get());
     }
 
     // **노드 수 방어를 여기서 다시 쓰지 않는다.** 사본이 생기면 둘 중 하나만

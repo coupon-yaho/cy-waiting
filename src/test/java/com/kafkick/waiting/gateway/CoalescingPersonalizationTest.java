@@ -212,7 +212,7 @@ class CoalescingPersonalizationTest {
         assertThat(건너뛴("set-cookie"))
                 .as("왜 안 모았는지가 사유로 남는다").isEqualTo(4);
         // 뒤엣사람의 응답이 끝났는가. 안 끝나면 클라이언트가 영원히 기다린다.
-        assertThat(Mono.when(끝남).block(java.time.Duration.ofSeconds(5))).isNull();
+        assertThat(Mono.when(끝남).block(Duration.ofSeconds(5))).isNull();
     }
 
     /**
@@ -251,7 +251,7 @@ class CoalescingPersonalizationTest {
         // 문자열이라 유출이 정의상 안 드러난다.
         assertThat(사람들).allSatisfy(e ->
                 assertThat(e.getResponse().getBodyAsString().block()).isEqualTo("목록:같은사람"));
-        assertThat(Mono.when(끝남).block(java.time.Duration.ofSeconds(5))).isNull();
+        assertThat(Mono.when(끝남).block(Duration.ofSeconds(5))).isNull();
     }
 
     /**
@@ -282,7 +282,7 @@ class CoalescingPersonalizationTest {
         // **각자 자기 것을 받았는가.** 여기가 개인화 유출이 드러나는 자리다.
         assertThat(사람들).allSatisfy(e -> assertThat(e.getResponse().getBodyAsString().block())
                 .isEqualTo("목록:" + e.getRequest().getHeaders().getFirst("X-Member-Id")));
-        assertThat(Mono.when(끝남).block(java.time.Duration.ofSeconds(5))).isNull();
+        assertThat(Mono.when(끝남).block(Duration.ofSeconds(5))).isNull();
     }
 
     /**

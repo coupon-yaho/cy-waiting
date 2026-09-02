@@ -43,10 +43,10 @@ jobs:
         run: |
           set -euo pipefail
           case "${{ inputs.layer }}" in
-            unit)        ./gradlew --no-daemon test ;;
-            integration) ./gradlew --no-daemon integrationTest ;;
-            context)     ./gradlew --no-daemon contextTest ;;
-            chaos)       ./gradlew --no-daemon chaosTest ;;
+            unit)        .github/scripts/gradle-retry.sh test ;;
+            integration) .github/scripts/gradle-retry.sh integrationTest ;;
+            context)     .github/scripts/gradle-retry.sh contextTest ;;
+            chaos)       .github/scripts/gradle-retry.sh chaosTest ;;
             # **비율이 무엇 위에서 나온 값인지 검사한다.** 판정 못 한 뮤턴트가
             # 있는 채로 남은 것만 세면, 게이트가 초록인데 무엇을 지켰는지 말할
             # 수 없다. 요약이 말한 수와 리포트에 기록된 수를 맞춰 본다.
@@ -56,6 +56,9 @@ jobs:
               # 죽으면 일반 그레이들 실패만 남는다.
               rc=0
               mkdir -p build   # 첫 실행이면 아직 없다. tee 가 먼저 죽는다
+              # **재시도 스크립트를 안 쓴다.** 이 단계는 로그를 스스로 모아
+              # 아래 검사에 넘기는데, 재시도가 로그를 덮어쓰면 마지막 판만 남아
+              # 앞 판의 유실을 못 본다. 뮤테이션은 나이틀리라 재실행이 싸다.
               ./gradlew --no-daemon pitest 2>&1 | tee build/pitest.log || rc=$?
               # **그레이들의 종료 코드를 잃지 않는다.** 여기서 그냥 exit 1 하면
               # OOM 킬(137)이 1 로 뭉개져, 왜 빨간지 로그를 다 읽어야 안다.
@@ -113,7 +116,7 @@ jobs:
             # 덮인다. 계층이 잡으로 갈려 exec 가 한자리에 안 모이므로 여기서
             # 셋을 함께 돌려 합쳐 잰다 — 빠뜨리면 임계가 안 도는데 잰 것으로
             # 기록된다. jacocoTestCoverageVerification 은 도메인 100% 다.
-            coverage)    ./gradlew --no-daemon test integrationTest contextTest \
+            coverage)    .github/scripts/gradle-retry.sh test integrationTest contextTest \
                            jacocoTestCoverageVerification \
                            adapterCoverageVerification gatewayCoverageVerification ;;
             *) echo "::error::알 수 없는 계층 '${{ inputs.layer }}'"; exit 1 ;;

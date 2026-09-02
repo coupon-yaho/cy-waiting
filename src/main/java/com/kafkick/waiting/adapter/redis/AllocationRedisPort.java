@@ -1,6 +1,7 @@
 package com.kafkick.waiting.adapter.redis;
 
 import com.kafkick.waiting.control.CapacityReport;
+import com.kafkick.waiting.domain.routing.InstanceAddress;
 import com.kafkick.waiting.control.CapacitySample;
 import com.kafkick.waiting.control.TimedCoupons;
 import com.kafkick.waiting.control.TimedSnapshot;
@@ -230,7 +231,13 @@ public final class AllocationRedisPort implements SnapshotSource {
                     || ts == null || !ts.canConvertToLong()) {
                 return drop(instanceId, "필드가 없거나 수가 아니다", dropped);
             }
-            return new CapacityReport(instanceId, credits.longValue(), ts.longValue());
+            // **주소가 없거나 모양이 어긋나도 보고는 산다** (E-12). 크레딧에는
+            // 들고 라우팅 후보에서만 빠진다 — 버리면 그 몫만큼 전역 크레딧이
+            // 조용히 줄어, 계약을 아직 안 따르는 판올림 구간에 전체가 조여진다.
+            JsonNode addr = node.get("addr");
+            return new CapacityReport(instanceId, credits.longValue(), ts.longValue(),
+                    addr == null || !addr.isTextual()
+                            ? null : InstanceAddress.parse(addr.asText()).orElse(null));
         } catch (JacksonException e) {
             return drop(instanceId, e.getMessage(), dropped);
         }

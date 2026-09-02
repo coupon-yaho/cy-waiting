@@ -162,7 +162,7 @@ class PollScaleDropScenarioTest {
                 .assertRecovery(() -> RecoveryCriteria.violations(
                         매진되면_배수가_풀린다(회복_배수[0]),
                         평시_간격이_밴드_그대로다(회복_간격)))
-                // **RC1~RC6 은 여기서 안 잰다.** 이 판은 예산 계산과 폴링 정책만
+                // **RC1~RC6 은 여기서 안 잰다.** 이 시나리오는 예산 계산과 폴링 정책만
                 // 걷는다 — 줄도 뒷단 유입도 세우지 않는다.
                 .run();
     }

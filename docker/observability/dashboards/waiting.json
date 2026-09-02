@@ -263,6 +263,10 @@
         {
           "expr": "increase(waiting_snapshot_clock_floor_applied_total[5m])",
           "legendFormat": "{{instance}} — 재료 시각 역행"
+        },
+        {
+          "expr": "increase(waiting_queue_clock_back_total[5m])",
+          "legendFormat": "{{instance}} — 순번 바닥값 적용(F2)"
         }
       ]
     },
@@ -323,6 +327,54 @@
         {
           "expr": "sum(increase(waiting_backend_body_episode_total[5m]))",
           "legendFormat": "구간 수 (5분)"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "서킷 상태",
+      "description": "서킷이 유입을 조이면 요청 지표가 0 이라 아무 일도 없는 것처럼 보인다. 무엇이 조이고 있는지는 여기서만 보인다",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 40
+      },
+      "targets": [
+        {
+          "expr": "resilience4j_circuitbreaker_state",
+          "legendFormat": "{{instance}} — {{name}} {{state}}"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "배분이 도는가",
+      "description": "받아 오는 것과 배분이 도는 것은 다른 고장이다. 배분이 멎어도 재료는 계속 받아 오므로 응답은 정상으로 보이고, 그동안 줄이 안 빠진다",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 56
+      },
+      "targets": [
+        {
+          "expr": "waiting_snapshot_tick_age",
+          "legendFormat": "{{instance}} — 배분이 돈 지(초)"
+        },
+        {
+          "expr": "waiting_snapshot_fetch_age",
+          "legendFormat": "{{instance}} — 받아 온 지(초)"
         }
       ]
     }

@@ -6,6 +6,8 @@ import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * 뒷단이 보고에 실어 올리는 자기 주소 (D-C1 · A-11).
@@ -100,5 +102,24 @@ class InstanceAddressTest {
     void 문자열로_되돌리면_같다() {
         assertThat(InstanceAddress.parse("10.0.1.7:8080").orElseThrow())
                 .hasToString("10.0.1.7:8080");
+    }
+
+    /**
+     * <b>라벨마다 본다.</b>
+     *
+     * <p>전체를 한 덩어리로 보면 양 끝만 맞으면 통과한다 — 가운데가 무엇이든
+     * 못 푸는 이름이 라우팅 후보로 올라간다.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {
+        "a..b:8080",
+        "a.-b:8080",
+        "a.b-:8080",
+        ".a.b:8080",
+        "a.b.:8080",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.b:8080"})
+    @DisplayName("못_푸는_이름은_안_받는다")
+    void 못_푸는_이름은_안_받는다(String raw) {
+        assertThat(InstanceAddress.parse(raw)).isEmpty();
     }
 }

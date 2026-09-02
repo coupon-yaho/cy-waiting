@@ -90,12 +90,12 @@ class GatewayRoutesTest {
             컨텍스트.getBean(SpringCloudCircuitBreakerResilience4JFilterFactory.class),
             new SimpleMeterRegistry(), 라우팅_없음());
 
-    /** 라우팅을 안 켠 판. 기존 시험들이 보는 것은 단일 주소 그대로다. */
+    /** 라우팅을 안 켠 경우. 기존 시험들이 보는 것은 단일 주소 그대로다. */
     private static ObjectProvider<RoutingProperties> 라우팅_없음() {
         return 라우팅(null);
     }
 
-    /** 배선만 넘긴다. 컨텍스트를 띄우지 않고 켠 판과 끈 판을 나란히 본다. */
+    /** 배선만 넘긴다. 컨텍스트를 띄우지 않고 켠 것과 끈 것을 나란히 본다. */
     private static ObjectProvider<RoutingProperties> 라우팅(RoutingProperties properties) {
         return new ObjectProvider<>() {
             @Override

@@ -76,7 +76,7 @@ class SnapshotRefresherTest {
         AtomicInteger 호출 = new AtomicInteger();
         SnapshotRefresher refresher = SnapshotRefresher.of(holder, () -> {
             int n = 호출.incrementAndGet();
-            return n == 1 ? Mono.error(new IllegalStateException("첫 판이 실패")) : Mono.just(정상);
+            return n == 1 ? Mono.error(new IllegalStateException("첫 회차가 실패")) : Mono.just(정상);
         });
 
         // **루프로 본다.** 한번() 을 시험이 두 번 부르면 "두 번 불렸다" 는
@@ -142,20 +142,20 @@ class SnapshotRefresherTest {
     @Test
     @DisplayName("받아들일_수_없는_스냅샷도_루프는_돈_것이다")
     void 받아들일_수_없는_스냅샷도_루프는_돈_것이다() {
-        // 필터로 버리는 경로다. 여기서 하트비트를 안 찍으면 스케줄러 판이
+        // 필터로 버리는 경로다. 여기서 하트비트를 안 찍으면 스케줄러 회차가
         // 갈린 동안 전 노드가 liveness 실패로 재기동을 반복한다 —
         // 재기동한다고 스케줄러가 고쳐지지 않는다.
         //
-        // **빈 해시가 아니라 판 갈림을 쓴다.** 빈 해시는 발행 표시가 없어 첫
+        // **빈 해시가 아니라 회차 갈림을 쓴다.** 빈 해시는 발행 표시가 없어 첫
         // 조건에서 걸려, 쿠폰을 하나도 못 읽은 두 번째 가지를 안 밟는다.
         MutableClock clock = MutableClock.at(지금);
         SnapshotHolder holder = 홀더(clock);
         AtomicInteger 호출 = new AtomicInteger();
-        Map<String, String> 판이_갈린_스냅샷 = Map.of(
+        Map<String, String> 회차가_갈린_스냅샷 = Map.of(
                 "#credit", "1000", "#nodes", "2", "#published", "1787184000",
-                "c1", "ADAPTIVE:QUEUEING:100:500:2000:뒷판이_늘린_필드");
+                "c1", "ADAPTIVE:QUEUEING:100:500:2000:뒷회차가_늘린_필드");
         SnapshotRefresher refresher = SnapshotRefresher.of(holder,
-                () -> Mono.just(호출.incrementAndGet() == 1 ? 정상 : 판이_갈린_스냅샷));
+                () -> Mono.just(호출.incrementAndGet() == 1 ? 정상 : 회차가_갈린_스냅샷));
 
         StepVerifier.create(refresher.once()).verifyComplete();
 
@@ -194,12 +194,12 @@ class SnapshotRefresherTest {
         MutableClock clock = MutableClock.at(지금);
         SnapshotHolder holder = 홀더(clock);
         AtomicInteger 호출 = new AtomicInteger();
-        Map<String, String> 판이_다른_스냅샷 = Map.of(
+        Map<String, String> 회차가_다른_스냅샷 = Map.of(
                 "#credit", "1000", "#nodes", "2", "#published", "1787184000",
-                "c1", "ADAPTIVE:QUEUEING:100:500:2000:뒷판이_늘린_필드");
+                "c1", "ADAPTIVE:QUEUEING:100:500:2000:뒷회차가_늘린_필드");
         SnapshotRefresher refresher = SnapshotRefresher.of(holder,
                 () -> 호출.incrementAndGet() == 1 ? Mono.just(정상)
-                        : Mono.just(판이_다른_스냅샷));
+                        : Mono.just(회차가_다른_스냅샷));
 
         StepVerifier.create(refresher.once()).verifyComplete();
         StepVerifier.create(refresher.once()).verifyComplete();
@@ -208,10 +208,10 @@ class SnapshotRefresherTest {
     }
 
     @Test
-    @DisplayName("루프는_판마다_새로_읽는다")
-    void 루프는_판마다_새로_읽는다() {
+    @DisplayName("루프는_회차마다_새로_읽는다")
+    void 루프는_회차마다_새로_읽는다() {
         // Supplier 를 한 번만 부르면 프로세스 수명 내내 최초 것만 쓴다.
-        // 키·커넥션·설정을 매 판 다시 읽는 구현을 끼우면 그때 드러난다.
+        // 키·커넥션·설정을 매 회차 다시 읽는 구현을 끼우면 그때 드러난다.
         //
         // 한번() 은 값을 안 흘리므로 방출 수로는 못 센다 — 호출 수를 본다.
         // **가상 시계로 잰다.** 실제 대기로 "3회 이상" 만 보면 간격 없이
@@ -228,7 +228,7 @@ class SnapshotRefresherTest {
 
         Disposable 구독 = refresher.loop(Duration.ofMillis(10), 가상).subscribe();
         try {
-            // 시간을 안 돌리면 첫 판만 돈다.
+            // 시간을 안 돌리면 첫 회차만 돈다.
             assertThat(호출).hasValue(1);
             가상.advanceTimeBy(Duration.ofMillis(10));
             assertThat(호출).hasValue(2);
@@ -264,11 +264,11 @@ class SnapshotRefresherTest {
                 .then(() -> 가상.advanceTimeBy(Duration.ofMillis(60)))
                 .verifyComplete();
 
-        // 매달린 판을 포기하되 들고 있던 것은 남는다.
+        // 매달린 회차를 포기하되 들고 있던 것은 남는다.
         assertThat(holder.current().coupons()).containsOnlyKeys("c1");
 
-        // **그리고 포기한 판도 한 바퀴 돈 것이다.** 이 사고의 발단이 정확히
-        // 여기였다 — 지연을 주입하니 모든 판이 타임아웃했고, 그걸 노드별
+        // **그리고 포기한 회차도 한 바퀴 돈 것이다.** 이 사고의 발단이 정확히
+        // 여기였다 — 지연을 주입하니 모든 회차가 타임아웃했고, 그걸 노드별
         // 신호로 세는 바람에 전 노드가 동시에 빠졌다.
         assertThat(holder.isFetchStale()).isFalse();
     }
@@ -280,23 +280,23 @@ class SnapshotRefresherTest {
         // 한쪽만 검증된 채로 남는다 — 아무도 안 빠지는 것만 확인하고,
         // 정말 멎은 노드가 빠지는지는 확인 안 한 것이다.
         //
-        // **취소는 하트비트가 아니라는 계약도 여기서 고정된다.** 그래서 판이
-        // 매달린 채로 뜯는다 — 이미 끝난 판을 뜯으면 취소 신호가 한번() 까지
+        // **취소는 하트비트가 아니라는 계약도 여기서 고정된다.** 그래서 회차가
+        // 매달린 채로 뜯는다 — 이미 끝난 회차를 뜯으면 취소 신호가 한번() 까지
         // 안 내려가고, doFinally 로 옮긴 구현도 그대로 통과한다.
         MutableClock clock = MutableClock.at(지금);
         SnapshotHolder holder = 홀더(clock);
         AtomicInteger 호출 = new AtomicInteger();
         SnapshotRefresher refresher = SnapshotRefresher.of(holder,
                 () -> 호출.incrementAndGet() == 1 ? Mono.just(정상) : Mono.never(),
-                Duration.ofSeconds(30));   // 매달린 판이 스스로 포기하지 않게
+                Duration.ofSeconds(30));   // 매달린 회차가 스스로 포기하지 않게
 
         VirtualTimeScheduler 가상 = VirtualTimeScheduler.create();
         Disposable 구독 = refresher.loop(Duration.ofMillis(100), 가상).subscribe();
         try {
-            가상.advanceTimeBy(Duration.ofMillis(250));   // 1판 성공, 2판은 매달린다
+            가상.advanceTimeBy(Duration.ofMillis(250));   // 1회차 성공, 2회차는 매달린다
             assertThat(holder.isFetchStale()).isFalse();
 
-            // **가상 시간은 그대로 두고 벽시계만 감는다.** 그래야 루프가 한 판도
+            // **가상 시간은 그대로 두고 벽시계만 감는다.** 그래야 루프가 한 회차도
             // 더 못 돈 채로 낡는다 — 뜯기 직전 상태를 낡음으로 만들어 둔다.
             clock.앞으로(FETCH_STALE.plusSeconds(1));
             assertThat(holder.isFetchStale()).isTrue();

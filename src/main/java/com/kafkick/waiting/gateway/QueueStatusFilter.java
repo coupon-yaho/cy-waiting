@@ -247,7 +247,7 @@ public final class QueueStatusFilter implements WebFilter {
                     entryTokens.issue(couponId, memberId, clock.instant()), EntryToken.TTL_SEC);
         }
         // **한 View 에서 둘 다 뽑는다.** 따로 읽으면 그 사이 갱신이 들어와
-        // ETA 는 판 N, 배수는 판 N+1 에서 나온다 — SnapshotHolder 가 View 를
+        // ETA 는 회차 N, 배수는 회차 N+1 에서 나온다 — SnapshotHolder 가 View 를
         // 두는 이유가 그것이다.
         SnapshotHolder.View view = holder.view();
         double etaSec = EtaPolicy.etaSec(entry.rank(), credit(view, couponId));

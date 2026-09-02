@@ -87,6 +87,17 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      * 구간에서 로그가 폭주하고, 그때 정작 봐야 할 것이 묻힌다. */
     private static final String METRIC = "waiting.admission";
 
+    /**
+     * 등록에서 순번 바닥값이 걸린 횟수. <b>순번 역행의 선행 신호다</b> (F2 · 8.4.5).
+     *
+     * <p>바닥값이 걸렸다는 것은 레디스 시계가 뒤로 갔다는 뜻이다. 아직 추월은
+     * 아니지만, 바닥값이 없었다면 추월이었다 — 이 값이 오르는 구간이 곧 그
+     * 방어 하나에 불변식 4 가 걸려 있는 구간이다.
+     */
+    // **판정 카운터에 안 섞는다.** SLI 의 분모가 그 이름들의 합이라, 한 요청이
+    // 거기서 두 번 세어지면 분모가 부풀고 실패율이 좋아 보인다 (O-7).
+    private static final String CLOCK_BACK = "waiting.queue.clock.back";
+
     /** 받아도 되는 최대 대기 시간. 넘으면 줄을 세우는 것이 되레 나쁘다. */
     static final long MAX_ETA_SEC = 600;
 
@@ -486,6 +497,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                     // 뒤집히면 그 사람이 통째로 추월당한다. 계획서가 "줄이 보이면
                     // 바로 풀어도 된다" 고 적은 것은 그 한 명을 안 센 것이다.
                     latch.mark(couponId, clock.instant().getEpochSecond());
+                    if (entry.clockWentBack()) {
+                        meters.counter(CLOCK_BACK).increment();
+                    }
                     // 등록이 다시 되면 fail-open 구간이 끝난 것이다. 쌍으로 안
                     // 남기면 로그에 진입만 있고 언제 닫혔는지가 없다 (LG-2).
                     failOpenWindow.exited().ifPresent(r -> log.info(

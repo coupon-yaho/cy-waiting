@@ -14,6 +14,7 @@
 
 | 문서 | 접두사 | 범위 |
 |---|---|---|
+| [05-glossary.md](05-glossary.md) | — | 용어. 한 낱말은 한 가지만 뜻한다 |
 | [10-java-style.md](10-java-style.md) | `JS` | 문법·표기·Lombok·Javadoc |
 | [20-design.md](20-design.md) | `DS` | DDD·SOLID·디자인 패턴·계층 |
 | [30-reactive.md](30-reactive.md) | `RX` | WebFlux·Reactor |
@@ -69,7 +70,7 @@
 | JS-14 | 유틸리티·중첩 클래스는 `static` | ✅ |
 | DS-1 | 도메인은 Spring·Redis·시계를 참조하지 않는다 | ✅ |
 | DS-2 | 도달 불가 상태를 만들 수 있는 public 생성자 금지 | — |
-| DS-8 | 직접 만들기 전에 라이브러리부터 찾는다. 판은 실측해 고른다 | — |
+| DS-8 | 직접 만들기 전에 라이브러리부터 찾는다. 버전은 실측해 고른다 | — |
 | RX-1 | 블로킹 호출 금지 | ✅ |
 | RX-4 | `subscribe()` 결과를 버리지 않는다 | — |
 | TS-1 | 구현보다 테스트를 먼저 커밋한다 | — |

@@ -24,6 +24,7 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Bean;
@@ -43,6 +44,10 @@ import org.springframework.test.web.reactive.server.WebTestClient;
  */
 // 램프를 짧게 잡는 배선은 C7 과 같다. 값만 다를 뿐 프로덕션이 도달하는 상태다.
 @Tag("chaos")
+// **컨텍스트를 캐시에 남기지 않는다.** 스케줄러를 켜고 띄우므로 제어 평면 루프가
+// 계속 도는데, 뒷정리가 자원을 내린 뒤에도 캐시된 컨텍스트는 살아 있다 — 그 루프가
+// 사라진 자원을 치면서 뒤 시험을 흔든다.
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = "waiting.scheduler.enabled=true")
 @Import(NodeLossScenarioTest.ShortRamp.class)

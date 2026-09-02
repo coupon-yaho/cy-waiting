@@ -2,6 +2,7 @@ package com.kafkick.waiting.chaos;
 
 import com.kafkick.waiting.control.LeaderLock;
 import com.kafkick.waiting.control.Leadership;
+import com.kafkick.waiting.control.TickedLeadership;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
@@ -44,6 +45,21 @@ class RedisLatencyHeldScenarioTest {
     /** 지금 서버 락의 주인. 스크립트가 하는 일을 메모리로 흉내 낸다. */
     private final AtomicReference<String> 락주인 = new AtomicReference<>();
 
+    /**
+     * 락이 사는 시각(나노). <b>프로덕션 락은 리스 TTL 이 붙은 키다</b> — 만료가
+     * 없으면 한 번 잡힌 락이 영영 안 풀려, 승계라는 사건 자체가 없는 판이 된다.
+     */
+    private final AtomicLong 락만료 = new AtomicLong();
+
+    /**
+     * 시험이 앞으로 감는 시계 (TS-4).
+     *
+     * <p>리스 경계가 밀리초 단위라 실시계로 재면 여유가 백 밀리초대다. 클래스
+     * 로딩 한 번에 그 여유가 사라져 <b>불변식 위반 문구로</b> 빨개지고, 그 빨강은
+     * 다음 사람이 제품을 의심하게 만든다.
+     */
+    private final AtomicLong 나노 = new AtomicLong();
+
     private final AtomicLong 판번호 = new AtomicLong();
 
     /**
@@ -57,15 +73,27 @@ class RedisLatencyHeldScenarioTest {
             if (느리다.get()) {
                 return Mono.never();
             }
+            // 만료된 락은 비운다. 서버 키의 TTL 이 하는 일이다.
+            if (락주인.get() != null && 나노.get() >= 락만료.get()) {
+                락주인.set(null);
+            }
             String 주인 = 락주인.compareAndSet(null, 나) ? 나 : 락주인.get();
             boolean 내것 = 나.equals(주인);
+            if (내것) {
+                락만료.set(나노.get() + 리스.toNanos());
+            }
             return Mono.just(new LeaderLock(내것, 주인, 리스.toMillis(),
                     내것 ? 판번호.incrementAndGet() : 0));
         });
     }
 
+    /** 시각을 앞으로 감는다. 실시간을 안 태우고 리스 경계를 정확히 밟는다. */
+    private void 앞으로(Duration 만큼) {
+        나노.addAndGet(만큼.toNanos());
+    }
+
     private Leadership 노드(String 나) {
-        return Leadership.of(나, 리스, 시도_상한, () -> 잡는다(나), Mono::empty);
+        return TickedLeadership.of(나, 리스, 시도_상한, () -> 잡는다(나), Mono::empty, 나노::get);
     }
 
     /** 한 판. 두 노드가 같이 연장을 시도한다. */
@@ -75,16 +103,15 @@ class RedisLatencyHeldScenarioTest {
     }
 
     /**
-     * 리스가 확실히 지날 때까지 돈다.
+     * 리스를 지나게 한다.
      *
-     * <p>지연 구간이라 한 판이 시도 상한만큼 걸린다 — 두 노드면 100ms 다.
-     * 리스의 세 배를 넘길 때까지 돌아 경계에 안 걸리게 한다.
+     * <p><b>실시간을 안 태운다.</b> 시각을 주입하므로 경계를 정확히 밟을 수 있고,
+     * 시험이 러너 속도에 안 걸린다 — 실시계로 재던 때는 진입 구간의 여유가
+     * 150ms 뿐이라 재컴파일 직후 첫 판이 곧잘 빨개졌다.
      */
-    private void 리스가_지날_때까지(Leadership 갑노드, Leadership 을노드) {
-        long 끝 = System.nanoTime() + 리스.multipliedBy(3).toNanos();
-        while (System.nanoTime() < 끝) {
-            한_틱(갑노드, 을노드);
-        }
+    private void 리스가_지나게_한다(Leadership 갑노드, Leadership 을노드) {
+        앞으로(리스.plusMillis(1));
+        한_틱(갑노드, 을노드);
     }
 
     private long 리더_수(Leadership... 노드들) {
@@ -98,7 +125,7 @@ class RedisLatencyHeldScenarioTest {
      * 조여져 있으면 아무도 리더가 아니게 되고, 배분이 멎는데 응답은 정상이다.
      */
     @Test
-    @DisplayName("C15_지연이_시도_상한을_넘겨도_리더가_정확히_한_대다")
+    @DisplayName("지연이_유지되면_확인_없이_리스가_지난_노드가_내려온다")
     void C15_지연이_시도_상한을_넘겨도_리더가_정확히_한_대다() {
         Leadership 갑노드 = 노드(갑);
         Leadership 을노드 = 노드(을);
@@ -106,12 +133,14 @@ class RedisLatencyHeldScenarioTest {
         long[] 지연중_리더 = new long[1];
         long[] 리스_지난_뒤_리더 = new long[1];
         long[] 회복_리더 = new long[1];
+        long[] 평시_판번호 = new long[1];
         long[] 회복_판번호 = new long[1];
 
         ChaosScenario.named("C15 레디스 지연 상승 유지")
                 .baseline(() -> {
                     한_틱(갑노드, 을노드);
                     정상_리더[0] = 리더_수(갑노드, 을노드);
+                    평시_판번호[0] = Math.max(갑노드.fence(), 을노드.fence());
                 })
                 .inject(() -> {
                     느리다.set(true);
@@ -120,7 +149,7 @@ class RedisLatencyHeldScenarioTest {
                     지연중_리더[0] = 리더_수(갑노드, 을노드);
                 })
                 .duringFault(() -> {
-                    리스가_지날_때까지(갑노드, 을노드);
+                    리스가_지나게_한다(갑노드, 을노드);
                     리스_지난_뒤_리더[0] = 리더_수(갑노드, 을노드);
                 })
                 .recover(() -> 느리다.set(false))
@@ -143,7 +172,7 @@ class RedisLatencyHeldScenarioTest {
                         // 지연이 걷히면 한 판 안에 다시 하나다.
                         리더가_정확히_하나다("회복", 회복_리더[0]),
                         // 판 번호를 들고 돌아온다. 0 이면 되돌릴 수 없는 쓰기가 전부 거절된다.
-                        판_번호를_들고_돌아온다(회복_판번호[0])))
+                        판_번호가_앞선다(평시_판번호[0], 회복_판번호[0])))
                 // **RC1~RC6 은 여기서 안 잰다.** 이 판은 리더십만 걷는다 — 줄도
                 // 뒷단 유입도 세우지 않는다. 밀린 크레딧의 버스트는 열린 루프가
                 // 있어야 재진다 (CY-817).
@@ -167,6 +196,20 @@ class RedisLatencyHeldScenarioTest {
         }
         return 수 == 0 ? Optional.empty()
                 : Optional.of("리스가 지났는데 아직 리더다 — 확인 없이 리스가 지나면 내려와야 한다");
+    }
+
+    /**
+     * <b>판 번호가 앞선다.</b> 0 만 막으면 옛 번호를 들고 돌아오는 판을 놓친다 —
+     * 프로덕션이 경고하는 사고가 그쪽이다 (CY-766).
+     */
+    private Optional<String> 판_번호가_앞선다(long 평시, long 회복) {
+        if (회복 <= 0) {
+            return Optional.of("돌아온 리더의 판 번호가 %d 다 — 울타리가 전부 거절한다"
+                    .formatted(회복));
+        }
+        return 회복 > 평시 ? Optional.empty()
+                : Optional.of("판 번호가 %d 에서 %d 다 — 옛 번호를 들고 돌아왔다"
+                        .formatted(평시, 회복));
     }
 
     private Optional<String> 판_번호를_들고_돌아온다(long 판번호) {

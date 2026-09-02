@@ -40,6 +40,9 @@ import org.springframework.cloud.client.circuitbreaker.ReactiveCircuitBreakerFac
 import org.springframework.cloud.circuitbreaker.resilience4j.ReactiveResilience4JCircuitBreakerFactory;
 import org.springframework.cloud.circuitbreaker.resilience4j.Resilience4JConfigurationProperties;
 import org.springframework.cloud.gateway.filter.factory.RemoveRequestHeaderGatewayFilterFactory;
+import io.netty.channel.ConnectTimeoutException;
+import java.net.ConnectException;
+import org.springframework.cloud.gateway.filter.factory.RetryGatewayFilterFactory;
 import org.springframework.cloud.gateway.filter.factory.SpringCloudCircuitBreakerResilience4JFilterFactory;
 import org.springframework.cloud.gateway.handler.predicate.MethodRoutePredicateFactory;
 import org.springframework.cloud.gateway.handler.predicate.PathRoutePredicateFactory;
@@ -88,7 +91,7 @@ class GatewayRoutesTest {
             SoldOutObserver.ofPublishedAt(
                     SoldOutCache.standard(), Instant::now, new SimpleMeterRegistry()),
             컨텍스트.getBean(SpringCloudCircuitBreakerResilience4JFilterFactory.class),
-            new SimpleMeterRegistry(), 라우팅_없음());
+            new SimpleMeterRegistry(), 라우팅_없음(), new RetryGatewayFilterFactory());
 
     /** 라우팅을 안 켠 판. 기존 시험들이 보는 것은 단일 주소 그대로다. */
     private static ObjectProvider<RoutingProperties> 라우팅_없음() {
@@ -658,7 +661,8 @@ class GatewayRoutesTest {
                 SoldOutObserver.ofPublishedAt(
                         SoldOutCache.standard(), Instant::now, new SimpleMeterRegistry()),
                 컨텍스트.getBean(SpringCloudCircuitBreakerResilience4JFilterFactory.class),
-                new SimpleMeterRegistry(), 라우팅(routing));
+                new SimpleMeterRegistry(), 라우팅(routing),
+                new RetryGatewayFilterFactory());
     }
 
     private static List<String> 주소들(RouteLocator locator) {
@@ -697,5 +701,58 @@ class GatewayRoutesTest {
     @DisplayName("배선이_없으면_단일_주소다")
     void 배선이_없으면_단일_주소다() {
         assertThat(주소들(locator)).allMatch("http://backend:8080"::equals);
+    }
+
+    /**
+     * <b>연결이 안 된 인스턴스는 다음 대로 넘긴다</b> (9.3.11 · G9.11).
+     *
+     * <p>인스턴스가 사라진 직후 그 주소로 간 요청이 5xx 로 새면, 사용자에게는
+     * 게이트웨이가 고장난 것으로 보인다.
+     */
+    @Test
+    @DisplayName("발급에_재시도가_붙어_있다")
+    void 발급에_재시도가_붙어_있다() {
+        assertThat(잡는_라우트(HttpMethod.POST, "/api/v1/coupons/c1/issue").getFilters())
+                .anyMatch(f -> 이름(f).contains("Retry"));
+    }
+
+    /**
+     * <b>서킷 안쪽이다.</b> 바깥에 두면 재시도가 만든 시도 하나하나가 서킷 창에
+     * 안 쌓여, 뒷단이 통째로 넘어져도 서킷이 안 열린다.
+     */
+    @Test
+    @DisplayName("재시도가_서킷_안쪽이다")
+    void 재시도가_서킷_안쪽이다() {
+        assertThat(FilterOrder.ROUTE_RETRY).isGreaterThan(FilterOrder.ROUTE_CIRCUIT);
+    }
+
+    /**
+     * <b>상태 코드로는 안 건다</b> (9.3.12 · 불변식 2).
+     *
+     * <p>5xx 는 뒷단이 요청을 받은 뒤에 낸 답이고, 그 시점에는 이미 재고가
+     * 움직였을 수 있다. 그걸 다시 보내면 그 한 건이 곧 초과 발급이다.
+     */
+    @Test
+    @DisplayName("연결_단계에만_재시도한다")
+    void 연결_단계에만_재시도한다() {
+        var config = GatewayRoutes.connectRetryConfig();
+
+        assertThat(config.getSeries()).isEmpty();
+        assertThat(config.getStatuses()).isEmpty();
+        assertThat(config.getExceptions())
+                .containsExactlyInAnyOrder(ConnectException.class, ConnectTimeoutException.class);
+    }
+
+    /** 한 번이면 충분하다. 여러 번 돌면 죽은 뒷단에 요청이 그만큼 오래 매달린다. */
+    @Test
+    @DisplayName("한_번만_다시_보낸다")
+    void 한_번만_다시_보낸다() {
+        assertThat(GatewayRoutes.connectRetryConfig().getRetries()).isEqualTo(1);
+    }
+
+    private static String 이름(GatewayFilter filter) {
+        GatewayFilter inner = filter instanceof OrderedGatewayFilter ordered
+                ? ordered.getDelegate() : filter;
+        return inner.toString();
     }
 }

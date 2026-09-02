@@ -66,6 +66,8 @@ class InstanceAddressTest {
         assertThat(InstanceAddress.parse("10.0.1.7:65536")).isEmpty();
         assertThat(InstanceAddress.parse("10.0.1.7:-1")).isEmpty();
         assertThat(InstanceAddress.parse("10.0.1.7:abc")).isEmpty();
+        // 쌍점으로 끝나면 포트가 없는 것이다. 빈 문자열을 파싱하면 예외가 난다.
+        assertThat(InstanceAddress.parse("10.0.1.7:")).isEmpty();
     }
 
     @Test

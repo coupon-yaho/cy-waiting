@@ -126,9 +126,13 @@ jobs:
       pull-requests: write
 
   # 취소를 통과로 세지 않기 위해 별도 잡으로 뺐다. 규칙은 verdict 액션에 있다.
+  #
+  # **빌드와 계획도 넣는다.** 아래 셋이 다 `needs: build` 라, 빌드가 깨지면 그
+  # 셋이 통째로 skipped 가 되고 `security` 만 남는다 — JAR 을 한 번도 못 만든
+  # 밤에 "이상 없음" 이 나간다. 실제로 그렇게 돼 있었다.
   verdict:
     name: 판정
-    needs: [test, load, waste, security]
+    needs: [plan, build, test, load, waste, security]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -145,7 +149,7 @@ jobs:
           results: ${{ join(needs.*.result, ' ') }}
 
   report:
-    needs: [test, load, waste, security, verdict]
+    needs: [plan, build, test, load, waste, security, verdict]
     if: ${{ !cancelled() }}
     uses: ./.github/workflows/_report.yml
     with:

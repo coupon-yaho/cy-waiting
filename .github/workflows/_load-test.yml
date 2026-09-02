@@ -158,10 +158,16 @@ jobs:
 
       # k6 에 continue-on-error 가 걸려 있어 스텝만으로는 잡이 안 죽는다.
       # 여기서 닫지 않으면 부하가 깨져도 잡이 초록이다.
+      # **셸에 보간하지 않는다.** `scenario` 는 workflow_dispatch 입력에서
+      # 매트릭스를 타고 오는 값이라 우리가 정한 것이 아니다. env 로 넘기고
+      # 인용해 쓴다 — 저장소에서 신뢰할 수 없는 입력이 셸에 닿는 유일한 자리다.
       - name: 판정 반영
         if: steps.evaluate.outputs.passed == 'false'
+        env:
+          SCENARIO: ${{ inputs.scenario }}
+          SUMMARY: ${{ steps.evaluate.outputs.summary }}
         run: |
-          echo "::error title=부하 시험::${{ inputs.scenario }} 기준 미달 — ${{ steps.evaluate.outputs.summary }}"
+          echo "::error title=부하 시험::$SCENARIO 기준 미달 — $SUMMARY"
           exit 1
 
       - name: compose 로그 수집

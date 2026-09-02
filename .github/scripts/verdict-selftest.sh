@@ -40,6 +40,21 @@ check "공백만 와도 막는다"           "   "                            1 
 # **부분 일치로 잡지 않는다.** 'failured' 같은 값은 결과가 아니고, 여기서
 # 걸리면 정상 판을 막는다 — 게이트가 시끄러우면 사람이 우회한다.
 check "비슷한 낱말은 안 잡는다"      "success successful"             0 success
+# **구분자에 안 기댄다.** join() 의 기본 구분자는 쉼표다. 여기가 비어 있으면
+# 새 워크플로 한 줄로 게이트가 조용히 사라진다.
+check "쉼표로 이어도 막는다"         "success,failure"                1 failure
+check "탭으로 이어도 막는다"         "$(printf 'success\tcancelled')" 1 failure
+check "쌍반점으로 이어도 막는다"     "success;failure"                1 failure
+
+# **배선도 본다.** 스크립트만 검사하면 액션이 그걸 안 불러도 통과한다 —
+# 옛 동작을 액션 쪽에 되돌려 넣어 봤더니 이 검사도 워크플로 셸 검사도 안 물었다.
+action=.github/actions/verdict/action.yml
+if grep -q 'scripts/verdict\.sh' "$action"; then
+    echo "  ✓ 액션이 스크립트를 부른다"
+else
+    echo "  ✗ 액션이 스크립트를 안 부른다 — $action"
+    fail=1
+fi
 
 [ "$fail" -eq 0 ] && echo "판정 자기검증 통과" || echo "판정 자기검증 실패"
 exit "$fail"

@@ -29,6 +29,11 @@ if not workflows.is_dir():
     sys.exit(0)
 
 files = sorted(workflows.glob('*.yml')) + sorted(workflows.glob('*.yaml'))
+# **composite action 의 run 도 셸이다.** 워크플로만 보면 그 블록은 문법 검사도
+# 안 받는다 — 판정 액션이 인라인이던 동안 아무도 안 봤다.
+actions = root / '.github' / 'actions'
+if actions.is_dir():
+    files += sorted(actions.glob('*/action.yml')) + sorted(actions.glob('*/action.yaml'))
 if not files:
     print("  워크플로 디렉터리가 비었다", file=sys.stderr)
     sys.exit(1)

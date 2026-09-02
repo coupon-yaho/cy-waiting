@@ -25,7 +25,10 @@ fi
 # skipped 는 통과로 본다 — 문서 PR 에서 빌드·테스트를 건너뛰는 것은 정상이다.
 # failure 와 cancelled 는 통과가 아니다. 취소는 "검사하지 않았다"는 뜻이지
 # "이상 없다"가 아니다.
-if grep -qE '(^| )(failure|cancelled)( |$)' <<<"$results"; then
+# **구분자에 안 기댄다.** 지금은 셋 다 공백으로 잇지만 `join()` 의 기본 구분자는
+# 쉼표다. 새 워크플로가 `join(needs.*.result)` 라고만 쓰면 — 가장 자연스러운
+# 형태다 — 게이트가 조용히 사라진다. 낱말 경계로만 본다.
+if grep -qE '(^|[^a-z])(failure|cancelled)([^a-z]|$)' <<<"$results"; then
     emit "status=failure"
     emit "ok=false"
     echo "::error title=판정::실패 — $results"

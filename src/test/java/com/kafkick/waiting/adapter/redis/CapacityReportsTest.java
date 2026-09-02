@@ -57,6 +57,44 @@ class CapacityReportsTest extends RedisContainerSupport {
         assertThat(reports.getFirst().instanceId()).isEqualTo("i1");
         assertThat(reports.getFirst().credits()).isEqualTo(180);
         assertThat(reports.getFirst().reportedAt()).isEqualTo(1_755_000_000L);
+        assertThat(reports.getFirst().routableAddress()).map(Object::toString)
+                .contains("10.0.3.17:8080");
+    }
+
+    /**
+     * <b>주소가 없어도 보고는 산다</b> (E-12 · D-C1).
+     *
+     * <p>계약이 늘기 전에 뜬 인스턴스는 주소를 안 싣는다. 그 보고를 버리면 그
+     * 몫만큼 전역 크레딧이 조용히 줄어, 판올림 구간에 전체가 조여진다.
+     */
+    @Test
+    @DisplayName("주소가_없어도_크레딧은_센다")
+    void 주소가_없어도_크레딧은_센다() {
+        보고("i1", "{\"credits\":180,\"ts\":1755000000}");
+
+        List<CapacityReport> reports = port.capacitySample().block(WAIT).reports();
+
+        assertThat(reports).hasSize(1);
+        assertThat(reports.getFirst().credits()).isEqualTo(180);
+        assertThat(reports.getFirst().routableAddress()).isEmpty();
+    }
+
+    /**
+     * <b>모양을 못 지킨 주소는 라우팅에서만 뺀다.</b>
+     *
+     * <p>이 값은 밖에서 온다 — 스킴이나 경로가 붙은 값을 그대로 믿으면
+     * 게이트웨이가 아무 데나 요청을 보내는 통로가 된다.
+     */
+    @Test
+    @DisplayName("깨진_주소는_라우팅에서만_뺀다")
+    void 깨진_주소는_라우팅에서만_뺀다() {
+        보고("i1", "{\"addr\":\"http://evil.example/x\",\"credits\":180,\"ts\":1755000000}");
+
+        List<CapacityReport> reports = port.capacitySample().block(WAIT).reports();
+
+        assertThat(reports).hasSize(1);
+        assertThat(reports.getFirst().credits()).isEqualTo(180);
+        assertThat(reports.getFirst().routableAddress()).isEmpty();
     }
 
     @Test

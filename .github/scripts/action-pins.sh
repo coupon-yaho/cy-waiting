@@ -244,7 +244,7 @@ while IFS=$'\t' read -r file line ref version; do
     fi
 
     if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        echo "::error file=$file,line=$line::$path — 주석이 정확한 회차가 아니다: '$version'." \
+        echo "::error file=$file,line=$line::$path — 주석이 정확한 버전이 아니다: '$version'." \
              "메이저만 적으면 Dependabot 이 그 메이저에 묶는다"
         fail=1
         continue

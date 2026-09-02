@@ -52,23 +52,24 @@ public final class InFlightTrackingFilter implements GlobalFilter, Ordered {
 
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
-        String instanceId = chosenInstanceId(exchange);
-        if (instanceId == null) {
-            // 균형기를 안 탄 요청이다. 세면 없는 인스턴스의 카운터가 는다.
+        ReservedInstance reserved = reserved(exchange);
+        if (reserved == null) {
+            // 균형기를 안 탄 요청이다. 놓을 자리도 없다.
             return chain.filter(exchange);
         }
-        InFlightRegistry.Ticket ticket = registry.started(instanceId, nowMillis.getAsLong());
-        return chain.filter(exchange).doFinally(signal -> ticket.finished());
+        // **놓는 것만 여기서 한다.** 잡는 것은 고르는 자리에서 원자적으로 끝났다 —
+        // 여기서 잡으면 읽고 세는 사이에 동시 요청이 상한을 넘긴다.
+        return chain.filter(exchange).doFinally(signal -> reserved.release());
     }
 
-    /** 균형기가 고른 인스턴스. 안 골랐으면 {@code null} 이다. */
-    private String chosenInstanceId(ServerWebExchange exchange) {
+    /** 균형기가 자리를 잡아 준 인스턴스. 안 골랐으면 {@code null} 이다. */
+    private ReservedInstance reserved(ServerWebExchange exchange) {
         Object raw = exchange.getAttribute(
                 ServerWebExchangeUtils.GATEWAY_LOADBALANCER_RESPONSE_ATTR);
         if (!(raw instanceof Response<?> response) || !response.hasServer()) {
             return null;
         }
         Object server = response.getServer();
-        return server instanceof ServiceInstance instance ? instance.getInstanceId() : null;
+        return server instanceof ReservedInstance instance ? instance : null;
     }
 }

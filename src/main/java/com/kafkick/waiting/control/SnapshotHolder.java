@@ -126,7 +126,7 @@ public final class SnapshotHolder {
     /**
      * 통째로 갈아 끼운다. 실패한 갱신은 이걸 부르지 않는다 — 옛 값이 남는다.
      *
-     * <p>성공한 판은 셋을 다 정한다. 앞 값을 볼 것이 없어 CAS 가 필요 없다.
+     * <p>성공한 회차는 셋을 다 정한다. 앞 값을 볼 것이 없어 CAS 가 필요 없다.
      */
     public void replace(GatewaySnapshot snapshot) {
         Instant now = clock.instant();
@@ -164,7 +164,7 @@ public final class SnapshotHolder {
     /**
      * 루프가 아직 한 번도 안 돌았나 — 기동 직후 구간이다.
      *
-     * <p><b>돌다 멎은 것과 갈라 두려고 노출한다.</b> 재기동 신호로 쓰면 첫 판을
+     * <p><b>돌다 멎은 것과 갈라 두려고 노출한다.</b> 재기동 신호로 쓰면 첫 회차를
      * 못 돈 파드가 죽고 다시 떠서 또 죽는다 — 크래시 루프다.
      */
     public boolean isBeforeFirstTick() {

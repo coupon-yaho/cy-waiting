@@ -130,7 +130,7 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
     @Test
     @DisplayName("값이_숫자가_아니면_죽은_것으로_본다")
     void 값이_숫자가_아니면_죽은_것으로_본다() {
-        // 판이 갈리거나 손으로 건드린 값이다. 살아 있는 것으로 세면
+        // 버전이 갈리거나 손으로 건드린 값이다. 살아 있는 것으로 세면
         // 분모가 부풀어 전 노드가 몫을 덜 쓴다.
         redis.<String, String>opsForHash().put(INSTANCES, "broken", "어제쯤").block(WAIT);
 
@@ -185,12 +185,12 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
         // 서버 시각을 받아 경계 양쪽을 박는다.
         // **왕복 사이에 서버 초가 넘어가면 경계가 한 칸 밀린다.** 그러면 나이
         // 60 으로 심은 항목이 61 이 되어 죽고, 시험이 간헐적으로 깨진다.
-        // 넘어가지 않은 판만 골라서 잰다 — 재는 것은 경계지 왕복 지연이 아니다.
+        // 넘어가지 않은 표본만 골라서 잰다 — 재는 것은 경계지 왕복 지연이 아니다.
         //
         // **시각을 인자로 받게 하지 않는다.** 그러면 운영에서도 노드가 제 시계를
         // 넣을 수 있고, 이 스크립트가 존재하는 이유가 바로 그걸 막는 것이다.
-        // 한 판은 명령 네 번이라 밀리초 단위고, 그 사이 초가 넘어갈 확률은 1%
-        // 아래다. 스무 판이 모두 걸릴 일은 사실상 없고, 그래도 걸리면 조용히
+        // 한 회차는 명령 네 번이라 밀리초 단위고, 그 사이 초가 넘어갈 확률은 1%
+        // 아래다. 스무 번이 모두 걸릴 일은 사실상 없고, 그래도 걸리면 조용히
         // 통과하는 대신 이유를 적어 실패한다.
         long reapAfter = 60;
         long alive = 0;
@@ -210,7 +210,7 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
                 break;
             }
         }
-        assertThat(measured).withFailMessage("초 경계를 안 넘긴 판이 없었다").isTrue();
+        assertThat(measured).withFailMessage("초 경계를 안 넘긴 표본이 없었다").isTrue();
 
         // 나이가 임계와 같으면 살고, 한 칸 넘으면 죽는다.
         assertThat(alive).isEqualTo(2);

@@ -416,6 +416,15 @@ if ! cp "$ROOT/.github/scripts/"*.sh "$clean_repo/.github/scripts/" 2>/dev/null 
     printf '  FAIL 임시 저장소에 CI 스크립트를 못 넣었다 — 아래 검사가 무의미하다\n'
     fail=$((fail + 1))
 fi
+# **액션도 같이 넣는다.** 판정 자기검증이 액션이 스크립트를 부르는지까지 보므로,
+# 스크립트만 넣으면 깨끗한 케이스가 그 이유로 막힌다 — 재려던 것이 아니다.
+if [[ -d "$ROOT/.github/actions" ]]; then
+    mkdir -p "$clean_repo/.github/actions"
+    if ! cp -r "$ROOT/.github/actions/." "$clean_repo/.github/actions/" 2>/dev/null; then
+        printf '  FAIL 임시 저장소에 액션을 못 넣었다 — 아래 검사가 무의미하다\n'
+        fail=$((fail + 1))
+    fi
+fi
 cp "$HOOKS/review-branch.sh" "$HOOKS/check-java.sh" "$HOOKS/check-lua.sh" \
    "$clean_repo/.claude/hooks/" 2>/dev/null
 chmod +x "$clean_repo/.claude/hooks/"*.sh 2>/dev/null

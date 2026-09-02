@@ -18,7 +18,7 @@ class RedisKeysTest {
     @Test
     @DisplayName("전역_키_문자열이_고정되어_있다")
     void 전역_키_문자열이_고정되어_있다() {
-        // 이름이 바뀌면 배포 중 두 판이 서로 다른 키를 본다.
+        // 이름이 바뀌면 배포 중 두 버전이 서로 다른 키를 본다.
         assertThat(RedisKeys.SNAPSHOT).isEqualTo("gw:snapshot");
         assertThat(RedisKeys.INSTANCES).isEqualTo("gw:instances");
         assertThat(RedisKeys.LEADER).isEqualTo("scheduler:leader");

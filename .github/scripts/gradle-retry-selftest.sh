@@ -13,7 +13,7 @@ trap 'rm -rf "$work"' EXIT
 cd "$work" || exit 1
 git init -q .
 
-# 판마다 다른 로그를 내는 가짜 그레이들. n 번째 판에서 무엇을 낼지 MODE 가 정한다.
+# 회차마다 다른 로그를 내는 가짜 그레이들. n 번째 실행에서 무엇을 낼지 MODE 가 정한다.
 cat > gradlew <<'STUB'
 #!/usr/bin/env bash
 n=$(cat .n 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > .n
@@ -38,7 +38,7 @@ check() {
     if [ "$rc" -eq "$want_rc" ] && [ "$rounds" -eq "$want_rounds" ]; then
         echo "  ✓ $name"
     else
-        echo "  ✗ $name — 종료 $rc (기대 $want_rc) · $rounds 판 (기대 $want_rounds)"
+        echo "  ✗ $name — 종료 $rc (기대 $want_rc) · $rounds 실행 (기대 $want_rounds)"
         fail=1
     fi
 }
@@ -76,7 +76,7 @@ for bad in 999999999999999999999 11 abc; do
     if [ "$rounds" -eq 3 ]; then
         echo "  ✓ 시도 횟수가 '$bad' 이면 기본 셋으로 돌아온다"
     else
-        echo "  ✗ 시도 횟수가 '$bad' 인데 $rounds 판 돌았다 — 셋이어야 한다"
+        echo "  ✗ 시도 횟수가 '$bad' 인데 $rounds 실행 돌았다 — 셋이어야 한다"
         fail=1
     fi
 done

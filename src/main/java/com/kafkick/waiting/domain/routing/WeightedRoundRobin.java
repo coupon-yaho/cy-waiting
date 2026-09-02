@@ -28,6 +28,12 @@ public final class WeightedRoundRobin implements InstanceChooser {
     /** 인스턴스별 누적. 사라진 대는 지운다 — 식별자가 재기동마다 새로 온다 (R-3). */
     private final Map<String, Long> credit = new HashMap<>();
 
+    /** 넘치면 상한에 재운다. 부호가 뒤집히면 배분이 정반대로 돈다. */
+    private long saturated(long a, long b) {
+        long sum = a + b;
+        return ((a ^ sum) & (b ^ sum)) < 0 ? Long.MAX_VALUE : sum;
+    }
+
     @Override
     public synchronized Optional<RoutingCandidate> choose(List<RoutingCandidate> candidates) {
         List<RoutingCandidate> eligible = new ArrayList<>();
@@ -37,7 +43,12 @@ public final class WeightedRoundRobin implements InstanceChooser {
             present.add(c.instanceId());
             if (c.eligible()) {
                 eligible.add(c);
-                total += c.credits();
+                // **넘치면 배분이 뒤집힌다.** 부호가 바뀌면 가장 여유 있는 대가
+                // 가장 안 뽑히는 대가 되고, 그 배포 내내 조용히 그렇게 돈다.
+                //
+                // 터뜨리지 않고 상한에 재운다. 여기서 예외를 던지면 **보낼 곳이
+                // 멀쩡한데 요청이 죽는다** — 합산기도 같은 이유로 재운다.
+                total = saturated(total, c.credits());
             }
         }
         credit.keySet().retainAll(present);
@@ -45,16 +56,30 @@ public final class WeightedRoundRobin implements InstanceChooser {
             return Optional.empty();
         }
 
+        // **다 셈한 뒤에 쓴다.** 누적을 그때그때 갱신하면 산술이 중간에 터졌을 때
+        // 앞엣것만 움직인 채로 아무것도 안 고르고 돌아간다 — 다음 호출이 그
+        // 유령 누적으로 고른다. 여기서 터지면 상태는 부른 적 없는 것과 같다.
+        //
+        // **지금은 그 경로를 못 만든다.** 위 합산이 같은 값을 먼저 더하므로,
+        // 누적이 넘칠 값이면 거기서 먼저 터진다. 다만 인스턴스가 드나들면
+        // 누적의 합이 0 이 아니게 되어 조금씩 밀릴 수 있고, 그때는 여기가
+        // 먼저 넘친다 — 그 경우를 시험으로 못 만들어서 방어만 둔다.
+        Map<String, Long> next = new HashMap<>();
         RoutingCandidate chosen = null;
         long leading = Long.MIN_VALUE;
         for (RoutingCandidate c : eligible) {
-            long value = credit.merge(c.instanceId(), c.credits(), Long::sum);
+            long value = saturated(credit.getOrDefault(c.instanceId(), 0L), c.credits());
+            next.put(c.instanceId(), value);
             if (value > leading) {
                 leading = value;
                 chosen = c;
             }
         }
-        credit.merge(chosen.instanceId(), -total, Long::sum);
+        // **여기는 재우지 않는다.** 누적은 매 회차 그 대의 크레딧이 더해지므로,
+        // 총합이 상한에 닿을 만큼 크면 누적도 같이 커진다 — 아래로 넘치는 조합이
+        // 안 만들어진다. 못 밟는 갈래를 두면 방어가 있다는 착각만 남는다.
+        next.put(chosen.instanceId(), leading - total);
+        credit.putAll(next);
         return Optional.of(chosen);
     }
 

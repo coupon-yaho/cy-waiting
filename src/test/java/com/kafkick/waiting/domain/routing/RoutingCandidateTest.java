@@ -118,6 +118,19 @@ class RoutingCandidateTest {
             assertThat(RoutingCandidate.seed(40, Duration.ZERO, Duration.ZERO)).isZero();
         }
 
+        /**
+         * <b>1밀리초 미만 램프는 램프가 없는 것과 같다.</b>
+         *
+         * <p>밀리초로 재므로 분모가 0 이 된다. 안 가르면 NaN 이 나오고, 그 값이
+         * 후보 생성에서 터져 라우팅이 통째로 멎는다.
+         */
+        @Test
+        @DisplayName("램프가_1밀리초_미만이면_씨앗이_없다")
+        void 램프가_1밀리초_미만이면_씨앗이_없다() {
+            assertThat(RoutingCandidate.seed(40, Duration.ZERO, Duration.ofNanos(500_000)))
+                    .isZero();
+        }
+
         /** 보고가 음수로 오면 0 으로 본다. 음수 씨앗은 그 대를 영원히 뽑히게 한다. */
         @Test
         @DisplayName("음수_보고는_0_으로_본다")

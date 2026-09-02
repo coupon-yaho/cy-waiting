@@ -87,6 +87,24 @@ class WeightedRoundRobinTest {
     @DisplayName("후보가 바뀔 때")
     class Changing {
 
+        /**
+         * <b>넘쳐도 보낼 곳은 돌려준다.</b>
+         *
+         * <p>부호가 뒤집히면 가장 여유 있는 대가 가장 안 뽑히는 대가 된다. 그렇다고
+         * 터뜨리면 보낼 곳이 멀쩡한데 요청이 죽는다 — 상한에 재운다.
+         */
+        @Test
+        @DisplayName("크레딧_합이_넘쳐도_고른다")
+        void 크레딧_합이_넘쳐도_고른다() {
+            List<RoutingCandidate> 큰_후보 = List.of(
+                    RoutingCandidate.of("a", Long.MAX_VALUE, 0),
+                    RoutingCandidate.of("b", Long.MAX_VALUE, 0));
+
+            assertThat(WeightedRoundRobin.create().choose(큰_후보))
+                    .as("넘쳐도 후보 중 하나가 나온다")
+                    .isPresent();
+        }
+
         /** <b>여유 0 은 후보가 아니다</b> (9.3.6). */
         @Test
         @DisplayName("여유가_0_인_대는_안_뽑는다")

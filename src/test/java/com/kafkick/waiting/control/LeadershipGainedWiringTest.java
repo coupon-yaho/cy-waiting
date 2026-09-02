@@ -48,7 +48,7 @@ class LeadershipGainedWiringTest {
         assertThat(gate.sweepable(줄이_선_쿠폰, false)).as("전제 — 유예가 이미 풀렸다")
                 .containsExactly("c1");
 
-        onLeadershipGained(sweeper, 이월을_기록하는_판(new ArrayList<>(),
+        onLeadershipGained(sweeper, 이월을_기록하는_회차(new ArrayList<>(),
                 new AtomicReference<>(0.0))).run();
 
         assertThat(gate.removalHeld()).isTrue();
@@ -58,7 +58,7 @@ class LeadershipGainedWiringTest {
     /**
      * <b>리더가 되면 평활화 이월을 다시 받는다</b> (F9 · CY-859).
      *
-     * <p>배분 판은 리더일 때만 돌므로 그 안에서 버리려 하면 비리더 구간을 한
+     * <p>배분 회차는 리더일 때만 돌므로 그 안에서 버리려 하면 비리더 구간을 한
      * 번도 못 본다. 되찾은 노드가 남이 움직인 값을 못 보고 옛 값을 이어 쓴다.
      */
     @Test
@@ -66,9 +66,9 @@ class LeadershipGainedWiringTest {
     void 리더가_되면_평활화_이월을_다시_받는다() {
         List<Double> 이월_요청 = new ArrayList<>();
         AtomicReference<Double> 저장된_이월 = new AtomicReference<>(7_300.0);
-        AllocationRound round = 이월을_기록하는_판(이월_요청, 저장된_이월);
+        AllocationRound round = 이월을_기록하는_회차(이월_요청, 저장된_이월);
         round.run().block();
-        assertThat(이월_요청).as("전제 — 첫 판에 한 번 받는다").containsExactly(7_300.0);
+        assertThat(이월_요청).as("전제 — 첫 회차에 한 번 받는다").containsExactly(7_300.0);
 
         저장된_이월.set(800.0);
         onLeadershipGained(안_걷는_스위퍼(), round).run();
@@ -78,7 +78,7 @@ class LeadershipGainedWiringTest {
                 .containsExactly(7_300.0, 800.0);
     }
 
-    /** 재료를 읽은 시각. 판이 나이를 이 값으로 매긴다. */
+    /** 재료를 읽은 시각. 회차가 나이를 이 값으로 매긴다. */
     private static final long 읽은_시각 = 1_700_000_000L;
 
     private QueueSweeper 안_걷는_스위퍼() {
@@ -88,7 +88,7 @@ class LeadershipGainedWiringTest {
                 new SimpleMeterRegistry());
     }
 
-    private AllocationRound 이월을_기록하는_판(List<Double> 이월_요청,
+    private AllocationRound 이월을_기록하는_회차(List<Double> 이월_요청,
             AtomicReference<Double> 저장된_이월) {
         return AllocationRound.of(
                 () -> true,

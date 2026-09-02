@@ -187,6 +187,64 @@ class InFlightRegistryTest {
     }
 
     @Nested
+    @DisplayName("동시 상한")
+    class Cap {
+
+        /**
+         * 느려진 한 대가 게이트웨이 커넥션을 다 붙잡지 못하게 막는다 (G9.13).
+         *
+         * <p>상한이 없으면 응답이 안 오는 인스턴스로 간 요청이 계속 쌓여, 멀쩡한
+         * 인스턴스로 갈 커넥션까지 그 한 대가 가져간다.
+         */
+        @Test
+        @DisplayName("상한에_닿으면_안_준다")
+        void 상한에_닿으면_안_준다() {
+            assertThat(레지스트리.tryStarted(갑, 2)).isPresent();
+            assertThat(레지스트리.tryStarted(갑, 2)).isPresent();
+
+            assertThat(레지스트리.tryStarted(갑, 2)).isEmpty();
+            assertThat(레지스트리.count(갑)).isEqualTo(2);
+        }
+
+        /** 상한은 인스턴스마다 따로다. 한 대가 막혀도 다른 대는 받는다. */
+        @Test
+        @DisplayName("상한은_인스턴스마다_따로다")
+        void 상한은_인스턴스마다_따로다() {
+            레지스트리.tryStarted(갑, 1);
+
+            assertThat(레지스트리.tryStarted(갑, 1)).isEmpty();
+            assertThat(레지스트리.tryStarted(을, 1)).isPresent();
+        }
+
+        /** 하나 놓으면 그 자리가 바로 난다. 안 그러면 상한이 영구 차단이 된다. */
+        @Test
+        @DisplayName("놓으면_자리가_난다")
+        void 놓으면_자리가_난다() {
+            InFlightRegistry.Ticket 표 = 레지스트리.tryStarted(갑, 1).orElseThrow();
+            표.finished();
+
+            assertThat(레지스트리.tryStarted(갑, 1)).isPresent();
+        }
+
+        /** 만료도 자리를 낸다 — 감소를 놓친 항목이 상한을 영구히 채우면 안 된다. */
+        @Test
+        @DisplayName("만료도_자리를_낸다")
+        void 만료도_자리를_낸다() {
+            레지스트리.tryStarted(갑, 1);
+            시계.앞으로(수명.plusSeconds(1));
+
+            assertThat(레지스트리.tryStarted(갑, 1)).isPresent();
+        }
+
+        @Test
+        @DisplayName("상한이_양수가_아니면_거절한다")
+        void 상한이_양수가_아니면_거절한다() {
+            assertThatThrownBy(() -> 레지스트리.tryStarted(갑, 0))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    @Nested
     @DisplayName("만들 때")
     class Construction {
 

@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;
 
 import com.kafkick.waiting.domain.allocation.CouponDemand;
+import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import java.util.List;
 import java.util.Random;
 import org.junit.jupiter.api.DisplayName;
@@ -184,5 +185,49 @@ class PollBudgetPlannerTest {
         // 반올림하면 이 사람이 먼 밴드로 밀려 예산을 과소 추정하고,
         // pollScale 이 안 올라 실제 부하가 예산을 넘는다.
         assertThat(PollBudgetPlanner.expectedPollRps(1, 0.02)).isCloseTo(1.0, within(0.001));
+    }
+
+    /**
+     * <b>조립을 한 자리에 둔 것이 이 메서드다.</b> 예산의 분모가 무엇인지가 여기
+     * 있고, 부르는 쪽이 저마다 조립하면 분모를 바꾸는 날 한쪽만 따라간다.
+     */
+    @Test
+    @DisplayName("재료에서_배수를_조립한다")
+    void 재료에서_배수를_조립한다() {
+        List<CouponDemand> demands = List.of(new CouponDemand("a", 20_000, 40_000));
+
+        PollBudgetPlanner.Scale scale = PollBudgetPlanner.scaleFor(
+                new SnapshotMeta(1_000, 20), demands, id -> 4_000);
+
+        assertThat(scale.nodes()).isEqualTo(20);
+        assertThat(scale.expected()).isCloseTo(20_000, within(0.1));
+        assertThat(scale.budget()).isCloseTo(PollBudgetPlanner.budgetRps(20), within(0.1));
+        assertThat(scale.scale()).isCloseTo(20_000 / PollBudgetPlanner.budgetRps(20),
+                within(0.001));
+    }
+
+    /** 노드 수가 분모다. 절반이면 예산도 절반이고 배수는 두 배다. */
+    @Test
+    @DisplayName("노드가_줄면_배수가_오른다")
+    void 노드가_줄면_배수가_오른다() {
+        List<CouponDemand> demands = List.of(new CouponDemand("a", 20_000, 40_000));
+
+        double 스물 = PollBudgetPlanner.scaleFor(
+                new SnapshotMeta(1_000, 20), demands, id -> 4_000).scale();
+        double 열 = PollBudgetPlanner.scaleFor(
+                new SnapshotMeta(1_000, 10), demands, id -> 4_000).scale();
+
+        assertThat(열).isCloseTo(스물 * 2, within(0.001));
+    }
+
+    /** 노드 수가 0 으로 와도 0 으로 안 나눈다. 방어는 재료가 쥔다. */
+    @Test
+    @DisplayName("노드가_0_이면_하나로_본다")
+    void 노드가_0_이면_하나로_본다() {
+        PollBudgetPlanner.Scale scale = PollBudgetPlanner.scaleFor(
+                new SnapshotMeta(1_000, 0), List.of(new CouponDemand("a", 10, 100)), id -> 1);
+
+        assertThat(scale.nodes()).isEqualTo(1);
+        assertThat(scale.budget()).isCloseTo(PollBudgetPlanner.budgetRps(1), within(0.1));
     }
 }

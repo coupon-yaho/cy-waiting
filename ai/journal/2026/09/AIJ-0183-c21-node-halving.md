@@ -177,6 +177,18 @@ C21 에서 안 물던 것이다. 다만 단위 시험이 전부 이미 죽이고
 시나리오 안에서 안 죽는다" 는 시나리오-국소 진술인데, 그것을 "스위트에 열려 있던
 구멍" 으로 잘못 승격시켰다. 닫힌 것은 없다.
 
+## 시험이 프로덕션이 안 부르는 자리를 부르고 있었다
+
+배수를 `budgetRps(분모.count())` 로 직접 조립했다. 프로덕션은
+`registry.count() → SnapshotMeta.effectiveGatewayCount() → AllocationRound.pollBudget`
+을 거친다. **CY-732 를 폴링 전용 분모를 새로 만들어 고치면** 그 변경이 조립 자리에
+들어가는데, 시험은 계속 제 산식을 돌려 **낡은 400 을 초록으로 단언한다.** TS-12 의
+8번이다.
+
+조립을 도메인 한 자리로 모았다 — `PollBudgetPlanner.scaleFor(meta, demands, drainRateOf)`
+가 예산의 분모를 쥐고, `AllocationRound` 도 시나리오도 그것을 부른다. 분모를 바꾸면
+둘이 같이 따라간다.
+
 ## RED 가 왜 없는가
 
 프로덕션을 한 줄도 안 고치는 측정 시나리오라 실패에서 시작할 대상이 없다. TS-8 이

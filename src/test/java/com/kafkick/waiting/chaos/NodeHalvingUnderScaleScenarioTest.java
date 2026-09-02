@@ -2,7 +2,10 @@ package com.kafkick.waiting.chaos;
 
 import com.kafkick.waiting.control.ControlPlaneProperties;
 import com.kafkick.waiting.control.GatewayRegistry;
+import com.kafkick.waiting.domain.allocation.CouponDemand;
+import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import com.kafkick.waiting.domain.queue.PollBudgetPlanner;
+import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -43,13 +46,13 @@ class NodeHalvingUnderScaleScenarioTest {
     /** 노드 하나가 감당할 폴링. 이 값을 넘으면 그 노드가 설계 밖이다. */
     private static final double 노드당_예산 = 200;
 
-    /**
-     * 이 줄이 만드는 초당 폴링.
-     *
-     * <p><b>리터럴로 두면 밴드표가 바뀌어도 시험이 안 따라간다.</b> 손으로 잰
-     * 2만은 아래 전제 판정이 이 함수의 출력에 대해 따로 확인한다.
-     */
-    private static final double 기대_부하 = PollBudgetPlanner.expectedPollRps(대기, 배분율);
+
+    /** 이 판의 줄. 하나뿐이라 이 쿠폰의 폴링이 곧 전역 폴링이다. */
+    private static final List<CouponDemand> 줄 =
+            List.of(new CouponDemand("c21", 대기, 대기 * 2));
+
+    /** 폴링 배수와 무관한 값. 이 판이 재는 것은 분모지 크레딧이 아니다. */
+    private static final long 크레딧 = 1_000;
 
     /** 손으로 잰 값. 2만 명이 전원 첫 밴드라 초당 2만 건이다. */
     private static final double 손으로_잰_부하 = 20_000;
@@ -81,11 +84,19 @@ class NodeHalvingUnderScaleScenarioTest {
      *
      * <p>전원이 첫 밴드라 간격이 곧 배수다. 밴드가 하나뿐인 판을 고른 것은
      * 천장이 안 물게 하기 위해서다 — 천장의 몫은 C19 가 잰다.
+     *
+     * <p><b>배수는 프로덕션이 조립하는 자리에서 받는다.</b> 여기서 예산과 배수를
+     * 다시 조립하면, 어느 분모로 예산을 잡는지가 바뀌는 날(CY-732) 이 시험만
+     * 낡은 값을 초록으로 단언한다.
      */
     private double 노드당_폴링(int 분모값, int 살아있는) {
-        double 예산 = PollBudgetPlanner.budgetRps(분모값);
-        double 배수 = PollBudgetPlanner.pollScale(기대_부하, 예산);
-        return 기대_부하 / 배수 / 살아있는;
+        PollBudgetPlanner.Scale 배수 = 배수를_잰다(분모값);
+        return 배수.expected() / 배수.scale() / 살아있는;
+    }
+
+    private static PollBudgetPlanner.Scale 배수를_잰다(int 분모값) {
+        return PollBudgetPlanner.scaleFor(
+                new SnapshotMeta(크레딧, 분모값), 줄, couponId -> 배분율);
     }
 
     /**
@@ -141,7 +152,7 @@ class NodeHalvingUnderScaleScenarioTest {
                         하강_지연이_둘_이상이다(),
                         // 전제 — 밴드표가 이 줄을 전원 첫 밴드로 놓는다. 이것이
                         // 깨지면 아래 노드당 값이 다른 판의 값이 된다.
-                        손으로_잰_부하와_같다(기대_부하),
+                        손으로_잰_부하와_같다(배수를_잰다(처음_노드).expected()),
                         // 전제 — 평시에 노드당 몫이 설계값이어야 뒤의 배가 뜻을 갖는다.
                         평시에_설계값을_받는다(정상_분모[0], 정상_노드당[0]),
                         // 감소는 즉시 반영 안 된다. 발급 상한에는 그것이 안전한

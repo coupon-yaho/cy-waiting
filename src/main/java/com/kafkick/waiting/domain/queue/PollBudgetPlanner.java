@@ -1,6 +1,7 @@
 package com.kafkick.waiting.domain.queue;
 
 import com.kafkick.waiting.domain.allocation.CouponDemand;
+import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import java.util.List;
 import java.util.function.ToDoubleFunction;
 
@@ -85,6 +86,25 @@ public final class PollBudgetPlanner {
     // SnapshotMeta.effectiveGatewayCount() 하나가 쥔다.
     public static double budgetRps(int nodes) {
         return BUDGET_RPS_PER_NODE * nodes;
+    }
+
+    /**
+     * 이 재료로 걸리는 전역 폴링 배수.
+     *
+     * <p><b>조립을 한 자리에 둔다.</b> 어느 분모로 예산을 잡는지가 여기 있고,
+     * 부르는 쪽이 저마다 조립하면 분모를 바꾸는 날 한쪽만 따라간다 — 시나리오가
+     * 낡은 값을 초록으로 단언하게 된다.
+     */
+    public static Scale scaleFor(SnapshotMeta meta, List<CouponDemand> demands,
+            ToDoubleFunction<String> drainRateOf) {
+        int nodes = meta.effectiveGatewayCount();
+        double expected = expectedPollRps(demands, drainRateOf);
+        double budget = budgetRps(nodes);
+        return new Scale(expected, budget, pollScale(expected, budget), nodes);
+    }
+
+    /** 한 틱의 폴링 예산과 그 결과. */
+    public record Scale(double expected, double budget, double scale, int nodes) {
     }
 
     /**

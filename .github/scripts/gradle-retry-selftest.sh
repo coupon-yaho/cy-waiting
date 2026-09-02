@@ -51,16 +51,20 @@ echo "재시도가 안 무는 것"
 check "시험 실패는 한 번에 끝낸다" test 1 1
 check "배선 실패를 해결 실패로 안 읽는다" wiring 1 1
 
-# **0 을 넣어도 그레이들은 돈다.** 안 돌면 잡이 초록인데 아무것도 안 한 것이다.
-rm -f .n
-MODE=test GRADLE_RETRY_ATTEMPTS=0 "$retry" test >/dev/null 2>&1
-rc=$?
-if [ "$rc" -ne 0 ] && [ "$(cat .n)" -ge 1 ]; then
-    echo "  ✓ 시도 횟수가 0 이어도 한 번은 돈다"
-else
-    echo "  ✗ 시도 횟수가 0 이면 그레이들을 안 부르고 초록이 된다"
-    fail=1
-fi
+# **망가진 시도 횟수로도 그레이들은 돈다.** 안 돌면 잡이 초록인데 아무것도 안 한
+# 것이다. `08` 은 정수처럼 보이지만 산술에서 8진수로 읽혀 터진다.
+for bad in 0 -1 08 abc ""; do
+    rm -f .n
+    MODE=test GRADLE_RETRY_ATTEMPTS="$bad" "$retry" test >/dev/null 2>&1
+    rc=$?
+    rounds=$(cat .n 2>/dev/null || echo 0)
+    if [ "$rc" -ne 0 ] && [ "$rounds" -ge 1 ]; then
+        echo "  ✓ 시도 횟수가 '$bad' 여도 한 번은 돌고 실패로 끝난다"
+    else
+        echo "  ✗ 시도 횟수가 '$bad' 이면 그레이들을 안 부르고 종료 $rc 다"
+        fail=1
+    fi
+done
 
 [ "$fail" -eq 0 ] && echo "자기검증 통과" || echo "::error::재시도 자기검증 실패"
 exit $fail

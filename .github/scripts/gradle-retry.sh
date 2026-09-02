@@ -17,8 +17,15 @@ cd "$(git rev-parse --show-toplevel)" || exit 1
 # **0 이나 쓰레기가 들어오면 되돌린다.** 안 그러면 루프가 한 번도 안 돌고 rc 가 0 인
 # 채로 끝난다 — 그레이들을 부르지 않고 잡이 초록이 된다. 재시도 장치가 스스로
 # 거짓 초록을 내는 것이 가장 나쁜 종류다.
+#
+# **모양부터 본다.** 산술로 먼저 읽으면 `08` 이 8진수로, `abc` 가 0 으로 새어
+# 들어와 루프가 한 번도 안 돌고 rc 가 0 인 채로 끝난다 — 그레이들을 안 부르고
+# 잡이 초록이 된다. 자릿수만 있는 값인지 보고, 그다음 10진으로 못 박는다.
 attempts=${GRADLE_RETRY_ATTEMPTS:-3}
-[ "$attempts" -ge 1 ] 2>/dev/null || attempts=3
+case "$attempts" in
+    ''|*[!0-9]*) attempts=3 ;;
+    *) attempts=$((10#$attempts)); [ "$attempts" -ge 1 ] || attempts=3 ;;
+esac
 log=$(mktemp)
 trap 'rm -f "$log"' EXIT
 

@@ -25,8 +25,8 @@ public class CouponServiceLoadBalancerConfig {
     @Bean
     ReactorServiceInstanceLoadBalancer capacityAwareLoadBalancer(
             ServiceInstanceListSupplier instances, InstanceChooser chooser,
-            InFlightRegistry inFlight) {
+            InFlightRegistry inFlight, RoutingProperties properties) {
         return CapacityAwareLoadBalancer.of(instances, chooser, inFlight,
-                System::currentTimeMillis);
+                System::currentTimeMillis, properties.perInstanceCap());
     }
 }

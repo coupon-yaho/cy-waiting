@@ -4,8 +4,10 @@ import com.kafkick.waiting.domain.routing.InFlightRegistry;
 import com.kafkick.waiting.domain.routing.InstanceChooser;
 import com.kafkick.waiting.domain.routing.RoutingCandidate;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -35,17 +37,28 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
 
     private final LongSupplier nowMillis;
 
+    /** 인스턴스 하나에 동시에 물릴 수 있는 수 (G9.13). */
+    private final int perInstanceCap;
+
     private CapacityAwareLoadBalancer(ServiceInstanceListSupplier instances,
-            InstanceChooser chooser, InFlightRegistry inFlight, LongSupplier nowMillis) {
+            InstanceChooser chooser, InFlightRegistry inFlight, LongSupplier nowMillis,
+            int perInstanceCap) {
         this.instances = Objects.requireNonNull(instances, "instances");
         this.chooser = Objects.requireNonNull(chooser, "chooser");
         this.inFlight = Objects.requireNonNull(inFlight, "inFlight");
         this.nowMillis = Objects.requireNonNull(nowMillis, "nowMillis");
+        if (perInstanceCap < 1) {
+            throw new IllegalArgumentException("perInstanceCap 은 1 이상이어야 한다: "
+                    + perInstanceCap);
+        }
+        this.perInstanceCap = perInstanceCap;
     }
 
     public static CapacityAwareLoadBalancer of(ServiceInstanceListSupplier instances,
-            InstanceChooser chooser, InFlightRegistry inFlight, LongSupplier nowMillis) {
-        return new CapacityAwareLoadBalancer(instances, chooser, inFlight, nowMillis);
+            InstanceChooser chooser, InFlightRegistry inFlight, LongSupplier nowMillis,
+            int perInstanceCap) {
+        return new CapacityAwareLoadBalancer(instances, chooser, inFlight, nowMillis,
+                perInstanceCap);
     }
 
     @Override
@@ -65,21 +78,42 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
         }
         inFlight.retain(present, now);
 
+        Map<String, ServiceInstance> byId = new LinkedHashMap<>();
         List<RoutingCandidate> candidates = new ArrayList<>();
         for (ServiceInstance instance : available) {
             String id = instance.getInstanceId();
-            candidates.add(RoutingCandidate.of(id, creditsOf(instance), inFlight.count(id, now)));
-        }
-        Optional<RoutingCandidate> chosen = chooser.choose(candidates);
-        if (chosen.isEmpty()) {
-            // **명확한 실패다** (9.3.4). 아무 대나 고르면 여유 0 인 대가 무너진다.
-            return new EmptyResponse();
-        }
-        String id = chosen.orElseThrow().instanceId();
-        for (ServiceInstance instance : available) {
-            if (instance.getInstanceId().equals(id)) {
-                return new DefaultResponse(instance);
+            int busy = inFlight.count(id, now);
+            // **상한에 닿은 대는 후보가 아니다.** 느려진 한 대로 간 요청이
+            // 무한정 쌓이면 그 한 대가 게이트웨이 커넥션을 다 붙잡는다.
+            if (busy >= perInstanceCap) {
+                continue;
             }
+            byId.put(id, instance);
+            candidates.add(RoutingCandidate.of(id, creditsOf(instance), busy));
+        }
+
+        // **고르는 자리에서 자리를 잡는다.** 읽고 나중에 세면 동시 요청이 다 같이
+        // 빈자리를 보고 같은 대를 고른 뒤에야 세어져, 상한 1 인 대에 둘이 들어간다.
+        // 잡는 데 실패했다는 것은 그 사이에 찼다는 뜻이라 그 대를 빼고 다시 고른다.
+        while (!candidates.isEmpty()) {
+            Optional<RoutingCandidate> chosen = chooser.choose(candidates);
+            if (chosen.isEmpty()) {
+                break;
+            }
+            String id = chosen.orElseThrow().instanceId();
+            // **목록에 없는 것을 돌려주면 빈 답이다.** 그대로 믿으면 없는 주소로
+            // 보낸다. 자리를 잡기 전에 본다 — 잡고 나면 놓을 사람이 없다.
+            ServiceInstance instance = byId.get(id);
+            if (instance == null) {
+                break;
+            }
+            Optional<InFlightRegistry.Ticket> ticket =
+                    inFlight.tryStarted(id, perInstanceCap, now);
+            if (ticket.isPresent()) {
+                return new DefaultResponse(
+                        ReservedInstance.of(instance, ticket.orElseThrow()));
+            }
+            candidates.removeIf(c -> c.instanceId().equals(id));
         }
         return new EmptyResponse();
     }

@@ -37,13 +37,18 @@ class InFlightTrackingFilterTest {
     private final InFlightTrackingFilter 필터 =
             InFlightTrackingFilter.of(레지스트리, () -> 지금);
 
-    private static ServerWebExchange 고른_요청(String instanceId) {
+    /**
+     * <b>자리는 균형기가 이미 잡아 뒀다.</b> 필터는 놓기만 한다 — 여기서 잡으면
+     * 읽고 세는 사이에 동시 요청이 상한을 넘긴다.
+     */
+    private ServerWebExchange 고른_요청(String instanceId) {
         MockServerWebExchange exchange = MockServerWebExchange.from(
                 MockServerHttpRequest.post("/api/v1/coupons/c1/issue"));
         ServiceInstance instance =
                 new DefaultServiceInstance(instanceId, "coupon-service", "10.0.1.7", 8080, false);
         exchange.getAttributes().put(ServerWebExchangeUtils.GATEWAY_LOADBALANCER_RESPONSE_ATTR,
-                new DefaultResponse(instance));
+                new DefaultResponse(ReservedInstance.of(instance,
+                        레지스트리.started(instanceId, 지금))));
         return exchange;
     }
 

@@ -18,6 +18,7 @@ import org.springframework.cloud.gateway.filter.OrderedGatewayFilter;
 import org.springframework.cloud.gateway.route.Route;
 import org.springframework.cloud.gateway.route.RouteLocator;
 import org.springframework.cloud.loadbalancer.annotation.LoadBalancerClientSpecification;
+import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
 import org.springframework.context.ApplicationContext;
 
 /**
@@ -36,6 +37,9 @@ class RoutingWiringTest {
     @Autowired
     private RouteLocator routes;
 
+    @Autowired
+    private PrometheusMeterRegistry prometheus;
+
     @Test
     @DisplayName("켜면_배선이_다_선다")
     void 켜면_배선이_다_선다() {
@@ -46,6 +50,18 @@ class RoutingWiringTest {
         assertThat(context.getBeansOfType(LoadBalancerClientSpecification.class).values())
                 .anyMatch(spec -> "coupon-service".equals(spec.getName()));
         assertThat(context.getBean(InstanceChooser.class)).isInstanceOf(WeightedP2c.class);
+        // 게이지도 같이 선다. 누수는 값이 안 내려가는 것으로만 보인다 (G9.3).
+        assertThat(context.getBeansOfType(InFlightMetrics.Binding.class)).hasSize(1);
+    }
+
+    /** 걸어 두기만 하고 안 걸면 스크레이프에 줄이 없다 — 이름 검사로는 안 드러난다. */
+    @Test
+    @DisplayName("물린_수가_긁힌다")
+    void 물린_수가_긁힌다() {
+        assertThat(prometheus.scrape())
+                .containsPattern("waiting_routing_inflight\\{[^}]*\\} [0-9.E-]+\\n")
+                .containsPattern("waiting_routing_instances\\{[^}]*\\} [0-9.E-]+\\n")
+                .doesNotContain("NaN");
     }
 
     /** 켜면 균형기를 거친다. 단일 주소로 두면 인스턴스를 고를 자리가 없다. */

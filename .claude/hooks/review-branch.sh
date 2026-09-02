@@ -376,6 +376,7 @@ for check in \
     "문서 링크:.github/scripts/doc-links.sh" \
     "문서 앵커:.github/scripts/doc-anchors.sh" \
     "재시도 자기검증:.github/scripts/gradle-retry-selftest.sh" \
+    "판정 자기검증:.github/scripts/verdict-selftest.sh" \
     "작업 로그:.github/scripts/journal-index.sh --check" \
     "워크플로 셸:.github/scripts/workflow-shell.sh" \
     "Loki 라벨:.github/scripts/loki-labels.sh" \

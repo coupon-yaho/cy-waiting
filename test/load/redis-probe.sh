@@ -11,13 +11,32 @@ out=${1:?출력 파일}
 interval=${PROBE_INTERVAL_SEC:-0.2}
 cli=${REDIS_CLI:-docker compose -f test/load/compose.yml exec -T redis redis-cli}
 
-# **표본 주기를 짧게 둔다.** 스파이크가 200ms 창이라 1 초 주기로는 봉우리를
-# 통째로 놓친다 — 그 봉우리가 정확히 재려는 값이다.
+# **`instantaneous_ops_per_sec` 를 안 쓴다.** 그 값은 레디스가 100ms 마다 찍은
+# 표본 열여섯의 평균이라 **약 1.6 초 창**이다 — 아무리 자주 물어도 200ms 봉우리가
+# 그 평균에 녹아 사라진다. 재려는 것이 정확히 그 봉우리다.
+#
+# 그래서 누적 명령 수의 차분을 우리가 직접 잰다. 창의 길이를 우리가 정한다.
 : > "$out"
+prev_cmds=""
+prev_ns=""
 while :; do
-    ops=$($cli INFO stats 2>/dev/null \
-        | sed -n 's/^instantaneous_ops_per_sec:\([0-9]*\).*/\1/p')
+    cmds=$($cli INFO stats 2>/dev/null \
+        | sed -n 's/^total_commands_processed:\([0-9]*\).*/\1/p')
+    now_ns=$(date +%s%N)
     # 못 읽은 표본은 0 으로 안 적는다. 0 은 "한가했다" 라는 뜻이라 봉우리를 깎는다.
-    [ -n "$ops" ] && printf '%s\n' "$ops" >> "$out"
+    if [ -n "$cmds" ]; then
+        if [ -n "$prev_cmds" ]; then
+            # **실제로 흐른 시간으로 나눈다.** 주기를 가정하면 한 표본을 놓쳤을 때
+            # 그 구간의 명령이 짧은 창에 실려 봉우리가 부풀어 보인다.
+            elapsed_ns=$((now_ns - prev_ns))
+            delta=$((cmds - prev_cmds))
+            # 레디스가 재시작하면 누적이 되돌아간다. 음수 차분은 안 적는다.
+            if [ "$elapsed_ns" -gt 0 ] && [ "$delta" -ge 0 ]; then
+                printf '%s\n' $(( delta * 1000000000 / elapsed_ns )) >> "$out"
+            fi
+        fi
+        prev_cmds=$cmds
+        prev_ns=$now_ns
+    fi
     sleep "$interval"
 done

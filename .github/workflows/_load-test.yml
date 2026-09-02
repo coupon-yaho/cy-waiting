@@ -116,8 +116,11 @@ jobs:
             test/load/redis-probe.sh redis-ops.txt &
             probe_pid=$!
           fi
-          k6 run --summary-export=k6-summary.json "test/load/$SCENARIO.js"
-          rc=$?
+          # **실패해도 뒷정리와 산출물 수집까지 간다.** 이 스텝은 `bash -e` 로
+          # 도므로 그냥 부르면 k6 가 빨개지는 순간 여기서 끝나고, 프로브가 남고
+          # 느린 명령 기록도 안 남는다 — 정작 그때가 그 기록이 필요한 때다.
+          rc=0
+          k6 run --summary-export=k6-summary.json "test/load/$SCENARIO.js" || rc=$?
           if [[ -n "${probe_pid:-}" ]]; then
             kill "$probe_pid" 2>/dev/null || true
             # 느린 명령이 있었는지도 남긴다 (10.0.4). 판정에는 안 쓰고 기록만 한다.

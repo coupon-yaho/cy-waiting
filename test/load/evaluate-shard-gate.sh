@@ -40,9 +40,9 @@ printf '  %-28s %s\n' "가정한 한계 ops/s" "$limit"
 # **p99 는 기록만 한다.** 계획서의 기준이 전부 "S=1 대비" 라는 상대값인데,
 # S=16 을 할지 정하는 자리에서 "S=1 대비" 는 순환이다 (D-L1).
 if [ -n "$summary" ] && [ -s "$summary" ]; then
-    p95=$(jq -r '.metrics.http_req_duration.["p(95)"]
+    p99=$(jq -r '.metrics.http_req_duration.["p(99)"]
         // .metrics.http_req_duration.values["p(95)"] // empty' "$summary" 2>/dev/null)
-    printf '  %-28s %s\n' "응답 p95(ms) — 기록만" "${p95:-없음}"
+    printf '  %-28s %s\n' "응답 p99(ms) — 기록만" "${p99:-없음}"
 fi
 
 if [ $((peak * 100)) -gt $((limit * threshold_pct)) ]; then

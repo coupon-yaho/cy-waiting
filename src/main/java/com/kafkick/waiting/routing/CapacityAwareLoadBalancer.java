@@ -1,6 +1,10 @@
 package com.kafkick.waiting.routing;
 
+import static java.util.concurrent.TimeUnit.NANOSECONDS;
+
+import com.kafkick.waiting.control.FailureWindow;
 import com.kafkick.waiting.domain.routing.InFlightRegistry;
+import com.kafkick.waiting.domain.routing.InstanceCountBand;
 import com.kafkick.waiting.domain.routing.InstanceChooser;
 import com.kafkick.waiting.domain.routing.RoutingCandidate;
 import java.util.ArrayList;
@@ -11,7 +15,10 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongSupplier;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.cloud.client.ServiceInstance;
 import org.springframework.cloud.client.loadbalancer.DefaultResponse;
 import org.springframework.cloud.client.loadbalancer.EmptyResponse;
@@ -29,6 +36,8 @@ import reactor.core.publisher.Mono;
  */
 public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLoadBalancer {
 
+    private static final Logger log = LoggerFactory.getLogger(CapacityAwareLoadBalancer.class);
+
     private final ServiceInstanceListSupplier instances;
 
     private final InstanceChooser chooser;
@@ -39,6 +48,13 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
 
     /** 인스턴스 하나에 동시에 물릴 수 있는 수 (G9.13). */
     private final int perInstanceCap;
+
+    /** 가정 밖 구간의 시작과 끝만 남긴다 (LG-2). */
+    private final FailureWindow outsideAssumption = FailureWindow.create();
+
+    /** 마지막으로 본 구간. 밖에서 밖으로 건너뛰는 것을 잡는다. */
+    private final AtomicReference<InstanceCountBand> lastBand =
+            new AtomicReference<>(InstanceCountBand.EXPECTED);
 
     private CapacityAwareLoadBalancer(ServiceInstanceListSupplier instances,
             InstanceChooser chooser, InFlightRegistry inFlight, LongSupplier nowMillis,
@@ -68,6 +84,7 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
 
     private Response<ServiceInstance> pick(List<ServiceInstance> available) {
         long now = nowMillis.getAsLong();
+        watchInstanceCount(available.size());
         // **사라지고 비어 있는 인스턴스의 카운터를 지운다.** 식별자가 재기동마다
         // 새로 오므로 안 지우면 배포를 거듭할수록 자란다. 다만 목록에서 잠깐
         // 빠진 대에 요청이 아직 물려 있으면 안 지운다 — 지우면 돌아온 순간
@@ -116,6 +133,33 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
             candidates.removeIf(c -> c.instanceId().equals(id));
         }
         return new EmptyResponse();
+    }
+
+    /**
+     * 인스턴스 수가 가정(A7) 밖이면 알린다 (9.3.9 · R-9).
+     *
+     * <p><b>자동으로 전략을 안 바꾼다.</b> 인스턴스 수로 전환하면 임계 근처에서
+     * 진동하고 — 롤링 배포가 정확히 그 구간을 지난다 — 어느 구간이 무슨 모드였는지가
+     * 대시보드에 안 남아 장애 분석이 막힌다.
+     */
+    // **구간의 시작만 찍는다.** 요청마다 찍으면 초당 수천 줄이 쌓이고, 그때
+    // 정작 봐야 할 것이 묻힌다 (LG-2).
+    private void watchInstanceCount(int instances) {
+        InstanceCountBand band = InstanceCountBand.of(instances);
+        if (band.withinAssumption()) {
+            lastBand.set(band);
+            outsideAssumption.exited().ifPresent(r -> log.info(
+                    "인스턴스 수가 가정 안으로 돌아왔다 — {}초 동안 {}건",
+                    NANOSECONDS.toSeconds(r.elapsedNanos()), r.swallowed()));
+            return;
+        }
+        // **아래에서 위로 뒤집히는 것도 새 사건이다.** 하나로 묶어 세면 처방이
+        // 정반대가 됐는데 알람이 조용하고, 운영자는 처음 받은 안내를 그대로 들고
+        // 있는다 — 대를 늘리라는 말과 줄이라는 말이 뒤바뀐 채로다.
+        boolean crossed = lastBand.getAndSet(band) != band;
+        if (outsideAssumption.entered() || crossed) {
+            log.warn("라우팅 가정 밖 — {}", band.describe(instances));
+        }
     }
 
     /**

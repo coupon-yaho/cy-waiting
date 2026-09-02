@@ -53,7 +53,7 @@ check "배선 실패를 해결 실패로 안 읽는다" wiring 1 1
 
 # **망가진 시도 횟수로도 그레이들은 돈다.** 안 돌면 잡이 초록인데 아무것도 안 한
 # 것이다. `08` 은 정수처럼 보이지만 산술에서 8진수로 읽혀 터진다.
-for bad in 0 -1 08 abc ""; do
+for bad in 0 -1 08 abc "" 999999999999999999999 11; do
     rm -f .n
     MODE=test GRADLE_RETRY_ATTEMPTS="$bad" "$retry" test >/dev/null 2>&1
     rc=$?
@@ -62,6 +62,21 @@ for bad in 0 -1 08 abc ""; do
         echo "  ✓ 시도 횟수가 '$bad' 여도 한 번은 돌고 실패로 끝난다"
     else
         echo "  ✗ 시도 횟수가 '$bad' 이면 그레이들을 안 부르고 종료 $rc 다"
+        fail=1
+    fi
+done
+
+# **망가진 값이 기본 셋으로 돌아오는지도 본다.** 위 검사는 "한 번은 돈다" 까지만
+# 보므로, 거대한 값이 그대로 커진 채여도 통과한다 — 그러면 일시적 실패 하나가
+# 잡 상한을 다 태운다.
+for bad in 999999999999999999999 11 abc; do
+    rm -f .n
+    MODE=maven GRADLE_RETRY_ATTEMPTS="$bad" RETRY_SLEEP=0 "$retry" test >/dev/null 2>&1
+    rounds=$(cat .n 2>/dev/null || echo 0)
+    if [ "$rounds" -eq 3 ]; then
+        echo "  ✓ 시도 횟수가 '$bad' 이면 기본 셋으로 돌아온다"
+    else
+        echo "  ✗ 시도 횟수가 '$bad' 인데 $rounds 판 돌았다 — 셋이어야 한다"
         fail=1
     fi
 done

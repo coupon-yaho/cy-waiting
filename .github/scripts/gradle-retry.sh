@@ -21,10 +21,13 @@ cd "$(git rev-parse --show-toplevel)" || exit 1
 # **모양부터 본다.** 산술로 먼저 읽으면 `08` 이 8진수로, `abc` 가 0 으로 새어
 # 들어와 루프가 한 번도 안 돌고 rc 가 0 인 채로 끝난다 — 그레이들을 안 부르고
 # 잡이 초록이 된다. 자릿수만 있는 값인지 보고, 그다음 10진으로 못 박는다.
+#
+# **위쪽도 막는다.** 자릿수만 보면 상한이 없어, 긴 값이 산술에서 넘쳐 거대한
+# 횟수가 되거나 그대로 커서 일시적 실패에 잡 상한을 다 태운다. 자리 수부터 자른다.
 attempts=${GRADLE_RETRY_ATTEMPTS:-3}
 case "$attempts" in
-    ''|*[!0-9]*) attempts=3 ;;
-    *) attempts=$((10#$attempts)); [ "$attempts" -ge 1 ] || attempts=3 ;;
+    ''|*[!0-9]*|??*[0-9]) attempts=3 ;;
+    *) attempts=$((10#$attempts)); [ "$attempts" -ge 1 ] && [ "$attempts" -le 10 ] || attempts=3 ;;
 esac
 log=$(mktemp)
 trap 'rm -f "$log"' EXIT

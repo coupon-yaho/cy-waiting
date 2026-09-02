@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.kafkick.waiting.MutableClock;
+import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tag;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -179,6 +180,53 @@ class AdmissionGatewayFilterTest {
 
         assertThat(exchange.getResponse().getBodyAsString().block())
                 .contains("\"rejoined\":true");
+    }
+
+    /**
+     * <b>순번 역행의 선행 신호를 셉니다</b> (F2 · 8.4.5).
+     *
+     * <p>바닥값이 적용됐다는 것은 레디스 시계가 뒤로 갔다는 뜻입니다. 그 자체로는
+     * 아직 추월이 아니지만, 바닥값이 없었다면 추월이었습니다 — 이 값이 오르면
+     * 그 방어가 지금 일하고 있다는 뜻이고, 방어가 빠지는 날 사고가 됩니다.
+     */
+    @Test
+    @DisplayName("시계가_뒤로_가면_센다")
+    void 시계가_뒤로_가면_센다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100));
+        줄.시계가_뒤로_갔다();
+
+        태운다(COUPON);
+
+        assertThat(meters.counter("waiting.queue.clock.back").count()).isEqualTo(1);
+    }
+
+    /**
+     * <b>사건이 나기 전에 이미 0 을 내보냅니다.</b>
+     *
+     * <p>첫 증가 때 만들면 그 앞에 0 표본이 없어 {@code increase} 의 기준이
+     * 없습니다. 드물게 한 번 나는 사건이 곧 그 첫 사건이라 통째로 사라집니다.
+     */
+    // **find 로 봅니다.** counter(...) 로 물으면 그 호출이 만들어 버려, 등록이
+    // 안 돼 있어도 통과합니다 — 위 두 시험이 그렇습니다.
+    @Test
+    @DisplayName("시계_역행_계수는_사건_전에_이미_등록된다")
+    void 시계_역행_계수는_사건_전에_이미_등록된다() {
+        assertThat(meters.find("waiting.queue.clock.back").counter())
+                .as("사건 전에도 등록돼 0 을 내보내야 한다")
+                .isNotNull()
+                .extracting(Counter::count)
+                .isEqualTo(0.0);
+    }
+
+    /** 안 뒤집혔으면 안 셉니다. 안 두면 "늘 센다" 로도 통과합니다. */
+    @Test
+    @DisplayName("시계가_멀쩡하면_안_센다")
+    void 시계가_멀쩡하면_안_센다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100));
+
+        태운다(COUPON);
+
+        assertThat(meters.counter("waiting.queue.clock.back").count()).isZero();
     }
 
     /** 처음 온 사람은 재방문이 아닙니다. 안 두면 "늘 참" 으로도 통과합니다. */

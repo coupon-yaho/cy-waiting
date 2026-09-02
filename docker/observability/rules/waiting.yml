@@ -201,6 +201,33 @@ groups:
         annotations:
           summary: "사흘째 판정 오류 예산을 정상의 {{ $value | printf \"%.1f\" }}배로 태우고 있다"
 
+      # **배분이 멎으면 줄이 안 빠지는데 응답은 정상이다** (8.4.4).
+      #
+      # **두 나이를 안 헷갈린다.** `waiting_snapshot_tick_age` 는 이 노드의 조회
+      # 루프가 마지막으로 돈 뒤다 — 리더가 죽어도 계속 돌므로 그걸 보면 정작 이
+      # 고장에 안 울린다. 배분이 멎은 것을 보는 값은 리더가 **발행한** 뒤 흐른
+      # 시간, 곧 `waiting_snapshot_age` 다.
+      #
+      # 지속 시간을 틱보다 길게 둔다. 한 틱을 놓친 것은 고장이 아니다.
+      - alert: 배분정지
+        expr: waiting_snapshot_age >= 0 and waiting_snapshot_age > 30
+        for: 1m
+        labels: { severity: page }
+        annotations:
+          summary: "배분이 {{ $value | printf \"%.0f\" }}초째 안 돌았다 — 줄이 안 빠진다"
+
+      # **순번 역행의 선행 신호다** (F2 · 8.4.5).
+      #
+      # 바닥값이 걸렸다는 것은 레디스 시계가 뒤로 갔다는 뜻이다. 아직 추월은
+      # 아니지만, 바닥값이 없었다면 추월이었다 — 불변식 4 가 방어 하나에
+      # 걸려 있는 구간이다.
+      - alert: 순번바닥값적용
+        expr: increase(waiting_queue_clock_back_total[5m]) > 0
+        for: 0m
+        labels: { severity: ticket }
+        annotations:
+          summary: "5분 사이 줄 등록에서 시각이 {{ $value }}회 뒤로 갔다"
+
       # 재료를 읽을 때 시각이 뒤로 갔다. 큐의 바닥값과는 다른 값이다.
       - alert: 재료시각역행
         expr: increase(waiting_snapshot_clock_floor_applied_total[5m]) > 0

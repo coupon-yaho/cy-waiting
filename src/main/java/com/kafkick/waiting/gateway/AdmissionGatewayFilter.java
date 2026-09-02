@@ -87,6 +87,16 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      * 구간에서 로그가 폭주하고, 그때 정작 봐야 할 것이 묻힌다. */
     private static final String METRIC = "waiting.admission";
 
+    /**
+     * 등록에서 순번 바닥값이 걸린 횟수. <b>순번 역행의 선행 신호다</b> (F2).
+     *
+     * <p>바닥값이 없었다면 추월이었다 — 이 값이 오르는 구간이 곧 방어 하나에
+     * 불변식 4 가 걸려 있는 구간이다.
+     */
+    // **판정 카운터에 안 섞는다.** SLI 의 분모가 그 이름들의 합이라, 한 요청이
+    // 거기서 두 번 세어지면 분모가 부풀고 실패율이 좋아 보인다 (O-7).
+    private static final String CLOCK_BACK = "waiting.queue.clock.back";
+
     /** 받아도 되는 최대 대기 시간. 넘으면 줄을 세우는 것이 되레 나쁘다. */
     static final long MAX_ETA_SEC = 600;
 
@@ -178,6 +188,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     // 출처를 넣으면 "실패율 = cause != none" 이 정상적인 매진 단락을 다 잡는다.
     private final Counter soldOutHits;
 
+    /** 레디스 시계가 뒤로 간 건수. 순번 역행의 선행 신호다 (F2). */
+    private final Counter clockBack;
+
     private AdmissionGatewayFilter(SnapshotHolder holder, AdmissionDecider decider,
             Clock clock, MeterRegistry meters, DoubleSupplier random,
             QueuePort queue, QueueToken tokens, SecondWindowLimiter limiter,
@@ -209,6 +222,11 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         this.error = ApiError.of(clock);
         this.soldOutCache = Objects.requireNonNull(soldOutCache, "soldOutCache 는 필수다");
         this.soldOutHits = meters.counter("waiting.soldout.cache.hit");
+        // **여기서 만들어 0 을 내보낸다.** 첫 증가 때 만들면 그 앞에 0 표본이
+        // 없어, 프로메테우스가 `increase` 를 낼 기준을 못 잡는다 — 드물게 한 번
+        // 나는 사건이 정확히 그 첫 사건이라, 이 지표가 겨눈 신호가 통째로
+        // 사라진다. 이 카운터는 순번 역행의 선행 신호다.
+        this.clockBack = meters.counter(CLOCK_BACK);
     }
 
     /** 흔들림의 난수원은 스레드마다 따로 둔다 — 공유하면 그 자체가 경합점이다. */
@@ -486,6 +504,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                     // 뒤집히면 그 사람이 통째로 추월당한다. 계획서가 "줄이 보이면
                     // 바로 풀어도 된다" 고 적은 것은 그 한 명을 안 센 것이다.
                     latch.mark(couponId, clock.instant().getEpochSecond());
+                    if (entry.clockWentBack()) {
+                        clockBack.increment();
+                    }
                     // 등록이 다시 되면 fail-open 구간이 끝난 것이다. 쌍으로 안
                     // 남기면 로그에 진입만 있고 언제 닫혔는지가 없다 (LG-2).
                     failOpenWindow.exited().ifPresent(r -> log.info(

@@ -5,8 +5,9 @@
 # 영영 안 줄어도 초록이 뜨고, 엄하면 제때 줄었는데도 미달로 적힌다.
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 1
+. test/load/selftest-lib.sh
 
-judge=$PWD/test/load/evaluate-redistribute.sh
+SELFTEST_JUDGE=$PWD/test/load/evaluate-redistribute.sh
 work=$(mktemp -d) || exit 1
 trap 'rm -rf "$work"' EXIT
 
@@ -14,21 +15,12 @@ trap 'rm -rf "$work"' EXIT
 # 무엇을 본 것인지 알 수 없다.
 unset SLACK SUSTAIN BUDGET_SEC MIN_PER_SEC
 
-fail=0
 check() {
     local name=$1 want_rc=$2 want_word=$3 target=$4 rows=$5
     printf '%s\n' "$rows" > "$work/s.txt"
-    local out rc
-    out=$(SLACK="${SLACK_:-8}" SUSTAIN="${SUSTAIN_:-3}" BUDGET_SEC="${BUDGET_:-5}" \
-          MIN_PER_SEC="${MINPS_:-10}" "$judge" "$work/s.txt" "$target" 2>&1)
-    rc=$?
-    if [ "$rc" -eq "$want_rc" ] && printf '%s' "$out" | grep -q "$want_word"; then
-        echo "  ✓ $name"
-    else
-        echo "  ✗ $name — 종료 $rc (기대 $want_rc), '$want_word' 없음"
-        printf '%s\n' "$out" | sed 's/^/      /'
-        fail=1
-    fi
+    SLACK="${SLACK_:-8}" SUSTAIN="${SUSTAIN_:-3}" BUDGET_SEC="${BUDGET_:-5}" \
+        MIN_PER_SEC="${MINPS_:-10}" \
+        run_case "$name" "$want_rc" "$want_word" -- "$work/s.txt" "$target"
 }
 
 echo "재분배 판정 자기검증"
@@ -117,12 +109,12 @@ check "회복이 안 되면 미달" 1 "닿은 적이 없다" 55 "-2 11 100
 2 12 100
 3 14 100"
 
-out=$("$judge" "$work/없는파일" 11 2>&1)
+out=$("$SELFTEST_JUDGE" "$work/없는파일" 11 2>&1)
 if [ $? -eq 2 ] && printf '%s' "$out" | grep -q "표본 파일이 없다"; then
     echo "  ✓ 표본 파일이 없으면 막는다"
 else
     echo "  ✗ 표본 파일이 없으면 막는다"
-    fail=1
+    selftest_failed=1
 fi
 
-exit $fail
+exit $selftest_failed

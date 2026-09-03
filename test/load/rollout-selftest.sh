@@ -5,28 +5,20 @@
 # 램프가 아예 없어도 초록이 뜨고, 그 초록을 근거로 램프를 지우게 된다.
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 1
+. test/load/selftest-lib.sh
 
-judge=$PWD/test/load/evaluate-rollout.sh
+SELFTEST_JUDGE=$PWD/test/load/evaluate-rollout.sh
 work=$(mktemp -d) || exit 1
 trap 'rm -rf "$work"' EXIT
 
 unset EARLY_SEC EARLY_MAX_RATIO MIN_PER_SEC
 
-fail=0
 check() {
     local name=$1 want_rc=$2 want_word=$3 steady=$4 rows=$5
     printf '%s\n' "$rows" > "$work/s.txt"
-    local out rc
-    out=$(EARLY_SEC="${EARLY_:-5}" EARLY_MAX_RATIO="${RATIO_:-70}" \
-          MIN_PER_SEC="${MINPS_:-10}" "$judge" "$work/s.txt" "$steady" 2>&1)
-    rc=$?
-    if [ "$rc" -eq "$want_rc" ] && printf '%s' "$out" | grep -q "$want_word"; then
-        echo "  ✓ $name"
-    else
-        echo "  ✗ $name — 종료 $rc (기대 $want_rc), '$want_word' 없음"
-        printf '%s\n' "$out" | sed 's/^/      /'
-        fail=1
-    fi
+    EARLY_SEC="${EARLY_:-5}" EARLY_MAX_RATIO="${RATIO_:-70}" \
+        MIN_PER_SEC="${MINPS_:-10}" \
+        run_case "$name" "$want_rc" "$want_word" -- "$work/s.txt" "$steady"
 }
 
 echo "롤링 배포 판정 자기검증"
@@ -69,12 +61,12 @@ check "평상시 몫이 0 이면 막는다" 2 "견줄 것이 없다" 0 "0 5 100"
 check "평상시 몫이 숫자가 아니면 막는다" 2 "정수여야" oops "0 5 100"
 RATIO_=oops check "한계 비율이 숫자가 아니면 막는다" 2 "정수여야" 33 "0 5 100"
 
-out=$("$judge" "$work/없는파일" 33 2>&1)
+out=$("$SELFTEST_JUDGE" "$work/없는파일" 33 2>&1)
 if [ $? -eq 2 ] && printf '%s' "$out" | grep -q "표본 파일이 없다"; then
     echo "  ✓ 표본 파일이 없으면 막는다"
 else
     echo "  ✗ 표본 파일이 없으면 막는다"
-    fail=1
+    selftest_failed=1
 fi
 
-exit $fail
+exit $selftest_failed

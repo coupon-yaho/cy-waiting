@@ -5,8 +5,9 @@
 # 봐도 초록이 뜨고, 그 초록을 근거로 재시도 배선을 안 넣게 된다.
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 1
+. test/load/selftest-lib.sh
 
-judge=$PWD/test/load/evaluate-kill.sh
+SELFTEST_JUDGE=$PWD/test/load/evaluate-kill.sh
 work=$(mktemp -d) || exit 1
 trap 'rm -rf "$work"' EXIT
 
@@ -14,21 +15,11 @@ trap 'rm -rf "$work"' EXIT
 # 무엇을 본 것인지 알 수 없다.
 unset MAX_5XX MIN_SAMPLE MIN_ADMITTED
 
-fail=0
 check() {
     local name=$1 want_rc=$2 want_word=$3 body=$4
     printf '%s\n' "$body" > "$work/codes"
-    local out rc
-    out=$(MAX_5XX="${ALLOW_:-0}" MIN_SAMPLE="${MIN_:-20}" \
-          MIN_ADMITTED="${ADMIT_:-20}" "$judge" "$work/codes" 2>&1)
-    rc=$?
-    if [ "$rc" -eq "$want_rc" ] && printf '%s' "$out" | grep -q "$want_word"; then
-        echo "  ✓ $name"
-    else
-        echo "  ✗ $name — 종료 $rc (기대 $want_rc), '$want_word' 없음"
-        printf '%s\n' "$out" | sed 's/^/      /'
-        fail=1
-    fi
+    MAX_5XX="${ALLOW_:-0}" MIN_SAMPLE="${MIN_:-20}" MIN_ADMITTED="${ADMIT_:-20}" \
+        run_case "$name" "$want_rc" "$want_word" -- "$work/codes"
 }
 
 many() { local code=$1 n=$2 i; for i in $(seq 1 "$n"); do echo "$code"; done; }
@@ -60,12 +51,12 @@ check "응답 코드가 아니면 막는다" 2 "응답 코드가 아닌" "$(many
 oops"
 ALLOW_=oops check "허용치가 숫자가 아니면 막는다" 2 "정수여야" "$(many 200 30)"
 
-out=$("$judge" "$work/없는파일" 2>&1)
+out=$("$SELFTEST_JUDGE" "$work/없는파일" 2>&1)
 if [ $? -eq 2 ] && printf '%s' "$out" | grep -q "응답 코드 파일이 없다"; then
     echo "  ✓ 파일이 없으면 막는다"
 else
     echo "  ✗ 파일이 없으면 막는다"
-    fail=1
+    selftest_failed=1
 fi
 
-exit $fail
+exit $selftest_failed

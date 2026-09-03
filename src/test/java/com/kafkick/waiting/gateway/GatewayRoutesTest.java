@@ -784,11 +784,37 @@ class GatewayRoutesTest {
      * 게이트웨이가 고장난 것으로 보인다.
      */
     @Test
-    @DisplayName("라우팅을_켜면_발급에_재시도가_붙는다")
-    void 라우팅을_켜면_발급에_재시도가_붙는다() {
-        assertThat(발급_필터(라우터(new RoutingProperties(
-                true, "coupon-service", null, null, null, null))))
-                .anyMatch(f -> 이름(f).contains("Retry"));
+    @DisplayName("라우팅을_켜면_두_라우트에_재시도가_붙는다")
+    void 라우팅을_켜면_두_라우트에_재시도가_붙는다() {
+        RouteLocator 켠_판 = 라우터(new RoutingProperties(
+                true, "coupon-service", null, null, null, null));
+
+        for (String id : List.of("issue", "coupons")) {
+            Route route = 라우트(켠_판, id);
+            // **정확히 하나여야 한다.** 있는지만 보면 중복 등록이 통과하고,
+            // 그러면 죽은 대로 두 번 더 가서 사용자 대기가 그만큼 늘어난다.
+            assertThat(route.getFilters())
+                    .as("%s 라우트의 재시도 필터", id)
+                    .filteredOn(f -> 이름(f).contains("Retry"))
+                    .hasSize(1);
+            // **라우트에 실린 순서를 본다.** 상수끼리 견주면 그 값이 실제로
+            // 안 실려도 통과한다.
+            assertThat(실린_순서(route, "Retry")).isEqualTo(FilterOrder.ROUTE_RETRY);
+        }
+
+        // 발급 라우트에서는 서킷보다 안쪽이어야 한다 — 바깥이면 폴백이 오류를
+        // 삼켜 재시도가 볼 것이 없다.
+        Route 발급 = 라우트(켠_판, "issue");
+        assertThat(실린_순서(발급, "Retry"))
+                .isGreaterThan(실린_순서(발급, "CircuitBreaker"));
+    }
+
+    /** 이름으로 라우트를 짚는다. 못 찾으면 실패다 — 없는 것을 통과로 세지 않는다. */
+    private static Route 라우트(RouteLocator locator, String id) {
+        return locator.getRoutes().collectList().block().stream()
+                .filter(r -> id.equals(r.getId()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError(id + " 라우트가 없다"));
     }
 
     /**
@@ -799,9 +825,14 @@ class GatewayRoutesTest {
     @Test
     @DisplayName("라우팅을_끄면_재시도를_안_건다")
     void 라우팅을_끄면_재시도를_안_건다() {
-        assertThat(발급_필터(라우터(new RoutingProperties(
-                false, "coupon-service", null, null, null, null))))
-                .noneMatch(f -> 이름(f).contains("Retry"));
+        RouteLocator 끈_판 = 라우터(new RoutingProperties(
+                false, "coupon-service", null, null, null, null));
+
+        for (String id : List.of("issue", "coupons")) {
+            assertThat(라우트(끈_판, id).getFilters())
+                    .as("%s 라우트", id)
+                    .noneMatch(f -> 이름(f).contains("Retry"));
+        }
     }
 
     /**

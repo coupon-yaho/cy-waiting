@@ -85,7 +85,7 @@ class ConnectRetryTest {
      * 프로세스가 물 수 있고, 그러면 연결이 성립해 이 시험이 재려던 것 대신
      * 엉뚱한 프로세스로 프록시한 채 초록이 뜬다.
      */
-    private void 죽은_자리가_맞는지_본다() {
+    private void 블랙홀이_아닌_죽은_자리인지_본다() {
         try (Socket probe = new Socket()) {
             probe.connect(new InetSocketAddress("127.0.0.1", 죽은_포트), 500);
             throw new AssertionError(
@@ -167,7 +167,7 @@ class ConnectRetryTest {
     @Test
     @DisplayName("연결이_안_된_대를_고르면_다음_대로_넘어간다")
     void 연결이_안_된_대를_고르면_다음_대로_넘어간다() {
-        죽은_자리가_맞는지_본다();
+        블랙홀이_아닌_죽은_자리인지_본다();
         산_대가_받은_수.set(0);
 
         int 보낸_수 = 6;
@@ -182,6 +182,30 @@ class ConnectRetryTest {
         // **산 대가 전부 받아야 한다.** 상태만 보면 폴백이 200 을 낼 때 못 가른다.
         assertThat(산_대가_받은_수.get())
                 .as("산 대가 실제로 받은 요청 수")
+                .isEqualTo(보낸_수);
+    }
+
+    /**
+     * <b>조회도 넘어가야 한다.</b> 여기가 발급보다 아프다 — 모으기가 붙어 있어
+     * 안 붙는 대로 간 요청 하나가 그 키에 붙은 모든 조회를 그동안 잠근다.
+     */
+    @Test
+    @DisplayName("조회도_연결이_안_되면_다음_대로_넘어간다")
+    void 조회도_연결이_안_되면_다음_대로_넘어간다() {
+        블랙홀이_아닌_죽은_자리인지_본다();
+        산_대가_받은_수.set(0);
+
+        int 보낸_수 = 6;
+        for (int i = 0; i < 보낸_수; i++) {
+            클라이언트().get().uri("/api/v1/coupons/c1")
+                    .header("X-Member-Id", "91000" + i)
+                    .header("X-Member-Grade", "GOLD")
+                    .exchange()
+                    .expectStatus().isEqualTo(HttpStatus.OK);
+        }
+
+        assertThat(산_대가_받은_수.get())
+                .as("산 대가 실제로 받은 조회 수")
                 .isEqualTo(보낸_수);
     }
 }

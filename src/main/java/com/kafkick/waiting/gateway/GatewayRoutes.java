@@ -271,11 +271,21 @@ public class GatewayRoutes {
                         .method(HttpMethod.GET)
                         .and().path("/api/v1/coupons", "/api/v1/coupons/" + COUPON_ID)
                         .and().predicate(rawPathIsPlain())
-                        // **조회에만 붙인다.** 발급에 붙이면 같은 응답을 여럿이
-                        // 받고, 그건 곧 초과 발급이다.
-                        .filters(f -> stripSpoofableClientIp(f)
-                                .filter(coalescing, FilterOrder.ROUTE_COALESCING)
-                                .filter(bodyDeadline, FilterOrder.ROUTE_BODY))
+                        .filters(f -> {
+                            // **모으기는 조회에만 붙인다.** 발급에 붙이면 같은
+                            // 응답을 여럿이 받고, 그건 곧 초과 발급이다.
+                            GatewayFilterSpec spec = stripSpoofableClientIp(f)
+                                    .filter(coalescing, FilterOrder.ROUTE_COALESCING);
+                            // **조회도 다음 대로 넘긴다.** 여기가 발급보다 아프다 —
+                            // 모으기가 붙은 뒤로는 안 붙는 대로 간 요청 하나가 그
+                            // 키에 붙은 모든 조회를 그동안 잠근다. 조회는 멱등이라
+                            // 다시 보내는 것이 안전하다.
+                            if (balanced) {
+                                spec = spec.filter(connectRetry(retries),
+                                        FilterOrder.ROUTE_RETRY);
+                            }
+                            return spec.filter(bodyDeadline, FilterOrder.ROUTE_BODY);
+                        })
                         // **여기도 끊는 자리가 있어야 한다.** 모으기가 붙은 뒤로는
                         // 멎은 요청 하나가 그 키를 영구히 잠근다 — 뒤이어 오는
                         // 모든 조회가 끝나지 않는 것에 붙고, 뒷단이 살아나도

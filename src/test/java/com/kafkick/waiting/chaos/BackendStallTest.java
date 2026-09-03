@@ -61,9 +61,14 @@ class BackendStallTest {
      * 것은 값이 아니라 "끊기는가, 그리고 그 끊김이 서킷에 쌓이는가" 다.
      */
     private static final Duration 응답_상한 = Duration.ofMillis(300);
-    // 응답 상한을 줄인 판이라 연결 상한도 그보다 짧아야 한다 —
-    // 기본값(500ms)을 그대로 두면 기동이 막힌다.
-    private static final Duration 연결_상한 = Duration.ofMillis(100);
+    // 응답 상한을 줄인 판이라 연결 상한도 그보다 짧아야 한다 — 운영값을 그대로
+    // 두면 기동이 막힌다.
+    //
+    // **응답 상한 바로 밑에 붙인다.** 여기서 연결 상한은 재는 대상이 아니라
+    // 통과 조건이라, 재는 것(응답 정체)에 최대한 안 끼어드는 값이어야 한다.
+    // 넉넉히 떼어 놓으면 부하 걸린 러너에서 로컬 연결이 그 값을 넘겨 실패하고,
+    // 그 실패가 응답 정체와 똑같이 서킷 창에 쌓여 무엇을 쟀는지 알 수 없게 된다.
+    private static final Duration 연결_상한 = Duration.ofMillis(250);
 
     @DynamicPropertySource
     static void 멎은_뒷단을_가리킨다(DynamicPropertyRegistry registry) {

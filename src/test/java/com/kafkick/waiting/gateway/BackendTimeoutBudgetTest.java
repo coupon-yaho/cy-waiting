@@ -28,6 +28,12 @@ class BackendTimeoutBudgetTest {
     /** 연결 실패에 무는 재시도가 한 번 더 간다. */
     private static final int ATTEMPTS = 2;
 
+    /**
+     * 뒷단이 정상일 때의 응답 여유. <b>이 가정을 값으로 남긴다</b> — 살아난
+     * 재시도의 값은 연결 대기와 이것의 합이고, 그것이 느림 임계 아래여야 한다.
+     */
+    private static final Duration HEALTHY_RESPONSE = Duration.ofMillis(300);
+
     private Binder 운영설정() throws IOException {
         List<PropertySource<?>> sources = new YamlPropertySourceLoader()
                 .load("application", new ClassPathResource("application.yml"));
@@ -58,15 +64,28 @@ class BackendTimeoutBudgetTest {
     }
 
     /**
-     * <b>위는 서킷의 느림 임계다.</b> 재시도가 서킷 안쪽이라, 죽은 대를 먼저 고른
-     * 요청은 연결 상한만큼 늦게 <b>성공</b>한다. 그것이 느림으로 집계되면 모든
-     * 요청이 200 인데 서킷이 열리고, 그때 판정이 한산한 쿠폰까지 줄로 보낸다 —
-     * 한산한 쿠폰은 줄 없이 지나가야 한다.
+     * <b>위는 서킷의 느림 임계다.</b> 재시도가 서킷 안쪽이라, 안 붙는 대를 먼저
+     * 고른 요청은 <b>연결 대기와 정상 응답을 더한 값</b>으로 성공한다. 서킷은
+     * 그 합을 재므로, 연결 상한만 견주면 정상 응답이 조금만 길어도 느림으로
+     * 세어진다 — 그때 모든 요청이 정상인데 서킷이 열리고, 판정이 한산한 쿠폰까지
+     * 줄로 보낸다.
      */
     @Test
-    @DisplayName("느리게_성공한_요청이_느림으로_안_세어진다")
-    void 느리게_성공한_요청이_느림으로_안_세어진다() throws IOException {
-        assertThat(뒷단().connectTimeout()).isLessThan(느림_임계());
+    @DisplayName("살아난_재시도가_느림으로_안_세어진다")
+    void 살아난_재시도가_느림으로_안_세어진다() throws IOException {
+        assertThat(뒷단().connectTimeout().plus(HEALTHY_RESPONSE))
+                .as("안 붙는 대를 먼저 고른 요청의 값")
+                .isLessThan(느림_임계());
+    }
+
+    /**
+     * <b>느림 임계는 격벽이 막기 시작하는 지연 아래여야 한다.</b> 위로 가면 느린
+     * 뒷단이 서킷에 집계되기 전에 격벽이 먼저 막고, 막힌 것은 창에 안 쌓인다.
+     */
+    @Test
+    @DisplayName("느림_임계가_격벽_지연_아래다")
+    void 느림_임계가_격벽_지연_아래다() throws IOException {
+        assertThat(느림_임계()).isLessThan(AdmissionGatewayFilter.BLOCKING_DELAY);
     }
 
     /**
@@ -82,16 +101,18 @@ class BackendTimeoutBudgetTest {
     }
 
     /**
-     * <b>연결과 응답을 더한 것이 격벽 시한 안이어야 한다.</b> 응답 상한은 시도마다
-     * 따로 걸리므로 최악은 둘의 합이다. 격벽이 먼저 끊으면 서킷에 가는 것이 오류가
-     * 아니라 취소이고, 취소는 창에 안 쌓인다.
+     * <b>최악의 성공 경로가 격벽 시한 안이어야 한다.</b> 실패한 연결 대기, 두 번째
+     * 연결, 그리고 응답까지다 — 응답 상한은 시도마다 따로 걸린다. 격벽이 먼저
+     * 끊으면 서킷에 가는 것이 오류가 아니라 취소이고, 취소는 창에 안 쌓인다.
      */
     @Test
-    @DisplayName("연결과_응답의_합이_격벽_시한_안이다")
-    void 연결과_응답의_합이_격벽_시한_안이다() throws IOException {
+    @DisplayName("시도_전부와_응답의_합이_격벽_시한_안이다")
+    void 시도_전부와_응답의_합이_격벽_시한_안이다() throws IOException {
         GatewayRoutes.Backend backend = 뒷단();
 
-        assertThat(backend.connectTimeout().plus(backend.responseTimeout()))
+        assertThat(backend.connectTimeout().multipliedBy(ATTEMPTS)
+                        .plus(backend.responseTimeout()))
+                .as("연결 %d 번과 응답을 더한 값", ATTEMPTS)
                 .isLessThan(AdmissionGatewayFilter.MAX_IN_FLIGHT);
     }
 }

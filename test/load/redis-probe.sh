@@ -26,9 +26,28 @@ probe=${PROBE_CMD:-docker compose -f test/load/compose.yml exec -T redis sh -c}
 loop="while :; do date +%s%N; redis-cli INFO stats | grep total_commands_processed; sleep $interval; done"
 
 : > "$out"
+# **자식을 짚어서 내린다.** 파이프라인으로 두면 부르는 쪽이 이 스크립트만 죽이고
+# 자식은 남는다 — 배시는 자식까지 신호를 안 보낸다. 그러면 다음 시나리오가 도는
+# 내내 레디스를 계속 치고, 그 부하가 다음 측정에 섞인다.
+#
+# `kill 0` 은 안 쓴다. 프로세스 그룹을 통째로 내려 부른 쪽까지 같이 끝난다.
+#
+# 자식을 **제 프로세스 그룹**으로 떼어 그 그룹만 내린다. 그냥 죽이면 그 아래
+# 손자(잠자는 프로세스 등)가 남는다.
+fifo=$(mktemp -u)
+mkfifo "$fifo"
+if command -v setsid >/dev/null 2>&1; then
+    setsid $probe "$loop" > "$fifo" 2>/dev/null &
+else
+    $probe "$loop" > "$fifo" 2>/dev/null &
+fi
+producer=$!
+trap 'kill -- -"$producer" 2>/dev/null || kill "$producer" 2>/dev/null; rm -f "$fifo"' \
+    EXIT INT TERM
+
 prev_cmds=""
 prev_ns=""
-$probe "$loop" 2>/dev/null | while IFS= read -r line; do
+while IFS= read -r line; do
     case "$line" in
         total_commands_processed:*) cmds=${line#total_commands_processed:} ;;
         [0-9]*) now_ns=$line; continue ;;
@@ -49,4 +68,4 @@ $probe "$loop" 2>/dev/null | while IFS= read -r line; do
     fi
     prev_cmds=$cmds
     prev_ns=$now_ns
-done
+done < "$fifo"

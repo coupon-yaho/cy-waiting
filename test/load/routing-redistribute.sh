@@ -23,6 +23,15 @@ AFTER_SEC="${AFTER_SEC:-15}"
 # 큰 대를 이 값으로 낮춘다. 200 → 20 이면 그 대의 몫이 55% 에서 11% 가 된다.
 DEGRADED_CREDITS="${DEGRADED_CREDITS:-20}"
 
+# 어느 방향을 재는가. `degrade` 는 열화를 넣고 유입이 주는지(9.4.1),
+# `recover` 는 열화를 걷고 유입이 돌아오는지(9.4.2) 본다. **되돌리는 쪽도
+# 재야 한다** — 한 방향만 보면 영영 안 돌아오는 구현도 통과한다.
+DIRECTION="${DIRECTION:-degrade}"
+case "$DIRECTION" in
+    degrade|recover) ;;
+    *) echo "DIRECTION 은 degrade 또는 recover 여야 한다: '$DIRECTION'"; exit 2 ;;
+esac
+
 NAMES=(backend backend-small backend-mid)
 CREDITS=(200 40 120)
 
@@ -46,7 +55,12 @@ served() {
   printf '%d\n' "$((10#$count))"
 }
 
-echo "전략 ${STRATEGY} · 큰 대를 ${CREDITS[0]} → ${DEGRADED_CREDITS} 으로 낮춘다"
+if [ "$DIRECTION" = degrade ]; then
+  START_CREDITS=${CREDITS[0]}; END_CREDITS=$DEGRADED_CREDITS
+else
+  START_CREDITS=$DEGRADED_CREDITS; END_CREDITS=${CREDITS[0]}
+fi
+echo "전략 ${STRATEGY} · 큰 대를 ${START_CREDITS} → ${END_CREDITS} 로 바꾼다"
 
 # **여유를 먼저 되돌리고 기다린다.** 앞 실행이 낮춰 둔 값은 볼륨에 남는다.
 # 그 상태로 기다리면 예열이 요구하는 크레딧에 영영 못 닿아 기동이 실패한다 —
@@ -65,6 +79,13 @@ if ! ROUTING_STRATEGY="$STRATEGY" $COMPOSE up -d --wait > "$work/up.log" 2>&1; t
   echo "겹침을 못 세웠다"; tail -20 "$work/up.log" | sed 's/^/  /'; exit 2
 fi
 sleep "$WARMUP_SEC"
+
+# 회복을 재려면 회복 **전** 상태가 있어야 한다. 예열은 정상값으로 마치고,
+# 표본을 뜨기 전에 열화 상태로 내려 앉힌다.
+if [ "$DIRECTION" = recover ]; then
+  $COMPOSE exec -T redis redis-cli SET sim:credits:stub-1 "$START_CREDITS" >/dev/null
+  sleep 6
+fi
 
 $COMPOSE exec -T redis redis-cli DEL "queue:{$COUPON}" >/dev/null 2>&1
 for _ in $(seq 1 30); do
@@ -113,15 +134,15 @@ for idx in 0 1 2; do served "${NAMES[idx]}" || exit 2; done > "$work/prev"
 
 for s in $(seq -- "-$BEFORE_SEC" -1); do sleep 1; sample "$s" || exit 2; done
 
-$COMPOSE exec -T redis redis-cli SET sim:credits:stub-1 "$DEGRADED_CREDITS" >/dev/null
+$COMPOSE exec -T redis redis-cli SET sim:credits:stub-1 "$END_CREDITS" >/dev/null
 for s in $(seq 0 "$AFTER_SEC"); do sleep 1; sample "$s" || exit 2; done
 
 kill %1 2>/dev/null; wait %1 2>/dev/null
 
-# 열화 뒤 큰 대의 목표 몫. 나머지 둘의 여유는 그대로다.
-after_sum=$(( DEGRADED_CREDITS + CREDITS[1] + CREDITS[2] ))
-target=$(( DEGRADED_CREDITS * 100 / after_sum ))
+# 바꾼 뒤 큰 대의 목표 몫. 나머지 둘의 여유는 그대로다.
+after_sum=$(( END_CREDITS + CREDITS[1] + CREDITS[2] ))
+target=$(( END_CREDITS * 100 / after_sum ))
 echo
-echo "열화 뒤 큰 대의 목표 몫: ${target}%"
+echo "바꾼 뒤 큰 대의 목표 몫: ${target}%"
 echo
 test/load/evaluate-redistribute.sh "$work/samples" "$target"

@@ -71,12 +71,24 @@ services:
         redis-cli -h redis SETNX sim:credits:stub-1 ${BIG_CAP:-200}
         redis-cli -h redis SETNX sim:credits:stub-2 ${SMALL_CAP:-40}
         redis-cli -h redis SETNX sim:credits:stub-3 ${MID_CAP:-120}
+        # **식별자도 손잡이다** (9.4.4). 재기동한 인스턴스는 **새 식별자**로
+        # 온다는 것이 계약이고(R-3), 램프는 처음 본 식별자에만 걸린다. 고정
+        # 이름을 쓰면 재시작해도 램프를 안 타서 롤링 배포를 흉내 낼 수 없다.
+        redis-cli -h redis SETNX sim:id:stub-1 stub-1
+        lastid=""
         while :; do
           now=$$(date +%s)
           big=$$(redis-cli -h redis GET sim:credits:stub-1)
           small=$$(redis-cli -h redis GET sim:credits:stub-2)
           mid=$$(redis-cli -h redis GET sim:credits:stub-3)
-          redis-cli -h redis HSET capacity:coupon-svc:v1 stub-1 \
+          bigid=$$(redis-cli -h redis GET sim:id:stub-1)
+          # 이름이 바뀌면 옛 자리를 지운다. 안 지우면 낡음 창(3초) 동안 두
+          # 인스턴스가 같은 주소로 함께 살아 여유가 두 배로 보인다.
+          if [ "$$bigid" != "$$lastid" ] && [ -n "$$lastid" ]; then
+            redis-cli -h redis HDEL capacity:coupon-svc:v1 "$$lastid" > /dev/null
+          fi
+          lastid=$$bigid
+          redis-cli -h redis HSET capacity:coupon-svc:v1 "$$bigid" \
             "{\"addr\":\"backend:8090\",\"credits\":$$big,\"ts\":$$now}" > /dev/null
           redis-cli -h redis HSET capacity:coupon-svc:v1 stub-2 \
             "{\"addr\":\"backend-small:8090\",\"credits\":$$small,\"ts\":$$now}" > /dev/null

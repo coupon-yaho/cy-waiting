@@ -23,10 +23,21 @@ VICTIM="${VICTIM:-backend}"
 # 죽인 뒤 이만큼 보낸다(초). 신선도(3초)가 지나 후보에서 빠질 때까지가
 # 위험 구간이라, 그보다 넉넉히 잡는다.
 AFTER_SEC="${AFTER_SEC:-12}"
-# 허용 5xx. **0 이다.** 하나라도 새면 사용자가 장애를 본 것이다.
+# 허용 유출. **0 이다.** 하나라도 새면 사용자가 장애를 본 것이다.
 MAX_5XX="${MAX_5XX:-0}"
 
-for setting in WARMUP_SEC AFTER_SEC MAX_5XX; do
+# 동시에 보내는 일꾼 수. 죽은 대로 간 요청은 시간 제한까지 매달리므로,
+# 하나로는 창 안에 표본이 안 쌓인다.
+WORKERS="${WORKERS:-12}"
+
+# **여유를 크게 잡는다.** 작게 두면 일꾼 열둘이 보내는 속도가 한 틱 몫을 넘겨
+# 쿠폰이 줄 모드로 켜지고, 그때부터 요청은 뒷단에 안 닿는다 — 죽은 대로 가는
+# 경로를 한 번도 안 밟은 실행이 "유출 0" 으로 나온다. 실제로 그랬다.
+BIG_CAP="${BIG_CAP:-2000}"
+SMALL_CAP="${SMALL_CAP:-400}"
+MID_CAP="${MID_CAP:-1200}"
+
+for setting in WARMUP_SEC AFTER_SEC MAX_5XX WORKERS BIG_CAP SMALL_CAP MID_CAP; do
     value=$(eval "printf '%s' \"\$$setting\"")
     case "$value" in
         ''|*[!0-9]*) echo "$setting 은 0 이상의 정수여야 한다: '$value'"; exit 2 ;;
@@ -42,11 +53,26 @@ echo "전략 ${STRATEGY} · ${VICTIM} 을 죽이고 ${AFTER_SEC}초 동안 응�
 # 앞 실행이 낮춰 뒀을 수 있어 여유를 먼저 되돌린다. 예열이 크레딧을 요구한다.
 $COMPOSE up -d redis > "$work/up.log" 2>&1
 for _ in $(seq 1 30); do
-  $COMPOSE exec -T redis redis-cli SET sim:credits:stub-1 200 >/dev/null 2>&1 && break
+  $COMPOSE exec -T redis redis-cli SET sim:credits:stub-1 "$BIG_CAP" >/dev/null 2>&1 && break
   sleep 1
 done
-if ! ROUTING_STRATEGY="$STRATEGY" $COMPOSE up -d --wait >> "$work/up.log" 2>&1; then
+if ! ROUTING_STRATEGY="$STRATEGY" BIG_CAP="$BIG_CAP" SMALL_CAP="$SMALL_CAP" \
+     MID_CAP="$MID_CAP" $COMPOSE up -d --wait >> "$work/up.log" 2>&1; then
   echo "겹침을 못 세웠다"; tail -20 "$work/up.log" | sed 's/^/  /'; exit 2
+fi
+# **램프가 다 오를 때까지 기다린다.** 겹침의 warmup 은 크레딧이 하한을 넘기만
+# 하면 통과시키는데, 램프는 60초짜리라 그 시점의 크레딧은 목표의 몇 분의 일이다.
+# 그 상태로 일꾼 열둘이 보내면 유입이 그때의 몫을 넘어 줄이 켜지고, 요청이
+# 뒷단에 안 닿는다 — 죽은 대로 가는 경로를 못 밟는다.
+target=$(( (BIG_CAP + SMALL_CAP + MID_CAP) * 9 / 10 ))
+for _ in $(seq 1 90); do
+  now=$($COMPOSE exec -T redis redis-cli HGET gw:snapshot '#credit' 2>/dev/null)
+  case "$now" in ''|*[!0-9]*) sleep 1; continue ;; esac
+  [ "$now" -ge "$target" ] && break
+  sleep 1
+done
+if [ "${now:-0}" -lt "$target" ]; then
+  echo "크레딧이 ${now:-0} 에서 안 오른다 (목표 $target) — 이 상태로는 못 잰다"; exit 2
 fi
 sleep "$WARMUP_SEC"
 
@@ -59,18 +85,27 @@ case "${state:-}" in
   *QUEUEING*) echo "줄 모드가 안 꺼진다 ($state) — 이 상태로는 못 잰다"; exit 2 ;;
 esac
 
-# 한 건씩 보내며 코드를 적는다. 죽이기 전과 후를 파일로 나눈다.
+# **일꾼 여럿이 보낸다.** 한 건씩 보내면 죽은 대로 간 요청이 시간 제한까지
+# 매달려, 12초에 네 건밖에 못 보낸다 — 그 표본으로는 유출을 말할 수 없다.
+# 실제로 그렇게 돌아서 "판정 불가" 가 나왔다.
 drive() {
-  local out=$1 seconds=$2 base=$3 i=0 deadline
+  local out=$1 seconds=$2 base=$3 slot deadline
   deadline=$(( $(date +%s) + seconds ))
-  while [ "$(date +%s)" -lt "$deadline" ]; do
-    i=$(( i + 1 ))
-    curl -s -o /dev/null --max-time 5 -w '%{http_code}\n' -X POST \
-      "$GATEWAY/api/v1/coupons/$COUPON/issue" \
-      -H "X-Member-Id: $(( base + i ))" \
-      -H "X-Member-Grade: GOLD" \
-      -H "X-Forwarded-For: 10.15.$(( i / 250 % 250 + 1 )).$(( i % 250 + 1 ))"
+  for slot in $(seq 1 "$WORKERS"); do
+    (
+      local_i=0
+      while [ "$(date +%s)" -lt "$deadline" ]; do
+        local_i=$(( local_i + 1 ))
+        i=$(( local_i * WORKERS + slot ))
+        curl -s -o /dev/null --max-time 5 -w '%{http_code}\n' -X POST \
+          "$GATEWAY/api/v1/coupons/$COUPON/issue" \
+          -H "X-Member-Id: $(( base + i ))" \
+          -H "X-Member-Grade: GOLD" \
+          -H "X-Forwarded-For: 10.15.$(( i / 250 % 250 + 1 )).$(( i % 250 + 1 ))"
+      done
+    ) &
   done > "$out"
+  wait
 }
 
 drive "$work/before" 4 5000000

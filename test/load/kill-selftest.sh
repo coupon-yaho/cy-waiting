@@ -12,14 +12,15 @@ trap 'rm -rf "$work"' EXIT
 
 # 물려받은 값을 버린다. 판정이 무는지를 보는 자리에서 그 입력이 흔들리면
 # 무엇을 본 것인지 알 수 없다.
-unset MAX_5XX MIN_SAMPLE
+unset MAX_5XX MIN_SAMPLE MIN_ADMITTED
 
 fail=0
 check() {
     local name=$1 want_rc=$2 want_word=$3 body=$4
     printf '%s\n' "$body" > "$work/codes"
     local out rc
-    out=$(MAX_5XX="${ALLOW_:-0}" MIN_SAMPLE="${MIN_:-20}" "$judge" "$work/codes" 2>&1)
+    out=$(MAX_5XX="${ALLOW_:-0}" MIN_SAMPLE="${MIN_:-20}" \
+          MIN_ADMITTED="${ADMIT_:-20}" "$judge" "$work/codes" 2>&1)
     rc=$?
     if [ "$rc" -eq "$want_rc" ] && printf '%s' "$out" | grep -q "$want_word"; then
         echo "  ✓ $name"
@@ -42,8 +43,17 @@ check "5xx 한 건이면 미달" 1 "미달" "$(many 200 29)
 check "504 도 5xx 로 센다" 1 "미달" "$(many 200 29)
 504"
 # 대기(202)와 한도(429)는 유출이 아니다. 이것을 미달로 세면 붐빌 때마다 빨개진다.
-check "202·429 는 유출이 아니다" 0 "충족" "$(many 202 15)
-$(many 429 15)"
+check "202·429 는 유출이 아니다" 0 "충족" "$(many 200 20)
+$(many 202 10)
+$(many 429 10)"
+# **전부 돌려보내졌으면 아무것도 안 잰 것이다.** 이 갈래가 안 물면 죽은 대로
+# 가는 경로를 한 번도 안 밟은 실행이 "충족" 으로 적힌다. 실제로 그랬다.
+check "전부 대기면 판정 불가" 2 "죽은 대로 가는 경로" "$(many 202 100)"
+check "뒷단까지 간 것이 적으면 판정 불가" 2 "죽은 대로 가는 경로" "$(many 200 5)
+$(many 202 100)"
+# **응답이 아예 없는 것도 유출이다.** 안 세면 매달린 요청 위에 초록이 뜬다.
+check "응답 없음(000)도 유출이다" 1 "미달" "$(many 200 29)
+000"
 check "표본이 모자라면 판정 불가" 2 "판정 불가" "$(many 200 5)"
 # 숫자가 아닌 줄이 섞이면 셈이 조용히 어긋난다.
 check "응답 코드가 아니면 막는다" 2 "응답 코드가 아닌" "$(many 200 30)

@@ -111,6 +111,42 @@ jobs:
         if: failure()
         run: docker compose -f test/load/compose.yml -f test/load/compose.waste.yml logs --tail 200
 
+  # **R1 은 시나리오 행렬로 못 잰다.** 행렬은 한 시나리오씩 따로 돌리는데,
+  # R1 은 "다른 쿠폰이 몰리는 동안에도 한산한 쿠폰은 줄 없이 지나간다" 라서
+  # 둘을 **같은 시각에** 봐야 성립한다. 한산 쪽만 따로 보면 대기열을 통째로
+  # 꺼도 통과하고, 경합 쪽만 따로 보면 격리를 아예 안 잰다.
+  #
+  # 실제로 그 상태였다 — `idle-coupon` 과 `contended-coupon` 이 행렬에서 따로
+  # 돌고 있었고, 둘을 겹쳐 돌리는 스크립트는 있는데 아무도 부르지 않았다.
+  isolation:
+    name: 부하 / 쿠폰 격리 (R1)
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c  # v6.0.0
+        with:
+          distribution: temurin
+          java-version: '25'
+      - uses: grafana/setup-k6-action@db07bd9765aac508ef18982e52ab937fe633a065  # v1.2.1
+      - name: 빌드 산출물 받기
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: build-libs
+          path: build/libs/
+      # 스택은 스크립트가 세우지 않는다. 두 시나리오가 같은 게이트웨이를 봐야
+      # 격리가 성립하므로 여기서 한 번 띄우고 스크립트는 부하만 넣는다.
+      - name: 하네스 기동
+        run: docker compose -f test/load/compose.yml up -d --wait
+      - name: 실측
+        run: ./test/load/r1-isolation.sh
+      - name: 하네스 로그
+        if: failure()
+        run: docker compose -f test/load/compose.yml logs --tail 200
+
   security:
     uses: ./.github/workflows/_security.yml
     with:
@@ -132,7 +168,7 @@ jobs:
   # 밤에 "이상 없음" 이 나간다. 실제로 그렇게 돼 있었다.
   verdict:
     name: 판정
-    needs: [plan, build, test, load, waste, security]
+    needs: [plan, build, test, load, waste, isolation, security]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -149,14 +185,14 @@ jobs:
           results: ${{ join(needs.*.result, ' ') }}
 
   report:
-    needs: [plan, build, test, load, waste, security, verdict]
+    needs: [plan, build, test, load, waste, isolation, security, verdict]
     if: ${{ !cancelled() }}
     uses: ./.github/workflows/_report.yml
     with:
       status: ${{ needs.verdict.outputs.ok == 'true' && 'success' || 'warning' }}
       title: 야간 검증 — ${{ needs.verdict.outputs.ok == 'true' && '이상 없음' || '주의 필요' }}
       summary: |
-        전 계층 테스트 · 9개 부하 시나리오 · 크레딧 낭비(G7.5) · CVE 전체 스캔
+        전 계층 테스트 · 9개 부하 시나리오 · 쿠폰 격리(R1) · 크레딧 낭비(G7.5) · CVE 전체 스캔
       fields: |
         계획=${{ needs.plan.result }}
         빌드=${{ needs.build.result }}

@@ -35,8 +35,15 @@ LATE_SEC="${LATE_SEC:-15}"
 LATE_RISE_POINTS="${LATE_RISE_POINTS:-5}"
 # 초당 도착이 이보다 적으면 그 초의 비율은 못 믿는다.
 MIN_PER_SEC="${MIN_PER_SEC:-10}"
+# 각 구간에 쓸 만한 초가 이만큼은 있어야 한다. 도착 합계만 보면 한 초가 구간
+# 전체를 대표할 수 있어, 끊긴 실행이 "억눌렸다 회복했다" 를 안 보이고 통과한다.
+MIN_USABLE_SEC="${MIN_USABLE_SEC:-3}"
+# 갈아 끼우기 전 몫이 평상시와 이만큼까지는 벌어져도 된다(%p). 그보다 멀면
+# 기준선이 틀린 것이라, 그 위에서 잰 앞뒤 비교는 아무것도 뜻하지 않는다.
+BEFORE_SLACK="${BEFORE_SLACK:-10}"
 
-for setting in EARLY_SEC EARLY_MAX_RATIO LATE_SEC LATE_RISE_POINTS MIN_PER_SEC; do
+for setting in EARLY_SEC EARLY_MAX_RATIO LATE_SEC LATE_RISE_POINTS MIN_PER_SEC \
+        MIN_USABLE_SEC BEFORE_SLACK; do
     value=$(eval "printf '%s' \"\$$setting\"")
     case "$value" in
         ''|*[!0-9]*) echo "$setting 은 0 이상의 정수여야 한다: '$value'"; exit 2 ;;
@@ -56,7 +63,8 @@ case "$steady" in
 esac
 [ "$steady" -gt 0 ] || { echo "평상시 몫이 0 이면 견줄 것이 없다"; exit 2; }
 
-early_new=0 early_total=0 late_new=0 late_total=0
+early_new=0 early_total=0 early_secs=0 late_new=0 late_total=0 late_secs=0
+before_new=0 before_total=0
 while read -r second fresh total; do
     # **필드를 따로 본다.** 이어 붙여 보면 하나가 빠진 줄(`-1 5`)이 그대로
     # 통과하고, 그 뒤 나눗셈이 0 으로 나뉜다 — 못 잰 것이 그럴듯한 수로 나온다.
@@ -66,19 +74,40 @@ while read -r second fresh total; do
     [ "$total" -lt "$MIN_PER_SEC" ] && continue
     share=$(( fresh * 100 / total ))
     printf '  %+4ds  새 인스턴스 %3d%%  (도착 %d/%d)\n' "$second" "$share" "$fresh" "$total"
+    if [ "$second" -lt 0 ]; then
+        before_new=$(( before_new + fresh ))
+        before_total=$(( before_total + total ))
+    fi
     if [ "$second" -ge 0 ] && [ "$second" -lt "$EARLY_SEC" ]; then
         early_new=$(( early_new + fresh ))
         early_total=$(( early_total + total ))
+        early_secs=$(( early_secs + 1 ))
     fi
     if [ "$second" -ge "$LATE_SEC" ]; then
         late_new=$(( late_new + fresh ))
         late_total=$(( late_total + total ))
+        late_secs=$(( late_secs + 1 ))
     fi
 done < "$samples"
 
 echo
-if [ "$early_total" -lt "$MIN_PER_SEC" ]; then
-    echo "판정 불가 — 첫 ${EARLY_SEC}초에 쓸 만한 표본이 없다"
+# **기준선부터 본다.** 갈아 끼우기 전 그 대가 제 몫을 받고 있었어야, 뒤에 낮아진
+# 것이 램프 때문이라고 말할 수 있다. 원래 아무것도 안 받던 대는 0% 에서 5% 로
+# 올라도 이 판정을 통과한다 — 그건 롤링 배포를 잰 것이 아니다.
+if [ "$before_total" -lt "$MIN_PER_SEC" ]; then
+    echo "판정 불가 — 갈아 끼우기 전 표본이 없다. 기준선을 못 세운다"
+    exit 2
+fi
+before_share=$(( before_new * 100 / before_total ))
+before_gap=$(( before_share - steady ))
+before_gap=${before_gap#-}
+if [ "$before_gap" -gt "$BEFORE_SLACK" ]; then
+    echo "판정 불가 — 갈아 끼우기 전 몫이 ${before_share}% 로 평상시 ${steady}% 와 ${before_gap}%p 벌어졌다"
+    exit 2
+fi
+
+if [ "$early_total" -lt "$MIN_PER_SEC" ] || [ "$early_secs" -lt "$MIN_USABLE_SEC" ]; then
+    echo "판정 불가 — 첫 ${EARLY_SEC}초에 쓸 만한 초가 ${early_secs}뿐이다"
     exit 2
 fi
 
@@ -93,8 +122,8 @@ fi
 # **회복 구간이 없으면 넘어가지 않는다.** 넘어가면 램프가 올라오는지를 한 번도
 # 안 본 실행이 충족으로 적히고, 이 판정이 막으려던 상태가 그것이다. 앞 구간이
 # 이미 미달이면 그것으로 끝난다 — 그때는 회복을 볼 것도 없다.
-if [ "$late_total" -lt "$MIN_PER_SEC" ]; then
-    echo "판정 불가 — ${LATE_SEC}초 이후에 쓸 만한 표본이 없다. 램프가 올라오는지를 못 본다"
+if [ "$late_total" -lt "$MIN_PER_SEC" ] || [ "$late_secs" -lt "$MIN_USABLE_SEC" ]; then
+    echo "판정 불가 — ${LATE_SEC}초 이후에 쓸 만한 초가 ${late_secs}뿐이다. 램프가 올라오는지를 못 본다"
     exit 2
 fi
 

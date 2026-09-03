@@ -33,6 +33,9 @@ for setting in SLACK SUSTAIN BUDGET_SEC MIN_PER_SEC; do
     esac
 done
 [ "$SUSTAIN" -ge 1 ] || { echo "SUSTAIN 은 1 이상이어야 한다"; exit 2; }
+# **0 이면 0 으로 나뉜다.** 그때 스크립트가 죽으며 종료 1 을 내고, 게이트는 그것을
+# 제품 미달로 읽는다 — 하네스 설정 오류가 제품 결함으로 적힌다.
+[ "$MIN_PER_SEC" -ge 1 ] || { echo "MIN_PER_SEC 은 1 이상이어야 한다"; exit 2; }
 
 samples=${1:-}
 target=${2:-}
@@ -47,9 +50,11 @@ after_usable=0
 before_degraded=0
 before_total=0
 while read -r second degraded total; do
-    case "$second$degraded$total" in
-        *[!0-9-]*|'') continue ;;
-    esac
+    # **필드를 따로 본다.** 이어 붙여 보면 하나가 빠진 줄(`-1 5`)이 그대로
+    # 통과하고, 그 뒤 나눗셈이 0 으로 나뉜다 — 못 잰 것이 그럴듯한 수로 나온다.
+    case "${second:-}" in ''|*[!0-9-]*) continue ;; esac
+    case "${degraded:-}" in ''|*[!0-9]*) continue ;; esac
+    case "${total:-}" in ''|*[!0-9]*) continue ;; esac
     [ "$total" -lt "$MIN_PER_SEC" ] && { streak=0; continue; }
     if [ "$second" -lt 0 ]; then
         before_degraded=$(( before_degraded + degraded ))

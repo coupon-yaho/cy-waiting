@@ -26,10 +26,9 @@ EARLY_MAX_RATIO="${EARLY_MAX_RATIO:-70}"
 LATE_SEC="${LATE_SEC:-15}"
 # 그 구간의 몫이 첫 구간보다 이만큼은 높아야 "올라왔다" 로 본다(%p).
 #
-# **평상시 몫의 비율로 걸지 않는다.** 램프는 60초 선형이라 15~20초의 몫은
-# 평상시의 절반쯤이다 — 거기에 "평상시의 70%" 같은 상수를 걸면 정상 실행이
-# 미달로 찍힌다. 실제로 그렇게 걸었다가 실측값(+20초 36%, 평상시 55%)이
-# 도달 불가인 것을 뒤늦게 알았다.
+# **평상시 몫의 비율로 걸지 않는다.** 램프가 도는 동안의 몫은 평상시의 일부라,
+# 거기에 "평상시의 몇 %" 같은 상수를 걸면 램프 길이에 따라 도달 불가가 된다 —
+# 실제로 그렇게 걸었다가 정상 실행을 미달로 만들었다 (AIJ-0218).
 #
 # 오르는 폭으로 보면 램프 길이와 창 길이가 바뀌어도 성립한다. 잡으려는 것은
 # 두 가지다 — 끝까지 굶는 것(오름 0)과 올라오다 주저앉는 것(오름 음수).
@@ -44,6 +43,9 @@ for setting in EARLY_SEC EARLY_MAX_RATIO LATE_SEC LATE_RISE_POINTS MIN_PER_SEC; 
     esac
 done
 [ "$EARLY_SEC" -ge 1 ] || { echo "EARLY_SEC 은 1 이상이어야 한다"; exit 2; }
+# **0 이면 0 으로 나뉜다.** 그때 스크립트가 죽으며 종료 1 을 내고, 게이트는 그것을
+# 제품 미달로 읽는다 — 하네스 설정 오류가 제품 결함으로 적힌다.
+[ "$MIN_PER_SEC" -ge 1 ] || { echo "MIN_PER_SEC 은 1 이상이어야 한다"; exit 2; }
 [ "$LATE_SEC" -ge "$EARLY_SEC" ] || { echo "LATE_SEC 은 EARLY_SEC 이상이어야 한다"; exit 2; }
 
 samples=${1:-}
@@ -56,9 +58,11 @@ esac
 
 early_new=0 early_total=0 late_new=0 late_total=0
 while read -r second fresh total; do
-    case "$second$fresh$total" in
-        *[!0-9-]*|'') continue ;;
-    esac
+    # **필드를 따로 본다.** 이어 붙여 보면 하나가 빠진 줄(`-1 5`)이 그대로
+    # 통과하고, 그 뒤 나눗셈이 0 으로 나뉜다 — 못 잰 것이 그럴듯한 수로 나온다.
+    case "${second:-}" in ''|*[!0-9-]*) continue ;; esac
+    case "${fresh:-}" in ''|*[!0-9]*) continue ;; esac
+    case "${total:-}" in ''|*[!0-9]*) continue ;; esac
     [ "$total" -lt "$MIN_PER_SEC" ] && continue
     share=$(( fresh * 100 / total ))
     printf '  %+4ds  새 인스턴스 %3d%%  (도착 %d/%d)\n' "$second" "$share" "$fresh" "$total"

@@ -52,8 +52,11 @@ for path in entries:
     for missing in sorted(expected - waited):
         bad.append(f"{path.name}: 판정이 '{missing}' 을 안 기다린다")
 
+    # **없으면 넘어가지 않는다.** 리포트 잡을 통째로 지우면 아래 검사가 전부
+    # 안 돌고 통과가 난다 — 이 검사가 막으려던 바로 그 상태다.
     report = jobs.get("report")
     if report is None:
+        bad.append(f"{path.name}: 판정은 있는데 리포트 잡이 없다")
         continue
     reported = set(needs_of(report))
     for missing in sorted(expected - reported):
@@ -65,9 +68,18 @@ for path in entries:
     # **두 형태를 따로 본다.** 한쪽에만 넣고 지나가는 것이 실제로 난 실수다 —
     # 합쳐서 보면 Slack 에는 있고 Confluence 에는 없는 상태가 통과한다.
     with_block = report.get("with") or {}
-    for shape, label in (("fields", "슬랙 필드"), ("confluence-body", "컨플루언스 표")):
+
+    # 슬랙 필드는 늘 있어야 한다. 컨플루언스는 선택이지만, **제목을 걸어 놓고
+    # 본문이 없으면** 빈 문서가 나간다 — 그건 선택이 아니라 결함이다.
+    shapes = [("fields", "슬랙 필드")]
+    if with_block.get("confluence-title"):
+        shapes.append(("confluence-body", "컨플루언스 표"))
+
+    for shape, label in shapes:
         body = with_block.get(shape)
         if not body:
+            # 비어 있으면 넘어가지 않는다. 넘어가면 전부 지운 것이 통과한다.
+            bad.append(f"{path.name}: 리포트에 {label}가 없다")
             continue
         for job in sorted(expected - OUTPUT_ONLY):
             if f"needs.{job}.result" not in body:

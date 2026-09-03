@@ -106,6 +106,11 @@ EXEMPT_JOB = """  journal-index:
 case("exempt", JOBS + EXEMPT_JOB + verdict() + report(), filename="main.yml")
 case("exempt-other-name", JOBS + EXEMPT_JOB + verdict() + report())
 PY
+# **사례를 못 만들었으면 거기서 멈춘다.** 이 스크립트에는 errexit 이 없어,
+# 위가 실패해도 그대로 흘러 열다섯이 전부 "종료 코드 불일치" 로 보고된다 —
+# 진짜 원인(python3 부재, 오타)이 그 밑에 묻힌다.
+rc=$?
+[ "$rc" -eq 0 ] || { echo "  사례를 못 만들었다 — 종료 $rc" >&2; exit 1; }
 
 fail=0
 # **문구까지 본다.** 종료 코드만 보면 엉뚱한 이유로 떨어진 것이 통과로 읽힌다.

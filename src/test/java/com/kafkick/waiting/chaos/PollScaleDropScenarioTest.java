@@ -90,13 +90,13 @@ class PollScaleDropScenarioTest {
 
     /** 줄 전체의 실측 부하. 대표 한 명으로는 지터가 부하에 주는 영향이 안 보인다. */
     private double 실측_부하(double scale) {
-        Random 고정_씨앗 = new Random(42);
+        Random 고정_시드 = new Random(42);
         double 합 = 0;
         for (long i = 0; i < A_대기; i++) {
-            합 += 1.0 / 폴링.intervalSec(EtaPolicy.etaSec(i, A_배분), 고정_씨앗::nextDouble, scale);
+            합 += 1.0 / 폴링.intervalSec(EtaPolicy.etaSec(i, A_배분), 고정_시드::nextDouble, scale);
         }
         for (long i = 0; i < B_대기; i++) {
-            합 += 1.0 / 폴링.intervalSec(EtaPolicy.etaSec(i, B_배분), 고정_씨앗::nextDouble, scale);
+            합 += 1.0 / 폴링.intervalSec(EtaPolicy.etaSec(i, B_배분), 고정_시드::nextDouble, scale);
         }
         return 합;
     }
@@ -258,7 +258,7 @@ class PollScaleDropScenarioTest {
     /**
      * 배수가 걸린 뒤에도 부하가 예산 밖이다. 계획서가 값으로 적은 자리다.
      *
-     * <p>밴드로 본다. 정확 일치는 지터 씨앗에 묶여 쓸모없이 깨진다.
+     * <p>밴드로 본다. 정확 일치는 지터 시드에 묶여 쓸모없이 깨진다.
      */
     private Optional<String> 부하가_예산을_넘긴다(double 걸린) {
         double 비 = 걸린 / 예산;

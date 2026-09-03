@@ -280,7 +280,7 @@ self_test() {
     mkdir -p "$repo" && (
         cd "$repo" || exit 1
         git init -q . && git config user.email t@t && git config user.name t
-        : > seed.txt && git add seed.txt && git commit -q -m 'chore: 씨앗'
+        : > seed.txt && git add seed.txt && git commit -q -m 'chore: 첫 커밋'
         git branch -q base
         : > a.txt && git add a.txt
         git commit -q -m 'feat(a): 하나' -m 'Refs: CY-1'

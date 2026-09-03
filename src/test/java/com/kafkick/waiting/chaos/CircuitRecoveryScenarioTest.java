@@ -60,6 +60,9 @@ class CircuitRecoveryScenarioTest {
 
     /** 짧게 잡는다. 운영값으로 재면 시험 하나가 그만큼 걸린다. */
     private static final Duration 응답_상한 = Duration.ofMillis(300);
+    // 응답 상한을 줄인 판이라 연결 상한도 그보다 짧아야 한다 —
+    // 기본값(500ms)을 그대로 두면 기동이 막힌다.
+    private static final Duration 연결_상한 = Duration.ofMillis(100);
 
     private static final BackendStub 뒷단 = BackendStub.멎을_수_있다(멎었다::get);
 
@@ -74,6 +77,7 @@ class CircuitRecoveryScenarioTest {
         registry.add("spring.data.redis.url", faults::주소);
         registry.add("waiting.backend.uri", () -> "http://localhost:" + 뒷단.port());
         registry.add("waiting.backend.response-timeout", () -> 응답_상한);
+        registry.add("waiting.backend.connect-timeout", () -> 연결_상한);
         // 표본 하한을 낮춘다. 운영값 20 건을 여기서 채우면 몇 초가 걸린다.
         registry.add("waiting.backend.circuit.minimum-number-of-calls", () -> 3);
         registry.add("waiting.backend.circuit.sliding-window-size", () -> "2s");

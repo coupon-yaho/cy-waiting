@@ -40,6 +40,15 @@ public class GatewayRoutes {
     private static final String RESPONSE_TIMEOUT_ATTR = "response-timeout";
 
     /**
+     * 라우트별 연결 상한을 읽는 키.
+     *
+     * <p><b>안 걸면 30초가 선다.</b> 죽은 인스턴스의 주소는 거절도 안 오고 답이
+     * 없어서, 그동안 요청이 매달린다 — 연결이 실패하지 않으니 연결 실패
+     * 재시도가 걸릴 자리가 없다 (G9.4).
+     */
+    private static final String CONNECT_TIMEOUT_ATTR = "connect-timeout";
+
+    /**
      * 서킷이 열렸을 때 넘길 주소.
      *
      * <p><b>받는 주소와 같은 상수에서 나온다.</b> 갈리면 기동은 되고 장애 때만
@@ -84,9 +93,13 @@ public class GatewayRoutes {
         };
     }
 
-    /** 뒷단 쿠폰 서비스. 가용량 기반 분배는 Phase 9 다 — 여기서는 하나만 본다. */
+    /**
+     * 뒷단 쿠폰 서비스.
+     *
+     * @param connectTimeout 연결을 이만큼만 기다린다. <b>안 정하면 30초다</b>
+     */
     @ConfigurationProperties("waiting.backend")
-    public record Backend(String uri, Duration responseTimeout) {
+    public record Backend(String uri, Duration responseTimeout, Duration connectTimeout) {
 
         // 검증은 밖에 둔다. 압축 생성자에서 부를 수 있는 것은 정적뿐이라,
         // 안에 두면 그 자리에서만 쓰이는 정적 메서드가 생긴다.
@@ -104,6 +117,18 @@ public class GatewayRoutes {
                 throw new IllegalArgumentException(
                         "responseTimeout 은 격벽 시한(" + AdmissionGatewayFilter.MAX_IN_FLIGHT
                                 + ") 보다 짧아야 한다: " + responseTimeout);
+            }
+            if (connectTimeout == null || connectTimeout.toMillis() < 1) {
+                throw new IllegalArgumentException(
+                        "connectTimeout 은 1ms 이상이어야 한다: " + connectTimeout);
+            }
+            // **응답 상한보다 짧아야 한다.** 길면 응답 상한이 먼저 끊어 연결
+            // 실패가 영영 안 드러나고, 그 요청은 재시도 없이 그대로 실패한다 —
+            // 연결 상한을 둔 이유가 사라진다.
+            if (connectTimeout.compareTo(responseTimeout) >= 0) {
+                throw new IllegalArgumentException(
+                        "connectTimeout 은 responseTimeout(" + responseTimeout
+                                + ") 보다 짧아야 한다: " + connectTimeout);
             }
         }
     }
@@ -225,6 +250,8 @@ public class GatewayRoutes {
                         // 서킷에 가는 것은 오류가 아니라 취소이고, 취소는 창에
                         // 안 쌓인다 — 멎은 뒷단의 서킷이 영영 안 열린다.
                         .metadata(RESPONSE_TIMEOUT_ATTR, backend.responseTimeout().toMillis())
+                        .metadata(CONNECT_TIMEOUT_ATTR,
+                                (int) backend.connectTimeout().toMillis())
                         .uri(uri))
                 .route("coupons", r -> r
                         .method(HttpMethod.GET)
@@ -240,6 +267,8 @@ public class GatewayRoutes {
                         // 모든 조회가 끝나지 않는 것에 붙고, 뒷단이 살아나도
                         // 게이트웨이를 재시작해야 풀린다.
                         .metadata(RESPONSE_TIMEOUT_ATTR, backend.responseTimeout().toMillis())
+                        .metadata(CONNECT_TIMEOUT_ATTR,
+                                (int) backend.connectTimeout().toMillis())
                         .uri(uri))
                 .build();
     }

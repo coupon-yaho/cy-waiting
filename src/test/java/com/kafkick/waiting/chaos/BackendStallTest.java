@@ -61,12 +61,16 @@ class BackendStallTest {
      * 것은 값이 아니라 "끊기는가, 그리고 그 끊김이 서킷에 쌓이는가" 다.
      */
     private static final Duration 응답_상한 = Duration.ofMillis(300);
+    // 응답 상한을 줄인 판이라 연결 상한도 그보다 짧아야 한다 —
+    // 기본값(500ms)을 그대로 두면 기동이 막힌다.
+    private static final Duration 연결_상한 = Duration.ofMillis(100);
 
     @DynamicPropertySource
     static void 멎은_뒷단을_가리킨다(DynamicPropertyRegistry registry) {
         registry.add("waiting.backend.uri",
                 () -> "http://localhost:" + 멎은_뒷단.port());
         registry.add("waiting.backend.response-timeout", () -> 응답_상한);
+        registry.add("waiting.backend.connect-timeout", () -> 연결_상한);
         // 표본 하한을 낮춘다. 운영값 20 건을 이 시험에서 채우면 6초가 걸린다.
         registry.add("waiting.backend.circuit.minimum-number-of-calls", () -> 3);
         registry.add("waiting.backend.circuit.slow-call-duration-threshold", () -> "100ms");

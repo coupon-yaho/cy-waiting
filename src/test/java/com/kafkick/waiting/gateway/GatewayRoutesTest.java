@@ -67,13 +67,14 @@ class GatewayRoutesTest {
     // 띄운다 — 애플리케이션을 통째로 세우면 라우트 하나 보려고 레디스까지 붙는다.
     /** 검증 시험이 주소만 보게 하는 유효한 값. 여기가 초점이 아니다. */
     private static final Duration 응답_상한 = Duration.ofSeconds(12);
+    private static final Duration 연결_상한 = Duration.ofMillis(500);
 
     private static final GenericApplicationContext 컨텍스트 = 술어만_있는_컨텍스트();
 
     // 띄운다 — 애플리케이션을 통째로 세우면 라우트 하나 보려고 레디스까지 붙는다.
     private final RouteLocator locator = new GatewayRoutes().routes(
             new RouteLocatorBuilder(컨텍스트),
-            new GatewayRoutes.Backend("http://backend:8080", 응답_상한),
+            new GatewayRoutes.Backend("http://backend:8080", 응답_상한, 연결_상한),
             AdmissionGatewayFilter.withIsolatedSoldOutCache(재료_없는_홀더(),
                     AdmissionDecider.of(공유_리미터, 0.7),
                     Clock.systemUTC(), new SimpleMeterRegistry(),
@@ -177,28 +178,28 @@ class GatewayRoutesTest {
     @DisplayName("뒷단_주소가_없으면_기동을_막는다")
     void 뒷단_주소가_없으면_기동을_막는다() {
         // 주소가 없으면 프록시가 어디로 갈지 정해지지 않는다.
-        assertThatThrownBy(() -> new GatewayRoutes.Backend("  ", 응답_상한))
+        assertThatThrownBy(() -> new GatewayRoutes.Backend("  ", 응답_상한, 연결_상한))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new GatewayRoutes.Backend(null, 응답_상한))
+        assertThatThrownBy(() -> new GatewayRoutes.Backend(null, 응답_상한, 연결_상한))
                 .isInstanceOf(IllegalArgumentException.class);
         // 스킴이 빠진 값은 기동에 성공하고 모든 프록시가 실패한다.
-        assertThatThrownBy(() -> new GatewayRoutes.Backend("backend:8080", 응답_상한))
+        assertThatThrownBy(() -> new GatewayRoutes.Backend("backend:8080", 응답_상한, 연결_상한))
                 .isInstanceOf(IllegalArgumentException.class);
         // 경로를 붙이면 그 경로만 조용히 버려진다.
-        assertThatThrownBy(() -> new GatewayRoutes.Backend("http://backend:8080/api", 응답_상한))
+        assertThatThrownBy(() -> new GatewayRoutes.Backend("http://backend:8080/api", 응답_상한, 연결_상한))
                 .isInstanceOf(IllegalArgumentException.class);
         // 호스트가 없으면 스킴만 맞고 프록시가 갈 곳이 없다.
-        assertThatThrownBy(() -> new GatewayRoutes.Backend("http://", 응답_상한))
+        assertThatThrownBy(() -> new GatewayRoutes.Backend("http://", 응답_상한, 연결_상한))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new GatewayRoutes.Backend("http://:8080", 응답_상한))
+        assertThatThrownBy(() -> new GatewayRoutes.Backend("http://:8080", 응답_상한, 연결_상한))
                 .isInstanceOf(IllegalArgumentException.class);
         // 주소로 읽히지 않는 값.
-        assertThatThrownBy(() -> new GatewayRoutes.Backend("http://back end", 응답_상한))
+        assertThatThrownBy(() -> new GatewayRoutes.Backend("http://back end", 응답_상한, 연결_상한))
                 .isInstanceOf(IllegalArgumentException.class);
         // 프록시는 스킴·호스트·포트만 가져간다. 나머지는 조용히 버려진다.
         for (String 군더더기 : List.of("http://backend?trace=1", "http://u:p@backend",
                 "http://backend#x")) {
-            assertThatThrownBy(() -> new GatewayRoutes.Backend(군더더기, 응답_상한))
+            assertThatThrownBy(() -> new GatewayRoutes.Backend(군더더기, 응답_상한, 연결_상한))
                     .as("뒷단 %s", 군더더기)
                     .isInstanceOf(IllegalArgumentException.class);
         }
@@ -224,13 +225,66 @@ class GatewayRoutesTest {
         assertThat(발급.getMetadata()).containsEntry("response-timeout", 응답_상한.toMillis());
     }
 
+    /**
+     * <b>연결 상한도 라우트가 들어야 한다</b> (G9.4).
+     *
+     * <p>안 걸면 프레임워크 기본값 30초가 선다. 죽은 인스턴스의 주소로 보낸
+     * 연결은 거절도 안 오고 그냥 답이 없어서, 그동안 요청이 매달린다 —
+     * <b>연결이 실패하지 않으므로 연결 실패 재시도가 걸릴 자리도 없다.</b>
+     * 실측에서 죽인 뒤 64 건 중 36 건이 응답 없이 끝났다.
+     */
+    @Test
+    @DisplayName("발급_라우트가_연결_상한을_들고_있다")
+    void 발급_라우트가_연결_상한을_들고_있다() {
+        Route 발급 = 라우트().stream()
+                .filter(r -> "issue".equals(r.getId()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("issue 라우트가 없다"));
+
+        assertThat(발급.getMetadata())
+                .containsEntry("connect-timeout", (int) 연결_상한.toMillis());
+    }
+
     @Test
     @DisplayName("응답_상한이_없으면_기동을_막는다")
     void 응답_상한이_없으면_기동을_막는다() {
-        assertThatThrownBy(() -> new GatewayRoutes.Backend("http://backend:8080", null))
+        assertThatThrownBy(() -> new GatewayRoutes.Backend("http://backend:8080", null, 연결_상한))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() ->
-                new GatewayRoutes.Backend("http://backend:8080", Duration.ZERO))
+                new GatewayRoutes.Backend("http://backend:8080", Duration.ZERO, 연결_상한))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /**
+     * <b>연결 상한이 응답 상한보다 길면 가려진다.</b> 그러면 응답 상한이 먼저
+     * 끊어 연결 실패가 영영 안 드러나고, 그 요청은 재시도 없이 실패한다 —
+     * 연결 상한을 둔 이유가 사라진다.
+     */
+    @Test
+    @DisplayName("연결_상한이_응답_상한보다_길면_기동을_막는다")
+    void 연결_상한이_응답_상한보다_길면_기동을_막는다() {
+        assertThatThrownBy(() ->
+                new GatewayRoutes.Backend("http://backend:8080", 응답_상한, 응답_상한))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() ->
+                new GatewayRoutes.Backend("http://backend:8080", 응답_상한,
+                        응답_상한.plusMillis(1)))
+                .isInstanceOf(IllegalArgumentException.class);
+        // 바로 앞은 받아야 한다. 안 그러면 상한을 못 올린다.
+        assertThatCode(() ->
+                new GatewayRoutes.Backend("http://backend:8080", 응답_상한,
+                        응답_상한.minusMillis(1)))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("연결_상한이_없으면_기동을_막는다")
+    void 연결_상한이_없으면_기동을_막는다() {
+        assertThatThrownBy(() ->
+                new GatewayRoutes.Backend("http://backend:8080", 응답_상한, null))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() ->
+                new GatewayRoutes.Backend("http://backend:8080", 응답_상한, Duration.ZERO))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -243,14 +297,14 @@ class GatewayRoutesTest {
     @DisplayName("응답_상한이_격벽_시한_뒤면_기동을_막는다")
     void 응답_상한이_격벽_시한_뒤면_기동을_막는다() {
         assertThatThrownBy(() -> new GatewayRoutes.Backend("http://backend:8080",
-                AdmissionGatewayFilter.MAX_IN_FLIGHT))
+                AdmissionGatewayFilter.MAX_IN_FLIGHT, 연결_상한))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new GatewayRoutes.Backend("http://backend:8080",
-                AdmissionGatewayFilter.MAX_IN_FLIGHT.plusSeconds(1)))
+                AdmissionGatewayFilter.MAX_IN_FLIGHT.plusSeconds(1), 연결_상한))
                 .isInstanceOf(IllegalArgumentException.class);
         // 바로 앞은 받아야 한다. 안 그러면 상한을 못 올린다.
         assertThatCode(() -> new GatewayRoutes.Backend("http://backend:8080",
-                AdmissionGatewayFilter.MAX_IN_FLIGHT.minusMillis(1)))
+                AdmissionGatewayFilter.MAX_IN_FLIGHT.minusMillis(1), 연결_상한))
                 .doesNotThrowAnyException();
     }
 
@@ -646,7 +700,7 @@ class GatewayRoutesTest {
     private RouteLocator 라우터(RoutingProperties routing) {
         return new GatewayRoutes().routes(
                 new RouteLocatorBuilder(컨텍스트),
-                new GatewayRoutes.Backend("http://backend:8080", 응답_상한),
+                new GatewayRoutes.Backend("http://backend:8080", 응답_상한, 연결_상한),
                 AdmissionGatewayFilter.withIsolatedSoldOutCache(재료_없는_홀더(),
                         AdmissionDecider.of(공유_리미터, 0.7),
                         Clock.systemUTC(), new SimpleMeterRegistry(),

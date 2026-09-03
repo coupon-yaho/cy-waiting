@@ -1,0 +1,88 @@
+# 9.4 검증용 겹침. **뒷단을 셋 세우고 여유를 다르게 준다.**
+#
+# 게이트가 요구하는 비율·재분배·유출은 전부 인스턴스가 여럿이라야 잰다. 기본
+# 구성은 하나뿐이라, 고르개가 아무리 맞아도 그 값이 실제 유입으로 나오는지를
+# 아무도 안 본다 — 그 사이에 배선·램프·상한·재시도가 있다.
+#
+# 여유는 200/40/120 이다 (9.4.5). 배수가 아니라 나머지가 남는 값으로 둔다 —
+# 딱 떨어지면 절삭 보정이 있으나 없으나 같은 값이 나와 그 갈래를 못 밟는다.
+services:
+  backend:
+    environment:
+      # 이 대가 가장 여유 있다. 나머지 둘과 비율이 갈려야 판정이 성립한다.
+      MAX_INFLIGHT: "200"
+      # **열화를 밖에서 넣는다** (9.4.1). 가장 여유 있는 대를 느리게 만들어야
+      # 효과가 보인다 — 작은 대를 느리게 하면 원래 적게 가던 것이 더 적게 갈 뿐이다.
+      LATENCY_MS: "${BIG_LATENCY_MS:-5}"
+
+  # **작은 대.** 여유 대비 부하로 고르지 않고 물린 수만 균등화하면, 이 대가
+  # 가장 먼저 무너진다 — 그것을 잡는 것이 이 시나리오의 값어치다.
+  backend-small:
+    build: ./backend-stub
+    environment:
+      PORT: "8090"
+      LATENCY_MS: "5"
+      MAX_INFLIGHT: "40"
+      SHARED_HEADER: "${SHARED_HEADER:-true}"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8090/stub/health"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+
+  backend-mid:
+    build: ./backend-stub
+    environment:
+      PORT: "8090"
+      LATENCY_MS: "5"
+      MAX_INFLIGHT: "120"
+      SHARED_HEADER: "${SHARED_HEADER:-true}"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8090/stub/health"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+
+  # **셋 다 보고한다.** 주소를 안 실으면 크레딧에는 들고 라우팅에서만 빠져,
+  # 유입 비율이 재려던 것과 달라진다.
+  seeder:
+    depends_on:
+      redis: { condition: service_healthy }
+    command:
+      - sh
+      - -c
+      - |
+        set -eu
+        redis-cli -h redis SADD coupons:active c1
+        redis-cli -h redis SET 'stock:{c1}' 1000000
+        redis-cli -h redis SADD coupons:active c2
+        redis-cli -h redis SET 'stock:{c2}' 1000000
+        redis-cli -h redis SADD coupons:active c3
+        redis-cli -h redis SET 'stock:{c3}' 0
+        # **셸 변수는 달러를 겹쳐 적는다.** 안 겹치면 compose 가 제 변수로 읽어
+        # 빈 문자열로 바꾼다 — 시각이 비면 보고가 통째로 걸러지고, 가용량이
+        # 하나도 안 들어와 크레딧이 하한에 머문다. 실제로 그렇게 돌았다.
+        while :; do
+          now=$$(date +%s)
+          redis-cli -h redis HSET capacity:coupon-svc:v1 stub-1 \
+            "{\"addr\":\"backend:8090\",\"credits\":200,\"ts\":$$now}" > /dev/null
+          redis-cli -h redis HSET capacity:coupon-svc:v1 stub-2 \
+            "{\"addr\":\"backend-small:8090\",\"credits\":40,\"ts\":$$now}" > /dev/null
+          redis-cli -h redis HSET capacity:coupon-svc:v1 stub-3 \
+            "{\"addr\":\"backend-mid:8090\",\"credits\":120,\"ts\":$$now}" > /dev/null
+          sleep 1
+        done
+
+  gateway:
+    depends_on:
+      redis: { condition: service_healthy }
+      backend: { condition: service_healthy }
+      backend-small: { condition: service_healthy }
+      backend-mid: { condition: service_healthy }
+      seeder: { condition: service_healthy }
+    environment:
+      # **라우팅을 켠다.** 끄면 단일 주소로 돌아가고, 그 상태로 잰 값은 이
+      # 페이즈가 만든 것을 하나도 안 지난다.
+      WAITING_ROUTING_ENABLED: "true"
+      # 전략은 밖에서 고른다. 둘 다 게이트를 넘어야 한다 (G9.9).
+      WAITING_ROUTING_STRATEGY: "${ROUTING_STRATEGY:-p2c}"

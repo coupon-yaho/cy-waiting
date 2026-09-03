@@ -2,7 +2,6 @@ package com.kafkick.waiting.gateway;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import com.kafkick.waiting.routing.RoutingProperties;
-import io.netty.channel.ConnectTimeoutException;
 import java.net.ConnectException;
 import org.springframework.cloud.gateway.filter.factory.RetryGatewayFilterFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -178,7 +177,10 @@ public class GatewayRoutes {
         // 발급이 답을 받은 뒤에도 다시 가고, 그 한 건이 곧 초과 발급이다.
         config.setSeries();
         config.setStatuses();
-        config.setExceptions(ConnectException.class, ConnectTimeoutException.class);
+        // 하나면 된다 — netty 의 ConnectTimeoutException 이 java.net.ConnectException
+        // 의 하위다. 둘을 적으면 "두 갈래를 덮는다" 로 읽혀, 한쪽을 지워도
+        // 안전한 것처럼 보인다.
+        config.setExceptions(ConnectException.class);
         return config;
     }
 
@@ -224,6 +226,7 @@ public class GatewayRoutes {
             RetryGatewayFilterFactory retries) {
         BodyDeadline bodyDeadline = bodyDeadline(backend, meters);
         String uri = backendUri(backend, routing);
+        boolean balanced = uri.startsWith("lb://");
         return builder.routes()
                 .route("issue", r -> r
                         .method(HttpMethod.POST)
@@ -232,20 +235,31 @@ public class GatewayRoutes {
                         // **앞뒤를 값으로 정한다.** 안 정하면 둘 다 0 이라 선언
                         // 위치를 옮기는 것만으로 순서가 바뀌고, 서킷이 판정 앞으로
                         // 가면 래치가 죽는다 (FilterOrder).
-                        .filters(f -> stripSpoofableClientIp(f)
-                                .filter(admission, FilterOrder.ROUTE_ADMISSION)
-                                .filter(circuit(breakers), FilterOrder.ROUTE_CIRCUIT)
-                                // 연결이 안 된 인스턴스는 다음 대로 넘긴다.
-                                // 죽은 주소로 간 요청이 5xx 로 새면 안 된다 (G9.11).
-                                .filter(connectRetry(retries), FilterOrder.ROUTE_RETRY)
-                                // **발급에만 붙인다.** 조회 응답에는 매진 코드가
-                                // 재고 정보로 실릴 수 있고, 그건 관찰이 아니다.
-                                .filter(soldOut, FilterOrder.ROUTE_SOLD_OUT)
-                                // **본문이 안 끝나는 뒷단을 끊는다.** 응답 상한은
-                                // 헤더가 오기까지만 재므로 그 뒤로는 아무것도
-                                // 안 걸리고, 헤더가 나간 뒤라 판정 쪽 시한도
-                                // 커넥션을 못 끊는다.
-                                .filter(bodyDeadline, FilterOrder.ROUTE_BODY))
+                        .filters(f -> {
+                            GatewayFilterSpec spec = stripSpoofableClientIp(f)
+                                    .filter(admission, FilterOrder.ROUTE_ADMISSION)
+                                    .filter(circuit(breakers), FilterOrder.ROUTE_CIRCUIT);
+                            // 연결이 안 된 인스턴스는 다음 대로 넘긴다.
+                            // 죽은 주소로 간 요청이 5xx 로 새면 안 된다 (G9.11).
+                            //
+                            // **균형기가 있을 때만 건다.** 단일 주소로 되돌린
+                            // 판에서는 고를 다음 대가 없어, 재시도가 같은 죽은
+                            // 주소로 두 번 간다 — 연결 시도와 사용자 대기가 그냥
+                            // 두 배다. 그 스위치를 당기는 순간이 하필 뒷단이
+                            // 아플 때다 (Phase 9 5절).
+                            if (balanced) {
+                                spec = spec.filter(connectRetry(retries),
+                                        FilterOrder.ROUTE_RETRY);
+                            }
+                            // **발급에만 붙인다.** 조회 응답에는 매진 코드가
+                            // 재고 정보로 실릴 수 있고, 그건 관찰이 아니다.
+                            return spec.filter(soldOut, FilterOrder.ROUTE_SOLD_OUT)
+                                    // **본문이 안 끝나는 뒷단을 끊는다.** 응답
+                                    // 상한은 헤더가 오기까지만 재므로 그 뒤로는
+                                    // 아무것도 안 걸리고, 헤더가 나간 뒤라 판정
+                                    // 쪽 시한도 커넥션을 못 끊는다.
+                                    .filter(bodyDeadline, FilterOrder.ROUTE_BODY);
+                        })
                         // **끊는 자리가 서킷 안쪽이어야 한다.** 밖에서 끊으면
                         // 서킷에 가는 것은 오류가 아니라 취소이고, 취소는 창에
                         // 안 쌓인다 — 멎은 뒷단의 서킷이 영영 안 열린다.

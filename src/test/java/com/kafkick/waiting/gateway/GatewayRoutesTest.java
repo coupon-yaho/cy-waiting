@@ -21,6 +21,7 @@ import java.util.stream.Stream;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.junit.jupiter.api.DisplayName;
@@ -226,23 +227,33 @@ class GatewayRoutesTest {
     }
 
     /**
-     * <b>연결 상한도 라우트가 들어야 한다</b> (G9.4).
+     * <b>연결 상한을 두 라우트가 다 들어야 한다</b> (G9.4).
      *
-     * <p>안 걸면 프레임워크 기본값 30초가 선다. 죽은 인스턴스의 주소로 보낸
-     * 연결은 거절도 안 오고 그냥 답이 없어서, 그동안 요청이 매달린다 —
-     * <b>연결이 실패하지 않으므로 연결 실패 재시도가 걸릴 자리도 없다.</b>
-     * 실측에서 죽인 뒤 64 건 중 36 건이 응답 없이 끝났다.
+     * <p>안 걸면 프레임워크 기본값 30초가 선다. 조회 쪽이 특히 아픈데, 모으기가
+     * 붙어 있어 멎은 요청 하나가 그 키에 붙은 모든 조회를 그동안 잠근다.
+     *
+     * <p><b>이 시험이 보는 것은 값이 라우트에 실렸는지까지다.</b> 그 값에 실제로
+     * 끊기는지는 여기서 안 잰다 — 그건 {@code ConnectRetryTest} 와 저널의 실측이다.
      */
-    @Test
-    @DisplayName("발급_라우트가_연결_상한을_들고_있다")
-    void 발급_라우트가_연결_상한을_들고_있다() {
-        Route 발급 = 라우트().stream()
-                .filter(r -> "issue".equals(r.getId()))
+    @ParameterizedTest
+    @ValueSource(strings = {"issue", "coupons"})
+    @DisplayName("두_라우트가_다_연결_상한을_들고_있다")
+    void 두_라우트가_다_연결_상한을_들고_있다(String id) {
+        Route route = 라우트().stream()
+                .filter(r -> id.equals(r.getId()))
                 .findFirst()
-                .orElseThrow(() -> new AssertionError("issue 라우트가 없다"));
+                .orElseThrow(() -> new AssertionError(id + " 라우트가 없다"));
 
-        assertThat(발급.getMetadata())
+        assertThat(route.getMetadata())
                 .containsEntry("connect-timeout", (int) 연결_상한.toMillis());
+    }
+
+    /** 바로 위는 받아야 한다. 안 그러면 상한을 못 내린다. */
+    @Test
+    @DisplayName("연결_상한_1ms_는_받는다")
+    void 연결_상한_1ms_는_받는다() {
+        assertThatCode(() -> new GatewayRoutes.Backend("http://backend:8080", 응답_상한,
+                Duration.ofMillis(1))).doesNotThrowAnyException();
     }
 
     @Test
@@ -757,6 +768,15 @@ class GatewayRoutesTest {
         assertThat(주소들(locator)).allMatch("http://backend:8080"::equals);
     }
 
+    /** 라우터가 만든 발급 라우트의 필터. 라우팅을 켠 판과 끈 판을 같이 본다. */
+    private static List<GatewayFilter> 발급_필터(RouteLocator locator) {
+        return locator.getRoutes().collectList().block().stream()
+                .filter(r -> "issue".equals(r.getId()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("issue 라우트가 없다"))
+                .getFilters();
+    }
+
     /**
      * <b>연결이 안 된 인스턴스는 다음 대로 넘긴다</b> (9.3.11 · G9.11).
      *
@@ -764,22 +784,38 @@ class GatewayRoutesTest {
      * 게이트웨이가 고장난 것으로 보인다.
      */
     @Test
-    @DisplayName("발급에_재시도가_붙어_있다")
-    void 발급에_재시도가_붙어_있다() {
-        assertThat(잡는_라우트(HttpMethod.POST, "/api/v1/coupons/c1/issue").getFilters())
+    @DisplayName("라우팅을_켜면_발급에_재시도가_붙는다")
+    void 라우팅을_켜면_발급에_재시도가_붙는다() {
+        assertThat(발급_필터(라우터(new RoutingProperties(
+                true, "coupon-service", null, null, null, null))))
                 .anyMatch(f -> 이름(f).contains("Retry"));
     }
 
     /**
-     * <b>서킷 바깥이다.</b>
-     *
-     * <p>안쪽에 두면 서킷이 요청 하나에 결과 하나만 보게 되어, 재시도가 만든
-     * 시도가 창에 안 쌓인다 — 관측 실패율이 절반이라 서킷이 늦게 열린다.
+     * <b>끄면 안 건다.</b> 단일 주소로 되돌린 판에는 고를 다음 대가 없어,
+     * 재시도가 같은 죽은 주소로 두 번 간다 — 연결 시도와 사용자 대기가 두 배다.
+     * 그 스위치를 당기는 순간이 하필 뒷단이 아플 때다 (Phase 9 5절).
      */
     @Test
-    @DisplayName("재시도가_서킷_바깥이다")
-    void 재시도가_서킷_바깥이다() {
-        assertThat(FilterOrder.ROUTE_RETRY).isLessThan(FilterOrder.ROUTE_CIRCUIT);
+    @DisplayName("라우팅을_끄면_재시도를_안_건다")
+    void 라우팅을_끄면_재시도를_안_건다() {
+        assertThat(발급_필터(라우터(new RoutingProperties(
+                false, "coupon-service", null, null, null, null))))
+                .noneMatch(f -> 이름(f).contains("Retry"));
+    }
+
+    /**
+     * <b>서킷 안쪽이다.</b>
+     *
+     * <p>바깥에 두면 재시도가 한 번도 안 돈다 — 서킷 필터가 폴백 주소를 들고
+     * 있으면 하류의 모든 오류를 그리로 넘기고 정상 완료를 내보내, 바깥의
+     * 재시도는 볼 오류가 없다. 이 값만으로는 그것을 못 잡으므로 실제로 넘어가는지는
+     * {@code ConnectRetryTest} 가 본다.
+     */
+    @Test
+    @DisplayName("재시도가_서킷_안쪽이다")
+    void 재시도가_서킷_안쪽이다() {
+        assertThat(FilterOrder.ROUTE_CIRCUIT).isLessThan(FilterOrder.ROUTE_RETRY);
     }
 
     /**
@@ -795,8 +831,9 @@ class GatewayRoutesTest {
 
         assertThat(config.getSeries()).isEmpty();
         assertThat(config.getStatuses()).isEmpty();
-        assertThat(config.getExceptions())
-                .containsExactlyInAnyOrder(ConnectException.class, ConnectTimeoutException.class);
+        // 하나면 된다 — netty 의 ConnectTimeoutException 이 이것의 하위다.
+        assertThat(config.getExceptions()).containsExactly(ConnectException.class);
+        assertThat(ConnectException.class).isAssignableFrom(ConnectTimeoutException.class);
     }
 
     /** 한 번이면 충분하다. 여러 번 돌면 죽은 뒷단에 요청이 그만큼 오래 매달린다. */

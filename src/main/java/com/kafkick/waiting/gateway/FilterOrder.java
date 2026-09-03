@@ -40,22 +40,28 @@ public final class FilterOrder {
     public static final int ROUTE_ADMISSION = 0;
 
     /**
-     * 연결이 안 된 인스턴스를 다음 대로 넘긴다.
-     *
-     * <p><b>서킷 바깥이다.</b> 안쪽에 두면 서킷이 <b>요청 하나에 결과 하나</b>만
-     * 보게 되어, 재시도가 만든 시도가 창에 안 쌓인다 — 뒷단이 통째로 넘어져도
-     * 관측 실패율이 절반이라 서킷이 늦게 열린다.
-     */
-    public static final int ROUTE_RETRY = ROUTE_ADMISSION + 1;
-
-    /**
      * 라우트 안의 서킷.
      *
      * <p><b>응답을 쓰는 필터보다 안쪽이어야 한다.</b> 프레임워크의 쓰기 필터가
      * {@code -1} 이라, 그보다 앞으로 가면 폴백이 이미 커밋된 응답에 쓰려 들고
      * 읽기 전용 헤더에서 터진다 — 그 예외가 원래 실패를 덮는다.
      */
-    public static final int ROUTE_CIRCUIT = ROUTE_RETRY + 1;
+    public static final int ROUTE_CIRCUIT = ROUTE_ADMISSION + 1;
+
+    /**
+     * 연결이 안 된 인스턴스를 다음 대로 넘긴다.
+     *
+     * <p><b>서킷 안쪽이다.</b> 바깥에 두면 재시도가 한 번도 안 돈다 — 서킷 필터가
+     * 폴백 주소를 들고 있으면 하류의 모든 오류를 그리로 넘기고 정상 완료를
+     * 내보내므로, 바깥의 재시도는 볼 오류가 없다. 상태 기반 재시도까지 꺼 둔
+     * 지금 설정에서는 두 갈래가 다 막힌다.
+     *
+     * <p>대가는 서킷이 <b>요청 하나에 결과 하나</b>만 보는 것이다. 그편이 맞다 —
+     * 서킷이 재야 할 것은 "이 요청이 끝내 실패했는가" 이지 "TCP 시도가 몇 번
+     * 실패했는가" 가 아니고, 바깥에 두면 한 대의 연결 실패가 전역 서킷 창을
+     * 두 배 속도로 밀어 멀쩡한 나머지까지 끊는다.
+     */
+    public static final int ROUTE_RETRY = ROUTE_CIRCUIT + 1;
 
     /**
      * <b>응답 본문을 보려면 여기여야 한다.</b>

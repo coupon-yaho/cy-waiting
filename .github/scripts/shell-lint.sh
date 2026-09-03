@@ -13,8 +13,15 @@ set -uo pipefail
 root=$(git rev-parse --show-toplevel 2>/dev/null) || root=.
 cd "$root" || exit 1
 
+# **없으면 막는다. 건너뛰지 않는다.** 건너뛰면 이 검사가 안 도는 것이 통과로
+# 보이고, 도구가 없는 사람만 늘 초록을 본다. 고치는 법은 우회가 아니라 설치다.
 if ! command -v shellcheck >/dev/null 2>&1; then
-    echo "  shellcheck 가 없어 검사를 못 한다" >&2
+    {
+        echo "  shellcheck 가 없어 검사를 못 한다"
+        echo "  러너에는 깔려 있다 (ubuntu-latest). 로컬에서는 아래 중 하나로 넣는다:"
+        echo "    dnf install ShellCheck   ·   apt install shellcheck   ·   brew install shellcheck"
+        echo "    또는 https://github.com/koalaman/shellcheck 릴리스의 정적 바이너리를 PATH 에 둔다"
+    } >&2
     exit 1
 fi
 
@@ -28,16 +35,34 @@ UNPARSABLE=(
     test/load/gate-selftest.sh
 )
 
-skipped() {
+# **벤더 파일은 뺀다.** 우리가 못 고치는 남의 코드라, 여기 잡히면 검사를
+# 끄는 쪽으로 몰린다. 확장자가 없고 shebang 이 있어 아래 고르기에 걸린다.
+VENDORED=(gradlew)
+
+listed() {
     local f=$1 s
-    for s in "${UNPARSABLE[@]}"; do [ "$f" = "$s" ] && return 0; done
+    shift
+    for s in "$@"; do [ "$f" = "$s" ] && return 0; done
     return 1
 }
 
+skipped() { listed "$1" "${UNPARSABLE[@]}"; }
+vendored() { listed "$1" "${VENDORED[@]}"; }
+
+# **확장자로만 고르면 게이트를 여는 스크립트가 빠진다.** `.githooks/commit-msg`
+# 는 커밋 메시지 게이트 그 자체인데 확장자가 없어, 이 검사가 처음 들어왔을 때
+# 통째로 밖에 있었다. 확장자가 없는 파일은 shebang 으로 고른다.
 targets=()
 while IFS= read -r f; do
-    skipped "$f" || targets+=("$f")
-done < <(git ls-files '*.sh')
+    skipped "$f" && continue
+    vendored "$f" && continue
+    case "${f##*/}" in
+        *.sh) targets+=("$f") ;;
+        *.*) ;;
+        *) head -1 "$f" 2>/dev/null \
+               | grep -qE '^#!.*[/ ](ba|da|k|z)?sh( |$)' && targets+=("$f") ;;
+    esac
+done < <(git ls-files)
 
 [ ${#targets[@]} -gt 0 ] || { echo "  검사할 셸이 없다" >&2; exit 1; }
 

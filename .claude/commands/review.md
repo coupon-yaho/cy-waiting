@@ -11,6 +11,10 @@ PR 을 올리기 전에 **CodeRabbit 이 볼 것을 먼저 본다.** 원격에�
 .claude/hooks/review-branch.sh ${1:-origin/develop}
 ```
 
+`셸 정적 검사` 는 `shellcheck` 를 쓴다. 없으면 그 자리에서 막힌다 — 러너에는
+깔려 있어 CI 만 도는 검사가 되면 곤란하므로 건너뛰지 않는다. 없다는 말이
+나오면 스크립트가 알려 주는 대로 설치하고 다시 돌린다.
+
 이 스크립트는 `check-java.sh`·`check-lua.sh` 를 **브랜치 변경 전체**에 태운다.
 두 훅은 `Write|Edit` 도구로 쓴 파일만 보므로, 힙독이나 스크립트로 만든 파일은
 그냥 지나간다 — 실제로 그렇게 들어간 위반이 CodeRabbit 까지 간 적이 있다.

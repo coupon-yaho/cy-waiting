@@ -40,7 +40,7 @@ import reactor.netty.DisposableServer;
 import reactor.netty.http.server.HttpServer;
 
 /**
- * <b>연결이 안 된 인스턴스로 간 요청이 다음 대로 넘어간다</b> (9.3.11 · G9.11).
+ * <b>연결이 안 된 인스턴스로 간 요청이 다음 대로 넘어간다.</b>
  *
  * <p>배선을 값으로만 재면(재시도 횟수·필터 순서) 배선이 <b>안 도는</b> 것을 못
  * 잡는다. 실제로 그랬다 — 재시도가 서킷 폴백에 먹혀 한 번도 안 돌았는데

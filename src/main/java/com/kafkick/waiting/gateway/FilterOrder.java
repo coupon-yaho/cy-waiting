@@ -52,7 +52,8 @@ public final class FilterOrder {
      * 연결이 안 된 인스턴스를 다음 대로 넘긴다.
      *
      * <p><b>서킷 안쪽이다.</b> 바깥에 두면 서킷의 폴백이 하류 오류를 다 삼켜
-     * 재시도가 한 번도 안 돈다. 대가와 근거는 AIJ-0214 에 있다.
+     * 재시도가 한 번도 안 돈다. 안쪽에 두는 대가와 그 근거는
+     * `ai/journal/2026/09/AIJ-0214-connect-timeout.md` 에 적었다.
      */
     public static final int ROUTE_RETRY = ROUTE_CIRCUIT + 1;
 

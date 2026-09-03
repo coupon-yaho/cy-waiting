@@ -43,7 +43,7 @@ public class GatewayRoutes {
      *
      * <p><b>안 걸면 30초가 선다.</b> 죽은 인스턴스의 주소는 거절도 안 오고 답이
      * 없어서, 그동안 요청이 매달린다 — 연결이 실패하지 않으니 연결 실패
-     * 재시도가 걸릴 자리가 없다 (G9.4).
+     * 재시도가 걸릴 자리가 없다.
      */
     private static final String CONNECT_TIMEOUT_ATTR = "connect-timeout";
 
@@ -148,10 +148,10 @@ public class GatewayRoutes {
     }
 
     /**
-     * 연결이 안 된 인스턴스를 다음 대로 넘긴다 (9.3.11 · 9.3.12).
+     * 연결이 안 된 인스턴스를 다음 대로 넘긴다.
      *
      * <p><b>연결 단계 실패에만 건다.</b> 발급은 멱등이 아니라, 요청이 뒷단에
-     * 닿은 뒤에 재시도하면 그 한 건이 곧 초과 발급이다 (불변식 2).
+     * 닿은 뒤에 재시도하면 그 한 건이 곧 초과 발급이다.
      */
     // 상태 코드로는 안 건다. 5xx 는 뒷단이 요청을 받은 뒤에 낸 답이고, 그
     // 시점에는 이미 재고가 움직였을 수 있다. 연결이 안 됐다는 것만이
@@ -240,7 +240,7 @@ public class GatewayRoutes {
                                     .filter(admission, FilterOrder.ROUTE_ADMISSION)
                                     .filter(circuit(breakers), FilterOrder.ROUTE_CIRCUIT);
                             // 연결이 안 된 인스턴스는 다음 대로 넘긴다.
-                            // 죽은 주소로 간 요청이 5xx 로 새면 안 된다 (G9.11).
+                            // 죽은 주소로 간 요청이 5xx 로 새면 안 된다.
                             //
                             // **균형기가 있을 때만 건다.** 단일 주소로 되돌린
                             // 판에서는 고를 다음 대가 없어, 재시도가 같은 죽은

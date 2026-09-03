@@ -9,8 +9,12 @@
 # 그러면 아무도 확인하지 않는다 (TS-9).
 set -uo pipefail
 
-# 허용 5xx. **0 이다.** 하나라도 새면 사용자가 장애를 본 것이다.
-MAX_5XX="${MAX_5XX:-0}"
+# 허용 유출. **0 이다.** 하나라도 새면 사용자가 장애를 본 것이다.
+#
+# **이름이 5xx 가 아닌 이유.** 아래에서 5xx 와 응답 없음(000)을 함께 세고 그
+# 합을 이 값과 견준다. `MAX_5XX` 라고 부르면 손잡이를 만지는 사람이 5xx 만
+# 재는 줄 알고, 매달린 요청이 허용치 밖에 있다고 읽는다.
+MAX_LEAK="${MAX_LEAK:-0}"
 # 이만큼도 안 보냈으면 유출이 없다고 말할 수 없다.
 MIN_SAMPLE="${MIN_SAMPLE:-20}"
 
@@ -20,7 +24,7 @@ MIN_SAMPLE="${MIN_SAMPLE:-20}"
 # 나온 적이 있다 — **거짓 초록은 없는 판정보다 나쁘다.**
 MIN_ADMITTED="${MIN_ADMITTED:-20}"
 
-for setting in MAX_5XX MIN_SAMPLE MIN_ADMITTED; do
+for setting in MAX_LEAK MIN_SAMPLE MIN_ADMITTED; do
     value=$(eval "printf '%s' \"\$$setting\"")
     case "$value" in
         ''|*[!0-9]*) echo "$setting 은 0 이상의 정수여야 한다: '$value'"; exit 2 ;;
@@ -55,8 +59,8 @@ if [ "$admitted" -lt "$MIN_ADMITTED" ]; then
     echo "판정 불가 — 뒷단까지 간 것이 ${admitted} 건뿐이다. 죽은 대로 가는 경로를 안 밟았다"
     exit 2
 fi
-if [ "$leaked" -gt "$MAX_5XX" ]; then
-    echo "미달 — 유출 ${leaked} 건이 허용 ${MAX_5XX} 건을 넘었다"
+if [ "$leaked" -gt "$MAX_LEAK" ]; then
+    echo "미달 — 유출 ${leaked} 건이 허용 ${MAX_LEAK} 건을 넘었다"
     exit 1
 fi
 echo "충족 — 유출이 허용 안이다"

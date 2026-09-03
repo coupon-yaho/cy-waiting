@@ -11,22 +11,33 @@
 # **"결국 제 몫을 받는다" 로는 판정이 안 된다.** 램프가 아예 없어도 그건
 # 참이다. 처음 몇 초에 **덜 받는지**를 본다 — 찬 인스턴스를 지키는 것이
 # 램프의 목적이다.
+#
+# **덜 받는 것만 봐도 안 된다.** 그러면 새 인스턴스가 끝까지 굶는 것이 가장
+# 잘 지킨 모습으로 읽힌다 — 램프가 아니라 배제다. 램프 계수가 0 에 고착되거나
+# 새 식별자가 후보에 영영 안 들어가는 회귀가 정확히 그 모양이고, 롤링 배포마다
+# 새 인스턴스가 무기한 놀아도 게이트는 초록이다. 올라오는 것까지 본다 (TS-8).
 set -uo pipefail
 
 # 첫 이 시간 동안은 평상시 몫보다 낮아야 한다(초).
 EARLY_SEC="${EARLY_SEC:-5}"
 # 그 구간의 몫이 평상시의 이 비율 아래라야 "덜 받았다" 로 본다(%).
 EARLY_MAX_RATIO="${EARLY_MAX_RATIO:-70}"
+# 이 시각부터는 램프가 다 올라 제 몫을 받아야 한다(초). 램프는 60초 짜리지만
+# 선형이라 이 무렵이면 아래 하한을 넘는다.
+LATE_SEC="${LATE_SEC:-15}"
+# 그 구간의 몫이 평상시의 이 비율 이상이라야 "올라왔다" 로 본다(%).
+LATE_MIN_RATIO="${LATE_MIN_RATIO:-70}"
 # 초당 도착이 이보다 적으면 그 초의 비율은 못 믿는다.
 MIN_PER_SEC="${MIN_PER_SEC:-10}"
 
-for setting in EARLY_SEC EARLY_MAX_RATIO MIN_PER_SEC; do
+for setting in EARLY_SEC EARLY_MAX_RATIO LATE_SEC LATE_MIN_RATIO MIN_PER_SEC; do
     value=$(eval "printf '%s' \"\$$setting\"")
     case "$value" in
         ''|*[!0-9]*) echo "$setting 은 0 이상의 정수여야 한다: '$value'"; exit 2 ;;
     esac
 done
 [ "$EARLY_SEC" -ge 1 ] || { echo "EARLY_SEC 은 1 이상이어야 한다"; exit 2; }
+[ "$LATE_SEC" -ge "$EARLY_SEC" ] || { echo "LATE_SEC 은 EARLY_SEC 이상이어야 한다"; exit 2; }
 
 samples=${1:-}
 steady=${2:-}
@@ -36,18 +47,21 @@ case "$steady" in
 esac
 [ "$steady" -gt 0 ] || { echo "평상시 몫이 0 이면 견줄 것이 없다"; exit 2; }
 
-early_new=0 early_total=0 usable=0
+early_new=0 early_total=0 late_new=0 late_total=0
 while read -r second fresh total; do
     case "$second$fresh$total" in
         *[!0-9-]*|'') continue ;;
     esac
     [ "$total" -lt "$MIN_PER_SEC" ] && continue
-    usable=$(( usable + 1 ))
     share=$(( fresh * 100 / total ))
     printf '  %+4ds  새 인스턴스 %3d%%  (도착 %d/%d)\n' "$second" "$share" "$fresh" "$total"
     if [ "$second" -ge 0 ] && [ "$second" -lt "$EARLY_SEC" ]; then
         early_new=$(( early_new + fresh ))
         early_total=$(( early_total + total ))
+    fi
+    if [ "$second" -ge "$LATE_SEC" ]; then
+        late_new=$(( late_new + fresh ))
+        late_total=$(( late_total + total ))
     fi
 done < "$samples"
 
@@ -64,4 +78,20 @@ if [ "$early_share" -gt "$limit" ]; then
     echo "미달 — 찬 인스턴스가 처음부터 제 몫을 받았다"
     exit 1
 fi
-echo "충족 — 처음에는 덜 받는다"
+
+# **회복 구간이 없으면 넘어가지 않는다.** 넘어가면 램프가 올라오는지를 한 번도
+# 안 본 실행이 충족으로 적히고, 이 판정이 막으려던 상태가 그것이다. 앞 구간이
+# 이미 미달이면 그것으로 끝난다 — 그때는 회복을 볼 것도 없다.
+if [ "$late_total" -lt "$MIN_PER_SEC" ]; then
+    echo "판정 불가 — ${LATE_SEC}초 이후에 쓸 만한 표본이 없다. 램프가 올라오는지를 못 본다"
+    exit 2
+fi
+
+late_share=$(( late_new * 100 / late_total ))
+floor=$(( steady * LATE_MIN_RATIO / 100 ))
+echo "${LATE_SEC}초 이후 몫 ${late_share}% · 하한 ${floor}%"
+if [ "$late_share" -lt "$floor" ]; then
+    echo "미달 — 램프가 끝나도 제 몫을 못 받는다. 램프가 아니라 배제다"
+    exit 1
+fi
+echo "충족 — 처음에는 덜 받고 뒤에는 제 몫을 받는다"

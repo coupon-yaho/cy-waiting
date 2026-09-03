@@ -10,6 +10,10 @@
 #
 # **"줄었다" 로는 판정이 안 된다.** 한 건만 줄어도 줄어든 것이라, 그러면
 # 어떤 구현도 통과한다. 목표 비율에 **닿았고 거기 머무는** 첫 초를 찾는다.
+#
+# **바꾸기 전이 이미 목표면 충족으로 안 적는다.** 그러면 아무것도 안 바뀐
+# 실행이 "재분배까지 0초" 로 나온다. 원래부터 제 몫이 안 가던 배선 결함이나,
+# 여유를 낮추는 명령이 조용히 실패한 실행이 정확히 그 모양이다.
 set -uo pipefail
 
 # 목표에서 이만큼까지는 닿은 것으로 본다(%p). 초당 표본이라 흔들림이 있다.
@@ -39,13 +43,22 @@ esac
 
 streak=0
 settled=""
-usable=0
+after_usable=0
+before_degraded=0
+before_total=0
 while read -r second degraded total; do
     case "$second$degraded$total" in
         *[!0-9-]*|'') continue ;;
     esac
     [ "$total" -lt "$MIN_PER_SEC" ] && { streak=0; continue; }
-    usable=$(( usable + 1 ))
+    if [ "$second" -lt 0 ]; then
+        before_degraded=$(( before_degraded + degraded ))
+        before_total=$(( before_total + total ))
+    else
+        # **바꾼 뒤의 표본만 센다.** 부하 생성기가 0 초에 죽으면 바꾸기 전
+        # 표본만으로 이 수가 차고, 하네스 고장이 제품 미달로 적힌다.
+        after_usable=$(( after_usable + 1 ))
+    fi
     share=$(( degraded * 100 / total ))
     gap=$(( share - target ))
     magnitude=${gap#-}
@@ -63,15 +76,28 @@ while read -r second degraded total; do
 done < "$samples"
 
 echo
-if [ "$usable" -lt "$SUSTAIN" ]; then
-    echo "판정 불가 — 쓸 만한 표본이 $usable 초뿐이다. 부하가 안 흘렀다"
+if [ "$after_usable" -lt "$SUSTAIN" ]; then
+    echo "판정 불가 — 바꾼 뒤 쓸 만한 표본이 $after_usable 초뿐이다. 부하가 안 흘렀다"
     exit 2
 fi
 if [ -z "$settled" ]; then
     echo "미달 — 목표 ${target}%±${SLACK}%p 에 ${SUSTAIN}초 연속으로 닿은 적이 없다"
     exit 1
 fi
-echo "재분배까지 ${settled}초 (예산 ${BUDGET_SEC}초)"
+# 닿았다면 **무엇이 바뀌어 닿았는지**를 말할 수 있어야 한다. 바꾸기 전 표본이
+# 없거나 그때 이미 목표 안이었으면 말할 수 없다.
+if [ "$before_total" -lt "$MIN_PER_SEC" ]; then
+    echo "판정 불가 — 바꾸기 전 표본이 없다. 무엇이 바뀌어 닿았는지 못 가른다"
+    exit 2
+fi
+before_share=$(( before_degraded * 100 / before_total ))
+before_gap=$(( before_share - target ))
+before_gap=${before_gap#-}
+if [ "$before_gap" -le "$SLACK" ]; then
+    echo "판정 불가 — 바꾸기 전부터 ${before_share}% 로 목표 ${target}%±${SLACK}%p 안이다. 바뀐 것이 없다"
+    exit 2
+fi
+echo "바꾸기 전 ${before_share}% · 재분배까지 ${settled}초 (예산 ${BUDGET_SEC}초)"
 if [ "$settled" -gt "$BUDGET_SEC" ]; then
     echo "미달 — 예산 ${BUDGET_SEC}초를 넘었다"
     exit 1

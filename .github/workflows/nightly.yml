@@ -140,7 +140,16 @@ jobs:
       # 스택은 스크립트가 세우지 않는다. 두 시나리오가 같은 게이트웨이를 봐야
       # 격리가 성립하므로 여기서 한 번 띄우고 스크립트는 부하만 넣는다.
       - name: 하네스 기동
-        run: docker compose -f test/load/compose.yml up -d --wait
+        run: |
+          set -uo pipefail
+          # **JAR 이 있는지 먼저 본다.** 없으면 이미지가 안 지어지고 기동이
+          # 알 수 없는 오류로 끝난다 — 부하 잡이 같은 이유로 이걸 본다.
+          jar=build/libs/waiting.jar
+          if [[ ! -f "$jar" ]]; then
+            echo "::error::실행 JAR 이 없다: $jar"
+            exit 1
+          fi
+          docker compose -f test/load/compose.yml up -d --wait
       - name: 실측
         run: ./test/load/r1-isolation.sh
       - name: 하네스 로그

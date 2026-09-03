@@ -131,4 +131,14 @@ echo "응답 코드: $(sort "$work/codes" | uniq -c | tr -s ' \n' ' ')"
 echo "도착 합계: $total (부하 $REQUESTS)"
 echo
 
-MAX_DEVIATION="$MAX_DEVIATION" test/load/evaluate-routing-ratio.sh "${specs[@]}"
+# **다 통과하지 못했으면 비율을 논하지 않는다.** 일부만 닿아도 그 일부의
+# 비율은 맞을 수 있어서, 못 잰 실행이 충족으로 적힌다. 몇 건이 어떤 코드로
+# 끊겼는지는 위에 이미 찍혀 있으니 여기서는 판정만 막는다.
+bad=$(grep -cv '^200$' "$work/codes")
+if [ "$bad" -ne 0 ]; then
+  echo "판정 불가 — $REQUESTS 건 중 $bad 건이 200 이 아니다. 이 실행으로는 분배를 못 잰다"
+  exit 2
+fi
+
+MAX_DEVIATION="$MAX_DEVIATION" EXPECTED_TOTAL="$REQUESTS" \
+  test/load/evaluate-routing-ratio.sh "${specs[@]}"

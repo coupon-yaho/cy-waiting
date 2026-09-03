@@ -143,15 +143,31 @@ jobs:
         run: |
           set -uo pipefail
           # **JAR 이 있는지 먼저 본다.** 없으면 이미지가 안 지어지고 기동이
-          # 알 수 없는 오류로 끝난다 — 부하 잡이 같은 이유로 이걸 본다.
+          # 알 수 없는 오류로 끝난다 — `_load-test.yml` 이 같은 이유로 이걸 본다.
+          # **확인한 경로를 그대로 넘긴다.** compose 기본값과 따로 적으면 둘이
+          # 갈라져도 확인이 통과한다 — 확인의 목적이 사라진다.
           jar=build/libs/waiting.jar
           if [[ ! -f "$jar" ]]; then
             echo "::error::실행 JAR 이 없다: $jar"
             exit 1
           fi
+          export WAITING_JAR="$jar"
+          echo "실행 JAR — $WAITING_JAR"
           docker compose -f test/load/compose.yml up -d --wait
       - name: 실측
+        env:
+          OUT_DIR: r1-out
         run: ./test/load/r1-isolation.sh
+      # 미달이 난 아침에 손에 남는 것이 이것뿐이다. 임시 디렉터리에 두면
+      # 실행이 끝나는 순간 요약이 같이 사라진다.
+      - name: 실측 산출물
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: r1-isolation
+          path: r1-out/
+          retention-days: 7
+          if-no-files-found: warn
       - name: 하네스 로그
         if: failure()
         run: docker compose -f test/load/compose.yml logs --tail 200
@@ -207,6 +223,7 @@ jobs:
         빌드=${{ needs.build.result }}
         테스트=${{ needs.test.result }}
         부하=${{ needs.load.result }}
+        쿠폰 격리 (R1)=${{ needs.isolation.result }}
         크레딧 낭비=${{ needs.waste.result }}
         보안=${{ needs.security.result }}
       link-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -219,6 +236,7 @@ jobs:
           <tr><td>빌드</td><td>${{ needs.build.result }}</td></tr>
           <tr><td>테스트 (전 계층)</td><td>${{ needs.test.result }}</td></tr>
           <tr><td>부하 (9 시나리오)</td><td>${{ needs.load.result }}</td></tr>
+          <tr><td>쿠폰 격리 (R1)</td><td>${{ needs.isolation.result }}</td></tr>
           <tr><td>크레딧 낭비 (G7.5)</td><td>${{ needs.waste.result }}</td></tr>
           <tr><td>보안 (LOW 포함)</td><td>${{ needs.security.result }}</td></tr>
         </table>

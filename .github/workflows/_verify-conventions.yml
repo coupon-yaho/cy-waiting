@@ -301,3 +301,8 @@ jobs:
       # 목록에 없어, 여기서 0 으로 끝나면 카오스가 빨개져도 병합이 열린다.
       - name: 판정 자기검증
         run: .github/scripts/verdict-selftest.sh
+
+      # 판정 규칙이 맞아도 **기다리는 목록이 비면** 그 잡은 판정 밖이다. 잡을
+      # 늘리고 판정·리포트에서 빠뜨리는 것이 실제로 난 실수라, 형태로 막는다.
+      - name: 판정 배선
+        run: .github/scripts/verdict-needs.sh

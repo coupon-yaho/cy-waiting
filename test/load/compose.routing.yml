@@ -10,10 +10,10 @@ services:
   backend:
     environment:
       # 이 대가 가장 여유 있다. 나머지 둘과 비율이 갈려야 판정이 성립한다.
-      MAX_INFLIGHT: "200"
+      MAX_INFLIGHT: "${BIG_CAP:-200}"
       # **열화를 밖에서 넣는다** (9.4.1). 가장 여유 있는 대를 느리게 만들어야
       # 효과가 보인다 — 작은 대를 느리게 하면 원래 적게 가던 것이 더 적게 갈 뿐이다.
-      LATENCY_MS: "${BIG_LATENCY_MS:-5}"
+      LATENCY_MS: "${BIG_LATENCY_MS:-${STUB_LATENCY_MS:-5}}"
 
   # **작은 대.** 여유 대비 부하로 고르지 않고 물린 수만 균등화하면, 이 대가
   # 가장 먼저 무너진다 — 그것을 잡는 것이 이 시나리오의 값어치다.
@@ -21,8 +21,8 @@ services:
     build: ./backend-stub
     environment:
       PORT: "8090"
-      LATENCY_MS: "5"
-      MAX_INFLIGHT: "40"
+      LATENCY_MS: "${STUB_LATENCY_MS:-5}"
+      MAX_INFLIGHT: "${SMALL_CAP:-40}"
       SHARED_HEADER: "${SHARED_HEADER:-true}"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8090/stub/health"]
@@ -34,8 +34,8 @@ services:
     build: ./backend-stub
     environment:
       PORT: "8090"
-      LATENCY_MS: "5"
-      MAX_INFLIGHT: "120"
+      LATENCY_MS: "${STUB_LATENCY_MS:-5}"
+      MAX_INFLIGHT: "${MID_CAP:-120}"
       SHARED_HEADER: "${SHARED_HEADER:-true}"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8090/stub/health"]
@@ -65,9 +65,12 @@ services:
         # **여유를 매 회 다시 읽는다.** 열화를 재려면 보고 값을 실행 도중에
         # 바꿀 수 있어야 하는데, 씨더를 재시작하면 그 몇 초가 5초 예산을 먹는다.
         # 손잡이를 키로 두면 `SET` 한 번이 다음 틱에 반영된다.
-        redis-cli -h redis SETNX sim:credits:stub-1 200
-        redis-cli -h redis SETNX sim:credits:stub-2 40
-        redis-cli -h redis SETNX sim:credits:stub-3 120
+        # **여유의 절대값도 손잡이다.** 비율만 맞추고 작게 두면 판정이 허용하는
+        # 유입이 낮아 물린 건수가 못 쌓인다 — 여유 대비 부하로 고르는 전략을
+        # 그 상태로 재면 비교할 것이 없다. 비율은 그대로 두고 규모만 키운다.
+        redis-cli -h redis SETNX sim:credits:stub-1 ${BIG_CAP:-200}
+        redis-cli -h redis SETNX sim:credits:stub-2 ${SMALL_CAP:-40}
+        redis-cli -h redis SETNX sim:credits:stub-3 ${MID_CAP:-120}
         while :; do
           now=$$(date +%s)
           big=$$(redis-cli -h redis GET sim:credits:stub-1)

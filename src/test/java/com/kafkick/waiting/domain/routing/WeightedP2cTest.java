@@ -171,6 +171,93 @@ class WeightedP2cTest {
             assertThat(비율(받은, "c", 총_요청)).isBetween(0.333 * 0.85, 0.333 * 1.15);
         }
 
+        /**
+         * <b>부하가 얕으면 여유 비율이 안 나온다</b> — 그것이 이 기준의 적용
+         * 범위다 (G9.1 의 부하 조건).
+         *
+         * <p>물린 것이 없으면 세 대의 부하율이 전부 0 이라 여유가 비교에서
+         * 빠지고 균등해진다. 실제로 그 구간에서 재고 "여유를 안 본다" 고
+         * 기록한 적이 있다 — 그 조건을 여기 못 박아 다시 안 겪게 한다.
+         */
+        @Test
+        @DisplayName("물린_것이_없으면_균등해진다")
+        void 물린_것이_없으면_균등해진다() {
+            Map<String, Long> 여유 = Map.of("a", 200L, "b", 40L, "c", 120L);
+            Random random = new Random(20260903);
+            WeightedP2c 고르개 = WeightedP2c.of(random::nextInt);
+            Map<String, Integer> 받은 = new HashMap<>(Map.of("a", 0, "b", 0, "c", 0));
+
+            int 총_요청 = 3_600;
+            for (int i = 0; i < 총_요청; i++) {
+                // **물린 것을 안 쌓는다.** 뒷단이 빨라 바로 끝나는 구간이다.
+                List<RoutingCandidate> 후보 = 여유.entrySet().stream()
+                        .map(e -> RoutingCandidate.of(e.getKey(), e.getValue(), 0))
+                        .toList();
+                받은.merge(고르개.choose(후보).orElseThrow().instanceId(), 1, Integer::sum);
+            }
+
+            // 여유가 5 배 갈리는데도 셋이 3분의 1씩 간다. 여유 비율(55.6/11.1/33.3)
+            // 과는 멀고, 균등(33.3)에는 가깝다.
+            assertThat(비율(받은, "b", 총_요청)).isBetween(0.30, 0.37);
+            assertThat(비율(받은, "a", 총_요청)).isBetween(0.30, 0.37);
+        }
+
+        /**
+         * <b>부하가 깊어질수록 여유 비율에 가까워진다</b> (G9.1 의 부하 조건).
+         *
+         * <p>얕은 쪽이 깊은 쪽보다 나으면 부등호가 뒤집힌 것이다 — 그때는
+         * 부하를 키울수록 나빠진다는 뜻이라 기준의 조건 자체가 헛말이 된다.
+         */
+        @Test
+        @DisplayName("부하가_깊을수록_여유_비율에_가까워진다")
+        void 부하가_깊을수록_여유_비율에_가까워진다() {
+            assertThat(작은_대의_편차(200)).isLessThan(작은_대의_편차(60));
+            assertThat(작은_대의_편차(60)).isLessThan(작은_대의_편차(20));
+            assertThat(작은_대의_편차(20)).isLessThan(작은_대의_편차(5));
+        }
+
+        /**
+         * <b>이 깊이가 G9.1 의 조건이다</b> — 여유 200/40/120 에서 동시 400.
+         *
+         * <p>동시 200 은 18% 로 아직 밖이다. 수렴이 느린 것이 이 규모에서
+         * 라운드로빈을 함께 두는 근거이기도 하다 (계획서 2.3).
+         */
+        @Test
+        @DisplayName("동시_400_이면_기준_안에_든다")
+        void 동시_400_이면_기준_안에_든다() {
+            assertThat(작은_대의_편차(400)).isLessThan(0.15);
+        }
+
+        /** 동시 {@code 동시성} 건이 늘 물려 있는 상태에서 작은 대의 상대 편차. */
+        private double 작은_대의_편차(int 동시성) {
+            Map<String, Long> 여유 = Map.of("a", 200L, "b", 40L, "c", 120L);
+            Map<String, Integer> 물린 = new HashMap<>(Map.of("a", 0, "b", 0, "c", 0));
+            Random random = new Random(20260903);
+            WeightedP2c 고르개 = WeightedP2c.of(random::nextInt);
+            Map<String, Integer> 받은 = new HashMap<>(Map.of("a", 0, "b", 0, "c", 0));
+            Deque<String> 진행중 = new ArrayDeque<>();
+
+            // **표본이 적으면 깊은 쪽이 손해다.** 자리를 채우는 동안의 초기
+            // 구간이 통계에 그대로 남아, 깊을수록 나쁘게 나온다.
+            int 총_요청 = 200_000;
+            for (int i = 0; i < 총_요청; i++) {
+                List<RoutingCandidate> 후보 = 여유.entrySet().stream()
+                        .map(e -> RoutingCandidate.of(e.getKey(), e.getValue(),
+                                물린.get(e.getKey())))
+                        .toList();
+                String 고른 = 고르개.choose(후보).orElseThrow().instanceId();
+                받은.merge(고른, 1, Integer::sum);
+                물린.merge(고른, 1, Integer::sum);
+                진행중.addLast(고른);
+                // **자리를 채워 둔다.** 지연이 같으면 먼저 보낸 것이 먼저 끝난다.
+                if (진행중.size() > 동시성) {
+                    물린.merge(진행중.removeFirst(), -1, Integer::sum);
+                }
+            }
+            double 기대 = 40.0 / 360.0;
+            return Math.abs(비율(받은, "b", 총_요청) - 기대) / 기대;
+        }
+
         private double 비율(Map<String, Integer> 받은, String id, int 총) {
             return (double) 받은.get(id) / 총;
         }

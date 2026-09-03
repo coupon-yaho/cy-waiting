@@ -20,10 +20,14 @@ COMPOSE="docker compose -f test/load/compose.yml -f test/load/compose.routing.ym
 
 STRATEGY="${STRATEGY:-round-robin}"
 REQUESTS="${REQUESTS:-600}"
-# **한 건씩 보낸다.** 여럿을 한꺼번에 보내면 순간 유입이 임계를 넘어 쿠폰이
-# 줄 모드로 켜지고, 그때부터 요청은 뒷단으로 안 가고 줄로 간다 — 200 대신
-# 202 가 오고 도착이 0 이 된다. 실제로 열 건씩 보내 600 건이 전부 그렇게
-# 끊겼다. 여기서 재려는 것은 판정이 아니라 **고르개의 분배**다.
+# **동시성이 판정의 일부다.** 한 건씩 보내면 물린 건수가 늘 0 이고, 그러면
+# 여유 대비 부하로 고르는 전략은 비교할 것이 없어 균등 무작위가 된다 —
+# 설계가 리틀의 법칙을 근거로 드는 것이 정확히 이 지점이다. 그 조건에서 잰
+# 값으로 "여유를 안 본다" 고 적으면 안 되는 것을 잰 것이다.
+#
+# 반대로 유입이 한 틱 몫(여유 합계)을 넘으면 쿠폰이 줄 모드로 켜져 요청이
+# 뒷단에 아예 안 닿는다. **느린 뒷단 + 낮은 동시성**이 둘 다 피하는 자리다 —
+# 물린 건수 = 유입 × 지연이므로, 지연을 올리면 유입을 안 올리고도 물린다.
 CONCURRENCY="${CONCURRENCY:-1}"
 
 # 묶음 사이에 쉬는 시간(초). 동시성을 올려 볼 때 유입 속도를 낮추는 손잡이다.
@@ -31,10 +35,12 @@ PACE_SEC="${PACE_SEC:-0}"
 COUPON="${COUPON:-c1}"
 GATEWAY="${GATEWAY:-http://localhost:18080}"
 
-# 가장 여유 있는 대에 넣는 지연. 열화한 대의 유입이 실제로 주는지를 볼 때
-# 쓴다 (9.4.1). 작은 대를 느리게 하면 원래 적게 가던 것이 더 적게 갈 뿐이라
-# 무엇이 원인인지 못 가른다.
-BIG_LATENCY_MS="${BIG_LATENCY_MS:-5}"
+# 뒷단 **셋 다**에 넣는 지연(ms). 비율을 재는 자리에서는 한 대만 느리게 하면
+# 안 된다 — 빠른 대가 물린 건수를 안 쌓아 늘 뽑히고, 그러면 고르개가 아니라
+# 지연 차이를 재게 된다. 열화 주입은 `routing-redistribute.sh` 가 따로 한다.
+#
+# 물린 건수 = 유입 × 지연이다. 지연을 올리면 유입을 안 올리고도 물린다.
+STUB_LATENCY_MS="${STUB_LATENCY_MS:-5}"
 
 # 허용 편차(%). 비워 두면 판정기의 기본값(게이트와 같은 ±15%)이 선다 —
 # 여기에 숫자를 또 적으면 게이트와 갈라질 자리가 하나 더 생긴다.
@@ -47,11 +53,13 @@ WARMUP_SEC="${WARMUP_SEC:-15}"
 
 # 이름과 보고한 여유. seeder 가 쓰는 값과 같아야 한다.
 NAMES=(backend backend-small backend-mid)
-CREDITS=(200 40 120)
+# **씨더가 쓰는 값과 같아야 한다.** 갈리면 기대값이 실제 보고와 달라져,
+# 맞게 도착한 것이 미달로 적힌다.
+CREDITS=("${BIG_CAP:-200}" "${SMALL_CAP:-40}" "${MID_CAP:-120}")
 
 # **손잡이부터 본다.** 동시성이 0 이면 나머지 연산이 0 으로 나누고, 그 오류는
 # 부하 루프 한가운데서 터져 절반쯤 보낸 상태로 끝난다.
-for setting in REQUESTS CONCURRENCY; do
+for setting in REQUESTS CONCURRENCY STUB_LATENCY_MS; do
     value=$(eval "printf '%s' \"\$$setting\"")
     case "$value" in
         ''|*[!0-9]*) echo "$setting 은 양의 정수여야 한다: '$value'"; exit 2 ;;
@@ -78,11 +86,12 @@ served() {
   printf '%d\n' "$((10#$count))"
 }
 
-echo "전략 ${STRATEGY} · 큰 대 지연 ${BIG_LATENCY_MS}ms · 부하 ${REQUESTS} 건"
+echo "전략 ${STRATEGY} · 뒷단 지연 ${STUB_LATENCY_MS}ms · 동시 ${CONCURRENCY} · 부하 ${REQUESTS} 건"
 
 # **실패하면 왜인지 보여준다.** 통째로 버리면 "겹침을 못 세웠다" 한 줄만 남고,
 # 그 한 줄로는 다시 세워 보는 것 말고 할 수 있는 일이 없다.
-if ! BIG_LATENCY_MS="$BIG_LATENCY_MS" ROUTING_STRATEGY="$STRATEGY" \
+if ! STUB_LATENCY_MS="$STUB_LATENCY_MS" ROUTING_STRATEGY="$STRATEGY" \
+     BIG_CAP="${CREDITS[0]}" SMALL_CAP="${CREDITS[1]}" MID_CAP="${CREDITS[2]}" \
      $COMPOSE up -d --wait > "$work/up.log" 2>&1; then
   echo "겹침을 못 세웠다"
   tail -20 "$work/up.log" | sed 's/^/  /'
@@ -108,19 +117,31 @@ for name in "${NAMES[@]}"; do served "$name" || exit 2; done > "$work/before"
 # 회원 번호가 겹치면 같은 사람의 재요청으로 걸러진다. 매 실행마다 다른 구간을
 # 쓴다. 앞자리가 0 이면 형식 검증에서 400 이 난다.
 base=$(( 1000000 + (RANDOM % 8000) * 1000 ))
-for i in $(seq 1 "$REQUESTS"); do
-  # **주소도 흩는다.** 한 주소로 몰아 보내면 주소별 한도에 걸려 429 가 나고,
-  # 그 요청은 뒷단에 닿지 않아 비율 표본에서 통째로 빠진다. 동시에 보내는
-  # 이상 한 주소로는 못 잰다.
-  curl -s -o /dev/null -w '%{http_code}\n' -X POST \
-    "$GATEWAY/api/v1/coupons/$COUPON/issue" \
-    -H "X-Member-Id: $((base + i))" \
-    -H "X-Member-Grade: GOLD" \
-    -H "X-Forwarded-For: 10.12.$(( i / 250 + 1 )).$(( i % 250 + 1 ))" &
-  if [ $(( i % CONCURRENCY )) -eq 0 ]; then
-    wait
+
+# **일꾼을 따로 돌린다.** 묶음마다 다 끝나기를 기다리면 그 경계에서 물린
+# 건수가 0 으로 떨어지고, 그 순간의 결정은 여유를 못 본다 — 재려던 조건이
+# 회차마다 무너진다. 일꾼 각자가 제 차례를 이어 보내야 물린 건수가 동시성
+# 근처에서 유지된다.
+#
+# **주소도 흩는다.** 한 주소로 몰아 보내면 주소별 한도에 걸려 429 가 나고,
+# 그 요청은 뒷단에 닿지 않아 표본에서 통째로 빠진다.
+worker() {
+  local slot=$1 n=$2 k i
+  for k in $(seq 1 "$n"); do
+    i=$(( (k - 1) * CONCURRENCY + slot ))
+    curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+      "$GATEWAY/api/v1/coupons/$COUPON/issue" \
+      -H "X-Member-Id: $((base + i))" \
+      -H "X-Member-Grade: GOLD" \
+      -H "X-Forwarded-For: 10.12.$(( i / 250 % 250 + 1 )).$(( i % 250 + 1 ))"
     [ "$PACE_SEC" = 0 ] || sleep "$PACE_SEC"
-  fi
+  done
+}
+
+per_worker=$(( REQUESTS / CONCURRENCY ))
+[ "$per_worker" -lt 1 ] && per_worker=1
+for slot in $(seq 1 "$CONCURRENCY"); do
+  worker "$slot" "$per_worker" &
 done > "$work/codes"
 wait
 
@@ -138,7 +159,7 @@ done
 
 echo
 echo "응답 코드: $(sort "$work/codes" | uniq -c | tr -s ' \n' ' ')"
-echo "도착 합계: $total (부하 $REQUESTS)"
+echo "도착 합계: $total (보낸 것 $(grep -c '' "$work/codes"))"
 echo
 
 # **다 통과하지 못했으면 비율을 논하지 않는다.** 일부만 닿아도 그 일부의
@@ -146,9 +167,12 @@ echo
 # 끊겼는지는 위에 이미 찍혀 있으니 여기서는 판정만 막는다.
 bad=$(grep -cv '^200$' "$work/codes")
 if [ "$bad" -ne 0 ]; then
-  echo "판정 불가 — $REQUESTS 건 중 $bad 건이 200 이 아니다. 이 실행으로는 분배를 못 잰다"
+  echo "판정 불가 — 보낸 것 중 $bad 건이 200 이 아니다. 이 실행으로는 분배를 못 잰다"
   exit 2
 fi
 
-MAX_DEVIATION="$MAX_DEVIATION" EXPECTED_TOTAL="$REQUESTS" \
+# **보낸 것과 도착한 것을 견준다.** 일꾼으로 나누면 나머지가 생겨 보낸 수가
+# 요청 수와 다를 수 있다. 요청 수로 견주면 멀쩡한 실행이 판정 불가가 된다.
+sent=$(grep -c '' "$work/codes")
+MAX_DEVIATION="$MAX_DEVIATION" EXPECTED_TOTAL="$sent" \
   test/load/evaluate-routing-ratio.sh "${specs[@]}"

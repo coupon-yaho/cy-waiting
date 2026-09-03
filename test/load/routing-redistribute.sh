@@ -33,7 +33,9 @@ case "$DIRECTION" in
 esac
 
 NAMES=(backend backend-small backend-mid)
-CREDITS=(200 40 120)
+# **씨더가 쓰는 값과 같아야 한다.** 갈리면 기대값이 실제 보고와 달라져,
+# 맞게 도착한 것이 미달로 적힌다.
+CREDITS=("${BIG_CAP:-200}" "${SMALL_CAP:-40}" "${MID_CAP:-120}")
 
 for setting in WARMUP_SEC BEFORE_SEC AFTER_SEC DEGRADED_CREDITS; do
     value=$(eval "printf '%s' \"\$$setting\"")

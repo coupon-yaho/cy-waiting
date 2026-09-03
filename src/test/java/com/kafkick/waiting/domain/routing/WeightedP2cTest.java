@@ -25,6 +25,22 @@ import org.junit.jupiter.api.Test;
 @Tag("unit")
 class WeightedP2cTest {
 
+    /**
+     * 여유 200/40/120. <b>순서를 못 박는다</b> — {@code Map.of} 는 순회 순서가
+     * 실행마다 달라, 씨드를 고정해도 후보 자리가 바뀌어 결과가 흔들린다.
+     */
+    private static final List<Map.Entry<String, Long>> 여유 = List.of(
+            Map.entry("a", 200L), Map.entry("b", 40L), Map.entry("c", 120L));
+
+    /** 같은 값을 키로 찾을 때만 쓴다. 순회하지 않으므로 순서가 상관없다. */
+    private static final Map<String, Long> 여유_별 = Map.of("a", 200L, "b", 40L, "c", 120L);
+
+    private static List<RoutingCandidate> 후보(Map<String, Integer> 물린) {
+        return 여유.stream()
+                .map(e -> RoutingCandidate.of(e.getKey(), e.getValue(), 물린.get(e.getKey())))
+                .toList();
+    }
+
     /** 뽑을 자리를 시험이 정한다. 무작위를 그대로 쓰면 무엇을 재는지가 흐려진다. */
     private static IntUnaryOperator 정해진(int... 자리들) {
         Deque<Integer> 남은 = new ArrayDeque<>();
@@ -144,24 +160,19 @@ class WeightedP2cTest {
         void 여유_비율에_가깝게_간다() {
             Map<String, Integer> 물린 = new HashMap<>(
                     Map.of("a", 0, "b", 0, "c", 0));
-            Map<String, Long> 여유 = Map.of("a", 200L, "b", 40L, "c", 120L);
             Random random = new Random(20260902);
             WeightedP2c 고르개 = WeightedP2c.of(random::nextInt);
             Map<String, Integer> 받은 = new HashMap<>(Map.of("a", 0, "b", 0, "c", 0));
 
             int 총_요청 = 3_600;
             for (int i = 0; i < 총_요청; i++) {
-                List<RoutingCandidate> 후보 = 여유.entrySet().stream()
-                        .map(e -> RoutingCandidate.of(e.getKey(), e.getValue(),
-                                물린.get(e.getKey())))
-                        .toList();
-                RoutingCandidate 고른 = 고르개.choose(후보).orElseThrow();
+                RoutingCandidate 고른 = 고르개.choose(후보(물린)).orElseThrow();
                 받은.merge(고른.instanceId(), 1, Integer::sum);
                 물린.merge(고른.instanceId(), 1, Integer::sum);
                 // 물린 것이 안 빠지면 한 번 받은 대가 영영 안 뽑힌다.
                 // 실제 부하처럼 여유에 비례한 속도로 빠뜨린다.
                 if (i % 10 == 9) {
-                    물린.replaceAll((id, n) -> Math.max(0, n - (int) (여유.get(id) / 40)));
+                    물린.replaceAll((id, n) -> Math.max(0, n - (int) (여유_별.get(id) / 40)));
                 }
             }
 
@@ -182,18 +193,15 @@ class WeightedP2cTest {
         @Test
         @DisplayName("물린_것이_없으면_균등해진다")
         void 물린_것이_없으면_균등해진다() {
-            Map<String, Long> 여유 = Map.of("a", 200L, "b", 40L, "c", 120L);
             Random random = new Random(20260903);
             WeightedP2c 고르개 = WeightedP2c.of(random::nextInt);
             Map<String, Integer> 받은 = new HashMap<>(Map.of("a", 0, "b", 0, "c", 0));
+            // **물린 것을 안 쌓는다.** 뒷단이 빨라 바로 끝나는 구간이다.
+            Map<String, Integer> 빈_부하 = Map.of("a", 0, "b", 0, "c", 0);
 
             int 총_요청 = 3_600;
             for (int i = 0; i < 총_요청; i++) {
-                // **물린 것을 안 쌓는다.** 뒷단이 빨라 바로 끝나는 구간이다.
-                List<RoutingCandidate> 후보 = 여유.entrySet().stream()
-                        .map(e -> RoutingCandidate.of(e.getKey(), e.getValue(), 0))
-                        .toList();
-                받은.merge(고르개.choose(후보).orElseThrow().instanceId(), 1, Integer::sum);
+                받은.merge(고르개.choose(후보(빈_부하)).orElseThrow().instanceId(), 1, Integer::sum);
             }
 
             // 여유가 5 배 갈리는데도 셋이 3분의 1씩 간다. 여유 비율(55.6/11.1/33.3)
@@ -219,8 +227,8 @@ class WeightedP2cTest {
         /**
          * <b>이 깊이가 G9.1 의 조건이다</b> — 여유 200/40/120 에서 동시 400.
          *
-         * <p>동시 200 은 18% 로 아직 밖이다. 수렴이 느린 것이 이 규모에서
-         * 라운드로빈을 함께 두는 근거이기도 하다 (계획서 2.3).
+         * <p>하한(아래 시험)은 320 이고 게이트는 400 으로 여유를 둔다. 실측
+         * 하네스는 이 깊이를 못 만들어, 이 조건은 지금 모의로만 선다.
          */
         @Test
         @DisplayName("동시_400_이면_기준_안에_든다")
@@ -229,24 +237,37 @@ class WeightedP2cTest {
         }
 
         /**
-         * <b>총 여유만큼 물려 있으면 작은 대가 제 여유를 넘는다</b> (2.3).
+         * <b>경계를 양쪽에서 밟는다.</b> 한쪽만 보면 부등호가 뒤집혀도 안 걸리고,
+         * 하한을 안 적으면 다음 사람이 다시 훑어 찾는다.
          *
-         * <p>비율이 어긋나는 것과 무너지는 것은 다르다. 위험한 것은 가장 작은
-         * 대가 제 여유를 넘는 것이고, 그 자리가 총 여유만큼 물려 있을 때다.
-         * 뽑기가 균등해서 작은 대가 가장 크게 출렁인다 — 평균은 맞아도 봉우리가
-         * 넘친다 (AIJ-0216).
+         * <p>동시 200 은 +18.8%, 300 은 +15.3% 로 아직 밖이고 320 에서 +14.8% 로
+         * 들어온다. 수렴이 느린 것이 이 규모에서 라운드로빈을 함께 두는
+         * 근거이기도 하다 (계획서 2.3).
          */
         @Test
-        @DisplayName("총_여유만큼_물리면_작은_대가_여유를_넘는다")
-        void 총_여유만큼_물리면_작은_대가_여유를_넘는다() {
-            assertThat(작은_대의_최대_사용률(360)).isGreaterThan(1.3);
-            // 절반만 물리면 아직 안 넘는다. 넘는 자리가 여유 근처임을 못 박는다.
-            assertThat(작은_대의_최대_사용률(180)).isLessThan(1.0);
+        @DisplayName("기준에_드는_하한은_동시_320_이다")
+        void 기준에_드는_하한은_동시_320_이다() {
+            assertThat(작은_대의_편차(320)).isLessThan(0.15);
+            assertThat(작은_대의_편차(300)).isGreaterThan(0.15);
+        }
+
+        /**
+         * <b>작은 대의 봉우리는 깊이를 따라 커진다</b> (2.3).
+         *
+         * <p>위험한 것은 가장 작은 대가 제 여유를 넘는 것이고, 그 자리가 총
+         * 여유만큼 물려 있을 때다. <b>지금 값은 단언으로 안 박는다</b> — 표본
+         * 최댓값이라 반복수를 늘리면 커지고, 고르개를 고쳐 봉우리가 내려가면
+         * 그 단언이 수정을 막는다. 실측값과 근거는 AIJ-0217 에 있다.
+         */
+        @Test
+        @DisplayName("작은_대의_봉우리는_깊을수록_커진다")
+        void 작은_대의_봉우리는_깊을수록_커진다() {
+            assertThat(작은_대의_최대_사용률(360)).isGreaterThan(작은_대의_최대_사용률(180));
+            assertThat(작은_대의_최대_사용률(360)).isLessThan(1.8);
         }
 
         /** 동시 {@code 동시성} 건이 물려 있을 때 작은 대의 <b>최대</b> 사용률. */
         private double 작은_대의_최대_사용률(int 동시성) {
-            Map<String, Long> 여유 = Map.of("a", 200L, "b", 40L, "c", 120L);
             Map<String, Integer> 물린 = new HashMap<>(Map.of("a", 0, "b", 0, "c", 0));
             Random random = new Random(20260903);
             WeightedP2c 고르개 = WeightedP2c.of(random::nextInt);
@@ -255,11 +276,7 @@ class WeightedP2cTest {
 
             int 총_요청 = 120_000;
             for (int i = 0; i < 총_요청; i++) {
-                List<RoutingCandidate> 후보 = 여유.entrySet().stream()
-                        .map(e -> RoutingCandidate.of(e.getKey(), e.getValue(),
-                                물린.get(e.getKey())))
-                        .toList();
-                String 고른 = 고르개.choose(후보).orElseThrow().instanceId();
+                String 고른 = 고르개.choose(후보(물린)).orElseThrow().instanceId();
                 물린.merge(고른, 1, Integer::sum);
                 진행중.addLast(고른);
                 if (진행중.size() > 동시성) {
@@ -275,7 +292,6 @@ class WeightedP2cTest {
 
         /** 동시 {@code 동시성} 건이 늘 물려 있는 상태에서 작은 대의 상대 편차. */
         private double 작은_대의_편차(int 동시성) {
-            Map<String, Long> 여유 = Map.of("a", 200L, "b", 40L, "c", 120L);
             Map<String, Integer> 물린 = new HashMap<>(Map.of("a", 0, "b", 0, "c", 0));
             Random random = new Random(20260903);
             WeightedP2c 고르개 = WeightedP2c.of(random::nextInt);
@@ -286,11 +302,7 @@ class WeightedP2cTest {
             // 구간이 통계에 그대로 남아, 깊을수록 나쁘게 나온다.
             int 총_요청 = 200_000;
             for (int i = 0; i < 총_요청; i++) {
-                List<RoutingCandidate> 후보 = 여유.entrySet().stream()
-                        .map(e -> RoutingCandidate.of(e.getKey(), e.getValue(),
-                                물린.get(e.getKey())))
-                        .toList();
-                String 고른 = 고르개.choose(후보).orElseThrow().instanceId();
+                String 고른 = 고르개.choose(후보(물린)).orElseThrow().instanceId();
                 받은.merge(고른, 1, Integer::sum);
                 물린.merge(고른, 1, Integer::sum);
                 진행중.addLast(고른);

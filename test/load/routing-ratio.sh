@@ -49,6 +49,16 @@ WARMUP_SEC="${WARMUP_SEC:-15}"
 NAMES=(backend backend-small backend-mid)
 CREDITS=(200 40 120)
 
+# **손잡이부터 본다.** 동시성이 0 이면 나머지 연산이 0 으로 나누고, 그 오류는
+# 부하 루프 한가운데서 터져 절반쯤 보낸 상태로 끝난다.
+for setting in REQUESTS CONCURRENCY; do
+    value=$(eval "printf '%s' \"\$$setting\"")
+    case "$value" in
+        ''|*[!0-9]*) echo "$setting 은 양의 정수여야 한다: '$value'"; exit 2 ;;
+    esac
+    [ "$((10#$value))" -gt 0 ] || { echo "$setting 은 0 보다 커야 한다"; exit 2; }
+done
+
 work=$(mktemp -d) || exit 1
 trap 'rm -rf "$work"' EXIT
 

@@ -7,6 +7,12 @@ set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
 judge=$PWD/test/load/evaluate-routing-ratio.sh
+# **물려받은 값을 버린다.** 이 셋을 밖에서 들고 오면 자기검증이 환경에 따라
+# 다른 답을 낸다 — `MIN_TOTAL=0` 이면 표본 부족 사례가 통과하고,
+# `EXPECTED_TOTAL=600` 이면 비율 사례가 엉뚱한 이유로 끝난다. 판정이 무는지를
+# 보는 자리에서 그 판정의 입력이 흔들리면 무엇을 봤는지 알 수 없다.
+unset TOLERANCE MIN_TOTAL EXPECTED_TOTAL MAX_DEVIATION
+
 fail=0
 
 # 허용치를 못 박고 부른다. 기본값에 기대면 기본값이 움직일 때 경계 사례가
@@ -69,6 +75,8 @@ check "칸이 넷이면 막는다" 2 "모양은" a:1:100:9 b:1:100
 # 오류를 내고, errexit 이 없으면 그대로 흘러 마지막 "충족" 이 찍힌다.
 TOLERANCE=oops check "허용치가 숫자가 아니면 막는다" 2 "정수여야" a:1:200 b:1:200
 MIN_TOTAL=xx check "최소 표본이 숫자가 아니면 막는다" 2 "정수여야" a:1:200 b:1:200
+# 부하 하네스가 넘기는 계약이라 여기도 같이 본다.
+EXPECTED_TOTAL=oops check "기대 총량이 숫자가 아니면 막는다" 2 "정수여야" a:1:200 b:1:200
 
 # **기본 허용치가 게이트와 같은지 본다.** 여기가 갈라지면 같은 실측을 놓고
 # 스크립트와 계획서가 다른 답을 낸다. 편차 12% 는 게이트(±15%) 안이고 자기

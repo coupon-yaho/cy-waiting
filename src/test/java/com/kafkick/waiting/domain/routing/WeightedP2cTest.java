@@ -228,6 +228,51 @@ class WeightedP2cTest {
             assertThat(작은_대의_편차(400)).isLessThan(0.15);
         }
 
+        /**
+         * <b>총 여유만큼 물려 있으면 작은 대가 제 여유를 넘는다</b> (2.3).
+         *
+         * <p>비율이 어긋나는 것과 무너지는 것은 다르다. 위험한 것은 가장 작은
+         * 대가 제 여유를 넘는 것이고, 그 자리가 총 여유만큼 물려 있을 때다.
+         * 뽑기가 균등해서 작은 대가 가장 크게 출렁인다 — 평균은 맞아도 봉우리가
+         * 넘친다 (AIJ-0216).
+         */
+        @Test
+        @DisplayName("총_여유만큼_물리면_작은_대가_여유를_넘는다")
+        void 총_여유만큼_물리면_작은_대가_여유를_넘는다() {
+            assertThat(작은_대의_최대_사용률(360)).isGreaterThan(1.3);
+            // 절반만 물리면 아직 안 넘는다. 넘는 자리가 여유 근처임을 못 박는다.
+            assertThat(작은_대의_최대_사용률(180)).isLessThan(1.0);
+        }
+
+        /** 동시 {@code 동시성} 건이 물려 있을 때 작은 대의 <b>최대</b> 사용률. */
+        private double 작은_대의_최대_사용률(int 동시성) {
+            Map<String, Long> 여유 = Map.of("a", 200L, "b", 40L, "c", 120L);
+            Map<String, Integer> 물린 = new HashMap<>(Map.of("a", 0, "b", 0, "c", 0));
+            Random random = new Random(20260903);
+            WeightedP2c 고르개 = WeightedP2c.of(random::nextInt);
+            Deque<String> 진행중 = new ArrayDeque<>();
+            double 최대 = 0;
+
+            int 총_요청 = 120_000;
+            for (int i = 0; i < 총_요청; i++) {
+                List<RoutingCandidate> 후보 = 여유.entrySet().stream()
+                        .map(e -> RoutingCandidate.of(e.getKey(), e.getValue(),
+                                물린.get(e.getKey())))
+                        .toList();
+                String 고른 = 고르개.choose(후보).orElseThrow().instanceId();
+                물린.merge(고른, 1, Integer::sum);
+                진행중.addLast(고른);
+                if (진행중.size() > 동시성) {
+                    물린.merge(진행중.removeFirst(), -1, Integer::sum);
+                }
+                // 자리를 채우는 동안은 안 센다. 그 구간은 정상 상태가 아니다.
+                if (i > 동시성) {
+                    최대 = Math.max(최대, 물린.get("b") / 40.0);
+                }
+            }
+            return 최대;
+        }
+
         /** 동시 {@code 동시성} 건이 늘 물려 있는 상태에서 작은 대의 상대 편차. */
         private double 작은_대의_편차(int 동시성) {
             Map<String, Long> 여유 = Map.of("a", 200L, "b", 40L, "c", 120L);

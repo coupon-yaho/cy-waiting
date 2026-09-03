@@ -22,15 +22,22 @@ set -uo pipefail
 EARLY_SEC="${EARLY_SEC:-5}"
 # 그 구간의 몫이 평상시의 이 비율 아래라야 "덜 받았다" 로 본다(%).
 EARLY_MAX_RATIO="${EARLY_MAX_RATIO:-70}"
-# 이 시각부터는 램프가 다 올라 제 몫을 받아야 한다(초). 램프는 60초 짜리지만
-# 선형이라 이 무렵이면 아래 하한을 넘는다.
+# 이 시각부터를 회복 구간으로 본다(초).
 LATE_SEC="${LATE_SEC:-15}"
-# 그 구간의 몫이 평상시의 이 비율 이상이라야 "올라왔다" 로 본다(%).
-LATE_MIN_RATIO="${LATE_MIN_RATIO:-70}"
+# 그 구간의 몫이 첫 구간보다 이만큼은 높아야 "올라왔다" 로 본다(%p).
+#
+# **평상시 몫의 비율로 걸지 않는다.** 램프는 60초 선형이라 15~20초의 몫은
+# 평상시의 절반쯤이다 — 거기에 "평상시의 70%" 같은 상수를 걸면 정상 실행이
+# 미달로 찍힌다. 실제로 그렇게 걸었다가 실측값(+20초 36%, 평상시 55%)이
+# 도달 불가인 것을 뒤늦게 알았다.
+#
+# 오르는 폭으로 보면 램프 길이와 창 길이가 바뀌어도 성립한다. 잡으려는 것은
+# 두 가지다 — 끝까지 굶는 것(오름 0)과 올라오다 주저앉는 것(오름 음수).
+LATE_RISE_POINTS="${LATE_RISE_POINTS:-5}"
 # 초당 도착이 이보다 적으면 그 초의 비율은 못 믿는다.
 MIN_PER_SEC="${MIN_PER_SEC:-10}"
 
-for setting in EARLY_SEC EARLY_MAX_RATIO LATE_SEC LATE_MIN_RATIO MIN_PER_SEC; do
+for setting in EARLY_SEC EARLY_MAX_RATIO LATE_SEC LATE_RISE_POINTS MIN_PER_SEC; do
     value=$(eval "printf '%s' \"\$$setting\"")
     case "$value" in
         ''|*[!0-9]*) echo "$setting 은 0 이상의 정수여야 한다: '$value'"; exit 2 ;;
@@ -88,10 +95,10 @@ if [ "$late_total" -lt "$MIN_PER_SEC" ]; then
 fi
 
 late_share=$(( late_new * 100 / late_total ))
-floor=$(( steady * LATE_MIN_RATIO / 100 ))
-echo "${LATE_SEC}초 이후 몫 ${late_share}% · 하한 ${floor}%"
+floor=$(( early_share + LATE_RISE_POINTS ))
+echo "${LATE_SEC}초 이후 몫 ${late_share}% · 첫 ${EARLY_SEC}초보다 ${LATE_RISE_POINTS}%p 이상이라야 한다 (하한 ${floor}%)"
 if [ "$late_share" -lt "$floor" ]; then
-    echo "미달 — 램프가 끝나도 제 몫을 못 받는다. 램프가 아니라 배제다"
+    echo "미달 — 시간이 지나도 안 올라온다. 램프가 아니라 배제다"
     exit 1
 fi
 echo "충족 — 처음에는 덜 받고 뒤에는 제 몫을 받는다"

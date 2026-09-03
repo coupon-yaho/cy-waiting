@@ -36,6 +36,30 @@ check "봉우리를 표본에서 고른다"    "80000 100 100"   0 "착수"
 # 못 잰 것이 "여유 있다" 로 기록된다.
 check "숫자가 아닌 표본은 막는다"  "oops"            1 "숫자가 아니다"
 
+# **p99 를 어디서 읽는지도 본다.** 요약의 모양이 두 가지라 한쪽만 보면 늘 "없음"
+# 이 찍히고, 그러면 기록이 있는 줄 알고 넘어간다. 없을 때 다른 값으로 채우지
+# 않는 것도 같이 본다 — 채우면 그 줄을 보는 사람이 p99 라고 믿는다.
+p99_check() {
+    local name=$1 json=$2 want=$3
+    printf '48000\n' > "$work/s.txt"
+    printf '%s' "$json" > "$work/summary.json"
+    local out
+    out=$(REDIS_OPS_LIMIT=80000 "$judge" "$work/s.txt" "$work/summary.json" 2>&1)
+    if printf '%s' "$out" | grep -q "응답 p99(ms) — 기록만 *$want"; then
+        echo "  ✓ $name"
+    else
+        echo "  ✗ $name — '$want' 이 안 나왔다"
+        fail=1
+    fi
+}
+
+p99_check "values 아래의 p99 를 읽는다" \
+    '{"metrics":{"http_req_duration":{"values":{"p(99)":123.4}}}}' "123.4"
+p99_check "바로 아래의 p99 도 읽는다" \
+    '{"metrics":{"http_req_duration":{"p(99)":222.5}}}' "222.5"
+p99_check "없으면 다른 값으로 안 채운다" \
+    '{"metrics":{"http_req_duration":{"values":{"p(95)":99.9}}}}' "없음"
+
 # **표본이 비면 실패다.** 프로브가 안 돌았다는 뜻이고, 그걸 "보류" 로 읽으면
 # 측정을 안 한 판이 착수 판정을 낸 것이 된다.
 : > "$work/empty.txt"

@@ -38,6 +38,17 @@ esac
 require_positive_int BEFORE_SEC AFTER_SEC DEGRADED_CREDITS || exit 2
 require_non_negative_int WARMUP_SEC || exit 2
 
+# **P2C 는 이 하네스로 못 잰다.** 아래에서 부하를 한 건씩 흘리므로 물린 건수가
+# 늘 0 에 가깝고, 그러면 여유가 비교에서 통째로 빠져 열화를 넣어도 몫이 안
+# 움직인다. 그 구간에서 재고 "P2C 는 안 줄었다" 고 적을 뻔했다 — 안 줄어든 것이
+# 아니라 잴 수 없는 조건이었다.
+case "$STRATEGY" in
+    *p2c*)
+        echo "판정 불가 — 전략 ${STRATEGY} 는 이 하네스로 못 잰다"
+        echo "  부하를 한 건씩 흘려 물린 건수가 0 에 가깝다. 이 기준의 적용 범위 밖이다"
+        exit 2 ;;
+esac
+
 work=$(mktemp -d) || exit 1
 trap 'rm -rf "$work"; kill %1 2>/dev/null' EXIT
 

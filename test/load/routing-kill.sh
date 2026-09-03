@@ -84,10 +84,20 @@ fi
 
 # **죽이기 전에 이미 새고 있으면 인과가 안 선다.** 죽인 뒤의 유출을 죽음
 # 때문이라고 적으려면 그 전이 깨끗해야 한다.
-if ! MIN_ADMITTED=1 test/load/evaluate-kill.sh "$work/before" >/dev/null 2>&1; then
+#
+# 하한 둘을 낮춰 부른다. 여기서 보려는 것은 유출뿐인데, 표본·도착 하한이 걸리면
+# 판정기가 "판정 불가" 를 내고 그것을 유출로 잘못 읽게 된다.
+MIN_SAMPLE=1 MIN_ADMITTED=1 test/load/evaluate-kill.sh "$work/before" \
+  > "$work/before.verdict" 2>&1
+before_rc=$?
+if [ "$before_rc" -ne 0 ]; then
   echo
-  echo "판정 불가 — 죽이기 전부터 유출이 있다. 죽인 뒤의 유출을 죽음 탓으로 못 돌린다"
-  MIN_ADMITTED=1 test/load/evaluate-kill.sh "$work/before" | sed 's/^/  /'
+  if [ "$before_rc" -eq 1 ]; then
+    echo "판정 불가 — 죽이기 전부터 유출이 있다. 죽인 뒤의 유출을 죽음 탓으로 못 돌린다"
+  else
+    echo "판정 불가 — 죽이기 전 표본을 못 읽었다"
+  fi
+  sed 's/^/  /' "$work/before.verdict"
   exit 2
 fi
 

@@ -51,13 +51,12 @@ require_non_negative_int STUB_LATENCY_MS WARMUP_SEC PACE_SEC || exit 2
 # 차이가 작아 여유가 비교에서 거의 빠지고, 그 실행은 고르개가 아니라 뽑기를
 # 잰다. 실제로 그 구간에서 재고 "P2C 가 여유를 안 본다" 고 기록한 적이 있다.
 #
-# 하한 320 은 모의로 잰 값이다 — 여유 200/40/120 에서 그 언저리부터 작은 대의
-# 편차가 ±15% 안에 든다. 씨드에 따라 흔들리는 자리라 시험은 200(밖)과 400(안)
-# 두 점으로 가르고, 게이트는 400 으로 여유를 둔다.
+# 이 값과 근거는 계획서 2.2 에 있다. 여기 다시 적으면 사본이 하나 더 생기고,
+# 실제로 그 사본들 사이에서 320 과 400 이 갈린 적이 있다.
 #
 # **이 하한을 낮춰서 재지 않는다.** 낮추면 다음 사람이 같은 것을 재고 같은
 # 결론을 낸다. 얕은 구간을 보고 싶으면 라운드로빈으로 잰다.
-MIN_P2C_CONCURRENCY="${MIN_P2C_CONCURRENCY:-320}"
+MIN_P2C_CONCURRENCY="${MIN_P2C_CONCURRENCY:-400}"
 case "$STRATEGY" in
     *p2c*)
         if [ "$CONCURRENCY" -lt "$MIN_P2C_CONCURRENCY" ]; then

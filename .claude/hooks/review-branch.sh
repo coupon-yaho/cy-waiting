@@ -375,12 +375,16 @@ head2 "CI 규범 검사 — 같은 스크립트"
 for check in \
     "문서 링크:.github/scripts/doc-links.sh" \
     "문서 앵커:.github/scripts/doc-anchors.sh" \
+    "셸 정적 검사:.github/scripts/shell-lint.sh" \
     "재시도 자기검증:.github/scripts/gradle-retry-selftest.sh" \
     "판정 자기검증:.github/scripts/verdict-selftest.sh" \
     "판정 배선:.github/scripts/verdict-needs.sh" \
     "판정 배선 자기검증:.github/scripts/verdict-needs-selftest.sh" \
     "샤딩 착수 판정:test/load/shard-gate-selftest.sh" \
     "유입 비율 판정:test/load/routing-ratio-selftest.sh" \
+    "재분배 판정:test/load/redistribute-selftest.sh" \
+    "종료 유출 판정:test/load/kill-selftest.sh" \
+    "롤링 배포 판정:test/load/rollout-selftest.sh" \
     "작업 로그:.github/scripts/journal-index.sh --check" \
     "워크플로 셸:.github/scripts/workflow-shell.sh" \
     "Loki 라벨:.github/scripts/loki-labels.sh" \

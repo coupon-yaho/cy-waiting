@@ -10,10 +10,10 @@ services:
   backend:
     environment:
       # 이 대가 가장 여유 있다. 나머지 둘과 비율이 갈려야 판정이 성립한다.
-      MAX_INFLIGHT: "200"
+      MAX_INFLIGHT: "${BIG_CAP:-200}"
       # **열화를 밖에서 넣는다** (9.4.1). 가장 여유 있는 대를 느리게 만들어야
       # 효과가 보인다 — 작은 대를 느리게 하면 원래 적게 가던 것이 더 적게 갈 뿐이다.
-      LATENCY_MS: "${BIG_LATENCY_MS:-5}"
+      LATENCY_MS: "${BIG_LATENCY_MS:-${STUB_LATENCY_MS:-5}}"
 
   # **작은 대.** 여유 대비 부하로 고르지 않고 물린 수만 균등화하면, 이 대가
   # 가장 먼저 무너진다 — 그것을 잡는 것이 이 시나리오의 값어치다.
@@ -21,8 +21,8 @@ services:
     build: ./backend-stub
     environment:
       PORT: "8090"
-      LATENCY_MS: "5"
-      MAX_INFLIGHT: "40"
+      LATENCY_MS: "${STUB_LATENCY_MS:-5}"
+      MAX_INFLIGHT: "${SMALL_CAP:-40}"
       SHARED_HEADER: "${SHARED_HEADER:-true}"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8090/stub/health"]
@@ -34,8 +34,8 @@ services:
     build: ./backend-stub
     environment:
       PORT: "8090"
-      LATENCY_MS: "5"
-      MAX_INFLIGHT: "120"
+      LATENCY_MS: "${STUB_LATENCY_MS:-5}"
+      MAX_INFLIGHT: "${MID_CAP:-120}"
       SHARED_HEADER: "${SHARED_HEADER:-true}"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8090/stub/health"]
@@ -62,14 +62,38 @@ services:
         # **셸 변수는 달러를 겹쳐 적는다.** 안 겹치면 compose 가 제 변수로 읽어
         # 빈 문자열로 바꾼다 — 시각이 비면 보고가 통째로 걸러지고, 가용량이
         # 하나도 안 들어와 크레딧이 하한에 머문다. 실제로 그렇게 돌았다.
+        # **여유를 매 회 다시 읽는다.** 열화를 재려면 보고 값을 실행 도중에
+        # 바꿀 수 있어야 하는데, 씨더를 재시작하면 그 몇 초가 5초 예산을 먹는다.
+        # 손잡이를 키로 두면 `SET` 한 번이 다음 틱에 반영된다.
+        # **여유의 절대값도 손잡이다.** 비율만 맞추고 작게 두면 판정이 허용하는
+        # 유입이 낮아 물린 건수가 못 쌓인다 — 여유 대비 부하로 고르는 전략을
+        # 그 상태로 재면 비교할 것이 없다. 비율은 그대로 두고 규모만 키운다.
+        redis-cli -h redis SETNX sim:credits:stub-1 ${BIG_CAP:-200}
+        redis-cli -h redis SETNX sim:credits:stub-2 ${SMALL_CAP:-40}
+        redis-cli -h redis SETNX sim:credits:stub-3 ${MID_CAP:-120}
+        # **식별자도 손잡이다** (9.4.4). 재기동한 인스턴스는 **새 식별자**로
+        # 온다는 것이 계약이고(R-3), 램프는 처음 본 식별자에만 걸린다. 고정
+        # 이름을 쓰면 재시작해도 램프를 안 타서 롤링 배포를 흉내 낼 수 없다.
+        redis-cli -h redis SETNX sim:id:stub-1 stub-1
+        lastid=""
         while :; do
           now=$$(date +%s)
-          redis-cli -h redis HSET capacity:coupon-svc:v1 stub-1 \
-            "{\"addr\":\"backend:8090\",\"credits\":200,\"ts\":$$now}" > /dev/null
+          big=$$(redis-cli -h redis GET sim:credits:stub-1)
+          small=$$(redis-cli -h redis GET sim:credits:stub-2)
+          mid=$$(redis-cli -h redis GET sim:credits:stub-3)
+          bigid=$$(redis-cli -h redis GET sim:id:stub-1)
+          # 이름이 바뀌면 옛 자리를 지운다. 안 지우면 낡음 창(3초) 동안 두
+          # 인스턴스가 같은 주소로 함께 살아 여유가 두 배로 보인다.
+          if [ "$$bigid" != "$$lastid" ] && [ -n "$$lastid" ]; then
+            redis-cli -h redis HDEL capacity:coupon-svc:v1 "$$lastid" > /dev/null
+          fi
+          lastid=$$bigid
+          redis-cli -h redis HSET capacity:coupon-svc:v1 "$$bigid" \
+            "{\"addr\":\"backend:8090\",\"credits\":$$big,\"ts\":$$now}" > /dev/null
           redis-cli -h redis HSET capacity:coupon-svc:v1 stub-2 \
-            "{\"addr\":\"backend-small:8090\",\"credits\":40,\"ts\":$$now}" > /dev/null
+            "{\"addr\":\"backend-small:8090\",\"credits\":$$small,\"ts\":$$now}" > /dev/null
           redis-cli -h redis HSET capacity:coupon-svc:v1 stub-3 \
-            "{\"addr\":\"backend-mid:8090\",\"credits\":120,\"ts\":$$now}" > /dev/null
+            "{\"addr\":\"backend-mid:8090\",\"credits\":$$mid,\"ts\":$$now}" > /dev/null
           sleep 1
         done
 

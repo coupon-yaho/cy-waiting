@@ -5,30 +5,26 @@
 # 통과하고, 늘 "미달" 을 내면 맞는 구현도 못 넘는다. 둘 다 조용히 일어난다.
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 1
+. test/load/selftest-lib.sh
 
-judge=$PWD/test/load/evaluate-routing-ratio.sh
+SELFTEST_JUDGE=$PWD/test/load/evaluate-routing-ratio.sh
 # **물려받은 값을 버린다.** 이 셋을 밖에서 들고 오면 자기검증이 환경에 따라
 # 다른 답을 낸다 — `MIN_TOTAL=0` 이면 표본 부족 사례가 통과하고,
 # `EXPECTED_TOTAL=600` 이면 비율 사례가 엉뚱한 이유로 끝난다. 판정이 무는지를
 # 보는 자리에서 그 판정의 입력이 흔들리면 무엇을 봤는지 알 수 없다.
 unset TOLERANCE MIN_TOTAL EXPECTED_TOTAL MAX_DEVIATION
 
-fail=0
 
 # 허용치를 못 박고 부른다. 기본값에 기대면 기본값이 움직일 때 경계 사례가
 # 조용히 다른 것을 재게 된다.
+#
+# **대조는 공통부가 한다.** 넷 중 이 하나만 제 사본을 들고 있었고, 사본이
+# 있으면 그중 하나만 헐거워져도 알 수 없다 — 공통부를 뺀 이유가 그것이다.
 check() {
     local name=$1 want_rc=$2 want_word=$3; shift 3
-    local out rc
-    out=$(MAX_DEVIATION="${TOLERANCE:-10}" MIN_TOTAL="${MIN_TOTAL:-100}" \
-          EXPECTED_TOTAL="${EXPECTED_TOTAL:-}" "$judge" "$@" 2>&1); rc=$?
-    if [ "$rc" -eq "$want_rc" ] && printf '%s' "$out" | grep -q "$want_word"; then
-        echo "  ✓ $name"
-    else
-        echo "  ✗ $name — 종료 $rc (기대 $want_rc), '$want_word' 없음"
-        printf '%s\n' "$out" | sed 's/^/      /'
-        fail=1
-    fi
+    MAX_DEVIATION="${TOLERANCE:-10}" MIN_TOTAL="${MIN_TOTAL:-100}" \
+        EXPECTED_TOTAL="${EXPECTED_TOTAL:-}" \
+        run_case "$name" "$want_rc" "$want_word" -- "$@"
 }
 
 echo "유입 비율 판정 자기검증"
@@ -81,13 +77,6 @@ EXPECTED_TOTAL=oops check "기대 총량이 숫자가 아니면 막는다" 2 "�
 # **기본 허용치가 게이트와 같은지 본다.** 여기가 갈라지면 같은 실측을 놓고
 # 스크립트와 계획서가 다른 답을 낸다. 편차 12% 는 게이트(±15%) 안이고 자기
 # 검증이 쓰는 10% 밖이다 — 기본값이 무엇인지가 결과를 가른다.
-out=$("$judge" a:1:112 b:1:100 c:1:88 2>&1)
-if printf '%s' "$out" | grep -q "충족"; then
-    echo "  ✓ 기본 허용치가 게이트와 같다 (±15%)"
-else
-    echo "  ✗ 기본 허용치가 게이트(±15%)와 다르다"
-    printf '%s\n' "$out" | sed 's/^/      /'
-    fail=1
-fi
+run_case "기본 허용치가 게이트와 같다 (±15%)" 0 "충족" -- a:1:112 b:1:100 c:1:88
 
-exit $fail
+exit $selftest_failed

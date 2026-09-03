@@ -69,6 +69,11 @@ jobs:
       - name: 재분배 판정 자기검증
         run: test/load/redistribute-selftest.sh
 
+      # 유출 판정이 헐거우면 사용자가 장애를 봐도 초록이 뜬다. 그 초록을
+      # 근거로 재시도 배선을 안 넣게 된다.
+      - name: 종료 유출 판정 자기검증
+        run: test/load/kill-selftest.sh
+
       # 리포트가 "4개 시나리오" 라고 적은 채 여덟 개를 돌고 있었다. 사본이
       # 생기면 갈라지고, 갈라진 쪽을 보는 사람은 안 돈 것을 돌았다고 읽는다.
       - name: nightly 시나리오 수가 리포트와 맞는가

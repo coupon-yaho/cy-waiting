@@ -17,7 +17,7 @@ BIG_CAP="${BIG_CAP:-200}"
 SMALL_CAP="${SMALL_CAP:-40}"
 MID_CAP="${MID_CAP:-120}"
 
-. test/load/routing-lib.sh
+. test/load/routing-lib.sh || exit 2
 
 WARMUP_SEC="${WARMUP_SEC:-15}"
 BEFORE_SEC="${BEFORE_SEC:-5}"
@@ -35,7 +35,8 @@ case "$DIRECTION" in
     *) echo "DIRECTION 은 degrade 또는 recover 여야 한다: '$DIRECTION'"; exit 2 ;;
 esac
 
-require_positive_int WARMUP_SEC BEFORE_SEC AFTER_SEC DEGRADED_CREDITS || exit 2
+require_positive_int BEFORE_SEC AFTER_SEC DEGRADED_CREDITS || exit 2
+require_non_negative_int WARMUP_SEC || exit 2
 
 work=$(mktemp -d) || exit 1
 trap 'rm -rf "$work"; kill %1 2>/dev/null' EXIT
@@ -45,7 +46,7 @@ if [ "$DIRECTION" = degrade ]; then
 else
   START_CREDITS=$DEGRADED_CREDITS; END_CREDITS=$BIG_CAP
 fi
-echo "전략 ${STRATEGY} · 큰 대를 ${START_CREDITS} → ${END_CREDITS} 로 바꾼다"
+echo "$(banner) · 큰 대를 ${START_CREDITS} → ${END_CREDITS} 로 바꾼다"
 
 bring_up "$work/up.log" || exit 2
 wait_for_ramp || exit 2

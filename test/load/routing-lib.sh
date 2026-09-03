@@ -26,11 +26,14 @@ NAMES=(backend backend-small backend-mid)
 # 닿고, **아무것도 안 잰 실행이 나온다.** 실제로 그렇게 한 번 돌았다.
 #
 # 부르는 쪽이 이 파일을 읽기 **전에** 셋을 정한다.
+#
+# **0 도 안 받는다.** 여유가 0 인 대는 고르개가 후보에서 빼므로, 그 값으로
+# 세운 겹침은 재려던 것을 아예 안 잰다.
 for _cap in BIG_CAP SMALL_CAP MID_CAP; do
     _value=$(eval "printf '%s' \"\${$_cap:-}\"")
     case "$_value" in
-        ''|*[!0-9]*)
-            echo "$_cap 을 정하고 routing-lib.sh 를 읽어야 한다: '$_value'" >&2
+        ''|*[!0-9]*|0)
+            echo "$_cap 은 1 이상의 정수여야 한다. routing-lib.sh 를 읽기 전에 정한다: '$_value'" >&2
             return 2 ;;
     esac
 done
@@ -40,16 +43,43 @@ COUPON="${COUPON:-c1}"
 GATEWAY="${GATEWAY:-http://localhost:18080}"
 STRATEGY="${STRATEGY:-round-robin}"
 STUB_LATENCY_MS="${STUB_LATENCY_MS:-5}"
+# 큰 대의 지연은 따로 둘 수 있다 — 열화를 지연으로 넣을 때 쓴다. 겹침이 그렇게
+# 읽으므로 여기서도 같은 기본값을 둔다.
+BIG_LATENCY_MS="${BIG_LATENCY_MS:-$STUB_LATENCY_MS}"
+
+# 실행 조건 한 줄. **이 문장이 저널과 게이트 표에 그대로 옮겨 붙는다** — 배너와
+# 실제 겹침이 갈리면 조건을 잘못 적은 실측이 남는다. 그래서 한 곳에서 만든다.
+banner() {
+    local latency="${STUB_LATENCY_MS}ms"
+    [ "$BIG_LATENCY_MS" = "$STUB_LATENCY_MS" ] \
+        || latency="${STUB_LATENCY_MS}ms(큰 대 ${BIG_LATENCY_MS}ms)"
+    printf '전략 %s · 여유 %s/%s/%s · 뒷단 지연 %s' \
+        "$STRATEGY" "$BIG_CAP" "$SMALL_CAP" "$MID_CAP" "$latency"
+}
 
 # 설정값이 정수인지 본다. 숫자가 아니면 셸 산술이 0 으로 읽어, 못 잰 것이
 # 그럴듯한 값으로 나온다.
-require_positive_int() {
+#
+# **둘로 나눠 둔다.** 하나로 두면 이름이 "양수" 라고 말하면서 0 을 통과시키게
+# 되고, 그러면 부르는 쪽이 이름을 믿고 `-gt 0` 을 따로 안 적는다. 실제로
+# `WORKERS=0` 이 그렇게 지나가 요청을 한 건도 안 보내는 실행이 나올 수 있었다.
+require_non_negative_int() {
     local name value
     for name in "$@"; do
         value=$(eval "printf '%s' \"\$$name\"")
         case "$value" in
             ''|*[!0-9]*) echo "$name 은 0 이상의 정수여야 한다: '$value'" >&2; return 2 ;;
         esac
+    done
+}
+
+# 0 이면 재는 것 자체가 성립하지 않는 값에 쓴다 — 보낼 건수, 일꾼 수, 창 길이.
+require_positive_int() {
+    local name value
+    require_non_negative_int "$@" || return 2
+    for name in "$@"; do
+        value=$(eval "printf '%s' \"\$$name\"")
+        [ "$value" -gt 0 ] || { echo "$name 은 1 이상이어야 한다: '$value'" >&2; return 2; }
     done
 }
 
@@ -95,6 +125,7 @@ bring_up() {
     $COMPOSE exec -T redis redis-cli SET sim:id:stub-1 stub-1 >/dev/null 2>&1
 
     if ! ROUTING_STRATEGY="$STRATEGY" STUB_LATENCY_MS="$STUB_LATENCY_MS" \
+         BIG_LATENCY_MS="$BIG_LATENCY_MS" \
          BIG_CAP="$BIG_CAP" SMALL_CAP="$SMALL_CAP" MID_CAP="$MID_CAP" \
          $COMPOSE up -d --wait >> "$log" 2>&1; then
         echo "겹침을 못 세웠다" >&2; tail -20 "$log" | sed 's/^/  /' >&2

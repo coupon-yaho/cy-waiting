@@ -18,7 +18,7 @@ BIG_CAP="${BIG_CAP:-2000}"
 SMALL_CAP="${SMALL_CAP:-400}"
 MID_CAP="${MID_CAP:-1200}"
 
-. test/load/routing-lib.sh
+. test/load/routing-lib.sh || exit 2
 
 # 죽일 대. 가장 여유 있는 대를 죽여야 유출이 있으면 드러난다.
 VICTIM="${VICTIM:-backend}"
@@ -31,13 +31,18 @@ AFTER_SEC="${AFTER_SEC:-12}"
 # 하나로는 창 안에 표본이 안 쌓인다 — 12초에 네 건을 보낸 적이 있다.
 WORKERS="${WORKERS:-12}"
 
-require_positive_int BEFORE_SEC AFTER_SEC WORKERS BIG_CAP SMALL_CAP MID_CAP || exit 2
+# 죽이기 전 희생양에 이만큼은 가 있어야 한다. 안 가고 있었으면 죽여도 아무
+# 경로를 안 밟는다.
+MIN_VICTIM="${MIN_VICTIM:-20}"
+
+require_positive_int BEFORE_SEC AFTER_SEC WORKERS || exit 2
+require_non_negative_int MIN_VICTIM || exit 2
 
 work=$(mktemp -d) || exit 1
 # 죽인 대를 반드시 되살린다. 안 살리면 다음 실행이 두 대로 시작한다.
 trap '$COMPOSE start "$VICTIM" >/dev/null 2>&1; rm -rf "$work"' EXIT
 
-echo "전략 ${STRATEGY} · ${VICTIM} 을 죽이고 ${AFTER_SEC}초 동안 응답을 센다"
+echo "$(banner) · 일꾼 ${WORKERS} · ${VICTIM} 을 죽이고 ${AFTER_SEC}초 동안 응답을 센다"
 
 bring_up "$work/up.log" || exit 2
 wait_for_ramp || exit 2
@@ -58,14 +63,38 @@ drive() {
   wait
 }
 
+# **죽일 대가 원래 트래픽을 받고 있었는지 본다.** 그 대가 후보에서 이미
+# 빠져 있으면 죽여도 유출이 0 이고, 나머지 둘이 최소 도착 수를 채워 "충족" 이
+# 난다 — 죽은 대로 가는 경로를 한 번도 안 밟은 실행이다. 판정기의 최소 도착
+# 수는 **세 대 합계**라 이것을 못 가른다.
+victim_before=$(served "$VICTIM") || exit 2
 drive "$work/before" "$BEFORE_SEC" 5000000
+victim_after=$(served "$VICTIM") || exit 2
+victim_delta=$(( victim_after - victim_before ))
+
+echo
+echo "  죽이기 전: $(sort "$work/before" | uniq -c | tr -s ' \n' ' ')"
+echo "  죽이기 전 ${VICTIM} 도착: ${victim_delta} 건"
+
+if [ "$victim_delta" -lt "$MIN_VICTIM" ]; then
+  echo
+  echo "판정 불가 — 죽이기 전 ${VICTIM} 에 ${victim_delta} 건만 갔다. 이 대는 원래 트래픽을 안 받는다"
+  exit 2
+fi
+
+# **죽이기 전에 이미 새고 있으면 인과가 안 선다.** 죽인 뒤의 유출을 죽음
+# 때문이라고 적으려면 그 전이 깨끗해야 한다.
+if ! MIN_ADMITTED=1 test/load/evaluate-kill.sh "$work/before" >/dev/null 2>&1; then
+  echo
+  echo "판정 불가 — 죽이기 전부터 유출이 있다. 죽인 뒤의 유출을 죽음 탓으로 못 돌린다"
+  MIN_ADMITTED=1 test/load/evaluate-kill.sh "$work/before" | sed 's/^/  /'
+  exit 2
+fi
+
 $COMPOSE kill "$VICTIM" >/dev/null 2>&1 || { echo "$VICTIM 을 못 죽였다"; exit 2; }
 drive "$work/after" "$AFTER_SEC" 6000000
 
 echo
-for phase in before after; do
-  label=$([ "$phase" = before ] && echo "죽이기 전" || echo "죽인 뒤")
-  echo "  $label: $(sort "$work/$phase" | uniq -c | tr -s ' \n' ' ')"
-done
+echo "  죽인 뒤: $(sort "$work/after" | uniq -c | tr -s ' \n' ' ')"
 echo
 test/load/evaluate-kill.sh "$work/after"

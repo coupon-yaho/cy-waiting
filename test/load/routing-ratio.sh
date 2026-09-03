@@ -20,7 +20,7 @@ BIG_CAP="${BIG_CAP:-200}"
 SMALL_CAP="${SMALL_CAP:-40}"
 MID_CAP="${MID_CAP:-120}"
 
-. test/load/routing-lib.sh
+. test/load/routing-lib.sh || exit 2
 
 REQUESTS="${REQUESTS:-600}"
 
@@ -44,13 +44,33 @@ MAX_DEVIATION="${MAX_DEVIATION:-}"
 # 램프가 오른 뒤 배분이 한두 틱 더 돌 틈.
 WARMUP_SEC="${WARMUP_SEC:-15}"
 
-require_positive_int REQUESTS CONCURRENCY STUB_LATENCY_MS WARMUP_SEC || exit 2
-[ "$CONCURRENCY" -gt 0 ] || { echo "CONCURRENCY 는 0 보다 커야 한다"; exit 2; }
+require_positive_int REQUESTS CONCURRENCY || exit 2
+require_non_negative_int STUB_LATENCY_MS WARMUP_SEC PACE_SEC || exit 2
+
+# **얕은 부하로 P2C 를 재지 않는다.** 물린 건수가 이보다 얕으면 세 대의 부하율
+# 차이가 작아 여유가 비교에서 거의 빠지고, 그 실행은 고르개가 아니라 뽑기를
+# 잰다. 실제로 그 구간에서 재고 "P2C 가 여유를 안 본다" 고 기록한 적이 있다.
+#
+# 하한 320 은 모의로 잰 값이다 — 여유 200/40/120 에서 작은 대의 편차가 그
+# 깊이부터 ±15% 안에 든다. 시험 `기준에_드는_하한은_동시_320_이다` 가 붙들고
+# 있고, 게이트는 400 으로 여유를 둔다.
+#
+# **이 하한을 낮춰서 재지 않는다.** 낮추면 다음 사람이 같은 것을 재고 같은
+# 결론을 낸다. 얕은 구간을 보고 싶으면 라운드로빈으로 잰다.
+MIN_P2C_CONCURRENCY="${MIN_P2C_CONCURRENCY:-320}"
+case "$STRATEGY" in
+    *p2c*)
+        if [ "$CONCURRENCY" -lt "$MIN_P2C_CONCURRENCY" ]; then
+            echo "판정 불가 — 전략 ${STRATEGY} 를 동시 ${CONCURRENCY} 로 재면 이 기준의 적용 범위 밖이다"
+            echo "  물린 건수가 ${MIN_P2C_CONCURRENCY} 이상이어야 여유가 비교에 들어온다"
+            exit 2
+        fi ;;
+esac
 
 work=$(mktemp -d) || exit 1
 trap 'rm -rf "$work"' EXIT
 
-echo "전략 ${STRATEGY} · 뒷단 지연 ${STUB_LATENCY_MS}ms · 동시 ${CONCURRENCY} · 부하 ${REQUESTS} 건"
+echo "$(banner) · 동시 ${CONCURRENCY} · 부하 ${REQUESTS} 건"
 
 bring_up "$work/up.log" || exit 2
 wait_for_ramp || exit 2
@@ -75,10 +95,17 @@ worker() {
   done
 }
 
+# **주문한 만큼 정확히 보낸다.** 절삭한 몫을 그대로 쓰면 `REQUESTS=600
+# CONCURRENCY=7` 에서 595 건만 나가고, 그 595 를 기준으로 판정이 성립한다 —
+# "넣은 부하가 다 닿았는가" 라는 가드가 그만큼 헐거워진다. 나머지는 앞쪽
+# 일꾼들이 한 건씩 더 가져간다.
 per_worker=$(( REQUESTS / CONCURRENCY ))
-[ "$per_worker" -lt 1 ] && per_worker=1
+remainder=$(( REQUESTS % CONCURRENCY ))
 for slot in $(seq 1 "$CONCURRENCY"); do
-  worker "$slot" "$per_worker" &
+  n=$per_worker
+  [ "$slot" -le "$remainder" ] && n=$(( n + 1 ))
+  [ "$n" -gt 0 ] || continue
+  worker "$slot" "$n" &
 done > "$work/codes"
 wait
 
@@ -97,8 +124,15 @@ done
 sent=$(grep -c '' "$work/codes")
 echo
 echo "응답 코드: $(sort "$work/codes" | uniq -c | tr -s ' \n' ' ')"
-echo "도착 합계: $total (보낸 것 $sent)"
+echo "도착 합계: $total (보낸 것 $sent / 주문 $REQUESTS)"
 echo
+
+# 보낸 것이 주문과 다르면 하네스가 고장 난 것이다. 그 실행의 비율은 무엇을
+# 잰 것인지 알 수 없다.
+if [ "$sent" -ne "$REQUESTS" ]; then
+  echo "판정 불가 — 주문 ${REQUESTS} 건 중 ${sent} 건만 나갔다. 하네스가 고장 났다"
+  exit 2
+fi
 
 # **다 통과하지 못했으면 비율을 논하지 않는다.** 일부만 닿아도 그 일부의
 # 비율은 맞을 수 있어서, 못 잰 실행이 충족으로 적힌다.
@@ -108,5 +142,5 @@ if [ "$bad" -ne 0 ]; then
   exit 2
 fi
 
-MAX_DEVIATION="$MAX_DEVIATION" EXPECTED_TOTAL="$sent" \
+MAX_DEVIATION="$MAX_DEVIATION" EXPECTED_TOTAL="$REQUESTS" \
   test/load/evaluate-routing-ratio.sh "${specs[@]}"

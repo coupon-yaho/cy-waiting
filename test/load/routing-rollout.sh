@@ -16,20 +16,19 @@ BIG_CAP="${BIG_CAP:-2000}"
 SMALL_CAP="${SMALL_CAP:-400}"
 MID_CAP="${MID_CAP:-1200}"
 
-. test/load/routing-lib.sh
-
+. test/load/routing-lib.sh || exit 2
 
 BEFORE_SEC="${BEFORE_SEC:-4}"
 AFTER_SEC="${AFTER_SEC:-20}"
 # 새로 뜬 것처럼 보이게 할 식별자. 앞 실행과 겹치면 램프를 안 탄다.
 FRESH_ID="${FRESH_ID:-stub-1-$$}"
 
-require_positive_int BEFORE_SEC AFTER_SEC BIG_CAP SMALL_CAP MID_CAP || exit 2
+require_positive_int BEFORE_SEC AFTER_SEC || exit 2
 
 work=$(mktemp -d) || exit 1
 trap 'rm -rf "$work"; kill %1 2>/dev/null' EXIT
 
-echo "전략 ${STRATEGY} · 큰 대를 ${FRESH_ID} 로 갈아 끼운다"
+echo "$(banner) · 큰 대를 ${FRESH_ID} 로 갈아 끼운다"
 
 bring_up "$work/up.log" || exit 2
 wait_for_ramp || exit 2

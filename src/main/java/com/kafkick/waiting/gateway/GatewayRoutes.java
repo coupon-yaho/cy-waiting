@@ -1,6 +1,11 @@
 package com.kafkick.waiting.gateway;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import com.kafkick.waiting.routing.RoutingProperties;
+import io.netty.channel.ConnectTimeoutException;
+import java.net.ConnectException;
+import org.springframework.cloud.gateway.filter.factory.RetryGatewayFilterFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.cloud.gateway.filter.GatewayFilter;
@@ -119,6 +124,40 @@ public class GatewayRoutes {
     }
 
     /**
+     * 연결이 안 된 인스턴스를 다음 대로 넘긴다 (9.3.11 · 9.3.12).
+     *
+     * <p><b>연결 단계 실패에만 건다.</b> 발급은 멱등이 아니라, 요청이 뒷단에
+     * 닿은 뒤에 재시도하면 그 한 건이 곧 초과 발급이다 (불변식 2).
+     */
+    // 상태 코드로는 안 건다. 5xx 는 뒷단이 요청을 받은 뒤에 낸 답이고, 그
+    // 시점에는 이미 재고가 움직였을 수 있다. 연결이 안 됐다는 것만이
+    // "그 요청은 아무 일도 안 했다" 를 보장한다.
+    private GatewayFilter connectRetry(RetryGatewayFilterFactory retries) {
+        return retries.apply(connectRetryConfig());
+    }
+
+    /**
+     * 연결 단계 실패에만 무는 설정.
+     *
+     * <p><b>따로 꺼내 둔다.</b> 필터로 감싸고 나면 무엇에 무는지가 밖에서 안
+     * 보여, 상태 기반 재시도가 켜져도 시험이 못 잡는다.
+     */
+    static RetryGatewayFilterFactory.RetryConfig connectRetryConfig() {
+        RetryGatewayFilterFactory.RetryConfig config =
+                new RetryGatewayFilterFactory.RetryConfig();
+        // 인스턴스가 열 대여도 한 번이면 충분하다. 여러 번 돌면 죽은 뒷단에
+        // 요청 하나가 그만큼 오래 매달려 격벽만 채운다.
+        config.setRetries(1);
+        config.allMethods();
+        // **상태 기반 재시도를 끈다.** 기본값이 5xx 계열이라 안 비우면
+        // 발급이 답을 받은 뒤에도 다시 가고, 그 한 건이 곧 초과 발급이다.
+        config.setSeries();
+        config.setStatuses();
+        config.setExceptions(ConnectException.class, ConnectTimeoutException.class);
+        return config;
+    }
+
+    /**
      * 걸려 있는 건수를 값으로 냅니다.
      *
      * <p>제어 평면이 종료할 때 이 값을 봅니다. <b>타입이 아니라 값으로 냅니다</b> —
@@ -140,12 +179,26 @@ public class GatewayRoutes {
                 backend.responseTimeout(), meters);
     }
 
+    /**
+     * 뒷단으로 가는 주소.
+     *
+     * <p>라우팅이 켜지면 {@code lb://} 로 보낸다 — 균형기가 인스턴스를 고른다.
+     * <b>끄면 단일 주소로 돌아간다</b>: 설정 한 줄이 롤백 수단이다 (Phase 9 5절).
+     */
+    private String backendUri(Backend backend, ObjectProvider<RoutingProperties> routing) {
+        RoutingProperties properties = routing.getIfAvailable();
+        return properties == null || !properties.enabled()
+                ? backend.uri() : "lb://" + properties.serviceId();
+    }
+
     @Bean
     public RouteLocator routes(RouteLocatorBuilder builder, Backend backend,
             AdmissionGatewayFilter admission, QueryCoalescingFilter coalescing,
             SoldOutObserver soldOut, SpringCloudCircuitBreakerFilterFactory breakers,
-            MeterRegistry meters) {
+            MeterRegistry meters, ObjectProvider<RoutingProperties> routing,
+            RetryGatewayFilterFactory retries) {
         BodyDeadline bodyDeadline = bodyDeadline(backend, meters);
+        String uri = backendUri(backend, routing);
         return builder.routes()
                 .route("issue", r -> r
                         .method(HttpMethod.POST)
@@ -157,6 +210,9 @@ public class GatewayRoutes {
                         .filters(f -> stripSpoofableClientIp(f)
                                 .filter(admission, FilterOrder.ROUTE_ADMISSION)
                                 .filter(circuit(breakers), FilterOrder.ROUTE_CIRCUIT)
+                                // 연결이 안 된 인스턴스는 다음 대로 넘긴다.
+                                // 죽은 주소로 간 요청이 5xx 로 새면 안 된다 (G9.11).
+                                .filter(connectRetry(retries), FilterOrder.ROUTE_RETRY)
                                 // **발급에만 붙인다.** 조회 응답에는 매진 코드가
                                 // 재고 정보로 실릴 수 있고, 그건 관찰이 아니다.
                                 .filter(soldOut, FilterOrder.ROUTE_SOLD_OUT)
@@ -169,7 +225,7 @@ public class GatewayRoutes {
                         // 서킷에 가는 것은 오류가 아니라 취소이고, 취소는 창에
                         // 안 쌓인다 — 멎은 뒷단의 서킷이 영영 안 열린다.
                         .metadata(RESPONSE_TIMEOUT_ATTR, backend.responseTimeout().toMillis())
-                        .uri(backend.uri()))
+                        .uri(uri))
                 .route("coupons", r -> r
                         .method(HttpMethod.GET)
                         .and().path("/api/v1/coupons", "/api/v1/coupons/" + COUPON_ID)
@@ -184,7 +240,7 @@ public class GatewayRoutes {
                         // 모든 조회가 끝나지 않는 것에 붙고, 뒷단이 살아나도
                         // 게이트웨이를 재시작해야 풀린다.
                         .metadata(RESPONSE_TIMEOUT_ATTR, backend.responseTimeout().toMillis())
-                        .uri(backend.uri()))
+                        .uri(uri))
                 .build();
     }
 }

@@ -416,6 +416,15 @@ if ! cp "$ROOT/.github/scripts/"*.sh "$clean_repo/.github/scripts/" 2>/dev/null 
     printf '  FAIL 임시 저장소에 CI 스크립트를 못 넣었다 — 아래 검사가 무의미하다\n'
     fail=$((fail + 1))
 fi
+# **부하 시험 스크립트도 같이 넣는다.** 러너가 부르는 검사 중 그 경로에 있는
+# 것이 있어, 안 넣으면 러너가 "실행할 수 없다" 로 막는다 — 재려던 것이 아니다.
+mkdir -p "$clean_repo/test/load"
+if ! cp "$ROOT/test/load/"*.sh "$clean_repo/test/load/" 2>/dev/null \
+    || ! chmod +x "$clean_repo/test/load/"*.sh 2>/dev/null; then
+    printf '  FAIL 임시 저장소에 부하 시험 스크립트를 못 넣었다 — 아래 검사가 무의미하다\n'
+    fail=$((fail + 1))
+fi
+
 # **액션도 같이 넣는다.** 판정 자기검증이 액션이 스크립트를 부르는지까지 보므로,
 # 스크립트만 넣으면 깨끗한 케이스가 그 이유로 막힌다 — 재려던 것이 아니다.
 if [[ -d "$ROOT/.github/actions" ]]; then

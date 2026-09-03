@@ -16,7 +16,14 @@ plugins {
 }
 
 group = 'com.kafkick'
-version = '0.5.0'
+version = '0.6.0'
+
+// **산출물 이름에 버전을 안 싣는다.** 실으면 Dockerfile 과 부하 시험 구성이 매
+// 릴리스마다 같이 고쳐야 하고, 한 곳을 빠뜨리면 없는 파일을 가리킨 채 조용히 깨진다.
+// 버전은 매니페스트(`Implementation-Version`)에 그대로 실린다.
+tasks.named('bootJar') {
+    archiveFileName = 'waiting.jar'
+}
 
 java {
     toolchain {
@@ -87,6 +94,9 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-data-redis-reactive'
     // 서킷·타임아웃 (Phase 6.1·6.2). 판은 spring-cloud BOM 이 관리한다.
     implementation 'org.springframework.cloud:spring-cloud-starter-circuitbreaker-reactor-resilience4j'
+    // 가용량 비율 라우팅 (Phase 9.1.2). **디스커버리는 안 붙인다** — 인스턴스
+    // 목록은 가용량 보고가 스냅샷에 실어 오고, 공급자는 그것을 로컬에서 읽는다.
+    implementation 'org.springframework.cloud:spring-cloud-starter-loadbalancer'
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     // 도메인 순수성은 리뷰로 못 지킨다. 한 번 깨지면 조용히 번진다.

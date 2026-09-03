@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.kafkick.waiting.control.SnapshotHolder;
+import com.kafkick.waiting.routing.RoutingProperties;
+import org.springframework.beans.factory.ObjectProvider;
 import com.kafkick.waiting.domain.admission.AdmissionDecider;
 import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
 import com.kafkick.waiting.domain.queue.EntryToken;
@@ -38,6 +40,9 @@ import org.springframework.cloud.client.circuitbreaker.ReactiveCircuitBreakerFac
 import org.springframework.cloud.circuitbreaker.resilience4j.ReactiveResilience4JCircuitBreakerFactory;
 import org.springframework.cloud.circuitbreaker.resilience4j.Resilience4JConfigurationProperties;
 import org.springframework.cloud.gateway.filter.factory.RemoveRequestHeaderGatewayFilterFactory;
+import io.netty.channel.ConnectTimeoutException;
+import java.net.ConnectException;
+import org.springframework.cloud.gateway.filter.factory.RetryGatewayFilterFactory;
 import org.springframework.cloud.gateway.filter.factory.SpringCloudCircuitBreakerResilience4JFilterFactory;
 import org.springframework.cloud.gateway.handler.predicate.MethodRoutePredicateFactory;
 import org.springframework.cloud.gateway.handler.predicate.PathRoutePredicateFactory;
@@ -86,7 +91,37 @@ class GatewayRoutesTest {
             SoldOutObserver.ofPublishedAt(
                     SoldOutCache.standard(), Instant::now, new SimpleMeterRegistry()),
             컨텍스트.getBean(SpringCloudCircuitBreakerResilience4JFilterFactory.class),
-            new SimpleMeterRegistry());
+            new SimpleMeterRegistry(), 라우팅_없음(), new RetryGatewayFilterFactory());
+
+    /** 라우팅을 안 켠 경우. 기존 시험들이 보는 것은 단일 주소 그대로다. */
+    private static ObjectProvider<RoutingProperties> 라우팅_없음() {
+        return 라우팅(null);
+    }
+
+    /** 배선만 넘긴다. 컨텍스트를 띄우지 않고 켠 것과 끈 것을 나란히 본다. */
+    private static ObjectProvider<RoutingProperties> 라우팅(RoutingProperties properties) {
+        return new ObjectProvider<>() {
+            @Override
+            public RoutingProperties getObject() {
+                return properties;
+            }
+
+            @Override
+            public RoutingProperties getObject(Object... args) {
+                return properties;
+            }
+
+            @Override
+            public RoutingProperties getIfAvailable() {
+                return properties;
+            }
+
+            @Override
+            public RoutingProperties getIfUnique() {
+                return properties;
+            }
+        };
+    }
 
     /**
      * 재료를 한 번도 못 받은 홀더. 이 시험은 <b>라우트가 무엇을 잡는가</b>만 보므로
@@ -606,5 +641,120 @@ class GatewayRoutesTest {
     @DisplayName("판정과_서킷의_앞뒤가_값으로_정해져_있다")
     void 판정과_서킷의_앞뒤가_값으로_정해져_있다() {
         assertThat(FilterOrder.ROUTE_ADMISSION).isLessThan(FilterOrder.ROUTE_CIRCUIT);
+    }
+
+    private RouteLocator 라우터(RoutingProperties routing) {
+        return new GatewayRoutes().routes(
+                new RouteLocatorBuilder(컨텍스트),
+                new GatewayRoutes.Backend("http://backend:8080", 응답_상한),
+                AdmissionGatewayFilter.withIsolatedSoldOutCache(재료_없는_홀더(),
+                        AdmissionDecider.of(공유_리미터, 0.7),
+                        Clock.systemUTC(), new SimpleMeterRegistry(),
+                        FakeQueuePort.create(),
+                        QueueToken.of("not-a-real-secret-0123456789abcdef"),
+                        공유_리미터,
+                        EntryToken.of("not-a-real-secret-0123456789abcdef"),
+                        IdempotencyKey.passThrough()),
+                QueryCoalescingFilter.of(
+                        new CoalescingProperties(false, 1024, 1 << 20, 100, List.of()),
+                        Clock.systemUTC(), new SimpleMeterRegistry()),
+                SoldOutObserver.ofPublishedAt(
+                        SoldOutCache.standard(), Instant::now, new SimpleMeterRegistry()),
+                컨텍스트.getBean(SpringCloudCircuitBreakerResilience4JFilterFactory.class),
+                new SimpleMeterRegistry(), 라우팅(routing),
+                new RetryGatewayFilterFactory());
+    }
+
+    private static List<String> 주소들(RouteLocator locator) {
+        return locator.getRoutes().collectList().block().stream()
+                .map(r -> r.getUri().toString()).toList();
+    }
+
+    /**
+     * <b>켜면 균형기를 거친다.</b> 단일 주소로 두면 인스턴스를 고를 자리가
+     * 아예 없어, 이 페이즈가 만든 것이 한 번도 안 돈다.
+     */
+    @Test
+    @DisplayName("라우팅을_켜면_lb_로_보낸다")
+    void 라우팅을_켜면_lb_로_보낸다() {
+        RouteLocator locator = 라우터(new RoutingProperties(
+                true, "coupon-service", null, null, null, null));
+
+        assertThat(주소들(locator)).allMatch("lb://coupon-service"::equals);
+    }
+
+    /**
+     * <b>끄면 단일 주소로 돌아간다.</b> 설정 한 줄이 롤백 수단이다 —
+     * 코드가 남아 있어도 무해해야 그 롤백이 성립한다.
+     */
+    @Test
+    @DisplayName("라우팅을_끄면_단일_주소다")
+    void 라우팅을_끄면_단일_주소다() {
+        RouteLocator locator = 라우터(new RoutingProperties(
+                false, "coupon-service", null, null, null, null));
+
+        assertThat(주소들(locator)).allMatch("http://backend:8080"::equals);
+    }
+
+    /** 배선이 아예 없으면 단일 주소다. 라우팅을 안 넣은 배포가 그 자리다. */
+    @Test
+    @DisplayName("배선이_없으면_단일_주소다")
+    void 배선이_없으면_단일_주소다() {
+        assertThat(주소들(locator)).allMatch("http://backend:8080"::equals);
+    }
+
+    /**
+     * <b>연결이 안 된 인스턴스는 다음 대로 넘긴다</b> (9.3.11 · G9.11).
+     *
+     * <p>인스턴스가 사라진 직후 그 주소로 간 요청이 5xx 로 새면, 사용자에게는
+     * 게이트웨이가 고장난 것으로 보인다.
+     */
+    @Test
+    @DisplayName("발급에_재시도가_붙어_있다")
+    void 발급에_재시도가_붙어_있다() {
+        assertThat(잡는_라우트(HttpMethod.POST, "/api/v1/coupons/c1/issue").getFilters())
+                .anyMatch(f -> 이름(f).contains("Retry"));
+    }
+
+    /**
+     * <b>서킷 바깥이다.</b>
+     *
+     * <p>안쪽에 두면 서킷이 요청 하나에 결과 하나만 보게 되어, 재시도가 만든
+     * 시도가 창에 안 쌓인다 — 관측 실패율이 절반이라 서킷이 늦게 열린다.
+     */
+    @Test
+    @DisplayName("재시도가_서킷_바깥이다")
+    void 재시도가_서킷_바깥이다() {
+        assertThat(FilterOrder.ROUTE_RETRY).isLessThan(FilterOrder.ROUTE_CIRCUIT);
+    }
+
+    /**
+     * <b>상태 코드로는 안 건다</b> (9.3.12 · 불변식 2).
+     *
+     * <p>5xx 는 뒷단이 요청을 받은 뒤에 낸 답이고, 그 시점에는 이미 재고가
+     * 움직였을 수 있다. 그걸 다시 보내면 그 한 건이 곧 초과 발급이다.
+     */
+    @Test
+    @DisplayName("연결_단계에만_재시도한다")
+    void 연결_단계에만_재시도한다() {
+        var config = GatewayRoutes.connectRetryConfig();
+
+        assertThat(config.getSeries()).isEmpty();
+        assertThat(config.getStatuses()).isEmpty();
+        assertThat(config.getExceptions())
+                .containsExactlyInAnyOrder(ConnectException.class, ConnectTimeoutException.class);
+    }
+
+    /** 한 번이면 충분하다. 여러 번 돌면 죽은 뒷단에 요청이 그만큼 오래 매달린다. */
+    @Test
+    @DisplayName("한_번만_다시_보낸다")
+    void 한_번만_다시_보낸다() {
+        assertThat(GatewayRoutes.connectRetryConfig().getRetries()).isEqualTo(1);
+    }
+
+    private static String 이름(GatewayFilter filter) {
+        GatewayFilter inner = filter instanceof OrderedGatewayFilter ordered
+                ? ordered.getDelegate() : filter;
+        return inner.toString();
     }
 }

@@ -40,13 +40,22 @@ public final class FilterOrder {
     public static final int ROUTE_ADMISSION = 0;
 
     /**
+     * 연결이 안 된 인스턴스를 다음 대로 넘긴다.
+     *
+     * <p><b>서킷 바깥이다.</b> 안쪽에 두면 서킷이 <b>요청 하나에 결과 하나</b>만
+     * 보게 되어, 재시도가 만든 시도가 창에 안 쌓인다 — 뒷단이 통째로 넘어져도
+     * 관측 실패율이 절반이라 서킷이 늦게 열린다.
+     */
+    public static final int ROUTE_RETRY = ROUTE_ADMISSION + 1;
+
+    /**
      * 라우트 안의 서킷.
      *
      * <p><b>응답을 쓰는 필터보다 안쪽이어야 한다.</b> 프레임워크의 쓰기 필터가
      * {@code -1} 이라, 그보다 앞으로 가면 폴백이 이미 커밋된 응답에 쓰려 들고
      * 읽기 전용 헤더에서 터진다 — 그 예외가 원래 실패를 덮는다.
      */
-    public static final int ROUTE_CIRCUIT = ROUTE_ADMISSION + 1;
+    public static final int ROUTE_CIRCUIT = ROUTE_RETRY + 1;
 
     /**
      * <b>응답 본문을 보려면 여기여야 한다.</b>

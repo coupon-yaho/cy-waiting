@@ -121,10 +121,10 @@ services:
         # 실행 JAR 이름을 정확히 짚는다. 여럿과 맞으면 무엇이 들어갈지
         # 순서에 달린다.
         #
-        # **CI 는 WAITING_JAR 를 실물에서 뽑아 넣는다.** 아래 기본값은 로컬용
-        # 이고 버전을 따라가므로, 버전을 올릴 때 같이 고쳐야 한다 — 안 고치면
-        # 로컬 부하 실행만 조용히 깨진다.
-        JAR: ${WAITING_JAR:-build/libs/waiting-0.5.0.jar}
+        # **버전이 안 들어간다.** 빌드가 이름을 고정하므로 릴리스마다 여기를
+        # 고칠 일이 없다 — 고쳐야 했을 때 빠뜨리면 없는 파일을 가리킨 채
+        # 로컬 부하 실행만 조용히 깨졌다.
+        JAR: ${WAITING_JAR:-build/libs/waiting.jar}
     depends_on:
       redis: { condition: service_healthy }
       backend: { condition: service_healthy }

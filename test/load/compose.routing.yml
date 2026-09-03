@@ -62,14 +62,23 @@ services:
         # **셸 변수는 달러를 겹쳐 적는다.** 안 겹치면 compose 가 제 변수로 읽어
         # 빈 문자열로 바꾼다 — 시각이 비면 보고가 통째로 걸러지고, 가용량이
         # 하나도 안 들어와 크레딧이 하한에 머문다. 실제로 그렇게 돌았다.
+        # **여유를 매 회 다시 읽는다.** 열화를 재려면 보고 값을 실행 도중에
+        # 바꿀 수 있어야 하는데, 씨더를 재시작하면 그 몇 초가 5초 예산을 먹는다.
+        # 손잡이를 키로 두면 `SET` 한 번이 다음 틱에 반영된다.
+        redis-cli -h redis SETNX sim:credits:stub-1 200
+        redis-cli -h redis SETNX sim:credits:stub-2 40
+        redis-cli -h redis SETNX sim:credits:stub-3 120
         while :; do
           now=$$(date +%s)
+          big=$$(redis-cli -h redis GET sim:credits:stub-1)
+          small=$$(redis-cli -h redis GET sim:credits:stub-2)
+          mid=$$(redis-cli -h redis GET sim:credits:stub-3)
           redis-cli -h redis HSET capacity:coupon-svc:v1 stub-1 \
-            "{\"addr\":\"backend:8090\",\"credits\":200,\"ts\":$$now}" > /dev/null
+            "{\"addr\":\"backend:8090\",\"credits\":$$big,\"ts\":$$now}" > /dev/null
           redis-cli -h redis HSET capacity:coupon-svc:v1 stub-2 \
-            "{\"addr\":\"backend-small:8090\",\"credits\":40,\"ts\":$$now}" > /dev/null
+            "{\"addr\":\"backend-small:8090\",\"credits\":$$small,\"ts\":$$now}" > /dev/null
           redis-cli -h redis HSET capacity:coupon-svc:v1 stub-3 \
-            "{\"addr\":\"backend-mid:8090\",\"credits\":120,\"ts\":$$now}" > /dev/null
+            "{\"addr\":\"backend-mid:8090\",\"credits\":$$mid,\"ts\":$$now}" > /dev/null
           sleep 1
         done
 

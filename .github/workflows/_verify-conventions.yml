@@ -64,6 +64,11 @@ jobs:
       - name: 유입 비율 판정 자기검증
         run: test/load/routing-ratio-selftest.sh
 
+      # 재분배 판정이 헐거우면 유입이 영영 안 줄어도 초록이 뜬다. "줄었다" 로
+      # 판정하면 한 건만 줄어도 통과한다 — 목표에 닿아 머무는지를 본다.
+      - name: 재분배 판정 자기검증
+        run: test/load/redistribute-selftest.sh
+
       # 리포트가 "4개 시나리오" 라고 적은 채 여덟 개를 돌고 있었다. 사본이
       # 생기면 갈라지고, 갈라진 쪽을 보는 사람은 안 돈 것을 돌았다고 읽는다.
       - name: nightly 시나리오 수가 리포트와 맞는가

@@ -16,7 +16,14 @@ plugins {
 }
 
 group = 'com.kafkick'
-version = '0.5.0'
+version = '0.6.0'
+
+// **산출물 이름에 버전을 안 싣는다.** 실으면 Dockerfile 과 부하 시험 구성이 매
+// 릴리스마다 같이 고쳐야 하고, 한 곳을 빠뜨리면 없는 파일을 가리킨 채 조용히 깨진다.
+// 버전은 매니페스트(`Implementation-Version`)에 그대로 실린다.
+tasks.named('bootJar') {
+    archiveFileName = 'waiting.jar'
+}
 
 java {
     toolchain {

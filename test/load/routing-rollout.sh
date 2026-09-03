@@ -49,6 +49,9 @@ wait_for_idle_queue || exit 2
 : > "$work/samples"
 for name in "${NAMES[@]}"; do served "$name" || exit 2; done > "$work/prev"
 
+# **라벨은 실제 경과 초다.** 순번을 그대로 쓰면 표본 하나를 뜨는 데 드는 시간
+# (뒷단 셋에 각각 도커 명령)이 라벨에서 빠져, 예산 5초로 적힌 결과가 벽시계로는
+# 그보다 한참 뒤가 된다 — 게이트가 요구하는 수가 조용히 늘어난다.
 sample() {
   local second=$1 total=0 fresh=0 idx now prev delta
   for idx in 0 1 2; do
@@ -63,6 +66,7 @@ sample() {
     total=$(( total + delta ))
   done
   mv "$work/cur" "$work/prev"
+  [ -z "${changed_at:-}" ] || second=$(( $(date +%s) - changed_at ))
   echo "$second $fresh $total" >> "$work/samples"
 }
 
@@ -70,6 +74,7 @@ for s in $(seq -- "-$BEFORE_SEC" -1); do sleep 1; sample "$s" || exit 2; done
 
 # **갈아 끼운다.** 주소는 그대로고 식별자만 바뀐다 — 같은 대가 새로 뜬 모양이다.
 $COMPOSE exec -T redis redis-cli SET sim:id:stub-1 "$FRESH_ID" >/dev/null
+changed_at=$(date +%s)
 for s in $(seq 0 "$AFTER_SEC"); do sleep 1; sample "$s" || exit 2; done
 
 kill %1 2>/dev/null; wait %1 2>/dev/null

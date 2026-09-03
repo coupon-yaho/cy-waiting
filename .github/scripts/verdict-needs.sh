@@ -10,7 +10,11 @@
 # 그것이다.
 set -uo pipefail
 
-root=$(git rev-parse --show-toplevel 2>/dev/null) || root=.
+# 검사할 뿌리를 인자로 받는다. 자기검증이 무너뜨린 워크플로를 만들어 넘겨야
+# 이 검사가 실제로 무는지를 잴 수 있다 — 저장소만 볼 수 있으면 통과하는 모습만
+# 본다. 인자가 없으면 저장소를 본다.
+root=${1:-}
+[ -n "$root" ] || root=$(git rev-parse --show-toplevel 2>/dev/null) || root=.
 python3 - "$root" <<'PY'
 import pathlib, sys
 
@@ -48,6 +52,10 @@ for path in entries:
     # 판정과 리포트 자신은 뺀다. 나머지는 전부 판정이 기다려야 한다.
     watchers = {"verdict", "report"}
     expected = set(jobs) - watchers - EXEMPT.get(path.name, set())
+    # **리포트는 판정도 기다려야 한다.** 리포트 본문이 `needs.verdict.outputs`
+    # 로 전체 결과를 싣기 때문이다 — 안 기다리면 그 값이 빈 문자열이 되고,
+    # 리포트는 아무 말 없이 "실패" 로 나간다. 판정 자신은 자기를 안 기다린다.
+    report_expected = expected | {"verdict"}
     waited = set(needs_of(jobs["verdict"]))
     for missing in sorted(expected - waited):
         bad.append(f"{path.name}: 판정이 '{missing}' 을 안 기다린다")
@@ -59,7 +67,7 @@ for path in entries:
         bad.append(f"{path.name}: 판정은 있는데 리포트 잡이 없다")
         continue
     reported = set(needs_of(report))
-    for missing in sorted(expected - reported):
+    for missing in sorted(report_expected - reported):
         bad.append(f"{path.name}: 리포트가 '{missing}' 을 안 기다린다")
 
     # 리포트가 각 잡의 결과를 실제로 싣는지까지 본다. `needs` 에만 넣고

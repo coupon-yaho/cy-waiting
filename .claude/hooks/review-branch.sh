@@ -378,6 +378,7 @@ for check in \
     "재시도 자기검증:.github/scripts/gradle-retry-selftest.sh" \
     "판정 자기검증:.github/scripts/verdict-selftest.sh" \
     "판정 배선:.github/scripts/verdict-needs.sh" \
+    "판정 배선 자기검증:.github/scripts/verdict-needs-selftest.sh" \
     "샤딩 착수 판정:test/load/shard-gate-selftest.sh" \
     "작업 로그:.github/scripts/journal-index.sh --check" \
     "워크플로 셸:.github/scripts/workflow-shell.sh" \

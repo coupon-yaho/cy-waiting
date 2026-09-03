@@ -59,6 +59,11 @@ jobs:
       - name: 샤딩 착수 판정 자기검증
         run: test/load/shard-gate-selftest.sh
 
+      # 비율 판정이 헐거우면 유입이 여유를 무시해도 초록이 뜬다. 실제로 한
+      # 전략은 여유를 전혀 안 보고 고르는데, 이 판정만이 그것을 갈라낸다.
+      - name: 유입 비율 판정 자기검증
+        run: test/load/routing-ratio-selftest.sh
+
       # 리포트가 "4개 시나리오" 라고 적은 채 여덟 개를 돌고 있었다. 사본이
       # 생기면 갈라지고, 갈라진 쪽을 보는 사람은 안 돈 것을 돌았다고 읽는다.
       - name: nightly 시나리오 수가 리포트와 맞는가

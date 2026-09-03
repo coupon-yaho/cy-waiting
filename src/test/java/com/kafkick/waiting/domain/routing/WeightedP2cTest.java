@@ -240,37 +240,37 @@ class WeightedP2cTest {
          * <b>경계를 양쪽에서 밟는다.</b> 한쪽만 보면 부등호가 뒤집혀도 안 걸리고,
          * 하한을 안 적으면 다음 사람이 다시 훑어 찾는다.
          *
-         * <p>동시 200 은 +18.8%, 300 은 +15.3% 로 아직 밖이고 320 에서 +14.8% 로
-         * 들어온다. 수렴이 느린 것이 이 규모에서 라운드로빈을 함께 두는
-         * 근거이기도 하다 (계획서 2.3).
+         * <p>이 씨드에서는 320 언저리가 경계지만 씨드에 따라 0.148~0.152 로
+         * 흔들려 그 자리를 단언으로 못 박지 않는다. 흔들리지 않는 두 점으로
+         * 가른다 — 200 은 +18.8%, 400 은 +13.3% 다.
          */
         @Test
-        @DisplayName("기준에_드는_하한은_동시_320_이다")
-        void 기준에_드는_하한은_동시_320_이다() {
-            assertThat(작은_대의_편차(320)).isLessThan(0.15);
-            assertThat(작은_대의_편차(300)).isGreaterThan(0.15);
+        @DisplayName("기준을_가르는_깊이가_200_과_400_사이다")
+        void 기준을_가르는_깊이가_200_과_400_사이다() {
+            assertThat(작은_대의_편차(400)).isLessThan(0.15);
+            assertThat(작은_대의_편차(200)).isGreaterThan(0.15);
         }
 
         /**
          * <b>작은 대의 봉우리는 깊이를 따라 커진다</b> (2.3).
          *
-         * <p>위험한 것은 가장 작은 대가 제 여유를 넘는 것이고, 그 자리가 총
-         * 여유만큼 물려 있을 때다. <b>지금 값은 단언으로 안 박는다</b> — 표본
-         * 최댓값이라 반복수를 늘리면 커지고, 고르개를 고쳐 봉우리가 내려가면
-         * 그 단언이 수정을 막는다. 실측값과 근거는 AIJ-0217 에 있다.
+         * <p><b>두 전략을 견준다.</b> 봉우리는 표본 최댓값이라 반복수를 늘리면
+         * 커져, 절대값을 박으면 제품을 안 건드려도 빨개진다. 견주는 쪽은 그
+         * 영향을 함께 받아 상쇄된다. 이 부등호가 뒤집히면 라운드로빈을 고른
+         * 근거가 사라진 것이므로 그때는 빨개지는 것이 맞다 (AIJ-0217).
          */
         @Test
-        @DisplayName("작은_대의_봉우리는_깊을수록_커진다")
-        void 작은_대의_봉우리는_깊을수록_커진다() {
-            assertThat(작은_대의_최대_사용률(360)).isGreaterThan(작은_대의_최대_사용률(180));
-            assertThat(작은_대의_최대_사용률(360)).isLessThan(1.8);
+        @DisplayName("작은_대의_봉우리가_라운드로빈보다_크다")
+        void 작은_대의_봉우리가_라운드로빈보다_크다() {
+            double p2c = 작은_대의_최대_사용률(WeightedP2c.of(new Random(20260903)::nextInt), 360);
+            double 라운드로빈 = 작은_대의_최대_사용률(WeightedRoundRobin.create(), 360);
+
+            assertThat(p2c).isGreaterThan(라운드로빈);
         }
 
         /** 동시 {@code 동시성} 건이 물려 있을 때 작은 대의 <b>최대</b> 사용률. */
-        private double 작은_대의_최대_사용률(int 동시성) {
+        private double 작은_대의_최대_사용률(InstanceChooser 고르개, int 동시성) {
             Map<String, Integer> 물린 = new HashMap<>(Map.of("a", 0, "b", 0, "c", 0));
-            Random random = new Random(20260903);
-            WeightedP2c 고르개 = WeightedP2c.of(random::nextInt);
             Deque<String> 진행중 = new ArrayDeque<>();
             double 최대 = 0;
 

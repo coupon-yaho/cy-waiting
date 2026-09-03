@@ -24,8 +24,9 @@ const BASE = __ENV.BASE_URL || 'http://localhost:18080';
 const SPIKE_USERS = Number(__ENV.SPIKE_USERS || '20000');
 
 export const options = {
-  // 게이트가 분위수를 읽는다. 기본은 p95 까지라 p90 은 들어 있다.
-  summaryTrendStats: ['min', 'p(10)', 'p(25)', 'med', 'p(75)', 'p(90)', 'max'],
+  // 게이트가 분위수를 읽는다. **p99 를 넣는다** — 샤딩 착수 판정이 기록으로
+  // 남기는 값이고, 안 넣으면 요약에 없어 늘 "없음" 이 찍힌다.
+  summaryTrendStats: ['min', 'p(10)', 'p(25)', 'med', 'p(75)', 'p(90)', 'p(99)', 'max'],
   scenarios: {
     spike: {
       executor: 'per-vu-iterations',

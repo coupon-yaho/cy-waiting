@@ -77,6 +77,17 @@ done
 $COMPOSE exec -T redis redis-cli SET sim:credits:stub-2 "${CREDITS[1]}" >/dev/null 2>&1
 $COMPOSE exec -T redis redis-cli SET sim:credits:stub-3 "${CREDITS[2]}" >/dev/null 2>&1
 
+
+# **이미지가 JAR 보다 낡았으면 다시 짓는다.** compose 는 JAR 이 바뀌어도 이미
+# 있는 이미지를 그대로 쓴다. 그러면 고친 코드가 아니라 **옛 바이너리를 재고**
+# 그 값을 실측으로 적게 된다 — 실제로 "고쳐도 값이 그대로다" 를 한 번 겪었다.
+jar=${WAITING_JAR:-build/libs/waiting.jar}
+if [ ! -f "$jar" ]; then
+  echo "실행 JAR 이 없다: $jar — ./gradlew build 를 먼저 돌린다"; exit 2
+fi
+$COMPOSE build gateway > "$work/build.log" 2>&1 || {
+  echo "게이트웨이 이미지를 못 지었다"; tail -20 "$work/build.log" | sed 's/^/  /'; exit 2
+}
 if ! ROUTING_STRATEGY="$STRATEGY" $COMPOSE up -d --wait > "$work/up.log" 2>&1; then
   echo "겹침을 못 세웠다"; tail -20 "$work/up.log" | sed 's/^/  /'; exit 2
 fi

@@ -124,7 +124,7 @@ services:
         # **CI 는 WAITING_JAR 를 실물에서 뽑아 넣는다.** 아래 기본값은 로컬용
         # 이고 버전을 따라가므로, 버전을 올릴 때 같이 고쳐야 한다 — 안 고치면
         # 로컬 부하 실행만 조용히 깨진다.
-        JAR: ${WAITING_JAR:-build/libs/waiting-0.5.0.jar}
+        JAR: ${WAITING_JAR:-build/libs/waiting-0.6.0.jar}
     depends_on:
       redis: { condition: service_healthy }
       backend: { condition: service_healthy }

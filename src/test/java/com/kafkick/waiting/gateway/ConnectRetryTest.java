@@ -11,6 +11,9 @@ import com.kafkick.waiting.domain.coupon.CouponStates;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import com.kafkick.waiting.domain.routing.InstanceAddress;
 import com.kafkick.waiting.domain.routing.InstanceRouting;
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -66,20 +69,30 @@ class ConnectRetryTest {
             })
             .bindNow();
 
-    /**
-     * 죽은 뒷단의 자리.
-     *
-     * <p><b>띄웠다가 내린다.</b> 안 쓰는 포트를 골라 적으면 그 사이에 다른
-     * 프로세스가 물 수 있고, 그러면 이 시험이 재려던 연결 실패가 안 난다.
-     */
-    private static final int 죽은_포트 = 죽은_포트를_고른다();
+    /** 죽은 뒷단의 자리. 띄웠다가 곧바로 내려 아무도 안 듣는 포트를 만든다. */
+    private static final int 죽은_포트 = 죽은_포트를_만든다();
 
-    private static int 죽은_포트를_고른다() {
+    private static int 죽은_포트를_만든다() {
         DisposableServer 잠깐 = HttpServer.create().port(0)
                 .handle((request, response) -> response.send()).bindNow();
         int port = 잠깐.port();
         잠깐.disposeNow();
         return port;
+    }
+
+    /**
+     * <b>정말로 거절하는지 먼저 본다.</b> 임시 포트 대역이라 내린 뒤 다른
+     * 프로세스가 물 수 있고, 그러면 연결이 성립해 이 시험이 재려던 것 대신
+     * 엉뚱한 프로세스로 프록시한 채 초록이 뜬다.
+     */
+    private void 죽은_자리가_맞는지_본다() {
+        try (Socket probe = new Socket()) {
+            probe.connect(new InetSocketAddress("127.0.0.1", 죽은_포트), 500);
+            throw new AssertionError(
+                    "죽은 자리 " + 죽은_포트 + " 에 누가 듣고 있다 — 이 실행으로는 못 잰다");
+        } catch (IOException expected) {
+            // 거절이 정상이다.
+        }
     }
 
     /**
@@ -154,6 +167,7 @@ class ConnectRetryTest {
     @Test
     @DisplayName("연결이_안_된_대를_고르면_다음_대로_넘어간다")
     void 연결이_안_된_대를_고르면_다음_대로_넘어간다() {
+        죽은_자리가_맞는지_본다();
         산_대가_받은_수.set(0);
 
         int 보낸_수 = 6;

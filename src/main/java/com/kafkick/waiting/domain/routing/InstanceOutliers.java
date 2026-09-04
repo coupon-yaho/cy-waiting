@@ -43,6 +43,14 @@ public final class InstanceOutliers {
         if (ramp.isNegative()) {
             throw new IllegalArgumentException("램프는 0 이상이어야 한다: " + ramp);
         }
+        // **밀리초 미만은 안 받는다.** 아래가 밀리초로 재므로 500us 같은 값이
+        // 0 으로 잘리고, 그러면 배제가 걸리자마자 풀려 없는 것과 같아진다.
+        if (ejectFor.toMillis() == 0) {
+            throw new IllegalArgumentException("배제 시간은 1ms 이상이어야 한다: " + ejectFor);
+        }
+        if (!ramp.isZero() && ramp.toMillis() == 0) {
+            throw new IllegalArgumentException("램프는 0 이거나 1ms 이상이어야 한다: " + ramp);
+        }
         this.threshold = threshold;
         this.ejectMillis = ejectFor.toMillis();
         this.rampMillis = ramp.toMillis();
@@ -118,8 +126,15 @@ public final class InstanceOutliers {
     public void retain(Set<String> live, long nowMillis) {
         Objects.requireNonNull(live, "live");
         lastSeen = Set.copyOf(live);
-        records.entrySet().removeIf(e -> !live.contains(e.getKey())
-                && !e.getValue().settling(nowMillis, ejectMillis, rampMillis));
+        // **키마다 잠금 안에서 지운다.** 밖에서 보고 지우면, 그 사이에 들어온
+        // 실패가 든 기록을 지우게 된다 — 그 실패는 어디에도 안 남는다.
+        for (String id : Set.copyOf(records.keySet())) {
+            if (live.contains(id)) {
+                continue;
+            }
+            records.computeIfPresent(id, (k, streak) ->
+                    streak.settling(nowMillis, ejectMillis, rampMillis) ? streak : null);
+        }
     }
 
     /** 마지막으로 본 인스턴스 수. 표시된 수를 여기에 견준다. */

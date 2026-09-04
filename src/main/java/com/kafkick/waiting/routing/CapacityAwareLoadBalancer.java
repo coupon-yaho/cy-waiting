@@ -155,11 +155,15 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
             }
             byId.put(id, instance);
             long credits = creditsOf(instance);
-            // **되돌아온 대를 무겁게 보이게 한다.** 배제 동안 트래픽이 0 이라
-            // 물린 건수도 0 이고, 그대로 두면 돌아오는 순간 전량이 그리로 간다.
-            // 제 여유만큼을 얹어 시작해 램프 동안 0 으로 준다.
-            double recovering = credits * outliers.recoveryRemaining(id, now);
-            candidates.add(RoutingCandidate.of(id, credits, busy, recovering));
+            // **되돌아온 대의 여유를 줄여 본다.** 배제 동안 트래픽이 0 이라 물린
+            // 건수도 0 이고, 그대로 두면 돌아오는 순간 전량이 그리로 간다. 물린
+            // 건수에 값을 얹는 방식은 P2C 에서 계단이 된다 — 얹은 값이 한가한
+            // 이웃보다 늘 커서 둘 다 그 대를 뽑을 때만 골라진다. 여유를 줄이면
+            // 같은 물린 건수로도 부하율이 높아져, 줄인 만큼만 받는다.
+            double remaining = outliers.recoveryRemaining(id, now);
+            long effective = remaining <= 0 ? credits
+                    : Math.max(1, Math.round(credits * (1 - remaining)));
+            candidates.add(RoutingCandidate.of(id, effective, busy));
         }
         return candidates;
     }

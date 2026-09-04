@@ -306,6 +306,11 @@ class InstanceOutliersTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> InstanceOutliers.of(3, 배제_시간, Duration.ofMillis(-1)))
                 .isInstanceOf(IllegalArgumentException.class);
+        // 밀리초 미만은 0 으로 잘려 배제가 걸리자마자 풀린다.
+        assertThatThrownBy(() -> InstanceOutliers.of(3, Duration.ofNanos(500_000), 램프))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> InstanceOutliers.of(3, 배제_시간, Duration.ofNanos(500_000)))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     /**

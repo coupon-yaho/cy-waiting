@@ -93,9 +93,14 @@ public final class InFlightTrackingFilter implements GlobalFilter, Ordered {
      * 뒷단이 실제로 낸 것을 본다. 바깥에서 보면 전부 성공으로 보인다.
      */
     private void record(String instanceId, ServerWebExchange exchange, SignalType signal) {
-        // **취소는 어느 쪽으로도 안 센다.** 클라이언트가 끊은 것이라 인스턴스의
-        // 잘못이 아니고, 실패로 세면 사용자가 창을 닫은 것만으로 뒷단이 빠진다.
+        // **취소는 누가 끊었는지로 가른다.** 뒷단 응답이 시작된 뒤의 취소는
+        // 우리 시한이 끊은 것이라 그 대의 실패다 — 헤더만 주고 본문을 안 끝내는
+        // 대가 여기서만 잡힌다. 시작 전의 취소는 클라이언트 이탈이라 안 센다.
+        // 이탈을 실패로 세면 사용자가 창을 닫은 것만으로 뒷단이 빠진다.
         if (signal == SignalType.CANCEL) {
+            if (exchange.getAttribute(ServerWebExchangeUtils.CLIENT_RESPONSE_ATTR) != null) {
+                outliers.failed(instanceId, nowMillis.getAsLong());
+            }
             return;
         }
         if (signal == SignalType.ON_ERROR) {

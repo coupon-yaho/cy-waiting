@@ -172,29 +172,29 @@ class CapacityAwareLoadBalancerTest {
      * 다시 빠진다 — 배제 시간 주기의 사각파다.
      */
     @Test
-    @DisplayName("되돌아온_대가_램프_동안_무겁게_보인다")
-    void 되돌아온_대가_램프_동안_무겁게_보인다() {
+    @DisplayName("되돌아온_대의_여유가_램프_동안_줄어_보인다")
+    void 되돌아온_대의_여유가_램프_동안_줄어_보인다() {
         for (int i = 0; i < 3; i++) {
             배제기.failed("be-1", 지금);
         }
         long 풀린_때 = 지금 + 배제_시간.toMillis();
 
-        List<Double> 부하율 = new ArrayList<>();
-        CapacityAwareLoadBalancer 균형기 = CapacityAwareLoadBalancer.of(
-                목록(인스턴스("be-1", "100"), 인스턴스("be-2", "100")),
-                candidates -> {
-                    candidates.stream().filter(c -> c.instanceId().equals("be-1"))
-                            .forEach(c -> 부하율.add(c.loadFactor()));
-                    return candidates.stream().findFirst();
-                },
-                레지스트리, 배제기, () -> 풀린_때, 상한);
+        List<Long> 여유 = new ArrayList<>();
+        InstanceChooser 여유를_적는다 = candidates -> {
+            candidates.stream().filter(c -> c.instanceId().equals("be-1"))
+                    .forEach(c -> 여유.add(c.credits()));
+            return candidates.stream().findFirst();
+        };
+        ServiceInstanceListSupplier 둘 = 목록(인스턴스("be-1", "100"), 인스턴스("be-2", "100"));
 
-        균형기.choose((Request<?>) null).block();
+        CapacityAwareLoadBalancer.of(둘, 여유를_적는다, 레지스트리, 배제기, () -> 풀린_때, 상한)
+                .choose((Request<?>) null).block();
+        long 절반 = 풀린_때 + Duration.ofSeconds(30).toMillis();
+        CapacityAwareLoadBalancer.of(둘, 여유를_적는다, 레지스트리, 배제기, () -> 절반, 상한)
+                .choose((Request<?>) null).block();
 
-        assertThat(부하율).hasSize(1);
-        assertThat(부하율.get(0))
-                .as("제 여유만큼을 얹어 시작한다 — 한가한 대보다 무겁다")
-                .isEqualTo(1.0);
+        assertThat(여유).as("막 풀렸을 때는 거의 없고, 절반에서는 절반이다")
+                .containsExactly(1L, 50L);
     }
 
     private Response<ServiceInstance> 고른다(InstanceChooser chooser,

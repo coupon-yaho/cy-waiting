@@ -45,12 +45,21 @@ public class Bulkhead {
      * <p><b>쿠폰마다 따로 셉니다.</b> 하나로 세면 몰리는 쿠폰이 자리를 다 쓰고
      * 한산한 쿠폰이 그 뒤에 밀립니다 — R1 이 뒤집힙니다.
      *
-     * @param cap 이 쿠폰이 동시에 걸어 둘 수 있는 상한. 배분된 크레딧에서 옵니다
+     * @param cap      이 쿠폰이 동시에 걸어 둘 수 있는 상한. 배분된 크레딧에서 옵니다
+     * @param totalCap 이 노드가 동시에 걸어 둘 수 있는 상한. 쿠폰별 상한만으로는
+     *                 캠페인이 여럿일 때 합이 안 묶입니다
      * @return 들어갔으면 참. 거짓이면 {@link #exit} 를 부르면 안 됩니다
      */
-    public synchronized boolean tryEnter(String couponId, long cap) {
+    public synchronized boolean tryEnter(String couponId, long cap, long totalCap) {
         int current = inFlight.getOrDefault(couponId, 0);
         if (current >= cap) {
+            return false;
+        }
+        // **전체 상한은 이미 물려 있는 쿠폰에만 겁니다.** 한산한 쿠폰의 첫 자리를
+        // 막으면 몰리는 쿠폰이 노드를 채운 동안 그 쿠폰이 통째로 밀립니다 —
+        // R1 이 뒤집힙니다. 묶어야 하는 것은 한 쿠폰이 계속 자리를 늘리는 쪽이고,
+        // 서로 다른 쿠폰의 수는 아래 `maxKeys` 가 이미 묶습니다.
+        if (current > 0 && total >= totalCap) {
             return false;
         }
         // **새 쿠폰만 상한을 봅니다.** 이미 담긴 쿠폰을 막으면 그 쿠폰이 자기

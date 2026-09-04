@@ -26,8 +26,8 @@ STUB_LATENCY_MS="${STUB_LATENCY_MS:-1500}"
 . test/load/routing-lib.sh || exit 2
 
 # 초당 도착. 여유 합 90 · 한산 비율 0.9 면 상한이 81 이고, 지연 1.5초에서
-# 깊이 90 을 만들려면 60 이 필요하다. 그 사이다.
-RATE="${RATE:-60}"
+# 깊이 90 을 만들려면 60 이 필요하다. 게이트 조건은 여유의 1.1 배라 66 으로 둔다.
+RATE="${RATE:-66}"
 DURATION_SEC="${DURATION_SEC:-40}"
 # 측정 조건으로 바꾸는 운영 손잡이. 기본 0.7 이면 상한이 25 라 창이 안 열린다.
 IDLE_RATIO="${IDLE_RATIO:-0.9}"

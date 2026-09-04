@@ -32,9 +32,9 @@ class BulkheadMetricsTest {
     void 걸려_있는_건수를_낸다() {
         지표를_건다();
 
-        bulkhead.tryEnter("c1", 5);
-        bulkhead.tryEnter("c1", 5);
-        bulkhead.tryEnter("c2", 5);
+        bulkhead.tryEnter("c1", 5, Long.MAX_VALUE);
+        bulkhead.tryEnter("c1", 5, Long.MAX_VALUE);
+        bulkhead.tryEnter("c2", 5, Long.MAX_VALUE);
 
         assertThat(meters.get("waiting.bulkhead.inflight").gauge().value()).isEqualTo(3);
     }
@@ -48,8 +48,8 @@ class BulkheadMetricsTest {
     void 자리를_쥔_쿠폰_수를_낸다() {
         지표를_건다();
 
-        bulkhead.tryEnter("c1", 5);
-        bulkhead.tryEnter("c2", 5);
+        bulkhead.tryEnter("c1", 5, Long.MAX_VALUE);
+        bulkhead.tryEnter("c2", 5, Long.MAX_VALUE);
 
         assertThat(meters.get("waiting.bulkhead.coupons").gauge().value()).isEqualTo(2);
     }
@@ -59,7 +59,7 @@ class BulkheadMetricsTest {
     @DisplayName("나가면_줄어든다")
     void 나가면_줄어든다() {
         지표를_건다();
-        bulkhead.tryEnter("c1", 5);
+        bulkhead.tryEnter("c1", 5, Long.MAX_VALUE);
 
         bulkhead.exit("c1");
 
@@ -75,7 +75,7 @@ class BulkheadMetricsTest {
     @DisplayName("수거되어도_값을_계속_낸다")
     void 수거되어도_값을_계속_낸다() {
         지표를_건다();
-        bulkhead.tryEnter("c1", 5);
+        bulkhead.tryEnter("c1", 5, Long.MAX_VALUE);
 
         수거를_강제한다();
 
@@ -93,7 +93,7 @@ class BulkheadMetricsTest {
     @DisplayName("게이지에_라벨을_안_붙인다")
     void 게이지에_라벨을_안_붙인다() {
         Bulkhead bulkhead = Bulkhead.withMaxKeys(10);
-        bulkhead.tryEnter("c1", 5);
+        bulkhead.tryEnter("c1", 5, Long.MAX_VALUE);
         BulkheadMetrics.bind(bulkhead, meters);
 
         assertThat(meters.getMeters())
@@ -129,8 +129,8 @@ class BulkheadMetricsTest {
         Bulkhead 첫째 = Bulkhead.withMaxKeys(10);
         // **상한을 다르게 준다.** 같은 값이면 분모가 어느 격벽에서 왔는지 못 가른다.
         Bulkhead 둘째 = Bulkhead.withMaxKeys(99);
-        둘째.tryEnter("c1", 5);
-        둘째.tryEnter("c2", 5);
+        둘째.tryEnter("c1", 5, Long.MAX_VALUE);
+        둘째.tryEnter("c2", 5, Long.MAX_VALUE);
 
         BulkheadMetrics.bind(첫째, meters);
         BulkheadMetrics.bind(둘째, meters);

@@ -662,7 +662,12 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
         // **초당 건수로는 못 막는 것이 있다.** 초당 100건이어도 각각 10초 걸리면
         // 동시 1,000건이다. 느려진 뒷단이 커넥션을 다 붙잡으면 한산한 쿠폰의
         // 통과 경로까지 같이 죽는다.
-        if (!bulkhead.tryEnter(couponId, inFlightCap(ratePerSec, meta))) {
+        // **노드 전체에도 상한을 씌운다.** 쿠폰별 상한만으로는 합이 안 묶여,
+        // 캠페인이 여럿이면 각자 제 상한까지 쓰고 그 합이 노드가 감당할 양을
+        // 넘는다. 라이브러리가 끼워 넣던 격벽이 그 자리를 하고 있었는데 크기가
+        // 25 로 박혀 있어 껐고, 그 몫을 여기서 제 예산으로 다시 세운다.
+        if (!bulkhead.tryEnter(couponId, inFlightCap(ratePerSec, meta),
+                inFlightCap(AdmissionDecider.globalCap(meta), meta))) {
             count("bulkhead-full");
             return shed(exchange, meta);
         }

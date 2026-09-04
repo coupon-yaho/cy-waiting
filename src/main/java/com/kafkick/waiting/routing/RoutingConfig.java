@@ -51,7 +51,7 @@ public class RoutingConfig {
         if (RoutingProperties.ROUND_ROBIN.equals(properties.strategy())) {
             return WeightedRoundRobin.create();
         }
-        // 무작위 씨앗을 안 고정한다. 고정하면 노드들이 같은 순서로 뽑아,
+        // 난수 시드를 안 고정한다. 고정하면 노드들이 같은 순서로 뽑아,
         // P2C 를 고른 이유인 쏠림 회피가 사라진다.
         return WeightedP2c.of(new Random()::nextInt);
     }

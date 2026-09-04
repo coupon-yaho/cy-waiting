@@ -18,7 +18,7 @@ public record CapacityReport(String instanceId, long credits, long reportedAt,
 
     /** 주소를 안 실은 보고. 크레딧 계산은 그대로 하고 라우팅에서만 빠진다. */
     // **주소가 없다고 버리지 않는다.** 버리면 그 인스턴스 몫만큼 전역 크레딧이
-    // 조용히 줄어, 계약을 아직 안 따르는 판올림 구간에 전체가 조여진다.
+    // 조용히 줄어, 계약을 아직 안 따르는 배포 구간에 전체가 조여진다.
     public CapacityReport(String instanceId, long credits, long reportedAt) {
         this(instanceId, credits, reportedAt, null);
     }

@@ -12,7 +12,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * @param strategy      {@code p2c} 또는 {@code round-robin} (R-9). 어느 쪽이 나은지는
  *                      실측으로 정할 문제라 코드에 하나만 박아 두면 그 측정을 못 한다
  * @param inFlightTtl   물린 표가 살 수 있는 최대 시간. 감소를 놓쳐도 누수가 유계다 (R-8)
- * @param coldStartRamp 기동 직후 보고된 값을 씨앗으로 쓰는 구간 (G9.12)
+ * @param coldStartRamp 기동 직후 보고된 값을 초기값으로 쓰는 구간 (G9.12)
  * @param perInstanceCap 인스턴스 하나에 동시에 물릴 수 있는 요청 수 (G9.13).
  *                       <b>느려진 한 대가 커넥션을 독식하지 못하게 한다</b>
  * @param outlierFailures 연속 실패가 이만큼이면 그 인스턴스를 후보에서 뺀다

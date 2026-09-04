@@ -187,4 +187,16 @@ class RoutingCandidateTest {
                     .isZero();
         }
     }
+
+    /**
+     * <b>램프가 0 이면 초기값도 0 이다.</b> 0 을 안 가르면 분모가 0 이 되어
+     * NaN 이 나오고, 그 값이 후보 생성에서 터져 라우팅이 통째로 멎는다.
+     */
+    @Test
+    @DisplayName("램프가_0_이면_초기값이_없다")
+    void 램프가_0_이면_초기값이_없다() {
+        assertThat(RoutingCandidate.seed(40, Duration.ZERO, Duration.ZERO)).isZero();
+        assertThat(RoutingCandidate.seed(40, Duration.ofSeconds(1), Duration.ZERO)).isZero();
+    }
+
 }

@@ -53,4 +53,15 @@ class InstanceRoutingTest {
         assertThatThrownBy(() -> new InstanceRouting("be-1", 주소, -1))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    /**
+     * <b>맨 앞의 구분자도 잡는다.</b> 자리를 0 보다 큰지로 보면 앞에 붙은
+     * 구분자가 통과하고, 그 값이 보고 문자열을 그 자리에서 쪼갠다.
+     */
+    @Test
+    @DisplayName("구분자가_맨_앞이어도_안_싣는다")
+    void 구분자가_맨_앞이어도_안_싣는다() {
+        assertThat(new InstanceRouting("|be-1", 주소, 200).encodable()).isFalse();
+    }
+
 }

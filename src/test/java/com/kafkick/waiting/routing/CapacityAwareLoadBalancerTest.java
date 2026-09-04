@@ -518,4 +518,29 @@ class CapacityAwareLoadBalancerTest {
                 목록(), 정해진(), 레지스트리, 배제기, () -> 지금, 0))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    /**
+     * <b>표를 못 잡으면 그 대를 빼고 다시 고른다.</b> 고르는 것과 자리를 잡는
+     * 것 사이에 남이 마지막 자리를 가져갈 수 있는데, 거기서 빈 답을 내면
+     * 보낼 곳이 멀쩡한데 요청이 죽는다.
+     */
+    @Test
+    @DisplayName("표를_못_잡으면_다음_후보로_간다")
+    void 표를_못_잡으면_다음_후보로_간다() {
+        List<List<String>> 본_회차 = new ArrayList<>();
+        Deque<String> 고를 = new ArrayDeque<>(List.of("be-1", "be-2"));
+
+        Response<ServiceInstance> 답 = 고른다(candidates -> {
+            본_회차.add(candidates.stream().map(RoutingCandidate::instanceId).toList());
+            String 이번 = 고를.poll();
+            // 고르는 사이에 be-1 의 마지막 자리를 남이 가져간다.
+            레지스트리.started("be-1", 지금);
+            return candidates.stream().filter(c -> c.instanceId().equals(이번)).findFirst();
+        }, 목록(인스턴스("be-1", "200"), 인스턴스("be-2", "200")), 1);
+
+        assertThat(답.hasServer()).isTrue();
+        assertThat(답.getServer().getInstanceId()).isEqualTo("be-2");
+        assertThat(본_회차).containsExactly(List.of("be-1", "be-2"), List.of("be-2"));
+    }
+
 }

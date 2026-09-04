@@ -92,4 +92,19 @@ class RoutingPropertiesTest {
         assertThat(new RoutingProperties(true, null, null, null, null, null, null, null).perInstanceCap())
                 .isEqualTo(200);
     }
+
+    /**
+     * <b>하한 자체는 받는다.</b> 막는 쪽만 시험하면 경계가 한 칸 안으로 밀려도
+     * 초록이라, 튜닝으로 하한을 적은 배포가 뜨지도 못하고 죽는다.
+     */
+    @Test
+    @DisplayName("하한_값은_받는다")
+    void 하한_값은_받는다() {
+        RoutingProperties 하한 =
+                new RoutingProperties(true, null, null, null, null, 1, 1, null);
+
+        assertThat(하한.perInstanceCap()).isEqualTo(1);
+        assertThat(하한.outlierFailures()).isEqualTo(1);
+    }
+
 }

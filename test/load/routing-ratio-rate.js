@@ -16,8 +16,10 @@ const COUPON = __ENV.COUPON || 'c1';
 const RATE = Number(__ENV.RATE || 23);
 const DURATION = __ENV.DURATION || '40s';
 // 물린 건수의 상한. 유입 × 지연보다 넉넉히 둔다 — 모자라면 k6 가 도착을
-// 떨어뜨려 고정 유입이 아니게 된다.
-const VUS = Number(__ENV.VUS || 100);
+// 떨어뜨려 고정 유입이 아니게 된다. 기본 조건(66/s · 1.5초)이 99 를 물리므로
+// 100 은 모자란다. 이 VU 는 답을 기다리며 서 있는 것이라 부하 시험의 VU 상한
+// 100 이 재려던 "생성기 자체의 부하" 와는 다른 수다.
+const VUS = Number(__ENV.VUS || 160);
 
 export const options = {
   scenarios: {

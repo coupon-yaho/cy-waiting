@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.kafkick.waiting.domain.routing.InFlightRegistry;
 import com.kafkick.waiting.domain.routing.InstanceOutliers;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
@@ -162,6 +163,27 @@ class InFlightTrackingFilterTest {
     @SuppressWarnings("unchecked")
     private static Set<String> 시도한(ServerWebExchange 요청) {
         return (Set<String>) 요청.getAttributes().getOrDefault(RoutingAttributes.TRIED, Set.of());
+    }
+
+    /**
+     * <b>하류가 오류를 받기 전에 적혀 있어야 한다.</b> 재시도는 백오프가 없어
+     * 그 오류 신호 안에서 곧바로 다시 구독하고, 그때 균형기가 이 목록을 읽는다.
+     * `doFinally` 에 적으면 콜백이 신호를 넘긴 뒤에 돌아 두 번째 선택이 빈
+     * 목록을 본다 — 시험 다섯이 초록인데 기능이 안 도는 자리였다.
+     */
+    @Test
+    @DisplayName("하류가_오류를_보기_전에_적힌다")
+    void 하류가_오류를_보기_전에_적힌다() {
+        ServerWebExchange 요청 = 고른_요청("be-1");
+        List<Set<String>> 하류가_본_것 = new ArrayList<>();
+
+        StepVerifier.create(필터.filter(요청, ex -> Mono.error(new IllegalStateException("끊김")))
+                        .doOnError(e -> 하류가_본_것.add(Set.copyOf(시도한(요청)))))
+                .verifyError();
+
+        assertThat(하류가_본_것).singleElement()
+                .as("재시도가 다시 고르는 시점에 이미 적혀 있다")
+                .isEqualTo(Set.of("be-1"));
     }
 
     /**

@@ -230,7 +230,8 @@ class CapacityAwareLoadBalancerTest {
 
     /** 이 요청이 이미 시도한 인스턴스들을 실은 요청. 재시도가 오는 모양이다. */
     private static Request<?> 이미_시도한(String... ids) {
-        Map<String, Object> attrs = Map.of(RoutingAttributes.TRIED, Set.of(ids));
+        Map<String, Object> attrs = ids.length == 0 ? Map.of()
+                : Map.of(RoutingAttributes.TRIED, Set.of(ids));
         return new DefaultRequest<>(new RequestDataContext(
                 new RequestData(MockServerHttpRequest.post("/api/v1/coupons/c1/issue").build(),
                         attrs)));
@@ -259,16 +260,29 @@ class CapacityAwareLoadBalancerTest {
         assertThat(고른것.getServer().getInstanceId())
                 .as("be-1 을 원하는 고르개를 줘도 그리로 안 간다")
                 .isEqualTo("be-2");
+
+        // **첫 시도는 속성이 없다.** 프로덕션의 실제 모양이고, 그때는 아무도 안 뺀다.
+        Response<ServiceInstance> 첫_시도 = CapacityAwareLoadBalancer.of(
+                목록(인스턴스("be-1", "100"), 인스턴스("be-2", "100")),
+                be1을_원한다, 레지스트리, 배제기, () -> 지금, 상한)
+                .choose(이미_시도한()).block();
+        assertThat(첫_시도.getServer().getInstanceId()).isEqualTo("be-1");
     }
 
-    /** 전부 시도했으면 뺄 것이 없다. 보낼 곳이 0 이 되는 것보다 다시 가는 편이 낫다. */
+    /**
+     * 전부 시도했으면 뺄 것이 없다. 보낼 곳이 0 이 되는 것보다 다시 가는 편이 낫다.
+     *
+     * <p><b>한 대짜리 목록으로 만든다.</b> 재시도가 한 번뿐이라 한 요청이 적을 수
+     * 있는 대는 최대 하나다 — 두 대를 다 적은 요청은 프로덕션에 없다. 도달 가능한
+     * 모양은 시도 사이에 목록이 그 대만 남는 경우다.
+     */
     @Test
     @DisplayName("전부_시도했으면_안_뺀다")
     void 전부_시도했으면_안_뺀다() {
         Response<ServiceInstance> 고른것 = CapacityAwareLoadBalancer.of(
-                목록(인스턴스("be-1", "100"), 인스턴스("be-2", "100")),
+                목록(인스턴스("be-1", "100")),
                 정해진("be-1"), 레지스트리, 배제기, () -> 지금, 상한)
-                .choose(이미_시도한("be-1", "be-2")).block();
+                .choose(이미_시도한("be-1")).block();
 
         assertThat(고른것.hasServer()).isTrue();
         assertThat(고른것.getServer().getInstanceId()).isEqualTo("be-1");

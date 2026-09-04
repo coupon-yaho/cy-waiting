@@ -81,10 +81,17 @@ public final class InFlightTrackingFilter implements GlobalFilter, Ordered {
         }
         // **놓는 것만 여기서 한다.** 잡는 것은 고르는 자리에서 원자적으로 끝났다 —
         // 여기서 잡으면 읽고 세는 사이에 동시 요청이 상한을 넘긴다.
-        return chain.filter(exchange).doFinally(signal -> {
-            reserved.release();
-            record(reserved.getInstanceId(), exchange, signal);
-        });
+        return chain.filter(exchange)
+                // **오류는 여기서 적는다.** `doFinally` 는 콜백을 하류로 신호를
+                // 넘긴 **뒤에** 돌린다. 재시도는 백오프가 없어 그 신호 안에서
+                // 곧바로 다시 구독하므로, `doFinally` 에 두면 두 번째 선택이
+                // 빈 목록을 보고 방금 죽은 대를 또 고른다. `doOnError` 는
+                // 하류보다 먼저 돈다.
+                .doOnError(e -> failed(reserved.getInstanceId(), exchange))
+                .doFinally(signal -> {
+                    reserved.release();
+                    record(reserved.getInstanceId(), exchange, signal);
+                });
     }
 
     /**
@@ -104,8 +111,9 @@ public final class InFlightTrackingFilter implements GlobalFilter, Ordered {
         if (signal == SignalType.CANCEL) {
             return;
         }
+        // 오류는 위 `doOnError` 가 이미 적었다. 여기서 또 적으면 한 시도가
+        // 두 번 세어져 배제 임계가 절반이 된다.
         if (signal == SignalType.ON_ERROR) {
-            failed(instanceId, exchange);
             return;
         }
         HttpStatusCode status = exchange.getResponse().getStatusCode();

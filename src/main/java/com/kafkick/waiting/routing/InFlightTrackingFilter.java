@@ -4,6 +4,7 @@ import com.kafkick.waiting.domain.routing.InFlightRegistry;
 import com.kafkick.waiting.domain.routing.InstanceOutliers;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.LongSupplier;
 import org.springframework.cloud.client.ServiceInstance;
 import org.springframework.cloud.client.loadbalancer.Response;
@@ -104,16 +105,16 @@ public final class InFlightTrackingFilter implements GlobalFilter, Ordered {
             return;
         }
         if (signal == SignalType.ON_ERROR) {
-            outliers.failed(instanceId, nowMillis.getAsLong());
+            failed(instanceId, exchange);
             return;
         }
         HttpStatusCode status = exchange.getResponse().getStatusCode();
         if (status != null && status.is5xxServerError()) {
-            outliers.failed(instanceId, nowMillis.getAsLong());
+            failed(instanceId, exchange);
             return;
         }
         if (status != null && INSTANCE_FAULT.contains(status.value())) {
-            outliers.failed(instanceId, nowMillis.getAsLong());
+            failed(instanceId, exchange);
             return;
         }
         // **나머지 4xx 는 어느 쪽으로도 안 센다.** 잘못된 요청은 어느 대로 보내도
@@ -123,6 +124,19 @@ public final class InFlightTrackingFilter implements GlobalFilter, Ordered {
             return;
         }
         outliers.succeeded(instanceId, nowMillis.getAsLong());
+    }
+
+    /**
+     * 실패를 배제기에 세고 <b>요청에도 적는다.</b> 재시도는 같은 요청을 다시
+     * 고르므로, 여기 적힌 것을 균형기가 읽어야 다음 대로 넘어간다.
+     */
+    @SuppressWarnings("unchecked")
+    private void failed(String instanceId, ServerWebExchange exchange) {
+        outliers.failed(instanceId, nowMillis.getAsLong());
+        // 재시도가 되돌리는 것은 응답 쪽뿐이라 요청 속성은 시도 사이에 남는다.
+        Set<String> tried = (Set<String>) exchange.getAttributes()
+                .computeIfAbsent(RoutingAttributes.TRIED, k -> ConcurrentHashMap.newKeySet());
+        tried.add(instanceId);
     }
 
     /** 균형기가 자리를 잡아 준 인스턴스. 안 골랐으면 {@code null} 이다. */

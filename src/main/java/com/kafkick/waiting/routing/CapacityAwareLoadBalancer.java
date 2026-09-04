@@ -24,6 +24,7 @@ import org.springframework.cloud.client.ServiceInstance;
 import org.springframework.cloud.client.loadbalancer.DefaultResponse;
 import org.springframework.cloud.client.loadbalancer.EmptyResponse;
 import org.springframework.cloud.client.loadbalancer.Request;
+import org.springframework.cloud.client.loadbalancer.RequestDataContext;
 import org.springframework.cloud.client.loadbalancer.Response;
 import org.springframework.cloud.loadbalancer.core.ReactorServiceInstanceLoadBalancer;
 import org.springframework.cloud.loadbalancer.core.ServiceInstanceListSupplier;
@@ -101,7 +102,23 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
 
     @Override
     public Mono<Response<ServiceInstance>> choose(Request request) {
-        return instances.get(request).next().map(this::pick);
+        Set<String> tried = tried(request);
+        return instances.get(request).next().map(available -> pick(available, tried));
+    }
+
+    /**
+     * 이 요청이 이미 실패해 본 인스턴스들. 재시도가 아니면 비어 있다.
+     *
+     * <p>요청 속성에서 읽는다 — 재시도가 되돌리는 것은 응답 쪽뿐이라 시도 사이에
+     * 남는 자리가 거기뿐이다.
+     */
+    @SuppressWarnings("unchecked")
+    private Set<String> tried(Request request) {
+        if (request == null || !(request.getContext() instanceof RequestDataContext context)) {
+            return Set.of();
+        }
+        Object raw = context.getClientRequest().getAttributes().get(RoutingAttributes.TRIED);
+        return raw instanceof Set<?> set ? (Set<String>) set : Set.of();
     }
 
     /**
@@ -171,7 +188,7 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
         return candidates;
     }
 
-    private Response<ServiceInstance> pick(List<ServiceInstance> available) {
+    private Response<ServiceInstance> pick(List<ServiceInstance> available, Set<String> tried) {
         long now = nowMillis.getAsLong();
         watchInstanceCount(available.size());
         // **사라지고 비어 있는 인스턴스의 카운터를 지운다.** 식별자가 재기동마다
@@ -188,6 +205,14 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
         // 고르개에 넘기기 전에 거른다. 규칙과 근거는 InstanceOutliers 에 있다.
         Set<String> ejected = outliers.ejected(present, now);
         watchEjection(present, ejected, now);
+        // **재시도는 방금 실패한 대를 다시 안 고른다.** 표는 재구독 전에 풀려 그
+        // 대가 다시 가장 한가해 보이므로, 안 빼면 3 대에서 같은 죽은 대로 갈
+        // 확률이 오히려 높다. 전부 시도했으면 안 뺀다 — 아래 되돌리기와 같은 뜻이다.
+        if (!tried.isEmpty() && !tried.containsAll(present)) {
+            Set<String> skip = new HashSet<>(ejected);
+            skip.addAll(tried);
+            ejected = skip;
+        }
 
         Map<String, ServiceInstance> byId = new LinkedHashMap<>();
         List<RoutingCandidate> candidates = gather(available, ejected, byId, now);

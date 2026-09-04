@@ -244,9 +244,16 @@ class CapacityAwareLoadBalancerTest {
     @Test
     @DisplayName("이미_시도한_대는_재시도에서_뺀다")
     void 이미_시도한_대는_재시도에서_뺀다() {
+        // 있으면 be-1 을 고르고 없으면 남은 것을 고른다. be-1 만 고집하는 고르개는
+        // 후보에 없을 때 빈 답을 내므로 재려던 것을 못 잰다.
+        InstanceChooser be1을_원한다 = candidates -> candidates.stream()
+                .filter(c -> c.instanceId().equals("be-1"))
+                .findFirst()
+                .or(() -> candidates.stream().findFirst());
+
         Response<ServiceInstance> 고른것 = CapacityAwareLoadBalancer.of(
                 목록(인스턴스("be-1", "100"), 인스턴스("be-2", "100")),
-                정해진("be-1", "be-2"), 레지스트리, 배제기, () -> 지금, 상한)
+                be1을_원한다, 레지스트리, 배제기, () -> 지금, 상한)
                 .choose(이미_시도한("be-1")).block();
 
         assertThat(고른것.getServer().getInstanceId())

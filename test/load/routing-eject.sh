@@ -31,7 +31,7 @@ require_positive_int BEFORE_SEC FAULT_SEC AFTER_SEC FAULT_STATUS || exit 2
 require_non_negative_int WARMUP_SEC || exit 2
 
 work=$(mktemp -d) || exit 1
-trap 'rm -rf "$work"; kill %1 2>/dev/null' EXIT
+trap 'reap_children; rm -rf "$work"' EXIT
 
 echo "$(banner) · 한 대를 즉시 ${FAULT_STATUS} 로 만든다"
 

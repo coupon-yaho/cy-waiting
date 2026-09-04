@@ -16,6 +16,19 @@ ROUTING_LIB_LOADED=1
 
 COMPOSE="docker compose -f test/load/compose.yml -f test/load/compose.routing.yml"
 
+# **죽일 때 부하 루프까지 걷는다.** 시나리오는 부하를 서브셸로 띄우는데, 밖에서
+# `kill` 로 죽이면 bash 는 EXIT trap 을 안 돌리고 그 루프가 살아남는다. 살아남은
+# 루프는 게이트웨이에 계속 요청을 보내 줄을 채우고, 다음 회차는 첫 요청부터
+# 202 를 받는다 — 실제로 몇 시간 살아남아 여섯 회차를 오염시켰다.
+# INT·TERM 을 잡아 exit 로 바꾸면 EXIT trap 이 돌고, 거기서 자식을 걷는다.
+# bash 는 앞에서 도는 명령이 끝난 뒤에야 trap 을 돌린다 — 시나리오의 표본
+# 간격이 1초라 그 안에 걷힌다. 긴 sleep 을 앞에 두면 그만큼 늦는다.
+trap 'exit 130' INT TERM
+reap_children() {
+    pkill -P $$ 2>/dev/null
+    return 0
+}
+
 # 뒷단 이름. **씨더가 쓰는 값과 같아야 한다** — 갈리면 기대값이 실제 보고와
 # 달라져, 맞게 도착한 것이 미달로 적힌다.
 NAMES=(backend backend-small backend-mid)

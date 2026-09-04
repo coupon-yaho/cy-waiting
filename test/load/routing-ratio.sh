@@ -74,7 +74,7 @@ case "$STRATEGY" in
 esac
 
 work=$(mktemp -d) || exit 1
-trap 'rm -rf "$work"' EXIT
+trap 'reap_children; rm -rf "$work"' EXIT
 
 echo "$(banner) · 동시 ${CONCURRENCY} · 부하 ${REQUESTS} 건"
 

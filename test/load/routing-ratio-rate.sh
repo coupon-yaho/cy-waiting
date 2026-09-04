@@ -65,7 +65,7 @@ restore() {
   if [ -n "$saved" ]; then $COMPOSE exec -T redis redis-cli SET gw:tunables "$saved" >/dev/null 2>&1
   else $COMPOSE exec -T redis redis-cli DEL gw:tunables >/dev/null 2>&1; fi
 }
-trap 'restore; rm -rf "$work"' EXIT
+trap 'reap_children; restore; rm -rf "$work"' EXIT
 
 wait_for_ramp || exit 2
 sleep "$WARMUP_SEC"

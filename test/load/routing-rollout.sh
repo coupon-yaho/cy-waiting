@@ -36,7 +36,7 @@ case "$STRATEGY" in
 esac
 
 work=$(mktemp -d) || exit 1
-trap 'rm -rf "$work"; kill %1 2>/dev/null' EXIT
+trap 'reap_children; rm -rf "$work"' EXIT
 
 echo "$(banner) · 큰 대를 ${FRESH_ID} 로 갈아 끼운다"
 

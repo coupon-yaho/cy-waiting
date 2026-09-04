@@ -134,6 +134,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      */
     private static final long IN_FLIGHT_GRACE = 5;
 
+    /** 격벽이 막기 시작하는 지연. 시험이 5 를 손으로 나누지 않게 여기서 낸다. */
+    static final Duration BLOCKING_DELAY = Duration.ofSeconds(MAX_IN_FLIGHT_SEC);
+
     /** 자리를 놓게 하는 시한. 시험이 손으로 베끼지 않게 여기서 한 번만 정한다. */
     static final Duration MAX_IN_FLIGHT =
             Duration.ofSeconds(MAX_IN_FLIGHT_SEC * IN_FLIGHT_GRACE);

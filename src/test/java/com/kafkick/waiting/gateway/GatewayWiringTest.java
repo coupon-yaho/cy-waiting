@@ -151,7 +151,7 @@ class GatewayWiringTest {
         assertThat(circuit.slidingWindowSize()).isEqualTo(Duration.ofSeconds(10));
         assertThat(circuit.minimumNumberOfCalls()).isEqualTo(20);
         assertThat(circuit.failureRateThreshold()).isEqualTo(50f);
-        assertThat(circuit.slowCallDurationThreshold()).isEqualTo(Duration.ofMillis(1500));
+        assertThat(circuit.slowCallDurationThreshold()).isEqualTo(Duration.ofMillis(1900));
         assertThat(circuit.slowCallRateThreshold()).isEqualTo(50f);
         assertThat(circuit.waitDurationInOpenState()).isEqualTo(Duration.ofSeconds(5));
         assertThat(circuit.maxWaitDurationInHalfOpenState()).isEqualTo(Duration.ofSeconds(30));

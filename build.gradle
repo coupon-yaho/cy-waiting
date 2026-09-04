@@ -354,8 +354,11 @@ pitest {
     //
     // **gateway 의 판정 코드도 넣는다.** 응답 봉투·재시도 안내처럼 값을 정하는
     // 코드가 여기 있는데, 범위 밖이라 약한 단언이 숫자에 안 잡혔다.
+    //
+    // **routing 도 넣는다.** 고르개에 넘길 후보를 거르고 실패를 세는 코드가
+    // 여기 있는데 범위 밖이라, 그 자리를 지워도 시험이 초록인 채로 지나갔다.
     targetClasses = ['com.kafkick.waiting.domain.*', 'com.kafkick.waiting.control.*',
-                     'com.kafkick.waiting.gateway.*']
+                     'com.kafkick.waiting.gateway.*', 'com.kafkick.waiting.routing.*']
     // domain 은 Phase 2 에서 채워진다. 그전까지 대상이 0건인데, 이걸 실패로
     // 두면 파이프라인이 페이즈 진행을 막는다. 클래스가 들어오면 임계가 문다.
     failWhenNoMutations = false
@@ -374,6 +377,9 @@ pitest {
             'com.kafkick.waiting.gateway.CorsPolicy*',
             'com.kafkick.waiting.gateway.ConfigUris*',
             'com.kafkick.waiting.gateway.FilterOrder',
+            'com.kafkick.waiting.routing.*Config',
+            'com.kafkick.waiting.routing.RoutingAttributes',
+            'com.kafkick.waiting.routing.ReservedInstance',
     ]
     mutationThreshold = 90          // 생존 ≤ 10%
     timestampedReports = false

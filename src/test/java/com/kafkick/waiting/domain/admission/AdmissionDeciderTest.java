@@ -272,6 +272,28 @@ class AdmissionDeciderTest {
         assertThat(d.decide(req)).isEqualTo(AdmissionDecision.REJECT_OVERLOAD);
     }
 
+    /**
+     * <b>낡음이 풀리는 초에 상한이 두 번 열리면 안 된다</b> (F4).
+     *
+     * <p>낡은 갈래와 정상 갈래가 서로 다른 키를 들면, 낡은 동안 전역을 다 쓴 초에
+     * 낡음이 풀리는 순간 정상 갈래가 0 부터 세기 시작해 그 한 초에 두 배가 나간다.
+     */
+    @Test
+    @DisplayName("낡음이_풀려도_같은_초의_전역_예산은_이어진다")
+    void 낡음이_풀려도_같은_초의_전역_예산은_이어진다() {
+        AdmissionDecider d = decider();
+        CouponState idle = CouponStates.idle(500);
+
+        for (int i = 0; i < 100; i++) {
+            assertThat(d.decide(request(idle).withDataStale(true)))
+                    .as("%d 번째", i).isEqualTo(AdmissionDecision.PASS_FAIL_OPEN);
+        }
+
+        // 같은 초에 낡음만 풀린다. 키가 갈려 있으면 여기서 100 명이 더 나간다.
+        assertThat(d.decide(request(idle)))
+                .isEqualTo(AdmissionDecision.ENQUEUE_RATE_GLOBAL);
+    }
+
     @Test
     @DisplayName("노드_예산이_먼저_마르면_전역_사유로_큐에_간다")
     void 노드_예산이_먼저_마르면_전역_사유로_큐에_간다() {

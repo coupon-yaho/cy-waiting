@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.kafkick.waiting.domain.routing.InFlightRegistry;
+import com.kafkick.waiting.domain.routing.InstanceOutliers;
 import com.kafkick.waiting.domain.routing.InstanceChooser;
 import com.kafkick.waiting.domain.routing.RoutingCandidate;
 import com.kafkick.waiting.domain.routing.WeightedRoundRobin;
@@ -37,6 +38,9 @@ class CapacityAwareLoadBalancerTest {
     private static final long 지금 = 1_800_000_000_000L;
 
     private final InFlightRegistry 레지스트리 = InFlightRegistry.of(수명);
+
+    private final InstanceOutliers 배제기 =
+            InstanceOutliers.of(3, Duration.ofSeconds(10));
 
     private static ServiceInstance 인스턴스(String id, String credits) {
         DefaultServiceInstance instance =
@@ -75,7 +79,7 @@ class CapacityAwareLoadBalancerTest {
 
     private Response<ServiceInstance> 고른다(InstanceChooser chooser,
             ServiceInstanceListSupplier 목록, int cap) {
-        return CapacityAwareLoadBalancer.of(목록, chooser, 레지스트리, () -> 지금, cap)
+        return CapacityAwareLoadBalancer.of(목록, chooser, 레지스트리, 배제기, () -> 지금, cap)
                 .choose((Request<?>) null).block();
     }
 
@@ -199,7 +203,7 @@ class CapacityAwareLoadBalancerTest {
     void 라운드로빈도_붙는다() {
         CapacityAwareLoadBalancer 균형기 = CapacityAwareLoadBalancer.of(
                 목록(인스턴스("be-1", "3"), 인스턴스("be-2", "1")),
-                WeightedRoundRobin.create(), 레지스트리, () -> 지금, 상한);
+                WeightedRoundRobin.create(), 레지스트리, 배제기, () -> 지금, 상한);
 
         List<String> 고른것 = new ArrayList<>();
         for (int i = 0; i < 4; i++) {
@@ -259,7 +263,7 @@ class CapacityAwareLoadBalancerTest {
     @DisplayName("상한이_양수가_아니면_거절한다")
     void 상한이_양수가_아니면_거절한다() {
         assertThatThrownBy(() -> CapacityAwareLoadBalancer.of(
-                목록(), 정해진(), 레지스트리, () -> 지금, 0))
+                목록(), 정해진(), 레지스트리, 배제기, () -> 지금, 0))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 }

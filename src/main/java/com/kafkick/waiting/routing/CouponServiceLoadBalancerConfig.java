@@ -3,6 +3,7 @@ package com.kafkick.waiting.routing;
 import com.kafkick.waiting.control.SnapshotHolder;
 import com.kafkick.waiting.domain.routing.InFlightRegistry;
 import com.kafkick.waiting.domain.routing.InstanceChooser;
+import com.kafkick.waiting.domain.routing.InstanceOutliers;
 import org.springframework.cloud.loadbalancer.core.ReactorServiceInstanceLoadBalancer;
 import org.springframework.cloud.loadbalancer.core.ServiceInstanceListSupplier;
 import org.springframework.context.annotation.Bean;
@@ -25,8 +26,9 @@ public class CouponServiceLoadBalancerConfig {
     @Bean
     ReactorServiceInstanceLoadBalancer capacityAwareLoadBalancer(
             ServiceInstanceListSupplier instances, InstanceChooser chooser,
-            InFlightRegistry inFlight, RoutingProperties properties) {
-        return CapacityAwareLoadBalancer.of(instances, chooser, inFlight,
+            InFlightRegistry inFlight, InstanceOutliers outliers,
+            RoutingProperties properties) {
+        return CapacityAwareLoadBalancer.of(instances, chooser, inFlight, outliers,
                 System::currentTimeMillis, properties.perInstanceCap());
     }
 }

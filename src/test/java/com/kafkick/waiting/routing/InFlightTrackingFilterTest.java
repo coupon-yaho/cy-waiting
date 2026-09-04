@@ -3,6 +3,7 @@ package com.kafkick.waiting.routing;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.kafkick.waiting.domain.routing.InFlightRegistry;
+import com.kafkick.waiting.domain.routing.InstanceOutliers;
 import java.time.Duration;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
@@ -34,8 +35,11 @@ class InFlightTrackingFilterTest {
 
     private final InFlightRegistry 레지스트리 = InFlightRegistry.of(Duration.ofSeconds(30));
 
+    private final InstanceOutliers 배제기 =
+            InstanceOutliers.of(3, Duration.ofSeconds(10));
+
     private final InFlightTrackingFilter 필터 =
-            InFlightTrackingFilter.of(레지스트리, () -> 지금);
+            InFlightTrackingFilter.of(레지스트리, 배제기, () -> 지금);
 
     /**
      * <b>자리는 균형기가 이미 잡아 뒀다.</b> 필터는 놓기만 한다 — 여기서 잡으면

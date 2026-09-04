@@ -6,6 +6,7 @@ import com.kafkick.waiting.control.FailureWindow;
 import com.kafkick.waiting.domain.routing.InFlightRegistry;
 import com.kafkick.waiting.domain.routing.InstanceCountBand;
 import com.kafkick.waiting.domain.routing.InstanceChooser;
+import com.kafkick.waiting.domain.routing.InstanceOutliers;
 import com.kafkick.waiting.domain.routing.RoutingCandidate;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -44,6 +45,8 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
 
     private final InFlightRegistry inFlight;
 
+    private final InstanceOutliers outliers;
+
     private final LongSupplier nowMillis;
 
     /** 인스턴스 하나에 동시에 물릴 수 있는 수 (G9.13). */
@@ -57,11 +60,12 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
             new AtomicReference<>(InstanceCountBand.EXPECTED);
 
     private CapacityAwareLoadBalancer(ServiceInstanceListSupplier instances,
-            InstanceChooser chooser, InFlightRegistry inFlight, LongSupplier nowMillis,
-            int perInstanceCap) {
+            InstanceChooser chooser, InFlightRegistry inFlight, InstanceOutliers outliers,
+            LongSupplier nowMillis, int perInstanceCap) {
         this.instances = Objects.requireNonNull(instances, "instances");
         this.chooser = Objects.requireNonNull(chooser, "chooser");
         this.inFlight = Objects.requireNonNull(inFlight, "inFlight");
+        this.outliers = Objects.requireNonNull(outliers, "outliers");
         this.nowMillis = Objects.requireNonNull(nowMillis, "nowMillis");
         if (perInstanceCap < 1) {
             throw new IllegalArgumentException("perInstanceCap 은 1 이상이어야 한다: "
@@ -71,10 +75,10 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
     }
 
     public static CapacityAwareLoadBalancer of(ServiceInstanceListSupplier instances,
-            InstanceChooser chooser, InFlightRegistry inFlight, LongSupplier nowMillis,
-            int perInstanceCap) {
-        return new CapacityAwareLoadBalancer(instances, chooser, inFlight, nowMillis,
-                perInstanceCap);
+            InstanceChooser chooser, InFlightRegistry inFlight, InstanceOutliers outliers,
+            LongSupplier nowMillis, int perInstanceCap) {
+        return new CapacityAwareLoadBalancer(instances, chooser, inFlight, outliers,
+                nowMillis, perInstanceCap);
     }
 
     @Override
@@ -94,11 +98,21 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
             present.add(instance.getInstanceId());
         }
         inFlight.retain(present, now);
+        outliers.retain(present);
+
+        // **연속으로 실패한 대를 뺀다.** 물린 표는 답이 끝날 때 놓으므로 즉시
+        // 실패하는 대는 물린 건수가 안 쌓여 가장 한가해 보이고, 부하율로 고르는
+        // 이상 그쪽으로 더 간다. 전부가 대상이면 하나도 안 빠진다 — 보낼 곳이
+        // 0 이 되는 것은 열화된 대로라도 보내는 것보다 나쁘다.
+        Set<String> ejected = outliers.ejected(present, now);
 
         Map<String, ServiceInstance> byId = new LinkedHashMap<>();
         List<RoutingCandidate> candidates = new ArrayList<>();
         for (ServiceInstance instance : available) {
             String id = instance.getInstanceId();
+            if (ejected.contains(id)) {
+                continue;
+            }
             int busy = inFlight.count(id, now);
             // **상한에 닿은 대는 후보가 아니다.** 느려진 한 대로 간 요청이
             // 무한정 쌓이면 그 한 대가 게이트웨이 커넥션을 다 붙잡는다.

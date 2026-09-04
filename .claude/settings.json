@@ -53,5 +53,18 @@
         ]
       }
     ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(./gradlew:*)",
+      "Bash(.claude/hooks/review-branch.sh:*)",
+      "Bash(.claude/hooks/check-java.sh:*)",
+      "Bash(.claude/hooks/check-lua.sh:*)",
+      "Bash(.github/scripts/journal-index.sh:*)",
+      "Bash(.github/scripts/verdict-needs.sh:*)",
+      "Bash(git worktree list:*)",
+      "Bash(git merge-base:*)",
+      "Bash(git name-rev:*)"
+    ]
   }
 }

@@ -60,6 +60,67 @@ class InFlightTrackingFilterTest {
         return MockServerWebExchange.from(MockServerHttpRequest.post("/api/v1/coupons/c1/issue"));
     }
 
+    private void 세_번(String instanceId, GatewayFilterChain 사슬) {
+        for (int i = 0; i < 3; i++) {
+            필터.filter(고른_요청(instanceId), 사슬).onErrorComplete().block();
+        }
+    }
+
+    /** 여기가 서킷 안쪽이라 폴백이 정상 코드로 바꾸기 전의 것을 본다. */
+    @Test
+    @DisplayName("뒷단_오류가_연속되면_그_대를_뺀다")
+    void 뒷단_오류가_연속되면_그_대를_뺀다() {
+        세_번("be-1", ex -> {
+            ex.getResponse().setRawStatusCode(503);
+            return Mono.empty();
+        });
+
+        assertThat(배제기.ejected(java.util.Set.of("be-1", "be-2"), 지금))
+                .containsExactly("be-1");
+    }
+
+    /** 연결이 끊긴 것도 그 대의 실패다. 상태 코드가 아예 안 선다. */
+    @Test
+    @DisplayName("에러로_끝난_것도_실패로_센다")
+    void 에러로_끝난_것도_실패로_센다() {
+        세_번("be-1", ex -> Mono.error(new IllegalStateException("뒷단이 끊었다")));
+
+        assertThat(배제기.ejected(java.util.Set.of("be-1", "be-2"), 지금))
+                .containsExactly("be-1");
+    }
+
+    /**
+     * <b>잘못된 요청은 어느 대로 보내도 같은 답이 온다.</b> 그걸로 빼면 나쁜
+     * 클라이언트 하나가 뒷단을 차례로 지운다.
+     */
+    @Test
+    @DisplayName("4xx_는_그_대의_실패가_아니다")
+    void 사백번대는_그_대의_실패가_아니다() {
+        세_번("be-1", ex -> {
+            ex.getResponse().setRawStatusCode(400);
+            return Mono.empty();
+        });
+
+        assertThat(배제기.ejected(java.util.Set.of("be-1", "be-2"), 지금)).isEmpty();
+    }
+
+    /**
+     * <b>취소는 어느 쪽으로도 안 센다.</b> 사용자가 창을 닫은 것만으로 뒷단이
+     * 빠지면, 이탈이 몰리는 구간에 멀쩡한 대가 차례로 사라진다.
+     */
+    @Test
+    @DisplayName("취소는_실패로_안_센다")
+    void 취소는_실패로_안_센다() {
+        for (int i = 0; i < 3; i++) {
+            StepVerifier.create(필터.filter(고른_요청("be-1"), ex -> Mono.never()))
+                    .thenCancel()
+                    .verify();
+        }
+
+        assertThat(배제기.ejected(java.util.Set.of("be-1", "be-2"), 지금)).isEmpty();
+        assertThat(배제기.tracked()).as("성공으로도 안 센다").isEmpty();
+    }
+
     /** 뒷단이 답할 때까지 물려 있다. 안 세면 부하율이 늘 0 이라 고르개가 눈이 먼다. */
     @Test
     @DisplayName("도는_동안_물린_것으로_센다")

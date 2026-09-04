@@ -77,6 +77,46 @@ class CapacityAwareLoadBalancerTest {
     /** 상한이 안 물리는 값. 상한을 재는 시험만 따로 낮춰 쓴다. */
     private static final int 상한 = 1_000;
 
+    /**
+     * <b>연속으로 실패한 대는 후보에 안 든다.</b> 물린 표를 답이 끝날 때 놓으므로
+     * 즉시 실패하는 대는 가장 한가해 보인다 — 거르지 않으면 그쪽으로 더 간다.
+     */
+    @Test
+    @DisplayName("배제된_대는_후보에_안_든다")
+    void 배제된_대는_후보에_안_든다() {
+        for (int i = 0; i < 3; i++) {
+            배제기.failed("be-1", 지금);
+        }
+
+        Response<ServiceInstance> 고른것 = 고른다(candidates -> {
+            assertThat(candidates).extracting(RoutingCandidate::instanceId)
+                    .as("배제된 대는 도메인에 넘어가지도 않는다")
+                    .containsExactly("be-2");
+            return candidates.stream().findFirst();
+        }, 목록(인스턴스("be-1", "100"), 인스턴스("be-2", "100")), 상한);
+
+        assertThat(고른것.getServer().getInstanceId()).isEqualTo("be-2");
+    }
+
+    /**
+     * <b>전부 앓아도 보낼 곳은 남긴다.</b> 배제가 전면 차단이 되면 열화된 대로라도
+     * 보내는 것보다 나쁘다 — 계획서가 인스턴스별 서킷을 막았던 자리다.
+     */
+    @Test
+    @DisplayName("전부_배제_대상이면_그대로_보낸다")
+    void 전부_배제_대상이면_그대로_보낸다() {
+        for (int i = 0; i < 3; i++) {
+            배제기.failed("be-1", 지금);
+            배제기.failed("be-2", 지금);
+        }
+
+        Response<ServiceInstance> 고른것 = 고른다(정해진("be-1"),
+                목록(인스턴스("be-1", "100"), 인스턴스("be-2", "100")), 상한);
+
+        assertThat(고른것.hasServer()).isTrue();
+        assertThat(고른것.getServer().getInstanceId()).isEqualTo("be-1");
+    }
+
     private Response<ServiceInstance> 고른다(InstanceChooser chooser,
             ServiceInstanceListSupplier 목록, int cap) {
         return CapacityAwareLoadBalancer.of(목록, chooser, 레지스트리, 배제기, () -> 지금, cap)

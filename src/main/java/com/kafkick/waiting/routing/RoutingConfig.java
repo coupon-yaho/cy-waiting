@@ -62,8 +62,9 @@ public class RoutingConfig {
      * 아니면 감소를 어디선가 놓친 것이다 (G9.3).
      */
     @Bean
-    InFlightMetrics.Binding inFlightMetrics(InFlightRegistry registry, MeterRegistry meters) {
-        InFlightMetrics.bind(registry, System::currentTimeMillis, meters);
+    InFlightMetrics.Binding inFlightMetrics(InFlightRegistry registry,
+            InstanceOutliers outliers, MeterRegistry meters) {
+        InFlightMetrics.bind(registry, outliers, System::currentTimeMillis, meters);
         return new InFlightMetrics.Binding();
     }
 

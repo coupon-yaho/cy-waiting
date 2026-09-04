@@ -12,6 +12,7 @@ import org.springframework.cloud.gateway.filter.GlobalFilter;
 import org.springframework.cloud.gateway.filter.ReactiveLoadBalancerClientFilter;
 import org.springframework.cloud.gateway.support.ServerWebExchangeUtils;
 import org.springframework.core.Ordered;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
@@ -39,11 +40,13 @@ public final class InFlightTrackingFilter implements GlobalFilter, Ordered {
     /**
      * 인스턴스마다 다른 답이 오는 4xx. <b>이것들은 그 대의 상태다.</b>
      *
-     * <p>포화된 뒷단은 429 로 흘리고, 시크릿이 안 풀린 대는 401·403 을 낸다.
-     * 셋 다 즉시 끝나 물린 건수가 안 쌓이므로, 성공으로 세면 그 대가 계속 가장
-     * 한가해 보여 트래픽이 오히려 몰린다 — 이 기능이 막으려던 바로 그 병리다.
+     * <p>포화된 대는 429 로 흘리고, 시크릿이 안 풀린 대는 401·403 을, 자기 쪽
+     * 시한이 지난 대는 408 을 낸다. 넷 다 즉시 끝나 물린 건수가 안 쌓이므로,
+     * 성공으로 세면 그 대가 계속 가장 한가해 보여 트래픽이 오히려 몰린다.
      */
-    private static final Set<Integer> INSTANCE_FAULT = Set.of(401, 403, 408, 429);
+    private static final Set<Integer> INSTANCE_FAULT = Set.of(
+            HttpStatus.UNAUTHORIZED.value(), HttpStatus.FORBIDDEN.value(),
+            HttpStatus.REQUEST_TIMEOUT.value(), HttpStatus.TOO_MANY_REQUESTS.value());
 
     private final InFlightRegistry registry;
 

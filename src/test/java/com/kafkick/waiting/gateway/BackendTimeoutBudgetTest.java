@@ -2,6 +2,7 @@ package com.kafkick.waiting.gateway;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.kafkick.waiting.routing.RoutingProperties;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.List;
@@ -100,9 +101,8 @@ class BackendTimeoutBudgetTest {
                 .isLessThanOrEqualTo(AdmissionGatewayFilter.BLOCKING_DELAY);
     }
 
-    private com.kafkick.waiting.routing.RoutingProperties 라우팅() throws IOException {
-        return 운영설정().bind("waiting.routing",
-                        com.kafkick.waiting.routing.RoutingProperties.class)
+    private RoutingProperties 라우팅() throws IOException {
+        return 운영설정().bind("waiting.routing", RoutingProperties.class)
                 .orElseThrow(() -> new AssertionError("waiting.routing 이 없다"));
     }
 

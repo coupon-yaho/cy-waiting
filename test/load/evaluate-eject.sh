@@ -19,7 +19,9 @@ EJECTED_SHARE="${EJECTED_SHARE:-5}"
 EJECT_BUDGET_SEC="${EJECT_BUDGET_SEC:-5}"
 # 복귀 몫이 정상에서 이만큼까지는 닿은 것으로 본다(%p).
 SLACK="${SLACK:-8}"
-# 복귀는 이 시간 안에 끝나야 한다(초). 램프를 태우므로 진입보다 길게 준다.
+# 복귀는 이 시간 안에 끝나야 한다(초). **배제 15 초에 램프 60 초를 더한 값**이다
+# (`waiting.routing` 의 기본값). 램프를 다 타야 제 몫이 되므로 그보다 짧게 두면
+# 맞게 도는 구현이 미달로 적힌다.
 RECOVER_BUDGET_SEC="${RECOVER_BUDGET_SEC:-75}"
 # 이만큼 연속으로 안에 있어야 머문다고 본다.
 SUSTAIN="${SUSTAIN:-3}"

@@ -64,7 +64,8 @@ public record RoutingProperties(boolean enabled, String serviceId, String strate
         }
         // **응답 상한보다 길어야 한다.** 멎은 대로 간 요청은 그 상한이 지나야
         // 실패로 관측되는데, 배제가 먼저 풀리면 직전 실패가 세어지기도 전에 그
-        // 대가 후보로 돌아온다. 상한 12초 위로 잡는다.
+        // 대가 후보로 돌아온다. 상한은 다른 설정에 있어 여기서 못 막고,
+        // BackendTimeoutBudgetTest 가 배포 파일을 읽어 그 관계를 문다.
         outlierEjectFor = outlierEjectFor == null ? Duration.ofSeconds(15) : outlierEjectFor;
         if (outlierEjectFor.isNegative() || outlierEjectFor.isZero()) {
             throw new IllegalArgumentException(

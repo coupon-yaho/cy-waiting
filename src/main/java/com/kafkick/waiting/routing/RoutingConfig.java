@@ -37,6 +37,8 @@ public class RoutingConfig {
      * 보되 <b>전부를 빼지는 않는다</b> — 배제가 전면 차단이 되면 안 된다.
      */
     @Bean
+    // 램프는 콜드 스타트와 같은 값을 쓴다. 둘 다 "자기 관측이 없어 한가해
+    // 보이는 대를 잠시 무겁게 본다" 는 같은 일이라 따로 둘 이유가 없다.
     InstanceOutliers instanceOutliers(RoutingProperties properties) {
         return InstanceOutliers.of(properties.outlierFailures(),
                 properties.outlierEjectFor(), properties.coldStartRamp());

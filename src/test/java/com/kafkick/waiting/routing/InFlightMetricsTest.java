@@ -7,6 +7,7 @@ import com.kafkick.waiting.domain.routing.InstanceOutliers;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
+import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -95,7 +96,7 @@ class InFlightMetricsTest {
 
         assertThat(meters.getMeters())
                 .filteredOn(m -> m.getId().getName().startsWith("waiting.routing"))
-                .hasSize(4)
+                .hasSize(5)
                 .allSatisfy(m -> assertThat(m.getId().getTags())
                         .as("%s 의 라벨", m.getId().getName())
                         .isEmpty());
@@ -115,7 +116,10 @@ class InFlightMetricsTest {
         for (int i = 0; i < 3; i++) {
             배제기.failed("be-1", 지금);
         }
+        배제기.retain(Set.of("be-1", "be-2"), 지금);
 
         assertThat(meters.get("waiting.routing.ejected").gauge().value()).isEqualTo(1);
+        assertThat(meters.get("waiting.routing.seen").gauge().value())
+                .as("견줄 대상").isEqualTo(2);
     }
 }

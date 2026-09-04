@@ -47,8 +47,11 @@ public final class InFlightMetrics {
         metrics.gauge(meters, "waiting.routing.instances", InFlightMetrics::instances,
                 "카운터를 들고 있는 인스턴스 수. 안 줄면 사라진 대가 남은 것이다");
         metrics.gauge(meters, "waiting.routing.ejected", InFlightMetrics::ejected,
-                "연속 실패로 표시된 인스턴스 수. 전체 대수와 같아지면 뒷단 전체가 "
-                        + "앓는 것이고, 그때는 배제가 안 걸린 채 그대로 나간다");
+                "연속 실패로 표시된 인스턴스 수. waiting.routing.seen 과 같아지면 "
+                        + "뒷단 전체가 앓는 것이고, 그때는 배제가 안 걸린 채 그대로 나간다");
+        metrics.gauge(meters, "waiting.routing.seen", InFlightMetrics::seen,
+                "마지막으로 본 인스턴스 수. 위 값을 여기에 견준다 — 물린 건수 쪽 "
+                        + "게이지는 배제된 대가 빠져서 견줄 대상이 못 된다");
     }
 
     /**
@@ -76,7 +79,11 @@ public final class InFlightMetrics {
     }
 
     private double ejected() {
-        return outliers.ejectedCount(nowMillis.getAsLong());
+        return outliers.markedCount(nowMillis.getAsLong());
+    }
+
+    private double seen() {
+        return outliers.seenCount();
     }
 
     /** 걸었다는 표시. 빈으로 두어야 스프링이 이 배선을 실제로 돌린다. */

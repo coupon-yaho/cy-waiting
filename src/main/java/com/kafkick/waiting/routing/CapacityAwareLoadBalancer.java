@@ -205,26 +205,30 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
         // 고르개에 넘기기 전에 거른다. 규칙과 근거는 InstanceOutliers 에 있다.
         Set<String> ejected = outliers.ejected(present, now);
         watchEjection(present, ejected, now);
-        // **재시도는 방금 실패한 대를 다시 안 고른다.** 표는 재구독 전에 풀려 그
-        // 대가 다시 가장 한가해 보이므로, 안 빼면 3 대에서 같은 죽은 대로 갈
-        // 확률이 오히려 높다. 전부 시도했으면 안 뺀다 — 아래 되돌리기와 같은 뜻이다.
+        // **재시도는 방금 실패한 대를 다시 안 고른다.** 안 빼면 3 대에서 같은 죽은
+        // 대로 갈 확률이 오히려 높다. 전부 시도했으면 안 뺀다.
+        Set<String> skip = ejected;
         if (!tried.isEmpty() && !tried.containsAll(present)) {
-            Set<String> skip = new HashSet<>(ejected);
+            skip = new HashSet<>(ejected);
             skip.addAll(tried);
-            ejected = skip;
         }
 
         Map<String, ServiceInstance> byId = new LinkedHashMap<>();
-        List<RoutingCandidate> candidates = gather(available, ejected, byId, now);
-        // **배제 때문에 보낼 곳이 0 이 되면 배제를 접는다.** 배제기는 자기끼리만
-        // 세어 "전부는 안 뺀다" 를 지키는데, 남은 대가 상한에 닿아 있으면 그 약속이
-        // 여기서 깨진다 — 앓는 대라도 보내는 것이 아무 데도 못 보내는 것보다 낫다.
+        List<RoutingCandidate> candidates = gather(available, skip, byId, now);
+        // **보낼 곳이 0 이 되면 되돌린다. 방금 실패한 대를 먼저 되돌린다** — 배제는
+        // 세 번 연속 실패한 근거가 있고 재시도 배제는 이번 한 번뿐이라, 둘 중 하나만
+        // 접어야 한다면 근거가 얕은 쪽이다. 그래도 비면 배제까지 접는다: 앓는 대라도
+        // 보내는 것이 아무 데도 못 보내는 것보다 낫다.
+        if (candidates.isEmpty() && !skip.equals(ejected)) {
+            byId.clear();
+            candidates = gather(available, ejected, byId, now);
+        }
         if (candidates.isEmpty() && !ejected.isEmpty()) {
             // 요청마다 도는 자리다. 구간의 첫 건만 남긴다 (LG-3).
             if (crowdedOut.entered()) {
                 log.warn("배제하고 나니 보낼 곳이 없다 — 뺀 {} 대를 도로 넣는다. "
-                        + "남은 대가 인스턴스별 상한에 닿았다는 뜻이다. 상한과 "
-                        + "뒷단 여유를 함께 본다", ejected.size());
+                        + "남은 대가 여유 0 이거나 인스턴스별 상한에 닿았다는 뜻이다. "
+                        + "상한과 뒷단 여유를 함께 본다", ejected.size());
             }
             byId.clear();
             candidates = gather(available, Set.of(), byId, now);

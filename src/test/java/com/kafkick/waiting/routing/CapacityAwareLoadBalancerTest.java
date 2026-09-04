@@ -276,6 +276,31 @@ class CapacityAwareLoadBalancerTest {
      * 있는 대는 최대 하나다 — 두 대를 다 적은 요청은 프로덕션에 없다. 도달 가능한
      * 모양은 시도 사이에 목록이 그 대만 남는 경우다.
      */
+    /**
+     * <b>되돌릴 때는 방금 실패한 대를 먼저 넣는다.</b> 배제는 세 번 연속 실패한
+     * 근거가 있고 재시도 배제는 이번 한 번뿐이다 — 둘 중 하나만 접어야 하면
+     * 근거가 얕은 쪽이다. 배제된 대로 도로 보내면 그 대의 실패가 또 쌓인다.
+     */
+    @Test
+    @DisplayName("되돌릴_때_시도한_대를_먼저_넣는다")
+    void 되돌릴_때_시도한_대를_먼저_넣는다() {
+        for (int i = 0; i < 3; i++) {
+            배제기.failed("be-1", 지금);
+        }
+        // be-2 는 이번 시도에서 실패했고, be-3 은 상한에 닿아 후보가 아니다.
+        레지스트리.started("be-3", 지금);
+
+        Response<ServiceInstance> 고른것 = CapacityAwareLoadBalancer.of(
+                목록(인스턴스("be-1", "100"), 인스턴스("be-2", "100"), 인스턴스("be-3", "100")),
+                candidates -> candidates.stream().findFirst(),
+                레지스트리, 배제기, () -> 지금, 1)
+                .choose(이미_시도한("be-2")).block();
+
+        assertThat(고른것.getServer().getInstanceId())
+                .as("배제된 be-1 이 아니라 방금 실패한 be-2 로 돌아간다")
+                .isEqualTo("be-2");
+    }
+
     @Test
     @DisplayName("전부_시도했으면_안_뺀다")
     void 전부_시도했으면_안_뺀다() {

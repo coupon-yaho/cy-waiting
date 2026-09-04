@@ -116,7 +116,7 @@ jobs:
               # **비율은 우리가 잰다.** PIT 의 임계는 정수 백분율로 비교해
               # 반올림한다 — 89.9% 가 90 으로 올라가 통과한다. 문서가 든
               # "생존 ≤ 10%" 는 그 반올림 아래에서 참이 아니다. 정수 산술로
-              # 다시 문다: 죽인 수 × 10 이 전체 × 9 보다 작으면 미달이다.
+              # 다시 문다.
               #
               # **PIT 이 직접 쓰는 판정을 센다.** 상태 이름을 우리가 다시 나열하면
               # NON_VIABLE 같은 것이 뜨는 날 우리 게이트만 실패하고, 메시지는
@@ -125,10 +125,18 @@ jobs:
               case "$killed" in
                 ''|*[!0-9]*) die "죽인 뮤턴트를 셀 수 없었다 — 리포트를 못 읽었다" ;;
               esac
-              if [ $((killed * 10)) -lt $((counted * 9)) ]; then
+              # **임계는 build.gradle 에서 읽는다.** 여기 숫자를 따로 박으면
+              # 한쪽만 바뀌는 날 CI 가 조용히 옛 값으로 계속 문다 — 주석으로는
+              # 그걸 못 막는다. 값이 사는 곳은 한 곳이다.
+              threshold=$(grep -oE 'mutationThreshold = [0-9]+' build.gradle \
+                | grep -oE '[0-9]+' | tail -1 || true)
+              case "$threshold" in
+                ''|*[!0-9]*) die "임계를 못 읽었다 — build.gradle 의 mutationThreshold 를 본다" ;;
+              esac
+              if [ $((killed * 100)) -lt $((counted * threshold)) ]; then
                 # 몇 개가 모자란지 함께 준다 — 89.9% 와 60% 는 다른 상황이다
-                short=$(( (counted * 9 + 9) / 10 - killed ))
-                die "죽인 뮤턴트가 ${counted}개 중 ${killed}개다 — ${short}개 모자라다"
+                short=$(( (counted * threshold + 99) / 100 - killed ))
+                die "죽인 뮤턴트가 ${counted}개 중 ${killed}개다 — 임계 ${threshold}% 에 ${short}개 모자라다"
               fi
               [ "$rc" -eq 0 ] || exit "$rc"
               ;;

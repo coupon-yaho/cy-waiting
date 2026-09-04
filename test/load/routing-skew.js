@@ -31,7 +31,10 @@ const passed = new Counter('issue_200');
 const queued = new Counter('issue_202');
 const other = new Counter('issue_other');
 // 게이트웨이별 통과. **한쪽으로 기울면 쏠림이 아니라 생성기를 잰 것이다.**
-const perGateway = new Counter('issue_by_gateway');
+//
+// **태그로 안 가른다.** 요약은 태그를 접어 내보내므로 부르는 쪽이 게이트웨이별
+// 값을 못 읽는다 — 안 읽히는 검사는 없는 검사보다 나쁘다. 이름을 따로 준다.
+const perGateway = BASES.map((_, i) => new Counter(`issue_gw${i}`));
 
 export default function () {
   // **VU 와 회차를 함께 센다.** 회차만 세면 모든 VU 의 첫 회차가 같은 값(0)이라
@@ -41,9 +44,11 @@ export default function () {
   //
   // VU 로만 가르는 것도 안 된다. VU 가 게이트웨이에 고정되면 한쪽 응답이 느려질
   // 때 그쪽 유입만 줄어, 고르개가 아니라 생성기가 부하를 재분배한 것이 된다.
-  const base = BASES[(__VU + __ITER) % BASES.length];
+  // **한 번만 셈한다.** 고른 자리와 세는 자리가 갈리면, 전량이 한 대로 가도
+  // 카운터가 반반을 찍는다 — 실제로 그렇게 갈려 있었다.
+  const gw = (__VU + __ITER) % BASES.length;
   const member = 7_000_000 + __VU * 100_000 + __ITER;
-  const res = http.post(`${base}/api/v1/coupons/${COUPON}/issue`, null, {
+  const res = http.post(`${BASES[gw]}/api/v1/coupons/${COUPON}/issue`, null, {
     headers: {
       'X-Member-Id': String(member),
       'X-Member-Grade': 'GOLD',
@@ -52,7 +57,7 @@ export default function () {
   });
   if (res.status === 200) {
     passed.add(1);
-    perGateway.add(1, { gateway: String(__ITER % BASES.length) });
+    perGateway[gw].add(1);
   } else if (res.status === 202) queued.add(1);
   else other.add(1);
 }

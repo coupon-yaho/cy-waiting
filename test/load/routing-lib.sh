@@ -167,6 +167,9 @@ bring_up() {
     local warm=$(( (BIG_CAP + SMALL_CAP + MID_CAP) * 9 / 10 ))
     [ "$warm" -gt 200 ] && warm=200
     [ "$warm" -lt 1 ] && warm=1
+    # **대기 상한을 램프보다 길게 준다.** 기본 60초는 게이트웨이를 새로 만든
+    # 회차에서 램프 60초를 못 기다려 예열이 "unhealthy" 로 죽는다 — 문턱이
+    # 아니라 시계가 문제였다. 예열 자체의 재시도 예산(180초)과 맞춘다.
     if ! ROUTING_STRATEGY="$STRATEGY" STUB_LATENCY_MS="$STUB_LATENCY_MS" \
          WARMUP_CREDIT="$warm" \
          BIG_LATENCY_MS="$BIG_LATENCY_MS" \
@@ -175,7 +178,8 @@ bring_up() {
          SMALL_INFLIGHT="${SMALL_INFLIGHT:-$SMALL_CAP}" \
          MID_INFLIGHT="${MID_INFLIGHT:-$MID_CAP}" \
          ROUTING_PER_INSTANCE_CAP="${ROUTING_PER_INSTANCE_CAP:-200}" \
-         $COMPOSE up -d --wait >> "$log" 2>&1; then
+         GATEWAY_LOG_LEVEL="${GATEWAY_LOG_LEVEL:-INFO}" \
+         $COMPOSE up -d --wait --wait-timeout 180 >> "$log" 2>&1; then
         echo "겹침을 못 세웠다" >&2; tail -20 "$log" | sed 's/^/  /' >&2
         return 2
     fi

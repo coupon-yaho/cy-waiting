@@ -113,3 +113,6 @@ services:
       # 깊이를 재는 회차는 이 상한을 올려야 한다 — 안 올리면 여유 큰 대가
       # 먼저 상한에 닿아 후보에서 빠지고, 재려던 비율 대신 상한을 잰다.
       WAITING_ROUTING_PER_INSTANCE_CAP: "${ROUTING_PER_INSTANCE_CAP:-200}"
+      # 원인을 지표로 역산하지 말고 예외 이름을 보기 위한 손잡이다. 기본은 조용하다.
+      LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_CLOUD_GATEWAY: "${GATEWAY_LOG_LEVEL:-INFO}"
+      LOGGING_LEVEL_COM_KAFKICK_WAITING_ROUTING: "${GATEWAY_LOG_LEVEL:-INFO}"

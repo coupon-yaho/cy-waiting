@@ -87,6 +87,27 @@ require_positive_int() {
 #
 # **못 읽으면 거기서 멈춘다.** 오류를 삼키고 빈 값을 돌려주면 그 값이 산술로
 # 흘러 들어가 엉뚱한 도착 수가 나오고, 그 수로 게이트를 적게 된다.
+# 스텁이 센 값 하나를 읽는다. 이름은 served·faulted·rejected 다.
+counter() {
+    local raw count
+    raw=$($COMPOSE exec -T "$1" sh -c 'wget -qO- http://localhost:8090/stub/health')
+    count=$(printf '%s' "$raw" | sed -n "s/.*\"$2\":\([0-9][0-9]*\).*/\1/p")
+    case "$count" in
+        ''|*[!0-9]*) echo "[$1] $2 를 못 읽었다: ${raw:-응답 없음}" >&2; return 1 ;;
+    esac
+    printf '%d\n' "$((10#$count))"
+}
+
+# **닿은 요청 수다.** 즉시 실패한 것은 served 에 안 들어가므로, 유입이 줄었는지
+# 보려면 둘을 더해야 한다 — 안 더하면 고장 난 대가 트래픽을 다 받고 있는데도
+# 0 으로 보인다.
+arrived() {
+    local ok bad
+    ok=$(counter "$1" served) || return 1
+    bad=$(counter "$1" faulted) || return 1
+    printf '%d\n' "$(( ok + bad ))"
+}
+
 served() {
     local raw count
     raw=$($COMPOSE exec -T "$1" sh -c 'wget -qO- http://localhost:8090/stub/health')

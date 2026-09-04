@@ -108,8 +108,10 @@ services:
       # **라우팅을 켠다.** 끄면 단일 주소로 돌아가고, 그 상태로 잰 값은 이
       # 페이즈가 만든 것을 하나도 안 지난다.
       WAITING_ROUTING_ENABLED: "true"
-      # 전략은 밖에서 고른다. 둘 다 게이트를 넘어야 한다 (G9.9).
-      WAITING_ROUTING_STRATEGY: "${ROUTING_STRATEGY:-p2c}"
+      # 전략은 밖에서 고른다. **안 주면 배포 기본값이 서야 한다** — 여기에
+      # 값을 박으면 겹침으로 도는 회차가 배포와 다른 전략을 재고, 그 값이
+      # 게이트로 적힌다.
+      WAITING_ROUTING_STRATEGY: "${ROUTING_STRATEGY:-round-robin}"
       # 깊이를 재는 회차는 이 상한을 올려야 한다 — 안 올리면 여유 큰 대가
       # 먼저 상한에 닿아 후보에서 빠지고, 재려던 비율 대신 상한을 잰다.
       WAITING_ROUTING_PER_INSTANCE_CAP: "${ROUTING_PER_INSTANCE_CAP:-200}"

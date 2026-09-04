@@ -117,6 +117,11 @@ for line in open(os.environ["SAMPLES"]):
         print("판정 불가 — 표본에 숫자가 아닌 것이 있다: %r" % line.strip())
         sys.exit(2)
     live = sum(depth)
+    # **0 은 나눌 수 없다.** 깊이 문턱을 0 으로 두면 여기까지 오는데, 터지면
+    # 종료 1 이라 "못 넘겼다" 로 읽힌다 — 못 잰 것과 미달은 다른 말이다.
+    if live == 0:
+        dropped += 1
+        continue
     # 얕은 표본은 버린다. 한두 건이 점유를 통째로 흔든다.
     if live < depth_floor:
         dropped += 1

@@ -68,7 +68,7 @@ check "얕은 표본만 있으면 판정 불가" 2 "쓸 만한 표본이 없다"
 
 # **절반 넘게 버렸으면 못 잰 것이다.** 남은 몇 개로 낸 백분위는 사실상
 # 최댓값이고, 그 판정은 통과 여부가 운에 걸린다.
-check "절반 넘게 버리면 판정 불가" 2 "쓸 만한 표본이" "$(samples 5 0; 샘플 0 0; for i in $(seq 1 40); do echo '1 0 0'; done)"
+check "절반 넘게 버리면 판정 불가" 2 "쓸 만한 표본이" "$(samples 5 0; for i in $(seq 1 40); do echo '1 0 0'; done)"
 
 # **눈금이 문턱에 가까우면 못 잰다.** 깊이 90 에서는 작은 대의 한 건이 10% 라,
 # 행동이 같은 구현도 한두 건 흔들림에 미달로 적힌다.
@@ -99,6 +99,18 @@ SAMPLES="$work/s.txt" MAX_DEVIATION=abc run_case "한계가 숫자가 아니면 
     "MAX_DEVIATION" -- "${SPECS[@]}"
 SAMPLES="$work/s.txt" MAX_SKEW=abc run_case "문턱이 숫자가 아니면 판정 불가" 2 \
     "MAX_SKEW" -- "${SPECS[@]}"
+
+# **문턱을 밖에서 주는 길도 서야 한다.** 회차가 문턱을 바꿔 부르는데 그 길이
+# 깨져 있으면, 판정 대신 셸 오류로 끝나면서 종료 코드만 남는다.
+printf '%s\n' "$(samples 30 10)" > "$work/s.txt"
+SAMPLES="$work/s.txt" MAX_SKEW=200 run_case "문턱을 올리면 통과" 0 "충족" -- "${SPECS[@]}"
+
+# **깊이 0 표본이 판정기를 못 터뜨린다.** 터지면 종료 1 이라 "못 넘겼다" 로
+# 읽히는데, 못 잰 것과 미달은 다른 말이다.
+printf '%s\n' "$(samples 40 0)
+0 0 0" > "$work/s.txt"
+SAMPLES="$work/s.txt" MIN_DEPTH_RATIO=0 run_case "깊이 0 표본은 버린다" 0 "충족" \
+    -- "${SPECS[@]}"
 
 # 표본 파일이 비면 순간 점유를 아예 못 잰다.
 : > "$work/empty"

@@ -77,6 +77,13 @@ case "$IDLE_RATIO" in
     *) echo "IDLE_RATIO 는 0.1~0.9 여야 한다: '$IDLE_RATIO'"; exit 2 ;;
 esac
 saved=$($COMPOSE exec -T redis redis-cli GET gw:tunables 2>/dev/null)
+restore() {
+  if [ -n "$saved" ]; then $COMPOSE exec -T redis redis-cli SET gw:tunables "$saved" >/dev/null 2>&1
+  else $COMPOSE exec -T redis redis-cli DEL gw:tunables >/dev/null 2>&1; fi
+}
+# **바꾸기 전에 되돌릴 손잡이를 건다.** 뒤에 걸면 확인이 실패하는 회차가 바뀐
+# 값을 남긴 채 끝나고, 다음 회차가 이 하네스의 조건으로 다른 것을 잰다.
+trap 'reap_children; restore; rm -rf "$work"' EXIT
 $COMPOSE exec -T redis redis-cli SET gw:tunables \
   "{\"idleCreditRatio\":$IDLE_RATIO,\"inFlightSeconds\":3}" >/dev/null
 applied=$($COMPOSE exec -T redis redis-cli GET gw:tunables 2>/dev/null)
@@ -84,11 +91,6 @@ case "$applied" in
     *"\"idleCreditRatio\":$IDLE_RATIO"*) ;;
     *) echo "튜너블을 못 세웠다 — 읽은 값: ${applied:-없음}"; exit 2 ;;
 esac
-restore() {
-  if [ -n "$saved" ]; then $COMPOSE exec -T redis redis-cli SET gw:tunables "$saved" >/dev/null 2>&1
-  else $COMPOSE exec -T redis redis-cli DEL gw:tunables >/dev/null 2>&1; fi
-}
-trap 'reap_children; restore; rm -rf "$work"' EXIT
 
 # **실제로 열린 포트를 찾는다.** 범위로 열면 어느 컨테이너가 어느 포트를 받는지
 # 순서가 안 정해진다. 박아 두면 한 대에만 전부 보내면서 둘에 나눠 보냈다고 적는다.
@@ -221,6 +223,11 @@ done
 echo "도착 합계: $total (보낸 것 $sent) · 표본 $(wc -l < "$work/samples" 2>/dev/null || echo 0) 개"
 echo
 
+# **조건부 대입을 앞에 붙이지 않는다.** 셸은 대입 낱말을 확장 전에 가리므로,
+# 확장된 `MAX_SKEW=25` 가 명령 이름으로 읽혀 "명령어를 찾을 수 없음" 이 난다 —
+# 문턱을 준 회차가 판정 대신 그 오류로 끝난다.
+if [ -n "$MAX_SKEW" ]; then
+  export MAX_SKEW
+fi
 SAMPLES="$work/samples" MAX_DEVIATION="$MAX_DEVIATION" \
-  ${MAX_SKEW:+MAX_SKEW="$MAX_SKEW"} \
   test/load/evaluate-skew.sh "${specs[@]}"

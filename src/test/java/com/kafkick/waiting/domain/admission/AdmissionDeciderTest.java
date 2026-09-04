@@ -10,6 +10,7 @@ import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.CouponStates;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import com.kafkick.waiting.domain.coupon.Tunables;
+import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -270,6 +271,60 @@ class AdmissionDeciderTest {
         }
 
         assertThat(d.decide(req)).isEqualTo(AdmissionDecision.REJECT_OVERLOAD);
+    }
+
+    /**
+     * <b>낡음이 풀리는 초에 상한이 두 번 열리면 안 된다</b> (F4).
+     *
+     * <p>낡은 갈래와 정상 갈래가 서로 다른 키를 들면, 낡은 동안 전역을 다 쓴 초에
+     * 낡음이 풀리는 순간 정상 갈래가 0 부터 세기 시작해 그 한 초에 두 배가 나간다.
+     */
+    @Test
+    @DisplayName("낡음이_풀려도_같은_초의_전역_예산은_이어진다")
+    void 낡음이_풀려도_같은_초의_전역_예산은_이어진다() {
+        AdmissionDecider d = decider();
+        CouponState idle = CouponStates.idle(500);
+
+        for (int i = 0; i < 100; i++) {
+            assertThat(d.decide(request(idle).withDataStale(true)))
+                    .as("%d 번째", i).isEqualTo(AdmissionDecision.PASS_FAIL_OPEN);
+        }
+
+        // 같은 초에 낡음만 풀린다. 키가 갈려 있으면 여기서 100 명이 더 나간다.
+        assertThat(d.decide(request(idle)))
+                .isEqualTo(AdmissionDecision.ENQUEUE_RATE_GLOBAL);
+    }
+
+    /**
+     * <b>노드 몫은 한 초에 한 번만 열린다</b> (F4).
+     *
+     * <p>전역 예산을 여는 자리가 셋이라 하나씩 짝지어 보면 안 묶인 갈래가 남는다.
+     * 갈래를 섞어 통과 총량을 세면 어느 하나만 제 카운터를 들어도 총량이 넘는다.
+     */
+    @Test
+    @DisplayName("갈래를_섞어도_한_초의_노드_몫은_하나다")
+    void 갈래를_섞어도_한_초의_노드_몫은_하나다() {
+        AdmissionDecider d = decider();
+        CouponState idle = CouponStates.idle(500);
+        CouponState queued = CouponStates.queueing(10, 1_000, 5_000);
+        // **예산을 쓰는 통과만 센다.** `isPass` 는 리미터를 안 지나는 우회까지
+        // 무는데, 그것까지 세면 이 단언이 노드 몫과 다른 것을 재게 된다.
+        Set<AdmissionDecision> 예산을_쓴다 = Set.of(AdmissionDecision.PASS_TOKEN,
+                AdmissionDecision.PASS_FAIL_OPEN, AdmissionDecision.PASS_UNDER_CAP);
+
+        int passed = 0;
+        for (int i = 0; i < 400; i++) {
+            AdmissionRequest req = switch (i % 3) {
+                case 0 -> request(idle).withDataStale(true);
+                case 1 -> request(queued).withValidToken(true);
+                default -> request(idle);
+            };
+            if (예산을_쓴다.contains(d.decide(req))) {
+                passed++;
+            }
+        }
+
+        assertThat(passed).isEqualTo(100);
     }
 
     @Test

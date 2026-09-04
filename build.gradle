@@ -381,6 +381,9 @@ pitest {
             'com.kafkick.waiting.routing.RoutingAttributes',
             'com.kafkick.waiting.routing.ReservedInstance',
     ]
+    // **PIT 은 정수 백분율로 비교한다.** 89.9% 가 90 으로 반올림돼 통과하므로
+    // 이 한 줄만으로는 "생존 ≤ 10%" 가 지켜지지 않는다. 반올림 없는 비율은
+    // 뮤테이션 잡이 리포트를 직접 세어 다시 문다 (.github/workflows/_test.yml).
     mutationThreshold = 90          // 생존 ≤ 10%
     timestampedReports = false
     // XML 이 있어야 생존 뮤턴트를 기계로 짚는다. HTML 만 두면 사람이 눈으로 센다.

@@ -161,7 +161,10 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
             // 이웃보다 늘 커서 둘 다 그 대를 뽑을 때만 골라진다. 여유를 줄이면
             // 같은 물린 건수로도 부하율이 높아져, 줄인 만큼만 받는다.
             double remaining = outliers.recoveryRemaining(id, now);
-            long effective = remaining <= 0 ? credits
+            // **여유 0 은 그대로 0 이다.** 아래 하한이 0 을 1 로 올리면 스스로
+            // 못 받는다고 말한 대가 후보로 되살아난다 — 여유 0 은 후보가
+            // 아니라는 규칙이 램프 때문에 깨진다.
+            long effective = remaining <= 0 || credits <= 0 ? credits
                     : Math.max(1, Math.round(credits * (1 - remaining)));
             candidates.add(RoutingCandidate.of(id, effective, busy));
         }

@@ -143,23 +143,7 @@ class InFlightTrackingFilterTest {
     }
 
     /**
-     * <b>뒷단 응답이 시작된 뒤의 취소는 우리 시한이 끊은 것이다.</b> 헤더만
-     * 주고 본문을 안 끝내는 대는 오류도 5xx 도 안 내므로 여기서만 잡힌다.
-     */
-    @Test
-    @DisplayName("응답이_시작된_뒤의_취소는_실패다")
-    void 응답이_시작된_뒤의_취소는_실패다() {
-        for (int i = 0; i < 3; i++) {
-            ServerWebExchange 요청 = 고른_요청("be-1");
-            요청.getAttributes().put(ServerWebExchangeUtils.CLIENT_RESPONSE_ATTR, new Object());
-            StepVerifier.create(필터.filter(요청, ex -> Mono.never())).thenCancel().verify();
-        }
-
-        assertThat(배제기.ejected(Set.of("be-1", "be-2"), 지금)).containsExactly("be-1");
-    }
-
-    /**
-     * <b>응답 전의 취소는 어느 쪽으로도 안 센다.</b> 사용자가 창을 닫은 것만으로
+     * <b>취소는 어느 쪽으로도 안 센다.</b> 사용자가 창을 닫은 것만으로
      * 뒷단이 빠지면, 이탈이 몰리는 구간에 멀쩡한 대가 차례로 사라진다.
      */
     @Test

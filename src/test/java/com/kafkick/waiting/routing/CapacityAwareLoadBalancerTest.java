@@ -167,6 +167,31 @@ class CapacityAwareLoadBalancerTest {
     }
 
     /**
+     * <b>여유 0 은 램프가 되살리면 안 된다.</b> 하한이 0 을 1 로 올리면 스스로
+     * 못 받는다고 말한 대가 후보로 돌아온다.
+     */
+    @Test
+    @DisplayName("여유_0_인_대는_램프가_안_되살린다")
+    void 여유_0_인_대는_램프가_안_되살린다() {
+        for (int i = 0; i < 3; i++) {
+            배제기.failed("be-1", 지금);
+        }
+        long 풀린_때 = 지금 + 배제_시간.toMillis();
+
+        List<Long> 여유 = new ArrayList<>();
+        CapacityAwareLoadBalancer.of(목록(인스턴스("be-1", "0"), 인스턴스("be-2", "100")),
+                        candidates -> {
+                            candidates.stream().filter(c -> c.instanceId().equals("be-1"))
+                                    .forEach(c -> 여유.add(c.credits()));
+                            return candidates.stream()
+                                    .filter(c -> c.instanceId().equals("be-2")).findFirst();
+                        }, 레지스트리, 배제기, () -> 풀린_때, 상한)
+                .choose((Request<?>) null).block();
+
+        assertThat(여유).as("0 이 1 로 안 오른다").containsExactly(0L);
+    }
+
+    /**
      * <b>되돌아온 대가 전량을 받으면 안 된다.</b> 배제 동안 물린 건수가 0 이라
      * 부하율이 가장 낮은데, 그대로 두면 아직 아픈 대에 전부가 꽂히고 곧바로
      * 다시 빠진다 — 배제 시간 주기의 사각파다.

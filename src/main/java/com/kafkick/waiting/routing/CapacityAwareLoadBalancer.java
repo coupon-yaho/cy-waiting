@@ -24,6 +24,8 @@ import org.springframework.cloud.client.ServiceInstance;
 import org.springframework.cloud.client.loadbalancer.DefaultResponse;
 import org.springframework.cloud.client.loadbalancer.EmptyResponse;
 import org.springframework.cloud.client.loadbalancer.Request;
+import org.springframework.cloud.client.loadbalancer.RequestData;
+import org.springframework.cloud.client.loadbalancer.RequestDataContext;
 import org.springframework.cloud.client.loadbalancer.Response;
 import org.springframework.cloud.loadbalancer.core.ReactorServiceInstanceLoadBalancer;
 import org.springframework.cloud.loadbalancer.core.ServiceInstanceListSupplier;
@@ -101,7 +103,30 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
 
     @Override
     public Mono<Response<ServiceInstance>> choose(Request request) {
-        return instances.get(request).next().map(this::pick);
+        Set<String> tried = tried(request);
+        return instances.get(request).next().map(available -> pick(available, tried));
+    }
+
+    /**
+     * 이 요청이 이미 실패해 본 인스턴스들. 재시도가 아니면 비어 있다.
+     *
+     * <p>요청 속성에서 읽는다 — 재시도가 되돌리는 것은 응답 쪽뿐이라 시도 사이에
+     * 남는 자리가 거기뿐이다.
+     */
+    @SuppressWarnings("unchecked")
+    private Set<String> tried(Request request) {
+        if (request == null || !(request.getContext() instanceof RequestDataContext context)) {
+            return Set.of();
+        }
+        // **요청이 비어 있을 수 있다.** 기본 문맥으로 떨어지는 경로가 있어 이
+        // 자리는 널을 받는다 — 그대로 부르면 고르는 자리가 통째로 터지고,
+        // 그건 라우팅 전면 차단이다.
+        RequestData client = context.getClientRequest();
+        if (client == null || client.getAttributes() == null) {
+            return Set.of();
+        }
+        Object raw = client.getAttributes().get(RoutingAttributes.TRIED);
+        return raw instanceof Set<?> set ? (Set<String>) set : Set.of();
     }
 
     /**
@@ -171,7 +196,7 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
         return candidates;
     }
 
-    private Response<ServiceInstance> pick(List<ServiceInstance> available) {
+    private Response<ServiceInstance> pick(List<ServiceInstance> available, Set<String> tried) {
         long now = nowMillis.getAsLong();
         watchInstanceCount(available.size());
         // **사라지고 비어 있는 인스턴스의 카운터를 지운다.** 식별자가 재기동마다
@@ -188,18 +213,30 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
         // 고르개에 넘기기 전에 거른다. 규칙과 근거는 InstanceOutliers 에 있다.
         Set<String> ejected = outliers.ejected(present, now);
         watchEjection(present, ejected, now);
+        // **재시도는 방금 실패한 대를 다시 안 고른다.** 안 빼면 3 대에서 같은 죽은
+        // 대로 갈 확률이 오히려 높다. 전부 시도했으면 안 뺀다.
+        Set<String> skip = ejected;
+        if (!tried.isEmpty() && !tried.containsAll(present)) {
+            skip = new HashSet<>(ejected);
+            skip.addAll(tried);
+        }
 
         Map<String, ServiceInstance> byId = new LinkedHashMap<>();
-        List<RoutingCandidate> candidates = gather(available, ejected, byId, now);
-        // **배제 때문에 보낼 곳이 0 이 되면 배제를 접는다.** 배제기는 자기끼리만
-        // 세어 "전부는 안 뺀다" 를 지키는데, 남은 대가 상한에 닿아 있으면 그 약속이
-        // 여기서 깨진다 — 앓는 대라도 보내는 것이 아무 데도 못 보내는 것보다 낫다.
+        List<RoutingCandidate> candidates = gather(available, skip, byId, now);
+        // **보낼 곳이 0 이 되면 되돌린다. 방금 실패한 대를 먼저 되돌린다** — 배제는
+        // 세 번 연속 실패한 근거가 있고 재시도 배제는 이번 한 번뿐이라, 둘 중 하나만
+        // 접어야 한다면 근거가 얕은 쪽이다. 그래도 비면 배제까지 접는다: 앓는 대라도
+        // 보내는 것이 아무 데도 못 보내는 것보다 낫다.
+        if (candidates.isEmpty() && !skip.equals(ejected)) {
+            byId.clear();
+            candidates = gather(available, ejected, byId, now);
+        }
         if (candidates.isEmpty() && !ejected.isEmpty()) {
             // 요청마다 도는 자리다. 구간의 첫 건만 남긴다 (LG-3).
             if (crowdedOut.entered()) {
                 log.warn("배제하고 나니 보낼 곳이 없다 — 뺀 {} 대를 도로 넣는다. "
-                        + "남은 대가 인스턴스별 상한에 닿았다는 뜻이다. 상한과 "
-                        + "뒷단 여유를 함께 본다", ejected.size());
+                        + "남은 대가 여유 0 이거나 인스턴스별 상한에 닿았다는 뜻이다. "
+                        + "상한과 뒷단 여유를 함께 본다", ejected.size());
             }
             byId.clear();
             candidates = gather(available, Set.of(), byId, now);

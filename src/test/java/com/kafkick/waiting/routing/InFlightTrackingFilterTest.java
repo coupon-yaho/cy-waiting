@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.kafkick.waiting.domain.routing.InFlightRegistry;
 import com.kafkick.waiting.domain.routing.InstanceOutliers;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
@@ -157,6 +158,75 @@ class InFlightTrackingFilterTest {
 
         assertThat(배제기.ejected(Set.of("be-1", "be-2"), 지금)).isEmpty();
         assertThat(배제기.tracked()).as("성공으로도 안 센다").isEmpty();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Set<String> 시도한(ServerWebExchange 요청) {
+        return (Set<String>) 요청.getAttributes().getOrDefault(RoutingAttributes.TRIED, Set.of());
+    }
+
+    /**
+     * <b>하류가 오류를 받기 전에 적혀 있어야 한다.</b> 재시도는 백오프가 없어
+     * 그 오류 신호 안에서 곧바로 다시 구독하고, 그때 균형기가 이 목록을 읽는다.
+     * `doFinally` 에 적으면 콜백이 신호를 넘긴 뒤에 돌아 두 번째 선택이 빈
+     * 목록을 본다 — 시험 다섯이 초록인데 기능이 안 도는 자리였다.
+     */
+    @Test
+    @DisplayName("하류가_오류를_보기_전에_적힌다")
+    void 하류가_오류를_보기_전에_적힌다() {
+        ServerWebExchange 요청 = 고른_요청("be-1");
+        List<Set<String>> 하류가_본_것 = new ArrayList<>();
+
+        StepVerifier.create(필터.filter(요청, ex -> Mono.error(new IllegalStateException("끊김")))
+                        .doOnError(e -> 하류가_본_것.add(Set.copyOf(시도한(요청)))))
+                .verifyError();
+
+        assertThat(하류가_본_것).singleElement()
+                .as("재시도가 다시 고르는 시점에 이미 적혀 있다")
+                .isEqualTo(Set.of("be-1"));
+    }
+
+    /**
+     * <b>실패한 대를 요청에 적어 둔다.</b> 재시도는 같은 요청을 다시 고르므로,
+     * 여기 적힌 것을 균형기가 읽어야 다음 대로 넘어간다.
+     */
+    @Test
+    @DisplayName("실패한_대를_요청에_적는다")
+    void 실패한_대를_요청에_적는다() {
+        ServerWebExchange 요청 = 고른_요청("be-1");
+
+        StepVerifier.create(필터.filter(요청, ex -> Mono.error(new IllegalStateException("끊김"))))
+                .verifyError();
+
+        assertThat(시도한(요청)).containsExactly("be-1");
+    }
+
+    /** 5xx 도 그 대의 실패라 적는다. 상태 코드가 서는 경로다. */
+    @Test
+    @DisplayName("오류_응답도_요청에_적는다")
+    void 오류_응답도_요청에_적는다() {
+        ServerWebExchange 요청 = 고른_요청("be-1");
+
+        필터.filter(요청, ex -> {
+            ex.getResponse().setRawStatusCode(503);
+            return Mono.empty();
+        }).block();
+
+        assertThat(시도한(요청)).containsExactly("be-1");
+    }
+
+    /** 성공한 대는 안 적는다. 적으면 다음 재시도가 멀쩡한 대를 피한다. */
+    @Test
+    @DisplayName("성공한_대는_안_적는다")
+    void 성공한_대는_안_적는다() {
+        ServerWebExchange 요청 = 고른_요청("be-1");
+
+        필터.filter(요청, ex -> {
+            ex.getResponse().setRawStatusCode(200);
+            return Mono.empty();
+        }).block();
+
+        assertThat(시도한(요청)).isEmpty();
     }
 
     /** 뒷단이 답할 때까지 물려 있다. 안 세면 부하율이 늘 0 이라 고르개가 눈이 먼다. */

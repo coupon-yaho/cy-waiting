@@ -13,13 +13,19 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.cloud.client.DefaultServiceInstance;
+import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.cloud.client.ServiceInstance;
+import org.springframework.cloud.client.loadbalancer.DefaultRequest;
 import org.springframework.cloud.client.loadbalancer.Request;
+import org.springframework.cloud.client.loadbalancer.RequestData;
+import org.springframework.cloud.client.loadbalancer.RequestDataContext;
 import org.springframework.cloud.client.loadbalancer.Response;
 import org.springframework.cloud.loadbalancer.core.ServiceInstanceListSupplier;
 import reactor.core.publisher.Flux;
@@ -220,6 +226,107 @@ class CapacityAwareLoadBalancerTest {
 
         assertThat(여유).as("막 풀렸을 때는 거의 없고, 절반에서는 절반이다")
                 .containsExactly(1L, 50L);
+    }
+
+    /** 이 요청이 이미 시도한 인스턴스들을 실은 요청. 재시도가 오는 모양이다. */
+    private static Request<?> 이미_시도한(String... ids) {
+        Map<String, Object> attrs = ids.length == 0 ? Map.of()
+                : Map.of(RoutingAttributes.TRIED, Set.of(ids));
+        return new DefaultRequest<>(new RequestDataContext(
+                new RequestData(MockServerHttpRequest.post("/api/v1/coupons/c1/issue").build(),
+                        attrs)));
+    }
+
+    /**
+     * <b>재시도가 같은 대를 다시 고르면 넘긴 것이 아니다.</b> 표는 재구독 전에
+     * 풀리므로 방금 실패한 대가 다시 가장 한가해 보이고, 3 대면 같은 죽은 대로
+     * 갈 확률이 오히려 높다 — 한 요청이 그 대에 실패를 둘 찍는다.
+     */
+    @Test
+    @DisplayName("이미_시도한_대는_재시도에서_뺀다")
+    void 이미_시도한_대는_재시도에서_뺀다() {
+        // 있으면 be-1 을 고르고 없으면 남은 것을 고른다. be-1 만 고집하는 고르개는
+        // 후보에 없을 때 빈 답을 내므로 재려던 것을 못 잰다.
+        InstanceChooser be1을_원한다 = candidates -> candidates.stream()
+                .filter(c -> c.instanceId().equals("be-1"))
+                .findFirst()
+                .or(() -> candidates.stream().findFirst());
+
+        Response<ServiceInstance> 고른것 = CapacityAwareLoadBalancer.of(
+                목록(인스턴스("be-1", "100"), 인스턴스("be-2", "100")),
+                be1을_원한다, 레지스트리, 배제기, () -> 지금, 상한)
+                .choose(이미_시도한("be-1")).block();
+
+        assertThat(고른것.getServer().getInstanceId())
+                .as("be-1 을 원하는 고르개를 줘도 그리로 안 간다")
+                .isEqualTo("be-2");
+
+        // **첫 시도는 속성이 없다.** 프로덕션의 실제 모양이고, 그때는 아무도 안 뺀다.
+        Response<ServiceInstance> 첫_시도 = CapacityAwareLoadBalancer.of(
+                목록(인스턴스("be-1", "100"), 인스턴스("be-2", "100")),
+                be1을_원한다, 레지스트리, 배제기, () -> 지금, 상한)
+                .choose(이미_시도한()).block();
+        assertThat(첫_시도.getServer().getInstanceId()).isEqualTo("be-1");
+    }
+
+    /**
+     * 전부 시도했으면 뺄 것이 없다. 보낼 곳이 0 이 되는 것보다 다시 가는 편이 낫다.
+     *
+     * <p><b>한 대짜리 목록으로 만든다.</b> 재시도가 한 번뿐이라 한 요청이 적을 수
+     * 있는 대는 최대 하나다 — 두 대를 다 적은 요청은 프로덕션에 없다. 도달 가능한
+     * 모양은 시도 사이에 목록이 그 대만 남는 경우다.
+     */
+    /**
+     * <b>되돌릴 때는 방금 실패한 대를 먼저 넣는다.</b> 배제는 세 번 연속 실패한
+     * 근거가 있고 재시도 배제는 이번 한 번뿐이다 — 둘 중 하나만 접어야 하면
+     * 근거가 얕은 쪽이다. 배제된 대로 도로 보내면 그 대의 실패가 또 쌓인다.
+     */
+    @Test
+    @DisplayName("되돌릴_때_시도한_대를_먼저_넣는다")
+    void 되돌릴_때_시도한_대를_먼저_넣는다() {
+        for (int i = 0; i < 3; i++) {
+            배제기.failed("be-1", 지금);
+        }
+        // be-2 는 이번 시도에서 실패했고, be-3 은 상한에 닿아 후보가 아니다.
+        레지스트리.started("be-3", 지금);
+
+        Response<ServiceInstance> 고른것 = CapacityAwareLoadBalancer.of(
+                목록(인스턴스("be-1", "100"), 인스턴스("be-2", "100"), 인스턴스("be-3", "100")),
+                candidates -> candidates.stream().findFirst(),
+                레지스트리, 배제기, () -> 지금, 1)
+                .choose(이미_시도한("be-2")).block();
+
+        assertThat(고른것.getServer().getInstanceId())
+                .as("배제된 be-1 이 아니라 방금 실패한 be-2 로 돌아간다")
+                .isEqualTo("be-2");
+    }
+
+    /**
+     * <b>요청이 비어 있어도 안 터진다.</b> 기본 문맥으로 떨어지는 경로가 있어
+     * 이 자리는 널을 받는다 — 그대로 부르면 고르는 자리가 터지고 라우팅이
+     * 통째로 멎는다.
+     */
+    @Test
+    @DisplayName("요청이_비어도_고른다")
+    void 요청이_비어도_고른다() {
+        Response<ServiceInstance> 고른것 = CapacityAwareLoadBalancer.of(
+                목록(인스턴스("be-1", "100")), 정해진("be-1"),
+                레지스트리, 배제기, () -> 지금, 상한)
+                .choose(new DefaultRequest<>(new RequestDataContext(null))).block();
+
+        assertThat(고른것.getServer().getInstanceId()).isEqualTo("be-1");
+    }
+
+    @Test
+    @DisplayName("전부_시도했으면_안_뺀다")
+    void 전부_시도했으면_안_뺀다() {
+        Response<ServiceInstance> 고른것 = CapacityAwareLoadBalancer.of(
+                목록(인스턴스("be-1", "100")),
+                정해진("be-1"), 레지스트리, 배제기, () -> 지금, 상한)
+                .choose(이미_시도한("be-1")).block();
+
+        assertThat(고른것.hasServer()).isTrue();
+        assertThat(고른것.getServer().getInstanceId()).isEqualTo("be-1");
     }
 
     private Response<ServiceInstance> 고른다(InstanceChooser chooser,

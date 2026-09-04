@@ -4,6 +4,7 @@ import com.kafkick.waiting.domain.routing.InFlightRegistry;
 import com.kafkick.waiting.domain.routing.InstanceOutliers;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.LongSupplier;
 import org.springframework.cloud.client.ServiceInstance;
 import org.springframework.cloud.client.loadbalancer.Response;
@@ -80,10 +81,17 @@ public final class InFlightTrackingFilter implements GlobalFilter, Ordered {
         }
         // **놓는 것만 여기서 한다.** 잡는 것은 고르는 자리에서 원자적으로 끝났다 —
         // 여기서 잡으면 읽고 세는 사이에 동시 요청이 상한을 넘긴다.
-        return chain.filter(exchange).doFinally(signal -> {
-            reserved.release();
-            record(reserved.getInstanceId(), exchange, signal);
-        });
+        return chain.filter(exchange)
+                // **오류는 여기서 적는다.** `doFinally` 는 콜백을 하류로 신호를
+                // 넘긴 **뒤에** 돌린다. 재시도는 백오프가 없어 그 신호 안에서
+                // 곧바로 다시 구독하므로, `doFinally` 에 두면 두 번째 선택이
+                // 빈 목록을 보고 방금 죽은 대를 또 고른다. `doOnError` 는
+                // 하류보다 먼저 돈다.
+                .doOnError(e -> failed(reserved.getInstanceId(), exchange))
+                .doFinally(signal -> {
+                    reserved.release();
+                    record(reserved.getInstanceId(), exchange, signal);
+                });
     }
 
     /**
@@ -103,17 +111,18 @@ public final class InFlightTrackingFilter implements GlobalFilter, Ordered {
         if (signal == SignalType.CANCEL) {
             return;
         }
+        // 오류는 위 `doOnError` 가 이미 적었다. 여기서 또 적으면 한 시도가
+        // 두 번 세어져 배제 임계가 절반이 된다.
         if (signal == SignalType.ON_ERROR) {
-            outliers.failed(instanceId, nowMillis.getAsLong());
             return;
         }
         HttpStatusCode status = exchange.getResponse().getStatusCode();
         if (status != null && status.is5xxServerError()) {
-            outliers.failed(instanceId, nowMillis.getAsLong());
+            failed(instanceId, exchange);
             return;
         }
         if (status != null && INSTANCE_FAULT.contains(status.value())) {
-            outliers.failed(instanceId, nowMillis.getAsLong());
+            failed(instanceId, exchange);
             return;
         }
         // **나머지 4xx 는 어느 쪽으로도 안 센다.** 잘못된 요청은 어느 대로 보내도
@@ -123,6 +132,19 @@ public final class InFlightTrackingFilter implements GlobalFilter, Ordered {
             return;
         }
         outliers.succeeded(instanceId, nowMillis.getAsLong());
+    }
+
+    /**
+     * 실패를 배제기에 세고 <b>요청에도 적는다.</b> 재시도는 같은 요청을 다시
+     * 고르므로, 여기 적힌 것을 균형기가 읽어야 다음 대로 넘어간다.
+     */
+    @SuppressWarnings("unchecked")
+    private void failed(String instanceId, ServerWebExchange exchange) {
+        outliers.failed(instanceId, nowMillis.getAsLong());
+        // 재시도가 되돌리는 것은 응답 쪽뿐이라 요청 속성은 시도 사이에 남는다.
+        Set<String> tried = (Set<String>) exchange.getAttributes()
+                .computeIfAbsent(RoutingAttributes.TRIED, k -> ConcurrentHashMap.newKeySet());
+        tried.add(instanceId);
     }
 
     /** 균형기가 자리를 잡아 준 인스턴스. 안 골랐으면 {@code null} 이다. */

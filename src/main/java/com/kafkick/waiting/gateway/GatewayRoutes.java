@@ -3,6 +3,7 @@ package com.kafkick.waiting.gateway;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import com.kafkick.waiting.routing.RoutingProperties;
 import java.net.ConnectException;
+import java.net.NoRouteToHostException;
 import org.springframework.cloud.gateway.filter.factory.RetryGatewayFilterFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -177,10 +178,26 @@ public class GatewayRoutes {
         // 발급이 답을 받은 뒤에도 다시 가고, 그 한 건이 곧 초과 발급이다.
         config.setSeries();
         config.setStatuses();
-        // 하나면 된다 — netty 의 ConnectTimeoutException 이 java.net.ConnectException
-        // 의 하위다. 둘을 적으면 "두 갈래를 덮는다" 로 읽혀, 한쪽을 지워도
-        // 안전한 것처럼 보인다.
-        config.setExceptions(ConnectException.class);
+        // **연결이 못 서는 갈래가 하나가 아니다.** 포트만 닫히면 거절이고 라우팅이
+        // 안 되면 도달 불가인데, 뒤엣것은 `ConnectException` 의 하위가 아니라
+        // 조건 하나로는 안 걸린다 — 실측에서 7921 건 중 여덟 건이 그렇게 샜다.
+        //
+        // **더 넓히지는 않는다.** `SocketException` 을 적으면 응답을 받기 시작한
+        // 뒤의 끊김까지 무는데, 그것을 다시 보내는 것이 곧 초과 발급이다 (9.3.12).
+        // 여기 둘은 연결·연결완료 단계에서만 나므로 다시 보내도 안전하다.
+        //
+        // **이름 풀이 실패는 안 넣는다.** 연결 상한은 채널 옵션이라 이름 풀이에는
+        // 안 걸리고, 리졸버 기본 상한이 그보다 몇 배 길다 — 넣으면 재시도가 그
+        // 상한을 두 배로 늘려 격벽 지연을 넘긴다. 게다가 다음 대도 같은 리졸버를
+        // 타므로 다시 보내도 결과가 같다. 못 푸는 대는 배제기가 걷는다.
+        //
+        // **열거가 완전한 것은 epoll 에서다.** netty 는 나머지 errno 를 거절로
+        // 모으지만 NIO 로 떨어지면 경로 없음이 소켓 오류로 온다. 그 갈래는 타입만
+        // 으로 응답 도중 끊김과 못 갈라 여기 못 넣는다 — 원인은 폴백 로그가 든다.
+        //
+        // netty 의 ConnectTimeoutException 은 `ConnectException` 의 하위라
+        // 따로 안 적는다.
+        config.setExceptions(ConnectException.class, NoRouteToHostException.class);
         return config;
     }
 

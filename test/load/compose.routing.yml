@@ -115,6 +115,13 @@ services:
       # 깊이를 재는 회차는 이 상한을 올려야 한다 — 안 올리면 여유 큰 대가
       # 먼저 상한에 닿아 후보에서 빠지고, 재려던 비율 대신 상한을 잰다.
       WAITING_ROUTING_PER_INSTANCE_CAP: "${ROUTING_PER_INSTANCE_CAP:-200}"
+      # **배제를 끌 수 있어야 한다.** 죽은 주소로 가는 재시도를 재려면 그 대가
+      # 후보로 남아야 하는데, 기본값이면 0.2 초 만에 빠져 회차 내내 서너 건만
+      # 지나간다 — 그 "전부 200" 은 재시도가 아니라 배제를 잰 값이다.
+      WAITING_ROUTING_OUTLIER_FAILURES: "${ROUTING_OUTLIER_FAILURES:-3}"
+      # **수명도 밖에서 준다.** 누수 판정의 축이라, 코드 기본값을 하네스가 손으로
+      # 옮겨 적으면 한쪽만 바뀌는 날 판정이 다른 잣대로 문다.
+      WAITING_ROUTING_IN_FLIGHT_TTL: "${ROUTING_IN_FLIGHT_TTL:-30s}"
       # 원인을 지표로 역산하지 말고 예외 이름을 보기 위한 손잡이다. 기본은 조용하다.
       LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_CLOUD_GATEWAY: "${GATEWAY_LOG_LEVEL:-INFO}"
       LOGGING_LEVEL_COM_KAFKICK_WAITING_ROUTING: "${GATEWAY_LOG_LEVEL:-INFO}"

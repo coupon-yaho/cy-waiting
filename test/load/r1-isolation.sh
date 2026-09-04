@@ -13,6 +13,10 @@ cd "$(git rev-parse --show-toplevel)" || exit 1
 work=$(mktemp -d) || exit 1
 trap 'rm -rf "$work"' EXIT
 
+# **결과를 남길 자리.** 안 주면 실행이 끝나는 순간 요약이 임시 디렉터리와 함께
+# 사라져, 야간이 깨진 아침에 손에 남는 것이 없다. CI 는 여기를 산출물로 올린다.
+OUT_DIR="${OUT_DIR:-}"
+
 COMPOSE="docker compose -f test/load/compose.yml"
 export REDIS_CLI="$COMPOSE exec -T redis redis-cli"
 BASE_URL="${BASE_URL:-http://localhost:18080}"
@@ -32,7 +36,11 @@ sleep 4
 k6 run --quiet --summary-export=$work/idle.json \
     test/load/idle-coupon.js >$work/idle.log 2>&1
 idle_run=$?
+# **경합 쪽 종료 코드도 받는다.** 안 받으면 그쪽 k6 가 못 돌아도 판정이
+# 한산 쪽만 보고 통과를 낸다. 그리고 첫 실행에서 가장 깨지기 쉬운 것이
+# 경합 쪽이다 — 초당 400 을 같은 러너에서 넣는다.
 wait "$hot"
+hot_run=$?
 
 failed=0
 echo
@@ -42,11 +50,21 @@ echo
 echo "-- 한산 쿠폰 (경합 중) --"
 test/load/evaluate-gate.sh idle-coupon $work/idle.json || failed=1
 
-# k6 자체가 못 돈 것을 통과로 세지 않는다.
+# k6 자체가 못 돈 것을 통과로 세지 않는다. **양쪽 다 본다.**
 if [[ $idle_run -ne 0 ]]; then
     echo "::error title=R1 실측::한산 시나리오가 임계를 넘겼다"
     tail -20 "$work/idle.log" >&2
     failed=1
+fi
+if [[ $hot_run -ne 0 ]]; then
+    echo "::error title=R1 실측::경합 시나리오가 못 돌았다"
+    tail -20 "$work/contended.log" >&2
+    failed=1
+fi
+
+# 요약과 로그를 남긴다. 판정이 미달을 낸 실행일수록 이것이 유일한 단서다.
+if [[ -n $OUT_DIR ]]; then
+    mkdir -p "$OUT_DIR" && cp "$work"/*.json "$work"/*.log "$OUT_DIR/" 2>/dev/null
 fi
 
 echo

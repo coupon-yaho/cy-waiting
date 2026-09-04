@@ -232,6 +232,7 @@ jobs:
         규범=${{ needs.conventions.result }}
         단위=${{ needs.test-unit.result }}
         통합=${{ needs.test-integration.result }}
+        컨텍스트=${{ needs.test-context.result }}
         카오스=${{ needs.test-chaos.result }}
         커버리지=${{ needs.test-coverage.result }}
         보안=${{ needs.security.result }}

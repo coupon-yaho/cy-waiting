@@ -67,6 +67,12 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
      */
     private final FailureWindow suppressed = FailureWindow.create();
 
+    /**
+     * 배제하고 나니 보낼 곳이 없던 구간. <b>부하 최고점에서만 켜지는 자리라</b>
+     * 억제 없이 남기면 초당 수만 줄이 쌓인다 (LG-1 · LG-3).
+     */
+    private final FailureWindow crowdedOut = FailureWindow.create();
+
     /** 마지막으로 본 구간. 밖에서 밖으로 건너뛰는 것을 잡는다. */
     private final AtomicReference<InstanceCountBand> lastBand =
             new AtomicReference<>(InstanceCountBand.EXPECTED);
@@ -105,16 +111,20 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
      * 구간의 첫 건만 남겨 매 초 같은 줄이 쌓이지 않게 한다 (LG-3).
      */
     private void watchEjection(Set<String> present, Set<String> ejected, long now) {
-        int marked = outliers.ejectedCount(now);
-        // **표시는 됐는데 하나도 안 뺐다는 것은 전부가 대상이라는 뜻이다.**
-        if (marked > 0 && marked >= present.size()) {
+        // **지금 목록 안에서만 센다.** 걷히길 기다리는 죽은 기록까지 세면,
+        // 멀쩡한 뒷단에 대고 전부 앓는다고 말하게 된다 — 롤링 배포마다 뜬다.
+        int marked = outliers.markedCount(now);
+        // 표시는 됐는데 하나도 안 뺐다는 것은 전부가 대상이라는 뜻이다.
+        if (!present.isEmpty() && marked >= present.size()) {
             if (suppressed.entered()) {
-                log.error("뒷단 {} 대가 전부 연속 실패다 — 배제를 안 건다. "
-                        + "빼면 보낼 곳이 0 이 된다", present.size());
+                log.error("뒷단 {} 대가 전부 연속 실패다 — 배제를 안 건다. 빼면 보낼 "
+                        + "곳이 0 이 된다. 뒷단 배포 상태와 서킷을 먼저 본다",
+                        present.size());
             }
         } else {
             suppressed.exited().ifPresent(r -> log.info(
-                    "뒷단 전체 실패가 풀렸다 — {}초 만이다", r.elapsedSeconds()));
+                    "뒷단 전체 실패가 풀렸다 — {}초 동안 {}건", r.elapsedSeconds(),
+                    r.swallowed()));
         }
         if (!ejected.isEmpty()) {
             if (ejecting.entered()) {
@@ -123,7 +133,8 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
             }
         } else {
             ejecting.exited().ifPresent(r -> log.info(
-                    "뺀 대가 없어졌다 — {}초 만이다", r.elapsedSeconds()));
+                    "뺀 대가 없어졌다 — {}초 동안 {}건", r.elapsedSeconds(),
+                    r.swallowed()));
         }
     }
 
@@ -167,10 +178,7 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
         inFlight.retain(present, now);
         outliers.retain(present, now);
 
-        // **연속으로 실패한 대를 뺀다.** 물린 표는 답이 끝날 때 놓으므로 즉시
-        // 실패하는 대는 물린 건수가 안 쌓여 가장 한가해 보이고, 부하율로 고르는
-        // 이상 그쪽으로 더 간다. 전부가 대상이면 하나도 안 빠진다 — 보낼 곳이
-        // 0 이 되는 것은 열화된 대로라도 보내는 것보다 나쁘다.
+        // 고르개에 넘기기 전에 거른다. 규칙과 근거는 InstanceOutliers 에 있다.
         Set<String> ejected = outliers.ejected(present, now);
         watchEjection(present, ejected, now);
 
@@ -180,10 +188,18 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
         // 세어 "전부는 안 뺀다" 를 지키는데, 남은 대가 상한에 닿아 있으면 그 약속이
         // 여기서 깨진다 — 앓는 대라도 보내는 것이 아무 데도 못 보내는 것보다 낫다.
         if (candidates.isEmpty() && !ejected.isEmpty()) {
-            log.warn("배제하고 나니 보낼 곳이 없다 — 뺀 {} 대를 도로 넣는다. "
-                    + "남은 대가 인스턴스별 상한에 닿았다는 뜻이다", ejected.size());
+            // 요청마다 도는 자리다. 구간의 첫 건만 남긴다 (LG-3).
+            if (crowdedOut.entered()) {
+                log.warn("배제하고 나니 보낼 곳이 없다 — 뺀 {} 대를 도로 넣는다. "
+                        + "남은 대가 인스턴스별 상한에 닿았다는 뜻이다. 상한과 "
+                        + "뒷단 여유를 함께 본다", ejected.size());
+            }
             byId.clear();
             candidates = gather(available, Set.of(), byId, now);
+        } else {
+            crowdedOut.exited().ifPresent(r -> log.info(
+                    "배제해도 보낼 곳이 남는다 — {}초 동안 {}건", r.elapsedSeconds(),
+                    r.swallowed()));
         }
 
         // **고르는 자리에서 자리를 잡는다.** 읽고 나중에 세면 동시 요청이 다 같이

@@ -321,9 +321,48 @@ class InstanceOutliersTest {
             outliers.failed("나", 1_000);
         }
         outliers.succeeded("다", 1_000);
+        outliers.retain(Set.of("가", "나", "다"), 1_000);
 
-        assertThat(outliers.ejectedCount(1_000)).as("표시된 것").isEqualTo(2);
+        assertThat(outliers.markedCount(1_000)).as("표시된 것").isEqualTo(2);
         assertThat(outliers.ejected(Set.of("가", "나"), 1_000)).as("걸러진 것").isEmpty();
+        assertThat(outliers.seenCount()).as("견줄 대상").isEqualTo(3);
+    }
+
+    /**
+     * <b>걷히길 기다리는 죽은 기록을 세면 안 된다.</b> 롤링 배포에서 앓던 대가
+     * 목록에서 빠지면 기록은 남는데, 그것까지 세면 멀쩡한 뒷단에 대고 전부
+     * 앓는다고 말하게 된다 — 배포 때마다 헛울리는 경보가 된다.
+     */
+    @Test
+    @DisplayName("목록에서_빠진_대는_표시된_수에_안_든다")
+    void 목록에서_빠진_대는_표시된_수에_안_든다() {
+        InstanceOutliers outliers = 배제기();
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("옛것", 1_000);
+        }
+
+        outliers.retain(Set.of("새것"), 1_000);
+
+        assertThat(outliers.tracked()).as("기록은 남긴다").contains("옛것");
+        assertThat(outliers.markedCount(1_000)).as("세지는 않는다").isZero();
+    }
+
+    /**
+     * 시각은 벽시계라 보정이나 재개로 뒤로 간다. 흐른 시간을 음수로 보면 배제가
+     * 안 풀리는데, <b>빠진 대는 트래픽이 0 이라 시간 말고는 나갈 문이 없다.</b>
+     */
+    @Test
+    @DisplayName("시각이_뒤로_가도_배제가_안_굳는다")
+    void 시각이_뒤로_가도_배제가_안_굳는다() {
+        InstanceOutliers outliers = 배제기();
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 10_000);
+        }
+
+        assertThat(outliers.ejected(Set.of("가", "나"), 5_000))
+                .as("뒤로 간 시각에는 갓 뺀 것으로 본다")
+                .containsExactly("가");
+        assertThat(outliers.recoveryRemaining("가", 5_000)).isZero();
     }
 
     @Test
@@ -334,8 +373,10 @@ class InstanceOutliersTest {
             outliers.failed("가", 1_000);
         }
 
-        assertThat(outliers.ejectedCount(1_000)).isEqualTo(1);
-        assertThat(outliers.ejectedCount(1_000 + 배제_시간.toMillis())).isZero();
+        outliers.retain(Set.of("가"), 1_000);
+
+        assertThat(outliers.markedCount(1_000)).isEqualTo(1);
+        assertThat(outliers.markedCount(1_000 + 배제_시간.toMillis())).isZero();
     }
 
     /** 산 목록이 비어 있다. 디스커버리가 빈 목록을 줄 때 실제로 온다. */

@@ -56,6 +56,9 @@ log.info("fail-open 해제. 지속 {}ms, 그동안 통과 {}건", duration.toMil
 | 게이트웨이 수 변화 | INFO | — |
 | 가용량 보고 신선도 상실 / 회복 | WARN → INFO | ✅ |
 | 큐 상한 도달 / 해소 | WARN → INFO | ✅ |
+| 인스턴스 배제 진입 / 해제 | WARN → INFO | ✅ |
+| 뒷단 전체가 배제 대상 (그래서 하나도 안 뺀다) | ERROR → INFO | ✅ |
+| 배제하고 나니 보낼 곳이 없다 | WARN → INFO | ✅ |
 | **시계 역행 감지 후 `maxscore` 점프** | **ERROR** | — |
 | **틱 배분 합계가 `globalCredit` 초과** | **ERROR** | — |
 | 인스턴스 수가 라우팅 가정(A7) 밖 | **WARN** | 전략 재검토 신호. 자동 전환하지 않으므로 이 로그가 유일한 알림이다 |

@@ -294,6 +294,34 @@ class AdmissionDeciderTest {
                 .isEqualTo(AdmissionDecision.ENQUEUE_RATE_GLOBAL);
     }
 
+    /**
+     * <b>노드 몫은 한 초에 한 번만 열린다</b> (F4).
+     *
+     * <p>전역 예산을 여는 자리가 셋이라 하나씩 짝지어 보면 안 묶인 갈래가 남는다.
+     * 갈래를 섞어 통과 총량을 세면 어느 하나만 제 카운터를 들어도 총량이 넘는다.
+     */
+    @Test
+    @DisplayName("갈래를_섞어도_한_초의_노드_몫은_하나다")
+    void 갈래를_섞어도_한_초의_노드_몫은_하나다() {
+        AdmissionDecider d = decider();
+        CouponState idle = CouponStates.idle(500);
+        CouponState 줄선것 = CouponStates.queueing(10, 1_000, 5_000);
+
+        int 통과 = 0;
+        for (int i = 0; i < 400; i++) {
+            AdmissionRequest req = switch (i % 3) {
+                case 0 -> request(idle).withDataStale(true);
+                case 1 -> request(줄선것).withValidToken(true);
+                default -> request(idle);
+            };
+            if (d.decide(req).isPass()) {
+                통과++;
+            }
+        }
+
+        assertThat(통과).isEqualTo(100);
+    }
+
     @Test
     @DisplayName("노드_예산이_먼저_마르면_전역_사유로_큐에_간다")
     void 노드_예산이_먼저_마르면_전역_사유로_큐에_간다() {

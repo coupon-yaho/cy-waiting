@@ -15,10 +15,13 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * @param coldStartRamp 기동 직후 보고된 값을 씨앗으로 쓰는 구간 (G9.12)
  * @param perInstanceCap 인스턴스 하나에 동시에 물릴 수 있는 요청 수 (G9.13).
  *                       <b>느려진 한 대가 커넥션을 독식하지 못하게 한다</b>
+ * @param outlierFailures 연속 실패가 이만큼이면 그 인스턴스를 후보에서 뺀다
+ * @param outlierEjectFor 뺀 뒤 이만큼 지나면 다시 후보로 돌린다
  */
 @ConfigurationProperties("waiting.routing")
 public record RoutingProperties(boolean enabled, String serviceId, String strategy,
-        Duration inFlightTtl, Duration coldStartRamp, Integer perInstanceCap) {
+        Duration inFlightTtl, Duration coldStartRamp, Integer perInstanceCap,
+        Integer outlierFailures, Duration outlierEjectFor) {
 
     /** 무작위 둘 중 여유 대비 덜 찬 쪽. 쏠림을 깨는 것이 이 규모에서 P2C 를 쓰는 이유다. */
     public static final String P2C = "p2c";
@@ -50,6 +53,20 @@ public record RoutingProperties(boolean enabled, String serviceId, String strate
         if (perInstanceCap < 1) {
             throw new IllegalArgumentException(
                     "perInstanceCap 은 1 이상이어야 한다: " + perInstanceCap);
+        }
+        // **셋 미만으로 두지 않는다.** 하나면 어쩌다 난 오류 한 건에 인스턴스가
+        // 빠지고, 그 몫이 남은 대로 몰려 멀쩡한 대까지 밀려 넘어진다.
+        outlierFailures = outlierFailures == null ? 3 : outlierFailures;
+        if (outlierFailures < 1) {
+            throw new IllegalArgumentException(
+                    "outlierFailures 는 1 이상이어야 한다: " + outlierFailures);
+        }
+        // 서킷의 열림 유지 시간과 같은 자리수로 둔다. 훨씬 짧으면 아직 고장 난
+        // 대가 계속 돌아와 배제가 사실상 없는 것이 된다.
+        outlierEjectFor = outlierEjectFor == null ? Duration.ofSeconds(10) : outlierEjectFor;
+        if (outlierEjectFor.isNegative() || outlierEjectFor.isZero()) {
+            throw new IllegalArgumentException(
+                    "outlierEjectFor 는 양수여야 한다: " + outlierEjectFor);
         }
     }
 }

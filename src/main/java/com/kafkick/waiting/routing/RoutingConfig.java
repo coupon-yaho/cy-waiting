@@ -2,6 +2,7 @@ package com.kafkick.waiting.routing;
 
 import com.kafkick.waiting.domain.routing.InFlightRegistry;
 import com.kafkick.waiting.domain.routing.InstanceChooser;
+import com.kafkick.waiting.domain.routing.InstanceOutliers;
 import com.kafkick.waiting.domain.routing.WeightedP2c;
 import com.kafkick.waiting.domain.routing.WeightedRoundRobin;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -27,6 +28,17 @@ public class RoutingConfig {
     @Bean
     InFlightRegistry inFlightRegistry(RoutingProperties properties) {
         return InFlightRegistry.of(properties.inFlightTtl());
+    }
+
+    /**
+     * 연속으로 실패하는 인스턴스를 잠시 후보에서 뺀다.
+     *
+     * <p>서킷은 뒷단 전체에 하나라 열리면 다 같이 막힌다. 여기는 인스턴스별로
+     * 보되 <b>전부를 빼지는 않는다</b> — 배제가 전면 차단이 되면 안 된다.
+     */
+    @Bean
+    InstanceOutliers instanceOutliers(RoutingProperties properties) {
+        return InstanceOutliers.of(properties.outlierFailures(), properties.outlierEjectFor());
     }
 
     /**
@@ -57,8 +69,9 @@ public class RoutingConfig {
 
     /** 나간 요청을 세고 어느 경로로 끝나든 되돌린다 (G9.3). */
     @Bean
-    InFlightTrackingFilter inFlightTrackingFilter(InFlightRegistry registry) {
-        return InFlightTrackingFilter.of(registry, System::currentTimeMillis);
+    InFlightTrackingFilter inFlightTrackingFilter(InFlightRegistry registry,
+            InstanceOutliers outliers) {
+        return InFlightTrackingFilter.of(registry, outliers, System::currentTimeMillis);
     }
 
     /** 이 서비스에만 우리 균형기를 건다. 다른 이름으로 가는 것은 기본 배선 그대로다. */

@@ -125,7 +125,10 @@ watch_ejected() {
     while :; do
         local v n
         v=$(gauge waiting_routing_ejected)
-        n=$(gauge waiting_routing_instances)
+        # **결과를 낸 대의 수를 본다.** `instances` 는 카운터를 들고 있는 수라,
+        # 보고가 만료돼도 물린 표가 남아 있으면 넷으로 보인다 — 노출이 부풀려진다.
+        # `seen` 은 성공이든 실패든 결과를 낸 대만 세고 목록에서 빠지면 걷힌다.
+        n=$(gauge waiting_routing_seen)
         case "$v" in ''|*[!0-9.eE+-]*) sleep 1; continue ;; esac
         case "$n" in ''|*[!0-9.eE+-]*) n=0 ;; esac
         printf '%.0f\n' "$v" >> "$work/ejected"
@@ -191,7 +194,7 @@ exposure=$(( inst_four * 100 / inst_total ))
 echo
 echo "응답 코드: $(awk '$1!="total"{printf "%s×%s ", $2, $1}' "$work/codes")"
 echo "산 대 도착 합계: $live (보낸 것 $sent) · 인스턴스 최고 $peak_inst 대 · 배제 최고 $peak_eject 대"
-echo "죽은 주소 노출: 표본 $inst_total 개 중 $inst_four 개가 넷 ($exposure%)"
+echo "죽은 주소 노출: 표본 $inst_total 개 중 $inst_four 개가 넷 ($exposure%) — 결과를 낸 대 수로 센다"
 echo
 
 ejecting_flag=$([ "$ROUTING_OUTLIER_FAILURES" -le 100 ] && echo 1 || echo 0)

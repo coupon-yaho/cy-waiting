@@ -22,8 +22,10 @@ DURATION_SEC="${DURATION_SEC:-30}"
 IDLE_RATIO="${IDLE_RATIO:-0.9}"
 WARMUP_SEC="${WARMUP_SEC:-15}"
 SAMPLE_MS="${SAMPLE_MS:-500}"
-# 물린 표의 수명. 설정과 같아야 한다 — 다르면 판정이 다른 잣대로 문다.
+# 물린 표의 수명. **제품에도 같은 값을 내려 준다** — 여기만 바꾸면 판정과 제품이
+# 다른 수명으로 돌고, 그러면 수명이 걷어 준 0 을 "제자리로 돌아왔다" 로 적는다.
 TTL_SEC="${TTL_SEC:-30}"
+export ROUTING_IN_FLIGHT_TTL="${TTL_SEC}s"
 # 놓는 자리가 돌면 마지막 응답 뒤 이 안에 0 이다. 뒷단 지연 하나가 여유다.
 ZERO_BUDGET_SEC="${ZERO_BUDGET_SEC:-5}"
 
@@ -122,5 +124,8 @@ awk -v mark="$end_at" '{printf "%d %d\n", $1 - mark, $2}' "$work/samples" > "$wo
 
 echo "표본 $(wc -l < "$work/relative") 개"
 echo
-TTL_SEC="$TTL_SEC" ZERO_BUDGET_SEC="$ZERO_BUDGET_SEC" \
+# 바닥을 조건에서 유도한다. 기대 깊이는 유입 × 지연이고, 8 할이면 예열과
+# 끝맺음의 흔들림을 덮으면서 "아무것도 안 지났다" 는 확실히 거른다.
+min_peak=$(( RATE * STUB_LATENCY_MS / 1000 * 8 / 10 ))
+TTL_SEC="$TTL_SEC" ZERO_BUDGET_SEC="$ZERO_BUDGET_SEC" MIN_PEAK="$min_peak" \
   test/load/evaluate-leak.sh "$work/relative"

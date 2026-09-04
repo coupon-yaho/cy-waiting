@@ -42,7 +42,11 @@ import org.springframework.cloud.circuitbreaker.resilience4j.ReactiveResilience4
 import org.springframework.cloud.circuitbreaker.resilience4j.Resilience4JConfigurationProperties;
 import org.springframework.cloud.gateway.filter.factory.RemoveRequestHeaderGatewayFilterFactory;
 import io.netty.channel.ConnectTimeoutException;
+import java.io.IOException;
 import java.net.ConnectException;
+import java.net.NoRouteToHostException;
+import java.net.SocketException;
+import java.net.UnknownHostException;
 import org.springframework.cloud.gateway.filter.factory.RetryGatewayFilterFactory;
 import org.springframework.cloud.gateway.filter.factory.SpringCloudCircuitBreakerResilience4JFilterFactory;
 import org.springframework.cloud.gateway.handler.predicate.MethodRoutePredicateFactory;
@@ -862,9 +866,55 @@ class GatewayRoutesTest {
 
         assertThat(config.getSeries()).isEmpty();
         assertThat(config.getStatuses()).isEmpty();
-        // 하나면 된다 — netty 의 ConnectTimeoutException 이 이것의 하위다.
-        assertThat(config.getExceptions()).containsExactly(ConnectException.class);
         assertThat(ConnectException.class).isAssignableFrom(ConnectTimeoutException.class);
+        // **넓히는 쪽을 막는다.** 좁히면 유출이지만 넓히면 초과 발급이라 값이
+        // 훨씬 비싸다. 갈래가 하나 늘어 목록이 바뀌어도 이 성질은 그대로 산다.
+        assertThat(config.getExceptions())
+                .as("연결 단계 밖까지 덮는 상위 타입이 끼면 안 된다")
+                .noneMatch(c -> c.isAssignableFrom(SocketException.class)
+                        || c.isAssignableFrom(IOException.class));
+        // **서로를 덮지 않는다.** 하나가 다른 하나의 상위면 목록에 잉여가 있거나
+        // 너무 넓다는 뜻이다 — 후자가 위험한 쪽이다.
+        for (Class<? extends Throwable> a : config.getExceptions()) {
+            for (Class<? extends Throwable> b : config.getExceptions()) {
+                assertThat(a == b || !a.isAssignableFrom(b))
+                        .as("%s 가 %s 를 이미 덮는다", a.getSimpleName(), b.getSimpleName())
+                        .isTrue();
+            }
+        }
+    }
+
+    /**
+     * <b>연결이 못 서는 갈래가 하나가 아니다.</b>
+     *
+     * <p>포트만 닫히면 거절이고 라우팅이 안 되면 도달 불가인데, 뒤엣것은
+     * {@code ConnectException} 의 하위가 아니라 조건 하나로는 안 덮인다.
+     */
+    @Test
+    @DisplayName("연결이_못_서는_갈래를_다_덮는다")
+    void 연결이_못_서는_갈래를_다_덮는다() {
+        var config = GatewayRoutes.connectRetryConfig();
+
+        // 계보가 갈린다는 것부터 못 박는다. 안 적으면 목록이 왜 둘인지가 안 남는다.
+        assertThat(ConnectException.class.isAssignableFrom(NoRouteToHostException.class))
+                .as("도달 불가는 거절의 하위가 아니다").isFalse();
+
+        assertThat(config.getExceptions()).containsExactlyInAnyOrder(
+                ConnectException.class, NoRouteToHostException.class);
+    }
+
+    /**
+     * <b>이름 풀이 실패는 안 문다.</b>
+     *
+     * <p>연결 상한이 채널 옵션이라 그 단계엔 안 걸리고, 재시도가 리졸버 상한을
+     * 두 배로 늘려 격벽 지연을 넘긴다. 다음 대도 같은 리졸버를 타므로 다시
+     * 보내도 결과가 같다 — 못 푸는 대는 배제기가 걷는다.
+     */
+    @Test
+    @DisplayName("이름_풀이_실패는_다시_안_보낸다")
+    void 이름_풀이_실패는_다시_안_보낸다() {
+        assertThat(GatewayRoutes.connectRetryConfig().getExceptions())
+                .noneMatch(c -> c.isAssignableFrom(UnknownHostException.class));
     }
 
     /** 한 번이면 충분하다. 여러 번 돌면 죽은 뒷단에 요청이 그만큼 오래 매달린다. */

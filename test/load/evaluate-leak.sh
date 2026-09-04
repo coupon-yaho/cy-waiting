@@ -15,8 +15,12 @@ set -uo pipefail
 SAMPLES="${1:?표본 파일이 필요하다}"
 TTL_SEC="${TTL_SEC:?수명을 알아야 판정한다}"
 ZERO_BUDGET_SEC="${ZERO_BUDGET_SEC:-5}"
+# **얕은 회차는 누수를 못 잰다.** 한 건이 물렸다 빠진 것으로 "누수 0" 을 적으면
+# 부하가 뒷단에 거의 안 닿은 회차가 게이트를 통과한다. G9.1 이 든 부하 조건과
+# 같은 자리다.
+MIN_PEAK="${MIN_PEAK:-400}"
 
-for setting in TTL_SEC ZERO_BUDGET_SEC; do
+for setting in TTL_SEC ZERO_BUDGET_SEC MIN_PEAK; do
     value=$(eval "printf '%s' \"\$$setting\"")
     case "$value" in
         ''|*[!0-9]*) echo "$setting 은 0 이상의 정수여야 한다: '$value'"; exit 2 ;;
@@ -26,7 +30,7 @@ done
     echo "판정 불가 — 예산 ${ZERO_BUDGET_SEC}초가 수명 ${TTL_SEC}초 이상이면 둘을 못 가른다"; exit 2; }
 [ -s "$SAMPLES" ] || { echo "판정 불가 — 표본 파일이 비었다: $SAMPLES"; exit 2; }
 
-TTL_SEC="$TTL_SEC" ZERO_BUDGET_SEC="$ZERO_BUDGET_SEC" python3 - "$SAMPLES" <<'PY'
+TTL_SEC="$TTL_SEC" ZERO_BUDGET_SEC="$ZERO_BUDGET_SEC" MIN_PEAK="$MIN_PEAK" python3 - "$SAMPLES" <<'PY'
 import os, sys
 
 ttl = int(os.environ["TTL_SEC"]) * 1000
@@ -60,6 +64,11 @@ print("부하 중 — 표본 %d 개 · 최대 %d 건" % (len(during), peak))
 # 적으면, 부하가 뒷단에 안 닿은 회차가 게이트를 통과한다.
 if peak == 0:
     print("판정 불가 — 부하 중에도 0 이었다. 요청이 균형기를 안 탔다")
+    sys.exit(2)
+min_peak = int(os.environ["MIN_PEAK"])
+if peak < min_peak:
+    print("판정 불가 — 최대가 %d 건뿐이다 (최소 %d). 이 깊이로는 누수를 못 잰다"
+          % (peak, min_peak))
     sys.exit(2)
 
 # **음수는 회수가 아니라 이중 감소다** (R-8). 표를 두 번 놓으면 그 대가 영영

@@ -27,7 +27,10 @@ TTL_SEC="${TTL_SEC:-30}"
 # 놓는 자리가 돌면 마지막 응답 뒤 이 안에 0 이다. 뒷단 지연 하나가 여유다.
 ZERO_BUDGET_SEC="${ZERO_BUDGET_SEC:-5}"
 
-require_positive_int RATE DURATION_SEC STUB_LATENCY_MS SAMPLE_MS TTL_SEC || exit 2
+require_positive_int RATE DURATION_SEC STUB_LATENCY_MS SAMPLE_MS TTL_SEC ZERO_BUDGET_SEC || exit 2
+# 예산이 수명 이상이면 둘을 못 가른다 — 판정이 무의미해진다. 돌기 전에 끊는다.
+[ "$TTL_SEC" -gt "$ZERO_BUDGET_SEC" ] || {
+    echo "예산 ${ZERO_BUDGET_SEC}초가 수명 ${TTL_SEC}초 이상이면 둘을 못 가른다"; exit 2; }
 require_non_negative_int WARMUP_SEC || exit 2
 command -v k6 >/dev/null || { echo "k6 가 없다 — 이 하네스는 고정 유입 실행기가 필요하다"; exit 2; }
 
@@ -90,9 +93,9 @@ sample_loop() {
     done
 }
 
-# 부하가 끝나는 시각을 미리 잡아 그것을 원점으로 쓴다.
-end_at=$(( $(date +%s%3N) + DURATION_SEC * 1000 ))
-sample_loop "$end_at" &
+# **표본은 절대 시각으로 남긴다.** 끝나는 시각을 미리 잡으면 k6 가 뜨는 동안
+# 원점이 앞으로 밀려, 0 이 되기까지 걸린 시간이 그만큼 부풀려 적힌다.
+sample_loop 0 &
 sampler=$!
 
 vus=$(( RATE * STUB_LATENCY_MS / 1000 * 3 / 2 + 50 ))
@@ -101,6 +104,7 @@ BASE_URL="$GATEWAY" COUPON="$COUPON" RATE="$RATE" DURATION="${DURATION_SEC}s" \
   k6 run --quiet --summary-export="$work/summary.json" \
   test/load/routing-ratio-rate.js > "$work/k6.log" 2>&1
 k6_rc=$?
+end_at=$(date +%s%3N)
 
 # 회수를 지켜보는 구간. 수명보다 길게 봐야 "수명이 걷어 줬다" 도 표본에 남는다.
 sleep "$(( TTL_SEC + 3 ))"
@@ -113,7 +117,10 @@ if [ "$k6_rc" -ne 0 ]; then
   exit 2
 fi
 
-echo "표본 $(wc -l < "$work/samples") 개"
+# 절대 시각을 원점 기준 경과로 옮긴다. 부하 중은 음수가 된다.
+awk -v mark="$end_at" '{printf "%d %d\n", $1 - mark, $2}' "$work/samples" > "$work/relative"
+
+echo "표본 $(wc -l < "$work/relative") 개"
 echo
 TTL_SEC="$TTL_SEC" ZERO_BUDGET_SEC="$ZERO_BUDGET_SEC" \
-  test/load/evaluate-leak.sh "$work/samples"
+  test/load/evaluate-leak.sh "$work/relative"

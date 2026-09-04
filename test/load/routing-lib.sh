@@ -148,7 +148,14 @@ bring_up() {
     # 앞 실행이 바꿔 둔 식별자로 시작하면 이번 갈아 끼우기가 램프를 안 탄다.
     $COMPOSE exec -T redis redis-cli SET sim:id:stub-1 stub-1 >/dev/null 2>&1
 
+    # 예열 컨테이너는 크레딧이 이 값에 닿아야 건강하다. 여유 합의 90% 로 두되
+    # 200 을 넘기지 않는다 — 큰 여유 회차는 지금까지와 같고, 작은 여유 회차는
+    # 영영 못 닿는 200 대신 제 여유에 맞는 값을 기다린다.
+    local warm=$(( (BIG_CAP + SMALL_CAP + MID_CAP) * 9 / 10 ))
+    [ "$warm" -gt 200 ] && warm=200
+    [ "$warm" -lt 1 ] && warm=1
     if ! ROUTING_STRATEGY="$STRATEGY" STUB_LATENCY_MS="$STUB_LATENCY_MS" \
+         WARMUP_CREDIT="$warm" \
          BIG_LATENCY_MS="$BIG_LATENCY_MS" \
          BIG_CAP="$BIG_CAP" SMALL_CAP="$SMALL_CAP" MID_CAP="$MID_CAP" \
          BIG_INFLIGHT="${BIG_INFLIGHT:-$BIG_CAP}" \
@@ -182,12 +189,20 @@ wait_for_ramp() {
 #
 # 지우자마자 보내면 게이트웨이가 아직 옛 스냅샷을 들고 있어, 요청이 뒷단으로
 # 안 가고 줄로 간다.
+#
+# **줄 키만 지우면 안 된다.** 입장 커서와 최대 순번이 남으면 리더가 줄을
+# 비었다고 안 보고 쿠폰을 다시 QUEUEING 으로 돌리며, 판정은 IDLE 이 아니면
+# 무조건 줄에 세운다(추월 금지). 그러면 첫 요청부터 202 다 — 여유가 작아 줄
+# 모드에 한 번이라도 들어간 회차는 전부 그렇게 죽었다. 셋을 같이 지운다.
 wait_for_idle_queue() {
     local state _
-    $COMPOSE exec -T redis redis-cli DEL "queue:{$COUPON}" >/dev/null 2>&1
+    $COMPOSE exec -T redis redis-cli DEL "queue:{$COUPON}" "admitted:{$COUPON}" \
+        "maxscore:{$COUPON}" >/dev/null 2>&1
     for _ in $(seq 1 30); do
         state=$($COMPOSE exec -T redis redis-cli HGET gw:snapshot "$COUPON" 2>/dev/null)
-        case "$state" in *QUEUEING*) sleep 1 ;; *) return 0 ;; esac
+        # IDLE 을 봐야 한다. QUEUEING 이 아닌 것으로 두면 PASSING 같은 중간 상태에서
+        # 나가고, 그 상태의 첫 요청이 다시 줄 모드를 켠다.
+        case "$state" in *:IDLE:*) return 0 ;; *) sleep 1 ;; esac
     done
     echo "줄 모드가 안 꺼진다 ($state) — 이 상태로는 못 잰다" >&2
     return 2

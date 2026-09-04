@@ -151,6 +151,10 @@ bring_up() {
     if ! ROUTING_STRATEGY="$STRATEGY" STUB_LATENCY_MS="$STUB_LATENCY_MS" \
          BIG_LATENCY_MS="$BIG_LATENCY_MS" \
          BIG_CAP="$BIG_CAP" SMALL_CAP="$SMALL_CAP" MID_CAP="$MID_CAP" \
+         BIG_INFLIGHT="${BIG_INFLIGHT:-$BIG_CAP}" \
+         SMALL_INFLIGHT="${SMALL_INFLIGHT:-$SMALL_CAP}" \
+         MID_INFLIGHT="${MID_INFLIGHT:-$MID_CAP}" \
+         ROUTING_PER_INSTANCE_CAP="${ROUTING_PER_INSTANCE_CAP:-200}" \
          $COMPOSE up -d --wait >> "$log" 2>&1; then
         echo "겹침을 못 세웠다" >&2; tail -20 "$log" | sed 's/^/  /' >&2
         return 2

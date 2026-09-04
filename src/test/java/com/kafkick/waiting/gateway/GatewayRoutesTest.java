@@ -887,8 +887,7 @@ class GatewayRoutesTest {
     /**
      * <b>연결이 못 서는 갈래가 하나가 아니다.</b>
      *
-     * <p>주소가 죽는 모양은 셋이고 예외 계보가 갈린다 — 포트만 닫히면 거절,
-     * 라우팅이 안 되면 도달 불가, 이름이 안 풀리면 DNS 다. 뒤엣둘은
+     * <p>포트만 닫히면 거절이고 라우팅이 안 되면 도달 불가인데, 뒤엣것은
      * {@code ConnectException} 의 하위가 아니라 조건 하나로는 안 덮인다.
      */
     @Test
@@ -896,14 +895,26 @@ class GatewayRoutesTest {
     void 연결이_못_서는_갈래를_다_덮는다() {
         var config = GatewayRoutes.connectRetryConfig();
 
-        // 계보가 갈린다는 것부터 못 박는다. 안 적으면 아래 목록이 왜 셋인지가 안 남는다.
+        // 계보가 갈린다는 것부터 못 박는다. 안 적으면 목록이 왜 둘인지가 안 남는다.
         assertThat(ConnectException.class.isAssignableFrom(NoRouteToHostException.class))
                 .as("도달 불가는 거절의 하위가 아니다").isFalse();
-        assertThat(ConnectException.class.isAssignableFrom(UnknownHostException.class))
-                .as("DNS 실패는 거절의 하위가 아니다").isFalse();
 
         assertThat(config.getExceptions()).containsExactlyInAnyOrder(
-                ConnectException.class, NoRouteToHostException.class, UnknownHostException.class);
+                ConnectException.class, NoRouteToHostException.class);
+    }
+
+    /**
+     * <b>이름 풀이 실패는 안 문다.</b>
+     *
+     * <p>연결 상한이 채널 옵션이라 그 단계엔 안 걸리고, 재시도가 리졸버 상한을
+     * 두 배로 늘려 격벽 지연을 넘긴다. 다음 대도 같은 리졸버를 타므로 다시
+     * 보내도 결과가 같다 — 못 푸는 대는 배제기가 걷는다.
+     */
+    @Test
+    @DisplayName("이름_풀이_실패는_다시_안_보낸다")
+    void 이름_풀이_실패는_다시_안_보낸다() {
+        assertThat(GatewayRoutes.connectRetryConfig().getExceptions())
+                .noneMatch(c -> c.isAssignableFrom(UnknownHostException.class));
     }
 
     /** 한 번이면 충분하다. 여러 번 돌면 죽은 뒷단에 요청이 그만큼 오래 매달린다. */

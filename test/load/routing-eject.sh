@@ -63,10 +63,14 @@ for name in "${NAMES[@]}"; do arrived "$name" || exit 2; done > "$work/prev"
 # 0.2초 만에 끊는 구현이 미달로 적힌다. 실제로 그렇게 한 번 적혔다.
 sample() {
   local second=$1 total=0 broken=0 idx now prev delta
+  local pids=()
   for idx in 0 1 2; do
     arrived "${NAMES[idx]}" > "$work/n$idx" &
+    pids+=($!)
   done
-  wait
+  # **셋만 기다린다.** 인자 없는 wait 는 부하 루프까지 기다리는데 그것은
+  # 끝나지 않는다 — 표본 하나에서 통째로 멎는다. 실제로 15분을 멎었다.
+  wait "${pids[@]}"
   for idx in 0 1 2; do
     now=$(cat "$work/n$idx")
     case "$now" in ''|*[!0-9]*) echo "표본을 못 읽었다: ${NAMES[idx]}" >&2; return 1 ;; esac

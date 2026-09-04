@@ -36,6 +36,16 @@ trap 'rm -rf "$work"; kill %1 2>/dev/null' EXIT
 echo "$(banner) · 한 대를 즉시 ${FAULT_STATUS} 로 만든다"
 
 bring_up "$work/up.log" || exit 2
+
+# **앞 실행이 남긴 고장을 걷는다.** 겹침은 이미지가 그대로면 컨테이너를 다시
+# 안 만들므로, 앞 회차가 켜 둔 고장이 그대로 살아 있다. 그 상태로 시작하면
+# 고장 전 몫이 처음부터 0 이라 아무것도 못 재는데, 그 사실은 판정기가
+# "잴 것이 없다" 로 끊어 줄 때에야 드러난다 — 실제로 두 번 그랬다.
+for name in "${NAMES[@]}"; do
+  $COMPOSE exec -T "$name" sh -c \
+      "wget -qO- 'http://localhost:8090/stub/fault?status=0'" >/dev/null || exit 2
+done
+
 wait_for_ramp || exit 2
 sleep "$WARMUP_SEC"
 wait_for_idle_queue || exit 2

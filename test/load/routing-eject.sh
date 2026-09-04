@@ -48,10 +48,18 @@ for name in "${NAMES[@]}"; do arrived "$name" || exit 2; done > "$work/prev"
 
 # 고장 난 대에 닿은 수와 전체를 초마다 뜬다. **닿은 수**여야 한다 — 즉시 실패는
 # 처리 건수에 안 들어가므로, 그것만 보면 트래픽을 다 받는 중에도 0 으로 보인다.
+# **셋을 나란히 읽는다.** 차례로 읽으면 표본 하나에 도커 명령이 여섯 번 들어
+# 2.8초가 걸리고, 그러면 진입 예산 5초가 판정기 해상도 아래로 내려간다 —
+# 0.2초 만에 끊는 구현이 미달로 적힌다. 실제로 그렇게 한 번 적혔다.
 sample() {
   local second=$1 total=0 broken=0 idx now prev delta
   for idx in 0 1 2; do
-    now=$(arrived "${NAMES[idx]}") || return 1
+    arrived "${NAMES[idx]}" > "$work/n$idx" &
+  done
+  wait
+  for idx in 0 1 2; do
+    now=$(cat "$work/n$idx")
+    case "$now" in ''|*[!0-9]*) echo "표본을 못 읽었다: ${NAMES[idx]}" >&2; return 1 ;; esac
     echo "$now" >> "$work/cur"
   done
   for idx in 0 1 2; do

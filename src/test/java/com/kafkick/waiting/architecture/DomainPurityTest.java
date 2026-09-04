@@ -104,6 +104,7 @@ class DomainPurityTest {
                         "com.kafkick.waiting.config..",
                         // 실재하는 바깥 계층이 목록에 없으면 이 검사는 늘 참이다.
                         "com.kafkick.waiting.gateway..",
+                        "com.kafkick.waiting.routing..",
                         "com.kafkick.waiting.control..")
                 .because("의존은 바깥에서 안으로만 흐른다 (DS-6)")
                 .check(classes);

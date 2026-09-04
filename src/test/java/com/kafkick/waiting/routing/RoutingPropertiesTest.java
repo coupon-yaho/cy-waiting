@@ -92,4 +92,46 @@ class RoutingPropertiesTest {
         assertThat(new RoutingProperties(true, null, null, null, null, null, null, null).perInstanceCap())
                 .isEqualTo(200);
     }
+
+    /** <b>하한 자체는 받는다.</b> 안 받으면 하한을 적은 배포가 뜨지도 못하고 죽는다. */
+    @Test
+    @DisplayName("하한_값은_받는다")
+    void 하한_값은_받는다() {
+        RoutingProperties 하한 =
+                new RoutingProperties(true, null, null, null, null, 1, 1, null);
+
+        assertThat(하한.perInstanceCap()).isEqualTo(1);
+        assertThat(하한.outlierFailures()).isEqualTo(1);
+    }
+
+    /**
+     * <b>0 이면 어쩌다 난 오류 한 건에 인스턴스가 빠진다.</b> 그 몫이 남은 대로
+     * 몰려 멀쩡한 대까지 밀려 넘어진다.
+     */
+    @Test
+    @DisplayName("연속_실패_임계가_양수가_아니면_거절한다")
+    void 연속_실패_임계가_양수가_아니면_거절한다() {
+        assertThatThrownBy(
+                () -> new RoutingProperties(true, null, null, null, null, null, 0, null))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(
+                () -> new RoutingProperties(true, null, null, null, null, null, -1, null))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /**
+     * <b>배제 시간이 0 이면 배제가 아니다.</b> 뺀 그 자리에서 다시 후보가 되어,
+     * 앓는 대를 빼는 장치가 이름만 남는다.
+     */
+    @Test
+    @DisplayName("배제_시간이_양수가_아니면_거절한다")
+    void 배제_시간이_양수가_아니면_거절한다() {
+        assertThatThrownBy(() -> new RoutingProperties(
+                true, null, null, null, null, null, null, Duration.ZERO))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new RoutingProperties(
+                true, null, null, null, null, null, null, Duration.ofSeconds(-1)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
 }

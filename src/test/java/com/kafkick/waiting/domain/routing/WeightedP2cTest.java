@@ -307,4 +307,5 @@ class WeightedP2cTest {
             return (double) 받은.get(id) / 총;
         }
     }
+
 }

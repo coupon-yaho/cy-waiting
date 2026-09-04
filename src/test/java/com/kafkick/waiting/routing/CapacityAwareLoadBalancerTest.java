@@ -518,4 +518,50 @@ class CapacityAwareLoadBalancerTest {
                 목록(), 정해진(), 레지스트리, 배제기, () -> 지금, 0))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    /**
+     * <b>표를 못 잡으면 그 대를 빼고 다시 고른다.</b> 고르는 것과 자리를 잡는
+     * 것 사이에 남이 마지막 자리를 가져갈 수 있는데, 거기서 빈 답을 내면
+     * 보낼 곳이 멀쩡한데 요청이 죽는다.
+     */
+    @Test
+    @DisplayName("표를_못_잡으면_다음_후보로_간다")
+    void 표를_못_잡으면_다음_후보로_간다() {
+        List<List<String>> 본_회차 = new ArrayList<>();
+        Deque<String> 고를 = new ArrayDeque<>(List.of("be-1", "be-2"));
+
+        Response<ServiceInstance> 답 = 고른다(candidates -> {
+            본_회차.add(candidates.stream().map(RoutingCandidate::instanceId).toList());
+            String 이번 = 고를.poll();
+            // 고르는 사이에 be-1 의 마지막 자리를 남이 가져간다. **프로덕션이
+            // 쓰는 길로 민다** — 상한 없는 뒷문으로 밀면 못 만드는 상태가 된다.
+            레지스트리.tryStarted("be-1", 1, 지금);
+            return candidates.stream().filter(c -> c.instanceId().equals(이번)).findFirst();
+        }, 목록(인스턴스("be-1", "200"), 인스턴스("be-2", "200")), 1);
+
+        assertThat(답.hasServer()).isTrue();
+        assertThat(답.getServer().getInstanceId()).isEqualTo("be-2");
+        assertThat(본_회차).containsExactly(List.of("be-1", "be-2"), List.of("be-2"));
+        // **잡은 표를 실어 보내는지까지 본다.** 안 실으면 놓을 사람이 없어
+        // 카운터가 수명으로만 줄고, 부하가 붙으면 전 대가 상한에 못 박힌다.
+        assertThat(답.getServer()).isInstanceOf(ReservedInstance.class);
+        assertThat(레지스트리.count("be-2", 지금)).isEqualTo(1);
+    }
+
+    /** 후보가 소진되면 빈 답이다. 아무나 고르면 상한을 넘겨 그 대가 무너진다. */
+    @Test
+    @DisplayName("아무도_표를_못_잡으면_빈_답이다")
+    void 아무도_표를_못_잡으면_빈_답이다() {
+        Deque<String> 고를 = new ArrayDeque<>(List.of("be-1", "be-2"));
+
+        Response<ServiceInstance> 답 = 고른다(candidates -> {
+            레지스트리.tryStarted("be-1", 1, 지금);
+            레지스트리.tryStarted("be-2", 1, 지금);
+            String 이번 = 고를.poll();
+            return candidates.stream().filter(c -> c.instanceId().equals(이번)).findFirst();
+        }, 목록(인스턴스("be-1", "200"), 인스턴스("be-2", "200")), 1);
+
+        assertThat(답.hasServer()).isFalse();
+    }
+
 }

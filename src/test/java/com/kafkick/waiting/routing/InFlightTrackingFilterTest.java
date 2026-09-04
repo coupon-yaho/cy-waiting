@@ -108,6 +108,22 @@ class InFlightTrackingFilterTest {
     }
 
     /**
+     * <b>429 는 그 대의 상태다.</b> 포화된 뒷단이 부하를 흘리는 가장 흔한
+     * 방식이고 즉시 끝나므로, 안 세면 그 대가 계속 가장 한가해 보인다 —
+     * 이 기능이 막으려던 바로 그 병리다.
+     */
+    @Test
+    @DisplayName("포화를_알리는_429_는_그_대의_실패다")
+    void 포화를_알리는_429_는_그_대의_실패다() {
+        세_번("be-1", ex -> {
+            ex.getResponse().setRawStatusCode(429);
+            return Mono.empty();
+        });
+
+        assertThat(배제기.ejected(Set.of("be-1", "be-2"), 지금)).containsExactly("be-1");
+    }
+
+    /**
      * <b>4xx 를 성공으로 세면 이 대가 영영 안 빠진다.</b> 400 이 매번 연속을
      * 끊어, 절반이 500 인 뒷단이 정상으로 보인다.
      */

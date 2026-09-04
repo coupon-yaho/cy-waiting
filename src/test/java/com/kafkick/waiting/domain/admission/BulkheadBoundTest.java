@@ -17,6 +17,10 @@ import org.junit.jupiter.api.Test;
 
 class BulkheadBoundTest {
 
+    /** 전체 상한을 안 재는 시험이다. 쿠폰별 상한만 보게 넉넉히 둔다. */
+    private static final long NO_TOTAL_CAP = Long.MAX_VALUE;
+
+
     /** 운영에서 상정한 규모. 이만큼은 <b>막히지 않아야</b> 한다. */
     private static final int EXPECTED_COUPONS = 2_000;
 
@@ -26,7 +30,7 @@ class BulkheadBoundTest {
         Bulkhead bulkhead = Bulkhead.withMaxKeys(CouponKeys.MAX);
 
         for (int i = 0; i < EXPECTED_COUPONS; i++) {
-            assertThat(bulkhead.tryEnter("c" + i, 1))
+            assertThat(bulkhead.tryEnter("c" + i, 1, NO_TOTAL_CAP))
                     .describedAs("%d 번째 쿠폰", i)
                     .isTrue();
         }
@@ -50,7 +54,7 @@ class BulkheadBoundTest {
 
         int rejected = 0;
         for (int i = 0; i < max * 100; i++) {
-            if (!bulkhead.tryEnter("c" + i, 1)) {
+            if (!bulkhead.tryEnter("c" + i, 1, NO_TOTAL_CAP)) {
                 rejected++;
             }
         }
@@ -79,7 +83,7 @@ class BulkheadBoundTest {
 
         for (int i = 0; i < CouponKeys.MAX * 5; i++) {
             String coupon = "c" + i;
-            assertThat(bulkhead.tryEnter(coupon, 1))
+            assertThat(bulkhead.tryEnter(coupon, 1, NO_TOTAL_CAP))
                     .describedAs("%d 번째 쿠폰이 자리를 못 잡았다 — 앞의 것이 안 지워졌다", i)
                     .isTrue();
             bulkhead.exit(coupon);
@@ -104,13 +108,13 @@ class BulkheadBoundTest {
         int max = 4;
         Bulkhead bulkhead = Bulkhead.withMaxKeys(max);
         for (int i = 0; i < max; i++) {
-            bulkhead.tryEnter("c" + i, 3);
+            bulkhead.tryEnter("c" + i, 3, NO_TOTAL_CAP);
         }
 
-        assertThat(bulkhead.tryEnter("새 쿠폰", 3))
+        assertThat(bulkhead.tryEnter("새 쿠폰", 3, NO_TOTAL_CAP))
                 .describedAs("맵이 찼으면 새 쿠폰은 안 받는다")
                 .isFalse();
-        assertThat(bulkhead.tryEnter("c0", 3))
+        assertThat(bulkhead.tryEnter("c0", 3, NO_TOTAL_CAP))
                 .describedAs("이미 자리를 쥔 쿠폰은 자기 몫을 계속 쓴다")
                 .isTrue();
         assertThat(bulkhead.size()).isEqualTo(max);
@@ -128,8 +132,8 @@ class BulkheadBoundTest {
     void 상한이_1이면_쿠폰_하나는_담는다() {
         Bulkhead bulkhead = Bulkhead.withMaxKeys(1);
 
-        assertThat(bulkhead.tryEnter("c1", 1)).isTrue();
-        assertThat(bulkhead.tryEnter("c2", 1)).isFalse();
+        assertThat(bulkhead.tryEnter("c1", 1, NO_TOTAL_CAP)).isTrue();
+        assertThat(bulkhead.tryEnter("c2", 1, NO_TOTAL_CAP)).isFalse();
     }
 
     /** 상한은 밖에서 받지 않고 자기가 안다. 지표가 분모로 이 값을 읽는다 (6.3.6). */

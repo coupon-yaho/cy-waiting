@@ -38,7 +38,8 @@ public class RoutingConfig {
      */
     @Bean
     InstanceOutliers instanceOutliers(RoutingProperties properties) {
-        return InstanceOutliers.of(properties.outlierFailures(), properties.outlierEjectFor());
+        return InstanceOutliers.of(properties.outlierFailures(),
+                properties.outlierEjectFor(), properties.coldStartRamp());
     }
 
     /**

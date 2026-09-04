@@ -37,7 +37,7 @@ class InFlightTrackingFilterTest {
     private final InFlightRegistry 레지스트리 = InFlightRegistry.of(Duration.ofSeconds(30));
 
     private final InstanceOutliers 배제기 =
-            InstanceOutliers.of(3, Duration.ofSeconds(10));
+            InstanceOutliers.of(3, Duration.ofSeconds(10), Duration.ofSeconds(60));
 
     private final InFlightTrackingFilter 필터 =
             InFlightTrackingFilter.of(레지스트리, 배제기, () -> 지금);
@@ -95,12 +95,49 @@ class InFlightTrackingFilterTest {
      * 클라이언트 하나가 뒷단을 차례로 지운다.
      */
     @Test
-    @DisplayName("4xx_는_그_대의_실패가_아니다")
-    void 사백번대는_그_대의_실패가_아니다() {
+    @DisplayName("4xx_는_어느_쪽으로도_안_센다")
+    void 사백번대는_어느_쪽으로도_안_센다() {
         세_번("be-1", ex -> {
             ex.getResponse().setRawStatusCode(400);
             return Mono.empty();
         });
+
+        assertThat(배제기.ejected(Set.of("be-1", "be-2"), 지금)).isEmpty();
+        assertThat(배제기.tracked()).as("성공으로도 안 센다").isEmpty();
+    }
+
+    /**
+     * <b>4xx 를 성공으로 세면 이 대가 영영 안 빠진다.</b> 400 이 매번 연속을
+     * 끊어, 절반이 500 인 뒷단이 정상으로 보인다.
+     */
+    @Test
+    @DisplayName("오백과_사백을_번갈아_내도_빠진다")
+    void 오백과_사백을_번갈아_내도_빠진다() {
+        int[] 코드 = {500, 400, 500, 400, 500};
+        for (int c : 코드) {
+            필터.filter(고른_요청("be-1"), ex -> {
+                ex.getResponse().setRawStatusCode(c);
+                return Mono.empty();
+            }).block();
+        }
+
+        assertThat(배제기.ejected(Set.of("be-1", "be-2"), 지금)).containsExactly("be-1");
+    }
+
+    /**
+     * <b>성공을 안 적으면 연속이 영영 안 풀린다.</b> 몇 시간에 걸쳐 흩어진 실패
+     * 셋만으로 멀쩡한 대가 빠지고, 트래픽이 많은 대일수록 먼저 걸린다.
+     */
+    @Test
+    @DisplayName("정상_응답이_연속을_끊는다")
+    void 정상_응답이_연속을_끊는다() {
+        int[] 코드 = {503, 503, 200, 503};
+        for (int c : 코드) {
+            필터.filter(고른_요청("be-1"), ex -> {
+                ex.getResponse().setRawStatusCode(c);
+                return Mono.empty();
+            }).block();
+        }
 
         assertThat(배제기.ejected(Set.of("be-1", "be-2"), 지금)).isEmpty();
     }

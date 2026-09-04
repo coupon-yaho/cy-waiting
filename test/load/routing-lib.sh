@@ -16,6 +16,26 @@ ROUTING_LIB_LOADED=1
 
 COMPOSE="docker compose -f test/load/compose.yml -f test/load/compose.routing.yml"
 
+# **죽일 때 부하 루프까지 걷는다.** 시나리오는 부하를 서브셸로 띄우는데, 밖에서
+# `kill` 로 죽이면 bash 는 EXIT trap 을 안 돌리고 그 루프가 살아남는다. 살아남은
+# 루프는 게이트웨이에 계속 요청을 보내 줄을 채우고, 다음 회차는 첫 요청부터
+# 202 를 받는다 — 실제로 몇 시간 살아남아 여섯 회차를 오염시켰다.
+# INT·TERM 을 잡아 exit 로 바꾸면 EXIT trap 이 돌고, 거기서 자식을 걷는다.
+# bash 는 앞에서 도는 명령이 끝난 뒤에야 trap 을 돌린다 — 시나리오의 표본
+# 간격이 1초라 그 안에 걷힌다. 긴 sleep 을 앞에 두면 그만큼 늦는다.
+trap 'exit 130' INT TERM
+# **손자까지 걷는다.** 부하 루프는 서브셸이고 그 안에서 curl 이 또 자식으로
+# 돈다. 직계만 죽이면 curl 이 시한(5초)까지 살아남아 다음 회차에 요청을
+# 흘린다 — 그 몇 초가 줄 모드를 켜면 그 회차는 통째로 못 쓴다.
+reap_children() {
+    local kid
+    for kid in $(pgrep -P $$ 2>/dev/null); do
+        pkill -P "$kid" 2>/dev/null
+        kill "$kid" 2>/dev/null
+    done
+    return 0
+}
+
 # 뒷단 이름. **씨더가 쓰는 값과 같아야 한다** — 갈리면 기대값이 실제 보고와
 # 달라져, 맞게 도착한 것이 미달로 적힌다.
 NAMES=(backend backend-small backend-mid)
@@ -148,14 +168,25 @@ bring_up() {
     # 앞 실행이 바꿔 둔 식별자로 시작하면 이번 갈아 끼우기가 램프를 안 탄다.
     $COMPOSE exec -T redis redis-cli SET sim:id:stub-1 stub-1 >/dev/null 2>&1
 
+    # 예열 컨테이너는 크레딧이 이 값에 닿아야 건강하다. 여유 합의 90% 로 두되
+    # 200 을 넘기지 않는다 — 큰 여유 회차는 지금까지와 같고, 작은 여유 회차는
+    # 영영 못 닿는 200 대신 제 여유에 맞는 값을 기다린다.
+    local warm=$(( (BIG_CAP + SMALL_CAP + MID_CAP) * 9 / 10 ))
+    [ "$warm" -gt 200 ] && warm=200
+    [ "$warm" -lt 1 ] && warm=1
+    # **대기 상한을 램프보다 길게 준다.** 기본 60초는 게이트웨이를 새로 만든
+    # 회차에서 램프 60초를 못 기다려 예열이 "unhealthy" 로 죽는다 — 문턱이
+    # 아니라 시계가 문제였다. 예열 자체의 재시도 예산(180초)과 맞춘다.
     if ! ROUTING_STRATEGY="$STRATEGY" STUB_LATENCY_MS="$STUB_LATENCY_MS" \
+         WARMUP_CREDIT="$warm" \
          BIG_LATENCY_MS="$BIG_LATENCY_MS" \
          BIG_CAP="$BIG_CAP" SMALL_CAP="$SMALL_CAP" MID_CAP="$MID_CAP" \
          BIG_INFLIGHT="${BIG_INFLIGHT:-$BIG_CAP}" \
          SMALL_INFLIGHT="${SMALL_INFLIGHT:-$SMALL_CAP}" \
          MID_INFLIGHT="${MID_INFLIGHT:-$MID_CAP}" \
          ROUTING_PER_INSTANCE_CAP="${ROUTING_PER_INSTANCE_CAP:-200}" \
-         $COMPOSE up -d --wait >> "$log" 2>&1; then
+         GATEWAY_LOG_LEVEL="${GATEWAY_LOG_LEVEL:-INFO}" \
+         $COMPOSE up -d --wait --wait-timeout 180 >> "$log" 2>&1; then
         echo "겹침을 못 세웠다" >&2; tail -20 "$log" | sed 's/^/  /' >&2
         return 2
     fi
@@ -182,12 +213,20 @@ wait_for_ramp() {
 #
 # 지우자마자 보내면 게이트웨이가 아직 옛 스냅샷을 들고 있어, 요청이 뒷단으로
 # 안 가고 줄로 간다.
+#
+# **줄 키만 지우면 안 된다.** 입장 커서와 최대 순번이 남으면 리더가 줄을
+# 비었다고 안 보고 쿠폰을 다시 QUEUEING 으로 돌리며, 판정은 IDLE 이 아니면
+# 무조건 줄에 세운다(추월 금지). 그러면 첫 요청부터 202 다 — 여유가 작아 줄
+# 모드에 한 번이라도 들어간 회차는 전부 그렇게 죽었다. 셋을 같이 지운다.
 wait_for_idle_queue() {
     local state _
-    $COMPOSE exec -T redis redis-cli DEL "queue:{$COUPON}" >/dev/null 2>&1
+    $COMPOSE exec -T redis redis-cli DEL "queue:{$COUPON}" "admitted:{$COUPON}" \
+        "maxscore:{$COUPON}" >/dev/null 2>&1
     for _ in $(seq 1 30); do
         state=$($COMPOSE exec -T redis redis-cli HGET gw:snapshot "$COUPON" 2>/dev/null)
-        case "$state" in *QUEUEING*) sleep 1 ;; *) return 0 ;; esac
+        # IDLE 을 봐야 한다. QUEUEING 이 아닌 것으로 두면 PASSING 같은 중간 상태에서
+        # 나가고, 그 상태의 첫 요청이 다시 줄 모드를 켠다.
+        case "$state" in *:IDLE:*) return 0 ;; *) sleep 1 ;; esac
     done
     echo "줄 모드가 안 꺼진다 ($state) — 이 상태로는 못 잰다" >&2
     return 2

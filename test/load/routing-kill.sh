@@ -40,7 +40,7 @@ require_non_negative_int MIN_VICTIM || exit 2
 
 work=$(mktemp -d) || exit 1
 # 죽인 대를 반드시 되살린다. 안 살리면 다음 실행이 두 대로 시작한다.
-trap '$COMPOSE start "$VICTIM" >/dev/null 2>&1; rm -rf "$work"' EXIT
+trap 'reap_children; $COMPOSE start "$VICTIM" >/dev/null 2>&1; rm -rf "$work"' EXIT
 
 echo "$(banner) · 일꾼 ${WORKERS} · ${VICTIM} 을 죽이고 ${AFTER_SEC}초 동안 응답을 센다"
 

@@ -50,7 +50,7 @@ case "$STRATEGY" in
 esac
 
 work=$(mktemp -d) || exit 1
-trap 'rm -rf "$work"; kill %1 2>/dev/null' EXIT
+trap 'reap_children; rm -rf "$work"' EXIT
 
 if [ "$DIRECTION" = degrade ]; then
   START_CREDITS=$BIG_CAP; END_CREDITS=$DEGRADED_CREDITS

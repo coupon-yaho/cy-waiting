@@ -6,6 +6,7 @@ import com.kafkick.waiting.domain.routing.InFlightRegistry;
 import com.kafkick.waiting.domain.routing.InstanceOutliers;
 import java.time.Duration;
 import java.util.List;
+import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -75,7 +76,7 @@ class InFlightTrackingFilterTest {
             return Mono.empty();
         });
 
-        assertThat(배제기.ejected(java.util.Set.of("be-1", "be-2"), 지금))
+        assertThat(배제기.ejected(Set.of("be-1", "be-2"), 지금))
                 .containsExactly("be-1");
     }
 
@@ -85,7 +86,7 @@ class InFlightTrackingFilterTest {
     void 에러로_끝난_것도_실패로_센다() {
         세_번("be-1", ex -> Mono.error(new IllegalStateException("뒷단이 끊었다")));
 
-        assertThat(배제기.ejected(java.util.Set.of("be-1", "be-2"), 지금))
+        assertThat(배제기.ejected(Set.of("be-1", "be-2"), 지금))
                 .containsExactly("be-1");
     }
 
@@ -101,7 +102,7 @@ class InFlightTrackingFilterTest {
             return Mono.empty();
         });
 
-        assertThat(배제기.ejected(java.util.Set.of("be-1", "be-2"), 지금)).isEmpty();
+        assertThat(배제기.ejected(Set.of("be-1", "be-2"), 지금)).isEmpty();
     }
 
     /**
@@ -117,7 +118,7 @@ class InFlightTrackingFilterTest {
                     .verify();
         }
 
-        assertThat(배제기.ejected(java.util.Set.of("be-1", "be-2"), 지금)).isEmpty();
+        assertThat(배제기.ejected(Set.of("be-1", "be-2"), 지금)).isEmpty();
         assertThat(배제기.tracked()).as("성공으로도 안 센다").isEmpty();
     }
 

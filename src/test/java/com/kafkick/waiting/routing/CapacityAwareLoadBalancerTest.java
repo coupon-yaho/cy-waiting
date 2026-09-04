@@ -35,12 +35,14 @@ class CapacityAwareLoadBalancerTest {
 
     private static final Duration 수명 = Duration.ofSeconds(30);
 
+    private static final Duration 배제_시간 = Duration.ofSeconds(10);
+
     private static final long 지금 = 1_800_000_000_000L;
 
     private final InFlightRegistry 레지스트리 = InFlightRegistry.of(수명);
 
     private final InstanceOutliers 배제기 =
-            InstanceOutliers.of(3, Duration.ofSeconds(10));
+            InstanceOutliers.of(3, 배제_시간, Duration.ofSeconds(60));
 
     private static ServiceInstance 인스턴스(String id, String credits) {
         DefaultServiceInstance instance =
@@ -96,6 +98,19 @@ class CapacityAwareLoadBalancerTest {
         }, 목록(인스턴스("be-1", "100"), 인스턴스("be-2", "100")), 상한);
 
         assertThat(고른것.getServer().getInstanceId()).isEqualTo("be-2");
+
+        // 있으면 be-1 을 고르고 없으면 남은 것을 고른다. 콜백 안이 아니라
+        // 돌아온 값으로 본다 — 고르개가 아예 안 불려도 초록이 되지 않게.
+        InstanceChooser be1을_원한다 = candidates -> candidates.stream()
+                .filter(c -> c.instanceId().equals("be-1"))
+                .findFirst()
+                .or(() -> candidates.stream().findFirst());
+
+        Response<ServiceInstance> 다시 = 고른다(be1을_원한다,
+                목록(인스턴스("be-1", "100"), 인스턴스("be-2", "100")), 상한);
+        assertThat(다시.getServer().getInstanceId())
+                .as("be-1 을 원하는 고르개를 줘도 그리로 안 간다")
+                .isEqualTo("be-2");
     }
 
     /**
@@ -115,6 +130,71 @@ class CapacityAwareLoadBalancerTest {
 
         assertThat(고른것.hasServer()).isTrue();
         assertThat(고른것.getServer().getInstanceId()).isEqualTo("be-1");
+    }
+
+    /**
+     * <b>기록을 안 걷으면 죽은 이름이 무한히 쌓인다.</b> 식별자는 재기동마다
+     * 새로 오고, 남은 기록이 배제 지표까지 부풀려 신호를 거짓말로 만든다.
+     */
+    @Test
+    @DisplayName("사라진_대의_배제_기록을_걷는다")
+    void 사라진_대의_배제_기록을_걷는다() {
+        배제기.failed("옛것", 지금);
+
+        고른다(정해진("be-1"), 목록(인스턴스("be-1", "100")), 상한);
+
+        assertThat(배제기.tracked()).doesNotContain("옛것");
+    }
+
+    /**
+     * <b>배제와 상한이 만나면 보낼 곳이 0 이 될 수 있다.</b> 배제기는 자기끼리만
+     * 세어 "전부는 안 뺀다" 를 지키는데, 남은 대가 상한에 닿아 있으면 그 약속이
+     * 균형기에서 깨진다. 그때는 배제를 접는다.
+     */
+    @Test
+    @DisplayName("배제가_보낼_곳을_없애면_배제를_접는다")
+    void 배제가_보낼_곳을_없애면_배제를_접는다() {
+        for (int i = 0; i < 3; i++) {
+            배제기.failed("be-1", 지금);
+        }
+        레지스트리.started("be-2", 지금);
+
+        Response<ServiceInstance> 고른것 = 고른다(정해진("be-1"),
+                목록(인스턴스("be-1", "100"), 인스턴스("be-2", "100")), 1);
+
+        assertThat(고른것.hasServer()).as("앓는 대라도 보낸다").isTrue();
+        assertThat(고른것.getServer().getInstanceId()).isEqualTo("be-1");
+    }
+
+    /**
+     * <b>되돌아온 대가 전량을 받으면 안 된다.</b> 배제 동안 물린 건수가 0 이라
+     * 부하율이 가장 낮은데, 그대로 두면 아직 아픈 대에 전부가 꽂히고 곧바로
+     * 다시 빠진다 — 배제 시간 주기의 사각파다.
+     */
+    @Test
+    @DisplayName("되돌아온_대가_램프_동안_무겁게_보인다")
+    void 되돌아온_대가_램프_동안_무겁게_보인다() {
+        for (int i = 0; i < 3; i++) {
+            배제기.failed("be-1", 지금);
+        }
+        long 풀린_때 = 지금 + 배제_시간.toMillis();
+
+        List<Double> 부하율 = new ArrayList<>();
+        CapacityAwareLoadBalancer 균형기 = CapacityAwareLoadBalancer.of(
+                목록(인스턴스("be-1", "100"), 인스턴스("be-2", "100")),
+                candidates -> {
+                    candidates.stream().filter(c -> c.instanceId().equals("be-1"))
+                            .forEach(c -> 부하율.add(c.loadFactor()));
+                    return candidates.stream().findFirst();
+                },
+                레지스트리, 배제기, () -> 풀린_때, 상한);
+
+        균형기.choose((Request<?>) null).block();
+
+        assertThat(부하율).hasSize(1);
+        assertThat(부하율.get(0))
+                .as("제 여유만큼을 얹어 시작한다 — 한가한 대보다 무겁다")
+                .isEqualTo(1.0);
     }
 
     private Response<ServiceInstance> 고른다(InstanceChooser chooser,

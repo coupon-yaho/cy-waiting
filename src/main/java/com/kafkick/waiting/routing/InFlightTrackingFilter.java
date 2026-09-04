@@ -3,6 +3,7 @@ package com.kafkick.waiting.routing;
 import com.kafkick.waiting.domain.routing.InFlightRegistry;
 import com.kafkick.waiting.domain.routing.InstanceOutliers;
 import java.util.Objects;
+import java.util.Set;
 import java.util.function.LongSupplier;
 import org.springframework.cloud.client.ServiceInstance;
 import org.springframework.cloud.client.loadbalancer.Response;
@@ -34,6 +35,15 @@ public final class InFlightTrackingFilter implements GlobalFilter, Ordered {
      */
     private static final int ORDER =
             ReactiveLoadBalancerClientFilter.LOAD_BALANCER_CLIENT_FILTER_ORDER + 1;
+
+    /**
+     * 인스턴스마다 다른 답이 오는 4xx. <b>이것들은 그 대의 상태다.</b>
+     *
+     * <p>포화된 뒷단은 429 로 흘리고, 시크릿이 안 풀린 대는 401·403 을 낸다.
+     * 셋 다 즉시 끝나 물린 건수가 안 쌓이므로, 성공으로 세면 그 대가 계속 가장
+     * 한가해 보여 트래픽이 오히려 몰린다 — 이 기능이 막으려던 바로 그 병리다.
+     */
+    private static final Set<Integer> INSTANCE_FAULT = Set.of(401, 403, 408, 429);
 
     private final InFlightRegistry registry;
 
@@ -90,13 +100,21 @@ public final class InFlightTrackingFilter implements GlobalFilter, Ordered {
             return;
         }
         HttpStatusCode status = exchange.getResponse().getStatusCode();
-        // **4xx 는 실패가 아니다.** 잘못된 요청은 어느 인스턴스로 보내도 같은
-        // 답이 온다. 그걸로 빼면 나쁜 클라이언트 하나가 뒷단을 지운다.
         if (status != null && status.is5xxServerError()) {
             outliers.failed(instanceId, nowMillis.getAsLong());
             return;
         }
-        outliers.succeeded(instanceId);
+        if (status != null && INSTANCE_FAULT.contains(status.value())) {
+            outliers.failed(instanceId, nowMillis.getAsLong());
+            return;
+        }
+        // **나머지 4xx 는 어느 쪽으로도 안 센다.** 잘못된 요청은 어느 대로 보내도
+        // 같은 답이 오므로 실패가 아니고, 그렇다고 성공으로 세면 500·400 을
+        // 번갈아 내는 대가 매번 연속을 끊어 영영 안 빠진다.
+        if (status != null && status.is4xxClientError()) {
+            return;
+        }
+        outliers.succeeded(instanceId, nowMillis.getAsLong());
     }
 
     /** 균형기가 자리를 잡아 준 인스턴스. 안 골랐으면 {@code null} 이다. */

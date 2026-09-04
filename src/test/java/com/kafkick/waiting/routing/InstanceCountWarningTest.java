@@ -88,7 +88,7 @@ class InstanceCountWarningTest {
         return CapacityAwareLoadBalancer.of(목록,
                 candidates -> candidates.stream().findFirst(),
                 InFlightRegistry.of(Duration.ofSeconds(30)),
-                InstanceOutliers.of(3, Duration.ofSeconds(10)), () -> 지금, 1_000);
+                InstanceOutliers.of(3, Duration.ofSeconds(10), Duration.ofSeconds(60)), () -> 지금, 1_000);
     }
 
     private List<String> 경고들() {
@@ -136,7 +136,7 @@ class InstanceCountWarningTest {
         CapacityAwareLoadBalancer 균형기 = CapacityAwareLoadBalancer.of(
                 번갈아_주는_목록(), candidates -> candidates.stream().findFirst(),
                 InFlightRegistry.of(Duration.ofSeconds(30)),
-                InstanceOutliers.of(3, Duration.ofSeconds(10)), () -> 지금, 1_000);
+                InstanceOutliers.of(3, Duration.ofSeconds(10), Duration.ofSeconds(60)), () -> 지금, 1_000);
 
         균형기.choose((Request<?>) null).block();
         균형기.choose((Request<?>) null).block();

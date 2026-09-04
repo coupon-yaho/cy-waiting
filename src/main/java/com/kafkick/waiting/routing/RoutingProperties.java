@@ -54,16 +54,18 @@ public record RoutingProperties(boolean enabled, String serviceId, String strate
             throw new IllegalArgumentException(
                     "perInstanceCap 은 1 이상이어야 한다: " + perInstanceCap);
         }
-        // **셋 미만으로 두지 않는다.** 하나면 어쩌다 난 오류 한 건에 인스턴스가
-        // 빠지고, 그 몫이 남은 대로 몰려 멀쩡한 대까지 밀려 넘어진다.
+        // **기본을 셋으로 둔다.** 하나면 어쩌다 난 오류 한 건에 인스턴스가 빠지고,
+        // 그 몫이 남은 대로 몰려 멀쩡한 대까지 밀려 넘어진다. 더 낮은 값도 받는다 —
+        // 튜닝과 시험이 막히면 실측으로 정할 길이 없어진다.
         outlierFailures = outlierFailures == null ? 3 : outlierFailures;
         if (outlierFailures < 1) {
             throw new IllegalArgumentException(
                     "outlierFailures 는 1 이상이어야 한다: " + outlierFailures);
         }
-        // 서킷의 열림 유지 시간과 같은 자리수로 둔다. 훨씬 짧으면 아직 고장 난
-        // 대가 계속 돌아와 배제가 사실상 없는 것이 된다.
-        outlierEjectFor = outlierEjectFor == null ? Duration.ofSeconds(10) : outlierEjectFor;
+        // **응답 상한보다 길어야 한다.** 멎은 대로 간 요청은 그 상한이 지나야
+        // 실패로 관측되는데, 배제가 먼저 풀리면 직전 실패가 세어지기도 전에 그
+        // 대가 후보로 돌아온다. 상한 12초 위로 잡는다.
+        outlierEjectFor = outlierEjectFor == null ? Duration.ofSeconds(15) : outlierEjectFor;
         if (outlierEjectFor.isNegative() || outlierEjectFor.isZero()) {
             throw new IllegalArgumentException(
                     "outlierEjectFor 는 양수여야 한다: " + outlierEjectFor);

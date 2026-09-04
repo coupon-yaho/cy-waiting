@@ -55,6 +55,18 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
     /** 가정 밖 구간의 시작과 끝만 남긴다 (LG-2). */
     private final FailureWindow outsideAssumption = FailureWindow.create();
 
+    /**
+     * 배제가 걸린 구간. <b>배제는 명백한 모드 전환인데 지표만으로는 언제 무엇이
+     * 빠졌는지 못 되짚는다.</b> 진입과 해제를 쌍으로 남긴다 (LG-2).
+     */
+    private final FailureWindow ejecting = FailureWindow.create();
+
+    /**
+     * 전부가 대상이라 하나도 못 뺀 구간. <b>뒷단 전체가 앓는다는 신호다.</b>
+     * 배제 지표는 이때도 표시된 수만 내므로 여기서만 드러난다.
+     */
+    private final FailureWindow suppressed = FailureWindow.create();
+
     /** 마지막으로 본 구간. 밖에서 밖으로 건너뛰는 것을 잡는다. */
     private final AtomicReference<InstanceCountBand> lastBand =
             new AtomicReference<>(InstanceCountBand.EXPECTED);
@@ -86,27 +98,38 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
         return instances.get(request).next().map(this::pick);
     }
 
-    private Response<ServiceInstance> pick(List<ServiceInstance> available) {
-        long now = nowMillis.getAsLong();
-        watchInstanceCount(available.size());
-        // **사라지고 비어 있는 인스턴스의 카운터를 지운다.** 식별자가 재기동마다
-        // 새로 오므로 안 지우면 배포를 거듭할수록 자란다. 다만 목록에서 잠깐
-        // 빠진 대에 요청이 아직 물려 있으면 안 지운다 — 지우면 돌아온 순간
-        // 부하가 0 으로 보여 그 대로 몰아 보낸다.
-        Set<String> present = new HashSet<>();
-        for (ServiceInstance instance : available) {
-            present.add(instance.getInstanceId());
+    /**
+     * 배제 구간의 진입과 해제를 남긴다.
+     *
+     * <p>식별자를 지표 라벨에 못 붙이므로(R-3 · LG-4) 로그가 유일한 기록이다.
+     * 구간의 첫 건만 남겨 매 초 같은 줄이 쌓이지 않게 한다 (LG-3).
+     */
+    private void watchEjection(Set<String> present, Set<String> ejected, long now) {
+        int marked = outliers.ejectedCount(now);
+        // **표시는 됐는데 하나도 안 뺐다는 것은 전부가 대상이라는 뜻이다.**
+        if (marked > 0 && marked >= present.size()) {
+            if (suppressed.entered()) {
+                log.error("뒷단 {} 대가 전부 연속 실패다 — 배제를 안 건다. "
+                        + "빼면 보낼 곳이 0 이 된다", present.size());
+            }
+        } else {
+            suppressed.exited().ifPresent(r -> log.info(
+                    "뒷단 전체 실패가 풀렸다 — {}초 만이다", r.elapsedSeconds()));
         }
-        inFlight.retain(present, now);
-        outliers.retain(present);
+        if (!ejected.isEmpty()) {
+            if (ejecting.entered()) {
+                log.warn("연속 실패로 {} 대를 후보에서 뺐다 (전체 {} 대). "
+                        + "되돌아올 때는 램프를 탄다", ejected.size(), present.size());
+            }
+        } else {
+            ejecting.exited().ifPresent(r -> log.info(
+                    "뺀 대가 없어졌다 — {}초 만이다", r.elapsedSeconds()));
+        }
+    }
 
-        // **연속으로 실패한 대를 뺀다.** 물린 표는 답이 끝날 때 놓으므로 즉시
-        // 실패하는 대는 물린 건수가 안 쌓여 가장 한가해 보이고, 부하율로 고르는
-        // 이상 그쪽으로 더 간다. 전부가 대상이면 하나도 안 빠진다 — 보낼 곳이
-        // 0 이 되는 것은 열화된 대로라도 보내는 것보다 나쁘다.
-        Set<String> ejected = outliers.ejected(present, now);
-
-        Map<String, ServiceInstance> byId = new LinkedHashMap<>();
+    /** 보낼 수 있는 후보를 모은다. 뺀 대와 상한에 닿은 대는 안 든다. */
+    private List<RoutingCandidate> gather(List<ServiceInstance> available, Set<String> ejected,
+            Map<String, ServiceInstance> byId, long now) {
         List<RoutingCandidate> candidates = new ArrayList<>();
         for (ServiceInstance instance : available) {
             String id = instance.getInstanceId();
@@ -120,7 +143,47 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
                 continue;
             }
             byId.put(id, instance);
-            candidates.add(RoutingCandidate.of(id, creditsOf(instance), busy));
+            long credits = creditsOf(instance);
+            // **되돌아온 대를 무겁게 보이게 한다.** 배제 동안 트래픽이 0 이라
+            // 물린 건수도 0 이고, 그대로 두면 돌아오는 순간 전량이 그리로 간다.
+            // 제 여유만큼을 얹어 시작해 램프 동안 0 으로 준다.
+            double recovering = credits * outliers.recoveryRemaining(id, now);
+            candidates.add(RoutingCandidate.of(id, credits, busy, recovering));
+        }
+        return candidates;
+    }
+
+    private Response<ServiceInstance> pick(List<ServiceInstance> available) {
+        long now = nowMillis.getAsLong();
+        watchInstanceCount(available.size());
+        // **사라지고 비어 있는 인스턴스의 카운터를 지운다.** 식별자가 재기동마다
+        // 새로 오므로 안 지우면 배포를 거듭할수록 자란다. 다만 목록에서 잠깐
+        // 빠진 대에 요청이 아직 물려 있으면 안 지운다 — 지우면 돌아온 순간
+        // 부하가 0 으로 보여 그 대로 몰아 보낸다.
+        Set<String> present = new HashSet<>();
+        for (ServiceInstance instance : available) {
+            present.add(instance.getInstanceId());
+        }
+        inFlight.retain(present, now);
+        outliers.retain(present, now);
+
+        // **연속으로 실패한 대를 뺀다.** 물린 표는 답이 끝날 때 놓으므로 즉시
+        // 실패하는 대는 물린 건수가 안 쌓여 가장 한가해 보이고, 부하율로 고르는
+        // 이상 그쪽으로 더 간다. 전부가 대상이면 하나도 안 빠진다 — 보낼 곳이
+        // 0 이 되는 것은 열화된 대로라도 보내는 것보다 나쁘다.
+        Set<String> ejected = outliers.ejected(present, now);
+        watchEjection(present, ejected, now);
+
+        Map<String, ServiceInstance> byId = new LinkedHashMap<>();
+        List<RoutingCandidate> candidates = gather(available, ejected, byId, now);
+        // **배제 때문에 보낼 곳이 0 이 되면 배제를 접는다.** 배제기는 자기끼리만
+        // 세어 "전부는 안 뺀다" 를 지키는데, 남은 대가 상한에 닿아 있으면 그 약속이
+        // 여기서 깨진다 — 앓는 대라도 보내는 것이 아무 데도 못 보내는 것보다 낫다.
+        if (candidates.isEmpty() && !ejected.isEmpty()) {
+            log.warn("배제하고 나니 보낼 곳이 없다 — 뺀 {} 대를 도로 넣는다. "
+                    + "남은 대가 인스턴스별 상한에 닿았다는 뜻이다", ejected.size());
+            byId.clear();
+            candidates = gather(available, Set.of(), byId, now);
         }
 
         // **고르는 자리에서 자리를 잡는다.** 읽고 나중에 세면 동시 요청이 다 같이

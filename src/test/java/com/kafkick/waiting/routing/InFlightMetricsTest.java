@@ -27,7 +27,7 @@ class InFlightMetricsTest {
     private final InFlightRegistry 레지스트리 = InFlightRegistry.of(Duration.ofSeconds(30));
 
     private final InstanceOutliers 배제기 =
-            InstanceOutliers.of(3, Duration.ofSeconds(10));
+            InstanceOutliers.of(3, Duration.ofSeconds(10), Duration.ofSeconds(60));
 
     private void 지표를_건다() {
         InFlightMetrics.bind(레지스트리, 배제기, () -> 지금, meters);

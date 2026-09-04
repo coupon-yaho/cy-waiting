@@ -191,6 +191,8 @@ bring_up() {
          MID_INFLIGHT="${MID_INFLIGHT:-$MID_CAP}" \
          ROUTING_PER_INSTANCE_CAP="${ROUTING_PER_INSTANCE_CAP:-200}" \
          GATEWAY_LOG_LEVEL="${GATEWAY_LOG_LEVEL:-INFO}" \
+         ROUTING_OUTLIER_FAILURES="${ROUTING_OUTLIER_FAILURES:-3}" \
+         ROUTING_IN_FLIGHT_TTL="${ROUTING_IN_FLIGHT_TTL:-30s}" \
          $COMPOSE up -d --wait --wait-timeout 180 \
            ${GATEWAY_SCALE:+--scale gateway=$GATEWAY_SCALE} >> "$log" 2>&1; then
         echo "겹침을 못 세웠다" >&2; tail -20 "$log" | sed 's/^/  /' >&2

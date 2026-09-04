@@ -385,6 +385,7 @@ for check in \
     "재분배 판정:test/load/redistribute-selftest.sh" \
     "종료 유출 판정:test/load/kill-selftest.sh" \
     "롤링 배포 판정:test/load/rollout-selftest.sh" \
+    "배제 판정:test/load/eject-selftest.sh" \
     "작업 로그:.github/scripts/journal-index.sh --check" \
     "워크플로 셸:.github/scripts/workflow-shell.sh" \
     "Loki 라벨:.github/scripts/loki-labels.sh" \

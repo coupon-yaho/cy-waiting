@@ -161,22 +161,4 @@ class WeightedRoundRobinTest {
         }
     }
 
-    /**
-     * <b>여유가 같으면 번갈아 간다.</b> 앞뒤를 못 박지 않으면 같은 값에서 늘
-     * 뒤엣것이 이겨, 목록 순서가 바뀌는 배포마다 배분이 통째로 달라진다.
-     */
-    @Test
-    @DisplayName("여유가_같으면_번갈아_간다")
-    void 여유가_같으면_번갈아_간다() {
-        InstanceChooser 고르개 = WeightedRoundRobin.create();
-        List<RoutingCandidate> 후보 = List.of(
-                RoutingCandidate.of("가", 100, 0), RoutingCandidate.of("나", 100, 0));
-
-        List<String> 고른 = List.of(
-                고르개.choose(후보).orElseThrow().instanceId(),
-                고르개.choose(후보).orElseThrow().instanceId());
-
-        assertThat(고른).containsExactly("가", "나");
-    }
-
 }

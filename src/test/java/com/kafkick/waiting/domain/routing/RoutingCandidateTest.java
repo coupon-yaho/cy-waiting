@@ -119,6 +119,17 @@ class RoutingCandidateTest {
         }
 
         /**
+         * <b>1밀리초는 램프가 있는 것이다.</b> 0 과 같이 접으면 램프를 밀리초로
+         * 좁힌 배포가 콜드 스타트 보정을 통째로 잃는다.
+         */
+        @Test
+        @DisplayName("램프가_1밀리초면_초기값이_실린다")
+        void 램프가_1밀리초면_초기값이_실린다() {
+            assertThat(RoutingCandidate.seed(40, Duration.ZERO, Duration.ofMillis(1)))
+                    .isCloseTo(40, within(1e-9));
+        }
+
+        /**
          * <b>1밀리초 미만 램프는 램프가 없는 것과 같다.</b>
          *
          * <p>밀리초로 재므로 분모가 0 이 된다. 안 가르면 NaN 이 나오고, 그 값이
@@ -186,17 +197,6 @@ class RoutingCandidateTest {
             assertThat(RoutingCandidate.seed(40, Duration.ZERO, Duration.ofSeconds(-1)))
                     .isZero();
         }
-    }
-
-    /**
-     * <b>램프가 0 이면 초기값도 0 이다.</b> 0 을 안 가르면 분모가 0 이 되어
-     * NaN 이 나오고, 그 값이 후보 생성에서 터져 라우팅이 통째로 멎는다.
-     */
-    @Test
-    @DisplayName("램프가_0_이면_초기값이_없다")
-    void 램프가_0_이면_초기값이_없다() {
-        assertThat(RoutingCandidate.seed(40, Duration.ZERO, Duration.ZERO)).isZero();
-        assertThat(RoutingCandidate.seed(40, Duration.ofSeconds(1), Duration.ZERO)).isZero();
     }
 
 }

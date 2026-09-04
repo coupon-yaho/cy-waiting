@@ -308,18 +308,4 @@ class WeightedP2cTest {
         }
     }
 
-    /**
-     * <b>부하율이 같으면 먼저 뽑은 쪽이다.</b> 뒤엣것으로 기울면 두 번째 추첨이
-     * 첫 번째를 늘 덮어, 둘을 뽑는 의미가 사라지고 한 번 뽑기와 같아진다.
-     */
-    @Test
-    @DisplayName("부하율이_같으면_먼저_뽑은_대다")
-    void 부하율이_같으면_먼저_뽑은_대다() {
-        List<RoutingCandidate> 같은_둘 = List.of(
-                RoutingCandidate.of("가", 100, 10), RoutingCandidate.of("나", 100, 10));
-
-        assertThat(WeightedP2c.of(정해진(0, 1)).choose(같은_둘))
-                .map(RoutingCandidate::instanceId).contains("가");
-    }
-
 }

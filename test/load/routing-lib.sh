@@ -101,10 +101,17 @@ counter() {
 # 보려면 둘을 더해야 한다 — 안 더하면 고장 난 대가 트래픽을 다 받고 있는데도
 # 0 으로 보인다.
 arrived() {
-    local ok bad
-    ok=$(counter "$1" served) || return 1
-    bad=$(counter "$1" faulted) || return 1
-    printf '%d\n' "$(( ok + bad ))"
+    local raw ok bad
+    # **한 번만 친다.** 두 번 읽으면 도커 명령이 배로 들고, 그 비용이 곧
+    # 판정기의 해상도가 된다 — 예산보다 표본 간격이 길어지면 맞게 도는
+    # 구현이 미달로 적힌다.
+    raw=$($COMPOSE exec -T "$1" sh -c 'wget -qO- http://localhost:8090/stub/health')
+    ok=$(printf '%s' "$raw" | sed -n 's/.*"served":\([0-9][0-9]*\).*/\1/p')
+    bad=$(printf '%s' "$raw" | sed -n 's/.*"faulted":\([0-9][0-9]*\).*/\1/p')
+    case "$ok$bad" in
+        ''|*[!0-9]*) echo "[$1] 도착 수를 못 읽었다: ${raw:-응답 없음}" >&2; return 1 ;;
+    esac
+    printf '%d\n' "$(( 10#$ok + 10#$bad ))"
 }
 
 # 뒷단이 누적으로 센 처리 건수. 즉시 실패한 것은 안 든다.

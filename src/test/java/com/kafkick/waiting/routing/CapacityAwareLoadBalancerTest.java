@@ -13,13 +13,19 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.cloud.client.DefaultServiceInstance;
+import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.cloud.client.ServiceInstance;
+import org.springframework.cloud.client.loadbalancer.DefaultRequest;
 import org.springframework.cloud.client.loadbalancer.Request;
+import org.springframework.cloud.client.loadbalancer.RequestData;
+import org.springframework.cloud.client.loadbalancer.RequestDataContext;
 import org.springframework.cloud.client.loadbalancer.Response;
 import org.springframework.cloud.loadbalancer.core.ServiceInstanceListSupplier;
 import reactor.core.publisher.Flux;
@@ -220,6 +226,45 @@ class CapacityAwareLoadBalancerTest {
 
         assertThat(여유).as("막 풀렸을 때는 거의 없고, 절반에서는 절반이다")
                 .containsExactly(1L, 50L);
+    }
+
+    /** 이 요청이 이미 시도한 인스턴스들을 실은 요청. 재시도가 오는 모양이다. */
+    private static Request<?> 이미_시도한(String... ids) {
+        Map<String, Object> attrs = Map.of(RoutingAttributes.TRIED, Set.of(ids));
+        return new DefaultRequest<>(new RequestDataContext(
+                new RequestData(MockServerHttpRequest.post("/api/v1/coupons/c1/issue").build(),
+                        attrs)));
+    }
+
+    /**
+     * <b>재시도가 같은 대를 다시 고르면 넘긴 것이 아니다.</b> 표는 재구독 전에
+     * 풀리므로 방금 실패한 대가 다시 가장 한가해 보이고, 3 대면 같은 죽은 대로
+     * 갈 확률이 오히려 높다 — 한 요청이 그 대에 실패를 둘 찍는다.
+     */
+    @Test
+    @DisplayName("이미_시도한_대는_재시도에서_뺀다")
+    void 이미_시도한_대는_재시도에서_뺀다() {
+        Response<ServiceInstance> 고른것 = CapacityAwareLoadBalancer.of(
+                목록(인스턴스("be-1", "100"), 인스턴스("be-2", "100")),
+                정해진("be-1", "be-2"), 레지스트리, 배제기, () -> 지금, 상한)
+                .choose(이미_시도한("be-1")).block();
+
+        assertThat(고른것.getServer().getInstanceId())
+                .as("be-1 을 원하는 고르개를 줘도 그리로 안 간다")
+                .isEqualTo("be-2");
+    }
+
+    /** 전부 시도했으면 뺄 것이 없다. 보낼 곳이 0 이 되는 것보다 다시 가는 편이 낫다. */
+    @Test
+    @DisplayName("전부_시도했으면_안_뺀다")
+    void 전부_시도했으면_안_뺀다() {
+        Response<ServiceInstance> 고른것 = CapacityAwareLoadBalancer.of(
+                목록(인스턴스("be-1", "100"), 인스턴스("be-2", "100")),
+                정해진("be-1"), 레지스트리, 배제기, () -> 지금, 상한)
+                .choose(이미_시도한("be-1", "be-2")).block();
+
+        assertThat(고른것.hasServer()).isTrue();
+        assertThat(고른것.getServer().getInstanceId()).isEqualTo("be-1");
     }
 
     private Response<ServiceInstance> 고른다(InstanceChooser chooser,

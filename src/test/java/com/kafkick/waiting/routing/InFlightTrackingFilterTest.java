@@ -159,6 +159,54 @@ class InFlightTrackingFilterTest {
         assertThat(배제기.tracked()).as("성공으로도 안 센다").isEmpty();
     }
 
+    @SuppressWarnings("unchecked")
+    private static Set<String> 시도한(ServerWebExchange 요청) {
+        return (Set<String>) 요청.getAttributes().getOrDefault(RoutingAttributes.TRIED, Set.of());
+    }
+
+    /**
+     * <b>실패한 대를 요청에 적어 둔다.</b> 재시도는 같은 요청을 다시 고르므로,
+     * 여기 적힌 것을 균형기가 읽어야 다음 대로 넘어간다.
+     */
+    @Test
+    @DisplayName("실패한_대를_요청에_적는다")
+    void 실패한_대를_요청에_적는다() {
+        ServerWebExchange 요청 = 고른_요청("be-1");
+
+        StepVerifier.create(필터.filter(요청, ex -> Mono.error(new IllegalStateException("끊김"))))
+                .verifyError();
+
+        assertThat(시도한(요청)).containsExactly("be-1");
+    }
+
+    /** 5xx 도 그 대의 실패라 적는다. 상태 코드가 서는 경로다. */
+    @Test
+    @DisplayName("오류_응답도_요청에_적는다")
+    void 오류_응답도_요청에_적는다() {
+        ServerWebExchange 요청 = 고른_요청("be-1");
+
+        필터.filter(요청, ex -> {
+            ex.getResponse().setRawStatusCode(503);
+            return Mono.empty();
+        }).block();
+
+        assertThat(시도한(요청)).containsExactly("be-1");
+    }
+
+    /** 성공한 대는 안 적는다. 적으면 다음 재시도가 멀쩡한 대를 피한다. */
+    @Test
+    @DisplayName("성공한_대는_안_적는다")
+    void 성공한_대는_안_적는다() {
+        ServerWebExchange 요청 = 고른_요청("be-1");
+
+        필터.filter(요청, ex -> {
+            ex.getResponse().setRawStatusCode(200);
+            return Mono.empty();
+        }).block();
+
+        assertThat(시도한(요청)).isEmpty();
+    }
+
     /** 뒷단이 답할 때까지 물려 있다. 안 세면 부하율이 늘 0 이라 고르개가 눈이 먼다. */
     @Test
     @DisplayName("도는_동안_물린_것으로_센다")

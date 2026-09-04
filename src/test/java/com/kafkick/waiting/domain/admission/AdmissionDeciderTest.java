@@ -10,6 +10,7 @@ import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.CouponStates;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import com.kafkick.waiting.domain.coupon.Tunables;
+import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -305,21 +306,25 @@ class AdmissionDeciderTest {
     void 갈래를_섞어도_한_초의_노드_몫은_하나다() {
         AdmissionDecider d = decider();
         CouponState idle = CouponStates.idle(500);
-        CouponState 줄선것 = CouponStates.queueing(10, 1_000, 5_000);
+        CouponState queued = CouponStates.queueing(10, 1_000, 5_000);
+        // **예산을 쓰는 통과만 센다.** `isPass` 는 리미터를 안 지나는 우회까지
+        // 무는데, 그것까지 세면 이 단언이 노드 몫과 다른 것을 재게 된다.
+        Set<AdmissionDecision> 예산을_쓴다 = Set.of(AdmissionDecision.PASS_TOKEN,
+                AdmissionDecision.PASS_FAIL_OPEN, AdmissionDecision.PASS_UNDER_CAP);
 
-        int 통과 = 0;
+        int passed = 0;
         for (int i = 0; i < 400; i++) {
             AdmissionRequest req = switch (i % 3) {
                 case 0 -> request(idle).withDataStale(true);
-                case 1 -> request(줄선것).withValidToken(true);
+                case 1 -> request(queued).withValidToken(true);
                 default -> request(idle);
             };
-            if (d.decide(req).isPass()) {
-                통과++;
+            if (예산을_쓴다.contains(d.decide(req))) {
+                passed++;
             }
         }
 
-        assertThat(통과).isEqualTo(100);
+        assertThat(passed).isEqualTo(100);
     }
 
     @Test

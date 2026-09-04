@@ -2,6 +2,7 @@ package com.kafkick.waiting.gateway;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.kafkick.waiting.routing.RoutingProperties;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.List;
@@ -98,6 +99,32 @@ class BackendTimeoutBudgetTest {
     void 연결_시도_전부가_격벽_지연_안이다() throws IOException {
         assertThat(뒷단().connectTimeout().multipliedBy(ATTEMPTS))
                 .isLessThanOrEqualTo(AdmissionGatewayFilter.BLOCKING_DELAY);
+    }
+
+    private RoutingProperties 라우팅() throws IOException {
+        return 운영설정().bind("waiting.routing", RoutingProperties.class)
+                .orElseThrow(() -> new AssertionError("waiting.routing 이 없다"));
+    }
+
+    /**
+     * <b>배제는 응답 상한보다 오래 가야 한다.</b> 멎은 대로 간 요청은 그 상한이
+     * 지나야 실패로 관측된다. 배제가 먼저 풀리면 직전 실패가 세어지기도 전에
+     * 그 대가 후보로 돌아오고, 돌아와서 다시 상한만큼 매달린다.
+     */
+    @Test
+    @DisplayName("배제가_응답_상한보다_길다")
+    void 배제가_응답_상한보다_길다() throws IOException {
+        assertThat(라우팅().outlierEjectFor()).isGreaterThan(뒷단().responseTimeout());
+    }
+
+    /**
+     * <b>되돌리는 램프가 배제보다 길어야 한다.</b> 짧으면 복귀가 사실상 절벽이라,
+     * 배제 동안 트래픽이 0 이던 대가 돌아오는 순간 전량을 받는다.
+     */
+    @Test
+    @DisplayName("램프가_배제보다_길다")
+    void 램프가_배제보다_길다() throws IOException {
+        assertThat(라우팅().coldStartRamp()).isGreaterThan(라우팅().outlierEjectFor());
     }
 
     /**

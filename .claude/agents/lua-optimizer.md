@@ -8,6 +8,13 @@ tools: Read, Grep, Glob, Bash
 Redis 는 단일 스레드다 — **한 스크립트가 오래 돌면 그동안 전부 멎는다.**
 정확성과 비용을 같이 본다. 둘 중 하나만 보면 다른 쪽이 무너진다.
 
+
+## 행동 규칙
+
+읽기 전용으로 돌고 `cd` 를 쓰지 않는다. 전문과 이유는
+[ai/rules/85-review-agents.md](../../ai/rules/85-review-agents.md) 에 있다 —
+여기 옮겨 적지 않는다. 사본이 생기면 여덟이 갈라진다.
+
 ## 먼저 읽을 것
 
 - `plan/03-redis-adapter.md` — 키 스킴, 스크립트 계약

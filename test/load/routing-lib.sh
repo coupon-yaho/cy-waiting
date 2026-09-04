@@ -83,19 +83,40 @@ require_positive_int() {
     done
 }
 
-# 뒷단이 누적으로 센 처리 건수.
+# 스텁이 누적으로 센 값 하나. 이름은 served·faulted·rejected 다.
 #
 # **못 읽으면 거기서 멈춘다.** 오류를 삼키고 빈 값을 돌려주면 그 값이 산술로
 # 흘러 들어가 엉뚱한 도착 수가 나오고, 그 수로 게이트를 적게 된다.
-served() {
+counter() {
     local raw count
     raw=$($COMPOSE exec -T "$1" sh -c 'wget -qO- http://localhost:8090/stub/health')
-    count=$(printf '%s' "$raw" | sed -n 's/.*"served":\([0-9][0-9]*\).*/\1/p')
+    count=$(printf '%s' "$raw" | sed -n "s/.*\"$2\":\([0-9][0-9]*\).*/\1/p")
     case "$count" in
-        ''|*[!0-9]*) echo "[$1] 처리 건수를 못 읽었다: ${raw:-응답 없음}" >&2; return 1 ;;
+        ''|*[!0-9]*) echo "[$1] $2 를 못 읽었다: ${raw:-응답 없음}" >&2; return 1 ;;
     esac
-    # 앞자리 0 은 셸 산술이 8진수로 읽는다. 십진임을 명시한다.
     printf '%d\n' "$((10#$count))"
+}
+
+# **닿은 요청 수다.** 즉시 실패한 것은 served 에 안 들어가므로, 유입이 줄었는지
+# 보려면 둘을 더해야 한다 — 안 더하면 고장 난 대가 트래픽을 다 받고 있는데도
+# 0 으로 보인다.
+arrived() {
+    local raw ok bad
+    # **한 번만 친다.** 두 번 읽으면 도커 명령이 배로 들고, 그 비용이 곧
+    # 판정기의 해상도가 된다 — 예산보다 표본 간격이 길어지면 맞게 도는
+    # 구현이 미달로 적힌다.
+    raw=$($COMPOSE exec -T "$1" sh -c 'wget -qO- http://localhost:8090/stub/health')
+    ok=$(printf '%s' "$raw" | sed -n 's/.*"served":\([0-9][0-9]*\).*/\1/p')
+    bad=$(printf '%s' "$raw" | sed -n 's/.*"faulted":\([0-9][0-9]*\).*/\1/p')
+    case "$ok$bad" in
+        ''|*[!0-9]*) echo "[$1] 도착 수를 못 읽었다: ${raw:-응답 없음}" >&2; return 1 ;;
+    esac
+    printf '%d\n' "$(( 10#$ok + 10#$bad ))"
+}
+
+# 뒷단이 누적으로 센 처리 건수. 즉시 실패한 것은 안 든다.
+served() {
+    counter "$1" served
 }
 
 # 겹침을 세운다. **이미지가 실행 JAR 보다 낡았으면 다시 짓는다** — compose 는
@@ -107,8 +128,11 @@ bring_up() {
         echo "실행 JAR 이 없다: $jar — ./gradlew build 를 먼저 돌린다" >&2
         return 2
     fi
-    if ! $COMPOSE build gateway > "$log" 2>&1; then
-        echo "게이트웨이 이미지를 못 지었다" >&2; tail -20 "$log" | sed 's/^/  /' >&2
+    # **뒷단 스텁도 같이 짓는다.** 게이트웨이만 지으면 스텁을 고쳐도 옛 이미지가
+    # 그대로 돌고, 새로 넣은 자극이 조용히 없는 것이 된다 — 그 회차는 재려던 것
+    # 대신 아무것도 안 잰 것이 되는데 초록으로 끝난다.
+    if ! $COMPOSE build gateway backend backend-small backend-mid > "$log" 2>&1; then
+        echo "이미지를 못 지었다" >&2; tail -20 "$log" | sed 's/^/  /' >&2
         return 2
     fi
     # 앞 실행이 낮춰 둔 여유가 볼륨에 남아 있으면 예열이 영영 안 끝난다.
@@ -127,6 +151,10 @@ bring_up() {
     if ! ROUTING_STRATEGY="$STRATEGY" STUB_LATENCY_MS="$STUB_LATENCY_MS" \
          BIG_LATENCY_MS="$BIG_LATENCY_MS" \
          BIG_CAP="$BIG_CAP" SMALL_CAP="$SMALL_CAP" MID_CAP="$MID_CAP" \
+         BIG_INFLIGHT="${BIG_INFLIGHT:-$BIG_CAP}" \
+         SMALL_INFLIGHT="${SMALL_INFLIGHT:-$SMALL_CAP}" \
+         MID_INFLIGHT="${MID_INFLIGHT:-$MID_CAP}" \
+         ROUTING_PER_INSTANCE_CAP="${ROUTING_PER_INSTANCE_CAP:-200}" \
          $COMPOSE up -d --wait >> "$log" 2>&1; then
         echo "겹침을 못 세웠다" >&2; tail -20 "$log" | sed 's/^/  /' >&2
         return 2

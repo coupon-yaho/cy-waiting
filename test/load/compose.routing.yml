@@ -10,7 +10,7 @@ services:
   backend:
     environment:
       # 이 대가 가장 여유 있다. 나머지 둘과 비율이 갈려야 판정이 성립한다.
-      MAX_INFLIGHT: "${BIG_CAP:-200}"
+      MAX_INFLIGHT: "${BIG_INFLIGHT:-${BIG_CAP:-200}}"
       # **열화를 밖에서 넣는다** (9.4.1). 가장 여유 있는 대를 느리게 만들어야
       # 효과가 보인다 — 작은 대를 느리게 하면 원래 적게 가던 것이 더 적게 갈 뿐이다.
       LATENCY_MS: "${BIG_LATENCY_MS:-${STUB_LATENCY_MS:-5}}"
@@ -22,7 +22,7 @@ services:
     environment:
       PORT: "8090"
       LATENCY_MS: "${STUB_LATENCY_MS:-5}"
-      MAX_INFLIGHT: "${SMALL_CAP:-40}"
+      MAX_INFLIGHT: "${SMALL_INFLIGHT:-${SMALL_CAP:-40}}"
       SHARED_HEADER: "${SHARED_HEADER:-true}"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8090/stub/health"]
@@ -35,7 +35,7 @@ services:
     environment:
       PORT: "8090"
       LATENCY_MS: "${STUB_LATENCY_MS:-5}"
-      MAX_INFLIGHT: "${MID_CAP:-120}"
+      MAX_INFLIGHT: "${MID_INFLIGHT:-${MID_CAP:-120}}"
       SHARED_HEADER: "${SHARED_HEADER:-true}"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8090/stub/health"]
@@ -110,3 +110,6 @@ services:
       WAITING_ROUTING_ENABLED: "true"
       # 전략은 밖에서 고른다. 둘 다 게이트를 넘어야 한다 (G9.9).
       WAITING_ROUTING_STRATEGY: "${ROUTING_STRATEGY:-p2c}"
+      # 깊이를 재는 회차는 이 상한을 올려야 한다 — 안 올리면 여유 큰 대가
+      # 먼저 상한에 닿아 후보에서 빠지고, 재려던 비율 대신 상한을 잰다.
+      WAITING_ROUTING_PER_INSTANCE_CAP: "${ROUTING_PER_INSTANCE_CAP:-200}"

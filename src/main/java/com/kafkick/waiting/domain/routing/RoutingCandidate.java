@@ -12,7 +12,8 @@ import java.util.Objects;
  * @param instanceId 인스턴스 식별자
  * @param credits    이 인스턴스가 받을 수 있는 양. 0 이면 후보가 아니다
  * @param inFlight   지금 이 게이트웨이가 이 인스턴스에 물려 둔 요청 수
- * @param seed       기동 직후 램프 구간에만 실리는 보고값. 램프가 끝나면 0 이다
+ * @param seed       기동 직후 램프 구간에만 실리는 보고값. 램프가 끝나면 0 이다.
+ *                   배제의 램프는 이 자리를 안 쓰고 여유 쪽을 줄인다
  */
 public record RoutingCandidate(String instanceId, long credits, int inFlight, double seed) {
 

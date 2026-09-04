@@ -18,13 +18,13 @@ import org.junit.jupiter.api.Test;
 class RoutingPropertiesTest {
 
     private static RoutingProperties 값(String strategy) {
-        return new RoutingProperties(true, null, strategy, null, null, null);
+        return new RoutingProperties(true, null, strategy, null, null, null, null, null);
     }
 
     @Test
     @DisplayName("안_적으면_기본값이_선다")
     void 안_적으면_기본값이_선다() {
-        RoutingProperties p = new RoutingProperties(true, null, null, null, null, null);
+        RoutingProperties p = new RoutingProperties(true, null, null, null, null, null, null, null);
 
         assertThat(p.serviceId()).isEqualTo("coupon-service");
         assertThat(p.strategy()).isEqualTo(RoutingProperties.P2C);
@@ -52,23 +52,24 @@ class RoutingPropertiesTest {
     @Test
     @DisplayName("수명과_램프의_범위를_본다")
     void 수명과_램프의_범위를_본다() {
-        assertThatThrownBy(() -> new RoutingProperties(true, null, null, Duration.ZERO, null, null))
+        assertThatThrownBy(() -> new RoutingProperties(true, null, null, Duration.ZERO, null, null, null, null))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new RoutingProperties(true, null, null,
-                Duration.ofSeconds(-1), null, null))
+                Duration.ofSeconds(-1), null, null, null, null))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new RoutingProperties(true, null, null, null,
-                Duration.ofSeconds(-1), null))
+                Duration.ofSeconds(-1), null, null, null))
                 .isInstanceOf(IllegalArgumentException.class);
-        // 램프 0 은 초기값을 안 쓰겠다는 뜻이다. 끄는 길을 막지 않는다.
-        assertThat(new RoutingProperties(true, null, null, null, Duration.ZERO, null).coldStartRamp())
+        // 램프 0 은 되돌리기를 안 하겠다는 뜻이다. 끄는 길을 막지 않는다.
+        assertThat(new RoutingProperties(true, null, null, null, Duration.ZERO,
+                null, null, null).coldStartRamp())
                 .isZero();
     }
 
     @Test
     @DisplayName("빈_이름은_기본값으로_본다")
     void 빈_이름은_기본값으로_본다() {
-        assertThat(new RoutingProperties(true, "  ", "  ", null, null, null).serviceId())
+        assertThat(new RoutingProperties(true, "  ", "  ", null, null, null, null, null).serviceId())
                 .isEqualTo("coupon-service");
     }
 
@@ -79,16 +80,16 @@ class RoutingPropertiesTest {
     @Test
     @DisplayName("상한이_양수가_아니면_거절한다")
     void 상한이_양수가_아니면_거절한다() {
-        assertThatThrownBy(() -> new RoutingProperties(true, null, null, null, null, 0))
+        assertThatThrownBy(() -> new RoutingProperties(true, null, null, null, null, 0, null, null))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new RoutingProperties(true, null, null, null, null, -1))
+        assertThatThrownBy(() -> new RoutingProperties(true, null, null, null, null, -1, null, null))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
     @DisplayName("상한을_안_적으면_기본값이다")
     void 상한을_안_적으면_기본값이다() {
-        assertThat(new RoutingProperties(true, null, null, null, null, null).perInstanceCap())
+        assertThat(new RoutingProperties(true, null, null, null, null, null, null, null).perInstanceCap())
                 .isEqualTo(200);
     }
 }

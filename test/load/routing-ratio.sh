@@ -37,6 +37,13 @@ CONCURRENCY="${CONCURRENCY:-1}"
 # 일꾼이 한 건 보낸 뒤 쉬는 시간(초). 유입 속도를 낮추는 손잡이다.
 PACE_SEC="${PACE_SEC:-0}"
 
+# 일꾼 사이의 출발 간격(밀리초). 0 이면 다 같이 출발한다.
+#
+# **깊이를 재는 회차는 이 값을 줘야 한다.** 동시성이 크면 첫 순간의 유입이
+# 예산을 통째로 넘겨 줄 모드가 켜지고, 그 뒤로는 요청이 뒷단에 안 닿는다.
+# 뒷단 지연을 동시성으로 나눈 값이 대략 고르게 퍼지는 지점이다.
+STAGGER_MS="${STAGGER_MS:-0}"
+
 # 허용 편차(%). 비워 두면 판정기의 기본값(게이트와 같은 ±15%)이 선다 —
 # 여기에 숫자를 또 적으면 게이트와 갈라질 자리가 하나 더 생긴다.
 MAX_DEVIATION="${MAX_DEVIATION:-}"
@@ -45,7 +52,7 @@ MAX_DEVIATION="${MAX_DEVIATION:-}"
 WARMUP_SEC="${WARMUP_SEC:-15}"
 
 require_positive_int REQUESTS CONCURRENCY || exit 2
-require_non_negative_int STUB_LATENCY_MS WARMUP_SEC PACE_SEC || exit 2
+require_non_negative_int STUB_LATENCY_MS WARMUP_SEC PACE_SEC STAGGER_MS || exit 2
 
 # **얕은 부하로 P2C 를 재지 않는다.** 물린 건수가 이보다 얕으면 세 대의 부하율
 # 차이가 작아 여유가 비교에서 거의 빠지고, 그 실행은 고르개가 아니라 뽑기를
@@ -87,6 +94,11 @@ base=$(( 1000000 + (RANDOM % 8000) * 1000 ))
 # 근처에서 유지된다.
 worker() {
   local slot=$1 n=$2 k i
+  # **출발을 흩는다.** 일꾼이 다 같이 첫 요청을 쏘면 그 순간 유입이 한산 통과
+  # 예산을 넘겨 줄 모드가 켜지고, 한 번 켜지면 줄이 빌 때까지 안 꺼진다 —
+  # 그 회차는 분배가 아니라 줄을 잰다. 실제로 두 번 그렇게 돌았다.
+  [ "$STAGGER_MS" = 0 ] || sleep "$(awk -v s="$slot" -v m="$STAGGER_MS" \
+      'BEGIN { printf "%.4f", s * m / 1000 }')"
   for k in $(seq 1 "$n"); do
     i=$(( (k - 1) * CONCURRENCY + slot ))
     issue "$(( base + i ))"

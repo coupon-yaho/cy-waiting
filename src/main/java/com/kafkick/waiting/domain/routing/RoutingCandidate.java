@@ -29,7 +29,7 @@ public record RoutingCandidate(String instanceId, long credits, int inFlight, do
         }
     }
 
-    /** 램프가 끝난 평상시. 씨앗을 안 쓴다 — 낡은 보고로 라우팅하면 되레 해롭다. */
+    /** 램프가 끝난 평상시. 초기값을 안 쓴다 — 낡은 보고로 라우팅하면 되레 해롭다. */
     public static RoutingCandidate of(String instanceId, long credits, int inFlight) {
         return new RoutingCandidate(instanceId, credits, inFlight, 0);
     }

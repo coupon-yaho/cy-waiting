@@ -60,7 +60,7 @@ class RoutingPropertiesTest {
         assertThatThrownBy(() -> new RoutingProperties(true, null, null, null,
                 Duration.ofSeconds(-1), null))
                 .isInstanceOf(IllegalArgumentException.class);
-        // 램프 0 은 씨앗을 안 쓰겠다는 뜻이다. 끄는 길을 막지 않는다.
+        // 램프 0 은 초기값을 안 쓰겠다는 뜻이다. 끄는 길을 막지 않는다.
         assertThat(new RoutingProperties(true, null, null, null, Duration.ZERO, null).coldStartRamp())
                 .isZero();
     }

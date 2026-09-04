@@ -128,6 +128,22 @@ class BackendTimeoutBudgetTest {
     }
 
     /**
+     * <b>서킷 라이브러리가 끼워 넣는 기본 격벽은 꺼져 있어야 한다.</b> 스프링
+     * 배선은 서킷마다 세마포어 격벽을 기본 크기 25 로 붙이는데, 설정에 없어
+     * 아무도 모른 채 노드당 뒷단 동시 호출이 25 로 잘렸다. 그 거절은 서킷
+     * 안이라 실패로 세어져 뒷단이 멀쩡한데 서킷이 열린다. 자체 격벽이 같은
+     * 일을 서킷 밖에서 이미 한다.
+     */
+    @Test
+    @DisplayName("라이브러리_기본_격벽이_꺼져_있다")
+    void 라이브러리_기본_격벽이_꺼져_있다() throws IOException {
+        assertThat(운영설정().bind("spring.cloud.circuitbreaker.bulkhead.resilience4j.enabled",
+                        Boolean.class).orElse(true))
+                .as("안 적으면 켜진다 — 적혀 있고 false 여야 한다")
+                .isFalse();
+    }
+
+    /**
      * <b>최악의 성공 경로가 격벽 시한 안이어야 한다.</b> 실패한 연결 대기, 두 번째
      * 연결, 그리고 응답까지다 — 응답 상한은 시도마다 따로 걸린다. 격벽이 먼저
      * 끊으면 서킷에 가는 것이 오류가 아니라 취소이고, 취소는 창에 안 쌓인다.

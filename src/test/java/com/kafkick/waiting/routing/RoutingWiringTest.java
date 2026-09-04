@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.kafkick.waiting.domain.routing.InFlightRegistry;
 import com.kafkick.waiting.domain.routing.InstanceChooser;
-import com.kafkick.waiting.domain.routing.WeightedP2c;
 import com.kafkick.waiting.domain.routing.WeightedRoundRobin;
 import com.kafkick.waiting.gateway.AdmissionGatewayFilter;
 import org.junit.jupiter.api.DisplayName;
@@ -49,7 +48,11 @@ class RoutingWiringTest {
         // 빠진 경우와 구분된다.
         assertThat(context.getBeansOfType(LoadBalancerClientSpecification.class).values())
                 .anyMatch(spec -> "coupon-service".equals(spec.getName()));
-        assertThat(context.getBean(InstanceChooser.class)).isInstanceOf(WeightedP2c.class);
+        // 기본은 라운드로빈이다 (R-4 · CY-916). **여기가 배포에 실제로 서는
+        // 고르개를 못 박는 자리다** — 설정만 바꾸고 배선이 안 따라오면 적힌
+        // 전략과 도는 전략이 갈린다.
+        assertThat(context.getBean(InstanceChooser.class))
+                .isInstanceOf(WeightedRoundRobin.class);
         // 게이지도 같이 선다. 누수는 값이 안 내려가는 것으로만 보인다 (G9.3).
         assertThat(context.getBeansOfType(InFlightMetrics.Binding.class)).hasSize(1);
     }

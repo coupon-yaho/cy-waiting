@@ -27,7 +27,9 @@ class RoutingPropertiesTest {
         RoutingProperties p = new RoutingProperties(true, null, null, null, null, null, null, null);
 
         assertThat(p.serviceId()).isEqualTo("coupon-service");
-        assertThat(p.strategy()).isEqualTo(RoutingProperties.P2C);
+        // **라운드로빈이 기본이다.** 게이트웨이 둘에서 잰 값이 그쪽을 가리켰다
+        // (CY-916). 이 줄이 배포에 실제로 서는 전략을 못 박는다.
+        assertThat(p.strategy()).isEqualTo(RoutingProperties.ROUND_ROBIN);
         assertThat(p.inFlightTtl()).isEqualTo(Duration.ofSeconds(30));
         assertThat(p.coldStartRamp()).isEqualTo(Duration.ofSeconds(60));
     }

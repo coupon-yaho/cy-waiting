@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.kafkick.waiting.domain.routing.InFlightRegistry;
 import com.kafkick.waiting.domain.routing.InstanceChooser;
+import com.kafkick.waiting.domain.routing.WeightedP2c;
 import com.kafkick.waiting.domain.routing.WeightedRoundRobin;
 import com.kafkick.waiting.gateway.AdmissionGatewayFilter;
 import org.junit.jupiter.api.DisplayName;
@@ -100,23 +101,24 @@ class RoutingWiringTest {
     }
 
     /**
-     * <b>전략을 설정으로 바꾼다</b> (R-9 · 9.3.8). 값이 바뀌면 다른 구현이
-     * 주입돼야 한다 — 안 그러면 두 전략을 만든 이유인 실측 비교가 성립하지 않는다.
+     * <b>기본이 아닌 쪽을 고른다</b> (R-9 · 9.3.8). 기본값은 바깥 클래스가
+     * 잡으므로, 여기가 잡는 것은 <b>되돌릴 길이 살아 있는가</b> 다 — 인스턴스가
+     * 쉰 대를 넘으면 P2C 로 되돌린다고 결정 문서가 적어 두었다.
      */
     @Nested
     @Tag("context")
     @SpringBootTest(properties = {"waiting.scheduler.enabled=false",
-            "waiting.routing.enabled=true", "waiting.routing.strategy=round-robin"})
-    class RoundRobin {
+            "waiting.routing.enabled=true", "waiting.routing.strategy=p2c"})
+    class P2c {
 
         @Autowired
         private ApplicationContext context;
 
         @Test
-        @DisplayName("설정을_바꾸면_라운드로빈이_선다")
-        void 설정을_바꾸면_라운드로빈이_선다() {
+        @DisplayName("설정을_바꾸면_P2C_가_선다")
+        void 설정을_바꾸면_P2C_가_선다() {
             assertThat(context.getBean(InstanceChooser.class))
-                    .isInstanceOf(WeightedRoundRobin.class);
+                    .isInstanceOf(WeightedP2c.class);
         }
     }
 

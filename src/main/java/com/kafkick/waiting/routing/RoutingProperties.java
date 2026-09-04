@@ -23,10 +23,7 @@ public record RoutingProperties(boolean enabled, String serviceId, String strate
         Duration inFlightTtl, Duration coldStartRamp, Integer perInstanceCap,
         Integer outlierFailures, Duration outlierEjectFor) {
 
-    /**
-     * 무작위 둘 중 여유 대비 덜 찬 쪽. <b>기본이 아니다</b> — 게이트웨이 둘에서
-     * 작은 대에 +36% 를 보냈다 (CY-916).
-     */
+    /** 무작위 둘 중 여유 대비 덜 찬 쪽. <b>기본이 아니다</b> — 비율에서 밀린다 (R-4). */
     public static final String P2C = "p2c";
 
     /** 여유 비율대로 결정적으로 돈다. 3~5 대 규모에서 더 정확하고, <b>기본값이다</b>. */
@@ -36,8 +33,7 @@ public record RoutingProperties(boolean enabled, String serviceId, String strate
         serviceId = serviceId == null || serviceId.isBlank() ? "coupon-service" : serviceId;
         // **기본은 라운드로빈이다** (R-4 · CY-916). P2C 를 고른 원래 이유는
         // 게이트웨이 M 대가 같은 인스턴스로 몰린다는 것이었는데, 두 대를 띄워
-        // 재 보니 라운드로빈은 안 몰렸고(집계 편차 0.2%) P2C 가 오히려 작은 대에
-        // +36% 를 보냈다. 근거는 AIJ-0225.
+        // 재 보니 안 몰렸고 P2C 가 오히려 비율에서 밀렸다. 값은 AIJ-0225.
         strategy = strategy == null || strategy.isBlank() ? ROUND_ROBIN : strategy;
         inFlightTtl = inFlightTtl == null ? Duration.ofSeconds(30) : inFlightTtl;
         coldStartRamp = coldStartRamp == null ? Duration.ofSeconds(60) : coldStartRamp;

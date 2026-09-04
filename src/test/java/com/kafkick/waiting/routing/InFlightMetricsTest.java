@@ -3,6 +3,7 @@ package com.kafkick.waiting.routing;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.kafkick.waiting.domain.routing.InFlightRegistry;
+import com.kafkick.waiting.domain.routing.InstanceOutliers;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
@@ -25,8 +26,11 @@ class InFlightMetricsTest {
 
     private final InFlightRegistry 레지스트리 = InFlightRegistry.of(Duration.ofSeconds(30));
 
+    private final InstanceOutliers 배제기 =
+            InstanceOutliers.of(3, Duration.ofSeconds(10));
+
     private void 지표를_건다() {
-        InFlightMetrics.bind(레지스트리, () -> 지금, meters);
+        InFlightMetrics.bind(레지스트리, 배제기, () -> 지금, meters);
     }
 
     @Test
@@ -91,9 +95,27 @@ class InFlightMetricsTest {
 
         assertThat(meters.getMeters())
                 .filteredOn(m -> m.getId().getName().startsWith("waiting.routing"))
-                .hasSize(3)
+                .hasSize(4)
                 .allSatisfy(m -> assertThat(m.getId().getTags())
                         .as("%s 의 라벨", m.getId().getName())
                         .isEmpty());
+    }
+
+    /**
+     * <b>표시된 수와 실제로 걸러진 수는 다를 수 있다.</b> 전부가 대상이면 하나도
+     * 안 빼므로, 이 값이 전체 대수와 같아지는 것이 뒷단 전체가 앓는다는 신호다.
+     */
+    @Test
+    @DisplayName("배제된_대의_수를_낸다")
+    void 배제된_대의_수를_낸다() {
+        지표를_건다();
+
+        assertThat(meters.get("waiting.routing.ejected").gauge().value()).isZero();
+
+        for (int i = 0; i < 3; i++) {
+            배제기.failed("be-1", 지금);
+        }
+
+        assertThat(meters.get("waiting.routing.ejected").gauge().value()).isEqualTo(1);
     }
 }

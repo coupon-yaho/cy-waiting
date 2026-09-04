@@ -83,6 +83,23 @@ public final class InstanceOutliers {
         records.keySet().removeIf(id -> !live.contains(id));
     }
 
+    /**
+     * 지금 연속 실패로 표시된 인스턴스 수.
+     *
+     * <p><b>실제로 걸러진 수와 다를 수 있다.</b> 전부가 대상이면 하나도 안 빼므로
+     * 그때 이 값은 전체 대수인데 걸러진 것은 0 이다. 그 어긋남이 곧 뒷단 전체가
+     * 앓고 있다는 신호라 지표로는 이쪽이 쓸모 있다.
+     */
+    public int ejectedCount(long nowMillis) {
+        int count = 0;
+        for (Record record : records.values()) {
+            if (record.ejected(nowMillis, ejectMillis)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
     /** 지금 기록을 들고 있는 인스턴스들. 지표와 시험이 훑는 자리다. */
     public Set<String> tracked() {
         return Set.copyOf(records.keySet());

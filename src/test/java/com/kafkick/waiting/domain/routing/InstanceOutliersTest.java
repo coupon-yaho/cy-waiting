@@ -221,4 +221,34 @@ class InstanceOutliersTest {
         assertThatThrownBy(() -> InstanceOutliers.of(3, Duration.ofMillis(-1)))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    /**
+     * 지표가 읽는 값이다. <b>전부가 대상이면 걸러진 수는 0 인데 이 값은 전체
+     * 대수다</b> — 그 어긋남이 뒷단 전체가 앓는다는 신호라 이쪽을 낸다.
+     */
+    @Test
+    @DisplayName("표시된_수는_걸러진_수와_따로_센다")
+    void 표시된_수는_걸러진_수와_따로_센다() {
+        InstanceOutliers outliers = 배제기();
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 1_000);
+            outliers.failed("나", 1_000);
+        }
+        outliers.succeeded("다");
+
+        assertThat(outliers.ejectedCount(1_000)).as("표시된 것").isEqualTo(2);
+        assertThat(outliers.ejected(Set.of("가", "나"), 1_000)).as("걸러진 것").isEmpty();
+    }
+
+    @Test
+    @DisplayName("배제_시간이_지나면_표시된_수에서도_빠진다")
+    void 배제_시간이_지나면_표시된_수에서도_빠진다() {
+        InstanceOutliers outliers = 배제기();
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 1_000);
+        }
+
+        assertThat(outliers.ejectedCount(1_000)).isEqualTo(1);
+        assertThat(outliers.ejectedCount(1_000 + 배제_시간.toMillis())).isZero();
+    }
 }

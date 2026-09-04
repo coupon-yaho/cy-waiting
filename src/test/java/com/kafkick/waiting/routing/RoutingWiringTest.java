@@ -49,7 +49,11 @@ class RoutingWiringTest {
         // 빠진 경우와 구분된다.
         assertThat(context.getBeansOfType(LoadBalancerClientSpecification.class).values())
                 .anyMatch(spec -> "coupon-service".equals(spec.getName()));
-        assertThat(context.getBean(InstanceChooser.class)).isInstanceOf(WeightedP2c.class);
+        // 기본은 라운드로빈이다 (R-4 · CY-916). **여기가 배포에 실제로 서는
+        // 고르개를 못 박는 자리다** — 설정만 바꾸고 배선이 안 따라오면 적힌
+        // 전략과 도는 전략이 갈린다.
+        assertThat(context.getBean(InstanceChooser.class))
+                .isInstanceOf(WeightedRoundRobin.class);
         // 게이지도 같이 선다. 누수는 값이 안 내려가는 것으로만 보인다 (G9.3).
         assertThat(context.getBeansOfType(InFlightMetrics.Binding.class)).hasSize(1);
     }
@@ -97,23 +101,24 @@ class RoutingWiringTest {
     }
 
     /**
-     * <b>전략을 설정으로 바꾼다</b> (R-9 · 9.3.8). 값이 바뀌면 다른 구현이
-     * 주입돼야 한다 — 안 그러면 두 전략을 만든 이유인 실측 비교가 성립하지 않는다.
+     * <b>기본이 아닌 쪽을 고른다</b> (R-9 · 9.3.8). 기본값은 바깥 클래스가
+     * 잡으므로, 여기가 잡는 것은 <b>되돌릴 길이 살아 있는가</b> 다 — 인스턴스가
+     * 쉰 대를 넘으면 P2C 로 되돌린다고 결정 문서가 적어 두었다.
      */
     @Nested
     @Tag("context")
     @SpringBootTest(properties = {"waiting.scheduler.enabled=false",
-            "waiting.routing.enabled=true", "waiting.routing.strategy=round-robin"})
-    class RoundRobin {
+            "waiting.routing.enabled=true", "waiting.routing.strategy=p2c"})
+    class P2c {
 
         @Autowired
         private ApplicationContext context;
 
         @Test
-        @DisplayName("설정을_바꾸면_라운드로빈이_선다")
-        void 설정을_바꾸면_라운드로빈이_선다() {
+        @DisplayName("설정을_바꾸면_P2C_가_선다")
+        void 설정을_바꾸면_P2C_가_선다() {
             assertThat(context.getBean(InstanceChooser.class))
-                    .isInstanceOf(WeightedRoundRobin.class);
+                    .isInstanceOf(WeightedP2c.class);
         }
     }
 

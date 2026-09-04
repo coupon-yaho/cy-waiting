@@ -14,7 +14,8 @@
 [ -n "${ROUTING_LIB_LOADED:-}" ] && return 0
 ROUTING_LIB_LOADED=1
 
-COMPOSE="docker compose -f test/load/compose.yml -f test/load/compose.routing.yml"
+# 회차가 겹침을 더 얹을 수 있다. 게이트웨이를 여러 대로 늘리는 회차가 그렇다.
+COMPOSE="docker compose -f test/load/compose.yml -f test/load/compose.routing.yml${COMPOSE_EXTRA:+ -f $COMPOSE_EXTRA}"
 
 # **죽일 때 부하 루프까지 걷는다.** 시나리오는 부하를 서브셸로 띄우는데, 밖에서
 # `kill` 로 죽이면 bash 는 EXIT trap 을 안 돌리고 그 루프가 살아남는다. 살아남은
@@ -190,7 +191,8 @@ bring_up() {
          MID_INFLIGHT="${MID_INFLIGHT:-$MID_CAP}" \
          ROUTING_PER_INSTANCE_CAP="${ROUTING_PER_INSTANCE_CAP:-200}" \
          GATEWAY_LOG_LEVEL="${GATEWAY_LOG_LEVEL:-INFO}" \
-         $COMPOSE up -d --wait --wait-timeout 180 >> "$log" 2>&1; then
+         $COMPOSE up -d --wait --wait-timeout 180 \
+           ${GATEWAY_SCALE:+--scale gateway=$GATEWAY_SCALE} >> "$log" 2>&1; then
         echo "겹침을 못 세웠다" >&2; tail -20 "$log" | sed 's/^/  /' >&2
         return 2
     fi

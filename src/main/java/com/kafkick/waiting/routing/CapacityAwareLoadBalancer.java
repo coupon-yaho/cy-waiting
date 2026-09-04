@@ -24,6 +24,7 @@ import org.springframework.cloud.client.ServiceInstance;
 import org.springframework.cloud.client.loadbalancer.DefaultResponse;
 import org.springframework.cloud.client.loadbalancer.EmptyResponse;
 import org.springframework.cloud.client.loadbalancer.Request;
+import org.springframework.cloud.client.loadbalancer.RequestData;
 import org.springframework.cloud.client.loadbalancer.RequestDataContext;
 import org.springframework.cloud.client.loadbalancer.Response;
 import org.springframework.cloud.loadbalancer.core.ReactorServiceInstanceLoadBalancer;
@@ -117,7 +118,14 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
         if (request == null || !(request.getContext() instanceof RequestDataContext context)) {
             return Set.of();
         }
-        Object raw = context.getClientRequest().getAttributes().get(RoutingAttributes.TRIED);
+        // **요청이 비어 있을 수 있다.** 기본 문맥으로 떨어지는 경로가 있어 이
+        // 자리는 널을 받는다 — 그대로 부르면 고르는 자리가 통째로 터지고,
+        // 그건 라우팅 전면 차단이다.
+        RequestData client = context.getClientRequest();
+        if (client == null || client.getAttributes() == null) {
+            return Set.of();
+        }
+        Object raw = client.getAttributes().get(RoutingAttributes.TRIED);
         return raw instanceof Set<?> set ? (Set<String>) set : Set.of();
     }
 

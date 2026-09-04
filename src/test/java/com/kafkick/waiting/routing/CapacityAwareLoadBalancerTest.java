@@ -301,6 +301,22 @@ class CapacityAwareLoadBalancerTest {
                 .isEqualTo("be-2");
     }
 
+    /**
+     * <b>요청이 비어 있어도 안 터진다.</b> 기본 문맥으로 떨어지는 경로가 있어
+     * 이 자리는 널을 받는다 — 그대로 부르면 고르는 자리가 터지고 라우팅이
+     * 통째로 멎는다.
+     */
+    @Test
+    @DisplayName("요청이_비어도_고른다")
+    void 요청이_비어도_고른다() {
+        Response<ServiceInstance> 고른것 = CapacityAwareLoadBalancer.of(
+                목록(인스턴스("be-1", "100")), 정해진("be-1"),
+                레지스트리, 배제기, () -> 지금, 상한)
+                .choose(new DefaultRequest<>(new RequestDataContext(null))).block();
+
+        assertThat(고른것.getServer().getInstanceId()).isEqualTo("be-1");
+    }
+
     @Test
     @DisplayName("전부_시도했으면_안_뺀다")
     void 전부_시도했으면_안_뺀다() {

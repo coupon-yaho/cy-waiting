@@ -58,9 +58,21 @@ bring_up "$work/up.log" || exit 2
 
 # **측정 조건을 적고 되돌린다.** 운영 손잡이라 남겨 두면 다음 회차가 다른
 # 조건으로 재고 다른 결론을 낸다.
+# **값을 검증하고 쓴 것을 확인한다.** 범위 밖이거나 모양이 어긋나면 제품이
+# 조용히 기본값으로 돌고, 배너는 요청한 값을 그대로 찍는다 — 그 회차는 적힌
+# 것과 다른 조건에서 잰 것이 된다.
+case "$IDLE_RATIO" in
+    0.[1-9]|0.[1-9][0-9]) ;;
+    *) echo "IDLE_RATIO 는 0.1~0.9 여야 한다: '$IDLE_RATIO'"; exit 2 ;;
+esac
 saved=$($COMPOSE exec -T redis redis-cli GET gw:tunables 2>/dev/null)
 $COMPOSE exec -T redis redis-cli SET gw:tunables \
   "{\"idleCreditRatio\":$IDLE_RATIO,\"inFlightSeconds\":3}" >/dev/null
+applied=$($COMPOSE exec -T redis redis-cli GET gw:tunables 2>/dev/null)
+case "$applied" in
+    *"\"idleCreditRatio\":$IDLE_RATIO"*) ;;
+    *) echo "튜너블을 못 세웠다 — 읽은 값: ${applied:-없음}"; exit 2 ;;
+esac
 restore() {
   if [ -n "$saved" ]; then $COMPOSE exec -T redis redis-cli SET gw:tunables "$saved" >/dev/null 2>&1
   else $COMPOSE exec -T redis redis-cli DEL gw:tunables >/dev/null 2>&1; fi
@@ -94,7 +106,13 @@ fi
 python3 - "$work/summary.json" > "$work/codes" <<'PY'
 import json, sys
 m = json.load(open(sys.argv[1]))["metrics"]
-def n(k): return int(m.get(k, {}).get("count", 0))
+# **두 모양을 다 받는다.** k6 판에 따라 카운터가 `count` 바로 아래에 있기도
+# 하고 `values.count` 로 한 겹 더 들어가기도 한다. 한쪽만 읽으면 다른 판에서
+# 전부 0 이 되고, 그러면 판정기가 매 회차를 판정 불가로 끊는다.
+def n(k):
+    v = m.get(k, {})
+    if "count" in v: return int(v["count"])
+    return int(v.get("values", {}).get("count", 0))
 print("200", n("issue_200")); print("202", n("issue_202")); print("other", n("issue_other"))
 print("total", n("http_reqs"))
 PY

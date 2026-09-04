@@ -24,8 +24,15 @@ COMPOSE="docker compose -f test/load/compose.yml -f test/load/compose.routing.ym
 # bash 는 앞에서 도는 명령이 끝난 뒤에야 trap 을 돌린다 — 시나리오의 표본
 # 간격이 1초라 그 안에 걷힌다. 긴 sleep 을 앞에 두면 그만큼 늦는다.
 trap 'exit 130' INT TERM
+# **손자까지 걷는다.** 부하 루프는 서브셸이고 그 안에서 curl 이 또 자식으로
+# 돈다. 직계만 죽이면 curl 이 시한(5초)까지 살아남아 다음 회차에 요청을
+# 흘린다 — 그 몇 초가 줄 모드를 켜면 그 회차는 통째로 못 쓴다.
 reap_children() {
-    pkill -P $$ 2>/dev/null
+    local kid
+    for kid in $(pgrep -P $$ 2>/dev/null); do
+        pkill -P "$kid" 2>/dev/null
+        kill "$kid" 2>/dev/null
+    done
     return 0
 }
 

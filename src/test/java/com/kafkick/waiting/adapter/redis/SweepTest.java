@@ -142,12 +142,32 @@ class SweepTest extends RedisContainerSupport {
         for (int i = 0; i < 50; i++) {
             enqueue("m" + i);
         }
+        // 만료된 신호와 낡은 기록을 심는다. **접어도 이 둘은 걷어야 한다.**
+        redis.opsForZSet().add(ALIVE, "m0", NOW - 10).block(WAIT);
+        redis.opsForHash().put(GRACE, "old", String.valueOf(만료된_시각)).block(WAIT);
         계수를_비운다();
 
-        sweepKeepingFront("3000");
+        List<Object> 결과 = sweepKeepingFront("3000");
 
         assertThat(호출_수("zrangebyscore")).as("앞줄 창을 안 읽는다").isZero();
         assertThat(호출_수("zmscore")).as("생존 신호를 안 묻는다").isZero();
+        // 살아 있는 신호가 있는지도 안 묻는다 — 그 값을 아무도 안 쓴다.
+        assertThat(호출_수("zcount")).as("생존 여부를 안 묻는다").isZero();
+        // **다른 시험이 같은 레디스를 쓴다.** 배경 루프가 창에 끼어들면 위
+        // 검사가 이유 없이 빨개진다. 이 회차가 스크립트 하나만 돌렸는지 같이
+        // 봐서, 그때는 "측정이 오염됐다" 로 먼저 터지게 한다.
+        assertThat(호출_수("evalsha") + 호출_수("eval")).as("이 회차만 쟀다").isOne();
+
+        // **비용만 보면 안 된다.** 접은 회차가 아무것도 안 하고 돌아가는 구현도
+        // 위 검사를 통과한다 — 그러면 승계 유예 내내 만료 신호와 낡은 기록이
+        // 안 걷히고 커서가 전진을 못 한다. 그 셋을 같이 못 박는다.
+        assertThat(swept(결과)).as("앞줄은 안 걷는다").isZero();
+        assertThat(expired(결과)).as("낡은 기록은 걷는다").isOne();
+        assertThat(redis.opsForZSet().score(ALIVE, "m0").block(WAIT))
+                .as("만료된 신호는 걷는다").isNull();
+        // 심은 것이 두 개뿐이라 한 바퀴에 다 훑고 커서가 처음으로 돌아온다.
+        // **"비어 있지 않다" 로는 부족하다** — 커서를 안 돌려도 통과한다.
+        assertThat(nextCursor(결과)).as("커서가 한 바퀴를 돈다").isEqualTo("0");
     }
 
     /** 접지 않은 회차는 그대로 읽어야 한다. 위 검사가 늘 0 이면 아무것도 안 지킨다. */

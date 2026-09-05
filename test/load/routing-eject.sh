@@ -22,7 +22,10 @@ MID_CAP="${MID_CAP:-120}"
 WARMUP_SEC="${WARMUP_SEC:-15}"
 BEFORE_SEC="${BEFORE_SEC:-5}"
 FAULT_SEC="${FAULT_SEC:-20}"
-AFTER_SEC="${AFTER_SEC:-20}"
+# **램프보다 길게 본다.** 배제가 풀린 뒤 제 몫으로 돌아오는 데 램프(기본 60초)가
+# 걸리는데, 20초만 보면 아직 오르는 중인 값을 "복귀 못 했다" 로 적는다 — 계기가
+# 짧아서 나는 미달이다. 실제로 그렇게 한 번 났다.
+AFTER_SEC="${AFTER_SEC:-80}"
 
 # 고장 난 대가 낼 코드. 5xx 여야 배제기가 실패로 센다.
 FAULT_STATUS="${FAULT_STATUS:-503}"

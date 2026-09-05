@@ -11,6 +11,8 @@ import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.ParameterizedTest;
 import org.springframework.cloud.client.DefaultServiceInstance;
 import org.springframework.cloud.client.ServiceInstance;
 import org.springframework.cloud.client.loadbalancer.DefaultResponse;
@@ -326,4 +328,25 @@ class InFlightTrackingFilterTest {
         assertThat(레지스트리.count("be-1", 지금)).isZero();
         assertThat(레지스트리.count("be-2", 지금)).isZero();
     }
+
+    /**
+     * <b>밖에서 만드는 코드는 그 대의 상태가 아니다.</b> 401·403 은 요청의
+     * 권한이고 408 은 요청이 안 끝난 것이다 — 어느 대로 보내도 같은 답이 온다.
+     *
+     * <p>실패로 세면 인증 없는 요청 몇 건으로 뒷단을 차례로 뺄 수 있다. 임계가
+     * 셋이고 램프 중 한 건이 배제를 되감으므로 초당 한 건 미만으로도 된다.
+     */
+    @ParameterizedTest
+    @ValueSource(ints = {401, 403, 408})
+    @DisplayName("밖에서_만드는_사백은_그_대의_실패가_아니다")
+    void 밖에서_만드는_사백은_그_대의_실패가_아니다(int code) {
+        세_번("be-1", ex -> {
+            ex.getResponse().setRawStatusCode(code);
+            return Mono.empty();
+        });
+
+        assertThat(배제기.ejected(Set.of("be-1", "be-2"), 지금))
+                .as("%d 로는 안 빠진다", code).isEmpty();
+    }
+
 }

@@ -11,6 +11,7 @@ import com.kafkick.waiting.domain.admission.CircuitState;
 import com.kafkick.waiting.domain.allocation.CouponDemand;
 import com.kafkick.waiting.domain.allocation.CreditSmoother;
 import com.kafkick.waiting.domain.allocation.Grant;
+import com.kafkick.waiting.domain.allocation.ReleaseRamp;
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.QueueMode;
 import com.kafkick.waiting.domain.coupon.RuntimeState;
@@ -970,7 +971,9 @@ class AllocationRoundTest {
         서킷.set(CircuitState.CLOSED);
         round.run().block();
 
-        assertThat(발행된("c1").credit()).as("1 에서 7,300 으로 뛰지 않는다").isEqualTo(2);
+        // 하한 40 에서 다시 출발한다. 램프가 그 아래로 누르면 한산 통과 상한이
+        // 0 이 되어, 줄 설 이유가 없는 쿠폰이 전 노드에서 줄을 선다 (R1).
+        assertThat(발행된("c1").credit()).as("1 에서 7,300 으로 뛰지 않는다").isEqualTo(40);
     }
 
     /** 램프는 늦추는 것이지 막는 것이 아니다. 안 그러면 회복이 영영 안 끝난다. */
@@ -982,25 +985,31 @@ class AllocationRoundTest {
         round.run().block();
         서킷.set(CircuitState.CLOSED);
 
-        long 앞선 = 1;
-        for (int i = 0; i < 80; i++) {
+        long 앞선 = 40;
+        int 틱 = 0;
+        while (앞선 < 7_300 && 틱 < 40) {
             round.run().block();
             long 지금 = 발행된("c1").credit();
-            assertThat(지금).as("한 회차에 1.2 배를 넘지 않는다")
-                    .isLessThanOrEqualTo(Math.max(앞선 + 1, (long) (앞선 * 1.2)));
+            assertThat(지금).as("한 회차에 배수를 넘지 않는다")
+                    .isLessThanOrEqualTo(Math.max(40, (long) (앞선 * ReleaseRamp.DEFAULT_STEP)));
             앞선 = 지금;
+            틱++;
         }
 
         assertThat(앞선).as("결국 원래 몫에 닿는다").isEqualTo(7_300);
+        // 틱이 1초라 틱 수가 곧 초다. 회복은 30초 안에 끝나야 한다 (RC3).
+        assertThat(틱).as("회복이 게이트 안에서 끝난다").isLessThanOrEqualTo(20);
     }
 
     /**
-     * <b>리더가 바뀌면 램프의 기준도 버린다.</b> 남이 리더였던 동안 움직인 값을
-     * 못 보고 제 옛 기준을 이어 쓰면, 승계 직후 한 틱이 그 기준의 배수로 나간다.
+     * <b>리더가 바뀌어도 램프는 안 놓는다.</b> 브레이크라서 그렇다 — 모른다는
+     * 것이 놓을 이유가 되면, 회복 도중에 승계가 끼는 순간 계단이 그대로
+     * 복원된다. 그 순간은 드물지 않다: 회차 타임아웃과 레디스 압박이 겹치는
+     * 구간이 곧 리더가 바뀌기 가장 쉬운 구간이다.
      */
     @Test
-    @DisplayName("리더십을_얻으면_램프_기준을_버린다")
-    void 리더십을_얻으면_램프_기준을_버린다() {
+    @DisplayName("리더십을_얻어도_램프를_안_놓는다")
+    void 리더십을_얻어도_램프를_안_놓는다() {
         AtomicReference<CircuitState> 서킷 = new AtomicReference<>(CircuitState.HALF_OPEN);
         AllocationRound round = 서킷_있는_회차(서킷, 7_300, 40);
         round.run().block();
@@ -1009,7 +1018,7 @@ class AllocationRoundTest {
         서킷.set(CircuitState.CLOSED);
         round.run().block();
 
-        assertThat(발행된("c1").credit()).as("승계했으면 제 옛 기준을 안 쓴다").isEqualTo(7_300);
+        assertThat(발행된("c1").credit()).as("승계가 계단을 되살리지 않는다").isEqualTo(40);
     }
 
     /**
@@ -1032,6 +1041,28 @@ class AllocationRoundTest {
                 .noneMatch(m -> m.contains("서킷 회복"));
     }
 
+    /**
+     * <b>램프 구간에도 몫이 실제로 나가야 한다.</b> 공정 배분은 쿠폰 수보다
+     * 크레딧이 적으면 전 쿠폰에 0 을 준다 — 램프가 그 구간을 한 틱에서 여러
+     * 틱으로 늘리므로, 하한이 그 아래를 받쳐야 회복 구간이 안 멎는다.
+     */
+    @Test
+    @DisplayName("램프_구간에도_쿠폰_여럿에_몫이_간다")
+    void 램프_구간에도_쿠폰_여럿에_몫이_간다() {
+        AtomicReference<CircuitState> 서킷 = new AtomicReference<>(CircuitState.HALF_OPEN);
+        AllocationRound round = 서킷_있는_회차(서킷, 7_300, 40,
+                List.of(new CouponDemand("c1", 20_000, 1_000_000),
+                        new CouponDemand("c2", 20_000, 1_000_000),
+                        new CouponDemand("c3", 20_000, 1_000_000)));
+        round.run().block();
+        적용.clear();
+
+        서킷.set(CircuitState.CLOSED);
+        round.run().block();
+
+        assertThat(적용).as("셋 다 몫을 받는다").containsExactly("c1=13", "c2=13", "c3=13");
+    }
+
     /** 초과 배분 지표는 게이트 전 값으로 잰다. 아니면 서킷이 열린 시간에 비례해 오른다. */
     @Test
     @DisplayName("배분_정지가_초과_지표를_안_올린다")
@@ -1047,10 +1078,15 @@ class AllocationRoundTest {
     /** 서킷을 보는 회차. 하한을 0 이 아니게 둬야 누수가 드러난다. */
     private AllocationRound 서킷_있는_회차(AtomicReference<CircuitState> 서킷,
             long 가용량, long 하한) {
+        return 서킷_있는_회차(서킷, 가용량, 하한,
+                List.of(new CouponDemand("c1", 20_000, 1_000_000)));
+    }
+
+    private AllocationRound 서킷_있는_회차(AtomicReference<CircuitState> 서킷,
+            long 가용량, long 하한, List<CouponDemand> 수요) {
         return AllocationRound.of(
                 () -> true,
-                () -> Mono.just(new TimedDemands(
-                        List.of(new CouponDemand("c1", 20_000, 1_000_000)), 읽은_시각)),
+                () -> Mono.just(new TimedDemands(수요, 읽은_시각)),
                 () -> 가용량, () -> 1,
                 grant -> {
                     적용.add(grant.couponId() + "=" + grant.credit());

@@ -77,6 +77,20 @@ public final class CapacityCollector {
 
     private boolean firstRound = true;
 
+    /**
+     * 첫 회차 표시를 들고 있는 회차 수의 상한.
+     *
+     * <p><b>무한정 들고 있으면 안 된다.</b> 뒷단 전체가 오래 멎으면 그동안
+     * 신선한 보고가 없어 표시가 안 타고, 그 사이 {@code seen} 은 비워진다.
+     * 뒷단이 <b>콜드로</b> 재기동해 보고를 다시 올리는 첫 회차에 그 표시가
+     * 살아 있으면 60초 예열 램프를 통째로 건너뛴다 — 뒷단이 가장 차가울 때
+     * 유령 몫이 그대로 실린다 (F6).
+     */
+    private static final int FIRST_ROUND_GRACE = HOLD_ROUNDS;
+
+    /** 첫 회차 표시를 든 채로 돈 회차 수. */
+    private int roundsHeld;
+
     private final AtomicLong lastKnown;
 
     /** 연속으로 못 읽은 회차의 수. 한 회차라도 성공하면 다시 0 이다. */
@@ -247,7 +261,9 @@ public final class CapacityCollector {
         // 이 표시를 태우면, 다음 회차에 보고가 신선해져도 이미 돌던 무리로
         // 못 보고 램프를 0 부터 다시 탄다 — 그동안 크레딧이 하한에 묶여
         // 한산 통과 상한이 0 이 된다 (R1).
-        if (fresh > 0) {
+        //
+        // **다만 무한정은 아니다.** 위 상수가 그 이유를 든다.
+        if (firstRound && (fresh > 0 || ++roundsHeld >= FIRST_ROUND_GRACE)) {
             firstRound = false;
         }
 

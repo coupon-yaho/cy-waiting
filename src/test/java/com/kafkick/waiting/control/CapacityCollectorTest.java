@@ -108,6 +108,25 @@ class CapacityCollectorTest {
     }
 
     @Test
+    @DisplayName("오래_비면_첫_회차_표시가_만료된다")
+    void 오래_비면_첫_회차_표시가_만료된다() {
+        // **무한정 들고 있으면 안 된다.** 뒷단 전체가 오래 멎으면 그동안 신선한
+        // 보고가 없어 표시가 안 타고, 그 사이 처음 본 기록도 비워진다. 뒷단이
+        // 콜드로 재기동해 보고를 다시 올리는 첫 회차에 그 표시가 살아 있으면
+        // 예열 램프를 통째로 건너뛴다 — 뒷단이 가장 차가울 때다 (F6).
+        CapacityCollector collector = collector();
+        for (int i = 0; i < CapacityCollector.HOLD_ROUNDS; i++) {
+            collector.collect(List.of(), NOW + i, 1);
+        }
+
+        long credit = collector.collect(List.of(report("cold", 600, NOW + 10)), NOW + 10, 1);
+
+        // 방금 처음 봤으므로 경과 0 이라 몫이 0 이고, 합이 0 이 된 이유가 램프라
+        // 하한을 쓴다. 300 이 나오면 예열을 건너뛴 것이다.
+        assertThat(credit).as("콜드 인스턴스가 예열을 건너뛰지 않는다").isEqualTo(FLOOR);
+    }
+
+    @Test
     @DisplayName("등록을_따로_안_불러도_램프가_걸린다")
     void 등록을_따로_안_불러도_램프가_걸린다() {
         // **두 번 불러야 하는 계약을 두면 빠뜨렸을 때 조용히 0 을 낸다.** 보고가

@@ -140,7 +140,10 @@ public final class AllocationRound {
      * 조임을 푸는 속도 (RC4). <b>평활이 조여진 값을 못 보므로</b> 서킷이 닫히는
      * 한 틱에 배분이 원래 몫으로 그대로 돌아간다. 그 계단을 회차당 배수로 나눈다.
      */
-    private final ReleaseRamp releaseRamp = ReleaseRamp.of(ReleaseRamp.DEFAULT_LIMIT);
+    private final ReleaseRamp releaseRamp = ReleaseRamp.of(ReleaseRamp.DEFAULT_STEP);
+
+    /** 램프가 걸린 구간. <b>진입과 해제를 쌍으로 남긴다</b> (LG-2). */
+    private final FailureWindow ramping = FailureWindow.create();
 
     /** 예산보다 더 들여보낸 누적 인원. */
     private final AtomicLong enteredOvershoot = new AtomicLong();
@@ -327,10 +330,17 @@ public final class AllocationRound {
         // **조임 창도 닫는다.** 안 닫으면 이 노드가 조임에 진입한 뒤 리더십을
         // 잃었다 되찾았을 때, 회복 로그가 비리더 구간까지 포함한 지속 시간을
         // 찍는다. 그동안 남이 조였는지 풀었는지는 이 노드가 모른다.
-        paused.exited();
-        // **램프 기준도 버린다.** 남이 리더였던 동안 움직인 값을 못 보고 제 옛
-        // 기준을 이어 쓰면, 승계 직후 한 틱이 그 기준의 배수로 나간다.
-        releaseRamp.reset();
+        //
+        // **버렸다는 것을 남긴다.** 조용히 버리면 찍힌 진입 경고 하나에 해제가
+        // 영영 안 생긴다. 여유 갱신 쪽이 같은 자리에서 같은 줄을 남긴다.
+        paused.exited().ifPresent(r -> log.info(
+                "리더십이 갈렸다 — 조임 창을 닫는다. 그동안 {}틱 조였다", r.swallowed()));
+        ramping.exited().ifPresent(r -> log.info(
+                "리더십이 갈렸다 — 램프 창을 닫는다. 그동안 {}틱 눌렀다", r.swallowed()));
+        // **램프 기준은 안 버린다.** 브레이크라서 그렇다 — 모른다는 것이 놓을
+        // 이유가 되면, 회복 도중에 승계가 끼는 순간 계단이 그대로 복원된다.
+        // 그 순간은 드물지 않다: 회차 타임아웃과 레디스 압박이 겹치는 구간이
+        // 곧 리더가 바뀌기 가장 쉬운 구간이다.
     }
 
     /**
@@ -395,13 +405,38 @@ public final class AllocationRound {
         // **회차마다 한 번 읽는다.** 두 번 읽으면 그 사이에 상태가 뒤집혀 같은
         // 회차가 자기모순인 값 둘로 판단한다 — 5초 창에 1초 틱이면 실제로 걸린다.
         CircuitState circuitNow = circuit.get();
-        long target = Math.max(smoothed, Math.max(0, creditFloor.getAsLong()));
+        long floorNow = Math.max(0, creditFloor.getAsLong());
+        long target = Math.max(smoothed, floorNow);
         long allowed = gated(target, circuitNow);
         // **푸는 쪽에도 제약이 있어야 한다.** 조이는 동안 평활에 들어가는 값은
         // 계속 원래 몫이라, 평활값은 조여진 값을 한 번도 안 본다. 그래서 서킷이
         // 닫히는 그 한 틱에 배분이 1 에서 원래 몫으로 그대로 돌아간다 — 방금
-        // 실패를 끝낸 뒷단을 향한 계단이고, 회복 버스트 한계는 1.2 배다 (RC4).
-        long credit = releaseRamp.next(allowed, allowed < target);
+        // 실패를 끝낸 뒷단을 향한 계단이다.
+        //
+        // **조였는지는 서킷에게 묻는다.** 값을 견줘 유추하면 조임과 목표가 같은
+        // 조합을 놓친다 — 뒷단이 전면 정지해 보고가 0 이고 서킷도 열린 회차가
+        // 정확히 그것이고, 하필 그 회차가 가장 큰 계단을 만든다.
+        // **램프에 정책 하한을 같이 넘긴다.** 하한 아래로 눌린 회차에는 노드당
+        // 몫이 유휴 비율 아래라 한산 통과 상한이 0 이고, 줄 설 이유가 없는
+        // 쿠폰이 전 노드에서 줄을 선다 (R1). 여유 갱신 쪽이 자기 램프에 대해
+        // 이미 되돌리는 자리를 여기서 다시 만들면 안 된다.
+        //
+        // **여기서 쓰는 하한은 R1 이 요구하는 최소다.** `creditFloor` 는 하한이
+        // 답이 된 회차에만 값이 있어 회복 구간에는 0 이다. 설정 하한은 이보다
+        // 크거나 같게 강제되므로, 이 값은 안전한 아래쪽 어림이다.
+        long r1Minimum = (long) Math.max(1, gatewayCount.getAsInt())
+                * CapacityCollector.IDLE_DIVISOR;
+        long credit = releaseRamp.next(allowed, Math.max(floorNow, r1Minimum),
+                circuitNow != CircuitState.CLOSED);
+        if (releaseRamp.ramping()) {
+            if (ramping.entered()) {
+                log.info("서킷 해제 램프 — 몫을 {} 부터 회차당 {}배로 올린다, 목표 {}",
+                        credit, ReleaseRamp.DEFAULT_STEP, target);
+            }
+        } else {
+            ramping.exited().ifPresent(r -> log.info(
+                    "서킷 해제 램프 끝 — {}틱 걸려 {} 로 돌아왔다", r.swallowed(), credit));
+        }
         Map<String, Long> granted = new LinkedHashMap<>();
         allocator.allocate(credit, collected).forEach(g -> granted.put(g.couponId(), g.credit()));
 

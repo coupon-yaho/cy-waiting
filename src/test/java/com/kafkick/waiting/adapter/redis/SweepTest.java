@@ -1,9 +1,12 @@
 package com.kafkick.waiting.adapter.redis;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.kafkick.waiting.domain.queue.GraceRetention;
+import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.List;
 import java.util.Properties;
@@ -101,7 +104,17 @@ class SweepTest extends RedisContainerSupport {
      * 병렬로 돌면 계수가 섞인다. 지금은 스케줄러가 꺼져 있고 갈래가 하나라
      * 안전한데, 둘 중 하나가 바뀌면 아래 검사가 조용히 흔들린다.
      */
-    private void 계수를_비운다() {
+    // **스크립트를 먼저 캐시에 올린다.** 캐시가 비어 있으면 스프링이 `EVALSHA`
+    // 를 쳐서 실패한 뒤 `EVAL` 로 떨어지는데, 실패한 호출도 계수에 든다 —
+    // 그러면 "이 회차만 쟀다" 가 앞선 시험이 무엇을 돌렸는지에 달리게 된다.
+    //
+    // **돌려서 올리지 않는다.** 한 번 돌리면 그 회차가 만료 신호와 낡은 기록을
+    // 미리 걷어, 정작 재려던 회차가 걷을 것이 없어진다. `SCRIPT LOAD` 는 본문만
+    // 캐시에 넣고 아무것도 안 건드린다.
+    private void 계수를_비운다() throws IOException {
+        String body = new ClassPathResource("redis/sweep.lua").getContentAsString(UTF_8);
+        redis.execute(c -> c.scriptingCommands().scriptLoad(ByteBuffer.wrap(body.getBytes(UTF_8))))
+                .blockLast(WAIT);
         redis.execute(c -> c.serverCommands().resetConfigStats()).blockLast(WAIT);
     }
 
@@ -138,7 +151,7 @@ class SweepTest extends RedisContainerSupport {
      */
     @Test
     @DisplayName("앞줄을_안_걷으면_창을_안_읽는다")
-    void 앞줄을_안_걷으면_창을_안_읽는다() {
+    void 앞줄을_안_걷으면_창을_안_읽는다() throws IOException {
         for (int i = 0; i < 50; i++) {
             enqueue("m" + i);
         }
@@ -173,7 +186,7 @@ class SweepTest extends RedisContainerSupport {
     /** 접지 않은 회차는 그대로 읽어야 한다. 위 검사가 늘 0 이면 아무것도 안 지킨다. */
     @Test
     @DisplayName("앞줄을_걷는_회차는_창을_읽는다")
-    void 앞줄을_걷는_회차는_창을_읽는다() {
+    void 앞줄을_걷는_회차는_창을_읽는다() throws IOException {
         for (int i = 0; i < 50; i++) {
             enqueue("m" + i);
         }
@@ -196,7 +209,7 @@ class SweepTest extends RedisContainerSupport {
      */
     @Test
     @DisplayName("살아_있는_신호가_없으면_창을_안_읽는다")
-    void 살아_있는_신호가_없으면_창을_안_읽는다() {
+    void 살아_있는_신호가_없으면_창을_안_읽는다() throws IOException {
         for (int i = 0; i < 50; i++) {
             enqueue("m" + i);
         }

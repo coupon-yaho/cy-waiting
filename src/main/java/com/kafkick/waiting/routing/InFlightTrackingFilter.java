@@ -39,15 +39,14 @@ public final class InFlightTrackingFilter implements GlobalFilter, Ordered {
             ReactiveLoadBalancerClientFilter.LOAD_BALANCER_CLIENT_FILTER_ORDER + 1;
 
     /**
-     * 인스턴스마다 다른 답이 오는 4xx. <b>이것들은 그 대의 상태다.</b>
-     *
-     * <p>포화된 대는 429 로 흘리고, 시크릿이 안 풀린 대는 401·403 을, 자기 쪽
-     * 시한이 지난 대는 408 을 낸다. 넷 다 즉시 끝나 물린 건수가 안 쌓이므로,
-     * 성공으로 세면 그 대가 계속 가장 한가해 보여 트래픽이 오히려 몰린다.
+     * 그 대의 상태를 말하는 4xx. 포화된 대는 429 로 흘리는데 즉시 끝나 물린
+     * 건수가 안 쌓이므로, 성공으로 세면 그 대가 계속 가장 한가해 보인다.
      */
-    private static final Set<Integer> INSTANCE_FAULT = Set.of(
-            HttpStatus.UNAUTHORIZED.value(), HttpStatus.FORBIDDEN.value(),
-            HttpStatus.REQUEST_TIMEOUT.value(), HttpStatus.TOO_MANY_REQUESTS.value());
+    // **401·403·408 은 뺐다.** 처음엔 넣었는데 셋 다 밖에서 만들 수 있고 요청의
+    // 성질이지 그 대의 상태가 아니다 — 어느 대로 보내도 같은 답이 온다. 실패로
+    // 세면 인증 없는 요청 몇 건으로 뒷단을 차례로 뺄 수 있다.
+    private static final Set<Integer> INSTANCE_FAULT =
+            Set.of(HttpStatus.TOO_MANY_REQUESTS.value());
 
     private final InFlightRegistry registry;
 

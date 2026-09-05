@@ -364,6 +364,42 @@ public final class AllocationRound {
      * 자리는 이미 없다. 반쯤 열렸을 때 <b>0 으로 막지는 않는다</b>: 뒷단에 닿는
      * 호출이 없으면 서킷이 표본을 못 채워 영영 안 닫힌다.
      */
+    /**
+     * 회차가 접혔다. <b>램프 기준을 되돌린다</b> — 발행 안 된 회차가 기준을
+     * 전진시키면 다음 발행이 실제로 나간 값의 배수에서 시작한다.
+     */
+    private Mono<Void> fold(ReleaseRamp.State before) {
+        releaseRamp.restore(before);
+        return Mono.empty();
+    }
+
+    /**
+     * 램프의 진입과 해제를 쌍으로 남긴다 (LG-2).
+     *
+     * <p><b>발행하는 회차에서만 부른다.</b> 앞에 두면 접힌 회차가 틱을 세고
+     * 진입 자리를 먹어, 다음 회복에 진입 로그가 아예 안 나온다.
+     */
+    private void watchRamp(boolean gatedNow, long credit, long target) {
+        // **창은 실제로 푸는 회차에 연다.** 램프는 조인 회차에 이미 걸리므로,
+        // 걸렸다는 것만 보고 열면 진입이 조임 시작에 찍히고 해제의 지속 시간에
+        // 장애 구간이 통째로 섞인다 — 정작 재려던 회복 틱 수가 그 수에 안 남는다.
+        //
+        // **회복 도중에 다시 조이면 거기서 끊는다.** 안 끊으면 두 번째 회복의
+        // 진입이 안 나오고, 마지막 해제가 센 틱에 중간 장애가 통째로 섞인다.
+        if (gatedNow) {
+            ramping.exited().ifPresent(r -> log.info(
+                    "서킷 해제 램프 중단 — {}틱 올리다 다시 조인다", r.swallowed()));
+        } else if (releaseRamp.ramping()) {
+            if (ramping.entered()) {
+                log.info("서킷 해제 램프 진입 — 몫을 {} 부터 회차당 {}배로 올린다, 목표 {}",
+                        credit, String.format("%.1f", ReleaseRamp.DEFAULT_STEP), target);
+            }
+        } else {
+            ramping.exited().ifPresent(r -> log.info(
+                    "서킷 해제 램프 종료 — {}틱 걸려 {} 로 돌아왔다", r.swallowed(), credit));
+        }
+    }
+
     private long gated(long credit, CircuitState now) {
         if (now == CircuitState.CLOSED) {
             paused.exited().ifPresent(r -> log.info(
@@ -430,24 +466,6 @@ public final class AllocationRound {
         // 전진시키면 다음 발행이 실제로 나간 값의 배수에서 시작한다.
         ReleaseRamp.State before = releaseRamp.snapshot();
         long credit = releaseRamp.next(allowed, Math.max(floorNow, r1Minimum), gatedNow);
-        // **창은 실제로 푸는 회차에 연다.** 램프는 조인 회차에 이미 걸리므로,
-        // 걸렸다는 것만 보고 열면 진입이 조임 시작에 찍히고 해제의 지속 시간에
-        // 장애 구간이 통째로 섞인다 — 정작 재려던 회복 틱 수가 그 수에 안 남는다.
-        //
-        // **회복 도중에 다시 조이면 거기서 끊는다.** 안 끊으면 두 번째 회복의
-        // 진입이 안 나오고, 마지막 해제가 센 틱에 중간 장애가 통째로 섞인다.
-        if (gatedNow) {
-            ramping.exited().ifPresent(r -> log.info(
-                    "서킷 해제 램프 중단 — {}틱 올리다 다시 조인다", r.swallowed()));
-        } else if (releaseRamp.ramping()) {
-            if (ramping.entered()) {
-                log.info("서킷 해제 램프 진입 — 몫을 {} 부터 회차당 {}배로 올린다, 목표 {}",
-                        credit, String.format("%.1f", ReleaseRamp.DEFAULT_STEP), target);
-            }
-        } else {
-            ramping.exited().ifPresent(r -> log.info(
-                    "서킷 해제 램프 종료 — {}틱 걸려 {} 로 돌아왔다", r.swallowed(), credit));
-        }
         Map<String, Long> granted = new LinkedHashMap<>();
         allocator.allocate(credit, collected).forEach(g -> granted.put(g.couponId(), g.credit()));
 
@@ -485,12 +503,13 @@ public final class AllocationRound {
                             credit, admitted, collected.size());
                 })
                 .then(Mono.defer(() -> lostLeadership()
-                        ? Mono.<Void>empty()
+                        ? fold(before)
                         // **히스테리시스는 아직 빈 값을 싣는다.** 제품이 아직
                         // 히스테리시스를 안 돌려서 실을 상태가 없다 (CY-324).
                         // 돌리기 시작하면 여기가 매 틱 이월을 지우는 자리가
                         // 되므로, 기본값에 숨기지 않고 눈에 보이게 둔다.
-                        : publishRound(collected, granted, credit, readAt, current)
+                        : Mono.<Void>fromRunnable(() -> watchRamp(gatedNow, credit, target))
+                        .then(publishRound(collected, granted, credit, readAt, current))
                         // **발행 뒤에 지운다** (7.3). 앞에 두면 방금 지운 큐가
                         // 이번 재료에는 아직 대기자로 실려, 그 회차의 크레딧이
                         // 없는 줄에 나간다.

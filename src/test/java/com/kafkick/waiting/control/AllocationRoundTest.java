@@ -1186,6 +1186,36 @@ class AllocationRoundTest {
         assertThat(발행된("c1").credit()).as("접힌 회차만큼 앞서지 않는다").isEqualTo(40);
     }
 
+    /**
+     * <b>발행 직전에 접힌 회차도 기준과 창을 안 움직인다.</b> 되돌리기가 앞
+     * 검사에만 걸려 있으면, 적용까지 마치고 발행에서 접힌 회차가 기준을 올리고
+     * 진입 자리까지 먹는다 — 다음 회복에 진입 로그가 아예 안 나온다.
+     */
+    @Test
+    @DisplayName("발행_직전에_접혀도_램프가_안_움직인다")
+    void 발행_직전에_접혀도_램프가_안_움직인다() {
+        AtomicReference<CircuitState> 서킷 = new AtomicReference<>(CircuitState.HALF_OPEN);
+        // 첫 검사는 통과시키고 발행 직전 검사에서 떨어뜨린다.
+        AtomicInteger 남은_참 = new AtomicInteger();
+        AllocationRound round = 서킷_있는_회차(서킷, 7_300, () -> 40L, 1,
+                List.of(new CouponDemand("c1", 20_000, 1_000_000)),
+                () -> 남은_참.getAndDecrement() > 0);
+
+        남은_참.set(99);
+        round.run().block();
+        서킷.set(CircuitState.CLOSED);
+
+        // 이 회차는 앞 검사만 지나고 발행 직전에 접힌다.
+        남은_참.set(1);
+        round.run().block();
+        남은_참.set(99);
+        round.run().block();
+
+        assertThat(발행된("c1").credit()).as("접힌 회차만큼 앞서지 않는다").isEqualTo(40);
+        assertThat(로그_메시지()).as("접힌 회차가 진입 자리를 안 먹는다")
+                .filteredOn(m -> m.startsWith("서킷 해제 램프 진입")).hasSize(1);
+    }
+
     /** 초과 배분 지표는 게이트 전 값으로 잰다. 아니면 서킷이 열린 시간에 비례해 오른다. */
     @Test
     @DisplayName("배분_정지가_초과_지표를_안_올린다")

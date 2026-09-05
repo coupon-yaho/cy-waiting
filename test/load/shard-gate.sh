@@ -12,7 +12,11 @@ set -uo pipefail
 
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
-COMPOSE="docker compose -f test/load/compose.yml"
+# **레디스를 전용 코어에 고정할 수 있다.** 기본은 안 한다 — 지금까지 잰 값들과
+# 견주려면 조건이 같아야 한다. 착수를 다시 정할 때만 켠다.
+#
+#   PINNED=1 test/load/shard-gate.sh
+COMPOSE="docker compose -f test/load/compose.yml${PINNED:+ -f test/load/compose.pinned.yml}"
 # **쿠폰은 노브가 아니다.** `open-spike.js` 가 `c2` 를 박아 두고 있어서, 여기만
 # 바꾸면 c3 을 비우고 c3 이 IDLE 인 것을 본 뒤 c2 를 때린다 — 빈 줄 보증이
 # 통째로 다른 쿠폰 얘기가 된다. 시나리오를 고칠 때 같이 고친다.

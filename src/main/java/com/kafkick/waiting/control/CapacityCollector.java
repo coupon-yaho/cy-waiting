@@ -243,7 +243,13 @@ public final class CapacityCollector {
                     new InstanceRouting(report.instanceId(), address, share)));
         }
         evictStale(now);
-        firstRound = false;
+        // **관측이 있었던 회차에서만 태운다.** 루프를 한 건도 안 돈 회차가
+        // 이 표시를 태우면, 다음 회차에 보고가 신선해져도 이미 돌던 무리로
+        // 못 보고 램프를 0 부터 다시 탄다 — 그동안 크레딧이 하한에 묶여
+        // 한산 통과 상한이 0 이 된다 (R1).
+        if (fresh > 0) {
+            firstRound = false;
+        }
 
         // **하한은 살아 있는 분모에 맞춘다.** 설정값으로만 재면 노드가 그보다
         // 늘었을 때 노드당 몫이 다시 0 이 된다 — 하한을 둔 이유가 사라진다.

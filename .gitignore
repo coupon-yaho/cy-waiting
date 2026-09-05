@@ -38,3 +38,7 @@ ai/journal/index.md
 
 # 부하 실행 산출물. 저장소에 두면 옛 결과를 새 판정에 쓴다.
 k6-summary.json
+redis-ops.txt
+redis-slowlog.txt
+routing-truth.txt
+routing-truth-k6.json

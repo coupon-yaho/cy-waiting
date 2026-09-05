@@ -89,6 +89,9 @@ jobs:
       - name: 쏠림 판정 자기검증
         run: test/load/skew-selftest.sh
 
+      - name: 라우팅 비교 판정 자기검증
+        run: test/load/routing-truth-selftest.sh
+
       # 수명이 대신 걷어 준 것과 놓는 자리가 도는 것을 안 가르면, 표를 놓는
       # 줄을 통째로 지운 구현도 초록이 뜬다.
       - name: 누수 판정 자기검증
@@ -98,6 +101,11 @@ jobs:
       # 무관하다. 닿았는지부터 보는 것이 이 판정의 절반이다.
       - name: 죽은 주소 판정 자기검증
         run: test/load/dead-addr-selftest.sh
+
+      # **이 프로브가 Phase 10 착수를 정하는 값을 만든다.** 시계가 틀리면 판정이
+      # 늘 "착수" 로 나오고, 그것이 계기 고장인지 진짜 부하인지 못 가른다.
+      - name: 레디스 프로브 자기검증
+        run: test/load/probe-selftest.sh
 
       # 리포트가 "4개 시나리오" 라고 적은 채 여덟 개를 돌고 있었다. 사본이
       # 생기면 갈라지고, 갈라진 쪽을 보는 사람은 안 돈 것을 돌았다고 읽는다.

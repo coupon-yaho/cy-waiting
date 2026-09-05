@@ -60,9 +60,28 @@ public final class RecoveryCriteria {
      *              배분이 안 돈 틱이라 역행이 아니다
      */
     public static Optional<String> rankRegressed(List<Long> ranks) {
+        // **빈 목록은 통과가 아니다.** 루프가 안 돌아 빈 값이 나가는데, 그것은
+        // "역행이 없었다" 가 아니라 "아무것도 안 넘겼다" 다.
+        //
+        // **한 개짜리는 막지 않는다.** 한 사람을 한 번만 본 것은 정상이다 —
+        // 그 사람에게 역행이 없었을 뿐이다. "두 번 이상 본 사람이 하나도 없다"
+        // 는 모으는 쪽(RankTracker)이 본다.
+        if (ranks == null || ranks.isEmpty()) {
+            return Optional.of("RC2 순번을 하나도 안 넘겼다 — 비교할 것이 없다");
+        }
+        // **원소 하나짜리도 본다.** 아래 루프는 i=1 부터라 목록에 하나뿐인 빈
+        // 자리를 못 본다 — 그 회차는 순번을 못 읽은 것인데 통과로 나간다.
+        if (ranks.get(0) == null) {
+            return Optional.of("RC2 순번이 빈 자리가 있다 — 1 번째");
+        }
         for (int i = 1; i < ranks.size(); i++) {
-            long before = ranks.get(i - 1);
-            long now = ranks.get(i);
+            Long beforeBoxed = ranks.get(i - 1);
+            Long nowBoxed = ranks.get(i);
+            if (beforeBoxed == null || nowBoxed == null) {
+                return Optional.of("RC2 순번이 빈 자리가 있다 — %d 번째".formatted(i));
+            }
+            long before = beforeBoxed;
+            long now = nowBoxed;
             if (now > before) {
                 return Optional.of(
                         "RC2 순번 역행 — %d 번째에 %d 에서 %d 로 밀렸다".formatted(i, before, now));
@@ -167,6 +186,17 @@ public final class RecoveryCriteria {
     // 자리와 무관하므로 위반이 아니다.
     public static Optional<String> seatLost(Map<String, Double> before,
             Map<String, Double> after) {
+        // **장애 전 자리를 하나도 못 모았으면 못 잰 것이다.** 비교 대상이 없으면
+        // 루프가 안 돌아 빈 값이 나가고, 줄에 아무도 없던 회차와 줄을 못 읽은
+        // 회차가 같은 값을 낸다.
+        if (before == null || before.isEmpty()) {
+            return Optional.of("RC5 장애 전 자리를 못 모았다 — 비교할 것이 없다");
+        }
+        // **회복 뒤를 못 읽은 것은 터질 일이 아니라 위반이다.** 여기서 터지면
+        // 시나리오가 판정 대신 예외로 끝나 무엇이 깨졌는지가 스택으로 덮인다.
+        if (after == null) {
+            return Optional.of("RC5 회복 뒤 자리를 못 모았다 — 비교할 것이 없다");
+        }
         for (Map.Entry<String, Double> was : before.entrySet()) {
             Double now = after.get(was.getKey());
             if (now == null) {

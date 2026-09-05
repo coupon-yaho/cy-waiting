@@ -4,6 +4,18 @@
 # **응답 지표로는 못 잰다.** 게이트웨이가 빨리 답해도 레디스가 한계에 닿아 있으면
 # 다음 단계에서 무너진다 — Phase 10 착수를 정하는 것은 그쪽 수치다.
 #
+# **명령 수로도 못 잰다.** `total_commands_processed` 는 Lua 안에서 부른 명령까지
+# 센다. `enqueue.lua` 는 스크립트 하나 안에서 아홉 번 치므로 등록 한 건이 명령
+# 아홉 개로 찍힌다(실측 9.4). 그 값을 단순 명령 기준 한계와 비교하면 분자와
+# 분모의 단위가 다르고, 스크립트를 고칠 때마다 부하가 안 변해도 값이 변한다 —
+# 실제로 그 비교로 "한계의 88%" 라는 판정이 한 번 나왔다. 같은 회차의 레디스
+# CPU 는 16% 였다 (AIJ-0235).
+#
+# 그래서 **CPU 사용률**을 잰다. 명령 수는 기록만 남긴다.
+#
+# 출력은 표본마다 한 줄, `<CPU 백분율×100> <창ms> <명령/초>` 세 칸이다.
+# 백분율에 100 을 곱해 두는 것은 셸이 소수를 못 다루기 때문이다.
+#
 # 사용: redis-probe.sh <출력파일> &   … 부하 … ; kill %1
 set -uo pipefail
 
@@ -47,7 +59,19 @@ esac
 # 돌았고 판정은 늘 "착수" 였다. `TIME` 은 초와 마이크로초를 준다.
 #
 # **표식을 앞에 단다.** 아래에서 이 루프를 컨테이너 안에서 찾아 내리는 데 쓴다.
-loop=": ${PROBE_MARK}; while :; do printf 'T%s\\n' \"\$(redis-cli TIME | tr '\\n' ':')\"; redis-cli INFO stats | grep total_commands_processed; sleep $interval; done"
+#
+# **CPU 는 컨테이너 안에서 정수로 바꾼다.** `used_cpu_user`·`used_cpu_sys` 가
+# 소수라 셸이 그대로는 못 더한다. awk 로 마이크로초 정수를 만들어 보낸다.
+# **주 스레드만 센다.** `used_cpu_user`/`used_cpu_sys` 는 프로세스 전체라
+# 배경 스레드(bio·io-threads) 몫이 얹힌다. 판정의 근거가 "명령 처리는 한
+# 스레드라 코어 하나가 곧 100%" 이므로, 그 명제가 참인 값은 `_main_thread` 다.
+#
+# **한 줄도 못 읽었으면 아무것도 안 낸다.** awk 의 `END` 는 입력이 비어도
+# 도므로 그냥 두면 `C0` 이 나가고, 읽는 쪽은 그것을 "CPU 0%" 로 적는다 —
+# 계기가 죽은 회차가 "여유 있다" 로 기록된다. 필드가 없는 레디스 버전에서도
+# 같은 길로 간다: 표본이 안 쌓이고 판정기가 "표본이 적다" 로 끊는다.
+cpu_cmd="redis-cli INFO cpu | awk -F: '/^used_cpu_(user|sys)_main_thread:/ {s+=\$2; n++} END {if (n > 0) printf \"C%d\\n\", s*1000000}'"
+loop=": ${PROBE_MARK}; while :; do printf 'T%s\\n' \"\$(redis-cli TIME | tr '\\n' ':')\"; $cpu_cmd; redis-cli INFO stats | grep total_commands_processed; sleep $interval; done"
 
 : > "$out"
 # **자식을 짚어서 내린다.** 파이프라인으로 두면 부르는 쪽이 이 스크립트만 죽이고
@@ -73,11 +97,16 @@ trap 'kill -- -"$producer" 2>/dev/null || kill "$producer" 2>/dev/null;
     EXIT INT TERM
 
 prev_cmds=""
+prev_cpu=""
 prev_ns=""
 now_ns=""
+now_cpu=""
 while IFS= read -r line; do
     case "$line" in
         total_commands_processed:*) cmds=${line#total_commands_processed:} ;;
+        C[0-9]*) now_cpu=${line#C}
+            now_cpu=${now_cpu%%[!0-9]*}
+            continue ;;
         T[0-9]*) stamp=${line#T}
             sec=${stamp%%:*}; rest=${stamp#*:}; usec=${rest%%:*}
             # **두 칸을 따로 본다.** 이어 붙여 보면 마이크로초 칸이 비어도
@@ -95,24 +124,29 @@ while IFS= read -r line; do
     # **시각 없이 온 카운터는 버린다.** 안 버리면 낡은 시각과 새 카운터가
     # 짝지어져 창이 두 배가 되고 값이 절반으로 나온다 — 부하 최고점에서 한쪽만
     # 실패하기 쉬우므로, 하필 피크가 가장 필요한 순간에 묽어진다.
-    if [ -z "$now_ns" ]; then
+    if [ -z "$now_ns" ] || [ -z "$now_cpu" ]; then
         continue
     fi
-    if [ -n "$prev_cmds" ]; then
+    if [ -n "$prev_cmds" ] && [ -n "$prev_cpu" ]; then
         # **실제로 흐른 시간으로 나눈다.** 주기를 가정하면 한 표본을 놓쳤을 때
         # 그 구간의 명령이 짧은 창에 실려 봉우리가 부풀어 보인다.
         elapsed_ns=$((now_ns - prev_ns))
         delta=$((cmds - prev_cmds))
+        cpu_delta=$((now_cpu - prev_cpu))
         # 레디스가 재시작하면 누적이 되돌아간다. 음수 차분은 안 적는다.
-        if [ "$elapsed_ns" -gt 0 ] && [ "$delta" -ge 0 ]; then
+        if [ "$elapsed_ns" -gt 0 ] && [ "$delta" -ge 0 ] && [ "$cpu_delta" -ge 0 ]; then
+            # CPU 백분율에 100 을 곱한 정수. 창이 나노초라 마이크로초를 맞춘다.
+            pct=$(( cpu_delta * 1000 * 100 * 100 / elapsed_ns ))
             # **창도 같이 적는다.** 비율만 적으면 계기가 고장 났을 때 그것이
             # 부하인지 창인지 산출물만 보고 못 가른다 — 원래 버그가 "창이 1ns"
             # 라는 1 차 증상이었는데, 비율만 보면 2 차 증상으로만 드러난다.
-            printf '%s %s\n' $(( delta * 1000000000 / elapsed_ns )) \
-                $(( elapsed_ns / 1000000 )) >> "$out"
+            printf '%s %s %s\n' "$pct" $(( elapsed_ns / 1000000 )) \
+                $(( delta * 1000000000 / elapsed_ns )) >> "$out"
         fi
     fi
     prev_cmds=$cmds
+    prev_cpu=$now_cpu
     prev_ns=$now_ns
     now_ns=""
+    now_cpu=""
 done < "$fifo"

@@ -29,10 +29,17 @@ esac
 command -v k6 >/dev/null || { echo "k6 가 없다"; exit 2; }
 
 echo "착수 판정 회차 · 쿠폰 ${COUPON}"
+# **이미지를 먼저 짓는다.** compose 는 JAR 이 바뀌어도 있는 이미지를 그대로 쓴다 —
+# 컨테이너만 지우면 낡은 바이너리를 재고 그 값이 계획서에 적힌다. 이 브랜치가
+# 되돌린 판정들이 전부 그 계열이다.
+jar=${WAITING_JAR:-build/libs/waiting.jar}
+if [ ! -f "$jar" ]; then
+    echo "실행 JAR 이 없다: $jar — ./gradlew build 를 먼저 돌린다"; exit 2
+fi
+$COMPOSE build gateway backend >/dev/null 2>&1 || { echo "이미지를 못 지었다"; exit 2; }
 # **게이트웨이도 새로 만든다.** 앞 회차가 깎아 둔 회복 램프를 그대로 들고
 # 있으면 크레딧이 1 에서 안 오르고, 예열이 3 분을 기다리다 죽는다. 예열
 # 컨테이너는 unhealthy 로 남으면 `--wait` 가 기다리지 않고 그대로 실패로 읽는다.
-#
 #
 # **겹침이 남긴 스텁은 그냥 둔다.** `--remove-orphans` 를 쓰면 컴포즈 프로젝트
 # 이름이 디렉터리 basename 이라 워크트리들이 같은 `load` 를 공유하는 탓에, 다른
@@ -41,6 +48,12 @@ echo "착수 판정 회차 · 쿠폰 ${COUPON}"
 $COMPOSE rm -sf gateway warmup >/dev/null 2>&1
 $COMPOSE up -d --wait --wait-timeout 240 || { echo "스택을 못 세웠다"; exit 2; }
 
+# **`routing-lib.sh` 의 `wait_for_idle_queue` 와 같은 절차다.** 그것을 안 부르는
+# 이유는 그 라이브러리가 라우팅 겹침(`compose.routing.yml`)과 스텁 셋의 여유
+# 값을 전제하는데, 이 회차는 CI 와 같은 모양이어야 해서 `compose.yml` 하나로만
+# 돌기 때문이다. **지우는 키 목록이 두 곳에 있다** — 넷째 키가 생기면 둘 다
+# 고쳐야 한다.
+#
 # **줄 키만 지우면 안 된다.** 입장 커서와 최대 순번이 남으면 리더가 줄을
 # 비었다고 안 보고 쿠폰을 QUEUEING 으로 되돌리며, 판정은 IDLE 이 아니면 무조건
 # 줄에 세운다(추월 금지) — 첫 요청부터 202 이거나 QUEUE_FULL 이다.
@@ -62,14 +75,22 @@ fi
 # 짜리 스파이크에서는 그 창이 회차 전체다 — 넉넉히 한 주기를 더 준다.
 sleep "${SNAPSHOT_SETTLE_SEC:-2}"
 
-# **앞 회차의 요약이 남으면 안 된다.** k6 가 요약을 못 남기고 죽으면 그것이
-# 이번 회차의 ops 표본과 짝지어져 판정을 낸다 — 앞 회차가 남긴 것 때문에
-# 판정이 갈렸다는 것이 바로 이 러너를 만든 이유다.
-rm -f "$OUT_SUMMARY"
+# **앞 회차의 산출물이 남으면 안 된다.** k6 가 요약을 못 남기고 죽거나 프로브가
+# 뜨기 전에 끝나면, 앞 회차의 것이 이번 회차 것과 짝지어져 판정을 낸다 — 앞
+# 회차가 남긴 것 때문에 판정이 갈렸다는 것이 바로 이 러너를 만든 이유다.
+rm -f "$OUT_SUMMARY" "$OUT_OPS"
 
 test/load/redis-probe.sh "$OUT_OPS" &
 probe=$!
 trap 'kill "$probe" 2>/dev/null' EXIT
+
+# **프로브가 떴는지 본다.** 주기 검증에 걸려 즉사하면 표본이 한 줄도 안 생기는데,
+# 그 사실이 회차가 끝난 뒤 "표본이 비었다" 로만 드러난다 — 12 초를 버린 뒤다.
+command sleep 1
+if ! kill -0 "$probe" 2>/dev/null; then
+    echo "::error title=착수 판정::프로브가 안 떴다 — 부하를 넣지 않는다"
+    exit 2
+fi
 
 rc=0
 k6 run --summary-export="$OUT_SUMMARY" test/load/open-spike.js || rc=$?

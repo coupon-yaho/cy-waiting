@@ -4,23 +4,29 @@
 # **계산으로 정하지 않는다.** 계획서의 계산은 어느 자리가 위험한지를 가리키는
 # 데까지만 쓰고, 착수는 실측이 정한다.
 #
-# 조건: 피크 ops 가 단일 노드 한계의 60% 를 넘으면 샤딩에 착수한다.
+# 조건: **레디스 CPU 사용률**의 봉우리가 60% 를 넘으면 샤딩에 착수한다.
+#
+# **명령 수로 판정하지 않는다.** `total_commands_processed` 는 Lua 안에서 부른
+# 명령까지 센다 — `enqueue.lua` 가 안에서 아홉 번 치므로 등록 한 건이 명령
+# 아홉으로 찍힌다(실측 9.4). 그 값을 단순 명령 기준 한계와 비교해 "한계의 88%,
+# 착수" 라는 판정이 한 번 나왔는데, 같은 회차의 CPU 는 16% 였다 (AIJ-0235).
+#
+# **CPU 에는 가정한 한계가 필요 없다.** 레디스의 명령 처리는 한 스레드라 코어
+# 하나가 곧 100% 다. 앞의 판정이 기대던 "단일 노드 한계 80,000" 은 근거가
+# 없었고, 이제 그 수가 없어도 판정이 선다.
+#
 # p99 는 **기록만 한다** — 절대 예산이 아직 없다 (D-L1).
 set -uo pipefail
 
-samples=${1:?ops 표본 파일}
+samples=${1:?표본 파일}
 # **요약도 필수다.** 없으면 줄에 선 건수를 못 읽어 "닿았는지" 검사가 통째로
 # 생략되고, 판정만 나온다 — 가드를 넣어 놓고 우회로를 열어 둔 셈이다.
 summary=${2:?k6 요약 파일}
 
-# 단일 노드 한계. **가정이다** — 계획서가 적은 80~120K 의 아래쪽을 쓴다.
-# 낮게 잡는 쪽이 안전하다: 실제 한계가 더 높으면 착수를 앞당길 뿐이고,
-# 높게 잡으면 이미 무너진 상태를 "여유 있다" 로 읽는다.
-limit=${REDIS_OPS_LIMIT:-80000}
 threshold_pct=${SHARD_THRESHOLD_PCT:-60}
 
 if [ ! -s "$samples" ]; then
-    echo "::error title=착수 판정::ops 표본이 비었다 — 프로브가 안 돌았다"
+    echo "::error title=착수 판정::표본이 비었다 — 프로브가 안 돌았다"
     exit 1
 fi
 if [ ! -s "$summary" ]; then
@@ -28,9 +34,19 @@ if [ ! -s "$summary" ]; then
     exit 1
 fi
 
-# 표본은 `<비율> <창ms>` 두 칸이다. 첫 칸만 본다 — 창은 아래 해상도 검사가 쓴다.
+# 표본은 `<CPU 백분율×100> <창ms> <명령/초>` 세 칸이다. 첫 칸이 판정에 쓰인다.
+# 둘째 칸은 계기가 고장 났을 때 사람이 부하인지 창인지 가르라고 프로브가 적는
+# 것이고, 셋째 칸은 기록이다 — 둘 다 판정에는 안 쓴다.
 peak=$(cut -d' ' -f1 "$samples" | sort -n | tail -1)
 count=$(grep -c '' "$samples")
+
+# **표본이 적으면 못 잰 것이다.** 한 개로도 판정이 나면, 프로브가 거의 안 돈
+# 회차가 그대로 착수를 낸다 — 고장 난 회차의 열 개도 그렇게 통과했다.
+min_samples=${MIN_SAMPLES:-20}
+if [ "$count" -lt "$min_samples" ]; then
+    echo "::error title=착수 판정::표본이 ${count} 개뿐이다 (최소 ${min_samples}) — 프로브를 먼저 본다"
+    exit 1
+fi
 
 # **한 줄만 깨져도 막는다.** `sort -n` 은 숫자가 아닌 줄을 0 으로 읽으므로,
 # 서른 줄 중 하나가 깨져도 봉우리만 보면 조용히 지나간다 — 그 회차는 프로브가
@@ -40,59 +56,56 @@ if cut -d' ' -f1 "$samples" | grep -qvE '^[0-9]+$'; then
     exit 1
 fi
 
-# **표본이 적으면 못 잰 것이다.** 한 개로도 판정이 나면, 프로브가 거의 안 돈
-# 회차가 그대로 착수를 낸다 — 고장 난 회차의 열 개도 그렇게 통과했다.
-min_samples=${MIN_SAMPLES:-20}
-if [ "$count" -lt "$min_samples" ]; then
-    echo "::error title=착수 판정::표본이 ${count} 개뿐이다 (최소 ${min_samples}) — 프로브를 먼저 본다"
-    exit 1
-fi
-if ! printf '%s' "$peak" | grep -qE '^[0-9]+$'; then
-    echo "::error title=착수 판정::피크가 숫자가 아니다: $peak"
-    exit 1
-fi
-
 # **계기가 고장 나면 늘 "착수" 가 나온다.** 실제로 프로브의 시계가 초를 나노초로
-# 읽어 값이 10 억 배로 부푼 채 판정이 그대로 통과했다 — 그 회차는 부하가 아니라
-# 계기를 잰 것이다. 한계의 열 배를 넘는 값은 단일 노드가 낼 수 있는 수가 아니다.
-if [ "$peak" -gt $(( limit * 10 )) ]; then
-    echo "::error title=착수 판정::피크 ${peak} 는 한계 ${limit} 의 열 배를 넘는다 — 계기를 먼저 본다"
+# 읽어 값이 10 억 배로 부푼 채 판정이 그대로 통과했다. 명령 처리는 한 스레드라
+# 배경 스레드를 얹어도 코어 몇 개를 넘지 못한다 — 열 배는 계기가 틀린 것이다.
+if [ "$peak" -gt 100000 ]; then
+    echo "::error title=착수 판정::봉우리 CPU 가 $((peak / 100))% 다 — 계기를 먼저 본다"
     exit 1
 fi
 
-# **판정은 정수 나눗셈으로 안 한다.** 60.00125% 가 60 으로 깎여 경계 바로
-# 위가 보류로 읽힌다. 보여 줄 값만 나누고, 비교는 곱으로 한다.
-pct=$((peak * 100 / limit))
 printf '  %-28s %s\n' "표본 수" "$count"
-printf '  %-28s %s\n' "피크 ops/s" "$peak"
-printf '  %-28s %s%%\n' "단일 노드 한계 대비" "$pct"
-printf '  %-28s %s\n' "가정한 한계 ops/s" "$limit"
+printf '  %-28s %s.%02d%%\n' "봉우리 CPU" "$((peak / 100))" "$((peak % 100))"
 
-# **p99 는 기록만 한다.** 계획서의 기준이 전부 "S=1 대비" 라는 상대값인데,
-# S=16 을 할지 정하는 자리에서 "S=1 대비" 는 순환이다 (D-L1).
+# 평균은 천장을 셈하는 데 쓴다. 봉우리는 창 하나짜리라 그 창의 등록률을 모른다.
+mean=$(cut -d' ' -f1 "$samples" | awk '{s+=$1} END {printf "%d", s/NR}')
+printf '  %-28s %s.%02d%%\n' "평균 CPU" "$((mean / 100))" "$((mean % 100))"
+
 # **없으면 없다고 적는다.** 다른 분위수로 대신 채우면 기록의 뜻이 바뀐다 —
 # 나중에 이 줄을 보고 p99 라고 믿는다. 요약의 두 모양을 다 본다.
 p99=$(jq -r '(.metrics.http_req_duration.values["p(99)"]
     // .metrics.http_req_duration["p(99)"]) // empty' "$summary" 2>/dev/null)
 printf '  %-28s %s\n' "응답 p99(ms) — 기록만" "${p99:-없음}"
 
-# **유입도 같이 남긴다 — 기록만.** 봉우리가 유입을 따라가는데 산출물에 유입이
-# 없으면, 회차마다 다른 값이 나왔을 때 부하가 달랐던 것인지 배선이 달랐던
-# 것인지 나중에 못 가른다. 실제로 88% · 88% · 32% 로 갈린 회차들이 유입
-# 1,656 · 1,089 · 857/s 였다. 문턱으로 걸지 않는다 — 한 러너가 낼 수 있는
-# 유입에 근거가 없어서, 걸면 그 순간 근거 없는 문턱이 판정을 정한다.
 rate=$(jq -r '(.metrics.http_reqs.values.rate
     // .metrics.http_reqs.rate) // empty' "$summary" 2>/dev/null)
 printf '  %-28s %s\n' "유입 req/s — 기록만" "${rate:-없음}"
 
+ops=$(cut -d' ' -f3 "$samples" | sort -n | tail -1)
+printf '  %-28s %s\n' "봉우리 명령/초 — 기록만" "${ops:-없음}"
+
 # **부하가 레디스에 안 닿았으면 잰 것이 없다.** 한산한 쿠폰은 통과 경로에서
 # 레디스를 안 친다(불변식 1). 게이트웨이가 앞에서 다 흘려보내면 등록 경로를
-# 한 번도 안 밟은 채 제어 평면 몫의 세 자릿수 ops 가 찍히고, 판정기는 그것을
-# "여유 있다" 로 읽는다 — 실제로 줄에 선 것이 0 인 회차가 보류를 냈다.
+# 한 번도 안 밟은 채 제어 평면 몫의 CPU 만 찍히고, 판정기는 그것을 "여유 있다"
+# 로 읽는다 — 실제로 줄에 선 것이 0 인 회차가 보류를 냈다.
 queued=$(jq -r '(.metrics.queued_responses.values.count
     // .metrics.queued_responses.count) // 0' "$summary" 2>/dev/null)
 case "$queued" in ''|*[!0-9]*) queued=0 ;; esac
 printf '  %-28s %s\n' "줄에 선 건수" "$queued"
+
+# **천장을 같이 낸다 — 기록만.** 등록률을 CPU 사용률로 나누면 코어 하나가
+# 낼 수 있는 등록률이 나온다. 판정에는 안 쓴다: 이 하네스가 만드는 부하가
+# 계획서의 오픈보다 훨씬 작아 외삽이고, 외삽으로 페이즈를 열지 않는다.
+# 다만 **샤딩보다 스크립트가 먼저인지**를 보는 것은 이 수다.
+enq=$(jq -r '(.metrics.queued_responses.values.rate
+    // .metrics.queued_responses.rate) // empty' "$summary" 2>/dev/null)
+if [ -n "$enq" ] && [ "$mean" -gt 0 ]; then
+    ceiling=$(awk -v e="$enq" -v m="$mean" 'BEGIN {printf "%d", e / (m / 10000)}')
+    printf '  %-28s %s\n' "등록/초 — 기록만" "$(awk -v e="$enq" 'BEGIN {printf "%d", e}')"
+    printf '  %-28s %s\n' "코어 하나 천장 — 기록만" "$ceiling"
+else
+    printf '  %-28s %s\n' "코어 하나 천장 — 기록만" "없음"
+fi
 
 min_queued=${MIN_QUEUED:-1000}
 if [ "$queued" -lt "$min_queued" ]; then
@@ -100,9 +113,11 @@ if [ "$queued" -lt "$min_queued" ]; then
     exit 1
 fi
 
-if [ $((peak * 100)) -gt $((limit * threshold_pct)) ]; then
-    echo "판정: 착수 — 피크가 한계의 ${threshold_pct}% 를 넘었다"
+# **판정은 정수 나눗셈으로 안 한다.** 봉우리가 백분율×100 이므로 문턱도 같은
+# 배율로 올려 비교한다.
+if [ "$peak" -gt $((threshold_pct * 100)) ]; then
+    echo "판정: 착수 — 봉우리 CPU 가 ${threshold_pct}% 를 넘었다"
     exit 0
 fi
-echo "판정: 보류 — 피크가 한계의 ${threshold_pct}% 안이다. 키 스킴은 그대로 둔다"
+echo "판정: 보류 — 봉우리 CPU 가 ${threshold_pct}% 안이다. 키 스킴은 그대로 둔다"
 exit 0

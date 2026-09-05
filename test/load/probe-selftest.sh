@@ -16,8 +16,14 @@ work=$(mktemp -d) || exit 1
 trap 'rm -rf "$work"' EXIT
 failed=0
 
-# 가짜 `redis-cli`. `TIME` 이면 정해진 시각을, `INFO` 면 정해진 카운터를 낸다.
-# 한 회차가 한 줄씩 소비한다.
+# 가짜 `redis-cli`. `TIME` 이면 정해진 시각을, `INFO cpu` 면 정해진 CPU 누적을,
+# `INFO stats` 면 정해진 카운터를 낸다. 한 회차가 한 줄씩 소비한다.
+#
+# **`INFO cpu` 는 소수 그대로 낸다.** 정수로 바꾸는 것은 프로브가 컨테이너
+# 안에서 awk 로 하는 일이라, 여기서 미리 바꾸면 그 자리가 안 검증된다.
+#
+# **프로세스 전체 필드도 같이 낸다 — 값을 다르게 둔다.** 프로브가 그쪽을 읽으면
+# 값이 어긋나 시험이 빨개진다. 안 그러면 필드를 되돌려도 초록이다.
 mkdir -p "$work/bin"
 cat > "$work/bin/redis-cli" <<'FAKE'
 #!/usr/bin/env bash
@@ -32,6 +38,14 @@ case "$*" in
             *) printf '%s\n' $line ;;
         esac
         ;;
+    *cpu*|*CPU*)
+        line=$(sed -n "$((n + 1))p" "$d/cpus")
+        case "$line" in
+            x) ;;
+            *) printf 'used_cpu_sys:99\nused_cpu_user:99\n' ;;&
+            *) printf 'used_cpu_sys_main_thread:0\nused_cpu_user_main_thread:%s\n' "$line" ;;
+        esac
+        ;;
     *INFO*|*info*)
         printf 'total_commands_processed:%s\n' "$(sed -n "$((n + 1))p" "$d/counts")"
         echo $(( n + 1 )) > "$d/turn"
@@ -44,6 +58,11 @@ chmod +x "$work/bin/redis-cli"
 run_probe() {
     printf '%s\n' "$1" > "$work/times"
     printf '%s\n' "$2" > "$work/counts"
+    # CPU 누적. 안 주면 0 초로 둔다 — 그 사례들이 보는 것은 명령 칸이다.
+    printf '%s\n' "${3:-0
+0
+0
+0}" > "$work/cpus"
     echo 0 > "$work/turn"
     : > "$work/out"
     # **걷는 자리도 가짜로 둔다.** 안 두면 종료 트랩이 기본값을 실제로 실행해
@@ -53,9 +72,10 @@ run_probe() {
         PROBE_STOP="true" timeout 10 test/load/redis-probe.sh "$work/out" >/dev/null 2>&1
 }
 
+# 출력은 `<CPU×100> <창ms> <명령/초>` 세 칸이다. 기본으로 명령 칸을 본다.
 expect() {
-    local name=$1 want=$2
-    got=$(cut -d' ' -f1 "$work/out" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
+    local name=$1 want=$2 col=${3:-3}
+    got=$(cut -d' ' -f"$col" "$work/out" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
     if [ "$got" = "$want" ]; then
         echo "  ✓ $name"
     else
@@ -132,6 +152,53 @@ else
     echo "  ✗ 창을 밀리초로 같이 적는다 — 나온 값 '$window' (기대 '250')"
     failed=1
 fi
+
+# **CPU 칸이 판정을 낸다.** 여기가 조용히 0 이면 게이트는 늘 "보류" 다 —
+# 샤딩이 필요한 상황에서도 안 열린다.
+#
+# 0.2 초 창에서 CPU 가 0.1 초 늘면 50% 다. 백분율에 100 을 곱해 적으므로 5000.
+run_probe '1788587000 0
+1788587000 200000' '0
+0' '0
+0.1'
+expect "CPU 사용률을 백분율×100 으로 적는다" "5000" 1
+
+# 두 배 걸리면 두 배다. 한 사례만 두면 어떤 상수로 나눠도 시험이 초록이다.
+run_probe '1788587000 0
+1788587000 200000' '0
+0' '0
+0.05'
+expect "절반이면 절반으로 적는다" "2500" 1
+
+# **소수 자리를 안 버린다.** 컨테이너 안의 awk 가 마이크로초 정수로 바꾸는데,
+# 그 자리를 잘라 쓰면 유휴 구간이 통째로 0% 로 찍힌다 — 그러면 평균이 낮아져
+# 천장이 부풀고, 샤딩이 필요 없다는 결론으로 기운다.
+run_probe '1788587000 0
+1788587000 200000' '0
+0' '0
+0.0037'
+expect "소수 자리를 버리지 않는다" "185" 1
+
+# **CPU 가 되돌아가면 안 적는다.** 레디스가 재시작하면 누적이 0 으로 간다.
+run_probe '1788587000 0
+1788587000 200000
+1788587000 400000' '0
+0
+0' '0
+0.1
+0.05'
+expect "CPU 가 되돌아가면 안 적는다" "5000" 1
+
+# **CPU 줄이 안 오면 그 표본을 버린다.** 안 버리면 낡은 누적과 새 시각이
+# 짝지어져 사용률이 실제보다 낮게 나온다 — 조용히 "보류" 쪽으로 기운다.
+run_probe '1788587000 0
+1788587000 200000
+1788587000 400000' '0
+0
+0' '0
+x
+0.2'
+expect "CPU 가 빠진 표본은 안 적는다" "5000" 1
 
 # **컨테이너 안의 루프까지 걷는지 본다.** `kill` 은 도커 클라이언트만 죽이고
 # 안쪽 프로세스는 남는다 — 남은 루프는 계속 레디스를 쳐서 다음 회차의 누적

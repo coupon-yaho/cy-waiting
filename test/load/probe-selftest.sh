@@ -126,7 +126,50 @@ window=$(cut -d' ' -f2 "$work/out" 2>/dev/null | tr -d '\n')
 if [ "$window" = "250" ]; then
     echo "  ✓ 창을 밀리초로 같이 적는다"
 else
-    echo "  ✗ 창을 밀리초로 같이 적는다 — 나온 값 '$창' (기대 '250')"
+    echo "  ✗ 창을 밀리초로 같이 적는다 — 나온 값 '$window' (기대 '250')"
+    failed=1
+fi
+
+# **컨테이너 안의 루프까지 걷는지 본다.** `kill` 은 도커 클라이언트만 죽이고
+# 안쪽 프로세스는 남는다 — 남은 루프는 계속 레디스를 쳐서 다음 회차의 누적
+# 명령 수에 제 몫을 얹는다. 실제로 여덟 개가 살아 있었다.
+printf '1788587000 0\n1788587000 250000\n' > "$work/times"
+printf '0\n25\n' > "$work/counts"
+echo 0 > "$work/turn"
+: > "$work/out"
+cat > "$work/bin/reap" <<'REAP'
+#!/usr/bin/env bash
+printf '%s
+' "$*" >> "$REAP_LOG"
+REAP
+chmod +x "$work/bin/reap"
+: > "$work/reaped"
+PATH="$work/bin:$PATH" PROBE_CMD="bash -c" PROBE_INTERVAL_SEC=0.01 \
+    REAP_LOG="$work/reaped" PROBE_STOP="reap" \
+    timeout 10 test/load/redis-probe.sh "$work/out" >/dev/null 2>&1
+
+if grep -q 'redis-probe-loop' "$work/reaped" 2>/dev/null; then
+    echo "  ✓ 끝날 때 안쪽 루프를 걷는다"
+else
+    echo "  ✗ 끝날 때 안쪽 루프를 걷는다 — 부른 기록이 없다"
+    failed=1
+fi
+
+# 걷을 때 쓰는 표식이 실제로 루프 문자열에 붙어 있어야 한다. 안 붙어 있으면
+# 위 사례는 초록인데 컨테이너 안에서는 아무것도 안 걷힌다.
+cat > "$work/bin/record" <<'REC'
+#!/usr/bin/env bash
+printf '%s
+' "$*" > "$REC_LOG"
+REC
+chmod +x "$work/bin/record"
+: > "$work/loopcmd"
+PATH="$work/bin:$PATH" PROBE_CMD="record" REC_LOG="$work/loopcmd" \
+    PROBE_STOP="true" timeout 10 test/load/redis-probe.sh "$work/out" >/dev/null 2>&1
+if grep -q 'redis-probe-loop' "$work/loopcmd" 2>/dev/null; then
+    echo "  ✓ 표식이 루프 문자열에 붙는다"
+else
+    echo "  ✗ 표식이 루프 문자열에 붙는다 — 루프에 표식이 없다"
     failed=1
 fi
 

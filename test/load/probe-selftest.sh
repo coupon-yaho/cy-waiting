@@ -208,9 +208,12 @@ expect "CPU 가 빠진 표본은 안 적는다" "5000" 1
 # 코드는 똑같이 0 이 아니다 — 그 사례는 가드가 없어도 초록이다. 거절 메시지를
 # 직접 문다. 빈 값은 기본값 0.2 로 떨어지므로 잘못된 값이 아니다.
 for bad in '1..2' '.' '0' '-1' 'abc' '1 2'; do
+    : > "$work/out"
     err=$(PATH="$work/bin:$PATH" PROBE_CMD="bash -c" PROBE_STOP="true" \
         PROBE_INTERVAL_SEC="$bad" timeout 5 test/load/redis-probe.sh "$work/out" 2>&1 >/dev/null)
-    if printf '%s' "$err" | grep -q '0 보다 큰 수여야 한다'; then
+    # **표본이 하나도 안 생겼는지도 본다.** 메시지만 보면 거절해 놓고 루프가
+    # 도는 구현도 초록이다 — 막으려던 것이 정확히 그 상태다.
+    if printf '%s' "$err" | grep -q '0 보다 큰 수여야 한다' && [ ! -s "$work/out" ]; then
         echo "  ✓ 주기 '$bad' 를 막는다"
     else
         echo "  ✗ 주기 '$bad' 를 안 막는다 — 나온 것 '$err'"

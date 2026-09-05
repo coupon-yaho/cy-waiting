@@ -36,6 +36,15 @@ WARMUP_SEC="${WARMUP_SEC:-10}"
 
 require_positive_int RATE DURATION_SEC STUB_LATENCY_MS BIG_LATENCY_MS || exit 2
 
+# **느린 배수가 정수여야 한다.** 판정기에 넘길 때 정수 나눗셈으로 자르는데,
+# 900/500 은 1.8 인데 1 로 잘려 판정 기준이 통째로 달라진다. 나누어떨어지지
+# 않으면 회차를 시작하지 않는다 — 잘린 배수로 낸 판정은 아무 뜻이 없다.
+if [ $((BIG_LATENCY_MS % STUB_LATENCY_MS)) -ne 0 ] \
+        || [ "$BIG_LATENCY_MS" -le "$STUB_LATENCY_MS" ]; then
+    echo "느린 대 지연 ${BIG_LATENCY_MS}ms 는 정상 ${STUB_LATENCY_MS}ms 의 2 배 이상 정수배여야 한다"
+    exit 2
+fi
+
 # **유입이 보고 여유 합을 넘으면 이 회차는 성립하지 않는다.** 넘는 순간 대기열이
 # 켜져 요청이 뒷단까지 안 가고, 그러면 뒷단 계수로는 아무것도 못 읽는다 —
 # 실제로 그 상태에서 처리 합이 289 건까지 떨어졌다. 여기서 재는 것은 통과

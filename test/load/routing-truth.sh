@@ -137,8 +137,11 @@ printf '  %-8s %10s\n' "제안 합" "$((total + dropped))"
 grep -E 'http_reqs\.\.|http_req_failed|http_req_duration\.\.|checks_succ' "$work/k6.log" \
     | sed 's/^/  /'
 
-cp "$work/result.txt" "${OUT_RESULT:-routing-truth.txt}"
+# **산출물 복사가 실패하면 판정하지 않는다.** 실패를 넘기면 앞 회차 파일이
+# 남아 있을 때 그것으로 판정이 난다.
+cp "$work/result.txt" "${OUT_RESULT:-routing-truth.txt}" || exit 2
 cp "$work/k6.json" "${OUT_SUMMARY:-routing-truth-k6.json}" || exit 2
+# 로그는 기록용이라 없어도 판정은 선다.
 cp "$work/k6.log" "${OUT_LOG:-routing-truth-k6.log}" 2>/dev/null
 
 # **판정기를 여기서 부른다.** 표만 내고 끝내면 사람이 눈으로 읽어 결론을 내는데,

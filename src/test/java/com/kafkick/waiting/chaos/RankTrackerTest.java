@@ -111,16 +111,16 @@ class RankTrackerTest {
         assertThat(tracker.seatChanges()).isEmpty();
     }
 
-    /** 줄을 떠난 사람은 끝까지 따라간 것이다. 한 번만 봤어도 판정이 선다. */
+    /** 줄을 떠난 것은 면제가 아니다. 한 번만 봤으면 비교한 짝이 없다. */
     @Test
-    @DisplayName("떠난_사람이_있으면_판정한다")
-    void 떠난_사람이_있으면_판정한다() {
+    @DisplayName("한_번_보고_떠났으면_판정_불가다")
+    void 한_번_보고_떠났으면_판정_불가다() {
         RankTracker tracker = new RankTracker();
         tracker.waiting("a", 100, 10L);
         tracker.admitted("a");
 
-        assertThat(tracker.regressions()).isEmpty();
-        assertThat(tracker.seatChanges()).isEmpty();
+        assertThat(tracker.regressions())
+                .anySatisfy(why -> assertThat(why).contains("RC2").contains("볼 수 없었다"));
     }
 
     /** 아무도 안 봤으면 통과가 아니라 못 잰 것이다. 통과로 넘기면 게이트가 사라진다. */
@@ -160,7 +160,9 @@ class RankTrackerTest {
     @DisplayName("입장은_자리_상실이_아니다")
     void 입장은_자리_상실이_아니다() {
         RankTracker tracker = new RankTracker();
+        // 두 번 봐야 자리 비교가 성립한다. 그 위에서 입장이 상실로 안 읽히는지 본다.
         tracker.waiting("a", 100, 10L);
+        tracker.waiting("a", 90, 10L);
         tracker.admitted("a");
 
         assertThat(tracker.seatChanges()).isEmpty();

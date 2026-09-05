@@ -66,12 +66,14 @@ public final class RankTracker {
     /**
      * 비교할 짝이 하나도 없는가.
      *
-     * <p>사람마다 관측이 하나뿐이고 아무도 줄을 안 떠났으면, 안쪽 루프가
-     * 아무에게도 안 돌아 빈 목록이 나간다. 그것은 "변화가 없었다" 가 아니라
-     * "볼 수 없었다" 다. 떠난 사람은 끝까지 따라간 것이라 여기 안 든다.
+     * <p>사람마다 관측이 하나뿐이면 안쪽 루프가 아무에게도 안 돌아 빈 목록이
+     * 나간다. 그것은 "변화가 없었다" 가 아니라 "볼 수 없었다" 다.
+     *
+     * <p>줄을 떠난 것은 면제가 아니다 — 한 번 보고 입장한 사람도 비교한 짝이
+     * 없기는 마찬가지다.
      */
     private boolean nothingToCompare() {
-        return done.isEmpty() && byMember.values().stream().noneMatch(seen -> seen.size() >= 2);
+        return byMember.values().stream().noneMatch(seen -> seen.size() >= 2);
     }
 
     public Set<String> members() {

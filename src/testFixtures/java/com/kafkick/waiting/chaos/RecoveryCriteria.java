@@ -69,6 +69,11 @@ public final class RecoveryCriteria {
         if (ranks == null || ranks.isEmpty()) {
             return Optional.of("RC2 순번을 하나도 안 넘겼다 — 비교할 것이 없다");
         }
+        // **원소 하나짜리도 본다.** 아래 루프는 i=1 부터라 목록에 하나뿐인 빈
+        // 자리를 못 본다 — 그 회차는 순번을 못 읽은 것인데 통과로 나간다.
+        if (ranks.get(0) == null) {
+            return Optional.of("RC2 순번이 빈 자리가 있다 — 1 번째");
+        }
         for (int i = 1; i < ranks.size(); i++) {
             Long beforeBoxed = ranks.get(i - 1);
             Long nowBoxed = ranks.get(i);
@@ -186,6 +191,11 @@ public final class RecoveryCriteria {
         // 회차가 같은 값을 낸다.
         if (before == null || before.isEmpty()) {
             return Optional.of("RC5 장애 전 자리를 못 모았다 — 비교할 것이 없다");
+        }
+        // **회복 뒤를 못 읽은 것은 터질 일이 아니라 위반이다.** 여기서 터지면
+        // 시나리오가 판정 대신 예외로 끝나 무엇이 깨졌는지가 스택으로 덮인다.
+        if (after == null) {
+            return Optional.of("RC5 회복 뒤 자리를 못 모았다 — 비교할 것이 없다");
         }
         for (Map.Entry<String, Double> was : before.entrySet()) {
             Double now = after.get(was.getKey());

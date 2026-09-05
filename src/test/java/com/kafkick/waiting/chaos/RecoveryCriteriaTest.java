@@ -107,6 +107,16 @@ class RecoveryCriteriaTest {
                 .hasValueSatisfying(v -> assertThat(v).contains("RC2"));
     }
 
+    /** 원소가 하나뿐이면 비교 루프가 안 도니 그 하나도 따로 봐야 한다. */
+    @Test
+    @DisplayName("하나뿐인_빈_순번도_잡는다")
+    void 하나뿐인_빈_순번도_잡는다() {
+        List<Long> 하나 = new ArrayList<>();
+        하나.add(null);
+        assertThat(RecoveryCriteria.rankRegressed(하나))
+                .hasValueSatisfying(v -> assertThat(v).contains("RC2"));
+    }
+
     /** RC3 — 회복 뒤 30초 안에 판정이 정상으로 돌아와야 한다. */
     @Test
     @DisplayName("느린_판정_복귀를_잡는다")
@@ -264,6 +274,14 @@ class RecoveryCriteriaTest {
     @DisplayName("장애_전_자리를_못_모았으면_잡는다")
     void 장애_전_자리를_못_모았으면_잡는다() {
         assertThat(RecoveryCriteria.seatLost(Map.of(), Map.of("a", 10.0)))
+                .hasValueSatisfying(v -> assertThat(v).contains("RC5"));
+    }
+
+    /** 회복 뒤를 못 읽은 것은 터질 일이 아니라 위반이다. 터지면 판정이 스택에 덮인다. */
+    @Test
+    @DisplayName("회복_뒤_자리를_못_모았으면_잡는다")
+    void 회복_뒤_자리를_못_모았으면_잡는다() {
+        assertThat(RecoveryCriteria.seatLost(Map.of("a", 10.0), null))
                 .hasValueSatisfying(v -> assertThat(v).contains("RC5"));
     }
 

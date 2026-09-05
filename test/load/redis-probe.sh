@@ -128,6 +128,10 @@ while IFS= read -r line; do
     # 짝지어져 창이 두 배가 되고 값이 절반으로 나온다 — 부하 최고점에서 한쪽만
     # 실패하기 쉬우므로, 하필 피크가 가장 필요한 순간에 묽어진다.
     if [ -z "$now_ns" ] || [ -z "$now_cpu" ]; then
+        # **버릴 때 둘 다 비운다.** 한쪽만 남기면 다음 표본의 새 값과 짝지어져
+        # 창이나 CPU 차분이 두 틱어치가 된다 — 값이 조용히 절반이나 두 배가 된다.
+        now_ns=""
+        now_cpu=""
         continue
     fi
     if [ -n "$prev_cmds" ] && [ -n "$prev_cpu" ]; then

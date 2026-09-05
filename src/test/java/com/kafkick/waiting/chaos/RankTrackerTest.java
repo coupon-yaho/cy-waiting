@@ -84,13 +84,29 @@ class RankTrackerTest {
 
     /** 한 번만 본 사람은 비교할 것이 없다. 없는 위반을 만들면 안 된다. */
     @Test
-    @DisplayName("한_번만_본_사람은_판정하지_않는다")
-    void 한_번만_본_사람은_판정하지_않는다() {
+    @DisplayName("한_번씩만_봤으면_판정_불가다")
+    void 한_번씩만_봤으면_판정_불가다() {
         RankTracker tracker = new RankTracker();
         tracker.waiting("a", 100, 10L);
 
-        assertThat(tracker.regressions()).isEmpty();
+        // **빈 목록은 "역행이 없었다" 로 읽힌다.** 관측이 사람마다 하나뿐이면
+        // 비교할 짝이 없어 볼 수가 없었던 것인데, 그것을 통과로 넘기면 폴링을
+        // 한 바퀴만 돌고 끝난 시나리오가 RC2 를 통과한 것으로 적힌다.
+        assertThat(tracker.regressions())
+                .anySatisfy(why -> assertThat(why).contains("RC2").contains("볼 수 없었다"));
         assertThat(tracker.seatChanges()).isEmpty();
+    }
+
+    /** 한 사람이라도 두 번 봤으면 판정이 선다. 한 번만 본 사람은 그대로 둔다. */
+    @Test
+    @DisplayName("한_사람이라도_두_번_봤으면_판정한다")
+    void 한_사람이라도_두_번_봤으면_판정한다() {
+        RankTracker tracker = new RankTracker();
+        tracker.waiting("a", 100, 10L);
+        tracker.waiting("a", 90, 10L);
+        tracker.waiting("b", 50, 20L);
+
+        assertThat(tracker.regressions()).isEmpty();
     }
 
     /** 아무도 안 봤으면 통과가 아니라 못 잰 것이다. 통과로 넘기면 게이트가 사라진다. */

@@ -81,6 +81,13 @@ public final class RankTracker {
         if (byMember.isEmpty()) {
             return List.of("RC2 관측이 없다 — 순번을 한 번도 안 봤다");
         }
+        // **한 번씩만 봤으면 역행을 볼 수 없다.** 사람마다 관측이 하나뿐이면
+        // 비교할 짝이 없어 판정기가 전원 통과를 낸다 — 그것은 "역행이 없었다"
+        // 가 아니라 "볼 수 없었다" 다. 시나리오가 폴링을 한 바퀴만 돌고 끝나면
+        // 이 상태가 되고, 그때 판정을 무력화해도 초록이다.
+        if (byMember.values().stream().noneMatch(seen -> seen.size() >= 2)) {
+            return List.of("RC2 두 번 이상 본 사람이 없다 — 역행을 볼 수 없었다");
+        }
         List<String> found = new ArrayList<>();
         byMember.forEach((id, seen) -> RecoveryCriteria
                 .rankRegressed(seen.stream().map(Seen::rank).toList())

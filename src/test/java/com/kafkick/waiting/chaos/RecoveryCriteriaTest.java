@@ -77,18 +77,22 @@ class RecoveryCriteriaTest {
     /**
      * <b>못 잰 것을 통과로 넘기지 않는다.</b>
      *
-     * <p>순번을 하나도 못 모았거나 하나만 모았으면 비교할 것이 없다. 루프가 안
-     * 돌아 빈 값이 나가는데, 그것은 "역행이 없었다" 가 아니라 "안 봤다" 다.
-     * 시험 수명 안에 앞줄 제거가 한 번도 안 돌아 판정을 무력화해도 초록이던
-     * 사고가 이미 한 번 났다.
+     * <p>목록이 비면 비교할 것이 없다. 루프가 안 돌아 빈 값이 나가는데, 그것은
+     * "역행이 없었다" 가 아니라 "아무것도 안 넘겼다" 다. 시험 수명 안에 앞줄
+     * 제거가 한 번도 안 돌아 판정을 무력화해도 초록이던 사고가 이미 한 번 났다.
      */
     @Test
-    @DisplayName("순번을_못_모았으면_잡는다")
-    void 순번을_못_모았으면_잡는다() {
+    @DisplayName("순번을_하나도_안_넘기면_잡는다")
+    void 순번을_하나도_안_넘기면_잡는다() {
         assertThat(RecoveryCriteria.rankRegressed(List.of()))
                 .hasValueSatisfying(v -> assertThat(v).contains("RC2"));
-        assertThat(RecoveryCriteria.rankRegressed(List.of(50L)))
-                .hasValueSatisfying(v -> assertThat(v).contains("RC2"));
+    }
+
+    /** 한 사람을 한 번만 본 것은 정상이다. 그 사람에게 역행이 없었을 뿐이다. */
+    @Test
+    @DisplayName("한_번만_본_순번은_위반이_아니다")
+    void 한_번만_본_순번은_위반이_아니다() {
+        assertThat(RecoveryCriteria.rankRegressed(List.of(50L))).isEmpty();
     }
 
     /** 순번이 없는 자리도 못 잰 것이다. 목록에 빈 자리가 있으면 비교가 성립 안 한다. */

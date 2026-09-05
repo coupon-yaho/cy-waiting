@@ -6,6 +6,7 @@ import com.kafkick.waiting.domain.allocation.CouponDemand;
 import com.kafkick.waiting.domain.allocation.CreditSmoother;
 import com.kafkick.waiting.domain.allocation.FairShareAllocator;
 import com.kafkick.waiting.domain.allocation.Grant;
+import com.kafkick.waiting.domain.allocation.ReleaseRamp;
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.routing.InstanceRouting;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
@@ -134,6 +135,15 @@ public final class AllocationRound {
 
     /** 서킷 때문에 배분을 조인 구간. <b>진입과 해제를 쌍으로 남긴다</b> (LG-2). */
     private final FailureWindow paused = FailureWindow.create();
+
+    /**
+     * 조임을 푸는 속도. <b>평활이 조여진 값을 못 보므로</b> 서킷이 닫히는 한
+     * 틱에 배분이 원래 몫으로 그대로 돌아간다. 그 계단을 회차당 배수로 나눈다.
+     */
+    private final ReleaseRamp releaseRamp = ReleaseRamp.of(ReleaseRamp.DEFAULT_STEP);
+
+    /** 램프가 걸린 구간. <b>진입과 해제를 쌍으로 남긴다</b> (LG-2). */
+    private final FailureWindow ramping = FailureWindow.create();
 
     /** 예산보다 더 들여보낸 누적 인원. */
     private final AtomicLong enteredOvershoot = new AtomicLong();
@@ -317,6 +327,20 @@ public final class AllocationRound {
     public void leadershipAcquired() {
         smoother.set(null);
         carryoverMisses.set(0);
+        // **조임 창도 닫는다.** 안 닫으면 이 노드가 조임에 진입한 뒤 리더십을
+        // 잃었다 되찾았을 때, 회복 로그가 비리더 구간까지 포함한 지속 시간을
+        // 찍는다. 그동안 남이 조였는지 풀었는지는 이 노드가 모른다.
+        //
+        // **버렸다는 것을 남긴다.** 조용히 버리면 찍힌 진입 경고 하나에 해제가
+        // 영영 안 생긴다. 여유 갱신 쪽이 같은 자리에서 같은 줄을 남긴다.
+        paused.exited().ifPresent(r -> log.info(
+                "리더십이 갈렸다 — 조임 창을 닫는다. 그동안 {}틱 조였다", r.swallowed()));
+        ramping.exited().ifPresent(r -> log.info(
+                "리더십이 갈렸다 — 램프 창을 닫는다. 그동안 {}틱 올렸다", r.swallowed()));
+        // **램프 기준은 안 버린다.** 브레이크라서 그렇다 — 모른다는 것이 놓을
+        // 이유가 되면, 회복 도중에 승계가 끼는 순간 계단이 그대로 복원된다.
+        // 그 순간은 드물지 않다: 회차 타임아웃과 레디스 압박이 겹치는 구간이
+        // 곧 리더가 바뀌기 가장 쉬운 구간이다.
     }
 
     /**
@@ -340,6 +364,42 @@ public final class AllocationRound {
      * 자리는 이미 없다. 반쯤 열렸을 때 <b>0 으로 막지는 않는다</b>: 뒷단에 닿는
      * 호출이 없으면 서킷이 표본을 못 채워 영영 안 닫힌다.
      */
+    /**
+     * 회차가 접혔다. <b>램프 기준을 되돌린다</b> — 발행 안 된 회차가 기준을
+     * 전진시키면 다음 발행이 실제로 나간 값의 배수에서 시작한다.
+     */
+    private Mono<Void> fold(ReleaseRamp.State before) {
+        releaseRamp.restore(before);
+        return Mono.empty();
+    }
+
+    /**
+     * 램프의 진입과 해제를 쌍으로 남긴다 (LG-2).
+     *
+     * <p><b>발행하는 회차에서만 부른다.</b> 앞에 두면 접힌 회차가 틱을 세고
+     * 진입 자리를 먹어, 다음 회복에 진입 로그가 아예 안 나온다.
+     */
+    private void watchRamp(boolean gatedNow, long credit, long target) {
+        // **창은 실제로 푸는 회차에 연다.** 램프는 조인 회차에 이미 걸리므로,
+        // 걸렸다는 것만 보고 열면 진입이 조임 시작에 찍히고 해제의 지속 시간에
+        // 장애 구간이 통째로 섞인다 — 정작 재려던 회복 틱 수가 그 수에 안 남는다.
+        //
+        // **회복 도중에 다시 조이면 거기서 끊는다.** 안 끊으면 두 번째 회복의
+        // 진입이 안 나오고, 마지막 해제가 센 틱에 중간 장애가 통째로 섞인다.
+        if (gatedNow) {
+            ramping.exited().ifPresent(r -> log.info(
+                    "서킷 해제 램프 중단 — {}틱 올리다 다시 조인다", r.swallowed()));
+        } else if (releaseRamp.ramping()) {
+            if (ramping.entered()) {
+                log.info("서킷 해제 램프 진입 — 몫을 {} 부터 회차당 {}배로 올린다, 목표 {}",
+                        credit, String.format("%.1f", ReleaseRamp.DEFAULT_STEP), target);
+            }
+        } else {
+            ramping.exited().ifPresent(r -> log.info(
+                    "서킷 해제 램프 종료 — {}틱 걸려 {} 로 돌아왔다", r.swallowed(), credit));
+        }
+    }
+
     private long gated(long credit, CircuitState now) {
         if (now == CircuitState.CLOSED) {
             paused.exited().ifPresent(r -> log.info(
@@ -381,11 +441,36 @@ public final class AllocationRound {
         // **회차마다 한 번 읽는다.** 두 번 읽으면 그 사이에 상태가 뒤집혀 같은
         // 회차가 자기모순인 값 둘로 판단한다 — 5초 창에 1초 틱이면 실제로 걸린다.
         CircuitState circuitNow = circuit.get();
-        long credit = gated(Math.max(smoothed, Math.max(0, creditFloor.getAsLong())), circuitNow);
+        long floorNow = Math.max(0, creditFloor.getAsLong());
+        long target = Math.max(smoothed, floorNow);
+        long allowed = gated(target, circuitNow);
+        // **푸는 쪽에도 제약이 있어야 한다.** 조이는 동안 평활에 들어가는 값은
+        // 계속 원래 몫이라, 평활값은 조여진 값을 한 번도 안 본다. 그래서 서킷이
+        // 닫히는 그 한 틱에 배분이 1 에서 원래 몫으로 그대로 돌아간다 — 방금
+        // 실패를 끝낸 뒷단을 향한 계단이다.
+        //
+        // **조였는지는 서킷에게 묻는다.** 값을 견줘 유추하면 조임과 목표가 같은
+        // 조합을 놓친다 — 뒷단이 전면 정지해 보고가 0 이고 서킷도 열린 회차가
+        // 정확히 그것이고, 하필 그 회차가 가장 큰 계단을 만든다.
+        // **램프에 정책 하한을 같이 넘긴다.** 하한 아래로 눌린 회차에는 노드당
+        // 몫이 유휴 비율 아래라 한산 통과 상한이 0 이고, 줄 설 이유가 없는
+        // 쿠폰이 전 노드에서 줄을 선다 (R1). 여유 갱신 쪽이 자기 램프에 대해
+        // 이미 되돌리는 자리를 여기서 다시 만들면 안 된다.
+        //
+        // **여기서 쓰는 하한은 R1 이 요구하는 최소다.** `creditFloor` 는 하한이
+        // 답이 된 회차에만 값이 있어 회복 구간에는 0 이다. 여유 갱신 쪽이 하한을
+        // 이 값과의 max 로 잡으므로, 이것은 유효 하한 이하인 안전한 어림이다.
+        long r1Minimum = CapacityCollector.idleMinimum(gatewayCount.getAsInt());
+        boolean gatedNow = circuitNow != CircuitState.CLOSED;
+        // **접힌 회차가 기준을 올리면 안 된다.** 발행이 안 된 회차가 기준을
+        // 전진시키면 다음 발행이 실제로 나간 값의 배수에서 시작한다.
+        ReleaseRamp.State before = releaseRamp.snapshot();
+        long credit = releaseRamp.next(allowed, Math.max(floorNow, r1Minimum), gatedNow);
         Map<String, Long> granted = new LinkedHashMap<>();
         allocator.allocate(credit, collected).forEach(g -> granted.put(g.couponId(), g.credit()));
 
         if (lostLeadership()) {
+            releaseRamp.restore(before);
             return Mono.empty();
         }
         watchBudget(credit, observed);
@@ -418,12 +503,13 @@ public final class AllocationRound {
                             credit, admitted, collected.size());
                 })
                 .then(Mono.defer(() -> lostLeadership()
-                        ? Mono.<Void>empty()
+                        ? fold(before)
                         // **히스테리시스는 아직 빈 값을 싣는다.** 제품이 아직
                         // 히스테리시스를 안 돌려서 실을 상태가 없다 (CY-324).
                         // 돌리기 시작하면 여기가 매 틱 이월을 지우는 자리가
                         // 되므로, 기본값에 숨기지 않고 눈에 보이게 둔다.
-                        : publishRound(collected, granted, credit, readAt, current)
+                        : Mono.<Void>fromRunnable(() -> watchRamp(gatedNow, credit, target))
+                        .then(publishRound(collected, granted, credit, readAt, current))
                         // **발행 뒤에 지운다** (7.3). 앞에 두면 방금 지운 큐가
                         // 이번 재료에는 아직 대기자로 실려, 그 회차의 크레딧이
                         // 없는 줄에 나간다.

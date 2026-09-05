@@ -80,6 +80,67 @@ class CapacityCollectorTest {
     }
 
     @Test
+    @DisplayName("빈_회차는_첫_회차_표시를_안_태운다")
+    void 빈_회차는_첫_회차_표시를_안_태운다() {
+        // **첫 회차 표시는 신선한 보고를 처음 본 회차에 쓴다.** 보고가 신선도
+        // 창을 한 번 넘긴 회차가 그 표시를 태우면, 다음 회차에 보고가 신선해져도
+        // 이미 돌던 무리로 못 보고 램프를 0 부터 다시 탄다. 그동안 크레딧이
+        // 하한에 묶여 한산 통과 상한이 0 이다.
+        CapacityCollector collector = collector();
+        collector.collect(List.of(), NOW, 1);
+
+        long credit = collector.collect(List.of(report("warm", 300, NOW + 1)), NOW + 1, 1);
+
+        assertThat(credit).as("신선한 보고를 처음 본 회차가 첫 회차다").isEqualTo(300);
+    }
+
+    @Test
+    @DisplayName("낡은_보고만_온_회차도_안_태운다")
+    void 낡은_보고만_온_회차도_안_태운다() {
+        // 보고가 오긴 왔는데 전부 낡았다. 관측이 없었던 것과 같다.
+        CapacityCollector collector = collector();
+        long 낡은 = NOW - FRESHNESS.toSeconds() - 1;
+        collector.collect(List.of(report("warm", 300, 낡은)), NOW, 1);
+
+        long credit = collector.collect(List.of(report("warm", 300, NOW + 1)), NOW + 1, 1);
+
+        assertThat(credit).isEqualTo(300);
+    }
+
+    @Test
+    @DisplayName("오래_비면_첫_회차_표시가_만료된다")
+    void 오래_비면_첫_회차_표시가_만료된다() {
+        // **무한정 들고 있으면 안 된다.** 뒷단 전체가 오래 멎으면 그동안 신선한
+        // 보고가 없어 표시가 안 타고, 그 사이 처음 본 기록도 비워진다. 뒷단이
+        // 콜드로 재기동해 보고를 다시 올리는 첫 회차에 그 표시가 살아 있으면
+        // 예열 램프를 통째로 건너뛴다 — 뒷단이 가장 차가울 때다 (F6).
+        CapacityCollector collector = collector();
+        for (int i = 0; i < CapacityCollector.HOLD_ROUNDS; i++) {
+            collector.collect(List.of(), NOW + i, 1);
+        }
+
+        long credit = collector.collect(List.of(report("cold", 600, NOW + 10)), NOW + 10, 1);
+
+        // 방금 처음 봤으므로 경과 0 이라 몫이 0 이고, 합이 0 이 된 이유가 램프라
+        // 하한을 쓴다. 600 이 나오면 예열을 통째로 건너뛴 것이다.
+        assertThat(credit).as("콜드 인스턴스가 예열을 건너뛰지 않는다").isEqualTo(FLOOR);
+    }
+
+    @Test
+    @DisplayName("상한_직전까지는_첫_회차로_본다")
+    void 상한_직전까지는_첫_회차로_본다() {
+        // 상한을 한 칸 줄여도 위 시험이 통과하면 경계가 한쪽만 막힌 것이다.
+        CapacityCollector collector = collector();
+        for (int i = 0; i < CapacityCollector.HOLD_ROUNDS - 1; i++) {
+            collector.collect(List.of(), NOW + i, 1);
+        }
+
+        long credit = collector.collect(List.of(report("warm", 300, NOW + 5)), NOW + 5, 1);
+
+        assertThat(credit).as("아직은 이미 돌던 무리로 본다").isEqualTo(300);
+    }
+
+    @Test
     @DisplayName("등록을_따로_안_불러도_램프가_걸린다")
     void 등록을_따로_안_불러도_램프가_걸린다() {
         // **두 번 불러야 하는 계약을 두면 빠뜨렸을 때 조용히 0 을 낸다.** 보고가

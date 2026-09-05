@@ -950,6 +950,88 @@ class AllocationRoundTest {
                 .anyMatch(m -> m.contains("서킷 회복"));
     }
 
+    /**
+     * <b>조임이 풀리는 순간이 계단이다</b> (RC4).
+     *
+     * <p>평활은 조여진 값을 한 번도 안 본다 — 관측치는 서킷과 무관하게 계속
+     * 원래 몫이다. 그래서 서킷이 닫히는 그 한 틱에 배분이 1 에서 원래 몫으로
+     * 그대로 돌아간다. 방금 실패를 끝낸 뒷단이 그것을 받는다.
+     */
+    @Test
+    @DisplayName("서킷이_닫혀도_한_번에_안_열린다")
+    void 서킷이_닫혀도_한_번에_안_열린다() {
+        AtomicReference<CircuitState> 서킷 = new AtomicReference<>(CircuitState.HALF_OPEN);
+        AllocationRound round = 서킷_있는_회차(서킷, 7_300, 40);
+
+        round.run().block();
+        assertThat(발행된("c1").credit()).as("조이는 동안은 하나다").isEqualTo(1);
+        적용.clear();
+
+        서킷.set(CircuitState.CLOSED);
+        round.run().block();
+
+        assertThat(발행된("c1").credit()).as("1 에서 7,300 으로 뛰지 않는다").isEqualTo(2);
+    }
+
+    /** 램프는 늦추는 것이지 막는 것이 아니다. 안 그러면 회복이 영영 안 끝난다. */
+    @Test
+    @DisplayName("램프는_원래_몫까지_올라간다")
+    void 램프는_원래_몫까지_올라간다() {
+        AtomicReference<CircuitState> 서킷 = new AtomicReference<>(CircuitState.HALF_OPEN);
+        AllocationRound round = 서킷_있는_회차(서킷, 7_300, 40);
+        round.run().block();
+        서킷.set(CircuitState.CLOSED);
+
+        long 앞선 = 1;
+        for (int i = 0; i < 80; i++) {
+            round.run().block();
+            long 지금 = 발행된("c1").credit();
+            assertThat(지금).as("한 회차에 1.2 배를 넘지 않는다")
+                    .isLessThanOrEqualTo(Math.max(앞선 + 1, (long) (앞선 * 1.2)));
+            앞선 = 지금;
+        }
+
+        assertThat(앞선).as("결국 원래 몫에 닿는다").isEqualTo(7_300);
+    }
+
+    /**
+     * <b>리더가 바뀌면 램프의 기준도 버린다.</b> 남이 리더였던 동안 움직인 값을
+     * 못 보고 제 옛 기준을 이어 쓰면, 승계 직후 한 틱이 그 기준의 배수로 나간다.
+     */
+    @Test
+    @DisplayName("리더십을_얻으면_램프_기준을_버린다")
+    void 리더십을_얻으면_램프_기준을_버린다() {
+        AtomicReference<CircuitState> 서킷 = new AtomicReference<>(CircuitState.HALF_OPEN);
+        AllocationRound round = 서킷_있는_회차(서킷, 7_300, 40);
+        round.run().block();
+
+        round.leadershipAcquired();
+        서킷.set(CircuitState.CLOSED);
+        round.run().block();
+
+        assertThat(발행된("c1").credit()).as("승계했으면 제 옛 기준을 안 쓴다").isEqualTo(7_300);
+    }
+
+    /**
+     * <b>조임 창이 리더 승계에서 안 닫히고 있었다.</b> 노드 A 가 조임에 진입해
+     * 경고를 찍고 리더십을 잃으면, 되찾은 뒤의 회복 로그가 비리더 구간까지
+     * 포함한 지속 시간을 찍는다.
+     */
+    @Test
+    @DisplayName("리더십을_얻으면_조임_창을_닫는다")
+    void 리더십을_얻으면_조임_창을_닫는다() {
+        AtomicReference<CircuitState> 서킷 = new AtomicReference<>(CircuitState.OPEN);
+        AllocationRound round = 서킷_있는_회차(서킷, 7_300, 40);
+        round.run().block();
+
+        round.leadershipAcquired();
+        서킷.set(CircuitState.CLOSED);
+        round.run().block();
+
+        assertThat(로그_메시지()).as("안 연 창을 닫았다고 적지 않는다")
+                .noneMatch(m -> m.contains("서킷 회복"));
+    }
+
     /** 초과 배분 지표는 게이트 전 값으로 잰다. 아니면 서킷이 열린 시간에 비례해 오른다. */
     @Test
     @DisplayName("배분_정지가_초과_지표를_안_올린다")

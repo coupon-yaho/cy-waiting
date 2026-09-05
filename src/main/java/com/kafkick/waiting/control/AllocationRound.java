@@ -336,7 +336,7 @@ public final class AllocationRound {
         paused.exited().ifPresent(r -> log.info(
                 "리더십이 갈렸다 — 조임 창을 닫는다. 그동안 {}틱 조였다", r.swallowed()));
         ramping.exited().ifPresent(r -> log.info(
-                "리더십이 갈렸다 — 램프 창을 닫는다. 그동안 {}틱 눌렀다", r.swallowed()));
+                "리더십이 갈렸다 — 램프 창을 닫는다. 그동안 {}틱 올렸다", r.swallowed()));
         // **램프 기준은 안 버린다.** 브레이크라서 그렇다 — 모른다는 것이 놓을
         // 이유가 되면, 회복 도중에 승계가 끼는 순간 계단이 그대로 복원된다.
         // 그 순간은 드물지 않다: 회차 타임아웃과 레디스 압박이 겹치는 구간이
@@ -426,25 +426,33 @@ public final class AllocationRound {
         // 이 값과의 max 로 잡으므로, 이것은 유효 하한 이하인 안전한 어림이다.
         long r1Minimum = CapacityCollector.idleMinimum(gatewayCount.getAsInt());
         boolean gatedNow = circuitNow != CircuitState.CLOSED;
+        // **접힌 회차가 기준을 올리면 안 된다.** 발행이 안 된 회차가 기준을
+        // 전진시키면 다음 발행이 실제로 나간 값의 배수에서 시작한다.
+        ReleaseRamp.State before = releaseRamp.snapshot();
         long credit = releaseRamp.next(allowed, Math.max(floorNow, r1Minimum), gatedNow);
         // **창은 실제로 푸는 회차에 연다.** 램프는 조인 회차에 이미 걸리므로,
         // 걸렸다는 것만 보고 열면 진입이 조임 시작에 찍히고 해제의 지속 시간에
         // 장애 구간이 통째로 섞인다 — 정작 재려던 회복 틱 수가 그 수에 안 남는다.
-        if (!gatedNow) {
-            if (releaseRamp.ramping()) {
-                if (ramping.entered()) {
-                    log.info("서킷 해제 램프 — 몫을 {} 부터 회차당 {}배로 올린다, 목표 {}",
-                            credit, String.format("%.1f", ReleaseRamp.DEFAULT_STEP), target);
-                }
-            } else {
-                ramping.exited().ifPresent(r -> log.info(
-                        "서킷 해제 램프 끝 — {}틱 걸려 {} 로 돌아왔다", r.swallowed(), credit));
+        //
+        // **회복 도중에 다시 조이면 거기서 끊는다.** 안 끊으면 두 번째 회복의
+        // 진입이 안 나오고, 마지막 해제가 센 틱에 중간 장애가 통째로 섞인다.
+        if (gatedNow) {
+            ramping.exited().ifPresent(r -> log.info(
+                    "서킷 해제 램프 중단 — {}틱 올리다 다시 조인다", r.swallowed()));
+        } else if (releaseRamp.ramping()) {
+            if (ramping.entered()) {
+                log.info("서킷 해제 램프 진입 — 몫을 {} 부터 회차당 {}배로 올린다, 목표 {}",
+                        credit, String.format("%.1f", ReleaseRamp.DEFAULT_STEP), target);
             }
+        } else {
+            ramping.exited().ifPresent(r -> log.info(
+                    "서킷 해제 램프 종료 — {}틱 걸려 {} 로 돌아왔다", r.swallowed(), credit));
         }
         Map<String, Long> granted = new LinkedHashMap<>();
         allocator.allocate(credit, collected).forEach(g -> granted.put(g.couponId(), g.credit()));
 
         if (lostLeadership()) {
+            releaseRamp.restore(before);
             return Mono.empty();
         }
         watchBudget(credit, observed);

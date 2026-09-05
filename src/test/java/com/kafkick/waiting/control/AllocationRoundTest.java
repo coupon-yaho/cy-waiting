@@ -34,6 +34,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
+import java.util.function.LongSupplier;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -985,20 +987,16 @@ class AllocationRoundTest {
         round.run().block();
         서킷.set(CircuitState.CLOSED);
 
-        long 앞선 = 40;
-        int 틱 = 0;
-        while (앞선 < 7_300 && 틱 < 40) {
+        // **값을 리터럴로 못 박는다.** 기댓값을 구현 상수로 만들면 배수가
+        // 무엇이든 참인 부등식이 되어, 40배 계단도 초록으로 지나간다.
+        List<Long> 회복 = new ArrayList<>();
+        for (int i = 0; i < 20 && (회복.isEmpty() || 회복.get(회복.size() - 1) < 7_300); i++) {
             round.run().block();
-            long 지금 = 발행된("c1").credit();
-            assertThat(지금).as("한 회차에 배수를 넘지 않는다")
-                    .isLessThanOrEqualTo(Math.max(40, (long) (앞선 * ReleaseRamp.DEFAULT_STEP)));
-            앞선 = 지금;
-            틱++;
+            회복.add(발행된("c1").credit());
         }
 
-        assertThat(앞선).as("결국 원래 몫에 닿는다").isEqualTo(7_300);
-        // 틱이 1초라 틱 수가 곧 초다. 회복은 30초 안에 끝나야 한다 (RC3).
-        assertThat(틱).as("회복이 게이트 안에서 끝난다").isLessThanOrEqualTo(20);
+        assertThat(회복).as("하한에서 두 배씩 오른다")
+                .containsExactly(40L, 80L, 160L, 320L, 640L, 1_280L, 2_560L, 5_120L, 7_300L);
     }
 
     /**
@@ -1091,10 +1089,101 @@ class AllocationRoundTest {
         }
 
         assertThat(로그_메시지()).as("진입은 실제로 푸는 회차에 한 번")
-                .filteredOn(m -> m.startsWith("서킷 해제 램프 —")).hasSize(1);
+                .filteredOn(m -> m.startsWith("서킷 해제 램프 진입")).hasSize(1);
         // 조인 다섯 회차가 이 수에 섞이면 여덟 틱짜리 회복이 열세 틱으로 찍힌다.
-        assertThat(로그_인자("서킷 해제 램프 끝")[0])
+        assertThat(로그_인자("서킷 해제 램프 종료")[0])
                 .as("해제가 센 틱은 조인 구간을 안 담는다").isEqualTo((long) (틱 - 1));
+    }
+
+    /**
+     * <b>회복 회차의 하한은 노드 수가 만든다.</b> 배분에 물리는 하한은 하한이
+     * 답이 된 회차에만 값이 있어, 서킷이 닫히고 보고가 신선해진 뒤에는 0 이다.
+     * 그 구간에서 한산 통과 상한을 세우는 것은 노드 수에서 나온 최소뿐이다.
+     */
+    @Test
+    @DisplayName("회복_하한이_노드_수를_따라간다")
+    void 회복_하한이_노드_수를_따라간다() {
+        // **열린 채로 시작한다.** 반쯤 열린 회차의 몫은 노드 수와 같아서, 그
+        // 두 배가 마침 이 최소와 같다 — 항을 빼도 같은 수가 나와 안 갈린다.
+        AtomicReference<CircuitState> 서킷 = new AtomicReference<>(CircuitState.OPEN);
+        // 하한 0 — 실제 배선이 회복 회차에 내는 값이다.
+        AllocationRound round = 서킷_있는_회차(서킷, 7_300, () -> 0L, 20,
+                List.of(new CouponDemand("c1", 20_000, 1_000_000)), () -> true);
+        round.run().block();
+
+        서킷.set(CircuitState.CLOSED);
+        round.run().block();
+
+        // 노드 20 대면 한산 통과가 성립하는 최소가 40 이다. 이 항을 빼면 1 이
+        // 나가고, 노드당 몫이 0 이라 한산 통과 상한이 0 이 된다.
+        assertThat(발행된("c1").credit()).isEqualTo(40);
+    }
+
+    /**
+     * <b>회복 도중에 다시 조이면 로그 쌍이 거기서 끊긴다.</b> 안 끊으면 두 번째
+     * 회복의 진입이 안 나오고, 마지막 해제가 센 틱에 중간 장애가 통째로 섞인다.
+     */
+    @Test
+    @DisplayName("회복_도중_재조임에_쌍이_끊긴다")
+    void 회복_도중_재조임에_쌍이_끊긴다() {
+        AtomicReference<CircuitState> 서킷 = new AtomicReference<>(CircuitState.OPEN);
+        AllocationRound round = 서킷_있는_회차(서킷, 7_300, 40);
+        round.run().block();
+
+        서킷.set(CircuitState.CLOSED);
+        round.run().block();
+        round.run().block();
+        서킷.set(CircuitState.OPEN);
+        round.run().block();
+        서킷.set(CircuitState.CLOSED);
+        round.run().block();
+
+        assertThat(로그_메시지()).as("회복이 둘이면 진입도 둘")
+                .filteredOn(m -> m.startsWith("서킷 해제 램프 진입")).hasSize(2);
+        assertThat(로그_인자("서킷 해제 램프 중단")[0])
+                .as("중단이 센 틱은 첫 회복 구간만이다").isEqualTo(2L);
+    }
+
+    /**
+     * <b>회복 도중 리더십이 갈리면 창을 닫는다.</b> 조용히 버리면 찍힌 진입
+     * 하나에 해제가 영영 안 생긴다.
+     */
+    @Test
+    @DisplayName("회복_중_승계가_램프_창을_닫는다")
+    void 회복_중_승계가_램프_창을_닫는다() {
+        AtomicReference<CircuitState> 서킷 = new AtomicReference<>(CircuitState.OPEN);
+        AllocationRound round = 서킷_있는_회차(서킷, 7_300, 40);
+        round.run().block();
+        서킷.set(CircuitState.CLOSED);
+        round.run().block();
+        round.run().block();
+
+        round.leadershipAcquired();
+
+        assertThat(로그_인자("리더십이 갈렸다 — 램프 창을 닫는다")[0])
+                .as("닫으면서 그동안 올린 틱을 남긴다").isEqualTo(2L);
+    }
+
+    /**
+     * <b>접힌 회차는 램프 기준을 안 움직인다.</b> 발행이 안 된 회차가 기준을
+     * 올리면 다음 발행이 실제로 나간 값의 배수에서 시작한다.
+     */
+    @Test
+    @DisplayName("접힌_회차는_램프_기준을_안_올린다")
+    void 접힌_회차는_램프_기준을_안_올린다() {
+        AtomicReference<CircuitState> 서킷 = new AtomicReference<>(CircuitState.HALF_OPEN);
+        AtomicBoolean 리더 = new AtomicBoolean(true);
+        AllocationRound round = 서킷_있는_회차(서킷, 7_300, () -> 40L, 1,
+                List.of(new CouponDemand("c1", 20_000, 1_000_000)), 리더::get);
+        round.run().block();
+        서킷.set(CircuitState.CLOSED);
+
+        리더.set(false);
+        round.run().block();
+        리더.set(true);
+        round.run().block();
+
+        assertThat(발행된("c1").credit()).as("접힌 회차만큼 앞서지 않는다").isEqualTo(40);
     }
 
     /** 초과 배분 지표는 게이트 전 값으로 잰다. 아니면 서킷이 열린 시간에 비례해 오른다. */
@@ -1118,10 +1207,21 @@ class AllocationRoundTest {
 
     private AllocationRound 서킷_있는_회차(AtomicReference<CircuitState> 서킷,
             long 가용량, long 하한, List<CouponDemand> 수요) {
+        return 서킷_있는_회차(서킷, 가용량, () -> 하한, 1, 수요, () -> true);
+    }
+
+    /**
+     * <b>하한을 공급자로 받는다.</b> 실제 배선은 상수가 아니다 — 하한이 답이 된
+     * 회차에만 값이 있고 회복 회차에는 0 이다. 상수로 물리면 R1 최소를 세우는
+     * 항이 결과에 못 닿아, 그 항을 통째로 빼도 시험이 초록이다.
+     */
+    private AllocationRound 서킷_있는_회차(AtomicReference<CircuitState> 서킷,
+            long 가용량, LongSupplier 하한, int 노드수,
+            List<CouponDemand> 수요, BooleanSupplier 리더) {
         return AllocationRound.of(
-                () -> true,
+                리더,
                 () -> Mono.just(new TimedDemands(수요, 읽은_시각)),
-                () -> 가용량, () -> 1,
+                () -> 가용량, () -> 노드수,
                 grant -> {
                     적용.add(grant.couponId() + "=" + grant.credit());
                     return Mono.just(grant.credit());
@@ -1132,7 +1232,7 @@ class AllocationRoundTest {
                 },
                 () -> Instant.ofEpochSecond(읽은_시각),
                 () -> Mono.just(CreditSmoother.of(1.0)),
-                SnapshotCodec.create(), () -> 하한, Optional::empty,
+                SnapshotCodec.create(), 하한, Optional::empty,
                 SoldOutCleanup.of(Integer.MAX_VALUE, new SimpleMeterRegistry()),
                 ids -> Mono.just(List.of()), ids -> Mono.just(List.of()),
                 안_걷는_스위퍼(), () -> false, 서킷::get);

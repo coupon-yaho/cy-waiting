@@ -93,4 +93,23 @@ public final class ReleaseRamp {
     public boolean ramping() {
         return ramping;
     }
+
+    /** 회차가 접혔을 때 되돌리려고 뜬다. {@code CreditSmoother.Snapshot} 과 같은 모양이다. */
+    public record State(long floor, boolean ramping) {
+    }
+
+    public State snapshot() {
+        return new State(floor, ramping);
+    }
+
+    /**
+     * 회차가 접혔으면 되돌린다.
+     *
+     * <p><b>안 되돌리면 기준만 전진한다.</b> 발행 안 된 회차가 기준을 올리면
+     * 다음 발행이 실제로 나간 값의 배수에서 시작한다 — 램프가 막으려던 계단이다.
+     */
+    public void restore(State state) {
+        this.floor = state.floor();
+        this.ramping = state.ramping();
+    }
 }

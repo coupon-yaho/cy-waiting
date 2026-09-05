@@ -17,6 +17,12 @@ class ReleaseRampTest {
     /** 값을 못 박으려고 시험 안에서만 쓰는 배수. 기본값과 따로 둔다. */
     private static final double STEP = 1.2;
 
+    /**
+     * 운영이 실제로 넘기는 하한. 배분은 노드 수에서 낸 최소를 늘 함께 넘긴다 —
+     * 노드가 하나여도 2 다. 0 은 이 클래스의 계약을 재는 자리에만 쓴다.
+     */
+    private static final long 운영_하한 = 2;
+
     @Test
     @DisplayName("조인_적이_없으면_그대로_통과시킨다")
     void 조인_적이_없으면_그대로_통과시킨다() {
@@ -54,6 +60,9 @@ class ReleaseRampTest {
     void 몫이_1_이어도_올라간다() {
         // 서킷이 반쯤 열린 동안의 몫이 정확히 1 이다. 1 × 1.2 를 내림하면 1 이라
         // 배수만으로는 영영 못 벗어난다 — 그 회차의 램프는 안 푸는 것과 같다.
+        //
+        // **하한 0 은 이 클래스의 계약을 재는 자리다.** 배분은 늘 2 이상을
+        // 넘기므로 운영에서는 하한이 먼저 이긴다. 그래도 계약은 계약이다.
         ReleaseRamp ramp = ReleaseRamp.of(STEP);
         ramp.next(1, 0, true);
 
@@ -77,9 +86,12 @@ class ReleaseRampTest {
         ramp.next(100, 0, true);
 
         long value = 100;
-        while (value < 300) {
+        int ticks = 0;
+        while (value < 300 && ticks < 50) {
             value = ramp.next(300, 0, false);
+            ticks++;
         }
+        assertThat(ticks).as("전진이 멎으면 실패로 끝나야 한다").isLessThan(50);
 
         // 닿은 뒤로는 다시 안 누른다. 누르면 정상 구간이 계속 램프에 묶인다.
         assertThat(ramp.next(1000, 0, false)).isEqualTo(1000);
@@ -155,6 +167,28 @@ class ReleaseRampTest {
 
         assertThat(value).isEqualTo(7_300);
         assertThat(ticks).as("여유를 두고 들어와야 한다").isLessThanOrEqualTo(20);
+    }
+
+    @Test
+    @DisplayName("운영이_넘기는_하한에서_출발한다")
+    void 운영이_넘기는_하한에서_출발한다() {
+        // 호출부가 실제로 만드는 조합이다 — 조인 몫과 노드 수에서 낸 최소.
+        ReleaseRamp ramp = ReleaseRamp.of(ReleaseRamp.DEFAULT_STEP);
+        ramp.next(0, 운영_하한, true);
+
+        assertThat(ramp.next(7_300, 운영_하한, false)).isEqualTo(2);
+        assertThat(ramp.next(7_300, 운영_하한, false)).isEqualTo(4);
+    }
+
+    @Test
+    @DisplayName("배수는_내림한다")
+    void 배수는_내림한다() {
+        // 13 × 1.2 = 15.6 이다. 올림이나 반올림으로 바뀌면 램프가 스스로 선언한
+        // 배수를 넘는데, 곱이 정수인 값만 못 박으면 그 변화가 안 잡힌다.
+        ReleaseRamp ramp = ReleaseRamp.of(STEP);
+        ramp.next(13, 0, true);
+
+        assertThat(ramp.next(300, 0, false)).isEqualTo(15);
     }
 
     @Test

@@ -122,8 +122,22 @@ class CapacityCollectorTest {
         long credit = collector.collect(List.of(report("cold", 600, NOW + 10)), NOW + 10, 1);
 
         // 방금 처음 봤으므로 경과 0 이라 몫이 0 이고, 합이 0 이 된 이유가 램프라
-        // 하한을 쓴다. 300 이 나오면 예열을 건너뛴 것이다.
+        // 하한을 쓴다. 600 이 나오면 예열을 통째로 건너뛴 것이다.
         assertThat(credit).as("콜드 인스턴스가 예열을 건너뛰지 않는다").isEqualTo(FLOOR);
+    }
+
+    @Test
+    @DisplayName("상한_직전까지는_첫_회차로_본다")
+    void 상한_직전까지는_첫_회차로_본다() {
+        // 상한을 한 칸 줄여도 위 시험이 통과하면 경계가 한쪽만 막힌 것이다.
+        CapacityCollector collector = collector();
+        for (int i = 0; i < CapacityCollector.HOLD_ROUNDS - 1; i++) {
+            collector.collect(List.of(), NOW + i, 1);
+        }
+
+        long credit = collector.collect(List.of(report("warm", 300, NOW + 5)), NOW + 5, 1);
+
+        assertThat(credit).as("아직은 이미 돌던 무리로 본다").isEqualTo(300);
     }
 
     @Test

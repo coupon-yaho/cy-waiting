@@ -27,7 +27,16 @@ if [ $# -lt 2 ]; then
 fi
 before=$1
 after=$2
+
+# **기준도 확인한다.** 그대로 awk 에 넘기면 `-1` 이 모든 회차를 통과시키고, 오타
+# 하나가 "미달" 로 나가 계기 문제가 제품 문제로 읽힌다. 하한을 확인하면서 정작
+# 판정을 가르는 수를 안 보고 있었다.
 target=${JUDGED_TARGET_PCT:-99.9}
+if ! printf '%s' "$target" | grep -Eq '^[0-9]+(\.[0-9]+)?$' \
+        || awk -v t="$target" 'BEGIN{ exit (t > 0 && t <= 100) ? 1 : 0 }'; then
+    echo "::error title=판정 비율::기준이 0 초과 100 이하의 백분율이 아니다: '$target'"
+    exit "$UNMEASURABLE"
+fi
 
 for f in "$before" "$after"; do
     if [ ! -s "$f" ]; then
@@ -119,13 +128,18 @@ if [ "$total" -lt "$min_total" ]; then
     exit "$UNMEASURABLE"
 fi
 
+# **보여 주는 수와 판정하는 수를 가른다.** 넷째 자리에서 반올림한 문자열로
+# 비교하면 99.89998% 가 "99.9000" 이 되어 기준을 통과한다. 판정은 계수에서
+# 곧장 낸다.
 pct=$(awk -v f="$fresh" -v t="$total" 'BEGIN{ printf "%.4f", f / t * 100 }')
 printf '  %-24s %s\n' "재료를 갖고 판정" "$fresh"
 printf '  %-24s %s\n' "재료 없이 판정" "$degraded"
 printf '  %-24s %s%%\n' "판정한 요청 비율" "$pct"
 printf '  %-24s %s%%\n' "기준" "$target"
 
-if awk -v p="$pct" -v t="$target" 'BEGIN{ exit (p >= t) ? 0 : 1 }'; then
+# 기준을 정확히 맞춘 회차는 충족이다 — SLO 목표는 "그 수 이상" 을 뜻한다 (O-7).
+if awk -v f="$fresh" -v n="$total" -v t="$target" \
+        'BEGIN{ exit (f / n * 100 >= t) ? 0 : 1 }'; then
     echo "판정: 충족 — 기준 이상이다"
     exit 0
 fi

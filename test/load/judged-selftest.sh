@@ -44,6 +44,21 @@ run_case "기준 바로 아래는 미달" 1 "미달" \
 JUDGED_TARGET_PCT=99.99 run_case "기준을 올리면 미달이 된다" 1 "미달" \
     -- "$zero" "$(metrics edge_ok.txt "$(fresh 19981.0)" "$(degraded 19.0)")"
 
+# **기준도 확인해야 한다.** 음수를 주면 어떤 회차도 안 걸리고, 오타는 "미달" 로
+# 나가 계기 문제가 제품 문제로 읽힌다.
+JUDGED_TARGET_PCT=-1 run_case "음수 기준은 막는다" 2 "백분율이 아니다" \
+    -- "$zero" "$(metrics edge_bad.txt "$(fresh 19979.0)" "$(degraded 21.0)")"
+JUDGED_TARGET_PCT=101 run_case "100 을 넘는 기준은 막는다" 2 "백분율이 아니다" \
+    -- "$zero" "$(metrics all.txt "$(fresh 20000.0)")"
+JUDGED_TARGET_PCT=구십구 run_case "기준이 숫자가 아니면 막는다" 2 "백분율이 아니다" \
+    -- "$zero" "$(metrics all.txt "$(fresh 20000.0)")"
+
+# **반올림한 표시값으로 판정하면 안 된다.** 1,000 만 중 9,989,998 은 99.89998%
+# 라 미달인데, 넷째 자리에서 자르면 "99.9000" 이 되어 기준과 같아진다. 표시값을
+# 비교하던 동안 이 회차가 충족으로 나갔다.
+run_case "반올림으로 기준을 넘기지 않는다" 1 "미달" \
+    -- "$zero" "$(metrics round.txt "$(fresh 9989998.0)" "$(degraded 10002.0)")"
+
 # **앞 회차와 예열이 분모에 섞이면 미달이 충족으로 뒤집힌다.** 이전 표본에
 # 신선 120 만이 쌓여 있고 이 회차가 99.0% 면, 차분을 안 하면 99.92% 가 된다.
 warm=$(metrics warm.txt "$(fresh 1200000.0)" "$(degraded 0.0)")

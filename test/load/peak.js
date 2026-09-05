@@ -10,7 +10,7 @@
 // 대로 나눠야 나오고, 그건 이 시나리오가 아니라 배선의 일이다.
 import http from 'k6/http';
 import { check } from 'k6';
-import { Counter } from 'k6/metrics';
+import { Counter, Rate } from 'k6/metrics';
 
 // 끊는 것도 줄 세우는 것도 정상 동작이다. 판정이 낸 것은 실패로 안 센다 (O-7).
 http.setResponseCallback(http.expectedStatuses(200, 202, 429, 503));
@@ -28,9 +28,10 @@ const ENTER_SHARE = Number(__ENV.ENTER_SHARE || '0.30');
 const polled = new Counter('peak_poll');
 const entered = new Counter('peak_enter');
 const passed = new Counter('peak_pass');
-// **토큰을 못 받은 폴링은 따로 센다.** 그것을 폴링으로 세면 줄에 선 적 없는
-// 요청이 폴링 몫을 채워, 섞은 비율이 실제와 달라진다.
-const tokenless = new Counter('peak_poll_tokenless');
+// **표 없이 시작한 폴링 몫을 비율로 잡는다.** 그 갈래는 폴링 대신 진입을 보내므로
+// 그만큼 폴링이 10% 아래로, 진입이 30% 위로 간다. 세기만 하면 몫이 어긋난 회차가
+// 그대로 지나간다 — 아래 임계가 그것을 회차의 실패로 만든다.
+const bootstrap = new Rate('peak_poll_bootstrap');
 
 // 결과는 갈래와 따로 센다. 끊긴 것도 줄 세운 것도 판정이 낸 정상 동작이다 (O-7).
 const admitted = new Counter('peak_admitted');
@@ -112,6 +113,9 @@ export const options = {
     // **검사에 임계를 건다.** 안 걸면 검사가 떨어져도 회차가 안 빨개져,
     // 검사가 있다는 사실만 남고 값이 없다.
     checks: ['rate>0.99'],
+    // 표를 못 얻어 진입으로 돌린 몫. 모든 VU 가 표 없이 시작하므로 0 은 될 수
+    // 없다. 10% 를 넘으면 섞은 비율이 계획서의 60·10·30 이 아니다.
+    peak_poll_bootstrap: ['rate<0.1'],
   },
 };
 
@@ -137,8 +141,8 @@ export default function () {
   if (dice < POLL_SHARE) {
     // **표가 없으면 폴링이 성립 안 한다.** 그때는 진입으로 돌린다 — 안 그러면
     // 400 이 쌓여 판정 밖 응답이 늘고, 그 회차가 통째로 거절된다.
+    bootstrap.add(token === null);
     if (token === null) {
-      tokenless.add(1);
       enter(member);
       return;
     }

@@ -140,6 +140,15 @@ rc=0
 $runner k6 run --summary-export="$OUT_SUMMARY" test/load/open-spike.js 2>&1 \
     | tee "$OUT_LOG"
 rc=${PIPESTATUS[0]}
+tee_rc=${PIPESTATUS[1]}
+
+# **로그가 안 남았으면 그렇다고 말한다.** 로그를 남기는 것이 이 줄의 목적인데
+# 실패를 넘기면, 임계가 깨졌을 때 무엇이 섞였는지 다시 못 본다 — 그것 때문에
+# 두 회차를 버렸다.
+if [ "$tee_rc" -ne 0 ]; then
+    echo "::error title=착수 판정::k6 로그를 못 남겼다: $OUT_LOG"
+    exit 2
+fi
 # **신호만 보내고 판정하면 안 된다.** 프로브는 신호를 받고 나서 안쪽 루프를
 # 걷고 파이프를 닫고 마지막 표본을 적는다. `kill` 은 그 일이 끝나기를 안
 # 기다리므로, 그대로 판정하면 마지막 쓰기와 읽기가 겹친다.

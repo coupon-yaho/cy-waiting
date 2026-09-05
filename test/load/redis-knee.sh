@@ -95,9 +95,17 @@ for duty in $LEVELS; do
     worst=0
     i=0
     while [ "$i" -lt "$CHUNKS" ]; do
+        # **실패한 묶음을 넘기지 않는다.** 넘기면 절반만 돈 회차가 멀쩡한 표본을
+        # 내고, 그 표가 문턱 근거가 된다.
+        bench_rc=0
         out=$($COMPOSE exec -T redis redis-benchmark -n "$chunk" -c 4 -P "$PIPELINE" -r 100000000 --csv \
             evalsha "$sha" 5 "$Q" "$M" "$A" "$AD" "$G" \
-            "__rand_int__" 86400 3600 "$CAP" 1800000000 300 2>&1)
+            "__rand_int__" 86400 3600 "$CAP" 1800000000 300 2>&1) || bench_rc=$?
+        if [ "$bench_rc" -ne 0 ] || ! printf '%s' "$out" | grep -q '^"test"'; then
+            echo "::error title=무릎::벤치마크 묶음이 실패했다 — 이 회차로는 못 잰다"
+            printf '%s\n' "$out" | tail -3 | sed 's/^/  /'
+            exit 2
+        fi
         one=$(printf '%s' "$out" | grep -v '^"test"' | tr -d '"' | tail -1 | cut -d, -f7)
         worst=$(awk -v a="$worst" -v b="${one:-0}" 'BEGIN{ print (b > a) ? b : a }')
         [ "$duty" -lt 100 ] && sleep "$rest"
@@ -131,6 +139,14 @@ for duty in $LEVELS; do
     printf '  %-6s %10s %10s %8s %10s\n' "$duty" "$rps" "${p99:-?}" "$cpu" "$added"
     printf '%s %s %s %s\n' "$duty" "$rps" "${p99:-0}" "$cpu" >> "$OUT"
 
+    # **이 지연은 부하 축에 안 걸린다.** 묶음 안에서 벤치마크는 늘 최대로 밀어
+    # 듀티와 무관하게 포화 값이 나온다. 그 열로 무릎을 판정하면 잡음이 문턱이
+    # 된다 — 판정기는 "기준선의 두 배" 만 보므로 흔들림 한 번이면 답이 난다.
+    #
+    # 그래서 표를 남기되 **판정에 먹이지 못하게 표시한다.** 유입 제한이 되는
+    # 도구로 바꾸기 전에는 이 열이 근거가 될 수 없다.
+    saturated=1
+
     if [ "$added" -lt $((REQUESTS / 2)) ]; then
         echo "::error title=무릎::신규 등록이 ${added} 건이다 (요청 ${REQUESTS}) — 빠른 경로로 빠졌다"
         exit 2
@@ -139,4 +155,11 @@ done
 
 r DEL "$Q" "$M" "$A" "$AD" "$G" >/dev/null
 echo
-echo "표본은 $OUT 에 있다. 판정은 test/load/evaluate-knee.sh 가 낸다."
+if [ "${saturated:-0}" = 1 ]; then
+    # 판정기가 이 표를 못 받게 한다. 사람이 눈으로 보는 것은 막지 않는다.
+    printf '# 포화-지연: 이 표의 p99 는 부하 축에 안 걸린다. 판정 근거로 못 쓴다\n' >> "$OUT"
+    echo "표본은 $OUT 에 있다. **판정에는 못 쓴다** — p99 가 부하 축에 안 걸린다."
+    echo "유입 제한이 되는 도구로 바꾸기 전에는 문턱 근거가 안 나온다."
+else
+    echo "표본은 $OUT 에 있다. 판정은 test/load/evaluate-knee.sh 가 낸다."
+fi

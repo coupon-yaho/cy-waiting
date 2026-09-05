@@ -10,9 +10,24 @@ samples=${1:?표본 파일}
 # 기준선 대비 이 배수를 넘으면 꺾인 것으로 본다. 두 배는 "지연이 두 배가 됐다"
 # 는 뜻이고, 절대 예산이 없는 자리에서 쓸 수 있는 몇 안 되는 상대 기준이다.
 knee_factor=${KNEE_FACTOR:-2}
+# **1 이하는 안 받는다.** awk 가 숫자 아닌 값을 0 으로 읽으므로 그대로 두면
+# 기준선 자신이 "두 배를 넘은" 첫 줄이 되어 무릎으로 나온다 — 가장 한가한
+# 회차의 CPU 가 문턱이 된다.
+if printf '%s' "$knee_factor" | grep -qvE '^[0-9]+(\.[0-9]+)?$' \
+        || awk -v f="$knee_factor" 'BEGIN{ exit (f > 1) ? 1 : 0 }'; then
+    echo "::error title=무릎 판정::KNEE_FACTOR 는 1 보다 큰 수여야 한다: '$knee_factor'"
+    exit 1
+fi
 
 if [ ! -s "$samples" ]; then
     echo "::error title=무릎 판정::표본이 비었다 — 회차가 안 돌았다"
+    exit 1
+fi
+
+# **생성기가 "못 쓴다" 고 표시한 표는 안 받는다.** 유입 제한이 없는 도구로
+# 잰 지연은 부하 축에 안 걸려서, 그 열로 무릎을 내면 잡음이 문턱이 된다.
+if grep -q '^# 포화-지연' "$samples" 2>/dev/null; then
+    echo "::error title=무릎 판정::생성기가 판정 불가로 표시한 표본이다 — p99 가 부하 축에 안 걸린다"
     exit 1
 fi
 
@@ -23,8 +38,12 @@ if [ "$lines" -lt "$min_lines" ]; then
     echo "::error title=무릎 판정::표본이 ${lines} 줄뿐이다 (최소 ${min_lines}) — 무릎을 못 본다"
     exit 1
 fi
-if awk '{ if (NF != 4) exit 1; for (i = 2; i <= 4; i++) if ($i !~ /^[0-9.]+$/) exit 1 }' \
-        "$samples"; then :; else
+# **첫 칸도 본다.** 부하 축인데 검사에서 빠져 있었다. 그리고 `[0-9.]+` 는
+# `1.2.3` 이나 `.` 도 통과시킨다 — awk 가 그것을 조용히 0 이나 1 로 읽는다.
+if awk '{
+        if (NF != 4) exit 1
+        for (i = 1; i <= 4; i++) if ($i !~ /^[0-9]+(\.[0-9]+)?$/) exit 1
+    }' "$samples"; then :; else
     echo "::error title=무릎 판정::표본에 숫자가 아닌 칸이 있다"
     exit 1
 fi

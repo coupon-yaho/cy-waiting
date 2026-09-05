@@ -94,7 +94,13 @@ class SweepTest extends RedisContainerSupport {
                 .blockFirst(WAIT);
     }
 
-    /** 명령별 호출 수를 0 으로 되돌린다. 아래 검사가 그 차분을 본다. */
+    /**
+     * 명령별 호출 수를 0 으로 되돌린다. 아래 검사가 그 차분을 본다.
+     *
+     * <p><b>서버 전역이다.</b> 컨테이너를 공유하므로 배경 루프가 돌거나 시험이
+     * 병렬로 돌면 계수가 섞인다. 지금은 스케줄러가 꺼져 있고 갈래가 하나라
+     * 안전한데, 둘 중 하나가 바뀌면 아래 검사가 조용히 흔들린다.
+     */
     private void 계수를_비운다() {
         redis.execute(c -> c.serverCommands().resetConfigStats()).blockLast(WAIT);
     }
@@ -156,6 +162,31 @@ class SweepTest extends RedisContainerSupport {
         sweep("3000");
 
         assertThat(호출_수("zrangebyscore")).as("앞줄 창을 읽는다").isPositive();
+        // **양쪽을 다 못 박는다.** 하나만 두면 위 검사가 늘 0 을 내는 구현
+        // — 앞줄 조립을 통째로 접은 구현 — 도 시험 둘이 초록이다.
+        assertThat(호출_수("zmscore")).as("생존 신호를 묻는다").isPositive();
+    }
+
+    /**
+     * <b>살아 있는 신호가 없으면 앞줄을 읽지도 않는다.</b>
+     *
+     * <p>줄에 사람이 있는데 아무도 살아 있지 않은 것은 저장소를 잃은 것이다.
+     * 그때는 앞줄을 안 걷는데, 창은 그대로 읽고 있었다. 승계 유예와 달리
+     * 이 상태는 끝내 주는 것이 없어 매 틱 되풀이된다.
+     */
+    @Test
+    @DisplayName("살아_있는_신호가_없으면_창을_안_읽는다")
+    void 살아_있는_신호가_없으면_창을_안_읽는다() {
+        for (int i = 0; i < 50; i++) {
+            enqueue("m" + i);
+        }
+        redis.delete(ALIVE).block(WAIT);
+        계수를_비운다();
+
+        sweep("3000");
+
+        assertThat(호출_수("zrangebyscore")).as("앞줄 창을 안 읽는다").isZero();
+        assertThat(호출_수("zmscore")).as("생존 신호를 안 묻는다").isZero();
     }
 
     @Test

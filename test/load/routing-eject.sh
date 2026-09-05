@@ -31,6 +31,14 @@ AFTER_SEC="${AFTER_SEC:-80}"
 FAULT_STATUS="${FAULT_STATUS:-503}"
 
 require_positive_int BEFORE_SEC FAULT_SEC AFTER_SEC FAULT_STATUS || exit 2
+# **배제가 무는 코드여야 한다.** 아무 양수나 받으면 200 으로 부른 회차가 고장을
+# 한 번도 안 낸 채 "유입이 안 끊겼다" 도 아니고 그냥 통과한다 — 배제를 재는
+# 하네스가 배제를 안 밟고 초록이 되는 자리다. 게이트웨이가 그 대의 실패로 세는
+# 것은 5xx 와 포화를 알리는 429 뿐이다.
+case "$FAULT_STATUS" in
+    429|5[0-9][0-9]) ;;
+    *) echo "FAULT_STATUS 는 5xx 나 429 여야 한다 — 배제가 무는 코드다: $FAULT_STATUS"; exit 2 ;;
+esac
 require_non_negative_int WARMUP_SEC || exit 2
 
 work=$(mktemp -d) || exit 1

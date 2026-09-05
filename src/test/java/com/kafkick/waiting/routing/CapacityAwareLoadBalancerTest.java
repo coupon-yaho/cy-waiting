@@ -564,4 +564,27 @@ class CapacityAwareLoadBalancerTest {
         assertThat(답.hasServer()).isFalse();
     }
 
+
+    /**
+     * <b>보낼 곳이 없다는 것은 목록이 비었다는 뜻이 아니다.</b> 여유 0 인 대는
+     * 후보 목록에는 들어가지만 고르개가 안 고른다 — 그 상태를 "후보가 있다" 로
+     * 읽으면 되돌리기가 한 줄도 안 돌고, 뒷단이 멀쩡한데 빈 답이 나간다.
+     */
+    @Test
+    @DisplayName("여유_0_만_남으면_배제를_접는다")
+    void 여유_0_만_남으면_배제를_접는다() {
+        // be-1 을 연속 실패로 뺀다. 남는 것은 여유 0 인 be-2 뿐이다.
+        for (int i = 0; i < 3; i++) {
+            배제기.failed("be-1", 지금);
+        }
+
+        Response<ServiceInstance> 답 = 고른다(정해진("be-1"),
+                목록(인스턴스("be-1", "200"), 인스턴스("be-2", "0")));
+
+        assertThat(답.hasServer())
+                .as("배제를 접고 be-1 로 보내야 한다 — 앓는 대라도 빈 답보다 낫다")
+                .isTrue();
+        assertThat(답.getServer().getInstanceId()).isEqualTo("be-1");
+    }
+
 }

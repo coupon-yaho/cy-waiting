@@ -289,4 +289,51 @@ class BulkheadTest {
                 .as("한산한 쿠폰의 첫 자리는 지난다")
                 .isTrue();
     }
+
+    /**
+     * <b>첫 자리 하나로는 R1 이 아니다.</b> 몰리는 쿠폰이 노드를 채운 동안
+     * 한산한 쿠폰이 동시 1건에 묶이면, 그 쿠폰의 처리량이 제 몫이 아니라
+     * 뒷단 지연에 묶인다 — 응답이 느릴수록 R1 이 더 크게 깨진다.
+     *
+     * <p>노드가 천장에 닿으면 <b>제 몫보다 많이 쥔 쿠폰이 물러난다.</b>
+     */
+    @Test
+    @DisplayName("전체가_차도_한산한_쿠폰은_제_몫을_쓴다")
+    void 전체가_차도_한산한_쿠폰은_제_몫을_쓴다() {
+        // 핫이 노드 전체(8)를 혼자 채운다.
+        for (int i = 0; i < 8; i++) {
+            assertThat(bulkhead.tryEnter("핫", 20, 8)).as("%d 번째", i).isTrue();
+        }
+
+        // 한산한 쿠폰이 온다. 넘겨 쓰는 폭(천장의 4분의 1 = 2)만큼은 쓴다.
+        for (int i = 0; i < 2; i++) {
+            assertThat(bulkhead.tryEnter("콜드", 20, 8))
+                    .as("한산한 쿠폰의 %d 번째 자리", i).isTrue();
+        }
+
+        // 그 폭을 넘으면 막힌다. 안 막으면 상한이 이름만 남는다.
+        assertThat(bulkhead.tryEnter("콜드", 20, 8))
+                .as("넘겨 쓰는 폭을 넘으면 막힌다").isFalse();
+        // 이미 제 몫을 넘겨 쥐고 있는 핫도 더는 못 늘린다.
+        assertThat(bulkhead.tryEnter("핫", 20, 8))
+                .as("많이 쥔 쪽이 먼저 물러난다").isFalse();
+    }
+
+    /**
+     * <b>합에 천장이 있다.</b> 한산한 쿠폰이 제 몫을 쓰게 하려면 넘겨 쓰는
+     * 자리가 있어야 하는데, 그 자리에 천장이 없으면 쿠폰이 늘 때마다 몫이
+     * 더해져 상한이 이름만 남는다.
+     */
+    @Test
+    @DisplayName("쿠폰이_아무리_많아도_합에_천장이_있다")
+    void 쿠폰이_아무리_많아도_합에_천장이_있다() {
+        for (int i = 0; i < 500; i++) {
+            bulkhead.tryEnter("쿠폰" + i, 20, 8);
+            bulkhead.tryEnter("쿠폰" + i, 20, 8);
+        }
+
+        assertThat(bulkhead.inFlight())
+                .as("천장 8 에 넘겨 쓰는 폭 2 를 더한 값을 안 넘는다")
+                .isLessThanOrEqualTo(10);
+    }
 }

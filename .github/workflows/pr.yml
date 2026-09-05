@@ -80,10 +80,10 @@ jobs:
           # 이어져 있는지 보는 시험이 있는데, 문서라고 건너뛰면 게이트를 지우는
           # PR 에서 정확히 그 시험이 안 돈다 — 막으려던 것을 그 PR 이 한다.
           #
-          # **빌드 배선도 예외다.** 액션 판올림은 `.github/` 만 건드려서 빌드가
+          # **빌드 배선도 예외다.** 액션 버전을 올리는 변경은 `.github/` 만 건드려서 빌드가
           # 통째로 건너뛰어졌다. 그래서 메이저 버전이 한 번도 안 돌아 본 채
           # 머지되고, 처음 실행되는 곳은 다음 사람의 코드 PR 이다 — 그 사람이
-          # 남의 판올림을 디버깅한다. 빌드를 바꾸면 빌드로 검증한다.
+          # 남이 올린 버전을 디버깅한다. 빌드를 바꾸면 빌드로 검증한다.
           #
           # **`pr.yml` 자신도 넣는다.** 빌드·테스트를 부르는 배선이 여기 있어서,
           # 빼 두면 그 호출을 바꾸는 변경이 자기가 바꾼 것을 안 돌린다.
@@ -232,6 +232,7 @@ jobs:
         규범=${{ needs.conventions.result }}
         단위=${{ needs.test-unit.result }}
         통합=${{ needs.test-integration.result }}
+        컨텍스트=${{ needs.test-context.result }}
         카오스=${{ needs.test-chaos.result }}
         커버리지=${{ needs.test-coverage.result }}
         보안=${{ needs.security.result }}

@@ -21,6 +21,7 @@ import java.util.stream.Stream;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.junit.jupiter.api.DisplayName;
@@ -41,7 +42,11 @@ import org.springframework.cloud.circuitbreaker.resilience4j.ReactiveResilience4
 import org.springframework.cloud.circuitbreaker.resilience4j.Resilience4JConfigurationProperties;
 import org.springframework.cloud.gateway.filter.factory.RemoveRequestHeaderGatewayFilterFactory;
 import io.netty.channel.ConnectTimeoutException;
+import java.io.IOException;
 import java.net.ConnectException;
+import java.net.NoRouteToHostException;
+import java.net.SocketException;
+import java.net.UnknownHostException;
 import org.springframework.cloud.gateway.filter.factory.RetryGatewayFilterFactory;
 import org.springframework.cloud.gateway.filter.factory.SpringCloudCircuitBreakerResilience4JFilterFactory;
 import org.springframework.cloud.gateway.handler.predicate.MethodRoutePredicateFactory;
@@ -67,13 +72,14 @@ class GatewayRoutesTest {
     // 띄운다 — 애플리케이션을 통째로 세우면 라우트 하나 보려고 레디스까지 붙는다.
     /** 검증 시험이 주소만 보게 하는 유효한 값. 여기가 초점이 아니다. */
     private static final Duration 응답_상한 = Duration.ofSeconds(12);
+    private static final Duration 연결_상한 = Duration.ofMillis(500);
 
     private static final GenericApplicationContext 컨텍스트 = 술어만_있는_컨텍스트();
 
     // 띄운다 — 애플리케이션을 통째로 세우면 라우트 하나 보려고 레디스까지 붙는다.
     private final RouteLocator locator = new GatewayRoutes().routes(
             new RouteLocatorBuilder(컨텍스트),
-            new GatewayRoutes.Backend("http://backend:8080", 응답_상한),
+            new GatewayRoutes.Backend("http://backend:8080", 응답_상한, 연결_상한),
             AdmissionGatewayFilter.withIsolatedSoldOutCache(재료_없는_홀더(),
                     AdmissionDecider.of(공유_리미터, 0.7),
                     Clock.systemUTC(), new SimpleMeterRegistry(),
@@ -177,28 +183,28 @@ class GatewayRoutesTest {
     @DisplayName("뒷단_주소가_없으면_기동을_막는다")
     void 뒷단_주소가_없으면_기동을_막는다() {
         // 주소가 없으면 프록시가 어디로 갈지 정해지지 않는다.
-        assertThatThrownBy(() -> new GatewayRoutes.Backend("  ", 응답_상한))
+        assertThatThrownBy(() -> new GatewayRoutes.Backend("  ", 응답_상한, 연결_상한))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new GatewayRoutes.Backend(null, 응답_상한))
+        assertThatThrownBy(() -> new GatewayRoutes.Backend(null, 응답_상한, 연결_상한))
                 .isInstanceOf(IllegalArgumentException.class);
         // 스킴이 빠진 값은 기동에 성공하고 모든 프록시가 실패한다.
-        assertThatThrownBy(() -> new GatewayRoutes.Backend("backend:8080", 응답_상한))
+        assertThatThrownBy(() -> new GatewayRoutes.Backend("backend:8080", 응답_상한, 연결_상한))
                 .isInstanceOf(IllegalArgumentException.class);
         // 경로를 붙이면 그 경로만 조용히 버려진다.
-        assertThatThrownBy(() -> new GatewayRoutes.Backend("http://backend:8080/api", 응답_상한))
+        assertThatThrownBy(() -> new GatewayRoutes.Backend("http://backend:8080/api", 응답_상한, 연결_상한))
                 .isInstanceOf(IllegalArgumentException.class);
         // 호스트가 없으면 스킴만 맞고 프록시가 갈 곳이 없다.
-        assertThatThrownBy(() -> new GatewayRoutes.Backend("http://", 응답_상한))
+        assertThatThrownBy(() -> new GatewayRoutes.Backend("http://", 응답_상한, 연결_상한))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new GatewayRoutes.Backend("http://:8080", 응답_상한))
+        assertThatThrownBy(() -> new GatewayRoutes.Backend("http://:8080", 응답_상한, 연결_상한))
                 .isInstanceOf(IllegalArgumentException.class);
         // 주소로 읽히지 않는 값.
-        assertThatThrownBy(() -> new GatewayRoutes.Backend("http://back end", 응답_상한))
+        assertThatThrownBy(() -> new GatewayRoutes.Backend("http://back end", 응답_상한, 연결_상한))
                 .isInstanceOf(IllegalArgumentException.class);
         // 프록시는 스킴·호스트·포트만 가져간다. 나머지는 조용히 버려진다.
         for (String 군더더기 : List.of("http://backend?trace=1", "http://u:p@backend",
                 "http://backend#x")) {
-            assertThatThrownBy(() -> new GatewayRoutes.Backend(군더더기, 응답_상한))
+            assertThatThrownBy(() -> new GatewayRoutes.Backend(군더더기, 응답_상한, 연결_상한))
                     .as("뒷단 %s", 군더더기)
                     .isInstanceOf(IllegalArgumentException.class);
         }
@@ -224,13 +230,76 @@ class GatewayRoutesTest {
         assertThat(발급.getMetadata()).containsEntry("response-timeout", 응답_상한.toMillis());
     }
 
+    /**
+     * <b>연결 상한을 두 라우트가 다 들어야 한다.</b>
+     *
+     * <p>안 걸면 프레임워크 기본값 30초가 선다. 조회 쪽이 특히 아픈데, 모으기가
+     * 붙어 있어 멎은 요청 하나가 그 키에 붙은 모든 조회를 그동안 잠근다.
+     *
+     * <p><b>이 시험이 보는 것은 값이 라우트에 실렸는지까지다.</b> 그 값에 실제로
+     * 끊기는지는 여기서 안 잰다 — 그건 {@code ConnectRetryTest} 와 저널의 실측이다.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"issue", "coupons"})
+    @DisplayName("두_라우트가_다_연결_상한을_들고_있다")
+    void 두_라우트가_다_연결_상한을_들고_있다(String id) {
+        Route route = 라우트().stream()
+                .filter(r -> id.equals(r.getId()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError(id + " 라우트가 없다"));
+
+        assertThat(route.getMetadata())
+                .containsEntry("connect-timeout", (int) 연결_상한.toMillis());
+    }
+
+    /** 바로 위는 받아야 한다. 안 그러면 상한을 못 내린다. */
+    @Test
+    @DisplayName("연결_상한_1ms_는_받는다")
+    void 연결_상한_1ms_는_받는다() {
+        assertThatCode(() -> new GatewayRoutes.Backend("http://backend:8080", 응답_상한,
+                Duration.ofMillis(1))).doesNotThrowAnyException();
+    }
+
     @Test
     @DisplayName("응답_상한이_없으면_기동을_막는다")
     void 응답_상한이_없으면_기동을_막는다() {
-        assertThatThrownBy(() -> new GatewayRoutes.Backend("http://backend:8080", null))
+        assertThatThrownBy(() -> new GatewayRoutes.Backend("http://backend:8080", null, 연결_상한))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() ->
-                new GatewayRoutes.Backend("http://backend:8080", Duration.ZERO))
+                new GatewayRoutes.Backend("http://backend:8080", Duration.ZERO, 연결_상한))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /**
+     * <b>연결 상한이 응답 상한보다 길면 가려진다.</b> 그러면 응답 상한이 먼저
+     * 끊어 연결 실패가 영영 안 드러나고, 그 요청은 재시도 없이 실패한다 —
+     * 연결 상한을 둔 이유가 사라진다.
+     */
+    @Test
+    @DisplayName("연결_상한이_응답_상한보다_길면_기동을_막는다")
+    void 연결_상한이_응답_상한보다_길면_기동을_막는다() {
+        assertThatThrownBy(() ->
+                new GatewayRoutes.Backend("http://backend:8080", 응답_상한, 응답_상한))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() ->
+                new GatewayRoutes.Backend("http://backend:8080", 응답_상한,
+                        응답_상한.plusMillis(1)))
+                .isInstanceOf(IllegalArgumentException.class);
+        // 바로 앞은 받아야 한다. 안 그러면 상한을 못 올린다.
+        assertThatCode(() ->
+                new GatewayRoutes.Backend("http://backend:8080", 응답_상한,
+                        응답_상한.minusMillis(1)))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("연결_상한이_없으면_기동을_막는다")
+    void 연결_상한이_없으면_기동을_막는다() {
+        assertThatThrownBy(() ->
+                new GatewayRoutes.Backend("http://backend:8080", 응답_상한, null))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() ->
+                new GatewayRoutes.Backend("http://backend:8080", 응답_상한, Duration.ZERO))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -243,14 +312,14 @@ class GatewayRoutesTest {
     @DisplayName("응답_상한이_격벽_시한_뒤면_기동을_막는다")
     void 응답_상한이_격벽_시한_뒤면_기동을_막는다() {
         assertThatThrownBy(() -> new GatewayRoutes.Backend("http://backend:8080",
-                AdmissionGatewayFilter.MAX_IN_FLIGHT))
+                AdmissionGatewayFilter.MAX_IN_FLIGHT, 연결_상한))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new GatewayRoutes.Backend("http://backend:8080",
-                AdmissionGatewayFilter.MAX_IN_FLIGHT.plusSeconds(1)))
+                AdmissionGatewayFilter.MAX_IN_FLIGHT.plusSeconds(1), 연결_상한))
                 .isInstanceOf(IllegalArgumentException.class);
         // 바로 앞은 받아야 한다. 안 그러면 상한을 못 올린다.
         assertThatCode(() -> new GatewayRoutes.Backend("http://backend:8080",
-                AdmissionGatewayFilter.MAX_IN_FLIGHT.minusMillis(1)))
+                AdmissionGatewayFilter.MAX_IN_FLIGHT.minusMillis(1), 연결_상한))
                 .doesNotThrowAnyException();
     }
 
@@ -646,7 +715,7 @@ class GatewayRoutesTest {
     private RouteLocator 라우터(RoutingProperties routing) {
         return new GatewayRoutes().routes(
                 new RouteLocatorBuilder(컨텍스트),
-                new GatewayRoutes.Backend("http://backend:8080", 응답_상한),
+                new GatewayRoutes.Backend("http://backend:8080", 응답_상한, 연결_상한),
                 AdmissionGatewayFilter.withIsolatedSoldOutCache(재료_없는_홀더(),
                         AdmissionDecider.of(공유_리미터, 0.7),
                         Clock.systemUTC(), new SimpleMeterRegistry(),
@@ -678,7 +747,7 @@ class GatewayRoutesTest {
     @DisplayName("라우팅을_켜면_lb_로_보낸다")
     void 라우팅을_켜면_lb_로_보낸다() {
         RouteLocator locator = 라우터(new RoutingProperties(
-                true, "coupon-service", null, null, null, null));
+                true, "coupon-service", null, null, null, null, null, null));
 
         assertThat(주소들(locator)).allMatch("lb://coupon-service"::equals);
     }
@@ -691,7 +760,7 @@ class GatewayRoutesTest {
     @DisplayName("라우팅을_끄면_단일_주소다")
     void 라우팅을_끄면_단일_주소다() {
         RouteLocator locator = 라우터(new RoutingProperties(
-                false, "coupon-service", null, null, null, null));
+                false, "coupon-service", null, null, null, null, null, null));
 
         assertThat(주소들(locator)).allMatch("http://backend:8080"::equals);
     }
@@ -703,33 +772,89 @@ class GatewayRoutesTest {
         assertThat(주소들(locator)).allMatch("http://backend:8080"::equals);
     }
 
+    /** 라우터가 만든 발급 라우트의 필터. 라우팅을 켠 판과 끈 판을 같이 본다. */
+    private static List<GatewayFilter> 발급_필터(RouteLocator locator) {
+        return locator.getRoutes().collectList().block().stream()
+                .filter(r -> "issue".equals(r.getId()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("issue 라우트가 없다"))
+                .getFilters();
+    }
+
     /**
-     * <b>연결이 안 된 인스턴스는 다음 대로 넘긴다</b> (9.3.11 · G9.11).
+     * <b>연결이 안 된 인스턴스는 다음 대로 넘긴다.</b>
      *
      * <p>인스턴스가 사라진 직후 그 주소로 간 요청이 5xx 로 새면, 사용자에게는
      * 게이트웨이가 고장난 것으로 보인다.
      */
     @Test
-    @DisplayName("발급에_재시도가_붙어_있다")
-    void 발급에_재시도가_붙어_있다() {
-        assertThat(잡는_라우트(HttpMethod.POST, "/api/v1/coupons/c1/issue").getFilters())
-                .anyMatch(f -> 이름(f).contains("Retry"));
+    @DisplayName("라우팅을_켜면_두_라우트에_재시도가_붙는다")
+    void 라우팅을_켜면_두_라우트에_재시도가_붙는다() {
+        RouteLocator 켠_판 = 라우터(new RoutingProperties(
+                true, "coupon-service", null, null, null, null, null, null));
+
+        for (String id : List.of("issue", "coupons")) {
+            Route route = 라우트(켠_판, id);
+            // **정확히 하나여야 한다.** 있는지만 보면 중복 등록이 통과하고,
+            // 그러면 죽은 대로 두 번 더 가서 사용자 대기가 그만큼 늘어난다.
+            assertThat(route.getFilters())
+                    .as("%s 라우트의 재시도 필터", id)
+                    .filteredOn(f -> 이름(f).contains("Retry"))
+                    .hasSize(1);
+            // **라우트에 실린 순서를 본다.** 상수끼리 견주면 그 값이 실제로
+            // 안 실려도 통과한다.
+            assertThat(실린_순서(route, "Retry")).isEqualTo(FilterOrder.ROUTE_RETRY);
+        }
+
+        // 발급 라우트에서는 서킷보다 안쪽이어야 한다 — 바깥이면 폴백이 오류를
+        // 삼켜 재시도가 볼 것이 없다.
+        Route 발급 = 라우트(켠_판, "issue");
+        assertThat(실린_순서(발급, "Retry"))
+                .isGreaterThan(실린_순서(발급, "CircuitBreaker"));
+    }
+
+    /** 이름으로 라우트를 짚는다. 못 찾으면 실패다 — 없는 것을 통과로 세지 않는다. */
+    private static Route 라우트(RouteLocator locator, String id) {
+        return locator.getRoutes().collectList().block().stream()
+                .filter(r -> id.equals(r.getId()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError(id + " 라우트가 없다"));
     }
 
     /**
-     * <b>서킷 바깥이다.</b>
-     *
-     * <p>안쪽에 두면 서킷이 요청 하나에 결과 하나만 보게 되어, 재시도가 만든
-     * 시도가 창에 안 쌓인다 — 관측 실패율이 절반이라 서킷이 늦게 열린다.
+     * <b>끄면 안 건다.</b> 단일 주소로 되돌린 판에는 고를 다음 대가 없어,
+     * 재시도가 같은 죽은 주소로 두 번 간다 — 연결 시도와 사용자 대기가 두 배다.
+     * 그 스위치를 당기는 순간이 하필 뒷단이 아플 때다 (Phase 9 5절).
      */
     @Test
-    @DisplayName("재시도가_서킷_바깥이다")
-    void 재시도가_서킷_바깥이다() {
-        assertThat(FilterOrder.ROUTE_RETRY).isLessThan(FilterOrder.ROUTE_CIRCUIT);
+    @DisplayName("라우팅을_끄면_재시도를_안_건다")
+    void 라우팅을_끄면_재시도를_안_건다() {
+        RouteLocator 끈_판 = 라우터(new RoutingProperties(
+                false, "coupon-service", null, null, null, null, null, null));
+
+        for (String id : List.of("issue", "coupons")) {
+            assertThat(라우트(끈_판, id).getFilters())
+                    .as("%s 라우트", id)
+                    .noneMatch(f -> 이름(f).contains("Retry"));
+        }
     }
 
     /**
-     * <b>상태 코드로는 안 건다</b> (9.3.12 · 불변식 2).
+     * <b>서킷 안쪽이다.</b>
+     *
+     * <p>바깥에 두면 재시도가 한 번도 안 돈다 — 서킷 필터가 폴백 주소를 들고
+     * 있으면 하류의 모든 오류를 그리로 넘기고 정상 완료를 내보내, 바깥의
+     * 재시도는 볼 오류가 없다. 이 값만으로는 그것을 못 잡으므로 실제로 넘어가는지는
+     * {@code ConnectRetryTest} 가 본다.
+     */
+    @Test
+    @DisplayName("재시도가_서킷_안쪽이다")
+    void 재시도가_서킷_안쪽이다() {
+        assertThat(FilterOrder.ROUTE_CIRCUIT).isLessThan(FilterOrder.ROUTE_RETRY);
+    }
+
+    /**
+     * <b>상태 코드로는 안 건다.</b>
      *
      * <p>5xx 는 뒷단이 요청을 받은 뒤에 낸 답이고, 그 시점에는 이미 재고가
      * 움직였을 수 있다. 그걸 다시 보내면 그 한 건이 곧 초과 발급이다.
@@ -741,8 +866,55 @@ class GatewayRoutesTest {
 
         assertThat(config.getSeries()).isEmpty();
         assertThat(config.getStatuses()).isEmpty();
+        assertThat(ConnectException.class).isAssignableFrom(ConnectTimeoutException.class);
+        // **넓히는 쪽을 막는다.** 좁히면 유출이지만 넓히면 초과 발급이라 값이
+        // 훨씬 비싸다. 갈래가 하나 늘어 목록이 바뀌어도 이 성질은 그대로 산다.
         assertThat(config.getExceptions())
-                .containsExactlyInAnyOrder(ConnectException.class, ConnectTimeoutException.class);
+                .as("연결 단계 밖까지 덮는 상위 타입이 끼면 안 된다")
+                .noneMatch(c -> c.isAssignableFrom(SocketException.class)
+                        || c.isAssignableFrom(IOException.class));
+        // **서로를 덮지 않는다.** 하나가 다른 하나의 상위면 목록에 잉여가 있거나
+        // 너무 넓다는 뜻이다 — 후자가 위험한 쪽이다.
+        for (Class<? extends Throwable> a : config.getExceptions()) {
+            for (Class<? extends Throwable> b : config.getExceptions()) {
+                assertThat(a == b || !a.isAssignableFrom(b))
+                        .as("%s 가 %s 를 이미 덮는다", a.getSimpleName(), b.getSimpleName())
+                        .isTrue();
+            }
+        }
+    }
+
+    /**
+     * <b>연결이 못 서는 갈래가 하나가 아니다.</b>
+     *
+     * <p>포트만 닫히면 거절이고 라우팅이 안 되면 도달 불가인데, 뒤엣것은
+     * {@code ConnectException} 의 하위가 아니라 조건 하나로는 안 덮인다.
+     */
+    @Test
+    @DisplayName("연결이_못_서는_갈래를_다_덮는다")
+    void 연결이_못_서는_갈래를_다_덮는다() {
+        var config = GatewayRoutes.connectRetryConfig();
+
+        // 계보가 갈린다는 것부터 못 박는다. 안 적으면 목록이 왜 둘인지가 안 남는다.
+        assertThat(ConnectException.class.isAssignableFrom(NoRouteToHostException.class))
+                .as("도달 불가는 거절의 하위가 아니다").isFalse();
+
+        assertThat(config.getExceptions()).containsExactlyInAnyOrder(
+                ConnectException.class, NoRouteToHostException.class);
+    }
+
+    /**
+     * <b>이름 풀이 실패는 안 문다.</b>
+     *
+     * <p>연결 상한이 채널 옵션이라 그 단계엔 안 걸리고, 재시도가 리졸버 상한을
+     * 두 배로 늘려 격벽 지연을 넘긴다. 다음 대도 같은 리졸버를 타므로 다시
+     * 보내도 결과가 같다 — 못 푸는 대는 배제기가 걷는다.
+     */
+    @Test
+    @DisplayName("이름_풀이_실패는_다시_안_보낸다")
+    void 이름_풀이_실패는_다시_안_보낸다() {
+        assertThat(GatewayRoutes.connectRetryConfig().getExceptions())
+                .noneMatch(c -> c.isAssignableFrom(UnknownHostException.class));
     }
 
     /** 한 번이면 충분하다. 여러 번 돌면 죽은 뒷단에 요청이 그만큼 오래 매달린다. */

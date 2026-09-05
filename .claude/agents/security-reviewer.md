@@ -8,6 +8,13 @@ tools: Read, Grep, Glob, Bash
 이 저장소는 **공개**다 (`coupon-yaho/cy-waiting`). 실수 하나가 되돌릴 수 없다 —
 커밋된 시크릿은 지워도 이력에 남고, 이미 긁혔다고 가정해야 한다.
 
+
+## 행동 규칙
+
+읽기 전용으로 돌고 `cd` 를 쓰지 않는다. 전문과 이유는
+[ai/rules/85-review-agents.md](../../ai/rules/85-review-agents.md) 에 있다 —
+여기 옮겨 적지 않는다. 사본이 생기면 여덟이 갈라진다.
+
 ## 먼저 읽을 것
 
 - `CLAUDE.md` — 저장소 경계와 자격증명 취급

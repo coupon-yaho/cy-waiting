@@ -16,7 +16,7 @@ plugins {
 }
 
 group = 'com.kafkick'
-version = '0.6.0'
+version = '0.7.0'
 
 // **산출물 이름에 버전을 안 싣는다.** 실으면 Dockerfile 과 부하 시험 구성이 매
 // 릴리스마다 같이 고쳐야 하고, 한 곳을 빠뜨리면 없는 파일을 가리킨 채 조용히 깨진다.
@@ -354,10 +354,14 @@ pitest {
     //
     // **gateway 의 판정 코드도 넣는다.** 응답 봉투·재시도 안내처럼 값을 정하는
     // 코드가 여기 있는데, 범위 밖이라 약한 단언이 숫자에 안 잡혔다.
+    //
+    // **routing 도 넣는다.** 고르개에 넘길 후보를 거르고 실패를 세는 코드가
+    // 여기 있는데 범위 밖이라, 그 자리를 지워도 시험이 초록인 채로 지나갔다.
     targetClasses = ['com.kafkick.waiting.domain.*', 'com.kafkick.waiting.control.*',
-                     'com.kafkick.waiting.gateway.*']
-    // domain 은 Phase 2 에서 채워진다. 그전까지 대상이 0건인데, 이걸 실패로
-    // 두면 파이프라인이 페이즈 진행을 막는다. 클래스가 들어오면 임계가 문다.
+                     'com.kafkick.waiting.gateway.*', 'com.kafkick.waiting.routing.*']
+    // 대상이 0건일 때 로컬 실행을 막지 않는다 — 페이즈 초기에 그랬다.
+    // **CI 에서는 0 을 통과로 두지 않는다.** 대상 지정이 비면 뮤테이션 잡이
+    // 잡는다 (.github/workflows/_test.yml).
     failWhenNoMutations = false
     // **배선은 대상이 아니다.** 조립만 하는 코드라 뮤턴트가 대부분 등가이고,
     // 실제로 지켜야 할 것(빈이 뜨는가·이름이 그룹과 맞는가)은 컨텍스트 시험이
@@ -374,7 +378,16 @@ pitest {
             'com.kafkick.waiting.gateway.CorsPolicy*',
             'com.kafkick.waiting.gateway.ConfigUris*',
             'com.kafkick.waiting.gateway.FilterOrder',
+            'com.kafkick.waiting.routing.*Config',
+            'com.kafkick.waiting.routing.RoutingAttributes',
+            'com.kafkick.waiting.routing.ReservedInstance',
     ]
+    // **PIT 은 정수 백분율로 비교한다.** 89.9% 가 90 으로 반올림돼 통과하므로
+    // 이 한 줄만으로는 "생존 ≤ 10%" 가 지켜지지 않는다. 반올림 없는 비율은
+    // 뮤테이션 잡이 리포트를 직접 세어 다시 문다 (.github/workflows/_test.yml).
+    //
+    // **값은 여기 하나다.** 그 잡이 이 줄을 읽어 비율을 잰다 — 숫자를 양쪽에
+    // 박으면 한쪽만 바뀌는 날 CI 가 조용히 옛 값으로 계속 문다.
     mutationThreshold = 90          // 생존 ≤ 10%
     timestampedReports = false
     // XML 이 있어야 생존 뮤턴트를 기계로 짚는다. HTML 만 두면 사람이 눈으로 센다.

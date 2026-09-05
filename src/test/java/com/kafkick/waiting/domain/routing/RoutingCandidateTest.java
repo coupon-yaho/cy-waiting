@@ -65,7 +65,7 @@ class RoutingCandidateTest {
     }
 
     @Nested
-    @DisplayName("콜드 스타트 씨앗")
+    @DisplayName("콜드 스타트 초기값")
     class ColdStart {
 
         /**
@@ -78,18 +78,18 @@ class RoutingCandidateTest {
         @Test
         @DisplayName("기동_직후에는_보고된_값을_그대로_쓴다")
         void 기동_직후에는_보고된_값을_그대로_쓴다() {
-            double 씨앗 = RoutingCandidate.seed(40, Duration.ZERO, Duration.ofSeconds(60));
+            double 초기값 = RoutingCandidate.seed(40, Duration.ZERO, Duration.ofSeconds(60));
 
-            assertThat(씨앗).isCloseTo(40, within(1e-9));
+            assertThat(초기값).isCloseTo(40, within(1e-9));
         }
 
-        /** 로컬 관측이 쌓이면 씨앗의 무게가 선형으로 준다. */
+        /** 로컬 관측이 쌓이면 초기값의 무게가 선형으로 준다. */
         @Test
         @DisplayName("램프_중간이면_절반이다")
         void 램프_중간이면_절반이다() {
-            double 씨앗 = RoutingCandidate.seed(40, Duration.ofSeconds(30), Duration.ofSeconds(60));
+            double 초기값 = RoutingCandidate.seed(40, Duration.ofSeconds(30), Duration.ofSeconds(60));
 
-            assertThat(씨앗).isCloseTo(20, within(1e-9));
+            assertThat(초기값).isCloseTo(20, within(1e-9));
         }
 
         /** 램프가 끝나면 식이 원래대로 돌아간다 — 진단용이라는 원칙이 유지된다. */
@@ -102,20 +102,31 @@ class RoutingCandidateTest {
                     .isZero();
         }
 
-        /** 씨앗이 실린 뒤에는 그것까지 세어 견준다. */
+        /** 초기값이 실린 뒤에는 그것까지 세어 견준다. */
         @Test
-        @DisplayName("씨앗이_부하율에_실린다")
-        void 씨앗이_부하율에_실린다() {
+        @DisplayName("초기값이_부하율에_실린다")
+        void 초기값이_부하율에_실린다() {
             RoutingCandidate 열화된 = RoutingCandidate.of("be-1", 100, 0, 40);
 
             assertThat(열화된.loadFactor()).isCloseTo(0.4, within(1e-9));
         }
 
-        /** 램프가 0 이면 씨앗을 안 쓴다. 나누지 않고 바로 0 이다. */
+        /** 램프가 0 이면 초기값을 안 쓴다. 나누지 않고 바로 0 이다. */
         @Test
-        @DisplayName("램프가_0_이면_씨앗이_없다")
-        void 램프가_0_이면_씨앗이_없다() {
+        @DisplayName("램프가_0_이면_초기값이_없다")
+        void 램프가_0_이면_초기값이_없다() {
             assertThat(RoutingCandidate.seed(40, Duration.ZERO, Duration.ZERO)).isZero();
+        }
+
+        /**
+         * <b>1밀리초는 램프가 있는 것이다.</b> 0 과 같이 접으면 램프를 밀리초로
+         * 좁힌 배포가 콜드 스타트 보정을 통째로 잃는다.
+         */
+        @Test
+        @DisplayName("램프가_1밀리초면_초기값이_실린다")
+        void 램프가_1밀리초면_초기값이_실린다() {
+            assertThat(RoutingCandidate.seed(40, Duration.ZERO, Duration.ofMillis(1)))
+                    .isCloseTo(40, within(1e-9));
         }
 
         /**
@@ -125,13 +136,13 @@ class RoutingCandidateTest {
          * 후보 생성에서 터져 라우팅이 통째로 멎는다.
          */
         @Test
-        @DisplayName("램프가_1밀리초_미만이면_씨앗이_없다")
-        void 램프가_1밀리초_미만이면_씨앗이_없다() {
+        @DisplayName("램프가_1밀리초_미만이면_초기값이_없다")
+        void 램프가_1밀리초_미만이면_초기값이_없다() {
             assertThat(RoutingCandidate.seed(40, Duration.ZERO, Duration.ofNanos(500_000)))
                     .isZero();
         }
 
-        /** 보고가 음수로 오면 0 으로 본다. 음수 씨앗은 그 대를 영원히 뽑히게 한다. */
+        /** 보고가 음수로 오면 0 으로 본다. 음수 초기값은 그 대를 영원히 뽑히게 한다. */
         @Test
         @DisplayName("음수_보고는_0_으로_본다")
         void 음수_보고는_0_으로_본다() {
@@ -159,10 +170,10 @@ class RoutingCandidateTest {
                     .isInstanceOf(IllegalArgumentException.class);
         }
 
-        /** NaN 씨앗은 부하율을 통째로 NaN 으로 만들어 비교가 늘 거짓이 된다. */
+        /** NaN 초기값은 부하율을 통째로 NaN 으로 만들어 비교가 늘 거짓이 된다. */
         @Test
-        @DisplayName("성한_값이_아닌_씨앗은_거절한다")
-        void 성한_값이_아닌_씨앗은_거절한다() {
+        @DisplayName("성한_값이_아닌_초기값은_거절한다")
+        void 성한_값이_아닌_초기값은_거절한다() {
             assertThatThrownBy(() -> RoutingCandidate.of("be-1", 100, 0, Double.NaN))
                     .isInstanceOf(IllegalArgumentException.class);
             assertThatThrownBy(() -> RoutingCandidate.of("be-1", 100, 0, -1))
@@ -179,12 +190,13 @@ class RoutingCandidateTest {
                     .isInstanceOf(NullPointerException.class);
         }
 
-        /** 음수 램프는 설정 실수다. 나누면 씨앗이 커져 그 대가 영원히 배제된다. */
+        /** 음수 램프는 설정 실수다. 나누면 초기값이 커져 그 대가 영원히 배제된다. */
         @Test
-        @DisplayName("음수_램프면_씨앗이_없다")
-        void 음수_램프면_씨앗이_없다() {
+        @DisplayName("음수_램프면_초기값이_없다")
+        void 음수_램프면_초기값이_없다() {
             assertThat(RoutingCandidate.seed(40, Duration.ZERO, Duration.ofSeconds(-1)))
                     .isZero();
         }
     }
+
 }

@@ -2,6 +2,7 @@ package com.kafkick.waiting.routing;
 
 import com.kafkick.waiting.domain.routing.InFlightRegistry;
 import com.kafkick.waiting.domain.routing.InstanceChooser;
+import com.kafkick.waiting.domain.routing.InstanceOutliers;
 import com.kafkick.waiting.domain.routing.WeightedP2c;
 import com.kafkick.waiting.domain.routing.WeightedRoundRobin;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -30,6 +31,20 @@ public class RoutingConfig {
     }
 
     /**
+     * 연속으로 실패하는 인스턴스를 잠시 후보에서 뺀다.
+     *
+     * <p>서킷은 뒷단 전체에 하나라 열리면 다 같이 막힌다. 여기는 인스턴스별로
+     * 보되 <b>전부를 빼지는 않는다</b> — 배제가 전면 차단이 되면 안 된다.
+     */
+    @Bean
+    // 램프는 콜드 스타트와 같은 값을 쓴다. 둘 다 "자기 관측이 없어 한가해
+    // 보이는 대를 잠시 무겁게 본다" 는 같은 일이라 따로 둘 이유가 없다.
+    InstanceOutliers instanceOutliers(RoutingProperties properties) {
+        return InstanceOutliers.of(properties.outlierFailures(),
+                properties.outlierEjectFor(), properties.coldStartRamp());
+    }
+
+    /**
      * <b>두 전략을 다 만든다</b> (R-9). 3~5 대로 줄면 라운드로빈이 더 정확하고
      * 단순한데, 어느 쪽이 나은지는 실측으로 정할 문제다.
      */
@@ -38,7 +53,7 @@ public class RoutingConfig {
         if (RoutingProperties.ROUND_ROBIN.equals(properties.strategy())) {
             return WeightedRoundRobin.create();
         }
-        // 무작위 씨앗을 안 고정한다. 고정하면 노드들이 같은 순서로 뽑아,
+        // 난수 시드를 안 고정한다. 고정하면 노드들이 같은 순서로 뽑아,
         // P2C 를 고른 이유인 쏠림 회피가 사라진다.
         return WeightedP2c.of(new Random()::nextInt);
     }
@@ -50,15 +65,17 @@ public class RoutingConfig {
      * 아니면 감소를 어디선가 놓친 것이다 (G9.3).
      */
     @Bean
-    InFlightMetrics.Binding inFlightMetrics(InFlightRegistry registry, MeterRegistry meters) {
-        InFlightMetrics.bind(registry, System::currentTimeMillis, meters);
+    InFlightMetrics.Binding inFlightMetrics(InFlightRegistry registry,
+            InstanceOutliers outliers, MeterRegistry meters) {
+        InFlightMetrics.bind(registry, outliers, System::currentTimeMillis, meters);
         return new InFlightMetrics.Binding();
     }
 
     /** 나간 요청을 세고 어느 경로로 끝나든 되돌린다 (G9.3). */
     @Bean
-    InFlightTrackingFilter inFlightTrackingFilter(InFlightRegistry registry) {
-        return InFlightTrackingFilter.of(registry, System::currentTimeMillis);
+    InFlightTrackingFilter inFlightTrackingFilter(InFlightRegistry registry,
+            InstanceOutliers outliers) {
+        return InFlightTrackingFilter.of(registry, outliers, System::currentTimeMillis);
     }
 
     /** 이 서비스에만 우리 균형기를 건다. 다른 이름으로 가는 것은 기본 배선 그대로다. */

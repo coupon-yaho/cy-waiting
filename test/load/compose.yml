@@ -107,7 +107,9 @@ services:
         - CMD
         - sh
         - -c
-        - "[ \"$$(redis-cli -h redis HGET gw:snapshot '#credit')\" -ge 200 ]"
+        # 여유를 작게 둔 회차는 200 에 영영 못 닿는다. 부르는 쪽이 제 여유에
+        # 맞는 값을 준다 — 안 주면 200 이다.
+        - "[ \"$$(redis-cli -h redis HGET gw:snapshot '#credit')\" -ge ${WARMUP_CREDIT:-200} ]"
       interval: 2s
       timeout: 3s
       # 램프는 60초짜리다. 재시도 예산이 그보다 짧으면 실행이 아니라 기동이 진다.

@@ -65,7 +65,7 @@ class CapacityReportsTest extends RedisContainerSupport {
      * <b>주소가 없어도 보고는 산다</b> (E-12 · D-C1).
      *
      * <p>계약이 늘기 전에 뜬 인스턴스는 주소를 안 싣는다. 그 보고를 버리면 그
-     * 몫만큼 전역 크레딧이 조용히 줄어, 판올림 구간에 전체가 조여진다.
+     * 몫만큼 전역 크레딧이 조용히 줄어, 배포 구간에 전체가 조여진다.
      */
     @Test
     @DisplayName("주소가_없어도_크레딧은_센다")

@@ -3,11 +3,16 @@ package com.kafkick.waiting.routing;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.kafkick.waiting.domain.routing.InFlightRegistry;
+import com.kafkick.waiting.domain.routing.InstanceOutliers;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.ParameterizedTest;
 import org.springframework.cloud.client.DefaultServiceInstance;
 import org.springframework.cloud.client.ServiceInstance;
 import org.springframework.cloud.client.loadbalancer.DefaultResponse;
@@ -34,8 +39,11 @@ class InFlightTrackingFilterTest {
 
     private final InFlightRegistry 레지스트리 = InFlightRegistry.of(Duration.ofSeconds(30));
 
+    private final InstanceOutliers 배제기 =
+            InstanceOutliers.of(3, Duration.ofSeconds(10), Duration.ofSeconds(60));
+
     private final InFlightTrackingFilter 필터 =
-            InFlightTrackingFilter.of(레지스트리, () -> 지금);
+            InFlightTrackingFilter.of(레지스트리, 배제기, () -> 지금);
 
     /**
      * <b>자리는 균형기가 이미 잡아 뒀다.</b> 필터는 놓기만 한다 — 여기서 잡으면
@@ -54,6 +62,189 @@ class InFlightTrackingFilterTest {
 
     private static ServerWebExchange 안_고른_요청() {
         return MockServerWebExchange.from(MockServerHttpRequest.post("/api/v1/coupons/c1/issue"));
+    }
+
+    private void 세_번(String instanceId, GatewayFilterChain 사슬) {
+        for (int i = 0; i < 3; i++) {
+            필터.filter(고른_요청(instanceId), 사슬).onErrorComplete().block();
+        }
+    }
+
+    /** 여기가 서킷 안쪽이라 폴백이 정상 코드로 바꾸기 전의 것을 본다. */
+    @Test
+    @DisplayName("뒷단_오류가_연속되면_그_대를_뺀다")
+    void 뒷단_오류가_연속되면_그_대를_뺀다() {
+        세_번("be-1", ex -> {
+            ex.getResponse().setRawStatusCode(503);
+            return Mono.empty();
+        });
+
+        assertThat(배제기.ejected(Set.of("be-1", "be-2"), 지금))
+                .containsExactly("be-1");
+    }
+
+    /** 연결이 끊긴 것도 그 대의 실패다. 상태 코드가 아예 안 선다. */
+    @Test
+    @DisplayName("에러로_끝난_것도_실패로_센다")
+    void 에러로_끝난_것도_실패로_센다() {
+        세_번("be-1", ex -> Mono.error(new IllegalStateException("뒷단이 끊었다")));
+
+        assertThat(배제기.ejected(Set.of("be-1", "be-2"), 지금))
+                .containsExactly("be-1");
+    }
+
+    /**
+     * <b>잘못된 요청은 어느 대로 보내도 같은 답이 온다.</b> 그걸로 빼면 나쁜
+     * 클라이언트 하나가 뒷단을 차례로 지운다.
+     */
+    @Test
+    @DisplayName("4xx_는_어느_쪽으로도_안_센다")
+    void 사백번대는_어느_쪽으로도_안_센다() {
+        세_번("be-1", ex -> {
+            ex.getResponse().setRawStatusCode(400);
+            return Mono.empty();
+        });
+
+        assertThat(배제기.ejected(Set.of("be-1", "be-2"), 지금)).isEmpty();
+        assertThat(배제기.tracked()).as("성공으로도 안 센다").isEmpty();
+    }
+
+    /**
+     * <b>429 는 그 대의 상태다.</b> 포화된 뒷단이 부하를 흘리는 가장 흔한
+     * 방식이고 즉시 끝나므로, 안 세면 그 대가 계속 가장 한가해 보인다 —
+     * 이 기능이 막으려던 바로 그 병리다.
+     */
+    @Test
+    @DisplayName("포화를_알리는_429_는_그_대의_실패다")
+    void 포화를_알리는_429_는_그_대의_실패다() {
+        세_번("be-1", ex -> {
+            ex.getResponse().setRawStatusCode(429);
+            return Mono.empty();
+        });
+
+        assertThat(배제기.ejected(Set.of("be-1", "be-2"), 지금)).containsExactly("be-1");
+    }
+
+    /**
+     * <b>4xx 를 성공으로 세면 이 대가 영영 안 빠진다.</b> 400 이 매번 연속을
+     * 끊어, 절반이 500 인 뒷단이 정상으로 보인다.
+     */
+    @Test
+    @DisplayName("오백과_사백을_번갈아_내도_빠진다")
+    void 오백과_사백을_번갈아_내도_빠진다() {
+        int[] 코드 = {500, 400, 500, 400, 500};
+        for (int c : 코드) {
+            필터.filter(고른_요청("be-1"), ex -> {
+                ex.getResponse().setRawStatusCode(c);
+                return Mono.empty();
+            }).block();
+        }
+
+        assertThat(배제기.ejected(Set.of("be-1", "be-2"), 지금)).containsExactly("be-1");
+    }
+
+    /**
+     * <b>성공을 안 적으면 연속이 영영 안 풀린다.</b> 몇 시간에 걸쳐 흩어진 실패
+     * 셋만으로 멀쩡한 대가 빠지고, 트래픽이 많은 대일수록 먼저 걸린다.
+     */
+    @Test
+    @DisplayName("정상_응답이_연속을_끊는다")
+    void 정상_응답이_연속을_끊는다() {
+        int[] 코드 = {503, 503, 200, 503};
+        for (int c : 코드) {
+            필터.filter(고른_요청("be-1"), ex -> {
+                ex.getResponse().setRawStatusCode(c);
+                return Mono.empty();
+            }).block();
+        }
+
+        assertThat(배제기.ejected(Set.of("be-1", "be-2"), 지금)).isEmpty();
+    }
+
+    /**
+     * <b>취소는 어느 쪽으로도 안 센다.</b> 사용자가 창을 닫은 것만으로
+     * 뒷단이 빠지면, 이탈이 몰리는 구간에 멀쩡한 대가 차례로 사라진다.
+     */
+    @Test
+    @DisplayName("취소는_실패로_안_센다")
+    void 취소는_실패로_안_센다() {
+        for (int i = 0; i < 3; i++) {
+            StepVerifier.create(필터.filter(고른_요청("be-1"), ex -> Mono.never()))
+                    .thenCancel()
+                    .verify();
+        }
+
+        assertThat(배제기.ejected(Set.of("be-1", "be-2"), 지금)).isEmpty();
+        assertThat(배제기.tracked()).as("성공으로도 안 센다").isEmpty();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Set<String> 시도한(ServerWebExchange 요청) {
+        return (Set<String>) 요청.getAttributes().getOrDefault(RoutingAttributes.TRIED, Set.of());
+    }
+
+    /**
+     * <b>하류가 오류를 받기 전에 적혀 있어야 한다.</b> 재시도는 백오프가 없어
+     * 그 오류 신호 안에서 곧바로 다시 구독하고, 그때 균형기가 이 목록을 읽는다.
+     * `doFinally` 에 적으면 콜백이 신호를 넘긴 뒤에 돌아 두 번째 선택이 빈
+     * 목록을 본다 — 시험 다섯이 초록인데 기능이 안 도는 자리였다.
+     */
+    @Test
+    @DisplayName("하류가_오류를_보기_전에_적힌다")
+    void 하류가_오류를_보기_전에_적힌다() {
+        ServerWebExchange 요청 = 고른_요청("be-1");
+        List<Set<String>> 하류가_본_것 = new ArrayList<>();
+
+        StepVerifier.create(필터.filter(요청, ex -> Mono.error(new IllegalStateException("끊김")))
+                        .doOnError(e -> 하류가_본_것.add(Set.copyOf(시도한(요청)))))
+                .verifyError();
+
+        assertThat(하류가_본_것).singleElement()
+                .as("재시도가 다시 고르는 시점에 이미 적혀 있다")
+                .isEqualTo(Set.of("be-1"));
+    }
+
+    /**
+     * <b>실패한 대를 요청에 적어 둔다.</b> 재시도는 같은 요청을 다시 고르므로,
+     * 여기 적힌 것을 균형기가 읽어야 다음 대로 넘어간다.
+     */
+    @Test
+    @DisplayName("실패한_대를_요청에_적는다")
+    void 실패한_대를_요청에_적는다() {
+        ServerWebExchange 요청 = 고른_요청("be-1");
+
+        StepVerifier.create(필터.filter(요청, ex -> Mono.error(new IllegalStateException("끊김"))))
+                .verifyError();
+
+        assertThat(시도한(요청)).containsExactly("be-1");
+    }
+
+    /** 5xx 도 그 대의 실패라 적는다. 상태 코드가 서는 경로다. */
+    @Test
+    @DisplayName("오류_응답도_요청에_적는다")
+    void 오류_응답도_요청에_적는다() {
+        ServerWebExchange 요청 = 고른_요청("be-1");
+
+        필터.filter(요청, ex -> {
+            ex.getResponse().setRawStatusCode(503);
+            return Mono.empty();
+        }).block();
+
+        assertThat(시도한(요청)).containsExactly("be-1");
+    }
+
+    /** 성공한 대는 안 적는다. 적으면 다음 재시도가 멀쩡한 대를 피한다. */
+    @Test
+    @DisplayName("성공한_대는_안_적는다")
+    void 성공한_대는_안_적는다() {
+        ServerWebExchange 요청 = 고른_요청("be-1");
+
+        필터.filter(요청, ex -> {
+            ex.getResponse().setRawStatusCode(200);
+            return Mono.empty();
+        }).block();
+
+        assertThat(시도한(요청)).isEmpty();
     }
 
     /** 뒷단이 답할 때까지 물려 있다. 안 세면 부하율이 늘 0 이라 고르개가 눈이 먼다. */
@@ -137,4 +328,25 @@ class InFlightTrackingFilterTest {
         assertThat(레지스트리.count("be-1", 지금)).isZero();
         assertThat(레지스트리.count("be-2", 지금)).isZero();
     }
+
+    /**
+     * <b>밖에서 만드는 코드는 그 대의 상태가 아니다.</b> 401·403 은 요청의
+     * 권한이고 408 은 요청이 안 끝난 것이다 — 어느 대로 보내도 같은 답이 온다.
+     *
+     * <p>실패로 세면 인증 없는 요청 몇 건으로 뒷단을 차례로 뺄 수 있다. 임계가
+     * 셋이고 램프 중 한 건이 배제를 되감으므로 초당 한 건 미만으로도 된다.
+     */
+    @ParameterizedTest
+    @ValueSource(ints = {401, 403, 408})
+    @DisplayName("밖에서_만드는_사백은_그_대의_실패가_아니다")
+    void 밖에서_만드는_사백은_그_대의_실패가_아니다(int code) {
+        세_번("be-1", ex -> {
+            ex.getResponse().setRawStatusCode(code);
+            return Mono.empty();
+        });
+
+        assertThat(배제기.ejected(Set.of("be-1", "be-2"), 지금))
+                .as("%d 로는 안 빠진다", code).isEmpty();
+    }
+
 }

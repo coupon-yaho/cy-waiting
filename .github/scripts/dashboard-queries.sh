@@ -33,7 +33,7 @@ while IFS= read -r metric; do
         continue
     fi
     # **남의 지표도 그냥 통과시키지 않는다.** 프레임워크가 내보내는 이름이라
-    # 코드에 없을 뿐이고, 그쪽 이름도 판올림에 바뀐다. 허용 목록에 적어 둔
+    # 코드에 없을 뿐이고, 그쪽 이름도 버전이 올라가면 바뀐다. 허용 목록에 적어 둔
     # 것만 인정하고, 늘릴 때는 `/actuator/prometheus` 에서 직접 확인한다.
     if ! grep -v '^#' "$ALLOWED" 2>/dev/null | grep -qxF "$metric"; then
         echo "::error file=$DIR::허용 목록에 없는 지표를 본다: $metric ($ALLOWED 참고)"

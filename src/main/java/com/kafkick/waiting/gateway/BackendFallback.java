@@ -9,6 +9,9 @@ import java.time.Clock;
 import java.util.Objects;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.DoubleSupplier;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.cloud.gateway.support.ServerWebExchangeUtils;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.reactive.function.server.ServerRequest;
 import org.springframework.web.reactive.function.server.ServerResponse;
@@ -22,6 +25,8 @@ import reactor.core.publisher.Mono;
  * 읽히므로 다시 오지 않는다 — 뒷단은 잠깐 흔들렸을 뿐인데.
  */
 public final class BackendFallback {
+
+    private static final Logger log = LoggerFactory.getLogger(BackendFallback.class);
 
     private static final String METRIC = "waiting.backend.fallback";
 
@@ -99,6 +104,17 @@ public final class BackendFallback {
         // 뒷단 오류로도 온다. 라벨을 오픈으로 고정하면 서킷이 닫힌 채 실패만 나는
         // 구간에서 지표가 거짓말하고, 그 지표로 회복을 판정한다 (8.4.3).
         meters.counter(METRIC, "state", state()).increment();
+        // **무엇이 폴백을 불렀는지 남긴다.** 지표는 서킷 상태만 실어, 서킷이
+        // 닫힌 채 실패만 나는 구간에서 원인이 뒷단인지 게이트웨이 자신인지를
+        // 못 가른다. 예외 이름 하나면 그 둘이 갈린다 — 실측에서 20 건이 뒷단에
+        // 가지도 않고 실패했는데 그것을 지표로만 역산하느라 반나절을 썼다.
+        if (log.isDebugEnabled()) {
+            request.attribute(ServerWebExchangeUtils.CIRCUITBREAKER_EXECUTION_EXCEPTION_ATTR)
+                    .ifPresentOrElse(
+                            ex -> log.debug("폴백 원인 — {}: {}", ex.getClass().getSimpleName(),
+                                    ex instanceof Throwable th ? th.getMessage() : ex),
+                            () -> log.debug("폴백 원인 — 예외 속성이 없다 (서킷이 열린 채 거절)"));
+        }
         // **차례가 온 사람과 줄에 선 사람에게 같은 답을 하면 안 된다.** 앞은 손에
         // 든 토큰의 수명 안에 돌아와야 하고, 뒤는 그럴 필요가 없다. 판정 경로가
         // 이미 그렇게 가르고 있는데(RETRY_TOKEN 은 가장 가까운 밴드) 여기만 하나로

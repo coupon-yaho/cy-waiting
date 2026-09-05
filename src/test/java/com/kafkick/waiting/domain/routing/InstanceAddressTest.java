@@ -122,4 +122,15 @@ class InstanceAddressTest {
     void 못_푸는_이름은_안_받는다(String raw) {
         assertThat(InstanceAddress.parse(raw)).isEmpty();
     }
+
+    /** <b>양 끝을 받는지도 본다.</b> 안 받으면 65535 로 뜬 뒷단이 조용히 빠진다. */
+    @Test
+    @DisplayName("포트의_양_끝은_받는다")
+    void 포트의_양_끝은_받는다() {
+        assertThat(InstanceAddress.parse("10.0.1.7:1"))
+                .map(InstanceAddress::port).contains(1);
+        assertThat(InstanceAddress.parse("10.0.1.7:65535"))
+                .map(InstanceAddress::port).contains(65535);
+    }
+
 }

@@ -2,8 +2,8 @@ package com.kafkick.waiting.gateway;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import com.kafkick.waiting.routing.RoutingProperties;
-import io.netty.channel.ConnectTimeoutException;
 import java.net.ConnectException;
+import java.net.NoRouteToHostException;
 import org.springframework.cloud.gateway.filter.factory.RetryGatewayFilterFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -38,6 +38,15 @@ public class GatewayRoutes {
 
     /** 프레임워크가 라우트별 응답 상한을 읽는 키. 이름을 틀리면 조용히 안 걸린다. */
     private static final String RESPONSE_TIMEOUT_ATTR = "response-timeout";
+
+    /**
+     * 라우트별 연결 상한을 읽는 키.
+     *
+     * <p><b>안 걸면 30초가 선다.</b> 죽은 인스턴스의 주소는 거절도 안 오고 답이
+     * 없어서, 그동안 요청이 매달린다 — 연결이 실패하지 않으니 연결 실패
+     * 재시도가 걸릴 자리가 없다.
+     */
+    private static final String CONNECT_TIMEOUT_ATTR = "connect-timeout";
 
     /**
      * 서킷이 열렸을 때 넘길 주소.
@@ -84,9 +93,13 @@ public class GatewayRoutes {
         };
     }
 
-    /** 뒷단 쿠폰 서비스. 가용량 기반 분배는 Phase 9 다 — 여기서는 하나만 본다. */
+    /**
+     * 뒷단 쿠폰 서비스.
+     *
+     * @param connectTimeout 연결을 이만큼만 기다린다. <b>안 정하면 30초다</b>
+     */
     @ConfigurationProperties("waiting.backend")
-    public record Backend(String uri, Duration responseTimeout) {
+    public record Backend(String uri, Duration responseTimeout, Duration connectTimeout) {
 
         // 검증은 밖에 둔다. 압축 생성자에서 부를 수 있는 것은 정적뿐이라,
         // 안에 두면 그 자리에서만 쓰이는 정적 메서드가 생긴다.
@@ -104,6 +117,18 @@ public class GatewayRoutes {
                 throw new IllegalArgumentException(
                         "responseTimeout 은 격벽 시한(" + AdmissionGatewayFilter.MAX_IN_FLIGHT
                                 + ") 보다 짧아야 한다: " + responseTimeout);
+            }
+            if (connectTimeout == null || connectTimeout.toMillis() < 1) {
+                throw new IllegalArgumentException(
+                        "connectTimeout 은 1ms 이상이어야 한다: " + connectTimeout);
+            }
+            // **응답 상한보다 짧아야 한다.** 길면 응답 상한이 먼저 끊어 연결
+            // 실패가 영영 안 드러나고, 그 요청은 재시도 없이 그대로 실패한다 —
+            // 연결 상한을 둔 이유가 사라진다.
+            if (connectTimeout.compareTo(responseTimeout) >= 0) {
+                throw new IllegalArgumentException(
+                        "connectTimeout 은 responseTimeout(" + responseTimeout
+                                + ") 보다 짧아야 한다: " + connectTimeout);
             }
         }
     }
@@ -124,10 +149,10 @@ public class GatewayRoutes {
     }
 
     /**
-     * 연결이 안 된 인스턴스를 다음 대로 넘긴다 (9.3.11 · 9.3.12).
+     * 연결이 안 된 인스턴스를 다음 대로 넘긴다.
      *
      * <p><b>연결 단계 실패에만 건다.</b> 발급은 멱등이 아니라, 요청이 뒷단에
-     * 닿은 뒤에 재시도하면 그 한 건이 곧 초과 발급이다 (불변식 2).
+     * 닿은 뒤에 재시도하면 그 한 건이 곧 초과 발급이다.
      */
     // 상태 코드로는 안 건다. 5xx 는 뒷단이 요청을 받은 뒤에 낸 답이고, 그
     // 시점에는 이미 재고가 움직였을 수 있다. 연결이 안 됐다는 것만이
@@ -153,7 +178,26 @@ public class GatewayRoutes {
         // 발급이 답을 받은 뒤에도 다시 가고, 그 한 건이 곧 초과 발급이다.
         config.setSeries();
         config.setStatuses();
-        config.setExceptions(ConnectException.class, ConnectTimeoutException.class);
+        // **연결이 못 서는 갈래가 하나가 아니다.** 포트만 닫히면 거절이고 라우팅이
+        // 안 되면 도달 불가인데, 뒤엣것은 `ConnectException` 의 하위가 아니라
+        // 조건 하나로는 안 걸린다 — 실측에서 7921 건 중 여덟 건이 그렇게 샜다.
+        //
+        // **더 넓히지는 않는다.** `SocketException` 을 적으면 응답을 받기 시작한
+        // 뒤의 끊김까지 무는데, 그것을 다시 보내는 것이 곧 초과 발급이다 (9.3.12).
+        // 여기 둘은 연결·연결완료 단계에서만 나므로 다시 보내도 안전하다.
+        //
+        // **이름 풀이 실패는 안 넣는다.** 연결 상한은 채널 옵션이라 이름 풀이에는
+        // 안 걸리고, 리졸버 기본 상한이 그보다 몇 배 길다 — 넣으면 재시도가 그
+        // 상한을 두 배로 늘려 격벽 지연을 넘긴다. 게다가 다음 대도 같은 리졸버를
+        // 타므로 다시 보내도 결과가 같다. 못 푸는 대는 배제기가 걷는다.
+        //
+        // **열거가 완전한 것은 epoll 에서다.** netty 는 나머지 errno 를 거절로
+        // 모으지만 NIO 로 떨어지면 경로 없음이 소켓 오류로 온다. 그 갈래는 타입만
+        // 으로 응답 도중 끊김과 못 갈라 여기 못 넣는다 — 원인은 폴백 로그가 든다.
+        //
+        // netty 의 ConnectTimeoutException 은 `ConnectException` 의 하위라
+        // 따로 안 적는다.
+        config.setExceptions(ConnectException.class, NoRouteToHostException.class);
         return config;
     }
 
@@ -199,6 +243,7 @@ public class GatewayRoutes {
             RetryGatewayFilterFactory retries) {
         BodyDeadline bodyDeadline = bodyDeadline(backend, meters);
         String uri = backendUri(backend, routing);
+        boolean balanced = uri.startsWith("lb://");
         return builder.routes()
                 .route("issue", r -> r
                         .method(HttpMethod.POST)
@@ -207,39 +252,64 @@ public class GatewayRoutes {
                         // **앞뒤를 값으로 정한다.** 안 정하면 둘 다 0 이라 선언
                         // 위치를 옮기는 것만으로 순서가 바뀌고, 서킷이 판정 앞으로
                         // 가면 래치가 죽는다 (FilterOrder).
-                        .filters(f -> stripSpoofableClientIp(f)
-                                .filter(admission, FilterOrder.ROUTE_ADMISSION)
-                                .filter(circuit(breakers), FilterOrder.ROUTE_CIRCUIT)
-                                // 연결이 안 된 인스턴스는 다음 대로 넘긴다.
-                                // 죽은 주소로 간 요청이 5xx 로 새면 안 된다 (G9.11).
-                                .filter(connectRetry(retries), FilterOrder.ROUTE_RETRY)
-                                // **발급에만 붙인다.** 조회 응답에는 매진 코드가
-                                // 재고 정보로 실릴 수 있고, 그건 관찰이 아니다.
-                                .filter(soldOut, FilterOrder.ROUTE_SOLD_OUT)
-                                // **본문이 안 끝나는 뒷단을 끊는다.** 응답 상한은
-                                // 헤더가 오기까지만 재므로 그 뒤로는 아무것도
-                                // 안 걸리고, 헤더가 나간 뒤라 판정 쪽 시한도
-                                // 커넥션을 못 끊는다.
-                                .filter(bodyDeadline, FilterOrder.ROUTE_BODY))
+                        .filters(f -> {
+                            GatewayFilterSpec spec = stripSpoofableClientIp(f)
+                                    .filter(admission, FilterOrder.ROUTE_ADMISSION)
+                                    .filter(circuit(breakers), FilterOrder.ROUTE_CIRCUIT);
+                            // 연결이 안 된 인스턴스는 다음 대로 넘긴다.
+                            // 죽은 주소로 간 요청이 5xx 로 새면 안 된다.
+                            //
+                            // **균형기가 있을 때만 건다.** 단일 주소로 되돌린
+                            // 판에서는 고를 다음 대가 없어, 재시도가 같은 죽은
+                            // 주소로 두 번 간다 — 연결 시도와 사용자 대기가 그냥
+                            // 두 배다. 그 스위치를 당기는 순간이 하필 뒷단이
+                            // 아플 때다 (Phase 9 5절).
+                            if (balanced) {
+                                spec = spec.filter(connectRetry(retries),
+                                        FilterOrder.ROUTE_RETRY);
+                            }
+                            // **발급에만 붙인다.** 조회 응답에는 매진 코드가
+                            // 재고 정보로 실릴 수 있고, 그건 관찰이 아니다.
+                            return spec.filter(soldOut, FilterOrder.ROUTE_SOLD_OUT)
+                                    // **본문이 안 끝나는 뒷단을 끊는다.** 응답
+                                    // 상한은 헤더가 오기까지만 재므로 그 뒤로는
+                                    // 아무것도 안 걸리고, 헤더가 나간 뒤라 판정
+                                    // 쪽 시한도 커넥션을 못 끊는다.
+                                    .filter(bodyDeadline, FilterOrder.ROUTE_BODY);
+                        })
                         // **끊는 자리가 서킷 안쪽이어야 한다.** 밖에서 끊으면
                         // 서킷에 가는 것은 오류가 아니라 취소이고, 취소는 창에
                         // 안 쌓인다 — 멎은 뒷단의 서킷이 영영 안 열린다.
                         .metadata(RESPONSE_TIMEOUT_ATTR, backend.responseTimeout().toMillis())
+                        .metadata(CONNECT_TIMEOUT_ATTR,
+                                (int) backend.connectTimeout().toMillis())
                         .uri(uri))
                 .route("coupons", r -> r
                         .method(HttpMethod.GET)
                         .and().path("/api/v1/coupons", "/api/v1/coupons/" + COUPON_ID)
                         .and().predicate(rawPathIsPlain())
-                        // **조회에만 붙인다.** 발급에 붙이면 같은 응답을 여럿이
-                        // 받고, 그건 곧 초과 발급이다.
-                        .filters(f -> stripSpoofableClientIp(f)
-                                .filter(coalescing, FilterOrder.ROUTE_COALESCING)
-                                .filter(bodyDeadline, FilterOrder.ROUTE_BODY))
+                        .filters(f -> {
+                            // **모으기는 조회에만 붙인다.** 발급에 붙이면 같은
+                            // 응답을 여럿이 받고, 그건 곧 초과 발급이다.
+                            GatewayFilterSpec spec = stripSpoofableClientIp(f)
+                                    .filter(coalescing, FilterOrder.ROUTE_COALESCING);
+                            // **조회도 다음 대로 넘긴다.** 여기가 발급보다 아프다 —
+                            // 모으기가 붙은 뒤로는 안 붙는 대로 간 요청 하나가 그
+                            // 키에 붙은 모든 조회를 그동안 잠근다. 조회는 멱등이라
+                            // 다시 보내는 것이 안전하다.
+                            if (balanced) {
+                                spec = spec.filter(connectRetry(retries),
+                                        FilterOrder.ROUTE_RETRY);
+                            }
+                            return spec.filter(bodyDeadline, FilterOrder.ROUTE_BODY);
+                        })
                         // **여기도 끊는 자리가 있어야 한다.** 모으기가 붙은 뒤로는
                         // 멎은 요청 하나가 그 키를 영구히 잠근다 — 뒤이어 오는
                         // 모든 조회가 끝나지 않는 것에 붙고, 뒷단이 살아나도
                         // 게이트웨이를 재시작해야 풀린다.
                         .metadata(RESPONSE_TIMEOUT_ATTR, backend.responseTimeout().toMillis())
+                        .metadata(CONNECT_TIMEOUT_ATTR,
+                                (int) backend.connectTimeout().toMillis())
                         .uri(uri))
                 .build();
     }

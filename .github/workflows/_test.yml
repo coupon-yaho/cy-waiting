@@ -88,6 +88,9 @@ jobs:
               if [ "$generated" != "$counted" ]; then
                 die "뮤턴트 ${generated}개를 만들었는데 ${counted}개만 기록됐다"
               fi
+              # **0 은 통과가 아니다.** 대상 지정이 오타 하나로 비면 아래
+              # 검사가 전부 0==0 으로 참이 되어, 아무것도 안 지킨 채 초록이 된다.
+              [ "$counted" -gt 0 ] || die "뮤턴트가 0개다 — 대상 지정이 비었는지 본다"
               # **상태를 읽었는지부터 확인한다.** 따옴표나 속성 이름이 바뀌면
               # 아래 검사가 0건을 내는데, 그 0 은 "판정이 다 붙었다" 가 아니라
               # "아무것도 못 읽었다" 다. 둘을 구분 못 하면 이 검사가 조용히
@@ -109,6 +112,31 @@ jobs:
               esac
               if [ "$unresolved" -gt 0 ]; then
                 die "판정이 안 붙은 뮤턴트가 ${unresolved}개다 — 비율이 근거를 잃었다"
+              fi
+              # **비율은 우리가 잰다.** PIT 의 임계는 정수 백분율로 비교해
+              # 반올림한다 — 89.9% 가 90 으로 올라가 통과한다. 문서가 든
+              # "생존 ≤ 10%" 는 그 반올림 아래에서 참이 아니다. 정수 산술로
+              # 다시 문다.
+              #
+              # **PIT 이 직접 쓰는 판정을 센다.** 상태 이름을 우리가 다시 나열하면
+              # NON_VIABLE 같은 것이 뜨는 날 우리 게이트만 실패하고, 메시지는
+              # 시험 탓을 한다 — 원인은 되돌릴 수 없는 뮤턴트인데.
+              killed=$(grep -oE "detected='true'" "$report" | wc -l | tr -d ' ' || true)
+              case "$killed" in
+                ''|*[!0-9]*) die "죽인 뮤턴트를 셀 수 없었다 — 리포트를 못 읽었다" ;;
+              esac
+              # **임계는 build.gradle 에서 읽는다.** 여기 숫자를 따로 박으면
+              # 한쪽만 바뀌는 날 CI 가 조용히 옛 값으로 계속 문다 — 주석으로는
+              # 그걸 못 막는다. 값이 사는 곳은 한 곳이다.
+              threshold=$(grep -oE 'mutationThreshold = [0-9]+' build.gradle \
+                | grep -oE '[0-9]+' | tail -1 || true)
+              case "$threshold" in
+                ''|*[!0-9]*) die "임계를 못 읽었다 — build.gradle 의 mutationThreshold 를 본다" ;;
+              esac
+              if [ $((killed * 100)) -lt $((counted * threshold)) ]; then
+                # 몇 개가 모자란지 함께 준다 — 89.9% 와 60% 는 다른 상황이다
+                short=$(( (counted * threshold + 99) / 100 - killed ))
+                die "죽인 뮤턴트가 ${counted}개 중 ${killed}개다 — 임계 ${threshold}% 에 ${short}개 모자라다"
               fi
               [ "$rc" -eq 0 ] || exit "$rc"
               ;;

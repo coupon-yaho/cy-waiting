@@ -23,6 +23,7 @@
 | [60-workflow.md](60-workflow.md) | `WF` | 커밋·Jira·문서·작업 로그 |
 | [70-packages.md](70-packages.md) | `PK` | 패키지별 추가 규칙 |
 | [80-logging.md](80-logging.md) | `LG` | 로깅·Loki·관측 |
+| [85-review-agents.md](85-review-agents.md) | — | 리뷰 에이전트의 행동 규칙 — 읽기 전용, `cd` 금지 |
 | [90-errors.md](90-errors.md) | `EX` | 예외 계층·에러 코드·전역 처리 |
 
 ---

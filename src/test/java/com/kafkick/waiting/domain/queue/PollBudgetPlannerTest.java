@@ -110,10 +110,10 @@ class PollBudgetPlannerTest {
         // **프로덕션 지터로 잰다.** 배선은 전부 0.2 다. 0 으로 재면 예산이
         // 정확히 닫히는 것처럼 보이는데, 그 설정은 어디에도 없다.
         PollIntervalPolicy 정책 = PollIntervalPolicy.of(0.2);
-        Random 고정_씨앗 = new Random(42);
+        Random 고정_시드 = new Random(42);
         double 실측 = 0;
         for (long i = 0; i < 대기; i++) {
-            실측 += 1.0 / 정책.intervalSec(i / 배수율, 고정_씨앗::nextDouble, 배수);
+            실측 += 1.0 / 정책.intervalSec(i / 배수율, 고정_시드::nextDouble, 배수);
         }
 
         assertThat(배수).as("예산 초과 배수").isEqualTo(5.0);

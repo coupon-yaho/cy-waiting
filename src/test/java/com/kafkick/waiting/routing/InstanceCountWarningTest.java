@@ -7,6 +7,7 @@ import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.kafkick.waiting.domain.routing.InFlightRegistry;
+import com.kafkick.waiting.domain.routing.InstanceOutliers;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -86,7 +87,8 @@ class InstanceCountWarningTest {
     private CapacityAwareLoadBalancer 균형기(ServiceInstanceListSupplier 목록) {
         return CapacityAwareLoadBalancer.of(목록,
                 candidates -> candidates.stream().findFirst(),
-                InFlightRegistry.of(Duration.ofSeconds(30)), () -> 지금, 1_000);
+                InFlightRegistry.of(Duration.ofSeconds(30)),
+                InstanceOutliers.of(3, Duration.ofSeconds(10), Duration.ofSeconds(60)), () -> 지금, 1_000);
     }
 
     private List<String> 경고들() {
@@ -133,7 +135,8 @@ class InstanceCountWarningTest {
     void 돌아오면_해제를_남긴다() {
         CapacityAwareLoadBalancer 균형기 = CapacityAwareLoadBalancer.of(
                 번갈아_주는_목록(), candidates -> candidates.stream().findFirst(),
-                InFlightRegistry.of(Duration.ofSeconds(30)), () -> 지금, 1_000);
+                InFlightRegistry.of(Duration.ofSeconds(30)),
+                InstanceOutliers.of(3, Duration.ofSeconds(10), Duration.ofSeconds(60)), () -> 지금, 1_000);
 
         균형기.choose((Request<?>) null).block();
         균형기.choose((Request<?>) null).block();

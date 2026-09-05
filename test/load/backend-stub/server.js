@@ -65,10 +65,40 @@ const SHARED_HEADER = process.env.SHARED_HEADER !== 'false';
  */
 const SLOW_BODY_MS = num('SLOW_BODY_MS', 0);
 
+/**
+ * 지금 즉시 내야 할 오류 코드. 0 이면 정상이다.
+ *
+ * **느려지는 고장과 빨리 실패하는 고장은 반대로 움직인다.** 앞엣것은 물린
+ * 건수가 쌓여 저절로 걸러지지만, 뒤엣것은 물린 건수가 안 쌓여 그 대가 가장
+ * 한가해 보이고 오히려 트래픽을 끌어당긴다. 이 노브가 뒤엣것을 만든다.
+ */
+let faultStatus = num('FAULT_STATUS', 0, { integer: true, max: 599 });
+
+let faulted = 0;
+
 const server = createServer((req, res) => {
   // 스텁 자신의 상태. compose 의 healthcheck 와 시나리오의 사후 확인이 쓴다.
   if (req.url === '/stub/health') {
-    return json(res, 200, { status: 'UP', inflight, served, rejected });
+    return json(res, 200, { status: 'UP', inflight, served, rejected, faulted, faultStatus });
+  }
+
+  // **도중에 켜고 끈다.** 기동 환경변수로만 두면 고장을 만들려고 컨테이너를
+  // 다시 띄워야 하고, 그러면 재기동과 고장이 같은 자극이 되어 무엇을 잰
+  // 것인지 갈리지 않는다.
+  if (req.url.startsWith('/stub/fault')) {
+    const asked = Number(new URL(req.url, 'http://stub').searchParams.get('status'));
+    if (!Number.isInteger(asked) || asked < 0 || asked > 599) {
+      return error(res, 400, 'BAD_REQUEST', 'status 는 0~599 의 정수여야 한다.');
+    }
+    faultStatus = asked;
+    return json(res, 200, { faultStatus });
+  }
+
+  // **지연을 안 태운다.** 즉시 실패가 이 모드의 요점이다 — 늦게 실패하면
+  // 물린 건수가 쌓여 고르개가 알아서 피하고, 재려던 것이 사라진다.
+  if (faultStatus > 0) {
+    faulted += 1;
+    return error(res, faultStatus, 'INSTANCE_FAULT', '이 인스턴스가 지금 못 받는다.');
   }
 
   if (MAX_INFLIGHT > 0 && inflight >= MAX_INFLIGHT) {

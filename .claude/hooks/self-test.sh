@@ -450,7 +450,7 @@ chmod +x "$clean_repo/.claude/hooks/"*.sh 2>/dev/null
     # 실패" 로 fail-closed 라, 없으면 깨끗한 케이스가 그 이유로 막혀 헛돈다.
     printf "plugins {\n    id 'java'\n}\n" > build.gradle
     git add -A
-    git commit -q -m 'chore: 씨앗'
+    git commit -q -m 'chore: 첫 커밋'
     git branch -q develop
     git switch -q -c selftest-work
     printf 'class Ok {\n    private Ok() {\n    }\n}\n' > Ok.java

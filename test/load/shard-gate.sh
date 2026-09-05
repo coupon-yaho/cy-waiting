@@ -100,8 +100,13 @@ if ! kill -0 "$probe" 2>/dev/null; then
     exit 2
 fi
 
+# **k6 의 출력을 남긴다.** 요약만 남기면 임계가 깨졌을 때 어떤 응답이 섞였는지
+# 를 못 본다 — 요약은 실패 건수를 안 싣는 판이 있어서, 깨진 사실만 알고 원인은
+# 모르는 상태가 된다.
 rc=0
-k6 run --summary-export="$OUT_SUMMARY" test/load/open-spike.js || rc=$?
+k6 run --summary-export="$OUT_SUMMARY" test/load/open-spike.js 2>&1 \
+    | tee "${OUT_LOG:-k6-spike.log}"
+rc=${PIPESTATUS[0]}
 # **신호만 보내고 판정하면 안 된다.** 프로브는 신호를 받고 나서 안쪽 루프를
 # 걷고 파이프를 닫고 마지막 표본을 적는다. `kill` 은 그 일이 끝나기를 안
 # 기다리므로, 그대로 판정하면 마지막 쓰기와 읽기가 겹친다.

@@ -55,17 +55,18 @@ public class Bulkhead {
         if (current >= cap) {
             return false;
         }
-        // **천장에 닿으면 제 몫보다 많이 쥔 쿠폰이 물러납니다.**
-        //
-        // 처음에는 "이미 물려 있는 쿠폰에만" 으로 뒀는데, 그러면 몰리는 쿠폰이
-        // 노드를 채운 동안 한산한 쿠폰이 **동시 1건**에 묶입니다 — 그 쿠폰의
-        // 처리량이 제 몫이 아니라 뒷단 지연에 묶이고, 응답이 느릴수록 더 크게
-        // 깨집니다. 첫 자리 하나는 R1 이 아닙니다.
-        //
-        // 제 몫은 천장을 지금 자리를 쥔 쿠폰 수로 나눈 값입니다. 한산한 쿠폰은
-        // 그만큼 쓰고, 그보다 많이 쥔 쿠폰이 먼저 물러납니다.
-        if (total >= totalCap && current >= fairShare(totalCap, current)) {
-            return false;
+        if (total >= totalCap) {
+            // **넘겨 쓰는 폭에 천장이 있습니다.** 안 두면 쿠폰이 늘 때마다 제 몫이
+            // 더해져 합이 조화급수로 자랍니다 — 그러면 상한이 아닙니다.
+            if (total >= totalCap + overshoot(totalCap)) {
+                return false;
+            }
+            // 그 폭 안에서는 **제 몫보다 적게 쥔 쿠폰이 우선합니다.** 몰리는 쿠폰이
+            // 노드를 채운 동안 한산한 쿠폰을 첫 자리 하나로 묶으면, 그 쿠폰의
+            // 처리량이 제 몫이 아니라 뒷단 지연에 묶입니다.
+            if (current >= fairShare(totalCap, current)) {
+                return false;
+            }
         }
         // **새 쿠폰만 상한을 봅니다.** 이미 담긴 쿠폰을 막으면 그 쿠폰이 자기
         // 자리를 못 쓰고, 맵은 어차피 안 커집니다.
@@ -84,6 +85,15 @@ public class Bulkhead {
      * 막혀 R1 이 뒤집힙니다 — 그 대가로 동시 물림이 쿠폰 수만큼 천장을 넘을 수
      * 있고, 그 폭은 `maxKeys` 가 묶습니다.
      */
+    /**
+     * 천장을 넘겨 쓸 수 있는 폭. <b>합의 상한이 이 값으로 정해집니다</b> —
+     * 한산한 쿠폰이 제 몫을 쓰게 하려면 넘겨 쓰는 자리가 있어야 하고, 그 자리에
+     * 천장이 없으면 상한이 이름만 남습니다.
+     */
+    private long overshoot(long totalCap) {
+        return Math.max(1, totalCap / 4);
+    }
+
     private long fairShare(long totalCap, int current) {
         // 지금 자리를 쥔 쿠폰 수로 나눕니다. 새로 오는 쿠폰이면 자기도 셉니다 —
         // 안 세면 첫 자리를 잡은 뒤 몫이 줄어 제 몫을 다 못 씁니다.

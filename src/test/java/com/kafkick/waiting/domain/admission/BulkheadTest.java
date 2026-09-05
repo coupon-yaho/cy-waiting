@@ -305,17 +305,35 @@ class BulkheadTest {
             assertThat(bulkhead.tryEnter("핫", 20, 8)).as("%d 번째", i).isTrue();
         }
 
-        // 한산한 쿠폰이 온다. 둘이 나눠 쓰면 넷씩이므로 넷까지는 지나야 한다.
-        for (int i = 0; i < 4; i++) {
+        // 한산한 쿠폰이 온다. 넘겨 쓰는 폭(천장의 4분의 1 = 2)만큼은 쓴다.
+        for (int i = 0; i < 2; i++) {
             assertThat(bulkhead.tryEnter("콜드", 20, 8))
                     .as("한산한 쿠폰의 %d 번째 자리", i).isTrue();
         }
 
-        // 제 몫을 넘어서면 그때는 물러난다. 천장이 없으면 상한이 아니다.
+        // 그 폭을 넘으면 막힌다. 안 막으면 상한이 이름만 남는다.
         assertThat(bulkhead.tryEnter("콜드", 20, 8))
-                .as("제 몫을 넘으면 막힌다").isFalse();
+                .as("넘겨 쓰는 폭을 넘으면 막힌다").isFalse();
         // 이미 제 몫을 넘겨 쥐고 있는 핫도 더는 못 늘린다.
         assertThat(bulkhead.tryEnter("핫", 20, 8))
                 .as("많이 쥔 쪽이 먼저 물러난다").isFalse();
+    }
+
+    /**
+     * <b>합에 천장이 있다.</b> 한산한 쿠폰이 제 몫을 쓰게 하려면 넘겨 쓰는
+     * 자리가 있어야 하는데, 그 자리에 천장이 없으면 쿠폰이 늘 때마다 몫이
+     * 더해져 상한이 이름만 남는다.
+     */
+    @Test
+    @DisplayName("쿠폰이_아무리_많아도_합에_천장이_있다")
+    void 쿠폰이_아무리_많아도_합에_천장이_있다() {
+        for (int i = 0; i < 500; i++) {
+            bulkhead.tryEnter("쿠폰" + i, 20, 8);
+            bulkhead.tryEnter("쿠폰" + i, 20, 8);
+        }
+
+        assertThat(bulkhead.inFlight())
+                .as("천장 8 에 넘겨 쓰는 폭 2 를 더한 값을 안 넘는다")
+                .isLessThanOrEqualTo(10);
     }
 }

@@ -50,18 +50,30 @@ trap 'kill -- -"$producer" 2>/dev/null || kill "$producer" 2>/dev/null; rm -f "$
 
 prev_cmds=""
 prev_ns=""
+now_ns=""
 while IFS= read -r line; do
     case "$line" in
         total_commands_processed:*) cmds=${line#total_commands_processed:} ;;
         T[0-9]*) stamp=${line#T}
             sec=${stamp%%:*}; rest=${stamp#*:}; usec=${rest%%:*}
-            case "$sec$usec" in ''|*[!0-9]*) continue ;; esac
-            now_ns=$(( sec * 1000000000 + usec * 1000 )); continue ;;
+            # **두 칸을 따로 본다.** 이어 붙여 보면 마이크로초 칸이 비어도
+            # 숫자로 통과하고, 빈 값이 0 으로 읽혀 다시 초 단위 시계가 된다 —
+            # 고친 그 버그가 조용히 돌아오는 자리다.
+            case "$sec" in ''|*[!0-9]*) continue ;; esac
+            case "$usec" in ''|*[!0-9]*) continue ;; esac
+            # 앞자리 0 은 8진수로 안 읽는다.
+            now_ns=$(( 10#$sec * 1000000000 + 10#$usec * 1000 )); continue ;;
         *) continue ;;
     esac
     # 뒤에 붙는 캐리지 리턴을 뗀다. 안 떼면 산술이 터진다.
     cmds=${cmds%%[!0-9]*}
     [ -n "$cmds" ] || continue
+    # **시각 없이 온 카운터는 버린다.** 안 버리면 낡은 시각과 새 카운터가
+    # 짝지어져 창이 두 배가 되고 값이 절반으로 나온다 — 부하 최고점에서 한쪽만
+    # 실패하기 쉬우므로, 하필 피크가 가장 필요한 순간에 묽어진다.
+    if [ -z "$now_ns" ]; then
+        continue
+    fi
     if [ -n "$prev_cmds" ]; then
         # **실제로 흐른 시간으로 나눈다.** 주기를 가정하면 한 표본을 놓쳤을 때
         # 그 구간의 명령이 짧은 창에 실려 봉우리가 부풀어 보인다.
@@ -69,9 +81,14 @@ while IFS= read -r line; do
         delta=$((cmds - prev_cmds))
         # 레디스가 재시작하면 누적이 되돌아간다. 음수 차분은 안 적는다.
         if [ "$elapsed_ns" -gt 0 ] && [ "$delta" -ge 0 ]; then
-            printf '%s\n' $(( delta * 1000000000 / elapsed_ns )) >> "$out"
+            # **창도 같이 적는다.** 비율만 적으면 계기가 고장 났을 때 그것이
+            # 부하인지 창인지 산출물만 보고 못 가른다 — 원래 버그가 "창이 1ns"
+            # 라는 1 차 증상이었는데, 비율만 보면 2 차 증상으로만 드러난다.
+            printf '%s %s\n' $(( delta * 1000000000 / elapsed_ns )) \
+                $(( elapsed_ns / 1000000 )) >> "$out"
         fi
     fi
     prev_cmds=$cmds
     prev_ns=$now_ns
+    now_ns=""
 done < "$fifo"

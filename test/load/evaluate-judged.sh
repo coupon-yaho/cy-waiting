@@ -19,8 +19,14 @@ set -uo pipefail
 # 같은 코드로 내면 "못 쟀다" 가 "미달" 로 읽힌다.
 UNMEASURABLE=2
 
-before=${1:?회차 이전 지표 표본 파일}
-after=${2:?회차 이후 지표 표본 파일}
+# **인자 누락도 판정 불가다.** `${1:?}` 로 두면 bash 가 1 로 끝내, 러너가 표본을
+# 하나만 넘긴 배선 실수가 "미달"(제품 결함)로 읽힌다.
+if [ $# -lt 2 ]; then
+    echo "::error title=판정 비율::지표 표본 파일 둘이 필요하다 — 회차 이전과 이후"
+    exit "$UNMEASURABLE"
+fi
+before=$1
+after=$2
 target=${JUDGED_TARGET_PCT:-99.9}
 
 for f in "$before" "$after"; do
@@ -32,6 +38,10 @@ done
 
 # **여러 줄이 잡히면 못 읽는다.** 라벨 조합이 갈라져 시계열이 둘이 되면 마지막
 # 값만 쓰는 것도, 이어 붙이는 것도 틀린다. 무엇이 갈렸는지를 먼저 봐야 한다.
+#
+# 노드가 여럿인 회차(10.7.3)는 노드마다 표본을 따로 뜨고 이 자를 노드별로 부른다.
+# 한 파일에 여러 노드를 담아 합산하지 않는다 — 합산하면 한 노드만 망가진 회차와
+# 전부 조금씩 나쁜 회차가 같은 수로 나온다.
 read_metric() {
     awk -v q="$2" '
         $0 ~ "^waiting_judgement_total\\{" && $0 ~ ("quality=\"" q "\"") {
@@ -88,10 +98,21 @@ fi
 total=$((fresh + degraded))
 # 기대 건수를 알면 그 비례로 하한을 잡는다. 절대값 하나로는 목표가 커질수록
 # 사실상 아무것도 안 막는다 — 600 만을 기대하는 회차에서 1,000 은 0.017% 다.
+#
+# **하한을 숫자로 확인한다.** 비숫자가 들어오면 산술이 죽고 하한이 빈 채로 비교에
+# 들어가, 부하가 안 닿은 회차를 막으라고 둔 가드가 그 자리에서 사라진다.
 if [ -n "${EXPECT_TOTAL:-}" ]; then
+    if ! printf '%s' "$EXPECT_TOTAL" | grep -Eq '^[0-9]+$'; then
+        echo "::error title=판정 비율::EXPECT_TOTAL 이 숫자가 아니다: '$EXPECT_TOTAL'"
+        exit "$UNMEASURABLE"
+    fi
     min_total=$((EXPECT_TOTAL / 2))
 else
     min_total=${MIN_TOTAL:-1000}
+    if ! printf '%s' "$min_total" | grep -Eq '^[0-9]+$'; then
+        echo "::error title=판정 비율::MIN_TOTAL 이 숫자가 아니다: '$min_total'"
+        exit "$UNMEASURABLE"
+    fi
 fi
 if [ "$total" -lt "$min_total" ]; then
     echo "::error title=판정 비율::판정이 ${total} 건뿐이다 (최소 ${min_total}) — 부하가 안 닿았다"

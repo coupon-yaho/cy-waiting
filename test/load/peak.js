@@ -35,18 +35,56 @@ const tokenless = new Counter('peak_poll_tokenless');
 // 결과는 갈래와 따로 센다. 끊긴 것도 줄 세운 것도 판정이 낸 정상 동작이다 (O-7).
 const admitted = new Counter('peak_admitted');
 const queued = new Counter('peak_queued');
+const closed = new Counter('peak_closed');
 const shed = new Counter('peak_shed');
+// **판정 밖 응답을 끊긴 것과 섞지 않는다.** 400·404 와, k6 가 연결 실패·타임아웃에
+// 쓰는 상태 0 이 여기 온다. 끊은 수에 합치면 목표 유입 근처에서 "판정이 끊었다" 와
+// "하네스가 못 붙었다" 가 한 수가 된다.
+const offJudgement = new Counter('peak_off_judgement');
 
-// 판정 밖 응답만 어긋남이다. 이 셋 말고는 배선이 틀린 것이다.
-function tally(r) {
+// 발급 요청의 결과. 200 은 뒷단까지 갔다는 뜻이다.
+function tallyIssue(r) {
   if (r.status === 200) {
     admitted.add(1);
   } else if (r.status === 202) {
     queued.add(1);
-  } else {
+  } else if (r.status === 429 || r.status === 503) {
     shed.add(1);
+  } else {
+    offJudgement.add(1);
+    return false;
   }
-  return [200, 202, 429, 503].includes(r.status);
+  return true;
+}
+
+// **폴링의 200 은 통과가 아니다.** 줄에서 기다리는 사람도, 매진으로 끝난 사람도
+// 200 을 받는다 — 상태만 보면 그 전부가 통과로 세어진다. 봉투를 읽어 가른다.
+function tallyPoll(r) {
+  if (r.status === 429 || r.status === 503) {
+    shed.add(1);
+    return true;
+  }
+  if (r.status !== 200) {
+    offJudgement.add(1);
+    return false;
+  }
+  let state = null;
+  try {
+    state = r.json().data.status;
+  } catch (e) {
+    // 봉투가 다르면 아래가 판정 밖으로 센다.
+  }
+  if (state === 'WAITING') {
+    queued.add(1);
+  } else if (state === 'ADMITTED') {
+    admitted.add(1);
+  } else if (state === 'CLOSED' || state === 'SOLD_OUT') {
+    closed.add(1);
+  } else {
+    offJudgement.add(1);
+    return false;
+  }
+  return true;
 }
 
 export const options = {
@@ -69,6 +107,11 @@ export const options = {
     dropped_iterations: ['count==0'],
     // 판정이 안 낸 응답이 섞이면 배선이 어긋난 것이다.
     http_req_failed: ['rate<0.01'],
+    // 봉투까지 본 뒤의 어긋남. 상태만 보는 위 임계가 못 잡는 자리다.
+    peak_off_judgement: ['count==0'],
+    // **검사에 임계를 건다.** 안 걸면 검사가 떨어져도 회차가 안 빨개져,
+    // 검사가 있다는 사실만 남고 값이 없다.
+    checks: ['rate>0.99'],
   },
 };
 
@@ -79,7 +122,12 @@ const headers = (member) => ({
   'X-Forwarded-For': `10.${(__VU % 200) + 20}.${__VU % 250}.${(__ITER % 250) + 1}`,
 });
 
-// 줄에 선 사람이 들고 다니는 표. VU 마다 하나면 폴링이 늘 같은 자리를 본다.
+// 줄에 선 사람이 들고 다니는 표. VU 마다 하나라, 진입이 새로 받을 때마다 덮인다 —
+// 한 사람이 2 초마다 폴링하는 모양은 아니다. 여기서 재려는 것은 폴링 몫이 실제
+// 부하에 실렸을 때 게이트웨이가 견디는가지 개인의 폴링 주기가 아니다.
+//
+// **폴링의 `X-Member-Id` 는 표의 주인이 아니다.** 판정은 토큰에서 주인을 뽑으므로
+// 동작하지만, 헤더를 근거로 읽으면 다른 사람의 자리를 본다고 오해한다.
 let token = null;
 
 export default function () {
@@ -97,7 +145,7 @@ export default function () {
     polled.add(1);
     const r = http.get(`${BASE}/api/v1/coupons/c2/queue`,
         { headers: Object.assign(headers(member), { 'Queue-Token': token }) });
-    check(r, { '폴링이 판정을 지난다': tally });
+    check(r, { '폴링이 판정을 지난다': tallyPoll });
     return;
   }
 
@@ -111,7 +159,7 @@ export default function () {
   // 줄 없이 지나가는 것을 확인하는 자리는 `idle-coupon.js` 다.
   passed.add(1);
   const r = http.post(`${BASE}/api/v1/coupons/c1/issue`, null, { headers: headers(member) });
-  check(r, { '통과가 판정을 지난다': tally });
+  check(r, { '통과가 판정을 지난다': tallyIssue });
 }
 
 function enter(member) {
@@ -124,5 +172,5 @@ function enter(member) {
       // 봉투가 다르면 표를 못 얻는다. 다음 회차가 다시 시도한다.
     }
   }
-  check(r, { '진입이 판정을 지난다': tally });
+  check(r, { '진입이 판정을 지난다': tallyIssue });
 }

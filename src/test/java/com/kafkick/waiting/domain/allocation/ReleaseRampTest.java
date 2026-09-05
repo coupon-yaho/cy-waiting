@@ -47,8 +47,8 @@ class ReleaseRampTest {
     }
 
     @Test
-    @DisplayName("1_에서도_올라간다")
-    void 1_에서도_올라간다() {
+    @DisplayName("몫이_1_이어도_올라간다")
+    void 몫이_1_이어도_올라간다() {
         // 서킷이 반쯤 열린 동안의 몫이 정확히 1 이다. 1 × 1.2 를 내림하면 1 이라
         // 배수만으로는 영영 못 벗어난다 — 그 회차의 램프는 안 푸는 것과 같다.
         ReleaseRamp ramp = ReleaseRamp.of(1.2);
@@ -58,8 +58,8 @@ class ReleaseRampTest {
     }
 
     @Test
-    @DisplayName("0_에서도_올라간다")
-    void 0_에서도_올라간다() {
+    @DisplayName("몫이_0_이어도_올라간다")
+    void 몫이_0_이어도_올라간다() {
         // 서킷이 열려 있던 동안의 몫은 0 이다. 0 에 무엇을 곱해도 0 이다.
         ReleaseRamp ramp = ReleaseRamp.of(1.2);
         ramp.next(0, true);

@@ -95,6 +95,9 @@ jobs:
       - name: 무릎 판정 자기검증
         run: test/load/knee-selftest.sh
 
+      - name: 판정 비율 자기검증
+        run: test/load/judged-selftest.sh
+
       # 수명이 대신 걷어 준 것과 놓는 자리가 도는 것을 안 가르면, 표를 놓는
       # 줄을 통째로 지운 구현도 초록이 뜬다.
       - name: 누수 판정 자기검증

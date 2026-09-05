@@ -3,7 +3,7 @@
 #
 # **기존 회차는 한쪽에 답안지를 줬다.** `routing-skew.sh` 는 뒷단 셋에 지연을
 # 똑같이 주고 동시 한도도 똑같이 준 뒤, 레디스에 적힌 숫자만 다르게 실었다.
-# 그러고 "선언된 비율대로 갔는가" 를 판정 기준으로 삼았다 — 라운드로빈은
+# 그러고 "선언된 비율대로 갔는가" 를 판정 기준으로 삼았다 — 가중 라운드로빈은
 # 정의상 그 숫자를 재생하므로 편차 0% 가 나올 수밖에 없고, P2C 는 실제로
 # 물린 건수를 보고 균등화하니 그만큼 벗어난 것으로 찍힌다. **세 뒷단이
 # 물리적으로 같은 서버라 검증할 가용량 차이가 아예 없었다.**
@@ -35,6 +35,15 @@ DURATION_SEC="${DURATION_SEC:-30}"
 WARMUP_SEC="${WARMUP_SEC:-10}"
 
 require_positive_int RATE DURATION_SEC STUB_LATENCY_MS BIG_LATENCY_MS || exit 2
+
+# **유입이 보고 여유 합을 넘으면 이 회차는 성립하지 않는다.** 넘는 순간 대기열이
+# 켜져 요청이 뒷단까지 안 가고, 그러면 뒷단 계수로는 아무것도 못 읽는다 —
+# 실제로 그 상태에서 처리 합이 289 건까지 떨어졌다. 여기서 재는 것은 통과
+# 경로의 나눔이므로 줄이 꺼진 채로 돌아야 한다.
+if [ "$RATE" -ge $((BIG_CAP + SMALL_CAP + MID_CAP)) ]; then
+    echo "유입 ${RATE}/s 가 보고 여유 합 $((BIG_CAP + SMALL_CAP + MID_CAP)) 이상이다 — 줄이 켜져 못 잰다"
+    exit 2
+fi
 require_non_negative_int WARMUP_SEC || exit 2
 command -v k6 >/dev/null || { echo "k6 가 없다"; exit 2; }
 
@@ -46,7 +55,10 @@ export BIG_INFLIGHT="${BIG_INFLIGHT:-150}" SMALL_INFLIGHT="${SMALL_INFLIGHT:-150
 work=$(mktemp -d) || exit 1
 trap 'reap_children; rm -rf "$work"' EXIT
 
-echo "$(banner) · 보고 여유 셋 다 ${BIG_CAP} · 실제 지연 ${STUB_LATENCY_MS}ms (큰 대 ${BIG_LATENCY_MS}ms)"
+# **보고 여유를 그대로 적는다.** "셋 다" 라고 적어 두면 값이 다른 회차에서
+# 거짓말이 된다 — 이 하네스의 요점이 보고와 실제의 어긋남이라 더 나쁘다.
+echo "$(banner) · 보고 여유 ${BIG_CAP}/${SMALL_CAP}/${MID_CAP}" \
+     "· 실제 지연 ${STUB_LATENCY_MS}ms (느린 대 ${BIG_LATENCY_MS}ms)"
 
 $COMPOSE rm -sf gateway >> "$work/up.log" 2>&1
 bring_up "$work/up.log" || exit 2

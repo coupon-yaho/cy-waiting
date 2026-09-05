@@ -103,8 +103,17 @@ fi
 # **k6 의 출력을 남긴다.** 요약만 남기면 임계가 깨졌을 때 어떤 응답이 섞였는지
 # 를 못 본다 — 요약은 실패 건수를 안 싣는 판이 있어서, 깨진 사실만 알고 원인은
 # 모르는 상태가 된다.
+# **부하 생성기도 레디스 코어를 피한다.** 2 만 VU 를 띄우는 쪽이 호스트를 다
+# 먹으면 레디스만 격리한 뜻이 없다 — 실제로 그 회차에서 응답 중앙값이 10.6 초로
+# 늘고 제어 평면이 250ms 안에 못 읽어 타임아웃이 났다. 레디스 CPU 는 낮은데
+# 나머지가 밀린 것이고, 그러면 재는 것이 또 레디스가 아니다.
+runner=""
+if [ -n "${PINNED:-}" ] && command -v taskset >/dev/null 2>&1; then
+    runner="taskset -c 1-11"
+fi
+
 rc=0
-k6 run --summary-export="$OUT_SUMMARY" test/load/open-spike.js 2>&1 \
+$runner k6 run --summary-export="$OUT_SUMMARY" test/load/open-spike.js 2>&1 \
     | tee "${OUT_LOG:-k6-spike.log}"
 rc=${PIPESTATUS[0]}
 # **신호만 보내고 판정하면 안 된다.** 프로브는 신호를 받고 나서 안쪽 루프를

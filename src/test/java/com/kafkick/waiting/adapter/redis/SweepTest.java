@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.kafkick.waiting.domain.queue.GraceRetention;
 import java.time.Duration;
 import java.util.List;
+import java.util.Properties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -83,6 +84,32 @@ class SweepTest extends RedisContainerSupport {
         return sweep(limit, BUDGET, "0");
     }
 
+    /** 앞줄 제거를 접고 도는 회차. 승계 유예 구간이 전 쿠폰에 이 모양으로 돈다. */
+    @SuppressWarnings("unchecked")
+    private List<Object> sweepKeepingFront(String limit) {
+        return (List<Object>) redis.execute(
+                        sweepScript,
+                        List.of(QUEUE, GRACE, ALIVE, ADMITTED),
+                        List.of(limit, String.valueOf(NOW), RETENTION, BUDGET, "0", "0"))
+                .blockFirst(WAIT);
+    }
+
+    /** 명령별 호출 수를 0 으로 되돌린다. 아래 검사가 그 차분을 본다. */
+    private void 계수를_비운다() {
+        redis.execute(c -> c.serverCommands().resetConfigStats()).blockLast(WAIT);
+    }
+
+    /** 되돌린 뒤 이 명령이 몇 번 돌았는가. 없으면 0 이다. */
+    private long 호출_수(String command) {
+        Properties stats = redis.execute(c -> c.serverCommands().info("commandstats"))
+                .blockFirst(WAIT);
+        String line = stats == null ? null : stats.getProperty("cmdstat_" + command);
+        if (line == null) {
+            return 0;
+        }
+        return Long.parseLong(line.replaceFirst("^calls=(\\d+).*$", "$1"));
+    }
+
     private String nextCursor(List<Object> r) {
         return String.valueOf(r.get(3));
     }
@@ -94,6 +121,41 @@ class SweepTest extends RedisContainerSupport {
     /** 유예 기록 정리 수. 반환값 두 번째는 생존 신호 정리 수다. */
     private long expired(List<Object> r) {
         return Long.parseLong(String.valueOf(r.get(2)));
+    }
+
+    /**
+     * <b>앞줄을 안 걷는 회차는 앞줄을 읽지도 않는다.</b>
+     *
+     * <p>리더 승계 유예 구간은 <b>모든 쿠폰</b>에 대해 앞줄 제거를 접고 돈다.
+     * 그때도 창을 읽으면 전 쿠폰이 매 틱 그 비용을 버린다 — 승계마다 몇 분씩이다.
+     * 실측으로 그 두 명령이 이 스크립트 비용의 절반을 넘는다.
+     */
+    @Test
+    @DisplayName("앞줄을_안_걷으면_창을_안_읽는다")
+    void 앞줄을_안_걷으면_창을_안_읽는다() {
+        for (int i = 0; i < 50; i++) {
+            enqueue("m" + i);
+        }
+        계수를_비운다();
+
+        sweepKeepingFront("3000");
+
+        assertThat(호출_수("zrangebyscore")).as("앞줄 창을 안 읽는다").isZero();
+        assertThat(호출_수("zmscore")).as("생존 신호를 안 묻는다").isZero();
+    }
+
+    /** 접지 않은 회차는 그대로 읽어야 한다. 위 검사가 늘 0 이면 아무것도 안 지킨다. */
+    @Test
+    @DisplayName("앞줄을_걷는_회차는_창을_읽는다")
+    void 앞줄을_걷는_회차는_창을_읽는다() {
+        for (int i = 0; i < 50; i++) {
+            enqueue("m" + i);
+        }
+        계수를_비운다();
+
+        sweep("3000");
+
+        assertThat(호출_수("zrangebyscore")).as("앞줄 창을 읽는다").isPositive();
     }
 
     @Test

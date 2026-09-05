@@ -77,5 +77,18 @@ else
     echo "  ✓ 표본 파일이 없으면 막는다"
 fi
 
+# **계기 고장은 착수가 아니다.** 시계가 틀려 값이 부풀면 판정이 늘 "착수" 로
+# 나오는데, 그것은 부하가 아니라 계기를 잰 것이다.
+printf '%s\n' 8000000000 > "$work/broken.txt"
+out=$(test/load/evaluate-shard-gate.sh "$work/broken.txt" 2>&1); rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "계기를 먼저 본다"; then
+    echo "  ✓ 계기가 고장 나면 판정 불가"
+else
+    echo "  ✗ 계기가 고장 나면 판정 불가 — 종료 $rc"
+    printf '%s\n' "$out" | sed 's/^/      /'
+    fail=1
+fi
+
 [ "$fail" -eq 0 ] && echo "착수 판정 자기검증 통과" || echo "착수 판정 자기검증 실패"
+
 exit "$fail"

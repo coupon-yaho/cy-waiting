@@ -12,18 +12,37 @@ set -uo pipefail
 
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
-COMPOSE="docker compose -f test/load/compose.yml"
+# **레디스를 전용 코어에 고정할 수 있다.** 기본은 안 한다 — 지금까지 잰 값들과
+# 견주려면 조건이 같아야 한다. 착수를 다시 정할 때만 켠다.
+#
+#   PINNED=1 test/load/shard-gate.sh
+# **`PINNED=0` 은 끈 것이다.** `${PINNED:+...}` 는 "비어 있지 않음" 만 보므로
+# 0 을 줘도 켜졌다. 끄려고 준 값이 켜는 자리가 된다.
+case "${PINNED:-}" in
+    ''|0|false|no) pinned="" ;;
+    *) pinned=" -f test/load/compose.pinned.yml" ;;
+esac
+COMPOSE="docker compose -f test/load/compose.yml$pinned"
 # **쿠폰은 노브가 아니다.** `open-spike.js` 가 `c2` 를 박아 두고 있어서, 여기만
 # 바꾸면 c3 을 비우고 c3 이 IDLE 인 것을 본 뒤 c2 를 때린다 — 빈 줄 보증이
 # 통째로 다른 쿠폰 얘기가 된다. 시나리오를 고칠 때 같이 고친다.
 COUPON=c2
-OUT_OPS="${OUT_OPS:-redis-ops.txt}"
-OUT_SUMMARY="${OUT_SUMMARY:-k6-summary.json}"
+OUT_OPS="${OUT_OPS:-redis-ops${pinned:+-pinned}.txt}"
+# **산출물 이름에 조건을 싣는다.** 고정한 회차와 안 한 회차가 같은 파일에
+# 덮이면 나중에 어느 조건에서 나온 값인지 못 가른다 — 그 둘을 한 표에 넣는
+# 것이 정확히 이 페이즈가 되풀이한 오류다.
+OUT_SUMMARY="${OUT_SUMMARY:-k6-summary${pinned:+-pinned}.json}"
 # 아래에서 앞 회차의 요약을 지운다. 환경에서 온 값을 그대로 지우므로 무엇을
 # 지우는지는 확인하고 간다.
 case "$OUT_SUMMARY" in
     *.json) ;;
     *) echo "OUT_SUMMARY 는 .json 이어야 한다: '$OUT_SUMMARY'"; exit 2 ;;
+esac
+# 아래에서 `tee` 로 덮어쓴다. 요약과 같은 이유로 무엇을 지우는지 보고 간다.
+OUT_LOG="${OUT_LOG:-k6-spike${pinned:+-pinned}.log}"
+case "$OUT_LOG" in
+    *.log) ;;
+    *) echo "OUT_LOG 는 .log 여야 한다: '$OUT_LOG'"; exit 2 ;;
 esac
 
 command -v k6 >/dev/null || { echo "k6 가 없다"; exit 2; }
@@ -96,8 +115,40 @@ if ! kill -0 "$probe" 2>/dev/null; then
     exit 2
 fi
 
+# **k6 의 출력을 남긴다.** 요약만 남기면 임계가 깨졌을 때 어떤 응답이 섞였는지
+# 를 못 본다 — 요약은 실패 건수를 안 싣는 판이 있어서, 깨진 사실만 알고 원인은
+# 모르는 상태가 된다.
+# **부하 생성기도 레디스 코어를 피한다.** 2 만 VU 를 띄우는 쪽이 호스트를 다
+# 먹으면 레디스만 격리한 뜻이 없다 — 실제로 그 회차에서 응답 중앙값이 10.6 초로
+# 늘고 제어 평면이 250ms 안에 못 읽어 타임아웃이 났다. 레디스 CPU 는 낮은데
+# 나머지가 밀린 것이고, 그러면 재는 것이 또 레디스가 아니다.
+runner=""
+if [ -n "$pinned" ]; then
+    # **없으면 말한다.** 조용히 안 묶으면 격리했다고 믿는 회차가 안 격리된
+    # 조건으로 돌고, 그 값이 "고정해서 쟀다" 로 기록된다.
+    if command -v taskset >/dev/null 2>&1; then
+        # 코어 지도는 `compose.pinned.yml` 이 든다 — 거기를 고치면 여기도
+        # 고친다. 이 기계(12 코어)를 못 박은 값이다.
+        runner="taskset -c 1-11"
+    else
+        echo "::error title=착수 판정::taskset 이 없다 — 생성기를 격리 못 한다"
+        exit 2
+    fi
+fi
+
 rc=0
-k6 run --summary-export="$OUT_SUMMARY" test/load/open-spike.js || rc=$?
+$runner k6 run --summary-export="$OUT_SUMMARY" test/load/open-spike.js 2>&1 \
+    | tee "$OUT_LOG"
+rc=${PIPESTATUS[0]}
+tee_rc=${PIPESTATUS[1]}
+
+# **로그가 안 남았으면 그렇다고 말한다.** 로그를 남기는 것이 이 줄의 목적인데
+# 실패를 넘기면, 임계가 깨졌을 때 무엇이 섞였는지 다시 못 본다 — 그것 때문에
+# 두 회차를 버렸다.
+if [ "$tee_rc" -ne 0 ]; then
+    echo "::error title=착수 판정::k6 로그를 못 남겼다: $OUT_LOG"
+    exit 2
+fi
 # **신호만 보내고 판정하면 안 된다.** 프로브는 신호를 받고 나서 안쪽 루프를
 # 걷고 파이프를 닫고 마지막 표본을 적는다. `kill` 은 그 일이 끝나기를 안
 # 기다리므로, 그대로 판정하면 마지막 쓰기와 읽기가 겹친다.
@@ -105,7 +156,7 @@ kill "$probe" 2>/dev/null
 wait "$probe" 2>/dev/null
 trap - EXIT
 
-echo "k6=$rc"
+echo "k6=$rc · 레디스 고정 ${pinned:+켬}${pinned:-끔}"
 # **k6 가 빨개진 회차는 판정하지 않는다.** 임계 위반(99)은 줄이 안 섰거나 다
 # 못 던졌다는 뜻이고, 그 회차의 봉우리는 재려던 것이 아니다.
 if [ "$rc" -ne 0 ]; then

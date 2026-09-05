@@ -6,6 +6,7 @@ import com.kafkick.waiting.domain.allocation.CouponDemand;
 import com.kafkick.waiting.domain.allocation.CreditSmoother;
 import com.kafkick.waiting.domain.allocation.FairShareAllocator;
 import com.kafkick.waiting.domain.allocation.Grant;
+import com.kafkick.waiting.domain.allocation.ReleaseRamp;
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.routing.InstanceRouting;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
@@ -134,6 +135,12 @@ public final class AllocationRound {
 
     /** 서킷 때문에 배분을 조인 구간. <b>진입과 해제를 쌍으로 남긴다</b> (LG-2). */
     private final FailureWindow paused = FailureWindow.create();
+
+    /**
+     * 조임을 푸는 속도 (RC4). <b>평활이 조여진 값을 못 보므로</b> 서킷이 닫히는
+     * 한 틱에 배분이 원래 몫으로 그대로 돌아간다. 그 계단을 회차당 배수로 나눈다.
+     */
+    private final ReleaseRamp releaseRamp = ReleaseRamp.of(ReleaseRamp.DEFAULT_LIMIT);
 
     /** 예산보다 더 들여보낸 누적 인원. */
     private final AtomicLong enteredOvershoot = new AtomicLong();
@@ -317,6 +324,13 @@ public final class AllocationRound {
     public void leadershipAcquired() {
         smoother.set(null);
         carryoverMisses.set(0);
+        // **조임 창도 닫는다.** 안 닫으면 이 노드가 조임에 진입한 뒤 리더십을
+        // 잃었다 되찾았을 때, 회복 로그가 비리더 구간까지 포함한 지속 시간을
+        // 찍는다. 그동안 남이 조였는지 풀었는지는 이 노드가 모른다.
+        paused.exited();
+        // **램프 기준도 버린다.** 남이 리더였던 동안 움직인 값을 못 보고 제 옛
+        // 기준을 이어 쓰면, 승계 직후 한 틱이 그 기준의 배수로 나간다.
+        releaseRamp.reset();
     }
 
     /**
@@ -381,7 +395,13 @@ public final class AllocationRound {
         // **회차마다 한 번 읽는다.** 두 번 읽으면 그 사이에 상태가 뒤집혀 같은
         // 회차가 자기모순인 값 둘로 판단한다 — 5초 창에 1초 틱이면 실제로 걸린다.
         CircuitState circuitNow = circuit.get();
-        long credit = gated(Math.max(smoothed, Math.max(0, creditFloor.getAsLong())), circuitNow);
+        long target = Math.max(smoothed, Math.max(0, creditFloor.getAsLong()));
+        long allowed = gated(target, circuitNow);
+        // **푸는 쪽에도 제약이 있어야 한다.** 조이는 동안 평활에 들어가는 값은
+        // 계속 원래 몫이라, 평활값은 조여진 값을 한 번도 안 본다. 그래서 서킷이
+        // 닫히는 그 한 틱에 배분이 1 에서 원래 몫으로 그대로 돌아간다 — 방금
+        // 실패를 끝낸 뒷단을 향한 계단이고, 회복 버스트 한계는 1.2 배다 (RC4).
+        long credit = releaseRamp.next(allowed, allowed < target);
         Map<String, Long> granted = new LinkedHashMap<>();
         allocator.allocate(credit, collected).forEach(g -> granted.put(g.couponId(), g.credit()));
 

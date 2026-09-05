@@ -35,6 +35,16 @@ if cut -d' ' -f1,2 "$result" | tr ' ' '\n' | grep -qvE '^[0-9]+$'; then
     exit 1
 fi
 
+# **밀어낸 건수를 무시하면 과부하가 회피로 읽힌다.** 처리 건수만 세면, 약한
+# 대에 잔뜩 보내 놓고 그 대가 동시 한도에서 밀어낸 회차가 "적게 보냈다" 로
+# 나온다 — 능력을 보고 피한 것과 정반대인데 판정은 같다. 이 회차는 한도를
+# 넉넉히 두어 밀어냄이 0 이어야 성립한다.
+rejected=$(cut -d' ' -f2 "$result" | awk '{s+=$1} END {print s+0}')
+if [ "$rejected" -gt 0 ]; then
+    echo "::error title=라우팅 비교::뒷단이 ${rejected} 건을 밀어냈다 — 과부하 회차는 몫을 못 읽는다"
+    exit 1
+fi
+
 slow=$(sed -n '1p' "$result" | cut -d' ' -f1)
 fast=$(( $(sed -n '2p' "$result" | cut -d' ' -f1) + $(sed -n '3p' "$result" | cut -d' ' -f1) ))
 total=$((slow + fast))
@@ -47,9 +57,18 @@ if [ "$total" -lt "$min_total" ]; then
     exit 1
 fi
 
-dropped=$(jq -r '(.metrics.dropped_iterations.values.count
-    // .metrics.dropped_iterations.count) // 0' "$summary" 2>/dev/null)
-case "$dropped" in ''|*[!0-9]*) dropped=0 ;; esac
+# **요약이 깨졌으면 0 으로 읽지 않는다.** `jq` 실패를 삼키고 빈 값을 0 으로
+# 바꾸면, 잘린 요약으로도 판정이 난다 — 두 방식이 같은 부하를 받았다는 증거가
+# 없는 채로 몫만 비교하게 된다.
+if ! dropped=$(jq -er '(.metrics.dropped_iterations.values.count
+        // .metrics.dropped_iterations.count) // empty' "$summary" 2>/dev/null); then
+    echo "::error title=라우팅 비교::요약에서 흘린 회차를 못 읽었다 — 요약을 먼저 본다"
+    exit 1
+fi
+case "$dropped" in ''|*[!0-9]*)
+    echo "::error title=라우팅 비교::흘린 회차가 숫자가 아니다: '$dropped'"
+    exit 1 ;;
+esac
 
 printf '  %-24s %s\n' "느린 대 처리" "$slow"
 printf '  %-24s %s\n' "정상 두 대 처리" "$fast"

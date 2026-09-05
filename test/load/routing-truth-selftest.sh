@@ -19,6 +19,13 @@ result() {
     printf '%s' "$path"
 }
 
+# 밀어낸 건수를 실은 결과. 다섯째 인자가 느린 대의 밀어냄이다.
+rejecting() {
+    local path=$work/$1
+    printf '%s %s 느린대\n%s 0 정상1\n%s 0 정상2\n' "$2" "$5" "$3" "$4" > "$path"
+    printf '%s' "$path"
+}
+
 summary() {
     local path=$work/$1
     printf '%s' "$2" > "$path"
@@ -76,6 +83,19 @@ run_case "배수 3 에서는 본다" 0 "능력을 본다" \
     -- "$(result f3.txt 2100 3950 3950)" "$ok"
 SLOW_FACTOR=9 run_case "배수 9 에서는 못 본다" 0 "못 본다" \
     -- "$(result f9.txt 2100 3950 3950)" "$ok"
+
+# **과부하 회차는 몫을 못 읽는다.** 약한 대에 잔뜩 보내 놓고 그 대가 동시
+# 한도에서 밀어내면, 처리 건수만 세는 판정기는 "적게 보냈다" 로 읽는다 —
+# 능력을 보고 피한 것과 정반대인데 답이 같아진다.
+run_case "밀어낸 건이 있으면 판정 불가" 1 "밀어냈다" \
+    -- "$(rejecting rej.txt 1071 3214 3215 400)" "$ok"
+
+# **요약이 깨졌으면 0 으로 안 읽는다.** 잘린 요약으로도 판정이 나면, 두 방식이
+# 같은 부하를 받았다는 증거가 없는 채로 몫만 비교하게 된다.
+run_case "요약이 깨졌으면 판정 불가" 1 "못 읽었다" \
+    -- "$(result seen2.txt 1071 3214 3215)" "$(summary broken.json '{"metrics":')"
+run_case "흘린 회차 계수가 없으면 판정 불가" 1 "못 읽었다" \
+    -- "$(result seen3.txt 1071 3214 3215)" "$(summary nodrop.json '{"metrics":{}}')"
 
 [ "$selftest_failed" -eq 0 ] && echo "라우팅 비교 자기검증 통과" \
     || echo "라우팅 비교 자기검증 실패"

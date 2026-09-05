@@ -126,5 +126,10 @@ grep -E 'http_reqs\.\.|http_req_failed|http_req_duration\.\.|checks_succ' "$work
     | sed 's/^/  /'
 
 cp "$work/result.txt" "${OUT_RESULT:-routing-truth.txt}"
-cp "$work/k6.json" "${OUT_SUMMARY:-routing-truth-k6.json}" 2>/dev/null
+cp "$work/k6.json" "${OUT_SUMMARY:-routing-truth-k6.json}" || exit 2
 cp "$work/k6.log" "${OUT_LOG:-routing-truth-k6.log}" 2>/dev/null
+
+# **판정기를 여기서 부른다.** 표만 내고 끝내면 사람이 눈으로 읽어 결론을 내는데,
+# 그 결론이 계획서와 결정 문서에 인용된다. 판정은 자기검증이 붙은 자가 낸다.
+echo
+SLOW_FACTOR=$((BIG_LATENCY_MS / STUB_LATENCY_MS))     test/load/evaluate-routing-truth.sh     "${OUT_RESULT:-routing-truth.txt}" "${OUT_SUMMARY:-routing-truth-k6.json}"

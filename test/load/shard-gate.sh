@@ -98,7 +98,11 @@ fi
 
 rc=0
 k6 run --summary-export="$OUT_SUMMARY" test/load/open-spike.js || rc=$?
+# **신호만 보내고 판정하면 안 된다.** 프로브는 신호를 받고 나서 안쪽 루프를
+# 걷고 파이프를 닫고 마지막 표본을 적는다. `kill` 은 그 일이 끝나기를 안
+# 기다리므로, 그대로 판정하면 마지막 쓰기와 읽기가 겹친다.
 kill "$probe" 2>/dev/null
+wait "$probe" 2>/dev/null
 trap - EXIT
 
 echo "k6=$rc"

@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
@@ -71,6 +72,35 @@ class RecoveryCriteriaTest {
     @DisplayName("같은_순번은_역행이_아니다")
     void 같은_순번은_역행이_아니다() {
         assertThat(RecoveryCriteria.rankRegressed(List.of(50L, 50L, 50L))).isEmpty();
+    }
+
+    /**
+     * <b>못 잰 것을 통과로 넘기지 않는다.</b>
+     *
+     * <p>순번을 하나도 못 모았거나 하나만 모았으면 비교할 것이 없다. 루프가 안
+     * 돌아 빈 값이 나가는데, 그것은 "역행이 없었다" 가 아니라 "안 봤다" 다.
+     * 시험 수명 안에 앞줄 제거가 한 번도 안 돌아 판정을 무력화해도 초록이던
+     * 사고가 이미 한 번 났다.
+     */
+    @Test
+    @DisplayName("순번을_못_모았으면_잡는다")
+    void 순번을_못_모았으면_잡는다() {
+        assertThat(RecoveryCriteria.rankRegressed(List.of()))
+                .hasValueSatisfying(v -> assertThat(v).contains("RC2"));
+        assertThat(RecoveryCriteria.rankRegressed(List.of(50L)))
+                .hasValueSatisfying(v -> assertThat(v).contains("RC2"));
+    }
+
+    /** 순번이 없는 자리도 못 잰 것이다. 목록에 빈 자리가 있으면 비교가 성립 안 한다. */
+    @Test
+    @DisplayName("빈_순번이_섞이면_잡는다")
+    void 빈_순번이_섞이면_잡는다() {
+        List<Long> 섞임 = new ArrayList<>();
+        섞임.add(50L);
+        섞임.add(null);
+        섞임.add(20L);
+        assertThat(RecoveryCriteria.rankRegressed(섞임))
+                .hasValueSatisfying(v -> assertThat(v).contains("RC2"));
     }
 
     /** RC3 — 회복 뒤 30초 안에 판정이 정상으로 돌아와야 한다. */
@@ -218,6 +248,19 @@ class RecoveryCriteriaTest {
         assertThat(RecoveryCriteria.seatLost(Map.of("a", 10.0), Map.of("a", 10.0))).isEmpty();
         assertThat(RecoveryCriteria.seatLost(Map.of("a", 10.0), Map.of("a", 99.0)))
                 .hasValueSatisfying(v -> assertThat(v).contains("RC5").contains("a"));
+    }
+
+    /**
+     * <b>장애 전 자리를 하나도 못 모았으면 못 잰 것이다.</b>
+     *
+     * <p>비교 대상이 없으면 루프가 안 돌아 빈 값이 나간다. 줄에 아무도 없던
+     * 회차와 줄을 못 읽은 회차가 같은 값을 내면 둘을 못 가른다.
+     */
+    @Test
+    @DisplayName("장애_전_자리를_못_모았으면_잡는다")
+    void 장애_전_자리를_못_모았으면_잡는다() {
+        assertThat(RecoveryCriteria.seatLost(Map.of(), Map.of("a", 10.0)))
+                .hasValueSatisfying(v -> assertThat(v).contains("RC5"));
     }
 
     /** 사람이 사라진 것도 자리를 잃은 것이다. 걷힌 사람은 새 순번으로 다시 선다. */

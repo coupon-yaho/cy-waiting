@@ -82,7 +82,7 @@ class RankTrackerTest {
         assertThat(tracker.seatChanges()).isEmpty();
     }
 
-    /** 한 번만 본 사람은 비교할 것이 없다. 없는 위반을 만들면 안 된다. */
+    /** 사람마다 관측이 하나뿐이면 볼 수가 없었던 것이다. 통과로 넘기면 안 된다. */
     @Test
     @DisplayName("한_번씩만_봤으면_판정_불가다")
     void 한_번씩만_봤으면_판정_불가다() {
@@ -94,7 +94,8 @@ class RankTrackerTest {
         // 한 바퀴만 돌고 끝난 시나리오가 RC2 를 통과한 것으로 적힌다.
         assertThat(tracker.regressions())
                 .anySatisfy(why -> assertThat(why).contains("RC2").contains("볼 수 없었다"));
-        assertThat(tracker.seatChanges()).isEmpty();
+        assertThat(tracker.seatChanges())
+                .anySatisfy(why -> assertThat(why).contains("RC5").contains("볼 수 없었다"));
     }
 
     /** 한 사람이라도 두 번 봤으면 판정이 선다. 한 번만 본 사람은 그대로 둔다. */
@@ -107,6 +108,19 @@ class RankTrackerTest {
         tracker.waiting("b", 50, 20L);
 
         assertThat(tracker.regressions()).isEmpty();
+        assertThat(tracker.seatChanges()).isEmpty();
+    }
+
+    /** 줄을 떠난 사람은 끝까지 따라간 것이다. 한 번만 봤어도 판정이 선다. */
+    @Test
+    @DisplayName("떠난_사람이_있으면_판정한다")
+    void 떠난_사람이_있으면_판정한다() {
+        RankTracker tracker = new RankTracker();
+        tracker.waiting("a", 100, 10L);
+        tracker.admitted("a");
+
+        assertThat(tracker.regressions()).isEmpty();
+        assertThat(tracker.seatChanges()).isEmpty();
     }
 
     /** 아무도 안 봤으면 통과가 아니라 못 잰 것이다. 통과로 넘기면 게이트가 사라진다. */

@@ -23,7 +23,10 @@ interval=${PROBE_INTERVAL_SEC:-0.2}
 # **시각을 표본 옆에서 찍는다.** 밖에서 받은 뒤에 찍으면 출력이 버퍼에 몰렸다
 # 한꺼번에 나올 때 시각이 뭉쳐, 창이 0 에 가까워지고 값이 터무니없이 커진다.
 probe=${PROBE_CMD:-docker compose -f test/load/compose.yml exec -T redis sh -c}
-loop="while :; do date +%s%N; redis-cli INFO stats | grep total_commands_processed; sleep $interval; done"
+# **시계는 레디스에게 묻는다.** 컨테이너의 `date` 가 `%N` 을 안 받아 초만 내는데,
+# 그것을 나노초로 읽으면 창이 1 이 되어 값이 10 억 배로 부푼다 — 실제로 그렇게
+# 돌았고 판정은 늘 "착수" 였다. `TIME` 은 초와 마이크로초를 준다.
+loop="while :; do printf 'T%s\\n' \"\$(redis-cli TIME | tr '\\n' ':')\"; redis-cli INFO stats | grep total_commands_processed; sleep $interval; done"
 
 : > "$out"
 # **자식을 짚어서 내린다.** 파이프라인으로 두면 부르는 쪽이 이 스크립트만 죽이고
@@ -50,7 +53,10 @@ prev_ns=""
 while IFS= read -r line; do
     case "$line" in
         total_commands_processed:*) cmds=${line#total_commands_processed:} ;;
-        [0-9]*) now_ns=$line; continue ;;
+        T[0-9]*) stamp=${line#T}
+            sec=${stamp%%:*}; rest=${stamp#*:}; usec=${rest%%:*}
+            case "$sec$usec" in ''|*[!0-9]*) continue ;; esac
+            now_ns=$(( sec * 1000000000 + usec * 1000 )); continue ;;
         *) continue ;;
     esac
     # 뒤에 붙는 캐리지 리턴을 뗀다. 안 떼면 산술이 터진다.

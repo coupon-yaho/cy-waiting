@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test;
  * 조여 둔 배분을 푸는 속도.
  *
  * <p>서킷이 배분을 초당 하나로 조인 뒤 닫히면, 조임이 없어진 그 한 틱에 값이
- * 원래 몫으로 그대로 돌아간다. 방금 실패를 끝낸 뒷단을 향한 계단이다 (RC4).
+ * 원래 몫으로 그대로 돌아간다. 방금 실패를 끝낸 뒷단을 향한 계단이다.
  */
 class ReleaseRampTest {
 
@@ -84,7 +84,6 @@ class ReleaseRampTest {
         // 닿은 뒤로는 다시 안 누른다. 누르면 정상 구간이 계속 램프에 묶인다.
         assertThat(ramp.next(1000, 0, false)).isEqualTo(1000);
     }
-
 
     @Test
     @DisplayName("다시_조이면_그_값에서_다시_시작한다")

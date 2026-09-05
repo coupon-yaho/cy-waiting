@@ -58,6 +58,14 @@ public final class CapacityCollector {
     public static final int HOLD_ROUNDS = 3;
 
     /**
+     * 첫 회차 표시를 들고 있는 회차 수의 상한.
+     *
+     * <p><b>무한정 들면 예열 램프가 사라진다</b> — 뒷단이 오래 멎었다 콜드로
+     * 돌아오는 첫 회차에 그 표시가 살아 있으면 60초 램프를 통째로 건너뛴다 (F6).
+     */
+    private static final int FIRST_ROUND_GRACE = HOLD_ROUNDS;
+
+    /**
      * 뒷단 보고가 기준 시각보다 앞서도 받아 주는 폭.
      *
      * <p>초 절단 때문에 시계가 완벽해도 한 초 어긋난다. 그 여유는 1 초지
@@ -66,27 +74,18 @@ public final class CapacityCollector {
     private static final long AHEAD_TOLERANCE_SEC = 1;
 
     /**
-     * 아직 한 회차도 안 걷었다. <b>승계와 신규 기동을 못 가른다</b> — 보고에
-     * 기동 시각이 실리면 그때 이 추정을 버린다 (A-13).
-     */
-    /**
      * 마지막 회차의 라우팅 목록. <b>합산에 든 값 그대로다</b> — 램프가 깎은 몫이
      * 여기에도 실려, 갓 뜬 인스턴스로 정상 비율만큼 안 간다 (F6).
      */
     private volatile List<InstanceRouting> lastRoutable = List.of();
 
-    private boolean firstRound = true;
-
     /**
-     * 첫 회차 표시를 들고 있는 회차 수의 상한.
+     * 신선한 보고를 아직 못 봤다. <b>그 무리는 이미 돌던 것으로 본다</b> —
+     * 리더가 바뀐 것이 뒷단이 새로 뜬 것은 아니다.
      *
-     * <p><b>무한정 들고 있으면 안 된다.</b> 뒷단 전체가 오래 멎으면 그동안
-     * 신선한 보고가 없어 표시가 안 타고, 그 사이 {@code seen} 은 비워진다.
-     * 뒷단이 <b>콜드로</b> 재기동해 보고를 다시 올리는 첫 회차에 그 표시가
-     * 살아 있으면 60초 예열 램프를 통째로 건너뛴다 — 뒷단이 가장 차가울 때
-     * 유령 몫이 그대로 실린다 (F6).
+     * <p>{@link #FIRST_ROUND_GRACE} 회차까지만 산다. 그 뒤로는 램프가 산다.
      */
-    private static final int FIRST_ROUND_GRACE = HOLD_ROUNDS;
+    private boolean firstRound = true;
 
     /** 첫 회차 표시를 든 채로 돈 회차 수. */
     private int roundsHeld;
@@ -177,7 +176,7 @@ public final class CapacityCollector {
         // **지금 노드 수로 잰다.** 옛 바닥을 들고 있으면 양쪽으로 다 틀린다 —
         // 노드가 늘면 그만큼 낮아 한산 통과가 막히고, 줄면 그만큼 높아 장애
         // 중에 실제 바닥보다 많이 민다. 걷을 때와 같은 식을 쓴다.
-        long bottom = Math.max(floor, (long) Math.max(1, nodes) * IDLE_DIVISOR);
+        long bottom = Math.max(floor, idleMinimum(nodes));
         lastKnown.updateAndGet(known -> known == 0 ? 0 : Math.max(bottom, known / 2));
     }
 
@@ -199,6 +198,16 @@ public final class CapacityCollector {
 
     public long lastKnown() {
         return lastKnown.get();
+    }
+
+    /**
+     * 한산 통과가 성립하는 최소 크레딧.
+     *
+     * <p><b>공식을 한 곳에 둔다.</b> 갈라지면 하한이 다시 전면 차단이 된다 —
+     * {@link #IDLE_DIVISOR} 가 경고하는 그 위험이다.
+     */
+    public static long idleMinimum(int nodes) {
+        return (long) Math.max(1, nodes) * IDLE_DIVISOR;
     }
 
     /** 마지막 회차에서 하한이 답이 됐으면 그 값, 아니면 0. */
@@ -269,7 +278,7 @@ public final class CapacityCollector {
 
         // **하한은 살아 있는 분모에 맞춘다.** 설정값으로만 재면 노드가 그보다
         // 늘었을 때 노드당 몫이 다시 0 이 된다 — 하한을 둔 이유가 사라진다.
-        long minimum = Math.max(floor, (long) Math.max(1, nodes) * IDLE_DIVISOR);
+        long minimum = Math.max(floor, idleMinimum(nodes));
         // **하한은 부족분을 우리가 만들었을 때만이다.** 램프가 깎아 하한 아래로
         // 내려갔으면 되돌린다 — 안 되돌리면 노드당 몫이 유휴 비율 아래로 내려가
         // 한산 통과 상한이 0 이 되고, 그 쿠폰이 전 노드에서 막힌다 (R1).

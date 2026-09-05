@@ -1063,6 +1063,40 @@ class AllocationRoundTest {
         assertThat(적용).as("셋 다 몫을 받는다").containsExactly("c1=13", "c2=13", "c3=13");
     }
 
+    /**
+     * <b>램프도 진입과 해제를 쌍으로 남긴다</b> (LG-2).
+     *
+     * <p>창을 램프가 걸린 시점에 열면 진입이 조임 시작에 찍히고, 해제의 지속
+     * 시간에 장애 구간이 통째로 섞인다 — 서킷이 5분 열려 있었으면 여덟 틱짜리
+     * 회복이 300틱으로 찍힌다. 정작 재려던 수가 그 수에 안 남는다.
+     */
+    @Test
+    @DisplayName("램프_로그가_실제_회복_구간만_센다")
+    void 램프_로그가_실제_회복_구간만_센다() {
+        AtomicReference<CircuitState> 서킷 = new AtomicReference<>(CircuitState.OPEN);
+        AllocationRound round = 서킷_있는_회차(서킷, 7_300, 40);
+        for (int i = 0; i < 5; i++) {
+            round.run().block();
+        }
+        assertThat(로그_메시지()).as("조인 동안에는 해제 램프가 안 뜬다")
+                .noneMatch(m -> m.contains("서킷 해제 램프"));
+
+        서킷.set(CircuitState.CLOSED);
+        long 앞선 = 0;
+        int 틱 = 0;
+        while (앞선 < 7_300 && 틱 < 40) {
+            round.run().block();
+            앞선 = 발행된("c1").credit();
+            틱++;
+        }
+
+        assertThat(로그_메시지()).as("진입은 실제로 푸는 회차에 한 번")
+                .filteredOn(m -> m.startsWith("서킷 해제 램프 —")).hasSize(1);
+        // 조인 다섯 회차가 이 수에 섞이면 여덟 틱짜리 회복이 열세 틱으로 찍힌다.
+        assertThat(로그_인자("서킷 해제 램프 끝")[0])
+                .as("해제가 센 틱은 조인 구간을 안 담는다").isEqualTo((long) (틱 - 1));
+    }
+
     /** 초과 배분 지표는 게이트 전 값으로 잰다. 아니면 서킷이 열린 시간에 비례해 오른다. */
     @Test
     @DisplayName("배분_정지가_초과_지표를_안_올린다")

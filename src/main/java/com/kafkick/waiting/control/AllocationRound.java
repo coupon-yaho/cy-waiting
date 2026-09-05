@@ -137,8 +137,8 @@ public final class AllocationRound {
     private final FailureWindow paused = FailureWindow.create();
 
     /**
-     * 조임을 푸는 속도 (RC4). <b>평활이 조여진 값을 못 보므로</b> 서킷이 닫히는
-     * 한 틱에 배분이 원래 몫으로 그대로 돌아간다. 그 계단을 회차당 배수로 나눈다.
+     * 조임을 푸는 속도. <b>평활이 조여진 값을 못 보므로</b> 서킷이 닫히는 한
+     * 틱에 배분이 원래 몫으로 그대로 돌아간다. 그 계단을 회차당 배수로 나눈다.
      */
     private final ReleaseRamp releaseRamp = ReleaseRamp.of(ReleaseRamp.DEFAULT_STEP);
 
@@ -422,20 +422,24 @@ public final class AllocationRound {
         // 이미 되돌리는 자리를 여기서 다시 만들면 안 된다.
         //
         // **여기서 쓰는 하한은 R1 이 요구하는 최소다.** `creditFloor` 는 하한이
-        // 답이 된 회차에만 값이 있어 회복 구간에는 0 이다. 설정 하한은 이보다
-        // 크거나 같게 강제되므로, 이 값은 안전한 아래쪽 어림이다.
-        long r1Minimum = (long) Math.max(1, gatewayCount.getAsInt())
-                * CapacityCollector.IDLE_DIVISOR;
-        long credit = releaseRamp.next(allowed, Math.max(floorNow, r1Minimum),
-                circuitNow != CircuitState.CLOSED);
-        if (releaseRamp.ramping()) {
-            if (ramping.entered()) {
-                log.info("서킷 해제 램프 — 몫을 {} 부터 회차당 {}배로 올린다, 목표 {}",
-                        credit, ReleaseRamp.DEFAULT_STEP, target);
+        // 답이 된 회차에만 값이 있어 회복 구간에는 0 이다. 여유 갱신 쪽이 하한을
+        // 이 값과의 max 로 잡으므로, 이것은 유효 하한 이하인 안전한 어림이다.
+        long r1Minimum = CapacityCollector.idleMinimum(gatewayCount.getAsInt());
+        boolean gatedNow = circuitNow != CircuitState.CLOSED;
+        long credit = releaseRamp.next(allowed, Math.max(floorNow, r1Minimum), gatedNow);
+        // **창은 실제로 푸는 회차에 연다.** 램프는 조인 회차에 이미 걸리므로,
+        // 걸렸다는 것만 보고 열면 진입이 조임 시작에 찍히고 해제의 지속 시간에
+        // 장애 구간이 통째로 섞인다 — 정작 재려던 회복 틱 수가 그 수에 안 남는다.
+        if (!gatedNow) {
+            if (releaseRamp.ramping()) {
+                if (ramping.entered()) {
+                    log.info("서킷 해제 램프 — 몫을 {} 부터 회차당 {}배로 올린다, 목표 {}",
+                            credit, String.format("%.1f", ReleaseRamp.DEFAULT_STEP), target);
+                }
+            } else {
+                ramping.exited().ifPresent(r -> log.info(
+                        "서킷 해제 램프 끝 — {}틱 걸려 {} 로 돌아왔다", r.swallowed(), credit));
             }
-        } else {
-            ramping.exited().ifPresent(r -> log.info(
-                    "서킷 해제 램프 끝 — {}틱 걸려 {} 로 돌아왔다", r.swallowed(), credit));
         }
         Map<String, Long> granted = new LinkedHashMap<>();
         allocator.allocate(credit, collected).forEach(g -> granted.put(g.couponId(), g.credit()));

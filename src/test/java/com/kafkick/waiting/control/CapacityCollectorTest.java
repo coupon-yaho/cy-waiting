@@ -80,6 +80,34 @@ class CapacityCollectorTest {
     }
 
     @Test
+    @DisplayName("빈_회차는_첫_회차_표시를_안_태운다")
+    void 빈_회차는_첫_회차_표시를_안_태운다() {
+        // **첫 회차 표시는 신선한 보고를 처음 본 회차에 쓴다.** 보고가 신선도
+        // 창을 한 번 넘긴 회차가 그 표시를 태우면, 다음 회차에 보고가 신선해져도
+        // 이미 돌던 무리로 못 보고 램프를 0 부터 다시 탄다. 그동안 크레딧이
+        // 하한에 묶여 한산 통과 상한이 0 이다.
+        CapacityCollector collector = collector();
+        collector.collect(List.of(), NOW, 1);
+
+        long credit = collector.collect(List.of(report("warm", 300, NOW + 1)), NOW + 1, 1);
+
+        assertThat(credit).as("신선한 보고를 처음 본 회차가 첫 회차다").isEqualTo(300);
+    }
+
+    @Test
+    @DisplayName("낡은_보고만_온_회차도_안_태운다")
+    void 낡은_보고만_온_회차도_안_태운다() {
+        // 보고가 오긴 왔는데 전부 낡았다. 관측이 없었던 것과 같다.
+        CapacityCollector collector = collector();
+        long 낡은 = NOW - FRESHNESS.toSeconds() - 1;
+        collector.collect(List.of(report("warm", 300, 낡은)), NOW, 1);
+
+        long credit = collector.collect(List.of(report("warm", 300, NOW + 1)), NOW + 1, 1);
+
+        assertThat(credit).isEqualTo(300);
+    }
+
+    @Test
     @DisplayName("등록을_따로_안_불러도_램프가_걸린다")
     void 등록을_따로_안_불러도_램프가_걸린다() {
         // **두 번 불러야 하는 계약을 두면 빠뜨렸을 때 조용히 0 을 낸다.** 보고가

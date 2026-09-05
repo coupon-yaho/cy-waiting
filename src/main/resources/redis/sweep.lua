@@ -146,17 +146,6 @@ end
 -- 빠지고, 임계가 더 안 오르면 그 사람은 어떤 회차에서도 창에 안 들어온다.
 -- 내리면 창이 한 칸 넓어질 뿐이고, 임계 이하인 사람은 아래의 정확한 비교가
 -- 되잡는다 — 그 검사가 남아 있어야 하는 이유가 여기다.
-local flat = usableAdmitted and redis.call('ZRANGEBYSCORE', KEYS[1],
-        '(' .. string.format('%.0f', math.floor(admitted)), '+inf', 'WITHSCORES',
-        'LIMIT', 0, limit) or {}
-local front = {}
-local ranks = {}
-for i = 1, #flat, 2 do
-    front[#front + 1] = flat[i]
-    ranks[#ranks + 1] = tonumber(flat[i + 1])
-end
-local swept = 0
-
 -- **살아 있는 신호가 하나도 없으면 앞줄을 안 걷는다.**
 --
 -- 줄에 사람이 있는데 아무도 살아 있지 않다는 것은 "전원이 떠났다" 가 아니라
@@ -167,29 +156,46 @@ local swept = 0
 -- 물리적으로 남아 있어, 개수만 보면 "전부 만료" 를 "살아 있다" 로 읽는다 —
 -- 회복 첫 회차가 정확히 그 상태다.
 --
--- **정리까지 건너뛰지는 않는다.** 앞줄 제거만 접고 만료 신호와 낡은 기록은
--- 그대로 걷는다. 안 그러면 이 구간이 길어질 때 해시가 한 방향으로만 자라고
--- 커서도 전진을 못 한다.
--- **살아 있는 신호가 하나도 없으면 앞줄을 안 걷는다.**
+-- **읽기보다 앞에 둔다.** 아래 제거 루프의 상한이 이 값을 보므로, 거짓이면
+-- 창을 읽어 봐야 버린다. 읽기끼리의 순서 교환이라 첫 쓰기 앞인 것은 그대로다.
 --
--- 줄에 사람이 있는데 아무도 살아 있지 않다는 것은 "전원이 떠났다" 가 아니라
--- **그 저장소를 잃었다** 는 뜻이다. 뒤처진 복제본 승격과 AOF 유실이 그 모양이고,
--- 둘 다 이 전역 판정이 정확히 잡는다.
---
--- **`ZCARD` 가 아니라 `ZCOUNT` 다.** 만료된 신호는 아래 정리가 걷기 전까지
--- 물리적으로 남아 있어, 개수만 보면 "전부 만료" 를 "살아 있다" 로 읽는다.
---
--- **정리까지 건너뛰지는 않는다.** 앞줄 제거만 접고 만료 신호와 낡은 기록은
--- 그대로 걷는다. 안 그러면 이 구간이 길어질 때 해시가 한 방향으로만 자란다.
-local anyAlive = redis.call('ZCOUNT', KEYS[3], now, '+inf') > 0
+-- **접는 회차면 묻지도 않는다.** `and` 가 왼쪽부터 끊으므로 `removeFront` 가
+-- 0 이면 `ZCOUNT` 자체가 안 돈다 — 그 회차에서는 이 값을 아무도 안 쓴다.
+local removing = removeFront == 1
+        and redis.call('ZCOUNT', KEYS[3], now, '+inf') > 0
 
-if #front > 0 then
+-- **걷을 회차가 아니면 읽지도 않는다.** 창을 읽는 이 호출과 뒤의 `ZMSCORE` 는
+-- 제거 조건과 무관하게 돌고 있었다. 승계 유예는 **모든 쿠폰**에 대해 접고
+-- 돌고, 저장소를 잃은 상태는 끝내 주는 것이 없어 매 틱 되풀이된다 — 실측으로
+-- 그 회차들이 3.7~7.6ms 였다.
+--
+-- **정리는 그대로 돈다.** 접는 것은 앞줄 제거뿐이고, 만료 신호와 낡은 기록은
+-- 아래에서 계속 걷는다 — 안 그러면 이 구간이 길어질 때 해시가 한 방향으로만
+-- 자라고 커서도 전진을 못 한다.
+local flat = (usableAdmitted and removing)
+        and redis.call('ZRANGEBYSCORE', KEYS[1],
+                '(' .. string.format('%.0f', math.floor(admitted)), '+inf', 'WITHSCORES',
+                'LIMIT', 0, limit) or {}
+-- **`#t` 로 자리를 잡지 않는다.** Lua 5.1 의 길이 연산자는 매번 이진 탐색을
+-- 돌아 누적이 O(n log n) 이 된다. 실측으로 원소 3,000 개에서 649μs 대 141μs 다.
+-- 세는 변수를 두면 같은 결과를 선형에 만든다.
+local front = {}
+local ranks = {}
+local nFront = 0
+for i = 1, #flat, 2 do
+    nFront = nFront + 1
+    front[nFront] = flat[i]
+    ranks[nFront] = tonumber(flat[i + 1])
+end
+local swept = 0
+
+if nFront > 0 then
     -- **앞부분의 score 만 묻는다.** ZRANGEBYSCORE 로 살아 있는 쪽을 다 받으면
     -- K 를 1 로 줘도 alive 전체 크기에 비례해 이벤트 루프를 잡는다.
     local scores = redis.call('ZMSCORE', KEYS[3], unpack(front))
     -- 만료 시각을 한 번만 푼다. 가드와 본 루프가 같은 배열을 쓴다.
     local aliveAt = {}
-    for i = 1, #front do
+    for i = 1, nFront do
         aliveAt[i] = tonumber(scores[i])
     end
 
@@ -206,7 +212,9 @@ if #front > 0 then
     -- 아래로 접힐 때 임계 이하인 사람을 되잡는 것이 그 검사다.
     local gone = {}
     local records = {}
-    for i = 1, (anyAlive and removeFront == 1) and #front or 0 do
+    local nGone = 0
+    local nRecords = 0
+    for i = 1, removing and nFront or 0 do
         -- score 가 없거나 이미 지난 것은 폴링이 끊긴 것이다
         local at = aliveAt[i]
         local rank = ranks[i]
@@ -226,14 +234,16 @@ if #front > 0 then
         --
         -- 기록이 제거보다 먼저라 "표시만 남고 큐에서 빠진" 순간은 없다.
         if (at == nil or at < now) and (rank == nil or rank > admitted) then
-            gone[#gone + 1] = front[i]
+            nGone = nGone + 1
+            gone[nGone] = front[i]
             -- 자리는 안 보관한다. 재방문자로 식별만 한다 (D-11).
-            records[#records + 1] = front[i]
-            records[#records + 1] = 'd:' .. string.format('%.0f', now)
+            records[nRecords + 1] = front[i]
+            records[nRecords + 2] = 'd:' .. string.format('%.0f', now)
+            nRecords = nRecords + 2
         end
     end
 
-    if #gone > 0 then
+    if nGone > 0 then
         -- **기록이 먼저다.** 제거를 먼저 하면 그 뒤가 터졌을 때 자리도 잃고
         -- 재방문자로도 식별 안 되는 사람이 남는다 — 이 청소를 Lua 로 둔
         -- 이유가 정확히 그것을 막는 것이다. 기록을 먼저 하면 실패 시 남는
@@ -248,11 +258,11 @@ if #front > 0 then
         -- **비면 안 부른다.** 걷을 사람이 전부 입장 표시를 들고 있으면 쓸
         -- 기록이 없는데, 인자 없는 HSET 은 오류다 — 그러면 ZREM 앞에서
         -- 스크립트가 죽고 그 쿠폰의 청소가 매 틱 같은 자리에서 실패한다.
-        if #records > 0 then
+        if nRecords > 0 then
             redis.call('HSET', KEYS[2], unpack(records))
         end
         redis.call('ZREM', KEYS[1], unpack(gone))
-        swept = #gone
+        swept = nGone
     end
 end
 
@@ -274,6 +284,8 @@ local fields = scanned[2]
 local cutoff = now - retention
 local doomed = {}
 local stamped = {}
+local nDoomed = 0
+local nStamped = 0
 -- **받은 것은 끝까지 분류한다.** 커서는 응답 전체 뒤로 전진하므로, 중간에
 -- 끊으면 그 뒤 항목이 이번 순회에서 통째로 빠진다 — 다음 한 바퀴가 돌 때까지
 -- 안 걷힌다. 예산은 분류가 아니라 **쓰기**에 건다. 비용은 COUNT 로 잡는다.
@@ -284,12 +296,14 @@ for i = 1, #fields, 2 do
         -- 지금으로 쳐 주면 매 회차 다시 젊어져 같은 일이 난다. 지금을 못 박아
         -- 다음 회차부터 늙게 한다 — 그러면 한 보관 기간 뒤 옛 값이 사라지고,
         -- 그때 이 분기를 뗀다.
-        stamped[#stamped + 1] = fields[i]
-        stamped[#stamped + 1] = 'a:' .. string.format('%.0f', now)
+        stamped[nStamped + 1] = fields[i]
+        stamped[nStamped + 2] = 'a:' .. string.format('%.0f', now)
+        nStamped = nStamped + 2
     else
         local at = stampOf(value)
         if at == nil or at < cutoff then
-            doomed[#doomed + 1] = fields[i]
+            nDoomed = nDoomed + 1
+            doomed[nDoomed] = fields[i]
         end
     end
 end
@@ -310,15 +324,22 @@ end
 -- MAX_BUDGET 이면 쌍이 16,000 개가 되어 unpack 한계를 넘는다 — 그러면 그 쿠폰의
 -- 청소가 매 틱 같은 자리에서 죽고 커서가 전진을 못 한다.
 stamped = firstOf(stamped, math.min(budget, MAX_SCAN) * 2)
-if #stamped > 0 then
+-- 자른 뒤라 센 값이 안 맞는다. 여기서는 "쓸 것이 있는가" 판정에만 쓰이므로
+-- 결과가 안 갈리지만, 아래 `doomed` 와 같은 모양으로 둔다.
+nStamped = #stamped
+if nStamped > 0 then
     redis.call('HSET', KEYS[2], unpack(stamped))
 end
 
 local expiredGrace = 0
 doomed = firstOf(doomed, budget)
-if #doomed > 0 then
+-- **여기는 다시 재야 한다.** `firstOf` 가 새 목록으로 바꿔치기하는데 이 수가
+-- 반환값에 실린다 — 안 다시 재면 예산에 잘린 회차가 자르기 전 수를 지운 것으로
+-- 보고한다. 실제로 그렇게 냈다가 기존 시험이 잡았다.
+nDoomed = #doomed
+if nDoomed > 0 then
     redis.call('HDEL', KEYS[2], unpack(doomed))
-    expiredGrace = #doomed
+    expiredGrace = nDoomed
 end
 
 -- 다음 커서를 돌려준다. 호출부가 이어서 넘긴다.

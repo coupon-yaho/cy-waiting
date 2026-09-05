@@ -101,10 +101,47 @@ if [ "$before_rc" -ne 0 ]; then
   exit 2
 fi
 
+# **남은 대들이 그 몫을 받는지도 본다.** 응답 코드만 세면 "5xx 0" 은 나오는데
+# 재분배는 안 잰 것이 된다 — 시나리오가 요구하는 것은 둘인데 절반만 재는 셈이다.
+# 죽기 전 도착을 먼저 떠 둔다.
+for name in "${NAMES[@]}"; do arrived "$name" || exit 2; done > "$work/arrived.before"
+
 $COMPOSE kill "$VICTIM" >/dev/null 2>&1 || { echo "$VICTIM 을 못 죽였다"; exit 2; }
 drive "$work/after" "$AFTER_SEC" 6000000
+
+# 마지막 요청이 아직 물려 있을 수 있다.
+sleep 2
+# **죽은 대는 안 읽는다.** 컨테이너가 멎었으므로 읽으려 하면 그 자리에서 끊긴다.
+# 죽은 대로 간 요청은 응답 코드가 말하고, 그것은 위 판정기가 이미 본다.
+for name in "${NAMES[@]}"; do
+  if [ "$name" = "$VICTIM" ]; then echo "-1"; else arrived "$name" || exit 2; fi
+done > "$work/arrived.after"
 
 echo
 echo "  죽인 뒤: $(sort "$work/after" | uniq -c | tr -s ' \n' ' ')"
 echo
 test/load/evaluate-kill.sh "$work/after"
+kill_rc=$?
+
+echo
+echo "재분배 — 죽인 뒤 남은 대들의 도착"
+CREDITS=("$BIG_CAP" "$SMALL_CAP" "$MID_CAP")
+specs=()
+for idx in 0 1 2; do
+  b=$(sed -n "$((idx + 1))p" "$work/arrived.before")
+  a=$(sed -n "$((idx + 1))p" "$work/arrived.after")
+  got=$(( a - b ))
+  if [ "${NAMES[idx]}" = "$VICTIM" ]; then
+    echo "  ${NAMES[idx]} (죽은 대) — 멎어서 못 읽는다"
+  else
+    specs+=("${NAMES[idx]}:${CREDITS[idx]}:$got")
+  fi
+done
+
+# 남은 둘의 비율을 여유와 견준다. 판정기는 비율 게이트가 쓰는 것과 같은 것이다.
+MAX_DEVIATION="${MAX_DEVIATION:-15}" test/load/evaluate-routing-ratio.sh "${specs[@]}"
+ratio_rc=$?
+
+[ "$kill_rc" -eq 0 ] && [ "$ratio_rc" -eq 0 ] && exit 0
+[ "$kill_rc" -eq 2 ] || [ "$ratio_rc" -eq 2 ] && exit 2
+exit 1

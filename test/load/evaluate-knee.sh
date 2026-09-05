@@ -16,7 +16,7 @@ if [ ! -s "$samples" ]; then
     exit 1
 fi
 
-# 표본은 `<동시> <등록/초> <p99ms> <CPU%>` 네 칸이다.
+# 표본은 `<듀티%> <등록/초> <p99ms> <CPU%>` 네 칸이다. 첫 칸이 부하 축이다.
 lines=$(grep -c '' "$samples")
 min_lines=${MIN_LINES:-4}
 if [ "$lines" -lt "$min_lines" ]; then

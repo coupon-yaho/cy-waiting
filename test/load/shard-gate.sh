@@ -127,6 +127,8 @@ if [ -n "$pinned" ]; then
     # **없으면 말한다.** 조용히 안 묶으면 격리했다고 믿는 회차가 안 격리된
     # 조건으로 돌고, 그 값이 "고정해서 쟀다" 로 기록된다.
     if command -v taskset >/dev/null 2>&1; then
+        # 코어 지도는 `compose.pinned.yml` 이 든다 — 거기를 고치면 여기도
+        # 고친다. 이 기계(12 코어)를 못 박은 값이다.
         runner="taskset -c 1-11"
     else
         echo "::error title=착수 판정::taskset 이 없다 — 생성기를 격리 못 한다"

@@ -12,7 +12,7 @@ SELFTEST_JUDGE=$PWD/test/load/evaluate-knee.sh
 work=$(mktemp -d) || exit 1
 trap 'rm -rf "$work"' EXIT
 
-# `<동시> <등록/초> <p99ms> <CPU%>` 네 칸씩.
+# `<듀티%> <등록/초> <p99ms> <CPU%>` 네 칸씩.
 rows() {
     local path=$work/$1
     shift

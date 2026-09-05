@@ -46,8 +46,11 @@ run_probe() {
     printf '%s\n' "$2" > "$work/counts"
     echo 0 > "$work/turn"
     : > "$work/out"
+    # **걷는 자리도 가짜로 둔다.** 안 두면 종료 트랩이 기본값을 실제로 실행해
+    # 진짜 도커 스택의 프로브 루프를 걷는다 — 다른 워크트리에서 회차가 도는
+    # 중이면 그쪽 표본이 끊기고, 출력이 버려져 흔적도 안 남는다.
     PATH="$work/bin:$PATH" PROBE_CMD="bash -c" PROBE_INTERVAL_SEC=0.01 \
-        timeout 10 test/load/redis-probe.sh "$work/out" >/dev/null 2>&1
+        PROBE_STOP="true" timeout 10 test/load/redis-probe.sh "$work/out" >/dev/null 2>&1
 }
 
 expect() {

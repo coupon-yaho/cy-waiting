@@ -7,7 +7,8 @@ set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
 judge=$PWD/test/load/evaluate-shard-gate.sh
-work=$(mktemp -d)
+# 실패를 안 보면 `work` 가 빈 문자열이 되어 이후 쓰기가 루트로 간다.
+work=$(mktemp -d) || exit 1
 trap 'rm -rf "$work"' EXIT
 
 fail=0

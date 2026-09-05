@@ -19,6 +19,12 @@ COMPOSE="docker compose -f test/load/compose.yml"
 COUPON=c2
 OUT_OPS="${OUT_OPS:-redis-ops.txt}"
 OUT_SUMMARY="${OUT_SUMMARY:-k6-summary.json}"
+# 아래에서 앞 회차의 요약을 지운다. 환경에서 온 값을 그대로 지우므로 무엇을
+# 지우는지는 확인하고 간다.
+case "$OUT_SUMMARY" in
+    *.json) ;;
+    *) echo "OUT_SUMMARY 는 .json 이어야 한다: '$OUT_SUMMARY'"; exit 2 ;;
+esac
 
 command -v k6 >/dev/null || { echo "k6 가 없다"; exit 2; }
 
@@ -27,11 +33,13 @@ echo "착수 판정 회차 · 쿠폰 ${COUPON}"
 # 있으면 크레딧이 1 에서 안 오르고, 예열이 3 분을 기다리다 죽는다. 예열
 # 컨테이너는 unhealthy 로 남으면 `--wait` 가 기다리지 않고 그대로 실패로 읽는다.
 #
-# **겹침이 남긴 스텁도 걷는다.** 이 회차는 `compose.yml` 하나로만 돌아야 CI 와
-# 같은 모양이다 — 라우팅 겹침의 스텁이 살아 있으면 뒷단 구성이 달라진다.
+#
+# **겹침이 남긴 스텁은 그냥 둔다.** `--remove-orphans` 를 쓰면 컴포즈 프로젝트
+# 이름이 디렉터리 basename 이라 워크트리들이 같은 `load` 를 공유하는 탓에, 다른
+# 워크트리에서 도는 라우팅 회차의 컨테이너까지 지운다. 스텁이 살아 있어도
+# 게이트웨이는 레디스에 등록된 노드만 보므로 이 회차에 안 섞인다.
 $COMPOSE rm -sf gateway warmup >/dev/null 2>&1
-$COMPOSE up -d --wait --wait-timeout 240 --remove-orphans \
-    || { echo "스택을 못 세웠다"; exit 2; }
+$COMPOSE up -d --wait --wait-timeout 240 || { echo "스택을 못 세웠다"; exit 2; }
 
 # **줄 키만 지우면 안 된다.** 입장 커서와 최대 순번이 남으면 리더가 줄을
 # 비었다고 안 보고 쿠폰을 QUEUEING 으로 되돌리며, 판정은 IDLE 이 아니면 무조건

@@ -27,8 +27,21 @@ probe=${PROBE_CMD:-docker compose -f test/load/compose.yml exec -T redis sh -c}
 # 안쪽 프로세스는 그대로 남는다 — 실제로 회차를 거듭할수록 남은 루프가 쌓여
 # 여덟 개가 살아 있었다. 그 루프들이 계속 레디스를 치므로 다음 회차의 누적
 # 명령 수에 제 몫을 얹는다. 위의 주석이 걱정한 그대로인데 바깥만 막고 있었다.
-PROBE_MARK=${PROBE_MARK:-redis-probe-loop}
+# **표식은 노브가 아니다.** `pkill -f` 는 패턴을 정규식으로 받으므로 짧은 값을
+# 주면 컨테이너의 PID 1 (`redis-server …`) 에 걸려 레디스가 통째로 내려간다 —
+# 회차 중이면 대기열이 사라지고, 그 뒤 판정은 "표본이 적다" 로만 드러나 원인이
+# 안 보인다. 값을 박고 패턴에 앵커를 건다.
+PROBE_MARK='redis-probe-loop'
 probe_stop=${PROBE_STOP:-docker compose -f test/load/compose.yml exec -T redis pkill -f}
+probe_pattern="^sh -c : ${PROBE_MARK};"
+
+# **주기가 컨테이너 셸 코드가 된다.** 아래 루프 문자열에 그대로 박혀 `sh -c` 로
+# 넘어가므로, 숫자가 아닌 값이 오면 그것이 레디스 컨테이너에서 돈다.
+case "$interval" in
+    ''|*[!0-9.]*)
+        echo "PROBE_INTERVAL_SEC 은 숫자여야 한다: '$interval'" >&2
+        exit 2 ;;
+esac
 # **시계는 레디스에게 묻는다.** 컨테이너의 `date` 가 `%N` 을 안 받아 초만 내는데,
 # 그것을 나노초로 읽으면 창이 1 이 되어 값이 10 억 배로 부푼다 — 실제로 그렇게
 # 돌았고 판정은 늘 "착수" 였다. `TIME` 은 초와 마이크로초를 준다.
@@ -45,8 +58,10 @@ loop=": ${PROBE_MARK}; while :; do printf 'T%s\\n' \"\$(redis-cli TIME | tr '\\n
 #
 # 자식을 **제 프로세스 그룹**으로 떼어 그 그룹만 내린다. 그냥 죽이면 그 아래
 # 손자(잠자는 프로세스 등)가 남는다.
-fifo=$(mktemp -u)
-mkfifo "$fifo"
+# **이름만 받고 만들면 그 사이를 선점당한다.** `set -e` 가 아니라 `mkfifo` 가
+# 조용히 실패하면 남의 파일에 쓰고 읽는다.
+fifo=$(mktemp -u) || exit 1
+mkfifo "$fifo" || { echo "이름 있는 파이프를 못 만들었다: $fifo" >&2; exit 1; }
 if command -v setsid >/dev/null 2>&1; then
     setsid $probe "$loop" > "$fifo" 2>/dev/null &
 else
@@ -54,7 +69,7 @@ else
 fi
 producer=$!
 trap 'kill -- -"$producer" 2>/dev/null || kill "$producer" 2>/dev/null;
-      $probe_stop "$PROBE_MARK" >/dev/null 2>&1; rm -f "$fifo"' \
+      $probe_stop "$probe_pattern" >/dev/null 2>&1; rm -f "$fifo"' \
     EXIT INT TERM
 
 prev_cmds=""

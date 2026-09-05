@@ -159,6 +159,19 @@ class ReleaseRampTest {
     }
 
     @Test
+    @DisplayName("정확히_따라잡은_회차에_비켜선다")
+    void 정확히_따라잡은_회차에_비켜선다() {
+        // 배수 1.2 로 100 에서 허용은 정확히 120 이다. 목표가 그 값이면 이미
+        // 따라잡은 것이라 다음 회차부터 안 눌러야 한다 — 한 칸 어긋나면 정상
+        // 구간이 한 회차 더 램프에 묶인다.
+        ReleaseRamp ramp = ReleaseRamp.of(STEP);
+        ramp.next(100, 0, true);
+
+        assertThat(ramp.next(120, 0, false)).isEqualTo(120);
+        assertThat(ramp.ramping()).isFalse();
+    }
+
+    @Test
     @DisplayName("정책_하한_아래로는_안_내려간다")
     void 정책_하한_아래로는_안_내려간다() {
         // 하한 아래로 눌린 회차에는 노드당 몫이 유휴 비율 아래라, 줄 설 이유가

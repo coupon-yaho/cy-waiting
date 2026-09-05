@@ -55,11 +55,16 @@ public class Bulkhead {
         if (current >= cap) {
             return false;
         }
-        // **전체 상한은 이미 물려 있는 쿠폰에만 겁니다.** 한산한 쿠폰의 첫 자리를
-        // 막으면 몰리는 쿠폰이 노드를 채운 동안 그 쿠폰이 통째로 밀립니다 —
-        // R1 이 뒤집힙니다. 묶어야 하는 것은 한 쿠폰이 계속 자리를 늘리는 쪽이고,
-        // 서로 다른 쿠폰의 수는 아래 `maxKeys` 가 이미 묶습니다.
-        if (current > 0 && total >= totalCap) {
+        // **천장에 닿으면 제 몫보다 많이 쥔 쿠폰이 물러납니다.**
+        //
+        // 처음에는 "이미 물려 있는 쿠폰에만" 으로 뒀는데, 그러면 몰리는 쿠폰이
+        // 노드를 채운 동안 한산한 쿠폰이 **동시 1건**에 묶입니다 — 그 쿠폰의
+        // 처리량이 제 몫이 아니라 뒷단 지연에 묶이고, 응답이 느릴수록 더 크게
+        // 깨집니다. 첫 자리 하나는 R1 이 아닙니다.
+        //
+        // 제 몫은 천장을 지금 자리를 쥔 쿠폰 수로 나눈 값입니다. 한산한 쿠폰은
+        // 그만큼 쓰고, 그보다 많이 쥔 쿠폰이 먼저 물러납니다.
+        if (total >= totalCap && current >= fairShare(totalCap, current)) {
             return false;
         }
         // **새 쿠폰만 상한을 봅니다.** 이미 담긴 쿠폰을 막으면 그 쿠폰이 자기
@@ -70,6 +75,20 @@ public class Bulkhead {
         inFlight.put(couponId, current + 1);
         total++;
         return true;
+    }
+
+    /**
+     * 천장에 닿았을 때 쿠폰 하나가 쥘 수 있는 몫.
+     *
+     * <p><b>하나는 보장합니다.</b> 0 으로 내려가면 한산한 쿠폰의 첫 자리까지
+     * 막혀 R1 이 뒤집힙니다 — 그 대가로 동시 물림이 쿠폰 수만큼 천장을 넘을 수
+     * 있고, 그 폭은 `maxKeys` 가 묶습니다.
+     */
+    private long fairShare(long totalCap, int current) {
+        // 지금 자리를 쥔 쿠폰 수로 나눕니다. 새로 오는 쿠폰이면 자기도 셉니다 —
+        // 안 세면 첫 자리를 잡은 뒤 몫이 줄어 제 몫을 다 못 씁니다.
+        int keys = inFlight.size() + (current == 0 ? 1 : 0);
+        return Math.max(1, totalCap / Math.max(1, keys));
     }
 
     /**

@@ -227,11 +227,11 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
         // 세 번 연속 실패한 근거가 있고 재시도 배제는 이번 한 번뿐이라, 둘 중 하나만
         // 접어야 한다면 근거가 얕은 쪽이다. 그래도 비면 배제까지 접는다: 앓는 대라도
         // 보내는 것이 아무 데도 못 보내는 것보다 낫다.
-        if (candidates.isEmpty() && !skip.equals(ejected)) {
+        if (noneUsable(candidates) && !skip.equals(ejected)) {
             byId.clear();
             candidates = gather(available, ejected, byId, now);
         }
-        if (candidates.isEmpty() && !ejected.isEmpty()) {
+        if (noneUsable(candidates) && !ejected.isEmpty()) {
             // 요청마다 도는 자리다. 구간의 첫 건만 남긴다 (LG-3).
             if (crowdedOut.entered()) {
                 log.warn("배제하고 나니 보낼 곳이 없다 — 뺀 {} 대를 도로 넣는다. "
@@ -270,6 +270,15 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
             candidates.removeIf(c -> c.instanceId().equals(id));
         }
         return new EmptyResponse();
+    }
+
+    /**
+     * <b>보낼 곳이 없는가.</b> 목록이 비었는지로 보면 안 된다 — 여유 0 인 대는
+     * 목록에 들어가지만 고르개가 안 고른다. 그 상태를 "후보가 있다" 로 읽으면
+     * 되돌리기가 한 줄도 안 돌고, 뒷단이 멀쩡한데 빈 답이 나간다.
+     */
+    private boolean noneUsable(List<RoutingCandidate> candidates) {
+        return candidates.stream().noneMatch(RoutingCandidate::eligible);
     }
 
     /**

@@ -40,3 +40,5 @@ ai/journal/index.md
 k6-summary.json
 redis-ops.txt
 redis-slowlog.txt
+routing-truth.txt
+routing-truth-k6.json

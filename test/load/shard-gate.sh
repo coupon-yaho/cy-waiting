@@ -51,14 +51,18 @@ $COMPOSE up -d --wait --wait-timeout 240 || { echo "스택을 못 세웠다"; ex
 # **`routing-lib.sh` 의 `wait_for_idle_queue` 와 같은 절차다.** 그것을 안 부르는
 # 이유는 그 라이브러리가 라우팅 겹침(`compose.routing.yml`)과 스텁 셋의 여유
 # 값을 전제하는데, 이 회차는 CI 와 같은 모양이어야 해서 `compose.yml` 하나로만
-# 돌기 때문이다. **지우는 키 목록이 두 곳에 있다** — 넷째 키가 생기면 둘 다
-# 고쳐야 한다.
+# 돌기 때문이다. **지우는 키 목록이 두 곳에 있다** — `RedisKeys` 에 쿠폰별 키가
+# 늘면 여기와 `routing-lib.sh` 를 둘 다 고쳐야 한다.
 #
 # **줄 키만 지우면 안 된다.** 입장 커서와 최대 순번이 남으면 리더가 줄을
 # 비었다고 안 보고 쿠폰을 QUEUEING 으로 되돌리며, 판정은 IDLE 이 아니면 무조건
 # 줄에 세운다(추월 금지) — 첫 요청부터 202 이거나 QUEUE_FULL 이다.
+# **쿠폰별 키 여섯을 다 지운다.** 셋만 지우면 이탈 기록과 생존 신호와 배분
+# 펜스가 앞 회차 값을 들고 넘어가, 새 회차의 첫 배분이 앞 회차의 펜스를 본다.
+# 재고(`stock:`)는 시더가 관리하므로 안 건드린다.
 $COMPOSE exec -T redis redis-cli DEL \
-    "queue:{$COUPON}" "admitted:{$COUPON}" "maxscore:{$COUPON}" >/dev/null 2>&1
+    "queue:{$COUPON}" "admitted:{$COUPON}" "maxscore:{$COUPON}" \
+    "grace:{$COUPON}" "alive:{$COUPON}" "dropfence:{$COUPON}" >/dev/null 2>&1
 
 state=""
 for _ in $(seq 1 30); do

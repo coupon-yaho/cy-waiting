@@ -53,28 +53,57 @@ bring_up "$work/up.log" || exit 2
 wait_for_ramp || exit 2
 wait_for_idle_queue || exit 2
 
-before_ok=$(served backend) || exit 2
-before_bad=$(counter backend rejected) || exit 2
-b2_ok=$(served backend-small) || exit 2
-b2_bad=$(counter backend-small rejected) || exit 2
-b3_ok=$(served backend-mid) || exit 2
-b3_bad=$(counter backend-mid rejected) || exit 2
+# **앞 회차 산출물을 먼저 지운다.** k6 가 요약을 못 남기고 죽으면 아래 복사가
+# 조용히 실패하고, 앞 회차 요약이 이번 표와 짝지어진다.
+rm -f "${OUT_RESULT:-routing-truth.txt}" "${OUT_SUMMARY:-routing-truth-k6.json}"       "${OUT_LOG:-routing-truth-k6.log}"
 
+sleep "$WARMUP_SEC"
+
+# 뒷단 이름은 `routing-lib.sh` 의 `NAMES` 를 쓴다. 손으로 적으면 한 곳만 바뀐다.
+before_ok=(); before_bad=()
+for name in "${NAMES[@]}"; do
+    before_ok+=("$(served "$name")") || exit 2
+    before_bad+=("$(counter "$name" rejected)") || exit 2
+done
+
+rc=0
 RATE="$RATE" DURATION_SEC="$DURATION_SEC" BASE_URL="$GATEWAY" COUPON="$COUPON" \
     k6 run --summary-export="$work/k6.json" test/load/routing-ratio-rate.js \
-    > "$work/k6.log" 2>&1
-echo "k6=$?"
+    > "$work/k6.log" 2>&1 || rc=$?
+echo "k6=$rc"
+
+# **흘린 회차는 이 시나리오에서 예상된 신호다.** VU 수가 고정인데 뒷단이 느리면
+# 고정 유입 실행기가 회차를 못 시작하고 흘린다 — 두 전략을 가르는 신호가 바로
+# 그것이다. 그래서 그 임계 하나만 깨진 것은 받아들인다.
+#
+# **나머지는 안 받는다.** 다른 임계가 깨졌거나 k6 가 다른 이유로 죽었으면 그
+# 회차의 표는 재려던 것이 아니다. 종료 코드를 그냥 버리면 응답의 절반이
+# 비정상인 회차로 결론을 내게 된다 — 같은 구멍을 이 저장소가 한 번 밟았다.
+breached=$(jq -r '[.metrics | to_entries[]
+    | select(.value.thresholds != null)
+    | select([.value.thresholds[]] | any(. == true))
+    | .key] | join(",")' "$work/k6.json" 2>/dev/null)
+if [ "$breached" != "" ] && [ "$breached" != "dropped_iterations" ]; then
+    echo "::error title=라우팅 비교::깨진 임계가 흘린 회차 말고도 있다: $breached"
+    exit 1
+fi
+if [ "$rc" -ne 0 ] && [ "$rc" -ne 99 ]; then
+    echo "::error title=라우팅 비교::k6 가 ${rc} 로 끝났다 — 이 회차로는 비교하지 않는다"
+    exit 1
+fi
 
 sleep "$(awk -v ms="$BIG_LATENCY_MS" 'BEGIN{printf "%.1f", ms/1000 + 1.5}')"
 
-after_ok=$(served backend); after_bad=$(counter backend rejected)
-a2_ok=$(served backend-small); a2_bad=$(counter backend-small rejected)
-a3_ok=$(served backend-mid); a3_bad=$(counter backend-mid rejected)
-
-printf '%s %s %s\n' "$((after_ok - before_ok))" "$((after_bad - before_bad))" "느린대" \
-    > "$work/result.txt"
-printf '%s %s %s\n' "$((a2_ok - b2_ok))" "$((a2_bad - b2_bad))" "정상1" >> "$work/result.txt"
-printf '%s %s %s\n' "$((a3_ok - b3_ok))" "$((a3_bad - b3_bad))" "정상2" >> "$work/result.txt"
+# **읽기 실패를 안 보면 0 이 된다.** 빈 문자열이 뺄셈에서 0 으로 읽혀, 그 뒷단이
+# 한 건도 처리 못 한 것으로 표에 찍힌다.
+: > "$work/result.txt"
+labels=(느린대 정상1 정상2)
+for i in "${!NAMES[@]}"; do
+    ok=$(served "${NAMES[i]}") || exit 2
+    bad=$(counter "${NAMES[i]}" rejected) || exit 2
+    printf '%s %s %s\n' "$((ok - before_ok[i]))" "$((bad - before_bad[i]))" \
+        "${labels[i]}" >> "$work/result.txt"
+done
 
 echo
 printf '  %-8s %10s %10s\n' "뒷단" "처리" "밀어냄"
@@ -87,6 +116,12 @@ done < "$work/result.txt"
 # 깎은 것이다. 총합과 응답 분포를 같이 남긴다.
 total=$(awk '{s+=$1} END {print s}' "$work/result.txt")
 printf '  %-8s %10s\n' "처리 합" "$total"
+# **흘린 회차도 같이 낸다.** 처리 합만 보면 두 전략의 제안 부하가 같았는지를
+# 못 본다 — 처리와 흘림을 더한 값이 같아야 비교가 성립한다.
+dropped=$(jq -r '(.metrics.dropped_iterations.values.count
+    // .metrics.dropped_iterations.count) // 0' "$work/k6.json" 2>/dev/null)
+printf '  %-8s %10s\n' "흘린 회차" "$dropped"
+printf '  %-8s %10s\n' "제안 합" "$((total + dropped))"
 grep -E 'http_reqs\.\.|http_req_failed|http_req_duration\.\.|checks_succ' "$work/k6.log" \
     | sed 's/^/  /'
 

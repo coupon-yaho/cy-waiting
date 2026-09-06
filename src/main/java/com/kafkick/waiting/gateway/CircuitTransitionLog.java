@@ -84,8 +84,14 @@ final class CircuitTransitionLog {
         }
     }
 
-    /** 반쯤 열린 창에서 모은 프로브. 창이 열릴 때마다 새로 만든다. */
-    private record Probes(LongAdder count) {
+    /**
+     * 반쯤 열린 창에서 모은 프로브와 그 창이 산 시간.
+     *
+     * <p><b>시간이 계수보다 단단하다.</b> 창 길이가 시한 근방이면 표본을 못 채워
+     * 만료된 것이고, 훨씬 짧으면 채우고 실패한 것이다 — 계수 한 건이 경계에서
+     * 어긋나도 이 판단은 안 눕는다.
+     */
+    private record Probes(long since, LongAdder count) {
     }
 
     private void blocked(String name) {
@@ -102,10 +108,15 @@ final class CircuitTransitionLog {
             // 프로브 구간도 남긴다. 열림과 닫힘만 보면 회복을 몇 번 시도했는지가 빈다.
             case HALF_OPEN -> {
                 // 창마다 처음부터 센다. 안 그러면 앞 창의 수가 다음 판단에 섞인다.
-                probes.put(name, new Probes(new LongAdder()));
+                probes.put(name, new Probes(nanoTicker.getAsLong(), new LongAdder()));
                 log.info("서킷 반쯤 열림 — {} 로 프로브를 보낸다. 실패하면 다시 연다", name);
             }
-            default -> log.info("서킷 상태 전이 — {} 가 {} 로 갔다", name, to);
+            default -> {
+                // 반쯤 열림도 열림도 아닌 곳으로 가면 그 창은 끝난 것이다.
+                // 위와 같은 이유로 걷는다 — 값이 아니라 비용이다.
+                probes.remove(name);
+                log.info("서킷 상태 전이 — {} 가 {} 로 갔다", name, to);
+            }
         }
     }
 
@@ -129,13 +140,20 @@ final class CircuitTransitionLog {
         // 프로브 공급이다. 수가 없으면 로그로는 그 둘이 같은 줄이다.
         Probes window = probes.remove(name);
         if (before != null) {
-            log.warn("회복 시도가 실패했다 — {} 가 {}초째 열려 있다, 프로브 {}건", name,
-                    NANOSECONDS.toSeconds(now - before.since()),
-                    window == null ? 0 : window.count().sum());
+            log.warn("회복 시도가 실패했다 — {} 가 {}초째 열려 있다, 프로브 {}건 · 창 {}초",
+                    name, NANOSECONDS.toSeconds(now - before.since()),
+                    window == null ? 0 : window.count().sum(),
+                    window == null ? 0 : NANOSECONDS.toSeconds(now - window.since()));
         }
     }
 
     private void exited(String name) {
+        // **창을 여기서도 걷는다.** 회복이 성공해 닫히는 것도 창의 끝이다.
+        //
+        // **숫자가 틀려서가 아니다** — 다음 창은 반쯤 열릴 때 새로 만들므로 옛
+        // 계수가 로그에 실릴 길은 없다. 안 걷으면 그 계수가 살아남아 닫힌 구간의
+        // 정상 호출마다 맵 조회와 증가가 붙는다. 100K 구간에서 요청마다다.
+        probes.remove(name);
         Opened window = opened.remove(name);
         if (window == null) {
             log.info("서킷 닫힘 — {} 가 다시 받는다", name);

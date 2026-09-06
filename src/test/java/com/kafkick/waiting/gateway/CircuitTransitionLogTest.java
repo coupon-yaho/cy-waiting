@@ -29,9 +29,12 @@ class CircuitTransitionLogTest {
 
     private static final String 이름 = "backend-1";
 
+    /** 반쯤 열린 창이 요구하는 표본 수. 설정과 같은 값을 시험이 직접 든다. */
+    private static final int 허용_프로브 = 10;
+
     private static final BackendCircuitProperties 설정 = new BackendCircuitProperties(
             Duration.ofSeconds(10), 20, 50f, Duration.ofMillis(1500), 50f,
-            Duration.ofSeconds(5), Duration.ofSeconds(30), 10);
+            Duration.ofSeconds(5), Duration.ofSeconds(30), 허용_프로브);
 
     /** 구간 시계. 고정하지 못하면 지속 시간이 시험에서 늘 0 이라 단위를 틀려도 통과한다 (TS-4). */
     private final AtomicLong 나노 = new AtomicLong();
@@ -142,10 +145,6 @@ class CircuitTransitionLogTest {
     }
 
     /**
-     * <b>나중에 생기는 서킷도 받아야 한다.</b> 서킷은 인스턴스별이라 뒷단이 늘면
-     * 이름도 는다 — 붙일 때 있던 것만 보면 새 인스턴스의 장애가 통째로 조용하다.
-     */
-    /**
      * <b>왜 다시 열렸는지가 로그에 없다.</b> 반쯤 열린 창이 표본을 다 채우고
      * 실패한 것과, 표본을 못 채운 채 시한이 만료된 것은 고칠 값이 다르다 —
      * 앞엣것은 뒷단이고 뒤엣것은 프로브 공급이다. 실측에서 그 둘을 못 갈랐다.
@@ -185,6 +184,50 @@ class CircuitTransitionLogTest {
                 .satisfies(e -> assertThat(e.getFormattedMessage()).contains("프로브 2건"));
     }
 
+    /**
+     * <b>창이 스스로 차서 열리는 길을 밟는다.</b> 손으로 전이를 내면 그 창이
+     * 임계를 채운 경우가 한 번도 안 나온다 — 이 로그의 뜻이 전부 "임계면 태운
+     * 것, 그 아래면 시한 만료" 에 걸려 있는데 그 임계값이 시험에 없게 된다.
+     */
+    @Test
+    @DisplayName("창이_스스로_차서_열려도_다_센다")
+    void 창이_스스로_차서_열려도_다_센다() {
+        서킷().transitionToOpenState();
+        서킷().transitionToHalfOpenState();
+        for (int i = 0; i < 허용_프로브; i++) {
+            서킷().onError(1, TimeUnit.MILLISECONDS, new RuntimeException("느리다"));
+        }
+
+        assertThat(남은것("회복 시도가 실패했다")).singleElement()
+                .satisfies(e -> assertThat(e.getFormattedMessage())
+                        .as("마지막 프로브의 사건이 전이보다 먼저 온다는 것에 기댄다")
+                        .contains("프로브 " + 허용_프로브 + "건"));
+    }
+
+    /**
+     * <b>닫힌 뒤에도 창이 살아 있으면 안 된다.</b> 다만 그것은 값이 아니라
+     * 비용이다 — 다음 창을 반쯤 열릴 때 새로 만들므로 옛 계수가 로그에 실릴
+     * 길은 없다. 로그로는 못 보는 성질이라 여기서는 안 재고, 근거는 저널에 둔다.
+     */
+    /**
+     * <b>창이 산 시간이 계수보다 단단하다.</b> 시한 근방이면 표본을 못 채워
+     * 만료된 것이고 훨씬 짧으면 채우고 실패한 것이라, 계수 한 건이 경계에서
+     * 어긋나도 이 판단은 안 눕는다.
+     */
+    @Test
+    @DisplayName("창이_산_시간을_남긴다")
+    void 창이_산_시간을_남긴다() {
+        서킷().transitionToOpenState();
+        서킷().transitionToHalfOpenState();
+        나노.addAndGet(Duration.ofSeconds(29).toNanos());
+
+        서킷().transitionToOpenState();
+
+        assertThat(남은것("회복 시도가 실패했다")).singleElement()
+                .satisfies(e -> assertThat(e.getFormattedMessage())
+                        .as("시한 근방이면 표본을 못 채운 것이다").contains("창 29초"));
+    }
+
     /** 다음 창은 처음부터 센다. 안 그러면 앞 창의 수가 다음 판단에 섞인다. */
     @Test
     @DisplayName("반쯤_열릴_때마다_프로브_수를_다시_센다")
@@ -201,6 +244,10 @@ class CircuitTransitionLogTest {
                 .satisfies(e -> assertThat(e.getFormattedMessage()).contains("프로브 0건"));
     }
 
+    /**
+     * <b>나중에 생기는 서킷도 받아야 한다.</b> 서킷은 인스턴스별이라 뒷단이 늘면
+     * 이름도 는다 — 붙일 때 있던 것만 보면 새 인스턴스의 장애가 통째로 조용하다.
+     */
     @Test
     @DisplayName("나중에_생긴_서킷도_따라_붙는다")
     void 나중에_생긴_서킷도_따라_붙는다() {

@@ -7,14 +7,106 @@
 #
 # PreToolUse(Bash) 훅. `gh pr create` 를 만나면 기계 검사를 돌리고
 # 위반이 있으면 exit 2 로 막는다.
+#
+# **실수를 막는 장치이지 샌드박스가 아니다.** 셸 문법을 정규식으로 흉내내므로
+# 작정하고 우회하는 형태(변수로 조립하거나 인코딩해 넘기는 것)는 못 막는다.
+# 그래서 두 종류의 틀림을 다르게 다룬다 — **자료를 명령으로 읽어 사람의 일을
+# 막는 쪽은 고치고, 의도적 우회는 안 쫓는다.**
 
 set -uo pipefail
 
 input=$(cat)
 cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // empty')
 
-# PR 생성이 아니면 통과
-[[ "$cmd" != *"gh pr create"* ]] && exit 0
+# **기본은 막는 쪽이다.** 앞 토큰 허용 목록으로 "명령 자리" 를 가리려 했더니
+# 개행·`sudo`·`$( )`·파이프가 전부 빠져나갔다. 그래서 반대로 센다 — 주석과
+# 히어독 본문만 걷어내고, 남은 자리에 그 명령이 있으면 막는다.
+CREATE_RE='(^|[^[:alnum:]_.-])gh[[:space:]]+pr[[:space:]]+create([^[:alnum:]_-]|$)'
+
+# 줄 이음은 먼저 붙인다. 안 붙이면 `gh pr \` 다음 줄의 `create` 가 안 보인다.
+# 따옴표로 묶어야 패턴이 글자 그대로 쓰인다 — 안 묶으면 역슬래시가 다음 글자를
+# 벗기는 뜻이 되어 줄바꿈만 지운다.
+join=$'\\'$'\n'
+cmd_joined=${cmd//"$join"/ }
+
+# 사전 걸러내기는 본 판별과 같은 관용도여야 한다. 더 엄하면 공백 하나로 게이트를
+# 통째로 지나간다.
+# 셸이 낱말을 만들 때 지우는 것들을 우리도 지운다. `$'...'` 는 `$` 까지 사라지므로
+# 그것부터 걷고, 남은 따옴표와 역슬래시를 뗀다.
+unquote() {
+    local v=${1//\$\'/}
+    v=${v//\$\"/}
+    v=${v//[\'\"]/}
+    printf '%s' "${v//\\/}"
+}
+
+cmd_naked=$(unquote "$cmd_joined")
+[[ ! "$cmd_joined" =~ $CREATE_RE && ! "$cmd_naked" =~ $CREATE_RE ]] && exit 0
+
+mapfile -t lines <<< "$cmd_joined"
+
+# 문자열 안의 `#` 는 주석이 아니다. 걷어내면 그 뒤에 붙은 진짜 명령이 숨는다.
+# 반대로 `;#` 처럼 메타문자 뒤에 붙은 것은 주석이다 — 안 걷으면 문서가 막힌다.
+strip_comment() {
+    local line=$1 i prefix sq dq
+    for ((i = 0; i < ${#line}; i++)); do
+        [[ "${line:i:1}" == '#' ]] || continue
+        ((i > 0)) && [[ ! "${line:i-1:1}" =~ [[:space:]\;\&\|\(] ]] && continue
+        prefix=${line:0:i}
+        sq=${prefix//[^\']/}
+        dq=${prefix//[^\"]/}
+        ((${#sq} % 2 == 0 && ${#dq} % 2 == 0)) || continue
+        printf '%s' "$prefix"
+        return
+    done
+    printf '%s' "$line"
+}
+
+# `<<<` 는 히어독이 아니고, 문자열 안의 `<<` 도 아니다. **구분자가 뒤에 다시
+# 나올 때만** 히어독으로 친다 — 가짜 구분자는 다시 안 나오므로 저절로 걸러지고,
+# 진짜로 안 닫힌 히어독은 차단 쪽으로 떨어진다.
+HEREDOC_RE='(^|[^<])<<-?[[:space:]]*['\''"]?([^[:space:]'\''"<;&|]+)'
+opens_heredoc() {
+    local line=$1 from=$2 j
+    [[ "$line" =~ $HEREDOC_RE ]] || return 1
+    delim=${BASH_REMATCH[2]}
+    delim=${delim%[\'\"]}
+    # `<<\EOF` 도 `<<E\OF` 도 인용이다. 역슬래시는 어느 자리에 있든 구분자에 안
+    # 들어가므로 종결선은 그것을 뗀 쪽이다 — 안 떼면 히어독이 영영 안 닫혀
+    # 본문이 명령으로 읽힌다.
+    delim=$(unquote "$delim")
+    for ((j = from; j < ${#lines[@]}; j++)); do
+        [[ "${lines[j]}" =~ ^[[:space:]]*"$delim"[[:space:]]*$ ]] && return 0
+    done
+    return 1
+}
+
+creating=0
+delim=""
+skip_to=-1
+for ((n = 0; n < ${#lines[@]}; n++)); do
+    if ((n <= skip_to)); then
+        continue
+    fi
+    line=${lines[n]}
+    if opens_heredoc "$line" $((n + 1)); then
+        for ((m = n + 1; m < ${#lines[@]}; m++)); do
+            [[ "${lines[m]}" =~ ^[[:space:]]*"$delim"[[:space:]]*$ ]] && { skip_to=$m; break; }
+        done
+    fi
+    # **인용과 이스케이프를 걷고 한 번 더 본다.** `gh'' pr create` 나
+    # `g\h pr create` 는 셸이 벗겨 같은 명령이 되는데 글자 그대로는 안 걸린다.
+    bare=$(strip_comment "$line")
+    naked=$(unquote "$bare")
+    if [[ "$bare" =~ $CREATE_RE || "$naked" =~ $CREATE_RE ]]; then
+        creating=1
+        # **명령 줄부터 끝까지를 넘긴다.** 물리적 한 줄만 보면 다음 줄로 이어진
+        # `--base` 를 못 찾아 엉뚱한 기준으로 리뷰가 돈다.
+        create_line=$(printf '%s\n' "${lines[@]:n}")
+        break
+    fi
+done
+((creating)) || exit 0
 
 # **검사를 못 돌리면 막는다.** 통과시키면 게이트가 인프라 오류 한 번에
 # 조용히 사라진다 — 가드는 fail closed 여야 한다.
@@ -31,12 +123,16 @@ fi
 
 # base 를 명령에서 뽑는다. 없으면 develop
 # **명령 문자열 전체를 훑지 않는다.** `--title "--base release"` 처럼 인용부호
-# 안에 들어간 값을 옵션으로 착각한다. 인자를 토큰으로 쪼갠 뒤 옵션 자리만 본다.
+# 안에 들어간 값을 옵션으로 착각하고, 히어독 본문의 낱말까지 옵션으로 센다.
+# 명령이 있던 줄만 토큰으로 쪼갠다.
 #
-# 실행하지 않고 쪼갠다 — `xargs` 는 셸 인용 규칙을 그대로 따르면서 명령을
-# 부르지 않는다.
+# 실행하지 않고 쪼갠다 — `xargs` 가 인용을 벗기되 명령을 부르지 않는다. 짝이
+# 안 맞으면 하드 에러이므로 그때는 기본값으로 안 넘어가고 막는다.
 base=""
-mapfile -t args < <(printf '%s' "$cmd" | xargs -n1 printf '%s\n' 2>/dev/null)
+if ! mapfile -t args < <(printf '%s' "$create_line" | xargs -n1 printf '%s\n' 2>/dev/null); then
+    echo "명령을 못 쪼갰다 — 어느 기준으로 볼지 모르므로 막는다." >&2
+    exit 2
+fi
 for ((i = 0; i < ${#args[@]}; i++)); do
     case "${args[i]}" in
         --base=*) base="${args[i]#--base=}"; break ;;

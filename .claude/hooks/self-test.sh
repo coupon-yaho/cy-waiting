@@ -18,9 +18,6 @@ fail=0
 # **로케일을 바꿔 같은 검사를 다시 돌린다.** 대괄호 범위는 콜레이션 순서를 따라서
 # 개발자 로케일(ko_KR.UTF-8)에서만 물고 CI(C.UTF-8)에서는 조용히 새는 일이 실제로
 # 있었다. 로케일에 기대는 판정은 로컬 통과가 아무 뜻이 없다.
-# **로케일을 바꿔 같은 검사를 다시 돌린다.** 대괄호 범위는 콜레이션 순서를 따라서
-# 개발자 로케일(ko_KR.UTF-8)에서만 물고 CI(C.UTF-8)에서는 조용히 새는 일이 실제로
-# 있었다. 로케일에 기대는 판정은 로컬 통과가 아무 뜻이 없다.
 # 빌드 스크립트 검사는 훅이 아니라 디렉터리를 받는 CI 스크립트다. 그래서
 # file_case 를 못 쓴다. **그렇다고 안 재면 이 게이트는 영원히 초록이다** (TS-9).
 gradle_case() {   # 내용 기대(block|allow) 설명 [확장자]
@@ -510,8 +507,15 @@ unrelated=$?
 #
 # **저장소 밖에서 돌린다.** 안에서 돌리면 그날 작업 트리가 깨끗한지에 따라
 # 통과 여부가 갈려, 회귀했는데도 초록이 된다.
-# 줄바꿈은 `\n` 으로 적고 편다 — 한 줄에 한 사례여야 표가 읽힌다.
+# 줄바꿈은 `\n` 으로 적고 편다 — 한 줄에 한 사례여야 표가 읽힌다. 차단 쪽은
+# 판별이 안 물면 그 자리에서 0 이 나오고, 통과 쪽은 판별이 물면 2 가 나온다.
 guard_bad=0
+# 차단 판정이 "저장소가 아니다" 갈래에서 나오는지부터 확인한다. 여기가 저장소
+# 안이면 표 전체가 다른 것을 재게 된다.
+if git -C /tmp rev-parse --show-toplevel >/dev/null 2>&1; then
+    printf '  FAIL /tmp 가 저장소 안이라 가드 판별 표를 못 믿는다\n'
+    guard_bad=$((guard_bad + 1))
+fi
 while IFS='|' read -r want name probe; do
     [[ -z "$want" ]] && continue
     got=$(cd /tmp && printf '%b' "$probe" | jq -Rs '{tool_input:{command:.}}' \
@@ -523,15 +527,20 @@ while IFS='|' read -r want name probe; do
 done <<'GUARD'
 2|맨 앞|gh pr create --base develop
 2|개행 뒤|git push\ngh pr create --base develop
-2|sudo 뒤|sudo gh pr create --base develop
-2|세미콜론이 붙음|git add -A; gh pr create
-2|환경변수 접두|FOO=1 gh pr create
 2|명령 치환|url=$(gh pr create --base develop)
-2|파이프 붙임|echo hi|gh pr create
-2|따옴표 안 실행|bash -c "gh pr create --base develop"
+2|두 칸|gh pr  create --base develop
+2|줄 이음|gh pr \\\ncreate --base develop
+2|여기 문자열|cat <<<"data"\ngh pr create --base develop
+2|문자열 안 <<|echo "see << EOF style"\ngh pr create --base develop
+2|좌시프트|echo $((1 << n))\ngh pr create --base develop
+2|따옴표 안 #|git commit -m "wip # 1" && gh pr create
+2|안 닫힌 히어독|cat <<EOF\ngh pr create --base develop
+2|하이픈 구분자|cat <<'END-OF'\nbody\nEND-OF\ngh pr create --base develop
+2|따옴표 안 자료도 막는다|echo 'gh pr create 예시'
 0|주석 뒤|echo x  # gh pr create --title 예시
-0|줄 안 주석|git status\n# gh pr create --title 예시
 0|히어독 본문|python3 - <<'PY'\ns = 'gh pr create --title x'\nPY
+0|무따옴표 구분자|cat <<EOF\ngh pr create\nEOF
+0|들여쓴 종결|cat <<-EOF\ngh pr create\n\tEOF
 0|무관한 명령|git status
 GUARD
 

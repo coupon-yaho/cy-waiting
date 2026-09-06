@@ -65,8 +65,10 @@ final class CircuitTransitionLog {
 
     private void attach(CircuitBreaker breaker) {
         breaker.getEventPublisher()
+                // **서킷을 그대로 넘긴다.** 이름만 넘기면 설정에 든 시한을 다시
+                // 찾을 길이 없어, 로그가 기준 없는 수만 싣게 된다.
                 .onStateTransition(event ->
-                        moved(breaker.getName(), event.getStateTransition().getToState()))
+                        moved(breaker, event.getStateTransition().getToState()))
                 // **막은 건수는 우리가 센다.** 라이브러리 쪽 값은 전이와 함께 새
                 // 상태로 갈리므로, 해제 시점에는 이미 0 이다.
                 .onCallNotPermitted(event -> blocked(breaker.getName()))
@@ -92,9 +94,11 @@ final class CircuitTransitionLog {
         if (failed) {
             window.failed().increment();
         }
-        // 느림은 성공이어도 느림이다. 판정하는 임계는 서킷이 든 그 값을 그대로 쓴다.
+        // 느림은 성공이어도 느림이다. **서킷과 같은 값에 같은 부등호를 쓴다** —
+        // 값만 맞추고 경계를 달리하면 임계에 정확히 걸린 호출을 서킷은 빠름으로,
+        // 이 줄은 느림으로 세어 재구성이 어긋난다.
         if (elapsed.compareTo(breaker.getCircuitBreakerConfig()
-                .getSlowCallDurationThreshold()) >= 0) {
+                .getSlowCallDurationThreshold()) > 0) {
             window.slow().increment();
         }
     }
@@ -108,14 +112,25 @@ final class CircuitTransitionLog {
      */
     private record Probes(long since, LongAdder count, LongAdder slow, LongAdder failed) {
 
-        static Probes opened(long since) {
+        static Probes halfOpened(long since) {
             return new Probes(since, new LongAdder(), new LongAdder(), new LongAdder());
         }
 
-        /** 창이 무엇을 모았는지. 총계만으로는 태운 사유가 안 갈린다. */
-        String describe() {
-            return "%d건(느림 %d · 오류 %d)".formatted(
-                    count.sum(), slow.sum(), failed.sum());
+        /**
+         * 창이 무엇을 모았는지. <b>없을 때도 이 자리가 답한다</b> — 부르는 쪽이
+         * 삼항으로 가르면 같은 사실이 두 모양으로 찍힌다.
+         */
+        static String describe(Probes window) {
+            if (window == null) {
+                return "probes=0 slow=0 errors=0";
+            }
+            return "probes=%d slow=%d errors=%d".formatted(
+                    window.count.sum(), window.slow.sum(), window.failed.sum());
+        }
+
+        /** 창이 산 시간(초). 없으면 0 이다. */
+        static long aliveSec(Probes window, long now) {
+            return window == null ? 0 : NANOSECONDS.toSeconds(now - window.since());
         }
     }
 
@@ -126,14 +141,15 @@ final class CircuitTransitionLog {
         }
     }
 
-    private void moved(String name, CircuitBreaker.State to) {
+    private void moved(CircuitBreaker breaker, CircuitBreaker.State to) {
+        String name = breaker.getName();
         switch (to) {
-            case OPEN, FORCED_OPEN -> entered(name, to);
-            case CLOSED -> exited(name);
+            case OPEN, FORCED_OPEN -> entered(breaker, to);
+            case CLOSED -> exited(breaker);
             // 프로브 구간도 남긴다. 열림과 닫힘만 보면 회복을 몇 번 시도했는지가 빈다.
             case HALF_OPEN -> {
                 // 창마다 처음부터 센다. 안 그러면 앞 창의 수가 다음 판단에 섞인다.
-                probes.put(name, Probes.opened(nanoTicker.getAsLong()));
+                probes.put(name, Probes.halfOpened(nanoTicker.getAsLong()));
                 log.info("서킷 반쯤 열림 — {} 로 프로브를 보낸다. 실패하면 다시 연다", name);
             }
             default -> {
@@ -149,7 +165,8 @@ final class CircuitTransitionLog {
      * <b>자동으로 걷히는 전이라 WARN 이다</b> (LG-7). ERROR 로 올리면 사람을 부르는
      * 알람이 매 진동마다 운다.
      */
-    private void entered(String name, CircuitBreaker.State to) {
+    private void entered(CircuitBreaker breaker, CircuitBreaker.State to) {
+        String name = breaker.getName();
         // **다시 열리는 것은 새 구간이 아니다.** OPEN → HALF_OPEN → OPEN 은 회복을
         // 시도했다 실패한 것이므로, 덮어쓰면 원래 시작 시각과 그동안 막은 건수가
         // 사라진다. 그러면 닫힘 로그가 장애를 실제보다 짧고 가볍게 말한다.
@@ -165,27 +182,39 @@ final class CircuitTransitionLog {
         // 프로브 공급이다. 수가 없으면 로그로는 그 둘이 같은 줄이다.
         Probes window = probes.remove(name);
         if (before != null) {
-            log.warn("회복 시도가 실패했다 — {} 가 {}초째 열려 있다, 프로브 {} · 창 {}초",
+            // **시한을 같이 싣는다.** 창 길이만 있으면 읽는 사람이 그 수를
+            // 외우고 있어야 "표본을 못 채웠다" 를 읽는다.
+            log.warn("회복 시도가 실패했다 — {} 가 {}초째 열려 있다, {} window={}/{}s",
                     name, NANOSECONDS.toSeconds(now - before.since()),
-                    window == null ? "0건" : window.describe(),
-                    window == null ? 0 : NANOSECONDS.toSeconds(now - window.since()));
+                    Probes.describe(window), Probes.aliveSec(window, now),
+                    breaker.getCircuitBreakerConfig()
+                            .getMaxWaitDurationInHalfOpenState().toSeconds());
         }
     }
 
-    private void exited(String name) {
+    private void exited(CircuitBreaker breaker) {
+        String name = breaker.getName();
         // **창을 여기서도 걷는다.** 회복이 성공해 닫히는 것도 창의 끝이다.
         //
         // **숫자가 틀려서가 아니다** — 다음 창은 반쯤 열릴 때 새로 만들므로 옛
-        // 계수가 로그에 실릴 길은 없다. 안 걷으면 그 계수가 살아남아 닫힌 구간의
-        // 정상 호출마다 맵 조회와 증가가 붙는다. 100K 구간에서 요청마다다.
-        probes.remove(name);
+        // 계수가 로그에 실릴 길은 없다. 맵 조회는 걷든 안 걷든 붙으므로 아끼는
+        // 것은 계수 증가와 설정 조회뿐이다. 그래도 닫힌 구간은 요청마다다.
+        // 되돌려도 시험이 초록이라는 것은 안다 (AIJ-0247).
+        //
+        // **걷으면서 남긴다.** 회복이 성공한 창도 창이고, 그것이 몇 초에 몇 건을
+        // 모았는지가 곧 "표본을 모으는 데 얼마나 걸리는가" 의 답이다 — 실측이
+        // 그 값을 물었는데 성공 경로에는 그 줄이 없었다.
+        Probes probe = probes.remove(name);
+        long at = nanoTicker.getAsLong();
         Opened window = opened.remove(name);
         if (window == null) {
-            log.info("서킷 닫힘 — {} 가 다시 받는다", name);
+            log.info("서킷 닫힘 — {} 가 다시 받는다, {} window={}s", name,
+                    Probes.describe(probe), Probes.aliveSec(probe, at));
             return;
         }
-        log.info("서킷 닫힘 — {} 가 {}초 동안 {}건을 막았다", name,
-                NANOSECONDS.toSeconds(nanoTicker.getAsLong() - window.since()),
-                window.blocked().sum());
+        log.info("서킷 닫힘 — {} 가 {}초 동안 {}건을 막았다, {} window={}s", name,
+                NANOSECONDS.toSeconds(at - window.since()),
+                window.blocked().sum(),
+                Probes.describe(probe), Probes.aliveSec(probe, at));
     }
 }

@@ -32,8 +32,11 @@ class CircuitTransitionLogTest {
     /** 반쯤 열린 창이 요구하는 표본 수. 설정과 같은 값을 시험이 직접 든다. */
     private static final int 허용_프로브 = 10;
 
+    /** 느린 호출의 경계. 서킷이 이 값 **초과**만 느림으로 센다. */
+    private static final long 느림_임계_ms = 1500;
+
     private static final BackendCircuitProperties 설정 = new BackendCircuitProperties(
-            Duration.ofSeconds(10), 20, 50f, Duration.ofMillis(1500), 50f,
+            Duration.ofSeconds(10), 20, 50f, Duration.ofMillis(느림_임계_ms), 50f,
             Duration.ofSeconds(5), Duration.ofSeconds(30), 허용_프로브);
 
     /** 구간 시계. 고정하지 못하면 지속 시간이 시험에서 늘 0 이라 단위를 틀려도 통과한다 (TS-4). */
@@ -162,7 +165,7 @@ class CircuitTransitionLogTest {
         assertThat(남은것("회복 시도가 실패했다")).singleElement()
                 .satisfies(e -> assertThat(e.getFormattedMessage())
                         .as("프로브를 몇 건 모았는지가 있어야 창을 태운 것과 시한 만료가 갈린다")
-                        .contains("프로브 2건"));
+                        .contains("probes=2"));
     }
 
     /**
@@ -181,7 +184,7 @@ class CircuitTransitionLogTest {
         서킷().transitionToOpenState();
 
         assertThat(남은것("회복 시도가 실패했다")).singleElement()
-                .satisfies(e -> assertThat(e.getFormattedMessage()).contains("프로브 2건"));
+                .satisfies(e -> assertThat(e.getFormattedMessage()).contains("probes=2"));
     }
 
     /**
@@ -201,14 +204,9 @@ class CircuitTransitionLogTest {
         assertThat(남은것("회복 시도가 실패했다")).singleElement()
                 .satisfies(e -> assertThat(e.getFormattedMessage())
                         .as("마지막 프로브의 사건이 전이보다 먼저 온다는 것에 기댄다")
-                        .contains("프로브 " + 허용_프로브 + "건"));
+                        .contains("probes=" + 허용_프로브));
     }
 
-    /**
-     * <b>닫힌 뒤에도 창이 살아 있으면 안 된다.</b> 다만 그것은 값이 아니라
-     * 비용이다 — 다음 창을 반쯤 열릴 때 새로 만들므로 옛 계수가 로그에 실릴
-     * 길은 없다. 로그로는 못 보는 성질이라 여기서는 안 재고, 근거는 저널에 둔다.
-     */
     /**
      * <b>찼다는 것만으로는 왜 열렸는지를 모른다.</b> 설정이 실패율과 느림 비율에
      * 각각 임계를 두므로 창은 두 길로 열린다. 앞엣것은 뒷단이 오류를 내는 것이고
@@ -229,7 +227,24 @@ class CircuitTransitionLogTest {
         assertThat(남은것("회복 시도가 실패했다")).singleElement()
                 .satisfies(e -> assertThat(e.getFormattedMessage())
                         .as("셋을 갈라야 창을 태운 사유가 갈린다")
-                        .contains("프로브 3건(느림 1 · 오류 1)"));
+                        .contains("probes=3 slow=1 errors=1"));
+    }
+
+    /**
+     * <b>임계에 정확히 걸린 호출은 느림이 아니다.</b> 서킷이 그렇게 세므로
+     * 여기도 같아야 한다 — 경계가 갈리면 이 줄로 창을 재구성할 수 없다.
+     */
+    @Test
+    @DisplayName("임계에_정확히_걸리면_느림이_아니다")
+    void 임계에_정확히_걸리면_느림이_아니다() {
+        서킷().transitionToOpenState();
+        서킷().transitionToHalfOpenState();
+        서킷().onSuccess(느림_임계_ms, TimeUnit.MILLISECONDS);
+
+        서킷().transitionToOpenState();
+
+        assertThat(남은것("회복 시도가 실패했다")).singleElement()
+                .satisfies(e -> assertThat(e.getFormattedMessage()).contains("slow=0"));
     }
 
     /**
@@ -241,14 +256,21 @@ class CircuitTransitionLogTest {
     @DisplayName("창이_산_시간을_남긴다")
     void 창이_산_시간을_남긴다() {
         서킷().transitionToOpenState();
+        // **열린 시각과 창이 열린 시각을 다르게 둔다.** 같으면 구현이 두 값을
+        // 바꿔 넣어도 시험이 초록이다 — 이 줄은 그 둘을 같이 싣는 줄이다.
+        나노.addAndGet(Duration.ofSeconds(7).toNanos());
         서킷().transitionToHalfOpenState();
         나노.addAndGet(Duration.ofSeconds(29).toNanos());
 
         서킷().transitionToOpenState();
 
         assertThat(남은것("회복 시도가 실패했다")).singleElement()
-                .satisfies(e -> assertThat(e.getFormattedMessage())
-                        .as("시한 근방이면 표본을 못 채운 것이다").contains("창 29초"));
+                .satisfies(e -> {
+                    assertThat(e.getFormattedMessage())
+                            .as("시한 근방이면 표본을 못 채운 것이다").contains("window=29/30s");
+                    assertThat(e.getFormattedMessage())
+                            .as("열린 구간은 그보다 길다").contains("36초째 열려 있다");
+                });
     }
 
     /** 다음 창은 처음부터 센다. 안 그러면 앞 창의 수가 다음 판단에 섞인다. */
@@ -263,8 +285,14 @@ class CircuitTransitionLogTest {
 
         서킷().transitionToOpenState();
 
-        assertThat(남은것("회복 시도가 실패했다")).last()
-                .satisfies(e -> assertThat(e.getFormattedMessage()).contains("프로브 0건"));
+        // **앞 줄이 1 이고 뒷 줄이 0 이라야 "새로 났다" 가 된다.** 뒷 줄만 보면
+        // 창이 아예 없을 때의 문자열과 같아, 리셋이 아니라 누락이어도 통과한다.
+        assertThat(남은것("회복 시도가 실패했다")).hasSize(2)
+                .satisfies(둘 -> {
+                    assertThat(둘.get(0).getFormattedMessage()).contains("probes=1");
+                    assertThat(둘.get(1).getFormattedMessage())
+                            .contains("probes=0 slow=0 errors=0");
+                });
     }
 
     /**

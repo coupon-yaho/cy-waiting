@@ -503,6 +503,11 @@ printf '{"tool_input":{"command":"git status"}}' \
     | "$ROOT/.claude/hooks/guard-pr.sh" >/dev/null 2>&1
 unrelated=$?
 
+# **명령 자리인지 본다.** 문자열 어딘가에 그 낱말이 있기만 해도 막으면 문서나
+# 기억 파일에 예시로 적는 명령까지 걸린다. 실제로 그렇게 두 번 막혔다.
+mentioned=$(printf '{"tool_input":{"command":"echo x  # gh pr create --title 예시"}}' \
+    | "$ROOT/.claude/hooks/guard-pr.sh" >/dev/null 2>&1; echo $?)
+
 # **증거가 없으면 막아야 한다.** 알리기만 하던 시절에 매 PR 마다 건너뛰었고,
 # 뒤늦게 돌렸더니 불변식 위반 하나와 치명 둘이 나왔다.
 rm -f "$clean_repo/.claude/.agents-reviewed"
@@ -539,6 +544,11 @@ if ((nostamp == 2)); then
     printf '  ok   에이전트 리뷰 증거가 없으면 막는다\n'; pass=$((pass + 1))
 else
     printf '  FAIL 증거가 없는데 통과시켰다 (exit %d)\n' "$nostamp"; fail=$((fail + 1))
+fi
+if ((mentioned == 0)); then
+    printf '  ok   주석에 적힌 명령은 안 막는다\n'; pass=$((pass + 1))
+else
+    printf '  FAIL 주석에 적힌 명령을 막았다 (exit %d)\n' "$mentioned"; fail=$((fail + 1))
 fi
 if ((blocked == 2)); then
     printf '  ok   실제 위반에서 PR 생성을 막는다\n'; pass=$((pass + 1))

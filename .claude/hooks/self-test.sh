@@ -544,6 +544,10 @@ done <<'GUARD'
 2|빈 인용으로 쪼갬|gh'' pr create --base develop
 2|역슬래시로 쪼갬|g\\h pr create --base develop
 0|역슬래시 구분자|cat <<\\EOF\ngh pr create\nEOF
+2|달러 인용으로 쪼갬|g$'h' pr create --base develop
+2|달러 큰따옴표|g$"h" pr create --base develop
+0|구분자 안쪽 역슬래시|cat <<E\\OF\ngh pr create\nEOF
+0|역슬래시 둘|cat <<\\E\\OF\ngh pr create\nEOF
 0|무관한 명령|git status
 GUARD
 

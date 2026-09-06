@@ -39,8 +39,15 @@ class CircuitTransitionLogTest {
             Duration.ofSeconds(10), 20, 50f, Duration.ofMillis(느림_임계_ms), 50f,
             Duration.ofSeconds(5), Duration.ofSeconds(30), 허용_프로브);
 
-    /** 구간 시계. 고정하지 못하면 지속 시간이 시험에서 늘 0 이라 단위를 틀려도 통과한다 (TS-4). */
-    private final AtomicLong 나노 = new AtomicLong();
+    /**
+     * 구간 시계. 고정하지 못하면 지속 시간이 시험에서 늘 0 이라 단위를 틀려도
+     * 통과한다 (TS-4).
+     *
+     * <p><b>0 에서 시작하지 않는다.</b> 시작 시각이 0 이면 `지금 - 시작` 과
+     * `지금 + 시작` 이 같은 값이라, 뺄셈을 덧셈으로 바꿔도 시험이 초록이다.
+     * 그래서 시각을 절대값으로 지정하지 않고 늘 앞 값에서 민다.
+     */
+    private final AtomicLong 나노 = new AtomicLong(Duration.ofHours(3).toNanos());
 
     private final CircuitBreakerRegistry registry = BackendCircuit.registry(설정);
 
@@ -104,7 +111,7 @@ class CircuitTransitionLogTest {
         서킷().transitionToOpenState();
         서킷().tryAcquirePermission();
         서킷().tryAcquirePermission();
-        나노.set(SECONDS.toNanos(42));
+        나노.addAndGet(SECONDS.toNanos(42));
 
         서킷().transitionToClosedState();
 
@@ -112,7 +119,10 @@ class CircuitTransitionLogTest {
                 .satisfies(e -> {
                     assertThat(e.getLevel()).isEqualTo(Level.INFO);
                     // 값까지 못 박는다. 담겼는지만 보면 단위를 ms 로 틀려도 통과한다.
-                    assertThat(e.getFormattedMessage()).contains("42초").contains("2건");
+                    // **앞뒤를 같이 본다.** 숫자만 담기면 21642초 도 42초 를
+                    // 담아, 뺄셈을 덧셈으로 바꿔도 통과한다.
+                    assertThat(e.getFormattedMessage())
+                            .contains("가 42초 동안 2건을 막았다");
                 });
     }
 
@@ -231,6 +241,23 @@ class CircuitTransitionLogTest {
     }
 
     /**
+     * <b>창을 한 번도 안 연 채 다시 열리면 0 으로 답한다.</b> 그 자리를 빈
+     * 문자열로 두면 로그에 칸이 통째로 사라져, 읽는 쪽이 "안 실렸다" 와
+     * "0 이었다" 를 못 가른다.
+     */
+    @Test
+    @DisplayName("창이_없으면_0_으로_답한다")
+    void 창이_없으면_0_으로_답한다() {
+        서킷().transitionToOpenState();
+
+        서킷().transitionToForcedOpenState();
+
+        assertThat(남은것("회복 시도가 실패했다")).singleElement()
+                .satisfies(e -> assertThat(e.getFormattedMessage())
+                        .contains("probes=0 slow=0 errors=0"));
+    }
+
+    /**
      * <b>임계에 정확히 걸린 호출은 느림이 아니다.</b> 서킷이 그렇게 세므로
      * 여기도 같아야 한다 — 경계가 갈리면 이 줄로 창을 재구성할 수 없다.
      */
@@ -269,7 +296,7 @@ class CircuitTransitionLogTest {
                     assertThat(e.getFormattedMessage())
                             .as("시한 근방이면 표본을 못 채운 것이다").contains("window=29/30s");
                     assertThat(e.getFormattedMessage())
-                            .as("열린 구간은 그보다 길다").contains("36초째 열려 있다");
+                            .as("열린 구간은 그보다 길다").contains("가 36초째 열려 있다");
                 });
     }
 
@@ -324,18 +351,18 @@ class CircuitTransitionLogTest {
         서킷().tryAcquirePermission();
 
         // 회복을 시도했다 실패한다. 여기서 이력이 사라지면 안 된다.
-        나노.set(SECONDS.toNanos(20));
+        나노.addAndGet(SECONDS.toNanos(20));
         서킷().transitionToHalfOpenState();
         서킷().transitionToOpenState();
         서킷().tryAcquirePermission();
 
-        나노.set(SECONDS.toNanos(30));
+        나노.addAndGet(SECONDS.toNanos(10));
         서킷().transitionToClosedState();
 
         assertThat(남은것("서킷 닫힘")).singleElement()
                 .satisfies(e -> assertThat(e.getFormattedMessage())
                         // 두 번째 열림부터가 아니라 처음부터 30초, 막은 것도 셋 다.
-                        .contains("30초").contains("3건"));
+                        .contains("가 30초 동안 3건을 막았다"));
     }
 
     /** 회복 시도가 실패한 사실도 남깁니다. 진동을 사후에 세려면 그 줄이 필요합니다. */
@@ -344,7 +371,7 @@ class CircuitTransitionLogTest {
     void 회복_시도가_실패하면_그_사실을_남긴다() {
         서킷().transitionToOpenState();
 
-        나노.set(SECONDS.toNanos(20));
+        나노.addAndGet(SECONDS.toNanos(20));
         서킷().transitionToHalfOpenState();
         서킷().transitionToOpenState();
 

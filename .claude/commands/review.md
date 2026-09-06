@@ -24,12 +24,20 @@ PR 을 올리기 전에 **CodeRabbit 이 볼 것을 먼저 본다.** 원격에�
 ## 2. 빌드와 품질 임계
 
 ```bash
-./gradlew build jacocoTestCoverageVerification pitest --no-daemon -q
+./gradlew build --no-daemon -q
 ```
 
-도메인 분기 100%, 뮤테이션 생존 ≤10%. 생존 뮤턴트가 나오면 **숫자만 보지 말고
-어디가 살아남았는지** 본다 — 임계를 통과해도 이미 버그가 났던 자리에 몰려
-있으면 그건 통과가 아니다.
+도메인 분기 100% 는 여기서 돈다.
+
+**뮤테이션은 `main` 으로 PR 을 열 때만 돌린다** — 30분이 걸려 매 PR 마다 걸면
+그동안 아무것도 못 한다.
+
+```bash
+./gradlew jacocoTestCoverageVerification pitest --no-daemon -q
+```
+
+생존 ≤10%. 생존 뮤턴트가 나오면 **숫자만 보지 말고 어디가 살아남았는지** 본다 —
+임계를 통과해도 이미 버그가 났던 자리에 몰려 있으면 그건 통과가 아니다.
 
 ## 3. 영역별 리뷰 에이전트
 

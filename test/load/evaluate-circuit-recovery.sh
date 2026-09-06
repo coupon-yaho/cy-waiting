@@ -41,6 +41,13 @@ recovered_pct=${RECOVERED_PCT:-95}
 # 닫힘까지 두 계단이라 6초, 거기에 배분 틱 하나와 표 왕복이 더 붙는다. 5 로 두면
 # 열린 상태에서 돌아오는 회차가 맞게 도는데도 "완화가 늦다" 로 미달이 된다.
 vote_gate_limit_sec=${VOTE_GATE_LIMIT_SEC:-9}
+# 열린 노드가 다시 반쯤 열리기까지 걸리는 최소 시간(ms). 잔여를 잴 때 표가
+# 재진입을 숨기는지 가르는 데만 쓴다.
+#
+# **`application.yml` 의 `wait-duration-in-open-state` 와 같아야 한다.** 거기를
+# 바꾸면 여기도 바꾼다. 게다가 우리가 보는 것은 전이 시각이 아니라 표본에 처음
+# 보인 시각이라 실제보다 늦다 — 유예는 그만큼 낙관이다.
+reopen_grace_ms=${REOPEN_GRACE_MS:-5000}
 # 배분이 열려 있는데 뒷단 도착이 멎어도 봐 주는 시간(ms). 조인 구간의 프로브가
 # 초당 한 건 아래라 몇 표본은 그냥 평평하다 — 표본 수로 세면 정상을 잡는다.
 tail_idle_ms=${TAIL_IDLE_MS:-8000}
@@ -65,17 +72,30 @@ verdict=$(awk \
     -v divisor="$idle_divisor" -v step="$ramp_step" \
     -v min_baseline="$min_baseline" -v recovered_pct="$recovered_pct" \
     -v grace_ms="$release_grace_ms" -v vote_limit="$vote_gate_limit_sec" \
-    -v tail_idle_ms="$tail_idle_ms" '
+    -v tail_idle_ms="$tail_idle_ms" -v reopen_grace_ms="$reopen_grace_ms" '
     # **awk 의 exit 는 END 를 건너뛰지 않는다.** 표시를 안 두면 본문에서 낸
     # 판정 뒤에 END 가 한 줄을 더 찍고, 부르는 쪽은 둘 중 뒤엣것을 읽는다.
+    # 표에 완전히 열린 노드가 있는가. `HALF_OPEN` 이 부분 문자열로 걸리므로
+    # 접힌 문자열을 쪼개서 본다.
+    function hasOpen(v,   parts, i, n) {
+        n = split(v, parts, "|")
+        for (i = 1; i <= n; i++) { if (parts[i] == "OPEN") { return 1 } }
+        return 0
+    }
+
     function layers() {
-        return sprintf("게이트 해제까지 %.1f초 · 표가 닫힌 뒤 조인 시간 %.1f초",
-                releasedAt ? (releasedAt - recT) / 1000.0 : -1, maxVoteGapMs / 1000.0)
+        return sprintf("게이트 해제까지 %.1f초 · 표가 닫힌 뒤 조인 시간 %.1f초 · half-open 잔여 %.1f초",
+                releasedAt ? (releasedAt - recT) / 1000.0 : -1, maxVoteGapMs / 1000.0,
+                residualMs / 1000.0)
     }
     # 층 수치를 실패에도 싣는다. 이 판정은 대개 미달인데, 층을 가르려고 칸을
     # 늘려 놓고 그 수가 실패 경로에서 안 보이면 손으로 표본을 뒤지게 된다.
     function fail(msg) { decided = 1; printf "MISS %s [%s]\n", msg, layers(); exit }
     function block(msg) { decided = 1; printf "BLOCK %s\n", msg; exit }
+
+    # **미측정을 첫 줄부터 -1 로 둔다.** 회복 구간에 닿기 전에 나는 실패도
+    # 층 수치를 싣는데, 그때 0 이 찍히면 "즉시 전이했다" 로 읽힌다.
+    BEGIN { residualMs = -1000 }
 
     /^#/ { phase = $2; next }
     /^[[:space:]]*$/ { next }
@@ -141,7 +161,27 @@ verdict=$(awk \
 
         if (phase == "회복" || phase == "해제" || phase == "승계") {
             recN++
-            if (recN == 1) { recT = t; recFirstServed = served }
+            if (recN == 1) { recT = t; recFirstServed = served; recVote = vote }
+            # **자극을 걷는 순간의 서킷 위상은 통제되지 않는다.** 그때 열려 있던
+            # half-open 은 자극 구간에서 시작한 것이라, 남은 수명이 회차마다
+            # 0~상한 사이에서 다르게 나온다. 그 항을 안 재면 회차 간 차이를
+            # 프로브 공급이 좋아진 것으로 읽는다.
+            #
+            # **표에서 half-open 이 사라질 때까지 잰다.** 노드 하나가 먼저 나가면
+            # 표는 바뀌지만 다른 노드는 아직 반쯤 열려 있다. 첫 변화로 끊으면
+            # 회차마다 제일 짧은 노드의 값이 적힌다.
+            #
+            # **표가 재진입을 숨길 수 있다.** 노드별 상태를 접은 문자열이라, 먼저
+            # 나간 노드가 열림 대기 뒤 다시 반쯤 열리면 그 구간이 처음 구간의
+            # 잔여에 섞인다. 열린 노드가 보인 뒤 그 대기보다 오래 half-open 이
+            # 남아 있으면 가를 수 없으므로 못 잰 것으로 둔다.
+            if (residualMs < 0 && recVote ~ /HALF_OPEN/) {
+                if (openSeenAt == 0 && hasOpen(vote)) { openSeenAt = t }
+                if (vote !~ /HALF_OPEN/) {
+                    residualMs = (openSeenAt && t - openSeenAt >= reopen_grace_ms) \
+                            ? -1000 : t - recT
+                }
+            }
             lastRecT = t
             # **도착이 멎은 시간을 잰다. 표본 수가 아니다.**
             #
@@ -289,8 +329,9 @@ verdict=$(awk \
             fail(sprintf("회복 봉우리가 초당 %.1f 건이다 — 기준선 %.1f 의 %.2f 배 (한계 %.1f)",
                     peakRate, baseRate, peakRate / baseRate, burst))
         }
-        printf "PASS %.1f %.1f %.1f %.2f %.1f %.1f\n", took, baseRate, peakRate,
-                peakRate / baseRate, (releasedAt - recT) / 1000.0, maxVoteGapMs / 1000.0
+        printf "PASS %.1f %.1f %.1f %.2f %.1f %.1f %.1f\n", took, baseRate, peakRate,
+                peakRate / baseRate, (releasedAt - recT) / 1000.0, maxVoteGapMs / 1000.0,
+                residualMs / 1000.0
     }
 ' "$samples")
 
@@ -308,6 +349,7 @@ case "$verdict" in
         printf '  %-24s 초당 %s건 (%s배)\n' "회복 봉우리" "$4" "$5"
         printf '  %-24s %s초\n' "게이트가 풀리기까지" "$6"
         printf '  %-24s %s초\n' "표가 닫힌 뒤 조인 시간" "$7"
+        printf '  %-24s %s초\n' "half-open 잔여" "$8"
         echo "판정: 충족 — 진입·유지·회복이 다 기준 안이다"
         exit 0 ;;
     *)

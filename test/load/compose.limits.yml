@@ -1,0 +1,18 @@
+# 게이트웨이에 운영 상한을 거는 겹침 (00-requirements A8).
+#
+# **base 를 안 고친다.** 저 파일은 시나리오 다섯이 같이 쓰고, 지금까지 잰 값들과
+# 견주려면 그쪽 조건이 그대로여야 한다. `compose.pinned.yml` 이 같은 이유로
+# 겹침이다.
+services:
+  gateway:
+    mem_limit: ${GATEWAY_MEM:-2g}
+    # 스왑을 안 준다. 안 걸면 도커가 상한의 두 배까지 허용해, 넘겨도 OOM 대신
+    # 조용히 스왑한다 — 그 지연이 느린 호출로 세어져 자극 없이 서킷을 연다.
+    memswap_limit: ${GATEWAY_MEM:-2g}
+    # 지연이 신호인 시나리오라 CPU 경합이 측정을 흔든다.
+    cpus: ${GATEWAY_CPUS:-2}
+    environment:
+      # 이미지 기본 70 을 덮는다. 다이렉트 버퍼는 상한을 안 박으면 최대 힙만큼
+      # 더 잡아 둘의 합이 mem_limit 을 넘는다. GATEWAY_MEM 을 1g 밑으로 내릴
+      # 때는 이 둘도 같이 내린다. G1 은 작은 상한에서 SerialGC 로 안 떨어지게 박는다.
+      JAVA_OPTS: ${GATEWAY_JAVA_OPTS:--XX:MaxRAMPercentage=60 -XX:MaxDirectMemorySize=384m -XX:+UseG1GC}

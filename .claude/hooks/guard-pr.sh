@@ -97,7 +97,7 @@ if [[ ! -f "$STAMP" ]] || [[ "$stamp_head" != "$head" ]] || ((stamp_list == 0));
         echo "    echo '돌린 에이전트: domain-guardian, resilience-auditor, ...' \\"
         echo "      >> .claude/.agents-reviewed"
         echo
-        echo "  ./gradlew build jacocoTestCoverageVerification pitest 도 아직이면 같이 돌린다."
+        echo "  ./gradlew build 도 아직이면 같이 돌린다. 뮤테이션은 main 으로 PR 을 열 때만."
     } >&2
     exit 2
 fi

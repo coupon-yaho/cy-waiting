@@ -26,8 +26,16 @@ cmd_joined=${cmd//"$join"/ }
 
 # 사전 걸러내기는 본 판별과 같은 관용도여야 한다. 더 엄하면 공백 하나로 게이트를
 # 통째로 지나간다.
-cmd_naked=${cmd_joined//[\'\"]/}
-cmd_naked=${cmd_naked//\\/}
+# 셸이 낱말을 만들 때 지우는 것들을 우리도 지운다. `$'...'` 는 `$` 까지 사라지므로
+# 그것부터 걷고, 남은 따옴표와 역슬래시를 뗀다.
+unquote() {
+    local v=${1//\$\'/}
+    v=${v//\$\"/}
+    v=${v//[\'\"]/}
+    printf '%s' "${v//\\/}"
+}
+
+cmd_naked=$(unquote "$cmd_joined")
 [[ ! "$cmd_joined" =~ $CREATE_RE && ! "$cmd_naked" =~ $CREATE_RE ]] && exit 0
 
 mapfile -t lines <<< "$cmd_joined"
@@ -57,9 +65,10 @@ opens_heredoc() {
     [[ "$line" =~ $HEREDOC_RE ]] || return 1
     delim=${BASH_REMATCH[2]}
     delim=${delim%[\'\"]}
-    # `<<\EOF` 도 인용이다. 역슬래시는 구분자에 안 들어가므로 종결선은 EOF 다 —
-    # 안 떼면 그 히어독이 영영 안 닫혀 본문이 명령으로 읽힌다.
-    delim=${delim#\\}
+    # `<<\EOF` 도 `<<E\OF` 도 인용이다. 역슬래시는 어느 자리에 있든 구분자에 안
+    # 들어가므로 종결선은 그것을 뗀 쪽이다 — 안 떼면 히어독이 영영 안 닫혀
+    # 본문이 명령으로 읽힌다.
+    delim=$(unquote "$delim")
     for ((j = from; j < ${#lines[@]}; j++)); do
         [[ "${lines[j]}" =~ ^[[:space:]]*"$delim"[[:space:]]*$ ]] && return 0
     done
@@ -82,8 +91,7 @@ for ((n = 0; n < ${#lines[@]}; n++)); do
     # **인용과 이스케이프를 걷고 한 번 더 본다.** `gh'' pr create` 나
     # `g\h pr create` 는 셸이 벗겨 같은 명령이 되는데 글자 그대로는 안 걸린다.
     bare=$(strip_comment "$line")
-    naked=${bare//[\'\"]/}
-    naked=${naked//\\/}
+    naked=$(unquote "$bare")
     if [[ "$bare" =~ $CREATE_RE || "$naked" =~ $CREATE_RE ]]; then
         creating=1
         create_line=$line

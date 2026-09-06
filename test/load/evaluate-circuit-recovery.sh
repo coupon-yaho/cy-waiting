@@ -5,8 +5,12 @@
 # 시험으로만 잡혀 있었다. 승계로 이어받은 노드는 조인 적이 없어 램프가 아예
 # 안 걸리는데, 그 구멍은 게이트웨이가 둘 이상일 때만 열린다.
 #
-# 표본 한 줄은 `<시각ms> <발행 크레딧> <뒷단 누적 도착> <노드 수>` 다. 구간은
-# `#` 줄로 가르고, 러너가 자극을 준 시각에 그 줄을 쓴다.
+# 표본 한 줄은 `<시각ms> <발행 크레딧> <뒷단 누적 도착> <노드 수> <노드별 서킷 표>`
+# 다. 구간은 `#` 줄로 가르고, 러너가 자극을 준 시각에 그 줄을 쓴다.
+#
+# **표를 같이 뜨는 이유.** 크레딧 하나만 보면 "서킷이 아직 안 닫혔다" 와 "표는
+# 닫혔는데 게이트가 안 풀렸다" 가 같은 그림이다. 둘은 고칠 자리가 다르다 —
+# 앞엣것은 서킷 설정이고 뒤엣것은 클러스터 표의 비대칭 완화다.
 #
 # **발행 크레딧을 읽는다. 게이지가 아니다.** `waiting.capacity.credit` 은 보고를
 # 합친 값이라 조임·램프 구간에 실제 발행분과 갈린다 (AIJ-0245). 그 게이지로
@@ -31,6 +35,9 @@ ramp_step=${RAMP_STEP:-2.0}
 min_baseline=${MIN_BASELINE:-4}
 # 회복을 끝났다고 볼 기준선 대비 비율.
 recovered_pct=${RECOVERED_PCT:-95}
+# 전 노드가 닫혔다고 한 뒤로 게이트가 풀리기까지 봐 주는 시간(초). 완화가
+# 연속 관측 몇 틱을 요구하므로 0 일 수는 없다.
+vote_gate_limit_sec=${VOTE_GATE_LIMIT_SEC:-5}
 # 해제 표시와 크레딧이 실제로 오르는 사이의 유예(ms). 표시는 로그로 잡는데
 # 크레딧은 다음 배분 틱에서야 오른다 — 틱이 1초라 그보다 넉넉히 준다.
 release_grace_ms=${RELEASE_GRACE_MS:-1500}
@@ -51,7 +58,7 @@ verdict=$(awk \
     -v limit_sec="$recovery_limit_sec" -v burst="$burst_limit" \
     -v divisor="$idle_divisor" -v step="$ramp_step" \
     -v min_baseline="$min_baseline" -v recovered_pct="$recovered_pct" \
-    -v grace_ms="$release_grace_ms" '
+    -v grace_ms="$release_grace_ms" -v vote_limit="$vote_gate_limit_sec" '
     # **awk 의 exit 는 END 를 건너뛰지 않는다.** 표시를 안 두면 본문에서 낸
     # 판정 뒤에 END 가 한 줄을 더 찍고, 부르는 쪽은 둘 중 뒤엣것을 읽는다.
     function fail(msg) { decided = 1; printf "MISS %s\n", msg; exit }
@@ -61,15 +68,18 @@ verdict=$(awk \
     /^[[:space:]]*$/ { next }
 
     {
-        if (NF != 4) {
-            block(sprintf("표본의 열이 4 개가 아니다 — %d 번째 줄", NR))
+        if (NF != 5) {
+            block(sprintf("표본의 열이 5 개가 아니다 — %d 번째 줄", NR))
         }
         for (i = 1; i <= 4; i++) {
             if ($i !~ /^[0-9]+$/) {
                 block(sprintf("표본이 숫자가 아니다 — %d 번째 줄의 %d 번째 칸 \047%s\047", NR, i, $i))
             }
         }
-        t = $1; credit = $2; served = $3; nodes = $4
+        t = $1; credit = $2; served = $3; nodes = $4; vote = $5
+        if (vote !~ /^[A-Z_|-]+$/) {
+            block(sprintf("서킷 표가 상태 문자열이 아니다 — %d 번째 줄 \047%s\047", NR, vote))
+        }
 
         if (seen && served < prevServed) {
             block(sprintf("뒷단 누적 도착이 줄었다 (%d → %d) — 회차 중에 뒷단이 다시 떴다",
@@ -101,6 +111,18 @@ verdict=$(awk \
         }
         if (phase == "유지" && credit > nodes) {
             fail(sprintf("조임이 유지되지 않았다 — 크레딧 %d 가 상한 %d 를 넘었다", credit, nodes))
+        }
+
+        # **표가 다 닫혔는데도 조여 있는 시간을 잰다.** 그 구간이 길면 고칠
+        # 자리는 서킷이 아니라 게이트다 — 표는 이미 "뒷단이 멀쩡하다" 인데
+        # 배분만 안 푼 것이다.
+        if ((phase == "회복" || phase == "해제" || phase == "승계") &&
+                vote == "CLOSED" && credit <= nodes) {
+            if (voteClosedFrom == 0) { voteClosedFrom = t }
+            voteGapMs = t - voteClosedFrom
+            if (voteGapMs > maxVoteGapMs) { maxVoteGapMs = voteGapMs }
+        } else {
+            voteClosedFrom = 0
         }
 
         if (phase == "회복" || phase == "해제" || phase == "승계") {
@@ -206,6 +228,12 @@ verdict=$(awk \
             fail(sprintf("회복이 안 끝났다 — 풀린 뒤 %.1f 초 동안 기준선의 %d%% 에 못 닿았다",
                     (lastRecT - releasedAt) / 1000.0, recovered_pct))
         }
+        # **먼저 층을 가른다.** 합계만 보면 서킷이 늦은 것과 게이트가 늦은 것이
+        # 같은 미달로 나가고, 다음 사람이 엉뚱한 데를 고친다.
+        if (maxVoteGapMs / 1000.0 > vote_limit) {
+            fail(sprintf("표는 닫혔는데 게이트가 %.1f 초 동안 안 풀렸다 (한계 %d 초) — 서킷이 아니라 완화가 늦다",
+                    maxVoteGapMs / 1000.0, vote_limit))
+        }
         took = (doneAt - recT) / 1000.0
         if (took > limit_sec) {
             fail(sprintf("회복이 %.1f 초 걸렸다 (한계 %d 초)", took, limit_sec))
@@ -214,8 +242,8 @@ verdict=$(awk \
             fail(sprintf("회복 봉우리가 초당 %.1f 건이다 — 기준선 %.1f 의 %.2f 배 (한계 %.1f)",
                     peakRate, baseRate, peakRate / baseRate, burst))
         }
-        printf "PASS %.1f %.1f %.1f %.2f %.1f\n", took, baseRate, peakRate,
-                peakRate / baseRate, (releasedAt - recT) / 1000.0
+        printf "PASS %.1f %.1f %.1f %.2f %.1f %.1f\n", took, baseRate, peakRate,
+                peakRate / baseRate, (releasedAt - recT) / 1000.0, maxVoteGapMs / 1000.0
     }
 ' "$samples")
 
@@ -232,6 +260,7 @@ case "$verdict" in
         printf '  %-24s 초당 %s건\n' "기준선 유입" "$3"
         printf '  %-24s 초당 %s건 (%s배)\n' "회복 봉우리" "$4" "$5"
         printf '  %-24s %s초\n' "게이트가 풀리기까지" "$6"
+        printf '  %-24s %s초\n' "표가 닫힌 뒤 조인 시간" "$7"
         echo "판정: 충족 — 진입·유지·회복이 다 기준 안이다"
         exit 0 ;;
     *)

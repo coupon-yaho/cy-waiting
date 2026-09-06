@@ -182,18 +182,36 @@ fi
 # 크레딧과 노드 수는 스크립트 하나로 한 번에 받고, 스텁은 밖으로 열린 포트에서
 # 직접 읽는다.
 STUB_URL="${STUB_URL:-http://localhost:18090}"
-NODE_COUNT_LUA="local n = 0
+#
+# **노드별 서킷 표도 같이 받는다.** 크레딧 하나만 보면 "서킷이 아직 안 닫혔다" 와
+# "표는 닫혔는데 게이트가 안 풀렸다" 가 같은 그림인데, 둘은 고칠 자리가 다르다.
+# 등록부가 `#c:<id>` 에 그 노드가 본 뒷단 서킷을 싣는다.
+SAMPLE_LUA="local n = 0
+local votes = {}
 for _, k in ipairs(redis.call('HKEYS', KEYS[2])) do
-  if string.sub(k, 1, 3) ~= '#c:' then n = n + 1 end
+  if string.sub(k, 1, 3) == '#c:' then
+    votes[#votes + 1] = redis.call('HGET', KEYS[2], k) or '-'
+  else
+    n = n + 1
+  end
 end
-return { redis.call('HGET', KEYS[1], '#credit') or '', tostring(n) }"
+table.sort(votes)
+local seen, uniq = {}, {}
+for _, v in ipairs(votes) do
+  if not seen[v] then seen[v] = true; uniq[#uniq + 1] = v end
+end
+return { redis.call('HGET', KEYS[1], '#credit') or '',
+         tostring(n),
+         table.concat(uniq, '|') }"
 
 sample_loop() {
-    local pair credit nodes served
+    local triple credit nodes votes served
     while :; do
-        pair=$(r --raw EVAL "$NODE_COUNT_LUA" 2 gw:snapshot gw:instances)
-        credit=$(printf '%s' "$pair" | sed -n 1p)
-        nodes=$(printf '%s' "$pair" | sed -n 2p)
+        triple=$(r --raw EVAL "$SAMPLE_LUA" 2 gw:snapshot gw:instances)
+        credit=$(printf '%s' "$triple" | sed -n 1p)
+        nodes=$(printf '%s' "$triple" | sed -n 2p)
+        votes=$(printf '%s' "$triple" | sed -n 3p)
+        [ -n "$votes" ] || votes='-'
         # **받은 수를 센다. 처리 완료 수가 아니다.** 느린 구간에 밀린 것이
         # 회복 순간에 한꺼번에 끝나면 완료 수가 봉우리처럼 보인다 — 재려던
         # 유입이 아니라 밀린 일을 잰다 (RC4 는 수신 수로 잰다).
@@ -201,7 +219,8 @@ sample_loop() {
             | sed 's/.*"accepted":\([0-9]*\).*/\1/')
         case "$credit$served$nodes" in
             ''|*[!0-9]*) ;;
-            *) printf '%s %s %s %s\n' "$(date +%s%3N)" "$credit" "$served" "$nodes" ;;
+            *) printf '%s %s %s %s %s\n' "$(date +%s%3N)" \
+                   "$credit" "$served" "$nodes" "$votes" ;;
         esac
         sleep "$(awk -v ms="$SAMPLE_MS" 'BEGIN{ printf "%.3f", ms / 1000 }')"
     done

@@ -243,7 +243,7 @@ mem_loop() {
         # shellcheck disable=SC2046
         docker stats --no-stream --format '{{.Name}} {{.MemUsage}}' \
                 $($COMPOSE ps -q gateway) 2>/dev/null \
-            | awk -v t="$(date +%s%3N)" '{ print t, $1, $2, $3 }' >> "$work/mem.txt"
+            | awk -v t="$(date +%s%3N)" '{ print t, $1, $2, $4 }' >> "$work/mem.txt"
         sleep 2
     done
 }
@@ -389,7 +389,7 @@ cp "$work/samples.txt" "$OUT"
 if [ -s "$work/mem.txt" ]; then
     awk '{ v=$3; u=v; sub(/[0-9.]+/, "", u); sub(/[A-Za-z]+$/, "", v)
            m = (u=="GiB") ? 1024 : (u=="KiB") ? 1/1024 : (u=="B") ? 1/1048576 : 1
-           if (v * m > peak) { peak = v * m; lim = $5 } }
+           if (v * m > peak) { peak = v * m; lim = $4 } }
          END{ printf "게이트웨이 메모리 봉우리: %.1fMiB / %s\n", peak, lim }' "$work/mem.txt"
 fi
 

@@ -15,27 +15,34 @@ cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // empty')
 
 # PR 생성이 아니면 통과.
 #
-# **부분 일치로 끝내지 않는다.** 명령 문자열 어딘가에 그 낱말이 들어 있기만 해도
-# 걸려서, 문서나 기억 파일에 예시로 적는 명령까지 막혔다. 토큰으로 쪼개 실제
-# 명령 자리에 있는지 본다. 쪼개기가 실패하면 막는다 — 가드는 fail closed 다.
+# **기본은 막는 쪽이다.** 앞 토큰 허용 목록으로 "명령 자리" 를 가리려 했더니
+# 개행·`sudo`·`$( )`·파이프가 전부 빠져나갔다. 그래서 반대로 센다 — 주석과
+# 히어독 본문만 걷어내고, 남은 자리에 그 명령이 있으면 막는다.
 [[ "$cmd" != *"gh pr create"* ]] && exit 0
-mapfile -t toks < <(printf '%s' "$cmd" | xargs -n1 printf '%s\n' 2>/dev/null)
-if ((${#toks[@]} > 0)); then
-    creating=0
-    for ((i = 0; i + 2 < ${#toks[@]}; i++)); do
-        [[ "${toks[i]}" == gh && "${toks[i + 1]}" == pr && "${toks[i + 2]}" == create ]] \
-            || continue
-        # 명령 자리인지 본다. 맨 앞이거나 앞 토큰이 구분자면 명령이고,
-        # 주석이나 문자열 안이면 아니다.
-        prev=""
-        ((i > 0)) && prev="${toks[i - 1]}"
-        case "$prev" in
-            ''|';'|'&&'|'||'|'|'|'('|'{'|then|do|else) creating=1 ;;
-        esac
-        ((creating)) && break
-    done
-    ((creating)) || exit 0
-fi
+
+creating=0
+delim=""
+in_heredoc=0
+while IFS= read -r line; do
+    if ((in_heredoc)); then
+        [[ "$line" =~ ^[[:space:]]*"$delim"[[:space:]]*$ ]] && in_heredoc=0
+        continue
+    fi
+    # 히어독이 시작하면 그 본문은 명령이 아니라 자료다. 문서에 예시로 적는
+    # 명령이 여기 들어온다.
+    if [[ "$line" =~ \<\<-?[[:space:]]*[\'\"]?([A-Za-z_][A-Za-z0-9_]*) ]]; then
+        delim="${BASH_REMATCH[1]}"
+        in_heredoc=1
+    fi
+    # 주석은 걷는다. `#` 이 토큰의 시작일 때만이다 — 문자열 안의 `#` 뒤를 걷으면
+    # 그 뒤에 붙은 진짜 명령이 숨는다.
+    line=$(printf '%s' "$line" | sed 's/\(^\|[[:space:]]\)#.*$//')
+    if [[ "$line" =~ (^|[^[:alnum:]_.-])gh[[:space:]]+pr[[:space:]]+create([^[:alnum:]_-]|$) ]]; then
+        creating=1
+        break
+    fi
+done <<< "$cmd"
+((creating)) || exit 0
 
 # **검사를 못 돌리면 막는다.** 통과시키면 게이트가 인프라 오류 한 번에
 # 조용히 사라진다 — 가드는 fail closed 여야 한다.

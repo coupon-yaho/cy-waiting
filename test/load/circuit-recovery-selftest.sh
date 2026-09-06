@@ -263,6 +263,27 @@ run_case "표가 닫혔는데 게이트가 오래 조이면 미달" 1 "표는 �
 } > "$work/grow.txt"
 run_case "노드가 늘면 판정 불가" 2 "늘었다" -- "$work/grow.txt"
 
+# **옛 네 칸 형식을 조용히 받지 않는다.** 받으면 표 칸이 빈 채로 지나가고,
+# 층을 가르는 검사가 통째로 잠든다.
+{
+    echo '# 정상'; printf '%s 300 0 %s\n' 0 "$NODES"; normal 200 20 3
+    echo '# 진입'; gated 1600 160 2 3
+    echo '# 유지'; gated 2200 160 2 5
+    echo '# 회복'; recovering 3200 160
+    echo '# 해제'; echo '# 승계'; printf '%s 300 340 %s CLOSED\n' 5200 "$NODES"
+} > "$work/fourcol.txt"
+run_case "옛 네 칸 형식은 막는다" 2 "열이 5 개가 아니다" -- "$work/fourcol.txt"
+
+# 표 칸이 상태 문자열이 아니면 무엇을 읽은 것인지 모른다.
+{
+    echo '# 정상'; printf '%s 300 0 %s closed!\n' 0 "$NODES"; normal 200 20 3
+    echo '# 진입'; gated 1600 160 2 3
+    echo '# 유지'; gated 2200 160 2 5
+    echo '# 회복'; recovering 3200 160
+    echo '# 해제'; echo '# 승계'; printf '%s 300 340 %s CLOSED\n' 5200 "$NODES"
+} > "$work/badvote.txt"
+run_case "표가 상태 문자열이 아니면 막는다" 2 "상태 문자열이 아니다" -- "$work/badvote.txt"
+
 : > "$work/empty.txt"
 run_case "표본이 비면 판정 불가" 2 "표본이 비었다" -- "$work/empty.txt"
 run_case "표본 파일이 없으면 판정 불가" 2 "표본이 비었다" -- "$work/없는파일.txt"

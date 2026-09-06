@@ -57,7 +57,7 @@ jobs:
           persist-credentials: false
 
       - name: 리뷰
-        uses: qodo-ai/pr-agent@4ebd5c5333c6ef21509e7304d27969eb825e6f22  # v0.43.0
+        uses: qodo-ai/pr-agent@ab6ec54bfeb37933ddb74259338752e9272016c6  # v0.44.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENAI_KEY: ${{ secrets.OPENAI_KEY }}

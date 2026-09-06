@@ -78,6 +78,10 @@ verdict=$(awk \
     function fail(msg) { decided = 1; printf "MISS %s [%s]\n", msg, layers(); exit }
     function block(msg) { decided = 1; printf "BLOCK %s\n", msg; exit }
 
+    # **미측정을 첫 줄부터 -1 로 둔다.** 회복 구간에 닿기 전에 나는 실패도
+    # 층 수치를 싣는데, 그때 0 이 찍히면 "즉시 전이했다" 로 읽힌다.
+    BEGIN { residualMs = -1000 }
+
     /^#/ { phase = $2; next }
     /^[[:space:]]*$/ { next }
 
@@ -142,20 +146,19 @@ verdict=$(awk \
 
         if (phase == "회복" || phase == "해제" || phase == "승계") {
             recN++
-            if (recN == 1) {
-                recT = t; recFirstServed = served; recVote = vote
-                # **못 잰 것과 0 을 가른다.** 반쯤 열린 노드가 없으면 잴 잔여가
-                # 아예 없고, 그때의 0 은 "즉시 전이했다" 로 읽힌다.
-                residualMs = -1000
-            }
+            if (recN == 1) { recT = t; recFirstServed = served; recVote = vote }
             # **자극을 걷는 순간의 서킷 위상은 통제되지 않는다.** 그때 열려 있던
             # half-open 은 자극 구간에서 시작한 것이라, 남은 수명이 회차마다
             # 0~상한 사이에서 다르게 나온다. 그 항을 안 재면 회차 간 차이를
             # 프로브 공급이 좋아진 것으로 읽는다.
             #
-            # 표가 노드별 상태를 접은 문자열이라, 두 노드가 상태를 맞바꾸면 이
-            # 값이 그 전이를 놓친다. 층을 가르는 눈금이지 정밀한 값이 아니다.
-            if (residualMs < 0 && recVote ~ /HALF_OPEN/ && vote != recVote) {
+            # **표에서 half-open 이 사라질 때까지 잰다.** 노드 하나가 먼저 나가면
+            # 표는 바뀌지만 다른 노드는 아직 반쯤 열려 있다. 첫 변화로 끊으면
+            # 회차마다 제일 짧은 노드의 값이 적힌다.
+            #
+            # 표가 노드별 상태를 접은 문자열이라 어느 노드인지는 모른다. 층을
+            # 가르는 눈금이지 정밀한 값이 아니다.
+            if (residualMs < 0 && recVote ~ /HALF_OPEN/ && vote !~ /HALF_OPEN/) {
                 residualMs = t - recT
             }
             lastRecT = t

@@ -145,6 +145,30 @@ run_case "회복이 한계를 넘으면 미달" 1 "초 걸렸다" -- "$work/slow
 } > "$work/residual.txt"
 run_case "반쯤 열린 채 시작하면 잔여를 잰다" 1 "잔여 0.6초" -- "$work/residual.txt"
 
+# **한 노드가 먼저 나가도 안 끝난다.** 표는 노드별 상태를 접은 문자열이라 첫
+# 변화로 끊으면 회차마다 제일 짧은 노드의 값이 적힌다.
+{
+    echo '# 정상'; normal 0 0
+    echo '# 진입'; gated 1600 160 2 3
+    echo '# 유지'; gated 2200 160 2 5
+    echo '# 회복'
+    printf '%s 2 160 %s HALF_OPEN\n' 3200 "$NODES"
+    printf '%s 2 180 %s HALF_OPEN|OPEN\n' 3400 "$NODES"
+    printf '%s 4 200 %s OPEN\n' 3800 "$NODES"
+    echo '# 해제'; echo '# 승계'
+    printf '%s 8 260 %s CLOSED\n' 13200 "$NODES"
+    printf '%s 16 360 %s CLOSED\n' 18200 "$NODES"
+    printf '%s 32 460 %s CLOSED\n' 23200 "$NODES"
+    printf '%s 64 560 %s CLOSED\n' 28200 "$NODES"
+    printf '%s 128 660 %s CLOSED\n' 33200 "$NODES"
+    printf '%s 256 760 %s CLOSED\n' 36200 "$NODES"
+    printf '%s 300 800 %s CLOSED\n' 38200 "$NODES"
+} > "$work/staggered.txt"
+run_case "노드가 엇갈려 나가면 마지막까지 잰다" 1 "잔여 0.6초" -- "$work/staggered.txt"
+
+# 회복 구간에 닿기 전에 나는 실패도 층 수치를 싣는다. 그 자리의 0 은 잰 값이 아니다.
+run_case "회복 전에 실패해도 잔여는 -1" 1 "-1.0초" -- "$work/late.txt"
+
 # **못 잰 것과 0 을 가른다.** 반쯤 열린 노드가 없으면 잴 잔여가 없는데, 0 으로
 # 찍으면 "즉시 전이했다" 로 읽힌다.
 run_case "잔여를 못 재면 -1 로 적는다" 0 "-1.0초" -- "$(healthy_run noresidual.txt)"

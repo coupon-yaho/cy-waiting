@@ -69,7 +69,7 @@ verdict=$(awk \
     # **awk 의 exit 는 END 를 건너뛰지 않는다.** 표시를 안 두면 본문에서 낸
     # 판정 뒤에 END 가 한 줄을 더 찍고, 부르는 쪽은 둘 중 뒤엣것을 읽는다.
     function layers() {
-        return sprintf("게이트 해제까지 %.1f초 · 표가 닫힌 뒤 조인 시간 %.1f초 · 첫 서킷 전이까지 %.1f초",
+        return sprintf("게이트 해제까지 %.1f초 · 표가 닫힌 뒤 조인 시간 %.1f초 · half-open 잔여 %.1f초",
                 releasedAt ? (releasedAt - recT) / 1000.0 : -1, maxVoteGapMs / 1000.0,
                 residualMs / 1000.0)
     }
@@ -142,12 +142,22 @@ verdict=$(awk \
 
         if (phase == "회복" || phase == "해제" || phase == "승계") {
             recN++
-            if (recN == 1) { recT = t; recFirstServed = served; recVote = vote }
+            if (recN == 1) {
+                recT = t; recFirstServed = served; recVote = vote
+                # **못 잰 것과 0 을 가른다.** 반쯤 열린 노드가 없으면 잴 잔여가
+                # 아예 없고, 그때의 0 은 "즉시 전이했다" 로 읽힌다.
+                residualMs = -1000
+            }
             # **자극을 걷는 순간의 서킷 위상은 통제되지 않는다.** 그때 열려 있던
             # half-open 은 자극 구간에서 시작한 것이라, 남은 수명이 회차마다
             # 0~상한 사이에서 다르게 나온다. 그 항을 안 재면 회차 간 차이를
             # 프로브 공급이 좋아진 것으로 읽는다.
-            if (residualMs == 0 && vote != recVote) { residualMs = t - recT }
+            #
+            # 표가 노드별 상태를 접은 문자열이라, 두 노드가 상태를 맞바꾸면 이
+            # 값이 그 전이를 놓친다. 층을 가르는 눈금이지 정밀한 값이 아니다.
+            if (residualMs < 0 && recVote ~ /HALF_OPEN/ && vote != recVote) {
+                residualMs = t - recT
+            }
             lastRecT = t
             # **도착이 멎은 시간을 잰다. 표본 수가 아니다.**
             #
@@ -295,8 +305,9 @@ verdict=$(awk \
             fail(sprintf("회복 봉우리가 초당 %.1f 건이다 — 기준선 %.1f 의 %.2f 배 (한계 %.1f)",
                     peakRate, baseRate, peakRate / baseRate, burst))
         }
-        printf "PASS %.1f %.1f %.1f %.2f %.1f %.1f\n", took, baseRate, peakRate,
-                peakRate / baseRate, (releasedAt - recT) / 1000.0, maxVoteGapMs / 1000.0
+        printf "PASS %.1f %.1f %.1f %.2f %.1f %.1f %.1f\n", took, baseRate, peakRate,
+                peakRate / baseRate, (releasedAt - recT) / 1000.0, maxVoteGapMs / 1000.0,
+                residualMs / 1000.0
     }
 ' "$samples")
 
@@ -314,6 +325,7 @@ case "$verdict" in
         printf '  %-24s 초당 %s건 (%s배)\n' "회복 봉우리" "$4" "$5"
         printf '  %-24s %s초\n' "게이트가 풀리기까지" "$6"
         printf '  %-24s %s초\n' "표가 닫힌 뒤 조인 시간" "$7"
+        printf '  %-24s %s초\n' "half-open 잔여" "$8"
         echo "판정: 충족 — 진입·유지·회복이 다 기준 안이다"
         exit 0 ;;
     *)

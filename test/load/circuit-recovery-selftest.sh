@@ -123,6 +123,32 @@ run_case "회복이 안 끝나면 미달" 1 "회복이 안 끝났다" -- "$work/
 } > "$work/slowdone.txt"
 run_case "회복이 한계를 넘으면 미달" 1 "초 걸렸다" -- "$work/slowdone.txt"
 
+# **잔여를 잰다.** 자극을 걷는 순간 반쯤 열려 있던 구간이 언제 끝났는지가 회차
+# 간 비교의 눈금이다. 이 칸이 잠들면 위상이 다른 두 회차의 차이를 공급이
+# 좋아진 것으로 읽는다.
+{
+    echo '# 정상'; normal 0 0
+    echo '# 진입'; gated 1600 160 2 3
+    echo '# 유지'; gated 2200 160 2 5
+    echo '# 회복'
+    printf '%s 2 160 %s HALF_OPEN\n' 3200 "$NODES"
+    printf '%s 2 180 %s HALF_OPEN\n' 3400 "$NODES"
+    printf '%s 4 200 %s OPEN\n' 3800 "$NODES"
+    echo '# 해제'; echo '# 승계'
+    printf '%s 8 260 %s CLOSED\n' 13200 "$NODES"
+    printf '%s 16 360 %s CLOSED\n' 18200 "$NODES"
+    printf '%s 32 460 %s CLOSED\n' 23200 "$NODES"
+    printf '%s 64 560 %s CLOSED\n' 28200 "$NODES"
+    printf '%s 128 660 %s CLOSED\n' 33200 "$NODES"
+    printf '%s 256 760 %s CLOSED\n' 36200 "$NODES"
+    printf '%s 300 800 %s CLOSED\n' 38200 "$NODES"
+} > "$work/residual.txt"
+run_case "반쯤 열린 채 시작하면 잔여를 잰다" 1 "잔여 0.6초" -- "$work/residual.txt"
+
+# **못 잰 것과 0 을 가른다.** 반쯤 열린 노드가 없으면 잴 잔여가 없는데, 0 으로
+# 찍으면 "즉시 전이했다" 로 읽힌다.
+run_case "잔여를 못 재면 -1 로 적는다" 0 "-1.0초" -- "$(healthy_run noresidual.txt)"
+
 # **봉우리가 기준선의 1.2 배를 넘으면 회복이 곧 2차 장애다** (RC4).
 {
     echo '# 정상'; normal 0 0

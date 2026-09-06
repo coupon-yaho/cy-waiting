@@ -14,7 +14,8 @@ set -uo pipefail
 
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
-COMPOSE="docker compose -f test/load/compose.yml -f test/load/compose.multi.yml"
+COMPOSE="docker compose -f test/load/compose.yml -f test/load/compose.multi.yml \
+-f test/load/compose.limits.yml"
 
 GATEWAYS="${GATEWAYS:-2}"
 # **한산 통과 상한 아래로 둔다.** 넘으면 줄이 서고, 줄이 한 번 서면 추월 금지
@@ -234,16 +235,59 @@ sample_loop() {
 
 mark() { printf '# %s\n' "$1" >> "$work/samples.txt"; }
 
+# **상한에 얼마나 붙었는지 남긴다.** 봉우리는 정상 구간이 아니라 게이트가 풀려
+# 억눌린 줄이 한꺼번에 나가는 순간에 온다. 표본은 회차 옆에 같이 둔다 — 봉우리
+# 한 줄만 남기면 그것이 언제였는지를 나중에 못 본다.
+report_memory() {
+    if [ ! -s "$work/mem.txt" ]; then
+        echo "메모리를 못 떴다 — 상한에 얼마나 붙었는지는 이 회차로 모른다"
+        return
+    fi
+    cp "$work/mem.txt" "${OUT%.txt}-mem.txt"
+    awk '$2 ~ /gateway/ {
+           v=$3; u=v; sub(/[0-9.]+/, "", u); sub(/[A-Za-z]+$/, "", v)
+           m = (u=="GiB") ? 1024 : (u=="KiB") ? 1/1024 : (u=="B") ? 1/1048576 : 1
+           if (v * m > peak) { peak = v * m; lim = $4 } }
+         END{ if (peak) printf "게이트웨이 메모리 봉우리: %.1fMiB / %s\n", peak, lim
+              else print "메모리 표본에 게이트웨이 행이 없다" }' "$work/mem.txt"
+}
+
+# **죽은 대는 그냥 없는 것이 된다.** 해제 판정이 살아 있는 컨테이너의 로그만 보고
+# 판정기는 노드 수가 주는 것을 우리가 만든 자극으로 읽는다. 그러면 계기 사망이
+# 제품 미달로 적힌다.
+#
+# **사인을 안 가린다.** OOMKilled 는 커널이 죽인 경우만 참이라, JVM 의
+# OutOfMemoryError 도 기동 실패도 거짓이다. 그래서 살아 있는 대수로 본다.
+# 우리가 죽인 리더는 id 로 견줘 뺀다.
+check_deaths() {
+    local expected="$GATEWAYS" alive
+    [ -n "${leader:-}" ] && expected=$((GATEWAYS - 1))
+    alive=$($COMPOSE ps -q gateway 2>/dev/null | grep -c .)
+    if [ "$alive" -ne "$expected" ]; then
+        echo "::error title=서킷 회복::게이트웨이가 $alive 대 남았다 — $expected 대를 기대했다. 이 회차로는 판정하지 않는다"
+        for cid in $($COMPOSE ps -aq gateway); do
+            printf '  %s %s\n' "${cid:0:12}" \
+                "$(docker inspect --format '{{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}}' "$cid" 2>/dev/null)"
+        done
+        exit 2
+    fi
+}
+
 # **메모리도 표본이다.** 파드 상한을 걸어 두고 실제 사용을 안 남기면, 조건이
 # 깨져도 다음 회차가 모른다. 초당 여러 번은 못 뜬다 — `docker stats` 한 번이
 # 수백 ms 다. 봉우리는 게이트가 풀리는 순간이라 2초면 잡힌다.
 mem_loop() {
+    local ids
     while :; do
-        # 컨테이너가 여럿이라 쪼개지는 게 맞다.
-        # shellcheck disable=SC2046
-        docker stats --no-stream --format '{{.Name}} {{.MemUsage}}' \
-                $($COMPOSE ps -q gateway) 2>/dev/null \
-            | awk -v t="$(date +%s%3N)" '{ print t, $1, $2, $4 }' >> "$work/mem.txt"
+        # **목록이 비면 안 부른다.** 인자가 없으면 docker stats 는 호스트의 모든
+        # 컨테이너를 찍고, 그 값이 게이트웨이 봉우리로 적힌다.
+        ids=$($COMPOSE ps -q gateway 2>/dev/null)
+        if [ -n "$ids" ]; then
+            # 컨테이너가 여럿이라 쪼개지는 게 맞다.
+            # shellcheck disable=SC2046
+            docker stats --no-stream --format '{{.Name}} {{.MemUsage}}' $ids 2>/dev/null \
+                | awk -v t="$(date +%s%3N)" '{ print t, $1, $2, $4 }' >> "$work/mem.txt"
+        fi
         sleep 2
     done
 }
@@ -330,6 +374,9 @@ if [ "$released" != 1 ]; then
     wait "$loadpid" 2>/dev/null; k6rc=$?
     loadpid=""
     cp "$work/samples.txt" "$OUT"
+    kill "$memsampler" 2>/dev/null; memsampler=""
+    report_memory
+    check_deaths
     # **부하를 못 만든 회차를 제품 미달로 내보내지 않는다.** 정상 경로에만 이
     # 검사를 두었더니, 실측에서 정확히 이쪽 경로가 그것 없이 나갔다.
     if [ "$k6rc" -ne 0 ]; then
@@ -383,25 +430,8 @@ wait "$loadpid" 2>/dev/null; k6rc=$?
 loadpid=""
 
 cp "$work/samples.txt" "$OUT"
-
-# **상한에 얼마나 붙었는지 남긴다.** 봉우리는 정상 구간이 아니라 게이트가 풀려
-# 억눌린 줄이 한꺼번에 나가는 순간에 온다.
-if [ -s "$work/mem.txt" ]; then
-    awk '{ v=$3; u=v; sub(/[0-9.]+/, "", u); sub(/[A-Za-z]+$/, "", v)
-           m = (u=="GiB") ? 1024 : (u=="KiB") ? 1/1024 : (u=="B") ? 1/1048576 : 1
-           if (v * m > peak) { peak = v * m; lim = $4 } }
-         END{ printf "게이트웨이 메모리 봉우리: %.1fMiB / %s\n", peak, lim }' "$work/mem.txt"
-fi
-
-# **죽은 대는 그냥 없는 것이 된다.** 해제 판정이 살아 있는 컨테이너의 로그만 보므로,
-# 한 대가 OOM 으로 빠지면 회차는 조용히 다른 조건을 잰다. 우리가 죽인 리더는
-# OOMKilled 가 거짓이라 이 검사에 안 걸린다.
-for cid in $($COMPOSE ps -aq gateway); do
-    if [ "$(docker inspect --format '{{.State.OOMKilled}}' "$cid" 2>/dev/null)" = "true" ]; then
-        echo "::error title=서킷 회복::게이트웨이가 OOM 으로 죽었다 ($cid) — 이 회차로는 판정하지 않는다"
-        exit 2
-    fi
-done
+report_memory
+check_deaths
 
 echo
 if [ "$k6rc" -ne 0 ]; then

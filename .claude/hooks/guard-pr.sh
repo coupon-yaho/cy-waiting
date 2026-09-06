@@ -13,8 +13,29 @@ set -uo pipefail
 input=$(cat)
 cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // empty')
 
-# PR 생성이 아니면 통과
+# PR 생성이 아니면 통과.
+#
+# **부분 일치로 끝내지 않는다.** 명령 문자열 어딘가에 그 낱말이 들어 있기만 해도
+# 걸려서, 문서나 기억 파일에 예시로 적는 명령까지 막혔다. 토큰으로 쪼개 실제
+# 명령 자리에 있는지 본다. 쪼개기가 실패하면 막는다 — 가드는 fail closed 다.
 [[ "$cmd" != *"gh pr create"* ]] && exit 0
+mapfile -t toks < <(printf '%s' "$cmd" | xargs -n1 printf '%s\n' 2>/dev/null)
+if ((${#toks[@]} > 0)); then
+    creating=0
+    for ((i = 0; i + 2 < ${#toks[@]}; i++)); do
+        [[ "${toks[i]}" == gh && "${toks[i + 1]}" == pr && "${toks[i + 2]}" == create ]] \
+            || continue
+        # 명령 자리인지 본다. 맨 앞이거나 앞 토큰이 구분자면 명령이고,
+        # 주석이나 문자열 안이면 아니다.
+        prev=""
+        ((i > 0)) && prev="${toks[i - 1]}"
+        case "$prev" in
+            ''|';'|'&&'|'||'|'|'|'('|'{'|then|do|else) creating=1 ;;
+        esac
+        ((creating)) && break
+    done
+    ((creating)) || exit 0
+fi
 
 # **검사를 못 돌리면 막는다.** 통과시키면 게이트가 인프라 오류 한 번에
 # 조용히 사라진다 — 가드는 fail closed 여야 한다.

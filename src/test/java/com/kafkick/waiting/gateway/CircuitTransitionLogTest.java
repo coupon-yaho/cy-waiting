@@ -166,6 +166,25 @@ class CircuitTransitionLogTest {
                         .contains("프로브 2건"));
     }
 
+    /**
+     * <b>성공한 프로브도 센다.</b> 창을 채웠는데 실패율이 임계를 넘어 열린
+     * 회차에는 성공이 섞여 있다 — 실패만 세면 그 창이 덜 찬 것처럼 보이고,
+     * 그러면 시한 만료와 다시 안 갈린다.
+     */
+    @Test
+    @DisplayName("성공한_프로브도_센다")
+    void 성공한_프로브도_센다() {
+        서킷().transitionToOpenState();
+        서킷().transitionToHalfOpenState();
+        서킷().onSuccess(1, TimeUnit.MILLISECONDS);
+        서킷().onError(1, TimeUnit.MILLISECONDS, new RuntimeException("느리다"));
+
+        서킷().transitionToOpenState();
+
+        assertThat(남은것("회복 시도가 실패했다")).singleElement()
+                .satisfies(e -> assertThat(e.getFormattedMessage()).contains("프로브 2건"));
+    }
+
     /** 다음 창은 처음부터 센다. 안 그러면 앞 창의 수가 다음 판단에 섞인다. */
     @Test
     @DisplayName("반쯤_열릴_때마다_프로브_수를_다시_센다")

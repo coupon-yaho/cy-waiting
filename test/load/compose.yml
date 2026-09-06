@@ -131,12 +131,11 @@ services:
       redis: { condition: service_healthy }
       backend: { condition: service_healthy }
       seeder: { condition: service_healthy }
-    # 운영은 메모리 2GB 로 제한한 파드에 올린다. 제한 없는 호스트에서 잰 수는
-    # 그 조건에서 재현되지 않는다.
+    # 운영 파드와 같은 값으로 묶는다 (00-requirements A8). swap 은 사용이
+    # 316MiB 라 안 건다.
     mem_limit: ${GATEWAY_MEM:-2g}
     environment:
-      # 컨테이너 인지가 켜져 있어 힙은 이 제한에서 잡힌다. 비율을 박아 두는 것은
-      # 남은 몫(메타스페이스·스레드 스택·다이렉트 버퍼)을 눈에 보이게 두려는 것이다.
+      # 이미지 기본 70 은 2GB 에서 여유가 얇다. 60 이면 힙 1.2GB 다.
       JAVA_OPTS: ${GATEWAY_JAVA_OPTS:--XX:MaxRAMPercentage=60}
       SPRING_DATA_REDIS_HOST: redis
       WAITING_BACKEND_URI: http://backend:8090

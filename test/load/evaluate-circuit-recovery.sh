@@ -41,8 +41,12 @@ recovered_pct=${RECOVERED_PCT:-95}
 # 닫힘까지 두 계단이라 6초, 거기에 배분 틱 하나와 표 왕복이 더 붙는다. 5 로 두면
 # 열린 상태에서 돌아오는 회차가 맞게 도는데도 "완화가 늦다" 로 미달이 된다.
 vote_gate_limit_sec=${VOTE_GATE_LIMIT_SEC:-9}
-# 열린 노드가 다시 반쯤 열리기까지 걸리는 최소 시간(ms). `wait-duration-in-open-state`
-# 와 같은 값이다. 잔여를 잴 때 표가 재진입을 숨기는지 가르는 데만 쓴다.
+# 열린 노드가 다시 반쯤 열리기까지 걸리는 최소 시간(ms). 잔여를 잴 때 표가
+# 재진입을 숨기는지 가르는 데만 쓴다.
+#
+# **`application.yml` 의 `wait-duration-in-open-state` 와 같아야 한다.** 거기를
+# 바꾸면 여기도 바꾼다. 게다가 우리가 보는 것은 전이 시각이 아니라 표본에 처음
+# 보인 시각이라 실제보다 늦다 — 유예는 그만큼 낙관이다.
 reopen_grace_ms=${REOPEN_GRACE_MS:-5000}
 # 배분이 열려 있는데 뒷단 도착이 멎어도 봐 주는 시간(ms). 조인 구간의 프로브가
 # 초당 한 건 아래라 몇 표본은 그냥 평평하다 — 표본 수로 세면 정상을 잡는다.
@@ -174,7 +178,7 @@ verdict=$(awk \
             if (residualMs < 0 && recVote ~ /HALF_OPEN/) {
                 if (openSeenAt == 0 && hasOpen(vote)) { openSeenAt = t }
                 if (vote !~ /HALF_OPEN/) {
-                    residualMs = (openSeenAt && t - openSeenAt > reopen_grace_ms) \
+                    residualMs = (openSeenAt && t - openSeenAt >= reopen_grace_ms) \
                             ? -1000 : t - recT
                 }
             }

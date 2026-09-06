@@ -24,7 +24,14 @@ jobs:
   hooks:
     name: 훅·문서 규범 검증
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # **예산이 이미 거의 찼다.** 마지막 초록 회차가 4분 44초로 5분의 95% 였고,
+    # 자기검증 하나를 더하니 넘겼다. 그때 잡은 "취소" 로 끝나는데 그건 멈춘 것이
+    # 아니라 시간이 다한 것이라, 로그만 보면 왜 죽었는지가 안 보인다.
+    #
+    # 지배항은 레디스 프로브 자기검증 180초와 훅 자기검증 78초다. 다음에 또
+    # 넘기면 늘리지 말고 잡을 쪼갠다 — 늘리기만 하면 언젠가 진짜 멈춘 것을
+    # 기다리게 된다.
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -97,6 +104,11 @@ jobs:
 
       - name: 판정 비율 자기검증
         run: test/load/judged-selftest.sh
+
+      # 램프는 게이트웨이 한 대짜리 단위 시험으로만 잡혀 있다. 여기가 조용히
+      # 틀리면 회복이 계단인 회차가 충족으로 적힌다.
+      - name: 서킷 회복 자기검증
+        run: test/load/circuit-recovery-selftest.sh
 
       # 수명이 대신 걷어 준 것과 놓는 자리가 도는 것을 안 가르면, 표를 놓는
       # 줄을 통째로 지운 구현도 초록이 뜬다.

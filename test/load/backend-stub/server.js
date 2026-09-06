@@ -30,13 +30,14 @@ function num(name, fallback, { integer = false, min = 0, max = Infinity } = {}) 
 }
 
 const PORT = num('PORT', 8090, { integer: true, min: 1, max: 65535 });
-const LATENCY_MS = num('LATENCY_MS', 0);
+let latencyMs = num('LATENCY_MS', 0);
 // 0 은 무제한. 한도를 넘으면 503 을 내 — 뒷단이 못 받는 상태를 흉내 낸다.
 // 동시 한도는 세는 값이라 정수다. 1.5 를 받으면 둘째 요청까지 들어온다.
 const MAX_INFLIGHT = num('MAX_INFLIGHT', 0, { integer: true });
 
 let inflight = 0;
 let served = 0;
+let accepted = 0;
 let rejected = 0;
 
 function json(res, status, body) {
@@ -79,12 +80,28 @@ let faulted = 0;
 const server = createServer((req, res) => {
   // 스텁 자신의 상태. compose 의 healthcheck 와 시나리오의 사후 확인이 쓴다.
   if (req.url === '/stub/health') {
-    return json(res, 200, { status: 'UP', inflight, served, rejected, faulted, faultStatus });
+    return json(res, 200, { status: 'UP', inflight, accepted, served, rejected, faulted, faultStatus, latencyMs });
   }
 
   // **도중에 켜고 끈다.** 기동 환경변수로만 두면 고장을 만들려고 컨테이너를
   // 다시 띄워야 하고, 그러면 재기동과 고장이 같은 자극이 되어 무엇을 잰
   // 것인지 갈리지 않는다.
+  // **지연도 도중에 바꾼다.** 서킷은 5xx 응답을 실패로 안 센다 — 게이트웨이가
+  // 상태 코드를 서킷에 안 물렸기 때문이고, 그건 뒷단이 요청을 받은 뒤에 낸 답이라
+  // 재시도가 곧 초과 발급이 되기 때문이다. 그래서 서킷을 열려면 느린 호출을
+  // 만들어야 하고, 그 자극이 여기 있다.
+  //
+  // **컨테이너를 다시 안 띄운다.** 기동 환경변수로만 두면 자극을 주려고 프로세스를
+  // 새로 띄워야 하고, 그러면 누적 셈이 0 으로 돌아가 회차의 도착을 못 잰다.
+  if (req.url.startsWith('/stub/latency')) {
+    const asked = Number(new URL(req.url, 'http://stub').searchParams.get('ms'));
+    if (!Number.isInteger(asked) || asked < 0 || asked > 60000) {
+      return error(res, 400, 'BAD_REQUEST', 'ms 는 0~60000 의 정수여야 한다.');
+    }
+    latencyMs = asked;
+    return json(res, 200, { latencyMs });
+  }
+
   if (req.url.startsWith('/stub/fault')) {
     const asked = Number(new URL(req.url, 'http://stub').searchParams.get('status'));
     if (!Number.isInteger(asked) || asked < 0 || asked > 599) {
@@ -106,6 +123,10 @@ const server = createServer((req, res) => {
     return error(res, 503, 'TEMPORARILY_UNAVAILABLE', '뒷단이 지금 못 받는다.');
   }
 
+  // **받은 수를 따로 센다.** 회복 버스트는 뒷단이 **받은** 건수로 재는데
+  // (RC4), 처리 완료 수로 재면 느린 구간에 밀린 것이 회복 순간에 한꺼번에
+  // 끝나면서 봉우리처럼 보인다 — 재려던 유입이 아니라 밀린 일을 잰다.
+  accepted += 1;
   inflight += 1;
   const startedAt = process.hrtime.bigint();
   setTimeout(() => {
@@ -162,10 +183,10 @@ const server = createServer((req, res) => {
       data: { path: req.url, method: req.method },
       error: null,
     });
-  }, LATENCY_MS);
+  }, latencyMs);
 });
 
 server.listen(PORT, () => {
-  process.stdout.write(`stub up :${PORT} latency=${LATENCY_MS}ms `
+  process.stdout.write(`stub up :${PORT} latency=${latencyMs}ms `
     + `maxInflight=${MAX_INFLIGHT} shared=${SHARED_HEADER} slowBody=${SLOW_BODY_MS}ms\n`);
 });

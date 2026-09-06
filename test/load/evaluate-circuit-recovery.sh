@@ -41,6 +41,9 @@ recovered_pct=${RECOVERED_PCT:-95}
 # 닫힘까지 두 계단이라 6초, 거기에 배분 틱 하나와 표 왕복이 더 붙는다. 5 로 두면
 # 열린 상태에서 돌아오는 회차가 맞게 도는데도 "완화가 늦다" 로 미달이 된다.
 vote_gate_limit_sec=${VOTE_GATE_LIMIT_SEC:-9}
+# 열린 노드가 다시 반쯤 열리기까지 걸리는 최소 시간(ms). `wait-duration-in-open-state`
+# 와 같은 값이다. 잔여를 잴 때 표가 재진입을 숨기는지 가르는 데만 쓴다.
+reopen_grace_ms=${REOPEN_GRACE_MS:-5000}
 # 배분이 열려 있는데 뒷단 도착이 멎어도 봐 주는 시간(ms). 조인 구간의 프로브가
 # 초당 한 건 아래라 몇 표본은 그냥 평평하다 — 표본 수로 세면 정상을 잡는다.
 tail_idle_ms=${TAIL_IDLE_MS:-8000}
@@ -65,9 +68,17 @@ verdict=$(awk \
     -v divisor="$idle_divisor" -v step="$ramp_step" \
     -v min_baseline="$min_baseline" -v recovered_pct="$recovered_pct" \
     -v grace_ms="$release_grace_ms" -v vote_limit="$vote_gate_limit_sec" \
-    -v tail_idle_ms="$tail_idle_ms" '
+    -v tail_idle_ms="$tail_idle_ms" -v reopen_grace_ms="$reopen_grace_ms" '
     # **awk 의 exit 는 END 를 건너뛰지 않는다.** 표시를 안 두면 본문에서 낸
     # 판정 뒤에 END 가 한 줄을 더 찍고, 부르는 쪽은 둘 중 뒤엣것을 읽는다.
+    # 표에 완전히 열린 노드가 있는가. `HALF_OPEN` 이 부분 문자열로 걸리므로
+    # 접힌 문자열을 쪼개서 본다.
+    function hasOpen(v,   parts, i, n) {
+        n = split(v, parts, "|")
+        for (i = 1; i <= n; i++) { if (parts[i] == "OPEN") { return 1 } }
+        return 0
+    }
+
     function layers() {
         return sprintf("게이트 해제까지 %.1f초 · 표가 닫힌 뒤 조인 시간 %.1f초 · half-open 잔여 %.1f초",
                 releasedAt ? (releasedAt - recT) / 1000.0 : -1, maxVoteGapMs / 1000.0,
@@ -156,10 +167,16 @@ verdict=$(awk \
             # 표는 바뀌지만 다른 노드는 아직 반쯤 열려 있다. 첫 변화로 끊으면
             # 회차마다 제일 짧은 노드의 값이 적힌다.
             #
-            # 표가 노드별 상태를 접은 문자열이라 어느 노드인지는 모른다. 층을
-            # 가르는 눈금이지 정밀한 값이 아니다.
-            if (residualMs < 0 && recVote ~ /HALF_OPEN/ && vote !~ /HALF_OPEN/) {
-                residualMs = t - recT
+            # **표가 재진입을 숨길 수 있다.** 노드별 상태를 접은 문자열이라, 먼저
+            # 나간 노드가 열림 대기 뒤 다시 반쯤 열리면 그 구간이 처음 구간의
+            # 잔여에 섞인다. 열린 노드가 보인 뒤 그 대기보다 오래 half-open 이
+            # 남아 있으면 가를 수 없으므로 못 잰 것으로 둔다.
+            if (residualMs < 0 && recVote ~ /HALF_OPEN/) {
+                if (openSeenAt == 0 && hasOpen(vote)) { openSeenAt = t }
+                if (vote !~ /HALF_OPEN/) {
+                    residualMs = (openSeenAt && t - openSeenAt > reopen_grace_ms) \
+                            ? -1000 : t - recT
+                }
             }
             lastRecT = t
             # **도착이 멎은 시간을 잰다. 표본 수가 아니다.**

@@ -166,6 +166,32 @@ run_case "반쯤 열린 채 시작하면 잔여를 잰다" 1 "잔여 0.6초" -- 
 } > "$work/staggered.txt"
 run_case "노드가 엇갈려 나가면 마지막까지 잰다" 1 "잔여 0.6초" -- "$work/staggered.txt"
 
+# **표가 재진입을 숨기면 못 잰 것으로 둔다.** 먼저 나간 노드가 열림 대기 뒤 다시
+# 반쯤 열리면 그 구간이 처음 구간의 잔여에 섞여, 회차 비교가 부풀린 값으로 돈다.
+{
+    echo '# 정상'; normal 0 0
+    echo '# 진입'; gated 1600 160 2 3
+    echo '# 유지'; gated 2200 160 2 5
+    echo '# 회복'
+    printf '%s 2 160 %s HALF_OPEN\n' 3200 "$NODES"
+    # 한 노드가 나간 뒤 열림 대기(5초)보다 오래 half-open 이 남는다.
+    i=0
+    while [ $i -lt 31 ]; do
+        printf '%s 2 %s %s HALF_OPEN|OPEN\n' $((3400 + i * 200)) $((161 + i)) "$NODES"
+        i=$((i + 1))
+    done
+    printf '%s 4 200 %s OPEN\n' 9800 "$NODES"
+    echo '# 해제'; echo '# 승계'
+    printf '%s 8 260 %s CLOSED\n' 13200 "$NODES"
+    printf '%s 16 360 %s CLOSED\n' 18200 "$NODES"
+    printf '%s 32 460 %s CLOSED\n' 23200 "$NODES"
+    printf '%s 64 560 %s CLOSED\n' 28200 "$NODES"
+    printf '%s 128 660 %s CLOSED\n' 33200 "$NODES"
+    printf '%s 256 760 %s CLOSED\n' 36200 "$NODES"
+    printf '%s 300 800 %s CLOSED\n' 38200 "$NODES"
+} > "$work/reopen.txt"
+run_case "재진입을 못 가르면 잔여는 -1" 1 "-1.0초" -- "$work/reopen.txt"
+
 # 회복 구간에 닿기 전에 나는 실패도 층 수치를 싣는다. 그 자리의 0 은 잰 값이 아니다.
 run_case "회복 전에 실패해도 잔여는 -1" 1 "-1.0초" -- "$work/late.txt"
 

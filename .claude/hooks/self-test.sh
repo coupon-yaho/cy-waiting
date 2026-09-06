@@ -548,6 +548,8 @@ done <<'GUARD'
 2|달러 큰따옴표|g$"h" pr create --base develop
 0|구분자 안쪽 역슬래시|cat <<E\\OF\ngh pr create\nEOF
 0|역슬래시 둘|cat <<\\E\\OF\ngh pr create\nEOF
+0|메타문자 뒤 주석|echo x;# gh pr create --title 예시
+2|줄을 이어도 막는다|gh pr create \\\n  --base develop
 0|무관한 명령|git status
 GUARD
 

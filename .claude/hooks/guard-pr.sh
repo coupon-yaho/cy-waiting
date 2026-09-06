@@ -7,6 +7,11 @@
 #
 # PreToolUse(Bash) 훅. `gh pr create` 를 만나면 기계 검사를 돌리고
 # 위반이 있으면 exit 2 로 막는다.
+#
+# **실수를 막는 장치이지 샌드박스가 아니다.** 셸 문법을 정규식으로 흉내내므로
+# 작정하고 우회하는 형태(변수로 조립하거나 인코딩해 넘기는 것)는 못 막는다.
+# 그래서 두 종류의 틀림을 다르게 다룬다 — **자료를 명령으로 읽어 사람의 일을
+# 막는 쪽은 고치고, 의도적 우회는 안 쫓는다.**
 
 set -uo pipefail
 
@@ -41,11 +46,12 @@ cmd_naked=$(unquote "$cmd_joined")
 mapfile -t lines <<< "$cmd_joined"
 
 # 문자열 안의 `#` 는 주석이 아니다. 걷어내면 그 뒤에 붙은 진짜 명령이 숨는다.
+# 반대로 `;#` 처럼 메타문자 뒤에 붙은 것은 주석이다 — 안 걷으면 문서가 막힌다.
 strip_comment() {
     local line=$1 i prefix sq dq
     for ((i = 0; i < ${#line}; i++)); do
         [[ "${line:i:1}" == '#' ]] || continue
-        ((i > 0)) && [[ ! "${line:i-1:1}" =~ [[:space:]] ]] && continue
+        ((i > 0)) && [[ ! "${line:i-1:1}" =~ [[:space:]\;\&\|\(] ]] && continue
         prefix=${line:0:i}
         sq=${prefix//[^\']/}
         dq=${prefix//[^\"]/}
@@ -94,7 +100,9 @@ for ((n = 0; n < ${#lines[@]}; n++)); do
     naked=$(unquote "$bare")
     if [[ "$bare" =~ $CREATE_RE || "$naked" =~ $CREATE_RE ]]; then
         creating=1
-        create_line=$line
+        # **명령 줄부터 끝까지를 넘긴다.** 물리적 한 줄만 보면 다음 줄로 이어진
+        # `--base` 를 못 찾아 엉뚱한 기준으로 리뷰가 돈다.
+        create_line=$(printf '%s\n' "${lines[@]:n}")
         break
     fi
 done

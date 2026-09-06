@@ -131,12 +131,18 @@ services:
       redis: { condition: service_healthy }
       backend: { condition: service_healthy }
       seeder: { condition: service_healthy }
-    # 운영 파드와 같은 값으로 묶는다 (00-requirements A8). swap 은 사용이
-    # 316MiB 라 안 건다.
+    # 운영과 같은 값으로 묶는다 (00-requirements A8).
     mem_limit: ${GATEWAY_MEM:-2g}
+    # **스왑을 안 준다.** 안 걸면 도커가 상한의 두 배까지 허용해, 상한을 넘겨도
+    # OOM 대신 조용히 스왑한다 — 그 지연이 느린 호출로 세어져 자극 없이 서킷을 연다.
+    memswap_limit: ${GATEWAY_MEM:-2g}
+    # 지연이 신호인 시나리오라 CPU 경합이 측정을 흔든다. 노드를 늘려도 값이 남게 묶는다.
+    cpus: ${GATEWAY_CPUS:-2}
     environment:
-      # 이미지 기본 70 은 2GB 에서 여유가 얇다. 60 이면 힙 1.2GB 다.
-      JAVA_OPTS: ${GATEWAY_JAVA_OPTS:--XX:MaxRAMPercentage=60}
+      # 이미지 기본 70 을 덮는다. 다이렉트 버퍼가 힙 밖에서 최대 힙만큼 더 잡을 수
+      # 있어, 상한을 안 박으면 둘의 합이 mem_limit 을 넘는다. G1 은 GATEWAY_MEM 을
+      # 낮춰도 SerialGC 로 안 떨어지게 박는다.
+      JAVA_OPTS: ${GATEWAY_JAVA_OPTS:--XX:MaxRAMPercentage=60 -XX:MaxDirectMemorySize=384m -XX:+UseG1GC}
       SPRING_DATA_REDIS_HOST: redis
       WAITING_BACKEND_URI: http://backend:8090
       WAITING_CORS_ALLOWED_0: http://localhost:5173

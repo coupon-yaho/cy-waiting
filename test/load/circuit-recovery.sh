@@ -62,9 +62,11 @@ command -v k6 >/dev/null || { echo "k6 가 없다 — 고정 유입 실행기가
 
 work=$(mktemp -d) || exit 1
 sampler=""
+memsampler=""
 loadpid=""
 cleanup() {
     [ -n "$sampler" ] && kill "$sampler" 2>/dev/null
+    [ -n "$memsampler" ] && kill "$memsampler" 2>/dev/null
     [ -n "$loadpid" ] && kill "$loadpid" 2>/dev/null
     # 자극을 남기지 않는다. 남으면 다음 회차가 시작부터 조인 채로 돈다.
     $COMPOSE exec -T backend wget -qO- 'http://localhost:8090/stub/latency?ms=0' \
@@ -232,6 +234,20 @@ sample_loop() {
 
 mark() { printf '# %s\n' "$1" >> "$work/samples.txt"; }
 
+# **메모리도 표본이다.** 파드 상한을 걸어 두고 실제 사용을 안 남기면, 조건이
+# 깨져도 다음 회차가 모른다. 초당 여러 번은 못 뜬다 — `docker stats` 한 번이
+# 수백 ms 다. 봉우리는 게이트가 풀리는 순간이라 2초면 잡힌다.
+mem_loop() {
+    while :; do
+        # 컨테이너가 여럿이라 쪼개지는 게 맞다.
+        # shellcheck disable=SC2046
+        docker stats --no-stream --format '{{.Name}} {{.MemUsage}}' \
+                $($COMPOSE ps -q gateway) 2>/dev/null \
+            | awk -v t="$(date +%s%3N)" '{ print t, $1, $2, $3 }' >> "$work/mem.txt"
+        sleep 2
+    done
+}
+
 # ── 부하 ─────────────────────────────────────────────────────────────────────
 #
 # **부하가 회차 전체를 덮어야 한다.** 구간 길이만 더해 놓고 진입 안정화와 해제
@@ -255,6 +271,8 @@ loadpid=$!
 mark 정상
 sample_loop >> "$work/samples.txt" &
 sampler=$!
+mem_loop &
+memsampler=$!
 sleep "$NORMAL_SEC"
 
 # ── 진입 — 뒷단을 고장 낸다 ──────────────────────────────────────────────────
@@ -360,10 +378,30 @@ mark 승계
 sleep "$HANDOVER_AFTER_SEC"
 
 kill "$sampler" 2>/dev/null; sampler=""
+kill "$memsampler" 2>/dev/null; memsampler=""
 wait "$loadpid" 2>/dev/null; k6rc=$?
 loadpid=""
 
 cp "$work/samples.txt" "$OUT"
+
+# **상한에 얼마나 붙었는지 남긴다.** 봉우리는 정상 구간이 아니라 게이트가 풀려
+# 억눌린 줄이 한꺼번에 나가는 순간에 온다.
+if [ -s "$work/mem.txt" ]; then
+    awk '{ v=$3; u=v; sub(/[0-9.]+/, "", u); sub(/[A-Za-z]+$/, "", v)
+           m = (u=="GiB") ? 1024 : (u=="KiB") ? 1/1024 : (u=="B") ? 1/1048576 : 1
+           if (v * m > peak) { peak = v * m; lim = $5 } }
+         END{ printf "게이트웨이 메모리 봉우리: %.1fMiB / %s\n", peak, lim }' "$work/mem.txt"
+fi
+
+# **죽은 대는 그냥 없는 것이 된다.** 해제 판정이 살아 있는 컨테이너의 로그만 보므로,
+# 한 대가 OOM 으로 빠지면 회차는 조용히 다른 조건을 잰다. 우리가 죽인 리더는
+# OOMKilled 가 거짓이라 이 검사에 안 걸린다.
+for cid in $($COMPOSE ps -aq gateway); do
+    if [ "$(docker inspect --format '{{.State.OOMKilled}}' "$cid" 2>/dev/null)" = "true" ]; then
+        echo "::error title=서킷 회복::게이트웨이가 OOM 으로 죽었다 ($cid) — 이 회차로는 판정하지 않는다"
+        exit 2
+    fi
+done
 
 echo
 if [ "$k6rc" -ne 0 ]; then

@@ -69,8 +69,9 @@ verdict=$(awk \
     # **awk 의 exit 는 END 를 건너뛰지 않는다.** 표시를 안 두면 본문에서 낸
     # 판정 뒤에 END 가 한 줄을 더 찍고, 부르는 쪽은 둘 중 뒤엣것을 읽는다.
     function layers() {
-        return sprintf("게이트 해제까지 %.1f초 · 표가 닫힌 뒤 조인 시간 %.1f초",
-                releasedAt ? (releasedAt - recT) / 1000.0 : -1, maxVoteGapMs / 1000.0)
+        return sprintf("게이트 해제까지 %.1f초 · 표가 닫힌 뒤 조인 시간 %.1f초 · 첫 서킷 전이까지 %.1f초",
+                releasedAt ? (releasedAt - recT) / 1000.0 : -1, maxVoteGapMs / 1000.0,
+                residualMs / 1000.0)
     }
     # 층 수치를 실패에도 싣는다. 이 판정은 대개 미달인데, 층을 가르려고 칸을
     # 늘려 놓고 그 수가 실패 경로에서 안 보이면 손으로 표본을 뒤지게 된다.
@@ -141,7 +142,12 @@ verdict=$(awk \
 
         if (phase == "회복" || phase == "해제" || phase == "승계") {
             recN++
-            if (recN == 1) { recT = t; recFirstServed = served }
+            if (recN == 1) { recT = t; recFirstServed = served; recVote = vote }
+            # **자극을 걷는 순간의 서킷 위상은 통제되지 않는다.** 그때 열려 있던
+            # half-open 은 자극 구간에서 시작한 것이라, 남은 수명이 회차마다
+            # 0~상한 사이에서 다르게 나온다. 그 항을 안 재면 회차 간 차이를
+            # 프로브 공급이 좋아진 것으로 읽는다.
+            if (residualMs == 0 && vote != recVote) { residualMs = t - recT }
             lastRecT = t
             # **도착이 멎은 시간을 잰다. 표본 수가 아니다.**
             #

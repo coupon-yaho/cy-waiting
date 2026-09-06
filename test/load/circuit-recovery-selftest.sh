@@ -271,9 +271,31 @@ run_case "표가 닫혔는데 끝내 안 풀리면 완화 탓" 1 "끝내 안 풀
     echo '# 정상'; normal 0 0
     echo '# 진입'; gated 1600 160 2 3
     echo '# 유지'; gated 2200 160 2 5
-    echo '# 회복'; gated 3200 160 2 20 OPEN 0
+    # 배분이 열려 있는데(크레딧 2) 열 초 넘게 도착이 없다.
+    echo '# 회복'; gated 3200 160 2 60 OPEN 0
 } > "$work/deadtail.txt"
 run_case "부하가 먼저 끝나면 판정 불가" 2 "부하가 먼저 끝났다" -- "$work/deadtail.txt"
+
+# **서킷이 활짝 열린 구간은 도착이 없는 것이 정상이다.** 크레딧 0 인 동안까지
+# 세면 제품이 제 일을 한 회차를 판정 불가로 덮는다 — 이 하네스가 찾으려던
+# 실패가 바로 거기 있다.
+{
+    echo '# 정상'; normal 0 0
+    echo '# 진입'; gated 1600 160 0 3
+    echo '# 유지'; gated 2200 160 0 5
+    echo '# 회복'; gated 3200 160 0 60 OPEN 0
+} > "$work/openflat.txt"
+run_case "활짝 열린 구간의 도착 0 은 정상" 1 "안 닫혀" -- "$work/openflat.txt"
+
+# 유지 구간에 표본이 없으면 조임이 붙어 있었는지를 한 번도 안 본다.
+{
+    echo '# 정상'; normal 0 0
+    echo '# 진입'; gated 1600 160 2 3
+    echo '# 유지'
+    echo '# 회복'; recovering 3200 160
+    echo '# 해제'; echo '# 승계'; printf '%s 300 340 %s CLOSED\n' 5200 "$NODES"
+} > "$work/nohold.txt"
+run_case "유지 구간이 비면 판정 불가" 2 "유지 구간에 표본이 없다" -- "$work/nohold.txt"
 
 # ── 판정 불가 ────────────────────────────────────────────────────────────────
 

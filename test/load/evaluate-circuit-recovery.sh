@@ -41,6 +41,9 @@ recovered_pct=${RECOVERED_PCT:-95}
 # 닫힘까지 두 계단이라 6초, 거기에 배분 틱 하나와 표 왕복이 더 붙는다. 5 로 두면
 # 열린 상태에서 돌아오는 회차가 맞게 도는데도 "완화가 늦다" 로 미달이 된다.
 vote_gate_limit_sec=${VOTE_GATE_LIMIT_SEC:-9}
+# 배분이 열려 있는데 뒷단 도착이 멎어도 봐 주는 시간(ms). 조인 구간의 프로브가
+# 초당 한 건 아래라 몇 표본은 그냥 평평하다 — 표본 수로 세면 정상을 잡는다.
+tail_idle_ms=${TAIL_IDLE_MS:-8000}
 # 해제 표시와 크레딧이 실제로 오르는 사이의 유예(ms). 표시는 로그로 잡는데
 # 크레딧은 다음 배분 틱에서야 오른다 — 틱이 1초라 그보다 넉넉히 준다.
 release_grace_ms=${RELEASE_GRACE_MS:-1500}
@@ -61,7 +64,8 @@ verdict=$(awk \
     -v limit_sec="$recovery_limit_sec" -v burst="$burst_limit" \
     -v divisor="$idle_divisor" -v step="$ramp_step" \
     -v min_baseline="$min_baseline" -v recovered_pct="$recovered_pct" \
-    -v grace_ms="$release_grace_ms" -v vote_limit="$vote_gate_limit_sec" '
+    -v grace_ms="$release_grace_ms" -v vote_limit="$vote_gate_limit_sec" \
+    -v tail_idle_ms="$tail_idle_ms" '
     # **awk 의 exit 는 END 를 건너뛰지 않는다.** 표시를 안 두면 본문에서 낸
     # 판정 뒤에 END 가 한 줄을 더 찍고, 부르는 쪽은 둘 중 뒤엣것을 읽는다.
     function layers() {
@@ -118,6 +122,7 @@ verdict=$(awk \
             enterN++
             if (credit <= nodes) { entered = 1 }
         }
+        if (phase == "유지") { holdN++ }
         if (phase == "유지" && credit > nodes) {
             fail(sprintf("조임이 유지되지 않았다 — 크레딧 %d 가 상한 %d 를 넘었다", credit, nodes))
         }
@@ -138,13 +143,23 @@ verdict=$(awk \
             recN++
             if (recN == 1) { recT = t; recFirstServed = served }
             lastRecT = t
-            # 꼬리에서 도착이 멎으면 그 표본 수를 센다. 다시 늘면 0 으로 되돌린다.
-            if (recPrevSample > 0 && served == recPrevSample) {
-                recTailFlat++
+            # **도착이 멎은 시간을 잰다. 표본 수가 아니다.**
+            #
+            # 그리고 **크레딧이 0 인 동안은 안 센다.** 서킷이 활짝 열린 구간에는
+            # 배분이 0 이라 뒷단에 아무것도 안 가는 것이 정상이다 — 표본 수로
+            # 세면 제품이 제 일을 한 구간을 "부하가 먼저 끝났다" 로 읽고, 이
+            # 하네스가 찾으려던 실패를 판정 불가로 덮는다.
+            if (credit > 0) {
+                if (recPrevSample > 0 && served == recPrevSample) {
+                    if (flatFrom == 0) { flatFrom = recPrevSampleT }
+                } else {
+                    flatFrom = 0
+                }
             } else {
-                recTailFlat = 0
+                flatFrom = 0
             }
-            recPrevSample = served
+            if (flatFrom > 0 && t - flatFrom > maxFlatMs) { maxFlatMs = t - flatFrom }
+            recPrevSample = served; recPrevSampleT = t
             # **자극을 걷은 것과 게이트가 풀린 것은 다르다.** 서킷은 제 창을
             # 채워야 닫히므로, 뒷단이 멀쩡해진 뒤로도 한동안 조인 채로 있다.
             # 그 구간의 낮은 크레딧은 램프가 만든 것이 아니라 게이트가 만든
@@ -232,10 +247,13 @@ verdict=$(awk \
         if (!recN) { block("회복 구간에 표본이 없다") }
         # **유입이 죽은 꼬리로 판정하지 않는다.** 러너의 산술이 다시 어긋나도
         # 여기서 끊긴다 — 앞선 회차가 그 꼬리를 분모에 넣고 결론을 냈다.
-        if (recTailFlat > 3 && recN > 6) {
-            block(sprintf("회복 구간 끝 %d 표본에 뒷단 도착이 없다 — 부하가 먼저 끝났다",
-                    recTailFlat))
+        if (maxFlatMs > tail_idle_ms) {
+            block(sprintf("배분이 열려 있는데 뒷단 도착이 %.1f 초 없다 — 부하가 먼저 끝났다",
+                    maxFlatMs / 1000.0))
         }
+        # **유지 구간에 표본이 있어야 한다.** 없으면 조임이 붙어 있었는지를 한
+        # 번도 안 보고 지나간다 — 그 구간을 재려고 만든 회차다.
+        if (!holdN) { block("유지 구간에 표본이 없다 — 조임이 붙어 있었는지를 못 본다") }
 
         # **게이트가 안 풀렸으면 회복이 시작도 안 한 것이다.** 원인을 이름으로
         # 부른다 — 그러지 않으면 램프의 기준이 대신 울려, 램프가 못 한 일처럼

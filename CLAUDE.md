@@ -160,8 +160,12 @@ waiting/
 
 ```bash
 .claude/hooks/review-branch.sh          # 기계 검사 — CodeRabbit 이 볼 것을 먼저 본다
-./gradlew build jacocoTestCoverageVerification pitest
+./gradlew build
 ```
+
+**뮤테이션은 `main` 으로 PR 을 열 때만 돌린다.** 30분이 걸려 매 PR 마다 돌리면
+그동안 아무것도 못 한다. 임계와 읽는 법은
+[ai/rules/85-review-agents.md](ai/rules/85-review-agents.md).
 
 `gh pr create` 는 **기계 검사가 통과해야 실행된다** (`.claude/hooks/guard-pr.sh`).
 막히면 우회하지 말고 고친다.

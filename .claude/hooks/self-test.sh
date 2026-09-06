@@ -503,10 +503,37 @@ printf '{"tool_input":{"command":"git status"}}' \
     | "$ROOT/.claude/hooks/guard-pr.sh" >/dev/null 2>&1
 unrelated=$?
 
-# **명령 자리인지 본다.** 문자열 어딘가에 그 낱말이 있기만 해도 막으면 문서나
-# 기억 파일에 예시로 적는 명령까지 걸린다. 실제로 그렇게 두 번 막혔다.
-mentioned=$(printf '{"tool_input":{"command":"echo x  # gh pr create --title 예시"}}' \
-    | "$ROOT/.claude/hooks/guard-pr.sh" >/dev/null 2>&1; echo $?)
+# **무엇이 명령이고 무엇이 자료인지 본다.**
+#
+# 부분 일치로 막으면 문서에 예시로 적은 명령까지 걸리고, 앞 토큰 허용 목록으로
+# 가리면 개행·sudo·명령 치환이 통째로 빠져나간다. 양쪽을 한 표로 못 박는다.
+#
+# **저장소 밖에서 돌린다.** 안에서 돌리면 그날 작업 트리가 깨끗한지에 따라
+# 통과 여부가 갈려, 회귀했는데도 초록이 된다.
+# 줄바꿈은 `\n` 으로 적고 편다 — 한 줄에 한 사례여야 표가 읽힌다.
+guard_bad=0
+while IFS='|' read -r want name probe; do
+    [[ -z "$want" ]] && continue
+    got=$(cd /tmp && printf '%b' "$probe" | jq -Rs '{tool_input:{command:.}}' \
+        | "$ROOT/.claude/hooks/guard-pr.sh" >/dev/null 2>&1; echo $?)
+    if [[ "$got" != "$want" ]]; then
+        printf '  FAIL 가드 판별: %s (exit %s, 기대 %s)\n' "$name" "$got" "$want"
+        guard_bad=$((guard_bad + 1))
+    fi
+done <<'GUARD'
+2|맨 앞|gh pr create --base develop
+2|개행 뒤|git push\ngh pr create --base develop
+2|sudo 뒤|sudo gh pr create --base develop
+2|세미콜론이 붙음|git add -A; gh pr create
+2|환경변수 접두|FOO=1 gh pr create
+2|명령 치환|url=$(gh pr create --base develop)
+2|파이프 붙임|echo hi|gh pr create
+2|따옴표 안 실행|bash -c "gh pr create --base develop"
+0|주석 뒤|echo x  # gh pr create --title 예시
+0|줄 안 주석|git status\n# gh pr create --title 예시
+0|히어독 본문|python3 - <<'PY'\ns = 'gh pr create --title x'\nPY
+0|무관한 명령|git status
+GUARD
 
 # **증거가 없으면 막아야 한다.** 알리기만 하던 시절에 매 PR 마다 건너뛰었고,
 # 뒤늦게 돌렸더니 불변식 위반 하나와 치명 둘이 나왔다.
@@ -545,10 +572,10 @@ if ((nostamp == 2)); then
 else
     printf '  FAIL 증거가 없는데 통과시켰다 (exit %d)\n' "$nostamp"; fail=$((fail + 1))
 fi
-if ((mentioned == 0)); then
-    printf '  ok   주석에 적힌 명령은 안 막는다\n'; pass=$((pass + 1))
+if ((guard_bad == 0)); then
+    printf '  ok   명령과 자료를 가려 막는다\n'; pass=$((pass + 1))
 else
-    printf '  FAIL 주석에 적힌 명령을 막았다 (exit %d)\n' "$mentioned"; fail=$((fail + 1))
+    printf '  FAIL 가드 판별이 %d 건 어긋난다\n' "$guard_bad"; fail=$((fail + 1))
 fi
 if ((blocked == 2)); then
     printf '  ok   실제 위반에서 PR 생성을 막는다\n'; pass=$((pass + 1))

@@ -123,17 +123,20 @@ run_case "회복이 안 끝나면 미달" 1 "회복이 안 끝났다" -- "$work/
 } > "$work/slowdone.txt"
 run_case "회복이 한계를 넘으면 미달" 1 "초 걸렸다" -- "$work/slowdone.txt"
 
-# **잔여를 잰다.** 자극을 걷는 순간 반쯤 열려 있던 구간이 언제 끝났는지가 회차
-# 간 비교의 눈금이다. 이 칸이 잠들면 위상이 다른 두 회차의 차이를 공급이
-# 좋아진 것으로 읽는다.
+# **완전히 열린 노드가 없으면 유예와 무관하게 잰다.** 재진입은 열림을 거쳐야만
+# 나므로, 표에 `OPEN` 이 한 번도 없으면 섞일 구간이 없다. `HALF_OPEN` 을 부분
+# 문자열로 보면 이 회차가 통째로 버려진다.
 {
     echo '# 정상'; normal 0 0
     echo '# 진입'; gated 1600 160 2 3
     echo '# 유지'; gated 2200 160 2 5
     echo '# 회복'
-    printf '%s 2 160 %s HALF_OPEN\n' 3200 "$NODES"
-    printf '%s 2 180 %s HALF_OPEN\n' 3400 "$NODES"
-    printf '%s 4 200 %s OPEN\n' 3800 "$NODES"
+    i=0
+    while [ $i -lt 34 ]; do
+        printf '%s 2 %s %s HALF_OPEN\n' $((3200 + i * 200)) $((160 + i)) "$NODES"
+        i=$((i + 1))
+    done
+    printf '%s 4 200 %s CLOSED\n' 10000 "$NODES"
     echo '# 해제'; echo '# 승계'
     printf '%s 8 260 %s CLOSED\n' 13200 "$NODES"
     printf '%s 16 360 %s CLOSED\n' 18200 "$NODES"
@@ -142,19 +145,20 @@ run_case "회복이 한계를 넘으면 미달" 1 "초 걸렸다" -- "$work/slow
     printf '%s 128 660 %s CLOSED\n' 33200 "$NODES"
     printf '%s 256 760 %s CLOSED\n' 36200 "$NODES"
     printf '%s 300 800 %s CLOSED\n' 38200 "$NODES"
-} > "$work/residual.txt"
-run_case "반쯤 열린 채 시작하면 잔여를 잰다" 1 "잔여 0.6초" -- "$work/residual.txt"
+} > "$work/halfopenonly.txt"
+run_case "열린 노드가 없으면 유예를 안 탄다" 1 "잔여 6.8초" -- "$work/halfopenonly.txt"
 
 # **한 노드가 먼저 나가도 안 끝난다.** 표는 노드별 상태를 접은 문자열이라 첫
-# 변화로 끊으면 회차마다 제일 짧은 노드의 값이 적힌다.
+# 변화로 끊으면 회차마다 제일 짧은 노드의 값이 적힌다. 먼저 나간 노드는 닫힌
+# 것이지 열린 것이 아니다 — `CLOSED` 를 열림으로 읽으면 유예가 잘못 걸린다.
 {
     echo '# 정상'; normal 0 0
     echo '# 진입'; gated 1600 160 2 3
     echo '# 유지'; gated 2200 160 2 5
     echo '# 회복'
     printf '%s 2 160 %s HALF_OPEN\n' 3200 "$NODES"
-    printf '%s 2 180 %s HALF_OPEN|OPEN\n' 3400 "$NODES"
-    printf '%s 4 200 %s OPEN\n' 3800 "$NODES"
+    printf '%s 2 180 %s CLOSED|HALF_OPEN\n' 3400 "$NODES"
+    printf '%s 4 200 %s CLOSED\n' 3800 "$NODES"
     echo '# 해제'; echo '# 승계'
     printf '%s 8 260 %s CLOSED\n' 13200 "$NODES"
     printf '%s 16 360 %s CLOSED\n' 18200 "$NODES"
@@ -165,6 +169,32 @@ run_case "반쯤 열린 채 시작하면 잔여를 잰다" 1 "잔여 0.6초" -- 
     printf '%s 300 800 %s CLOSED\n' 38200 "$NODES"
 } > "$work/staggered.txt"
 run_case "노드가 엇갈려 나가면 마지막까지 잰다" 1 "잔여 0.6초" -- "$work/staggered.txt"
+
+# **유예 경계는 재진입이 시작되는 시각이다.** 열린 노드는 그 시각에 반쯤 열리므로
+# 경계 자신이 이미 오염이다. 여기서 값을 적으면 재진입이 섞인 값을 적는다.
+{
+    echo '# 정상'; normal 0 0
+    echo '# 진입'; gated 1600 160 2 3
+    echo '# 유지'; gated 2200 160 2 5
+    echo '# 회복'
+    printf '%s 2 160 %s HALF_OPEN\n' 3200 "$NODES"
+    i=0
+    while [ $i -lt 25 ]; do
+        printf '%s 2 %s %s HALF_OPEN|OPEN\n' $((3400 + i * 200)) $((161 + i)) "$NODES"
+        i=$((i + 1))
+    done
+    # 열린 노드를 처음 본 3400 에서 정확히 열림 대기만큼 뒤다.
+    printf '%s 4 200 %s OPEN\n' 8400 "$NODES"
+    echo '# 해제'; echo '# 승계'
+    printf '%s 8 260 %s CLOSED\n' 13200 "$NODES"
+    printf '%s 16 360 %s CLOSED\n' 18200 "$NODES"
+    printf '%s 32 460 %s CLOSED\n' 23200 "$NODES"
+    printf '%s 64 560 %s CLOSED\n' 28200 "$NODES"
+    printf '%s 128 660 %s CLOSED\n' 33200 "$NODES"
+    printf '%s 256 760 %s CLOSED\n' 36200 "$NODES"
+    printf '%s 300 800 %s CLOSED\n' 38200 "$NODES"
+} > "$work/grace.txt"
+run_case "유예 경계는 못 잰 쪽이다" 1 "잔여 -1.0초" -- "$work/grace.txt"
 
 # **표가 재진입을 숨기면 못 잰 것으로 둔다.** 먼저 나간 노드가 열림 대기 뒤 다시
 # 반쯤 열리면 그 구간이 처음 구간의 잔여에 섞여, 회차 비교가 부풀린 값으로 돈다.
@@ -190,14 +220,30 @@ run_case "노드가 엇갈려 나가면 마지막까지 잰다" 1 "잔여 0.6초
     printf '%s 256 760 %s CLOSED\n' 36200 "$NODES"
     printf '%s 300 800 %s CLOSED\n' 38200 "$NODES"
 } > "$work/reopen.txt"
-run_case "재진입을 못 가르면 잔여는 -1" 1 "-1.0초" -- "$work/reopen.txt"
+run_case "재진입을 못 가르면 잔여는 -1" 1 "잔여 -1.0초" -- "$work/reopen.txt"
 
 # 회복 구간에 닿기 전에 나는 실패도 층 수치를 싣는다. 그 자리의 0 은 잰 값이 아니다.
-run_case "회복 전에 실패해도 잔여는 -1" 1 "-1.0초" -- "$work/late.txt"
+# **유지 구간에서 끊기는 표본이라야 한다.** 회복 표본을 다 읽고 끝에서 나는 실패는
+# 초기화 자리를 늦게 잡아도 -1 이 찍혀, 고치려던 것을 안 문다.
+run_case "회복 전에 실패해도 잔여는 -1" 1 "잔여 -1.0초" -- "$work/leak.txt"
+
+# **충족 회차에도 잔여가 실린다.** 실측에서 사람이 읽는 자리가 그 줄이라, 칸이
+# 어긋나 있으면 미달 회차에서만 맞는 값을 본다.
+{
+    echo '# 정상'; normal 0 0
+    echo '# 진입'; gated 1600 160 2 3
+    echo '# 유지'; gated 2200 160 2 5
+    echo '# 회복'
+    printf '%s 2 160 %s HALF_OPEN\n' 3200 "$NODES"
+    printf '%s 2 180 %s HALF_OPEN\n' 3400 "$NODES"
+    recovering 3600 200
+    echo '# 해제'; echo '# 승계'; printf '%s 300 %s %s CLOSED\n' 5600 380 "$NODES"
+} > "$work/passresidual.txt"
+run_case "충족 회차도 잔여를 싣는다" 0 "잔여 *0.4초" -- "$work/passresidual.txt"
 
 # **못 잰 것과 0 을 가른다.** 반쯤 열린 노드가 없으면 잴 잔여가 없는데, 0 으로
 # 찍으면 "즉시 전이했다" 로 읽힌다.
-run_case "잔여를 못 재면 -1 로 적는다" 0 "-1.0초" -- "$(healthy_run noresidual.txt)"
+run_case "잔여를 못 재면 -1 로 적는다" 0 "잔여 *-1.0초" -- "$(healthy_run noresidual.txt)"
 
 # **봉우리가 기준선의 1.2 배를 넘으면 회복이 곧 2차 장애다** (RC4).
 {
@@ -239,6 +285,9 @@ run_case "풀린 뒤 한산 통과가 막히면 미달" 1 "한산 통과" -- "$w
     printf '%s 1 175 1 OPEN\n' 5300
 } > "$work/stuck.txt"
 run_case "게이트가 안 풀리면 미달" 1 "안 닫혀" -- "$work/stuck.txt"
+# 회복 첫 표본이 이미 활짝 열려 있으면 잴 잔여가 없다. 0 으로 찍으면 그 회차가
+# "즉시 전이했다" 가 된다.
+run_case "회복이 열린 채 시작하면 잔여는 -1" 1 "잔여 -1.0초" -- "$work/stuck.txt"
 
 # **승계가 계단을 되살리면 안 된다.** 이어받은 노드는 조인 적이 없어 램프가
 # 안 걸린다 — 게이트웨이가 둘 이상일 때만 열리는 구멍이라 여기서만 잡힌다.

@@ -117,9 +117,9 @@ final class CircuitTransitionLog {
                     window.count.sum(), window.slow.sum(), window.failed.sum());
         }
 
-        /** 구간이 산 시간(초). 없으면 0 이다. */
-        static long aliveSec(Probes window, long now) {
-            return window == null ? 0 : NANOSECONDS.toSeconds(now - window.since());
+        /** 구간이 산 시간(ms). 상한이 1초 미만일 수 있어 초로 자르면 0 이 된다. */
+        static long aliveMs(Probes window, long now) {
+            return window == null ? 0 : NANOSECONDS.toMillis(now - window.since());
         }
     }
 
@@ -167,11 +167,11 @@ final class CircuitTransitionLog {
         // 다 채우고 실패한 것과 못 채운 채 만료된 것은 고칠 자리가 다르다.
         Probes window = probes.remove(name);
         if (before != null) {
-            log.warn("회복 시도가 실패했다 — {} 가 {}초째 열려 있다, {} window={}/{}s",
+            log.warn("회복 시도가 실패했다 — {} 가 {}초째 열려 있다, {} window={}/{}ms",
                     name, NANOSECONDS.toSeconds(now - before.since()),
-                    Probes.describe(window), Probes.aliveSec(window, now),
+                    Probes.describe(window), Probes.aliveMs(window, now),
                     breaker.getCircuitBreakerConfig()
-                            .getMaxWaitDurationInHalfOpenState().toSeconds());
+                            .getMaxWaitDurationInHalfOpenState().toMillis());
         }
     }
 
@@ -182,13 +182,13 @@ final class CircuitTransitionLog {
         long at = nanoTicker.getAsLong();
         Opened window = opened.remove(name);
         if (window == null) {
-            log.info("서킷 닫힘 — {} 가 다시 받는다, {} window={}s", name,
-                    Probes.describe(probe), Probes.aliveSec(probe, at));
+            log.info("서킷 닫힘 — {} 가 다시 받는다, {} window={}ms", name,
+                    Probes.describe(probe), Probes.aliveMs(probe, at));
             return;
         }
-        log.info("서킷 닫힘 — {} 가 {}초 동안 {}건을 막았다, {} window={}s", name,
+        log.info("서킷 닫힘 — {} 가 {}초 동안 {}건을 막았다, {} window={}ms", name,
                 NANOSECONDS.toSeconds(at - window.since()),
                 window.blocked().sum(),
-                Probes.describe(probe), Probes.aliveSec(probe, at));
+                Probes.describe(probe), Probes.aliveMs(probe, at));
     }
 }

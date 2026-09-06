@@ -249,6 +249,26 @@ class CircuitTransitionLogTest {
                 .satisfies(e -> assertThat(e.getFormattedMessage()).contains("slow=0"));
     }
 
+    /** 상한이 1초 미만일 수 있다. 초로 자르면 그 회차가 0/0 으로 찍힌다. */
+    @Test
+    @DisplayName("1초_미만_상한도_0_이_아니다")
+    void 초_미만_상한도_0_이_아니다() {
+        CircuitBreakerRegistry 짧은 = BackendCircuit.registry(new BackendCircuitProperties(
+                Duration.ofSeconds(10), 20, 50f, Duration.ofMillis(느림_임계_ms), 50f,
+                Duration.ofSeconds(5), Duration.ofMillis(500), 허용_프로브));
+        CircuitTransitionLog.of(나노::get).watch(짧은);
+        CircuitBreaker 서킷 = 짧은.circuitBreaker(이름);
+        서킷.transitionToOpenState();
+        서킷.transitionToHalfOpenState();
+        나노.addAndGet(Duration.ofMillis(300).toNanos());
+
+        서킷.transitionToOpenState();
+
+        assertThat(남은것("회복 시도가 실패했다")).last()
+                .satisfies(e -> assertThat(e.getFormattedMessage())
+                        .contains("window=300/500ms"));
+    }
+
     /** 시간은 계수와 달리 사건 순서에 안 눕는다. */
     @Test
     @DisplayName("half_open_이_산_시간을_남긴다")
@@ -264,7 +284,7 @@ class CircuitTransitionLogTest {
         assertThat(남은것("회복 시도가 실패했다")).singleElement()
                 .satisfies(e -> {
                     assertThat(e.getFormattedMessage())
-                            .as("시한 근방이면 표본을 못 채운 것이다").contains("window=29/30s");
+                            .as("시한 근방이면 표본을 못 채운 것이다").contains("window=29000/30000ms");
                     assertThat(e.getFormattedMessage())
                             .as("열린 구간은 그보다 길다").contains("가 36초째 열려 있다");
                 });

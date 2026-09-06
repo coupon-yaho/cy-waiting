@@ -144,6 +144,43 @@ class CircuitTransitionLogTest {
      * <b>나중에 생기는 서킷도 받아야 한다.</b> 서킷은 인스턴스별이라 뒷단이 늘면
      * 이름도 는다 — 붙일 때 있던 것만 보면 새 인스턴스의 장애가 통째로 조용하다.
      */
+    /**
+     * <b>왜 다시 열렸는지가 로그에 없다.</b> 반쯤 열린 창이 표본을 다 채우고
+     * 실패한 것과, 표본을 못 채운 채 시한이 만료된 것은 고칠 값이 다르다 —
+     * 앞엣것은 뒷단이고 뒤엣것은 프로브 공급이다. 실측에서 그 둘을 못 갈랐다.
+     */
+    @Test
+    @DisplayName("회복_실패에_프로브_수를_남긴다")
+    void 회복_실패에_프로브_수를_남긴다() {
+        서킷().transitionToOpenState();
+        서킷().transitionToHalfOpenState();
+        서킷().onError(1, java.util.concurrent.TimeUnit.MILLISECONDS, new RuntimeException("느리다"));
+        서킷().onError(1, java.util.concurrent.TimeUnit.MILLISECONDS, new RuntimeException("느리다"));
+
+        서킷().transitionToOpenState();
+
+        assertThat(남은것("회복 시도가 실패했다")).singleElement()
+                .satisfies(e -> assertThat(e.getFormattedMessage())
+                        .as("프로브를 몇 건 모았는지가 있어야 창을 태운 것과 시한 만료가 갈린다")
+                        .contains("프로브 2건"));
+    }
+
+    /** 다음 창은 처음부터 센다. 안 그러면 앞 창의 수가 다음 판단에 섞인다. */
+    @Test
+    @DisplayName("반쯤_열릴_때마다_프로브_수를_다시_센다")
+    void 반쯤_열릴_때마다_프로브_수를_다시_센다() {
+        서킷().transitionToOpenState();
+        서킷().transitionToHalfOpenState();
+        서킷().onError(1, java.util.concurrent.TimeUnit.MILLISECONDS, new RuntimeException("느리다"));
+        서킷().transitionToOpenState();
+        서킷().transitionToHalfOpenState();
+
+        서킷().transitionToOpenState();
+
+        assertThat(남은것("회복 시도가 실패했다")).last()
+                .satisfies(e -> assertThat(e.getFormattedMessage()).contains("프로브 0건"));
+    }
+
     @Test
     @DisplayName("나중에_생긴_서킷도_따라_붙는다")
     void 나중에_생긴_서킷도_따라_붙는다() {

@@ -4,6 +4,7 @@ import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import java.time.Duration;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -72,15 +73,29 @@ final class CircuitTransitionLog {
                 // **프로브도 우리가 센다.** 같은 이유다 — 전이 순간에 라이브러리
                 // 값을 읽으면 이미 새 상태의 것이라, 방금 끝난 창이 몇 건을
                 // 모았는지는 거기 없다.
-                .onSuccess(event -> probed(breaker.getName()))
-                .onError(event -> probed(breaker.getName()));
+                .onSuccess(event -> probed(breaker, event.getElapsedDuration(), false))
+                .onError(event -> probed(breaker, event.getElapsedDuration(), true));
     }
 
-    /** 반쯤 열린 창에서만 센다. 닫힌 구간의 정상 호출까지 세면 뜻이 없다. */
-    private void probed(String name) {
-        Probes window = probes.get(name);
-        if (window != null) {
-            window.count().increment();
+    /**
+     * 반쯤 열린 창에서만 센다. 닫힌 구간의 정상 호출까지 세면 뜻이 없다.
+     *
+     * <p><b>느림과 오류를 갈라 센다.</b> 창은 두 길로 열리고 고칠 자리가 다르다 —
+     * 오류는 뒷단이 죽은 것이고, 느림은 자극 이전의 호출이 창에 남은 쪽일 수 있다.
+     */
+    private void probed(CircuitBreaker breaker, Duration elapsed, boolean failed) {
+        Probes window = probes.get(breaker.getName());
+        if (window == null) {
+            return;
+        }
+        window.count().increment();
+        if (failed) {
+            window.failed().increment();
+        }
+        // 느림은 성공이어도 느림이다. 판정하는 임계는 서킷이 든 그 값을 그대로 쓴다.
+        if (elapsed.compareTo(breaker.getCircuitBreakerConfig()
+                .getSlowCallDurationThreshold()) >= 0) {
+            window.slow().increment();
         }
     }
 
@@ -91,7 +106,17 @@ final class CircuitTransitionLog {
      * 만료된 것이고, 훨씬 짧으면 채우고 실패한 것이다 — 계수 한 건이 경계에서
      * 어긋나도 이 판단은 안 눕는다.
      */
-    private record Probes(long since, LongAdder count) {
+    private record Probes(long since, LongAdder count, LongAdder slow, LongAdder failed) {
+
+        static Probes opened(long since) {
+            return new Probes(since, new LongAdder(), new LongAdder(), new LongAdder());
+        }
+
+        /** 창이 무엇을 모았는지. 총계만으로는 태운 사유가 안 갈린다. */
+        String describe() {
+            return "%d건(느림 %d · 오류 %d)".formatted(
+                    count.sum(), slow.sum(), failed.sum());
+        }
     }
 
     private void blocked(String name) {
@@ -108,7 +133,7 @@ final class CircuitTransitionLog {
             // 프로브 구간도 남긴다. 열림과 닫힘만 보면 회복을 몇 번 시도했는지가 빈다.
             case HALF_OPEN -> {
                 // 창마다 처음부터 센다. 안 그러면 앞 창의 수가 다음 판단에 섞인다.
-                probes.put(name, new Probes(nanoTicker.getAsLong(), new LongAdder()));
+                probes.put(name, Probes.opened(nanoTicker.getAsLong()));
                 log.info("서킷 반쯤 열림 — {} 로 프로브를 보낸다. 실패하면 다시 연다", name);
             }
             default -> {
@@ -140,9 +165,9 @@ final class CircuitTransitionLog {
         // 프로브 공급이다. 수가 없으면 로그로는 그 둘이 같은 줄이다.
         Probes window = probes.remove(name);
         if (before != null) {
-            log.warn("회복 시도가 실패했다 — {} 가 {}초째 열려 있다, 프로브 {}건 · 창 {}초",
+            log.warn("회복 시도가 실패했다 — {} 가 {}초째 열려 있다, 프로브 {} · 창 {}초",
                     name, NANOSECONDS.toSeconds(now - before.since()),
-                    window == null ? 0 : window.count().sum(),
+                    window == null ? "0건" : window.describe(),
                     window == null ? 0 : NANOSECONDS.toSeconds(now - window.since()));
         }
     }

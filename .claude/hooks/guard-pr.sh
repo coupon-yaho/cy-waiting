@@ -13,35 +13,73 @@ set -uo pipefail
 input=$(cat)
 cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // empty')
 
-# PR 생성이 아니면 통과.
-#
 # **기본은 막는 쪽이다.** 앞 토큰 허용 목록으로 "명령 자리" 를 가리려 했더니
 # 개행·`sudo`·`$( )`·파이프가 전부 빠져나갔다. 그래서 반대로 센다 — 주석과
 # 히어독 본문만 걷어내고, 남은 자리에 그 명령이 있으면 막는다.
-[[ "$cmd" != *"gh pr create"* ]] && exit 0
+CREATE_RE='(^|[^[:alnum:]_.-])gh[[:space:]]+pr[[:space:]]+create([^[:alnum:]_-]|$)'
+
+# 줄 이음은 먼저 붙인다. 안 붙이면 `gh pr \` 다음 줄의 `create` 가 안 보인다.
+# 따옴표로 묶어야 패턴이 글자 그대로 쓰인다 — 안 묶으면 역슬래시가 다음 글자를
+# 벗기는 뜻이 되어 줄바꿈만 지운다.
+join=$'\\'$'\n'
+cmd_joined=${cmd//"$join"/ }
+
+# 사전 걸러내기는 본 판별과 같은 관용도여야 한다. 더 엄하면 공백 하나로 게이트를
+# 통째로 지나간다.
+[[ ! "$cmd_joined" =~ $CREATE_RE ]] && exit 0
+
+mapfile -t lines <<< "$cmd_joined"
+
+# 문자열 안의 `#` 는 주석이 아니다. 걷어내면 그 뒤에 붙은 진짜 명령이 숨는다.
+strip_comment() {
+    local line=$1 i prefix sq dq
+    for ((i = 0; i < ${#line}; i++)); do
+        [[ "${line:i:1}" == '#' ]] || continue
+        ((i > 0)) && [[ ! "${line:i-1:1}" =~ [[:space:]] ]] && continue
+        prefix=${line:0:i}
+        sq=${prefix//[^\']/}
+        dq=${prefix//[^\"]/}
+        ((${#sq} % 2 == 0 && ${#dq} % 2 == 0)) || continue
+        printf '%s' "$prefix"
+        return
+    done
+    printf '%s' "$line"
+}
+
+# `<<<` 는 히어독이 아니고, 문자열 안의 `<<` 도 아니다. **구분자가 뒤에 다시
+# 나올 때만** 히어독으로 친다 — 가짜 구분자는 다시 안 나오므로 저절로 걸러지고,
+# 진짜로 안 닫힌 히어독은 차단 쪽으로 떨어진다.
+HEREDOC_RE='(^|[^<])<<-?[[:space:]]*['\''"]?([^[:space:]'\''"<;&|]+)'
+opens_heredoc() {
+    local line=$1 from=$2 j
+    [[ "$line" =~ $HEREDOC_RE ]] || return 1
+    delim=${BASH_REMATCH[2]}
+    delim=${delim%[\'\"]}
+    for ((j = from; j < ${#lines[@]}; j++)); do
+        [[ "${lines[j]}" =~ ^[[:space:]]*"$delim"[[:space:]]*$ ]] && return 0
+    done
+    return 1
+}
 
 creating=0
 delim=""
-in_heredoc=0
-while IFS= read -r line; do
-    if ((in_heredoc)); then
-        [[ "$line" =~ ^[[:space:]]*"$delim"[[:space:]]*$ ]] && in_heredoc=0
+skip_to=-1
+for ((n = 0; n < ${#lines[@]}; n++)); do
+    if ((n <= skip_to)); then
         continue
     fi
-    # 히어독이 시작하면 그 본문은 명령이 아니라 자료다. 문서에 예시로 적는
-    # 명령이 여기 들어온다.
-    if [[ "$line" =~ \<\<-?[[:space:]]*[\'\"]?([A-Za-z_][A-Za-z0-9_]*) ]]; then
-        delim="${BASH_REMATCH[1]}"
-        in_heredoc=1
+    line=${lines[n]}
+    if opens_heredoc "$line" $((n + 1)); then
+        for ((m = n + 1; m < ${#lines[@]}; m++)); do
+            [[ "${lines[m]}" =~ ^[[:space:]]*"$delim"[[:space:]]*$ ]] && { skip_to=$m; break; }
+        done
     fi
-    # 주석은 걷는다. `#` 이 토큰의 시작일 때만이다 — 문자열 안의 `#` 뒤를 걷으면
-    # 그 뒤에 붙은 진짜 명령이 숨는다.
-    line=$(printf '%s' "$line" | sed 's/\(^\|[[:space:]]\)#.*$//')
-    if [[ "$line" =~ (^|[^[:alnum:]_.-])gh[[:space:]]+pr[[:space:]]+create([^[:alnum:]_-]|$) ]]; then
+    if [[ "$(strip_comment "$line")" =~ $CREATE_RE ]]; then
         creating=1
+        create_line=$line
         break
     fi
-done <<< "$cmd"
+done
 ((creating)) || exit 0
 
 # **검사를 못 돌리면 막는다.** 통과시키면 게이트가 인프라 오류 한 번에
@@ -59,12 +97,16 @@ fi
 
 # base 를 명령에서 뽑는다. 없으면 develop
 # **명령 문자열 전체를 훑지 않는다.** `--title "--base release"` 처럼 인용부호
-# 안에 들어간 값을 옵션으로 착각한다. 인자를 토큰으로 쪼갠 뒤 옵션 자리만 본다.
+# 안에 들어간 값을 옵션으로 착각하고, 히어독 본문의 낱말까지 옵션으로 센다.
+# 명령이 있던 줄만 토큰으로 쪼갠다.
 #
-# 실행하지 않고 쪼갠다 — `xargs` 는 셸 인용 규칙을 그대로 따르면서 명령을
-# 부르지 않는다.
+# 실행하지 않고 쪼갠다 — `xargs` 가 인용을 벗기되 명령을 부르지 않는다. 짝이
+# 안 맞으면 하드 에러이므로 그때는 기본값으로 안 넘어가고 막는다.
 base=""
-mapfile -t args < <(printf '%s' "$cmd" | xargs -n1 printf '%s\n' 2>/dev/null)
+if ! mapfile -t args < <(printf '%s' "$create_line" | xargs -n1 printf '%s\n' 2>/dev/null); then
+    echo "명령을 못 쪼갰다 — 어느 기준으로 볼지 모르므로 막는다." >&2
+    exit 2
+fi
 for ((i = 0; i < ${#args[@]}; i++)); do
     case "${args[i]}" in
         --base=*) base="${args[i]#--base=}"; break ;;

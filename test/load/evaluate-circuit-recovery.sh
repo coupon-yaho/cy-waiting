@@ -31,6 +31,9 @@ ramp_step=${RAMP_STEP:-2.0}
 min_baseline=${MIN_BASELINE:-4}
 # 회복을 끝났다고 볼 기준선 대비 비율.
 recovered_pct=${RECOVERED_PCT:-95}
+# 해제 표시와 크레딧이 실제로 오르는 사이의 유예(ms). 표시는 로그로 잡는데
+# 크레딧은 다음 배분 틱에서야 오른다 — 틱이 1초라 그보다 넉넉히 준다.
+release_grace_ms=${RELEASE_GRACE_MS:-1500}
 
 if [ ! -s "$samples" ]; then
     echo "::error title=서킷 회복::표본이 비었다 — 회차를 못 쟀다"
@@ -47,7 +50,8 @@ done
 verdict=$(awk \
     -v limit_sec="$recovery_limit_sec" -v burst="$burst_limit" \
     -v divisor="$idle_divisor" -v step="$ramp_step" \
-    -v min_baseline="$min_baseline" -v recovered_pct="$recovered_pct" '
+    -v min_baseline="$min_baseline" -v recovered_pct="$recovered_pct" \
+    -v grace_ms="$release_grace_ms" '
     # **awk 의 exit 는 END 를 건너뛰지 않는다.** 표시를 안 두면 본문에서 낸
     # 판정 뒤에 END 가 한 줄을 더 찍고, 부르는 쪽은 둘 중 뒤엣것을 읽는다.
     function fail(msg) { decided = 1; printf "MISS %s\n", msg; exit }
@@ -115,10 +119,16 @@ verdict=$(awk \
                 releasedAt = t
             }
             if (releasedAt) {
+                relN++
                 # **풀린 뒤로는 한산 통과가 성립해야 한다** (R1). 노드당 몫이
                 # 유휴 나눗값 아래면 그 상한이 0 이고, 줄 설 이유가 없는 쿠폰이
                 # 전 노드에서 줄을 선다.
-                if (credit < nodes * divisor) {
+                #
+                # **한 틱을 유예한다.** 해제는 로그로 잡는데 크레딧은 다음 배분
+                # 틱에서야 오른다 — 표본이 그보다 촘촘하면 그 사이 여러 표본이
+                # 아직 조인 값이고, 맞게 도는 제품이 미달로 적힌다. 표본 수가
+                # 아니라 시간으로 준다.
+                if (t - releasedAt > grace_ms && credit < nodes * divisor) {
                     fail(sprintf("풀린 뒤 한산 통과가 막혔다 — 크레딧 %d, 노드 %d, 최소 %d",
                             credit, nodes, nodes * divisor))
                 }
@@ -140,7 +150,11 @@ verdict=$(awk \
         #
         # 게이트가 아직 안 풀린 승계는 건너뛴다. 그 구간의 앞 값은 램프가 아니라
         # 게이트가 정한 것이라, 배수를 거기에 걸면 아무 뜻이 없다.
-        if (phase == "승계" && !handoverSeen && releasedAt) {
+        #
+        # **첫 표본만 보지 않는다.** 승계 뒤 몇 틱은 이어받은 노드가 제 스무더를
+        # 이월받고 첫 회차를 도는 구간이라, 계단이 둘째나 셋째 틱에 선다. 첫
+        # 표본만 보면 그 계단을 통째로 놓친다 — 이 하네스가 있는 이유가 거기다.
+        if (phase == "승계" && releasedAt) {
             handoverSeen = 1
             allowed = beforeHandover * step
             floorAllowed = nodes * divisor
@@ -150,7 +164,7 @@ verdict=$(awk \
                         beforeHandover, credit, int(allowed)))
             }
         }
-        if (phase != "승계") { beforeHandover = credit }
+        beforeHandover = credit
 
         prevServed = served; prevNodes = nodes; seen = 1
     }

@@ -34,6 +34,9 @@ SAMPLE_MS="${SAMPLE_MS:-200}"
 # 곧 초과 발급이기 때문이다. 그래서 서킷을 여는 길은 느린 호출뿐이고, 이 값은
 # 느린 호출 문턱(1.9초)보다 넉넉히 커야 한다.
 FAULT_LATENCY_MS="${FAULT_LATENCY_MS:-3000}"
+# 서킷이 10초 창을 채우고, 클러스터 투표가 돌고, 배분이 그 값을 읽는 데 몇 틱이
+# 든다. 느린 호출은 그 지연만큼 늦게 창에 들어가므로 자극 지연도 같이 센다.
+SETTLE_SEC=$((12 + FAULT_LATENCY_MS / 1000))
 COUPON="${COUPON:-c1}"
 OUT="${OUT:-circuit-recovery.txt}"
 
@@ -152,6 +155,17 @@ if [ "$RATE" -ge "$headroom" ]; then
     exit 2
 fi
 
+# **자극이 스텁의 동시 한도 안이어야 한다.** 넘으면 스텁이 즉시 503 을 내는데,
+# 그 503 은 서킷에 안 물리므로 느린 호출 비율을 희석해 서킷이 안 열린다 —
+# 진입을 못 만든 회차가 나온다. 새 계수도 그 503 은 안 세므로 표본에서도 사라진다.
+depth=$(( RATE * FAULT_LATENCY_MS / 1000 ))
+stub_cap=$($COMPOSE exec -T backend printenv MAX_INFLIGHT 2>/dev/null | tr -d '\r')
+case "$stub_cap" in ''|*[!0-9]*) stub_cap=0 ;; esac
+if [ "$stub_cap" -gt 0 ] && [ "$depth" -ge "$stub_cap" ]; then
+    echo "::error title=서킷 회복::기대 물림 ${depth} 이 스텁 동시 한도 ${stub_cap} 이상이다 — 즉시 503 이 느린 호출을 희석한다"
+    exit 2
+fi
+
 # ── 표본 뜨기 ────────────────────────────────────────────────────────────────
 #
 # **발행 크레딧을 읽는다. 게이지가 아니다.** `waiting.capacity.credit` 은 보고를
@@ -162,15 +176,29 @@ fi
 # **노드 수도 매번 읽는다.** 리더를 죽이면 그 수가 줄고, 한산 통과의 최소가
 # 그 수를 따라간다 — 시작 값을 박아 두면 승계 뒤 회차가 실제보다 두 배 높은
 # 문턱으로 판정된다. 지킨 회차가 미달로 적히는 자리다.
+#
+# **왕복을 줄인다.** 표본 하나에 도커를 세 번 치면 그 비용이 곧 표본 간격이 되고,
+# 그 간격은 회복 봉우리를 나누는 분모다 — 계기가 굵어지면 봉우리가 뭉개진다.
+# 크레딧과 노드 수는 스크립트 하나로 한 번에 받고, 스텁은 밖으로 열린 포트에서
+# 직접 읽는다.
+STUB_URL="${STUB_URL:-http://localhost:18090}"
+NODE_COUNT_LUA="local n = 0
+for _, k in ipairs(redis.call('HKEYS', KEYS[2])) do
+  if string.sub(k, 1, 3) ~= '#c:' then n = n + 1 end
+end
+return { redis.call('HGET', KEYS[1], '#credit') or '', tostring(n) }"
+
 sample_loop() {
+    local pair credit nodes served
     while :; do
-        credit=$(r HGET gw:snapshot '#credit')
-        nodes=$(r --raw HKEYS gw:instances | grep -cv '^#c:')
+        pair=$(r --raw EVAL "$NODE_COUNT_LUA" 2 gw:snapshot gw:instances)
+        credit=$(printf '%s' "$pair" | sed -n 1p)
+        nodes=$(printf '%s' "$pair" | sed -n 2p)
         # **받은 수를 센다. 처리 완료 수가 아니다.** 느린 구간에 밀린 것이
         # 회복 순간에 한꺼번에 끝나면 완료 수가 봉우리처럼 보인다 — 재려던
         # 유입이 아니라 밀린 일을 잰다 (RC4 는 수신 수로 잰다).
-        served=$($COMPOSE exec -T backend wget -qO- http://localhost:8090/stub/health \
-            2>/dev/null | sed 's/.*"accepted":\([0-9]*\).*/\1/')
+        served=$(curl -sf -m 2 "$STUB_URL/stub/health" 2>/dev/null \
+            | sed 's/.*"accepted":\([0-9]*\).*/\1/')
         case "$credit$served$nodes" in
             ''|*[!0-9]*) ;;
             *) printf '%s %s %s %s\n' "$(date +%s%3N)" "$credit" "$served" "$nodes" ;;
@@ -182,9 +210,23 @@ sample_loop() {
 mark() { printf '# %s\n' "$1" >> "$work/samples.txt"; }
 
 # ── 부하 ─────────────────────────────────────────────────────────────────────
-total_sec=$((NORMAL_SEC + HOLD_SEC + RECOVER_SEC))
-BASE_URLS="$bases" RATE="$RATE" DURATION="${total_sec}s" COUPON="$COUPON" \
-    k6 run --quiet test/load/circuit-recovery.js >"$work/k6.log" 2>&1 &
+#
+# **부하가 회차 전체를 덮어야 한다.** 구간 길이만 더해 놓고 진입 안정화와 해제
+# 대기를 빼먹었더니, 회복 구간 뒤쪽 27초가 유입 0 으로 떴다. 그 표본으로 잰
+# 도착률을 "서킷이 프로브를 못 채운다" 의 근거로 쓸 뻔했다 — 하네스가 부하를
+# 멈춘 것과 제품이 요청을 못 받는 것은 다르다.
+#
+# 최악은 게이트가 끝내 안 풀리는 길이다. 그쪽이 더 길면 그 값을 쓴다.
+tail_sec=$((HANDOVER_AFTER_SEC * 2))
+[ $((RECOVER_SEC / 2)) -gt "$tail_sec" ] && tail_sec=$((RECOVER_SEC / 2))
+total_sec=$((NORMAL_SEC + SETTLE_SEC + HOLD_SEC + RECOVER_SEC + tail_sec + 5))
+
+# **동시 실행자를 자극에 맞춰 잡는다.** 물림은 유입 × 지연이다. 모자라면 회차가
+# 통째로 판정 불가로 끝나고, 그때 고친 값이 조건도 같이 바꾼다.
+vus=$(( RATE * FAULT_LATENCY_MS / 1000 * 3 / 2 + 50 ))
+BASE_URLS="$bases" RATE="$RATE" DURATION="${total_sec}s" COUPON="$COUPON" VUS="$vus" \
+    k6 run --quiet --summary-export="$work/k6.json" test/load/circuit-recovery.js \
+    >"$work/k6.log" 2>&1 &
 loadpid=$!
 
 mark 정상
@@ -198,9 +240,7 @@ if ! $COMPOSE exec -T backend wget -qO- \
         "http://localhost:8090/stub/latency?ms=$FAULT_LATENCY_MS" >/dev/null 2>&1; then
     echo "자극을 못 넣었다"; exit 2
 fi
-# 서킷이 10초 창을 채우고, 클러스터 투표가 돌고, 배분이 그 값을 읽는 데 몇 틱이
-# 든다. 느린 호출은 그 지연만큼 늦게 창에 들어가므로 자극 지연도 같이 센다.
-sleep $(( 12 + FAULT_LATENCY_MS / 1000 ))
+sleep "$SETTLE_SEC"
 
 mark 유지
 sleep "$HOLD_SEC"
@@ -214,12 +254,19 @@ fi
 # **게이트가 풀린 순간을 제품에게 묻는다.** 크레딧으로 유추하면 승계로 노드
 # 수가 줄 때 같은 값이 갑자기 상한 위로 보여, 안 풀린 회차를 풀렸다고 적는다.
 # 배분은 그 전이를 로그로 남기므로 그것을 본다.
+# **회복이 시작한 시각에 앵커한다.** 창을 넉넉히 잡으면 예열이나 정상 구간에
+# 서킷이 한 번 흔들렸다 닫힌 줄을 주워, 안 풀린 회차가 풀린 것으로 적힌다.
+recover_at=$(date -u '+%Y-%m-%dT%H:%M:%S')
 echo "게이트가 풀리기를 기다린다"
 released=0
 for _ in $(seq 1 $((RECOVER_SEC * 2))); do
+    # **배분 쪽 짝을 본다.** 등록부의 게이트 로그는 노드마다 제 메모리로
+    # 찍는 줄이라, 비리더가 먼저 풀면 리더는 아직 조인 값을 발행 중이다 —
+    # 그 시점에 표시하면 맞게 도는 제품이 미달로 적힌다. 이 줄은 배분이
+    # 실제로 조임을 푼 자리의 짝이라 크레딧과 같은 시각을 가리킨다.
     for cid in $($COMPOSE ps -q gateway); do
-        if docker logs --since 5m "$cid" 2>&1 \
-                | grep -q "배분 게이트를 푼다 —.*→ CLOSED"; then
+        if docker logs --since "$recover_at" "$cid" 2>&1 \
+                    | grep -q "서킷 회복 —"; then
             released=1
             break
         fi
@@ -232,10 +279,18 @@ if [ "$released" != 1 ]; then
     echo "게이트가 안 풀렸다 — 승계는 건너뛴다"
     sleep "$((RECOVER_SEC / 2))"
     kill "$sampler" 2>/dev/null; sampler=""
-    wait "$loadpid" 2>/dev/null
+    wait "$loadpid" 2>/dev/null; k6rc=$?
     loadpid=""
     cp "$work/samples.txt" "$OUT"
-    exec test/load/evaluate-circuit-recovery.sh "$OUT"
+    # **부하를 못 만든 회차를 제품 미달로 내보내지 않는다.** 정상 경로에만 이
+    # 검사를 두었더니, 실측에서 정확히 이쪽 경로가 그것 없이 나갔다.
+    if [ "$k6rc" -ne 0 ]; then
+        echo "::error title=서킷 회복::k6 가 $k6rc 로 끝났다 — 이 회차로는 판정하지 않는다"
+        tail -5 "$work/k6.log" | sed 's/^/  /'
+        exit 2
+    fi
+    test/load/evaluate-circuit-recovery.sh "$OUT"
+    exit $?
 fi
 mark 해제
 echo "게이트가 풀렸다"
@@ -265,9 +320,12 @@ if [ -z "$leader" ]; then
     exit 2
 fi
 echo "리더는 ${leader} — 죽인다"
-mark 승계
+# **죽인 뒤에 표시한다.** 앞에 쓰면 그 뒤 첫 표본이 아직 죽기 전 리더의 값이라,
+# 이 하네스가 존재하는 이유 — 이어받은 노드에 램프가 안 걸린다 — 를 원리적으로
+# 못 잰다. 리스가 초 단위라 그 한 표본이 늘 죽기 전 값이다.
 docker kill --signal SIGKILL "$leader" >/dev/null 2>&1 || {
     echo "리더를 못 죽였다: $leader"; exit 2; }
+mark 승계
 
 sleep "$HANDOVER_AFTER_SEC"
 
@@ -284,4 +342,4 @@ if [ "$k6rc" -ne 0 ]; then
     exit 2
 fi
 echo "표본은 $OUT 에 있다. 판정은 test/load/evaluate-circuit-recovery.sh 가 낸다."
-exec test/load/evaluate-circuit-recovery.sh "$OUT"
+test/load/evaluate-circuit-recovery.sh "$OUT"

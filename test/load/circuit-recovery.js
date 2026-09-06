@@ -37,7 +37,11 @@ export const options = {
   },
   // **못 만든 부하로 판정하지 않는다.** 흘린 회차가 있으면 기준선 유입이 목표와
   // 다르고, 회복 봉우리를 그 기준선에 견주는 판정이 통째로 어긋난다.
-  thresholds: { dropped_iterations: ['count==0'] },
+  thresholds: {
+    dropped_iterations: ['count==0'],
+    // 판정 밖 응답이 섞이면 배선이 어긋난 것이다. 안 걸면 전량이 그것이어도 초록이다.
+    circuit_off_judgement: ['count==0'],
+  },
 };
 
 const passed = new Counter('circuit_passed');
@@ -63,7 +67,21 @@ function headers(extra) {
   }, extra || {});
 }
 
+const gatewayDown = new Counter('circuit_gateway_down');
+
 function tally(r) {
+  // **연결 자체가 안 된 것은 판정이 아니다.** 죽인 리더로 간 요청이라, 판정 밖
+  // 응답으로 세면 우리가 만든 자극이 회차를 무효로 만든다.
+  if (r.status === 0) {
+    gatewayDown.add(1);
+    if (r.request && r.request.url) {
+      const hit = BASES.find((b) => r.request.url.indexOf(b) === 0);
+      if (hit) {
+        down[hit] = true;
+      }
+    }
+    return;
+  }
   if (r.status === 200) {
     passed.add(1);
   } else if (r.status === 202) {
@@ -75,10 +93,20 @@ function tally(r) {
   }
 }
 
+// 연결이 아예 안 되는 주소. **죽인 리더가 여기 들어온다.**
+//
+// 실제 앞단은 안 붙는 대를 빼고 산 대에 전량을 몰아준다. 생성기가 죽은 주소로
+// 계속 쏘면 그 몫이 통째로 사라져, 승계 뒤 유효 유입이 절반이 된다 — 램프도
+// 없는 새 리더가 두 배 부하를 받는 더 가혹하고 현실적인 조합을 한 번도 안
+// 지나게 된다. 그리고 그 실패가 판정 밖 응답으로 세어져 회차가 통째로 무효다.
+const down = {};
+
 // **주소를 회차마다 바꾼다.** VU 로만 가르면 VU 가 게이트웨이에 고정돼, 한쪽이
 // 느려질 때 그쪽 유입만 줄어든다 — 고르개가 아니라 생성기가 부하를 재분배한다.
 function base() {
-  return BASES[(__VU + __ITER) % BASES.length];
+  const alive = BASES.filter((b) => !down[b]);
+  const pool = alive.length > 0 ? alive : BASES;
+  return pool[(__VU + __ITER) % pool.length];
 }
 
 function reset() {
@@ -99,8 +127,20 @@ export default function () {
     tally(r);
     if (r.status === 200) {
       redeemed.add(1);
+      reset();
+      return;
     }
-    // 성공이든 아니든 이 사람의 생애는 여기서 끝난다. 표는 한 번만 쓴다.
+    // **끊겼다고 표를 버리지 않는다.** 이 자리의 429 는 "잠시 뒤에 그 표로 다시
+    // 오라" 는 뜻이고(RETRY_TOKEN), 제품은 차례가 온 사람을 줄 뒤로 안 돌린다.
+    // 버리면 크레딧은 썼는데 뒷단 호출은 안 만든 허가가 되어, 하네스가 재려던
+    // 간극을 스스로 만든다 — 그 수를 제품 탓으로 돌리게 된다.
+    //
+    // 조인 구간에는 이 429 가 반드시 난다. 게이트가 크레딧을 0 으로 만들면
+    // 노드 예산도 0 이라, 유효한 표를 든 사람까지 전원 여기로 온다.
+    if (r.status === 0 || r.status === 429 || r.status === 503) {
+      return;
+    }
+    // 그 밖의 거절은 표가 죽은 것이다. 다음 회차에 새로 선다.
     reset();
     return;
   }
@@ -111,7 +151,11 @@ export default function () {
         { headers: headers({ 'Queue-Token': queueToken }) });
     if (r.status !== 200) {
       tally(r);
-      // 끊겼으면 다음 회차에 새로 선다. 여기서 버리면 줄이 마르지 않는다.
+      // **줄에 선 사람을 폴링 한 번 실패로 버리지 않는다.** 버려도 레디스의 줄
+      // 항목은 남아, 임계가 그 유령 위를 지나가고 아무도 뒷단에 안 닿는다.
+      if (r.status === 0 || r.status === 429 || r.status === 503) {
+        return;
+      }
       reset();
       return;
     }
@@ -139,6 +183,9 @@ export default function () {
   const r = http.post(`${base()}/api/v1/coupons/${COUPON}/issue`, null,
       { headers: headers() });
   tally(r);
+  if (r.status === 0) {
+    return;
+  }
   if (r.status === 202) {
     try {
       queueToken = r.json().data.queueToken || null;

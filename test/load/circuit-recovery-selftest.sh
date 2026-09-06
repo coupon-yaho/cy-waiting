@@ -105,9 +105,12 @@ run_case "회복이 안 끝나면 미달" 1 "회복이 안 끝났다" -- "$work/
     echo '# 회복'; printf '%s 4 160 %s\n' 3200 "$NODES"
     echo '# 해제'; echo '# 승계'
     printf '%s 8 260 %s\n' 13200 "$NODES"
-    printf '%s 16 360 %s\n' 23200 "$NODES"
-    printf '%s 32 460 %s\n' 33200 "$NODES"
-    printf '%s 300 500 %s\n' 38200 "$NODES"
+    printf '%s 16 360 %s\n' 18200 "$NODES"
+    printf '%s 32 460 %s\n' 23200 "$NODES"
+    printf '%s 64 560 %s\n' 28200 "$NODES"
+    printf '%s 128 660 %s\n' 33200 "$NODES"
+    printf '%s 256 760 %s\n' 36200 "$NODES"
+    printf '%s 300 800 %s\n' 38200 "$NODES"
 } > "$work/slowdone.txt"
 run_case "회복이 한계를 넘으면 미달" 1 "초 걸렸다" -- "$work/slowdone.txt"
 
@@ -132,9 +135,11 @@ run_case "회복 봉우리가 크면 미달" 1 "봉우리" -- "$work/burst.txt"
     echo '# 유지'; gated 2200 160 2 5
     echo '# 회복'; printf '%s 2 160 %s\n' 3200 "$NODES"
     echo '# 해제'
+    # 앞 1.5초는 유예다 — 해제 로그와 다음 배분 틱 사이의 간격이다.
     printf '%s 3 168 %s\n' 3400 "$NODES"
-    printf '%s 300 188 %s\n' 3600 "$NODES"
-    echo '# 승계'; printf '%s 300 208 %s\n' 3800 "$NODES"
+    printf '%s 3 176 %s\n' 4200 "$NODES"
+    printf '%s 3 184 %s\n' 5200 "$NODES"
+    echo '# 승계'; printf '%s 6 192 %s\n' 5400 "$NODES"
 } > "$work/idle.txt"
 run_case "풀린 뒤 한산 통과가 막히면 미달" 1 "한산 통과" -- "$work/idle.txt"
 
@@ -170,13 +175,16 @@ run_case "승계가 계단을 되살리면 미달" 1 "승계" -- "$work/handover
     echo '# 정상'; normal 0 0
     echo '# 진입'; gated 1600 160 2 3
     echo '# 유지'; gated 2200 160 2 5
-    echo '# 회복'
-    printf '%s 4 160 %s\n' 3200 "$NODES"
-    printf '%s 8 168 %s\n' 3400 "$NODES"
-    echo '# 해제'; echo '# 승계'
-    printf '%s 16 176 1\n' 3600
-    printf '%s 32 184 1\n' 3800
-    printf '%s 300 200 1\n' 4000
+    echo '# 회복'; printf '%s 2 160 %s\n' 3200 "$NODES"
+    echo '# 해제'; printf '%s 4 168 %s\n' 3400 "$NODES"
+    echo '# 승계'
+    printf '%s 8 176 1\n' 3600
+    printf '%s 16 184 1\n' 3800
+    printf '%s 32 192 1\n' 4000
+    printf '%s 64 200 1\n' 4200
+    printf '%s 128 208 1\n' 4400
+    printf '%s 256 216 1\n' 4600
+    printf '%s 300 224 1\n' 4800
 } > "$work/shrink.txt"
 run_case "승계로 노드가 줄어도 충족" 0 "충족" -- "$work/shrink.txt"
 
@@ -191,9 +199,29 @@ run_case "승계로 노드가 줄어도 충족" 0 "충족" -- "$work/shrink.txt"
     echo '# 해제'; echo '# 승계'
     printf '%s 4 160 %s\n' 3200 "$NODES"
     printf '%s 8 168 %s\n' 3400 "$NODES"
-    printf '%s 300 188 %s\n' 3600 "$NODES"
+    printf '%s 16 176 %s\n' 3600 "$NODES"
+    printf '%s 32 184 %s\n' 3800 "$NODES"
+    printf '%s 64 192 %s\n' 4000 "$NODES"
+    printf '%s 128 200 %s\n' 4200 "$NODES"
+    printf '%s 256 208 %s\n' 4400 "$NODES"
+    printf '%s 300 216 %s\n' 4600 "$NODES"
 } > "$work/fullopen.txt"
 run_case "전면 정지에서 돌아와도 충족" 0 "충족" -- "$work/fullopen.txt"
+
+# **첫 표본만 보면 계단을 놓친다.** 이어받은 노드는 제 스무더를 이월받고 첫
+# 회차를 도느라, 계단이 둘째나 셋째 틱에 선다. 실측 리뷰가 정확히 이 모양으로
+# 판정기를 뚫었다 — 16 을 지나 그다음 틱에 300 이 나갔는데 충족이 나왔다.
+{
+    echo '# 정상'; normal 0 0
+    echo '# 진입'; gated 1600 160 2 3
+    echo '# 유지'; gated 2200 160 2 5
+    echo '# 회복'; printf '%s 4 160 %s\n' 3200 "$NODES"
+    echo '# 해제'; printf '%s 8 168 %s\n' 3400 "$NODES"
+    echo '# 승계'
+    printf '%s 16 176 %s\n' 3600 "$NODES"
+    printf '%s 300 196 %s\n' 3800 "$NODES"
+} > "$work/second.txt"
+run_case "승계 둘째 틱의 계단도 잡는다" 1 "승계" -- "$work/second.txt"
 
 # ── 판정 불가 ────────────────────────────────────────────────────────────────
 

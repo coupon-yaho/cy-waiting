@@ -31,10 +31,16 @@ normal() {
 }
 
 # 조인 구간. 크레딧이 노드 수 이하로 내려가 있고 도착도 멎는다.
+# 조인 구간. 크레딧이 노드 수 이하로 내려가 있다.
+#
+# **도착 증분을 줄 수 있게 둔다.** 조인 동안에도 프로브는 나가므로 도착이 아주
+# 안 멎지는 않는다. 0 으로 두면 회복 구간 꼬리가 평평해져, 부하가 먼저 끝난
+# 회차를 막는 가드에 걸린다.
 gated() {
-    local t=$1 served=$2 credit=${3:-2} n=${4:-5} vote=${5:-OPEN}
+    local t=$1 served=$2 credit=${3:-2} n=${4:-5} vote=${5:-OPEN} step=${6:-0}
     for i in $(seq 0 $((n - 1))); do
-        printf '%s %s %s %s %s\n' $((t + i * 200)) "$credit" "$served" "$NODES" "$vote"
+        printf '%s %s %s %s %s\n' $((t + i * 200)) "$credit" \
+            $((served + i * step)) "$NODES" "$vote"
     done
 }
 
@@ -153,8 +159,8 @@ run_case "풀린 뒤 한산 통과가 막히면 미달" 1 "한산 통과" -- "$w
     echo '# 정상'; normal 0 0
     echo '# 진입'; gated 1600 160 2 3
     echo '# 유지'; gated 2200 160 2 5
-    echo '# 회복'; gated 3200 160 2 10
-    printf '%s 1 160 1 OPEN\n' 5300
+    echo '# 회복'; gated 3200 160 2 10 OPEN 1
+    printf '%s 1 175 1 OPEN\n' 5300
 } > "$work/stuck.txt"
 run_case "게이트가 안 풀리면 미달" 1 "안 닫혀" -- "$work/stuck.txt"
 
@@ -234,19 +240,40 @@ run_case "승계 둘째 틱의 계단도 잡는다" 1 "승계" -- "$work/second.
     echo '# 진입'; gated 1600 160 2 3
     echo '# 유지'; gated 2200 160 2 5
     # 전 노드가 닫혔다고 하는데도 십여 초 동안 조인 채다.
-    echo '# 회복'; gated 3200 160 2 40 CLOSED
-    echo '# 해제'; printf '%s 4 200 %s CLOSED\n' 11400 "$NODES"
+    echo '# 회복'; gated 3200 160 2 60 CLOSED 1
+    echo '# 해제'; printf '%s 4 230 %s CLOSED\n' 15400 "$NODES"
     echo '# 승계'
-    printf '%s 8 208 %s CLOSED\n' 11600 "$NODES"
-    printf '%s 16 216 %s CLOSED\n' 11800 "$NODES"
-    printf '%s 32 224 %s CLOSED\n' 12000 "$NODES"
-    printf '%s 64 232 %s CLOSED\n' 12200 "$NODES"
-    printf '%s 128 240 %s CLOSED\n' 12400 "$NODES"
-    printf '%s 256 248 %s CLOSED\n' 12600 "$NODES"
-    printf '%s 300 256 %s CLOSED\n' 12800 "$NODES"
+    printf '%s 8 238 %s CLOSED\n' 15600 "$NODES"
+    printf '%s 16 246 %s CLOSED\n' 15800 "$NODES"
+    printf '%s 32 254 %s CLOSED\n' 16000 "$NODES"
+    printf '%s 64 262 %s CLOSED\n' 16200 "$NODES"
+    printf '%s 128 270 %s CLOSED\n' 16400 "$NODES"
+    printf '%s 256 278 %s CLOSED\n' 16600 "$NODES"
+    printf '%s 300 286 %s CLOSED\n' 16800 "$NODES"
 } > "$work/votegap.txt"
 run_case "표가 닫혔는데 게이트가 오래 조이면 미달" 1 "표는 닫혔는데" \
     -- "$work/votegap.txt"
+
+# **표가 닫혔는데 끝내 안 풀린 회차는 완화 탓이다.** 표를 안 보면 그 회차가
+# 서킷 탓으로 나가고, 다음 사람이 엉뚱한 데를 고친다.
+{
+    echo '# 정상'; normal 0 0
+    echo '# 진입'; gated 1600 160 2 3
+    echo '# 유지'; gated 2200 160 2 5
+    echo '# 회복'; gated 3200 160 2 80 CLOSED 1
+} > "$work/easestuck.txt"
+run_case "표가 닫혔는데 끝내 안 풀리면 완화 탓" 1 "끝내 안 풀렸다" \
+    -- "$work/easestuck.txt"
+
+# **부하가 먼저 끝난 회차를 제품 미달로 안 내보낸다.** 앞선 회차가 그 꼬리를
+# 분모에 넣고 결론을 냈다. 러너의 산술이 다시 어긋나도 여기서 끊긴다.
+{
+    echo '# 정상'; normal 0 0
+    echo '# 진입'; gated 1600 160 2 3
+    echo '# 유지'; gated 2200 160 2 5
+    echo '# 회복'; gated 3200 160 2 20 OPEN 0
+} > "$work/deadtail.txt"
+run_case "부하가 먼저 끝나면 판정 불가" 2 "부하가 먼저 끝났다" -- "$work/deadtail.txt"
 
 # ── 판정 불가 ────────────────────────────────────────────────────────────────
 

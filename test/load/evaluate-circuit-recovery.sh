@@ -35,9 +35,12 @@ ramp_step=${RAMP_STEP:-2.0}
 min_baseline=${MIN_BASELINE:-4}
 # 회복을 끝났다고 볼 기준선 대비 비율.
 recovered_pct=${RECOVERED_PCT:-95}
-# 전 노드가 닫혔다고 한 뒤로 게이트가 풀리기까지 봐 주는 시간(초). 완화가
-# 연속 관측 몇 틱을 요구하므로 0 일 수는 없다.
-vote_gate_limit_sec=${VOTE_GATE_LIMIT_SEC:-5}
+# 전 노드가 닫혔다고 한 뒤로 게이트가 풀리기까지 봐 주는 시간(초).
+#
+# **제품의 설계 최소에서 끌어온다.** 완화는 한 계단당 연속 관측 세 틱이고 열림에서
+# 닫힘까지 두 계단이라 6초, 거기에 배분 틱 하나와 표 왕복이 더 붙는다. 5 로 두면
+# 열린 상태에서 돌아오는 회차가 맞게 도는데도 "완화가 늦다" 로 미달이 된다.
+vote_gate_limit_sec=${VOTE_GATE_LIMIT_SEC:-9}
 # 해제 표시와 크레딧이 실제로 오르는 사이의 유예(ms). 표시는 로그로 잡는데
 # 크레딧은 다음 배분 틱에서야 오른다 — 틱이 1초라 그보다 넉넉히 준다.
 release_grace_ms=${RELEASE_GRACE_MS:-1500}
@@ -61,7 +64,13 @@ verdict=$(awk \
     -v grace_ms="$release_grace_ms" -v vote_limit="$vote_gate_limit_sec" '
     # **awk 의 exit 는 END 를 건너뛰지 않는다.** 표시를 안 두면 본문에서 낸
     # 판정 뒤에 END 가 한 줄을 더 찍고, 부르는 쪽은 둘 중 뒤엣것을 읽는다.
-    function fail(msg) { decided = 1; printf "MISS %s\n", msg; exit }
+    function layers() {
+        return sprintf("게이트 해제까지 %.1f초 · 표가 닫힌 뒤 조인 시간 %.1f초",
+                releasedAt ? (releasedAt - recT) / 1000.0 : -1, maxVoteGapMs / 1000.0)
+    }
+    # 층 수치를 실패에도 싣는다. 이 판정은 대개 미달인데, 층을 가르려고 칸을
+    # 늘려 놓고 그 수가 실패 경로에서 안 보이면 손으로 표본을 뒤지게 된다.
+    function fail(msg) { decided = 1; printf "MISS %s [%s]\n", msg, layers(); exit }
     function block(msg) { decided = 1; printf "BLOCK %s\n", msg; exit }
 
     /^#/ { phase = $2; next }
@@ -127,8 +136,15 @@ verdict=$(awk \
 
         if (phase == "회복" || phase == "해제" || phase == "승계") {
             recN++
-            if (recN == 1) { recT = t }
+            if (recN == 1) { recT = t; recFirstServed = served }
             lastRecT = t
+            # 꼬리에서 도착이 멎으면 그 표본 수를 센다. 다시 늘면 0 으로 되돌린다.
+            if (recPrevSample > 0 && served == recPrevSample) {
+                recTailFlat++
+            } else {
+                recTailFlat = 0
+            }
+            recPrevSample = served
             # **자극을 걷은 것과 게이트가 풀린 것은 다르다.** 서킷은 제 창을
             # 채워야 닫히므로, 뒷단이 멀쩡해진 뒤로도 한동안 조인 채로 있다.
             # 그 구간의 낮은 크레딧은 램프가 만든 것이 아니라 게이트가 만든
@@ -214,11 +230,24 @@ verdict=$(awk \
             fail("서킷이 열렸는데 배분을 조이지 않았다 — 진입 구간의 크레딧이 상한 위다")
         }
         if (!recN) { block("회복 구간에 표본이 없다") }
+        # **유입이 죽은 꼬리로 판정하지 않는다.** 러너의 산술이 다시 어긋나도
+        # 여기서 끊긴다 — 앞선 회차가 그 꼬리를 분모에 넣고 결론을 냈다.
+        if (recTailFlat > 3 && recN > 6) {
+            block(sprintf("회복 구간 끝 %d 표본에 뒷단 도착이 없다 — 부하가 먼저 끝났다",
+                    recTailFlat))
+        }
 
         # **게이트가 안 풀렸으면 회복이 시작도 안 한 것이다.** 원인을 이름으로
         # 부른다 — 그러지 않으면 램프의 기준이 대신 울려, 램프가 못 한 일처럼
         # 적힌다. 실측에서 이 자리가 먼저 걸렸다.
         if (!releasedAt) {
+            # **표를 먼저 본다.** 전 노드가 닫혔다고 하는데도 끝내 안 풀렸으면
+            # 고칠 자리는 서킷이 아니라 완화다. 표 칸을 넣은 이유가 이것인데,
+            # 아래 검사는 이 갈래 뒤에 있어 영영 도달 못 했다.
+            if (maxVoteGapMs / 1000.0 > vote_limit) {
+                fail(sprintf("표는 닫혔는데 게이트가 끝내 안 풀렸다 — %.1f 초 (한계 %d 초), 완화가 늦다",
+                        maxVoteGapMs / 1000.0, vote_limit))
+            }
             fail(sprintf("서킷이 안 닫혀 배분이 안 풀렸다 — %.1f 초 동안 크레딧이 상한 %d 위로 안 올라갔다",
                     (lastRecT - recT) / 1000.0, prevNodes))
         }

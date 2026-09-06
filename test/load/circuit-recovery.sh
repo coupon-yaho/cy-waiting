@@ -217,11 +217,15 @@ sample_loop() {
         # 유입이 아니라 밀린 일을 잰다 (RC4 는 수신 수로 잰다).
         served=$(curl -sf -m 2 "$STUB_URL/stub/health" 2>/dev/null \
             | sed 's/.*"accepted":\([0-9]*\).*/\1/')
-        case "$credit$served$nodes" in
-            ''|*[!0-9]*) ;;
-            *) printf '%s %s %s %s %s\n' "$(date +%s%3N)" \
-                   "$credit" "$served" "$nodes" "$votes" ;;
-        esac
+        # **칸마다 따로 본다.** 붙여서 검사하면 크레딧이 빈 표본이 옆 칸의
+        # 숫자에 묻혀 통과하고, 네 칸짜리 줄이 찍혀 회차 전체가 판정 불가가
+        # 된다 — 표본 하나만 건너뛰면 될 일이었다.
+        if printf '%s' "$credit" | grep -Eq '^[0-9]+$' \
+                && printf '%s' "$served" | grep -Eq '^[0-9]+$' \
+                && printf '%s' "$nodes" | grep -Eq '^[0-9]+$'; then
+            printf '%s %s %s %s %s\n' "$(date +%s%3N)" \
+                "$credit" "$served" "$nodes" "$votes"
+        fi
         sleep "$(awk -v ms="$SAMPLE_MS" 'BEGIN{ printf "%.3f", ms / 1000 }')"
     done
 }
@@ -275,7 +279,10 @@ fi
 # 배분은 그 전이를 로그로 남기므로 그것을 본다.
 # **회복이 시작한 시각에 앵커한다.** 창을 넉넉히 잡으면 예열이나 정상 구간에
 # 서킷이 한 번 흔들렸다 닫힌 줄을 주워, 안 풀린 회차가 풀린 것으로 적힌다.
-recover_at=$(date -u '+%Y-%m-%dT%H:%M:%S')
+# **존을 붙인다.** 없이 주면 도커가 로컬 시간으로 읽어, UTC 로 찍은 값이 이
+# 호스트에서는 아홉 시간 앞을 가리킨다 — 창이 로그 전체가 되어 예열 구간에
+# 한 번 흔들렸다 닫힌 줄을 주워, 안 풀린 회차가 풀린 것으로 적힌다.
+recover_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 echo "게이트가 풀리기를 기다린다"
 released=0
 for _ in $(seq 1 $((RECOVER_SEC * 2))); do

@@ -29,7 +29,7 @@ class CircuitTransitionLogTest {
 
     private static final String 이름 = "backend-1";
 
-    /** 반쯤 열린 창이 요구하는 표본 수. 설정과 같은 값을 시험이 직접 든다. */
+    /** half-open 이 요구하는 표본 수. 설정과 같은 값을 시험이 직접 든다. */
     private static final int 허용_프로브 = 10;
 
     /** 느린 호출의 경계. 서킷이 이 값 **초과**만 느림으로 센다. */
@@ -158,8 +158,8 @@ class CircuitTransitionLogTest {
     }
 
     /**
-     * <b>왜 다시 열렸는지가 로그에 없다.</b> 반쯤 열린 창이 표본을 다 채우고
-     * 실패한 것과, 표본을 못 채운 채 시한이 만료된 것은 고칠 값이 다르다 —
+     * <b>왜 다시 열렸는지가 로그에 없다.</b> half-open 이 표본을 다 채우고
+     * 실패한 것과, 못 채운 채 만료된 것은 고칠 값이 다르다 —
      * 앞엣것은 뒷단이고 뒤엣것은 프로브 공급이다. 실측에서 그 둘을 못 갈랐다.
      */
     @Test
@@ -174,14 +174,14 @@ class CircuitTransitionLogTest {
 
         assertThat(남은것("회복 시도가 실패했다")).singleElement()
                 .satisfies(e -> assertThat(e.getFormattedMessage())
-                        .as("프로브를 몇 건 모았는지가 있어야 창을 태운 것과 시한 만료가 갈린다")
+                        .as("몇 건 모았는지가 있어야 다 채우고 실패한 것과 만료가 갈린다")
                         .contains("probes=2"));
     }
 
     /**
-     * <b>성공한 프로브도 센다.</b> 창을 채웠는데 실패율이 임계를 넘어 열린
-     * 회차에는 성공이 섞여 있다 — 실패만 세면 그 창이 덜 찬 것처럼 보이고,
-     * 그러면 시한 만료와 다시 안 갈린다.
+     * <b>성공한 프로브도 센다.</b> 표본을 채웠는데 실패율이 임계를 넘어 열린
+     * 회차에는 성공이 섞여 있다 — 실패만 세면 덜 찬 것처럼 보이고, 그러면
+     * 만료와 다시 안 갈린다.
      */
     @Test
     @DisplayName("성공한_프로브도_센다")
@@ -198,13 +198,13 @@ class CircuitTransitionLogTest {
     }
 
     /**
-     * <b>창이 스스로 차서 열리는 길을 밟는다.</b> 손으로 전이를 내면 그 창이
-     * 임계를 채운 경우가 한 번도 안 나온다 — 이 로그의 뜻이 전부 "임계면 태운
-     * 것, 그 아래면 시한 만료" 에 걸려 있는데 그 임계값이 시험에 없게 된다.
+     * <b>표본이 스스로 차서 열리는 길을 밟는다.</b> 손으로 전이를 내면 표본이
+     * 임계를 채운 경우가 한 번도 안 나온다 — 이 로그의 뜻이 전부 "임계면 다
+     * 채우고 실패, 그 아래면 만료" 에 걸려 있는데 그 값이 시험에 없게 된다.
      */
     @Test
-    @DisplayName("창이_스스로_차서_열려도_다_센다")
-    void 창이_스스로_차서_열려도_다_센다() {
+    @DisplayName("표본이_스스로_차서_열려도_다_센다")
+    void 표본이_스스로_차서_열려도_다_센다() {
         서킷().transitionToOpenState();
         서킷().transitionToHalfOpenState();
         for (int i = 0; i < 허용_프로브; i++) {
@@ -219,8 +219,8 @@ class CircuitTransitionLogTest {
 
     /**
      * <b>찼다는 것만으로는 왜 열렸는지를 모른다.</b> 설정이 실패율과 느림 비율에
-     * 각각 임계를 두므로 창은 두 길로 열린다. 앞엣것은 뒷단이 오류를 내는 것이고
-     * 뒤엣것은 느린 호출이 창에 남은 것이라, 고칠 자리가 다르다.
+     * 각각 임계를 두므로 half-open 은 두 길로 실패한다. 앞엣것은 뒷단이 오류를
+     * 내는 것이고 뒤엣것은 느린 호출이 남은 것이라, 고칠 자리가 다르다.
      */
     @Test
     @DisplayName("프로브를_느림과_오류로_나눠_센다")
@@ -236,18 +236,18 @@ class CircuitTransitionLogTest {
 
         assertThat(남은것("회복 시도가 실패했다")).singleElement()
                 .satisfies(e -> assertThat(e.getFormattedMessage())
-                        .as("셋을 갈라야 창을 태운 사유가 갈린다")
+                        .as("셋을 갈라야 실패한 사유가 갈린다")
                         .contains("probes=3 slow=1 errors=1"));
     }
 
     /**
-     * <b>창을 한 번도 안 연 채 다시 열리면 0 으로 답한다.</b> 그 자리를 빈
+     * <b>half-open 을 한 번도 안 거치고 다시 열리면 0 으로 답한다.</b> 그 자리를 빈
      * 문자열로 두면 로그에 칸이 통째로 사라져, 읽는 쪽이 "안 실렸다" 와
      * "0 이었다" 를 못 가른다.
      */
     @Test
-    @DisplayName("창이_없으면_0_으로_답한다")
-    void 창이_없으면_0_으로_답한다() {
+    @DisplayName("구간이_없으면_0_으로_답한다")
+    void 구간이_없으면_0_으로_답한다() {
         서킷().transitionToOpenState();
 
         서킷().transitionToForcedOpenState();
@@ -259,7 +259,7 @@ class CircuitTransitionLogTest {
 
     /**
      * <b>임계에 정확히 걸린 호출은 느림이 아니다.</b> 서킷이 그렇게 세므로
-     * 여기도 같아야 한다 — 경계가 갈리면 이 줄로 창을 재구성할 수 없다.
+     * 여기도 같아야 한다 — 경계가 갈리면 이 줄로 서킷의 판단을 재구성할 수 없다.
      */
     @Test
     @DisplayName("임계에_정확히_걸리면_느림이_아니다")
@@ -275,15 +275,15 @@ class CircuitTransitionLogTest {
     }
 
     /**
-     * <b>창이 산 시간이 계수보다 단단하다.</b> 시한 근방이면 표본을 못 채워
-     * 만료된 것이고 훨씬 짧으면 채우고 실패한 것이라, 계수 한 건이 경계에서
+     * <b>half-open 이 산 시간이 계수보다 단단하다.</b> 상한 근방이면 표본을 못
+     * 채워 만료된 것이고 훨씬 짧으면 채우고 실패한 것이라, 계수 한 건이 경계에서
      * 어긋나도 이 판단은 안 눕는다.
      */
     @Test
-    @DisplayName("창이_산_시간을_남긴다")
-    void 창이_산_시간을_남긴다() {
+    @DisplayName("half_open_이_산_시간을_남긴다")
+    void half_open_이_산_시간을_남긴다() {
         서킷().transitionToOpenState();
-        // **열린 시각과 창이 열린 시각을 다르게 둔다.** 같으면 구현이 두 값을
+        // **OPEN 시각과 half-open 시각을 다르게 둔다.** 같으면 구현이 두 값을
         // 바꿔 넣어도 시험이 초록이다 — 이 줄은 그 둘을 같이 싣는 줄이다.
         나노.addAndGet(Duration.ofSeconds(7).toNanos());
         서킷().transitionToHalfOpenState();
@@ -300,7 +300,7 @@ class CircuitTransitionLogTest {
                 });
     }
 
-    /** 다음 창은 처음부터 센다. 안 그러면 앞 창의 수가 다음 판단에 섞인다. */
+    /** 다음 구간은 처음부터 센다. 안 그러면 앞 구간의 수가 다음 판단에 섞인다. */
     @Test
     @DisplayName("반쯤_열릴_때마다_프로브_수를_다시_센다")
     void 반쯤_열릴_때마다_프로브_수를_다시_센다() {
@@ -313,7 +313,7 @@ class CircuitTransitionLogTest {
         서킷().transitionToOpenState();
 
         // **앞 줄이 1 이고 뒷 줄이 0 이라야 "새로 났다" 가 된다.** 뒷 줄만 보면
-        // 창이 아예 없을 때의 문자열과 같아, 리셋이 아니라 누락이어도 통과한다.
+        // 구간이 아예 없을 때의 문자열과 같아, 리셋이 아니라 누락이어도 통과한다.
         assertThat(남은것("회복 시도가 실패했다")).hasSize(2)
                 .satisfies(둘 -> {
                     assertThat(둘.get(0).getFormattedMessage()).contains("probes=1");

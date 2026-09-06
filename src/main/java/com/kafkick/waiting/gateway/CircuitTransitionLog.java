@@ -35,7 +35,7 @@ final class CircuitTransitionLog {
     /** 이름별로 따로 센다 — 서킷은 인스턴스별이다 (R-10). 크기는 뒷단 수로 묶인다. */
     private final ConcurrentMap<String, Opened> opened = new ConcurrentHashMap<>();
 
-    /** 반쯤 열린 창마다의 프로브 수. 창이 끝나면 걷는다. */
+    /** half-open 구간마다의 프로브 수. 그 구간이 끝나면 걷는다. */
     private final ConcurrentMap<String, Probes> probes = new ConcurrentHashMap<>();
 
     private final LongSupplier nanoTicker;
@@ -73,17 +73,17 @@ final class CircuitTransitionLog {
                 // 상태로 갈리므로, 해제 시점에는 이미 0 이다.
                 .onCallNotPermitted(event -> blocked(breaker.getName()))
                 // **프로브도 우리가 센다.** 같은 이유다 — 전이 순간에 라이브러리
-                // 값을 읽으면 이미 새 상태의 것이라, 방금 끝난 창이 몇 건을
-                // 모았는지는 거기 없다.
+                // 값을 읽으면 이미 새 상태의 것이라, 방금 끝난 half-open 구간이
+                // 몇 건을 모았는지는 거기 없다.
                 .onSuccess(event -> probed(breaker, event.getElapsedDuration(), false))
                 .onError(event -> probed(breaker, event.getElapsedDuration(), true));
     }
 
     /**
-     * 반쯤 열린 창에서만 센다. 닫힌 구간의 정상 호출까지 세면 뜻이 없다.
+     * half-open 구간에서만 센다. 닫힌 뒤의 정상 호출까지 세면 뜻이 없다.
      *
-     * <p><b>느림과 오류를 갈라 센다.</b> 창은 두 길로 열리고 고칠 자리가 다르다 —
-     * 오류는 뒷단이 죽은 것이고, 느림은 자극 이전의 호출이 창에 남은 쪽일 수 있다.
+     * <p><b>느림과 오류를 갈라 센다.</b> half-open 은 두 길로 실패하고 고칠 자리가
+     * 다르다 — 오류는 뒷단이 죽은 것이고, 느림은 자극 이전의 호출이 남은 쪽이다.
      */
     private void probed(CircuitBreaker breaker, Duration elapsed, boolean failed) {
         Probes window = probes.get(breaker.getName());
@@ -104,11 +104,11 @@ final class CircuitTransitionLog {
     }
 
     /**
-     * 반쯤 열린 창에서 모은 프로브와 그 창이 산 시간.
+     * half-open 구간이 모은 프로브와 그 구간이 산 시간.
      *
-     * <p><b>시간이 계수보다 단단하다.</b> 창 길이가 시한 근방이면 표본을 못 채워
-     * 만료된 것이고, 훨씬 짧으면 채우고 실패한 것이다 — 계수 한 건이 경계에서
-     * 어긋나도 이 판단은 안 눕는다.
+     * <p><b>시간이 계수보다 단단하다.</b> 구간 길이가
+     * {@code maxWaitDurationInHalfOpenState} 근방이면 표본을 못 채워 만료된 것이고,
+     * 훨씬 짧으면 채우고 실패한 것이다 — 계수 한 건이 경계에서 어긋나도 안 눕는다.
      */
     private record Probes(long since, LongAdder count, LongAdder slow, LongAdder failed) {
 
@@ -117,7 +117,7 @@ final class CircuitTransitionLog {
         }
 
         /**
-         * 창이 무엇을 모았는지. <b>없을 때도 이 자리가 답한다</b> — 부르는 쪽이
+         * 구간이 무엇을 모았는지. <b>없을 때도 이 자리가 답한다</b> — 부르는 쪽이
          * 삼항으로 가르면 같은 사실이 두 모양으로 찍힌다.
          */
         static String describe(Probes window) {
@@ -128,7 +128,7 @@ final class CircuitTransitionLog {
                     window.count.sum(), window.slow.sum(), window.failed.sum());
         }
 
-        /** 창이 산 시간(초). 없으면 0 이다. */
+        /** half-open 구간이 산 시간(초). 없으면 0 이다. */
         static long aliveSec(Probes window, long now) {
             return window == null ? 0 : NANOSECONDS.toSeconds(now - window.since());
         }
@@ -148,12 +148,12 @@ final class CircuitTransitionLog {
             case CLOSED -> exited(breaker);
             // 프로브 구간도 남긴다. 열림과 닫힘만 보면 회복을 몇 번 시도했는지가 빈다.
             case HALF_OPEN -> {
-                // 창마다 처음부터 센다. 안 그러면 앞 창의 수가 다음 판단에 섞인다.
+                // 구간마다 처음부터 센다. 안 그러면 앞 구간의 수가 다음 판단에 섞인다.
                 probes.put(name, Probes.halfOpened(nanoTicker.getAsLong()));
                 log.info("서킷 반쯤 열림 — {} 로 프로브를 보낸다. 실패하면 다시 연다", name);
             }
             default -> {
-                // 반쯤 열림도 열림도 아닌 곳으로 가면 그 창은 끝난 것이다.
+                // half-open 도 OPEN 도 아닌 곳으로 가면 그 구간은 끝난 것이다.
                 // 위와 같은 이유로 걷는다 — 값이 아니라 비용이다.
                 probes.remove(name);
                 log.info("서킷 상태 전이 — {} 가 {} 로 갔다", name, to);
@@ -177,13 +177,13 @@ final class CircuitTransitionLog {
         Opened before = opened.putIfAbsent(name, new Opened(now, new LongAdder()));
         log.warn("서킷 열림({}) — {} 로 가는 발급을 막는다. 그 인스턴스의 지연과 오류율을 확인하라",
                 to, name);
-        // **프로브 수를 같이 남긴다.** 창을 다 채우고 실패한 것과 못 채운 채
-        // 시한이 만료된 것은 고칠 값이 다르다 — 앞엣것은 뒷단이고 뒤엣것은
-        // 프로브 공급이다. 수가 없으면 로그로는 그 둘이 같은 줄이다.
+        // **프로브 수를 같이 남긴다.** 표본을 다 채우고 실패한 것과 못 채운 채
+        // 만료된 것은 고칠 값이 다르다 — 앞엣것은 뒷단이고 뒤엣것은 프로브
+        // 공급이다. 수가 없으면 로그로는 그 둘이 같은 줄이다.
         Probes window = probes.remove(name);
         if (before != null) {
-            // **시한을 같이 싣는다.** 창 길이만 있으면 읽는 사람이 그 수를
-            // 외우고 있어야 "표본을 못 채웠다" 를 읽는다.
+            // **상한을 같이 싣는다.** 구간 길이만 있으면 읽는 사람이
+            // {@code maxWaitDurationInHalfOpenState} 를 외우고 있어야 한다.
             log.warn("회복 시도가 실패했다 — {} 가 {}초째 열려 있다, {} window={}/{}s",
                     name, NANOSECONDS.toSeconds(now - before.since()),
                     Probes.describe(window), Probes.aliveSec(window, now),
@@ -194,16 +194,16 @@ final class CircuitTransitionLog {
 
     private void exited(CircuitBreaker breaker) {
         String name = breaker.getName();
-        // **창을 여기서도 걷는다.** 회복이 성공해 닫히는 것도 창의 끝이다.
+        // **여기서도 걷는다.** 회복이 성공해 닫히는 것도 half-open 의 끝이다.
         //
-        // **숫자가 틀려서가 아니다** — 다음 창은 반쯤 열릴 때 새로 만들므로 옛
+        // **숫자가 틀려서가 아니다** — 다음 구간은 half-open 에서 새로 만들므로 옛
         // 계수가 로그에 실릴 길은 없다. 맵 조회는 걷든 안 걷든 붙으므로 아끼는
         // 것은 계수 증가와 설정 조회뿐이다. 그래도 닫힌 구간은 요청마다다.
         // 되돌려도 시험이 초록이라는 것은 안다 (AIJ-0247).
         //
-        // **걷으면서 남긴다.** 회복이 성공한 창도 창이고, 그것이 몇 초에 몇 건을
-        // 모았는지가 곧 "표본을 모으는 데 얼마나 걸리는가" 의 답이다 — 실측이
-        // 그 값을 물었는데 성공 경로에는 그 줄이 없었다.
+        // **걷으면서 남긴다.** 회복이 성공한 half-open 도 구간이고, 그것이 몇 초에
+        // 몇 건을 모았는지가 곧 "표본을 모으는 데 얼마나 걸리는가" 의 답이다 —
+        // 실측이 그 값을 물었는데 성공 경로에는 그 줄이 없었다.
         Probes probe = probes.remove(name);
         long at = nanoTicker.getAsLong();
         Opened window = opened.remove(name);

@@ -34,6 +34,9 @@ final class CircuitTransitionLog {
     /** 이름별로 따로 센다 — 서킷은 인스턴스별이다 (R-10). 크기는 뒷단 수로 묶인다. */
     private final ConcurrentMap<String, Opened> opened = new ConcurrentHashMap<>();
 
+    /** 반쯤 열린 창마다의 프로브 수. 창이 끝나면 걷는다. */
+    private final ConcurrentMap<String, Probes> probes = new ConcurrentHashMap<>();
+
     private final LongSupplier nanoTicker;
 
     private CircuitTransitionLog(LongSupplier nanoTicker) {
@@ -65,7 +68,24 @@ final class CircuitTransitionLog {
                         moved(breaker.getName(), event.getStateTransition().getToState()))
                 // **막은 건수는 우리가 센다.** 라이브러리 쪽 값은 전이와 함께 새
                 // 상태로 갈리므로, 해제 시점에는 이미 0 이다.
-                .onCallNotPermitted(event -> blocked(breaker.getName()));
+                .onCallNotPermitted(event -> blocked(breaker.getName()))
+                // **프로브도 우리가 센다.** 같은 이유다 — 전이 순간에 라이브러리
+                // 값을 읽으면 이미 새 상태의 것이라, 방금 끝난 창이 몇 건을
+                // 모았는지는 거기 없다.
+                .onSuccess(event -> probed(breaker.getName()))
+                .onError(event -> probed(breaker.getName()));
+    }
+
+    /** 반쯤 열린 창에서만 센다. 닫힌 구간의 정상 호출까지 세면 뜻이 없다. */
+    private void probed(String name) {
+        Probes window = probes.get(name);
+        if (window != null) {
+            window.count().increment();
+        }
+    }
+
+    /** 반쯤 열린 창에서 모은 프로브. 창이 열릴 때마다 새로 만든다. */
+    private record Probes(LongAdder count) {
     }
 
     private void blocked(String name) {
@@ -80,8 +100,11 @@ final class CircuitTransitionLog {
             case OPEN, FORCED_OPEN -> entered(name, to);
             case CLOSED -> exited(name);
             // 프로브 구간도 남긴다. 열림과 닫힘만 보면 회복을 몇 번 시도했는지가 빈다.
-            case HALF_OPEN -> log.info(
-                    "서킷 반쯤 열림 — {} 로 프로브를 보낸다. 실패하면 다시 연다", name);
+            case HALF_OPEN -> {
+                // 창마다 처음부터 센다. 안 그러면 앞 창의 수가 다음 판단에 섞인다.
+                probes.put(name, new Probes(new LongAdder()));
+                log.info("서킷 반쯤 열림 — {} 로 프로브를 보낸다. 실패하면 다시 연다", name);
+            }
             default -> log.info("서킷 상태 전이 — {} 가 {} 로 갔다", name, to);
         }
     }
@@ -101,9 +124,14 @@ final class CircuitTransitionLog {
         Opened before = opened.putIfAbsent(name, new Opened(now, new LongAdder()));
         log.warn("서킷 열림({}) — {} 로 가는 발급을 막는다. 그 인스턴스의 지연과 오류율을 확인하라",
                 to, name);
+        // **프로브 수를 같이 남긴다.** 창을 다 채우고 실패한 것과 못 채운 채
+        // 시한이 만료된 것은 고칠 값이 다르다 — 앞엣것은 뒷단이고 뒤엣것은
+        // 프로브 공급이다. 수가 없으면 로그로는 그 둘이 같은 줄이다.
+        Probes window = probes.remove(name);
         if (before != null) {
-            log.warn("회복 시도가 실패했다 — {} 가 {}초째 열려 있다", name,
-                    NANOSECONDS.toSeconds(now - before.since()));
+            log.warn("회복 시도가 실패했다 — {} 가 {}초째 열려 있다, 프로브 {}건", name,
+                    NANOSECONDS.toSeconds(now - before.since()),
+                    window == null ? 0 : window.count().sum());
         }
     }
 

@@ -11,6 +11,7 @@ import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -154,8 +155,8 @@ class CircuitTransitionLogTest {
     void 회복_실패에_프로브_수를_남긴다() {
         서킷().transitionToOpenState();
         서킷().transitionToHalfOpenState();
-        서킷().onError(1, java.util.concurrent.TimeUnit.MILLISECONDS, new RuntimeException("느리다"));
-        서킷().onError(1, java.util.concurrent.TimeUnit.MILLISECONDS, new RuntimeException("느리다"));
+        서킷().onError(1, TimeUnit.MILLISECONDS, new RuntimeException("느리다"));
+        서킷().onError(1, TimeUnit.MILLISECONDS, new RuntimeException("느리다"));
 
         서킷().transitionToOpenState();
 
@@ -171,7 +172,7 @@ class CircuitTransitionLogTest {
     void 반쯤_열릴_때마다_프로브_수를_다시_센다() {
         서킷().transitionToOpenState();
         서킷().transitionToHalfOpenState();
-        서킷().onError(1, java.util.concurrent.TimeUnit.MILLISECONDS, new RuntimeException("느리다"));
+        서킷().onError(1, TimeUnit.MILLISECONDS, new RuntimeException("느리다"));
         서킷().transitionToOpenState();
         서킷().transitionToHalfOpenState();
 

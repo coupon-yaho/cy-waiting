@@ -76,12 +76,11 @@ final class CircuitTransitionLog {
     }
 
     /**
-     * half-open 구간에서만 센다.
+     * half-open 구간에서만 센다. 느림과 오류를 가른다 — 두 길로 실패하고 고칠
+     * 자리가 다르다.
      *
-     * <p>느림과 오류를 가른다. half-open 은 두 길로 실패하고 고칠 자리가 다르다.
-     *
-     * <p><b>이 수는 완료다.</b> 허가는 취득 시점에 깎이므로 만료 때 비행 중이던
-     * 호출은 안 들어온다 — 그 차이는 {@code notPermitted} 가 답한다.
+     * <p><b>완료 수다.</b> 허가는 취득 시점에 깎이므로 만료 때 비행 중이던 호출은
+     * 안 들어온다. 그 차이는 {@code notPermitted} 가 답한다.
      */
     private void probed(CircuitBreaker breaker, Duration elapsed, boolean failed) {
         Probes window = probes.get(breaker.getName());
@@ -174,10 +173,12 @@ final class CircuitTransitionLog {
         // 회복을 시도한 적이 없는데 실패했다는 줄이 남는다.
         long now = nanoTicker.getAsLong();
         Opened before = opened.putIfAbsent(name, new Opened(now, new LongAdder()));
+        // 다 채우고 실패한 것과 못 채운 채 만료된 것은 고칠 자리가 다르다.
+        // **로그보다 먼저 걷는다.** 뒤에 두면 그 사이에 막힌 호출이 이미 끝난
+        // 구간의 계수로 들어가, 계수 폭이 로그 지연에 비례한다.
+        Probes window = probes.remove(name);
         log.warn("서킷 열림({}) — {} 로 가는 발급을 막는다. 그 인스턴스의 지연과 오류율을 확인하라",
                 to, name);
-        // 다 채우고 실패한 것과 못 채운 채 만료된 것은 고칠 자리가 다르다.
-        Probes window = probes.remove(name);
         if (before != null) {
             log.warn("회복 시도가 실패했다 — {} 가 {}초째 열려 있다, {} window={}/{}ms",
                     name, NANOSECONDS.toSeconds(now - before.since()),

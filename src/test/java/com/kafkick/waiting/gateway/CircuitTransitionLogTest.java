@@ -35,9 +35,13 @@ class CircuitTransitionLogTest {
     /** 느린 호출의 경계. 서킷이 이 값 **초과**만 느림으로 센다. */
     private static final long 느림_임계_ms = 1500;
 
+    /**
+     * 열림 대기를 길게 잡는다. 자동 전이가 켜져 있어 짧으면 시험이 멈춘 사이
+     * half-open 으로 저절로 가고, 그 줄이 끼어들어 단언이 흔들린다.
+     */
     private static final BackendCircuitProperties 설정 = new BackendCircuitProperties(
             Duration.ofSeconds(10), 20, 50f, Duration.ofMillis(느림_임계_ms), 50f,
-            Duration.ofSeconds(5), Duration.ofSeconds(30), 허용_프로브);
+            Duration.ofHours(1), Duration.ofSeconds(30), 허용_프로브);
 
     /**
      * 구간 시계. 고정하지 못하면 지속 시간이 시험에서 늘 0 이라 단위를 틀려도
@@ -120,7 +124,9 @@ class CircuitTransitionLogTest {
                     // 값까지 못 박는다. 담겼는지만 보면 단위를 ms 로 틀려도 통과한다.
                     // 숫자만 담기면 21642초 도 42초 를 담는다.
                     assertThat(e.getFormattedMessage())
-                            .contains("가 42초 동안 2건을 막았다");
+                            .contains("가 42초 동안 2건을 막았다")
+                            .as("열림 구간의 차단은 half-open 칸에 안 든다")
+                            .contains("probes=0 slow=0 errors=0 notPermitted=0");
                 });
     }
 
@@ -169,7 +175,7 @@ class CircuitTransitionLogTest {
         assertThat(남은것("회복 시도가 실패했다")).singleElement()
                 .satisfies(e -> assertThat(e.getFormattedMessage())
                         .as("몇 건 모았는지가 있어야 다 채우고 실패한 것과 만료가 갈린다")
-                        .contains("probes=2"));
+                        .contains("probes=2 slow=0 errors=2 notPermitted=0"));
     }
 
     /** 실패만 세면 덜 찬 것처럼 보여 만료와 안 갈린다. */
@@ -184,7 +190,8 @@ class CircuitTransitionLogTest {
         서킷().transitionToOpenState();
 
         assertThat(남은것("회복 시도가 실패했다")).singleElement()
-                .satisfies(e -> assertThat(e.getFormattedMessage()).contains("probes=2"));
+                .satisfies(e -> assertThat(e.getFormattedMessage())
+                        .contains("probes=2 slow=0 errors=1 notPermitted=0"));
     }
 
     /** 손으로 전이를 내면 표본이 임계를 채운 경우가 한 번도 안 나온다. */
@@ -200,7 +207,7 @@ class CircuitTransitionLogTest {
         assertThat(남은것("회복 시도가 실패했다")).singleElement()
                 .satisfies(e -> assertThat(e.getFormattedMessage())
                         .as("마지막 프로브의 사건이 전이보다 먼저 온다는 것에 기댄다")
-                        .contains("probes=" + 허용_프로브));
+                        .contains("probes=" + 허용_프로브 + " slow=0 errors=10 notPermitted=0"));
     }
 
     /** half-open 은 실패율과 느림 비율 두 길로 실패하고, 고칠 자리가 다르다. */
@@ -234,12 +241,80 @@ class CircuitTransitionLogTest {
         }
 
         서킷().tryAcquirePermission();
+        서킷().tryAcquirePermission();
         서킷().transitionToOpenState();
 
         assertThat(남은것("회복 시도가 실패했다")).singleElement()
                 .satisfies(e -> assertThat(e.getFormattedMessage())
-                        .as("완료가 0 이어도 허가는 다 나갔다")
-                        .contains("probes=0 slow=0 errors=0 notPermitted=1"));
+                        .as("완료가 0 이어도 허가는 다 나갔다. 유무가 아니라 양이다")
+                        .contains("probes=0 slow=0 errors=0 notPermitted=2"));
+    }
+
+    /** 운영에서 흔한 모양이다 — 허가는 다 나갔는데 일부만 돌아온다. */
+    @Test
+    @DisplayName("완료와_거절이_한_구간에서_따로_는다")
+    void 완료와_거절이_한_구간에서_따로_는다() {
+        서킷().transitionToOpenState();
+        서킷().transitionToHalfOpenState();
+        for (int i = 0; i < 허용_프로브; i++) {
+            서킷().tryAcquirePermission();
+        }
+        서킷().onSuccess(10, TimeUnit.MILLISECONDS);
+        서킷().onSuccess(10, TimeUnit.MILLISECONDS);
+        서킷().onError(10, TimeUnit.MILLISECONDS, new RuntimeException("죽었다"));
+
+        서킷().tryAcquirePermission();
+        서킷().transitionToOpenState();
+
+        assertThat(남은것("회복 시도가 실패했다")).singleElement()
+                .satisfies(e -> assertThat(e.getFormattedMessage())
+                        .as("완료가 허가를 되돌려주지 않는다")
+                        .contains("probes=3 slow=0 errors=1 notPermitted=1"));
+    }
+
+    /**
+     * 열린 구간의 차단은 압도적 다수다. 그것이 half-open 칸으로 새면 "허가가
+     * 소진돼 매달렸다" 라는 정반대 진단이 찍힌다.
+     */
+    @Test
+    @DisplayName("구간이_끝난_뒤의_차단은_안_센다")
+    void 구간이_끝난_뒤의_차단은_안_센다() {
+        서킷().transitionToOpenState();
+        서킷().transitionToHalfOpenState();
+        서킷().onError(10, TimeUnit.MILLISECONDS, new RuntimeException("죽었다"));
+        서킷().transitionToOpenState();
+
+        서킷().tryAcquirePermission();
+        서킷().tryAcquirePermission();
+        서킷().tryAcquirePermission();
+        서킷().transitionToClosedState();
+
+        assertThat(남은것("회복 시도가 실패했다")).singleElement()
+                .satisfies(e -> assertThat(e.getFormattedMessage())
+                        .contains("probes=1 slow=0 errors=1 notPermitted=0"));
+        assertThat(남은것("서킷 닫힘")).singleElement()
+                .satisfies(e -> assertThat(e.getFormattedMessage())
+                        .as("열림 구간의 차단 셋은 막은 건수로만 간다")
+                        .contains("3건을 막았다")
+                        .contains("probes=0 slow=0 errors=0 notPermitted=0"));
+    }
+
+    /** 성공으로 닫히는 구간이 무엇을 모았는지도 로그만 답한다. */
+    @Test
+    @DisplayName("성공으로_닫힌_구간도_계수를_남긴다")
+    void 성공으로_닫힌_구간도_계수를_남긴다() {
+        서킷().transitionToOpenState();
+        서킷().transitionToHalfOpenState();
+        서킷().onSuccess(2_000, TimeUnit.MILLISECONDS);
+        서킷().onSuccess(10, TimeUnit.MILLISECONDS);
+        나노.addAndGet(SECONDS.toNanos(3));
+
+        서킷().transitionToClosedState();
+
+        assertThat(남은것("서킷 닫힘")).singleElement()
+                .satisfies(e -> assertThat(e.getFormattedMessage())
+                        .contains("probes=2 slow=1 errors=0 notPermitted=0")
+                        .contains("window=3000ms"));
     }
 
     /** 빈 문자열로 두면 "안 실렸다" 와 "0 이었다" 가 안 갈린다. */
@@ -284,9 +359,10 @@ class CircuitTransitionLogTest {
 
         서킷.transitionToOpenState();
 
-        assertThat(남은것("회복 시도가 실패했다")).last()
-                .satisfies(e -> assertThat(e.getFormattedMessage())
-                        .contains("window=300/500ms"));
+        assertThat(남은것("회복 시도가 실패했다"))
+                .as("자동 전이가 먼저 나면 500/500 줄이 끼어든다")
+                .filteredOn(e -> e.getFormattedMessage().contains("window=300/500ms"))
+                .hasSize(1);
     }
 
     /** 시간은 계수와 달리 사건 순서에 안 눕는다. */
@@ -325,7 +401,7 @@ class CircuitTransitionLogTest {
         // 뒷 줄만 보면 구간이 없을 때의 문자열과 같아 누락과 안 갈린다.
         assertThat(남은것("회복 시도가 실패했다")).hasSize(2)
                 .satisfies(둘 -> {
-                    assertThat(둘.get(0).getFormattedMessage()).contains("probes=1");
+                    assertThat(둘.get(0).getFormattedMessage()).contains("probes=1 slow=0 errors=1 notPermitted=0");
                     assertThat(둘.get(1).getFormattedMessage())
                             .contains("probes=0 slow=0 errors=0 notPermitted=0");
                 });

@@ -210,6 +210,29 @@ class CircuitTransitionLogTest {
      * 길은 없다. 로그로는 못 보는 성질이라 여기서는 안 재고, 근거는 저널에 둔다.
      */
     /**
+     * <b>찼다는 것만으로는 왜 열렸는지를 모른다.</b> 설정이 실패율과 느림 비율에
+     * 각각 임계를 두므로 창은 두 길로 열린다. 앞엣것은 뒷단이 오류를 내는 것이고
+     * 뒤엣것은 느린 호출이 창에 남은 것이라, 고칠 자리가 다르다.
+     */
+    @Test
+    @DisplayName("프로브를_느림과_오류로_나눠_센다")
+    void 프로브를_느림과_오류로_나눠_센다() {
+        서킷().transitionToOpenState();
+        서킷().transitionToHalfOpenState();
+        // 임계 1500ms 위아래로 하나씩. 느림은 성공이어도 느림이다.
+        서킷().onSuccess(2_000, TimeUnit.MILLISECONDS);
+        서킷().onSuccess(10, TimeUnit.MILLISECONDS);
+        서킷().onError(10, TimeUnit.MILLISECONDS, new RuntimeException("죽었다"));
+
+        서킷().transitionToOpenState();
+
+        assertThat(남은것("회복 시도가 실패했다")).singleElement()
+                .satisfies(e -> assertThat(e.getFormattedMessage())
+                        .as("셋을 갈라야 창을 태운 사유가 갈린다")
+                        .contains("프로브 3건(느림 1 · 오류 1)"));
+    }
+
+    /**
      * <b>창이 산 시간이 계수보다 단단하다.</b> 시한 근방이면 표본을 못 채워
      * 만료된 것이고 훨씬 짧으면 채우고 실패한 것이라, 계수 한 건이 경계에서
      * 어긋나도 이 판단은 안 눕는다.

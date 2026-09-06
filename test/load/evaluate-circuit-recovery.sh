@@ -37,7 +37,7 @@ if [ ! -s "$samples" ]; then
     exit "$UNMEASURABLE"
 fi
 
-for phase in 정상 진입 유지 회복 승계; do
+for phase in 정상 진입 유지 회복; do
     if ! grep -q "^# ${phase}\$" "$samples"; then
         echo "::error title=서킷 회복::구간 표시 '# ${phase}' 가 없다 — 어디가 어느 구간인지 모른다"
         exit "$UNMEASURABLE"
@@ -48,8 +48,10 @@ verdict=$(awk \
     -v limit_sec="$recovery_limit_sec" -v burst="$burst_limit" \
     -v divisor="$idle_divisor" -v step="$ramp_step" \
     -v min_baseline="$min_baseline" -v recovered_pct="$recovered_pct" '
-    function fail(msg) { printf "MISS %s\n", msg; exit }
-    function block(msg) { printf "BLOCK %s\n", msg; exit }
+    # **awk 의 exit 는 END 를 건너뛰지 않는다.** 표시를 안 두면 본문에서 낸
+    # 판정 뒤에 END 가 한 줄을 더 찍고, 부르는 쪽은 둘 중 뒤엣것을 읽는다.
+    function fail(msg) { decided = 1; printf "MISS %s\n", msg; exit }
+    function block(msg) { decided = 1; printf "BLOCK %s\n", msg; exit }
 
     /^#/ { phase = $2; next }
     /^[[:space:]]*$/ { next }
@@ -97,31 +99,48 @@ verdict=$(awk \
             fail(sprintf("조임이 유지되지 않았다 — 크레딧 %d 가 상한 %d 를 넘었다", credit, nodes))
         }
 
-        if (phase == "회복" || phase == "승계") {
+        if (phase == "회복" || phase == "해제" || phase == "승계") {
             recN++
-            if (recN == 1) { recT = t; recServed = served }
-            # **회복 구간 내내 한산 통과가 성립해야 한다** (R1). 노드당 몫이
-            # 유휴 나눗값 아래면 그 상한이 0 이고, 줄 설 이유가 없는 쿠폰이
-            # 전 노드에서 줄을 선다.
-            if (credit < nodes * divisor) {
-                fail(sprintf("회복 중 한산 통과가 막혔다 — 크레딧 %d, 노드 %d, 최소 %d",
-                        credit, nodes, nodes * divisor))
+            if (recN == 1) { recT = t }
+            lastRecT = t
+            # **자극을 걷은 것과 게이트가 풀린 것은 다르다.** 서킷은 제 창을
+            # 채워야 닫히므로, 뒷단이 멀쩡해진 뒤로도 한동안 조인 채로 있다.
+            # 그 구간의 낮은 크레딧은 램프가 만든 것이 아니라 게이트가 만든
+            # 것이라, 램프의 기준으로 재면 지킨 회차가 미달로 적힌다.
+            #
+            # **크레딧으로 유추하지 않는다.** 승계로 노드 수가 줄면 같은 값이
+            # 갑자기 상한 위로 보여, 안 풀린 회차가 풀린 것으로 적힌다. 러너가
+            # 배분의 전이 로그를 보고 표시를 남긴다.
+            if (!releasedAt && (phase == "해제" || phase == "승계")) {
+                releasedAt = t
             }
-            # 틱당 도착을 기준선과 견준다. 첫 표본은 앞이 없어 건너뛴다.
-            if (recPrevT > 0 && t > recPrevT) {
-                rate = (served - recPrevServed) * 1000.0 / (t - recPrevT)
-                if (rate > peakRate) { peakRate = rate }
-            }
-            recPrevT = t; recPrevServed = served
-            if (!doneAt && baseN >= min_baseline) {
-                target = baseSum / baseN * recovered_pct / 100.0
-                if (credit >= target) { doneAt = t }
+            if (releasedAt) {
+                # **풀린 뒤로는 한산 통과가 성립해야 한다** (R1). 노드당 몫이
+                # 유휴 나눗값 아래면 그 상한이 0 이고, 줄 설 이유가 없는 쿠폰이
+                # 전 노드에서 줄을 선다.
+                if (credit < nodes * divisor) {
+                    fail(sprintf("풀린 뒤 한산 통과가 막혔다 — 크레딧 %d, 노드 %d, 최소 %d",
+                            credit, nodes, nodes * divisor))
+                }
+                # 틱당 도착을 기준선과 견준다. 첫 표본은 앞이 없어 건너뛴다.
+                if (relPrevT > 0 && t > relPrevT) {
+                    rate = (served - relPrevServed) * 1000.0 / (t - relPrevT)
+                    if (rate > peakRate) { peakRate = rate }
+                }
+                relPrevT = t; relPrevServed = served
+                if (!doneAt && baseN >= min_baseline) {
+                    target = baseSum / baseN * recovered_pct / 100.0
+                    if (credit >= target) { doneAt = t }
+                }
             }
         }
 
         # **승계 직후 한 틱이 램프 안이어야 한다.** 이어받은 노드는 조인 적이
         # 없어 램프가 안 걸린다 — 게이트웨이가 둘 이상일 때만 열리는 구멍이다.
-        if (phase == "승계" && !handoverSeen) {
+        #
+        # 게이트가 아직 안 풀린 승계는 건너뛴다. 그 구간의 앞 값은 램프가 아니라
+        # 게이트가 정한 것이라, 배수를 거기에 걸면 아무 뜻이 없다.
+        if (phase == "승계" && !handoverSeen && releasedAt) {
             handoverSeen = 1
             allowed = beforeHandover * step
             floorAllowed = nodes * divisor
@@ -137,6 +156,7 @@ verdict=$(awk \
     }
 
     END {
+        if (decided) { exit }
         if (!seen) { block("표본이 한 줄도 없다") }
         # **회차를 시작한 대수로 본다.** 끝 값으로 보면 리더를 죽인 뒤의 수라,
         # 우리가 만든 자극이 이 회차를 판정 불가로 만든다.
@@ -158,11 +178,19 @@ verdict=$(awk \
             fail("서킷이 열렸는데 배분을 조이지 않았다 — 진입 구간의 크레딧이 상한 위다")
         }
         if (!recN) { block("회복 구간에 표본이 없다") }
-        if (!handoverSeen) { block("승계 구간에 표본이 없다") }
+
+        # **게이트가 안 풀렸으면 회복이 시작도 안 한 것이다.** 원인을 이름으로
+        # 부른다 — 그러지 않으면 램프의 기준이 대신 울려, 램프가 못 한 일처럼
+        # 적힌다. 실측에서 이 자리가 먼저 걸렸다.
+        if (!releasedAt) {
+            fail(sprintf("서킷이 안 닫혀 배분이 안 풀렸다 — %.1f 초 동안 크레딧이 상한 %d 위로 안 올라갔다",
+                    (lastRecT - recT) / 1000.0, prevNodes))
+        }
+        if (!handoverSeen) { block("승계가 게이트 해제 뒤에 안 왔다 — 램프를 못 잰다") }
 
         if (!doneAt) {
-            fail(sprintf("회복이 안 끝났다 — %.1f 초 동안 기준선의 %d%% 에 못 닿았다",
-                    (recPrevT - recT) / 1000.0, recovered_pct))
+            fail(sprintf("회복이 안 끝났다 — 풀린 뒤 %.1f 초 동안 기준선의 %d%% 에 못 닿았다",
+                    (lastRecT - releasedAt) / 1000.0, recovered_pct))
         }
         took = (doneAt - recT) / 1000.0
         if (took > limit_sec) {
@@ -172,7 +200,8 @@ verdict=$(awk \
             fail(sprintf("회복 봉우리가 초당 %.1f 건이다 — 기준선 %.1f 의 %.2f 배 (한계 %.1f)",
                     peakRate, baseRate, peakRate / baseRate, burst))
         }
-        printf "PASS %.1f %.1f %.1f %.2f\n", took, baseRate, peakRate, peakRate / baseRate
+        printf "PASS %.1f %.1f %.1f %.2f %.1f\n", took, baseRate, peakRate,
+                peakRate / baseRate, (releasedAt - recT) / 1000.0
     }
 ' "$samples")
 
@@ -188,6 +217,7 @@ case "$verdict" in
         printf '  %-24s %s초\n' "회복에 걸린 시간" "$2"
         printf '  %-24s 초당 %s건\n' "기준선 유입" "$3"
         printf '  %-24s 초당 %s건 (%s배)\n' "회복 봉우리" "$4" "$5"
+        printf '  %-24s %s초\n' "게이트가 풀리기까지" "$6"
         echo "판정: 충족 — 진입·유지·회복이 다 기준 안이다"
         exit 0 ;;
     *)

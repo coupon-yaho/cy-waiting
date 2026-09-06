@@ -17,7 +17,10 @@ cd "$(git rev-parse --show-toplevel)" || exit 1
 COMPOSE="docker compose -f test/load/compose.yml -f test/load/compose.multi.yml"
 
 GATEWAYS="${GATEWAYS:-2}"
-RATE="${RATE:-200}"
+# **한산 통과 상한 아래로 둔다.** 넘으면 줄이 서고, 줄이 한 번 서면 추월 금지
+# 때문에 그 뒤로 아무도 뒷단에 안 닿는다 — 회복 구간의 도착이 0 이라 재려던
+# 봉우리를 못 잰다. 실측에서 유입 200 이 정확히 그렇게 끝났다.
+RATE="${RATE:-60}"
 # 각 구간의 길이(초). 정상은 기준선을 만들 만큼, 유지는 조임이 붙어 있는지 볼
 # 만큼, 회복은 램프가 끝날 만큼이면 된다.
 NORMAL_SEC="${NORMAL_SEC:-20}"
@@ -26,6 +29,11 @@ RECOVER_SEC="${RECOVER_SEC:-40}"
 # 승계를 언제 넣을지. 회복이 한창일 때라야 램프가 걸린 채로 갈린다.
 HANDOVER_AFTER_SEC="${HANDOVER_AFTER_SEC:-6}"
 SAMPLE_MS="${SAMPLE_MS:-200}"
+# **자극은 지연이다. 5xx 가 아니다.** 게이트웨이는 상태 코드를 서킷에 안 물린다 —
+# 5xx 는 뒷단이 요청을 받은 뒤에 낸 답이라, 그걸 실패로 세고 재시도하면 그 한 건이
+# 곧 초과 발급이기 때문이다. 그래서 서킷을 여는 길은 느린 호출뿐이고, 이 값은
+# 느린 호출 문턱(1.9초)보다 넉넉히 커야 한다.
+FAULT_LATENCY_MS="${FAULT_LATENCY_MS:-3000}"
 COUPON="${COUPON:-c1}"
 OUT="${OUT:-circuit-recovery.txt}"
 
@@ -34,7 +42,7 @@ case "$OUT" in
     *) echo "OUT 은 .txt 여야 한다: '$OUT'"; exit 2 ;;
 esac
 
-for n in GATEWAYS RATE NORMAL_SEC HOLD_SEC RECOVER_SEC HANDOVER_AFTER_SEC SAMPLE_MS; do
+for n in GATEWAYS RATE NORMAL_SEC HOLD_SEC RECOVER_SEC HANDOVER_AFTER_SEC SAMPLE_MS FAULT_LATENCY_MS; do
     v=$(eval "printf '%s' \"\$$n\"")
     case "$v" in
         ''|*[!0-9]*) echo "$n 은 양의 정수여야 한다: '$v'"; exit 2 ;;
@@ -55,8 +63,8 @@ loadpid=""
 cleanup() {
     [ -n "$sampler" ] && kill "$sampler" 2>/dev/null
     [ -n "$loadpid" ] && kill "$loadpid" 2>/dev/null
-    # 고장을 남기지 않는다. 남으면 다음 회차가 시작부터 조인 채로 돈다.
-    $COMPOSE exec -T backend wget -qO- 'http://localhost:8090/stub/fault?status=0' \
+    # 자극을 남기지 않는다. 남으면 다음 회차가 시작부터 조인 채로 돈다.
+    $COMPOSE exec -T backend wget -qO- 'http://localhost:8090/stub/latency?ms=0' \
         >/dev/null 2>&1
     rm -rf "$work"
 }
@@ -135,6 +143,15 @@ done
 [ "$plateau" -ge 5 ] || { echo "여유 램프가 안 끝났다 (마지막 크레딧 $last)"; exit 2; }
 echo "여유 램프 완료 — 크레딧 $last"
 
+# **유입이 한산 통과 상한 안인지 본다.** 넘으면 줄이 서고, 그 회차는 회복이
+# 아니라 줄을 잰 것이 된다 — 그것도 도착이 0 이라 아무것도 못 잰다.
+# 유휴 비율의 기본값이 0.7 이라 0.6 이면 여유가 있다.
+headroom=$(( last * 6 / 10 ))
+if [ "$RATE" -ge "$headroom" ]; then
+    echo "::error title=서킷 회복::유입 ${RATE}/s 가 한산 통과 여유 ${headroom}/s 이상이다 — 줄이 서면 뒷단이 요청을 못 받는다"
+    exit 2
+fi
+
 # ── 표본 뜨기 ────────────────────────────────────────────────────────────────
 #
 # **발행 크레딧을 읽는다. 게이지가 아니다.** `waiting.capacity.credit` 은 보고를
@@ -149,8 +166,11 @@ sample_loop() {
     while :; do
         credit=$(r HGET gw:snapshot '#credit')
         nodes=$(r --raw HKEYS gw:instances | grep -cv '^#c:')
+        # **받은 수를 센다. 처리 완료 수가 아니다.** 느린 구간에 밀린 것이
+        # 회복 순간에 한꺼번에 끝나면 완료 수가 봉우리처럼 보인다 — 재려던
+        # 유입이 아니라 밀린 일을 잰다 (RC4 는 수신 수로 잰다).
         served=$($COMPOSE exec -T backend wget -qO- http://localhost:8090/stub/health \
-            2>/dev/null | sed 's/.*"served":\([0-9]*\).*/\1/')
+            2>/dev/null | sed 's/.*"accepted":\([0-9]*\).*/\1/')
         case "$credit$served$nodes" in
             ''|*[!0-9]*) ;;
             *) printf '%s %s %s %s\n' "$(date +%s%3N)" "$credit" "$served" "$nodes" ;;
@@ -174,48 +194,82 @@ sleep "$NORMAL_SEC"
 
 # ── 진입 — 뒷단을 고장 낸다 ──────────────────────────────────────────────────
 mark 진입
-if ! $COMPOSE exec -T backend wget -qO- 'http://localhost:8090/stub/fault?status=503' \
-        >/dev/null 2>&1; then
-    echo "고장을 못 넣었다"; exit 2
+if ! $COMPOSE exec -T backend wget -qO- \
+        "http://localhost:8090/stub/latency?ms=$FAULT_LATENCY_MS" >/dev/null 2>&1; then
+    echo "자극을 못 넣었다"; exit 2
 fi
-# 서킷이 창을 채우고 클러스터 투표가 도는 데 몇 틱이 든다. 그 몫만 진입으로 둔다.
-sleep 5
+# 서킷이 10초 창을 채우고, 클러스터 투표가 돌고, 배분이 그 값을 읽는 데 몇 틱이
+# 든다. 느린 호출은 그 지연만큼 늦게 창에 들어가므로 자극 지연도 같이 센다.
+sleep $(( 12 + FAULT_LATENCY_MS / 1000 ))
 
 mark 유지
 sleep "$HOLD_SEC"
 
 # ── 회복 — 고장을 걷고, 도중에 리더를 죽인다 ─────────────────────────────────
 mark 회복
-if ! $COMPOSE exec -T backend wget -qO- 'http://localhost:8090/stub/fault?status=0' \
+if ! $COMPOSE exec -T backend wget -qO- 'http://localhost:8090/stub/latency?ms=0' \
         >/dev/null 2>&1; then
-    echo "고장을 못 걷었다"; exit 2
+    echo "자극을 못 걷었다"; exit 2
 fi
+# **게이트가 풀린 순간을 제품에게 묻는다.** 크레딧으로 유추하면 승계로 노드
+# 수가 줄 때 같은 값이 갑자기 상한 위로 보여, 안 풀린 회차를 풀렸다고 적는다.
+# 배분은 그 전이를 로그로 남기므로 그것을 본다.
+echo "게이트가 풀리기를 기다린다"
+released=0
+for _ in $(seq 1 $((RECOVER_SEC * 2))); do
+    for cid in $($COMPOSE ps -q gateway); do
+        if docker logs --since 5m "$cid" 2>&1 \
+                | grep -q "배분 게이트를 푼다 —.*→ CLOSED"; then
+            released=1
+            break
+        fi
+    done
+    [ "$released" = 1 ] && break
+    sleep 0.5
+done
+if [ "$released" != 1 ]; then
+    # 표시를 안 쓴다. 판정기가 "안 풀렸다" 로 끊고 원인을 이름으로 부른다.
+    echo "게이트가 안 풀렸다 — 승계는 건너뛴다"
+    sleep "$((RECOVER_SEC / 2))"
+    kill "$sampler" 2>/dev/null; sampler=""
+    wait "$loadpid" 2>/dev/null
+    loadpid=""
+    cp "$work/samples.txt" "$OUT"
+    exec test/load/evaluate-circuit-recovery.sh "$OUT"
+fi
+mark 해제
+echo "게이트가 풀렸다"
 sleep "$HANDOVER_AFTER_SEC"
 
 # **리더를 짚어서 죽인다.** 소유자 식별자는 기동마다 새로 만드는 UUID 라 밖에서
 # 못 맞춘다. 대신 리더가 될 때 그 값을 로그에 남기므로, 잠금에 든 값과 같은 줄을
 # 찍은 컨테이너가 리더다. 아무 대나 죽이면 승계가 안 일어난 회차를 승계라고 적는다.
-owner=$(r GET scheduler:leader)
+# 잠금 값의 형식은 `<펜스 번호>|<소유자>` 다. 번호까지 넣어 찾으면 로그의
+# 소유자와 절대 안 맞아, 리더가 멀쩡히 있는데 "못 짚었다" 로 끝난다.
+lock=$(r GET scheduler:leader)
+owner=${lock##*|}
+# **컨테이너를 식별자로 짚는다.** `compose kill` 에는 인덱스가 없고, 인덱스와
+# 컨테이너의 짝을 다른 명령으로 다시 맞추면 그 사이 순서가 바뀌었을 때 엉뚱한
+# 대를 죽인다 — 그 회차는 승계가 아닌 것을 승계라고 적는다.
 leader=""
 if [ -n "$owner" ]; then
-    for idx in $(seq 1 "$GATEWAYS"); do
-        if $COMPOSE logs --index "$idx" --no-log-prefix gateway 2>/dev/null \
-                | grep -q "리더가 됐다 — owner=$owner"; then
-            leader=$idx
+    for cid in $($COMPOSE ps -q gateway); do
+        if docker logs "$cid" 2>&1 | grep -q "리더가 됐다 — owner=$owner"; then
+            leader=$cid
             break
         fi
     done
 fi
 if [ -z "$leader" ]; then
-    echo "::error title=서킷 회복::리더를 못 짚었다 (잠금 '$owner') — 승계를 못 만든다"
+    echo "::error title=서킷 회복::리더를 못 짚었다 (잠금 '$lock') — 승계를 못 만든다"
     exit 2
 fi
-echo "리더는 게이트웨이 ${leader}번 — 죽인다"
+echo "리더는 ${leader} — 죽인다"
 mark 승계
-$COMPOSE kill --signal SIGKILL --index "$leader" gateway >/dev/null 2>&1 || {
-    echo "리더를 못 죽였다"; exit 2; }
+docker kill --signal SIGKILL "$leader" >/dev/null 2>&1 || {
+    echo "리더를 못 죽였다: $leader"; exit 2; }
 
-sleep $((RECOVER_SEC - HANDOVER_AFTER_SEC))
+sleep "$HANDOVER_AFTER_SEC"
 
 kill "$sampler" 2>/dev/null; sampler=""
 wait "$loadpid" 2>/dev/null; k6rc=$?

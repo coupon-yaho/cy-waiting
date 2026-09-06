@@ -51,7 +51,7 @@ healthy_run() {
         echo '# 진입'; gated 1600 160 2 3
         echo '# 유지'; gated 2200 160 2 5
         echo '# 회복'; recovering 3200 160
-        echo '# 승계'; printf '%s 300 %s %s\n' 5200 340 "$NODES"
+        echo '# 해제'; echo '# 승계'; printf '%s 300 %s %s\n' 5200 340 "$NODES"
     } > "$work/$1"
     printf '%s' "$work/$1"
 }
@@ -66,7 +66,7 @@ run_case "정상 회차는 충족" 0 "충족" -- "$(healthy_run ok.txt)"
     echo '# 진입'; gated 1600 160 300 3
     echo '# 유지'; gated 2200 160 2 5
     echo '# 회복'; recovering 3200 160
-    echo '# 승계'; printf '%s 300 %s %s\n' 5200 340 "$NODES"
+    echo '# 해제'; echo '# 승계'; printf '%s 300 %s %s\n' 5200 340 "$NODES"
 } > "$work/late.txt"
 run_case "진입이 늦으면 미달" 1 "조이지 않았다" -- "$work/late.txt"
 
@@ -77,7 +77,7 @@ run_case "진입이 늦으면 미달" 1 "조이지 않았다" -- "$work/late.txt
     echo '# 유지'; gated 2200 160 2 2
     printf '%s 300 160 %s\n' 2600 "$NODES"
     echo '# 회복'; recovering 3200 160
-    echo '# 승계'; printf '%s 300 %s %s\n' 5200 340 "$NODES"
+    echo '# 해제'; echo '# 승계'; printf '%s 300 %s %s\n' 5200 340 "$NODES"
 } > "$work/leak.txt"
 run_case "유지가 새면 미달" 1 "조임이 유지되지 않았다" -- "$work/leak.txt"
 
@@ -90,34 +90,65 @@ run_case "유지가 새면 미달" 1 "조임이 유지되지 않았다" -- "$wor
     for i in $(seq 0 40); do
         printf '%s %s %s %s\n' $((3200 + i * 1000)) $((4 + i)) $((160 + i * 4)) "$NODES"
     done
-    echo '# 승계'; printf '%s 300 %s %s\n' 60000 400 "$NODES"
+    # 승계 한 틱도 램프 안에 둔다. 밖에 두면 그 검사가 먼저 나서, 이 회차가
+    # 회복 시간이 아니라 승계를 잰 것이 된다.
+    echo '# 해제'; echo '# 승계'; printf '%s 80 %s %s\n' 60000 400 "$NODES"
 } > "$work/slow.txt"
-run_case "회복이 느리면 미달" 1 "회복이" -- "$work/slow.txt"
+run_case "회복이 안 끝나면 미달" 1 "회복이 안 끝났다" -- "$work/slow.txt"
+
+# **끝나긴 했는데 늦은 회차.** 위 사례는 아예 안 끝나는 쪽이라 한계를 지워도
+# 안 걸린다 — 한계를 실제로 쓰는지 보려면 닿기는 하되 늦게 닿아야 한다.
+{
+    echo '# 정상'; normal 0 0
+    echo '# 진입'; gated 1600 160 2 3
+    echo '# 유지'; gated 2200 160 2 5
+    echo '# 회복'; printf '%s 4 160 %s\n' 3200 "$NODES"
+    echo '# 해제'; echo '# 승계'
+    printf '%s 8 260 %s\n' 13200 "$NODES"
+    printf '%s 16 360 %s\n' 23200 "$NODES"
+    printf '%s 32 460 %s\n' 33200 "$NODES"
+    printf '%s 300 500 %s\n' 38200 "$NODES"
+} > "$work/slowdone.txt"
+run_case "회복이 한계를 넘으면 미달" 1 "초 걸렸다" -- "$work/slowdone.txt"
 
 # **봉우리가 기준선의 1.2 배를 넘으면 회복이 곧 2차 장애다** (RC4).
 {
     echo '# 정상'; normal 0 0
     echo '# 진입'; gated 1600 160 2 3
     echo '# 유지'; gated 2200 160 2 5
-    echo '# 회복'
-    printf '%s 4 160 %s\n' 3200 "$NODES"
-    printf '%s 300 300 %s\n' 3400 "$NODES"
-    printf '%s 300 320 %s\n' 3600 "$NODES"
-    echo '# 승계'; printf '%s 300 340 %s\n' 3800 "$NODES"
+    echo '# 회복'; printf '%s 2 160 %s\n' 3200 "$NODES"
+    echo '# 해제'
+    printf '%s 4 168 %s\n' 3400 "$NODES"
+    printf '%s 300 308 %s\n' 3600 "$NODES"
+    echo '# 승계'; printf '%s 300 328 %s\n' 3800 "$NODES"
 } > "$work/burst.txt"
 run_case "회복 봉우리가 크면 미달" 1 "봉우리" -- "$work/burst.txt"
 
-# **회복 구간에 한산 통과 상한이 0 이 되면 안 된다** (R1). 노드 둘이면 4 미만이다.
+# **풀린 뒤에는 한산 통과 상한이 1 이상이어야 한다** (R1). 노드 둘이면 크레딧
+# 4 미만이다. 3 은 상한(노드 수 2)을 넘어 풀린 것으로 잡히면서도 최소에는 못 미친다.
 {
     echo '# 정상'; normal 0 0
     echo '# 진입'; gated 1600 160 2 3
     echo '# 유지'; gated 2200 160 2 5
-    echo '# 회복'
-    printf '%s 2 160 %s\n' 3200 "$NODES"
-    printf '%s 300 180 %s\n' 3400 "$NODES"
-    echo '# 승계'; printf '%s 300 200 %s\n' 3600 "$NODES"
+    echo '# 회복'; printf '%s 2 160 %s\n' 3200 "$NODES"
+    echo '# 해제'
+    printf '%s 3 168 %s\n' 3400 "$NODES"
+    printf '%s 300 188 %s\n' 3600 "$NODES"
+    echo '# 승계'; printf '%s 300 208 %s\n' 3800 "$NODES"
 } > "$work/idle.txt"
-run_case "회복 중 한산 통과가 막히면 미달" 1 "한산 통과" -- "$work/idle.txt"
+run_case "풀린 뒤 한산 통과가 막히면 미달" 1 "한산 통과" -- "$work/idle.txt"
+
+# **게이트가 안 풀리면 회복이 시작도 안 한 것이다.** 원인을 이름으로 부른다 —
+# 그러지 않으면 램프의 기준이 대신 울려, 램프가 못 한 일처럼 적힌다. 실측에서
+# 서킷이 프로브를 못 채워 이 자리가 먼저 걸렸다.
+{
+    echo '# 정상'; normal 0 0
+    echo '# 진입'; gated 1600 160 2 3
+    echo '# 유지'; gated 2200 160 2 5
+    echo '# 회복'; gated 3200 160 2 10
+    printf '%s 1 160 1\n' 5300
+} > "$work/stuck.txt"
+run_case "게이트가 안 풀리면 미달" 1 "안 닫혀" -- "$work/stuck.txt"
 
 # **승계가 계단을 되살리면 안 된다.** 이어받은 노드는 조인 적이 없어 램프가
 # 안 걸린다 — 게이트웨이가 둘 이상일 때만 열리는 구멍이라 여기서만 잡힌다.
@@ -128,7 +159,7 @@ run_case "회복 중 한산 통과가 막히면 미달" 1 "한산 통과" -- "$w
     echo '# 회복'
     printf '%s 4 160 %s\n' 3200 "$NODES"
     printf '%s 8 168 %s\n' 3400 "$NODES"
-    echo '# 승계'; printf '%s 300 188 %s\n' 3600 "$NODES"
+    echo '# 해제'; echo '# 승계'; printf '%s 300 188 %s\n' 3600 "$NODES"
 } > "$work/handover.txt"
 run_case "승계가 계단을 되살리면 미달" 1 "승계" -- "$work/handover.txt"
 
@@ -142,7 +173,7 @@ run_case "승계가 계단을 되살리면 미달" 1 "승계" -- "$work/handover
     echo '# 회복'
     printf '%s 4 160 %s\n' 3200 "$NODES"
     printf '%s 8 168 %s\n' 3400 "$NODES"
-    echo '# 승계'
+    echo '# 해제'; echo '# 승계'
     printf '%s 16 176 1\n' 3600
     printf '%s 32 184 1\n' 3800
     printf '%s 300 200 1\n' 4000
@@ -157,7 +188,7 @@ run_case "승계로 노드가 줄어도 충족" 0 "충족" -- "$work/shrink.txt"
     echo '# 진입'; gated 1600 160 0 3
     echo '# 유지'; gated 2200 160 0 5
     echo '# 회복'
-    echo '# 승계'
+    echo '# 해제'; echo '# 승계'
     printf '%s 4 160 %s\n' 3200 "$NODES"
     printf '%s 8 168 %s\n' 3400 "$NODES"
     printf '%s 300 188 %s\n' 3600 "$NODES"
@@ -175,7 +206,7 @@ run_case "전면 정지에서 돌아와도 충족" 0 "충족" -- "$work/fullopen
     echo '# 회복'
     printf '%s 4 160 %s\n' 3200 "$NODES"
     printf '%s 300 180 3\n' 3400
-    echo '# 승계'; printf '%s 300 200 3\n' 3600
+    echo '# 해제'; echo '# 승계'; printf '%s 300 200 3\n' 3600
 } > "$work/grow.txt"
 run_case "노드가 늘면 판정 불가" 2 "늘었다" -- "$work/grow.txt"
 
@@ -195,7 +226,7 @@ run_case "구간 표시가 없으면 판정 불가" 2 "구간 표시" -- "$work/
     echo '# 진입'; printf '%s 1 20 1\n' 1600
     echo '# 유지'; printf '%s 1 20 1\n' 2200
     echo '# 회복'; printf '%s 2 20 1\n' 3200; printf '%s 300 40 1\n' 3400
-    echo '# 승계'; printf '%s 300 60 1\n' 3600
+    echo '# 해제'; echo '# 승계'; printf '%s 300 60 1\n' 3600
 } > "$work/single.txt"
 run_case "노드가 하나면 판정 불가" 2 "게이트웨이가" -- "$work/single.txt"
 
@@ -204,7 +235,7 @@ run_case "노드가 하나면 판정 불가" 2 "게이트웨이가" -- "$work/si
     echo '# 진입'; printf '%s 오류 160 %s\n' 1600 "$NODES"
     echo '# 유지'; gated 2200 160 2 5
     echo '# 회복'; recovering 3200 160
-    echo '# 승계'; printf '%s 300 340 %s\n' 5200 "$NODES"
+    echo '# 해제'; echo '# 승계'; printf '%s 300 340 %s\n' 5200 "$NODES"
 } > "$work/bad.txt"
 run_case "표본이 숫자가 아니면 판정 불가" 2 "표본이 숫자가 아니다" -- "$work/bad.txt"
 
@@ -217,7 +248,7 @@ run_case "표본이 숫자가 아니면 판정 불가" 2 "표본이 숫자가 �
     echo '# 진입'; gated 1600 160 2 3
     echo '# 유지'; gated 2200 160 2 5
     echo '# 회복'; recovering 3200 160
-    echo '# 승계'; printf '%s 300 340 %s\n' 5200 "$NODES"
+    echo '# 해제'; echo '# 승계'; printf '%s 300 340 %s\n' 5200 "$NODES"
 } > "$work/short.txt"
 run_case "정상 구간이 짧으면 판정 불가" 2 "기준선 표본이" -- "$work/short.txt"
 
@@ -228,7 +259,7 @@ run_case "정상 구간이 짧으면 판정 불가" 2 "기준선 표본이" -- "
     echo '# 진입'; gated 1600 100 2 3
     echo '# 유지'; gated 2200 100 2 5
     echo '# 회복'; recovering 3200 100
-    echo '# 승계'; printf '%s 300 280 %s\n' 5200 "$NODES"
+    echo '# 해제'; echo '# 승계'; printf '%s 300 280 %s\n' 5200 "$NODES"
 } > "$work/reset.txt"
 run_case "도착이 줄면 판정 불가" 2 "다시 떴다" -- "$work/reset.txt"
 
@@ -238,7 +269,7 @@ run_case "도착이 줄면 판정 불가" 2 "다시 떴다" -- "$work/reset.txt"
     echo '# 진입'; gated 1600 0 2 3
     echo '# 유지'; gated 2200 0 2 5
     echo '# 회복'; recovering 3200 0
-    echo '# 승계'; printf '%s 300 180 %s\n' 5200 "$NODES"
+    echo '# 해제'; echo '# 승계'; printf '%s 300 180 %s\n' 5200 "$NODES"
 } > "$work/noload.txt"
 run_case "기준선 유입이 0 이면 판정 불가" 2 "부하가 안 닿았다" -- "$work/noload.txt"
 

@@ -26,7 +26,9 @@ cmd_joined=${cmd//"$join"/ }
 
 # 사전 걸러내기는 본 판별과 같은 관용도여야 한다. 더 엄하면 공백 하나로 게이트를
 # 통째로 지나간다.
-[[ ! "$cmd_joined" =~ $CREATE_RE ]] && exit 0
+cmd_naked=${cmd_joined//[\'\"]/}
+cmd_naked=${cmd_naked//\\/}
+[[ ! "$cmd_joined" =~ $CREATE_RE && ! "$cmd_naked" =~ $CREATE_RE ]] && exit 0
 
 mapfile -t lines <<< "$cmd_joined"
 
@@ -55,6 +57,9 @@ opens_heredoc() {
     [[ "$line" =~ $HEREDOC_RE ]] || return 1
     delim=${BASH_REMATCH[2]}
     delim=${delim%[\'\"]}
+    # `<<\EOF` 도 인용이다. 역슬래시는 구분자에 안 들어가므로 종결선은 EOF 다 —
+    # 안 떼면 그 히어독이 영영 안 닫혀 본문이 명령으로 읽힌다.
+    delim=${delim#\\}
     for ((j = from; j < ${#lines[@]}; j++)); do
         [[ "${lines[j]}" =~ ^[[:space:]]*"$delim"[[:space:]]*$ ]] && return 0
     done
@@ -74,7 +79,12 @@ for ((n = 0; n < ${#lines[@]}; n++)); do
             [[ "${lines[m]}" =~ ^[[:space:]]*"$delim"[[:space:]]*$ ]] && { skip_to=$m; break; }
         done
     fi
-    if [[ "$(strip_comment "$line")" =~ $CREATE_RE ]]; then
+    # **인용과 이스케이프를 걷고 한 번 더 본다.** `gh'' pr create` 나
+    # `g\h pr create` 는 셸이 벗겨 같은 명령이 되는데 글자 그대로는 안 걸린다.
+    bare=$(strip_comment "$line")
+    naked=${bare//[\'\"]/}
+    naked=${naked//\\/}
+    if [[ "$bare" =~ $CREATE_RE || "$naked" =~ $CREATE_RE ]]; then
         creating=1
         create_line=$line
         break

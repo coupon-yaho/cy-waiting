@@ -219,7 +219,27 @@ class CircuitTransitionLogTest {
         assertThat(남은것("회복 시도가 실패했다")).singleElement()
                 .satisfies(e -> assertThat(e.getFormattedMessage())
                         .as("셋을 갈라야 실패한 사유가 갈린다")
-                        .contains("probes=3 slow=1 errors=1"));
+                        .contains("probes=3 slow=1 errors=1 notPermitted=0"));
+    }
+
+    /** 허가가 소진돼 못 채운 것과 공급이 없어 못 채운 것은 고칠 자리가 다르다. */
+    @Test
+    @DisplayName("허가가_소진돼_막힌_수를_따로_센다")
+    void 허가가_소진돼_막힌_수를_따로_센다() {
+        서킷().transitionToOpenState();
+        서킷().transitionToHalfOpenState();
+        // 허가만 가져가고 완료를 안 낸다 — 프로브가 매달린 모양이다.
+        for (int i = 0; i < 허용_프로브; i++) {
+            서킷().tryAcquirePermission();
+        }
+
+        서킷().tryAcquirePermission();
+        서킷().transitionToOpenState();
+
+        assertThat(남은것("회복 시도가 실패했다")).singleElement()
+                .satisfies(e -> assertThat(e.getFormattedMessage())
+                        .as("완료가 0 이어도 허가는 다 나갔다")
+                        .contains("probes=0 slow=0 errors=0 notPermitted=1"));
     }
 
     /** 빈 문자열로 두면 "안 실렸다" 와 "0 이었다" 가 안 갈린다. */
@@ -232,7 +252,7 @@ class CircuitTransitionLogTest {
 
         assertThat(남은것("회복 시도가 실패했다")).singleElement()
                 .satisfies(e -> assertThat(e.getFormattedMessage())
-                        .contains("probes=0 slow=0 errors=0"));
+                        .contains("probes=0 slow=0 errors=0 notPermitted=0"));
     }
 
     /** 서킷은 초과만 느림으로 센다. 경계가 갈리면 재구성이 어긋난다. */
@@ -307,7 +327,7 @@ class CircuitTransitionLogTest {
                 .satisfies(둘 -> {
                     assertThat(둘.get(0).getFormattedMessage()).contains("probes=1");
                     assertThat(둘.get(1).getFormattedMessage())
-                            .contains("probes=0 slow=0 errors=0");
+                            .contains("probes=0 slow=0 errors=0 notPermitted=0");
                 });
     }
 

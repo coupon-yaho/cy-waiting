@@ -79,6 +79,9 @@ final class CircuitTransitionLog {
      * half-open 구간에서만 센다.
      *
      * <p>느림과 오류를 가른다. half-open 은 두 길로 실패하고 고칠 자리가 다르다.
+     *
+     * <p><b>이 수는 완료다.</b> 허가는 취득 시점에 깎이므로 만료 때 비행 중이던
+     * 호출은 안 들어온다 — 그 차이는 {@code notPermitted} 가 답한다.
      */
     private void probed(CircuitBreaker breaker, Duration elapsed, boolean failed) {
         Probes window = probes.get(breaker.getName());
@@ -102,19 +105,22 @@ final class CircuitTransitionLog {
      * <p>길이가 {@code maxWaitDurationInHalfOpenState} 근방이면 표본을 못 채운
      * 것이고, 훨씬 짧으면 채우고 실패한 것이다.
      */
-    private record Probes(long since, LongAdder count, LongAdder slow, LongAdder failed) {
+    private record Probes(long since, LongAdder count, LongAdder slow, LongAdder failed,
+            LongAdder notPermitted) {
 
         static Probes halfOpened(long since) {
-            return new Probes(since, new LongAdder(), new LongAdder(), new LongAdder());
+            return new Probes(since, new LongAdder(), new LongAdder(), new LongAdder(),
+                    new LongAdder());
         }
 
         /** 구간이 무엇을 모았는지. 없을 때도 여기서 답한다. */
         static String describe(Probes window) {
             if (window == null) {
-                return "probes=0 slow=0 errors=0";
+                return "probes=0 slow=0 errors=0 notPermitted=0";
             }
-            return "probes=%d slow=%d errors=%d".formatted(
-                    window.count.sum(), window.slow.sum(), window.failed.sum());
+            return "probes=%d slow=%d errors=%d notPermitted=%d".formatted(
+                    window.count.sum(), window.slow.sum(), window.failed.sum(),
+                    window.notPermitted.sum());
         }
 
         /** 구간이 산 시간(ms). 상한이 1초 미만일 수 있어 초로 자르면 0 이 된다. */
@@ -127,6 +133,12 @@ final class CircuitTransitionLog {
         Opened window = opened.get(name);
         if (window != null) {
             window.blocked().increment();
+        }
+        // half-open 에서 막혔다면 허가가 소진된 것이다. 공급이 없어 못 채운 구간과
+        // 프로브가 매달려 못 채운 구간이 이 값으로 갈린다.
+        Probes probe = probes.get(name);
+        if (probe != null) {
+            probe.notPermitted().increment();
         }
     }
 

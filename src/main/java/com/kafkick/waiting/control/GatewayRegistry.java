@@ -196,7 +196,7 @@ public final class GatewayRegistry {
     // 관측을 그대로 둔다. 평활은 쓰는 쪽이 한다 — 여기서 두 번 하면 회복이
     // 늦는 이유가 두 곳으로 갈린다.
     public void passObserved(int passed, int passReported, int alive) {
-        clusterPass.set(passed < 0 || passReported < alive ? -1 : passed);
+        clusterPass.set(passReported < alive ? -1 : passed);
     }
 
     /** 이번 관측이 실패했다. <b>통과 수는 직전 값을 안 지킨다</b> — 순간값이다. */

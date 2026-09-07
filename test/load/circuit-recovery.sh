@@ -383,11 +383,13 @@ total_sec=$((NORMAL_SEC + SETTLE_SEC + HOLD_SEC + RECOVER_SEC + tail_sec + 5))
 
 # **동시 실행자를 자극에 맞춰 잡는다.** 물림은 유입 × 지연이다. 모자라면 회차가
 # 통째로 판정 불가로 끝나고, 그때 고친 값이 조건도 같이 바꾼다.
-vus=$(( RATE * FAULT_LATENCY_MS / 1000 * 3 / 2 + 50 ))
-# **표를 쓰러 오는 사람 수가 배수량의 천장이다.** 이들이 0.2초마다 한 번 집으므로
-# 초당 최대 `HOLDERS × 5` 건이 지나간다. 유입보다 적으면 기준선이 거기서 멎어,
-# 봉우리 비의 분모가 상한과 멀어진다.
-holders=${HOLDERS:-$(( RATE / 4 + 20 ))}
+# **재시도 간격만큼 회차가 더 물린다.** 자극 지연만 보면 예산이 모자라 흘린
+# 회차가 나고, 흘리면 그 회차는 통째로 판정 불가다.
+vus=$(( RATE * (FAULT_LATENCY_MS / 1000 + 2) * 3 / 2 + 50 ))
+# **표를 쓰러 오는 사람 수가 배수량의 천장이다.** 이들은 제품이 준 재시도 간격을
+# 지키므로 한 사람이 초당 한 번꼴이다 — 천장이 곧 `HOLDERS` 다. 유입보다 적으면
+# 기준선이 거기서 멎어, 봉우리 비의 분모가 상한과 멀어진다.
+holders=${HOLDERS:-$(( RATE + 20 ))}
 BASE_URLS="$bases" RATE="$RATE" DURATION="${total_sec}s" COUPON="$COUPON" VUS="$vus" \
     HOLDERS="$holders" \
     k6 run --quiet --summary-export="$work/k6.json" test/load/circuit-recovery.js \

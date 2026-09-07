@@ -341,9 +341,9 @@ public final class AllocationRound {
             // "몫 올림" 으로만 나가, 승계를 원인에서 못 읽는다.
             log.info("승계 — 램프를 발행 몫 {} 에서 다시 세운다", publishedCredit);
         } else {
-            // **위험한 쪽이 무음이면 안 된다** (LG-2). 이 갈래는 브레이크 없이
-            // 첫 회차를 돌므로, 안전한 쪽만 보이면 계단이 났을 때 원인을 못 짚는다.
-            log.warn("승계 — 발행 몫을 몰라 첫 회차에 램프를 안 건다");
+            // **위험한 쪽이 무음이면 안 된다** (LG-2). 앞 임기의 기준이 남아
+            // 있으면 램프는 걸린 채다 — 그 구분까지 실어야 없는 계단을 안 찾는다.
+            log.warn("승계 — 발행 몫을 모른다. 앞 임기 기준이 있으면 그것을 이어 쓴다");
         }
         smoother.set(null);
         carryoverMisses.set(0);
@@ -554,7 +554,12 @@ public final class AllocationRound {
                 .doOnCancel(() -> restoreUnpublished(published, before));
     }
 
-    /** 발행이 나간 회차는 안 되돌린다 — 그 몫은 노드에 실제로 닿았다. */
+    /**
+     * 발행이 나간 회차는 안 되돌린다 — 그 몫은 노드에 실제로 닿았다.
+     *
+     * <p><b>단위 시험이 이 갈래에 못 닿는다.</b> 발행 뒤의 정리·걷기는 오류를
+     * 스스로 삼키므로, 남는 것은 그 구간에서 틱을 넘겨 잘리는 회차뿐이다.
+     */
     private void restoreUnpublished(AtomicBoolean published, ReleaseRamp.State before) {
         if (!published.get()) {
             releaseRamp.restore(before);

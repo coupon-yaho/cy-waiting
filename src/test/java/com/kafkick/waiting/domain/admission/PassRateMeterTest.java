@@ -243,7 +243,9 @@ class PassRateMeterTest {
             pool.shutdownNow();
         }
 
-        assertThat(low).isPositive();
+        // **바닥 1 이 아니라 접힌 값으로 판정한다.** 찢어진 읽기가 나면 값이
+        // 한 자리로 떨어지는데, 양수만 보면 그것을 통과로 읽는다.
+        assertThat(low).isGreaterThanOrEqualTo(60);
     }
 
     /** 무잠금이라 잃기 쉬운 것은 원자성이 아니라 셈이다. 한 건도 안 샌다. */
@@ -295,7 +297,9 @@ class PassRateMeterTest {
 
         assertThat(meter.perSecond(7_100)).as("아직 한 창 안이라 직전 값을 쓴다")
                 .isEqualTo(60);
-        assertThat(meter.perSecond(17_100)).as("두 창을 넘기면 지난 부하다").isZero();
+        assertThat(meter.perSecond(16_999)).as("두 창 직전까지는 직전 값이다")
+                .isEqualTo(60);
+        assertThat(meter.perSecond(17_000)).as("정확히 두 창이면 지난 부하다").isZero();
     }
 
     /** 뒤진 도장 하나가 창을 버리면, 끊긴 적 없는 부하가 한 창 내내 0 이다. */
@@ -314,7 +318,6 @@ class PassRateMeterTest {
                 .isEqualTo(1_000);
     }
 
-    /** 창 길이가 크면 두 배가 넘쳐 음수가 되고 값이 영영 0 이다. */
     /** 창이 길면 한두 건이 0 으로 반올림된다. 통과가 있었으면 0 을 내면 안 된다. */
     @Test
     @DisplayName("한_건도_0_으로_안_반올림한다")
@@ -322,9 +325,11 @@ class PassRateMeterTest {
         PassRateMeter meter = PassRateMeter.of(WINDOW_MS);
         meter.passed(1_000);
 
-        assertThat(meter.perSecond(1_000)).isOne();
+        // 3초로 나누면 0.33 이라 바닥이 없으면 0 이 된다.
+        assertThat(meter.perSecond(4_000)).isOne();
     }
 
+    /** 창 길이가 크면 두 배가 넘쳐 음수가 되고 값이 영영 0 이다. */
     @Test
     @DisplayName("창은_상한을_넘을_수_없다")
     void 창은_상한을_넘을_수_없다() {

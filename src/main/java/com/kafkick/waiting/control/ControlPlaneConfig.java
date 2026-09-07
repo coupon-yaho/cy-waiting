@@ -245,19 +245,23 @@ public class ControlPlaneConfig {
     /**
      * 승계 노드가 램프를 세울 출발점.
      *
-     * @return 발행된 적 없으면 음수(램프 없음), 재료가 낡았으면 R1 하한
+     * <p><b>R1 은 여기서 안 지킨다.</b> 하한보다 낮은 값이 나올 수 있고, 그것을
+     * 되올리는 것은 {@code ReleaseRamp.next} 에 넘기는 minimum 이다.
+     *
+     * @return 기동 직후면 음수(램프 없음), 그 밖에는 발행 몫이나 R1 하한 이하
      */
-    // 낡은 큰 값은 브레이크를 통째로 푼다. 그렇다고 안 주면 브레이크가 아예
-    // 없으므로, 그 사이의 안전한 값인 R1 하한에서 다시 올린다.
+    // 낡은 큰 값은 브레이크를 통째로 푼다. 그렇다고 안 주면 브레이크가 아예 없다.
     static long startingCredit(SnapshotHolder.View seen, SnapshotHolder holder,
             GatewayRegistry registry) {
+        long floor = CapacityCollector.idleMinimum(registry.count());
         if (!seen.snapshot().isPublished()) {
-            return -1;
+            // **못 읽은 것과 아직 안 읽은 것은 다르다.** 샤드가 끊긴 채 몇 시간
+            // 떠 있던 노드도 여기 오는데, 램프를 안 걸면 첫 틱이 목표를 통째로
+            // 발행한다. 기동 직후만 면제한다.
+            return seen.isBeforeFirstTick() ? -1 : floor;
         }
         long published = seen.snapshot().meta().globalCredit();
-        return holder.isDataStale(seen)
-                ? Math.min(published, CapacityCollector.idleMinimum(registry.count()))
-                : published;
+        return holder.isDataStale(seen) ? Math.min(published, floor) : published;
     }
 
     @Bean

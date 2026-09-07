@@ -132,6 +132,32 @@ if [[ -n "$key" && -r "$env_file" ]]; then
     fi
 fi
 
+# **문서가 가리키는 키도 본다.** 브랜치만 보면 계획서에 적힌 키가 실재하는지는
+# 아무도 안 묻는다 — 열다섯 종이 47 곳에서 없는 곳을 가리키고 있었고, 나중에
+# 그 번호로 다른 티켓이 생기자 링크가 엉뚱한 곳으로 열렸다 (CY-891).
+if [[ -r "$env_file" ]] && git -C "$ROOT" diff --quiet --exit-code 2>/dev/null; then
+    changed=$(git -C "$ROOT" diff --name-only origin/develop...HEAD 2>/dev/null \
+        | grep -E '^(plan|ai)/.*\.md$' || true)
+    if [[ -n "$changed" ]]; then
+        keys=$(cd "$ROOT" && grep -hoE '\bCY-[0-9]+\b' $changed 2>/dev/null \
+            | sort -u || true)
+        missing=$(set -a; . "$env_file" >/dev/null 2>&1; set +a
+            [[ -z "${ATLASSIAN_BASE_URL:-}" ]] && exit 0
+            for k in $keys; do
+                c=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+                    -u "$ATLASSIAN_USER_EMAIL:$ATLASSIAN_API_TOKEN" \
+                    -H 'Accept: application/json' \
+                    "${ATLASSIAN_BASE_URL%/}/rest/api/3/issue/$k?fields=summary" 2>/dev/null)
+                [[ "$c" == "404" ]] && printf '%s ' "$k"
+            done)
+        if [[ -n "${missing// /}" ]]; then
+            echo "고친 문서가 없는 이슈를 가리킨다: $missing" >&2
+            echo "  없는 추적을 있는 척 두지 않는다 — 키를 고치거나 뺀다" >&2
+            exit 2
+        fi
+    fi
+fi
+
 RUNNER="$ROOT/.claude/hooks/review-branch.sh"
 if [[ ! -x "$RUNNER" ]]; then
     echo "로컬 리뷰 러너를 실행할 수 없다: $RUNNER" >&2

@@ -49,6 +49,7 @@ import reactor.netty.http.server.HttpServer;
 @Tag("context")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = {"waiting.scheduler.enabled=false", "waiting.routing.enabled=true",
+                "waiting.routing.allowed-destinations=127.0.0.0/8",
                 "waiting.routing.strategy=round-robin"})
 @Import(ConnectRetryTest.TwoInstances.class)
 class ConnectRetryTest {

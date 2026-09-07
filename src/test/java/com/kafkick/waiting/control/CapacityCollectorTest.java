@@ -3,6 +3,7 @@ package com.kafkick.waiting.control;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.kafkick.waiting.domain.routing.AllowedDestinations;
 import com.kafkick.waiting.domain.routing.InstanceAddress;
 import com.kafkick.waiting.domain.routing.InstanceRouting;
 import java.time.Duration;
@@ -964,5 +965,45 @@ class CapacityCollectorTest {
         collector.collect(List.of(), warmed + 100, 1);
 
         assertThat(collector.routable()).isEmpty();
+    }
+
+    /**
+     * <b>허용 밖 주소는 라우팅에서 뺀다</b> (CY-887). 보고에 쓸 수 있는 쪽이
+     * 게이트웨이를 임의 주소로 향하게 하는 것을 막는 자리다. 크레딧에는 든다 —
+     * 버리면 그 몫만큼 전역 크레딧이 줄어 계약을 안 따르는 배포 구간에 전체가 조인다.
+     */
+    @Test
+    @DisplayName("허용_밖_주소는_라우팅에서_빠진다")
+    void 허용_밖_주소는_라우팅에서_빠진다() {
+        CapacityCollector collector = CapacityCollector.of(RAMP_UP, FRESHNESS, FLOOR, CAP,
+                AllowedDestinations.of(List.of("10.0.1.0/24")));
+        // 둘 다 예열한다. 안 하면 램프가 새 대의 몫을 0 으로 깎아, 크레딧에
+        // 드는지를 못 잰다.
+        long warmed = NOW + RAMP_UP.toSeconds();
+        for (long t = NOW; t <= warmed; t += FRESHNESS.toSeconds()) {
+            collector.collect(List.of(report("a", 100, t), report("b", 200, t)), t, 1);
+        }
+
+        long 크레딧 = collector.collect(List.of(
+                주소_있는_보고("a", "10.0.1.7:8080", 100, warmed),
+                주소_있는_보고("b", "evil.example.com:8080", 200, warmed)), warmed, 1);
+
+        assertThat(collector.routable()).extracting(InstanceRouting::instanceId)
+                .containsExactly("a");
+        assertThat(크레딧).as("빠진 대의 몫도 크레딧에는 든다").isEqualTo(300);
+    }
+
+    /** 제한을 안 걸면 모양만 맞으면 실린다. 라우팅이 꺼진 배포의 동작이다. */
+    @Test
+    @DisplayName("제한을_안_걸면_모양만_본다")
+    void 제한을_안_걸면_모양만_본다() {
+        CapacityCollector collector = collector();
+        long warmed = warm(collector, "a", 100);
+
+        collector.collect(List.of(
+                주소_있는_보고("a", "evil.example.com:8080", 100, warmed)), warmed, 1);
+
+        assertThat(collector.routable()).extracting(InstanceRouting::instanceId)
+                .containsExactly("a");
     }
 }

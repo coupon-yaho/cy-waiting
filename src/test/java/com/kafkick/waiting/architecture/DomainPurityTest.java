@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
 import com.tngtech.archunit.core.importer.ImportOption;
+import java.net.InetAddress;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -67,6 +68,23 @@ class DomainPurityTest {
                 .orShould().callMethod(ZonedDateTime.class, "now")
                 .orShould().dependOnClassesThat().haveFullyQualifiedName("java.time.Clock")
                 .because("시각을 직접 읽으면 초 경계 동작을 시험할 수 없다 (TS-4)")
+                .check(classes);
+    }
+
+    /**
+     * <b>이름 조회는 IO 다.</b> 같은 입력이 리졸버 설정에 따라 다른 답을 내면
+     * 재현 가능한 실패를 못 만들고, 그 대기가 요청 경로와 배분 틱에 얹힌다.
+     * 리터럴 해석은 조회를 안 하므로 {@code getByAddress} 쪽은 안 막는다.
+     */
+    @Test
+    @DisplayName("도메인은_이름을_풀지_않는다")
+    void 도메인은_이름을_풀지_않는다() {
+        noClasses()
+                .that().resideInAPackage(DOMAIN)
+                .and().haveSimpleNameNotEndingWith("IpLiteral")
+                .should().callMethod(InetAddress.class, "getByName", String.class)
+                .orShould().callMethod(InetAddress.class, "getAllByName", String.class)
+                .because("이름 조회는 블로킹 IO 이고 검사와 연결의 시점을 가른다")
                 .check(classes);
     }
 

@@ -28,7 +28,8 @@ import org.springframework.context.ApplicationContext;
  * 나간다 — 단일 주소로 도는 것과 겉으로 구분이 안 된다.
  */
 @Tag("context")
-@SpringBootTest(properties = {"waiting.scheduler.enabled=false", "waiting.routing.enabled=true"})
+@SpringBootTest(properties = {"waiting.scheduler.enabled=false",
+        "waiting.routing.enabled=true", "waiting.routing.allowed-destinations=.internal"})
 class RoutingWiringTest {
 
     @Autowired
@@ -108,7 +109,8 @@ class RoutingWiringTest {
     @Nested
     @Tag("context")
     @SpringBootTest(properties = {"waiting.scheduler.enabled=false",
-            "waiting.routing.enabled=true", "waiting.routing.strategy=p2c"})
+            "waiting.routing.enabled=true", "waiting.routing.strategy=p2c",
+            "waiting.routing.allowed-destinations=.internal"})
     class P2c {
 
         @Autowired

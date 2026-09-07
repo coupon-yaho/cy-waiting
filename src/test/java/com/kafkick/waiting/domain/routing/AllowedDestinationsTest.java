@@ -3,6 +3,7 @@ package com.kafkick.waiting.domain.routing;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.util.Arrays;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -113,5 +114,141 @@ class AllowedDestinationsTest {
         assertThat(허용.permits(주소("a.internal:1"))).isTrue();
         assertThat(허용.permits(주소("10.0.1.9:1"))).isTrue();
         assertThat(허용.permits(주소("example.com:1"))).isFalse();
+    }
+
+    /** 접미사에 점을 안 붙이면 그 이름만 받는다. 하위 이름까지 여는 것은 다른 뜻이다. */
+    @Test
+    @DisplayName("점_없는_항목은_그_이름만_받는다")
+    void 점_없는_항목은_그_이름만_받는다() {
+        AllowedDestinations 허용 = AllowedDestinations.of(List.of("coupon-be"));
+
+        assertThat(허용.permits(주소("coupon-be:9000"))).isTrue();
+        assertThat(허용.permits(주소("a.coupon-be:9000"))).isFalse();
+    }
+
+    /** 대역 표기가 숫자가 아니거나 주소가 아니면 기동에서 끊는다. */
+    @Test
+    @DisplayName("대역_표기가_망가지면_거절한다")
+    void 대역_표기가_망가지면_거절한다() {
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of("not-an-ip/24")))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of("10.0.1.0/x")))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of("10.0.1.0/-1")))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /** 비트가 바이트 경계에 딱 맞으면 나머지 마스크를 안 본다. */
+    @Test
+    @DisplayName("바이트_경계_대역도_본다")
+    void 바이트_경계_대역도_본다() {
+        AllowedDestinations 허용 = AllowedDestinations.of(List.of("10.0.0.0/8"));
+
+        assertThat(허용.permits(주소("10.9.9.9:1"))).isTrue();
+        assertThat(허용.permits(주소("11.0.0.1:1"))).isFalse();
+    }
+
+    /** 앞 바이트부터 갈리면 나머지를 안 본다. */
+    @Test
+    @DisplayName("앞_바이트가_다르면_거절한다")
+    void 앞_바이트가_다르면_거절한다() {
+        assertThat(AllowedDestinations.of(List.of("10.0.1.0/24")).permits(주소("11.0.1.7:1")))
+                .isFalse();
+    }
+
+    /**
+     * <b>대역과 주소의 길이가 다르면 안 맞는다.</b> 설정에 IPv6 대역을 적고 뒷단이
+     * IPv4 를 보고하면 바이트 수가 달라, 앞에서 안 끊으면 배열 밖을 읽는다.
+     *
+     * <p>반대 방향은 못 만든다 — {@link InstanceAddress} 가 콜론 든 호스트를
+     * 이미 거절해서 IPv6 주소는 여기까지 못 온다.
+     */
+    @Test
+    @DisplayName("길이가_다른_대역은_안_맞는다")
+    void 길이가_다른_대역은_안_맞는다() {
+        assertThat(AllowedDestinations.of(List.of("fd00::/8")).permits(주소("10.0.1.7:1")))
+                .isFalse();
+    }
+
+    /** 비트가 바이트 경계에 안 맞으면 마지막 바이트를 마스크로 본다. */
+    @Test
+    @DisplayName("경계에_안_맞는_대역도_본다")
+    void 경계에_안_맞는_대역도_본다() {
+        AllowedDestinations 허용 = AllowedDestinations.of(List.of("10.0.1.0/25"));
+
+        assertThat(허용.permits(주소("10.0.1.100:1"))).isTrue();
+        assertThat(허용.permits(주소("10.0.1.200:1"))).isFalse();
+    }
+
+    /** 목록에 빈 자리가 오면 기동에서 끊는다. yaml 의 빈 항목이 그렇게 온다. */
+    @Test
+    @DisplayName("빈_자리가_있으면_거절한다")
+    void 빈_자리가_있으면_거절한다() {
+        List<String> 빈_자리가_섞인_목록 = Arrays.asList(".internal", null);
+
+        assertThatThrownBy(() -> AllowedDestinations.of(빈_자리가_섞인_목록))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /**
+     * <b>맨 주소는 그 한 대를 뜻한다.</b> 접미사로 넣으면 이름끼리만 견주므로 그
+     * 주소를 보고한 뒷단이 도리어 거절되고, 증상은 "라우팅 후보 0" 이다.
+     */
+    @Test
+    @DisplayName("맨_주소도_받는다")
+    void 맨_주소도_받는다() {
+        AllowedDestinations 허용 = AllowedDestinations.of(List.of("10.0.1.5"));
+
+        assertThat(허용.permits(주소("10.0.1.5:9000"))).isTrue();
+        assertThat(허용.permits(주소("10.0.1.6:9000"))).isFalse();
+    }
+
+    /**
+     * <b>한 낱말짜리 hex 이름이 대역을 통과하면 안 된다.</b> {@code InetAddress} 는
+     * {@code beef} 를 DNS 로 풀어 주는데, 그러면 검사한 순간과 연결하는 순간이 갈린다.
+     */
+    @Test
+    @DisplayName("hex_이름은_대역으로_안_통과한다")
+    void hex_이름은_대역으로_안_통과한다() {
+        AllowedDestinations 허용 = AllowedDestinations.of(List.of("10.0.1.0/24"));
+
+        assertThat(허용.permits(주소("beef:9000"))).isFalse();
+        assertThat(허용.permits(주소("1234:9000"))).isFalse();
+    }
+
+    /** 이름 항목이 라벨 규칙을 어기면 기동에서 끊는다. 안 끊으면 영영 안 맞는다. */
+    @Test
+    @DisplayName("못_맞을_이름은_거절한다")
+    void 못_맞을_이름은_거절한다() {
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of("*.internal")))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of("a..b")))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of("a.b.")))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of(".")))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of("..internal")))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /** 무제한은 이름으로만 만든다. 인자를 빠뜨려 조용히 되는 것과는 다르다. */
+    @Test
+    @DisplayName("무제한은_다_받는다")
+    void 무제한은_다_받는다() {
+        assertThat(AllowedDestinations.unrestricted().permits(주소("evil.example.com:1")))
+                .isTrue();
+    }
+
+    /**
+     * <b>앞자리 0 을 받으면 안 된다.</b> {@code 010} 을 8진수로 읽는 파서가 있어,
+     * 받아 주면 검사한 값과 연결하는 값이 갈린다.
+     */
+    @Test
+    @DisplayName("앞자리_0_표기는_주소가_아니다")
+    void 앞자리_0_표기는_주소가_아니다() {
+        AllowedDestinations 허용 = AllowedDestinations.of(List.of("10.0.1.0/24"));
+
+        assertThat(허용.permits(주소("010.0.1.5:8080"))).isFalse();
     }
 }

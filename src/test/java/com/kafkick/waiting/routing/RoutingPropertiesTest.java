@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Duration;
+import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -17,14 +18,19 @@ import org.junit.jupiter.api.Test;
 @Tag("unit")
 class RoutingPropertiesTest {
 
+    /** 목적지 제한. 켜진 설정은 이것이 없으면 못 선다. */
+    private static final List<String> 허용 = List.of(".internal");
+
     private static RoutingProperties 값(String strategy) {
-        return new RoutingProperties(true, null, strategy, null, null, null, null, null);
+        return new RoutingProperties(true, null, strategy, null, null, null, null, null,
+                허용);
     }
 
     @Test
     @DisplayName("안_적으면_기본값이_선다")
     void 안_적으면_기본값이_선다() {
-        RoutingProperties p = new RoutingProperties(true, null, null, null, null, null, null, null);
+        RoutingProperties p = new RoutingProperties(true, null, null, null, null, null, null, null,
+                허용);
 
         assertThat(p.serviceId()).isEqualTo("coupon-service");
         // **라운드로빈이 기본이다.** 게이트웨이 둘에서 잰 값이 그쪽을 가리켰다
@@ -54,24 +60,29 @@ class RoutingPropertiesTest {
     @Test
     @DisplayName("수명과_램프의_범위를_본다")
     void 수명과_램프의_범위를_본다() {
-        assertThatThrownBy(() -> new RoutingProperties(true, null, null, Duration.ZERO, null, null, null, null))
+        assertThatThrownBy(() -> new RoutingProperties(true, null, null, Duration.ZERO,
+                null, null, null, null, 허용))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new RoutingProperties(true, null, null,
-                Duration.ofSeconds(-1), null, null, null, null))
+                Duration.ofSeconds(-1), null, null, null, null,
+                허용))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new RoutingProperties(true, null, null, null,
-                Duration.ofSeconds(-1), null, null, null))
+                Duration.ofSeconds(-1), null, null, null,
+                허용))
                 .isInstanceOf(IllegalArgumentException.class);
         // 램프 0 은 되돌리기를 안 하겠다는 뜻이다. 끄는 길을 막지 않는다.
         assertThat(new RoutingProperties(true, null, null, null, Duration.ZERO,
-                null, null, null).coldStartRamp())
+                null, null, null,
+                허용).coldStartRamp())
                 .isZero();
     }
 
     @Test
     @DisplayName("빈_이름은_기본값으로_본다")
     void 빈_이름은_기본값으로_본다() {
-        assertThat(new RoutingProperties(true, "  ", "  ", null, null, null, null, null).serviceId())
+        assertThat(new RoutingProperties(true, "  ", "  ", null, null, null, null, null,
+                허용).serviceId())
                 .isEqualTo("coupon-service");
     }
 
@@ -82,16 +93,19 @@ class RoutingPropertiesTest {
     @Test
     @DisplayName("상한이_양수가_아니면_거절한다")
     void 상한이_양수가_아니면_거절한다() {
-        assertThatThrownBy(() -> new RoutingProperties(true, null, null, null, null, 0, null, null))
+        assertThatThrownBy(() -> new RoutingProperties(true, null, null, null, null, 0, null, null,
+                허용))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new RoutingProperties(true, null, null, null, null, -1, null, null))
+        assertThatThrownBy(() -> new RoutingProperties(true, null, null, null, null, -1, null, null,
+                허용))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
     @DisplayName("상한을_안_적으면_기본값이다")
     void 상한을_안_적으면_기본값이다() {
-        assertThat(new RoutingProperties(true, null, null, null, null, null, null, null).perInstanceCap())
+        assertThat(new RoutingProperties(true, null, null, null, null, null, null, null,
+                허용).perInstanceCap())
                 .isEqualTo(200);
     }
 
@@ -100,7 +114,8 @@ class RoutingPropertiesTest {
     @DisplayName("하한_값은_받는다")
     void 하한_값은_받는다() {
         RoutingProperties 하한 =
-                new RoutingProperties(true, null, null, null, null, 1, 1, null);
+                new RoutingProperties(true, null, null, null, null, 1, 1, null,
+                허용);
 
         assertThat(하한.perInstanceCap()).isEqualTo(1);
         assertThat(하한.outlierFailures()).isEqualTo(1);
@@ -114,10 +129,12 @@ class RoutingPropertiesTest {
     @DisplayName("연속_실패_임계가_양수가_아니면_거절한다")
     void 연속_실패_임계가_양수가_아니면_거절한다() {
         assertThatThrownBy(
-                () -> new RoutingProperties(true, null, null, null, null, null, 0, null))
+                () -> new RoutingProperties(true, null, null, null, null, null, 0, null,
+                허용))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(
-                () -> new RoutingProperties(true, null, null, null, null, null, -1, null))
+                () -> new RoutingProperties(true, null, null, null, null, null, -1, null,
+                허용))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -129,11 +146,39 @@ class RoutingPropertiesTest {
     @DisplayName("배제_시간이_양수가_아니면_거절한다")
     void 배제_시간이_양수가_아니면_거절한다() {
         assertThatThrownBy(() -> new RoutingProperties(
-                true, null, null, null, null, null, null, Duration.ZERO))
+                true, null, null, null, null, null, null, Duration.ZERO,
+                허용))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new RoutingProperties(
-                true, null, null, null, null, null, null, Duration.ofSeconds(-1)))
+                true, null, null, null, null, null, null, Duration.ofSeconds(-1),
+                허용))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    /**
+     * <b>켤 때는 목적지를 적어야 한다</b> (CY-887). 뒷단이 보고한 주소가 곧 연결
+     * 대상이라, 목록이 비었다는 것이 "아무 데나 보내도 된다" 로 읽히면 그 배포가
+     * 그대로 통로가 된다.
+     */
+    @Test
+    @DisplayName("켤_때_목적지가_비면_안_뜬다")
+    void 켤_때_목적지가_비면_안_뜬다() {
+        assertThatThrownBy(() -> new RoutingProperties(true, null, null, null,
+                null, null, null, null, List.of()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("allowed-destinations");
+        assertThatThrownBy(() -> new RoutingProperties(true, null, null, null,
+                null, null, null, null, null))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /** 꺼진 배포까지 요구하면 라우팅과 무관한 배포가 이 설정 때문에 안 뜬다. */
+    @Test
+    @DisplayName("꺼져_있으면_안_적어도_뜬다")
+    void 꺼져_있으면_안_적어도_뜬다() {
+        RoutingProperties p = new RoutingProperties(false, null, null, null,
+                null, null, null, null, null);
+
+        assertThat(p.allowedDestinations()).isEmpty();
+    }
 }

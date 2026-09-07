@@ -1,14 +1,19 @@
 package com.kafkick.waiting.control;
 
-import java.time.Duration;
-import java.util.Collection;
+import com.kafkick.waiting.domain.routing.AllowedDestinations;
+import com.kafkick.waiting.domain.routing.InstanceAddress;
 import com.kafkick.waiting.domain.routing.InstanceRouting;
+import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
-import java.util.List;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.atomic.AtomicLong;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * 뒷단이 스스로 보고한 여유를 모아 <b>전역 크레딧</b>을 만든다. 콜드 인스턴스는 자기
@@ -16,6 +21,8 @@ import java.util.concurrent.atomic.AtomicLong;
  * 느려서 즉시 포화된다. 그래서 램프를 건다.
  */
 public final class CapacityCollector {
+
+    private static final Logger log = LoggerFactory.getLogger(CapacityCollector.class);
 
     /** 창의 제곱이 {@code long} 안에 들어오게 묶는다 — 아래 {@code require} 참조. */
     private static final Duration MAX_WINDOW = Duration.ofDays(1);
@@ -88,7 +95,17 @@ public final class CapacityCollector {
      */
     private final AtomicLong lastFloor = new AtomicLong();
 
-    private CapacityCollector(Duration rampUp, Duration freshness, long floor, long perInstanceCap) {
+    /** 연결해도 되는 목적지. 켜는 쪽에서 목록이 비면 기동을 끊는다. */
+    private final AllowedDestinations allowed;
+
+    /** 허용 밖 주소를 보고한 인스턴스가 있는 구간. 회차마다 열고 닫는다. */
+    private final FailureWindow destinationDenied = FailureWindow.create();
+
+    /** 이번 회차에 목적지 때문에 뺀 수. 회차가 끝나면 창을 열거나 닫는다. */
+    private volatile int deniedThisRound;
+
+    private CapacityCollector(Duration rampUp, Duration freshness, long floor,
+            long perInstanceCap, AllowedDestinations allowed) {
         require(rampUp, "rampUp");
         require(freshness, "freshness");
         if (floor < 1) {
@@ -102,6 +119,7 @@ public final class CapacityCollector {
         this.freshness = freshness;
         this.floor = floor;
         this.perInstanceCap = perInstanceCap;
+        this.allowed = Objects.requireNonNull(allowed, "allowed 는 필수다");
         this.lastKnown = new AtomicLong(floor);
     }
 
@@ -112,7 +130,18 @@ public final class CapacityCollector {
      */
     public static CapacityCollector of(Duration rampUp, Duration freshness,
             long floor, long perInstanceCap) {
-        return new CapacityCollector(rampUp, freshness, floor, perInstanceCap);
+        return new CapacityCollector(rampUp, freshness, floor, perInstanceCap,
+                AllowedDestinations.unrestricted());
+    }
+
+    /**
+     * 목적지를 제한해 만든다. <b>라우팅을 켜는 배포는 이쪽을 쓴다</b> — 뒷단이
+     * 보고한 주소가 곧 연결 대상이라, 모양만 보면 임의 주소로 향할 수 있다.
+     */
+    public static CapacityCollector of(Duration rampUp, Duration freshness,
+            long floor, long perInstanceCap, AllowedDestinations allowed) {
+        return new CapacityCollector(rampUp, freshness, floor, perInstanceCap,
+                Objects.requireNonNull(allowed, "allowed 는 필수다"));
     }
 
     /**
@@ -181,6 +210,14 @@ public final class CapacityCollector {
     }
 
     /** 마지막 회차에서 하한이 답이 됐으면 그 값, 아니면 0. */
+    /**
+     * 마지막 회차에서 허용 목적지 밖이라 라우팅에서 뺀 수. <b>0 이 아닌데 후보가
+     * 비면 설정이 원인이다</b> — 그 구분을 로그만으로는 못 한다.
+     */
+    public double deniedDestinations() {
+        return deniedThisRound;
+    }
+
     public long lastFloor() {
         return lastFloor.get();
     }
@@ -202,6 +239,7 @@ public final class CapacityCollector {
         // **라우팅 목록을 같은 회차에서 만든다.** 따로 돌면 합산에 든 인스턴스와
         // 보낼 인스턴스가 갈리고, 그 갈림은 램프 구간에만 나타난다.
         List<InstanceRouting> routable = new ArrayList<>();
+        deniedThisRound = 0;
         long total = 0;
         int fresh = 0;
         // **램프가 깎은 것과 뒷단이 못 가진 것은 다르다.** 앞엣것은 우리가 만든
@@ -229,11 +267,16 @@ public final class CapacityCollector {
             // 되어 전역 크레딧이 0 이 된다 — 전면 차단이다.
             long share = usable(report, now);
             total = saturatedAdd(total, share);
-            // 주소를 안 실은 인스턴스는 크레딧에는 들고 라우팅에서만 빠진다.
-            report.routableAddress().ifPresent(address -> routable.add(
-                    new InstanceRouting(report.instanceId(), address, share)));
+            // 주소를 안 실었거나 허용 밖인 인스턴스는 크레딧에는 들고 라우팅에서만
+            // 빠진다. 크레딧에서까지 빼면 그 몫만큼 전역 크레딧이 조용히 줄어,
+            // 계약을 아직 안 따르는 배포 구간에 전체가 조여진다.
+            report.routableAddress()
+                    .filter(address -> permits(report.instanceId(), address))
+                    .ifPresent(address -> routable.add(
+                            new InstanceRouting(report.instanceId(), address, share)));
         }
         evictStale(now);
+        closeDeniedWindow();
         // **관측이 있었던 회차에서만 태운다.** 한 건도 안 돈 회차가 태우면 다음 회차에
         // 이미 돌던 무리로 못 보고 램프를 0 부터 다시 타, 크레딧이 하한에 묶인 동안 한산
         // 통과 상한이 0 이 된다. 무한정은 아닌 이유는 위 상수가 든다.
@@ -275,6 +318,45 @@ public final class CapacityCollector {
     private long saturatedAdd(long a, long b) {
         long sum = a + b;
         return ((a ^ sum) & (b ^ sum)) < 0 ? Long.MAX_VALUE : sum;
+    }
+
+    /**
+     * 연결해도 되는 주소인가. <b>거절은 그 인스턴스만 뺀다</b> — 회차 전체를
+     * 막으면 보고 하나가 라우팅을 끄는 손잡이가 된다.
+     */
+    private boolean permits(String instanceId, InstanceAddress address) {
+        if (allowed.permits(address)) {
+            return true;
+        }
+        deniedThisRound++;
+        // **구간의 첫 건만 남긴다.** 뒷단이 매 틱 같은 값을 쓰므로, 다 남기면
+        // 그때 정작 봐야 할 것이 묻힌다. 구간이 끝나면 아래에서 요약을 낸다.
+        if (destinationDenied.entered()) {
+            log.warn("가용량 보고의 주소가 허용 목적지 밖이다 — {} ({}). 이 인스턴스는 "
+                    + "크레딧에는 들지만 라우팅 후보에서 빠진다", safe(instanceId), address);
+        }
+        return false;
+    }
+
+    /**
+     * <b>구간이 끝나면 요약을 낸다.</b> 안 닫으면 첫 거절 뒤로 영영 조용해서,
+     * 다른 인스턴스가 같은 일을 해도 아무 데도 안 남는다.
+     */
+    private void closeDeniedWindow() {
+        if (deniedThisRound > 0) {
+            return;
+        }
+        destinationDenied.exited().ifPresent(recovered ->
+                log.info("허용 목적지 밖 보고가 그쳤다 — {}초 만에, 그동안 {}회차 뺐다",
+                        recovered.elapsedSeconds(), recovered.swallowed()));
+    }
+
+    /**
+     * 로그 한 줄을 위조하지 못하게 줄바꿈을 지운다. instanceId 는 뒷단이 정하는
+     * 값이고 길이·문자 제한이 없다.
+     */
+    private String safe(String instanceId) {
+        return instanceId.replaceAll("[\\r\\n]", "_");
     }
 
     private boolean isFresh(CapacityReport report, long now) {

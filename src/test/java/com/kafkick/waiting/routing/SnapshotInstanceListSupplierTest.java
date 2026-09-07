@@ -6,6 +6,7 @@ import com.kafkick.waiting.control.GatewaySnapshot;
 import com.kafkick.waiting.control.SnapshotHolder;
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
+import com.kafkick.waiting.domain.routing.AllowedDestinations;
 import com.kafkick.waiting.domain.routing.InstanceAddress;
 import com.kafkick.waiting.domain.routing.InstanceRouting;
 import java.time.Clock;
@@ -33,8 +34,8 @@ class SnapshotInstanceListSupplierTest {
     private final SnapshotHolder holder = SnapshotHolder.of(
             Duration.ofSeconds(3), Duration.ofSeconds(5), Clock.fixed(지금, ZoneOffset.UTC));
 
-    private final SnapshotInstanceListSupplier 공급자 =
-            SnapshotInstanceListSupplier.of("coupon-service", holder);
+    private final SnapshotInstanceListSupplier 공급자 = SnapshotInstanceListSupplier.of(
+            "coupon-service", holder, AllowedDestinations.of(List.of("10.0.1.0/24")));
 
     private static InstanceRouting 인스턴스(String id, String addr, long credits) {
         return new InstanceRouting(id, InstanceAddress.parse(addr).orElseThrow(), credits);
@@ -98,5 +99,20 @@ class SnapshotInstanceListSupplierTest {
     @DisplayName("서비스_이름을_돌려준다")
     void 서비스_이름을_돌려준다() {
         assertThat(공급자.getServiceId()).isEqualTo("coupon-service");
+    }
+
+    /**
+     * <b>발행 측만으로는 못 닫는다.</b> 라우팅이 꺼진 노드가 리더면 안 걸러진 목록이
+     * 나가고, 켠 노드가 그것을 그대로 쓴다. 실제로 연결하는 쪽이 마지막 자물쇠다.
+     */
+    @Test
+    @DisplayName("허용_밖_주소는_후보에서_빠진다")
+    void 허용_밖_주소는_후보에서_빠진다() {
+        재료를_심는다(인스턴스("be-1", "10.0.1.7:8080", 200),
+                인스턴스("evil", "evil.example.com:8080", 200));
+
+        assertThat(공급자.get().blockFirst())
+                .extracting(ServiceInstance::getInstanceId)
+                .containsExactly("be-1");
     }
 }

@@ -53,7 +53,8 @@ public class GatewayPresenceConfig {
         long voteFreshSec = voteFreshSec(properties.scheduler().tick(), reapAfterSec);
         return GatewayHeartbeatLoop.of(
                 // **판정 필터가 없어도 돈다.** 이 루프는 그 빈보다 먼저 서고,
-                // 없으면 통과 수는 0 이다 — 상한을 안 올리는 쪽이라 안전하다.
+                // 판정 필터가 아직 없으면 "모름" 을 싣는다 — 0 으로 실으면 안 잰
+                // 노드가 잰 노드로 세어져 합이 모자란 것을 못 안다.
                 beatStep(state -> port.beat(instanceId, reapAfterSec, voteFreshSec, state,
                                 passed(passRate)),
                         circuit::now, registry),

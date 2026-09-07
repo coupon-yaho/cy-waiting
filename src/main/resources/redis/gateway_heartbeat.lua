@@ -62,12 +62,10 @@ end
 if ARGV[1] == nil or ARGV[1] == '' then
     return redis.error_reply('instanceId 는 필수다')
 end
--- 예약 접두사를 쓰면 자기 표를 자기 항목으로 오해한다.
-if string.sub(ARGV[1], 1, #VOTE) == VOTE then
-    return redis.error_reply('instanceId 는 ' .. VOTE .. ' 로 시작할 수 없다')
-end
-if string.sub(ARGV[1], 1, #PASS) == PASS then
-    return redis.error_reply('instanceId 는 ' .. PASS .. ' 로 시작할 수 없다')
+-- 예약 접두사를 쓰면 자기 표를 자기 항목으로 오해한다. **짝이 되는 leave 와
+-- 같은 문턱이라야 한다** — 여기만 좁으면 등록은 되는데 퇴장만 못 하는 id 가 난다.
+if string.sub(ARGV[1], 1, 1) == '#' then
+    return redis.error_reply('instanceId 는 # 로 시작할 수 없다')
 end
 
 -- **모르는 값은 거절한다.** 합산에 들어가면 전 클러스터의 상한이 그것으로 정해진다.
@@ -101,13 +99,14 @@ if mine == nil or mine == '' then
 elseif mine ~= 'CLOSED' and mine ~= 'OPEN' and mine ~= 'HALF_OPEN' then
     return redis.error_reply('모르는 서킷 상태다: ' .. tostring(mine))
 end
-redis.call('HSET', KEYS[1], ARGV[1], now)
-redis.call('HSET', KEYS[1], VOTE .. ARGV[1], mine)
--- **안 잰 노드는 0 이 아니라 없는 것이다.** 0 을 쓰면 "안 잰 노드" 가 "0 을
+-- **한 번에 쓴다.** 같은 키라 나눌 이유가 없고, 노드마다 매 틱 도는 자리다.
+-- **안 잰 노드는 0 이 아니라 없는 것이다** — 0 을 쓰면 "안 잰 노드" 가 "0 을
 -- 잰 노드" 로 세어져, 합이 모자란 것을 아무도 모른다.
 if measured then
-    redis.call('HSET', KEYS[1], PASS .. ARGV[1], passed)
+    redis.call('HSET', KEYS[1], ARGV[1], now, VOTE .. ARGV[1], mine,
+            PASS .. ARGV[1], passed)
 else
+    redis.call('HSET', KEYS[1], ARGV[1], now, VOTE .. ARGV[1], mine)
     redis.call('HDEL', KEYS[1], PASS .. ARGV[1])
 end
 

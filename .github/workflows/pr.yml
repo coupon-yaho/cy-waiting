@@ -64,6 +64,30 @@ jobs:
           echo "key=$key" >> "$GITHUB_OUTPUT"
           echo "::notice title=Jira::$key"
 
+      # **없는 키를 막는다.** 리포트 잡이 이 키로 코멘트를 달다 404 를 받아도
+      # 경고로 끝나, 없는 티켓을 단 PR 이 몇 주 동안 초록으로 지나갔다.
+      # 404 만 막는다 — 429·5xx 는 연동의 일시 실패라 PR 을 세울 이유가 아니다.
+      - name: Jira 키 실재 확인
+        if: steps.jira.outputs.key != '' && env.HAS_JIRA == 'true'
+        env:
+          KEY: ${{ steps.jira.outputs.key }}
+          HAS_JIRA: ${{ secrets.ATLASSIAN_BASE_URL != '' && secrets.ATLASSIAN_API_TOKEN != '' }}
+          BASE_URL: ${{ secrets.ATLASSIAN_BASE_URL }}
+          EMAIL: ${{ secrets.ATLASSIAN_USER_EMAIL }}
+          TOKEN: ${{ secrets.ATLASSIAN_API_TOKEN }}
+        run: |
+          set -uo pipefail
+          code=$(curl -s -o /dev/null -w '%{http_code}' -u "$EMAIL:$TOKEN" \
+              -H 'Accept: application/json' \
+              "${BASE_URL%/}/rest/api/3/issue/$KEY?fields=summary")
+          if [[ "$code" == "404" ]]; then
+            echo "::error title=WF-3::$KEY 라는 이슈가 없다. 브랜치를 실재하는 키로 딴다"
+            exit 1
+          fi
+          if [[ "$code" != "200" ]]; then
+            echo "::warning title=Jira::$KEY 확인을 못 했다 (HTTP $code) — 연동의 일시 실패로 본다"
+          fi
+
       - name: 코드 변경 감지
         id: changes
         env:

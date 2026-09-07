@@ -244,4 +244,25 @@ class BackendProbeTest {
         assertThat(지표.get(BackendProbe.PASSED).functionCounter().count()).isZero();
         assertThat(지표.get(BackendProbe.FAILED).functionCounter().count()).isZero();
     }
+
+    /**
+     * <b>공급자가 동기로 던져도 자리를 돌려준다.</b> 안 감싸면 그 예외가 아래 연산자를
+     * 안 지나, 자리는 먹고 표본은 안 남긴 채 회차가 끝난다 — 반쯤 열린 자리 열 개가
+     * 그렇게 하나씩 사라진다.
+     */
+    @Test
+    @DisplayName("공급자가_던져도_표본으로_센다")
+    void 공급자가_던져도_표본으로_센다() {
+        CircuitBreaker 서킷 = 서킷();
+        열어_둔다(서킷);
+        서킷.transitionToHalfOpenState();
+        BackendProbe 프로브 = BackendProbe.of(() -> Optional.of(서킷), () -> {
+            throw new IllegalStateException("주소 조립이 터졌다");
+        });
+
+        프로브.probe().block();
+
+        assertThat(프로브.failed()).as("자리를 먹었으면 표본으로 남긴다").isEqualTo(1);
+        assertThat(프로브.skipped()).isZero();
+    }
 }

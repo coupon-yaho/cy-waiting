@@ -73,7 +73,9 @@ public final class BackendProbe {
             return Mono.empty();
         }
         long startedAt = circuit.getCurrentTimestamp();
-        return call.get()
+        // **defer 로 감싼다.** 여기서 바로 부르면 공급자가 동기로 던진 것이 아래
+        // 연산자를 안 지나, 자리는 먹고 표본은 안 남긴 채 회차가 끝난다.
+        return Mono.defer(call)
                 .doOnSuccess(ignored -> record(circuit, startedAt, null))
                 .doOnError(error -> record(circuit, startedAt, error))
                 // **취소도 허가를 돌려준다.** 안 돌려주면 반쯤 열린 자리가 하나

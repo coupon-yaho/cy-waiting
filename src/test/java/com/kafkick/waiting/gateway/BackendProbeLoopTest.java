@@ -155,4 +155,30 @@ class BackendProbeLoopTest {
             루프.stop();
         }
     }
+
+    /**
+     * <b>끝난 루프는 끝난 것으로 보인다.</b> 안 그러면 {@code isRunning()} 이 계속
+     * 참을 돌려주고, 다시 켜려는 호출이 CAS 에 걸려 조용히 아무것도 안 한다.
+     */
+    @Test
+    @DisplayName("루프가_끝나면_다시_켤_수_있다")
+    void 루프가_끝나면_다시_켤_수_있다() {
+        VirtualTimeScheduler 가상 = VirtualTimeScheduler.create();
+        AtomicInteger 회차 = new AtomicInteger();
+        BackendProbeLoop 루프 = BackendProbeLoop.of(() -> {
+            회차.incrementAndGet();
+            return Mono.empty();
+        }, 간격);
+
+        루프.start(가상);
+        루프.stop();
+
+        assertThat(루프.isRunning()).isFalse();
+        int 멈춘_뒤 = 회차.get();
+        루프.start(가상);
+        가상.advanceTimeBy(간격.multipliedBy(2));
+
+        assertThat(회차.get()).as("다시 켜면 다시 돈다").isGreaterThan(멈춘_뒤);
+        루프.stop();
+    }
 }

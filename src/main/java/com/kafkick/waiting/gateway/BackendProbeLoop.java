@@ -84,20 +84,36 @@ public final class BackendProbeLoop implements SmartLifecycle {
         startedAt.set(Instant.now());
         log.info("합성 프로브를 {} 간격으로 돈다", interval);
         subscription = Mono.defer(round)
+                .doOnSuccess(done -> recovered())
                 .onErrorResume(this::swallow)
                 .subscribeOn(scheduler)
                 .repeatWhen(done -> done.delayElements(interval, scheduler))
-                .subscribe(tick -> { },
-                        // 여기 오면 루프가 끝난 것이다. 지표가 0 으로 굳으므로
-                        // 밖에서 보이지만, 왜 끝났는지는 이 줄에만 남는다.
-                        error -> log.error("합성 프로브 루프가 끝났다 — 다시 뜰 때까지 "
-                                + "회복 표본이 줄에서만 나온다", error));
+                .subscribe(tick -> { }, this::terminated);
     }
 
     /**
      * <b>구간의 첫 건만 남긴다.</b> 1초 간격이면 하루 8만 줄이고, 그때 정작 봐야
      * 할 것이 묻힌다. 회차가 터져도 다음은 나가므로 결과는 "이번 표본이 빈 것" 이다.
      */
+    /**
+     * <b>끝난 것을 끝난 것으로 남긴다.</b> 안 그러면 {@code isRunning()} 이 계속 참을
+     * 돌려주고, 다시 켜려는 호출이 CAS 에 걸려 조용히 아무것도 안 한다.
+     */
+    private void terminated(Throwable error) {
+        log.error("합성 프로브 루프가 끝났다 — 다시 뜰 때까지 회복 표본이 줄에서만 "
+                + "나온다", error);
+        stop();
+    }
+
+    /** 회차가 성공하면 실패 구간을 닫는다. 안 닫으면 다음 실패가 조용히 지나간다. */
+    private void recovered() {
+        Instant began = failingSince.getAndSet(null);
+        if (began != null) {
+            log.info("합성 프로브 회차가 다시 돈다 — {}초 만에",
+                    Duration.between(began, Instant.now()).toSeconds());
+        }
+    }
+
     private Mono<Void> swallow(Throwable error) {
         if (failingSince.compareAndSet(null, Instant.now())) {
             log.warn("합성 프로브 회차가 터졌다 — {}. 이번 표본이 비고 회복 판정이 "

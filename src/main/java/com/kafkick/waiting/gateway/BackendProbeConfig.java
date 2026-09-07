@@ -1,8 +1,10 @@
 package com.kafkick.waiting.gateway;
 
+import com.kafkick.waiting.routing.RoutingProperties;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.netty.channel.ChannelOption;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -31,7 +33,16 @@ public class BackendProbeConfig {
      */
     @Bean
     BackendProbe backendProbe(GatewayRoutes.Backend backend, BackendProbeProperties probe,
-            CircuitBreakerRegistry circuits) {
+            CircuitBreakerRegistry circuits, ObjectProvider<RoutingProperties> routing) {
+        // **라우팅과 같이 못 켠다.** 트래픽은 lb:// 로 흩어지는데 프로브는 고정 주소
+        // 하나만 치고, 그 결과는 전 인스턴스를 덮는 같은 서킷에 남는다 — 그 한 대가
+        // 죽으면 멀쩡한 나머지로 갈 발급이 통째로 폴백으로 떨어진다.
+        RoutingProperties on = routing.getIfAvailable();
+        if (on != null && on.enabled()) {
+            throw new IllegalStateException(
+                    "라우팅과 합성 프로브를 같이 켤 수 없다 — 프로브가 한 대만 보고 "
+                            + "그 결과가 전 인스턴스의 서킷에 남는다");
+        }
         // **상한도 전용 스케줄러에서 잰다.** 공용 풀을 쓰면 트래픽이 몰릴 때 이
         // 타이머가 요청 처리 뒤에 줄을 서 상한이 실제보다 늦게 끊는다.
         Scheduler timer = Schedulers.newSingle("backend-probe-timeout", true);

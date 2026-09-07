@@ -17,6 +17,12 @@ cd "$(git rev-parse --show-toplevel)" || exit 1
 COMPOSE="docker compose -f test/load/compose.yml -f test/load/compose.multi.yml \
 -f test/load/compose.limits.yml"
 
+# **예열 문턱을 상한에 맞춘다.** 겹침의 기본값은 200 이라, 상한을 그보다 낮게
+# 잡은 회차는 예열이 영영 안 끝나고 스택이 기동에서 죽는다.
+BACKEND_CREDITS="${BACKEND_CREDITS:-300}"
+export BACKEND_CREDITS
+export WARMUP_CREDIT="${WARMUP_CREDIT:-$BACKEND_CREDITS}"
+
 GATEWAYS="${GATEWAYS:-2}"
 # **한산 통과 상한 아래로 둔다.** 넘으면 줄이 서고, 줄이 한 번 서면 추월 금지
 # 때문에 그 뒤로 아무도 뒷단에 안 닿는다 — 회복 구간의 도착이 0 이라 재려던
@@ -27,8 +33,14 @@ RATE="${RATE:-60}"
 NORMAL_SEC="${NORMAL_SEC:-20}"
 HOLD_SEC="${HOLD_SEC:-15}"
 RECOVER_SEC="${RECOVER_SEC:-40}"
-# 승계를 언제 넣을지. 회복이 한창일 때라야 램프가 걸린 채로 갈린다.
-HANDOVER_AFTER_SEC="${HANDOVER_AFTER_SEC:-6}"
+# 승계를 언제 넣을지. **램프가 걸려 있는 동안이라야 한다** — 램프가 끝난 뒤에
+# 죽이면 직전 값이 이미 상한이라 계단 검사가 항등적으로 통과한다. 배수를 4 로
+# 올려 램프가 3~4초로 짧아졌으므로 그 안쪽으로 잡는다.
+HANDOVER_AFTER_SEC="${HANDOVER_AFTER_SEC:-2}"
+# **죽이는 시각과 표본을 거두는 시각은 다른 값이다.** 승계를 램프 안으로 당기느라
+# 이 둘을 같이 줄였더니 램프가 끝나기 전에 표본이 멎어, 맞게 도는 회차가
+# "회복이 안 끝났다" 로 적혔다.
+TAIL_SEC="${TAIL_SEC:-15}"
 SAMPLE_MS="${SAMPLE_MS:-200}"
 # **자극은 지연이다. 5xx 가 아니다.** 게이트웨이는 상태 코드를 서킷에 안 물린다 —
 # 5xx 는 뒷단이 요청을 받은 뒤에 낸 답이라, 그걸 실패로 세고 재시도하면 그 한 건이
@@ -46,7 +58,7 @@ case "$OUT" in
     *) echo "OUT 은 .txt 여야 한다: '$OUT'"; exit 2 ;;
 esac
 
-for n in GATEWAYS RATE NORMAL_SEC HOLD_SEC RECOVER_SEC HANDOVER_AFTER_SEC SAMPLE_MS FAULT_LATENCY_MS; do
+for n in GATEWAYS RATE NORMAL_SEC HOLD_SEC RECOVER_SEC HANDOVER_AFTER_SEC TAIL_SEC SAMPLE_MS FAULT_LATENCY_MS; do
     v=$(eval "printf '%s' \"\$$n\"")
     case "$v" in
         ''|*[!0-9]*) echo "$n 은 양의 정수여야 한다: '$v'"; exit 2 ;;
@@ -113,9 +125,9 @@ done
 echo "게이트웨이: $bases"
 
 # **정말 여러 대가 붙었는지 본다.** 한 대만 등록되면 분모가 안 갈리고, 그 회차는
-# 한 대짜리를 여러 대라고 적은 것이 된다. 등록부에는 투표 항목(`#c:` 접두어)이
-# 같이 들어 있어 그것까지 세면 한 대만 붙어도 둘로 보인다.
-registered=$(r --raw HKEYS gw:instances | grep -cv '^#c:')
+# 한 대짜리를 여러 대라고 적은 것이 된다. 등록부에는 `#` 으로 시작하는 예약
+# 항목(서킷 표·통과 수)이 같이 들어 있어 그것까지 세면 한 대가 여럿으로 보인다.
+registered=$(r --raw HKEYS gw:instances | grep -cv '^#')
 case "$registered" in
     ''|*[!0-9]*) echo "등록부를 못 읽었다"; exit 2 ;;
 esac
@@ -194,7 +206,7 @@ local votes = {}
 for _, k in ipairs(redis.call('HKEYS', KEYS[2])) do
   if string.sub(k, 1, 3) == '#c:' then
     votes[#votes + 1] = redis.call('HGET', KEYS[2], k) or '-'
-  else
+  elseif string.sub(k, 1, 1) ~= '#' then
     n = n + 1
   end
 end
@@ -252,6 +264,49 @@ report_memory() {
               else print "메모리 표본에 게이트웨이 행이 없다" }' "$work/mem.txt"
 }
 
+# **노드별 허가 수를 구간별로 낸다.** 클러스터 합에서 나눠 짐작하면 열린 구간의
+# 0 이 평균을 눌러, 재려던 half-open 의 공급이 아니라 회차 전체의 평균이 나온다.
+#
+# 구간을 갈라도 유지 쪽에는 서킷이 열려 있는 시간이 섞인다. 그 평균은 공급의
+# 하한이지 half-open 이 받는 속도가 아니다 — 그 값은 회복 로그의 프로브 수가 든다.
+report_calls() {
+    if [ ! -s "$work/calls.txt" ]; then
+        echo "노드별 서킷 호출을 못 떴다"
+        return
+    fi
+    cp "$work/calls.txt" "${OUT%.txt}-calls.txt"
+    span() {
+        awk -v t0="$2" -v t1="$3" -v label="$1" '
+            t1 <= 0 { next }
+            # **모양이 어긋난 줄은 버린다.** 지표를 못 긁은 회차는 칸이 비어,
+            # 그대로 더하면 통과 수가 뒤로 간다.
+            NF != 6 { next }
+            $1 >= t0 && $1 <= t1 {
+                calls = $3 + $4
+                if (!(($2) in first)) { first[$2] = calls; ft[$2] = $1; fa[$2] = $6 }
+                # 계수는 단조다. 줄면 컨테이너가 다시 뜬 것이므로 안 센다.
+                if (calls < last[$2] || $6 < la[$2]) { next }
+                last[$2] = calls; lt[$2] = $1; la[$2] = $6
+            }
+            END {
+                for (n in first) {
+                    d = (lt[n] - ft[n]) / 1000
+                    if (d <= 0) { continue }
+                    printf "  %s %s 서킷 초당 %.2f건 (%d건 / %.1f초)\n",
+                            n, label, (last[n] - first[n]) / d, last[n] - first[n], d
+                    # 표시한 수는 리더 것만 는다. 노드별 구간이 조금씩 어긋나므로
+                    # 분모는 그 노드 자신의 구간으로 나눈다.
+                    if (la[n] > fa[n]) {
+                        printf "  %s %s 배분이 표시한 수 초당 %.2f건 (%d건)\n",
+                                n, label, (la[n] - fa[n]) / d, la[n] - fa[n]
+                    }
+                }
+            }' "$work/calls.txt"
+    }
+    span "유지" "${hold_at:-0}" "${recover_ms:-0}"
+    span "회복" "${recover_ms:-0}" "${release_ms:-0}"
+}
+
 # **죽은 대는 그냥 없는 것이 된다.** 해제 판정이 살아 있는 컨테이너의 로그만 보고
 # 판정기는 노드 수가 주는 것을 우리가 만든 자극으로 읽는다. 그러면 계기 사망이
 # 제품 미달로 적힌다.
@@ -276,6 +331,24 @@ check_deaths() {
 # **메모리도 표본이다.** 파드 상한을 걸어 두고 실제 사용을 안 남기면, 조건이
 # 깨져도 다음 회차가 모른다. 초당 여러 번은 못 뜬다 — `docker stats` 한 번이
 # 수백 ms 다. 봉우리는 게이트가 풀리는 순간이라 2초면 잡힌다.
+# **노드별로 서킷이 허가한 수를 뜬다.** 뒷단 도착률은 클러스터 합이라, 한 노드의
+# 서킷이 half-open 에서 몇 건을 통과시켰는지와 재는 자리가 다르다. 그 둘이 화해가
+# 안 돼 "공급이 병목" 의 근거가 반쪽으로 남아 있었다 (AIJ-0246).
+#
+# 관리 포트는 밖으로 안 열려 있다. 컨테이너 안에서 긁는다.
+calls_of() {
+    docker exec "$1" wget -qO- http://localhost:8081/actuator/prometheus 2>/dev/null \
+        | awk '/^resilience4j_circuitbreaker_calls_seconds_count/ {
+                 k = "?"; if ($0 ~ /kind="successful"/) k = "ok"
+                 else if ($0 ~ /kind="failed"/) k = "fail"
+                 else if ($0 ~ /kind="ignored"/) k = "ignored"
+                 sum[k] += $NF }
+               /^resilience4j_circuitbreaker_not_permitted_calls_total/ { np += $NF }
+               # 배분이 표시한 수. 리더만 는다 — 클러스터 합으로 본다.
+               /^waiting_allocation_admitted_total/ { adm += $NF }
+               END { printf "%d %d %d %d", sum["ok"], sum["fail"], np, adm }'
+}
+
 mem_loop() {
     local ids
     while :; do
@@ -288,6 +361,10 @@ mem_loop() {
             docker stats --no-stream --format '{{.Name}} {{.MemUsage}}' $ids 2>/dev/null \
                 | awk -v t="$(date +%s%3N)" '{ print t, $1, $2, $4 }' >> "$work/mem.txt"
         fi
+        for cid in $ids; do
+            printf '%s %s %s\n' "$(date +%s%3N)" "${cid:0:12}" "$(calls_of "$cid")" \
+                >> "$work/calls.txt"
+        done
         sleep 2
     done
 }
@@ -300,14 +377,19 @@ mem_loop() {
 # 멈춘 것과 제품이 요청을 못 받는 것은 다르다.
 #
 # 최악은 게이트가 끝내 안 풀리는 길이다. 그쪽이 더 길면 그 값을 쓴다.
-tail_sec=$((HANDOVER_AFTER_SEC * 2))
+tail_sec=$((HANDOVER_AFTER_SEC + TAIL_SEC))
 [ $((RECOVER_SEC / 2)) -gt "$tail_sec" ] && tail_sec=$((RECOVER_SEC / 2))
 total_sec=$((NORMAL_SEC + SETTLE_SEC + HOLD_SEC + RECOVER_SEC + tail_sec + 5))
 
 # **동시 실행자를 자극에 맞춰 잡는다.** 물림은 유입 × 지연이다. 모자라면 회차가
 # 통째로 판정 불가로 끝나고, 그때 고친 값이 조건도 같이 바꾼다.
 vus=$(( RATE * FAULT_LATENCY_MS / 1000 * 3 / 2 + 50 ))
+# **표를 쓰러 오는 사람 수가 배수량의 천장이다.** 이들이 0.2초마다 한 번 집으므로
+# 초당 최대 `HOLDERS × 5` 건이 지나간다. 유입보다 적으면 기준선이 거기서 멎어,
+# 봉우리 비의 분모가 상한과 멀어진다.
+holders=${HOLDERS:-$(( RATE / 4 + 20 ))}
 BASE_URLS="$bases" RATE="$RATE" DURATION="${total_sec}s" COUPON="$COUPON" VUS="$vus" \
+    HOLDERS="$holders" \
     k6 run --quiet --summary-export="$work/k6.json" test/load/circuit-recovery.js \
     >"$work/k6.log" 2>&1 &
 loadpid=$!
@@ -328,10 +410,12 @@ fi
 sleep "$SETTLE_SEC"
 
 mark 유지
+hold_at=$(date +%s%3N)
 sleep "$HOLD_SEC"
 
 # ── 회복 — 고장을 걷고, 도중에 리더를 죽인다 ─────────────────────────────────
 mark 회복
+recover_ms=$(date +%s%3N)
 if ! $COMPOSE exec -T backend wget -qO- 'http://localhost:8090/stub/latency?ms=0' \
         >/dev/null 2>&1; then
     echo "자극을 못 걷었다"; exit 2
@@ -357,8 +441,11 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     # 그 시점에 표시하면 맞게 도는 제품이 미달로 적힌다. 이 줄은 배분이
     # 실제로 조임을 푼 자리의 짝이라 크레딧과 같은 시각을 가리킨다.
     for cid in $($COMPOSE ps -q gateway); do
-        if docker logs --since "$recover_at" "$cid" 2>&1 \
-                    | grep -q "서킷 회복 —"; then
+        # **`grep -q` 를 안 쓴다.** pipefail 아래서 grep 이 먼저 끝나면 앞쪽이
+        # SIGPIPE 로 죽어 파이프라인이 실패로 읽힌다 — 로그가 커지는 회차에서만
+        # 나고, 맞게 찾은 줄이 못 찾은 것이 된다.
+        if [ "$(docker logs --since "$recover_at" "$cid" 2>&1 \
+                | grep -c "서킷 회복 —")" -gt 0 ]; then
             released=1
             break
         fi
@@ -376,11 +463,15 @@ if [ "$released" != 1 ]; then
     cp "$work/samples.txt" "$OUT"
     kill "$memsampler" 2>/dev/null; memsampler=""
     report_memory
+    report_calls
     check_deaths
     # **부하를 못 만든 회차를 제품 미달로 내보내지 않는다.** 정상 경로에만 이
     # 검사를 두었더니, 실측에서 정확히 이쪽 경로가 그것 없이 나갔다.
     if [ "$k6rc" -ne 0 ]; then
         echo "::error title=서킷 회복::k6 가 $k6rc 로 끝났다 — 이 회차로는 판정하지 않는다"
+        # **로그를 남긴다.** 다섯 줄만 찍고 지우면 왜 흘렸는지를 다음 회차에
+        # 다시 재현해야 한다.
+        cp "$work/k6.log" "${OUT%.txt}-k6.log" 2>/dev/null
         tail -5 "$work/k6.log" | sed 's/^/  /'
         exit 2
     fi
@@ -388,6 +479,7 @@ if [ "$released" != 1 ]; then
     exit $?
 fi
 mark 해제
+release_ms=$(date +%s%3N)
 echo "게이트가 풀렸다"
 sleep "$HANDOVER_AFTER_SEC"
 
@@ -404,7 +496,11 @@ owner=${lock##*|}
 leader=""
 if [ -n "$owner" ]; then
     for cid in $($COMPOSE ps -q gateway); do
-        if docker logs "$cid" 2>&1 | grep -q "리더가 됐다 — owner=$owner"; then
+        # **파일로 받아 찾는다.** 파이프로 바로 받으면 `grep -q` 가 앞쪽을
+        # SIGPIPE 로 죽여 pipefail 이 실패로 읽고, `grep -c` 는 조기 종료를
+        # 잃어 전량을 읽는다 — 그 지연이 승계 시각에 그대로 들어간다.
+        docker logs "$cid" > "$work/leader.log" 2>&1
+        if grep -q "리더가 됐다 — owner=$owner" "$work/leader.log"; then
             leader=$cid
             break
         fi
@@ -422,7 +518,7 @@ docker kill --signal SIGKILL "$leader" >/dev/null 2>&1 || {
     echo "리더를 못 죽였다: $leader"; exit 2; }
 mark 승계
 
-sleep "$HANDOVER_AFTER_SEC"
+sleep "$TAIL_SEC"
 
 kill "$sampler" 2>/dev/null; sampler=""
 kill "$memsampler" 2>/dev/null; memsampler=""
@@ -431,11 +527,13 @@ loadpid=""
 
 cp "$work/samples.txt" "$OUT"
 report_memory
+report_calls
 check_deaths
 
 echo
 if [ "$k6rc" -ne 0 ]; then
     echo "::error title=서킷 회복::k6 가 $k6rc 로 끝났다 — 이 회차로는 판정하지 않는다"
+    cp "$work/k6.log" "${OUT%.txt}-k6.log" 2>/dev/null
     tail -5 "$work/k6.log" | sed 's/^/  /'
     exit 2
 fi

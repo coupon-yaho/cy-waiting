@@ -8,10 +8,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * 종료 신호를 받은 뒤 부하 분산기가 우리를 뺄 때까지 기다립니다.
- *
- * <p>readiness 를 내려도 앞단이 알아채기 전까지는 계속 보냅니다. 곧바로 드레인하면
- * 그 사이 도착한 요청이 커넥션째 끊겨, 롤링 배포마다 사용자가 오류를 봅니다.
+ * 종료 신호를 받은 뒤 부하 분산기가 우리를 뺄 때까지 기다립니다. readiness 를 내려도
+ * 앞단이 알아채기 전까지는 계속 보내므로, 곧바로 드레인하면 그 사이 도착한 요청이
+ * 커넥션째 끊겨 롤링 배포마다 사용자가 오류를 봅니다.
  */
 public final class DrainWait {
 
@@ -19,10 +18,8 @@ public final class DrainWait {
 
     /**
      * 대기 상한. {@code spring.lifecycle.timeout-per-shutdown-phase} 와 같은 값이다.
-     *
-     * <p>이 대기는 컨테이너의 단계별 상한 <b>밖</b>이라 프레임워크가 못 끊는다.
-     * 여기서 안 막으면 {@code 6s} 를 {@code 6m} 로 적은 오타 하나가 노드를 기동
-     * 상태로 붙들고, 오케스트레이터가 진행 중인 요청째 강제 종료한다.
+     * 이 대기는 컨테이너의 단계별 상한 <b>밖</b>이라 프레임워크가 못 끊는다 — {@code 6s}
+     * 를 {@code 6m} 로 적은 오타 하나가 노드를 붙들고 진행 중인 요청째 강제 종료된다.
      */
     private static final Duration MAX_WAIT = Duration.ofSeconds(30);
 
@@ -68,12 +65,9 @@ public final class DrainWait {
     }
 
     /**
-     * readiness 를 내리고, 부하 분산기가 뺄 시간을 준 뒤 돌아옵니다.
-     *
-     * <p><b>순서가 뒤집히면 안 됩니다.</b> 기다린 뒤에 내리면 그 대기 시간 동안
-     * 앞단은 우리가 멀쩡하다고 보고 계속 보냅니다.
-     *
-     * <p>드레인 자체는 이 뒤에 컨테이너가 합니다 — 부르는 쪽이 돌아가야 시작됩니다.
+     * readiness 를 내리고, 부하 분산기가 뺄 시간을 준 뒤 돌아옵니다. <b>순서가 뒤집히면
+     * 안 됩니다</b> — 기다린 뒤에 내리면 그 대기 시간 동안 앞단은 우리가 멀쩡하다고
+     * 보고 계속 보냅니다. 드레인 자체는 부르는 쪽이 돌아가야 컨테이너가 시작합니다.
      */
     public void beforeDrain() {
         shutdown.draining();
@@ -100,10 +94,9 @@ public final class DrainWait {
             // 생성자가 MAX_WAIT 이하의 양수로 강제한다.
             Thread.sleep(millis);
         } catch (InterruptedException e) {
-            // **끊긴 표시를 다시 세우지 않는다.** 이 스레드는 곧바로 컨테이너의
-            // 단계별 정지로 들어가 `latch.await` 로 드레인을 기다리는데, 표시가
-            // 서 있으면 그 기다림이 즉시 깨진다 — 지켜 주려던 진행 중인 요청이
-            // 바로 그때 끊긴다. 끊겼다는 사실은 부르는 쪽이 로그로 남긴다.
+            // **끊긴 표시를 다시 세우지 않는다.** 이 스레드는 곧바로 컨테이너의 단계별
+            // 정지로 들어가 드레인을 기다리는데, 표시가 서 있으면 그 기다림이 즉시 깨져
+            // 지켜 주려던 진행 중인 요청이 바로 그때 끊긴다.
             throw new IllegalStateException("대기가 끊겼다", e);
         }
     }

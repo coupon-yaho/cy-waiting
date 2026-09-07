@@ -10,12 +10,8 @@ import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
 
 /**
- * 대기 응답을 쓴다.
- *
- * <p><b>게이트웨이만 내는 응답이다.</b> 사람마다 순번이 다르므로 캐시를 막고,
- * 뒷단이 못 내는 응답이라 그 헤더가 표지가 되지도 않는다.
- *
- * <p>본문의 값은 전부 우리가 만든 것이라 봉투를 깨는 글자가 못 들어온다.
+ * 대기 응답을 쓴다. 사람마다 순번이 달라 캐시를 막는다. 본문의 값은 전부 우리가
+ * 만든 것이라 봉투를 깨는 글자가 못 들어온다.
  */
 public final class QueueResponse {
 
@@ -58,11 +54,8 @@ public final class QueueResponse {
             // 입장은 토큰을 실어야 하므로 여기로 안 온다.
             case ADMITTED -> throw new IllegalArgumentException("입장은 따로 쓴다: " + state);
             // 줄에 없다. 이탈로 걷혔거나 큐가 정리됐다 — 어느 쪽이든 다시 서야 한다.
-            //
-            // **매진과 사유를 갈라 쓴다.** 매진은 앞에서 `SOLD_OUT` 으로 끝나므로
-            // 여기까지 오는 것은 재고와 무관한 이유다. 둘이 같은 사유를 쓰면
-            // 이탈로 지워진 사람이 "다 팔렸다" 는 말을 듣고, 다시 설 수 있는데도
-            // 안 선다.
+            // 매진과 사유를 갈라 쓴다. 같은 사유를 쓰면 이탈로 지워진 사람이 다 팔렸다는
+            // 말을 듣고, 다시 설 수 있는데도 안 선다.
             case NOT_QUEUED -> """
                     {"status":"CLOSED","reason":"NOT_IN_QUEUE"}""";
             // 조회로는 안 나온다. 등록 결과에만 있는 상태다.

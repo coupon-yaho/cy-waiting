@@ -6,18 +6,15 @@ import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 
 /**
- * 뒷단 서킷의 상태를 판정에 넘긴다 (F3).
- *
- * <p><b>메모리 안의 값이다.</b> resilience4j 레지스트리는 이 프로세스가 들고
- * 있으므로 요청 경로에서 읽어도 레디스를 안 친다 (불변식 1).
+ * 뒷단 서킷의 상태를 판정에 넘긴다 (F3). <b>메모리 안의 값이다</b> — resilience4j
+ * 레지스트리는 이 프로세스가 들고 있으므로 요청 경로에서 읽어도 레디스를 안 친다 (불변식 1).
  */
 public final class CircuitStateReader {
 
     /**
-     * 서킷을 보고 있는가. <b>1 이 아니면 F3 이 꺼져 있다.</b>
-     *
-     * <p>안 보는 것과 닫혀 있는 것이 같은 값을 내므로, 배선이 빠지면 판정도
-     * 배분도 조용히 평소대로 돈다 — 다음 장애 때만 드러난다.
+     * 서킷을 보고 있는가. <b>1 이 아니면 F3 이 꺼져 있다.</b> 안 보는 것과 닫혀 있는 것이
+     * 같은 값을 내므로, 배선이 빠지면 판정도 배분도 조용히 평소대로 돌아 다음 장애 때만
+     * 드러난다.
      */
     public static final String WIRED = "waiting.circuit.wired";
 
@@ -35,10 +32,8 @@ public final class CircuitStateReader {
     }
 
     /**
-     * 서킷을 보고 있는가. <b>이름이 없으면 안 보는 것이다.</b>
-     *
-     * <p>레지스트리가 없거나 그 이름의 서킷이 아직 없으면 이 리더는 영원히
-     * 닫힘을 낸다. 그 사실이 밖에서 보여야 한다.
+     * <b>이름이 없으면 안 보는 것이다.</b> 레지스트리가 없거나 그 이름의 서킷이 아직 없으면
+     * 이 리더는 영원히 닫힘을 낸다. 그 사실이 밖에서 보여야 한다.
      */
     public boolean wired() {
         return circuits != null && circuits.find(circuitName).isPresent();
@@ -53,10 +48,8 @@ public final class CircuitStateReader {
     }
 
     /**
-     * 지금 상태. <b>모르면 정상으로 본다.</b>
-     *
-     * <p>모른다고 줄로 보내면 서킷을 안 붙인 배치에서 전 요청이 큐로 간다 —
-     * 없는 장애를 만드는 셈이다. 서킷이 실제로 열렸을 때만 조인다.
+     * 지금 상태. <b>모르면 정상으로 본다.</b> 모른다고 줄로 보내면 서킷을 안 붙인 배치에서
+     * 전 요청이 큐로 간다 — 없는 장애를 만드는 셈이다.
      */
     public CircuitState now() {
         if (circuits == null) {
@@ -69,13 +62,9 @@ public final class CircuitStateReader {
                 .map(breaker -> switch (breaker.getState()) {
                     case OPEN -> CircuitState.OPEN;
                     case HALF_OPEN -> CircuitState.HALF_OPEN;
-                    // **DISABLED 도 정상이다.** 운영자가 서킷을 끈 것이지 뒷단이
-                    // 죽은 것이 아니다. 여기서 조이면 끄는 것이 곧 조이는 것이 된다.
-                    //
-                    // **FORCED_OPEN 도 여기다.** 그 상태에는 해제 조건이 없다 —
-                    // 사람이 풀기 전까지 영원하다. 줄로 돌리면 전 쿠폰이 무기한
-                    // 큐에 갇히고, 한산한 쿠폰에도 없던 줄이 생겨 스스로 유지된다.
-                    // 킬스위치는 기존 폴백이 받는 것이 맞다.
+                    // **DISABLED 는 운영자가 끈 것이지 뒷단이 죽은 것이 아니다.**
+                    // FORCED_OPEN 도 여기다 — 해제 조건이 없어 줄로 돌리면 전 쿠폰이
+                    // 무기한 갇히고, 한산한 쿠폰에도 없던 줄이 생겨 스스로 유지된다.
                     case CLOSED, DISABLED, METRICS_ONLY, FORCED_OPEN -> CircuitState.CLOSED;
                 })
                 .orElse(CircuitState.CLOSED);

@@ -3,10 +3,8 @@ package com.kafkick.waiting.domain.allocation;
 import com.kafkick.waiting.domain.coupon.QueueMode;
 
 /**
- * 이 쿠폰이 이번 틱에 받고 싶은 양.
- *
- * <p><b>재고가 천장이다</b>(C-2). 재고 3 개에 100 명을 통과시키면 97 명이
- * 헛걸음하고, 그만큼의 크레딧은 다른 쿠폰이 못 쓴 채 버려진다.
+ * 이 쿠폰이 이번 틱에 받고 싶은 양. <b>재고가 천장이다</b>(C-2) — 재고 3 개에
+ * 100 명을 통과시키면 97 명이 헛걸음하고, 그 크레딧은 다른 쿠폰이 못 쓴 채 버려진다.
  *
  * @param couponId 예산을 나누는 단위
  * @param waiting  줄 선 사람 수
@@ -16,13 +14,10 @@ import com.kafkick.waiting.domain.coupon.QueueMode;
 public record CouponDemand(String couponId, long waiting, long stock, QueueMode mode) {
 
     /**
-     * 재고를 못 읽었다.
-     *
-     * <p><b>0 과 갈라야 한다.</b> 접으면 재고 키를 잃은 쿠폰이 매진으로 보이고,
-     * 줄에 사람이 남아 있어도 종결된다 — 다음 스냅샷도 안 되돌린다.
+     * 재고를 못 읽었다. <b>0 과 갈라야 한다</b> — 접으면 재고 키를 잃은 쿠폰이 매진으로
+     * 보이고, 줄에 사람이 남아 있어도 종결된다. 경계를 넘는 것은 값이 아니라
+     * {@code stockKnown()} 이라, 상태 쪽의 같은 뜻 값과 수가 달라도 된다.
      */
-    // 상태 쪽에도 같은 뜻의 값이 따로 있다. 경계를 넘는 것은 값이 아니라
-    // stockKnown() 이라, 둘이 같은 수일 필요는 없다.
     public static final long STOCK_UNKNOWN = -1;
 
     public CouponDemand {
@@ -59,9 +54,7 @@ public record CouponDemand(String couponId, long waiting, long stock, QueueMode 
     /**
      * 재고를 넘겨 주면 그 몫은 뒷단이 거절하고, 다른 쿠폰이 못 쓴 채 사라진다.
      *
-     * <p><b>미상이면 안 깎는다.</b> 깎으면 재고를 못 읽는 동안 그 줄이 통째로
-     * 굶는다. 진짜 상한은 뒷단이 원자적으로 지키므로(불변식 2) 여기서 모르는
-     * 값을 0 으로 가정할 이유가 없다.
+     * <p><b>미상이면 안 깎는다.</b> 깎으면 그 줄이 굶고, 진짜 상한은 뒷단이 지킨다 (불변식 2).
      */
     public long want() {
         return stockKnown() ? Math.min(waiting, stock) : waiting;

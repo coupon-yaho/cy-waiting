@@ -3,11 +3,9 @@ package com.kafkick.waiting.gateway;
 import java.time.Duration;
 
 /**
- * 서킷 설정값을 검증한다.
- *
- * <p>검증을 밖에 둔다. 압축 생성자에서 부를 수 있는 것은 정적뿐이라, 안에 두면
- * 그 자리에서만 쓰이는 정적 메서드가 생긴다 ({@code GatewayRoutes.Backend} 와
- * 같은 이유다).
+ * 서킷 설정값을 검증한다. <b>검증을 밖에 둔다</b> — 압축 생성자에서 부를 수 있는 것은
+ * 정적뿐이라, 안에 두면 그 자리에서만 쓰이는 정적 메서드가 생긴다
+ * ({@code GatewayRoutes.Backend} 와 같은 이유다).
  */
 final class CircuitSettings {
 

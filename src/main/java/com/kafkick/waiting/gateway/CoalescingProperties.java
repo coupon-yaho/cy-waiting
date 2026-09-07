@@ -8,15 +8,12 @@ import java.util.stream.Collectors;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
- * 조회를 모을 경로와 수명.
- *
- * <p><b>화이트리스트로만 켭니다.</b> 기본이 켜짐이면 개인화된 응답이 붙는 순간
- * 남의 응답을 받습니다.
+ * <b>화이트리스트로만 켠다.</b> 기본이 켜짐이면 개인화된 응답이 붙는 순간 남의
+ * 응답을 받는다.
  *
  * @param enabled 통째로 끄는 스위치. 장애 중에 되돌릴 수단이다
  * @param maxBodyBytes 이보다 큰 응답은 안 모은다
- * @param maxCacheBytes 담아 둘 수 있는 전체 바이트. <b>키 수로만 막으면 유계가
- *                      아니다</b> — 상한이 그대로 OOM 의 근거가 된다
+ * @param maxCacheBytes 바이트 예산. 키 수로만 막으면 유계가 아니라 그대로 OOM 이다
  * @param maxKeys 동시에 모을 수 있는 키 수
  * @param routes 모을 경로. 여기 없는 경로는 그대로 프록시한다
  */
@@ -64,10 +61,8 @@ public record CoalescingProperties(boolean enabled, int maxBodyBytes,
     }
 
     /**
-     * 경로별 수명. 없는 경로는 안 모읍니다.
-     *
-     * <p><b>부르는 쪽이 한 번만 부릅니다.</b> 요청마다 만들면 조회 한 건마다 맵을
-     * 새로 짓는 셈이고, 모으기로 던 뒷단 부하가 할당과 GC 로 돌아옵니다.
+     * <b>부르는 쪽이 한 번만 부른다.</b> 요청마다 만들면 조회 한 건마다 맵을 새로
+     * 짓는 셈이고, 모으기로 던 뒷단 부하가 할당과 GC 로 돌아온다.
      */
     public Map<String, Duration> ttlByPath() {
         return routes.stream().collect(Collectors.toUnmodifiableMap(

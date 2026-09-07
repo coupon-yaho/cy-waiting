@@ -38,11 +38,9 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 /**
- * 같은 조회를 <b>뒷단 한 번</b>으로 모으고, 아주 짧게 들고 있습니다.
- *
- * <p>발급은 판정이 막아 주는데 조회는 그대로 통과합니다. 그리고 이건 R2 까지
- * 갉아먹습니다 — 인스턴스가 조회로 포화되면 낮은 가용량을 보고하고, 발급 유입까지
- * 같이 조여집니다.
+ * 같은 조회를 <b>뒷단 한 번</b>으로 모으고 아주 짧게 들고 있는다. 발급은 판정이
+ * 막지만 조회는 그대로 통과하고, 인스턴스가 조회로 포화되면 낮은 가용량을 보고해
+ * 발급 유입까지 같이 조여진다 — R2 를 갉아먹는 자리다.
  */
 public final class QueryCoalescingFilter implements GatewayFilter {
 
@@ -51,10 +49,8 @@ public final class QueryCoalescingFilter implements GatewayFilter {
     private static final String METRIC = "waiting.coalescing";
 
     /**
-     * 뒷단이 <b>공유해도 된다고 말하는</b> 지시어.
-     *
-     * <p>표준 의미 그대로다 — 공유 캐시가 나눠 줘도 되는 응답. 자체 헤더를 만들면
-     * 그 뜻을 두 팀이 각자 해석하게 되고, 발급 계층이 안 붙이는 날 조용히 나뉜다.
+     * 뒷단이 <b>공유해도 된다고 말하는</b> 지시어. 표준 의미 그대로 쓴다 — 자체
+     * 헤더를 만들면 두 팀이 각자 해석하고, 발급 계층이 안 붙이는 날 조용히 나뉜다.
      */
     private static final String SHARED = "public";
 
@@ -62,26 +58,21 @@ public final class QueryCoalescingFilter implements GatewayFilter {
     private static final String NO_SHARED_MARKER = "no-shared-marker";
 
     /**
-     * 되돌리기 전에 연속으로 봐야 하는 선언 수.
-     *
-     * <p><b>뒷단이 여럿이면 롤링 배포 중 절반만 헤더를 붙인다.</b> 응답 하나로
-     * 되돌리면 그 구간 내내 켜졌다 꺼졌다 하고, 진입·복귀 로그가 요청마다 나간다.
+     * 되돌리기 전에 연속으로 봐야 하는 선언 수. <b>뒷단이 여럿이면 롤링 배포 중
+     * 절반만 헤더를 붙인다</b> — 응답 하나로 되돌리면 그 구간 내내 켜졌다 꺼졌다
+     * 하고, 진입·복귀 로그가 요청마다 나간다.
      */
     private static final int RECOVERY_STREAK = 20;
 
     /**
-     * 자격 증명. <b>이게 실려 오면 안 모읍니다.</b>
-     *
-     * <p>토큰을 든 요청은 정의상 그 사람 것입니다. 우리 API 는 이 헤더를 안 쓰므로
-     * 실려 왔다면 뒷단이 다르게 답할 수 있다고 봅니다.
+     * 자격 증명. <b>이게 실려 오면 안 모은다</b> — 토큰을 든 요청은 정의상 그 사람
+     * 것이고, 우리 API 가 안 쓰는 헤더라면 뒷단이 다르게 답할 수 있다.
      */
     private static final List<String> CREDENTIALS = List.of(HttpHeaders.AUTHORIZATION);
 
     /**
-     * 응답의 뜻을 바꾸는 요청 헤더.
-     *
-     * <p>키에 안 넣을 것이면 모으지도 않아야 합니다 — 범위 요청이 전체를 받거나
-     * 조건부 요청이 조건 없는 200 을 받습니다.
+     * 응답의 뜻을 바꾸는 요청 헤더. 키에 안 넣을 것이면 모으지도 않아야 한다 —
+     * 범위 요청이 전체를 받거나 조건부 요청이 조건 없는 200 을 받는다.
      */
     private static final List<String> SPECIAL = List.of(
             HttpHeaders.RANGE, HttpHeaders.IF_NONE_MATCH, HttpHeaders.IF_MODIFIED_SINCE,
@@ -89,10 +80,8 @@ public final class QueryCoalescingFilter implements GatewayFilter {
             HttpHeaders.CACHE_CONTROL, HttpHeaders.PRAGMA);
 
     /**
-     * 연결에 매인 헤더. <b>다시 쓸 때 옮기면 안 됩니다.</b>
-     *
-     * <p>담아 둔 값은 그때의 연결에 대한 것이라, 다른 연결에 그대로 실으면 길이와
-     * 인코딩이 어긋나 응답이 안 끝납니다 — 클라이언트는 영원히 기다립니다.
+     * 연결에 매인 헤더. <b>다시 쓸 때 옮기면 안 된다</b> — 담아 둔 값은 그때의
+     * 연결에 대한 것이라, 다른 연결에 실으면 길이와 인코딩이 어긋나 응답이 안 끝난다.
      */
     private static final List<String> HOP_BY_HOP = List.of(
             "connection", "keep-alive", "transfer-encoding", "content-length",
@@ -111,10 +100,8 @@ public final class QueryCoalescingFilter implements GatewayFilter {
     private final CoalescingKeys keys = CoalescingKeys.create();
 
     /**
-     * 공유 선언을 안 하는 경로.
-     *
-     * <p><b>가짓수가 유계다</b> — {@code filter} 의 {@code ttlByPath.containsKey}
-     * 가드를 지난 경로만 들어온다. 밖에서 오는 값이 아니라 상한이 필요 없다.
+     * 공유 선언을 안 하는 경로. <b>가짓수가 유계다</b> — {@code filter} 의
+     * {@code ttlByPath.containsKey} 가드를 지난 경로만 들어와 상한이 필요 없다.
      */
     private final Set<String> declined = ConcurrentHashMap.newKeySet();
 
@@ -122,10 +109,9 @@ public final class QueryCoalescingFilter implements GatewayFilter {
     private final Map<String, AtomicInteger> declaring = new ConcurrentHashMap<>();
 
     /**
-     * 계약이 안 선 구간을 <b>경로마다</b> 쌍으로 남긴다.
-     *
-     * <p>하나로 두면 두 경로가 잇달아 멎을 때 두 번째는 진입 로그가 안 나가고,
-     * 첫 번째만 회복해도 창이 닫혀 "복귀" 가 찍힌다 — 아직 안 모으는 경로를 두고.
+     * 계약이 안 선 구간을 <b>경로마다</b> 쌍으로 남긴다. 하나로 두면 두 경로가
+     * 잇달아 멎을 때 둘째는 진입 로그가 안 나가고, 첫째만 회복해도 창이 닫혀
+     * 아직 안 모으는 경로를 두고 복귀가 찍힌다.
      */
     private final Map<String, FailureWindow> contracts = new ConcurrentHashMap<>();
 
@@ -152,9 +138,7 @@ public final class QueryCoalescingFilter implements GatewayFilter {
     /**
      * 뒷단이 돌려준 것.
      *
-     * @param shareable 이 키로 모인 사람들에게 나눠 줘도 되는가. 거짓이면 각자
-     *                  부른다 — 이름이 "크다" 였을 때 이 자리의 세 번째 사례를
-     *                  아무도 못 떠올렸다
+     * @param shareable 이 키로 모인 사람들에게 나눠 줘도 되는가. 거짓이면 각자 부른다
      * @param cause 못 나눠 주는 이유. 지표가 이 값으로 갈린다
      */
     private record Captured(int status, Map<String, List<String>> headers, byte[] body,
@@ -258,10 +242,8 @@ public final class QueryCoalescingFilter implements GatewayFilter {
     }
 
     /**
-     * 뒷단으로 보내면서 응답을 함께 담습니다.
-     *
-     * <p><b>흘려보내면서 담습니다.</b> 삼켰다가 다시 쓰면 상한을 넘긴 응답을
-     * 되돌릴 방법이 없어, 보호 장치가 메모리 사고의 원인이 됩니다.
+     * 뒷단으로 보내면서 응답을 함께 담는다. <b>흘려보내면서 담는다</b> — 삼켰다가
+     * 다시 쓰면 상한을 넘긴 응답을 되돌릴 수 없어, 보호 장치가 사고의 원인이 된다.
      */
     private Mono<Captured> proxy(ServerWebExchange exchange, GatewayFilterChain chain,
             Duration ttl, CoalescingKeys.Key key, String path) {
@@ -294,10 +276,8 @@ public final class QueryCoalescingFilter implements GatewayFilter {
     }
 
     /**
-     * 헤더를 값으로 복사합니다.
-     *
-     * <p>뷰를 들고 있으면 다음 요청이 그 응답의 헤더를 고칠 때 담아 둔 것까지
-     * 같이 바뀝니다.
+     * 헤더를 값으로 복사한다. 뷰를 들고 있으면 다음 요청이 그 응답의 헤더를 고칠 때
+     * 담아 둔 것까지 같이 바뀐다.
      */
     private Map<String, List<String>> headers(ServerHttpResponse response) {
         Map<String, List<String>> copy = new LinkedHashMap<>();
@@ -306,10 +286,8 @@ public final class QueryCoalescingFilter implements GatewayFilter {
     }
 
     /**
-     * 담을 수 있으면 담습니다. <b>한 번만 담습니다.</b>
-     *
-     * <p>부른 쪽이 응답을 다 쓰기 <b>전에</b> 부르는 것이 요점입니다. 뒤에 두면
-     * 담기까지의 틈이 그대로 뒷단을 헛되이 치는 창이 됩니다.
+     * 담을 수 있으면 담는다. <b>한 번만 담는다.</b> 부른 쪽이 응답을 다 쓰기 전에
+     * 부르는 것이 요점이다 — 뒤에 두면 그 틈이 뒷단을 헛되이 치는 창이 된다.
      */
     private void store(ServerHttpResponse response, List<byte[]> chunks,
             AtomicBoolean tooBig, Duration ttl, String path, ServerWebExchange exchange,
@@ -332,8 +310,8 @@ public final class QueryCoalescingFilter implements GatewayFilter {
     }
 
     /**
-     * 담되 <b>상한에서 멈춥니다.</b> 넘긴 응답은 담지도 나눠 주지도 않습니다 —
-     * 뒤엣사람은 각자 부릅니다.
+     * 담되 <b>상한에서 멈춘다.</b> 넘긴 응답은 담지도 나눠 주지도 않는다 —
+     * 뒤엣사람은 각자 부른다.
      */
     private void capture(DataBuffer buffer, List<byte[]> chunks, AtomicLong held,
             AtomicBoolean tooBig) {
@@ -403,21 +381,14 @@ public final class QueryCoalescingFilter implements GatewayFilter {
     }
 
     /**
-     * 붙지 않고 그대로 흘리되 <b>응답은 본다.</b>
-     *
-     * <p>안 보면 한 번의 누락이 영구가 됩니다 — 안 붙으니 응답을 못 보고, 못 보니
-     * 선언이 돌아온 것을 모릅니다. 본문은 안 건드리고 헤더만 읽습니다.
+     * 붙지 않고 그대로 흘리되 <b>응답은 본다.</b> 안 보면 한 번의 누락이 영구가
+     * 된다 — 안 붙으니 응답을 못 보고, 못 보니 선언이 돌아온 것을 모른다. 회복
+     * 조건은 커밋된 정상 응답의 연속이고, 그동안 Vary 학습도 같이 멎는다.
      */
-    // **커밋될 때만 돕니다.** 클라이언트가 중간에 끊으면 콜백이 아예 안 돌고,
-    // 오류 응답은 커밋되더라도 학습에서 걸러진다. 그래서 실제 회복 조건은
-    // "커밋된 정상 응답이 연속으로 와야 한다" 이고, 그동안 이 경로는 계속 안 붙는다.
-    // 안 붙는 동안에는 Vary 학습도 같이 멎는다.
-    //
-    // 체인보다 먼저 등록하므로 뒤 필터가 Cache-Control 을 덧붙이면 그것은 못 본다.
-    // 지금 그런 필터는 없고, 스모크 시나리오가 "우리만 달면 게이트웨이가 드러난다"
-    // 로 그 전제를 지킨다.
     private Mono<Void> passThrough(ServerWebExchange exchange, GatewayFilterChain chain,
             String path) {
+        // 체인보다 먼저 등록하므로 뒤 필터가 덧붙인 Cache-Control 은 못 본다.
+        // 지금 그런 필터는 없고, 스모크 시나리오가 그 전제를 지킨다.
         exchange.getResponse().beforeCommit(() -> {
             ServerHttpResponse response = exchange.getResponse();
             HttpStatusCode status = response.getStatusCode();
@@ -429,13 +400,9 @@ public final class QueryCoalescingFilter implements GatewayFilter {
     }
 
     /**
-     * 이 경로의 뒷단이 <b>공유를 선언하는가</b>를 응답에서 배웁니다.
-     *
-     * <p>선언을 안 하면 다음부터는 안 붙습니다. 붙으면 지연만 두 배가 되고 뒷단
-     * 부하는 그대로라 없느니만 못합니다. 선언이 오면 곧바로 되돌립니다.
-     *
-     * <p>실패 응답으로는 안 배웁니다 — 장애 구간의 5xx 에 헤더가 없다고 계약이
-     * 깨진 것으로 읽으면, 뒷단이 살아난 뒤에도 안 모읍니다.
+     * 이 경로의 뒷단이 <b>공유를 선언하는가</b>를 응답에서 배운다. 선언이 없으면
+     * 안 붙는다 — 붙어 봤자 지연만 두 배고 뒷단 부하는 그대로다. 실패 응답으로는
+     * 안 배운다. 장애의 5xx 를 계약 파기로 읽으면 살아난 뒤에도 안 모은다.
      */
     private void learnDeclaration(String path, Set<String> directives, int code) {
         if (code >= 400) {
@@ -461,16 +428,17 @@ public final class QueryCoalescingFilter implements GatewayFilter {
     }
 
     /**
-     * 왜 못 나누는가. {@code null} 이면 나눠도 된다.
-     *
-     * <p><b>"거절했다" 와 "말한 적이 없다" 를 가릅니다.</b> 뒤엣것은 발급 계층과의
-     * 계약이 아직 안 섰다는 신호라, 한 라벨에 묶으면 언제 닫을 수 있는지를 못 봅니다.
+     * 왜 못 나누는가. {@code null} 이면 나눠도 된다. <b>거절했다와 말한 적이 없다를
+     * 가른다</b> — 뒤엣것은 계약이 아직 안 섰다는 신호라, 묶으면 닫을 때를 못 본다.
      */
     private String refusal(HttpHeaders headers) {
         return refusal(headers, directives(headers.getCacheControl()));
     }
 
     private String refusal(HttpHeaders headers, Set<String> directives) {
+        // **쿠키를 심는 응답은 못 나눈다.** 공유 선언은 "저장해도 된다" 이지 "개인
+        // 자격 증명이 없다" 가 아니다. 헤더만 벗기면 뒷단이 심으려던 쿠키가 리더에게만
+        // 가고 나머지는 조용히 못 받아, 증상이 인증 실패로 나타난다.
         if (!headers.getOrEmpty(HttpHeaders.SET_COOKIE).isEmpty()) {
             return "set-cookie";
         }
@@ -478,24 +446,14 @@ public final class QueryCoalescingFilter implements GatewayFilter {
                 || directives.contains("no-cache")) {
             return "not-shareable";
         }
+        // **말이 없어도 못 나눈다.** 개인화됐는지 아는 것은 뒷단뿐이고, 기본이
+        // 나눔이면 필드 하나가 붙는 날 남의 응답이 나간다.
         return directives.contains(SHARED) ? null : NO_SHARED_MARKER;
     }
 
-    // **쿠키를 심는 응답은 못 나눈다.** `public` 은 "공유 캐시가 저장해도 된다"
-    // 이지 "개인 자격 증명이 없다" 가 아니다. 뒷단 프레임워크가 세션을 부트스트랩
-    // 하며 붙이면 그 사이로 지나가고, 받는 브라우저는 남의 세션을 자기 것으로
-    // 저장한다.
-    //
-    // 헤더만 벗기지 않는다. 벗기면 뒷단이 심으려던 쿠키가 리더에게만 가고
-    // 나머지는 조용히 못 받아, 증상이 인증 실패로 나타난다.
-    //
-    // **말이 없어도 못 나눈다.** 개인화됐는지 아는 것은 뒷단뿐이고, 기본이
-    // 나눔이면 필드 하나가 붙는 날 남의 응답이 나간다.
     /**
-     * 지시어를 <b>토큰으로</b> 가릅니다.
-     *
-     * <p>부분 문자열로 보면 {@code no-public} 이라고 거절한 뒷단이 허락한 것으로
-     * 읽히고, {@code community="public-catalog"} 같은 확장 지시어도 허락이 됩니다.
+     * 지시어를 <b>토큰으로</b> 가른다. 부분 문자열로 보면 {@code no-public} 으로
+     * 거절한 뒷단이 허락한 것으로 읽히고, 확장 지시어의 값까지 허락이 된다.
      */
     private Set<String> directives(String control) {
         if (control == null) {
@@ -565,15 +523,9 @@ public final class QueryCoalescingFilter implements GatewayFilter {
                 response.bufferFactory().wrap(entry.body())));
     }
 
-    // **쿠키는 여기 없다.** 브라우저는 분석 쿠키 하나만 있어도 매 요청에 싣는다 —
-    // 있다고 거르면 이 기능이 브라우저에서 한 번도 안 돈다. 회원 헤더로 거르다
-    // 통째로 죽였던 것과 같은 실수다. 쿠키로 갈리는 응답은 뒷단이 `Vary: Cookie`
-    // 로 말해야 한다. 안 말하면 못 막고, 그때는 화이트리스트에서 빼야 한다.
     /**
-     * 뜻이 달라 같은 응답을 받으면 안 되는 요청인가.
-     *
-     * <p>범위·조건부 요청과 캐시 지시어는 응답의 의미를 바꿉니다. 키에 안 넣을
-     * 것이면 모으지도 않아야 합니다.
+     * 뜻이 달라 같은 응답을 받으면 안 되는 요청인가. 범위·조건부 요청과 캐시
+     * 지시어는 응답의 의미를 바꾼다 — 키에 안 넣을 것이면 모으지도 않아야 한다.
      */
     private boolean isSpecialRequest(ServerWebExchange exchange) {
         HttpHeaders headers = exchange.getRequest().getHeaders();
@@ -581,6 +533,11 @@ public final class QueryCoalescingFilter implements GatewayFilter {
                 .anyMatch(name -> SPECIAL.stream().anyMatch(name::equalsIgnoreCase));
     }
 
+    /**
+     * <b>쿠키는 여기 없다.</b> 브라우저는 분석 쿠키 하나만 있어도 매 요청에 실어,
+     * 있다고 거르면 이 기능이 브라우저에서 한 번도 안 돈다. 쿠키로 갈리는 응답은
+     * 뒷단이 {@code Vary: Cookie} 로 말해야 하고, 안 말하면 화이트리스트에서 뺀다.
+     */
     private boolean hasCredential(ServerWebExchange exchange) {
         HttpHeaders headers = exchange.getRequest().getHeaders();
         return headers.headerNames().stream()
@@ -592,10 +549,8 @@ public final class QueryCoalescingFilter implements GatewayFilter {
     }
 
     /**
-     * 상한에 얼마나 가까운지를 게이지로 냅니다.
-     *
-     * <p>상한에 닿으면 모으기가 조용히 멎습니다. 뒷단 도달 수만 원상복귀하고
-     * 그림에는 아무것도 안 남습니다 (6.10.9 · 6.10.10).
+     * 상한에 얼마나 가까운지를 게이지로 낸다. 상한에 닿으면 모으기가 조용히 멎어,
+     * 뒷단 도달 수만 원상복귀하고 그림에는 아무것도 안 남는다 (6.10.9 · 6.10.10).
      */
     public void bindMetrics(MeterRegistry registry) {
         Gauge.builder("waiting.coalescing.cached", cache, ResponseCache::size)

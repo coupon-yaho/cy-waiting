@@ -1,10 +1,8 @@
 package com.kafkick.waiting.domain.coupon;
 
 /**
- * 쿠폰이 <b>지금 실제로</b> 어떤 상태인가. 기계가 관측한 값이다.
- *
- * <p>정책({@link QueueMode})과 섞지 않는다 — 섞으면 "붐빈다"와 "줄을 세우기로
- * 했다"를 구분할 수 없다.
+ * 쿠폰이 <b>지금 실제로</b> 어떤 상태인가. 기계가 관측한 값이라 정책({@link QueueMode})과
+ * 섞지 않는다 — 섞으면 "붐빈다"와 "줄을 세우기로 했다"를 구분할 수 없다.
  */
 public enum RuntimeState {
 
@@ -15,10 +13,8 @@ public enum RuntimeState {
     QUEUEING,
 
     /**
-     * 이번 틱 백로그가 몫 이하다 — {@code credit >= waiting}.
-     *
-     * <p>줄이 곧 없어진다는 뜻은 <b>아니다.</b> 신규 유입이 계속 들어오면
-     * (ALWAYS 모드, 지속 과부하) 다음 틱에 다시 {@code QUEUEING} 이 된다.
+     * 이번 틱 백로그가 몫 이하다 — {@code credit >= waiting}. 줄이 곧 없어진다는 뜻은
+     * <b>아니다</b>: 신규 유입이 계속되면 다음 틱에 다시 {@code QUEUEING} 이 된다.
      */
     DRAINING,
 

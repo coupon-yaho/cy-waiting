@@ -7,12 +7,9 @@ import java.time.temporal.ChronoUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * 판정 재료를 들고 있고 <b>낡음을 두 종류로</b> 구분한다.
- *
- * <p>{@code fetchStale} 은 이 노드의 루프가 멎은 것이라 503 이고, {@code dataStale}
- * 은 스케줄러가 멎은 것이라 200 을 유지한다. 그래서 앞엣것은 "받아왔는가" 가 아니라
- * <b>"루프가 도는가"</b> 로 잰다 — 받아오기 실패는 모든 노드에 동시에 오고, 그걸
- * 노드별 신호로 흘리면 전 노드가 한꺼번에 빠진다 (AIJ-0033).
+ * 판정 재료를 들고 <b>낡음을 두 종류로</b> 가른다 — 이 노드의 루프가 멎은 {@code fetchStale}
+ * 은 503, 스케줄러가 멎은 {@code dataStale} 은 200 이다. 앞엣것을 <b>루프가 도는가</b> 로 재는
+ * 것은, 받아오기 실패가 전 노드에 동시에 와서 노드별 신호로 흘리면 다 같이 빠져서다 (AIJ-0033).
  */
 public final class SnapshotHolder {
 
@@ -21,15 +18,11 @@ public final class SnapshotHolder {
     private final Clock clock;
 
     /**
-     * 판정에 쓰는 셋을 <b>한 덩어리로</b> 든다. {@code lastTick} 이 {@code null}
-     * 이면 루프가 아직 한 바퀴도 못 돈 것이다.
+     * 판정에 쓰는 셋을 <b>한 덩어리로</b> 든다. 따로 두면 읽는 쪽이 새 스냅샷과 옛 시각을
+     * 짝지어 봐서 방금 갱신했는데도 낡음이 되고, 그 값이 노드를 빼는 경로에 물려 있다.
      *
-     * <p>따로 두면 읽는 쪽이 새 스냅샷과 옛 시각을 짝지어 본다. 그러면 방금
-     * 갱신했는데도 낡음이 되고, 그 값이 노드를 빼는 경로에 물려 있다.
-     */
-    /**
-     * @param ageAtFetch 받아온 순간에 잰 재료의 나이. <b>레디스 시계 하나로</b>
-     *                   잰 값이라 노드 시계가 어긋나도 안 흔들린다
+     * @param lastTick   루프가 아직 한 바퀴도 못 돌았으면 {@code null}
+     * @param ageAtFetch <b>레디스 시계 하나로</b> 잰 재료의 나이라 노드 시계와 무관하다
      */
     private record Held(GatewaySnapshot snapshot, Instant fetchedAt, Instant lastTick,
             Duration ageAtFetch) {
@@ -74,10 +67,8 @@ public final class SnapshotHolder {
     }
 
     /**
-     * 판정과 진단을 <b>같은 순간에서</b> 뽑는다.
-     *
-     * <p>따로 읽으면 그 사이에 갱신이 들어와, 못 받는다고 하면서 재료는 있다고
-     * 하는 응답이 나온다. 첫 스냅샷이 도착하는 순간에 정확히 걸린다.
+     * 판정과 진단을 <b>같은 순간에서</b> 뽑는다. 따로 읽으면 그 사이에 갱신이 들어와, 못
+     * 받는다고 하면서 재료는 있다고 하는 응답이 나온다 — 첫 스냅샷이 오는 순간에 정확히 걸린다.
      */
     public View view() {
         Held held = current.get();
@@ -136,10 +127,8 @@ public final class SnapshotHolder {
     }
 
     /**
-     * 받아온 순간의 <b>레디스 시각</b>과 함께 갈아 끼운다.
-     *
-     * <p>재료의 나이를 여기서 한 번만 재고, 그 뒤로는 이 노드가 흐른 시간만
-     * 더한다 — 두 벽시계를 빼는 자리가 없어진다.
+     * 받아온 순간의 <b>레디스 시각</b>과 함께 갈아 끼운다. 재료의 나이를 여기서 한 번만 재고
+     * 그 뒤로는 이 노드가 흐른 시간만 더한다 — 두 벽시계를 빼는 자리가 없어진다.
      */
     public void replace(GatewaySnapshot snapshot, long serverSec) {
         Instant now = clock.instant();
@@ -150,11 +139,9 @@ public final class SnapshotHolder {
     }
 
     /**
-     * 루프가 한 바퀴 돌았다고 알린다. <b>받아오기에 실패해도 부른다.</b>
-     *
-     * <p>성공했을 때만 부르면 낡음이 다시 "받아왔는가" 가 되고, 공유 원인
-     * 장애가 전 노드 동시 이탈이 된다. 스냅샷은 앞 값을 그대로 이어야 하므로
-     * 읽고 쓰는 사이에 갱신이 끼지 않게 CAS 로 돌린다.
+     * 루프가 한 바퀴 돌았다고 알린다. <b>받아오기에 실패해도 부른다</b> — 성공했을 때만 부르면
+     * 낡음이 다시 받아왔는가가 되고, 공유 원인 장애가 전 노드 동시 이탈이 된다. 스냅샷은 앞
+     * 값을 그대로 이어야 해서 읽고 쓰는 사이에 갱신이 끼지 않게 CAS 로 돌린다.
      */
     public void loopTicked() {
         Instant now = clock.instant();
@@ -162,10 +149,8 @@ public final class SnapshotHolder {
     }
 
     /**
-     * 루프가 아직 한 번도 안 돌았나 — 기동 직후 구간이다.
-     *
-     * <p><b>돌다 멎은 것과 갈라 두려고 노출한다.</b> 재기동 신호로 쓰면 첫 회차를
-     * 못 돈 파드가 죽고 다시 떠서 또 죽는다 — 크래시 루프다.
+     * 루프가 아직 한 번도 안 돌았나 — 기동 직후 구간이다. <b>돌다 멎은 것과 갈라 두려고
+     * 노출한다</b>: 재기동 신호로 쓰면 첫 회차를 못 돈 파드가 죽고 다시 떠서 또 죽는다.
      */
     public boolean isBeforeFirstTick() {
         return current.get().lastTick() == null;
@@ -174,8 +159,7 @@ public final class SnapshotHolder {
     /**
      * 마지막으로 <b>받아 온</b> 뒤 흐른 시간. 실패한 갱신은 이걸 안 움직인다.
      *
-     * <p>판정에는 안 쓴다. 헬스 detail 에 {@link #dataAge()} 와 나란히 실어
-     * 사람이 원인을 가리게 하는 값이다.
+     * <p>판정에는 안 쓴다 — 헬스 detail 에 {@link #dataAge()} 와 나란히 실어 원인을 가리는 값이다.
      */
     public Duration fetchAge() {
         return Duration.between(current.get().fetchedAt(), clock.instant());
@@ -193,12 +177,9 @@ public final class SnapshotHolder {
     }
 
     /**
-     * 스케줄러가 발행한 뒤 흐른 시간. 이 노드의 사정과 무관하다.
-     *
-     * <p><b>음수는 0 으로 본다.</b> 리더 시계가 앞서면 발행 시각이 미래로 와서
-     * 나이가 음수가 되고, 그러면 {@code dataStale} 이 영영 거짓이 된다 —
-     * 스케줄러가 죽어도 아무 노드가 fail-open 에 못 들어간다. 조용히 보정하지
-     * 않고 {@link #isClockAhead()} 로 드러낸다.
+     * 스케줄러가 발행한 뒤 흐른 시간. <b>음수는 0 으로 보되 {@link #isClockAhead()} 로 드러낸다</b>
+     * — 리더 시계가 앞서 나이가 음수면 {@code dataStale} 이 영영 거짓이라, 스케줄러가 죽어도
+     * 아무 노드가 fail-open 에 못 들어간다.
      */
     public Duration dataAge() {
         return view().dataAge();

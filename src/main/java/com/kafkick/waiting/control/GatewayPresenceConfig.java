@@ -21,12 +21,9 @@ import reactor.core.publisher.Mono;
 public class GatewayPresenceConfig {
 
     /**
-     * 표를 인정하는 신선도. <b>분모의 임계와 분리한다.</b>
-     *
-     * <p>같이 두면 죽은 노드의 마지막 표가 분모의 임계만큼 살아 있고, 시체
-     * 하나가 멀쩡한 클러스터를 그 시간 내내 조인다. <b>기본값에서는 둘이 같다</b> —
-     * 임계가 여유 신선도(3초)라 이 값이 거기로 잘린다. 임계를 늘리는 순간 분리가
-     * 살아나고, 그때 통과 수의 "모름" 판정도 같이 넓어진다.
+     * 표를 인정하는 신선도. <b>분모의 임계와 분리한다</b> — 같이 두면 죽은 노드의 마지막
+     * 표가 분모의 임계만큼 살아 시체 하나가 멀쩡한 클러스터를 그 시간 내내 조인다.
+     * 기본값에서는 임계(3초)에 잘려 둘이 같고, 임계를 늘리는 순간 분리가 살아난다.
      */
     private static final int VOTE_FRESH_TICKS = 5;
 
@@ -72,13 +69,10 @@ public class GatewayPresenceConfig {
     }
 
     /**
-     * 표를 인정할 초. <b>곱한 뒤에 초로 바꾼다.</b>
-     *
-     * <p>먼저 초로 바꾸면 1초 미만 틱이 0 으로 잘려 하한 1초가 나간다. 그러면
-     * 하트비트 한 회차가 오는 사이에 남의 표가 낡아, 리더가 자기 표만 들고
-     * 판단한다 — 클러스터 다수결이 이름만 남는다.
+     * 표를 인정할 초. <b>곱한 뒤에 초로 바꾸고 올림한다</b> — 먼저 초로 바꾸면 1초 미만
+     * 틱이 0 으로 잘려 하한 1초가 나가고, 그러면 하트비트 한 회차 사이에 남의 표가 낡아
+     * 클러스터 다수결이 이름만 남는다. 내림하면 간격과 같아져 왕복 지연만큼 모자란다.
      */
-    // 올림한다. 내리면 간격과 같아져 왕복 지연만큼 늘 모자란다.
     static long voteFreshSec(Duration tick, long reapAfterSec) {
         long millis = tick.multipliedBy(VOTE_FRESH_TICKS).toMillis();
         return Math.clamp(Math.ceilDiv(millis, 1000L), 1, reapAfterSec);
@@ -91,13 +85,10 @@ public class GatewayPresenceConfig {
     }
 
     /**
-     * 한 번의 하트비트. <b>서킷을 싣고, 클러스터 판정을 받아 적는다</b> (CY-791).
-     *
-     * <p>배선을 따로 뺀 것은, 이 두 줄이 빠져도 하트비트가 초록으로 돌기
-     * 때문이다. 그러면 배분은 리더 한 대의 로컬 서킷으로 크레딧을 정한다.
+     * 한 번의 하트비트. <b>서킷을 싣고, 클러스터 판정을 받아 적는다</b> (CY-791). 따로
+     * 뺀 것은 이 두 줄이 빠져도 하트비트가 초록으로 돌아, 배분이 리더 한 대의 로컬
+     * 서킷으로 크레딧을 정하기 때문이다. 실패는 무응답이 취소로 와 여기서 못 본다.
      */
-    // **성공만 여기서 적는다.** 실패는 루프가 상한 바깥에서 센다 — 무응답은
-    // 오류로 안 오고 취소로 오기 때문에, 여기서는 볼 수 없다.
     static Supplier<Mono<Integer>> beatStep(Function<CircuitState, Mono<Presence>> beat,
             Supplier<CircuitState> local, GatewayRegistry registry) {
         return () -> beat.apply(local.get())

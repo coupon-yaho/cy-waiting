@@ -13,11 +13,8 @@ import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Mono;
 
 /**
- * 배분은 <b>리더 한 대만</b> 돈다.
- *
- * <p>실패를 둘로 가른다. <b>사실</b>("남이 쥐고 있다")은 즉시 내려오고,
- * <b>모름</b>(오류·빈 응답·멈춤·취소)은 리스가 판단한다 — 로컬만 내려가도 락은
- * 여전히 이 노드 것이라, 즉시 하야하면 남은 리스 동안 아무도 리더가 못 된다.
+ * 배분은 <b>리더 한 대만</b> 돈다. 사실(남이 쥐고 있다)은 즉시 내려오고, 모름(오류·멈춤·
+ * 취소)은 리스가 판단한다 — 즉시 하야해도 락은 이 노드 것이라 아무도 리더가 못 된다.
  *
  * @see <a href="../../../../../../../ai/journal/2026/08/AIJ-0042-leadership-lease.md">AIJ-0042</a>
  */
@@ -26,11 +23,9 @@ public final class Leadership {
     private static final Logger log = LoggerFactory.getLogger(Leadership.class);
 
     /**
-     * 마지막 성공부터 회복하는 회차가 끝날 때까지 들어가는 <b>시도의 수</b>.
-     *
-     * <p>실제 예산은 {@code 4 × (시도 + 지연) + 시도 ≤ lease} 인데 지연은 여기서
-     * 모른다. 지연이 0 이상이므로 <b>{@code 5 × 시도 ≤ lease} 는 반드시 필요하다</b> —
-     * 이것만으로 예산을 닫지는 못하지만, 넘으면 확실히 깨진다.
+     * 마지막 성공부터 회복 회차가 끝날 때까지 들어가는 <b>시도의 수</b>. 실제 예산은
+     * {@code 4 × (시도 + 지연) + 시도 ≤ lease} 인데 지연은 여기서 모른다. 그래서
+     * {@code 5 × 시도 ≤ lease} 만 건다 — 예산을 닫지는 못해도 넘으면 확실히 깨진다.
      */
     private static final int ATTEMPTS_PER_LEASE = 5;
 
@@ -65,10 +60,8 @@ public final class Leadership {
     private final AtomicReference<Standing> standing =
             new AtomicReference<>(new Standing(State.FOLLOWER, 0, 0, 0));
     /**
-     * 억제 구간. {@code null} 이면 지금은 실패 중이 아니다.
-     *
-     * <p>시작 시각과 삼킨 시도 수를 따로 두면 비우는 것과 읽는 것 사이가 벌어져,
-     * 그때 들어온 실패가 이번 회복 로그에도 다음에도 안 들어간다.
+     * 억제 구간. {@code null} 이면 실패 중이 아니다. 시작 시각과 삼킨 시도 수를 따로
+     * 두면 비우는 것과 읽는 것 사이가 벌어져, 그때 들어온 실패가 어느 쪽에도 안 남는다.
      */
     private record Failing(long since, int swallowed) {
     }
@@ -117,10 +110,8 @@ public final class Leadership {
     }
 
     /**
-     * 기동마다 새로 만든다.
-     *
-     * <p>고정 ID 를 쓰면 재기동한 자신을 이전 소유자로 오인해, 죽기 전에 잡아 둔
-     * 락을 새 프로세스가 자기 것으로 알고 연장한다.
+     * 기동마다 새로 만든다. 고정 ID 를 쓰면 재기동한 자신을 이전 소유자로 오인해,
+     * 죽기 전에 잡아 둔 락을 새 프로세스가 자기 것으로 알고 연장한다.
      */
     public static String newOwnerId() {
         return UUID.randomUUID().toString();
@@ -131,22 +122,18 @@ public final class Leadership {
     }
 
     /**
-     * 이 노드가 지금 리더인가. 요청 경로가 아니라 배분 틱이 묻는다.
-     *
-     * <p><b>확인된 지 리스가 지났으면 아니다.</b> 값이 늙는 경로 — 멈춤, 취소,
-     * STW, 루프 정지 — 는 저마다 다른 모양이라 하나씩 막을 수 없다. 나이로 재면
-     * 전부 한 자리에서 접힌다.
-     */
-    /**
-     * 내 펜스 번호. <b>리더가 아니면 0 이다</b> (CY-766).
-     *
-     * <p>되돌릴 수 없는 쓰기가 이 번호를 들고 나간다. 0 이면 줄 옆의 울타리가
-     * 전부 거절한다 — 안 지우는 쪽이라 안전한 방향이다.
+     * 내 펜스 번호. <b>리더가 아니면 0 이다</b> (CY-766). 되돌릴 수 없는 쓰기가 이 번호를
+     * 들고 나가고, 0 이면 줄 옆의 울타리가 전부 거절한다 — 안 지우는 쪽이라 안전하다.
      */
     public long fence() {
         return isLeader() ? standing.get().fence() : 0;
     }
 
+    /**
+     * 이 노드가 지금 리더인가. 요청 경로가 아니라 배분 틱이 묻는다. <b>확인된 지 리스가
+     * 지났으면 아니다</b> — 값이 늙는 경로(멈춤·취소·STW·루프 정지)는 저마다 다른 모양이라
+     * 하나씩 못 막지만, 나이로 재면 전부 한 자리에서 접힌다.
+     */
     public boolean isLeader() {
         Standing now = standing.get();
         if (now.state() != State.LEADER) {
@@ -173,10 +160,8 @@ public final class Leadership {
     /**
      * 락을 잡거나 연장한다. 모르는 채로 끝난 시도는 아무것도 안 바꾼다 —
      * {@code confirmedAt} 이 안 움직이므로 리스가 지나면 저절로 내려온다.
+     * RULE-EXCEPTION(RX-6): 낡은 재료는 유계지만 리더가 둘인 것은 유계가 아니다.
      */
-    // RULE-EXCEPTION(RX-6): 판정 재료를 유지하라는 규칙과 방향이 다르다. 낡은
-    // 재료로 판정하는 것은 유계지만 리더가 둘인 것은 유계가 아니다. 다만
-    // "즉시 버린다" 도 아니다 — 리스가 그 유계다.
     public Mono<Void> renew() {
         return Mono.defer(() -> {
             if (standing.get().state() == State.CLOSED) {
@@ -194,11 +179,9 @@ public final class Leadership {
     }
 
     /**
-     * 락을 놓고 <b>종료한다.</b>
-     *
-     * <p>표시를 먼저 하는 것이 핵심이다. 락만 지우고 종료 표시를 안 하면, 종료 중
-     * 스케줄러가 한 틱만 더 돌아도 방금 비운 락을 <b>죽는 노드가 다시 잡는다.</b>
-     * 그러면 다음 리더가 리스 만료를 기다리게 되어 해제한 이득이 사라진다.
+     * 락을 놓고 <b>종료한다.</b> 종료 표시를 먼저 하는 것이 핵심이다 — 락만 지우면 종료
+     * 중 스케줄러가 한 틱만 더 돌아도 <b>죽는 노드가 그 락을 다시 잡고</b>, 다음 리더가
+     * 리스 만료를 기다리게 되어 해제한 이득이 사라진다.
      */
     public Mono<Void> release() {
         return Mono.defer(() -> {
@@ -206,10 +189,9 @@ public final class Leadership {
             if (before.state() == State.CLOSED) {
                 return Mono.<Void>empty();
             }
-            // **로컬 상태로 거르지 않는다.** FOLLOWER 는 "락이 남의 것" 과 "리스가
-            // 지나 내려왔지만 서버 락은 아직 내 것" 을 둘 다 뜻한다. 뒤엣것에서
-            // 안 지우면 정상 종료인데도 다음 리더가 리스 만료를 기다린다.
-            // 지우는 쪽이 안전한 것은 스크립트가 소유자를 확인하기 때문이다.
+            // **로컬 상태로 거르지 않는다.** FOLLOWER 는 락이 남의 것과 리스가 지나
+            // 내려왔지만 서버 락은 내 것을 둘 다 뜻하고, 뒤엣것에서 안 지우면 정상
+            // 종료인데도 다음 리더가 기다린다. 지워도 되는 건 스크립트가 소유자를 봐서다.
             long heldFor = ticker.getAsLong() - before.leaderSince();
             boolean wasLeader = before.state() == State.LEADER;
             return releaseLock()
@@ -249,12 +231,9 @@ public final class Leadership {
 
         Standing before = standing.getAndUpdate(s -> switch (s.state()) {
             case CLOSED -> s;
-            // **뒤로 밀지 않는다.** 겹친 두 임기 중 늦게 도착한 옛 임기가 확인 시각을
-            // 되돌리면, 멀쩡한 리더가 헛강등되고 거짓 경고가 찍힌다.
-            // **펜스 번호도 뒤로 안 민다.** 늦게 도착한 옛 임기의 응답이 번호를
-            // 되돌리면, 멀쩡한 리더가 비가역 쓰기를 옛 번호로 내보낸다.
-            // 임기 안에서는 연장이 같은 번호를 돌려주므로 이 최댓값은 그
-            // 겹침에만 걸리고, 새 임기는 아래 FOLLOWER 갈래로 들어온다.
+            // **확인 시각도 펜스 번호도 뒤로 안 민다.** 늦게 도착한 옛 임기가 되돌리면
+            // 멀쩡한 리더가 헛강등되거나 비가역 쓰기를 옛 번호로 낸다. 임기 안 연장은
+            // 같은 번호라 이 최댓값은 겹침에만 걸리고, 새 임기는 FOLLOWER 갈래로 온다.
             case LEADER -> new Standing(State.LEADER,
                     Math.max(s.confirmedAt(), startedAt), s.leaderSince(),
                     Math.max(s.fence(), lock.fence()));
@@ -278,10 +257,9 @@ public final class Leadership {
     }
 
     /**
-     * 실패가 이어지는 동안 경고는 한 번만 찍고 <b>삼킨 시도를 센다.</b>
-     *
-     * <p>매 회차 찍으면 몇 분짜리 단절에 노드마다 수백 줄이다. 그렇다고 지속 시간만
-     * 남기면 한 회차가 실패한 것인지 수백 회차인지 사후에 못 가린다.
+     * 실패가 이어지는 동안 경고는 한 번만 찍고 <b>삼킨 시도를 센다.</b> 매 회차 찍으면
+     * 몇 분 단절에 노드마다 수백 줄이고, 지속 시간만 남기면 한 회차가 실패한 것인지
+     * 수백 회차인지 사후에 못 가린다.
      */
     private void enterFailing(Throwable cause) {
         long now = ticker.getAsLong();

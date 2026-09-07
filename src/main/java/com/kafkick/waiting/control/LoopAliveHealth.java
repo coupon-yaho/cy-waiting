@@ -6,13 +6,9 @@ import org.springframework.boot.health.contributor.HealthIndicator;
 import org.springframework.stereotype.Component;
 
 /**
- * 루프가 멎었으면 <b>이 프로세스의 결함</b>이다 — 빼는 것이 아니라 재기동이다.
- *
- * <p>받아오기 실패는 여기 안 넣는다. 공유 원인일 수 있고, 그러면 전 노드가 동시에
- * 재기동해 그 자체가 전면 장애가 된다.
- *
- * <p>이름을 못 박는다. 헬스 그룹이 빈 이름으로 지목하므로 기본 이름에 맡기면
- * 클래스 이름을 고치는 것만으로 그룹에서 빠진다.
+ * 루프가 멎었으면 <b>이 프로세스의 결함</b>이다 — 빼는 것이 아니라 재기동이다. 받아오기
+ * 실패는 여기 안 넣는다. 공유 원인이면 전 노드가 동시에 재기동해 그 자체가 전면 장애다.
+ * 이름을 못 박은 것은 기본 이름에 맡기면 클래스명 변경만으로 헬스 그룹에서 빠져서다.
  */
 @Component("loopAlive")
 public final class LoopAliveHealth implements HealthIndicator {
@@ -32,10 +28,9 @@ public final class LoopAliveHealth implements HealthIndicator {
 
 
     /**
-     * <b>한 번이라도 돈 뒤</b> 임계를 넘겼을 때만 죽는다.
-     *
-     * <p>기동 직후를 정지로 세면 첫 회차를 못 돈 파드가 죽고, 재기동해도 또 첫 회차
-     * 전이라 또 죽는다. 그 구간은 받는 쪽과 기동 프로브가 맡는다.
+     * <b>한 번이라도 돈 뒤</b> 임계를 넘겼을 때만 죽는다. 기동 직후를 정지로 세면 첫
+     * 회차를 못 돈 파드가 죽고 재기동해도 또 첫 회차 전이라 또 죽는다 — 그 구간은
+     * 받는 쪽과 기동 프로브가 맡는다.
      */
     @Override
     public Health health() {

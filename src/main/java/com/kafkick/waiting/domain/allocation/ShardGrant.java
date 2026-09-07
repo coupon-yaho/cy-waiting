@@ -1,10 +1,8 @@
 package com.kafkick.waiting.domain.allocation;
 
 /**
- * 샤드 하나에 배정된 몫.
- *
- * <p>샤드가 하나뿐인 지금도 번호를 들고 다닌다. 나중에 붙이면 이 값을 실어
- * 나르는 경로를 전부 다시 고쳐야 한다 (DS-7).
+ * 샤드 하나에 배정된 몫. 샤드가 하나뿐인 지금도 번호를 들고 다닌다 — 나중에
+ * 붙이면 이 값을 실어 나르는 경로를 전부 다시 고쳐야 한다 (DS-7).
  */
 public record ShardGrant(String couponId, int shardIndex, long credit) {
 

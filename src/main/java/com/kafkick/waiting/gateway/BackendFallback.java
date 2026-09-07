@@ -91,15 +91,6 @@ public final class BackendFallback {
         return new BackendFallback(clock, meters, random, null, null);
     }
 
-    /**
-     * 서킷이 넘긴 요청에 답한다.
-     *
-     * <p><b>같은 값을 주지 않는다.</b> 전원이 같은 순간에 다시 오면 서킷이
-     * 닫히자마자 재포화되어 다시 열리고, 그 진동이 회복을 막는다.
-     *
-     * <p>봉투는 {@link ApiError} 가 만든다 — 여기서 따로 짜면 같은 게이트웨이가
-     * 두 가지 오류 형식을 낸다.
-     */
     /** 서킷이 <b>부르지도 않고</b> 되돌렸다는 표식. 통과 수를 세는 쪽이 이걸 뺀다. */
     public static final String NOT_CALLED = BackendFallback.class.getName() + ".notCalled";
 
@@ -110,6 +101,11 @@ public final class BackendFallback {
                 .orElse(true);
     }
 
+    /**
+     * 서킷이 넘긴 요청에 답한다. <b>같은 값을 주지 않는다</b> — 전원이 같은
+     * 순간에 다시 오면 재포화되어 다시 열리고, 그 진동이 회복을 막는다.
+     * 봉투는 {@link ApiError} 가 만든다.
+     */
     public Mono<ServerResponse> respond(ServerRequest request) {
         // **닿은 것과 안 부른 것을 가른다** (RC4). 폴백은 둘 다로 온다 — 뒷단이
         // 붙잡아 상한에 걸린 것은 닿은 것이고, 서킷이 열린 채 거절한 것은 아니다.
@@ -121,10 +117,8 @@ public final class BackendFallback {
         // 뒷단 오류로도 온다. 라벨을 오픈으로 고정하면 서킷이 닫힌 채 실패만 나는
         // 구간에서 지표가 거짓말하고, 그 지표로 회복을 판정한다 (8.4.3).
         meters.counter(METRIC, "state", state()).increment();
-        // **무엇이 폴백을 불렀는지 남긴다.** 지표는 서킷 상태만 실어, 서킷이
-        // 닫힌 채 실패만 나는 구간에서 원인이 뒷단인지 게이트웨이 자신인지를
-        // 못 가른다. 예외 이름 하나면 그 둘이 갈린다 — 실측에서 20 건이 뒷단에
-        // 가지도 않고 실패했는데 그것을 지표로만 역산하느라 반나절을 썼다.
+        // 지표는 서킷 상태만 실어, 닫힌 채 실패만 나는 구간에서 원인이 뒷단인지
+        // 게이트웨이 자신인지를 못 가른다. 예외 이름 하나면 그 둘이 갈린다.
         if (log.isDebugEnabled()) {
             request.attribute(ServerWebExchangeUtils.CIRCUITBREAKER_EXECUTION_EXCEPTION_ATTR)
                     .ifPresentOrElse(
@@ -133,9 +127,7 @@ public final class BackendFallback {
                             () -> log.debug("폴백 원인 — 예외 속성이 없다 (서킷이 열린 채 거절)"));
         }
         // **차례가 온 사람과 줄에 선 사람에게 같은 답을 하면 안 된다.** 앞은 손에
-        // 든 토큰의 수명 안에 돌아와야 하고, 뒤는 그럴 필요가 없다. 판정 경로가
-        // 이미 그렇게 가르고 있는데(RETRY_TOKEN 은 가장 가까운 밴드) 여기만 하나로
-        // 답하면 같은 상황에 두 정책이 갈린다.
+        // 든 토큰의 수명 안에 돌아와야 한다. 판정 경로가 이미 그렇게 가른다.
         boolean admitted = admitted(request);
         ApiError.Envelope envelope = error.render(request.exchange(),
                 HttpStatus.SERVICE_UNAVAILABLE, CODE,
@@ -164,9 +156,9 @@ public final class BackendFallback {
     /**
      * 이 요청을 판정한 회차의 배수. <b>홀더를 다시 안 읽는다</b> — 서킷을 지나
      * 나중에 도는 자리라 그러면 다른 회차의 값이 나간다.
+     *
+     * <p>없으면 1.0 이다. 모를 때 늘리면 근거 없이 전원을 멀리 보낸다.
      */
-    // 없으면 1.0 이다. 판정을 안 거친 요청이거나 첫 틱 전이고, 둘 다 배수를
-    // 모르는 상태다. 모를 때 늘리면 근거 없이 전원을 멀리 보내는 것이다.
     private double pollScale(ServerRequest request) {
         Double scale = request.exchange().getAttribute(AdmissionGatewayFilter.POLL_SCALE);
         return scale == null ? PollIntervalPolicy.NO_SCALE : scale;
@@ -175,11 +167,9 @@ public final class BackendFallback {
     /**
      * 다시 올 시각.
      *
-     * <p>차례가 온 사람은 <b>가장 가까운 밴드</b>로 부른다. 멀리 보내면 그 사이
-     * 그의 몫이 남에게 가고, 토큰 수명이 다하면 줄 맨 뒤로 다시 선다.
+     * <p>차례가 온 사람은 <b>가장 가까운 밴드</b>로 부르고 배수도 안 받는다.
+     * 멀리 보내면 토큰이 죽어 줄 맨 뒤에 다시 선다.
      */
-    // **차례가 온 쪽은 배수도 안 받는다.** 판정 경로가 같은 사람에게 그렇게
-    // 답한다 — 배수만큼 멀리 보내면 토큰이 죽어 줄 맨 뒤에 다시 선다.
     private int retryAfterSec(boolean admitted, double pollScale) {
         return admitted
                 ? (int) POLL.intervalSec(0, random, PollIntervalPolicy.NO_SCALE)

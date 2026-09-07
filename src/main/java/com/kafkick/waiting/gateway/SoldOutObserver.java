@@ -22,10 +22,8 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 /**
- * 뒷단이 낸 매진 응답을 <b>관찰만</b> 한다 (7.2.2 · B-10).
- *
- * <p>응답을 바꾸지 않는다. 게이트웨이가 매진 응답을 스스로 만들면 그 순간
- * 게이트웨이의 존재가 드러난다 — 뒷단이 낸 것을 그대로 흘려보낸다.
+ * 뒷단이 낸 매진 응답을 <b>관찰만</b> 한다 (7.2.2 · B-10). 응답을 바꾸지 않는다 —
+ * 게이트웨이가 매진 응답을 스스로 만들면 그 순간 게이트웨이의 존재가 드러난다.
  */
 public final class SoldOutObserver implements GatewayFilter {
 
@@ -33,10 +31,8 @@ public final class SoldOutObserver implements GatewayFilter {
     private static final String SOLD_OUT_CODE = "COUPON-306";
 
     /**
-     * 코드를 찾아볼 앞부분 길이.
-     *
-     * <p>오류 봉투는 짧고 코드가 앞에 온다. 상한이 없으면 뒷단이 큰 본문을
-     * 409 로 낼 때 그 전부를 문자열로 만든다.
+     * 코드를 찾아볼 앞부분 길이. 오류 봉투는 짧고 코드가 앞에 온다 — 상한이 없으면
+     * 뒷단이 큰 본문을 409 로 낼 때 그 전부를 문자열로 만든다.
      */
     private static final int PREFIX = 512;
 
@@ -56,10 +52,8 @@ public final class SoldOutObserver implements GatewayFilter {
     }
 
     /**
-     * <b>노드 시계가 아니라 재료의 발행 시각을 심는다.</b>
-     *
-     * <p>해제가 발행 시각끼리 비교하므로, 무장도 같은 시계 영역이라야 한다 —
-     * 섞으면 두 시계의 차가 그대로 판정에 실린다.
+     * <b>노드 시계가 아니라 재료의 발행 시각을 심는다.</b> 해제가 발행 시각끼리 비교하므로
+     * 무장도 같은 시계 영역이라야 한다 — 섞으면 두 시계의 차가 그대로 판정에 실린다.
      */
     public static SoldOutObserver ofSnapshot(SoldOutCache cache, SnapshotHolder holder,
             MeterRegistry meters) {
@@ -105,10 +99,8 @@ public final class SoldOutObserver implements GatewayFilter {
     }
 
     /**
-     * 관찰이 응답을 죽이지 않게 한다.
-     *
-     * <p><b>이건 곁다리다.</b> 여기서 던지면 `doOnNext` 가 그 오류를 응답
-     * 스트림에 실어, 관찰 실패가 곧 응답 실패가 된다.
+     * <b>관찰은 곁다리다.</b> 여기서 던지면 {@code doOnNext} 가 그 오류를 응답 스트림에
+     * 실어, 관찰 실패가 곧 응답 실패가 된다.
      */
     private void observe(ServerWebExchange exchange, DataBuffer buffer, String couponId,
             Prefix prefix) {
@@ -122,21 +114,17 @@ public final class SoldOutObserver implements GatewayFilter {
     }
 
     /**
-     * 매진 봉투인가.
-     *
-     * <p><b>상태와 사유를 함께 본다.</b> 상태만 보면 중복 발급 같은 다른 409 가
-     * 그 쿠폰을 끊고, 본문만 보면 매진을 설명하는 200 이 같은 일을 한다.
+     * 매진 봉투인가. <b>상태와 사유를 함께 본다</b> — 상태만 보면 중복 발급 같은 다른
+     * 409 가 그 쿠폰을 끊고, 본문만 보면 매진을 설명하는 200 이 같은 일을 한다.
      */
     private void inspect(ServerWebExchange exchange, DataBuffer buffer, String couponId,
             Prefix prefix) {
         if (!HttpStatus.CONFLICT.equals(exchange.getResponse().getStatusCode())) {
             return;
         }
-        // **정말로 뒷단에 닿은 응답인가.** 이 필터는 쓰기 필터보다 바깥이라
-        // 판정·서킷보다도 바깥이다. 안 가르면 게이트웨이 자신이 낸 매진
-        // (사다리 1번의 `COUPON-306`)을 되먹여, 뒷단이 살아나도 안 풀린다.
-        //
-        // 이 표시는 라우팅 필터만 심고, 서킷 폴백은 재디스패치 전에 지운다.
+        // **정말로 뒷단에 닿은 응답인가.** 이 필터는 판정·서킷보다 바깥이라, 안 가르면
+        // 게이트웨이 자신이 낸 매진을 되먹여 뒷단이 살아나도 안 풀린다. 이 표시는 라우팅
+        // 필터만 심고, 서킷 폴백은 재디스패치 전에 지운다.
         if (exchange.getAttribute(ServerWebExchangeUtils.CLIENT_RESPONSE_ATTR) == null) {
             return;
         }
@@ -157,10 +145,8 @@ public final class SoldOutObserver implements GatewayFilter {
     }
 
     /**
-     * 앞부분만 모은다.
-     *
-     * <p><b>조각 하나만 보면 코드가 경계에 걸려 안 보인다.</b> 그렇다고 전부
-     * 모으면 그것이 곧 버퍼링이다. 상한까지만 이어 붙인다.
+     * 앞부분만 모은다. <b>조각 하나만 보면 코드가 경계에 걸려 안 보이고</b>, 그렇다고
+     * 전부 모으면 그것이 곧 버퍼링이다. 상한까지만 이어 붙인다.
      */
     private static final class Prefix {
 
@@ -179,10 +165,9 @@ public final class SoldOutObserver implements GatewayFilter {
             if (take <= 0) {
                 return false;
             }
-            // 읽기 위치를 안 옮긴다. 옮기면 뒷사람이 빈 조각을 받는다.
-            //
-            // 조각 경계가 여러 바이트 문자를 가를 수 있다. 찾는 것이 아스키라
-            // 잘린 꼬리가 치환 문자가 되어도 검색에는 영향이 없다.
+            // 읽기 위치를 안 옮긴다. 옮기면 뒷사람이 빈 조각을 받는다. 조각 경계가 여러
+            // 바이트 문자를 가를 수 있지만, 찾는 것이 아스키라 잘린 꼬리가 치환 문자가
+            // 되어도 검색에는 영향이 없다.
             head.append(buffer.toString(buffer.readPosition(), take, StandardCharsets.UTF_8));
             bytes += take;
             return true;
@@ -198,11 +183,9 @@ public final class SoldOutObserver implements GatewayFilter {
     }
 
     /**
-     * 쿠폰 이름을 <b>판정과 같은 출처에서</b> 뽑는다.
-     *
-     * <p>경로를 다시 파면 담는 키와 읽는 키의 출처가 둘이 된다 — 라우트 술어가
-     * 한 번만 느슨해지면 캐시가 조용히 0% 적중이 되고, 상한을 클라이언트가 고른
-     * 문자열로 채울 수 있다. 라우트를 안 탄 요청이 자동으로 걸러지는 것은 덤이다.
+     * 쿠폰 이름을 <b>판정과 같은 출처에서</b> 뽑는다. 경로를 다시 파면 담는 키와 읽는 키의
+     * 출처가 둘이 되어, 라우트 술어가 한 번만 느슨해지면 캐시가 조용히 0% 적중이 되고
+     * 상한을 클라이언트가 고른 문자열로 채울 수 있다.
      */
     private String couponOf(ServerWebExchange exchange) {
         Object vars = exchange.getAttribute(

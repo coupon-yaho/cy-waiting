@@ -14,11 +14,9 @@ import org.springframework.web.reactive.function.server.RouterFunction;
 import org.springframework.web.reactive.function.server.ServerResponse;
 
 /**
- * 서킷이 넘긴 요청을 받는 자리.
- *
- * <p><b>핸들러만 만들어 두면 오히려 위험하다.</b> 서킷 필터는 {@code forward:}
- * 로 넘길 뿐이라, 받는 라우트가 없으면 404 다. 코드에 핸들러가 보이므로 아무도
- * 그 경로를 의심하지 않고, 장애 때만 드러난다.
+ * 서킷이 넘긴 요청을 받는 자리. <b>핸들러만 만들어 두면 오히려 위험하다</b> — 서킷 필터는
+ * {@code forward:} 로 넘길 뿐이라 받는 라우트가 없으면 404 다. 코드에 핸들러가 보이니
+ * 아무도 그 경로를 의심하지 않고, 장애 때만 드러난다.
  */
 @Configuration
 public class BackendFallbackRoutes {
@@ -38,10 +36,8 @@ public class BackendFallbackRoutes {
 
     /**
      * <b>밖에서 온 요청은 안 받는다.</b> 이 경로는 신원 필터와 남용 리미터의
-     * {@code /api/**} 밖이라 아무나 칠 수 있는데, 한 번마다 "서킷이 열렸다" 는
-     * 지표가 오른다 — 밖에서 회복 판정을 흔들 수 있다.
-     *
-     * <p>게이트웨이가 넘긴 요청에만 있는 표식으로 가른다.
+     * {@code /api/**} 밖이라 아무나 칠 수 있는데, 한 번마다 "서킷이 열렸다" 는 지표가
+     * 올라 밖에서 회복 판정을 흔들 수 있다.
      */
     private RequestPredicate forwarded() {
         return request -> request.exchange()

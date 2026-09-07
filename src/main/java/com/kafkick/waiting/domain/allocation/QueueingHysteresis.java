@@ -1,10 +1,8 @@
 package com.kafkick.waiting.domain.allocation;
 
 /**
- * 대기열을 켜고 끄는 임계를 비대칭으로 둔다.
- *
- * <p>같은 임계를 쓰면 유입이 임계선 근처에서 흔들릴 때 사용자에게
- * <b>"대기 없음 → 500명 → 대기 없음"</b> 이 반복해서 보인다.
+ * 대기열을 켜고 끄는 임계를 비대칭으로 둔다. 같은 임계를 쓰면 유입이 임계선
+ * 근처에서 흔들릴 때 <b>"대기 없음 → 500명 → 대기 없음"</b> 이 반복해 보인다.
  */
 public class QueueingHysteresis {
 
@@ -21,19 +19,16 @@ public class QueueingHysteresis {
         this.exitRatio = exitRatio;
         this.minHoldTicks = minHoldTicks;
         this.queueing = snapshot.queueing();
-        // 설정이 줄어든 뒤 옛 값이 실려 오면 이미 최소 유지를 넘어, 이월받자마자
-        // 첫 틱에 놓아 버린다 — 이월이 스스로를 무력화하고 표시가 한 번 더 튄다.
-        // 하한도 건다. 최소 유지가 0 이면 상한이 -1 이 되고, 그 값은 스냅샷이
-        // 거부해서 히스테리시스를 끈 설정에서 리더가 발행을 못 한다.
+        // 옛 값이 그대로 실려 오면 이월받자마자 첫 틱에 놓아 버린다. 하한도 건다 —
+        // 최소 유지가 0 이면 상한이 -1 이 되고, 그 값은 스냅샷이 거부해서
+        // 히스테리시스를 끈 설정에서 리더가 발행을 못 한다.
         this.belowExitTicks = Math.max(0, Math.min(snapshot.belowExitTicks(), minHoldTicks - 1));
     }
 
     /**
      * 이월받은 상태로 시작한다.
      *
-     * <p>리더가 바뀔 때마다 꺼진 채로 시작하면, 붙잡고 있던 대기열이 한 틱
-     * 꺼졌다 다시 켜진다 — 사람에게는 "대기 없음 → 500명" 이 반복해 보인다.
-     * 히스테리시스가 막으려던 진동이 리더 교체 때마다 나는 셈이다.
+     * <p>꺼진 채로 시작하면 히스테리시스가 막으려던 진동이 리더 교체마다 난다.
      */
     public static QueueingHysteresis restore(double enterRatio, double exitRatio,
             int minHoldTicks, Snapshot snapshot) {
@@ -64,8 +59,7 @@ public class QueueingHysteresis {
     /**
      * 이번 틱에 줄을 세울 것인가.
      *
-     * <p>켤 때는 {@code enterRatio} 를 넘어야 하고, 끌 때는 {@code exitRatio}
-     * 아래로 <b>연속해서</b> {@code minHoldTicks} 만큼 머물러야 한다.
+     * <p>끌 때만 <b>연속</b> {@code minHoldTicks} 를 요구한다 — 한 틱의 소강으로는 못 푼다.
      */
     public boolean shouldQueue(long demand, long capacity) {
         double load = load(demand, capacity);

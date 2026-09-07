@@ -15,11 +15,8 @@ import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
 /**
- * 스냅샷을 주기적으로 받아 홀더에 갈아 끼운다.
- *
- * <p><b>실패해도 들고 있던 것을 지우지 않는다.</b> 지우면 레디스가 잠깐 끊긴
- * 사이 판정 재료가 사라진다 — 낡은 값으로 버티는 것과 아무 값 없이 버티는
- * 것은 다르다. 후자는 못 버티는 것이다.
+ * 스냅샷을 주기적으로 받아 홀더에 갈아 끼운다. <b>실패해도 들고 있던 것을 지우지 않는다</b> —
+ * 낡은 값으로 버티는 것과 아무 값 없이 버티는 것은 다르다. 후자는 못 버티는 것이다.
  */
 public final class SnapshotRefresher {
 
@@ -32,11 +29,8 @@ public final class SnapshotRefresher {
 
     private final SnapshotCodec codec = SnapshotCodec.create();
     /**
-     * 언제부터 못 받고 있나. 비어 있으면 정상이다.
-     *
-     * <p>진입과 해제를 쌍으로 남기고 해제에 지속 시간을 담는다 (LG-2). 매 회차
-     * 찍으면 20노드 30초 단절에 수백 줄이 쏟아지고(LG-3), 걷힌 시점을 가리키는
-     * 줄은 하나도 없다 — 사후에 얼마나 영향받았는지 답할 수 없다.
+     * 언제부터 못 받고 있나. 비어 있으면 정상이다. 진입과 해제를 쌍으로 남기고 해제에 지속
+     * 시간을 담는다 (LG-2) — 매 회차 찍으면 수백 줄이 쏟아지는데(LG-3) 걷힌 시점은 안 남는다.
      */
     private final AtomicReference<Instant> failingSince = new AtomicReference<>();
     private final SnapshotHolder holder;
@@ -70,10 +64,8 @@ public final class SnapshotRefresher {
 
 
     /**
-     * 시계를 안 받는 형태. <b>운영 배선은 이걸 안 쓴다</b> — 빈으로 주입받는다.
-     *
-     * <p>나이를 재는 시계라 고정할 일이 드물어 남겨 둔다. 고정이 필요한 시험은
-     * 위의 형태를 쓴다.
+     * 시계를 안 받는 형태. <b>운영 배선은 이걸 안 쓴다</b> — 빈으로 주입받는다. 나이를 재는
+     * 시계라 고정할 일이 드물어 남겨 둔다. 고정이 필요한 시험은 위의 형태를 쓴다.
      */
     public static SnapshotRefresher of(SnapshotHolder holder,
             Supplier<Mono<Map<String, String>>> source) {
@@ -95,29 +87,19 @@ public final class SnapshotRefresher {
     }
 
     /**
-     * 한 회차. <b>타임아웃 타이머도 주어진 스케줄러에서 돈다</b> (RX-3).
-     *
-     * <p>공용 풀에 두면 부하로 그 풀이 밀릴 때 <b>포기 자체가 늦어져</b>
-     * 나이가 임계를 넘는다 — 부하가 가장 높을 때 노드가 로테이션에서 빠진다.
+     * 한 회차. <b>타임아웃 타이머도 주어진 스케줄러에서 돈다</b> (RX-3). 공용 풀에 두면 부하로
+     * 그 풀이 밀릴 때 <b>포기 자체가 늦어져</b> 나이가 임계를 넘는다 — 부하가 가장 높을 때
+     * 노드가 로테이션에서 빠진다.
      */
     public Mono<Void> once(Scheduler scheduler) {
         // **defer 로 감싼다.** source.get() 이 조립 중에 던지면 아래 오류
         // 처리가 못 받는다 — 루프를 만들기도 전에 터져 그 자리에서 멎는다.
         return Mono.defer(source)
                 .timeout(timeout, scheduler)
-                // **발행된 것만 받는다.** 빈 해시는 장애가 아니라 흔한 상태라
-                // 성공 응답으로 온다 — 그대로 받으면 들고 있던 것이 지워지고
-                // 전 쿠폰이 매진으로 보인다.
-                // 발행 표시가 없으면 버리되 **조용히 버리지 않는다.** 필터는
-                // 오류가 아니라서 아무 흔적을 안 남기는데, 스케줄러 회차가 그
-                // 필드를 아직 안 쓰면 전 노드가 영영 갱신을 못 한다.
                 .map(read -> new Read(codec.decode(read.hash()), read.now()))
-                // **받아들일 수 있는 것만 받는다.** 발행 표시가 없으면 스케줄러가
-                // 낸 것이 아니고, 쿠폰을 하나도 못 읽었으면 형식이 갈린 것이다 —
-                // 둘 다 그대로 받으면 홀더가 비고 전 쿠폰이 매진으로 보인다.
-                //
-                // 조용히 버리지 않는다. 필터는 오류가 아니라 흔적을 안 남기는데,
-                // 스케줄러 회차가 갈리면 전 노드가 영영 갱신을 못 한다.
+                // **받아들일 수 있는 것만 받는다.** 발행 표시가 없거나 쿠폰을 하나도 못 읽었으면
+                // 그대로 받는 순간 홀더가 비고 전 쿠폰이 매진으로 보인다. 버리기 전에 남기는 것은
+                // 필터가 흔적을 안 남겨, 전 노드가 영영 갱신을 못 해도 조용하기 때문이다.
                 .doOnNext(read -> {
                     if (!isAcceptable(read.snapshot())) {
                         enterFailing("받아들일 수 없는 스냅샷 — 발행={} 쿠폰={}",
@@ -140,21 +122,16 @@ public final class SnapshotRefresher {
                         e.toString()))
                 .onErrorResume(e -> Mono.empty())
                 .then()
-                // **한 바퀴 돈 것은 성패와 무관하다.** 성공했을 때만 찍으면
-                // fetchStale 이 다시 "받아왔는가" 가 되고, 레디스가 모두에게
-                // 느린 순간 전 노드가 동시에 liveness 실패로 재기동한다.
-                //
-                // 오류는 바로 위에서 이미 완료로 바뀌었고, 버려진 스냅샷도
-                // 완료로 온다 — 그래서 여기 한 자리면 세 경로를 다 덮는다.
-                // 취소는 루프가 뜯긴 것이지 돈 것이 아니라, 신호가 안 온다.
+                // **한 바퀴 돈 것은 성패와 무관하다.** 성공했을 때만 찍으면 fetchStale 이 다시
+                // 받아왔는가가 되고, 레디스가 모두에게 느린 순간 전 노드가 동시에 재기동한다.
+                // 오류도 버려진 스냅샷도 완료로 오지만, 취소는 돈 것이 아니라 신호가 안 온다.
                 .doOnSuccess(ignored -> holder.loopTicked());
     }
 
     /**
-     * <b>완료한 뒤에 다음 회차를 잡는다.</b> 고정 주기로 쏘면 한 회차가 늦을 때
-     * 다음 회차가 큐에 쌓이고, 회복되는 순간 밀린 것이 한꺼번에 나간다.
-     *
-     * <p>전용 스케줄러를 쓴다. 기본 풀에 얹으면 요청 처리 뒤에 줄을 선다.
+     * <b>완료한 뒤에 다음 회차를 잡는다.</b> 고정 주기로 쏘면 한 회차가 늦을 때 다음 회차가
+     * 큐에 쌓이고, 회복되는 순간 밀린 것이 한꺼번에 나간다. 전용 스케줄러를 쓰는 것은 기본
+     * 풀에 얹으면 요청 처리 뒤에 줄을 서기 때문이다.
      */
     public Flux<Void> loop(Duration interval, Scheduler scheduler) {
         // **defer 로 감싼다.** 안 감싸면 한번() 이 여기서 한 번만 평가되고,
@@ -182,11 +159,9 @@ public final class SnapshotRefresher {
     }
 
     /**
-     * 발행 표시가 있고 쿠폰을 하나 이상 읽었는가.
-     *
-     * <p>빈 해시는 장애가 아니라 흔한 상태고(복제본 승격·키 만료·리더 재선출),
-     * 값 형식이 갈리면 발행 표시는 멀쩡한데 쿠폰만 전부 빠진다. 둘 다 정상
-     * 응답으로 오므로 오류 경로로는 못 막는다.
+     * 발행 표시가 있고 쿠폰을 하나 이상 읽었는가. 빈 해시는 장애가 아니라 흔한 상태고(복제본
+     * 승격·키 만료·리더 재선출), 값 형식이 갈리면 발행 표시는 멀쩡한데 쿠폰만 전부 빠진다.
+     * 둘 다 정상 응답으로 오므로 오류 경로로는 못 막는다.
      */
     private boolean isAcceptable(GatewaySnapshot snapshot) {
         return !snapshot.publishedAt().equals(Instant.EPOCH) && !snapshot.coupons().isEmpty();

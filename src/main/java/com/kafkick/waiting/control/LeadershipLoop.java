@@ -10,11 +10,9 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
 
 /**
- * 연장을 부르는 루프.
- *
- * <p><b>아무도 안 부르면 리더가 조용히 사라진다</b> — 락은 리스 만료로 풀리고
- * 배분은 멎는데 예외도 로그도 안 난다. 배분 틱과 따로 도는 것은 주기가 다르기
- * 때문이다 — 얹으면 연장이 배분만큼 드물어져 리스를 못 지킨다.
+ * 연장을 부르는 루프. <b>아무도 안 부르면 리더가 조용히 사라진다</b> — 락은 리스
+ * 만료로 풀리고 배분은 멎는데 예외도 로그도 안 난다. 배분 틱에 얹지 않는 것은 주기가
+ * 달라서다 — 얹으면 연장이 배분만큼 드물어져 리스를 못 지킨다.
  */
 public final class LeadershipLoop {
 
@@ -59,11 +57,9 @@ public final class LeadershipLoop {
     }
 
     /**
-     * 한 회차가 터져도 돈다. 여기서 멎으면 리스가 만료돼 리더가 없어지고, 그 뒤로
-     * 영영 안 돌아온다.
-     *
-     * <p>상한은 {@code Leadership} 이 이미 건다 — 여기서 또 걸면 두 값이 갈릴 때
-     * 어느 쪽이 맞는지 아무도 모른다.
+     * 한 회차가 터져도 돈다. 여기서 멎으면 리스가 만료돼 리더가 없어지고 그 뒤로 영영
+     * 안 돌아온다. 상한은 {@code Leadership} 이 이미 건다 — 여기서 또 걸면 두 값이
+     * 갈릴 때 어느 쪽이 맞는지 아무도 모른다.
      */
     private Flux<Void> loop() {
         return Mono.defer(renew)

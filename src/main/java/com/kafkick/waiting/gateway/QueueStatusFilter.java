@@ -39,11 +39,8 @@ public final class QueueStatusFilter implements WebFilter {
             .parse("/api/v1/coupons/{couponId}/queue");
 
     /**
-     * 순번 토큰을 싣는 헤더.
-     *
-     * <p><b>쿼리스트링으로 받지 않는다.</b> 앞단 프록시 액세스 로그에 URL 이
-     * 그대로 남고, 그 한 줄이면 남의 차례를 통째로 가로챈다 — 페이로드에
-     * `memberId` 가 평문이라 발급까지 이어진다.
+     * 순번 토큰을 싣는 헤더. <b>쿼리스트링으로 받지 않는다</b> — 앞단 프록시 액세스
+     * 로그에 URL 이 그대로 남고, 그 한 줄이면 남의 차례를 통째로 가로챈다.
      */
     private static final String TOKEN_HEADER = "Queue-Token";
 
@@ -57,10 +54,8 @@ public final class QueueStatusFilter implements WebFilter {
             PollIntervalPolicy.of(PollIntervalPolicy.NORMAL_JITTER_RATIO);
 
     /**
-     * 오류 경로의 안내 (F7). <b>정상 경로와 다른 정책이다.</b>
-     *
-     * <p>정상 경로는 사람마다 폴링 시점이 이미 흩어져 있다. 오류는 전원이 같은
-     * 초에 받으므로 더 넓게 흩고, 장애가 이어지면 더 멀리 보낸다.
+     * 오류 경로의 안내 (F7). <b>정상 경로와 다른 정책이다</b> — 정상은 폴링 시점이
+     * 이미 흩어져 있지만, 오류는 전원이 같은 초에 받아 더 넓게 흩어야 한다.
      */
     private static final ErrorBackoff BACKOFF = ErrorBackoff.defaults();
 
@@ -68,10 +63,8 @@ public final class QueueStatusFilter implements WebFilter {
     private static final String POLL_KEY = "poll:";
 
     /**
-     * 이 노드가 초당 받아 주는 조회 수.
-     *
-     * <p>동시 대기 20,000 이 폴링 간격 1초로 물으면 그만큼 온다. 노드 수로
-     * 나눠야 맞지만 조회는 어느 노드로든 가므로, 한 노드가 전부 받는 최악을 둔다.
+     * 이 노드가 초당 받아 주는 조회 수. 동시 대기 20,000 이 1초 간격으로 물으면
+     * 그만큼 온다. 조회는 어느 노드로든 가므로 한 노드가 전부 받는 최악을 둔다.
      */
     private long pollCap() {
         return MAX_POLL_PER_SEC;
@@ -145,17 +138,9 @@ public final class QueueStatusFilter implements WebFilter {
             count("no-token");
             return error.write(exchange, ApiError.Code.INVALID_REQUEST);
         }
-        // **매진이면 줄을 안 친다** (R3 · 7.1.4). 재고가 없으면 답이 정해져
-        // 있는데, 그런데도 물으러 가면 매진 순간 몰리는 폴링이 그대로 레디스
-        // 부하가 된다 — 정작 그때 줄을 정리해야 한다.
-        //
-        // **조회 상한보다 앞이다.** 상한은 노드 전역 키 하나라 쿠폰별 격리가
-        // 없다. 뒤에 두면 죽은 쿠폰의 폴링이 살아 있는 쿠폰의 예산을 먹고, 매진
-        // 폴러 자신도 상한에 걸려 `Retry-After` 가 붙은 503 을 받는다 — 이
-        // 변경이 없애려던 폴링 재생산이 정확히 그 경로로 돌아온다.
-        //
-        // 상한을 안 써도 되는 것은 여기서 레디스를 안 치기 때문이다. 남용은
-        // 앞단의 주소·회원 상한이 이미 막는다.
+        // **매진이면 줄을 안 친다** (R3 · 7.1.4). 답이 정해졌는데 물으러 가면 매진
+        // 순간 몰리는 폴링이 그대로 레디스 부하다. **조회 상한보다 앞이다** — 상한은
+        // 노드 전역 키 하나라, 뒤에 두면 죽은 쿠폰이 산 쿠폰의 예산을 먹는다.
         if (soldOut(couponId)) {
             count("sold-out");
             return response.soldOut(exchange);
@@ -167,11 +152,8 @@ public final class QueueStatusFilter implements WebFilter {
         if (!limiter.tryAcquire(POLL_KEY, pollCap(), nowSec)) {
             count("rate-limited");
             // **여기야말로 배수를 걸어야 한다.** 거절만 배수를 빼면 과부하일수록
-            // 거절 비중이 커져, 예산을 건다는 말이 절반만 맞다.
-            //
-            // 다만 MAX_POLL_PER_SEC 은 PollBudgetPlanner 의 노드당 예산과 다른
-            // 값이다. 배수는 이 갈래가 돌기 한참 전에 걸리므로, 여기 오는 것은
-            // 예산을 넘긴 정도가 아니라 노드가 통째로 밀린 상황이다 (CY-728).
+            // 거절 비중이 커져 예산을 건다는 말이 절반만 맞다. 여기 오는 것은 예산
+            // 초과가 아니라 노드가 통째로 밀린 상황이다 (CY-728).
             return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
                     (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random,
                             pollScale(holder.view())));
@@ -187,12 +169,9 @@ public final class QueueStatusFilter implements WebFilter {
                 .flatMap(entry -> answer(exchange, couponId, member.get(), entry))
                 // 조회가 실패해도 순번은 레디스에 남는다. 다시 물으면 된다.
                 .onErrorResume(e -> {
-                    // **무엇이 실패했는지는 남긴다.** 라벨이 하나면 레디스가 끊긴
-                    // 것과 역직렬화가 깨진 것이 같은 수치로 보여, 대응이 갈린다.
-                    //
-                    // **밖에서 온 이름을 그대로 안 쓴다.** 여기 올라오는 것은
-                    // 레티스·네티·리액터의 클래스명이고 익명 클래스면 빈
-                    // 문자열이다 — 라벨 값 집합을 우리가 안 소유하게 된다.
+                    // **무엇이 실패했는지는 남기되 밖에서 온 이름은 안 쓴다.**
+                    // 라벨이 하나면 레디스가 끊긴 것과 역직렬화가 깨진 것이 같은
+                    // 수치로 보이고, 그대로 쓰면 라벨 값 집합을 우리가 안 소유한다.
                     count("unavailable", FailureCause.of(e));
                     return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
                             backoffSec());
@@ -200,14 +179,10 @@ public final class QueueStatusFilter implements WebFilter {
     }
 
     /**
-     * 오류에 실어 보낼 초 (F7).
-     *
-     * <p>정상 경로의 밴드를 그대로 쓰면 안 된다. 오류는 전원이 같은 초에 받으므로
-     * 같은 폭으로는 안 흩어지고, 장애가 이어지는 동안 같은 간격으로 계속
-     * 두드리면 회복하려는 뒷단의 자리를 그 요청들이 계속 차지한다.
+     * 오류에 실어 보낼 초 (F7). 오류는 전원이 같은 초에 받아 정상 경로의 밴드로는
+     * 안 흩어지고, 같은 간격으로 계속 두드리면 회복하려는 뒷단의 자리를 차지한다.
+     * 예산이 정한 바닥도 함께 넘긴다 — 장애 구간이 곧 배수가 커져 있는 구간이다.
      */
-    // **예산이 정한 바닥을 함께 넘긴다.** 장애 구간이 곧 배수가 커져 있는
-    // 구간이라, 무시하면 하필 그때 거절받은 사람만 예산 밖으로 돌아온다.
     private int backoffSec() {
         int step = failing.stepAt(clock.instant(), ErrorBackoff.step());
         long floor = POLL.intervalSec(EtaPolicy.UNKNOWN, () -> 0.5, pollScale(holder.view()));
@@ -257,13 +232,10 @@ public final class QueueStatusFilter implements WebFilter {
     }
 
     /**
-     * 제어 평면이 정한 전역 폴링 배수.
-     *
-     * <p><b>낡았다고 1.0 으로 안 되돌린다.</b> 되돌리면 제어 평면이 멎은 순간
-     * 전원의 간격이 한꺼번에 짧아진다 — 이미 흔들리는 노드에 폴링이 몰린다.
+     * 제어 평면이 정한 전역 폴링 배수. <b>낡았다고 1.0 으로 안 되돌린다</b> —
+     * 되돌리면 제어 평면이 멎는 순간 전원의 간격이 한꺼번에 짧아진다. 전역 값이라
+     * 쿠폰이 스냅샷에서 빠져도 남는다 — 쿠폰별 필드면 그 줄이 예산 밖으로 나갔다.
      */
-    // 전역 값이라 쿠폰이 스냅샷에서 빠져도 남는다. 쿠폰별 필드에 두면 그
-    // 쿠폰이 떨어지는 순간 그 줄 전체가 예산 밖으로 나갔다.
     private double pollScale(SnapshotHolder.View view) {
         return view.snapshot().meta().pollScale();
     }

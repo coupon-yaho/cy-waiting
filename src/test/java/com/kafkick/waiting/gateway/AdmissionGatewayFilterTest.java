@@ -367,6 +367,27 @@ class AdmissionGatewayFilterTest {
                 .isEqualTo(500);
     }
 
+    /**
+     * <b>뒷단으로 넘어가기 전에 끊긴 것은 도착이 아니다.</b> 반납 콜백은 구독이
+     * 끊길 때도 도는데, 그때 세면 통과 수가 부푼다.
+     */
+    @Test
+    @DisplayName("넘어가기_전에_끊기면_안_센다")
+    void 넘어가기_전에_끊기면_안_센다() {
+        스냅샷을_심는다(CouponStates.idle(100));
+        for (int i = 0; i < 500; i++) {
+            태운다(COUPON);
+        }
+
+        for (int i = 0; i < 5; i++) {
+            MockServerWebExchange exchange = 요청(COUPON, MEMBER + i);
+            filter.filter(exchange, e -> Mono.never()).subscribe().dispose();
+        }
+
+        assertThat(filter.passRatePerSec()).as("끊긴 다섯을 세면 505 가 된다")
+                .isEqualTo(500);
+    }
+
     /** 뒷단이 붙잡아 끝난 것은 닿은 것이다. 표식이 없으면 센다. */
     @Test
     @DisplayName("뒷단이_붙잡은_건은_센다")

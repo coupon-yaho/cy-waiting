@@ -44,6 +44,7 @@ import org.springframework.cloud.gateway.support.ServerWebExchangeUtils;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.SignalType;
 
 /**
  * 발급 요청을 통과·대기·거절로 가른다. <b>판정 재료는 로컬 스냅샷에서만 읽는다</b>
@@ -714,7 +715,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
                     // **여기서 센다** (RC4). 판정 자리에서 세면 서킷이 열린 동안의
                     // 통과 판정까지 들어가는데, 그것들은 뒷단에 안 닿는다. 뒷단이
                     // 붙잡아 상한에 걸린 것은 닿은 것이라 센다.
-                    if (!Boolean.TRUE.equals(
+                    // **취소는 안 센다.** 이 콜백은 구독이 끊길 때도 도는데, 그때는
+                    // 뒷단으로 넘어가기 전이라 도착이 아니다.
+                    if (signal != SignalType.CANCEL && !Boolean.TRUE.equals(
                             exchange.getAttribute(BackendFallback.NOT_CALLED))) {
                         passRate.passed(clock.millis());
                     }

@@ -28,6 +28,9 @@ import reactor.core.scheduler.Schedulers;
  */
 class CapacityRefreshLogTest {
 
+    /** 목적지 제한이 없는 상태. 이름으로 남겨야 인자를 빠뜨린 것과 안 헷갈린다. */
+    private static final AllowedDestinations 무제한 = AllowedDestinations.unrestricted();
+
     private static final long NOW = 1_800_000_000L;
     private static final long 하한 = 10;
 
@@ -76,7 +79,8 @@ class CapacityRefreshLogTest {
     private static final Duration 램프 = Duration.ofSeconds(60);
 
     private CapacityCollector collector() {
-        return CapacityCollector.of(램프, Duration.ofSeconds(3), 하한, 100_000, AllowedDestinations.unrestricted());
+        return CapacityCollector.of(램프, Duration.ofSeconds(3), 하한, 100_000,
+                무제한);
     }
 
     private CapacityRefresh refresh(CapacityCollector collector,

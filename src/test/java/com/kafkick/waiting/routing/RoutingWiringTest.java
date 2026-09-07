@@ -40,7 +40,8 @@ import org.springframework.context.ApplicationContext;
  */
 @Tag("context")
 @SpringBootTest(properties = {"waiting.scheduler.enabled=false",
-        "waiting.routing.enabled=true", "waiting.routing.allowed-destinations=.internal"})
+        "waiting.routing.enabled=true", "waiting.routing.allowed-destinations=.internal",
+        "waiting.routing.allowed-ports=9000"})
 class RoutingWiringTest {
 
     @Autowired
@@ -153,7 +154,8 @@ class RoutingWiringTest {
     @Tag("context")
     @SpringBootTest(properties = {"waiting.scheduler.enabled=false",
             "waiting.routing.enabled=true", "waiting.routing.strategy=p2c",
-            "waiting.routing.allowed-destinations=.internal"})
+            "waiting.routing.allowed-destinations=.internal",
+            "waiting.routing.allowed-ports=9000"})
     class P2c {
 
         @Autowired

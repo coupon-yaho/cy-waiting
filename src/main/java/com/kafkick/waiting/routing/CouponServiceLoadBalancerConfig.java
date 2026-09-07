@@ -25,7 +25,7 @@ public class CouponServiceLoadBalancerConfig {
     ServiceInstanceListSupplier snapshotInstances(RoutingProperties properties,
             SnapshotHolder holder) {
         return SnapshotInstanceListSupplier.of(properties.serviceId(), holder,
-                AllowedDestinations.of(properties.allowedDestinations()));
+                AllowedDestinations.of(properties.allowedDestinations(), properties.allowedPorts()));
     }
 
     @Bean

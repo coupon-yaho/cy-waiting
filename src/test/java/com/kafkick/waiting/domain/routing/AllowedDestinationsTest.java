@@ -19,6 +19,12 @@ import org.junit.jupiter.api.Test;
 @Tag("unit")
 class AllowedDestinationsTest {
 
+    /** 목적지 제한이 없는 상태. 이름으로 남겨야 인자를 빠뜨린 것과 안 헷갈린다. */
+    private static final AllowedDestinations 무제한 = AllowedDestinations.unrestricted();
+
+    /** 시험이 쓰는 포트. 목적지와 짝으로 막지 않으면 호스트 제한이 반쪽이다. */
+    private static final List<Integer> 포트 = List.of(9000, 8080, 1);
+
     private static InstanceAddress 주소(String raw) {
         return InstanceAddress.parse(raw).orElseThrow();
     }
@@ -26,7 +32,7 @@ class AllowedDestinationsTest {
     @Test
     @DisplayName("접미사가_맞으면_받는다")
     void 접미사가_맞으면_받는다() {
-        AllowedDestinations 허용 = AllowedDestinations.of(List.of(".internal"));
+        AllowedDestinations 허용 = AllowedDestinations.of(List.of(".internal"), 포트);
 
         assertThat(허용.permits(주소("coupon-be-3.internal:9000"))).isTrue();
     }
@@ -35,7 +41,7 @@ class AllowedDestinationsTest {
     @Test
     @DisplayName("라벨_경계를_안_지키면_거절한다")
     void 라벨_경계를_안_지키면_거절한다() {
-        AllowedDestinations 허용 = AllowedDestinations.of(List.of(".internal"));
+        AllowedDestinations 허용 = AllowedDestinations.of(List.of(".internal"), 포트);
 
         assertThat(허용.permits(주소("evil-internal:9000"))).isFalse();
         assertThat(허용.permits(주소("coupon.internal.evil.com:9000"))).isFalse();
@@ -45,14 +51,14 @@ class AllowedDestinationsTest {
     @Test
     @DisplayName("접미사와_같은_이름도_받는다")
     void 접미사와_같은_이름도_받는다() {
-        assertThat(AllowedDestinations.of(List.of(".internal")).permits(주소("internal:9000")))
+        assertThat(AllowedDestinations.of(List.of(".internal"), 포트).permits(주소("internal:9000")))
                 .isTrue();
     }
 
     @Test
     @DisplayName("대소문자를_안_가린다")
     void 대소문자를_안_가린다() {
-        AllowedDestinations 허용 = AllowedDestinations.of(List.of(".Internal"));
+        AllowedDestinations 허용 = AllowedDestinations.of(List.of(".Internal"), 포트);
 
         assertThat(허용.permits(주소("Coupon-BE.INTERNAL:9000"))).isTrue();
     }
@@ -60,7 +66,7 @@ class AllowedDestinationsTest {
     @Test
     @DisplayName("대역_안의_주소를_받는다")
     void 대역_안의_주소를_받는다() {
-        AllowedDestinations 허용 = AllowedDestinations.of(List.of("10.0.1.0/24"));
+        AllowedDestinations 허용 = AllowedDestinations.of(List.of("10.0.1.0/24"), 포트);
 
         assertThat(허용.permits(주소("10.0.1.7:8080"))).isTrue();
         assertThat(허용.permits(주소("10.0.2.7:8080"))).isFalse();
@@ -73,7 +79,7 @@ class AllowedDestinationsTest {
     @Test
     @DisplayName("이름은_대역으로_안_통과한다")
     void 이름은_대역으로_안_통과한다() {
-        AllowedDestinations 허용 = AllowedDestinations.of(List.of("10.0.1.0/24"));
+        AllowedDestinations 허용 = AllowedDestinations.of(List.of("10.0.1.0/24"), 포트);
 
         assertThat(허용.permits(주소("10.0.1.7.nip.io:8080"))).isFalse();
     }
@@ -85,9 +91,9 @@ class AllowedDestinationsTest {
     @Test
     @DisplayName("빈_목록은_만들_수_없다")
     void 빈_목록은_만들_수_없다() {
-        assertThatThrownBy(() -> AllowedDestinations.of(List.of()))
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of(), 포트))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> AllowedDestinations.of(null))
+        assertThatThrownBy(() -> AllowedDestinations.of(null, 포트))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -98,9 +104,9 @@ class AllowedDestinationsTest {
     @Test
     @DisplayName("못_읽는_항목은_거절한다")
     void 못_읽는_항목은_거절한다() {
-        assertThatThrownBy(() -> AllowedDestinations.of(List.of("10.0.1.0/99")))
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of("10.0.1.0/99"), 포트))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> AllowedDestinations.of(List.of("")))
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of(""), 포트))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -109,7 +115,7 @@ class AllowedDestinationsTest {
     @DisplayName("항목이_여럿이면_하나만_맞아도_받는다")
     void 항목이_여럿이면_하나만_맞아도_받는다() {
         AllowedDestinations 허용 =
-                AllowedDestinations.of(List.of(".internal", "10.0.1.0/24"));
+                AllowedDestinations.of(List.of(".internal", "10.0.1.0/24"), 포트);
 
         assertThat(허용.permits(주소("a.internal:1"))).isTrue();
         assertThat(허용.permits(주소("10.0.1.9:1"))).isTrue();
@@ -120,7 +126,7 @@ class AllowedDestinationsTest {
     @Test
     @DisplayName("점_없는_항목은_그_이름만_받는다")
     void 점_없는_항목은_그_이름만_받는다() {
-        AllowedDestinations 허용 = AllowedDestinations.of(List.of("coupon-be"));
+        AllowedDestinations 허용 = AllowedDestinations.of(List.of("coupon-be"), 포트);
 
         assertThat(허용.permits(주소("coupon-be:9000"))).isTrue();
         assertThat(허용.permits(주소("a.coupon-be:9000"))).isFalse();
@@ -130,11 +136,11 @@ class AllowedDestinationsTest {
     @Test
     @DisplayName("대역_표기가_망가지면_거절한다")
     void 대역_표기가_망가지면_거절한다() {
-        assertThatThrownBy(() -> AllowedDestinations.of(List.of("not-an-ip/24")))
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of("not-an-ip/24"), 포트))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> AllowedDestinations.of(List.of("10.0.1.0/x")))
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of("10.0.1.0/x"), 포트))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> AllowedDestinations.of(List.of("10.0.1.0/-1")))
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of("10.0.1.0/-1"), 포트))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -142,7 +148,7 @@ class AllowedDestinationsTest {
     @Test
     @DisplayName("바이트_경계_대역도_본다")
     void 바이트_경계_대역도_본다() {
-        AllowedDestinations 허용 = AllowedDestinations.of(List.of("10.0.0.0/8"));
+        AllowedDestinations 허용 = AllowedDestinations.of(List.of("10.0.0.0/8"), 포트);
 
         assertThat(허용.permits(주소("10.9.9.9:1"))).isTrue();
         assertThat(허용.permits(주소("11.0.0.1:1"))).isFalse();
@@ -152,21 +158,7 @@ class AllowedDestinationsTest {
     @Test
     @DisplayName("앞_바이트가_다르면_거절한다")
     void 앞_바이트가_다르면_거절한다() {
-        assertThat(AllowedDestinations.of(List.of("10.0.1.0/24")).permits(주소("11.0.1.7:1")))
-                .isFalse();
-    }
-
-    /**
-     * <b>대역과 주소의 길이가 다르면 안 맞는다.</b> 설정에 IPv6 대역을 적고 뒷단이
-     * IPv4 를 보고하면 바이트 수가 달라, 앞에서 안 끊으면 배열 밖을 읽는다.
-     *
-     * <p>반대 방향은 못 만든다 — {@link InstanceAddress} 가 콜론 든 호스트를
-     * 이미 거절해서 IPv6 주소는 여기까지 못 온다.
-     */
-    @Test
-    @DisplayName("길이가_다른_대역은_안_맞는다")
-    void 길이가_다른_대역은_안_맞는다() {
-        assertThat(AllowedDestinations.of(List.of("fd00::/8")).permits(주소("10.0.1.7:1")))
+        assertThat(AllowedDestinations.of(List.of("10.0.1.0/24"), 포트).permits(주소("11.0.1.7:1")))
                 .isFalse();
     }
 
@@ -174,7 +166,7 @@ class AllowedDestinationsTest {
     @Test
     @DisplayName("경계에_안_맞는_대역도_본다")
     void 경계에_안_맞는_대역도_본다() {
-        AllowedDestinations 허용 = AllowedDestinations.of(List.of("10.0.1.0/25"));
+        AllowedDestinations 허용 = AllowedDestinations.of(List.of("10.0.1.0/25"), 포트);
 
         assertThat(허용.permits(주소("10.0.1.127:1"))).as("경계 안").isTrue();
         assertThat(허용.permits(주소("10.0.1.128:1"))).as("경계 밖").isFalse();
@@ -186,7 +178,7 @@ class AllowedDestinationsTest {
     void 빈_자리가_있으면_거절한다() {
         List<String> 빈_자리가_섞인_목록 = Arrays.asList(".internal", null);
 
-        assertThatThrownBy(() -> AllowedDestinations.of(빈_자리가_섞인_목록))
+        assertThatThrownBy(() -> AllowedDestinations.of(빈_자리가_섞인_목록, 포트))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -197,7 +189,7 @@ class AllowedDestinationsTest {
     @Test
     @DisplayName("맨_주소도_받는다")
     void 맨_주소도_받는다() {
-        AllowedDestinations 허용 = AllowedDestinations.of(List.of("10.0.1.5"));
+        AllowedDestinations 허용 = AllowedDestinations.of(List.of("10.0.1.5"), 포트);
 
         assertThat(허용.permits(주소("10.0.1.5:9000"))).isTrue();
         assertThat(허용.permits(주소("10.0.1.6:9000"))).isFalse();
@@ -210,7 +202,7 @@ class AllowedDestinationsTest {
     @Test
     @DisplayName("hex_이름은_대역으로_안_통과한다")
     void hex_이름은_대역으로_안_통과한다() {
-        AllowedDestinations 허용 = AllowedDestinations.of(List.of("10.0.1.0/24"));
+        AllowedDestinations 허용 = AllowedDestinations.of(List.of("10.0.1.0/24"), 포트);
 
         assertThat(허용.permits(주소("beef:9000"))).isFalse();
         assertThat(허용.permits(주소("1234:9000"))).isFalse();
@@ -220,15 +212,15 @@ class AllowedDestinationsTest {
     @Test
     @DisplayName("못_맞을_이름은_거절한다")
     void 못_맞을_이름은_거절한다() {
-        assertThatThrownBy(() -> AllowedDestinations.of(List.of("*.internal")))
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of("*.internal"), 포트))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> AllowedDestinations.of(List.of("a..b")))
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of("a..b"), 포트))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> AllowedDestinations.of(List.of("a.b.")))
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of("a.b."), 포트))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> AllowedDestinations.of(List.of(".")))
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of("."), 포트))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> AllowedDestinations.of(List.of("..internal")))
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of("..internal"), 포트))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -247,7 +239,7 @@ class AllowedDestinationsTest {
     @Test
     @DisplayName("앞자리_0_표기는_주소가_아니다")
     void 앞자리_0_표기는_주소가_아니다() {
-        AllowedDestinations 허용 = AllowedDestinations.of(List.of("10.0.1.0/24"));
+        AllowedDestinations 허용 = AllowedDestinations.of(List.of("10.0.1.0/24"), 포트);
 
         assertThat(허용.permits(주소("010.0.1.5:8080"))).isFalse();
     }
@@ -260,9 +252,9 @@ class AllowedDestinationsTest {
     @Test
     @DisplayName("덜_적힌_주소는_거절한다")
     void 덜_적힌_주소는_거절한다() {
-        assertThatThrownBy(() -> AllowedDestinations.of(List.of("10.0.1")))
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of("10.0.1"), 포트))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> AllowedDestinations.of(List.of("10")))
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of("10"), 포트))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -270,7 +262,7 @@ class AllowedDestinationsTest {
     @Test
     @DisplayName("전_대역은_적을_수_없다")
     void 전_대역은_적을_수_없다() {
-        assertThatThrownBy(() -> AllowedDestinations.of(List.of("0.0.0.0/0")))
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of("0.0.0.0/0"), 포트))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -281,7 +273,50 @@ class AllowedDestinationsTest {
     @Test
     @DisplayName("접미사만_적으면_맨_주소는_거절한다")
     void 접미사만_적으면_맨_주소는_거절한다() {
-        assertThat(AllowedDestinations.of(List.of(".internal")).permits(주소("10.0.1.7:8080")))
+        assertThat(AllowedDestinations.of(List.of(".internal"), 포트).permits(주소("10.0.1.7:8080")))
                 .isFalse();
+    }
+
+    /**
+     * <b>호스트만 보면 반쪽이다</b> (CY-887). 허용한 망 안의 아무 포트나 고를 수
+     * 있으면 같은 망의 다른 서비스가 그대로 연결 대상이 된다.
+     */
+    @Test
+    @DisplayName("허용_밖_포트는_거절한다")
+    void 허용_밖_포트는_거절한다() {
+        AllowedDestinations 허용 =
+                AllowedDestinations.of(List.of("10.0.1.0/24"), List.of(8080));
+
+        assertThat(허용.permits(주소("10.0.1.7:8080"))).isTrue();
+        assertThat(허용.permits(주소("10.0.1.7:6379"))).as("같은 망의 다른 서비스").isFalse();
+    }
+
+    /** 포트가 비면 못 켠다. 안 적은 것이 전부 허용이면 호스트 제한이 반쪽이 된다. */
+    @Test
+    @DisplayName("포트가_비면_만들_수_없다")
+    void 포트가_비면_만들_수_없다() {
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of(".internal"), List.of()))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of(".internal"), null))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of(".internal"), List.of(0)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of(".internal"), List.of(65536)))
+                .isInstanceOf(IllegalArgumentException.class);
+        // yaml 의 빈 항목이 이렇게 온다.
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of(".internal"),
+                Arrays.asList((Integer) null)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /**
+     * <b>v6 대역은 아무것도 안 맞는다.</b> {@link InstanceAddress} 가 콜론 든 호스트를
+     * 거절해 v6 주소가 여기까지 못 온다. 받아 두면 설정이 거짓말을 한다.
+     */
+    @Test
+    @DisplayName("v6_대역은_아직_거절한다")
+    void v6_대역은_아직_거절한다() {
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of("fd00::/8"), List.of(9000)))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }

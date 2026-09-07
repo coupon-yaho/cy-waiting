@@ -107,6 +107,12 @@ public final class CapacityCollector {
     /** 이번 회차에 처음 뺀 인스턴스. 로그에 한 대만 싣고 나머지는 수로 센다. */
     private String firstDenied = "";
 
+    /**
+     * <b>끝난 회차의 값만 낸다.</b> 도는 중인 필드를 그대로 내면 긁는 시점에 따라
+     * 0 이나 반쯤 센 값이 나가고, 그 값으로 건 알람은 못 믿는다.
+     */
+    private final AtomicLong lastDenied = new AtomicLong();
+
     private CapacityCollector(Duration rampUp, Duration freshness, long floor,
             long perInstanceCap, AllowedDestinations allowed) {
         require(rampUp, "rampUp");
@@ -184,6 +190,7 @@ public final class CapacityCollector {
     public void leadershipAcquired() {
         failedRounds.set(0);
         deniedThisRound = 0;
+        lastDenied.set(0);
         destinationDenied.exited();
     }
 
@@ -215,7 +222,7 @@ public final class CapacityCollector {
      * @return 게이지가 받는 폭. 회차 값이라 {@code int} 로 충분하지만 등록부가 실수다
      */
     public double deniedDestinations() {
-        return deniedThisRound;
+        return lastDenied.get();
     }
 
     /** 마지막 회차에서 하한이 답이 됐으면 그 값, 아니면 0. */
@@ -278,6 +285,7 @@ public final class CapacityCollector {
         }
         evictStale(now);
         markDeniedWindow();
+        publishDenied();
         // **관측이 있었던 회차에서만 태운다.** 한 건도 안 돈 회차가 태우면 다음 회차에
         // 이미 돌던 무리로 못 보고 램프를 0 부터 다시 타, 크레딧이 하한에 묶인 동안 한산
         // 통과 상한이 0 이 된다. 무한정은 아닌 이유는 위 상수가 든다.
@@ -354,6 +362,11 @@ public final class CapacityCollector {
         destinationDenied.exited().ifPresent(recovered ->
                 log.info("허용 목적지 밖 보고가 그쳤다 — {}초 만에, 그동안 {}회차 뺐다",
                         recovered.elapsedSeconds(), recovered.swallowed()));
+    }
+
+    /** 회차가 끝났다. 여기서만 게이지가 움직인다. */
+    private void publishDenied() {
+        lastDenied.set(deniedThisRound);
     }
 
     /**

@@ -20,6 +20,9 @@ import org.junit.jupiter.api.Test;
 @Tag("chaos")
 class ClockBackAndGhostScenarioTest {
 
+    /** 목적지 제한이 없는 상태. 이름으로 남겨야 인자를 빠뜨린 것과 안 헷갈린다. */
+    private static final AllowedDestinations 무제한 = AllowedDestinations.unrestricted();
+
     private static final long NOW = 1_800_000_000L;
 
     private static final Duration 램프 = Duration.ofSeconds(60);
@@ -52,7 +55,8 @@ class ClockBackAndGhostScenarioTest {
     private static final long 여유 = 10_000;
 
     private CapacityCollector 수집기() {
-        return CapacityCollector.of(램프, 신선도, 하한, 100_000, AllowedDestinations.unrestricted());
+        return CapacityCollector.of(램프, 신선도, 하한, 100_000,
+                무제한);
     }
 
     /**

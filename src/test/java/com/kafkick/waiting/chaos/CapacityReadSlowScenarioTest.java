@@ -29,6 +29,9 @@ import reactor.test.scheduler.VirtualTimeScheduler;
 @Tag("chaos")
 class CapacityReadSlowScenarioTest {
 
+    /** 목적지 제한이 없는 상태. 이름으로 남겨야 인자를 빠뜨린 것과 안 헷갈린다. */
+    private static final AllowedDestinations 무제한 = AllowedDestinations.unrestricted();
+
     private static final long 시작_시각 = 1_800_000_000L;
 
     /** 회차 하나가 지나는 시간. <b>시계가 멎어 있으면 신선도도 램프도 안 밟힌다.</b> */
@@ -120,7 +123,8 @@ class CapacityReadSlowScenarioTest {
     }
 
     private Rig 회차를_짠다(long 보고할_여유) {
-        CapacityCollector 수집기 = CapacityCollector.of(램프, 신선도, 하한, 100_000, AllowedDestinations.unrestricted());
+        CapacityCollector 수집기 = CapacityCollector.of(램프, 신선도, 하한, 100_000,
+                무제한);
         MeterRegistry 지표 = new SimpleMeterRegistry();
         AtomicLong 시각 = new AtomicLong(시작_시각);
         AtomicReference<Duration> 지연 = new AtomicReference<>(Duration.ZERO);

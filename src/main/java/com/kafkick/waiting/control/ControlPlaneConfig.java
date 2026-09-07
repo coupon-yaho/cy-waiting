@@ -58,7 +58,7 @@ public class ControlPlaneConfig {
         RoutingProperties on = routing.getIfAvailable();
         AllowedDestinations allowed = on == null || !on.enabled()
                 ? AllowedDestinations.unrestricted()
-                : AllowedDestinations.of(on.allowedDestinations());
+                : AllowedDestinations.of(on.allowedDestinations(), on.allowedPorts());
         CapacityCollector collector =
                 CapacityCollector.of(rampUp, freshness, floor, cap, allowed);
         Gauge.builder("waiting.routing.destination.denied", collector,

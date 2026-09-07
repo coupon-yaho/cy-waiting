@@ -22,6 +22,9 @@ import reactor.test.scheduler.VirtualTimeScheduler;
  */
 class CapacityRefreshTest {
 
+    /** 목적지 제한이 없는 상태. 이름으로 남겨야 인자를 빠뜨린 것과 안 헷갈린다. */
+    private static final AllowedDestinations 무제한 = AllowedDestinations.unrestricted();
+
     private static final Instant 지금 = Instant.parse("2026-08-25T00:00:00Z");
 
     private static final Duration 예산 = Duration.ofMillis(250);
@@ -30,7 +33,8 @@ class CapacityRefreshTest {
     private static final long FLOOR = CapacityCollector.IDLE_DIVISOR;
 
     private CapacityCollector collector() {
-        return CapacityCollector.of(Duration.ofSeconds(60), Duration.ofSeconds(3), FLOOR, 10_000, AllowedDestinations.unrestricted());
+        return CapacityCollector.of(Duration.ofSeconds(60), Duration.ofSeconds(3), FLOOR, 10_000,
+                무제한);
     }
 
     @Test

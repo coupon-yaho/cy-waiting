@@ -29,13 +29,16 @@ import org.springframework.cloud.client.ServiceInstance;
 @Tag("unit")
 class SnapshotInstanceListSupplierTest {
 
+    /** 시험이 쓰는 포트. 목적지와 짝으로 막지 않으면 호스트 제한이 반쪽이다. */
+    private static final List<Integer> 포트 = List.of(9000, 8080, 1);
+
     private static final Instant 지금 = Instant.parse("2026-09-02T00:00:00Z");
 
     private final SnapshotHolder holder = SnapshotHolder.of(
             Duration.ofSeconds(3), Duration.ofSeconds(5), Clock.fixed(지금, ZoneOffset.UTC));
 
     private final SnapshotInstanceListSupplier 공급자 = SnapshotInstanceListSupplier.of(
-            "coupon-service", holder, AllowedDestinations.of(List.of("10.0.1.0/24")));
+            "coupon-service", holder, AllowedDestinations.of(List.of("10.0.1.0/24"), 포트));
 
     private static InstanceRouting 인스턴스(String id, String addr, long credits) {
         return new InstanceRouting(id, InstanceAddress.parse(addr).orElseThrow(), credits);

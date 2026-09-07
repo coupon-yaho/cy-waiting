@@ -3,8 +3,10 @@ package com.kafkick.waiting.domain.routing;
 import com.kafkick.waiting.domain.net.IpLiteral;
 import com.kafkick.waiting.domain.net.IpRange;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
@@ -14,6 +16,10 @@ import java.util.regex.Pattern;
  */
 public final class AllowedDestinations {
 
+    private static final int MAX_PORT = 65535;
+
+    private static final int V4_BYTES = 4;
+
     /** 주소를 쓰다 만 모양. 점으로 끊긴 열 진수인데 넷이 아니다. */
     private static final Pattern PARTIAL_ADDRESS =
             Pattern.compile("\\d{1,3}(\\.\\d{1,3}){0,2}");
@@ -22,13 +28,20 @@ public final class AllowedDestinations {
 
     private final List<IpRange> ranges;
 
+    /**
+     * 연결해도 되는 포트. <b>호스트만 보면 반쪽이다</b> — 허용한 망 안의 아무 포트나
+     * 고를 수 있으면 같은 망의 다른 서비스가 그대로 대상이 된다.
+     */
+    private final Set<Integer> ports;
+
     /** 제한이 없으면 참. 라우팅이 꺼진 배포의 상태다. */
     private final boolean unrestricted;
 
     private AllowedDestinations(List<HostSuffix> suffixes, List<IpRange> ranges,
-            boolean unrestricted) {
+            Set<Integer> ports, boolean unrestricted) {
         this.suffixes = suffixes;
         this.ranges = ranges;
+        this.ports = ports;
         this.unrestricted = unrestricted;
     }
 
@@ -37,20 +50,29 @@ public final class AllowedDestinations {
      * 무제한이 되는 것과, 그렇게 부르겠다고 적는 것은 다르다.
      */
     public static AllowedDestinations unrestricted() {
-        return new AllowedDestinations(List.of(), List.of(), true);
+        return new AllowedDestinations(List.of(), List.of(), Set.of(), true);
     }
 
     /**
      * 이름 접미사({@code .internal}), 대역({@code 10.0.1.0/24}), 맨 주소를 섞어 받는다.
      *
      * <p><b>빈 목록을 안 받는다.</b> 안 적은 것이 전부 허용이 되면 설정을 빠뜨린
-     * 배포가 그대로 통로가 되고, 그 사실은 아무 데도 안 남는다.
+     * 배포가 그대로 통로가 되고, 그 사실은 아무 데도 안 남는다. 포트도 같다 —
+     * 호스트만 보면 허용한 망 안의 아무 서비스나 대상이 된다.
      *
      * @throws IllegalArgumentException 비었거나 못 읽는 항목이 있을 때
      */
-    public static AllowedDestinations of(List<String> entries) {
+    public static AllowedDestinations of(List<String> entries, Collection<Integer> ports) {
         if (entries == null || entries.isEmpty()) {
             throw new IllegalArgumentException("허용 목적지가 비면 라우팅을 켤 수 없다");
+        }
+        if (ports == null || ports.isEmpty()) {
+            throw new IllegalArgumentException("허용 포트가 비면 라우팅을 켤 수 없다");
+        }
+        for (Integer port : ports) {
+            if (port == null || port < 1 || port > MAX_PORT) {
+                throw new IllegalArgumentException("허용 포트가 범위 밖이다: " + port);
+            }
         }
         List<HostSuffix> suffixes = new ArrayList<>();
         List<IpRange> ranges = new ArrayList<>();
@@ -75,18 +97,30 @@ public final class AllowedDestinations {
                     throw new IllegalArgumentException(
                             "허용 목적지에 전 대역을 적을 수 없다: " + entry);
                 }
+                // **v6 대역은 아무것도 안 맞는다.** InstanceAddress 가 콜론 든 호스트를
+                // 거절해 v6 주소가 여기까지 못 온다. 받아 두면 설정이 거짓말을 한다.
+                if (range.address().length != V4_BYTES) {
+                    throw new IllegalArgumentException(
+                            "IPv6 대역은 아직 못 쓴다 — 보고 주소가 v4 뿐이다: " + entry);
+                }
                 ranges.add(range);
             } else {
                 suffixes.add(HostSuffix.parse(trimmed));
             }
         }
-        return new AllowedDestinations(List.copyOf(suffixes), List.copyOf(ranges), false);
+        return new AllowedDestinations(List.copyOf(suffixes), List.copyOf(ranges),
+                Set.copyOf(ports), false);
     }
 
     /** 항목 하나라도 맞으면 받는다. 다 안 맞으면 그 인스턴스는 라우팅 후보가 아니다. */
     public boolean permits(InstanceAddress address) {
         if (unrestricted) {
             return true;
+        }
+        // **포트를 먼저 본다.** 허용한 망 안의 아무 포트나 고를 수 있으면 같은 망의
+        // 다른 서비스가 그대로 연결 대상이 된다.
+        if (!ports.contains(address.port())) {
+            return false;
         }
         String host = address.host().toLowerCase(Locale.ROOT);
         byte[] literal = IpLiteral.parse(host);

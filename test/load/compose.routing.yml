@@ -110,6 +110,8 @@ services:
       WAITING_ROUTING_ENABLED: "true"
       # 켜려면 목적지 허용 목록이 있어야 한다. 하네스의 뒷단은 컴포즈 망의 이름이다.
       WAITING_ROUTING_ALLOWED_DESTINATIONS: "backend,backend-small,backend-mid"
+      # 목적지와 짝이다. 호스트만 막으면 같은 망의 다른 서비스가 대상이 된다.
+      WAITING_ROUTING_ALLOWED_PORTS: "8090"
       # 전략은 밖에서 고른다. **안 주면 배포 기본값이 서야 한다** — 여기에
       # 값을 박으면 겹침으로 도는 회차가 배포와 다른 전략을 재고, 그 값이
       # 게이트로 적힌다.

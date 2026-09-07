@@ -104,7 +104,8 @@ public final class BackendFallback {
     /**
      * 서킷이 넘긴 요청에 답한다. <b>같은 값을 주지 않는다</b> — 전원이 같은
      * 순간에 다시 오면 재포화되어 다시 열리고, 그 진동이 회복을 막는다.
-     * 봉투는 {@link ApiError} 가 만든다.
+     * 봉투는 {@link ApiError} 가 만든다 — 여기서 따로 짜면 같은 게이트웨이가
+     * 두 가지 오류 형식을 낸다.
      */
     public Mono<ServerResponse> respond(ServerRequest request) {
         // **닿은 것과 안 부른 것을 가른다.** 폴백은 둘 다로 온다 — 뒷단이

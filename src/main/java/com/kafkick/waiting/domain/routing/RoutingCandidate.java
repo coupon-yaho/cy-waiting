@@ -37,9 +37,9 @@ public record RoutingCandidate(String instanceId, long credits, int inFlight, do
     }
 
     /**
-     * <b>막 뜬 게이트웨이는 전 인스턴스가 0 으로 보인다</b> — 열화된 대를 못 가려
-     * 정상 비율만큼 보낸다. 낡은 보고라도 0 보다 낫고, 로컬 관측이 쌓일수록
-     * 무게를 선형으로 빼 램프가 끝나면 식이 원래대로 돌아간다.
+     * 기동 직후 램프 구간에만 실리는 초기값. <b>막 뜬 게이트웨이는 전 인스턴스가 0 으로
+     * 보인다</b> — 열화된 대를 못 가려 정상 비율만큼 보낸다. 낡은 보고라도 0 보다 낫고,
+     * 로컬 관측이 쌓일수록 무게를 선형으로 빼 램프가 끝나면 식이 원래대로 돌아간다.
      */
     public static double seed(double reportedInFlight, Duration elapsed, Duration ramp) {
         // **밀리초로 재므로 1ms 미만은 램프가 없는 것과 같다.** 안 가르면 분모가 0 이

@@ -33,8 +33,8 @@ public final class SoldOutCache {
     private final Map<String, Armed> observed = new ConcurrentHashMap<>();
 
     /**
-     * <b>맵 크기를 안 쓴다.</b> 검사와 넣기가 나뉘면 동시 기록자 수만큼 상한을 넘는다 —
-     * 키가 클라이언트 입력에서 오는 자리에서는 그게 곧 구멍이다.
+     * 담긴 수. <b>맵 크기를 안 쓴다</b> — 검사와 넣기가 나뉘면 동시 기록자 수만큼 상한을
+     * 넘고, 키가 클라이언트 입력에서 오는 자리에서는 그게 곧 구멍이다.
      */
     private final AtomicInteger armedCount = new AtomicInteger();
 
@@ -70,6 +70,8 @@ public final class SoldOutCache {
     }
 
     /**
+     * 뒷단이 매진이라고 답한 것을 기록한다.
+     *
      * @param publishedAt 지금 손에 든 재료의 발행 시각. 해제는 이보다 나중에 발행된
      *                    재료만 한다 — 같은 재료로 풀면 관찰이 곧바로 지워진다
      * @return 새로 무장했으면 참. 이미 무장 중이면 거짓 — 로그는 쿠폰당 한 번이다

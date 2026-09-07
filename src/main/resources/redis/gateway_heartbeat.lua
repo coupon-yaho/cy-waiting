@@ -66,13 +66,9 @@ if string.sub(ARGV[1], 1, 1) == '#' then
     return redis.error_reply('instanceId 는 # 로 시작할 수 없다')
 end
 
--- **모르는 값은 거절한다.** 합산에 들어가면 전 클러스터의 상한이 그것으로 정해진다.
--- 0 이 정상값이라 positiveInt 를 못 쓴다 — 나머지 검사는 같게 둬야 실수·inf 가 합에
--- 섞여 다른 인자를 막은 이유가 무의미해지지 않는다.
-
--- **상한을 epoch 근처까지 올리면 안 된다.** 옛 스크립트는 이 field 를 인스턴스 시각으로
--- 읽으므로, 지금 값이 낮아야 죽은 항목으로 보고 지운다. 그것이 새 노드를 분모에 안
--- 세는 유일한 이유다.
+-- **모르는 값은 거절하고 상한은 낮게 둔다.** 합산에 들어가면 전 클러스터의 상한이
+-- 그것으로 정해지고, epoch 근처까지 올리면 이 field 를 인스턴스 시각으로 읽는 옛
+-- 스크립트가 새 노드를 분모에 센다. 0 이 정상값이라 positiveInt 는 못 쓴다.
 local MAX_PASS = 1e9
 local passed = ARGV[5]
 local measured = passed ~= nil and passed ~= ''

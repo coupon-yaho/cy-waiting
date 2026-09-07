@@ -529,9 +529,9 @@ public final class QueryCoalescingFilter implements GatewayFilter {
     }
 
     /**
-     * <b>쿠키는 여기 없다.</b> 브라우저는 분석 쿠키 하나만 있어도 매 요청에 실어,
-     * 있다고 거르면 이 기능이 브라우저에서 한 번도 안 돈다. 쿠키로 갈리는 응답은
-     * 뒷단이 {@code Vary: Cookie} 로 말해야 하고, 안 말하면 화이트리스트에서 뺀다.
+     * 인증이 실린 요청인가. <b>쿠키는 여기 없다</b> — 브라우저는 분석 쿠키 하나만 있어도
+     * 매 요청에 실어, 있다고 거르면 이 기능이 브라우저에서 한 번도 안 돈다. 쿠키로 갈리는
+     * 응답은 뒷단이 {@code Vary: Cookie} 로 말해야 하고, 안 말하면 화이트리스트에서 뺀다.
      */
     private boolean hasCredential(ServerWebExchange exchange) {
         HttpHeaders headers = exchange.getRequest().getHeaders();

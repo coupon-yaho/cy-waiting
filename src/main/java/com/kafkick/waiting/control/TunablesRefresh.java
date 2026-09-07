@@ -81,8 +81,8 @@ public final class TunablesRefresh {
     }
 
     /**
-     * <b>실패하면 마지막 값을 그대로 둔다.</b> 기본값으로 되돌리면 장애가 시작될 때마다
-     * 운영자가 걸어 둔 값이 사라지고, 그 원복은 사람이 바꾼 것과 로그로 구별되지 않는다.
+     * 한 번 읽는다. <b>실패하면 마지막 값을 그대로 둔다</b> — 기본값으로 되돌리면 장애가
+     * 시작될 때마다 운영자가 걸어 둔 값이 사라지고, 그 원복은 사람이 바꾼 것과 구별되지 않는다.
      */
     public Mono<Void> refresh() {
         return read.get()
@@ -110,8 +110,8 @@ public final class TunablesRefresh {
     }
 
     /**
-     * <b>지표가 이 값을 읽는다.</b> 게이지가 마지막 값을 계속 내므로 못 읽고 있다는
-     * 사실은 이 값으로만 드러난다 — 없으면 "5분째 못 받음" 을 걸 곳이 없다.
+     * 마지막으로 읽은 지 몇 초 됐는가. <b>지표가 이 값을 읽는다</b> — 게이지가 마지막 값을
+     * 계속 내므로 못 읽고 있다는 사실은 이 값으로만 드러난다.
      */
     public double staleSeconds() {
         return NANOSECONDS.toSeconds(nanoTicker.getAsLong() - lastReadNanos.get());

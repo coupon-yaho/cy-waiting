@@ -416,9 +416,10 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
     /**
      * 관찰보다 나중에 발행된 재료가 재고를 말하면 푼다.
      *
-     * <p>낡거나 재고를 모르는 재료로는 안 푼다. 못 믿는 재료로 방패를
-     * 부수는 것만 허용하면 비대칭이고, 재고 키를 잃는 것은 뒷단이 409 를 내는
-     * 것과 같이 오므로 하필 그때 방패가 매 틱 열린다.
+     * <p>낡은 재료로는 안 푼다. 집행은 낡음을 견디는데 해제만 허용하면 비대칭이다.
+     * 재고를 모르는 재료로도 안 푼다 — 해제의 근거는 재입고를 본 것인데, 못 읽은
+     * 것은 본 것이 아니다. 재고 키를 잃는 것은 뒷단이 409 를 내는 것과 같이 오므로
+     * 하필 그때 방패가 매 틱 열린다.
      */
     private void releaseIfRestocked(String couponId, CouponState state,
             SnapshotHolder.View view) {
@@ -504,6 +505,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
                 .switchIfEmpty(Mono.defer(() ->
                         failOpen(exchange, chain, meta, couponId).then(Mono.empty())))
                 .flatMap(entry -> {
+                    // 이 노드가 방금 이 쿠폰의 줄을 봤다. 다음 창의 신규 유입이
+                    // 여기 선 사람을 넘지 않게 한 구간 붙잡는다.
+                    //
                     // 거절이든 스냅샷이 줄을 보고 있든 무조건 찍는다. 스냅샷은
                     // 방금 넣은 이 사람을 아직 모르고, 안 찍으면 사다리 4번이 켜져
                     // fail-open 으로 뒤집혀 그 사람을 전원이 추월한다.
@@ -596,6 +600,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
             // 차례가 온 사람은 배수에서 뺀다. 멀리 보내면 수명 있는 입장 토큰이
             // 죽어 줄 맨 뒤에 새 순번으로 다시 서고, 그것이 곧 순번 역행이자
             // 추월이다. 밴드가 1초면 흔들림이 0 이라 통째로 같이 돌아온다.
+            //
+            // 그래서 차단된 토큰 보유자가 쌓였다가 매초 같은 순간에 함께 돌아오고,
+            // 서킷이 닫히려는 순간을 되밀 수 있다.
             case RETRY_TOKEN -> (int) POLL.intervalSec(0, random, PollIntervalPolicy.NO_SCALE);
             case REJECT_QUEUE_FULL, REJECT_OVERLOAD ->
                     (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random, pollScale);
@@ -647,6 +654,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
         // 초당 100건이어도 각각 10초 걸리면 동시 1,000건이라 초당 예산만으로는
         // 못 막는다. 노드 전체에도 씌우는 것은 쿠폰별 상한의 합이 안 묶여,
         // 캠페인이 여럿이면 그 합이 노드가 감당할 양을 넘기 때문이다.
+        //
+        // 라이브러리가 끼워 넣던 격벽이 그 자리를 하고 있었는데, 크기가 25 로
+        // 박혀 있어 껐다. 그 몫을 여기서 제 예산으로 다시 세운다.
         if (!bulkhead.tryEnter(couponId, inFlightCap(ratePerSec, meta),
                 inFlightCap(AdmissionDecider.globalCap(meta), meta))) {
             count("bulkhead-full");

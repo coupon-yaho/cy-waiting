@@ -99,8 +99,8 @@ public final class SoldOutObserver implements GatewayFilter {
     }
 
     /**
-     * <b>관찰은 곁다리다.</b> 여기서 던지면 {@code doOnNext} 가 그 오류를 응답 스트림에
-     * 실어, 관찰 실패가 곧 응답 실패가 된다.
+     * 관찰이 응답을 죽이지 않게 한다. <b>관찰은 곁다리다</b> — 여기서 던지면
+     * {@code doOnNext} 가 그 오류를 응답 스트림에 실어, 관찰 실패가 곧 응답 실패가 된다.
      */
     private void observe(ServerWebExchange exchange, DataBuffer buffer, String couponId,
             Prefix prefix) {

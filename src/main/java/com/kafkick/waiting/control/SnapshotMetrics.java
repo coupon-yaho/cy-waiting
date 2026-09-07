@@ -22,9 +22,9 @@ public final class SnapshotMetrics {
     }
 
     /**
-     * <b>강한 참조로 등록한다.</b> {@code MeterRegistry.gauge(name, obj, fn)} 는 대상을
-     * 약한 참조로 잡으므로 여기서 만든 객체가 첫 GC 에 수거되고 그 뒤로는 지표가 영원히
-     * {@code NaN} 을 낸다 — 스크레이프에 줄은 그대로 나가 이름만 보는 시험은 못 잡는다.
+     * 홀더를 지표에 건다. <b>강한 참조로 등록한다</b> — {@code MeterRegistry.gauge} 는
+     * 대상을 약한 참조로 잡으므로 여기서 만든 객체가 첫 GC 에 수거되면 그 뒤로는 지표가
+     * 영원히 {@code NaN} 이다. 스크레이프에 줄은 그대로 나가 이름만 보는 시험은 못 잡는다.
      */
     public static void bind(SnapshotHolder holder, MeterRegistry meters) {
         Objects.requireNonNull(meters, "meters 는 필수다");
@@ -93,8 +93,8 @@ public final class SnapshotMetrics {
     }
 
     /**
-     * <b>널 검사를 안 겹친다.</b> 틱 시각이 없는 것은 초기값 하나뿐이고 그것은
-     * {@code EPOCH} 라 발행으로 안 읽힌다 — 두 조건이 같이 설 수 없다.
+     * 조회 루프가 마지막으로 돈 뒤 지난 시간. <b>널 검사를 안 겹친다</b> — 틱 시각이 없는
+     * 것은 초기값 하나뿐이고 그것은 {@code EPOCH} 라 발행으로 안 읽힌다.
      */
     private double tickAgeSeconds() {
         SnapshotHolder.View view = holder.view();

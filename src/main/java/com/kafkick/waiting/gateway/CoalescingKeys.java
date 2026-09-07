@@ -27,6 +27,8 @@ final class CoalescingKeys {
     }
 
     /**
+     * 키와 그 키를 만들 때 쓴 규칙.
+     *
      * @param value 캐시와 모으기가 쓰는 키
      * @param vary 만들 때 알고 있던 갈림 헤더. 응답이 다르다고 말하면 이 키로 모인
      *             사람들은 <b>같은 응답을 받으면 안 된다</b>
@@ -77,8 +79,8 @@ final class CoalescingKeys {
     }
 
     /**
-     * <b>배우기 전의 첫 무리가 가장 위험하다</b> — 갈림 헤더를 몰라, 회원이 서로
-     * 다른 요청들이 한 키에 붙어 있다.
+     * 이 응답을 <b>이 키로 모인 사람들에게 나눠 줘도 되는가.</b> 배우기 전의 첫 무리가
+     * 가장 위험하다 — 갈림 헤더를 몰라, 회원이 서로 다른 요청들이 한 키에 붙어 있다.
      */
     boolean shareable(Key key, List<String> learned) {
         return !learned.contains(ALL) && learned.equals(key.vary());

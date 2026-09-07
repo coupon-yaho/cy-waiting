@@ -86,9 +86,13 @@ public class PollIntervalPolicy {
         // **자르고 나서 흔든다.** 흔든 뒤에 자르면 상한 위 값이 상한 하나로 모여
         // 배수가 걸린 밴드에서 지터가 0 이 되고, 그 밴드 전원이 같은 초에 돌아온다.
         // 천장을 흔들림의 위쪽 끝에 걸어, 평균은 상한이 아니라 상한/(1+지터) 다.
+        //
+        // 클라이언트가 받는 값은 그래도 60 을 안 넘으므로, 생존 신호 수명을
+        // 이 상한에서 끌어내는 것은 그대로다.
         double ceiling = MAX_INTERVAL_SEC / (1 + jitterRatio);
         // **하한을 여기서도 건다.** SnapshotMeta 가 이미 정규화했지만 이 인자는
         // 그냥 double 이라, 1 미만이 들어오면 한산할 때 오히려 부하를 만든다.
+        // 사본이 아니라 공개 API 의 방어이고, 양쪽 다 자기 시험이 있다.
         double scaled = Math.min(base * Math.max(1.0, pollScale), ceiling);
         // [-jitter, +jitter] 로 흔들어 같은 밴드가 동시에 두드리지 않게 한다
         double jittered = scaled * (1 + jitterRatio * (2 * random.getAsDouble() - 1));

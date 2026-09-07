@@ -27,9 +27,9 @@ public final class FailureAge {
     private final AtomicReference<Failing> failing = new AtomicReference<>();
 
     /**
-     * <b>이 자리만 실패를 시작하거나 잇는다.</b> 동시에 들어온 실패들은 각자 다른
-     * 순간을 들고 오는데, 늦게 처리된 옛 것이 새 것을 덮으면 해제 유예가 실제보다
-     * 일찍 차서 장애가 이어지는데도 풀린다.
+     * 조회가 실패했다. <b>이 자리만 실패를 시작하거나 잇는다.</b> 동시에 들어온 실패들은
+     * 각자 다른 순간을 들고 오는데, 늦게 처리된 옛 것이 새 것을 덮으면 해제 유예가
+     * 실제보다 일찍 차서 장애가 이어지는데도 풀린다.
      */
     public void failed(Instant now) {
         Failing before = failing.getAndUpdate(f -> f == null
@@ -63,8 +63,8 @@ public final class FailureAge {
     }
 
     /**
-     * <b>한 번으로는 안 푼다.</b> 샤드 하나가 죽으면 일부만 실패하는데, 성공마다
-     * 풀면 실패 사이에 낀 성공 때문에 단계가 영영 1 에 머문다.
+     * 성공했다. <b>한 번으로는 안 푼다.</b> 샤드 하나가 죽으면 일부만 실패하는데,
+     * 성공마다 풀면 실패 사이에 낀 성공 때문에 단계가 영영 1 에 머문다.
      *
      * @param quiet 마지막 실패로부터 이만큼 지나야 푼다
      */

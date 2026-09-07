@@ -23,6 +23,8 @@ final class CircuitTransitionLog {
     private static final Logger log = LoggerFactory.getLogger(CircuitTransitionLog.class);
 
     /**
+     * 열린 구간.
+     *
      * @param since   열린 시각(단조 나노). 벽시계는 NTP 가 되돌리면 음수가 된다
      * @param blocked 그동안 막은 호출 수
      */

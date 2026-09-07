@@ -13,8 +13,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 /**
- * <b>필터는 스스로 선다.</b> 여기 남은 것들은 도메인이라 스프링을 못 참조하므로,
- * 값을 주고 만들어 주는 자리가 필요하다.
+ * 도메인 배선. <b>필터는 스스로 선다</b> — 여기 남은 것들은 도메인이라 스프링을 못
+ * 참조하므로, 값을 주고 만들어 주는 자리가 필요하다.
  */
 @Configuration
 @EnableConfigurationProperties({QueueTokenProperties.class, ProxyProperties.class,
@@ -30,8 +30,8 @@ public class IdentityConfig {
 
 
     /**
-     * <b>화이트리스트로만 켠다.</b> 목록에 없는 경로는 그대로 프록시한다 — 기본이
-     * 켜짐이면 개인화된 응답이 붙는 순간 남의 응답을 받는다.
+     * 조회를 모으는 필터. <b>화이트리스트로만 켠다</b> — 목록에 없는 경로는 그대로
+     * 프록시한다. 기본이 켜짐이면 개인화된 응답이 붙는 순간 남의 응답을 받는다.
      */
     @Bean
     public QueryCoalescingFilter queryCoalescingFilter(CoalescingProperties props,

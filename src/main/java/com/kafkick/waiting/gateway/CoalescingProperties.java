@@ -8,8 +8,8 @@ import java.util.stream.Collectors;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
- * <b>화이트리스트로만 켠다.</b> 기본이 켜짐이면 개인화된 응답이 붙는 순간 남의
- * 응답을 받는다.
+ * 조회를 모을 경로와 수명. <b>화이트리스트로만 켠다</b> — 기본이 켜짐이면 개인화된
+ * 응답이 붙는 순간 남의 응답을 받는다.
  *
  * @param enabled 통째로 끄는 스위치. 장애 중에 되돌릴 수단이다
  * @param maxBodyBytes 이보다 큰 응답은 안 모은다
@@ -61,8 +61,8 @@ public record CoalescingProperties(boolean enabled, int maxBodyBytes,
     }
 
     /**
-     * <b>부르는 쪽이 한 번만 부른다.</b> 요청마다 만들면 조회 한 건마다 맵을 새로
-     * 짓는 셈이고, 모으기로 던 뒷단 부하가 할당과 GC 로 돌아온다.
+     * 경로별 수명. 없는 경로는 안 모은다. <b>부르는 쪽이 한 번만 부른다</b> — 요청마다
+     * 만들면 모으기로 던 뒷단 부하가 할당과 GC 로 돌아온다.
      */
     public Map<String, Duration> ttlByPath() {
         return routes.stream().collect(Collectors.toUnmodifiableMap(

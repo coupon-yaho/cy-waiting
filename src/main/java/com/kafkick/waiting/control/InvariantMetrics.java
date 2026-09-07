@@ -36,8 +36,8 @@ public final class InvariantMetrics {
     }
 
     /**
-     * <b>게이지가 아니라 누적이다.</b> 마지막 틱의 값을 내면 리더십을 잃는 순간 그 값이
-     * 굳고, 15초 스크레이프가 1초짜리 사건을 열넷 중 열넷 놓친다.
+     * 지표에 건다. <b>게이지가 아니라 누적이다</b> — 마지막 틱의 값을 내면 리더십을 잃는
+     * 순간 그 값이 굳고, 15초 스크레이프가 1초짜리 사건을 열넷 중 열넷 놓친다.
      */
     public static InvariantMetrics bind(AllocationRound round, ClockSkewTracker skew,
             MeterRegistry meters) {

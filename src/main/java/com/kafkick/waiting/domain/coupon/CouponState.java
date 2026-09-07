@@ -3,6 +3,7 @@ package com.kafkick.waiting.domain.coupon;
 /**
  * 판정에 쓰는 쿠폰 하나의 상태. <b>불변식을 문서가 아니라 생성자가 지킨다</b> —
  * 픽스처가 존재할 수 없는 상태를 만들면 테스트가 버그를 증명하지 못한다.
+ * 도달 가능한 상태만 만들려면 {@code CouponStates} 팩토리를 쓴다.
  *
  * @param mode           운영자가 정한 대기열 정책
  * @param runtime        기계가 관측한 현재 상태

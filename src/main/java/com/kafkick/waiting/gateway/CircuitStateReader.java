@@ -32,8 +32,8 @@ public final class CircuitStateReader {
     }
 
     /**
-     * <b>이름이 없으면 안 보는 것이다.</b> 레지스트리가 없거나 그 이름의 서킷이 아직 없으면
-     * 이 리더는 영원히 닫힘을 낸다. 그 사실이 밖에서 보여야 한다.
+     * 서킷을 보고 있는가. <b>이름이 없으면 안 보는 것이다.</b> 레지스트리가 없거나 그
+     * 이름의 서킷이 아직 없으면 이 리더는 영원히 닫힘을 낸다. 그 사실이 밖에서 보여야 한다.
      */
     public boolean wired() {
         return circuits != null && circuits.find(circuitName).isPresent();

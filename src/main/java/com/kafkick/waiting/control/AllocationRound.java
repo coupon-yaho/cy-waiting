@@ -46,8 +46,6 @@ public final class AllocationRound {
 
     private static final Logger log = LoggerFactory.getLogger(AllocationRound.class);
 
-    /** 이월을 못 받았을 때의 계수. 이월받으면 그쪽 계수를 따른다. */
-    /** 매진 큐 정리 판단 (7.3). 지우는 것은 어댑터가 한다. */
     /** 이탈자 청소 (7.4). <b>멈추는 판단을 안에 들고 있다.</b> */
     private final QueueSweeper sweeper;
 
@@ -57,6 +55,7 @@ public final class AllocationRound {
     /** 뒷단 서킷. <b>회차마다 한 번 읽는다</b> — 두 번 읽으면 한 회차가 자기모순이 된다. */
     private final Supplier<CircuitState> circuit;
 
+    /** 매진 큐 정리 판단 (7.3). 지우는 것은 어댑터가 한다. */
     private final SoldOutCleanup cleanup;
 
     /** 지울 쿠폰들을 넘긴다. 지운 키 수를 돌려준다. */
@@ -76,6 +75,7 @@ public final class AllocationRound {
     private final LongSupplier globalCredit;
     private final LongSupplier creditFloor;
     private final IntSupplier gatewayCount;
+
     private final Function<Grant, Mono<Long>> apply;
     private final Function<Map<String, String>, Mono<Void>> publish;
     private final Supplier<Instant> clock;
@@ -325,6 +325,26 @@ public final class AllocationRound {
      * 정리된다.
      */
     public void leadershipAcquired() {
+        leadershipAcquired(-1);
+    }
+
+    /**
+     * 리더가 됐다. <b>발행된 몫에서 램프를 다시 세운다</b> — 조인 적이 없는
+     * 노드는 램프가 안 걸려 첫 회차가 목표까지 한 번에 뛴다 (F9).
+     *
+     * @param publishedCredit 이 노드가 마지막으로 본 발행 몫. 모르면 음수
+     */
+    public void leadershipAcquired(long publishedCredit) {
+        if (publishedCredit >= 0) {
+            releaseRamp.resumeFrom(publishedCredit);
+            // **원인을 적어 둔다.** 안 적으면 다음 회차의 램프 진입 로그가
+            // "몫 올림" 으로만 나가, 승계를 원인에서 못 읽는다.
+            log.info("승계 — 램프를 발행 몫 {} 에서 다시 세운다", publishedCredit);
+        } else {
+            // **위험한 쪽이 무음이면 안 된다** (LG-2). 이 갈래는 브레이크 없이
+            // 첫 회차를 돌므로, 안전한 쪽만 보이면 계단이 났을 때 원인을 못 짚는다.
+            log.warn("승계 — 발행 몫을 몰라 첫 회차에 램프를 안 건다");
+        }
         smoother.set(null);
         carryoverMisses.set(0);
         // **조임 창도 닫는다.** 안 닫으면 이 노드가 조임에 진입한 뒤 리더십을
@@ -386,17 +406,19 @@ public final class AllocationRound {
         //
         // **회복 도중에 다시 조이면 거기서 끊는다.** 안 끊으면 두 번째 회복의
         // 진입이 안 나오고, 마지막 해제가 센 틱에 중간 장애가 통째로 섞인다.
+        // **원인을 안 못 박는다.** 배수 제한이 모든 회차에 걸리므로, 서킷이
+        // 내내 닫힌 채 뒷단이 늘어난 회차도 여기를 지난다.
         if (gatedNow) {
             ramping.exited().ifPresent(r -> log.info(
-                    "서킷 해제 램프 중단 — {}틱 올리다 다시 조인다", r.swallowed()));
+                    "몫 올림 램프 중단 — {}틱 올리다 다시 조인다", r.swallowed()));
         } else if (releaseRamp.ramping()) {
             if (ramping.entered()) {
-                log.info("서킷 해제 램프 진입 — 몫을 {} 부터 회차당 {}배로 올린다, 목표 {}",
+                log.info("몫 올림 램프 진입 — 몫을 {} 부터 회차당 {}배로 올린다, 목표 {}",
                         credit, String.format("%.1f", ReleaseRamp.DEFAULT_STEP), target);
             }
         } else {
             ramping.exited().ifPresent(r -> log.info(
-                    "서킷 해제 램프 종료 — {}틱 걸려 {} 로 돌아왔다", r.swallowed(), credit));
+                    "몫 올림 램프 종료 — {}틱 걸려 {} 로 돌아왔다", r.swallowed(), credit));
         }
     }
 
@@ -509,7 +531,13 @@ public final class AllocationRound {
                         // 돌리기 시작하면 여기가 매 틱 이월을 지우는 자리가
                         // 되므로, 기본값에 숨기지 않고 눈에 보이게 둔다.
                         : Mono.<Void>fromRunnable(() -> watchRamp(gatedNow, credit, target))
-                        .then(publishRound(collected, granted, credit, readAt, current))
+                        .then(publishRound(collected, granted, credit, readAt, current)
+                                // **안 나간 회차가 기준을 올리면 안 된다.** 발행이
+                                // 터지거나 회차가 잘리면 노드는 옛 몫을 쓰는데
+                                // 기준만 배수로 올라, 다음 성공이 그 배수의
+                                // 배수에서 시작한다. 취소는 오류로 안 온다.
+                                .doOnError(e -> releaseRamp.restore(before))
+                                .doOnCancel(() -> releaseRamp.restore(before)))
                         // **발행 뒤에 지운다** (7.3). 앞에 두면 방금 지운 큐가
                         // 이번 재료에는 아직 대기자로 실려, 그 회차의 크레딧이
                         // 없는 줄에 나간다.

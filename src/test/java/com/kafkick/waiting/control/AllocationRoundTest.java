@@ -995,8 +995,8 @@ class AllocationRoundTest {
             회복.add(발행된("c1").credit());
         }
 
-        assertThat(회복).as("하한에서 두 배씩 오른다")
-                .containsExactly(40L, 80L, 160L, 320L, 640L, 1_280L, 2_560L, 5_120L, 7_300L);
+        assertThat(회복).as("하한에서 네 배씩 오른다")
+                .containsExactly(40L, 160L, 640L, 2_560L, 7_300L);
     }
 
     /**
@@ -1017,6 +1017,41 @@ class AllocationRoundTest {
         round.run().block();
 
         assertThat(발행된("c1").credit()).as("승계가 계단을 되살리지 않는다").isEqualTo(40);
+    }
+
+    /**
+     * <b>이어받은 노드는 조인 적이 없어 램프가 안 걸린다.</b> 그러면 첫 회차가
+     * 발행된 몫에서 목표까지 한 번에 뛴다.
+     */
+    @Test
+    @DisplayName("승계하면_발행된_몫에서_올린다")
+    void 승계하면_발행된_몫에서_올린다() {
+        AtomicReference<CircuitState> 서킷 = new AtomicReference<>(CircuitState.CLOSED);
+        AllocationRound round = 서킷_있는_회차(서킷, 7_300, 40);
+
+        round.leadershipAcquired(256);
+        round.run().block();
+
+        // 값을 리터럴로 못 박는다. 256 × 4 다.
+        assertThat(발행된("c1").credit()).as("한 틱에 목표까지 뛰지 않는다").isEqualTo(1_024);
+    }
+
+    /**
+     * <b>모르는 것과 0 은 다르다.</b> 재료를 못 받은 노드의 몫도 0 이라, 그것을
+     * 출발점으로 삼으면 승계마다 크레딧이 하한에서 다시 오른다 — 서킷이 열린 적도
+     * 없는데 한산한 쿠폰이 그동안 줄을 선다.
+     */
+    @Test
+    @DisplayName("발행_몫을_모르면_램프를_안_건다")
+    void 발행_몫을_모르면_램프를_안_건다() {
+        AtomicReference<CircuitState> 서킷 = new AtomicReference<>(CircuitState.CLOSED);
+        AllocationRound round = 서킷_있는_회차(서킷, 7_300, 40);
+
+        round.leadershipAcquired(-1);
+        round.run().block();
+
+        assertThat(발행된("c1").credit()).as("안 조인 회차를 스스로 조이지 않는다")
+                .isEqualTo(7_300);
     }
 
     /**
@@ -1077,7 +1112,7 @@ class AllocationRoundTest {
             round.run().block();
         }
         assertThat(로그_메시지()).as("조인 동안에는 해제 램프가 안 뜬다")
-                .noneMatch(m -> m.contains("서킷 해제 램프"));
+                .noneMatch(m -> m.contains("몫 올림 램프"));
 
         서킷.set(CircuitState.CLOSED);
         long 앞선 = 0;
@@ -1089,9 +1124,9 @@ class AllocationRoundTest {
         }
 
         assertThat(로그_메시지()).as("진입은 실제로 푸는 회차에 한 번")
-                .filteredOn(m -> m.startsWith("서킷 해제 램프 진입")).hasSize(1);
+                .filteredOn(m -> m.startsWith("몫 올림 램프 진입")).hasSize(1);
         // 조인 다섯 회차가 이 수에 섞이면 여덟 틱짜리 회복이 열세 틱으로 찍힌다.
-        assertThat(로그_인자("서킷 해제 램프 종료")[0])
+        assertThat(로그_인자("몫 올림 램프 종료")[0])
                 .as("해제가 센 틱은 조인 구간을 안 담는다").isEqualTo((long) (틱 - 1));
     }
 
@@ -1139,8 +1174,8 @@ class AllocationRoundTest {
         round.run().block();
 
         assertThat(로그_메시지()).as("회복이 둘이면 진입도 둘")
-                .filteredOn(m -> m.startsWith("서킷 해제 램프 진입")).hasSize(2);
-        assertThat(로그_인자("서킷 해제 램프 중단")[0])
+                .filteredOn(m -> m.startsWith("몫 올림 램프 진입")).hasSize(2);
+        assertThat(로그_인자("몫 올림 램프 중단")[0])
                 .as("중단이 센 틱은 첫 회복 구간만이다").isEqualTo(2L);
     }
 
@@ -1213,7 +1248,7 @@ class AllocationRoundTest {
 
         assertThat(발행된("c1").credit()).as("접힌 회차만큼 앞서지 않는다").isEqualTo(40);
         assertThat(로그_메시지()).as("접힌 회차가 진입 자리를 안 먹는다")
-                .filteredOn(m -> m.startsWith("서킷 해제 램프 진입")).hasSize(1);
+                .filteredOn(m -> m.startsWith("몫 올림 램프 진입")).hasSize(1);
     }
 
     /** 초과 배분 지표는 게이트 전 값으로 잰다. 아니면 서킷이 열린 시간에 비례해 오른다. */
@@ -1229,6 +1264,54 @@ class AllocationRoundTest {
     }
 
     /** 서킷을 보는 회차. 하한을 0 이 아니게 둬야 누수가 드러난다. */
+    /**
+     * <b>발행이 안 나간 회차가 기준을 올리면 안 된다.</b> 노드는 옛 몫을 쓰는데
+     * 램프의 기준만 배수로 올라, 다음 성공이 그 배수의 배수에서 시작한다.
+     */
+    @Test
+    @DisplayName("발행이_터지면_램프_기준이_안_오른다")
+    void 발행이_터지면_램프_기준이_안_오른다() {
+        AtomicReference<CircuitState> 서킷 = new AtomicReference<>(CircuitState.OPEN);
+        AtomicBoolean 터진다 = new AtomicBoolean();
+        AllocationRound round = 발행이_갈리는_회차(서킷, 7_300, 터진다);
+
+        // 조인 회차로 기준을 8 로 만든다.
+        round.run().block();
+        서킷.set(CircuitState.CLOSED);
+        // 회복 첫 회차의 발행이 터진다. 이 회차의 몫은 아무 노드에도 안 닿는다.
+        터진다.set(true);
+        round.run().onErrorResume(e -> Mono.empty()).block();
+        터진다.set(false);
+        round.run().block();
+
+        // 안 나간 회차가 기준을 올렸으면 그 값의 배수인 32 가 나온다.
+        assertThat(발행된("c1").credit()).as("안 나간 회차는 기준을 안 올린다")
+                .isEqualTo(8);
+    }
+
+    private AllocationRound 발행이_갈리는_회차(AtomicReference<CircuitState> 서킷,
+            long 가용량, AtomicBoolean 터진다) {
+        return AllocationRound.of(
+                () -> true,
+                () -> Mono.just(new TimedDemands(
+                        List.of(new CouponDemand("c1", 20_000, 1_000_000)), 읽은_시각)),
+                () -> 가용량, () -> 1,
+                grant -> Mono.just(grant.credit()),
+                hash -> {
+                    if (터진다.get()) {
+                        return Mono.error(new IllegalStateException("스냅샷 샤드가 끊겼다"));
+                    }
+                    발행.put("last", hash);
+                    return Mono.empty();
+                },
+                () -> Instant.ofEpochSecond(읽은_시각),
+                () -> Mono.just(CreditSmoother.of(1.0)),
+                SnapshotCodec.create(), () -> 8L, Optional::empty,
+                SoldOutCleanup.of(Integer.MAX_VALUE, new SimpleMeterRegistry()),
+                ids -> Mono.just(List.of()), ids -> Mono.just(List.of()),
+                안_걷는_스위퍼(), () -> false, 서킷::get);
+    }
+
     private AllocationRound 서킷_있는_회차(AtomicReference<CircuitState> 서킷,
             long 가용량, long 하한) {
         return 서킷_있는_회차(서킷, 가용량, 하한,
@@ -1248,9 +1331,16 @@ class AllocationRoundTest {
     private AllocationRound 서킷_있는_회차(AtomicReference<CircuitState> 서킷,
             long 가용량, LongSupplier 하한, int 노드수,
             List<CouponDemand> 수요, BooleanSupplier 리더) {
+        return 서킷_있는_회차(서킷, 가용량, 하한, 노드수, () -> 수요, 리더);
+    }
+
+    /** 회차마다 수요가 달라지는 자리. 줄이 찼다 빠지는 것을 그대로 밟는다. */
+    private AllocationRound 서킷_있는_회차(AtomicReference<CircuitState> 서킷,
+            long 가용량, LongSupplier 하한, int 노드수,
+            Supplier<List<CouponDemand>> 수요, BooleanSupplier 리더) {
         return AllocationRound.of(
                 리더,
-                () -> Mono.just(new TimedDemands(수요, 읽은_시각)),
+                () -> Mono.just(new TimedDemands(수요.get(), 읽은_시각)),
                 () -> 가용량, () -> 노드수,
                 grant -> {
                     적용.add(grant.couponId() + "=" + grant.credit());

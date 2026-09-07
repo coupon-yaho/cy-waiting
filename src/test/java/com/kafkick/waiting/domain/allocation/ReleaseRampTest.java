@@ -24,13 +24,16 @@ class ReleaseRampTest {
     private static final long 운영_하한 = 2;
 
     @Test
-    @DisplayName("조인_적이_없으면_그대로_통과시킨다")
-    void 조인_적이_없으면_그대로_통과시킨다() {
-        // 평상시에 끼어들면 캠페인이 열릴 때 정상적인 증가까지 늦춘다.
+    @DisplayName("첫_회차는_그대로_내고_그_뒤는_배수다")
+    void 첫_회차는_그대로_내고_그_뒤는_배수다() {
+        // **첫 회차는 견줄 것이 없다.** 제한하면 기동이 하한에서 시작해 그동안
+        // 한산 통과 상한이 0 이다 (R1). 그 뒤로는 늘 배수를 지킨다 — 회복
+        // 구간에만 걸면 그 구간이 끝나는 순간이 새 계단이 된다 (RC4).
         ReleaseRamp ramp = ReleaseRamp.of(STEP);
 
         assertThat(ramp.next(300, 0, false)).isEqualTo(300);
-        assertThat(ramp.next(500, 0, false)).isEqualTo(500);
+        // 300 × 1.2 = 360.
+        assertThat(ramp.next(500, 0, false)).isEqualTo(360);
     }
 
     @Test
@@ -80,8 +83,8 @@ class ReleaseRampTest {
     }
 
     @Test
-    @DisplayName("원래_몫에_닿으면_램프가_비켜선다")
-    void 원래_몫에_닿으면_램프가_비켜선다() {
+    @DisplayName("원래_몫에_닿아도_다음_상승은_배수다")
+    void 원래_몫에_닿아도_다음_상승은_배수다() {
         ReleaseRamp ramp = ReleaseRamp.of(STEP);
         ramp.next(100, 0, true);
 
@@ -93,8 +96,9 @@ class ReleaseRampTest {
         }
         assertThat(ticks).as("전진이 멎으면 실패로 끝나야 한다").isLessThan(50);
 
-        // 닿은 뒤로는 다시 안 누른다. 누르면 정상 구간이 계속 램프에 묶인다.
-        assertThat(ramp.next(1000, 0, false)).isEqualTo(1000);
+        // **닿았다고 놓지 않는다.** 놓으면 그 뒤의 상승이 계단이다 — 다른 상한이
+        // 몫을 눌러 두었다 풀리는 자리가 정확히 그렇다 (RC4).
+        assertThat(ramp.next(1000, 0, false)).isEqualTo(360);
     }
 
     @Test
@@ -119,7 +123,6 @@ class ReleaseRampTest {
         ramp.next(100, 0, true);
         assertThat(ramp.next(50, 0, false)).isEqualTo(50);
 
-        assertThat(ramp.ramping()).isTrue();
         assertThat(ramp.next(300, 0, false)).isEqualTo(60);
     }
 
@@ -166,7 +169,12 @@ class ReleaseRampTest {
         }
 
         assertThat(value).isEqualTo(7_300);
-        assertThat(ticks).as("여유를 두고 들어와야 한다").isLessThanOrEqualTo(20);
+        // **20 으로 두면 지켜 주지 않는다.** 배수 2 도 14틱이라 통과하는데, 그
+        // 값이 바로 실측에서 램프만 11.4초를 물어 RC3 를 넘긴 값이다. 나머지
+        // 항(잔여·열림 대기·표본 확보·완화)이 20초 남짓이라 램프의 예산은 열 틱
+        // 아래다.
+        assertThat(ticks).as("램프가 쓸 수 있는 예산은 열 틱 아래다")
+                .isLessThanOrEqualTo(9);
     }
 
     @Test
@@ -177,7 +185,7 @@ class ReleaseRampTest {
         ramp.next(0, 운영_하한, true);
 
         assertThat(ramp.next(7_300, 운영_하한, false)).isEqualTo(2);
-        assertThat(ramp.next(7_300, 운영_하한, false)).isEqualTo(4);
+        assertThat(ramp.next(7_300, 운영_하한, false)).isEqualTo(8);
     }
 
     @Test
@@ -251,6 +259,108 @@ class ReleaseRampTest {
         ReleaseRamp ramp = ReleaseRamp.of(STEP);
 
         assertThatThrownBy(() -> ramp.next(-1, 0, false))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /**
+     * 승계로 이어받은 노드는 조인 적이 없어 램프가 아예 안 걸린다. 그러면 첫
+     * 회차가 발행된 값에서 목표까지 한 번에 뛴다.
+     */
+    @Test
+    @DisplayName("이어받으면_발행된_값에서_올린다")
+    void 이어받으면_발행된_값에서_올린다() {
+        ReleaseRamp ramp = ReleaseRamp.of(STEP);
+
+        ramp.resumeFrom(256);
+
+        // 배수 1.2 를 그대로 밟는다. 상수로 견주면 배수를 바꿔도 초록이다.
+        assertThat(ramp.next(1200, 0, false))
+                .as("한 틱에 256 에서 1200 으로 뛰면 회복이 곧 2차 장애다")
+                .isEqualTo(307);
+        assertThat(ramp.next(1200, 0, false)).isEqualTo(368);
+        assertThat(ramp.next(1200, 0, false)).isEqualTo(441);
+    }
+
+    /** 이어받은 값이 이미 목표면 올릴 것이 없다. 램프가 켜진 채 남으면 안 된다. */
+    @Test
+    @DisplayName("이어받은_값이_목표면_그_회차는_그대로다")
+    void 이어받은_값이_목표면_그_회차는_그대로다() {
+        ReleaseRamp ramp = ReleaseRamp.of(STEP);
+
+        ramp.resumeFrom(300);
+
+        assertThat(ramp.next(300, 0, false)).isEqualTo(300);
+        assertThat(ramp.next(1200, 0, false))
+                .as("따라잡아도 다음 상승은 배수를 지킨다")
+                .isEqualTo(360);
+    }
+
+    /**
+     * <b>잘리지 않은 회차 뒤에도 브레이크가 남아야 한다.</b> 목표가 한 번
+     * 내려가면 그 회차는 안 잘리는데, 그때 승계가 나면 낡은 큰 값이 그대로
+     * 들어와 다음 한 틱이 무제한이 된다.
+     */
+    @Test
+    @DisplayName("안_잘린_회차_뒤에도_낮추는_쪽으로만_받는다")
+    void 안_잘린_회차_뒤에도_낮추는_쪽으로만_받는다() {
+        ReleaseRamp ramp = ReleaseRamp.of(STEP);
+        ramp.next(100, 0, true);
+        // 뒷단이 여유를 낮게 보고한 회차. 안 잘린다.
+        assertThat(ramp.next(50, 0, false)).isEqualTo(50);
+
+        // 그 순간 승계가 나고, 낡은 재료가 장애 전 값을 들고 온다.
+        ramp.resumeFrom(7_300);
+
+        assertThat(ramp.next(7_300, 0, false))
+                .as("50 에서 7300 으로 뛰면 고치려던 계단이 그대로다")
+                .isEqualTo(60);
+    }
+
+    /**
+     * 이 값은 승계를 일으킨 바로 그 경로에서 온다. 낡은 큰 값을 그대로 받으면
+     * 브레이크가 그 자리에서 풀린다.
+     */
+    @Test
+    @DisplayName("램프_중에는_낮추는_쪽으로만_받는다")
+    void 램프_중에는_낮추는_쪽으로만_받는다() {
+        ReleaseRamp ramp = ReleaseRamp.of(STEP);
+        // 조인 회차가 기준을 0 으로 내렸다.
+        ramp.next(0, 0, true);
+
+        // 낡은 노드가 장애 직전 값을 들고 이어받는다.
+        ramp.resumeFrom(1200);
+
+        assertThat(ramp.next(1200, 0, false))
+                .as("한 틱에 0 에서 1200 이면 고치려던 계단이 그대로다")
+                .isEqualTo(1);
+    }
+
+    /** 발행된 값을 모르면(음수) 세울 기준이 없다. */
+    @Test
+    @DisplayName("음수는_거절한다")
+    void 이어받을_값이_음수면_거절한다() {
+        ReleaseRamp ramp = ReleaseRamp.of(STEP);
+
+        assertThatThrownBy(() -> ramp.resumeFrom(-1))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /**
+     * <b>못 만드는 조합을 픽스처가 만들면 안 된다</b> (DS-2). 아무것도 안 낸
+     * 상태로 램프가 걸려 있으면 다음 회차가 배수를 안 지킨다.
+     */
+    @Test
+    @DisplayName("안_낸_채_걸린_램프는_못_만든다")
+    void 안_낸_채_걸린_램프는_못_만든다() {
+        assertThatThrownBy(() -> new ReleaseRamp.State(-1, true))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /** -1 보다 작은 몫은 어느 경로도 안 만든다. 받으면 그 값이 기준이 된다. */
+    @Test
+    @DisplayName("몫은_음수_하나까지만_받는다")
+    void 몫은_음수_하나까지만_받는다() {
+        assertThatThrownBy(() -> new ReleaseRamp.State(-2, false))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 }

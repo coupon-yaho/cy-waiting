@@ -22,7 +22,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 /**
- * 뒷단이 낸 매진 응답을 <b>관찰만</b> 한다 (7.2.2 · B-10). 응답을 바꾸지 않는다 —
+ * 뒷단이 낸 매진 응답을 <b>관찰만</b> 한다. 응답을 바꾸지 않는다 —
  * 게이트웨이가 매진 응답을 스스로 만들면 그 순간 게이트웨이의 존재가 드러난다.
  */
 public final class SoldOutObserver implements GatewayFilter {
@@ -60,7 +60,7 @@ public final class SoldOutObserver implements GatewayFilter {
         return new SoldOutObserver(cache, () -> holder.view().snapshot().publishedAt(), meters);
     }
 
-    /** 발행 시각원을 직접 받는다. 고정하지 못하면 해제 비교를 못 잰다 (TS-4). */
+    /** 발행 시각원을 직접 받는다. 고정하지 못하면 해제 비교를 못 잰다. */
     public static SoldOutObserver ofPublishedAt(SoldOutCache cache,
             Supplier<Instant> publishedAt, MeterRegistry meters) {
         return new SoldOutObserver(cache, publishedAt, meters);
@@ -137,8 +137,8 @@ public final class SoldOutObserver implements GatewayFilter {
         // 태그를 안 달면 그 둘이 한 수치에 뭉쳐 구별이 안 된다.
         meters.counter(METRIC, "result", armed ? "armed" : "already").increment();
         if (armed) {
-            // **쌍의 앞쪽이다** (LG-2). 뒤쪽은 판정이 풀 때 찍는다. 쿠폰당 한
-            // 번만 찍히므로 매진이 몰려도 로그가 안 넘친다 (LG-3).
+            // **쌍의 앞쪽이다.** 뒤쪽은 판정이 풀 때 찍는다. 쿠폰당 한 번만
+            // 찍히므로 매진이 몰려도 로그가 안 넘친다.
             log.info("매진 관찰 — 쿠폰 {} 의 발급을 뒷단이 거절했다. 이 노드는 끊는다",
                     couponId);
         }

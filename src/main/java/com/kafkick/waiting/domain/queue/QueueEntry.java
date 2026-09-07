@@ -25,7 +25,6 @@ public record QueueEntry(QueueState state, long rank, long score,
         boolean ok = switch (state) {
             // 줄에 없다. 자리를 들고 있으면 안 된다.
             case NOT_QUEUED, REJECTED -> rank == NONE && score == NONE;
-            // 줄에 있다. 앞의 인원도 순번도 있다.
             case WAITING -> rank >= 0 && score >= 0;
             // 차례가 왔다. 큐에서 빠졌으므로 앞에 아무도 없고, 유예 기록으로
             // 되읽은 경우에는 순번을 모른다.

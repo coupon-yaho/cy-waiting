@@ -96,13 +96,13 @@ public final class GatewayRedisPort {
      * @param open     그중 서킷이 열렸다고 말한 수
      * @param halfOpen 그중 반쯤 열렸다고 말한 수
      * @param reported 표를 낸 수. 아직 읽는 곳이 없다
-     * @param passed   전 노드가 초당 뒷단으로 보낸 수의 합 (RC4)
+     * @param passed   전 노드가 초당 뒷단으로 보낸 수의 합. 회복 봉우리를 잴 재료다
      * @param passReported 그 합에 기여한 수. alive 보다 작으면 합이 "모름" 이다
      */
     public record Presence(int alive, int open, int halfOpen, int reported, int passed,
             int passReported) {
 
-        // **스크립트가 못 내는 조합을 픽스처가 만들면 안 된다** (DS-2). 표를 낸
+        // **스크립트가 못 내는 조합을 픽스처가 만들면 안 된다.** 표를 낸
         // 수가 산 수보다 많은 상태로 배선을 재면, 그 시험은 없는 클러스터를 짚는다.
         public Presence {
             if (alive < 0 || open < 0 || halfOpen < 0 || passed < 0) {

@@ -88,7 +88,7 @@ public final class CapacityRefresh {
         observed.set(seen);
         // **하한에 박힌 것은 모드 전환이다.** 진입도 해제도 안 남기면, 크레딧이
         // 하한에 고정돼 한산 통과가 사실상 막힌 것을 사람이 게이지를 보고
-        // 있어야만 안다 (LG-2).
+        // 있어야만 안다.
         if (collector.lastFloor() > 0) {
             if (pinned.entered()) {
                 log.warn("신선한 가용량 보고가 없다 — 크레딧을 하한 {}로 묶는다", value);
@@ -108,8 +108,7 @@ public final class CapacityRefresh {
 
     /**
      * 리더십이 갈리면 <b>열린 창을 전부 닫는다.</b> 안 닫으면 다음 리더의 첫 실패가
-     * 진입으로 안 잡혀 로그가 빠지고, 그 뒤 복귀 로그의 지속 시간에 비리더 구간이 섞인다
-     * (LG-2).
+     * 진입으로 안 잡혀 로그가 빠지고, 그 뒤 복귀 로그의 지속 시간에 비리더 구간이 섞인다.
      */
     public void leadershipChanged() {
         pinned.exited().ifPresent(recovered ->
@@ -133,14 +132,14 @@ public final class CapacityRefresh {
         long after = collector.lastKnown();
         // **게이지가 배분값을 따라가야 한다.** 성공 회차에서만 갱신하면 감쇠가 도는
         // 동안 지표는 장애 직전 값에 얼어 있고, 배분은 그와 다른 값으로 돈다 —
-        // 회복 판정이 "아무 일도 없었다" 로 자동 통과한다 (RC6).
+        // 지표가 장애 이전 값으로 수렴했는지를 보는 회복 판정이 자동 통과한다.
         credit.set(after);
         readFailed.increment();
         if (failures.entered()) {
             log.warn("가용량을 못 읽는다 — 직전 값으로 배분한다: {}", e.toString());
         }
         // 감쇠는 읽기 실패와 다른 모드다. 진입 조건도 해제 조건도 명확한데
-        // 안 남기면 크레딧이 어디까지 깎였는지를 사후에 못 밝힌다 (LG-2).
+        // 안 남기면 크레딧이 어디까지 깎였는지를 사후에 못 밝힌다.
         if (after < before && decaying.entered()) {
             log.warn("가용량을 오래 못 읽는다 — 크레딧을 깎기 시작한다: {} → {}", before, after);
         }

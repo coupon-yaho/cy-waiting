@@ -30,7 +30,7 @@ public final class SnapshotRefresher {
     private final SnapshotCodec codec = SnapshotCodec.create();
     /**
      * 언제부터 못 받고 있나. 비어 있으면 정상이다. 진입과 해제를 쌍으로 남기고 해제에 지속
-     * 시간을 담는다 (LG-2) — 매 회차 찍으면 수백 줄이 쏟아지는데(LG-3) 걷힌 시점은 안 남는다.
+     * 시간을 담는다 — 매 회차 찍으면 수백 줄이 쏟아지면서 걷힌 시점은 안 남는다.
      */
     private final AtomicReference<Instant> failingSince = new AtomicReference<>();
     private final SnapshotHolder holder;
@@ -87,7 +87,7 @@ public final class SnapshotRefresher {
     }
 
     /**
-     * 한 회차. <b>타임아웃 타이머도 주어진 스케줄러에서 돈다</b> (RX-3). 공용 풀에 두면 부하로
+     * 한 회차. <b>타임아웃 타이머도 주어진 스케줄러에서 돈다.</b> 공용 풀에 두면 부하로
      * 그 풀이 밀릴 때 <b>포기 자체가 늦어져</b> 나이가 임계를 넘는다 — 부하가 가장 높을 때
      * 노드가 로테이션에서 빠진다.
      */
@@ -142,14 +142,14 @@ public final class SnapshotRefresher {
                 .subscribeOn(scheduler);
     }
 
-    /** 못 받기 시작한 순간에만 남긴다. 그 뒤로는 조용하다 (LG-3). */
+    /** 못 받기 시작한 순간에만 남긴다. 그 뒤로는 조용하다. */
     private void enterFailing(String message, Object... args) {
         if (failingSince.compareAndSet(null, clock.instant())) {
             log.warn(message, args);
         }
     }
 
-    /** 걷힌 순간에 지속 시간과 함께 남긴다 (LG-2). */
+    /** 걷힌 순간에 지속 시간과 함께 남긴다. */
     private void exitFailing() {
         Instant since = failingSince.getAndSet(null);
         if (since != null) {

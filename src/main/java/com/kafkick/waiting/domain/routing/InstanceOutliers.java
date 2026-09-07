@@ -9,7 +9,7 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * 연속으로 실패하는 인스턴스를 후보에서 잠시 빼고, <b>천천히 되돌린다</b>. 물린 표는
  * 응답이 끝날 때 놓으므로 즉시 실패하는 대는 물린 건수가 안 쌓여 <b>가장 한가해
- * 보이고</b>, 부하율로 고르는 이상 그쪽으로 더 간다. 시각은 인자로 받는다 (DS-1).
+ * 보이고</b>, 부하율로 고르는 이상 그쪽으로 더 간다. 시각은 인자로 받는다.
  */
 public final class InstanceOutliers {
 

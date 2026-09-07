@@ -6,13 +6,13 @@ import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 
 /**
- * 뒷단 서킷의 상태를 판정에 넘긴다 (F3). <b>메모리 안의 값이다</b> — resilience4j
- * 레지스트리는 이 프로세스가 들고 있으므로 요청 경로에서 읽어도 레디스를 안 친다 (불변식 1).
+ * 뒷단 서킷의 상태를 판정에 넘긴다. <b>메모리 안의 값이다</b> — resilience4j 레지스트리는
+ * 이 프로세스가 들고 있어, 요청 경로에서 레디스를 안 친다는 원칙을 안 깬다.
  */
 public final class CircuitStateReader {
 
     /**
-     * 서킷을 보고 있는가. <b>1 이 아니면 F3 이 꺼져 있다.</b> 안 보는 것과 닫혀 있는 것이
+     * 서킷을 보고 있는가. <b>1 이 아니면 연동이 꺼져 있다.</b> 안 보는 것과 닫혀 있는 것이
      * 같은 값을 내므로, 배선이 빠지면 판정도 배분도 조용히 평소대로 돌아 다음 장애 때만
      * 드러난다.
      */
@@ -56,7 +56,7 @@ public final class CircuitStateReader {
             return CircuitState.CLOSED;
         }
         // **없는 이름을 만들지 않는다.** `circuitBreaker(name)` 은 없으면
-        // 새로 만드는데, 그 유령은 영원히 닫혀 있다 — 이름이 어긋나면 F3 이
+        // 새로 만드는데, 그 유령은 영원히 닫혀 있다 — 이름이 어긋나면 연동이
         // 켜진 것처럼 보이면서 실제로는 죽는다.
         return circuits.find(circuitName)
                 .map(breaker -> switch (breaker.getState()) {

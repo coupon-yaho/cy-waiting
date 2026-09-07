@@ -9,9 +9,8 @@ import java.util.function.DoubleSupplier;
 import java.util.function.ToDoubleFunction;
 
 /**
- * 불변식이 깨지기 <b>전에</b> 오르는 값들 (6.9.1). 초과 발급 자체는 재고를 가진 발급
- * 계층만 알므로 게이트웨이는 스스로 계산한 값으로 대신 봅니다 — 여기가 오르면 원인이
- * 이쪽에 있습니다.
+ * 불변식이 깨지기 <b>전에</b> 오르는 값들. 초과 발급 자체는 재고를 가진 발급 계층만
+ * 알므로 게이트웨이는 스스로 계산한 값으로 대신 본다 — 여기가 오르면 원인이 이쪽에 있다.
  */
 public final class InvariantMetrics {
 
@@ -25,7 +24,7 @@ public final class InvariantMetrics {
      */
     private final DoubleSupplier markersDropped;
 
-    /** 전 노드가 초당 뒷단으로 보낸 수. 관측 전에는 음수다 (RC4). */
+    /** 전 노드가 초당 뒷단으로 보낸 수. 관측 전에는 음수다. */
     private final DoubleSupplier arrivalRate;
 
     private InvariantMetrics(AllocationRound round, ClockSkewTracker skew,
@@ -37,8 +36,8 @@ public final class InvariantMetrics {
     }
 
     /**
-     * <b>게이지가 아니라 누적입니다.</b> 마지막 틱의 값을 내면 리더십을 잃는 순간 그 값이
-     * 굳고, 15초 스크레이프가 1초짜리 사건을 열넷 중 열넷 놓칩니다.
+     * <b>게이지가 아니라 누적이다.</b> 마지막 틱의 값을 내면 리더십을 잃는 순간 그 값이
+     * 굳고, 15초 스크레이프가 1초짜리 사건을 열넷 중 열넷 놓친다.
      */
     public static InvariantMetrics bind(AllocationRound round, ClockSkewTracker skew,
             MeterRegistry meters) {
@@ -84,7 +83,7 @@ public final class InvariantMetrics {
         return metrics;
     }
 
-    /** <b>태그를 안 붙입니다.</b> 쿠폰 식별자는 가짓수에 상한이 없습니다 (LG-4). */
+    /** <b>태그를 안 붙인다.</b> 쿠폰 식별자는 가짓수에 상한이 없다. */
     private void count(MeterRegistry meters, String name,
             ToDoubleFunction<InvariantMetrics> read, String why) {
         FunctionCounter.builder(name, this, read)

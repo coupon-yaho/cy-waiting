@@ -13,7 +13,7 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * 인스턴스별로 지금 물려 있는 요청 수를 센다. 감소를 한 경로라도 놓치면 카운터가
  * 영구히 부풀어 그 인스턴스가 영원히 배제되므로, 놓친 감소는 <b>수명으로 회수</b>해
- * 누수를 유계로 만든다. 시각을 주입받는 것은 초 경계를 시험하기 위해서다 (DS-1).
+ * 누수를 유계로 만든다. 시각을 주입받는 것은 초 경계를 시험하기 위해서다.
  */
 public final class InFlightRegistry {
 
@@ -86,8 +86,8 @@ public final class InFlightRegistry {
     }
 
     /**
-     * 전 인스턴스의 합. 식별자가 재기동마다 새로 오므로(R-3) 게이지에 인스턴스별
-     * 태그를 달면 시계열이 무한히 는다 (LG-4).
+     * 전 인스턴스의 합. 식별자가 재기동마다 새로 오므로 게이지에 인스턴스별
+     * 태그를 달면 시계열이 무한히 는다.
      */
     public int total(long nowMillis) {
         long cutoff = cutoff(nowMillis);

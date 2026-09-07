@@ -26,7 +26,7 @@ public final class ApiError {
     /**
      * 에러 코드를 한 곳에 모은다. 뒷단도 내는 코드는 <b>글자 그대로</b> 옮겼다 — 문구가
      * 다르면 그것으로 갈리고, 없는 필드는 더 확실한 표지다. RULE-EXCEPTION(EX-5):
-     * logLevel 을 안 둔다. 거절은 사유별 계수로만 센다 (AIJ-0061).
+     * logLevel 을 안 둔다. 거절은 사유별 계수로만 센다.
      */
     public enum Code {
 

@@ -36,14 +36,14 @@ public final class CapacityCollector {
     }
 
     /**
-     * 유휴 비율(B-13 의 0.7)의 역수를 올림한 값 — 노드당 몫이 이만큼은 돼야 한산 통과
-     * 상한이 1 이 된다. 비율은 게이트웨이가 주입받는 값이라 여기서 못 읽는다. 갈라지면
-     * 하한이 다시 전면 차단이 되므로, 바꿀 때 두 곳을 같이 본다.
+     * 유휴 비율 0.7 의 역수를 올림한 값 — 노드당 몫이 이만큼은 돼야 한산 통과 상한이
+     * 1 이 된다. 비율은 게이트웨이가 주입받는 값이라 여기서 못 읽는다. 갈라지면 하한이
+     * 다시 전면 차단이 되므로, 바꿀 때 두 곳을 같이 본다.
      */
     public static final int IDLE_DIVISOR = 2;
 
     /**
-     * 못 읽어도 직전 값을 그대로 쓰는 회차의 수. <b>R-2 의 3회 연속 누락과 다른
+     * 못 읽어도 직전 값을 그대로 쓰는 회차의 수. <b>뒷단 보고의 3회 연속 누락과 다른
      * 값이다</b> — 저건 뒷단 하나를 벽시계로, 이건 우리 시야를 회차로 센다.
      */
     public static final int HOLD_ROUNDS = 3;
@@ -51,7 +51,7 @@ public final class CapacityCollector {
     /**
      * 첫 회차 표시를 들고 있는 회차 수의 상한. <b>무한정 들면 예열 램프가 사라진다</b>
      * — 뒷단이 오래 멎었다 콜드로 돌아오는 첫 회차에 그 표시가 살아 있으면 60초 램프를
-     * 통째로 건너뛴다 (F6).
+     * 통째로 건너뛰고, 콜드 인스턴스가 과대 보고한 여유가 그대로 실린다.
      */
     private static final int FIRST_ROUND_GRACE = HOLD_ROUNDS;
 
@@ -63,7 +63,7 @@ public final class CapacityCollector {
 
     /**
      * 마지막 회차의 라우팅 목록. <b>합산에 든 값 그대로다</b> — 램프가 깎은 몫이
-     * 여기에도 실려, 갓 뜬 인스턴스로 정상 비율만큼 안 간다 (F6).
+     * 여기에도 실려, 갓 뜬 인스턴스로 정상 비율만큼 안 간다.
      */
     private volatile List<InstanceRouting> lastRoutable = List.of();
 
@@ -108,7 +108,7 @@ public final class CapacityCollector {
     /**
      * <p><b>램프와 신선도는 별개 노브다.</b> 하나로 묶으면 한 값이 반대 방향 두
      * 사고를 함께 조종한다 — 크게 잡으면 죽은 인스턴스가 오래 세어지고, 작게
-     * 잡으면 틱 한 번 밀려도 전면 억제다. 신선도 값은 R-2 가 정한다.
+     * 잡으면 틱 한 번 밀려도 전면 억제다. 신선도는 보고 주기 1초에 낡음 임계 3초다.
      */
     public static CapacityCollector of(Duration rampUp, Duration freshness,
             long floor, long perInstanceCap) {
@@ -236,7 +236,7 @@ public final class CapacityCollector {
         evictStale(now);
         // **관측이 있었던 회차에서만 태운다.** 한 건도 안 돈 회차가 태우면 다음 회차에
         // 이미 돌던 무리로 못 보고 램프를 0 부터 다시 타, 크레딧이 하한에 묶인 동안 한산
-        // 통과 상한이 0 이 된다 (R1). 무한정은 아닌 이유는 위 상수가 든다.
+        // 통과 상한이 0 이 된다. 무한정은 아닌 이유는 위 상수가 든다.
         if (firstRound && (fresh > 0 || ++roundsHeld >= FIRST_ROUND_GRACE)) {
             firstRound = false;
         }
@@ -245,7 +245,7 @@ public final class CapacityCollector {
         // 늘었을 때 노드당 몫이 다시 0 이 된다 — 하한을 둔 이유가 사라진다.
         long minimum = Math.max(floor, idleMinimum(nodes));
         // **하한은 부족분을 우리가 만들었을 때만이다.** 램프가 깎아 내려갔으면 되돌린다,
-        // 아니면 한산 통과 상한이 0 이 되어 그 쿠폰이 전 노드에서 막힌다 (R1). 깎기 전
+        // 아니면 한산 통과 상한이 0 이 되어 그 쿠폰이 전 노드에서 막힌다. 깎기 전
         // 합과 같으면 뒷단이 실제로 가진 값이라 안 얹는다 — 여유 0 도 그래서 0 으로 남는다.
         boolean rampMadeIt = total < minimum && total < reported;
         long credit = fresh == 0 || rampMadeIt ? minimum : total;
@@ -278,15 +278,15 @@ public final class CapacityCollector {
     }
 
     private boolean isFresh(CapacityReport report, long now) {
-        // **TTL 만 믿지 않는다** — TTL 은 지우는 시점이라 죽은 보고가 그동안 세어진다.
-        // 앞선 것도 조금은 받는다: 뒷단은 같은 NTP 를 보므로 어긋나면 다 같이 어긋난다.
-        // 앞뒤를 같은 값으로 열면 유령 몫이 창의 두 배를 살아 회복 첫 구간에 실린다 (F6·RC4).
+        // **TTL 만 믿지 않는다** — 죽은 보고가 지워질 때까지 세어진다. 앞선 것도 조금은
+        // 받는다: 뒷단은 같은 NTP 를 본다. 앞뒤를 같은 값으로 열면 유령 몫이 창의 두 배를
+        // 살아 회복 첫 구간의 유입 봉우리가 정상의 1.2배를 넘는다.
         long age = now - report.reportedAt();
         return age <= freshness.toSeconds() && age >= -AHEAD_TOLERANCE_SEC;
     }
 
     /**
-     * <b>맵이 자라는 것만 막는다.</b> 재기동은 새 식별자로 오므로(R-3) 옛 기록이 램프를
+     * <b>맵이 자라는 것만 막는다.</b> 재기동은 새 식별자로 오므로 옛 기록이 램프를
      * 건너뛰게 하지 않는다. 그래서 램프 창만큼 산다 — 짧게 잡으면 몇 초 못 본 인스턴스가
      * 램프를 다시 타고, 돌아오는 첫 회차에 크레딧이 하한보다도 낮아진다.
      */

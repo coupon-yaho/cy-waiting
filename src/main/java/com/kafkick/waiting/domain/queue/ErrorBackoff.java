@@ -4,7 +4,7 @@ import java.time.Duration;
 import java.util.function.DoubleSupplier;
 
 /**
- * 오류 경로의 재시도 안내 (F7). 장애 중 503 을 받은 대기자는 <b>전원이 같은 초에
+ * 오류 경로의 재시도 안내. 장애 중 503 을 받은 대기자는 <b>전원이 같은 초에
  * 오류를 받는다</b> — 같은 값을 주면 전원이 같은 초에 돌아오고, 그 파도가 회복을
  * 2차 장애로 만든다.
  */
@@ -103,7 +103,7 @@ public final class ErrorBackoff {
         int streak = Math.min(Math.max(consecutiveFailures, 1), MAX_DOUBLINGS);
         // **천장은 상한이 아니라 상한/(1+폭) 이다.** 상한으로 자른 뒤 흔들면 위로
         // 흩어진 값이 상한 한 점에 모여 흔들림이 0 이 된다 — 장애가 길어진 구간에서
-        // F7 이 막으려던 파도가 그대로 다시 생긴다.
+        // 이 백오프가 막으려던 파도가 그대로 다시 생긴다.
         long ceiling = Math.round(maxSec / (1 + jitterRatio));
         // **시프트로 안 키운다.** 기본 간격이 크면 열여섯 번 미만에도 넘쳐
         // 음수가 되고, 그러면 상한을 씌우기 전에 값이 이미 뒤집힌다. 천장에

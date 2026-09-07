@@ -53,9 +53,8 @@ public class GatewayRoutes {
     public static final String FALLBACK_URI = "forward:" + BackendFallbackRoutes.FALLBACK_ISSUE;
 
     /**
-     * 서킷의 이름. 지금은 뒷단 주소가 하나라 하나뿐이다. 가용량 기반 분배(Phase 9)가
-     * 붙으면 <b>인스턴스마다 따로 잡는다</b> (R-10) — 하나로 묶으면 한 대가 죽어도
-     * 전 트래픽이 막힌다.
+     * 서킷의 이름. 지금은 뒷단 주소가 하나라 하나뿐이다. 가용량 기반 분배가 붙으면
+     * <b>인스턴스마다 따로 잡는다</b> — 하나로 묶으면 한 대가 죽어도 전부 막힌다.
      */
     public static final String CIRCUIT = "backend";
 
@@ -165,7 +164,7 @@ public class GatewayRoutes {
         config.setStatuses();
         // **연결이 못 서는 갈래가 하나가 아니다.** 포트가 닫히면 거절, 라우팅이 안
         // 되면 도달 불가이고 뒤엣것은 하위 타입이 아니다. 더 넓히지는 않는다 —
-        // 응답을 받기 시작한 뒤의 끊김을 다시 보내는 것이 곧 초과 발급이다 (9.3.12).
+        // 응답을 받기 시작한 뒤의 끊김을 다시 보내는 것이 곧 초과 발급이다.
         config.setExceptions(ConnectException.class, NoRouteToHostException.class);
         return config;
     }
@@ -190,7 +189,7 @@ public class GatewayRoutes {
 
     /**
      * 뒷단으로 가는 주소. 라우팅이 켜지면 {@code lb://} 로 보내 균형기가 고른다.
-     * <b>끄면 단일 주소로 돌아간다</b> — 설정 한 줄이 롤백 수단이다 (Phase 9 5절).
+     * <b>끄면 단일 주소로 돌아간다</b> — 설정 한 줄이 롤백 수단이다.
      */
     private String backendUri(Backend backend, ObjectProvider<RoutingProperties> routing) {
         RoutingProperties properties = routing.getIfAvailable();
@@ -221,7 +220,7 @@ public class GatewayRoutes {
                                     .filter(circuit(breakers), FilterOrder.ROUTE_CIRCUIT);
                             // 죽은 주소로 간 요청이 5xx 로 새면 안 된다. **균형기가
                             // 있을 때만 건다** — 단일 주소로 되돌리면 고를 다음 대가
-                            // 없어 같은 죽은 주소로 두 번 간다 (Phase 9 5절).
+                            // 없어 같은 죽은 주소로 두 번 간다.
                             if (balanced) {
                                 spec = spec.filter(connectRetry(retries),
                                         FilterOrder.ROUTE_RETRY);

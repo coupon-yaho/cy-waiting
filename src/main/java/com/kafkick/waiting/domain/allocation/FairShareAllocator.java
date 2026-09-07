@@ -6,7 +6,7 @@ import java.util.List;
 /**
  * 전역 크레딧을 쿠폰에 나눈다. <b>기아 불가와 유휴 낭비 0 을 함께 만족시킨다</b> —
  * 균등하게만 나누면 한산한 쿠폰이 남긴 몫이 버려지고, 요구량 비례로만 나누면
- * 몰리는 쿠폰 하나가 전부 가져가 나머지가 굶는다 (C-1·C-3).
+ * 몰리는 쿠폰 하나가 전부 가져가 나머지가 굶는다.
  */
 public class FairShareAllocator {
 
@@ -14,7 +14,7 @@ public class FairShareAllocator {
     }
 
     /**
-     * 상태가 없어 static 으로 둘 수도 있지만 <b>배분은 도메인 규칙이다</b> (JS-14).
+     * 상태가 없어 static 으로 둘 수도 있지만 <b>배분은 도메인 규칙이다.</b>
      * 두 번째 정책이 생길 때 호출부를 안 고치려면 인스턴스여야 한다.
      */
     public static FairShareAllocator create() {
@@ -54,7 +54,7 @@ public class FairShareAllocator {
      * 이유 없이 기다린다. 굶주린 수보다 작아지면 그때는 다음 틱 몫이 된다.
      */
     private long distribute(List<CouponDemand> active, long[] granted, long pool) {
-        // 호출부가 pool > 0 을 보장한다. 0 이면 애초에 돌 이유가 없다.
+        // 호출부가 pool > 0 을 보장한다.
         int hungry = 0;
         for (int i = 0; i < active.size(); i++) {
             if (granted[i] < active.get(i).want()) {

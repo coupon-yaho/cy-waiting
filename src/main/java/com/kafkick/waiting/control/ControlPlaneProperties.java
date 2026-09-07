@@ -34,7 +34,7 @@ public record ControlPlaneProperties(Scheduler scheduler, Leader leader, Capacit
 
     public static ControlPlaneProperties defaults() {
         return new ControlPlaneProperties(
-                // 유예 90틱 = 90초. 폴링 최대 간격 60초의 1.5배다 (7.3.2).
+                // 유예 90틱 = 90초. 폴링 최대 간격 60초의 1.5배다.
                 new Scheduler(Duration.ofSeconds(1), Duration.ofSeconds(3), 1, 90),
                 new Leader(Duration.ofSeconds(2), Duration.ofMillis(300), Duration.ofMillis(100)),
                 new Capacity(Duration.ofSeconds(60), Duration.ofSeconds(3), 5, 10_000, 3, 1));
@@ -102,7 +102,7 @@ public record ControlPlaneProperties(Scheduler scheduler, Leader leader, Capacit
                 throw new IllegalArgumentException(
                         "shards 는 아직 1 만 지원한다 — 샤드별 적용이 없다: %d".formatted(shards));
             }
-            // **폴링 최대 간격보다 길어야 한다** (7.3.2). 마지막 폴링 시점을 정하는 것은 낡음
+            // **폴링 최대 간격보다 길어야 한다.** 마지막 폴링 시점을 정하는 것은 낡음
             // 한계가 아니라 **우리가 클라이언트에게 준 간격**이다 — 먼 밴드는 60초를 받으므로,
             // 그보다 짧으면 그 사람이 다시 왔을 때 줄이 이미 없다.
             if (tick.multipliedBy(soldOutGraceTicks)

@@ -8,7 +8,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/** 잘못 쓸면 되돌릴 수 없다 — 이탈자로 잘못 판정하면 재입장이 새 score 다 (7.4.8·7.4.9). */
+/** 잘못 쓸면 되돌릴 수 없다 — 이탈자로 잘못 판정하면 재입장이 새 score 다. */
 public final class SweepGate {
 
     /** 멈춘 쿠폰과 다시 쓸 수 있게 되는 틱. <b>한 틱이 아니다</b> — 아래 팩토리 참조. */
@@ -45,9 +45,9 @@ public final class SweepGate {
     }
 
     /**
-     * 리더가 되면 <b>유예를 처음부터 준다</b> (CY-822). 새 리더는 생존 신호가 얼마나 멎었는지
+     * 리더가 되면 <b>유예를 처음부터 준다.</b> 새 리더는 생존 신호가 얼마나 멎었는지
      * 모르는데, 모른다는 것이 걷을 이유가 되면 안 된다 — 걷힌 사람은 새 score 로 다시 서서
-     * 순번이 뒤로 간다 (불변식 3). 틱을 안 되돌리면 되찾은 회차가 이미 유예를 넘어 있다.
+     * 순번이 뒤로 간다. 틱을 안 되돌리면 되찾은 회차가 이미 유예를 넘어 있다.
      */
     public void leadershipAcquired() {
         tick = 0;
@@ -82,14 +82,14 @@ public final class SweepGate {
         }
         List<String> sweepable = new ArrayList<>();
         coupons.forEach((couponId, state) -> {
-            // **매진이거나 재고를 모르는 동안은 멈춘다** (7.1·CY-702). 그 쿠폰의 폴링은
+            // **매진이거나 재고를 모르는 동안은 멈춘다.** 그 쿠폰의 폴링은
             // 게이트웨이가 종결해 생존 신호의 유일한 갱신처가 멎고, 줄 선 전원의 신호가
             // 일제히 끊긴다 — 리더만 미상으로 보면 여기서 안 멈춘다.
             if (dataStale || state.soldOut() || !state.stockKnown()) {
                 resumeAt.put(couponId, tick + resumeDelayTicks);
                 return;
             }
-            // **풀린 뒤 유예만큼 건너뛴다** (7.4.9). 그 구간은 밀렸던 폴링이
+            // **풀린 뒤 유예만큼 건너뛴다.** 그 구간은 밀렸던 폴링이
             // 아직 안 왔다. 한 틱만 쉬면 신호를 못 채운 사람을 걷는다.
             Long at = resumeAt.get(couponId);
             if (at != null && tick < at) {

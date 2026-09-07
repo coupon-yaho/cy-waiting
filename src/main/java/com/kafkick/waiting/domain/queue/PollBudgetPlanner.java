@@ -20,8 +20,8 @@ public final class PollBudgetPlanner {
 
     /**
      * 노드 한 대가 감당할 폴링(초당). 폴링은 레디스를 안 치고 그 노드의 메모리에서
-     * 끝나 예산의 단위가 노드다. <b>아직 가정이다</b> — 계획서 3.3 절의 4,000 을
-     * 20 으로 나눈 역산값이고, 실측은 Phase 10 의 부하 게이트에서 채운다.
+     * 끝나 예산의 단위가 노드다. <b>아직 가정이다</b> — 전체 4,000 을 노드 20 대로
+     * 나눈 역산값이고, 실측은 스케일아웃 부하 시험에서 채운다.
      */
     private static final double BUDGET_RPS_PER_NODE = 200;
 
@@ -54,8 +54,7 @@ public final class PollBudgetPlanner {
 
     /**
      * 살아 있는 쿠폰만 합산한다. <b>매진 큐를 빼지 않으면</b> 죽은 큐 10만 명이
-     * 예산의 대부분을 먹고, 배분에서 막아 둔 기아가 폴링 경로로 되살아난다
-     * (Phase 7 3.3절).
+     * 예산의 대부분을 먹고, 배분에서 막아 둔 기아가 폴링 경로로 되살아난다.
      */
     public static double expectedPollRps(
             List<CouponDemand> demands, ToDoubleFunction<String> drainRateOf) {

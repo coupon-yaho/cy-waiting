@@ -4,7 +4,7 @@ import java.time.Duration;
 import java.util.Objects;
 
 /**
- * 라우팅 후보 하나. <b>견주는 것은 절대량이 아니라 여유 대비 부하다</b> (R-4) —
+ * 라우팅 후보 하나. <b>견주는 것은 절대량이 아니라 여유 대비 부하다</b> —
  * in-flight 만 균등화하면 여유 200 인 대와 40 인 대에 같은 양이 가 뒤엣것이 먼저 무너진다.
  *
  * @param instanceId 인스턴스 식별자
@@ -38,7 +38,7 @@ public record RoutingCandidate(String instanceId, long credits, int inFlight, do
 
     /**
      * <b>막 뜬 게이트웨이는 전 인스턴스가 0 으로 보인다</b> — 열화된 대를 못 가려
-     * 정상 비율만큼 보낸다 (G9.12). 낡은 보고라도 0 보다 낫고, 로컬 관측이 쌓일수록
+     * 정상 비율만큼 보낸다. 낡은 보고라도 0 보다 낫고, 로컬 관측이 쌓일수록
      * 무게를 선형으로 빼 램프가 끝나면 식이 원래대로 돌아간다.
      */
     public static double seed(double reportedInFlight, Duration elapsed, Duration ramp) {

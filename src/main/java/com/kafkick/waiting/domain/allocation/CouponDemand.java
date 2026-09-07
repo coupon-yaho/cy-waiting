@@ -3,7 +3,7 @@ package com.kafkick.waiting.domain.allocation;
 import com.kafkick.waiting.domain.coupon.QueueMode;
 
 /**
- * 이 쿠폰이 이번 틱에 받고 싶은 양. <b>재고가 천장이다</b>(C-2) — 재고 3 개에
+ * 이 쿠폰이 이번 틱에 받고 싶은 양. <b>재고가 천장이다</b> — 재고 3 개에
  * 100 명을 통과시키면 97 명이 헛걸음하고, 그 크레딧은 다른 쿠폰이 못 쓴 채 버려진다.
  *
  * @param couponId 예산을 나누는 단위
@@ -54,13 +54,14 @@ public record CouponDemand(String couponId, long waiting, long stock, QueueMode 
     /**
      * 재고를 넘겨 주면 그 몫은 뒷단이 거절하고, 다른 쿠폰이 못 쓴 채 사라진다.
      *
-     * <p><b>미상이면 안 깎는다.</b> 깎으면 그 줄이 굶고, 진짜 상한은 뒷단이 지킨다 (불변식 2).
+     * <p><b>미상이면 안 깎는다.</b> 깎으면 그 줄이 굶는다. 초과 발급을 막는 진짜
+     * 상한은 재고를 쥔 뒷단이 지킨다.
      */
     public long want() {
         return stockKnown() ? Math.min(waiting, stock) : waiting;
     }
 
-    /** 여기가 {@code IDLE ⟹ credit == 0}(I1)의 출처다 — 요구량이 0 이면 못 받는다. */
+    /** 유휴 쿠폰의 크레딧이 0 인 까닭이 여기다 — 요구량이 0 이면 몫을 안 받는다. */
     public boolean isActive() {
         return want() > 0;
     }

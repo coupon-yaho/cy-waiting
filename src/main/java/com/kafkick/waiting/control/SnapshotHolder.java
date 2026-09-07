@@ -9,7 +9,7 @@ import java.util.concurrent.atomic.AtomicReference;
 /**
  * 판정 재료를 들고 <b>낡음을 두 종류로</b> 가른다 — 이 노드의 루프가 멎은 {@code fetchStale}
  * 은 503, 스케줄러가 멎은 {@code dataStale} 은 200 이다. 앞엣것을 <b>루프가 도는가</b> 로 재는
- * 것은, 받아오기 실패가 전 노드에 동시에 와서 노드별 신호로 흘리면 다 같이 빠져서다 (AIJ-0033).
+ * 것은, 받아오기 실패가 전 노드에 동시에 와서 노드별 신호로 흘리면 다 같이 빠져서다.
  */
 public final class SnapshotHolder {
 
@@ -57,11 +57,7 @@ public final class SnapshotHolder {
         return current.get().snapshot();
     }
 
-    /**
-     * 스냅샷을 아직 믿는 한계.
-     *
-     * <p><b>줄을 세운 기록이 이보다 먼저 풀리면 추월이 난다</b> (불변식 4).
-     */
+    /** 스냅샷을 아직 믿는 한계. 줄을 세운 기록이 이보다 먼저 풀리면 추월이 난다. */
     public Duration dataStaleAfter() {
         return dataStaleAfter;
     }

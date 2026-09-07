@@ -39,7 +39,7 @@ public final class SnapshotRefreshLifecycle
     private final SnapshotRefresher refresher;
     private final ShutdownState shutdown;
 
-    /** readiness 를 내리고 부하 분산기가 뺄 때까지 기다린다 (6.4.1·6.4.2). */
+    /** readiness 를 내리고 부하 분산기가 뺄 때까지 기다린다. */
     private final DrainWait drainWait;
 
     /** 드레인이 상한 안에 끝났는지 남긴다. 없으면 안 남긴다 — 시험 배선을 위해서다. */
@@ -48,7 +48,7 @@ public final class SnapshotRefreshLifecycle
 
     /**
      * 회차를 도는 스케줄러를 만든다. <b>안에서 만들면 시험이 가상 시계를 못 넣어</b> 관용치로
-     * 흔들림을 덮은 시험이 남는다 (TS-4).
+     * 흔들림을 덮은 시험이 남는다.
      */
     private final Supplier<Scheduler> schedulers;
 
@@ -125,7 +125,7 @@ public final class SnapshotRefreshLifecycle
         drainingAt = System.nanoTime();
         // **readiness 를 내리고 부하 분산기가 뺄 시간을 준다.** 곧바로 드레인하면 그 사이 도착한
         // 요청이 커넥션째 끊긴다. 등록 해제는 여기 붙이지 않는다 — 아직 요청을 받는 노드를
-        // 분모에서 빼면 초과 발급이다. 그 일은 드레인 뒤 GatewayHeartbeatLoop 가 한다 (6.4.4).
+        // 분모에서 빼면 초과 발급이다. 그 일은 드레인 뒤 GatewayHeartbeatLoop 가 한다.
         drainWait.beforeDrain();
         // **빠졌는지까지 남긴다.** 안 남기면 오케스트레이터가 진행 중인 요청째
         // 죽인 것과 곱게 빠진 것이 로그에서 같다 — 롤링 배포마다 사용자가 오류를
@@ -148,7 +148,7 @@ public final class SnapshotRefreshLifecycle
         this.owner = context;
     }
 
-    /** 드레인 결과를 남길 자리를 받습니다. 배선이 안 되면 안 남깁니다. */
+    /** 드레인 결과를 남길 자리. 배선이 안 되면 안 남긴다. */
     @Autowired(required = false)
     public void setDrainOutcome(DrainOutcome drainOutcome) {
         this.drainOutcome = drainOutcome;

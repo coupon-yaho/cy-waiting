@@ -10,7 +10,7 @@ import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 
 /**
- * 서명한 토큰. <b>레디스를 안 친다</b> (RD-4) — 검증에 조회가 필요하면 요청마다
+ * 서명한 토큰. <b>요청 경로에서 레디스를 안 친다</b> — 검증에 조회가 필요하면 요청마다
  * 왕복이 생기고, 그 왕복이 곧 사람 수에 비례한다.
  */
 public final class SignedToken {

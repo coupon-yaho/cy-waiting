@@ -31,8 +31,8 @@ public final class FilterOrder {
 
     /**
      * <b>서킷 앞이다</b> — 뒤로 가면 서킷이 열린 동안 판정이 안 돌아 래치가 표식을
-     * 못 받고, 다음 창의 신규 유입이 방금 줄 선 사람을 추월한다 (불변식 4). 라우트
-     * 필터는 전역 필터와 다른 사슬이라 위 값들과 겹쳐도 된다.
+     * 못 받고, 다음 창의 신규 유입이 방금 줄 선 사람을 추월한다. 라우트 필터는
+     * 전역 필터와 다른 사슬이라 위 값들과 겹쳐도 된다.
      */
     public static final int ROUTE_ADMISSION = 0;
 
@@ -45,8 +45,7 @@ public final class FilterOrder {
 
     /**
      * 연결이 안 된 인스턴스를 다음 대로 넘긴다. <b>서킷 안쪽이다</b> — 바깥에 두면
-     * 서킷의 폴백이 하류 오류를 다 삼켜 재시도가 한 번도 안 돈다. 안쪽에 두는 대가와
-     * 그 근거는 AIJ-0214 에 적었다.
+     * 서킷의 폴백이 하류 오류를 다 삼켜 재시도가 한 번도 안 돈다.
      */
     public static final int ROUTE_RETRY = ROUTE_CIRCUIT + 1;
 

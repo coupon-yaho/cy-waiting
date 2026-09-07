@@ -1,7 +1,7 @@
 package com.kafkick.waiting.domain.coupon;
 
 /**
- * 배포 없이 되돌릴 수 있는 값들 (P-1). <b>한 벌로 움직입니다</b> — 필드별로 갈아 끼우면
+ * 배포 없이 되돌릴 수 있는 값들. <b>한 벌로 움직입니다</b> — 필드별로 갈아 끼우면
  * 낡은 타임아웃과 새 격벽 상한 같은, 아무도 검증한 적 없는 조합이 한순간 존재합니다.
  *
  * @param idleCreditRatio 노드 몫 중 한산 통과에 쓰는 비율. 1 미만이어야 합니다
@@ -19,7 +19,7 @@ public record Tunables(double idleCreditRatio, long inFlightSeconds) {
     /**
      * 한산 몫의 상한. 둘이 같은 노드 예산을 쓰므로 한산이 거의 다 긁으면 차례가 온
      * 사람이 밀립니다. 밀린 사람은 토큰 수명이 지나 줄 맨 뒤로 다시 서고, 그건
-     * 순번 역행입니다 (불변식 3).
+     * 순번 역행입니다.
      */
     public static final double MAX_IDLE_RATIO = 0.9;
 
@@ -64,7 +64,7 @@ public record Tunables(double idleCreditRatio, long inFlightSeconds) {
     public static Tunables parse(String json) {
         Tunables base = defaults();
         // 빈 값도 읽기로 넘긴다. 여기서 한 번 더 거르면 그 갈래를 부를 길이
-        // 없어져, 읽기 쪽 방어가 도달 불가능한 채로 남는다 (TS-3).
+        // 없어져, 읽기 쪽 방어가 도달 불가능한 채로 남는다.
         if (json == null) {
             return base;
         }

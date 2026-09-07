@@ -37,7 +37,7 @@ public final class SnapshotCodec {
     private static final String PUBLISHED = "#published";
 
     /**
-     * 운영자가 배포 없이 고치는 값 (P-1). 스냅샷이 이미 매 틱 전 노드에 닿으므로
+     * 운영자가 배포 없이 고치는 값. 스냅샷이 이미 매 틱 전 노드에 닿으므로
      * 리더가 여기 실어 보낸다 — 설정 서버를 따로 붙이지 않는다.
      */
     private static final String TUNABLES = "#tunables";
@@ -57,7 +57,7 @@ public final class SnapshotCodec {
 
     /**
      * 라우팅에 쓸 뒷단 목록. {@code id|host:port|credits} 를 쉼표로 잇는다.
-     * <b>없으면 없는 것으로 본다</b> (E-12) — 옛 리더는 이 자리를 안 싣고,
+     * <b>없으면 없는 것으로 본다</b> — 옛 리더는 이 자리를 안 싣고,
      * 그 구간에는 라우팅이 단일 주소로 돌아간다.
      */
     private static final String INSTANCES = "#instances";
@@ -77,9 +77,9 @@ public final class SnapshotCodec {
     private static final int MIN_FIELDS = 5;
 
     /**
-     * 재고 미상 표시. 예약 자리라 옛 노드가 통째로 건너뛴다 (E-12) — 쿠폰 값에 실으면
-     * 음수는 옛 생성자가 거부하고 양수는 재입고로 읽혀 매진 방패가 풀린다 (7.2.4).
-     * <b>있는 것이 곧 미상</b>이고, 쿠폰 값과 <b>같은 읽기로</b> 와야 한다 (10 절).
+     * 재고 미상 표시. 예약 자리라 옛 노드가 통째로 건너뛴다 — 쿠폰 값에 실으면
+     * 음수는 옛 생성자가 거부하고 양수는 재입고로 읽혀 매진 방패가 풀린다.
+     * <b>있는 것이 곧 미상</b>이고, 쿠폰 값과 <b>같은 읽기로</b> 와야 한다.
      */
     public static final String STOCK_UNKNOWN_FIELD = "#u:";
 
@@ -89,7 +89,7 @@ public final class SnapshotCodec {
     private SnapshotCodec() {
     }
 
-    /** 상태가 없지만 인스턴스다 — 인스턴스가 늘면 여기 필드가 생긴다 (JS-13). */
+    /** 상태가 없지만 인스턴스다 — 인스턴스가 늘면 여기 필드가 생긴다. */
     public static SnapshotCodec create() {
         return new SnapshotCodec();
     }
@@ -97,7 +97,7 @@ public final class SnapshotCodec {
     /**
      * 이월 상태에 <b>기본값을 안 준다</b> — 편의 오버로드를 두면 이월을 지우는
      * 호출이 안 지우는 호출과 똑같이 생겨서 발행 경로가 늘 때 조용히 섞인다.
-     * 리더마다 0 에서 시작하면 진동하기 가장 쉬운 회복 직후에 ETA 가 튄다 (F9).
+     * 리더마다 0 에서 시작하면 진동하기 가장 쉬운 회복 직후에 ETA 가 튄다.
      */
     public Map<String, String> encode(GatewaySnapshot snapshot, CreditSmoother.Snapshot smoothing,
             QueueingHysteresis.Snapshot hysteresis) {
@@ -134,7 +134,7 @@ public final class SnapshotCodec {
     /**
      * 쿠폰 하나의 값. <b>여섯 번째 자리에 전역 배수를 싣는다</b> — 아직 여섯을 기대하는
      * 옛 노드가 이 자리를 그 쿠폰의 배수로 읽어서다. 상수를 박으면 롤아웃 내내 옛 파드가
-     * 배수 없이 폴링해 예산을 넘긴다. 관대한 디코더가 전 노드에 깔리면 지운다 (CY-736).
+     * 배수 없이 폴링해 예산을 넘긴다. 관대한 디코더가 전 노드에 깔리면 지운다.
      */
     private String encodeCoupon(CouponState state, double pollScale) {
         // **미상이면 재고 자리에 0 이 나간다** — 옛 노드가 오늘 하던 그대로
@@ -253,7 +253,7 @@ public final class SnapshotCodec {
         // 스레드가 OOM 으로 죽고 실패해도 옛 값을 유지한다는 설계가 무력해진다.
         // 남는 필드는 마지막 원소에 뭉치므로 판정은 같다.
         String[] parts = raw.split(":", MIN_FIELDS + 1);
-        // **모르는 필드는 무시한다** (E-12). 형식이 갈리면 구·신이 섞여 도는 구간에
+        // **모르는 필드는 무시한다.** 형식이 갈리면 구·신이 섞여 도는 구간에
         // 신버전이 스냅샷을 하나도 못 받아 롤아웃이 멈춘다. **관대함은 한 방향뿐이다** —
         // 모자란 것을 받으면 자리가 밀린 값을 믿게 되고, 그건 판정을 바꾼다.
         if (parts.length < MIN_FIELDS) {

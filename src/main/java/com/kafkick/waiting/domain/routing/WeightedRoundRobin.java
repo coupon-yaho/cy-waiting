@@ -9,7 +9,7 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * 여유 비율대로 <b>결정적으로</b> 돈다 (R-9). 여유대로 세어 놓고 몰아 주면 한 바퀴의
+ * 여유 비율대로 <b>결정적으로</b> 돈다. 여유대로 세어 놓고 몰아 주면 한 바퀴의
  * 합은 맞아도 그 구간에 그 대가 무너지므로, 매번 여유만큼 더하고 가장 앞선 대를 골라
  * 총합만큼 뺀다 — 비율이 정확하면서 고루 펴진다.
  */
@@ -23,7 +23,7 @@ public final class WeightedRoundRobin implements InstanceChooser {
         return new WeightedRoundRobin();
     }
 
-    /** 인스턴스별 누적. 사라진 대는 지운다 — 식별자가 재기동마다 새로 온다 (R-3). */
+    /** 인스턴스별 누적. 사라진 대는 지운다 — 식별자가 재기동마다 새로 온다. */
     private final Map<String, Long> credit = new HashMap<>();
 
     /** 넘치면 상한에 재운다. 부호가 뒤집히면 배분이 정반대로 돈다. */

@@ -16,7 +16,7 @@ public enum AdmissionDecision {
     /** 판정 재료가 낡았지만 줄이 비어 있다. 상한 안에서 통과시킨다. */
     PASS_FAIL_OPEN,
 
-    /** 안 몰리는 쿠폰이 상한 안에서 통과한다. <b>이 경로가 R1 이다.</b> */
+    /** 안 몰리는 쿠폰이 상한 안에서 통과한다. <b>게이트웨이가 있는 이유가 이 경로다.</b> */
     PASS_UNDER_CAP,
 
     /** 낡았는데 줄에 사람이 있다. 모른다는 것이 추월의 사유가 되지 않는다. */
@@ -41,7 +41,7 @@ public enum AdmissionDecision {
     ENQUEUE_KEY_SATURATED,
 
     /**
-     * 서킷이 열렸다 (F3). <b>fallback 이 아니라 줄로 보낸다</b> — 사용자는 503 대신
+     * 서킷이 열렸다. <b>fallback 이 아니라 줄로 보낸다</b> — 사용자는 503 대신
      * 순번을 받고 뒷단은 완전히 쉰다. 회복 뒤 크레딧이 그 줄을 배수한다.
      */
     ENQUEUE_CIRCUIT_OPEN,
@@ -57,7 +57,7 @@ public enum AdmissionDecision {
 
     /**
      * 토큰을 들고 왔지만 노드 상한을 넘었다. 큐 뒤로 안 보낸다 — 차례가 온 사람을
-     * 되돌리면 허가가 "아마도" 가 된다. 짧은 재시도를 안내한다 (F8).
+     * 되돌리면 허가가 "아마도" 가 된다. 짧은 재시도를 안내한다.
      */
     RETRY_TOKEN;
 

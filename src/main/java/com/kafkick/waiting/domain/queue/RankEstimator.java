@@ -2,8 +2,8 @@ package com.kafkick.waiting.domain.queue;
 
 /**
  * 샤드 안 순위를 전역 순위로 환산한다. {@code localRank} 는 <b>도메인이 계산하지
- * 않고 주입받는 값</b>이다 — 어댑터의 {@code ZCOUNT} 결과이고, 그 값이 단조라는
- * 보장은 Phase 3 이 진다 (G3.11).
+ * 않고 주입받는 값</b>이다 — 어댑터의 {@code ZCOUNT} 결과이고, 그 값이 단조 감소
+ * 한다는 보장은 레디스 어댑터가 진다.
  */
 public final class RankEstimator {
 

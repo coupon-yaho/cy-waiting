@@ -8,7 +8,7 @@ import java.util.Optional;
  * 그쪽이 가장 잘 알고, 그래야 게이트웨이가 인스턴스 목록을 알 필요도 없어진다.
  *
  * @param reportedAt 읽는 쪽의 {@code now} 와 <b>같은 시계</b>여야 한다
- * @param address    라우팅할 주소 (D-C1). <b>없을 수 있다</b> — 크레딧에만 들고 라우팅 후보는 아니다
+ * @param address    라우팅할 주소. <b>없을 수 있다</b> — 크레딧에만 들고 라우팅 후보는 아니다
  */
 public record CapacityReport(String instanceId, long credits, long reportedAt,
         InstanceAddress address) {

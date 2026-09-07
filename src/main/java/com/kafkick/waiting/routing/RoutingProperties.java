@@ -9,11 +9,11 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * @param enabled       끄면 단일 주소로 돌아간다. <b>롤백 수단이다</b> — 라우팅이
  *                      의심스러우면 이 한 줄로 되돌린다
  * @param serviceId     {@code lb://} 뒤에 오는 이름
- * @param strategy      {@code p2c} 또는 {@code round-robin} (R-9). 어느 쪽이 나은지는
+ * @param strategy      {@code p2c} 또는 {@code round-robin}. 어느 쪽이 나은지는
  *                      실측으로 정할 문제라 코드에 하나만 박아 두면 그 측정을 못 한다
- * @param inFlightTtl   물린 표가 살 수 있는 최대 시간. 감소를 놓쳐도 누수가 유계다 (R-8)
- * @param coldStartRamp 기동 직후 보고된 값을 초기값으로 쓰는 구간 (G9.12)
- * @param perInstanceCap 인스턴스 하나에 동시에 물릴 수 있는 요청 수 (G9.13).
+ * @param inFlightTtl   물린 표가 살 수 있는 최대 시간. 감소를 놓쳐도 누수가 유계다
+ * @param coldStartRamp 기동 직후 보고된 값을 초기값으로 쓰는 구간
+ * @param perInstanceCap 인스턴스 하나에 동시에 물릴 수 있는 요청 수.
  *                       <b>느려진 한 대가 커넥션을 독식하지 못하게 한다</b>
  * @param outlierFailures 연속 실패가 이만큼이면 그 인스턴스를 후보에서 뺀다
  * @param outlierEjectFor 뺀 뒤 이만큼 지나면 다시 후보로 돌린다
@@ -23,7 +23,7 @@ public record RoutingProperties(boolean enabled, String serviceId, String strate
         Duration inFlightTtl, Duration coldStartRamp, Integer perInstanceCap,
         Integer outlierFailures, Duration outlierEjectFor) {
 
-    /** 무작위 둘 중 여유 대비 덜 찬 쪽. <b>기본이 아니다</b> — 비율에서 밀린다 (R-4). */
+    /** 무작위 둘 중 여유 대비 덜 찬 쪽. <b>기본이 아니다</b> — 비율에서 밀린다. */
     public static final String P2C = "p2c";
 
     /** 여유 비율대로 결정적으로 돈다. 3~5 대 규모에서 더 정확하고, <b>기본값이다</b>. */
@@ -31,9 +31,9 @@ public record RoutingProperties(boolean enabled, String serviceId, String strate
 
     public RoutingProperties {
         serviceId = serviceId == null || serviceId.isBlank() ? "coupon-service" : serviceId;
-        // **기본은 라운드로빈이다** (R-4 · CY-916). P2C 를 고른 원래 이유는
-        // 게이트웨이 M 대가 같은 인스턴스로 몰린다는 것이었는데, 두 대를 띄워
-        // 재 보니 안 몰렸고 P2C 가 오히려 비율에서 밀렸다. 값은 AIJ-0225.
+        // **기본은 라운드로빈이다.** P2C 를 고른 원래 이유는 게이트웨이 여러 대가
+        // 같은 인스턴스로 몰린다는 것이었는데, 두 대를 띄워 재 보니 안 몰렸고
+        // P2C 가 오히려 비율에서 밀렸다.
         strategy = strategy == null || strategy.isBlank() ? ROUND_ROBIN : strategy;
         inFlightTtl = inFlightTtl == null ? Duration.ofSeconds(30) : inFlightTtl;
         coldStartRamp = coldStartRamp == null ? Duration.ofSeconds(60) : coldStartRamp;

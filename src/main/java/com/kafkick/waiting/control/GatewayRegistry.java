@@ -33,7 +33,7 @@ public final class GatewayRegistry {
     private final AtomicReference<Denominator> current;
 
     /**
-     * 클러스터가 본 서킷과 <b>푼 방향으로 이어진 관측 수</b> (CY-791).
+     * 클러스터가 본 서킷과 <b>푼 방향으로 이어진 관측 수</b>.
      *
      * <p>분모와 같은 이유로 한 덩어리로 바꾼다 — 조인 값이 푼 값에 덮인다.
      */
@@ -118,7 +118,7 @@ public final class GatewayRegistry {
         if (now == before.state()) {
             return;
         }
-        // **해제 로그에 지속 시간을 담는다** (LG-2). 얼마나 조여 있었는지를
+        // **해제 로그에 지속 시간을 담는다.** 얼마나 조여 있었는지를
         // 안 남기면 회복 판정을 사후에 못 한다.
         long heldSec = NANOSECONDS.toSeconds(at - before.enteredAt());
         if (ClusterCircuit.severity(now) > ClusterCircuit.severity(before.state())) {

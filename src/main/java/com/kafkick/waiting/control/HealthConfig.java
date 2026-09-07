@@ -41,7 +41,7 @@ public class HealthConfig {
 
     /**
      * 판정 재료를 받아 오는 루프. <b>이게 없으면 홀더가 영원히 빈다</b> — 받는 판정이
-     * 영구히 거절하고, 살아 있음 판정은 첫 판 전이라 통과하므로 재기동도 안 된다.
+     * 영구히 거절하고, 살아 있음 판정은 첫 회차 전이라 통과하므로 재기동도 안 된다.
      * 뜨긴 뜨는데 아무것도 안 하는 파드가 된다.
      */
     @Bean
@@ -57,8 +57,8 @@ public class HealthConfig {
     }
 
     /**
-     * 부하 분산기가 우리를 뺄 때까지 기다리는 시간입니다. <b>앞단 설정과 짝입니다.</b>
-     * 한쪽만 바꾸면 어긋나므로 값의 근거를 {@code application.yml} 에 적어 둡니다.
+     * 부하 분산기가 우리를 뺄 때까지 기다리는 시간. <b>앞단 설정과 짝이다.</b>
+     * 한쪽만 바꾸면 어긋나므로 값의 근거를 {@code application.yml} 에 적어 둔다.
      */
     @Bean
     DrainWait drainWait(ShutdownState shutdown, ShutdownProperties properties) {
@@ -66,9 +66,9 @@ public class HealthConfig {
     }
 
     /**
-     * 드레인이 상한 안에 끝났는지 남깁니다 (6.4.2). 세는 대상은 <b>이름이 아니라 값으로</b>
-     * 받습니다 — 게이트웨이 타입을 여기서 참조하면 제어 평면이 요청 경로를 알게 되고,
-     * 그 방향은 되돌리기 어렵습니다.
+     * 드레인이 상한 안에 끝났는지 남긴다. 세는 대상은 <b>이름이 아니라 값으로</b> 받는다
+     * — 게이트웨이 타입을 여기서 참조하면 제어 평면이 요청 경로를 알게 되고, 그 방향은
+     * 되돌리기 어렵다.
      */
     @Bean
     DrainOutcome drainOutcome(@Qualifier(IN_FLIGHT) IntSupplier inFlight,

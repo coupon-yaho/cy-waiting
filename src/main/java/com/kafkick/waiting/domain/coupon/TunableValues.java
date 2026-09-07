@@ -3,14 +3,14 @@ package com.kafkick.waiting.domain.coupon;
 /**
  * 운영자가 적은 값을 읽습니다.
  *
- * <p>레코드 안에 두면 그 자리에서만 쓰이는 정적 메서드가 생깁니다 (JS-13).
+ * <p>레코드 안에 두면 그 자리에서만 쓰이는 정적 메서드가 생깁니다.
  */
 final class TunableValues {
 
     private TunableValues() {
     }
 
-    /** 상태가 없지만 인스턴스입니다 — 읽을 값이 늘면 여기 필드가 생깁니다 (JS-13). */
+    /** 상태가 없지만 인스턴스입니다 — 읽을 값이 늘면 여기 필드가 생깁니다. */
     static TunableValues create() {
         return new TunableValues();
     }
@@ -40,7 +40,7 @@ final class TunableValues {
     /**
      * 값 하나를 꺼냅니다.
      *
-     * <p><b>도메인은 라이브러리를 안 씁니다</b> (DS-1). 읽는 것이 수 몇 개뿐입니다.
+     * <p><b>도메인은 라이브러리를 안 씁니다.</b> 읽는 것이 수 몇 개뿐입니다.
      */
     private Double number(String json, String key) {
         // **최상위 객체의 멤버만 키로 본다.** 앞뒤 문자만 보면 중첩 객체 안의

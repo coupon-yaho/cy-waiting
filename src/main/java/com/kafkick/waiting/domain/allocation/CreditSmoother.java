@@ -2,7 +2,7 @@ package com.kafkick.waiting.domain.allocation;
 
 /**
  * 여유 값을 EWMA 로 다듬는다. ETA 오차의 지배항이 배수율의 흔들림이라, 순간값을
- * 그대로 쓰면 GC 스파이크 한 번이 표시 ETA 를 두 배로 만든다 (Phase 4 F9).
+ * 그대로 쓰면 GC 스파이크 한 번이 표시 ETA 를 두 배로 만든다.
  */
 public class CreditSmoother {
 
@@ -31,7 +31,7 @@ public class CreditSmoother {
     /**
      * 이월받은 상태로 시작한다.
      *
-     * <p>리더가 바뀔 때마다 0 에서 다시 시작하면 그 순간 ETA 가 튄다 (F9).
+     * <p>리더가 바뀔 때마다 0 에서 다시 시작하면 그 순간 ETA 가 튄다.
      */
     public static CreditSmoother restore(double alpha, Snapshot snapshot) {
         if (!Double.isFinite(alpha) || alpha <= 0 || alpha > 1) {
@@ -54,7 +54,7 @@ public class CreditSmoother {
         return value;
     }
 
-    /** Phase 4 가 스냅샷 메타에 실어 다음 리더에게 넘긴다. */
+    /** 제어 평면이 스냅샷 메타에 실어 다음 리더에게 넘긴다. */
     public Snapshot snapshot() {
         return new Snapshot(value, seeded);
     }

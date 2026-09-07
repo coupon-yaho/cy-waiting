@@ -40,7 +40,7 @@ import reactor.core.publisher.Mono;
 /**
  * 같은 조회를 <b>뒷단 한 번</b>으로 모으고 아주 짧게 들고 있는다. 발급은 판정이
  * 막지만 조회는 그대로 통과하고, 인스턴스가 조회로 포화되면 낮은 가용량을 보고해
- * 발급 유입까지 같이 조여진다 — R2 를 갉아먹는 자리다.
+ * 발급 유입까지 같이 조여진다 — 뒷단 가용량에 맞춰 서빙한다는 목표를 갉아먹는다.
  */
 public final class QueryCoalescingFilter implements GatewayFilter {
 
@@ -115,7 +115,7 @@ public final class QueryCoalescingFilter implements GatewayFilter {
      */
     private final Map<String, FailureWindow> contracts = new ConcurrentHashMap<>();
 
-    /** 키 상한에 닿아 모으기가 멎은 구간. 카운터만 두면 사후에 못 답한다 (LG-2). */
+    /** 키 상한에 닿아 모으기가 멎은 구간. 카운터만 두면 사후에 못 답한다. */
     private final FailureWindow saturation;
 
     private QueryCoalescingFilter(CoalescingProperties props, Clock clock,
@@ -160,8 +160,7 @@ public final class QueryCoalescingFilter implements GatewayFilter {
             count("skipped", "credential");
             return chain.filter(exchange);
         }
-        // **뜻이 다른 GET 은 같은 응답을 받으면 안 된다.** 범위 요청이 전체를
-        // 받거나, 조건부 요청이 조건 없는 200 을 받는다.
+        // 범위 요청이 전체를 받거나, 조건부 요청이 조건 없는 200 을 받는다.
         if (isSpecialRequest(exchange)) {
             count("skipped", "request-directive");
             return chain.filter(exchange);
@@ -198,8 +197,8 @@ public final class QueryCoalescingFilter implements GatewayFilter {
                         + "올리거나 ttl 을 줄인다");
             }
         } else {
-            // 쌍으로 안 남기면 진입만 있고 언제 풀렸는지가 없다 (LG-2). 그리고
-            // 한 번 켠 뒤 안 끄면 두 번째 포화부터는 조용하다.
+            // 쌍으로 안 남기면 진입만 있고 언제 풀렸는지가 없다. 그리고 한 번
+            // 켠 뒤 안 끄면 두 번째 포화부터는 조용하다.
             saturation.exited().ifPresent(r -> log.warn(
                     "모으기 포화 해제 — {}초 동안 {}건을 못 모았다",
                     NANOSECONDS.toSeconds(r.elapsedNanos()), r.swallowed()));
@@ -343,7 +342,7 @@ public final class QueryCoalescingFilter implements GatewayFilter {
         byte[] body = join(chunks);
         List<String> learned = keys.learn(path, response.getHeaders());
         // **한 번만 만든다.** 응답마다 소문자 사본과 집합을 두세 번 짓는 것은
-        // 5ms 예산(G6.11)을 쓰는 자리다.
+        // 필터에 준 5ms 예산을 그대로 쓰는 자리다.
         Set<String> directives = directives(response.getHeaders().getCacheControl());
 
         // **담는 것과 나눠 주는 것은 다른 판단이다.** 담을 때는 방금 배운 것으로
@@ -412,7 +411,7 @@ public final class QueryCoalescingFilter implements GatewayFilter {
         AtomicInteger streak = declaring.computeIfAbsent(path, p -> new AtomicInteger());
         if (directives.contains(SHARED)) {
             // **한 건으로 안 되돌린다.** 뒷단 절반만 헤더를 붙인 롤링 구간에서
-            // 켜졌다 꺼졌다 하며 로그가 요청마다 나간다 (LG-3).
+            // 켜졌다 꺼졌다 하며 로그가 요청마다 나간다.
             if (streak.incrementAndGet() >= RECOVERY_STREAK && declined.remove(path)) {
                 window.exited().ifPresent(r -> log.warn(
                         "공유 선언 복귀 — {} 에서 {}초 동안 {}건을 못 모았다",
@@ -511,9 +510,8 @@ public final class QueryCoalescingFilter implements GatewayFilter {
             return response.setComplete();
         }
         response.setRawStatusCode(entry.status());
-        // **연결에 매인 헤더는 안 옮긴다.** 담아 둔 값은 그때의 연결에 대한
-        // 것이라, 다른 연결에 그대로 실으면 길이와 인코딩이 어긋나 응답이 안
-        // 끝난다 — 클라이언트는 영원히 기다린다.
+        // **연결에 매인 헤더는 안 옮긴다.** 옮기면 길이와 인코딩이 어긋나
+        // 응답이 안 끝나고, 클라이언트는 영원히 기다린다.
         entry.headers().forEach((name, values) -> {
             if (!HOP_BY_HOP.contains(name.toLowerCase(Locale.ROOT))) {
                 response.getHeaders().put(name, values);
@@ -523,10 +521,7 @@ public final class QueryCoalescingFilter implements GatewayFilter {
                 response.bufferFactory().wrap(entry.body())));
     }
 
-    /**
-     * 뜻이 달라 같은 응답을 받으면 안 되는 요청인가. 범위·조건부 요청과 캐시
-     * 지시어는 응답의 의미를 바꾼다 — 키에 안 넣을 것이면 모으지도 않아야 한다.
-     */
+    /** 뜻이 달라 같은 응답을 받으면 안 되는 요청인가. */
     private boolean isSpecialRequest(ServerWebExchange exchange) {
         HttpHeaders headers = exchange.getRequest().getHeaders();
         return headers.headerNames().stream()
@@ -550,7 +545,7 @@ public final class QueryCoalescingFilter implements GatewayFilter {
 
     /**
      * 상한에 얼마나 가까운지를 게이지로 낸다. 상한에 닿으면 모으기가 조용히 멎어,
-     * 뒷단 도달 수만 원상복귀하고 그림에는 아무것도 안 남는다 (6.10.9 · 6.10.10).
+     * 뒷단 도달 수만 원상복귀하고 그림에는 아무것도 안 남는다.
      */
     public void bindMetrics(MeterRegistry registry) {
         Gauge.builder("waiting.coalescing.cached", cache, ResponseCache::size)

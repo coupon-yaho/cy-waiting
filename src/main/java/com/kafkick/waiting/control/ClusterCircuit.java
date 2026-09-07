@@ -3,7 +3,7 @@ package com.kafkick.waiting.control;
 import com.kafkick.waiting.domain.admission.CircuitState;
 
 /**
- * 클러스터가 본 서킷 (CY-791). 배분이 리더 한 대의 로컬 관측을 쓰면 두 방향으로
+ * 클러스터가 본 서킷. 배분이 리더 한 대의 로컬 관측을 쓰면 두 방향으로
  * 틀린다 — 리더만 정상이면 나머지가 다 열려 있어도 평소 속도로 돌고, 리더만 열려
  * 있으면 멀쩡한 노드들의 배분까지 0 이 된다.
  */
@@ -18,7 +18,7 @@ public final class ClusterCircuit {
      *
      * @param alive    살아 있는 노드 수
      * @param open     그중 서킷이 열렸다고 말한 수
-     * @param halfOpen 그중 반쯤 열렸다고 말한 수
+     * @param halfOpen 그중 half-open 이라고 말한 수
      */
     public static CircuitState of(int alive, int open, int halfOpen) {
         // **정상이면 alive 는 최소 1 이다** — 기동 직후는 등록부 초기값이 맡는다.

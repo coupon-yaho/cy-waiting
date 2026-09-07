@@ -13,7 +13,7 @@ final class ConfigUris {
     private ConfigUris() {
     }
 
-    /** 상태가 없지만 인스턴스다 — 검증이 늘면 여기 필드가 생긴다 (JS-13). */
+    /** 상태가 없지만 인스턴스다 — 검증이 늘면 여기 필드가 생긴다. */
     static ConfigUris create() {
         return new ConfigUris();
     }

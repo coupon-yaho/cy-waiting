@@ -44,7 +44,7 @@ public class BackendFallbackRoutes {
                 .getAttribute(ServerWebExchangeUtils.GATEWAY_ROUTE_ATTR) != null;
     }
 
-    /** 응답 시각은 주입받은 시계로 찍는다 — 판정 경로와 갈리면 안 된다 (TS-4). */
+    /** 응답 시각은 주입받은 시계로 찍는다 — 판정 경로와 갈리면 안 된다. */
     @Bean
     public BackendFallback backendFallback(Clock clock, MeterRegistry meters,
             CircuitBreakerRegistry circuits) {

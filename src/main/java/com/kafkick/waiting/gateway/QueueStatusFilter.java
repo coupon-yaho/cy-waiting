@@ -54,7 +54,7 @@ public final class QueueStatusFilter implements WebFilter {
             PollIntervalPolicy.of(PollIntervalPolicy.NORMAL_JITTER_RATIO);
 
     /**
-     * 오류 경로의 안내 (F7). <b>정상 경로와 다른 정책이다</b> — 정상은 폴링 시점이
+     * 오류 경로의 안내. <b>정상 경로와 다른 정책이다</b> — 정상은 폴링 시점이
      * 이미 흩어져 있지만, 오류는 전원이 같은 초에 받아 더 넓게 흩어야 한다.
      */
     private static final ErrorBackoff BACKOFF = ErrorBackoff.defaults();
@@ -115,7 +115,7 @@ public final class QueueStatusFilter implements WebFilter {
         return new QueueStatusFilter(holder, queue, tokens, clock, meters, limiter, entryTokens);
     }
 
-    /** 난수원을 받는다. 고정하지 못하면 흔들림이 실제로 붙었는지 못 잰다 (TS-4). */
+    /** 난수원을 받는다. 고정하지 못하면 흔들림이 실제로 붙었는지 못 잰다. */
     public static QueueStatusFilter of(SnapshotHolder holder, QueuePort queue,
             QueueToken tokens, Clock clock, MeterRegistry meters, DoubleSupplier random,
             SecondWindowLimiter limiter, EntryToken entryTokens) {
@@ -138,7 +138,7 @@ public final class QueueStatusFilter implements WebFilter {
             count("no-token");
             return error.write(exchange, ApiError.Code.INVALID_REQUEST);
         }
-        // **매진이면 줄을 안 친다** (R3 · 7.1.4). 답이 정해졌는데 물으러 가면 매진
+        // **매진이면 줄을 안 친다.** 답이 정해졌는데 물으러 가면 매진
         // 순간 몰리는 폴링이 그대로 레디스 부하다. **조회 상한보다 앞이다** — 상한은
         // 노드 전역 키 하나라, 뒤에 두면 죽은 쿠폰이 산 쿠폰의 예산을 먹는다.
         if (soldOut(couponId)) {
@@ -153,7 +153,7 @@ public final class QueueStatusFilter implements WebFilter {
             count("rate-limited");
             // **여기야말로 배수를 걸어야 한다.** 거절만 배수를 빼면 과부하일수록
             // 거절 비중이 커져 예산을 건다는 말이 절반만 맞다. 여기 오는 것은 예산
-            // 초과가 아니라 노드가 통째로 밀린 상황이다 (CY-728).
+            // 초과가 아니라 노드가 통째로 밀린 상황이다.
             return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
                     (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random,
                             pollScale(holder.view())));
@@ -179,7 +179,7 @@ public final class QueueStatusFilter implements WebFilter {
     }
 
     /**
-     * 오류에 실어 보낼 초 (F7). 오류는 전원이 같은 초에 받아 정상 경로의 밴드로는
+     * 오류에 실어 보낼 초. 오류는 전원이 같은 초에 받아 정상 경로의 밴드로는
      * 안 흩어지고, 같은 간격으로 계속 두드리면 회복하려는 뒷단의 자리를 차지한다.
      * 예산이 정한 바닥도 함께 넘긴다 — 장애 구간이 곧 배수가 커져 있는 구간이다.
      */
@@ -191,7 +191,7 @@ public final class QueueStatusFilter implements WebFilter {
 
     /** 잘못 말하면 기다리던 사람이 줄을 잃으므로, 모르는 것을 끝난 것으로 안 읽는다. */
     private boolean soldOut(String couponId) {
-        // **매진 관찰 캐시는 안 본다** (계획 7.2 5.2.1). 그 관찰은 발급을
+        // **매진 관찰 캐시는 안 본다.** 그 관찰은 발급을
         // 시도했다가 거절당한 사실이고, 줄 선 사람에게 "네 차례에 못 받는다" 를
         // 뜻하지 않는다. 여기서 읽으면 관찰 하나가 5만 명의 줄을 끊는다.
         SnapshotHolder.View view = holder.view();
@@ -262,7 +262,7 @@ public final class QueueStatusFilter implements WebFilter {
     /**
      * <b>태그 키 집합을 늘 같게 둔다.</b> 같은 이름에 키 집합이 둘이면
      * 프로메테우스 레지스트리가 등록을 거절한다 — 지금은 단순 레지스트리라 안
-     * 터지고, 6.5 에서 붙이는 순간 터진다.
+     * 터지고, 프로메테우스를 붙이는 순간 터진다.
      */
     private void count(String outcome, String cause) {
         meters.counter(METRIC, "outcome", outcome, "cause", cause).increment();

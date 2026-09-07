@@ -28,7 +28,7 @@ public final class BodyDeadline implements GatewayFilter {
     private final Duration limit;
 
     /**
-     * 끊은 건수. <b>로그가 아니라 지표다</b> (LG-1) — 끊기는 것은 요청 단위라 로그로 남기면
+     * 끊은 건수. <b>로그가 아니라 지표다</b> — 끊기는 것은 요청 단위라 로그로 남기면
      * 그게 곧 요청당 로그다. 안 세면 오탐이 시작된 순간을 못 본다 — 큰 응답이 정상 속도로
      * 흐르다 걸리는 것이 그 위험이다.
      */
@@ -37,7 +37,7 @@ public final class BodyDeadline implements GatewayFilter {
     /** 구간 수. 건수가 만이어도 구간이 하나면 장애는 한 번이다. */
     private final Counter episodes;
 
-    /** 구간의 진입·해제를 쌍으로 남긴다 (LG-2). 해제는 부르는 쪽이 훑는다. */
+    /** 구간의 진입·해제를 쌍으로 남긴다. 해제는 부르는 쪽이 훑는다. */
     private final FailureWindow window = FailureWindow.create();
 
     private BodyDeadline(Duration limit, MeterRegistry meters) {
@@ -102,7 +102,7 @@ public final class BodyDeadline implements GatewayFilter {
     }
 
     /**
-     * 쓰기 전체에 시한을 건다. <b>예외를 지연 생성한다</b> (EX-3) — 즉시 평가하면 안 걸리는
+     * 쓰기 전체에 시한을 건다. <b>예외를 지연 생성한다</b> — 즉시 평가하면 안 걸리는
      * 응답까지 전부 스택트레이스를 채워 보호 장치가 부하가 된다.
      */
     private Mono<Void> cut(Mono<Void> write) {
@@ -113,7 +113,7 @@ public final class BodyDeadline implements GatewayFilter {
                 // 셀 수는 있고, 그게 이 보호 장치를 튜닝할 유일한 근거다.
                 .doOnError(TimeoutException.class, e -> {
                     cuts.increment();
-                    // **구간의 시작만 찍는다** (LG-3). 요청마다 찍으면 그 자체가
+                    // **구간의 시작만 찍는다.** 요청마다 찍으면 그 자체가
                     // 폭포다 — 이 실패는 유입률만큼 한꺼번에 난다.
                     if (window.entered()) {
                         // **구간 수는 건수와 다른 질문에 답한다.** 만 건이 한

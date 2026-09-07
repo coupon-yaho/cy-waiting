@@ -15,8 +15,6 @@ import reactor.core.publisher.Mono;
 /**
  * 배분은 <b>리더 한 대만</b> 돈다. 사실(남이 쥐고 있다)은 즉시 내려오고, 모름(오류·멈춤·
  * 취소)은 리스가 판단한다 — 즉시 하야해도 락은 이 노드 것이라 아무도 리더가 못 된다.
- *
- * @see <a href="../../../../../../../ai/journal/2026/08/AIJ-0042-leadership-lease.md">AIJ-0042</a>
  */
 public final class Leadership {
 
@@ -52,8 +50,8 @@ public final class Leadership {
     private final Supplier<Mono<Void>> release;
 
     /**
-     * <b>{@code nanoTime} 이다.</b> 벽시계는 스큐와 역행이 시나리오에 있고(C11·C12),
-     * 리스 판정이 거기 걸리면 시계가 튈 때 리더가 둘이 된다.
+     * <b>{@code nanoTime} 이다.</b> 노드 간 시계 스큐와 역행은 장애 시나리오에 들어
+     * 있고, 리스 판정이 거기 걸리면 시계가 튈 때 리더가 둘이 된다.
      */
     private final LongSupplier ticker;
 
@@ -122,7 +120,7 @@ public final class Leadership {
     }
 
     /**
-     * 내 펜스 번호. <b>리더가 아니면 0 이다</b> (CY-766). 되돌릴 수 없는 쓰기가 이 번호를
+     * 내 펜스 번호. <b>리더가 아니면 0 이다.</b> 되돌릴 수 없는 쓰기가 이 번호를
      * 들고 나가고, 0 이면 줄 옆의 울타리가 전부 거절한다 — 안 지우는 쪽이라 안전하다.
      */
     public long fence() {

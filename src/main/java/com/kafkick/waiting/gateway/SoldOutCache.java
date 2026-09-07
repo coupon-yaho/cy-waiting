@@ -14,8 +14,8 @@ import java.util.concurrent.atomic.LongAdder;
 import java.util.function.LongSupplier;
 
 /**
- * 매진을 관찰한 사실을 노드가 기억한다 (7.2 · B-10). <b>스냅샷보다 오래 살면 안 된다</b>
- * (B-11) — 재입고가 상시 발생하므로 영구 캐시하면 재입고된 쿠폰이 영영 막힌다.
+ * 매진을 관찰한 사실을 노드가 기억한다. <b>스냅샷보다 오래 살면 안 된다</b> —
+ * 재입고가 상시 발생하므로 영구 캐시하면 재입고된 쿠폰이 영영 막힌다.
  */
 public final class SoldOutCache {
 
@@ -72,7 +72,7 @@ public final class SoldOutCache {
     /**
      * @param publishedAt 지금 손에 든 재료의 발행 시각. 해제는 이보다 나중에 발행된
      *                    재료만 한다 — 같은 재료로 풀면 관찰이 곧바로 지워진다
-     * @return 새로 무장했으면 참. 이미 무장 중이면 거짓 — 로그는 쿠폰당 한 번이다 (LG-3)
+     * @return 새로 무장했으면 참. 이미 무장 중이면 거짓 — 로그는 쿠폰당 한 번이다
      */
     public boolean observed(String couponId, Instant publishedAt) {
         if (armedCount.get() >= maxKeys) {
@@ -140,8 +140,8 @@ public final class SoldOutCache {
             return false;
         }
         // **`LongAdder` 다.** 한 쿠폰에 100K 가 몰리는 것이 전제라, 셀 하나에
-        // CAS 를 걸면 그 자체가 경합점이 된다 (RX-11). 값은 해제할 때 한 번만
-        // 읽으므로 정합한 읽기 비용을 낼 이유가 없다.
+        // CAS 를 걸면 그 자체가 경합점이 된다. 값은 해제할 때 한 번만 읽으므로
+        // 정합한 읽기 비용을 낼 이유가 없다.
         armed.blocked().increment();
         return true;
     }
@@ -153,7 +153,7 @@ public final class SoldOutCache {
      * @return 이번에 푼 기록. 없으면 빈 값 — 부르는 쪽이 로그를 찍는다
      */
     public Optional<Released> restocked(String couponId, Instant publishedAt) {
-        // **먼저 락 없이 읽는다** (RX-11). 매진이 듣는 동안 그 쿠폰의 항목이
+        // **먼저 락 없이 읽는다.** 매진이 듣는 동안 그 쿠폰의 항목이
         // 있으므로, 바로 computeIfPresent 를 부르면 끊는 요청 전부가 같은 버킷
         // 모니터로 수렴한다 — 한 쿠폰에 100K 가 몰리는 것이 이 제품의 전제다.
         Armed armed = observed.get(couponId);
@@ -167,7 +167,7 @@ public final class SoldOutCache {
                 : Optional.empty();
     }
 
-    /** 해제된 기록. 얼마나 오래 끊었고 몇 건을 끊었는가 (LG-2). */
+    /** 해제된 기록. 얼마나 오래 끊었고 몇 건을 끊었는가. */
     public record Released(Duration elapsed, long blocked) {
     }
 
@@ -187,7 +187,7 @@ public final class SoldOutCache {
     }
 
     /**
-     * 담긴 수와 상한을 게이지로 낸다 (7.2.7).
+     * 담긴 수와 상한을 게이지로 낸다.
      *
      * <p>상한에 닿으면 새 관찰을 못 받고, 그때부터 뒷단이 다시 다 맞는다.
      */

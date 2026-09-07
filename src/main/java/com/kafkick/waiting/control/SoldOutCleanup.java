@@ -12,7 +12,7 @@ import java.util.Objects;
 import java.util.Set;
 
 /**
- * 매진된 쿠폰의 큐를 <b>언제</b> 지워도 되는지 답한다 (7.3).
+ * 매진된 쿠폰의 큐를 <b>언제</b> 지워도 되는지 답한다.
  *
  * <p>지우는 일은 어댑터가 한다. 여기는 판단만 하므로 레디스 없이 잴 수 있다.
  */
@@ -44,8 +44,8 @@ public final class SoldOutCleanup {
         Objects.requireNonNull(meters, "meters 는 필수다");
         this.graceTicks = graceTicks;
         this.dropped = meters.counter("waiting.soldout.cleanup", "outcome", "dropped");
-        // **취소가 0 이면 안전 장치가 죽어 있다는 뜻이다** (7.3.2b). 그것을
-        // 알 방법이 이 계수뿐이다 — 쿠폰 ID 는 라벨로 못 쓴다 (LG-4).
+        // **취소가 0 이면 안전 장치가 죽어 있다는 뜻이다.** 그것을 알 방법이 이
+        // 계수뿐이다 — 쿠폰 ID 는 가짓수에 상한이 없어 라벨로 못 쓴다.
         this.cancelled = meters.counter("waiting.soldout.cleanup", "outcome", "cancelled");
         this.failed = meters.counter("waiting.soldout.cleanup", "outcome", "failed");
     }
@@ -77,7 +77,7 @@ public final class SoldOutCleanup {
                 return;
             }
             int ticks = seen.merge(couponId, 1, Integer::sum);
-            // **표를 아직 못 세운 것만 알린다** (CY-766). 첫 회차에만 알리면 그 한 번이
+            // **표를 아직 못 세운 것만 알린다.** 첫 회차에만 알리면 그 한 번이
             // 실패했을 때 유예 내내 표가 없고, 매 회차 알리면 같은 쓰기를 되풀이한다.
             if (!fenced.contains(couponId)) {
                 claimed.add(couponId);
@@ -127,7 +127,7 @@ public final class SoldOutCleanup {
     }
 
     private void cancelIfCounting(String couponId) {
-        // 재고가 돌아왔다. 셈과 표시를 둘 다 버려 삭제를 취소한다 (7.3.2b).
+        // 재고가 돌아왔다. 셈과 표시를 둘 다 버려 삭제를 취소한다.
         if (seen.remove(couponId) != null || deleted.remove(couponId)) {
             cancelled.increment();
         }

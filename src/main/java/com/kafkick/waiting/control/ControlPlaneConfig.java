@@ -70,12 +70,12 @@ public class ControlPlaneConfig {
                 () -> port.load().map(hash ->
                         CreditSmoother.restore(CreditSmoother.DEFAULT_ALPHA, codec.smoothing(hash))),
                 codec, capacity::lastFloor, tunables::current,
-                // **유예를 값으로 정한다** (7.3.2). 스냅샷 낡음 한계보다 충분히
+                // **유예를 값으로 정한다.** 스냅샷 낡음 한계보다 충분히
                 // 커야 마지막 폴링이 줄을 안 잃는다.
                 cleanup,
-                // **이제 실제로 지운다** (5.3.1). 선결 조건 셋이 닫혔다 — 미상과 0 을
-                // 가르고(CY-702), 지우기 직전 재고를 다시 보고(CY-765), 울타리가 옛
-                // 리더를 거른다(CY-766). 회차 번호를 붙잡으면 그 울타리를 우회한다.
+                // **이제 실제로 지운다.** 선결 조건 셋이 닫혔다 — 재고 미상과 0 을 가르고,
+                // 지우기 직전 재고를 다시 보고, 울타리가 옛 리더를 거른다. 회차 번호를
+                // 붙잡으면 그 울타리를 우회한다.
                 ids -> port.dropSoldOutQueues(ids, leadership.fence()),
                 // 세기 시작한 줄에 표만 세운다. 지웠을 때만 세우면 한 번도 안
                 // 지운 줄에 표가 없어, 얼었다 깨어난 옛 리더를 못 막는다.
@@ -84,13 +84,13 @@ public class ControlPlaneConfig {
                 // 이 노드도 게이트웨이다. 자기가 든 재료의 나이가 노드들의
                 // 폴링 상태에 가장 가까운 신호다.
                 holder::isDataStale,
-                // **클러스터가 본 것으로 조인다** (CY-791). 리더의 로컬 서킷만 보면 리더만
+                // **클러스터가 본 것으로 조인다.** 리더의 로컬 서킷만 보면 리더만
                 // 멀쩡할 때 그 몫이 이미 넘어진 뒷단으로 간다. 회차마다 한 번 읽는다 —
                 // 두 번 읽으면 그 사이 뒤집혀 같은 회차가 자기모순인 값 둘로 판단한다.
                 registry::circuit,
-                // **라우팅 목록도 같이 싣는다** (Phase 9). 보고는 리더만 읽으므로,
-                // 요청 경로가 레디스를 안 치려면(불변식 1) 이 길밖에 없다.
-                // 합산에 든 값 그대로라 램프가 깎은 몫이 여기에도 실린다 (F6).
+                // **라우팅 목록도 같이 싣는다.** 보고는 리더만 읽으므로, 요청 경로에서
+                // 레디스를 치지 않으려면 이 길밖에 없다. 합산에 든 값 그대로라 갓 뜬
+                // 인스턴스의 램프가 깎은 몫이 여기에도 실린다.
                 capacity::routable);
         return round;
     }
@@ -133,13 +133,13 @@ public class ControlPlaneConfig {
 
     /**
      * 불변식의 선행 지표. 초과 발급 자체는 발급 계층만 알므로, 게이트웨이는 스스로
-     * 계산한 값으로 대신 본다 (6.9.1).
+     * 계산한 값으로 대신 본다.
      */
     @Bean
     InvariantMetrics invariantMetrics(AllocationRound round, AllocationRedisPort port,
             MeterRegistry meters, GatewayRegistry registry) {
         // **도착 합은 배분을 안 거친다.** 상한으로 쓰면 관측이 제 출력에 오염돼
-        // 진동하므로 뺐다 (AIJ-0250). 남은 쓰임이 지표뿐이라 여기로 바로 온다.
+        // 진동하므로 뺐다. 남은 쓰임이 지표뿐이라 여기로 바로 온다.
         return InvariantMetrics.bind(round, port.clockSkew(), meters, port::markersDropped,
                 registry::passRate);
     }
@@ -173,7 +173,7 @@ public class ControlPlaneConfig {
         return SoldOutCleanup.of(properties.scheduler().soldOutGraceTicks(), meters);
     }
 
-    /** 멈추는 판단을 생성자가 필수로 받는다 — 빠뜨리면 컴파일이 안 된다 (7.4). */
+    /** 멈추는 판단을 생성자가 필수로 받는다 — 빠뜨리면 컴파일이 안 된다. */
     @Bean
     QueueSweeper queueSweeper(AllocationRedisPort port, ControlPlaneProperties properties,
             MeterRegistry meters) {
@@ -193,16 +193,16 @@ public class ControlPlaneConfig {
         return () -> {
             collector.leadershipAcquired();
             capacity.leadershipChanged();
-            // **평활화 이월도 여기서 버린다** (F9 · CY-859). 회차 안은 리더일 때만 돌아
-            // 비리더 구간을 한 번도 못 본다. 램프 출발점은 발행된 몫이되 낡으면 R1 하한 —
-            // 0 에서 오르면 한산한 쿠폰이 줄을 서고, 낡은 큰 값은 브레이크를 푼다.
+            // **평활화 이월도 여기서 버린다.** 회차 안은 리더일 때만 돌아 비리더 구간을
+            // 한 번도 못 본다. 램프 출발점은 발행된 몫이되 낡으면 한산 통과가 살아 있는
+            // 최소 몫 — 0 에서 오르면 한산한 쿠폰이 줄을 서고, 낡은 큰 값은 브레이크를 푼다.
             SnapshotHolder.View seen = holder.view();
             round.leadershipAcquired(startingCredit(seen, holder, registry));
             // **매진 유예를 처음부터 준다.** 얼어 있던 셈을 이어 쓰면 유예가
             // 설정값이 아니라 "내가 리더였던 틱 수" 가 되고, 그 둘은 장애
             // 중에 갈린다.
             cleanup.leadershipAcquired();
-            // **이탈자 청소의 재개 유예도 같다** (CY-822). 표시가 리더 메모리라 승계에서
+            // **이탈자 청소의 재개 유예도 같다.** 표시가 리더 메모리라 승계에서
             // 사라지지만, 모른다는 것이 걷을 이유가 되면 안 된다 — 걷힌 사람은 새 score 로
             // 다시 서므로 순번이 뒤로 간다.
             sweeper.leadershipAcquired();
@@ -211,9 +211,10 @@ public class ControlPlaneConfig {
 
     /**
      * 승계 노드가 램프를 세울 출발점. 낡은 큰 값은 브레이크를 풀고, 안 주면 브레이크가
-     * 없다. <b>R1 은 여기서 안 지킨다</b> — 되올리는 것은 {@code ReleaseRamp.next} 다.
+     * 없다. <b>한산 통과 하한은 여기서 안 지킨다</b> — 되올리는 것은
+     * {@code ReleaseRamp.next} 다.
      *
-     * @return 기동 직후면 음수(램프 없음), 그 밖에는 발행 몫이나 R1 하한 이하
+     * @return 기동 직후면 음수(램프 없음), 그 밖에는 발행 몫이나 한산 통과 최소 몫 이하
      */
     static long startingCredit(SnapshotHolder.View seen, SnapshotHolder holder,
             GatewayRegistry registry) {

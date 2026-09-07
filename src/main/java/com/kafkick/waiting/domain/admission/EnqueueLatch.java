@@ -6,7 +6,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 줄에 세운 직후의 한 구간을 메운다. 스냅샷은 한 틱 늦어 아직 한산하다고 말하고,
- * 그동안 <b>방금 줄 선 사람을 신규 유입이 넘어간다</b> (불변식 4). 노드 로컬이라
+ * 그동안 <b>방금 줄 선 사람을 신규 유입이 추월한다.</b> 노드 로컬이라
  * 다른 노드의 등록은 스냅샷으로만 보인다.
  */
 public final class EnqueueLatch {
@@ -57,8 +57,8 @@ public final class EnqueueLatch {
      */
     public void mark(String couponKey, long epochSecond) {
         // **이미 걸려 있으면 시각을 안 고친다.** 대기 판정이 다시 여기로 돌아오는
-        // 닫힌 고리가 있어, 갱신하면 트래픽이 이어지는 동안 영영 안 풀린다 (R1).
-        // 래치가 덮는 것은 첫 등록부터 스냅샷이 따라잡기까지다.
+        // 닫힌 고리가 있어, 갱신하면 트래픽이 이어지는 동안 영영 안 풀린다 —
+        // 한산해진 뒤에도 줄이 선다. 래치가 덮는 것은 스냅샷이 따라잡기까지다.
         if (marked.putIfAbsent(couponKey, epochSecond) != null) {
             return;
         }

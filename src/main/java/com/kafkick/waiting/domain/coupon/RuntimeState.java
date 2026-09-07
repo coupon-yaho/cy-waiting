@@ -6,7 +6,7 @@ package com.kafkick.waiting.domain.coupon;
  */
 public enum RuntimeState {
 
-    /** 줄이 없다. 상한 안이면 대기열 없이 통과시킨다 — 이 제품의 존재 이유(R1). */
+    /** 줄이 없다. 상한 안이면 대기열 없이 통과시킨다 — 게이트웨이가 있는 이유다. */
     IDLE,
 
     /** 줄이 서 있다. 신규 유입은 뒤에 선다. */

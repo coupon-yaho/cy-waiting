@@ -36,7 +36,7 @@ public final class BulkheadMetrics {
 
     /**
      * <b>태그를 안 붙인다.</b> 쿠폰 식별자는 밖에서 오는 값이라 가짓수에 상한이 없고,
-     * 하나 붙는 순간 지표 하나가 메모리를 밀어낸다 (LG-4).
+     * 하나 붙는 순간 지표 하나가 메모리를 밀어낸다.
      */
     private void gauge(MeterRegistry meters, String name,
             ToDoubleFunction<BulkheadMetrics> read, String why) {

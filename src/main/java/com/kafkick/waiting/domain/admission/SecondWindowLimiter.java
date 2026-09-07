@@ -5,7 +5,7 @@ import java.util.Map;
 
 /**
  * 초 단위 고정 윈도우 리미터. <b>경로별로 나누지 않는다</b> — 각자 카운터를 들면
- * 회복 전이 순간 두 상한이 동시에 열려 1.5× 버스트가 나간다 (F4). 리미터는 하나고
+ * 회복 전이 순간 두 상한이 동시에 열려 1.5× 버스트가 나간다. 리미터는 하나고
  * 상한만 인자로 받는다.
  */
 public class SecondWindowLimiter {
@@ -30,7 +30,7 @@ public class SecondWindowLimiter {
      *
      * @param key          예산을 나누는 단위. 쿠폰 ID 또는 노드 전역 키
      * @param cap          이번 판정에 적용할 상한. 경로마다 다른 값이 온다
-     * @param epochSecond  주입받은 시각. 도메인은 시계를 부르지 않는다 (DS-1)
+     * @param epochSecond  주입받은 시각. 도메인은 시계를 부르지 않는다
      */
     public synchronized boolean tryAcquire(String key, long cap, long epochSecond) {
         if (cap <= 0) {
@@ -43,7 +43,7 @@ public class SecondWindowLimiter {
             return false;
         }
         if (current == 0 && used.size() >= maxKeys) {
-            // 새 키를 받을 자리가 없다. 통과시키면 상한이 무의미해지므로 거부한다.
+            // 자리 없이 통과시키면 상한이 무의미해진다.
             return false;
         }
         used.put(key, current + 1);

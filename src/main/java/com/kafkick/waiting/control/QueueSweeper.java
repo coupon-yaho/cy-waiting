@@ -13,7 +13,7 @@ import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Mono;
 
 /**
- * 이탈자를 걷어 낸다 (7.4). <b>멈추는 판단을 필수 인자로 받는다</b> — 계획이 산문으로
+ * 이탈자를 걷어 낸다. <b>멈추는 판단을 필수 인자로 받는다</b> — 계획이 산문으로
  * 적어 둔 것을 기계로 만드는 자리라, 빠뜨리면 컴파일이 안 된다.
  */
 public final class QueueSweeper {
@@ -48,7 +48,7 @@ public final class QueueSweeper {
         this.sweep = Objects.requireNonNull(sweep, "sweep 은 필수다");
         Objects.requireNonNull(meters, "meters 는 필수다");
         // **걷은 수가 곧 우리 오판일 수도 있다.** 그 값이 튈 때 장애인지 버그인지
-        // 가르려면 평시 값을 먼저 알아야 하고, 재려면 자리가 있어야 한다 (7.4.6).
+        // 가르려면 평시 값을 먼저 알아야 하고, 재려면 자리가 있어야 한다.
         this.swept = meters.counter("waiting.sweep", "kind", "swept");
         this.expiredSignals = meters.counter("waiting.sweep", "kind", "expired-signal");
         this.expiredGrace = meters.counter("waiting.sweep", "kind", "expired-grace");
@@ -91,7 +91,7 @@ public final class QueueSweeper {
     }
 
     /**
-     * 리더가 되면 <b>재개 유예를 처음부터 준다</b> (CY-822). 재개 표시는 리더 메모리라
+     * 리더가 되면 <b>재개 유예를 처음부터 준다.</b> 재개 표시는 리더 메모리라
      * 승계에서 사라져, 새 리더는 그 쿠폰의 생존 신호가 얼마나 오래 멎었는지 모른다.
      */
     public void leadershipAcquired() {
@@ -101,7 +101,7 @@ public final class QueueSweeper {
     /** 이번 틱의 청소. <b>청소 실패가 배분을 막지 않는다</b> — 다음 틱에 다시 온다. */
     public Mono<SweepResult> run(Map<String, CouponState> coupons, boolean dataStale) {
         List<String> targets = gate.sweepable(coupons, dataStale);
-        // **승계 유예 중에도 정리는 돈다** (CY-822). 앞줄 제거만 접는다 —
+        // **승계 유예 중에도 정리는 돈다.** 앞줄 제거만 접는다 —
         // 대상까지 비우면 만료 신호와 유예 기록이 한 방향으로만 자라고 커서가
         // 전진을 못 한다. 승계가 유예보다 잦으면 청소가 영영 안 돈다.
         boolean removeFront = !targets.isEmpty();
@@ -112,7 +112,7 @@ public final class QueueSweeper {
             return Mono.just(SweepResult.NOTHING);
         }
         List<String> chosen = targets;
-        // **이번 회차에 들일 인원만큼 본다** (7.4.3). 상수로 두면 뜨거운 쿠폰은
+        // **이번 회차에 들일 인원만큼 본다.** 상수로 두면 뜨거운 쿠폰은
         // 배수 대상 안의 유령을 못 걷고, 한산한 쿠폰에는 매 틱 과한 왕복을 낸다.
         return sweep.apply(chosen, scanLimit(coupons, chosen), removeFront)
                 .doOnNext(r -> {

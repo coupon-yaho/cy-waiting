@@ -68,7 +68,8 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
     public static final String POLL_SCALE = "waiting.admission.poll-scale";
 
     /**
-     * 이 요청을 <b>재료를 갖고 판정했는가</b>. SLI 가 이 값만 읽는다 (O-7).
+     * 이 요청을 <b>재료를 갖고 판정했는가</b>. 게이트웨이의 품질 지표는 성공 응답
+     * 비율이 아니라 판정 성공률이고, 그 지표가 이 값만 읽는다.
      *
      * <p>운영 카운터를 더해 만들지 않는다 — 한 요청이 여러 사유를 지나면
      * 실패율이 100% 를 넘고, 라벨을 리네임하면 그 항이 조용히 빠진다.
@@ -94,11 +95,11 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
     private static final String METRIC = "waiting.admission";
 
     /**
-     * 등록에서 순번 바닥값이 걸린 횟수. 순번 역행의 선행 신호다 (F2) — 이 값이
-     * 오르는 구간이 곧 불변식 4 가 방어 하나에 걸려 있는 구간이다.
+     * 등록에서 순번 바닥값이 걸린 횟수. 순번 역행의 선행 신호다 — 이 값이 오르는
+     * 구간은 줄 선 사람을 추월시키지 않는다는 약속이 방어 하나에 걸린 구간이다.
      *
-     * <p>판정 카운터에 안 섞는다. SLI 의 분모가 그 이름들의 합이라 한 요청이
-     * 두 번 세어지면 분모가 부풀고 실패율이 좋아 보인다 (O-7).
+     * <p>판정 카운터에 안 섞는다. 품질 지표의 분모가 그 이름들의 합이라 한 요청이
+     * 두 번 세어지면 분모가 부풀고 실패율이 좋아 보인다.
      */
     private static final String CLOCK_BACK = "waiting.queue.clock.back";
 
@@ -126,16 +127,16 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
      *
      * <p>유입은 같은 예산이 이미 조이므로 걸려 있는 수는 <b>예산 × 지연</b>이고,
      * 이 값이 곧 격벽이 막기 시작하는 지연이다. 서킷의 느림 임계보다 커야
-     * 느린 뒷단이 서킷에 집계된 뒤에 막힌다 — 6.8.1 에서 튜너블로 뺀다.
+     * 느린 뒷단이 서킷에 집계된 뒤에 막힌다 — 나중에 튜너블로 뺀다.
      */
     private static final long MAX_IN_FLIGHT_SEC = 3;
 
     /**
      * 자리를 놓게 하는 상한의 여유 배수.
      *
-     * <p>뒷단 응답 상한(12초)보다 뒤여야 합니다. 여기가 먼저 끊으면 서킷에 가는
-     * 것이 오류가 아니라 취소가 되고, 취소는 창에 안 쌓입니다 — 멎은 뒷단의
-     * 서킷이 영영 안 열립니다. 여기는 그 상한이 안 걸렸을 때의 마지막 그물입니다.
+     * <p>뒷단 응답 상한보다 뒤여야 한다. 여기가 먼저 끊으면 서킷에 가는 것이
+     * 오류가 아니라 취소가 되고, 취소는 창에 안 쌓여 멎은 뒷단의 서킷이 영영
+     * 안 열린다. 여기는 그 상한이 안 걸렸을 때의 마지막 그물이다.
      */
     private static final long IN_FLIGHT_GRACE = 5;
 
@@ -149,12 +150,12 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
     private final SnapshotHolder holder;
     private final AdmissionDecider decider;
 
-    /** 뒷단 서킷의 상태. <b>판정의 입력이다</b> (F3). */
+    /** 뒷단 서킷의 상태. <b>판정의 입력이다</b> — 안 보면 half-open 회복을 방해한다. */
     private final CircuitStateReader circuit;
     private final Clock clock;
     private final MeterRegistry meters;
 
-    /** 이 노드가 뒷단으로 보낸 초당 수. 하트비트가 실어 리더가 합산한다 (RC4). */
+    /** 이 노드가 뒷단으로 보낸 초당 수. 회복 봉우리를 재려고 리더가 합산한다. */
     private final PassRateMeter passRate = PassRateMeter.of(PassRateMeter.DEFAULT_WINDOW_MS);
     private final DoubleSupplier random;
     private final QueuePort queue;
@@ -163,7 +164,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
     private final SecondWindowLimiter limiter;
     private final EnqueueLatch latch;
 
-    /** 뒷단의 멱등성이 작동할 근거. 같은 시도에 같은 값을 준다 (A-10). */
+    /** 뒷단의 멱등성이 작동할 근거. 같은 시도에 같은 값을 준다. */
     private final IdempotencyKey idempotency;
 
     /** 동시에 걸려 있는 건수를 센다. 리미터가 세는 초당 건수와 단위가 다르다. */
@@ -175,7 +176,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
     private final AtomicBoolean misconfigured = new AtomicBoolean();
 
     /**
-     * fail-open 구간의 진입과 해제 (LG-2).
+     * fail-open 구간의 진입과 해제를 쌍으로 남긴다.
      *
      * <p>이 전이가 로그에 없으면 사후에 <b>추월이 언제 열렸는지</b>를 못 짚는다.
      * 지표는 초 단위로 뭉개져 남고 보존 기간도 짧아, 사고 조사에서 필요한
@@ -184,23 +185,22 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
     private final FailureWindow failOpenWindow;
 
     /**
-     * 보호 장치가 끊는 구간.
+     * 보호 장치가 끊는 구간. 진입과 해제를 쌍으로 남긴다.
      *
-     * <p>카운터만 두면 사후에 "몇 시부터 몇 시까지, 몇 건을 끊었나" 를 못 답합니다.
-     * 그 답이 필요한 때는 늘 사고가 끝난 뒤입니다 (LG-2).
+     * <p>카운터만 두면 사후에 "몇 시부터 몇 시까지, 몇 건을 끊었나" 를 못 답한다.
      */
     private final FailureWindow shedWindow;
 
-    /** 재료가 아직 재고를 말하는 창에서 이것이 유일한 근거다 (7.2 · B-10). */
+    /** 재료가 아직 재고를 말하는 창에서 이것이 유일한 근거다. */
     private final SoldOutCache soldOutCache;
 
     /**
      * 캐시가 끊은 건수. {@code cause} 축에 안 싣는다 — 그 축은 실패 원인의 닫힌
-     * 집합이라(LG-4), 판정 출처를 넣으면 정상적인 매진 단락이 실패율에 잡힌다.
+     * 집합이라, 판정 출처를 넣으면 정상적인 매진 단락이 실패율에 잡힌다.
      */
     private final Counter soldOutHits;
 
-    /** 레디스 시계가 뒤로 간 건수. 순번 역행의 선행 신호다 (F2). */
+    /** 레디스 시계가 뒤로 간 건수. 순번 역행의 선행 신호다. */
     private final Counter clockBack;
 
     private AdmissionGatewayFilter(SnapshotHolder holder, AdmissionDecider decider,
@@ -273,7 +273,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
                 entryTokens, idempotency, System::nanoTime, SoldOutCache.standard(), null);
     }
 
-    /** 매진 캐시를 함께 받는다 (7.2.3). 담는 쪽과 읽는 쪽이 같은 것이라야 한다. */
+    /** 매진 캐시를 함께 받는다. 담는 쪽과 읽는 쪽이 같은 것이라야 한다. */
     public static AdmissionGatewayFilter of(SnapshotHolder holder, AdmissionDecider decider,
             Clock clock, MeterRegistry meters, QueuePort queue, QueueToken tokens,
             SecondWindowLimiter limiter, EntryToken entryTokens,
@@ -283,7 +283,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
                 entryTokens, idempotency, System::nanoTime, soldOutCache, null);
     }
 
-    /** 난수원을 받는다. 고정하지 못하면 흔들림이 실제로 붙었는지 못 잰다 (TS-4). */
+    /** 난수원을 받는다. 고정하지 못하면 흔들림이 실제로 붙었는지 못 잰다. */
     public static AdmissionGatewayFilter withIsolatedSoldOutCache(SnapshotHolder holder,
             AdmissionDecider decider,
             Clock clock, MeterRegistry meters, DoubleSupplier random,
@@ -299,7 +299,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
      * NTP 가 시각을 되돌릴 때 음수가 안 된다.
      *
      * <p>고정하지 못하면 fail-open 이 얼마나 이어졌는지를 재는 계산 자체가
-     * 시험에서 늘 0 이 되어, 단위를 틀려도 통과한다 (TS-4).
+     * 시험에서 늘 0 이 되어, 단위를 틀려도 통과한다.
      */
     public static AdmissionGatewayFilter withIsolatedSoldOutCache(SnapshotHolder holder,
             AdmissionDecider decider,
@@ -314,8 +314,8 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
     /**
      * 지금 뒷단에 걸려 있는 건수.
      *
-     * <p>종료할 때 이 값이 0 이 되기를 기다립니다 — 안 되면 그만큼이 강제 종료로
-     * 끊깁니다. 격벽이 세는 값이라 뒷단으로 넘어간 것만 셉니다.
+     * <p>종료할 때 이 값이 0 이 되기를 기다린다 — 안 되면 그만큼이 강제 종료로
+     * 끊긴다. 격벽이 세는 값이라 뒷단으로 넘어간 것만 센다.
      */
     public int inFlight() {
         return bulkhead.inFlight();
@@ -341,7 +341,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
     /**
      * <b>태그 키 집합을 늘 같게 둔다.</b> 같은 이름에 키 집합이 둘이면
      * 프로메테우스 레지스트리가 등록을 거절한다 — 지금은 단순 레지스트리라 안
-     * 터지고, 6.5 에서 붙이는 순간 터진다.
+     * 터지고, 프로메테우스를 붙이는 순간 터진다.
      */
     private void count(String outcome, String cause) {
         meters.counter(METRIC, "outcome", outcome, "cause", cause).increment();
@@ -351,7 +351,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
         // **품질은 요청마다 한 번만 센다.** 운영 카운터를 여럿 더해 만들면 한
         // 요청이 여러 번 세어져 실패율이 100% 를 넘고, 라벨 하나를 리네임하면
-        // 그 항이 조용히 빠진다 (O-7).
+        // 그 항이 조용히 빠진다.
         return judge(exchange, chain)
                 .doFinally(signal -> meters.counter(JUDGEMENT, "quality",
                         exchange.getAttributeOrDefault(DEGRADED, false)
@@ -398,7 +398,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
                 // 무관하게 통과해 기다린 사람과 안 기다린 사람이 같아진다.
                 holder.isDataStale(view), hasEntryToken(exchange, couponId), 
                 latch.latched(couponId, nowSec),
-                // **서킷을 여기서 읽는다** (F3). 메모리 안의 값이라 왕복이 없다.
+                // **서킷을 여기서 읽는다.** 메모리 안의 값이라 왕복이 없다.
                 // 안 실으면 판정이 서킷을 영영 안 보고, 열린 동안 계속 통과를
                 // 내 전량이 fallback 으로 간다.
                 nowSec, MAX_ETA_SEC, circuit.now()));
@@ -414,9 +414,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
     }
 
     /**
-     * 관찰보다 나중에 발행된 재료가 재고를 말하면 푼다 (7.2.4).
+     * 관찰보다 나중에 발행된 재료가 재고를 말하면 푼다.
      *
-     * <p>낡거나 재고를 모르는 재료로는 안 푼다 (CY-702). 못 믿는 재료로 방패를
+     * <p>낡거나 재고를 모르는 재료로는 안 푼다. 못 믿는 재료로 방패를
      * 부수는 것만 허용하면 비대칭이고, 재고 키를 잃는 것은 뒷단이 409 를 내는
      * 것과 같이 오므로 하필 그때 방패가 매 틱 열린다.
      */
@@ -426,9 +426,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
             return;
         }
         soldOutCache.restocked(couponId, view.snapshot().publishedAt())
-                // **쌍으로 남긴다** (LG-2). 쿠폰 ID 는 라벨로 못 쓰므로
-                // (LG-4), 어느 쿠폰이 몇 초 동안 몇 건을 끊었는지는 로그만이
-                // 답할 수 있는 자리다.
+                // **진입과 쌍으로 남긴다.** 쿠폰 ID 는 카디널리티가 높아 지표
+                // 라벨로 못 쓰므로, 어느 쿠폰이 몇 초 동안 몇 건을 끊었는지는
+                // 로그만이 답할 수 있는 자리다.
                 .ifPresent(r -> log.info("매진 해제 — 쿠폰 {} 를 {}초 동안 끊었고 {}건이었다",
                         couponId, r.elapsed().toSeconds(), r.blocked()));
     }
@@ -464,7 +464,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
             AdmissionDecision decision, String couponId, CouponState state, SnapshotMeta meta) {
         if (decision.isPass()) {
             // **판정이 쓴 예산을 그대로 받는다.** 여기서 credit 을 다시 꺼내면
-            // 한산 통과가 0 을 받고, 0 은 상한으로 쓰이는 순간 전면 차단이다 (I1).
+            // 한산 통과가 0 을 받고, 0 은 상한으로 쓰이는 순간 전면 차단이다.
             return forward(exchange, chain, couponId,
                     decider.admittedRatePerSec(decision, state, meta), meta);
         }
@@ -476,7 +476,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
     }
 
     /**
-     * 줄에 세운다. <b>여기가 요청 경로에서 레디스를 치는 유일한 자리다</b> (RD-4) —
+     * 줄에 세운다. <b>여기가 요청 경로에서 레디스를 치는 유일한 자리다</b> —
      * 통과한 사람은 여기 안 온다.
      */
     private Mono<Void> enqueue(ServerWebExchange exchange, GatewayFilterChain chain,
@@ -512,7 +512,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
                         clockBack.increment();
                     }
                     // 등록이 다시 되면 fail-open 구간이 끝난 것이다. 쌍으로 안
-                    // 남기면 로그에 진입만 있고 언제 닫혔는지가 없다 (LG-2).
+                    // 남기면 로그에 진입만 있고 언제 닫혔는지가 없다.
                     failOpenWindow.exited().ifPresent(r -> log.info(
                             "fail-open 해제 — {}초 동안 {}건 통과시켰다",
                             NANOSECONDS.toSeconds(r.elapsedNanos()), r.swallowed()));
@@ -594,8 +594,8 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
             double pollScale) {
         return switch (decision) {
             // 차례가 온 사람은 배수에서 뺀다. 멀리 보내면 수명 있는 입장 토큰이
-            // 죽어 줄 맨 뒤에 새 순번으로 다시 선다 (불변식 3·4). 밴드가 1초라
-            // 흔들림이 0 이고, 그래서 매초 같은 순간에 통째로 돌아온다 (CY-741).
+            // 죽어 줄 맨 뒤에 새 순번으로 다시 서고, 그것이 곧 순번 역행이자
+            // 추월이다. 밴드가 1초면 흔들림이 0 이라 통째로 같이 돌아온다.
             case RETRY_TOKEN -> (int) POLL.intervalSec(0, random, PollIntervalPolicy.NO_SCALE);
             case REJECT_QUEUE_FULL, REJECT_OVERLOAD ->
                     (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random, pollScale);
@@ -653,7 +653,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
             return shed(exchange, meta);
         }
         // 뒷단으로 넘어가는 건이 생겼으면 끊던 구간이 끝난 것이다. 쌍으로 안
-        // 남기면 로그에 진입만 있고 언제 닫혔는지가 없다 (LG-2).
+        // 남기면 로그에 진입만 있고 언제 닫혔는지가 없다.
         shedWindow.exited().ifPresent(r -> log.warn(
                 "보호 차단 해제 — {}초 동안 {}건 끊었다",
                 NANOSECONDS.toSeconds(r.elapsedNanos()), r.swallowed()));
@@ -663,7 +663,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
                         .build())
                 // doFinally 는 끝나는 것만 돌려주지 안 끝나는 것을 끝내지 못한다.
                 // 멈춘 뒷단 하나가 격벽을 영구히 닫는 것을 이 상한이 막는다.
-                // 뒷단 응답 타임아웃(6.2)과는 다르다 — 여기는 자리를 쥐는 시간이다.
+                // 뒷단 응답 타임아웃과는 다르다 — 여기는 자리를 쥐는 시간이다.
                 .timeout(MAX_IN_FLIGHT)
                 // 헤더가 이미 나간 뒤라면 ApiError 가 조용히 비켜선다 — 그
                 // 판단을 여기서 한 번 더 하면 두 곳이 갈릴 수 있다.
@@ -675,7 +675,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
                 // 나서 영영 안 열리고, 그 쿠폰은 뒷단이 멀쩡해져도 계속 막힌다.
                 .doFinally(signal -> {
                     bulkhead.exit(couponId);
-                    // 여기서 센다 (RC4). 판정 자리에서 세면 서킷이 열린 동안의
+                    // 여기서 센다. 판정 자리에서 세면 서킷이 열린 동안의
                     // 통과 판정까지 들어가는데 그것들은 뒷단에 안 닿는다. 취소는
                     // 뒷단 응답이 왔는지로 가른다 — 받는 중에 끊긴 것은 도착이다.
                     boolean reached = signal != SignalType.CANCEL
@@ -728,15 +728,15 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
      * 이 쿠폰이 동시에 걸어 둘 수 있는 건수.
      *
      * <p>이 통과를 낸 <b>초당 예산</b>에 한 건이 걸려 있을 수 있는 시간을 곱한다.
-     * 예산이 줄면 격벽도 같이 조여진다 (6.3.3).
+     * 예산이 줄면 격벽도 같이 조여진다.
      *
      * <p><b>예산이 0 인 구간에는 폴백을 쓴다.</b> 재료가 아직 없는 기동 직후가
      * 그렇고, 0 을 상한으로 쓰면 전면 차단이다 — 등록 경로와 같은 폴백이다.
      */
     private long inFlightCap(long ratePerSec, SnapshotMeta meta) {
         long perSecond = ratePerSec > 0 ? ratePerSec : AdmissionDecider.MIN_CREDIT;
-        // **재료에 실려 온 값을 먼저 본다** (P-1). 배포 없이 되돌릴 수 있어야
-        // 롤백이 성립하고, 그 전파 경로가 스냅샷이다.
+        // **재료에 실려 온 값을 먼저 본다.** 배포 없이 되돌릴 수 있어야 롤백이
+        // 성립하고, 그 전파 경로가 스냅샷이다.
         long seconds = meta.inFlightSecondsOr(MAX_IN_FLIGHT_SEC);
         // **곱이 넘치면 음수가 되고, 음수 상한은 전면 차단이다.** 예산은 밖에서
         // 오는 globalCredit 에서 나오므로 여기서 막는다.

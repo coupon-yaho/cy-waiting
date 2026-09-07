@@ -94,7 +94,7 @@ public final class AbuseLimitFilter implements WebFilter {
         return new AbuseLimitFilter(clock, meters, trusted);
     }
 
-    /** 난수원을 받는다. 고정하지 못하면 흔들림이 실제로 붙었는지 못 잰다 (TS-4). */
+    /** 난수원을 받는다. 고정하지 못하면 흔들림이 실제로 붙었는지 못 잰다. */
     public static AbuseLimitFilter of(Clock clock, MeterRegistry meters, DoubleSupplier random,
             TrustedProxies trusted) {
         return new AbuseLimitFilter(clock, meters, random, trusted);

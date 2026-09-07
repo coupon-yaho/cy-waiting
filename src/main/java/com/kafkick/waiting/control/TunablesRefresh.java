@@ -17,9 +17,9 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
 
 /**
- * 운영자가 적은 값을 <b>배분 회차 밖에서</b> 읽습니다 (P-1). 회차 안에서 읽으면 레디스가
+ * 운영자가 적은 값을 <b>배분 회차 밖에서</b> 읽는다. 회차 안에서 읽으면 레디스가
  * 500ms 느려지는 것만으로 틱 예산을 넘겨 스냅샷이 아예 안 나가고, 전 노드가 동시에
- * 낡음으로 빠집니다.
+ * 낡음으로 빠진다.
  */
 public final class TunablesRefresh {
 
@@ -34,9 +34,9 @@ public final class TunablesRefresh {
     private final Scheduler worker;
 
     /**
-     * 아직 한 번도 못 읽었을 때 쓸 값. <b>승계 첫 회차가 위험합니다.</b> 새 리더의 캐시가
+     * 아직 한 번도 못 읽었을 때 쓸 값. <b>승계 첫 회차가 위험하다.</b> 새 리더의 캐시가
      * 빈 채로 발행하면 앞 리더가 싣던 값이 통째로 지워져, 운영자가 걸어 둔 조치가 리더
-     * 교체만으로 풀립니다.
+     * 교체만으로 풀린다.
      */
     private final Supplier<Optional<Tunables>> seed;
 
@@ -47,8 +47,8 @@ public final class TunablesRefresh {
     private final AtomicLong lastReadNanos = new AtomicLong();
 
     /**
-     * 마지막으로 읽은 값. <b>비어 있음이 "안 실려 왔다" 는 뜻입니다.</b> 기본값으로 채우면
-     * 그 값이 각 노드의 기동 설정을 덮어써, 운영자가 키를 만든 적도 없는데 값이 바뀝니다.
+     * 마지막으로 읽은 값. <b>비어 있음이 "안 실려 왔다" 는 뜻이다.</b> 기본값으로 채우면
+     * 그 값이 각 노드의 기동 설정을 덮어써, 운영자가 키를 만든 적도 없는데 값이 바뀐다.
      */
     private final AtomicReference<Optional<Tunables>> applied =
             new AtomicReference<>(Optional.empty());
@@ -74,15 +74,15 @@ public final class TunablesRefresh {
         return new TunablesRefresh(read, seed, budget, worker, System::nanoTime);
     }
 
-    /** 시각을 주입받는다. 실시계로 두면 못 읽는 구간을 못 잰다 (TS-4). */
+    /** 시각을 주입받는다. 실시계로 두면 못 읽는 구간을 못 잰다. */
     static TunablesRefresh of(Supplier<Mono<String>> read, Supplier<Optional<Tunables>> seed,
             Duration budget, Scheduler worker, LongSupplier nanoTicker) {
         return new TunablesRefresh(read, seed, budget, worker, nanoTicker);
     }
 
     /**
-     * <b>실패하면 마지막 값을 그대로 둡니다.</b> 기본값으로 되돌리면 장애가 시작될 때마다
-     * 운영자가 걸어 둔 값이 사라지고, 그 원복은 사람이 바꾼 것과 로그로 구별되지 않습니다.
+     * <b>실패하면 마지막 값을 그대로 둔다.</b> 기본값으로 되돌리면 장애가 시작될 때마다
+     * 운영자가 걸어 둔 값이 사라지고, 그 원복은 사람이 바꾼 것과 로그로 구별되지 않는다.
      */
     public Mono<Void> refresh() {
         return read.get()
@@ -102,24 +102,24 @@ public final class TunablesRefresh {
     }
 
     /**
-     * 지금 실어 보낼 값. <b>한 번도 못 읽었으면 재료에 실려 있던 것을 이어 싣습니다.</b>
-     * 승계 첫 회차에 빈 값을 실으면 앞 리더가 걸어 둔 조치가 지워집니다.
+     * 지금 실어 보낼 값. <b>한 번도 못 읽었으면 재료에 실려 있던 것을 이어 싣는다.</b>
+     * 승계 첫 회차에 빈 값을 실으면 앞 리더가 걸어 둔 조치가 지워진다.
      */
     public Optional<Tunables> current() {
         return everRead.get() ? applied.get() : seed.get();
     }
 
     /**
-     * <b>지표가 이 값을 읽습니다.</b> 게이지가 마지막 값을 계속 내므로 못 읽고 있다는
-     * 사실은 이 값으로만 드러납니다 — 없으면 "5분째 못 받음" 을 못 겁니다.
+     * <b>지표가 이 값을 읽는다.</b> 게이지가 마지막 값을 계속 내므로 못 읽고 있다는
+     * 사실은 이 값으로만 드러난다 — 없으면 "5분째 못 받음" 을 걸 곳이 없다.
      */
     public double staleSeconds() {
         return NANOSECONDS.toSeconds(nanoTicker.getAsLong() - lastReadNanos.get());
     }
 
     /**
-     * <b>바뀔 때만 남깁니다.</b> 매 틱 찍으면 조사가 필요한 순간에 묻히고, 장애
-     * 뒤에 무엇을 건드렸는지는 이 줄로만 되짚습니다 (6.8.5).
+     * <b>바뀔 때만 남긴다.</b> 매 틱 찍으면 조사가 필요한 순간에 묻히고, 장애
+     * 뒤에 무엇을 건드렸는지는 이 줄로만 되짚는다.
      */
     private void adopt(Optional<Tunables> now) {
         Optional<Tunables> before = everRead.get() ? applied.getAndSet(now) : seed.get();

@@ -19,7 +19,7 @@ public record CouponState(
 
     /**
      * 재고를 <b>못 읽었다</b>는 뜻. 다 팔린 것(0)과 다른 값이라야 한다 — 같은 값이면
-     * 재고 키를 잃은 쿠폰이 종결되고 큐까지 지워진다 (3.1). 경계를 넘는 것은 이 값이
+     * 재고 키를 잃은 쿠폰이 종결되고 큐까지 지워진다. 경계를 넘는 것은 이 값이
      * 아니라 {@link #stockKnown()} 이라, 수요 쪽 값과 같은 수일 필요는 없다.
      */
     public static final long STOCK_UNKNOWN = -1;
@@ -107,7 +107,7 @@ public record CouponState(
 
     /**
      * 한산한 쿠폰의 노드 상한. <b>이 쿠폰의 credit 으로는 못 잰다</b> — IDLE 이면
-     * 0 이라(I1) 한산할수록 큐로 가는 역전이 생긴다. 노드 몫의 전역 크레딧으로 잰다.
+     * 0 이라 한산할수록 큐로 가는 역전이 생긴다. 노드 몫의 전역 크레딧으로 잰다.
      */
     public long idleCap(SnapshotMeta meta, double idleCreditRatio) {
         if (!Double.isFinite(idleCreditRatio) || idleCreditRatio < 0) {
@@ -117,14 +117,15 @@ public record CouponState(
         long perNode = meta.globalCredit() / meta.effectiveGatewayCount();
         long capped = (long) (perNode * idleCreditRatio);
         // 절삭으로 0 이 되면 아무도 안 몰리는 쿠폰이 전 노드에서 줄을 선다.
-        // perNode >= 1 일 때만 1 을 얹으므로 총합은 globalCredit 을 안 넘는다 (C-10).
+        // perNode >= 1 일 때만 1 을 얹으므로 총합은 globalCredit 을 안 넘는다.
         // 비율 0 은 예외다 — 절삭이 아니라 한산 통과를 끈다는 설정이다.
         return capped == 0 && perNode > 0 && idleCreditRatio > 0 ? 1 : capped;
     }
 
     /**
      * 지금 줄이 빠지는 데 걸리는 시간(초). {@code credit} 이 0 이면 예외가 아니라
-     * 무한이 맞다 — 한산한 쿠폰이 정확히 그 상태라(I1) 막으면 R1 경로가 터진다.
+     * 무한이 맞다 — 한산한 쿠폰이 정확히 그 상태라, 막으면 줄 없이 통과하는
+     * 경로가 통째로 터진다.
      */
     public double queueDepthSec() {
         if (waiting == 0) {
@@ -209,14 +210,14 @@ public record CouponState(
         }
         // 재고가 없는데 줄이 남았으면 매진이다. 여기서 만들면 아무것도 못 받을 줄에
         // 사람을 계속 세운다. **미상은 안 걸린다** — 못 읽은 것을 매진으로 접으면 그
-        // 줄이 종결되고 큐까지 지워진다. 진짜 상한은 뒷단이 지킨다 (불변식 2).
+        // 줄이 종결되고 큐까지 지워진다. 초과 발급을 막는 상한은 뒷단이 지킨다.
         if (remainingStock != STOCK_UNKNOWN && remainingStock <= 0) {
             throw new IllegalArgumentException(
                     "재고가 없으면 매진이다. closed 를 쓴다: remainingStock=%d"
                             .formatted(remainingStock));
         }
         // 이번 틱에 다 뺄 수 있으면 배수 중, 아니면 아직 줄 서는 중이다.
-        // **I3 의 경계와 같은 자리**를 쓴다 — 갈리면 이 팩토리가 생성자에
+        // **생성자의 DRAINING 경계와 같은 자리**를 쓴다 — 갈리면 이 팩토리가 생성자에
         // 막히는 조합을 만든다. 그래서 이 셈은 여기 한 곳에만 있다.
         RuntimeState runtime = credit >= waiting
                 ? RuntimeState.DRAINING
@@ -227,7 +228,7 @@ public record CouponState(
     /**
      * 재고를 못 읽은 쿠폰. 줄은 그대로 돌리고 <b>매진으로는 안 접는다</b> — 굶기지
      * 않으려면 몫을 안 깎아야 하고, 종결하지 않으려면 매진이 아니어야 한다. 줄이
-     * 비면 몫도 0 이라야 I1 이 잡으려던 갈라짐이 여기서도 드러난다.
+     * 비면 몫도 0 이라야 유휴와 배분이 갈라지지 않는다.
      */
     public static CouponState stockUnknown(QueueMode mode, long credit, long waiting) {
         return waiting > 0
@@ -235,7 +236,7 @@ public record CouponState(
                 : new CouponState(mode, RuntimeState.IDLE, credit, STOCK_UNKNOWN, 0);
     }
 
-    /** 줄이 빈 쿠폰. 배분을 못 받았으므로 credit 은 0 이다 (I1). */
+    /** 줄이 빈 쿠폰. 배분을 못 받았으므로 credit 은 0 이다. */
     public static CouponState noQueue(QueueMode mode, long remainingStock) {
         return new CouponState(mode, RuntimeState.IDLE, 0, remainingStock, 0);
     }
@@ -243,12 +244,12 @@ public record CouponState(
     /**
      * 운영자가 껐는데 <b>줄이 아직 남아 있다.</b> {@code mode} 와 {@code waiting} 은
      * 서로 독립이다. 런타임은 못 박지 않고 유도한다 — 못 박으면 다 뺄 수 있는 줄까지
-     * {@code QUEUEING} 이 되어 I3' 에 막힌다 (계획서 2절 3.7).
+     * {@code QUEUEING} 이 되어 생성자에 막힌다.
      */
     public static CouponState offWithQueue(long credit, long remainingStock, long waiting) {
         // **가드는 여기 남긴다.** 이름이 "줄이 있는 OFF" 이므로 비었을 때
         // 무엇을 쓰라고 그 자리에서 말해야 한다. 런타임 유도는 위임한다 —
-        // I3 의 경계를 두 곳에 적으면 갈린다.
+        // DRAINING 경계를 두 곳에 적으면 갈린다.
         if (waiting <= 0) {
             throw new IllegalArgumentException(
                     "offWithQueue 는 줄이 남아 있을 때만이다. 비었으면 off 를 쓴다: waiting=%d"

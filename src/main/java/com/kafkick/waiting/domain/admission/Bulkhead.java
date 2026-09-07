@@ -35,7 +35,7 @@ public class Bulkhead {
 
     /**
      * 자리를 하나 잡습니다. <b>쿠폰마다 따로 셉니다</b> — 하나로 세면 몰리는 쿠폰이
-     * 자리를 다 쓰고 한산한 쿠폰이 그 뒤에 밀려 R1 이 뒤집힙니다.
+     * 자리를 다 쓰고 한산한 쿠폰이 그 뒤에 밀려 줄 없이 통과하지 못합니다.
      *
      * @param cap      이 쿠폰이 동시에 걸어 둘 수 있는 상한. 배분된 크레딧에서 옵니다
      * @param totalCap 이 노드가 동시에 걸어 둘 수 있는 상한. 쿠폰별 상한만으로는
@@ -81,8 +81,8 @@ public class Bulkhead {
 
     /**
      * 천장에 닿았을 때 쿠폰 하나가 쥘 수 있는 몫. <b>하나는 보장합니다</b> — 0 으로
-     * 내려가면 한산한 쿠폰의 첫 자리까지 막혀 R1 이 뒤집힙니다. 그 대가로 동시
-     * 물림이 쿠폰 수만큼 천장을 넘고, 그 폭은 `maxKeys` 가 묶습니다.
+     * 내려가면 한산한 쿠폰이 첫 자리조차 못 잡습니다. 그 대가로 동시 물림이
+     * 쿠폰 수만큼 천장을 넘고, 그 폭은 {@code maxKeys} 가 묶습니다.
      */
     private long fairShare(long totalCap, int current) {
         // 지금 자리를 쥔 쿠폰 수로 나눕니다. 새로 오는 쿠폰이면 자기도 셉니다 —
@@ -111,7 +111,7 @@ public class Bulkhead {
         inFlight.put(couponId, current - 1);
     }
 
-    /** 지금 걸려 있는 전체 건수. 지표가 이 값을 읽습니다 (6.3.6). */
+    /** 지금 걸려 있는 전체 건수. 지표가 이 값을 읽습니다. */
     public synchronized int inFlight() {
         return total;
     }
@@ -121,7 +121,7 @@ public class Bulkhead {
         return inFlight.size();
     }
 
-    /** 담을 수 있는 쿠폰 수. <b>지표가 분모로 읽습니다</b> (6.3.6). */
+    /** 담을 수 있는 쿠폰 수. <b>지표가 분모로 읽습니다.</b> */
     public int maxKeys() {
         return maxKeys;
     }

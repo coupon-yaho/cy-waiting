@@ -44,7 +44,7 @@ public final class AllocationRound {
 
     private static final Logger log = LoggerFactory.getLogger(AllocationRound.class);
 
-    /** 이탈자 청소 (7.4). <b>멈추는 판단을 안에 들고 있다.</b> */
+    /** 이탈자 청소. <b>멈추는 판단을 안에 들고 있다.</b> */
     private final QueueSweeper sweeper;
 
     /** 이 노드가 든 재료가 낡았는가. <b>값으로 받는다</b> — 상수로 두면 가드가 안 걸린다. */
@@ -53,20 +53,20 @@ public final class AllocationRound {
     /** 뒷단 서킷. <b>회차마다 한 번 읽는다</b> — 두 번 읽으면 한 회차가 자기모순이 된다. */
     private final Supplier<CircuitState> circuit;
 
-    /** 매진 큐 정리 판단 (7.3). 지우는 것은 어댑터가 한다. */
+    /** 매진 큐 정리 판단. 지우는 것은 어댑터가 한다. */
     private final SoldOutCleanup cleanup;
 
     /** 지울 쿠폰들을 넘긴다. 지운 키 수를 돌려준다. */
     private final Function<List<String>, Mono<List<String>>> dropQueues;
 
-    /** 세기 시작한 줄에 울타리 표만 세운다. <b>선 것을 돌려준다</b> (CY-766). */
+    /** 세기 시작한 줄에 울타리 표만 세운다. <b>실제로 선 것만 돌려준다.</b> */
     private final Function<List<String>, Mono<List<String>>> claimQueues;
 
     private final BooleanSupplier stillLeader;
     private final Supplier<Mono<TimedDemands>> demands;
     /**
-     * 라우팅에 쓸 뒷단 목록. <b>발행에 실어 전 노드에 보낸다</b> — 요청 경로가
-     * 레디스를 안 치므로(불변식 1) 이 길 말고는 닿을 방법이 없다.
+     * 라우팅에 쓸 뒷단 목록. <b>발행에 실어 전 노드에 보낸다</b> — 요청 경로에서는
+     * 레디스를 치지 않으므로 이 길 말고는 닿을 방법이 없다.
      */
     private final Supplier<List<InstanceRouting>> routable;
 
@@ -108,13 +108,13 @@ public final class AllocationRound {
 
     private final FailureWindow failures;
 
-    /** 초과 구간. 틱마다 찍으면 정작 조사가 필요한 순간에 묻힌다 (LG-2). */
+    /** 초과 구간. 틱마다 찍으면 정작 조사가 필요한 순간에 묻힌다. */
     private final FailureWindow overshoot = FailureWindow.create();
 
     /**
-     * 폴링 예산을 넘긴 구간. 진입과 해제를 쌍으로 남긴다 (LG-2). 창이 리더 메모리라
+     * 폴링 예산을 넘긴 구간. 진입과 해제를 쌍으로 남긴다. 창이 리더 메모리라
      * <b>쌍이 끊길 수 있다</b> — 초과 중 리더십을 잃으면 새 리더의 창은 비어 있어 해제가
-     * 안 나온다 (CY-735).
+     * 안 나온다.
      */
     private final FailureWindow pollOvershoot = FailureWindow.create();
 
@@ -127,7 +127,7 @@ public final class AllocationRound {
     /** 뒷단이 받을 수 있다고 한 것보다 더 나눠 준 누적량. */
     private final AtomicLong budgetOvershoot = new AtomicLong();
 
-    /** 서킷 때문에 배분을 조인 구간. <b>진입과 해제를 쌍으로 남긴다</b> (LG-2). */
+    /** 서킷 때문에 배분을 조인 구간. <b>진입과 해제를 쌍으로 남긴다.</b> */
     private final FailureWindow paused = FailureWindow.create();
 
     /**
@@ -136,14 +136,14 @@ public final class AllocationRound {
      */
     private final ReleaseRamp releaseRamp = ReleaseRamp.of(ReleaseRamp.DEFAULT_STEP);
 
-    /** 램프가 걸린 구간. <b>진입과 해제를 쌍으로 남긴다</b> (LG-2). */
+    /** 램프가 걸린 구간. <b>진입과 해제를 쌍으로 남긴다.</b> */
     private final FailureWindow ramping = FailureWindow.create();
 
     /** 예산보다 더 들여보낸 누적 인원. */
     private final AtomicLong enteredOvershoot = new AtomicLong();
 
     /**
-     * 차례를 준 누적 인원. <b>크레딧 낭비의 분모다</b> (G7.5). 응답이 유실되면 적용이 0 을
+     * 차례를 준 누적 인원. <b>크레딧 낭비의 분모다.</b> 응답이 유실되면 적용이 0 을
      * 돌려줘 적게 세지만 <b>틀리는 방향이 안전하다</b> — 분모가 작으면 게이트가 미달로
      * 기운다.
      */
@@ -207,7 +207,7 @@ public final class AllocationRound {
                 sweeper, dataStale, circuit, List::of);
     }
 
-    /** 라우팅 목록을 함께 싣는 자리 (Phase 9). */
+    /** 라우팅 목록을 함께 싣는 자리. */
     public static AllocationRound of(BooleanSupplier stillLeader,
             Supplier<Mono<TimedDemands>> demands,
             LongSupplier globalCredit, IntSupplier gatewayCount, Function<Grant, Mono<Long>> apply,
@@ -263,7 +263,8 @@ public final class AllocationRound {
     /**
      * 이월은 <b>임기마다 한 번</b> 받는다. 매 회차 받으면 방금 쓴 값을 되읽어
      * 평활화가 아무 일도 안 하게 되고, 프로세스당 한 번만 받으면 남이 리더였던
-     * 동안 움직인 값을 못 보고 제 옛 값을 이어 쓴다 (F9 · CY-859).
+     * 동안 움직인 값을 못 보고 제 옛 값을 이어 쓴다 — 리더가 바뀐 직후가 진동하기
+     * 가장 쉬운 구간이다.
      */
     private Mono<Void> seeded() {
         if (smoother.get() != null) {
@@ -299,7 +300,7 @@ public final class AllocationRound {
 
     /**
      * 리더가 됐다. <b>평활화 이월을 버린다</b> — 안 버리면 남이 리더였던 동안 움직인
-     * 값을 못 보고 제 옛 값을 이어 쓴다 (F9 · CY-859). 회차 도중에 잃어 발행 안 된 채
+     * 값을 못 보고 제 옛 값을 이어 쓴다. 회차 도중에 잃어 발행 안 된 채
      * 전진한 값도 여기서 정리된다.
      */
     public void leadershipAcquired() {
@@ -307,7 +308,7 @@ public final class AllocationRound {
     }
 
     /**
-     * 리더가 됐다. 조인 적 없는 노드는 램프가 안 걸려 첫 회차가 목표까지 뛴다 (F9).
+     * 리더가 됐다. 조인 적 없는 노드는 램프가 안 걸려 첫 회차가 목표까지 뛴다.
      *
      * @param publishedCredit 마지막으로 본 발행 몫. 모르면 음수 — 앞 임기 기준을 잇는다
      */
@@ -318,7 +319,7 @@ public final class AllocationRound {
             // "몫 올림" 으로만 나가, 승계를 원인에서 못 읽는다.
             log.info("승계 — 램프를 발행 몫 {} 에서 다시 세운다", publishedCredit);
         } else {
-            // **위험한 쪽이 무음이면 안 된다** (LG-2). 앞 임기의 기준이 남아
+            // **위험한 쪽이 무음이면 안 된다.** 앞 임기의 기준이 남아
             // 있으면 램프는 걸린 채다 — 그 구분까지 실어야 없는 계단을 안 찾는다.
             log.warn("승계 — 발행 몫을 모른다. 앞 임기 기준이 있으면 그것을 이어 쓴다");
         }
@@ -359,7 +360,7 @@ public final class AllocationRound {
     }
 
     /**
-     * 램프의 진입과 해제를 쌍으로 남긴다 (LG-2). <b>발행하는 회차에서만 부른다</b> —
+     * 램프의 진입과 해제를 쌍으로 남긴다. <b>발행하는 회차에서만 부른다</b> —
      * 접힌 회차가 진입 자리를 먹으면 다음 회복에 진입 로그가 아예 안 나온다.
      */
     private void watchRamp(boolean gatedNow, long credit, long target) {
@@ -381,9 +382,9 @@ public final class AllocationRound {
     }
 
     /**
-     * 서킷이 열린 동안 배분을 조인다 (F3 · CY-787). 임계를 올리면 큐에서 나온 사람이
-     * 토큰을 쥐고 503 을 받아 자리를 잃는다. 반쯤 열렸을 때 <b>0 으로 막지는 않는다</b>
-     * — 뒷단에 닿는 호출이 없으면 서킷이 표본을 못 채워 영영 안 닫힌다.
+     * 서킷이 열린 동안 배분을 조인다. 임계를 올리면 큐에서 나온 사람이 토큰을 쥐고
+     * 503 을 받아 자리를 잃는다. half-open 에서 <b>0 으로 막지는 않는다</b> — 뒷단에
+     * 닿는 호출이 없으면 서킷이 표본을 못 채워 영영 안 닫힌다.
      */
     private long gated(long credit, CircuitState now) {
         if (now == CircuitState.CLOSED) {
@@ -393,7 +394,7 @@ public final class AllocationRound {
             return credit;
         }
         if (paused.entered()) {
-            // **진입을 남긴다** (LG-2). 안 남기면 배분이 왜 멎었는지 알 방법이
+            // **진입을 남긴다.** 안 남기면 배분이 왜 멎었는지 알 방법이
             // 서킷 로그뿐인데, 그건 리더가 아닌 노드에서 날 수도 있다.
             log.warn("서킷 때문에 배분을 조인다 — 상태 {}, 원래 몫 {}. "
                     + "임계를 올리면 큐에서 나온 사람이 503 을 받고 자리를 잃는다", now, credit);
@@ -413,7 +414,7 @@ public final class AllocationRound {
         CreditSmoother current = carried == null ? CreditSmoother.of(CreditSmoother.DEFAULT_ALPHA) : carried;
         // **하한은 평활 뒤에 건다.** 하한은 관측이 아니라 정책이다. 평활을 거치면
         // 앞선 낮은 값에서 올라오는 데 열 틱이 넘고, 그동안 노드당 몫이 유휴 비율
-        // 아래에 머물러 한산 통과 상한이 0 이다 — 하한을 둔 이유가 사라진다 (R1).
+        // 아래에 머물러 한산 통과 상한이 0 이다 — 한산한 쿠폰은 줄 없이 통과해야 한다.
         long observed = Math.max(0, globalCredit.getAsLong());
         long smoothed = Math.round(current.observe(observed));
         // **서킷은 평활과 하한 뒤에 건다.** 앞에 걸면 평활이 0 을 천천히 내리는 사이
@@ -424,7 +425,7 @@ public final class AllocationRound {
         long target = Math.max(smoothed, floorNow);
         long allowed = gated(target, circuitNow);
         // **램프에 정책 하한을 같이 넘긴다.** 하한 아래로 눌린 회차는 노드당 몫이 유휴
-        // 비율 아래라, 줄 설 이유가 없는 쿠폰이 전 노드에서 줄을 선다 (R1). `creditFloor`
+        // 비율 아래라, 줄 설 이유가 없는 쿠폰이 전 노드에서 줄을 선다. `creditFloor`
         // 는 회복 구간에 0 이라, 이 최소가 유효 하한 이하인 안전한 어림이다.
         long r1Minimum = CapacityCollector.idleMinimum(gatewayCount.getAsInt());
         // **푸는 쪽에도 제약이 있어야 한다.** 조이는 동안 평활은 조여진 값을 한 번도 안
@@ -481,7 +482,7 @@ public final class AllocationRound {
                             published.set(true);
                             watchRamp(gatedNow, credit, target);
                         })
-                        // **발행 뒤에 지운다** (7.3). 앞에 두면 방금 지운 큐가 이번
+                        // **발행 뒤에 지운다.** 앞에 두면 방금 지운 큐가 이번
                         // 재료에 아직 대기자로 실려 없는 줄에 크레딧이 나간다. 미루지
                         // 않으면 발행이 구독되기 전에 셈과 로그가 먼저 일어난다.
                         .then(Mono.defer(() -> cleanUp(collected, granted)))
@@ -506,9 +507,9 @@ public final class AllocationRound {
     }
 
     /**
-     * 매진된 지 오래된 쿠폰의 줄을 지운다 (7.3).
+     * 매진된 지 오래된 쿠폰의 줄을 지운다.
      *
-     * <p><b>정리 실패가 배분을 막지 않는다</b> (7.3.4). 다음 틱에 다시 온다.
+     * <p><b>정리 실패가 배분을 막지 않는다.</b> 다음 틱에 다시 온다.
      */
     private Mono<Void> cleanUp(List<CouponDemand> collected, Map<String, Long> granted) {
         List<String> due = cleanup.due(couponsOf(collected, granted));
@@ -522,7 +523,7 @@ public final class AllocationRound {
         if (lostLeadership()) {
             return Mono.empty();
         }
-        // **세기 시작한 줄에 먼저 표를 세운다** (CY-766). 표는 지웠을 때만 생겨 한 번도
+        // **세기 시작한 줄에 먼저 표를 세운다.** 표는 지웠을 때만 생겨 한 번도
         // 안 지운 줄에는 없는데, 그게 울타리가 지키려던 경우다 — 얼었다 깨어난 옛 리더가
         // 새 리더는 아직 지울 생각도 없는 줄을 지운다.
         Mono<Void> claim = claimQueues.apply(claimed)
@@ -534,7 +535,7 @@ public final class AllocationRound {
             return claim;
         }
         // **몇 개인지만 남긴다.** 목록을 통째로 찍으면 대량 매진에서 한 줄에
-        // 쿠폰 ID 가 수백 개 들어간다 (LG-3). 어느 쿠폰인지는 지운 뒤에 남긴다.
+        // 쿠폰 ID 가 수백 개 들어간다. 어느 쿠폰인지는 지운 뒤에 남긴다.
         log.info("매진 큐 정리 — 쿠폰 {}개를 지운다", due.size());
         return claim.then(dropQueues.apply(due)
                 .doOnNext(dropped -> {
@@ -554,7 +555,7 @@ public final class AllocationRound {
                 .then());
     }
 
-    /** 이탈자를 걷어 낸다 (7.4). 멈춰야 할 구간은 스위퍼가 안다. */
+    /** 이탈자를 걷어 낸다. 멈춰야 할 구간은 스위퍼가 안다. */
     private Mono<Void> sweepUp(List<CouponDemand> collected, Map<String, Long> granted) {
         if (lostLeadership()) {
             return Mono.empty();
@@ -567,7 +568,7 @@ public final class AllocationRound {
     }
 
     /**
-     * 나눠 준 예산이 <b>뒷단이 받는다고 한 것</b>을 넘었는가 (6.9.1). 넘는 자리는 배분기가
+     * 나눠 준 예산이 <b>뒷단이 받는다고 한 것</b>을 넘었는가. 넘는 자리는 배분기가
      * 아니라 평활 지연과 하한이다 — 뒷단이 1,000 으로 떨어져도 평활은 열 틱 넘게 7,300 을
      * 나눠 준다. 관측치를 인자로 받아야 한 회차가 서로 다른 두 값을 견주지 않는다.
      */
@@ -586,7 +587,7 @@ public final class AllocationRound {
     }
 
     /**
-     * 실제로 들여보낸 수가 예산을 넘었는가 (6.9.1). <b>나눠 준 수와 다르다</b> — 동점
+     * 실제로 들여보낸 수가 예산을 넘었는가. <b>나눠 준 수와 다르다</b> — 동점
      * score 가 있으면 임계 하나에 여럿이 걸려 준 몫보다 많이 들어간다.
      */
     private void watchEntered(long admitted, long credit) {
@@ -608,7 +609,7 @@ public final class AllocationRound {
         return enteredOvershoot.get();
     }
 
-    /** 차례를 준 누적 인원. 크레딧 낭비의 분모다 (G7.5). */
+    /** 차례를 준 누적 인원. 크레딧 낭비의 분모다. */
     public double admitted() {
         return admitted.get();
     }
@@ -660,7 +661,7 @@ public final class AllocationRound {
      * 넘긴다 — 이 전이가 없으면 줄이 영영 안 빠진다.
      */
     private CouponState stateOf(CouponDemand demand, Map<String, Long> granted) {
-        // **못 읽은 재고를 매진으로 안 접는다** (3.1). 접으면 그 쿠폰이 종결되고
+        // **못 읽은 재고를 매진으로 안 접는다.** 접으면 그 쿠폰이 종결되고
         // 정리가 유예 틱을 채운 뒤 큐를 지운다 — 자동으로 안 낫는 오판이
         // 되돌릴 수 없는 삭제가 된다. 진짜 상한은 뒷단이 원자적으로 지킨다.
         if (!demand.stockKnown()) {
@@ -721,9 +722,9 @@ public final class AllocationRound {
         // **회차마다 한 번 센다.** 상태를 만드는 자리에서 세면 정리·청소·발행이
         // 같은 회차를 세 번 훑어 셋으로 부푼다.
         long unknown = collected.stream().filter(d -> !d.stockKnown()).count();
-        // **히스테리시스는 아직 빈 값을 싣는다.** 제품이 아직 히스테리시스를
-        // 안 돌려서 실을 상태가 없다 (CY-324). 돌리기 시작하면 여기가 매 틱
-        // 이월을 지우는 자리가 되므로, 기본값에 숨기지 않고 눈에 보이게 둔다.
+        // **히스테리시스는 아직 빈 값을 싣는다.** 제품이 아직 히스테리시스를 안 돌려
+        // 실을 상태가 없다. 돌리기 시작하면 여기가 매 틱 이월을 지우는 자리가 되므로,
+        // 기본값에 숨기지 않고 눈에 보이게 둔다.
         return publish.apply(codec.encode(
                         snapshot(collected, granted, credit, readAt,
                                 tunables.get().orElse(null), budget.scale()),

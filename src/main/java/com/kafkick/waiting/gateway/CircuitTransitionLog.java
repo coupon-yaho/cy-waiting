@@ -14,7 +14,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * 서킷의 상태 전이를 <b>진입·해제 쌍으로</b> 남긴다 (LG-2). 지표는 초 단위로 뭉개지고
+ * 서킷의 상태 전이를 <b>진입·해제 쌍으로</b> 남긴다. 지표는 초 단위로 뭉개지고
  * 보존도 짧아, "언제 열려 얼마나 오래, 몇 건을 막았는가" 는 전이 로그만 답한다 —
  * 회복 판정이 그 위에 선다.
  */
@@ -29,7 +29,7 @@ final class CircuitTransitionLog {
     private record Opened(long since, LongAdder blocked) {
     }
 
-    /** 이름별로 따로 센다 — 서킷은 인스턴스별이다 (R-10). 크기는 뒷단 수로 묶인다. */
+    /** 이름별로 따로 센다 — 서킷은 인스턴스별이다. 크기는 뒷단 수로 묶인다. */
     private final ConcurrentMap<String, Opened> opened = new ConcurrentHashMap<>();
 
     /** half-open 구간마다의 프로브 수. 그 구간이 끝나면 걷는다. */
@@ -45,7 +45,7 @@ final class CircuitTransitionLog {
         return new CircuitTransitionLog(System::nanoTime);
     }
 
-    /** 구간 시계를 받는다. 고정하지 못하면 지속 시간이 시험에서 늘 0 이다 (TS-4). */
+    /** 구간 시계를 받는다. 고정하지 못하면 지속 시간이 시험에서 늘 0 이다. */
     static CircuitTransitionLog of(LongSupplier nanoTicker) {
         return new CircuitTransitionLog(nanoTicker);
     }
@@ -154,7 +154,7 @@ final class CircuitTransitionLog {
     }
 
     /**
-     * <b>자동으로 걷히는 전이라 WARN 이다</b> (LG-7). ERROR 로 올리면 사람을 부르는
+     * <b>자동으로 걷히는 전이라 WARN 이다.</b> ERROR 로 올리면 사람을 부르는
      * 알람이 매 진동마다 운다.
      */
     private void entered(CircuitBreaker breaker, CircuitBreaker.State to) {

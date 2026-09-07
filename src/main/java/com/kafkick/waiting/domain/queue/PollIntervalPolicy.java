@@ -5,7 +5,7 @@ import java.time.Duration;
 import java.util.function.DoubleSupplier;
 
 /**
- * 폴링 간격을 서버가 정한다 (D-2). 부하를 정하는 것은 대기 인원이 아니라 <b>큐의
+ * 폴링 간격을 서버가 정한다. 부하를 정하는 것은 대기 인원이 아니라 <b>큐의
  * 시간 깊이</b>이고, 개인은 자기가 얼마나 기다릴지 몰라 클라이언트에 맡길 수 없다.
  */
 public class PollIntervalPolicy {
@@ -77,7 +77,7 @@ public class PollIntervalPolicy {
 
     /**
      * 이 사람의 폴링 간격. {@code random} 은 {@code [0,1]} 을 낸다. <b>주입받는다</b>
-     * — 도메인이 난수원을 직접 부르면 실패를 재현할 수 없다 (DS-1).
+     * — 도메인이 난수원을 직접 부르면 실패를 재현할 수 없다.
      *
      * @param pollScale 전역 예산이 모자랄 때 모두의 간격을 함께 늘리는 배수
      */
@@ -87,7 +87,7 @@ public class PollIntervalPolicy {
         // 배수가 걸린 밴드에서 지터가 0 이 되고, 그 밴드 전원이 같은 초에 돌아온다.
         // 천장을 흔들림의 위쪽 끝에 걸어, 평균은 상한이 아니라 상한/(1+지터) 다.
         double ceiling = MAX_INTERVAL_SEC / (1 + jitterRatio);
-        // **하한을 여기서도 건다.** SnapshotMeta 가 이미 정규화했지만(I6) 이 인자는
+        // **하한을 여기서도 건다.** SnapshotMeta 가 이미 정규화했지만 이 인자는
         // 그냥 double 이라, 1 미만이 들어오면 한산할 때 오히려 부하를 만든다.
         double scaled = Math.min(base * Math.max(1.0, pollScale), ceiling);
         // [-jitter, +jitter] 로 흔들어 같은 밴드가 동시에 두드리지 않게 한다

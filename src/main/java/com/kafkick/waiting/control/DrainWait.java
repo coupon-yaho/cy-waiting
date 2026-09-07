@@ -8,9 +8,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * 종료 신호를 받은 뒤 부하 분산기가 우리를 뺄 때까지 기다립니다. readiness 를 내려도
+ * 종료 신호를 받은 뒤 부하 분산기가 우리를 뺄 때까지 기다린다. readiness 를 내려도
  * 앞단이 알아채기 전까지는 계속 보내므로, 곧바로 드레인하면 그 사이 도착한 요청이
- * 커넥션째 끊겨 롤링 배포마다 사용자가 오류를 봅니다.
+ * 커넥션째 끊겨 롤링 배포마다 사용자가 오류를 본다.
  */
 public final class DrainWait {
 
@@ -27,47 +27,47 @@ public final class DrainWait {
     private final Duration wait;
     private final LongConsumer sleeper;
 
-    /** 두 번 불려도 한 번만 기다립니다. 곱해지면 배포가 그만큼 느려집니다. */
+    /** 두 번 불려도 한 번만 기다린다. 곱해지면 배포가 그만큼 느려진다. */
     private final AtomicBoolean waited = new AtomicBoolean();
 
     private DrainWait(ShutdownState shutdown, Duration wait, LongConsumer sleeper) {
         this.shutdown = Objects.requireNonNull(shutdown, "shutdown 은 필수다");
-        // 안 주면 실제로 잠듭니다. 생성자에서 정하므로 필드는 늘 채워집니다.
+        // 안 주면 실제로 잠든다. 생성자에서 정하므로 필드는 늘 채워진다.
         this.sleeper = sleeper == null ? this::sleep : sleeper;
         Objects.requireNonNull(wait, "wait 는 필수다");
-        // **0 이면 이 장치가 없는 것과 같습니다.** 값으로 끄면 기다림이 사라졌다는
-        // 사실이 설정 어디에도 안 드러납니다.
+        // **0 이면 이 장치가 없는 것과 같다.** 값으로 끄면 기다림이 사라졌다는
+        // 사실이 설정 어디에도 안 드러난다.
         if (wait.isNegative() || wait.isZero()) {
             throw new IllegalArgumentException("LB 제외 대기는 양수여야 한다: " + wait);
         }
-        // **상한을 먼저 봅니다.** `toMillis()` 는 넘치면 `ArithmeticException` 을
-        // 던지므로, 뒤에 두면 아주 큰 값이 검증을 통째로 우회합니다.
+        // **상한을 먼저 본다.** `toMillis()` 는 넘치면 `ArithmeticException` 을
+        // 던지므로, 뒤에 두면 아주 큰 값이 검증을 통째로 우회한다.
         if (wait.compareTo(MAX_WAIT) > 0) {
             throw new IllegalArgumentException(
                     "LB 제외 대기는 " + MAX_WAIT + " 이하여야 한다: " + wait);
         }
-        // **밀리초 미만은 0 으로 잘립니다.** `PT0.0005S` 는 양수 검사를 통과하지만
-        // 실제로는 안 기다리고, 기다림이 사라진 사실이 어디에도 안 드러납니다.
+        // **밀리초 미만은 0 으로 잘린다.** `PT0.0005S` 는 양수 검사를 통과하지만
+        // 실제로는 안 기다리고, 기다림이 사라진 사실이 어디에도 안 드러난다.
         if (wait.toMillis() < 1) {
             throw new IllegalArgumentException("LB 제외 대기는 1ms 이상이어야 한다: " + wait);
         }
         this.wait = wait;
     }
 
-    /** 실제로 잠듭니다. 운영 배선이 쓰는 길입니다. */
+    /** 실제로 잠든다. 운영 배선이 쓰는 길이다. */
     public static DrainWait of(ShutdownState shutdown, Duration wait) {
         return new DrainWait(shutdown, wait, null);
     }
 
-    /** 잠드는 방식을 받습니다. 실제로 자면 이 시험만 장비 속도에 걸립니다 (TS-4). */
+    /** 잠드는 방식을 받는다. 실제로 자면 이 시험만 장비 속도에 걸린다. */
     public static DrainWait of(ShutdownState shutdown, Duration wait, LongConsumer sleeper) {
         return new DrainWait(shutdown, wait, sleeper);
     }
 
     /**
-     * readiness 를 내리고, 부하 분산기가 뺄 시간을 준 뒤 돌아옵니다. <b>순서가 뒤집히면
-     * 안 됩니다</b> — 기다린 뒤에 내리면 그 대기 시간 동안 앞단은 우리가 멀쩡하다고
-     * 보고 계속 보냅니다. 드레인 자체는 부르는 쪽이 돌아가야 컨테이너가 시작합니다.
+     * readiness 를 내리고, 부하 분산기가 뺄 시간을 준 뒤 돌아온다. <b>순서가 뒤집히면
+     * 안 된다</b> — 기다린 뒤에 내리면 그 대기 시간 동안 앞단은 우리가 멀쩡하다고 보고
+     * 계속 보낸다. 드레인 자체는 부르는 쪽이 돌아가야 컨테이너가 시작한다.
      */
     public void beforeDrain() {
         shutdown.draining();
@@ -80,10 +80,10 @@ public final class DrainWait {
         try {
             sleeper.accept(wait.toMillis());
         } catch (RuntimeException e) {
-            // 끊겼다고 안 죽으면 안 됩니다. 그 사실만 남기고 계속합니다.
+            // 끊겼다고 죽으면 안 된다. 그 사실만 남기고 계속한다.
             log.warn("부하 분산기 대기가 끊겼다 — 덜 기다린 채로 드레인한다", e);
         }
-        // 진입만 남기면 얼마나 버텼는지를 사후에 못 답한다 (LG-2).
+        // 진입만 남기면 얼마나 버텼는지를 사후에 못 답한다.
         log.info("부하 분산기 대기 끝 — {}ms 기다렸다. 드레인을 시작한다",
                 (System.nanoTime() - startedAt) / 1_000_000L);
     }

@@ -9,15 +9,15 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * 드레인이 <b>상한 안에 끝났는지</b>를 남깁니다 (6.4.2). 안 남기면 오케스트레이터가
- * 진행 중인 요청째 죽인 것과 곱게 빠진 것이 로그에서 같습니다. 롤링 배포마다 사용자가
- * 오류를 보는데 그 사실이 어디에도 안 드러납니다.
+ * 드레인이 <b>상한 안에 끝났는지</b>를 남긴다. 안 남기면 오케스트레이터가 진행 중인
+ * 요청째 죽인 것과 곱게 빠진 것이 로그에서 같다. 롤링 배포마다 사용자가 오류를 보는데
+ * 그 사실이 어디에도 안 드러난다.
  */
 public final class DrainOutcome {
 
     private static final Logger log = LoggerFactory.getLogger(DrainOutcome.class);
 
-    /** 얼마나 자주 볼 것인가. 촘촘하면 다 빠진 뒤 붙들고 있는 시간이 짧아집니다. */
+    /** 얼마나 자주 볼 것인가. 촘촘하면 다 빠진 뒤 붙들고 있는 시간이 짧아진다. */
     private static final long TICK_MILLIS = 50;
 
     private final IntSupplier inFlight;
@@ -32,8 +32,8 @@ public final class DrainOutcome {
             Consumer<String> recorder) {
         this.inFlight = Objects.requireNonNull(inFlight, "inFlight 는 필수다");
         Objects.requireNonNull(limit, "limit 는 필수다");
-        // **0 이면 지켜보는 것이 아닙니다.** 값으로 끄면 그 사실이 설정 어디에도
-        // 안 드러나고, 로그가 조용한 것이 곧 정상으로 읽힙니다.
+        // **0 이면 지켜보는 것이 아니다.** 값으로 끄면 그 사실이 설정 어디에도
+        // 안 드러나고, 로그가 조용한 것이 곧 정상으로 읽힌다.
         if (limit.isNegative() || limit.isZero()) {
             throw new IllegalArgumentException("드레인 상한은 양수여야 한다: " + limit);
         }
@@ -46,14 +46,14 @@ public final class DrainOutcome {
         return new DrainOutcome(inFlight, limit, null, null);
     }
 
-    /** 잠드는 방식과 남기는 곳을 받습니다. 실제로 자면 시험이 장비 속도에 걸립니다 (TS-4). */
+    /** 잠드는 방식과 남기는 곳을 받는다. 실제로 자면 시험이 장비 속도에 걸린다. */
     public static DrainOutcome of(IntSupplier inFlight, Duration limit, LongConsumer sleeper,
             Consumer<String> recorder) {
         return new DrainOutcome(inFlight, limit, sleeper, recorder);
     }
 
     /**
-     * 다 빠질 때까지, 또는 상한까지 기다립니다.
+     * 다 빠질 때까지, 또는 상한까지 기다린다.
      *
      * @return 상한 안에 다 빠졌으면 참
      */
@@ -65,8 +65,8 @@ public final class DrainOutcome {
             left = inFlight.getAsInt();
         }
         if (left > 0) {
-            // **건수를 같이 남깁니다.** 그 숫자가 곧 강제 종료로 끊길 요청 수이고,
-            // 없으면 롤링 배포의 오류가 이것 때문인지 못 가립니다.
+            // **건수를 같이 남긴다.** 그 숫자가 곧 강제 종료로 끊길 요청 수이고,
+            // 없으면 롤링 배포의 오류가 이것 때문인지 못 가린다.
             recorder.accept((interrupted
                     ? "드레인 대기가 끊겼다 — %d건이 남았다. ".formatted(left)
                     : "드레인 상한 초과 — %d초를 기다렸는데 %d건이 남았다. "

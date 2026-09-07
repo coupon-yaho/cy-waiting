@@ -91,7 +91,7 @@ public final class AllocationRedisPort implements SnapshotSource {
     /** 표가 견뎌야 하는 리스의 배수. 지연된 명령이 도착할 여유까지 본다. */
     private static final int FENCE_TTL_LEASES = 4;
 
-    /** 값이 JSON 인 것은 계약이다 — 위치 기반 문자열은 필드가 늘면 깨진다 (D-C3). */
+    /** 값이 JSON 인 것은 계약이다 — 위치 기반 문자열은 필드가 늘면 깨진다. */
     private static final ObjectMapper JSON = new ObjectMapper();
 
     private static final Logger log = LoggerFactory.getLogger(AllocationRedisPort.class);
@@ -130,7 +130,7 @@ public final class AllocationRedisPort implements SnapshotSource {
      * 쪽만 세는 셈이다.
      */
     private final AtomicLong markersDropped = new AtomicLong();
-    /** 신선도의 기준 시각. 뒤로 가는 것을 여기서 막는다 (A-9). */
+    /** 신선도의 기준 시각. 뒤로 가는 것을 여기서 막는다. */
     private final ServerClock serverClock = ServerClock.create();
 
     /** 마지막으로 성공한 정책 회차. 읽기가 실패하면 여기로 되돌아간다. */
@@ -182,7 +182,7 @@ public final class AllocationRedisPort implements SnapshotSource {
      * 뒷단이 스스로 적어 둔 여유를 읽는다.
      *
      * <p><b>밖에서 쓰는 키라 아무 값이나 들어온다.</b> 깨진 값 하나가 회차를 죽이면
-     * 멀쩡한 인스턴스 몫까지 사라져 전역 크레딧이 하한으로 떨어진다 (4.4.6).
+     * 멀쩡한 인스턴스 몫까지 사라져 전역 크레딧이 하한으로 떨어진다.
      */
     public Mono<CapacitySample> capacitySample() {
         AtomicBoolean dropped = new AtomicBoolean();
@@ -234,7 +234,7 @@ public final class AllocationRedisPort implements SnapshotSource {
                     || ts == null || !ts.canConvertToLong()) {
                 return drop(instanceId, "필드가 없거나 수가 아니다", dropped);
             }
-            // **주소가 없거나 모양이 어긋나도 보고는 산다** (E-12). 크레딧에는
+            // **주소가 없거나 모양이 어긋나도 보고는 산다.** 크레딧에는
             // 들고 라우팅 후보에서만 빠진다 — 버리면 그 몫만큼 전역 크레딧이
             // 조용히 줄어, 계약을 아직 안 따르는 배포 구간에 전체가 조여진다.
             JsonNode addr = node.get("addr");
@@ -461,7 +461,7 @@ public final class AllocationRedisPort implements SnapshotSource {
     }
 
     /**
-     * 세기 시작한 쿠폰의 줄 옆에 <b>울타리 표만</b> 세운다 (CY-766).
+     * 세기 시작한 쿠폰의 줄 옆에 <b>울타리 표만</b> 세운다.
      *
      * <p>표는 지웠을 때만 생기므로 한 번도 안 지운 줄에는 표가 없다. 후보로
      * 올리는 순간 세워야 그 뒤에 오는 옛 회차가 걸린다.
@@ -481,10 +481,10 @@ public final class AllocationRedisPort implements SnapshotSource {
     }
 
     /**
-     * 매진된 쿠폰의 줄과 딸린 키를 지운다 (7.3.1·7.3.3).
+     * 매진된 쿠폰의 줄과 딸린 키를 지운다.
      *
      * <p><b>한 쿠폰이 실패해도 나머지는 지운다.</b> 정리가 배분을 막으면
-     * 안 지워진 것 하나가 그 틱 전체를 세운다 (7.3.4).
+     * 안 지워진 것 하나가 그 틱 전체를 세운다.
      */
     public Mono<List<String>> dropSoldOutQueues(List<String> couponIds, long fence) {
         if (couponIds.isEmpty()) {
@@ -501,7 +501,7 @@ public final class AllocationRedisPort implements SnapshotSource {
         return Flux.fromIterable(couponIds)
                 // **지운 것만 쿠폰별로 돌려준다.** 합으로 접거나 안 지운 쿠폰까지
                 // 실으면 부르는 쪽이 그것을 "지웠다" 로 읽어, 실패한 쿠폰과 살아난
-                // 쿠폰이 다음 틱에 다시 안 온다 (7.3.4).
+                // 쿠폰이 다음 틱에 다시 안 온다.
                 .flatMap(id -> dropOne(id, fence)
                         .filter(Boolean::booleanValue)
                         .map(dropped -> id)
@@ -511,10 +511,10 @@ public final class AllocationRedisPort implements SnapshotSource {
 
     /**
      * 줄과 생존 신호만 지운다. 나머지 셋은 지우면 <b>되돌릴 수 없는 손해</b>가 난다.
-     * `admitted:` 는 A-7 이 세운 단조성이 깨져 입장한 사람이 토큰을 두 번 받고,
+     * `admitted:` 는 입장 임계의 단조성이 깨져 입장한 사람이 토큰을 두 번 받고,
      * `grace:` 는 차례가 왔던 사람이 종료를 안 받게 막는 유일한 장치이며,
-     * `coupons:active` 는 `cy-be` 소유라 (O-3) 빼는 순간 매진 종결이 꺼져 미지 쿠폰이
-     * fail-open 으로 흐른다. 재고는 쓰기 직전 스크립트 안에서 다시 본다 (5.3.1·CY-765).
+     * `coupons:active` 는 발급 계층 소유라 빼는 순간 매진 종결이 꺼져 미지 쿠폰이
+     * fail-open 으로 흐른다. 재고는 쓰기 직전 스크립트 안에서 다시 본다.
      */
     private Mono<Long> runDrop(String couponId, long fence, boolean delete) {
         return redis.execute(DROP_QUEUE,
@@ -534,7 +534,7 @@ public final class AllocationRedisPort implements SnapshotSource {
                 .onErrorResume(e -> {
                     // **매 건 남긴다.** 이 저장소의 유일한 비가역 쓰기인데 실패는
                     // 부르는 쪽에서 삼켜진다. 창을 걸면 프로세스 수명에 한 줄만
-                    // 남아 정리가 멎어도 조용하다 (7.3.4).
+                    // 남아 정리가 멎어도 조용하다.
                     log.warn("매진 큐 정리 실패 — 다음 틱에 다시 한다: 쿠폰={} {}",
                             couponId, e.toString());
                     return Mono.error(e);
@@ -542,7 +542,7 @@ public final class AllocationRedisPort implements SnapshotSource {
     }
 
     /**
-     * 이탈자를 걷어 낸다 (7.4).
+     * 이탈자를 걷어 낸다.
      *
      * <p><b>커서를 쿠폰별로 이어 간다.</b> 매번 0 에서 시작하면 해시 앞쪽만
      * 계속 훑고 뒤쪽 기록은 영영 안 지워진다.
@@ -609,7 +609,7 @@ public final class AllocationRedisPort implements SnapshotSource {
      * 쿠폰별 재고. <b>못 읽으면 담지 않는다</b> — 키가 없거나 수가 아닐 때다.
      *
      * <p>빠진 자리를 0 으로 접으면 재고 키를 잃은 쿠폰이 매진이 된다. 부르는
-     * 쪽이 그 빈자리를 미상으로 싣는다 (3.1).
+     * 쪽이 그 빈자리를 미상으로 싣는다.
      */
     public Mono<Map<String, Long>> stocks(List<String> couponIds) {
         List<String> keys = couponIds.stream().map(RedisKeys::stock).toList();
@@ -641,10 +641,10 @@ public final class AllocationRedisPort implements SnapshotSource {
     }
 
     /**
-     * 운영자가 적은 값을 읽습니다 (P-1).
+     * 운영자가 배포 없이 고친 값을 읽는다.
      *
-     * <p><b>리더만 읽습니다.</b> 전 노드가 매 틱 읽으면 그 자체가 요청 경로 밖의
-     * 부하이고, 노드마다 다른 값을 볼 수 있습니다 — 스냅샷으로 퍼뜨리는 이유입니다.
+     * <p><b>리더만 읽는다.</b> 전 노드가 매 틱 읽으면 그 자체가 요청 경로 밖의
+     * 부하이고, 노드마다 다른 값을 볼 수 있다 — 스냅샷으로 퍼뜨리는 이유다.
      */
     public Mono<String> readTunables() {
         return redis.opsForValue().get(RedisKeys.TUNABLES);
@@ -714,7 +714,7 @@ public final class AllocationRedisPort implements SnapshotSource {
             return;
         }
         markersDropped.addAndGet(dropped);
-        // **몇 개인지만 남긴다.** 쿠폰 ID 는 라벨로도 로그로도 못 쏟는다 (LG-3).
+        // **몇 개인지만 남긴다.** 쿠폰 ID 는 라벨로도 로그로도 못 쏟는다.
         if (publishTrim.entered()) {
             log.warn("발행 필드가 상한을 넘어 재고 미상 표시 {}개를 버렸다 — 그 쿠폰들이 매진으로 읽힌다",
                     dropped);

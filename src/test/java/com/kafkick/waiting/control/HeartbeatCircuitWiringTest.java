@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.kafkick.waiting.adapter.redis.GatewayRedisPort.Presence;
 import com.kafkick.waiting.domain.admission.CircuitState;
 import java.time.Duration;
+import org.springframework.beans.factory.ObjectProvider;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
@@ -40,7 +41,7 @@ class HeartbeatCircuitWiringTest {
 
         GatewayPresenceConfig.beatStep(circuit -> {
             보낸_것.add(circuit);
-            return Mono.just(new Presence(1, 0, 0, 1));
+            return Mono.just(new Presence(1, 0, 0, 1, 0, 1));
         }, () -> CircuitState.HALF_OPEN, 등록부()).get().block();
 
         assertThat(보낸_것).containsExactly(CircuitState.HALF_OPEN);
@@ -58,7 +59,7 @@ class HeartbeatCircuitWiringTest {
     void 클러스터_판정을_등록부에_적는다() {
         GatewayRegistry registry = 등록부();
 
-        GatewayPresenceConfig.beatStep(circuit -> Mono.just(new Presence(3, 1, 0, 3)),
+        GatewayPresenceConfig.beatStep(circuit -> Mono.just(new Presence(3, 1, 0, 3, 0, 3)),
                 () -> CircuitState.CLOSED, registry).get().block();
 
         assertThat(registry.circuit()).as("소수만 열린 것은 부분 장애다")
@@ -71,7 +72,7 @@ class HeartbeatCircuitWiringTest {
     void 반쯤_열린_표는_전면_정지가_안_된다() {
         GatewayRegistry registry = 등록부();
 
-        GatewayPresenceConfig.beatStep(circuit -> Mono.just(new Presence(3, 0, 3, 3)),
+        GatewayPresenceConfig.beatStep(circuit -> Mono.just(new Presence(3, 0, 3, 3, 0, 3)),
                 () -> CircuitState.CLOSED, registry).get().block();
 
         assertThat(registry.circuit()).isEqualTo(CircuitState.HALF_OPEN);
@@ -150,5 +151,78 @@ class HeartbeatCircuitWiringTest {
     @DisplayName("신선도는_분모의_임계를_안_넘는다")
     void 신선도는_분모의_임계를_안_넘는다() {
         assertThat(GatewayPresenceConfig.voteFreshSec(Duration.ofSeconds(10), 3)).isEqualTo(3);
+    }
+
+    /**
+     * <b>합산 결과가 등록부에 앉아야 한다</b> (RC4). 이 한 줄이 없으면 배분이
+     * 전 노드의 도착 합을 영영 모르고, 지표가 조용히 -1 로 남는다.
+     */
+    @Test
+    @DisplayName("합산한_통과_수를_등록부에_적는다")
+    void 합산한_통과_수를_등록부에_적는다() {
+        GatewayRegistry 등록부 = 등록부();
+
+        GatewayPresenceConfig.beatStep(circuit -> Mono.just(new Presence(2, 0, 0, 2, 55, 2)),
+                () -> CircuitState.CLOSED, 등록부).get().block();
+
+        assertThat(등록부.passRate()).isEqualTo(55);
+    }
+
+    /**
+     * <b>한 대라도 안 실었으면 합이 아니라 "모름" 이다.</b> 롤아웃 중 옛 노드는
+     * 새 field 를 죽은 항목으로 보고 매 틱 지운다 — 모자란 합을 정상 부하로
+     * 읽으면 없는 한산함을 근거로 조인다.
+     */
+    @Test
+    @DisplayName("덜_실린_합은_모름으로_적는다")
+    void 덜_실린_합은_모름으로_적는다() {
+        GatewayRegistry 등록부 = 등록부();
+
+        GatewayPresenceConfig.beatStep(circuit -> Mono.just(new Presence(3, 0, 0, 3, 55, 2)),
+                () -> CircuitState.CLOSED, 등록부).get().block();
+
+        assertThat(등록부.passRate()).isEqualTo(-1);
+    }
+
+    /** 이 노드가 센 값이 스크립트 인자로 나가야 한다. 안 나가면 아무도 못 센다. */
+    @Test
+    @DisplayName("이_노드의_통과_수를_실어_보낸다")
+    void 이_노드의_통과_수를_실어_보낸다() {
+        assertThat(GatewayPresenceConfig.passed(단일_공급자(() -> 42L))).isEqualTo(42);
+    }
+
+    /**
+     * <b>판정 필터가 아직 안 섰으면 "모름" 이다.</b> 0 을 실으면 그 노드가 "0 을
+     * 잰 노드" 로 세어져, 합이 모자란 것을 아무도 모른다.
+     */
+    @Test
+    @DisplayName("공급자가_없으면_모름을_싣는다")
+    void 공급자가_없으면_모름을_싣는다() {
+        assertThat(GatewayPresenceConfig.passed(단일_공급자(null))).isEqualTo(-1);
+    }
+
+    /** 빈 하나만 담는 최소 제공자. 스프링 컨텍스트를 안 띄운다. */
+    private ObjectProvider<PassRateSource> 단일_공급자(PassRateSource source) {
+        return new ObjectProvider<>() {
+            @Override
+            public PassRateSource getObject() {
+                return source;
+            }
+
+            @Override
+            public PassRateSource getObject(Object... args) {
+                return source;
+            }
+
+            @Override
+            public PassRateSource getIfAvailable() {
+                return source;
+            }
+
+            @Override
+            public PassRateSource getIfUnique() {
+                return source;
+            }
+        };
     }
 }

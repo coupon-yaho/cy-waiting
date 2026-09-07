@@ -187,7 +187,7 @@ public class ControlPlaneConfig {
      * 리더가 된 순간에 처음부터 줘야 하는 것들. <b>람다로 묻어 두지 않는다</b> — 한 줄을
      * 빠뜨리면 그 셈만 얼어 있던 값을 이어 쓰고, 그건 전 시험이 초록인 채로 일어난다.
      */
-    static Runnable onLeadershipGained(CapacityCollector collector, CapacityRefresh capacity,
+    Runnable onLeadershipGained(CapacityCollector collector, CapacityRefresh capacity,
             SoldOutCleanup cleanup, QueueSweeper sweeper, AllocationRound round,
             SnapshotHolder holder, GatewayRegistry registry) {
         return () -> {
@@ -216,7 +216,7 @@ public class ControlPlaneConfig {
      *
      * @return 기동 직후면 음수(램프 없음), 그 밖에는 발행 몫이나 한산 통과 최소 몫 이하
      */
-    static long startingCredit(SnapshotHolder.View seen, SnapshotHolder holder,
+    long startingCredit(SnapshotHolder.View seen, SnapshotHolder holder,
             GatewayRegistry registry) {
         long floor = CapacityCollector.idleMinimum(registry.count());
         if (!seen.snapshot().isPublished()) {

@@ -491,7 +491,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
         // 판정에 쓴 상태를 그대로 쓴다. 다시 읽으면 그 사이 틱이 지나 어긋난다.
         // 상한 함수는 사다리 6번과 일부러 다르고 MAX_ETA_SEC 만 같다 — 인자까지
         // 갈라지면 6번이 건 상한과 실제 등록 상한의 근거가 어긋난다.
-        long capacity = AdmissionDecider.queueCapacity(state, MAX_ETA_SEC);
+        long capacity = decider.queueCapacity(state, MAX_ETA_SEC);
         return queue.enqueue(couponId, memberId, capacity, clock.instant())
                 // **여기까지만 열어 준다.** 뒤에 붙이면 줄에 선 사람이 응답을
                 // 못 써서 뒷단까지 가고, 자리를 쥔 채로 재고까지 먹는다.
@@ -551,7 +551,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
             SnapshotMeta meta, String couponId) {
         // **판정과 같은 리미터·같은 키다.** 따로 들면 한 초에 두 예산이 겹쳐
         // 나가고, 리미터를 하나로 두라는 규칙이 막으려던 버스트가 그대로 난다.
-        long cap = (long) (AdmissionDecider.globalCap(meta) * FAIL_OPEN_SHARE);
+        long cap = (long) (decider.globalCap(meta) * FAIL_OPEN_SHARE);
         if (limiter.tryAcquire(AdmissionDecider.GLOBAL_KEY, cap,
                 clock.instant().getEpochSecond())) {
             // 매 요청 찍으면 정작 조사가 필요한 순간에 묻힌다. 구간의 시작만 찍는다.
@@ -658,7 +658,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
         // 라이브러리가 끼워 넣던 격벽이 그 자리를 하고 있었는데, 크기가 25 로
         // 박혀 있어 껐다. 그 몫을 여기서 제 예산으로 다시 세운다.
         if (!bulkhead.tryEnter(couponId, inFlightCap(ratePerSec, meta),
-                inFlightCap(AdmissionDecider.globalCap(meta), meta))) {
+                inFlightCap(decider.globalCap(meta), meta))) {
             count("bulkhead-full");
             return shed(exchange, meta);
         }

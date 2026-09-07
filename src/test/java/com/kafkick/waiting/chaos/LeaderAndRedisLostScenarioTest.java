@@ -155,6 +155,9 @@ class LeaderAndRedisLostScenarioTest {
     private SnapshotHolder holder;
 
     @Autowired
+    private AdmissionDecider decider;
+
+    @Autowired
     private QueueToken tokens;
 
     @Autowired
@@ -265,7 +268,7 @@ class LeaderAndRedisLostScenarioTest {
 
     /** 지금 재료가 허용하는 초당 fail-open 상한. 필터가 보는 것과 같은 값이다. */
     private long 초당_상한() {
-        return (long) (AdmissionDecider.globalCap(holder.view().snapshot().meta()) * 0.5);
+        return (long) (decider.globalCap(holder.view().snapshot().meta()) * 0.5);
     }
 
     /** 초 경계를 넘긴다. 리미터의 창이 바뀌어야 앞 배치의 예산과 안 섞인다. */

@@ -95,7 +95,7 @@ public final class BackendFallback {
     public static final String NOT_CALLED = BackendFallback.class.getName() + ".notCalled";
 
     /** 서킷이 부르지도 않고 되돌렸는가. 예외가 없거나 거절 예외면 안 부른 것이다. */
-    static boolean notCalled(ServerRequest request) {
+    private boolean notCalled(ServerRequest request) {
         return request.attribute(ServerWebExchangeUtils.CIRCUITBREAKER_EXECUTION_EXCEPTION_ATTR)
                 .map(ex -> ex instanceof CallNotPermittedException)
                 .orElse(true);

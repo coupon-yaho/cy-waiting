@@ -29,6 +29,8 @@ class HeartbeatCircuitWiringTest {
 
     private static final Duration 간격 = Duration.ofSeconds(1);
 
+    private final GatewayPresenceConfig 배선 = new GatewayPresenceConfig();
+
     private GatewayRegistry 등록부() {
         return GatewayRegistry.of(등록부_감소_틱, 1);
     }
@@ -39,7 +41,7 @@ class HeartbeatCircuitWiringTest {
     void 이_노드의_서킷을_실어_보낸다() {
         List<CircuitState> 보낸_것 = new ArrayList<>();
 
-        GatewayPresenceConfig.beatStep(circuit -> {
+        배선.beatStep(circuit -> {
             보낸_것.add(circuit);
             return Mono.just(new Presence(1, 0, 0, 1, 0, 1));
         }, () -> CircuitState.HALF_OPEN, 등록부()).get().block();
@@ -59,7 +61,7 @@ class HeartbeatCircuitWiringTest {
     void 클러스터_판정을_등록부에_적는다() {
         GatewayRegistry registry = 등록부();
 
-        GatewayPresenceConfig.beatStep(circuit -> Mono.just(new Presence(3, 1, 0, 3, 0, 3)),
+        배선.beatStep(circuit -> Mono.just(new Presence(3, 1, 0, 3, 0, 3)),
                 () -> CircuitState.CLOSED, registry).get().block();
 
         assertThat(registry.circuit()).as("소수만 열린 것은 부분 장애다")
@@ -72,7 +74,7 @@ class HeartbeatCircuitWiringTest {
     void 반쯤_열린_표는_전면_정지가_안_된다() {
         GatewayRegistry registry = 등록부();
 
-        GatewayPresenceConfig.beatStep(circuit -> Mono.just(new Presence(3, 0, 3, 3, 0, 3)),
+        배선.beatStep(circuit -> Mono.just(new Presence(3, 0, 3, 3, 0, 3)),
                 () -> CircuitState.CLOSED, registry).get().block();
 
         assertThat(registry.circuit()).isEqualTo(CircuitState.HALF_OPEN);
@@ -141,7 +143,7 @@ class HeartbeatCircuitWiringTest {
     @Test
     @DisplayName("틱이_일초_미만이어도_신선도가_안_잘린다")
     void 틱이_일초_미만이어도_신선도가_안_잘린다() {
-        long 신선도 = GatewayPresenceConfig.voteFreshSec(Duration.ofMillis(900), 60);
+        long 신선도 = 배선.voteFreshSec(Duration.ofMillis(900), 60);
 
         assertThat(신선도).as("0.9초 × 5 = 4.5초, 올림하면 5초").isEqualTo(5);
     }
@@ -150,7 +152,7 @@ class HeartbeatCircuitWiringTest {
     @Test
     @DisplayName("신선도는_분모의_임계를_안_넘는다")
     void 신선도는_분모의_임계를_안_넘는다() {
-        assertThat(GatewayPresenceConfig.voteFreshSec(Duration.ofSeconds(10), 3)).isEqualTo(3);
+        assertThat(배선.voteFreshSec(Duration.ofSeconds(10), 3)).isEqualTo(3);
     }
 
     /**
@@ -162,7 +164,7 @@ class HeartbeatCircuitWiringTest {
     void 합산한_통과_수를_등록부에_적는다() {
         GatewayRegistry 등록부 = 등록부();
 
-        GatewayPresenceConfig.beatStep(circuit -> Mono.just(new Presence(2, 0, 0, 2, 55, 2)),
+        배선.beatStep(circuit -> Mono.just(new Presence(2, 0, 0, 2, 55, 2)),
                 () -> CircuitState.CLOSED, 등록부).get().block();
 
         assertThat(등록부.passRate()).isEqualTo(55);
@@ -178,7 +180,7 @@ class HeartbeatCircuitWiringTest {
     void 덜_실린_합은_모름으로_적는다() {
         GatewayRegistry 등록부 = 등록부();
 
-        GatewayPresenceConfig.beatStep(circuit -> Mono.just(new Presence(3, 0, 0, 3, 55, 2)),
+        배선.beatStep(circuit -> Mono.just(new Presence(3, 0, 0, 3, 55, 2)),
                 () -> CircuitState.CLOSED, 등록부).get().block();
 
         assertThat(등록부.passRate()).isEqualTo(-1);
@@ -188,7 +190,7 @@ class HeartbeatCircuitWiringTest {
     @Test
     @DisplayName("이_노드의_통과_수를_실어_보낸다")
     void 이_노드의_통과_수를_실어_보낸다() {
-        assertThat(GatewayPresenceConfig.passed(단일_공급자(() -> 42L))).isEqualTo(42);
+        assertThat(배선.passed(단일_공급자(() -> 42L))).isEqualTo(42);
     }
 
     /**
@@ -198,7 +200,7 @@ class HeartbeatCircuitWiringTest {
     @Test
     @DisplayName("공급자가_없으면_모름을_싣는다")
     void 공급자가_없으면_모름을_싣는다() {
-        assertThat(GatewayPresenceConfig.passed(단일_공급자(null))).isEqualTo(-1);
+        assertThat(배선.passed(단일_공급자(null))).isEqualTo(-1);
     }
 
     /** 빈 하나만 담는 최소 제공자. 스프링 컨텍스트를 안 띄운다. */

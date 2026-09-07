@@ -152,7 +152,7 @@ class GatewayRedisPortTest extends RedisContainerSupport {
     @DisplayName("칸_수가_다른_응답은_거절한다")
     void 칸_수가_다른_응답은_거절한다() {
         // 롤백 구간에서 옛 스크립트가 돌려주는 모양이다.
-        assertThatThrownBy(() -> GatewayRedisPort.presence(List.of(3L, 1_700_000_000L, 1L)))
+        assertThatThrownBy(() -> port.presence(List.of(3L, 1_700_000_000L, 1L)))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("7 칸");
     }
@@ -162,7 +162,7 @@ class GatewayRedisPortTest extends RedisContainerSupport {
     @DisplayName("칸_수가_맞으면_자리대로_읽는다")
     void 칸_수가_맞으면_자리대로_읽는다() {
         GatewayRedisPort.Presence seen =
-                GatewayRedisPort.presence(List.of(9L, 1_700_000_000L, 3L, 2L, 7L, 55L, 6L));
+                port.presence(List.of(9L, 1_700_000_000L, 3L, 2L, 7L, 55L, 6L));
 
         assertThat(seen).isEqualTo(new GatewayRedisPort.Presence(9, 3, 2, 7, 55, 6));
     }
@@ -204,14 +204,14 @@ class GatewayRedisPortTest extends RedisContainerSupport {
     @Test
     @DisplayName("상한을_넘는_통과_수는_묶어_보낸다")
     void 상한을_넘는_통과_수는_묶어_보낸다() {
-        assertThat(GatewayRedisPort.passArg(9_000_000_000L)).isEqualTo("1000000000");
+        assertThat(port.passArg(9_000_000_000L)).isEqualTo("1000000000");
     }
 
     /** 안 쟀으면 빈 값이다. 0 을 보내면 안 잰 노드가 잰 노드로 세어진다. */
     @Test
     @DisplayName("안_쟀으면_빈_값을_보낸다")
     void 안_쟀으면_빈_값을_보낸다() {
-        assertThat(GatewayRedisPort.passArg(-1)).isEmpty();
-        assertThat(GatewayRedisPort.passArg(0)).isEqualTo("0");
+        assertThat(port.passArg(-1)).isEmpty();
+        assertThat(port.passArg(0)).isEqualTo("0");
     }
 }

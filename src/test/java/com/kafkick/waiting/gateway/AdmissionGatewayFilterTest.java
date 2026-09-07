@@ -115,9 +115,11 @@ class AdmissionGatewayFilterTest {
      */
     private static final DoubleSupplier 고정_난수 = () -> 0.5;
 
+    /** 기본 필터가 쥔 판정기. 기댓값을 여기서 뽑아야 필터가 보는 값과 안 갈라진다. */
+    private final AdmissionDecider 판정 = AdmissionDecider.of(limiter, IDLE_RATIO);
+
     private final AdmissionGatewayFilter filter = AdmissionGatewayFilter.withIsolatedSoldOutCache(
-            holder, AdmissionDecider.of(limiter, IDLE_RATIO),
-            Clock.fixed(지금, ZoneOffset.UTC), meters, 고정_난수,
+            holder, 판정, Clock.fixed(지금, ZoneOffset.UTC), meters, 고정_난수,
             줄, tokens, limiter, entryTokens, 멱등키);
 
     private final AtomicReference<Boolean> 뒷단에_닿음 = new AtomicReference<>(false);
@@ -1173,7 +1175,7 @@ class AdmissionGatewayFilterTest {
         // 스냅샷이 낡으면 없는 쿠폰을 404 로 끝내지 않고 이연한다.
         holder.replace(new GatewaySnapshot(Map.of(COUPON, CouponStates.idle(1_000)),
                 META, 지금.minusSeconds(60)));
-        long CAP = (long) (AdmissionDecider.globalCap(META) * 0.5);
+        long CAP = (long) (판정.globalCap(META) * 0.5);
 
         // **예산 안은 전부 통과해야 한다.** 한 번이라도 닿았는지만 보면 앞쪽이
         // 이미 막혀도 초록이다.

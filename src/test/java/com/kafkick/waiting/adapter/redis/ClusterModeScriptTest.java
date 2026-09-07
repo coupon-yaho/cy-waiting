@@ -143,7 +143,7 @@ class ClusterModeScriptTest {
                     RedisKeys.alive("c1", 1, 0),
                     RedisKeys.stock("c1"),
                     RedisKeys.dropFence("c1", 1, 0));
-            case "snapshot_publish.lua" -> List.of(RedisKeys.SNAPSHOT);
+            case "snapshot_publish.lua" -> List.of(RedisKeys.SNAPSHOT, RedisKeys.SNAPSHOT_FENCE);
             case "capacity_read.lua" -> List.of(RedisKeys.CAPACITY);
             case "snapshot_read.lua" -> List.of(RedisKeys.SNAPSHOT);
             case "active_read.lua" -> List.of(RedisKeys.ACTIVE_COUPONS);
@@ -165,7 +165,7 @@ class ClusterModeScriptTest {
             case "drop_queue.lua" -> List.of("1", "1", "60000");
             // 인자가 없다. 기준 시각을 밖에서 주면 이 스크립트를 둔 이유가 사라진다.
             case "capacity_read.lua", "snapshot_read.lua", "active_read.lua" -> List.of();
-            case "snapshot_publish.lua" -> List.of("#credit", "0");
+            case "snapshot_publish.lua" -> List.of("1", "60000", "#credit", "0");
             case "leader_acquire.lua" -> List.of("node-1", "2000");
             case "leader_release.lua" -> List.of("node-1");
             case "gateway_heartbeat.lua" -> List.of("node-1", "30", "CLOSED", "5", "40");

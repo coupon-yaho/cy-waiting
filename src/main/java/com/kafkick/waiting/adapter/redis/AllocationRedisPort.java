@@ -655,8 +655,10 @@ public final class AllocationRedisPort implements SnapshotSource {
      *
      * <p>지우고 쓰는 것을 나눠 치면 그 사이에 끊길 때 키가 없는 채로 남고,
      * 전 노드가 판정 재료를 잃는다. 근거는 스크립트 주석에 있다.
+     *
+     * @param fence 이 발행의 임기. 옛 임기는 새 임기를 못 덮는다. 0 이면 리더가 아니다
      */
-    public Mono<Void> publish(Map<String, String> hash) {
+    public Mono<Void> publish(Map<String, String> hash, long fence) {
         if (hash.isEmpty()) {
             return Mono.error(new IllegalArgumentException("빈 스냅샷은 발행하지 않는다"));
         }
@@ -666,15 +668,39 @@ public final class AllocationRedisPort implements SnapshotSource {
                     "한 번에 실을 수 있는 필드를 넘었다: %d > %d"
                             .formatted(toPublish.size(), MAX_PUBLISH_FIELDS)));
         }
-        List<String> args = new ArrayList<>(toPublish.size() * 2);
+        List<String> args = new ArrayList<>(toPublish.size() * 2 + 2);
+        args.add(Long.toString(fence));
+        args.add(Long.toString(fenceTtl.toMillis()));
         toPublish.forEach((field, value) -> {
             args.add(field);
             args.add(value);
         });
         int dropped = hash.size() - toPublish.size();
-        return redis.execute(PUBLISH, List.of(RedisKeys.SNAPSHOT), args).next()
+        return redis.execute(PUBLISH,
+                        List.of(RedisKeys.SNAPSHOT, RedisKeys.SNAPSHOT_FENCE), args).next()
+                .flatMap(result -> fenced(result)
+                        ? Mono.<List<?>>error(new FencedOutException(fence))
+                        : Mono.just(result))
                 .doOnSuccess(done -> watchTrim(dropped))
                 .then();
+    }
+
+    /**
+     * 실린 것이 없으면 울타리가 거절한 것이다. <b>성공으로 안 읽는다</b> — 읽으면
+     * 재료가 노드에 안 닿았는데 램프가 오르고, 안 버린 표시를 버렸다고 센다.
+     */
+    private boolean fenced(Object result) {
+        return result instanceof List<?> counts && !counts.isEmpty()
+                && counts.get(0) instanceof Number written && written.longValue() == 0;
+    }
+
+    /** 옛 임기의 발행이 거절됐다. 이 노드는 더 이상 리더가 아니다. */
+    public static final class FencedOutException extends IllegalStateException {
+
+        FencedOutException(long fence) {
+            super("옛 임기의 발행이 거절됐다 — 임기 %d. 이 노드는 리더가 아니다"
+                    .formatted(fence));
+        }
     }
 
     /**

@@ -88,7 +88,10 @@ public class ControlPlaneConfig {
         SnapshotCodec codec = SnapshotCodec.create();
         AllocationRound round = AllocationRound.of(leadership::isLeader, collector::collect,
                 capacity::lastKnown,
-                registry::count, port::apply, port::publish, Instant::now,
+                registry::count, port::apply,
+                // **임기를 발행마다 다시 읽는다.** 붙잡아 두면 강등된 뒤에도 옛
+                // 번호로 나가고, 그것이 울타리가 막으려던 바로 그 경우다.
+                hash -> port.publish(hash, leadership.fence()), Instant::now,
                 () -> port.load().map(hash ->
                         CreditSmoother.restore(CreditSmoother.DEFAULT_ALPHA, codec.smoothing(hash))),
                 codec, capacity::lastFloor, tunables::current,

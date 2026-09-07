@@ -48,7 +48,10 @@ class AllocationRedisPortTest extends RedisContainerSupport {
                 RedisKeys.COUPON_POLICY,
                 RedisKeys.alive("c1", SHARDS, 0), RedisKeys.grace("c1", SHARDS, 0),
                 RedisKeys.stock("c3"), RedisKeys.maxScore("c1", SHARDS, 0),
-                RedisKeys.dropFence("c1", SHARDS, 0)).block(WAIT);
+                RedisKeys.dropFence("c1", SHARDS, 0),
+                // **울타리도 지운다.** 남기면 앞 시험이 올려 둔 임기가 다음 시험의
+                // 발행을 거절해, 회차가 아니라 순서가 결과를 정한다.
+                RedisKeys.SNAPSHOT_FENCE).block(WAIT);
     }
 
     private void 줄_세운다(String couponId, long... scores) {
@@ -433,11 +436,30 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     void 옛_임기의_발행은_안_덮는다() {
         port.publish(Map.of("c1", "새 리더", "#credit", "7"), 5).block(WAIT);
 
-        port.publish(Map.of("c1", "옛 리더", "#credit", "1"), 4).block(WAIT);
+        assertThatThrownBy(() ->
+                port.publish(Map.of("c1", "옛 리더", "#credit", "1"), 4).block(WAIT))
+                .as("성공으로 읽으면 재료가 안 닿았는데 램프가 오른다")
+                .isInstanceOf(AllocationRedisPort.FencedOutException.class);
 
         assertThat(port.load().block(WAIT))
                 .as("옛 시야가 새 시야를 덮으면 대기 수가 뒤로 간다")
                 .containsEntry("c1", "새 리더");
+    }
+
+    /**
+     * <b>울타리 표에 수명이 있다.</b> 안 주면 시계가 뒤로 간 리더가 스스로 못 풀린다 —
+     * 새로 뽑힌 정당한 리더의 발행이 영영 거절되고, 그러면 전 노드가 재료를 잃어
+     * 줄 없는 쿠폰이 통째로 통과한다.
+     */
+    @Test
+    @DisplayName("울타리_표는_스스로_풀린다")
+    void 울타리_표는_스스로_풀린다() {
+        port.publish(Map.of("c1", "리더", "#credit", "7"), 5).block(WAIT);
+
+        assertThat(redis.getExpire(RedisKeys.SNAPSHOT_FENCE).block(WAIT))
+                .as("수명이 없으면 시계가 뒤로 간 리더가 영구히 막힌다")
+                .isNotNull()
+                .satisfies(ttl -> assertThat(ttl).isPositive());
     }
 
     /** 같은 임기의 재시도는 막지 않는다. 막으면 실패한 발행이 영영 안 된다. */
@@ -460,7 +482,9 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     void 리더가_아니면_발행이_안_선다() {
         port.publish(Map.of("c1", "리더가 쓴 것", "#credit", "7"), 5).block(WAIT);
 
-        port.publish(Map.of("c1", "강등된 노드", "#credit", "1"), 0).block(WAIT);
+        assertThatThrownBy(() ->
+                port.publish(Map.of("c1", "강등된 노드", "#credit", "1"), 0).block(WAIT))
+                .isInstanceOf(AllocationRedisPort.FencedOutException.class);
 
         assertThat(port.load().block(WAIT)).containsEntry("c1", "리더가 쓴 것");
     }
@@ -610,9 +634,9 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     @DisplayName("발행은_통째로_갈아_끼운다")
     void 발행은_통째로_갈아_끼운다() {
         // 남기면 끝난 쿠폰이 스냅샷에 영영 남아, 각 노드가 없는 쿠폰을 계속 판정한다.
-        port.publish(Map.of("c1", "a", "c2", "b")).block(WAIT);
+        port.publish(Map.of("c1", "a", "c2", "b"), 1).block(WAIT);
 
-        port.publish(Map.of("c1", "c")).block(WAIT);
+        port.publish(Map.of("c1", "c"), 1).block(WAIT);
 
         assertThat(port.load().block(WAIT)).containsOnlyKeys("c1");
     }
@@ -684,7 +708,10 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         redis.delete(RedisKeys.COUPON_POLICY,
                 RedisKeys.alive("c1", SHARDS, 0), RedisKeys.grace("c1", SHARDS, 0),
                 RedisKeys.stock("c3"), RedisKeys.maxScore("c1", SHARDS, 0),
-                RedisKeys.dropFence("c1", SHARDS, 0)).block(WAIT);
+                RedisKeys.dropFence("c1", SHARDS, 0),
+                // **울타리도 지운다.** 남기면 앞 시험이 올려 둔 임기가 다음 시험의
+                // 발행을 거절해, 회차가 아니라 순서가 결과를 정한다.
+                RedisKeys.SNAPSHOT_FENCE).block(WAIT);
         redis.opsForValue().set(RedisKeys.COUPON_POLICY, "해시가-아니다").block(WAIT);
     }
 

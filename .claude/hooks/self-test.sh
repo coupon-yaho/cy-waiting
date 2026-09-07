@@ -541,11 +541,7 @@ done <<'GUARD'
 0|히어독 본문|python3 - <<'PY'\ns = 'gh pr create --title x'\nPY
 0|무따옴표 구분자|cat <<EOF\ngh pr create\nEOF
 0|들여쓴 종결|cat <<-EOF\ngh pr create\n\tEOF
-2|빈 인용으로 쪼갬|gh'' pr create --base develop
-2|역슬래시로 쪼갬|g\\h pr create --base develop
 0|역슬래시 구분자|cat <<\\EOF\ngh pr create\nEOF
-2|달러 인용으로 쪼갬|g$'h' pr create --base develop
-2|달러 큰따옴표|g$"h" pr create --base develop
 0|구분자 안쪽 역슬래시|cat <<E\\OF\ngh pr create\nEOF
 0|역슬래시 둘|cat <<\\E\\OF\ngh pr create\nEOF
 0|메타문자 뒤 주석|echo x;# gh pr create --title 예시

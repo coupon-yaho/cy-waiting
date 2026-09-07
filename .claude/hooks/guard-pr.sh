@@ -31,8 +31,8 @@ cmd_joined=${cmd//"$join"/ }
 
 # 사전 걸러내기는 본 판별과 같은 관용도여야 한다. 더 엄하면 공백 하나로 게이트를
 # 통째로 지나간다.
-# 셸이 낱말을 만들 때 지우는 것들을 우리도 지운다. `$'...'` 는 `$` 까지 사라지므로
-# 그것부터 걷고, 남은 따옴표와 역슬래시를 뗀다.
+# 셸이 낱말을 만들 때 지우는 것들. **명령 판별에는 안 쓴다** — 통째로 인용된
+# 문자열까지 벗겨 예시가 다시 막혔다. 히어독 구분자에만 쓴다.
 unquote() {
     local v=${1//\$\'/}
     v=${v//\$\"/}
@@ -40,8 +40,7 @@ unquote() {
     printf '%s' "${v//\\/}"
 }
 
-cmd_naked=$(unquote "$cmd_joined")
-[[ ! "$cmd_joined" =~ $CREATE_RE && ! "$cmd_naked" =~ $CREATE_RE ]] && exit 0
+[[ ! "$cmd_joined" =~ $CREATE_RE ]] && exit 0
 
 mapfile -t lines <<< "$cmd_joined"
 
@@ -94,11 +93,10 @@ for ((n = 0; n < ${#lines[@]}; n++)); do
             [[ "${lines[m]}" =~ ^[[:space:]]*"$delim"[[:space:]]*$ ]] && { skip_to=$m; break; }
         done
     fi
-    # **인용과 이스케이프를 걷고 한 번 더 본다.** `gh'' pr create` 나
-    # `g\h pr create` 는 셸이 벗겨 같은 명령이 되는데 글자 그대로는 안 걸린다.
-    bare=$(strip_comment "$line")
-    naked=$(unquote "$bare")
-    if [[ "$bare" =~ $CREATE_RE || "$naked" =~ $CREATE_RE ]]; then
+    # **인용을 벗긴 형태로는 안 본다.** `gh'' pr create` 로 쪼개면 지나가지만,
+    # 벗기면 인용 안의 예시까지 명령으로 읽어 사람의 일을 막는다. 머리말의
+    # 방침대로 우회는 안 쫓고 오탐을 없애는 쪽을 고른다.
+    if [[ "$(strip_comment "$line")" =~ $CREATE_RE ]]; then
         creating=1
         # **명령 줄부터 끝까지를 넘긴다.** 물리적 한 줄만 보면 다음 줄로 이어진
         # `--base` 를 못 찾아 엉뚱한 기준으로 리뷰가 돈다.

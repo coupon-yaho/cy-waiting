@@ -166,12 +166,17 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
         assertThat(alive(beat("a"))).isEqualTo(1);
     }
 
-    /** 예약 접두어는 하트비트와 같게 막는다. 한쪽만 막으면 계약이 갈린다. */
+    /**
+     * <b>두 스크립트가 같은 문턱이어야 한다.</b> 한쪽만 좁으면 등록은 되는데
+     * 퇴장만 못 하는 id 가 나고, 그 오류는 루프가 삼켜 조용히 남는다.
+     */
     @Test
-    @DisplayName("예약_접두어로는_못_나간다")
-    void 예약_접두어로는_못_나간다() {
+    @DisplayName("예약_접두어는_양쪽에서_막는다")
+    void 예약_접두어는_양쪽에서_막는다() {
         assertThatThrownBy(() -> redis.execute(leave, List.of(INSTANCES), List.of("#p:a"))
                 .blockFirst(WAIT))
+                .hasRootCauseMessage("instanceId 는 # 로 시작할 수 없다");
+        assertThatThrownBy(() -> beat("#x", REAP_AFTER, "CLOSED", VOTE_FRESH, "1"))
                 .hasRootCauseMessage("instanceId 는 # 로 시작할 수 없다");
     }
 

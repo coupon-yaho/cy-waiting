@@ -10,6 +10,8 @@ import com.kafkick.waiting.domain.admission.AdmissionRequest;
 import com.kafkick.waiting.domain.admission.Bulkhead;
 import com.kafkick.waiting.domain.admission.CouponKeys;
 import com.kafkick.waiting.domain.admission.EnqueueLatch;
+import com.kafkick.waiting.control.PassRateSource;
+import com.kafkick.waiting.domain.admission.PassRateMeter;
 import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
@@ -51,7 +53,7 @@ import reactor.core.publisher.Mono;
  * 안 풀렸을 때 기동은 되고 판정만 사라진다.
  */
 @Component
-public final class AdmissionGatewayFilter implements GatewayFilter {
+public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSource {
 
     /** 응답을 쓰는 쪽이 읽는다. 다시 판정하면 두 번 세고 답이 갈릴 수 있다. */
     public static final String DECISION = "waiting.admission.decision";
@@ -148,6 +150,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     private final CircuitStateReader circuit;
     private final Clock clock;
     private final MeterRegistry meters;
+
+    /** 이 노드가 뒷단으로 보낸 초당 수. 하트비트가 실어 리더가 합산한다 (RC4). */
+    private final PassRateMeter passRate = PassRateMeter.of(PassRateMeter.DEFAULT_WINDOW_MS);
     private final DoubleSupplier random;
     private final QueuePort queue;
     private final QueueToken tokens;
@@ -309,6 +314,15 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      */
     public int inFlight() {
         return bulkhead.inFlight();
+    }
+
+    /**
+     * 이 노드가 최근에 뒷단으로 보낸 초당 수. <b>시계를 안 받는다</b> — 세는
+     * 쪽과 읽는 쪽이 다른 시계를 쓰면 창이 매번 즉시 접힌다.
+     */
+    @Override
+    public long passRatePerSec() {
+        return passRate.perSecond(clock.millis());
     }
 
     /**
@@ -671,6 +685,10 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
             count("bulkhead-full");
             return shed(exchange, meta);
         }
+        // **여기서 센다** (RC4). 판정 자리에서 세면 서킷이 열린 동안의 통과
+        // 판정까지 들어가는데, 그것들은 폴백으로 끝나 뒷단에 안 닿는다. 반대로
+        // 스냅샷에 없는 쿠폰은 판정을 안 지나고 여기로 온다.
+        passRate.passed(clock.millis());
         // 뒷단으로 넘어가는 건이 생겼으면 끊던 구간이 끝난 것이다. 쌍으로 안
         // 남기면 로그에 진입만 있고 언제 닫혔는지가 없다 (LG-2).
         shedWindow.exited().ifPresent(r -> log.warn(

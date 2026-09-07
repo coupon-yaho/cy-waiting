@@ -2,6 +2,7 @@ package com.kafkick.waiting.control;
 
 import com.kafkick.waiting.adapter.redis.ClockSkewTracker;
 import io.micrometer.core.instrument.FunctionCounter;
+import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.util.Objects;
 import java.util.function.DoubleSupplier;
@@ -27,11 +28,15 @@ public final class InvariantMetrics {
      */
     private final DoubleSupplier markersDropped;
 
+    /** 전 노드가 초당 뒷단으로 보낸 수. 관측 전에는 음수다 (RC4). */
+    private final DoubleSupplier arrivalRate;
+
     private InvariantMetrics(AllocationRound round, ClockSkewTracker skew,
-            DoubleSupplier markersDropped) {
+            DoubleSupplier markersDropped, DoubleSupplier arrivalRate) {
         this.round = Objects.requireNonNull(round, "round 는 필수다");
         this.skew = Objects.requireNonNull(skew, "skew 는 필수다");
         this.markersDropped = Objects.requireNonNull(markersDropped, "markersDropped 는 필수다");
+        this.arrivalRate = Objects.requireNonNull(arrivalRate, "arrivalRate 는 필수다");
     }
 
     /**
@@ -42,16 +47,17 @@ public final class InvariantMetrics {
      */
     public static InvariantMetrics bind(AllocationRound round, ClockSkewTracker skew,
             MeterRegistry meters) {
-        return bind(round, skew, meters, () -> 0);
+        return bind(round, skew, meters, () -> 0, () -> -1);
     }
 
     /**
      * 발행이 버린 미상 표시까지 건다. <b>그 수가 거짓 매진의 직접 증거다.</b>
      */
     public static InvariantMetrics bind(AllocationRound round, ClockSkewTracker skew,
-            MeterRegistry meters, DoubleSupplier markersDropped) {
+            MeterRegistry meters, DoubleSupplier markersDropped, DoubleSupplier arrivalRate) {
         Objects.requireNonNull(meters, "meters 는 필수다");
-        InvariantMetrics metrics = new InvariantMetrics(round, skew, markersDropped);
+        InvariantMetrics metrics =
+                new InvariantMetrics(round, skew, markersDropped, arrivalRate);
         // **형제들과 같은 상태 객체를 쓴다.** 여기만 딴 객체를 넘기면 그것만
         // 약한 참조로 남아, GC 뒤에 이 계수가 조용히 0 으로 굳는다.
         metrics.count(meters, "waiting.snapshot.stock.unknown.dropped",
@@ -69,6 +75,11 @@ public final class InvariantMetrics {
         metrics.count(meters, "waiting.snapshot.clock.floor.applied",
                 InvariantMetrics::floorApplied,
                 "재료를 읽을 때 시각이 뒤로 가 바닥값이 걸린 횟수");
+        // **게이지다.** 순간값이라 누적으로 내면 관측 전의 -1 이 카운터를 깬다.
+        Gauge.builder("waiting.backend.arrival.rate", metrics, InvariantMetrics::arrivalRate)
+                .description("전 노드가 초당 뒷단으로 보낸 수. 노드마다 같은 합을 내므로 max 로 읽는다 (RC4)")
+                .strongReference(true)
+                .register(meters);
         metrics.count(meters, "waiting.allocation.admitted",
                 InvariantMetrics::admitted,
                 "차례를 준 누적 인원. 크레딧 낭비의 분모다 (G7.5)");
@@ -89,6 +100,10 @@ public final class InvariantMetrics {
     /** 평활 지연과 하한이 만드는 초과. 배분기 자체는 준 예산을 안 넘긴다. */
     private double budgetOvershoot() {
         return round.budgetOvershoot();
+    }
+
+    private double arrivalRate() {
+        return arrivalRate.getAsDouble();
     }
 
     /** 발행이 버린 미상 표시 수. 거짓 매진이 나간 직접 증거다. */

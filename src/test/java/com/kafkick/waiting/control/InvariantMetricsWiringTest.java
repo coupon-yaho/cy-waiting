@@ -23,6 +23,9 @@ class InvariantMetricsWiringTest {
     @Autowired
     private PrometheusMeterRegistry registry;
 
+    @Autowired
+    private GatewayRegistry gateways;
+
     // **약한 참조는 여기서 못 잡는다.** 함수형 계측기는 상태 객체를 약한 참조로
     // 잡으므로, 부르는 자리에서 만든 람다를 넘기면 GC 뒤에 그 계수가 0 으로
     // 굳는다. 그런데 굳기 전에는 등록도 스크레이프도 정상이라 아래 시험들이
@@ -55,7 +58,23 @@ class InvariantMetricsWiringTest {
                 .contains("waiting_snapshot_stock_unknown_dropped_total")
                 // 서킷을 보고 있는가 (F3 · CY-788). 안 보는 것과 닫혀 있는 것이
                 // 같은 값을 내므로, 이 게이지가 없으면 배선이 빠진 것을 못 안다.
-                .contains("waiting_circuit_wired");
+                .contains("waiting_circuit_wired")
+                // 회복 봉우리를 정상과 견주는 재료 (RC4). 판정에는 아직 안 쓰지만
+                // 밖에서 읽을 수 있어야 그 값이 맞는지 다음 사람이 본다.
+                .contains("waiting_backend_arrival_rate");
+    }
+
+    /**
+     * <b>이름만 보면 배선이 빠진 것을 못 안다.</b> 도착 합을 안 넘기면 그 게이지가
+     * 영영 -1 인데, 이름을 세는 시험은 그대로 초록이다 (RC4).
+     */
+    @Test
+    @DisplayName("등록부에_앉은_도착_합이_게이지에_나온다")
+    void 등록부에_앉은_도착_합이_게이지에_나온다() {
+        gateways.passObserved(94, 2, 2);
+
+        assertThat(registry.scrape())
+                .contains("waiting_backend_arrival_rate{application=\"waiting\"} 94.0");
     }
 
     /**

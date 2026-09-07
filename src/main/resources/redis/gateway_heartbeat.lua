@@ -3,12 +3,15 @@
 -- KEYS[1]  gw:instances   HASH
 --            field = instanceId      → 서버 시각(초)
 --            field = '#c:'..id       → 그 노드가 본 뒷단 서킷
+--            field = '#p:'..id       → 그 노드가 초당 통과시킨 수
 -- ARGV[1]  instanceId
 -- ARGV[2]  죽은 항목 임계(초). 이보다 오래된 field 는 지운다
 -- ARGV[3]  이 노드가 본 뒷단 서킷. 없으면 안 본 것으로 친다
 -- ARGV[4]  표를 인정하는 신선도(초). 분모의 임계보다 훨씬 짧다
+-- ARGV[5]  이 노드가 초당 통과시킨 수. 없으면 0
 --
--- 반환  {살아있는 수, 서버 시각(초), 열린 수, 반쯤 열린 수, 표를 낸 수}
+-- 반환  {살아있는 수, 서버 시각(초), 열린 수, 반쯤 열린 수, 표를 낸 수,
+--        통과 수 합, 통과 수를 실은 수}
 --
 -- **서킷을 별도 field 에 싣는다** (CY-791). 값에 붙이면 옛 노드의 tonumber 가
 -- nil 을 내고 그 노드를 죽은 것으로 판정해 **지운다** — 롤아웃 내내 옛 리더가
@@ -27,6 +30,10 @@
 -- 방금 지운 항목을 살아 있는 것으로 본다.
 
 local VOTE = '#c:'
+-- **회복 봉우리를 정상과 견줄 재료다** (RC4). 그 수는 노드마다 제 것만 알고,
+-- 배분은 리더 한 대가 돈다. **지표 축이다** — 이 합은 배분의 출력 그 자체라
+-- 상한의 기준값이 못 된다 (AIJ-0250).
+local PASS = '#p:'
 
 -- **상한과 무한을 함께 막는다.** tonumber 는 1e400 을 inf 로 주는데
 -- math.floor(inf) == inf 라 정수 검사를 그냥 통과한다. 그러면 아무것도 영영
@@ -59,6 +66,28 @@ end
 if string.sub(ARGV[1], 1, #VOTE) == VOTE then
     return redis.error_reply('instanceId 는 ' .. VOTE .. ' 로 시작할 수 없다')
 end
+if string.sub(ARGV[1], 1, #PASS) == PASS then
+    return redis.error_reply('instanceId 는 ' .. PASS .. ' 로 시작할 수 없다')
+end
+
+-- **모르는 값은 거절한다.** 합산에 들어가면 전 클러스터의 상한이 그것으로 정해진다.
+-- 0 이 정상값이라 positiveInt 를 못 쓴다. 나머지 검사는 같게 둔다 — 여기만
+-- 헐거우면 실수·inf 가 합에 섞여 다른 인자를 막은 이유가 무의미해진다.
+--
+-- **상한을 epoch 근처까지 올리면 안 된다.** 옛 스크립트는 이 field 를 인스턴스
+-- 시각으로 읽으므로, 지금 값이 낮아야 죽은 항목으로 보고 지운다. 그것이 새
+-- 노드를 분모에 안 세는 유일한 이유다.
+local MAX_PASS = 1e9
+local passed = ARGV[5]
+local measured = passed ~= nil and passed ~= ''
+if measured then
+    passed = tonumber(passed)
+    if passed == nil or passed ~= passed or passed < 0
+            or passed > MAX_PASS or passed ~= math.floor(passed) then
+        return redis.error_reply(
+                '통과 수는 0..' .. MAX_PASS .. ' 의 정수여야 한다: ' .. tostring(ARGV[5]))
+    end
+end
 
 local now = tonumber(redis.call('TIME')[1])
 
@@ -74,6 +103,13 @@ elseif mine ~= 'CLOSED' and mine ~= 'OPEN' and mine ~= 'HALF_OPEN' then
 end
 redis.call('HSET', KEYS[1], ARGV[1], now)
 redis.call('HSET', KEYS[1], VOTE .. ARGV[1], mine)
+-- **안 잰 노드는 0 이 아니라 없는 것이다.** 0 을 쓰면 "안 잰 노드" 가 "0 을
+-- 잰 노드" 로 세어져, 합이 모자란 것을 아무도 모른다.
+if measured then
+    redis.call('HSET', KEYS[1], PASS .. ARGV[1], passed)
+else
+    redis.call('HDEL', KEYS[1], PASS .. ARGV[1])
+end
 
 -- 정리는 읽으면서 한다. 배포 이력만큼 해시가 자라면 매 틱 그걸 다 읽는다.
 -- **순서를 배열로 고정한다.** pairs 는 순서가 정해져 있지 않아, 같은 해시를
@@ -81,8 +117,10 @@ redis.call('HSET', KEYS[1], VOTE .. ARGV[1], mine)
 -- 스크립트에 남길 이유가 없다.
 local ids = {}
 local votes = {}
+local passes = {}
 local seenOf = {}
 local voteOf = {}
+local passOf = {}
 local entries = redis.call('HGETALL', KEYS[1])
 for i = 1, #entries, 2 do
     local field = entries[i]
@@ -90,6 +128,10 @@ for i = 1, #entries, 2 do
         local id = string.sub(field, #VOTE + 1)
         voteOf[id] = entries[i + 1]
         votes[#votes + 1] = id
+    elseif string.sub(field, 1, #PASS) == PASS then
+        local id = string.sub(field, #PASS + 1)
+        passOf[id] = tonumber(entries[i + 1])
+        passes[#passes + 1] = id
     else
         seenOf[field] = tonumber(entries[i + 1])
         ids[#ids + 1] = field
@@ -100,6 +142,12 @@ local alive = 0
 local open = 0
 local halfOpen = 0
 local reported = 0
+local passSum = 0
+-- **합만으로는 "진짜 0" 과 "아무도 안 실었다" 가 안 갈린다.** 롤아웃 중 옛
+-- 노드는 새 필드를 죽은 항목으로 보고 매 틱 지운다. 표에는 reported 가 그
+-- 구분을 주는데 통과 수에는 대응물이 없어, 상한으로 쓰는 순간 없는 부하를
+-- 근거로 조인다. 읽는 쪽이 alive 와 견줘 "모름" 으로 다룰 수 있게 같이 낸다.
+local passReported = 0
 local dead = {}
 for _, id in ipairs(ids) do
     local seen = seenOf[id]
@@ -109,11 +157,16 @@ for _, id in ipairs(ids) do
     if seen == nil or seen > now or now - seen > reapAfter then
         dead[#dead + 1] = id
         dead[#dead + 1] = VOTE .. id
+        dead[#dead + 1] = PASS .. id
     else
         alive = alive + 1
         -- 죽은 노드의 표는 안 센다. 낡은 표도 안 센다 — 둘 다 이미 없는
-        -- 관측이라, 세면 지나간 장애가 지금의 배분을 정한다.
+        -- 관측이라, 세면 지나간 장애가 지금의 배분을 정한다. **통과 수도 같다.**
         if now - seen <= voteFresh then
+            if passOf[id] ~= nil then
+                passSum = passSum + passOf[id]
+                passReported = passReported + 1
+            end
             local vote = voteOf[id]
             if vote ~= nil then
                 reported = reported + 1
@@ -133,6 +186,11 @@ for _, id in ipairs(votes) do
         dead[#dead + 1] = VOTE .. id
     end
 end
+for _, id in ipairs(passes) do
+    if seenOf[id] == nil then
+        dead[#dead + 1] = PASS .. id
+    end
+end
 
 -- **unpack 한계를 넘기지 않는다.** 한 번에 다 못 지우면 다음 틱이 마저 지운다 —
 -- 남은 것은 어차피 죽은 항목이라 세는 값에 영향이 없다.
@@ -144,4 +202,7 @@ if #dead > 0 then
     end
 end
 
-return {alive, now, open, halfOpen, reported}
+-- **읽는 쪽의 폭에 맞춰 묶는다.** 노드당 상한만 두면 합이 그 폭을 넘어 감기고,
+-- 감긴 음수는 낡은 값을 그대로 쓰게 만든다.
+return {alive, now, open, halfOpen, reported,
+        math.min(math.floor(passSum), 2147483647), passReported}

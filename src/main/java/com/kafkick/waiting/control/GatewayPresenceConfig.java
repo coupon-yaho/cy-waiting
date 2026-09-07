@@ -7,6 +7,7 @@ import com.kafkick.waiting.gateway.CircuitStateReader;
 import java.time.Duration;
 import java.util.function.Function;
 import java.util.function.Supplier;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import reactor.core.publisher.Mono;
@@ -22,9 +23,10 @@ public class GatewayPresenceConfig {
     /**
      * 표를 인정하는 신선도. <b>분모의 임계와 분리한다.</b>
      *
-     * <p>같이 두면 죽은 노드의 마지막 표가 분모의 임계(기본 60초)만큼 살아
-     * 있고, 시체 하나가 멀쩡한 클러스터를 그 시간 내내 조인다. 반대로 뒷단이
-     * 무너지는 중에 노드가 재기동하면 유령의 CLOSED 표가 과반을 흐린다.
+     * <p>같이 두면 죽은 노드의 마지막 표가 분모의 임계만큼 살아 있고, 시체
+     * 하나가 멀쩡한 클러스터를 그 시간 내내 조인다. <b>기본값에서는 둘이 같다</b> —
+     * 임계가 여유 신선도(3초)라 이 값이 거기로 잘린다. 임계를 늘리는 순간 분리가
+     * 살아나고, 그때 통과 수의 "모름" 판정도 같이 넓어진다.
      */
     private static final int VOTE_FRESH_TICKS = 5;
 
@@ -45,17 +47,25 @@ public class GatewayPresenceConfig {
     @Bean
     GatewayHeartbeatLoop gatewayHeartbeatLoop(GatewayRedisPort port,
             GatewayRegistry registry, ControlPlaneProperties properties,
-            CircuitStateReader circuit) {
+            CircuitStateReader circuit, ObjectProvider<PassRateSource> passRate) {
         String instanceId = Leadership.newOwnerId();
         long reapAfterSec = properties.capacity().freshness().toSeconds();
         long voteFreshSec = voteFreshSec(properties.scheduler().tick(), reapAfterSec);
         return GatewayHeartbeatLoop.of(
-                beatStep(state -> port.beat(instanceId, reapAfterSec, voteFreshSec, state),
+                // **판정 필터가 없어도 돈다.** 이 루프는 그 빈보다 먼저 서고,
+                // 없으면 통과 수는 0 이다 — 상한을 안 올리는 쪽이라 안전하다.
+                beatStep(state -> port.beat(instanceId, reapAfterSec, voteFreshSec, state,
+                                passed(passRate)),
                         circuit::now, registry),
                 () -> port.leave(instanceId),
                 registry::observed,
                 // 놓침은 상한 바깥에서 센다 — 무응답이 오류로 안 오기 때문이다.
-                () -> registry.circuitMissed(circuit.now()),
+                () -> {
+                    registry.circuitMissed(circuit.now());
+                    // 통과 수에는 분모 같은 유지 근거가 없다. 낡은 값을 "지금" 이라는
+                    // 이름으로 내보내면 장애 내내 지나간 부하를 보고한다.
+                    registry.passUnknown();
+                },
                 properties.scheduler().tick(),
                 properties.leader().attempt());
     }
@@ -73,6 +83,12 @@ public class GatewayPresenceConfig {
         return Math.clamp(Math.ceilDiv(millis, 1000L), 1, reapAfterSec);
     }
 
+    /** 이 노드가 최근에 뒷단으로 보낸 초당 수. 아직 안 붙었으면 음수("모름")다. */
+    static long passed(ObjectProvider<PassRateSource> passRate) {
+        PassRateSource source = passRate.getIfAvailable();
+        return source == null ? -1 : source.passRatePerSec();
+    }
+
     /**
      * 한 번의 하트비트. <b>서킷을 싣고, 클러스터 판정을 받아 적는다</b> (CY-791).
      *
@@ -86,6 +102,8 @@ public class GatewayPresenceConfig {
         return () -> beat.apply(local.get())
                 .doOnNext(seen -> registry.circuitObserved(seen.alive(), seen.open(),
                         seen.halfOpen()))
+                .doOnNext(seen -> registry.passObserved(seen.passed(), seen.passReported(),
+                        seen.alive()))
                 .map(Presence::alive);
     }
 }

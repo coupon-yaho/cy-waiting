@@ -319,6 +319,29 @@ class AdmissionGatewayFilterTest {
         assertThat(exchange.getResponse().getStatusCode()).isNull();
     }
 
+    /**
+     * <b>뒷단으로 간 것만 센다</b> (RC4). 회복 봉우리를 정상과 견주려면 그 수를
+     * 알아야 하는데, 노드는 제 것만 안다.
+     */
+    @Test
+    @DisplayName("통과한_요청만_초당_수에_센다")
+    void 통과한_요청만_초당_수에_센다() {
+        스냅샷을_심는다(CouponStates.idle(100));
+        // 창(5초)으로 나눈 값이라 눈에 보이려면 창 하나를 채워야 한다.
+        for (int i = 0; i < 500; i++) {
+            태운다(COUPON);
+        }
+
+        // **다섯 건을 태운다.** 한 건이면 창(5초)으로 나눠 0.2 라 세든 안 세든
+        // 반올림이 같다 — 버그를 넣어도 값이 안 변한다.
+        스냅샷을_심는다(CouponStates.closed(0));
+        for (int i = 0; i < 5; i++) {
+            태운다(COUPON);
+        }
+
+        assertThat(filter.passRatePerSec()).as("505건이면 101 이 된다").isEqualTo(100);
+    }
+
     @Test
     @DisplayName("매진은_뒷단에_안_간다")
     void 매진은_뒷단에_안_간다() {

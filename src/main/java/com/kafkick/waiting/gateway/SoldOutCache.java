@@ -14,24 +14,16 @@ import java.util.concurrent.atomic.LongAdder;
 import java.util.function.LongSupplier;
 
 /**
- * 매진을 관찰한 사실을 노드가 기억한다 (7.2 · B-10).
- *
- * <p><b>스냅샷보다 오래 살면 안 된다</b> (B-11). 재입고가 상시 발생하므로
- * 영구 캐시하면 재입고된 쿠폰이 영영 막힌다.
+ * 매진을 관찰한 사실을 노드가 기억한다. <b>스냅샷보다 오래 살면 안 된다</b> —
+ * 재입고가 상시 발생하므로 영구 캐시하면 재입고된 쿠폰이 영영 막힌다.
  */
 public final class SoldOutCache {
 
     /**
-     * 한 쿠폰의 무장 기록.
-     *
-     * @param publishedAt 무장 당시 손에 들고 있던 재료의 발행 시각. <b>레디스 시계</b>다
-     * @param armedNanos  무장 시각. <b>단조 시계</b>다 — 수명은 벽시계로 안 잰다
-     * @param blocked     그동안 끊은 건수. 해제 로그가 이 값을 싣는다
+     * 한 쿠폰의 무장 기록. {@code publishedAt} 은 레디스 시계, {@code armedNanos} 는 단조
+     * 시계다. {@code LongAdder} 가 {@code equals} 를 재정의하지 않아 이 record 의 동치가
+     * 동일성으로 떨어지고, 그 덕에 아래 CAS 제거가 "이 무장을 지운다" 로 돈다.
      */
-    // **`equals` 가 동일성으로 떨어진다** — `LongAdder` 가 재정의를 안 하기
-    // 때문이다. 아래 CAS 제거(`remove(key, armed)`)가 "이 무장을 지운다" 로
-    // 도는 것이 그 덕이다. 값 비교가 되는 형으로 바꾸면 뜻이 "같은 무장을
-    // 지운다" 로 바뀌어 새 무장을 지울 수 있다.
     private record Armed(Instant publishedAt, long armedNanos, LongAdder blocked) {
     }
 
@@ -41,10 +33,8 @@ public final class SoldOutCache {
     private final Map<String, Armed> observed = new ConcurrentHashMap<>();
 
     /**
-     * 담긴 수.
-     *
-     * <p><b>맵 크기를 안 쓴다.</b> 검사와 넣기가 나뉘면 동시 기록자 수만큼
-     * 상한을 넘는다 — 키가 클라이언트 입력에서 오는 자리에서는 그게 곧 구멍이다.
+     * 담긴 수. <b>맵 크기를 안 쓴다</b> — 검사와 넣기가 나뉘면 동시 기록자 수만큼 상한을
+     * 넘고, 키가 클라이언트 입력에서 오는 자리에서는 그게 곧 구멍이다.
      */
     private final AtomicInteger armedCount = new AtomicInteger();
 
@@ -72,7 +62,7 @@ public final class SoldOutCache {
     }
 
     /**
-     * 배포 값과 같은 모양으로 만든다. <b>정본은 `application.yml` 이다</b> —
+     * 배포 값과 같은 모양으로 만든다. <b>정본은 {@code application.yml} 이다</b> —
      * 여기 값이 갈리면 시험이 배포되는 숫자를 안 재게 된다.
      */
     public static SoldOutCache standard() {
@@ -82,11 +72,9 @@ public final class SoldOutCache {
     /**
      * 뒷단이 매진이라고 답한 것을 기록한다.
      *
-     * @param publishedAt 지금 손에 든 재료의 발행 시각. <b>해제는 이것보다 나중에
-     *                    발행된 재료만 한다</b> — 같은 재료로 풀면 관찰을 만든 그
-     *                    재료가 곧바로 관찰을 지운다
-     * @return 이번에 새로 무장했으면 참. 이미 무장 중이면 거짓 — 로그를 쿠폰당
-     *         한 번만 찍게 하려는 것이다 (LG-3)
+     * @param publishedAt 지금 손에 든 재료의 발행 시각. 해제는 이보다 나중에 발행된
+     *                    재료만 한다 — 같은 재료로 풀면 관찰이 곧바로 지워진다
+     * @return 새로 무장했으면 참. 이미 무장 중이면 거짓 — 로그는 쿠폰당 한 번이다
      */
     public boolean observed(String couponId, Instant publishedAt) {
         if (armedCount.get() >= maxKeys) {
@@ -154,22 +142,20 @@ public final class SoldOutCache {
             return false;
         }
         // **`LongAdder` 다.** 한 쿠폰에 100K 가 몰리는 것이 전제라, 셀 하나에
-        // CAS 를 걸면 그 자체가 경합점이 된다 (RX-11). 값은 해제할 때 한 번만
-        // 읽으므로 정합한 읽기 비용을 낼 이유가 없다.
+        // CAS 를 걸면 그 자체가 경합점이 된다. 값은 해제할 때 한 번만 읽으므로
+        // 정합한 읽기 비용을 낼 이유가 없다.
         armed.blocked().increment();
         return true;
     }
 
     /**
-     * 관찰보다 <b>나중에 발행된</b> 재료가 재고를 말한다. TTL 을 안 기다리고 푼다.
-     *
-     * <p>발행 시각을 안 보면 관찰과 같은 재료가 곧바로 관찰을 지운다 — 캐시가
-     * 존재하는 창이 바로 그 창이라, 그러면 아무것도 안 막는다.
+     * 관찰보다 <b>나중에 발행된</b> 재료만 푼다. 발행 시각을 안 보면 관찰과 같은 재료가
+     * 곧바로 관찰을 지우는데, 캐시가 존재하는 창이 바로 그 창이라 아무것도 못 막는다.
      *
      * @return 이번에 푼 기록. 없으면 빈 값 — 부르는 쪽이 로그를 찍는다
      */
     public Optional<Released> restocked(String couponId, Instant publishedAt) {
-        // **먼저 락 없이 읽는다** (RX-11). 매진이 듣는 동안 그 쿠폰의 항목이
+        // **먼저 락 없이 읽는다.** 매진이 듣는 동안 그 쿠폰의 항목이
         // 있으므로, 바로 computeIfPresent 를 부르면 끊는 요청 전부가 같은 버킷
         // 모니터로 수렴한다 — 한 쿠폰에 100K 가 몰리는 것이 이 제품의 전제다.
         Armed armed = observed.get(couponId);
@@ -183,7 +169,7 @@ public final class SoldOutCache {
                 : Optional.empty();
     }
 
-    /** 해제된 기록. 얼마나 오래 끊었고 몇 건을 끊었는가 (LG-2). */
+    /** 해제된 기록. 얼마나 오래 끊었고 몇 건을 끊었는가. */
     public record Released(Duration elapsed, long blocked) {
     }
 
@@ -203,7 +189,7 @@ public final class SoldOutCache {
     }
 
     /**
-     * 담긴 수와 상한을 게이지로 낸다 (7.2.7).
+     * 담긴 수와 상한을 게이지로 낸다.
      *
      * <p>상한에 닿으면 새 관찰을 못 받고, 그때부터 뒷단이 다시 다 맞는다.
      */

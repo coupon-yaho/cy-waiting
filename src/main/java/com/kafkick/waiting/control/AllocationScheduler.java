@@ -16,11 +16,9 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
 
 /**
- * 배분의 회차를 만든다. <b>리더 한 대만</b> 돈다.
- *
- * <p>주기를 고정 간격으로 잡으면 레디스가 느려질 때 틱이 큐에 쌓였다가 회복하는
- * 순간 한꺼번에 터진다. 크레딧이 몰려 나가면 뒷단이 그 순간 다시 넘어지므로,
- * <b>한 회차가 끝난 뒤에 다음 지연을 시작한다.</b>
+ * 배분의 회차를 만든다. <b>리더 한 대만</b> 돈다. 고정 간격으로 잡으면 레디스가 느려질 때
+ * 틱이 쌓였다 회복하는 순간 한꺼번에 터져 뒷단이 다시 넘어지므로, <b>한 회차가 끝난 뒤에
+ * 다음 지연을 시작한다.</b>
  */
 public final class AllocationScheduler {
 
@@ -96,16 +94,8 @@ public final class AllocationScheduler {
     }
 
     /**
-     * 한 회차. <b>리더가 아니면 아무것도 안 한다.</b>
-     *
-     * <p>회차가 터지거나 멈춰도 루프는 돈다. 여기서 멎으면 크레딧이 영영 갱신되지
-     * 않고, 전 노드가 낡은 값으로 판정하다 결국 fail-open 한다.
-     */
-    /**
-     * 실패가 이어지는 동안 경고는 한 번만 찍는다.
-     *
-     * <p>초당 한 회차라 매번 찍으면 몇 분짜리 단절에 수백 줄이고, 정작 조사가
-     * 필요한 순간에 원인이 묻힌다.
+     * 실패가 이어지는 동안 경고는 한 번만 찍는다. 초당 한 회차라 매번 찍으면 몇 분짜리
+     * 단절에 수백 줄이고, 정작 조사가 필요한 순간에 원인이 묻힌다.
      */
     private void failed(Throwable cause) {
         if (failures.entered()) {
@@ -118,6 +108,10 @@ public final class AllocationScheduler {
                 recovered.elapsedSeconds(), recovered.swallowed()));
     }
 
+    /**
+     * 한 회차. <b>리더가 아니면 아무것도 안 한다.</b> 여기서 멎으면 크레딧이 영영 갱신되지
+     * 않고 전 노드가 낡은 값으로 판정하다 결국 fail-open 하므로, 터지거나 멈춰도 루프는 돈다.
+     */
     private Mono<Void> round() {
         if (!isLeader.getAsBoolean()) {
             return Mono.empty();

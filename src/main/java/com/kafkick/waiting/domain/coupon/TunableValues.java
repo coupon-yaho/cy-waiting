@@ -1,23 +1,23 @@
 package com.kafkick.waiting.domain.coupon;
 
 /**
- * 운영자가 적은 값을 읽습니다.
+ * 운영자가 적은 값을 읽는다.
  *
- * <p>레코드 안에 두면 그 자리에서만 쓰이는 정적 메서드가 생깁니다 (JS-13).
+ * <p>레코드 안에 두면 그 자리에서만 쓰이는 정적 메서드가 생긴다.
  */
 final class TunableValues {
 
     private TunableValues() {
     }
 
-    /** 상태가 없지만 인스턴스입니다 — 읽을 값이 늘면 여기 필드가 생깁니다 (JS-13). */
+    /** 상태가 없지만 인스턴스다 — 읽을 값이 늘면 여기 필드가 생긴다. */
     static TunableValues create() {
         return new TunableValues();
     }
 
     /**
-     * <b>보호를 끄는 값은 안 받습니다.</b> 0 이면 한산 통과가 통째로 막혀 피크
-     * 전량이 큐 등록으로 가고, 1 에 가까우면 차례가 온 사람이 밀립니다.
+     * <b>보호를 끄는 값은 안 받는다.</b> 0 이면 한산 통과가 통째로 막혀 피크
+     * 전량이 큐 등록으로 가고, 1 에 가까우면 차례가 온 사람이 밀린다.
      */
     double ratio(String json, String key, double fallback) {
         Double value = number(json, key);
@@ -26,8 +26,8 @@ final class TunableValues {
     }
 
     /**
-     * <b>서킷보다 짧거나 격벽을 끄는 값은 안 받습니다.</b> 짧으면 느려진 뒷단이
-     * 서킷에 집계되기 전에 격벽이 먼저 끊어, 서킷이 영영 안 열립니다.
+     * <b>서킷보다 짧거나 격벽을 끄는 값은 안 받는다.</b> 짧으면 느려진 뒷단이
+     * 서킷에 집계되기 전에 격벽이 먼저 끊어, 서킷이 영영 안 열린다.
      */
     long seconds(String json, String key, long fallback) {
         Double value = number(json, key);
@@ -38,9 +38,9 @@ final class TunableValues {
     }
 
     /**
-     * 값 하나를 꺼냅니다.
+     * 값 하나를 꺼낸다.
      *
-     * <p><b>도메인은 라이브러리를 안 씁니다</b> (DS-1). 읽는 것이 수 몇 개뿐입니다.
+     * <p><b>도메인은 라이브러리를 안 쓴다.</b> 읽는 것이 수 몇 개뿐이다.
      */
     private Double number(String json, String key) {
         // **최상위 객체의 멤버만 키로 본다.** 앞뒤 문자만 보면 중첩 객체 안의
@@ -146,7 +146,7 @@ final class TunableValues {
         return i;
     }
 
-    /** 수로 읽습니다. <b>뒤에 뭐가 붙었으면 그 값은 못 믿습니다</b> — {@code 8oops}. */
+    /** 수로 읽는다. <b>뒤에 뭐가 붙었으면 그 값은 못 믿는다</b> — {@code 8oops}. */
     private Double asNumber(String raw) {
         // 빈 값은 여기 안 온다 — 값 자리가 비면 앞에서 이미 -1 로 끊긴다.
         String text = raw.strip();
@@ -158,8 +158,8 @@ final class TunableValues {
         try {
             return Double.valueOf(text);
         } catch (NumberFormatException e) {
-            // **그 값만 버립니다.** 여기서 던지면 오타 하나가 방금 고친 다른 값도
-            // 되돌립니다.
+            // **그 값만 버린다.** 여기서 던지면 오타 하나가 방금 고친 다른 값도
+            // 되돌린다.
             return null;
         }
     }

@@ -3,10 +3,7 @@ package com.kafkick.waiting.domain.queue;
 import java.util.Objects;
 
 /**
- * 줄에서의 자리.
- *
- * <p>{@code score} 는 순번이고 {@code rank} 는 내 앞의 인원이다. 둘은 다르다 —
- * 순번은 벽시계라 안 변하고, 앞의 인원은 앞사람이 빠지면 줄어든다.
+ * 줄에서의 자리. 순번은 벽시계라 안 변하고, 앞의 인원은 앞사람이 빠지면 줄어든다.
  *
  * @param rank 내 앞의 인원. 줄에 없으면 {@code -1}
  * @param score 이 사람의 순번(마이크로초). 줄에 없으면 {@code -1}
@@ -28,7 +25,6 @@ public record QueueEntry(QueueState state, long rank, long score,
         boolean ok = switch (state) {
             // 줄에 없다. 자리를 들고 있으면 안 된다.
             case NOT_QUEUED, REJECTED -> rank == NONE && score == NONE;
-            // 줄에 있다. 앞의 인원도 순번도 있다.
             case WAITING -> rank >= 0 && score >= 0;
             // 차례가 왔다. 큐에서 빠졌으므로 앞에 아무도 없고, 유예 기록으로
             // 되읽은 경우에는 순번을 모른다.
@@ -38,12 +34,9 @@ public record QueueEntry(QueueState state, long rank, long score,
             throw new IllegalArgumentException(
                     "%s 가 가질 수 없는 값이다: rank=%d score=%d".formatted(state, rank, score));
         }
-        // **재방문은 새로 선 사람에게만 있다.** 이미 줄에 있던 사람은 스크립트가
-        // 먼저 돌아가 기록을 안 보고, 조회는 그 사실을 아예 안 싣는다.
-        //
-        // **던지지 않고 낮춘다.** 등록 결과를 만들다 던지면 부르는 쪽이 그것을
-        // 삼켜 fail-open 으로 흘리고, 그러면 줄에 5만 명이 서 있어도 신규가
-        // 뒷단 직행이 된다 — 보고용 값 하나 때문에 줄이 통째로 열린다.
+        // **재방문은 새로 선 사람에게만 있다.** 던지지 않고 낮추는 것은, 등록 결과를
+        // 만들다 던지면 부르는 쪽이 삼켜 fail-open 으로 흘리기 때문이다 — 보고용 값
+        // 하나 때문에 줄에 5만 명이 서 있어도 신규가 뒷단 직행이 된다.
         rejoined = rejoined && state == QueueState.WAITING && !alreadyQueued;
     }
 

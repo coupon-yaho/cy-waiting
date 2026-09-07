@@ -1,10 +1,8 @@
 package com.kafkick.waiting.domain.queue;
 
 /**
- * 예상 대기 시간과 그 표시 구간.
- *
- * <p><b>순간 배수율로 나누지 않는다.</b> 평활화한 값을 쓴다 — GC 스파이크 한 번에
- * 표시 시간이 두 배가 되면 사용자는 서비스가 망가진 신호로 읽는다.
+ * 예상 대기 시간과 그 표시 구간. <b>순간 배수율로 나누지 않는다.</b> GC 스파이크
+ * 한 번에 표시 시간이 두 배가 되면 사용자는 서비스가 망가진 신호로 읽는다.
  */
 public final class EtaPolicy {
 
@@ -62,9 +60,8 @@ public final class EtaPolicy {
      * 오래 기다리게 하는 쪽이 훨씬 나쁘다.
      */
     public static EtaDisplay bucket(double etaSec) {
-        // **모르는 것과 말이 안 되는 것을 같이 본다.** NaN 은 비교가 전부 거짓이라
-        // 그냥 두면 마지막 구간으로 떨어지지만, 음수는 첫 구간에 걸려 "곧 입장" 이
-        // 된다 — 짧게 말했다가 오래 기다리게 하는 쪽이 훨씬 나쁘다.
+        // NaN 은 비교가 전부 거짓이라 그냥 두면 마지막 구간으로 떨어지지만,
+        // 음수는 첫 구간에 걸려 "곧 입장" 이 된다. 둘을 같은 자리로 접는다.
         if (!(etaSec >= 0)) {
             return BUCKETS[BUCKETS.length - 1];
         }

@@ -9,11 +9,9 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * 여유 비율대로 <b>결정적으로</b> 돈다 (R-9).
- *
- * <p>여유대로 세어 놓고 몰아 주면 한 바퀴의 합은 맞아도 그 구간에 그 대가
- * 무너진다. 매번 여유만큼 더하고 가장 앞선 대를 골라 총합만큼 빼는 방식이라
- * 비율이 정확하면서 고루 펴진다.
+ * 여유 비율대로 <b>결정적으로</b> 돈다. 여유대로 세어 놓고 몰아 주면 한 바퀴의
+ * 합은 맞아도 그 구간에 그 대가 무너지므로, 매번 여유만큼 더하고 가장 앞선 대를 골라
+ * 총합만큼 뺀다 — 비율이 정확하면서 고루 펴진다.
  */
 public final class WeightedRoundRobin implements InstanceChooser {
 
@@ -25,7 +23,7 @@ public final class WeightedRoundRobin implements InstanceChooser {
         return new WeightedRoundRobin();
     }
 
-    /** 인스턴스별 누적. 사라진 대는 지운다 — 식별자가 재기동마다 새로 온다 (R-3). */
+    /** 인스턴스별 누적. 사라진 대는 지운다 — 식별자가 재기동마다 새로 온다. */
     private final Map<String, Long> credit = new HashMap<>();
 
     /** 넘치면 상한에 재운다. 부호가 뒤집히면 배분이 정반대로 돈다. */
@@ -43,11 +41,9 @@ public final class WeightedRoundRobin implements InstanceChooser {
             present.add(c.instanceId());
             if (c.eligible()) {
                 eligible.add(c);
-                // **넘치면 배분이 뒤집힌다.** 부호가 바뀌면 가장 여유 있는 대가
-                // 가장 안 뽑히는 대가 되고, 그 배포 내내 조용히 그렇게 돈다.
-                //
-                // 터뜨리지 않고 상한에 재운다. 여기서 예외를 던지면 **보낼 곳이
-                // 멀쩡한데 요청이 죽는다** — 합산기도 같은 이유로 재운다.
+                // **넘치면 배분이 뒤집힌다** — 가장 여유 있는 대가 가장 안 뽑히는 대가
+                // 되어 그 배포 내내 조용히 그렇게 돈다. 터뜨리지 않고 상한에 재우는 것은,
+                // 예외를 던지면 보낼 곳이 멀쩡한데 요청이 죽기 때문이다.
                 total = saturated(total, c.credits());
             }
         }
@@ -56,14 +52,9 @@ public final class WeightedRoundRobin implements InstanceChooser {
             return Optional.empty();
         }
 
-        // **다 셈한 뒤에 쓴다.** 누적을 그때그때 갱신하면 산술이 중간에 터졌을 때
-        // 앞엣것만 움직인 채로 아무것도 안 고르고 돌아간다 — 다음 호출이 그
-        // 유령 누적으로 고른다. 여기서 터지면 상태는 부른 적 없는 것과 같다.
-        //
-        // **지금은 그 경로를 못 만든다.** 위 합산이 같은 값을 먼저 더하므로,
-        // 누적이 넘칠 값이면 거기서 먼저 터진다. 다만 인스턴스가 드나들면
-        // 누적의 합이 0 이 아니게 되어 조금씩 밀릴 수 있고, 그때는 여기가
-        // 먼저 넘친다 — 그 경우를 시험으로 못 만들어서 방어만 둔다.
+        // **다 셈한 뒤에 쓴다.** 누적을 그때그때 갱신하면 산술이 중간에 터졌을 때 앞엣것만
+        // 움직인 채 아무것도 안 고르고 돌아가, 다음 호출이 그 유령 누적으로 고른다.
+        // 인스턴스가 드나들 때만 여기가 먼저 넘치는데, 그 경우를 못 만들어 방어만 둔다.
         Map<String, Long> next = new HashMap<>();
         RoutingCandidate chosen = null;
         long leading = Long.MIN_VALUE;

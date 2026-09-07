@@ -4,11 +4,9 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.LongAdder;
 
 /**
- * 이 노드가 뒷단으로 넘긴 초당 요청 수.
- *
- * <p>회복 봉우리를 정상과 견주려면 그 수를 알아야 하는데, 노드는 제 것만 안다
- * (RC4). <b>지금은 지표로만 낸다</b> — 이 값으로 자르면 관측이 제 출력에 오염돼
- * 진동한다 (AIJ-0250).
+ * 이 노드가 뒷단으로 넘긴 초당 요청 수. 회복 봉우리가 정상의 1.2배를 넘는지
+ * 보려면 그 수를 알아야 하는데 노드는 제 것만 안다. <b>지금은 지표로만 낸다</b> —
+ * 이 값으로 배분을 자르면 관측이 제 출력에 오염돼 진동한다.
  */
 public final class PassRateMeter {
 
@@ -28,7 +26,7 @@ public final class PassRateMeter {
 
     /**
      * 창 하나. <b>수를 {@link LongAdder} 로 든다</b> — 요청마다 CAS 를 돌면 노드
-     * 하나의 캐시 라인에 피크 부하가 통째로 몰린다 (R4).
+     * 하나의 캐시 라인에 피크 부하가 통째로 몰린다.
      *
      * @param previous 직전 창이 낸 값. 한 창도 안 채웠으면 음수다
      */
@@ -52,10 +50,8 @@ public final class PassRateMeter {
     }
 
     /**
-     * 한 건이 뒷단으로 갔다.
-     *
-     * <p><b>접을 때만 CAS 를 돈다.</b> 창 경계에 겹친 몇 건은 접힌 값에도 새
-     * 창에도 안 들어갈 수 있다 — 초당 수를 재는 데는 그 오차가 안 보인다.
+     * 한 건이 뒷단으로 갔다. <b>접을 때만 CAS 를 돈다</b> — 창 경계에 겹친 몇 건은
+     * 어느 창에도 안 들어갈 수 있지만, 초당 수에는 그 오차가 안 보인다.
      */
     public void passed(long nowMs) {
         Window w = window.get();
@@ -65,7 +61,7 @@ public final class PassRateMeter {
         w.count().increment();
     }
 
-    /** 이 도장이 창을 접는가. 대부분의 회차가 여기서 끝나 CAS 를 안 돈다. */
+    /** 이 도장이 창을 접는가. 대부분의 호출이 여기서 끝나 CAS 를 안 돈다. */
     private boolean rolls(Window w, long nowMs) {
         if (w.startedAt() == IDLE) {
             return true;

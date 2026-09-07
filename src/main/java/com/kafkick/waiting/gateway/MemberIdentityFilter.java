@@ -14,11 +14,9 @@ import org.springframework.web.util.pattern.PathPatternParser;
 import reactor.core.publisher.Mono;
 
 /**
- * 회원 헤더의 <b>형식만</b> 본다. 서명이 없어 값 자체는 못 믿는다 — 여기서 막는
- * 것은 깨진 값이 뒷단까지 흘러가는 것뿐이다.
- *
- * <p><b>필터 계층에 둔다.</b> 순번 조회는 게이트웨이 라우트를 안 타므로,
- * 라우트에만 붙이면 그 경로가 통째로 뚫린다.
+ * 회원 헤더의 <b>형식만</b> 본다. 서명이 없어 값 자체는 못 믿고, 막는 것은 깨진
+ * 값이 뒷단까지 흘러가는 것뿐이다. 필터 계층에 두는 것은 순번 조회가 라우트를 안
+ * 타서, 라우트에만 붙이면 그 경로가 통째로 뚫리기 때문이다.
  */
 @Component
 @Order(FilterOrder.IDENTITY)

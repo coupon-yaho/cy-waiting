@@ -10,9 +10,9 @@ import org.springframework.cloud.client.ServiceInstance;
  * 고르는 순간 자리를 잡아 둔 인스턴스.
  *
  * <p><b>상한을 읽고 나중에 세면 늦다.</b> 동시 요청이 다 같이 빈자리를 보고
- * 같은 대를 고른 뒤에야 세어지므로, 상한 1 인 대에 둘이 들어간다.
+ * 같은 대를 고른 뒤에야 세어지므로, 상한 1 인 대에 둘이 들어간다. 표를 여기 실어
+ * 필터가 놓는 것은 고르는 쪽과 놓는 쪽이 갈려 있어 다른 길이 없기 때문이다.
  */
-// 표를 여기 실어 필터가 놓는다. 고르는 쪽과 놓는 쪽이 갈려 있어 다른 길이 없다.
 public final class ReservedInstance implements ServiceInstance {
 
     private final ServiceInstance delegate;

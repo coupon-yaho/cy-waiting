@@ -12,23 +12,17 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
 
 /**
- * 제어 평면을 켜고 끈다.
- *
- * <p><b>순서가 전부다.</b> 연장을 먼저 멈추지 않으면 방금 비운 락을 죽는 노드가
- * 다시 잡고, 커넥션이 닫힌 뒤에 놓으려 하면 매번 실패한다.
+ * 제어 평면을 켜고 끈다. <b>순서가 전부다</b> — 연장을 먼저 멈추지 않으면 방금 비운 락을
+ * 죽는 노드가 다시 잡고, 커넥션이 닫힌 뒤에 놓으려 하면 매번 실패한다. 컨테이너는 종료가
+ * 아닐 때도 stop() 을 부르므로 <b>멈추는 것과 끝나는 것을 가른다.</b>
  */
-// **멈추는 것과 끝나는 것을 가른다.** 컨테이너는 종료가 아닐 때도 stop() 을
-// 부른다. 그 자리에서 락을 놓으면 리더십이 종단 상태가 되어, 다시 시작해도
-// 영영 리더가 못 된다.
 public final class ControlPlaneLifecycle implements SmartLifecycle, DisposableBean {
 
     private static final Logger log = LoggerFactory.getLogger(ControlPlaneLifecycle.class);
 
     /**
-     * 컨테이너는 <b>단계가 큰 것부터</b> 멈춘다.
-     *
-     * <p>웹 서버가 빠진 뒤, 커넥션 팩토리(0)가 닫히기 전 — 그 사이가 락을 놓을
-     * 수 있는 유일한 창이다.
+     * 컨테이너는 <b>단계가 큰 것부터</b> 멈춘다. 웹 서버가 빠진 뒤 커넥션 팩토리(0)가
+     * 닫히기 전 — 그 사이가 락을 놓을 수 있는 유일한 창이다.
      */
     private static final int PHASE = 1024;
 
@@ -73,11 +67,9 @@ public final class ControlPlaneLifecycle implements SmartLifecycle, DisposableBe
     }
 
     /**
-     * <b>루프만 멈춘다.</b> 락은 안 놓는다 — 이 호출이 종료라는 보장이 없다.
-     *
-     * <p>컨테이너는 캐시된 컨텍스트를 전환하거나 잠시 세울 때도 여기를 부른다.
-     * 그때 놓으면 리더십이 종단 상태가 되고, 다시 시작해도 리더가 못 된다.
-     * 놓는 자리는 {@link #destroy()} 다.
+     * <b>루프만 멈춘다.</b> 컨테이너는 컨텍스트를 전환하거나 잠시 세울 때도 여기를 부르므로,
+     * 그때 락을 놓으면 리더십이 종단 상태가 되어 다시 시작해도 리더가 못 된다. 놓는 자리는
+     * {@link #destroy()} 다.
      */
     @Override
     public void stop(Runnable callback) {
@@ -93,11 +85,9 @@ public final class ControlPlaneLifecycle implements SmartLifecycle, DisposableBe
     }
 
     /**
-     * <b>여기가 정말 끝나는 자리다.</b> 컨테이너가 빈을 버릴 때 락을 놓는다.
-     *
-     * <p>해제가 종료를 붙들면 안 된다. 못 놓아도 리스 만료로 풀리지만, 붙들면
-     * 오케스트레이터가 강제로 끊고 그때는 진행 중인 요청까지 함께 끊긴다.
-     * 그래서 상한을 걸고, 실패해도 넘어간다.
+     * <b>여기가 정말 끝나는 자리다.</b> 못 놓아도 리스 만료로 풀리지만, 해제가 종료를 붙들면
+     * 오케스트레이터가 강제로 끊고 그때는 진행 중인 요청까지 함께 끊긴다 — 그래서 상한을
+     * 걸고, 실패해도 넘어간다.
      */
     @Override
     public void destroy() {

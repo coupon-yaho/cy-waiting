@@ -16,7 +16,7 @@ import org.springframework.context.annotation.Bean;
  */
 public class CouponServiceLoadBalancerConfig {
 
-    /** 목록은 판정 재료에서 온다. <b>여기서 레디스를 읽으면 불변식 1 이 깨진다.</b> */
+    /** 목록은 판정 재료에서 온다. <b>여기서 레디스를 읽으면 요청 경로가 레디스를 친다.</b> */
     @Bean
     ServiceInstanceListSupplier snapshotInstances(RoutingProperties properties,
             SnapshotHolder holder) {

@@ -14,10 +14,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * 서킷의 상태 전이를 <b>진입·해제 쌍으로</b> 남긴다 (LG-2).
- *
- * <p>지표는 초 단위로 뭉개져 남고 보존도 짧다. 장애가 걷힌 뒤 "언제 열려 얼마나
- * 오래, 몇 건을 막았는가" 는 전이 로그만 답한다 — 회복 판정이 그 위에 선다.
+ * 서킷의 상태 전이를 <b>진입·해제 쌍으로</b> 남긴다. 지표는 초 단위로 뭉개지고
+ * 보존도 짧아, "언제 열려 얼마나 오래, 몇 건을 막았는가" 는 전이 로그만 답한다 —
+ * 회복 판정이 그 위에 선다.
  */
 final class CircuitTransitionLog {
 
@@ -32,7 +31,7 @@ final class CircuitTransitionLog {
     private record Opened(long since, LongAdder blocked) {
     }
 
-    /** 이름별로 따로 센다 — 서킷은 인스턴스별이다 (R-10). 크기는 뒷단 수로 묶인다. */
+    /** 이름별로 따로 센다 — 서킷은 인스턴스별이다. 크기는 뒷단 수로 묶인다. */
     private final ConcurrentMap<String, Opened> opened = new ConcurrentHashMap<>();
 
     /** half-open 구간마다의 프로브 수. 그 구간이 끝나면 걷는다. */
@@ -48,7 +47,7 @@ final class CircuitTransitionLog {
         return new CircuitTransitionLog(System::nanoTime);
     }
 
-    /** 구간 시계를 받는다. 고정하지 못하면 지속 시간이 시험에서 늘 0 이다 (TS-4). */
+    /** 구간 시계를 받는다. 고정하지 못하면 지속 시간이 시험에서 늘 0 이다. */
     static CircuitTransitionLog of(LongSupplier nanoTicker) {
         return new CircuitTransitionLog(nanoTicker);
     }
@@ -76,11 +75,9 @@ final class CircuitTransitionLog {
     }
 
     /**
-     * half-open 구간에서만 센다. 느림과 오류를 가른다 — 두 길로 실패하고 고칠
-     * 자리가 다르다.
-     *
-     * <p><b>완료 수다.</b> 허가는 취득 시점에 깎이므로 만료 때 비행 중이던 호출은
-     * 안 들어온다. 그 차이는 {@code notPermitted} 가 답한다.
+     * half-open 구간에서만 센다. 느림과 오류를 가르는 것은 고칠 자리가 달라서다.
+     * <b>완료 수라</b> 만료 때 비행 중이던 호출은 안 들어온다 — 허가가 취득 시점에
+     * 깎이기 때문이고, 그 차이는 {@code notPermitted} 가 답한다.
      */
     private void probed(CircuitBreaker breaker, Duration elapsed, boolean failed) {
         Probes window = probes.get(breaker.getName());
@@ -99,10 +96,9 @@ final class CircuitTransitionLog {
     }
 
     /**
-     * half-open 구간이 모은 프로브와 그 구간이 산 시간.
-     *
-     * <p>길이가 {@code maxWaitDurationInHalfOpenState} 근방이면 표본을 못 채운
-     * 것이고, 훨씬 짧으면 채우고 실패한 것이다.
+     * half-open 구간이 모은 프로브와 그 구간이 산 시간. 길이가
+     * {@code maxWaitDurationInHalfOpenState} 근방이면 표본을 못 채운 것이고, 훨씬 짧으면
+     * 채우고 실패한 것이다.
      */
     private record Probes(long since, LongAdder count, LongAdder slow, LongAdder failed,
             LongAdder notPermitted) {
@@ -160,17 +156,14 @@ final class CircuitTransitionLog {
     }
 
     /**
-     * <b>자동으로 걷히는 전이라 WARN 이다</b> (LG-7). ERROR 로 올리면 사람을 부르는
+     * <b>자동으로 걷히는 전이라 WARN 이다.</b> ERROR 로 올리면 사람을 부르는
      * 알람이 매 진동마다 운다.
      */
     private void entered(CircuitBreaker breaker, CircuitBreaker.State to) {
         String name = breaker.getName();
-        // **다시 열리는 것은 새 구간이 아니다.** OPEN → HALF_OPEN → OPEN 은 회복을
-        // 시도했다 실패한 것이므로, 덮어쓰면 원래 시작 시각과 그동안 막은 건수가
-        // 사라진다. 그러면 닫힘 로그가 장애를 실제보다 짧고 가볍게 말한다.
-        //
-        // **시각은 한 번만 읽는다.** 두 번 읽으면 첫 열림에서도 값이 달라져,
-        // 회복을 시도한 적이 없는데 실패했다는 줄이 남는다.
+        // **다시 열리는 것은 새 구간이 아니다.** OPEN → HALF_OPEN → OPEN 에서 덮어쓰면
+        // 시작 시각과 막은 건수가 사라져 닫힘 로그가 장애를 짧고 가볍게 말한다. 시각을
+        // 두 번 읽으면 첫 열림에서도 값이 갈려 회복에 실패했다는 줄이 잘못 남는다.
         long now = nanoTicker.getAsLong();
         Opened before = opened.putIfAbsent(name, new Opened(now, new LongAdder()));
         // 다 채우고 실패한 것과 못 채운 채 만료된 것은 고칠 자리가 다르다.

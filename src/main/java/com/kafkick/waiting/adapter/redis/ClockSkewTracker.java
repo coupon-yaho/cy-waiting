@@ -45,7 +45,7 @@ public class ClockSkewTracker {
     /**
      * 관측된 최대 역행 폭(마이크로초).
      *
-     * <p>이 값이 크면 `slew` 가 아니라 `step` 보정이 걸렸다는 신호다 (2.4절).
+     * <p>이 값이 크면 slew 가 아니라 step 보정이 걸렸다는 신호다.
      */
     public long maxSkewMicros() {
         return maxSkewMicros.get();

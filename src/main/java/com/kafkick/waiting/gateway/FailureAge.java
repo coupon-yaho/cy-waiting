@@ -7,12 +7,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * 실패가 <b>얼마나 이어졌는지</b>를 든다 (F7).
- *
- * <p>단계를 요청 수로 세면 피크에서 밀리초 만에 상한에 닿아 무의미해진다.
+ * 실패가 <b>얼마나 이어졌는지</b>를 든다. 요청 수로 세면 피크에서 밀리초 만에
+ * 상한에 닿아 무의미하다. 적는 자리와 읽는 자리를 가른 것은, 조회는 성공했는데
+ * 응답을 쓰다 끊긴 경우까지 뒷단 장애로 기록되지 않게 하려는 것이다.
  */
-// 적는 것과 읽는 것을 가른다. 읽는 것만으로 실패가 시작되면, 조회는 성공했는데
-// 응답을 쓰다 끊긴 경우까지 뒷단 장애로 기록된다.
 public final class FailureAge {
 
     private static final Logger log = LoggerFactory.getLogger(FailureAge.class);
@@ -29,10 +27,9 @@ public final class FailureAge {
     private final AtomicReference<Failing> failing = new AtomicReference<>();
 
     /**
-     * 조회가 실패했다. <b>이 자리만 실패를 시작하거나 잇는다.</b>
-     *
-     * <p>동시에 들어온 실패들은 각자 다른 순간을 들고 온다. 늦게 처리된 옛 것이
-     * 새 것을 덮으면 해제 유예가 실제보다 일찍 차서, 장애가 이어지는데도 풀린다.
+     * 조회가 실패했다. <b>이 자리만 실패를 시작하거나 잇는다.</b> 동시에 들어온 실패들은
+     * 각자 다른 순간을 들고 오는데, 늦게 처리된 옛 것이 새 것을 덮으면 해제 유예가
+     * 실제보다 일찍 차서 장애가 이어지는데도 풀린다.
      */
     public void failed(Instant now) {
         Failing before = failing.getAndUpdate(f -> f == null
@@ -66,12 +63,11 @@ public final class FailureAge {
     }
 
     /**
-     * 성공했다. <b>한 번으로는 안 푼다.</b>
+     * 성공했다. <b>한 번으로는 안 푼다.</b> 샤드 하나가 죽으면 일부만 실패하는데,
+     * 성공마다 풀면 실패 사이에 낀 성공 때문에 단계가 영영 1 에 머문다.
      *
      * @param quiet 마지막 실패로부터 이만큼 지나야 푼다
      */
-    // 샤드 하나가 죽으면 일부만 실패하는데, 성공마다 풀면 실패 사이에 성공이
-    // 끼어 단계가 영원히 1 에 머문다.
     public void cleared(Instant now, Duration quiet) {
         // **판단과 로그를 한 원자 연산에서 낸다.** 갱신 뒤에 다시 읽으면 그
         // 사이에 남이 바꿔, 해제 로그가 두 번 나거나 아예 안 난다.

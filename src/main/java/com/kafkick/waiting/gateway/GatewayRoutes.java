@@ -40,28 +40,21 @@ public class GatewayRoutes {
     private static final String RESPONSE_TIMEOUT_ATTR = "response-timeout";
 
     /**
-     * 라우트별 연결 상한을 읽는 키.
-     *
-     * <p><b>안 걸면 30초가 선다.</b> 죽은 인스턴스의 주소는 거절도 안 오고 답이
-     * 없어서, 그동안 요청이 매달린다 — 연결이 실패하지 않으니 연결 실패
-     * 재시도가 걸릴 자리가 없다.
+     * 라우트별 연결 상한을 읽는 키. <b>안 걸면 30초가 선다</b> — 죽은 인스턴스의
+     * 주소는 거절도 답도 없어 그동안 요청이 매달리고, 연결이 실패하지 않으니
+     * 연결 실패 재시도가 걸릴 자리도 없다.
      */
     private static final String CONNECT_TIMEOUT_ATTR = "connect-timeout";
 
     /**
-     * 서킷이 열렸을 때 넘길 주소.
-     *
-     * <p><b>받는 주소와 같은 상수에서 나온다.</b> 갈리면 기동은 되고 장애 때만
-     * 404 가 드러난다 — 사용자에게 404 는 매진으로 읽혀 다시 오지 않는다.
+     * 서킷이 열렸을 때 넘길 주소. <b>받는 주소와 같은 상수에서 나온다</b> — 갈리면
+     * 기동은 되고 장애 때만 404 가 드러나며, 404 는 매진으로 읽혀 다시 오지 않는다.
      */
     public static final String FALLBACK_URI = "forward:" + BackendFallbackRoutes.FALLBACK_ISSUE;
 
     /**
-     * 서킷의 이름.
-     *
-     * <p>지금은 뒷단 주소가 하나라 하나뿐이다. 가용량 기반 분배(Phase 9)가 붙으면
-     * <b>인스턴스마다 따로 이름을 잡는다</b> (R-10) — 뒷단 전체를 하나로 묶으면
-     * 한 대가 죽어도 전 트래픽이 막힌다.
+     * 서킷의 이름. 지금은 뒷단 주소가 하나라 하나뿐이다. 가용량 기반 분배가 붙으면
+     * <b>인스턴스마다 따로 잡는다</b> — 하나로 묶으면 한 대가 죽어도 전부 막힌다.
      */
     public static final String CIRCUIT = "backend";
 
@@ -110,9 +103,8 @@ public class GatewayRoutes {
                         "responseTimeout 은 1ms 이상이어야 한다: " + responseTimeout);
             }
             // **격벽 시한보다 앞이어야 한다.** 뒤에 있으면 격벽이 먼저 끊고, 그때
-            // 서킷에 가는 것은 오류가 아니라 취소다 — 취소는 창에 안 쌓여 멎은
-            // 뒷단의 서킷이 영영 안 열린다. 시험으로만 두면 배포 설정 한 줄이
-            // 이 순서를 뒤집고, 그 사실은 장애 때만 드러난다.
+            // 서킷에 가는 것은 취소라 창에 안 쌓인다. 시험이 아니라 여기서 막는 것은
+            // 배포 설정 한 줄이 이 순서를 뒤집기 때문이다.
             if (responseTimeout.compareTo(AdmissionGatewayFilter.MAX_IN_FLIGHT) >= 0) {
                 throw new IllegalArgumentException(
                         "responseTimeout 은 격벽 시한(" + AdmissionGatewayFilter.MAX_IN_FLIGHT
@@ -134,10 +126,8 @@ public class GatewayRoutes {
     }
 
     /**
-     * 서킷 필터를 손으로 만든다.
-     *
-     * <p>{@code circuitBreaker(...)} 는 order 를 줄 자리가 없어 0 으로 붙는다.
-     * 판정도 0 이면 둘의 앞뒤가 안정 정렬에만 기대게 된다.
+     * 서킷 필터를 손으로 만든다. {@code circuitBreaker(...)} 는 order 를 줄 자리가
+     * 없어 0 으로 붙고, 판정도 0 이면 둘의 앞뒤가 안정 정렬에만 기대게 된다.
      */
     private GatewayFilter circuit(SpringCloudCircuitBreakerFilterFactory breakers) {
         SpringCloudCircuitBreakerFilterFactory.Config config =
@@ -149,23 +139,17 @@ public class GatewayRoutes {
     }
 
     /**
-     * 연결이 안 된 인스턴스를 다음 대로 넘긴다.
-     *
-     * <p><b>연결 단계 실패에만 건다.</b> 발급은 멱등이 아니라, 요청이 뒷단에
-     * 닿은 뒤에 재시도하면 그 한 건이 곧 초과 발급이다.
+     * 연결이 안 된 인스턴스를 다음 대로 넘긴다. <b>연결 단계 실패에만 건다</b> —
+     * 발급은 멱등이 아니라 뒷단에 닿은 뒤의 재시도는 그 한 건이 곧 초과 발급이고,
+     * 연결이 안 됐다는 것만이 그 요청이 아무 일도 안 했음을 보장한다.
      */
-    // 상태 코드로는 안 건다. 5xx 는 뒷단이 요청을 받은 뒤에 낸 답이고, 그
-    // 시점에는 이미 재고가 움직였을 수 있다. 연결이 안 됐다는 것만이
-    // "그 요청은 아무 일도 안 했다" 를 보장한다.
     private GatewayFilter connectRetry(RetryGatewayFilterFactory retries) {
         return retries.apply(connectRetryConfig());
     }
 
     /**
-     * 연결 단계 실패에만 무는 설정.
-     *
-     * <p><b>따로 꺼내 둔다.</b> 필터로 감싸고 나면 무엇에 무는지가 밖에서 안
-     * 보여, 상태 기반 재시도가 켜져도 시험이 못 잡는다.
+     * 연결 단계 실패에만 무는 설정. <b>따로 꺼내 둔다</b> — 필터로 감싸고 나면
+     * 무엇에 무는지가 밖에서 안 보여, 상태 기반 재시도가 켜져도 시험이 못 잡는다.
      */
     static RetryGatewayFilterFactory.RetryConfig connectRetryConfig() {
         RetryGatewayFilterFactory.RetryConfig config =
@@ -178,34 +162,23 @@ public class GatewayRoutes {
         // 발급이 답을 받은 뒤에도 다시 가고, 그 한 건이 곧 초과 발급이다.
         config.setSeries();
         config.setStatuses();
-        // **연결이 못 서는 갈래가 하나가 아니다.** 포트만 닫히면 거절이고 라우팅이
-        // 안 되면 도달 불가인데, 뒤엣것은 `ConnectException` 의 하위가 아니라
-        // 조건 하나로는 안 걸린다 — 실측에서 7921 건 중 여덟 건이 그렇게 샜다.
+        // **연결이 못 서는 갈래가 하나가 아니다.** 포트가 닫히면 거절, 라우팅이 안
+        // 되면 도달 불가이고 뒤엣것은 하위 타입이 아니다. 더 넓히지는 않는다 —
+        // 응답을 받기 시작한 뒤의 끊김을 다시 보내는 것이 곧 초과 발급이다.
         //
-        // **더 넓히지는 않는다.** `SocketException` 을 적으면 응답을 받기 시작한
-        // 뒤의 끊김까지 무는데, 그것을 다시 보내는 것이 곧 초과 발급이다 (9.3.12).
-        // 여기 둘은 연결·연결완료 단계에서만 나므로 다시 보내도 안전하다.
+        // **이름 풀이 실패는 안 넣는다.** 연결 상한이 채널 옵션이라 리졸버에는
+        // 안 걸리고, 재시도가 그 상한을 두 배로 늘려 격벽 지연을 넘긴다. 다음
+        // 대도 같은 리졸버를 타므로 다시 보내도 결과가 같다.
         //
-        // **이름 풀이 실패는 안 넣는다.** 연결 상한은 채널 옵션이라 이름 풀이에는
-        // 안 걸리고, 리졸버 기본 상한이 그보다 몇 배 길다 — 넣으면 재시도가 그
-        // 상한을 두 배로 늘려 격벽 지연을 넘긴다. 게다가 다음 대도 같은 리졸버를
-        // 타므로 다시 보내도 결과가 같다. 못 푸는 대는 배제기가 걷는다.
-        //
-        // **열거가 완전한 것은 epoll 에서다.** netty 는 나머지 errno 를 거절로
-        // 모으지만 NIO 로 떨어지면 경로 없음이 소켓 오류로 온다. 그 갈래는 타입만
-        // 으로 응답 도중 끊김과 못 갈라 여기 못 넣는다 — 원인은 폴백 로그가 든다.
-        //
-        // netty 의 ConnectTimeoutException 은 `ConnectException` 의 하위라
-        // 따로 안 적는다.
+        // **열거가 완전한 것은 epoll 에서다.** NIO 로 떨어지면 경로 없음이 소켓
+        // 오류로 와, 타입만으로는 응답 도중 끊김과 못 갈라 여기 못 넣는다.
         config.setExceptions(ConnectException.class, NoRouteToHostException.class);
         return config;
     }
 
     /**
-     * 걸려 있는 건수를 값으로 냅니다.
-     *
-     * <p>제어 평면이 종료할 때 이 값을 봅니다. <b>타입이 아니라 값으로 냅니다</b> —
-     * 게이트웨이 타입을 그쪽에서 참조하면 제어 평면이 요청 경로를 알게 됩니다.
+     * 걸려 있는 건수를 값으로 낸다. 제어 평면이 종료할 때 이 값을 본다. <b>타입이
+     * 아니라 값이다</b> — 게이트웨이 타입을 참조하면 제어 평면이 요청 경로를 안다.
      */
     @Bean(HealthConfig.IN_FLIGHT)
     public IntSupplier inFlightRequests(AdmissionGatewayFilter admission) {
@@ -213,10 +186,8 @@ public class GatewayRoutes {
     }
 
     /**
-     * 본문 쓰기 상한. <b>응답 상한의 배수</b>라 배포 없이 같이 움직인다.
-     *
-     * <p>따로 적으면 응답 상한만 고쳤을 때 두 값이 갈리고, 그때 어느 쪽이 먼저
-     * 끊는지가 바뀐다.
+     * 본문 쓰기 상한. <b>응답 상한의 배수</b>라 배포 없이 같이 움직인다. 따로 적으면
+     * 응답 상한만 고쳤을 때 두 값이 갈리고, 어느 쪽이 먼저 끊는지가 바뀐다.
      */
     private BodyDeadline bodyDeadline(Backend backend, MeterRegistry meters) {
         return BodyDeadline.of(backend.responseTimeout().multipliedBy(2),
@@ -224,10 +195,8 @@ public class GatewayRoutes {
     }
 
     /**
-     * 뒷단으로 가는 주소.
-     *
-     * <p>라우팅이 켜지면 {@code lb://} 로 보낸다 — 균형기가 인스턴스를 고른다.
-     * <b>끄면 단일 주소로 돌아간다</b>: 설정 한 줄이 롤백 수단이다 (Phase 9 5절).
+     * 뒷단으로 가는 주소. 라우팅이 켜지면 {@code lb://} 로 보내 균형기가 고른다.
+     * <b>끄면 단일 주소로 돌아간다</b> — 설정 한 줄이 롤백 수단이다.
      */
     private String backendUri(Backend backend, ObjectProvider<RoutingProperties> routing) {
         RoutingProperties properties = routing.getIfAvailable();
@@ -256,14 +225,9 @@ public class GatewayRoutes {
                             GatewayFilterSpec spec = stripSpoofableClientIp(f)
                                     .filter(admission, FilterOrder.ROUTE_ADMISSION)
                                     .filter(circuit(breakers), FilterOrder.ROUTE_CIRCUIT);
-                            // 연결이 안 된 인스턴스는 다음 대로 넘긴다.
-                            // 죽은 주소로 간 요청이 5xx 로 새면 안 된다.
-                            //
-                            // **균형기가 있을 때만 건다.** 단일 주소로 되돌린
-                            // 판에서는 고를 다음 대가 없어, 재시도가 같은 죽은
-                            // 주소로 두 번 간다 — 연결 시도와 사용자 대기가 그냥
-                            // 두 배다. 그 스위치를 당기는 순간이 하필 뒷단이
-                            // 아플 때다 (Phase 9 5절).
+                            // 죽은 주소로 간 요청이 5xx 로 새면 안 된다. **균형기가
+                            // 있을 때만 건다** — 단일 주소로 되돌리면 고를 다음 대가
+                            // 없어 같은 죽은 주소로 두 번 간다.
                             if (balanced) {
                                 spec = spec.filter(connectRetry(retries),
                                         FilterOrder.ROUTE_RETRY);
@@ -272,9 +236,8 @@ public class GatewayRoutes {
                             // 재고 정보로 실릴 수 있고, 그건 관찰이 아니다.
                             return spec.filter(soldOut, FilterOrder.ROUTE_SOLD_OUT)
                                     // **본문이 안 끝나는 뒷단을 끊는다.** 응답
-                                    // 상한은 헤더가 오기까지만 재므로 그 뒤로는
-                                    // 아무것도 안 걸리고, 헤더가 나간 뒤라 판정
-                                    // 쪽 시한도 커넥션을 못 끊는다.
+                                    // 상한은 헤더까지만 재고, 헤더가 나간 뒤라
+                                    // 판정 쪽 시한도 커넥션을 못 끊는다.
                                     .filter(bodyDeadline, FilterOrder.ROUTE_BODY);
                         })
                         // **끊는 자리가 서킷 안쪽이어야 한다.** 밖에서 끊으면
@@ -294,19 +257,17 @@ public class GatewayRoutes {
                             GatewayFilterSpec spec = stripSpoofableClientIp(f)
                                     .filter(coalescing, FilterOrder.ROUTE_COALESCING);
                             // **조회도 다음 대로 넘긴다.** 여기가 발급보다 아프다 —
-                            // 모으기가 붙은 뒤로는 안 붙는 대로 간 요청 하나가 그
-                            // 키에 붙은 모든 조회를 그동안 잠근다. 조회는 멱등이라
-                            // 다시 보내는 것이 안전하다.
+                            // 안 붙는 대로 간 요청 하나가 그 키에 붙은 모든 조회를
+                            // 잠근다. 조회는 멱등이라 다시 보내도 안전하다.
                             if (balanced) {
                                 spec = spec.filter(connectRetry(retries),
                                         FilterOrder.ROUTE_RETRY);
                             }
                             return spec.filter(bodyDeadline, FilterOrder.ROUTE_BODY);
                         })
-                        // **여기도 끊는 자리가 있어야 한다.** 모으기가 붙은 뒤로는
-                        // 멎은 요청 하나가 그 키를 영구히 잠근다 — 뒤이어 오는
-                        // 모든 조회가 끝나지 않는 것에 붙고, 뒷단이 살아나도
-                        // 게이트웨이를 재시작해야 풀린다.
+                        // **여기도 끊는 자리가 있어야 한다.** 멎은 요청 하나가 그
+                        // 키를 영구히 잠그고, 뒤이어 오는 조회가 모두 거기 붙어
+                        // 뒷단이 살아나도 재시작해야 풀린다.
                         .metadata(RESPONSE_TIMEOUT_ATTR, backend.responseTimeout().toMillis())
                         .metadata(CONNECT_TIMEOUT_ATTR,
                                 (int) backend.connectTimeout().toMillis())

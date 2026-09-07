@@ -20,13 +20,13 @@ import reactor.core.publisher.Mono;
 import reactor.core.publisher.SignalType;
 
 /**
- * 인스턴스로 나간 요청을 세고, <b>어느 경로로 끝나든</b> 되돌린다.
+ * 인스턴스로 나간 요청을 세고, <b>어느 경로로 끝나든</b> 되돌린다. 감소를 한 경로라도
+ * 놓치면 그 인스턴스의 카운터가 영구히 부풀고, 부하율이 계속 높게 보여 고르개가 그
+ * 인스턴스를 영원히 배제한다.
  *
- * <p>감소를 한 경로라도 놓치면 그 인스턴스의 카운터가 영구히 부풀고, 부하율이
- * 계속 높게 보여 고르개가 그 인스턴스를 영원히 배제한다 (G9.3).
+ * <p><b>{@code doFinally} 한 자리에 모은다.</b> 성공·실패·취소를 각각 처리하면 그중
+ * 하나가 빠지고, 빠진 것은 누수가 쌓인 뒤에야 보인다.
  */
-// **`doFinally` 한 자리에 모은다.** 성공·실패·취소를 각각 처리하면 그중 하나가
-// 빠지고, 빠진 것은 누수가 쌓인 뒤에야 보인다.
 public final class InFlightTrackingFilter implements GlobalFilter, Ordered {
 
     /**
@@ -41,10 +41,10 @@ public final class InFlightTrackingFilter implements GlobalFilter, Ordered {
     /**
      * 그 대의 상태를 말하는 4xx. 포화된 대는 429 로 흘리는데 즉시 끝나 물린
      * 건수가 안 쌓이므로, 성공으로 세면 그 대가 계속 가장 한가해 보인다.
+     *
+     * <p><b>401·403·408 은 뺐다.</b> 셋 다 밖에서 만들 수 있고 요청의 성질이지 그 대의
+     * 상태가 아니다 — 실패로 세면 인증 없는 요청 몇 건으로 뒷단을 차례로 뺄 수 있다.
      */
-    // **401·403·408 은 뺐다.** 처음엔 넣었는데 셋 다 밖에서 만들 수 있고 요청의
-    // 성질이지 그 대의 상태가 아니다 — 어느 대로 보내도 같은 답이 온다. 실패로
-    // 세면 인증 없는 요청 몇 건으로 뒷단을 차례로 뺄 수 있다.
     private static final Set<Integer> INSTANCE_FAULT =
             Set.of(HttpStatus.TOO_MANY_REQUESTS.value());
 
@@ -81,11 +81,9 @@ public final class InFlightTrackingFilter implements GlobalFilter, Ordered {
         // **놓는 것만 여기서 한다.** 잡는 것은 고르는 자리에서 원자적으로 끝났다 —
         // 여기서 잡으면 읽고 세는 사이에 동시 요청이 상한을 넘긴다.
         return chain.filter(exchange)
-                // **오류는 여기서 적는다.** `doFinally` 는 콜백을 하류로 신호를
-                // 넘긴 **뒤에** 돌린다. 재시도는 백오프가 없어 그 신호 안에서
-                // 곧바로 다시 구독하므로, `doFinally` 에 두면 두 번째 선택이
-                // 빈 목록을 보고 방금 죽은 대를 또 고른다. `doOnError` 는
-                // 하류보다 먼저 돈다.
+                // **오류는 여기서 적는다.** doFinally 는 하류로 신호를 넘긴 뒤에
+                // 돌고, 재시도는 백오프가 없어 그 신호 안에서 곧바로 다시 구독한다 —
+                // 그러면 두 번째 선택이 방금 죽은 대를 또 고른다.
                 .doOnError(e -> failed(reserved.getInstanceId(), exchange))
                 .doFinally(signal -> {
                     reserved.release();
@@ -100,15 +98,9 @@ public final class InFlightTrackingFilter implements GlobalFilter, Ordered {
      * 뒷단이 실제로 낸 것을 본다. 바깥에서 보면 전부 성공으로 보인다.
      */
     private void record(String instanceId, ServerWebExchange exchange, SignalType signal) {
-        // **취소는 어느 쪽으로도 안 센다.** 우리 시한이 끊은 것과 사용자가 받다가
-        // 끊은 것이 지금 구조로는 안 갈린다 — 응답이 시작됐는지로 가르려 했으나
-        // 받다가 끊는 이탈도 그 자리다. 잘못 빼는 쪽이 더 나쁘다: 이탈은 장애
-        // 구간에 몰리므로, 그때 멀쩡한 대가 차례로 빠진다.
-        //
-        // **그래서 놓치는 것은 거의 없다.** 헤더만 주고 본문을 안 끝내는 대는
-        // 본문 시한이 오류로 끊으므로 위에서 실패로 세어진다. 응답 자체가 안
-        // 오는 대는 응답 상한이 오류로 끊는다. 취소로만 끝나는 것은 격벽 시한
-        // 뿐인데, 그것은 응답 상한보다 뒤라 대개 앞에서 이미 잡힌다.
+        // **취소는 어느 쪽으로도 안 센다.** 우리 시한이 끊은 것과 사용자가 받다가 끊은
+        // 것이 지금 구조로는 안 갈리고, 이탈은 장애 구간에 몰려 잘못 빼면 멀쩡한 대가
+        // 차례로 빠진다. 안 끝내는 대는 본문·응답 시한이 오류로 끊어 앞에서 잡힌다.
         if (signal == SignalType.CANCEL) {
             return;
         }

@@ -1,7 +1,7 @@
 package com.kafkick.waiting.adapter.redis;
 
 /**
- * 레디스 키를 한 곳에서만 만든다 (RD-3).
+ * 레디스 키를 한 곳에서만 만든다.
  *
  * <p>키가 두 곳에서 만들어지면 <b>샤딩을 도입할 때 한쪽만 고쳐진다.</b> 그때는
  * 진행 중인 큐가 통째로 유실되고, 되돌릴 방법이 없다.
@@ -17,20 +17,20 @@ public final class RedisKeys {
     /** 배분을 도는 노드 하나를 정하는 락. */
     public static final String LEADER = "scheduler:leader";
 
-    /** 운영자가 배포 없이 고치는 값 (P-1). 밖에서 쓰는 키다. */
+    /** 운영자가 배포 없이 고치는 값. 밖에서 쓰는 키다. */
     public static final String TUNABLES = "gw:tunables";
 
     /** 배분 대상 쿠폰. 여기 없는 쿠폰은 스케줄러가 보지 않는다. */
     public static final String ACTIVE_COUPONS = "coupons:active";
 
-    /** 쿠폰별 정책 JSON. 밖에서 쓰는 키라 파싱 실패를 전제한다 (E-12). */
+    /** 쿠폰별 정책 JSON. 밖에서 쓰는 키라 파싱 실패를 전제한다. */
     public static final String COUPON_POLICY = "coupon:policy";
 
     /**
      * 뒷단 인스턴스의 가용량 자기보고.
      *
      * <p><b>측정 버전을 키에 담는다.</b> 측정 방식을 바꿀 때 옛 보고가 섞이면 배분이
-     * 두 기준을 합산한다 — 그건 어느 쪽도 아닌 값이다 (4.4.7).
+     * 두 기준을 합산한다 — 그건 어느 쪽도 아닌 값이다.
      */
     public static final String CAPACITY = "capacity:coupon-svc:v1";
 
@@ -39,22 +39,24 @@ public final class RedisKeys {
      *
      * <p><b>writer 가 둘, reader 가 셋이 된다.</b> 접두사를 각자 문자열로 들면
      * 새로 붙는 쪽이 입장한 사람을 이탈자로 읽는다 — 그건 값 하나가 아니라
-     * 사람의 상태가 뒤집히는 일이다 (RD-3 과 같은 이유로 한 곳에 둔다).
+     * 사람의 상태가 뒤집히는 일이다. 그래서 접두사도 여기 한 곳에 둔다.
      */
     public static final String GRACE_DEPARTED = "d:";
 
     /** 입장 표시. {@link #GRACE_DEPARTED} 참조. */
     public static final String GRACE_ADMITTED = "a:";
 
-    /** 해시태그를 깨뜨리는 문자. 클라이언트 입력이 키에 들어가는 경로를 막는다. */
-    // '#' 은 스냅샷 해시의 전역값 접두사다. 쿠폰 ID 에 들어가면 그 쿠폰이
-    // 전역값을 덮어써 — '#credit' 이름의 쿠폰 하나로 전 쿠폰의 몫이 0 이 된다.
+    /**
+     * 해시태그를 깨뜨리는 문자. 클라이언트 입력이 키에 들어가는 경로를 막는다.
+     * '#' 은 스냅샷 해시의 전역값 접두사라, 쿠폰 ID 에 들어가면 그 쿠폰이 전역값을
+     * 덮어써 '#credit' 이름의 쿠폰 하나로 전 쿠폰의 몫이 0 이 된다.
+     */
     private static final String FORBIDDEN = "{}:#";
 
     private RedisKeys() {
     }
 
-    /** 대기열 ZSET. score 는 Redis {@code TIME} 의 마이크로초다 (A-9). */
+    /** 대기열 ZSET. score 는 Redis {@code TIME} 의 마이크로초다. */
     public static String queue(String couponId, int shards, int shard) {
         return "queue:{" + tag(couponId, shards, shard) + "}";
     }
@@ -64,13 +66,13 @@ public final class RedisKeys {
         return "maxscore:{" + tag(couponId, shards, shard) + "}";
     }
 
-    /** 입장 임계. <b>개수가 아니라 score 값</b>이다 (D-8). */
+    /** 입장 임계. <b>개수가 아니라 score 값</b>이다. */
     public static String admitted(String couponId, int shards, int shard) {
         return "admitted:{" + tag(couponId, shards, shard) + "}";
     }
 
     /**
-     * 이탈자 기록. 재방문자를 식별하되 자리는 보관하지 않는다 (D-11).
+     * 이탈자 기록. 재방문자를 식별하되 자리는 보관하지 않는다.
      *
      * <p><b>값의 형식은 {@code <종류>:<초>} 다</b> — {@code d:} 이탈, {@code a:} 입장.
      * 있는지만 봐서는 둘을 못 가른다 ({@link #GRACE_DEPARTED}·{@link #GRACE_ADMITTED}).
@@ -83,7 +85,7 @@ public final class RedisKeys {
      * 생존 신호. 폴링이 곧 하트비트다.
      *
      * <p><b>사람마다 키를 만들지 않는다.</b> 그러면 청소 스크립트가 KEYS 에
-     * 선언되지 않은 키를 만지게 되고 클러스터가 거부한다 (RD-1). 쿠폰당 ZSET
+     * 선언되지 않은 키를 만지게 되고 클러스터가 거부한다. 쿠폰당 ZSET
      * 하나에 <b>만료 시각을 score 로</b> 담는다 — 개별 TTL 은 잃지만 청소가
      * 어차피 만료를 보므로 잃는 것이 없다.
      */
@@ -92,7 +94,7 @@ public final class RedisKeys {
     }
 
     /**
-     * 매진 큐 삭제의 <b>울타리 표</b>. 마지막으로 지운 리더의 펜스 번호다 (5.3.1).
+     * 매진 큐 삭제의 <b>울타리 표</b>. 마지막으로 지운 리더의 펜스 번호다.
      *
      * <p>리더 키는 줄과 다른 슬롯이라 삭제 스크립트가 같이 못 읽는다. 그래서
      * 소유권을 <b>줄과 같은 슬롯</b>에서 확인한다 — 옛 펜스 번호의 명령은 안 듣는다.
@@ -105,7 +107,7 @@ public final class RedisKeys {
      * 남은 재고. <b>발급 계층이 소유하고 샤드와 무관하다.</b>
      *
      * <p>샤딩하면 슬롯이 갈리므로 <b>Lua 에서 만지지 않는다</b> — 별도로 읽는다.
-     * 예외는 매진 큐 삭제 하나다 (E-3 · CY-765). 되돌릴 수 없어서 쓰기 직전의
+     * 예외는 매진 큐 삭제 하나다. 되돌릴 수 없어서 쓰기 직전의
      * 사실이 필요하고, 샤드가 하나면 줄과 태그가 같다. 여럿이면 거절한다.
      */
     public static String stock(String couponId) {
@@ -126,10 +128,10 @@ public final class RedisKeys {
      * 해시태그 본문.
      *
      * <p><b>샤드가 하나면 접미사를 붙이지 않는다.</b> 붙였다 떼는 순간 콜드 쿠폰
-     * 전체의 키가 갈리므로, 운영 중 샤딩 도입이 불가능해진다 (3.1절).
+     * 전체의 키가 갈리므로, 운영 중 샤딩 도입이 불가능해진다.
+     *
+     * <p>RULE-EXCEPTION(JS-13): 키 생성 유틸리티라 인스턴스가 없다.
      */
-    // RULE-EXCEPTION(JS-13): JS-14 가 RedisKeys 를 유틸리티 클래스로 명시한다.
-    // 인스턴스가 없어 인스턴스 메서드로 둘 수 없다 (AIJ-0014).
     private static String tag(String couponId, int shards, int shard) {
         String id = validated(couponId, "couponId");
         if (shards < 1) {
@@ -143,9 +145,11 @@ public final class RedisKeys {
         return shards == 1 ? id : id + ":" + shard;
     }
 
-    /** 클라이언트 입력이 키 이름에 들어가는 경로는 전부 의심한다 (PK-R5). */
-    // RULE-EXCEPTION(JS-13): JS-14 가 RedisKeys 를 유틸리티 클래스로 명시한다.
-    // 인스턴스가 없어 인스턴스 메서드로 둘 수 없다 (AIJ-0014).
+    /**
+     * 클라이언트 입력이 키 이름에 들어가는 경로는 전부 의심한다.
+     *
+     * <p>RULE-EXCEPTION(JS-13): 키 생성 유틸리티라 인스턴스가 없다.
+     */
     private static String validated(String value, String what) {
         if (value == null || value.isBlank()) {
             throw new IllegalArgumentException(what + " 는 필수다");

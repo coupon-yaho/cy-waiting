@@ -7,10 +7,8 @@ import java.util.Objects;
 import java.util.regex.Pattern;
 
 /**
- * 전달 헤더를 믿어도 되는 홉.
- *
- * <p><b>아무나 채워 넣게 두면 상한이 무의미해진다.</b> 매 요청 다른 값을 넣어
- * 키를 무한히 만들면 리미터가 포화하고, 그때부터 정상 사용자가 막힌다.
+ * 전달 헤더를 믿어도 되는 홉. <b>아무나 채워 넣게 두면 상한이 무의미해진다</b> — 매 요청
+ * 다른 값으로 키를 무한히 만들면 리미터가 포화하고, 그때부터 정상 사용자가 막힌다.
  *
  * @param cidrs 신뢰하는 대역. 비어 있으면 아무 헤더도 안 믿는다
  */
@@ -19,10 +17,8 @@ public final class TrustedProxies {
     private static final int BITS_PER_BYTE = 8;
 
     /**
-     * 숫자 표기만 받는 형태.
-     *
-     * <p>이름이 섞이면 그 조회가 요청 경로에 붙는다. {@code dead.beef} 처럼
-     * 주소처럼 생긴 이름도 여기서 걸러야 한다.
+     * 숫자 표기만 받는 형태. 이름이 섞이면 그 조회가 요청 경로에 붙으므로,
+     * {@code dead.beef} 처럼 주소처럼 생긴 이름도 여기서 걸러야 한다.
      */
     private static final Pattern NUMERIC = Pattern.compile(
             "^(\\d{1,3}(\\.\\d{1,3}){3}|[0-9a-fA-F:]+)$");
@@ -69,10 +65,8 @@ public final class TrustedProxies {
     }
 
     /**
-     * 이 주소가 신뢰하는 홉인가.
-     *
-     * <p><b>기본은 안 믿는 것이다.</b> 헤더를 믿는 것은 앞단이 그 헤더를
-     * 덮어쓴다는 보장이 있을 때만이다.
+     * 이 주소가 신뢰하는 홉인가. <b>기본은 안 믿는 것이다</b> — 헤더를 믿는 것은
+     * 앞단이 그 헤더를 덮어쓴다는 보장이 있을 때만이다.
      */
     public boolean isTrusted(String address) {
         Objects.requireNonNull(address, "address 는 필수다");
@@ -108,7 +102,6 @@ public final class TrustedProxies {
      * 요청 경로에 붙는다.
      */
     static byte[] literal(String address) {
-        // 숫자 표기만 통과시킨 뒤 푼다. 이름이 오면 여기서 조회가 일어난다.
         if (address == null || !NUMERIC.matcher(address).matches()) {
             return null;
         }

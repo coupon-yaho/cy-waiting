@@ -1,6 +1,7 @@
 package com.kafkick.waiting.routing;
 
 import java.time.Duration;
+import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
@@ -17,11 +18,14 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *                       <b>느려진 한 대가 커넥션을 독식하지 못하게 한다</b>
  * @param outlierFailures 연속 실패가 이만큼이면 그 인스턴스를 후보에서 뺀다
  * @param outlierEjectFor 뺀 뒤 이만큼 지나면 다시 후보로 돌린다
+ * @param allowedDestinations 연결해도 되는 목적지. <b>켤 때는 필수다</b>
+ * @param allowedPorts   연결해도 되는 포트. 호스트만 보면 반쪽이다
  */
 @ConfigurationProperties("waiting.routing")
 public record RoutingProperties(boolean enabled, String serviceId, String strategy,
         Duration inFlightTtl, Duration coldStartRamp, Integer perInstanceCap,
-        Integer outlierFailures, Duration outlierEjectFor) {
+        Integer outlierFailures, Duration outlierEjectFor, List<String> allowedDestinations,
+        List<Integer> allowedPorts) {
 
     /** 무작위 둘 중 여유 대비 덜 찬 쪽. <b>기본이 아니다</b> — 비율에서 밀린다. */
     public static final String P2C = "p2c";
@@ -30,6 +34,21 @@ public record RoutingProperties(boolean enabled, String serviceId, String strate
     public static final String ROUND_ROBIN = "round-robin";
 
     public RoutingProperties {
+        allowedDestinations = allowedDestinations == null ? List.of()
+                : allowedDestinations.stream()
+                        .filter(entry -> entry != null && !entry.isBlank()).toList();
+        allowedPorts = allowedPorts == null ? List.of() : List.copyOf(allowedPorts);
+        // **켤 때만 막는다.** 꺼진 배포에서까지 요구하면 라우팅과 무관한 배포가
+        // 이 설정 때문에 안 뜬다. 켜는 순간은 안 봐주고 끊는다 — 목록이 비었다는
+        // 것이 "아무 데나 보내도 된다" 로 읽히면 그 배포가 그대로 통로가 된다.
+        if (enabled && allowedDestinations.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "라우팅을 켜려면 allowed-destinations 를 적어야 한다");
+        }
+        if (enabled && allowedPorts.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "라우팅을 켜려면 allowed-ports 를 적어야 한다");
+        }
         serviceId = serviceId == null || serviceId.isBlank() ? "coupon-service" : serviceId;
         // **기본은 라운드로빈이다.** P2C 를 고른 원래 이유는 게이트웨이 여러 대가
         // 같은 인스턴스로 몰린다는 것이었는데, 두 대를 띄워 재 보니 안 몰렸고

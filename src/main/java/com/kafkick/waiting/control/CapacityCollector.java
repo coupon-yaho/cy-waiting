@@ -1,14 +1,19 @@
 package com.kafkick.waiting.control;
 
-import java.time.Duration;
-import java.util.Collection;
+import com.kafkick.waiting.domain.routing.AllowedDestinations;
+import com.kafkick.waiting.domain.routing.InstanceAddress;
 import com.kafkick.waiting.domain.routing.InstanceRouting;
+import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
-import java.util.List;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.atomic.AtomicLong;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * 뒷단이 스스로 보고한 여유를 모아 <b>전역 크레딧</b>을 만든다. 콜드 인스턴스는 자기
@@ -16,6 +21,8 @@ import java.util.concurrent.atomic.AtomicLong;
  * 느려서 즉시 포화된다. 그래서 램프를 건다.
  */
 public final class CapacityCollector {
+
+    private static final Logger log = LoggerFactory.getLogger(CapacityCollector.class);
 
     /** 창의 제곱이 {@code long} 안에 들어오게 묶는다 — 아래 {@code require} 참조. */
     private static final Duration MAX_WINDOW = Duration.ofDays(1);
@@ -88,7 +95,26 @@ public final class CapacityCollector {
      */
     private final AtomicLong lastFloor = new AtomicLong();
 
-    private CapacityCollector(Duration rampUp, Duration freshness, long floor, long perInstanceCap) {
+    /** 연결해도 되는 목적지. 켜는 쪽에서 목록이 비면 기동을 끊는다. */
+    private final AllowedDestinations allowed;
+
+    /** 허용 밖 주소를 보고한 인스턴스가 있는 구간. 회차마다 열고 닫는다. */
+    private final FailureWindow destinationDenied = FailureWindow.create();
+
+    /** 이번 회차에 목적지 때문에 뺀 수. 회차가 끝나면 창을 열거나 닫는다. */
+    private volatile int deniedThisRound;
+
+    /** 이번 회차에 처음 뺀 인스턴스. 로그에 한 대만 싣고 나머지는 수로 센다. */
+    private String firstDenied = "";
+
+    /**
+     * <b>끝난 회차의 값만 낸다.</b> 도는 중인 필드를 그대로 내면 긁는 시점에 따라
+     * 0 이나 반쯤 센 값이 나가고, 그 값으로 건 알람은 못 믿는다.
+     */
+    private final AtomicLong lastDenied = new AtomicLong();
+
+    private CapacityCollector(Duration rampUp, Duration freshness, long floor,
+            long perInstanceCap, AllowedDestinations allowed) {
         require(rampUp, "rampUp");
         require(freshness, "freshness");
         if (floor < 1) {
@@ -102,6 +128,7 @@ public final class CapacityCollector {
         this.freshness = freshness;
         this.floor = floor;
         this.perInstanceCap = perInstanceCap;
+        this.allowed = Objects.requireNonNull(allowed, "allowed 는 필수다");
         this.lastKnown = new AtomicLong(floor);
     }
 
@@ -111,8 +138,9 @@ public final class CapacityCollector {
      * 잡으면 틱 한 번 밀려도 전면 억제다. 신선도는 보고 주기 1초에 낡음 임계 3초다.
      */
     public static CapacityCollector of(Duration rampUp, Duration freshness,
-            long floor, long perInstanceCap) {
-        return new CapacityCollector(rampUp, freshness, floor, perInstanceCap);
+            long floor, long perInstanceCap, AllowedDestinations allowed) {
+        return new CapacityCollector(rampUp, freshness, floor, perInstanceCap,
+                Objects.requireNonNull(allowed, "allowed 는 필수다"));
     }
 
     /**
@@ -154,9 +182,16 @@ public final class CapacityCollector {
         lastKnown.updateAndGet(known -> known == 0 ? 0 : Math.max(bottom, known / 2));
     }
 
-    /** 리더가 됐다. <b>유예를 처음부터 준다</b> — 비리더 구간의 실패는 남의 회차다. */
+    /**
+     * 리더가 됐다. <b>유예를 처음부터 준다</b> — 비리더 구간의 실패는 남의 회차다.
+     * 열린 창도 같이 닫는다. 안 닫으면 지속 시간에 비리더 구간이 섞이고, 게이지가
+     * 마지막 값에 얼어붙어 안 도는 노드가 그 값을 계속 낸다.
+     */
     public void leadershipAcquired() {
         failedRounds.set(0);
+        deniedThisRound = 0;
+        lastDenied.set(0);
+        destinationDenied.exited();
     }
 
     /** 마지막 회차에서 보낼 수 있던 인스턴스들. 스냅샷에 실어 전 노드에 보낸다. */
@@ -178,6 +213,16 @@ public final class CapacityCollector {
      */
     public static long idleMinimum(int nodes) {
         return (long) Math.max(1, nodes) * IDLE_DIVISOR;
+    }
+
+    /**
+     * 직전 회차에서 허용 목적지 밖이라 라우팅에서 뺀 수. 누적이 아니라 회차 값이다.
+     * <b>0 이 아닌데 후보가 비면 설정이 원인이다</b> — 그 구분을 로그로는 못 한다.
+     *
+     * @return 게이지가 받는 폭. 회차 값이라 {@code int} 로 충분하지만 등록부가 실수다
+     */
+    public double deniedDestinations() {
+        return lastDenied.get();
     }
 
     /** 마지막 회차에서 하한이 답이 됐으면 그 값, 아니면 0. */
@@ -202,6 +247,7 @@ public final class CapacityCollector {
         // **라우팅 목록을 같은 회차에서 만든다.** 따로 돌면 합산에 든 인스턴스와
         // 보낼 인스턴스가 갈리고, 그 갈림은 램프 구간에만 나타난다.
         List<InstanceRouting> routable = new ArrayList<>();
+        deniedThisRound = 0;
         long total = 0;
         int fresh = 0;
         // **램프가 깎은 것과 뒷단이 못 가진 것은 다르다.** 앞엣것은 우리가 만든
@@ -229,11 +275,17 @@ public final class CapacityCollector {
             // 되어 전역 크레딧이 0 이 된다 — 전면 차단이다.
             long share = usable(report, now);
             total = saturatedAdd(total, share);
-            // 주소를 안 실은 인스턴스는 크레딧에는 들고 라우팅에서만 빠진다.
-            report.routableAddress().ifPresent(address -> routable.add(
-                    new InstanceRouting(report.instanceId(), address, share)));
+            // 주소를 안 실었거나 허용 밖인 인스턴스는 크레딧에는 들고 라우팅에서만
+            // 빠진다. 크레딧에서까지 빼면 그 몫만큼 전역 크레딧이 조용히 줄어,
+            // 계약을 아직 안 따르는 배포 구간에 전체가 조여진다.
+            report.routableAddress()
+                    .filter(address -> permits(report.instanceId(), address))
+                    .ifPresent(address -> routable.add(
+                            new InstanceRouting(report.instanceId(), address, share)));
         }
         evictStale(now);
+        markDeniedWindow();
+        publishDenied();
         // **관측이 있었던 회차에서만 태운다.** 한 건도 안 돈 회차가 태우면 다음 회차에
         // 이미 돌던 무리로 못 보고 램프를 0 부터 다시 타, 크레딧이 하한에 묶인 동안 한산
         // 통과 상한이 0 이 된다. 무한정은 아닌 이유는 위 상수가 든다.
@@ -275,6 +327,54 @@ public final class CapacityCollector {
     private long saturatedAdd(long a, long b) {
         long sum = a + b;
         return ((a ^ sum) & (b ^ sum)) < 0 ? Long.MAX_VALUE : sum;
+    }
+
+    /**
+     * 연결해도 되는 주소인가. <b>거절은 그 인스턴스만 뺀다</b> — 회차 전체를
+     * 막으면 보고 하나가 라우팅을 끄는 손잡이가 된다.
+     */
+    private boolean permits(String instanceId, InstanceAddress address) {
+        if (allowed.permits(address)) {
+            return true;
+        }
+        // 첫 건만 기억해 회차 끝에서 한 번 남긴다. 여기서 남기면 거절 수만큼
+        // 줄이 쌓이고, 창의 회차 수도 인스턴스 수만큼 부푼다.
+        if (deniedThisRound++ == 0) {
+            firstDenied = "%s (%s)".formatted(safe(instanceId), address);
+        }
+        return false;
+    }
+
+    /**
+     * <b>회차마다 창을 열고 닫는다.</b> 안 닫으면 첫 거절 뒤로 영영 조용해서,
+     * 다른 인스턴스가 같은 일을 해도 아무 데도 안 남는다.
+     */
+    private void markDeniedWindow() {
+        if (deniedThisRound > 0) {
+            if (destinationDenied.entered()) {
+                log.warn("가용량 보고의 주소가 허용 목적지 밖이다 — {} 외 이번 회차 {}대. "
+                        + "이 인스턴스들은 크레딧에는 들지만 라우팅 후보에서 빠진다. "
+                        + "허용 목록 설정과 뒷단이 보고한 주소를 함께 본다",
+                        firstDenied, deniedThisRound);
+            }
+            return;
+        }
+        destinationDenied.exited().ifPresent(recovered ->
+                log.info("허용 목적지 밖 보고가 그쳤다 — {}초 만에, 그동안 {}회차 뺐다",
+                        recovered.elapsedSeconds(), recovered.swallowed()));
+    }
+
+    /** 회차가 끝났다. 여기서만 게이지가 움직인다. */
+    private void publishDenied() {
+        lastDenied.set(deniedThisRound);
+    }
+
+    /**
+     * 로그 한 줄을 위조하지 못하게 줄바꿈을 지운다. instanceId 는 뒷단이 정하는
+     * 값이고 길이·문자 제한이 없다.
+     */
+    private String safe(String instanceId) {
+        return instanceId.replaceAll("[\\r\\n]", "_");
     }
 
     private boolean isFresh(CapacityReport report, long now) {

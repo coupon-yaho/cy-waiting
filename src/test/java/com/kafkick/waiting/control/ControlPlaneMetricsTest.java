@@ -1,5 +1,6 @@
 package com.kafkick.waiting.control;
 
+import com.kafkick.waiting.domain.routing.AllowedDestinations;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.micrometer.core.instrument.MeterRegistry;
@@ -21,6 +22,9 @@ import reactor.core.scheduler.Schedulers;
  */
 class ControlPlaneMetricsTest {
 
+    /** 목적지 제한이 없는 상태. 이름으로 남겨야 인자를 빠뜨린 것과 안 헷갈린다. */
+    private static final AllowedDestinations 무제한 = AllowedDestinations.unrestricted();
+
     private static final Instant 지금 = Instant.parse("2026-08-25T00:00:00Z");
 
     private static final Duration 예산 = Duration.ofMillis(250);
@@ -30,7 +34,8 @@ class ControlPlaneMetricsTest {
     void 전역_크레딧과_노드_수를_잰다() {
         MeterRegistry meters = new SimpleMeterRegistry();
         CapacityCollector collector =
-                CapacityCollector.of(Duration.ofSeconds(60), Duration.ofSeconds(3), 5, 10_000);
+                CapacityCollector.of(Duration.ofSeconds(60), Duration.ofSeconds(3), 5, 10_000,
+                무제한);
         CapacityRefresh refresh = CapacityRefresh.of(
                 () -> Mono.just(new CapacitySample(List.of(new CapacityReport("i1", 300, 지금.getEpochSecond())), 지금.getEpochSecond())),
                 collector, () -> 3, 예산, Schedulers.immediate(), meters);
@@ -49,7 +54,8 @@ class ControlPlaneMetricsTest {
     void 못_읽은_회차를_센다() {
         MeterRegistry meters = new SimpleMeterRegistry();
         CapacityCollector collector =
-                CapacityCollector.of(Duration.ofSeconds(60), Duration.ofSeconds(3), 5, 10_000);
+                CapacityCollector.of(Duration.ofSeconds(60), Duration.ofSeconds(3), 5, 10_000,
+                무제한);
         CapacityRefresh refresh = CapacityRefresh.of(
                 () -> Mono.error(new IllegalStateException("레디스가 죽었다")),
                 collector, () -> 1, 예산, Schedulers.immediate(), meters);

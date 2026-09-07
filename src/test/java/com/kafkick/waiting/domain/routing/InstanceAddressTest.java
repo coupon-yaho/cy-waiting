@@ -1,6 +1,7 @@
 package com.kafkick.waiting.domain.routing;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
@@ -133,4 +134,26 @@ class InstanceAddressTest {
                 .map(InstanceAddress::port).contains(65535);
     }
 
+    /**
+     * <b>정규 생성자도 막는다</b> (CY-887). 목적지 판정이 "콜론 든 호스트는 여기까지
+     * 못 온다" 를 전제로 서는데, {@code new} 가 무검증이면 그 전제가 관례일 뿐이다.
+     */
+    @Test
+    @DisplayName("정규_생성자도_막는다")
+    void 정규_생성자도_막는다() {
+        assertThatThrownBy(() -> new InstanceAddress("fd00::1", 8080))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new InstanceAddress("", 8080))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new InstanceAddress(null, 8080))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new InstanceAddress("a.b.", 8080))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new InstanceAddress("be.internal", 0))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new InstanceAddress("be.internal", 65536))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new InstanceAddress("a".repeat(256), 8080))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
 }

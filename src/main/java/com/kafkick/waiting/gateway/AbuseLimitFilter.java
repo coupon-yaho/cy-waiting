@@ -1,9 +1,10 @@
 package com.kafkick.waiting.gateway;
 
-import com.kafkick.waiting.domain.admission.SecondWindowLimiter.AcquireResult;
 import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
+import com.kafkick.waiting.domain.admission.SecondWindowLimiter.AcquireResult;
 import com.kafkick.waiting.domain.queue.EtaPolicy;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
+import com.kafkick.waiting.domain.net.IpLiteral;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.beans.factory.annotation.Autowired;
 import java.net.InetSocketAddress;
@@ -165,7 +166,7 @@ public final class AbuseLimitFilter implements WebFilter {
         String candidate = last.substring(last.lastIndexOf(',') + 1).trim();
         // **주소로 안 읽히면 버린다.** 프록시 주소로 바꾸면 그 뒤의 모두가 한 몫을
         // 나눠 쓰고, 그대로 키로 쓰면 값을 바꿔가며 키를 무한히 만들 수 있다.
-        return TrustedProxies.literal(candidate) == null ? null : candidate;
+        return IpLiteral.parse(candidate) == null ? null : candidate;
     }
 
     /** 미해결 주소는 {@code getAddress()} 가 비어 있다. 그대로 부르면 터진다. */

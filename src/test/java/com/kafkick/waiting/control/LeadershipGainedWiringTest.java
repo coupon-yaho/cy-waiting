@@ -1,5 +1,6 @@
 package com.kafkick.waiting.control;
 
+import com.kafkick.waiting.domain.routing.AllowedDestinations;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.kafkick.waiting.MutableClock;
@@ -31,6 +32,9 @@ import reactor.core.scheduler.Schedulers;
  * 얼어 있던 값을 이어 쓴다. 그래서 그 목록 자체를 못 박는다.
  */
 class LeadershipGainedWiringTest {
+
+    /** 목적지 제한이 없는 상태. 이름으로 남겨야 인자를 빠뜨린 것과 안 헷갈린다. */
+    private static final AllowedDestinations 무제한 = AllowedDestinations.unrestricted();
 
     private static final Map<String, CouponState> 줄이_선_쿠폰 =
             Map.of("c1", CouponStates.queueing(10, 1_000, 100));
@@ -164,7 +168,8 @@ class LeadershipGainedWiringTest {
     private Runnable onLeadershipGained(QueueSweeper sweeper, AllocationRound round) {
         ControlPlaneProperties.Capacity 설정 = ControlPlaneProperties.defaults().capacity();
         CapacityCollector collector = CapacityCollector.of(설정.rampUp(), 설정.freshness(),
-                설정.floor(), 설정.perInstanceCap());
+                설정.floor(), 설정.perInstanceCap(),
+                무제한);
         return 배선.onLeadershipGained(collector,
                 CapacityRefresh.of(Mono::empty, collector, () -> 1, Duration.ofSeconds(1),
                         Schedulers.immediate(), new SimpleMeterRegistry()),

@@ -66,6 +66,12 @@ import reactor.core.publisher.Mono;
  */
 class GatewayRoutesTest {
 
+    /** 목적지 제한. 켜진 설정은 이것이 없으면 못 선다. */
+    private static final List<String> 허용 = List.of(".internal");
+
+    /** 목적지와 짝이다. 포트를 안 막으면 허용한 망 안의 아무 서비스나 대상이 된다. */
+    private static final List<Integer> 허용_포트 = List.of(9000);
+
     // 라우트 정의가 술어 팩토리를 컨텍스트에서 꺼낸다. 필요한 것만 등록해
     private static final SecondWindowLimiter 공유_리미터 = SecondWindowLimiter.withMaxKeys(10);
 
@@ -747,7 +753,8 @@ class GatewayRoutesTest {
     @DisplayName("라우팅을_켜면_lb_로_보낸다")
     void 라우팅을_켜면_lb_로_보낸다() {
         RouteLocator locator = 라우터(new RoutingProperties(
-                true, "coupon-service", null, null, null, null, null, null));
+                true, "coupon-service", null, null, null, null, null, null,
+                허용, 허용_포트));
 
         assertThat(주소들(locator)).allMatch("lb://coupon-service"::equals);
     }
@@ -760,7 +767,8 @@ class GatewayRoutesTest {
     @DisplayName("라우팅을_끄면_단일_주소다")
     void 라우팅을_끄면_단일_주소다() {
         RouteLocator locator = 라우터(new RoutingProperties(
-                false, "coupon-service", null, null, null, null, null, null));
+                false, "coupon-service", null, null, null, null, null, null,
+                허용, 허용_포트));
 
         assertThat(주소들(locator)).allMatch("http://backend:8080"::equals);
     }
@@ -791,7 +799,8 @@ class GatewayRoutesTest {
     @DisplayName("라우팅을_켜면_두_라우트에_재시도가_붙는다")
     void 라우팅을_켜면_두_라우트에_재시도가_붙는다() {
         RouteLocator 켠_판 = 라우터(new RoutingProperties(
-                true, "coupon-service", null, null, null, null, null, null));
+                true, "coupon-service", null, null, null, null, null, null,
+                허용, 허용_포트));
 
         for (String id : List.of("issue", "coupons")) {
             Route route = 라우트(켠_판, id);
@@ -830,7 +839,8 @@ class GatewayRoutesTest {
     @DisplayName("라우팅을_끄면_재시도를_안_건다")
     void 라우팅을_끄면_재시도를_안_건다() {
         RouteLocator 끈_판 = 라우터(new RoutingProperties(
-                false, "coupon-service", null, null, null, null, null, null));
+                false, "coupon-service", null, null, null, null, null, null,
+                허용, 허용_포트));
 
         for (String id : List.of("issue", "coupons")) {
             assertThat(라우트(끈_판, id).getFilters())

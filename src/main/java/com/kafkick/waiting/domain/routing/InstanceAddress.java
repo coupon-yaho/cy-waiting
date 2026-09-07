@@ -13,6 +13,8 @@ public record InstanceAddress(String host, int port) {
     /** 로그·지표로 그대로 흘러 들어가므로 길이를 자른다. */
     private static final int MAX_LENGTH = 255;
 
+    private static final int MAX_PORT = 65535;
+
     /**
      * 라벨 하나. <b>점으로 가른 조각마다 본다</b> — 전체를 한 덩어리로 보면
      * {@code a..b} 나 {@code a.-b} 처럼 못 푸는 이름이 양 끝만 맞아 통과한다.
@@ -20,6 +22,29 @@ public record InstanceAddress(String host, int port) {
      */
     private static final Pattern LABEL =
             Pattern.compile("[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?");
+
+    /**
+     * <b>정규 생성자에서 막는다.</b> 목적지 판정이 "콜론 든 호스트는 여기까지 못
+     * 온다" 를 전제로 서는데, {@code new} 가 무검증이면 그 전제가 관례일 뿐이다.
+     */
+    public InstanceAddress {
+        if (host == null || host.isEmpty() || host.length() > MAX_LENGTH) {
+            throw new IllegalArgumentException("호스트가 없거나 너무 길다: " + host);
+        }
+        // **끝점을 안 받는다.** `a.b.` 처럼 점으로 끝나면 마지막 조각이 비고,
+        // 빈 라벨은 못 푸는 이름이다. 앞도 같다.
+        if (host.startsWith(".") || host.endsWith(".")) {
+            throw new IllegalArgumentException("호스트가 점으로 끝난다: " + host);
+        }
+        for (String label : host.split("\\.", -1)) {
+            if (!LABEL.matcher(label).matches()) {
+                throw new IllegalArgumentException("호스트의 라벨을 못 읽는다: " + host);
+            }
+        }
+        if (port < 1 || port > MAX_PORT) {
+            throw new IllegalArgumentException("포트는 1.." + MAX_PORT + " 여야 한다: " + port);
+        }
+    }
 
     /** @return 모양을 지킨 주소. 아니면 비어 있다 — 그 인스턴스는 라우팅 후보가 아니다 */
     public static Optional<InstanceAddress> parse(String raw) {
@@ -30,27 +55,13 @@ public record InstanceAddress(String host, int port) {
         if (colon <= 0 || colon == raw.length() - 1) {
             return Optional.empty();
         }
-        String host = raw.substring(0, colon);
-        // **끝점을 안 받는다.** `a.b.` 처럼 점으로 끝나면 마지막 조각이 비고,
-        // 빈 라벨은 못 푸는 이름이다. 앞도 같다.
-        if (host.startsWith(".") || host.endsWith(".")) {
-            return Optional.empty();
-        }
-        for (String label : host.split("\\.", -1)) {
-            if (!LABEL.matcher(label).matches()) {
-                return Optional.empty();
-            }
-        }
-        int port;
         try {
-            port = Integer.parseInt(raw.substring(colon + 1));
-        } catch (NumberFormatException e) {
+            return Optional.of(new InstanceAddress(raw.substring(0, colon),
+                    Integer.parseInt(raw.substring(colon + 1))));
+        } catch (IllegalArgumentException e) {
+            // 모양이 어긋난 것은 정상 실패다. 부르는 쪽이 그 인스턴스를 후보에서 뺀다.
             return Optional.empty();
         }
-        if (port < 1 || port > 65535) {
-            return Optional.empty();
-        }
-        return Optional.of(new InstanceAddress(host, port));
     }
 
     @Override

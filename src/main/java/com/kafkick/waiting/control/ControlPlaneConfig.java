@@ -1,6 +1,9 @@
 package com.kafkick.waiting.control;
 
 import com.kafkick.waiting.adapter.redis.AllocationRedisPort;
+import com.kafkick.waiting.domain.routing.AllowedDestinations;
+import com.kafkick.waiting.routing.RoutingProperties;
+import java.time.Duration;
 import com.kafkick.waiting.adapter.redis.LeaderRedisPort;
 import com.kafkick.waiting.domain.allocation.CreditSmoother;
 import io.micrometer.core.instrument.Gauge;
@@ -12,6 +15,7 @@ import reactor.core.publisher.Mono;
 import java.time.Instant;
 import java.util.Optional;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import reactor.core.scheduler.Scheduler;
@@ -40,11 +44,29 @@ public class ControlPlaneConfig {
                 () -> port.acquire(ownerId), () -> port.release(ownerId));
     }
 
+    /**
+     * <b>라우팅이 켜졌을 때만 목적지를 제한한다.</b> 노브 자체가 켠 배포에만 뜨므로
+     * 없으면 라우팅이 꺼진 것이다. 목록이 비면 못 켜게 막는 것은 그 노브가 든다.
+     */
     @Bean
-    CapacityCollector capacityCollector(ControlPlaneProperties properties) {
-        return CapacityCollector.of(properties.capacity().rampUp(),
-                properties.capacity().freshness(), properties.capacity().floor(),
-                properties.capacity().perInstanceCap());
+    CapacityCollector capacityCollector(ControlPlaneProperties properties,
+            ObjectProvider<RoutingProperties> routing, MeterRegistry meters) {
+        Duration rampUp = properties.capacity().rampUp();
+        Duration freshness = properties.capacity().freshness();
+        long floor = properties.capacity().floor();
+        long cap = properties.capacity().perInstanceCap();
+        RoutingProperties on = routing.getIfAvailable();
+        AllowedDestinations allowed = on == null || !on.enabled()
+                ? AllowedDestinations.unrestricted()
+                : AllowedDestinations.of(on.allowedDestinations(), on.allowedPorts());
+        CapacityCollector collector =
+                CapacityCollector.of(rampUp, freshness, floor, cap, allowed);
+        Gauge.builder("waiting.routing.destination.denied", collector,
+                        CapacityCollector::deniedDestinations)
+                .description("직전 회차에 허용 목적지 밖이라 라우팅에서 뺀 인스턴스 수. 누적이 아니다")
+                .strongReference(true)
+                .register(meters);
+        return collector;
     }
 
     @Bean

@@ -1,5 +1,6 @@
 package com.kafkick.waiting.control;
 
+import com.kafkick.waiting.domain.routing.AllowedDestinations;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import ch.qos.logback.classic.Level;
@@ -75,7 +76,7 @@ class CapacityRefreshLogTest {
     private static final Duration 램프 = Duration.ofSeconds(60);
 
     private CapacityCollector collector() {
-        return CapacityCollector.of(램프, Duration.ofSeconds(3), 하한, 100_000);
+        return CapacityCollector.of(램프, Duration.ofSeconds(3), 하한, 100_000, AllowedDestinations.unrestricted());
     }
 
     private CapacityRefresh refresh(CapacityCollector collector,

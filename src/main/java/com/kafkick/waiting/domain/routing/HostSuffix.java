@@ -23,17 +23,23 @@ public record HostSuffix(String value) {
      * @throws IllegalArgumentException 라벨 규칙을 못 지킬 때
      */
     public static HostSuffix parse(String raw) {
-        String host = raw.toLowerCase(Locale.ROOT);
-        String bare = host.startsWith(".") ? host.substring(1) : host;
+        return new HostSuffix(raw == null ? null : raw.toLowerCase(Locale.ROOT));
+    }
+
+    /** <b>정규 생성자도 막는다.</b> 팩토리만 검증하면 못 맞을 값이 {@code new} 로 샌다. */
+    public HostSuffix {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException("허용 목적지의 이름이 비었다");
+        }
+        String bare = value.startsWith(".") ? value.substring(1) : value;
         if (bare.isEmpty() || bare.startsWith(".") || bare.endsWith(".")) {
-            throw new IllegalArgumentException("허용 목적지의 이름을 못 읽는다: " + raw);
+            throw new IllegalArgumentException("허용 목적지의 이름을 못 읽는다: " + value);
         }
         for (String label : bare.split("\\.", -1)) {
             if (!LABEL.matcher(label).matches()) {
-                throw new IllegalArgumentException("허용 목적지의 이름을 못 읽는다: " + raw);
+                throw new IllegalArgumentException("허용 목적지의 이름을 못 읽는다: " + value);
             }
         }
-        return new HostSuffix(host);
     }
 
     /**

@@ -25,10 +25,22 @@ public final class IpLiteral {
     private static final Pattern V4 =
             Pattern.compile("(0|[1-9]\\d{0,2})(\\.(0|[1-9]\\d{0,2})){3}");
 
+    /**
+     * v6 리터럴의 모양. <b>콜론 유무만 보면 안 된다</b> — {@code zz::qq} 는 콜론이
+     * 있어도 리터럴 판정을 건너뛰고 이름 조회로 간다(실측 9.4ms). 첫 글자까지
+     * 묶어야 그 갈래가 닫힌다.
+     */
+    private static final Pattern V6_SHAPE = Pattern.compile("[0-9A-Fa-f:][0-9A-Fa-f:.]*");
+
     private IpLiteral() {
     }
 
-    /** @return 푼 바이트. 숫자 표기가 아니거나 못 읽으면 {@code null} */
+    /**
+     * <b>{@code Optional} 을 안 쓴다.</b> 요청 경로와 배분 틱에서 인스턴스마다 도는
+     * 자리라 할당을 안 늘린다.
+     *
+     * @return 푼 바이트. 숫자 표기가 아니거나 못 읽으면 {@code null}
+     */
     public static byte[] parse(String raw) {
         if (raw == null) {
             return null;
@@ -45,9 +57,9 @@ public final class IpLiteral {
             }
             return out;
         }
-        // **콜론이 있어야 v6 로 본다.** 콜론이 없으면 이름일 수 있고, 그 갈래는
-        // 조회로 간다. 콜론이 있으면 리터럴로만 읽히고 못 읽으면 바로 거절이다.
-        if (raw.indexOf(':') < 0) {
+        // **콜론과 글자 집합을 함께 본다.** 이름에 못 쓰는 콜론이 있고 v6 가 쓰는
+        // 글자만 있으면 리터럴로만 읽히고, 못 읽으면 조회 없이 바로 거절이다.
+        if (raw.indexOf(':') < 0 || !V6_SHAPE.matcher(raw).matches()) {
             return null;
         }
         try {

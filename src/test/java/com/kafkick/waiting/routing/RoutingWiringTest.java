@@ -2,11 +2,19 @@ package com.kafkick.waiting.routing;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.kafkick.waiting.control.GatewaySnapshot;
+import com.kafkick.waiting.control.SnapshotHolder;
+import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import com.kafkick.waiting.domain.routing.InFlightRegistry;
+import com.kafkick.waiting.domain.routing.InstanceAddress;
+import com.kafkick.waiting.domain.routing.InstanceRouting;
 import com.kafkick.waiting.domain.routing.InstanceChooser;
 import com.kafkick.waiting.domain.routing.WeightedP2c;
 import com.kafkick.waiting.domain.routing.WeightedRoundRobin;
 import com.kafkick.waiting.gateway.AdmissionGatewayFilter;
+import java.time.Instant;
+import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
@@ -17,7 +25,10 @@ import org.springframework.cloud.gateway.filter.GatewayFilter;
 import org.springframework.cloud.gateway.filter.OrderedGatewayFilter;
 import org.springframework.cloud.gateway.route.Route;
 import org.springframework.cloud.gateway.route.RouteLocator;
+import org.springframework.cloud.client.ServiceInstance;
 import org.springframework.cloud.loadbalancer.annotation.LoadBalancerClientSpecification;
+import org.springframework.cloud.loadbalancer.core.ServiceInstanceListSupplier;
+import org.springframework.cloud.loadbalancer.support.LoadBalancerClientFactory;
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
 import org.springframework.context.ApplicationContext;
 
@@ -41,6 +52,15 @@ class RoutingWiringTest {
     @Autowired
     private PrometheusMeterRegistry prometheus;
 
+    @Autowired
+    private SnapshotHolder holder;
+
+    @Autowired
+    private LoadBalancerClientFactory clients;
+
+    /** 고정 시각. 여기 재료의 신선도는 이 시험이 보는 것이 아니다. */
+    private static final Instant 실은_때 = Instant.parse("2026-09-08T00:00:00Z");
+
     @Test
     @DisplayName("켜면_배선이_다_선다")
     void 켜면_배선이_다_선다() {
@@ -57,6 +77,29 @@ class RoutingWiringTest {
                 .isInstanceOf(WeightedRoundRobin.class);
         // 게이지도 같이 선다. 누수는 값이 안 내려가는 것으로만 보인다 (G9.3).
         assertThat(context.getBeansOfType(InFlightMetrics.Binding.class)).hasSize(1);
+    }
+
+    /**
+     * <b>제한이 실제로 꽂혔는지 본다</b> (CY-887). 조립에서 무제한으로 바꿔도
+     * 다른 시험은 다 초록이라, 기능이 프로덕션에서 통째로 꺼진 것을 아무도 못 본다.
+     */
+    @Test
+    @DisplayName("허용_밖_주소는_후보에_안_오른다")
+    void 허용_밖_주소는_후보에_안_오른다() {
+        holder.replace(new GatewaySnapshot(Map.of(), new SnapshotMeta(10, 1),
+                실은_때, List.of(
+                        new InstanceRouting("ok", InstanceAddress.parse("be-1.internal:9000")
+                                .orElseThrow(), 100),
+                        new InstanceRouting("evil", InstanceAddress.parse("evil.example.com:9000")
+                                .orElseThrow(), 100))));
+
+        // 공급자는 뒷단 하나짜리 자식 컨텍스트에 있다. 부모에서 찾으면 없다.
+        ServiceInstanceListSupplier 공급자 = clients.getInstance(
+                "coupon-service", ServiceInstanceListSupplier.class);
+
+        assertThat(공급자.get().blockFirst())
+                .extracting(ServiceInstance::getInstanceId)
+                .containsExactly("ok");
     }
 
     /** 걸어 두기만 하고 안 걸면 스크레이프에 줄이 없다 — 이름 검사로는 안 드러난다. */

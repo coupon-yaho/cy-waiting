@@ -1,5 +1,6 @@
 package com.kafkick.waiting.chaos;
 
+import com.kafkick.waiting.domain.routing.AllowedDestinations;
 import com.kafkick.waiting.control.CapacityCollector;
 import com.kafkick.waiting.control.CapacityRefresh;
 import com.kafkick.waiting.control.CapacityReport;
@@ -119,7 +120,7 @@ class CapacityReadSlowScenarioTest {
     }
 
     private Rig 회차를_짠다(long 보고할_여유) {
-        CapacityCollector 수집기 = CapacityCollector.of(램프, 신선도, 하한, 100_000);
+        CapacityCollector 수집기 = CapacityCollector.of(램프, 신선도, 하한, 100_000, AllowedDestinations.unrestricted());
         MeterRegistry 지표 = new SimpleMeterRegistry();
         AtomicLong 시각 = new AtomicLong(시작_시각);
         AtomicReference<Duration> 지연 = new AtomicReference<>(Duration.ZERO);

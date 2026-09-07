@@ -1,5 +1,6 @@
 package com.kafkick.waiting.chaos;
 
+import com.kafkick.waiting.domain.routing.AllowedDestinations;
 import com.kafkick.waiting.control.CapacityCollector;
 import com.kafkick.waiting.control.ControlPlaneProperties;
 import com.kafkick.waiting.domain.allocation.CreditSmoother;
@@ -52,7 +53,7 @@ class BothReturnScenarioTest {
     private final int[] 첫_관측_뒤_분모 = new int[1];
 
     private final CapacityCollector 수집기 =
-            CapacityCollector.of(램프, 신선도, 하한, 배선.perInstanceCap());
+            CapacityCollector.of(램프, 신선도, 하한, 배선.perInstanceCap(), AllowedDestinations.unrestricted());
 
     /**
      * 발행 전에 걸리는 평활화. <b>배선이 쓰는 계수와 같다.</b>

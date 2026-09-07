@@ -5,6 +5,7 @@ import com.kafkick.waiting.domain.net.IpRange;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.regex.Pattern;
 
 /**
  * 뒷단이 보고한 주소를 연결해도 되는가. <b>{@link InstanceAddress} 와 다른 질문이다</b> —
@@ -12,6 +13,10 @@ import java.util.Locale;
  * 보고에 쓸 수 있는 쪽이 게이트웨이를 임의 주소로 향하게 하는 것을 막는 자리다.
  */
 public final class AllowedDestinations {
+
+    /** 주소를 쓰다 만 모양. 점으로 끊긴 열 진수인데 넷이 아니다. */
+    private static final Pattern PARTIAL_ADDRESS =
+            Pattern.compile("\\d{1,3}(\\.\\d{1,3}){0,2}");
 
     private final List<HostSuffix> suffixes;
 
@@ -54,11 +59,23 @@ public final class AllowedDestinations {
                 throw new IllegalArgumentException("허용 목적지에 빈 항목이 있다");
             }
             String trimmed = entry.trim();
+            // **주소를 쓰다 만 것을 이름으로 받지 않는다.** `10.0.1` 은 라벨이 다
+            // 유효해 접미사로 들어가고, 그 접미사는 영영 아무것도 안 맞는다.
+            if (PARTIAL_ADDRESS.matcher(trimmed).matches()) {
+                throw new IllegalArgumentException("허용 목적지의 주소가 덜 적혔다: " + entry);
+            }
             // 주소나 대역이면 대역으로, 아니면 이름으로 본다. 맨 주소를 이름으로
             // 넣으면 이름끼리만 견주므로 그 주소를 보고한 뒷단이 도리어 거절된다.
             if (trimmed.indexOf('/') >= 0 || IpLiteral.parse(trimmed) != null) {
-                ranges.add(IpRange.parse(trimmed).orElseThrow(() ->
-                        new IllegalArgumentException("허용 목적지의 대역을 못 읽는다: " + entry)));
+                IpRange range = IpRange.parse(trimmed).orElseThrow(() ->
+                        new IllegalArgumentException("허용 목적지의 대역을 못 읽는다: " + entry));
+                // **전면 개방을 이름 없이 만들지 않는다.** 빈 목록은 막으면서 `/0` 을
+                // 받으면 같은 결과가 표기 하나로 조용히 선다.
+                if (range.prefixBits() == 0) {
+                    throw new IllegalArgumentException(
+                            "허용 목적지에 전 대역을 적을 수 없다: " + entry);
+                }
+                ranges.add(range);
             } else {
                 suffixes.add(HostSuffix.parse(trimmed));
             }

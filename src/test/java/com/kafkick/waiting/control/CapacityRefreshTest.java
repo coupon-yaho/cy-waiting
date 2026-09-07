@@ -1,5 +1,6 @@
 package com.kafkick.waiting.control;
 
+import com.kafkick.waiting.domain.routing.AllowedDestinations;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -29,7 +30,7 @@ class CapacityRefreshTest {
     private static final long FLOOR = CapacityCollector.IDLE_DIVISOR;
 
     private CapacityCollector collector() {
-        return CapacityCollector.of(Duration.ofSeconds(60), Duration.ofSeconds(3), FLOOR, 10_000);
+        return CapacityCollector.of(Duration.ofSeconds(60), Duration.ofSeconds(3), FLOOR, 10_000, AllowedDestinations.unrestricted());
     }
 
     @Test

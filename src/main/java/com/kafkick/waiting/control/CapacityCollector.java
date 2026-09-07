@@ -104,6 +104,9 @@ public final class CapacityCollector {
     /** 이번 회차에 목적지 때문에 뺀 수. 회차가 끝나면 창을 열거나 닫는다. */
     private volatile int deniedThisRound;
 
+    /** 이번 회차에 처음 뺀 인스턴스. 로그에 한 대만 싣고 나머지는 수로 센다. */
+    private String firstDenied = "";
+
     private CapacityCollector(Duration rampUp, Duration freshness, long floor,
             long perInstanceCap, AllowedDestinations allowed) {
         require(rampUp, "rampUp");
@@ -127,16 +130,6 @@ public final class CapacityCollector {
      * <p><b>램프와 신선도는 별개 노브다.</b> 하나로 묶으면 한 값이 반대 방향 두
      * 사고를 함께 조종한다 — 크게 잡으면 죽은 인스턴스가 오래 세어지고, 작게
      * 잡으면 틱 한 번 밀려도 전면 억제다. 신선도는 보고 주기 1초에 낡음 임계 3초다.
-     */
-    public static CapacityCollector of(Duration rampUp, Duration freshness,
-            long floor, long perInstanceCap) {
-        return new CapacityCollector(rampUp, freshness, floor, perInstanceCap,
-                AllowedDestinations.unrestricted());
-    }
-
-    /**
-     * 목적지를 제한해 만든다. <b>라우팅을 켜는 배포는 이쪽을 쓴다</b> — 뒷단이
-     * 보고한 주소가 곧 연결 대상이라, 모양만 보면 임의 주소로 향할 수 있다.
      */
     public static CapacityCollector of(Duration rampUp, Duration freshness,
             long floor, long perInstanceCap, AllowedDestinations allowed) {
@@ -183,9 +176,15 @@ public final class CapacityCollector {
         lastKnown.updateAndGet(known -> known == 0 ? 0 : Math.max(bottom, known / 2));
     }
 
-    /** 리더가 됐다. <b>유예를 처음부터 준다</b> — 비리더 구간의 실패는 남의 회차다. */
+    /**
+     * 리더가 됐다. <b>유예를 처음부터 준다</b> — 비리더 구간의 실패는 남의 회차다.
+     * 열린 창도 같이 닫는다. 안 닫으면 지속 시간에 비리더 구간이 섞이고, 게이지가
+     * 마지막 값에 얼어붙어 안 도는 노드가 그 값을 계속 낸다.
+     */
     public void leadershipAcquired() {
         failedRounds.set(0);
+        deniedThisRound = 0;
+        destinationDenied.exited();
     }
 
     /** 마지막 회차에서 보낼 수 있던 인스턴스들. 스냅샷에 실어 전 노드에 보낸다. */
@@ -209,15 +208,17 @@ public final class CapacityCollector {
         return (long) Math.max(1, nodes) * IDLE_DIVISOR;
     }
 
-    /** 마지막 회차에서 하한이 답이 됐으면 그 값, 아니면 0. */
     /**
-     * 마지막 회차에서 허용 목적지 밖이라 라우팅에서 뺀 수. <b>0 이 아닌데 후보가
-     * 비면 설정이 원인이다</b> — 그 구분을 로그만으로는 못 한다.
+     * 직전 회차에서 허용 목적지 밖이라 라우팅에서 뺀 수. 누적이 아니라 회차 값이다.
+     * <b>0 이 아닌데 후보가 비면 설정이 원인이다</b> — 그 구분을 로그로는 못 한다.
+     *
+     * @return 게이지가 받는 폭. 회차 값이라 {@code int} 로 충분하지만 등록부가 실수다
      */
     public double deniedDestinations() {
         return deniedThisRound;
     }
 
+    /** 마지막 회차에서 하한이 답이 됐으면 그 값, 아니면 0. */
     public long lastFloor() {
         return lastFloor.get();
     }
@@ -276,7 +277,7 @@ public final class CapacityCollector {
                             new InstanceRouting(report.instanceId(), address, share)));
         }
         evictStale(now);
-        closeDeniedWindow();
+        markDeniedWindow();
         // **관측이 있었던 회차에서만 태운다.** 한 건도 안 돈 회차가 태우면 다음 회차에
         // 이미 돌던 무리로 못 보고 램프를 0 부터 다시 타, 크레딧이 하한에 묶인 동안 한산
         // 통과 상한이 0 이 된다. 무한정은 아닌 이유는 위 상수가 든다.
@@ -328,22 +329,26 @@ public final class CapacityCollector {
         if (allowed.permits(address)) {
             return true;
         }
-        deniedThisRound++;
-        // **구간의 첫 건만 남긴다.** 뒷단이 매 틱 같은 값을 쓰므로, 다 남기면
-        // 그때 정작 봐야 할 것이 묻힌다. 구간이 끝나면 아래에서 요약을 낸다.
-        if (destinationDenied.entered()) {
-            log.warn("가용량 보고의 주소가 허용 목적지 밖이다 — {} ({}). 이 인스턴스는 "
-                    + "크레딧에는 들지만 라우팅 후보에서 빠진다", safe(instanceId), address);
+        // 첫 건만 기억해 회차 끝에서 한 번 남긴다. 여기서 남기면 거절 수만큼
+        // 줄이 쌓이고, 창의 회차 수도 인스턴스 수만큼 부푼다.
+        if (deniedThisRound++ == 0) {
+            firstDenied = "%s (%s)".formatted(safe(instanceId), address);
         }
         return false;
     }
 
     /**
-     * <b>구간이 끝나면 요약을 낸다.</b> 안 닫으면 첫 거절 뒤로 영영 조용해서,
+     * <b>회차마다 창을 열고 닫는다.</b> 안 닫으면 첫 거절 뒤로 영영 조용해서,
      * 다른 인스턴스가 같은 일을 해도 아무 데도 안 남는다.
      */
-    private void closeDeniedWindow() {
+    private void markDeniedWindow() {
         if (deniedThisRound > 0) {
+            if (destinationDenied.entered()) {
+                log.warn("가용량 보고의 주소가 허용 목적지 밖이다 — {} 외 이번 회차 {}대. "
+                        + "이 인스턴스들은 크레딧에는 들지만 라우팅 후보에서 빠진다. "
+                        + "허용 목록 설정과 뒷단이 보고한 주소를 함께 본다",
+                        firstDenied, deniedThisRound);
+            }
             return;
         }
         destinationDenied.exited().ifPresent(recovered ->

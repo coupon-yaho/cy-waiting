@@ -1,5 +1,6 @@
 package com.kafkick.waiting.control;
 
+import com.kafkick.waiting.domain.routing.AllowedDestinations;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.micrometer.core.instrument.MeterRegistry;
@@ -30,7 +31,7 @@ class ControlPlaneMetricsTest {
     void 전역_크레딧과_노드_수를_잰다() {
         MeterRegistry meters = new SimpleMeterRegistry();
         CapacityCollector collector =
-                CapacityCollector.of(Duration.ofSeconds(60), Duration.ofSeconds(3), 5, 10_000);
+                CapacityCollector.of(Duration.ofSeconds(60), Duration.ofSeconds(3), 5, 10_000, AllowedDestinations.unrestricted());
         CapacityRefresh refresh = CapacityRefresh.of(
                 () -> Mono.just(new CapacitySample(List.of(new CapacityReport("i1", 300, 지금.getEpochSecond())), 지금.getEpochSecond())),
                 collector, () -> 3, 예산, Schedulers.immediate(), meters);
@@ -49,7 +50,7 @@ class ControlPlaneMetricsTest {
     void 못_읽은_회차를_센다() {
         MeterRegistry meters = new SimpleMeterRegistry();
         CapacityCollector collector =
-                CapacityCollector.of(Duration.ofSeconds(60), Duration.ofSeconds(3), 5, 10_000);
+                CapacityCollector.of(Duration.ofSeconds(60), Duration.ofSeconds(3), 5, 10_000, AllowedDestinations.unrestricted());
         CapacityRefresh refresh = CapacityRefresh.of(
                 () -> Mono.error(new IllegalStateException("레디스가 죽었다")),
                 collector, () -> 1, 예산, Schedulers.immediate(), meters);

@@ -1,5 +1,6 @@
 package com.kafkick.waiting.control;
 
+import com.kafkick.waiting.domain.routing.AllowedDestinations;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.kafkick.waiting.MutableClock;
@@ -164,7 +165,7 @@ class LeadershipGainedWiringTest {
     private Runnable onLeadershipGained(QueueSweeper sweeper, AllocationRound round) {
         ControlPlaneProperties.Capacity 설정 = ControlPlaneProperties.defaults().capacity();
         CapacityCollector collector = CapacityCollector.of(설정.rampUp(), 설정.freshness(),
-                설정.floor(), 설정.perInstanceCap());
+                설정.floor(), 설정.perInstanceCap(), AllowedDestinations.unrestricted());
         return 배선.onLeadershipGained(collector,
                 CapacityRefresh.of(Mono::empty, collector, () -> 1, Duration.ofSeconds(1),
                         Schedulers.immediate(), new SimpleMeterRegistry()),

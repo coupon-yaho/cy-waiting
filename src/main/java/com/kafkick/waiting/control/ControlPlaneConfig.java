@@ -63,7 +63,7 @@ public class ControlPlaneConfig {
                 CapacityCollector.of(rampUp, freshness, floor, cap, allowed);
         Gauge.builder("waiting.routing.destination.denied", collector,
                         CapacityCollector::deniedDestinations)
-                .description("허용 목적지 밖이라 라우팅에서 뺀 인스턴스 수. 리더만 오른다")
+                .description("직전 회차에 허용 목적지 밖이라 라우팅에서 뺀 인스턴스 수. 누적이 아니다")
                 .strongReference(true)
                 .register(meters);
         return collector;

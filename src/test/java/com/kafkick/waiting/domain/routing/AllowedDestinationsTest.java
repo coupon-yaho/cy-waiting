@@ -176,8 +176,8 @@ class AllowedDestinationsTest {
     void 경계에_안_맞는_대역도_본다() {
         AllowedDestinations 허용 = AllowedDestinations.of(List.of("10.0.1.0/25"));
 
-        assertThat(허용.permits(주소("10.0.1.100:1"))).isTrue();
-        assertThat(허용.permits(주소("10.0.1.200:1"))).isFalse();
+        assertThat(허용.permits(주소("10.0.1.127:1"))).as("경계 안").isTrue();
+        assertThat(허용.permits(주소("10.0.1.128:1"))).as("경계 밖").isFalse();
     }
 
     /** 목록에 빈 자리가 오면 기동에서 끊는다. yaml 의 빈 항목이 그렇게 온다. */
@@ -250,5 +250,38 @@ class AllowedDestinationsTest {
         AllowedDestinations 허용 = AllowedDestinations.of(List.of("10.0.1.0/24"));
 
         assertThat(허용.permits(주소("010.0.1.5:8080"))).isFalse();
+    }
+
+    /**
+     * <b>주소를 쓰다 만 것을 이름으로 받지 않는다.</b> {@code 10.0.1} 은 라벨이 다
+     * 유효해 접미사로 들어가고, 그 접미사는 영영 아무것도 안 맞는다 — 증상은 기동
+     * 성공에 후보 0 이다.
+     */
+    @Test
+    @DisplayName("덜_적힌_주소는_거절한다")
+    void 덜_적힌_주소는_거절한다() {
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of("10.0.1")))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of("10")))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /** 빈 목록은 막으면서 전 대역을 받으면, 같은 결과가 표기 하나로 조용히 선다. */
+    @Test
+    @DisplayName("전_대역은_적을_수_없다")
+    void 전_대역은_적을_수_없다() {
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of("0.0.0.0/0")))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /**
+     * <b>이름과 주소는 서로를 안 덮는다.</b> 접미사만 적어 두고 뒷단이 파드 주소를
+     * 보고하면 전면 거절이다 — 이 조합이 실제 사고의 모양이다.
+     */
+    @Test
+    @DisplayName("접미사만_적으면_맨_주소는_거절한다")
+    void 접미사만_적으면_맨_주소는_거절한다() {
+        assertThat(AllowedDestinations.of(List.of(".internal")).permits(주소("10.0.1.7:8080")))
+                .isFalse();
     }
 }

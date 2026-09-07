@@ -74,16 +74,22 @@ class DomainPurityTest {
     /**
      * <b>이름 조회는 IO 다.</b> 같은 입력이 리졸버 설정에 따라 다른 답을 내면
      * 재현 가능한 실패를 못 만들고, 그 대기가 요청 경로와 배분 틱에 얹힌다.
-     * 리터럴 해석은 조회를 안 하므로 {@code getByAddress} 쪽은 안 막는다.
+     * {@code IpLiteral} 만 뺀다 — v6 리터럴 해석을 위임하고, 넘기기 전에 모양으로
+     * 걸러 조회로 안 간다. 근거는 AIJ-0255 다.
      */
     @Test
     @DisplayName("도메인은_이름을_풀지_않는다")
     void 도메인은_이름을_풀지_않는다() {
         noClasses()
                 .that().resideInAPackage(DOMAIN)
-                .and().haveSimpleNameNotEndingWith("IpLiteral")
+                .and().doNotHaveFullyQualifiedName("com.kafkick.waiting.domain.net.IpLiteral")
                 .should().callMethod(InetAddress.class, "getByName", String.class)
                 .orShould().callMethod(InetAddress.class, "getAllByName", String.class)
+                .orShould().callMethod(InetAddress.class, "getLocalHost")
+                .orShould().callMethod(InetAddress.class, "getHostName")
+                .orShould().callMethod(InetAddress.class, "getCanonicalHostName")
+                .orShould().dependOnClassesThat()
+                .haveFullyQualifiedName("java.net.InetSocketAddress")
                 .because("이름 조회는 블로킹 IO 이고 검사와 연결의 시점을 가른다")
                 .check(classes);
     }

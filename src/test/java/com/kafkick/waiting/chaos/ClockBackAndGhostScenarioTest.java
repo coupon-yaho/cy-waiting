@@ -1,5 +1,6 @@
 package com.kafkick.waiting.chaos;
 
+import com.kafkick.waiting.domain.routing.AllowedDestinations;
 import com.kafkick.waiting.adapter.redis.ServerClock;
 import com.kafkick.waiting.control.CapacityCollector;
 import com.kafkick.waiting.control.CapacityReport;
@@ -51,7 +52,7 @@ class ClockBackAndGhostScenarioTest {
     private static final long 여유 = 10_000;
 
     private CapacityCollector 수집기() {
-        return CapacityCollector.of(램프, 신선도, 하한, 100_000);
+        return CapacityCollector.of(램프, 신선도, 하한, 100_000, AllowedDestinations.unrestricted());
     }
 
     /**

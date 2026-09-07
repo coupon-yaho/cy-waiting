@@ -712,10 +712,10 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
                 .doFinally(signal -> {
                     bulkhead.exit(couponId);
                     // **여기서 센다** (RC4). 판정 자리에서 세면 서킷이 열린 동안의
-                    // 통과 판정까지 들어가는데, 그것들은 폴백으로 끝나 뒷단에
-                    // 안 닿는다. 상한이 걸리면 그건 뒷단이 붙잡은 것이라 센다.
+                    // 통과 판정까지 들어가는데, 그것들은 뒷단에 안 닿는다. 뒷단이
+                    // 붙잡아 상한에 걸린 것은 닿은 것이라 센다.
                     if (!Boolean.TRUE.equals(
-                            exchange.getAttribute(BackendFallback.FELL_BACK))) {
+                            exchange.getAttribute(BackendFallback.NOT_CALLED))) {
                         passRate.passed(clock.millis());
                     }
                 });

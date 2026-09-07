@@ -512,6 +512,32 @@ run_case "옛 네 칸 형식은 막는다" 2 "열이 5 개가 아니다" -- "$wo
 run_case "표가 상태 문자열이 아니면 막는다" 2 "상태 문자열이 아니다" -- "$work/badvote.txt"
 
 : > "$work/empty.txt"
+# **상한은 안 넘고 기준선만 넘는 봉우리.** RC4 의 본체는 기준선 대비다. 상한
+# 검사가 먼저 잡는 픽스처만 두면 그 본체를 통째로 지워도 자기검증이 초록이다.
+{
+    echo '# 정상'; normal 0 0
+    echo '# 진입'; gated 1600 160 2 3
+    echo '# 유지'; gated 2200 160 2 5
+    echo '# 회복'; recovering 3200 160 128
+    echo '# 해제'; echo '# 승계'
+    i=0
+    while [ $i -lt 6 ]; do
+        printf '%s 300 %s %s CLOSED\n' $((5200 + i * 200)) $((340 + i * 30)) "$NODES"
+        i=$((i + 1))
+    done
+} > "$work/baseburst.txt"
+run_case "기준선만 넘는 봉우리도 미달" 1 "기준선" -- "$work/baseburst.txt"
+
+# **못 잰 봉우리를 통과로 안 적는다.** 풀린 뒤 표본이 둘도 안 되면 창을 못 채운다.
+{
+    echo '# 정상'; normal 0 0
+    echo '# 진입'; gated 1600 160 2 3
+    echo '# 유지'; gated 2200 160 2 5
+    echo '# 회복'; recovering 3200 160 128
+    echo '# 해제'; echo '# 승계'; printf '%s 300 %s %s CLOSED\n' 5200 340 "$NODES"
+} > "$work/nopeak.txt"
+run_case "봉우리를 못 재면 판정 불가" 2 "봉우리를 못 쟀다" -- "$work/nopeak.txt"
+
 # **못 잰 것을 통과로 안 적는다.** 직전 몫이 이미 상한이면 허용이 상한의 배수라,
 # 램프를 통째로 건너뛴 승계도 그 회차에서는 통과한다.
 {

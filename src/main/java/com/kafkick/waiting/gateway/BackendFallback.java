@@ -99,13 +99,17 @@ public final class BackendFallback {
      * <p>봉투는 {@link ApiError} 가 만든다 — 여기서 따로 짜면 같은 게이트웨이가
      * 두 가지 오류 형식을 낸다.
      */
-    /** 이 요청이 뒷단에 안 닿았다는 표식. 통과 수를 세는 쪽이 이걸 보고 뺀다. */
-    public static final String FELL_BACK = BackendFallback.class.getName() + ".fellBack";
+    /** 서킷이 <b>부르지도 않고</b> 되돌렸다는 표식. 통과 수를 세는 쪽이 이걸 뺀다. */
+    public static final String NOT_CALLED = BackendFallback.class.getName() + ".notCalled";
 
     public Mono<ServerResponse> respond(ServerRequest request) {
-        // **뒷단에 닿은 것과 서킷이 되돌린 것을 가른다** (RC4). 안 가르면 서킷이
-        // 열린 동안의 거절이 도착으로 세어져 회복 봉우리가 부푼다.
-        request.exchange().getAttributes().put(FELL_BACK, true);
+        // **닿은 것과 안 부른 것을 가른다** (RC4). 폴백은 둘 다로 온다 — 뒷단이
+        // 붙잡아 상한에 걸린 것은 닿은 것이고, 서킷이 열린 채 거절한 것은 아니다.
+        // 그 둘은 실행 예외가 실렸는지로 갈린다.
+        if (request.attribute(ServerWebExchangeUtils.CIRCUITBREAKER_EXECUTION_EXCEPTION_ATTR)
+                .isEmpty()) {
+            request.exchange().getAttributes().put(NOT_CALLED, true);
+        }
         // **"열렸다" 라고 단정하지 않는다.** 폴백은 서킷 오픈뿐 아니라 연결 실패나
         // 뒷단 오류로도 온다. 라벨을 오픈으로 고정하면 서킷이 닫힌 채 실패만 나는
         // 구간에서 지표가 거짓말하고, 그 지표로 회복을 판정한다 (8.4.3).

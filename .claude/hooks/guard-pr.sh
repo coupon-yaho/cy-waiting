@@ -132,32 +132,6 @@ if [[ -n "$key" && -r "$env_file" ]]; then
     fi
 fi
 
-# **문서가 가리키는 키도 본다.** 브랜치만 보면 계획서에 적힌 키가 실재하는지는
-# 아무도 안 묻는다 — 열다섯 종이 47 곳에서 없는 곳을 가리키고 있었고, 나중에
-# 그 번호로 다른 티켓이 생기자 링크가 엉뚱한 곳으로 열렸다 (CY-891).
-if [[ -r "$env_file" ]] && git -C "$ROOT" diff --quiet --exit-code 2>/dev/null; then
-    changed=$(git -C "$ROOT" diff --name-only origin/develop...HEAD 2>/dev/null \
-        | grep -E '^(plan|ai)/.*\.md$' || true)
-    if [[ -n "$changed" ]]; then
-        keys=$(cd "$ROOT" && grep -hoE '\bCY-[0-9]+\b' $changed 2>/dev/null \
-            | sort -u || true)
-        missing=$(set -a; . "$env_file" >/dev/null 2>&1; set +a
-            [[ -z "${ATLASSIAN_BASE_URL:-}" ]] && exit 0
-            for k in $keys; do
-                c=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
-                    -u "$ATLASSIAN_USER_EMAIL:$ATLASSIAN_API_TOKEN" \
-                    -H 'Accept: application/json' \
-                    "${ATLASSIAN_BASE_URL%/}/rest/api/3/issue/$k?fields=summary" 2>/dev/null)
-                [[ "$c" == "404" ]] && printf '%s ' "$k"
-            done)
-        if [[ -n "${missing// /}" ]]; then
-            echo "고친 문서가 없는 이슈를 가리킨다: $missing" >&2
-            echo "  없는 추적을 있는 척 두지 않는다 — 키를 고치거나 뺀다" >&2
-            exit 2
-        fi
-    fi
-fi
-
 RUNNER="$ROOT/.claude/hooks/review-branch.sh"
 if [[ ! -x "$RUNNER" ]]; then
     echo "로컬 리뷰 러너를 실행할 수 없다: $RUNNER" >&2
@@ -190,6 +164,41 @@ base="${base:-develop}"
 # 이미 접두가 붙어 있으면 겹치지 않게 둔다. origin/origin/develop 이 되면
 # 러너가 폴백을 타고, 폴백마저 없으면 브랜치 커밋을 하나도 안 보고 통과한다.
 [[ "$base" != origin/* ]] && base="origin/$base"
+
+# **문서가 가리키는 키도 본다.** 브랜치만 보면 계획서에 적힌 키가 실재하는지는
+# 아무도 안 묻는다 — 열다섯 종이 47 곳에서 없는 곳을 가리키고 있었고, 나중에
+# 그 번호로 다른 티켓이 생기자 링크가 엉뚱한 곳으로 열렸다 (CY-891).
+#
+# **더한 줄만 본다.** 파일 전체를 보면 내가 안 건드린 낡은 키가 남을 막고,
+# 지난 엔트리를 안 고치는 저널(ai/journal/README.md 7절)은 영영 못 건드리게 된다.
+if [[ -r "$env_file" ]]; then
+    added=$(git -C "$ROOT" diff -U0 "$base...HEAD" -- 'plan/*.md' 'ai/rules/*.md' \
+        2>/dev/null | grep '^+' | grep -v '^+++' || true)
+    if [[ -z "$added" ]] && ! git -C "$ROOT" rev-parse --verify --quiet "$base" >/dev/null
+    then
+        echo "$base 를 못 찾아 문서의 티켓 키를 못 봤다 — git fetch 뒤 다시 연다" >&2
+        exit 2
+    fi
+    keys=$(printf '%s' "$added" | grep -oE '\bCY-[0-9]+\b' | sort -u || true)
+    if [[ -n "$keys" ]]; then
+        missing=$(set -a; . "$env_file" >/dev/null 2>&1; set +a
+            [[ -z "${ATLASSIAN_BASE_URL:-}" || -z "${ATLASSIAN_USER_EMAIL:-}" \
+                || -z "${ATLASSIAN_API_TOKEN:-}" ]] && exit 0
+            for k in $keys; do
+                c=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+                    -u "$ATLASSIAN_USER_EMAIL:$ATLASSIAN_API_TOKEN" \
+                    -H 'Accept: application/json' \
+                    "${ATLASSIAN_BASE_URL%/}/rest/api/3/issue/$k?fields=summary" \
+                    2>/dev/null)
+                [[ "$c" == "404" ]] && printf '%s ' "$k"
+            done)
+        if [[ -n "${missing// /}" ]]; then
+            echo "더한 문서 줄이 없는 이슈를 가리킨다: $missing" >&2
+            echo "  없는 추적을 있는 척 두지 않는다 — 키를 고치거나 뺀다" >&2
+            exit 2
+        fi
+    fi
+fi
 
 out=$("$RUNNER" "$base" 2>&1)
 status=$?

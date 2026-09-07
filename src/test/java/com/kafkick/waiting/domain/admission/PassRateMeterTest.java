@@ -100,7 +100,7 @@ class PassRateMeterTest {
         // 값이 없고, 새 창은 한 건뿐이다.
         meter.passed(20_000);
 
-        assertThat(meter.perSecond(24_000)).isZero();
+        assertThat(meter.perSecond(24_000)).as("지난 봉우리 60 이 아니다").isOne();
     }
 
     /** 읽는 시각이 창보다 앞서면 직전 값을 쓴다. 지어낸 값을 내면 안 된다. */
@@ -145,7 +145,7 @@ class PassRateMeterTest {
 
         // 얼린 창을 12000/s 로 내면 안 된다. 얼마 동안 센 것인지 모르므로
         // 물려줄 값이 없고, 새 창은 한 건뿐이다.
-        assertThat(meter.perSecond(11_000)).isZero();
+        assertThat(meter.perSecond(11_000)).isOne();
     }
 
     /** 창이 반도 안 찼으면 직전 값을 쓴다. 그 값이 없으면 지금 것을 쓸 수밖에 없다. */
@@ -181,7 +181,7 @@ class PassRateMeterTest {
 
         // 직전 창은 아무도 안 지나간 구간이라 물려줄 값이 없다. 새 창이 차는
         // 대로 그 값을 쓴다 — 60초로 나눈 5 도, 지난 봉우리 60 도 아니다.
-        assertThat(meter.perSecond(66_100)).isZero();
+        assertThat(meter.perSecond(66_100)).isOne();
         for (int i = 0; i < 500; i++) {
             meter.passed(66_100 + i);
         }
@@ -310,6 +310,16 @@ class PassRateMeterTest {
     }
 
     /** 창 길이가 크면 두 배가 넘쳐 음수가 되고 값이 영영 0 이다. */
+    /** 창이 길면 한두 건이 0 으로 반올림된다. 통과가 있었으면 0 을 내면 안 된다. */
+    @Test
+    @DisplayName("한_건도_0_으로_안_반올림한다")
+    void 한_건도_0_으로_안_반올림한다() {
+        PassRateMeter meter = PassRateMeter.of(WINDOW_MS);
+        meter.passed(1_000);
+
+        assertThat(meter.perSecond(1_000)).isOne();
+    }
+
     @Test
     @DisplayName("창은_상한을_넘을_수_없다")
     void 창은_상한을_넘을_수_없다() {

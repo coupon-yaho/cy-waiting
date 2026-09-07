@@ -497,6 +497,7 @@ public final class AllocationRound {
         }
         watchBudget(credit, observed);
         AtomicBoolean anyFailed = new AtomicBoolean();
+        AtomicBoolean published = new AtomicBoolean();
         return Flux.fromIterable(collected)
                 .concatMap(demand -> applyOne(demand, granted, anyFailed))
                 .reduce(0L, Long::sum)
@@ -530,14 +531,13 @@ public final class AllocationRound {
                         // 히스테리시스를 안 돌려서 실을 상태가 없다 (CY-324).
                         // 돌리기 시작하면 여기가 매 틱 이월을 지우는 자리가
                         // 되므로, 기본값에 숨기지 않고 눈에 보이게 둔다.
-                        : Mono.<Void>fromRunnable(() -> watchRamp(gatedNow, credit, target))
-                        .then(publishRound(collected, granted, credit, readAt, current)
-                                // **안 나간 회차가 기준을 올리면 안 된다.** 발행이
-                                // 터지거나 회차가 잘리면 노드는 옛 몫을 쓰는데
-                                // 기준만 배수로 올라, 다음 성공이 그 배수의
-                                // 배수에서 시작한다. 취소는 오류로 안 온다.
-                                .doOnError(e -> releaseRamp.restore(before))
-                                .doOnCancel(() -> releaseRamp.restore(before)))
+                        // 램프 창도 나간 회차에서만 연다. 앞에 두면 안 나간
+                        // 회차가 진입 자리를 먹어 다음 회복에 로그가 안 나온다.
+                        : publishRound(collected, granted, credit, readAt, current)
+                        .doOnSuccess(done -> {
+                            published.set(true);
+                            watchRamp(gatedNow, credit, target);
+                        })
                         // **발행 뒤에 지운다** (7.3). 앞에 두면 방금 지운 큐가
                         // 이번 재료에는 아직 대기자로 실려, 그 회차의 크레딧이
                         // 없는 줄에 나간다.
@@ -547,7 +547,18 @@ public final class AllocationRound {
                         .then(Mono.defer(() -> cleanUp(collected, granted)))
                         // **정리 뒤에 쓴다.** 앞에 두면 곧 지울 줄을 훑느라
                         // 예산을 쓴다.
-                        .then(Mono.defer(() -> sweepUp(collected, granted)))));
+                        .then(Mono.defer(() -> sweepUp(collected, granted)))))
+                // 발행까지 못 간 회차가 기준을 올리면 다음 성공이 그 배수의
+                // 배수에서 시작한다. 틱을 넘겨 잘린 회차는 오류가 아니라 취소다.
+                .doOnError(e -> restoreUnpublished(published, before))
+                .doOnCancel(() -> restoreUnpublished(published, before));
+    }
+
+    /** 발행이 나간 회차는 안 되돌린다 — 그 몫은 노드에 실제로 닿았다. */
+    private void restoreUnpublished(AtomicBoolean published, ReleaseRamp.State before) {
+        if (!published.get()) {
+            releaseRamp.restore(before);
+        }
     }
 
     /**

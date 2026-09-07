@@ -41,6 +41,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
+import reactor.core.Disposable;
 import reactor.core.publisher.Mono;
 
 /**
@@ -1287,6 +1288,49 @@ class AllocationRoundTest {
         // 안 나간 회차가 기준을 올렸으면 그 값의 배수인 32 가 나온다.
         assertThat(발행된("c1").credit()).as("안 나간 회차는 기준을 안 올린다")
                 .isEqualTo(8);
+    }
+
+    /**
+     * 회차가 틱을 넘기면 스케줄러가 자른다. 그 취소는 적용 도중에도 오고,
+     * 그때도 발행은 안 나가므로 기준이 오르면 안 된다.
+     */
+    @Test
+    @DisplayName("적용_중_잘려도_램프_기준이_안_오른다")
+    void 적용_중_잘려도_램프_기준이_안_오른다() {
+        AtomicReference<CircuitState> 서킷 = new AtomicReference<>(CircuitState.OPEN);
+        AtomicBoolean 멈춘다 = new AtomicBoolean();
+        AllocationRound round = 적용이_멈추는_회차(서킷, 7_300, 멈춘다);
+
+        round.run().block();
+        서킷.set(CircuitState.CLOSED);
+        멈춘다.set(true);
+        Disposable 도는_중 = round.run().subscribe();
+        도는_중.dispose();
+        멈춘다.set(false);
+        round.run().block();
+
+        assertThat(발행된("c1").credit()).as("안 나간 회차는 기준을 안 올린다")
+                .isEqualTo(8);
+    }
+
+    private AllocationRound 적용이_멈추는_회차(AtomicReference<CircuitState> 서킷,
+            long 가용량, AtomicBoolean 멈춘다) {
+        return AllocationRound.of(
+                () -> true,
+                () -> Mono.just(new TimedDemands(
+                        List.of(new CouponDemand("c1", 20_000, 1_000_000)), 읽은_시각)),
+                () -> 가용량, () -> 1,
+                grant -> 멈춘다.get() ? Mono.never() : Mono.just(grant.credit()),
+                hash -> {
+                    발행.put("last", hash);
+                    return Mono.empty();
+                },
+                () -> Instant.ofEpochSecond(읽은_시각),
+                () -> Mono.just(CreditSmoother.of(1.0)),
+                SnapshotCodec.create(), () -> 8L, Optional::empty,
+                SoldOutCleanup.of(Integer.MAX_VALUE, new SimpleMeterRegistry()),
+                ids -> Mono.just(List.of()), ids -> Mono.just(List.of()),
+                안_걷는_스위퍼(), () -> false, 서킷::get);
     }
 
     private AllocationRound 발행이_갈리는_회차(AtomicReference<CircuitState> 서킷,

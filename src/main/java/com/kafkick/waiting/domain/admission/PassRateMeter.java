@@ -96,7 +96,11 @@ public final class PassRateMeter {
         return w.previous() < 0 ? perWindow(w.count()) : previous;
     }
 
+    /**
+     * 창 하나의 초당 수. <b>0 으로 반올림하지 않는다</b> — 창이 길면 한두 건이
+     * 0 이 되어 "부하 없음" 으로 읽힌다. 창은 통과가 열므로 수가 0 일 수 없다.
+     */
     private long perWindow(long count) {
-        return Math.round(count * 1000.0 / windowMs);
+        return Math.max(1, Math.round(count * 1000.0 / windowMs));
     }
 }

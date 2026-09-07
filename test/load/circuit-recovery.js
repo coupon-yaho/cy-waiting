@@ -136,8 +136,10 @@ export function holder() {
   sleep(wait);
 }
 
+// 기본 시나리오도 제품이 말한 간격을 지킨다. 안 지키면 표를 든 VU 가 다음
+// 회차를 곧바로 집어, 재려던 회복 봉우리를 하네스가 만든다.
 export default function () {
-  step();
+  sleep(step());
 }
 
 // 제품이 실은 재시도 간격(초). 안 실렸으면 기본 폴링 주기를 쓴다.

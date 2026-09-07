@@ -278,9 +278,12 @@ verdict=$(awk \
             # **램프 밖에서 난 승계는 계단을 못 잰다.** 직전 값이 이미 상한이면
             # 허용이 상한의 배수라, 이어받은 노드가 램프를 통째로 건너뛰어도
             # 통과한다. 그 회차는 이 검사가 없는 것과 같다.
+            # **못 잰 것을 통과로 안 적는다.** 직전 몫이 이미 상한이면 허용이
+            # 상한의 배수라, 램프를 통째로 건너뛴 승계도 그 회차에서 통과한다.
+            # 끝에서 가른다 — 여기서 끊으면 이 회차의 다른 미달을 못 본다.
             if (!handoverSeen && ceiling > 0 && beforeHandover >= ceiling) {
-                printf "  승계가 램프 밖에서 났다 — 계단 검사는 이 회차로 뜻이 없다 (직전 %d, 상한 %d)\n",
-                        beforeHandover, ceiling | "cat 1>&2"
+                handoverBlind = 1
+                blindBefore = beforeHandover
             }
             handoverSeen = 1
             allowed = beforeHandover * step
@@ -378,6 +381,12 @@ verdict=$(awk \
         if (peakRate > baseRate * burst) {
             fail(sprintf("회복 봉우리가 초당 %.1f 건이다 — 기준선 %.1f 의 %.2f 배 (한계 %.1f)",
                     peakRate, baseRate, peakRate / baseRate, burst))
+        }
+        # **마지막에 가른다.** 다른 미달이 있으면 그것이 더 구체적이고, 없을
+        # 때만 "이 회차로는 계단을 못 잰다" 가 유일한 결론이다.
+        if (handoverBlind) {
+            block(sprintf("승계가 램프 밖에서 났다 — 계단을 못 잰다 (직전 %d, 상한 %d)",
+                    blindBefore, ceiling))
         }
         printf "PASS %.1f %.1f %.1f %.2f %.1f %.1f %.1f\n", took, baseRate, peakRate,
                 peakRate / baseRate, (releasedAt - recT) / 1000.0, maxVoteGapMs / 1000.0,

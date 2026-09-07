@@ -24,7 +24,11 @@ promoted-to:
 | `GatewayPresenceConfig` | `voteFreshSec`, `passed`, `beatStep` |
 | `ControlPlaneConfig` | `onLeadershipGained`, `startingCredit` |
 | `GatewayRedisPort` | `passArg`, `presence` |
-| `BackendFallback` | `notCalled` — 여기서만 `private` 도 같이 붙였다 |
+| `BackendFallback` | `notCalled` |
+
+`notCalled` 와 `passArg` 는 `private` 도 같이 되돌렸다. **원래 `private static`
+이었던 것은 이 둘뿐이다** — 나머지는 처음부터 패키지 전용으로 태어나 시험이
+부르던 것들이라 되돌릴 `private` 이 없다.
 
 ## 왜 지금
 
@@ -49,13 +53,29 @@ promoted-to:
 
 ## 미룬 것
 
-`AdmissionGatewayFilter.codeOf`, `retryAfterSec`, `GatewayRoutes.connectRetryConfig`,
-`BulkheadMetrics.bind` 는 **시험이 클래스 이름으로 부르는 자리가 스물이 넘는다.**
-같이 고치면 이 변경이 리팩터인지 시험 수정인지 안 보인다. CY-885 로 뺐다.
+`AdmissionGatewayFilter.retryAfterSec`(시험 29줄)·`codeOf`(9줄),
+`BulkheadMetrics.bind`(5줄), `GatewayRoutes.connectRetryConfig`(4줄) 은 호출부
+수정이 시험 쪽에 몰려 이 변경이 리팩터인지 시험 수정인지 안 보인다. `*Metrics.bind`
+셋이 같은 모양이라 통째로 판단할 것도 같이 CY-885 로 뺐다.
 
-`GatewayRedisPort.passArg`, `presence` 는 인스턴스로 바꾸되 `private` 은 안 붙였다 —
-상한 묶기와 칸 수 검증을 시험이 직접 부르고, 그 둘은 롤백 구간의 계약이라
-지울 시험이 아니다.
+`GatewayRedisPort.presence` 는 인스턴스로만 바꿨다. 칸 수 검증은 옛 스크립트가
+돌려주는 모양을 픽스처로 만들어야 하는데 살아 있는 레디스로는 그 모양이 안 나온다.
+
+## 어떻게 검증했나
+
+- `./gradlew build` 와 `integrationTest --tests '*GatewayRedisPortTest*'` 12건
+- 호출부 치환이 같은 객체를 보는지 — `AdmissionDecider` 빈 정의가 하나뿐이고
+  시험이 덮는 곳이 없다. 옮긴 다섯은 `@Bean` 이 아니라 CGLIB 가로채기도 없다
+
+## 남은 위험
+
+**지금 등가인 이유가 "상태를 안 쓴다" 뿐이다.** 이 리팩터가 준비한 미래(필드가
+생기는 것)가 오면 주어와 기댓값이 다른 인스턴스이던 시험들이 조용히 갈라진다.
+그래서 필터 아홉과 판정기 하나를 같은 객체로 묶었다.
+
+`passArg` 를 `private` 으로 되돌리며 직접 부르던 시험을 `beat` 로 옮겼다.
+스크립트가 거절하는 값으로 재므로 판별력은 올랐지만, **단위로 잡던 것을 통합으로
+옮긴 것이라** 컨테이너가 흔들리면 파싱과 무관한 이유로 빨개진다.
 
 ## 다음 사람이 알아야 할 것
 

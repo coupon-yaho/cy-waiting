@@ -60,7 +60,7 @@ public final class GatewayRedisPort {
      * 음수는 "안 쟀다" 라 빈 값으로 보낸다 — 0 으로 보내면 안 잰 노드가 0 을 잰
      * 노드로 세어진다.
      */
-    String passArg(long passedPerSec) {
+    private String passArg(long passedPerSec) {
         return passedPerSec < 0 ? "" : Long.toString(Math.min(passedPerSec, MAX_PASS));
     }
 

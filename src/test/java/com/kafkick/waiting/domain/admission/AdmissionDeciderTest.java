@@ -617,10 +617,11 @@ class AdmissionDeciderTest {
     @DisplayName("토큰_통과가_쓴_예산은_노드_예산이다")
     void 토큰_통과가_쓴_예산은_노드_예산이다() {
         CouponState 줄선_것 = CouponStates.queueing(100, 500, 3000);
-        AdmissionDecider 판정 = decider();
 
-        assertThat(판정.admittedRatePerSec(AdmissionDecision.PASS_TOKEN, 줄선_것, META))
-                .isEqualTo(판정.globalCap(META))
+        // **구현에 기댓값을 묻지 않는다.** globalCap 을 다시 부르면 그 함수가
+        // 무엇을 돌려주든 참이라, 나눗셈을 뒤집어도 여기서 안 죽는다.
+        assertThat(decider().admittedRatePerSec(AdmissionDecision.PASS_TOKEN, 줄선_것, META))
+                .as("크레딧 1000 을 노드 10 대가 나눈 몫").isEqualTo(100)
                 // 쿠폰 몫과 다른 값이어야 한다. 같으면 무엇을 재는지 알 수 없다.
                 .isNotEqualTo(줄선_것.contendedCap(META.effectiveGatewayCount()));
     }
@@ -632,14 +633,12 @@ class AdmissionDeciderTest {
     @Test
     @DisplayName("우회와_장애_개방이_쓴_예산은_노드_예산이다")
     void 우회와_장애_개방이_쓴_예산은_노드_예산이다() {
-        AdmissionDecider 판정 = decider();
-
-        assertThat(판정.admittedRatePerSec(
+        assertThat(decider().admittedRatePerSec(
                 AdmissionDecision.PASS_BYPASS, CouponStates.off(500), META))
-                .isEqualTo(판정.globalCap(META));
-        assertThat(판정.admittedRatePerSec(
+                .as("크레딧 1000 을 노드 10 대가 나눈 몫").isEqualTo(100);
+        assertThat(decider().admittedRatePerSec(
                 AdmissionDecision.PASS_FAIL_OPEN, CouponStates.idle(500), META))
-                .isEqualTo(판정.globalCap(META));
+                .isEqualTo(100);
     }
 
     /** 통과가 아닌 판정에 예산을 물으면 부르는 쪽이 틀린 것이다. 조용히 0 을 주면 전면 차단이다. */

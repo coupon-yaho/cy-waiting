@@ -115,7 +115,7 @@ class AdmissionGatewayFilterTest {
      */
     private static final DoubleSupplier 고정_난수 = () -> 0.5;
 
-    /** 기본 필터가 쥔 판정기. 기댓값을 여기서 뽑아야 필터가 보는 값과 안 갈라진다. */
+    /** 이 파일의 모든 필터가 쥔 판정기. 기댓값을 여기서 뽑아야 필터가 보는 값과 안 갈라진다. */
     private final AdmissionDecider 판정 = AdmissionDecider.of(limiter, IDLE_RATIO);
 
     private final AdmissionGatewayFilter filter = AdmissionGatewayFilter.withIsolatedSoldOutCache(
@@ -525,7 +525,7 @@ class AdmissionGatewayFilterTest {
         // 안 따라잡았을 수 있다.
         MutableClock 시계 = MutableClock.at(지금);
         AdmissionGatewayFilter f = AdmissionGatewayFilter.withIsolatedSoldOutCache(
-                holder, AdmissionDecider.of(limiter, IDLE_RATIO),
+                holder, 판정,
                 시계, meters, () -> 0.5, 줄, tokens, limiter, entryTokens, 멱등키);
         스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
         태운다(f, COUPON);
@@ -550,7 +550,7 @@ class AdmissionGatewayFilterTest {
         SnapshotHolder 같은_시계_홀더 = SnapshotHolder.of(
                 Duration.ofSeconds(3), 홀더_유효_한계, 시계);
         AdmissionGatewayFilter f = AdmissionGatewayFilter.withIsolatedSoldOutCache(
-                같은_시계_홀더, AdmissionDecider.of(limiter, IDLE_RATIO),
+                같은_시계_홀더, 판정,
                 시계, meters, () -> 0.5, 줄, tokens, limiter, entryTokens, 멱등키);
         같은_시계_홀더.replace(new GatewaySnapshot(
                 Map.of(COUPON, CouponStates.queueing(10, 1_000, 5_000)), META, 지금));
@@ -578,7 +578,7 @@ class AdmissionGatewayFilterTest {
         MutableClock 시계 = MutableClock.at(지금);
         SnapshotHolder 소수_홀더 = SnapshotHolder.of(Duration.ofSeconds(3), 한계, 시계);
         AdmissionGatewayFilter f = AdmissionGatewayFilter.withIsolatedSoldOutCache(
-                소수_홀더, AdmissionDecider.of(limiter, IDLE_RATIO),
+                소수_홀더, 판정,
                 시계, meters, () -> 0.5, 줄, tokens, limiter, entryTokens, 멱등키);
         // **초 경계 한가운데서 줄을 세운다.** 래치는 초로 자른 시각을 재므로,
         // 초의 앞부분이 잘려 나간 만큼 실효 수명이 짧아진다. 경계에서 세우면
@@ -1068,7 +1068,7 @@ class AdmissionGatewayFilterTest {
     void 큐가_찼으면_다시_올_때를_알려_준다() {
         // 안 알려 주면 각자 마음대로 돌아온다. 그 파도가 다음 거절을 만든다.
         AdmissionGatewayFilter f = AdmissionGatewayFilter.withIsolatedSoldOutCache(
-                holder, AdmissionDecider.of(limiter, IDLE_RATIO),
+                holder, 판정,
                 Clock.fixed(지금, ZoneOffset.UTC), meters, () -> 0.5, 줄, tokens, limiter, entryTokens, 멱등키);
         스냅샷을_심는다(CouponStates.queueing(1, 1_000, 5_000));
 
@@ -1247,7 +1247,7 @@ class AdmissionGatewayFilterTest {
     void 래치가_풀리면_무대기_통과가_되살아난다() {
         MutableClock 시계 = MutableClock.at(지금);
         AdmissionGatewayFilter f = AdmissionGatewayFilter.withIsolatedSoldOutCache(
-                holder, AdmissionDecider.of(limiter, IDLE_RATIO), 시계, meters, () -> 0.5,
+                holder, 판정, 시계, meters, () -> 0.5,
                 줄, tokens, limiter, entryTokens, 멱등키);
         스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
         // 래치가 실제로 걸렸는지부터 본다. 안 걸렸으면 뒤의 통과가 아무 뜻이 없다.
@@ -1278,7 +1278,7 @@ class AdmissionGatewayFilterTest {
     void 트래픽이_이어져도_래치가_풀린다() {
         MutableClock 시계 = MutableClock.at(지금);
         AdmissionGatewayFilter f = AdmissionGatewayFilter.withIsolatedSoldOutCache(
-                holder, AdmissionDecider.of(limiter, IDLE_RATIO),
+                holder, 판정,
                 시계, meters, () -> 0.5, 줄, tokens, limiter, entryTokens, 멱등키);
         스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
         태운다(f, COUPON);
@@ -1304,7 +1304,7 @@ class AdmissionGatewayFilterTest {
     void 줄이_보여도_표식은_찍는다() {
         MutableClock 시계 = MutableClock.at(지금);
         AdmissionGatewayFilter f = AdmissionGatewayFilter.withIsolatedSoldOutCache(
-                holder, AdmissionDecider.of(limiter, IDLE_RATIO),
+                holder, 판정,
                 시계, meters, () -> 0.5, 줄, tokens, limiter, entryTokens, 멱등키);
         // 스냅샷이 이미 줄을 보고 있는 상태에서 한 명 더 넣는다.
         스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
@@ -1395,7 +1395,7 @@ class AdmissionGatewayFilterTest {
         Instant 낡은_발행 = 지금.minusSeconds(3_600);
         MutableClock 시계 = MutableClock.at(지금);
         AdmissionGatewayFilter 시계를_쓰는_필터 = AdmissionGatewayFilter.withIsolatedSoldOutCache(
-                holder, AdmissionDecider.of(limiter, IDLE_RATIO), 시계, meters, 고정_난수,
+                holder, 판정, 시계, meters, 고정_난수,
                 줄, tokens, limiter, entryTokens, 멱등키);
         holder.replace(new GatewaySnapshot(
                 Map.of(COUPON, CouponStates.idle(1_000_000)),
@@ -1673,7 +1673,7 @@ class AdmissionGatewayFilterTest {
     private final MutableClock 격벽_시계 = MutableClock.at(지금);
 
     private final AdmissionGatewayFilter 격벽_필터 = AdmissionGatewayFilter.withIsolatedSoldOutCache(
-            holder, AdmissionDecider.of(limiter, IDLE_RATIO),
+            holder, 판정,
             격벽_시계, meters, 고정_난수, 줄, tokens, limiter, entryTokens, 멱등키);
 
     /**

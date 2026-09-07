@@ -204,14 +204,24 @@ class GatewayRedisPortTest extends RedisContainerSupport {
     @Test
     @DisplayName("상한을_넘는_통과_수는_묶어_보낸다")
     void 상한을_넘는_통과_수는_묶어_보낸다() {
-        assertThat(port.passArg(9_000_000_000L)).isEqualTo("1000000000");
+        GatewayRedisPort.Presence seen =
+                찍는다("gw-a", CircuitState.CLOSED, 9_000_000_000L).block(WAIT);
+
+        // 스크립트가 안 거절했다는 것과 묶인 값이 실렸다는 것을 같이 본다.
+        assertThat(seen.passed()).isEqualTo(1_000_000_000);
+        assertThat(seen.passReported()).isEqualTo(1);
     }
 
-    /** 안 쟀으면 빈 값이다. 0 을 보내면 안 잰 노드가 잰 노드로 세어진다. */
+    /** 안 쟀으면 안 싣는다. 0 을 실으면 안 잰 노드가 0 을 잰 노드로 세어진다. */
     @Test
-    @DisplayName("안_쟀으면_빈_값을_보낸다")
-    void 안_쟀으면_빈_값을_보낸다() {
-        assertThat(port.passArg(-1)).isEmpty();
-        assertThat(port.passArg(0)).isEqualTo("0");
+    @DisplayName("안_쟀으면_아무것도_안_싣는다")
+    void 안_쟀으면_아무것도_안_싣는다() {
+        assertThat(찍는다("gw-a", CircuitState.CLOSED, -1).block(WAIT).passReported())
+                .as("안 잰 노드는 합에 기여하지 않는다").isZero();
+
+        GatewayRedisPort.Presence 잰_영 = 찍는다("gw-a", CircuitState.CLOSED, 0).block(WAIT);
+
+        assertThat(잰_영.passReported()).as("0 을 잰 것은 실린다").isEqualTo(1);
+        assertThat(잰_영.passed()).isZero();
     }
 }

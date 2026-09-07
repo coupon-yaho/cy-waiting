@@ -1,11 +1,16 @@
 package com.kafkick.waiting.gateway;
 
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.micrometer.core.instrument.FunctionCounter;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Mono;
 
 /**
@@ -17,6 +22,14 @@ import reactor.core.publisher.Mono;
  */
 public final class BackendProbe {
 
+    public static final String PASSED = "waiting.probe.passed";
+
+    public static final String FAILED = "waiting.probe.failed";
+
+    public static final String SKIPPED = "waiting.probe.skipped";
+
+    private static final Logger log = LoggerFactory.getLogger(BackendProbe.class);
+
     private final Supplier<Optional<CircuitBreaker>> breaker;
 
     /** 뒷단 헬스 경로 한 번. 실패는 오류 신호로 온다. */
@@ -27,6 +40,9 @@ public final class BackendProbe {
     private final AtomicLong failed = new AtomicLong();
 
     private final AtomicLong skipped = new AtomicLong();
+
+    /** 실패 구간의 첫 건만 남기는 자물쇠. 성공하면 푼다. */
+    private final AtomicReference<Boolean> failingSince = new AtomicReference<>();
 
     private BackendProbe(Supplier<Optional<CircuitBreaker>> breaker, Supplier<Mono<Void>> call) {
         this.breaker = Objects.requireNonNull(breaker, "breaker 는 필수다");
@@ -63,26 +79,42 @@ public final class BackendProbe {
                 // **취소도 허가를 돌려준다.** 안 돌려주면 반쯤 열린 자리가 하나
                 // 줄어든 채로 남고, 그만큼 회복 표본이 영영 안 찬다.
                 .doOnCancel(circuit::releasePermission)
-                // **실패를 밖으로 안 흘린다.** 루프를 타고 올라가면 그 구독이 끊기고,
-                // 끊기면 서킷이 열린 채로 아무도 다시 안 친다.
+                // **여기서 신호를 끊는다.** 루프도 삼키지만 그쪽은 동기로 던진 것을
+                // 받는 자리라, 이 오류 신호는 여기까지만 온다.
                 .onErrorResume(error -> Mono.empty());
     }
 
+    /**
+     * 회차 결과를 <b>카운터로</b> 낸다. 단조 증가라 게이지로 내면 재기동 리셋을
+     * 못 다뤄 회복 구간의 증가율이 틀어진다.
+     *
+     * <p>셋 다 0 이면 루프가 죽은 것이다. 그 구분이 없으면 배선이 빠진 채 조용히 돈다.
+     */
+    public BackendProbe bind(MeterRegistry meters) {
+        counter(meters, PASSED, "합성 프로브가 표본을 채운 회차 수", passed);
+        counter(meters, FAILED, "합성 프로브가 실패로 표본을 채운 회차 수", failed);
+        counter(meters, SKIPPED, "반쯤 열리지 않아 안 친 회차 수. 루프 생존의 신호다", skipped);
+        return this;
+    }
+
+    private void counter(MeterRegistry meters, String name, String why, AtomicLong value) {
+        FunctionCounter.builder(name, value, AtomicLong::doubleValue)
+                .description(why)
+                .register(meters);
+    }
+
     /** 표본을 채운 회차 수. */
-    public double passed() {
+    public long passed() {
         return passed.get();
     }
 
     /** 표본을 실패로 채운 회차 수. */
-    public double failed() {
+    public long failed() {
         return failed.get();
     }
 
-    /**
-     * 안 친 회차 수. <b>루프가 죽은 것과 칠 일이 없던 것을 가른다</b> — 셋 다 0 이면
-     * 도는 것이 없다는 뜻이고, 그 구분이 없으면 배선이 빠진 채 조용히 돈다.
-     */
-    public double skipped() {
+    /** 반쯤 열리지 않아 안 친 회차 수. */
+    public long skipped() {
         return skipped.get();
     }
 
@@ -92,9 +124,16 @@ public final class BackendProbe {
         if (error == null) {
             passed.incrementAndGet();
             circuit.onSuccess(elapsed, unit);
-        } else {
-            failed.incrementAndGet();
-            circuit.onError(elapsed, unit, error);
+            failingSince.set(null);
+            return;
+        }
+        failed.incrementAndGet();
+        circuit.onError(elapsed, unit, error);
+        // **원인을 한 번은 남긴다.** 수만 세면 경로 오설정과 뒷단 사망이 밖에서
+        // 같은 값이다. 구간의 첫 건만 남겨 회차마다 쌓이는 것을 막는다.
+        if (failingSince.compareAndSet(null, Boolean.TRUE)) {
+            log.warn("합성 프로브가 실패로 표본을 채운다 — {}. 경로 설정과 뒷단을 "
+                    + "함께 본다", error.toString());
         }
     }
 }

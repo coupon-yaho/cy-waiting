@@ -1,7 +1,6 @@
 package com.kafkick.waiting.gateway;
 
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
-import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.netty.channel.ChannelOption;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -12,6 +11,8 @@ import org.springframework.http.HttpStatusCode;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Scheduler;
+import reactor.core.scheduler.Schedulers;
 import reactor.netty.http.client.HttpClient;
 
 /**
@@ -31,6 +32,9 @@ public class BackendProbeConfig {
     @Bean
     BackendProbe backendProbe(GatewayRoutes.Backend backend, BackendProbeProperties probe,
             CircuitBreakerRegistry circuits) {
+        // **상한도 전용 스케줄러에서 잰다.** 공용 풀을 쓰면 트래픽이 몰릴 때 이
+        // 타이머가 요청 처리 뒤에 줄을 서 상한이 실제보다 늦게 끊는다.
+        Scheduler timer = Schedulers.newSingle("backend-probe-timeout", true);
         HttpClient http = HttpClient.create().option(ChannelOption.CONNECT_TIMEOUT_MILLIS,
                 (int) backend.connectTimeout().toMillis());
         WebClient client = WebClient.builder()
@@ -42,30 +46,21 @@ public class BackendProbeConfig {
         return BackendProbe.of(() -> circuits.find(GatewayRoutes.CIRCUIT),
                 () -> client.get().uri(probe.path())
                         .retrieve()
-                        // 2xx 가 아니면 실패다. 뒷단이 살아 답을 준 것과 제 일을
-                        // 할 수 있는 것은 다르다.
-                        .onStatus(HttpStatusCode::isError,
+                        // **2xx 만 성공이다.** 뒷단이 살아 답을 준 것과 제 일을 할 수
+                        // 있는 것은 다르고, 3xx 도 그렇다 — 헬스 경로가 로그인
+                        // 페이지로 넘기면 그 302 가 회복 표본이 된다.
+                        .onStatus(status -> !status.is2xxSuccessful(),
                                 response -> response.createException().flatMap(Mono::error))
                         .bodyToMono(Void.class)
                         .then()
                         // **반쯤 열린 시한보다 짧아야 한다.** 넘으면 그 회차의 답이
                         // 다음 구간에 표본으로 얹힌다 — 허가를 안 쓴 유령 표본이다.
-                        .timeout(backend.responseTimeout()));
+                        .timeout(backend.responseTimeout(), timer));
     }
 
     @Bean
     BackendProbeLoop backendProbeLoop(BackendProbe probe, BackendProbeProperties properties,
             MeterRegistry meters) {
-        // **안 도는 것과 칠 일이 없는 것을 가른다.** 셋 다 0 이면 루프가 죽은 것이다.
-        Gauge.builder("waiting.probe.passed", probe, BackendProbe::passed)
-                .description("합성 프로브가 표본을 채운 회차 수")
-                .strongReference(true).register(meters);
-        Gauge.builder("waiting.probe.failed", probe, BackendProbe::failed)
-                .description("합성 프로브가 실패로 표본을 채운 회차 수")
-                .strongReference(true).register(meters);
-        Gauge.builder("waiting.probe.skipped", probe, BackendProbe::skipped)
-                .description("반쯤 열리지 않아 안 친 회차 수. 루프 생존의 신호다")
-                .strongReference(true).register(meters);
-        return BackendProbeLoop.of(probe::probe, properties.interval());
+        return BackendProbeLoop.of(probe.bind(meters)::probe, properties.interval());
     }
 }

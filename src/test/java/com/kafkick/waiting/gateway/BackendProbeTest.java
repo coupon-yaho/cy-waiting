@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -87,6 +89,8 @@ class BackendProbeTest {
         프로브.probe().block();
 
         assertThat(서킷.getState()).isEqualTo(CircuitBreaker.State.OPEN);
+        assertThat(프로브.failed()).as("실패 수를 안 세면 그 지표가 영영 0 이다").isEqualTo(2);
+        assertThat(프로브.passed()).isZero();
     }
 
     /**
@@ -112,7 +116,12 @@ class BackendProbeTest {
     @Test
     @DisplayName("열려_있으면_안_친다")
     void 열려_있으면_안_친다() {
-        CircuitBreaker 서킷 = 서킷();
+        // 대기가 짧으면 첫 허가 시도가 반쯤 열린 상태로 넘겨, 이 시험이 재려는
+        // 것과 다른 것을 재게 된다.
+        CircuitBreaker 서킷 = CircuitBreaker.of("backend", CircuitBreakerConfig.custom()
+                .waitDurationInOpenState(Duration.ofHours(1))
+                .automaticTransitionFromOpenToHalfOpenEnabled(false)
+                .build());
         열어_둔다(서킷);
         AtomicInteger 호출 = new AtomicInteger();
         BackendProbe 프로브 = BackendProbe.of(() -> Optional.of(서킷),
@@ -173,5 +182,66 @@ class BackendProbeTest {
         assertThat(프로브.passed()).isEqualTo(1);
         assertThat(프로브.failed()).isZero();
         assertThat(프로브.skipped()).isZero();
+    }
+
+    /**
+     * <b>허가 자리를 안 넘겨 쓴다.</b> 이 게이트가 없으면 프로브가 반쯤 열린 자리를
+     * 회차마다 무제한으로 먹고, 이미 큐에서 빠져 입장 토큰을 든 사람이 폴백으로
+     * 떨어져 그 토큰이 죽는다.
+     */
+    @Test
+    @DisplayName("허가가_없으면_안_친다")
+    void 허가가_없으면_안_친다() {
+        CircuitBreaker 서킷 = CircuitBreaker.of("backend", CircuitBreakerConfig.custom()
+                .permittedNumberOfCallsInHalfOpenState(1)
+                .waitDurationInOpenState(Duration.ofHours(1))
+                .automaticTransitionFromOpenToHalfOpenEnabled(false)
+                .build());
+        열어_둔다(서킷);
+        서킷.transitionToHalfOpenState();
+        AtomicInteger 호출 = new AtomicInteger();
+        BackendProbe 프로브 = BackendProbe.of(() -> Optional.of(서킷),
+                () -> Mono.<Void>never().doOnSubscribe(s -> 호출.incrementAndGet()));
+
+        // 하나뿐인 자리를 첫 회차가 쥔 채로 안 놓는다.
+        프로브.probe().subscribe();
+        프로브.probe().block();
+
+        assertThat(호출).as("자리가 없으면 뒷단을 안 친다").hasValue(1);
+        assertThat(프로브.skipped()).isEqualTo(1);
+    }
+
+    /** 취소도 자리를 돌려준다. 안 돌려주면 반쯤 열린 자리가 하나씩 영구히 준다. */
+    @Test
+    @DisplayName("취소하면_자리를_돌려준다")
+    void 취소하면_자리를_돌려준다() {
+        CircuitBreaker 서킷 = CircuitBreaker.of("backend", CircuitBreakerConfig.custom()
+                .permittedNumberOfCallsInHalfOpenState(1)
+                .waitDurationInOpenState(Duration.ofHours(1))
+                .automaticTransitionFromOpenToHalfOpenEnabled(false)
+                .build());
+        열어_둔다(서킷);
+        서킷.transitionToHalfOpenState();
+        BackendProbe 프로브 = BackendProbe.of(() -> Optional.of(서킷), Mono::never);
+
+        프로브.probe().subscribe().dispose();
+
+        assertThat(서킷.tryAcquirePermission()).as("자리가 돌아왔다").isTrue();
+    }
+
+    /** 이름과 값이 안 걸리면 회복 구간에 볼 것이 없다. */
+    @Test
+    @DisplayName("회차_지표를_이름으로_낸다")
+    void 회차_지표를_이름으로_낸다() {
+        CircuitBreaker 서킷 = 서킷();
+        MeterRegistry 지표 = new SimpleMeterRegistry();
+        BackendProbe 프로브 =
+                BackendProbe.of(() -> Optional.of(서킷), Mono::empty).bind(지표);
+
+        프로브.probe().block();
+
+        assertThat(지표.get(BackendProbe.SKIPPED).functionCounter().count()).isEqualTo(1);
+        assertThat(지표.get(BackendProbe.PASSED).functionCounter().count()).isZero();
+        assertThat(지표.get(BackendProbe.FAILED).functionCounter().count()).isZero();
     }
 }

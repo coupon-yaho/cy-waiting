@@ -8,6 +8,8 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import com.kafkick.waiting.control.GatewayHeartbeatLoop;
+import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
 import org.springframework.context.ApplicationContext;
 
 /**
@@ -34,7 +36,7 @@ class BackendProbeWiringTest {
     @Nested
     @Tag("context")
     @SpringBootTest(properties = {"waiting.scheduler.enabled=false",
-            "waiting.backend.probe.enabled=true"})
+            "waiting.backend.probe.enabled=true", "waiting.backend.probe.path=/actuator/health"})
     class Enabled {
 
         @Autowired
@@ -47,11 +49,32 @@ class BackendProbeWiringTest {
             assertThat(context.getBeansOfType(BackendProbeLoop.class)).hasSize(1);
         }
 
-        /** 루프가 스프링 수명에 걸려야 웹 서버보다 먼저 내려간다. */
+        /**
+         * <b>웹 서버보다 먼저 내려가고 하트비트 뒤에 뜬다.</b> 순서가 뒤집히면
+         * 드레이닝 동안 프로브가 남거나, 재료가 서기 전에 돈다.
+         */
         @Test
-        @DisplayName("루프가_수명에_걸린다")
-        void 루프가_수명에_걸린다() {
-            assertThat(context.getBean(BackendProbeLoop.class).isRunning()).isTrue();
+        @DisplayName("루프가_수명_순서에_걸린다")
+        void 루프가_수명_순서에_걸린다() {
+            BackendProbeLoop 루프 = context.getBean(BackendProbeLoop.class);
+
+            assertThat(루프.isRunning()).isTrue();
+            assertThat(루프.getPhase())
+                    .as("하트비트 뒤에 뜬다")
+                    .isGreaterThan(context.getBean(GatewayHeartbeatLoop.class).getPhase())
+                    .as("웹 서버보다 먼저 내려간다")
+                    .isLessThan(Integer.MAX_VALUE);
+        }
+
+        /** 지표가 안 걸리면 루프가 죽은 것과 칠 일이 없는 것이 밖에서 같은 값이다. */
+        @Test
+        @DisplayName("회차_지표가_긁힌다")
+        void 회차_지표가_긁힌다() {
+            assertThat(context.getBean(PrometheusMeterRegistry.class).scrape())
+                    .containsPattern("waiting_probe_skipped_total\\{[^}]*\\} [0-9.E-]+\\n")
+                    .containsPattern("waiting_probe_passed_total\\{[^}]*\\} [0-9.E-]+\\n")
+                    .containsPattern("waiting_probe_failed_total\\{[^}]*\\} [0-9.E-]+\\n")
+                    .doesNotContain("NaN");
         }
     }
 }

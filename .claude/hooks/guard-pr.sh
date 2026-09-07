@@ -130,6 +130,12 @@ if [[ -n "$key" && -r "$env_file" ]]; then
         echo "$key 라는 이슈가 없다. 브랜치를 실재하는 키로 딴다 (WF-3)" >&2
         exit 2
     fi
+    # 자격 증명이 아예 없으면 위에서 빈 값으로 나온다. 값이 있는데 200 도 404 도
+    # 아니면 못 본 것이라, 통과시키면 이 게이트가 조용히 사라진다.
+    if [[ -n "$code" && "$code" != "200" && "$code" != "000" ]]; then
+        echo "$key 를 못 봤다 (HTTP $code). 자격 증명과 연결을 확인하고 다시 연다." >&2
+        exit 2
+    fi
 fi
 
 RUNNER="$ROOT/.claude/hooks/review-branch.sh"
@@ -181,20 +187,51 @@ if [[ -r "$env_file" ]]; then
     fi
     keys=$(printf '%s' "$added" | grep -oE '\bCY-[0-9]+\b' | sort -u || true)
     if [[ -n "$keys" ]]; then
-        missing=$(set -a; . "$env_file" >/dev/null 2>&1; set +a
+        # **200 과 404 말고는 "못 봤다" 다.** 404 만 실패로 보면 만료된 자격 증명·
+        # 권한 오류·속도 제한·서버 오류·타임아웃이 전부 통과한다 — 검사가 인프라
+        # 오류 한 번에 조용히 사라지는 것이 이 티켓이 고치려는 사고 그 자체다.
+        verdict=$(set -a; . "$env_file" >/dev/null 2>&1; set +a
             [[ -z "${ATLASSIAN_BASE_URL:-}" || -z "${ATLASSIAN_USER_EMAIL:-}" \
                 || -z "${ATLASSIAN_API_TOKEN:-}" ]] && exit 0
+            # **자격 증명을 먼저 본다.** 지라는 권한이 없으면 404 를 준다 —
+            # 존재를 숨기는 것이라, 안 보면 만료된 토큰이 "이슈가 없다" 로 나온다.
+            me=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+                -u "$ATLASSIAN_USER_EMAIL:$ATLASSIAN_API_TOKEN" \
+                -H 'Accept: application/json' \
+                "${ATLASSIAN_BASE_URL%/}/rest/api/3/myself" 2>/dev/null)
+            [[ "$me" != "200" ]] && { printf '자격:%s ' "$me"; exit 0; }
             for k in $keys; do
                 c=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
                     -u "$ATLASSIAN_USER_EMAIL:$ATLASSIAN_API_TOKEN" \
                     -H 'Accept: application/json' \
                     "${ATLASSIAN_BASE_URL%/}/rest/api/3/issue/$k?fields=summary" \
                     2>/dev/null)
-                [[ "$c" == "404" ]] && printf '%s ' "$k"
+                case "$c" in
+                    200) ;;
+                    404) printf '없음:%s ' "$k" ;;
+                    *)   printf '못봄:%s(%s) ' "$k" "$c" ;;
+                esac
             done)
+        missing=$(printf '%s' "$verdict" | tr ' ' '\n' | grep '^없음:' | cut -d: -f2 \
+            | tr '\n' ' ' || true)
+        unclear=$(printf '%s' "$verdict" | tr ' ' '\n' | grep '^못봄:' | cut -d: -f2 \
+            | tr '\n' ' ' || true)
         if [[ -n "${missing// /}" ]]; then
             echo "더한 문서 줄이 없는 이슈를 가리킨다: $missing" >&2
             echo "  없는 추적을 있는 척 두지 않는다 — 키를 고치거나 뺀다" >&2
+            exit 2
+        fi
+        creds=$(printf '%s' "$verdict" | tr ' ' '\n' | grep '^자격:' | cut -d: -f2 || true)
+        if [[ -n "$creds" ]]; then
+            echo "지라에 못 붙어 티켓 키를 못 봤다 (HTTP $creds)." >&2
+            echo "  통과시키면 이 게이트가 인프라 오류 한 번에 조용히 사라진다." >&2
+            echo "  ../.env 의 자격 증명을 확인하고 다시 연다." >&2
+            exit 2
+        fi
+        if [[ -n "${unclear// /}" ]]; then
+            echo "티켓을 못 봤다: $unclear" >&2
+            echo "  통과시키면 이 게이트가 인프라 오류 한 번에 조용히 사라진다." >&2
+            echo "  자격 증명과 연결을 확인하고 다시 연다." >&2
             exit 2
         fi
     fi

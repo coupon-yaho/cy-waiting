@@ -1,9 +1,10 @@
 package com.kafkick.waiting.domain.admission;
 
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.LongAdder;
 
 /**
- * 이 노드가 뒷단으로 보낸 초당 요청 수.
+ * 이 노드가 뒷단으로 넘긴 초당 요청 수.
  *
  * <p>회복 봉우리를 정상과 견주려면 그 수를 알아야 하는데, 노드는 제 것만 안다
  * (RC4). <b>지금은 지표로만 낸다</b> — 이 값으로 자르면 관측이 제 출력에 오염돼
@@ -22,17 +23,20 @@ public final class PassRateMeter {
 
     private final long windowMs;
 
+    /** 초당으로 나눌 때의 최소 구간. 갓 연 창의 몇 건이 부풀지 않게 한다. */
+    private final long minSpanMs;
+
     /**
-     * 창 하나. <b>셋을 한 덩어리로 바꾼다</b> — 나눠 두면 읽는 쪽이 새 시작과
-     * 0 으로 리셋된 수를 짝지어 부하 중에 0 을 낸다.
+     * 창 하나. <b>수를 {@link LongAdder} 로 든다</b> — 요청마다 CAS 를 돌면 노드
+     * 하나의 캐시 라인에 피크 부하가 통째로 몰린다 (R4).
      *
      * @param previous 직전 창이 낸 값. 한 창도 안 채웠으면 음수다
      */
-    private record Window(long startedAt, long count, long previous) {
+    private record Window(long startedAt, LongAdder count, long previous) {
     }
 
     private final AtomicReference<Window> window =
-            new AtomicReference<>(new Window(IDLE, 0, -1));
+            new AtomicReference<>(new Window(IDLE, new LongAdder(), -1));
 
     private PassRateMeter(long windowMs) {
         if (windowMs <= 0 || windowMs > MAX_WINDOW_MS) {
@@ -40,18 +44,34 @@ public final class PassRateMeter {
                     "windowMs 는 1.." + MAX_WINDOW_MS + " 여야 한다: " + windowMs);
         }
         this.windowMs = windowMs;
+        this.minSpanMs = Math.max(1, windowMs / 5);
     }
 
     public static PassRateMeter of(long windowMs) {
         return new PassRateMeter(windowMs);
     }
 
-    /** 한 건이 뒷단으로 갔다. */
+    /**
+     * 한 건이 뒷단으로 갔다.
+     *
+     * <p><b>접을 때만 CAS 를 돈다.</b> 창 경계에 겹친 몇 건은 접힌 값에도 새
+     * 창에도 안 들어갈 수 있다 — 초당 수를 재는 데는 그 오차가 안 보인다.
+     */
     public void passed(long nowMs) {
-        window.updateAndGet(w -> {
-            Window open = advance(w, nowMs);
-            return new Window(open.startedAt(), open.count() + 1, open.previous());
-        });
+        Window w = window.get();
+        if (rolls(w, nowMs)) {
+            w = window.updateAndGet(now -> advance(now, nowMs));
+        }
+        w.count().increment();
+    }
+
+    /** 이 도장이 창을 접는가. 대부분의 회차가 여기서 끝나 CAS 를 안 돈다. */
+    private boolean rolls(Window w, long nowMs) {
+        if (w.startedAt() == IDLE) {
+            return true;
+        }
+        long elapsed = nowMs - w.startedAt();
+        return elapsed > windowMs || elapsed < -windowMs;
     }
 
     /**
@@ -59,20 +79,17 @@ public final class PassRateMeter {
      * 읽기가 상태를 바꾸면 묻는 주기에 따라 값이 달라진다.
      */
     private Window advance(Window w, long nowMs) {
+        if (!rolls(w, nowMs)) {
+            return w;
+        }
         if (w.startedAt() == IDLE) {
-            return new Window(nowMs, 0, w.previous());
+            return new Window(nowMs, new LongAdder(), w.previous());
         }
         long elapsed = nowMs - w.startedAt();
-        if (elapsed <= windowMs) {
-            // **작은 역행은 시계가 아니라 도장 순서다.** 스레드마다 제 시계를
-            // 읽으므로 1ms 뒤진 도장이 흔하다. 그것으로 창을 버리면 한 건이
-            // 초당 수를 0 으로 떨어뜨리고 창 하나를 다 채워야 돌아온다.
-            return elapsed >= -windowMs ? w : new Window(nowMs, 0, -1);
-        }
         // **유휴를 건너뛴 창은 직전 값이 아니다.** 창이 두 배를 넘도록 열려
-        // 있었다는 것은 그사이 한 건도 안 왔다는 뜻이다 — 그 값을 물려주면
-        // 세일이 다시 열릴 때까지 지난 봉우리를 보고한다.
-        return new Window(nowMs, 0, elapsed <= windowMs * 2 ? perWindow(w.count()) : -1);
+        // 있었다는 것은 그사이 한 건도 안 왔다는 뜻이다.
+        long carried = elapsed > windowMs * 2 ? -1 : perWindow(w.count().sum());
+        return new Window(nowMs, new LongAdder(), carried);
     }
 
     /**
@@ -81,9 +98,8 @@ public final class PassRateMeter {
      */
     public long perSecond(long nowMs) {
         Window w = window.get();
-        long previous = Math.max(0, w.previous());
         if (w.startedAt() == IDLE) {
-            return previous;
+            return Math.max(0, w.previous());
         }
         long elapsed = nowMs - w.startedAt();
         // **한 창이 통째로 비면 0 이다.** 창은 열린 뒤 창 길이만큼만 통과를
@@ -91,16 +107,25 @@ public final class PassRateMeter {
         if (elapsed >= windowMs * 2) {
             return 0;
         }
-        // **분모는 언제나 창 길이다.** 실제 구간으로 나누면 접을 때와 읽을 때가
-        // 갈리고, 갓 연 창의 몇 건이 초당으로 부풀어 그 값이 상한이 된다.
-        return w.previous() < 0 ? perWindow(w.count()) : previous;
+        if (w.previous() >= 0) {
+            return w.previous();
+        }
+        // **첫 창은 실제 구간으로 나누되 바닥을 둔다.** 창 길이로 나누면 회복
+        // 첫 초의 봉우리가 5분의 1로 눌리고, 실제 구간만 쓰면 5ms 에 지나간 세
+        // 건이 600건/s 가 된다.
+        return perSpan(w.count().sum(), Math.max(elapsed, minSpanMs));
+    }
+
+    /** 창 하나의 초당 수. 접힌 창은 창 길이만큼 열려 있었다. */
+    private long perWindow(long count) {
+        return perSpan(count, windowMs);
     }
 
     /**
-     * 창 하나의 초당 수. <b>0 으로 반올림하지 않는다</b> — 창이 길면 한두 건이
-     * 0 이 되어 "부하 없음" 으로 읽힌다. 창은 통과가 열므로 수가 0 일 수 없다.
+     * <b>0 으로 반올림하지 않는다</b> — 창이 길면 한두 건이 "부하 없음" 이 된다.
+     * 창은 통과가 여므로 수가 0 일 수 없고, 유휴는 읽는 쪽이 먼저 0 으로 끊는다.
      */
-    private long perWindow(long count) {
-        return Math.max(1, Math.round(count * 1000.0 / windowMs));
+    private long perSpan(long count, long spanMs) {
+        return Math.max(1, Math.round(count * 1000.0 / spanMs));
     }
 }

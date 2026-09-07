@@ -339,7 +339,7 @@ class AdmissionGatewayFilterTest {
             태운다(COUPON);
         }
 
-        assertThat(filter.passRatePerSec()).as("505건이면 101 이 된다").isEqualTo(100);
+        assertThat(filter.passRatePerSec()).as("매진까지 세면 505 가 된다").isEqualTo(500);
     }
 
     @Test

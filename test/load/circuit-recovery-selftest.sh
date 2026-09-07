@@ -48,10 +48,13 @@ gated() {
 }
 
 # 회복 구간. 하한 4 에서 두 배씩 올라 300 에 닿는다. 도착은 크레딧을 따라간다.
+# 마지막 인자는 회복이 멈출 몫이다. **승계 직전 몫이 상한이면 계단을 못 잰다** —
+# 허용이 상한의 배수라 램프를 통째로 건너뛴 회차도 통과한다.
 recovering() {
-    local t=$1 served=$2
+    local t=$1 served=$2 upto=${3:-300}
     local i=0
     for credit in 4 8 16 32 64 128 256 300 300; do
+        if [[ $credit -gt $upto ]]; then break; fi
         printf '%s %s %s %s CLOSED\n' $((t + i * 200)) "$credit" "$((served + i * 20))" "$NODES"
         i=$((i + 1))
     done
@@ -62,7 +65,7 @@ healthy_run() {
         echo '# 정상'; normal 0 0
         echo '# 진입'; gated 1600 160 2 3
         echo '# 유지'; gated 2200 160 2 5
-        echo '# 회복'; recovering 3200 160
+        echo '# 회복'; recovering 3200 160 128
         echo '# 해제'; echo '# 승계'
         printf '%s 300 %s %s CLOSED\n' 5200 340 "$NODES"
         printf '%s 300 %s %s CLOSED\n' 5700 375 "$NODES"
@@ -79,7 +82,7 @@ run_case "정상 회차는 충족" 0 "충족" -- "$(healthy_run ok.txt)"
     echo '# 정상'; normal 0 0
     echo '# 진입'; gated 1600 160 300 3
     echo '# 유지'; gated 2200 160 2 5
-    echo '# 회복'; recovering 3200 160
+    echo '# 회복'; recovering 3200 160 128
     echo '# 해제'; echo '# 승계'; printf '%s 300 %s %s CLOSED\n' 5200 340 "$NODES"
 } > "$work/late.txt"
 run_case "진입이 늦으면 미달" 1 "조이지 않았다" -- "$work/late.txt"
@@ -90,7 +93,7 @@ run_case "진입이 늦으면 미달" 1 "조이지 않았다" -- "$work/late.txt
     echo '# 진입'; gated 1600 160 2 3
     echo '# 유지'; gated 2200 160 2 2
     printf '%s 300 160 %s CLOSED\n' 2600 "$NODES"
-    echo '# 회복'; recovering 3200 160
+    echo '# 회복'; recovering 3200 160 128
     echo '# 해제'; echo '# 승계'; printf '%s 300 %s %s CLOSED\n' 5200 340 "$NODES"
 } > "$work/leak.txt"
 run_case "유지가 새면 미달" 1 "조임이 유지되지 않았다" -- "$work/leak.txt"
@@ -241,7 +244,7 @@ run_case "회복 전에 실패해도 잔여는 -1" 1 "잔여 -1.0초" -- "$work/
     echo '# 회복'
     printf '%s 2 160 %s HALF_OPEN\n' 3200 "$NODES"
     printf '%s 2 180 %s HALF_OPEN\n' 3400 "$NODES"
-    recovering 3600 200
+    recovering 3600 200 128
     echo '# 해제'; echo '# 승계'
     printf '%s 300 %s %s CLOSED\n' 5600 380 "$NODES"
     printf '%s 300 %s %s CLOSED\n' 6100 415 "$NODES"
@@ -326,7 +329,7 @@ run_case "회복이 열린 채 시작하면 잔여는 -1" 1 "잔여 -1.0초" -- 
     echo '# 정상'; normal 0 0
     echo '# 진입'; gated 1600 160 2 3
     echo '# 유지'; gated 2200 160 2 5
-    echo '# 회복'; recovering 3200 160
+    echo '# 회복'; recovering 3200 160 128
     echo '# 해제'
     printf '%s 64 320 %s CLOSED\n' 5200 "$NODES"
     echo '# 승계'
@@ -340,7 +343,7 @@ run_case "정확히 배수인 계단은 통과" 0 "충족" -- "$work/stepexact.t
     echo '# 정상'; normal 0 0
     echo '# 진입'; gated 1600 160 2 3
     echo '# 유지'; gated 2200 160 2 5
-    echo '# 회복'; recovering 3200 160
+    echo '# 회복'; recovering 3200 160 128
     echo '# 해제'
     printf '%s 64 320 %s CLOSED\n' 5200 "$NODES"
     echo '# 승계'
@@ -467,7 +470,7 @@ run_case "활짝 열린 구간의 도착 0 은 정상" 1 "안 닫혀" -- "$work/
     echo '# 정상'; normal 0 0
     echo '# 진입'; gated 1600 160 2 3
     echo '# 유지'
-    echo '# 회복'; recovering 3200 160
+    echo '# 회복'; recovering 3200 160 128
     echo '# 해제'; echo '# 승계'; printf '%s 300 340 %s CLOSED\n' 5200 "$NODES"
 } > "$work/nohold.txt"
 run_case "유지 구간이 비면 판정 불가" 2 "유지 구간에 표본이 없다" -- "$work/nohold.txt"
@@ -493,7 +496,7 @@ run_case "노드가 늘면 판정 불가" 2 "늘었다" -- "$work/grow.txt"
     echo '# 정상'; printf '%s 300 0 %s\n' 0 "$NODES"; normal 200 20 3
     echo '# 진입'; gated 1600 160 2 3
     echo '# 유지'; gated 2200 160 2 5
-    echo '# 회복'; recovering 3200 160
+    echo '# 회복'; recovering 3200 160 128
     echo '# 해제'; echo '# 승계'; printf '%s 300 340 %s CLOSED\n' 5200 "$NODES"
 } > "$work/fourcol.txt"
 run_case "옛 네 칸 형식은 막는다" 2 "열이 5 개가 아니다" -- "$work/fourcol.txt"
@@ -503,12 +506,25 @@ run_case "옛 네 칸 형식은 막는다" 2 "열이 5 개가 아니다" -- "$wo
     echo '# 정상'; printf '%s 300 0 %s closed!\n' 0 "$NODES"; normal 200 20 3
     echo '# 진입'; gated 1600 160 2 3
     echo '# 유지'; gated 2200 160 2 5
-    echo '# 회복'; recovering 3200 160
+    echo '# 회복'; recovering 3200 160 128
     echo '# 해제'; echo '# 승계'; printf '%s 300 340 %s CLOSED\n' 5200 "$NODES"
 } > "$work/badvote.txt"
 run_case "표가 상태 문자열이 아니면 막는다" 2 "상태 문자열이 아니다" -- "$work/badvote.txt"
 
 : > "$work/empty.txt"
+# **못 잰 것을 통과로 안 적는다.** 직전 몫이 이미 상한이면 허용이 상한의 배수라,
+# 램프를 통째로 건너뛴 승계도 그 회차에서는 통과한다.
+{
+    echo '# 정상'; normal 0 0
+    echo '# 진입'; gated 1600 160 2 3
+    echo '# 유지'; gated 2200 160 2 5
+    echo '# 회복'; recovering 3200 160
+    echo '# 해제'; echo '# 승계'
+    printf '%s 300 %s %s CLOSED\n' 5200 340 "$NODES"
+    printf '%s 300 %s %s CLOSED\n' 5700 375 "$NODES"
+} > "$work/blindhandover.txt"
+run_case "승계가 상한에서 나면 판정 불가" 2 "계단을 못 잰다" -- "$work/blindhandover.txt"
+
 run_case "표본이 비면 판정 불가" 2 "표본이 비었다" -- "$work/empty.txt"
 run_case "표본 파일이 없으면 판정 불가" 2 "표본이 비었다" -- "$work/없는파일.txt"
 
@@ -540,7 +556,7 @@ run_case "노드가 하나면 판정 불가" 2 "게이트웨이가" -- "$work/si
     echo '# 정상'; normal 0 0
     echo '# 진입'; printf '%s 오류 160 %s CLOSED\n' 1600 "$NODES"
     echo '# 유지'; gated 2200 160 2 5
-    echo '# 회복'; recovering 3200 160
+    echo '# 회복'; recovering 3200 160 128
     echo '# 해제'; echo '# 승계'; printf '%s 300 340 %s CLOSED\n' 5200 "$NODES"
 } > "$work/bad.txt"
 run_case "표본이 숫자가 아니면 판정 불가" 2 "표본이 숫자가 아니다" -- "$work/bad.txt"
@@ -553,7 +569,7 @@ run_case "표본이 숫자가 아니면 판정 불가" 2 "표본이 숫자가 �
     echo '# 정상'; normal 0 0 3
     echo '# 진입'; gated 1600 160 2 3
     echo '# 유지'; gated 2200 160 2 5
-    echo '# 회복'; recovering 3200 160
+    echo '# 회복'; recovering 3200 160 128
     echo '# 해제'; echo '# 승계'; printf '%s 300 340 %s CLOSED\n' 5200 "$NODES"
 } > "$work/short.txt"
 run_case "정상 구간이 짧으면 판정 불가" 2 "기준선 표본이" -- "$work/short.txt"

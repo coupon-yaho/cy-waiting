@@ -44,22 +44,25 @@ class PassRateMeterTest {
     }
 
     /**
-     * <b>창보다 짧은 구간을 초당으로 부풀리지 않는다.</b> 실제 구간으로 나누면
-     * 기동 직후 세 건이 5ms 에 지나간 것이 600건/s 가 되고, 상한이 그 값에 묶인다.
+     * <b>덜 찬 창은 실제 구간으로 나눈다.</b> 창 길이로 나누면 회복 첫 초의
+     * 봉우리가 5분의 1로 눌려, 재려던 전이가 지표에서 사라진다.
      */
     @Test
-    @DisplayName("창을_못_채우면_창_길이로_나눈다")
-    void 창을_못_채우면_창_길이로_나눈다() {
+    @DisplayName("덜_찬_창은_실제_구간으로_나눈다")
+    void 덜_찬_창은_실제_구간으로_나눈다() {
         PassRateMeter meter = PassRateMeter.of(WINDOW_MS);
         for (int i = 0; i < 100; i++) {
             meter.passed(1_000 + i * 10);
         }
 
-        // 100건이 1초 동안 왔다. 아직 창이 안 찼으므로 창(5초)으로 나눈 20 이다.
-        assertThat(meter.perSecond(2_000)).isEqualTo(20);
+        // 100건이 1초 동안 왔다. 그 1초로 나눈 100 이다.
+        assertThat(meter.perSecond(2_000)).isEqualTo(100);
     }
 
-    /** 부풀림은 창이 짧을수록 크다. 5ms 에 세 건이면 실제 구간으로는 600건/s 다. */
+    /**
+     * <b>구간에 바닥을 둔다.</b> 실제 구간만 쓰면 5ms 에 지나간 세 건이 600건/s
+     * 가 되고, 이 값을 상한으로 쓰는 순간 그 수에 묶인다.
+     */
     @Test
     @DisplayName("첫_창도_부풀리지_않는다")
     void 첫_창도_부풀리지_않는다() {
@@ -68,7 +71,8 @@ class PassRateMeterTest {
         meter.passed(1_002);
         meter.passed(1_005);
 
-        assertThat(meter.perSecond(1_005)).as("세 건을 창으로 나누면 1 이다").isOne();
+        assertThat(meter.perSecond(1_005)).as("5ms 가 아니라 바닥 1초로 나눈다")
+                .isEqualTo(3);
     }
 
     /**
@@ -117,7 +121,7 @@ class PassRateMeterTest {
         assertThat(meter.perSecond(1_000)).isEqualTo(60);
     }
 
-    /** 전부 같은 밀리초에 와도 분모가 창 길이라 부풀지 않는다. */
+    /** 전부 같은 밀리초에 와도 바닥이 있어 무한이 안 된다. */
     @Test
     @DisplayName("같은_밀리초에_몰려도_안_부푼다")
     void 같은_밀리초에_몰려도_안_부푼다() {
@@ -126,7 +130,7 @@ class PassRateMeterTest {
             meter.passed(1_000);
         }
 
-        assertThat(meter.perSecond(1_000)).isEqualTo(60);
+        assertThat(meter.perSecond(1_000)).isEqualTo(300);
     }
 
     /**
@@ -143,9 +147,9 @@ class PassRateMeterTest {
         // NTP 가 60초를 뒤로 돌린다. 그 뒤 같은 부하가 이어진다.
         meter.passed(10_000);
 
-        // 얼린 창을 12000/s 로 내면 안 된다. 얼마 동안 센 것인지 모르므로
-        // 물려줄 값이 없고, 새 창은 한 건뿐이다.
-        assertThat(meter.perSecond(11_000)).isOne();
+        // 얼린 창을 12000/s 로 내면 안 된다. 접힌 창이 4989건을 5초 동안
+        // 받았으므로 998 이고, 실제 부하 1000건/s 와 같은 자리다.
+        assertThat(meter.perSecond(11_000)).isEqualTo(998);
     }
 
     /** 창이 반도 안 찼으면 직전 값을 쓴다. 그 값이 없으면 지금 것을 쓸 수밖에 없다. */
@@ -186,7 +190,7 @@ class PassRateMeterTest {
             meter.passed(66_100 + i);
         }
         assertThat(meter.perSecond(66_700)).as("유입이 오는 대로 따라 오른다")
-                .isEqualTo(100);
+                .isEqualTo(501);
     }
 
     /**
@@ -270,7 +274,8 @@ class PassRateMeterTest {
             pool.shutdownNow();
         }
 
-        assertThat(meter.perSecond(1_000)).isEqualTo(threads * 5_000 / 5);
+        // 도장이 전부 같아 접히지 않는다. 바닥 1초로 나눈 값이 곧 센 수다.
+        assertThat(meter.perSecond(1_000)).isEqualTo(threads * 5_000);
     }
 
     /**

@@ -423,10 +423,52 @@ class AllocationRedisPortTest extends RedisContainerSupport {
                 .isEqualTo("20");
     }
 
+    /**
+     * <b>옛 임기의 발행은 새 임기를 못 덮는다</b> (CY-845). 유령 리더가 옛 시야로
+     * 덮으면 전 노드의 대기 수가 뒤로 가고, 0 이 되면 줄이 없는 것으로 읽혀 사다리가
+     * 통과로 갈린다 — 줄 선 사람을 추월하는 것이다.
+     */
+    @Test
+    @DisplayName("옛_임기의_발행은_안_덮는다")
+    void 옛_임기의_발행은_안_덮는다() {
+        port.publish(Map.of("c1", "새 리더", "#credit", "7"), 5).block(WAIT);
+
+        port.publish(Map.of("c1", "옛 리더", "#credit", "1"), 4).block(WAIT);
+
+        assertThat(port.load().block(WAIT))
+                .as("옛 시야가 새 시야를 덮으면 대기 수가 뒤로 간다")
+                .containsEntry("c1", "새 리더");
+    }
+
+    /** 같은 임기의 재시도는 막지 않는다. 막으면 실패한 발행이 영영 안 된다. */
+    @Test
+    @DisplayName("같은_임기의_재시도는_통한다")
+    void 같은_임기의_재시도는_통한다() {
+        port.publish(Map.of("c1", "먼저", "#credit", "7"), 5).block(WAIT);
+
+        port.publish(Map.of("c1", "다시", "#credit", "7"), 5).block(WAIT);
+
+        assertThat(port.load().block(WAIT)).containsEntry("c1", "다시");
+    }
+
+    /**
+     * <b>0 은 리더가 아니라는 뜻이다.</b> 강등된 노드가 그 값을 들고 나오므로,
+     * 안 막으면 리더가 아닌 노드가 전 클러스터의 재료를 갈아 끼운다.
+     */
+    @Test
+    @DisplayName("리더가_아니면_발행이_안_선다")
+    void 리더가_아니면_발행이_안_선다() {
+        port.publish(Map.of("c1", "리더가 쓴 것", "#credit", "7"), 5).block(WAIT);
+
+        port.publish(Map.of("c1", "강등된 노드", "#credit", "1"), 0).block(WAIT);
+
+        assertThat(port.load().block(WAIT)).containsEntry("c1", "리더가 쓴 것");
+    }
+
     @Test
     @DisplayName("발행한_것을_그대로_읽는다")
     void 발행한_것을_그대로_읽는다() {
-        port.publish(Map.of("c1", "OFF:QUEUEING:1:10:5", "#credit", "7")).block(WAIT);
+        port.publish(Map.of("c1", "OFF:QUEUEING:1:10:5", "#credit", "7"), 1).block(WAIT);
 
         assertThat(port.load().block(WAIT))
                 .containsEntry("#credit", "7")
@@ -439,9 +481,9 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         // 지우고 쓰는 것을 나눠 치면 그 사이에 끊길 때 키가 없는 채로 남는다.
         // 그러면 전 노드가 판정 재료를 잃고 낡음으로 넘어가, 줄 없는 쿠폰이
         // 통째로 통과한다. 리더가 스스로 공유 상태를 부수는 셈이다.
-        port.publish(Map.of("c1", "a", "#credit", "7")).block(WAIT);
+        port.publish(Map.of("c1", "a", "#credit", "7"), 1).block(WAIT);
 
-        assertThatThrownBy(() -> port.publish(Map.of()).block(WAIT))
+        assertThatThrownBy(() -> port.publish(Map.of(), 1).block(WAIT))
                 .isInstanceOf(IllegalArgumentException.class);
 
         assertThat(port.load().block(WAIT)).containsEntry("c1", "a");
@@ -465,7 +507,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
             큰_스냅샷.put(SnapshotCodec.STOCK_UNKNOWN_FIELD + "c" + i, "1");
         }
 
-        port.publish(큰_스냅샷).block(WAIT);
+        port.publish(큰_스냅샷, 1).block(WAIT);
 
         Map<String, String> 실린것 = port.load().block(WAIT);
         assertThat(실린것).as("쿠폰은 다 실린다").containsKey("c1599");
@@ -493,7 +535,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
             큰_스냅샷.put(SnapshotCodec.STOCK_UNKNOWN_FIELD + "c" + i, "1");
         }
 
-        port.publish(큰_스냅샷).block(WAIT);
+        port.publish(큰_스냅샷, 1).block(WAIT);
 
         Map<String, String> 실린것 = port.load().block(WAIT);
         assertThat(실린것.keySet().stream()
@@ -514,7 +556,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
             큰_스냅샷.put(SnapshotCodec.STOCK_UNKNOWN_FIELD + "c" + i, "1");
         }
 
-        assertThatThrownBy(() -> port.publish(큰_스냅샷).block(WAIT))
+        assertThatThrownBy(() -> port.publish(큰_스냅샷, 1).block(WAIT))
                 .isInstanceOf(IllegalStateException.class);
 
         // **안 나간 스냅샷은 거짓 매진을 안 만든다.** 여기서 세면 지표가 "표시를
@@ -533,7 +575,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
             스냅샷.put(SnapshotCodec.STOCK_UNKNOWN_FIELD + "c" + i, "1");
         }
 
-        port.publish(스냅샷).block(WAIT);
+        port.publish(스냅샷, 1).block(WAIT);
 
         assertThat(port.load().block(WAIT)).hasSize(3_000);
         assertThat(port.markersDropped()).isZero();
@@ -555,7 +597,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
             스냅샷.put(SnapshotCodec.STOCK_UNKNOWN_FIELD + "c" + i, "1");
         }
 
-        port.publish(스냅샷).block(WAIT);
+        port.publish(스냅샷, 1).block(WAIT);
 
         Map<String, String> 실린것 = port.load().block(WAIT);
         assertThat(실린것).as("줄이 빈 쪽부터 버려 상한을 맞춘다").hasSize(3_000);

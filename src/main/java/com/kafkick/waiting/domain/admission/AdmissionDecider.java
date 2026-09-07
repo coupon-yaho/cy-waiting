@@ -154,7 +154,7 @@ public class AdmissionDecider {
      * <b>등록 경로가 쓰는</b> 줄 길이 상한. 사다리 6번은 이 함수를 안 쓴다 —
      * 폴백은 줄이 아직 없는 구간만의 것이라 둘이 다른 값을 본다.
      */
-    public static long queueCapacity(CouponState state, long maxEtaSec) {
+    public long queueCapacity(CouponState state, long maxEtaSec) {
         // **원 함수의 가드를 뒤집지 않는다.** 받아 줄 시간이 없으면 자리도 없다.
         // 이걸 안 걸면 음수가 그대로 폴백을 타고 나가고, 스크립트가 오류를 내고,
         // 그 오류는 fail-open 으로 흘러 닫히는 게 아니라 열린다.
@@ -181,7 +181,7 @@ public class AdmissionDecider {
     public static final long MIN_CREDIT = 1;
 
     /** 이 노드가 초당 감당할 양. 쿠폰과 무관한 노드 전체의 상한이다. */
-    public static long globalCap(SnapshotMeta meta) {
+    public long globalCap(SnapshotMeta meta) {
         return meta.globalCredit() / meta.effectiveGatewayCount();
     }
 

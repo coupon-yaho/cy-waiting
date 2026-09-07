@@ -48,7 +48,7 @@ public final class GatewayRedisPort {
                         List.of(instanceId, Long.toString(reapAfterSec), circuit.name(),
                                 Long.toString(voteFreshSec), passArg(passedPerSec)))
                 .next()
-                .map(GatewayRedisPort::presence);
+                .map(this::presence);
     }
 
     /** 노드 하나가 실을 수 있는 상한. 스크립트의 상한과 같아야 한다. */
@@ -60,7 +60,7 @@ public final class GatewayRedisPort {
      * 음수는 "안 쟀다" 라 빈 값으로 보낸다 — 0 으로 보내면 안 잰 노드가 0 을 잰
      * 노드로 세어진다.
      */
-    static String passArg(long passedPerSec) {
+    private String passArg(long passedPerSec) {
         return passedPerSec < 0 ? "" : Long.toString(Math.min(passedPerSec, MAX_PASS));
     }
 
@@ -72,7 +72,7 @@ public final class GatewayRedisPort {
      * 자물쇠다. 모자란 칸을 0 으로 메우면 표가 영영 0 이고 클러스터는 항상 닫힌
      * 것으로 보인다 — 기능이 조용히 꺼진 채 다음 장애를 맞는다.
      */
-    static Presence presence(Object raw) {
+    Presence presence(Object raw) {
         List<?> v = (List<?>) raw;
         if (v.size() != BEAT_FIELDS) {
             throw new IllegalStateException(

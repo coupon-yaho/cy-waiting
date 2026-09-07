@@ -73,13 +73,13 @@ public class GatewayPresenceConfig {
      * 틱이 0 으로 잘려 하한 1초가 나가고, 그러면 하트비트 한 회차 사이에 남의 표가 낡아
      * 클러스터 다수결이 이름만 남는다. 내림하면 간격과 같아져 왕복 지연만큼 모자란다.
      */
-    static long voteFreshSec(Duration tick, long reapAfterSec) {
+    long voteFreshSec(Duration tick, long reapAfterSec) {
         long millis = tick.multipliedBy(VOTE_FRESH_TICKS).toMillis();
         return Math.clamp(Math.ceilDiv(millis, 1000L), 1, reapAfterSec);
     }
 
     /** 이 노드가 최근에 뒷단으로 보낸 초당 수. 아직 안 붙었으면 음수("모름")다. */
-    static long passed(ObjectProvider<PassRateSource> passRate) {
+    long passed(ObjectProvider<PassRateSource> passRate) {
         PassRateSource source = passRate.getIfAvailable();
         return source == null ? -1 : source.passRatePerSec();
     }
@@ -89,7 +89,7 @@ public class GatewayPresenceConfig {
      * 뺀 것은 이 두 줄이 빠져도 하트비트가 초록으로 돌아, 배분이 리더 한 대의 로컬
      * 서킷으로 크레딧을 정하기 때문이다. 실패는 무응답이 취소로 와 여기서 못 본다.
      */
-    static Supplier<Mono<Integer>> beatStep(Function<CircuitState, Mono<Presence>> beat,
+    Supplier<Mono<Integer>> beatStep(Function<CircuitState, Mono<Presence>> beat,
             Supplier<CircuitState> local, GatewayRegistry registry) {
         return () -> beat.apply(local.get())
                 .doOnNext(seen -> registry.circuitObserved(seen.alive(), seen.open(),

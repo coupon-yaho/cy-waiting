@@ -35,6 +35,8 @@ class LeadershipGainedWiringTest {
     private static final Map<String, CouponState> 줄이_선_쿠폰 =
             Map.of("c1", CouponStates.queueing(10, 1_000, 100));
 
+    private final ControlPlaneConfig 배선 = new ControlPlaneConfig();
+
     /**
      * <b>이탈자 청소의 재개 유예를 처음부터 준다.</b>
      */
@@ -122,7 +124,7 @@ class LeadershipGainedWiringTest {
         holder.replace(발행된_스냅샷(4_000, 시계.instant()));
         시계.앞으로(Duration.ofSeconds(30));
 
-        long 출발점 = ControlPlaneConfig.startingCredit(holder.view(), holder,
+        long 출발점 = 배선.startingCredit(holder.view(), holder,
                 GatewayRegistry.of(1, 3));
 
         // 노드 셋의 R1 하한이다. 4000 을 그대로 받으면 브레이크가 통째로 풀린다.
@@ -138,7 +140,7 @@ class LeadershipGainedWiringTest {
                 Duration.ofSeconds(10), 시계);
         holder.replace(발행된_스냅샷(4_000, 시계.instant()));
 
-        assertThat(ControlPlaneConfig.startingCredit(holder.view(), holder,
+        assertThat(배선.startingCredit(holder.view(), holder,
                 GatewayRegistry.of(1, 3))).isEqualTo(4_000);
     }
 
@@ -150,7 +152,7 @@ class LeadershipGainedWiringTest {
         SnapshotHolder holder = SnapshotHolder.of(Duration.ofSeconds(3),
                 Duration.ofSeconds(10), 시계);
 
-        assertThat(ControlPlaneConfig.startingCredit(holder.view(), holder,
+        assertThat(배선.startingCredit(holder.view(), holder,
                 GatewayRegistry.of(1, 3))).isNegative();
     }
 
@@ -163,7 +165,7 @@ class LeadershipGainedWiringTest {
         ControlPlaneProperties.Capacity 설정 = ControlPlaneProperties.defaults().capacity();
         CapacityCollector collector = CapacityCollector.of(설정.rampUp(), 설정.freshness(),
                 설정.floor(), 설정.perInstanceCap());
-        return ControlPlaneConfig.onLeadershipGained(collector,
+        return 배선.onLeadershipGained(collector,
                 CapacityRefresh.of(Mono::empty, collector, () -> 1, Duration.ofSeconds(1),
                         Schedulers.immediate(), new SimpleMeterRegistry()),
                 SoldOutCleanup.of(1, new SimpleMeterRegistry()),

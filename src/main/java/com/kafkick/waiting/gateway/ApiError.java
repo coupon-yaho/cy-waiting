@@ -26,9 +26,10 @@ public final class ApiError {
     /**
      * 에러 코드를 한 곳에 모은다. 뒷단도 내는 코드는 <b>글자 그대로</b> 옮겼다 — 문구가
      * 다르면 그것으로 갈리고, 없는 필드는 더 확실한 표지다.
+     *
+     * <p>RULE-EXCEPTION(EX-5): logLevel 을 안 둔다. 거절은 사유별 계수로만 센다.
+     * 그 결정의 근거는 AIJ-0061 에 있다.
      */
-    // RULE-EXCEPTION(EX-5): logLevel 을 안 둔다. 거절은 사유별 계수로만 센다 —
-    // 그 결정의 근거는 AIJ-0061 에 있다.
     public enum Code {
 
         /** 검증 실패·필수 헤더 누락. 뒷단의 {@code CommonErrorCode.INVALID_INPUT}. */

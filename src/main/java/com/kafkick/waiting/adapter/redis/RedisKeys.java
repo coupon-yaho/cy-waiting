@@ -129,8 +129,9 @@ public final class RedisKeys {
      *
      * <p><b>샤드가 하나면 접미사를 붙이지 않는다.</b> 붙였다 떼는 순간 콜드 쿠폰
      * 전체의 키가 갈리므로, 운영 중 샤딩 도입이 불가능해진다.
+     *
+     * <p>RULE-EXCEPTION(JS-13): 키 생성 유틸리티라 인스턴스가 없다.
      */
-    // RULE-EXCEPTION(JS-13): 키 생성 유틸리티라 인스턴스가 없다.
     private static String tag(String couponId, int shards, int shard) {
         String id = validated(couponId, "couponId");
         if (shards < 1) {
@@ -144,8 +145,11 @@ public final class RedisKeys {
         return shards == 1 ? id : id + ":" + shard;
     }
 
-    /** 클라이언트 입력이 키 이름에 들어가는 경로는 전부 의심한다. */
-    // RULE-EXCEPTION(JS-13): 키 생성 유틸리티라 인스턴스가 없다.
+    /**
+     * 클라이언트 입력이 키 이름에 들어가는 경로는 전부 의심한다.
+     *
+     * <p>RULE-EXCEPTION(JS-13): 키 생성 유틸리티라 인스턴스가 없다.
+     */
     private static String validated(String value, String what) {
         if (value == null || value.isBlank()) {
             throw new IllegalArgumentException(what + " 는 필수다");

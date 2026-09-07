@@ -61,7 +61,7 @@ class InvariantMetricsWiringTest {
                 .contains("waiting_circuit_wired")
                 // 회복 봉우리를 정상과 견주는 재료 (RC4). 판정에는 아직 안 쓰지만
                 // 밖에서 읽을 수 있어야 그 값이 맞는지 다음 사람이 본다.
-                .contains("waiting_backend_arrival_rate");
+                .contains("waiting_admission_forwarded_rate");
     }
 
     /**
@@ -74,7 +74,7 @@ class InvariantMetricsWiringTest {
         gateways.passObserved(94, 2, 2);
 
         assertThat(registry.scrape())
-                .contains("waiting_backend_arrival_rate{application=\"waiting\"} 94.0");
+                .contains("waiting_admission_forwarded_rate{application=\"waiting\"} 94.0");
     }
 
     /**

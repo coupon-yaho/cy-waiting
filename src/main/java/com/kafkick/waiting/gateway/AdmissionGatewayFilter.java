@@ -685,9 +685,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
             count("bulkhead-full");
             return shed(exchange, meta);
         }
-        // **여기서 센다** (RC4). 판정 자리에서 세면 서킷이 열린 동안의 통과
-        // 판정까지 들어가는데, 그것들은 폴백으로 끝나 뒷단에 안 닿는다. 반대로
-        // 스냅샷에 없는 쿠폰은 판정을 안 지나고 여기로 온다.
+        // **넘긴 수지 닿은 수가 아니다** (RC4). 서킷 필터가 뒤에 있어 폴백으로
+        // 끝나는 건도 여기 들어간다. 판정 자리보다는 가깝다 — 스냅샷에 없는
+        // 쿠폰이 판정을 안 지나고 여기로 온다.
         passRate.passed(clock.millis());
         // 뒷단으로 넘어가는 건이 생겼으면 끊던 구간이 끝난 것이다. 쌍으로 안
         // 남기면 로그에 진입만 있고 언제 닫혔는지가 없다 (LG-2).

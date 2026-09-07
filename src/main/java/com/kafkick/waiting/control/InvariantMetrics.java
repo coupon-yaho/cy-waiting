@@ -76,8 +76,8 @@ public final class InvariantMetrics {
                 InvariantMetrics::floorApplied,
                 "재료를 읽을 때 시각이 뒤로 가 바닥값이 걸린 횟수");
         // **게이지다.** 순간값이라 누적으로 내면 관측 전의 -1 이 카운터를 깬다.
-        Gauge.builder("waiting.backend.arrival.rate", metrics, InvariantMetrics::arrivalRate)
-                .description("전 노드가 초당 뒷단으로 보낸 수. 노드마다 같은 합을 내므로 max 로 읽는다 (RC4)")
+        Gauge.builder("waiting.admission.forwarded.rate", metrics, InvariantMetrics::arrivalRate)
+                .description("전 노드가 초당 뒷단으로 넘긴 수. 노드마다 같은 합을 내므로 max 로 읽는다 (RC4)")
                 .strongReference(true)
                 .register(meters);
         metrics.count(meters, "waiting.allocation.admitted",

@@ -30,7 +30,15 @@ burst_limit=${BURST_LIMIT:-1.2}
 # 노드당 몫이 이만큼은 돼야 한산 통과 상한이 1 이 된다 (R1).
 idle_divisor=${IDLE_DIVISOR:-2}
 # 램프가 한 회차에 올릴 수 있는 배수. 승계 뒤 한 틱이 이 안이어야 한다.
-ramp_step=${RAMP_STEP:-2.0}
+# 램프 배수. **제품 상수에서 읽는다** — 손으로 적으면 둘이 갈라져, 배수를 바꾼
+# 회차가 지킨 것도 어긴 것도 아닌 값으로 판정된다.
+ramp_src=src/main/java/com/kafkick/waiting/domain/allocation/ReleaseRamp.java
+ramp_step=${RAMP_STEP:-$(sed -n 's/.*DEFAULT_STEP = \([0-9.]*\);.*/\1/p' "$ramp_src" 2>/dev/null)}
+case "$ramp_step" in
+    ''|*[!0-9.]*) echo "::error title=서킷 회복::램프 배수를 못 읽었다 ($ramp_src)"; exit "$UNMEASURABLE" ;;
+esac
+# 배분의 정책 하한. 제품 기본값과 같아야 한다 (ControlPlaneProperties 의 capacity.floor).
+capacity_floor=${CAPACITY_FLOOR:-5}
 # 기준선을 만들 최소 표본. 한둘로는 그 회차의 목표를 못 정한다.
 min_baseline=${MIN_BASELINE:-4}
 # 회복을 끝났다고 볼 기준선 대비 비율.
@@ -48,6 +56,9 @@ vote_gate_limit_sec=${VOTE_GATE_LIMIT_SEC:-9}
 # 바꾸면 여기도 바꾼다. 게다가 우리가 보는 것은 전이 시각이 아니라 표본에 처음
 # 보인 시각이라 실제보다 늦다 — 유예는 그만큼 낙관이다.
 reopen_grace_ms=${REOPEN_GRACE_MS:-5000}
+# 봉우리를 재는 창(ms). 뒷단 계수가 뭉쳐 오르므로 이웃 표본으로 나누면 봉우리가
+# 표본 간격의 산물이 된다. RC4 는 지속 봉우리를 막는 조항이다.
+peak_window_ms=${PEAK_WINDOW_MS:-1000}
 # 배분이 열려 있는데 뒷단 도착이 멎어도 봐 주는 시간(ms). 조인 구간의 프로브가
 # 초당 한 건 아래라 몇 표본은 그냥 평평하다 — 표본 수로 세면 정상을 잡는다.
 tail_idle_ms=${TAIL_IDLE_MS:-8000}
@@ -72,7 +83,9 @@ verdict=$(awk \
     -v divisor="$idle_divisor" -v step="$ramp_step" \
     -v min_baseline="$min_baseline" -v recovered_pct="$recovered_pct" \
     -v grace_ms="$release_grace_ms" -v vote_limit="$vote_gate_limit_sec" \
-    -v tail_idle_ms="$tail_idle_ms" -v reopen_grace_ms="$reopen_grace_ms" '
+    -v tail_idle_ms="$tail_idle_ms" -v reopen_grace_ms="$reopen_grace_ms" \
+    -v peak_window_ms="$peak_window_ms" \
+    -v capacity_floor="$capacity_floor" '
     # **awk 의 exit 는 END 를 건너뛰지 않는다.** 표시를 안 두면 본문에서 낸
     # 판정 뒤에 END 가 한 줄을 더 찍고, 부르는 쪽은 둘 중 뒤엣것을 읽는다.
     # 표에 완전히 열린 노드가 있는가. `HALF_OPEN` 이 부분 문자열로 걸리므로
@@ -129,6 +142,7 @@ verdict=$(awk \
 
         # **정상 구간이 기준선이다.** 크레딧은 합으로 평균을 내고, 유입은 구간
         # 전체의 도착 증분을 벽시계로 나눈다 — 한 점만 보면 잡음이 기준이 된다.
+        if (phase == "정상" && credit > ceiling) { ceiling = credit }
         if (phase == "정상") {
             baseSum += credit; baseN++
             baseNodes = nodes
@@ -225,12 +239,25 @@ verdict=$(awk \
                     fail(sprintf("풀린 뒤 한산 통과가 막혔다 — 크레딧 %d, 노드 %d, 최소 %d",
                             credit, nodes, nodes * divisor))
                 }
-                # 틱당 도착을 기준선과 견준다. 첫 표본은 앞이 없어 건너뛴다.
-                if (relPrevT > 0 && t > relPrevT) {
-                    rate = (served - relPrevServed) * 1000.0 / (t - relPrevT)
+                # **봉우리는 창으로 잰다.** 뒷단 계수는 뭉쳐 오르는데 표본은
+                # 0.5초 간격이라, 이웃 표본으로 나누면 한 뭉치가 통째로 그 칸에
+                # 실려 두 배짜리 봉우리가 만들어진다. 기준선은 구간 전체를
+                # 평균하므로 그렇게 견주면 재는 것이 다르다.
+                #
+                # RC4 가 막으려는 것은 회복이 곧 2차 장애가 되는 지속 봉우리다.
+                relN++; relT[relN] = t; relS[relN] = served
+                if (relAnchor == 0) { relAnchor = 1 }
+                # 창 안에 드는 가장 오래된 표본까지 물린다.
+                while (relAnchor < relN && t - relT[relAnchor] > peak_window_ms) {
+                    relAnchor++
+                }
+                # 창을 못 채우면 있는 만큼으로 잰다. 표본이 그것뿐이면 그 값이
+                # 최선이고, 아예 안 재면 RC4 가 조용히 통과한다.
+                if (relAnchor < relN && t > relT[relAnchor]) {
+                    rate = (served - relS[relAnchor]) * 1000.0 / (t - relT[relAnchor])
+                    peakSeen = 1
                     if (rate > peakRate) { peakRate = rate }
                 }
-                relPrevT = t; relPrevServed = served
                 if (!doneAt && baseN >= min_baseline) {
                     target = baseSum / baseN * recovered_pct / 100.0
                     if (credit >= target) { doneAt = t }
@@ -248,9 +275,20 @@ verdict=$(awk \
         # 이월받고 첫 회차를 도는 구간이라, 계단이 둘째나 셋째 틱에 선다. 첫
         # 표본만 보면 그 계단을 통째로 놓친다 — 이 하네스가 있는 이유가 거기다.
         if (phase == "승계" && releasedAt) {
+            # **램프 밖에서 난 승계는 계단을 못 잰다.** 직전 값이 이미 상한이면
+            # 허용이 상한의 배수라, 이어받은 노드가 램프를 통째로 건너뛰어도
+            # 통과한다. 그 회차는 이 검사가 없는 것과 같다.
+            if (!handoverSeen && ceiling > 0 && beforeHandover >= ceiling) {
+                printf "  승계가 램프 밖에서 났다 — 계단 검사는 이 회차로 뜻이 없다 (직전 %d, 상한 %d)\n",
+                        beforeHandover, ceiling | "cat 1>&2"
+            }
             handoverSeen = 1
             allowed = beforeHandover * step
+            # **제품의 하한과 같은 값이라야 한다.** 배분은 정책 하한과 R1 최소 중
+            # 큰 쪽을 램프에 넘기므로, 노드 수만으로 잡으면 지킨 회차가 미달로
+            # 적힌다 — 승계 직후 노드가 하나로 줄면 특히 그렇다.
             floorAllowed = nodes * divisor
+            if (capacity_floor > floorAllowed) { floorAllowed = capacity_floor }
             if (allowed < floorAllowed) { allowed = floorAllowed }
             if (credit > allowed + 0.5) {
                 fail(sprintf("승계 뒤 한 틱이 램프를 넘었다 — %d 에서 %d 로, 허용 %d",
@@ -324,6 +362,18 @@ verdict=$(awk \
         took = (doneAt - recT) / 1000.0
         if (took > limit_sec) {
             fail(sprintf("회복이 %.1f 초 걸렸다 (한계 %d 초)", took, limit_sec))
+        }
+        # **못 잰 봉우리를 통과로 적지 않는다.** 창을 채울 표본이 없으면 RC4 는
+        # 검증된 것이 아니다. 0 으로 찍으면 그 회차가 조용히 초록이 된다.
+        if (!peakSeen) {
+            block("회복 봉우리를 못 쟀다 — 풀린 뒤 표본이 둘도 안 된다")
+        }
+        # **기준은 정상 유입이다** (RC4). 분모를 상한으로 바꾸면 여유가 있는
+        # 회차가 전부 통과하는데, 그건 판정을 느슨하게 한 것이지 제품이 나아진
+        # 것이 아니다. 상한 대비도 같이 보되 그쪽은 보조다.
+        if (ceiling > 0 && peakRate > ceiling * burst) {
+            fail(sprintf("회복 봉우리가 초당 %.1f 건이다 — 상한 %d 의 %.2f 배 (한계 %.1f)",
+                    peakRate, ceiling, peakRate / ceiling, burst))
         }
         if (peakRate > baseRate * burst) {
             fail(sprintf("회복 봉우리가 초당 %.1f 건이다 — 기준선 %.1f 의 %.2f 배 (한계 %.1f)",

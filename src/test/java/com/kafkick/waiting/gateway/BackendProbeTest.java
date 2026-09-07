@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import java.time.Duration;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -46,7 +47,7 @@ class BackendProbeTest {
     void 닫혀_있으면_안_친다() {
         CircuitBreaker 서킷 = 서킷();
         AtomicInteger 호출 = new AtomicInteger();
-        BackendProbe 프로브 = BackendProbe.of(() -> 서킷,
+        BackendProbe 프로브 = BackendProbe.of(() -> Optional.of(서킷),
                 () -> Mono.fromRunnable(호출::incrementAndGet));
 
         프로브.probe().block();
@@ -64,7 +65,7 @@ class BackendProbeTest {
         CircuitBreaker 서킷 = 서킷();
         열어_둔다(서킷);
         서킷.transitionToHalfOpenState();
-        BackendProbe 프로브 = BackendProbe.of(() -> 서킷, Mono::empty);
+        BackendProbe 프로브 = BackendProbe.of(() -> Optional.of(서킷), Mono::empty);
 
         프로브.probe().block();
         프로브.probe().block();
@@ -79,7 +80,7 @@ class BackendProbeTest {
         CircuitBreaker 서킷 = 서킷();
         열어_둔다(서킷);
         서킷.transitionToHalfOpenState();
-        BackendProbe 프로브 = BackendProbe.of(() -> 서킷,
+        BackendProbe 프로브 = BackendProbe.of(() -> Optional.of(서킷),
                 () -> Mono.error(new IllegalStateException("뒷단이 아직 안 산다")));
 
         프로브.probe().block();
@@ -98,31 +99,79 @@ class BackendProbeTest {
         CircuitBreaker 서킷 = 서킷();
         열어_둔다(서킷);
         서킷.transitionToHalfOpenState();
-        BackendProbe 프로브 = BackendProbe.of(() -> 서킷,
+        BackendProbe 프로브 = BackendProbe.of(() -> Optional.of(서킷),
                 () -> Mono.error(new IllegalStateException("뒷단이 아직 안 산다")));
 
         assertThat(프로브.probe().block()).isNull();
     }
 
     /**
-     * <b>열린 구간에는 허가가 안 난다.</b> 그때도 치면 대기 시간이 무의미해지고,
-     * 죽은 뒷단에 회차마다 호출이 쌓인다.
+     * <b>열린 구간에는 안 친다.</b> 허가 시도 자체가 "막은 건수" 에 세어져, 실사용자
+     * 거절과 프로브가 안 갈린다. 반쯤 열린 상태로 넘기는 것은 서킷의 제 타이머다.
      */
     @Test
-    @DisplayName("열려_있으면_허가를_기다린다")
-    void 열려_있으면_허가를_기다린다() {
-        CircuitBreaker 서킷 = CircuitBreaker.of("backend", CircuitBreakerConfig.custom()
-                .waitDurationInOpenState(Duration.ofHours(1))
-                .automaticTransitionFromOpenToHalfOpenEnabled(false)
-                .build());
+    @DisplayName("열려_있으면_안_친다")
+    void 열려_있으면_안_친다() {
+        CircuitBreaker 서킷 = 서킷();
         열어_둔다(서킷);
         AtomicInteger 호출 = new AtomicInteger();
-        BackendProbe 프로브 = BackendProbe.of(() -> 서킷,
+        BackendProbe 프로브 = BackendProbe.of(() -> Optional.of(서킷),
                 () -> Mono.fromRunnable(호출::incrementAndGet));
 
         프로브.probe().block();
 
         assertThat(호출).hasValue(0);
         assertThat(서킷.getState()).isEqualTo(CircuitBreaker.State.OPEN);
+        assertThat(서킷.getMetrics().getNumberOfNotPermittedCalls())
+                .as("허가 시도조차 안 한다 — 막은 건수가 프로브로 부풀면 안 된다")
+                .isZero();
+    }
+
+    /**
+     * <b>운영자가 끈 것도 안 친다.</b> DISABLED 는 허가가 항상 나서 뒷단에 무한정
+     * 꽂히고, 그 결과가 서킷에는 안 남는다 — 끄는 유일한 수단이 재기동이 된다.
+     */
+    @Test
+    @DisplayName("운영자가_끄면_안_친다")
+    void 운영자가_끄면_안_친다() {
+        CircuitBreaker 서킷 = 서킷();
+        서킷.transitionToDisabledState();
+        AtomicInteger 호출 = new AtomicInteger();
+        BackendProbe 프로브 = BackendProbe.of(() -> Optional.of(서킷),
+                () -> Mono.fromRunnable(호출::incrementAndGet));
+
+        프로브.probe().block();
+
+        assertThat(호출).hasValue(0);
+    }
+
+    /** 이름이 없으면 만들지 않는다. 새로 만든 유령은 영원히 닫혀 있다. */
+    @Test
+    @DisplayName("서킷이_없으면_안_친다")
+    void 서킷이_없으면_안_친다() {
+        AtomicInteger 호출 = new AtomicInteger();
+        BackendProbe 프로브 = BackendProbe.of(Optional::empty,
+                () -> Mono.fromRunnable(호출::incrementAndGet));
+
+        프로브.probe().block();
+
+        assertThat(호출).hasValue(0);
+        assertThat(프로브.skipped()).isEqualTo(1);
+    }
+
+    /** 셋 다 0 이면 루프가 죽은 것이다. 그 구분이 없으면 배선이 빠진 채 조용히 돈다. */
+    @Test
+    @DisplayName("회차_결과를_센다")
+    void 회차_결과를_센다() {
+        CircuitBreaker 서킷 = 서킷();
+        열어_둔다(서킷);
+        서킷.transitionToHalfOpenState();
+        BackendProbe 프로브 = BackendProbe.of(() -> Optional.of(서킷), Mono::empty);
+
+        프로브.probe().block();
+
+        assertThat(프로브.passed()).isEqualTo(1);
+        assertThat(프로브.failed()).isZero();
+        assertThat(프로브.skipped()).isZero();
     }
 }

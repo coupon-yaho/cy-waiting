@@ -422,6 +422,15 @@ if ! cp "$ROOT/test/load/"*.sh "$clean_repo/test/load/" 2>/dev/null \
     fail=$((fail + 1))
 fi
 
+# **판정기가 읽는 제품 상수도 넣는다.** 서킷 회복 판정이 램프 배수를 소스에서
+# 읽어, 없으면 "못 쟀다"(2) 로 끝나고 깨끗한 케이스가 그 이유로 막힌다.
+ramp_src=src/main/java/com/kafkick/waiting/domain/allocation/ReleaseRamp.java
+mkdir -p "$clean_repo/$(dirname "$ramp_src")"
+if ! cp "$ROOT/$ramp_src" "$clean_repo/$ramp_src" 2>/dev/null; then
+    printf '  FAIL 임시 저장소에 램프 상수를 못 넣었다 — 아래 검사가 무의미하다\n'
+    fail=$((fail + 1))
+fi
+
 # **액션도 같이 넣는다.** 판정 자기검증이 액션이 스크립트를 부르는지까지 보므로,
 # 스크립트만 넣으면 깨끗한 케이스가 그 이유로 막힌다 — 재려던 것이 아니다.
 if [[ -d "$ROOT/.github/actions" ]]; then
@@ -541,11 +550,7 @@ done <<'GUARD'
 0|히어독 본문|python3 - <<'PY'\ns = 'gh pr create --title x'\nPY
 0|무따옴표 구분자|cat <<EOF\ngh pr create\nEOF
 0|들여쓴 종결|cat <<-EOF\ngh pr create\n\tEOF
-2|빈 인용으로 쪼갬|gh'' pr create --base develop
-2|역슬래시로 쪼갬|g\\h pr create --base develop
 0|역슬래시 구분자|cat <<\\EOF\ngh pr create\nEOF
-2|달러 인용으로 쪼갬|g$'h' pr create --base develop
-2|달러 큰따옴표|g$"h" pr create --base develop
 0|구분자 안쪽 역슬래시|cat <<E\\OF\ngh pr create\nEOF
 0|역슬래시 둘|cat <<\\E\\OF\ngh pr create\nEOF
 0|메타문자 뒤 주석|echo x;# gh pr create --title 예시

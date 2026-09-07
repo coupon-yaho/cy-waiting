@@ -22,6 +22,9 @@ public final class GatewayRegistry {
 
     private static final Logger log = LoggerFactory.getLogger(GatewayRegistry.class);
 
+    /** 전 노드의 초당 통과 수 합. 관측 전에는 음수라 쓰는 쪽이 "모른다" 로 읽는다. */
+    private final AtomicInteger clusterPass = new AtomicInteger(-1);
+
     /**
      * 분모와 연속 감소 횟수. <b>한 덩어리로 바꾼다.</b>
      *
@@ -183,5 +186,26 @@ public final class GatewayRegistry {
     /** 지금 쓰는 분모. <b>1 아래로 내려가지 않는다</b> — 나누는 쪽이 있다. */
     public int count() {
         return current.get().value();
+    }
+
+    /**
+     * 전 노드가 초당 뒷단으로 보낸 수. <b>한 대라도 안 실었으면 "모름" 이다</b> —
+     * 롤아웃 중 옛 노드가 그 field 를 매 틱 지우므로, 모자란 합을 정상 부하로
+     * 읽으면 없는 한산함을 근거로 조인다.
+     */
+    // 관측을 그대로 둔다. 평활은 쓰는 쪽이 한다 — 여기서 두 번 하면 회복이
+    // 늦는 이유가 두 곳으로 갈린다.
+    public void passObserved(int passed, int passReported, int alive) {
+        clusterPass.set(passReported < alive ? -1 : passed);
+    }
+
+    /** 이번 관측이 실패했다. <b>통과 수는 직전 값을 안 지킨다</b> — 순간값이다. */
+    public void passUnknown() {
+        clusterPass.set(-1);
+    }
+
+    /** 마지막으로 관측한 클러스터 통과 수. 관측 전에는 음수다. */
+    public int passRate() {
+        return clusterPass.get();
     }
 }

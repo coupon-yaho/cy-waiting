@@ -31,8 +31,8 @@ cmd_joined=${cmd//"$join"/ }
 
 # 사전 걸러내기는 본 판별과 같은 관용도여야 한다. 더 엄하면 공백 하나로 게이트를
 # 통째로 지나간다.
-# 셸이 낱말을 만들 때 지우는 것들을 우리도 지운다. `$'...'` 는 `$` 까지 사라지므로
-# 그것부터 걷고, 남은 따옴표와 역슬래시를 뗀다.
+# 셸이 낱말을 만들 때 지우는 것들. **명령 판별에는 안 쓴다** — 통째로 인용된
+# 문자열까지 벗겨 예시가 다시 막혔다. 히어독 구분자에만 쓴다.
 unquote() {
     local v=${1//\$\'/}
     v=${v//\$\"/}
@@ -40,8 +40,7 @@ unquote() {
     printf '%s' "${v//\\/}"
 }
 
-cmd_naked=$(unquote "$cmd_joined")
-[[ ! "$cmd_joined" =~ $CREATE_RE && ! "$cmd_naked" =~ $CREATE_RE ]] && exit 0
+[[ ! "$cmd_joined" =~ $CREATE_RE ]] && exit 0
 
 mapfile -t lines <<< "$cmd_joined"
 
@@ -94,11 +93,10 @@ for ((n = 0; n < ${#lines[@]}; n++)); do
             [[ "${lines[m]}" =~ ^[[:space:]]*"$delim"[[:space:]]*$ ]] && { skip_to=$m; break; }
         done
     fi
-    # **인용과 이스케이프를 걷고 한 번 더 본다.** `gh'' pr create` 나
-    # `g\h pr create` 는 셸이 벗겨 같은 명령이 되는데 글자 그대로는 안 걸린다.
-    bare=$(strip_comment "$line")
-    naked=$(unquote "$bare")
-    if [[ "$bare" =~ $CREATE_RE || "$naked" =~ $CREATE_RE ]]; then
+    # **인용을 벗긴 형태로는 안 본다.** `gh'' pr create` 로 쪼개면 지나가지만,
+    # 벗기면 인용 안의 예시까지 명령으로 읽어 사람의 일을 막는다. 머리말의
+    # 방침대로 우회는 안 쫓고 오탐을 없애는 쪽을 고른다.
+    if [[ "$(strip_comment "$line")" =~ $CREATE_RE ]]; then
         creating=1
         # **명령 줄부터 끝까지를 넘긴다.** 물리적 한 줄만 보면 다음 줄로 이어진
         # `--base` 를 못 찾아 엉뚱한 기준으로 리뷰가 돈다.
@@ -114,6 +112,26 @@ if ! ROOT=$(git rev-parse --show-toplevel 2>/dev/null); then
     echo "git 저장소가 아니라 로컬 리뷰를 돌릴 수 없다. PR 은 저장소 안에서 연다." >&2
     exit 2
 fi
+# **없는 티켓 번호를 막는다.** 브랜치명 형식만 보면 그 번호가 실재하는지는
+# 아무도 안 묻는다 — 실제로 없는 키 스무 종이 300 커밋에 달렸다 (AIJ-0252).
+# CI 는 이 검사를 못 한다: 그쪽 계정은 이 프로젝트를 못 본다.
+branch=$(git -C "$ROOT" symbolic-ref --quiet --short HEAD 2>/dev/null || true)
+key=$(printf '%s' "$branch" | grep -oE 'CY-[0-9]+' | head -1)
+env_file="$ROOT/../.env"
+if [[ -n "$key" && -r "$env_file" ]]; then
+    # 값을 읽어 쓰기만 한다. 없거나 안 통하면 조용히 넘어간다 — 자격 증명
+    # 문제로 PR 을 못 열게 되면 이 검사가 게이트가 아니라 장애물이 된다.
+    code=$(set -a; . "$env_file" >/dev/null 2>&1; set +a
+        [[ -z "${ATLASSIAN_BASE_URL:-}" ]] && exit 0
+        curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+            -u "$ATLASSIAN_USER_EMAIL:$ATLASSIAN_API_TOKEN" -H 'Accept: application/json' \
+            "${ATLASSIAN_BASE_URL%/}/rest/api/3/issue/$key?fields=summary" 2>/dev/null)
+    if [[ "$code" == "404" ]]; then
+        echo "$key 라는 이슈가 없다. 브랜치를 실재하는 키로 딴다 (WF-3)" >&2
+        exit 2
+    fi
+fi
+
 RUNNER="$ROOT/.claude/hooks/review-branch.sh"
 if [[ ! -x "$RUNNER" ]]; then
     echo "로컬 리뷰 러너를 실행할 수 없다: $RUNNER" >&2

@@ -60,9 +60,22 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
 
     private List<Object> beat(String instanceId, String reapAfter, String circuit,
             String voteFresh) {
+        return beat(instanceId, reapAfter, circuit, voteFresh, "0");
+    }
+
+    private List<Object> beat(String instanceId, String reapAfter, String circuit,
+            String voteFresh, String passRate) {
         return (List<Object>) redis.execute(heartbeat, List.of(INSTANCES),
-                        List.of(instanceId, reapAfter, circuit, voteFresh))
+                        List.of(instanceId, reapAfter, circuit, voteFresh, passRate))
                 .blockFirst(WAIT);
+    }
+
+    private long passed(List<Object> r) {
+        return Long.parseLong(String.valueOf(r.get(5)));
+    }
+
+    private long passReported(List<Object> r) {
+        return Long.parseLong(String.valueOf(r.get(6)));
     }
 
     private List<Object> beat(String instanceId, String reapAfter) {
@@ -147,8 +160,39 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
 
         Long removed = redis.execute(leave, List.of(INSTANCES), List.of("b")).blockFirst(WAIT);
 
-        assertThat(removed).isEqualTo(1);
+        // 항목·표·통과 수 셋이 같이 빠진다. 마지막 노드가 나가면 치울 틱이
+        // 안 와서, 남긴 field 가 다음 기동까지 산다.
+        assertThat(removed).isEqualTo(3);
         assertThat(alive(beat("a"))).isEqualTo(1);
+    }
+
+    /**
+     * <b>두 스크립트가 같은 문턱이어야 한다.</b> 한쪽만 좁으면 등록은 되는데
+     * 퇴장만 못 하는 id 가 나고, 그 오류는 루프가 삼켜 조용히 남는다.
+     */
+    @Test
+    @DisplayName("예약_접두어는_양쪽에서_막는다")
+    void 예약_접두어는_양쪽에서_막는다() {
+        assertThatThrownBy(() -> redis.execute(leave, List.of(INSTANCES), List.of("#p:a"))
+                .blockFirst(WAIT))
+                .hasRootCauseMessage("instanceId 는 # 로 시작할 수 없다");
+        assertThatThrownBy(() -> beat("#x", REAP_AFTER, "CLOSED", VOTE_FRESH, "1"))
+                .hasRootCauseMessage("instanceId 는 # 로 시작할 수 없다");
+    }
+
+    /**
+     * 마지막 노드가 나가면 치울 틱이 안 온다. 남은 field 는 다음 기동까지 살아
+     * 첫 조회가 그걸 다 읽는다. <b>두 스크립트의 접두어가 갈린 것도 여기서 잡힌다.</b>
+     */
+    @Test
+    @DisplayName("마지막_노드가_나가면_표도_안_남는다")
+    void 마지막_노드가_나가면_표도_안_남는다() {
+        beat("only", REAP_AFTER, "OPEN", VOTE_FRESH, "40");
+
+        redis.execute(leave, List.of(INSTANCES), List.of("only")).blockFirst(WAIT);
+
+        assertThat(redis.<String, String>opsForHash().entries(INSTANCES)
+                .collectList().block(WAIT)).isEmpty();
     }
 
     @Test
@@ -393,5 +437,164 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
 
     private int at(List<Object> r, int index) {
         return Integer.parseInt(String.valueOf(r.get(index)));
+    }
+
+    /**
+     * 회복 봉우리를 정상과 견주려면 전 노드의 도착 합을 알아야 한다 (RC4).
+     * 그 수는 노드마다 제 것만 알아, 여기서 합산해 돌려준다.
+     */
+    @Test
+    @DisplayName("노드가_통과시킨_수를_합산해_돌려준다")
+    void 노드가_통과시킨_수를_합산해_돌려준다() {
+        beat("a", REAP_AFTER, "CLOSED", VOTE_FRESH, "30");
+        assertThat(passed(beat("b", REAP_AFTER, "CLOSED", VOTE_FRESH, "25"))).isEqualTo(55);
+    }
+
+    /**
+     * <b>안 실은 노드는 0 이 아니라 없는 것이다.</b> 0 으로 쓰면 그 노드가 "0 을
+     * 잰 노드" 로 세어져, 합이 모자란 것을 읽는 쪽이 못 안다.
+     */
+    @Test
+    @DisplayName("안_실은_노드는_기여에서_빠진다")
+    void 안_실은_노드는_기여에서_빠진다() {
+        beat("a", REAP_AFTER, "CLOSED", VOTE_FRESH, "30");
+
+        List<Object> seen = beat("b", REAP_AFTER, "CLOSED", VOTE_FRESH, "");
+
+        assertThat(passed(seen)).isEqualTo(30);
+        assertThat(passReported(seen)).isOne();
+    }
+
+    /** 한 번 실은 노드가 안 재게 되면 그 값이 남으면 안 된다. */
+    @Test
+    @DisplayName("실었다_안_실으면_그_값이_지워진다")
+    void 실었다_안_실으면_그_값이_지워진다() {
+        beat("a", REAP_AFTER, "CLOSED", VOTE_FRESH, "30");
+
+        List<Object> seen = beat("a", REAP_AFTER, "CLOSED", VOTE_FRESH, "");
+
+        assertThat(passed(seen)).isZero();
+        assertThat(passReported(seen)).isZero();
+    }
+
+    /** 합이 읽는 쪽의 폭을 넘으면 감겨서 음수가 되고, 음수는 낡은 값을 살린다. */
+    @Test
+    @DisplayName("합은_읽는_쪽의_폭을_안_넘는다")
+    void 합은_읽는_쪽의_폭을_안_넘는다() {
+        beat("a", REAP_AFTER, "CLOSED", VOTE_FRESH, "1000000000");
+        beat("b", REAP_AFTER, "CLOSED", VOTE_FRESH, "1000000000");
+
+        assertThat(passed(beat("c", REAP_AFTER, "CLOSED", VOTE_FRESH, "1000000000")))
+                .isEqualTo(Integer.MAX_VALUE);
+    }
+
+    /** 죽은 노드의 마지막 값이 남으면 없는 부하가 지금의 상한을 정한다. */
+    @Test
+    @DisplayName("죽은_노드의_통과_수는_안_센다")
+    void 죽은_노드의_통과_수는_안_센다() {
+        beat("old", REAP_AFTER, "CLOSED", VOTE_FRESH, "30");
+        redis.<String, String>opsForHash().put(INSTANCES, "old", "1").block(WAIT);
+
+        assertThat(passed(beat("b", REAP_AFTER, "CLOSED", VOTE_FRESH, "25"))).isEqualTo(25);
+    }
+
+    /** 모르는 값이 합산에 들어가면 전 클러스터의 상한이 그것으로 정해진다. */
+    @Test
+    @DisplayName("통과_수가_수가_아니면_거절한다")
+    void 통과_수가_수가_아니면_거절한다() {
+        assertThatThrownBy(() -> beat("a", REAP_AFTER, "CLOSED", VOTE_FRESH, "많이"))
+                .hasRootCauseMessage("통과 수는 0..1000000000 의 정수여야 한다: 많이");
+    }
+
+    /**
+     * 낡은 표를 안 세는 것과 같은 이유다 — 이미 없는 관측이 지금의 상한을 정하면
+     * 안 된다. 하트비트가 끊긴 노드의 마지막 통과 수가 그 자리다.
+     */
+    @Test
+    @DisplayName("낡은_통과_수는_안_센다")
+    void 낡은_통과_수는_안_센다() {
+        beat("stale", REAP_AFTER, "CLOSED", VOTE_FRESH, "300");
+        // 표 신선도는 넘기고 죽음 임계는 안 넘긴 상태로 민다.
+        long now = stamped(beat("live", REAP_AFTER, "CLOSED", VOTE_FRESH, "25"));
+        redis.<String, String>opsForHash()
+                .put(INSTANCES, "stale", Long.toString(now - 10)).block(WAIT);
+
+        assertThat(passed(beat("live", REAP_AFTER, "CLOSED", VOTE_FRESH, "25"))).isEqualTo(25);
+    }
+
+    /** 항목이 사라진 통과 수는 남겨 둘 이유가 없다. 안 지우면 배포 이력만큼 자란다. */
+    @Test
+    @DisplayName("항목이_없는_통과_수는_지운다")
+    void 항목이_없는_통과_수는_지운다() {
+        redis.<String, String>opsForHash().put(INSTANCES, "#p:gone", "40").block(WAIT);
+
+        beat("a");
+
+        assertThat(redis.<String, String>opsForHash().hasKey(INSTANCES, "#p:gone").block(WAIT))
+                .isFalse();
+    }
+
+    /**
+     * 옛 노드는 인자를 넷만 보낸다. 거절하면 그 노드가 통째로 분모에서 빠지고,
+     * 남은 노드가 큰 몫을 쓴다 — 초과 발급 방향이라 롤아웃이 안전하지 않다.
+     */
+    @Test
+    @DisplayName("인자를_안_보내도_안_죽는다")
+    void 인자를_안_보내도_안_죽는다() {
+        List<Object> seen = (List<Object>) redis.execute(heartbeat, List.of(INSTANCES),
+                        List.of("old", REAP_AFTER, "CLOSED", VOTE_FRESH))
+                .blockFirst(WAIT);
+
+        assertThat(alive(seen)).isEqualTo(1);
+        assertThat(passed(seen)).isZero();
+        // **0 을 쓰면 안 된다.** 안 잰 노드가 잰 노드로 세어지면, 롤아웃 중
+        // 모자란 합을 정상 부하로 읽는다.
+        assertThat(passReported(seen)).isZero();
+    }
+
+    /** 무한은 정수 검사를 그냥 통과한다. 합에 들어가면 상한이 통째로 무의미해진다. */
+    @Test
+    @DisplayName("통과_수가_무한이면_거절한다")
+    void 통과_수가_무한이면_거절한다() {
+        assertThatThrownBy(() -> beat("a", REAP_AFTER, "CLOSED", VOTE_FRESH, "1e400"))
+                .hasRootCauseMessage("통과 수는 0..1000000000 의 정수여야 한다: 1e400");
+    }
+
+    /** 실수는 합에 섞이면 안 된다. 다른 인자를 정수로 막은 이유와 같다. */
+    @Test
+    @DisplayName("통과_수가_정수가_아니면_거절한다")
+    void 통과_수가_정수가_아니면_거절한다() {
+        assertThatThrownBy(() -> beat("a", REAP_AFTER, "CLOSED", VOTE_FRESH, "1.5"))
+                .hasRootCauseMessage("통과 수는 0..1000000000 의 정수여야 한다: 1.5");
+    }
+
+    /**
+     * <b>합만으로는 "진짜 0" 과 "아무도 안 실었다" 가 안 갈린다.</b> 롤아웃 중
+     * 옛 노드가 새 필드를 죽은 항목으로 보고 매 틱 지우므로, 그 구분이 없으면
+     * 상한이 없는 부하를 근거로 걸린다.
+     */
+    @Test
+    @DisplayName("통과_수를_실은_노드_수도_돌려준다")
+    void 통과_수를_실은_노드_수도_돌려준다() {
+        beat("a", REAP_AFTER, "CLOSED", VOTE_FRESH, "30");
+
+        List<Object> seen = beat("b", REAP_AFTER, "CLOSED", VOTE_FRESH, "25");
+
+        assertThat(passed(seen)).isEqualTo(55);
+        assertThat(passReported(seen)).isEqualTo(2);
+    }
+
+    /** 새 필드가 지워진 뒤에는 그 노드가 안 세어져야 한다. */
+    @Test
+    @DisplayName("지워진_통과_수는_실은_수에서_빠진다")
+    void 지워진_통과_수는_실은_수에서_빠진다() {
+        beat("a", REAP_AFTER, "CLOSED", VOTE_FRESH, "30");
+        // 옛 노드가 새 필드를 죽은 항목으로 보고 지운 상태다.
+        redis.<String, String>opsForHash().remove(INSTANCES, "#p:a").block(WAIT);
+
+        List<Object> seen = beat("b", REAP_AFTER, "CLOSED", VOTE_FRESH, "25");
+
+        assertThat(passed(seen)).isEqualTo(25);
+        assertThat(passReported(seen)).isEqualTo(1);
     }
 }

@@ -69,7 +69,7 @@ public class ControlPlaneConfig {
             TunablesRefresh tunables, ControlPlaneProperties properties,
             SoldOutCleanup cleanup, QueueSweeper sweeper, SnapshotHolder holder) {
         SnapshotCodec codec = SnapshotCodec.create();
-        return AllocationRound.of(leadership::isLeader, collector::collect,
+        AllocationRound round = AllocationRound.of(leadership::isLeader, collector::collect,
                 capacity::lastKnown,
                 registry::count, port::apply, port::publish, Instant::now,
                 () -> port.load().map(hash ->
@@ -105,6 +105,7 @@ public class ControlPlaneConfig {
                 // 요청 경로가 레디스를 안 치려면(불변식 1) 이 길밖에 없다.
                 // 합산에 든 값 그대로라 램프가 깎은 몫이 여기에도 실린다 (F6).
                 capacity::routable);
+        return round;
     }
 
     /**
@@ -158,8 +159,11 @@ public class ControlPlaneConfig {
      */
     @Bean
     InvariantMetrics invariantMetrics(AllocationRound round, AllocationRedisPort port,
-            MeterRegistry meters) {
-        return InvariantMetrics.bind(round, port.clockSkew(), meters, port::markersDropped);
+            MeterRegistry meters, GatewayRegistry registry) {
+        // **도착 합은 배분을 안 거친다.** 상한으로 쓰면 관측이 제 출력에 오염돼
+        // 진동하므로 뺐다 (AIJ-0250). 남은 쓰임이 지표뿐이라 여기로 바로 온다.
+        return InvariantMetrics.bind(round, port.clockSkew(), meters, port::markersDropped,
+                registry::passRate);
     }
 
     /**
@@ -201,7 +205,6 @@ public class ControlPlaneConfig {
                 meters);
     }
 
-    /** 배분 틱. <b>재료를 먼저 읽고 배분한다</b> — 안 읽으면 크레딧이 첫 하한에 머문다. */
     /**
      * 리더가 된 순간에 처음부터 줘야 하는 것들.
      *
@@ -209,14 +212,24 @@ public class ControlPlaneConfig {
      * 있던 값을 이어 쓰는데, 그건 전 시험이 초록인 채로 일어난다.
      */
     static Runnable onLeadershipGained(CapacityCollector collector, CapacityRefresh capacity,
-            SoldOutCleanup cleanup, QueueSweeper sweeper, AllocationRound round) {
+            SoldOutCleanup cleanup, QueueSweeper sweeper, AllocationRound round,
+            SnapshotHolder holder, GatewayRegistry registry) {
         return () -> {
             collector.leadershipAcquired();
             capacity.leadershipChanged();
             // **평활화 이월도 여기서 버린다** (F9 · CY-859). 회차 안에서 버리려
             // 하면 그 회차는 리더일 때만 도므로 비리더 구간을 한 번도 못 본다 —
             // 되찾은 노드가 남이 움직인 값을 못 보고 옛 값을 이어 쓴다.
-            round.leadershipAcquired();
+            // **발행된 몫을 램프의 출발점으로 준다** (F9). 발행된 적이 없으면
+            // 안 준다 — 빈 재료의 몫도 0 이라, 그 0 에서 다시 오르는 동안 서킷이
+            // 열린 적 없는 한산한 쿠폰이 줄을 선다 (R1).
+            //
+            // **낡은 값은 안 받는다.** "낮추는 쪽으로만" 은 이미 리더였던 노드에만
+            // 걸린다 — 승계 노드는 램프를 한 번도 안 돌려 그 값을 그대로 받는다.
+            // 장애 전의 큰 몫을 물려받으면 첫 회차에 브레이크가 통째로 풀린다.
+            // 그렇다고 안 주면 브레이크가 아예 없으므로, R1 하한에서 시작한다.
+            SnapshotHolder.View seen = holder.view();
+            round.leadershipAcquired(startingCredit(seen, holder, registry));
             // **매진 유예를 처음부터 준다.** 얼어 있던 셈을 이어 쓰면 유예가
             // 설정값이 아니라 "내가 리더였던 틱 수" 가 되고, 그 둘은 장애
             // 중에 갈린다.
@@ -229,17 +242,40 @@ public class ControlPlaneConfig {
         };
     }
 
+    /**
+     * 승계 노드가 램프를 세울 출발점.
+     *
+     * <p><b>R1 은 여기서 안 지킨다.</b> 하한보다 낮은 값이 나올 수 있고, 그것을
+     * 되올리는 것은 {@code ReleaseRamp.next} 에 넘기는 minimum 이다.
+     *
+     * @return 기동 직후면 음수(램프 없음), 그 밖에는 발행 몫이나 R1 하한 이하
+     */
+    // 낡은 큰 값은 브레이크를 통째로 푼다. 그렇다고 안 주면 브레이크가 아예 없다.
+    static long startingCredit(SnapshotHolder.View seen, SnapshotHolder holder,
+            GatewayRegistry registry) {
+        long floor = CapacityCollector.idleMinimum(registry.count());
+        if (!seen.snapshot().isPublished()) {
+            // **못 읽은 것과 아직 안 읽은 것은 다르다.** 샤드가 끊긴 채 몇 시간
+            // 떠 있던 노드도 여기 오는데, 램프를 안 걸면 첫 틱이 목표를 통째로
+            // 발행한다. 기동 직후만 면제한다.
+            return seen.isBeforeFirstTick() ? -1 : floor;
+        }
+        long published = seen.snapshot().meta().globalCredit();
+        return holder.isDataStale(seen) ? Math.min(published, floor) : published;
+    }
+
     @Bean
     AllocationScheduler allocationLoop(ControlPlaneProperties properties, Leadership leadership,
             AllocationRound round, CapacityRefresh capacity, CapacityCollector collector,
             TunablesRefresh tunables, Scheduler allocationScheduler, SoldOutCleanup cleanup,
-            QueueSweeper sweeper) {
+            QueueSweeper sweeper, SnapshotHolder holder, GatewayRegistry registry) {
         return AllocationScheduler.of(properties.scheduler().tick(),
                 properties.scheduler().firstTickDelay(),
                 // **승계는 유예를 처음부터 준다.** 비리더 구간에 얼어 있던 실패
                 // 횟수를 이어 쓰면 재승계 첫 회차가 곧바로 크레딧을 깎는다.
                 LeadershipEdge.of(leadership::isLeader,
-                        onLeadershipGained(collector, capacity, cleanup, sweeper, round),
+                        onLeadershipGained(collector, capacity, cleanup, sweeper, round, holder,
+                                registry),
                         capacity::leadershipChanged),
                 // **운영 값을 먼저 읽고 배분한다.** 순서가 뒤면 방금 바꾼 값이
                 // 한 틱 늦게 나가고, 장애 중의 한 틱은 길다.

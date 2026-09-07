@@ -5,6 +5,7 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 import com.kafkick.waiting.domain.admission.AdmissionDecision;
+import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -371,5 +372,51 @@ class BackendFallbackTest {
         exchange.getAttributes().put(
                 AdmissionGatewayFilter.DECISION, AdmissionDecision.PASS_TOKEN);
         return exchange;
+    }
+
+    /**
+     * <b>서킷이 부르지도 않고 되돌린 건은 도착이 아니다</b> (RC4). 이 표식이
+     * 안 남으면 통과 수를 세는 쪽이 그 건을 뒷단 도착으로 센다.
+     */
+    @Test
+    @DisplayName("안_부른_회차에_표식을_남긴다")
+    void 안_부른_회차에_표식을_남긴다() {
+        MockServerWebExchange exchange = 넘어온_요청();
+
+        답한다(fallback, exchange);
+
+        assertThat(exchange.<Boolean>getAttribute(BackendFallback.NOT_CALLED)).isTrue();
+    }
+
+    /** 뒷단이 붙잡아 실패한 건은 닿은 것이다. 그 회차에는 표식이 없어야 한다. */
+    @Test
+    @DisplayName("뒷단이_실패한_회차에는_표식이_없다")
+    void 뒷단이_실패한_회차에는_표식이_없다() {
+        MockServerWebExchange exchange = 넘어온_요청();
+        exchange.getAttributes().put(
+                ServerWebExchangeUtils.CIRCUITBREAKER_EXECUTION_EXCEPTION_ATTR,
+                new IllegalStateException("뒷단이 끊겼다"));
+
+        답한다(fallback, exchange);
+
+        assertThat(exchange.<Boolean>getAttribute(BackendFallback.NOT_CALLED)).isNull();
+    }
+
+    /**
+     * <b>거절도 예외를 싣는다.</b> 예외가 있는지로만 가르면 서킷이 부르지도 않고
+     * 되돌린 건이 도착으로 세어진다 — 고치려던 것과 정확히 반대다.
+     */
+    @Test
+    @DisplayName("거절_예외가_실려도_안_부른_것이다")
+    void 거절_예외가_실려도_안_부른_것이다() {
+        MockServerWebExchange exchange = 넘어온_요청();
+        exchange.getAttributes().put(
+                ServerWebExchangeUtils.CIRCUITBREAKER_EXECUTION_EXCEPTION_ATTR,
+                CallNotPermittedException.createCallNotPermittedException(
+                        CircuitBreakerRegistry.ofDefaults().circuitBreaker("backend")));
+
+        답한다(fallback, exchange);
+
+        assertThat(exchange.<Boolean>getAttribute(BackendFallback.NOT_CALLED)).isTrue();
     }
 }

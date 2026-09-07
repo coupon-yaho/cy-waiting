@@ -10,6 +10,8 @@ import com.kafkick.waiting.domain.admission.AdmissionRequest;
 import com.kafkick.waiting.domain.admission.Bulkhead;
 import com.kafkick.waiting.domain.admission.CouponKeys;
 import com.kafkick.waiting.domain.admission.EnqueueLatch;
+import com.kafkick.waiting.control.PassRateSource;
+import com.kafkick.waiting.domain.admission.PassRateMeter;
 import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
@@ -42,6 +44,7 @@ import org.springframework.cloud.gateway.support.ServerWebExchangeUtils;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.SignalType;
 
 /**
  * 발급 요청을 통과·대기·거절로 가른다. <b>판정 재료는 로컬 스냅샷에서만 읽는다</b>
@@ -51,7 +54,7 @@ import reactor.core.publisher.Mono;
  * 안 풀렸을 때 기동은 되고 판정만 사라진다.
  */
 @Component
-public final class AdmissionGatewayFilter implements GatewayFilter {
+public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSource {
 
     /** 응답을 쓰는 쪽이 읽는다. 다시 판정하면 두 번 세고 답이 갈릴 수 있다. */
     public static final String DECISION = "waiting.admission.decision";
@@ -148,6 +151,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
     private final CircuitStateReader circuit;
     private final Clock clock;
     private final MeterRegistry meters;
+
+    /** 이 노드가 뒷단으로 보낸 초당 수. 하트비트가 실어 리더가 합산한다 (RC4). */
+    private final PassRateMeter passRate = PassRateMeter.of(PassRateMeter.DEFAULT_WINDOW_MS);
     private final DoubleSupplier random;
     private final QueuePort queue;
     private final QueueToken tokens;
@@ -309,6 +315,15 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
      */
     public int inFlight() {
         return bulkhead.inFlight();
+    }
+
+    /**
+     * 이 노드가 최근에 뒷단으로 보낸 초당 수. <b>시계를 안 받는다</b> — 세는
+     * 쪽과 읽는 쪽이 다른 시계를 쓰면 창이 매번 즉시 접힌다.
+     */
+    @Override
+    public long passRatePerSec() {
+        return passRate.perSecond(clock.millis());
     }
 
     /**
@@ -695,7 +710,21 @@ public final class AdmissionGatewayFilter implements GatewayFilter {
                 })
                 // **어느 쪽으로 끝나도 돌려준다.** 안 돌려주면 격벽이 한 번 차고
                 // 나서 영영 안 열리고, 그 쿠폰은 뒷단이 멀쩡해져도 계속 막힌다.
-                .doFinally(signal -> bulkhead.exit(couponId));
+                .doFinally(signal -> {
+                    bulkhead.exit(couponId);
+                    // **여기서 센다** (RC4). 판정 자리에서 세면 서킷이 열린 동안의
+                    // 통과 판정까지 들어가는데, 그것들은 뒷단에 안 닿는다. 뒷단이
+                    // 붙잡아 상한에 걸린 것은 닿은 것이라 센다.
+                    // **취소는 뒷단 응답이 왔는지로 가른다.** 넘어가기 전에 끊긴
+                    // 것은 도착이 아니고, 응답을 받는 중에 끊긴 것은 도착이다.
+                    boolean reached = signal != SignalType.CANCEL
+                            || exchange.getAttribute(
+                                    ServerWebExchangeUtils.CLIENT_RESPONSE_ATTR) != null;
+                    if (reached && !Boolean.TRUE.equals(
+                            exchange.getAttribute(BackendFallback.NOT_CALLED))) {
+                        passRate.passed(clock.millis());
+                    }
+                });
     }
 
     /** 재료 없이 판정했다고 표시합니다. <b>세는 것은 끝에서 한 번</b> 합니다. */

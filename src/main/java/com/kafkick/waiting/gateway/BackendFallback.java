@@ -3,6 +3,7 @@ package com.kafkick.waiting.gateway;
 import com.kafkick.waiting.domain.admission.AdmissionDecision;
 import com.kafkick.waiting.domain.queue.EtaPolicy;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
+import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
@@ -99,7 +100,23 @@ public final class BackendFallback {
      * <p>봉투는 {@link ApiError} 가 만든다 — 여기서 따로 짜면 같은 게이트웨이가
      * 두 가지 오류 형식을 낸다.
      */
+    /** 서킷이 <b>부르지도 않고</b> 되돌렸다는 표식. 통과 수를 세는 쪽이 이걸 뺀다. */
+    public static final String NOT_CALLED = BackendFallback.class.getName() + ".notCalled";
+
+    /** 서킷이 부르지도 않고 되돌렸는가. 예외가 없거나 거절 예외면 안 부른 것이다. */
+    static boolean notCalled(ServerRequest request) {
+        return request.attribute(ServerWebExchangeUtils.CIRCUITBREAKER_EXECUTION_EXCEPTION_ATTR)
+                .map(ex -> ex instanceof CallNotPermittedException)
+                .orElse(true);
+    }
+
     public Mono<ServerResponse> respond(ServerRequest request) {
+        // **닿은 것과 안 부른 것을 가른다** (RC4). 폴백은 둘 다로 온다 — 뒷단이
+        // 붙잡아 상한에 걸린 것은 닿은 것이고, 서킷이 열린 채 거절한 것은 아니다.
+        // 예외가 실렸는지로는 못 가른다: 거절도 예외를 싣는다. 그 종류를 본다.
+        if (notCalled(request)) {
+            request.exchange().getAttributes().put(NOT_CALLED, true);
+        }
         // **"열렸다" 라고 단정하지 않는다.** 폴백은 서킷 오픈뿐 아니라 연결 실패나
         // 뒷단 오류로도 온다. 라벨을 오픈으로 고정하면 서킷이 닫힌 채 실패만 나는
         // 구간에서 지표가 거짓말하고, 그 지표로 회복을 판정한다 (8.4.3).

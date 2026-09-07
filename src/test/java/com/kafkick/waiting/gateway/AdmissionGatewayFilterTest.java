@@ -319,6 +319,92 @@ class AdmissionGatewayFilterTest {
         assertThat(exchange.getResponse().getStatusCode()).isNull();
     }
 
+    /**
+     * <b>뒷단으로 간 것만 센다</b> (RC4). 회복 봉우리를 정상과 견주려면 그 수를
+     * 알아야 하는데, 노드는 제 것만 안다.
+     */
+    @Test
+    @DisplayName("통과한_요청만_초당_수에_센다")
+    void 통과한_요청만_초당_수에_센다() {
+        스냅샷을_심는다(CouponStates.idle(100));
+        // 창(5초)으로 나눈 값이라 눈에 보이려면 창 하나를 채워야 한다.
+        for (int i = 0; i < 500; i++) {
+            태운다(COUPON);
+        }
+
+        // **다섯 건을 태운다.** 한 건이면 창(5초)으로 나눠 0.2 라 세든 안 세든
+        // 반올림이 같다 — 버그를 넣어도 값이 안 변한다.
+        스냅샷을_심는다(CouponStates.closed(0));
+        for (int i = 0; i < 5; i++) {
+            태운다(COUPON);
+        }
+
+        assertThat(filter.passRatePerSec()).as("매진까지 세면 505 가 된다").isEqualTo(500);
+    }
+
+    /**
+     * <b>서킷이 부르지도 않고 되돌린 건은 도착이 아니다</b> (RC4). 판정은 통과를
+     * 냈지만 그 요청은 폴백으로 끝나 뒷단에 안 닿는다.
+     */
+    @Test
+    @DisplayName("서킷이_되돌린_건은_안_센다")
+    void 서킷이_되돌린_건은_안_센다() {
+        스냅샷을_심는다(CouponStates.idle(100));
+        for (int i = 0; i < 500; i++) {
+            태운다(COUPON);
+        }
+
+        // 폴백이 표식을 남긴 그대로다 — 서킷이 실행 없이 거절했다는 뜻이다.
+        for (int i = 0; i < 5; i++) {
+            MockServerWebExchange exchange = 요청(COUPON, MEMBER + i);
+            filter.filter(exchange, e -> {
+                e.getAttributes().put(BackendFallback.NOT_CALLED, true);
+                return Mono.empty();
+            }).block();
+        }
+
+        assertThat(filter.passRatePerSec()).as("되돌린 다섯을 세면 505 가 된다")
+                .isEqualTo(500);
+    }
+
+    /**
+     * <b>뒷단으로 넘어가기 전에 끊긴 것은 도착이 아니다.</b> 반납 콜백은 구독이
+     * 끊길 때도 도는데, 그때 세면 통과 수가 부푼다.
+     */
+    @Test
+    @DisplayName("넘어가기_전에_끊기면_안_센다")
+    void 넘어가기_전에_끊기면_안_센다() {
+        스냅샷을_심는다(CouponStates.idle(100));
+        for (int i = 0; i < 500; i++) {
+            태운다(COUPON);
+        }
+
+        for (int i = 0; i < 5; i++) {
+            MockServerWebExchange exchange = 요청(COUPON, MEMBER + i);
+            filter.filter(exchange, e -> Mono.never()).subscribe().dispose();
+        }
+
+        assertThat(filter.passRatePerSec()).as("끊긴 다섯을 세면 505 가 된다")
+                .isEqualTo(500);
+    }
+
+    /** 뒷단이 붙잡아 끝난 것은 닿은 것이다. 표식이 없으면 센다. */
+    @Test
+    @DisplayName("뒷단이_붙잡은_건은_센다")
+    void 뒷단이_붙잡은_건은_센다() {
+        스냅샷을_심는다(CouponStates.idle(100));
+        for (int i = 0; i < 500; i++) {
+            태운다(COUPON);
+        }
+
+        for (int i = 0; i < 5; i++) {
+            MockServerWebExchange exchange = 요청(COUPON, MEMBER + i);
+            filter.filter(exchange, e -> Mono.empty()).block();
+        }
+
+        assertThat(filter.passRatePerSec()).isEqualTo(505);
+    }
+
     @Test
     @DisplayName("매진은_뒷단에_안_간다")
     void 매진은_뒷단에_안_간다() {

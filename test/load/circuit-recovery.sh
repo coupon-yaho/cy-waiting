@@ -68,12 +68,13 @@ case "$OUT" in
 esac
 # **이름을 직접 대도 조건은 남아야 한다.** 조건을 파일 이름에만 실었으므로,
 # 표식이 없으면 두 조건의 값이 같은 이름으로 덮인다.
-if [ -n "$probe" ]; then
-    case "$OUT" in
-        *probe*) ;;
-        *) echo "PROBE 를 켰으면 OUT 이름에 probe 가 들어가야 한다: '$OUT'"; exit 2 ;;
-    esac
-fi
+# **양쪽을 다 본다.** 켠 회차가 표식 없는 이름을 쓰는 것만 막으면, 안 켠 회차가
+# 표식 있는 이름으로 앞 회차의 산출물을 덮는다 — 조건이 뒤바뀐 채로 남는다.
+case "$probe:$OUT" in
+    ?*:*probe*) ;;
+    ?*:*) echo "PROBE 를 켰으면 OUT 이름에 probe 가 들어가야 한다: '$OUT'"; exit 2 ;;
+    :*probe*) echo "PROBE 를 안 켰으면 OUT 이름에 probe 가 들어가면 안 된다: '$OUT'"; exit 2 ;;
+esac
 
 for n in GATEWAYS RATE NORMAL_SEC HOLD_SEC RECOVER_SEC HANDOVER_AFTER_SEC TAIL_SEC SAMPLE_MS FAULT_LATENCY_MS; do
     v=$(eval "printf '%s' \"\$$n\"")
@@ -303,23 +304,26 @@ report_calls() {
             # 그대로 더하면 통과 수가 뒤로 간다.
             NF != 9 { next }
             $1 >= t0 && $1 <= t1 {
-                calls = $3 + $4
-                # 프로브가 채운 표본은 줄이 채운 것과 갈라 센다.
-                pr = $7 + $8 + $9
+                # **프로브 몫을 서킷 계수에서 뺀다.** 통과·실패는 같은 서킷에
+                # 기록되므로 안 빼면 프로브를 켠 회차의 "초당 건수" 가 그만큼
+                # 부풀어 두 조건이 비교가 안 된다. 바쁘다는 답은 자리를 돌려주고
+                # 세기만 하므로 애초에 서킷 계수에 없다 — 따로 낸다.
+                pr = $7 + $8
+                calls = $3 + $4 - pr
                 if (!(($2) in first)) {
                     first[$2] = calls; ft[$2] = $1; fa[$2] = $6
-                    fn[$2] = $5; fp[$2] = pr
+                    fn[$2] = $5; fp[$2] = pr; fb[$2] = $9
                 }
                 # 계수는 단조다. 줄면 컨테이너가 다시 뜬 것이므로 안 센다.
                 if (calls < last[$2] || $6 < la[$2]) { next }
                 last[$2] = calls; lt[$2] = $1; la[$2] = $6
-                ln[$2] = $5; lp[$2] = pr
+                ln[$2] = $5; lp[$2] = pr; lb[$2] = $9
             }
             END {
                 for (n in first) {
                     d = (lt[n] - ft[n]) / 1000
                     if (d <= 0) { continue }
-                    printf "  %s %s 서킷 초당 %.2f건 (%d건 / %.1f초)\n",
+                    printf "  %s %s 줄이 채운 서킷 표본 초당 %.2f건 (%d건 / %.1f초)\n",
                             n, label, (last[n] - first[n]) / d, last[n] - first[n], d
                     # 표시한 수는 리더 것만 는다. 노드별 구간이 조금씩 어긋나므로
                     # 분모는 그 노드 자신의 구간으로 나눈다.
@@ -330,9 +334,10 @@ report_calls() {
                     # **못 들어간 요청과 프로브 몫을 같이 낸다.** 프로브가 반쯤
                     # 열린 자리를 먹으면 차례가 온 사람이 폴백으로 떨어지는데,
                     # 그 수가 안 나오면 예산을 정할 재료가 회차를 돌려도 안 생긴다.
-                    if (ln[n] > fn[n] || lp[n] > fp[n]) {
-                        printf "  %s %s 못 들어간 요청 %d건 · 프로브 표본 %d건\n",
-                                n, label, ln[n] - fn[n], lp[n] - fp[n]
+                    if (ln[n] > fn[n] || lp[n] > fp[n] || lb[n] > fb[n]) {
+                        printf "  %s %s 못 들어간 요청 %d건 · 프로브 표본 %d건 · "
+                                "프로브가 만난 포화 %d건\n",
+                                n, label, ln[n] - fn[n], lp[n] - fp[n], lb[n] - fb[n]
                     }
                 }
             }' "$work/calls.txt"

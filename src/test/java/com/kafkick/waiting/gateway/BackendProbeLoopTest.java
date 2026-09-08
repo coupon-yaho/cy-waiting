@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.DoubleSupplier;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -20,6 +21,12 @@ import reactor.test.scheduler.VirtualTimeScheduler;
  */
 @Tag("unit")
 class BackendProbeLoopTest {
+
+    /**
+     * 첫 회차를 안 늦추는 난수. <b>여기 값을 든다</b> — 난수를 안 주는 문을
+     * 열어 두면 위상이 흔들려 아래 시험들이 간격이 아니라 위상을 잰다.
+     */
+    private static final DoubleSupplier 위상_없음 = () -> 0.0;
 
     private static final Duration 간격 = Duration.ofSeconds(1);
 
@@ -59,7 +66,7 @@ class BackendProbeLoopTest {
     void 간격만큼_쉬고_다음을_돈다() {
         VirtualTimeScheduler 가상 = VirtualTimeScheduler.create();
         CountingRound 회차 = new CountingRound(Duration.ZERO, 가상);
-        BackendProbeLoop 루프 = BackendProbeLoop.of(회차, 간격);
+        BackendProbeLoop 루프 = BackendProbeLoop.of(회차, 간격, 위상_없음);
 
         루프.start(가상);
         try {
@@ -85,7 +92,7 @@ class BackendProbeLoopTest {
     void 느린_회차가_겹치지도_끊기지도_않는다() {
         VirtualTimeScheduler 가상 = VirtualTimeScheduler.create();
         CountingRound 회차 = new CountingRound(간격.multipliedBy(3), 가상);
-        BackendProbeLoop 루프 = BackendProbeLoop.of(회차, 간격);
+        BackendProbeLoop 루프 = BackendProbeLoop.of(회차, 간격, 위상_없음);
 
         루프.start(가상);
         try {
@@ -106,7 +113,7 @@ class BackendProbeLoopTest {
         AtomicInteger 회차 = new AtomicInteger();
         BackendProbeLoop 루프 = BackendProbeLoop.of(
                 () -> Mono.error(new IllegalStateException("터졌다 " + 회차.incrementAndGet())),
-                간격);
+                간격, 위상_없음);
 
         루프.start(가상);
         try {
@@ -124,7 +131,7 @@ class BackendProbeLoopTest {
     void 멈추면_더_안_돈다() {
         VirtualTimeScheduler 가상 = VirtualTimeScheduler.create();
         CountingRound 회차 = new CountingRound(Duration.ZERO, 가상);
-        BackendProbeLoop 루프 = BackendProbeLoop.of(회차, 간격);
+        BackendProbeLoop 루프 = BackendProbeLoop.of(회차, 간격, 위상_없음);
 
         루프.start(가상);
         가상.advanceTimeBy(간격.multipliedBy(2));
@@ -143,7 +150,7 @@ class BackendProbeLoopTest {
     void 두_번_켜도_하나만_돈다() {
         VirtualTimeScheduler 가상 = VirtualTimeScheduler.create();
         CountingRound 회차 = new CountingRound(Duration.ZERO, 가상);
-        BackendProbeLoop 루프 = BackendProbeLoop.of(회차, 간격);
+        BackendProbeLoop 루프 = BackendProbeLoop.of(회차, 간격, 위상_없음);
 
         루프.start(가상);
         루프.start(가상);
@@ -168,7 +175,7 @@ class BackendProbeLoopTest {
         BackendProbeLoop 루프 = BackendProbeLoop.of(() -> {
             회차.incrementAndGet();
             return Mono.empty();
-        }, 간격);
+        }, 간격, 위상_없음);
 
         루프.start(가상);
         루프.stop();

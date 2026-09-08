@@ -5,6 +5,7 @@ import java.time.Instant;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.DoubleSupplier;
 import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,6 +35,12 @@ public final class BackendProbeLoop implements SmartLifecycle {
 
     private final Duration interval;
 
+    /**
+     * 첫 회차의 위상을 흩는 난수. <b>주입받는다</b> — 여기서 직접 부르면 노드
+     * 둘이 같은 초에 닫히는 회차를 재현할 수 없다.
+     */
+    private final DoubleSupplier random;
+
     private final AtomicBoolean running = new AtomicBoolean();
 
     /** 돌기 시작한 시각. 멈출 때 얼마나 돌았는지 같이 남긴다. */
@@ -46,13 +53,20 @@ public final class BackendProbeLoop implements SmartLifecycle {
 
     private volatile Scheduler owned;
 
-    private BackendProbeLoop(Supplier<Mono<Void>> round, Duration interval) {
+    private BackendProbeLoop(Supplier<Mono<Void>> round, Duration interval,
+            DoubleSupplier random) {
         this.round = Objects.requireNonNull(round, "round 는 필수다");
         this.interval = Objects.requireNonNull(interval, "interval 은 필수다");
+        this.random = Objects.requireNonNull(random, "random 은 필수다");
     }
 
-    public static BackendProbeLoop of(Supplier<Mono<Void>> round, Duration interval) {
-        return new BackendProbeLoop(round, interval);
+    /**
+     * <b>난수를 밖에서 받는다.</b> 안 받는 문을 열어 두면 시험이 그리로 들어가
+     * 위상이 흔들리고, 그러면 위상을 흩는 것이 실제로 도는지를 아무도 못 잰다.
+     */
+    public static BackendProbeLoop of(Supplier<Mono<Void>> round, Duration interval,
+            DoubleSupplier random) {
+        return new BackendProbeLoop(round, interval, random);
     }
 
     /**
@@ -82,8 +96,15 @@ public final class BackendProbeLoop implements SmartLifecycle {
 
     private void begin(Scheduler scheduler) {
         startedAt.set(Instant.now());
-        log.info("합성 프로브를 {} 간격으로 돈다", interval);
+        // **첫 회차의 위상을 흩는다.** 간격이 결정적이면 노드 둘의 서킷이 같은
+        // 자극으로 같은 초에 열리고, 같은 속도로 표본을 채워 같은 초에 닫힌다 —
+        // 억눌린 줄 두 벌이 함께 나가 회복 봉우리가 노드 수만큼 커진다 (RC4).
+        Duration phase = Duration.ofNanos(
+                (long) (interval.toNanos() * Math.clamp(random.getAsDouble(), 0.0, 1.0)));
+        log.info("합성 프로브를 {} 간격으로 돈다 — 첫 회차는 {}ms 뒤다",
+                interval, phase.toMillis());
         subscription = Mono.defer(round)
+                .delaySubscription(phase, scheduler)
                 .doOnSuccess(done -> recovered())
                 .onErrorResume(this::swallow)
                 .subscribeOn(scheduler)
@@ -91,10 +112,6 @@ public final class BackendProbeLoop implements SmartLifecycle {
                 .subscribe(tick -> { }, this::terminated);
     }
 
-    /**
-     * <b>구간의 첫 건만 남긴다.</b> 1초 간격이면 하루 8만 줄이고, 그때 정작 봐야
-     * 할 것이 묻힌다. 회차가 터져도 다음은 나가므로 결과는 "이번 표본이 빈 것" 이다.
-     */
     /**
      * <b>끝난 것을 끝난 것으로 남긴다.</b> 안 그러면 {@code isRunning()} 이 계속 참을
      * 돌려주고, 다시 켜려는 호출이 CAS 에 걸려 조용히 아무것도 안 한다.
@@ -114,6 +131,10 @@ public final class BackendProbeLoop implements SmartLifecycle {
         }
     }
 
+    /**
+     * <b>구간의 첫 건만 남긴다.</b> 1초 간격이면 하루 8만 줄이고, 그때 정작 봐야
+     * 할 것이 묻힌다. 회차가 터져도 다음은 나가므로 결과는 "이번 표본이 빈 것" 이다.
+     */
     private Mono<Void> swallow(Throwable error) {
         if (failingSince.compareAndSet(null, Instant.now())) {
             log.warn("합성 프로브 회차가 터졌다 — {}. 이번 표본이 비고 회복 판정이 "

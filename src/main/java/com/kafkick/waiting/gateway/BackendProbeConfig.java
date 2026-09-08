@@ -57,9 +57,15 @@ public class BackendProbeConfig {
         return BackendProbe.of(() -> circuits.find(GatewayRoutes.CIRCUIT),
                 () -> client.get().uri(probe.path())
                         .retrieve()
-                        // **2xx 만 성공이다.** 뒷단이 살아 답을 준 것과 제 일을 할 수
-                        // 있는 것은 다르고, 3xx 도 그렇다 — 헬스 경로가 로그인
-                        // 페이지로 넘기면 그 302 가 회복 표본이 된다.
+                        // **바쁘다는 답은 표본이 아니다.** 요청 경로는 5xx 를 서킷에
+                        // 안 무는데 프로브만 실패로 세면 정의가 둘이 되고, 회복
+                        // 구간에 프로브가 혼자 서킷을 다시 연다.
+                        .onStatus(status -> status.value() == 429 || status.value() == 503,
+                                response -> response.createException().flatMap(cause ->
+                                        Mono.error(new BackendProbe.Busy(cause.getMessage()))))
+                        // **나머지는 2xx 만 성공이다.** 뒷단이 살아 답을 준 것과 제
+                        // 일을 할 수 있는 것은 다르고, 3xx 도 그렇다 — 헬스 경로가
+                        // 로그인 페이지로 넘기면 그 302 가 회복 표본이 된다.
                         .onStatus(status -> !status.is2xxSuccessful(),
                                 response -> response.createException().flatMap(Mono::error))
                         .bodyToMono(Void.class)
@@ -72,6 +78,7 @@ public class BackendProbeConfig {
     @Bean
     BackendProbeLoop backendProbeLoop(BackendProbe probe, BackendProbeProperties properties,
             MeterRegistry meters) {
-        return BackendProbeLoop.of(probe.bind(meters)::probe, properties.interval());
+        return BackendProbeLoop.of(probe.bind(meters)::probe, properties.interval(),
+                Math::random);
     }
 }

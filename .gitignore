@@ -44,3 +44,4 @@ routing-truth.txt
 routing-truth-k6.json
 peak-steps.tsv
 peak-out/
+circuit-recovery*.txt

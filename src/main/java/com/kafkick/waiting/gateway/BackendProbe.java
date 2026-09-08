@@ -28,6 +28,20 @@ public final class BackendProbe {
 
     public static final String SKIPPED = "waiting.probe.skipped";
 
+    public static final String BUSY = "waiting.probe.busy";
+
+    /**
+     * 뒷단이 살아 있고 지금 바쁘다. <b>회복의 증거가 아니다</b> — 요청 경로는
+     * 같은 답을 서킷에 안 물므로, 프로브만 실패로 세면 정의가 둘이 된다.
+     */
+    public static final class Busy extends RuntimeException {
+
+        /** 이 패키지 안에서만 만든다 — 밖에서 만들면 뜻이 흐려진다 (JS-12). */
+        Busy(String message) {
+            super(message);
+        }
+    }
+
     private static final Logger log = LoggerFactory.getLogger(BackendProbe.class);
 
     private final Supplier<Optional<CircuitBreaker>> breaker;
@@ -38,6 +52,8 @@ public final class BackendProbe {
     private final AtomicLong passed = new AtomicLong();
 
     private final AtomicLong failed = new AtomicLong();
+
+    private final AtomicLong busy = new AtomicLong();
 
     private final AtomicLong skipped = new AtomicLong();
 
@@ -96,6 +112,7 @@ public final class BackendProbe {
         counter(meters, PASSED, "합성 프로브가 표본을 채운 회차 수", passed);
         counter(meters, FAILED, "합성 프로브가 실패로 표본을 채운 회차 수", failed);
         counter(meters, SKIPPED, "반쯤 열리지 않아 안 친 회차 수. 루프 생존의 신호다", skipped);
+        counter(meters, BUSY, "뒷단이 바빠 표본으로 안 센 회차 수", busy);
         return this;
     }
 
@@ -120,13 +137,30 @@ public final class BackendProbe {
         return skipped.get();
     }
 
+    /** 뒷단이 바빠 표본으로 안 센 회차 수. */
+    public long busy() {
+        return busy.get();
+    }
+
     private void record(CircuitBreaker circuit, long startedAt, Throwable error) {
         long elapsed = circuit.getCurrentTimestamp() - startedAt;
         TimeUnit unit = circuit.getTimestampUnit();
         if (error == null) {
             passed.incrementAndGet();
             circuit.onSuccess(elapsed, unit);
-            failingSince.set(null);
+            // **멎은 것도 남긴다.** 진입만 찍으면 언제 멎었는지가 안 나와,
+            // 회복 구간에 그 줄을 본 운영자가 아직도 실패 중인지 못 가른다.
+            if (failingSince.compareAndSet(Boolean.TRUE, null)) {
+                log.info("합성 프로브가 다시 표본을 채운다");
+            }
+            return;
+        }
+        // **바쁘다는 답은 판정을 안 바꾼다.** 자리를 돌려주고 세기만 한다 —
+        // 실패로 세면 프로브가 혼자 서킷을 다시 열고, 성공으로 세면 못 받는
+        // 뒷단을 향해 서킷이 닫힌다. 어느 쪽도 회복의 증거가 아니다.
+        if (error instanceof Busy) {
+            busy.incrementAndGet();
+            circuit.releasePermission();
             return;
         }
         failed.incrementAndGet();

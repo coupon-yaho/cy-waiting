@@ -422,6 +422,18 @@ if ! cp "$ROOT/test/load/"*.sh "$clean_repo/test/load/" 2>/dev/null \
     fail=$((fail + 1))
 fi
 
+# **스텁 소스도 같이 넣는다.** 뒷단 스텁 자기검증이 그것을 띄워서 프로브 경로를
+# 재므로, 없으면 "스텁이 안 떴다"(2) 로 끝나고 깨끗한 케이스가 그 이유로 막힌다.
+mkdir -p "$clean_repo/test/load/backend-stub"
+# **package.json 도 같이 넣는다.** 스텁이 ESM 이라 그 표식이 없으면 node 가
+# CommonJS 로 읽어 첫 import 에서 죽는다 — 소스만 넣으면 안 뜬다.
+if ! cp "$ROOT/test/load/backend-stub/server.js" \
+        "$ROOT/test/load/backend-stub/package.json" \
+        "$clean_repo/test/load/backend-stub/" 2>/dev/null; then
+    printf '  FAIL 임시 저장소에 스텁 소스를 못 넣었다 — 아래 검사가 무의미하다\n'
+    fail=$((fail + 1))
+fi
+
 # **판정기가 읽는 제품 상수도 넣는다.** 서킷 회복 판정이 램프 배수를 소스에서
 # 읽어, 없으면 "못 쟀다"(2) 로 끝나고 깨끗한 케이스가 그 이유로 막힌다.
 ramp_src=src/main/java/com/kafkick/waiting/domain/allocation/ReleaseRamp.java

@@ -77,10 +77,53 @@ let faultStatus = num('FAULT_STATUS', 0, { integer: true, max: 599 });
 
 let faulted = 0;
 
+// 프로브가 친 횟수. **발급 셈과 갈라 둔다** — 합치면 회복 봉우리(RC4)를 재는
+// 자가 프로브 회차만큼 부풀고, 그 봉우리로 게이트를 판정하게 된다.
+let probed = 0;
+
 const server = createServer((req, res) => {
   // 스텁 자신의 상태. compose 의 healthcheck 와 시나리오의 사후 확인이 쓴다.
+  //
+  // **고장 중에도 산다.** 여기가 같이 빨개지면 컨테이너가 unhealthy 로 내려가고
+  // 하네스가 자기 계기를 잃는다 — 무엇이 고장인지 볼 수단이 사라진다.
   if (req.url === '/stub/health') {
-    return json(res, 200, { status: 'UP', inflight, accepted, served, rejected, faulted, faultStatus, latencyMs });
+    return json(res, 200, { status: 'UP', inflight, accepted, served, rejected, faulted, probed, faultStatus, latencyMs });
+  }
+
+  // **합성 프로브가 치는 경로.** 회복 판정에 쓰는 호출이라 발급과 **같은 자원
+  // 상태**를 지나야 한다 — 정적 200 을 주면 뒷단이 느리거나 죽어 있어도 서킷이
+  // 닫혀 회복이 거짓이 된다 (09-routing · AIJ-0249).
+  //
+  // **자리를 안 먹는다.** 물린 건수를 읽기만 하고 안 올린다. 프로브가 용량을
+  // 쓰면 회복을 재려던 장치가 회복을 늦춘다.
+  //
+  // **발급 셈에 안 섞인다.** 실제 뒷단(CY-890)도 이 둘을 지켜야 한다.
+  if (req.url === '/stub/ready') {
+    probed += 1;
+    if (faultStatus > 0) {
+      return error(res, faultStatus, 'INSTANCE_FAULT', '이 인스턴스가 지금 못 받는다.');
+    }
+    if (MAX_INFLIGHT > 0 && inflight >= MAX_INFLIGHT) {
+      return error(res, 503, 'TEMPORARILY_UNAVAILABLE', '뒷단이 지금 못 받는다.');
+    }
+    // 느린 뒷단을 프로브도 느리게 겪는다. 서킷은 5xx 가 아니라 느린 호출로 열린다.
+    return setTimeout(() => {
+      // **본문이 안 끝나는 모드도 같이 겪는다.** 헤더만 빠른 뒷단에서 프로브가
+      // 즉시 200 을 받으면, 발급이 한 건도 못 끝나는데 서킷이 닫힌다 — 이 경로가
+      // 없애려던 거짓 회복이 그 모드에서 그대로 난다.
+      if (SLOW_BODY_MS > 0) {
+        if (res.writableEnded || res.destroyed) {
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        const tick = setInterval(() => res.write(' '), SLOW_BODY_MS);
+        const stop = () => clearInterval(tick);
+        res.on('close', stop);
+        res.on('error', stop);
+        return;
+      }
+      json(res, 200, { status: 'READY', inflight });
+    }, latencyMs);
   }
 
   // **도중에 켜고 끈다.** 기동 환경변수로만 두면 고장을 만들려고 컨테이너를
@@ -109,6 +152,13 @@ const server = createServer((req, res) => {
     }
     faultStatus = asked;
     return json(res, 200, { faultStatus });
+  }
+
+  // **아는 계기 경로가 아니면 404 다.** 발급 핸들러로 흘려보내면 프로브 경로
+  // 오타가 200 을 받고 자리를 먹고 받은 건수를 올린다 — 계약 셋 중 둘이 조용히
+  // 깨지고, 그 사실을 아무것도 안 알린다.
+  if (req.url.startsWith('/stub/')) {
+    return error(res, 404, 'NOT_FOUND', '없는 계기 경로다.');
   }
 
   // **지연을 안 태운다.** 즉시 실패가 이 모드의 요점이다 — 늦게 실패하면

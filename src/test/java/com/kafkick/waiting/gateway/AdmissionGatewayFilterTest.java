@@ -1881,9 +1881,8 @@ class AdmissionGatewayFilterTest {
         // 폴백이 같은 장애에 쓰는 갈래와 같은 값이어야 한다. 밴드만 보면
         // 정책이 통째로 바뀌어도 통과하므로 값으로 못 박는다.
         assertThat(차례가_온_사람.getResponse().getHeaders().getFirst("Retry-After"))
-                .isEqualTo(String.valueOf(
-                        거절값.retryAfterSec(
-                                AdmissionDecision.RETRY_TOKEN, 고정_난수, 1.0)));
+                .as("가장 가까운 밴드다. 같은 매핑으로 기대값을 만들면 밴드를 바꿔도 통과한다")
+                .isEqualTo("1");
         풀어_준다();
     }
 
@@ -1920,24 +1919,34 @@ class AdmissionGatewayFilterTest {
      * 클라이언트는 줄이 찼다는 답을 받아 새 순번으로 다시 선다 — 순번 역행이다.
      */
     @Test
-    @DisplayName("상한에_걸린_토큰_보유자는_큐로_안_돌린다")
-    void 상한에_걸린_토큰_보유자는_큐로_안_돌린다() {
+    @DisplayName("노드_예산을_다_쓴_뒤_토큰_보유자는_큐로_안_돌린다")
+    void 노드_예산을_다_쓴_뒤_토큰_보유자는_큐로_안_돌린다() {
         스냅샷을_심는다(CouponStates.queueing(CREDIT, 1_000_000, 10), 좁은_META);
         // 같은 초에 노드 예산을 다 쓴다. 다음 한 건이 차례가 온 채로 상한에 걸린다.
+        AtomicInteger 뒷단에_닿은_수 = new AtomicInteger();
         for (int i = 0; i < 초당_통과; i++) {
-            격벽_필터.filter(토큰_요청("먼저" + i), e -> Mono.empty()).block();
+            filter.filter(토큰_요청("먼저" + i), e -> {
+                뒷단에_닿은_수.incrementAndGet();
+                return Mono.empty();
+            }).block();
         }
 
         MockServerWebExchange 넘친_사람 = 토큰_요청("넘친사람");
-        격벽_필터.filter(넘친_사람, e -> Mono.empty()).block();
+        filter.filter(넘친_사람, e -> Mono.empty()).block();
 
+        // **상한 직전까지는 통과해야 한다.** 안 재면 예산이 줄어드는 판도 초록이다.
+        assertThat(뒷단에_닿은_수).hasValue(초당_통과);
         assertThat(넘친_사람.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
                 .isEqualTo(AdmissionDecision.RETRY_TOKEN);
+        // **큐 만원과 같은 429 다.** 상태로는 안 갈리므로 본문이 유일한 판정이다.
         assertThat(넘친_사람.getResponse().getStatusCode())
                 .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
         assertThat(넘친_사람.getResponse().getBodyAsString().block())
                 .as("큐가 찼다는 답을 주면 새 순번으로 다시 선다")
                 .contains("\"code\":\"RETRY_TOKEN\"");
+        // **값으로 못 박는다.** 같은 매핑으로 기대값을 만들면 멀리 보내는 판이 통과한다.
+        assertThat(넘친_사람.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER))
+                .as("토큰 수명이 150초라 멀리 보내면 줄 맨 뒤로 간다").isEqualTo("1");
     }
 
     /**

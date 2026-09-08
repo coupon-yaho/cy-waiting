@@ -877,8 +877,12 @@ class GatewayRoutesTest {
     void 연결_단계에만_재시도한다() {
         var config = 연결_재시도.config();
 
+        // **계열만 진짜 판정이다.** 기본값이 5xx 계열이라 안 비우면 여기가 빨개진다.
         assertThat(config.getSeries()).isEmpty();
+        // 상태 코드는 기본이 비어 있어 이 줄만으로는 못 잡는다. 넓히는 쪽만 막는다.
         assertThat(config.getStatuses()).isEmpty();
+        // **발급이 POST 라 메서드를 안 열면 연결 실패가 다음 대로 안 넘어간다.**
+        assertThat(config.getMethods()).contains(HttpMethod.POST);
         assertThat(ConnectException.class).isAssignableFrom(ConnectTimeoutException.class);
         // **넓히는 쪽을 막는다.** 좁히면 유출이지만 넓히면 초과 발급이라 값이
         // 훨씬 비싸다. 갈래가 하나 늘어 목록이 바뀌어도 이 성질은 그대로 산다.

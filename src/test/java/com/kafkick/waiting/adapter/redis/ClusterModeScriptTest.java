@@ -165,7 +165,9 @@ class ClusterModeScriptTest {
             case "drop_queue.lua" -> List.of("1", "1", "60000");
             // 인자가 없다. 기준 시각을 밖에서 주면 이 스크립트를 둔 이유가 사라진다.
             case "capacity_read.lua", "snapshot_read.lua", "active_read.lua" -> List.of();
-            case "snapshot_publish.lua" -> List.of("1", "60000", "#credit", "0");
+            // **리더인 값이라야 한다.** 0 이면 스크립트가 앞에서 되돌아 KEYS[2] 를
+            // 한 번도 안 만지고, 슬롯 교차 검사가 공회전한 채로 초록이 된다.
+            case "snapshot_publish.lua" -> List.of("1770000000123456", "10000", "#credit", "0");
             case "leader_acquire.lua" -> List.of("node-1", "2000");
             case "leader_release.lua" -> List.of("node-1");
             case "gateway_heartbeat.lua" -> List.of("node-1", "30", "CLOSED", "5", "40");

@@ -1,6 +1,7 @@
 package com.kafkick.waiting.adapter.redis;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.entry;
 
@@ -51,7 +52,10 @@ class AllocationRedisPortTest extends RedisContainerSupport {
                 RedisKeys.dropFence("c1", SHARDS, 0),
                 // **울타리도 지운다.** 남기면 앞 시험이 올려 둔 임기가 다음 시험의
                 // 발행을 거절해, 회차가 아니라 순서가 결과를 정한다.
-                RedisKeys.SNAPSHOT_FENCE).block(WAIT);
+                RedisKeys.SNAPSHOT_FENCE,
+                // **스냅샷도 지운다.** 발행이 통째 교체라 지금은 자가치유되지만,
+                // 발행 전 load 를 재는 시험이 생기면 순서가 결과를 정한다.
+                RedisKeys.SNAPSHOT).block(WAIT);
     }
 
     private void 줄_세운다(String couponId, long... scores) {
@@ -427,6 +431,12 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     }
 
     /**
+     * 임기 번호는 <b>리더 락이 찍은 마이크로초 벽시계</b>다. 작은 수로 재면 자릿수
+     * 때문에 지수 표기로 저장되는 결함을 못 잡는다 — 그러면 다음 임기가 영영 막힌다.
+     */
+    private static final long 임기 = 1_770_000_000_123_456L;
+
+    /**
      * <b>옛 임기의 발행은 새 임기를 못 덮는다</b> (CY-845). 유령 리더가 옛 시야로
      * 덮으면 전 노드의 대기 수가 뒤로 가고, 0 이 되면 줄이 없는 것으로 읽혀 사다리가
      * 통과로 갈린다 — 줄 선 사람을 추월하는 것이다.
@@ -434,59 +444,103 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     @Test
     @DisplayName("옛_임기의_발행은_안_덮는다")
     void 옛_임기의_발행은_안_덮는다() {
-        port.publish(Map.of("c1", "새 리더", "#credit", "7"), 5).block(WAIT);
+        Map<String, String> 새_시야 = Map.of("c1", "새 리더", "c2", "둘째", "#credit", "7");
+        port.publish(새_시야, 임기).block(WAIT);
 
+        // **필드를 덜 들고 온다.** 같은 집합으로 재면 거절이 남의 쿠폰을 지워도 안 보인다.
         assertThatThrownBy(() ->
-                port.publish(Map.of("c1", "옛 리더", "#credit", "1"), 4).block(WAIT))
+                port.publish(Map.of("c1", "옛 리더", "#credit", "1"), 임기 - 1).block(WAIT))
                 .as("성공으로 읽으면 재료가 안 닿았는데 램프가 오른다")
                 .isInstanceOf(AllocationRedisPort.FencedOutException.class);
 
         assertThat(port.load().block(WAIT))
-                .as("옛 시야가 새 시야를 덮으면 대기 수가 뒤로 간다")
-                .containsEntry("c1", "새 리더");
+                .as("거절은 아무것도 안 건드린다")
+                .containsExactlyInAnyOrderEntriesOf(새_시야);
+        assertThat(redis.opsForValue().get(RedisKeys.SNAPSHOT_FENCE).block(WAIT))
+                .as("거절이 울타리를 되돌리면 다음 틱에 그대로 덮인다")
+                .isEqualTo(Long.toString(임기));
     }
 
-    /**
-     * <b>울타리 표에 수명이 있다.</b> 안 주면 시계가 뒤로 간 리더가 스스로 못 풀린다 —
-     * 새로 뽑힌 정당한 리더의 발행이 영영 거절되고, 그러면 전 노드가 재료를 잃어
-     * 줄 없는 쿠폰이 통째로 통과한다.
-     */
+    /** 거절이 울타리를 낮추면 같은 번호로 다시 시도했을 때 통과한다. */
     @Test
-    @DisplayName("울타리_표는_스스로_풀린다")
-    void 울타리_표는_스스로_풀린다() {
-        port.publish(Map.of("c1", "리더", "#credit", "7"), 5).block(WAIT);
+    @DisplayName("거절을_되풀이해도_계속_막힌다")
+    void 거절을_되풀이해도_계속_막힌다() {
+        port.publish(Map.of("c1", "새 리더", "#credit", "7"), 임기).block(WAIT);
 
-        assertThat(redis.getExpire(RedisKeys.SNAPSHOT_FENCE).block(WAIT))
-                .as("수명이 없으면 시계가 뒤로 간 리더가 영구히 막힌다")
-                .isNotNull()
-                .satisfies(ttl -> assertThat(ttl).isPositive());
+        for (int i = 0; i < 3; i++) {
+            assertThatThrownBy(() ->
+                    port.publish(Map.of("c1", "옛 리더"), 임기 - 1).block(WAIT))
+                    .isInstanceOf(AllocationRedisPort.FencedOutException.class);
+        }
+
+        assertThat(port.load().block(WAIT)).containsEntry("c1", "새 리더");
+    }
+
+    /** 다음 임기는 통과해야 한다. 부등호를 잘못 쓰면 새 리더가 영영 못 쓴다. */
+    @Test
+    @DisplayName("새_임기는_통과한다")
+    void 새_임기는_통과한다() {
+        port.publish(Map.of("c1", "앞 리더", "#credit", "7"), 임기).block(WAIT);
+
+        port.publish(Map.of("c1", "새 리더", "#credit", "9"), 임기 + 1).block(WAIT);
+
+        assertThat(port.load().block(WAIT)).containsEntry("c1", "새 리더");
     }
 
     /** 같은 임기의 재시도는 막지 않는다. 막으면 실패한 발행이 영영 안 된다. */
     @Test
     @DisplayName("같은_임기의_재시도는_통한다")
     void 같은_임기의_재시도는_통한다() {
-        port.publish(Map.of("c1", "먼저", "#credit", "7"), 5).block(WAIT);
+        port.publish(Map.of("c1", "먼저", "#credit", "7"), 임기).block(WAIT);
 
-        port.publish(Map.of("c1", "다시", "#credit", "7"), 5).block(WAIT);
+        port.publish(Map.of("c1", "다시", "#credit", "7"), 임기).block(WAIT);
 
         assertThat(port.load().block(WAIT)).containsEntry("c1", "다시");
     }
 
     /**
+     * <b>울타리 표에 수명이 있고, 만료되면 작은 번호도 통과한다.</b> 없으면 시계가
+     * 뒤로 간 리더가 스스로 못 풀린다 — 새로 뽑힌 정당한 리더의 발행이 영영 거절되고,
+     * 그동안 전 노드가 얼어붙은 재료를 읽는다.
+     */
+    @Test
+    @DisplayName("울타리_표는_스스로_풀린다")
+    void 울타리_표는_스스로_풀린다() {
+        AllocationRedisPort 짧은_수명 = AllocationRedisPort.withSnapshotFenceTtl(
+                redis, SHARDS, Duration.ofMillis(300));
+        짧은_수명.publish(Map.of("c1", "시계가 앞선 리더", "#credit", "7"), 임기).block(WAIT);
+
+        assertThatThrownBy(() ->
+                짧은_수명.publish(Map.of("c1", "정당한 리더"), 임기 - 1).block(WAIT))
+                .as("만료 전에는 막힌다")
+                .isInstanceOf(AllocationRedisPort.FencedOutException.class);
+
+        await().atMost(Duration.ofSeconds(5))
+                .ignoreException(AllocationRedisPort.FencedOutException.class)
+                .untilAsserted(() -> {
+                    짧은_수명.publish(Map.of("c1", "정당한 리더", "#credit", "1"), 임기 - 1)
+                            .block(WAIT);
+                    assertThat(port.load().block(WAIT)).containsEntry("c1", "정당한 리더");
+                });
+    }
+
+    /**
      * <b>0 은 리더가 아니라는 뜻이다.</b> 강등된 노드가 그 값을 들고 나오므로,
      * 안 막으면 리더가 아닌 노드가 전 클러스터의 재료를 갈아 끼운다.
+     *
+     * <p><b>첫 발행으로 낸다.</b> 울타리 값이 이미 있으면 그 비교에 걸려, 이 갈래를
+     * 지워도 시험이 초록이다 — 그리고 표가 없는 상태는 수명이 만드는 정상 상태다.
      */
     @Test
     @DisplayName("리더가_아니면_발행이_안_선다")
     void 리더가_아니면_발행이_안_선다() {
-        port.publish(Map.of("c1", "리더가 쓴 것", "#credit", "7"), 5).block(WAIT);
-
         assertThatThrownBy(() ->
                 port.publish(Map.of("c1", "강등된 노드", "#credit", "1"), 0).block(WAIT))
                 .isInstanceOf(AllocationRedisPort.FencedOutException.class);
 
-        assertThat(port.load().block(WAIT)).containsEntry("c1", "리더가 쓴 것");
+        assertThat(redis.hasKey(RedisKeys.SNAPSHOT).block(WAIT))
+                .as("리더가 아닌 노드는 아무 키도 안 만든다").isFalse();
+        assertThat(redis.hasKey(RedisKeys.SNAPSHOT_FENCE).block(WAIT)).isFalse();
     }
 
     @Test
@@ -711,7 +765,10 @@ class AllocationRedisPortTest extends RedisContainerSupport {
                 RedisKeys.dropFence("c1", SHARDS, 0),
                 // **울타리도 지운다.** 남기면 앞 시험이 올려 둔 임기가 다음 시험의
                 // 발행을 거절해, 회차가 아니라 순서가 결과를 정한다.
-                RedisKeys.SNAPSHOT_FENCE).block(WAIT);
+                RedisKeys.SNAPSHOT_FENCE,
+                // **스냅샷도 지운다.** 발행이 통째 교체라 지금은 자가치유되지만,
+                // 발행 전 load 를 재는 시험이 생기면 순서가 결과를 정한다.
+                RedisKeys.SNAPSHOT).block(WAIT);
         redis.opsForValue().set(RedisKeys.COUPON_POLICY, "해시가-아니다").block(WAIT);
     }
 

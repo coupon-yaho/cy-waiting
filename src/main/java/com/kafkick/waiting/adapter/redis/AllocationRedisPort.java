@@ -91,6 +91,16 @@ public final class AllocationRedisPort implements SnapshotSource {
     /** 표가 견뎌야 하는 리스의 배수. 지연된 명령이 도착할 여유까지 본다. */
     private static final int FENCE_TTL_LEASES = 4;
 
+    /**
+     * 스냅샷 울타리의 <b>하한</b>. 쿠폰별 표와 달리 <b>1시간이 아니다</b>.
+     *
+     * <p>리더가 매 틱 다시 쓰므로 막아야 할 창이 리스 하나 더하기 틱뿐이다. 길게
+     * 두면 시계가 뒤로 간 리더가 그 시간 내내 발행을 못 하고, 그동안 전 노드가
+     * 얼어붙은 재료를 읽는다 — 이 울타리가 막으려던 것보다 나쁘다. 짧아서 생기는
+     * 구멍은 없다: 거절은 수명을 갱신하지 않으므로 만료는 리스를 잃었다는 뜻이다.
+     */
+    private static final Duration MIN_SNAPSHOT_FENCE_TTL = Duration.ofSeconds(10);
+
     /** 값이 JSON 인 것은 계약이다 — 위치 기반 문자열은 필드가 늘면 깨진다. */
     private static final ObjectMapper JSON = new ObjectMapper();
 
@@ -115,6 +125,9 @@ public final class AllocationRedisPort implements SnapshotSource {
 
     /** 울타리 표의 수명. 리스보다 넉넉히 길어야 옛 리더가 사라지기 전에 안 걷힌다. */
     private final Duration fenceTtl;
+
+    /** 스냅샷 울타리의 수명. 쿠폰별 표와 이유가 달라 따로 든다. */
+    private final Duration snapshotFenceTtl;
     private final FailureWindow rejected = FailureWindow.create();
     private final FailureWindow malformed = FailureWindow.create();
 
@@ -122,6 +135,11 @@ public final class AllocationRedisPort implements SnapshotSource {
     private final FailureWindow addressMalformed = FailureWindow.create();
     private final FailureWindow badPolicy = FailureWindow.create();
     private final FailureWindow publishTrim = FailureWindow.create();
+
+    /** 울타리가 발행을 막은 구간. 그 사이 전 노드가 얼어붙은 재료를 읽는다. */
+    private final FailureWindow publishFence = FailureWindow.create();
+
+    private final AtomicLong publishFenced = new AtomicLong();
 
     /**
      * 상한을 넘겨 버린 미상 표시의 누적 수. <b>0 이 아니면 거짓 매진이 나갔다.</b>
@@ -149,14 +167,20 @@ public final class AllocationRedisPort implements SnapshotSource {
                 MIN_FENCE_TTL.compareTo(
                                 properties.leader().lease().multipliedBy(FENCE_TTL_LEASES)) > 0
                         ? MIN_FENCE_TTL
+                        : properties.leader().lease().multipliedBy(FENCE_TTL_LEASES),
+                MIN_SNAPSHOT_FENCE_TTL.compareTo(
+                                properties.leader().lease().multipliedBy(FENCE_TTL_LEASES)) > 0
+                        ? MIN_SNAPSHOT_FENCE_TTL
                         : properties.leader().lease().multipliedBy(FENCE_TTL_LEASES));
     }
 
 
 
     private AllocationRedisPort(ReactiveStringRedisTemplate redis, int shards,
-            Duration fenceTtl) {
+            Duration fenceTtl, Duration snapshotFenceTtl) {
         this.fenceTtl = Objects.requireNonNull(fenceTtl, "fenceTtl 은 필수다");
+        this.snapshotFenceTtl =
+                Objects.requireNonNull(snapshotFenceTtl, "snapshotFenceTtl 은 필수다");
         if (shards < 1) {
             throw new IllegalArgumentException("shards 는 1 이상이어야 한다: %d".formatted(shards));
         }
@@ -165,7 +189,16 @@ public final class AllocationRedisPort implements SnapshotSource {
     }
 
     public static AllocationRedisPort of(ReactiveStringRedisTemplate redis, int shards) {
-        return new AllocationRedisPort(redis, shards, MIN_FENCE_TTL);
+        return new AllocationRedisPort(redis, shards, MIN_FENCE_TTL, MIN_SNAPSHOT_FENCE_TTL);
+    }
+
+    /**
+     * 울타리 수명을 짧게 준다. <b>시험이 스스로 풀리는 것을 재려면 필요하다</b> —
+     * 운영 값으로는 그 갈래를 재는 데 열 초가 걸린다.
+     */
+    static AllocationRedisPort withSnapshotFenceTtl(ReactiveStringRedisTemplate redis,
+            int shards, Duration snapshotFenceTtl) {
+        return new AllocationRedisPort(redis, shards, MIN_FENCE_TTL, snapshotFenceTtl);
     }
 
     /** 상한을 넘겨 버린 미상 표시의 누적 수. 0 이 아니면 거짓 매진이 나갔다. */
@@ -670,7 +703,7 @@ public final class AllocationRedisPort implements SnapshotSource {
         }
         List<String> args = new ArrayList<>(toPublish.size() * 2 + 2);
         args.add(Long.toString(fence));
-        args.add(Long.toString(fenceTtl.toMillis()));
+        args.add(Long.toString(snapshotFenceTtl.toMillis()));
         toPublish.forEach((field, value) -> {
             args.add(field);
             args.add(value);
@@ -678,28 +711,50 @@ public final class AllocationRedisPort implements SnapshotSource {
         int dropped = hash.size() - toPublish.size();
         return redis.execute(PUBLISH,
                         List.of(RedisKeys.SNAPSHOT, RedisKeys.SNAPSHOT_FENCE), args).next()
-                .flatMap(result -> fenced(result)
-                        ? Mono.<List<?>>error(new FencedOutException(fence))
-                        : Mono.just(result))
+                .flatMap(result -> {
+                    long blockedBy = blockedBy(result);
+                    if (blockedBy < 0) {
+                        publishFence.exited().ifPresent(recovered -> log.info(
+                                "발행이 다시 나간다 — {}초 만에, 그동안 {}회차 막혔다",
+                                recovered.elapsedSeconds(), recovered.swallowed()));
+                        return Mono.just(result);
+                    }
+                    publishFenced.incrementAndGet();
+                    // 구간의 첫 건만 남긴다. 막힌 동안 전 노드가 얼어붙은 재료를
+                    // 읽으므로, 이 줄이 그 상태의 유일한 원인 신호다.
+                    if (publishFence.entered()) {
+                        log.error("발행이 울타리에 막혔다 — 이 노드의 임기 {}, 마지막으로 "
+                                + "쓴 임기 {}. 전 노드가 곧 낡은 재료를 읽는다", fence, blockedBy);
+                    }
+                    return Mono.<List<?>>error(new FencedOutException(fence, blockedBy));
+                })
                 .doOnSuccess(done -> watchTrim(dropped))
                 .then();
     }
 
     /**
-     * 실린 것이 없으면 울타리가 거절한 것이다. <b>성공으로 안 읽는다</b> — 읽으면
-     * 재료가 노드에 안 닿았는데 램프가 오르고, 안 버린 표시를 버렸다고 센다.
+     * 울타리가 거절했는가. <b>센티널로 본다</b> — 실린 수 0 으로 보면 값 충돌에
+     * 기대게 되고, 빈 발행을 나중에 허용하는 순간 거절이 조용히 성공으로 읽힌다.
      */
-    private boolean fenced(Object result) {
-        return result instanceof List<?> counts && !counts.isEmpty()
-                && counts.get(0) instanceof Number written && written.longValue() == 0;
+    private long blockedBy(Object result) {
+        if (!(result instanceof List<?> counts) || counts.size() < 3
+                || !(counts.get(0) instanceof Number written) || written.longValue() != -1) {
+            return -1;
+        }
+        return counts.get(2) instanceof Number seen ? seen.longValue() : 0;
+    }
+
+    /** 울타리가 발행을 거절한 회차 수. 0 이 아니면 이 노드의 재료가 안 나갔다. */
+    public double publishFenced() {
+        return publishFenced.get();
     }
 
     /** 옛 임기의 발행이 거절됐다. 이 노드는 더 이상 리더가 아니다. */
     public static final class FencedOutException extends IllegalStateException {
 
-        FencedOutException(long fence) {
-            super("옛 임기의 발행이 거절됐다 — 임기 %d. 이 노드는 리더가 아니다"
-                    .formatted(fence));
+        FencedOutException(long fence, long blockedBy) {
+            super("발행이 울타리에 막혔다 — 이 노드의 임기 %d, 마지막으로 쓴 임기 %d"
+                    .formatted(fence, blockedBy));
         }
     }
 

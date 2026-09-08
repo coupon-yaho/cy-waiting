@@ -40,6 +40,38 @@ run_case "기준 정확히는 충족" 0 "충족" \
 run_case "기준 바로 아래는 미달" 1 "미달" \
     -- "$zero" "$(metrics edge_bad.txt "$(fresh 19979.0)" "$(degraded 21.0)")"
 
+# 이 회차가 몇 건까지 허용하는지 같이 낸다. 근거는 90-decisions 2.21 절에 있다.
+#
+# **찍은 예산이 통과 경계와 같아야 한다.** 예산만큼 열화해도 충족이고 하나 더면
+# 미달이다. 그 둘을 같이 안 재면 표시와 판정이 갈려도 안 잡힌다.
+run_case "예산만큼 열화해도 충족이다" 0 "열화 예산 20건" \
+    -- "$zero" "$(metrics edge_budget.txt "$(fresh 19980.0)" "$(degraded 20.0)")"
+run_case "예산보다 한 건 더면 미달이다" 1 "열화 예산 20건" \
+    -- "$zero" "$(metrics edge_over.txt "$(fresh 19979.0)" "$(degraded 21.0)")"
+
+# **판정 수가 다른 회차도 본다.** 사례가 전부 같은 총계면 그 수를 상수로 박은
+# 판이 통과한다.
+run_case "판정 수가 다르면 예산도 다르다" 0 "열화 예산 100건" \
+    -- "$zero" "$(metrics budget_big.txt "$(fresh 100000.0)")"
+
+# **경계가 정수로 안 떨어지는 크기가 기본이다.** 실측 회차의 총량이 그렇다.
+# 위 사례들만으로는 반올림·올림으로 바꾼 판이 전부 초록이다 — 그러면 21건이라
+# 찍어 놓고 21건이면 미달이 된다.
+run_case "소수 경계에서도 내림이다" 0 "열화 예산 20건" \
+    -- "$zero" "$(metrics budget_frac.txt "$(fresh 20975.0)" "$(degraded 20.0)")"
+run_case "소수 경계의 한 건 더는 미달이다" 1 "열화 예산 20건" \
+    -- "$zero" "$(metrics budget_frac2.txt "$(fresh 20974.0)" "$(degraded 21.0)")"
+
+# **예산 0 이 이 결정의 요지다.** 짧은 창에서 이 기준은 사실상 "낡음 창 0회" 다.
+# 그 수가 검증 밖이면 올림으로 바꾼 판이 1건을 찍고, 1건은 실제로 미달이다.
+JUDGED_TARGET_PCT=99.99 MIN_TOTAL=100 \
+    run_case "예산이 0 인 회차도 있다" 0 "열화 예산 0건" \
+    -- "$zero" "$(metrics budget_zero.txt "$(fresh 1000.0)")"
+
+# 기준을 올리면 예산이 줄어야 한다. 그 목표의 경계에서 판정과 같이 본다.
+JUDGED_TARGET_PCT=99.99 run_case "기준을 올리면 예산이 준다" 0 "열화 예산 2건" \
+    -- "$zero" "$(metrics budget3.txt "$(fresh 19998.0)" "$(degraded 2.0)")"
+
 # **기준을 실제로 쓰는지 본다.** 안 쓰면 어떤 값을 줘도 같은 답이 나온다.
 JUDGED_TARGET_PCT=99.99 run_case "기준을 올리면 미달이 된다" 1 "미달" \
     -- "$zero" "$(metrics edge_ok.txt "$(fresh 19981.0)" "$(degraded 19.0)")"

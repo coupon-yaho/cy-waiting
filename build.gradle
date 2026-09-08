@@ -172,6 +172,14 @@ tasks.named('test') {
                     'plan/06-protection.md')
             .withPropertyName('gatePlans')
             .withPathSensitivity(PathSensitivity.RELATIVE)
+    // **소스 글자도 시험의 입력이다.** 구조 검사는 클래스파일이 아니라 소스를
+    // 읽는다. 우회가 바이트코드를 안 바꾸면 — `import static` 으로 옮기는 것이
+    // 그렇다 — 그레이들이 UP-TO-DATE 로 건너뛰어 그 검사가 안 돈다.
+    inputs.files(sourceSets.main.java.sourceDirectories,
+                    sourceSets.test.java.sourceDirectories,
+                    sourceSets.testFixtures.java.sourceDirectories)
+            .withPropertyName('scannedSources')
+            .withPathSensitivity(PathSensitivity.RELATIVE)
     finalizedBy jacocoTestReport
 }
 

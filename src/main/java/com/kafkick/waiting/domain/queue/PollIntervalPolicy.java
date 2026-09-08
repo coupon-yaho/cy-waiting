@@ -25,8 +25,11 @@ public class PollIntervalPolicy {
     /**
      * 정상 경로의 흔들림 폭. <b>배선값을 여기 둔다</b> — 오류 경로가 이보다 넓어야
      * 한다는 관계를 시험이 재는데, 배선에만 있으면 리터럴 둘의 비교가 된다.
+     *
+     * <p><b>패키지 밖으로 안 낸다.</b> 밖에서 읽으면 그 값으로 제 정책을 만들 수
+     * 있고, 그러면 운영값을 바꿔도 그 자리가 안 따라간다 ({@link #standard()}).
      */
-    public static final double NORMAL_JITTER_RATIO = 0.2;
+    static final double NORMAL_JITTER_RATIO = 0.2;
 
     private static final long MIN_INTERVAL_SEC = 1;
     private static final long MAX_INTERVAL_SEC = 60;
@@ -71,6 +74,22 @@ public class PollIntervalPolicy {
 
     private PollIntervalPolicy(double jitterRatio) {
         this.jitterRatio = jitterRatio;
+    }
+
+    /**
+     * <b>운영이 쓰는 정책.</b> 부르는 쪽마다 만들면 비율이 갈리고, 시험이 제 것을 들면
+     * 운영의 값을 바꿔도 그 시험이 초록으로 남는다.
+     */
+    public static PollIntervalPolicy standard() {
+        return of(NORMAL_JITTER_RATIO);
+    }
+
+    /**
+     * <b>흔들림을 끈 정책.</b> 밴드나 배수가 미는 지점 하나를 결정론적으로 재는
+     * 시험이 쓴다. 운영에는 이 설정이 없다 — 같은 밴드가 같은 초에 돌아온다.
+     */
+    public static PollIntervalPolicy noJitter() {
+        return of(0);
     }
 
     /**

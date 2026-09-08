@@ -67,7 +67,7 @@ public final class AbuseLimitFilter implements WebFilter {
     /** 키 상한. 식별자를 바꿔가며 메모리를 밀어내는 것을 막는다. */
     private static final int MAX_KEYS = 100_000;
 
-    private static final PollIntervalPolicy BACKOFF = PollIntervalPolicy.of(PollIntervalPolicy.NORMAL_JITTER_RATIO);
+    private static final PollIntervalPolicy POLL = PollIntervalPolicy.standard();
 
     private final SecondWindowLimiter limiter = SecondWindowLimiter.withMaxKeys(MAX_KEYS);
     private final TrustedProxies trusted;
@@ -186,6 +186,6 @@ public final class AbuseLimitFilter implements WebFilter {
     private Mono<Void> reject(ServerWebExchange exchange, String kind) {
         meters.counter(METRIC, "key", kind).increment();
         return error.write(exchange, ApiError.Code.RATE_LIMITED,
-                (int) BACKOFF.intervalSec(EtaPolicy.UNKNOWN, random, PollIntervalPolicy.NO_SCALE));
+                (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random, PollIntervalPolicy.NO_SCALE));
     }
 }

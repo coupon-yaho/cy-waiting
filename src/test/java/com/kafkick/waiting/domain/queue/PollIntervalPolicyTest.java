@@ -200,7 +200,7 @@ class PollIntervalPolicyTest {
     @Test
     @DisplayName("가장_가까운_밴드도_한_값에_안_모인다")
     void 가장_가까운_밴드도_한_값에_안_모인다() {
-        PollIntervalPolicy 정책 = PollIntervalPolicy.of(PollIntervalPolicy.NORMAL_JITTER_RATIO);
+        PollIntervalPolicy 정책 = PollIntervalPolicy.standard();
         Random 난수 = new Random(42);
 
         Set<Long> 나온_값 = new HashSet<>();
@@ -224,7 +224,7 @@ class PollIntervalPolicyTest {
     @Test
     @DisplayName("가장_가까운_밴드는_넷_중_하나가_뒤로_간다")
     void 가장_가까운_밴드는_넷_중_하나가_뒤로_간다() {
-        PollIntervalPolicy 정책 = PollIntervalPolicy.of(PollIntervalPolicy.NORMAL_JITTER_RATIO);
+        PollIntervalPolicy 정책 = PollIntervalPolicy.standard();
         Random 난수 = new Random(7);
 
         int 뒤로 = 0;
@@ -266,7 +266,7 @@ class PollIntervalPolicyTest {
     @Test
     @DisplayName("바닥은_세_번째_밴드까지만_문다")
     void 바닥은_세_번째_밴드까지만_문다() {
-        PollIntervalPolicy 정책 = PollIntervalPolicy.of(PollIntervalPolicy.NORMAL_JITTER_RATIO);
+        PollIntervalPolicy 정책 = PollIntervalPolicy.standard();
         Random 난수 = new Random(11);
 
         Set<Long> 셋째 = new HashSet<>();
@@ -285,10 +285,26 @@ class PollIntervalPolicyTest {
     @Test
     @DisplayName("가운데_난수는_밴드_값_그대로다")
     void 가운데_난수는_밴드_값_그대로다() {
-        PollIntervalPolicy 정책 = PollIntervalPolicy.of(PollIntervalPolicy.NORMAL_JITTER_RATIO);
+        PollIntervalPolicy 정책 = PollIntervalPolicy.standard();
 
         assertThat(정책.intervalSec(0, () -> 0.5, PollIntervalPolicy.NO_SCALE)).isEqualTo(1);
         assertThat(정책.intervalSec(10, () -> 0.5, PollIntervalPolicy.NO_SCALE)).isEqualTo(3);
         assertThat(정책.intervalSec(60, () -> 0.5, PollIntervalPolicy.NO_SCALE)).isEqualTo(10);
+    }
+
+    /**
+     * <b>운영이 쓰는 비율을 값으로 못 박는다.</b> 상수를 참조해 비교하면 양변이
+     * 같이 움직여 언제나 통과한다 — 정작 바뀔 만한 것은 그 상수 쪽이다.
+     */
+    @Test
+    @DisplayName("운영_정책의_흔들림_폭은_밴드의_오분의_일이다")
+    void 운영_정책의_흔들림_폭은_밴드의_오분의_일이다() {
+        // 셋째 밴드(10초)로 잰다. 폭이 2초라 1초 바닥이 안 물어 비율이 그대로 보인다.
+        PollIntervalPolicy 정책 = PollIntervalPolicy.standard();
+
+        assertThat(정책.intervalSec(60, () -> 0.0, PollIntervalPolicy.NO_SCALE))
+                .as("아래쪽 끝").isEqualTo(8);
+        assertThat(정책.intervalSec(60, () -> 1.0, PollIntervalPolicy.NO_SCALE))
+                .as("위쪽 끝").isEqualTo(12);
     }
 }

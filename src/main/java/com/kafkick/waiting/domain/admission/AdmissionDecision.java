@@ -87,4 +87,22 @@ public enum AdmissionDecision {
                 || this == REJECT_OVERLOAD
                 || this == RETRY_TOKEN;
     }
+
+    /**
+     * <b>낡은 재료에서만 나오는 값인가.</b> 사다리가 이 셋을 낼 때는 낡음이 조건에
+     * 들어 있다. 값에 대한 함의이지 요청의 이력이 아니다 — <b>덮어쓴 판정에 묻지
+     * 않는다.</b> 보호 차단도 같은 값을 적는데 그쪽 재료는 신선하다.
+     *
+     * <p>값을 늘리면 여기서 컴파일이 깨진다. 다만 사다리 <b>순서</b>를 바꾸는 것은
+     * 안 깨지므로 그때는 사람이 다시 판단한다.
+     */
+    public boolean onlyFromStaleMaterial() {
+        return switch (this) {
+            case PASS_FAIL_OPEN, ENQUEUE_STALE, REJECT_OVERLOAD -> true;
+            case PASS_TOKEN, PASS_BYPASS, PASS_UNDER_CAP, ENQUEUE_CIRCUIT_OPEN,
+                 ENQUEUE_ALWAYS, ENQUEUE_BACKLOG, ENQUEUE_RATE_COUPON,
+                 ENQUEUE_RATE_GLOBAL, ENQUEUE_KEY_SATURATED, REJECT_SOLD_OUT,
+                 REJECT_QUEUE_FULL, RETRY_TOKEN -> false;
+        };
+    }
 }

@@ -667,4 +667,37 @@ class AdmissionDeciderTest {
                 .isNotEqualTo(한산.idleCap(META, IDLE_RATIO));
     }
 
+
+    /**
+     * <b>낡은 재료에서만 나온다는 함의를 사다리에 묶는다</b> (CY-906).
+     *
+     * <p>표시가 값으로 붙으므로, 그 값이 신선한 재료로도 나오게 되면 정상 구간이
+     * 열화로 세어진다. 사다리를 재정렬하면 술어는 그대로인 채 주장만 거짓이 된다 —
+     * 그때 빨개지는 자리가 여기다.
+     */
+    @Test
+    @DisplayName("신선한_재료로는_낡음_전용_판정이_안_나온다")
+    void 신선한_재료로는_낡음_전용_판정이_안_나온다() {
+        AdmissionDecider d = decider();
+        List<CouponState> 상태들 = List.of(
+                CouponStates.idle(500), CouponStates.idle(0),
+                CouponStates.queueing(10, 1_000, 50),
+                CouponStates.queueing(10, 1_000, 5_000),
+                CouponStates.closed(100));
+
+        for (CouponState state : 상태들) {
+            for (boolean 토큰 : List.of(true, false)) {
+                for (boolean 래치 : List.of(true, false)) {
+                    for (CircuitState 서킷 : CircuitState.values()) {
+                        AdmissionDecision 판정 = d.decide(new AdmissionRequest(
+                                "c1", state, META, false, 토큰, 래치, 0, 100, 서킷));
+
+                        assertThat(판정.onlyFromStaleMaterial())
+                                .as("%s · 서킷 %s 에서 %s 가 나왔다", state.runtime(), 서킷, 판정)
+                                .isFalse();
+                    }
+                }
+            }
+        }
+    }
 }

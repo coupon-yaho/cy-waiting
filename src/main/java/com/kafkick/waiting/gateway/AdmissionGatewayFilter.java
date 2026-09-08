@@ -26,10 +26,8 @@ import org.springframework.http.HttpHeaders;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.Duration;
-import java.util.EnumSet;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -78,12 +76,6 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
 
     /** 재료 없이 판정한 요청. {@link #JUDGEMENT} 가 이 표시를 읽는다. */
     private static final String DEGRADED = "waiting.judgement.degraded";
-
-    /** 낡은 재료에서만 나오는 판정. 사다리 4·7번의 결과다. */
-    private static final Set<AdmissionDecision> STALE_DECISIONS = EnumSet.of(
-            AdmissionDecision.PASS_FAIL_OPEN,
-            AdmissionDecision.ENQUEUE_STALE,
-            AdmissionDecision.REJECT_OVERLOAD);
 
     private static final Logger log = LoggerFactory.getLogger(AdmissionGatewayFilter.class);
 
@@ -407,10 +399,10 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
                 nowSec, MAX_ETA_SEC, circuit.now()));
         exchange.getAttributes().put(DECISION, decision);
         count(decision.name());
-        // **낡은 재료로 내린 판정도 재료 없이 판정한 것이다.** 사다리 4·7번이
-        // 그 자리다 — 스냅샷에 있는 쿠폰은 deferred-* 를 안 지나므로, 여기서
-        // 표시하지 않으면 스냅샷이 멎은 구간이 통째로 성공으로 잡힌다.
-        if (STALE_DECISIONS.contains(decision)) {
+        // **낡은 재료로 내린 판정도 재료 없이 판정한 것이다.** 스냅샷에 있는 쿠폰은
+        // deferred-* 를 안 지나므로, 여기서 표시하지 않으면 스냅샷이 멎은 구간이
+        // 통째로 성공으로 잡힌다. 어느 판정이 그 자리인지는 판정값 자신이 안다.
+        if (decision.onlyFromStaleMaterial()) {
             degraded(exchange);
         }
         return route(exchange, chain, decision, couponId, state, view.snapshot().meta());

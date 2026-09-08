@@ -1603,6 +1603,27 @@ class AdmissionGatewayFilterTest {
     }
 
     /**
+     * <b>끊은 것은 신선한 판정이다</b> (CY-899 · CY-906).
+     *
+     * <p>이 출구가 적는 값은 낡은 재료에서만 나오는 값과 같다. 최종 판정에 그 술어를
+     * 물으면 큐만 죽은 장애가 통째로 열화가 되고, 1분짜리 장애가 예산을 태운다.
+     */
+    @Test
+    @DisplayName("신선한_재료로_끊은_요청은_열화가_아니다")
+    void 신선한_재료로_끊은_요청은_열화가_아니다() {
+        // 전역 몫이 회복 램프의 바닥이면 여는 몫이 0 이라 첫 요청부터 막는다.
+        스냅샷을_심는다(CouponStates.queueing(1, 1_000, 100), new SnapshotMeta(1, 1));
+        줄.터진다(new IllegalStateException("레디스가 죽었다"));
+
+        MockServerWebExchange 막힌_요청 = 태운다(COUPON);
+
+        assertThat(막힌_요청.getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(품질("fresh")).as("재료를 갖고 판정했다").isEqualTo(1.0);
+        assertThat(품질("degraded")).as("여기를 열화로 세면 예산이 통째로 탄다").isZero();
+    }
+
+    /**
      * <b>차례가 온 사람은 그 값으로 적는다.</b> 과부하 거절로 뭉개면 뒤에 읽는 쪽이
      * 그를 못 가르고, 가르는 읽기가 덮어쓰기보다 먼저라는 순서도 같이 깨진다.
      */

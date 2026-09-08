@@ -15,6 +15,7 @@ import com.kafkick.waiting.control.QueueSweeper;
 import java.util.concurrent.ConcurrentHashMap;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -110,6 +111,9 @@ public final class AllocationRedisPort implements SnapshotSource {
     private static final RedisScript<List> SWEEP =
             RedisScript.of(new ClassPathResource("redis/sweep.lua"), List.class);
 
+    private static final RedisScript<Long> SEAL_APPLY_FENCE =
+            RedisScript.of(new ClassPathResource("redis/apply_fence_seal.lua"), Long.class);
+
     private static final RedisScript<Long> DROP_QUEUE =
             RedisScript.of(new ClassPathResource("redis/drop_queue.lua"), Long.class);
 
@@ -144,8 +148,6 @@ public final class AllocationRedisPort implements SnapshotSource {
     /** 울타리가 막은 입장 적용 회차 수. 0 이 아니면 이 노드가 사람을 못 들였다. */
     private final AtomicLong applyFenced = new AtomicLong();
 
-    /** 적용이 막힌 구간. 그 사이 그 쿠폰의 줄이 안 빠진다. */
-    private final FailureWindow applyFence = FailureWindow.create();
 
     /**
      * 상한을 넘겨 버린 미상 표시의 누적 수. <b>0 이 아니면 거짓 매진이 나갔다.</b>
@@ -496,7 +498,7 @@ public final class AllocationRedisPort implements SnapshotSource {
         }
         return Flux.fromIterable(keys)
                 .flatMap(key -> redis.opsForZSet().size(key).defaultIfEmpty(0L))
-                .reduce(0L, Long::sum);
+                .reduce(0L, (a, b) -> a + b);
     }
 
     /**
@@ -672,31 +674,49 @@ public final class AllocationRedisPort implements SnapshotSource {
      *
      * @param fence 이 회차의 임기. 옛 임기는 임계를 안 올린다. 0 이면 리더가 아니다
      */
+    /**
+     * 활성 쿠폰의 문을 새 임기로 잠근다. <b>승계 직후에 부른다</b> — 적용만으로는
+     * 그 쿠폰에 크레딧이 갈 때까지 표에 옛 임기가 남고, 그 창에 유령이 먼저
+     * 도착하면 자기 번호와 같아서 통과한다.
+     */
+    public Mono<Long> sealApplyFences(Collection<String> couponIds, long fence) {
+        if (fence <= 0 || couponIds.isEmpty()) {
+            return Mono.just(0L);
+        }
+        return Flux.fromIterable(couponIds)
+                .flatMap(couponId -> redis.execute(SEAL_APPLY_FENCE,
+                                List.of(RedisKeys.applyFence(couponId, shards, 0)),
+                                List.of(Long.toString(fence),
+                                        Long.toString(fenceTtl.toMillis())))
+                        .next()
+                        .map(sealed -> 1L)
+                        // 하나가 실패해도 나머지는 잠근다. 못 잠근 쿠폰은 적용이
+                        // 그 자리에서 다시 막는다 — 안 잠긴 채로 지나가지 않는다.
+                        .onErrorReturn(0L), MAX_CONCURRENT_READS)
+                .reduce(0L, (a, b) -> a + b);
+    }
+
     public Mono<Long> apply(Grant grant, long fence) {
         return redis.execute(APPLY,
                         List.of(RedisKeys.queue(grant.couponId(), shards, 0),
                                 RedisKeys.admitted(grant.couponId(), shards, 0),
                                 RedisKeys.applyFence(grant.couponId(), shards, 0)),
                         List.of(Long.toString(grant.credit()), Long.toString(fence),
-                                Long.toString(snapshotFenceTtl.toMillis())))
+                                Long.toString(fenceTtl.toMillis())))
                 .next()
-                .map(result -> {
+                .flatMap(result -> {
                     List<?> counts = (List<?>) result;
-                    // 울타리가 막으면 임계 자리에 -1 이 온다. 스크립트가 만들 수 있는
-                    // 정상 임계는 -1 이 아니다 — 그 값은 "아직 아무도 안 들였다" 다.
-                    if ("-1".equals(String.valueOf(counts.get(0)))
-                            && Long.parseLong(String.valueOf(counts.get(1))) == 0) {
-                        applyFenced.incrementAndGet();
-                        if (applyFence.entered()) {
-                            log.error("입장 적용이 울타리에 막혔다 — 이 노드의 임기 {}. "
-                                    + "그 사이 줄이 안 빠진다", fence);
-                        }
-                        return 0L;
+                    // **칸 수로 가른다.** {-1, 0} 은 임계가 없고 들일 사람도 없는
+                    // 정상 회차와 같은 값이라, 그것으로 가르면 새 쿠폰과 빈 큐가
+                    // 거절로 오독된다.
+                    if (counts.size() < 3) {
+                        return Mono.just(Long.parseLong(String.valueOf(counts.get(1))));
                     }
-                    applyFence.exited().ifPresent(recovered -> log.info(
-                            "입장 적용이 다시 선다 — {}초 만에, 그동안 {}회차 막혔다",
-                            recovered.elapsedSeconds(), recovered.swallowed()));
-                    return Long.parseLong(String.valueOf(counts.get(1)));
+                    applyFenced.incrementAndGet();
+                    // **오류로 올린다.** 회차가 몫을 0 으로 접는 자리가 이미 있고,
+                    // 값으로 0 을 내면 임계가 안 올랐는데 몫만 실려 나간다.
+                    return Mono.error(new FencedOutException(grant.couponId(), fence,
+                            Long.parseLong(String.valueOf(counts.get(2)))));
                 });
     }
 
@@ -787,6 +807,12 @@ public final class AllocationRedisPort implements SnapshotSource {
         FencedOutException(long fence, long blockedBy) {
             super("발행이 울타리에 막혔다 — 이 노드의 임기 %d, 마지막으로 쓴 임기 %d"
                     .formatted(fence, blockedBy));
+        }
+
+        FencedOutException(String couponId, long fence, long blockedBy) {
+            super("입장 적용이 울타리에 막혔다 — 쿠폰 %s, 이 노드의 임기 %d, "
+                    .formatted(couponId, fence)
+                    + "마지막으로 들인 임기 %d".formatted(blockedBy));
         }
     }
 

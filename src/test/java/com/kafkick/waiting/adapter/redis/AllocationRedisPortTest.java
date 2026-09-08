@@ -431,12 +431,71 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         줄_세운다("c1", 10, 20, 30, 40, 50);
         port.apply(new Grant("c1", 2), 임기).block(WAIT);
 
-        Long 유령이_들인_수 = port.apply(new Grant("c1", 2), 임기 - 1).block(WAIT);
+        assertThatThrownBy(() -> port.apply(new Grant("c1", 2), 임기 - 1).block(WAIT))
+                .as("값으로 0 을 내면 임계가 안 올랐는데 몫만 실려 나간다")
+                .isInstanceOf(AllocationRedisPort.FencedOutException.class);
 
-        assertThat(유령이_들인_수).as("들인 사람이 없어야 한다").isZero();
         assertThat(redis.opsForValue().get(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT))
                 .as("임계가 두 번 올라가면 그 초의 입장이 예산의 두 배다")
                 .isEqualTo("20");
+    }
+
+    /**
+     * <b>유령이 먼저 도착해도 막힌다</b> (CY-892). 적용만으로는 그 쿠폰에 크레딧이
+     * 갈 때까지 표에 옛 임기가 남아, 새 리더가 만지기 전이면 유령이 자기 번호와
+     * 같아서 통과한다 — 그래서 승계 때 문을 먼저 잠근다.
+     */
+    @Test
+    @DisplayName("승계_때_잠근_문은_유령이_먼저_와도_막는다")
+    void 승계_때_잠근_문은_유령이_먼저_와도_막는다() {
+        줄_세운다("c1", 10, 20, 30, 40, 50);
+        port.apply(new Grant("c1", 2), 임기 - 1).block(WAIT);
+        // 새 리더가 그 쿠폰을 아직 안 만졌다. 승계 때 문만 잠근 상태다.
+        port.sealApplyFences(List.of("c1"), 임기).block(WAIT);
+
+        assertThatThrownBy(() -> port.apply(new Grant("c1", 2), 임기 - 1).block(WAIT))
+                .isInstanceOf(AllocationRedisPort.FencedOutException.class);
+
+        assertThat(redis.opsForValue().get(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT))
+                .isEqualTo("20");
+    }
+
+    /**
+     * <b>잠금은 덮어쓴다.</b> 큰 값만 쓰면 시계가 뒤로 간 리더가 승계해도 옛 표를
+     * 못 넘어 그 쿠폰의 줄이 수명 내내 안 빠진다. 락을 쥔 것이 권위다.
+     */
+    @Test
+    @DisplayName("잠금은_작은_번호로도_덮는다")
+    void 잠금은_작은_번호로도_덮는다() {
+        줄_세운다("c1", 10, 20, 30, 40, 50);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+
+        port.sealApplyFences(List.of("c1"), 임기 - 100).block(WAIT);
+
+        assertThat(port.apply(new Grant("c1", 2), 임기 - 100).block(WAIT))
+                .as("시계가 뒤로 간 새 리더도 들일 수 있어야 한다").isEqualTo(2);
+    }
+
+    /** 리더가 아니면 안 잠근다. 강등된 노드가 문을 제 번호로 되돌리면 안 된다. */
+    @Test
+    @DisplayName("리더가_아니면_안_잠근다")
+    void 리더가_아니면_안_잠근다() {
+        assertThat(port.sealApplyFences(List.of("c1"), 0).block(WAIT)).isZero();
+
+        assertThat(redis.hasKey(RedisKeys.applyFence("c1", SHARDS, 0)).block(WAIT)).isFalse();
+    }
+
+    /**
+     * <b>정상 회차를 거절로 안 읽는다.</b> 임계가 없고 들일 사람도 없으면 스크립트가
+     * 거절과 같은 값을 내는데, 칸 수로 안 가르면 새 쿠폰과 빈 큐가 거절이 된다.
+     */
+    @Test
+    @DisplayName("빈_큐와_새_쿠폰은_거절이_아니다")
+    void 빈_큐와_새_쿠폰은_거절이_아니다() {
+        assertThat(port.apply(new Grant("c1", 0), 임기).block(WAIT))
+                .as("크레딧 0 은 정상 회차다").isZero();
+        assertThat(port.apply(new Grant("c1", 3), 임기).block(WAIT))
+                .as("큐가 빈 것도 정상 회차다").isZero();
     }
 
     /** 다음 임기는 통과해야 한다. 부등호를 잘못 쓰면 새 리더가 영영 못 들인다. */
@@ -460,7 +519,8 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     void 리더가_아니면_적용이_안_선다() {
         줄_세운다("c1", 10, 20, 30);
 
-        assertThat(port.apply(new Grant("c1", 2), 0).block(WAIT)).isZero();
+        assertThatThrownBy(() -> port.apply(new Grant("c1", 2), 0).block(WAIT))
+                .isInstanceOf(AllocationRedisPort.FencedOutException.class);
 
         assertThat(redis.hasKey(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT))
                 .as("리더가 아닌 노드는 임계를 안 만든다").isFalse();

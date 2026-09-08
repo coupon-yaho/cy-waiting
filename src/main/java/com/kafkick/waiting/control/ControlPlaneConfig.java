@@ -16,6 +16,8 @@ import reactor.core.publisher.Mono;
 import java.time.Instant;
 import java.util.Optional;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -31,6 +33,8 @@ import reactor.core.scheduler.Schedulers;
 @ConditionalOnProperty(name = "waiting.scheduler.enabled", havingValue = "true",
         matchIfMissing = true)
 public class ControlPlaneConfig {
+
+    private static final Logger log = LoggerFactory.getLogger(ControlPlaneConfig.class);
 
     /** 이탈 기록 보관. <b>등록도 같은 값을 읽는다</b> — 갈리면 판정이 갈린다. */
     private static final long GRACE_SEC = GraceRetention.SECONDS;
@@ -226,8 +230,12 @@ public class ControlPlaneConfig {
      */
     Runnable onLeadershipGained(CapacityCollector collector, CapacityRefresh capacity,
             SoldOutCleanup cleanup, QueueSweeper sweeper, AllocationRound round,
-            SnapshotHolder holder, GatewayRegistry registry) {
+            SnapshotHolder holder, GatewayRegistry registry, Runnable sealApplyFences) {
         return () -> {
+            // **문을 먼저 잠근다.** 적용만으로는 그 쿠폰에 크레딧이 갈 때까지 표에
+            // 옛 임기가 남고, 그 창에 유령이 먼저 도착하면 자기 번호와 같아서
+            // 통과한다 — 같은 초에 두 리더의 몫이 다 나가면 초과 발급이다.
+            sealApplyFences.run();
             collector.leadershipAcquired();
             capacity.leadershipChanged();
             // **평활화 이월도 여기서 버린다.** 회차 안은 리더일 때만 돌아 비리더 구간을
@@ -244,6 +252,19 @@ public class ControlPlaneConfig {
             // 다시 서므로 순번이 뒤로 간다.
             sweeper.leadershipAcquired();
         };
+    }
+
+    /**
+     * 승계 직후 활성 쿠폰의 문을 잠근다. <b>못 잠가도 회차는 돈다</b> — 안 잠긴
+     * 쿠폰은 적용이 그 자리에서 다시 막으므로, 여기서 막으면 회복만 늦어진다.
+     */
+    Runnable sealApplyFences(AllocationRedisPort port, SnapshotHolder holder,
+            Leadership leadership) {
+        return () -> port
+                .sealApplyFences(holder.current().coupons().keySet(), leadership.fence())
+                .subscribe(sealed -> { },
+                        e -> log.warn("입장 울타리를 못 잠갔다 — 적용이 그 자리에서 "
+                                + "다시 막는다", e));
     }
 
     /**
@@ -275,14 +296,15 @@ public class ControlPlaneConfig {
     AllocationScheduler allocationLoop(ControlPlaneProperties properties, Leadership leadership,
             AllocationRound round, CapacityRefresh capacity, CapacityCollector collector,
             TunablesRefresh tunables, Scheduler allocationScheduler, SoldOutCleanup cleanup,
-            QueueSweeper sweeper, SnapshotHolder holder, GatewayRegistry registry) {
+            QueueSweeper sweeper, SnapshotHolder holder, GatewayRegistry registry,
+            AllocationRedisPort port) {
         return AllocationScheduler.of(properties.scheduler().tick(),
                 properties.scheduler().firstTickDelay(),
                 // **승계는 유예를 처음부터 준다.** 비리더 구간에 얼어 있던 실패
                 // 횟수를 이어 쓰면 재승계 첫 회차가 곧바로 크레딧을 깎는다.
                 LeadershipEdge.of(leadership::isLeader,
                         onLeadershipGained(collector, capacity, cleanup, sweeper, round, holder,
-                                registry),
+                                registry, sealApplyFences(port, holder, leadership)),
                         capacity::leadershipChanged),
                 // **운영 값을 먼저 읽고 배분한다.** 순서가 뒤면 방금 바꾼 값이
                 // 한 틱 늦게 나가고, 장애 중의 한 틱은 길다.

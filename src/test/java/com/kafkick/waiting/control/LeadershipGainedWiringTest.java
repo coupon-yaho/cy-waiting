@@ -178,6 +178,8 @@ class LeadershipGainedWiringTest {
                 // 재료가 없으면 발행 몫을 모른다 — 램프는 그때 손대지 않는다.
                 SnapshotHolder.of(Duration.ofSeconds(3), Duration.ofSeconds(10),
                         Clock.systemUTC()),
-                GatewayRegistry.of(1, 3));
+                GatewayRegistry.of(1, 3),
+                // 잠금은 별도 배선이라 여기서는 안 잰다.
+                () -> { });
     }
 }

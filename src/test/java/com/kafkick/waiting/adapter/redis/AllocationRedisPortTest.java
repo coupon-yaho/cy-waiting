@@ -418,12 +418,58 @@ class AllocationRedisPortTest extends RedisContainerSupport {
                 .containsOnly(entry("c1", 70L));
     }
 
+    /**
+     * <b>옛 임기의 적용은 임계를 안 올린다</b> (CY-892). 발행에는 울타리를 걸었는데
+     * 사람을 들이는 쓰기에는 문이 없었다 — 유령 리더가 깨어나면 같은 초에 두 리더의
+     * 몫이 다 나가 그 초의 입장 인원이 예산의 두 배다. 불변식 2 다.
+     */
+    @Test
+    @DisplayName("옛_임기의_적용은_안_들인다")
+    void 옛_임기의_적용은_안_들인다() {
+        줄_세운다("c1", 10, 20, 30, 40, 50);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+
+        Long 유령이_들인_수 = port.apply(new Grant("c1", 2), 임기 - 1).block(WAIT);
+
+        assertThat(유령이_들인_수).as("들인 사람이 없어야 한다").isZero();
+        assertThat(redis.opsForValue().get(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT))
+                .as("임계가 두 번 올라가면 그 초의 입장이 예산의 두 배다")
+                .isEqualTo("20");
+    }
+
+    /** 다음 임기는 통과해야 한다. 부등호를 잘못 쓰면 새 리더가 영영 못 들인다. */
+    @Test
+    @DisplayName("새_임기의_적용은_통한다")
+    void 새_임기의_적용은_통한다() {
+        줄_세운다("c1", 10, 20, 30, 40, 50);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+
+        assertThat(port.apply(new Grant("c1", 2), 임기 + 1).block(WAIT)).isEqualTo(2);
+        assertThat(redis.opsForValue().get(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT))
+                .isEqualTo("40");
+    }
+
+    /**
+     * <b>0 은 리더가 아니라는 뜻이다.</b> 첫 적용으로 낸다 — 울타리 값이 이미 있으면
+     * 그 비교에 걸려 이 갈래를 지워도 초록이다.
+     */
+    @Test
+    @DisplayName("리더가_아니면_적용이_안_선다")
+    void 리더가_아니면_적용이_안_선다() {
+        줄_세운다("c1", 10, 20, 30);
+
+        assertThat(port.apply(new Grant("c1", 2), 0).block(WAIT)).isZero();
+
+        assertThat(redis.hasKey(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT))
+                .as("리더가 아닌 노드는 임계를 안 만든다").isFalse();
+    }
+
     @Test
     @DisplayName("적용하면_임계가_올라간다")
     void 적용하면_임계가_올라간다() {
         줄_세운다("c1", 10, 20, 30);
 
-        Long 들인_인원 = port.apply(new Grant("c1", 2)).block(WAIT);
+        Long 들인_인원 = port.apply(new Grant("c1", 2), 임기).block(WAIT);
 
         assertThat(들인_인원).isEqualTo(2);
         assertThat(redis.opsForValue().get(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT))

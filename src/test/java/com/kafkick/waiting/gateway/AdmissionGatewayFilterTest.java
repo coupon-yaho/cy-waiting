@@ -1228,6 +1228,52 @@ class AdmissionGatewayFilterTest {
                 .as("재료가 없어도 자리는 채운다").isEqualTo(1.0);
     }
 
+    /**
+     * <b>판정을 못 거친 갈래도 차례가 온 사람을 알아봐야 한다</b> (CY-896).
+     *
+     * <p>보호 차단과 폴백은 판정값으로 그 사람을 가른다. 이 갈래는 판정기를 안 거쳐
+     * 그 값이 비고, 그러면 줄에 안 선 사람으로 읽혀 1초 대신 24~60초를 받는다.
+     * 토큰 수명이 150초라 두세 번이면 죽고 줄 맨 뒤에 새 순번으로 다시 선다.
+     */
+    @Test
+    @DisplayName("첫_틱_전에도_차례가_온_사람을_알아본다")
+    void 첫_틱_전에도_차례가_온_사람을_알아본다() {
+        // 스냅샷을 안 심는다. 홀더가 첫 틱 전이다.
+        MockServerWebExchange 토큰을_든_요청 = 토큰_요청(MEMBER);
+
+        filter.filter(토큰을_든_요청, e -> Mono.empty()).block();
+
+        assertThat(토큰을_든_요청.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .as("비어 있으면 줄에 안 선 사람으로 읽힌다")
+                .isEqualTo(AdmissionDecision.PASS_TOKEN);
+    }
+
+    /** 낡은 재료 갈래도 같다. 그쪽은 배수까지 실려 더 멀리 밀린다. */
+    @Test
+    @DisplayName("낡은_재료에서도_차례가_온_사람을_알아본다")
+    void 낡은_재료에서도_차례가_온_사람을_알아본다() {
+        // 재료가 낡고 그 쿠폰이 스냅샷에 없어야 이연 갈래를 탄다.
+        holder.replace(new GatewaySnapshot(Map.of(COUPON, CouponStates.idle(1_000)),
+                SnapshotMetas.overBudget(META.globalCredit(), 1, 1.5), 지금.minusSeconds(60)));
+
+        MockServerWebExchange 토큰을_든_요청 = 토큰_요청("없는쿠폰", MEMBER);
+
+        filter.filter(토큰을_든_요청, e -> Mono.empty()).block();
+
+        assertThat(토큰을_든_요청.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .isEqualTo(AdmissionDecision.PASS_TOKEN);
+    }
+
+    /** 토큰이 없으면 그대로 비운다. 없는 자격을 지어내면 그가 줄을 통째로 건너뛴다. */
+    @Test
+    @DisplayName("토큰_없는_요청은_판정을_안_지어낸다")
+    void 토큰_없는_요청은_판정을_안_지어낸다() {
+        MockServerWebExchange exchange = 태운다("없는쿠폰", "회원");
+
+        assertThat(exchange.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .isNotEqualTo(AdmissionDecision.PASS_TOKEN);
+    }
+
     @Test
     @DisplayName("미지_쿠폰을_만_번_불러도_줄을_안_만든다")
     void 미지_쿠폰을_만_번_불러도_줄을_안_만든다() {
@@ -1652,14 +1698,18 @@ class AdmissionGatewayFilterTest {
 
     /** 차례가 온 사람의 요청. 격벽 상한이 배분된 몫에서 나오는지는 이 경로로 잰다. */
     private MockServerWebExchange 토큰_요청(String memberId) {
+        return 토큰_요청(COUPON, memberId);
+    }
+
+    private MockServerWebExchange 토큰_요청(String couponId, String memberId) {
         MockServerWebExchange exchange = MockServerWebExchange.from(
                 MockServerHttpRequest.method(HttpMethod.POST,
-                        "/api/v1/coupons/" + COUPON + "/issue")
+                        "/api/v1/coupons/" + couponId + "/issue")
                         .header("X-Member-Id", memberId)
-                        .header("Entry-Token", entryTokens.issue(COUPON, memberId, 지금)));
+                        .header("Entry-Token", entryTokens.issue(couponId, memberId, 지금)));
         exchange.getAttributes().put(
                 ServerWebExchangeUtils.URI_TEMPLATE_VARIABLES_ATTRIBUTE,
-                Map.of("couponId", COUPON));
+                Map.of("couponId", couponId));
         return exchange;
     }
 

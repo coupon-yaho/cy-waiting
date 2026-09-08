@@ -56,7 +56,7 @@ public final class LeaderRedisPort {
      * 스플릿 브레인을 사후에 조사할 수 없다.
      */
     public Mono<LeaderLock> acquire(String ownerId) {
-        return redis.execute(ACQUIRE, List.of(RedisKeys.LEADER),
+        return redis.execute(ACQUIRE, List.of(RedisKeys.LEADER, RedisKeys.LEADER_GENERATION),
                         List.of(ownerId, Long.toString(lease.toMillis())))
                 .next()
                 .map(raw -> toLock((List<?>) raw));

@@ -42,6 +42,7 @@ class LeaderElectionTest extends RedisContainerSupport {
      */
     private static final Duration POLL = Duration.ofSeconds(1);
     private static final String LEADER = RedisKeys.LEADER;
+    private static final String GEN = RedisKeys.LEADER_GENERATION;
     /**
      * 스크립트에 넘기는 리스. <b>초 단위로 둔다</b> — 여기서 파생시키는 관측 창이
      * 서브초가 되면 레디스 왕복 한 번이 창보다 길어져, 결함이 아니라 부하에 진다.
@@ -58,7 +59,7 @@ class LeaderElectionTest extends RedisContainerSupport {
     void 준비() {
         acquire = RedisScript.of(new ClassPathResource("redis/leader_acquire.lua"), List.class);
         release = RedisScript.of(new ClassPathResource("redis/leader_release.lua"), Long.class);
-        redis.delete(LEADER).block(WAIT);
+        redis.delete(LEADER, GEN).block(WAIT);
     }
 
     @SuppressWarnings("unchecked")
@@ -68,8 +69,8 @@ class LeaderElectionTest extends RedisContainerSupport {
 
     @SuppressWarnings("unchecked")
     private List<Object> tryAcquire(String owner, String lease) {
-        return (List<Object>) redis.execute(acquire, List.of(LEADER), List.of(owner, lease))
-                .blockFirst(WAIT);
+        return (List<Object>) redis.execute(acquire, List.of(LEADER, GEN),
+                List.of(owner, lease)).blockFirst(WAIT);
     }
 
     private long releaseBy(String owner) {
@@ -99,6 +100,64 @@ class LeaderElectionTest extends RedisContainerSupport {
 
     private long fence(List<Object> r) {
         return Long.parseLong(String.valueOf(r.get(3)));
+    }
+
+    /** 레디스 서버의 마이크로초. 옛 형식의 펜스 번호가 이 크기였다. */
+    private long serverMicros() {
+        Long millis = redis.execute(connection -> connection.serverCommands().time())
+                .blockFirst(WAIT);
+        return millis * 1000L;
+    }
+
+    /**
+     * <b>번호는 세는 값이지 시계가 아니다</b> (CY-893).
+     *
+     * <p>벽시계로 매기면 승계 사이의 간격만큼 벌어지고, 시계가 뒤로 가면 새 리더의
+     * 번호가 옛 리더보다 작아진다. 세는 값이면 다음 임기가 정확히 하나 크다.
+     */
+    @Test
+    @DisplayName("임기는_하나씩_오른다")
+    void 임기는_하나씩_오른다() {
+        long 첫_임기 = fence(tryAcquire("node-1"));
+        releaseBy("node-1");
+
+        assertThat(fence(tryAcquire("node-2")) - 첫_임기)
+                .as("시계로 매기면 승계 사이의 마이크로초만큼 벌어진다")
+                .isOne();
+    }
+
+    /**
+     * <b>세는 값을 처음 만들 때 시계로 씨앗을 준다</b> (CY-893).
+     *
+     * <p>1 부터 세면 남아 있는 옛 울타리 표(마이크로초 벽시계)를 못 넘어, 새 리더가
+     * 자기 임기로 들어가려 할 때마다 그 표에 막힌다.
+     */
+    @Test
+    @DisplayName("세는_값이_없으면_시계로_씨앗을_준다")
+    void 세는_값이_없으면_시계로_씨앗을_준다() {
+        long 시작 = serverMicros();
+
+        assertThat(fence(tryAcquire("node-1")))
+                .as("옛 울타리 표가 마이크로초라 그보다 커야 넘는다")
+                .isGreaterThan(시작);
+    }
+
+    /**
+     * <b>세는 값에 수명을 안 준다</b> (CY-893).
+     *
+     * <p>사라지면 다음 임기가 씨앗부터 다시 시작한다. 그 사이 시계가 뒤로 가 있으면
+     * 새 임기가 옛 임기보다 작아져, 세대 번호로 바꾼 이유가 사라진다.
+     */
+    @Test
+    @DisplayName("세는_값은_락이_풀려도_남는다")
+    void 세는_값은_락이_풀려도_남는다() {
+        tryAcquire("node-1");
+        releaseBy("node-1");
+
+        assertThat(redis.hasKey(GEN).block(WAIT)).as("지워지면 씨앗부터 다시 센다").isTrue();
+        assertThat(redis.getExpire(GEN).block(WAIT))
+                .as("수명이 붙으면 만료 뒤 임기가 되감긴다")
+                .isEqualTo(Duration.ZERO);
     }
 
     /**

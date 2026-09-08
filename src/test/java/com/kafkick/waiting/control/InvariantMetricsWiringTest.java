@@ -56,6 +56,9 @@ class InvariantMetricsWiringTest {
                 // 재고 키를 잃은 사실과, 그것이 거짓 매진으로 나간 사실 (CY-702).
                 .contains("waiting_allocation_stock_unknown_ticks_total")
                 .contains("waiting_snapshot_stock_unknown_dropped_total")
+                // **울타리 거절도 나와야 한다.** 진입 로그는 구간의 첫 건뿐이라
+                // 막힌 구간의 길이를 그것만으로는 못 센다.
+                .contains("waiting_snapshot_publish_fenced_total")
                 // 서킷을 보고 있는가 (F3 · CY-788). 안 보는 것과 닫혀 있는 것이
                 // 같은 값을 내므로, 이 게이지가 없으면 배선이 빠진 것을 못 안다.
                 .contains("waiting_circuit_wired")

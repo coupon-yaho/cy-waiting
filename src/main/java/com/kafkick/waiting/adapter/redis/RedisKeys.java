@@ -11,6 +11,13 @@ public final class RedisKeys {
     /** 리더가 발행하는 판정 재료. 각 노드가 주기적으로 받아 간다. */
     public static final String SNAPSHOT = "gw:snapshot";
 
+    /**
+     * 그 해시를 마지막으로 쓴 임기. <b>해시 태그가 스냅샷과 같은 슬롯에 묶는다</b> —
+     * 태그 없는 {@code gw:snapshot} 은 키 전체로 슬롯을 정하므로 태그 안의 글자가
+     * 같으면 두 키가 같은 슬롯이다 (RD-2).
+     */
+    public static final String SNAPSHOT_FENCE = "{gw:snapshot}:fence";
+
     /** 살아 있는 게이트웨이 목록. 배분의 분모가 여기서 나온다. */
     public static final String INSTANCES = "gw:instances";
 

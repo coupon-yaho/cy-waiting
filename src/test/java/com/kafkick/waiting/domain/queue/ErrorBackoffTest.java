@@ -4,7 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Random;
+import java.util.Set;
 import java.util.random.RandomGenerator;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -169,11 +172,19 @@ class ErrorBackoffTest {
                 .isEqualTo(ErrorBackoff.BASE_SEC);
     }
 
-    /** 바닥이 있어도 상한은 넘지 않는다. 넘으면 회복 뒤에도 아무도 안 돌아온다. */
+    /**
+     * 바닥이 있어도 상한은 넘지 않는다. 넘으면 회복 뒤에도 아무도 안 돌아온다.
+     *
+     * <p><b>상한에 붙이지도 않는다</b> (CY-904). 붙이면 위로 흔들 자리가 없어 폭이
+     * 0 이 되고, 하필 바닥이 가장 높은 구간에서 전원이 같은 초에 돌아온다.
+     */
     @Test
     @DisplayName("바닥이_커도_상한을_안_넘는다")
     void 바닥이_커도_상한을_안_넘는다() {
-        assertThat(정책.retryAfterSec(1, 9_999, () -> 0.0)).isEqualTo(ErrorBackoff.MAX_SEC);
+        assertThat(정책.retryAfterSec(1, 9_999, () -> 0.0))
+                .as("흔들 자리를 남긴다").isEqualTo(ErrorBackoff.MAX_SEC - 1);
+        assertThat(정책.retryAfterSec(1, 9_999, () -> 1.0))
+                .as("그 자리가 상한을 안 넘는다").isEqualTo(ErrorBackoff.MAX_SEC);
     }
 
     /**
@@ -267,5 +278,124 @@ class ErrorBackoffTest {
                     .isGreaterThanOrEqualTo(직전);
             직전 = 지금;
         }
+    }
+
+    /**
+     * <b>바닥이 상한에 닿아도 흩어진다</b> (CY-904).
+     *
+     * <p><b>지금은 못 닿는 입력이다</b> — 아래 시험이 그 사실을 못 박는다. 정상
+     * 경로의 천장이 바뀌면 닿고, 그때 폭이 0 이 되어 거절받은 전원이 같은 초에
+     * 돌아온다. 계약이 아니라 그 가정이 깨질 때를 막는 가드다 (AIJ-0271).
+     */
+    @Test
+    @DisplayName("바닥이_상한에_닿아도_흩어진다")
+    void 바닥이_상한에_닿아도_흩어진다() {
+        ErrorBackoff 정책 = ErrorBackoff.defaults();
+        Random 난수 = new Random(11);
+
+        Set<Long> 나온_값 = new HashSet<>();
+        for (int i = 0; i < 5_000; i++) {
+            나온_값.add(정책.retryAfterSec(1, ErrorBackoff.MAX_SEC, 난수::nextDouble));
+        }
+
+        assertThat(나온_값).as("한 값이면 그 무리가 같은 초에 돌아온다").hasSizeGreaterThan(1);
+        assertThat(나온_값).as("상한을 넘겨 부르지 않는다")
+                .allSatisfy(v -> assertThat(v).isLessThanOrEqualTo(ErrorBackoff.MAX_SEC));
+    }
+
+    /**
+     * <b>비율이 좁아도 폭이 남는다.</b> 운영 비율(0.5)에서는 비율만으로도 폭이
+     * 남지만, 좁은 비율에서는 반올림이 통째로 먹어 한 값으로 모인다 — 그 자리를
+     * 비율에만 맡기면 폭의 바닥이 있는지 없는지 아무도 못 잰다.
+     */
+    @Test
+    @DisplayName("좁은_비율에서도_폭이_남는다")
+    void 좁은_비율에서도_폭이_남는다() {
+        ErrorBackoff 좁은 = ErrorBackoff.of(ErrorBackoff.BASE_SEC, ErrorBackoff.MAX_SEC, 0.01);
+        Random 난수 = new Random(5);
+
+        Set<Long> 나온_값 = new HashSet<>();
+        for (int i = 0; i < 2_000; i++) {
+            나온_값.add(좁은.retryAfterSec(1, 30, 난수::nextDouble));
+        }
+
+        assertThat(나온_값).as("한 값에 모인다").hasSizeGreaterThan(1);
+    }
+
+    /** 비율 0 은 끄겠다는 뜻이다. 바닥이 그것을 되살리면 끌 수단이 사라진다. */
+    @Test
+    @DisplayName("비율_0_은_안_흔든다")
+    void 비율_0_은_안_흔든다() {
+        ErrorBackoff 끈다 = ErrorBackoff.of(ErrorBackoff.BASE_SEC, ErrorBackoff.MAX_SEC, 0);
+
+        assertThat(끈다.retryAfterSec(1, 30, () -> 0.0)).isEqualTo(30);
+        assertThat(끈다.retryAfterSec(1, 30, () -> 1.0)).isEqualTo(30);
+    }
+
+    /** 상한 바로 아래에서도 폭이 남아야 한다. 이 셋 중 상한만이 이 가드를 가른다. */
+    @Test
+    @DisplayName("상한_바로_아래에서도_폭이_남는다")
+    void 상한_바로_아래에서도_폭이_남는다() {
+        ErrorBackoff 정책 = ErrorBackoff.defaults();
+        Random 난수 = new Random(3);
+
+        for (long 바닥 : new long[] {ErrorBackoff.MAX_SEC - 2, ErrorBackoff.MAX_SEC - 1,
+                ErrorBackoff.MAX_SEC}) {
+            Set<Long> 나온_값 = new HashSet<>();
+            for (int i = 0; i < 2_000; i++) {
+                나온_값.add(정책.retryAfterSec(1, 바닥, 난수::nextDouble));
+            }
+            assertThat(나온_값).as("바닥 %s 에서 한 값에 모인다", 바닥).hasSizeGreaterThan(1);
+        }
+    }
+
+    /**
+     * <b>지금은 바닥이 상한에 못 닿는다</b> (CY-904).
+     *
+     * <p>위 가드가 무엇을 막는지는 이 사실에 달려 있다. 정상 경로가 자기 천장을
+     * 걸어 두어 바닥이 50 에서 멈춘다 ([[AIJ-0264]]). <b>그 천장을 지우면 여기가
+     * 먼저 빨개져야 한다</b> — 안 그러면 가드가 왜 있는지 아무도 모른다.
+     */
+    @Test
+    @DisplayName("조회_경로의_바닥은_상한에_못_닿는다")
+    void 조회_경로의_바닥은_상한에_못_닿는다() {
+        PollIntervalPolicy 폴링 = PollIntervalPolicy.standard();
+
+        for (double 배수 : new double[] {1, 1.5, 2, 5, 100, 10_000}) {
+            long 바닥 = 폴링.intervalSec(EtaPolicy.UNKNOWN, () -> 0.5, 배수);
+            assertThat(바닥).as("배수 %s 의 바닥", 배수)
+                    .isLessThan(ErrorBackoff.MAX_SEC);
+        }
+    }
+
+    /**
+     * 오류 상한과 폴링 상한은 같은 자리다. 리터럴 둘이라 한쪽만 내리면 오류
+     * 안내가 조용히 그 위로 나가고 생존 신호 수명 유도가 깨진다.
+     */
+    @Test
+    @DisplayName("오류_상한은_폴링_상한과_같다")
+    void 오류_상한은_폴링_상한과_같다() {
+        assertThat(ErrorBackoff.MAX_SEC)
+                .isEqualTo(PollIntervalPolicy.maxInterval().toSeconds());
+    }
+
+    /** 비율 0 은 끄겠다는 뜻이다. 상한까지 1초 낮추는 것은 그 뜻이 아니다. */
+    @Test
+    @DisplayName("비율_0_은_상한도_안_낮춘다")
+    void 비율_0_은_상한도_안_낮춘다() {
+        ErrorBackoff 끈다 = ErrorBackoff.of(ErrorBackoff.BASE_SEC, ErrorBackoff.MAX_SEC, 0);
+
+        assertThat(끈다.retryAfterSec(1, ErrorBackoff.MAX_SEC, () -> 0.0))
+                .isEqualTo(ErrorBackoff.MAX_SEC);
+    }
+
+    /** 상한이 기본 간격과 같으면 첫 계단이 그 아래로 안 내려간다. */
+    @Test
+    @DisplayName("상한이_기본과_같으면_안_내려간다")
+    void 상한이_기본과_같으면_안_내려간다() {
+        ErrorBackoff 좁은 = ErrorBackoff.of(5, 5, 0.5);
+
+        assertThat(좁은.retryAfterSec(1, 0, () -> 0.0)).isEqualTo(5);
+        assertThat(좁은.retryAfterSec(1, 0, () -> 1.0)).isEqualTo(5);
     }
 }

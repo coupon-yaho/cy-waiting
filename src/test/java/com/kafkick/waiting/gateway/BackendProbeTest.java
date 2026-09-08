@@ -265,4 +265,46 @@ class BackendProbeTest {
         assertThat(프로브.failed()).as("자리를 먹었으면 표본으로 남긴다").isEqualTo(1);
         assertThat(프로브.skipped()).isZero();
     }
+
+    /**
+     * <b>바쁘다는 답은 표본이 아니다.</b> 요청 경로는 5xx 를 서킷에 안 문다 —
+     * 뒷단이 받은 뒤에 낸 답이라 재시도가 곧 초과 발급이기 때문이다. 프로브만
+     * 그것을 실패로 세면 회복 구간에 프로브가 혼자 서킷을 다시 연다.
+     */
+    @Test
+    @DisplayName("뒷단이_바쁘면_표본으로_안_센다")
+    void 뒷단이_바쁘면_표본으로_안_센다() {
+        CircuitBreaker 서킷 = 서킷();
+        열어_둔다(서킷);
+        서킷.transitionToHalfOpenState();
+        BackendProbe 프로브 = BackendProbe.of(() -> Optional.of(서킷),
+                () -> Mono.error(new BackendProbe.Busy("뒷단이 지금 못 받는다")));
+
+        프로브.probe().block();
+        프로브.probe().block();
+
+        assertThat(프로브.busy()).as("바쁜 회차").isEqualTo(2);
+        assertThat(프로브.failed()).as("실패로 안 센다").isZero();
+        assertThat(프로브.passed()).as("성공으로도 안 센다").isZero();
+        // **자리를 돌려준다.** 안 돌려주면 반쯤 열린 자리가 줄어든 채 남아 그만큼
+        // 회복 표본이 영영 안 찬다.
+        assertThat(서킷.getState()).as("판정을 안 바꾼다")
+                .isEqualTo(CircuitBreaker.State.HALF_OPEN);
+    }
+
+    /** 바쁜 회차도 계기에 나와야 한다 — 안 나오면 왜 안 닫히는지 밖에서 못 본다. */
+    @Test
+    @DisplayName("바쁜_회차도_계기에_난다")
+    void 바쁜_회차도_계기에_난다() {
+        CircuitBreaker 서킷 = 서킷();
+        열어_둔다(서킷);
+        서킷.transitionToHalfOpenState();
+        MeterRegistry 계기 = new SimpleMeterRegistry();
+        BackendProbe 프로브 = BackendProbe.of(() -> Optional.of(서킷),
+                () -> Mono.error(new BackendProbe.Busy("뒷단이 지금 못 받는다"))).bind(계기);
+
+        프로브.probe().block();
+
+        assertThat(계기.find(BackendProbe.BUSY).functionCounter().count()).isEqualTo(1);
+    }
 }

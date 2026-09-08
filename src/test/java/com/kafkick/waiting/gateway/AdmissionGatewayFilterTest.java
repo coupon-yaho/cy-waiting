@@ -1576,6 +1576,58 @@ class AdmissionGatewayFilterTest {
         assertThat(품질("degraded")).as("재료 없이 판정한 건").isZero();
     }
 
+    /**
+     * <b>막았으면 판정도 나간 응답에 맞춘다</b> (CY-899).
+     *
+     * <p>사다리가 적어 둔 등록을 그대로 두면 503 을 받은 사람이 줄에 선 것으로
+     * 읽힌다. 보호 차단은 그 처치를 받았는데 이 출구만 안 받고 있었다.
+     */
+    @Test
+    @DisplayName("등록이_안_돼_막으면_판정을_고쳐_적는다")
+    void 등록이_안_돼_막으면_판정을_고쳐_적는다() {
+        // **여는 몫을 먼저 다 쓴 뒤라야 막는 출구가 돈다.** 쿠폰 몫이 전역 몫을
+        // 넘으면 발행이 못 만드는 스냅샷이라, 둘을 같은 값으로 둔다.
+        스냅샷을_심는다(CouponStates.queueing(4, 1_000, 100), new SnapshotMeta(4, 1));
+        줄.터진다(new IllegalStateException("레디스가 죽었다"));
+        태운다(COUPON, "첫째");
+        태운다(COUPON, "둘째");
+
+        MockServerWebExchange 막힌_요청 = 태운다(COUPON, "셋째");
+
+        assertThat(막힌_요청.getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(사유("enqueue-failed-shed")).as("이 출구를 지났다는 것부터 못 박는다")
+                .isEqualTo(1.0);
+        assertThat(막힌_요청.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .isEqualTo(AdmissionDecision.REJECT_OVERLOAD);
+    }
+
+    /**
+     * <b>차례가 온 사람은 그 값으로 적는다.</b> 과부하 거절로 뭉개면 뒤에 읽는 쪽이
+     * 그를 못 가르고, 가르는 읽기가 덮어쓰기보다 먼저라는 순서도 같이 깨진다.
+     */
+    @Test
+    @DisplayName("막힌_토큰_보유자는_판정도_그대로_남는다")
+    void 막힌_토큰_보유자는_판정도_그대로_남는다() {
+        // 전역 몫이 회복 램프의 바닥이면 여는 몫이 0 이라 첫 요청부터 막는다.
+        holder.replace(new GatewaySnapshot(Map.of(COUPON, CouponStates.idle(1)),
+                SnapshotMetas.overBudget(1, 1, 1.5), 지금.minusSeconds(60)));
+        줄.터진다(new IllegalStateException("레디스가 죽었다"));
+
+        MockServerWebExchange 토큰을_든_요청 = 토큰_요청("없는쿠폰", MEMBER);
+        filter.filter(토큰을_든_요청, e -> Mono.empty()).block();
+
+        assertThat(토큰을_든_요청.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .isEqualTo(AdmissionDecision.RETRY_TOKEN);
+        assertThat(토큰을_든_요청.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER))
+                .as("가까운 밴드다. 순서를 뒤집으면 배수까지 실려 멀어진다").isIn("1", "2");
+    }
+
+    private double 사유(String outcome) {
+        var counter = meters.find("waiting.admission").tag("outcome", outcome).counter();
+        return counter == null ? 0 : counter.count();
+    }
+
     private double 품질(String 라벨) {
         var counter = meters.find(AdmissionGatewayFilter.JUDGEMENT)
                 .tag("quality", 라벨).counter();

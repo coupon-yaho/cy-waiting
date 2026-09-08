@@ -3,35 +3,30 @@ package com.kafkick.waiting.gateway;
 import com.kafkick.waiting.domain.admission.AdmissionDecision;
 import com.kafkick.waiting.domain.queue.EtaPolicy;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
-import java.util.Objects;
 import java.util.function.DoubleSupplier;
 
 /**
  * 거절의 응답 값. 판정값을 응답 코드와 다시 올 시각으로 옮긴다.
  *
- * <p><b>이 매핑의 주인은 여기 하나다.</b> 갈래를 손으로 펴 둔 자리가 셋이었고,
- * 하나가 바뀌면 나머지가 조용히 갈렸다.
+ * <p><b>다시 올 시각은 여기 하나가 낸다.</b> 갈래를 손으로 펴 둔 자리가 셋이었고,
+ * 하나가 바뀌면 나머지가 조용히 갈렸다. 응답 코드는 판정이 낸 거절만 여기서 온다.
  */
 final class Rejection {
 
-    /**
-     * 거절 안내의 폴링 정책. <b>여기 하나만 둔다</b> — 부르는 쪽마다 만들면 시험이
-     * 자기 것을 들고, 운영의 흔들림을 0 으로 바꿔도 그 시험이 초록으로 남는다.
-     */
+    /** 거절 안내의 폴링 정책. */
     private static final PollIntervalPolicy STANDARD =
             PollIntervalPolicy.of(PollIntervalPolicy.NORMAL_JITTER_RATIO);
 
     private final PollIntervalPolicy poll;
 
     private Rejection(PollIntervalPolicy poll) {
-        this.poll = Objects.requireNonNull(poll, "poll 은 필수다");
+        this.poll = poll;
     }
 
-    static Rejection of(PollIntervalPolicy poll) {
-        return new Rejection(poll);
-    }
-
-    /** 운영이 쓰는 정책. 시험도 이것을 부른다 — 갈리는 통로를 안 만든다. */
+    /**
+     * <b>만드는 길이 이것뿐이다.</b> 정책을 인자로 받는 문을 열어 두면 시험이 제 것을
+     * 들고, 운영의 흔들림을 0 으로 바꿔도 그 시험이 초록으로 남는다.
+     */
     static Rejection standard() {
         return new Rejection(STANDARD);
     }

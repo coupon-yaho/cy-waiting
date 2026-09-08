@@ -171,7 +171,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
     private final Bulkhead bulkhead = Bulkhead.withMaxKeys(CouponKeys.MAX);
     private final ApiError error;
 
-    /** 판정값을 응답 코드와 다시 올 시각으로 옮긴다. 이 매핑의 주인이다. */
+    /** 판정값을 응답 코드와 다시 올 시각으로 옮긴다. */
     private final Rejection rejection = Rejection.standard();
     private final QueueResponse waiting = QueueResponse.create();
 
@@ -684,6 +684,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
         // **줄에 안 선 쪽만 배수를 지킨다.** 이 갈래가 도는 순간이 곧 예산이
         // 빠듯한 순간이라 거기만 빼면 과부하일수록 예산이 덜 걸린다. 토큰
         // 보유자는 반대다 — 그 순간이 곧 그가 가장 멀리 밀리는 순간이다.
+        //
+        // **응답 코드는 매핑에서 안 가져온다.** 바로 위에서 판정을 덮어썼으므로
+        // 그것으로 코드를 뽑으면 차례가 온 사람도 과부하 거절로 나간다.
         return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
                 rejection.retryAfterSec(hasToken
                                 ? AdmissionDecision.RETRY_TOKEN

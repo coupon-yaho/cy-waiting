@@ -7,17 +7,14 @@ import org.springframework.cloud.gateway.filter.factory.RetryGatewayFilterFactor
 /**
  * 연결이 안 된 인스턴스를 다음 대로 넘기는 설정.
  *
- * <p><b>필터 밖에 둔다.</b> 필터로 감싸고 나면 무엇에 무는지가 밖에서 안 보여,
- * 상태 기반 재시도가 켜져도 시험이 못 잡는다.
+ * <p><b>라우팅 설정 밖으로 꺼내 둔다.</b> 필터로 감싸고 나면 무엇에 무는지가 밖에서
+ * 안 보여, 상태 기반 재시도가 켜져도 시험이 못 잡는다.
  */
 final class ConnectRetry {
 
     private final int retries;
 
     private ConnectRetry(int retries) {
-        if (retries < 1) {
-            throw new IllegalArgumentException("retries 는 1 이상이어야 한다: " + retries);
-        }
         this.retries = retries;
     }
 

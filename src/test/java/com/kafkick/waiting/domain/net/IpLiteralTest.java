@@ -71,19 +71,23 @@ class IpLiteralTest {
 
     /**
      * <b>모양만 맞고 못 푸는 v6 도 조회로 안 샌다.</b> 이 보장은 JDK 구현에 얹혀
-     * 있어 계약이 아니다 — 여기가 느려지면 폴링 스레드에서 이름 조회가 도는 것이다.
+     * 있어 계약이 아니다 — 새면 폴링 스레드가 이름 조회에서 블로킹된다.
      */
     @Test
     @DisplayName("못_푸는_v6_는_조회_없이_null_이다")
     void 못_푸는_v6_는_조회_없이_null_이다() {
+        // **한 번을 재면 잡음이 판정을 뒤집는다.** 여러 번의 합으로 본다 — 한 건이
+        // 조회를 타면 수십 밀리초라, 상한이 넉넉해도 그 합은 못 넘긴다.
+        int 횟수 = 200;
         long 시작 = System.nanoTime();
-
-        assertThat(IpLiteral.parse("1:2:3")).isNull();
-        assertThat(IpLiteral.parse("1:2:3:4:5:6:7:8:9")).isNull();
+        for (int i = 0; i < 횟수; i++) {
+            assertThat(IpLiteral.parse("1:2:3")).isNull();
+            assertThat(IpLiteral.parse("1:2:3:4:5:6:7:8:9")).isNull();
+        }
 
         assertThat(Duration.ofNanos(System.nanoTime() - 시작))
-                .as("이름 조회가 돌면 여기가 수십 밀리초가 된다")
-                .isLessThan(Duration.ofMillis(50));
+                .as("조회가 돌면 건당 수십 밀리초라 합이 수십 초가 된다")
+                .isLessThan(Duration.ofSeconds(3));
     }
 
     /**

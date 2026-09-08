@@ -14,8 +14,15 @@ set -uo pipefail
 
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
+# **합성 프로브는 켜서도 꺼서도 잰다.** RC3 과 RC4 가 폴링 간격 하나로 반대로
+# 밀리는 것이 이 회차가 드러낸 것이고 (AIJ-0249), 프로브는 그 얽힘을 끊으려는
+# 장치다. 두 조건의 값을 같은 표에 섞지 않으려고 산출물 이름에 조건을 싣는다.
+case "${PROBE:-}" in
+    ''|0|false|no) probe="" ;;
+    *) probe=" -f test/load/compose.probe.yml" ;;
+esac
 COMPOSE="docker compose -f test/load/compose.yml -f test/load/compose.multi.yml \
--f test/load/compose.limits.yml"
+-f test/load/compose.limits.yml$probe"
 
 # **예열 문턱을 상한에 맞춘다.** 겹침의 기본값은 200 이라, 상한을 그보다 낮게
 # 잡은 회차는 예열이 영영 안 끝나고 스택이 기동에서 죽는다.
@@ -51,7 +58,9 @@ FAULT_LATENCY_MS="${FAULT_LATENCY_MS:-3000}"
 # 든다. 느린 호출은 그 지연만큼 늦게 창에 들어가므로 자극 지연도 같이 센다.
 SETTLE_SEC=$((12 + FAULT_LATENCY_MS / 1000))
 COUPON="${COUPON:-c1}"
-OUT="${OUT:-circuit-recovery.txt}"
+# **산출물 이름에 조건을 싣는다.** 프로브를 켠 회차와 안 켠 회차가 같은 파일에
+# 덮이면 나중에 어느 조건에서 나온 값인지 못 가른다.
+OUT="${OUT:-circuit-recovery${probe:+-probe}.txt}"
 
 case "$OUT" in
     *.txt) ;;

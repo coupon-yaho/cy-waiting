@@ -72,6 +72,11 @@ end
 -- 넘으므로 잃는 것이 없다.
 local ROLLOUT_MARGIN = 86400000000  -- 24시간(마이크로초). 배포가 이보다 길면 못 막는다
 
+-- **Lua 가 정수를 정확히 드는 한계.** 이 위로는 `INCR` 이 성공해도 되돌아온 값이
+-- 반올림돼 직전 임기와 같아진다. 울타리는 같은 번호를 재시도로 보고 들이므로,
+-- 그 순간 유령이 통과한다. 씨앗이 마이크로초라 여유가 이백 년을 넘는다.
+local EXACT_MAX = 9007199254740992
+
 local function nextGeneration()
     local t = redis.call('TIME')
     local floor = tonumber(t[1]) * 1000000 + tonumber(t[2]) + ROLLOUT_MARGIN
@@ -97,6 +102,9 @@ local function nextGeneration()
         end
         redis.call('SET', KEYS[2], mark)
         bumped = redis.call('INCR', KEYS[2])
+    end
+    if bumped >= EXACT_MAX then
+        return nil
     end
     return bumped
 end

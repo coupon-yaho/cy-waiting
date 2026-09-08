@@ -233,6 +233,22 @@ class LeaderElectionTest extends RedisContainerSupport {
                 .isEqualTo(Long.toString(Long.MAX_VALUE));
     }
 
+    /**
+     * <b>정확히 못 드는 자리에서도 멈춘다.</b> 그 위로는 {@code INCR} 이 성공해도
+     * 되돌아온 값이 반올림돼 직전 임기와 같아진다. 울타리는 같은 번호를 재시도로
+     * 보고 들이므로, 두 리더가 같은 번호를 들고 나란히 통과한다.
+     */
+    @Test
+    @DisplayName("정확히_못_드는_크기가_되면_임기를_안_매긴다")
+    void 정확히_못_드는_크기가_되면_임기를_안_매긴다() {
+        long 정확한_한계 = 9_007_199_254_740_992L;
+        redis.opsForValue().set(GEN, Long.toString(정확한_한계 - 1)).block(WAIT);
+
+        assertThatThrownBy(() -> tryAcquire("node-1"))
+                .rootCause()
+                .hasMessageContaining("상한");
+    }
+
     /** 타입이 어긋나도 같다. {@code GET} 부터 터져 스크립트가 못 돈다. */
     @Test
     @DisplayName("세는_값의_타입이_어긋나도_다시_씨앗을_준다")

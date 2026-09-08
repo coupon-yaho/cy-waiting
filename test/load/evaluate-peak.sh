@@ -143,7 +143,14 @@ if [ -z "$best_actual" ]; then
     fail "선 회차가 하나도 없다 (${stop_kind:-사다리가 비었다}) — 잰 것이 없다"
 fi
 
-printf '  %-24s %s\n' "현재 최대치(실측 유입)" "$best_actual"
+# **천장을 못 봤으면 최대치라고 안 부른다.** 사다리가 짧았을 뿐인데 마지막 칸을
+# 최대치로 적으면, 사다리를 줄이는 것으로 기록을 낮출 수 있고 그 수가 계획서로
+# 간다. 못 본 것은 아래 경계다 — 그보다 크다는 것만 안다.
+if [ "$broke" = 1 ]; then
+    printf '  %-24s %s\n' "현재 최대치(실측 유입)" "$best_actual"
+else
+    printf '  %-24s %s\n' "아래 경계(실측 유입)" "$best_actual"
+fi
 printf '  %-24s %s\n' "그때의 요청 유입" "$best_rate"
 printf '  %-24s %s ms\n' "그때의 응답 p99" "$best_p99"
 printf '  %-24s %s\n' "허용 오차" "$tolerance"
@@ -153,6 +160,10 @@ if [ "$broke" = 1 ]; then
     printf '  %-24s %s (요청 %s)\n' "천장의 종류" "$stop_kind" "$stop_rate"
 else
     printf '  %-24s %s\n' "천장의 종류" "천장을 아직 못 봤다 — 사다리가 짧다"
+    # 사다리를 늘려야 하는 회차를 기록으로 받아들일지는 부르는 쪽이 정한다.
+    if [ "${PEAK_REQUIRE_CEILING:-0}" = 1 ]; then
+        fail "천장을 못 봤다 — 사다리를 늘려야 최대치를 안다"
+    fi
 fi
 [ "$gap" = 1 ] && echo "  ::경고:: 멈춘 회차 위에 선 회차가 있다 — 사다리가 이어지지 않았다"
 
@@ -168,7 +179,7 @@ if [ -n "$floor" ]; then
         echo "판정: 미달 — 최대치가 기록한 바닥 ${floor} 아래로 내려갔다"
         exit 1
     fi
-    fail "최대치가 바닥 ${floor} 아래인데 천장이 ${stop_kind:-못 봤다} 쪽이다 — 제품 미달로 못 읽는다"
+    fail "값이 바닥 ${floor} 아래인데 천장이 ${stop_kind:-못 봤다} 쪽이다 — 제품 미달로 못 읽는다"
 fi
 echo "판정: 기록 — 바닥이 없어 되돌아감은 안 본다"
 exit 0

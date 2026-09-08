@@ -47,9 +47,14 @@ slow=$(table slow.tsv $'2000\t1990\tok\t1.8' $'4000\t3950\tok\t7.2')
 run_case "기준을 안 주면 느려도 선다" 0 "3950" -- "$slow"
 PEAK_LATENCY_P99_MS=5 run_case "기준을 주면 느린 회차가 제품 천장이다" 0 "제품" -- "$slow"
 
-# **천장을 못 본 회차를 최대치로 적지 않는다.** 사다리가 짧았을 뿐이다.
-run_case "전 회차가 다 서면 천장을 못 본 것이다" 0 "천장을 아직 못 봤다" \
-    -- "$(table all.tsv $'2000\t1990\tok\t1.8' $'4000\t3950\tok\t2.4')"
+# **천장을 못 본 회차를 최대치로 적지 않는다.** 사다리가 짧았을 뿐이다 —
+# 사다리를 줄이는 것으로 기록을 낮출 수 있으면 그 수를 못 믿는다.
+allrungs=$(table all.tsv $'2000\t1990\tok\t1.8' $'4000\t3950\tok\t2.4')
+run_case "전 회차가 다 서면 천장을 못 본 것이다" 0 "천장을 아직 못 봤다" -- "$allrungs"
+run_case "천장을 못 봤으면 아래 경계로 적는다" 0 "아래 경계(실측 유입) 3950" -- "$allrungs"
+run_case "천장을 봤으면 최대치로 적는다" 0 "최대치(실측 유입) 1990" -- "$product"
+PEAK_REQUIRE_CEILING=1 run_case "천장을 요구하면 짧은 사다리는 판정 불가" 2 "사다리를 늘려야" \
+    -- "$allrungs"
 
 # **기준을 실제로 쓰는지 본다.** 안 쓰면 어떤 값을 줘도 같은 답이 나온다.
 PEAK_ARRIVAL_TOLERANCE=0.99 run_case "허용 오차를 조이면 최대치가 내려간다" 0 "1990" \
@@ -178,6 +183,13 @@ lib_case "판정 밖 응답은 안 선다" under "$(peak_verdict_from_k6 99 "$of
 lib_case "섞은 비율이 어긋나면 판정 불가" unmeasurable "$(peak_verdict_from_k6 99 "$mix")"
 lib_case "99 인데 깨진 것이 없으면 판정 불가" unmeasurable "$(peak_verdict_from_k6 99 "$none")"
 lib_case "다른 종료 코드는 판정 불가" unmeasurable "$(peak_verdict_from_k6 1 "$none")"
+
+# **임계 모양이 둘이다.** 비어 있지 않다는 것만 보면 통과한 중첩형도 깨진 것이
+# 되어, 드롭 하나로 99 가 난 회차의 멀쩡한 임계까지 제품 미달로 읽힌다.
+nest_ok=$(thr '"dropped_iterations":{"thresholds":{"count==0":{"ok":false}}},"http_req_failed":{"thresholds":{"rate<0.01":{"ok":true}}}' nest_ok.json)
+nest_bad=$(thr '"http_req_failed":{"thresholds":{"rate<0.01":{"ok":false}}}' nest_bad.json)
+lib_case "중첩형에서 통과한 임계는 안 깨진 것" ok "$(peak_verdict_from_k6 99 "$nest_ok")"
+lib_case "중첩형에서 깨진 임계는 안 선다" under "$(peak_verdict_from_k6 99 "$nest_bad")"
 
 [ "$selftest_failed" -eq 0 ] && echo "최대치 자기검증 통과" || echo "최대치 자기검증 실패"
 exit "$selftest_failed"

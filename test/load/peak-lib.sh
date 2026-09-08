@@ -60,9 +60,21 @@ try:
     m = json.load(open(sys.argv[1])).get('metrics', {})
 except Exception:
     print('unmeasurable'); raise SystemExit
-# 요약의 참은 "임계가 깨졌다" 는 뜻이다. 예열 회차(드롭 0)가 거짓으로 온다.
+def broken(entry):
+    # k6 판에 따라 모양이 둘이다. 평면형은 참이 "깨졌다" 는 뜻이고(드롭 0 인
+    # 예열 회차가 거짓으로 온다), 중첩형은 `{"ok": false}` 로 온다.
+    # **비어 있지 않다는 것만 보면 안 된다** — 통과한 중첩형도 참이 되어,
+    # 드롭 하나로 99 가 난 회차의 멀쩡한 임계까지 깨진 것으로 읽힌다.
+    if isinstance(entry, bool):
+        return entry
+    if isinstance(entry, dict):
+        return not entry.get('ok', True)
+    return bool(entry)
+
 crossed = {n for n, v in m.items()
-           if any(v.get('thresholds', {}).values())} if isinstance(m, dict) else set()
+           if isinstance(v, dict)
+           and any(broken(e) for e in v.get('thresholds', {}).values())} \
+    if isinstance(m, dict) else set()
 if not crossed:
     print('unmeasurable')          # 99 인데 깨진 것이 안 보인다 — 요약을 못 믿는다
 elif crossed & {'http_req_failed', 'peak_off_judgement', 'checks'}:

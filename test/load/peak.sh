@@ -113,6 +113,13 @@ if [ "$warm_rate" != 0 ]; then
     RATE=$warm_rate DURATION=$warm_dur k6 run \
         --summary-export="$OUT_DIR/k6-warmup.json" test/load/peak.js \
         > "$OUT_DIR/k6-warmup.log" 2>&1
+    # **예열이 돌았는지 본다.** 안 돌면 첫 회차가 갓 뜬 JVM 을 그대로 재는데,
+    # 예열을 넣은 이유가 정확히 그것을 표에서 빼는 것이다. 조용히 넘기면
+    # 사다리의 첫 칸이 늘 느리고 그 이유를 아무도 모른다.
+    if [ -z "$(peak_summary_value "$OUT_DIR/k6-warmup.json" rate)" ]; then
+        echo "::error title=현재 최대치::예열 회차가 안 돌았다 — 첫 회차가 예열을 뒤집어쓴다"
+        exit 2
+    fi
 fi
 
 printf '# 요청유입\t실측유입\t판정\t응답p99ms\n' >> "$OUT_TABLE"

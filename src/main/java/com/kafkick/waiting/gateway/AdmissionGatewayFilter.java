@@ -109,9 +109,6 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
     /** 재시도 안내의 흔들림 폭. 폴링 간격과 같은 정책을 쓴다. */
     private static final PollIntervalPolicy POLL = PollIntervalPolicy.of(PollIntervalPolicy.NORMAL_JITTER_RATIO);
 
-    /** 거절을 응답으로 옮기는 자리. 필터가 들고 쓴다. */
-    private final Rejection rejection = Rejection.of(POLL);
-
     private static final String MEMBER_ID = "X-Member-Id";
 
     /** 발급 계층 명세가 정한 이름. 조회가 준 토큰을 여기 실어 온다. */
@@ -173,6 +170,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
     /** 동시에 걸려 있는 건수를 센다. 리미터가 세는 초당 건수와 단위가 다르다. */
     private final Bulkhead bulkhead = Bulkhead.withMaxKeys(CouponKeys.MAX);
     private final ApiError error;
+
+    /** 판정값을 응답 코드와 다시 올 시각으로 옮긴다. 이 매핑의 주인이다. */
+    private final Rejection rejection = Rejection.standard();
     private final QueueResponse waiting = QueueResponse.create();
 
     /** 설정 오류를 한 번만 알린다. 라우트가 틀렸으면 늘 틀리다. */
@@ -685,10 +685,10 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
         // 빠듯한 순간이라 거기만 빼면 과부하일수록 예산이 덜 걸린다. 토큰
         // 보유자는 반대다 — 그 순간이 곧 그가 가장 멀리 밀리는 순간이다.
         return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
-                hasToken
-                        ? (int) POLL.intervalSec(0, random, PollIntervalPolicy.NO_SCALE)
-                        : (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random,
-                                meta.pollScale()));
+                rejection.retryAfterSec(hasToken
+                                ? AdmissionDecision.RETRY_TOKEN
+                                : AdmissionDecision.REJECT_OVERLOAD,
+                        random, meta.pollScale()));
     }
 
     /**

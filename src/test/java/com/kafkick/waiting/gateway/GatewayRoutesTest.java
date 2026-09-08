@@ -67,7 +67,7 @@ import reactor.core.publisher.Mono;
 class GatewayRoutesTest {
 
     /** 라우팅이 쓰는 것과 같은 설정. 재시도를 넓히면 여기부터 갈린다. */
-    private final ConnectRetry 연결재시도 = ConnectRetry.of();
+    private final ConnectRetry 연결_재시도 = ConnectRetry.singleAttempt();
 
     /** 목적지 제한. 켜진 설정은 이것이 없으면 못 선다. */
     private static final List<String> 허용 = List.of(".internal");
@@ -246,7 +246,7 @@ class GatewayRoutesTest {
      * 붙어 있어 멎은 요청 하나가 그 키에 붙은 모든 조회를 그동안 잠근다.
      *
      * <p><b>이 시험이 보는 것은 값이 라우트에 실렸는지까지다.</b> 그 값에 실제로
-     * 끊기는지는 여기서 안 잰다 — 그건 {@code ConnectRetryTest} 와 저널의 실측이다.
+     * 끊기는지는 여기서 안 잰다 — 그건 {@code ConnectRetryRoutingTest} 와 저널의 실측이다.
      */
     @ParameterizedTest
     @ValueSource(strings = {"issue", "coupons"})
@@ -858,7 +858,7 @@ class GatewayRoutesTest {
      * <p>바깥에 두면 재시도가 한 번도 안 돈다 — 서킷 필터가 폴백 주소를 들고
      * 있으면 하류의 모든 오류를 그리로 넘기고 정상 완료를 내보내, 바깥의
      * 재시도는 볼 오류가 없다. 이 값만으로는 그것을 못 잡으므로 실제로 넘어가는지는
-     * {@code ConnectRetryTest} 가 본다.
+     * {@code ConnectRetryRoutingTest} 가 본다.
      */
     @Test
     @DisplayName("재시도가_서킷_안쪽이다")
@@ -875,7 +875,7 @@ class GatewayRoutesTest {
     @Test
     @DisplayName("연결_단계에만_재시도한다")
     void 연결_단계에만_재시도한다() {
-        var config = 연결재시도.config();
+        var config = 연결_재시도.config();
 
         assertThat(config.getSeries()).isEmpty();
         assertThat(config.getStatuses()).isEmpty();
@@ -906,7 +906,7 @@ class GatewayRoutesTest {
     @Test
     @DisplayName("연결이_못_서는_갈래를_다_덮는다")
     void 연결이_못_서는_갈래를_다_덮는다() {
-        var config = 연결재시도.config();
+        var config = 연결_재시도.config();
 
         // 계보가 갈린다는 것부터 못 박는다. 안 적으면 목록이 왜 둘인지가 안 남는다.
         assertThat(ConnectException.class.isAssignableFrom(NoRouteToHostException.class))
@@ -926,7 +926,7 @@ class GatewayRoutesTest {
     @Test
     @DisplayName("이름_풀이_실패는_다시_안_보낸다")
     void 이름_풀이_실패는_다시_안_보낸다() {
-        assertThat(연결재시도.config().getExceptions())
+        assertThat(연결_재시도.config().getExceptions())
                 .noneMatch(c -> c.isAssignableFrom(UnknownHostException.class));
     }
 
@@ -934,7 +934,7 @@ class GatewayRoutesTest {
     @Test
     @DisplayName("한_번만_다시_보낸다")
     void 한_번만_다시_보낸다() {
-        assertThat(연결재시도.config().getRetries()).isEqualTo(1);
+        assertThat(연결_재시도.config().getRetries()).isEqualTo(1);
     }
 
     private static String 이름(GatewayFilter filter) {

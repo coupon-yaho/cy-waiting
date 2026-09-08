@@ -7,12 +7,19 @@ import java.util.Objects;
 import java.util.function.DoubleSupplier;
 
 /**
- * 거절의 봉투. 판정값을 응답 코드와 다시 올 시각으로 옮긴다.
+ * 거절의 응답 값. 판정값을 응답 코드와 다시 올 시각으로 옮긴다.
  *
- * <p><b>필터 밖으로 꺼내 둔다.</b> 필터에 정적 헬퍼로 두면 시험이 클래스 이름으로만
- * 부를 수 있고, 폴링 정책 같은 협력자가 붙을 때 호출부를 전부 고쳐야 한다.
+ * <p><b>이 매핑의 주인은 여기 하나다.</b> 갈래를 손으로 펴 둔 자리가 셋이었고,
+ * 하나가 바뀌면 나머지가 조용히 갈렸다.
  */
-public final class Rejection {
+final class Rejection {
+
+    /**
+     * 거절 안내의 폴링 정책. <b>여기 하나만 둔다</b> — 부르는 쪽마다 만들면 시험이
+     * 자기 것을 들고, 운영의 흔들림을 0 으로 바꿔도 그 시험이 초록으로 남는다.
+     */
+    private static final PollIntervalPolicy STANDARD =
+            PollIntervalPolicy.of(PollIntervalPolicy.NORMAL_JITTER_RATIO);
 
     private final PollIntervalPolicy poll;
 
@@ -20,15 +27,20 @@ public final class Rejection {
         this.poll = Objects.requireNonNull(poll, "poll 은 필수다");
     }
 
-    public static Rejection of(PollIntervalPolicy poll) {
+    static Rejection of(PollIntervalPolicy poll) {
         return new Rejection(poll);
+    }
+
+    /** 운영이 쓰는 정책. 시험도 이것을 부른다 — 갈리는 통로를 안 만든다. */
+    static Rejection standard() {
+        return new Rejection(STANDARD);
     }
 
     /**
      * 거절의 응답 코드. <b>전부 열거한다</b> — 빠짐없이 적어야 새 판정값이 생겼을 때
      * 컴파일이 깨진다. {@code default} 로 두면 새 사유가 조용히 매진으로 나간다.
      */
-    public ApiError.Code code(AdmissionDecision decision) {
+    ApiError.Code code(AdmissionDecision decision) {
         return switch (decision) {
             case REJECT_SOLD_OUT -> ApiError.Code.SOLD_OUT;
             case REJECT_QUEUE_FULL -> ApiError.Code.QUEUE_FULL;
@@ -49,7 +61,7 @@ public final class Rejection {
      * <p>배수를 인자로 받는다. 안 받는 갈래를 남기면 거절 갈래가 그쪽을 쓰고,
      * 과부하일수록 거절 비중이 커져 예산이 절반만 걸린다.
      */
-    public int retryAfterSec(AdmissionDecision decision, DoubleSupplier random,
+    int retryAfterSec(AdmissionDecision decision, DoubleSupplier random,
             double pollScale) {
         return switch (decision) {
             // 차례가 온 사람은 배수에서 뺀다. 멀리 보내면 수명 있는 입장 토큰이

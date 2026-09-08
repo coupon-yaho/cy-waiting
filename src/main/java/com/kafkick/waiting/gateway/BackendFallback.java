@@ -57,6 +57,9 @@ public final class BackendFallback {
     private final MeterRegistry meters;
     private final DoubleSupplier random;
 
+    /** 다시 올 시각의 주인. 필터와 같은 매핑을 써야 두 경로가 안 갈린다. */
+    private final Rejection rejection = Rejection.standard();
+
     /** 없으면 상태를 모른다고 적는다. 시험이 레지스트리 없이도 돌 수 있어야 한다. */
     private final CircuitBreakerRegistry circuits;
 
@@ -172,8 +175,8 @@ public final class BackendFallback {
      * 멀리 보내면 토큰이 죽어 줄 맨 뒤에 다시 선다.
      */
     private int retryAfterSec(boolean admitted, double pollScale) {
-        return admitted
-                ? (int) POLL.intervalSec(0, random, PollIntervalPolicy.NO_SCALE)
-                : (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random, pollScale);
+        return rejection.retryAfterSec(admitted
+                ? AdmissionDecision.RETRY_TOKEN
+                : AdmissionDecision.REJECT_OVERLOAD, random, pollScale);
     }
 }

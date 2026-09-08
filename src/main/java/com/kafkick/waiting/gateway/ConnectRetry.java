@@ -7,28 +7,32 @@ import org.springframework.cloud.gateway.filter.factory.RetryGatewayFilterFactor
 /**
  * 연결이 안 된 인스턴스를 다음 대로 넘기는 설정.
  *
- * <p><b>라우팅 설정 밖으로 꺼내 둔다.</b> 거기 정적 헬퍼로 두면 시험이 클래스
- * 이름으로만 부를 수 있고, 재시도 횟수를 설정에서 받게 될 때 호출부가 다 바뀐다.
+ * <p><b>필터 밖에 둔다.</b> 필터로 감싸고 나면 무엇에 무는지가 밖에서 안 보여,
+ * 상태 기반 재시도가 켜져도 시험이 못 잡는다.
  */
-public final class ConnectRetry {
+final class ConnectRetry {
 
-    private ConnectRetry() {
-    }
+    private final int retries;
 
-    public static ConnectRetry of() {
-        return new ConnectRetry();
+    private ConnectRetry(int retries) {
+        if (retries < 1) {
+            throw new IllegalArgumentException("retries 는 1 이상이어야 한다: " + retries);
+        }
+        this.retries = retries;
     }
 
     /**
-     * 연결 단계 실패에만 무는 설정. <b>따로 꺼내 둔다</b> — 필터로 감싸고 나면
-     * 무엇에 무는지가 밖에서 안 보여, 상태 기반 재시도가 켜져도 시험이 못 잡는다.
+     * 한 번만 다시 보낸다. <b>여러 번 돌면 죽은 뒷단에 요청 하나가 그만큼 오래
+     * 매달려 격벽만 채운다</b> — 인스턴스가 열 대여도 한 번이면 충분하다.
      */
-    public RetryGatewayFilterFactory.RetryConfig config() {
+    static ConnectRetry singleAttempt() {
+        return new ConnectRetry(1);
+    }
+
+    RetryGatewayFilterFactory.RetryConfig config() {
         RetryGatewayFilterFactory.RetryConfig config =
                 new RetryGatewayFilterFactory.RetryConfig();
-        // 인스턴스가 열 대여도 한 번이면 충분하다. 여러 번 돌면 죽은 뒷단에
-        // 요청 하나가 그만큼 오래 매달려 격벽만 채운다.
-        config.setRetries(1);
+        config.setRetries(retries);
         config.allMethods();
         // **상태 기반 재시도를 끈다.** 기본값이 5xx 계열이라 안 비우면
         // 발급이 답을 받은 뒤에도 다시 가고, 그 한 건이 곧 초과 발급이다.

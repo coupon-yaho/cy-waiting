@@ -2,8 +2,6 @@ package com.kafkick.waiting.gateway;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import com.kafkick.waiting.routing.RoutingProperties;
-import java.net.ConnectException;
-import java.net.NoRouteToHostException;
 import org.springframework.cloud.gateway.filter.factory.RetryGatewayFilterFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -31,7 +29,7 @@ import org.springframework.web.server.ServerWebExchange;
 public class GatewayRoutes {
 
     /** 연결 단계에만 무는 재시도 설정. 무엇에 무는지가 밖에서 보여야 한다. */
-    private final ConnectRetry connectRetry = ConnectRetry.of();
+    private final ConnectRetry connectRetryPolicy = ConnectRetry.singleAttempt();
 
     /**
      * 술어는 디코딩해 맞추고 전달은 원본을 그대로 보낸다. 좁히지 않으면 판정한
@@ -147,7 +145,7 @@ public class GatewayRoutes {
      * 연결이 안 됐다는 것만이 그 요청이 아무 일도 안 했음을 보장한다.
      */
     private GatewayFilter connectRetry(RetryGatewayFilterFactory retries) {
-        return retries.apply(connectRetry.config());
+        return retries.apply(connectRetryPolicy.config());
     }
 
     /**

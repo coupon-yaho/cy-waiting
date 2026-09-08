@@ -2,6 +2,9 @@ package com.kafkick.waiting.domain.queue;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.HashSet;
+import java.util.Random;
+import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -185,5 +188,37 @@ class PollIntervalPolicyTest {
         org.assertj.core.api.Assertions.assertThatThrownBy(
                         () -> PollIntervalPolicy.of(Double.POSITIVE_INFINITY))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /**
+     * <b>가장 가까운 밴드도 흩어져야 한다</b> (CY-898).
+     *
+     * <p>1초 밴드에 비율 지터를 걸면 흔들림이 반올림에 통째로 먹혀 값이 언제나
+     * 정확히 1 이다. 그 밴드에 몰린 사람 전원이 같은 초에 함께 돌아오고, 서킷이
+     * 닫히려는 순간을 그 무리가 되민다.
+     */
+    @Test
+    @DisplayName("가장_가까운_밴드도_한_값에_안_모인다")
+    void 가장_가까운_밴드도_한_값에_안_모인다() {
+        PollIntervalPolicy 정책 = PollIntervalPolicy.of(PollIntervalPolicy.NORMAL_JITTER_RATIO);
+        Random 난수 = new Random(42);
+
+        Set<Long> 나온_값 = new HashSet<>();
+        for (int i = 0; i < 1_000; i++) {
+            나온_값.add(정책.intervalSec(0, 난수::nextDouble, PollIntervalPolicy.NO_SCALE));
+        }
+
+        assertThat(나온_값).as("한 값이면 그 밴드 전원이 같은 초에 돌아온다").hasSizeGreaterThan(1);
+        assertThat(나온_값).as("가까운 밴드가 멀어지면 안 된다").allMatch(v -> v <= 3);
+    }
+
+    /** 흩어지되 가운데는 그대로다. 고정 난수 0.5 에서 밴드 값이 나와야 한다. */
+    @Test
+    @DisplayName("가운데_난수는_밴드_값_그대로다")
+    void 가운데_난수는_밴드_값_그대로다() {
+        PollIntervalPolicy 정책 = PollIntervalPolicy.of(PollIntervalPolicy.NORMAL_JITTER_RATIO);
+
+        assertThat(정책.intervalSec(0, () -> 0.5, PollIntervalPolicy.NO_SCALE)).isEqualTo(1);
+        assertThat(정책.intervalSec(10, () -> 0.5, PollIntervalPolicy.NO_SCALE)).isEqualTo(3);
     }
 }

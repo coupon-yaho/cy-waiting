@@ -29,6 +29,13 @@ public class PollIntervalPolicy {
     public static final double NORMAL_JITTER_RATIO = 0.2;
 
     private static final long MIN_INTERVAL_SEC = 1;
+
+    /**
+     * 흔들림의 최소 폭(초). <b>비율만 쓰면 가까운 밴드가 안 흩어진다</b> — 1초에
+     * 20% 는 ±0.2 초라 반올림이 통째로 먹어 값이 언제나 하나다. 그 밴드에 몰린
+     * 사람 전원이 같은 초에 함께 돌아온다.
+     */
+    private static final double MIN_JITTER_SEC = 1.0;
     private static final long MAX_INTERVAL_SEC = 60;
 
     /**
@@ -94,8 +101,10 @@ public class PollIntervalPolicy {
         // 그냥 double 이라, 1 미만이 들어오면 한산할 때 오히려 부하를 만든다.
         // 사본이 아니라 공개 API 의 방어이고, 양쪽 다 자기 시험이 있다.
         double scaled = Math.min(base * Math.max(1.0, pollScale), ceiling);
-        // [-jitter, +jitter] 로 흔들어 같은 밴드가 동시에 두드리지 않게 한다
-        double jittered = scaled * (1 + jitterRatio * (2 * random.getAsDouble() - 1));
+        // [-폭, +폭] 으로 흔들어 같은 밴드가 동시에 두드리지 않게 한다. **폭은 초로
+        // 잰다** — 비율만 쓰면 가까운 밴드에서 폭이 반올림보다 좁아 흩어짐이 0 이다.
+        double spread = Math.max(scaled * jitterRatio, MIN_JITTER_SEC);
+        double jittered = scaled + spread * (2 * random.getAsDouble() - 1);
         return Math.clamp(Math.round(jittered), MIN_INTERVAL_SEC, MAX_INTERVAL_SEC);
     }
 

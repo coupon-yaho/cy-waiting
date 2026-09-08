@@ -6,6 +6,7 @@ import com.kafkick.waiting.routing.RoutingProperties;
 import java.time.Duration;
 import com.kafkick.waiting.adapter.redis.LeaderRedisPort;
 import com.kafkick.waiting.domain.allocation.CreditSmoother;
+import io.micrometer.core.instrument.FunctionCounter;
 import io.micrometer.core.instrument.Gauge;
 import com.kafkick.waiting.domain.queue.GraceRetention;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
@@ -165,6 +166,12 @@ public class ControlPlaneConfig {
             MeterRegistry meters, GatewayRegistry registry) {
         // **도착 합은 배분을 안 거친다.** 상한으로 쓰면 관측이 제 출력에 오염돼
         // 진동하므로 뺐다. 남은 쓰임이 지표뿐이라 여기로 바로 온다.
+        // **울타리 거절도 같이 낸다.** 막힌 동안 전 노드가 얼어붙은 재료를 읽는데,
+        // 진입 로그는 구간의 첫 건뿐이라 그것만으로는 길이를 못 센다.
+        FunctionCounter.builder("waiting.snapshot.publish.fenced", port,
+                        AllocationRedisPort::publishFenced)
+                .description("울타리가 막은 발행 회차 수. 0 이 아니면 이 노드의 재료가 안 나갔다")
+                .register(meters);
         return InvariantMetrics.bind(round, port.clockSkew(), meters, port::markersDropped,
                 registry::passRate);
     }

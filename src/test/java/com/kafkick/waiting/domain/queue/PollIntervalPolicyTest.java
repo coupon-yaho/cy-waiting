@@ -291,4 +291,20 @@ class PollIntervalPolicyTest {
         assertThat(정책.intervalSec(10, () -> 0.5, PollIntervalPolicy.NO_SCALE)).isEqualTo(3);
         assertThat(정책.intervalSec(60, () -> 0.5, PollIntervalPolicy.NO_SCALE)).isEqualTo(10);
     }
+
+    /**
+     * <b>운영이 쓰는 비율을 값으로 못 박는다.</b> 상수를 참조해 비교하면 양변이
+     * 같이 움직여 언제나 통과한다 — 정작 바뀔 만한 것은 그 상수 쪽이다.
+     */
+    @Test
+    @DisplayName("운영_정책의_흔들림_폭은_밴드의_오분의_일이다")
+    void 운영_정책의_흔들림_폭은_밴드의_오분의_일이다() {
+        // 셋째 밴드(10초)로 잰다. 폭이 2초라 1초 바닥이 안 물어 비율이 그대로 보인다.
+        PollIntervalPolicy 정책 = PollIntervalPolicy.standard();
+
+        assertThat(정책.intervalSec(60, () -> 0.0, PollIntervalPolicy.NO_SCALE))
+                .as("아래쪽 끝").isEqualTo(8);
+        assertThat(정책.intervalSec(60, () -> 1.0, PollIntervalPolicy.NO_SCALE))
+                .as("위쪽 끝").isEqualTo(12);
+    }
 }

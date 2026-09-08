@@ -62,6 +62,9 @@ class AdmissionGatewayFilterTest {
 
     private static final ObjectMapper JSON = new ObjectMapper();
 
+    /** <b>운영이 쓰는 그것</b>이다. 여기서 새로 만들면 정책이 갈려도 초록으로 남는다. */
+    private final Rejection 거절값 = Rejection.standard();
+
     private static final String COUPON = "c1";
 
     private static final String MEMBER = "812934";
@@ -685,7 +688,7 @@ class AdmissionGatewayFilterTest {
     void 줄이_꽉_차_거절해도_배수를_지킨다() {
         // **천장 안쪽에서 잰다.** 배수 3 이면 90 이라 천장 50 에 잘리는데, 그러면
         // 배수 2 를 넘는 어떤 값을 넘겨도 같은 답이라 곱셈이 안 관측된다.
-        assertThat(AdmissionGatewayFilter.retryAfterSec(
+        assertThat(거절값.retryAfterSec(
                 AdmissionDecision.REJECT_QUEUE_FULL, () -> 0.5, 1.5))
                 .as("ETA 를 모르는 밴드(30초)에 배수 1.5").isEqualTo(45);
     }
@@ -702,10 +705,10 @@ class AdmissionGatewayFilterTest {
     @Test
     @DisplayName("차례가_온_사람의_재시도는_배수를_안_받는다")
     void 차례가_온_사람의_재시도는_배수를_안_받는다() {
-        assertThat(AdmissionGatewayFilter.retryAfterSec(
+        assertThat(거절값.retryAfterSec(
                 AdmissionDecision.RETRY_TOKEN, () -> 0.5, 3.0))
                 .as("가장 가까운 밴드(1초). 배수 3 이 곱해지면 안 된다").isEqualTo(1);
-        assertThat(AdmissionGatewayFilter.retryAfterSec(
+        assertThat(거절값.retryAfterSec(
                 AdmissionDecision.RETRY_TOKEN, () -> 0.5, 50.0))
                 .as("배수 50 이면 상한 60초 — 토큰 최소 수명 150초의 절반이 날아간다")
                 .isEqualTo(1);
@@ -1002,11 +1005,11 @@ class AdmissionGatewayFilterTest {
     void 거절_사유마다_다른_응답이다() {
         // **뭉치면 운영자가 엉뚱한 것을 조인다.** 매진은 끝난 것이고, 큐 만원은
         // 잠시 뒤 다시 오면 되고, 과부하는 노드를 늘려야 한다 — 셋이 다르다.
-        assertThat(AdmissionGatewayFilter.codeOf(AdmissionDecision.REJECT_SOLD_OUT))
+        assertThat(거절값.code(AdmissionDecision.REJECT_SOLD_OUT))
                 .isEqualTo(ApiError.Code.SOLD_OUT);
-        assertThat(AdmissionGatewayFilter.codeOf(AdmissionDecision.REJECT_QUEUE_FULL))
+        assertThat(거절값.code(AdmissionDecision.REJECT_QUEUE_FULL))
                 .isEqualTo(ApiError.Code.QUEUE_FULL);
-        assertThat(AdmissionGatewayFilter.codeOf(AdmissionDecision.REJECT_OVERLOAD))
+        assertThat(거절값.code(AdmissionDecision.REJECT_OVERLOAD))
                 .isEqualTo(ApiError.Code.TEMPORARILY_UNAVAILABLE);
     }
 
@@ -1021,9 +1024,9 @@ class AdmissionGatewayFilterTest {
 
         // 루프가 공회전해도 통과하지 않게 개수를 함께 본다.
         assertThat(거절).hasSize(4);
-        // codeOf 는 switch 식이라 null 을 못 낸다 — 던지지 않는 것이 재려는 것이다.
+        // code 는 switch 식이라 null 을 못 낸다 — 던지지 않는 것이 재려는 것이다.
         assertThat(거절).allSatisfy(decision ->
-                assertThatCode(() -> AdmissionGatewayFilter.codeOf(decision))
+                assertThatCode(() -> 거절값.code(decision))
                         .as("%s", decision).doesNotThrowAnyException());
     }
 
@@ -1031,10 +1034,10 @@ class AdmissionGatewayFilterTest {
     @DisplayName("통과_판정에_봉투를_물으면_던진다")
     void 통과_판정에_봉투를_물으면_던진다() {
         // 조용히 매진을 돌려주면 통과해야 할 사람이 끝난 것으로 처리된다.
-        assertThatThrownBy(() -> AdmissionGatewayFilter.codeOf(AdmissionDecision.PASS_UNDER_CAP))
+        assertThatThrownBy(() -> 거절값.code(AdmissionDecision.PASS_UNDER_CAP))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() ->
-                AdmissionGatewayFilter.retryAfterSec(AdmissionDecision.ENQUEUE_ALWAYS, () -> 0.5, 1.0))
+                거절값.retryAfterSec(AdmissionDecision.ENQUEUE_ALWAYS, () -> 0.5, 1.0))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -1093,9 +1096,9 @@ class AdmissionGatewayFilterTest {
         // 파도가 다음 거절을 만들고, 그게 반복된다.
         //
         // 폭까지 본다. 다르기만 하면 흔들림이 얼마든 통과한다.
-        assertThat(AdmissionGatewayFilter.retryAfterSec(
+        assertThat(거절값.retryAfterSec(
                 AdmissionDecision.REJECT_QUEUE_FULL, () -> 0, 1.0)).isEqualTo(24);
-        assertThat(AdmissionGatewayFilter.retryAfterSec(
+        assertThat(거절값.retryAfterSec(
                 AdmissionDecision.REJECT_QUEUE_FULL, () -> 1, 1.0)).isEqualTo(36);
     }
 
@@ -1109,7 +1112,7 @@ class AdmissionGatewayFilterTest {
         Random 난수 = new Random(20260825L);
         double[] 값 = new double[10_000];
         for (int i = 0; i < 값.length; i++) {
-            값[i] = AdmissionGatewayFilter.retryAfterSec(
+            값[i] = 거절값.retryAfterSec(
                     AdmissionDecision.REJECT_QUEUE_FULL, 난수::nextDouble, 1.0);
         }
 
@@ -1128,16 +1131,16 @@ class AdmissionGatewayFilterTest {
         // 자기 몫이 남에게 간다.
         //
         // 가장 가까운 밴드라 흔들림이 반올림에 흡수된다 — 그것도 못 박는다.
-        assertThat(AdmissionGatewayFilter.retryAfterSec(AdmissionDecision.RETRY_TOKEN, () -> 0, 1.0))
+        assertThat(거절값.retryAfterSec(AdmissionDecision.RETRY_TOKEN, () -> 0, 1.0))
                 .isEqualTo(1);
-        assertThat(AdmissionGatewayFilter.retryAfterSec(AdmissionDecision.RETRY_TOKEN, () -> 1, 1.0))
+        assertThat(거절값.retryAfterSec(AdmissionDecision.RETRY_TOKEN, () -> 1, 1.0))
                 .isEqualTo(1);
     }
 
     @Test
     @DisplayName("매진에는_안내를_안_싣는다")
     void 매진에는_안내를_안_싣는다() {
-        assertThat(AdmissionGatewayFilter.retryAfterSec(AdmissionDecision.REJECT_SOLD_OUT,
+        assertThat(거절값.retryAfterSec(AdmissionDecision.REJECT_SOLD_OUT,
                 () -> 0.5, 1.0)).isEqualTo(ApiError.NO_RETRY);
     }
 
@@ -1146,7 +1149,7 @@ class AdmissionGatewayFilterTest {
     void 차례가_온_사람은_큐로_안_돌린다() {
         // 토큰을 들고 왔는데 노드 상한을 넘은 경우다. 어느 술어에도 안 걸려서
         // 그냥 두면 조용히 통과한다 — 상한을 넘겼는데 지나가는 것이다.
-        assertThat(AdmissionGatewayFilter.codeOf(AdmissionDecision.RETRY_TOKEN))
+        assertThat(거절값.code(AdmissionDecision.RETRY_TOKEN))
                 .isEqualTo(ApiError.Code.RETRY_TOKEN);
     }
 
@@ -1864,7 +1867,10 @@ class AdmissionGatewayFilterTest {
     @Test
     @DisplayName("격벽이_끊어도_차례가_온_사람은_가까이_부른다")
     void 격벽이_끊어도_차례가_온_사람은_가까이_부른다() {
-        스냅샷을_심는다(CouponStates.queueing(CREDIT, 1_000_000, 10), 좁은_META);
+        // **배수를 1 이 아닌 값으로 심는다.** 1 이면 배수를 실어도 값이 같아,
+        // 차례가 온 사람을 배수만큼 멀리 보내는 판이 그대로 통과한다.
+        스냅샷을_심는다(CouponStates.queueing(CREDIT, 1_000_000, 10),
+                SnapshotMetas.overBudget(CREDIT, 1, 1.5));
         붙잡아_채운다(초당_통과 * 3);
 
         MockServerWebExchange 차례가_온_사람 = 다음_초에_한_건(
@@ -1875,9 +1881,8 @@ class AdmissionGatewayFilterTest {
         // 폴백이 같은 장애에 쓰는 갈래와 같은 값이어야 한다. 밴드만 보면
         // 정책이 통째로 바뀌어도 통과하므로 값으로 못 박는다.
         assertThat(차례가_온_사람.getResponse().getHeaders().getFirst("Retry-After"))
-                .isEqualTo(String.valueOf(
-                        AdmissionGatewayFilter.retryAfterSec(
-                                AdmissionDecision.RETRY_TOKEN, 고정_난수, 1.0)));
+                .as("가장 가까운 밴드다. 같은 매핑으로 기대값을 만들면 밴드를 바꿔도 통과한다")
+                .isEqualTo("1");
         풀어_준다();
     }
 
@@ -1905,6 +1910,43 @@ class AdmissionGatewayFilterTest {
         assertThat(막힌_것.getResponse().getHeaders().getFirst("Retry-After"))
                 .as("30초 밴드에 배수 1.5").isEqualTo(배수가_걸린_거절);
         풀어_준다();
+    }
+
+    /**
+     * <b>차례가 온 사람의 거절은 큐로 안 돌린다.</b>
+     *
+     * <p>필터를 거쳐 본다. 매핑만 재면 필터가 다른 코드를 실어도 초록이고, 그때
+     * 클라이언트는 줄이 찼다는 답을 받아 새 순번으로 다시 선다 — 순번 역행이다.
+     */
+    @Test
+    @DisplayName("노드_예산을_다_쓴_뒤_토큰_보유자는_큐로_안_돌린다")
+    void 노드_예산을_다_쓴_뒤_토큰_보유자는_큐로_안_돌린다() {
+        스냅샷을_심는다(CouponStates.queueing(CREDIT, 1_000_000, 10), 좁은_META);
+        // 같은 초에 노드 예산을 다 쓴다. 다음 한 건이 차례가 온 채로 상한에 걸린다.
+        AtomicInteger 뒷단에_닿은_수 = new AtomicInteger();
+        for (int i = 0; i < 초당_통과; i++) {
+            filter.filter(토큰_요청("먼저" + i), e -> {
+                뒷단에_닿은_수.incrementAndGet();
+                return Mono.empty();
+            }).block();
+        }
+
+        MockServerWebExchange 넘친_사람 = 토큰_요청("넘친사람");
+        filter.filter(넘친_사람, e -> Mono.empty()).block();
+
+        // **상한 직전까지는 통과해야 한다.** 안 재면 예산이 줄어드는 판도 초록이다.
+        assertThat(뒷단에_닿은_수).hasValue(초당_통과);
+        assertThat(넘친_사람.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .isEqualTo(AdmissionDecision.RETRY_TOKEN);
+        // **큐 만원과 같은 429 다.** 상태로는 안 갈리므로 본문이 유일한 판정이다.
+        assertThat(넘친_사람.getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        assertThat(넘친_사람.getResponse().getBodyAsString().block())
+                .as("큐가 찼다는 답을 주면 새 순번으로 다시 선다")
+                .contains("\"code\":\"RETRY_TOKEN\"");
+        // **값으로 못 박는다.** 같은 매핑으로 기대값을 만들면 멀리 보내는 판이 통과한다.
+        assertThat(넘친_사람.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER))
+                .as("토큰 수명이 150초라 멀리 보내면 줄 맨 뒤로 간다").isEqualTo("1");
     }
 
     /**

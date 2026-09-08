@@ -51,8 +51,8 @@ import reactor.netty.http.server.HttpServer;
         properties = {"waiting.scheduler.enabled=false", "waiting.routing.enabled=true",
                 "waiting.routing.allowed-destinations=127.0.0.0/8",
                 "waiting.routing.strategy=round-robin"})
-@Import(ConnectRetryTest.TwoInstances.class)
-class ConnectRetryTest {
+@Import(ConnectRetryRoutingTest.TwoInstances.class)
+class ConnectRetryRoutingTest {
 
     private static final Instant 지금 = Instant.parse("2026-09-03T00:00:00Z");
 

@@ -1,7 +1,6 @@
 package com.kafkick.waiting.gateway;
 
 import com.kafkick.waiting.domain.admission.AdmissionDecision;
-import com.kafkick.waiting.domain.queue.EtaPolicy;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
@@ -31,9 +30,6 @@ public final class BackendFallback {
 
     private static final String METRIC = "waiting.backend.fallback";
 
-    /** 재시도를 흩는 폭. 판정 경로와 같은 값이라야 두 안내가 안 갈린다. */
-    private static final PollIntervalPolicy POLL = PollIntervalPolicy.of(PollIntervalPolicy.NORMAL_JITTER_RATIO);
-
     /**
      * <b>줄에 선 사람에게 자리가 그대로라고 말한다.</b> 안 그러면 다시 줄을
      * 서려 하고, 그건 자기 자리를 버리는 일이다.
@@ -56,6 +52,9 @@ public final class BackendFallback {
     private final ApiError error;
     private final MeterRegistry meters;
     private final DoubleSupplier random;
+
+    /** 다시 올 시각을 내는 자리. 필터와 같은 것을 써야 두 안내가 안 갈린다. */
+    private final Rejection rejection = Rejection.standard();
 
     /** 없으면 상태를 모른다고 적는다. 시험이 레지스트리 없이도 돌 수 있어야 한다. */
     private final CircuitBreakerRegistry circuits;
@@ -166,14 +165,12 @@ public final class BackendFallback {
     }
 
     /**
-     * 다시 올 시각.
-     *
-     * <p>차례가 온 사람은 <b>가장 가까운 밴드</b>로 부르고 배수도 안 받는다.
-     * 멀리 보내면 토큰이 죽어 줄 맨 뒤에 다시 선다.
+     * 다시 올 시각. <b>여기서 값을 짓지 않는다</b> — 차례가 온 사람과 안 선 사람을
+     * 판정값으로 옮겨 주고, 밴드와 배수는 그 매핑이 정한다.
      */
     private int retryAfterSec(boolean admitted, double pollScale) {
-        return admitted
-                ? (int) POLL.intervalSec(0, random, PollIntervalPolicy.NO_SCALE)
-                : (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random, pollScale);
+        return rejection.retryAfterSec(admitted
+                ? AdmissionDecision.RETRY_TOKEN
+                : AdmissionDecision.REJECT_OVERLOAD, random, pollScale);
     }
 }

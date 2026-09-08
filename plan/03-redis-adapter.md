@@ -122,7 +122,7 @@ S == 1:   queue:{cid}     maxscore:{cid}     admitted:{cid}     grace:{cid}     
 
 전역:     gw:snapshot      gw:instances      scheduler:leader    gw:tunables
           coupons:active   coupon:policy     capacity:coupon-svc:{version}
-울타리:   {gw:snapshot}:fence          dropfence:{cid:s}
+울타리:   {gw:snapshot}:fence   dropfence:{cid:s}   applyfence:{cid:s}
           — 태그가 지키는 데이터와 같은 슬롯에 묶는다. 옛 임기의 쓰기를 거절한다
 쿠폰별:   stock:{cid}      (샤드 무관 — 발급 계층이 소유)
 

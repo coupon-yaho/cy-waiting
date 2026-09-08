@@ -50,6 +50,8 @@ class AllocationRedisPortTest extends RedisContainerSupport {
                 RedisKeys.alive("c1", SHARDS, 0), RedisKeys.grace("c1", SHARDS, 0),
                 RedisKeys.stock("c3"), RedisKeys.maxScore("c1", SHARDS, 0),
                 RedisKeys.dropFence("c1", SHARDS, 0),
+                RedisKeys.applyFence("c1", SHARDS, 0),
+                RedisKeys.applyFence("c2", SHARDS, 0),
                 // **울타리도 지운다.** 남기면 앞 시험이 올려 둔 임기가 다음 시험의
                 // 발행을 거절해, 회차가 아니라 순서가 결과를 정한다.
                 RedisKeys.SNAPSHOT_FENCE,
@@ -418,12 +420,196 @@ class AllocationRedisPortTest extends RedisContainerSupport {
                 .containsOnly(entry("c1", 70L));
     }
 
+    /**
+     * <b>옛 임기의 적용은 임계를 안 올린다</b> (CY-892). 발행에는 울타리를 걸었는데
+     * 사람을 들이는 쓰기에는 문이 없었다 — 유령 리더가 깨어나면 같은 초에 두 리더의
+     * 몫이 다 나가 그 초의 입장 인원이 예산의 두 배다. 불변식 2 다.
+     */
+    @Test
+    @DisplayName("옛_임기의_적용은_안_들인다")
+    void 옛_임기의_적용은_안_들인다() {
+        줄_세운다("c1", 10, 20, 30, 40, 50);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+
+        assertThatThrownBy(() -> port.apply(new Grant("c1", 2), 임기 - 1).block(WAIT))
+                .as("값으로 0 을 내면 임계가 안 올랐는데 몫만 실려 나간다")
+                .isInstanceOf(AllocationRedisPort.FencedOutException.class);
+
+        assertThat(redis.opsForValue().get(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT))
+                .as("임계가 두 번 올라가면 그 초의 입장이 예산의 두 배다")
+                .isEqualTo("20");
+    }
+
+    /**
+     * <b>유령이 먼저 도착해도 막힌다</b> (CY-892). 적용만으로는 그 쿠폰에 크레딧이
+     * 갈 때까지 표에 옛 임기가 남아, 새 리더가 만지기 전이면 유령이 자기 번호와
+     * 같아서 통과한다 — 그래서 승계 때 문을 먼저 잠근다.
+     */
+    @Test
+    @DisplayName("승계_때_잠근_문은_유령이_먼저_와도_막는다")
+    void 승계_때_잠근_문은_유령이_먼저_와도_막는다() {
+        줄_세운다("c1", 10, 20, 30, 40, 50);
+        port.apply(new Grant("c1", 2), 임기 - 1).block(WAIT);
+        // 새 리더가 그 쿠폰을 아직 안 만졌다. 승계 때 문만 잠근 상태다.
+        port.sealApplyFences(List.of("c1"), 임기).block(WAIT);
+
+        assertThatThrownBy(() -> port.apply(new Grant("c1", 2), 임기 - 1).block(WAIT))
+                .isInstanceOf(AllocationRedisPort.FencedOutException.class);
+
+        assertThat(redis.opsForValue().get(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT))
+                .isEqualTo("20");
+    }
+
+    /**
+     * <b>잠금은 덮어쓴다.</b> 큰 값만 쓰면 시계가 뒤로 간 리더가 승계해도 옛 표를
+     * 못 넘어 그 쿠폰의 줄이 수명 내내 안 빠진다. 락을 쥔 것이 권위다.
+     */
+    @Test
+    @DisplayName("잠금은_작은_번호로도_덮는다")
+    void 잠금은_작은_번호로도_덮는다() {
+        줄_세운다("c1", 10, 20, 30, 40, 50);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+
+        port.sealApplyFences(List.of("c1"), 임기 - 100).block(WAIT);
+
+        assertThat(port.apply(new Grant("c1", 2), 임기 - 100).block(WAIT))
+                .as("시계가 뒤로 간 새 리더도 들일 수 있어야 한다").isEqualTo(2);
+    }
+
+    /** 리더가 아니면 안 잠근다. 강등된 노드가 문을 제 번호로 되돌리면 안 된다. */
+    @Test
+    @DisplayName("리더가_아니면_안_잠근다")
+    void 리더가_아니면_안_잠근다() {
+        assertThat(port.sealApplyFences(List.of("c1"), 0).block(WAIT)).isZero();
+
+        assertThat(redis.hasKey(RedisKeys.applyFence("c1", SHARDS, 0)).block(WAIT)).isFalse();
+    }
+
+    /**
+     * <b>스크립트 자신도 리더가 아닌 호출을 막는다.</b> 포트가 앞에서 걸러 주므로
+     * 그 가드를 지워도 위 시험은 초록이다 — 다른 자리에서 이 스크립트를 부르는
+     * 순간 강등된 노드가 문을 제 번호로 덮는다.
+     */
+    @Test
+    @DisplayName("잠금_스크립트도_리더가_아니면_안_쓴다")
+    void 잠금_스크립트도_리더가_아니면_안_쓴다() {
+        assertThat(port.sealApplyFences(List.of("c1", "c2"), 임기).block(WAIT))
+                .as("잠근 수를 그대로 센다 — 1 로 갈면 안 잠근 것도 잠갔다고 센다")
+                .isEqualTo(2);
+    }
+
+    /**
+     * <b>울타리 표는 스스로 풀린다.</b> 없으면 시계가 뒤로 간 리더가 못 풀려 그
+     * 쿠폰의 줄이 영영 안 빠진다 — 살아 있음이 통째로 죽는다.
+     */
+    @Test
+    @DisplayName("입장_울타리도_수명이_있다")
+    void 입장_울타리도_수명이_있다() {
+        줄_세운다("c1", 10, 20, 30);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+
+        assertThat(redis.getExpire(RedisKeys.applyFence("c1", SHARDS, 0)).block(WAIT))
+                .isNotNull()
+                .satisfies(ttl -> assertThat(ttl).isPositive());
+    }
+
+    /** 잠금도 수명을 준다. 안 주면 잠근 문이 영구가 되어 같은 자리에서 갇힌다. */
+    @Test
+    @DisplayName("잠근_문에도_수명이_있다")
+    void 잠근_문에도_수명이_있다() {
+        port.sealApplyFences(List.of("c1"), 임기).block(WAIT);
+
+        assertThat(redis.getExpire(RedisKeys.applyFence("c1", SHARDS, 0)).block(WAIT))
+                .isNotNull()
+                .satisfies(ttl -> assertThat(ttl).isPositive());
+    }
+
+    /** 거절 수가 쿠폰마다 오른다. 회차로 읽으면 운영자가 장애 규모를 과소평가한다. */
+    @Test
+    @DisplayName("거절_수가_쿠폰마다_오른다")
+    void 거절_수가_쿠폰마다_오른다() {
+        줄_세운다("c1", 10, 20, 30);
+        줄_세운다("c2", 10, 20, 30);
+        port.sealApplyFences(List.of("c1", "c2"), 임기).block(WAIT);
+        double 앞 = port.applyFenced();
+
+        for (String couponId : List.of("c1", "c2")) {
+            assertThatThrownBy(() -> port.apply(new Grant(couponId, 1), 임기 - 1).block(WAIT))
+                    .isInstanceOf(AllocationRedisPort.FencedOutException.class);
+        }
+
+        assertThat(port.applyFenced() - 앞).isEqualTo(2);
+    }
+
+    /** 막은 임기를 메시지에 싣는다. 안 실으면 운영자가 원인을 손으로 찾는다. */
+    @Test
+    @DisplayName("막은_임기를_메시지에_싣는다")
+    void 막은_임기를_메시지에_싣는다() {
+        줄_세운다("c1", 10, 20, 30);
+        port.apply(new Grant("c1", 1), 임기).block(WAIT);
+
+        assertThatThrownBy(() -> port.apply(new Grant("c1", 1), 임기 - 1).block(WAIT))
+                .hasMessageContaining(Long.toString(임기));
+    }
+
+    /** 임기 0 은 막은 사람이 아니라 "내가 리더가 아니다" 다. 없는 임기를 찍으면 안 된다. */
+    @Test
+    @DisplayName("리더가_아닌_것을_막은_임기로_안_찍는다")
+    void 리더가_아닌_것을_막은_임기로_안_찍는다() {
+        줄_세운다("c1", 10, 20, 30);
+
+        assertThatThrownBy(() -> port.apply(new Grant("c1", 1), 0).block(WAIT))
+                .hasMessageContaining("리더가 아니다")
+                .hasMessageNotContaining("마지막으로 들인 임기");
+    }
+
+    /**
+     * <b>정상 회차를 거절로 안 읽는다.</b> 임계가 없고 들일 사람도 없으면 스크립트가
+     * 거절과 같은 값을 내는데, 칸 수로 안 가르면 새 쿠폰과 빈 큐가 거절이 된다.
+     */
+    @Test
+    @DisplayName("빈_큐와_새_쿠폰은_거절이_아니다")
+    void 빈_큐와_새_쿠폰은_거절이_아니다() {
+        assertThat(port.apply(new Grant("c1", 0), 임기).block(WAIT))
+                .as("크레딧 0 은 정상 회차다").isZero();
+        assertThat(port.apply(new Grant("c1", 3), 임기).block(WAIT))
+                .as("큐가 빈 것도 정상 회차다").isZero();
+    }
+
+    /** 다음 임기는 통과해야 한다. 부등호를 잘못 쓰면 새 리더가 영영 못 들인다. */
+    @Test
+    @DisplayName("새_임기의_적용은_통한다")
+    void 새_임기의_적용은_통한다() {
+        줄_세운다("c1", 10, 20, 30, 40, 50);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+
+        assertThat(port.apply(new Grant("c1", 2), 임기 + 1).block(WAIT)).isEqualTo(2);
+        assertThat(redis.opsForValue().get(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT))
+                .isEqualTo("40");
+    }
+
+    /**
+     * <b>0 은 리더가 아니라는 뜻이다.</b> 첫 적용으로 낸다 — 울타리 값이 이미 있으면
+     * 그 비교에 걸려 이 갈래를 지워도 초록이다.
+     */
+    @Test
+    @DisplayName("리더가_아니면_적용이_안_선다")
+    void 리더가_아니면_적용이_안_선다() {
+        줄_세운다("c1", 10, 20, 30);
+
+        assertThatThrownBy(() -> port.apply(new Grant("c1", 2), 0).block(WAIT))
+                .isInstanceOf(AllocationRedisPort.FencedOutException.class);
+
+        assertThat(redis.hasKey(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT))
+                .as("리더가 아닌 노드는 임계를 안 만든다").isFalse();
+    }
+
     @Test
     @DisplayName("적용하면_임계가_올라간다")
     void 적용하면_임계가_올라간다() {
         줄_세운다("c1", 10, 20, 30);
 
-        Long 들인_인원 = port.apply(new Grant("c1", 2)).block(WAIT);
+        Long 들인_인원 = port.apply(new Grant("c1", 2), 임기).block(WAIT);
 
         assertThat(들인_인원).isEqualTo(2);
         assertThat(redis.opsForValue().get(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT))
@@ -763,6 +949,8 @@ class AllocationRedisPortTest extends RedisContainerSupport {
                 RedisKeys.alive("c1", SHARDS, 0), RedisKeys.grace("c1", SHARDS, 0),
                 RedisKeys.stock("c3"), RedisKeys.maxScore("c1", SHARDS, 0),
                 RedisKeys.dropFence("c1", SHARDS, 0),
+                RedisKeys.applyFence("c1", SHARDS, 0),
+                RedisKeys.applyFence("c2", SHARDS, 0),
                 // **울타리도 지운다.** 남기면 앞 시험이 올려 둔 임기가 다음 시험의
                 // 발행을 거절해, 회차가 아니라 순서가 결과를 정한다.
                 RedisKeys.SNAPSHOT_FENCE,

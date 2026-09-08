@@ -15,6 +15,7 @@ import com.kafkick.waiting.control.QueueSweeper;
 import java.util.concurrent.ConcurrentHashMap;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -79,6 +80,9 @@ public final class AllocationRedisPort implements SnapshotSource {
     /** 한 회차가 동시에 낼 수 있는 읽기. 무제한이면 한 회차가 커넥션을 독점한다. */
     private static final int MAX_CONCURRENT_READS = 16;
 
+    /** 잠금을 겹쳐 보내는 폭. 읽기와 값은 같지만 이름이 거짓말을 하면 안 된다. */
+    private static final int MAX_CONCURRENT_WRITES = 16;
+
     /**
      * 울타리 표 수명의 <b>하한</b>. 실제 값은 리스에서 유도한다.
      *
@@ -110,6 +114,9 @@ public final class AllocationRedisPort implements SnapshotSource {
     private static final RedisScript<List> SWEEP =
             RedisScript.of(new ClassPathResource("redis/sweep.lua"), List.class);
 
+    private static final RedisScript<Long> SEAL_APPLY_FENCE =
+            RedisScript.of(new ClassPathResource("redis/apply_fence_seal.lua"), Long.class);
+
     private static final RedisScript<Long> DROP_QUEUE =
             RedisScript.of(new ClassPathResource("redis/drop_queue.lua"), Long.class);
 
@@ -140,6 +147,10 @@ public final class AllocationRedisPort implements SnapshotSource {
     private final FailureWindow publishFence = FailureWindow.create();
 
     private final AtomicLong publishFenced = new AtomicLong();
+
+    /** 울타리가 막은 입장 적용 건수. <b>회차가 아니라 쿠폰 단위다</b>. */
+    private final AtomicLong applyFenced = new AtomicLong();
+
 
     /**
      * 상한을 넘겨 버린 미상 표시의 누적 수. <b>0 이 아니면 거짓 매진이 나갔다.</b>
@@ -490,7 +501,7 @@ public final class AllocationRedisPort implements SnapshotSource {
         }
         return Flux.fromIterable(keys)
                 .flatMap(key -> redis.opsForZSet().size(key).defaultIfEmpty(0L))
-                .reduce(0L, Long::sum);
+                .reduce(0L, (a, b) -> a + b);
     }
 
     /**
@@ -659,18 +670,64 @@ public final class AllocationRedisPort implements SnapshotSource {
     }
 
     /**
+     * 활성 쿠폰의 문을 새 임기로 잠근다. <b>승계 직후에 부른다</b> — 적용만으로는
+     * 그 쿠폰에 크레딧이 갈 때까지 표에 옛 임기가 남고, 그 창에 유령이 먼저
+     * 도착하면 자기 번호와 같아서 통과한다.
+     *
+     * <p><b>샤드 0 에만 나간다.</b> 적용과 같은 자리라 지금은 맞지만, 샤딩을 켜면
+     * 나머지 샤드의 문이 안 잠긴다.
+     *
+     * @return 잠근 쿠폰 수. 넘긴 수보다 적으면 그만큼 못 잠갔다
+     */
+    public Mono<Long> sealApplyFences(Collection<String> couponIds, long fence) {
+        if (fence <= 0 || couponIds.isEmpty()) {
+            return Mono.just(0L);
+        }
+        return Flux.fromIterable(couponIds)
+                .flatMap(couponId -> redis.execute(SEAL_APPLY_FENCE,
+                                List.of(RedisKeys.applyFence(couponId, shards, 0)),
+                                List.of(Long.toString(fence),
+                                        Long.toString(fenceTtl.toMillis())))
+                        .next()
+                        // **스크립트가 낸 값을 그대로 접는다.** 1 로 갈면 "예외가 안
+                        // 난 수" 가 되어, 안 잠근 것을 잠갔다고 센다.
+                        .map(Number::longValue)
+                        // 하나가 실패해도 나머지는 잠근다. 못 잠근 쿠폰은 적용이
+                        // 그 자리에서 다시 막는다 — 안 잠긴 채로 지나가지 않는다.
+                        .onErrorReturn(0L), MAX_CONCURRENT_WRITES)
+                .reduce(0L, Long::sum);
+    }
+
+    /**
      * 들어온 인원을 돌려준다. 나눠 준 몫과 다르다 — 큐가 짧으면 남는다.
      *
      * <p><b>샤드가 하나인 동안만 옳다.</b> 여럿이면 몫을 샤드에 나눠 각각
      * 적용해야 하는데, 지금은 0번에만 나간다. 그래서 기동에서 하나로 막는다.
+     *
+     * @param fence 이 회차의 임기. 옛 임기는 임계를 안 올린다. 0 이면 리더가 아니다
      */
-    public Mono<Long> apply(Grant grant) {
+    public Mono<Long> apply(Grant grant, long fence) {
         return redis.execute(APPLY,
                         List.of(RedisKeys.queue(grant.couponId(), shards, 0),
-                                RedisKeys.admitted(grant.couponId(), shards, 0)),
-                        List.of(Long.toString(grant.credit())))
+                                RedisKeys.admitted(grant.couponId(), shards, 0),
+                                RedisKeys.applyFence(grant.couponId(), shards, 0)),
+                        List.of(Long.toString(grant.credit()), Long.toString(fence),
+                                Long.toString(fenceTtl.toMillis())))
                 .next()
-                .map(result -> Long.parseLong(String.valueOf(((List<?>) result).get(1))));
+                .flatMap(result -> {
+                    List<?> counts = (List<?>) result;
+                    // **칸 수로 가른다.** {-1, 0} 은 임계가 없고 들일 사람도 없는
+                    // 정상 회차와 같은 값이라, 그것으로 가르면 새 쿠폰과 빈 큐가
+                    // 거절로 오독된다.
+                    if (counts.size() < 3) {
+                        return Mono.just(Long.parseLong(String.valueOf(counts.get(1))));
+                    }
+                    applyFenced.incrementAndGet();
+                    // **오류로 올린다.** 회차가 몫을 0 으로 접는 자리가 이미 있고,
+                    // 값으로 0 을 내면 임계가 안 올랐는데 몫만 실려 나간다.
+                    return Mono.error(new FencedOutException(grant.couponId(), fence,
+                            Long.parseLong(String.valueOf(counts.get(2)))));
+                });
     }
 
     /**
@@ -749,12 +806,30 @@ public final class AllocationRedisPort implements SnapshotSource {
         return publishFenced.get();
     }
 
-    /** 옛 임기의 발행이 거절됐다. 이 노드는 더 이상 리더가 아니다. */
+    /** 울타리가 입장 적용을 거절한 건수. 쿠폰마다 오르므로 회차 수가 아니다. */
+    public double applyFenced() {
+        return applyFenced.get();
+    }
+
+    /**
+     * 옛 임기의 쓰기가 거절됐다. 발행과 입장 적용이 같은 원인으로 여기 온다 —
+     * 이 노드는 더 이상 리더가 아니거나, 그렇게 보이는 임기를 들고 있다.
+     */
     public static final class FencedOutException extends IllegalStateException {
 
         FencedOutException(long fence, long blockedBy) {
             super("발행이 울타리에 막혔다 — 이 노드의 임기 %d, 마지막으로 쓴 임기 %d"
                     .formatted(fence, blockedBy));
+        }
+
+        FencedOutException(String couponId, long fence, long blockedBy) {
+            // **임기 0 은 "막은 사람" 이 아니라 "내가 리더가 아니다" 다.** 그 값을
+            // 마지막 기록자로 찍으면 운영자가 없는 임기를 찾는다.
+            super(blockedBy > 0
+                    ? "입장 적용이 울타리에 막혔다 — 쿠폰 %s, 이 노드의 임기 %d, 마지막으로 들인 임기 %d"
+                            .formatted(couponId, fence, blockedBy)
+                    : "입장 적용을 안 냈다 — 쿠폰 %s, 이 노드는 리더가 아니다"
+                            .formatted(couponId));
         }
     }
 

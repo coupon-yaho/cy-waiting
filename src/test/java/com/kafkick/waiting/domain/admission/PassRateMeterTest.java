@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -300,6 +301,56 @@ class PassRateMeterTest {
         assertThat(meter.perSecond(16_999)).as("두 창 직전까지는 직전 값이다")
                 .isEqualTo(60);
         assertThat(meter.perSecond(17_000)).as("정확히 두 창이면 지난 부하다").isZero();
+    }
+
+    /**
+     * <b>둘이 같이 접어도 한 번만 접힌다.</b> 경계에 여럿이 몰리면 진 쪽의 CAS 가
+     * 이미 접힌 창 위에서 다시 돈다. 그때 또 접으면 직전 값이 갓 연 창의 것이 되어,
+     * 끊긴 적 없는 부하가 한 창 내내 0 으로 보고된다.
+     */
+    @Test
+    @DisplayName("경계에_몰려도_한_번만_접는다")
+    void 경계에_몰려도_한_번만_접는다() throws Exception {
+        PassRateMeter meter = PassRateMeter.of(WINDOW_MS);
+        int threads = 8;
+        int perWindow = 5_000;
+        int rounds = 200;
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        CyclicBarrier 맞춤 = new CyclicBarrier(threads);
+        AtomicLong 최소 = new AtomicLong(Long.MAX_VALUE);
+        List<Future<?>> running = new ArrayList<>();
+        for (int t = 0; t < threads; t++) {
+            boolean 읽는_쪽 = t == 0;
+            running.add(pool.submit(() -> {
+                for (int r = 0; r < rounds; r++) {
+                    long opened = 1_000 + r * (WINDOW_MS + 1);
+                    for (int i = 0; i < perWindow; i++) {
+                        meter.passed(opened);
+                    }
+                    맞춤.await(30, TimeUnit.SECONDS);
+                    // 다 같이 경계를 넘는다. 하나가 접고 나머지는 진 CAS 를 다시 돈다.
+                    meter.passed(opened + WINDOW_MS + 1);
+                    맞춤.await(30, TimeUnit.SECONDS);
+                    if (읽는_쪽) {
+                        최소.accumulateAndGet(meter.perSecond(opened + WINDOW_MS + 1),
+                                Math::min);
+                    }
+                    맞춤.await(30, TimeUnit.SECONDS);
+                }
+                return null;
+            }));
+        }
+        try {
+            for (Future<?> f : running) {
+                f.get(60, TimeUnit.SECONDS);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+
+        assertThat(최소.get())
+                .as("두 번 접히면 직전 값이 갓 연 창의 몇 건으로 주저앉는다")
+                .isEqualTo(threads * perWindow / (WINDOW_MS / 1_000));
     }
 
     /** 뒤진 도장 하나가 창을 버리면, 끊긴 적 없는 부하가 한 창 내내 0 이다. */

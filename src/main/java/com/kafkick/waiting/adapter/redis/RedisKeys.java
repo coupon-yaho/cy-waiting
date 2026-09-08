@@ -111,6 +111,16 @@ public final class RedisKeys {
     }
 
     /**
+     * 입장 적용의 <b>울타리 표</b>. 마지막으로 사람을 들인 리더의 펜스 번호다.
+     *
+     * <p>임계가 단조로 오르는 것은 순번 역행에 대한 보장이지 초과 발급에 대한 것이
+     * 아니다 — 두 리더가 각각 제 몫을 밀면 임계가 예산을 넘는다.
+     */
+    public static String applyFence(String couponId, int shards, int shard) {
+        return "applyfence:{" + tag(couponId, shards, shard) + "}";
+    }
+
+    /**
      * 남은 재고. <b>발급 계층이 소유하고 샤드와 무관하다.</b>
      *
      * <p>샤딩하면 슬롯이 갈리므로 <b>Lua 에서 만지지 않는다</b> — 별도로 읽는다.

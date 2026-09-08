@@ -36,6 +36,13 @@ public final class ErrorBackoff {
      */
     private static final int MAX_DOUBLINGS = 16;
 
+    /**
+     * 흔들 자리로 남겨 두는 초. <b>두 자리에서 다른 일을 한다</b> — 바닥이 상한에
+     * 붙는 것을 막고(그러면 흔들 자리가 없다), 좁은 비율에서 폭이 반올림에 먹히는
+     * 것을 막는다. 근거와 도달 조건은 AIJ-0271 에 있다.
+     */
+    private static final long MIN_SPREAD_SEC = 1;
+
     private final long baseSec;
     private final long maxSec;
     private final double jitterRatio;
@@ -96,8 +103,9 @@ public final class ErrorBackoff {
     /**
      * 바닥을 함께 받는다.
      *
-     * @param floorSec 이보다 빨리 부르지 않는다. 폴링 예산이 정한 값이다 — 무시하면
-     *                 하필 예산이 빠듯한 장애 구간에 거절받은 사람만 예산 밖으로 온다
+     * @param floorSec 이보다 빨리 안 부른다. 폴링 예산이 정한 값이다 — 무시하면
+     *                 예산이 빠듯한 장애 구간에 거절받은 사람만 예산 밖으로 온다.
+     *                 <b>상한에 닿으면 흔들 자리만큼 물러선다</b> (AIJ-0271)
      */
     public long retryAfterSec(int consecutiveFailures, long floorSec, DoubleSupplier random) {
         int streak = Math.min(Math.max(consecutiveFailures, 1), MAX_DOUBLINGS);
@@ -112,13 +120,16 @@ public final class ErrorBackoff {
         for (int i = 1; i < streak && grown < ceiling; i++) {
             grown = grown > ceiling / 2 ? ceiling : grown * 2;
         }
-        // **바닥은 천장보다 세다.** 바닥은 폴링 예산이 정한 최소 간격이라, 그보다
-        // 빨리 부르면 장애 구간에만 예산이 안 걸린다. 상한까지만 따른다.
-        long base = Math.clamp(Math.max(grown, floorSec), 1, maxSec);
-        // **남은 여유만큼 편다.** 위 끝을 상한으로 자르면 잘린 만큼이 상한 한
-        // 점에 쌓인다. 자르는 대신 폭을 줄이면 값이 [base, 위끝] 에 고르게 남고,
-        // 바닥이 상한 가까이 와도 몰리지 않는다.
-        long top = Math.min(Math.round(base * (1 + jitterRatio)), maxSec);
+        // **바닥은 천장보다 세다.** 다만 상한에 붙이면 흔들 자리가 없다. 비율이
+        // 0 이면 안 흔드므로 물러설 이유도 없다. 근거는 AIJ-0271.
+        long room = jitterRatio == 0 ? maxSec
+                : Math.max(baseSec, maxSec - MIN_SPREAD_SEC);
+        long base = Math.clamp(Math.max(grown, floorSec), 1, room);
+        // **남은 여유만큼 편다.** 위 끝을 자르면 잘린 만큼이 상한 한 점에 쌓인다.
+        // 좁은 비율에서는 반올림이 폭을 통째로 먹으므로 초 단위 바닥을 같이 둔다.
+        long top = jitterRatio == 0 ? base
+                : Math.min(Math.max(Math.round(base * (1 + jitterRatio)),
+                        base + MIN_SPREAD_SEC), maxSec);
         // **위로만 흔든다.** 아래로 흔들면 바닥보다 빨리 부르게 되어 장애
         // 구간에만 폴링 예산이 안 걸린다.
         double jittered = base + (top - base) * random.getAsDouble();

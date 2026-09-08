@@ -179,7 +179,7 @@ public class ControlPlaneConfig {
                 .register(meters);
         FunctionCounter.builder("waiting.allocation.apply.fenced", port,
                         AllocationRedisPort::applyFenced)
-                .description("울타리가 막은 입장 적용 회차 수. 0 이 아니면 그 줄이 안 빠졌다")
+                .description("울타리가 막은 입장 적용 건수. 쿠폰마다 오르므로 회차 수가 아니다")
                 .register(meters);
         return InvariantMetrics.bind(round, port.clockSkew(), meters, port::markersDropped,
                 registry::passRate);
@@ -258,25 +258,28 @@ public class ControlPlaneConfig {
      * 승계 직후 활성 쿠폰의 문을 잠근다. <b>못 잠가도 회차는 돈다</b> — 안 잠긴
      * 쿠폰은 적용이 그 자리에서 다시 막으므로, 여기서 막으면 회복만 늦어진다.
      */
-    Runnable sealApplyFences(AllocationRedisPort port, SnapshotHolder holder,
-            Leadership leadership) {
+    Runnable sealApplyFences(AllocationRedisPort port, Leadership leadership, SealGate gate) {
         return () -> {
-            // **마지막 발행의 쿠폰을 잠근다.** 활성 목록을 다시 읽으면 승계 첫
-            // 순간에 왕복이 하나 더 붙는다. 그 뒤에 활성이 된 쿠폰은 적용이
-            // 스스로 잠그므로, 여기서 놓치는 것은 새 리더가 안 만지는 쿠폰뿐이다.
-            var coupons = holder.current().coupons().keySet();
+            gate.sealing();
             long fence = leadership.fence();
-            port.sealApplyFences(coupons, fence)
-                    // **다 잠갔는지 센다.** 안 세면 레디스가 전부 거절해도 로그도
-                    // 지표도 없다 — 회복 구간의 안전 장치가 무성으로 사라진다.
-                    .subscribe(sealed -> {
-                        if (sealed < coupons.size()) {
-                            log.warn("입장 울타리를 다 못 잠갔다 — {}/{} 개, 임기 {}. "
-                                    + "못 잠근 쿠폰은 적용이 그 자리에서 다시 막는다",
-                                    sealed, coupons.size(), fence);
-                        }
-                    }, e -> log.warn("입장 울타리를 못 잠갔다 — 쿠폰 {}개, 임기 {}",
-                            coupons.size(), fence, e));
+            // **권위 있는 자리에서 읽는다.** 마지막 발행의 쿠폰을 쓰면 발행이 밀렸거나
+            // 갱신이 실패한 구간에 새로 활성이 된 쿠폰이 빠지고, 그 쿠폰이 정확히
+            // 유령의 지연된 몫을 받는 자리다.
+            port.activeCoupons()
+                    .flatMap(coupons -> port.sealApplyFences(coupons, fence)
+                            .doOnNext(locked -> {
+                                if (locked < coupons.size()) {
+                                    log.warn("입장 울타리를 다 못 잠갔다 — {}/{} 개, "
+                                            + "임기 {}. 못 잠근 쿠폰은 적용이 그 자리에서 "
+                                            + "다시 막는다", locked, coupons.size(), fence);
+                                }
+                            }))
+                    // **못 잠가도 회차는 연다.** 여기서 멈추면 아무도 배분을 안 돌아
+                    // 줄이 통째로 멎는다 — 못 잠근 쿠폰은 적용이 다시 막는다.
+                    .doOnError(e -> log.warn("입장 울타리를 못 잠갔다 — 임기 {}", fence, e))
+                    .onErrorReturn(0L)
+                    .doFinally(signal -> gate.sealed())
+                    .subscribe();
         };
     }
 
@@ -311,13 +314,16 @@ public class ControlPlaneConfig {
             TunablesRefresh tunables, Scheduler allocationScheduler, SoldOutCleanup cleanup,
             QueueSweeper sweeper, SnapshotHolder holder, GatewayRegistry registry,
             AllocationRedisPort port) {
+        SealGate gate = SealGate.of(leadership::isLeader);
         return AllocationScheduler.of(properties.scheduler().tick(),
                 properties.scheduler().firstTickDelay(),
                 // **승계는 유예를 처음부터 준다.** 비리더 구간에 얼어 있던 실패
                 // 횟수를 이어 쓰면 재승계 첫 회차가 곧바로 크레딧을 깎는다.
-                LeadershipEdge.of(leadership::isLeader,
+                // **문을 잠글 때까지 리더로 안 친다.** 잠금이 끝나기 전에 회차가
+                // 돌면, 새 리더가 안 만지는 쿠폰에 유령의 지연된 몫이 그대로 들어간다.
+                LeadershipEdge.of(gate,
                         onLeadershipGained(collector, capacity, cleanup, sweeper, round, holder,
-                                registry, sealApplyFences(port, holder, leadership)),
+                                registry, sealApplyFences(port, leadership, gate)),
                         capacity::leadershipChanged),
                 // **운영 값을 먼저 읽고 배분한다.** 순서가 뒤면 방금 바꾼 값이
                 // 한 틱 늦게 나가고, 장애 중의 한 틱은 길다.

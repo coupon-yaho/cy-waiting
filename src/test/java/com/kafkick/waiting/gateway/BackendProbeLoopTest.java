@@ -181,4 +181,46 @@ class BackendProbeLoopTest {
         assertThat(회차.get()).as("다시 켜면 다시 돈다").isGreaterThan(멈춘_뒤);
         루프.stop();
     }
+
+    /**
+     * <b>첫 회차의 위상을 흩는다.</b> 간격이 결정적이면 노드 둘의 서킷이 같은 초에
+     * 표본을 채우고 같은 초에 닫힌다 — 억눌린 줄 두 벌이 함께 나가 회복 봉우리가
+     * 노드 수만큼 커진다 (RC4). 자극도 같고 타이머도 같아서 그렇게 된다.
+     */
+    @Test
+    @DisplayName("첫_회차를_간격_안에서_흩는다")
+    void 첫_회차를_간격_안에서_흩는다() {
+        VirtualTimeScheduler 시계 = VirtualTimeScheduler.create();
+        AtomicInteger 회차 = new AtomicInteger();
+        // 난수 0.5 면 첫 회차가 간격의 절반 뒤다.
+        BackendProbeLoop 루프 = BackendProbeLoop.of(
+                () -> Mono.fromRunnable(회차::incrementAndGet),
+                Duration.ofSeconds(2), () -> 0.5);
+
+        루프.start(시계);
+        시계.advanceTimeBy(Duration.ofMillis(900));
+        assertThat(회차.get()).as("절반 전에는 안 돈다").isZero();
+
+        시계.advanceTimeBy(Duration.ofMillis(200));
+        assertThat(회차.get()).as("절반이 지나면 첫 회차").isEqualTo(1);
+
+        루프.stop();
+    }
+
+    /** 난수 0 이면 곧바로 돈다. 위상을 흩는 것이지 늦추는 것이 아니다. */
+    @Test
+    @DisplayName("난수가_0_이면_곧바로_돈다")
+    void 난수가_0_이면_곧바로_돈다() {
+        VirtualTimeScheduler 시계 = VirtualTimeScheduler.create();
+        AtomicInteger 회차 = new AtomicInteger();
+        BackendProbeLoop 루프 = BackendProbeLoop.of(
+                () -> Mono.fromRunnable(회차::incrementAndGet),
+                Duration.ofSeconds(2), () -> 0.0);
+
+        루프.start(시계);
+        시계.advanceTimeBy(Duration.ofMillis(1));
+
+        assertThat(회차.get()).isEqualTo(1);
+        루프.stop();
+    }
 }

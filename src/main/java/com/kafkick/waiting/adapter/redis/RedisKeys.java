@@ -24,6 +24,13 @@ public final class RedisKeys {
     /** 배분을 도는 노드 하나를 정하는 락. */
     public static final String LEADER = "scheduler:leader";
 
+    /**
+     * 임기를 세는 값. <b>해시 태그가 리더 키와 같은 슬롯에 묶는다</b> — 태그 없는
+     * {@code scheduler:leader} 는 키 전체로 슬롯을 정하므로 태그 안의 글자가 같으면
+     * 두 키가 같은 슬롯이다 (RD-2). 그래서 리더 키 이름을 안 바꾸고 같이 읽는다.
+     */
+    public static final String LEADER_GENERATION = "{scheduler:leader}:gen";
+
     /** 운영자가 배포 없이 고치는 값. 밖에서 쓰는 키다. */
     public static final String TUNABLES = "gw:tunables";
 

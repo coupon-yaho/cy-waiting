@@ -145,8 +145,8 @@ public final class Leadership {
         // 펜스 번호도 같이 버린다 — 리스가 지난 노드의 번호는 이제 옛 임기이다.
         if (standing.compareAndSet(now, new Standing(State.FOLLOWER,
                 now.confirmedAt(), now.leaderSince(), 0))) {
-            log.warn("확인 없이 리스가 지나 리더에서 내려왔다 — {}초 동안 리더였다, owner={}",
-                    heldSeconds(now), ownerId);
+            log.warn("확인 없이 리스가 지나 리더에서 내려왔다 — {}초 동안 리더였다, owner={}, 임기={}",
+                    heldSeconds(now), ownerId, now.fence());
         }
         return false;
     }
@@ -197,8 +197,8 @@ public final class Leadership {
                     // 남아, 다음 리더와 겹치는 구간이 리스가 아니라 영영이 된다.
                     .doFinally(signal -> {
                         if (wasLeader) {
-                            log.info("리더에서 내려왔다 — {}초 동안 리더였다, owner={}",
-                                    NANOSECONDS.toSeconds(heldFor), ownerId);
+                            log.info("리더에서 내려왔다 — {}초 동안 리더였다, owner={}, 임기={}",
+                                    NANOSECONDS.toSeconds(heldFor), ownerId, before.fence());
                         }
                     });
         }).then();
@@ -245,7 +245,10 @@ public final class Leadership {
             return releaseLock();
         }
         if (before.state() == State.FOLLOWER) {
-            log.info("리더가 됐다 — owner={}, lease={}초", ownerId, lease.toSeconds());
+            // 임기 번호를 같이 찍는다. 세는 값이라 로그가 없으면 사후에 누가 어떤
+            // 순서로 리더였는지 복원할 방법이 없다.
+            log.info("리더가 됐다 — owner={}, 임기={}, lease={}초",
+                    ownerId, lock.fence(), lease.toSeconds());
         }
         return Mono.empty();
     }

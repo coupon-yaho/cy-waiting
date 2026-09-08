@@ -152,7 +152,9 @@ class ClusterModeScriptTest {
                     RedisKeys.queue("c1", 1, 0),
                     RedisKeys.admitted("c1", 1, 0),
                     RedisKeys.applyFence("c1", 1, 0));
-            case "leader_acquire.lua", "leader_release.lua" -> List.of(RedisKeys.LEADER);
+            case "leader_acquire.lua" ->
+                    List.of(RedisKeys.LEADER, RedisKeys.LEADER_GENERATION);
+            case "leader_release.lua" -> List.of(RedisKeys.LEADER);
             case "gateway_heartbeat.lua", "gateway_leave.lua" -> List.of(RedisKeys.INSTANCES);
             default -> throw new IllegalStateException("인자를 안 정한 스크립트: " + script);
         };

@@ -25,8 +25,7 @@ public final class LeaderFaults {
     // 프로덕션에 없는 상태 위에 세운 시험은 아무것도 증명하지 못한다.
     private static final String TAKE_OVER = """
             redis.call('DEL', KEYS[1])
-            local t = redis.call('TIME')
-            local fence = tonumber(t[1]) * 1000000 + tonumber(t[2])
+            local fence = redis.call('INCR', KEYS[2])
             if redis.call('SET', KEYS[1],
                     string.format('%.0f', fence) .. '|' .. ARGV[1],
                     'NX', 'PX', tonumber(ARGV[2])) then
@@ -103,9 +102,14 @@ public final class LeaderFaults {
     //
     // 값은 **지금 형식으로** 쓴다. 번호 없는 옛 형식으로 쓰면 승계가 롤아웃
     // 호환 갈래로 빠져, 지금 리더가 죽어 남기는 락을 물려받는 경로를 안 밟는다.
+    //
+    // 번호도 **운영과 같은 자리에서** 받는다. 시계로 지어내면 프로덕션이 만들 수
+    // 없는 임기 역전이 시험 안에서만 생기고, 그 위에 세운 판정은 아무것도 증명하지
+    // 않는다.
     public boolean 죽은_리더가_넘겨받는다(String ownerId, Duration lease) {
         Long taken = redis.sync().eval(TAKE_OVER, ScriptOutputType.INTEGER,
-                new String[] {RedisKeys.LEADER}, 소유자로_쓸_수_있는가(ownerId),
+                new String[] {RedisKeys.LEADER, RedisKeys.LEADER_GENERATION},
+                소유자로_쓸_수_있는가(ownerId),
                 String.valueOf(lease.toMillis()));
         return taken != null && taken == 1L;
     }

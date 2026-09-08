@@ -449,7 +449,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
         if (view.isBeforeFirstTick()) {
             count("deferred-no-material");
             degraded(exchange);
-            markToken(exchange, couponId);
+            markTokenHolder(exchange, couponId);
             // 재료가 없어 크레딧을 모른다. 폴백으로 최소 배수 속도를 가정한다.
             return forward(exchange, chain, couponId, 0, view.snapshot().meta());
         }
@@ -459,7 +459,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
         if (holder.isDataStale(view)) {
             count("deferred-stale-material");
             degraded(exchange);
-            markToken(exchange, couponId);
+            markTokenHolder(exchange, couponId);
             return failOpen(exchange, chain, view.snapshot().meta(), couponId);
         }
         count("unknown-coupon");
@@ -570,9 +570,16 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
             return forward(exchange, chain, couponId, cap, meta);
         }
         count("enqueue-failed-shed");
+        // **여기도 차례가 온 사람을 가른다.** 상한이 걸리는 순간이 곧 부하가 몰린
+        // 순간이라, 이 출구가 보호 차단보다 자주 돈다. 안 가르면 그 사람이 배수까지
+        // 실린 밴드로 밀려 토큰이 죽는다.
+        boolean hasToken = exchange.<AdmissionDecision>getAttribute(DECISION)
+                == AdmissionDecision.PASS_TOKEN;
         return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
-                rejection.retryAfterSec(AdmissionDecision.REJECT_OVERLOAD, random,
-                        meta.pollScale()));
+                rejection.retryAfterSec(hasToken
+                                ? AdmissionDecision.RETRY_TOKEN
+                                : AdmissionDecision.REJECT_OVERLOAD,
+                        random, meta.pollScale()));
     }
 
     /**
@@ -580,7 +587,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
      * 차단과 폴백이 이 값으로 그를 가르는데, 비어 있으면 줄에 안 선 사람으로 읽혀
      * 멀리 밀린다. 토큰이 없으면 안 심는다 — 없는 자격을 지어내면 줄을 건너뛴다.
      */
-    private void markToken(ServerWebExchange exchange, String couponId) {
+    private void markTokenHolder(ServerWebExchange exchange, String couponId) {
         if (hasEntryToken(exchange, couponId)) {
             exchange.getAttributes().put(DECISION, AdmissionDecision.PASS_TOKEN);
         }

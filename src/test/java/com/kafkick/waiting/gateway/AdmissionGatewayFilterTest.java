@@ -1248,11 +1248,34 @@ class AdmissionGatewayFilterTest {
                 .isEqualTo(AdmissionDecision.PASS_TOKEN);
     }
 
+    /**
+     * <b>같은 갈래의 다른 출구도 봐야 한다</b> (CY-896).
+     *
+     * <p>낡은 재료 갈래는 상한을 두고 여는데, 그 상한에 걸리는 출구가 판정값을 안 읽고
+     * 과부하 거절을 상수로 박아 쓴다. 상한이 걸리는 순간이 곧 부하가 몰린 순간이라
+     * 이쪽이 실제로 더 자주 돈다.
+     */
+    @Test
+    @DisplayName("낡은_재료의_상한에_걸려도_차례가_온_사람은_가까이_부른다")
+    void 낡은_재료의_상한에_걸려도_차례가_온_사람은_가까이_부른다() {
+        // 상한을 0 으로 만들어 여는 쪽이 아니라 막는 출구로 보낸다.
+        holder.replace(new GatewaySnapshot(Map.of(COUPON, CouponStates.idle(1_000)),
+                SnapshotMetas.overBudget(0, 1, 1.5), 지금.minusSeconds(60)));
+
+        MockServerWebExchange 토큰을_든_요청 = 토큰_요청("없는쿠폰", MEMBER);
+        filter.filter(토큰을_든_요청, e -> Mono.empty()).block();
+
+        assertThat(토큰을_든_요청.getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(토큰을_든_요청.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER))
+                .as("배수까지 실려 천장 근처로 가면 토큰이 죽는다").isEqualTo("1");
+    }
+
     /** 낡은 재료 갈래도 같다. 그쪽은 배수까지 실려 더 멀리 밀린다. */
     @Test
     @DisplayName("낡은_재료에서도_차례가_온_사람을_알아본다")
     void 낡은_재료에서도_차례가_온_사람을_알아본다() {
-        // 재료가 낡고 그 쿠폰이 스냅샷에 없어야 이연 갈래를 탄다.
+        // 재료가 낡고 그 쿠폰이 스냅샷에 없어야 미룬 갈래를 탄다.
         holder.replace(new GatewaySnapshot(Map.of(COUPON, CouponStates.idle(1_000)),
                 SnapshotMetas.overBudget(META.globalCredit(), 1, 1.5), 지금.minusSeconds(60)));
 
@@ -1272,9 +1295,10 @@ class AdmissionGatewayFilterTest {
     @DisplayName("첫_틱_전_보호_차단도_차례가_온_사람을_가까이_부른다")
     void 첫_틱_전_보호_차단도_차례가_온_사람을_가까이_부른다() {
         // 스냅샷을 안 심는다. 첫 틱 전이라 격벽 상한이 최소 크레딧에서 나온다.
+        // 손으로 적으면 그 유도가 바뀌어도 시험이 옛 값을 잰다.
         List<Sinks.Empty<Void>> 붙잡은 = new ArrayList<>();
-        // 재료가 없으면 상한이 최소 크레딧에서 나온다. 그 값을 코드에서 끌어온다.
-        int 상한 = (int) AdmissionGatewayFilter.MAX_IN_FLIGHT.toSeconds();
+        int 상한 = (int) (AdmissionDecider.MIN_CREDIT
+                * AdmissionGatewayFilter.BLOCKING_DELAY.toSeconds());
         for (int i = 0; i < 상한; i++) {
             Sinks.Empty<Void> 안_끝남 = Sinks.empty();
             붙잡은.add(안_끝남);
@@ -1282,13 +1306,17 @@ class AdmissionGatewayFilterTest {
         }
 
         MockServerWebExchange 넘친_사람 = 토큰_요청("없는쿠폰", "넘친사람");
-        filter.filter(넘친_사람, e -> Mono.empty()).block();
+        try {
+            filter.filter(넘친_사람, e -> Mono.empty()).block();
 
-        assertThat(넘친_사람.getResponse().getStatusCode())
-                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
-        assertThat(넘친_사람.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER))
-                .as("토큰 수명이 150초라 멀리 보내면 줄 맨 뒤로 간다").isEqualTo("1");
-        붙잡은.forEach(Sinks.Empty::tryEmitEmpty);
+            assertThat(넘친_사람.getResponse().getStatusCode())
+                    .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+            assertThat(넘친_사람.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER))
+                    .as("토큰 수명이 150초라 멀리 보내면 줄 맨 뒤로 간다").isEqualTo("1");
+        } finally {
+            // 단언이 깨져도 자리를 놓는다. 안 놓으면 시한이 남아 죽은 요청을 다시 태운다.
+            붙잡은.forEach(Sinks.Empty::tryEmitEmpty);
+        }
     }
 
     /** 토큰이 없으면 그대로 비운다. 없는 자격을 지어내면 그가 줄을 통째로 건너뛴다. */
@@ -1298,7 +1326,23 @@ class AdmissionGatewayFilterTest {
         MockServerWebExchange exchange = 태운다("없는쿠폰", "회원");
 
         assertThat(exchange.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
-                .isNotEqualTo(AdmissionDecision.PASS_TOKEN);
+                .as("안 심는 것이 계약이다. 무엇이든 아니면 된다로 두면 뮤턴트가 산다")
+                .isNull();
+
+        // **만료된 토큰도 같다.** 이 갈래는 재기동 구간의 전 트래픽이 지나므로
+        // 검증을 건너뛰자는 최적화가 실제로 나올 법한 자리다.
+        MockServerWebExchange 만료 = MockServerWebExchange.from(
+                MockServerHttpRequest.method(HttpMethod.POST,
+                                "/api/v1/coupons/없는쿠폰/issue")
+                        .header("X-Member-Id", MEMBER)
+                        .header("Entry-Token", entryTokens.issue("없는쿠폰", MEMBER,
+                                지금.minus(Duration.ofDays(1)))));
+        만료.getAttributes().put(ServerWebExchangeUtils.URI_TEMPLATE_VARIABLES_ATTRIBUTE,
+                Map.of("couponId", "없는쿠폰"));
+        filter.filter(만료, e -> Mono.empty()).block();
+
+        assertThat(만료.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .as("만료된 토큰으로 차례가 온 사람이 되면 그가 줄을 건너뛴다").isNull();
     }
 
     @Test

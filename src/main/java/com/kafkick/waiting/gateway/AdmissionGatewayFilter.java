@@ -449,6 +449,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
         if (view.isBeforeFirstTick()) {
             count("deferred-no-material");
             degraded(exchange);
+            markToken(exchange, couponId);
             // 재료가 없어 크레딧을 모른다. 폴백으로 최소 배수 속도를 가정한다.
             return forward(exchange, chain, couponId, 0, view.snapshot().meta());
         }
@@ -458,6 +459,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
         if (holder.isDataStale(view)) {
             count("deferred-stale-material");
             degraded(exchange);
+            markToken(exchange, couponId);
             return failOpen(exchange, chain, view.snapshot().meta(), couponId);
         }
         count("unknown-coupon");
@@ -571,6 +573,17 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
         return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
                 rejection.retryAfterSec(AdmissionDecision.REJECT_OVERLOAD, random,
                         meta.pollScale()));
+    }
+
+    /**
+     * <b>404 를 미루고 통과시키는 갈래에서도 차례가 온 사람을 표시한다.</b> 보호
+     * 차단과 폴백이 이 값으로 그를 가르는데, 비어 있으면 줄에 안 선 사람으로 읽혀
+     * 멀리 밀린다. 토큰이 없으면 안 심는다 — 없는 자격을 지어내면 줄을 건너뛴다.
+     */
+    private void markToken(ServerWebExchange exchange, String couponId) {
+        if (hasEntryToken(exchange, couponId)) {
+            exchange.getAttributes().put(DECISION, AdmissionDecision.PASS_TOKEN);
+        }
     }
 
     /**

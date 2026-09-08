@@ -1264,6 +1264,33 @@ class AdmissionGatewayFilterTest {
                 .isEqualTo(AdmissionDecision.PASS_TOKEN);
     }
 
+    /**
+     * <b>증상까지 확인한다.</b> 판정을 심는 것 자체가 목적이 아니라, 그 값으로
+     * 보호 차단이 그를 가까이 부르는 것이 목적이다.
+     */
+    @Test
+    @DisplayName("첫_틱_전_보호_차단도_차례가_온_사람을_가까이_부른다")
+    void 첫_틱_전_보호_차단도_차례가_온_사람을_가까이_부른다() {
+        // 스냅샷을 안 심는다. 첫 틱 전이라 격벽 상한이 최소 크레딧에서 나온다.
+        List<Sinks.Empty<Void>> 붙잡은 = new ArrayList<>();
+        // 재료가 없으면 상한이 최소 크레딧에서 나온다. 그 값을 코드에서 끌어온다.
+        int 상한 = (int) AdmissionGatewayFilter.MAX_IN_FLIGHT.toSeconds();
+        for (int i = 0; i < 상한; i++) {
+            Sinks.Empty<Void> 안_끝남 = Sinks.empty();
+            붙잡은.add(안_끝남);
+            filter.filter(토큰_요청("없는쿠폰", "먼저" + i), e -> 안_끝남.asMono()).subscribe();
+        }
+
+        MockServerWebExchange 넘친_사람 = 토큰_요청("없는쿠폰", "넘친사람");
+        filter.filter(넘친_사람, e -> Mono.empty()).block();
+
+        assertThat(넘친_사람.getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(넘친_사람.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER))
+                .as("토큰 수명이 150초라 멀리 보내면 줄 맨 뒤로 간다").isEqualTo("1");
+        붙잡은.forEach(Sinks.Empty::tryEmitEmpty);
+    }
+
     /** 토큰이 없으면 그대로 비운다. 없는 자격을 지어내면 그가 줄을 통째로 건너뛴다. */
     @Test
     @DisplayName("토큰_없는_요청은_판정을_안_지어낸다")

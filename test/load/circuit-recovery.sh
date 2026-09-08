@@ -66,6 +66,14 @@ case "$OUT" in
     *.txt) ;;
     *) echo "OUT 은 .txt 여야 한다: '$OUT'"; exit 2 ;;
 esac
+# **이름을 직접 대도 조건은 남아야 한다.** 조건을 파일 이름에만 실었으므로,
+# 표식이 없으면 두 조건의 값이 같은 이름으로 덮인다.
+if [ -n "$probe" ]; then
+    case "$OUT" in
+        *probe*) ;;
+        *) echo "PROBE 를 켰으면 OUT 이름에 probe 가 들어가야 한다: '$OUT'"; exit 2 ;;
+    esac
+fi
 
 for n in GATEWAYS RATE NORMAL_SEC HOLD_SEC RECOVER_SEC HANDOVER_AFTER_SEC TAIL_SEC SAMPLE_MS FAULT_LATENCY_MS; do
     v=$(eval "printf '%s' \"\$$n\"")
@@ -182,7 +190,11 @@ fi
 # **자극이 스텁의 동시 한도 안이어야 한다.** 넘으면 스텁이 즉시 503 을 내는데,
 # 그 503 은 서킷에 안 물리므로 느린 호출 비율을 희석해 서킷이 안 열린다 —
 # 진입을 못 만든 회차가 나온다. 새 계수도 그 503 은 안 세므로 표본에서도 사라진다.
-depth=$(( RATE * FAULT_LATENCY_MS / 1000 ))
+# **반쯤 열린 허가도 같이 든다.** 서킷이 열린 뒤 창마다 노드당 그 수만큼 더
+# 들어간다. 안 더하면 기본값이 정확히 한도에 앉아, 스크립트가 스스로 금지한
+# 경계에서 도는데 사전 검사는 통과한다.
+half_open=${HALF_OPEN_PERMITS:-10}
+depth=$(( RATE * FAULT_LATENCY_MS / 1000 + GATEWAYS * half_open ))
 stub_cap=$($COMPOSE exec -T backend printenv MAX_INFLIGHT 2>/dev/null | tr -d '\r')
 case "$stub_cap" in ''|*[!0-9]*) stub_cap=0 ;; esac
 if [ "$stub_cap" -gt 0 ] && [ "$depth" -ge "$stub_cap" ]; then
@@ -289,13 +301,19 @@ report_calls() {
             t1 <= 0 { next }
             # **모양이 어긋난 줄은 버린다.** 지표를 못 긁은 회차는 칸이 비어,
             # 그대로 더하면 통과 수가 뒤로 간다.
-            NF != 6 { next }
+            NF != 9 { next }
             $1 >= t0 && $1 <= t1 {
                 calls = $3 + $4
-                if (!(($2) in first)) { first[$2] = calls; ft[$2] = $1; fa[$2] = $6 }
+                # 프로브가 채운 표본은 줄이 채운 것과 갈라 센다.
+                pr = $7 + $8 + $9
+                if (!(($2) in first)) {
+                    first[$2] = calls; ft[$2] = $1; fa[$2] = $6
+                    fn[$2] = $5; fp[$2] = pr
+                }
                 # 계수는 단조다. 줄면 컨테이너가 다시 뜬 것이므로 안 센다.
                 if (calls < last[$2] || $6 < la[$2]) { next }
                 last[$2] = calls; lt[$2] = $1; la[$2] = $6
+                ln[$2] = $5; lp[$2] = pr
             }
             END {
                 for (n in first) {
@@ -308,6 +326,13 @@ report_calls() {
                     if (la[n] > fa[n]) {
                         printf "  %s %s 배분이 표시한 수 초당 %.2f건 (%d건)\n",
                                 n, label, (la[n] - fa[n]) / d, la[n] - fa[n]
+                    }
+                    # **못 들어간 요청과 프로브 몫을 같이 낸다.** 프로브가 반쯤
+                    # 열린 자리를 먹으면 차례가 온 사람이 폴백으로 떨어지는데,
+                    # 그 수가 안 나오면 예산을 정할 재료가 회차를 돌려도 안 생긴다.
+                    if (ln[n] > fn[n] || lp[n] > fp[n]) {
+                        printf "  %s %s 못 들어간 요청 %d건 · 프로브 표본 %d건\n",
+                                n, label, ln[n] - fn[n], lp[n] - fp[n]
                     }
                 }
             }' "$work/calls.txt"
@@ -353,9 +378,15 @@ calls_of() {
                  else if ($0 ~ /kind="ignored"/) k = "ignored"
                  sum[k] += $NF }
                /^resilience4j_circuitbreaker_not_permitted_calls_total/ { np += $NF }
+               # 프로브 몫. **서킷 계수에 섞여 있으므로 따로 안 빼면 프로브를 켠
+               # 회차의 "초당 건수" 가 그만큼 부풀어 두 조건이 비교가 안 된다.
+               /^waiting_probe_passed_total/ { pp += $NF }
+               /^waiting_probe_failed_total/ { pf += $NF }
+               /^waiting_probe_busy_total/ { pb += $NF }
                # 배분이 표시한 수. 리더만 는다 — 클러스터 합으로 본다.
                /^waiting_allocation_admitted_total/ { adm += $NF }
-               END { printf "%d %d %d %d", sum["ok"], sum["fail"], np, adm }'
+               END { printf "%d %d %d %d %d %d %d",
+                       sum["ok"], sum["fail"], np, adm, pp, pf, pb }'
 }
 
 mem_loop() {

@@ -11,6 +11,8 @@ set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
 command -v node >/dev/null || { echo "node 가 없다"; exit 2; }
+# **계기를 못 읽으면 빈 문자열끼리 비교해 조용히 통과한다.** 없는 것을 먼저 막는다.
+command -v python3 >/dev/null || { echo "python3 가 없다"; exit 2; }
 
 failed=0
 PORT=${STUB_SELFTEST_PORT:-18190}
@@ -77,6 +79,14 @@ expect_same_counter() {
     before=$(counter "$key")
     curl -s -o /dev/null "http://127.0.0.1:$PORT$path"
     after=$(counter "$key")
+    # **읽었는지 먼저 본다.** 못 읽으면 둘 다 빈 문자열이라 같아지고, 이 회차의
+    # 핵심 계약을 지키는 유일한 검사가 아무것도 안 재고 초록으로 남는다.
+    case "$before$after" in
+        ''|*[!0-9]*)
+            echo "  ✗ $name — $key 를 못 읽었다 (이전 '"'"'$before'"'"' 이후 '"'"'$after'"'"')"
+            failed=1
+            return ;;
+    esac
     if [ "$before" = "$after" ]; then
         echo "  ✓ $name"
     else
@@ -108,6 +118,26 @@ expect_status "고장을 끄면 돌아온다" 200 /stub/ready
 curl -s -o /dev/null "http://127.0.0.1:$PORT/stub/latency?ms=300"
 expect_slower "느리면 프로브도 느리다" 250 /stub/ready
 curl -s -o /dev/null "http://127.0.0.1:$PORT/stub/latency?ms=0"
+
+# **경로 오타가 200 을 받으면 안 된다.** 발급 핸들러로 떨어지면 자리를 먹고
+# 받은 건수를 올리면서 계약 셋 중 둘이 조용히 깨진다.
+expect_status "오타 난 계기 경로는 404" 404 /stub/readyz
+expect_same_counter "오타 경로도 받은 건수에 안 섞인다" accepted /stub/readyz
+stop
+
+# 헤더는 빠르고 본문이 안 끝나는 뒷단. 발급이 한 건도 못 끝나는데 프로브만
+# 즉시 200 을 받으면 서킷이 거짓으로 닫힌다.
+start SLOW_BODY_MS=100 || exit 2
+slow_ms=$(elapsed_ms "/stub/ready?probe" 2>/dev/null)
+before_ready=$(date +%s%3N)
+curl -s -m 1 -o /dev/null "http://127.0.0.1:$PORT/stub/ready"
+after_ready=$(date +%s%3N)
+if [ $((after_ready - before_ready)) -ge 900 ]; then
+    echo "  ✓ 본문이 안 끝나면 프로브도 안 끝난다"
+else
+    echo "  ✗ 본문이 안 끝나면 프로브도 안 끝난다 — $((after_ready - before_ready))ms 만에 끝났다"
+    failed=1
+fi
 stop
 
 # 동시 한도. 발급이 못 들어가는 순간에 프로브만 통과하면 안 된다.

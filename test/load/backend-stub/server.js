@@ -107,7 +107,23 @@ const server = createServer((req, res) => {
       return error(res, 503, 'TEMPORARILY_UNAVAILABLE', '뒷단이 지금 못 받는다.');
     }
     // 느린 뒷단을 프로브도 느리게 겪는다. 서킷은 5xx 가 아니라 느린 호출로 열린다.
-    return setTimeout(() => json(res, 200, { status: 'READY', inflight }), latencyMs);
+    return setTimeout(() => {
+      // **본문이 안 끝나는 모드도 같이 겪는다.** 헤더만 빠른 뒷단에서 프로브가
+      // 즉시 200 을 받으면, 발급이 한 건도 못 끝나는데 서킷이 닫힌다 — 이 경로가
+      // 없애려던 거짓 회복이 그 모드에서 그대로 난다.
+      if (SLOW_BODY_MS > 0) {
+        if (res.writableEnded || res.destroyed) {
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        const tick = setInterval(() => res.write(' '), SLOW_BODY_MS);
+        const stop = () => clearInterval(tick);
+        res.on('close', stop);
+        res.on('error', stop);
+        return;
+      }
+      json(res, 200, { status: 'READY', inflight });
+    }, latencyMs);
   }
 
   // **도중에 켜고 끈다.** 기동 환경변수로만 두면 고장을 만들려고 컨테이너를
@@ -136,6 +152,13 @@ const server = createServer((req, res) => {
     }
     faultStatus = asked;
     return json(res, 200, { faultStatus });
+  }
+
+  // **아는 계기 경로가 아니면 404 다.** 발급 핸들러로 흘려보내면 프로브 경로
+  // 오타가 200 을 받고 자리를 먹고 받은 건수를 올린다 — 계약 셋 중 둘이 조용히
+  // 깨지고, 그 사실을 아무것도 안 알린다.
+  if (req.url.startsWith('/stub/')) {
+    return error(res, 404, 'NOT_FOUND', '없는 계기 경로다.');
   }
 
   // **지연을 안 태운다.** 즉시 실패가 이 모드의 요점이다 — 늦게 실패하면

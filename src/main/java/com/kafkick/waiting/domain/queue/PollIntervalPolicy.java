@@ -77,6 +77,14 @@ public class PollIntervalPolicy {
      * {@code jitterRatio} 는 기본 간격에 곱해 폭을 내는 비율이다. 그렇게 낸 폭이
      * 1초보다 좁으면 1초를 쓴다 ({@link #MIN_JITTER_SEC}). 0 이면 안 흔든다.
      */
+    /**
+     * <b>운영이 쓰는 정책.</b> 부르는 쪽마다 만들면 비율이 갈리고, 시험이 제 것을 들면
+     * 운영의 값을 바꿔도 그 시험이 초록으로 남는다.
+     */
+    public static PollIntervalPolicy standard() {
+        return of(NORMAL_JITTER_RATIO);
+    }
+
     public static PollIntervalPolicy of(double jitterRatio) {
         if (!Double.isFinite(jitterRatio) || jitterRatio < 0) {
             throw new IllegalArgumentException(

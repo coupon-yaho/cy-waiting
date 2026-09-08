@@ -50,8 +50,7 @@ public final class QueueStatusFilter implements WebFilter {
     private static final String METRIC = "waiting.queue.status";
 
     /** 폴링 간격의 흔들림. 같은 밴드가 한꺼번에 두드리지 않게 한다. */
-    private static final PollIntervalPolicy POLL =
-            PollIntervalPolicy.of(PollIntervalPolicy.NORMAL_JITTER_RATIO);
+    private static final PollIntervalPolicy POLL = PollIntervalPolicy.standard();
 
     /**
      * 오류 경로의 안내. <b>정상 경로와 다른 정책이다</b> — 정상은 폴링 시점이

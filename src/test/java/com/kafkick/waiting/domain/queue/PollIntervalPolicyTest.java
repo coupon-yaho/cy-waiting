@@ -200,7 +200,7 @@ class PollIntervalPolicyTest {
     @Test
     @DisplayName("가장_가까운_밴드도_한_값에_안_모인다")
     void 가장_가까운_밴드도_한_값에_안_모인다() {
-        PollIntervalPolicy 정책 = PollIntervalPolicy.of(PollIntervalPolicy.NORMAL_JITTER_RATIO);
+        PollIntervalPolicy 정책 = PollIntervalPolicy.standard();
         Random 난수 = new Random(42);
 
         Set<Long> 나온_값 = new HashSet<>();
@@ -224,7 +224,7 @@ class PollIntervalPolicyTest {
     @Test
     @DisplayName("가장_가까운_밴드는_넷_중_하나가_뒤로_간다")
     void 가장_가까운_밴드는_넷_중_하나가_뒤로_간다() {
-        PollIntervalPolicy 정책 = PollIntervalPolicy.of(PollIntervalPolicy.NORMAL_JITTER_RATIO);
+        PollIntervalPolicy 정책 = PollIntervalPolicy.standard();
         Random 난수 = new Random(7);
 
         int 뒤로 = 0;
@@ -266,7 +266,7 @@ class PollIntervalPolicyTest {
     @Test
     @DisplayName("바닥은_세_번째_밴드까지만_문다")
     void 바닥은_세_번째_밴드까지만_문다() {
-        PollIntervalPolicy 정책 = PollIntervalPolicy.of(PollIntervalPolicy.NORMAL_JITTER_RATIO);
+        PollIntervalPolicy 정책 = PollIntervalPolicy.standard();
         Random 난수 = new Random(11);
 
         Set<Long> 셋째 = new HashSet<>();
@@ -285,7 +285,7 @@ class PollIntervalPolicyTest {
     @Test
     @DisplayName("가운데_난수는_밴드_값_그대로다")
     void 가운데_난수는_밴드_값_그대로다() {
-        PollIntervalPolicy 정책 = PollIntervalPolicy.of(PollIntervalPolicy.NORMAL_JITTER_RATIO);
+        PollIntervalPolicy 정책 = PollIntervalPolicy.standard();
 
         assertThat(정책.intervalSec(0, () -> 0.5, PollIntervalPolicy.NO_SCALE)).isEqualTo(1);
         assertThat(정책.intervalSec(10, () -> 0.5, PollIntervalPolicy.NO_SCALE)).isEqualTo(3);

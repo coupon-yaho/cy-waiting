@@ -14,8 +14,7 @@ import java.util.function.DoubleSupplier;
 final class Rejection {
 
     /** 거절 안내의 폴링 정책. */
-    private static final PollIntervalPolicy STANDARD =
-            PollIntervalPolicy.of(PollIntervalPolicy.NORMAL_JITTER_RATIO);
+    private static final PollIntervalPolicy STANDARD = PollIntervalPolicy.standard();
 
     private final PollIntervalPolicy poll;
 

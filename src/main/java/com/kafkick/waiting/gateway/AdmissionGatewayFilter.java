@@ -523,7 +523,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
                     // 등록이 다시 되면 fail-open 구간이 끝난 것이다. 쌍으로 안
                     // 남기면 로그에 진입만 있고 언제 닫혔는지가 없다.
                     failOpenWindow.exited().ifPresent(r -> log.info(
-                            "fail-open 해제 — {}초 동안 {}건 통과시켰다",
+                            "fail-open 해제 — {}초 동안 {}건을 열거나 막았다",
                             NANOSECONDS.toSeconds(r.elapsedNanos()), r.swallowed()));
                     if (!entry.accepted()) {
                         // 2차 방어. 판정은 자리가 있다고 봤지만 실제로는 없었다.
@@ -557,12 +557,14 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
         // **판정과 같은 리미터·같은 키다.** 따로 들면 한 초에 두 예산이 겹쳐
         // 나가고, 리미터를 하나로 두라는 규칙이 막으려던 버스트가 그대로 난다.
         long cap = (long) (decider.globalCap(meta) * FAIL_OPEN_SHARE);
+        // **상한 앞에서 찍는다.** 여는 갈래 안에 두면 상한이 0 인 구간에서 전 요청이
+        // 막는 갈래로 가 진입도 해제도 한 줄 안 남는다 — 알람은 뜨는데 볼 로그가 없다.
+        // 매 요청 찍으면 정작 조사가 필요한 순간에 묻히므로 구간의 시작만 찍는다.
+        if (failOpenWindow.entered()) {
+            log.warn("fail-open 진입 — 줄 등록이 안 된다, 상한={}", cap);
+        }
         if (limiter.tryAcquire(AdmissionDecider.GLOBAL_KEY, cap,
                 clock.instant().getEpochSecond())) {
-            // 매 요청 찍으면 정작 조사가 필요한 순간에 묻힌다. 구간의 시작만 찍는다.
-            if (failOpenWindow.entered()) {
-                log.warn("fail-open 진입 — 줄 등록이 안 돼 통과시킨다, 상한={}", cap);
-            }
             count("enqueue-failed-open");
             degraded(exchange);
             // **연 예산이 곧 격벽의 밑변이다.** 여기서 0 을 넘기면 최소 배수
@@ -575,16 +577,17 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
         // 실린 밴드로 밀려 토큰이 죽는다.
         boolean hasToken = exchange.<AdmissionDecision>getAttribute(DECISION)
                 == AdmissionDecision.PASS_TOKEN;
-        // **막는 쪽도 재료 없이 판정한 것이다.** 여는 쪽만 남기면 레디스가 죽어 503 이
-        // 나간 구간이 통째로 성공으로 잡힌다. 판정도 같이 고쳐 적는다 — 사다리가 적어
-        // 둔 등록을 그대로 두면 뒤에 읽는 쪽에는 줄에 선 것으로 보인다.
-        degraded(exchange);
-        exchange.getAttributes().put(DECISION, AdmissionDecision.REJECT_OVERLOAD);
+        // **판정을 나간 응답에 맞춘다.** 사다리가 적어 둔 등록이 남으면 503 을 받은
+        // 사람이 줄에 선 것으로 읽힌다. 차례가 온 사람은 그대로 그 값으로 적는다 —
+        // 과부하 거절로 뭉개면 뒤에 읽는 쪽이 그를 못 가른다.
+        //
+        // **품질은 여기서 안 건드린다.** 재료가 신선한데 큐만 죽은 장애도 이 자리에
+        // 오므로, 표시하면 그 구간이 통째로 열화로 세어진다 (90-decisions 2.19).
+        AdmissionDecision shed = hasToken
+                ? AdmissionDecision.RETRY_TOKEN : AdmissionDecision.REJECT_OVERLOAD;
+        exchange.getAttributes().put(DECISION, shed);
         return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
-                rejection.retryAfterSec(hasToken
-                                ? AdmissionDecision.RETRY_TOKEN
-                                : AdmissionDecision.REJECT_OVERLOAD,
-                        random, meta.pollScale()));
+                rejection.retryAfterSec(shed, random, meta.pollScale()));
     }
 
     /**

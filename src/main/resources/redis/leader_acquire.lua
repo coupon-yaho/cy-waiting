@@ -75,15 +75,23 @@ local ROLLOUT_MARGIN = 86400000000  -- 24시간(마이크로초). 배포가 이�
 local function nextGeneration()
     local t = redis.call('TIME')
     local floor = tonumber(t[1]) * 1000000 + tonumber(t[2]) + ROLLOUT_MARGIN
+    -- 자리 수를 박아 쓴다. 그냥 이어 붙이면 큰 수가 지수 표기로 나간다.
+    local mark = string.format('%.0f', floor)
     -- **성하지 않은 값도 여기서 걷어낸다.** 타입이 어긋나거나 정수가 아니면 INCR 이
     -- 스크립트째 터지고 그러면 리더가 영영 안 뽑힌다. SET 은 타입을 덮는다.
     local stored = redis.pcall('GET', KEYS[2])
     local seen = type(stored) == 'string' and tonumber(stored) or nil
     if seen == nil or seen ~= seen or seen ~= math.floor(seen) or seen < floor then
-        -- 자리 수를 박아 쓴다. 그냥 이어 붙이면 큰 수가 지수 표기로 나간다.
-        redis.call('SET', KEYS[2], string.format('%.0f', floor))
+        redis.call('SET', KEYS[2], mark)
     end
-    return redis.call('INCR', KEYS[2])
+    -- **레디스가 거절하는 모양을 `tonumber` 는 받는다.** 지수 표기, int64 밖의 값,
+    -- 그리고 상한이 그렇다. 여기서 안 걷으면 그 키 하나가 리더를 영영 막는다.
+    local bumped = redis.pcall('INCR', KEYS[2])
+    if type(bumped) == 'table' then
+        redis.call('SET', KEYS[2], mark)
+        bumped = redis.call('INCR', KEYS[2])
+    end
+    return bumped
 end
 
 local current = redis.call('GET', KEYS[1])

@@ -196,6 +196,26 @@ class LeaderElectionTest extends RedisContainerSupport {
         assertThat(fence(r)).isGreaterThan(시작 + ROLLOUT_MARGIN_US);
     }
 
+    /**
+     * <b>레디스가 거절하는 모양을 {@code tonumber} 는 받는다.</b> 지수 표기와 int64
+     * 밖의 값이 검증을 통과한 뒤 {@code INCR} 에서 터진다 — 검증만으로는 못 걷는다.
+     */
+    @Test
+    @DisplayName("세는_값이_레디스가_못_읽는_모양이면_다시_씨앗을_준다")
+    void 세는_값이_레디스가_못_읽는_모양이면_다시_씨앗을_준다() {
+        for (String 못_읽는_값 : List.of("1.8e15", "99999999999999999999", "1e400",
+                Long.toString(Long.MAX_VALUE))) {
+            redis.delete(LEADER).block(WAIT);
+            redis.opsForValue().set(GEN, 못_읽는_값).block(WAIT);
+            long 시작 = serverMicros();
+
+            List<Object> r = tryAcquire("node-1");
+
+            assertThat(acquired(r)).as("%s 에서 리더가 안 뽑힌다", 못_읽는_값).isTrue();
+            assertThat(fence(r)).as("%s", 못_읽는_값).isGreaterThan(시작 + ROLLOUT_MARGIN_US);
+        }
+    }
+
     /** 타입이 어긋나도 같다. {@code GET} 부터 터져 스크립트가 못 돈다. */
     @Test
     @DisplayName("세는_값의_타입이_어긋나도_다시_씨앗을_준다")

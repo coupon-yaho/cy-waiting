@@ -64,6 +64,9 @@ promoted-to:
   팩토리 이름을 `create` 로 바꿔 탐지를 통째로 죽이기
 - 주석에 `PollIntervalPolicy.of(0.3)` 을 적어 넣고 빨개지지 않는 것도 봤다.
   이 저장소는 주석에 코드를 그대로 쓰므로 안 걸러내면 문서만 고쳐도 빨개진다
+- 원격 리뷰가 하나 더 찾았다. Java 는 들여오는 이름의 점 사이에 공백과 줄바꿈을
+  허용하는데, 붙어 있는 것만 보고 있었다. 한 번 접는 것으로 빠져나간다 — 실제로
+  접어 넣어 안 잡히는 것을 보고 고친 뒤 잡히는 것까지 봤다
 - 시험 쪽 사본 넷을 실제로 걷었다. `PollScaleDropScenarioTest` 와
   `PollBudgetPlannerTest` 는 운영값으로 만들던 것이라 `standard()` 로,
   `EtaPolicyTest` 와 `PollBudgetPlannerTest` 의 `of(0)` 셋은 `noJitter()` 로 갔다

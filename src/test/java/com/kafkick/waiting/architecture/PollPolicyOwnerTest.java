@@ -51,10 +51,15 @@ class PollPolicyOwnerTest {
     private static final Pattern BORROWS = Pattern.compile(
             Pattern.quote(TYPE) + "\\s*\\.\\s*(standard|noJitter)\\s*\\(");
 
-    /** 만드는 이름을 들여오는 길. 열리면 타입 이름을 안 적고 만들 수 있다. */
+    /**
+     * 만드는 이름을 들여오는 길. 열리면 타입 이름을 안 적고 만들 수 있다.
+     *
+     * <p><b>점 주위 공백을 넘긴다</b> — Java 는 들여오는 이름의 점 사이에 공백과
+     * 줄바꿈을 허용한다. 붙어 있는 것만 보면 한 번 접는 것으로 빠져나간다.
+     */
     private static final Pattern STATIC_IMPORT = Pattern.compile(
-            "import\\s+static\\s+[\\w.]*" + Pattern.quote(TYPE)
-                    + "\\.\\s*(of|standard|noJitter|\\*)\\s*;");
+            "import\\s+static\\s+[\\w\\s.]*?" + Pattern.quote(TYPE)
+                    + "\\s*\\.\\s*(of|standard|noJitter|\\*)\\s*;");
 
     @Test
     @DisplayName("비율을_손에_들고_만드는_자리가_없다")
@@ -87,6 +92,26 @@ class PollPolicyOwnerTest {
                 .as("받아 쓰는 자리가 안 보이면 이름이 바뀐 것이다")
                 .contains("src/main/java/com/kafkick/waiting/gateway/Rejection.java",
                         "src/main/java/com/kafkick/waiting/gateway/AdmissionGatewayFilter.java");
+    }
+
+    /**
+     * <b>접어 쓴 들여오기도 잡는다.</b> 컴파일러가 받는 표기를 검사가 못 받으면,
+     * 우회는 실수가 아니라 아는 사람만 쓰는 문이 된다.
+     */
+    @Test
+    @DisplayName("점_주위를_접은_들여오기도_잡는다")
+    void 점_주위를_접은_들여오기도_잡는다() {
+        String 접은_것 = "import static com.kafkick.waiting.domain.queue\n"
+                + "        . " + TYPE + " . of ;";
+        String 붙인_것 = "import static com.kafkick.waiting.domain.queue."
+                + TYPE + ".of;";
+        String 상관없는_것 = "import static com.kafkick.waiting.domain.queue."
+                + TYPE + ".NO_SCALE;";
+
+        assertThat(STATIC_IMPORT.matcher(접은_것).find()).as("접은 것").isTrue();
+        assertThat(STATIC_IMPORT.matcher(붙인_것).find()).as("붙인 것").isTrue();
+        // 만들기와 무관한 상수 반입까지 막으면 이름과 단언이 어긋난다.
+        assertThat(STATIC_IMPORT.matcher(상관없는_것).find()).as("상수 반입").isFalse();
     }
 
     /** 면제가 죽은 채로 남지 않게 한다. 없는 자리를 빼 주고 있으면 지운다. */

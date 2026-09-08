@@ -141,6 +141,12 @@ public final class AllocationRedisPort implements SnapshotSource {
 
     private final AtomicLong publishFenced = new AtomicLong();
 
+    /** 울타리가 막은 입장 적용 회차 수. 0 이 아니면 이 노드가 사람을 못 들였다. */
+    private final AtomicLong applyFenced = new AtomicLong();
+
+    /** 적용이 막힌 구간. 그 사이 그 쿠폰의 줄이 안 빠진다. */
+    private final FailureWindow applyFence = FailureWindow.create();
+
     /**
      * 상한을 넘겨 버린 미상 표시의 누적 수. <b>0 이 아니면 거짓 매진이 나갔다.</b>
      *
@@ -663,14 +669,35 @@ public final class AllocationRedisPort implements SnapshotSource {
      *
      * <p><b>샤드가 하나인 동안만 옳다.</b> 여럿이면 몫을 샤드에 나눠 각각
      * 적용해야 하는데, 지금은 0번에만 나간다. 그래서 기동에서 하나로 막는다.
+     *
+     * @param fence 이 회차의 임기. 옛 임기는 임계를 안 올린다. 0 이면 리더가 아니다
      */
-    public Mono<Long> apply(Grant grant) {
+    public Mono<Long> apply(Grant grant, long fence) {
         return redis.execute(APPLY,
                         List.of(RedisKeys.queue(grant.couponId(), shards, 0),
-                                RedisKeys.admitted(grant.couponId(), shards, 0)),
-                        List.of(Long.toString(grant.credit())))
+                                RedisKeys.admitted(grant.couponId(), shards, 0),
+                                RedisKeys.applyFence(grant.couponId(), shards, 0)),
+                        List.of(Long.toString(grant.credit()), Long.toString(fence),
+                                Long.toString(snapshotFenceTtl.toMillis())))
                 .next()
-                .map(result -> Long.parseLong(String.valueOf(((List<?>) result).get(1))));
+                .map(result -> {
+                    List<?> counts = (List<?>) result;
+                    // 울타리가 막으면 임계 자리에 -1 이 온다. 스크립트가 만들 수 있는
+                    // 정상 임계는 -1 이 아니다 — 그 값은 "아직 아무도 안 들였다" 다.
+                    if ("-1".equals(String.valueOf(counts.get(0)))
+                            && Long.parseLong(String.valueOf(counts.get(1))) == 0) {
+                        applyFenced.incrementAndGet();
+                        if (applyFence.entered()) {
+                            log.error("입장 적용이 울타리에 막혔다 — 이 노드의 임기 {}. "
+                                    + "그 사이 줄이 안 빠진다", fence);
+                        }
+                        return 0L;
+                    }
+                    applyFence.exited().ifPresent(recovered -> log.info(
+                            "입장 적용이 다시 선다 — {}초 만에, 그동안 {}회차 막혔다",
+                            recovered.elapsedSeconds(), recovered.swallowed()));
+                    return Long.parseLong(String.valueOf(counts.get(1)));
+                });
     }
 
     /**
@@ -747,6 +774,11 @@ public final class AllocationRedisPort implements SnapshotSource {
     /** 울타리가 발행을 거절한 회차 수. 0 이 아니면 이 노드의 재료가 안 나갔다. */
     public double publishFenced() {
         return publishFenced.get();
+    }
+
+    /** 울타리가 입장 적용을 거절한 회차 수. 0 이 아니면 그 쿠폰의 줄이 안 빠졌다. */
+    public double applyFenced() {
+        return applyFenced.get();
     }
 
     /** 옛 임기의 발행이 거절됐다. 이 노드는 더 이상 리더가 아니다. */

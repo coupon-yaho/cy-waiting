@@ -50,6 +50,8 @@ class AllocationRedisPortTest extends RedisContainerSupport {
                 RedisKeys.alive("c1", SHARDS, 0), RedisKeys.grace("c1", SHARDS, 0),
                 RedisKeys.stock("c3"), RedisKeys.maxScore("c1", SHARDS, 0),
                 RedisKeys.dropFence("c1", SHARDS, 0),
+                RedisKeys.applyFence("c1", SHARDS, 0),
+                RedisKeys.applyFence("c2", SHARDS, 0),
                 // **울타리도 지운다.** 남기면 앞 시험이 올려 둔 임기가 다음 시험의
                 // 발행을 거절해, 회차가 아니라 순서가 결과를 정한다.
                 RedisKeys.SNAPSHOT_FENCE,
@@ -809,6 +811,8 @@ class AllocationRedisPortTest extends RedisContainerSupport {
                 RedisKeys.alive("c1", SHARDS, 0), RedisKeys.grace("c1", SHARDS, 0),
                 RedisKeys.stock("c3"), RedisKeys.maxScore("c1", SHARDS, 0),
                 RedisKeys.dropFence("c1", SHARDS, 0),
+                RedisKeys.applyFence("c1", SHARDS, 0),
+                RedisKeys.applyFence("c2", SHARDS, 0),
                 // **울타리도 지운다.** 남기면 앞 시험이 올려 둔 임기가 다음 시험의
                 // 발행을 거절해, 회차가 아니라 순서가 결과를 정한다.
                 RedisKeys.SNAPSHOT_FENCE,

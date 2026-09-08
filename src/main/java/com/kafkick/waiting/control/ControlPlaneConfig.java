@@ -89,9 +89,10 @@ public class ControlPlaneConfig {
         SnapshotCodec codec = SnapshotCodec.create();
         AllocationRound round = AllocationRound.of(leadership::isLeader, collector::collect,
                 capacity::lastKnown,
-                registry::count, port::apply,
-                // **임기를 발행마다 다시 읽는다.** 붙잡아 두면 강등된 뒤에도 옛
+                registry::count,
+                // **임기를 회차마다 다시 읽는다.** 붙잡아 두면 강등된 뒤에도 옛
                 // 번호로 나가고, 그것이 울타리가 막으려던 바로 그 경우다.
+                grant -> port.apply(grant, leadership.fence()),
                 hash -> port.publish(hash, leadership.fence()), Instant::now,
                 () -> port.load().map(hash ->
                         CreditSmoother.restore(CreditSmoother.DEFAULT_ALPHA, codec.smoothing(hash))),
@@ -171,6 +172,10 @@ public class ControlPlaneConfig {
         FunctionCounter.builder("waiting.snapshot.publish.fenced", port,
                         AllocationRedisPort::publishFenced)
                 .description("울타리가 막은 발행 회차 수. 0 이 아니면 이 노드의 재료가 안 나갔다")
+                .register(meters);
+        FunctionCounter.builder("waiting.allocation.apply.fenced", port,
+                        AllocationRedisPort::applyFenced)
+                .description("울타리가 막은 입장 적용 회차 수. 0 이 아니면 그 줄이 안 빠졌다")
                 .register(meters);
         return InvariantMetrics.bind(round, port.clockSkew(), meters, port::markersDropped,
                 registry::passRate);

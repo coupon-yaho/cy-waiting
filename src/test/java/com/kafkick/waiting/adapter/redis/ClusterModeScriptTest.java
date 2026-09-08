@@ -149,7 +149,8 @@ class ClusterModeScriptTest {
             case "active_read.lua" -> List.of(RedisKeys.ACTIVE_COUPONS);
             case "allocation_apply.lua" -> List.of(
                     RedisKeys.queue("c1", 1, 0),
-                    RedisKeys.admitted("c1", 1, 0));
+                    RedisKeys.admitted("c1", 1, 0),
+                    RedisKeys.applyFence("c1", 1, 0));
             case "leader_acquire.lua", "leader_release.lua" -> List.of(RedisKeys.LEADER);
             case "gateway_heartbeat.lua", "gateway_leave.lua" -> List.of(RedisKeys.INSTANCES);
             default -> throw new IllegalStateException("인자를 안 정한 스크립트: " + script);
@@ -161,7 +162,9 @@ class ClusterModeScriptTest {
             case "enqueue.lua" -> List.of("m1", "60", "30", "-1", "1000", "300");
             case "queue_status.lua" -> List.of("m1", "30", "1000");
             case "sweep.lua" -> List.of("10", "1000", "300", "50", "0");
-            case "allocation_apply.lua" -> List.of("1");
+            // 리더인 값이라야 한다. 0 이면 스크립트가 앞에서 되돌아 KEYS[3] 을
+            // 한 번도 안 만지고, 슬롯 교차 검사가 공회전한 채로 초록이 된다.
+            case "allocation_apply.lua" -> List.of("1", "1770000000123456", "10000");
             case "drop_queue.lua" -> List.of("1", "1", "60000");
             // 인자가 없다. 기준 시각을 밖에서 주면 이 스크립트를 둔 이유가 사라진다.
             case "capacity_read.lua", "snapshot_read.lua", "active_read.lua" -> List.of();

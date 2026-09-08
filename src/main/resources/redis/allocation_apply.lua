@@ -2,7 +2,10 @@
 --
 -- KEYS[1]  queue:{cid}          ZSET
 -- KEYS[2]  admitted:{cid}       입장 임계. 개수가 아니라 score 값이다
+-- KEYS[3]  applyfence:{cid}     마지막으로 들인 리더의 임기
 -- ARGV[1]  이번 회차에 들일 인원. 0 이상의 정수
+-- ARGV[2]  이 회차의 임기(펜스 번호). 0 이면 리더가 아니다
+-- ARGV[3]  울타리 표의 수명(ms)
 --
 -- 반환  {임계, 들인 인원}
 --   임계      새 입장 임계. 안 바뀌었으면 이전 값
@@ -15,10 +18,41 @@
 --
 -- **임계는 뒤로 안 간다.** 되돌리면 이미 통과한 사람이 다시 대기가 되고,
 -- 그건 순번 역행이다. 두 번 적용돼도 값이 같거나 커지므로 리더가 겹쳐도
--- 안전하다 — 개수 기반이면 두 번 적용이 두 배 입장이 됐다.
+-- 순번은 안전하다 — 개수 기반이면 두 번 적용이 두 배 입장이 됐다.
+--
+-- **그것으로 초과 발급은 안 막힌다.** 단조는 순번 역행에 대한 보장이고, 두
+-- 리더가 각각 제 몫을 밀면 임계가 예산을 넘어 오른다. 그래서 울타리를 둔다 —
+-- 옛 임기의 적용은 임계를 안 올린다.
 
 -- 배정밀도가 정확한 정수 범위. 넘으면 세는 것 자체가 의미를 잃는다.
 local MAX_ADMIT = 9007199254740992
+
+local fence = tonumber(ARGV[2])
+if fence == nil or fence ~= fence or fence ~= math.floor(fence) then
+    return redis.error_reply('펜스 번호는 정수여야 한다: ' .. tostring(ARGV[2]))
+end
+local fenceTtl = tonumber(ARGV[3])
+if fenceTtl == nil or fenceTtl ~= fenceTtl or fenceTtl < 1
+        or fenceTtl ~= math.floor(fenceTtl) then
+    return redis.error_reply('울타리 수명은 1 이상의 정수여야 한다: ' .. tostring(ARGV[3]))
+end
+
+-- **0 은 리더가 아니라는 뜻이다.** 강등된 노드가 그 값을 들고 나오므로, 안 막으면
+-- 리더가 아닌 노드가 사람을 들인다.
+if fence <= 0 then
+    return {'-1', 0}
+end
+
+-- **옛 임기는 안 들인다.** 승계 뒤 깨어난 유령의 회차는 이미 제 몫을 계산한
+-- 뒤이고, 그것을 그대로 밀면 같은 초에 두 리더의 몫이 다 나간다.
+-- 같은 번호의 재시도는 막지 않는다 — 막으면 실패한 회차가 영영 안 된다.
+local seenFence = tonumber(redis.call('GET', KEYS[3]))
+if seenFence ~= nil and seenFence == seenFence and fence < seenFence then
+    return {'-1', 0}
+end
+-- **수명을 준다.** 안 주면 시계가 뒤로 간 리더가 스스로 못 풀려 그 쿠폰의 줄이
+-- 영영 안 빠진다. 리더가 매 틱 다시 쓰므로 짧아도 구멍이 안 생긴다.
+redis.call('SET', KEYS[3], string.format('%.0f', fence), 'PX', fenceTtl)
 
 local admit = tonumber(ARGV[1])
 -- 무한대는 math.floor 를 통과한다. 상한을 안 두면 그 뒤 LIMIT 에서 엉뚱한

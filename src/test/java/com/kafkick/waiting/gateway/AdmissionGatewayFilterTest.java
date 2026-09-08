@@ -1576,6 +1576,46 @@ class AdmissionGatewayFilterTest {
         assertThat(품질("degraded")).as("재료 없이 판정한 건").isZero();
     }
 
+    /**
+     * <b>막는 쪽도 재료 없이 판정한 것이다</b> (CY-899).
+     *
+     * <p>줄 등록이 안 돼 여는 쪽은 그 사실을 품질에 남기는데 막는 쪽은 안 남긴다.
+     * 그러면 레디스가 죽어 503 이 나간 구간이 통째로 성공으로 잡힌다 — 회복 판정이
+     * 보는 것이 그 값이다.
+     */
+    @Test
+    @DisplayName("등록이_안_돼_막아도_품질에_남긴다")
+    void 등록이_안_돼_막아도_품질에_남긴다() {
+        // 상한을 0 으로 만들어 여는 쪽이 아니라 막는 출구로 보낸다.
+        holder.replace(new GatewaySnapshot(Map.of(COUPON, CouponStates.queueing(1, 1_000_000, 10)),
+                new SnapshotMeta(0, 1), 지금));
+        줄.터진다(new IllegalStateException("레디스가 죽었다"));
+
+        MockServerWebExchange exchange = 태운다(COUPON);
+
+        assertThat(exchange.getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(품질("degraded")).as("여는 쪽만 남기면 그 구간이 성공으로 잡힌다")
+                .isEqualTo(1.0);
+    }
+
+    /**
+     * <b>막았으면 판정도 고쳐 적는다.</b> 사다리가 적어 둔 등록을 그대로 두면 실제로
+     * 503 이 나가는데 뒤에 읽는 쪽에는 줄에 선 것으로 보인다.
+     */
+    @Test
+    @DisplayName("등록이_안_돼_막으면_판정을_고쳐_적는다")
+    void 등록이_안_돼_막으면_판정을_고쳐_적는다() {
+        holder.replace(new GatewaySnapshot(Map.of(COUPON, CouponStates.queueing(1, 1_000_000, 10)),
+                new SnapshotMeta(0, 1), 지금));
+        줄.터진다(new IllegalStateException("레디스가 죽었다"));
+
+        MockServerWebExchange exchange = 태운다(COUPON);
+
+        assertThat(exchange.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .isEqualTo(AdmissionDecision.REJECT_OVERLOAD);
+    }
+
     private double 품질(String 라벨) {
         var counter = meters.find(AdmissionGatewayFilter.JUDGEMENT)
                 .tag("quality", 라벨).counter();

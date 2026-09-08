@@ -109,7 +109,7 @@ class PollBudgetPlannerTest {
         //
         // **프로덕션 지터로 잰다.** 배선은 전부 0.2 다. 0 으로 재면 예산이
         // 정확히 닫히는 것처럼 보이는데, 그 설정은 어디에도 없다.
-        PollIntervalPolicy 정책 = PollIntervalPolicy.of(0.2);
+        PollIntervalPolicy 정책 = PollIntervalPolicy.standard();
         Random 고정_시드 = new Random(42);
         double 실측 = 0;
         for (long i = 0; i < 대기; i++) {
@@ -134,7 +134,7 @@ class PollBudgetPlannerTest {
     @Test
     @DisplayName("가장_먼_밴드에서는_배수가_상한에_잘린다")
     void 가장_먼_밴드에서는_배수가_상한에_잘린다() {
-        PollIntervalPolicy 정책 = PollIntervalPolicy.of(0);
+        PollIntervalPolicy 정책 = PollIntervalPolicy.noJitter();
         long 먼_밴드_eta = 1_000;
 
         assertThat(정책.intervalSec(먼_밴드_eta, () -> 0.5, 2.0)).isEqualTo(60);
@@ -153,7 +153,7 @@ class PollBudgetPlannerTest {
     @Test
     @DisplayName("짧은_밴드에서는_완만한_배수가_반올림에_먹힌다")
     void 짧은_밴드에서는_완만한_배수가_반올림에_먹힌다() {
-        PollIntervalPolicy 정책 = PollIntervalPolicy.of(0);
+        PollIntervalPolicy 정책 = PollIntervalPolicy.noJitter();
         double 첫_밴드_eta = 0.5;
 
         assertThat(정책.intervalSec(첫_밴드_eta, () -> 0.5, 1.49)).as("먹힌다").isEqualTo(1);

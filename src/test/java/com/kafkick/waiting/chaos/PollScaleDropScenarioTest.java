@@ -47,9 +47,6 @@ class PollScaleDropScenarioTest {
 
     private static final double B_배분 = 5;
 
-    /** <b>배선값을 쓴다.</b> 리터럴로 두면 배선이 바뀌어도 이 시나리오가 안 문다. */
-    private static final double 지터 = PollIntervalPolicy.NORMAL_JITTER_RATIO;
-
     /**
      * 손으로 잰 기대값이다 — 프로덕션 식을 베끼면 상수를 바꿔도 같이 움직여
      * 아무것도 안 잰다. 둘을 합치면 초당 1,655 건이고 예산이 200 이다.
@@ -74,7 +71,7 @@ class PollScaleDropScenarioTest {
 
     private static final DoubleSupplier 흔들지_않는다 = () -> 0.5;
 
-    private final PollIntervalPolicy 폴링 = PollIntervalPolicy.of(지터);
+    private final PollIntervalPolicy 폴링 = PollIntervalPolicy.standard();
 
     private double 배수를_낸다(List<CouponDemand> 수요) {
         Map<String, Double> 배분 = Map.of(A, A_배분, B, B_배분);

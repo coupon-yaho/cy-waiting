@@ -9,6 +9,7 @@ import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import com.kafkick.waiting.domain.routing.AllowedDestinations;
 import com.kafkick.waiting.domain.routing.InstanceAddress;
 import com.kafkick.waiting.domain.routing.InstanceRouting;
+import java.net.URI;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -19,6 +20,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.cloud.client.ServiceInstance;
+import org.springframework.cloud.client.loadbalancer.LoadBalancerUriTools;
 
 /**
  * 인스턴스 목록을 판정 재료에서 읽는다.
@@ -63,6 +65,31 @@ class SnapshotInstanceListSupplierTest {
             assertThat(i.getServiceId()).isEqualTo("coupon-service");
             assertThat(i.isSecure()).isFalse();
         });
+    }
+
+    /**
+     * <b>v6 뒷단으로 갈 URI 가 서야 한다</b> (CY-888).
+     *
+     * <p>고르개가 이 인스턴스로 요청 URI 를 다시 짓는다. 대괄호 없이 이으면 못 읽는
+     * 문자열이 되고, 그 대는 후보에 있는데도 요청이 안 나간다 — 예산만 나가고 갈 곳이
+     * 없다. 목적지 판정은 벗긴 모양을 보므로 두 자리가 다른 표기를 쓴다.
+     */
+    @Test
+    @DisplayName("v6_뒷단으로_갈_URI_가_선다")
+    void v6_뒷단으로_갈_URI_가_선다() {
+        SnapshotInstanceListSupplier 공급자 = SnapshotInstanceListSupplier.of(
+                "coupon-service", holder, AllowedDestinations.of(List.of("fd00::/8"), 포트));
+        재료를_심는다(인스턴스("be-v6", "[fd00::1]:9000", 200));
+
+        ServiceInstance 대 = 공급자.get().blockFirst().getFirst();
+
+        // **값으로는 벗긴 모양을 든다.** 목적지 판정이 호스트를 그대로 리터럴로 읽어,
+        // 씌운 채 담으면 대역에 아무것도 안 맞아 이 대가 후보에서 통째로 빠진다.
+        assertThat(대.getHost()).isEqualTo("fd00::1");
+        // 고르개는 다시 지을 때 씌운다. 씌운 채 넘겨도 같은 결과라 여기서는 안 갈린다.
+        assertThat(LoadBalancerUriTools.reconstructURI(대,
+                URI.create("http://coupon-service/api/v1/coupons/c1/issue")))
+                .hasToString("http://[fd00::1]:9000/api/v1/coupons/c1/issue");
     }
 
     /** <b>여유를 같이 싣는다.</b> 안 실으면 고르개가 부하율을 못 낸다. */

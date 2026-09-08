@@ -575,6 +575,11 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
         // 실린 밴드로 밀려 토큰이 죽는다.
         boolean hasToken = exchange.<AdmissionDecision>getAttribute(DECISION)
                 == AdmissionDecision.PASS_TOKEN;
+        // **막는 쪽도 재료 없이 판정한 것이다.** 여는 쪽만 남기면 레디스가 죽어 503 이
+        // 나간 구간이 통째로 성공으로 잡힌다. 판정도 같이 고쳐 적는다 — 사다리가 적어
+        // 둔 등록을 그대로 두면 뒤에 읽는 쪽에는 줄에 선 것으로 보인다.
+        degraded(exchange);
+        exchange.getAttributes().put(DECISION, AdmissionDecision.REJECT_OVERLOAD);
         return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
                 rejection.retryAfterSec(hasToken
                                 ? AdmissionDecision.RETRY_TOKEN

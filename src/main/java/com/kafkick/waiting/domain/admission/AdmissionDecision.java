@@ -80,15 +80,23 @@ public enum AdmissionDecision {
                 || this == ENQUEUE_KEY_SATURATED;
     }
 
+    /** 여기서 끝낸다. 줄도 뒷단도 없다. */
+    public boolean isReject() {
+        return this == REJECT_SOLD_OUT
+                || this == REJECT_QUEUE_FULL
+                || this == REJECT_OVERLOAD
+                || this == RETRY_TOKEN;
+    }
+
     /**
-     * <b>낡음이 답을 바꾼 판정인가.</b> 이 셋은 낡음 자체가 조건이라, 재료가 신선했다면
-     * 다른 답이 나왔다. 줄을 세우는 갈래는 낡아도 답이 같으므로 안 든다 — 표시하면
-     * 스냅샷이 멎은 구간이 통째로 열화가 되고, 그 지표로는 알람을 못 건다.
+     * <b>낡은 재료에서만 나오는 값인가.</b> 사다리가 이 셋을 낼 때는 낡음이 조건에
+     * 들어 있다. 값에 대한 함의이지 요청의 이력이 아니다 — <b>덮어쓴 판정에 묻지
+     * 않는다.</b> 보호 차단도 같은 값을 적는데 그쪽 재료는 신선하다.
      *
-     * <p>값을 늘리면 <b>여기서 컴파일이 깨진다.</b> 집합을 밖에 손으로 베껴 두면
-     * 사다리를 재정렬할 때 조용히 갈린다.
+     * <p>값을 늘리면 여기서 컴파일이 깨진다. 다만 사다리 <b>순서</b>를 바꾸는 것은
+     * 안 깨지므로 그때는 사람이 다시 판단한다.
      */
-    public boolean judgedOnStaleMaterial() {
+    public boolean onlyFromStaleMaterial() {
         return switch (this) {
             case PASS_FAIL_OPEN, ENQUEUE_STALE, REJECT_OVERLOAD -> true;
             case PASS_TOKEN, PASS_BYPASS, PASS_UNDER_CAP, ENQUEUE_CIRCUIT_OPEN,
@@ -96,13 +104,5 @@ public enum AdmissionDecision {
                  ENQUEUE_RATE_GLOBAL, ENQUEUE_KEY_SATURATED, REJECT_SOLD_OUT,
                  REJECT_QUEUE_FULL, RETRY_TOKEN -> false;
         };
-    }
-
-    /** 여기서 끝낸다. 줄도 뒷단도 없다. */
-    public boolean isReject() {
-        return this == REJECT_SOLD_OUT
-                || this == REJECT_QUEUE_FULL
-                || this == REJECT_OVERLOAD
-                || this == RETRY_TOKEN;
     }
 }

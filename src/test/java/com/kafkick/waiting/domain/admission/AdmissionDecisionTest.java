@@ -63,28 +63,19 @@ class AdmissionDecisionTest {
     }
 
     /**
-     * <b>낡음이 판정을 바꾼 자리만 표시한다</b> (CY-906).
+     * <b>낡은 재료에서만 나오는 값은 셋이다</b> (CY-906).
      *
-     * <p>사다리 3·6' 도 낡은 재료에서 나오지만 그 갈래는 재료와 무관하게 줄을 세운다 —
-     * 낡음이 답을 안 바꿨으므로 재료 없이 판정한 것이 아니다. 4·7 번은 낡음 자체가
-     * 조건이라 그 셋만 든다.
+     * <p>사다리가 이 셋을 낼 때는 낡음이 조건에 들어 있다. 다른 값은 신선한 재료로도
+     * 나오므로, <b>값만 보고는 그 요청이 낡음을 겪었는지 못 가른다.</b>
      */
     @Test
-    @DisplayName("낡음이_답을_바꾼_판정은_셋이다")
-    void 낡음이_답을_바꾼_판정은_셋이다() {
+    @DisplayName("낡은_재료에서만_나오는_값은_셋이다")
+    void 낡은_재료에서만_나오는_값은_셋이다() {
         assertThat(Arrays.stream(AdmissionDecision.values())
-                .filter(AdmissionDecision::judgedOnStaleMaterial).toList())
+                .filter(AdmissionDecision::onlyFromStaleMaterial))
                 .containsExactlyInAnyOrder(
                         AdmissionDecision.PASS_FAIL_OPEN,
                         AdmissionDecision.ENQUEUE_STALE,
                         AdmissionDecision.REJECT_OVERLOAD);
-    }
-
-    /** 줄을 세우는 갈래는 낡아도 답이 같다. 표시하면 그 구간이 통째로 열화가 된다. */
-    @Test
-    @DisplayName("낡아도_줄을_세운_갈래는_표시_안_한다")
-    void 낡아도_줄을_세운_갈래는_표시_안_한다() {
-        assertThat(AdmissionDecision.ENQUEUE_ALWAYS.judgedOnStaleMaterial()).isFalse();
-        assertThat(AdmissionDecision.ENQUEUE_CIRCUIT_OPEN.judgedOnStaleMaterial()).isFalse();
     }
 }

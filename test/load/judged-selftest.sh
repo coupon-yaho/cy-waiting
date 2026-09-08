@@ -40,6 +40,17 @@ run_case "기준 정확히는 충족" 0 "충족" \
 run_case "기준 바로 아래는 미달" 1 "미달" \
     -- "$zero" "$(metrics edge_bad.txt "$(fresh 19979.0)" "$(degraded 21.0)")"
 
+# **비율이 이 회차에서 몇 건인지 같이 낸다.** 30일 창에서 정한 수라 짧은 회차에
+# 그대로 쓰면 뜻이 달라진다 — 8,000/초 30초면 예산이 240 건인데 낡음 창은 한 번에
+# 수만 건이라, 그 창에서 이 기준은 사실상 "낡음 창 0회" 다. 수가 아니라 뜻을 적는다.
+run_case "이 회차의 열화 예산을 같이 낸다" 0 "열화 예산" \
+    -- "$zero" "$(metrics budget.txt "$(fresh 20000.0)")"
+run_case "예산은 판정 수에서 나온다" 0 "20건" \
+    -- "$zero" "$(metrics budget2.txt "$(fresh 20000.0)")"
+# 기준을 올리면 예산이 줄어야 한다. 안 줄면 그 줄이 기준과 무관한 값이다.
+JUDGED_TARGET_PCT=99.99 run_case "기준을 올리면 예산이 준다" 0 "2건" \
+    -- "$zero" "$(metrics budget3.txt "$(fresh 20000.0)")"
+
 # **기준을 실제로 쓰는지 본다.** 안 쓰면 어떤 값을 줘도 같은 답이 나온다.
 JUDGED_TARGET_PCT=99.99 run_case "기준을 올리면 미달이 된다" 1 "미달" \
     -- "$zero" "$(metrics edge_ok.txt "$(fresh 19981.0)" "$(degraded 19.0)")"

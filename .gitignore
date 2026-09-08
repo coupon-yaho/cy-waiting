@@ -42,3 +42,5 @@ redis-ops.txt
 redis-slowlog.txt
 routing-truth.txt
 routing-truth-k6.json
+peak-steps.tsv
+peak-out/

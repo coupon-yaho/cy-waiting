@@ -204,12 +204,81 @@ class PollIntervalPolicyTest {
         Random 난수 = new Random(42);
 
         Set<Long> 나온_값 = new HashSet<>();
-        for (int i = 0; i < 1_000; i++) {
-            나온_값.add(정책.intervalSec(0, 난수::nextDouble, PollIntervalPolicy.NO_SCALE));
+        int 둘째_값 = 0;
+        int 횟수 = 10_000;
+        for (int i = 0; i < 횟수; i++) {
+            long v = 정책.intervalSec(0, 난수::nextDouble, PollIntervalPolicy.NO_SCALE);
+            나온_값.add(v);
+            둘째_값 += v == 2 ? 1 : 0;
         }
 
-        assertThat(나온_값).as("한 값이면 그 밴드 전원이 같은 초에 돌아온다").hasSizeGreaterThan(1);
-        assertThat(나온_값).as("가까운 밴드가 멀어지면 안 된다").allMatch(v -> v <= 3);
+        // **값의 집합을 못 박는다.** 범위만 보면 폭을 넓히는 판이 그대로 통과한다.
+        assertThat(나온_값).as("한 값이면 그 밴드 전원이 같은 초에 돌아온다")
+                .containsExactlyInAnyOrder(1L, 2L);
+    }
+
+    /**
+     * <b>얼마나 흩어지는지도 못 박는다.</b> 아래쪽 절반이 하한에 되접혀 넷 중 셋은
+     * 여전히 같은 초에 돌아온다. 그 값이 곧 이 고침의 효과라 계약으로 둔다.
+     */
+    @Test
+    @DisplayName("가장_가까운_밴드는_넷_중_하나가_뒤로_간다")
+    void 가장_가까운_밴드는_넷_중_하나가_뒤로_간다() {
+        PollIntervalPolicy 정책 = PollIntervalPolicy.of(PollIntervalPolicy.NORMAL_JITTER_RATIO);
+        Random 난수 = new Random(7);
+
+        int 뒤로 = 0;
+        int 횟수 = 20_000;
+        for (int i = 0; i < 횟수; i++) {
+            뒤로 += 정책.intervalSec(0, 난수::nextDouble, PollIntervalPolicy.NO_SCALE) == 2 ? 1 : 0;
+        }
+
+        assertThat((double) 뒤로 / 횟수).as("되접힘 때문에 절반이 아니라 사분의 일이다")
+                .isBetween(0.22, 0.28);
+    }
+
+    /**
+     * <b>바닥이 걸려도 상한에 안 쌓인다.</b> 천장을 비율로만 잡으면 위쪽 끝이 그
+     * 천장을 넘어, 넘은 만큼이 상한 한 값으로 접힌다 — 자르고 나서 흔드는 것으로
+     * 없앤 그림이 바닥 쪽에서 되살아난다.
+     */
+    @Test
+    @DisplayName("바닥이_걸린_비율에서도_상한에_안_쌓인다")
+    void 바닥이_걸린_비율에서도_상한에_안_쌓인다() {
+        PollIntervalPolicy 정책 = PollIntervalPolicy.of(0.01);
+        Random 난수 = new Random(3);
+
+        int 상한 = 0;
+        int 횟수 = 20_000;
+        for (int i = 0; i < 횟수; i++) {
+            상한 += 정책.intervalSec(1_000, 난수::nextDouble, 1_000) == 60 ? 1 : 0;
+        }
+
+        assertThat((double) 상한 / 횟수).as("한 값에 쌓이면 그 밴드 전원이 같이 돌아온다")
+                .isLessThan(0.4);
+    }
+
+    /**
+     * <b>바닥이 무는 밴드가 둘이다.</b> 조건은 밴드 × 비율이 1초보다 좁은 것이라
+     * 1초와 3초가 걸린다. 3초는 하한에 안 닿아 평균이 그대로지만 분산이 넓어진다 —
+     * 의도한 자리인지 시험으로 못 박아 둔다.
+     */
+    @Test
+    @DisplayName("바닥은_세_번째_밴드까지만_문다")
+    void 바닥은_세_번째_밴드까지만_문다() {
+        PollIntervalPolicy 정책 = PollIntervalPolicy.of(PollIntervalPolicy.NORMAL_JITTER_RATIO);
+        Random 난수 = new Random(11);
+
+        Set<Long> 셋째 = new HashSet<>();
+        Set<Long> 먼_밴드 = new HashSet<>();
+        for (int i = 0; i < 20_000; i++) {
+            셋째.add(정책.intervalSec(10, 난수::nextDouble, PollIntervalPolicy.NO_SCALE));
+            먼_밴드.add(정책.intervalSec(60, 난수::nextDouble, PollIntervalPolicy.NO_SCALE));
+        }
+
+        assertThat(셋째).as("바닥이 물어 폭이 ±1 이다").containsExactlyInAnyOrder(2L, 3L, 4L);
+        assertThat(먼_밴드).as("비율이 바닥보다 커서 전과 같다")
+                .containsExactlyInAnyOrder(8L, 9L, 10L, 11L, 12L);
     }
 
     /** 흩어지되 가운데는 그대로다. 고정 난수 0.5 에서 밴드 값이 나와야 한다. */
@@ -220,5 +289,6 @@ class PollIntervalPolicyTest {
 
         assertThat(정책.intervalSec(0, () -> 0.5, PollIntervalPolicy.NO_SCALE)).isEqualTo(1);
         assertThat(정책.intervalSec(10, () -> 0.5, PollIntervalPolicy.NO_SCALE)).isEqualTo(3);
+        assertThat(정책.intervalSec(60, () -> 0.5, PollIntervalPolicy.NO_SCALE)).isEqualTo(10);
     }
 }

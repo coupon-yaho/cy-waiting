@@ -61,10 +61,11 @@ final class Rejection {
         return switch (decision) {
             // 차례가 온 사람은 배수에서 뺀다. 멀리 보내면 수명 있는 입장 토큰이
             // 죽어 줄 맨 뒤에 새 순번으로 다시 서고, 그것이 곧 순번 역행이자
-            // 추월이다. 밴드가 1초면 흔들림이 0 이라 통째로 같이 돌아온다.
+            // 추월이다.
             //
-            // 그래서 차단된 토큰 보유자가 쌓였다가 매초 같은 순간에 함께 돌아오고,
-            // 서킷이 닫히려는 순간을 되밀 수 있다.
+            // **여전히 같은 초에 몰린다.** 이 밴드는 넷 중 셋이 1초로 접히고,
+            // 다시 올 시각이 정수라 서브초 위상은 안 흩어진다 — 초당 유입이 0.8배로
+            // 줄 뿐이라 서킷의 프로브 자리를 먹는 그림은 남는다 (CY-898).
             case RETRY_TOKEN -> (int) poll.intervalSec(0, random, PollIntervalPolicy.NO_SCALE);
             case REJECT_QUEUE_FULL, REJECT_OVERLOAD ->
                     (int) poll.intervalSec(EtaPolicy.UNKNOWN, random, pollScale);

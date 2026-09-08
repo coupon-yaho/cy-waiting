@@ -47,6 +47,10 @@ run_case "이 회차의 열화 예산을 같이 낸다" 0 "열화 예산" \
     -- "$zero" "$(metrics budget.txt "$(fresh 20000.0)")"
 run_case "예산은 판정 수에서 나온다" 0 "20건" \
     -- "$zero" "$(metrics budget2.txt "$(fresh 20000.0)")"
+# **찍은 예산이 통과 경계와 같아야 한다.** 부동소수를 그냥 자르면 20 이 19 로
+# 나오고, 그 수를 보고 스무 건까지 된다고 읽으면 실제로는 통과인데 안 된다고 믿는다.
+run_case "예산만큼 열화해도 충족이다" 0 "열화 예산 20건" \
+    -- "$zero" "$(metrics edge_budget.txt "$(fresh 19980.0)" "$(degraded 20.0)")"
 # 기준을 올리면 예산이 줄어야 한다. 안 줄면 그 줄이 기준과 무관한 값이다.
 JUDGED_TARGET_PCT=99.99 run_case "기준을 올리면 예산이 준다" 0 "2건" \
     -- "$zero" "$(metrics budget3.txt "$(fresh 20000.0)")"

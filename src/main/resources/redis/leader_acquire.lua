@@ -84,15 +84,24 @@ local function nextGeneration()
     if seen == nil or seen ~= seen or seen ~= math.floor(seen) or seen < floor then
         redis.call('SET', KEYS[2], mark)
     end
-    -- **레디스가 거절하는 모양을 `tonumber` 는 받는다.** 지수 표기, int64 밖의 값,
-    -- 그리고 상한이 그렇다. 여기서 안 걷으면 그 키 하나가 리더를 영영 막는다.
+    -- **레디스가 거절하는 모양을 `tonumber` 는 받는다.** 지수 표기와 int64 밖의 값이
+    -- 그렇다. 여기서 안 걷으면 그 키 하나가 리더를 영영 막는다.
     local bumped = redis.pcall('INCR', KEYS[2])
     if type(bumped) == 'table' then
+        -- **낮춰 덮기 전에 그 값이 나갈 수 있었는지부터 본다.** 0 을 더해 보면
+        -- 레디스가 읽는 정수인지가 갈린다 — 읽히는데 못 오르는 것은 상한뿐이고,
+        -- 그 번호는 직전 임기로 이미 나갔다. 낮춰 덮으면 그 번호를 든 유령이
+        -- 울타리를 통과한다. 리더를 안 뽑는 쪽이 안전한 방향이라 nil 로 알린다.
+        if type(redis.pcall('INCRBY', KEYS[2], 0)) ~= 'table' then
+            return nil
+        end
         redis.call('SET', KEYS[2], mark)
         bumped = redis.call('INCR', KEYS[2])
     end
     return bumped
 end
+
+local CEILING = '세는 값이 상한이라 임기를 못 매긴다'
 
 local current = redis.call('GET', KEYS[1])
 
@@ -100,6 +109,9 @@ if not current then
     -- 아무도 안 잡았다. NX 로 잡아 **경합에서 하나만 이기게** 한다. 진 쪽도 번호를
     -- 태우므로 **연속은 보장하지 않는다** — 지키는 것은 순서뿐이다.
     local fence = nextGeneration()
+    if fence == nil then
+        return redis.error_reply(CEILING)
+    end
     local mark = string.format('%.0f', fence)
     if redis.call('SET', KEYS[1], mark .. '|' .. ARGV[1], 'NX', 'PX', lease) then
         return {1, ARGV[1], lease, fence}
@@ -119,6 +131,9 @@ if owner == ARGV[1] then
     -- 0 은 울타리가 전부 거절하는 값이라 연장만으로는 스스로 못 빠져나온다.
     if fence <= 0 then
         fence = nextGeneration()
+        if fence == nil then
+            return redis.error_reply(CEILING)
+        end
         redis.call('SET', KEYS[1], string.format('%.0f', fence) .. '|' .. ARGV[1],
                 'PX', lease)
         return {1, ARGV[1], lease, fence}

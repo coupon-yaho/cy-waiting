@@ -203,8 +203,7 @@ class LeaderElectionTest extends RedisContainerSupport {
     @Test
     @DisplayName("세는_값이_레디스가_못_읽는_모양이면_다시_씨앗을_준다")
     void 세는_값이_레디스가_못_읽는_모양이면_다시_씨앗을_준다() {
-        for (String 못_읽는_값 : List.of("1.8e15", "99999999999999999999", "1e400",
-                Long.toString(Long.MAX_VALUE))) {
+        for (String 못_읽는_값 : List.of("1.8e15", "99999999999999999999", "1e400")) {
             redis.delete(LEADER).block(WAIT);
             redis.opsForValue().set(GEN, 못_읽는_값).block(WAIT);
             long 시작 = serverMicros();
@@ -214,6 +213,24 @@ class LeaderElectionTest extends RedisContainerSupport {
             assertThat(acquired(r)).as("%s 에서 리더가 안 뽑힌다", 못_읽는_값).isTrue();
             assertThat(fence(r)).as("%s", 못_읽는_값).isGreaterThan(시작 + ROLLOUT_MARGIN_US);
         }
+    }
+
+    /**
+     * <b>상한은 덮지 않고 멈춘다.</b> 레디스가 읽는데 못 오르는 값은 상한뿐이고, 그
+     * 번호는 직전 임기로 이미 나갔다. 바닥으로 낮춰 덮으면 그 번호를 든 유령이
+     * 울타리를 통과한다 — 리더를 안 뽑는 쪽이 안전한 방향이다.
+     */
+    @Test
+    @DisplayName("세는_값이_상한이면_낮춰_덮지_않는다")
+    void 세는_값이_상한이면_낮춰_덮지_않는다() {
+        redis.opsForValue().set(GEN, Long.toString(Long.MAX_VALUE)).block(WAIT);
+
+        assertThatThrownBy(() -> tryAcquire("node-1"))
+                .rootCause()
+                .hasMessageContaining("상한");
+        assertThat(redis.opsForValue().get(GEN).block(WAIT))
+                .as("낮춰 덮으면 그 번호를 든 유령이 통과한다")
+                .isEqualTo(Long.toString(Long.MAX_VALUE));
     }
 
     /** 타입이 어긋나도 같다. {@code GET} 부터 터져 스크립트가 못 돈다. */

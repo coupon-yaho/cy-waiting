@@ -310,13 +310,46 @@ class AllowedDestinationsTest {
     }
 
     /**
-     * <b>v6 대역은 아무것도 안 맞는다.</b> {@link InstanceAddress} 가 콜론 든 호스트를
-     * 거절해 v6 주소가 여기까지 못 온다. 받아 두면 설정이 거짓말을 한다.
+     * <b>v6 대역으로 v6 뒷단을 받는다</b> (CY-888).
+     *
+     * <p>주소가 여기까지 오게 됐으므로 대역도 받는다. 안 받으면 v6 로 보고한 대가
+     * 후보에서 빠지는데 크레딧에는 들어가, 그 예산으로 통과한 요청이 갈 곳이 없다.
      */
     @Test
-    @DisplayName("v6_대역은_아직_거절한다")
-    void v6_대역은_아직_거절한다() {
-        assertThatThrownBy(() -> AllowedDestinations.of(List.of("fd00::/8"), List.of(9000)))
+    @DisplayName("v6_대역_안의_뒷단을_받는다")
+    void v6_대역_안의_뒷단을_받는다() {
+        AllowedDestinations 허용 = AllowedDestinations.of(List.of("fd00::/8"), 포트);
+
+        assertThat(허용.permits(주소("[fd00::1]:9000"))).isTrue();
+        assertThat(허용.permits(주소("[fd00:1234::abcd]:8080"))).isTrue();
+    }
+
+    /** 대역 밖은 막는다. 받아 두기만 하면 v6 를 전면 개방한 것과 같다. */
+    @Test
+    @DisplayName("v6_대역_밖의_뒷단은_막는다")
+    void v6_대역_밖의_뒷단은_막는다() {
+        AllowedDestinations 허용 = AllowedDestinations.of(List.of("fd00::/8"), 포트);
+
+        assertThat(허용.permits(주소("[2001:db8::1]:9000"))).isFalse();
+    }
+
+    /**
+     * <b>v4 대역은 v6 를 안 받는다.</b> 바이트 수가 달라 견줄 수 없는데, 길이를
+     * 안 보면 앞 네 바이트만 맞아도 통과한다.
+     */
+    @Test
+    @DisplayName("v4_대역은_v6_뒷단을_안_받는다")
+    void v4_대역은_v6_뒷단을_안_받는다() {
+        AllowedDestinations 허용 = AllowedDestinations.of(List.of("10.0.1.0/24"), 포트);
+
+        assertThat(허용.permits(주소("[fd00::1]:9000"))).isFalse();
+    }
+
+    /** v6 도 전 대역은 못 적는다. 표기 하나로 전면 개방이 조용히 서면 안 된다. */
+    @Test
+    @DisplayName("v6_전_대역은_거절한다")
+    void v6_전_대역은_거절한다() {
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of("::/0"), List.of(9000)))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 }

@@ -18,8 +18,6 @@ public final class AllowedDestinations {
 
     private static final int MAX_PORT = 65535;
 
-    private static final int V4_BYTES = 4;
-
     /** 주소를 쓰다 만 모양. 점으로 끊긴 열 진수인데 넷이 아니다. */
     private static final Pattern PARTIAL_ADDRESS =
             Pattern.compile("\\d{1,3}(\\.\\d{1,3}){0,2}");
@@ -96,12 +94,6 @@ public final class AllowedDestinations {
                 if (range.prefixBits() == 0) {
                     throw new IllegalArgumentException(
                             "허용 목적지에 전 대역을 적을 수 없다: " + entry);
-                }
-                // **v6 대역은 아무것도 안 맞는다.** InstanceAddress 가 콜론 든 호스트를
-                // 거절해 v6 주소가 여기까지 못 온다. 받아 두면 설정이 거짓말을 한다.
-                if (range.address().length != V4_BYTES) {
-                    throw new IllegalArgumentException(
-                            "IPv6 대역은 아직 못 쓴다 — 보고 주소가 v4 뿐이다: " + entry);
                 }
                 ranges.add(range);
             } else {

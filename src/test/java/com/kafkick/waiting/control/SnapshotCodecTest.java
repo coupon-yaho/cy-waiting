@@ -267,6 +267,30 @@ class SnapshotCodecTest {
                         InstanceAddress.parse("10.0.1.8:9000").orElseThrow(), 40));
     }
 
+    /**
+     * <b>v6 주소도 왕복한다</b> (CY-888).
+     *
+     * <p>구분자가 쉼표와 세로줄이고 v6 는 콜론을 쓰므로 자리는 안 겹친다. 왕복이
+     * 안 맞으면 그 대가 다음 틱에 후보에서 빠지고, 크레딧만 남아 갈 곳 없는 예산이 된다.
+     */
+    @Test
+    @DisplayName("v6_주소도_싣고_읽는다")
+    void v6_주소도_싣고_읽는다() {
+        SnapshotCodec codec = SnapshotCodec.create();
+        InstanceRouting v6 = new InstanceRouting("be-v6",
+                InstanceAddress.parse("[fd00::1]:9000").orElseThrow(), 70);
+        GatewaySnapshot 원본 = new GatewaySnapshot(
+                Map.of("c1", CouponState.idle(500)), new SnapshotMeta(10, 1),
+                Instant.ofEpochSecond(1_787_184_000L),
+                List.of(new InstanceRouting("be-1", 주소, 200), v6));
+
+        GatewaySnapshot 되돌린 = codec.decode(codec.encode(원본,
+                CreditSmoother.Snapshot.empty(), QueueingHysteresis.Snapshot.empty()));
+
+        assertThat(되돌린.instances())
+                .containsExactly(new InstanceRouting("be-1", 주소, 200), v6);
+    }
+
     /** 옛 리더는 이 자리를 안 싣는다. 없으면 없는 것으로 본다 (E-12). */
     @Test
     @DisplayName("라우팅_목록이_없으면_비어_있다")

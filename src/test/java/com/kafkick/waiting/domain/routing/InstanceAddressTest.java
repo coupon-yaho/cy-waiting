@@ -182,6 +182,10 @@ class InstanceAddressTest {
         assertThat(InstanceAddress.parse("[]:8080")).isEmpty();
         assertThat(InstanceAddress.parse("[2001:db8::1]8080")).isEmpty();
         assertThat(InstanceAddress.parse("[2001:db8::1]:")).isEmpty();
+        // 닫는 대괄호가 없으면 어디까지가 호스트인지 못 정한다.
+        assertThat(InstanceAddress.parse("[2001:db8::1:8080")).isEmpty();
+        // 닫고 끝나면 포트가 없다.
+        assertThat(InstanceAddress.parse("[2001:db8::1]")).isEmpty();
     }
 
     /**

@@ -306,6 +306,22 @@ class BackendFallbackTest {
 
         assertThat(exchange.getResponse().getBodyAsString().block())
                 .doesNotContain("대기 순번");
+        // **상태도 다르다** (F8 · CY-903). 503 은 클라이언트가 입장 단계를 버리는
+        // 신호라, 가까이 불러 놓고 새 순번으로 다시 세우게 된다.
+        assertThat(exchange.getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+    }
+
+    /** 줄에 선 사람은 그대로 503 이다. 그에게는 순번이 유지되는 것이 사실이다. */
+    @Test
+    @DisplayName("줄에_선_사람은_503_그대로다")
+    void 줄에_선_사람은_503_그대로다() {
+        MockServerWebExchange exchange = 넘어온_요청();
+
+        답한다(fallback, exchange);
+
+        assertThat(exchange.getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
     }
 
     /**

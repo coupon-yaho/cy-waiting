@@ -1130,11 +1130,12 @@ class AdmissionGatewayFilterTest {
         // 상한에 걸렸을 뿐 차례는 왔다. 큐 만원인 사람과 같이 두면 그 사이
         // 자기 몫이 남에게 간다.
         //
-        // 가장 가까운 밴드라 흔들림이 반올림에 흡수된다 — 그것도 못 박는다.
+        // **가까이 부르되 한 값에 안 모은다** (CY-898). 양 끝이 갈려야 그 밴드에
+        // 몰린 사람들이 같은 초에 함께 안 돌아온다.
         assertThat(거절값.retryAfterSec(AdmissionDecision.RETRY_TOKEN, () -> 0, 1.0))
                 .isEqualTo(1);
         assertThat(거절값.retryAfterSec(AdmissionDecision.RETRY_TOKEN, () -> 1, 1.0))
-                .isEqualTo(1);
+                .as("양 끝이 같으면 흩어짐이 0 이다").isEqualTo(2);
     }
 
     @Test

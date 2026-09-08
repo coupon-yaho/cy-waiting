@@ -32,6 +32,13 @@ public class PollIntervalPolicy {
     private static final long MAX_INTERVAL_SEC = 60;
 
     /**
+     * 흔들림 폭의 바닥(초). <b>비율만 쓰면 가까운 밴드가 안 흩어진다</b> — 1초에
+     * 20% 는 ±0.2 초라 반올림이 통째로 먹어 값이 하나로 모인다. 비율이 0 이면
+     * 안 건다. 끄겠다는 뜻이라 되살리면 밴드 경계가 흔들린다.
+     */
+    private static final double MIN_JITTER_SEC = 1.0;
+
+    /**
      * 서버가 시킨 간격을 지키는 사람이 <b>몇 번까지 놓쳐도 되는가</b>. 모바일
      * 브라우저가 탭을 뒤로 보내면 타이머가 뭉텅이로 밀린다. 두 번은 흔하고 세
      * 번은 드물다 — 그 위는 사람이 떠난 것으로 본다.
@@ -66,7 +73,10 @@ public class PollIntervalPolicy {
         this.jitterRatio = jitterRatio;
     }
 
-    /** {@code jitterRatio} 는 기본 간격에 곱해지는 흔들림 폭이다. */
+    /**
+     * {@code jitterRatio} 는 기본 간격에 곱해 폭을 내는 비율이다. 그렇게 낸 폭이
+     * 1초보다 좁으면 1초를 쓴다 ({@link #MIN_JITTER_SEC}). 0 이면 안 흔든다.
+     */
     public static PollIntervalPolicy of(double jitterRatio) {
         if (!Double.isFinite(jitterRatio) || jitterRatio < 0) {
             throw new IllegalArgumentException(
@@ -89,13 +99,21 @@ public class PollIntervalPolicy {
         //
         // 클라이언트가 받는 값은 그래도 60 을 안 넘으므로, 생존 신호 수명을
         // 이 상한에서 끌어내는 것은 그대로다.
-        double ceiling = MAX_INTERVAL_SEC / (1 + jitterRatio);
+        // **천장은 폭과 같은 식에서 나와야 한다.** 폭에 바닥이 걸리면 위쪽 끝이
+        // 비율로 잰 천장을 넘어, 넘은 만큼이 상한 한 점에 쌓인다 — 자르고 나서
+        // 흔드는 것으로 없앤 그림이 바닥 쪽에서 되살아난다.
+        double ceiling = jitterRatio == 0 ? MAX_INTERVAL_SEC
+                : Math.min(MAX_INTERVAL_SEC / (1 + jitterRatio),
+                        MAX_INTERVAL_SEC - MIN_JITTER_SEC);
         // **하한을 여기서도 건다.** SnapshotMeta 가 이미 정규화했지만 이 인자는
         // 그냥 double 이라, 1 미만이 들어오면 한산할 때 오히려 부하를 만든다.
         // 사본이 아니라 공개 API 의 방어이고, 양쪽 다 자기 시험이 있다.
         double scaled = Math.min(base * Math.max(1.0, pollScale), ceiling);
-        // [-jitter, +jitter] 로 흔들어 같은 밴드가 동시에 두드리지 않게 한다
-        double jittered = scaled * (1 + jitterRatio * (2 * random.getAsDouble() - 1));
+        // [-폭, +폭] 으로 흔들어 같은 밴드가 동시에 두드리지 않게 한다. 폭은 초로
+        // 재고 바닥이 있다 — 근거는 MIN_JITTER_SEC 에 있다.
+        double spread = jitterRatio == 0
+                ? 0 : Math.max(scaled * jitterRatio, MIN_JITTER_SEC);
+        double jittered = scaled + spread * (2 * random.getAsDouble() - 1);
         return Math.clamp(Math.round(jittered), MIN_INTERVAL_SEC, MAX_INTERVAL_SEC);
     }
 

@@ -32,8 +32,8 @@ public record InstanceAddress(String host, int port) {
         if (host == null || host.isEmpty() || host.length() > MAX_LENGTH) {
             throw new IllegalArgumentException("호스트가 없거나 너무 길다: " + host);
         }
-        // **대괄호는 표기이지 값이 아니다.** 벗긴 모양만 든다 — 목적지 판정과
-        // 고르개가 리터럴을 그대로 읽으므로, 씌운 채 담으면 둘 다 못 읽는다.
+        // **대괄호는 표기이지 값이 아니다.** 벗긴 모양만 든다 — 목적지 판정이
+        // 호스트를 그대로 리터럴로 읽으므로, 씌운 채 담으면 대역에 아무것도 안 맞는다.
         if (host.indexOf(':') >= 0) {
             if (IpLiteral.parse(host) == null) {
                 throw new IllegalArgumentException("콜론 든 호스트가 v6 리터럴이 아니다: " + host);
@@ -53,6 +53,18 @@ public record InstanceAddress(String host, int port) {
         if (port < 1 || port > MAX_PORT) {
             throw new IllegalArgumentException("포트는 1.." + MAX_PORT + " 여야 한다: " + port);
         }
+        // **낼 때의 길이로 다시 잰다.** 호스트만 재면 포트와 대괄호가 상한을 넘어,
+        // 낸 문자열을 받는 쪽이 못 읽고 그 대만 조용히 빠지는데 크레딧은 남는다.
+        if (rendered(host, port).length() > MAX_LENGTH) {
+            throw new IllegalArgumentException("주소가 너무 길다: " + host + ":" + port);
+        }
+    }
+
+    /** 다시 읽힐 표기. v6 는 대괄호를 씌운다. */
+    private String rendered(String value, int number) {
+        return value.indexOf(':') < 0
+                ? value + ":" + number
+                : "[" + value + "]:" + number;
     }
 
     /**
@@ -74,8 +86,8 @@ public record InstanceAddress(String host, int port) {
                 return Optional.empty();
             }
             host = raw.substring(1, close);
-            // **대괄호는 v6 에만 쓴다.** 이름을 싸서 넣는 길을 내면 콜론 검사를
-            // 우회하는 통로가 되고, 그 이름은 목적지 판정에서 리터럴로도 안 읽힌다.
+            // **대괄호는 v6 에만 쓴다.** 이름을 싸서 받으면 같은 값에 표기가 둘 생겨,
+            // 벗겨 담은 뒤 낼 때는 안 씌워 나가므로 왕복이 비대칭이 된다.
             if (host.indexOf(':') < 0) {
                 return Optional.empty();
             }
@@ -99,6 +111,6 @@ public record InstanceAddress(String host, int port) {
     /** <b>다시 읽힐 표기로 낸다.</b> 스냅샷이 이 문자열로 실려 나가고 받는 쪽이 푼다. */
     @Override
     public String toString() {
-        return host.indexOf(':') < 0 ? host + ":" + port : "[" + host + "]:" + port;
+        return rendered(host, port);
     }
 }

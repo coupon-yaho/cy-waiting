@@ -20,6 +20,18 @@ import org.junit.jupiter.params.provider.ValueSource;
 @Tag("unit")
 class InstanceAddressTest {
 
+    /** 라벨 상한 63 을 안 넘으면서 원하는 길이를 만드는 이름. */
+    private static String 라벨을_이은_이름(int 길이) {
+        StringBuilder sb = new StringBuilder();
+        while (sb.length() < 길이) {
+            if (sb.length() > 0) {
+                sb.append('.');
+            }
+            sb.append("a".repeat(Math.min(60, 길이 - sb.length())));
+        }
+        return sb.substring(0, 길이);
+    }
+
     @Test
     @DisplayName("호스트와_포트를_읽는다")
     void 호스트와_포트를_읽는다() {
@@ -96,11 +108,15 @@ class InstanceAddressTest {
     @DisplayName("너무_길면_안_받는다")
     void 너무_길면_안_받는다() {
         assertThat(InstanceAddress.parse("a".repeat(300) + ":8080")).isEmpty();
+        assertThat(InstanceAddress.parse("[" + "a".repeat(300) + "]:8080")).isEmpty();
     }
 
     @Test
     @DisplayName("문자열로_되돌리면_같다")
     void 문자열로_되돌리면_같다() {
+        // 상한 바로 아래는 왕복이 선다. 그 위는 생성자가 막는다.
+        InstanceAddress 긴_이름 = new InstanceAddress(라벨을_이은_이름(250), 8080);
+        assertThat(InstanceAddress.parse(긴_이름.toString())).contains(긴_이름);
         assertThat(InstanceAddress.parse("10.0.1.7:8080").orElseThrow())
                 .hasToString("10.0.1.7:8080");
     }
@@ -210,6 +226,10 @@ class InstanceAddressTest {
         assertThatThrownBy(() -> new InstanceAddress("be.internal", 65536))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new InstanceAddress("a".repeat(256), 8080))
+                .isInstanceOf(IllegalArgumentException.class);
+        // **낼 때의 길이로 재야 한다.** 호스트만 재면 포트가 상한을 넘어, 낸 문자열을
+        // 받는 쪽이 못 읽고 그 대만 조용히 빠지는데 크레딧은 남는다.
+        assertThatThrownBy(() -> new InstanceAddress(라벨을_이은_이름(252), 8080))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 }

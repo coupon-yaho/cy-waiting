@@ -2,6 +2,8 @@ package com.kafkick.waiting.domain.net;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.time.Duration;
+
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -65,5 +67,33 @@ class IpLiteralTest {
     @DisplayName("범위를_벗어난_숫자는_못_읽는다")
     void 범위를_벗어난_숫자는_못_읽는다() {
         assertThat(IpLiteral.parse("999.0.0.1")).isNull();
+    }
+
+    /**
+     * <b>모양만 맞고 못 푸는 v6 도 조회로 안 샌다.</b> 이 보장은 JDK 구현에 얹혀
+     * 있어 계약이 아니다 — 여기가 느려지면 폴링 스레드에서 이름 조회가 도는 것이다.
+     */
+    @Test
+    @DisplayName("못_푸는_v6_는_조회_없이_null_이다")
+    void 못_푸는_v6_는_조회_없이_null_이다() {
+        long 시작 = System.nanoTime();
+
+        assertThat(IpLiteral.parse("1:2:3")).isNull();
+        assertThat(IpLiteral.parse("1:2:3:4:5:6:7:8:9")).isNull();
+
+        assertThat(Duration.ofNanos(System.nanoTime() - 시작))
+                .as("이름 조회가 돌면 여기가 수십 밀리초가 된다")
+                .isLessThan(Duration.ofMillis(50));
+    }
+
+    /**
+     * <b>v4 매핑 주소는 네 바이트로 접힌다.</b> 그래야 v4 대역과 견줄 수 있다.
+     * 안 접히면 길이가 갈려 그 대가 조용히 후보에서 빠지고 크레딧만 남는다.
+     */
+    @Test
+    @DisplayName("v4_매핑_주소는_네_바이트다")
+    void v4_매핑_주소는_네_바이트다() {
+        assertThat(IpLiteral.parse("::ffff:10.0.1.7"))
+                .isEqualTo(IpLiteral.parse("10.0.1.7"));
     }
 }

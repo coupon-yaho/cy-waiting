@@ -83,13 +83,21 @@ class SnapshotInstanceListSupplierTest {
 
         ServiceInstance 대 = 공급자.get().blockFirst().getFirst();
 
-        // **값으로는 벗긴 모양을 든다.** 목적지 판정이 호스트를 그대로 리터럴로 읽어,
-        // 씌운 채 담으면 대역에 아무것도 안 맞아 이 대가 후보에서 통째로 빠진다.
-        assertThat(대.getHost()).isEqualTo("fd00::1");
-        // 고르개는 다시 지을 때 씌운다. 씌운 채 넘겨도 같은 결과라 여기서는 안 갈린다.
+        // **여기서는 씌운 모양이다.** 목적지 판정은 이 앞에서 도메인 값으로 끝났고,
+        // 여기부터는 URI 를 짓는 자리라 표기가 필요하다.
+        assertThat(대.getHost()).isEqualTo("[fd00::1]");
+        assertThat(대.getUri()).hasToString("http://[fd00::1]:9000");
         assertThat(LoadBalancerUriTools.reconstructURI(대,
                 URI.create("http://coupon-service/api/v1/coupons/c1/issue")))
                 .hasToString("http://[fd00::1]:9000/api/v1/coupons/c1/issue");
+        // **인코딩이 섞이면 다시 짓는 길이 갈린다.** 그쪽은 안 씌우므로 호스트가 v6 면
+        // 그 자리에서 터진다 — 쿠폰 ID 는 클라이언트가 넣고 질의는 브라우저가 인코딩한다.
+        assertThat(LoadBalancerUriTools.reconstructURI(대,
+                URI.create("http://coupon-service/api/v1/coupons/c%31/issue")))
+                .hasToString("http://[fd00::1]:9000/api/v1/coupons/c%31/issue");
+        assertThat(LoadBalancerUriTools.reconstructURI(대,
+                URI.create("http://coupon-service/api/v1/coupons/c1/issue?q=a%20b")))
+                .hasToString("http://[fd00::1]:9000/api/v1/coupons/c1/issue?q=a%20b");
     }
 
     /** <b>여유를 같이 싣는다.</b> 안 실으면 고르개가 부하율을 못 낸다. */

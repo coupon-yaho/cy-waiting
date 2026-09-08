@@ -334,15 +334,65 @@ class AllowedDestinationsTest {
     }
 
     /**
-     * <b>v4 대역은 v6 를 안 받는다.</b> 바이트 수가 달라 견줄 수 없는데, 길이를
-     * 안 보면 앞 네 바이트만 맞아도 통과한다.
+     * <b>바이트 수가 다르면 안 견준다.</b> 앞 바이트가 겹치는 짝을 골라야 그 검사가
+     * 실제로 돈다 — `fd00::/8` 의 첫 바이트가 253 이고 `253.1.2.3` 도 253 이다.
+     * 길이를 안 보면 v6 만 허용한 배포가 우리 망도 아닌 v4 뒷단을 받는다.
      */
+    @Test
+    @DisplayName("v6_대역은_앞_바이트가_같은_v4_뒷단도_안_받는다")
+    void v6_대역은_앞_바이트가_같은_v4_뒷단도_안_받는다() {
+        AllowedDestinations 허용 = AllowedDestinations.of(List.of("fd00::/8"), 포트);
+
+        assertThat(허용.permits(주소("253.1.2.3:9000"))).isFalse();
+    }
+
+    /** 반대 방향도 같다. v4 대역이 v6 뒷단을 받으면 안 된다. */
     @Test
     @DisplayName("v4_대역은_v6_뒷단을_안_받는다")
     void v4_대역은_v6_뒷단을_안_받는다() {
         AllowedDestinations 허용 = AllowedDestinations.of(List.of("10.0.1.0/24"), 포트);
 
         assertThat(허용.permits(주소("[fd00::1]:9000"))).isFalse();
+    }
+
+    /**
+     * <b>v4 매핑 주소는 v4 로 접힌다.</b> 그래서 v4 대역이 받는다 — 검사한 대상과
+     * 연결하는 대상이 같으므로 맞는 동작이다. 안 접히면 길이가 갈려 조용히 후보에서
+     * 빠지고 크레딧만 남으므로, 접힌다는 사실을 여기서 못 박는다.
+     */
+    @Test
+    @DisplayName("v4_매핑_주소는_v4_대역이_받는다")
+    void v4_매핑_주소는_v4_대역이_받는다() {
+        AllowedDestinations 허용 = AllowedDestinations.of(List.of("10.0.1.0/24"), 포트);
+
+        assertThat(허용.permits(주소("[::ffff:10.0.1.7]:9000"))).isTrue();
+    }
+
+    /**
+     * <b>콜론을 빠뜨린 v6 오타는 이름으로 선다.</b> `fd00::/8` 에서 콜론을 흘리면
+     * `fd00` 이 접미사로 조용히 들어가고 영영 아무것도 안 맞는다. 반쪽 v4 를 막는
+     * 검사의 v6 짝이 없다 — 지금 동작을 못 박아 다음 판단의 입력으로 둔다.
+     */
+    @Test
+    @DisplayName("콜론_빠진_v6_는_이름으로_선다")
+    void 콜론_빠진_v6_는_이름으로_선다() {
+        AllowedDestinations 허용 = AllowedDestinations.of(List.of("fd00"), 포트);
+
+        assertThat(허용.permits(주소("[fd00::1]:9000")))
+                .as("이름으로 서면 v6 뒷단이 통째로 빠진다").isFalse();
+    }
+
+    /**
+     * <b>설정에는 대괄호를 안 쓴다.</b> 보고 표기를 그대로 베껴 적는 것이 가장 자연스러운
+     * 오타인데, 받아 두면 이름으로 읽혀 영영 아무것도 안 맞는 접미사가 된다.
+     */
+    @Test
+    @DisplayName("대괄호를_씌운_항목은_거절한다")
+    void 대괄호를_씌운_항목은_거절한다() {
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of("[fd00::1]"), List.of(9000)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of("[fd00::]/8"), List.of(9000)))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     /** v6 도 전 대역은 못 적는다. 표기 하나로 전면 개방이 조용히 서면 안 된다. */

@@ -86,9 +86,16 @@ public final class SnapshotInstanceListSupplier implements ServiceInstanceListSu
 
     // **https 로 안 붙인다.** 뒷단은 같은 사설망이고, 주소에 스킴을 안 실었다 —
     // 여기서 정하는 것이 계약이다.
+    //
+    // **v6 호스트는 여기서 대괄호를 씌운다.** 라우팅이 URI 를 다시 지을 때 인코딩이
+    // 섞여 있으면 안 씌우는 길로 가고, 그러면 그 자리에서 터진다 — 쿠폰 ID 는
+    // 클라이언트가 넣고 질의는 브라우저가 인코딩하므로 밖에서 부르는 실패다.
+    // 목적지 판정은 이 앞에서 도메인 값으로 끝나 있어 표기가 갈려도 안 어긋난다.
     private DefaultServiceInstance toInstance(InstanceRouting routing) {
+        String host = routing.address().host();
         DefaultServiceInstance instance = new DefaultServiceInstance(
-                routing.instanceId(), serviceId, routing.address().host(),
+                routing.instanceId(), serviceId,
+                host.indexOf(':') < 0 ? host : "[" + host + "]",
                 routing.address().port(), false);
         instance.getMetadata().put(CREDITS, Long.toString(routing.credits()));
         return instance;

@@ -335,6 +335,7 @@ redis.call('ZADD', KEYS[1], t, ARGV[1])
 
 ```
 HSET capacity:coupon-svc:{version} <uuid> {"addr":"10.0.3.17:8080","credits":180,"ts":...}
+                                 v6 는 대괄호를 씌운다 — "addr":"[fd00::1]:9000" (CY-888)
                                  매 1초 갱신
 읽을 때   now - ts > 3초  →  없는 것으로 취급 (R-2·R-7)
 ```

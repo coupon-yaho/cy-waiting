@@ -66,6 +66,9 @@ import reactor.core.publisher.Mono;
  */
 class GatewayRoutesTest {
 
+    /** 라우팅이 쓰는 것과 같은 설정. 재시도를 넓히면 여기부터 갈린다. */
+    private final ConnectRetry 연결재시도 = ConnectRetry.of();
+
     /** 목적지 제한. 켜진 설정은 이것이 없으면 못 선다. */
     private static final List<String> 허용 = List.of(".internal");
 
@@ -872,7 +875,7 @@ class GatewayRoutesTest {
     @Test
     @DisplayName("연결_단계에만_재시도한다")
     void 연결_단계에만_재시도한다() {
-        var config = GatewayRoutes.connectRetryConfig();
+        var config = 연결재시도.config();
 
         assertThat(config.getSeries()).isEmpty();
         assertThat(config.getStatuses()).isEmpty();
@@ -903,7 +906,7 @@ class GatewayRoutesTest {
     @Test
     @DisplayName("연결이_못_서는_갈래를_다_덮는다")
     void 연결이_못_서는_갈래를_다_덮는다() {
-        var config = GatewayRoutes.connectRetryConfig();
+        var config = 연결재시도.config();
 
         // 계보가 갈린다는 것부터 못 박는다. 안 적으면 목록이 왜 둘인지가 안 남는다.
         assertThat(ConnectException.class.isAssignableFrom(NoRouteToHostException.class))
@@ -923,7 +926,7 @@ class GatewayRoutesTest {
     @Test
     @DisplayName("이름_풀이_실패는_다시_안_보낸다")
     void 이름_풀이_실패는_다시_안_보낸다() {
-        assertThat(GatewayRoutes.connectRetryConfig().getExceptions())
+        assertThat(연결재시도.config().getExceptions())
                 .noneMatch(c -> c.isAssignableFrom(UnknownHostException.class));
     }
 
@@ -931,7 +934,7 @@ class GatewayRoutesTest {
     @Test
     @DisplayName("한_번만_다시_보낸다")
     void 한_번만_다시_보낸다() {
-        assertThat(GatewayRoutes.connectRetryConfig().getRetries()).isEqualTo(1);
+        assertThat(연결재시도.config().getRetries()).isEqualTo(1);
     }
 
     private static String 이름(GatewayFilter filter) {

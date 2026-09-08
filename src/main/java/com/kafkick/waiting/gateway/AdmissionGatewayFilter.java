@@ -109,6 +109,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
     /** 재시도 안내의 흔들림 폭. 폴링 간격과 같은 정책을 쓴다. */
     private static final PollIntervalPolicy POLL = PollIntervalPolicy.of(PollIntervalPolicy.NORMAL_JITTER_RATIO);
 
+    /** 거절을 응답으로 옮기는 자리. 필터가 들고 쓴다. */
+    private final Rejection rejection = Rejection.of(POLL);
+
     private static final String MEMBER_ID = "X-Member-Id";
 
     /** 발급 계층 명세가 정한 이름. 조회가 준 토큰을 여기 실어 온다. */
@@ -472,8 +475,8 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
         if (decision.isEnqueue()) {
             return enqueue(exchange, chain, couponId, state, meta);
         }
-        return error.write(exchange, codeOf(decision),
-                retryAfterSec(decision, random, meta.pollScale()));
+        return error.write(exchange, rejection.code(decision),
+                rejection.retryAfterSec(decision, random, meta.pollScale()));
     }
 
     /**
@@ -526,7 +529,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
                         // 세어졌고, 두 번 세면 SLI 의 분모가 부푼다.
                         count("queue-full-2nd");
                         return error.write(exchange, ApiError.Code.QUEUE_FULL,
-                                retryAfterSec(AdmissionDecision.REJECT_QUEUE_FULL, random,
+                                rejection.retryAfterSec(AdmissionDecision.REJECT_QUEUE_FULL, random,
                                         meta.pollScale()));
                     }
                     double etaSec = EtaPolicy.etaSec(entry.rank(), state.credit());
@@ -566,54 +569,8 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
         }
         count("enqueue-failed-shed");
         return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
-                retryAfterSec(AdmissionDecision.REJECT_OVERLOAD, random, meta.pollScale()));
-    }
-
-    /**
-     * 거절의 봉투. <b>전부 열거한다</b> — 빠짐없이 적어야 새 판정값이 생겼을 때
-     * 컴파일이 깨진다. {@code default} 로 두면 새 사유가 조용히 매진으로 나간다.
-     */
-    static ApiError.Code codeOf(AdmissionDecision decision) {
-        return switch (decision) {
-            case REJECT_SOLD_OUT -> ApiError.Code.SOLD_OUT;
-            case REJECT_QUEUE_FULL -> ApiError.Code.QUEUE_FULL;
-            case REJECT_OVERLOAD -> ApiError.Code.TEMPORARILY_UNAVAILABLE;
-            // 차례가 온 사람을 큐 뒤로 안 돌린다. 되돌리면 허가가 "아마도" 가 된다.
-            case RETRY_TOKEN -> ApiError.Code.RETRY_TOKEN;
-            case PASS_TOKEN, PASS_BYPASS, PASS_FAIL_OPEN, PASS_UNDER_CAP,
-                 ENQUEUE_STALE, ENQUEUE_ALWAYS, ENQUEUE_BACKLOG,
-                 ENQUEUE_RATE_COUPON, ENQUEUE_RATE_GLOBAL, ENQUEUE_KEY_SATURATED,
-                 ENQUEUE_CIRCUIT_OPEN ->
-                    throw new IllegalArgumentException("거절이 아니다: " + decision);
-        };
-    }
-
-    /**
-     * 다시 와도 되는 때. 같은 값을 주면 다 같이 돌아오므로 흔들어서 흩는다.
-     *
-     * <p>배수를 인자로 받는다. 안 받는 갈래를 남기면 거절 갈래가 그쪽을 쓰고,
-     * 과부하일수록 거절 비중이 커져 예산이 절반만 걸린다.
-     */
-    static int retryAfterSec(AdmissionDecision decision, DoubleSupplier random,
-            double pollScale) {
-        return switch (decision) {
-            // 차례가 온 사람은 배수에서 뺀다. 멀리 보내면 수명 있는 입장 토큰이
-            // 죽어 줄 맨 뒤에 새 순번으로 다시 서고, 그것이 곧 순번 역행이자
-            // 추월이다. 밴드가 1초면 흔들림이 0 이라 통째로 같이 돌아온다.
-            //
-            // 그래서 차단된 토큰 보유자가 쌓였다가 매초 같은 순간에 함께 돌아오고,
-            // 서킷이 닫히려는 순간을 되밀 수 있다.
-            case RETRY_TOKEN -> (int) POLL.intervalSec(0, random, PollIntervalPolicy.NO_SCALE);
-            case REJECT_QUEUE_FULL, REJECT_OVERLOAD ->
-                    (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random, pollScale);
-            // 매진은 안 싣는다. 다시 와도 소용없는데 시각을 주면 재시도를 부른다.
-            case REJECT_SOLD_OUT -> ApiError.NO_RETRY;
-            case PASS_TOKEN, PASS_BYPASS, PASS_FAIL_OPEN, PASS_UNDER_CAP,
-                 ENQUEUE_STALE, ENQUEUE_ALWAYS, ENQUEUE_BACKLOG,
-                 ENQUEUE_RATE_COUPON, ENQUEUE_RATE_GLOBAL, ENQUEUE_KEY_SATURATED,
-                 ENQUEUE_CIRCUIT_OPEN ->
-                    throw new IllegalArgumentException("거절이 아니다: " + decision);
-        };
+                rejection.retryAfterSec(AdmissionDecision.REJECT_OVERLOAD, random,
+                        meta.pollScale()));
     }
 
     /**

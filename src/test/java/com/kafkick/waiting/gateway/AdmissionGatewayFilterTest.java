@@ -20,6 +20,7 @@ import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import com.kafkick.waiting.domain.coupon.SnapshotMetas;
 import com.kafkick.waiting.domain.coupon.Tunables;
 import com.kafkick.waiting.domain.queue.EntryToken;
+import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import com.kafkick.waiting.domain.queue.QueueToken;
 import java.time.Clock;
 import tools.jackson.databind.JsonNode;
@@ -61,6 +62,10 @@ import reactor.test.StepVerifier;
 class AdmissionGatewayFilterTest {
 
     private static final ObjectMapper JSON = new ObjectMapper();
+
+    /** 필터가 쓰는 것과 같은 봉투. 정책을 바꾸면 여기부터 갈린다. */
+    private final Rejection 봉투 =
+            Rejection.of(PollIntervalPolicy.of(PollIntervalPolicy.NORMAL_JITTER_RATIO));
 
     private static final String COUPON = "c1";
 
@@ -685,7 +690,7 @@ class AdmissionGatewayFilterTest {
     void 줄이_꽉_차_거절해도_배수를_지킨다() {
         // **천장 안쪽에서 잰다.** 배수 3 이면 90 이라 천장 50 에 잘리는데, 그러면
         // 배수 2 를 넘는 어떤 값을 넘겨도 같은 답이라 곱셈이 안 관측된다.
-        assertThat(AdmissionGatewayFilter.retryAfterSec(
+        assertThat(봉투.retryAfterSec(
                 AdmissionDecision.REJECT_QUEUE_FULL, () -> 0.5, 1.5))
                 .as("ETA 를 모르는 밴드(30초)에 배수 1.5").isEqualTo(45);
     }
@@ -702,10 +707,10 @@ class AdmissionGatewayFilterTest {
     @Test
     @DisplayName("차례가_온_사람의_재시도는_배수를_안_받는다")
     void 차례가_온_사람의_재시도는_배수를_안_받는다() {
-        assertThat(AdmissionGatewayFilter.retryAfterSec(
+        assertThat(봉투.retryAfterSec(
                 AdmissionDecision.RETRY_TOKEN, () -> 0.5, 3.0))
                 .as("가장 가까운 밴드(1초). 배수 3 이 곱해지면 안 된다").isEqualTo(1);
-        assertThat(AdmissionGatewayFilter.retryAfterSec(
+        assertThat(봉투.retryAfterSec(
                 AdmissionDecision.RETRY_TOKEN, () -> 0.5, 50.0))
                 .as("배수 50 이면 상한 60초 — 토큰 최소 수명 150초의 절반이 날아간다")
                 .isEqualTo(1);
@@ -1002,11 +1007,11 @@ class AdmissionGatewayFilterTest {
     void 거절_사유마다_다른_응답이다() {
         // **뭉치면 운영자가 엉뚱한 것을 조인다.** 매진은 끝난 것이고, 큐 만원은
         // 잠시 뒤 다시 오면 되고, 과부하는 노드를 늘려야 한다 — 셋이 다르다.
-        assertThat(AdmissionGatewayFilter.codeOf(AdmissionDecision.REJECT_SOLD_OUT))
+        assertThat(봉투.code(AdmissionDecision.REJECT_SOLD_OUT))
                 .isEqualTo(ApiError.Code.SOLD_OUT);
-        assertThat(AdmissionGatewayFilter.codeOf(AdmissionDecision.REJECT_QUEUE_FULL))
+        assertThat(봉투.code(AdmissionDecision.REJECT_QUEUE_FULL))
                 .isEqualTo(ApiError.Code.QUEUE_FULL);
-        assertThat(AdmissionGatewayFilter.codeOf(AdmissionDecision.REJECT_OVERLOAD))
+        assertThat(봉투.code(AdmissionDecision.REJECT_OVERLOAD))
                 .isEqualTo(ApiError.Code.TEMPORARILY_UNAVAILABLE);
     }
 
@@ -1021,9 +1026,9 @@ class AdmissionGatewayFilterTest {
 
         // 루프가 공회전해도 통과하지 않게 개수를 함께 본다.
         assertThat(거절).hasSize(4);
-        // codeOf 는 switch 식이라 null 을 못 낸다 — 던지지 않는 것이 재려는 것이다.
+        // 봉투는 switch 식이라 null 을 못 낸다 — 던지지 않는 것이 재려는 것이다.
         assertThat(거절).allSatisfy(decision ->
-                assertThatCode(() -> AdmissionGatewayFilter.codeOf(decision))
+                assertThatCode(() -> 봉투.code(decision))
                         .as("%s", decision).doesNotThrowAnyException());
     }
 
@@ -1031,10 +1036,10 @@ class AdmissionGatewayFilterTest {
     @DisplayName("통과_판정에_봉투를_물으면_던진다")
     void 통과_판정에_봉투를_물으면_던진다() {
         // 조용히 매진을 돌려주면 통과해야 할 사람이 끝난 것으로 처리된다.
-        assertThatThrownBy(() -> AdmissionGatewayFilter.codeOf(AdmissionDecision.PASS_UNDER_CAP))
+        assertThatThrownBy(() -> 봉투.code(AdmissionDecision.PASS_UNDER_CAP))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() ->
-                AdmissionGatewayFilter.retryAfterSec(AdmissionDecision.ENQUEUE_ALWAYS, () -> 0.5, 1.0))
+                봉투.retryAfterSec(AdmissionDecision.ENQUEUE_ALWAYS, () -> 0.5, 1.0))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -1093,9 +1098,9 @@ class AdmissionGatewayFilterTest {
         // 파도가 다음 거절을 만들고, 그게 반복된다.
         //
         // 폭까지 본다. 다르기만 하면 흔들림이 얼마든 통과한다.
-        assertThat(AdmissionGatewayFilter.retryAfterSec(
+        assertThat(봉투.retryAfterSec(
                 AdmissionDecision.REJECT_QUEUE_FULL, () -> 0, 1.0)).isEqualTo(24);
-        assertThat(AdmissionGatewayFilter.retryAfterSec(
+        assertThat(봉투.retryAfterSec(
                 AdmissionDecision.REJECT_QUEUE_FULL, () -> 1, 1.0)).isEqualTo(36);
     }
 
@@ -1109,7 +1114,7 @@ class AdmissionGatewayFilterTest {
         Random 난수 = new Random(20260825L);
         double[] 값 = new double[10_000];
         for (int i = 0; i < 값.length; i++) {
-            값[i] = AdmissionGatewayFilter.retryAfterSec(
+            값[i] = 봉투.retryAfterSec(
                     AdmissionDecision.REJECT_QUEUE_FULL, 난수::nextDouble, 1.0);
         }
 
@@ -1128,16 +1133,16 @@ class AdmissionGatewayFilterTest {
         // 자기 몫이 남에게 간다.
         //
         // 가장 가까운 밴드라 흔들림이 반올림에 흡수된다 — 그것도 못 박는다.
-        assertThat(AdmissionGatewayFilter.retryAfterSec(AdmissionDecision.RETRY_TOKEN, () -> 0, 1.0))
+        assertThat(봉투.retryAfterSec(AdmissionDecision.RETRY_TOKEN, () -> 0, 1.0))
                 .isEqualTo(1);
-        assertThat(AdmissionGatewayFilter.retryAfterSec(AdmissionDecision.RETRY_TOKEN, () -> 1, 1.0))
+        assertThat(봉투.retryAfterSec(AdmissionDecision.RETRY_TOKEN, () -> 1, 1.0))
                 .isEqualTo(1);
     }
 
     @Test
     @DisplayName("매진에는_안내를_안_싣는다")
     void 매진에는_안내를_안_싣는다() {
-        assertThat(AdmissionGatewayFilter.retryAfterSec(AdmissionDecision.REJECT_SOLD_OUT,
+        assertThat(봉투.retryAfterSec(AdmissionDecision.REJECT_SOLD_OUT,
                 () -> 0.5, 1.0)).isEqualTo(ApiError.NO_RETRY);
     }
 
@@ -1146,7 +1151,7 @@ class AdmissionGatewayFilterTest {
     void 차례가_온_사람은_큐로_안_돌린다() {
         // 토큰을 들고 왔는데 노드 상한을 넘은 경우다. 어느 술어에도 안 걸려서
         // 그냥 두면 조용히 통과한다 — 상한을 넘겼는데 지나가는 것이다.
-        assertThat(AdmissionGatewayFilter.codeOf(AdmissionDecision.RETRY_TOKEN))
+        assertThat(봉투.code(AdmissionDecision.RETRY_TOKEN))
                 .isEqualTo(ApiError.Code.RETRY_TOKEN);
     }
 
@@ -1876,7 +1881,7 @@ class AdmissionGatewayFilterTest {
         // 정책이 통째로 바뀌어도 통과하므로 값으로 못 박는다.
         assertThat(차례가_온_사람.getResponse().getHeaders().getFirst("Retry-After"))
                 .isEqualTo(String.valueOf(
-                        AdmissionGatewayFilter.retryAfterSec(
+                        봉투.retryAfterSec(
                                 AdmissionDecision.RETRY_TOKEN, 고정_난수, 1.0)));
         풀어_준다();
     }

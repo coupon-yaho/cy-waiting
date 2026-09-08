@@ -10,6 +10,7 @@ import com.kafkick.waiting.domain.coupon.QueueMode;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -178,8 +179,24 @@ class LeadershipGainedWiringTest {
                 // 재료가 없으면 발행 몫을 모른다 — 램프는 그때 손대지 않는다.
                 SnapshotHolder.of(Duration.ofSeconds(3), Duration.ofSeconds(10),
                         Clock.systemUTC()),
-                GatewayRegistry.of(1, 3),
-                // 잠금은 별도 배선이라 여기서는 안 잰다.
-                () -> { });
+                GatewayRegistry.of(1, 3), 잠금);
+    }
+
+    /** 승계 때 문을 잠근 횟수. 안 세면 이 줄이 빠져도 전 시험이 초록이다. */
+    private final AtomicInteger 잠근_횟수 = new AtomicInteger();
+
+    private final Runnable 잠금 = 잠근_횟수::incrementAndGet;
+
+    /**
+     * <b>잠금이 승계 목록에 있다.</b> 이 줄이 빠지면 새 리더가 안 만지는 쿠폰의 문이
+     * 옛 임기로 남고, 유령이 먼저 도착하면 자기 번호와 같아서 통과한다 (CY-892).
+     */
+    @Test
+    @DisplayName("승계하면_입장_울타리를_잠근다")
+    void 승계하면_입장_울타리를_잠근다() {
+        onLeadershipGained(안_걷는_스위퍼(),
+                이월을_기록하는_회차(new ArrayList<>(), new AtomicReference<>(0.0))).run();
+
+        assertThat(잠근_횟수).hasValue(1);
     }
 }

@@ -51,7 +51,7 @@ end
 -- 같은 번호의 재시도는 막지 않는다 — 막으면 실패한 회차가 영영 안 된다.
 local seenFence = tonumber(redis.call('GET', KEYS[3]))
 if seenFence ~= nil and seenFence == seenFence and fence < seenFence then
-    return {'-1', -1, string.format('%.0f', seenFence)}
+    return {'-1', -1}
 end
 -- **수명을 준다.** 이 표는 쿠폰별이라 그 쿠폰이 한산하면 갱신이 안 온다 — 스냅샷
 -- 울타리처럼 짧게 두면 그 사이 문이 통째로 사라진다. 그래서 쿠폰별 표와 같은

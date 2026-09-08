@@ -80,6 +80,24 @@ public enum AdmissionDecision {
                 || this == ENQUEUE_KEY_SATURATED;
     }
 
+    /**
+     * <b>낡음이 답을 바꾼 판정인가.</b> 이 셋은 낡음 자체가 조건이라, 재료가 신선했다면
+     * 다른 답이 나왔다. 줄을 세우는 갈래는 낡아도 답이 같으므로 안 든다 — 표시하면
+     * 스냅샷이 멎은 구간이 통째로 열화가 되고, 그 지표로는 알람을 못 건다.
+     *
+     * <p>값을 늘리면 <b>여기서 컴파일이 깨진다.</b> 집합을 밖에 손으로 베껴 두면
+     * 사다리를 재정렬할 때 조용히 갈린다.
+     */
+    public boolean judgedOnStaleMaterial() {
+        return switch (this) {
+            case PASS_FAIL_OPEN, ENQUEUE_STALE, REJECT_OVERLOAD -> true;
+            case PASS_TOKEN, PASS_BYPASS, PASS_UNDER_CAP, ENQUEUE_CIRCUIT_OPEN,
+                 ENQUEUE_ALWAYS, ENQUEUE_BACKLOG, ENQUEUE_RATE_COUPON,
+                 ENQUEUE_RATE_GLOBAL, ENQUEUE_KEY_SATURATED, REJECT_SOLD_OUT,
+                 REJECT_QUEUE_FULL, RETRY_TOKEN -> false;
+        };
+    }
+
     /** 여기서 끝낸다. 줄도 뒷단도 없다. */
     public boolean isReject() {
         return this == REJECT_SOLD_OUT

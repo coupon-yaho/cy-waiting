@@ -12,6 +12,8 @@ set -uo pipefail
 
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
+. test/load/peak-lib.sh || exit 2
+
 COMPOSE="docker compose -f test/load/compose.yml"
 
 # peak.js 가 두 쿠폰을 박아 두고 있다. 여기만 바꾸면 다른 쿠폰을 비우고 이 쿠폰을
@@ -21,6 +23,12 @@ COUPONS="c1 c2"
 # 사다리. 낮은 쪽에서부터 올린다 — 천장을 지나친 뒤의 값은 뜻이 없다.
 RATES=${RATES:-"1000 2000 4000 8000 16000"}
 DURATION=${DURATION:-30s}
+# **회차를 돌리기 전에 끊는다.** 못 읽는 형식이면 기대 건수가 엉뚱해져 "부하가
+# 안 닿았다" 가드가 사라지는데, 그 사실은 회차를 다 돌린 뒤에야 드러난다.
+DURATION_SEC=$(peak_duration_sec "$DURATION")
+if [ "$DURATION_SEC" = 0 ]; then
+    echo "DURATION 을 못 읽는다 — 30s · 1m · 1m30s 꼴이어야 한다: '$DURATION'"; exit 2
+fi
 
 # **천장을 지나면 사다리를 멈춘다.** 그 위 회차는 판정에 안 쓰이면서 호스트만
 # 먹는다 — 32,000 회차에서 VU 가 2 만을 넘자 연결이 EOF 로 끊기고 러너가
@@ -89,33 +97,7 @@ wait_idle() {
     sleep "${SNAPSHOT_SETTLE_SEC:-2}"
 }
 
-# k6 요약에서 값을 뽑는다. 없으면 빈 문자열을 내고 부르는 쪽이 판정 불가로 읽는다.
-from_summary() {
-    python3 - "$1" "$2" <<'PY'
-import json, sys
-try:
-    d = json.load(open(sys.argv[1]))
-except Exception:
-    sys.exit(0)
-m = d.get('metrics', {})
-if sys.argv[2] == 'rate':
-    v = m.get('http_reqs', {}).get('rate')
-else:
-    v = m.get('http_req_duration', {}).get('p(99)')
-if isinstance(v, (int, float)):
-    print(f'{v:.4f}')
-PY
-}
-
-# **잰 호스트를 같이 남긴다.** 천장 하나만 적으면 다음 사람이 다른 기계에서
-# 나온 수와 견주게 되고, 이 페이즈가 되풀이한 오류가 정확히 그것이다.
-{
-    echo "코어: $(nproc 2>/dev/null || echo 모름)"
-    echo "메모리: $(free -g 2>/dev/null | awk '/^Mem:/{print $2 " GB"}')"
-    echo "k6: $(k6 version 2>/dev/null | head -1)"
-    echo "사다리: $RATES · 회차당 $DURATION"
-} > "$OUT_DIR/host.txt"
-cat "$OUT_DIR/host.txt"
+# 요약 읽기와 종료 코드 해석은 `peak-lib.sh` 가 든다 — 자기검증이 그것을 직접 잰다.
 
 echo "현재 최대치 회차 · 사다리 [$RATES] · 회차당 $DURATION"
 
@@ -154,25 +136,25 @@ for rate in $RATES; do
     k6_rc=${PIPESTATUS[0]}
     metrics "$after"
 
-    actual=$(from_summary "$summary" rate)
-    p99=$(from_summary "$summary" p99)
+    actual=$(peak_summary_value "$summary" rate)
+    p99=$(peak_summary_value "$summary" p99)
 
-    # **k6 의 임계 위반(99)은 이 회차에서 정상이다.** 못 만든 유입이 있다는
-    # 뜻이고, 그것이 곧 하네스 천장이라 표에 적어야 한다. 다른 코드는 다르다 —
-    # 요약이 안 나왔거나 러너가 죽은 것이라 판정할 재료가 없다.
-    if [ "$k6_rc" -ne 0 ] && [ "$k6_rc" -ne 99 ]; then
-        echo "  k6 가 ${k6_rc} 로 끝났다 — 이 회차는 판정 불가"
-        printf '%s\t%s\tunmeasurable\t%s\n' "$rate" "${actual:-0}" "${p99:-0}" >> "$OUT_TABLE"
-        continue
-    fi
+    # **깨진 임계를 가려 읽는다.** 통째로 정상으로 읽으면 게이트웨이가 연결을
+    # 끊은 회차가 `ok` 로 표에 남고, 그 수가 계획서로 간다.
+    k6_verdict=$(peak_verdict_from_k6 "$k6_rc" "$summary")
     if [ -z "$actual" ] || [ -z "$p99" ]; then
         echo "  요약에서 값을 못 읽었다 — 이 회차는 판정 불가"
         printf '%s\t0\tunmeasurable\t0\n' "$rate" >> "$OUT_TABLE"
-        continue
+        break
+    fi
+    if [ "$k6_verdict" != ok ]; then
+        echo "  k6 임계가 ${k6_verdict} 로 갈렸다 (종료 ${k6_rc})"
+        printf '%s\t%s\t%s\t%s\n' "$rate" "$actual" "$k6_verdict" "$p99" >> "$OUT_TABLE"
+        break
     fi
 
     # 판정 비율은 그 자가 낸다. 여기서 다시 셈하면 둘이 갈린다.
-    if EXPECT_TOTAL=$(awk -v r="$rate" -v d="${DURATION%s}" 'BEGIN{ printf "%d", r * d }') \
+    if EXPECT_TOTAL=$(awk -v r="$rate" -v d="$DURATION_SEC" 'BEGIN{ printf "%d", r * d }') \
             test/load/evaluate-judged.sh "$before" "$after" > "$OUT_DIR/judged-$rate.txt" 2>&1; then
         verdict=ok
     else

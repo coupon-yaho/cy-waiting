@@ -89,10 +89,11 @@ while IFS=$'\t' read -r rate actual verdict p99 rest || [ -n "${rate:-}" ]; do
     fi
     prev_rate=$rate
 
-    # **실측이 요청을 크게 넘으면 계기가 틀어진 것이다.** 만든 적 없는 부하가
-    # 표에 남고, 그 수가 계획서로 간다.
-    awk -v a="$actual" -v r="$rate" 'BEGIN{ exit (a > r * 1.5) ? 0 : 1 }' \
-        && fail "${line_no} 번째 줄의 실측이 요청을 크게 넘는다 (${actual} > ${rate}) — 계기를 본다"
+    # **실측이 요청을 넘으면 계기가 틀어진 것이다.** 고정 도착률은 요청을 넘길
+    # 수 없다. 여유를 넓게 두면 만든 적 없는 부하가 표에 남고 계획서로 간다 —
+    # 반올림과 마지막 회차의 꼬리만 덮을 만큼만 둔다.
+    awk -v a="$actual" -v r="$rate" 'BEGIN{ exit (a > r * 1.05) ? 0 : 1 }' \
+        && fail "${line_no} 번째 줄의 실측이 요청을 넘는다 (${actual} > ${rate}) — 계기를 본다"
 
     made=$(awk -v a="$actual" -v r="$rate" -v t="$tolerance" \
         'BEGIN{ print (a >= r * t) ? 1 : 0 }')
@@ -114,10 +115,13 @@ while IFS=$'\t' read -r rate actual verdict p99 rest || [ -n "${rate:-}" ]; do
     [ "$broke" = 1 ] && continue
     broke=1
     stop_rate=$rate
-    if [ "$made" = 0 ]; then
-        stop_kind="하네스"
-    elif [ "$verdict" = unmeasurable ]; then
+    # **판정 불가를 먼저 본다.** 요약을 못 읽은 회차는 실측을 0 으로 적으므로,
+    # 도착 미달을 먼저 보면 계기 사고가 "생성기 한계" 로 적힌다 — 이 자가
+    # 가르려던 바로 그 둘이 그 자리에서 붙는다.
+    if [ "$verdict" = unmeasurable ]; then
         stop_kind="판정 불가"
+    elif [ "$made" = 0 ]; then
+        stop_kind="하네스"
     else
         stop_kind="제품"
     fi
@@ -126,8 +130,18 @@ done < "$table"
 # **표에 회차가 없는 것과 회차가 안 선 것은 다르다.** 앞엣것은 러너가 아무것도
 # 안 남긴 것이고, 뒤엣것은 가장 낮은 유입조차 못 만든 것이다.
 [ "$rows" -gt 0 ] || fail "회차가 한 줄도 없다 — 표가 빈 채로 왔다"
-# 0 을 최대치로 적으면 계기 문제가 제품 문제로 읽힌다.
-[ -n "$best_actual" ] || fail "선 회차가 하나도 없다 — 잰 것이 없다"
+
+# **선 회차가 없을 때도 종료 코드를 가른다.** 0 을 최대치로 적으면 안 되지만,
+# 제품이 가장 낮은 회차부터 무너진 것을 "계기를 고쳐라" 로 내보내는 것도 같은
+# 종류의 잘못이다 — 다음에 할 일을 반대로 가리킨다.
+if [ -z "$best_actual" ]; then
+    if [ "$stop_kind" = "제품" ]; then
+        echo "  가장 낮은 회차부터 안 선다 (요청 ${stop_rate})"
+        echo "판정: 미달 — 게이트웨이가 가장 낮은 유입도 못 버텼다"
+        exit 1
+    fi
+    fail "선 회차가 하나도 없다 (${stop_kind:-사다리가 비었다}) — 잰 것이 없다"
+fi
 
 printf '  %-24s %s\n' "현재 최대치(실측 유입)" "$best_actual"
 printf '  %-24s %s\n' "그때의 요청 유입" "$best_rate"
@@ -147,8 +161,14 @@ if [ -n "$floor" ]; then
         echo "판정: 충족 — 기록한 바닥 ${floor} 이상이다"
         exit 0
     fi
-    echo "판정: 미달 — 최대치가 기록한 바닥 ${floor} 아래로 내려갔다"
-    exit 1
+    # **바닥 아래인 이유를 가른다.** 하네스가 못 만들어 내려간 것을 제품 미달로
+    # 내면 고칠 곳을 반대로 가리킨다. 바로 위 줄이 "하네스" 라고 찍었는데 종료
+    # 코드가 "제품" 이면 게이트를 읽는 쪽은 종료 코드만 본다.
+    if [ "$stop_kind" = "제품" ]; then
+        echo "판정: 미달 — 최대치가 기록한 바닥 ${floor} 아래로 내려갔다"
+        exit 1
+    fi
+    fail "최대치가 바닥 ${floor} 아래인데 천장이 ${stop_kind:-못 봤다} 쪽이다 — 제품 미달로 못 읽는다"
 fi
 echo "판정: 기록 — 바닥이 없어 되돌아감은 안 본다"
 exit 0

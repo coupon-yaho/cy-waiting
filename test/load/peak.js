@@ -1,13 +1,14 @@
-// 피크 100K RPS 지속 60초 (10.7.1 · R4).
+// 지속 유입 회차 (10.7.1 · R4).
 //
 // **세 갈래를 실제 비율로 섞는다.** 계획서가 그 비율을 든다 — 2 만 명이 2 초마다
 // 폴링하면 10K 라 100K 의 10 분의 1 이고, 나머지는 통과 트래픽과 신규 진입이다.
 // 한 갈래만 때리면 R4 의 한 축만 증명한 것이 된다.
 //
-// **한 러너로는 100K 를 못 만든다.** 실측 도착률이 4,000/초 언저리다 — 이
-// 시나리오는 그 사실을 숨기지 않는다. 아래 임계가 목표 유입에 못 미치면
-// 빨개지고, 판정기는 그 회차를 근거로 쓰지 않는다. 진짜 값은 생성기를 여러
-// 대로 나눠야 나오고, 그건 이 시나리오가 아니라 배선의 일이다.
+// **한 러너로는 100K 를 못 만든다.** 그래서 게이트를 목표 수가 아니라 현재
+// 최대치 기록으로 바꿨다 (90-decisions O-8). 기본값은 그 기록이 선 자리다 —
+// 만들 수 없는 수를 기본값으로 두면 맨손으로 부른 회차가 늘 빨갛다.
+// 사다리는 `peak.sh` 가 돌린다. 아래 임계가 목표 유입에 못 미치면 빨개지고,
+// 판정기는 그 회차를 근거로 쓰지 않는다.
 import http from 'k6/http';
 import { check } from 'k6';
 import { Counter, Rate } from 'k6/metrics';
@@ -16,8 +17,8 @@ import { Counter, Rate } from 'k6/metrics';
 http.setResponseCallback(http.expectedStatuses(200, 202, 429, 503));
 
 const BASE = __ENV.BASE_URL || 'http://localhost:18080';
-const RATE = Number(__ENV.RATE || '100000');
-const DURATION = __ENV.DURATION || '60s';
+const RATE = Number(__ENV.RATE || '8000');
+const DURATION = __ENV.DURATION || '30s';
 
 // 갈래별 몫. 계획서 1절의 근거를 그대로 옮긴다 — 바꾸려면 거기를 먼저 고친다.
 const POLL_SHARE = Number(__ENV.POLL_SHARE || '0.10');

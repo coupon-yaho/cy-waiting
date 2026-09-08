@@ -387,6 +387,7 @@ for check in \
     "롤링 배포 판정:test/load/rollout-selftest.sh" \
     "배제 판정:test/load/eject-selftest.sh" \
     "서킷 회복 판정:test/load/circuit-recovery-selftest.sh" \
+    "최대치 판정:test/load/peak-selftest.sh" \
     "작업 로그:.github/scripts/journal-index.sh --check" \
     "워크플로 셸:.github/scripts/workflow-shell.sh" \
     "Loki 라벨:.github/scripts/loki-labels.sh" \

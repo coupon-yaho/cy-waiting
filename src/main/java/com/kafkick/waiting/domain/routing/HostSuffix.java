@@ -10,8 +10,9 @@ import java.util.regex.Pattern;
 public record HostSuffix(String value) {
 
     /**
-     * <b>{@link InstanceAddress} 와 같은 규칙이라야 한다.</b> 여기가 넓으면 영영
-     * 안 맞을 항목이 조용히 들어가고, 증상은 "라우팅 후보 0" 이다.
+     * <b>{@link InstanceAddress} 의 이름 갈래와 같은 규칙이라야 한다.</b> 여기가 넓으면
+     * 영영 안 맞을 항목이 조용히 들어가고, 증상은 "라우팅 후보 0" 이다. v6 리터럴은
+     * 이름이 아니라 대역으로 견주므로 이 규칙 밖이다.
      */
     private static final Pattern LABEL =
             Pattern.compile("[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?");

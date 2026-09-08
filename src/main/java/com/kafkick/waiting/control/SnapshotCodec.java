@@ -207,7 +207,7 @@ public final class SnapshotCodec {
             if (sb.length() > 0) {
                 sb.append(',');
             }
-            sb.append(i.instanceId()).append('|').append(i.address()).append('|')
+            sb.append(i.instanceId()).append('|').append(i.address().toString()).append('|')
                     .append(i.credits());
         }
         return sb.toString();

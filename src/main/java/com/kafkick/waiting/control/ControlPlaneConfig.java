@@ -260,11 +260,24 @@ public class ControlPlaneConfig {
      */
     Runnable sealApplyFences(AllocationRedisPort port, SnapshotHolder holder,
             Leadership leadership) {
-        return () -> port
-                .sealApplyFences(holder.current().coupons().keySet(), leadership.fence())
-                .subscribe(sealed -> { },
-                        e -> log.warn("입장 울타리를 못 잠갔다 — 적용이 그 자리에서 "
-                                + "다시 막는다", e));
+        return () -> {
+            // **마지막 발행의 쿠폰을 잠근다.** 활성 목록을 다시 읽으면 승계 첫
+            // 순간에 왕복이 하나 더 붙는다. 그 뒤에 활성이 된 쿠폰은 적용이
+            // 스스로 잠그므로, 여기서 놓치는 것은 새 리더가 안 만지는 쿠폰뿐이다.
+            var coupons = holder.current().coupons().keySet();
+            long fence = leadership.fence();
+            port.sealApplyFences(coupons, fence)
+                    // **다 잠갔는지 센다.** 안 세면 레디스가 전부 거절해도 로그도
+                    // 지표도 없다 — 회복 구간의 안전 장치가 무성으로 사라진다.
+                    .subscribe(sealed -> {
+                        if (sealed < coupons.size()) {
+                            log.warn("입장 울타리를 다 못 잠갔다 — {}/{} 개, 임기 {}. "
+                                    + "못 잠근 쿠폰은 적용이 그 자리에서 다시 막는다",
+                                    sealed, coupons.size(), fence);
+                        }
+                    }, e -> log.warn("입장 울타리를 못 잠갔다 — 쿠폰 {}개, 임기 {}",
+                            coupons.size(), fence, e));
+        };
     }
 
     /**

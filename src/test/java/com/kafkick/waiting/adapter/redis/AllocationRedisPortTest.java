@@ -486,6 +486,84 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     }
 
     /**
+     * <b>스크립트 자신도 리더가 아닌 호출을 막는다.</b> 포트가 앞에서 걸러 주므로
+     * 그 가드를 지워도 위 시험은 초록이다 — 다른 자리에서 이 스크립트를 부르는
+     * 순간 강등된 노드가 문을 제 번호로 덮는다.
+     */
+    @Test
+    @DisplayName("잠금_스크립트도_리더가_아니면_안_쓴다")
+    void 잠금_스크립트도_리더가_아니면_안_쓴다() {
+        assertThat(port.sealApplyFences(List.of("c1", "c2"), 임기).block(WAIT))
+                .as("잠근 수를 그대로 센다 — 1 로 갈면 안 잠근 것도 잠갔다고 센다")
+                .isEqualTo(2);
+    }
+
+    /**
+     * <b>울타리 표는 스스로 풀린다.</b> 없으면 시계가 뒤로 간 리더가 못 풀려 그
+     * 쿠폰의 줄이 영영 안 빠진다 — 살아 있음이 통째로 죽는다.
+     */
+    @Test
+    @DisplayName("입장_울타리도_수명이_있다")
+    void 입장_울타리도_수명이_있다() {
+        줄_세운다("c1", 10, 20, 30);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+
+        assertThat(redis.getExpire(RedisKeys.applyFence("c1", SHARDS, 0)).block(WAIT))
+                .isNotNull()
+                .satisfies(ttl -> assertThat(ttl).isPositive());
+    }
+
+    /** 잠금도 수명을 준다. 안 주면 잠근 문이 영구가 되어 같은 자리에서 갇힌다. */
+    @Test
+    @DisplayName("잠근_문에도_수명이_있다")
+    void 잠근_문에도_수명이_있다() {
+        port.sealApplyFences(List.of("c1"), 임기).block(WAIT);
+
+        assertThat(redis.getExpire(RedisKeys.applyFence("c1", SHARDS, 0)).block(WAIT))
+                .isNotNull()
+                .satisfies(ttl -> assertThat(ttl).isPositive());
+    }
+
+    /** 거절 수가 쿠폰마다 오른다. 회차로 읽으면 운영자가 장애 규모를 과소평가한다. */
+    @Test
+    @DisplayName("거절_수가_쿠폰마다_오른다")
+    void 거절_수가_쿠폰마다_오른다() {
+        줄_세운다("c1", 10, 20, 30);
+        줄_세운다("c2", 10, 20, 30);
+        port.sealApplyFences(List.of("c1", "c2"), 임기).block(WAIT);
+        double 앞 = port.applyFenced();
+
+        for (String couponId : List.of("c1", "c2")) {
+            assertThatThrownBy(() -> port.apply(new Grant(couponId, 1), 임기 - 1).block(WAIT))
+                    .isInstanceOf(AllocationRedisPort.FencedOutException.class);
+        }
+
+        assertThat(port.applyFenced() - 앞).isEqualTo(2);
+    }
+
+    /** 막은 임기를 메시지에 싣는다. 안 실으면 운영자가 원인을 손으로 찾는다. */
+    @Test
+    @DisplayName("막은_임기를_메시지에_싣는다")
+    void 막은_임기를_메시지에_싣는다() {
+        줄_세운다("c1", 10, 20, 30);
+        port.apply(new Grant("c1", 1), 임기).block(WAIT);
+
+        assertThatThrownBy(() -> port.apply(new Grant("c1", 1), 임기 - 1).block(WAIT))
+                .hasMessageContaining(Long.toString(임기));
+    }
+
+    /** 임기 0 은 막은 사람이 아니라 "내가 리더가 아니다" 다. 없는 임기를 찍으면 안 된다. */
+    @Test
+    @DisplayName("리더가_아닌_것을_막은_임기로_안_찍는다")
+    void 리더가_아닌_것을_막은_임기로_안_찍는다() {
+        줄_세운다("c1", 10, 20, 30);
+
+        assertThatThrownBy(() -> port.apply(new Grant("c1", 1), 0).block(WAIT))
+                .hasMessageContaining("리더가 아니다")
+                .hasMessageNotContaining("마지막으로 들인 임기");
+    }
+
+    /**
      * <b>정상 회차를 거절로 안 읽는다.</b> 임계가 없고 들일 사람도 없으면 스크립트가
      * 거절과 같은 값을 내는데, 칸 수로 안 가르면 새 쿠폰과 빈 큐가 거절이 된다.
      */

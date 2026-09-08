@@ -80,6 +80,9 @@ public final class AllocationRedisPort implements SnapshotSource {
     /** 한 회차가 동시에 낼 수 있는 읽기. 무제한이면 한 회차가 커넥션을 독점한다. */
     private static final int MAX_CONCURRENT_READS = 16;
 
+    /** 잠금을 겹쳐 보내는 폭. 읽기와 값은 같지만 이름이 거짓말을 하면 안 된다. */
+    private static final int MAX_CONCURRENT_WRITES = 16;
+
     /**
      * 울타리 표 수명의 <b>하한</b>. 실제 값은 리스에서 유도한다.
      *
@@ -145,7 +148,7 @@ public final class AllocationRedisPort implements SnapshotSource {
 
     private final AtomicLong publishFenced = new AtomicLong();
 
-    /** 울타리가 막은 입장 적용 회차 수. 0 이 아니면 이 노드가 사람을 못 들였다. */
+    /** 울타리가 막은 입장 적용 건수. <b>회차가 아니라 쿠폰 단위다</b>. */
     private final AtomicLong applyFenced = new AtomicLong();
 
 
@@ -667,17 +670,14 @@ public final class AllocationRedisPort implements SnapshotSource {
     }
 
     /**
-     * 들어온 인원을 돌려준다. 나눠 준 몫과 다르다 — 큐가 짧으면 남는다.
-     *
-     * <p><b>샤드가 하나인 동안만 옳다.</b> 여럿이면 몫을 샤드에 나눠 각각
-     * 적용해야 하는데, 지금은 0번에만 나간다. 그래서 기동에서 하나로 막는다.
-     *
-     * @param fence 이 회차의 임기. 옛 임기는 임계를 안 올린다. 0 이면 리더가 아니다
-     */
-    /**
      * 활성 쿠폰의 문을 새 임기로 잠근다. <b>승계 직후에 부른다</b> — 적용만으로는
      * 그 쿠폰에 크레딧이 갈 때까지 표에 옛 임기가 남고, 그 창에 유령이 먼저
      * 도착하면 자기 번호와 같아서 통과한다.
+     *
+     * <p><b>샤드 0 에만 나간다.</b> 적용과 같은 자리라 지금은 맞지만, 샤딩을 켜면
+     * 나머지 샤드의 문이 안 잠긴다.
+     *
+     * @return 잠근 쿠폰 수. 넘긴 수보다 적으면 그만큼 못 잠갔다
      */
     public Mono<Long> sealApplyFences(Collection<String> couponIds, long fence) {
         if (fence <= 0 || couponIds.isEmpty()) {
@@ -689,13 +689,23 @@ public final class AllocationRedisPort implements SnapshotSource {
                                 List.of(Long.toString(fence),
                                         Long.toString(fenceTtl.toMillis())))
                         .next()
-                        .map(sealed -> 1L)
+                        // **스크립트가 낸 값을 그대로 접는다.** 1 로 갈면 "예외가 안
+                        // 난 수" 가 되어, 안 잠근 것을 잠갔다고 센다.
+                        .map(Number::longValue)
                         // 하나가 실패해도 나머지는 잠근다. 못 잠근 쿠폰은 적용이
                         // 그 자리에서 다시 막는다 — 안 잠긴 채로 지나가지 않는다.
-                        .onErrorReturn(0L), MAX_CONCURRENT_READS)
-                .reduce(0L, (a, b) -> a + b);
+                        .onErrorReturn(0L), MAX_CONCURRENT_WRITES)
+                .reduce(0L, Long::sum);
     }
 
+    /**
+     * 들어온 인원을 돌려준다. 나눠 준 몫과 다르다 — 큐가 짧으면 남는다.
+     *
+     * <p><b>샤드가 하나인 동안만 옳다.</b> 여럿이면 몫을 샤드에 나눠 각각
+     * 적용해야 하는데, 지금은 0번에만 나간다. 그래서 기동에서 하나로 막는다.
+     *
+     * @param fence 이 회차의 임기. 옛 임기는 임계를 안 올린다. 0 이면 리더가 아니다
+     */
     public Mono<Long> apply(Grant grant, long fence) {
         return redis.execute(APPLY,
                         List.of(RedisKeys.queue(grant.couponId(), shards, 0),
@@ -796,12 +806,15 @@ public final class AllocationRedisPort implements SnapshotSource {
         return publishFenced.get();
     }
 
-    /** 울타리가 입장 적용을 거절한 회차 수. 0 이 아니면 그 쿠폰의 줄이 안 빠졌다. */
+    /** 울타리가 입장 적용을 거절한 건수. 쿠폰마다 오르므로 회차 수가 아니다. */
     public double applyFenced() {
         return applyFenced.get();
     }
 
-    /** 옛 임기의 발행이 거절됐다. 이 노드는 더 이상 리더가 아니다. */
+    /**
+     * 옛 임기의 쓰기가 거절됐다. 발행과 입장 적용이 같은 원인으로 여기 온다 —
+     * 이 노드는 더 이상 리더가 아니거나, 그렇게 보이는 임기를 들고 있다.
+     */
     public static final class FencedOutException extends IllegalStateException {
 
         FencedOutException(long fence, long blockedBy) {
@@ -810,9 +823,13 @@ public final class AllocationRedisPort implements SnapshotSource {
         }
 
         FencedOutException(String couponId, long fence, long blockedBy) {
-            super("입장 적용이 울타리에 막혔다 — 쿠폰 %s, 이 노드의 임기 %d, "
-                    .formatted(couponId, fence)
-                    + "마지막으로 들인 임기 %d".formatted(blockedBy));
+            // **임기 0 은 "막은 사람" 이 아니라 "내가 리더가 아니다" 다.** 그 값을
+            // 마지막 기록자로 찍으면 운영자가 없는 임기를 찾는다.
+            super(blockedBy > 0
+                    ? "입장 적용이 울타리에 막혔다 — 쿠폰 %s, 이 노드의 임기 %d, 마지막으로 들인 임기 %d"
+                            .formatted(couponId, fence, blockedBy)
+                    : "입장 적용을 안 냈다 — 쿠폰 %s, 이 노드는 리더가 아니다"
+                            .formatted(couponId));
         }
     }
 

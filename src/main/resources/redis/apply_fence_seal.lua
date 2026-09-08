@@ -1,4 +1,4 @@
--- 입장 적용의 문을 <b>새 임기로 잠근다.</b>
+-- 입장 적용의 문을 **새 임기로 잠근다.**
 --
 -- KEYS[1]  applyfence:{cid}   그 쿠폰에 마지막으로 사람을 들인 리더의 임기
 -- ARGV[1]  잠글 임기. 0 이면 리더가 아니다
@@ -19,13 +19,15 @@ local fence = tonumber(ARGV[1])
 if fence == nil or fence ~= fence or fence ~= math.floor(fence) then
     return redis.error_reply('펜스 번호는 정수여야 한다: ' .. tostring(ARGV[1]))
 end
-if fence <= 0 then
-    return 0
-end
-
 local ttl = tonumber(ARGV[2])
 if ttl == nil or ttl ~= ttl or ttl < 1 or ttl ~= math.floor(ttl) then
     return redis.error_reply('울타리 수명은 1 이상의 정수여야 한다: ' .. tostring(ARGV[2]))
+end
+
+-- **인자를 다 본 뒤에 분기한다.** 먼저 되돌아가면 수명이 쓰레기여도 조용히 지나가고,
+-- 그 오타는 리더가 된 노드에서만 드러난다.
+if fence <= 0 then
+    return 0
 end
 
 redis.call('SET', KEYS[1], string.format('%.0f', fence), 'PX', ttl)

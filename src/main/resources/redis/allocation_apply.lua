@@ -7,7 +7,8 @@
 -- ARGV[2]  이 회차의 임기(펜스 번호). 0 이면 리더가 아니다
 -- ARGV[3]  울타리 표의 수명(ms)
 --
--- 반환  {임계, 들인 인원}. 울타리가 막았으면 {-1, -1, 막은 임기}
+-- 반환  {임계, 들인 인원}. 첫 칸은 문자열, 둘째는 정수다
+--        울타리가 막았으면 {'-1', -1, 막은 임기}. 막은 임기도 문자열이다
 --   임계      새 입장 임계. 안 바뀌었으면 이전 값
 --   들인 인원  임계 위로 새로 들어온 사람 수
 --
@@ -30,6 +31,15 @@
 -- 배정밀도가 정확한 정수 범위. 넘으면 세는 것 자체가 의미를 잃는다.
 local MAX_ADMIT = 9007199254740992
 
+local admit = tonumber(ARGV[1])
+-- 무한대는 math.floor 를 통과한다. 상한을 안 두면 그 뒤 LIMIT 에서 엉뚱한
+-- 메시지로 터져 원인을 못 찾는다.
+if admit == nil or admit ~= admit or admit < 0 or admit ~= math.floor(admit)
+        or admit > MAX_ADMIT then
+    return redis.error_reply('들일 인원은 0 이상 ' .. MAX_ADMIT
+            .. ' 이하의 정수여야 한다: ' .. tostring(ARGV[1]))
+end
+
 local fence = tonumber(ARGV[2])
 if fence == nil or fence ~= fence or fence ~= math.floor(fence) then
     return redis.error_reply('펜스 번호는 정수여야 한다: ' .. tostring(ARGV[2]))
@@ -43,7 +53,7 @@ end
 -- **0 은 리더가 아니라는 뜻이다.** 강등된 노드가 그 값을 들고 나오므로, 안 막으면
 -- 리더가 아닌 노드가 사람을 들인다.
 if fence <= 0 then
-    return {'-1', -1, 0}
+    return {'-1', -1, '0'}
 end
 
 -- **옛 임기는 안 들인다.** 승계 뒤 깨어난 유령의 회차는 이미 제 몫을 계산한
@@ -51,21 +61,13 @@ end
 -- 같은 번호의 재시도는 막지 않는다 — 막으면 실패한 회차가 영영 안 된다.
 local seenFence = tonumber(redis.call('GET', KEYS[3]))
 if seenFence ~= nil and seenFence == seenFence and fence < seenFence then
-    return {'-1', -1}
+    return {'-1', -1, string.format('%.0f', seenFence)}
 end
 -- **수명을 준다.** 이 표는 쿠폰별이라 그 쿠폰이 한산하면 갱신이 안 온다 — 스냅샷
 -- 울타리처럼 짧게 두면 그 사이 문이 통째로 사라진다. 그래서 쿠폰별 표와 같은
 -- 수명을 쓴다. 길어서 생기는 영구 차단은 승계 때 문을 다시 잠그는 것이 푼다.
 redis.call('SET', KEYS[3], string.format('%.0f', fence), 'PX', fenceTtl)
 
-local admit = tonumber(ARGV[1])
--- 무한대는 math.floor 를 통과한다. 상한을 안 두면 그 뒤 LIMIT 에서 엉뚱한
--- 메시지로 터져 원인을 못 찾는다.
-if admit == nil or admit ~= admit or admit < 0 or admit ~= math.floor(admit)
-        or admit > MAX_ADMIT then
-    return redis.error_reply('들일 인원은 0 이상 ' .. MAX_ADMIT
-            .. ' 이하의 정수여야 한다: ' .. tostring(ARGV[1]))
-end
 
 -- **없는 것과 깨진 것을 가른다.** 둘 다 -1 로 접으면 큐 맨 앞부터 다시 세어
 -- 임계가 뒤로 가고, 그 회차에서 이미 통과한 사람이 대기로 되돌아간다.

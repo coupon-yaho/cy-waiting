@@ -1,7 +1,7 @@
 -- 리더 획득·연장. **획득과 확인이 갈리면 두 리더가 생긴다.**
 --
 -- KEYS[1]  scheduler:leader
--- KEYS[2]  {scheduler:leader}:gen   임기를 세는 값
+-- KEYS[2]  {scheduler:leader}:gen   임기를 세는 값. 태그가 슬롯을 묶는다
 -- ARGV[1]  ownerId. 이 노드를 가리키는 값
 -- ARGV[2]  리스(밀리초). 양의 정수
 --
@@ -36,6 +36,11 @@ end
 if ARGV[1] == nil or ARGV[1] == '' then
     return redis.error_reply('ownerId 는 필수다')
 end
+-- **키 개수를 본다.** 하나로 부르면 세는 값을 nil 로 만져 스크립트가 통째로 터지고,
+-- 그 오류는 갱신 경로가 삼켜 전 노드가 리더 없이 돈다.
+if KEYS[2] == nil then
+    return redis.error_reply('KEYS 는 리더 키와 세는 값 둘이어야 한다')
+end
 
 -- 값의 형식은 `<펜스 번호>|<ownerId>` 다. **옛 형식(번호 없음)도 읽는다** —
 -- 롤아웃 구간에 옛 노드가 남긴 값을 못 읽으면 그 락을 남의 것으로 보고
@@ -48,15 +53,35 @@ local function ownerOf(value)
     return string.sub(value, sep + 1), tonumber(string.sub(value, 1, sep - 1)) or 0
 end
 
--- **씨앗은 시계다.** 1 부터 세면 남아 있는 옛 울타리 표(마이크로초 벽시계)를 못 넘어,
--- 새 리더가 자기 임기로 들어가려 할 때마다 그 표에 막힌다. 한 번 만들면 수명을 안 준다 —
--- 사라지면 씨앗부터 다시 세고, 그 사이 시계가 뒤로 가 있으면 임기가 되감긴다.
+-- **번호는 세는 값과 시계 중 큰 쪽에서 하나 오른다.**
+--
+-- 세는 값만 쓰면 되감김을 못 버틴다. 스크립트의 효과는 복제와 AOF 에 한 트랜잭션으로
+-- 나가므로 복제본이 `INCR` 을 못 받았다면 락도 못 받았다 — 되감김과 재선거가 항상
+-- 같이 온다. 그때 다음 리더가 **방금 나간 번호를 그대로 다시 발급**하고, 다른 슬롯에
+-- 남아 있는 울타리 표는 그 번호를 같은 임기로 보고 통과시킨다.
+--
+-- 시계만 쓰면 뒤로 간 시계를 못 버틴다. 승계한 노드의 번호가 옛 리더보다 작아진다.
+--
+-- 그래서 **둘 중 큰 쪽**을 바닥으로 삼는다. 시계가 뒤로 가면 세는 값이 이기고, 세는
+-- 값이 되감기면 시계가 이긴다. 한쪽만으로는 어느 경우에도 못 버틴다.
+--
+-- 시계 바닥에 **배포 창을 더한다.** 안 더하면 배포 중에 아직 안 바뀐 노드가 리더를
+-- 한 번 쥘 때 그쪽 번호가 더 커서, 새 노드가 표 수명 내내 거절된다.
+--
+-- 수명을 안 준다. 사라지면 시계 바닥부터 다시 세는데, 그 바닥이 남아 있는 옛 표를
+-- 넘으므로 잃는 것이 없다.
+local ROLLOUT_MARGIN = 86400000000  -- 24시간(마이크로초). 배포가 이보다 길면 못 막는다
+
 local function nextGeneration()
-    if redis.call('EXISTS', KEYS[2]) == 0 then
-        local t = redis.call('TIME')
-        local seed = tonumber(t[1]) * 1000000 + tonumber(t[2])
+    local t = redis.call('TIME')
+    local floor = tonumber(t[1]) * 1000000 + tonumber(t[2]) + ROLLOUT_MARGIN
+    -- **성하지 않은 값도 여기서 걷어낸다.** 타입이 어긋나거나 정수가 아니면 INCR 이
+    -- 스크립트째 터지고 그러면 리더가 영영 안 뽑힌다. SET 은 타입을 덮는다.
+    local stored = redis.pcall('GET', KEYS[2])
+    local seen = type(stored) == 'string' and tonumber(stored) or nil
+    if seen == nil or seen ~= seen or seen ~= math.floor(seen) or seen < floor then
         -- 자리 수를 박아 쓴다. 그냥 이어 붙이면 큰 수가 지수 표기로 나간다.
-        redis.call('SET', KEYS[2], string.format('%.0f', seed))
+        redis.call('SET', KEYS[2], string.format('%.0f', floor))
     end
     return redis.call('INCR', KEYS[2])
 end
@@ -64,9 +89,8 @@ end
 local current = redis.call('GET', KEYS[1])
 
 if not current then
-    -- 아무도 안 잡았다. NX 로 잡아 **경합에서 하나만 이기게** 한다.
-    -- **자리 수를 박아 쓴다.** 그냥 이어 붙이면 큰 수가 지수 표기로 나가
-    -- ('1.7e+15') 정밀도를 잃고, 되읽은 펜스 번호가 쓴 것과 달라진다.
+    -- 아무도 안 잡았다. NX 로 잡아 **경합에서 하나만 이기게** 한다. 진 쪽도 번호를
+    -- 태우므로 **연속은 보장하지 않는다** — 지키는 것은 순서뿐이다.
     local fence = nextGeneration()
     local mark = string.format('%.0f', fence)
     if redis.call('SET', KEYS[1], mark .. '|' .. ARGV[1], 'NX', 'PX', lease) then

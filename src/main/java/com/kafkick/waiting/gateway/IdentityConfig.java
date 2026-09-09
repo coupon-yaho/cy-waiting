@@ -76,7 +76,7 @@ public class IdentityConfig {
     /** 같은 비밀키를 쓰되 접두와 수명이 다르다. 한쪽 토큰이 다른 쪽에서 안 통한다. */
     @Bean
     public EntryToken entryToken(QueueTokenProperties properties) {
-        return EntryToken.of(properties.secret());
+        return properties.entryToken();
     }
 
     /**

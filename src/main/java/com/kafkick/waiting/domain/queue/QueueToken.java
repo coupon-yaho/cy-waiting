@@ -1,6 +1,7 @@
 package com.kafkick.waiting.domain.queue;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -25,7 +26,15 @@ public final class QueueToken {
     }
 
     public static QueueToken of(String secret) {
-        return new QueueToken(SignedToken.of(PREFIX, TTL_SEC, WINDOW_SEC, secret));
+        return of(secret, List.of());
+    }
+
+    /**
+     * 옛 키를 검증에서만 받는다 (CY-902). <b>여기가 더 아프다</b> — 줄 토큰을
+     * 거절당하면 자리를 잃고 처음부터 다시 선다. 수명도 한 시간이라 창이 넓다.
+     */
+    public static QueueToken of(String secret, List<String> alsoAccept) {
+        return new QueueToken(SignedToken.of(PREFIX, TTL_SEC, WINDOW_SEC, secret, alsoAccept));
     }
 
     public String issue(String couponId, String memberId, Instant now) {

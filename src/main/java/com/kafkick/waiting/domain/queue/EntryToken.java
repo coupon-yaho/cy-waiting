@@ -1,6 +1,7 @@
 package com.kafkick.waiting.domain.queue;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -26,7 +27,12 @@ public final class EntryToken {
     }
 
     public static EntryToken of(String secret) {
-        return new EntryToken(SignedToken.of(PREFIX, TTL_SEC, WINDOW_SEC, secret));
+        return of(secret, List.of());
+    }
+
+    /** 옛 키를 검증에서만 받는다 — 롤링 배포 창을 여는 자리다 (CY-902). */
+    public static EntryToken of(String secret, List<String> alsoAccept) {
+        return new EntryToken(SignedToken.of(PREFIX, TTL_SEC, WINDOW_SEC, secret, alsoAccept));
     }
 
     public String issue(String couponId, String memberId, Instant now) {

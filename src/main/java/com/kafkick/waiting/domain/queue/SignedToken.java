@@ -5,6 +5,7 @@ import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.List;
 import java.util.Optional;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -36,11 +37,19 @@ public final class SignedToken {
     private final long windowSec;
     private final byte[] secret;
 
-    private SignedToken(String prefix, long ttlSec, long windowSec, byte[] secret) {
+    /**
+     * 검증에서만 받아 주는 옛 키들. <b>발급에는 안 쓴다</b> — 옛 키로 내면 배포가
+     * 끝나고 그 키를 뺀 뒤에 방금 낸 토큰이 죽는다.
+     */
+    private final List<byte[]> alsoAccept;
+
+    private SignedToken(String prefix, long ttlSec, long windowSec, byte[] secret,
+            List<byte[]> alsoAccept) {
         this.prefix = prefix;
         this.ttlSec = ttlSec;
         this.windowSec = windowSec;
         this.secret = secret;
+        this.alsoAccept = alsoAccept;
     }
 
     /**
@@ -48,9 +57,26 @@ public final class SignedToken {
      * 있다는 사실만 믿고 지나가면 그 믿음이 틀린 채로 운영에 나간다.
      */
     public static SignedToken of(String prefix, long ttlSec, long windowSec, String secret) {
+        return of(prefix, ttlSec, windowSec, secret, List.of());
+    }
+
+    /**
+     * <b>옛 키를 검증에서만 받는다</b> (CY-902). 키가 하나뿐이면 롤링 배포 중
+     * 새 키 파드가 낸 토큰을 옛 키 파드가 거절하고, 그 사람은 큐에 새로 선다.
+     */
+    public static SignedToken of(String prefix, long ttlSec, long windowSec, String secret,
+            List<String> alsoAccept) {
         if (secret == null || secret.length() < MIN_SECRET_LENGTH) {
             throw new IllegalArgumentException(
                     "토큰 비밀키는 %d자 이상이어야 한다".formatted(MIN_SECRET_LENGTH));
+        }
+        // **받아 주는 키도 같은 규칙이다.** 여기만 느슨하면 짧은 옛 키를 남겨 두는
+        // 것으로 서명이 뜻을 잃는다.
+        for (String old : alsoAccept) {
+            if (old == null || old.length() < MIN_SECRET_LENGTH) {
+                throw new IllegalArgumentException(
+                        "받아 주는 키도 %d자 이상이어야 한다".formatted(MIN_SECRET_LENGTH));
+            }
         }
         // 창이 0 이면 발급이 0 으로 나누고, 수명이 0 이면 받자마자 만료된다.
         if (windowSec < 1 || ttlSec < 1) {
@@ -63,7 +89,8 @@ public final class SignedToken {
                     "창은 수명보다 짧아야 한다: ttl=%d window=%d".formatted(ttlSec, windowSec));
         }
         return new SignedToken(prefix, ttlSec, windowSec,
-                secret.getBytes(StandardCharsets.UTF_8));
+                secret.getBytes(StandardCharsets.UTF_8),
+                alsoAccept.stream().map(v -> v.getBytes(StandardCharsets.UTF_8)).toList());
     }
 
     /**
@@ -92,7 +119,7 @@ public final class SignedToken {
         }
         String payload = token.substring(prefix.length(), mark);
         byte[] presented = decode(token.substring(mark + 1));
-        if (presented == null || !MessageDigest.isEqual(sign(payload), presented)) {
+        if (presented == null || !signedByUs(payload, presented)) {
             return Optional.empty();
         }
         // 서명이 맞으므로 여기서부터는 우리가 만든 문자열이다.
@@ -106,6 +133,18 @@ public final class SignedToken {
         return Long.parseLong(parts[2]) <= now.getEpochSecond()
                 ? Optional.empty()
                 : Optional.of(parts[1]);
+    }
+
+    /**
+     * 우리가 낸 서명인가. <b>맞은 뒤에도 나머지를 다 본다</b> — 첫 키에서 빠져나가면
+     * 걸린 시간이 어느 키였는지를 알려 준다.
+     */
+    private boolean signedByUs(String payload, byte[] presented) {
+        boolean matched = MessageDigest.isEqual(sign(secret, payload), presented);
+        for (byte[] old : alsoAccept) {
+            matched |= MessageDigest.isEqual(sign(old, payload), presented);
+        }
+        return matched;
     }
 
     /**
@@ -126,9 +165,13 @@ public final class SignedToken {
      * 않는다 — {@link Mac} 은 스레드 안전하지 않다.
      */
     private byte[] sign(String payload) {
+        return sign(secret, payload);
+    }
+
+    private byte[] sign(byte[] key, String payload) {
         try {
             Mac mac = Mac.getInstance(ALGORITHM);
-            mac.init(new SecretKeySpec(secret, ALGORITHM));
+            mac.init(new SecretKeySpec(key, ALGORITHM));
             return mac.doFinal((prefix + payload).getBytes(StandardCharsets.UTF_8));
         } catch (GeneralSecurityException e) {
             throw new IllegalStateException("토큰 서명 실패", e);

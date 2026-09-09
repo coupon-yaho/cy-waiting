@@ -100,4 +100,35 @@ class IpLiteralTest {
         assertThat(IpLiteral.parse("::ffff:10.0.1.7"))
                 .isEqualTo(IpLiteral.parse("10.0.1.7"));
     }
+
+    /**
+     * <b>한 대를 가리키는 주소만 목적지다.</b> 뒷단이 보고한 값이 그대로 연결 대상이
+     * 되므로, 어느 한 대도 아닌 주소가 여기를 지나면 게이트웨이가 엉뚱한 데로 보낸다.
+     */
+    @Test
+    @DisplayName("한_대를_가리키는_주소만_목적지다")
+    void 한_대를_가리키는_주소만_목적지다() {
+        assertThat(IpLiteral.routable(IpLiteral.parse("10.0.1.7"))).isTrue();
+        // 루프백은 같은 호스트의 뒷단이라 목적지다. 자기 자신은 포트가 가른다.
+        assertThat(IpLiteral.routable(IpLiteral.parse("127.0.0.1"))).isTrue();
+        assertThat(IpLiteral.routable(IpLiteral.parse("fd00::5"))).isTrue();
+        assertThat(IpLiteral.routable(IpLiteral.parse("::1"))).as("v6 루프백도 같다").isTrue();
+        // fe 로 시작해도 다음 두 비트가 다르면 링크 로컬이 아니다.
+        assertThat(IpLiteral.routable(IpLiteral.parse("fec0::1"))).isTrue();
+        // 169 로 시작해도 둘째 바이트가 다르면 링크 로컬이 아니다.
+        assertThat(IpLiteral.routable(IpLiteral.parse("169.1.1.1"))).isTrue();
+    }
+
+    @Test
+    @DisplayName("한_대가_아닌_주소는_목적지가_아니다")
+    void 한_대가_아닌_주소는_목적지가_아니다() {
+        assertThat(IpLiteral.routable(null)).as("못 읽은 것은 목적지가 아니다").isFalse();
+        assertThat(IpLiteral.routable(IpLiteral.parse("0.0.0.0"))).isFalse();
+        assertThat(IpLiteral.routable(IpLiteral.parse("::"))).isFalse();
+        assertThat(IpLiteral.routable(IpLiteral.parse("169.254.1.1"))).isFalse();
+        assertThat(IpLiteral.routable(IpLiteral.parse("fe80::1"))).isFalse();
+        assertThat(IpLiteral.routable(IpLiteral.parse("224.0.0.1"))).isFalse();
+        assertThat(IpLiteral.routable(IpLiteral.parse("255.255.255.255"))).isFalse();
+        assertThat(IpLiteral.routable(IpLiteral.parse("ff02::1"))).isFalse();
+    }
 }

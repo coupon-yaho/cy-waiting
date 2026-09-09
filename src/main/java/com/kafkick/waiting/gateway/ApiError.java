@@ -24,24 +24,21 @@ import reactor.core.publisher.Mono;
 public final class ApiError {
 
     /**
-     * 에러 코드는 한 곳에 모은다.
+     * 에러 코드를 한 곳에 모은다. 뒷단도 내는 코드는 <b>글자 그대로</b> 옮겼다 — 문구가
+     * 다르면 그것으로 갈리고, 없는 필드는 더 확실한 표지다.
      *
-     * <p>뒷단도 내는 코드는 <b>글자 그대로</b> 옮겼다. 코드가 같아도 문구가 다르면
-     * 그것으로 갈리고, 없는 필드는 더 확실한 표지다.
+     * <p>RULE-EXCEPTION(EX-5): logLevel 을 안 둔다. 거절은 사유별 계수로만 센다.
+     * 그 결정의 근거는 AIJ-0061 에 있다.
      */
-    // RULE-EXCEPTION(EX-5): logLevel 을 안 둔다. 거절은 요청마다 로그를 남기지
-    // 않고 사유별 계수로만 센다 — 그 결정의 근거는 AIJ-0061 에 있다.
     public enum Code {
 
         /** 검증 실패·필수 헤더 누락. 뒷단의 {@code CommonErrorCode.INVALID_INPUT}. */
         INVALID_REQUEST(HttpStatus.BAD_REQUEST, "COMMON-001", "잘못된 요청입니다.", true),
 
         /**
-         * 스냅샷에 없는 쿠폰.
-         *
-         * <p>뒷단은 발급 경로에서 {@code COUPON-301} 을 낸다. 명세서의
-         * {@code COMMON-002} 를 쓰면 재료를 못 믿는 구간에 흘려보낸 요청만 뒷단
-         * 코드를 받아, 그 차이가 <b>fail-open 이 열린 순간을 알려 주는 신호</b>가 된다.
+         * 스냅샷에 없는 쿠폰. 뒷단이 발급 경로에서 내는 {@code COUPON-301} 을 그대로 쓴다.
+         * 명세서의 {@code COMMON-002} 를 쓰면 재료를 못 믿는 구간에 흘려보낸 요청만 뒷단
+         * 코드를 받아, 그 차이가 <b>fail-open 이 열린 순간의 신호</b>가 된다.
          */
         UNKNOWN_COUPON(HttpStatus.NOT_FOUND, "COUPON-301", "쿠폰 회차를 찾을 수 없습니다.", true),
 
@@ -96,10 +93,8 @@ public final class ApiError {
         }
 
         /**
-         * 뒷단도 내는 응답인가.
-         *
-         * <p>그렇다면 <b>헤더 하나도 더 붙이면 안 된다.</b> 뒷단이 안 다는 헤더를
-         * 우리만 달면 그 존재만으로 게이트웨이가 끊은 것이 드러난다.
+         * 뒷단도 내는 응답인가. 그렇다면 <b>헤더 하나도 더 붙이면 안 된다</b> — 뒷단이
+         * 안 다는 헤더를 우리만 달면 그 존재만으로 게이트웨이가 끊은 것이 드러난다.
          */
         public boolean mirrorsBackend() {
             return mirrorsBackend;
@@ -146,10 +141,7 @@ public final class ApiError {
     }
 
     /**
-     * 거절을 응답으로 쓴다.
-     *
-     * <p><b>이유를 나누지 않는다.</b> 무엇이 왜 틀렸는지 알려 주면 형식을 맞추는
-     * 데 쓰인다. 카탈로그의 문구 그대로만 나간다.
+     * <b>이유를 나누지 않는다.</b> 무엇이 왜 틀렸는지 알려 주면 형식을 맞추는 데 쓰인다.
      *
      * @param retryAfterSec 다시 와도 되는 때. {@link #NO_RETRY} 면 안 싣는다
      */
@@ -178,12 +170,9 @@ public final class ApiError {
     }
 
     /**
-     * 봉투를 만들되 <b>쓰지는 않는다.</b>
-     *
-     * <p>함수형 라우트는 {@code ServerResponse} 를 돌려줘야 해서 교환에 직접 못
-     * 쓴다. 그렇다고 거기서 봉투를 따로 짜면 <b>같은 게이트웨이가 두 가지 오류
-     * 형식을 낸다</b> — 클라이언트는 어느 쪽을 파싱할지 알 수 없다. 만드는 곳을
-     * 하나로 두고 싣는 방식만 가른다.
+     * 봉투를 만들되 <b>쓰지는 않는다.</b> 함수형 라우트는 {@code ServerResponse} 를
+     * 돌려줘야 해서 교환에 직접 못 쓴다. 거기서 봉투를 따로 짜면 게이트웨이가 오류 형식을
+     * 두 가지로 내므로, 만드는 곳은 하나로 두고 싣는 방식만 가른다.
      */
     Envelope render(ServerWebExchange exchange, HttpStatus status, String code,
             String message, int retryAfterSec, boolean mirrorsBackend) {
@@ -227,10 +216,8 @@ public final class ApiError {
     }
 
     /**
-     * 봉투를 손으로 짜지 않게 한 곳에서 만든다. 사본이 생기면 둘이 갈라진다.
-     *
-     * <p><b>{@code null} 인 자리는 아예 안 쓴다.</b> 뒷단이 {@code non_null} 로
-     * 직렬화해 {@code data} 키 자체가 없다 — 우리만 쓰면 그 한 글자로 갈린다.
+     * <b>{@code null} 인 자리는 아예 안 쓴다.</b> 뒷단이 {@code non_null} 로 직렬화해
+     * {@code data} 키 자체가 없다 — 우리만 쓰면 그 한 글자로 갈린다.
      *
      * @return 못 만들면 {@code null}
      */

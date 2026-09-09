@@ -2,16 +2,15 @@ package com.kafkick.waiting.control;
 
 import com.kafkick.waiting.adapter.redis.ClockSkewTracker;
 import io.micrometer.core.instrument.FunctionCounter;
+import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.util.Objects;
 import java.util.function.DoubleSupplier;
 import java.util.function.ToDoubleFunction;
 
 /**
- * 불변식이 깨지기 <b>전에</b> 오르는 값들 (6.9.1).
- *
- * <p>초과 발급 자체는 재고를 가진 발급 계층만 압니다. 게이트웨이는 스스로 계산한
- * 값으로 대신 봅니다 — 여기가 오르면 원인이 이쪽에 있습니다.
+ * 불변식이 깨지기 <b>전에</b> 오르는 값들. 초과 발급 자체는 재고를 가진 발급 계층만
+ * 알므로 게이트웨이는 스스로 계산한 값으로 대신 본다 — 여기가 오르면 원인이 이쪽에 있다.
  */
 public final class InvariantMetrics {
 
@@ -20,38 +19,39 @@ public final class InvariantMetrics {
     private final ClockSkewTracker skew;
 
     /**
-     * 발행이 버린 미상 표시를 읽는 함수.
-     *
-     * <p><b>여기 붙들어 둔다.</b> 함수형 계측기는 상태 객체를 약한 참조로 잡으므로,
-     * 부르는 자리에서 만든 람다를 그대로 넘기면 GC 뒤에 그 계수가 0 으로 굳는다.
+     * 발행이 버린 미상 표시를 읽는 함수. <b>여기 붙들어 둔다</b> — 함수형 계측기는 상태
+     * 객체를 약한 참조로 잡아, 부르는 자리의 람다를 넘기면 GC 뒤에 계수가 0 으로 굳는다.
      */
     private final DoubleSupplier markersDropped;
 
+    /** 전 노드가 초당 뒷단으로 보낸 수. 관측 전에는 음수다. */
+    private final DoubleSupplier arrivalRate;
+
     private InvariantMetrics(AllocationRound round, ClockSkewTracker skew,
-            DoubleSupplier markersDropped) {
+            DoubleSupplier markersDropped, DoubleSupplier arrivalRate) {
         this.round = Objects.requireNonNull(round, "round 는 필수다");
         this.skew = Objects.requireNonNull(skew, "skew 는 필수다");
         this.markersDropped = Objects.requireNonNull(markersDropped, "markersDropped 는 필수다");
+        this.arrivalRate = Objects.requireNonNull(arrivalRate, "arrivalRate 는 필수다");
     }
 
     /**
-     * 지표에 겁니다.
-     *
-     * <p><b>게이지가 아니라 누적입니다.</b> 마지막 틱의 값을 내면 리더십을 잃는
-     * 순간 그 값이 굳고, 15초 스크레이프가 1초짜리 사건을 열넷 중 열넷 놓칩니다.
+     * 지표에 건다. <b>게이지가 아니라 누적이다</b> — 마지막 틱의 값을 내면 리더십을 잃는
+     * 순간 그 값이 굳고, 15초 스크레이프가 1초짜리 사건을 열넷 중 열넷 놓친다.
      */
     public static InvariantMetrics bind(AllocationRound round, ClockSkewTracker skew,
             MeterRegistry meters) {
-        return bind(round, skew, meters, () -> 0);
+        return bind(round, skew, meters, () -> 0, () -> -1);
     }
 
     /**
      * 발행이 버린 미상 표시까지 건다. <b>그 수가 거짓 매진의 직접 증거다.</b>
      */
     public static InvariantMetrics bind(AllocationRound round, ClockSkewTracker skew,
-            MeterRegistry meters, DoubleSupplier markersDropped) {
+            MeterRegistry meters, DoubleSupplier markersDropped, DoubleSupplier arrivalRate) {
         Objects.requireNonNull(meters, "meters 는 필수다");
-        InvariantMetrics metrics = new InvariantMetrics(round, skew, markersDropped);
+        InvariantMetrics metrics =
+                new InvariantMetrics(round, skew, markersDropped, arrivalRate);
         // **형제들과 같은 상태 객체를 쓴다.** 여기만 딴 객체를 넘기면 그것만
         // 약한 참조로 남아, GC 뒤에 이 계수가 조용히 0 으로 굳는다.
         metrics.count(meters, "waiting.snapshot.stock.unknown.dropped",
@@ -69,6 +69,11 @@ public final class InvariantMetrics {
         metrics.count(meters, "waiting.snapshot.clock.floor.applied",
                 InvariantMetrics::floorApplied,
                 "재료를 읽을 때 시각이 뒤로 가 바닥값이 걸린 횟수");
+        // **게이지다.** 순간값이라 누적으로 내면 관측 전의 -1 이 카운터를 깬다.
+        Gauge.builder("waiting.admission.forwarded.rate", metrics, InvariantMetrics::arrivalRate)
+                .description("전 노드가 초당 뒷단으로 넘긴 수. 노드마다 같은 합을 내므로 max 로 읽는다 (RC4)")
+                .strongReference(true)
+                .register(meters);
         metrics.count(meters, "waiting.allocation.admitted",
                 InvariantMetrics::admitted,
                 "차례를 준 누적 인원. 크레딧 낭비의 분모다 (G7.5)");
@@ -78,7 +83,7 @@ public final class InvariantMetrics {
         return metrics;
     }
 
-    /** <b>태그를 안 붙입니다.</b> 쿠폰 식별자는 가짓수에 상한이 없습니다 (LG-4). */
+    /** <b>태그를 안 붙인다.</b> 쿠폰 식별자는 가짓수에 상한이 없다. */
     private void count(MeterRegistry meters, String name,
             ToDoubleFunction<InvariantMetrics> read, String why) {
         FunctionCounter.builder(name, this, read)
@@ -89,6 +94,10 @@ public final class InvariantMetrics {
     /** 평활 지연과 하한이 만드는 초과. 배분기 자체는 준 예산을 안 넘긴다. */
     private double budgetOvershoot() {
         return round.budgetOvershoot();
+    }
+
+    private double arrivalRate() {
+        return arrivalRate.getAsDouble();
     }
 
     /** 발행이 버린 미상 표시 수. 거짓 매진이 나간 직접 증거다. */

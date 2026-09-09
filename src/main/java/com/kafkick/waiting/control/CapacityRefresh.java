@@ -15,10 +15,9 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
 
 /**
- * 배분 재료를 읽어 수집기에 넣는다.
- *
- * <p><b>자기 예산을 갖는다.</b> 배분과 한 예산을 나눠 쓰면 읽기가 느려질 때 회차가
- * 통째로 안 끝나고, 그러면 임계가 안 올라가 큐가 자라 다음 회차가 더 무거워진다.
+ * 배분 재료를 읽어 수집기에 넣는다. <b>자기 예산을 갖는다</b> — 배분과 한 예산을 나눠
+ * 쓰면 읽기가 느려질 때 회차가 통째로 안 끝나고, 임계가 안 올라가 큐가 자라 다음 회차가
+ * 더 무거워진다.
  */
 public final class CapacityRefresh {
 
@@ -67,10 +66,8 @@ public final class CapacityRefresh {
      * 아니다. 직전 값으로 돈다.
      */
     public Mono<Void> refresh() {
-        // **읽기와 시각을 한 예산 안에서 같이 받는다.** 시각을 따로 받으면 그
-        // 왕복이 예산 밖이라, 느릴 때 관측과 기준 시각이 서로 다른 순간의 것이 된다.
-        // **보고와 기준 시각을 한 왕복으로 받는다.** 따로 내면 같은 순간이
-        // 아니고, 클러스터에서는 아예 다른 노드의 벽시계가 된다.
+        // **보고와 기준 시각을 한 왕복으로 받는다.** 따로 받으면 그 왕복이 예산 밖이라
+        // 같은 순간의 것이 아니고, 클러스터에서는 아예 다른 노드의 벽시계가 된다.
         return Mono.defer(sample)
                 // **타이머도 배분 스케줄러다.** 기본 스케줄러를 쓰면 제어 평면의
                 // 시간과 분리되고, 시험이 가상 시간으로 재지 못한다.
@@ -91,7 +88,7 @@ public final class CapacityRefresh {
         observed.set(seen);
         // **하한에 박힌 것은 모드 전환이다.** 진입도 해제도 안 남기면, 크레딧이
         // 하한에 고정돼 한산 통과가 사실상 막힌 것을 사람이 게이지를 보고
-        // 있어야만 안다 (LG-2).
+        // 있어야만 안다.
         if (collector.lastFloor() > 0) {
             if (pinned.entered()) {
                 log.warn("신선한 가용량 보고가 없다 — 크레딧을 하한 {}로 묶는다", value);
@@ -110,10 +107,8 @@ public final class CapacityRefresh {
     }
 
     /**
-     * 리더십이 갈렸다. <b>열린 창을 전부 닫는다.</b>
-     *
-     * <p>안 닫으면 다음 리더의 첫 실패가 진입으로 안 잡혀 로그가 빠지고, 그 뒤
-     * 복귀 로그의 지속 시간에 비리더 구간이 섞인다 (LG-2).
+     * 리더십이 갈리면 <b>열린 창을 전부 닫는다.</b> 안 닫으면 다음 리더의 첫 실패가
+     * 진입으로 안 잡혀 로그가 빠지고, 그 뒤 복귀 로그의 지속 시간에 비리더 구간이 섞인다.
      */
     public void leadershipChanged() {
         pinned.exited().ifPresent(recovered ->
@@ -137,14 +132,14 @@ public final class CapacityRefresh {
         long after = collector.lastKnown();
         // **게이지가 배분값을 따라가야 한다.** 성공 회차에서만 갱신하면 감쇠가 도는
         // 동안 지표는 장애 직전 값에 얼어 있고, 배분은 그와 다른 값으로 돈다 —
-        // 회복 판정이 "아무 일도 없었다" 로 자동 통과한다 (RC6).
+        // 지표가 장애 이전 값으로 수렴했는지를 보는 회복 판정이 자동 통과한다.
         credit.set(after);
         readFailed.increment();
         if (failures.entered()) {
             log.warn("가용량을 못 읽는다 — 직전 값으로 배분한다: {}", e.toString());
         }
         // 감쇠는 읽기 실패와 다른 모드다. 진입 조건도 해제 조건도 명확한데
-        // 안 남기면 크레딧이 어디까지 깎였는지를 사후에 못 밝힌다 (LG-2).
+        // 안 남기면 크레딧이 어디까지 깎였는지를 사후에 못 밝힌다.
         if (after < before && decaying.entered()) {
             log.warn("가용량을 오래 못 읽는다 — 크레딧을 깎기 시작한다: {} → {}", before, after);
         }

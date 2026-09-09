@@ -7,14 +7,104 @@
 #
 # PreToolUse(Bash) 훅. `gh pr create` 를 만나면 기계 검사를 돌리고
 # 위반이 있으면 exit 2 로 막는다.
+#
+# **실수를 막는 장치이지 샌드박스가 아니다.** 셸 문법을 정규식으로 흉내내므로
+# 작정하고 우회하는 형태(변수로 조립하거나 인코딩해 넘기는 것)는 못 막는다.
+# 그래서 두 종류의 틀림을 다르게 다룬다 — **자료를 명령으로 읽어 사람의 일을
+# 막는 쪽은 고치고, 의도적 우회는 안 쫓는다.**
 
 set -uo pipefail
 
 input=$(cat)
 cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // empty')
 
-# PR 생성이 아니면 통과
-[[ "$cmd" != *"gh pr create"* ]] && exit 0
+# **기본은 막는 쪽이다.** 앞 토큰 허용 목록으로 "명령 자리" 를 가리려 했더니
+# 개행·`sudo`·`$( )`·파이프가 전부 빠져나갔다. 그래서 반대로 센다 — 주석과
+# 히어독 본문만 걷어내고, 남은 자리에 그 명령이 있으면 막는다.
+CREATE_RE='(^|[^[:alnum:]_.-])gh[[:space:]]+pr[[:space:]]+create([^[:alnum:]_-]|$)'
+
+# 줄 이음은 먼저 붙인다. 안 붙이면 `gh pr \` 다음 줄의 `create` 가 안 보인다.
+# 따옴표로 묶어야 패턴이 글자 그대로 쓰인다 — 안 묶으면 역슬래시가 다음 글자를
+# 벗기는 뜻이 되어 줄바꿈만 지운다.
+join=$'\\'$'\n'
+cmd_joined=${cmd//"$join"/ }
+
+# 사전 걸러내기는 본 판별과 같은 관용도여야 한다. 더 엄하면 공백 하나로 게이트를
+# 통째로 지나간다.
+# 셸이 낱말을 만들 때 지우는 것들. **명령 판별에는 안 쓴다** — 통째로 인용된
+# 문자열까지 벗겨 예시가 다시 막혔다. 히어독 구분자에만 쓴다.
+unquote() {
+    local v=${1//\$\'/}
+    v=${v//\$\"/}
+    v=${v//[\'\"]/}
+    printf '%s' "${v//\\/}"
+}
+
+[[ ! "$cmd_joined" =~ $CREATE_RE ]] && exit 0
+
+mapfile -t lines <<< "$cmd_joined"
+
+# 문자열 안의 `#` 는 주석이 아니다. 걷어내면 그 뒤에 붙은 진짜 명령이 숨는다.
+# 반대로 `;#` 처럼 메타문자 뒤에 붙은 것은 주석이다 — 안 걷으면 문서가 막힌다.
+strip_comment() {
+    local line=$1 i prefix sq dq
+    for ((i = 0; i < ${#line}; i++)); do
+        [[ "${line:i:1}" == '#' ]] || continue
+        ((i > 0)) && [[ ! "${line:i-1:1}" =~ [[:space:]\;\&\|\(] ]] && continue
+        prefix=${line:0:i}
+        sq=${prefix//[^\']/}
+        dq=${prefix//[^\"]/}
+        ((${#sq} % 2 == 0 && ${#dq} % 2 == 0)) || continue
+        printf '%s' "$prefix"
+        return
+    done
+    printf '%s' "$line"
+}
+
+# `<<<` 는 히어독이 아니고, 문자열 안의 `<<` 도 아니다. **구분자가 뒤에 다시
+# 나올 때만** 히어독으로 친다 — 가짜 구분자는 다시 안 나오므로 저절로 걸러지고,
+# 진짜로 안 닫힌 히어독은 차단 쪽으로 떨어진다.
+HEREDOC_RE='(^|[^<])<<-?[[:space:]]*['\''"]?([^[:space:]'\''"<;&|]+)'
+opens_heredoc() {
+    local line=$1 from=$2 j
+    [[ "$line" =~ $HEREDOC_RE ]] || return 1
+    delim=${BASH_REMATCH[2]}
+    delim=${delim%[\'\"]}
+    # `<<\EOF` 도 `<<E\OF` 도 인용이다. 역슬래시는 어느 자리에 있든 구분자에 안
+    # 들어가므로 종결선은 그것을 뗀 쪽이다 — 안 떼면 히어독이 영영 안 닫혀
+    # 본문이 명령으로 읽힌다.
+    delim=$(unquote "$delim")
+    for ((j = from; j < ${#lines[@]}; j++)); do
+        [[ "${lines[j]}" =~ ^[[:space:]]*"$delim"[[:space:]]*$ ]] && return 0
+    done
+    return 1
+}
+
+creating=0
+delim=""
+skip_to=-1
+for ((n = 0; n < ${#lines[@]}; n++)); do
+    if ((n <= skip_to)); then
+        continue
+    fi
+    line=${lines[n]}
+    if opens_heredoc "$line" $((n + 1)); then
+        for ((m = n + 1; m < ${#lines[@]}; m++)); do
+            [[ "${lines[m]}" =~ ^[[:space:]]*"$delim"[[:space:]]*$ ]] && { skip_to=$m; break; }
+        done
+    fi
+    # **인용을 벗긴 형태로는 안 본다.** `gh'' pr create` 로 쪼개면 지나가지만,
+    # 벗기면 인용 안의 예시까지 명령으로 읽어 사람의 일을 막는다. 머리말의
+    # 방침대로 우회는 안 쫓고 오탐을 없애는 쪽을 고른다.
+    if [[ "$(strip_comment "$line")" =~ $CREATE_RE ]]; then
+        creating=1
+        # **명령 줄부터 끝까지를 넘긴다.** 물리적 한 줄만 보면 다음 줄로 이어진
+        # `--base` 를 못 찾아 엉뚱한 기준으로 리뷰가 돈다.
+        create_line=$(printf '%s\n' "${lines[@]:n}")
+        break
+    fi
+done
+((creating)) || exit 0
 
 # **검사를 못 돌리면 막는다.** 통과시키면 게이트가 인프라 오류 한 번에
 # 조용히 사라진다 — 가드는 fail closed 여야 한다.
@@ -22,6 +112,32 @@ if ! ROOT=$(git rev-parse --show-toplevel 2>/dev/null); then
     echo "git 저장소가 아니라 로컬 리뷰를 돌릴 수 없다. PR 은 저장소 안에서 연다." >&2
     exit 2
 fi
+# **없는 티켓 번호를 막는다.** 브랜치명 형식만 보면 그 번호가 실재하는지는
+# 아무도 안 묻는다 — 실제로 없는 키 스무 종이 300 커밋에 달렸다 (AIJ-0252).
+# CI 는 이 검사를 못 한다: 그쪽 계정은 이 프로젝트를 못 본다.
+branch=$(git -C "$ROOT" symbolic-ref --quiet --short HEAD 2>/dev/null || true)
+key=$(printf '%s' "$branch" | grep -oE 'CY-[0-9]+' | head -1)
+env_file="$ROOT/../.env"
+if [[ -n "$key" && -r "$env_file" ]]; then
+    # 값을 읽어 쓰기만 한다. 없거나 안 통하면 조용히 넘어간다 — 자격 증명
+    # 문제로 PR 을 못 열게 되면 이 검사가 게이트가 아니라 장애물이 된다.
+    code=$(set -a; . "$env_file" >/dev/null 2>&1; set +a
+        [[ -z "${ATLASSIAN_BASE_URL:-}" ]] && exit 0
+        curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+            -u "$ATLASSIAN_USER_EMAIL:$ATLASSIAN_API_TOKEN" -H 'Accept: application/json' \
+            "${ATLASSIAN_BASE_URL%/}/rest/api/3/issue/$key?fields=summary" 2>/dev/null)
+    if [[ "$code" == "404" ]]; then
+        echo "$key 라는 이슈가 없다. 브랜치를 실재하는 키로 딴다 (WF-3)" >&2
+        exit 2
+    fi
+    # 자격 증명이 아예 없으면 위에서 빈 값으로 나온다. 값이 있는데 200 도 404 도
+    # 아니면 못 본 것이라, 통과시키면 이 게이트가 조용히 사라진다.
+    if [[ -n "$code" && "$code" != "200" && "$code" != "000" ]]; then
+        echo "$key 를 못 봤다 (HTTP $code). 자격 증명과 연결을 확인하고 다시 연다." >&2
+        exit 2
+    fi
+fi
+
 RUNNER="$ROOT/.claude/hooks/review-branch.sh"
 if [[ ! -x "$RUNNER" ]]; then
     echo "로컬 리뷰 러너를 실행할 수 없다: $RUNNER" >&2
@@ -31,12 +147,16 @@ fi
 
 # base 를 명령에서 뽑는다. 없으면 develop
 # **명령 문자열 전체를 훑지 않는다.** `--title "--base release"` 처럼 인용부호
-# 안에 들어간 값을 옵션으로 착각한다. 인자를 토큰으로 쪼갠 뒤 옵션 자리만 본다.
+# 안에 들어간 값을 옵션으로 착각하고, 히어독 본문의 낱말까지 옵션으로 센다.
+# 명령이 있던 줄만 토큰으로 쪼갠다.
 #
-# 실행하지 않고 쪼갠다 — `xargs` 는 셸 인용 규칙을 그대로 따르면서 명령을
-# 부르지 않는다.
+# 실행하지 않고 쪼갠다 — `xargs` 가 인용을 벗기되 명령을 부르지 않는다. 짝이
+# 안 맞으면 하드 에러이므로 그때는 기본값으로 안 넘어가고 막는다.
 base=""
-mapfile -t args < <(printf '%s' "$cmd" | xargs -n1 printf '%s\n' 2>/dev/null)
+if ! mapfile -t args < <(printf '%s' "$create_line" | xargs -n1 printf '%s\n' 2>/dev/null); then
+    echo "명령을 못 쪼갰다 — 어느 기준으로 볼지 모르므로 막는다." >&2
+    exit 2
+fi
 for ((i = 0; i < ${#args[@]}; i++)); do
     case "${args[i]}" in
         --base=*) base="${args[i]#--base=}"; break ;;
@@ -50,6 +170,72 @@ base="${base:-develop}"
 # 이미 접두가 붙어 있으면 겹치지 않게 둔다. origin/origin/develop 이 되면
 # 러너가 폴백을 타고, 폴백마저 없으면 브랜치 커밋을 하나도 안 보고 통과한다.
 [[ "$base" != origin/* ]] && base="origin/$base"
+
+# **문서가 가리키는 키도 본다.** 브랜치만 보면 계획서에 적힌 키가 실재하는지는
+# 아무도 안 묻는다 — 열다섯 종이 47 곳에서 없는 곳을 가리키고 있었고, 나중에
+# 그 번호로 다른 티켓이 생기자 링크가 엉뚱한 곳으로 열렸다 (CY-891).
+#
+# **더한 줄만 본다.** 파일 전체를 보면 내가 안 건드린 낡은 키가 남을 막고,
+# 지난 엔트리를 안 고치는 저널(ai/journal/README.md 7절)은 영영 못 건드리게 된다.
+if [[ -r "$env_file" ]]; then
+    added=$(git -C "$ROOT" diff -U0 "$base...HEAD" -- 'plan/*.md' 'ai/rules/*.md' \
+        2>/dev/null | grep '^+' | grep -v '^+++' || true)
+    if [[ -z "$added" ]] && ! git -C "$ROOT" rev-parse --verify --quiet "$base" >/dev/null
+    then
+        echo "$base 를 못 찾아 문서의 티켓 키를 못 봤다 — git fetch 뒤 다시 연다" >&2
+        exit 2
+    fi
+    keys=$(printf '%s' "$added" | grep -oE '\bCY-[0-9]+\b' | sort -u || true)
+    if [[ -n "$keys" ]]; then
+        # **200 과 404 말고는 "못 봤다" 다.** 404 만 실패로 보면 만료된 자격 증명·
+        # 권한 오류·속도 제한·서버 오류·타임아웃이 전부 통과한다 — 검사가 인프라
+        # 오류 한 번에 조용히 사라지는 것이 이 티켓이 고치려는 사고 그 자체다.
+        verdict=$(set -a; . "$env_file" >/dev/null 2>&1; set +a
+            [[ -z "${ATLASSIAN_BASE_URL:-}" || -z "${ATLASSIAN_USER_EMAIL:-}" \
+                || -z "${ATLASSIAN_API_TOKEN:-}" ]] && exit 0
+            # **자격 증명을 먼저 본다.** 지라는 권한이 없으면 404 를 준다 —
+            # 존재를 숨기는 것이라, 안 보면 만료된 토큰이 "이슈가 없다" 로 나온다.
+            me=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+                -u "$ATLASSIAN_USER_EMAIL:$ATLASSIAN_API_TOKEN" \
+                -H 'Accept: application/json' \
+                "${ATLASSIAN_BASE_URL%/}/rest/api/3/myself" 2>/dev/null)
+            [[ "$me" != "200" ]] && { printf '자격:%s ' "$me"; exit 0; }
+            for k in $keys; do
+                c=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+                    -u "$ATLASSIAN_USER_EMAIL:$ATLASSIAN_API_TOKEN" \
+                    -H 'Accept: application/json' \
+                    "${ATLASSIAN_BASE_URL%/}/rest/api/3/issue/$k?fields=summary" \
+                    2>/dev/null)
+                case "$c" in
+                    200) ;;
+                    404) printf '없음:%s ' "$k" ;;
+                    *)   printf '못봄:%s(%s) ' "$k" "$c" ;;
+                esac
+            done)
+        missing=$(printf '%s' "$verdict" | tr ' ' '\n' | grep '^없음:' | cut -d: -f2 \
+            | tr '\n' ' ' || true)
+        unclear=$(printf '%s' "$verdict" | tr ' ' '\n' | grep '^못봄:' | cut -d: -f2 \
+            | tr '\n' ' ' || true)
+        if [[ -n "${missing// /}" ]]; then
+            echo "더한 문서 줄이 없는 이슈를 가리킨다: $missing" >&2
+            echo "  없는 추적을 있는 척 두지 않는다 — 키를 고치거나 뺀다" >&2
+            exit 2
+        fi
+        creds=$(printf '%s' "$verdict" | tr ' ' '\n' | grep '^자격:' | cut -d: -f2 || true)
+        if [[ -n "$creds" ]]; then
+            echo "지라에 못 붙어 티켓 키를 못 봤다 (HTTP $creds)." >&2
+            echo "  통과시키면 이 게이트가 인프라 오류 한 번에 조용히 사라진다." >&2
+            echo "  ../.env 의 자격 증명을 확인하고 다시 연다." >&2
+            exit 2
+        fi
+        if [[ -n "${unclear// /}" ]]; then
+            echo "티켓을 못 봤다: $unclear" >&2
+            echo "  통과시키면 이 게이트가 인프라 오류 한 번에 조용히 사라진다." >&2
+            echo "  자격 증명과 연결을 확인하고 다시 연다." >&2
+            exit 2
+        fi
+    fi
+fi
 
 out=$("$RUNNER" "$base" 2>&1)
 status=$?
@@ -97,7 +283,7 @@ if [[ ! -f "$STAMP" ]] || [[ "$stamp_head" != "$head" ]] || ((stamp_list == 0));
         echo "    echo '돌린 에이전트: domain-guardian, resilience-auditor, ...' \\"
         echo "      >> .claude/.agents-reviewed"
         echo
-        echo "  ./gradlew build jacocoTestCoverageVerification pitest 도 아직이면 같이 돌린다."
+        echo "  ./gradlew build 도 아직이면 같이 돌린다. 뮤테이션은 main 으로 PR 을 열 때만."
     } >&2
     exit 2
 fi

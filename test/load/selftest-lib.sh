@@ -27,7 +27,9 @@ run_case() {
     local out rc
     out=$("$SELFTEST_JUDGE" "$@" 2>&1)
     rc=$?
-    if [ "$rc" -eq "$want_rc" ] && printf '%s' "$out" | grep -q "$want_word"; then
+    # `--` 를 넣는다. 없으면 `-1.0초` 같은 기대 문구가 grep 의 옵션으로 먹혀,
+    # 판정기가 맞게 찍었는데도 케이스가 빨개진다.
+    if [ "$rc" -eq "$want_rc" ] && printf '%s' "$out" | grep -q -- "$want_word"; then
         echo "  ✓ $name"
     else
         echo "  ✗ $name — 종료 $rc (기대 $want_rc), '$want_word' 없음"

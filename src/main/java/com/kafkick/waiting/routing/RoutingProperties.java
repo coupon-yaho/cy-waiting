@@ -1,6 +1,7 @@
 package com.kafkick.waiting.routing;
 
 import java.time.Duration;
+import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
@@ -9,31 +10,49 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * @param enabled       끄면 단일 주소로 돌아간다. <b>롤백 수단이다</b> — 라우팅이
  *                      의심스러우면 이 한 줄로 되돌린다
  * @param serviceId     {@code lb://} 뒤에 오는 이름
- * @param strategy      {@code p2c} 또는 {@code round-robin} (R-9). 어느 쪽이 나은지는
+ * @param strategy      {@code p2c} 또는 {@code round-robin}. 어느 쪽이 나은지는
  *                      실측으로 정할 문제라 코드에 하나만 박아 두면 그 측정을 못 한다
- * @param inFlightTtl   물린 표가 살 수 있는 최대 시간. 감소를 놓쳐도 누수가 유계다 (R-8)
- * @param coldStartRamp 기동 직후 보고된 값을 초기값으로 쓰는 구간 (G9.12)
- * @param perInstanceCap 인스턴스 하나에 동시에 물릴 수 있는 요청 수 (G9.13).
+ * @param inFlightTtl   물린 표가 살 수 있는 최대 시간. 감소를 놓쳐도 누수가 유계다
+ * @param coldStartRamp 기동 직후 보고된 값을 초기값으로 쓰는 구간
+ * @param perInstanceCap 인스턴스 하나에 동시에 물릴 수 있는 요청 수.
  *                       <b>느려진 한 대가 커넥션을 독식하지 못하게 한다</b>
  * @param outlierFailures 연속 실패가 이만큼이면 그 인스턴스를 후보에서 뺀다
  * @param outlierEjectFor 뺀 뒤 이만큼 지나면 다시 후보로 돌린다
+ * @param allowedDestinations 연결해도 되는 목적지. <b>켤 때는 필수다</b>
+ * @param allowedPorts   연결해도 되는 포트. 호스트만 보면 반쪽이다
  */
 @ConfigurationProperties("waiting.routing")
 public record RoutingProperties(boolean enabled, String serviceId, String strategy,
         Duration inFlightTtl, Duration coldStartRamp, Integer perInstanceCap,
-        Integer outlierFailures, Duration outlierEjectFor) {
+        Integer outlierFailures, Duration outlierEjectFor, List<String> allowedDestinations,
+        List<Integer> allowedPorts) {
 
-    /** 무작위 둘 중 여유 대비 덜 찬 쪽. <b>기본이 아니다</b> — 비율에서 밀린다 (R-4). */
+    /** 무작위 둘 중 여유 대비 덜 찬 쪽. <b>기본이 아니다</b> — 비율에서 밀린다. */
     public static final String P2C = "p2c";
 
     /** 여유 비율대로 결정적으로 돈다. 3~5 대 규모에서 더 정확하고, <b>기본값이다</b>. */
     public static final String ROUND_ROBIN = "round-robin";
 
     public RoutingProperties {
+        allowedDestinations = allowedDestinations == null ? List.of()
+                : allowedDestinations.stream()
+                        .filter(entry -> entry != null && !entry.isBlank()).toList();
+        allowedPorts = allowedPorts == null ? List.of() : List.copyOf(allowedPorts);
+        // **켤 때만 막는다.** 꺼진 배포에서까지 요구하면 라우팅과 무관한 배포가
+        // 이 설정 때문에 안 뜬다. 켜는 순간은 안 봐주고 끊는다 — 목록이 비었다는
+        // 것이 "아무 데나 보내도 된다" 로 읽히면 그 배포가 그대로 통로가 된다.
+        if (enabled && allowedDestinations.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "라우팅을 켜려면 allowed-destinations 를 적어야 한다");
+        }
+        if (enabled && allowedPorts.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "라우팅을 켜려면 allowed-ports 를 적어야 한다");
+        }
         serviceId = serviceId == null || serviceId.isBlank() ? "coupon-service" : serviceId;
-        // **기본은 라운드로빈이다** (R-4 · CY-916). P2C 를 고른 원래 이유는
-        // 게이트웨이 M 대가 같은 인스턴스로 몰린다는 것이었는데, 두 대를 띄워
-        // 재 보니 안 몰렸고 P2C 가 오히려 비율에서 밀렸다. 값은 AIJ-0225.
+        // **기본은 라운드로빈이다.** P2C 를 고른 원래 이유는 게이트웨이 여러 대가
+        // 같은 인스턴스로 몰린다는 것이었는데, 두 대를 띄워 재 보니 안 몰렸고
+        // P2C 가 오히려 비율에서 밀렸다.
         strategy = strategy == null || strategy.isBlank() ? ROUND_ROBIN : strategy;
         inFlightTtl = inFlightTtl == null ? Duration.ofSeconds(30) : inFlightTtl;
         coldStartRamp = coldStartRamp == null ? Duration.ofSeconds(60) : coldStartRamp;
@@ -65,10 +84,9 @@ public record RoutingProperties(boolean enabled, String serviceId, String strate
             throw new IllegalArgumentException(
                     "outlierFailures 는 1 이상이어야 한다: " + outlierFailures);
         }
-        // **응답 상한보다 길어야 한다.** 멎은 대로 간 요청은 그 상한이 지나야
-        // 실패로 관측되는데, 배제가 먼저 풀리면 직전 실패가 세어지기도 전에 그
-        // 대가 후보로 돌아온다. 상한은 다른 설정에 있어 여기서 못 막고,
-        // BackendTimeoutBudgetTest 가 배포 파일을 읽어 그 관계를 문다.
+        // **응답 상한보다 길어야 한다.** 멎은 대로 간 요청은 그 상한이 지나야 실패로
+        // 관측되는데, 배제가 먼저 풀리면 직전 실패가 세어지기도 전에 그 대가 돌아온다.
+        // 상한이 다른 설정에 있어 BackendTimeoutBudgetTest 가 그 관계를 문다.
         outlierEjectFor = outlierEjectFor == null ? Duration.ofSeconds(15) : outlierEjectFor;
         if (outlierEjectFor.isNegative() || outlierEjectFor.isZero()) {
             throw new IllegalArgumentException(

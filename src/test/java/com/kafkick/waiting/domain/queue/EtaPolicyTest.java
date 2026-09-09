@@ -78,7 +78,7 @@ class EtaPolicyTest {
     void 모름과_폴링이_같은_값을_같은_뜻으로_읽는다() {
         // **표현이 갈리면 한쪽이 모름을 '아주 가까움' 으로 읽는다.** 그 값이 나오는
         // 조건이 배수가 멈춘 순간이라, 하필 그때 폴링이 가장 짧아진다.
-        PollIntervalPolicy 폴링 = PollIntervalPolicy.of(0);
+        PollIntervalPolicy 폴링 = PollIntervalPolicy.noJitter();
         long 모를_때 = 폴링.intervalSec(EtaPolicy.UNKNOWN, () -> 0.5, 1.0);
         long 아주_멀_때 = 폴링.intervalSec(100_000, () -> 0.5, 1.0);
 
@@ -95,7 +95,7 @@ class EtaPolicyTest {
         assertThat(EtaPolicy.bucket(Double.NEGATIVE_INFINITY))
                 .isEqualTo(EtaDisplay.OVER_TEN_MINUTES);
 
-        PollIntervalPolicy 폴링 = PollIntervalPolicy.of(0);
+        PollIntervalPolicy 폴링 = PollIntervalPolicy.noJitter();
         assertThat(폴링.intervalSec(-1, () -> 0.5, 1.0))
                 .isEqualTo(폴링.intervalSec(100_000, () -> 0.5, 1.0));
     }

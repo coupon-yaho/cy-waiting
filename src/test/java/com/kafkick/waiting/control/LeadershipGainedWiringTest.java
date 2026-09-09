@@ -1,12 +1,16 @@
 package com.kafkick.waiting.control;
 
+import com.kafkick.waiting.domain.routing.AllowedDestinations;
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.kafkick.waiting.MutableClock;
 import com.kafkick.waiting.domain.allocation.CreditSmoother;
 import com.kafkick.waiting.domain.allocation.CouponDemand;
 import com.kafkick.waiting.domain.coupon.QueueMode;
+import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -14,6 +18,7 @@ import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.CouponStates;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.time.Clock;
 import java.time.Duration;
 import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
@@ -29,8 +34,13 @@ import reactor.core.scheduler.Schedulers;
  */
 class LeadershipGainedWiringTest {
 
+    /** 목적지 제한이 없는 상태. 이름으로 남겨야 인자를 빠뜨린 것과 안 헷갈린다. */
+    private static final AllowedDestinations 무제한 = AllowedDestinations.unrestricted();
+
     private static final Map<String, CouponState> 줄이_선_쿠폰 =
             Map.of("c1", CouponStates.queueing(10, 1_000, 100));
+
+    private final ControlPlaneConfig 배선 = new ControlPlaneConfig();
 
     /**
      * <b>이탈자 청소의 재개 유예를 처음부터 준다.</b>
@@ -106,14 +116,87 @@ class LeadershipGainedWiringTest {
                 SnapshotCodec.create(), () -> 0L);
     }
 
+    /**
+     * <b>낡은 큰 몫을 그대로 물려받으면 안 된다.</b> "낮추는 쪽으로만 받는다" 는
+     * 이미 리더였던 노드에만 걸린다 — 승계 노드는 램프를 한 번도 안 돌렸다.
+     */
+    @Test
+    @DisplayName("낡은_재료의_몫은_하한까지_낮춘다")
+    void 낡은_재료의_몫은_하한까지_낮춘다() {
+        MutableClock 시계 = MutableClock.at(Instant.ofEpochSecond(1_000));
+        SnapshotHolder holder = SnapshotHolder.of(Duration.ofSeconds(3),
+                Duration.ofSeconds(10), 시계);
+        holder.replace(발행된_스냅샷(4_000, 시계.instant()));
+        시계.앞으로(Duration.ofSeconds(30));
+
+        long 출발점 = 배선.startingCredit(holder.view(), holder,
+                GatewayRegistry.of(1, 3));
+
+        // 노드 셋의 R1 하한이다. 4000 을 그대로 받으면 브레이크가 통째로 풀린다.
+        assertThat(출발점).isEqualTo(6);
+    }
+
+    /** 신선하면 발행 몫 그대로다. 무조건 하한으로 낮추면 회복이 그만큼 늦다. */
+    @Test
+    @DisplayName("신선한_재료의_몫은_그대로_받는다")
+    void 신선한_재료의_몫은_그대로_받는다() {
+        MutableClock 시계 = MutableClock.at(Instant.ofEpochSecond(1_000));
+        SnapshotHolder holder = SnapshotHolder.of(Duration.ofSeconds(3),
+                Duration.ofSeconds(10), 시계);
+        holder.replace(발행된_스냅샷(4_000, 시계.instant()));
+
+        assertThat(배선.startingCredit(holder.view(), holder,
+                GatewayRegistry.of(1, 3))).isEqualTo(4_000);
+    }
+
+    /** 발행된 적이 없으면 몫도 0 이다. 그 0 을 출발점으로 삼으면 하한에서 다시 오른다. */
+    @Test
+    @DisplayName("발행된_적이_없으면_안_준다")
+    void 발행된_적이_없으면_안_준다() {
+        MutableClock 시계 = MutableClock.at(Instant.ofEpochSecond(1_000));
+        SnapshotHolder holder = SnapshotHolder.of(Duration.ofSeconds(3),
+                Duration.ofSeconds(10), 시계);
+
+        assertThat(배선.startingCredit(holder.view(), holder,
+                GatewayRegistry.of(1, 3))).isNegative();
+    }
+
+    private GatewaySnapshot 발행된_스냅샷(long credit, Instant at) {
+        return new GatewaySnapshot(Map.of(),
+                new SnapshotMeta(credit, 3, GatewaySnapshot.EMPTY.meta().tunables(), 1.0), at);
+    }
+
     private Runnable onLeadershipGained(QueueSweeper sweeper, AllocationRound round) {
         ControlPlaneProperties.Capacity 설정 = ControlPlaneProperties.defaults().capacity();
         CapacityCollector collector = CapacityCollector.of(설정.rampUp(), 설정.freshness(),
-                설정.floor(), 설정.perInstanceCap());
-        return ControlPlaneConfig.onLeadershipGained(collector,
+                설정.floor(), 설정.perInstanceCap(),
+                무제한);
+        return 배선.onLeadershipGained(collector,
                 CapacityRefresh.of(Mono::empty, collector, () -> 1, Duration.ofSeconds(1),
                         Schedulers.immediate(), new SimpleMeterRegistry()),
                 SoldOutCleanup.of(1, new SimpleMeterRegistry()),
-                sweeper, round);
+                sweeper, round,
+                // 재료가 없으면 발행 몫을 모른다 — 램프는 그때 손대지 않는다.
+                SnapshotHolder.of(Duration.ofSeconds(3), Duration.ofSeconds(10),
+                        Clock.systemUTC()),
+                GatewayRegistry.of(1, 3), 잠금);
+    }
+
+    /** 승계 때 문을 잠근 횟수. 안 세면 이 줄이 빠져도 전 시험이 초록이다. */
+    private final AtomicInteger 잠근_횟수 = new AtomicInteger();
+
+    private final Runnable 잠금 = 잠근_횟수::incrementAndGet;
+
+    /**
+     * <b>잠금이 승계 목록에 있다.</b> 이 줄이 빠지면 새 리더가 안 만지는 쿠폰의 문이
+     * 옛 임기로 남고, 유령이 먼저 도착하면 자기 번호와 같아서 통과한다 (CY-892).
+     */
+    @Test
+    @DisplayName("승계하면_입장_울타리를_잠근다")
+    void 승계하면_입장_울타리를_잠근다() {
+        onLeadershipGained(안_걷는_스위퍼(),
+                이월을_기록하는_회차(new ArrayList<>(), new AtomicReference<>(0.0))).run();
+
+        assertThat(잠근_횟수).hasValue(1);
     }
 }

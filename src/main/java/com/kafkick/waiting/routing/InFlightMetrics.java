@@ -9,10 +9,10 @@ import java.util.function.LongSupplier;
 import java.util.function.ToDoubleFunction;
 
 /**
- * 인스턴스로 나간 요청이 지금 얼마나 물려 있는지 (9.2.6).
+ * 인스턴스로 나간 요청이 지금 얼마나 물려 있는지.
  *
  * <p><b>누수는 값이 안 내려가는 것으로만 보인다.</b> 부하가 끝났는데 0 이 아니면
- * 감소를 어디선가 놓친 것이고, 그 인스턴스는 고르개에서 조용히 배제된다 (G9.3).
+ * 감소를 어디선가 놓친 것이고, 그 인스턴스는 고르개에서 조용히 배제된다.
  */
 public final class InFlightMetrics {
 
@@ -55,8 +55,8 @@ public final class InFlightMetrics {
     }
 
     /**
-     * <b>인스턴스 식별자를 라벨에 안 붙인다.</b> 재기동마다 새로 오므로(R-3)
-     * 시계열이 무한히 늘고, 하나 붙는 순간 지표가 메모리를 밀어낸다 (LG-4).
+     * <b>인스턴스 식별자를 라벨에 안 붙인다.</b> 재기동마다 새로 오므로 시계열이
+     * 무한히 늘고, 하나 붙는 순간 지표가 메모리를 밀어낸다.
      */
     private void gauge(MeterRegistry meters, String name,
             ToDoubleFunction<InFlightMetrics> read, String why) {

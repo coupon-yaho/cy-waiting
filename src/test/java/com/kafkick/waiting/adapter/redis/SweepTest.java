@@ -1,11 +1,15 @@
 package com.kafkick.waiting.adapter.redis;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.kafkick.waiting.domain.queue.GraceRetention;
+import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.List;
+import java.util.Properties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -83,6 +87,48 @@ class SweepTest extends RedisContainerSupport {
         return sweep(limit, BUDGET, "0");
     }
 
+    /** 앞줄 제거를 접고 도는 회차. 승계 유예 구간이 전 쿠폰에 이 모양으로 돈다. */
+    @SuppressWarnings("unchecked")
+    private List<Object> sweepKeepingFront(String limit) {
+        return (List<Object>) redis.execute(
+                        sweepScript,
+                        List.of(QUEUE, GRACE, ALIVE, ADMITTED),
+                        List.of(limit, String.valueOf(NOW), RETENTION, BUDGET, "0", "0"))
+                .blockFirst(WAIT);
+    }
+
+    /**
+     * 명령별 호출 수를 0 으로 되돌린다. 아래 검사가 그 차분을 본다.
+     *
+     * <p><b>서버 전역이다.</b> 컨테이너를 공유하므로 배경 루프가 돌거나 시험이
+     * 병렬로 돌면 계수가 섞인다. 지금은 스케줄러가 꺼져 있고 갈래가 하나라
+     * 안전한데, 둘 중 하나가 바뀌면 아래 검사가 조용히 흔들린다.
+     */
+    // **스크립트를 먼저 캐시에 올린다.** 캐시가 비어 있으면 스프링이 `EVALSHA`
+    // 를 쳐서 실패한 뒤 `EVAL` 로 떨어지는데, 실패한 호출도 계수에 든다 —
+    // 그러면 "이 회차만 쟀다" 가 앞선 시험이 무엇을 돌렸는지에 달리게 된다.
+    //
+    // **돌려서 올리지 않는다.** 한 번 돌리면 그 회차가 만료 신호와 낡은 기록을
+    // 미리 걷어, 정작 재려던 회차가 걷을 것이 없어진다. `SCRIPT LOAD` 는 본문만
+    // 캐시에 넣고 아무것도 안 건드린다.
+    private void 계수를_비운다() throws IOException {
+        String body = new ClassPathResource("redis/sweep.lua").getContentAsString(UTF_8);
+        redis.execute(c -> c.scriptingCommands().scriptLoad(ByteBuffer.wrap(body.getBytes(UTF_8))))
+                .blockLast(WAIT);
+        redis.execute(c -> c.serverCommands().resetConfigStats()).blockLast(WAIT);
+    }
+
+    /** 되돌린 뒤 이 명령이 몇 번 돌았는가. 없으면 0 이다. */
+    private long 호출_수(String command) {
+        Properties stats = redis.execute(c -> c.serverCommands().info("commandstats"))
+                .blockFirst(WAIT);
+        String line = stats == null ? null : stats.getProperty("cmdstat_" + command);
+        if (line == null) {
+            return 0;
+        }
+        return Long.parseLong(line.replaceFirst("^calls=(\\d+).*$", "$1"));
+    }
+
     private String nextCursor(List<Object> r) {
         return String.valueOf(r.get(3));
     }
@@ -94,6 +140,86 @@ class SweepTest extends RedisContainerSupport {
     /** 유예 기록 정리 수. 반환값 두 번째는 생존 신호 정리 수다. */
     private long expired(List<Object> r) {
         return Long.parseLong(String.valueOf(r.get(2)));
+    }
+
+    /**
+     * <b>앞줄을 안 걷는 회차는 앞줄을 읽지도 않는다.</b>
+     *
+     * <p>리더 승계 유예 구간은 <b>모든 쿠폰</b>에 대해 앞줄 제거를 접고 돈다.
+     * 그때도 창을 읽으면 전 쿠폰이 매 틱 그 비용을 버린다 — 승계마다 몇 분씩이다.
+     * 실측으로 그 두 명령이 이 스크립트 비용의 절반을 넘는다.
+     */
+    @Test
+    @DisplayName("앞줄을_안_걷으면_창을_안_읽는다")
+    void 앞줄을_안_걷으면_창을_안_읽는다() throws IOException {
+        for (int i = 0; i < 50; i++) {
+            enqueue("m" + i);
+        }
+        // 만료된 신호와 낡은 기록을 심는다. **접어도 이 둘은 걷어야 한다.**
+        redis.opsForZSet().add(ALIVE, "m0", NOW - 10).block(WAIT);
+        redis.opsForHash().put(GRACE, "old", String.valueOf(만료된_시각)).block(WAIT);
+        계수를_비운다();
+
+        List<Object> 결과 = sweepKeepingFront("3000");
+
+        assertThat(호출_수("zrangebyscore")).as("앞줄 창을 안 읽는다").isZero();
+        assertThat(호출_수("zmscore")).as("생존 신호를 안 묻는다").isZero();
+        // 살아 있는 신호가 있는지도 안 묻는다 — 그 값을 아무도 안 쓴다.
+        assertThat(호출_수("zcount")).as("생존 여부를 안 묻는다").isZero();
+        // **다른 시험이 같은 레디스를 쓴다.** 배경 루프가 창에 끼어들면 위
+        // 검사가 이유 없이 빨개진다. 이 회차가 스크립트 하나만 돌렸는지 같이
+        // 봐서, 그때는 "측정이 오염됐다" 로 먼저 터지게 한다.
+        assertThat(호출_수("evalsha") + 호출_수("eval")).as("이 회차만 쟀다").isOne();
+
+        // **비용만 보면 안 된다.** 접은 회차가 아무것도 안 하고 돌아가는 구현도
+        // 위 검사를 통과한다 — 그러면 승계 유예 내내 만료 신호와 낡은 기록이
+        // 안 걷히고 커서가 전진을 못 한다. 그 셋을 같이 못 박는다.
+        assertThat(swept(결과)).as("앞줄은 안 걷는다").isZero();
+        assertThat(expired(결과)).as("낡은 기록은 걷는다").isOne();
+        assertThat(redis.opsForZSet().score(ALIVE, "m0").block(WAIT))
+                .as("만료된 신호는 걷는다").isNull();
+        // 심은 것이 두 개뿐이라 한 바퀴에 다 훑고 커서가 처음으로 돌아온다.
+        // **"비어 있지 않다" 로는 부족하다** — 커서를 안 돌려도 통과한다.
+        assertThat(nextCursor(결과)).as("커서가 한 바퀴를 돈다").isEqualTo("0");
+    }
+
+    /** 접지 않은 회차는 그대로 읽어야 한다. 위 검사가 늘 0 이면 아무것도 안 지킨다. */
+    @Test
+    @DisplayName("앞줄을_걷는_회차는_창을_읽는다")
+    void 앞줄을_걷는_회차는_창을_읽는다() throws IOException {
+        for (int i = 0; i < 50; i++) {
+            enqueue("m" + i);
+        }
+        계수를_비운다();
+
+        sweep("3000");
+
+        assertThat(호출_수("zrangebyscore")).as("앞줄 창을 읽는다").isPositive();
+        // **양쪽을 다 못 박는다.** 하나만 두면 위 검사가 늘 0 을 내는 구현
+        // — 앞줄 조립을 통째로 접은 구현 — 도 시험 둘이 초록이다.
+        assertThat(호출_수("zmscore")).as("생존 신호를 묻는다").isPositive();
+    }
+
+    /**
+     * <b>살아 있는 신호가 없으면 앞줄을 읽지도 않는다.</b>
+     *
+     * <p>줄에 사람이 있는데 아무도 살아 있지 않은 것은 저장소를 잃은 것이다.
+     * 그때는 앞줄을 안 걷는데, 창은 그대로 읽고 있었다. 승계 유예와 달리
+     * 이 상태는 끝내 주는 것이 없어 매 틱 되풀이된다.
+     */
+    @Test
+    @DisplayName("살아_있는_신호가_없으면_창을_안_읽는다")
+    void 살아_있는_신호가_없으면_창을_안_읽는다() throws IOException {
+        for (int i = 0; i < 50; i++) {
+            enqueue("m" + i);
+        }
+        redis.delete(ALIVE).block(WAIT);
+        계수를_비운다();
+
+        sweep("3000");
+
+        assertThat(호출_수("zrangebyscore")).as("앞줄 창을 안 읽는다").isZero();
+        assertThat(호출_수("zmscore")).as("생존 신호를 안 묻는다").isZero();
     }
 
     @Test
@@ -318,6 +444,91 @@ class SweepTest extends RedisContainerSupport {
                 .as("걷힌다").isNull();
         assertThat(redis.opsForZSet().score(QUEUE, "성실이").block(WAIT))
                 .as("살아 있는 사람은 순번까지 그대로").isEqualTo(임계값 + 2);
+    }
+
+    /**
+     * <b>내려 적어 넓어진 한 칸에 임계 이하인 사람이 든다.</b>
+     *
+     * <p>걷으면 아직 차례가 안 온 사람이 빠지고, 다시 서면 그 뒤에 온 사람들에게
+     * 통째로 추월당한다. <b>이 상태는 임계 쓰기가 깨졌을 때만 생긴다</b> — 정상
+     * 경로는 임계도 순번도 정수라 이 칸이 비어 있다.
+     */
+    @Test
+    @DisplayName("넓어진_칸에_든_임계_이하는_안_걷는다")
+    void 넓어진_칸에_든_임계_이하는_안_걷는다() {
+        long 임계값 = 1_787_938_822_815_265L;
+        redis.opsForValue().set(ADMITTED, 임계값 + ".75").block(WAIT);
+        // 창은 (임계값 부터 열리므로 이 둘이 든다. 그런데 임계보다 아래다.
+        // **둘을 세운다.** 하나면 맨 앞만 보는 구현도 통과한다.
+        redis.opsForZSet().add(QUEUE, "차례전", 임계값 + 0.25).block(WAIT);
+        redis.opsForZSet().add(QUEUE, "차례전2", 임계값 + 0.5).block(WAIT);
+        redis.opsForZSet().add(QUEUE, "이탈자", 임계값 + 1).block(WAIT);
+        // 살아 있는 신호가 하나도 없으면 그 회차는 앞줄을 통째로 안 걷는다.
+        redis.opsForZSet().add(QUEUE, "성실이", 임계값 + 2).block(WAIT);
+        살아있다("성실이");
+
+        assertThat(swept(sweep("100"))).as("임계 위인 사람만 걷는다").isOne();
+
+        assertThat(redis.opsForZSet().score(QUEUE, "차례전").block(WAIT))
+                .as("아직 차례가 안 온 사람은 순번까지 그대로").isEqualTo(임계값 + 0.25);
+        assertThat(redis.opsForZSet().score(QUEUE, "차례전2").block(WAIT))
+                .as("둘째도 그대로").isEqualTo(임계값 + 0.5);
+        assertThat(redis.opsForHash().get(GRACE, "차례전").block(WAIT))
+                .as("이탈 기록도 안 남는다 — 남으면 다음 폴링이 종료를 받는다").isNull();
+        assertThat(redis.opsForZSet().score(QUEUE, "이탈자").block(WAIT))
+                .as("걷힌다").isNull();
+    }
+
+    /**
+     * <b>임계와 순번이 같은 사람은 창에 안 든다.</b>
+     *
+     * <p>차례가 왔는데 아직 안 걷어 간 사람이 매 회차 이 자리에 선다. 창의 왼쪽 끝
+     * 하나가 그를 지키고, 예전에는 사람마다 순번을 견줘 한 번 더 막았다 — 그 이중
+     * 방어가 없어졌으므로 경계를 직접 못 박는다.
+     */
+    @Test
+    @DisplayName("임계와_순번이_같으면_창에_안_든다")
+    void 임계와_순번이_같으면_창에_안_든다() {
+        long 임계값 = 1_787_938_822_815_265L;
+        redis.opsForValue().set(ADMITTED, String.valueOf(임계값)).block(WAIT);
+        // 차례가 왔는데 안 걷어 갔다. 생존 신호가 없어 걷는 조건은 다 갖췄다.
+        redis.opsForZSet().add(QUEUE, "차례온사람", 임계값).block(WAIT);
+        redis.opsForZSet().add(QUEUE, "이탈자", 임계값 + 1).block(WAIT);
+        redis.opsForZSet().add(QUEUE, "성실이", 임계값 + 2).block(WAIT);
+        살아있다("성실이");
+
+        assertThat(swept(sweep("100"))).as("임계 위인 사람만 걷는다").isOne();
+
+        assertThat(redis.opsForZSet().score(QUEUE, "차례온사람").block(WAIT))
+                .as("걷으면 그가 다시 서서 뒷사람들에게 통째로 추월당한다")
+                .isEqualTo((double) 임계값);
+        assertThat(redis.opsForZSet().score(QUEUE, "이탈자").block(WAIT)).isNull();
+    }
+
+    /**
+     * <b>정수 임계에서는 순번을 한 번도 안 묻는다.</b>
+     *
+     * <p>이 회차가 정상 구간의 대부분이다. 묻는 자리를 남겨 두면 창 크기에 비례하는
+     * 비용이 그대로 돌아온다 — 값이 같아서 결과로는 안 드러난다.
+     */
+    @Test
+    @DisplayName("정수_임계에서는_순번을_안_묻는다")
+    void 정수_임계에서는_순번을_안_묻는다() throws IOException {
+        long 임계값 = 1_787_938_822_815_265L;
+        redis.opsForValue().set(ADMITTED, String.valueOf(임계값)).block(WAIT);
+        for (int i = 1; i <= 5; i++) {
+            redis.opsForZSet().add(QUEUE, "m" + i, 임계값 + i).block(WAIT);
+        }
+        살아있다("m5");
+        계수를_비운다();
+
+        sweep("100");
+
+        // 생존 신호가 있는지 보는 한 번만 돈다. 넓어진 칸을 세는 것은 안 돈다.
+        //
+        // **이 단언이 오염도 같이 본다.** 배경이 청소를 한 번 더 돌면 그 회차의
+        // 생존 검사가 같은 계수를 올려 여기서 먼저 터진다.
+        assertThat(호출_수("zcount")).as("정수 임계는 셀 것이 없다").isOne();
     }
 
     @Test

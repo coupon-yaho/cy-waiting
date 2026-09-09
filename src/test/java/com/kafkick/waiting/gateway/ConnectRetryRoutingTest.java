@@ -49,9 +49,10 @@ import reactor.netty.http.server.HttpServer;
 @Tag("context")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = {"waiting.scheduler.enabled=false", "waiting.routing.enabled=true",
+                "waiting.routing.allowed-destinations=127.0.0.0/8",
                 "waiting.routing.strategy=round-robin"})
-@Import(ConnectRetryTest.TwoInstances.class)
-class ConnectRetryTest {
+@Import(ConnectRetryRoutingTest.TwoInstances.class)
+class ConnectRetryRoutingTest {
 
     private static final Instant 지금 = Instant.parse("2026-09-03T00:00:00Z");
 
@@ -107,6 +108,9 @@ class ConnectRetryTest {
     static void 상한을_줄인다(DynamicPropertyRegistry registry) {
         // 라우팅이 켜지면 이 주소는 안 쓰이지만, 검증이 값을 요구한다.
         registry.add("waiting.backend.uri", () -> "http://localhost:" + 산_대.port());
+        // 포트가 실행마다 달라 여기서 넣는다. 정적 목록으로는 못 적는다.
+        registry.add("waiting.routing.allowed-ports",
+                () -> 죽은_포트 + "," + 산_대.port());
         registry.add("waiting.backend.response-timeout", () -> 응답_상한);
         registry.add("waiting.backend.connect-timeout", () -> 연결_상한);
     }

@@ -24,7 +24,14 @@ jobs:
   hooks:
     name: 훅·문서 규범 검증
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # **예산이 이미 거의 찼다.** 마지막 초록 회차가 4분 44초로 5분의 95% 였고,
+    # 자기검증 하나를 더하니 넘겼다. 그때 잡은 "취소" 로 끝나는데 그건 멈춘 것이
+    # 아니라 시간이 다한 것이라, 로그만 보면 왜 죽었는지가 안 보인다.
+    #
+    # 지배항은 레디스 프로브 자기검증 180초와 훅 자기검증 78초다. 다음에 또
+    # 넘기면 늘리지 말고 잡을 쪼갠다 — 늘리기만 하면 언젠가 진짜 멈춘 것을
+    # 기다리게 된다.
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -89,6 +96,30 @@ jobs:
       - name: 쏠림 판정 자기검증
         run: test/load/skew-selftest.sh
 
+      - name: 라우팅 비교 판정 자기검증
+        run: test/load/routing-truth-selftest.sh
+
+      - name: 무릎 판정 자기검증
+        run: test/load/knee-selftest.sh
+
+      - name: 판정 비율 자기검증
+        run: test/load/judged-selftest.sh
+
+      # **이 판정이 착수 표에 적힐 수를 만든다.** 여기가 조용히 틀리면 하네스가
+      # 못 만든 부하를 게이트웨이가 견딘 것으로 적게 된다.
+      - name: 최대치 자기검증
+        run: test/load/peak-selftest.sh
+
+      # **합성 프로브가 이 경로를 친다.** 정적 200 을 주면 뒷단이 느리거나 죽어
+      # 있어도 서킷이 닫혀 회복이 거짓이 된다.
+      - name: 뒷단 스텁 자기검증
+        run: test/load/stub-selftest.sh
+
+      # 램프는 게이트웨이 한 대짜리 단위 시험으로만 잡혀 있다. 여기가 조용히
+      # 틀리면 회복이 계단인 회차가 충족으로 적힌다.
+      - name: 서킷 회복 자기검증
+        run: test/load/circuit-recovery-selftest.sh
+
       # 수명이 대신 걷어 준 것과 놓는 자리가 도는 것을 안 가르면, 표를 놓는
       # 줄을 통째로 지운 구현도 초록이 뜬다.
       - name: 누수 판정 자기검증
@@ -98,6 +129,11 @@ jobs:
       # 무관하다. 닿았는지부터 보는 것이 이 판정의 절반이다.
       - name: 죽은 주소 판정 자기검증
         run: test/load/dead-addr-selftest.sh
+
+      # **이 프로브가 Phase 10 착수를 정하는 값을 만든다.** 시계가 틀리면 판정이
+      # 늘 "착수" 로 나오고, 그것이 계기 고장인지 진짜 부하인지 못 가른다.
+      - name: 레디스 프로브 자기검증
+        run: test/load/probe-selftest.sh
 
       # 리포트가 "4개 시나리오" 라고 적은 채 여덟 개를 돌고 있었다. 사본이
       # 생기면 갈라지고, 갈라진 쪽을 보는 사람은 안 돈 것을 돌았다고 읽는다.

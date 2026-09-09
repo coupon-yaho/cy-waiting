@@ -22,7 +22,7 @@ services:
     environment:
       PORT: "8090"
       LATENCY_MS: "5"
-      MAX_INFLIGHT: "200"
+      MAX_INFLIGHT: "${STUB_INFLIGHT:-200}"
       # **계약을 안 지키는 뒷단도 재야 한다.** 늘 붙이면 하네스가 그 상태를 한
       # 번도 안 지나고, 그러면 "발급 계층이 안 붙이면 어떻게 되는가" 를 아무도
       # 못 본다. 기본은 붙임 — 기존 게이트가 그 상태를 잰다.
@@ -69,7 +69,7 @@ services:
         redis-cli -h redis SET 'stock:{c3}' 0
         while :; do
           redis-cli -h redis HSET capacity:coupon-svc:v1 stub-1 \
-            "{\"addr\":\"backend:8090\",\"credits\":300,\"ts\":$(date +%s)}" > /dev/null
+            "{\"addr\":\"backend:8090\",\"credits\":${BACKEND_CREDITS:-300},\"ts\":$(date +%s)}" > /dev/null
           sleep 1
         done
     healthcheck:

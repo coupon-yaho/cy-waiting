@@ -23,6 +23,9 @@ class InvariantMetricsWiringTest {
     @Autowired
     private PrometheusMeterRegistry registry;
 
+    @Autowired
+    private GatewayRegistry gateways;
+
     // **약한 참조는 여기서 못 잡는다.** 함수형 계측기는 상태 객체를 약한 참조로
     // 잡으므로, 부르는 자리에서 만든 람다를 넘기면 GC 뒤에 그 계수가 0 으로
     // 굳는다. 그런데 굳기 전에는 등록도 스크레이프도 정상이라 아래 시험들이
@@ -53,9 +56,32 @@ class InvariantMetricsWiringTest {
                 // 재고 키를 잃은 사실과, 그것이 거짓 매진으로 나간 사실 (CY-702).
                 .contains("waiting_allocation_stock_unknown_ticks_total")
                 .contains("waiting_snapshot_stock_unknown_dropped_total")
+                // **울타리 거절도 나와야 한다.** 진입 로그는 구간의 첫 건뿐이라
+                // 막힌 구간의 길이를 그것만으로는 못 센다.
+                .contains("waiting_snapshot_publish_fenced_total")
+                .contains("waiting_allocation_apply_fenced_total")
+                // 되돌릴 수 없는 쓰기가 막힌 수 (CY-894). 안 내면 그 창 동안 죽은
+                // 줄이 폴링 예산을 먹는데 아무도 못 본다.
+                .contains("waiting_queue_drop_fenced_total")
                 // 서킷을 보고 있는가 (F3 · CY-788). 안 보는 것과 닫혀 있는 것이
                 // 같은 값을 내므로, 이 게이지가 없으면 배선이 빠진 것을 못 안다.
-                .contains("waiting_circuit_wired");
+                .contains("waiting_circuit_wired")
+                // 회복 봉우리를 정상과 견주는 재료 (RC4). 판정에는 아직 안 쓰지만
+                // 밖에서 읽을 수 있어야 그 값이 맞는지 다음 사람이 본다.
+                .contains("waiting_admission_forwarded_rate");
+    }
+
+    /**
+     * <b>이름만 보면 배선이 빠진 것을 못 안다.</b> 도착 합을 안 넘기면 그 게이지가
+     * 영영 -1 인데, 이름을 세는 시험은 그대로 초록이다 (RC4).
+     */
+    @Test
+    @DisplayName("등록부에_앉은_도착_합이_게이지에_나온다")
+    void 등록부에_앉은_도착_합이_게이지에_나온다() {
+        gateways.passObserved(94, 2, 2);
+
+        assertThat(registry.scrape())
+                .contains("waiting_admission_forwarded_rate{application=\"waiting\"} 94.0");
     }
 
     /**

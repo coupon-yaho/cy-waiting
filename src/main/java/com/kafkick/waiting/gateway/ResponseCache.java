@@ -10,18 +10,14 @@ import java.util.Objects;
 import java.util.Optional;
 
 /**
- * 조회 응답을 <b>아주 짧게</b> 들고 있습니다.
- *
- * <p>코얼레싱은 동시에 도착한 것만 모읍니다. 짧은 수명을 얹어야 연속 도착까지
- * 흡수됩니다.
+ * 조회 응답을 <b>아주 짧게</b> 들고 있는다. 코얼레싱은 동시에 도착한 것만 모으므로, 짧은
+ * 수명을 얹어야 연속 도착까지 흡수된다.
  */
 public final class ResponseCache {
 
     /**
-     * 들고 있을 수 있는 <b>바이트</b>.
-     *
-     * <p>키 수로만 막으면 유계가 아닙니다 — 키 1만 × 본문 256KiB 는 2.4GiB 라,
-     * 메모리를 지키겠다고 만든 상한이 그대로 OOM 의 근거가 됩니다.
+     * 들고 있을 수 있는 <b>바이트</b>. 키 수로만 막으면 유계가 아니다 — 키 1만 × 본문
+     * 256KiB 는 2.4GiB 라, 메모리를 지키겠다고 만든 상한이 그대로 OOM 의 근거가 된다.
      */
     private final long maxBytes;
 
@@ -45,10 +41,8 @@ public final class ResponseCache {
     }
 
     /**
-     * 뒷단이 돌려준 것.
-     *
-     * <p><b>값을 복사해 들고 있습니다.</b> 준 쪽이 나중에 그 배열이나 맵을 고치면
-     * 그다음 요청들이 바뀐 것을 받습니다.
+     * 뒷단이 돌려준 것. <b>값을 복사해 들고 있는다</b> — 준 쪽이 나중에 그 배열이나 맵을
+     * 고치면 그다음 요청들이 바뀐 것을 받는다.
      */
     public record Entry(int status, Map<String, List<String>> headers, byte[] body) {
 
@@ -72,10 +66,8 @@ public final class ResponseCache {
     }
 
     /**
-     * 수명 안이면 돌려줍니다.
-     *
-     * <p><b>지난 값을 돌려주면 안 됩니다.</b> 재고가 0 이 된 뒤에도 남아 있다고
-     * 답하고, 그 사람은 매진된 쿠폰을 받으러 갑니다.
+     * 수명 안이면 돌려준다. <b>지난 값을 돌려주면 안 된다</b> — 재고가 0 이 된 뒤에도 남아
+     * 있다고 답하고, 그 사람은 매진된 쿠폰을 받으러 간다.
      */
     public synchronized Optional<Entry> get(String key) {
         Held found = held.get(key);
@@ -90,10 +82,8 @@ public final class ResponseCache {
     }
 
     /**
-     * 담습니다. <b>예산을 넘는 새 항목은 안 받습니다.</b>
-     *
-     * <p>이미 담긴 키의 갱신은 새 항목이 아닙니다 — 그것까지 막으면 가장 자주 쓰는
-     * 키가 영영 안 바뀌고, 그때 캐시는 낡은 값을 계속 냅니다.
+     * 담는다. <b>예산을 넘는 새 항목은 안 받는다.</b> 이미 담긴 키의 갱신은 새 항목이
+     * 아니다 — 그것까지 막으면 자주 쓰는 키가 영영 안 바뀌어 낡은 값을 계속 낸다.
      */
     public synchronized void put(String key, Entry entry, Duration ttl) {
         if (ttl == null || ttl.isZero() || ttl.isNegative()) {
@@ -135,12 +125,12 @@ public final class ResponseCache {
         });
     }
 
-    /** 담고 있는 키 수. 지표가 이 값을 읽습니다. */
+    /** 담고 있는 키 수. 지표가 이 값을 읽는다. */
     public synchronized int size() {
         return held.size();
     }
 
-    /** 담고 있는 바이트. 예산에 얼마나 가까운지를 지표가 읽습니다. */
+    /** 담고 있는 바이트. 예산에 얼마나 가까운지를 지표가 읽는다. */
     public synchronized long bytes() {
         return bytes;
     }

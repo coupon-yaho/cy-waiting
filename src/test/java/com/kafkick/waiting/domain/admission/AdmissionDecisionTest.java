@@ -61,4 +61,21 @@ class AdmissionDecisionTest {
                         AdmissionDecision.REJECT_OVERLOAD,
                         AdmissionDecision.RETRY_TOKEN);
     }
+
+    /**
+     * <b>낡은 재료에서만 나오는 값은 셋이다</b> (CY-906).
+     *
+     * <p>사다리가 이 셋을 낼 때는 낡음이 조건에 들어 있다. 다른 값은 신선한 재료로도
+     * 나오므로, <b>값만 보고는 그 요청이 낡음을 겪었는지 못 가른다.</b>
+     */
+    @Test
+    @DisplayName("낡은_재료에서만_나오는_값은_셋이다")
+    void 낡은_재료에서만_나오는_값은_셋이다() {
+        assertThat(Arrays.stream(AdmissionDecision.values())
+                .filter(AdmissionDecision::onlyFromStaleMaterial))
+                .containsExactlyInAnyOrder(
+                        AdmissionDecision.PASS_FAIL_OPEN,
+                        AdmissionDecision.ENQUEUE_STALE,
+                        AdmissionDecision.REJECT_OVERLOAD);
+    }
 }

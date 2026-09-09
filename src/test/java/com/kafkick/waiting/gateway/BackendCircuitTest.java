@@ -105,4 +105,31 @@ class BackendCircuitTest {
                 .isAutomaticTransitionFromOpenToHalfOpenEnabled())
                 .isTrue();
     }
+
+    /**
+     * <b>스스로 반쯤 연다</b> — 합성 프로브의 전제다 (CY-889). 프로브는 열린 구간에
+     * 허가를 안 청한다. 허가 시도가 "막은 건수" 를 오염시켜 실사용자 거절과 안
+     * 갈리기 때문이다. 수동 전환이면 아무도 그 시도를 안 해 반쯤 열린 구간이 영영
+     * 안 오고, 표본은 다시 발급 줄에서만 나온다.
+     */
+    @Test
+    @DisplayName("스스로_반쯤_열어야_프로브가_성립한다")
+    void 스스로_반쯤_열어야_프로브가_성립한다() {
+        assertThat(registry.circuitBreaker("backend-probe-premise")
+                .getCircuitBreakerConfig()
+                .isAutomaticTransitionFromOpenToHalfOpenEnabled()).isTrue();
+    }
+
+    /**
+     * <b>응답 상한이 반쯤 열린 시한보다 짧아야 한다</b> (CY-889). 길면 그 회차의 답이
+     * 다음 구간에 얹혀, 허가를 안 쓴 유령 표본이 서킷을 닫는다.
+     */
+    @Test
+    @DisplayName("응답_상한이_반쯤_열린_시한보다_짧다")
+    void 응답_상한이_반쯤_열린_시한보다_짧다() {
+        // 응답 상한은 격벽 시한 아래로 이미 묶여 있다. 그 상한이 여기 시한보다
+        // 짧으면 어떤 설정값을 넣어도 유령 표본이 안 생긴다.
+        assertThat(설정.maxWaitDurationInHalfOpenState())
+                .isGreaterThanOrEqualTo(AdmissionGatewayFilter.MAX_IN_FLIGHT);
+    }
 }

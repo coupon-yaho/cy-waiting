@@ -122,6 +122,10 @@ S == 1:   queue:{cid}     maxscore:{cid}     admitted:{cid}     grace:{cid}     
 
 전역:     gw:snapshot      gw:instances      scheduler:leader    gw:tunables
           coupons:active   coupon:policy     capacity:coupon-svc:{version}
+울타리:   {gw:snapshot}:fence   dropfence:{cid:s}   applyfence:{cid:s}
+          — 태그가 지키는 데이터와 같은 슬롯에 묶는다. 옛 임기의 쓰기를 거절한다
+임기:     {scheduler:leader}:gen
+          — 임기를 세는 값. 리더 키와 같은 슬롯이다. 수명을 안 준다 (CY-893)
 쿠폰별:   stock:{cid}      (샤드 무관 — 발급 계층이 소유)
 
 s = crc16(memberId) % S         ← 반드시 sticky (E-7)
@@ -172,7 +176,7 @@ coupon:policy  JSON. `pcall(cjson.decode, …)` 로 읽고 실패는 기본값 (
 |---|---|---|
 | `enqueue.lua` | 조회-후-등록을 나누면 새로고침 연타 시 항목 2개 등록. **시계 단조 가드도 여기서 원자적이어야 한다** (2.1절) | 단일 샤드 완결 ✓ |
 | `queue_status.lua` | 유예 복원·하트비트·배수 판정이 원자적이어야 순번 역행 없음 | 단일 샤드 완결 ✓ |
-| `leader_acquire.lua` | GET-후-SET 사이에 다른 노드가 잡을 수 있음 | 단일 키 ✓ |
+| `leader_acquire.lua` | GET-후-SET 사이에 다른 노드가 잡을 수 있음. 임기 번호도 같은 원자 구간에서 나와야 한다 | 두 키, 태그로 같은 슬롯 ✓ |
 | `sweep.lua` | 큐에서 제거와 grace 이동이 나뉘면 자리 유실 | 단일 샤드 완결 ✓ |
 | ~~`collect_demand`~~ | **Lua 쓰지 않음** — 파이프라인 ZCARD로 | 슬롯 교차 불가 |
 | ~~`apply_allocation`~~ | **Lua 쓰지 않음** — HSET + 샤드별 임계 SET | 슬롯 교차 불가 |

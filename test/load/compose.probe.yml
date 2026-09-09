@@ -1,0 +1,21 @@
+# 합성 프로브를 켜는 겹침.
+#
+# **기본 스택에 안 넣는다.** 지금까지 잰 회차는 프로브가 꺼진 조건에서 나왔고,
+# 조용히 켜면 같은 표에 다른 조건의 값이 섞인다 — 이 페이즈가 되풀이한 오류다.
+#
+# **경로는 부하를 반영해야 한다.** `/stub/ready` 는 발급과 같은 자원 상태를
+# 지나되 받은 건수에는 안 섞인다 (`backend-stub/server.js`). 정적 200 을 주는
+# 경로를 치면 뒷단이 느리거나 죽어 있어도 서킷이 닫혀 회복이 거짓이 된다.
+# 실제 뒷단이 같은 계약을 내는 것이 CY-890 이다.
+services:
+  gateway:
+    environment:
+      WAITING_BACKEND_PROBE_ENABLED: "true"
+      WAITING_BACKEND_PROBE_PATH: /stub/ready
+      # 서킷이 열린 뒤 반쯤 열리기까지가 5초다. 그보다 성기면 그 순간을 놓쳐
+      # 회복이 다음 회차까지 통째로 밀린다.
+      WAITING_BACKEND_PROBE_INTERVAL: 1s
+      # **라우팅과 같이 못 켠다.** 트래픽은 lb:// 로 흩어지는데 프로브는 고정 주소
+      # 하나만 치고, 그 결과가 전 인스턴스를 덮는 서킷에 남는다. 켜져 있으면
+      # 기동이 막히므로 겹침 순서에 상관없이 여기서 끈다.
+      WAITING_ROUTING_ENABLED: "false"

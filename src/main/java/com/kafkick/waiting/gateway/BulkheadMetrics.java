@@ -7,9 +7,8 @@ import java.util.Objects;
 import java.util.function.ToDoubleFunction;
 
 /**
- * 격벽이 지금 얼마나 차 있는지를 냅니다.
- *
- * <p><b>막은 횟수만으로는 부족합니다.</b> 그 값은 이미 막힌 뒤에야 오릅니다.
+ * 격벽이 지금 얼마나 차 있는지를 낸다. <b>막은 횟수만으로는 부족하다</b> — 그 값은 이미
+ * 막힌 뒤에야 오른다.
  */
 public final class BulkheadMetrics {
 
@@ -20,10 +19,8 @@ public final class BulkheadMetrics {
     }
 
     /**
-     * 격벽을 지표에 겁니다.
-     *
-     * <p><b>강한 참조로 등록합니다.</b> 약한 참조면 첫 GC 에 수거되어 영원히
-     * {@code NaN} 을 내는데, 스크레이프에는 줄이 그대로 나갑니다.
+     * 격벽을 지표에 건다. <b>강한 참조로 등록한다</b> — 약한 참조면 첫 GC 에 수거되어 영원히
+     * {@code NaN} 을 내는데, 스크레이프에는 줄이 그대로 나간다.
      */
     public static void bind(Bulkhead bulkhead, MeterRegistry meters) {
         Objects.requireNonNull(meters, "meters 는 필수다");
@@ -38,8 +35,8 @@ public final class BulkheadMetrics {
     }
 
     /**
-     * <b>태그를 안 붙입니다.</b> 쿠폰 식별자는 밖에서 오는 값이라 가짓수에 상한이
-     * 없고, 하나 붙는 순간 지표 하나가 메모리를 밀어냅니다 (LG-4).
+     * <b>태그를 안 붙인다.</b> 쿠폰 식별자는 밖에서 오는 값이라 가짓수에 상한이 없고,
+     * 하나 붙는 순간 지표 하나가 메모리를 밀어낸다.
      */
     private void gauge(MeterRegistry meters, String name,
             ToDoubleFunction<BulkheadMetrics> read, String why) {
@@ -49,20 +46,20 @@ public final class BulkheadMetrics {
                 .register(meters);
     }
 
-    /** 이 값이 상한에 붙으면 곧 막히기 시작합니다. */
+    /** 이 값이 상한에 붙으면 곧 막히기 시작한다. */
     private double inFlight() {
         return bulkhead.inFlight();
     }
 
-    /** 맵이 상한에 붙으면 새 쿠폰이 아예 못 들어갑니다. */
+    /** 맵이 상한에 붙으면 새 쿠폰이 아예 못 들어간다. */
     private double coupons() {
         return bulkhead.size();
     }
 
     /**
-     * <b>분자만 내면 판단이 안 됩니다.</b> 800 이라는 값만 보고는 여유인지 임박인지
-     * 모릅니다. 격벽에게 직접 묻습니다 — 여기서 따로 들면 상수를 바꾸는 날 조용히
-     * 갈라지고, 알람은 갈라진 쪽을 봅니다.
+     * <b>분자만 내면 판단이 안 된다.</b> 800 이라는 값만 보고는 여유인지 임박인지 모른다.
+     * 격벽에게 직접 묻는다 — 여기서 따로 들면 상수를 바꾸는 날 조용히 갈라지고, 알람은
+     * 갈라진 쪽을 본다.
      */
     private double maxCoupons() {
         return bulkhead.maxKeys();

@@ -1,9 +1,10 @@
 package com.kafkick.waiting.gateway;
 
-import com.kafkick.waiting.domain.admission.SecondWindowLimiter.AcquireResult;
 import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
+import com.kafkick.waiting.domain.admission.SecondWindowLimiter.AcquireResult;
 import com.kafkick.waiting.domain.queue.EtaPolicy;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
+import com.kafkick.waiting.domain.net.IpLiteral;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.beans.factory.annotation.Autowired;
 import java.net.InetSocketAddress;
@@ -22,10 +23,9 @@ import org.springframework.web.util.pattern.PathPatternParser;
 import reactor.core.publisher.Mono;
 
 /**
- * 한 사람이 노드 예산을 다 먹는 것을 막는다.
- *
- * <p>판정의 상한은 쿠폰별과 노드 전역뿐이라 <b>사용자 단위 상한이 어디에도 없다.</b>
- * 큐가 결국 막긴 하지만, 정상 사용자를 전부 큐로 미는 것 자체가 공격 성공이다.
+ * 한 사람이 노드 예산을 다 먹는 것을 막는다. 판정의 상한은 쿠폰별과 노드 전역뿐이라
+ * <b>사용자 단위 상한이 어디에도 없다.</b> 큐가 결국 막긴 하지만, 정상 사용자를 전부
+ * 큐로 미는 것 자체가 공격 성공이다.
  */
 @Component
 @Order(FilterOrder.ABUSE)
@@ -56,10 +56,8 @@ public final class AbuseLimitFilter implements WebFilter {
     private static final long IP_ISSUE_CAP = 200;
 
     /**
-     * 폴링 경로의 상한.
-     *
-     * <p><b>발급보다 느슨하다.</b> 1초 간격으로 물으라고 해 놓고 그 폴링을 막으면
-     * 정상 대기자가 끊긴다. 탭이 여럿일 수 있으니 그 열 배를 준다.
+     * 폴링 경로의 상한. <b>발급보다 느슨하다</b> — 1초 간격으로 물으라고 해 놓고 그
+     * 폴링을 막으면 정상 대기자가 끊긴다. 탭이 여럿일 수 있으니 그 열 배를 준다.
      */
     private static final long MEMBER_POLL_CAP = 10;
 
@@ -69,7 +67,7 @@ public final class AbuseLimitFilter implements WebFilter {
     /** 키 상한. 식별자를 바꿔가며 메모리를 밀어내는 것을 막는다. */
     private static final int MAX_KEYS = 100_000;
 
-    private static final PollIntervalPolicy BACKOFF = PollIntervalPolicy.of(PollIntervalPolicy.NORMAL_JITTER_RATIO);
+    private static final PollIntervalPolicy POLL = PollIntervalPolicy.standard();
 
     private final SecondWindowLimiter limiter = SecondWindowLimiter.withMaxKeys(MAX_KEYS);
     private final TrustedProxies trusted;
@@ -97,7 +95,7 @@ public final class AbuseLimitFilter implements WebFilter {
         return new AbuseLimitFilter(clock, meters, trusted);
     }
 
-    /** 난수원을 받는다. 고정하지 못하면 흔들림이 실제로 붙었는지 못 잰다 (TS-4). */
+    /** 난수원을 받는다. 고정하지 못하면 흔들림이 실제로 붙었는지 못 잰다. */
     public static AbuseLimitFilter of(Clock clock, MeterRegistry meters, DoubleSupplier random,
             TrustedProxies trusted) {
         return new AbuseLimitFilter(clock, meters, random, trusted);
@@ -168,7 +166,7 @@ public final class AbuseLimitFilter implements WebFilter {
         String candidate = last.substring(last.lastIndexOf(',') + 1).trim();
         // **주소로 안 읽히면 버린다.** 프록시 주소로 바꾸면 그 뒤의 모두가 한 몫을
         // 나눠 쓰고, 그대로 키로 쓰면 값을 바꿔가며 키를 무한히 만들 수 있다.
-        return TrustedProxies.literal(candidate) == null ? null : candidate;
+        return IpLiteral.parse(candidate) == null ? null : candidate;
     }
 
     /** 미해결 주소는 {@code getAddress()} 가 비어 있다. 그대로 부르면 터진다. */
@@ -181,15 +179,13 @@ public final class AbuseLimitFilter implements WebFilter {
     }
 
     /**
-     * <b>큐에 안 넣는다.</b> 넣으면 공격자가 자리를 차지하고, 그 자리는 정상
-     * 사용자의 것이다.
+     * <b>큐에 안 넣는다.</b> 넣으면 공격자가 정상 사용자의 자리를 차지한다. 배수도 안 건다 —
+     * 이 갈래는 판정보다 앞이라 홀더를 읽으면 요청 경로에 무관한 의존이 하나 늘고, 남용
+     * 요청을 예산에 맞춰 배려할 이유도 없다.
      */
-    // **배수를 명시적으로 안 건다.** 이 갈래는 판정보다 앞이라 재료를 아직 안
-    // 봤고, 여기서 홀더를 읽으면 요청 경로에 판정과 무관한 의존이 하나 는다.
-    // 남용 요청을 예산에 맞춰 배려할 이유도 없다.
     private Mono<Void> reject(ServerWebExchange exchange, String kind) {
         meters.counter(METRIC, "key", kind).increment();
         return error.write(exchange, ApiError.Code.RATE_LIMITED,
-                (int) BACKOFF.intervalSec(EtaPolicy.UNKNOWN, random, PollIntervalPolicy.NO_SCALE));
+                (int) POLL.intervalSec(EtaPolicy.UNKNOWN, random, PollIntervalPolicy.NO_SCALE));
     }
 }

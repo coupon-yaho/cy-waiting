@@ -12,7 +12,7 @@ import java.util.Objects;
 import java.util.Set;
 
 /**
- * 매진된 쿠폰의 큐를 <b>언제</b> 지워도 되는지 답한다 (7.3).
+ * 매진된 쿠폰의 큐를 <b>언제</b> 지워도 되는지 답한다.
  *
  * <p>지우는 일은 어댑터가 한다. 여기는 판단만 하므로 레디스 없이 잴 수 있다.
  */
@@ -44,8 +44,8 @@ public final class SoldOutCleanup {
         Objects.requireNonNull(meters, "meters 는 필수다");
         this.graceTicks = graceTicks;
         this.dropped = meters.counter("waiting.soldout.cleanup", "outcome", "dropped");
-        // **취소가 0 이면 안전 장치가 죽어 있다는 뜻이다** (7.3.2b). 그것을
-        // 알 방법이 이 계수뿐이다 — 쿠폰 ID 는 라벨로 못 쓴다 (LG-4).
+        // **취소가 0 이면 안전 장치가 죽어 있다는 뜻이다.** 그것을 알 방법이 이
+        // 계수뿐이다 — 쿠폰 ID 는 가짓수에 상한이 없어 라벨로 못 쓴다.
         this.cancelled = meters.counter("waiting.soldout.cleanup", "outcome", "cancelled");
         this.failed = meters.counter("waiting.soldout.cleanup", "outcome", "failed");
     }
@@ -55,10 +55,8 @@ public final class SoldOutCleanup {
     }
 
     /**
-     * 이번 틱에 큐를 지워도 되는 쿠폰들.
-     *
-     * <p><b>재료에 없는 쿠폰의 셈은 버린다.</b> 안 버리면 활성 목록을 드나드는
-     * 쿠폰이 옛 셈을 이어받아 유예를 다 안 채우고 지워진다.
+     * 이번 틱에 큐를 지워도 되는 쿠폰들. <b>재료에 없는 쿠폰의 셈은 버린다</b> — 안 버리면
+     * 활성 목록을 드나드는 쿠폰이 옛 셈을 이어받아 유예를 다 안 채우고 지워진다.
      */
     public List<String> due(Map<String, CouponState> coupons) {
         seen.keySet().retainAll(coupons.keySet());
@@ -72,22 +70,15 @@ public final class SoldOutCleanup {
                 fenced.remove(couponId);
                 return;
             }
-            // **대기자가 남았을 때가 지울 때다.** "줄이 빈 뒤에 지운다" 로
-            // 쓰면 영영 안 돈다 — 매진 쿠폰은 크레딧이 0 이라 아무도 입장으로
-            // 안 빠지고, 폴링은 게이트웨이가 종결하므로 큐에서 빼는 스크립트가
-            // 안 돌고, 스위퍼는 매진 중 멈춘다. `waiting` 을 줄이는 주체가
-            // 하나도 없다. 줄을 지우는 것이 곧 `waiting` 을 0 으로 만드는 일이다.
+            // **대기자가 남았을 때가 지울 때다.** "줄이 빈 뒤에" 로 쓰면 영영 안 돈다 —
+            // 매진 쿠폰은 크레딧이 0 이고 폴링도 스위퍼도 큐를 안 건드려, 줄을 지우는
+            // 것 말고는 `waiting` 을 0 으로 만드는 주체가 없다.
             if (deleted.contains(couponId)) {
                 return;
             }
             int ticks = seen.merge(couponId, 1, Integer::sum);
-            // **표를 아직 못 세운 것만 알린다** (CY-766). 울타리 표는 지웠을
-            // 때만 생기므로 아직 한 번도 안 지운 줄에는 표가 없다 — 얼었다
-            // 깨어난 옛 리더가 그 줄을 지우는 것을 못 막는다.
-            //
-            // 첫 회차에만 알리면 그 한 번이 실패했을 때 유예 내내 표가 없고,
-            // 매 회차 알리면 유예 길이만큼 같은 쓰기를 되풀이한다. 확인될
-            // 때까지만 알린다.
+            // **표를 아직 못 세운 것만 알린다.** 첫 회차에만 알리면 그 한 번이
+            // 실패했을 때 유예 내내 표가 없고, 매 회차 알리면 같은 쓰기를 되풀이한다.
             if (!fenced.contains(couponId)) {
                 claimed.add(couponId);
             }
@@ -99,10 +90,9 @@ public final class SoldOutCleanup {
     }
 
     /**
-     * 이번 회차에 <b>세기 시작한</b> 쿠폰들. {@link #due} 뒤에 읽는다.
-     *
-     * <p>울타리 표는 지웠을 때만 생기므로, 한 번도 안 지운 줄에는 표가 없다.
-     * 후보로 올리는 순간 표를 세워야 그 뒤에 오는 옛 임기가 걸린다.
+     * 이번 회차에 <b>세기 시작한</b> 쿠폰들. {@link #due} 뒤에 읽는다. 울타리 표는 지웠을
+     * 때만 생기므로 한 번도 안 지운 줄에는 표가 없다 — 후보로 올리는 순간 표를 세워야
+     * 그 뒤에 오는 옛 임기가 걸린다.
      */
     public List<String> claimed() {
         return List.copyOf(claimed);
@@ -114,10 +104,8 @@ public final class SoldOutCleanup {
     }
 
     /**
-     * 지운 것이 확인됐다.
-     *
-     * <p><b>시도 전에 표시하면 재시도가 영영 없다.</b> 부분 실패가 "다음 틱에
-     * 다시 온다" 가 아니라 영구 누수가 된다.
+     * 지운 것이 확인됐다. <b>시도 전에 표시하면 재시도가 영영 없다</b> — 부분 실패가
+     * "다음 틱에 다시 온다" 가 아니라 영구 누수가 된다.
      */
     public void dropped(List<String> couponIds) {
         deleted.addAll(couponIds);
@@ -126,22 +114,29 @@ public final class SoldOutCleanup {
 
     /** 못 지웠다. 셈을 남겨 두어 다음 틱에 다시 시도한다. */
     public void failed(List<String> couponIds) {
-        couponIds.forEach(id -> failed.increment());
+        couponIds.forEach(id -> {
+            failed.increment();
+            // **표 확인 표시를 놓는다** (CY-894). 삭제는 표가 있어야 도는데, 표가
+            // 축출되거나 수명이 다하면 다시 세울 사람이 없어 그 줄이 영영 안 지워진다.
+            // 실패한 쿠폰은 다음 회차에 후보로 다시 올려 표부터 세운다.
+            fenced.remove(id);
+        });
     }
 
     /**
-     * 리더가 됐다. <b>셈을 처음부터 준다.</b>
-     *
-     * <p>비리더 구간에 얼어 있던 셈을 이어 쓰면 유예가 설정값이 아니라 "내가
-     * 리더였던 틱 수" 가 된다 — 그 둘은 장애 중에 완전히 갈린다.
+     * 리더가 되면 <b>셈을 처음부터 준다.</b> 비리더 구간에 얼어 있던 셈을 이어 쓰면 유예가
+     * 설정값이 아니라 "내가 리더였던 틱 수" 가 된다 — 그 둘은 장애 중에 완전히 갈린다.
      */
     public void leadershipAcquired() {
         seen.clear();
         deleted.clear();
+        // **표 확인 표시도 비운다** (CY-894). 안 비우면 재승계 뒤 그 쿠폰이
+        // claim 후보에 영영 안 올라, 승계 잠금이 실패했을 때 두 번째 방어선이 없다.
+        fenced.clear();
     }
 
     private void cancelIfCounting(String couponId) {
-        // 재고가 돌아왔다. 셈과 표시를 둘 다 버려 삭제를 취소한다 (7.3.2b).
+        // 재고가 돌아왔다. 셈과 표시를 둘 다 버려 삭제를 취소한다.
         if (seen.remove(couponId) != null || deleted.remove(couponId)) {
             cancelled.increment();
         }

@@ -63,6 +63,19 @@ public final class RankTracker {
         done.add(memberId);
     }
 
+    /**
+     * 비교할 짝이 하나도 없는가.
+     *
+     * <p>사람마다 관측이 하나뿐이면 안쪽 루프가 아무에게도 안 돌아 빈 목록이
+     * 나간다. 그것은 "변화가 없었다" 가 아니라 "볼 수 없었다" 다.
+     *
+     * <p>줄을 떠난 것은 면제가 아니다 — 한 번 보고 입장한 사람도 비교한 짝이
+     * 없기는 마찬가지다.
+     */
+    private boolean nothingToCompare() {
+        return byMember.values().stream().noneMatch(seen -> seen.size() >= 2);
+    }
+
     public Set<String> members() {
         return Set.copyOf(byMember.keySet());
     }
@@ -80,6 +93,9 @@ public final class RankTracker {
     public List<String> regressions() {
         if (byMember.isEmpty()) {
             return List.of("RC2 관측이 없다 — 순번을 한 번도 안 봤다");
+        }
+        if (nothingToCompare()) {
+            return List.of("RC2 두 번 이상 본 사람이 없다 — 역행을 볼 수 없었다");
         }
         List<String> found = new ArrayList<>();
         byMember.forEach((id, seen) -> RecoveryCriteria
@@ -99,6 +115,9 @@ public final class RankTracker {
         // 한 명도 안 세우고 초록이 된다.
         if (byMember.isEmpty()) {
             return List.of("RC5 관측이 없다 — 자리를 한 번도 안 봤다");
+        }
+        if (nothingToCompare()) {
+            return List.of("RC5 두 번 이상 본 사람이 없다 — 자리 변화를 볼 수 없었다");
         }
         List<String> found = new ArrayList<>();
         byMember.forEach((id, seen) -> {

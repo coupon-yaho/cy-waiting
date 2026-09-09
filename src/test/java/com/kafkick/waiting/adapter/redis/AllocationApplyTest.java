@@ -30,6 +30,16 @@ class AllocationApplyTest extends RedisContainerSupport {
     private static final Duration WAIT = Duration.ofSeconds(10);
     private static final String QUEUE = RedisKeys.queue("c1", 1, 0);
     private static final String ADMITTED = RedisKeys.admitted("c1", 1, 0);
+    private static final String FENCE = RedisKeys.applyFence("c1", 1, 0);
+
+    /** 잠금은 두 표를 한 번에 세운다 — 삭제 쪽은 올리기만 한다 (CY-894). */
+    private static final String DROP_FENCE = RedisKeys.dropFence("c1", 1, 0);
+
+    /** 임기는 리더 락이 찍는 마이크로초 벽시계다. 작은 수는 자릿수 결함을 못 잡는다. */
+    private static final String 임기 = "1770000000123456";
+
+    /** 울타리 표의 수명(ms). 이 시험은 만료를 안 재므로 넉넉히 준다. */
+    private static final String 수명 = "3600000";
 
     @Autowired
     private ReactiveStringRedisTemplate redis;
@@ -39,7 +49,9 @@ class AllocationApplyTest extends RedisContainerSupport {
     @BeforeEach
     void 준비() {
         apply = RedisScript.of(new ClassPathResource("redis/allocation_apply.lua"), List.class);
-        redis.delete(QUEUE, ADMITTED).block(WAIT);
+        // **울타리도 지운다.** 같은 컨테이너를 쓰는 다른 시험이 올려 둔 임기가
+        // 남으면 이 클래스의 회차가 통째로 거절된다.
+        redis.delete(QUEUE, ADMITTED, FENCE).block(WAIT);
     }
 
     private void 줄_세운다(long... scores) {
@@ -50,8 +62,8 @@ class AllocationApplyTest extends RedisContainerSupport {
 
     @SuppressWarnings("unchecked")
     private List<Object> 배분(long admit) {
-        return (List<Object>) redis.execute(apply, List.of(QUEUE, ADMITTED),
-                List.of(String.valueOf(admit))).blockLast(WAIT);
+        return (List<Object>) redis.execute(apply, List.of(QUEUE, ADMITTED, FENCE),
+                List.of(String.valueOf(admit), 임기, 수명)).blockLast(WAIT);
     }
 
     private long 임계() {
@@ -241,5 +253,35 @@ class AllocationApplyTest extends RedisContainerSupport {
         // 메시지로 터져 원인을 못 찾는다.
         assertThatThrownBy(() -> redis.execute(apply, List.of(QUEUE, ADMITTED), List.of("inf"))
                 .blockLast(WAIT)).rootCause().hasMessageContaining("이하의 정수");
+    }
+
+    /**
+     * <b>잠금 스크립트도 리더가 아닌 호출을 막는다.</b> 포트가 앞에서 걸러 주므로
+     * 포트를 거쳐서는 이 갈래를 못 만든다 — 지워도 포트 시험은 초록이다. 다른
+     * 자리에서 이 스크립트를 부르는 순간 강등된 노드가 문을 제 번호로 덮는다.
+     */
+    @Test
+    @DisplayName("잠금은_리더가_아니면_안_쓴다")
+    void 잠금은_리더가_아니면_안_쓴다() {
+        RedisScript<Long> seal = RedisScript.of(
+                new ClassPathResource("redis/fence_seal.lua"), Long.class);
+
+        Long 잠갔나 = redis.execute(seal, List.of(FENCE, DROP_FENCE), List.of("0", 수명)).blockLast(WAIT);
+
+        assertThat(잠갔나).as("안 잠갔으면 0 을 내야 부르는 쪽이 셀 수 있다").isZero();
+        assertThat(redis.hasKey(FENCE).block(WAIT)).isFalse();
+    }
+
+    /** 수명이 없으면 잠근 문이 영구가 된다. 스크립트가 인자를 안 보면 그 오타가 안 드러난다. */
+    @Test
+    @DisplayName("잠금은_수명을_안_주면_거절한다")
+    void 잠금은_수명을_안_주면_거절한다() {
+        RedisScript<Long> seal = RedisScript.of(
+                new ClassPathResource("redis/fence_seal.lua"), Long.class);
+
+        assertThatThrownBy(() ->
+                redis.execute(seal, List.of(FENCE, DROP_FENCE), List.of(임기, "0")).blockLast(WAIT))
+                .rootCause()
+                .hasMessageContaining("울타리 수명은");
     }
 }

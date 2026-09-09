@@ -62,7 +62,11 @@ class GatewayRedisPortTest extends RedisContainerSupport {
     }
 
     private Mono<GatewayRedisPort.Presence> 찍는다(String id, CircuitState circuit) {
-        return port.beat(id, REAP_AFTER_SEC, VOTE_FRESH_SEC, circuit);
+        return 찍는다(id, circuit, 0);
+    }
+
+    private Mono<GatewayRedisPort.Presence> 찍는다(String id, CircuitState circuit, long passed) {
+        return port.beat(id, REAP_AFTER_SEC, VOTE_FRESH_SEC, circuit, passed);
     }
 
     @Test
@@ -103,7 +107,7 @@ class GatewayRedisPortTest extends RedisContainerSupport {
 
         GatewayRedisPort.Presence seen = 찍는다("gw-c", CircuitState.HALF_OPEN).block(WAIT);
 
-        assertThat(seen).isEqualTo(new GatewayRedisPort.Presence(3, 1, 1, 3));
+        assertThat(seen).isEqualTo(new GatewayRedisPort.Presence(3, 1, 1, 3, 0, 3));
     }
 
     /**
@@ -134,7 +138,7 @@ class GatewayRedisPortTest extends RedisContainerSupport {
         port.leave("gw-a").block(WAIT);
 
         GatewayRedisPort.Presence seen = 찍는다("gw-b", CircuitState.CLOSED).block(WAIT);
-        assertThat(seen).isEqualTo(new GatewayRedisPort.Presence(1, 0, 0, 1));
+        assertThat(seen).isEqualTo(new GatewayRedisPort.Presence(1, 0, 0, 1, 0, 1));
     }
 
     /**
@@ -148,9 +152,9 @@ class GatewayRedisPortTest extends RedisContainerSupport {
     @DisplayName("칸_수가_다른_응답은_거절한다")
     void 칸_수가_다른_응답은_거절한다() {
         // 롤백 구간에서 옛 스크립트가 돌려주는 모양이다.
-        assertThatThrownBy(() -> GatewayRedisPort.presence(List.of(3L, 1_700_000_000L, 1L)))
+        assertThatThrownBy(() -> port.presence(List.of(3L, 1_700_000_000L, 1L)))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("5 칸");
+                .hasMessageContaining("7 칸");
     }
 
     /** 칸 수가 맞으면 자리대로 읽는다. 순서를 바꾸면 여기가 빨개진다. */
@@ -158,8 +162,66 @@ class GatewayRedisPortTest extends RedisContainerSupport {
     @DisplayName("칸_수가_맞으면_자리대로_읽는다")
     void 칸_수가_맞으면_자리대로_읽는다() {
         GatewayRedisPort.Presence seen =
-                GatewayRedisPort.presence(List.of(9L, 1_700_000_000L, 3L, 2L, 7L));
+                port.presence(List.of(9L, 1_700_000_000L, 3L, 2L, 7L, 55L, 6L));
 
-        assertThat(seen).isEqualTo(new GatewayRedisPort.Presence(9, 3, 2, 7));
+        assertThat(seen).isEqualTo(new GatewayRedisPort.Presence(9, 3, 2, 7, 55, 6));
+    }
+
+    /** 회복 봉우리를 정상과 견주려면 전 노드의 도착 합을 알아야 한다 (RC4). */
+    @Test
+    @DisplayName("노드별_통과_수를_합산해_돌려준다")
+    void 노드별_통과_수를_합산해_돌려준다() {
+        찍는다("gw-a", CircuitState.CLOSED, 30).block(WAIT);
+
+        GatewayRedisPort.Presence seen = 찍는다("gw-b", CircuitState.CLOSED, 25).block(WAIT);
+
+        assertThat(seen.passed()).isEqualTo(55);
+    }
+
+    /**
+     * <b>스크립트가 못 내는 조합을 픽스처가 만들면 안 된다</b> (DS-2). 표를 낸
+     * 수가 산 수보다 많은 상태로 배선을 재면 없는 클러스터를 짚는 시험이 된다.
+     */
+    @Test
+    @DisplayName("산_수보다_많은_표는_못_만든다")
+    void 산_수보다_많은_표는_못_만든다() {
+        assertThatThrownBy(() -> new GatewayRedisPort.Presence(1, 0, 0, 2, 0, 1))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /** 통과 수를 실은 수도 산 수를 못 넘는다. 넘으면 "모름" 판정이 영영 안 선다. */
+    @Test
+    @DisplayName("산_수보다_많이_실을_수_없다")
+    void 산_수보다_많이_실을_수_없다() {
+        assertThatThrownBy(() -> new GatewayRedisPort.Presence(1, 0, 0, 1, 30, 2))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /**
+     * <b>거절이 심장을 멈추면 안 된다.</b> 스크립트는 범위를 벗어난 값에 오류를
+     * 내고, 그러면 그 노드는 생존 표시조차 못 써 임계 뒤 분모에서 빠진다.
+     */
+    @Test
+    @DisplayName("상한을_넘는_통과_수는_묶어_보낸다")
+    void 상한을_넘는_통과_수는_묶어_보낸다() {
+        GatewayRedisPort.Presence seen =
+                찍는다("gw-a", CircuitState.CLOSED, 9_000_000_000L).block(WAIT);
+
+        // 스크립트가 안 거절했다는 것과 묶인 값이 실렸다는 것을 같이 본다.
+        assertThat(seen.passed()).isEqualTo(1_000_000_000);
+        assertThat(seen.passReported()).isEqualTo(1);
+    }
+
+    /** 안 쟀으면 안 싣는다. 0 을 실으면 안 잰 노드가 0 을 잰 노드로 세어진다. */
+    @Test
+    @DisplayName("안_쟀으면_아무것도_안_싣는다")
+    void 안_쟀으면_아무것도_안_싣는다() {
+        assertThat(찍는다("gw-a", CircuitState.CLOSED, -1).block(WAIT).passReported())
+                .as("안 잰 노드는 합에 기여하지 않는다").isZero();
+
+        GatewayRedisPort.Presence 잰_영 = 찍는다("gw-a", CircuitState.CLOSED, 0).block(WAIT);
+
+        assertThat(잰_영.passReported()).as("0 을 잰 것은 실린다").isEqualTo(1);
+        assertThat(잰_영.passed()).isZero();
     }
 }

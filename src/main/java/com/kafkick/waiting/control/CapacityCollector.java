@@ -1,22 +1,28 @@
 package com.kafkick.waiting.control;
 
-import java.time.Duration;
-import java.util.Collection;
+import com.kafkick.waiting.domain.routing.AllowedDestinations;
+import com.kafkick.waiting.domain.routing.InstanceAddress;
 import com.kafkick.waiting.domain.routing.InstanceRouting;
+import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
-import java.util.List;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.atomic.AtomicLong;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
- * 뒷단이 스스로 보고한 여유를 모아 <b>전역 크레딧</b>을 만든다.
- *
- * <p>콜드 인스턴스는 자기 여유를 과대 보고한다 — 재기동 직후엔 커넥션 풀이 비어
- * "유휴" 로 보이지만 실제로는 느려서 즉시 포화된다. 그래서 램프를 건다.
+ * 뒷단이 스스로 보고한 여유를 모아 <b>전역 크레딧</b>을 만든다. 콜드 인스턴스는 자기
+ * 여유를 과대 보고한다 — 재기동 직후엔 커넥션 풀이 비어 유휴로 보이지만 실제로는
+ * 느려서 즉시 포화된다. 그래서 램프를 건다.
  */
 public final class CapacityCollector {
+
+    private static final Logger log = LoggerFactory.getLogger(CapacityCollector.class);
 
     /** 창의 제곱이 {@code long} 안에 들어오게 묶는다 — 아래 {@code require} 참조. */
     private static final Duration MAX_WINDOW = Duration.ofDays(1);
@@ -27,11 +33,8 @@ public final class CapacityCollector {
     private final long perInstanceCap;
 
     /**
-     * 인스턴스를 처음 본 시각.
-     *
-     * <p><b>램프 창을 넘겨 안 보이면 지운다.</b> 재기동은 새 식별자로 오므로(R-3)
-     * 옛 기록이 램프를 건너뛰게 하지 않는다 — 지우는 이유는 맵이 배포 이력만큼
-     * 쌓이는 것뿐이다.
+     * 인스턴스를 처음 본 시각. 램프 창을 넘겨 안 보이면 지운다 —
+     * 왜 그 창인지는 {@link #evictStale} 이 든다.
      */
     private final Map<String, Seen> seen = new LinkedHashMap<>();
 
@@ -39,58 +42,79 @@ public final class CapacityCollector {
     private record Seen(long first, long last) {
     }
 
-    /** 마지막으로 성공한 관측. 읽기가 실패하면 여기로 되돌아간다. */
     /**
-     * 유휴 비율(B-13 의 0.7)의 역수를 올림한 값. 노드당 몫이 이만큼은 돼야
-     * 한산 통과 상한이 1 이 된다.
-     *
-     * <p>비율은 게이트웨이가 주입받는 값이라 여기서 못 읽는다. 갈라지면 하한이
+     * 유휴 비율 0.7 의 역수를 올림한 값 — 노드당 몫이 이만큼은 돼야 한산 통과 상한이
+     * 1 이 된다. 비율은 게이트웨이가 주입받는 값이라 여기서 못 읽는다. 갈라지면 하한이
      * 다시 전면 차단이 되므로, 바꿀 때 두 곳을 같이 본다.
      */
     public static final int IDLE_DIVISOR = 2;
 
     /**
-     * 못 읽어도 직전 값을 그대로 쓰는 회차의 수.
-     *
-     * <p><b>R-2 의 "3회 연속 누락" 과 다른 값이다</b> — 저건 뒷단 하나를 벽시계로,
-     * 이건 우리 시야를 회차로 센다.
+     * 못 읽어도 직전 값을 그대로 쓰는 회차의 수. <b>뒷단 보고의 3회 연속 누락과 다른
+     * 값이다</b> — 저건 뒷단 하나를 벽시계로, 이건 우리 시야를 회차로 센다.
      */
     public static final int HOLD_ROUNDS = 3;
 
     /**
-     * 뒷단 보고가 기준 시각보다 앞서도 받아 주는 폭.
-     *
-     * <p>초 절단 때문에 시계가 완벽해도 한 초 어긋난다. 그 여유는 1 초지
-     * 신선도 창 전체가 아니다.
+     * 첫 회차 표시를 들고 있는 회차 수의 상한. <b>무한정 들면 예열 램프가 사라진다</b>
+     * — 뒷단이 오래 멎었다 콜드로 돌아오는 첫 회차에 그 표시가 살아 있으면 60초 램프를
+     * 통째로 건너뛰고, 콜드 인스턴스가 과대 보고한 여유가 그대로 실린다.
+     */
+    private static final int FIRST_ROUND_GRACE = HOLD_ROUNDS;
+
+    /**
+     * 뒷단 보고가 기준 시각보다 앞서도 받아 주는 폭. 초 절단 때문에 시계가 완벽해도
+     * 한 초 어긋난다 — 그 여유는 1 초지 신선도 창 전체가 아니다.
      */
     private static final long AHEAD_TOLERANCE_SEC = 1;
 
     /**
-     * 아직 한 회차도 안 걷었다. <b>승계와 신규 기동을 못 가른다</b> — 보고에
-     * 기동 시각이 실리면 그때 이 추정을 버린다 (A-13).
-     */
-    /**
      * 마지막 회차의 라우팅 목록. <b>합산에 든 값 그대로다</b> — 램프가 깎은 몫이
-     * 여기에도 실려, 갓 뜬 인스턴스로 정상 비율만큼 안 간다 (F6).
+     * 여기에도 실려, 갓 뜬 인스턴스로 정상 비율만큼 안 간다.
      */
     private volatile List<InstanceRouting> lastRoutable = List.of();
 
+    /**
+     * 신선한 보고를 아직 못 봤다. <b>그 무리는 이미 돌던 것으로 본다</b> — 리더가 바뀐
+     * 것이 뒷단이 새로 뜬 것은 아니다. {@link #FIRST_ROUND_GRACE} 회차까지만 산다.
+     */
     private boolean firstRound = true;
 
+    /** 첫 회차 표시를 든 채로 돈 회차 수. */
+    private int roundsHeld;
+
+    /** 마지막으로 성공한 관측. 읽기가 실패하면 여기로 되돌아간다. */
     private final AtomicLong lastKnown;
 
     /** 연속으로 못 읽은 회차의 수. 한 회차라도 성공하면 다시 0 이다. */
     private final AtomicLong failedRounds = new AtomicLong();
 
     /**
-     * 마지막 회차에서 실제로 <b>하한이 답이 된</b> 값. 하한이 안 걸린 회차에서는 0 이다.
-     *
-     * <p>배분이 평활 뒤에 이것을 다시 건다. 하한은 관측이 아니라 정책이라
-     * 평활에 묻히면 안 된다.
+     * 마지막 회차에서 <b>하한이 답이 된</b> 값, 안 걸렸으면 0. 배분이 평활 뒤에 이것을
+     * 다시 건다 — 하한은 관측이 아니라 정책이라 평활에 묻히면 안 된다.
      */
     private final AtomicLong lastFloor = new AtomicLong();
 
-    private CapacityCollector(Duration rampUp, Duration freshness, long floor, long perInstanceCap) {
+    /** 연결해도 되는 목적지. 켜는 쪽에서 목록이 비면 기동을 끊는다. */
+    private final AllowedDestinations allowed;
+
+    /** 허용 밖 주소를 보고한 인스턴스가 있는 구간. 회차마다 열고 닫는다. */
+    private final FailureWindow destinationDenied = FailureWindow.create();
+
+    /** 이번 회차에 목적지 때문에 뺀 수. 회차가 끝나면 창을 열거나 닫는다. */
+    private volatile int deniedThisRound;
+
+    /** 이번 회차에 처음 뺀 인스턴스. 로그에 한 대만 싣고 나머지는 수로 센다. */
+    private String firstDenied = "";
+
+    /**
+     * <b>끝난 회차의 값만 낸다.</b> 도는 중인 필드를 그대로 내면 긁는 시점에 따라
+     * 0 이나 반쯤 센 값이 나가고, 그 값으로 건 알람은 못 믿는다.
+     */
+    private final AtomicLong lastDenied = new AtomicLong();
+
+    private CapacityCollector(Duration rampUp, Duration freshness, long floor,
+            long perInstanceCap, AllowedDestinations allowed) {
         require(rampUp, "rampUp");
         require(freshness, "freshness");
         if (floor < 1) {
@@ -104,17 +128,19 @@ public final class CapacityCollector {
         this.freshness = freshness;
         this.floor = floor;
         this.perInstanceCap = perInstanceCap;
+        this.allowed = Objects.requireNonNull(allowed, "allowed 는 필수다");
         this.lastKnown = new AtomicLong(floor);
     }
 
     /**
      * <p><b>램프와 신선도는 별개 노브다.</b> 하나로 묶으면 한 값이 반대 방향 두
      * 사고를 함께 조종한다 — 크게 잡으면 죽은 인스턴스가 오래 세어지고, 작게
-     * 잡으면 틱 한 번 밀려도 전면 억제다. 신선도 값은 R-2 가 정한다.
+     * 잡으면 틱 한 번 밀려도 전면 억제다. 신선도는 보고 주기 1초에 낡음 임계 3초다.
      */
     public static CapacityCollector of(Duration rampUp, Duration freshness,
-            long floor, long perInstanceCap) {
-        return new CapacityCollector(rampUp, freshness, floor, perInstanceCap);
+            long floor, long perInstanceCap, AllowedDestinations allowed) {
+        return new CapacityCollector(rampUp, freshness, floor, perInstanceCap,
+                Objects.requireNonNull(allowed, "allowed 는 필수다"));
     }
 
     /**
@@ -125,7 +151,6 @@ public final class CapacityCollector {
         if (value.isZero() || value.isNegative()) {
             throw new IllegalArgumentException("%s 은 양수여야 한다: %s".formatted(name, value));
         }
-        // 초 단위로 재는데 500ms 를 주면 조용히 0 이 되어 나눗셈이 터진다.
         if (value.toNanosPart() != 0) {
             throw new IllegalArgumentException("%s 은 초 단위여야 한다: %s".formatted(name, value));
         }
@@ -141,10 +166,8 @@ public final class CapacityCollector {
 
 
     /**
-     * 이번 읽기가 실패했다. <b>유예 안에서는 직전 값을 지킨다.</b>
-     *
-     * <p>0건과 못 읽은 것은 다르다. <b>다만 무기한은 아니다</b> — 길어지면 그건
-     * 관측이 아니라 추측이고, 분자는 유지가 과다 방향이다.
+     * 이번 읽기가 실패했다. <b>유예 안에서는 직전 값을 지킨다</b> — 0건과 못 읽은 것은
+     * 다르다. 무기한은 아니다: 길어지면 관측이 아니라 추측이고, 유지가 과다 방향이다.
      *
      * @param nodes 지금 살아 있는 게이트웨이 수. 바닥이 이 값을 받쳐야 한다
      */
@@ -152,39 +175,54 @@ public final class CapacityCollector {
         if (failedRounds.incrementAndGet() <= HOLD_ROUNDS) {
             return;
         }
-        // **절벽이 아니라 비탈로 내려간다.** 유예가 끝나는 순간 바닥으로 떨구면
-        // 그 한 틱에 유입이 몇 배로 조여져 회복 구간이 더 나빠진다.
-        //
-        // **바닥은 걷을 때와 같은 값이다.** 설정값만 보면 노드가 그보다 늘었을 때
-        // 노드당 몫이 유휴 비율 아래로 내려가 한산 통과가 전 노드에서 막힌다.
-        //
-        // **0 은 안 올린다.** 뒷단이 스스로 "여유 0" 이라고 말한 뒤라면 그건
-        // 관측이고, 거기에 바닥을 얹으면 죽었다고 말한 뒷단에 다시 밀어넣는다.
-        // **지금 노드 수로 잰다.** 옛 바닥을 들고 있으면 양쪽으로 다 틀린다 —
-        // 노드가 늘면 그만큼 낮아 한산 통과가 막히고, 줄면 그만큼 높아 장애
-        // 중에 실제 바닥보다 많이 민다. 걷을 때와 같은 식을 쓴다.
-        long bottom = Math.max(floor, (long) Math.max(1, nodes) * IDLE_DIVISOR);
+        // **절벽이 아니라 비탈이다** — 유예가 끝나는 순간 바닥으로 떨구면 그 한 틱에
+        // 유입이 몇 배로 조여진다. 바닥은 걷을 때와 같은 식으로 지금 노드 수에서 잰다.
+        // **0 은 안 올린다** — 뒷단이 말한 여유 0 은 관측이고, 얹으면 다시 밀어넣는다.
+        long bottom = Math.max(floor, idleMinimum(nodes));
         lastKnown.updateAndGet(known -> known == 0 ? 0 : Math.max(bottom, known / 2));
     }
 
-    /** 리더가 됐다. <b>유예를 처음부터 준다</b> — 비리더 구간의 실패는 남의 회차다. */
+    /**
+     * 리더가 됐다. <b>유예를 처음부터 준다</b> — 비리더 구간의 실패는 남의 회차다.
+     * 열린 창도 같이 닫는다. 안 닫으면 지속 시간에 비리더 구간이 섞이고, 게이지가
+     * 마지막 값에 얼어붙어 안 도는 노드가 그 값을 계속 낸다.
+     */
     public void leadershipAcquired() {
         failedRounds.set(0);
+        deniedThisRound = 0;
+        lastDenied.set(0);
+        destinationDenied.exited();
     }
 
-    /**
-     * 지금 배분이 쓰는 값.
-     *
-     * <p><b>관측치가 아닐 수 있다.</b> 못 읽는 회차가 이어지면 감쇠한 값이다 —
-     * 호출부가 관측이라고 믿고 쓰면 그 차이를 못 본다.
-     */
     /** 마지막 회차에서 보낼 수 있던 인스턴스들. 스냅샷에 실어 전 노드에 보낸다. */
     public List<InstanceRouting> routable() {
         return lastRoutable;
     }
 
+    /**
+     * 지금 배분이 쓰는 값. <b>관측치가 아닐 수 있다</b> — 못 읽는 회차가 이어지면
+     * 감쇠한 값이라, 호출부가 관측이라고 믿고 쓰면 그 차이를 못 본다.
+     */
     public long lastKnown() {
         return lastKnown.get();
+    }
+
+    /**
+     * 한산 통과가 성립하는 최소 크레딧. <b>공식을 한 곳에 둔다</b> — 갈라지면 하한이
+     * 다시 전면 차단이 된다. {@link #IDLE_DIVISOR} 가 경고하는 그 위험이다.
+     */
+    public static long idleMinimum(int nodes) {
+        return (long) Math.max(1, nodes) * IDLE_DIVISOR;
+    }
+
+    /**
+     * 직전 회차에서 허용 목적지 밖이라 라우팅에서 뺀 수. 누적이 아니라 회차 값이다.
+     * <b>0 이 아닌데 후보가 비면 설정이 원인이다</b> — 그 구분을 로그로는 못 한다.
+     *
+     * @return 게이지가 받는 폭. 회차 값이라 {@code int} 로 충분하지만 등록부가 실수다
+     */
+    public double deniedDestinations() {
+        return lastDenied.get();
     }
 
     /** 마지막 회차에서 하한이 답이 됐으면 그 값, 아니면 0. */
@@ -193,10 +231,8 @@ public final class CapacityCollector {
     }
 
     /**
-     * 신선한 보고를 모아 전역 크레딧을 낸다.
-     *
-     * <p><b>처음 보는 인스턴스는 여기서 등록한다.</b> 등록을 따로 부르게 하면
-     * 빠뜨렸을 때 조용히 영원히 0 을 내고, 그 상태는 운영에 존재할 수 없다.
+     * 신선한 보고를 모아 전역 크레딧을 낸다. <b>처음 보는 인스턴스는 여기서 등록한다</b>
+     * — 등록을 따로 부르게 하면 빠뜨렸을 때 조용히 영원히 0 을 낸다.
      *
      * @param now 읽은 시각(초). {@code reportedAt} 과 <b>같은 시계</b>여야 한다
      */
@@ -211,6 +247,7 @@ public final class CapacityCollector {
         // **라우팅 목록을 같은 회차에서 만든다.** 따로 돌면 합산에 든 인스턴스와
         // 보낼 인스턴스가 갈리고, 그 갈림은 램프 구간에만 나타난다.
         List<InstanceRouting> routable = new ArrayList<>();
+        deniedThisRound = 0;
         long total = 0;
         int fresh = 0;
         // **램프가 깎은 것과 뒷단이 못 가진 것은 다르다.** 앞엣것은 우리가 만든
@@ -238,32 +275,36 @@ public final class CapacityCollector {
             // 되어 전역 크레딧이 0 이 된다 — 전면 차단이다.
             long share = usable(report, now);
             total = saturatedAdd(total, share);
-            // 주소를 안 실은 인스턴스는 크레딧에는 들고 라우팅에서만 빠진다.
-            report.routableAddress().ifPresent(address -> routable.add(
-                    new InstanceRouting(report.instanceId(), address, share)));
+            // 주소를 안 실었거나 허용 밖인 인스턴스는 크레딧에는 들고 라우팅에서만
+            // 빠진다. 크레딧에서까지 빼면 그 몫만큼 전역 크레딧이 조용히 줄어,
+            // 계약을 아직 안 따르는 배포 구간에 전체가 조여진다.
+            report.routableAddress()
+                    .filter(address -> permits(report.instanceId(), address))
+                    .ifPresent(address -> routable.add(
+                            new InstanceRouting(report.instanceId(), address, share)));
         }
         evictStale(now);
-        firstRound = false;
+        markDeniedWindow();
+        publishDenied();
+        // **관측이 있었던 회차에서만 태운다.** 한 건도 안 돈 회차가 태우면 다음 회차에
+        // 이미 돌던 무리로 못 보고 램프를 0 부터 다시 타, 크레딧이 하한에 묶인 동안 한산
+        // 통과 상한이 0 이 된다. 무한정은 아닌 이유는 위 상수가 든다.
+        if (firstRound && (fresh > 0 || ++roundsHeld >= FIRST_ROUND_GRACE)) {
+            firstRound = false;
+        }
 
         // **하한은 살아 있는 분모에 맞춘다.** 설정값으로만 재면 노드가 그보다
         // 늘었을 때 노드당 몫이 다시 0 이 된다 — 하한을 둔 이유가 사라진다.
-        long minimum = Math.max(floor, (long) Math.max(1, nodes) * IDLE_DIVISOR);
-        // **하한은 부족분을 우리가 만들었을 때만이다.** 램프가 깎아 하한 아래로
-        // 내려갔으면 되돌린다 — 안 되돌리면 노드당 몫이 유휴 비율 아래로 내려가
-        // 한산 통과 상한이 0 이 되고, 그 쿠폰이 전 노드에서 막힌다 (R1).
-        //
-        // 깎기 전 합(reported)과 같으면 램프가 손대지 않은 값이다. 그건 뒷단이
-        // 실제로 가진 것이므로 하한을 얹지 않는다 — 없는 여유를 만들어 내는
-        // 셈이고, "여유 0" 이라는 명시적 백프레셔도 그 규칙으로 0 이 남는다.
+        long minimum = Math.max(floor, idleMinimum(nodes));
+        // **하한은 부족분을 우리가 만들었을 때만이다.** 램프가 깎아 내려갔으면 되돌린다,
+        // 아니면 한산 통과 상한이 0 이 되어 그 쿠폰이 전 노드에서 막힌다. 깎기 전
+        // 합과 같으면 뒷단이 실제로 가진 값이라 안 얹는다 — 여유 0 도 그래서 0 으로 남는다.
         boolean rampMadeIt = total < minimum && total < reported;
         long credit = fresh == 0 || rampMadeIt ? minimum : total;
         lastFloor.set(fresh == 0 || rampMadeIt ? minimum : 0);
-        // **하한을 만들었으면 라우팅 몫에도 싣는다.** 램프가 전부를 0 으로 깎으면
-        // 판정은 하한으로 통과시키는데 보낼 곳이 하나도 없다 — 고르개가 여유 0 인
-        // 대를 후보로 안 보기 때문이다. 통과시켜 놓고 갈 곳이 없는 것이 가장 나쁘다.
-        //
-        // 램프 구간에는 전부 똑같이 데워지는 중이라 고르게 나눈다. 나머지는 앞에
-        // 준다 — 버리면 합이 발행한 크레딧보다 작아진다.
+        // **하한을 만들었으면 라우팅 몫에도 싣는다.** 고르개가 여유 0 인 대를 후보로 안
+        // 봐서, 통과시켜 놓고 갈 곳이 없어진다. 램프 구간엔 전부 똑같이 데워지는 중이라
+        // 고르게 나누고, 나머지는 앞에 준다 — 버리면 합이 발행한 크레딧보다 작아진다.
         List<InstanceRouting> published = routable;
         if (rampMadeIt && !routable.isEmpty()) {
             published = new ArrayList<>();
@@ -288,28 +329,66 @@ public final class CapacityCollector {
         return ((a ^ sum) & (b ^ sum)) < 0 ? Long.MAX_VALUE : sum;
     }
 
+    /**
+     * 연결해도 되는 주소인가. <b>거절은 그 인스턴스만 뺀다</b> — 회차 전체를
+     * 막으면 보고 하나가 라우팅을 끄는 손잡이가 된다.
+     */
+    private boolean permits(String instanceId, InstanceAddress address) {
+        if (allowed.permits(address)) {
+            return true;
+        }
+        // 첫 건만 기억해 회차 끝에서 한 번 남긴다. 여기서 남기면 거절 수만큼
+        // 줄이 쌓이고, 창의 회차 수도 인스턴스 수만큼 부푼다.
+        if (deniedThisRound++ == 0) {
+            firstDenied = "%s (%s)".formatted(safe(instanceId), address);
+        }
+        return false;
+    }
+
+    /**
+     * <b>회차마다 창을 열고 닫는다.</b> 안 닫으면 첫 거절 뒤로 영영 조용해서,
+     * 다른 인스턴스가 같은 일을 해도 아무 데도 안 남는다.
+     */
+    private void markDeniedWindow() {
+        if (deniedThisRound > 0) {
+            if (destinationDenied.entered()) {
+                log.warn("가용량 보고의 주소가 허용 목적지 밖이다 — {} 외 이번 회차 {}대. "
+                        + "이 인스턴스들은 크레딧에는 들지만 라우팅 후보에서 빠진다. "
+                        + "허용 목록 설정과 뒷단이 보고한 주소를 함께 본다",
+                        firstDenied, deniedThisRound);
+            }
+            return;
+        }
+        destinationDenied.exited().ifPresent(recovered ->
+                log.info("허용 목적지 밖 보고가 그쳤다 — {}초 만에, 그동안 {}회차 뺐다",
+                        recovered.elapsedSeconds(), recovered.swallowed()));
+    }
+
+    /** 회차가 끝났다. 여기서만 게이지가 움직인다. */
+    private void publishDenied() {
+        lastDenied.set(deniedThisRound);
+    }
+
+    /**
+     * 로그 한 줄을 위조하지 못하게 줄바꿈을 지운다. instanceId 는 뒷단이 정하는
+     * 값이고 길이·문자 제한이 없다.
+     */
+    private String safe(String instanceId) {
+        return instanceId.replaceAll("[\\r\\n]", "_");
+    }
+
     private boolean isFresh(CapacityReport report, long now) {
-        // **TTL 만 믿지 않는다.** TTL 은 지우는 시점이지 신선한 시점이 아니다 —
-        // 죽은 인스턴스의 마지막 보고가 TTL 동안 계속 세어진다.
-        //
-        // **앞선 것도 조금은 받는다.** 나이는 두 벽시계의 차라 뒷단이 앞서면
-        // 음수가 되는데, 그것을 낡음으로 보면 전 인스턴스가 한꺼번에 사라진다 —
-        // 뒷단은 같은 NTP 를 보므로 어긋나면 다 같이 어긋난다.
-        //
-        // **두 방향을 같은 값으로 재지 않는다.** 뒤쪽은 "얼마나 낡은 것까지 세느냐"
-        // 이고 앞쪽은 "시계가 얼마나 앞서도 봐주느냐" 다. 창을 통째로 열면 죽은
-        // 인스턴스의 마지막 보고가 창의 두 배 동안 살아 있고, 그 유령 몫이 회복
-        // 첫 구간 — 뒷단이 가장 차가울 때 — 에 그대로 실린다 (F6·RC4).
+        // **TTL 만 믿지 않는다** — 죽은 보고가 지워질 때까지 세어진다. 앞선 것도 조금은
+        // 받는다: 뒷단은 같은 NTP 를 본다. 앞뒤를 같은 값으로 열면 유령 몫이 창의 두 배를
+        // 살아 회복 첫 구간의 유입 봉우리가 정상의 1.2배를 넘는다.
         long age = now - report.reportedAt();
         return age <= freshness.toSeconds() && age >= -AHEAD_TOLERANCE_SEC;
     }
 
     /**
-     * <b>맵이 자라는 것만 막는다.</b> 재기동은 새 식별자로 오므로(R-3) 옛 기록이
-     * 램프를 건너뛰게 하지 않는다 — 지우는 이유는 배포 이력만큼 쌓이는 것뿐이다.
-     *
-     * <p>그래서 램프 창만큼 산다. 그보다 짧게 잡으면 몇 초 못 본 인스턴스가 램프를
-     * 다시 타고, 돌아오는 첫 회차에 크레딧이 하한보다도 낮아진다.
+     * <b>맵이 자라는 것만 막는다.</b> 재기동은 새 식별자로 오므로 옛 기록이 램프를
+     * 건너뛰게 하지 않는다. 그래서 램프 창만큼 산다 — 짧게 잡으면 몇 초 못 본 인스턴스가
+     * 램프를 다시 타고, 돌아오는 첫 회차에 크레딧이 하한보다도 낮아진다.
      */
     private void evictStale(long now) {
         seen.values().removeIf(s -> now - s.last() > rampUp.toSeconds());
@@ -328,12 +407,9 @@ public final class CapacityCollector {
         if (warmed >= window) {
             return credits;
         }
-        // **먼저 나눈다.** 곱하고 나누면 큰 보고에서 넘쳐 음수가 되고, 그러면
-        // 다른 인스턴스 몫을 상쇄해 전역 크레딧이 하한으로 떨어진다.
-        //
-        // 앞항은 넘치지 않는다 — 여기 오는 warmed 는 창보다 작으므로
-        // credits/window × warmed < credits 다. 방어를 넣으면 죽은 코드가 되고,
-        // 죽은 방어는 방어처럼 보여서 더 나쁘다.
+        // **먼저 나눈다** — 곱하고 나누면 큰 보고에서 넘쳐 음수가 되고, 그 음수가 다른
+        // 인스턴스 몫을 상쇄해 전역 크레딧이 하한으로 떨어진다. 앞항은 넘치지 않는다:
+        // 여기 오는 warmed 는 창보다 작아 credits/window × warmed < credits 다.
         return credits / window * warmed + credits % window * warmed / window;
     }
 }

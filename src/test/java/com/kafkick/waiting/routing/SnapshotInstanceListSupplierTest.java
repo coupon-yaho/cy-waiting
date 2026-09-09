@@ -6,8 +6,10 @@ import com.kafkick.waiting.control.GatewaySnapshot;
 import com.kafkick.waiting.control.SnapshotHolder;
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
+import com.kafkick.waiting.domain.routing.AllowedDestinations;
 import com.kafkick.waiting.domain.routing.InstanceAddress;
 import com.kafkick.waiting.domain.routing.InstanceRouting;
+import java.net.URI;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -18,6 +20,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.cloud.client.ServiceInstance;
+import org.springframework.cloud.client.loadbalancer.LoadBalancerUriTools;
 
 /**
  * 인스턴스 목록을 판정 재료에서 읽는다.
@@ -28,13 +31,16 @@ import org.springframework.cloud.client.ServiceInstance;
 @Tag("unit")
 class SnapshotInstanceListSupplierTest {
 
+    /** 시험이 쓰는 포트. 목적지와 짝으로 막지 않으면 호스트 제한이 반쪽이다. */
+    private static final List<Integer> 포트 = List.of(9000, 8080, 1);
+
     private static final Instant 지금 = Instant.parse("2026-09-02T00:00:00Z");
 
     private final SnapshotHolder holder = SnapshotHolder.of(
             Duration.ofSeconds(3), Duration.ofSeconds(5), Clock.fixed(지금, ZoneOffset.UTC));
 
-    private final SnapshotInstanceListSupplier 공급자 =
-            SnapshotInstanceListSupplier.of("coupon-service", holder);
+    private final SnapshotInstanceListSupplier 공급자 = SnapshotInstanceListSupplier.of(
+            "coupon-service", holder, AllowedDestinations.of(List.of("10.0.1.0/24"), 포트));
 
     private static InstanceRouting 인스턴스(String id, String addr, long credits) {
         return new InstanceRouting(id, InstanceAddress.parse(addr).orElseThrow(), credits);
@@ -59,6 +65,39 @@ class SnapshotInstanceListSupplierTest {
             assertThat(i.getServiceId()).isEqualTo("coupon-service");
             assertThat(i.isSecure()).isFalse();
         });
+    }
+
+    /**
+     * <b>v6 뒷단으로 갈 URI 가 서야 한다</b> (CY-888).
+     *
+     * <p>고르개가 이 인스턴스로 요청 URI 를 다시 짓는다. 대괄호 없이 이으면 못 읽는
+     * 문자열이 되고, 그 대는 후보에 있는데도 요청이 안 나간다 — 예산만 나가고 갈 곳이
+     * 없다. 목적지 판정은 벗긴 모양을 보므로 두 자리가 다른 표기를 쓴다.
+     */
+    @Test
+    @DisplayName("v6_뒷단으로_갈_URI_가_선다")
+    void v6_뒷단으로_갈_URI_가_선다() {
+        SnapshotInstanceListSupplier 공급자 = SnapshotInstanceListSupplier.of(
+                "coupon-service", holder, AllowedDestinations.of(List.of("fd00::/8"), 포트));
+        재료를_심는다(인스턴스("be-v6", "[fd00::1]:9000", 200));
+
+        ServiceInstance 대 = 공급자.get().blockFirst().getFirst();
+
+        // **여기서는 씌운 모양이다.** 목적지 판정은 이 앞에서 도메인 값으로 끝났고,
+        // 여기부터는 URI 를 짓는 자리라 표기가 필요하다.
+        assertThat(대.getHost()).isEqualTo("[fd00::1]");
+        assertThat(대.getUri()).hasToString("http://[fd00::1]:9000");
+        assertThat(LoadBalancerUriTools.reconstructURI(대,
+                URI.create("http://coupon-service/api/v1/coupons/c1/issue")))
+                .hasToString("http://[fd00::1]:9000/api/v1/coupons/c1/issue");
+        // **인코딩이 섞이면 다시 짓는 길이 갈린다.** 그쪽은 안 씌우므로 호스트가 v6 면
+        // 그 자리에서 터진다 — 쿠폰 ID 는 클라이언트가 넣고 질의는 브라우저가 인코딩한다.
+        assertThat(LoadBalancerUriTools.reconstructURI(대,
+                URI.create("http://coupon-service/api/v1/coupons/c%31/issue")))
+                .hasToString("http://[fd00::1]:9000/api/v1/coupons/c%31/issue");
+        assertThat(LoadBalancerUriTools.reconstructURI(대,
+                URI.create("http://coupon-service/api/v1/coupons/c1/issue?q=a%20b")))
+                .hasToString("http://[fd00::1]:9000/api/v1/coupons/c1/issue?q=a%20b");
     }
 
     /** <b>여유를 같이 싣는다.</b> 안 실으면 고르개가 부하율을 못 낸다. */
@@ -98,5 +137,20 @@ class SnapshotInstanceListSupplierTest {
     @DisplayName("서비스_이름을_돌려준다")
     void 서비스_이름을_돌려준다() {
         assertThat(공급자.getServiceId()).isEqualTo("coupon-service");
+    }
+
+    /**
+     * <b>발행 측만으로는 못 닫는다.</b> 라우팅이 꺼진 노드가 리더면 안 걸러진 목록이
+     * 나가고, 켠 노드가 그것을 그대로 쓴다. 실제로 연결하는 쪽이 마지막 자물쇠다.
+     */
+    @Test
+    @DisplayName("허용_밖_주소는_후보에서_빠진다")
+    void 허용_밖_주소는_후보에서_빠진다() {
+        재료를_심는다(인스턴스("be-1", "10.0.1.7:8080", 200),
+                인스턴스("evil", "evil.example.com:8080", 200));
+
+        assertThat(공급자.get().blockFirst())
+                .extracting(ServiceInstance::getInstanceId)
+                .containsExactly("be-1");
     }
 }

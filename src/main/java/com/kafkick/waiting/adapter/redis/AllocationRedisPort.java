@@ -13,8 +13,10 @@ import com.kafkick.waiting.domain.allocation.Grant;
 import com.kafkick.waiting.domain.coupon.QueueMode;
 import com.kafkick.waiting.control.QueueSweeper;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -79,6 +81,9 @@ public final class AllocationRedisPort implements SnapshotSource {
     /** 한 회차가 동시에 낼 수 있는 읽기. 무제한이면 한 회차가 커넥션을 독점한다. */
     private static final int MAX_CONCURRENT_READS = 16;
 
+    /** 잠금을 겹쳐 보내는 폭. 읽기와 값은 같지만 이름이 거짓말을 하면 안 된다. */
+    private static final int MAX_CONCURRENT_WRITES = 16;
+
     /**
      * 울타리 표 수명의 <b>하한</b>. 실제 값은 리스에서 유도한다.
      *
@@ -91,7 +96,17 @@ public final class AllocationRedisPort implements SnapshotSource {
     /** 표가 견뎌야 하는 리스의 배수. 지연된 명령이 도착할 여유까지 본다. */
     private static final int FENCE_TTL_LEASES = 4;
 
-    /** 값이 JSON 인 것은 계약이다 — 위치 기반 문자열은 필드가 늘면 깨진다 (D-C3). */
+    /**
+     * 스냅샷 울타리의 <b>하한</b>. 쿠폰별 표와 달리 <b>1시간이 아니다</b>.
+     *
+     * <p>리더가 매 틱 다시 쓰므로 막아야 할 창이 리스 하나 더하기 틱뿐이다. 길게
+     * 두면 시계가 뒤로 간 리더가 그 시간 내내 발행을 못 하고, 그동안 전 노드가
+     * 얼어붙은 재료를 읽는다 — 이 울타리가 막으려던 것보다 나쁘다. 짧아서 생기는
+     * 구멍은 없다: 거절은 수명을 갱신하지 않으므로 만료는 리스를 잃었다는 뜻이다.
+     */
+    private static final Duration MIN_SNAPSHOT_FENCE_TTL = Duration.ofSeconds(10);
+
+    /** 값이 JSON 인 것은 계약이다 — 위치 기반 문자열은 필드가 늘면 깨진다. */
     private static final ObjectMapper JSON = new ObjectMapper();
 
     private static final Logger log = LoggerFactory.getLogger(AllocationRedisPort.class);
@@ -99,6 +114,12 @@ public final class AllocationRedisPort implements SnapshotSource {
     private final ReactiveStringRedisTemplate redis;
     private static final RedisScript<List> SWEEP =
             RedisScript.of(new ClassPathResource("redis/sweep.lua"), List.class);
+
+    private static final RedisScript<Long> SEAL_FENCES =
+            RedisScript.of(new ClassPathResource("redis/fence_seal.lua"), Long.class);
+
+    private static final RedisScript<Long> SEAL_SNAPSHOT_FENCE =
+            RedisScript.of(new ClassPathResource("redis/snapshot_fence_seal.lua"), Long.class);
 
     private static final RedisScript<Long> DROP_QUEUE =
             RedisScript.of(new ClassPathResource("redis/drop_queue.lua"), Long.class);
@@ -115,6 +136,14 @@ public final class AllocationRedisPort implements SnapshotSource {
 
     /** 울타리 표의 수명. 리스보다 넉넉히 길어야 옛 리더가 사라지기 전에 안 걷힌다. */
     private final Duration fenceTtl;
+
+    /** 스냅샷 울타리의 수명. 쿠폰별 표와 이유가 달라 따로 든다. */
+    private final Duration snapshotFenceTtl;
+    /** 옛 임기라 막힌 매진 큐 삭제. 그 창 동안 죽은 줄이 폴링 예산을 먹는다. */
+    private final AtomicLong dropFenced = new AtomicLong();
+
+    private final FailureWindow dropFencedWindow = FailureWindow.create();
+
     private final FailureWindow rejected = FailureWindow.create();
     private final FailureWindow malformed = FailureWindow.create();
 
@@ -123,6 +152,15 @@ public final class AllocationRedisPort implements SnapshotSource {
     private final FailureWindow badPolicy = FailureWindow.create();
     private final FailureWindow publishTrim = FailureWindow.create();
 
+    /** 울타리가 발행을 막은 구간. 그 사이 전 노드가 얼어붙은 재료를 읽는다. */
+    private final FailureWindow publishFence = FailureWindow.create();
+
+    private final AtomicLong publishFenced = new AtomicLong();
+
+    /** 울타리가 막은 입장 적용 건수. <b>회차가 아니라 쿠폰 단위다</b>. */
+    private final AtomicLong applyFenced = new AtomicLong();
+
+
     /**
      * 상한을 넘겨 버린 미상 표시의 누적 수. <b>0 이 아니면 거짓 매진이 나갔다.</b>
      *
@@ -130,7 +168,7 @@ public final class AllocationRedisPort implements SnapshotSource {
      * 쪽만 세는 셈이다.
      */
     private final AtomicLong markersDropped = new AtomicLong();
-    /** 신선도의 기준 시각. 뒤로 가는 것을 여기서 막는다 (A-9). */
+    /** 신선도의 기준 시각. 뒤로 가는 것을 여기서 막는다. */
     private final ServerClock serverClock = ServerClock.create();
 
     /** 마지막으로 성공한 정책 회차. 읽기가 실패하면 여기로 되돌아간다. */
@@ -149,14 +187,20 @@ public final class AllocationRedisPort implements SnapshotSource {
                 MIN_FENCE_TTL.compareTo(
                                 properties.leader().lease().multipliedBy(FENCE_TTL_LEASES)) > 0
                         ? MIN_FENCE_TTL
+                        : properties.leader().lease().multipliedBy(FENCE_TTL_LEASES),
+                MIN_SNAPSHOT_FENCE_TTL.compareTo(
+                                properties.leader().lease().multipliedBy(FENCE_TTL_LEASES)) > 0
+                        ? MIN_SNAPSHOT_FENCE_TTL
                         : properties.leader().lease().multipliedBy(FENCE_TTL_LEASES));
     }
 
 
 
     private AllocationRedisPort(ReactiveStringRedisTemplate redis, int shards,
-            Duration fenceTtl) {
+            Duration fenceTtl, Duration snapshotFenceTtl) {
         this.fenceTtl = Objects.requireNonNull(fenceTtl, "fenceTtl 은 필수다");
+        this.snapshotFenceTtl =
+                Objects.requireNonNull(snapshotFenceTtl, "snapshotFenceTtl 은 필수다");
         if (shards < 1) {
             throw new IllegalArgumentException("shards 는 1 이상이어야 한다: %d".formatted(shards));
         }
@@ -165,7 +209,16 @@ public final class AllocationRedisPort implements SnapshotSource {
     }
 
     public static AllocationRedisPort of(ReactiveStringRedisTemplate redis, int shards) {
-        return new AllocationRedisPort(redis, shards, MIN_FENCE_TTL);
+        return new AllocationRedisPort(redis, shards, MIN_FENCE_TTL, MIN_SNAPSHOT_FENCE_TTL);
+    }
+
+    /**
+     * 울타리 수명을 짧게 준다. <b>시험이 스스로 풀리는 것을 재려면 필요하다</b> —
+     * 운영 값으로는 그 갈래를 재는 데 열 초가 걸린다.
+     */
+    static AllocationRedisPort withSnapshotFenceTtl(ReactiveStringRedisTemplate redis,
+            int shards, Duration snapshotFenceTtl) {
+        return new AllocationRedisPort(redis, shards, MIN_FENCE_TTL, snapshotFenceTtl);
     }
 
     /** 상한을 넘겨 버린 미상 표시의 누적 수. 0 이 아니면 거짓 매진이 나갔다. */
@@ -182,7 +235,7 @@ public final class AllocationRedisPort implements SnapshotSource {
      * 뒷단이 스스로 적어 둔 여유를 읽는다.
      *
      * <p><b>밖에서 쓰는 키라 아무 값이나 들어온다.</b> 깨진 값 하나가 회차를 죽이면
-     * 멀쩡한 인스턴스 몫까지 사라져 전역 크레딧이 하한으로 떨어진다 (4.4.6).
+     * 멀쩡한 인스턴스 몫까지 사라져 전역 크레딧이 하한으로 떨어진다.
      */
     public Mono<CapacitySample> capacitySample() {
         AtomicBoolean dropped = new AtomicBoolean();
@@ -234,16 +287,15 @@ public final class AllocationRedisPort implements SnapshotSource {
                     || ts == null || !ts.canConvertToLong()) {
                 return drop(instanceId, "필드가 없거나 수가 아니다", dropped);
             }
-            // **주소가 없거나 모양이 어긋나도 보고는 산다** (E-12). 크레딧에는
+            // **주소가 없거나 모양이 어긋나도 보고는 산다.** 크레딧에는
             // 들고 라우팅 후보에서만 빠진다 — 버리면 그 몫만큼 전역 크레딧이
             // 조용히 줄어, 계약을 아직 안 따르는 배포 구간에 전체가 조여진다.
             JsonNode addr = node.get("addr");
             InstanceAddress parsed = addr == null || !addr.isTextual()
                     ? null : InstanceAddress.parse(addr.asText()).orElse(null);
             // **모양이 어긋난 것만 남긴다.** 아예 없는 것은 계약을 아직 안 따르는
-            // 배포 구간의 정상 상태라 시끄럽게 하면 안 되고, 있는데 못 읽는 것은
-            // 계약 위반이라 사람이 봐야 한다 — 안 남기면 그 대가 영영 라우팅에서
-            // 빠진 채로 아무도 모른다.
+            // 배포 구간의 정상 상태다. 있는데 못 읽는 것은 계약 위반이라, 안 남기면
+            // 그 대가 영영 라우팅에서 빠진 채로 아무도 모른다.
             if (parsed == null && addr != null && addr.isTextual() && addressMalformed.entered()) {
                 log.warn("가용량 보고의 주소가 모양에 안 맞는다 — {}. 이 인스턴스는 "
                         + "크레딧에는 들지만 라우팅 후보에서 빠진다", instanceId);
@@ -264,13 +316,6 @@ public final class AllocationRedisPort implements SnapshotSource {
         return null;
     }
 
-    /**
-     * 목록에 없는 쿠폰은 보지 않는다. 끝난 쿠폰까지 보면 매 틱 왕복만 늘어난다.
-     *
-     * <p><b>밖에서 쓰는 키라 아무 값이나 들어온다.</b> 키에 못 쓰는 멤버 하나가
-     * 회차를 죽이면 멀쩡한 쿠폰 전부의 배분이 멎는데, 사람이 목록을 고치기 전에는
-     * 안 풀린다. 그래서 걸러 내되 걸러 냈다는 사실을 남긴다.
-     */
     /**
      * 배분 대상과 <b>그것을 읽은 레디스 시각</b>.
      *
@@ -306,6 +351,13 @@ public final class AllocationRedisPort implements SnapshotSource {
                 });
     }
 
+    /**
+     * 목록에 없는 쿠폰은 보지 않는다. 끝난 쿠폰까지 보면 매 틱 왕복만 늘어난다.
+     *
+     * <p><b>밖에서 쓰는 키라 아무 값이나 들어온다.</b> 키에 못 쓰는 멤버 하나가
+     * 회차를 죽이면 멀쩡한 쿠폰 전부의 배분이 멎는데, 사람이 목록을 고치기 전에는
+     * 안 풀린다. 그래서 걸러 내되 걸러 냈다는 사실을 남긴다.
+     */
     public Mono<List<String>> activeCoupons() {
         AtomicBoolean dropped = new AtomicBoolean();
         return redis.opsForSet().members(RedisKeys.ACTIVE_COUPONS)
@@ -458,81 +510,89 @@ public final class AllocationRedisPort implements SnapshotSource {
         }
         return Flux.fromIterable(keys)
                 .flatMap(key -> redis.opsForZSet().size(key).defaultIfEmpty(0L))
-                .reduce(0L, Long::sum);
+                .reduce(0L, (a, b) -> a + b);
     }
 
     /**
-     * 매진된 쿠폰의 줄과 딸린 키를 지운다 (7.3.1·7.3.3).
-     *
-     * <p><b>한 쿠폰이 실패해도 나머지는 지운다.</b> 정리가 배분을 막으면
-     * 안 지워진 것 하나가 그 틱 전체를 세운다 (7.3.4).
-     */
-    /**
-     * 세기 시작한 쿠폰의 줄 옆에 <b>울타리 표만</b> 세운다 (CY-766).
+     * 세기 시작한 쿠폰의 줄 옆에 <b>울타리 표만</b> 세운다.
      *
      * <p>표는 지웠을 때만 생기므로 한 번도 안 지운 줄에는 표가 없다. 후보로
      * 올리는 순간 세워야 그 뒤에 오는 옛 회차가 걸린다.
      */
     public Mono<List<String>> claimSoldOutQueues(List<String> couponIds, long fence) {
-        if (couponIds.isEmpty() || shards != 1) {
+        // **리더가 아니면 세울 자격도 없다.** 0 을 그대로 넘기면 스크립트가 앞에서
+        // 되돌아 0 을 내는데, 그것을 "표가 섰다" 로 접으면 그 쿠폰이 다시는 후보에
+        // 안 오른다.
+        if (couponIds.isEmpty() || shards != 1 || fence <= 0) {
             return Mono.just(List.of());
         }
         return Flux.fromIterable(couponIds)
                 // **선 것만 돌려준다.** 실패한 것을 확인으로 치면 그 줄은 표
                 // 없이 유예를 보내고, 옛 회차가 그대로 지운다.
                 .flatMap(id -> runDrop(id, fence, false)
+                        // **-1 은 내 표가 안 섰다는 뜻이다** (CY-894). 그것을 확인으로
+                        // 접으면 그 쿠폰이 다시는 후보에 안 올라 표 없이 유예를 보낸다.
+                        .filter(result -> result >= 0)
                         .map(ignored -> id)
                         .onErrorResume(e -> Mono.empty()), MAX_CONCURRENT_READS)
                 .collectList()
                 .map(List::copyOf);
     }
 
+    /**
+     * 매진된 쿠폰의 줄과 딸린 키를 지운다.
+     *
+     * <p><b>한 쿠폰이 실패해도 나머지는 지운다.</b> 정리가 배분을 막으면
+     * 안 지워진 것 하나가 그 틱 전체를 세운다.
+     */
     public Mono<List<String>> dropSoldOutQueues(List<String> couponIds, long fence) {
         if (couponIds.isEmpty()) {
             return Mono.just(List.of());
         }
-        // **샤딩을 켜면 지울 수 없다.** 재고는 샤드 무관 키라 줄과 슬롯이
-        // 갈린다 — 클러스터는 스크립트를 실행 전에 거절하고, 단독 배치는 받아
-        // 주지만 그때는 아래가 샤드 0 만 지워 나머지 샤드의 줄이 영구 고아가
-        // 된다. 그 줄의 `waiting` 을 0 으로 만드는 주체가 삭제뿐이라 폴링
-        // 예산을 영원히 먹는다. 둘 다 조용해서 여기서 소리 나게 막는다.
+        // **샤딩을 켜면 지울 수 없다.** 재고는 샤드 무관 키라 줄과 슬롯이 갈린다.
+        // 단독 배치는 받아 주지만 샤드 0 만 지워 나머지 샤드의 줄이 영구 고아가
+        // 되고, 그 줄은 폴링 예산을 영원히 먹는다. 조용해서 여기서 소리 나게 막는다.
         if (shards != 1) {
             return Mono.error(new IllegalStateException(
                     "샤드가 여럿이면 매진 큐를 못 지운다 — 재고 세대가 있어야 한다: %d"
                             .formatted(shards)));
         }
+        long before = dropFenced.get();
         return Flux.fromIterable(couponIds)
-                // **쿠폰별 결과를 그대로 돌려준다.** 합으로 접으면 한 쿠폰이
-                // 실패해도 전체가 성공으로 보이고, 실패한 것까지 지운 것으로
-                // 표시돼 다음 틱에 다시 안 온다 (7.3.4).
-                // **지운 것만 남긴다.** 살아나서 안 지운 쿠폰까지 돌려주면
-                // 판단이 "지웠다" 로 읽어 다음 회차에 다시 안 온다.
+                // **지운 것만 쿠폰별로 돌려준다.** 합으로 접거나 안 지운 쿠폰까지
+                // 실으면 부르는 쪽이 그것을 "지웠다" 로 읽어, 실패한 쿠폰과 살아난
+                // 쿠폰이 다음 틱에 다시 안 온다.
                 .flatMap(id -> dropOne(id, fence)
                         .filter(Boolean::booleanValue)
                         .map(dropped -> id)
                         .onErrorResume(e -> Mono.empty()), MAX_CONCURRENT_READS)
-                .collectList();
+                .collectList()
+                // **회차 단위로 판정한다.** 쿠폰마다 열고 닫으면 한 틱 안에서 창이
+                // 여러 번 뒤집히고, 유령이 실제로 지운 회차가 "다시 지난다" 로 찍힌다.
+                .doOnNext(dropped -> judgeFenceWindow(dropFenced.get() - before, fence));
+    }
+
+    /** 이 회차에 막힌 것이 있었나. 진입은 구간의 첫 회차에만, 해제는 짝으로 남긴다. */
+    private void judgeFenceWindow(long fencedNow, long fence) {
+        if (fencedNow > 0) {
+            if (dropFencedWindow.entered()) {
+                log.warn("매진 큐 삭제가 막혔다 — 옛 임기 {} 다. 이 회차에 {}건. "
+                        + "그 줄은 다음 리더가 지운다", fence, fencedNow);
+            }
+            return;
+        }
+        dropFencedWindow.exited().ifPresent(recovered ->
+                log.info("매진 큐 삭제가 다시 지난다 — {}초 동안 {}회차가 막혔다",
+                        recovered.elapsedSeconds(), recovered.swallowed()));
     }
 
     /**
-     * 줄과 생존 신호만 지운다.
-     *
-     * <p>지우는 것을 좁힌 이유는 아래 셋이 전부 <b>되돌릴 수 없는 손해</b>를
-     * 만들기 때문이다.
+     * 줄과 생존 신호만 지운다. 나머지 셋은 지우면 <b>되돌릴 수 없는 손해</b>가 난다.
+     * `admitted:` 는 입장 임계의 단조성이 깨져 입장한 사람이 토큰을 두 번 받고,
+     * `grace:` 는 차례가 왔던 사람이 종료를 안 받게 막는 유일한 장치이며,
+     * `coupons:active` 는 발급 계층 소유라 빼는 순간 매진 종결이 꺼져 미지 쿠폰이
+     * fail-open 으로 흐른다. 재고는 쓰기 직전 스크립트 안에서 다시 본다.
      */
-    // `admitted:` — 입장 임계다. 지우면 임계가 뒤로 가고, 그건 A-7 이 "두 번
-    //   적용돼도 안전하다" 로 세운 단조성을 깨는 이 저장소의 유일한 쓰기가 된다.
-    //   이미 입장한 사람이 두 번째 토큰을 받을 수 있다.
-    // `grace:` — `a:` 입장 표시가 여기 있다. 차례가 왔던 사람이 종료를 안 받게
-    //   막는 유일한 장치이고 보관이 5분이다. 정리가 그것을 앞질러 지우면 안 된다.
-    // `coupons:active` — 이 집합은 `cy-be` 소유다 (O-3). 게이트웨이는 읽기만
-    //   한다. 그리고 빼는 순간 그 쿠폰이 스냅샷에서 사라져 **매진 종결이 통째로
-    //   꺼진다** — 조회는 레디스로 내려가고, 발급은 404 가 되며, 재료가 낡으면
-    //   미지 쿠폰 경로가 fail-open 으로 뒷단에 흘린다. 사다리 1번을 우회하는 셈이다.
-    // **쓰기 직전에 재고를 다시 본다** (5.3.1 · CY-765). 수집과 삭제 사이에
-    //   재입고되면 살아난 줄을 지운다 — 메모리 안의 취소는 다음 스냅샷이 와야
-    //   도는데 삭제는 그 전에 나간다. 그 검사가 스크립트 안에 있어야 읽고
-    //   지우는 사이가 안 벌어진다.
     private Mono<Long> runDrop(String couponId, long fence, boolean delete) {
         return redis.execute(DROP_QUEUE,
                         List.of(RedisKeys.queue(couponId, shards, 0),
@@ -547,13 +607,21 @@ public final class AllocationRedisPort implements SnapshotSource {
 
     private Mono<Boolean> dropOne(String couponId, long fence) {
         return runDrop(couponId, fence, true)
-                .map(dropped -> dropped == 1L)
+                .map(result -> {
+                    // **막힌 것을 안 지운 것과 가른다.** 둘이 같으면 최대 유예 내내
+                    // 죽은 줄이 폴링 예산을 먹는데 아무도 못 본다.
+                    // -2 는 표가 아예 없다는 뜻이다. 잠금과 후보 표시가 둘 다
+                    // 실패한 것이라, 자기가 유일한 리더라는 근거가 없다.
+                    if (result < 0) {
+                        dropFenced.incrementAndGet();
+                        return false;
+                    }
+                    return result == 1L;
+                })
                 .onErrorResume(e -> {
-                    // **다음 틱에 다시 온다.** 여기서 터뜨리면 안 지워진 것
-                    // 하나가 그 틱의 배분을 통째로 세운다 (7.3.4).
-                    // **억제하지 않는다.** 이 저장소의 유일한 비가역 쓰기이고,
-                    // 실패는 부르는 쪽에서 삼켜져 아무 신호도 안 간다. 창을
-                    // 걸면 프로세스 수명에 한 줄만 남고 정리가 멎어도 조용하다.
+                    // **매 건 남긴다.** 이 저장소의 유일한 비가역 쓰기인데 실패는
+                    // 부르는 쪽에서 삼켜진다. 창을 걸면 프로세스 수명에 한 줄만
+                    // 남아 정리가 멎어도 조용하다.
                     log.warn("매진 큐 정리 실패 — 다음 틱에 다시 한다: 쿠폰={} {}",
                             couponId, e.toString());
                     return Mono.error(e);
@@ -561,7 +629,7 @@ public final class AllocationRedisPort implements SnapshotSource {
     }
 
     /**
-     * 이탈자를 걷어 낸다 (7.4).
+     * 이탈자를 걷어 낸다.
      *
      * <p><b>커서를 쿠폰별로 이어 간다.</b> 매번 0 에서 시작하면 해시 앞쪽만
      * 계속 훑고 뒤쪽 기록은 영영 안 지워진다.
@@ -628,7 +696,7 @@ public final class AllocationRedisPort implements SnapshotSource {
      * 쿠폰별 재고. <b>못 읽으면 담지 않는다</b> — 키가 없거나 수가 아닐 때다.
      *
      * <p>빠진 자리를 0 으로 접으면 재고 키를 잃은 쿠폰이 매진이 된다. 부르는
-     * 쪽이 그 빈자리를 미상으로 싣는다 (3.1).
+     * 쪽이 그 빈자리를 미상으로 싣는다.
      */
     public Mono<Map<String, Long>> stocks(List<String> couponIds) {
         List<String> keys = couponIds.stream().map(RedisKeys::stock).toList();
@@ -645,25 +713,109 @@ public final class AllocationRedisPort implements SnapshotSource {
     }
 
     /**
+     * 발행의 문을 새 임기로 잠근다. <b>쿠폰 쪽과 나란히 돈다</b> — 슬롯이 갈려
+     * 한 스크립트로 못 묶고, 이어 붙이면 배분이 안 도는 시간이 곱해진다.
+     *
+     * <p>안 잠그면 새 리더의 첫 발행 전까지 유령의 발행이 자기 번호와 같아서
+     * 통과한다. 그 회차의 정리와 청소가 그 뒤에 매달려 같이 나간다 (CY-911).
+     *
+     * @return 1 이면 잠갔다. 0 은 리더가 아니거나 이미 더 앞선 임기가 서 있다
+     */
+    public Mono<Long> sealSnapshotFence(long fence) {
+        if (fence <= 0) {
+            return Mono.just(0L);
+        }
+        return redis.execute(SEAL_SNAPSHOT_FENCE, List.of(RedisKeys.SNAPSHOT_FENCE),
+                        List.of(Long.toString(fence),
+                                Long.toString(snapshotFenceTtl.toMillis())))
+                .next()
+                .map(Number::longValue);
+    }
+
+    /**
+     * 활성 쿠폰의 문을 새 임기로 잠근다. <b>승계 직후에 부른다</b> — 적용만으로는
+     * 그 쿠폰에 크레딧이 갈 때까지 표에 옛 임기가 남고, 그 창에 유령이 먼저
+     * 도착하면 자기 번호와 같아서 통과한다.
+     *
+     * <p><b>샤드 0 에만 나간다.</b> 적용과 같은 자리라 지금은 맞지만, 샤딩을 켜면
+     * 나머지 샤드의 문이 안 잠긴다.
+     *
+     * @return 잠근 쿠폰 수. 넘긴 수보다 적으면 그만큼 못 잠갔다
+     */
+    public Mono<Long> sealFences(Collection<String> couponIds, long fence) {
+        // **승계에서 창을 닫는다.** 리더십을 잃으면 정리가 안 돌아 해제가 영영
+        // 안 찍히고, 다음 사건은 진입이 이미 열려 있어 한 줄도 안 남는다.
+        dropFencedWindow.exited().ifPresent(recovered ->
+                log.info("매진 큐 삭제 막힘 구간이 승계로 끝났다 — {}초 동안 {}회차",
+                        recovered.elapsedSeconds(), recovered.swallowed()));
+        if (fence <= 0 || couponIds.isEmpty()) {
+            return Mono.just(0L);
+        }
+        // **샤드 0 만 잠근다.** 매진 큐 삭제 자체가 샤드가 여럿이면 거절하므로
+        // 지금은 맞지만, 그 빗장을 푸는 날 나머지 샤드의 문이 안 잠긴 채로
+        // 성공을 낸다 — 잠갔다는 로그가 있는데 줄이 지워진다.
+        if (shards != 1) {
+            return Mono.error(new IllegalStateException(
+                    "샤드가 여럿이면 울타리를 다 못 잠근다: %d".formatted(shards)));
+        }
+        return Flux.fromIterable(couponIds)
+                .flatMap(couponId -> redis.execute(SEAL_FENCES,
+                                List.of(RedisKeys.applyFence(couponId, shards, 0),
+                                        RedisKeys.dropFence(couponId, shards, 0)),
+                                List.of(Long.toString(fence),
+                                        Long.toString(fenceTtl.toMillis())))
+                        .next()
+                        // **스크립트가 낸 값을 그대로 접는다.** 1 로 갈면 "예외가 안
+                        // 난 수" 가 되어, 안 잠근 것을 잠갔다고 센다.
+                        .map(Number::longValue)
+                        // 하나가 실패해도 나머지는 잠근다. 못 잠근 쿠폰은 그 자리에서
+                        // 다시 막는다 — 안 잠긴 채로 지나가지 않는다.
+                        .onErrorReturn(0L), MAX_CONCURRENT_WRITES)
+                .reduce(0L, Long::sum);
+    }
+
+    /** 옛 임기라 막힌 매진 큐 삭제 건수. */
+    public long dropFenced() {
+        return dropFenced.get();
+    }
+
+    /**
      * 들어온 인원을 돌려준다. 나눠 준 몫과 다르다 — 큐가 짧으면 남는다.
      *
      * <p><b>샤드가 하나인 동안만 옳다.</b> 여럿이면 몫을 샤드에 나눠 각각
      * 적용해야 하는데, 지금은 0번에만 나간다. 그래서 기동에서 하나로 막는다.
+     *
+     * @param fence 이 회차의 임기. 옛 임기는 임계를 안 올린다. 0 이면 리더가 아니다
      */
-    public Mono<Long> apply(Grant grant) {
+    public Mono<Long> apply(Grant grant, long fence) {
         return redis.execute(APPLY,
                         List.of(RedisKeys.queue(grant.couponId(), shards, 0),
-                                RedisKeys.admitted(grant.couponId(), shards, 0)),
-                        List.of(Long.toString(grant.credit())))
+                                RedisKeys.admitted(grant.couponId(), shards, 0),
+                                RedisKeys.applyFence(grant.couponId(), shards, 0)),
+                        List.of(Long.toString(grant.credit()), Long.toString(fence),
+                                Long.toString(fenceTtl.toMillis())))
                 .next()
-                .map(result -> Long.parseLong(String.valueOf(((List<?>) result).get(1))));
+                .flatMap(result -> {
+                    List<?> counts = (List<?>) result;
+                    // **칸 수로 가른다.** {-1, 0} 은 임계가 없고 들일 사람도 없는
+                    // 정상 회차와 같은 값이라, 그것으로 가르면 새 쿠폰과 빈 큐가
+                    // 거절로 오독된다.
+                    if (counts.size() < 3) {
+                        return Mono.just(Long.parseLong(String.valueOf(counts.get(1))));
+                    }
+                    applyFenced.incrementAndGet();
+                    // **오류로 올린다.** 회차가 몫을 0 으로 접는 자리가 이미 있고,
+                    // 값으로 0 을 내면 임계가 안 올랐는데 몫만 실려 나간다.
+                    return Mono.error(new FencedOutException(grant.couponId(), fence,
+                            Long.parseLong(String.valueOf(counts.get(2)))));
+                });
     }
 
     /**
-     * 운영자가 적은 값을 읽습니다 (P-1).
+     * 운영자가 배포 없이 고친 값을 읽는다.
      *
-     * <p><b>리더만 읽습니다.</b> 전 노드가 매 틱 읽으면 그 자체가 요청 경로 밖의
-     * 부하이고, 노드마다 다른 값을 볼 수 있습니다 — 스냅샷으로 퍼뜨리는 이유입니다.
+     * <p><b>리더만 읽는다.</b> 전 노드가 매 틱 읽으면 그 자체가 요청 경로 밖의
+     * 부하이고, 노드마다 다른 값을 볼 수 있다 — 스냅샷으로 퍼뜨리는 이유다.
      */
     public Mono<String> readTunables() {
         return redis.opsForValue().get(RedisKeys.TUNABLES);
@@ -674,8 +826,10 @@ public final class AllocationRedisPort implements SnapshotSource {
      *
      * <p>지우고 쓰는 것을 나눠 치면 그 사이에 끊길 때 키가 없는 채로 남고,
      * 전 노드가 판정 재료를 잃는다. 근거는 스크립트 주석에 있다.
+     *
+     * @param fence 이 발행의 임기. 옛 임기는 새 임기를 못 덮는다. 0 이면 리더가 아니다
      */
-    public Mono<Void> publish(Map<String, String> hash) {
+    public Mono<Void> publish(Map<String, String> hash, long fence) {
         if (hash.isEmpty()) {
             return Mono.error(new IllegalArgumentException("빈 스냅샷은 발행하지 않는다"));
         }
@@ -685,26 +839,89 @@ public final class AllocationRedisPort implements SnapshotSource {
                     "한 번에 실을 수 있는 필드를 넘었다: %d > %d"
                             .formatted(toPublish.size(), MAX_PUBLISH_FIELDS)));
         }
-        List<String> args = new ArrayList<>(toPublish.size() * 2);
+        List<String> args = new ArrayList<>(toPublish.size() * 2 + 2);
+        args.add(Long.toString(fence));
+        args.add(Long.toString(snapshotFenceTtl.toMillis()));
         toPublish.forEach((field, value) -> {
             args.add(field);
             args.add(value);
         });
         int dropped = hash.size() - toPublish.size();
-        return redis.execute(PUBLISH, List.of(RedisKeys.SNAPSHOT), args).next()
+        return redis.execute(PUBLISH,
+                        List.of(RedisKeys.SNAPSHOT, RedisKeys.SNAPSHOT_FENCE), args).next()
+                .flatMap(result -> {
+                    long blockedBy = blockedBy(result);
+                    if (blockedBy < 0) {
+                        publishFence.exited().ifPresent(recovered -> log.info(
+                                "발행이 다시 나간다 — {}초 만에, 그동안 {}회차 막혔다",
+                                recovered.elapsedSeconds(), recovered.swallowed()));
+                        return Mono.just(result);
+                    }
+                    publishFenced.incrementAndGet();
+                    // 구간의 첫 건만 남긴다. 막힌 동안 전 노드가 얼어붙은 재료를
+                    // 읽으므로, 이 줄이 그 상태의 유일한 원인 신호다.
+                    if (publishFence.entered()) {
+                        log.error("발행이 울타리에 막혔다 — 이 노드의 임기 {}, 마지막으로 "
+                                + "쓴 임기 {}. 전 노드가 곧 낡은 재료를 읽는다", fence, blockedBy);
+                    }
+                    return Mono.<List<?>>error(new FencedOutException(fence, blockedBy));
+                })
                 .doOnSuccess(done -> watchTrim(dropped))
                 .then();
     }
 
     /**
-     * 상한을 넘으면 <b>미상 표시부터 버린다</b>.
-     *
-     * <p>표시는 쿠폰마다 필드를 하나 더 쓰므로 실을 수 있는 쿠폰이 절반이 된다.
-     * 그런데 그 두 배가 되는 순간은 재고를 통째로 못 읽는 순간이라, 하필 그때
-     * 발행이 죽는다 — 전 노드가 낡음으로 넘어가고 정리도 청소도 같이 멎는다.
+     * 울타리가 거절했는가. <b>센티널로 본다</b> — 실린 수 0 으로 보면 값 충돌에
+     * 기대게 되고, 빈 발행을 나중에 허용하는 순간 거절이 조용히 성공으로 읽힌다.
      */
-    // 표시를 잃으면 그 쿠폰이 거짓 매진으로 읽힌다. 나쁘지만 스냅샷이 아예
-    // 안 나가는 것보다 낫다 — 옛 노드가 오늘 하는 것과 같은 자리다.
+    private long blockedBy(Object result) {
+        if (!(result instanceof List<?> counts) || counts.size() < 3
+                || !(counts.get(0) instanceof Number written) || written.longValue() != -1) {
+            return -1;
+        }
+        return counts.get(2) instanceof Number seen ? seen.longValue() : 0;
+    }
+
+    /** 울타리가 발행을 거절한 회차 수. 0 이 아니면 이 노드의 재료가 안 나갔다. */
+    public double publishFenced() {
+        return publishFenced.get();
+    }
+
+    /** 울타리가 입장 적용을 거절한 건수. 쿠폰마다 오르므로 회차 수가 아니다. */
+    public double applyFenced() {
+        return applyFenced.get();
+    }
+
+    /**
+     * 옛 임기의 쓰기가 거절됐다. 발행과 입장 적용이 같은 원인으로 여기 온다 —
+     * 이 노드는 더 이상 리더가 아니거나, 그렇게 보이는 임기를 들고 있다.
+     */
+    public static final class FencedOutException extends IllegalStateException {
+
+        FencedOutException(long fence, long blockedBy) {
+            super("발행이 울타리에 막혔다 — 이 노드의 임기 %d, 마지막으로 쓴 임기 %d"
+                    .formatted(fence, blockedBy));
+        }
+
+        FencedOutException(String couponId, long fence, long blockedBy) {
+            // **임기 0 은 "막은 사람" 이 아니라 "내가 리더가 아니다" 다.** 그 값을
+            // 마지막 기록자로 찍으면 운영자가 없는 임기를 찾는다.
+            super(blockedBy > 0
+                    ? "입장 적용이 울타리에 막혔다 — 쿠폰 %s, 이 노드의 임기 %d, 마지막으로 들인 임기 %d"
+                            .formatted(couponId, fence, blockedBy)
+                    : "입장 적용을 안 냈다 — 쿠폰 %s, 이 노드는 리더가 아니다"
+                            .formatted(couponId));
+        }
+    }
+
+    /**
+     * 상한을 넘으면 <b>미상 표시부터 버린다</b>. 표시를 잃은 쿠폰은 거짓 매진으로
+     * 읽히지만, 스냅샷이 아예 안 나가는 것보다는 낫다.
+     *
+     * <p>표시는 쿠폰마다 필드를 하나 더 쓴다. 그 두 배가 되는 순간은 재고를 통째로
+     * 못 읽는 순간이라 하필 그때 발행이 죽는다 — 전 노드가 낡음으로 넘어가고
+     * 정리도 청소도 같이 멎는다.
+     */
     private Map<String, String> withinLimit(Map<String, String> hash) {
         if (hash.size() <= MAX_PUBLISH_FIELDS) {
             return hash;
@@ -734,7 +951,7 @@ public final class AllocationRedisPort implements SnapshotSource {
             return;
         }
         markersDropped.addAndGet(dropped);
-        // **몇 개인지만 남긴다.** 쿠폰 ID 는 라벨로도 로그로도 못 쏟는다 (LG-3).
+        // **몇 개인지만 남긴다.** 쿠폰 ID 는 라벨로도 로그로도 못 쏟는다.
         if (publishTrim.entered()) {
             log.warn("발행 필드가 상한을 넘어 재고 미상 표시 {}개를 버렸다 — 그 쿠폰들이 매진으로 읽힌다",
                     dropped);

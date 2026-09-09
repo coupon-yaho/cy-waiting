@@ -66,6 +66,15 @@ import reactor.core.publisher.Mono;
  */
 class GatewayRoutesTest {
 
+    /** 라우팅이 쓰는 것과 같은 설정. 재시도를 넓히면 여기부터 갈린다. */
+    private final ConnectRetry 연결_재시도 = ConnectRetry.singleAttempt();
+
+    /** 목적지 제한. 켜진 설정은 이것이 없으면 못 선다. */
+    private static final List<String> 허용 = List.of(".internal");
+
+    /** 목적지와 짝이다. 포트를 안 막으면 허용한 망 안의 아무 서비스나 대상이 된다. */
+    private static final List<Integer> 허용_포트 = List.of(9000);
+
     // 라우트 정의가 술어 팩토리를 컨텍스트에서 꺼낸다. 필요한 것만 등록해
     private static final SecondWindowLimiter 공유_리미터 = SecondWindowLimiter.withMaxKeys(10);
 
@@ -237,7 +246,7 @@ class GatewayRoutesTest {
      * 붙어 있어 멎은 요청 하나가 그 키에 붙은 모든 조회를 그동안 잠근다.
      *
      * <p><b>이 시험이 보는 것은 값이 라우트에 실렸는지까지다.</b> 그 값에 실제로
-     * 끊기는지는 여기서 안 잰다 — 그건 {@code ConnectRetryTest} 와 저널의 실측이다.
+     * 끊기는지는 여기서 안 잰다 — 그건 {@code ConnectRetryRoutingTest} 와 저널의 실측이다.
      */
     @ParameterizedTest
     @ValueSource(strings = {"issue", "coupons"})
@@ -747,7 +756,8 @@ class GatewayRoutesTest {
     @DisplayName("라우팅을_켜면_lb_로_보낸다")
     void 라우팅을_켜면_lb_로_보낸다() {
         RouteLocator locator = 라우터(new RoutingProperties(
-                true, "coupon-service", null, null, null, null, null, null));
+                true, "coupon-service", null, null, null, null, null, null,
+                허용, 허용_포트));
 
         assertThat(주소들(locator)).allMatch("lb://coupon-service"::equals);
     }
@@ -760,7 +770,8 @@ class GatewayRoutesTest {
     @DisplayName("라우팅을_끄면_단일_주소다")
     void 라우팅을_끄면_단일_주소다() {
         RouteLocator locator = 라우터(new RoutingProperties(
-                false, "coupon-service", null, null, null, null, null, null));
+                false, "coupon-service", null, null, null, null, null, null,
+                허용, 허용_포트));
 
         assertThat(주소들(locator)).allMatch("http://backend:8080"::equals);
     }
@@ -791,7 +802,8 @@ class GatewayRoutesTest {
     @DisplayName("라우팅을_켜면_두_라우트에_재시도가_붙는다")
     void 라우팅을_켜면_두_라우트에_재시도가_붙는다() {
         RouteLocator 켠_판 = 라우터(new RoutingProperties(
-                true, "coupon-service", null, null, null, null, null, null));
+                true, "coupon-service", null, null, null, null, null, null,
+                허용, 허용_포트));
 
         for (String id : List.of("issue", "coupons")) {
             Route route = 라우트(켠_판, id);
@@ -830,7 +842,8 @@ class GatewayRoutesTest {
     @DisplayName("라우팅을_끄면_재시도를_안_건다")
     void 라우팅을_끄면_재시도를_안_건다() {
         RouteLocator 끈_판 = 라우터(new RoutingProperties(
-                false, "coupon-service", null, null, null, null, null, null));
+                false, "coupon-service", null, null, null, null, null, null,
+                허용, 허용_포트));
 
         for (String id : List.of("issue", "coupons")) {
             assertThat(라우트(끈_판, id).getFilters())
@@ -845,7 +858,7 @@ class GatewayRoutesTest {
      * <p>바깥에 두면 재시도가 한 번도 안 돈다 — 서킷 필터가 폴백 주소를 들고
      * 있으면 하류의 모든 오류를 그리로 넘기고 정상 완료를 내보내, 바깥의
      * 재시도는 볼 오류가 없다. 이 값만으로는 그것을 못 잡으므로 실제로 넘어가는지는
-     * {@code ConnectRetryTest} 가 본다.
+     * {@code ConnectRetryRoutingTest} 가 본다.
      */
     @Test
     @DisplayName("재시도가_서킷_안쪽이다")
@@ -862,10 +875,14 @@ class GatewayRoutesTest {
     @Test
     @DisplayName("연결_단계에만_재시도한다")
     void 연결_단계에만_재시도한다() {
-        var config = GatewayRoutes.connectRetryConfig();
+        var config = 연결_재시도.config();
 
+        // **계열만 진짜 판정이다.** 기본값이 5xx 계열이라 안 비우면 여기가 빨개진다.
         assertThat(config.getSeries()).isEmpty();
+        // 상태 코드는 기본이 비어 있어 이 줄만으로는 못 잡는다. 넓히는 쪽만 막는다.
         assertThat(config.getStatuses()).isEmpty();
+        // **발급이 POST 라 메서드를 안 열면 연결 실패가 다음 대로 안 넘어간다.**
+        assertThat(config.getMethods()).contains(HttpMethod.POST);
         assertThat(ConnectException.class).isAssignableFrom(ConnectTimeoutException.class);
         // **넓히는 쪽을 막는다.** 좁히면 유출이지만 넓히면 초과 발급이라 값이
         // 훨씬 비싸다. 갈래가 하나 늘어 목록이 바뀌어도 이 성질은 그대로 산다.
@@ -893,7 +910,7 @@ class GatewayRoutesTest {
     @Test
     @DisplayName("연결이_못_서는_갈래를_다_덮는다")
     void 연결이_못_서는_갈래를_다_덮는다() {
-        var config = GatewayRoutes.connectRetryConfig();
+        var config = 연결_재시도.config();
 
         // 계보가 갈린다는 것부터 못 박는다. 안 적으면 목록이 왜 둘인지가 안 남는다.
         assertThat(ConnectException.class.isAssignableFrom(NoRouteToHostException.class))
@@ -913,7 +930,7 @@ class GatewayRoutesTest {
     @Test
     @DisplayName("이름_풀이_실패는_다시_안_보낸다")
     void 이름_풀이_실패는_다시_안_보낸다() {
-        assertThat(GatewayRoutes.connectRetryConfig().getExceptions())
+        assertThat(연결_재시도.config().getExceptions())
                 .noneMatch(c -> c.isAssignableFrom(UnknownHostException.class));
     }
 
@@ -921,7 +938,7 @@ class GatewayRoutesTest {
     @Test
     @DisplayName("한_번만_다시_보낸다")
     void 한_번만_다시_보낸다() {
-        assertThat(GatewayRoutes.connectRetryConfig().getRetries()).isEqualTo(1);
+        assertThat(연결_재시도.config().getRetries()).isEqualTo(1);
     }
 
     private static String 이름(GatewayFilter filter) {

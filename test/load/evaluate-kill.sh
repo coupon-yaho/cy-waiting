@@ -41,6 +41,11 @@ fi
 
 total=$(grep -c '' "$codes")
 # 판정이 돌려보낸 것(대기·한도)은 뒷단에 안 닿았다. 나머지가 실제로 간 것이다.
+#
+# **429 하나가 예외다** (CY-903). 격벽 시한이 끊은 차례가 온 사람은 이미
+# `chain.filter` 를 지난 뒤라 뒷단에 닿았을 수 있는데 429 로 나간다. 지금 회차는
+# 표를 든 VU 가 없어(`routing-lib.sh` 의 `issue()` 가 토큰을 안 보낸다) 안 섞이지만,
+# 넣는 날 이 줄이 그만큼 헐거워진다.
 turned_back=$(grep -cE '^(202|429)$' "$codes")
 admitted=$(( total - turned_back ))
 server_error=$(grep -c '^5' "$codes")

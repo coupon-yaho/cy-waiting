@@ -1,8 +1,10 @@
 package com.kafkick.waiting.control;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.kafkick.waiting.domain.routing.AllowedDestinations;
 import com.kafkick.waiting.domain.routing.InstanceAddress;
 import com.kafkick.waiting.domain.routing.InstanceRouting;
 import java.time.Duration;
@@ -19,6 +21,12 @@ import org.junit.jupiter.api.Test;
  */
 class CapacityCollectorTest {
 
+    /** 목적지 제한이 없는 상태. 이름으로 남겨야 인자를 빠뜨린 것과 안 헷갈린다. */
+    private static final AllowedDestinations 무제한 = AllowedDestinations.unrestricted();
+
+    /** 시험이 쓰는 포트. 목적지와 짝으로 막지 않으면 호스트 제한이 반쪽이다. */
+    private static final List<Integer> 포트 = List.of(9000, 8080, 1);
+
     private static final Duration RAMP_UP = Duration.ofSeconds(60);
     /** R-2 가 정한 값이다 — 보고 주기 1초, 3회 연속 누락이면 없는 것으로 본다. */
     private static final Duration FRESHNESS = Duration.ofSeconds(3);
@@ -27,7 +35,8 @@ class CapacityCollectorTest {
     private static final long NOW = 1_800_000_000L;
 
     private CapacityCollector collector() {
-        return CapacityCollector.of(RAMP_UP, FRESHNESS, FLOOR, CAP);
+        return CapacityCollector.of(RAMP_UP, FRESHNESS, FLOOR, CAP,
+                무제한);
     }
 
     private static CapacityReport report(String id, long credits, long reportedAt) {
@@ -77,6 +86,67 @@ class CapacityCollectorTest {
 
         // 이미 돌던 100 은 온전히, 콜드 200 은 60초 중 15초라 4분의 1이다.
         assertThat(credit).isEqualTo(150);
+    }
+
+    @Test
+    @DisplayName("빈_회차는_첫_회차_표시를_안_태운다")
+    void 빈_회차는_첫_회차_표시를_안_태운다() {
+        // **첫 회차 표시는 신선한 보고를 처음 본 회차에 쓴다.** 보고가 신선도
+        // 창을 한 번 넘긴 회차가 그 표시를 태우면, 다음 회차에 보고가 신선해져도
+        // 이미 돌던 무리로 못 보고 램프를 0 부터 다시 탄다. 그동안 크레딧이
+        // 하한에 묶여 한산 통과 상한이 0 이다.
+        CapacityCollector collector = collector();
+        collector.collect(List.of(), NOW, 1);
+
+        long credit = collector.collect(List.of(report("warm", 300, NOW + 1)), NOW + 1, 1);
+
+        assertThat(credit).as("신선한 보고를 처음 본 회차가 첫 회차다").isEqualTo(300);
+    }
+
+    @Test
+    @DisplayName("낡은_보고만_온_회차도_안_태운다")
+    void 낡은_보고만_온_회차도_안_태운다() {
+        // 보고가 오긴 왔는데 전부 낡았다. 관측이 없었던 것과 같다.
+        CapacityCollector collector = collector();
+        long 낡은 = NOW - FRESHNESS.toSeconds() - 1;
+        collector.collect(List.of(report("warm", 300, 낡은)), NOW, 1);
+
+        long credit = collector.collect(List.of(report("warm", 300, NOW + 1)), NOW + 1, 1);
+
+        assertThat(credit).isEqualTo(300);
+    }
+
+    @Test
+    @DisplayName("오래_비면_첫_회차_표시가_만료된다")
+    void 오래_비면_첫_회차_표시가_만료된다() {
+        // **무한정 들고 있으면 안 된다.** 뒷단 전체가 오래 멎으면 그동안 신선한
+        // 보고가 없어 표시가 안 타고, 그 사이 처음 본 기록도 비워진다. 뒷단이
+        // 콜드로 재기동해 보고를 다시 올리는 첫 회차에 그 표시가 살아 있으면
+        // 예열 램프를 통째로 건너뛴다 — 뒷단이 가장 차가울 때다 (F6).
+        CapacityCollector collector = collector();
+        for (int i = 0; i < CapacityCollector.HOLD_ROUNDS; i++) {
+            collector.collect(List.of(), NOW + i, 1);
+        }
+
+        long credit = collector.collect(List.of(report("cold", 600, NOW + 10)), NOW + 10, 1);
+
+        // 방금 처음 봤으므로 경과 0 이라 몫이 0 이고, 합이 0 이 된 이유가 램프라
+        // 하한을 쓴다. 600 이 나오면 예열을 통째로 건너뛴 것이다.
+        assertThat(credit).as("콜드 인스턴스가 예열을 건너뛰지 않는다").isEqualTo(FLOOR);
+    }
+
+    @Test
+    @DisplayName("상한_직전까지는_첫_회차로_본다")
+    void 상한_직전까지는_첫_회차로_본다() {
+        // 상한을 한 칸 줄여도 위 시험이 통과하면 경계가 한쪽만 막힌 것이다.
+        CapacityCollector collector = collector();
+        for (int i = 0; i < CapacityCollector.HOLD_ROUNDS - 1; i++) {
+            collector.collect(List.of(), NOW + i, 1);
+        }
+
+        long credit = collector.collect(List.of(report("warm", 300, NOW + 5)), NOW + 5, 1);
+
+        assertThat(credit).as("아직은 이미 돌던 무리로 본다").isEqualTo(300);
     }
 
     @Test
@@ -235,7 +305,8 @@ class CapacityCollectorTest {
         // 곱하고 나누면 넘쳐서 음수가 되고, 그러면 다른 인스턴스 몫을 상쇄해
         // 전역 크레딧이 하한으로 떨어진다.
         CapacityCollector collector = CapacityCollector.of(
-                RAMP_UP, FRESHNESS, FLOOR, Long.MAX_VALUE);
+                RAMP_UP, FRESHNESS, FLOOR, Long.MAX_VALUE,
+                무제한);
         collector.collect(List.of(report("seed", 0, NOW)), NOW, 1);
         collector.collect(List.of(report("huge", Long.MAX_VALUE, NOW)), NOW, 1);
 
@@ -264,7 +335,8 @@ class CapacityCollectorTest {
         // 인스턴스가 많고 각자 상한에 가까우면 합이 넘친다. 넘치면 음수가 되어
         // 전역 크레딧이 0 이 된다.
         CapacityCollector collector = CapacityCollector.of(
-                RAMP_UP, FRESHNESS, FLOOR, Long.MAX_VALUE);
+                RAMP_UP, FRESHNESS, FLOOR, Long.MAX_VALUE,
+                무제한);
         long warmed = NOW + RAMP_UP.toSeconds();
         for (long t = NOW; t <= warmed; t += FRESHNESS.toSeconds()) {
             collector.collect(
@@ -281,10 +353,12 @@ class CapacityCollectorTest {
     void 초_미만_설정은_기동에_실패한다() {
         // 초 단위로 재는데 500ms 를 주면 조용히 0 이 되어 나눗셈이 터지거나
         // 임계가 사라진다.
-        assertThatThrownBy(() -> CapacityCollector.of(Duration.ofMillis(500), FRESHNESS, FLOOR, CAP))
+        assertThatThrownBy(() -> CapacityCollector.of(Duration.ofMillis(500), FRESHNESS, FLOOR, CAP,
+                무제한))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("초 단위");
-        assertThatThrownBy(() -> CapacityCollector.of(RAMP_UP, Duration.ofMillis(1500), FLOOR, CAP))
+        assertThatThrownBy(() -> CapacityCollector.of(RAMP_UP, Duration.ofMillis(1500), FLOOR, CAP,
+                무제한))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("초 단위");
     }
@@ -295,7 +369,8 @@ class CapacityCollectorTest {
         // **램프 나머지항이 창의 제곱으로 커진다.** 창을 하루로 묶으면 어떤
         // 보고값이 와도 넘칠 수 없다 — 곱셈을 감싸는 것보다 근본적이다.
         assertThatThrownBy(() -> CapacityCollector.of(
-                Duration.ofDays(2), FRESHNESS, FLOOR, CAP))
+                Duration.ofDays(2), FRESHNESS, FLOOR, CAP,
+                무제한))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("이하여야 한다");
     }
@@ -306,7 +381,8 @@ class CapacityCollectorTest {
         // 상한과 최대 보고값을 함께 줘도 계산이 성립해야 한다.
         Duration window = Duration.ofDays(1);
         CapacityCollector collector = CapacityCollector.of(
-                window, FRESHNESS, FLOOR, Long.MAX_VALUE);
+                window, FRESHNESS, FLOOR, Long.MAX_VALUE,
+                무제한);
         long half = window.toSeconds() / 2;
         // 첫 회차는 웜으로 잡히므로 램프를 재려면 그 뒤에 나타나야 한다.
         collector.collect(List.of(report("seed", 0, NOW)), NOW, 1);
@@ -336,17 +412,22 @@ class CapacityCollectorTest {
     @Test
     @DisplayName("설정이_0_이하면_기동에_실패한다")
     void 설정이_0_이하면_기동에_실패한다() {
-        assertThatThrownBy(() -> CapacityCollector.of(Duration.ZERO, FRESHNESS, FLOOR, CAP))
+        assertThatThrownBy(() -> CapacityCollector.of(Duration.ZERO, FRESHNESS, FLOOR, CAP,
+                무제한))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("rampUp");
-        assertThatThrownBy(() -> CapacityCollector.of(Duration.ofSeconds(-1), FRESHNESS, FLOOR, CAP))
+        assertThatThrownBy(() -> CapacityCollector.of(Duration.ofSeconds(-1), FRESHNESS, FLOOR, CAP,
+                무제한))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("rampUp");
-        assertThatThrownBy(() -> CapacityCollector.of(RAMP_UP, Duration.ZERO, FLOOR, CAP))
+        assertThatThrownBy(() -> CapacityCollector.of(RAMP_UP, Duration.ZERO, FLOOR, CAP,
+                무제한))
                 .hasMessageContaining("freshness");
-        assertThatThrownBy(() -> CapacityCollector.of(RAMP_UP, FRESHNESS, 0, CAP))
+        assertThatThrownBy(() -> CapacityCollector.of(RAMP_UP, FRESHNESS, 0, CAP,
+                무제한))
                 .hasMessageContaining("floor");
-        assertThatThrownBy(() -> CapacityCollector.of(RAMP_UP, FRESHNESS, FLOOR, 0))
+        assertThatThrownBy(() -> CapacityCollector.of(RAMP_UP, FRESHNESS, FLOOR, 0,
+                무제한))
                 .hasMessageContaining("perInstanceCap");
     }
 
@@ -704,18 +785,22 @@ class CapacityCollectorTest {
     @Test
     @DisplayName("하한이_0이면_안_뜬다")
     void 하한이_0이면_안_뜬다() {
-        assertThatThrownBy(() -> CapacityCollector.of(RAMP_UP, FRESHNESS, 0, CAP))
+        assertThatThrownBy(() -> CapacityCollector.of(RAMP_UP, FRESHNESS, 0, CAP,
+                무제한))
                 .isInstanceOf(IllegalArgumentException.class);
         // 1 은 뜬다. 여기까지 막으면 하한을 못 쓰는 설정이 된다.
-        assertThat(CapacityCollector.of(RAMP_UP, FRESHNESS, 1, CAP).lastKnown()).isOne();
+        assertThat(CapacityCollector.of(RAMP_UP, FRESHNESS, 1, CAP,
+                무제한).lastKnown()).isOne();
     }
 
     @Test
     @DisplayName("인스턴스_상한이_0이면_안_뜬다")
     void 인스턴스_상한이_0이면_안_뜬다() {
-        assertThatThrownBy(() -> CapacityCollector.of(RAMP_UP, FRESHNESS, FLOOR, 0))
+        assertThatThrownBy(() -> CapacityCollector.of(RAMP_UP, FRESHNESS, FLOOR, 0,
+                무제한))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThat(CapacityCollector.of(RAMP_UP, FRESHNESS, FLOOR, 1).lastKnown())
+        assertThat(CapacityCollector.of(RAMP_UP, FRESHNESS, FLOOR, 1,
+                무제한).lastKnown())
                 .isEqualTo(FLOOR);
     }
 
@@ -903,5 +988,73 @@ class CapacityCollectorTest {
         collector.collect(List.of(), warmed + 100, 1);
 
         assertThat(collector.routable()).isEmpty();
+    }
+
+    /**
+     * <b>허용 밖 주소는 라우팅에서 뺀다</b> (CY-887). 보고에 쓸 수 있는 쪽이
+     * 게이트웨이를 임의 주소로 향하게 하는 것을 막는 자리다. 크레딧에는 든다 —
+     * 버리면 그 몫만큼 전역 크레딧이 줄어 계약을 안 따르는 배포 구간에 전체가 조인다.
+     */
+    @Test
+    @DisplayName("허용_밖_주소는_라우팅에서_빠진다")
+    void 허용_밖_주소는_라우팅에서_빠진다() {
+        CapacityCollector collector = CapacityCollector.of(RAMP_UP, FRESHNESS, FLOOR, CAP,
+                AllowedDestinations.of(List.of("10.0.1.0/24"), 포트));
+        // 둘 다 예열한다. 안 하면 램프가 새 대의 몫을 0 으로 깎아, 크레딧에
+        // 드는지를 못 잰다.
+        long warmed = NOW + RAMP_UP.toSeconds();
+        for (long t = NOW; t <= warmed; t += FRESHNESS.toSeconds()) {
+            collector.collect(List.of(report("a", 100, t), report("b", 200, t)), t, 1);
+        }
+
+        long 크레딧 = collector.collect(List.of(
+                주소_있는_보고("a", "10.0.1.7:8080", 100, warmed),
+                주소_있는_보고("b", "evil.example.com:8080", 200, warmed)), warmed, 1);
+
+        assertThat(collector.routable()).extracting(InstanceRouting::instanceId)
+                .containsExactly("a");
+        assertThat(collector.routable()).singleElement()
+                .extracting(InstanceRouting::credits).isEqualTo(100L);
+        assertThat(크레딧).as("빠진 대의 몫도 크레딧에는 든다").isEqualTo(300);
+        assertThat(collector.deniedDestinations())
+                .as("뺀 수를 게이지로 낸다 — 후보가 빈 이유를 로그로는 못 가른다")
+                .isEqualTo(1);
+
+        collector.collect(List.of(주소_있는_보고("a", "10.0.1.7:8080", 100, warmed)), warmed, 1);
+
+        assertThat(collector.deniedDestinations()).as("깨끗한 회차면 0 으로 돌아온다")
+                .isZero();
+    }
+
+    /** 제한을 안 걸면 모양만 맞으면 실린다. 라우팅이 꺼진 배포의 동작이다. */
+    @Test
+    @DisplayName("제한을_안_걸면_모양만_본다")
+    void 제한을_안_걸면_모양만_본다() {
+        CapacityCollector collector = collector();
+        long warmed = warm(collector, "a", 100);
+
+        collector.collect(List.of(
+                주소_있는_보고("a", "evil.example.com:8080", 100, warmed)), warmed, 1);
+
+        assertThat(collector.routable()).extracting(InstanceRouting::instanceId)
+                .containsExactly("a");
+    }
+
+    /**
+     * <b>로그 한 줄을 위조하지 못하게 한다.</b> instanceId 는 뒷단이 정하고 길이도
+     * 문자도 제한이 없다. 줄바꿈이 그대로 나가면 없는 사건을 지어낼 수 있다.
+     */
+    @Test
+    @DisplayName("거절_로그에_줄바꿈을_안_싣는다")
+    void 거절_로그에_줄바꿈을_안_싣는다() {
+        CapacityCollector collector = CapacityCollector.of(RAMP_UP, FRESHNESS, FLOOR, CAP,
+                AllowedDestinations.of(List.of("10.0.1.0/24"), 포트));
+        long warmed = warm(collector, "a", 100);
+
+        assertThatCode(() -> collector.collect(List.of(
+                주소_있는_보고("a\n조작된 줄", "evil.example.com:1", 100, warmed)), warmed, 1))
+                .doesNotThrowAnyException();
+
+        assertThat(collector.deniedDestinations()).isEqualTo(1);
     }
 }

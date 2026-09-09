@@ -20,6 +20,9 @@ class RedisKeysTest {
     void 전역_키_문자열이_고정되어_있다() {
         // 이름이 바뀌면 배포 중 두 버전이 서로 다른 키를 본다.
         assertThat(RedisKeys.SNAPSHOT).isEqualTo("gw:snapshot");
+        // **태그가 슬롯을 묶는다.** 이름이 흔들리면 울타리가 조용히 사라지고,
+        // 그러면 유령 리더가 옛 시야로 덮어 줄 선 사람이 추월당한다.
+        assertThat(RedisKeys.SNAPSHOT_FENCE).isEqualTo("{gw:snapshot}:fence");
         assertThat(RedisKeys.INSTANCES).isEqualTo("gw:instances");
         assertThat(RedisKeys.LEADER).isEqualTo("scheduler:leader");
         assertThat(RedisKeys.TUNABLES).isEqualTo("gw:tunables");

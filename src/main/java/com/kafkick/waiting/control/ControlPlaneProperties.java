@@ -4,11 +4,8 @@ import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import java.time.Duration;
 
 /**
- * 제어 평면의 시간 예산.
- *
- * <p><b>어긋나면 안 뜨게 한다.</b> 주석으로 적어 두면 값을 바꾸는 사람이 안 읽고
- * 배분이 멎는 사고로 배운다. 특히 연장은 어긋나도 예외가 안 나고 조용히 리더가
- * 없어진다.
+ * 제어 평면의 시간 예산. <b>어긋나면 안 뜨게 한다</b> — 주석으로 적어 두면 값을 바꾸는 사람이
+ * 안 읽고 배분이 멎는 사고로 배운다. 특히 연장은 어긋나도 예외가 안 나고 조용히 리더가 없어진다.
  *
  * @param scheduler 배분 주기
  * @param leader    리더 리스와 연장
@@ -37,7 +34,7 @@ public record ControlPlaneProperties(Scheduler scheduler, Leader leader, Capacit
 
     public static ControlPlaneProperties defaults() {
         return new ControlPlaneProperties(
-                // 유예 90틱 = 90초. 폴링 최대 간격 60초의 1.5배다 (7.3.2).
+                // 유예 90틱 = 90초. 폴링 최대 간격 60초의 1.5배다.
                 new Scheduler(Duration.ofSeconds(1), Duration.ofSeconds(3), 1, 90),
                 new Leader(Duration.ofSeconds(2), Duration.ofMillis(300), Duration.ofMillis(100)),
                 new Capacity(Duration.ofSeconds(60), Duration.ofSeconds(3), 5, 10_000, 3, 1));
@@ -98,20 +95,16 @@ public record ControlPlaneProperties(Scheduler scheduler, Leader leader, Capacit
                 throw new IllegalArgumentException(
                         "firstTickDelay 는 음수일 수 없다: %s".formatted(firstTickDelay));
             }
-            // **하나만 받는다.** 여럿이면 몫을 샤드에 나눠 각각 적용해야 하는데
-            // 지금 적용은 0번에만 나간다. 그러면 나머지 샤드의 줄은 영원히 안
-            // 빠지고 아무 오류도 안 난다 — 산문으로 지킬 일이 아니다.
-            //
-            // 큐 등록 상한도 여기 걸린다. 상한은 쿠폰 전체의 수인데 스크립트는
-            // 자기 샤드만 세므로, 이 줄을 풀면 실효 상한이 샤드 수만큼 커진다.
+            // **하나만 받는다.** 여럿이면 몫을 샤드에 나눠 각각 적용해야 하는데 지금 적용은
+            // 0번에만 나가, 나머지 샤드의 줄이 영원히 안 빠지고 오류도 안 난다. 큐 등록 상한도
+            // 여기 걸린다 — 상한은 쿠폰 전체인데 스크립트는 자기 샤드만 세기 때문이다.
             if (shards != 1) {
                 throw new IllegalArgumentException(
                         "shards 는 아직 1 만 지원한다 — 샤드별 적용이 없다: %d".formatted(shards));
             }
-            // **폴링 최대 간격보다 길어야 한다** (7.3.2). 마지막 폴링이 언제
-            // 오는지를 정하는 것은 낡음 한계가 아니라 **우리가 클라이언트에게
-            // 준 간격**이다. 먼 밴드는 60초를 받으므로, 그보다 짧으면 그 사람이
-            // 다시 왔을 때 줄이 이미 없다.
+            // **폴링 최대 간격보다 길어야 한다.** 마지막 폴링 시점을 정하는 것은 낡음
+            // 한계가 아니라 **우리가 클라이언트에게 준 간격**이다 — 먼 밴드는 60초를 받으므로,
+            // 그보다 짧으면 그 사람이 다시 왔을 때 줄이 이미 없다.
             if (tick.multipliedBy(soldOutGraceTicks)
                     .compareTo(PollIntervalPolicy.maxInterval()) <= 0) {
                 throw new IllegalArgumentException(
@@ -123,10 +116,9 @@ public record ControlPlaneProperties(Scheduler scheduler, Leader leader, Capacit
     }
 
     /**
-     * 마지막 성공부터 회복하는 회차가 끝날 때까지 들어가는 시도의 수.
-     *
-     * <p>세 번 놓쳐도 락을 안 잃으려면 그 뒤에 오는 회복 회차까지 리스 안에 들어와야
-     * 한다. 세 번째 실패가 끝나는 시점에서 끊으면 지연 하나와 시도 하나가 빠진다.
+     * 마지막 성공부터 회복하는 회차가 끝날 때까지 들어가는 시도의 수. 세 번 놓쳐도 락을 안
+     * 잃으려면 회복 회차까지 리스 안에 들어와야 한다 — 세 번째 실패가 끝나는 시점에서 끊으면
+     * 지연 하나와 시도 하나가 빠진다.
      */
     private static final int ATTEMPTS = 4;
 

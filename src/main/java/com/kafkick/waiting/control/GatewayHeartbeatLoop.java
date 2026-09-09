@@ -17,10 +17,9 @@ import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
 /**
- * 하트비트를 주기적으로 남기고, 관측한 노드 수를 넘긴다.
- *
- * <p><b>수명은 스프링에 맡긴다.</b> 직접 만들면 웹 서버가 내려간 뒤 도는지 전에
- * 도는지를 알 수 없고, 그 차이가 드레이닝 중 판정을 가른다 — {@link #getPhase()}.
+ * 하트비트를 주기적으로 남기고, 관측한 노드 수를 넘긴다. <b>수명은 스프링에 맡긴다</b> — 직접
+ * 만들면 웹 서버가 내려간 뒤 도는지 전에 도는지를 알 수 없고, 그 차이가 드레이닝 중 판정을
+ * 가른다 ({@link #getPhase()}).
  */
 public final class GatewayHeartbeatLoop implements SmartLifecycle {
 
@@ -30,30 +29,22 @@ public final class GatewayHeartbeatLoop implements SmartLifecycle {
     private final Supplier<Mono<Void>> leave;
     private final IntConsumer observed;
 
-    /**
-     * 한 회차를 놓쳤을 때 부른다. <b>상한 바깥에 둔다</b> — 상한이 걸리면
-     * 리액터는 상류를 취소하지 오류를 흘리지 않아, 안쪽에 두면 무응답
-     * 구간을 통째로 못 본다. 레디스 장애에서 더 흔한 쪽이 무응답이다.
-     */
+    /** 한 회차를 놓쳤을 때 부른다. <b>상한 바깥에서</b> 부르는 이유는 호출 자리에 적었다. */
     private final Runnable onMiss;
     private final Duration interval;
     private final Duration leaveTimeout;
 
     /**
-     * 종료 경로 타임아웃이 도는 곳.
-     *
-     * <p>기본 공용 풀을 쓰면 시험이 이 구간만 가상 시간으로 못 당긴다 — 실제
-     * 경과 시간을 재게 되고, 느린 러너에서 흔들린다.
+     * 종료 경로 타임아웃이 도는 곳. 기본 공용 풀을 쓰면 시험이 이 구간만 가상 시간으로 못
+     * 당겨 실제 경과 시간을 재게 되고, 느린 러너에서 흔들린다.
      */
     private final Scheduler leaveTimer;
 
     private final AtomicBoolean running = new AtomicBoolean();
 
     /**
-     * 하트비트를 못 쓰기 시작한 시각. 성공하면 지운다.
-     *
-     * <p><b>매 회차 찍으면 로그가 폭발한다.</b> 틱 2초·5분 단절·30대면 4,500줄이다.
-     * 진입에 한 번, 해제에 지속 시간과 함께 한 번만 남긴다.
+     * 하트비트를 못 쓰기 시작한 시각. 성공하면 지운다. <b>매 회차 찍으면 로그가 폭발한다</b> —
+     * 틱 2초·5분 단절·30대면 4,500줄이다. 진입에 한 번, 해제에 지속 시간과 함께 한 번만 남긴다.
      */
     private final AtomicReference<Instant> failingSince = new AtomicReference<>();
     /** 구독과 스케줄러는 {@code start} 에서 정해져 {@code stop} 이 지운다. */
@@ -106,21 +97,17 @@ public final class GatewayHeartbeatLoop implements SmartLifecycle {
 
     private Flux<Void> loop(Scheduler scheduler) {
         return Mono.defer(beat)
-                // **타임아웃이 없으면 루프가 조용히 멎는다.** 한 회차가 안 끝나면
-                // 다음 지연이 시작되지 않는데, 오류가 아니라 무응답이라 아래
-                // 로그도 안 나온다. 그동안 이 노드는 하트비트를 못 쓰면서
-                // 요청은 계속 받아, 리더가 분모에서 뺀 뒤에도 통과를 만든다.
+                // **타임아웃이 없으면 루프가 조용히 멎는다.** 한 회차가 안 끝나면 다음 지연이
+                // 시작되지 않는데, 오류가 아니라 무응답이라 아래 로그도 안 나온다. 그동안 이
+                // 노드는 요청을 계속 받아, 리더가 분모에서 뺀 뒤에도 통과를 만든다.
                 .timeout(interval, scheduler)
                 .doOnNext(count -> {
                     exitFailing();
                     observed.accept(count);
                 })
-                // **한 회차가 터져도 루프는 돈다.** 여기서 멎으면 그 노드가 영영
-                // 분모에서 빠지고, 남은 노드가 큰 몫을 쓴다.
-                //
-                // **여기가 상한 바깥이다.** 상한이 걸리면 상류는 취소되지 오류를
-                // 안 흘리므로, 놓침을 상한 안쪽에서 세면 무응답 구간을 통째로
-                // 못 본다. 레디스 장애에서 더 흔한 쪽이 무응답이다.
+                // **한 회차가 터져도 루프는 돈다.** 여기서 멎으면 그 노드가 영영 분모에서 빠지고
+                // 남은 노드가 큰 몫을 쓴다. 놓침을 **상한 바깥에서** 세는 것은, 상한이 오류가
+                // 아니라 취소라 안쪽에서 세면 레디스 장애에서 더 흔한 무응답을 못 봐서다.
                 .doOnError(e -> {
                     enterFailing(e);
                     onMiss.run();
@@ -132,10 +119,8 @@ public final class GatewayHeartbeatLoop implements SmartLifecycle {
     }
 
     /**
-     * <b>비동기 종료다.</b> 컨테이너는 {@code SmartLifecycle} 을 구현한 빈에
-     * 이쪽만 부르고, 콜백이 올 때까지 다음 단계로 안 넘어간다.
-     *
-     * <p>그래서 블로킹이 필요 없다 — 기다림은 컨테이너가 한다.
+     * <b>비동기 종료다.</b> 컨테이너는 {@code SmartLifecycle} 빈에 이쪽만 부르고 콜백이 올
+     * 때까지 다음 단계로 안 넘어간다 — 그래서 블로킹이 필요 없다. 기다림은 컨테이너가 한다.
      */
     @Override
     public void stop(Runnable callback) {
@@ -196,17 +181,15 @@ public final class GatewayHeartbeatLoop implements SmartLifecycle {
     }
 
     /**
-     * 웹 서버가 드레이닝을 <b>마친 뒤</b>, 레디스 커넥션이 <b>닫히기 전</b>에 멈춘다.
-     *
-     * <p>스프링은 phase 내림차순으로 멈춘다 — 웹 서버가 먼저, 커넥션 팩토리(0)가
-     * 나중이다. 그 사이가 등록을 뺄 수 있는 유일한 창이다.
+     * 웹 서버가 드레이닝을 <b>마친 뒤</b>, 레디스 커넥션이 <b>닫히기 전</b>에 멈춘다. 스프링은
+     * phase 내림차순으로 멈추므로 웹 서버가 먼저, 커넥션 팩토리(0)가 나중이다 — 그 사이가
+     * 등록을 뺄 수 있는 유일한 창이다.
      */
     @Override
     public int getPhase() {
-        // 0 이하면 커넥션이 닫힌 뒤에 해제해 매번 실패하고, 유령 항목이 임계
-        // 동안 분모를 부풀린다. 드레이닝보다 먼저 빼도 안 된다 — 아직 요청을
-        // 처리하는 노드를 분모에서 빼면 남은 노드가 크레딧을 다 쓰고 그 위에
-        // 이 노드의 통과분이 더해진다.
+        // 0 이하면 커넥션이 닫힌 뒤에 해제해 매번 실패하고, 유령 항목이 임계 동안 분모를
+        // 부풀린다. 드레이닝보다 먼저 빼도 안 된다 — 아직 요청을 처리하는 노드를 분모에서
+        // 빼면 남은 노드가 크레딧을 다 쓰고 그 위에 이 노드의 통과분이 더해진다.
         return 1024;
     }
 }

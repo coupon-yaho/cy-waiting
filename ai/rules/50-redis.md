@@ -47,6 +47,7 @@ S == 1:   queue:{cid}     maxscore:{cid}     admitted:{cid}     grace:{cid}     
 
 전역:     gw:snapshot   gw:instances   scheduler:leader
           coupons:active   coupon:policy   capacity:coupon-svc:{version}
+          {scheduler:leader}:gen   ← 임기를 세는 값. 수명을 안 준다 (CY-893)
 쿠폰별:   stock:{cid}   ← 발급 계층 소유. 게이트웨이는 읽기만
 ```
 

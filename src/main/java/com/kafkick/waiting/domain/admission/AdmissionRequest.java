@@ -5,10 +5,8 @@ import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import java.util.Objects;
 
 /**
- * 판정에 필요한 재료 전부. 도메인은 이것 말고 아무것도 안 본다.
- *
- * <p>{@code dataStale} 과 {@code justEnqueued} 는 <b>주입받는 값</b>이다. 도메인은
- * 시계도 노드 로컬 상태도 참조하지 않는다 (DS-1).
+ * 판정에 필요한 재료 전부. {@code dataStale} 과 {@code justEnqueued} 까지 <b>주입
+ * 받는</b> 것은 도메인이 시계도 노드 로컬 상태도 안 보기 때문이다.
  *
  * @param couponKey     예산을 나누는 단위
  * @param state         스냅샷에서 읽은 쿠폰 상태
@@ -32,7 +30,7 @@ public record AdmissionRequest(
 
     public AdmissionRequest {
         // **모르는 것을 정상으로 안 접는다.** 안 실어 보내면 그 경로가 서킷을
-        // 영영 안 보는데, 그게 F3 이 막으려던 상태다.
+        // 영영 안 봐서, 열려 있는 동안에도 신규 유입이 뒷단으로 나간다.
         Objects.requireNonNull(circuit, "circuit 은 필수다");
     }
 

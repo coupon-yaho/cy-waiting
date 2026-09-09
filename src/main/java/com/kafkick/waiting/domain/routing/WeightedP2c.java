@@ -7,11 +7,9 @@ import java.util.Optional;
 import java.util.function.IntUnaryOperator;
 
 /**
- * 무작위 둘 중 <b>여유 대비 덜 찬 쪽</b>으로 보낸다.
- *
- * <p>최소값을 그냥 고르면 게이트웨이 M 대가 같은 인스턴스로 동시에 몰린다.
- * 그놈이 순식간에 가장 바쁜 놈이 되고 다 같이 다음으로 옮겨 간다 — 진동한다.
- * 무작위 둘을 뽑는 것만으로 그 쏠림이 깨진다.
+ * 무작위 둘 중 <b>여유 대비 덜 찬 쪽</b>으로 보낸다. 최소값을 그냥 고르면 게이트웨이
+ * M 대가 같은 인스턴스로 동시에 몰려 그놈이 가장 바쁜 놈이 되고 다 같이 다음으로
+ * 옮겨 간다 — 무작위 둘을 뽑는 것만으로 그 진동이 깨진다.
  */
 public final class WeightedP2c implements InstanceChooser {
 

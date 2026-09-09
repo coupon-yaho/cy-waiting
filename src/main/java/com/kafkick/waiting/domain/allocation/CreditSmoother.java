@@ -1,10 +1,8 @@
 package com.kafkick.waiting.domain.allocation;
 
 /**
- * 여유 값을 지수 이동평균으로 다듬는다.
- *
- * <p>순간값을 그대로 쓰면 GC 스파이크 한 번이 표시 ETA 를 두 배로 만든다.
- * ETA 오차의 지배항이 배수율의 흔들림이다 (Phase 4 F9).
+ * 여유 값을 EWMA 로 다듬는다. ETA 오차의 지배항이 배수율의 흔들림이라, 순간값을
+ * 그대로 쓰면 GC 스파이크 한 번이 표시 ETA 를 두 배로 만든다.
  */
 public class CreditSmoother {
 
@@ -33,7 +31,7 @@ public class CreditSmoother {
     /**
      * 이월받은 상태로 시작한다.
      *
-     * <p>리더가 바뀔 때마다 0 에서 다시 시작하면 그 순간 ETA 가 튄다 (F9).
+     * <p>리더가 바뀔 때마다 0 에서 다시 시작하면 그 순간 ETA 가 튄다.
      */
     public static CreditSmoother restore(double alpha, Snapshot snapshot) {
         if (!Double.isFinite(alpha) || alpha <= 0 || alpha > 1) {
@@ -45,8 +43,7 @@ public class CreditSmoother {
     /**
      * 관측치를 넣고 다듬어진 값을 돌려준다.
      *
-     * <p>첫 관측치는 그대로 초기값이 된다. 0 에서 시작하면 첫 몇 틱 동안
-     * 실제보다 한참 낮은 값이 나가고 그 사이 표시 ETA 가 몇 배로 뛴다.
+     * <p>첫 관측치가 그대로 초기값이 된다. 0 에서 시작하면 첫 몇 틱의 표시 ETA 가 몇 배로 뛴다.
      */
     public double observe(double credit) {
         if (!Double.isFinite(credit) || credit < 0) {
@@ -57,7 +54,7 @@ public class CreditSmoother {
         return value;
     }
 
-    /** Phase 4 가 스냅샷 메타에 실어 다음 리더에게 넘긴다. */
+    /** 제어 평면이 스냅샷 메타에 실어 다음 리더에게 넘긴다. */
     public Snapshot snapshot() {
         return new Snapshot(value, seeded);
     }

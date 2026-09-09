@@ -34,7 +34,7 @@ import reactor.core.publisher.Mono;
 /**
  * 여유 대비 부하가 낮은 인스턴스로 보낸다.
  *
- * <p>고르는 규칙은 도메인이 쥔다 (R-9). 여기는 스프링의 모양에 맞춰 재료를
+ * <p>고르는 규칙은 도메인이 쥔다. 여기는 스프링의 모양에 맞춰 재료를
  * 모아 넘기고 답을 되돌리는 일만 한다.
  */
 public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLoadBalancer {
@@ -51,15 +51,15 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
 
     private final LongSupplier nowMillis;
 
-    /** 인스턴스 하나에 동시에 물릴 수 있는 수 (G9.13). */
+    /** 인스턴스 하나에 동시에 물릴 수 있는 수. */
     private final int perInstanceCap;
 
-    /** 가정 밖 구간의 시작과 끝만 남긴다 (LG-2). */
+    /** 가정 밖 구간의 시작과 끝만 남긴다. */
     private final FailureWindow outsideAssumption = FailureWindow.create();
 
     /**
      * 배제가 걸린 구간. <b>배제는 명백한 모드 전환인데 지표만으로는 언제 무엇이
-     * 빠졌는지 못 되짚는다.</b> 진입과 해제를 쌍으로 남긴다 (LG-2).
+     * 빠졌는지 못 되짚는다.</b> 진입과 해제를 쌍으로 남긴다.
      */
     private final FailureWindow ejecting = FailureWindow.create();
 
@@ -71,7 +71,7 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
 
     /**
      * 배제하고 나니 보낼 곳이 없던 구간. <b>부하 최고점에서만 켜지는 자리라</b>
-     * 억제 없이 남기면 초당 수만 줄이 쌓인다 (LG-1 · LG-3).
+     * 억제 없이 남기면 초당 수만 줄이 쌓인다.
      */
     private final FailureWindow crowdedOut = FailureWindow.create();
 
@@ -132,8 +132,8 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
     /**
      * 배제 구간의 진입과 해제를 남긴다.
      *
-     * <p>식별자를 지표 라벨에 못 붙이므로(R-3 · LG-4) 로그가 유일한 기록이다.
-     * 구간의 첫 건만 남겨 매 초 같은 줄이 쌓이지 않게 한다 (LG-3).
+     * <p>식별자는 카디널리티 때문에 지표 라벨에 못 붙어 로그가 유일한 기록이다.
+     * 구간의 첫 건만 남겨 매 초 같은 줄이 쌓이지 않게 한다.
      */
     private void watchEjection(Set<String> present, Set<String> ejected, long now) {
         // **지금 목록 안에서만 센다.** 걷히길 기다리는 죽은 기록까지 세면,
@@ -180,11 +180,9 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
             }
             byId.put(id, instance);
             long credits = creditsOf(instance);
-            // **되돌아온 대의 여유를 줄여 본다.** 배제 동안 트래픽이 0 이라 물린
-            // 건수도 0 이고, 그대로 두면 돌아오는 순간 전량이 그리로 간다. 물린
-            // 건수에 값을 얹는 방식은 P2C 에서 계단이 된다 — 얹은 값이 한가한
-            // 이웃보다 늘 커서 둘 다 그 대를 뽑을 때만 골라진다. 여유를 줄이면
-            // 같은 물린 건수로도 부하율이 높아져, 줄인 만큼만 받는다.
+            // **되돌아온 대의 여유를 줄인다.** 배제 동안 트래픽이 0 이라 물린 건수도
+            // 0 이고, 그대로 두면 돌아오는 순간 전량이 그리로 간다. 물린 건수에 값을
+            // 얹는 쪽은 P2C 에서 계단이 된다 — 여유를 줄여야 줄인 만큼만 받는다.
             double remaining = outliers.recoveryRemaining(id, now);
             // **여유 0 은 그대로 0 이다.** 아래 하한이 0 을 1 로 올리면 스스로
             // 못 받는다고 말한 대가 후보로 되살아난다 — 여유 0 은 후보가
@@ -200,9 +198,8 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
         long now = nowMillis.getAsLong();
         watchInstanceCount(available.size());
         // **사라지고 비어 있는 인스턴스의 카운터를 지운다.** 식별자가 재기동마다
-        // 새로 오므로 안 지우면 배포를 거듭할수록 자란다. 다만 목록에서 잠깐
-        // 빠진 대에 요청이 아직 물려 있으면 안 지운다 — 지우면 돌아온 순간
-        // 부하가 0 으로 보여 그 대로 몰아 보낸다.
+        // 새로 와 안 지우면 배포를 거듭할수록 자란다. 다만 잠깐 빠진 대에 요청이
+        // 아직 물려 있으면 안 지운다 — 돌아온 순간 부하가 0 으로 보여 그리로 몰린다.
         Set<String> present = new HashSet<>();
         for (ServiceInstance instance : available) {
             present.add(instance.getInstanceId());
@@ -223,16 +220,15 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
 
         Map<String, ServiceInstance> byId = new LinkedHashMap<>();
         List<RoutingCandidate> candidates = gather(available, skip, byId, now);
-        // **보낼 곳이 0 이 되면 되돌린다. 방금 실패한 대를 먼저 되돌린다** — 배제는
-        // 세 번 연속 실패한 근거가 있고 재시도 배제는 이번 한 번뿐이라, 둘 중 하나만
-        // 접어야 한다면 근거가 얕은 쪽이다. 그래도 비면 배제까지 접는다: 앓는 대라도
-        // 보내는 것이 아무 데도 못 보내는 것보다 낫다.
+        // **보낼 곳이 0 이 되면 되돌린다. 방금 실패한 대가 먼저다** — 배제는 세 번
+        // 연속 실패한 근거가 있고 재시도 배제는 이번 한 번뿐이라 근거가 얕다.
+        // 그래도 비면 배제까지 접는다: 앓는 대라도 아무 데도 못 보내는 것보다 낫다.
         if (noneUsable(candidates) && !skip.equals(ejected)) {
             byId.clear();
             candidates = gather(available, ejected, byId, now);
         }
         if (noneUsable(candidates) && !ejected.isEmpty()) {
-            // 요청마다 도는 자리다. 구간의 첫 건만 남긴다 (LG-3).
+            // 요청마다 도는 자리다. 구간의 첫 건만 남긴다.
             if (crowdedOut.entered()) {
                 log.warn("배제하고 나니 보낼 곳이 없다 — 뺀 {} 대를 도로 넣는다. "
                         + "남은 대가 여유 0 이거나 인스턴스별 상한에 닿았다는 뜻이다. "
@@ -282,14 +278,13 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
     }
 
     /**
-     * 인스턴스 수가 가정(A7) 밖이면 알린다 (9.3.9 · R-9).
+     * 인스턴스 수가 가정한 범위 밖이면 알린다. <b>구간의 시작만 찍는다</b> —
+     * 요청마다 찍으면 초당 수천 줄에 정작 봐야 할 것이 묻힌다.
      *
      * <p><b>자동으로 전략을 안 바꾼다.</b> 인스턴스 수로 전환하면 임계 근처에서
      * 진동하고 — 롤링 배포가 정확히 그 구간을 지난다 — 어느 구간이 무슨 모드였는지가
      * 대시보드에 안 남아 장애 분석이 막힌다.
      */
-    // **구간의 시작만 찍는다.** 요청마다 찍으면 초당 수천 줄이 쌓이고, 그때
-    // 정작 봐야 할 것이 묻힌다 (LG-2).
     private void watchInstanceCount(int instances) {
         InstanceCountBand band = InstanceCountBand.of(instances);
         if (band.withinAssumption()) {
@@ -310,7 +305,7 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
 
     /**
      * <b>못 읽으면 후보에서 뺀다.</b> 기본값을 주면 여유를 모르는 대가 정상
-     * 비율만큼 받는다 — 그게 이 페이즈가 막으려는 것이다.
+     * 비율만큼 받는다 — 여유에 맞춰 보내겠다는 목적이 무너진다.
      */
     private long creditsOf(ServiceInstance instance) {
         String raw = instance.getMetadata().get(SnapshotInstanceListSupplier.CREDITS);

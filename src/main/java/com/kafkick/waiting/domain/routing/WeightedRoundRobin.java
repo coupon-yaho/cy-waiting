@@ -55,11 +55,19 @@ public final class WeightedRoundRobin implements InstanceChooser {
         // **다 셈한 뒤에 쓴다.** 누적을 그때그때 갱신하면 산술이 중간에 터졌을 때 앞엣것만
         // 움직인 채 아무것도 안 고르고 돌아가, 다음 호출이 그 유령 누적으로 고른다.
         // 인스턴스가 드나들 때만 여기가 먼저 넘치는데, 그 경우를 못 만들어 방어만 둔다.
+        // **누적은 지금 규모 안에서만 뜻이 있다.** 큰 여유로 돌다 전 대가 같이 회복하면
+        // 여유가 1 로 붕괴하는데 누적은 옛 규모라, 회차마다 좁혀지는 폭이 대 수뿐이다 —
+        // 실측으로 한 대가 167 요청을 연속으로 받았다. 방금 회복한 대에 전량을 몰아주는
+        // 것이라 그 대가 다시 무너진다. 총합의 두 배로 재우면 안정 가중치에서는 순서도
+        // 비율도 그대로이고 붕괴 구간의 연속만 둘로 줄어든다.
+        long bound = saturated(total, total);
         Map<String, Long> next = new HashMap<>();
         RoutingCandidate chosen = null;
         long leading = Long.MIN_VALUE;
         for (RoutingCandidate c : eligible) {
-            long value = saturated(credit.getOrDefault(c.instanceId(), 0L), c.credits());
+            long value = Math.clamp(
+                    saturated(credit.getOrDefault(c.instanceId(), 0L), c.credits()),
+                    -bound, bound);
             next.put(c.instanceId(), value);
             if (value > leading) {
                 leading = value;

@@ -12,7 +12,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *
  * @param secret        16자 이상. 짧으면 {@link QueueToken} 이 기동을 막는다
  * @param previous      검증에서만 받아 주는 옛 키. 롤링 배포의 창이다 (CY-902)
- * @param rolloutEndsAt <b>배포가 끝나는 때</b>. 시작이 아니다 — 근거는 AIJ-0273
+ * @param rolloutEndsAt <b>회전 전체가 끝나는 때</b>. 판 하나의 끝이 아니다 (AIJ-0273)
  */
 @ConfigurationProperties("waiting.token")
 public record QueueTokenProperties(String secret, List<String> previous,

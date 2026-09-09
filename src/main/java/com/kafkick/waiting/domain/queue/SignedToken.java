@@ -83,9 +83,9 @@ public final class SignedToken {
      * <b>옛 키를 검증에서만 받는다</b> (CY-902). 키가 하나뿐이면 롤링 배포 중
      * 새 키 파드가 낸 토큰을 옛 키 파드가 거절하고, 그 사람은 큐에 새로 선다.
      *
-     * @param rolloutEndsAt <b>배포가 끝나는 때</b>. 시작이 아니다 — 옛 키 파드는
-     *                      그때까지 계속 발급하므로, 시작으로 잡으면 배포가 도는
-     *                      중에 입장 토큰 창(210초)이 먼저 닫힌다
+     * @param rolloutEndsAt <b>회전 전체가 끝나는 때</b>. 판 하나의 끝이 아니다 —
+     *                      회전은 배포 두 판이고 두 판이 같은 값을 쓴다. 첫 판의
+     *                      끝으로 잡으면 그 파드들이 둘째 판을 못 버틴다
      */
     public static SignedToken of(String prefix, long ttlSec, long windowSec, String secret,
             List<String> alsoAccept, Instant rolloutEndsAt) {
@@ -168,7 +168,8 @@ public final class SignedToken {
         }
         String payload = token.substring(prefix.length(), mark);
         byte[] presented = decode(token.substring(mark + 1));
-        if (presented == null || !signedByUs(payload, presented, now)) {
+        Match match = matchOf(payload, presented, now);
+        if (match == Match.NONE) {
             return Optional.empty();
         }
         // 서명이 맞으므로 여기서부터는 우리가 만든 문자열이다.
@@ -179,31 +180,42 @@ public final class SignedToken {
         if (parts.length != 3 || !parts[0].equals(couponId)) {
             return Optional.empty();
         }
-        return Long.parseLong(parts[2]) <= now.getEpochSecond()
-                ? Optional.empty()
-                : Optional.of(parts[1]);
+        if (Long.parseLong(parts[2]) <= now.getEpochSecond()) {
+            return Optional.empty();
+        }
+        // **받아 준 것만 센다.** 서명만 맞고 만료·쿠폰·모양에서 걸린 것을 세면
+        // 창을 닫아도 되는 때를 그만큼 늦게 본다.
+        if (match == Match.PREVIOUS) {
+            acceptedByPrevious.incrementAndGet();
+        }
+        return Optional.of(parts[1]);
     }
 
     /**
      * 우리가 낸 서명인가. <b>맞은 뒤에도 나머지를 다 본다</b> — 첫 키에서 빠져나가면
      * 걸린 시간이 어느 키였는지를 알려 준다.
      */
-    private boolean signedByUs(String payload, byte[] presented, Instant now) {
+    private Match matchOf(String payload, byte[] presented, Instant now) {
+        if (presented == null) {
+            return Match.NONE;
+        }
         // 창 밖이면 현재 키 하나만 본다. 그 조기 반환은 비밀에 안 달려 있다.
         boolean matched = MessageDigest.isEqual(sign(secret, payload), presented);
         if (acceptUntil == null || !now.isBefore(acceptUntil)) {
-            return matched;
+            return matched ? Match.CURRENT : Match.NONE;
         }
         boolean byPrevious = false;
         for (byte[] old : alsoAccept) {
             byPrevious |= MessageDigest.isEqual(sign(old, payload), presented);
         }
-        // 키가 서로 다른 것은 위에서 막았으므로 둘이 함께 맞을 수 없다.
-        if (byPrevious) {
-            acceptedByPrevious.incrementAndGet();
+        if (matched) {
+            return Match.CURRENT;
         }
-        return matched || byPrevious;
+        return byPrevious ? Match.PREVIOUS : Match.NONE;
     }
+
+    /** 어느 키로 맞았는가. 밖으로는 안 나간다 — 나가면 회전 진행도가 보인다. */
+    private enum Match { NONE, CURRENT, PREVIOUS }
 
     /**
      * <b>만료가 아니라 발급 시각을 끊는다.</b> 만료를 끊으면 창 끝에 받은 사람의

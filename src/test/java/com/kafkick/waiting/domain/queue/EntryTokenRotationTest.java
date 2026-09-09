@@ -178,7 +178,7 @@ class EntryTokenRotationTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
-    /** 옛 키로 받은 횟수를 센다. 0 이 되는 때가 창을 닫아도 되는 때다. */
+    /** 옛 키로 받은 횟수를 센다. 누적이라 더 안 오르는 때가 창을 닫아도 되는 때다. */
     @Test
     @DisplayName("옛_키로_받은_횟수를_센다")
     void 옛_키로_받은_횟수를_센다() {
@@ -188,5 +188,21 @@ class EntryTokenRotationTest {
         파드.verify(파드.issue("c1", "m2", 지금), "c1", 지금);
 
         assertThat(파드.acceptedByPrevious()).as("옛 키로 맞은 것만 센다").isEqualTo(1);
+    }
+
+    /**
+     * <b>받아 준 것만 센다.</b> 서명만 맞고 만료·쿠폰에서 걸린 것을 세면 창을
+     * 닫아도 되는 때를 그만큼 늦게 본다 — 그 수가 유일한 신호다.
+     */
+    @Test
+    @DisplayName("거절한_옛_키_토큰은_안_센다")
+    void 거절한_옛_키_토큰은_안_센다() {
+        EntryToken 파드 = EntryToken.of(새_키, List.of(옛_키), 배포_끝);
+        String 옛_토큰 = EntryToken.of(옛_키).issue("c1", "m1", 지금);
+
+        파드.verify(옛_토큰, "다른쿠폰", 지금);
+        파드.verify(옛_토큰, "c1", 지금.plusSeconds(EntryToken.TTL_SEC + 1));
+
+        assertThat(파드.acceptedByPrevious()).as("서명만 맞은 것은 안 센다").isZero();
     }
 }

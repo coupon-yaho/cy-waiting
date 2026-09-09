@@ -9,7 +9,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import java.time.Clock;
 import com.kafkick.waiting.control.SnapshotHolder;
 import io.micrometer.core.instrument.FunctionCounter;
-import java.util.function.Supplier;
+import java.util.function.ToDoubleFunction;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -73,7 +73,7 @@ public class IdentityConfig {
     @Bean
     public QueueToken queueToken(QueueTokenProperties properties, MeterRegistry meters) {
         QueueToken token = properties.queueToken();
-        rotationGauge(meters, "queue", token::acceptedByPrevious);
+        rotationGauge(meters, "queue", token, QueueToken::acceptedByPrevious);
         return token;
     }
 
@@ -84,7 +84,7 @@ public class IdentityConfig {
     @Bean
     public EntryToken entryToken(QueueTokenProperties properties, MeterRegistry meters) {
         EntryToken token = properties.entryToken();
-        rotationGauge(meters, "entry", token::acceptedByPrevious);
+        rotationGauge(meters, "entry", token, EntryToken::acceptedByPrevious);
         return token;
     }
 
@@ -93,10 +93,12 @@ public class IdentityConfig {
      * 회전이 어디까지 갔는지가 보인다. <b>누적이라 증가율로 읽는다</b> — 한 번이라도
      * 맞으면 값 자체는 영영 0 이 아니다. 더 안 오르면 창을 닫아도 된다 (CY-902).
      */
-    private void rotationGauge(MeterRegistry meters, String kind,
-            Supplier<Number> value) {
-        FunctionCounter.builder("waiting.token.previous.accepted", value,
-                        v -> v.get().doubleValue())
+    private <T> void rotationGauge(MeterRegistry meters, String kind, T token,
+            ToDoubleFunction<T> value) {
+        // **토큰 자체를 관측 대상으로 준다.** 미터가 그 참조를 약하게 쥐므로,
+        // 람다를 주면 아무도 안 붙들어 GC 뒤에 계열이 멎는다 — 옛 키 트래픽이
+        // 계속 오는데 그래프만 얼어붙는다.
+        FunctionCounter.builder("waiting.token.previous.accepted", token, value)
                 .tag("kind", kind)
                 .description("옛 비밀키로 받아 준 토큰 수. 더 안 오르면 창을 닫아도 된다")
                 .register(meters);

@@ -87,20 +87,56 @@ public final class IpLiteral {
             if (first == 0 || first >= 224) {
                 return false;
             }
-            return !(first == 169 && (address[1] & 0xff) == 254);
+            if (first == 169 && (address[1] & 0xff) == 254) {
+                return false;
+            }
+            // 192.88.99.0/24 — 6to4 릴레이 애니캐스트라 한 대가 아니다.
+            return !(first == 192 && (address[1] & 0xff) == 88 && (address[2] & 0xff) == 99);
         }
         if (first == 0xff) {
             return false;
         }
         // fe80::/10. 다음 바이트의 위 두 비트까지 봐야 fec0::/10 과 안 섞인다.
+        // **fec0::/10 은 참으로 둔다** — 폐기된 대역이지만 한 대를 가리키기는 한다.
         if (first == 0xfe && (address[1] & 0xc0) == 0x80) {
             return false;
         }
-        for (byte b : address) {
-            if (b != 0) {
-                return true;
+        // **v4 를 v6 표기 안에 실어 나르는 것들.** 앞 열두 바이트가 0 이면 v4 호환
+        // 표기라 뒤의 넉 자를 v4 로 쓰고, 그러면 여기 판정이 v4 규칙을 안 거친다 —
+        // `::127.0.0.1` 이 목적지가 된다. `::1` 만 남기고 거절한다.
+        // 미지정(`::`)도 여기서 걸린다 — 앞 열두 바이트가 0 이고 뒤가 `::1` 이 아니다.
+        return !embedsV4(address);
+    }
+
+    /**
+     * v4 주소를 실어 나르는 v6 표기인가. <b>한 대를 가리키는지가 v6 규칙으로 안
+     * 갈린다</b> — 번역되는 순간 어디로 가는지는 안에 실린 v4 가 정한다.
+     *
+     * <p>RULE-EXCEPTION(JS-13): 주소를 푸는 유틸리티라 인스턴스가 없다.
+     */
+    private static boolean embedsV4(byte[] address) {
+        // 6to4 `2002::/16` · Teredo `2001::/32`
+        if ((address[0] & 0xff) == 0x20 && (address[1] & 0xff) == 0x02) {
+            return true;
+        }
+        if ((address[0] & 0xff) == 0x20 && (address[1] & 0xff) == 0x01
+                && address[2] == 0 && address[3] == 0) {
+            return true;
+        }
+        // NAT64 `64:ff9b::/96`
+        if ((address[0] & 0xff) == 0x00 && (address[1] & 0xff) == 0x64
+                && (address[2] & 0xff) == 0xff && (address[3] & 0xff) == 0x9b) {
+            return true;
+        }
+        // v4 호환 `::a.b.c.d`. 앞 열두 바이트가 0 인 자리다 — `::1` 은 빼고 본다.
+        for (int i = 0; i < 12; i++) {
+            if (address[i] != 0) {
+                return false;
             }
         }
-        return false;
+        // 앞이 다 0 이면 남는 것은 뒤 넉 자다. 한 수로 접어 `::1` 하나만 뺀다.
+        int tail = ((address[12] & 0xff) << 24) | ((address[13] & 0xff) << 16)
+                | ((address[14] & 0xff) << 8) | (address[15] & 0xff);
+        return tail != 1;
     }
 }

@@ -117,6 +117,19 @@ class IpLiteralTest {
         assertThat(IpLiteral.routable(IpLiteral.parse("fec0::1"))).isTrue();
         // 169 로 시작해도 둘째 바이트가 다르면 링크 로컬이 아니다.
         assertThat(IpLiteral.routable(IpLiteral.parse("169.1.1.1"))).isTrue();
+        // 앞 두 바이트가 20 01 이어도 그다음이 0 이 아니면 Teredo 가 아니다.
+        assertThat(IpLiteral.routable(IpLiteral.parse("2001:db8::1"))).isTrue();
+        // 20 으로 시작해도 둘째가 02 가 아니면 6to4 가 아니다.
+        assertThat(IpLiteral.routable(IpLiteral.parse("2003::1"))).isTrue();
+        // 192 로 시작해도 둘째가 88 이 아니면 릴레이 애니캐스트가 아니다.
+        assertThat(IpLiteral.routable(IpLiteral.parse("192.168.0.5"))).isTrue();
+        // 192.88 로 시작해도 셋째가 99 가 아니면 릴레이 애니캐스트가 아니다.
+        assertThat(IpLiteral.routable(IpLiteral.parse("192.88.1.1"))).isTrue();
+        // 20 01 로 시작해도 넷째가 0 이 아니면 Teredo 가 아니다.
+        assertThat(IpLiteral.routable(IpLiteral.parse("2001:1::1"))).isTrue();
+        // 00 64 로 시작해도 셋째·넷째가 ff 9b 가 아니면 NAT64 가 아니다.
+        assertThat(IpLiteral.routable(IpLiteral.parse("64:1::1"))).isTrue();
+        assertThat(IpLiteral.routable(IpLiteral.parse("64:ff00::1"))).isTrue();
     }
 
     @Test
@@ -130,5 +143,26 @@ class IpLiteralTest {
         assertThat(IpLiteral.routable(IpLiteral.parse("224.0.0.1"))).isFalse();
         assertThat(IpLiteral.routable(IpLiteral.parse("255.255.255.255"))).isFalse();
         assertThat(IpLiteral.routable(IpLiteral.parse("ff02::1"))).isFalse();
+    }
+
+    /**
+     * <b>v4 를 v6 표기 안에 실어 나르는 것은 목적지가 아니다.</b> 번역되는 순간
+     * 어디로 가는지는 안에 실린 v4 가 정하는데, 그 v4 는 여기 판정을 안 거친다.
+     */
+    @Test
+    @DisplayName("v4_를_실어_나르는_v6_표기는_거절한다")
+    void v4_를_실어_나르는_v6_표기는_거절한다() {
+        assertThat(IpLiteral.routable(IpLiteral.parse("::127.0.0.1"))).isFalse();
+        assertThat(IpLiteral.routable(IpLiteral.parse("::10.0.0.5"))).isFalse();
+        assertThat(IpLiteral.routable(IpLiteral.parse("::2"))).as("::1 만 빼고 거절한다")
+                .isFalse();
+        assertThat(IpLiteral.routable(IpLiteral.parse("64:ff9b::a00:105")))
+                .as("NAT64").isFalse();
+        assertThat(IpLiteral.routable(IpLiteral.parse("2002:0a00:0005::1")))
+                .as("6to4").isFalse();
+        assertThat(IpLiteral.routable(IpLiteral.parse("2001:0:0a00:5::1")))
+                .as("Teredo").isFalse();
+        assertThat(IpLiteral.routable(IpLiteral.parse("192.88.99.1")))
+                .as("6to4 릴레이 애니캐스트").isFalse();
     }
 }

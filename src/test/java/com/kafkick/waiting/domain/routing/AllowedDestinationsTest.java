@@ -284,12 +284,44 @@ class AllowedDestinationsTest {
     @Test
     @DisplayName("한_대가_아닌_주소는_거절한다")
     void 한_대가_아닌_주소는_거절한다() {
-        AllowedDestinations 허용 =
-                AllowedDestinations.of(List.of("fe80::/10", "ff00::/8", "169.254.0.0/16"), 포트);
+        AllowedDestinations 허용 = AllowedDestinations.of(
+                List.of("fe80::/32", "ff02::/32", "169.254.0.0/16"), 포트);
 
         assertThat(허용.permits(주소("[fe80::1]:8080"))).isFalse();
         assertThat(허용.permits(주소("[ff02::1]:8080"))).isFalse();
         assertThat(허용.permits(주소("169.254.1.1:8080"))).isFalse();
+    }
+
+    /**
+     * <b>v6 의 한 바이트는 v4 의 한 바이트가 아니다.</b> 같은 `/8` 이 v6 에서는 비교가
+     * 안 되게 넓다. 사설 대역의 정본 표기 `fc00::/7` 은 그 자신이 내부망이라 받는다.
+     */
+    @Test
+    @DisplayName("v6_하한은_v4_보다_좁다")
+    void v6_하한은_v4_보다_좁다() {
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of("2000::/8"), 포트))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of("::/8"), 포트))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        assertThat(AllowedDestinations.of(List.of("fc00::/7"), 포트)
+                .permits(주소("[fd00::5]:8080"))).as("사설 대역 정본 표기는 받는다").isTrue();
+        assertThat(AllowedDestinations.of(List.of("2001:db8::/32"), 포트)
+                .permits(주소("[2001:db8::5]:8080"))).as("좁게 적으면 받는다").isTrue();
+    }
+
+    /**
+     * <b>주소로 못 읽히는 숫자 항목은 거절한다.</b> 접미사로 받으면 영영 아무것도 안
+     * 맞고, 더 나쁘게는 보고 쪽의 `010.0.0.5` 가 그 접미사에 걸려 통과한다 — 그 값은
+     * 연결할 때 `10.0.0.5` 로 풀려 검사한 값과 갈린다.
+     */
+    @Test
+    @DisplayName("주소로_못_읽는_숫자_항목은_거절한다")
+    void 주소로_못_읽는_숫자_항목은_거절한다() {
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of("10.0.1.256"), 포트))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of("10.0.1.5.6"), 포트))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     /**

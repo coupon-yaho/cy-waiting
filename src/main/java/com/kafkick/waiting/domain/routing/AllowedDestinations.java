@@ -19,13 +19,32 @@ public final class AllowedDestinations {
     private static final int MAX_PORT = 65535;
 
     /**
-     * 대역 프리픽스의 하한. 내부망이 실제로 쓰는 가장 넓은 폭이 한 바이트이고
-     * (`10.0.0.0/8` · `fd00::/8`), 그보다 넓은 것은 내부망일 수 없다.
+     * v4 대역 프리픽스의 하한. 내부망이 쓰는 가장 넓은 폭이 `10.0.0.0/8` 이고
+     * 그보다 넓은 것은 내부망일 수 없다.
      */
-    private static final int MIN_PREFIX_BITS = 8;
+    private static final int MIN_V4_PREFIX_BITS = 8;
+
+    /**
+     * v6 대역 프리픽스의 하한. <b>비트 수가 주소 수가 아니다</b> — 같은 `/8` 이
+     * v6 에서는 v4 전체의 2의 88승 배다. 그래서 훨씬 좁게 받는다.
+     */
+    private static final int MIN_V6_PREFIX_BITS = 32;
+
+    /**
+     * 사설 대역(ULA)의 하한. 정본 표기가 `fc00::/7` 이라 위 하한으로는 못 적는데,
+     * 그 대역은 정의상 내부망이라 그 자신은 받는다.
+     */
+    private static final int MIN_ULA_PREFIX_BITS = 7;
 
     /** v4 주소의 바이트 수. 매핑 표기가 v6 인 척 v4 규칙으로 서는 것을 여기서 가른다. */
     private static final int V4_BYTES = 4;
+
+    /**
+     * 라벨이 전부 숫자면 이름이 아니다. 주소로 못 읽히는 그런 항목을 접미사로 받으면
+     * <b>보고 쪽에서 그 접미사에 걸리는 숫자 호스트가 생긴다</b> — `010.0.0.5` 는
+     * 주소로 안 읽혀 이름 갈래로 가는데, 연결할 때는 `10.0.0.5` 로 풀린다.
+     */
+    private static final Pattern ALL_DIGIT_LABELS = Pattern.compile("[.\\d]*\\d[.\\d]*");
 
     /** 주소를 쓰다 만 모양. 점으로 끊긴 열 진수인데 넷이 아니다. */
     private static final Pattern PARTIAL_ADDRESS =
@@ -94,6 +113,12 @@ public final class AllowedDestinations {
             if (PARTIAL_ADDRESS.matcher(trimmed).matches()) {
                 throw new IllegalArgumentException("허용 목적지의 주소가 덜 적혔다: " + entry);
             }
+            // **숫자와 점뿐인 것은 이름으로 안 받는다.** `10.0.1.256` 처럼 주소로 못
+            // 읽히는 것이 접미사가 되면 영영 아무것도 안 맞고, 증상은 후보 0 이다.
+            if (trimmed.indexOf('/') < 0 && IpLiteral.parse(trimmed) == null
+                    && ALL_DIGIT_LABELS.matcher(trimmed).matches()) {
+                throw new IllegalArgumentException("허용 목적지의 주소를 못 읽는다: " + entry);
+            }
             // 주소나 대역이면 대역으로, 아니면 이름으로 본다. 맨 주소를 이름으로
             // 넣으면 이름끼리만 견주므로 그 주소를 보고한 뒷단이 도리어 거절된다.
             if (trimmed.indexOf('/') >= 0 || IpLiteral.parse(trimmed) != null) {
@@ -111,10 +136,11 @@ public final class AllowedDestinations {
                 // 눈에 띄지만 v6 에는 그런 신호가 없다 — `2000::/3` 하나로 공인
                 // 유니캐스트 전부가 열린다. 내부망이 쓰는 폭(`10.0.0.0/8`·`fd00::/8`)이
                 // 한 바이트라 그것을 하한으로 둔다.
-                if (range.prefixBits() < MIN_PREFIX_BITS) {
+                int floor = minPrefixBits(range);
+                if (range.prefixBits() < floor) {
                     throw new IllegalArgumentException(
-                            "허용 목적지의 대역이 너무 넓다 — 프리픽스는 %d 비트 이상이어야 한다: %s"
-                                    .formatted(MIN_PREFIX_BITS, entry));
+                            "허용 목적지의 대역이 너무 넓다 — 프리픽스가 %d 비트 이상이어야 한다: %s"
+                                    .formatted(floor, entry));
                 }
                 ranges.add(range);
             } else {
@@ -123,6 +149,20 @@ public final class AllowedDestinations {
         }
         return new AllowedDestinations(List.copyOf(suffixes), List.copyOf(ranges),
                 Set.copyOf(ports), false);
+    }
+
+    /**
+     * 이 대역이 지켜야 하는 프리픽스 하한. <b>패밀리마다 다르다</b> — 비트 수가
+     * 주소 수가 아니라, 같은 폭이 v6 에서는 비교가 안 되게 넓다.
+     *
+     * <p>RULE-EXCEPTION(JS-13): 설정을 읽는 정적 팩터리가 부르는 자리라 인스턴스가 없다.
+     */
+    private static int minPrefixBits(IpRange range) {
+        if (range.address().length == V4_BYTES) {
+            return MIN_V4_PREFIX_BITS;
+        }
+        // fc00::/7. 정의상 내부망이라 정본 표기 그 자신은 받는다.
+        return (range.address()[0] & 0xfe) == 0xfc ? MIN_ULA_PREFIX_BITS : MIN_V6_PREFIX_BITS;
     }
 
     /** 항목 하나라도 맞으면 받는다. 다 안 맞으면 그 인스턴스는 라우팅 후보가 아니다. */

@@ -34,6 +34,35 @@ class WeightedRoundRobinTest {
         return 받은;
     }
 
+    /** 연속으로 같은 대가 받은 가장 긴 구간. 몰아주기는 합이 아니라 이 수로 드러난다. */
+    private static int 최대_연속(InstanceChooser 고르개, List<RoutingCandidate> 후보, int 횟수) {
+        String 앞 = null;
+        int 연속 = 0;
+        int 최대 = 0;
+        for (int i = 0; i < 횟수; i++) {
+            String 고른 = 고르개.choose(후보).orElseThrow().instanceId();
+            연속 = 고른.equals(앞) ? 연속 + 1 : 1;
+            앞 = 고른;
+            최대 = Math.max(최대, 연속);
+        }
+        return 최대;
+    }
+
+    /**
+     * <b>전 대가 같이 회복하면 누적이 옛 규모로 남는다.</b> 여유가 1 로 붕괴하면
+     * 회차마다 좁혀지는 폭이 대 수뿐이라, 방금 회복한 대가 전량을 받고 다시 무너진다.
+     */
+    @Test
+    @DisplayName("같이_회복해도_한_대에_안_몰린다")
+    void 같이_회복해도_한_대에_안_몰린다() {
+        InstanceChooser 고르개 = WeightedRoundRobin.create();
+        // 큰 여유로 한동안 돈다. 누적이 ±500 까지 벌어지는 자리다.
+        돌린다(고르개, 후보(1_000, 300, 200), 200);
+
+        assertThat(최대_연속(고르개, 후보(1, 1, 1), 400))
+                .as("붕괴 직후 한 대가 연속으로 받는 수").isLessThanOrEqualTo(2);
+    }
+
     @Nested
     @DisplayName("비율")
     class Ratio {

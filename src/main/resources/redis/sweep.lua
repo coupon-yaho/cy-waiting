@@ -132,25 +132,35 @@ local removing = removeFront == 1
 
 -- **임계를 내림한 정수로 적는다.** 그냥 이어 붙이면 Lua 가 유효숫자 열넷으로 줄이는데
 -- 큐 score 는 마이크로초라 열여섯 자리다. 반올림이 위로 가면 곧 차례가 올 사람이 창에서
--- 빠지고, 내리면 창이 한 칸 넓어질 뿐이라 아래의 정확한 비교가 되잡는다.
+-- 빠지고, 내리면 창이 한 칸 넓어질 뿐이라 아래에서 그 칸을 되잡는다.
 
--- **순번을 같이 받고, 걷을 회차가 아니면 읽지도 않는다.** 멤버당 ZSCORE 를 다시 부르면
--- K 번의 왕복이 된다. 승계 유예는 모든 쿠폰에 대해 접고 도는데 그 회차가 실측으로
--- 3.7~7.6ms 였다 — 접는 것은 앞줄 제거뿐이고 아래 정리는 그대로 돈다.
-local flat = (usableAdmitted and removing)
-        and redis.call('ZRANGEBYSCORE', KEYS[1],
-                '(' .. string.format('%.0f', math.floor(admitted)), '+inf', 'WITHSCORES',
-                'LIMIT', 0, limit) or {}
--- **`#t` 로 자리를 잡지 않는다.** Lua 5.1 의 길이 연산자는 매번 이진 탐색을
--- 돌아 누적이 O(n log n) 이 된다. 실측으로 원소 3,000 개에서 649μs 대 141μs 다.
--- 세는 변수를 두면 같은 결과를 선형에 만든다.
+-- **순번은 같이 안 받는다.** 원소당 비용이 정확히 두 배인데 쓰는 곳은 그 한 칸을
+-- 되잡는 자리뿐이다. 걷을 회차가 아니면 창을 읽지도 않는다 — 승계 유예는 모든 쿠폰에
+-- 대해 접고 도는데 그 회차가 실측으로 3.7~7.6ms 였다.
 local front = {}
-local ranks = {}
 local nFront = 0
-for i = 1, #flat, 2 do
-    nFront = nFront + 1
-    front[nFront] = flat[i]
-    ranks[nFront] = tonumber(flat[i + 1])
+local skip = 0
+if usableAdmitted and removing then
+    local bound = string.format('%.0f', math.floor(admitted))
+    front = redis.call('ZRANGEBYSCORE', KEYS[1], '(' .. bound, '+inf', 'LIMIT', 0, limit)
+    -- **`#t` 를 한 번만 쓴다.** Lua 5.1 의 길이 연산자는 매번 이진 탐색을 돌아,
+    -- 원소마다 부르면 누적이 O(n log n) 이 된다. 원소 3,000 개에서 649μs 대 141μs 다.
+    nFront = #front
+    -- **넓어진 한 칸에 임계 이하가 든다.** 걷으면 아직 차례가 안 온 사람이 다시 서서
+    -- 통째로 추월당한다. 순번은 앞에서부터 오르고 동점도 붙어 나오니 그런 사람은 맨
+    -- 앞에 몰린다 — 몇 명인지만 세고 그만큼 건너뛴다. 내려 적은 값이 임계와 같으면
+    -- (정상 경로가 임계를 정수로만 적으므로 늘 그렇다) 세지도 않는다.
+    --
+    -- **자릿수를 박아 넘긴다.** 수를 그대로 넘기면 Lua 가 유효숫자 열넷으로 줄이는데
+    -- 큐 순번은 마이크로초라 열여섯 자리다. 17 자리면 배정도가 그대로 왕복한다.
+    if tonumber(bound) < admitted then
+        skip = redis.call('ZCOUNT', KEYS[1],
+                '(' .. bound, string.format('%.17g', admitted))
+        -- 창은 K 로 잘리는데 세는 것은 안 잘린다. 넘으면 전부 건너뛴다.
+        if skip > nFront then
+            skip = nFront
+        end
+    end
 end
 local swept = 0
 
@@ -170,18 +180,14 @@ if nFront > 0 then
 
     -- 회복 구간을 지키는 것은 SweepGate 의 재개 유예다. 그것이 리더 메모리라
     -- 승계에서 사라지는 것이 진짜 구멍이고, 레디스로 내려야 풀린다.
-    --
-    -- 창이 이미 임계 위라 아래의 rank 검사는 대개 참인데 지우면 안 된다 —
-    -- 범위 인자가 문자열을 거치며 임계가 아래로 접힐 때 임계 이하인 사람을
-    -- 되잡는 것이 그 검사다.
     local gone = {}
     local records = {}
     local nGone = 0
     local nRecords = 0
-    for i = 1, removing and nFront or 0 do
+    -- 넓어진 칸에 든 앞쪽은 위에서 이미 걸러 냈다.
+    for i = skip + 1, removing and nFront or 0 do
         -- score 가 없거나 이미 지난 것은 폴링이 끊긴 것이다
         local at = aliveAt[i]
-        local rank = ranks[i]
         -- **입장 표시는 덮어쓴다.** 차례가 왔던 사람이 다시 줄을 서면 그 표시가 남은
         -- 채로 임계 위에 선다. 큐에서만 빼고 표시를 남기면 다음 폴링에 조회가 입장이라
         -- 답해 줄 전체를 추월하고 초과 발급이 된다.
@@ -191,7 +197,7 @@ if nFront > 0 then
         -- 영구히 부풀어 그 쿠폰이 한산으로 안 돌아간다.
 
         -- 기록이 제거보다 먼저라 "표시만 남고 큐에서 빠진" 순간은 없다.
-        if (at == nil or at < now) and (rank == nil or rank > admitted) then
+        if at == nil or at < now then
             nGone = nGone + 1
             gone[nGone] = front[i]
             -- 자리는 안 보관한다. 재방문자로 식별만 한다.

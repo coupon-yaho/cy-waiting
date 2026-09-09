@@ -8,7 +8,11 @@
 -- ARGV[2]  1 이면 지운다, 0 이면 표만 세운다
 -- ARGV[3]  표의 수명(밀리초)
 --
--- 반환  1 이면 지웠다, 0 이면 안 지웠다
+-- 반환  1 이면 지웠다, 0 이면 안 지웠다, -1 이면 옛 임기라 막았다,
+--       -2 면 표가 없어 막았다
+--
+-- **막은 것을 안 지운 것과 가르는 이유.** 둘이 같은 값이면 최대 유예 내내 죽은
+-- 줄이 폴링 예산을 먹는데 관측 창구가 하나도 없다.
 --
 -- **이 저장소에서 되돌릴 수 없는 유일한 쓰기다.** 지운 줄을 되살리는 코드가
 -- 없다 — `coupons:active` 는 발급 계층 소유라 여기서 다시 넣지 못한다. 그래서
@@ -34,7 +38,7 @@ end
 -- 같은 번호의 재시도는 막지 않는다 — 막으면 실패한 삭제가 영영 안 된다.
 local seen = tonumber(redis.call('GET', KEYS[4]))
 if seen ~= nil and seen == seen and fence < seen then
-    return 0
+    return -1
 end
 
 -- **후보로 올리는 순간 표를 세운다.** 지웠을 때만 세우면 한 번도 안 지운 줄에는 표가
@@ -43,6 +47,13 @@ end
 redis.call('SET', KEYS[4], string.format('%.0f', fence), 'PX', tonumber(ARGV[3]))
 if ARGV[2] ~= '1' then
     return 0
+end
+
+-- **표가 없으면 안 지운다.** 표는 후보로 오른 첫 회차에 서므로, 지울 때가 되면
+-- 이미 있어야 한다. 없다는 것은 승계 잠금도 후보 표시도 실패했다는 뜻이고,
+-- 그 상태의 이 노드는 자기가 유일한 리더라는 근거가 없다 — 되돌릴 수 없는 쓰기다.
+if seen == nil or seen ~= seen then
+    return -2
 end
 
 local raw = redis.call('GET', KEYS[3])

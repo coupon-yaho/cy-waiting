@@ -85,6 +85,8 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "7").block(WAIT);
         // 삭제가 재고를 직접 본다 (CY-765). 안 심으면 못 읽은 것이라 안 지운다.
         redis.opsForValue().set(RedisKeys.stock("c1"), "0").block(WAIT);
+        // 후보로 먼저 올려 표를 세운다 — 표 없이 지우는 회차는 운영에 없다 (CY-894).
+        port.claimSoldOutQueues(List.of("c1"), 1).block(WAIT);
 
         assertThat(port.dropSoldOutQueues(List.of("c1"), 1).block(WAIT))
                 .as("지운 쿠폰을 돌려준다").containsExactly("c1");
@@ -451,7 +453,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         줄_세운다("c1", 10, 20, 30, 40, 50);
         port.apply(new Grant("c1", 2), 임기 - 1).block(WAIT);
         // 새 리더가 그 쿠폰을 아직 안 만졌다. 승계 때 문만 잠근 상태다.
-        port.sealApplyFences(List.of("c1"), 임기).block(WAIT);
+        port.sealFences(List.of("c1"), 임기).block(WAIT);
 
         assertThatThrownBy(() -> port.apply(new Grant("c1", 2), 임기 - 1).block(WAIT))
                 .isInstanceOf(AllocationRedisPort.FencedOutException.class);
@@ -470,7 +472,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         줄_세운다("c1", 10, 20, 30, 40, 50);
         port.apply(new Grant("c1", 2), 임기).block(WAIT);
 
-        port.sealApplyFences(List.of("c1"), 임기 - 100).block(WAIT);
+        port.sealFences(List.of("c1"), 임기 - 100).block(WAIT);
 
         assertThat(port.apply(new Grant("c1", 2), 임기 - 100).block(WAIT))
                 .as("시계가 뒤로 간 새 리더도 들일 수 있어야 한다").isEqualTo(2);
@@ -480,7 +482,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     @Test
     @DisplayName("리더가_아니면_안_잠근다")
     void 리더가_아니면_안_잠근다() {
-        assertThat(port.sealApplyFences(List.of("c1"), 0).block(WAIT)).isZero();
+        assertThat(port.sealFences(List.of("c1"), 0).block(WAIT)).isZero();
 
         assertThat(redis.hasKey(RedisKeys.applyFence("c1", SHARDS, 0)).block(WAIT)).isFalse();
     }
@@ -493,7 +495,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     @Test
     @DisplayName("잠금_스크립트도_리더가_아니면_안_쓴다")
     void 잠금_스크립트도_리더가_아니면_안_쓴다() {
-        assertThat(port.sealApplyFences(List.of("c1", "c2"), 임기).block(WAIT))
+        assertThat(port.sealFences(List.of("c1", "c2"), 임기).block(WAIT))
                 .as("잠근 수를 그대로 센다 — 1 로 갈면 안 잠근 것도 잠갔다고 센다")
                 .isEqualTo(2);
     }
@@ -517,7 +519,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     @Test
     @DisplayName("잠근_문에도_수명이_있다")
     void 잠근_문에도_수명이_있다() {
-        port.sealApplyFences(List.of("c1"), 임기).block(WAIT);
+        port.sealFences(List.of("c1"), 임기).block(WAIT);
 
         assertThat(redis.getExpire(RedisKeys.applyFence("c1", SHARDS, 0)).block(WAIT))
                 .isNotNull()
@@ -530,7 +532,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     void 거절_수가_쿠폰마다_오른다() {
         줄_세운다("c1", 10, 20, 30);
         줄_세운다("c2", 10, 20, 30);
-        port.sealApplyFences(List.of("c1", "c2"), 임기).block(WAIT);
+        port.sealFences(List.of("c1", "c2"), 임기).block(WAIT);
         double 앞 = port.applyFenced();
 
         for (String couponId : List.of("c1", "c2")) {

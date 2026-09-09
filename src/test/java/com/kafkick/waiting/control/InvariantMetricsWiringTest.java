@@ -60,6 +60,9 @@ class InvariantMetricsWiringTest {
                 // 막힌 구간의 길이를 그것만으로는 못 센다.
                 .contains("waiting_snapshot_publish_fenced_total")
                 .contains("waiting_allocation_apply_fenced_total")
+                // 되돌릴 수 없는 쓰기가 막힌 수 (CY-894). 안 내면 그 창 동안 죽은
+                // 줄이 폴링 예산을 먹는데 아무도 못 본다.
+                .contains("waiting_queue_drop_fenced_total")
                 // 서킷을 보고 있는가 (F3 · CY-788). 안 보는 것과 닫혀 있는 것이
                 // 같은 값을 내므로, 이 게이지가 없으면 배선이 빠진 것을 못 안다.
                 .contains("waiting_circuit_wired")

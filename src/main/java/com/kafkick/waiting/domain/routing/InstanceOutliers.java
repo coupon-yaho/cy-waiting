@@ -71,8 +71,10 @@ public final class InstanceOutliers {
 
     /**
      * 이 인스턴스가 실패로 끝냈다. 연속이 임계에 닿으면 거기서 배제가 시작된다.
-     * <b>배제·회복 구간의 실패는 임계를 안 기다린다</b> — 되돌리는 중은 아직 미덥지
-     * 않다는 뜻이라 한 건으로 곧바로 다시 뺀다.
+     *
+     * <p><b>배제 구간의 실패만 임계를 안 기다린다</b> — 그 구간은 트래픽이 0 이라 거기
+     * 오는 것이 늦게 돌아온 결과다. 회복 구간은 같은 임계를 쓰고, 못 미치는 실패는
+     * 회복을 취소하지 않는다.
      */
     public void failed(String instanceId, long nowMillis) {
         Objects.requireNonNull(instanceId, "instanceId");
@@ -192,20 +194,39 @@ public final class InstanceOutliers {
                 return;
             }
             if (age >= ejectMillis + rampMillis) {
+                // **가라앉으면 계수도 함께 버린다.** 램프에서 쌓은 연속을 넘기면 평상시
+                // 첫 실패 한 건이 그 대를 다시 뺀다 — 트래픽이 끊겼다 돌아오는 자리에서
+                // 그 계수가 무기한 살아남는다.
                 ejectedAt = null;
+                consecutive = 0;
             }
         }
 
         synchronized void failed(int threshold, long now, long ejectMillis, long rampMillis) {
-            // **배제와 램프 구간의 실패는 그 자리에서 다시 뺀다.** 되돌리는 중은
-            // 아직 미덥지 않다는 뜻이라, 임계만큼을 다시 주면 그동안 그 대가
-            // 여전히 가장 한가해 보인다.
-            if (ejectedAt != null && age(now) < ejectMillis + rampMillis) {
+            // **배제 중의 실패는 그 자리에서 다시 뺀다.** 거기 오는 것은 배제 전에
+            // 나갔다 늦게 돌아온 결과라, 아직 안 나은 대가 스스로 배제를 끝내면 안 된다.
+            if (ejected(now, ejectMillis)) {
                 ejectedAt = now;
                 consecutive = 0;
                 return;
             }
-            ejectedAt = null;
+            // **가라앉았으면 앓은 적 없는 대와 같이 다룬다.** 램프에서 쌓은 연속을
+            // 넘기면 평상시 첫 실패 한 건이 그 대를 다시 뺀다 — 트래픽이 끊겼다
+            // 돌아오는 자리에서 그 계수가 무기한 살아남는다.
+            if (!settling(now, ejectMillis, rampMillis) && ejectedAt != null) {
+                ejectedAt = null;
+                consecutive = 0;
+            }
+            // **램프 중에도 뺄 근거는 처음과 같다.** 한 건으로 되감으면 배경 오류만으로
+            // 램프가 안 끝난다 — 램프 60초 · 대당 50rps 면 그동안 1,500 건을 받고,
+            // 오류율 1% 에서 완주 확률이 사실상 0 이다. 그 대는 영구히 제 몫에서 빠진다.
+            //
+            // 반대 근거였던 "그동안 가장 한가해 보인다" 는 램프가 그 대의 몫을 선형으로
+            // 깎는 것으로 답한다. **다만 전 대가 같이 회복하는 구간에서는 그 답이 없다** —
+            // 다 같이 깎이면 비율이 그대로라 억제량이 0 이다. 그 자리는 계획서에 있다.
+            //
+            // 임계에 못 미치는 실패로 램프를 취소하지는 않는다. 취소하면 몫을 안 깎은
+            // 채 전량을 받아 배제가 노린 것과 반대가 된다.
             if (++consecutive >= threshold) {
                 consecutive = 0;
                 ejectedAt = now;

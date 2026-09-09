@@ -3,6 +3,7 @@ package com.kafkick.waiting.domain.routing;
 import java.time.Duration;
 import java.util.LinkedHashSet;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -27,6 +28,16 @@ public final class InstanceOutliers {
      * 게이지로는 못 읽는다.
      */
     private volatile Set<String> lastSeen = Set.of();
+
+    /**
+     * 관측용 누적. <b>회차가 아니라 사건 수다</b> — 되돌리다 다시 빠진 비율과
+     * 끝까지 마친 수를 견주는 자리다. 카운터라 되돌아가지 않는다.
+     */
+    private final AtomicLong firstEjections = new AtomicLong();
+
+    private final AtomicLong reEjections = new AtomicLong();
+
+    private final AtomicLong rampsCompleted = new AtomicLong();
 
     private InstanceOutliers(int threshold, Duration ejectFor, Duration ramp) {
         Objects.requireNonNull(ejectFor, "ejectFor");
@@ -65,8 +76,8 @@ public final class InstanceOutliers {
     /** 이 인스턴스가 답을 제대로 냈다. 배제 중이었으면 거기서 되돌리기 시작한다. */
     public void succeeded(String instanceId, long nowMillis) {
         Objects.requireNonNull(instanceId, "instanceId");
-        records.computeIfAbsent(instanceId, id -> new Streak())
-                .succeeded(nowMillis, ejectMillis, rampMillis);
+        count(records.computeIfAbsent(instanceId, id -> new Streak())
+                .succeeded(nowMillis, ejectMillis, rampMillis));
     }
 
     /**
@@ -78,8 +89,8 @@ public final class InstanceOutliers {
      */
     public void failed(String instanceId, long nowMillis) {
         Objects.requireNonNull(instanceId, "instanceId");
-        records.computeIfAbsent(instanceId, id -> new Streak())
-                .failed(threshold, nowMillis, ejectMillis, rampMillis);
+        count(records.computeIfAbsent(instanceId, id -> new Streak())
+                .failed(threshold, nowMillis, ejectMillis, rampMillis));
     }
 
     /**
@@ -108,6 +119,66 @@ public final class InstanceOutliers {
         Streak streak = records.get(instanceId);
         return streak == null ? 0
                 : streak.recoveryRemaining(nowMillis, ejectMillis, rampMillis);
+    }
+
+    /**
+     * 무슨 일이 있었는가. <b>세는 자리를 하나로 모은다</b> — 상태를 바꾸는 자리마다
+     * 세면 갈래 하나가 빠져도 안 드러난다.
+     */
+    private enum Event {
+        NONE, EJECTED, RE_EJECTED, RAMP_DONE
+    }
+
+    private void count(Event event) {
+        switch (event) {
+            case EJECTED -> firstEjections.incrementAndGet();
+            case RE_EJECTED -> reEjections.incrementAndGet();
+            case RAMP_DONE -> rampsCompleted.incrementAndGet();
+            default -> {
+                // 아무 전이도 없었다
+            }
+        }
+    }
+
+    /**
+     * 지금 되돌리는 중인 인스턴스 수. <b>배제도 정상도 아닌 구간</b>이라 배제
+     * 게이지에 안 잡히는데, 이 구간이 곧 회복이 끝났는지를 묻는 자리다.
+     */
+    public int rampingCount(long nowMillis) {
+        int count = 0;
+        for (Streak streak : records.values()) {
+            if (streak.recoveryRemaining(nowMillis, ejectMillis, rampMillis) > 0) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /**
+     * 되돌리는 중이라 안 준 몫의 합. 1 이면 한 대분을 통째로 안 주고 있다는 뜻이라,
+     * 대 수와 함께 보면 억제가 실제로 걸렸는지가 나온다.
+     */
+    public double rampSuppressed(long nowMillis) {
+        double sum = 0;
+        for (Streak streak : records.values()) {
+            sum += streak.recoveryRemaining(nowMillis, ejectMillis, rampMillis);
+        }
+        return sum;
+    }
+
+    /** 처음 빼기까지 간 횟수. 아래 값과 견주면 되돌리다 다시 빠진 비율이 나온다. */
+    public long firstEjections() {
+        return firstEjections.get();
+    }
+
+    /** 되돌리는 중에 다시 뺀 횟수. 이것만 늘고 완주가 안 늘면 회복이 안 끝난다. */
+    public long reEjections() {
+        return reEjections.get();
+    }
+
+    /** 되돌리기를 끝까지 마친 횟수. <b>진입만 있고 해제가 없으면 여기가 안 는다.</b> */
+    public long rampsCompleted() {
+        return rampsCompleted.get();
     }
 
     /**
@@ -180,10 +251,10 @@ public final class InstanceOutliers {
             return Math.max(0, now - ejectedAt);
         }
 
-        synchronized void succeeded(long now, long ejectMillis, long rampMillis) {
+        synchronized Event succeeded(long now, long ejectMillis, long rampMillis) {
             consecutive = 0;
             if (ejectedAt == null) {
-                return;
+                return Event.NONE;
             }
             long age = age(now);
             // **배제 중의 성공은 배제를 끝내되 램프로 넘긴다.** 배제 전에 나갔던
@@ -191,7 +262,7 @@ public final class InstanceOutliers {
             // 반쯤 고장 난 대가 스스로 배제를 취소한다.
             if (age < ejectMillis) {
                 ejectedAt = now - ejectMillis;
-                return;
+                return Event.NONE;
             }
             if (age >= ejectMillis + rampMillis) {
                 // **가라앉으면 계수도 함께 버린다.** 램프에서 쌓은 연속을 넘기면 평상시
@@ -199,21 +270,25 @@ public final class InstanceOutliers {
                 // 그 계수가 무기한 살아남는다.
                 ejectedAt = null;
                 consecutive = 0;
+                return Event.RAMP_DONE;
             }
+            return Event.NONE;
         }
 
-        synchronized void failed(int threshold, long now, long ejectMillis, long rampMillis) {
+        synchronized Event failed(int threshold, long now, long ejectMillis, long rampMillis) {
             // **배제 중의 실패는 그 자리에서 다시 뺀다.** 거기 오는 것은 배제 전에
             // 나갔다 늦게 돌아온 결과라, 아직 안 나은 대가 스스로 배제를 끝내면 안 된다.
             if (ejected(now, ejectMillis)) {
                 ejectedAt = now;
                 consecutive = 0;
-                return;
+                return Event.NONE;
             }
             // **가라앉았으면 앓은 적 없는 대와 같이 다룬다.** 램프에서 쌓은 연속을
             // 넘기면 평상시 첫 실패 한 건이 그 대를 다시 뺀다 — 트래픽이 끊겼다
             // 돌아오는 자리에서 그 계수가 무기한 살아남는다.
-            if (!settling(now, ejectMillis, rampMillis) && ejectedAt != null) {
+            boolean ramping = settling(now, ejectMillis, rampMillis);
+            boolean rampJustEnded = !ramping && ejectedAt != null;
+            if (rampJustEnded) {
                 ejectedAt = null;
                 consecutive = 0;
             }
@@ -230,7 +305,9 @@ public final class InstanceOutliers {
             if (++consecutive >= threshold) {
                 consecutive = 0;
                 ejectedAt = now;
+                return ramping ? Event.RE_EJECTED : Event.EJECTED;
             }
+            return rampJustEnded ? Event.RAMP_DONE : Event.NONE;
         }
 
         synchronized boolean ejected(long now, long ejectMillis) {

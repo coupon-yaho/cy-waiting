@@ -2,6 +2,7 @@ package com.kafkick.waiting.routing;
 
 import com.kafkick.waiting.domain.routing.InFlightRegistry;
 import com.kafkick.waiting.domain.routing.InstanceOutliers;
+import io.micrometer.core.instrument.FunctionCounter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.util.Objects;
@@ -52,6 +53,55 @@ public final class InFlightMetrics {
         metrics.gauge(meters, "waiting.routing.seen", InFlightMetrics::seen,
                 "마지막으로 본 인스턴스 수. 위 값을 여기에 견준다 — 물린 건수 쪽 "
                         + "게이지는 배제된 대가 빠져서 견줄 대상이 못 된다");
+        // **되돌리는 중은 배제도 정상도 아니다.** 위 게이지들이 그 구간을 못 잡아,
+        // 그 대가 회복을 마쳤는지를 운영에서 물을 수단이 없었다.
+        metrics.gauge(meters, "waiting.routing.ramping", InFlightMetrics::ramping,
+                "되돌리는 중인 인스턴스 수. 배제 게이지가 안 세는 구간이라 "
+                        + "이 값이 안 내려가면 회복이 안 끝나고 있는 것이다");
+        metrics.gauge(meters, "waiting.routing.ramp.suppressed", InFlightMetrics::suppressed,
+                "되돌리는 중이라 안 준 몫의 합. 1 이면 한 대분을 통째로 안 주고 있다");
+        // **진입만 세면 해제를 못 본다.** 되돌리다 다시 빠지는 것과 끝까지 마치는 것을
+        // 갈라야 회복이 도는지 맴도는지가 갈린다.
+        metrics.counter(meters, "waiting.routing.ejections.first",
+                InFlightMetrics::firstEjections,
+                "연속 실패로 처음 뺀 횟수. 아래 둘과 견주는 기준이다");
+        metrics.counter(meters, "waiting.routing.ejections.reentry",
+                InFlightMetrics::reEjections,
+                "되돌리는 중에 다시 뺀 횟수. 이것만 늘고 완주가 안 늘면 회복이 맴돈다");
+        metrics.counter(meters, "waiting.routing.ramp.completed",
+                InFlightMetrics::rampsCompleted,
+                "되돌리기를 끝까지 마친 횟수. 진입만 있고 해제가 없으면 안 는다");
+    }
+
+    /**
+     * 누적을 그대로 읽는다. <b>게이지로 두면 안 된다</b> — 되돌아가지 않는 값이라
+     * 스크레이프 사이의 증가분을 셈하는 쪽이 맞다.
+     */
+    private void counter(MeterRegistry meters, String name,
+            ToDoubleFunction<InFlightMetrics> read, String why) {
+        FunctionCounter.builder(name, this, read)
+                .description(why)
+                .register(meters);
+    }
+
+    private double ramping() {
+        return outliers.rampingCount(nowMillis.getAsLong());
+    }
+
+    private double suppressed() {
+        return outliers.rampSuppressed(nowMillis.getAsLong());
+    }
+
+    private double firstEjections() {
+        return outliers.firstEjections();
+    }
+
+    private double reEjections() {
+        return outliers.reEjections();
+    }
+
+    private double rampsCompleted() {
+        return outliers.rampsCompleted();
     }
 
     /**

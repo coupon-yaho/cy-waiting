@@ -1,6 +1,7 @@
 package com.kafkick.waiting.domain.routing;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Duration;
@@ -112,6 +113,60 @@ class InstanceOutliersTest {
                 .as("임계에 못 미치면 안 뺀다").isEmpty();
         assertThat(outliers.recoveryRemaining("가", 풀린_뒤))
                 .as("램프는 그대로 이어진다").isEqualTo(1.0);
+    }
+
+    /**
+     * <b>램프 구간이 밖에서 보여야 한다.</b> 배제 게이지는 배제 창만 세므로 되돌리는
+     * 중인 대는 어디에도 안 잡힌다 — 그 대가 회복을 마쳤는지를 물을 수단이 없다.
+     */
+    @Test
+    @DisplayName("되돌리는_중인_대와_안_준_몫이_보인다")
+    void 되돌리는_중인_대와_안_준_몫이_보인다() {
+        InstanceOutliers outliers = 배제기();
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 1_000);
+        }
+        // 안 앓은 대는 기록만 있고 되돌릴 것이 없다.
+        outliers.succeeded("나", 1_000);
+
+        long 배제_중 = 1_000 + 배제_시간.toMillis() / 2;
+        assertThat(outliers.rampingCount(배제_중)).as("배제 중은 되돌리는 중이 아니다").isZero();
+
+        long 램프_절반 = 1_000 + 배제_시간.toMillis() + 램프.toMillis() / 2;
+        assertThat(outliers.rampingCount(램프_절반)).isOne();
+        assertThat(outliers.rampSuppressed(램프_절반))
+                .as("절반쯤 왔으면 안 준 몫도 절반이다").isCloseTo(0.5, within(0.01));
+
+        long 가라앉은_뒤 = 1_000 + 배제_시간.toMillis() + 램프.toMillis();
+        assertThat(outliers.rampingCount(가라앉은_뒤)).isZero();
+        assertThat(outliers.rampSuppressed(가라앉은_뒤)).isZero();
+    }
+
+    /**
+     * <b>되돌리다 다시 빠진 것과 끝까지 마친 것을 가른다.</b> 앞엣것만 늘고 뒤엣것이
+     * 안 늘면 회복이 안 끝나는 것인데, 합쳐 세면 그 상태가 안 보인다.
+     */
+    @Test
+    @DisplayName("첫_배제와_재배제와_완주를_따로_센다")
+    void 첫_배제와_재배제와_완주를_따로_센다() {
+        InstanceOutliers outliers = 배제기();
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 1_000);
+        }
+        assertThat(outliers.firstEjections()).isOne();
+        assertThat(outliers.reEjections()).isZero();
+
+        long 램프_중 = 1_000 + 배제_시간.toMillis() + 1;
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 램프_중);
+        }
+        assertThat(outliers.reEjections()).as("되돌리다 다시 빠졌다").isOne();
+        assertThat(outliers.firstEjections()).as("첫 배제는 안 는다").isOne();
+
+        long 두_번째_램프_뒤 = 램프_중 + 배제_시간.toMillis() + 램프.toMillis();
+        outliers.succeeded("가", 두_번째_램프_뒤);
+
+        assertThat(outliers.rampsCompleted()).as("끝까지 마쳤다").isOne();
     }
 
     /**

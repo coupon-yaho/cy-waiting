@@ -96,10 +96,27 @@ class InFlightMetricsTest {
 
         assertThat(meters.getMeters())
                 .filteredOn(m -> m.getId().getName().startsWith("waiting.routing"))
-                .hasSize(5)
+                // 수를 못 박는 것은 새 지표를 걸 때 이 규칙을 다시 읽게 하려는 것이다.
+                .hasSize(10)
                 .allSatisfy(m -> assertThat(m.getId().getTags())
                         .as("%s 의 라벨", m.getId().getName())
                         .isEmpty());
+    }
+
+    /**
+     * <b>되돌리는 구간이 이름으로 잡혀야 한다.</b> 배제 게이지는 배제 창만 세므로,
+     * 이 넷이 없으면 그 대가 회복을 마쳤는지를 운영에서 물을 수단이 없다.
+     */
+    @Test
+    @DisplayName("되돌리는_구간의_지표가_선다")
+    void 되돌리는_구간의_지표가_선다() {
+        지표를_건다();
+
+        assertThat(meters.getMeters())
+                .extracting(m -> m.getId().getName())
+                .contains("waiting.routing.ramping", "waiting.routing.ramp.suppressed",
+                        "waiting.routing.ejections.first", "waiting.routing.ejections.reentry",
+                        "waiting.routing.ramp.completed");
     }
 
     /**

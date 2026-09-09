@@ -8,6 +8,8 @@ import com.kafkick.waiting.domain.queue.QueueToken;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import java.time.Clock;
 import com.kafkick.waiting.control.SnapshotHolder;
+import io.micrometer.core.instrument.FunctionCounter;
+import java.util.function.Supplier;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -69,14 +71,35 @@ public class IdentityConfig {
 
     /** 비밀키가 없거나 짧으면 여기서 기동이 멎는다. 약한 키로 조용히 돌지 않는다. */
     @Bean
-    public QueueToken queueToken(QueueTokenProperties properties) {
-        return properties.queueToken();
+    public QueueToken queueToken(QueueTokenProperties properties, MeterRegistry meters) {
+        QueueToken token = properties.queueToken();
+        rotationGauge(meters, "queue", token::acceptedByPrevious);
+        return token;
     }
 
-    /** 같은 비밀키를 쓰되 접두와 수명이 다르다. 한쪽 토큰이 다른 쪽에서 안 통한다. */
+    /**
+     * 같은 비밀키를 쓰되 접두와 수명이 다르다. 한쪽 토큰이 다른 쪽에서 안 통한다.
+     * <b>회전 창도 둘이 공유한다</b> — 다만 닫히는 때는 각자의 수명에서 나온다.
+     */
     @Bean
-    public EntryToken entryToken(QueueTokenProperties properties) {
-        return properties.entryToken();
+    public EntryToken entryToken(QueueTokenProperties properties, MeterRegistry meters) {
+        EntryToken token = properties.entryToken();
+        rotationGauge(meters, "entry", token::acceptedByPrevious);
+        return token;
+    }
+
+    /**
+     * <b>옛 키로 맞은 횟수만 낸다.</b> 어느 키인지는 안 붙인다 — 밖으로 새면
+     * 회전이 어디까지 갔는지가 보인다. <b>누적이라 증가율로 읽는다</b> — 한 번이라도
+     * 맞으면 값 자체는 영영 0 이 아니다. 더 안 오르면 창을 닫아도 된다 (CY-902).
+     */
+    private void rotationGauge(MeterRegistry meters, String kind,
+            Supplier<Number> value) {
+        FunctionCounter.builder("waiting.token.previous.accepted", value,
+                        v -> v.get().doubleValue())
+                .tag("kind", kind)
+                .description("옛 비밀키로 받아 준 토큰 수. 더 안 오르면 창을 닫아도 된다")
+                .register(meters);
     }
 
     /**

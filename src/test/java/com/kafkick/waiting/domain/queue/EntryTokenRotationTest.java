@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Instant;
+import java.util.Collections;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -27,8 +28,8 @@ class EntryTokenRotationTest {
 
     private static final String 남의_키 = "rotation-other-secret-0123456789abc";
 
-    /** 창을 연 시각. 여기서부터 이 토큰의 수명만큼만 옛 키를 받는다. */
-    private static final Instant 돌린_때 = 지금.minusSeconds(10);
+    /** 배포가 끝나는 때. 여기서부터 이 토큰의 수명만큼만 옛 키를 받는다. */
+    private static final Instant 배포_끝 = 지금.minusSeconds(10);
 
     /**
      * <b>배포 중 양쪽이 서로의 토큰을 받는다.</b> 한쪽만 받으면 그 창 동안 절반의
@@ -38,7 +39,7 @@ class EntryTokenRotationTest {
     @DisplayName("옛_키로_만든_것을_새_키_파드가_받는다")
     void 옛_키로_만든_것을_새_키_파드가_받는다() {
         EntryToken 옛_파드 = EntryToken.of(옛_키);
-        EntryToken 새_파드 = EntryToken.of(새_키, List.of(옛_키), 돌린_때);
+        EntryToken 새_파드 = EntryToken.of(새_키, List.of(옛_키), 배포_끝);
 
         String 옛_토큰 = 옛_파드.issue("c1", "m1", 지금);
 
@@ -52,7 +53,7 @@ class EntryTokenRotationTest {
     @Test
     @DisplayName("발급은_현재_키로만_한다")
     void 발급은_현재_키로만_한다() {
-        EntryToken 새_파드 = EntryToken.of(새_키, List.of(옛_키), 돌린_때);
+        EntryToken 새_파드 = EntryToken.of(새_키, List.of(옛_키), 배포_끝);
         EntryToken 옛_파드 = EntryToken.of(옛_키);
 
         String 낸_것 = 새_파드.issue("c1", "m1", 지금);
@@ -68,7 +69,7 @@ class EntryTokenRotationTest {
     @Test
     @DisplayName("목록에_없는_키는_거절한다")
     void 목록에_없는_키는_거절한다() {
-        EntryToken 파드 = EntryToken.of(새_키, List.of(옛_키), 돌린_때);
+        EntryToken 파드 = EntryToken.of(새_키, List.of(옛_키), 배포_끝);
 
         String 남의_토큰 = EntryToken.of(남의_키).issue("c1", "m1", 지금);
 
@@ -82,9 +83,11 @@ class EntryTokenRotationTest {
     @Test
     @DisplayName("받아_주는_키도_짧으면_기동을_막는다")
     void 받아_주는_키도_짧으면_기동을_막는다() {
-        assertThatThrownBy(() -> EntryToken.of(새_키, List.of("짧다"), 돌린_때))
+        // null 갈래는 도메인 API 를 직접 부를 때만 온다 — 설정 경로는 List.copyOf 가
+        // 먼저 막는다. 분기를 덮되 운영에서 보는 예외가 아니라는 것을 적어 둔다.
+        assertThatThrownBy(() -> EntryToken.of(새_키, List.of("짧다"), 배포_끝))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> EntryToken.of(새_키, java.util.Collections.singletonList(null), 돌린_때))
+        assertThatThrownBy(() -> EntryToken.of(새_키, Collections.singletonList(null), 배포_끝))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -92,7 +95,7 @@ class EntryTokenRotationTest {
     @Test
     @DisplayName("창을_안_열면_현재_키만_받는다")
     void 창을_안_열면_현재_키만_받는다() {
-        EntryToken 파드 = EntryToken.of(새_키, List.of(), 돌린_때);
+        EntryToken 파드 = EntryToken.of(새_키, List.of(), 배포_끝);
 
         assertThat(파드.verify(EntryToken.of(옛_키).issue("c1", "m1", 지금), "c1", 지금))
                 .isEmpty();
@@ -106,7 +109,7 @@ class EntryTokenRotationTest {
     @Test
     @DisplayName("목록_뒤쪽_키로_만든_것도_받는다")
     void 목록_뒤쪽_키로_만든_것도_받는다() {
-        EntryToken 파드 = EntryToken.of(새_키, List.of(남의_키, 옛_키), 돌린_때);
+        EntryToken 파드 = EntryToken.of(새_키, List.of(남의_키, 옛_키), 배포_끝);
 
         assertThat(파드.verify(EntryToken.of(옛_키).issue("c1", "m1", 지금), "c1", 지금))
                 .contains("m1");
@@ -122,15 +125,15 @@ class EntryTokenRotationTest {
     @Test
     @DisplayName("수명이_지나면_옛_키를_안_받는다")
     void 수명이_지나면_옛_키를_안_받는다() {
-        Instant 돌린_때 = 지금;
-        EntryToken 파드 = EntryToken.of(새_키, List.of(옛_키), 돌린_때);
+        Instant 배포_끝 = 지금;
+        EntryToken 파드 = EntryToken.of(새_키, List.of(옛_키), 배포_끝);
         String 옛_토큰 = EntryToken.of(옛_키).issue("c1", "m1", 지금);
 
-        Instant 창_안 = 돌린_때.plusSeconds(EntryToken.TTL_SEC - 1);
+        Instant 창_안 = 배포_끝.plusSeconds(EntryToken.TTL_SEC - 1);
         assertThat(파드.verify(옛_토큰, "c1", 창_안)).as("창 안에서는 받는다").contains("m1");
 
         // 그 키로 낸 마지막 토큰이 죽고 나면 더 받아 줄 이유가 없다.
-        Instant 창_밖 = 돌린_때.plusSeconds(EntryToken.ACCEPT_WINDOW_SEC + 1);
+        Instant 창_밖 = 배포_끝.plusSeconds(EntryToken.ACCEPT_WINDOW_SEC + 1);
         assertThat(파드.verify(EntryToken.of(옛_키).issue("c1", "m1", 창_밖), "c1", 창_밖))
                 .as("창 밖에서는 새로 찍은 것도 안 받는다").isEmpty();
     }
@@ -147,8 +150,8 @@ class EntryTokenRotationTest {
 
     /** 창을 열면서 언제 돌렸는지를 안 적으면 기동을 막는다. 모르면 못 닫는다. */
     @Test
-    @DisplayName("돌린_때가_없으면_창을_못_연다")
-    void 돌린_때가_없으면_창을_못_연다() {
+    @DisplayName("배포_끝가_없으면_창을_못_연다")
+    void 배포_끝가_없으면_창을_못_연다() {
         assertThatThrownBy(() -> EntryToken.of(새_키, List.of(옛_키), null))
                 .isInstanceOf(IllegalArgumentException.class);
     }
@@ -157,9 +160,9 @@ class EntryTokenRotationTest {
     @Test
     @DisplayName("현재_키를_옛_키로_적으면_막는다")
     void 현재_키를_옛_키로_적으면_막는다() {
-        assertThatThrownBy(() -> EntryToken.of(새_키, List.of(새_키), 돌린_때))
+        assertThatThrownBy(() -> EntryToken.of(새_키, List.of(새_키), 배포_끝))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> EntryToken.of(새_키, List.of(옛_키, 옛_키), 돌린_때))
+        assertThatThrownBy(() -> EntryToken.of(새_키, List.of(옛_키, 옛_키), 배포_끝))
                 .as("중복도 막는다").isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -171,7 +174,7 @@ class EntryTokenRotationTest {
     @DisplayName("옛_키는_두_개까지만_받는다")
     void 옛_키는_두_개까지만_받는다() {
         assertThatThrownBy(() -> EntryToken.of(새_키,
-                List.of(옛_키, 남의_키, "rotation-third-secret-0123456789abc"), 돌린_때))
+                List.of(옛_키, 남의_키, "rotation-third-secret-0123456789abc"), 배포_끝))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -179,7 +182,7 @@ class EntryTokenRotationTest {
     @Test
     @DisplayName("옛_키로_받은_횟수를_센다")
     void 옛_키로_받은_횟수를_센다() {
-        EntryToken 파드 = EntryToken.of(새_키, List.of(옛_키), 돌린_때);
+        EntryToken 파드 = EntryToken.of(새_키, List.of(옛_키), 배포_끝);
 
         파드.verify(EntryToken.of(옛_키).issue("c1", "m1", 지금), "c1", 지금);
         파드.verify(파드.issue("c1", "m2", 지금), "c1", 지금);

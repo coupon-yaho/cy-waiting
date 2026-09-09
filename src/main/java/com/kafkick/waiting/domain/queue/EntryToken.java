@@ -1,6 +1,7 @@
 package com.kafkick.waiting.domain.queue;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -25,8 +26,21 @@ public final class EntryToken {
         this.signer = signer;
     }
 
+    /** 옛 키를 받는 기간(초). 그 키로 낸 마지막 토큰의 수명이다. */
+    public static final long ACCEPT_WINDOW_SEC = SignedToken.acceptWindowSec(TTL_SEC, WINDOW_SEC);
+
     public static EntryToken of(String secret) {
-        return new EntryToken(SignedToken.of(PREFIX, TTL_SEC, WINDOW_SEC, secret));
+        return of(secret, List.of(), null);
+    }
+
+    /** 옛 키를 검증에서만 받는다 — 롤링 배포 창을 여는 자리다 (CY-902). */
+    public static EntryToken of(String secret, List<String> alsoAccept, Instant rolloutEndsAt) {
+        return new EntryToken(SignedToken.of(PREFIX, TTL_SEC, WINDOW_SEC, secret, alsoAccept, rolloutEndsAt));
+    }
+
+    /** 옛 키로 맞은 횟수. 누적이라 더 안 오르는 때가 창을 닫아도 되는 때다. */
+    public long acceptedByPrevious() {
+        return signer.acceptedByPrevious();
     }
 
     public String issue(String couponId, String memberId, Instant now) {

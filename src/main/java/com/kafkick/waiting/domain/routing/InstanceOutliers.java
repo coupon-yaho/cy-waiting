@@ -197,12 +197,24 @@ public final class InstanceOutliers {
         }
 
         synchronized void failed(int threshold, long now, long ejectMillis, long rampMillis) {
-            // **배제와 램프 구간의 실패는 그 자리에서 다시 뺀다.** 되돌리는 중은
-            // 아직 미덥지 않다는 뜻이라, 임계만큼을 다시 주면 그동안 그 대가
-            // 여전히 가장 한가해 보인다.
-            if (ejectedAt != null && age(now) < ejectMillis + rampMillis) {
+            // **배제 중의 실패는 그 자리에서 다시 뺀다.** 그 구간은 트래픽이 0 이라
+            // 여기 오는 것은 배제 전에 나갔다 늦게 돌아온 결과다 — 아직 안 나은
+            // 대가 스스로 배제를 끝내면 안 된다.
+            if (ejectedAt != null && age(now) < ejectMillis) {
                 ejectedAt = now;
                 consecutive = 0;
+                return;
+            }
+            // **램프 중에도 뺄 근거는 처음과 같다.** 한 건으로 되감으면 배경 오류만으로
+            // 램프가 안 끝난다 — 램프 60초 · 대당 50rps 면 그동안 1,500 건을 받고,
+            // 오류율 1% 에서 완주 확률이 사실상 0 이다. 그 대는 영구히 제 몫에서
+            // 빠진다. 반대 근거였던 "그동안 가장 한가해 보인다" 는 램프가 이미 그 대의
+            // 몫을 선형으로 깎는 것으로 답한다.
+            if (ejectedAt != null && age(now) < ejectMillis + rampMillis) {
+                if (++consecutive >= threshold) {
+                    consecutive = 0;
+                    ejectedAt = now;
+                }
                 return;
             }
             ejectedAt = null;

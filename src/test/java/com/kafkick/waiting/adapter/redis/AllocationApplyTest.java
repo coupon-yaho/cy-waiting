@@ -32,6 +32,9 @@ class AllocationApplyTest extends RedisContainerSupport {
     private static final String ADMITTED = RedisKeys.admitted("c1", 1, 0);
     private static final String FENCE = RedisKeys.applyFence("c1", 1, 0);
 
+    /** 잠금은 두 표를 한 번에 세운다 — 삭제 쪽은 올리기만 한다 (CY-894). */
+    private static final String DROP_FENCE = RedisKeys.dropFence("c1", 1, 0);
+
     /** 임기는 리더 락이 찍는 마이크로초 벽시계다. 작은 수는 자릿수 결함을 못 잡는다. */
     private static final String 임기 = "1770000000123456";
 
@@ -261,9 +264,9 @@ class AllocationApplyTest extends RedisContainerSupport {
     @DisplayName("잠금은_리더가_아니면_안_쓴다")
     void 잠금은_리더가_아니면_안_쓴다() {
         RedisScript<Long> seal = RedisScript.of(
-                new ClassPathResource("redis/apply_fence_seal.lua"), Long.class);
+                new ClassPathResource("redis/fence_seal.lua"), Long.class);
 
-        Long 잠갔나 = redis.execute(seal, List.of(FENCE), List.of("0", 수명)).blockLast(WAIT);
+        Long 잠갔나 = redis.execute(seal, List.of(FENCE, DROP_FENCE), List.of("0", 수명)).blockLast(WAIT);
 
         assertThat(잠갔나).as("안 잠갔으면 0 을 내야 부르는 쪽이 셀 수 있다").isZero();
         assertThat(redis.hasKey(FENCE).block(WAIT)).isFalse();
@@ -274,10 +277,10 @@ class AllocationApplyTest extends RedisContainerSupport {
     @DisplayName("잠금은_수명을_안_주면_거절한다")
     void 잠금은_수명을_안_주면_거절한다() {
         RedisScript<Long> seal = RedisScript.of(
-                new ClassPathResource("redis/apply_fence_seal.lua"), Long.class);
+                new ClassPathResource("redis/fence_seal.lua"), Long.class);
 
         assertThatThrownBy(() ->
-                redis.execute(seal, List.of(FENCE), List.of(임기, "0")).blockLast(WAIT))
+                redis.execute(seal, List.of(FENCE, DROP_FENCE), List.of(임기, "0")).blockLast(WAIT))
                 .rootCause()
                 .hasMessageContaining("울타리 수명은");
     }

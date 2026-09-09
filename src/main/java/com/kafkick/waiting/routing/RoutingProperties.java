@@ -30,6 +30,26 @@ public record RoutingProperties(boolean enabled, String serviceId, String strate
     /** 무작위 둘 중 여유 대비 덜 찬 쪽. <b>기본이 아니다</b> — 비율에서 밀린다. */
     public static final String P2C = "p2c";
 
+    /**
+     * 게이트웨이 자신의 포트를 목적지로 안 받는다.
+     *
+     * <p>같은 호스트의 뒷단이 실제 배치라 루프백은 목적지로 둔다. 그러면 자기 자신을
+     * 부르는 것을 가르는 것은 포트뿐인데, 뒷단이 흔히 쓰는 8080 이 이 게이트웨이의
+     * 기본 포트이기도 하다 — 겹치면 발급 요청이 같은 라우트로 되돌아온다.
+     *
+     * @throws IllegalStateException 허용 포트가 자기 포트를 담고 있을 때
+     */
+    public void rejectSelfPorts(Integer... ownPorts) {
+        for (Integer own : ownPorts) {
+            // 0 은 무작위 배정이라 이 값으로는 자기 포트를 못 안다.
+            if (own != null && own > 0 && allowedPorts.contains(own)) {
+                throw new IllegalStateException(
+                        "허용 포트가 게이트웨이 자신의 포트를 담고 있다 — 발급이 자기 자신으로 돈다: "
+                                + own);
+            }
+        }
+    }
+
     /** 여유 비율대로 결정적으로 돈다. 3~5 대 규모에서 더 정확하고, <b>기본값이다</b>. */
     public static final String ROUND_ROBIN = "round-robin";
 

@@ -224,6 +224,119 @@ class AllowedDestinationsTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    /**
+     * <b>구체적으로 보이는 표기로 통째로 열리면 안 된다.</b> v4 의 {@code 0.0.0.0/1}
+     * 은 눈에 띄지만 v6 에는 그런 신호가 없다 — {@code 2000::/3} 하나로 공인
+     * 유니캐스트 전부가 열리는데 표기는 대역 하나처럼 읽힌다.
+     */
+    @Test
+    @DisplayName("한_바이트보다_넓은_대역은_거절한다")
+    void 한_바이트보다_넓은_대역은_거절한다() {
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of("2000::/3"), 포트))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of("0.0.0.0/1"), 포트))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /** 내부망이 쓰는 폭은 그대로 받는다. 한 칸 좁히면 설정이 통째로 막힌다. */
+    @Test
+    @DisplayName("내부망_한_바이트_대역은_받는다")
+    void 내부망_한_바이트_대역은_받는다() {
+        assertThat(AllowedDestinations.of(List.of("10.0.0.0/8"), 포트)
+                .permits(주소("10.7.1.5:8080"))).isTrue();
+        assertThat(AllowedDestinations.of(List.of("fd00::/8"), 포트)
+                .permits(주소("[fd00::5]:8080"))).isTrue();
+    }
+
+    /**
+     * <b>미지정은 대역 안이어도 목적지가 아니다.</b> "아무 대나" 를 뜻하는 주소라
+     * 어느 한 대도 가리키지 않는다.
+     */
+    @Test
+    @DisplayName("미지정_주소는_대역_안이어도_거절한다")
+    void 미지정_주소는_대역_안이어도_거절한다() {
+        AllowedDestinations 허용 =
+                AllowedDestinations.of(List.of("0.0.0.0/8", "fd00::/8"), 포트);
+
+        assertThat(허용.permits(주소("0.0.0.0:8080"))).isFalse();
+        assertThat(허용.permits(주소("[::]:8080"))).isFalse();
+        assertThat(허용.permits(주소("[fd00::5]:8080"))).as("한 대는 그대로 받는다").isTrue();
+    }
+
+    /**
+     * <b>루프백은 목적지다.</b> 같은 호스트의 뒷단이 실제 배치 모양이고 하네스도 그
+     * 모양으로 돈다. 자기 자신을 부르는 것을 막는 것은 포트 목록이다.
+     */
+    @Test
+    @DisplayName("루프백은_적어_두면_받는다")
+    void 루프백은_적어_두면_받는다() {
+        AllowedDestinations 허용 = AllowedDestinations.of(List.of("127.0.0.0/8"), 포트);
+
+        assertThat(허용.permits(주소("127.0.0.1:8080"))).isTrue();
+        assertThat(허용.permits(주소("127.0.0.1:7000"))).as("포트가 다르면 거절한다")
+                .isFalse();
+    }
+
+    /**
+     * <b>한 대를 가리키지 않는 주소는 목적지가 아니다.</b> 링크 로컬은 어느 링크인지가
+     * 빠져 있고, 멀티캐스트는 애초에 한 대가 아니다.
+     */
+    @Test
+    @DisplayName("한_대가_아닌_주소는_거절한다")
+    void 한_대가_아닌_주소는_거절한다() {
+        AllowedDestinations 허용 = AllowedDestinations.of(
+                List.of("fe80::/32", "ff02::/32", "169.254.0.0/16"), 포트);
+
+        assertThat(허용.permits(주소("[fe80::1]:8080"))).isFalse();
+        assertThat(허용.permits(주소("[ff02::1]:8080"))).isFalse();
+        assertThat(허용.permits(주소("169.254.1.1:8080"))).isFalse();
+    }
+
+    /**
+     * <b>v6 의 한 바이트는 v4 의 한 바이트가 아니다.</b> 같은 `/8` 이 v6 에서는 비교가
+     * 안 되게 넓다. 사설 대역의 정본 표기 `fc00::/7` 은 그 자신이 내부망이라 받는다.
+     */
+    @Test
+    @DisplayName("v6_하한은_v4_보다_좁다")
+    void v6_하한은_v4_보다_좁다() {
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of("2000::/8"), 포트))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of("::/8"), 포트))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        assertThat(AllowedDestinations.of(List.of("fc00::/7"), 포트)
+                .permits(주소("[fd00::5]:8080"))).as("사설 대역 정본 표기는 받는다").isTrue();
+        assertThat(AllowedDestinations.of(List.of("2001:db8::/32"), 포트)
+                .permits(주소("[2001:db8::5]:8080"))).as("좁게 적으면 받는다").isTrue();
+    }
+
+    /**
+     * <b>주소로 못 읽히는 숫자 항목은 거절한다.</b> 접미사로 받으면 영영 아무것도 안
+     * 맞고, 더 나쁘게는 보고 쪽의 `010.0.0.5` 가 그 접미사에 걸려 통과한다 — 그 값은
+     * 연결할 때 `10.0.0.5` 로 풀려 검사한 값과 갈린다.
+     */
+    @Test
+    @DisplayName("주소로_못_읽는_숫자_항목은_거절한다")
+    void 주소로_못_읽는_숫자_항목은_거절한다() {
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of("10.0.1.256"), 포트))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of("10.0.1.5.6"), 포트))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /**
+     * <b>v6 표기로 적은 v4 매핑 대역이 조용히 v4 규칙으로 선다.</b>
+     * {@code ::ffff:0.0.0.0/1} 은 v6 항목처럼 읽히는데 실제로는 v4 절반이 열린다.
+     */
+    @Test
+    @DisplayName("v4_매핑_표기는_거절한다")
+    void v4_매핑_표기는_거절한다() {
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of("::ffff:0.0.0.0/1"), 포트))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> AllowedDestinations.of(List.of("::ffff:10.0.0.1"), 포트))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
     /** 무제한은 이름으로만 만든다. 인자를 빠뜨려 조용히 되는 것과는 다르다. */
     @Test
     @DisplayName("무제한은_다_받는다")

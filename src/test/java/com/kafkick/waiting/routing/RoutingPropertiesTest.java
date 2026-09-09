@@ -1,6 +1,7 @@
 package com.kafkick.waiting.routing;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Duration;
@@ -195,6 +196,34 @@ class RoutingPropertiesTest {
                 null, null, null, null, 허용, null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("allowed-ports");
+    }
+
+    /**
+     * <b>자기 자신을 목적지로 두고 뜨지 않는다.</b> 루프백을 목적지로 받으므로 자기
+     * 호출을 가르는 것은 포트뿐인데, 뒷단이 흔히 쓰는 8080 이 이 게이트웨이의 기본
+     * 포트이기도 하다. 겹치면 발급이 같은 라우트로 되돌아온다.
+     */
+    @Test
+    @DisplayName("허용_포트가_자기_포트를_담으면_안_뜬다")
+    void 허용_포트가_자기_포트를_담으면_안_뜬다() {
+        RoutingProperties p = new RoutingProperties(true, null, null, null,
+                null, null, null, null, 허용, List.of(8080, 8090));
+
+        assertThatThrownBy(() -> p.rejectSelfPorts(8080, 8081))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("8080");
+        assertThatThrownBy(() -> p.rejectSelfPorts(null, 8090))
+                .as("관리 포트도 같다").isInstanceOf(IllegalStateException.class);
+    }
+
+    /** 무작위 배정(0)과 안 겹치는 포트로는 뜬다. 0 으로는 자기 포트를 알 수 없다. */
+    @Test
+    @DisplayName("안_겹치면_그대로_뜬다")
+    void 안_겹치면_그대로_뜬다() {
+        RoutingProperties p = new RoutingProperties(true, null, null, null,
+                null, null, null, null, 허용, List.of(8090));
+
+        assertThatCode(() -> p.rejectSelfPorts(8080, 0, null)).doesNotThrowAnyException();
     }
 
     /** 꺼진 배포까지 요구하면 라우팅과 무관한 배포가 이 설정 때문에 안 뜬다. */

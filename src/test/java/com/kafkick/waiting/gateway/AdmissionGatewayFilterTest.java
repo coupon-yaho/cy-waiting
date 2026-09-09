@@ -1267,7 +1267,8 @@ class AdmissionGatewayFilterTest {
         filter.filter(토큰을_든_요청, e -> Mono.empty()).block();
 
         assertThat(토큰을_든_요청.getResponse().getStatusCode())
-                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+                .as("큐 뒤로 안 보낸다는 뜻의 코드다 — 503 이면 그 사람이 새 순번으로 선다")
+                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
         assertThat(토큰을_든_요청.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER))
                 .as("배수까지 실려 천장 근처로 가면 토큰이 죽는다").isEqualTo("1");
     }
@@ -1310,8 +1311,10 @@ class AdmissionGatewayFilterTest {
         try {
             filter.filter(넘친_사람, e -> Mono.empty()).block();
 
+            // **429 다** (CY-903 · F8). 503 은 클라이언트가 입장 단계를 버리는
+            // 신호라, 가까이 불러 놓고 새 순번으로 다시 세우게 된다.
             assertThat(넘친_사람.getResponse().getStatusCode())
-                    .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+                    .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
             assertThat(넘친_사람.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER))
                     .as("토큰 수명이 150초라 멀리 보내면 줄 맨 뒤로 간다").isEqualTo("1");
         } finally {
@@ -1927,11 +1930,13 @@ class AdmissionGatewayFilterTest {
         // **상한 직전까지는 통과해야 한다.** 넘긴 것만 보면 늘 막아도 통과한다.
         assertThat(태운_것.getLast().getResponse().getStatusCode()).isNull();
         assertThat(한_건_더.getResponse().getStatusCode())
-                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
-        // 리미터가 아니라 격벽이 막았는지 못 박는다. 둘 다 거절이라 상태만
-        // 보면 사다리가 막아도 이 시험은 통과한다.
-        assertThat(한_건_더.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
-                .isEqualTo(AdmissionDecision.REJECT_OVERLOAD);
+                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        // 리미터가 아니라 격벽이 막았는지 못 박는다. 둘 다 429 라 상태만 보면
+        // 사다리가 막아도 이 시험은 통과한다.
+        //
+        // **판정값으로는 못 가른다** (CY-903). 차례가 온 사람은 어느 출구에서든
+        // 같은 값을 받는다 — 그것이 이 회차가 맞춘 것이다. 출구를 세는 자로 가른다.
+        assertThat(사유("bulkhead-full")).as("격벽이 막았다").isEqualTo(1.0);
         풀어_준다();
     }
 
@@ -2042,7 +2047,7 @@ class AdmissionGatewayFilterTest {
         // 세는 것이고, 그때는 동시 건수가 상한을 넘어도 아무도 안 막는다.
         assertThat(태운_것).allSatisfy(끊긴_것 ->
                 assertThat(끊긴_것.getResponse().getStatusCode())
-                        .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE));
+                        .isEqualTo(HttpStatus.TOO_MANY_REQUESTS));
         // 건수를 못 박는다. 하나만 보면 일부만 끊기고 나머지가 자리를 쥔 채
         // 남는 경우를 못 잡는다.
         assertThat(meters.counter("waiting.admission",
@@ -2072,7 +2077,7 @@ class AdmissionGatewayFilterTest {
                 "사람" + 초당_통과 * 3, e -> Mono.empty());
 
         assertThat(차례가_온_사람.getResponse().getStatusCode())
-                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
         // 폴백이 같은 장애에 쓰는 갈래와 같은 값이어야 한다. 밴드만 보면
         // 정책이 통째로 바뀌어도 통과하므로 값으로 못 박는다.
         assertThat(차례가_온_사람.getResponse().getHeaders().getFirst("Retry-After"))
@@ -2164,7 +2169,7 @@ class AdmissionGatewayFilterTest {
                 "사람" + 초당_통과 * 3, e -> Mono.empty());
 
         assertThat(차례가_온_사람.getResponse().getStatusCode())
-                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
         assertThat(차례가_온_사람.getResponse().getHeaders().getFirst("Retry-After"))
                 .as("배수 50 이 곱해지면 상한 60 이 된다").isEqualTo("1");
         풀어_준다();
@@ -2225,7 +2230,7 @@ class AdmissionGatewayFilterTest {
 
         assertThat(직전.getResponse().getStatusCode()).as("시한 직전").isNull();
         assertThat(직후.getResponse().getStatusCode()).as("시한 직후")
-                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
     }
 
     /**
@@ -2267,7 +2272,7 @@ class AdmissionGatewayFilterTest {
         MockServerWebExchange 콜드 = 요청("c2", "사람9");
         격벽_필터.filter(콜드, e -> Mono.empty()).block();
 
-        assertThat(핫.getResponse().getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(핫.getResponse().getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
         assertThat(콜드.getResponse().getStatusCode()).isNull();
         풀어_준다();
     }
@@ -2289,7 +2294,7 @@ class AdmissionGatewayFilterTest {
 
         assertThat(한_건_더.getResponse().getStatusCode())
                 .as("걸림 시간 2초면 상한도 2배다")
-                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
         풀어_준다();
     }
 

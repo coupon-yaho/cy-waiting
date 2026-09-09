@@ -578,7 +578,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
         AdmissionDecision shed = hasToken
                 ? AdmissionDecision.RETRY_TOKEN : AdmissionDecision.REJECT_OVERLOAD;
         exchange.getAttributes().put(DECISION, shed);
-        return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
+        // **코드도 그 판정에서 뽑는다** (F8 · CY-903). 503 은 클라이언트가 입장
+        // 단계를 버리는 신호라, 가까이 불러 놓고 새 순번으로 다시 세우게 된다.
+        return error.write(exchange, rejection.code(shed),
                 rejection.retryAfterSec(shed, random, meta.pollScale()));
     }
 
@@ -685,7 +687,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
 
     /**
      * 보호 장치가 끊는다. 판정도 같이 고쳐 적는다 — 사다리가 적어 둔 통과를
-     * 그대로 두면 실제로 503 이 나가는데 뒤에 읽는 쪽에는 통과로 보인다.
+     * 그대로 두면 나간 응답과 뒤에 읽는 값이 갈린다.
      *
      * <p>판정에 쓴 재료를 그대로 받는다. 홀더를 다시 읽으면 시한 갈래는 수 초
      * 뒤에 도는 자리라 판정과 다른 회차의 배수가 나간다.
@@ -695,23 +697,23 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
         if (shedWindow.entered()) {
             log.warn("보호 차단 진입 — 뒷단이 못 받아 끊는다");
         }
-        // 차례가 온 사람은 가까운 밴드로 부른다. 멀리 보내면 수명 있는 입장 토큰이
-        // 죽어 줄 맨 뒤로 다시 선다. 폴백이 같은 장애에 쓰는 갈래와 같아야 한다
-        // (BackendFallback).
+        // 차례가 온 사람은 가까운 밴드로 부르고 429 로 낸다. 멀리 보내거나 503 을
+        // 내면 수명 있는 입장 토큰이 죽어 줄 맨 뒤로 다시 선다. 폴백도 같은 장애에
+        // 같은 갈래를 쓴다 (BackendFallback · F8).
         boolean hasToken = exchange.<AdmissionDecision>getAttribute(DECISION)
                 == AdmissionDecision.PASS_TOKEN;
-        exchange.getAttributes().put(DECISION, AdmissionDecision.REJECT_OVERLOAD);
+        AdmissionDecision shed = hasToken
+                ? AdmissionDecision.RETRY_TOKEN : AdmissionDecision.REJECT_OVERLOAD;
+        exchange.getAttributes().put(DECISION, shed);
         // **줄에 안 선 쪽만 배수를 지킨다.** 이 갈래가 도는 순간이 곧 예산이
         // 빠듯한 순간이라 거기만 빼면 과부하일수록 예산이 덜 걸린다. 토큰
         // 보유자는 반대다 — 그 순간이 곧 그가 가장 멀리 밀리는 순간이다.
         //
-        // **응답 코드는 매핑에서 안 가져온다.** 바로 위에서 판정을 덮어썼으므로
-        // 그것으로 코드를 뽑으면 차례가 온 사람도 과부하 거절로 나간다.
-        return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE,
-                rejection.retryAfterSec(hasToken
-                                ? AdmissionDecision.RETRY_TOKEN
-                                : AdmissionDecision.REJECT_OVERLOAD,
-                        random, meta.pollScale()));
+        // **코드도 그 판정에서 뽑는다** (F8 · CY-903). 과부하로 뭉개 놓고 코드를
+        // 거기서 뽑으면 차례가 온 사람이 503 을 받고, 클라이언트가 그것을 입장
+        // 단계를 버리라는 신호로 읽는다.
+        return error.write(exchange, rejection.code(shed),
+                rejection.retryAfterSec(shed, random, meta.pollScale()));
     }
 
     /**

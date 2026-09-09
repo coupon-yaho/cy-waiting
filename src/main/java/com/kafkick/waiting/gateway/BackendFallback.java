@@ -128,10 +128,13 @@ public final class BackendFallback {
         }
         // **차례가 온 사람과 줄에 선 사람에게 같은 답을 하면 안 된다.** 앞은 손에
         // 든 토큰의 수명 안에 돌아와야 한다. 판정 경로가 이미 그렇게 가른다.
+        // **상태도 가른다** (F8 · CY-903). 503 은 클라이언트가 입장 단계를 버리는
+        // 신호라, 가까이 불러 놓고 새 순번으로 다시 세우게 된다. 이 출구가 뒷단
+        // 장애에서 가장 자주 도는 자리다.
         boolean admitted = admitted(request);
         ApiError.Envelope envelope = error.render(request.exchange(),
-                HttpStatus.SERVICE_UNAVAILABLE, CODE,
-                admitted ? ADMITTED : QUEUED,
+                admitted ? HttpStatus.TOO_MANY_REQUESTS : HttpStatus.SERVICE_UNAVAILABLE,
+                CODE, admitted ? ADMITTED : QUEUED,
                 retryAfterSec(admitted, pollScale(request)), false);
         return ServerResponse.status(envelope.status())
                 .headers(headers -> headers.putAll(envelope.headers()))

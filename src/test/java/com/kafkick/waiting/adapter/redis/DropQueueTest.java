@@ -355,4 +355,65 @@ class DropQueueTest extends RedisContainerSupport {
 
         assertThat(있나(RedisKeys.queue(산것, 1, 0))).as("살아난 쪽은 그대로").isTrue();
     }
+
+    /**
+     * <b>승계 직후 문을 잠근다</b> (CY-894).
+     *
+     * <p>표는 그 쿠폰이 매진 후보가 될 때 선다. 승계와 그 첫 틱 사이에 유령이
+     * 먼저 도착하면 표가 없어 그대로 지운다 — 되돌릴 수 없는 쓰기다. 입장
+     * 울타리가 같은 창을 이미 닫았다 (CY-892).
+     */
+    @Test
+    @DisplayName("승계_직후_잠그면_옛_임기가_못_지운다")
+    void 승계_직후_잠그면_옛_임기가_못_지운다() {
+        줄을_세운다();
+        redis.opsForValue().set(RedisKeys.stock(COUPON), "0").block(WAIT);
+
+        // 새 리더가 승계하면서 활성 쿠폰의 문을 잠근다. 아직 한 번도 안 지웠다.
+        assertThat(port.sealDropFences(List.of(COUPON), 200).block(WAIT)).isEqualTo(1L);
+
+        assertThat(port.dropSoldOutQueues(List.of(COUPON), FENCE).block(WAIT))
+                .as("옛 임기의 첫 삭제도 막는다").isEmpty();
+        assertThat(있나(RedisKeys.queue(COUPON, 1, 0))).as("줄이 살아 있다").isTrue();
+    }
+
+    /** 리더가 아니면 안 잠근다. 강등된 노드가 0 을 들고 나온다. */
+    @Test
+    @DisplayName("펜스가_0이면_안_잠근다")
+    void 펜스가_0이면_안_잠근다() {
+        assertThat(port.sealDropFences(List.of(COUPON), 0).block(WAIT)).isZero();
+        assertThat(있나(RedisKeys.dropFence(COUPON, 1, 0))).isFalse();
+    }
+
+    /**
+     * <b>막혔다는 사실이 남아야 한다</b> (CY-894).
+     *
+     * <p>거절이 "지울 것이 없었다" 와 같은 값이면 최대 한 시간 동안 죽은 줄이
+     * 폴링 예산을 먹는데 관측 창구가 하나도 없다.
+     */
+    @Test
+    @DisplayName("막힌_삭제를_따로_센다")
+    void 막힌_삭제를_따로_센다() {
+        줄을_세운다();
+        redis.opsForValue().set(RedisKeys.stock(COUPON), "0").block(WAIT);
+        port.sealDropFences(List.of(COUPON), 200).block(WAIT);
+
+        long 이전 = port.dropFenced();
+        port.dropSoldOutQueues(List.of(COUPON), FENCE).block(WAIT);
+
+        assertThat(port.dropFenced() - 이전).as("막힌 건수").isEqualTo(1);
+    }
+
+    /** 지울 것이 없어 안 지운 것은 막힌 것이 아니다. 둘을 섞으면 아무것도 못 읽는다. */
+    @Test
+    @DisplayName("매진이_아니면_막힌_것이_아니다")
+    void 매진이_아니면_막힌_것이_아니다() {
+        줄을_세운다();
+        redis.opsForValue().set(RedisKeys.stock(COUPON), "5").block(WAIT);
+
+        long 이전 = port.dropFenced();
+        assertThat(port.dropSoldOutQueues(List.of(COUPON), FENCE).block(WAIT)).isEmpty();
+
+        assertThat(port.dropFenced() - 이전).as("막힌 것이 아니다").isZero();
+    }
 }

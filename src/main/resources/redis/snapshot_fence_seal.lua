@@ -27,8 +27,10 @@ if fence <= 0 then
     return 0
 end
 
+-- **무한대는 안 비켜 준다.** 덮어쓰는 잠금과 달리 이쪽은 큰 값을 못 고치므로,
+-- 밖에서 들어온 `1e400` 하나가 잠금도 발행도 영영 막는다.
 local seen = tonumber(redis.call('GET', KEYS[1]))
-if seen ~= nil and seen == seen and fence < seen then
+if seen ~= nil and seen == seen and seen ~= math.huge and fence < seen then
     return 0
 end
 -- 자리 수를 박아 쓴다. 그냥 이어 붙이면 큰 수가 지수 표기로 나간다.

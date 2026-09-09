@@ -18,6 +18,15 @@ public final class AllowedDestinations {
 
     private static final int MAX_PORT = 65535;
 
+    /**
+     * 대역 프리픽스의 하한. 내부망이 실제로 쓰는 가장 넓은 폭이 한 바이트이고
+     * (`10.0.0.0/8` · `fd00::/8`), 그보다 넓은 것은 내부망일 수 없다.
+     */
+    private static final int MIN_PREFIX_BITS = 8;
+
+    /** v4 주소의 바이트 수. 매핑 표기가 v6 인 척 v4 규칙으로 서는 것을 여기서 가른다. */
+    private static final int V4_BYTES = 4;
+
     /** 주소를 쓰다 만 모양. 점으로 끊긴 열 진수인데 넷이 아니다. */
     private static final Pattern PARTIAL_ADDRESS =
             Pattern.compile("\\d{1,3}(\\.\\d{1,3}){0,2}");
@@ -90,11 +99,22 @@ public final class AllowedDestinations {
             if (trimmed.indexOf('/') >= 0 || IpLiteral.parse(trimmed) != null) {
                 IpRange range = IpRange.parse(trimmed).orElseThrow(() ->
                         new IllegalArgumentException("허용 목적지의 대역을 못 읽는다: " + entry));
-                // **전면 개방을 이름 없이 만들지 않는다.** 빈 목록은 막으면서 `/0` 을
-                // 받으면 같은 결과가 표기 하나로 조용히 선다.
-                if (range.prefixBits() == 0) {
+                // **v6 표기가 v4 규칙으로 서는 것을 막는다.** `::ffff:0.0.0.0/1` 은
+                // v6 항목처럼 읽히는데, 매핑을 풀면 네 바이트라 프리픽스가 v4 에
+                // 걸린다 — 적은 사람이 뜻한 것의 절반이 아니라 v4 절반이 열린다.
+                if (trimmed.indexOf(':') >= 0 && range.address().length == V4_BYTES) {
                     throw new IllegalArgumentException(
-                            "허용 목적지에 전 대역을 적을 수 없다: " + entry);
+                            "허용 목적지에 v4 매핑 표기를 쓸 수 없다: " + entry);
+                }
+                // **넓은 대역을 이름 없이 만들지 않는다.** 빈 목록은 막으면서 넓은
+                // 표기를 받으면 같은 결과가 대역 하나처럼 조용히 선다. v4 의 `/1` 은
+                // 눈에 띄지만 v6 에는 그런 신호가 없다 — `2000::/3` 하나로 공인
+                // 유니캐스트 전부가 열린다. 내부망이 쓰는 폭(`10.0.0.0/8`·`fd00::/8`)이
+                // 한 바이트라 그것을 하한으로 둔다.
+                if (range.prefixBits() < MIN_PREFIX_BITS) {
+                    throw new IllegalArgumentException(
+                            "허용 목적지의 대역이 너무 넓다 — 프리픽스는 %d 비트 이상이어야 한다: %s"
+                                    .formatted(MIN_PREFIX_BITS, entry));
                 }
                 ranges.add(range);
             } else {
@@ -120,6 +140,11 @@ public final class AllowedDestinations {
         // **이름을 대역으로 안 풀어 준다.** 풀려면 이름 조회가 필요하고, 그 결과는
         // 검사한 순간과 연결하는 순간이 다를 수 있다.
         if (literal != null) {
+            // **한 대를 가리키는 주소만 목적지다.** 대역 하나만 넓게 적혀 있으면
+            // 뒷단이 루프백이나 미지정을 보고해 게이트웨이가 스스로에게 요청을 보낸다.
+            if (!IpLiteral.routable(literal)) {
+                return false;
+            }
             return ranges.stream().anyMatch(range -> range.contains(literal));
         }
         return suffixes.stream().anyMatch(suffix -> suffix.matches(host));

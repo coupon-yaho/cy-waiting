@@ -68,4 +68,39 @@ public final class IpLiteral {
             return null;
         }
     }
+
+    /**
+     * 이 주소로 요청을 보내도 되는가. <b>한 대를 가리키는 주소만 참이다.</b>
+     *
+     * <p>미지정은 "아무 대나" 라 목적지가 아니고, 링크 로컬은 어느 링크인지가 빠져
+     * 있으며, 멀티캐스트와 브로드캐스트는 애초에 한 대가 아니다.
+     *
+     * <p><b>루프백은 참이다</b> — 같은 호스트의 뒷단이 실제 배치 모양이다.
+     */
+    public static boolean routable(byte[] address) {
+        if (address == null) {
+            return false;
+        }
+        int first = address[0] & 0xff;
+        if (address.length == V4_OCTETS) {
+            // 0.0.0.0/8 · 169.254.0.0/16 · 224.0.0.0/4 · 255.255.255.255
+            if (first == 0 || first >= 224) {
+                return false;
+            }
+            return !(first == 169 && (address[1] & 0xff) == 254);
+        }
+        if (first == 0xff) {
+            return false;
+        }
+        // fe80::/10. 다음 바이트의 위 두 비트까지 봐야 fec0::/10 과 안 섞인다.
+        if (first == 0xfe && (address[1] & 0xc0) == 0x80) {
+            return false;
+        }
+        for (byte b : address) {
+            if (b != 0) {
+                return true;
+            }
+        }
+        return false;
+    }
 }

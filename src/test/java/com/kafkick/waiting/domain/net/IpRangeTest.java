@@ -112,4 +112,30 @@ class IpRangeTest {
 
         assertThat(대역.contains(주소("10.0.1.7"))).isTrue();
     }
+
+    /**
+     * <b>주소 길이와 같은 프리픽스를 받는다.</b> 한 칸 밀리면 `/32` 와 `/128` 이 못
+     * 읽는 표기가 되는데, 신뢰 홉 목록은 못 읽는 표기를 조용히 버린다 — 한 대를
+     * 지목한 홉이 목록에서 사라지고 리미터 키가 프록시 하나로 뭉친다.
+     */
+    @Test
+    @DisplayName("프리픽스는_주소_길이까지만_받는다")
+    void 프리픽스는_주소_길이까지만_받는다() {
+        assertThat(IpRange.parse("10.0.1.0/32")).as("v4 의 끝은 32 다").isPresent();
+        assertThat(IpRange.parse("fd00::/128")).as("v6 의 끝은 128 이다").isPresent();
+        assertThat(IpRange.parse("fd00::/129")).isEmpty();
+        // **여기서는 0 도 표기로 성립한다.** 넓은 대역을 막는 것은 부르는 쪽의 일이고,
+        // 신뢰 홉 목록에는 그 하한이 아직 없다 (CY-917).
+        assertThat(IpRange.parse("10.0.1.0/0")).isPresent();
+    }
+
+    /** 거절은 옆 시험이 든다. 여기는 <b>받아야 하는 두 끝</b>만 본다. */
+    @Test
+    @DisplayName("생성자도_주소_길이와_같은_폭을_받는다")
+    void 생성자도_주소_길이와_같은_폭을_받는다() {
+        byte[] 주소 = {10, 0, 1, 0};
+
+        assertThat(new IpRange(주소, 32).prefixBits()).isEqualTo(32);
+        assertThat(new IpRange(주소, 0).prefixBits()).isZero();
+    }
 }

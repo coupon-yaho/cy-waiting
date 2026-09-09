@@ -75,6 +75,23 @@ class EntryTokenTest {
     }
 
     /**
+     * <b>만료 시각 그 순간은 이미 지난 것이다.</b> 한 칸 느슨하면 그 초에 도착한
+     * 요청이 통과하고, 그 자리가 차례를 이미 잃은 사람이다.
+     *
+     * <p>{@code 지금} 이 창 경계라 만료를 창의 폭 없이 셀 수 있다.
+     */
+    @Test
+    @DisplayName("만료_시각_그_순간은_안_받는다")
+    void 만료_시각_그_순간은_안_받는다() {
+        String issued = token.issue("c1", "m1", 지금);
+        Instant 만료 = 지금.plusSeconds(EntryToken.TTL_SEC);
+
+        assertThat(token.verify(issued, "c1", 만료.minusSeconds(1))).as("한 칸 앞은 받는다")
+                .contains("m1");
+        assertThat(token.verify(issued, "c1", 만료)).as("그 순간은 안 받는다").isEmpty();
+    }
+
+    /**
      * 창 끝에 받은 사람의 토큰이 몇 초만 살면 안 된다. 대기가 그보다 길다.
      */
     @Test

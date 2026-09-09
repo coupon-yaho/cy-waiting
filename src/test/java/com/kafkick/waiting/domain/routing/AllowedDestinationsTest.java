@@ -337,6 +337,17 @@ class AllowedDestinationsTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    /**
+     * <b>가장 높은 포트도 받는다.</b> 한 칸 밀리면 65535 를 듣는 뒷단을 적은 배포가
+     * 기동에서 막힌다. 거절 쪽은 포트 검증 시험이 이미 든다.
+     */
+    @Test
+    @DisplayName("가장_높은_포트도_받는다")
+    void 가장_높은_포트도_받는다() {
+        assertThat(AllowedDestinations.of(List.of("10.0.0.0/8"), List.of(65535))
+                .permits(주소("10.0.0.5:65535"))).isTrue();
+    }
+
     /** 무제한은 이름으로만 만든다. 인자를 빠뜨려 조용히 되는 것과는 다르다. */
     @Test
     @DisplayName("무제한은_다_받는다")

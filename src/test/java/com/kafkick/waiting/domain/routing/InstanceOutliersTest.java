@@ -115,6 +115,28 @@ class InstanceOutliersTest {
     }
 
     /**
+     * <b>램프에서 쌓은 연속은 램프와 함께 버린다.</b> 넘기면 평상시 첫 실패 한 건이
+     * 그 대를 다시 뺀다 — 하필 트래픽이 끊겼다 돌아오는 순간이 그 자리다.
+     */
+    @Test
+    @DisplayName("램프에서_쌓은_연속은_안_넘어간다")
+    void 램프에서_쌓은_연속은_안_넘어간다() {
+        InstanceOutliers outliers = 배제기();
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 1_000);
+        }
+        long 램프_중 = 1_000 + 배제_시간.toMillis() + 1;
+        outliers.failed("가", 램프_중);
+        outliers.failed("가", 램프_중);
+
+        long 가라앉은_뒤 = 1_000 + 배제_시간.toMillis() + 램프.toMillis();
+        outliers.failed("가", 가라앉은_뒤);
+
+        assertThat(outliers.ejected(Set.of("가", "나"), 가라앉은_뒤))
+                .as("앓은 적 없는 대와 같이 임계만큼 준다").isEmpty();
+    }
+
+    /**
      * <b>램프까지 다 지나야 평상시다.</b> 그 전에는 되돌리는 중이라 미덥지 않고,
      * 다 지나면 한 번도 앓은 적 없는 대와 같이 다룬다.
      */

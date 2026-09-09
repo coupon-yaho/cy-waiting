@@ -38,9 +38,9 @@ class SealGateTest {
     @DisplayName("잠근_뒤에는_돈다")
     void 잠근_뒤에는_돈다() {
         SealGate gate = SealGate.of(() -> true);
-        gate.sealing();
+        long 세대 = gate.sealing();
 
-        gate.sealed();
+        gate.sealed(세대);
 
         assertThat(gate.getAsBoolean()).isTrue();
     }
@@ -55,6 +55,40 @@ class SealGateTest {
         assertThat(gate.getAsBoolean()).isFalse();
 
         리더인가.set(true);
+        assertThat(gate.getAsBoolean()).isTrue();
+    }
+
+    /**
+     * <b>지난 승계의 완료가 이번 잠금을 열면 안 된다</b> (CY-894 · 리뷰).
+     *
+     * <p>승계가 잦으면 첫 잠금이 끝나기 전에 다음 승계가 온다. 첫 잠금의 완료가
+     * 그때 문을 열면, 새 리더가 자기 문을 잠그기 전에 배분을 돈다.
+     */
+    @Test
+    @DisplayName("지난_잠금의_완료는_문을_안_연다")
+    void 지난_잠금의_완료는_문을_안_연다() {
+        SealGate gate = SealGate.of(() -> true);
+
+        long 첫째 = gate.sealing();
+        long 둘째 = gate.sealing();
+        gate.sealed(첫째);
+
+        assertThat(gate.getAsBoolean()).as("둘째 잠금이 아직 도는 중이다").isFalse();
+
+        gate.sealed(둘째);
+        assertThat(gate.getAsBoolean()).isTrue();
+    }
+
+    /** 늦게 도착한 완료가 이미 열린 문을 닫지도 않는다. */
+    @Test
+    @DisplayName("늦은_완료가_문을_닫지_않는다")
+    void 늦은_완료가_문을_닫지_않는다() {
+        SealGate gate = SealGate.of(() -> true);
+
+        long 첫째 = gate.sealing();
+        gate.sealed(첫째);
+        gate.sealed(첫째);
+
         assertThat(gate.getAsBoolean()).isTrue();
     }
 }

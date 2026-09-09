@@ -270,7 +270,7 @@ public class ControlPlaneConfig {
      */
     Runnable sealFences(AllocationRedisPort port, Leadership leadership, SealGate gate) {
         return () -> {
-            gate.sealing();
+            long generation = gate.sealing();
             long fence = leadership.fence();
             // **권위 있는 자리에서 읽는다.** 마지막 발행의 쿠폰을 쓰면 발행이 밀렸거나
             // 갱신이 실패한 구간에 새로 활성이 된 쿠폰이 빠지고, 그 쿠폰이 정확히
@@ -288,7 +288,9 @@ public class ControlPlaneConfig {
                     // 줄이 통째로 멎는다 — 못 잠근 쿠폰은 적용이 다시 막는다.
                     .doOnError(e -> log.warn("울타리를 못 잠갔다 — 임기 {}", fence, e))
                     .onErrorReturn(0L)
-                    .doFinally(signal -> gate.sealed())
+                    // **이 잠금의 세대로 연다.** 승계가 잦으면 첫 잠금의
+                    // 완료가 둘째 잠금이 도는 중에 문을 열어 버린다.
+                    .doFinally(signal -> gate.sealed(generation))
                     .subscribe();
         };
     }

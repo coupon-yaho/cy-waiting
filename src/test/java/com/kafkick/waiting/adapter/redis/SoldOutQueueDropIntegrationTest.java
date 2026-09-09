@@ -96,7 +96,9 @@ class SoldOutQueueDropIntegrationTest extends RedisContainerSupport {
                 SnapshotCodec.create(), () -> 0L, Optional::empty,
                 SoldOutCleanup.of(1, new SimpleMeterRegistry()),
                 ids -> port.dropSoldOutQueues(ids, fence),
-                ids -> Mono.just(List.of()),
+                // **후보 올리기를 스텁으로 두지 않는다** (CY-894). 표가 삭제의
+                // 전제가 됐으므로, 스텁이면 이 시험이 운영과 다른 순서를 잰다.
+                ids -> port.claimSoldOutQueues(ids, fence),
                 QueueSweeper.of(
                         SweepGates.warmed(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
                         (ids, limit, removeFront) -> Mono.just(QueueSweeper.SweepResult.NOTHING)),

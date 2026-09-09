@@ -85,6 +85,8 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "7").block(WAIT);
         // 삭제가 재고를 직접 본다 (CY-765). 안 심으면 못 읽은 것이라 안 지운다.
         redis.opsForValue().set(RedisKeys.stock("c1"), "0").block(WAIT);
+        // 후보로 먼저 올려 표를 세운다 — 표 없이 지우는 회차는 운영에 없다 (CY-894).
+        port.claimSoldOutQueues(List.of("c1"), 1).block(WAIT);
 
         assertThat(port.dropSoldOutQueues(List.of("c1"), 1).block(WAIT))
                 .as("지운 쿠폰을 돌려준다").containsExactly("c1");

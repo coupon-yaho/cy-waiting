@@ -114,7 +114,13 @@ public final class SoldOutCleanup {
 
     /** 못 지웠다. 셈을 남겨 두어 다음 틱에 다시 시도한다. */
     public void failed(List<String> couponIds) {
-        couponIds.forEach(id -> failed.increment());
+        couponIds.forEach(id -> {
+            failed.increment();
+            // **표 확인 표시를 놓는다** (CY-894). 삭제는 표가 있어야 도는데, 표가
+            // 축출되거나 수명이 다하면 다시 세울 사람이 없어 그 줄이 영영 안 지워진다.
+            // 실패한 쿠폰은 다음 회차에 후보로 다시 올려 표부터 세운다.
+            fenced.remove(id);
+        });
     }
 
     /**

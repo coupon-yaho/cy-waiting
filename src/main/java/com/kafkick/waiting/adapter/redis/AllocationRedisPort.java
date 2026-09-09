@@ -517,7 +517,10 @@ public final class AllocationRedisPort implements SnapshotSource {
      * 올리는 순간 세워야 그 뒤에 오는 옛 회차가 걸린다.
      */
     public Mono<List<String>> claimSoldOutQueues(List<String> couponIds, long fence) {
-        if (couponIds.isEmpty() || shards != 1) {
+        // **리더가 아니면 세울 자격도 없다.** 0 을 그대로 넘기면 스크립트가 앞에서
+        // 되돌아 0 을 내는데, 그것을 "표가 섰다" 로 접으면 그 쿠폰이 다시는 후보에
+        // 안 오른다.
+        if (couponIds.isEmpty() || shards != 1 || fence <= 0) {
             return Mono.just(List.of());
         }
         return Flux.fromIterable(couponIds)
@@ -604,7 +607,9 @@ public final class AllocationRedisPort implements SnapshotSource {
                 .map(result -> {
                     // **막힌 것을 안 지운 것과 가른다.** 둘이 같으면 최대 유예 내내
                     // 죽은 줄이 폴링 예산을 먹는데 아무도 못 본다.
-                    if (result == -1L) {
+                    // -2 는 표가 아예 없다는 뜻이다. 잠금과 후보 표시가 둘 다
+                    // 실패한 것이라, 자기가 유일한 리더라는 근거가 없다.
+                    if (result < 0) {
                         dropFenced.incrementAndGet();
                         return false;
                     }

@@ -205,4 +205,32 @@ class EntryTokenRotationTest {
 
         assertThat(파드.acceptedByPrevious()).as("서명만 맞은 것은 안 센다").isZero();
     }
+
+    /**
+     * <b>옛 키를 받는 기간은 그 키로 낸 마지막 토큰의 수명이다.</b> 짧으면 배포가
+     * 끝난 뒤에도 유효한 토큰을 든 사람이 거절당하고, 길면 뺀 키가 그만큼 더 산다.
+     */
+    @Test
+    @DisplayName("받는_기간은_수명과_창의_합이다")
+    void 받는_기간은_수명과_창의_합이다() {
+        assertThat(SignedToken.acceptWindowSec(180, 30)).isEqualTo(210);
+        assertThat(EntryToken.ACCEPT_WINDOW_SEC)
+                .as("입장 토큰도 같은 셈을 쓴다").isEqualTo(EntryToken.TTL_SEC + 30);
+    }
+
+    /**
+     * <b>만료 시각 그 순간은 이미 지난 것이다.</b> 한 칸 느슨하면 그 초에 도착한
+     * 요청이 통과하고, 그 자리가 차례를 이미 잃은 사람이다.
+     */
+    @Test
+    @DisplayName("만료_시각_그_순간은_안_받는다")
+    void 만료_시각_그_순간은_안_받는다() {
+        EntryToken 파드 = EntryToken.of(새_키);
+        String 토큰 = 파드.issue("c1", "m1", 지금);
+
+        Instant 만료 = 지금.plusSeconds(EntryToken.TTL_SEC);
+        assertThat(파드.verify(토큰, "c1", 만료.minusSeconds(1))).as("한 칸 앞은 받는다")
+                .contains("m1");
+        assertThat(파드.verify(토큰, "c1", 만료)).as("그 순간은 안 받는다").isEmpty();
+    }
 }

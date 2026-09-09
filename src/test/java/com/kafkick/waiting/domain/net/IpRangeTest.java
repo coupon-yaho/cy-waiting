@@ -112,4 +112,53 @@ class IpRangeTest {
 
         assertThat(대역.contains(주소("10.0.1.7"))).isTrue();
     }
+
+    /**
+     * <b>프리픽스의 두 끝을 다 못 박는다.</b> 한쪽만 재면 부등호를 옮겨도 초록이고,
+     * 그러면 주소 길이를 넘는 대역이 서서 배열 밖을 읽는다.
+     */
+    @Test
+    @DisplayName("프리픽스는_주소_길이까지만_받는다")
+    void 프리픽스는_주소_길이까지만_받는다() {
+        assertThat(IpRange.parse("10.0.1.0/32")).as("v4 의 끝은 32 다").isPresent();
+        assertThat(IpRange.parse("10.0.1.0/33")).as("한 칸 넘으면 못 읽는다").isEmpty();
+        assertThat(IpRange.parse("10.0.1.0/0")).as("0 도 표기로는 성립한다").isPresent();
+        assertThat(IpRange.parse("10.0.1.0/-1")).isEmpty();
+        assertThat(IpRange.parse("fd00::/128")).as("v6 의 끝은 128 이다").isPresent();
+        assertThat(IpRange.parse("fd00::/129")).isEmpty();
+    }
+
+    /**
+     * <b>정규 생성자도 같은 두 끝을 본다.</b> 팩토리만 막으면 {@code new} 로 배열
+     * 밖을 읽는 대역을 만들 수 있다.
+     */
+    @Test
+    @DisplayName("생성자도_프리픽스의_두_끝을_본다")
+    void 생성자도_프리픽스의_두_끝을_본다() {
+        byte[] 주소 = {10, 0, 1, 0};
+
+        assertThat(new IpRange(주소, 32).prefixBits()).isEqualTo(32);
+        assertThat(new IpRange(주소, 0).prefixBits()).isZero();
+        assertThatThrownBy(() -> new IpRange(주소, 33))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new IpRange(주소, -1))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /**
+     * <b>같은 대역은 같은 값이고 다른 대역은 다른 값이다.</b> 뒤엣것을 안 재면
+     * 늘 같은 수를 내는 구현도 통과하고, 그러면 집합에 넣는 순간 전부 한 통에 쌓인다.
+     */
+    @Test
+    @DisplayName("같은_대역은_같은_해시다")
+    void 같은_대역은_같은_해시다() {
+        IpRange 하나 = IpRange.parse("10.0.1.0/24").orElseThrow();
+        IpRange 같은_것 = IpRange.parse("10.0.1.0/24").orElseThrow();
+        IpRange 폭이_다른_것 = IpRange.parse("10.0.1.0/25").orElseThrow();
+        IpRange 주소가_다른_것 = IpRange.parse("10.0.2.0/24").orElseThrow();
+
+        assertThat(하나).isEqualTo(같은_것).hasSameHashCodeAs(같은_것);
+        assertThat(하나.hashCode()).isNotEqualTo(폭이_다른_것.hashCode());
+        assertThat(하나.hashCode()).isNotEqualTo(주소가_다른_것.hashCode());
+    }
 }

@@ -275,19 +275,28 @@ public class ControlPlaneConfig {
             // **권위 있는 자리에서 읽는다.** 마지막 발행의 쿠폰을 쓰면 발행이 밀렸거나
             // 갱신이 실패한 구간에 새로 활성이 된 쿠폰이 빠지고, 그 쿠폰이 정확히
             // 유령의 지연된 몫을 받는 자리다.
-            port.activeCoupons()
-                    .flatMap(coupons -> port.sealFences(coupons, fence)
+            Mono<Long> coupons = port.activeCoupons()
+                    .flatMap(active -> port.sealFences(active, fence)
                             .doOnNext(locked -> {
-                                if (locked < coupons.size()) {
+                                if (locked < active.size()) {
                                     log.warn("울타리를 다 못 잠갔다 — {}/{} 개, 임기 {}. "
                                             + "못 잠근 쿠폰은 적용과 삭제가 그 자리에서 "
-                                            + "다시 막는다", locked, coupons.size(), fence);
+                                            + "다시 막는다", locked, active.size(), fence);
                                 }
                             }))
                     // **못 잠가도 회차는 연다.** 여기서 멈추면 아무도 배분을 안 돌아
                     // 줄이 통째로 멎는다 — 못 잠근 쿠폰은 적용이 다시 막는다.
                     .doOnError(e -> log.warn("울타리를 못 잠갔다 — 임기 {}", fence, e))
-                    .onErrorReturn(0L)
+                    .onErrorReturn(0L);
+            // **발행의 문도 같이 잠근다** (CY-911). 그 표는 첫 발행에야 서므로 승계와
+            // 첫 틱 사이가 비고, 그 창의 발행에 정리와 청소가 매달려 같이 나간다.
+            Mono<Long> snapshot = port.sealSnapshotFence(fence)
+                    .doOnError(e -> log.warn("발행 울타리를 못 잠갔다 — 임기 {}. 첫 발행이 "
+                            + "설 때까지 유령의 재료가 나갈 수 있다", fence, e))
+                    .onErrorReturn(0L);
+            // 슬롯이 갈려 한 스크립트로 못 묶는다. 나란히 돌려 승계가 멎는 시간을
+            // 안 늘리고, 한쪽 실패가 다른 쪽을 끊지 않도록 각자 삼킨다.
+            Mono.when(coupons, snapshot)
                     // **이 잠금의 세대로 연다.** 승계가 잦으면 첫 잠금의
                     // 완료가 둘째 잠금이 도는 중에 문을 열어 버린다.
                     .doFinally(signal -> gate.sealed(generation))

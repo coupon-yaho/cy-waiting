@@ -731,6 +731,61 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         assertThat(redis.hasKey(RedisKeys.SNAPSHOT_FENCE).block(WAIT)).isFalse();
     }
 
+    /**
+     * <b>승계 때 발행의 문도 잠근다</b> (CY-911). 안 잠그면 새 리더의 첫 발행 전까지
+     * 유령의 발행이 자기 번호와 같아서 통과하고, 그 회차의 정리와 청소가 매달려 같이
+     * 나간다 — 걷힌 사람은 새 score 로 다시 선다.
+     */
+    @Test
+    @DisplayName("승계_때_잠근_발행의_문은_유령이_먼저_와도_막는다")
+    void 승계_때_잠근_발행의_문은_유령이_먼저_와도_막는다() {
+        port.publish(Map.of("c1", "옛 리더", "#credit", "1"), 임기 - 1).block(WAIT);
+
+        assertThat(port.sealSnapshotFence(임기).block(WAIT)).isEqualTo(1);
+
+        assertThatThrownBy(() ->
+                port.publish(Map.of("c1", "유령", "#credit", "9"), 임기 - 1).block(WAIT))
+                .isInstanceOf(AllocationRedisPort.FencedOutException.class);
+        assertThat(port.load().block(WAIT))
+                .as("거절은 아무것도 안 건드린다")
+                .containsEntry("c1", "옛 리더");
+    }
+
+    /**
+     * <b>발행의 잠금은 올리기만 한다.</b> 덮어쓰면 승계 중에 멎었던 옛 리더의 잠금이
+     * 늦게 착륙해 표를 낮추고, 그 뒤 그 리더의 발행이 통과한다.
+     */
+    @Test
+    @DisplayName("발행의_잠금은_늦게_와도_표를_안_낮춘다")
+    void 발행의_잠금은_늦게_와도_표를_안_낮춘다() {
+        port.publish(Map.of("c1", "새 리더", "#credit", "7"), 임기).block(WAIT);
+
+        assertThat(port.sealSnapshotFence(임기 - 100).block(WAIT))
+                .as("안 잠갔으면 0 을 내야 부르는 쪽이 셀 수 있다").isZero();
+
+        assertThat(redis.opsForValue().get(RedisKeys.SNAPSHOT_FENCE).block(WAIT))
+                .isEqualTo(Long.toString(임기));
+    }
+
+    /** 리더가 아니면 안 잠근다. 0 이 서면 그 뒤의 모든 발행이 통과한다. */
+    @Test
+    @DisplayName("발행의_문은_리더가_아니면_안_잠근다")
+    void 발행의_문은_리더가_아니면_안_잠근다() {
+        assertThat(port.sealSnapshotFence(0).block(WAIT)).isZero();
+
+        assertThat(redis.hasKey(RedisKeys.SNAPSHOT_FENCE).block(WAIT)).isFalse();
+    }
+
+    /** 수명이 없으면 잠근 문이 영구가 된다. 승계 뒤 발행이 통째로 멎는다. */
+    @Test
+    @DisplayName("잠근_발행의_문에_수명이_붙는다")
+    void 잠근_발행의_문에_수명이_붙는다() {
+        port.sealSnapshotFence(임기).block(WAIT);
+
+        assertThat(redis.getExpire(RedisKeys.SNAPSHOT_FENCE).block(WAIT))
+                .as("수명이 없으면 -1 로 온다").isPositive();
+    }
+
     @Test
     @DisplayName("발행한_것을_그대로_읽는다")
     void 발행한_것을_그대로_읽는다() {

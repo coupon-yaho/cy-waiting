@@ -13,6 +13,7 @@ import com.kafkick.waiting.domain.allocation.Grant;
 import com.kafkick.waiting.domain.coupon.QueueMode;
 import com.kafkick.waiting.control.QueueSweeper;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -135,6 +136,11 @@ public final class AllocationRedisPort implements SnapshotSource {
 
     /** 스냅샷 울타리의 수명. 쿠폰별 표와 이유가 달라 따로 든다. */
     private final Duration snapshotFenceTtl;
+    /** 옛 임기라 막힌 매진 큐 삭제. 그 창 동안 죽은 줄이 폴링 예산을 먹는다. */
+    private final AtomicLong dropFenced = new AtomicLong();
+
+    private final FailureWindow dropFencedWindow = FailureWindow.create();
+
     private final FailureWindow rejected = FailureWindow.create();
     private final FailureWindow malformed = FailureWindow.create();
 
@@ -574,7 +580,22 @@ public final class AllocationRedisPort implements SnapshotSource {
 
     private Mono<Boolean> dropOne(String couponId, long fence) {
         return runDrop(couponId, fence, true)
-                .map(dropped -> dropped == 1L)
+                .map(result -> {
+                    // **막힌 것을 안 지운 것과 가른다.** 둘이 같으면 최대 유예 내내
+                    // 죽은 줄이 폴링 예산을 먹는데 아무도 못 본다.
+                    if (result == -1L) {
+                        dropFenced.incrementAndGet();
+                        if (dropFencedWindow.entered()) {
+                            log.warn("매진 큐 삭제가 막혔다 — 옛 임기 {} 다. 그 줄은 "
+                                    + "다음 리더가 지운다: 쿠폰={}", fence, couponId);
+                        }
+                        return false;
+                    }
+                    dropFencedWindow.exited().ifPresent(recovered ->
+                            log.info("매진 큐 삭제가 다시 지난다 — {}초 동안 {}건 막혔다",
+                                    recovered.elapsedSeconds(), recovered.swallowed()));
+                    return result == 1L;
+                })
                 .onErrorResume(e -> {
                     // **매 건 남긴다.** 이 저장소의 유일한 비가역 쓰기인데 실패는
                     // 부르는 쪽에서 삼켜진다. 창을 걸면 프로세스 수명에 한 줄만
@@ -680,20 +701,42 @@ public final class AllocationRedisPort implements SnapshotSource {
      * @return 잠근 쿠폰 수. 넘긴 수보다 적으면 그만큼 못 잠갔다
      */
     public Mono<Long> sealApplyFences(Collection<String> couponIds, long fence) {
+        return sealFences(couponIds, fence,
+                couponId -> RedisKeys.applyFence(couponId, shards, 0));
+    }
+
+    /**
+     * 매진 큐 삭제의 문을 새 임기로 잠근다 (CY-894).
+     *
+     * <p><b>표는 그 쿠폰이 후보가 될 때 선다.</b> 승계와 그 첫 틱 사이에 유령이
+     * 먼저 도착하면 표가 없어 그대로 지운다 — 되돌릴 수 없는 쓰기다.
+     */
+    public Mono<Long> sealDropFences(Collection<String> couponIds, long fence) {
+        return sealFences(couponIds, fence,
+                couponId -> RedisKeys.dropFence(couponId, shards, 0));
+    }
+
+    /** 옛 임기라 막힌 매진 큐 삭제 건수. */
+    public long dropFenced() {
+        return dropFenced.get();
+    }
+
+    /** 문을 잠그는 절차는 표마다 같다. 키만 다르다. */
+    private Mono<Long> sealFences(Collection<String> couponIds, long fence,
+            Function<String, String> key) {
         if (fence <= 0 || couponIds.isEmpty()) {
             return Mono.just(0L);
         }
         return Flux.fromIterable(couponIds)
-                .flatMap(couponId -> redis.execute(SEAL_APPLY_FENCE,
-                                List.of(RedisKeys.applyFence(couponId, shards, 0)),
+                .flatMap(couponId -> redis.execute(SEAL_APPLY_FENCE, List.of(key.apply(couponId)),
                                 List.of(Long.toString(fence),
                                         Long.toString(fenceTtl.toMillis())))
                         .next()
                         // **스크립트가 낸 값을 그대로 접는다.** 1 로 갈면 "예외가 안
                         // 난 수" 가 되어, 안 잠근 것을 잠갔다고 센다.
                         .map(Number::longValue)
-                        // 하나가 실패해도 나머지는 잠근다. 못 잠근 쿠폰은 적용이
-                        // 그 자리에서 다시 막는다 — 안 잠긴 채로 지나가지 않는다.
+                        // 하나가 실패해도 나머지는 잠근다. 못 잠근 쿠폰은 그 자리에서
+                        // 다시 막는다 — 안 잠긴 채로 지나가지 않는다.
                         .onErrorReturn(0L), MAX_CONCURRENT_WRITES)
                 .reduce(0L, Long::sum);
     }

@@ -177,6 +177,12 @@ public class ControlPlaneConfig {
                         AllocationRedisPort::publishFenced)
                 .description("울타리가 막은 발행 회차 수. 0 이 아니면 이 노드의 재료가 안 나갔다")
                 .register(meters);
+        // **되돌릴 수 없는 쓰기가 막힌 수다.** 그 창 동안 죽은 줄이 폴링 예산을
+        // 먹는데, 안 내면 막혔다는 사실이 어디에도 안 남는다 (CY-894).
+        FunctionCounter.builder("waiting.queue.drop.fenced", port,
+                        AllocationRedisPort::dropFenced)
+                .description("옛 임기라 막힌 매진 큐 삭제 수")
+                .register(meters);
         FunctionCounter.builder("waiting.allocation.apply.fenced", port,
                         AllocationRedisPort::applyFenced)
                 .description("울타리가 막은 입장 적용 건수. 쿠폰마다 오르므로 회차 수가 아니다")
@@ -257,6 +263,9 @@ public class ControlPlaneConfig {
     /**
      * 승계 직후 활성 쿠폰의 문을 잠근다. <b>못 잠가도 회차는 돈다</b> — 안 잠긴
      * 쿠폰은 적용이 그 자리에서 다시 막으므로, 여기서 막으면 회복만 늦어진다.
+     *
+     * <p><b>매진 큐 삭제의 문도 같이 잠근다</b> (CY-894). 그쪽 표는 후보가 될 때
+     * 서므로 승계와 첫 틱 사이가 비고, 그 창의 쓰기는 되돌릴 수 없다.
      */
     Runnable sealApplyFences(AllocationRedisPort port, Leadership leadership, SealGate gate) {
         return () -> {
@@ -266,7 +275,14 @@ public class ControlPlaneConfig {
             // 갱신이 실패한 구간에 새로 활성이 된 쿠폰이 빠지고, 그 쿠폰이 정확히
             // 유령의 지연된 몫을 받는 자리다.
             port.activeCoupons()
-                    .flatMap(coupons -> port.sealApplyFences(coupons, fence)
+                    .flatMap(coupons -> port.sealDropFences(coupons, fence)
+                            .doOnNext(locked -> {
+                                if (locked < coupons.size()) {
+                                    log.warn("삭제 울타리를 다 못 잠갔다 — {}/{} 개, "
+                                            + "임기 {}", locked, coupons.size(), fence);
+                                }
+                            })
+                            .then(port.sealApplyFences(coupons, fence))
                             .doOnNext(locked -> {
                                 if (locked < coupons.size()) {
                                     log.warn("입장 울타리를 다 못 잠갔다 — {}/{} 개, "

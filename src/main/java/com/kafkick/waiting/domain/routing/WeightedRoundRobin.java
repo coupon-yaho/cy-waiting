@@ -59,7 +59,9 @@ public final class WeightedRoundRobin implements InstanceChooser {
         // 여유가 1 로 붕괴하는데 누적은 옛 규모라, 회차마다 좁혀지는 폭이 대 수뿐이다 —
         // 실측으로 한 대가 167 요청을 연속으로 받았다. 방금 회복한 대에 전량을 몰아주는
         // 것이라 그 대가 다시 무너진다. 총합의 두 배로 재우면 안정 가중치에서는 순서도
-        // 비율도 그대로이고 붕괴 구간의 연속만 둘로 줄어든다.
+        // 비율도 그대로이고, 붕괴 구간의 연속이 **2 x 배수 + 1** 로 묶인다 (후보가 둘이면
+        // 여섯). 한 배는 그 수를 셋까지 줄이지만 극단으로 기운 가중치에서 비율을 민다 —
+        // 비율이 이 고르개를 고른 이유라 그쪽을 안 건드리는 값을 골랐다.
         long bound = saturated(total, total);
         Map<String, Long> next = new HashMap<>();
         RoutingCandidate chosen = null;
@@ -74,9 +76,9 @@ public final class WeightedRoundRobin implements InstanceChooser {
                 chosen = c;
             }
         }
-        // **여기는 재우지 않는다.** 누적은 매 회차 그 대의 크레딧이 더해지므로,
-        // 총합이 상한에 닿을 만큼 크면 누적도 같이 커진다 — 아래로 넘치는 조합이
-        // 안 만들어진다. 못 밟는 갈래를 두면 방어가 있다는 착각만 남는다.
+        // **여기는 재우지 않는다.** 위에서 누적을 총합의 두 배 안으로 재우므로 이 값은
+        // 총합의 세 배 밖으로 못 나간다 — 총합이 상한의 3분의 1 아래면 아래로 넘치는
+        // 조합이 안 만들어진다. 못 밟는 갈래를 두면 방어가 있다는 착각만 남는다.
         next.put(chosen.instanceId(), leading - total);
         credit.putAll(next);
         return Optional.of(chosen);

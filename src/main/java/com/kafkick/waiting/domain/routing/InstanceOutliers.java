@@ -71,8 +71,10 @@ public final class InstanceOutliers {
 
     /**
      * 이 인스턴스가 실패로 끝냈다. 연속이 임계에 닿으면 거기서 배제가 시작된다.
-     * <b>배제·회복 구간의 실패는 임계를 안 기다린다</b> — 되돌리는 중은 아직 미덥지
-     * 않다는 뜻이라 한 건으로 곧바로 다시 뺀다.
+     *
+     * <p><b>배제 구간의 실패만 임계를 안 기다린다</b> — 그 구간은 트래픽이 0 이라 거기
+     * 오는 것이 늦게 돌아온 결과다. 회복 구간은 같은 임계를 쓰고, 못 미치는 실패는
+     * 회복을 취소하지 않는다.
      */
     public void failed(String instanceId, long nowMillis) {
         Objects.requireNonNull(instanceId, "instanceId");

@@ -370,7 +370,7 @@ class DropQueueTest extends RedisContainerSupport {
         redis.opsForValue().set(RedisKeys.stock(COUPON), "0").block(WAIT);
 
         // 새 리더가 승계하면서 활성 쿠폰의 문을 잠근다. 아직 한 번도 안 지웠다.
-        assertThat(port.sealDropFences(List.of(COUPON), 200).block(WAIT)).isEqualTo(1L);
+        assertThat(port.sealFences(List.of(COUPON), 200).block(WAIT)).isEqualTo(1L);
 
         assertThat(port.dropSoldOutQueues(List.of(COUPON), FENCE).block(WAIT))
                 .as("옛 임기의 첫 삭제도 막는다").isEmpty();
@@ -381,7 +381,7 @@ class DropQueueTest extends RedisContainerSupport {
     @Test
     @DisplayName("펜스가_0이면_안_잠근다")
     void 펜스가_0이면_안_잠근다() {
-        assertThat(port.sealDropFences(List.of(COUPON), 0).block(WAIT)).isZero();
+        assertThat(port.sealFences(List.of(COUPON), 0).block(WAIT)).isZero();
         assertThat(있나(RedisKeys.dropFence(COUPON, 1, 0))).isFalse();
     }
 
@@ -396,7 +396,7 @@ class DropQueueTest extends RedisContainerSupport {
     void 막힌_삭제를_따로_센다() {
         줄을_세운다();
         redis.opsForValue().set(RedisKeys.stock(COUPON), "0").block(WAIT);
-        port.sealDropFences(List.of(COUPON), 200).block(WAIT);
+        port.sealFences(List.of(COUPON), 200).block(WAIT);
 
         long 이전 = port.dropFenced();
         port.dropSoldOutQueues(List.of(COUPON), FENCE).block(WAIT);
@@ -415,5 +415,53 @@ class DropQueueTest extends RedisContainerSupport {
         assertThat(port.dropSoldOutQueues(List.of(COUPON), FENCE).block(WAIT)).isEmpty();
 
         assertThat(port.dropFenced() - 이전).as("막힌 것이 아니다").isZero();
+    }
+
+    /**
+     * <b>잠금이 표를 낮추면 안 된다</b> (CY-894 · 리뷰).
+     *
+     * <p>입장 울타리는 덮어쓰는 것이 맞다 — 시계가 뒤로 간 리더도 승계하면 풀려야
+     * 한다. 삭제는 반대다. 승계 중에 멈췄던 옛 리더가 깨어나 새 리더의 표를 낮추면,
+     * 그 뒤 자기 유령 삭제가 자기 번호와 같아서 통과한다.
+     */
+    @Test
+    @DisplayName("잠금은_삭제_울타리를_안_낮춘다")
+    void 잠금은_삭제_울타리를_안_낮춘다() {
+        줄을_세운다();
+        redis.opsForValue().set(RedisKeys.stock(COUPON), "0").block(WAIT);
+
+        // 새 리더가 202 로 잠갔다. 멈췄던 옛 리더가 뒤늦게 201 로 잠근다.
+        port.sealFences(List.of(COUPON), 202).block(WAIT);
+        port.sealFences(List.of(COUPON), 201).block(WAIT);
+
+        assertThat(port.dropSoldOutQueues(List.of(COUPON), 201).block(WAIT))
+                .as("낮춘 표로 자기 삭제를 통과시키면 안 된다").isEmpty();
+        assertThat(있나(RedisKeys.queue(COUPON, 1, 0))).as("줄이 살아 있다").isTrue();
+    }
+
+    /** 입장 울타리는 같은 잠금이 덮어쓴다. 두 표의 규칙이 다르다. */
+    @Test
+    @DisplayName("잠금은_입장_울타리를_덮어쓴다")
+    void 잠금은_입장_울타리를_덮어쓴다() {
+        port.sealFences(List.of(COUPON), 202).block(WAIT);
+        port.sealFences(List.of(COUPON), 201).block(WAIT);
+
+        assertThat(redis.opsForValue().get(RedisKeys.applyFence(COUPON, 1, 0)).block(WAIT))
+                .as("시계가 뒤로 간 리더도 승계하면 풀려야 한다").isEqualTo("201");
+    }
+
+    /**
+     * <b>표를 못 세운 것을 확인으로 안 친다</b> (CY-894 · 리뷰).
+     *
+     * <p>확인으로 접으면 그 쿠폰이 다시는 후보에 안 올라 표 없이 유예를 보내고,
+     * 옛 회차가 그대로 지운다.
+     */
+    @Test
+    @DisplayName("막힌_후보는_확인으로_안_친다")
+    void 막힌_후보는_확인으로_안_친다() {
+        port.sealFences(List.of(COUPON), 200).block(WAIT);
+
+        assertThat(port.claimSoldOutQueues(List.of(COUPON), FENCE).block(WAIT))
+                .as("옛 임기의 표는 안 섰다").isEmpty();
     }
 }

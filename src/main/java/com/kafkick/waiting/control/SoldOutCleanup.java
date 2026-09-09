@@ -124,6 +124,9 @@ public final class SoldOutCleanup {
     public void leadershipAcquired() {
         seen.clear();
         deleted.clear();
+        // **표 확인 표시도 비운다** (CY-894). 안 비우면 재승계 뒤 그 쿠폰이
+        // claim 후보에 영영 안 올라, 승계 잠금이 실패했을 때 두 번째 방어선이 없다.
+        fenced.clear();
     }
 
     private void cancelIfCounting(String couponId) {

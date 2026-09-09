@@ -236,12 +236,12 @@ public class ControlPlaneConfig {
      */
     Runnable onLeadershipGained(CapacityCollector collector, CapacityRefresh capacity,
             SoldOutCleanup cleanup, QueueSweeper sweeper, AllocationRound round,
-            SnapshotHolder holder, GatewayRegistry registry, Runnable sealApplyFences) {
+            SnapshotHolder holder, GatewayRegistry registry, Runnable sealFences) {
         return () -> {
             // **문을 먼저 잠근다.** 적용만으로는 그 쿠폰에 크레딧이 갈 때까지 표에
             // 옛 임기가 남고, 그 창에 유령이 먼저 도착하면 자기 번호와 같아서
             // 통과한다 — 같은 초에 두 리더의 몫이 다 나가면 초과 발급이다.
-            sealApplyFences.run();
+            sealFences.run();
             collector.leadershipAcquired();
             capacity.leadershipChanged();
             // **평활화 이월도 여기서 버린다.** 회차 안은 리더일 때만 돌아 비리더 구간을
@@ -265,9 +265,10 @@ public class ControlPlaneConfig {
      * 쿠폰은 적용이 그 자리에서 다시 막으므로, 여기서 막으면 회복만 늦어진다.
      *
      * <p><b>매진 큐 삭제의 문도 같이 잠근다</b> (CY-894). 그쪽 표는 후보가 될 때
-     * 서므로 승계와 첫 틱 사이가 비고, 그 창의 쓰기는 되돌릴 수 없다.
+     * 서므로 승계와 첫 틱 사이가 비고, 그 창의 쓰기는 되돌릴 수 없다. 한 스크립트로
+     * 둘을 잠근다 — 표마다 왕복하면 배분이 안 도는 시간이 곱해진다.
      */
-    Runnable sealApplyFences(AllocationRedisPort port, Leadership leadership, SealGate gate) {
+    Runnable sealFences(AllocationRedisPort port, Leadership leadership, SealGate gate) {
         return () -> {
             gate.sealing();
             long fence = leadership.fence();
@@ -275,24 +276,17 @@ public class ControlPlaneConfig {
             // 갱신이 실패한 구간에 새로 활성이 된 쿠폰이 빠지고, 그 쿠폰이 정확히
             // 유령의 지연된 몫을 받는 자리다.
             port.activeCoupons()
-                    .flatMap(coupons -> port.sealDropFences(coupons, fence)
+                    .flatMap(coupons -> port.sealFences(coupons, fence)
                             .doOnNext(locked -> {
                                 if (locked < coupons.size()) {
-                                    log.warn("삭제 울타리를 다 못 잠갔다 — {}/{} 개, "
-                                            + "임기 {}", locked, coupons.size(), fence);
-                                }
-                            })
-                            .then(port.sealApplyFences(coupons, fence))
-                            .doOnNext(locked -> {
-                                if (locked < coupons.size()) {
-                                    log.warn("입장 울타리를 다 못 잠갔다 — {}/{} 개, "
-                                            + "임기 {}. 못 잠근 쿠폰은 적용이 그 자리에서 "
+                                    log.warn("울타리를 다 못 잠갔다 — {}/{} 개, 임기 {}. "
+                                            + "못 잠근 쿠폰은 적용과 삭제가 그 자리에서 "
                                             + "다시 막는다", locked, coupons.size(), fence);
                                 }
                             }))
                     // **못 잠가도 회차는 연다.** 여기서 멈추면 아무도 배분을 안 돌아
                     // 줄이 통째로 멎는다 — 못 잠근 쿠폰은 적용이 다시 막는다.
-                    .doOnError(e -> log.warn("입장 울타리를 못 잠갔다 — 임기 {}", fence, e))
+                    .doOnError(e -> log.warn("울타리를 못 잠갔다 — 임기 {}", fence, e))
                     .onErrorReturn(0L)
                     .doFinally(signal -> gate.sealed())
                     .subscribe();
@@ -339,7 +333,7 @@ public class ControlPlaneConfig {
                 // 돌면, 새 리더가 안 만지는 쿠폰에 유령의 지연된 몫이 그대로 들어간다.
                 LeadershipEdge.of(gate,
                         onLeadershipGained(collector, capacity, cleanup, sweeper, round, holder,
-                                registry, sealApplyFences(port, leadership, gate)),
+                                registry, sealFences(port, leadership, gate)),
                         capacity::leadershipChanged),
                 // **운영 값을 먼저 읽고 배분한다.** 순서가 뒤면 방금 바꾼 값이
                 // 한 틱 늦게 나가고, 장애 중의 한 틱은 길다.

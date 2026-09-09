@@ -115,8 +115,8 @@ public final class AllocationRedisPort implements SnapshotSource {
     private static final RedisScript<List> SWEEP =
             RedisScript.of(new ClassPathResource("redis/sweep.lua"), List.class);
 
-    private static final RedisScript<Long> SEAL_APPLY_FENCE =
-            RedisScript.of(new ClassPathResource("redis/apply_fence_seal.lua"), Long.class);
+    private static final RedisScript<Long> SEAL_FENCES =
+            RedisScript.of(new ClassPathResource("redis/fence_seal.lua"), Long.class);
 
     private static final RedisScript<Long> DROP_QUEUE =
             RedisScript.of(new ClassPathResource("redis/drop_queue.lua"), Long.class);
@@ -524,6 +524,9 @@ public final class AllocationRedisPort implements SnapshotSource {
                 // **선 것만 돌려준다.** 실패한 것을 확인으로 치면 그 줄은 표
                 // 없이 유예를 보내고, 옛 회차가 그대로 지운다.
                 .flatMap(id -> runDrop(id, fence, false)
+                        // **-1 은 내 표가 안 섰다는 뜻이다** (CY-894). 그것을 확인으로
+                        // 접으면 그 쿠폰이 다시는 후보에 안 올라 표 없이 유예를 보낸다.
+                        .filter(result -> result >= 0)
                         .map(ignored -> id)
                         .onErrorResume(e -> Mono.empty()), MAX_CONCURRENT_READS)
                 .collectList()
@@ -548,6 +551,7 @@ public final class AllocationRedisPort implements SnapshotSource {
                     "샤드가 여럿이면 매진 큐를 못 지운다 — 재고 세대가 있어야 한다: %d"
                             .formatted(shards)));
         }
+        long before = dropFenced.get();
         return Flux.fromIterable(couponIds)
                 // **지운 것만 쿠폰별로 돌려준다.** 합으로 접거나 안 지운 쿠폰까지
                 // 실으면 부르는 쪽이 그것을 "지웠다" 로 읽어, 실패한 쿠폰과 살아난
@@ -556,7 +560,24 @@ public final class AllocationRedisPort implements SnapshotSource {
                         .filter(Boolean::booleanValue)
                         .map(dropped -> id)
                         .onErrorResume(e -> Mono.empty()), MAX_CONCURRENT_READS)
-                .collectList();
+                .collectList()
+                // **회차 단위로 판정한다.** 쿠폰마다 열고 닫으면 한 틱 안에서 창이
+                // 여러 번 뒤집히고, 유령이 실제로 지운 회차가 "다시 지난다" 로 찍힌다.
+                .doOnNext(dropped -> judgeFenceWindow(dropFenced.get() - before, fence));
+    }
+
+    /** 이 회차에 막힌 것이 있었나. 진입은 구간의 첫 회차에만, 해제는 짝으로 남긴다. */
+    private void judgeFenceWindow(long fencedNow, long fence) {
+        if (fencedNow > 0) {
+            if (dropFencedWindow.entered()) {
+                log.warn("매진 큐 삭제가 막혔다 — 옛 임기 {} 다. 이 회차에 {}건. "
+                        + "그 줄은 다음 리더가 지운다", fence, fencedNow);
+            }
+            return;
+        }
+        dropFencedWindow.exited().ifPresent(recovered ->
+                log.info("매진 큐 삭제가 다시 지난다 — {}초 동안 {}회차가 막혔다",
+                        recovered.elapsedSeconds(), recovered.swallowed()));
     }
 
     /**
@@ -585,15 +606,8 @@ public final class AllocationRedisPort implements SnapshotSource {
                     // 죽은 줄이 폴링 예산을 먹는데 아무도 못 본다.
                     if (result == -1L) {
                         dropFenced.incrementAndGet();
-                        if (dropFencedWindow.entered()) {
-                            log.warn("매진 큐 삭제가 막혔다 — 옛 임기 {} 다. 그 줄은 "
-                                    + "다음 리더가 지운다: 쿠폰={}", fence, couponId);
-                        }
                         return false;
                     }
-                    dropFencedWindow.exited().ifPresent(recovered ->
-                            log.info("매진 큐 삭제가 다시 지난다 — {}초 동안 {}건 막혔다",
-                                    recovered.elapsedSeconds(), recovered.swallowed()));
                     return result == 1L;
                 })
                 .onErrorResume(e -> {
@@ -700,35 +714,26 @@ public final class AllocationRedisPort implements SnapshotSource {
      *
      * @return 잠근 쿠폰 수. 넘긴 수보다 적으면 그만큼 못 잠갔다
      */
-    public Mono<Long> sealApplyFences(Collection<String> couponIds, long fence) {
-        return sealFences(couponIds, fence,
-                couponId -> RedisKeys.applyFence(couponId, shards, 0));
-    }
-
-    /**
-     * 매진 큐 삭제의 문을 새 임기로 잠근다 (CY-894).
-     *
-     * <p><b>표는 그 쿠폰이 후보가 될 때 선다.</b> 승계와 그 첫 틱 사이에 유령이
-     * 먼저 도착하면 표가 없어 그대로 지운다 — 되돌릴 수 없는 쓰기다.
-     */
-    public Mono<Long> sealDropFences(Collection<String> couponIds, long fence) {
-        return sealFences(couponIds, fence,
-                couponId -> RedisKeys.dropFence(couponId, shards, 0));
-    }
-
-    /** 옛 임기라 막힌 매진 큐 삭제 건수. */
-    public long dropFenced() {
-        return dropFenced.get();
-    }
-
-    /** 문을 잠그는 절차는 표마다 같다. 키만 다르다. */
-    private Mono<Long> sealFences(Collection<String> couponIds, long fence,
-            Function<String, String> key) {
+    public Mono<Long> sealFences(Collection<String> couponIds, long fence) {
+        // **승계에서 창을 닫는다.** 리더십을 잃으면 정리가 안 돌아 해제가 영영
+        // 안 찍히고, 다음 사건은 진입이 이미 열려 있어 한 줄도 안 남는다.
+        dropFencedWindow.exited().ifPresent(recovered ->
+                log.info("매진 큐 삭제 막힘 구간이 승계로 끝났다 — {}초 동안 {}회차",
+                        recovered.elapsedSeconds(), recovered.swallowed()));
         if (fence <= 0 || couponIds.isEmpty()) {
             return Mono.just(0L);
         }
+        // **샤드 0 만 잠근다.** 매진 큐 삭제 자체가 샤드가 여럿이면 거절하므로
+        // 지금은 맞지만, 그 빗장을 푸는 날 나머지 샤드의 문이 안 잠긴 채로
+        // 성공을 낸다 — 잠갔다는 로그가 있는데 줄이 지워진다.
+        if (shards != 1) {
+            return Mono.error(new IllegalStateException(
+                    "샤드가 여럿이면 울타리를 다 못 잠근다: %d".formatted(shards)));
+        }
         return Flux.fromIterable(couponIds)
-                .flatMap(couponId -> redis.execute(SEAL_APPLY_FENCE, List.of(key.apply(couponId)),
+                .flatMap(couponId -> redis.execute(SEAL_FENCES,
+                                List.of(RedisKeys.applyFence(couponId, shards, 0),
+                                        RedisKeys.dropFence(couponId, shards, 0)),
                                 List.of(Long.toString(fence),
                                         Long.toString(fenceTtl.toMillis())))
                         .next()
@@ -739,6 +744,11 @@ public final class AllocationRedisPort implements SnapshotSource {
                         // 다시 막는다 — 안 잠긴 채로 지나가지 않는다.
                         .onErrorReturn(0L), MAX_CONCURRENT_WRITES)
                 .reduce(0L, Long::sum);
+    }
+
+    /** 옛 임기라 막힌 매진 큐 삭제 건수. */
+    public long dropFenced() {
+        return dropFenced.get();
     }
 
     /**

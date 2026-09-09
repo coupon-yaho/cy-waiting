@@ -129,14 +129,13 @@ class IpRangeTest {
         assertThat(IpRange.parse("10.0.1.0/0")).isPresent();
     }
 
-    /** <b>정규 생성자도 주소 길이와 같은 프리픽스를 받는다.</b> 팩토리만 막으면 갈린다. */
+    /** 거절은 옆 시험이 든다. 여기는 <b>받아야 하는 두 끝</b>만 본다. */
     @Test
-    @DisplayName("생성자도_프리픽스의_두_끝을_본다")
-    void 생성자도_프리픽스의_두_끝을_본다() {
+    @DisplayName("생성자도_주소_길이와_같은_폭을_받는다")
+    void 생성자도_주소_길이와_같은_폭을_받는다() {
         byte[] 주소 = {10, 0, 1, 0};
 
         assertThat(new IpRange(주소, 32).prefixBits()).isEqualTo(32);
         assertThat(new IpRange(주소, 0).prefixBits()).isZero();
     }
-
 }

@@ -27,6 +27,9 @@ class EntryTokenRotationTest {
 
     private static final String 남의_키 = "rotation-other-secret-0123456789abc";
 
+    /** 창을 연 시각. 여기서부터 이 토큰의 수명만큼만 옛 키를 받는다. */
+    private static final Instant 돌린_때 = 지금.minusSeconds(10);
+
     /**
      * <b>배포 중 양쪽이 서로의 토큰을 받는다.</b> 한쪽만 받으면 그 창 동안 절반의
      * 사람이 자기 차례를 잃는다.
@@ -35,7 +38,7 @@ class EntryTokenRotationTest {
     @DisplayName("옛_키로_만든_것을_새_키_파드가_받는다")
     void 옛_키로_만든_것을_새_키_파드가_받는다() {
         EntryToken 옛_파드 = EntryToken.of(옛_키);
-        EntryToken 새_파드 = EntryToken.of(새_키, List.of(옛_키));
+        EntryToken 새_파드 = EntryToken.of(새_키, List.of(옛_키), 돌린_때);
 
         String 옛_토큰 = 옛_파드.issue("c1", "m1", 지금);
 
@@ -49,7 +52,7 @@ class EntryTokenRotationTest {
     @Test
     @DisplayName("발급은_현재_키로만_한다")
     void 발급은_현재_키로만_한다() {
-        EntryToken 새_파드 = EntryToken.of(새_키, List.of(옛_키));
+        EntryToken 새_파드 = EntryToken.of(새_키, List.of(옛_키), 돌린_때);
         EntryToken 옛_파드 = EntryToken.of(옛_키);
 
         String 낸_것 = 새_파드.issue("c1", "m1", 지금);
@@ -65,7 +68,7 @@ class EntryTokenRotationTest {
     @Test
     @DisplayName("목록에_없는_키는_거절한다")
     void 목록에_없는_키는_거절한다() {
-        EntryToken 파드 = EntryToken.of(새_키, List.of(옛_키));
+        EntryToken 파드 = EntryToken.of(새_키, List.of(옛_키), 돌린_때);
 
         String 남의_토큰 = EntryToken.of(남의_키).issue("c1", "m1", 지금);
 
@@ -79,9 +82,9 @@ class EntryTokenRotationTest {
     @Test
     @DisplayName("받아_주는_키도_짧으면_기동을_막는다")
     void 받아_주는_키도_짧으면_기동을_막는다() {
-        assertThatThrownBy(() -> EntryToken.of(새_키, List.of("짧다")))
+        assertThatThrownBy(() -> EntryToken.of(새_키, List.of("짧다"), 돌린_때))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> EntryToken.of(새_키, java.util.Collections.singletonList(null)))
+        assertThatThrownBy(() -> EntryToken.of(새_키, java.util.Collections.singletonList(null), 돌린_때))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -89,7 +92,7 @@ class EntryTokenRotationTest {
     @Test
     @DisplayName("창을_안_열면_현재_키만_받는다")
     void 창을_안_열면_현재_키만_받는다() {
-        EntryToken 파드 = EntryToken.of(새_키, List.of());
+        EntryToken 파드 = EntryToken.of(새_키, List.of(), 돌린_때);
 
         assertThat(파드.verify(EntryToken.of(옛_키).issue("c1", "m1", 지금), "c1", 지금))
                 .isEmpty();
@@ -103,9 +106,84 @@ class EntryTokenRotationTest {
     @Test
     @DisplayName("목록_뒤쪽_키로_만든_것도_받는다")
     void 목록_뒤쪽_키로_만든_것도_받는다() {
-        EntryToken 파드 = EntryToken.of(새_키, List.of(남의_키, 옛_키));
+        EntryToken 파드 = EntryToken.of(새_키, List.of(남의_키, 옛_키), 돌린_때);
 
         assertThat(파드.verify(EntryToken.of(옛_키).issue("c1", "m1", 지금), "c1", 지금))
                 .contains("m1");
+    }
+
+    /**
+     * <b>창이 저절로 닫힌다</b> (CY-902 · 보안 리뷰).
+     *
+     * <p>HMAC 은 대칭이라 검증에 받아 주는 키는 곧 <b>토큰을 찍을 수 있는 키</b>다.
+     * "검증에서만 쓴다" 는 권한을 안 줄인다 — 설정에서 빼야만 닫히면 새는 키가
+     * 며칠 더 산다. 열어 둘 이유는 그 키로 낸 마지막 토큰의 수명뿐이다.
+     */
+    @Test
+    @DisplayName("수명이_지나면_옛_키를_안_받는다")
+    void 수명이_지나면_옛_키를_안_받는다() {
+        Instant 돌린_때 = 지금;
+        EntryToken 파드 = EntryToken.of(새_키, List.of(옛_키), 돌린_때);
+        String 옛_토큰 = EntryToken.of(옛_키).issue("c1", "m1", 지금);
+
+        Instant 창_안 = 돌린_때.plusSeconds(EntryToken.TTL_SEC - 1);
+        assertThat(파드.verify(옛_토큰, "c1", 창_안)).as("창 안에서는 받는다").contains("m1");
+
+        // 그 키로 낸 마지막 토큰이 죽고 나면 더 받아 줄 이유가 없다.
+        Instant 창_밖 = 돌린_때.plusSeconds(EntryToken.ACCEPT_WINDOW_SEC + 1);
+        assertThat(파드.verify(EntryToken.of(옛_키).issue("c1", "m1", 창_밖), "c1", 창_밖))
+                .as("창 밖에서는 새로 찍은 것도 안 받는다").isEmpty();
+    }
+
+    /** 창이 닫혀도 현재 키는 그대로다. 닫는 것은 옛 키뿐이다. */
+    @Test
+    @DisplayName("창이_닫혀도_현재_키는_받는다")
+    void 창이_닫혀도_현재_키는_받는다() {
+        EntryToken 파드 = EntryToken.of(새_키, List.of(옛_키), 지금);
+        Instant 나중 = 지금.plusSeconds(EntryToken.ACCEPT_WINDOW_SEC + 100);
+
+        assertThat(파드.verify(파드.issue("c1", "m1", 나중), "c1", 나중)).contains("m1");
+    }
+
+    /** 창을 열면서 언제 돌렸는지를 안 적으면 기동을 막는다. 모르면 못 닫는다. */
+    @Test
+    @DisplayName("돌린_때가_없으면_창을_못_연다")
+    void 돌린_때가_없으면_창을_못_연다() {
+        assertThatThrownBy(() -> EntryToken.of(새_키, List.of(옛_키), null))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /** 현재 키를 옛 키로도 적으면 돌린 것이 아니다. 그 착각을 기동에서 막는다. */
+    @Test
+    @DisplayName("현재_키를_옛_키로_적으면_막는다")
+    void 현재_키를_옛_키로_적으면_막는다() {
+        assertThatThrownBy(() -> EntryToken.of(새_키, List.of(새_키), 돌린_때))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> EntryToken.of(새_키, List.of(옛_키, 옛_키), 돌린_때))
+                .as("중복도 막는다").isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /**
+     * <b>목록이 자라면 요청당 비용이 그만큼 곱해진다.</b> 검증이 폴링 상한보다
+     * 앞이라 인증 없는 요청 하나가 키 수만큼 HMAC 을 돌린다.
+     */
+    @Test
+    @DisplayName("옛_키는_두_개까지만_받는다")
+    void 옛_키는_두_개까지만_받는다() {
+        assertThatThrownBy(() -> EntryToken.of(새_키,
+                List.of(옛_키, 남의_키, "rotation-third-secret-0123456789abc"), 돌린_때))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /** 옛 키로 받은 횟수를 센다. 0 이 되는 때가 창을 닫아도 되는 때다. */
+    @Test
+    @DisplayName("옛_키로_받은_횟수를_센다")
+    void 옛_키로_받은_횟수를_센다() {
+        EntryToken 파드 = EntryToken.of(새_키, List.of(옛_키), 돌린_때);
+
+        파드.verify(EntryToken.of(옛_키).issue("c1", "m1", 지금), "c1", 지금);
+        파드.verify(파드.issue("c1", "m2", 지금), "c1", 지금);
+
+        assertThat(파드.acceptedByPrevious()).as("옛 키로 맞은 것만 센다").isEqualTo(1);
     }
 }

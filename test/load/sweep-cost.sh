@@ -116,8 +116,21 @@ run_round() {
     measured
 }
 
+# **찍기 전에 받는다.** 치환 안에서 끝내면 회차가 죽어도 `printf` 의 성공이 그것을
+# 덮어, 빈 칸을 찍고 0 으로 끝난다 — 검사를 넣어 둔 값이 통째로 사라지는 자리다.
+die_if_empty() {
+    [ -n "$1" ] && return 0
+    echo "계수에 회차가 없다 — 아무것도 안 돌았다" >&2
+    exit 3
+}
+
+scanned=$(run_round 1) || exit 3
+die_if_empty "$scanned"
+folded=$(run_round 0) || exit 3
+die_if_empty "$folded"
+
 printf '스크립트  %s\n' "$SCRIPT"
 printf '조건      큐 %s · 검사 범위 %s · %s회 평균(한 회차)\n\n' "$SEED" "$SCAN" "$RUNS"
 printf '%-24s %s\n' "회차" "평균(μs)"
-printf '%-24s %s\n' "앞줄을 훑는다" "$(run_round 1)"
-printf '%-24s %s\n' "앞줄을 접는다" "$(run_round 0)"
+printf '%-24s %s\n' "앞줄을 훑는다" "$scanned"
+printf '%-24s %s\n' "앞줄을 접는다" "$folded"

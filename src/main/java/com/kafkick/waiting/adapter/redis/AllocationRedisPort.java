@@ -118,6 +118,9 @@ public final class AllocationRedisPort implements SnapshotSource {
     private static final RedisScript<Long> SEAL_FENCES =
             RedisScript.of(new ClassPathResource("redis/fence_seal.lua"), Long.class);
 
+    private static final RedisScript<Long> SEAL_SNAPSHOT_FENCE =
+            RedisScript.of(new ClassPathResource("redis/snapshot_fence_seal.lua"), Long.class);
+
     private static final RedisScript<Long> DROP_QUEUE =
             RedisScript.of(new ClassPathResource("redis/drop_queue.lua"), Long.class);
 
@@ -707,6 +710,26 @@ public final class AllocationRedisPort implements SnapshotSource {
             }
             return byCoupon;
         });
+    }
+
+    /**
+     * 발행의 문을 새 임기로 잠근다. <b>쿠폰 쪽과 나란히 돈다</b> — 슬롯이 갈려
+     * 한 스크립트로 못 묶고, 이어 붙이면 배분이 안 도는 시간이 곱해진다.
+     *
+     * <p>안 잠그면 새 리더의 첫 발행 전까지 유령의 발행이 자기 번호와 같아서
+     * 통과한다. 그 회차의 정리와 청소가 그 뒤에 매달려 같이 나간다 (CY-911).
+     *
+     * @return 1 이면 잠갔다. 0 은 리더가 아니거나 이미 더 앞선 임기가 서 있다
+     */
+    public Mono<Long> sealSnapshotFence(long fence) {
+        if (fence <= 0) {
+            return Mono.just(0L);
+        }
+        return redis.execute(SEAL_SNAPSHOT_FENCE, List.of(RedisKeys.SNAPSHOT_FENCE),
+                        List.of(Long.toString(fence),
+                                Long.toString(snapshotFenceTtl.toMillis())))
+                .next()
+                .map(Number::longValue);
     }
 
     /**

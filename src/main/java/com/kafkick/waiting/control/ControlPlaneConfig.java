@@ -275,19 +275,40 @@ public class ControlPlaneConfig {
             // **권위 있는 자리에서 읽는다.** 마지막 발행의 쿠폰을 쓰면 발행이 밀렸거나
             // 갱신이 실패한 구간에 새로 활성이 된 쿠폰이 빠지고, 그 쿠폰이 정확히
             // 유령의 지연된 몫을 받는 자리다.
-            port.activeCoupons()
-                    .flatMap(coupons -> port.sealFences(coupons, fence)
+            Mono<Long> coupons = port.activeCoupons()
+                    .flatMap(active -> port.sealFences(active, fence)
                             .doOnNext(locked -> {
-                                if (locked < coupons.size()) {
+                                if (locked < active.size()) {
                                     log.warn("울타리를 다 못 잠갔다 — {}/{} 개, 임기 {}. "
                                             + "못 잠근 쿠폰은 적용과 삭제가 그 자리에서 "
-                                            + "다시 막는다", locked, coupons.size(), fence);
+                                            + "다시 막는다", locked, active.size(), fence);
                                 }
                             }))
                     // **못 잠가도 회차는 연다.** 여기서 멈추면 아무도 배분을 안 돌아
                     // 줄이 통째로 멎는다 — 못 잠근 쿠폰은 적용이 다시 막는다.
                     .doOnError(e -> log.warn("울타리를 못 잠갔다 — 임기 {}", fence, e))
-                    .onErrorReturn(0L)
+                    .onErrorReturn(0L);
+            // **발행의 문도 같이 잠근다** (CY-911). 그 표는 첫 발행에야 서므로 승계와
+            // 첫 틱 사이가 비고, 그 창의 발행에 정리와 청소가 매달려 같이 나간다.
+            Mono<Long> snapshot = port.sealSnapshotFence(fence)
+                    // **못 잠근 것도 남긴다.** 리더가 됐다고 믿는 노드가 여기서
+                    // 실패하는 것이 리더 둘을 가장 싸게 잡는 신호인데, 값으로만
+                    // 두면 아무 데도 안 남는다.
+                    .doOnNext(locked -> {
+                        if (locked == 0) {
+                            log.warn("발행 울타리를 못 잠갔다 — 임기 {}. 리더가 아니거나 더 "
+                                    + "앞선 임기가 서 있다는 뜻이고, 둘 다 이 노드의 발행이 "
+                                    + "계속 막힌다는 뜻이다", fence);
+                        }
+                    })
+                    .doOnError(e -> log.warn("발행 울타리를 못 잠갔다 — 임기 {}. 첫 발행이 "
+                            + "설 때까지 유령의 재료가 나갈 수 있다", fence, e))
+                    .onErrorReturn(0L);
+            // **발행의 문은 게이트가 안 기다린다.** 이 노드의 첫 발행이 어차피 같은
+            // 번호를 심으므로 배분을 세울 이유가 없고, 스냅샷 슬롯이 죽어 있으면
+            // 명령 시한만큼 새 리더의 첫 틱이 통째로 사라진다.
+            snapshot.subscribe();
+            coupons
                     // **이 잠금의 세대로 연다.** 승계가 잦으면 첫 잠금의
                     // 완료가 둘째 잠금이 도는 중에 문을 열어 버린다.
                     .doFinally(signal -> gate.sealed(generation))

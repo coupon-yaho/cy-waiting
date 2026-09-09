@@ -624,6 +624,9 @@ class AllocationRedisPortTest extends RedisContainerSupport {
      */
     private static final long 임기 = 1_770_000_000_123_456L;
 
+    /** 스냅샷 울타리 수명의 하한. 포트의 값을 옮겨 적었다 — 쿠폰 표의 한 시간이 아니다. */
+    private static final Duration 발행표_수명_하한 = Duration.ofSeconds(10);
+
     /**
      * <b>옛 임기의 발행은 새 임기를 못 덮는다</b> (CY-845). 유령 리더가 옛 시야로
      * 덮으면 전 노드의 대기 수가 뒤로 가고, 0 이 되면 줄이 없는 것으로 읽혀 사다리가
@@ -729,6 +732,79 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         assertThat(redis.hasKey(RedisKeys.SNAPSHOT).block(WAIT))
                 .as("리더가 아닌 노드는 아무 키도 안 만든다").isFalse();
         assertThat(redis.hasKey(RedisKeys.SNAPSHOT_FENCE).block(WAIT)).isFalse();
+    }
+
+    /**
+     * <b>승계 때 발행의 문도 잠근다</b> (CY-911). 안 잠그면 새 리더의 첫 발행 전까지
+     * 유령의 발행이 자기 번호와 같아서 통과하고, 그 회차의 정리와 청소가 매달려 같이
+     * 나간다 — 걷힌 사람은 새 score 로 다시 선다.
+     */
+    @Test
+    @DisplayName("승계_때_잠근_발행의_문은_유령이_먼저_와도_막는다")
+    void 승계_때_잠근_발행의_문은_유령이_먼저_와도_막는다() {
+        port.publish(Map.of("c1", "옛 리더", "#credit", "1"), 임기 - 1).block(WAIT);
+
+        assertThat(port.sealSnapshotFence(임기).block(WAIT)).isEqualTo(1);
+
+        assertThatThrownBy(() ->
+                port.publish(Map.of("c1", "유령", "#credit", "9"), 임기 - 1).block(WAIT))
+                .isInstanceOf(AllocationRedisPort.FencedOutException.class);
+        assertThat(port.load().block(WAIT))
+                .as("거절은 아무것도 안 건드린다")
+                .containsEntry("c1", "옛 리더");
+        assertThat(redis.opsForValue().get(RedisKeys.SNAPSHOT_FENCE).block(WAIT))
+                .as("자릿수가 새면 지수 표기로 굳어 자기 번호와 안 맞는다")
+                .isEqualTo(Long.toString(임기));
+    }
+
+    /**
+     * <b>잠근 뒤 자기 발행은 통과한다.</b> 막는 것만 재면 새 리더가 자기 잠금에
+     * 막히는 결함이 안 잡힌다 — 그 사이 전 노드가 얼어붙은 재료를 읽는다.
+     */
+    @Test
+    @DisplayName("잠근_뒤_자기_임기의_발행은_통과한다")
+    void 잠근_뒤_자기_임기의_발행은_통과한다() {
+        port.sealSnapshotFence(임기).block(WAIT);
+
+        port.publish(Map.of("c1", "새 리더", "#credit", "7"), 임기).block(WAIT);
+
+        assertThat(port.load().block(WAIT)).containsEntry("c1", "새 리더");
+    }
+
+    /**
+     * <b>발행의 잠금은 올리기만 한다.</b> 덮어쓰면 승계 중에 멎었던 옛 리더의 잠금이
+     * 늦게 착륙해 표를 낮추고, 그 뒤 그 리더의 발행이 통과한다.
+     */
+    @Test
+    @DisplayName("발행의_잠금은_늦게_와도_표를_안_낮춘다")
+    void 발행의_잠금은_늦게_와도_표를_안_낮춘다() {
+        port.publish(Map.of("c1", "새 리더", "#credit", "7"), 임기).block(WAIT);
+
+        assertThat(port.sealSnapshotFence(임기 - 100).block(WAIT))
+                .as("안 잠갔으면 0 을 내야 부르는 쪽이 셀 수 있다").isZero();
+
+        assertThat(redis.opsForValue().get(RedisKeys.SNAPSHOT_FENCE).block(WAIT))
+                .isEqualTo(Long.toString(임기));
+    }
+
+    /** 리더가 아니면 안 잠근다. 0 이 서면 그 뒤의 모든 발행이 통과한다. */
+    @Test
+    @DisplayName("발행의_문은_리더가_아니면_안_잠근다")
+    void 발행의_문은_리더가_아니면_안_잠근다() {
+        assertThat(port.sealSnapshotFence(0).block(WAIT)).isZero();
+
+        assertThat(redis.hasKey(RedisKeys.SNAPSHOT_FENCE).block(WAIT)).isFalse();
+    }
+
+    /** 수명이 없으면 잠근 문이 영구가 된다. 승계 뒤 발행이 통째로 멎는다. */
+    @Test
+    @DisplayName("잠근_발행의_문에_수명이_붙는다")
+    void 잠근_발행의_문에_수명이_붙는다() {
+        port.sealSnapshotFence(임기).block(WAIT);
+
+        assertThat(redis.getExpire(RedisKeys.SNAPSHOT_FENCE).block(WAIT))
+                .as("쿠폰 표의 한 시간을 쓰면 시계가 앞선 노드 하나가 발행을 그만큼 얼린다")
+                .isBetween(Duration.ofSeconds(1), 발행표_수명_하한);
     }
 
     @Test

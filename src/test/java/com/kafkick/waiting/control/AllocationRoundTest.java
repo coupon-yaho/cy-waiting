@@ -273,6 +273,44 @@ class AllocationRoundTest {
         assertThat(쓴_쿠폰).as("줄이 선 쿠폰을 쓸러 간다").containsExactly("c1");
     }
 
+    /**
+     * <b>발행이 막힌 회차는 아무도 안 걷습니다.</b>
+     *
+     * <p>이탈자 청소에는 울타리 인자가 없습니다. 유령이 못 걷는 것은 청소가 발행
+     * 뒤에 매달려 있어서인데, 그 순서가 유일한 방어라 여기서 못 박습니다 (CY-911).
+     */
+    @Test
+    @DisplayName("발행이_막히면_그_회차는_안_걷는다")
+    void 발행이_막히면_그_회차는_안_걷는다() {
+        List<String> 쓴_쿠폰 = new ArrayList<>();
+        AllocationRound round = AllocationRound.of(
+                () -> true,
+                () -> Mono.just(new TimedDemands(
+                        List.of(new CouponDemand("c1", 100, 1_000, QueueMode.ADAPTIVE)),
+                        읽은_시각)),
+                () -> 1_000, () -> 1,
+                grant -> Mono.just(grant.credit()),
+                // 울타리가 옛 임기를 거절한 자리. 포트가 오류로 올린다.
+                hash -> Mono.error(new IllegalStateException("옛 임기라 막혔다")),
+                () -> Instant.ofEpochSecond(읽은_시각),
+                () -> Mono.just(CreditSmoother.of(1.0)),
+                SnapshotCodec.create(), () -> 0L, Optional::empty,
+                SoldOutCleanup.of(1, new SimpleMeterRegistry()),
+                ids -> Mono.just(List.of()),
+                ids -> Mono.just(List.of()),
+                QueueSweeper.of(
+                        SweepGates.warmed(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
+                        (ids, limit, removeFront) -> {
+                            쓴_쿠폰.addAll(ids);
+                            return Mono.just(QueueSweeper.SweepResult.NOTHING);
+                        }), () -> false, () -> CircuitState.CLOSED);
+
+        round.run().onErrorResume(e -> Mono.empty()).block();
+
+        assertThat(쓴_쿠폰)
+                .as("걷힌 사람은 새 score 로 다시 서므로 순번이 뒤로 간다").isEmpty();
+    }
+
     /** 판단은 돌되 아무것도 안 걷는 스위퍼. 이 시험들의 초점이 아니다. */
     private static QueueSweeper 안_걷는_스위퍼() {
         return QueueSweeper.of(

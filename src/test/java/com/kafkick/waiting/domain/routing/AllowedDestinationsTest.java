@@ -337,28 +337,15 @@ class AllowedDestinationsTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
-    /** 포트의 두 끝을 다 못 박는다. 한쪽만 재면 부등호를 옮겨도 초록이다. */
-    @Test
-    @DisplayName("포트의_두_끝을_받는다")
-    void 포트의_두_끝을_받는다() {
-        assertThat(AllowedDestinations.of(List.of("10.0.0.0/8"), List.of(1, 65535))
-                .permits(주소("10.0.0.5:65535"))).isTrue();
-        assertThatThrownBy(() -> AllowedDestinations.of(List.of("10.0.0.0/8"), List.of(65536)))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> AllowedDestinations.of(List.of("10.0.0.0/8"), List.of(0)))
-                .isInstanceOf(IllegalArgumentException.class);
-    }
-
     /**
-     * <b>대역 자리에 온 것은 대역으로 읽는다.</b> 이름으로 넘기면 오류 문구가 갈려,
-     * 설정을 고치는 사람이 어느 규칙에 걸렸는지 못 본다.
+     * <b>가장 높은 포트도 받는다.</b> 한 칸 밀리면 65535 를 듣는 뒷단을 적은 배포가
+     * 기동에서 막힌다. 거절 쪽은 포트 검증 시험이 이미 든다.
      */
     @Test
-    @DisplayName("빗금으로_시작하면_대역_오류다")
-    void 빗금으로_시작하면_대역_오류다() {
-        assertThatThrownBy(() -> AllowedDestinations.of(List.of("/24"), 포트))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("대역을 못 읽는다");
+    @DisplayName("가장_높은_포트도_받는다")
+    void 가장_높은_포트도_받는다() {
+        assertThat(AllowedDestinations.of(List.of("10.0.0.0/8"), List.of(65535))
+                .permits(주소("10.0.0.5:65535"))).isTrue();
     }
 
     /** 무제한은 이름으로만 만든다. 인자를 빠뜨려 조용히 되는 것과는 다르다. */

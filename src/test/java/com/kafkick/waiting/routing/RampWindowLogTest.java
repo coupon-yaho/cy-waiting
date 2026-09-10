@@ -68,8 +68,11 @@ class RampWindowLogTest {
         로거().setLevel(원래_수준);
     }
 
+    /** 살아 있는 대들. 시험이 중간에 빼면 다음 회차부터 안 보인다. */
+    private final List<ServiceInstance> 산_대들 = new ArrayList<>();
+
     private CapacityAwareLoadBalancer 균형기() {
-        List<ServiceInstance> instances = new ArrayList<>();
+        List<ServiceInstance> instances = 산_대들;
         for (int i = 0; i < 4; i++) {
             instances.add(new DefaultServiceInstance("be-" + i, "coupon-service",
                     "10.0.1." + i, 8080, false));
@@ -84,7 +87,7 @@ class RampWindowLogTest {
 
             @Override
             public Flux<List<ServiceInstance>> get() {
-                return Flux.just(instances);
+                return Flux.just(List.copyOf(instances));
             }
         };
         return CapacityAwareLoadBalancer.of(목록,
@@ -151,7 +154,8 @@ class RampWindowLogTest {
 
         assertThat(줄들()).noneMatch(m -> m.contains("되돌리기가 끝났다"));
         assertThat(줄들(Level.WARN))
-                .anyMatch(m -> m.contains("되돌리기가 안 끝났다"));
+                .as("목록에서 빠진 것과 다시 빠진 것은 다른 줄이다")
+                .anyMatch(m -> m.contains("다시 빠졌다"));
     }
 
     /**
@@ -164,6 +168,7 @@ class RampWindowLogTest {
         CapacityAwareLoadBalancer 균형기 = 균형기();
         for (int i = 0; i < 3; i++) {
             배제기.failed("be-0", 시작);
+            배제기.failed("be-2", 시작);
         }
         long 늦게 = 시작 + 배제_시간.toMillis();
         for (int i = 0; i < 3; i++) {
@@ -172,7 +177,7 @@ class RampWindowLogTest {
         시계.set(시작 + 배제_시간.toMillis() + 램프.toMillis() / 2);
         균형기.choose((Request<?>) null).block();
 
-        // be-0 은 여기서 램프를 마치고, be-1 은 아직 램프 중이라 다시 빠진다.
+        // be-0 과 be-2 는 여기서 램프를 마치고, be-1 은 아직 램프 중이라 다시 빠진다.
         시계.set(시작 + 배제_시간.toMillis() + 램프.toMillis());
         for (int i = 0; i < 3; i++) {
             배제기.failed("be-1", 시계.get());
@@ -182,8 +187,31 @@ class RampWindowLogTest {
         assertThat(줄들()).noneMatch(m -> m.contains("되돌리기가 끝났다"));
         assertThat(줄들(Level.WARN)).filteredOn(m -> m.contains("되돌리기가 안 끝났다"))
                 .singleElement().asString()
-                .as("다시 빠진 수와 완주한 수를 함께 든다")
-                .contains("1 대가 다시 빠졌다").contains("완주 1 대");
+                .as("다시 빠진 수와 완주한 수가 자리를 안 바꾼다")
+                .contains("1 대가 다시 빠졌다").contains("완주 2 대");
+    }
+
+    /**
+     * <b>되돌리던 대가 목록에서 빠져도 구간이 닫힌다.</b> 완주도 재배제도 아닌데
+     * 되돌리는 대는 0 이 된다 — 롤링 배포마다 지나는 자리라 완주와 갈라야 한다.
+     */
+    @Test
+    @DisplayName("되돌리던_대가_사라지면_완주라_안_한다")
+    void 되돌리던_대가_사라지면_완주라_안_한다() {
+        CapacityAwareLoadBalancer 균형기 = 균형기();
+        for (int i = 0; i < 3; i++) {
+            배제기.failed("be-0", 시작);
+        }
+        시계.set(시작 + 배제_시간.toMillis() + 램프.toMillis() / 2);
+        균형기.choose((Request<?>) null).block();
+
+        산_대들.removeIf(i -> "be-0".equals(i.getInstanceId()));
+        균형기.choose((Request<?>) null).block();
+
+        assertThat(줄들()).noneMatch(m -> m.contains("되돌리기가 끝났다"))
+                .noneMatch(m -> m.contains("다시 빠졌다"));
+        assertThat(줄들(Level.WARN))
+                .anyMatch(m -> m.contains("되돌리기가 안 끝났다"));
     }
 
     /** 앓은 대가 없으면 아무 말도 안 한다. 늘 시끄러우면 사람이 안 본다. */

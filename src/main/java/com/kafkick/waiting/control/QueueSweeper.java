@@ -42,6 +42,9 @@ public final class QueueSweeper {
     private final Counter expiredGrace;
     private final Counter failed;
 
+    /** 울타리가 막은 쿠폰 수. 이 값만 오르면 청소가 멎은 것이지 걷을 게 없는 것이 아니다. */
+    private final Counter fenced;
+
     private QueueSweeper(SweepGate gate, SweepCall sweep,
             MeterRegistry meters) {
         this.gate = Objects.requireNonNull(gate, "gate 는 필수다 — 멈추는 판단 없이 쓸면 안 된다");
@@ -55,6 +58,7 @@ public final class QueueSweeper {
         // **"걷을 게 없어서 0" 과 "전부 죽어서 0" 을 가른다.** 안 가르면 청소가
         // 멎은 것이 정상으로 보인다.
         this.failed = meters.counter("waiting.sweep", "kind", "failed");
+        this.fenced = meters.counter("waiting.sweep", "kind", "fenced");
     }
 
     public static QueueSweeper of(SweepGate gate, SweepCall sweep,
@@ -82,12 +86,17 @@ public final class QueueSweeper {
      * 쓸어 낸 결과. <b>실패를 함께 싣는다</b> — 오류를 성공으로 접으면 "걷을 게 없어서 0"
      * 과 "전부 죽어서 0" 이 같은 값이 되고, 청소가 멎은 것이 정상으로 보인다.
      */
-    public record SweepResult(long swept, long expiredSignals, long expiredGrace, long failed) {
+    /**
+     * @param fenced 울타리가 앞줄 제거를 막은 쿠폰 수. <b>0 의 셋째 뜻이다</b> —
+     *               걷을 게 없어서도, 다 죽어서도 아닌 0 을 여기서 가른다
+     */
+    public record SweepResult(long swept, long expiredSignals, long expiredGrace, long failed,
+            long fenced) {
 
-        public static final SweepResult NOTHING = new SweepResult(0, 0, 0, 0);
+        public static final SweepResult NOTHING = new SweepResult(0, 0, 0, 0, 0);
 
         /** 한 쿠폰이 실패했다. */
-        public static final SweepResult FAILED = new SweepResult(0, 0, 0, 1);
+        public static final SweepResult FAILED = new SweepResult(0, 0, 0, 1, 0);
     }
 
     /**
@@ -120,6 +129,14 @@ public final class QueueSweeper {
                     expiredSignals.increment(r.expiredSignals());
                     expiredGrace.increment(r.expiredGrace());
                     failed.increment(r.failed());
+                    fenced.increment(r.fenced());
+                    if (r.fenced() > 0) {
+                        // **막힌 것을 걷을 게 없는 것과 안 섞는다.** 지표만 보면
+                        // 청소가 완전히 멎은 상태가 평시와 같은 값을 낸다.
+                        log.warn("이탈자 청소가 울타리에 막혔다 — 쿠폰 {}개. 앞줄 제거만 "
+                                + "멎고 정리는 돈다. 임기와 적용 울타리를 함께 본다",
+                                r.fenced());
+                    }
                     if (r.swept() > 0) {
                         // **걷은 수를 남긴다.** 이탈자와 우리 오판이 같은
                         // 수치로 보이므로, 이 값이 튀는 것이 유일한 신호다.

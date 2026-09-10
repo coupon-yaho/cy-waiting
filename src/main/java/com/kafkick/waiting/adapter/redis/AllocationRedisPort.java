@@ -675,7 +675,8 @@ public final class AllocationRedisPort implements SnapshotSource {
                         a.swept() + b.swept(),
                         a.expiredSignals() + b.expiredSignals(),
                         a.expiredGrace() + b.expiredGrace(),
-                        a.failed() + b.failed()));
+                        a.failed() + b.failed(),
+                        a.fenced() + b.fenced()));
     }
 
     private Mono<QueueSweeper.SweepResult> sweepOne(String couponId, long nowSec,
@@ -696,12 +697,11 @@ public final class AllocationRedisPort implements SnapshotSource {
                     List<?> values = (List<?>) raw;
                     // **막혀도 커서는 옮긴다.** 막히는 것은 앞줄 제거뿐이고 정리는
                     // 그대로 돌므로, 안 옮기면 그 회차가 훑은 자리를 다시 훑는다.
-                    if (fenced(values)) {
-                        sweepFenced.incrementAndGet();
-                    }
+                    long blocked = fenced(values) ? 1 : 0;
+                    sweepFenced.addAndGet(blocked);
                     sweepCursors.put(couponId, String.valueOf(values.get(3)));
                     return new QueueSweeper.SweepResult(toLongOrZero(values.get(0)),
-                            toLongOrZero(values.get(1)), toLongOrZero(values.get(2)), 0);
+                            toLongOrZero(values.get(1)), toLongOrZero(values.get(2)), 0, blocked);
                 });
     }
 

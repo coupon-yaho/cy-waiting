@@ -179,9 +179,10 @@ public class ControlPlaneConfig {
                 .register(meters);
         // **되돌릴 수 없는 쓰기가 막힌 수다.** 그 창 동안 죽은 줄이 폴링 예산을
         // 먹는데, 안 내면 막혔다는 사실이 어디에도 안 남는다 (CY-894).
+        // **앞줄 제거가 막힌 수다.** 정리는 그때도 도므로 걷은 수만으로는 못 가린다.
         FunctionCounter.builder("waiting.queue.sweep.fenced", port,
                         AllocationRedisPort::sweepFenced)
-                .description("옛 임기라 막힌 이탈자 청소 수")
+                .description("옛 임기라 앞줄 제거가 막힌 이탈자 청소 수")
                 .register(meters);
         FunctionCounter.builder("waiting.queue.drop.fenced", port,
                         AllocationRedisPort::dropFenced)

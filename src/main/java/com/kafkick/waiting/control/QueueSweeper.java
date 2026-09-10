@@ -7,6 +7,7 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.LongSupplier;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -46,13 +47,15 @@ public final class QueueSweeper {
     private final Counter fenced;
 
     /** 막힌 구간. 진입과 해제를 쌍으로 남겨 얼마나 오래 멎었는지를 사후에 잰다. */
-    private final FailureWindow fenceWindow = FailureWindow.create();
+    private final FailureWindow fenceWindow;
 
     private QueueSweeper(SweepGate gate, SweepCall sweep,
-            MeterRegistry meters) {
+            MeterRegistry meters, LongSupplier nanoTicker) {
         this.gate = Objects.requireNonNull(gate, "gate 는 필수다 — 멈추는 판단 없이 쓸면 안 된다");
         this.sweep = Objects.requireNonNull(sweep, "sweep 은 필수다");
         Objects.requireNonNull(meters, "meters 는 필수다");
+        this.fenceWindow = FailureWindow.of(
+                Objects.requireNonNull(nanoTicker, "nanoTicker 는 필수다"));
         // **걷은 수가 곧 우리 오판일 수도 있다.** 그 값이 튈 때 장애인지 버그인지
         // 가르려면 평시 값을 먼저 알아야 하고, 재려면 자리가 있어야 한다.
         this.swept = meters.counter("waiting.sweep", "kind", "swept");
@@ -66,12 +69,18 @@ public final class QueueSweeper {
 
     public static QueueSweeper of(SweepGate gate, SweepCall sweep,
             MeterRegistry meters) {
-        return new QueueSweeper(gate, sweep, meters);
+        return new QueueSweeper(gate, sweep, meters, System::nanoTime);
+    }
+
+    /** 시계를 받는다. 고정하지 못하면 막힌 구간의 길이가 로그에 실리는지 못 잰다. */
+    static QueueSweeper of(SweepGate gate, SweepCall sweep, MeterRegistry meters,
+            LongSupplier nanoTicker) {
+        return new QueueSweeper(gate, sweep, meters, nanoTicker);
     }
 
     /** 계측 없이 만든다. <b>시험 편의다</b> — 운영은 위 팩토리를 쓴다. */
     public static QueueSweeper of(SweepGate gate, SweepCall sweep) {
-        return new QueueSweeper(gate, sweep, new SimpleMeterRegistry());
+        return new QueueSweeper(gate, sweep, new SimpleMeterRegistry(), System::nanoTime);
     }
 
     /**

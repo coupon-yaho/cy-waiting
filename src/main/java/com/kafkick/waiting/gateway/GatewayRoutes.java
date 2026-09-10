@@ -16,6 +16,7 @@ import org.springframework.cloud.gateway.route.builder.RouteLocatorBuilder;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import java.time.Duration;
+import java.util.Set;
 import java.util.function.Predicate;
 import org.springframework.http.HttpMethod;
 import org.springframework.web.server.ServerWebExchange;
@@ -52,6 +53,9 @@ public class GatewayRoutes {
      * 기동은 되고 장애 때만 404 가 드러나며, 404 는 매진으로 읽혀 다시 오지 않는다.
      */
     public static final String FALLBACK_URI = "forward:" + BackendFallbackRoutes.FALLBACK_ISSUE;
+
+    /** 서킷이 실패로 셀 뒷단 응답. 계열로는 못 적어 하나씩 적는다. */
+    private static final Set<String> SERVER_FAILURES = Set.of("500", "502", "503", "504");
 
     /**
      * 서킷의 이름. 지금은 뒷단 주소가 하나라 하나뿐이다. 가용량 기반 분배가 붙으면
@@ -136,6 +140,9 @@ public class GatewayRoutes {
         config.setName(CIRCUIT);
         config.setFallbackUri(FALLBACK_URI);
         config.setRouteId("issue");
+        // **응답이 오면 서킷은 성공으로 센다.** 상태를 실패로 바꾸지 않으면 뒷단이
+        // 전부 500 을 내도 안 열린다. 501·505 는 뒷단이 아프다는 뜻이 아니라 뺀다.
+        config.setStatusCodes(SERVER_FAILURES);
         return breakers.apply(config);
     }
 

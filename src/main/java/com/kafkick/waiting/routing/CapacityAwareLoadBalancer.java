@@ -16,7 +16,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongSupplier;
 import org.slf4j.Logger;
@@ -76,10 +75,15 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
      */
     private final FailureWindow rampWindow = FailureWindow.create();
 
-    /** 구간에 들어설 때의 완주 수와 재배제 수. 구간이 닫힌 이유를 이 둘로 가른다. */
-    private final AtomicLong rampsAtEntry = new AtomicLong();
+    /**
+     * 구간에 들어설 때의 완주 수와 재배제 수. 구간이 닫힌 이유를 이 둘로 가른다.
+     * <b>한 번에 갈아 끼운다</b> — 따로 쓰면 그 사이에 창이 닫힐 때 한쪽만 새 값이라
+     * 증분이 음수까지 나고 갈래가 뒤집힌다.
+     */
+    private record Marks(long completed, long reEjected) {
+    }
 
-    private final AtomicLong reEjectionsAtEntry = new AtomicLong();
+    private final AtomicReference<Marks> rampMarks = new AtomicReference<>(new Marks(0, 0));
 
     /**
      * 배제하고 나니 보낼 곳이 없던 구간. <b>부하 최고점에서만 켜지는 자리라</b>
@@ -178,8 +182,7 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
         int ramping = outliers.rampingCount(now);
         if (ramping > 0) {
             if (rampWindow.entered()) {
-                rampsAtEntry.set(outliers.rampsCompleted());
-                reEjectionsAtEntry.set(outliers.reEjections());
+                rampMarks.set(new Marks(outliers.rampsCompleted(), outliers.reEjections()));
                 log.info("{} 대가 되돌아오는 중이다 (전체 {} 대) — 램프 동안 제 몫을 "
                         + "덜 받는다", ramping, present.size());
             }
@@ -195,18 +198,20 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
      * 완주 하나가 다시 빠진 하나를 가린다 — 두 증분을 따로 보고 섞이면 경고다.
      */
     private void closedRamp(FailureWindow.Recovered window) {
-        long done = outliers.rampsCompleted() - rampsAtEntry.get();
-        long again = outliers.reEjections() - reEjectionsAtEntry.get();
+        Marks entry = rampMarks.get();
+        long done = outliers.rampsCompleted() - entry.completed();
+        long again = outliers.reEjections() - entry.reEjected();
         if (again > 0) {
             log.warn("되돌리기가 안 끝났다 — {}초 만에 {} 대가 다시 빠졌다 (완주 {} 대). "
-                    + "그 대는 배제와 램프를 되풀이하는 중이다",
-                    window.elapsedSeconds(), again, done);
+                    + "다시 빠진 대가 배제와 램프를 되풀이하는 중이다. 뒷단 그 대의 "
+                    + "오류율부터 본다", window.elapsedSeconds(), again, done);
         } else if (done > 0) {
             log.info("되돌리기가 끝났다 — {}초 동안 {} 대가 제 몫으로 돌아왔다",
                     window.elapsedSeconds(), done);
         } else {
             log.warn("되돌리기가 안 끝났다 — {}초 만에 구간이 닫혔다. 되돌리던 대가 "
-                    + "목록에서 빠졌다", window.elapsedSeconds());
+                    + "목록에서 빠졌거나 시각이 뒤로 갔다. 뒷단 목록과 시각 동기를 "
+                    + "함께 본다", window.elapsedSeconds());
         }
     }
 

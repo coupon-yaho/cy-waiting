@@ -173,7 +173,7 @@ public final class InstanceOutliers {
      * 배제가 무시된 국면 하나가 열렸다. 도로 넣은 쪽과 전부가 대상이라 하나도 못 뺀
      * 쪽 <b>둘 다</b> 여기로 온다 — 한쪽만 세면 나머지 구간이 지표에서 사라진다.
      */
-    public void overridden() {
+    public void ejectionOverridden() {
         ejectionsOverridden.incrementAndGet();
     }
 

@@ -91,6 +91,13 @@ class CrowdedOutLogTest {
                 .toList();
     }
 
+    private List<String> 줄들(Level 수준) {
+        return 로그.list.stream()
+                .filter(e -> e.getLevel() == 수준)
+                .map(ILoggingEvent::getFormattedMessage)
+                .toList();
+    }
+
     /**
      * <b>뺀 대가 없어져도 보낼 곳이 없으면 회복이 아니다.</b> 해제를 뺀 대의 유무로만
      * 가르면, 뒷단이 여전히 전부 포화인 채로 "보낼 곳이 남는다" 가 남는다 — 그 직후
@@ -116,8 +123,9 @@ class CrowdedOutLogTest {
         균형기.choose((Request<?>) null).block();
 
         assertThat(줄들()).noneMatch(m -> m.contains("보낼 곳이 남는다"));
-        // 구간을 열어 두면 지속 시간과 건수가 서로 다른 구간을 가리킨다. 다른 문구로 닫는다.
-        assertThat(줄들()).anyMatch(m -> m.contains("뺀 대가 없어졌는데 보낼 곳도 없다"));
+        // 열어 두면 두 구간이 한 줄에 섞인다. 다른 문구로 닫되 값은 닫은 구간의 것이다.
+        assertThat(줄들(Level.WARN)).filteredOn(m -> m.contains("도로 넣던 구간이 닫혔다"))
+                .singleElement().asString().contains("1건");
     }
 
     /**
@@ -168,7 +176,7 @@ class CrowdedOutLogTest {
         균형기.choose((Request<?>) null).block();
 
         assertThat(배제기.ejectionsOverridden()).as("두 회차가 한 국면이다").isOne();
-        assertThat(줄들()).filteredOn(m -> m.contains("보낼 곳이 없다"))
+        assertThat(줄들(Level.WARN)).filteredOn(m -> m.contains("보낼 곳이 없다"))
                 .singleElement().asString().as("어느 대인지가 든다").contains("be-1");
     }
 
@@ -198,8 +206,29 @@ class CrowdedOutLogTest {
         }
         균형기.choose((Request<?>) null).block();
 
-        assertThat(줄들()).filteredOn(m -> m.contains("보낼 곳이 남는다"))
+        assertThat(줄들(Level.INFO)).filteredOn(m -> m.contains("보낼 곳이 남는다"))
                 .singleElement().asString()
                 .as("지속 시간과 건수가 그 구간의 것이어야 한다").contains("1건");
+    }
+
+    /**
+     * <b>전부가 대상이면 하나도 안 뺀다.</b> 그 구간에는 뺀 대가 없어 도로 넣는
+     * 갈래에 안 걸리는데, 배제가 무시된 것은 마찬가지다 — 안 세면 배제 게이지가
+     * N 을 내는 동안 계수는 0 이다.
+     */
+    @Test
+    @DisplayName("전부가_대상인_국면도_무시로_센다")
+    void 전부가_대상인_국면도_무시로_센다() {
+        CapacityAwareLoadBalancer 균형기 =
+                균형기(인스턴스("be-1", "100"), 인스턴스("be-2", "100"));
+        for (int i = 0; i < 3; i++) {
+            배제기.failed("be-1", 지금);
+            배제기.failed("be-2", 지금);
+        }
+
+        균형기.choose((Request<?>) null).block();
+
+        assertThat(배제기.ejectionsOverridden()).isOne();
+        assertThat(줄들(Level.ERROR)).anyMatch(m -> m.contains("전부 연속 실패"));
     }
 }

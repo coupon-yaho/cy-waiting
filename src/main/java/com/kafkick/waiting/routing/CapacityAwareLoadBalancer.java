@@ -158,9 +158,8 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
         // 표시는 됐는데 하나도 안 뺐다는 것은 전부가 대상이라는 뜻이다.
         if (!present.isEmpty() && marked >= present.size()) {
             if (suppressed.entered()) {
-                // **이쪽도 배제가 무시된 국면이다.** 도로 넣는 쪽만 세면, 전 대가
-                // 대상이라 하나도 안 뺀 구간에서 배제 게이지는 N 인데 계수는 0 이다.
-                outliers.overridden();
+                // 이쪽도 배제가 무시된 국면이다. 근거는 그 계수의 주석에 있다.
+                outliers.ejectionOverridden();
                 log.error("뒷단 {} 대가 전부 연속 실패다 — 배제를 안 건다. 빼면 보낼 "
                         + "곳이 0 이 된다. 뒷단 배포 상태와 서킷을 먼저 본다",
                         present.size());
@@ -226,9 +225,8 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
         if (!crowdedOut.entered()) {
             return;
         }
-        outliers.overridden();
-        // 식별자를 싣는다. 지표 라벨에는 못 붙어 이 줄이 유일한 기록이고, 구간
-        // 도중에 대상이 바뀌면 그때 다시 이 줄이 나간다.
+        outliers.ejectionOverridden();
+        // 식별자는 지표 라벨에 못 붙어 이 줄이 유일한 기록이다.
         log.warn("배제하고 나니 보낼 곳이 없다 — 뺀 {} 대를 도로 넣는다: {}. "
                 + "남은 대가 여유 0 이거나 인스턴스별 상한에 닿았다는 뜻이다. "
                 + "상한과 뒷단 여유를 함께 본다", ejected.size(), ejected);
@@ -298,20 +296,17 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
             byId.clear();
             candidates = gather(available, ejected, byId, now);
         }
-        // **한 번만 셈한다.** 아래 갈래 셋이 같은 값을 물으므로, 나눠 부르면 정상
-        // 갈래에서만 한 번 더 도는 셈이 된다.
         boolean stuck = noneUsable(candidates);
         if (stuck && !ejected.isEmpty()) {
             enteredCrowdedOut(ejected);
             byId.clear();
             candidates = gather(available, Set.of(), byId, now);
         } else if (stuck) {
-            // **뺀 대가 없어져도 보낼 곳이 없으면 회복이 아니다.** 그렇다고 구간을
-            // 열어 두면 지속 시간과 건수가 서로 다른 구간을 가리키고, 그 사이 다른
-            // 대가 새로 빠져도 진입 줄이 안 나간다. 다른 문구로 닫는다.
+            // 보낼 곳이 없는 것은 회복이 아니다. 열어 두면 두 구간이 한 줄에 섞인다.
             crowdedOut.exited().ifPresent(r -> log.warn(
-                    "뺀 대가 없어졌는데 보낼 곳도 없다 — {}초 동안 {}건. 뒷단이 전부 "
-                    + "포화라 빈 답이 나간다", r.elapsedSeconds(), r.swallowed()));
+                    "도로 넣던 구간이 닫혔다 — {}초 동안 {}건. 지금도 보낼 곳이 없어 "
+                    + "빈 답이 나간다. 뒷단 여유와 인스턴스별 상한을 함께 본다",
+                    r.elapsedSeconds(), r.swallowed()));
         } else {
             crowdedOut.exited().ifPresent(r -> log.info(
                     "배제해도 보낼 곳이 남는다 — {}초 동안 {}건", r.elapsedSeconds(),

@@ -150,8 +150,12 @@ class InFlightMetricsTest {
                 .isEqualTo(1);
         assertThat(meters.get("waiting.routing.ramp.completed").functionCounter().count())
                 .isEqualTo(2);
+        배제기.ejectionOverridden();
+        배제기.ejectionOverridden();
+        배제기.ejectionOverridden();
+        배제기.ejectionOverridden();
         assertThat(meters.get("waiting.routing.ejections.overridden").functionCounter().count())
-                .as("도로 넣은 적이 없다").isZero();
+                .as("다른 계수와 값이 겹치면 배선을 바꿔 걸어도 안 빨개진다").isEqualTo(4);
     }
 
     /**

@@ -726,11 +726,13 @@ class SweepTest extends RedisContainerSupport {
     void 낡은_임기는_안_걷는다() {
         이탈자를_세운다();
 
+        Double 이탈자_순번 = redis.opsForZSet().score(QUEUE, "이탈자").block(WAIT);
+
         List<Object> 결과 = sweep("3000", BUDGET, "0", 임기 - 1);
 
         assertThat(swept(결과)).as("거절은 센티널로 온다").isEqualTo(-1);
         assertThat(redis.opsForZSet().score(QUEUE, "이탈자").block(WAIT))
-                .as("줄이 그대로다").isNotNull();
+                .as("순번까지 그대로다").isEqualTo(이탈자_순번);
         assertThat(nextCursor(결과)).as("커서를 그대로 돌려준다").isEqualTo("0");
     }
 

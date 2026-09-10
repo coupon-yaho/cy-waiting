@@ -260,7 +260,6 @@ class TermRewindScenarioTest {
                 .run();
     }
 
-    @SuppressWarnings("unchecked")
     /**
      * <b>쿠폰 슬롯만 승격하면 그 슬롯의 표가 사라진다.</b> 리더 슬롯은 그대로라
      * 승계가 안 일어나고, 그래서 아무도 문을 다시 안 잠근다.
@@ -286,11 +285,14 @@ class TermRewindScenarioTest {
                     유실_세는값 = 표(GEN);
                 })
                 .duringFault(() -> {
+                    // **청소를 먼저 부른다.** 적용이 표를 유령 번호로 세우고 나면
+                    // 그다음 청소는 같은 번호라서 통과한다 — 표가 없어 통과한 것과
+                    // 구분이 안 되므로 울타리가 멀쩡해도 초록이 된다.
+                    유령_청소 = port.sweep(List.of(COUPON), 1_800_000_000L, 100, 300, 100,
+                            옛_임기).block(기다림);
                     유령이_두드린다();
                     유지_입장표 = 표(RedisKeys.applyFence(COUPON, SHARDS, SHARD));
                     유지_삭제표 = 표(RedisKeys.dropFence(COUPON, SHARDS, SHARD));
-                    유령_청소 = port.sweep(List.of(COUPON), 1_800_000_000L, 100, 300, 100,
-                            옛_임기).block(기다림);
                     // **두 번 두드린다.** 첫 회차의 거절이 표를 유령 번호로 세우므로,
                     // 둘째 회차에는 그 표가 자기 번호와 같아 삭제가 통과한다.
                     유령이_두드린다();
@@ -316,17 +318,18 @@ class TermRewindScenarioTest {
                         // 유령이 먼저 두드리면 표가 자기 옛 번호로 선다.
                         같다("표가 유령 번호로 안 섰다", 옛_임기, 유지_입장표),
                         같다("삭제 표가 유령 번호로 안 섰다", 옛_임기, 유지_삭제표),
-                        // 청소의 울타리도 비교 대상이 없어 그대로 통과한다.
+                        // 표가 없는 동안 부른 것이라 비교 대상이 없어 통과한다.
                         같다("유령의 청소가 막혔다", 0, 유령_청소.fenced()),
                         // **되돌릴 수 없는 쪽까지 열린다.** 첫 회차가 세운 표를 딛고
                         // 둘째 회차의 삭제가 줄을 지운다 — 되살리는 코드가 없다.
-                        살아있다("둘째 회차 뒤의 줄", !표없이_두드린_뒤_줄있음)))
+                        사라졌다("둘째 회차 뒤의 줄", !표없이_두드린_뒤_줄있음)))
                 .assertRecovery(() -> RecoveryCriteria.violations(
                         같다("승계 잠금이 표를 안 올렸다", 새_임기, 회복_입장표),
                         막혔다("잠근 뒤 유령의 적용", 유령_적용_막힘)))
                 .run();
     }
 
+    @SuppressWarnings("unchecked")
     private List<Object> 잡는다(String owner) {
         return (List<Object>) redis.execute(획득, List.of(LEADER, GEN),
                 List.of(owner, LEASE)).blockFirst(기다림);
@@ -419,6 +422,11 @@ class TermRewindScenarioTest {
 
     private static Optional<String> 통과했다(String 무엇, boolean 통과) {
         return 통과 ? Optional.empty() : Optional.of(무엇 + "이 막혔다");
+    }
+
+    /** 사라져야 하는 것에 쓴다. 살아 있어야 하는 것과 실패 문장이 반대다. */
+    private static Optional<String> 사라졌다(String 무엇, boolean 사라짐) {
+        return 사라짐 ? Optional.empty() : Optional.of(무엇 + "이 안 사라졌다");
     }
 
     private static Optional<String> 살아있다(String 무엇, boolean 산다) {

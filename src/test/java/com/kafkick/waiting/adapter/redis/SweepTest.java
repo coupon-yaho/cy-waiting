@@ -780,7 +780,10 @@ class SweepTest extends RedisContainerSupport {
         redis.delete(APPLY_FENCE).block(WAIT);
         이탈자를_세운다();
 
-        assertThat(swept(sweep("3000", BUDGET, "0", 1))).isOne();
+        List<Object> 결과 = sweep("3000", BUDGET, "0", 1);
+
+        assertThat(막혔는가(결과)).as("세운 적이 없으면 안 막는다").isFalse();
+        assertThat(swept(결과)).isOne();
     }
 
     /** 임계 위에 서서 신호가 끊긴 사람 하나. 걷을 수 있는 가장 단순한 모양이다. */

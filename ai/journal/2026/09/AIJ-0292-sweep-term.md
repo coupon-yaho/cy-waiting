@@ -5,7 +5,7 @@ kind: fix
 plan: [08-resilience]
 phase: 9
 jira: CY-912
-commits: [HEAD~1, HEAD]
+commits: [e14777b, d4fc610, 9de7249, 1d067cd]
 agent: claude-opus-5
 confidence: high
 promoted-to:
@@ -54,7 +54,7 @@ promoted-to:
 
 ## 어떻게 검증했나
 
-- 낡은 임기가 아무것도 안 걷고 줄을 그대로 두는 것, 커서를 그대로 돌려주는 것
+- 낡은 임기가 앞줄을 안 걷고 순번까지 그대로 두는 것, 그때도 정리는 도는 것
 - 같은 임기와 표 없는 경우는 그대로 걷는 것 — 안 재면 전부 막는 구현이 통과한다
 - 클러스터 모드에서 다섯 키가 한 슬롯인지 — 갈리면 그 시험이 먼저 터진다
 - `build` · `integrationTest` · `contextTest` 통과

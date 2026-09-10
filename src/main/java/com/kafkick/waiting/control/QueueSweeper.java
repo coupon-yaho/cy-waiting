@@ -45,6 +45,9 @@ public final class QueueSweeper {
     /** 울타리가 막은 쿠폰 수. 이 값만 오르면 청소가 멎은 것이지 걷을 게 없는 것이 아니다. */
     private final Counter fenced;
 
+    /** 막힌 구간. 진입과 해제를 쌍으로 남겨 얼마나 오래 멎었는지를 사후에 잰다. */
+    private final FailureWindow fenceWindow = FailureWindow.create();
+
     private QueueSweeper(SweepGate gate, SweepCall sweep,
             MeterRegistry meters) {
         this.gate = Objects.requireNonNull(gate, "gate 는 필수다 — 멈추는 판단 없이 쓸면 안 된다");
@@ -83,12 +86,10 @@ public final class QueueSweeper {
     }
 
     /**
-     * 쓸어 낸 결과. <b>실패를 함께 싣는다</b> — 오류를 성공으로 접으면 "걷을 게 없어서 0"
-     * 과 "전부 죽어서 0" 이 같은 값이 되고, 청소가 멎은 것이 정상으로 보인다.
-     */
-    /**
-     * @param fenced 울타리가 앞줄 제거를 막은 쿠폰 수. <b>0 의 셋째 뜻이다</b> —
-     *               걷을 게 없어서도, 다 죽어서도 아닌 0 을 여기서 가른다
+     * 쓸어 낸 결과. <b>0 의 뜻이 셋이다</b> — 걷을 게 없어서, 전부 죽어서, 울타리가
+     * 앞줄 제거를 막아서다. 안 가르면 청소가 멎은 것이 정상으로 보인다.
+     *
+     * @param fenced 울타리가 앞줄 제거를 막은 <b>쿠폰 수</b>. 회차 수가 아니다
      */
     public record SweepResult(long swept, long expiredSignals, long expiredGrace, long failed,
             long fenced) {
@@ -105,6 +106,23 @@ public final class QueueSweeper {
      */
     public void leadershipAcquired() {
         gate.leadershipAcquired();
+    }
+
+    /**
+     * 울타리에 막힌 구간의 진입과 해제를 남긴다. <b>틱마다 찍으면 안 된다</b> —
+     * 유령 구간은 임기가 돌아올 때까지 이어져 매 틱 같은 줄이 쌓인다.
+     */
+    private void watchFence(long blocked) {
+        if (blocked > 0) {
+            if (fenceWindow.entered()) {
+                log.warn("이탈자 청소가 울타리에 막혔다 — 쿠폰 {}개. 앞줄 제거만 멎고 "
+                        + "정리는 돈다. 임기와 적용 울타리를 함께 본다", blocked);
+            }
+            return;
+        }
+        fenceWindow.exited().ifPresent(r -> log.info(
+                "이탈자 청소의 울타리가 풀렸다 — {}초 동안 {}회차", r.elapsedSeconds(),
+                r.swallowed()));
     }
 
     /** 이번 틱의 청소. <b>청소 실패가 배분을 막지 않는다</b> — 다음 틱에 다시 온다. */
@@ -130,13 +148,7 @@ public final class QueueSweeper {
                     expiredGrace.increment(r.expiredGrace());
                     failed.increment(r.failed());
                     fenced.increment(r.fenced());
-                    if (r.fenced() > 0) {
-                        // **막힌 것을 걷을 게 없는 것과 안 섞는다.** 지표만 보면
-                        // 청소가 완전히 멎은 상태가 평시와 같은 값을 낸다.
-                        log.warn("이탈자 청소가 울타리에 막혔다 — 쿠폰 {}개. 앞줄 제거만 "
-                                + "멎고 정리는 돈다. 임기와 적용 울타리를 함께 본다",
-                                r.fenced());
-                    }
+                    watchFence(r.fenced());
                     if (r.swept() > 0) {
                         // **걷은 수를 남긴다.** 이탈자와 우리 오판이 같은
                         // 수치로 보이므로, 이 값이 튀는 것이 유일한 신호다.

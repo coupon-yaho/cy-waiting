@@ -157,9 +157,6 @@ public final class AllocationRedisPort implements SnapshotSource {
 
     private final AtomicLong publishFenced = new AtomicLong();
 
-    /** 울타리가 막은 청소 건수. <b>회차가 아니라 쿠폰 단위다</b>. */
-    private final AtomicLong sweepFenced = new AtomicLong();
-
     /** 울타리가 막은 입장 적용 건수. <b>회차가 아니라 쿠폰 단위다</b>. */
     private final AtomicLong applyFenced = new AtomicLong();
 
@@ -645,6 +642,7 @@ public final class AllocationRedisPort implements SnapshotSource {
     /**
      * @param removeFront 앞줄에서 빼도 되는가. <b>거짓이어도 정리는 돈다</b> —
      *                    승계 유예 구간이 그 자리다
+     * @param fence       이 회차의 임기. 적용 울타리보다 낮으면 앞줄만 안 뺀다
      */
     public Mono<QueueSweeper.SweepResult> sweep(List<String> couponIds, long nowSec,
             int scanLimit, long graceSec, int budget, boolean removeFront, long fence) {
@@ -698,20 +696,14 @@ public final class AllocationRedisPort implements SnapshotSource {
                     // **막혀도 커서는 옮긴다.** 막히는 것은 앞줄 제거뿐이고 정리는
                     // 그대로 돌므로, 안 옮기면 그 회차가 훑은 자리를 다시 훑는다.
                     long blocked = fenced(values) ? 1 : 0;
-                    sweepFenced.addAndGet(blocked);
                     sweepCursors.put(couponId, String.valueOf(values.get(3)));
                     return new QueueSweeper.SweepResult(toLongOrZero(values.get(0)),
                             toLongOrZero(values.get(1)), toLongOrZero(values.get(2)), 0, blocked);
                 });
     }
 
-    /** 울타리가 막은 청소 건수. 유령이 걷으러 온 흔적이라 0 이 아니면 본다. */
-    public double sweepFenced() {
-        return sweepFenced.get();
-    }
-
     /**
-     * 이 회차가 울타리에 막혔는가. <b>숫자가 아니면 터뜨린다</b> — 0 으로 접으면
+     * 이 쿠폰의 앞줄 제거가 울타리에 막혔는가. <b>숫자가 아니면 터뜨린다</b> — 0 으로 접으면
      * 반환 모양이 바뀐 날 막힌 회차가 조용히 안 막힌 것으로 읽힌다.
      */
     private boolean fenced(List<?> values) {

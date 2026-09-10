@@ -158,6 +158,9 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
         // 표시는 됐는데 하나도 안 뺐다는 것은 전부가 대상이라는 뜻이다.
         if (!present.isEmpty() && marked >= present.size()) {
             if (suppressed.entered()) {
+                // **이쪽도 배제가 무시된 국면이다.** 도로 넣는 쪽만 세면, 전 대가
+                // 대상이라 하나도 안 뺀 구간에서 배제 게이지는 N 인데 계수는 0 이다.
+                outliers.overridden();
                 log.error("뒷단 {} 대가 전부 연속 실패다 — 배제를 안 건다. 빼면 보낼 "
                         + "곳이 0 이 된다. 뒷단 배포 상태와 서킷을 먼저 본다",
                         present.size());
@@ -213,6 +216,22 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
                     + "목록에서 빠졌거나 시각이 뒤로 갔다. 뒷단 목록과 시각 동기를 "
                     + "함께 본다", window.elapsedSeconds());
         }
+    }
+
+    /**
+     * 뺀 대를 도로 넣는 구간에 들었다. <b>국면 단위로 센다</b> — 다른 계수들이 사건
+     * 수라, 여기만 요청 수면 한 대시보드에서 나머지가 바닥에 눌린다.
+     */
+    private void enteredCrowdedOut(Set<String> ejected) {
+        if (!crowdedOut.entered()) {
+            return;
+        }
+        outliers.overridden();
+        // 식별자를 싣는다. 지표 라벨에는 못 붙어 이 줄이 유일한 기록이고, 구간
+        // 도중에 대상이 바뀌면 그때 다시 이 줄이 나간다.
+        log.warn("배제하고 나니 보낼 곳이 없다 — 뺀 {} 대를 도로 넣는다: {}. "
+                + "남은 대가 여유 0 이거나 인스턴스별 상한에 닿았다는 뜻이다. "
+                + "상한과 뒷단 여유를 함께 본다", ejected.size(), ejected);
     }
 
     /** 보낼 수 있는 후보를 모은다. 뺀 대와 상한에 닿은 대는 안 든다. */
@@ -279,21 +298,21 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
             byId.clear();
             candidates = gather(available, ejected, byId, now);
         }
-        if (noneUsable(candidates) && !ejected.isEmpty()) {
-            // **회차마다 센다.** 로그는 구간의 첫 건만 남기므로, 그 구간이 몇 회차나
-            // 배제를 무시했는지는 계수로만 보인다.
-            outliers.overridden();
-            // 요청마다 도는 자리다. 구간의 첫 건만 남긴다.
-            if (crowdedOut.entered()) {
-                log.warn("배제하고 나니 보낼 곳이 없다 — 뺀 {} 대를 도로 넣는다. "
-                        + "남은 대가 여유 0 이거나 인스턴스별 상한에 닿았다는 뜻이다. "
-                        + "상한과 뒷단 여유를 함께 본다", ejected.size());
-            }
+        // **한 번만 셈한다.** 아래 갈래 셋이 같은 값을 물으므로, 나눠 부르면 정상
+        // 갈래에서만 한 번 더 도는 셈이 된다.
+        boolean stuck = noneUsable(candidates);
+        if (stuck && !ejected.isEmpty()) {
+            enteredCrowdedOut(ejected);
             byId.clear();
             candidates = gather(available, Set.of(), byId, now);
-        } else if (!noneUsable(candidates)) {
-            // **뺀 대가 없어진 것만으로는 해제가 아니다.** 그 조건으로 가르면 뒷단이
-            // 여전히 전부 포화인 채로 "남는다" 가 찍히고, 그 직후 빈 답이 나간다.
+        } else if (stuck) {
+            // **뺀 대가 없어져도 보낼 곳이 없으면 회복이 아니다.** 그렇다고 구간을
+            // 열어 두면 지속 시간과 건수가 서로 다른 구간을 가리키고, 그 사이 다른
+            // 대가 새로 빠져도 진입 줄이 안 나간다. 다른 문구로 닫는다.
+            crowdedOut.exited().ifPresent(r -> log.warn(
+                    "뺀 대가 없어졌는데 보낼 곳도 없다 — {}초 동안 {}건. 뒷단이 전부 "
+                    + "포화라 빈 답이 나간다", r.elapsedSeconds(), r.swallowed()));
+        } else {
             crowdedOut.exited().ifPresent(r -> log.info(
                     "배제해도 보낼 곳이 남는다 — {}초 동안 {}건", r.elapsedSeconds(),
                     r.swallowed()));

@@ -41,7 +41,7 @@ public final class InstanceOutliers {
     private final AtomicLong rampsCompleted = new AtomicLong();
 
     /**
-     * 뺀 대를 도로 넣은 회차. <b>표시는 됐는데 배제가 안 걸린 자리다</b> — 그 구간의
+     * 배제가 무시된 국면 수. <b>표시는 됐는데 배제가 안 걸린 자리다</b> — 그 구간의
      * 그 대는 몫이 안 깎인 채 받으므로, 배제 게이지만 보면 반대로 읽힌다.
      */
     private final AtomicLong ejectionsOverridden = new AtomicLong();
@@ -170,14 +170,14 @@ public final class InstanceOutliers {
     }
 
     /**
-     * 뺀 대를 도로 넣었다. 보낼 곳이 0 이 되는 것보다 열화된 대로라도 보내는 것이
-     * 낫다는 규칙이 걸린 자리라, <b>그 회차의 배제는 없던 것과 같다.</b>
+     * 배제가 무시된 국면 하나가 열렸다. 도로 넣은 쪽과 전부가 대상이라 하나도 못 뺀
+     * 쪽 <b>둘 다</b> 여기로 온다 — 한쪽만 세면 나머지 구간이 지표에서 사라진다.
      */
     public void overridden() {
         ejectionsOverridden.incrementAndGet();
     }
 
-    /** 배제가 무시된 회차 수. 배제 게이지가 든 수가 실제로 걸렸는지를 여기에 견준다. */
+    /** 배제가 무시된 국면 수. 배제 게이지가 든 수가 실제로 걸렸는지를 여기에 견준다. */
     public long ejectionsOverridden() {
         return ejectionsOverridden.get();
     }

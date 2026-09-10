@@ -116,15 +116,48 @@ class CrowdedOutLogTest {
         균형기.choose((Request<?>) null).block();
 
         assertThat(줄들()).noneMatch(m -> m.contains("보낼 곳이 남는다"));
+        // 구간을 열어 두면 지속 시간과 건수가 서로 다른 구간을 가리킨다. 다른 문구로 닫는다.
+        assertThat(줄들()).anyMatch(m -> m.contains("뺀 대가 없어졌는데 보낼 곳도 없다"));
     }
 
     /**
-     * <b>로그는 구간의 첫 건만 남는다.</b> 그 구간이 몇 회차나 배제를 무시했는지는
-     * 계수로만 보이고, 그 수가 배제 게이지를 견줄 대상이다.
+     * <b>구간이 닫혔으면 다음 국면은 다시 남는다.</b> 안 닫으면 그 사이 다른 대가
+     * 새로 빠져 도로 넣기 시작해도 진입 줄이 안 나가, 로그가 든 대와 실제로 전량을
+     * 받는 대가 갈린다.
      */
     @Test
-    @DisplayName("배제가_무시된_회차를_센다")
-    void 배제가_무시된_회차를_센다() {
+    @DisplayName("갭을_지난_다음_국면도_남는다")
+    void 갭을_지난_다음_국면도_남는다() {
+        CapacityAwareLoadBalancer 균형기 =
+                균형기(인스턴스("be-1", "100"), 인스턴스("be-2", "0"));
+        for (int i = 0; i < 3; i++) {
+            배제기.failed("be-1", 지금);
+        }
+        균형기.choose((Request<?>) null).block();
+
+        for (int i = 0; i < 3; i++) {
+            배제기.succeeded("be-1", 지금);
+        }
+        레지스트리.started("be-1", 지금);
+        균형기.choose((Request<?>) null).block();
+
+        // 갭을 지나 be-1 이 다시 빠진다. 같은 구간의 연장이 아니라 새 국면이다.
+        for (int i = 0; i < 3; i++) {
+            배제기.failed("be-1", 지금);
+        }
+        균형기.choose((Request<?>) null).block();
+
+        assertThat(줄들()).filteredOn(m -> m.contains("보낼 곳이 없다")).hasSize(2);
+        assertThat(배제기.ejectionsOverridden()).as("국면 둘이다").isEqualTo(2);
+    }
+
+    /**
+     * <b>국면 단위로 센다.</b> 다른 계수들이 사건 수라 여기만 요청 수면 한 대시보드에서
+     * 나머지가 바닥에 눌린다. 그 수가 배제 게이지를 견줄 대상이다.
+     */
+    @Test
+    @DisplayName("배제가_무시된_국면을_센다")
+    void 배제가_무시된_국면을_센다() {
         CapacityAwareLoadBalancer 균형기 =
                 균형기(인스턴스("be-1", "100"), 인스턴스("be-2", "0"));
         for (int i = 0; i < 3; i++) {
@@ -134,9 +167,19 @@ class CrowdedOutLogTest {
         균형기.choose((Request<?>) null).block();
         균형기.choose((Request<?>) null).block();
 
-        assertThat(배제기.ejectionsOverridden()).as("로그는 한 줄이어도 두 회차다")
-                .isEqualTo(2);
-        assertThat(줄들()).filteredOn(m -> m.contains("보낼 곳이 없다")).hasSize(1);
+        assertThat(배제기.ejectionsOverridden()).as("두 회차가 한 국면이다").isOne();
+        assertThat(줄들()).filteredOn(m -> m.contains("보낼 곳이 없다"))
+                .singleElement().asString().as("어느 대인지가 든다").contains("be-1");
+    }
+
+    /** 갈래를 안 타면 안 센다. 조건을 안 묶으면 모든 요청을 세도 초록이다. */
+    @Test
+    @DisplayName("보낼_곳이_있으면_안_센다")
+    void 보낼_곳이_있으면_안_센다() {
+        균형기(인스턴스("be-1", "100"), 인스턴스("be-2", "100"))
+                .choose((Request<?>) null).block();
+
+        assertThat(배제기.ejectionsOverridden()).isZero();
     }
 
     /** 진짜 회복은 남긴다. 안 남기면 구간이 언제 끝났는지가 없다. */
@@ -155,6 +198,8 @@ class CrowdedOutLogTest {
         }
         균형기.choose((Request<?>) null).block();
 
-        assertThat(줄들()).anyMatch(m -> m.contains("보낼 곳이 남는다"));
+        assertThat(줄들()).filteredOn(m -> m.contains("보낼 곳이 남는다"))
+                .singleElement().asString()
+                .as("지속 시간과 건수가 그 구간의 것이어야 한다").contains("1건");
     }
 }

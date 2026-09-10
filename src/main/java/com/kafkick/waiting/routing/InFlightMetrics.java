@@ -58,7 +58,7 @@ public final class InFlightMetrics {
         metrics.gauge(meters, "waiting.routing.ramping", InFlightMetrics::ramping,
                 "되돌리는 중인 인스턴스 수. 배제 게이지가 안 세는 구간이라 "
                         + "이 값이 안 내려가면 회복이 안 끝나고 있는 것이다");
-        metrics.gauge(meters, "waiting.routing.ramp.suppressed", InFlightMetrics::suppressed,
+        metrics.gauge(meters, "waiting.routing.ramp.suppressed", InFlightMetrics::rampSuppressed,
                 "되돌리는 중이라 깎기로 한 몫의 합. 고르개가 대마다 최소 하나는 "
                         + "남기므로 실제로 막히는 양은 이보다 작다");
         // **진입만 세면 해제를 못 본다.** 되돌리다 다시 빠지는 것과 끝까지 마치는 것을
@@ -66,7 +66,7 @@ public final class InFlightMetrics {
         metrics.counter(meters, "waiting.routing.ejections.started",
                 InFlightMetrics::ejectionsStarted,
                 "정상 구간에서 뺀 횟수. 배제 국면 하나가 여기서 열린다");
-        metrics.counter(meters, "waiting.routing.ejections.reentry",
+        metrics.counter(meters, "waiting.routing.ejections.repeated",
                 InFlightMetrics::reEjections,
                 "되돌리는 중에 다시 뺀 횟수. 이것만 늘고 완주가 안 늘면 회복이 맴돈다");
         metrics.counter(meters, "waiting.routing.ramp.completed",
@@ -90,7 +90,7 @@ public final class InFlightMetrics {
         return outliers.rampingCount(nowMillis.getAsLong());
     }
 
-    private double suppressed() {
+    private double rampSuppressed() {
         return outliers.rampSuppressed(nowMillis.getAsLong());
     }
 
@@ -108,7 +108,8 @@ public final class InFlightMetrics {
 
     /**
      * <b>인스턴스 식별자를 라벨에 안 붙인다.</b> 재기동마다 새로 오므로 시계열이
-     * 무한히 늘고, 하나 붙는 순간 지표가 메모리를 밀어낸다.
+     * 무한히 늘고, 하나 붙는 순간 지표가 메모리를 밀어낸다. 아래 카운터들이 이
+     * 강한 참조에 얹혀 있으므로, 게이지를 다 걷으면 그쪽이 첫 GC 에 죽는다.
      */
     private void gauge(MeterRegistry meters, String name,
             ToDoubleFunction<InFlightMetrics> read, String why) {

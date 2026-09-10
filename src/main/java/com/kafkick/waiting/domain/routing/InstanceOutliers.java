@@ -140,10 +140,7 @@ public final class InstanceOutliers {
         return count;
     }
 
-    /**
-     * 되돌리는 중이라 깎기로 한 몫의 합. 대 수와 함께 보면 억제가 걸렸는지가 나온다.
-     * <b>실제로 막히는 양은 이보다 작다</b> — 고르개가 대마다 최소 하나는 남긴다.
-     */
+    /** 되돌리는 중이라 깎기로 한 몫의 합. 고르개가 남기는 최소 하나는 안 뺀 값이다. */
     public double rampSuppressed(long nowMillis) {
         double sum = 0;
         for (String id : lastSeen) {
@@ -152,20 +149,17 @@ public final class InstanceOutliers {
         return sum;
     }
 
-    /**
-     * 정상 구간에서 뺀 횟수. <b>배제 국면 하나가 여기서 열린다</b> — 되돌리는 중에
-     * 다시 뺀 것은 아래로 가므로, 둘을 견주면 회복이 도는지 맴도는지가 갈린다.
-     */
+    /** 정상 구간에서 뺀 횟수. <b>배제 국면 하나가 여기서 열린다.</b> */
     public long ejectionsStarted() {
         return ejectionsStarted.get();
     }
 
-    /** 되돌리는 중에 다시 뺀 횟수. 이것만 늘고 완주가 안 늘면 회복이 안 끝난다. */
+    /** 되돌리는 중에 다시 뺀 횟수. */
     public long reEjections() {
         return reEjections.get();
     }
 
-    /** 되돌리기를 끝까지 마친 횟수. <b>진입만 있고 해제가 없으면 여기가 안 는다.</b> */
+    /** 되돌리기를 끝까지 마친 횟수. */
     public long rampsCompleted() {
         return rampsCompleted.get();
     }
@@ -217,7 +211,7 @@ public final class InstanceOutliers {
         return count;
     }
 
-    /** 지금 기록을 들고 있는 인스턴스들. 지표와 시험이 훑는 자리다. */
+    /** 지금 기록을 들고 있는 인스턴스들. 시험이 훑는 자리다. */
     public Set<String> tracked() {
         return Set.copyOf(records.keySet());
     }
@@ -235,8 +229,9 @@ public final class InstanceOutliers {
             case EJECTED -> ejectionsStarted.incrementAndGet();
             case RE_EJECTED -> reEjections.incrementAndGet();
             case RAMP_DONE -> rampsCompleted.incrementAndGet();
-            default -> {
-                // 아무 전이도 없었다
+            case NONE -> {
+                // 아무 전이도 없었다. **default 를 안 쓴다** — 상수를 하나 더할 때
+                // 여기가 안 깨지면 그 사건은 조용히 안 세어진다.
             }
         }
     }

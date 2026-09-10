@@ -39,7 +39,7 @@ class InFlightMetricsTest {
             "waiting.routing.ramp.suppressed",
             "waiting.routing.ramp.completed",
             "waiting.routing.ejections.started",
-            "waiting.routing.ejections.reentry");
+            "waiting.routing.ejections.repeated");
 
     private final MeterRegistry meters = new SimpleMeterRegistry();
 
@@ -145,7 +145,7 @@ class InFlightMetricsTest {
                 .as("램프 사분의 일이면 사분의 삼이 남는다").isCloseTo(0.75, within(0.01));
         assertThat(meters.get("waiting.routing.ejections.started").functionCounter().count())
                 .isEqualTo(3);
-        assertThat(meters.get("waiting.routing.ejections.reentry").functionCounter().count())
+        assertThat(meters.get("waiting.routing.ejections.repeated").functionCounter().count())
                 .isEqualTo(1);
         assertThat(meters.get("waiting.routing.ramp.completed").functionCounter().count())
                 .isEqualTo(2);

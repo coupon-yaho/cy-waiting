@@ -66,7 +66,8 @@ public final class InstanceOutliers {
     }
 
     /**
-     * @param threshold 연속 실패가 이만큼이면 뺀다. 배제 창을 성공으로 닫는 근거도 같다
+     * @param threshold 연속 실패가 이만큼이면 뺀다. 배제 창을 성공으로 닫는 데도,
+     *                  되돌리는 중에 다시 빼는 데도 같은 수를 쓴다
      * @param ejectFor  뺀 뒤 이만큼 지나면 되돌리기 시작한다
      * @param ramp      되돌린 뒤 제 몫을 다 받기까지 걸리는 시간
      */
@@ -74,7 +75,10 @@ public final class InstanceOutliers {
         return new InstanceOutliers(threshold, ejectFor, ramp);
     }
 
-    /** 이 인스턴스가 답을 제대로 냈다. 배제 중이었으면 거기서 되돌리기 시작한다. */
+    /**
+     * 이 인스턴스가 답을 제대로 냈다. <b>배제 중이면 임계만큼 이어져야</b> 거기서
+     * 되돌리기가 시작된다 — 한 건은 배제 전에 나갔던 요청일 수 있다.
+     */
     public void succeeded(String instanceId, long nowMillis) {
         Objects.requireNonNull(instanceId, "instanceId");
         Streak streak = records.computeIfAbsent(instanceId, id -> new Streak());
@@ -85,8 +89,8 @@ public final class InstanceOutliers {
     /**
      * 이 인스턴스가 실패로 끝냈다. 연속이 임계에 닿으면 거기서 배제가 시작된다.
      *
-     * <p><b>배제 구간의 실패만 임계를 안 기다린다</b> — 그 구간은 트래픽이 0 이라 거기
-     * 오는 것이 늦게 돌아온 결과다. 회복 구간은 같은 임계를 쓰고, 못 미치는 실패는
+     * <p><b>배제 구간의 실패만 임계를 안 기다린다</b> — 거기 오는 것은 대개 배제 전에
+     * 나갔다 늦게 돌아온 결과다. 회복 구간은 같은 임계를 쓰고, 못 미치는 실패는
      * 회복을 취소하지 않는다.
      */
     public void failed(String instanceId, long nowMillis) {
@@ -243,14 +247,14 @@ public final class InstanceOutliers {
      */
     private static final class Streak {
 
-        private int consecutive;
+        private int consecutiveFailures;
 
         /**
          * 배제 창 안의 연속 성공. <b>창을 닫는 근거를 여는 근거와 맞춘다</b> — 하나로
          * 닫으면 늦게 돌아온 결과 한 건이 응답 상한을 덮으라고 잡은 창을 지운다.
-         * 연속 실패와 짝이라 <b>버리는 자리도 같다</b> — 남기면 다음 창이 얕아진다.
+         * 실패 한 건이 끊고, 창 밖에서는 안 쌓인다.
          */
-        private int windowSuccesses;
+        private int consecutiveSuccesses;
 
         /**
          * 뺀 시각. 여기서부터 배제 시간이 흐르고 그 뒤로 램프가 이어진다. <b>램프까지
@@ -261,36 +265,37 @@ public final class InstanceOutliers {
 
         /**
          * 뺀 뒤 흐른 시간. <b>0 아래로 안 본다.</b> 벽시계라 시각 보정이나 재개로 뒤로
-         * 갈 수 있는데, 음수가 되면 배제가 안 풀린다. 빠진 대는 트래픽이 0 이라 성공도
-         * 실패도 안 들어와 <b>시간 말고는 나갈 문이 없다.</b>
+         * 갈 수 있는데, 음수가 되면 배제가 안 풀린다. 빠진 대에는 대개 트래픽이 안 가
+         * <b>시간이 주된 문</b>이고, 도로 넣는 갈래에서만 성공이 문을 연다.
          */
         private long age(long now) {
             return Math.max(0, now - ejectedAt);
         }
 
         synchronized void succeeded(int threshold, long now, long ejectMillis) {
-            consecutive = 0;
+            consecutiveFailures = 0;
             if (!ejected(now, ejectMillis)) {
-                windowSuccesses = 0;
+                consecutiveSuccesses = 0;
                 return;
             }
             // **배제 중의 성공은 배제를 끝내되 램프로 넘긴다.** 다만 임계만큼
             // 이어져야 한다 — 배제 전에 나갔던 요청이 늦게 성공으로 돌아오는
             // 자리라, 한 건으로 닫으면 반쯤 고장 난 대가 스스로 배제를 취소한다.
-            if (++windowSuccesses >= threshold) {
-                windowSuccesses = 0;
+            if (++consecutiveSuccesses >= threshold) {
+                consecutiveSuccesses = 0;
                 ejectedAt = now - ejectMillis;
             }
         }
 
         synchronized Event failed(int threshold, long now, long ejectMillis) {
+            // 실패는 갈래를 안 가리고 연속 성공을 끊는다. 흩어진 성공이 쌓여
+            // 창을 닫으면 안 된다.
+            consecutiveSuccesses = 0;
             // **배제 중의 실패는 그 자리에서 다시 뺀다.** 거기 오는 것은 배제 전에
             // 나갔다 늦게 돌아온 결과라, 아직 안 나은 대가 스스로 배제를 끝내면 안 된다.
             if (ejected(now, ejectMillis)) {
                 ejectedAt = now;
-                consecutive = 0;
-                // 흩어진 성공이 쌓여 창을 닫으면 안 된다. 실패가 그것도 되돌린다.
-                windowSuccesses = 0;
+                consecutiveFailures = 0;
                 return Event.NONE;
             }
             // 가라앉은 것은 부르는 쪽이 먼저 떼어 냈으므로, 여기 남는 것은
@@ -306,9 +311,8 @@ public final class InstanceOutliers {
             //
             // 임계에 못 미치는 실패로 램프를 취소하지는 않는다. 취소하면 몫을 안 깎은
             // 채 전량을 받아 배제가 노린 것과 반대가 된다.
-            if (++consecutive >= threshold) {
-                consecutive = 0;
-                windowSuccesses = 0;
+            if (++consecutiveFailures >= threshold) {
+                consecutiveFailures = 0;
                 ejectedAt = now;
                 return ramping ? Event.RE_EJECTED : Event.EJECTED;
             }
@@ -324,8 +328,7 @@ public final class InstanceOutliers {
                 return Event.NONE;
             }
             ejectedAt = null;
-            consecutive = 0;
-            windowSuccesses = 0;
+            consecutiveFailures = 0;
             return Event.RAMP_DONE;
         }
 

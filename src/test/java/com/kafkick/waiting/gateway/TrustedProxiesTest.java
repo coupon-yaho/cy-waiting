@@ -128,6 +128,18 @@ class TrustedProxiesTest {
                 .hasMessageContaining("쓸 수 없는");
     }
 
+    /**
+     * <b>매핑 표기는 v4 규칙으로 선다.</b> 풀면 네 바이트라 v4 하한이 걸려, 적은
+     * 표기는 v6 인데 실제로 믿는 범위는 v4 대역이 된다.
+     */
+    @Test
+    @DisplayName("v4_매핑_표기는_막는다")
+    void v4_매핑_표기는_막는다() {
+        assertThatThrownBy(() -> TrustedProxies.of(List.of("::ffff:10.0.0.0/8")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("매핑");
+    }
+
     /** 사설 대역 한 덩이는 실제 배치 모양이라 받는다. 하한이 그것까지 막으면 못 쓴다. */
     @Test
     @DisplayName("사설_대역_한_덩이는_받는다")

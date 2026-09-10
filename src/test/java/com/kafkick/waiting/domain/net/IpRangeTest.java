@@ -165,4 +165,14 @@ class IpRangeTest {
         assertThat(IpRange.parse("fc00::/7").orElseThrow().tooWide()).isFalse();
         assertThat(IpRange.parse("fc00::/6").orElseThrow().tooWide()).isTrue();
     }
+
+    /** 길이가 둘뿐이다. 안 막으면 빈 배열로 만든 대역이 하한을 물을 때 터진다. */
+    @Test
+    @DisplayName("주소_길이가_넷도_열여섯도_아니면_거절한다")
+    void 주소_길이가_넷도_열여섯도_아니면_거절한다() {
+        assertThatThrownBy(() -> new IpRange(new byte[0], 0))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new IpRange(new byte[5], 8))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
 }

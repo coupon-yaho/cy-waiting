@@ -16,6 +16,8 @@ public record IpRange(byte[] address, int prefixBits) {
 
     private static final int V4_BYTES = 4;
 
+    private static final int V6_BYTES = 16;
+
     /**
      * v4 대역 프리픽스의 하한. 내부망이 쓰는 가장 넓은 폭이 `10.0.0.0/8` 이고
      * 그보다 넓은 것은 내부망일 수 없다.
@@ -40,6 +42,12 @@ public record IpRange(byte[] address, int prefixBits) {
      */
     public IpRange {
         Objects.requireNonNull(address, "address 는 필수다");
+        // **길이가 둘뿐이다.** 안 막으면 빈 배열로도 만들어지고, 그 대역에 하한을
+        // 물으면 첫 바이트를 읽다 터진다.
+        if (address.length != V4_BYTES && address.length != V6_BYTES) {
+            throw new IllegalArgumentException(
+                    "주소는 4 바이트나 16 바이트여야 한다: " + address.length);
+        }
         if (prefixBits < 0 || prefixBits > address.length * BITS_PER_BYTE) {
             throw new IllegalArgumentException(
                     "프리픽스는 0..%d 여야 한다: %d".formatted(
@@ -121,12 +129,17 @@ public record IpRange(byte[] address, int prefixBits) {
         return (address[whole] & mask) == (target[whole] & mask);
     }
 
+    /** v4 대역인가. 표기와 실제가 갈리는지 보는 자리가 이걸 묻는다. */
+    public boolean isV4() {
+        return address.length == V4_BYTES;
+    }
+
     /**
      * 이 대역이 지켜야 하는 프리픽스 하한. <b>패밀리마다 다르다</b> — 비트 수가
      * 주소 수가 아니라, 같은 폭이 v6 에서는 비교가 안 되게 넓다.
      */
     public int minimumPrefixBits() {
-        if (address.length == V4_BYTES) {
+        if (isV4()) {
             return MIN_V4_PREFIX_BITS;
         }
         // fc00::/7. 정의상 내부망이라 정본 표기 그 자신은 받는다.

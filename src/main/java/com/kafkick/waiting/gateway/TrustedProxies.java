@@ -57,6 +57,12 @@ public final class TrustedProxies {
      * v4 를 실어 나르는 v6 대역은 번역된 인터넷 전부를 한 줄로 연다.
      */
     private IpRange usableAsHop(IpRange range, String entry) {
+        // **v6 표기가 v4 규칙으로 서는 것을 막는다.** 매핑을 풀면 네 바이트라 v4
+        // 하한이 걸려, 적은 표기와 실제로 믿는 범위가 갈린다.
+        if (entry.indexOf(':') >= 0 && range.isV4()) {
+            throw new IllegalArgumentException(
+                    "%s 에 v4 매핑 표기를 쓸 수 없다: %s".formatted(KEY, entry));
+        }
         if (range.tooWide()) {
             throw new IllegalArgumentException(
                     "%s 의 신뢰 홉 대역이 너무 넓다 — 프리픽스가 %d 비트 이상이어야 한다: %s"

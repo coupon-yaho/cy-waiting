@@ -3,6 +3,7 @@ package com.kafkick.waiting.gateway;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.kafkick.waiting.domain.coupon.Tunables;
 import java.time.Duration;
 import java.util.stream.Stream;
 import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
@@ -146,5 +147,26 @@ class BackendCircuitPropertiesTest {
         assertThatThrownBy(() -> new BackendCircuitProperties(
                 Duration.ofSeconds(4_294_967_306L), 20, 50f, 느림, 50f, 대기, 반쯤_상한, 10))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /**
+     * <b>느림 임계는 격벽이 끊는 지연의 하한 아래여야 한다.</b> 위면 느린 요청이
+     * 서킷에 닿기 전에 격벽이 끊어 창에 안 쌓이고, 서킷이 영영 안 열린다. 그 지연은
+     * 배포 없이 하한까지 내려오므로 기본값이 아니라 하한과 견준다.
+     */
+    @Test
+    @DisplayName("느림_임계가_격벽_지연_하한에_닿으면_기동을_막는다")
+    void 느림_임계가_격벽_지연_하한에_닿으면_기동을_막는다() {
+        Duration 하한 = Duration.ofSeconds(Tunables.MIN_INFLIGHT_SECONDS);
+
+        assertThatThrownBy(() -> new BackendCircuitProperties(
+                창, 20, 50f, 하한, 50f, 대기, 반쯤_상한, 10))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("slow-call-duration-threshold");
+        assertThat(new BackendCircuitProperties(
+                창, 20, 50f, 하한.minusMillis(1), 50f, 대기, 반쯤_상한, 10)
+                .slowCallDurationThreshold())
+                .as("하한 바로 아래는 받는다 — 경계를 안 재면 전부 막는 구현이 통과한다")
+                .isEqualTo(하한.minusMillis(1));
     }
 }

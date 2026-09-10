@@ -44,6 +44,14 @@ final class CircuitSettings {
         }
     }
 
+    /** 다른 장치가 먼저 끊는 지연보다 짧아야 한다. 같거나 길면 서킷에 표본이 안 쌓인다. */
+    void below(Duration value, Duration limit, String key, String why) {
+        if (value.compareTo(limit) >= 0) {
+            throw new IllegalArgumentException(
+                    "%s%s 는 %s(%s) 보다 짧아야 한다: %s".formatted(PREFIX, key, why, limit, value));
+        }
+    }
+
     /** 0 이면 첫 한 건으로 서킷이 열리거나 회복 판정이 표본 없이 난다. */
     void atLeastOne(int value, String key) {
         if (value < 1) {

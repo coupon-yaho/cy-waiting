@@ -79,6 +79,7 @@ class TermRewindScenarioTest {
     private long 유실_입장표;
     private long 유실_세는값;
     private long 회복_입장표;
+    private long 회복_삭제표;
     private boolean 유령_적용_막힘;
     private boolean 유령_발행_막힘;
     private List<String> 유령_삭제;
@@ -302,8 +303,13 @@ class TermRewindScenarioTest {
                 // 회복을 손으로 부르는 것이 곧 "무엇이 잠그는가" 의 답이다.
                 .recover(() -> port.sealFences(List.of(COUPON), 새_임기).block(기다림))
                 .afterRecovery(() -> {
+                    // 유지 구간이 줄을 지웠으므로 다시 세운다. 안 세우면 삭제 울타리가
+                    // 깨져도 지울 것이 없어 초록이 된다.
+                    매진된_줄을_세운다();
                     유령이_두드린다();
                     회복_입장표 = 표(RedisKeys.applyFence(COUPON, SHARDS, SHARD));
+                    회복_삭제표 = 표(RedisKeys.dropFence(COUPON, SHARDS, SHARD));
+                    회복_줄있음 = 줄이_있는가();
                 })
                 .assertEntry(() -> RecoveryCriteria.violations(
                         같다("표가 안 섰다", 새_임기, 진입_입장표),
@@ -325,7 +331,12 @@ class TermRewindScenarioTest {
                         사라졌다("둘째 회차 뒤의 줄", !표없이_두드린_뒤_줄있음)))
                 .assertRecovery(() -> RecoveryCriteria.violations(
                         같다("승계 잠금이 표를 안 올렸다", 새_임기, 회복_입장표),
-                        막혔다("잠근 뒤 유령의 적용", 유령_적용_막힘)))
+                        같다("승계 잠금이 삭제 표를 안 올렸다", 새_임기, 회복_삭제표),
+                        막혔다("잠근 뒤 유령의 적용", 유령_적용_막힘),
+                        // **되돌릴 수 없는 쪽을 따로 본다.** 적용만 막혀도 삭제가 뚫리면
+                        // 유지 구간의 사고가 회복 뒤에 그대로 되풀이된다.
+                        막혔다("잠근 뒤 유령의 삭제", 유령_삭제.isEmpty()),
+                        살아있다("잠근 뒤의 줄", 회복_줄있음)))
                 .run();
     }
 

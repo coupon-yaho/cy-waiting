@@ -359,7 +359,10 @@ public class ControlPlaneConfig {
                 LeadershipEdge.of(gate,
                         onLeadershipGained(collector, capacity, cleanup, sweeper, round, holder,
                                 registry, sealFences(port, leadership, gate)),
-                        capacity::leadershipChanged),
+                        () -> {
+                            capacity.leadershipChanged();
+                            sweeper.leadershipLost();
+                        }),
                 // **운영 값을 먼저 읽고 배분한다.** 순서가 뒤면 방금 바꾼 값이
                 // 한 틱 늦게 나가고, 장애 중의 한 틱은 길다.
                 () -> capacity.refresh().then(tunables.refresh()).then(round.run()),

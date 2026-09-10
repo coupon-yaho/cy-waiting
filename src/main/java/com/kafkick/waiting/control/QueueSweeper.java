@@ -109,6 +109,16 @@ public final class QueueSweeper {
     }
 
     /**
+     * 리더십을 잃었다. <b>막힌 구간을 여기서 닫는다</b> — 비리더 구간에는 청소가 안
+     * 돌아 해제가 영영 안 찍히고, 다음 임기의 막힘이 그 연장으로 삼켜진다.
+     */
+    public void leadershipLost() {
+        fenceWindow.exited().ifPresent(r -> log.info(
+                "리더십을 잃어 청소의 울타리 구간을 닫는다 — {}초 동안 {}회차",
+                r.elapsedSeconds(), r.swallowed()));
+    }
+
+    /**
      * 울타리에 막힌 구간의 진입과 해제를 남긴다. <b>틱마다 찍으면 안 된다</b> —
      * 유령 구간은 임기가 돌아올 때까지 이어져 매 틱 같은 줄이 쌓인다.
      */

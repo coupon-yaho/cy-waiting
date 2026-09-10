@@ -16,7 +16,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * @param coldStartRamp 기동 직후 보고된 값을 초기값으로 쓰는 구간
  * @param perInstanceCap 인스턴스 하나에 동시에 물릴 수 있는 요청 수.
  *                       <b>느려진 한 대가 커넥션을 독식하지 못하게 한다</b>
- * @param outlierFailures 연속 실패가 이만큼이면 그 인스턴스를 후보에서 뺀다
+ * @param outlierFailures 연속 실패가 이만큼이면 뺀다. <b>세 자리를 겸한다</b> —
+ *                        배제 창을 성공으로 닫는 데도, 되돌리는 중에 다시 빼는 데도 쓴다
  * @param outlierEjectFor 뺀 뒤 이만큼 지나면 다시 후보로 돌린다
  * @param allowedDestinations 연결해도 되는 목적지. <b>켤 때는 필수다</b>
  * @param allowedPorts   연결해도 되는 포트. 호스트만 보면 반쪽이다

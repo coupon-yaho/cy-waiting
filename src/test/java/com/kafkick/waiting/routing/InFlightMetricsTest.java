@@ -39,7 +39,8 @@ class InFlightMetricsTest {
             "waiting.routing.ramp.suppressed",
             "waiting.routing.ramp.completed",
             "waiting.routing.ejections.started",
-            "waiting.routing.ejections.repeated");
+            "waiting.routing.ejections.repeated",
+            "waiting.routing.ejections.overridden");
 
     private final MeterRegistry meters = new SimpleMeterRegistry();
 
@@ -149,6 +150,8 @@ class InFlightMetricsTest {
                 .isEqualTo(1);
         assertThat(meters.get("waiting.routing.ramp.completed").functionCounter().count())
                 .isEqualTo(2);
+        assertThat(meters.get("waiting.routing.ejections.overridden").functionCounter().count())
+                .as("도로 넣은 적이 없다").isZero();
     }
 
     /**

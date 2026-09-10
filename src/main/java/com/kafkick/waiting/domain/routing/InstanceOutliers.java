@@ -40,6 +40,12 @@ public final class InstanceOutliers {
 
     private final AtomicLong rampsCompleted = new AtomicLong();
 
+    /**
+     * 뺀 대를 도로 넣은 회차. <b>표시는 됐는데 배제가 안 걸린 자리다</b> — 그 구간의
+     * 그 대는 몫이 안 깎인 채 받으므로, 배제 게이지만 보면 반대로 읽힌다.
+     */
+    private final AtomicLong ejectionsOverridden = new AtomicLong();
+
     private InstanceOutliers(int threshold, Duration ejectFor, Duration ramp) {
         Objects.requireNonNull(ejectFor, "ejectFor");
         Objects.requireNonNull(ramp, "ramp");
@@ -161,6 +167,19 @@ public final class InstanceOutliers {
     /** 되돌리는 중에 다시 뺀 횟수. */
     public long reEjections() {
         return reEjections.get();
+    }
+
+    /**
+     * 뺀 대를 도로 넣었다. 보낼 곳이 0 이 되는 것보다 열화된 대로라도 보내는 것이
+     * 낫다는 규칙이 걸린 자리라, <b>그 회차의 배제는 없던 것과 같다.</b>
+     */
+    public void overridden() {
+        ejectionsOverridden.incrementAndGet();
+    }
+
+    /** 배제가 무시된 회차 수. 배제 게이지가 든 수가 실제로 걸렸는지를 여기에 견준다. */
+    public long ejectionsOverridden() {
+        return ejectionsOverridden.get();
     }
 
     /** 되돌리기를 끝까지 마친 횟수. */

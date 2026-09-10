@@ -118,6 +118,27 @@ class CrowdedOutLogTest {
         assertThat(줄들()).noneMatch(m -> m.contains("보낼 곳이 남는다"));
     }
 
+    /**
+     * <b>로그는 구간의 첫 건만 남는다.</b> 그 구간이 몇 회차나 배제를 무시했는지는
+     * 계수로만 보이고, 그 수가 배제 게이지를 견줄 대상이다.
+     */
+    @Test
+    @DisplayName("배제가_무시된_회차를_센다")
+    void 배제가_무시된_회차를_센다() {
+        CapacityAwareLoadBalancer 균형기 =
+                균형기(인스턴스("be-1", "100"), 인스턴스("be-2", "0"));
+        for (int i = 0; i < 3; i++) {
+            배제기.failed("be-1", 지금);
+        }
+
+        균형기.choose((Request<?>) null).block();
+        균형기.choose((Request<?>) null).block();
+
+        assertThat(배제기.ejectionsOverridden()).as("로그는 한 줄이어도 두 회차다")
+                .isEqualTo(2);
+        assertThat(줄들()).filteredOn(m -> m.contains("보낼 곳이 없다")).hasSize(1);
+    }
+
     /** 진짜 회복은 남긴다. 안 남기면 구간이 언제 끝났는지가 없다. */
     @Test
     @DisplayName("보낼_곳이_생기면_해제를_찍는다")

@@ -280,6 +280,9 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
             candidates = gather(available, ejected, byId, now);
         }
         if (noneUsable(candidates) && !ejected.isEmpty()) {
+            // **회차마다 센다.** 로그는 구간의 첫 건만 남기므로, 그 구간이 몇 회차나
+            // 배제를 무시했는지는 계수로만 보인다.
+            outliers.overridden();
             // 요청마다 도는 자리다. 구간의 첫 건만 남긴다.
             if (crowdedOut.entered()) {
                 log.warn("배제하고 나니 보낼 곳이 없다 — 뺀 {} 대를 도로 넣는다. "
@@ -288,7 +291,9 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
             }
             byId.clear();
             candidates = gather(available, Set.of(), byId, now);
-        } else {
+        } else if (!noneUsable(candidates)) {
+            // **뺀 대가 없어진 것만으로는 해제가 아니다.** 그 조건으로 가르면 뒷단이
+            // 여전히 전부 포화인 채로 "남는다" 가 찍히고, 그 직후 빈 답이 나간다.
             crowdedOut.exited().ifPresent(r -> log.info(
                     "배제해도 보낼 곳이 남는다 — {}초 동안 {}건", r.elapsedSeconds(),
                     r.swallowed()));

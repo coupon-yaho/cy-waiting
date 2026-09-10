@@ -128,7 +128,7 @@ public class IdentityConfig {
      * 넘기고, 도용 방어는 뒷단이 회원과 키의 쌍으로 저장해서 진다.
      */
     @Bean
-    public IdempotencyKey idempotencyKey() {
-        return IdempotencyKey.passThrough();
+    public IdempotencyKey idempotencyKey(MeterRegistry meters) {
+        return IdempotencyKey.passThrough(meters);
     }
 }

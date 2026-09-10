@@ -1,5 +1,8 @@
 package com.kafkick.waiting.gateway;
 
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -29,11 +32,31 @@ public final class IdempotencyKey {
             "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}"
                     + "-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$");
 
-    private IdempotencyKey() {
+    private static final String FALLBACK_METRIC = "waiting.idempotency.fallback";
+
+    /** 값을 안 줬다. 빈 값도 여기다 — 헤더만 붙이고 비워 보내는 클라이언트가 있다. */
+    private final Counter missing;
+
+    /** 값을 줬는데 UUID v4 가 아니다. 클라이언트가 계약을 틀리게 안다는 신호다. */
+    private final Counter malformed;
+
+    private IdempotencyKey(MeterRegistry meters) {
+        Objects.requireNonNull(meters, "meters 는 필수다");
+        this.missing = meters.counter(FALLBACK_METRIC, "reason", "missing");
+        this.malformed = meters.counter(FALLBACK_METRIC, "reason", "malformed");
     }
 
+    /**
+     * 떨어진 수를 사유별로 센다. <b>떨어지면 응답으로는 안 드러난다</b> — 같은 회원의
+     * 다른 시도가 한 키로 합쳐져 두 번째 발급을 잃어도 운영이 모른다.
+     */
+    public static IdempotencyKey passThrough(MeterRegistry meters) {
+        return new IdempotencyKey(meters);
+    }
+
+    /** 계측 없이 만든다. <b>시험 편의다</b> — 운영은 위 팩토리를 쓴다. */
     public static IdempotencyKey passThrough() {
-        return new IdempotencyKey();
+        return new IdempotencyKey(new SimpleMeterRegistry());
     }
 
     /**
@@ -50,6 +73,7 @@ public final class IdempotencyKey {
             // 건으로 본다.
             return clientKey.trim().toLowerCase(Locale.ROOT);
         }
+        (clientKey == null || clientKey.isBlank() ? missing : malformed).increment();
         return fallback(couponId, memberId);
     }
 

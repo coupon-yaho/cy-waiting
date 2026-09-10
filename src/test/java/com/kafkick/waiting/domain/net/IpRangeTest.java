@@ -138,4 +138,41 @@ class IpRangeTest {
         assertThat(new IpRange(주소, 32).prefixBits()).isEqualTo(32);
         assertThat(new IpRange(주소, 0).prefixBits()).isZero();
     }
+
+    /**
+     * <b>비트 수가 주소 수가 아니다.</b> 같은 폭이 v6 에서는 비교가 안 되게 넓어
+     * 패밀리마다 하한이 다르고, 사설 대역은 정본 표기 자신이 하한이다.
+     */
+    @Test
+    @DisplayName("패밀리마다_하한이_다르다")
+    void 패밀리마다_하한이_다르다() {
+        assertThat(IpRange.parse("10.0.0.0/8").orElseThrow().minimumPrefixBits()).isEqualTo(8);
+        assertThat(IpRange.parse("2001:db8::/32").orElseThrow().minimumPrefixBits())
+                .isEqualTo(32);
+        assertThat(IpRange.parse("fc00::/7").orElseThrow().minimumPrefixBits())
+                .as("정본 표기 그 자신은 받는다").isEqualTo(7);
+        assertThat(IpRange.parse("fd00::/8").orElseThrow().minimumPrefixBits()).isEqualTo(7);
+    }
+
+    /** 하한을 한 비트라도 못 미치면 대역 하나로 안 본다. */
+    @Test
+    @DisplayName("하한에_한_비트_모자라면_너무_넓다")
+    void 하한에_한_비트_모자라면_너무_넓다() {
+        assertThat(IpRange.parse("10.0.0.0/8").orElseThrow().tooWide()).isFalse();
+        assertThat(IpRange.parse("10.0.0.0/7").orElseThrow().tooWide()).isTrue();
+        assertThat(IpRange.parse("2001:db8::/32").orElseThrow().tooWide()).isFalse();
+        assertThat(IpRange.parse("2001:db8::/31").orElseThrow().tooWide()).isTrue();
+        assertThat(IpRange.parse("fc00::/7").orElseThrow().tooWide()).isFalse();
+        assertThat(IpRange.parse("fc00::/6").orElseThrow().tooWide()).isTrue();
+    }
+
+    /** 길이가 둘뿐이다. 안 막으면 빈 배열로 만든 대역이 하한을 물을 때 터진다. */
+    @Test
+    @DisplayName("주소_길이가_넷도_열여섯도_아니면_거절한다")
+    void 주소_길이가_넷도_열여섯도_아니면_거절한다() {
+        assertThatThrownBy(() -> new IpRange(new byte[0], 0))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new IpRange(new byte[5], 8))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
 }

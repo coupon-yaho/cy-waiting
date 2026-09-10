@@ -33,8 +33,8 @@ public final class InFlightMetrics {
     /**
      * 레지스트리를 지표에 건다.
      *
-     * <p><b>강한 참조로 등록한다.</b> 약한 참조면 첫 GC 에 수거되어 영원히
-     * {@code NaN} 을 내는데, 스크레이프에는 줄이 그대로 나간다.
+     * <p><b>게이지는 강한 참조로 건다.</b> 약한 참조면 첫 GC 에 수거되어 영원히
+     * {@code NaN} 을 내고, 카운터는 그 게이지와 같은 객체를 써서 함께 산다.
      */
     public static void bind(InFlightRegistry registry, InstanceOutliers outliers,
             LongSupplier nowMillis, MeterRegistry meters) {
@@ -59,23 +59,25 @@ public final class InFlightMetrics {
                 "되돌리는 중인 인스턴스 수. 배제 게이지가 안 세는 구간이라 "
                         + "이 값이 안 내려가면 회복이 안 끝나고 있는 것이다");
         metrics.gauge(meters, "waiting.routing.ramp.suppressed", InFlightMetrics::suppressed,
-                "되돌리는 중이라 안 준 몫의 합. 1 이면 한 대분을 통째로 안 주고 있다");
+                "되돌리는 중이라 깎기로 한 몫의 합. 고르개가 대마다 최소 하나는 "
+                        + "남기므로 실제로 막히는 양은 이보다 작다");
         // **진입만 세면 해제를 못 본다.** 되돌리다 다시 빠지는 것과 끝까지 마치는 것을
         // 갈라야 회복이 도는지 맴도는지가 갈린다.
-        metrics.counter(meters, "waiting.routing.ejections.first",
-                InFlightMetrics::firstEjections,
-                "연속 실패로 처음 뺀 횟수. 아래 둘과 견주는 기준이다");
+        metrics.counter(meters, "waiting.routing.ejections.started",
+                InFlightMetrics::ejectionsStarted,
+                "정상 구간에서 뺀 횟수. 배제 국면 하나가 여기서 열린다");
         metrics.counter(meters, "waiting.routing.ejections.reentry",
                 InFlightMetrics::reEjections,
                 "되돌리는 중에 다시 뺀 횟수. 이것만 늘고 완주가 안 늘면 회복이 맴돈다");
         metrics.counter(meters, "waiting.routing.ramp.completed",
                 InFlightMetrics::rampsCompleted,
-                "되돌리기를 끝까지 마친 횟수. 진입만 있고 해제가 없으면 안 는다");
+                "되돌리기를 끝까지 마친 횟수. 라우팅이 한 건도 안 돌면 같이 멎는다");
     }
 
     /**
      * 누적을 그대로 읽는다. <b>게이지로 두면 안 된다</b> — 되돌아가지 않는 값이라
-     * 스크레이프 사이의 증가분을 셈하는 쪽이 맞다.
+     * 스크레이프 사이의 증가분을 셈하는 쪽이 맞다. 여기는 약한 참조라, 위 게이지들과
+     * <b>같은 객체를 넘겨</b> 그쪽 강한 참조에 얹는다.
      */
     private void counter(MeterRegistry meters, String name,
             ToDoubleFunction<InFlightMetrics> read, String why) {
@@ -92,8 +94,8 @@ public final class InFlightMetrics {
         return outliers.rampSuppressed(nowMillis.getAsLong());
     }
 
-    private double firstEjections() {
-        return outliers.firstEjections();
+    private double ejectionsStarted() {
+        return outliers.ejectionsStarted();
     }
 
     private double reEjections() {

@@ -2,10 +2,11 @@ package com.kafkick.waiting.domain.routing;
 
 import java.time.Duration;
 import java.util.LinkedHashSet;
+import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * 연속으로 실패하는 인스턴스를 후보에서 잠시 빼고, <b>천천히 되돌린다</b>. 물린 표는
@@ -33,7 +34,7 @@ public final class InstanceOutliers {
      * 관측용 누적. <b>회차가 아니라 사건 수다</b> — 되돌리다 다시 빠진 비율과
      * 끝까지 마친 수를 견주는 자리다. 카운터라 되돌아가지 않는다.
      */
-    private final AtomicLong firstEjections = new AtomicLong();
+    private final AtomicLong ejectionsStarted = new AtomicLong();
 
     private final AtomicLong reEjections = new AtomicLong();
 
@@ -76,8 +77,9 @@ public final class InstanceOutliers {
     /** 이 인스턴스가 답을 제대로 냈다. 배제 중이었으면 거기서 되돌리기 시작한다. */
     public void succeeded(String instanceId, long nowMillis) {
         Objects.requireNonNull(instanceId, "instanceId");
-        count(records.computeIfAbsent(instanceId, id -> new Streak())
-                .succeeded(nowMillis, ejectMillis, rampMillis));
+        Streak streak = records.computeIfAbsent(instanceId, id -> new Streak());
+        count(streak.settled(nowMillis, ejectMillis, rampMillis));
+        streak.succeeded(nowMillis, ejectMillis);
     }
 
     /**
@@ -89,8 +91,11 @@ public final class InstanceOutliers {
      */
     public void failed(String instanceId, long nowMillis) {
         Objects.requireNonNull(instanceId, "instanceId");
-        count(records.computeIfAbsent(instanceId, id -> new Streak())
-                .failed(threshold, nowMillis, ejectMillis, rampMillis));
+        // **가라앉음을 먼저 떼어 낸다.** 한 호출이 사건 하나만 내므로, 램프를 끝내는
+        // 그 실패가 곧 재배제이기도 하면(임계 1) 완주가 통째로 사라진다.
+        Streak streak = records.computeIfAbsent(instanceId, id -> new Streak());
+        count(streak.settled(nowMillis, ejectMillis, rampMillis));
+        count(streak.failed(threshold, nowMillis, ejectMillis));
     }
 
     /**
@@ -122,32 +127,13 @@ public final class InstanceOutliers {
     }
 
     /**
-     * 무슨 일이 있었는가. <b>세는 자리를 하나로 모은다</b> — 상태를 바꾸는 자리마다
-     * 세면 갈래 하나가 빠져도 안 드러난다.
-     */
-    private enum Event {
-        NONE, EJECTED, RE_EJECTED, RAMP_DONE
-    }
-
-    private void count(Event event) {
-        switch (event) {
-            case EJECTED -> firstEjections.incrementAndGet();
-            case RE_EJECTED -> reEjections.incrementAndGet();
-            case RAMP_DONE -> rampsCompleted.incrementAndGet();
-            default -> {
-                // 아무 전이도 없었다
-            }
-        }
-    }
-
-    /**
      * 지금 되돌리는 중인 인스턴스 수. <b>배제도 정상도 아닌 구간</b>이라 배제
      * 게이지에 안 잡히는데, 이 구간이 곧 회복이 끝났는지를 묻는 자리다.
      */
     public int rampingCount(long nowMillis) {
         int count = 0;
-        for (Streak streak : records.values()) {
-            if (streak.recoveryRemaining(nowMillis, ejectMillis, rampMillis) > 0) {
+        for (String id : lastSeen) {
+            if (recoveryRemaining(id, nowMillis) > 0) {
                 count++;
             }
         }
@@ -155,20 +141,23 @@ public final class InstanceOutliers {
     }
 
     /**
-     * 되돌리는 중이라 안 준 몫의 합. 1 이면 한 대분을 통째로 안 주고 있다는 뜻이라,
-     * 대 수와 함께 보면 억제가 실제로 걸렸는지가 나온다.
+     * 되돌리는 중이라 깎기로 한 몫의 합. 대 수와 함께 보면 억제가 걸렸는지가 나온다.
+     * <b>실제로 막히는 양은 이보다 작다</b> — 고르개가 대마다 최소 하나는 남긴다.
      */
     public double rampSuppressed(long nowMillis) {
         double sum = 0;
-        for (Streak streak : records.values()) {
-            sum += streak.recoveryRemaining(nowMillis, ejectMillis, rampMillis);
+        for (String id : lastSeen) {
+            sum += recoveryRemaining(id, nowMillis);
         }
         return sum;
     }
 
-    /** 처음 빼기까지 간 횟수. 아래 값과 견주면 되돌리다 다시 빠진 비율이 나온다. */
-    public long firstEjections() {
-        return firstEjections.get();
+    /**
+     * 정상 구간에서 뺀 횟수. <b>배제 국면 하나가 여기서 열린다</b> — 되돌리는 중에
+     * 다시 뺀 것은 아래로 가므로, 둘을 견주면 회복이 도는지 맴도는지가 갈린다.
+     */
+    public long ejectionsStarted() {
+        return ejectionsStarted.get();
     }
 
     /** 되돌리는 중에 다시 뺀 횟수. 이것만 늘고 완주가 안 늘면 회복이 안 끝난다. */
@@ -189,14 +178,21 @@ public final class InstanceOutliers {
     public void retain(Set<String> live, long nowMillis) {
         Objects.requireNonNull(live, "live");
         lastSeen = Set.copyOf(live);
-        // **키마다 잠금 안에서 지운다.** 밖에서 보고 지우면, 그 사이에 들어온
-        // 실패가 든 기록을 지우게 된다 — 그 실패는 어디에도 안 남는다.
-        for (String id : Set.copyOf(records.keySet())) {
+        // 반복 중에 지워도 되는 것이 이 맵의 계약이라, 열쇠를 따로 뜨지 않는다.
+        for (Map.Entry<String, Streak> entry : records.entrySet()) {
+            String id = entry.getKey();
+            // **완주는 여기서도 센다.** 그 대에게 다음 요청이 올 때만 세면 그 전에
+            // 빠진 대의 완주가 영영 안 세어져, 연 배제에서 재배제와 완주를 뺀 값이
+            // 배포마다 벌어진다. 여기는 라우팅 한 건마다 도므로 아무 대의 요청이든
+            // 하나면 잡힌다 — 라우팅이 통째로 멎으면 이 계수도 멎는다.
+            count(entry.getValue().settled(nowMillis, ejectMillis, rampMillis));
             if (live.contains(id)) {
                 continue;
             }
-            records.computeIfPresent(id, (k, streak) ->
-                    streak.settling(nowMillis, ejectMillis, rampMillis) ? streak : null);
+            // **키마다 잠금 안에서 지운다.** 밖에서 보고 지우면, 그 사이에 들어온
+            // 실패가 든 기록을 지우게 된다 — 그 실패는 어디에도 안 남는다.
+            records.computeIfPresent(id, (k, s) ->
+                    s.unsettled() ? s : null);
         }
     }
 
@@ -227,6 +223,25 @@ public final class InstanceOutliers {
     }
 
     /**
+     * 무슨 일이 있었는가. <b>세는 자리를 하나로 모은다</b> — 상태를 바꾸는 자리마다
+     * 세면 갈래 하나가 빠져도 안 드러난다.
+     */
+    private enum Event {
+        NONE, EJECTED, RE_EJECTED, RAMP_DONE
+    }
+
+    private void count(Event event) {
+        switch (event) {
+            case EJECTED -> ejectionsStarted.incrementAndGet();
+            case RE_EJECTED -> reEjections.incrementAndGet();
+            case RAMP_DONE -> rampsCompleted.incrementAndGet();
+            default -> {
+                // 아무 전이도 없었다
+            }
+        }
+    }
+
+    /**
      * 한 인스턴스의 연속 실패와 배제 시작 시각. <b>자물쇠 하나로 묶는다</b> — 따로
      * 두면 임계에 닿은 순간과 시각을 적는 순간 사이가 벌어져, 배제가 시작 안 된 채로
      * 남는다.
@@ -251,31 +266,17 @@ public final class InstanceOutliers {
             return Math.max(0, now - ejectedAt);
         }
 
-        synchronized Event succeeded(long now, long ejectMillis, long rampMillis) {
+        synchronized void succeeded(long now, long ejectMillis) {
             consecutive = 0;
-            if (ejectedAt == null) {
-                return Event.NONE;
-            }
-            long age = age(now);
             // **배제 중의 성공은 배제를 끝내되 램프로 넘긴다.** 배제 전에 나갔던
             // 요청이 늦게 성공으로 돌아오는 자리라, 그것만으로 전량을 되돌리면
             // 반쯤 고장 난 대가 스스로 배제를 취소한다.
-            if (age < ejectMillis) {
+            if (ejected(now, ejectMillis)) {
                 ejectedAt = now - ejectMillis;
-                return Event.NONE;
             }
-            if (age >= ejectMillis + rampMillis) {
-                // **가라앉으면 계수도 함께 버린다.** 램프에서 쌓은 연속을 넘기면 평상시
-                // 첫 실패 한 건이 그 대를 다시 뺀다 — 트래픽이 끊겼다 돌아오는 자리에서
-                // 그 계수가 무기한 살아남는다.
-                ejectedAt = null;
-                consecutive = 0;
-                return Event.RAMP_DONE;
-            }
-            return Event.NONE;
         }
 
-        synchronized Event failed(int threshold, long now, long ejectMillis, long rampMillis) {
+        synchronized Event failed(int threshold, long now, long ejectMillis) {
             // **배제 중의 실패는 그 자리에서 다시 뺀다.** 거기 오는 것은 배제 전에
             // 나갔다 늦게 돌아온 결과라, 아직 안 나은 대가 스스로 배제를 끝내면 안 된다.
             if (ejected(now, ejectMillis)) {
@@ -283,15 +284,9 @@ public final class InstanceOutliers {
                 consecutive = 0;
                 return Event.NONE;
             }
-            // **가라앉았으면 앓은 적 없는 대와 같이 다룬다.** 램프에서 쌓은 연속을
-            // 넘기면 평상시 첫 실패 한 건이 그 대를 다시 뺀다 — 트래픽이 끊겼다
-            // 돌아오는 자리에서 그 계수가 무기한 살아남는다.
-            boolean ramping = settling(now, ejectMillis, rampMillis);
-            boolean rampJustEnded = !ramping && ejectedAt != null;
-            if (rampJustEnded) {
-                ejectedAt = null;
-                consecutive = 0;
-            }
+            // 가라앉은 것은 부르는 쪽이 먼저 떼어 냈으므로, 여기 남는 것은
+            // 평상시이거나 램프 중이다.
+            boolean ramping = unsettled();
             // **램프 중에도 뺄 근거는 처음과 같다.** 한 건으로 되감으면 배경 오류만으로
             // 램프가 안 끝난다 — 램프 60초 · 대당 50rps 면 그동안 1,500 건을 받고,
             // 오류율 1% 에서 완주 확률이 사실상 0 이다. 그 대는 영구히 제 몫에서 빠진다.
@@ -307,16 +302,32 @@ public final class InstanceOutliers {
                 ejectedAt = now;
                 return ramping ? Event.RE_EJECTED : Event.EJECTED;
             }
-            return rampJustEnded ? Event.RAMP_DONE : Event.NONE;
+            return Event.NONE;
+        }
+
+        /**
+         * 가라앉았으면 계수를 버리고 완주를 알린다. <b>한 번만 낸다</b> — 시각을
+         * 지우는 것이 곧 표시라, 다음 호출은 아무것도 안 낸다.
+         */
+        synchronized Event settled(long now, long ejectMillis, long rampMillis) {
+            if (ejectedAt == null || age(now) < ejectMillis + rampMillis) {
+                return Event.NONE;
+            }
+            ejectedAt = null;
+            consecutive = 0;
+            return Event.RAMP_DONE;
         }
 
         synchronized boolean ejected(long now, long ejectMillis) {
             return ejectedAt != null && age(now) < ejectMillis;
         }
 
-        /** 배제든 램프든 아직 안 가라앉았는가. 걷을지 판단하는 자리다. */
-        synchronized boolean settling(long now, long ejectMillis, long rampMillis) {
-            return ejectedAt != null && age(now) < ejectMillis + rampMillis;
+        /**
+         * 배제든 램프든 아직 안 가라앉았는가. <b>시각을 다시 안 본다</b> — 부르는
+         * 쪽이 같은 시각으로 가라앉음을 먼저 떼어 내므로, 남아 있으면 도는 중이다.
+         */
+        synchronized boolean unsettled() {
+            return ejectedAt != null;
         }
 
         synchronized double recoveryRemaining(long now, long ejectMillis, long rampMillis) {

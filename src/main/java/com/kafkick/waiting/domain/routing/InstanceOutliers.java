@@ -79,7 +79,7 @@ public final class InstanceOutliers {
         Objects.requireNonNull(instanceId, "instanceId");
         Streak streak = records.computeIfAbsent(instanceId, id -> new Streak());
         count(streak.settled(nowMillis, ejectMillis, rampMillis));
-        streak.succeeded(nowMillis, ejectMillis);
+        streak.succeeded(threshold, nowMillis, ejectMillis);
     }
 
     /**
@@ -246,6 +246,12 @@ public final class InstanceOutliers {
         private int consecutive;
 
         /**
+         * 배제 창 안의 연속 성공. <b>창을 닫는 근거를 여는 근거와 맞춘다</b> — 하나로
+         * 닫으면 늦게 돌아온 결과 한 건이 응답 상한을 덮으라고 잡은 창을 지운다.
+         */
+        private int recoveries;
+
+        /**
          * 뺀 시각. 여기서부터 배제 시간이 흐르고 그 뒤로 램프가 이어진다. <b>램프까지
          * 끝나야 지운다</b> — 그 전에 지우면 갓 돌아온 대와 한 번도 앓은 적 없는 대가
          * 구분이 안 되어, 아직 고장 난 대에 임계만큼을 다시 준다.
@@ -261,12 +267,17 @@ public final class InstanceOutliers {
             return Math.max(0, now - ejectedAt);
         }
 
-        synchronized void succeeded(long now, long ejectMillis) {
+        synchronized void succeeded(int threshold, long now, long ejectMillis) {
             consecutive = 0;
-            // **배제 중의 성공은 배제를 끝내되 램프로 넘긴다.** 배제 전에 나갔던
-            // 요청이 늦게 성공으로 돌아오는 자리라, 그것만으로 전량을 되돌리면
-            // 반쯤 고장 난 대가 스스로 배제를 취소한다.
-            if (ejected(now, ejectMillis)) {
+            if (!ejected(now, ejectMillis)) {
+                recoveries = 0;
+                return;
+            }
+            // **배제 중의 성공은 배제를 끝내되 램프로 넘긴다.** 다만 임계만큼
+            // 이어져야 한다 — 배제 전에 나갔던 요청이 늦게 성공으로 돌아오는
+            // 자리라, 한 건으로 닫으면 반쯤 고장 난 대가 스스로 배제를 취소한다.
+            if (++recoveries >= threshold) {
+                recoveries = 0;
                 ejectedAt = now - ejectMillis;
             }
         }
@@ -277,6 +288,8 @@ public final class InstanceOutliers {
             if (ejected(now, ejectMillis)) {
                 ejectedAt = now;
                 consecutive = 0;
+                // 흩어진 성공이 쌓여 창을 닫으면 안 된다. 실패가 그것도 되돌린다.
+                recoveries = 0;
                 return Event.NONE;
             }
             // 가라앉은 것은 부르는 쪽이 먼저 떼어 냈으므로, 여기 남는 것은

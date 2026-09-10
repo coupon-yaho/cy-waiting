@@ -70,6 +70,12 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
     private final FailureWindow suppressed = FailureWindow.create();
 
     /**
+     * 되돌리는 중인 대가 있던 구간. <b>배제 해제 줄은 여기까지 안 말한다</b> — 그
+     * 뒤로 램프가 이어지는데, 어느 대가 언제 제 몫으로 돌아왔는지가 안 남는다.
+     */
+    private final FailureWindow returning = FailureWindow.create();
+
+    /**
      * 배제하고 나니 보낼 곳이 없던 구간. <b>부하 최고점에서만 켜지는 자리라</b>
      * 억제 없이 남기면 초당 수만 줄이 쌓인다.
      */
@@ -130,7 +136,7 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
     }
 
     /**
-     * 배제 구간의 진입과 해제를 남긴다.
+     * 배제와 되돌리기 구간의 진입과 해제를 남긴다.
      *
      * <p>식별자는 카디널리티 때문에 지표 라벨에 못 붙어 로그가 유일한 기록이다.
      * 구간의 첫 건만 남겨 매 초 같은 줄이 쌓이지 않게 한다.
@@ -159,6 +165,19 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
         } else {
             ejecting.exited().ifPresent(r -> log.info(
                     "뺀 대가 없어졌다 — {}초 동안 {}건", r.elapsedSeconds(),
+                    r.swallowed()));
+        }
+        // **배제가 걷혀도 끝이 아니다.** 그 뒤로 램프가 이어지는데 위 해제 줄이
+        // 거기까지 말하지 않아, 몫이 아직 깎인 구간이 로그에 안 남았다.
+        int ramping = outliers.rampingCount(now);
+        if (ramping > 0) {
+            if (returning.entered()) {
+                log.info("{} 대가 되돌아오는 중이다 (전체 {} 대) — 램프 동안 제 몫을 "
+                        + "덜 받는다", ramping, present.size());
+            }
+        } else {
+            returning.exited().ifPresent(r -> log.info(
+                    "되돌리기가 끝났다 — {}초 동안 {}회차", r.elapsedSeconds(),
                     r.swallowed()));
         }
     }

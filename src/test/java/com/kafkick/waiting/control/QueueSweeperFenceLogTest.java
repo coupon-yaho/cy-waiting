@@ -14,6 +14,8 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.LongSupplier;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -53,9 +55,13 @@ class QueueSweeperFenceLogTest {
     }
 
     private QueueSweeper 막히는_청소() {
+        return 막히는_청소(System::nanoTime);
+    }
+
+    private QueueSweeper 막히는_청소(LongSupplier 시계) {
         return QueueSweeper.of(
                 SweepGates.warmed(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
-                (ids, limit, removeFront) -> Mono.just(막힘), new SimpleMeterRegistry());
+                (ids, limit, removeFront) -> Mono.just(막힘), new SimpleMeterRegistry(), 시계);
     }
 
     private Map<String, CouponState> 줄이_있는_쿠폰() {
@@ -72,13 +78,17 @@ class QueueSweeperFenceLogTest {
     @Test
     @DisplayName("리더십을_잃으면_막힌_구간을_닫는다")
     void 리더십을_잃으면_막힌_구간을_닫는다() {
-        QueueSweeper 청소 = 막히는_청소();
+        AtomicLong 시각 = new AtomicLong(1_000);
+        QueueSweeper 청소 = 막히는_청소(시각::get);
         청소.run(줄이_있는_쿠폰(), false).block();
+        시각.addAndGet(Duration.ofSeconds(7).toNanos());
 
         청소.leadershipLost();
 
+        // 길이와 회차 수를 다른 값으로 둔다. 같으면 둘을 바꿔 넣어도 통과한다.
         assertThat(줄들(Level.INFO)).filteredOn(m -> m.contains("리더십을 잃어"))
-                .singleElement().asString().as("그 구간의 회차 수를 싣는다").contains("1회차");
+                .singleElement().asString().as("그 구간의 길이와 회차 수를 싣는다")
+                .contains("7초 동안 1회차");
     }
 
     /**

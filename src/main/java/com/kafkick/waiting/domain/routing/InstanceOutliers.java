@@ -66,7 +66,7 @@ public final class InstanceOutliers {
     }
 
     /**
-     * @param threshold 연속 실패가 이만큼이면 뺀다
+     * @param threshold 연속 실패가 이만큼이면 뺀다. 배제 창을 성공으로 닫는 근거도 같다
      * @param ejectFor  뺀 뒤 이만큼 지나면 되돌리기 시작한다
      * @param ramp      되돌린 뒤 제 몫을 다 받기까지 걸리는 시간
      */
@@ -248,8 +248,9 @@ public final class InstanceOutliers {
         /**
          * 배제 창 안의 연속 성공. <b>창을 닫는 근거를 여는 근거와 맞춘다</b> — 하나로
          * 닫으면 늦게 돌아온 결과 한 건이 응답 상한을 덮으라고 잡은 창을 지운다.
+         * 연속 실패와 짝이라 <b>버리는 자리도 같다</b> — 남기면 다음 창이 얕아진다.
          */
-        private int recoveries;
+        private int windowSuccesses;
 
         /**
          * 뺀 시각. 여기서부터 배제 시간이 흐르고 그 뒤로 램프가 이어진다. <b>램프까지
@@ -270,14 +271,14 @@ public final class InstanceOutliers {
         synchronized void succeeded(int threshold, long now, long ejectMillis) {
             consecutive = 0;
             if (!ejected(now, ejectMillis)) {
-                recoveries = 0;
+                windowSuccesses = 0;
                 return;
             }
             // **배제 중의 성공은 배제를 끝내되 램프로 넘긴다.** 다만 임계만큼
             // 이어져야 한다 — 배제 전에 나갔던 요청이 늦게 성공으로 돌아오는
             // 자리라, 한 건으로 닫으면 반쯤 고장 난 대가 스스로 배제를 취소한다.
-            if (++recoveries >= threshold) {
-                recoveries = 0;
+            if (++windowSuccesses >= threshold) {
+                windowSuccesses = 0;
                 ejectedAt = now - ejectMillis;
             }
         }
@@ -289,7 +290,7 @@ public final class InstanceOutliers {
                 ejectedAt = now;
                 consecutive = 0;
                 // 흩어진 성공이 쌓여 창을 닫으면 안 된다. 실패가 그것도 되돌린다.
-                recoveries = 0;
+                windowSuccesses = 0;
                 return Event.NONE;
             }
             // 가라앉은 것은 부르는 쪽이 먼저 떼어 냈으므로, 여기 남는 것은
@@ -307,6 +308,7 @@ public final class InstanceOutliers {
             // 채 전량을 받아 배제가 노린 것과 반대가 된다.
             if (++consecutive >= threshold) {
                 consecutive = 0;
+                windowSuccesses = 0;
                 ejectedAt = now;
                 return ramping ? Event.RE_EJECTED : Event.EJECTED;
             }
@@ -323,6 +325,7 @@ public final class InstanceOutliers {
             }
             ejectedAt = null;
             consecutive = 0;
+            windowSuccesses = 0;
             return Event.RAMP_DONE;
         }
 

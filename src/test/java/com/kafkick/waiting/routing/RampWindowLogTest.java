@@ -96,6 +96,13 @@ class RampWindowLogTest {
         return 로그.list.stream().map(ILoggingEvent::getFormattedMessage).toList();
     }
 
+    private List<String> 줄들(Level 수준) {
+        return 로그.list.stream()
+                .filter(e -> e.getLevel() == 수준)
+                .map(ILoggingEvent::getFormattedMessage)
+                .toList();
+    }
+
     @Test
     @DisplayName("되돌리는_구간의_진입과_해제를_남긴다")
     void 되돌리는_구간의_진입과_해제를_남긴다() {
@@ -110,15 +117,40 @@ class RampWindowLogTest {
         // **구간의 첫 회차만 찍는다.** 요청마다 찍으면 초당 수천 줄이 쌓인다 (LG-2).
         균형기.choose((Request<?>) null).block();
 
-        assertThat(줄들()).filteredOn(m -> m.contains("되돌아오는 중"))
+        assertThat(줄들(Level.INFO)).filteredOn(m -> m.contains("되돌아오는 중"))
                 .singleElement().asString()
                 .as("몇 대가 되돌아오는지가 든다").contains("1 대");
 
         시계.set(시작 + 배제_시간.toMillis() + 램프.toMillis());
         균형기.choose((Request<?>) null).block();
 
-        assertThat(줄들()).filteredOn(m -> m.contains("되돌리기가 끝났다"))
+        assertThat(줄들(Level.INFO)).filteredOn(m -> m.contains("되돌리기가 끝났다"))
                 .as("해제가 없으면 그 구간이 아직 도는지 알 수 없다").hasSize(1);
+    }
+
+    /**
+     * <b>구간이 닫혔다고 회복한 것이 아니다.</b> 되돌리다 다시 빠지면 되돌리는 대가
+     * 0 이 되어 같은 신호가 나는데, 그것을 완주라 부르면 맴도는 상태가 로그에서
+     * 정상으로 읽힌다 — 이 구간을 남기는 이유가 정확히 그것을 가르는 것이다.
+     */
+    @Test
+    @DisplayName("되돌리다_다시_빠지면_완주라_안_한다")
+    void 되돌리다_다시_빠지면_완주라_안_한다() {
+        CapacityAwareLoadBalancer 균형기 = 균형기();
+        for (int i = 0; i < 3; i++) {
+            배제기.failed("be-0", 시작);
+        }
+        시계.set(시작 + 배제_시간.toMillis() + 램프.toMillis() / 2);
+        균형기.choose((Request<?>) null).block();
+
+        for (int i = 0; i < 3; i++) {
+            배제기.failed("be-0", 시계.get());
+        }
+        균형기.choose((Request<?>) null).block();
+
+        assertThat(줄들()).noneMatch(m -> m.contains("되돌리기가 끝났다"));
+        assertThat(줄들(Level.WARN))
+                .anyMatch(m -> m.contains("되돌리기가 안 끝났다"));
     }
 
     /** 앓은 대가 없으면 아무 말도 안 한다. 늘 시끄러우면 사람이 안 본다. */

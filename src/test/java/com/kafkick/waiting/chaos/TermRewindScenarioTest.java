@@ -73,6 +73,9 @@ class TermRewindScenarioTest {
     private long 진입_입장표;
     private long 진입_삭제표;
     private long 진입_발행표;
+    private long 유실_입장표;
+    private long 유실_세는값;
+    private long 회복_입장표;
     private boolean 유령_적용_막힘;
     private boolean 유령_발행_막힘;
     private List<String> 유령_삭제;
@@ -255,6 +258,61 @@ class TermRewindScenarioTest {
     }
 
     @SuppressWarnings("unchecked")
+    /**
+     * <b>쿠폰 슬롯만 승격하면 그 슬롯의 표가 사라진다.</b> 리더 슬롯은 그대로라
+     * 승계가 안 일어나고, 그래서 아무도 문을 다시 안 잠근다.
+     */
+    @Test
+    @DisplayName("C13b_쿠폰_슬롯만_승격하면_아무도_문을_다시_안_잠근다")
+    void C13b_쿠폰_슬롯만_승격하면_아무도_문을_다시_안_잠근다() {
+        ChaosScenario.named("C13b 울타리 표 유실")
+                .baseline(() -> {
+                    매진된_줄을_세운다();
+                    새_임기 = 임기("node-new");
+                    port.sealFences(List.of(COUPON), 새_임기).block(기다림);
+                    port.publish(Map.of("v", "1"), 새_임기).block(기다림);
+                    옛_임기 = 새_임기 - 1;
+                    진입_입장표 = 표(RedisKeys.applyFence(COUPON, SHARDS, SHARD));
+                    진입_삭제표 = 표(RedisKeys.dropFence(COUPON, SHARDS, SHARD));
+                })
+                .inject(() -> {
+                    // 쿠폰 슬롯만 옛 복제본으로 넘어간 모양. 리더 슬롯은 그대로다.
+                    redis.delete(RedisKeys.applyFence(COUPON, SHARDS, SHARD),
+                            RedisKeys.dropFence(COUPON, SHARDS, SHARD)).block(기다림);
+                    유실_입장표 = 표(RedisKeys.applyFence(COUPON, SHARDS, SHARD));
+                    유실_세는값 = 표(GEN);
+                })
+                .duringFault(() -> {
+                    유령이_두드린다();
+                    유지_입장표 = 표(RedisKeys.applyFence(COUPON, SHARDS, SHARD));
+                    유지_삭제표 = 표(RedisKeys.dropFence(COUPON, SHARDS, SHARD));
+                })
+                // **다시 잠그는 것은 승계뿐이다.** 쿠폰 슬롯만 넘어가면 승계가 안 도므로,
+                // 회복을 손으로 부르는 것이 곧 "무엇이 잠그는가" 의 답이다.
+                .recover(() -> port.sealFences(List.of(COUPON), 새_임기).block(기다림))
+                .afterRecovery(() -> {
+                    유령이_두드린다();
+                    회복_입장표 = 표(RedisKeys.applyFence(COUPON, SHARDS, SHARD));
+                })
+                .assertEntry(() -> RecoveryCriteria.violations(
+                        같다("표가 안 섰다", 새_임기, 진입_입장표),
+                        같다("삭제 표가 안 섰다", 새_임기, 진입_삭제표),
+                        같다("표가 안 사라졌다", 0, 유실_입장표),
+                        // 리더 슬롯은 멀쩡하다 — 승계가 안 도는 것이 이 시나리오의 전제다.
+                        같다("세는 값까지 사라졌다", 새_임기, 유실_세는값)))
+                .assertDuring(() -> RecoveryCriteria.violations(
+                        // **표가 없으면 어떤 임기든 통과한다.** 이것이 이 시나리오가
+                        // 드러내려는 구멍이고, 지금은 그것을 사실로 못 박는다.
+                        통과했다("표가 없는 동안 유령의 적용", !유령_적용_막힘),
+                        // 유령이 먼저 두드리면 표가 자기 옛 번호로 선다.
+                        같다("표가 유령 번호로 안 섰다", 옛_임기, 유지_입장표),
+                        같다("삭제 표가 유령 번호로 안 섰다", 옛_임기, 유지_삭제표)))
+                .assertRecovery(() -> RecoveryCriteria.violations(
+                        같다("승계 잠금이 표를 안 올렸다", 새_임기, 회복_입장표),
+                        막혔다("잠근 뒤 유령의 적용", 유령_적용_막힘)))
+                .run();
+    }
+
     private List<Object> 잡는다(String owner) {
         return (List<Object>) redis.execute(획득, List.of(LEADER, GEN),
                 List.of(owner, LEASE)).blockFirst(기다림);

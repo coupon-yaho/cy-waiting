@@ -69,6 +69,10 @@ public final class InFlightMetrics {
         metrics.counter(meters, "waiting.routing.ejections.repeated",
                 InFlightMetrics::reEjections,
                 "되돌리는 중에 다시 뺀 횟수. 이것만 늘고 완주가 안 늘면 회복이 맴돈다");
+        metrics.counter(meters, "waiting.routing.ejections.overridden",
+                InFlightMetrics::ejectionsOverridden,
+                "배제가 무시된 국면 수. **대 수가 아니다** — 이 값이 오르는 동안 "
+                        + "waiting.routing.ejected 가 든 대는 안 걸린 것이다");
         metrics.counter(meters, "waiting.routing.ramp.completed",
                 InFlightMetrics::rampsCompleted,
                 "되돌리기를 끝까지 마친 횟수. 라우팅이 한 건도 안 돌면 같이 멎는다");
@@ -100,6 +104,10 @@ public final class InFlightMetrics {
 
     private double reEjections() {
         return outliers.reEjections();
+    }
+
+    private double ejectionsOverridden() {
+        return outliers.ejectionsOverridden();
     }
 
     private double rampsCompleted() {

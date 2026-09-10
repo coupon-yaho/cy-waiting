@@ -40,6 +40,12 @@ public final class InstanceOutliers {
 
     private final AtomicLong rampsCompleted = new AtomicLong();
 
+    /**
+     * 배제가 무시된 국면 수. <b>표시는 됐는데 배제가 안 걸린 자리다</b> — 그 구간의
+     * 그 대는 몫이 안 깎인 채 받으므로, 배제 게이지만 보면 반대로 읽힌다.
+     */
+    private final AtomicLong ejectionsOverridden = new AtomicLong();
+
     private InstanceOutliers(int threshold, Duration ejectFor, Duration ramp) {
         Objects.requireNonNull(ejectFor, "ejectFor");
         Objects.requireNonNull(ramp, "ramp");
@@ -161,6 +167,19 @@ public final class InstanceOutliers {
     /** 되돌리는 중에 다시 뺀 횟수. */
     public long reEjections() {
         return reEjections.get();
+    }
+
+    /**
+     * 배제가 무시된 국면 하나가 열렸다. 도로 넣은 쪽과 전부가 대상이라 하나도 못 뺀
+     * 쪽 <b>둘 다</b> 여기로 온다 — 한쪽만 세면 나머지 구간이 지표에서 사라진다.
+     */
+    public void ejectionOverridden() {
+        ejectionsOverridden.incrementAndGet();
+    }
+
+    /** 배제가 무시된 국면 수. 배제 게이지가 든 수가 실제로 걸렸는지를 여기에 견준다. */
+    public long ejectionsOverridden() {
+        return ejectionsOverridden.get();
     }
 
     /** 되돌리기를 끝까지 마친 횟수. */

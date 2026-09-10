@@ -39,7 +39,8 @@ class InFlightMetricsTest {
             "waiting.routing.ramp.suppressed",
             "waiting.routing.ramp.completed",
             "waiting.routing.ejections.started",
-            "waiting.routing.ejections.repeated");
+            "waiting.routing.ejections.repeated",
+            "waiting.routing.ejections.overridden");
 
     private final MeterRegistry meters = new SimpleMeterRegistry();
 
@@ -149,6 +150,12 @@ class InFlightMetricsTest {
                 .isEqualTo(1);
         assertThat(meters.get("waiting.routing.ramp.completed").functionCounter().count())
                 .isEqualTo(2);
+        배제기.ejectionOverridden();
+        배제기.ejectionOverridden();
+        배제기.ejectionOverridden();
+        배제기.ejectionOverridden();
+        assertThat(meters.get("waiting.routing.ejections.overridden").functionCounter().count())
+                .as("다른 계수와 값이 겹치면 배선을 바꿔 걸어도 안 빨개진다").isEqualTo(4);
     }
 
     /**

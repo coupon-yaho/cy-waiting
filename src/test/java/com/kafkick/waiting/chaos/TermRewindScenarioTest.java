@@ -2,6 +2,7 @@ package com.kafkick.waiting.chaos;
 
 import com.kafkick.waiting.adapter.redis.AllocationRedisPort;
 import com.kafkick.waiting.adapter.redis.RedisKeys;
+import com.kafkick.waiting.control.QueueSweeper;
 import com.kafkick.waiting.domain.allocation.Grant;
 import io.lettuce.core.RedisURI;
 import java.time.Duration;
@@ -73,6 +74,8 @@ class TermRewindScenarioTest {
     private long 진입_입장표;
     private long 진입_삭제표;
     private long 진입_발행표;
+    private QueueSweeper.SweepResult 유령_청소;
+    private boolean 표없이_두드린_뒤_줄있음;
     private long 유실_입장표;
     private long 유실_세는값;
     private long 회복_입장표;
@@ -286,6 +289,12 @@ class TermRewindScenarioTest {
                     유령이_두드린다();
                     유지_입장표 = 표(RedisKeys.applyFence(COUPON, SHARDS, SHARD));
                     유지_삭제표 = 표(RedisKeys.dropFence(COUPON, SHARDS, SHARD));
+                    유령_청소 = port.sweep(List.of(COUPON), 1_800_000_000L, 100, 300, 100,
+                            옛_임기).block(기다림);
+                    // **두 번 두드린다.** 첫 회차의 거절이 표를 유령 번호로 세우므로,
+                    // 둘째 회차에는 그 표가 자기 번호와 같아 삭제가 통과한다.
+                    유령이_두드린다();
+                    표없이_두드린_뒤_줄있음 = 줄이_있는가();
                 })
                 // **다시 잠그는 것은 승계뿐이다.** 쿠폰 슬롯만 넘어가면 승계가 안 도므로,
                 // 회복을 손으로 부르는 것이 곧 "무엇이 잠그는가" 의 답이다.
@@ -306,7 +315,12 @@ class TermRewindScenarioTest {
                         통과했다("표가 없는 동안 유령의 적용", !유령_적용_막힘),
                         // 유령이 먼저 두드리면 표가 자기 옛 번호로 선다.
                         같다("표가 유령 번호로 안 섰다", 옛_임기, 유지_입장표),
-                        같다("삭제 표가 유령 번호로 안 섰다", 옛_임기, 유지_삭제표)))
+                        같다("삭제 표가 유령 번호로 안 섰다", 옛_임기, 유지_삭제표),
+                        // 청소의 울타리도 비교 대상이 없어 그대로 통과한다.
+                        같다("유령의 청소가 막혔다", 0, 유령_청소.fenced()),
+                        // **되돌릴 수 없는 쪽까지 열린다.** 첫 회차가 세운 표를 딛고
+                        // 둘째 회차의 삭제가 줄을 지운다 — 되살리는 코드가 없다.
+                        살아있다("둘째 회차 뒤의 줄", !표없이_두드린_뒤_줄있음)))
                 .assertRecovery(() -> RecoveryCriteria.violations(
                         같다("승계 잠금이 표를 안 올렸다", 새_임기, 회복_입장표),
                         막혔다("잠근 뒤 유령의 적용", 유령_적용_막힘)))

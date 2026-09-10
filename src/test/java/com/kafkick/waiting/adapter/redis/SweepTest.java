@@ -146,6 +146,10 @@ class SweepTest extends RedisContainerSupport {
         return String.valueOf(r.get(3));
     }
 
+    private boolean 막혔는가(List<Object> r) {
+        return Long.parseLong(String.valueOf(r.get(4))) != 0;
+    }
+
     private long swept(List<Object> r) {
         return Long.parseLong(String.valueOf(r.get(0)));
     }
@@ -727,13 +731,21 @@ class SweepTest extends RedisContainerSupport {
         이탈자를_세운다();
 
         Double 이탈자_순번 = redis.opsForZSet().score(QUEUE, "이탈자").block(WAIT);
+        // 되돌릴 것 없는 정리는 막힌 회차에도 돌아야 한다. 그 둘을 심어 둔다.
+        redis.opsForZSet().add(ALIVE, "만료", NOW - 10).block(WAIT);
+        redis.opsForHash().put(GRACE, "낡음", String.valueOf(만료된_시각)).block(WAIT);
 
         List<Object> 결과 = sweep("3000", BUDGET, "0", 임기 - 1);
 
-        assertThat(swept(결과)).as("거절은 센티널로 온다").isEqualTo(-1);
+        assertThat(막혔는가(결과)).as("막힌 것을 따로 낸다").isTrue();
+        assertThat(swept(결과)).as("앞줄은 안 걷는다").isZero();
         assertThat(redis.opsForZSet().score(QUEUE, "이탈자").block(WAIT))
                 .as("순번까지 그대로다").isEqualTo(이탈자_순번);
-        assertThat(nextCursor(결과)).as("커서를 그대로 돌려준다").isEqualTo("0");
+        // **정리는 막으면 안 된다.** 이 둘의 리퍼가 이 스크립트뿐이라, 막으면 표
+        // 수명 내내 한 방향으로만 자란다.
+        assertThat(redis.opsForZSet().score(ALIVE, "만료").block(WAIT))
+                .as("만료된 신호는 걷는다").isNull();
+        assertThat(expired(결과)).as("낡은 기록도 걷는다").isOne();
     }
 
     /** 같은 임기의 재시도는 안 막는다. 막으면 실패한 청소가 영영 안 된다. */
@@ -742,7 +754,23 @@ class SweepTest extends RedisContainerSupport {
     void 같은_임기는_그대로_걷는다() {
         이탈자를_세운다();
 
-        assertThat(swept(sweep("3000", BUDGET, "0", 임기))).isOne();
+        List<Object> 결과 = sweep("3000", BUDGET, "0", 임기);
+
+        assertThat(막혔는가(결과)).as("같은 번호는 안 막는다").isFalse();
+        assertThat(swept(결과)).isOne();
+    }
+
+    /** 0 은 리더가 아니라는 뜻이다. 표가 없어도 막는다 — 다른 울타리 여섯과 같다. */
+    @Test
+    @DisplayName("임기가_0_이면_표가_없어도_막는다")
+    void 임기가_0_이면_표가_없어도_막는다() {
+        redis.delete(APPLY_FENCE).block(WAIT);
+        이탈자를_세운다();
+
+        List<Object> 결과 = sweep("3000", BUDGET, "0", 0);
+
+        assertThat(막혔는가(결과)).isTrue();
+        assertThat(swept(결과)).isZero();
     }
 
     /** 울타리 표가 없으면 세운 적이 없다는 뜻이다. 그때는 막지 않는다. */

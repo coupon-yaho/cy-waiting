@@ -14,9 +14,9 @@
 --          대상까지 비우면 기록이 한 방향으로만 자라고 커서가 전진을 못 한다
 -- ARGV[7]  이 회차의 임기. 울타리보다 낮으면 아무것도 안 한다
 --
--- 반환  {swept, expiredSignals, expiredGrace, nextCursor}. 임기가 낡으면
---        {-1, -1, -1, 넘어온 커서} — **센티널을 쓴다.** 0 으로 두면 아무것도 안 걷은
---        회차와 거절이 같아 보이고, 커서를 그대로 돌려줘야 다음 회차가 안 건너뛴다
+-- 반환  {swept, expiredSignals, expiredGrace, nextCursor, 막혔는가(1/0)}
+--        **막힌 것을 따로 낸다.** 0 으로 접으면 아무것도 안 걷은 회차와 구분이 안 되고,
+--        정리는 그때도 돌므로 걷은 수만으로는 못 가린다
 --
 -- 이탈 기록 해시의 값  'd:<초>' 이탈 기록 · 'a:<초>' 입장 표시 · 접두사 없는 값은
 -- 종류가 생기기 전의 이탈 기록. queue_status 가 같은 자리에 입장 표시를 쓰므로,
@@ -96,14 +96,19 @@ if term == nil or term ~= term or term ~= math.floor(term) then
     return redis.error_reply('임기는 정수여야 한다: ' .. tostring(ARGV[7]))
 end
 
--- **낡은 임기는 안 걷는다.** 리더 판정은 회차 시작에 로컬 플래그를 한 번 읽는 것뿐이라,
--- 회차 도중 리스가 끝난 유령이 그대로 걷으러 온다. 발행은 이미 울타리를 받는데 청소만
--- 안 받고 있었다. 표가 없으면 세운 적이 없다는 뜻이라 막지 않는다 — 막으면 첫 회차가
+-- **낡은 임기는 앞줄을 못 뺀다.** 리더 판정은 회차 시작에 로컬 플래그를 한 번 읽는
+-- 것뿐이라, 회차 도중 리스가 끝난 유령이 그대로 걷으러 온다.
+--
+-- **막는 것은 되돌릴 수 없는 쓰기뿐이다.** 정리까지 막으면 유예 기록과 만료 신호의
+-- 유일한 리퍼가 표 수명 내내 멎어 한 방향으로만 자란다 — `ARGV[6]` 이 같은 이유로
+-- 이미 그렇게 갈라져 있다.
+--
+-- 0 이하는 리더가 아니라는 뜻이라 표가 없어도 막는다. 표가 있는데 번호가 낮은 것도
+-- 막는다. 표가 없고 번호가 성하면 세운 적이 없다는 뜻이라 들인다 — 막으면 첫 회차가
 -- 영영 안 돈다. 같은 번호의 재시도도 안 막는다.
 local fenced = tonumber(redis.call('GET', KEYS[5]))
-if fenced ~= nil and fenced == fenced and term < fenced then
-    return {-1, -1, -1, ARGV[5]}
-end
+local fencedOut = term <= 0
+        or (fenced ~= nil and fenced == fenced and term < fenced)
 
 -- **커서도 쓰기 전에 본다.** 형식이 틀리면 HSCAN 이 오류를 내는데, 그때는 이미
 -- 앞의 쓰기가 끝나 있다. Lua 는 롤백하지 않는다.
@@ -141,7 +146,7 @@ end
 -- **`ZCARD` 가 아니라 `ZCOUNT` 다.** 만료된 신호는 아래 정리가 걷기 전까지 남아 있어
 -- 개수만 보면 "전부 만료" 를 "살아 있다" 로 읽는다. `removeFront` 가 0 이면 `and` 가
 -- 왼쪽에서 끊어 `ZCOUNT` 조차 안 돈다 — 읽기끼리의 교환이라 첫 쓰기 앞은 그대로다.
-local removing = removeFront == 1
+local removing = removeFront == 1 and not fencedOut
         and redis.call('ZCOUNT', KEYS[3], now, '+inf') > 0
 
 -- **임계 위에서 K 명을 센다.** 순번 0 부터 세면 안 걷어 간 사람이 쌓인 만큼 창이
@@ -320,4 +325,4 @@ if nDoomed > 0 then
 end
 
 -- 다음 커서를 돌려준다. 호출부가 이어서 넘긴다.
-return {swept, expiredSignals, expiredGrace, scanned[1]}
+return {swept, expiredSignals, expiredGrace, scanned[1], fencedOut and 1 or 0}

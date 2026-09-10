@@ -651,6 +651,13 @@ public final class AllocationRedisPort implements SnapshotSource {
         if (couponIds.isEmpty()) {
             return Mono.just(QueueSweeper.SweepResult.NOTHING);
         }
+        // **샤드가 여럿이면 거절한다.** 울타리를 세우는 자리가 샤드 0 만 잠그므로,
+        // 그 빗장을 푸는 날 나머지 샤드는 표가 없어 어떤 임기든 통과한다 — 울타리가
+        // 있는 채로 아무것도 안 막고 막힌 건수도 영영 0 이라 지표로도 안 드러난다.
+        if (shards != 1) {
+            return Mono.error(new IllegalStateException(
+                    "샤드가 여럿이면 청소의 울타리가 안 선다: %d".formatted(shards)));
+        }
         sweepCursors.keySet().retainAll(couponIds);
         return Flux.fromIterable(couponIds)
                 // **한 쿠폰이 실패해도 나머지는 쓴다.** 청소가 배분을 막으면
@@ -687,11 +694,10 @@ public final class AllocationRedisPort implements SnapshotSource {
                 .switchIfEmpty(Mono.error(new IllegalStateException("청소 결과가 비었다")))
                 .map(raw -> {
                     List<?> values = (List<?>) raw;
-                    // **거절이면 커서를 안 옮긴다.** 옮기면 유령이 부른 회차만큼
-                    // 정당한 리더가 훑을 자리를 건너뛴다.
-                    if (toLongOrZero(values.get(0)) < 0) {
+                    // **막혀도 커서는 옮긴다.** 막히는 것은 앞줄 제거뿐이고 정리는
+                    // 그대로 돌므로, 안 옮기면 그 회차가 훑은 자리를 다시 훑는다.
+                    if (fenced(values)) {
                         sweepFenced.incrementAndGet();
-                        return QueueSweeper.SweepResult.NOTHING;
                     }
                     sweepCursors.put(couponId, String.valueOf(values.get(3)));
                     return new QueueSweeper.SweepResult(toLongOrZero(values.get(0)),
@@ -702,6 +708,17 @@ public final class AllocationRedisPort implements SnapshotSource {
     /** 울타리가 막은 청소 건수. 유령이 걷으러 온 흔적이라 0 이 아니면 본다. */
     public double sweepFenced() {
         return sweepFenced.get();
+    }
+
+    /**
+     * 이 회차가 울타리에 막혔는가. <b>숫자가 아니면 터뜨린다</b> — 0 으로 접으면
+     * 반환 모양이 바뀐 날 막힌 회차가 조용히 안 막힌 것으로 읽힌다.
+     */
+    private boolean fenced(List<?> values) {
+        if (values.size() < 5 || !(values.get(4) instanceof Number flag)) {
+            throw new IllegalStateException("청소 결과에 막힘 표시가 없다: " + values);
+        }
+        return flag.longValue() != 0;
     }
 
     private long toLongOrZero(Object value) {

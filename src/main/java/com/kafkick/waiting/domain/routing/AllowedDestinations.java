@@ -18,24 +18,6 @@ public final class AllowedDestinations {
 
     private static final int MAX_PORT = 65535;
 
-    /**
-     * v4 대역 프리픽스의 하한. 내부망이 쓰는 가장 넓은 폭이 `10.0.0.0/8` 이고
-     * 그보다 넓은 것은 내부망일 수 없다.
-     */
-    private static final int MIN_V4_PREFIX_BITS = 8;
-
-    /**
-     * v6 대역 프리픽스의 하한. <b>비트 수가 주소 수가 아니다</b> — 같은 `/8` 이
-     * v6 에서는 v4 전체의 2의 88승 배다. 그래서 훨씬 좁게 받는다.
-     */
-    private static final int MIN_V6_PREFIX_BITS = 32;
-
-    /**
-     * 사설 대역(ULA)의 하한. 정본 표기가 `fc00::/7` 이라 위 하한으로는 못 적는데,
-     * 그 대역은 정의상 내부망이라 그 자신은 받는다.
-     */
-    private static final int MIN_ULA_PREFIX_BITS = 7;
-
     /** v4 주소의 바이트 수. 매핑 표기가 v6 인 척 v4 규칙으로 서는 것을 여기서 가른다. */
     private static final int V4_BYTES = 4;
 
@@ -131,16 +113,12 @@ public final class AllowedDestinations {
                     throw new IllegalArgumentException(
                             "허용 목적지에 v4 매핑 표기를 쓸 수 없다: " + entry);
                 }
-                // **넓은 대역을 이름 없이 만들지 않는다.** 빈 목록은 막으면서 넓은
-                // 표기를 받으면 같은 결과가 대역 하나처럼 조용히 선다. v4 의 `/1` 은
-                // 눈에 띄지만 v6 에는 그런 신호가 없다 — `2000::/3` 하나로 공인
-                // 유니캐스트 전부가 열린다. 내부망이 쓰는 폭(`10.0.0.0/8`·`fd00::/8`)이
-                // 한 바이트라 그것을 하한으로 둔다.
-                int floor = minPrefixBits(range);
-                if (range.prefixBits() < floor) {
+                // **넓은 대역을 이름 없이 만들지 않는다.** 하한의 근거는 IpRange 가
+                // 든다 — 여기 옮겨 적으면 둘이 갈린다.
+                if (range.tooWide()) {
                     throw new IllegalArgumentException(
                             "허용 목적지의 대역이 너무 넓다 — 프리픽스가 %d 비트 이상이어야 한다: %s"
-                                    .formatted(floor, entry));
+                                    .formatted(range.minimumPrefixBits(), entry));
                 }
                 ranges.add(range);
             } else {
@@ -149,20 +127,6 @@ public final class AllowedDestinations {
         }
         return new AllowedDestinations(List.copyOf(suffixes), List.copyOf(ranges),
                 Set.copyOf(ports), false);
-    }
-
-    /**
-     * 이 대역이 지켜야 하는 프리픽스 하한. <b>패밀리마다 다르다</b> — 비트 수가
-     * 주소 수가 아니라, 같은 폭이 v6 에서는 비교가 안 되게 넓다.
-     *
-     * <p>RULE-EXCEPTION(JS-13): 설정을 읽는 정적 팩터리가 부르는 자리라 인스턴스가 없다.
-     */
-    private static int minPrefixBits(IpRange range) {
-        if (range.address().length == V4_BYTES) {
-            return MIN_V4_PREFIX_BITS;
-        }
-        // fc00::/7. 정의상 내부망이라 정본 표기 그 자신은 받는다.
-        return (range.address()[0] & 0xfe) == 0xfc ? MIN_ULA_PREFIX_BITS : MIN_V6_PREFIX_BITS;
     }
 
     /** 항목 하나라도 맞으면 받는다. 다 안 맞으면 그 인스턴스는 라우팅 후보가 아니다. */

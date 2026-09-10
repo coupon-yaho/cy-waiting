@@ -629,24 +629,61 @@ class InstanceOutliersTest {
     }
 
     /**
-     * <b>배제 전에 나간 요청이 나중에 성공으로 끝나면 배제가 일찍 풀린다.</b>
-     * 의도한 동작이다 — 지우는 것은 성공뿐이라는 규칙이 여기까지 온다. 반쯤
-     * 고장 난 대가 스스로 배제를 취소하는 진동이 이 자리에서 난다.
+     * <b>배제 창을 여는 데 실패 셋이 필요하면 닫는 데도 성공 셋이 필요하다.</b> 그
+     * 창은 응답 상한을 덮으라고 잡은 값인데, 그 안에 늦게 돌아온 성공 하나가 창을
+     * 지우면 반쯤 고장 난 대가 스스로 배제를 취소한다.
      */
     @Test
-    @DisplayName("배제_중_늦게_온_성공이_배제를_푼다")
-    void 배제_중_늦게_온_성공이_배제를_푼다() {
+    @DisplayName("배제_중_성공_하나로는_창이_안_지워진다")
+    void 배제_중_성공_하나로는_창이_안_지워진다() {
         InstanceOutliers outliers = 배제기();
         for (int i = 0; i < 3; i++) {
             outliers.failed("가", 1_000);
         }
-        assertThat(outliers.ejected(Set.of("가", "나"), 1_000)).containsExactly("가");
 
         outliers.succeeded("가", 1_000);
+
+        assertThat(outliers.ejected(Set.of("가", "나"), 1_000))
+                .as("늦게 돌아온 결과 하나는 근거가 얕다").containsExactly("가");
+        assertThat(outliers.recoveryRemaining("가", 1_000))
+                .as("아직 배제 중이라 되돌릴 것이 없다").isZero();
+    }
+
+    /** 임계만큼 이어지면 창을 닫되 램프로 넘긴다. 전량을 되돌리지는 않는다. */
+    @Test
+    @DisplayName("배제_중_성공이_임계만큼_이어지면_램프로_넘긴다")
+    void 배제_중_성공이_임계만큼_이어지면_램프로_넘긴다() {
+        InstanceOutliers outliers = 배제기();
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 1_000);
+        }
+
+        for (int i = 0; i < 3; i++) {
+            outliers.succeeded("가", 1_000);
+        }
 
         assertThat(outliers.ejected(Set.of("가", "나"), 1_000)).isEmpty();
         assertThat(outliers.recoveryRemaining("가", 1_000))
                 .as("배제를 끝내되 램프로 넘긴다").isEqualTo(1);
+    }
+
+    /** 실패 한 건이 그 사이의 성공을 되돌린다. 흩어진 성공이 쌓여 창을 지우면 안 된다. */
+    @Test
+    @DisplayName("배제_중_실패가_쌓인_성공을_지운다")
+    void 배제_중_실패가_쌓인_성공을_지운다() {
+        InstanceOutliers outliers = 배제기();
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 1_000);
+        }
+
+        outliers.succeeded("가", 1_000);
+        outliers.succeeded("가", 1_000);
+        outliers.failed("가", 1_000);
+        outliers.succeeded("가", 1_000);
+        outliers.succeeded("가", 1_000);
+
+        assertThat(outliers.ejected(Set.of("가", "나"), 1_000))
+                .as("셋을 새로 채워야 한다").containsExactly("가");
     }
 
     /**

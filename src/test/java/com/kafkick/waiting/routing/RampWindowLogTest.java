@@ -3,6 +3,7 @@ package com.kafkick.waiting.routing;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
@@ -47,7 +48,7 @@ class RampWindowLogTest {
 
     private Level 원래_수준;
 
-    private static ch.qos.logback.classic.Logger 로거() {
+    private Logger 로거() {
         return ((LoggerContext) LoggerFactory.getILoggerFactory())
                 .getLogger(CapacityAwareLoadBalancer.class);
     }
@@ -151,6 +152,38 @@ class RampWindowLogTest {
         assertThat(줄들()).noneMatch(m -> m.contains("되돌리기가 끝났다"));
         assertThat(줄들(Level.WARN))
                 .anyMatch(m -> m.contains("되돌리기가 안 끝났다"));
+    }
+
+    /**
+     * <b>한 대가 마쳤다고 구간이 성공은 아니다.</b> 둘 중 하나가 완주하고 하나가 다시
+     * 빠져도 되돌리는 대는 0 이 된다 — 완주만 보고 가르면 그 회차가 정상으로 남는다.
+     */
+    @Test
+    @DisplayName("완주와_재배제가_섞이면_성공이라_안_한다")
+    void 완주와_재배제가_섞이면_성공이라_안_한다() {
+        CapacityAwareLoadBalancer 균형기 = 균형기();
+        for (int i = 0; i < 3; i++) {
+            배제기.failed("be-0", 시작);
+        }
+        long 늦게 = 시작 + 배제_시간.toMillis();
+        for (int i = 0; i < 3; i++) {
+            배제기.failed("be-1", 늦게);
+        }
+        시계.set(시작 + 배제_시간.toMillis() + 램프.toMillis() / 2);
+        균형기.choose((Request<?>) null).block();
+
+        // be-0 은 여기서 램프를 마치고, be-1 은 아직 램프 중이라 다시 빠진다.
+        시계.set(시작 + 배제_시간.toMillis() + 램프.toMillis());
+        for (int i = 0; i < 3; i++) {
+            배제기.failed("be-1", 시계.get());
+        }
+        균형기.choose((Request<?>) null).block();
+
+        assertThat(줄들()).noneMatch(m -> m.contains("되돌리기가 끝났다"));
+        assertThat(줄들(Level.WARN)).filteredOn(m -> m.contains("되돌리기가 안 끝났다"))
+                .singleElement().asString()
+                .as("다시 빠진 수와 완주한 수를 함께 든다")
+                .contains("1 대가 다시 빠졌다").contains("완주 1 대");
     }
 
     /** 앓은 대가 없으면 아무 말도 안 한다. 늘 시끄러우면 사람이 안 본다. */

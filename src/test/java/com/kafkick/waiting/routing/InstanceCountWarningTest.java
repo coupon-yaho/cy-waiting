@@ -3,6 +3,7 @@ package com.kafkick.waiting.routing;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
@@ -39,7 +40,7 @@ class InstanceCountWarningTest {
 
     private Level 원래_수준;
 
-    private static ch.qos.logback.classic.Logger 로거() {
+    private Logger 로거() {
         return ((LoggerContext) LoggerFactory.getILoggerFactory())
                 .getLogger(CapacityAwareLoadBalancer.class);
     }

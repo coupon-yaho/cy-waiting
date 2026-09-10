@@ -70,6 +70,22 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
     private final FailureWindow suppressed = FailureWindow.create();
 
     /**
+     * 되돌리는 중인 대가 있던 구간. <b>배제 해제 줄은 여기까지 안 말한다</b> — 그
+     * 뒤로 램프가 이어지는데, 어느 대가 언제 제 몫으로 돌아왔는지가 안 남는다.
+     */
+    private final FailureWindow rampWindow = FailureWindow.create();
+
+    /**
+     * 구간에 들어설 때의 완주 수와 재배제 수. 구간이 닫힌 이유를 이 둘로 가른다.
+     * <b>한 번에 갈아 끼운다</b> — 따로 쓰면 그 사이에 창이 닫힐 때 한쪽만 새 값이라
+     * 증분이 음수까지 나고 갈래가 뒤집힌다.
+     */
+    private record Marks(long completed, long reEjected) {
+    }
+
+    private final AtomicReference<Marks> rampMarks = new AtomicReference<>(new Marks(0, 0));
+
+    /**
      * 배제하고 나니 보낼 곳이 없던 구간. <b>부하 최고점에서만 켜지는 자리라</b>
      * 억제 없이 남기면 초당 수만 줄이 쌓인다.
      */
@@ -130,7 +146,7 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
     }
 
     /**
-     * 배제 구간의 진입과 해제를 남긴다.
+     * 배제와 되돌리기 구간의 진입과 해제를 남긴다.
      *
      * <p>식별자는 카디널리티 때문에 지표 라벨에 못 붙어 로그가 유일한 기록이다.
      * 구간의 첫 건만 남겨 매 초 같은 줄이 쌓이지 않게 한다.
@@ -160,6 +176,42 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
             ejecting.exited().ifPresent(r -> log.info(
                     "뺀 대가 없어졌다 — {}초 동안 {}건", r.elapsedSeconds(),
                     r.swallowed()));
+        }
+        // **배제가 걷혀도 끝이 아니다.** 그 뒤로 램프가 이어지는데 위 해제 줄이
+        // 거기까지 말하지 않아, 몫이 아직 깎인 구간이 로그에 안 남았다.
+        int ramping = outliers.rampingCount(now);
+        if (ramping > 0) {
+            if (rampWindow.entered()) {
+                rampMarks.set(new Marks(outliers.rampsCompleted(), outliers.reEjections()));
+                log.info("{} 대가 되돌아오는 중이다 (전체 {} 대) — 램프 동안 제 몫을 "
+                        + "덜 받는다", ramping, present.size());
+            }
+        } else {
+            rampWindow.exited().ifPresent(this::closedRamp);
+        }
+    }
+
+    /**
+     * 되돌리는 구간이 닫힌 이유를 남긴다.
+     *
+     * <p><b>닫혔다고 회복한 것이 아니다.</b> 다시 빠져도 되돌리는 대가 0 이 되고,
+     * 완주 하나가 다시 빠진 하나를 가린다 — 두 증분을 따로 보고 섞이면 경고다.
+     */
+    private void closedRamp(FailureWindow.Recovered window) {
+        Marks entry = rampMarks.get();
+        long done = outliers.rampsCompleted() - entry.completed();
+        long again = outliers.reEjections() - entry.reEjected();
+        if (again > 0) {
+            log.warn("되돌리기가 안 끝났다 — {}초 만에 {} 대가 다시 빠졌다 (완주 {} 대). "
+                    + "다시 빠진 대가 배제와 램프를 되풀이하는 중이다. 뒷단 그 대의 "
+                    + "오류율부터 본다", window.elapsedSeconds(), again, done);
+        } else if (done > 0) {
+            log.info("되돌리기가 끝났다 — {}초 동안 {} 대가 제 몫으로 돌아왔다",
+                    window.elapsedSeconds(), done);
+        } else {
+            log.warn("되돌리기가 안 끝났다 — {}초 만에 구간이 닫혔다. 되돌리던 대가 "
+                    + "목록에서 빠졌거나 시각이 뒤로 갔다. 뒷단 목록과 시각 동기를 "
+                    + "함께 본다", window.elapsedSeconds());
         }
     }
 

@@ -59,6 +59,7 @@ log.info("fail-open 해제. 지속 {}ms, 그동안 통과 {}건", duration.toMil
 | 인스턴스 배제 진입 / 해제 | WARN → INFO | ✅ |
 | 뒷단 전체가 배제 대상 (그래서 하나도 안 뺀다) | ERROR → INFO | ✅ |
 | 배제하고 나니 보낼 곳이 없다 | WARN → INFO | ✅ |
+| 되돌리는 구간 진입 / 해제 | INFO → INFO·WARN | 해제는 완주인지 재배제인지 목록 이탈인지로 갈린다. 완주만 INFO 다 |
 | **시계 역행 감지 후 `maxscore` 점프** | **ERROR** | — |
 | **틱 배분 합계가 `globalCredit` 초과** | **ERROR** | — |
 | 인스턴스 수가 라우팅 가정(A7) 밖 | **WARN** | 전략 재검토 신호. 자동 전환하지 않으므로 이 로그가 유일한 알림이다 |

@@ -157,6 +157,9 @@ public final class AllocationRedisPort implements SnapshotSource {
 
     private final AtomicLong publishFenced = new AtomicLong();
 
+    /** 울타리가 막은 청소 건수. <b>회차가 아니라 쿠폰 단위다</b>. */
+    private final AtomicLong sweepFenced = new AtomicLong();
+
     /** 울타리가 막은 입장 적용 건수. <b>회차가 아니라 쿠폰 단위다</b>. */
     private final AtomicLong applyFenced = new AtomicLong();
 
@@ -635,8 +638,8 @@ public final class AllocationRedisPort implements SnapshotSource {
      * 계속 훑고 뒤쪽 기록은 영영 안 지워진다.
      */
     public Mono<QueueSweeper.SweepResult> sweep(List<String> couponIds, long nowSec,
-            int scanLimit, long graceSec, int budget) {
-        return sweep(couponIds, nowSec, scanLimit, graceSec, budget, true);
+            int scanLimit, long graceSec, int budget, long fence) {
+        return sweep(couponIds, nowSec, scanLimit, graceSec, budget, true, fence);
     }
 
     /**
@@ -644,7 +647,7 @@ public final class AllocationRedisPort implements SnapshotSource {
      *                    승계 유예 구간이 그 자리다
      */
     public Mono<QueueSweeper.SweepResult> sweep(List<String> couponIds, long nowSec,
-            int scanLimit, long graceSec, int budget, boolean removeFront) {
+            int scanLimit, long graceSec, int budget, boolean removeFront, long fence) {
         if (couponIds.isEmpty()) {
             return Mono.just(QueueSweeper.SweepResult.NOTHING);
         }
@@ -652,7 +655,8 @@ public final class AllocationRedisPort implements SnapshotSource {
         return Flux.fromIterable(couponIds)
                 // **한 쿠폰이 실패해도 나머지는 쓴다.** 청소가 배분을 막으면
                 // 안 걷힌 것 하나가 그 틱 전체를 세운다.
-                .flatMap(id -> sweepOne(id, nowSec, scanLimit, graceSec, budget, removeFront)
+                .flatMap(id -> sweepOne(id, nowSec, scanLimit, graceSec, budget, removeFront,
+                        fence)
                         .onErrorResume(e -> {
                             log.warn("이탈자 청소 실패 — 다음 틱에 다시 한다: 쿠폰={} {}",
                                     id, e.toString());
@@ -668,24 +672,36 @@ public final class AllocationRedisPort implements SnapshotSource {
     }
 
     private Mono<QueueSweeper.SweepResult> sweepOne(String couponId, long nowSec,
-            int scanLimit, long graceSec, int budget, boolean removeFront) {
+            int scanLimit, long graceSec, int budget, boolean removeFront, long fence) {
         String cursor = sweepCursors.getOrDefault(couponId, "0");
         return redis.execute(SWEEP,
                         List.of(RedisKeys.queue(couponId, shards, 0),
                                 RedisKeys.grace(couponId, shards, 0),
                                 RedisKeys.alive(couponId, shards, 0),
-                                RedisKeys.admitted(couponId, shards, 0)),
+                                RedisKeys.admitted(couponId, shards, 0),
+                                RedisKeys.applyFence(couponId, shards, 0)),
                         List.of(Integer.toString(scanLimit), Long.toString(nowSec),
                                 Long.toString(graceSec), Integer.toString(budget), cursor,
-                                removeFront ? "1" : "0"))
+                                removeFront ? "1" : "0", Long.toString(fence)))
                 .next()
                 .switchIfEmpty(Mono.error(new IllegalStateException("청소 결과가 비었다")))
                 .map(raw -> {
                     List<?> values = (List<?>) raw;
+                    // **거절이면 커서를 안 옮긴다.** 옮기면 유령이 부른 회차만큼
+                    // 정당한 리더가 훑을 자리를 건너뛴다.
+                    if (toLongOrZero(values.get(0)) < 0) {
+                        sweepFenced.incrementAndGet();
+                        return QueueSweeper.SweepResult.NOTHING;
+                    }
                     sweepCursors.put(couponId, String.valueOf(values.get(3)));
                     return new QueueSweeper.SweepResult(toLongOrZero(values.get(0)),
                             toLongOrZero(values.get(1)), toLongOrZero(values.get(2)), 0);
                 });
+    }
+
+    /** 울타리가 막은 청소 건수. 유령이 걷으러 온 흔적이라 0 이 아니면 본다. */
+    public double sweepFenced() {
+        return sweepFenced.get();
     }
 
     private long toLongOrZero(Object value) {

@@ -4,6 +4,7 @@
 -- KEYS[2]  grace:{cid}   이탈 기록 해시
 -- KEYS[3]  alive:{cid}   생존 신호 ZSET. score 는 만료 시각(초)
 -- KEYS[4]  admitted:{cid} 입장 임계. **창의 시작점**이고, 이 값 이하는 안 걷는다
+-- KEYS[5]  applyfence:{cid} 이 쿠폰에 마지막으로 적용한 임기. 같은 슬롯이라 여기서 읽는다
 -- ARGV[1]  검사 범위 K. **입장 임계 위에서** 이만큼만 본다. 1..3999
 -- ARGV[2]  지금 시각(초). 도메인처럼 주입받는다
 -- ARGV[3]  유예 보관 기간(초)
@@ -11,8 +12,11 @@
 -- ARGV[5]  HSCAN 커서. 첫 호출은 '0'. 반환된 값을 다음에 넘긴다
 -- ARGV[6]  앞줄에서 빼도 되는가 (1/0). **0 이어도 정리는 돈다** — 승계 유예 구간에
 --          대상까지 비우면 기록이 한 방향으로만 자라고 커서가 전진을 못 한다
+-- ARGV[7]  이 회차의 임기. 울타리보다 낮으면 아무것도 안 한다
 --
--- 반환  {swept, expiredSignals, expiredGrace, nextCursor}
+-- 반환  {swept, expiredSignals, expiredGrace, nextCursor}. 임기가 낡으면
+--        {-1, -1, -1, 넘어온 커서} — **센티널을 쓴다.** 0 으로 두면 아무것도 안 걷은
+--        회차와 거절이 같아 보이고, 커서를 그대로 돌려줘야 다음 회차가 안 건너뛴다
 --
 -- 이탈 기록 해시의 값  'd:<초>' 이탈 기록 · 'a:<초>' 입장 표시 · 접두사 없는 값은
 -- 종류가 생기기 전의 이탈 기록. queue_status 가 같은 자리에 입장 표시를 쓰므로,
@@ -85,6 +89,20 @@ end
 local removeFront = ARGV[6] == nil and 1 or tonumber(ARGV[6])
 if removeFront ~= 0 and removeFront ~= 1 then
     return redis.error_reply('제거 여부는 0 또는 1 이어야 한다: ' .. tostring(ARGV[6]))
+end
+
+local term = tonumber(ARGV[7])
+if term == nil or term ~= term or term ~= math.floor(term) then
+    return redis.error_reply('임기는 정수여야 한다: ' .. tostring(ARGV[7]))
+end
+
+-- **낡은 임기는 안 걷는다.** 리더 판정은 회차 시작에 로컬 플래그를 한 번 읽는 것뿐이라,
+-- 회차 도중 리스가 끝난 유령이 그대로 걷으러 온다. 발행은 이미 울타리를 받는데 청소만
+-- 안 받고 있었다. 표가 없으면 세운 적이 없다는 뜻이라 막지 않는다 — 막으면 첫 회차가
+-- 영영 안 돈다. 같은 번호의 재시도도 안 막는다.
+local fenced = tonumber(redis.call('GET', KEYS[5]))
+if fenced ~= nil and fenced == fenced and term < fenced then
+    return {-1, -1, -1, ARGV[5]}
 end
 
 -- **커서도 쓰기 전에 본다.** 형식이 틀리면 HSCAN 이 오류를 내는데, 그때는 이미

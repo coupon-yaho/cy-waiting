@@ -179,6 +179,10 @@ public class ControlPlaneConfig {
                 .register(meters);
         // **되돌릴 수 없는 쓰기가 막힌 수다.** 그 창 동안 죽은 줄이 폴링 예산을
         // 먹는데, 안 내면 막혔다는 사실이 어디에도 안 남는다 (CY-894).
+        FunctionCounter.builder("waiting.queue.sweep.fenced", port,
+                        AllocationRedisPort::sweepFenced)
+                .description("옛 임기라 막힌 이탈자 청소 수")
+                .register(meters);
         FunctionCounter.builder("waiting.queue.drop.fenced", port,
                         AllocationRedisPort::dropFenced)
                 .description("옛 임기라 막힌 매진 큐 삭제 수")
@@ -223,10 +227,12 @@ public class ControlPlaneConfig {
     /** 멈추는 판단을 생성자가 필수로 받는다 — 빠뜨리면 컴파일이 안 된다. */
     @Bean
     QueueSweeper queueSweeper(AllocationRedisPort port, ControlPlaneProperties properties,
-            MeterRegistry meters) {
+            Leadership leadership, MeterRegistry meters) {
         return QueueSweeper.of(SweepGate.of(properties.scheduler().tick(), PollIntervalPolicy.aliveTtl()),
+                // **임기를 회차마다 다시 읽는다.** 붙잡아 두면 강등된 뒤에도 옛
+                // 번호로 걷는다 — 그것이 유령이 큐를 부수는 자리다.
                 (ids, scanLimit, removeFront) -> port.sweep(ids, Instant.now().getEpochSecond(),
-                        scanLimit, GRACE_SEC, SWEEP_BUDGET, removeFront),
+                        scanLimit, GRACE_SEC, SWEEP_BUDGET, removeFront, leadership.fence()),
                 meters);
     }
 

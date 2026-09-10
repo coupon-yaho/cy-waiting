@@ -687,6 +687,53 @@ class InstanceOutliersTest {
     }
 
     /**
+     * <b>임계에 못 미친 성공은 다음 창으로 안 넘어간다.</b> 넘기면 남은 계수만큼
+     * 다음 창이 얕아져, 늦게 온 성공 한 건이 그 창을 지운다 — 이 회차가 없애려던
+     * 바로 그 동작이다. 창 안에는 트래픽이 0 이라 임계 미달이 오히려 흔하다.
+     */
+    @Test
+    @DisplayName("임계에_못_미친_성공은_다음_창으로_안_넘어간다")
+    void 임계에_못_미친_성공은_다음_창으로_안_넘어간다() {
+        InstanceOutliers outliers = 배제기();
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 1_000);
+        }
+        outliers.succeeded("가", 1_000);
+        outliers.succeeded("가", 1_000);
+
+        long 램프_중 = 1_000 + 배제_시간.toMillis() + 1;
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 램프_중);
+        }
+        outliers.succeeded("가", 램프_중);
+
+        assertThat(outliers.ejected(Set.of("가", "나"), 램프_중))
+                .as("새 창은 성공 셋을 새로 받아야 닫힌다").containsExactly("가");
+    }
+
+    /** 가라앉은 뒤에도 마찬가지다. 걷는 자리가 계수를 안 버리면 같은 구멍이 남는다. */
+    @Test
+    @DisplayName("가라앉은_뒤에도_성공_계수는_안_넘어간다")
+    void 가라앉은_뒤에도_성공_계수는_안_넘어간다() {
+        InstanceOutliers outliers = 배제기();
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 1_000);
+        }
+        outliers.succeeded("가", 1_000);
+        outliers.succeeded("가", 1_000);
+
+        long 가라앉은_뒤 = 1_000 + 배제_시간.toMillis() + 램프.toMillis();
+        outliers.retain(Set.of("가", "나"), 가라앉은_뒤);
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 가라앉은_뒤);
+        }
+        outliers.succeeded("가", 가라앉은_뒤);
+
+        assertThat(outliers.ejected(Set.of("가", "나"), 가라앉은_뒤))
+                .as("앓은 적 없는 대와 같이 셋을 요구한다").containsExactly("가");
+    }
+
+    /**
      * 응답 완료마다 이벤트루프 스레드에서 불린다. <b>연속을 세는 자리가 안
      * 막히면 증분을 잃어</b> 임계에 못 닿고, 앓는 대가 안 빠진다.
      */

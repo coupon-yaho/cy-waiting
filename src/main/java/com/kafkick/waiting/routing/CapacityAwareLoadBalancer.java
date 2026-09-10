@@ -76,8 +76,10 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
      */
     private final FailureWindow rampWindow = FailureWindow.create();
 
-    /** 구간에 들어설 때의 완주 수. 구간이 닫힌 이유가 완주인지 재배제인지를 가른다. */
+    /** 구간에 들어설 때의 완주 수와 재배제 수. 구간이 닫힌 이유를 이 둘로 가른다. */
     private final AtomicLong rampsAtEntry = new AtomicLong();
+
+    private final AtomicLong reEjectionsAtEntry = new AtomicLong();
 
     /**
      * 배제하고 나니 보낼 곳이 없던 구간. <b>부하 최고점에서만 켜지는 자리라</b>
@@ -177,6 +179,7 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
         if (ramping > 0) {
             if (rampWindow.entered()) {
                 rampsAtEntry.set(outliers.rampsCompleted());
+                reEjectionsAtEntry.set(outliers.reEjections());
                 log.info("{} 대가 되돌아오는 중이다 (전체 {} 대) — 램프 동안 제 몫을 "
                         + "덜 받는다", ramping, present.size());
             }
@@ -188,17 +191,22 @@ public final class CapacityAwareLoadBalancer implements ReactorServiceInstanceLo
     /**
      * 되돌리는 구간이 닫힌 이유를 남긴다.
      *
-     * <p><b>닫혔다고 회복한 것이 아니다.</b> 다시 빠져도 되돌리는 대가 0 이 되므로,
-     * 완주 수가 늘었는지로 가른다 — 안 가르면 맴도는 상태가 정상으로 읽힌다.
+     * <p><b>닫혔다고 회복한 것이 아니다.</b> 다시 빠져도 되돌리는 대가 0 이 되고,
+     * 완주 하나가 다시 빠진 하나를 가린다 — 두 증분을 따로 보고 섞이면 경고다.
      */
     private void closedRamp(FailureWindow.Recovered window) {
         long done = outliers.rampsCompleted() - rampsAtEntry.get();
-        if (done > 0) {
+        long again = outliers.reEjections() - reEjectionsAtEntry.get();
+        if (again > 0) {
+            log.warn("되돌리기가 안 끝났다 — {}초 만에 {} 대가 다시 빠졌다 (완주 {} 대). "
+                    + "그 대는 배제와 램프를 되풀이하는 중이다",
+                    window.elapsedSeconds(), again, done);
+        } else if (done > 0) {
             log.info("되돌리기가 끝났다 — {}초 동안 {} 대가 제 몫으로 돌아왔다",
                     window.elapsedSeconds(), done);
         } else {
-            log.warn("되돌리기가 안 끝났다 — {}초 만에 구간이 닫혔다. 다시 뺐거나 그 "
-                    + "대가 목록에서 빠졌다", window.elapsedSeconds());
+            log.warn("되돌리기가 안 끝났다 — {}초 만에 구간이 닫혔다. 되돌리던 대가 "
+                    + "목록에서 빠졌다", window.elapsedSeconds());
         }
     }
 

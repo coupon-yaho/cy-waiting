@@ -85,10 +85,7 @@ class CrowdedOutLogTest {
     }
 
     private List<String> 줄들() {
-        return 로그.list.stream()
-                .filter(e -> e.getLevel() != Level.DEBUG)
-                .map(ILoggingEvent::getFormattedMessage)
-                .toList();
+        return 로그.list.stream().map(ILoggingEvent::getFormattedMessage).toList();
     }
 
     private List<String> 줄들(Level 수준) {
@@ -111,7 +108,9 @@ class CrowdedOutLogTest {
         for (int i = 0; i < 3; i++) {
             배제기.failed("be-1", 지금);
         }
-        균형기.choose((Request<?>) null).block();
+        for (int i = 0; i < 3; i++) {
+            균형기.choose((Request<?>) null).block();
+        }
         assertThat(줄들()).anyMatch(m -> m.contains("보낼 곳이 없다"));
 
         // 배제 창을 닫고, 그 대를 인스턴스별 상한으로 막는다. 뺀 대는 없어졌지만
@@ -119,13 +118,13 @@ class CrowdedOutLogTest {
         for (int i = 0; i < 3; i++) {
             배제기.succeeded("be-1", 지금);
         }
-        레지스트리.started("be-1", 지금);
+        레지스트리.tryStarted("be-1", 상한, 지금);
         균형기.choose((Request<?>) null).block();
 
         assertThat(줄들()).noneMatch(m -> m.contains("보낼 곳이 남는다"));
         // 열어 두면 두 구간이 한 줄에 섞인다. 다른 문구로 닫되 값은 닫은 구간의 것이다.
         assertThat(줄들(Level.WARN)).filteredOn(m -> m.contains("도로 넣던 구간이 닫혔다"))
-                .singleElement().asString().contains("1건");
+                .singleElement().asString().as("닫은 구간의 건수다").contains("3건");
     }
 
     /**
@@ -134,8 +133,8 @@ class CrowdedOutLogTest {
      * 받는 대가 갈린다.
      */
     @Test
-    @DisplayName("갭을_지난_다음_국면도_남는다")
-    void 갭을_지난_다음_국면도_남는다() {
+    @DisplayName("다시_빠지면_새_국면으로_남는다")
+    void 다시_빠지면_새_국면으로_남는다() {
         CapacityAwareLoadBalancer 균형기 =
                 균형기(인스턴스("be-1", "100"), 인스턴스("be-2", "0"));
         for (int i = 0; i < 3; i++) {
@@ -146,10 +145,10 @@ class CrowdedOutLogTest {
         for (int i = 0; i < 3; i++) {
             배제기.succeeded("be-1", 지금);
         }
-        레지스트리.started("be-1", 지금);
+        레지스트리.tryStarted("be-1", 상한, 지금);
         균형기.choose((Request<?>) null).block();
 
-        // 갭을 지나 be-1 이 다시 빠진다. 같은 구간의 연장이 아니라 새 국면이다.
+        // be-1 이 다시 빠진다. 같은 구간의 연장이 아니라 새 국면이다.
         for (int i = 0; i < 3; i++) {
             배제기.failed("be-1", 지금);
         }
@@ -177,7 +176,8 @@ class CrowdedOutLogTest {
 
         assertThat(배제기.ejectionsOverridden()).as("두 회차가 한 국면이다").isOne();
         assertThat(줄들(Level.WARN)).filteredOn(m -> m.contains("보낼 곳이 없다"))
-                .singleElement().asString().as("어느 대인지가 든다").contains("be-1");
+                .singleElement().asString().as("수와 식별자가 자리를 안 바꾼다")
+                .contains("뺀 1 대").contains("[be-1]");
     }
 
     /** 갈래를 안 타면 안 센다. 조건을 안 묶으면 모든 요청을 세도 초록이다. */
@@ -188,6 +188,9 @@ class CrowdedOutLogTest {
                 .choose((Request<?>) null).block();
 
         assertThat(배제기.ejectionsOverridden()).isZero();
+        assertThat(줄들()).as("정상 구간으로 새면 안 된다")
+                .noneMatch(m -> m.contains("보낼 곳이 없다"))
+                .noneMatch(m -> m.contains("전부 연속 실패"));
     }
 
     /** 진짜 회복은 남긴다. 안 남기면 구간이 언제 끝났는지가 없다. */
@@ -199,7 +202,9 @@ class CrowdedOutLogTest {
         for (int i = 0; i < 3; i++) {
             배제기.failed("be-1", 지금);
         }
-        균형기.choose((Request<?>) null).block();
+        for (int i = 0; i < 3; i++) {
+            균형기.choose((Request<?>) null).block();
+        }
 
         for (int i = 0; i < 3; i++) {
             배제기.succeeded("be-1", 지금);
@@ -208,7 +213,7 @@ class CrowdedOutLogTest {
 
         assertThat(줄들(Level.INFO)).filteredOn(m -> m.contains("보낼 곳이 남는다"))
                 .singleElement().asString()
-                .as("지속 시간과 건수가 그 구간의 것이어야 한다").contains("1건");
+                .as("건수가 그 구간의 것이어야 한다").contains("3건");
     }
 
     /**
@@ -227,8 +232,10 @@ class CrowdedOutLogTest {
         }
 
         균형기.choose((Request<?>) null).block();
+        균형기.choose((Request<?>) null).block();
 
-        assertThat(배제기.ejectionsOverridden()).isOne();
-        assertThat(줄들(Level.ERROR)).anyMatch(m -> m.contains("전부 연속 실패"));
+        assertThat(배제기.ejectionsOverridden()).as("두 회차가 한 국면이다").isOne();
+        assertThat(줄들(Level.ERROR)).filteredOn(m -> m.contains("전부 연속 실패"))
+                .hasSize(1);
     }
 }

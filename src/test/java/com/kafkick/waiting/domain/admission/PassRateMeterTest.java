@@ -12,8 +12,11 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.LongAdder;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * 통과 계량기. <b>세는 쪽과 읽는 쪽이 겹치는 자리를 본다</b> — 이 값은 회복
@@ -351,6 +354,30 @@ class PassRateMeterTest {
         assertThat(최소.get())
                 .as("두 번 접히면 직전 값이 갓 연 창의 몇 건으로 주저앉는다")
                 .isEqualTo(threads * perWindow / (WINDOW_MS / 1_000));
+    }
+
+    /**
+     * <b>진 CAS 는 남이 방금 연 창 위에서 다시 돈다.</b> 위 시험이 재는 그 사고를
+     * 갈래에서 막는 자리다.
+     *
+     * <p>{@code passed} 를 통해서는 못 닿는다 — 접힘을 본 순간과 CAS 가 도는 순간
+     * 사이에 남이 접어야 참이라, 접는 함수를 직접 부른다.
+     */
+    @ParameterizedTest
+    @ValueSource(longs = {0, 1, -1, 2_500, -2_500, 5_000, -5_000})
+    @DisplayName("남이_연_창은_다시_안_접는다")
+    void 남이_연_창은_다시_안_접는다(long 경과_ms) {
+        PassRateMeter meter = PassRateMeter.of(WINDOW_MS);
+        long 열린_시각 = 6_000;
+        long 직전_초당 = 60;
+        // 이긴 쪽도 CAS 가 돌아온 뒤에 세므로 이 창의 수는 아직 0 이다.
+        PassRateMeter.Window 남이_연_창 =
+                new PassRateMeter.Window(열린_시각, new LongAdder(), 직전_초당);
+
+        PassRateMeter.Window 결과 = meter.advance(남이_연_창, 열린_시각 + 경과_ms);
+
+        assertThat(결과).as("새 창을 열면 안 된다 — 남이 연 창을 그대로 돌려준다")
+                .isSameAs(남이_연_창);
     }
 
     /** 뒤진 도장 하나가 창을 버리면, 끊긴 적 없는 부하가 한 창 내내 0 이다. */

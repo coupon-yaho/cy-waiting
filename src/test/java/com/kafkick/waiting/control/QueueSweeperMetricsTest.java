@@ -25,7 +25,7 @@ class QueueSweeperMetricsTest {
 
     /** 갈래마다 다른 수를 돌려준다 — 같으면 서로를 읽는 배선이 안 잡힌다. */
     private static final QueueSweeper.SweepResult 결과 =
-            new QueueSweeper.SweepResult(3, 5, 7, 11);
+            new QueueSweeper.SweepResult(3, 5, 7, 11, 13);
 
     private final MeterRegistry meters = new SimpleMeterRegistry();
 
@@ -52,6 +52,23 @@ class QueueSweeperMetricsTest {
         assertThat(계수("expired-signal")).as("만료 신호").isEqualTo(5);
         assertThat(계수("expired-grace")).as("낡은 기록").isEqualTo(7);
         assertThat(계수("failed")).as("실패").isEqualTo(11);
+        assertThat(계수("fenced")).as("울타리가 막은 쿠폰").isEqualTo(13);
+    }
+
+    /**
+     * <b>0 의 셋째 뜻을 가른다.</b> 걷을 게 없어서도, 다 죽어서도 아닌 0 이 있다 —
+     * 울타리가 앞줄 제거를 막은 쿠폰이다. 안 가르면 청소가 멎은 것이 평시와 같은 값을 낸다.
+     */
+    @Test
+    @DisplayName("막히면_막힌_수로_세고_걷은_수는_0_이다")
+    void 막히면_막힌_수로_세고_걷은_수는_0_이다() {
+        sweeper(new QueueSweeper.SweepResult(0, 2, 3, 0, 1))
+                .run(줄이_있는_쿠폰(), false).block();
+
+        assertThat(계수("fenced")).as("막힌 쿠폰").isOne();
+        assertThat(계수("swept")).as("걷은 수는 0 이다").isZero();
+        assertThat(계수("failed")).as("실패가 아니다").isZero();
+        assertThat(계수("expired-grace")).as("정리는 그때도 돈다").isEqualTo(3);
     }
 
     /**

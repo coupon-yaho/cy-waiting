@@ -31,6 +31,7 @@ class SweepWriteOrderTest {
     private static final String GRACE = RedisKeys.grace(COUPON, 1, 0);
     private static final String ALIVE = RedisKeys.alive(COUPON, 1, 0);
     private static final String ADMITTED = RedisKeys.admitted(COUPON, 1, 0);
+    private static final String APPLY_FENCE = RedisKeys.applyFence(COUPON, 1, 0);
 
     private RedisClient client;
     private StatefulRedisConnection<String, String> connection;
@@ -74,8 +75,8 @@ class SweepWriteOrderTest {
 
     private Object 청소한다(int limit) {
         return connection.sync().eval(LuaScripts.of("sweep.lua"), ScriptOutputType.MULTI,
-                new String[] {QUEUE, GRACE, ALIVE, ADMITTED},
-                String.valueOf(limit), "1800000000", "300", "50", "0");
+                new String[] {QUEUE, GRACE, ALIVE, ADMITTED, APPLY_FENCE},
+                String.valueOf(limit), "1800000000", "300", "50", "0", "1", "1");
     }
 
     /**

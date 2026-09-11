@@ -50,6 +50,11 @@ class SweepTest extends RedisContainerSupport {
     private static final String RETENTION = String.valueOf(GraceRetention.SECONDS);
     private static final String BUDGET = "1000";
 
+    /** 이 회차의 임기. 적용 울타리와 견줘 낡은 임기의 청소를 막는다. */
+    private static final long 임기 = 7;
+
+    private static final String APPLY_FENCE = RedisKeys.applyFence(COUPON, 1, 0);
+
     /** unpack 한계에서 실측한 상한. 기록이 쌍이라 검사 범위 쪽이 먼저 걸린다. */
     private static final int MAX_SCAN = 3_999;
     private static final int MAX_BUDGET = 7_999;
@@ -64,7 +69,8 @@ class SweepTest extends RedisContainerSupport {
     void 준비() {
         enqueueScript = RedisScript.of(new ClassPathResource("redis/enqueue.lua"), List.class);
         sweepScript = RedisScript.of(new ClassPathResource("redis/sweep.lua"), List.class);
-        redis.delete(QUEUE, MAX_SCORE, GRACE, ALIVE, ADMITTED).block(WAIT);
+        redis.delete(QUEUE, MAX_SCORE, GRACE, ALIVE, ADMITTED, APPLY_FENCE).block(WAIT);
+        redis.opsForValue().set(APPLY_FENCE, Long.toString(임기)).block(WAIT);
     }
 
     private void enqueue(String memberId) {
@@ -76,10 +82,16 @@ class SweepTest extends RedisContainerSupport {
 
     @SuppressWarnings("unchecked")
     private List<Object> sweep(String limit, String budget, String cursor) {
+        return sweep(limit, budget, cursor, 임기);
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Object> sweep(String limit, String budget, String cursor, long term) {
         return (List<Object>) redis.execute(
                         sweepScript,
-                        List.of(QUEUE, GRACE, ALIVE, ADMITTED),
-                        List.of(limit, String.valueOf(NOW), RETENTION, budget, cursor))
+                        List.of(QUEUE, GRACE, ALIVE, ADMITTED, APPLY_FENCE),
+                        List.of(limit, String.valueOf(NOW), RETENTION, budget, cursor,
+                                "1", Long.toString(term)))
                 .blockFirst(WAIT);
     }
 
@@ -92,8 +104,9 @@ class SweepTest extends RedisContainerSupport {
     private List<Object> sweepKeepingFront(String limit) {
         return (List<Object>) redis.execute(
                         sweepScript,
-                        List.of(QUEUE, GRACE, ALIVE, ADMITTED),
-                        List.of(limit, String.valueOf(NOW), RETENTION, BUDGET, "0", "0"))
+                        List.of(QUEUE, GRACE, ALIVE, ADMITTED, APPLY_FENCE),
+                        List.of(limit, String.valueOf(NOW), RETENTION, BUDGET, "0", "0",
+                                Long.toString(임기)))
                 .blockFirst(WAIT);
     }
 
@@ -131,6 +144,10 @@ class SweepTest extends RedisContainerSupport {
 
     private String nextCursor(List<Object> r) {
         return String.valueOf(r.get(3));
+    }
+
+    private boolean 막혔는가(List<Object> r) {
+        return Long.parseLong(String.valueOf(r.get(4))) != 0;
     }
 
     private long swept(List<Object> r) {
@@ -701,5 +718,79 @@ class SweepTest extends RedisContainerSupport {
                         "정리 예산은 %d 이하여야 한다: %d".formatted(MAX_BUDGET, MAX_BUDGET + 1));
 
         assertThat(swept(sweep("10", String.valueOf(MAX_BUDGET), "0"))).isZero();
+    }
+
+    /**
+     * <b>낡은 임기의 청소는 안 듣는다.</b> 리더 판정은 회차 시작에 로컬 플래그를 한 번
+     * 읽는 것뿐이라, 회차 도중에 리스가 끝난 유령이 그대로 걷으러 온다. 발행은 이미
+     * 울타리를 받는데 청소만 안 받고 있었다.
+     */
+    @Test
+    @DisplayName("낡은_임기는_안_걷는다")
+    void 낡은_임기는_안_걷는다() {
+        이탈자를_세운다();
+
+        Double 이탈자_순번 = redis.opsForZSet().score(QUEUE, "이탈자").block(WAIT);
+        // 되돌릴 것 없는 정리는 막힌 회차에도 돌아야 한다. 그 둘을 심어 둔다.
+        redis.opsForZSet().add(ALIVE, "만료", NOW - 10).block(WAIT);
+        redis.opsForHash().put(GRACE, "낡음", String.valueOf(만료된_시각)).block(WAIT);
+
+        List<Object> 결과 = sweep("3000", BUDGET, "0", 임기 - 1);
+
+        assertThat(막혔는가(결과)).as("막힌 것을 따로 낸다").isTrue();
+        assertThat(swept(결과)).as("앞줄은 안 걷는다").isZero();
+        assertThat(redis.opsForZSet().score(QUEUE, "이탈자").block(WAIT))
+                .as("순번까지 그대로다").isEqualTo(이탈자_순번);
+        // **정리는 막으면 안 된다.** 이 둘의 리퍼가 이 스크립트뿐이라, 막으면 표
+        // 수명 내내 한 방향으로만 자란다.
+        assertThat(redis.opsForZSet().score(ALIVE, "만료").block(WAIT))
+                .as("만료된 신호는 걷는다").isNull();
+        assertThat(expired(결과)).as("낡은 기록도 걷는다").isOne();
+    }
+
+    /** 같은 임기의 재시도는 안 막는다. 막으면 실패한 청소가 영영 안 된다. */
+    @Test
+    @DisplayName("같은_임기는_그대로_걷는다")
+    void 같은_임기는_그대로_걷는다() {
+        이탈자를_세운다();
+
+        List<Object> 결과 = sweep("3000", BUDGET, "0", 임기);
+
+        assertThat(막혔는가(결과)).as("같은 번호는 안 막는다").isFalse();
+        assertThat(swept(결과)).isOne();
+    }
+
+    /** 0 은 리더가 아니라는 뜻이다. 표가 없어도 막는다 — 다른 울타리 여섯과 같다. */
+    @Test
+    @DisplayName("임기가_0_이면_표가_없어도_막는다")
+    void 임기가_0_이면_표가_없어도_막는다() {
+        redis.delete(APPLY_FENCE).block(WAIT);
+        이탈자를_세운다();
+
+        List<Object> 결과 = sweep("3000", BUDGET, "0", 0);
+
+        assertThat(막혔는가(결과)).isTrue();
+        assertThat(swept(결과)).isZero();
+    }
+
+    /** 울타리 표가 없으면 세운 적이 없다는 뜻이다. 그때는 막지 않는다. */
+    @Test
+    @DisplayName("울타리_표가_없으면_안_막는다")
+    void 울타리_표가_없으면_안_막는다() {
+        redis.delete(APPLY_FENCE).block(WAIT);
+        이탈자를_세운다();
+
+        List<Object> 결과 = sweep("3000", BUDGET, "0", 1);
+
+        assertThat(막혔는가(결과)).as("세운 적이 없으면 안 막는다").isFalse();
+        assertThat(swept(결과)).isOne();
+    }
+
+    /** 임계 위에 서서 신호가 끊긴 사람 하나. 걷을 수 있는 가장 단순한 모양이다. */
+    private void 이탈자를_세운다() {
+        enqueue("이탈자");
+        redis.opsForZSet().remove(ALIVE, "이탈자").block(WAIT);
+        enqueue("성실이");
+        살아있다("성실이");
     }
 }

@@ -156,7 +156,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         redis.opsForZSet().add(RedisKeys.alive("c1", SHARDS, 0), "m1", 지금 + 60).block(WAIT);
 
         QueueSweeper.SweepResult 결과 =
-                port.sweep(List.of("c1"), 지금, 100, 300, 100).block(WAIT);
+                port.sweep(List.of("c1"), 지금, 100, 300, 100, 임기).block(WAIT);
 
         assertThat(결과.swept()).as("걷은 수").isEqualTo(2);
         assertThat(redis.opsForZSet().size(RedisKeys.queue("c1", SHARDS, 0)).block(WAIT))
@@ -184,7 +184,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         redis.opsForZSet().add(RedisKeys.alive("c1", SHARDS, 0), "old", 지금 - 10).block(WAIT);
 
         QueueSweeper.SweepResult 결과 =
-                port.sweep(List.of("c1"), 지금, 100, 300, 100, false).block(WAIT);
+                port.sweep(List.of("c1"), 지금, 100, 300, 100, false, 임기).block(WAIT);
 
         assertThat(결과.swept()).as("앞줄은 안 걷는다").isZero();
         assertThat(redis.opsForZSet().size(RedisKeys.queue("c1", SHARDS, 0)).block(WAIT))
@@ -209,7 +209,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         }
 
         QueueSweeper.SweepResult 결과 =
-                port.sweep(List.of("c1"), 지금, 100, 300, 100).block(WAIT);
+                port.sweep(List.of("c1"), 지금, 100, 300, 100, 임기).block(WAIT);
 
         assertThat(결과.swept()).as("걷은 수").isZero();
         assertThat(redis.opsForZSet().size(RedisKeys.queue("c1", SHARDS, 0)).block(WAIT))
@@ -232,7 +232,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         줄_세운다("c1", 1, 2, 3);
 
         QueueSweeper.SweepResult 결과 =
-                port.sweep(List.of("c1"), 지금, 100, 300, 100).block(WAIT);
+                port.sweep(List.of("c1"), 지금, 100, 300, 100, 임기).block(WAIT);
 
         assertThat(결과.swept()).as("걷은 수").isZero();
         assertThat(redis.opsForZSet().size(RedisKeys.queue("c1", SHARDS, 0)).block(WAIT))
@@ -256,7 +256,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "1").block(WAIT);
 
         QueueSweeper.SweepResult 결과 =
-                port.sweep(List.of("c1"), 지금, 100, 300, 100).block(WAIT);
+                port.sweep(List.of("c1"), 지금, 100, 300, 100, 임기).block(WAIT);
 
         assertThat(결과.swept()).as("걷은 수").isZero();
         assertThat(redis.opsForZSet().score(RedisKeys.queue("c1", SHARDS, 0), "m1").block(WAIT))
@@ -284,7 +284,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "1").block(WAIT);
 
         QueueSweeper.SweepResult 결과 =
-                port.sweep(List.of("c1"), 지금, 100, 300, 100).block(WAIT);
+                port.sweep(List.of("c1"), 지금, 100, 300, 100, 임기).block(WAIT);
 
         assertThat(결과.swept()).as("차례가 온 사람은 안 걷는다").isZero();
         assertThat(redis.opsForZSet().score(RedisKeys.queue("c1", SHARDS, 0), "m1").block(WAIT))
@@ -312,7 +312,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         redis.opsForHash().put(RedisKeys.grace("c1", SHARDS, 0), "m1", "a:" + 지금).block(WAIT);
 
         QueueSweeper.SweepResult 결과 =
-                port.sweep(List.of("c1"), 지금, 100, 300, 100).block(WAIT);
+                port.sweep(List.of("c1"), 지금, 100, 300, 100, 임기).block(WAIT);
 
         assertThat(결과.failed()).as("실패").isZero();
         assertThat(결과.swept()).as("걷은 수").isOne();
@@ -336,7 +336,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         redis.opsForZSet().add(RedisKeys.alive("c1", SHARDS, 0), "m1", 지금 + 60).block(WAIT);
         redis.opsForHash().put(RedisKeys.grace("c1", SHARDS, 0), "m9", "a:" + 지금).block(WAIT);
 
-        port.sweep(List.of("c1"), 지금 + 100, 100, 300, 100).block(WAIT);
+        port.sweep(List.of("c1"), 지금 + 100, 100, 300, 100, 임기).block(WAIT);
 
         assertThat(redis.opsForHash().get(RedisKeys.grace("c1", SHARDS, 0), "m9").block(WAIT))
                 .isEqualTo("a:" + 지금);
@@ -346,7 +346,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     @Test
     @DisplayName("쓸_것이_없으면_왕복하지_않는다")
     void 쓸_것이_없으면_왕복하지_않는다() {
-        assertThat(port.sweep(List.of(), 1_700_000_000L, 100, 300, 100).block(WAIT))
+        assertThat(port.sweep(List.of(), 1_700_000_000L, 100, 300, 100, 임기).block(WAIT))
                 .isEqualTo(QueueSweeper.SweepResult.NOTHING);
     }
 

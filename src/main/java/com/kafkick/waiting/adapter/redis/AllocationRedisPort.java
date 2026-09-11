@@ -635,24 +635,33 @@ public final class AllocationRedisPort implements SnapshotSource {
      * 계속 훑고 뒤쪽 기록은 영영 안 지워진다.
      */
     public Mono<QueueSweeper.SweepResult> sweep(List<String> couponIds, long nowSec,
-            int scanLimit, long graceSec, int budget) {
-        return sweep(couponIds, nowSec, scanLimit, graceSec, budget, true);
+            int scanLimit, long graceSec, int budget, long fence) {
+        return sweep(couponIds, nowSec, scanLimit, graceSec, budget, true, fence);
     }
 
     /**
      * @param removeFront 앞줄에서 빼도 되는가. <b>거짓이어도 정리는 돈다</b> —
      *                    승계 유예 구간이 그 자리다
+     * @param fence       이 회차의 임기. 적용 울타리보다 낮으면 앞줄만 안 뺀다
      */
     public Mono<QueueSweeper.SweepResult> sweep(List<String> couponIds, long nowSec,
-            int scanLimit, long graceSec, int budget, boolean removeFront) {
+            int scanLimit, long graceSec, int budget, boolean removeFront, long fence) {
         if (couponIds.isEmpty()) {
             return Mono.just(QueueSweeper.SweepResult.NOTHING);
+        }
+        // **샤드가 여럿이면 거절한다.** 울타리를 세우는 자리가 샤드 0 만 잠그므로,
+        // 그 빗장을 푸는 날 나머지 샤드는 표가 없어 어떤 임기든 통과한다 — 울타리가
+        // 있는 채로 아무것도 안 막고 막힌 건수도 영영 0 이라 지표로도 안 드러난다.
+        if (shards != 1) {
+            return Mono.error(new IllegalStateException(
+                    "샤드가 여럿이면 청소의 울타리가 안 선다: %d".formatted(shards)));
         }
         sweepCursors.keySet().retainAll(couponIds);
         return Flux.fromIterable(couponIds)
                 // **한 쿠폰이 실패해도 나머지는 쓴다.** 청소가 배분을 막으면
                 // 안 걷힌 것 하나가 그 틱 전체를 세운다.
-                .flatMap(id -> sweepOne(id, nowSec, scanLimit, graceSec, budget, removeFront)
+                .flatMap(id -> sweepOne(id, nowSec, scanLimit, graceSec, budget, removeFront,
+                        fence)
                         .onErrorResume(e -> {
                             log.warn("이탈자 청소 실패 — 다음 틱에 다시 한다: 쿠폰={} {}",
                                     id, e.toString());
@@ -664,28 +673,44 @@ public final class AllocationRedisPort implements SnapshotSource {
                         a.swept() + b.swept(),
                         a.expiredSignals() + b.expiredSignals(),
                         a.expiredGrace() + b.expiredGrace(),
-                        a.failed() + b.failed()));
+                        a.failed() + b.failed(),
+                        a.fenced() + b.fenced()));
     }
 
     private Mono<QueueSweeper.SweepResult> sweepOne(String couponId, long nowSec,
-            int scanLimit, long graceSec, int budget, boolean removeFront) {
+            int scanLimit, long graceSec, int budget, boolean removeFront, long fence) {
         String cursor = sweepCursors.getOrDefault(couponId, "0");
         return redis.execute(SWEEP,
                         List.of(RedisKeys.queue(couponId, shards, 0),
                                 RedisKeys.grace(couponId, shards, 0),
                                 RedisKeys.alive(couponId, shards, 0),
-                                RedisKeys.admitted(couponId, shards, 0)),
+                                RedisKeys.admitted(couponId, shards, 0),
+                                RedisKeys.applyFence(couponId, shards, 0)),
                         List.of(Integer.toString(scanLimit), Long.toString(nowSec),
                                 Long.toString(graceSec), Integer.toString(budget), cursor,
-                                removeFront ? "1" : "0"))
+                                removeFront ? "1" : "0", Long.toString(fence)))
                 .next()
                 .switchIfEmpty(Mono.error(new IllegalStateException("청소 결과가 비었다")))
                 .map(raw -> {
                     List<?> values = (List<?>) raw;
+                    // **막혀도 커서는 옮긴다.** 막히는 것은 앞줄 제거뿐이고 정리는
+                    // 그대로 돌므로, 안 옮기면 그 회차가 훑은 자리를 다시 훑는다.
+                    long blocked = fenced(values) ? 1 : 0;
                     sweepCursors.put(couponId, String.valueOf(values.get(3)));
                     return new QueueSweeper.SweepResult(toLongOrZero(values.get(0)),
-                            toLongOrZero(values.get(1)), toLongOrZero(values.get(2)), 0);
+                            toLongOrZero(values.get(1)), toLongOrZero(values.get(2)), 0, blocked);
                 });
+    }
+
+    /**
+     * 이 쿠폰의 앞줄 제거가 울타리에 막혔는가. <b>숫자가 아니면 터뜨린다</b> — 0 으로 접으면
+     * 반환 모양이 바뀐 날 막힌 회차가 조용히 안 막힌 것으로 읽힌다.
+     */
+    private boolean fenced(List<?> values) {
+        if (values.size() < 5 || !(values.get(4) instanceof Number flag)) {
+            throw new IllegalStateException("청소 결과에 막힘 표시가 없다: " + values);
+        }
+        return flag.longValue() != 0;
     }
 
     private long toLongOrZero(Object value) {

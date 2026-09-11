@@ -223,10 +223,12 @@ public class ControlPlaneConfig {
     /** 멈추는 판단을 생성자가 필수로 받는다 — 빠뜨리면 컴파일이 안 된다. */
     @Bean
     QueueSweeper queueSweeper(AllocationRedisPort port, ControlPlaneProperties properties,
-            MeterRegistry meters) {
+            Leadership leadership, MeterRegistry meters) {
         return QueueSweeper.of(SweepGate.of(properties.scheduler().tick(), PollIntervalPolicy.aliveTtl()),
+                // **임기를 회차마다 다시 읽는다.** 붙잡아 두면 강등된 뒤에도 옛
+                // 번호로 걷는다 — 그것이 유령이 큐를 부수는 자리다.
                 (ids, scanLimit, removeFront) -> port.sweep(ids, Instant.now().getEpochSecond(),
-                        scanLimit, GRACE_SEC, SWEEP_BUDGET, removeFront),
+                        scanLimit, GRACE_SEC, SWEEP_BUDGET, removeFront, leadership.fence()),
                 meters);
     }
 
@@ -357,7 +359,10 @@ public class ControlPlaneConfig {
                 LeadershipEdge.of(gate,
                         onLeadershipGained(collector, capacity, cleanup, sweeper, round, holder,
                                 registry, sealFences(port, leadership, gate)),
-                        capacity::leadershipChanged),
+                        () -> {
+                            capacity.leadershipChanged();
+                            sweeper.leadershipLost();
+                        }),
                 // **운영 값을 먼저 읽고 배분한다.** 순서가 뒤면 방금 바꾼 값이
                 // 한 틱 늦게 나가고, 장애 중의 한 틱은 길다.
                 () -> capacity.refresh().then(tunables.refresh()).then(round.run()),

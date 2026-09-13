@@ -77,10 +77,6 @@ class LeaderKillScenarioTest {
     private static final Duration 기다림 = Duration.ofSeconds(20);
 
     private static final int 줄_선_사람 = 5;
-
-    /** 줄 선 사람의 생존 신호 수명. 시험 수명보다 길어야 만료 정리가 자리를 안 걷는다. */
-    private static final Duration 생존_수명 = Duration.ofMinutes(5);
-
     /** 각 구간에 보내는 요청 수. 정상 구간과 같아야 비교가 성립한다. */
     private static final int 보낼_수 = 20;
 
@@ -204,7 +200,7 @@ class LeaderKillScenarioTest {
         redis.opsForSet().add(RedisKeys.ACTIVE_COUPONS, COUPON, 한산한_쿠폰).block(기다림);
         redis.opsForValue().set(RedisKeys.stock(COUPON), "50").block(기다림);
         redis.opsForValue().set(RedisKeys.stock(한산한_쿠폰), "100000").block(기다림);
-        QueueSeed.줄을_세운다(연결, COUPON, 줄_선_사람, 생존_수명);
+        QueueSeed.줄을_세운다(연결, COUPON, 줄_선_사람);
     }
 
 

@@ -63,7 +63,6 @@ class LeaderHandoverScenarioTest {
 
     private static final Duration 기다림 = Duration.ofSeconds(60);
 
-    private static final Duration 생존_수명 = Duration.ofMinutes(5);
 
     private static final long 가용량 = 2_000;
 
@@ -209,7 +208,7 @@ class LeaderHandoverScenarioTest {
             redis.opsForSet().add(RedisKeys.ACTIVE_COUPONS, 쿠폰).block(기다림);
             redis.opsForValue().set(RedisKeys.stock(쿠폰), "100000").block(기다림);
         }
-        심은_자리.putAll(QueueSeed.줄을_세운다(연결, COUPON, 줄_선_사람, 생존_수명));
+        심은_자리.putAll(QueueSeed.줄을_세운다(연결, COUPON, 줄_선_사람));
     }
 
     @Test

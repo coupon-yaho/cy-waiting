@@ -67,8 +67,6 @@ class BackendFailureScenarioTest {
 
     private static final Duration 기다림 = Duration.ofSeconds(20);
 
-    /** 심어 둔 줄의 생존 신호 수명. 시험 수명보다 길어야 스위퍼가 살아 있다고 읽는다. */
-    private static final Duration 생존_수명 = Duration.ofMinutes(5);
 
     /** 뒷단이 보고하는 여유. 바닥값을 크게 넘겨야 대조군 예산이 구간을 버틴다. */
     private static final long 가용량 = 2_000;
@@ -175,7 +173,7 @@ class BackendFailureScenarioTest {
             redis.opsForSet().add(RedisKeys.ACTIVE_COUPONS, 쿠폰).block(기다림);
             redis.opsForValue().set(RedisKeys.stock(쿠폰), "100000").block(기다림);
         }
-        QueueSeed.줄을_세운다(연결, COUPON, 줄_선_사람, 생존_수명);
+        QueueSeed.줄을_세운다(연결, COUPON, 줄_선_사람);
     }
 
     /**

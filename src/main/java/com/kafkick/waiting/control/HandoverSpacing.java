@@ -22,11 +22,14 @@ public final class HandoverSpacing implements BooleanSupplier {
     private final LongSupplier nanoTicker;
     private final Duration ceiling;
 
-    /** 이 시각(나노) 전에는 리더로 안 친다. 쉬지 않을 때는 0 이다. */
+    /** 쉬는 중인가. <b>시각의 부호로 표시하지 않는다</b> — 단조 시계는 음수일 수 있다. */
+    private volatile boolean waiting;
+
+    /** 쉬는 중이면 이 시각(나노)까지 리더로 안 친다. */
     private volatile long notBefore;
 
-    /** 쉰 구간을 건 시각. 해제 로그를 한 번만 남기려고 둔다. 쉬는 중이 아니면 -1 이다. */
-    private volatile long armedAt = -1;
+    /** 쉬는 구간을 건 시각. 해제 로그의 길이를 잰다. */
+    private volatile long armedAt;
 
     private HandoverSpacing(LongSupplier nanoTicker, Duration tick) {
         this.nanoTicker = Objects.requireNonNull(nanoTicker, "nanoTicker 는 필수다");
@@ -45,29 +48,38 @@ public final class HandoverSpacing implements BooleanSupplier {
      */
     public void armedFrom(Duration publishedAge) {
         long now = nanoTicker.getAsLong();
+        // **쉬는 중에 다시 걸면 앞 구간부터 닫는다.** 안 닫으면 앞 진입 로그가 짝을 잃는다.
+        released(now);
         if (publishedAge == null || publishedAge.compareTo(ceiling) >= 0) {
-            notBefore = now;
-            armedAt = -1;
             return;
         }
         Duration wait = publishedAge.isNegative() ? ceiling : ceiling.minus(publishedAge);
         notBefore = now + wait.toNanos();
         armedAt = now;
+        waiting = true;
         log.info("승계 첫 회차를 앞 발행에서 떨어뜨린다 — {}ms 쉰다", wait.toMillis());
     }
 
     @Override
     public boolean getAsBoolean() {
+        if (!waiting) {
+            return true;
+        }
         long now = nanoTicker.getAsLong();
-        if (now < notBefore) {
+        // 나노 시각은 차이로만 견준다. 값끼리 크기를 보면 넘침 경계에서 뒤집힌다.
+        if (now - notBefore < 0) {
             return false;
         }
-        long since = armedAt;
-        if (since >= 0) {
-            armedAt = -1;
-            log.info("승계 첫 회차 대기 끝 — {}ms 쉬었다",
-                    Duration.ofNanos(now - since).toMillis());
-        }
+        released(now);
         return true;
+    }
+
+    /** 쉬는 구간을 닫는다. 쉬는 중이 아니면 아무것도 안 한다. */
+    private void released(long now) {
+        if (waiting) {
+            waiting = false;
+            log.info("승계 첫 회차 대기 끝 — {}ms 쉬었다",
+                    Duration.ofNanos(now - armedAt).toMillis());
+        }
     }
 }

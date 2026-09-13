@@ -240,20 +240,27 @@ class AllocationRoundTest {
         이월.set(흔들림);
         발행이_터진다.set(true);
         돈다(round);
-        이월.set(Mono.just(CreditSmoother.of(0.3)));
+        // 매번 새로 만든다. 한 벌을 돌려 쓰면 앞 임기가 관측한 스무더가 값 있는 이월로 돌아온다.
+        이월.set(Mono.fromSupplier(() -> CreditSmoother.of(0.3)));
         발행이_터진다.set(false);
         돈다(round);
 
         round.leadershipAcquired();
-        이월.set(흔들림);
         돈다(round);
 
+        이월.set(흔들림);
+        for (int i = 0; i < 3; i++) {
+            round.leadershipAcquired();
+            돈다(round);
+        }
+
         // **실패는 시도마다 센다.** 한 임기에 한 번만 세면 흔들림이 얼마나 길었는지 못 본다.
-        assertThat(round.carryoverFailures()).as("못 읽은 시도").isEqualTo(4);
+        // 넷의 값을 서로 달리 둔다 — 같으면 세는 자리를 서로 바꿔도 통과한다.
+        assertThat(round.carryoverFailures()).as("못 읽은 시도").isEqualTo(6);
         assertThat(round.carryoverRestored()).as("값을 이어받은 임기").isEqualTo(1);
-        assertThat(round.carryoverEmpty()).as("읽었는데 이을 값이 없던 임기").isEqualTo(1);
+        assertThat(round.carryoverEmpty()).as("읽었는데 이을 값이 없던 임기").isEqualTo(2);
         assertThat(round.carryoverReplaced()).as("못 받은 채 제 발행이 자리를 덮은 임기")
-                .isEqualTo(1);
+                .isEqualTo(3);
     }
 
     /**

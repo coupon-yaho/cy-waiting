@@ -57,8 +57,9 @@ class CarryoverReadTest {
         }, codec, Duration.ofSeconds(4), VirtualTimeScheduler.create()).get()
                 .block(Duration.ofSeconds(2));
 
-        assertThat(요청).singleElement().asList().as("쿠폰 자리는 안 끌어온다")
-                .doesNotContain("c1");
+        // 스텁이 요청한 자리만 주므로 빠진 자리는 아래 이월에서 걸리고, 남는 자리는 여기서 걸린다.
+        assertThat(요청).singleElement().asList().as("평활화 자리만 읽는다")
+                .containsExactlyElementsOf(codec.smoothingFields());
         assertThat(이어받음.snapshot()).isEqualTo(new CreditSmoother.Snapshot(200.0, true));
     }
 

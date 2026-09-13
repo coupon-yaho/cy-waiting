@@ -101,9 +101,11 @@ class BackendBodyStallScenarioTest {
         }
     }
 
-    /** 한 요청의 끝. 상태와 본문이 잘렸는지. */
+    /** 한 요청의 끝. 상태와 본문이 잘렸는지. 헤더를 못 받았으면 상태가 0 이다. */
     private record Outcome(int status, boolean 잘림) {
     }
+
+    private static final int 헤더_없음 = 0;
 
     @LocalServerPort
     private int port;
@@ -118,16 +120,22 @@ class BackendBodyStallScenarioTest {
     private final AtomicInteger 회원 = new AtomicInteger(70_000);
 
     private Outcome 발급을_시도한다() {
-        FluxExchangeResult<String> 응답 = WebTestClient.bindToServer()
-                .baseUrl("http://localhost:" + port)
-                .responseTimeout(Duration.ofSeconds(10))
-                .build()
-                .post()
-                .uri("/api/v1/coupons/" + COUPON + "/issue")
-                .header("X-Member-Id", String.valueOf(회원.getAndIncrement()))
-                .header("X-Member-Grade", "GOLD")
-                .exchange()
-                .returnResult(String.class);
+        FluxExchangeResult<String> 응답;
+        try {
+            응답 = WebTestClient.bindToServer()
+                    .baseUrl("http://localhost:" + port)
+                    .responseTimeout(Duration.ofSeconds(10))
+                    .build()
+                    .post()
+                    .uri("/api/v1/coupons/" + COUPON + "/issue")
+                    .header("X-Member-Id", String.valueOf(회원.getAndIncrement()))
+                    .header("X-Member-Grade", "GOLD")
+                    .exchange()
+                    .returnResult(String.class);
+        } catch (RuntimeException e) {
+            // **헤더 대기에서 멎어도 시나리오를 끊지 않는다.** 여기서 던지면 판정이 안 돌고 이유가 안 남는다.
+            return new Outcome(헤더_없음, true);
+        }
         boolean 잘림;
         try {
             응답.getResponseBody().then().block(Duration.ofSeconds(10));

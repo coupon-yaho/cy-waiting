@@ -20,6 +20,7 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -178,6 +179,13 @@ class ServerErrorCircuitRecoveryScenarioTest {
                     long 전 = 뒷단.받은_수();
                     열기_전_상태.addAll(여러_번_시도한다(5));
                     열기_전_유입[0] = 뒷단.받은_수() - 전;
+                    // **열린 뒤부터 잰다.** 창이 시간 단위라 호출이 느리면 다섯 건으로 표본이 안
+                    // 차고, 그때 유지 구간의 요청이 뒷단에 가 판정이 빨개진다.
+                    Awaitility.await().atMost(Duration.ofSeconds(10))
+                            .until(() -> {
+                                여러_번_시도한다(1);
+                                return 서킷().getState() == CircuitBreaker.State.OPEN;
+                            });
                     long 열린_뒤 = 뒷단.받은_수();
                     장애중_상태.addAll(여러_번_시도한다(5));
                     유지중_유입[0] = 뒷단.받은_수() - 열린_뒤;

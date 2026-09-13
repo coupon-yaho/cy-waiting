@@ -156,7 +156,7 @@ class SlowCallCircuitScenarioTest {
         List<Integer> 유지_상태 = new ArrayList<>();
         long[] 유지중_유입 = new long[1];
         int[] 열린_때_실패 = {-1};
-        Duration[] 느린_회원_응답 = new Duration[1];
+        long[] 느린_회원_응답 = {-1};
 
         ChaosScenario.named("C8b 뒷단 느림 → 서킷 오픈")
                 .baseline(() -> {
@@ -220,21 +220,21 @@ class SlowCallCircuitScenarioTest {
                         .formatted(느림_초과.get(), 실패_초과.get(), 열린_때_실패));
     }
 
-    /** 하네스 확인이다. 느리던 짝수 회원으로 스텁을 직접 불러 걸린 시간을 잰다. */
-    private Duration 뒷단에_직접_묻는다() {
-        long 시작 = System.nanoTime();
+    /** 하네스 확인이다. 느리던 짝수 회원으로 스텁을 직접 불러, 늦게 답하는 갈래를 탄 수를 센다. */
+    private long 뒷단에_직접_묻는다() {
+        long 전 = 뒷단.늦게_답한_수();
         WebTestClient.bindToServer()
                 .baseUrl("http://localhost:" + 뒷단.port())
                 .responseTimeout(Duration.ofSeconds(2))
                 .build()
                 .get().uri("/probe").header("X-Member-Id", "2")
                 .exchange().expectStatus().isOk();
-        return Duration.ofNanos(System.nanoTime() - 시작);
+        return 뒷단.늦게_답한_수() - 전;
     }
 
-    private Optional<String> 느림이_걷혔다(Duration 걸림) {
-        return 걸림 != null && 걸림.compareTo(느림_임계) < 0 ? Optional.empty()
-                : Optional.of("하네스 — 느림을 걷었는데 스텁이 %s 걸렸다".formatted(걸림));
+    private Optional<String> 느림이_걷혔다(long 늦게_답한_증가) {
+        return 늦게_답한_증가 == 0 ? Optional.empty()
+                : Optional.of("하네스 — 느림을 걷었는데 스텁이 늦게 답하는 갈래를 탔다");
     }
 
     private Optional<String> 유입이_멎었다(long 유입) {

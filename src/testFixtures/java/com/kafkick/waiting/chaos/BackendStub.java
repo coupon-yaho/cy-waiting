@@ -25,6 +25,7 @@ public final class BackendStub implements AutoCloseable {
     private final AtomicLong received = new AtomicLong();
     private final ConcurrentHashMap<String, AtomicLong> perCoupon = new ConcurrentHashMap<>();
     private final AtomicLong duplicated = new AtomicLong();
+    private final AtomicLong delayed = new AtomicLong();
     private final Set<String> seen = ConcurrentHashMap.newKeySet();
     private final DisposableServer server;
 
@@ -61,6 +62,7 @@ public final class BackendStub implements AutoCloseable {
                     // **느린 것은 늦게라도 답한다.** 응답 상한 안에 오므로 실패가 아니라
                     // 느린 호출로만 세어진다.
                     if (member != null && slowMember.test(member)) {
+                        delayed.incrementAndGet();
                         return Mono.delay(delay).then(response.status(status).send());
                     }
                     return response.status(status).send();
@@ -104,6 +106,11 @@ public final class BackendStub implements AutoCloseable {
 
     public int port() {
         return server.port();
+    }
+
+    /** 늦게 답하는 갈래를 탄 수. 걸린 시간으로 재면 환경 지연이 섞인다. */
+    public long 늦게_답한_수() {
+        return delayed.get();
     }
 
     public long 받은_수() {

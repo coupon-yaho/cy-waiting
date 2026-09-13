@@ -647,6 +647,18 @@ class GatewayRoutesTest {
                 .isLessThan(NettyWriteResponseFilter.WRITE_RESPONSE_FILTER_ORDER);
     }
 
+    /** 본문 상한은 응답 상한의 두 배로 실린다. 카오스 시나리오는 실시간이라 이 배수를 못 잰다. */
+    @Test
+    @DisplayName("본문_상한이_응답_상한의_두_배로_실린다")
+    void 본문_상한이_응답_상한의_두_배로_실린다() {
+        Route 발급 = 잡는_라우트(HttpMethod.POST, "/api/v1/coupons/c1/issue");
+
+        BodyDeadline 상한 = 발급.getFilters().stream().map(GatewayRoutesTest::끝까지_벗긴다)
+                .filter(BodyDeadline.class::isInstance).map(BodyDeadline.class::cast)
+                .findFirst().orElseThrow(() -> new AssertionError("본문 상한 필터가 없다"));
+        assertThat(상한.limit()).isEqualTo(응답_상한.multipliedBy(2));
+    }
+
     /**
      * <b>매진 관찰도 쓰기 필터보다 앞이어야 한다.</b>
      *

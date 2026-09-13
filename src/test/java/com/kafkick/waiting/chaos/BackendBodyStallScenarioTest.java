@@ -52,12 +52,8 @@ class BackendBodyStallScenarioTest {
     private static final Instant 지금 = Instant.parse("2026-09-14T00:00:00Z");
     private static final String COUPON = "c18b";
 
-    /** 응답 상한. 본문 상한은 이것의 두 배로 배선된다. */
+    /** 응답 상한. 본문 상한은 이것의 두 배로 배선된다 — 배수는 라우트 시험이 잰다. */
     private static final Duration 응답_상한 = Duration.ofMillis(500);
-    private static final Duration 본문_상한 = 응답_상한.multipliedBy(2);
-
-    /** 끊긴 뒤 클라이언트에 닿기까지의 여유. 상한 배선이 달라지면 이 폭 밖으로 나가야 한다. */
-    private static final Duration 여유 = Duration.ofMillis(400);
 
     private static final int 보낼_수 = 3;
 
@@ -105,8 +101,8 @@ class BackendBodyStallScenarioTest {
         }
     }
 
-    /** 한 요청의 끝. 상태, 본문이 잘렸는지, 끝나기까지 걸린 시간. */
-    private record Outcome(int status, boolean 잘림, Duration 걸림) {
+    /** 한 요청의 끝. 상태와 본문이 잘렸는지. */
+    private record Outcome(int status, boolean 잘림) {
     }
 
     @LocalServerPort
@@ -122,7 +118,6 @@ class BackendBodyStallScenarioTest {
     private final AtomicInteger 회원 = new AtomicInteger(70_000);
 
     private Outcome 발급을_시도한다() {
-        long 시작 = System.nanoTime();
         FluxExchangeResult<String> 응답 = WebTestClient.bindToServer()
                 .baseUrl("http://localhost:" + port)
                 .responseTimeout(Duration.ofSeconds(10))
@@ -140,7 +135,7 @@ class BackendBodyStallScenarioTest {
         } catch (RuntimeException e) {
             잘림 = true;
         }
-        return new Outcome(응답.getStatus().value(), 잘림, Duration.ofNanos(System.nanoTime() - 시작));
+        return new Outcome(응답.getStatus().value(), 잘림);
     }
 
     private List<Outcome> 여러_번_시도한다(int 횟수) {
@@ -185,7 +180,8 @@ class BackendBodyStallScenarioTest {
                 .afterRecovery(() -> 회복.addAll(여러_번_시도한다(2)))
                 .assertEntry(() -> RecoveryCriteria.violations(온전히_받았다("정상", 정상)))
                 .assertDuring(() -> RecoveryCriteria.violations(
-                        상한에서_끝났다(장애중),
+                        // **끊은 것이 본문 상한인가.** 클라이언트 시한에 걸려도 잘림으로 보이므로
+                        // 걸린 시간이 아니라 상한의 계수로 가른다.
                         상한이_끊었다(끊은_증가[0]),
                         // **결함을 못 박는다.** 봉투가 갈리고(CY-713) 끊는 자리가 서킷 바깥이라
                         // 성공으로 쌓인다(CY-710). 고치면 여기가 빨개지고, 그때 판정을 뒤집는다.
@@ -203,23 +199,14 @@ class BackendBodyStallScenarioTest {
                 : Optional.of("%s — 전부 온전한 200 이어야 한다: %s".formatted(구간, 결과들));
     }
 
-    /** 본문 상한에서 끝났는가. 아래로도 묶어야 상한이 응답 상한의 두 배로 배선된 것이 드러난다. */
-    private Optional<String> 상한에서_끝났다(List<Outcome> 결과들) {
-        Duration 하한 = 본문_상한.minus(Duration.ofMillis(50));
-        Duration 한계 = 본문_상한.plus(여유);
-        return 결과들.size() == 보낼_수 && 결과들.stream().allMatch(
-                r -> r.걸림().compareTo(하한) >= 0 && r.걸림().compareTo(한계) < 0)
-                ? Optional.empty()
-                : Optional.of("본문 상한 %s~%s 에서 안 끝났다: %s".formatted(하한, 한계, 결과들));
-    }
-
     private Optional<String> 상한이_끊었다(double 증가) {
         return 증가 == 보낼_수 ? Optional.empty()
                 : Optional.of("본문 상한이 %s 건을 끊었다 (보낸 %d)".formatted(증가, 보낼_수));
     }
 
     private Optional<String> 잘린_200_이_나갔다(List<Outcome> 결과들) {
-        return 결과들.stream().allMatch(r -> r.status() == 200 && r.잘림()) ? Optional.empty()
+        return 결과들.size() == 보낼_수 && 결과들.stream().allMatch(r -> r.status() == 200 && r.잘림())
+                ? Optional.empty()
                 : Optional.of("결함이 바뀌었다(CY-713) — 잘린 200 이 아니다: %s".formatted(결과들));
     }
 

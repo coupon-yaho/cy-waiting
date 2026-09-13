@@ -5,12 +5,16 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BooleanSupplier;
 import java.util.function.LongSupplier;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * 리더가 <b>되는 순간</b>과 <b>잃는 순간</b>에 한 번씩 알린다. 승계마다 초기화해야
  * 하는 상태를 그 구별 없이 두면, 비리더 구간에 얼어 있던 값을 자기 것으로 이어 쓴다.
  */
 public final class LeadershipEdge implements BooleanSupplier {
+
+    private static final Logger log = LoggerFactory.getLogger(LeadershipEdge.class);
 
     private final BooleanSupplier source;
     private final LongSupplier term;
@@ -58,6 +62,9 @@ public final class LeadershipEdge implements BooleanSupplier {
         long previous = heldTerm.get();
         if (current > 0 && previous > 0 && current != previous
                 && heldTerm.compareAndSet(previous, current)) {
+            // 드문 이상 신호다. 리더십 로그만으로는 틱 사이 승계를 이 노드가 알아챘는지 모른다.
+            log.info("틱 사이에 임기가 바뀌었다 — {} → {}. 앞 임기를 닫고 다시 연다",
+                    previous, current);
             onLost.run();
             onGained.run();
         } else if (previous <= 0 && current > 0) {

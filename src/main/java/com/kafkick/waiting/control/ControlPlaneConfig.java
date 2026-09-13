@@ -276,7 +276,8 @@ public class ControlPlaneConfig {
      * 서므로 승계와 첫 틱 사이가 비고, 그 창의 쓰기는 되돌릴 수 없다. 한 스크립트로
      * 둘을 잠근다 — 표마다 왕복하면 배분이 안 도는 시간이 곱해진다.
      */
-    Runnable sealFences(AllocationRedisPort port, Leadership leadership, SealGate gate) {
+    Runnable sealFences(AllocationRedisPort port, Leadership leadership, SealGate gate,
+            Duration deadline, Scheduler scheduler) {
         return () -> {
             long generation = gate.sealing();
             long fence = leadership.fence();
@@ -317,6 +318,12 @@ public class ControlPlaneConfig {
             // 명령 시한만큼 새 리더의 첫 틱이 통째로 사라진다.
             snapshot.subscribe();
             coupons
+                    // **잠금 전체에 시한을 둔다.** 문이 승계 첫 회차를 세우므로, 끝이
+                    // 없으면 레디스가 매달린 동안 새 리더가 배분을 안 돈다.
+                    .timeout(deadline, scheduler)
+                    .doOnError(e -> log.warn("울타리 잠금이 시한({})을 넘었다 — 문을 연다. "
+                            + "못 잠근 쿠폰은 적용이 다시 막는다, 임기 {}", deadline, fence))
+                    .onErrorResume(e -> Mono.empty())
                     // **이 잠금의 세대로 연다.** 승계가 잦으면 첫 잠금의
                     // 완료가 둘째 잠금이 도는 중에 문을 열어 버린다.
                     .doFinally(signal -> gate.sealed(generation))
@@ -388,7 +395,8 @@ public class ControlPlaneConfig {
                 // 횟수를 이어 쓰면 재승계 첫 회차가 곧바로 크레딧을 깎는다.
                 leaderTick(leadership::isLeader, leadership::fence, gate,
                         onLeadershipGained(collector, capacity, cleanup, sweeper, round, holder,
-                                registry, sealFences(port, leadership, gate)),
+                                registry, sealFences(port, leadership, gate,
+                                        properties.scheduler().tick(), allocationScheduler)),
                         () -> {
                             capacity.leadershipChanged();
                             sweeper.leadershipLost();

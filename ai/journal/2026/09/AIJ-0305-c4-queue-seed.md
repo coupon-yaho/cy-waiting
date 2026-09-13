@@ -5,7 +5,7 @@ kind: test
 plan: [08-resilience]
 phase: 9
 jira: CY-852
-commits: [fd11b49]
+commits: [94d144c, e1d9a12]
 agent: claude-opus-5
 confidence: high
 promoted-to:

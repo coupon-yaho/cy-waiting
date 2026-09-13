@@ -37,7 +37,7 @@
 
 | ID | 작업 | 주요 테스트 |
 |---|---|---|
-| 6.1.1 | resilience4j 의존성 + 서킷 부착 | 뒷단이 실패하면 열린다. **인스턴스별 동작은 Phase 9 (9.3.13)** — 가를 대상이 없다 (O-6) |
+| 6.1.1 | resilience4j 의존성 + 서킷 부착 | 뒷단이 실패하면 열린다. 실패는 예외·느림과 **응답 500·502·503·504** 다 — 상태를 안 넘기면 응답이 온 것만으로 성공이다 (CY-853). **인스턴스별 동작은 Phase 9 (9.3.13)** — 가를 대상이 없다 (O-6) |
 | 6.1.2 | **`/fallback/issue` 핸들러 구현** | 서킷 오픈 시 404 가 아님. 줄에 선 사람은 503, **차례가 온 사람은 429** (F8 · CY-903) |
 | 6.1.3 | 503 + `Retry-After` + 지터 | |
 | 6.1.4 | 대기열 순번이 유지됨을 응답으로 안내 | |
@@ -58,7 +58,7 @@
 | `slidingWindowSize` | **10s** | |
 | `minimumNumberOfCalls` | **20** | 표본이 적을 때 열지 않는다 |
 | `failureRateThreshold` | **50%** | |
-| **`slowCallDurationThreshold`** | **타임아웃의 50%** | 아래 참조 |
+| **`slowCallDurationThreshold`** | **타임아웃의 50%** | 아래 참조. **격벽이 끊는 지연의 하한(2초) 아래**여야 하고 기동이 막는다 (CY-869) |
 | **`slowCallRateThreshold`** | **50%** | |
 | `waitDurationInOpenState` | **5s** | 지연이 걷히면 늦어도 2번째 시도에 닫힌다 → `G8.12` |
 | `permittedNumberOfCallsInHalfOpenState` | **10** | 서킷이 회복을 판정할 표본 수 |

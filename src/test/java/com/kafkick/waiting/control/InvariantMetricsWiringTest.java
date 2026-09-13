@@ -77,7 +77,8 @@ class InvariantMetricsWiringTest {
                 // 발행한 몫이라 둘 다 못 보여 준다.
                 .contains(이월 + "restored\"}")
                 .contains(이월 + "empty\"}")
-                .contains(이월 + "failed\"}")
+                .contains(이월 + "replaced\"}")
+                .contains("waiting_allocation_carryover_failures_total")
                 .contains("waiting_allocation_smoothed_credit");
     }
 

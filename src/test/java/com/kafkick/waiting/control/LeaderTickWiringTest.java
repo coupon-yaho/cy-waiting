@@ -55,9 +55,9 @@ class LeaderTickWiringTest {
     @Test
     @DisplayName("잠그는_동안의_틱을_잃은_것으로_안_본다")
     void 잠그는_동안의_틱을_잃은_것으로_안_본다() {
-        틱.getAsBoolean();
-        틱.getAsBoolean();
-        틱.getAsBoolean();
+        assertThat(틱.getAsBoolean()).as("잠금을 시작한 틱").isFalse();
+        assertThat(틱.getAsBoolean()).as("잠그는 중인 틱").isFalse();
+        assertThat(틱.getAsBoolean()).as("잠그는 중인 틱").isFalse();
 
         assertThat(잃음).as("잠그는 중은 리더십을 잃은 것이 아니다").hasValue(0);
         assertThat(세대).as("한 번만 잠근다").hasValue(1);

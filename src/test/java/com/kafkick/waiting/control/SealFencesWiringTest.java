@@ -20,6 +20,7 @@ import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactor
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
+import reactor.test.scheduler.VirtualTimeScheduler;
 
 /**
  * 승계가 <b>세 문을 다 잠그는지</b>를 배선에서 잰다 (CY-911).
@@ -119,17 +120,18 @@ class SealFencesWiringTest {
     void 잠금이_시한을_넘기면_문을_연다() {
         SealGate gate = SealGate.of(() -> true);
         Leadership leadership = 리더가_된다();
+        // **잠금 시한은 가상 시간으로 넘긴다.** 레디스가 끊겨 명령은 명령 시한(기다림)까지
+        // 매달리므로, 그 전에 문이 열리면 잠금 시한이 연 것이다.
+        VirtualTimeScheduler 시계 = VirtualTimeScheduler.create();
+        Duration 시한 = Duration.ofSeconds(1);
         faults.끊는다();
         try {
-            long 시작 = System.nanoTime();
+            new ControlPlaneConfig().sealFences(port, leadership, gate, 시한, 시계).run();
+            assertThat(gate.getAsBoolean()).as("시한 전에는 잠그는 중이다").isFalse();
 
-            new ControlPlaneConfig().sealFences(port, leadership, gate, Duration.ofMillis(300),
-                    Schedulers.parallel()).run();
+            시계.advanceTimeBy(시한);
 
-            Awaitility.await().atMost(기다림).until(gate::getAsBoolean);
-            assertThat(Duration.ofNanos(System.nanoTime() - 시작))
-                    .as("명령 시한(%s)이 아니라 잠금 시한에서 연다", 기다림)
-                    .isLessThan(Duration.ofSeconds(3));
+            assertThat(gate.getAsBoolean()).as("시한이 지나면 명령 시한을 안 기다리고 연다").isTrue();
         } finally {
             faults.붙인다();
         }

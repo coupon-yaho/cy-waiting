@@ -88,6 +88,25 @@ public final class AllocationRound {
     /** 이월을 못 받는 동안 이어 쓰는 평활. 이월이 오거나 임기가 바뀌면 버린다. */
     private final AtomicReference<CreditSmoother> interim = new AtomicReference<>();
 
+    /** 이월 결과. 받음·없음·실패를 가르지 않으면 승계 뒤 계단의 원인을 못 읽는다. */
+    private final AtomicLong carryoverRestored = new AtomicLong();
+    private final AtomicLong carryoverEmpty = new AtomicLong();
+    private final AtomicLong carryoverFailed = new AtomicLong();
+
+    /** 마지막 회차의 평활값. 지표 스레드가 읽는다. 임기가 바뀌면 비운다. */
+    private volatile double smoothedCredit = Double.NaN;
+
+    /** 이월받은 상태를 센다. <b>값이 없는 이월은 콜드다</b> — 받은 것과 섞으면 안 된다. */
+    private void carried(CreditSmoother.Snapshot snapshot) {
+        if (snapshot.seeded()) {
+            carryoverRestored.incrementAndGet();
+            log.info("평활화 이월 완료 — {} 에서 잇는다", snapshot.value());
+        } else {
+            carryoverEmpty.incrementAndGet();
+            log.info("평활화 이월할 값이 없다 — 첫 관측에서 시작한다");
+        }
+    }
+
     /** 이월을 이어서 몇 회차 못 받았나. 임기가 바뀌면 0 부터 다시 센다. */
     private final AtomicInteger carryoverMisses = new AtomicInteger();
 
@@ -286,6 +305,7 @@ public final class AllocationRound {
                 // 되고, 미관측 폴백은 첫 관측치를 평활 없이 발행한다. 임기 내내 다시
                 // 시도하되 콜드 스무더는 저장하지 않아, 흔들림이 지나가면 이어받는다.
                 .onErrorResume(e -> {
+                    carryoverFailed.incrementAndGet();
                     if (carryoverMisses.incrementAndGet() == CARRYOVER_WARN_AFTER) {
                         log.warn("평활화 이월을 {}회차 못 받았다 — 그동안 콜드로 돈다",
                                 CARRYOVER_WARN_AFTER);
@@ -296,7 +316,7 @@ public final class AllocationRound {
                 .doOnNext(restored -> {
                     if (smoother.compareAndSet(null, restored)) {
                         interim.set(null);
-                        log.info("평활화 이월 완료");
+                        carried(restored.snapshot());
                     }
                 })
                 .then();
@@ -329,6 +349,7 @@ public final class AllocationRound {
         }
         smoother.set(null);
         interim.set(null);
+        smoothedCredit = Double.NaN;
         carryoverMisses.set(0);
         // **조임 창도 닫는다.** 안 닫으면 회복 로그가 비리더 구간까지 포함한 지속
         // 시간을 찍는다. 버렸다는 것은 남긴다 — 조용히 버리면 찍힌 진입 경고 하나에
@@ -423,7 +444,9 @@ public final class AllocationRound {
         // 앞선 낮은 값에서 올라오는 데 열 틱이 넘고, 그동안 노드당 몫이 유휴 비율
         // 아래에 머물러 한산 통과 상한이 0 이다 — 한산한 쿠폰은 줄 없이 통과해야 한다.
         long observed = Math.max(0, globalCredit.getAsLong());
-        long smoothed = Math.round(current.observe(observed));
+        double smoothedValue = current.observe(observed);
+        smoothedCredit = smoothedValue;
+        long smoothed = Math.round(smoothedValue);
         // **서킷은 평활과 하한 뒤에 건다.** 앞에 걸면 평활이 0 을 천천히 내리는 사이
         // 첫 회차에 수천이 그대로 나간다. 서킷은 관측이 아니라 사실이라 정책인 하한보다
         // 뒤다. 회차마다 한 번만 읽는다 — 두 번 읽으면 한 회차가 자기모순이 된다.
@@ -629,6 +652,26 @@ public final class AllocationRound {
     /** 폴링 예산을 넘긴 누적 틱 수. 0 이면 배수가 한 번도 안 걸렸다. */
     public double pollBudgetOvershootTicks() {
         return pollBudgetOvershootTicks.get();
+    }
+
+    /** 이월을 값째 받은 누적 임기 수. */
+    public double carryoverRestored() {
+        return carryoverRestored.get();
+    }
+
+    /** 이월을 읽었는데 이을 값이 없던 누적 임기 수. */
+    public double carryoverEmpty() {
+        return carryoverEmpty.get();
+    }
+
+    /** 이월 읽기가 실패한 누적 시도 수. 한 임기에서 여러 번 오를 수 있다. */
+    public double carryoverFailed() {
+        return carryoverFailed.get();
+    }
+
+    /** 마지막 회차의 평활값. <b>리더가 아니면 NaN 이다</b> — 굳은 값이 섞이면 못 읽는다. */
+    public double smoothedCredit() {
+        return stillLeader.getAsBoolean() ? smoothedCredit : Double.NaN;
     }
 
     /**

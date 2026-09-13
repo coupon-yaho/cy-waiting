@@ -13,7 +13,9 @@ import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.util.List;
 import java.util.Map;
+import java.util.function.BooleanSupplier;
 import java.util.function.Function;
+import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 import reactor.core.publisher.Mono;
 import java.time.Instant;
@@ -343,6 +345,17 @@ public class ControlPlaneConfig {
     }
 
     /**
+     * 배분 틱이 리더로 치는가. <b>경계는 리더십을 보고, 문은 알린 뒤에 본다.</b> 경계가
+     * 문을 보면 잠그는 동안의 틱을 잃음으로 읽어 다시 잠그고, 알리기 전에 문을 보면 잠그기
+     * 시작한 그 틱에 회차가 돈다 — 새 리더가 안 만진 쿠폰에 유령의 몫이 들어간다.
+     */
+    BooleanSupplier leaderTick(BooleanSupplier leader, LongSupplier term, SealGate gate,
+            Runnable onGained, Runnable onLost) {
+        LeadershipEdge edge = LeadershipEdge.of(leader, term, onGained, onLost);
+        return () -> edge.getAsBoolean() && gate.getAsBoolean();
+    }
+
+    /**
      * 평활화 이월 읽기. <b>제 시한을 둔다</b> — 가용량과 운영값 갱신이 이미 틱의 4분의 1 씩
      * 쓰는데, 승계 직후 이 왕복이 나머지를 다 쓰면 전 노드가 낡음으로 넘어간다. 넘기면
      * 실패로 끝나 회차가 다음에 다시 받는다.
@@ -373,9 +386,7 @@ public class ControlPlaneConfig {
                 properties.scheduler().firstTickDelay(),
                 // **승계는 유예를 처음부터 준다.** 비리더 구간에 얼어 있던 실패
                 // 횟수를 이어 쓰면 재승계 첫 회차가 곧바로 크레딧을 깎는다.
-                // **문을 잠글 때까지 리더로 안 친다.** 잠금이 끝나기 전에 회차가
-                // 돌면, 새 리더가 안 만지는 쿠폰에 유령의 지연된 몫이 그대로 들어간다.
-                LeadershipEdge.of(gate,
+                leaderTick(leadership::isLeader, leadership::fence, gate,
                         onLeadershipGained(collector, capacity, cleanup, sweeper, round, holder,
                                 registry, sealFences(port, leadership, gate)),
                         () -> {

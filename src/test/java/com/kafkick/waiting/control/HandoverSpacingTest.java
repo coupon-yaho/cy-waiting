@@ -135,6 +135,39 @@ class HandoverSpacingTest {
         assertThat(간격.getAsBoolean()).isTrue();
     }
 
+    /**
+     * <b>단조 시계는 음수일 수 있다</b> ({@code System.nanoTime}). 부호로 "안 쉼" 을 표시하면 음수
+     * 시각에서 걸지 않은 간격이 막고, 쉰 구간의 해제가 안 남는다.
+     */
+    @Test
+    @DisplayName("시각이_음수여도_간격이_맞게_돈다")
+    void 시각이_음수여도_간격이_맞게_돈다() {
+        나노.set(-5_000_000_000L);
+        HandoverSpacing 음수_시계 = HandoverSpacing.of(나노::get, 틱);
+        assertThat(음수_시계.getAsBoolean()).as("건 적 없으면 막지 않는다").isTrue();
+
+        음수_시계.armedFrom(Duration.ofMillis(400));
+        assertThat(음수_시계.getAsBoolean()).isFalse();
+        흘린다(Duration.ofMillis(1_600));
+        assertThat(음수_시계.getAsBoolean()).isTrue();
+        assertThat(정보_로그()).as("진입과 해제가 한 쌍 남는다").hasSize(2);
+    }
+
+    /** 쉬는 중에 다시 걸면 앞 구간의 해제를 먼저 남긴다. 안 남기면 진입 로그 하나가 짝을 잃는다. */
+    @Test
+    @DisplayName("쉬는_중에_다시_걸면_앞_구간을_먼저_닫는다")
+    void 쉬는_중에_다시_걸면_앞_구간을_먼저_닫는다() {
+        간격.armedFrom(Duration.ofMillis(400));
+        흘린다(Duration.ofMillis(300));
+
+        간격.armedFrom(null);
+
+        assertThat(정보_로그()).hasSize(2);
+        assertThat(정보_로그().get(1)).contains("대기 끝").contains("300ms");
+        assertThat(간격.getAsBoolean()).isTrue();
+        assertThat(정보_로그()).as("닫은 구간을 또 닫지 않는다").hasSize(2);
+    }
+
     /** 쉬는 구간의 진입과 해제를 쌍으로 남긴다. 안 남기면 리더가 됐는데 발행이 없는 이유를 모른다. */
     @Test
     @DisplayName("쉬는_구간의_진입과_해제를_남긴다")

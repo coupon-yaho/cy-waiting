@@ -226,6 +226,43 @@ class LeadershipTest {
                 .verify(BLOCK);
     }
 
+    /** 연장 응답이 {@code 늦게} 오는 한 회차를 가상 시간으로 돌리고, 벽시계를 {@code 흐른_뒤} 만큼 감는다. */
+    private void 늦은_연장을_돌린다(Leadership leadership, Duration 흐른_뒤) {
+        StepVerifier.withVirtualTime(leadership::renew)
+                .thenAwait(ATTEMPT.multipliedBy(2))
+                .expectComplete()
+                .verify(BLOCK);
+        시간을_흘린다(흐른_뒤);
+    }
+
+    /**
+     * <b>연장이 시도 시한보다 늦게 오면 명령이 돼도 내려온다</b> (CY-847). 레디스 지연이 연장
+     * 시도와 명령 상한 사이인 밴드다. 받아들인 동작이라 사실로 적는다 — 카오스 시나리오는 실제
+     * 회선 지연으로 같은 것을 재고, 여기서는 시각을 쥐고 결정적으로 잰다.
+     */
+    @Test
+    @DisplayName("연장이_시도_시한보다_늦게_오면_리스가_지나고_내려온다")
+    void 연장이_시도_시한보다_늦게_오면_리스가_지나고_내려온다() {
+        Leadership leadership = 리더가_된다(() -> 내_락().delayElement(ATTEMPT.plusMillis(50)));
+        시간을_흘린다(Duration.ofSeconds(1));
+
+        늦은_연장을_돌린다(leadership, Duration.ofMillis(1_500));
+
+        assertThat(leadership.isLeader()).as("늦은 응답은 확인 시각을 못 옮긴다").isFalse();
+    }
+
+    /** 대조군. 시한 안에 오면 같은 시각에 리더다 — 안 재면 늘 내려오는 구현이 위를 통과한다. */
+    @Test
+    @DisplayName("연장이_시도_시한_안에_오면_리더로_남는다")
+    void 연장이_시도_시한_안에_오면_리더로_남는다() {
+        Leadership leadership = 리더가_된다(() -> 내_락().delayElement(ATTEMPT.minusMillis(50)));
+        시간을_흘린다(Duration.ofSeconds(1));
+
+        늦은_연장을_돌린다(leadership, Duration.ofMillis(1_500));
+
+        assertThat(leadership.isLeader()).isTrue();
+    }
+
     @Test
     @DisplayName("리더였다가_빈_응답을_받으면_리스가_지나고_내려온다")
     void 리더였다가_빈_응답을_받으면_리스가_지나고_내려온다() {

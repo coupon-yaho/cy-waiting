@@ -13,7 +13,9 @@ import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.util.List;
 import java.util.Map;
+import java.util.function.BooleanSupplier;
 import java.util.function.Function;
+import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 import reactor.core.publisher.Mono;
 import java.time.Instant;
@@ -274,7 +276,8 @@ public class ControlPlaneConfig {
      * 서므로 승계와 첫 틱 사이가 비고, 그 창의 쓰기는 되돌릴 수 없다. 한 스크립트로
      * 둘을 잠근다 — 표마다 왕복하면 배분이 안 도는 시간이 곱해진다.
      */
-    Runnable sealFences(AllocationRedisPort port, Leadership leadership, SealGate gate) {
+    Runnable sealFences(AllocationRedisPort port, Leadership leadership, SealGate gate,
+            Duration deadline, Scheduler scheduler) {
         return () -> {
             long generation = gate.sealing();
             long fence = leadership.fence();
@@ -315,6 +318,12 @@ public class ControlPlaneConfig {
             // 명령 시한만큼 새 리더의 첫 틱이 통째로 사라진다.
             snapshot.subscribe();
             coupons
+                    // **잠금 전체에 시한을 둔다.** 문이 승계 첫 회차를 세우므로, 끝이
+                    // 없으면 레디스가 매달린 동안 새 리더가 배분을 안 돈다.
+                    .timeout(deadline, scheduler)
+                    .doOnError(e -> log.warn("울타리 잠금이 시한({})을 넘었다 — 문을 연다. "
+                            + "못 잠근 쿠폰은 적용이 다시 막는다, 임기 {}", deadline, fence))
+                    .onErrorResume(e -> Mono.empty())
                     // **이 잠금의 세대로 연다.** 승계가 잦으면 첫 잠금의
                     // 완료가 둘째 잠금이 도는 중에 문을 열어 버린다.
                     .doFinally(signal -> gate.sealed(generation))
@@ -340,6 +349,17 @@ public class ControlPlaneConfig {
         }
         long published = seen.snapshot().meta().globalCredit();
         return holder.isDataStale(seen) ? Math.min(published, floor) : published;
+    }
+
+    /**
+     * 배분 틱이 리더로 치는가. <b>경계는 리더십을 보고, 문은 알린 뒤에 본다.</b> 경계가
+     * 문을 보면 잠그는 동안의 틱을 잃음으로 읽어 다시 잠그고, 알리기 전에 문을 보면 잠그기
+     * 시작한 그 틱에 회차가 돈다 — 새 리더가 안 만진 쿠폰에 유령의 몫이 들어간다.
+     */
+    BooleanSupplier leaderTick(BooleanSupplier leader, LongSupplier term, SealGate gate,
+            Runnable onGained, Runnable onLost) {
+        LeadershipEdge edge = LeadershipEdge.of(leader, term, onGained, onLost);
+        return () -> edge.getAsBoolean() && gate.getAsBoolean();
     }
 
     /**
@@ -373,11 +393,10 @@ public class ControlPlaneConfig {
                 properties.scheduler().firstTickDelay(),
                 // **승계는 유예를 처음부터 준다.** 비리더 구간에 얼어 있던 실패
                 // 횟수를 이어 쓰면 재승계 첫 회차가 곧바로 크레딧을 깎는다.
-                // **문을 잠글 때까지 리더로 안 친다.** 잠금이 끝나기 전에 회차가
-                // 돌면, 새 리더가 안 만지는 쿠폰에 유령의 지연된 몫이 그대로 들어간다.
-                LeadershipEdge.of(gate,
+                leaderTick(leadership::isLeader, leadership::fence, gate,
                         onLeadershipGained(collector, capacity, cleanup, sweeper, round, holder,
-                                registry, sealFences(port, leadership, gate)),
+                                registry, sealFences(port, leadership, gate,
+                                        properties.scheduler().tick(), allocationScheduler)),
                         () -> {
                             capacity.leadershipChanged();
                             sweeper.leadershipLost();

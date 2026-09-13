@@ -41,7 +41,8 @@ import reactor.core.publisher.Mono;
  * C9b — 뒷단 5xx → 서킷 오픈 → half-open 회복 (CY-926).
  *
  * <p>5xx 가 서킷 실패로 세어진 뒤(CY-853) 그 서킷이 <b>열린 채로 안 굳는지</b>를 C8 과 같은
- * 판정으로 잰다. C8 은 응답이 아예 안 오고, 여기는 오긴 오는데 500 이다.
+ * 판정으로 잰다. C8 은 응답이 아예 안 오고, 여기는 오긴 오는데 500 이다. 실시간으로 도는
+ * 통합 확인이고, 전이 시점은 {@code BackendCircuitTransitionTest} 가 시계를 쥐고 잰다.
  */
 @Tag("chaos")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,

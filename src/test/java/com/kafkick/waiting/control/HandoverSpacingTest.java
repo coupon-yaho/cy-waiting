@@ -2,11 +2,18 @@ package com.kafkick.waiting.control;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.kafkick.waiting.MutableClock;
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import java.time.Duration;
-import java.time.Instant;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 
 /**
  * 승계 첫 회차를 앞 리더의 마지막 발행에서 떨어뜨린다 (CY-928).
@@ -18,12 +25,39 @@ class HandoverSpacingTest {
 
     private static final Duration 틱 = Duration.ofSeconds(1);
 
-    /** 발행 시각은 초 단위로 실린다. 초 경계에 맞춰 둬야 올림 여유를 가를 수 있다. */
-    private static final Instant 발행 = Instant.parse("2026-09-14T00:00:10Z");
+    /** 발행 시각이 초 단위로 실려 더하는 여유. 대기의 상한은 이것과 틱의 합이다. */
+    private static final Duration 상한 = Duration.ofSeconds(2);
 
-    private final MutableClock 시계 = MutableClock.at(발행.plusMillis(400));
+    private final AtomicLong 나노 = new AtomicLong(1_000_000_000L);
 
-    private final HandoverSpacing 간격 = HandoverSpacing.of(시계, 틱);
+    private final HandoverSpacing 간격 = HandoverSpacing.of(나노::get, 틱);
+
+    private ListAppender<ILoggingEvent> 로그;
+
+    private Logger 로거() {
+        return (Logger) LoggerFactory.getLogger(HandoverSpacing.class);
+    }
+
+    @BeforeEach
+    void 로그를_받는다() {
+        로그 = new ListAppender<>();
+        로그.start();
+        로거().addAppender(로그);
+    }
+
+    @AfterEach
+    void 로그를_뗀다() {
+        로거().detachAppender(로그);
+    }
+
+    private void 흘린다(Duration 만큼) {
+        나노.addAndGet(만큼.toNanos());
+    }
+
+    private List<String> 정보_로그() {
+        return 로그.list.stream().filter(e -> e.getLevel() == Level.INFO)
+                .map(ILoggingEvent::getFormattedMessage).toList();
+    }
 
     @Test
     @DisplayName("리더가_된_적_없으면_막지_않는다")
@@ -32,38 +66,63 @@ class HandoverSpacingTest {
     }
 
     /**
-     * <b>마지막 발행에서 한 틱이 안 지났으면 미룬다.</b> 발행 시각이 초 단위라 실제 발행은 그
-     * 초 안 어디쯤이다 — 한 초를 더해야 실제 발행에서 한 틱이 보장된다.
+     * <b>발행의 나이로 남은 대기를 구한다.</b> 벽시계로 빼면 발행 시각(레디스 시계)과 이 노드
+     * 시계의 차이만큼 대기가 늘거나 0 이 된다. 나이는 홀더가 레디스 시계로 재 둔 값이다.
      */
     @Test
-    @DisplayName("마지막_발행에서_한_틱이_안_지났으면_첫_회차를_미룬다")
-    void 마지막_발행에서_한_틱이_안_지났으면_첫_회차를_미룬다() {
-        간격.armedFrom(발행);
+    @DisplayName("갓_난_발행이면_한_초와_한_틱에서_나이를_뺀_만큼_쉰다")
+    void 갓_난_발행이면_한_초와_한_틱에서_나이를_뺀_만큼_쉰다() {
+        간격.armedFrom(Duration.ofMillis(400));
 
         assertThat(간격.getAsBoolean()).as("인계 직후").isFalse();
-        시계.앞으로(Duration.ofMillis(1_500));
-        assertThat(간격.getAsBoolean()).as("발행 시각 + 틱은 지났지만 초 올림 여유 안이다").isFalse();
-        시계.앞으로(Duration.ofMillis(100));
-        assertThat(간격.getAsBoolean()).as("발행 시각 + 한 초 + 틱").isTrue();
+        흘린다(Duration.ofMillis(1_599));
+        assertThat(간격.getAsBoolean()).as("남은 대기 1,600ms 직전").isFalse();
+        흘린다(Duration.ofMillis(1));
+        assertThat(간격.getAsBoolean()).isTrue();
     }
 
     /** 리더가 죽은 승계는 마지막 발행이 이미 리스 넘게 지났다. 기다리면 승계만 늦어진다. */
     @Test
     @DisplayName("오래된_발행이면_기다리지_않는다")
     void 오래된_발행이면_기다리지_않는다() {
-        시계.앞으로(Duration.ofSeconds(2));
+        간격.armedFrom(상한);
 
-        간격.armedFrom(발행);
+        assertThat(간격.getAsBoolean()).isTrue();
+        assertThat(정보_로그()).as("안 쉬면 쉰다고 안 적는다").isEmpty();
+    }
+
+    /** 나이를 모르면(발행을 본 적 없거나 시계가 갈림) 견줄 것이 없다. */
+    @Test
+    @DisplayName("나이를_모르면_기다리지_않는다")
+    void 나이를_모르면_기다리지_않는다() {
+        간격.armedFrom(null);
 
         assertThat(간격.getAsBoolean()).isTrue();
     }
 
-    /** 발행을 본 적이 없으면 견줄 것이 없다. 기동 직후 첫 리더다. */
+    /** <b>상한을 넘겨 쉬지 않는다.</b> 나이가 음수로 틀어져도 대기는 한 초와 한 틱까지다. */
     @Test
-    @DisplayName("본_발행이_없으면_기다리지_않는다")
-    void 본_발행이_없으면_기다리지_않는다() {
-        간격.armedFrom(null);
+    @DisplayName("나이가_틀어져도_상한까지만_쉰다")
+    void 나이가_틀어져도_상한까지만_쉰다() {
+        간격.armedFrom(Duration.ofSeconds(-5));
 
+        흘린다(상한.minusMillis(1));
+        assertThat(간격.getAsBoolean()).isFalse();
+        흘린다(Duration.ofMillis(1));
         assertThat(간격.getAsBoolean()).isTrue();
+    }
+
+    /** 쉬는 구간의 진입과 해제를 쌍으로 남긴다. 안 남기면 리더가 됐는데 발행이 없는 이유를 모른다. */
+    @Test
+    @DisplayName("쉬는_구간의_진입과_해제를_남긴다")
+    void 쉬는_구간의_진입과_해제를_남긴다() {
+        간격.armedFrom(Duration.ofMillis(400));
+        흘린다(Duration.ofMillis(1_600));
+        간격.getAsBoolean();
+        간격.getAsBoolean();
+
+        assertThat(정보_로그()).hasSize(2);
+        assertThat(정보_로그().get(0)).contains("1600ms");
+        assertThat(정보_로그().get(1)).contains("대기 끝");
     }
 }

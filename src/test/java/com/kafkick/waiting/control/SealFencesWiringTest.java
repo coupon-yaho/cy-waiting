@@ -19,6 +19,7 @@ import org.springframework.data.redis.connection.lettuce.LettuceClientConfigurat
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 /**
  * 승계가 <b>세 문을 다 잠그는지</b>를 배선에서 잰다 (CY-911).
@@ -81,7 +82,7 @@ class SealFencesWiringTest {
     void 승계가_입장과_삭제와_발행의_문을_다_잠근다() {
         SealGate gate = SealGate.of(() -> true);
 
-        new ControlPlaneConfig().sealFences(port, 리더가_된다(), gate).run();
+        new ControlPlaneConfig().sealFences(port, 리더가_된다(), gate, 기다림, Schedulers.parallel()).run();
 
         Awaitility.await().atMost(기다림).until(gate::getAsBoolean);
         // 발행 잠금은 게이트가 안 기다린다. 그 문의 목적이 배분을 세우는 것이 아니다.
@@ -101,11 +102,37 @@ class SealFencesWiringTest {
         Leadership 강등된_노드 = Leadership.of("node-2", 리스, 시도,
                 () -> Mono.just(LeaderLock.heldBy("node-1", 리스.toMillis())), Mono::empty);
 
-        new ControlPlaneConfig().sealFences(port, 강등된_노드, gate).run();
+        new ControlPlaneConfig().sealFences(port, 강등된_노드, gate, 기다림,
+                Schedulers.parallel()).run();
 
         Awaitility.await().atMost(기다림).until(gate::getAsBoolean);
         assertThat(redis.hasKey(RedisKeys.SNAPSHOT_FENCE).block(기다림))
                 .as("리더가 아닌 번호가 서면 그 뒤의 모든 발행이 통과한다").isFalse();
+    }
+
+    /**
+     * <b>잠금이 시한을 넘기면 문을 연다.</b> 문이 승계 첫 회차를 세우므로 잠금에 끝이 없으면
+     * 레디스가 매달린 동안 새 리더가 배분을 안 돈다. 못 잠근 쿠폰은 적용이 다시 막는다.
+     */
+    @Test
+    @DisplayName("잠금이_시한을_넘기면_문을_연다")
+    void 잠금이_시한을_넘기면_문을_연다() {
+        SealGate gate = SealGate.of(() -> true);
+        Leadership leadership = 리더가_된다();
+        faults.끊는다();
+        try {
+            long 시작 = System.nanoTime();
+
+            new ControlPlaneConfig().sealFences(port, leadership, gate, Duration.ofMillis(300),
+                    Schedulers.parallel()).run();
+
+            Awaitility.await().atMost(기다림).until(gate::getAsBoolean);
+            assertThat(Duration.ofNanos(System.nanoTime() - 시작))
+                    .as("명령 시한(%s)이 아니라 잠금 시한에서 연다", 기다림)
+                    .isLessThan(Duration.ofSeconds(3));
+        } finally {
+            faults.붙인다();
+        }
     }
 
     private Leadership 리더가_된다() {

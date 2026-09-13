@@ -7,6 +7,7 @@ import java.util.function.Predicate;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.netty.DisposableServer;
 import reactor.netty.http.server.HttpServer;
@@ -28,11 +29,11 @@ public final class BackendStub implements AutoCloseable {
     private final DisposableServer server;
 
     private BackendStub(BooleanSupplier stalled, Predicate<String> failing) {
-        this(stalled, failing, member -> false, Duration.ZERO);
+        this(stalled, () -> false, failing, member -> false, Duration.ZERO);
     }
 
-    private BackendStub(BooleanSupplier stalled, Predicate<String> failing,
-            Predicate<String> slowMember, Duration delay) {
+    private BackendStub(BooleanSupplier stalled, BooleanSupplier bodyStalled,
+            Predicate<String> failing, Predicate<String> slowMember, Duration delay) {
         this.server = HttpServer.create()
                 .port(0)
                 .handle((request, response) -> {
@@ -50,6 +51,11 @@ public final class BackendStub implements AutoCloseable {
                     // 서킷이 여는 근거가 갈리므로 스텁이 둘을 구분해야 한다.
                     if (stalled.getAsBoolean()) {
                         return Mono.never();
+                    }
+                    // 헤더와 첫 조각만 보내고 본문을 안 끝낸다. 헤더가 나갔으니 서킷은 성공으로 센다.
+                    if (bodyStalled.getAsBoolean()) {
+                        return response.status(200)
+                                .sendString(Flux.concat(Mono.just("{"), Flux.never()));
                     }
                     int status = failing.test(couponId) ? 500 : 200;
                     // **느린 것은 늦게라도 답한다.** 응답 상한 안에 오므로 실패가 아니라
@@ -87,7 +93,13 @@ public final class BackendStub implements AutoCloseable {
 
     /** 고른 회원에게만 {@code 지연} 뒤 200 을 내는 뒷단. 느린 호출 갈래를 만든다. */
     public static BackendStub 늦게_답한다(Predicate<String> 느린_회원, Duration 지연) {
-        return new BackendStub(() -> false, couponId -> false, 느린_회원, 지연);
+        return new BackendStub(() -> false, () -> false, couponId -> false, 느린_회원, 지연);
+    }
+
+    /** 스위치가 켜지면 헤더 200 뒤 본문을 안 끝내는 뒷단. */
+    public static BackendStub 본문을_안_끝낼_수_있다(BooleanSupplier 본문이_멎었나) {
+        return new BackendStub(() -> false, 본문이_멎었나, couponId -> false, member -> false,
+                Duration.ZERO);
     }
 
     public int port() {

@@ -2,8 +2,12 @@ package com.kafkick.waiting.control;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.kafkick.waiting.domain.coupon.SnapshotMeta;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -64,6 +68,55 @@ class LeaderTickWiringTest {
 
         문.sealed(세대.get());
         assertThat(틱.getAsBoolean()).isTrue();
+    }
+
+    /** 발행을 본 뷰. 나이는 홀더가 레디스 시계로 잰 값이다. */
+    private static SnapshotHolder.View 뷰(Duration 나이, boolean 시계가_갈림) {
+        return new SnapshotHolder.View(new GatewaySnapshot(Map.of(), new SnapshotMeta(10, 1),
+                Instant.parse("2026-09-14T00:00:10Z")), Duration.ZERO, Duration.ZERO, 나이,
+                시계가_갈림);
+    }
+
+    private final AtomicLong 나노 = new AtomicLong(1_000_000_000L);
+
+    /**
+     * <b>리더로 치기 시작한 틱에 승계 간격을 건다</b> (CY-928). 이 배선이 빠지면 정상 인계에서 두
+     * 리더의 몫이 1초 안에 겹치는데, 간격 자체의 시험은 그대로 초록이다.
+     */
+    @Test
+    @DisplayName("리더로_치기_시작한_틱에_승계_간격을_건다")
+    void 리더로_치기_시작한_틱에_승계_간격을_건다() {
+        AtomicBoolean 이끈다 = new AtomicBoolean(false);
+        BooleanSupplier 승계_틱 = 배선.handoverTick(이끈다::get,
+                () -> 뷰(Duration.ofMillis(400), false),
+                HandoverSpacing.of(나노::get, Duration.ofSeconds(1)));
+        assertThat(승계_틱.getAsBoolean()).isFalse();
+
+        이끈다.set(true);
+        assertThat(승계_틱.getAsBoolean()).as("갓 난 발행이면 쉰다").isFalse();
+        나노.addAndGet(Duration.ofMillis(1_600).toNanos());
+        assertThat(승계_틱.getAsBoolean()).isTrue();
+
+        // 한 번 건 뒤로는 리더인 동안 다시 안 건다 — 매 틱 걸면 영영 못 돈다.
+        assertThat(승계_틱.getAsBoolean()).isTrue();
+    }
+
+    /** 놓았다 다시 잡으면 다시 건다. 시계가 갈린 뷰는 나이를 못 믿어 안 기다린다. */
+    @Test
+    @DisplayName("다시_잡으면_다시_걸고_시계가_갈렸으면_안_기다린다")
+    void 다시_잡으면_다시_걸고_시계가_갈렸으면_안_기다린다() {
+        AtomicBoolean 이끈다 = new AtomicBoolean(true);
+        AtomicBoolean 갈림 = new AtomicBoolean(true);
+        BooleanSupplier 승계_틱 = 배선.handoverTick(이끈다::get,
+                () -> 뷰(Duration.ofMillis(400), 갈림.get()),
+                HandoverSpacing.of(나노::get, Duration.ofSeconds(1)));
+        assertThat(승계_틱.getAsBoolean()).as("시계가 갈렸으면 안 기다린다").isTrue();
+
+        이끈다.set(false);
+        assertThat(승계_틱.getAsBoolean()).isFalse();
+        갈림.set(false);
+        이끈다.set(true);
+        assertThat(승계_틱.getAsBoolean()).as("다시 잡으면 다시 건다").isFalse();
     }
 
     /** 틱 사이에 갈렸다 돌아오면 앞 임기를 닫고 문을 다시 잠근다. 잠금이 끝날 때까지 안 돈다. */

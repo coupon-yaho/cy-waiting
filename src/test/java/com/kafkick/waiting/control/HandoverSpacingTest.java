@@ -112,6 +112,29 @@ class HandoverSpacingTest {
         assertThat(간격.getAsBoolean()).isTrue();
     }
 
+    /** 틱이 1초가 아니어도 한 초와 한 틱이다. 올림과 틱을 서로 바꿔 더하는 구현을 거른다. */
+    @Test
+    @DisplayName("틱이_짧아도_한_초와_한_틱을_쉰다")
+    void 틱이_짧아도_한_초와_한_틱을_쉰다() {
+        HandoverSpacing 짧은_틱 = HandoverSpacing.of(나노::get, Duration.ofMillis(250));
+        짧은_틱.armedFrom(Duration.ZERO);
+
+        흘린다(Duration.ofMillis(1_249));
+        assertThat(짧은_틱.getAsBoolean()).isFalse();
+        흘린다(Duration.ofMillis(1));
+        assertThat(짧은_틱.getAsBoolean()).isTrue();
+    }
+
+    /** 다시 걸면 앞 시한을 버린다. 모르는 나이로 다시 걸었는데 앞 대기가 남으면 승계가 밀린다. */
+    @Test
+    @DisplayName("다시_걸면_앞_시한을_버린다")
+    void 다시_걸면_앞_시한을_버린다() {
+        간격.armedFrom(Duration.ZERO);
+        간격.armedFrom(null);
+
+        assertThat(간격.getAsBoolean()).isTrue();
+    }
+
     /** 쉬는 구간의 진입과 해제를 쌍으로 남긴다. 안 남기면 리더가 됐는데 발행이 없는 이유를 모른다. */
     @Test
     @DisplayName("쉬는_구간의_진입과_해제를_남긴다")

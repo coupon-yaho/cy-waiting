@@ -38,10 +38,10 @@ import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Mono;
 
 /**
- * C18-b — 헤더 200 은 오고 본문이 안 끝난다 (CY-870).
+ * C18-b — 헤더 200 은 오고 본문이 안 끝난다 (CY-714).
  *
- * <p>본문 상한이 커넥션을 끊어 매달리지는 않는다. 다만 헤더가 이미 나가 <b>사용자는 잘린 200 을
- * 받고, 서킷은 성공으로 센다</b>. 받아들인 한계라 사실로 못 박는다 — 바뀌는 날 이 판정이 뒤집힌다.
+ * <p>본문 상한이 커넥션을 끊어 매달리지는 않는다. 다만 <b>사용자는 잘린 200 을 받고 서킷은 성공으로
+ * 센다</b> — 열린 결함이다 (CY-710·CY-713). 지금 동작을 못 박아, 고치는 날 여기가 뒤집힌다.
  */
 @Tag("chaos")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
@@ -56,8 +56,8 @@ class BackendBodyStallScenarioTest {
     private static final Duration 응답_상한 = Duration.ofMillis(500);
     private static final Duration 본문_상한 = 응답_상한.multipliedBy(2);
 
-    /** 끊긴 뒤 클라이언트에 닿기까지의 여유. */
-    private static final Duration 여유 = Duration.ofSeconds(2);
+    /** 끊긴 뒤 클라이언트에 닿기까지의 여유. 상한 배선이 달라지면 이 폭 밖으로 나가야 한다. */
+    private static final Duration 여유 = Duration.ofMillis(400);
 
     private static final int 보낼_수 = 3;
 
@@ -106,7 +106,7 @@ class BackendBodyStallScenarioTest {
     }
 
     /** 한 요청의 끝. 상태, 본문이 잘렸는지, 끝나기까지 걸린 시간. */
-    private record 결과(int status, boolean 잘림, Duration 걸림) {
+    private record Outcome(int status, boolean 잘림, Duration 걸림) {
     }
 
     @LocalServerPort
@@ -121,7 +121,7 @@ class BackendBodyStallScenarioTest {
     /** 회원 번호. 요청마다 새로 뽑는다 — 고정 시계라 같은 회원은 초당 상한에 걸린다. */
     private final AtomicInteger 회원 = new AtomicInteger(70_000);
 
-    private 결과 발급을_시도한다() {
+    private Outcome 발급을_시도한다() {
         long 시작 = System.nanoTime();
         FluxExchangeResult<String> 응답 = WebTestClient.bindToServer()
                 .baseUrl("http://localhost:" + port)
@@ -140,11 +140,11 @@ class BackendBodyStallScenarioTest {
         } catch (RuntimeException e) {
             잘림 = true;
         }
-        return new 결과(응답.getStatus().value(), 잘림, Duration.ofNanos(System.nanoTime() - 시작));
+        return new Outcome(응답.getStatus().value(), 잘림, Duration.ofNanos(System.nanoTime() - 시작));
     }
 
-    private List<결과> 여러_번_시도한다(int 횟수) {
-        List<결과> 결과들 = new ArrayList<>();
+    private List<Outcome> 여러_번_시도한다(int 횟수) {
+        List<Outcome> 결과들 = new ArrayList<>();
         for (int i = 0; i < 횟수; i++) {
             결과들.add(발급을_시도한다());
         }
@@ -163,20 +163,23 @@ class BackendBodyStallScenarioTest {
     @Test
     @DisplayName("C18b_끝나지_않는_본문은_상한에서_잘린_200_으로_끝난다")
     void C18b_끝나지_않는_본문은_상한에서_잘린_200_으로_끝난다() {
-        List<결과> 정상 = new ArrayList<>();
-        List<결과> 장애중 = new ArrayList<>();
-        List<결과> 회복 = new ArrayList<>();
+        List<Outcome> 정상 = new ArrayList<>();
+        List<Outcome> 장애중 = new ArrayList<>();
+        List<Outcome> 회복 = new ArrayList<>();
         double[] 끊은_증가 = new double[1];
         int[] 서킷_실패 = new int[1];
+        int[] 서킷_성공_증가 = new int[1];
 
         ChaosScenario.named("C18-b 뒷단 본문 멎음")
                 .baseline(() -> 정상.addAll(여러_번_시도한다(2)))
                 .inject(() -> 본문이_멎었다.set(true))
                 .duringFault(() -> {
                     double 전 = 끊은_수();
+                    int 성공_전 = 서킷().getMetrics().getNumberOfSuccessfulCalls();
                     장애중.addAll(여러_번_시도한다(보낼_수));
                     끊은_증가[0] = 끊은_수() - 전;
                     서킷_실패[0] = 서킷().getMetrics().getNumberOfFailedCalls();
+                    서킷_성공_증가[0] = 서킷().getMetrics().getNumberOfSuccessfulCalls() - 성공_전;
                 })
                 .recover(() -> 본문이_멎었다.set(false))
                 .afterRecovery(() -> 회복.addAll(여러_번_시도한다(2)))
@@ -184,29 +187,30 @@ class BackendBodyStallScenarioTest {
                 .assertDuring(() -> RecoveryCriteria.violations(
                         상한에서_끝났다(장애중),
                         상한이_끊었다(끊은_증가[0]),
-                        // **사실이다.** 헤더가 나간 뒤라 503 으로 못 바꾸고, 끊는 자리가 서킷
-                        // 바깥이라 실패로 안 쌓인다. 둘 중 하나라도 바뀌면 여기가 빨개진다.
+                        // **결함을 못 박는다.** 봉투가 갈리고(CY-713) 끊는 자리가 서킷 바깥이라
+                        // 성공으로 쌓인다(CY-710). 고치면 여기가 빨개지고, 그때 판정을 뒤집는다.
                         잘린_200_이_나갔다(장애중),
-                        서킷은_못_봤다(서킷_실패[0])))
+                        서킷이_성공으로_셌다(서킷_실패[0], 서킷_성공_증가[0])))
                 .assertRecovery(() -> RecoveryCriteria.violations(
                         온전히_받았다("회복", 회복),
                         뒷단.중복_수신이_없다()))
                 .run();
     }
 
-    private Optional<String> 온전히_받았다(String 구간, List<결과> 결과들) {
+    private Optional<String> 온전히_받았다(String 구간, List<Outcome> 결과들) {
         return !결과들.isEmpty() && 결과들.stream().allMatch(r -> r.status() == 200 && !r.잘림())
                 ? Optional.empty()
                 : Optional.of("%s — 전부 온전한 200 이어야 한다: %s".formatted(구간, 결과들));
     }
 
-    /** 매달리지 않았는가. 본문 상한에 끊겨 클라이언트까지 닿는 시간 안에 끝나야 한다. */
-    private Optional<String> 상한에서_끝났다(List<결과> 결과들) {
+    /** 본문 상한에서 끝났는가. 아래로도 묶어야 상한이 응답 상한의 두 배로 배선된 것이 드러난다. */
+    private Optional<String> 상한에서_끝났다(List<Outcome> 결과들) {
+        Duration 하한 = 본문_상한.minus(Duration.ofMillis(50));
         Duration 한계 = 본문_상한.plus(여유);
-        return 결과들.size() == 보낼_수
-                && 결과들.stream().allMatch(r -> r.걸림().compareTo(한계) < 0)
+        return 결과들.size() == 보낼_수 && 결과들.stream().allMatch(
+                r -> r.걸림().compareTo(하한) >= 0 && r.걸림().compareTo(한계) < 0)
                 ? Optional.empty()
-                : Optional.of("본문 상한 %s 안에 안 끝났다: %s".formatted(한계, 결과들));
+                : Optional.of("본문 상한 %s~%s 에서 안 끝났다: %s".formatted(하한, 한계, 결과들));
     }
 
     private Optional<String> 상한이_끊었다(double 증가) {
@@ -214,13 +218,15 @@ class BackendBodyStallScenarioTest {
                 : Optional.of("본문 상한이 %s 건을 끊었다 (보낸 %d)".formatted(증가, 보낼_수));
     }
 
-    private Optional<String> 잘린_200_이_나갔다(List<결과> 결과들) {
+    private Optional<String> 잘린_200_이_나갔다(List<Outcome> 결과들) {
         return 결과들.stream().allMatch(r -> r.status() == 200 && r.잘림()) ? Optional.empty()
-                : Optional.of("사실이 바뀌었다 — 잘린 200 이 아니다: %s".formatted(결과들));
+                : Optional.of("결함이 바뀌었다(CY-713) — 잘린 200 이 아니다: %s".formatted(결과들));
     }
 
-    private Optional<String> 서킷은_못_봤다(int 실패) {
-        return 실패 == 0 ? Optional.empty()
-                : Optional.of("사실이 바뀌었다 — 서킷이 끊긴 본문을 실패 %d 건으로 셌다".formatted(실패));
+    /** 끊긴 호출이 실패가 아니라 성공으로 쌓였다. 실패 0 만 보면 아예 안 센 경우도 초록이다. */
+    private Optional<String> 서킷이_성공으로_셌다(int 실패, int 성공_증가) {
+        return 실패 == 0 && 성공_증가 == 보낼_수 ? Optional.empty()
+                : Optional.of("결함이 바뀌었다(CY-710) — 서킷 실패 %d, 성공 증가 %d (보낸 %d)"
+                        .formatted(실패, 성공_증가, 보낼_수));
     }
 }

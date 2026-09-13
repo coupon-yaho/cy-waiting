@@ -28,6 +28,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.data.redis.autoconfigure.DataRedisProperties;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -58,8 +59,16 @@ class RedisLatencyScenarioTest {
     private static final Instant 지금 = Instant.parse("2026-08-31T00:00:00Z");
     private static final String COUPON = "c1";
 
-    /** 레디스 명령 상한. 이 위로 넣으면 지연이 아니라 정지가 된다. */
-    private static final Duration 명령_상한 = Duration.ofMillis(350);
+    @Autowired
+    private DataRedisProperties redisProperties;
+
+    /**
+     * 레디스 명령 상한. 이 위로 넣으면 지연이 아니라 정지가 된다. <b>설정에서 읽는다</b> —
+     * 숫자로 적어 두면 상한이 바뀐 날 "상한의 0.6 배" 라는 근거가 말없이 어긋난다.
+     */
+    private Duration 명령_상한() {
+        return redisProperties.getTimeout();
+    }
 
     /**
      * 주입할 지연. <b>상한의 0.6 배다.</b>
@@ -68,7 +77,9 @@ class RedisLatencyScenarioTest {
      * 뒤집혀, 지연 시나리오가 말없이 정지 시나리오가 된다. 상한이 500ms 이던 때
      * 520ms 에서 이미 같은 배치 안에서 성공과 타임아웃이 갈렸다.
      */
-    private static final Duration 지연 = Duration.ofMillis(210);
+    private Duration 지연() {
+        return 명령_상한().multipliedBy(6).dividedBy(10);
+    }
 
     /**
      * 판정이 늦어져도 되는 폭. <b>주입량에 묶는다.</b>
@@ -76,7 +87,9 @@ class RedisLatencyScenarioTest {
      * <p>정상 대비 배수로 두면 문턱이 장비 소음 대역(수 ms)에 들어앉아, 잡아야
      * 할 신호(수백 ms)와 무관해진다.
      */
-    private static final Duration 허용_증가 = 지연.dividedBy(2);
+    private Duration 허용_증가() {
+        return 지연().dividedBy(2);
+    }
 
     /** 버리는 워밍업 라운드. 첫 요청은 커넥션 수립과 JIT 을 같이 먹는다. */
     private static final int 워밍업 = 5;
@@ -136,7 +149,7 @@ class RedisLatencyScenarioTest {
                 new GatewaySnapshot(Map.of(COUPON, CouponStates.idle(1_000_000)),
                         new SnapshotMeta(10_000, 1), 지금),
                 CreditSmoother.Snapshot.empty(), QueueingHysteresis.Snapshot.empty());
-        redis.opsForHash().putAll(RedisKeys.SNAPSHOT, 재료).block(명령_상한.multipliedBy(4));
+        redis.opsForHash().putAll(RedisKeys.SNAPSHOT, 재료).block(명령_상한().multipliedBy(4));
     }
 
     /**
@@ -220,7 +233,7 @@ class RedisLatencyScenarioTest {
      */
     private long 카나리_지연() {
         long 시작 = System.nanoTime();
-        redis.opsForValue().get("chaos:canary").block(명령_상한.multipliedBy(4));
+        redis.opsForValue().get("chaos:canary").block(명령_상한().multipliedBy(4));
         return Duration.ofNanos(System.nanoTime() - 시작).toMillis();
     }
 
@@ -239,14 +252,14 @@ class RedisLatencyScenarioTest {
         long[] 카나리 = new long[3];
         long[] 도착 = new long[3];
 
-        ChaosScenario.named("C2 Redis 지연 %s".formatted(지연))
+        ChaosScenario.named("C2 Redis 지연 %s".formatted(지연()))
                 .baseline(() -> {
                     재료를_심는다();
                     재료가_닿기를_기다린다();
                     카나리[0] = 카나리_지연();
                     도착[0] = 뒷단_도착을_센다(() -> 정상[0] = 최대_지연(1_000));
                 })
-                .inject(() -> 지연을_넣는다(지연))
+                .inject(() -> 지연을_넣는다(지연()))
                 .duringFault(() -> {
                     // **주입이 걸렸는지 먼저 본다.** 이것이 안 느려졌으면 뒤의
                     // 모든 판정이 아무것도 안 잰 것이다.
@@ -302,7 +315,7 @@ class RedisLatencyScenarioTest {
     @Test
     @DisplayName("판정이_변화를_실제로_잡는다")
     void 판정이_변화를_실제로_잡는다() {
-        long 문턱 = 허용_증가.toMillis();
+        long 문턱 = 허용_증가().toMillis();
         assertThat(판정이_안_느려졌다("가짜", 10, 10 + 문턱)).as("문턱까지는 통과")
                 .isEmpty();
         assertThat(판정이_안_느려졌다("가짜", 10, 10 + 문턱 + 1))
@@ -370,7 +383,7 @@ class RedisLatencyScenarioTest {
      */
     private Optional<String> 주입이_걸렸다(long 정상_카나리, long 장애중_카나리) {
         long 늘어난_것 = 장애중_카나리 - 정상_카나리;
-        return 늘어난_것 >= 허용_증가.toMillis() ? Optional.empty()
+        return 늘어난_것 >= 허용_증가().toMillis() ? Optional.empty()
                 : Optional.of("카나리가 %dms 밖에 안 느려졌다 (%dms → %dms) — 주입이 안 걸렸다"
                         .formatted(늘어난_것, 정상_카나리, 장애중_카나리));
     }
@@ -383,7 +396,7 @@ class RedisLatencyScenarioTest {
      */
     private Optional<String> 지연이_걷혔다(long 정상_카나리, long 회복_카나리) {
         long 남은_것 = 회복_카나리 - 정상_카나리;
-        return 남은_것 <= 허용_증가.toMillis() ? Optional.empty()
+        return 남은_것 <= 허용_증가().toMillis() ? Optional.empty()
                 : Optional.of("카나리가 아직 %dms 느리다 (%dms → %dms) — 지연이 안 걷혔다"
                         .formatted(남은_것, 정상_카나리, 회복_카나리));
     }
@@ -396,7 +409,7 @@ class RedisLatencyScenarioTest {
      */
     private Optional<String> 판정이_안_느려졌다(String 구간, long 정상, long 지금_지연) {
         long 늘어난_것 = 지금_지연 - 정상;
-        return 늘어난_것 <= 허용_증가.toMillis() ? Optional.empty()
+        return 늘어난_것 <= 허용_증가().toMillis() ? Optional.empty()
                 : Optional.of("%s 판정이 %dms 느려졌다 (%dms → %dms) — 통과 경로가 레디스를 친다"
                         .formatted(구간, 늘어난_것, 정상, 지금_지연));
     }

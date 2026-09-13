@@ -2,15 +2,19 @@ package com.kafkick.waiting.chaos;
 
 import com.kafkick.waiting.adapter.redis.RedisKeys;
 import com.kafkick.waiting.control.Leadership;
+import com.kafkick.waiting.gateway.QueuePort;
 import java.io.IOException;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Optional;
+import java.util.concurrent.locks.LockSupport;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.data.redis.autoconfigure.DataRedisProperties;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.test.annotation.DirtiesContext;
@@ -18,11 +22,11 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 
 /**
- * C2b — 연장만 끊기고 쓰기는 되는 지연 밴드 (CY-847).
+ * C2b — 연장만 끊기고 명령은 되는 지연 밴드 (CY-847).
  *
- * <p><b>리더 연장 한 번의 상한이 명령 상한보다 짧으면</b> 그 사이의 지연에서 명령은 되는데
- * 연장만 시한에 걸린다. 리스가 지나 리더가 0 이 되고, 다시 잡는 시도도 같은 시한에 걸려
- * 지연이 이어지는 내내 배분이 멎는다. 지연 시나리오(C2)는 배분 루프를 꺼 이 밴드를 안 때린다.
+ * <p><b>리더 연장 한 번의 상한이 명령 상한보다 짧다.</b> 그 사이의 지연에서는 연장만 시한에
+ * 걸려 리스가 지나 리더가 0 이 되고, 다시 잡는 시도도 같은 시한에 걸린다. 받아들인 동작이다 —
+ * 명령 상한을 연장 시도에 맞춰 내리면 줄 등록이 그만큼 먼저 끊겨 fail-open(추월)이 열린다.
  */
 @Tag("chaos")
 // 배분·리더 루프를 켜므로 컨텍스트를 닫는다. 캐시에 남으면 다음 시나리오의 레디스에 쓴다.
@@ -31,16 +35,16 @@ import org.springframework.test.context.DynamicPropertySource;
         properties = "waiting.scheduler.enabled=true")
 class LeaderRenewBandScenarioTest {
 
-    private static final String COUPON = "c2b-idle";
-
-    /**
-     * 명령 상한(350ms) 바로 아래. <b>옛 설정(연장 300ms · 명령 500ms)에서는 연장만 끊기는
-     * 밴드 안이었다.</b> 두 상한이 같아진 지금은 명령도 되고 연장도 돼야 한다.
-     */
-    private static final Duration 지연 = Duration.ofMillis(300);
+    private static final String COUPON = "c2b-queued";
 
     /** 리스(2초)를 여러 번 넘길 만큼 둔다. 한 리스 안이면 모름이 리더로 버틴다. */
     private static final Duration 유지 = Duration.ofSeconds(6);
+
+    /** 리더 표본 간격. 끝의 한 번만 보면 잃었다 되찾은 구간을 못 가른다. */
+    private static final Duration 표본_간격 = Duration.ofMillis(100);
+
+    /** 유지 구간에 줄에 세워 볼 사람 수. */
+    private static final int 등록_수 = 5;
 
     private static final Duration 기다림 = Duration.ofSeconds(20);
 
@@ -70,6 +74,20 @@ class LeaderRenewBandScenarioTest {
     @Autowired
     private Leadership leadership;
 
+    @Autowired
+    private QueuePort queue;
+
+    @Autowired
+    private DataRedisProperties redisProperties;
+
+    /**
+     * 주입할 지연. <b>명령 상한의 0.85 배다</b> — 명령은 되고, 연장 시도(상한보다 짧다)는
+     * 넘는 자리다. 설정에서 구해 상한이 바뀌어도 그 밴드 안에 머문다.
+     */
+    private Duration 지연() {
+        return redisProperties.getTimeout().multipliedBy(85).dividedBy(100);
+    }
+
     private void 재료를_심는다() {
         redis.opsForSet().add(RedisKeys.ACTIVE_COUPONS, COUPON).block(기다림);
         redis.opsForValue().set(RedisKeys.stock(COUPON), "100000").block(기다림);
@@ -87,62 +105,103 @@ class LeaderRenewBandScenarioTest {
         return Duration.ofNanos(System.nanoTime() - 시작).toMillis();
     }
 
-    @Test
-    @DisplayName("C2b_명령_상한_아래_지연에서_리더를_안_놓는다")
-    void C2b_명령_상한_아래_지연에서_리더를_안_놓는다() {
-        long[] 발행 = new long[3];
-        long[] 카나리 = new long[2];
-        boolean[] 리더 = new boolean[1];
+    /** 유지 구간 내내 리더를 묻고, 리더가 아닌 표본 수를 돌려준다. */
+    private int 리더가_아닌_표본() {
+        int 놓침 = 0;
+        long 끝 = System.nanoTime() + 유지.toNanos();
+        while (System.nanoTime() < 끝) {
+            if (!leadership.isLeader()) {
+                놓침++;
+            }
+            LockSupport.parkNanos(표본_간격.toNanos());
+        }
+        return 놓침;
+    }
 
-        ChaosScenario.named("C2b 연장 밴드 지연 %s".formatted(지연))
+    /**
+     * 요청 경로와 같은 포트로 줄에 세운다. <b>실패한 수를 돌려준다</b> — 실패하면 요청 경로가
+     * fail-open 으로 넘어가 줄 선 사람을 추월하므로, 그 문턱이 이 수로 보인다.
+     */
+    private int 줄_등록이_실패한_수() {
+        int 실패 = 0;
+        for (int i = 0; i < 등록_수; i++) {
+            try {
+                queue.enqueue(COUPON, "c2b-" + i, 1_000, Instant.now()).block(기다림);
+            } catch (RuntimeException e) {
+                실패++;
+            }
+        }
+        return 실패;
+    }
+
+    @Test
+    @DisplayName("C2b_연장_밴드_지연에서_리더는_사라지고_줄_등록은_산다")
+    void C2b_연장_밴드_지연에서_리더는_사라지고_줄_등록은_산다() {
+        long[] 발행 = new long[2];
+        long[] 카나리 = new long[2];
+        int[] 놓침 = new int[1];
+        int[] 등록_실패 = new int[1];
+        boolean[] 리더_복귀 = new boolean[1];
+        boolean[] 정상_리더 = new boolean[1];
+
+        ChaosScenario.named("C2b 연장 밴드 지연 %s".formatted(지연()))
                 .baseline(() -> {
                     재료를_심는다();
                     Awaitility.await().atMost(기다림)
                             .until(() -> leadership.isLeader() && 발행_시각() > 0);
                     카나리[0] = 카나리_지연();
-                    발행[0] = 발행_시각();
+                    정상_리더[0] = leadership.isLeader();
                 })
-                .inject(() -> 지연을_넣는다(지연))
+                .inject(() -> 지연을_넣는다(지연()))
                 .duringFault(() -> {
                     카나리[1] = 카나리_지연();
-                    long 시작 = 발행_시각();
-                    Awaitility.await().pollDelay(유지).atMost(유지.plusSeconds(5))
-                            .until(() -> true);
-                    리더[0] = leadership.isLeader();
-                    발행[0] = 시작;
-                    발행[1] = 발행_시각();
+                    놓침[0] = 리더가_아닌_표본();
+                    등록_실패[0] = 줄_등록이_실패한_수();
+                    발행[0] = 발행_시각();
                 })
                 .recover(this::지연을_걷는다)
-                .afterRecovery(() -> Awaitility.await().atMost(기다림)
-                        .until(() -> (발행[2] = 발행_시각()) > 발행[1]))
+                .afterRecovery(() -> {
+                    Awaitility.await().atMost(기다림)
+                            .until(() -> (발행[1] = 발행_시각()) > 발행[0]);
+                    리더_복귀[0] = leadership.isLeader();
+                })
+                // 평시에 리더가 있어야 "사라졌다" 가 이 지연 탓이다.
                 .assertEntry(() -> RecoveryCriteria.violations(
-                        발행이_있다(발행[0])))
+                        리더가_돌아왔다(정상_리더[0]).map(why -> "전제 — 평시에 리더가 없다")))
                 .assertDuring(() -> RecoveryCriteria.violations(
                         주입이_걸렸다(카나리[0], 카나리[1]),
-                        // **리더를 놓지 않는다.** 명령은 되는데 연장만 시한에 걸려
-                        // 리스를 잃으면, 지연이 이어지는 내내 아무도 배분을 안 돈다.
-                        리더를_지켰다(리더[0])))
-                // **발행 전진은 여기서 안 판정한다** (CY-927). 리더를 지켜도 회차가 레디스
-                // 왕복을 차례로 여러 번 해 이 지연에서는 틱 시한 안에 못 끝난다 — 연장
-                // 밴드와 다른 한계라, 섞으면 이 시나리오가 무엇을 쟀는지 못 가린다.
+                        // **리더가 사라지는 것을 사실로 적는다.** 받아들인 동작이라 여기서
+                        // 리더가 남기를 기대하면 시나리오가 아니라 소원이 된다. 이 값이
+                        // 뒤집히는 날이 시한 관계가 바뀐 날이고, 그때 줄 등록도 다시 본다.
+                        리더가_사라졌다(놓침[0]),
+                        // **맞바꾼 쪽이 서 있는가.** 명령 상한을 안 내린 이유가 이것이다.
+                        줄_등록이_산다(등록_실패[0])))
                 .assertRecovery(() -> RecoveryCriteria.violations(
-                        배분이_돌아왔다(발행[1], 발행[2])))
+                        리더가_돌아왔다(리더_복귀[0]),
+                        배분이_돌아왔다(발행[0], 발행[1])))
                 .run();
-    }
-
-    private Optional<String> 발행이_있다(long 시각) {
-        return 시각 > 0 ? Optional.empty() : Optional.of("전제 — 정상 구간에 발행이 없다");
     }
 
     /** 주입이 정말 걸렸는가. 안 걸렸으면 뒤의 판정이 아무것도 안 잰다. */
     private Optional<String> 주입이_걸렸다(long 정상, long 장애중) {
-        return 장애중 - 정상 >= 지연.toMillis() / 2 ? Optional.empty()
+        return 장애중 - 정상 >= 지연().toMillis() / 2 ? Optional.empty()
                 : Optional.of("전제 — 카나리가 %dms → %dms 로 안 느려졌다".formatted(정상, 장애중));
     }
 
-    private Optional<String> 리더를_지켰다(boolean 리더) {
-        return 리더 ? Optional.empty()
-                : Optional.of("유지 — 연장 밴드 지연에서 리더를 놓았다 (리스 %s 넘게)".formatted(유지));
+    private Optional<String> 리더가_사라졌다(int 놓침) {
+        return 놓침 > 0 ? Optional.empty()
+                : Optional.of("유지 — 연장 밴드 지연에서 리더가 한 번도 안 사라졌다. 연장 시도와 "
+                        + "명령 상한의 관계가 바뀌었는지 보고, 줄 등록 문턱을 같이 다시 잰다");
+    }
+
+    private Optional<String> 줄_등록이_산다(int 실패) {
+        return 실패 == 0 ? Optional.empty()
+                : Optional.of("유지 — 줄 등록이 %d/%d 번 실패했다. 요청 경로가 fail-open 으로 넘어간다"
+                        .formatted(실패, 등록_수));
+    }
+
+    private Optional<String> 리더가_돌아왔다(boolean 리더) {
+        return 리더 ? Optional.empty() : Optional.of("회복 — 지연을 걷어도 리더가 없다");
     }
 
     private Optional<String> 배분이_돌아왔다(long 전, long 후) {

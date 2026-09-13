@@ -36,8 +36,8 @@ class RedisBudgetGuardTest {
     @Test
     @DisplayName("예산_안이면_뜬다")
     void 예산_안이면_뜬다() {
-        RedisTimeBudget budget =
-                RedisTimeBudget.of(props(Duration.ofMillis(500), Duration.ofSeconds(1)), 운영값);
+        RedisTimeBudget budget = RedisTimeBudget.of(
+                props(운영값.leader().attempt(), Duration.ofSeconds(1)), 운영값);
 
         // 예외가 안 나는 것이 단언이다. 경계 바로 안쪽 값을 쓴다.
         assertThatCode(budget::verify).doesNotThrowAnyException();

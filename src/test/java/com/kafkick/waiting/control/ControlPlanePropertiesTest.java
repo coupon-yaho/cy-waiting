@@ -203,8 +203,8 @@ class ControlPlanePropertiesTest {
 
         assertThat(defaults.scheduler().tick()).isEqualTo(Duration.ofSeconds(1));
         assertThat(defaults.leader().lease()).isEqualTo(Duration.ofSeconds(2));
-        assertThat(defaults.leader().attempt()).isEqualTo(Duration.ofMillis(300));
-        assertThat(defaults.leader().renewDelay()).isEqualTo(Duration.ofMillis(100));
+        assertThat(defaults.leader().attempt()).isEqualTo(Duration.ofMillis(350));
+        assertThat(defaults.leader().renewDelay()).isEqualTo(Duration.ofMillis(50));
     }
 
     /**

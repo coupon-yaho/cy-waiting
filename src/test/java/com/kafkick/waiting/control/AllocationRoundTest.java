@@ -33,6 +33,7 @@ import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.LongSupplier;
@@ -135,6 +136,60 @@ class AllocationRoundTest {
         // 관측치를 생으로 내보내면 1,000 이다.
         assertThat(발행된_크레딧).as("이월을 받은 회차는 평활한 값을 낸다")
                 .containsExactly(1_000L, 440L);
+    }
+
+    /** 이월이 늘 실패하는 회차. 관측만 바꿔 가며 발행된 몫을 모은다. */
+    private AllocationRound 이월이_안_오는_회차(AtomicLong 관측, List<Long> 발행된_크레딧) {
+        return AllocationRound.of(
+                () -> true,
+                () -> Mono.just(new TimedDemands(
+                        List.of(new CouponDemand("c1", 5, 100, QueueMode.ADAPTIVE)), 읽은_시각)),
+                관측::get, () -> 1,
+                grant -> Mono.just(grant.credit()),
+                hash -> {
+                    발행된_크레딧.add(Long.parseLong(hash.get("#credit")));
+                    return Mono.empty();
+                },
+                () -> Instant.ofEpochSecond(읽은_시각),
+                () -> Mono.error(new IllegalStateException("레디스가 흔들린다")),
+                SnapshotCodec.create(), () -> 0L);
+    }
+
+    /**
+     * <b>이월을 못 받는 동안에도 평활은 이어진다</b> (CY-864). 회차마다 콜드 스무더를
+     * 새로 만들면 실패가 이어지는 내내 관측치가 생으로 나간다 — 승계 직후는 레디스가
+     * 가장 흔들려 그 구간이 길다.
+     */
+    @Test
+    @DisplayName("이월을_못_받는_동안에도_평활이_이어진다")
+    void 이월을_못_받는_동안에도_평활이_이어진다() {
+        AtomicLong 관측 = new AtomicLong(1_000);
+        List<Long> 발행된_크레딧 = new ArrayList<>();
+        AllocationRound round = 이월이_안_오는_회차(관측, 발행된_크레딧);
+
+        round.run().block();
+        관측.set(200);
+        round.run().block();
+
+        // 첫 회차는 견줄 것이 없어 1,000 이다. 둘째는 0.3 × 200 + 0.7 × 1,000 = 760 이다.
+        // 회차마다 콜드로 시작하면 200 이 생으로 나간다.
+        assertThat(발행된_크레딧).containsExactly(1_000L, 760L);
+    }
+
+    /** 임시로 이어 온 평활은 임기에 묶인다. 새 임기가 앞 임기의 콜드 값을 이어 쓰면 안 된다. */
+    @Test
+    @DisplayName("이월_대신_이어_온_평활은_임기가_바뀌면_버린다")
+    void 이월_대신_이어_온_평활은_임기가_바뀌면_버린다() {
+        AtomicLong 관측 = new AtomicLong(1_000);
+        List<Long> 발행된_크레딧 = new ArrayList<>();
+        AllocationRound round = 이월이_안_오는_회차(관측, 발행된_크레딧);
+
+        round.run().block();
+        round.leadershipAcquired();
+        관측.set(200);
+        round.run().block();
+
+        assertThat(발행된_크레딧).containsExactly(1_000L, 200L);
     }
 
     @Test

@@ -20,6 +20,9 @@ public final class QueueSeed {
 
     private static final int SHARD = 0;
 
+    /** 바닥값의 수명. 등록 경로가 스크립트에 넘기는 값과 같다. */
+    static final long MAX_SCORE_TTL_SEC = 86_400;
+
     private QueueSeed() {
     }
 
@@ -44,8 +47,11 @@ public final class QueueSeed {
             redis.zadd(alive, 만료_초, member);
             자리.put(member, score);
         }
-        redis.set(RedisKeys.maxScore(couponId, SHARDS, SHARD),
-                String.valueOf(지금_마이크로 + n));
+        // 등록 스크립트처럼 마지막 점수를 수명과 함께 쓴다. 수명 없는 키는 프로덕션에 없다.
+        if (n > 0) {
+            redis.setex(RedisKeys.maxScore(couponId, SHARDS, SHARD), MAX_SCORE_TTL_SEC,
+                    String.valueOf(지금_마이크로 + n - 1));
+        }
         return 자리;
     }
 

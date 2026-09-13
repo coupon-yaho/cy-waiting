@@ -91,6 +91,20 @@ class QueueSeedTest {
                         .isBetween(지금_초, 지금_초 + 수명.toSeconds() + 5));
     }
 
+    /** 바닥값은 등록 스크립트처럼 마지막 점수이고 수명이 걸린다. */
+    @Test
+    @DisplayName("바닥값이_마지막_점수이고_수명이_걸린다")
+    void 바닥값이_마지막_점수이고_수명이_걸린다() {
+        String coupon = COUPON + "-floor";
+        var 자리 = QueueSeed.줄을_세운다(연결, coupon, 줄_선_사람, 수명);
+        String key = RedisKeys.maxScore(coupon, 1, 0);
+
+        double 마지막 = 자리.values().stream().mapToDouble(Double::doubleValue).max().orElseThrow();
+        assertThat(Double.parseDouble(연결.sync().get(key))).isEqualTo(마지막);
+        assertThat(연결.sync().ttl(key))
+                .isBetween(QueueSeed.MAX_SCORE_TTL_SEC - 5, QueueSeed.MAX_SCORE_TTL_SEC);
+    }
+
     private List<Object> 다시_등록한다(String member) {
         String script = 스크립트를_읽는다();
         String[] keys = {

@@ -68,6 +68,11 @@ public final class BodyDeadline implements GatewayFilter {
         return new BodyDeadline(limit, meters);
     }
 
+    /** 걸린 상한. 배선이 응답 상한의 배수를 그대로 실었는지 시험이 본다. */
+    Duration limit() {
+        return limit;
+    }
+
     /**
      * 본문 쓰기 <b>전체</b>에 시한을 건다. 조각 사이에만 걸면 못 잡는다 — 꾸준히 흘리는
      * 뒷단이 정확히 그 구멍이고, 실측에서 40초를 기다려도 안 끝난 것이 그 모양이다.

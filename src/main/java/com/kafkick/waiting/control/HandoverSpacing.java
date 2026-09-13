@@ -74,7 +74,7 @@ public final class HandoverSpacing implements BooleanSupplier {
         return true;
     }
 
-    /** 쉬는 구간을 닫는다. 쉬는 중이 아니면 아무것도 안 한다. */
+    /** 진입 로그가 짝 없이 남지 않게 쉬는 구간을 닫는다. 쉬는 중이 아니면 아무것도 안 한다. */
     private void released(long now) {
         if (waiting) {
             waiting = false;

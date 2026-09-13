@@ -85,6 +85,9 @@ public final class AllocationRound {
      */
     private final AtomicReference<CreditSmoother> smoother = new AtomicReference<>();
 
+    /** 이월을 못 받는 동안 이어 쓰는 평활. 이월이 오거나 임기가 바뀌면 버린다. */
+    private final AtomicReference<CreditSmoother> interim = new AtomicReference<>();
+
     /** 이월을 이어서 몇 회차 못 받았나. 임기가 바뀌면 0 부터 다시 센다. */
     private final AtomicInteger carryoverMisses = new AtomicInteger();
 
@@ -292,6 +295,7 @@ public final class AllocationRound {
                 .doOnNext(restored -> carryoverReturned())
                 .doOnNext(restored -> {
                     if (smoother.compareAndSet(null, restored)) {
+                        interim.set(null);
                         log.info("평활화 이월 완료");
                     }
                 })
@@ -324,6 +328,7 @@ public final class AllocationRound {
             log.warn("승계 — 발행 몫을 모른다. 앞 임기 기준이 있으면 그것을 이어 쓴다");
         }
         smoother.set(null);
+        interim.set(null);
         carryoverMisses.set(0);
         // **조임 창도 닫는다.** 안 닫으면 회복 로그가 비리더 구간까지 포함한 지속
         // 시간을 찍는다. 버렸다는 것은 남긴다 — 조용히 버리면 찍힌 진입 경고 하나에
@@ -408,10 +413,12 @@ public final class AllocationRound {
 
     private Mono<Void> allocate(List<CouponDemand> collected, Instant readAt) {
         // **이월을 못 받았어도 회차는 돈다.** 여기서 멈추면 레디스가 흔들릴 때 배분이
-        // 통째로 안 시작한다. 다만 그 스무더를 저장하지는 않는다 — 저장하면 흔들림이
-        // 지나가도 그 임기 내내 콜드로 남는다.
+        // 통째로 안 시작한다. 그 스무더는 이월 자리에 저장하지 않는다 — 저장하면 흔들림이
+        // 지나가도 그 임기 내내 콜드로 남는다. 대신 임시로 이어 쓴다 — 회차마다 새로
+        // 만들면 실패가 이어지는 내내 관측치가 생으로 나간다.
         CreditSmoother carried = smoother.get();
-        CreditSmoother current = carried == null ? CreditSmoother.of(CreditSmoother.DEFAULT_ALPHA) : carried;
+        CreditSmoother current = carried != null ? carried : interim.updateAndGet(
+                s -> s == null ? CreditSmoother.of(CreditSmoother.DEFAULT_ALPHA) : s);
         // **하한은 평활 뒤에 건다.** 하한은 관측이 아니라 정책이다. 평활을 거치면
         // 앞선 낮은 값에서 올라오는 데 열 틱이 넘고, 그동안 노드당 몫이 유휴 비율
         // 아래에 머물러 한산 통과 상한이 0 이다 — 한산한 쿠폰은 줄 없이 통과해야 한다.

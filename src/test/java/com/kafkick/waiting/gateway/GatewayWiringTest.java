@@ -55,6 +55,9 @@ class GatewayWiringTest {
     @Autowired
     private MeterRegistry meters;
 
+    @Autowired
+    private IdempotencyKey idempotencyKey;
+
     /**
      * <b>라이브러리가 실제로 바인딩한 값을 본다.</b> yml 문자열을 {@code @Value} 로
      * 다시 읽으면 우리가 적은 것을 우리가 확인하는 것뿐이라, 키가 라이브러리가
@@ -278,5 +281,20 @@ class GatewayWiringTest {
     void 걸림_시간_하한이_서킷_느림_임계보다_뒤다() {
         assertThat(Duration.ofSeconds(Tunables.MIN_INFLIGHT_SECONDS))
                 .isGreaterThan(circuit.slowCallDurationThreshold());
+    }
+
+    /**
+     * <b>멱등 키 폴백이 운영 레지스트리에 쌓여야 합니다.</b> 계측 없는 팩토리로 배선하면
+     * 떨어진 레지스트리에 세어져, 운영 지표는 0 인 채로 남습니다.
+     */
+    @Test
+    @DisplayName("멱등_키_폴백이_운영_지표로_나간다")
+    void 멱등_키_폴백이_운영_지표로_나간다() {
+        double 전 = meters.counter("waiting.idempotency.fallback", "reason", "missing").count();
+
+        idempotencyKey.of("c1", "m1", null);
+
+        assertThat(meters.counter("waiting.idempotency.fallback", "reason", "missing").count())
+                .isEqualTo(전 + 1);
     }
 }

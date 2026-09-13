@@ -61,6 +61,25 @@ class AllocationSchedulerTest {
         scheduler.stop(() -> { });
     }
 
+    /**
+     * <b>리더가 아니던 회차 뒤에는 한 틱을 안 기다린다</b> (CY-928). 승계 첫 틱은 울타리 잠금이
+     * 끝날 때까지 리더로 안 치는데, 잠금이 수 ms 에 끝나도 한 틱을 쉬면 첫 배분이 그만큼 밀려
+     * 승계 게이트의 여유 1틱을 먹는다.
+     */
+    @Test
+    @DisplayName("리더가_아니던_회차_뒤에는_한_틱을_안_기다린다")
+    void 리더가_아니던_회차_뒤에는_한_틱을_안_기다린다() {
+        VirtualTimeScheduler timer = VirtualTimeScheduler.create();
+        리더.set(false);
+        scheduler(timer).start();
+        timer.advanceTimeBy(FIRST);
+
+        리더.set(true);
+        timer.advanceTimeBy(TICK.dividedBy(2));
+
+        assertThat(배분).as("잠금이 끝난 뒤 다음 틱까지 안 기다린다").hasValue(1);
+    }
+
     @Test
     @DisplayName("첫_회차를_미룬다")
     void 첫_회차를_미룬다() {

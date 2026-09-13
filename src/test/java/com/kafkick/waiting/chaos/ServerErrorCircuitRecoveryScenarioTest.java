@@ -155,13 +155,18 @@ class ServerErrorCircuitRecoveryScenarioTest {
     @DisplayName("C9b_5xx_로_연_서킷이_열린_채로_안_굳는다")
     void C9b_5xx_로_연_서킷이_열린_채로_안_굳는다() {
         long[] 유지중_유입 = new long[1];
+        List<Integer> 정상_상태 = new ArrayList<>();
+        long[] 정상_유입 = new long[1];
+        List<Integer> 열기_전_상태 = new ArrayList<>();
+        long[] 열기_전_유입 = new long[1];
         List<Integer> 장애중_상태 = new ArrayList<>();
         long[] 회복_유입 = new long[1];
 
         ChaosScenario.named("C9b 뒷단 5xx → 서킷 오픈")
                 .baseline(() -> {
                     // **서킷은 첫 요청이 만든다.** 그 전에 잡으려 하면 없다.
-                    여러_번_시도한다(3);
+                    정상_상태.addAll(여러_번_시도한다(3));
+                    정상_유입[0] = 뒷단.받은_수();
                     서킷().getEventPublisher().onStateTransition(e -> {
                         if (e.getStateTransition().getToState() == CircuitBreaker.State.OPEN) {
                             열린_횟수.incrementAndGet();
@@ -170,7 +175,9 @@ class ServerErrorCircuitRecoveryScenarioTest {
                 })
                 .inject(() -> 실패한다.set(true))
                 .duringFault(() -> {
-                    여러_번_시도한다(5);
+                    long 전 = 뒷단.받은_수();
+                    열기_전_상태.addAll(여러_번_시도한다(5));
+                    열기_전_유입[0] = 뒷단.받은_수() - 전;
                     long 열린_뒤 = 뒷단.받은_수();
                     장애중_상태.addAll(여러_번_시도한다(5));
                     유지중_유입[0] = 뒷단.받은_수() - 열린_뒤;
@@ -180,8 +187,13 @@ class ServerErrorCircuitRecoveryScenarioTest {
                     닫힐_때까지_두드린다();
                     회복_유입[0] = 뒷단이_직접_답한다() ? 1 : 0;
                 })
-                .assertEntry(ChaosScenario.Verdict.none())
-                .assertDuring(() -> RecoveryCriteria.violations(서킷이_열렸다(),
+                // **뒷단 배선이 살아 있는가.** 연결이 안 되는 배선에서도 서킷은 열려 아래
+                // 판정이 다 초록이 된다 — 그때는 5xx 로 연 것이 아니다.
+                .assertEntry(() -> RecoveryCriteria.violations(
+                        다_통과했다(정상_상태, 정상_유입[0])))
+                .assertDuring(() -> RecoveryCriteria.violations(
+                        오백이_뒷단에서_왔다(열기_전_상태, 열기_전_유입[0]),
+                        서킷이_열렸다(),
                         유입이_멎었다(유지중_유입[0]),
                         // **막는 것과 줄에 세우는 것은 다르다.** 뒷단 유입 0 은 둘 다에서
                         // 나온다. 5xx 가 폴백으로 바뀌어 503 이 되는 것도 여기서 갈린다.
@@ -191,7 +203,8 @@ class ServerErrorCircuitRecoveryScenarioTest {
                 // C8 과 같은 한계라, 대기 시간이 지나 시도에 들어갔는지까지 잰다.
                 .assertRecovery(() -> RecoveryCriteria.violations(
                         시도에_들어갔다(),
-                        뒷단이_다시_받았다(회복_유입[0]),
+                        // 하네스 확인이다. 스텁을 직접 찔러 스위치가 걷혔는지만 본다.
+                        스위치가_걷혔다(회복_유입[0]),
                         뒷단.중복_수신이_없다()))
                 .run();
     }
@@ -251,8 +264,22 @@ class ServerErrorCircuitRecoveryScenarioTest {
         }
     }
 
-    private Optional<String> 뒷단이_다시_받았다(long 회복_유입) {
+    private Optional<String> 스위치가_걷혔다(long 회복_유입) {
         return 회복_유입 > 0 ? Optional.empty()
-                : Optional.of("회복 구간인데 뒷단이 직접 물어도 안 답한다 — 아직 안 돌아왔다");
+                : Optional.of("하네스 — 스위치를 걷었는데 스텁이 직접 물어도 200 이 아니다");
+    }
+
+    private Optional<String> 다_통과했다(List<Integer> 상태, long 유입) {
+        return 상태.size() == 3 && 상태.stream().allMatch(s -> s == 200) && 유입 == 3
+                ? Optional.empty()
+                : Optional.of("전제 — 정상 구간이 뒷단까지 다 안 갔다: 상태 %s, 뒷단 수신 %d"
+                        .formatted(상태, 유입));
+    }
+
+    /** 서킷을 연 것이 뒷단의 5xx 인가. 뒷단이 받았고 사용자가 5xx 계열을 받았어야 한다. */
+    private Optional<String> 오백이_뒷단에서_왔다(List<Integer> 상태, long 유입) {
+        return 유입 > 0 && 상태.stream().anyMatch(s -> s >= 500) ? Optional.empty()
+                : Optional.of("전제 — 5xx 가 뒷단에서 안 왔다: 상태 %s, 뒷단 수신 %d"
+                        .formatted(상태, 유입));
     }
 }

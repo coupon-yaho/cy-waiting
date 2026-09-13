@@ -56,6 +56,12 @@ class ServerErrorScopeScenarioTest {
     /** 멀쩡한 한산한 쿠폰. 뒷단은 이 쿠폰에 늘 200 을 낸다. */
     private static final String 멀쩡한_쿠폰 = "c9c-well";
 
+    /**
+     * 대조 쿠폰. <b>한 번도 줄에 안 세운다.</b> 줄에 선 쿠폰은 등록 래치가 붙잡아 서킷을 닫아도
+     * 계속 줄에 세운다 — 줄 선 사람을 추월하지 않게 하는 동작이라, 대조군으로 못 쓴다.
+     */
+    private static final String 대조_쿠폰 = "c9c-control";
+
     private static final AtomicBoolean 실패한다 = new AtomicBoolean();
 
     private static final BackendStub 뒷단 =
@@ -100,7 +106,8 @@ class ServerErrorScopeScenarioTest {
             Map<String, String> 재료 = SnapshotCodec.create().encode(
                     new GatewaySnapshot(Map.of(
                             아픈_쿠폰, CouponStates.idle(1_000_000),
-                            멀쩡한_쿠폰, CouponStates.idle(1_000_000)),
+                            멀쩡한_쿠폰, CouponStates.idle(1_000_000),
+                            대조_쿠폰, CouponStates.idle(1_000_000)),
                             new SnapshotMeta(10_000, 1), 지금),
                     CreditSmoother.Snapshot.empty(), QueueingHysteresis.Snapshot.empty());
             return () -> Mono.just(재료);
@@ -150,8 +157,9 @@ class ServerErrorScopeScenarioTest {
         List<Integer> 정상_상태 = new ArrayList<>();
         List<Integer> 멀쩡한_쿠폰_상태 = new ArrayList<>();
         long[] 멀쩡한_쿠폰_유입 = new long[1];
-        CircuitBreaker.State[] 열린_뒤_상태 = new CircuitBreaker.State[1];
+        CircuitBreaker.State[] 보낸_뒤_상태 = new CircuitBreaker.State[1];
         CircuitBreaker.State[] 회복_뒤_상태 = new CircuitBreaker.State[1];
+        List<Integer> 닫은_뒤_상태 = new ArrayList<>();
 
         ChaosScenario.named("C9c 쿠폰 하나의 5xx")
                 .baseline(() -> 정상_상태.addAll(여러_번_시도한다(멀쩡한_쿠폰, 3)))
@@ -162,48 +170,54 @@ class ServerErrorScopeScenarioTest {
                                 여러_번_시도한다(아픈_쿠폰, 1);
                                 return 서킷().getState() == CircuitBreaker.State.OPEN;
                             });
-                    열린_뒤_상태[0] = 서킷().getState();
                     long 전 = 뒷단.받은_수(멀쩡한_쿠폰);
                     멀쩡한_쿠폰_상태.addAll(여러_번_시도한다(멀쩡한_쿠폰, 5));
                     멀쩡한_쿠폰_유입[0] = 뒷단.받은_수(멀쩡한_쿠폰) - 전;
+                    // 보내는 동안에도 열려 있었는가. 중간에 반쯤 열리면 202 의 뜻이 흐려진다.
+                    보낸_뒤_상태[0] = 서킷().getState();
                 })
                 .recover(() -> 실패한다.set(false))
                 .afterRecovery(() -> {
                     Awaitility.await().atMost(Duration.ofSeconds(20))
                             .until(() -> 서킷().getState() != CircuitBreaker.State.OPEN);
                     회복_뒤_상태[0] = 서킷().getState();
+                    // **대조군.** 서킷만 닫고 나머지(쌓인 요청·고정 시계)는 그대로 둔다. 줄에 선
+                    // 적 없는 쿠폰이 통과하면, 래치가 없던 멀쩡한 쿠폰의 첫 202 는 서킷 탓이다.
+                    서킷().transitionToClosedState();
+                    닫은_뒤_상태.addAll(여러_번_시도한다(대조_쿠폰, 3));
                 })
                 .assertEntry(() -> RecoveryCriteria.violations(
                         다_통과했다("정상", 정상_상태)))
                 .assertDuring(() -> RecoveryCriteria.violations(
-                        열렸다(열린_뒤_상태[0]),
+                        열려_있었다(보낸_뒤_상태[0]),
                         // **넓어진 범위를 사실로 적는다.** 멀쩡한 쿠폰은 뒷단이 200 을 낼 것인데도
-                        // 서킷이 전체 하나라 판정이 줄에 세운다. 이 값이 뒤집히는 날이 범위를
-                        // 좁힌 날이다.
+                        // 서킷이 전체 하나라 첫 요청이 줄에 선다. 그 뒤 요청은 등록 래치가 이어
+                        // 붙잡는다 — 줄 선 사람을 추월하지 않게 하는 동작이다.
                         멀쩡한_쿠폰도_줄에_섰다(멀쩡한_쿠폰_상태),
                         멀쩡한_쿠폰이_뒷단에_안_갔다(멀쩡한_쿠폰_유입[0])))
                 // 닫히는 것까지는 못 잰다 — HALF_OPEN 의 유일한 길이 배분인데 스케줄러를 껐다
                 // (CY-813). 열린 채로 안 굳는지까지 본다.
                 .assertRecovery(() -> RecoveryCriteria.violations(
                         안_굳었다(회복_뒤_상태[0]),
+                        다_통과했다("서킷을 닫은 뒤 대조 쿠폰", 닫은_뒤_상태),
                         뒷단.중복_수신이_없다()))
                 .run();
     }
 
     private Optional<String> 다_통과했다(String 구간, List<Integer> 상태) {
         return !상태.isEmpty() && 상태.stream().allMatch(s -> s == 200) ? Optional.empty()
-                : Optional.of("전제 — %s 구간에 멀쩡한 쿠폰이 다 통과하지 않았다: %s".formatted(구간, 상태));
+                : Optional.of("%s — 멀쩡한 쿠폰이 다 통과하지 않았다: %s".formatted(구간, 상태));
     }
 
-    private Optional<String> 열렸다(CircuitBreaker.State 상태) {
+    private Optional<String> 열려_있었다(CircuitBreaker.State 상태) {
         return 상태 == CircuitBreaker.State.OPEN ? Optional.empty()
-                : Optional.of("전제 — 아픈 쿠폰의 5xx 로 서킷이 안 열렸다: %s".formatted(상태));
+                : Optional.of("전제 — 멀쩡한 쿠폰을 보내는 사이 서킷이 닫혔다: %s".formatted(상태));
     }
 
     private Optional<String> 멀쩡한_쿠폰도_줄에_섰다(List<Integer> 상태) {
         return !상태.isEmpty() && 상태.stream().allMatch(s -> s == 202) ? Optional.empty()
-                : Optional.of("유지 — 멀쩡한 쿠폰이 줄에 안 섰다: %s. 서킷 범위가 바뀌었는지 보고 "
-                        + "이 사실 판정과 계획서를 같이 고친다".formatted(상태));
+                : Optional.of(("유지 — 멀쩡한 쿠폰이 줄에 안 섰다: %s. 서킷 범위가 바뀌었는지 보고 "
+                        + "이 사실 판정과 계획서를 같이 고친다").formatted(상태));
     }
 
     private Optional<String> 멀쩡한_쿠폰이_뒷단에_안_갔다(long 유입) {

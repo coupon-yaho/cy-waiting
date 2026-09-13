@@ -2,6 +2,8 @@ package com.kafkick.waiting.control;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -30,8 +32,18 @@ class LeaderTickWiringTest {
 
     private final AtomicInteger 잃음 = new AtomicInteger();
 
+    /** 알림의 차례. 잃음이 얻음 뒤에 오면 새 임기에서 막 세운 상태를 곧바로 멈춘다. */
+    private final List<String> 차례 = new ArrayList<>();
+
     private final BooleanSupplier 틱 = 배선.leaderTick(리더::get, 임기::get, 문,
-            () -> 세대.set(문.sealing()), 잃음::incrementAndGet);
+            () -> {
+                차례.add("잠금");
+                세대.set(문.sealing());
+            },
+            () -> {
+                차례.add("잃음");
+                잃음.incrementAndGet();
+            });
 
     /** 잠그기 시작한 틱에 회차가 돌면 새 리더가 안 만진 쿠폰에 유령의 몫이 들어간다. */
     @Test
@@ -67,5 +79,6 @@ class LeaderTickWiringTest {
         assertThat(틱.getAsBoolean()).as("새 임기의 잠금이 끝날 때까지 안 돈다").isFalse();
         assertThat(잃음).hasValue(1);
         assertThat(세대).hasValue(2);
+        assertThat(차례).as("앞 임기를 닫고 새 임기를 잠근다").containsExactly("잠금", "잃음", "잠금");
     }
 }

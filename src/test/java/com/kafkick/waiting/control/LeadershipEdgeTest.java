@@ -2,6 +2,8 @@ package com.kafkick.waiting.control;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -95,15 +97,19 @@ class LeadershipEdgeTest {
     @Test
     @DisplayName("틱_사이에_임기가_바뀌면_잃고_다시_얻는다")
     void 틱_사이에_임기가_바뀌면_잃고_다시_얻는다() {
+        List<String> 차례 = new ArrayList<>();
+        LeadershipEdge 순서_edge = LeadershipEdge.of(리더::get, 임기::get,
+                () -> 차례.add("얻음"), () -> 차례.add("잃음"));
         리더.set(true);
-        edge.getAsBoolean();
+        순서_edge.getAsBoolean();
 
         임기.set(7);
-        edge.getAsBoolean();
-        edge.getAsBoolean();
+        assertThat(순서_edge.getAsBoolean()).as("새 임기에서도 리더다").isTrue();
+        순서_edge.getAsBoolean();
 
-        assertThat(잃음).as("앞 임기를 닫는다").hasValue(1);
-        assertThat(알림).as("새 임기를 연다 — 한 번만").hasValue(2);
+        // **앞 임기를 먼저 닫는다.** 거꾸로 부르면 새 임기에서 막 초기화한 상태를 곧바로
+        // 멈추게 된다 — 잃음 알림이 청소를 세운다.
+        assertThat(차례).containsExactly("얻음", "잃음", "얻음");
     }
 
     /** 임기를 모르면(0) 안 가른다. 잃는 순간 번호가 먼저 0 이 되는 창에서 헛 승계를 만든다. */
@@ -118,5 +124,43 @@ class LeadershipEdgeTest {
 
         assertThat(잃음).hasValue(0);
         assertThat(알림).hasValue(1);
+    }
+
+    /**
+     * <b>모르는 번호를 본 뒤에도 알던 번호를 지킨다.</b> 0 을 기록하고 다음 번호를 조용히
+     * 받으면 5 → 0 → 7 에서 실제 승계를 놓친다. 지연 중에는 틱이 길어져 그 창이 넓다.
+     */
+    @Test
+    @DisplayName("모르는_번호_사이의_승계도_가른다")
+    void 모르는_번호_사이의_승계도_가른다() {
+        리더.set(true);
+        edge.getAsBoolean();
+        임기.set(0);
+        edge.getAsBoolean();
+
+        임기.set(7);
+        edge.getAsBoolean();
+
+        assertThat(잃음).hasValue(1);
+        assertThat(알림).hasValue(2);
+    }
+
+    /** 얻는 순간 번호를 몰랐으면 처음 알게 된 번호를 조용히 받고, 그 뒤의 승계는 가른다. */
+    @Test
+    @DisplayName("얻을_때_모르던_번호는_조용히_받는다")
+    void 얻을_때_모르던_번호는_조용히_받는다() {
+        임기.set(0);
+        리더.set(true);
+        edge.getAsBoolean();
+
+        임기.set(5);
+        edge.getAsBoolean();
+        assertThat(잃음).as("처음 알게 된 번호는 승계가 아니다").hasValue(0);
+        assertThat(알림).hasValue(1);
+
+        임기.set(7);
+        edge.getAsBoolean();
+        assertThat(잃음).as("받은 번호에서 바뀌면 승계다").hasValue(1);
+        assertThat(알림).hasValue(2);
     }
 }

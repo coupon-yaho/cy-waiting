@@ -80,7 +80,49 @@ public final class InvariantMetrics {
         metrics.count(meters, "waiting.allocation.stock.unknown.ticks",
                 InvariantMetrics::stockUnknownTicks,
                 "재고를 못 읽은 채 발행한 누적 쿠폰·틱. 0 이 아니면 재고 키를 잃었다");
+        metrics.carryover(meters, "restored", InvariantMetrics::carryoverRestored);
+        metrics.carryover(meters, "empty", InvariantMetrics::carryoverEmpty);
+        metrics.carryover(meters, "replaced", InvariantMetrics::carryoverReplaced);
+        // **시도는 이름을 뗀다.** 임기 단위 결과와 한 이름에 섞으면 비율이 뜻을 잃는다.
+        metrics.count(meters, "waiting.allocation.carryover.failures",
+                InvariantMetrics::carryoverFailures,
+                "평활화 이월 읽기가 실패한 누적 시도 수. 흔들림이 얼마나 길었는지를 본다");
+        // **게이지다.** 리더가 아니면 NaN 이라 노드마다 하나만 값을 낸다.
+        Gauge.builder("waiting.allocation.smoothed.credit", metrics,
+                        InvariantMetrics::smoothedCredit)
+                .description("배분이 쓰는 평활값. 발행한 몫과 달리 평활의 수렴을 보여 준다")
+                .strongReference(true)
+                .register(meters);
         return metrics;
+    }
+
+    /** 결과만 라벨로 가른다. 가짓수가 셋으로 묶인다. */
+    private void carryover(MeterRegistry meters, String outcome,
+            ToDoubleFunction<InvariantMetrics> read) {
+        FunctionCounter.builder("waiting.allocation.carryover", this, read)
+                .tag("outcome", outcome)
+                .description("임기마다 한 번 오르는 평활화 이월 결과")
+                .register(meters);
+    }
+
+    private double carryoverRestored() {
+        return round.carryoverRestored();
+    }
+
+    private double carryoverEmpty() {
+        return round.carryoverEmpty();
+    }
+
+    private double carryoverReplaced() {
+        return round.carryoverReplaced();
+    }
+
+    private double carryoverFailures() {
+        return round.carryoverFailures();
+    }
+
+    private double smoothedCredit() {
+        return round.smoothedCredit();
     }
 
     /** <b>태그를 안 붙인다.</b> 쿠폰 식별자는 가짓수에 상한이 없다. */

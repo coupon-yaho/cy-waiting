@@ -33,6 +33,7 @@ import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.LongSupplier;
@@ -109,7 +110,12 @@ class AllocationRoundTest {
                         List.of(new CouponDemand("c1", 5, 100, QueueMode.ADAPTIVE)), 읽은_시각)),
                 () -> 1_000, () -> 1,
                 grant -> Mono.just(grant.credit()),
+                // **발행도 같은 레디스라 같이 터진다.** 발행이 되면 이월 자리가 이 리더의
+                // 값으로 덮여, 다시 읽어도 앞 리더의 200 은 없다.
                 hash -> {
+                    if (터진다.get()) {
+                        return Mono.error(new IllegalStateException("레디스가 흔들린다"));
+                    }
                     발행된_크레딧.add(Long.parseLong(hash.get("#credit")));
                     return Mono.empty();
                 },
@@ -123,7 +129,7 @@ class AllocationRoundTest {
                 },
                 SnapshotCodec.create(), () -> 0L);
 
-        round.run().block();
+        round.run().onErrorResume(e -> Mono.empty()).block();
         assertThat(시도.get()).as("한 회차 실패했다").isEqualTo(1);
 
         터진다.set(false);
@@ -134,7 +140,215 @@ class AllocationRoundTest {
         // 이월값 200 과 관측 1,000 사이. 알파가 0.3 이라 440 이 나온다 —
         // 관측치를 생으로 내보내면 1,000 이다.
         assertThat(발행된_크레딧).as("이월을 받은 회차는 평활한 값을 낸다")
-                .containsExactly(1_000L, 440L);
+                .containsExactly(440L);
+    }
+
+    /** 이월이 늘 실패하는 회차. 관측만 바꿔 가며 발행된 몫을 모은다. */
+    private AllocationRound 이월이_안_오는_회차(AtomicLong 관측, List<Long> 발행된_크레딧) {
+        return AllocationRound.of(
+                () -> true,
+                () -> Mono.just(new TimedDemands(
+                        List.of(new CouponDemand("c1", 5, 100, QueueMode.ADAPTIVE)), 읽은_시각)),
+                관측::get, () -> 1,
+                grant -> Mono.just(grant.credit()),
+                hash -> {
+                    발행된_크레딧.add(Long.parseLong(hash.get("#credit")));
+                    return Mono.empty();
+                },
+                () -> Instant.ofEpochSecond(읽은_시각),
+                () -> Mono.error(new IllegalStateException("레디스가 흔들린다")),
+                SnapshotCodec.create(), () -> 0L);
+    }
+
+    /**
+     * <b>이월을 못 받는 동안에도 평활은 이어진다</b> (CY-864). 회차마다 콜드 스무더를
+     * 새로 만들면 실패가 이어지는 내내 관측치가 생으로 나간다 — 승계 직후는 레디스가
+     * 가장 흔들려 그 구간이 길다.
+     */
+    @Test
+    @DisplayName("이월을_못_받는_동안에도_평활이_이어진다")
+    void 이월을_못_받는_동안에도_평활이_이어진다() {
+        AtomicLong 관측 = new AtomicLong(1_000);
+        List<Long> 발행된_크레딧 = new ArrayList<>();
+        AllocationRound round = 이월이_안_오는_회차(관측, 발행된_크레딧);
+
+        round.run().block();
+        관측.set(200);
+        round.run().block();
+
+        // 첫 회차는 견줄 것이 없어 1,000 이다. 둘째는 0.3 × 200 + 0.7 × 1,000 = 760 이다.
+        // 회차마다 콜드로 시작하면 200 이 생으로 나간다.
+        assertThat(발행된_크레딧).containsExactly(1_000L, 760L);
+    }
+
+    /** 임시로 이어 온 평활은 임기에 묶인다. 새 임기가 앞 임기의 콜드 값을 이어 쓰면 안 된다. */
+    @Test
+    @DisplayName("이월_대신_이어_온_평활은_임기가_바뀌면_버린다")
+    void 이월_대신_이어_온_평활은_임기가_바뀌면_버린다() {
+        AtomicLong 관측 = new AtomicLong(1_000);
+        List<Long> 발행된_크레딧 = new ArrayList<>();
+        AllocationRound round = 이월이_안_오는_회차(관측, 발행된_크레딧);
+
+        round.run().block();
+        round.leadershipAcquired();
+        관측.set(200);
+        round.run().block();
+
+        assertThat(발행된_크레딧).containsExactly(1_000L, 200L);
+    }
+
+    /** 이월과 발행 성패를 밖에서 고르는 회차. 관측은 1,000 으로 고정이다. */
+    private AllocationRound 이월을_고르는_회차(AtomicReference<Mono<CreditSmoother>> 이월,
+            AtomicBoolean 리더, AtomicBoolean 발행이_터진다) {
+        return AllocationRound.of(
+                리더::get,
+                () -> Mono.just(new TimedDemands(
+                        List.of(new CouponDemand("c1", 5, 100, QueueMode.ADAPTIVE)), 읽은_시각)),
+                () -> 1_000, () -> 1,
+                grant -> Mono.just(grant.credit()),
+                hash -> 발행이_터진다.get()
+                        ? Mono.error(new IllegalStateException("레디스가 흔들린다"))
+                        : Mono.empty(),
+                () -> Instant.ofEpochSecond(읽은_시각),
+                이월::get,
+                SnapshotCodec.create(), () -> 0L);
+    }
+
+    private static void 돈다(AllocationRound round) {
+        round.run().onErrorResume(e -> Mono.empty()).block();
+    }
+
+    /**
+     * <b>이월의 결과를 갈라 센다</b> (CY-865). 버린 것과 받은 것이 안 남으면 승계 뒤의
+     * 계단이 이월을 못 받아서인지, 받을 값이 없어서인지 못 가른다.
+     */
+    @Test
+    @DisplayName("이월_결과를_받음_없음_실패로_갈라_센다")
+    void 이월_결과를_받음_없음_실패로_갈라_센다() {
+        Mono<CreditSmoother> 흔들림 = Mono.error(new IllegalStateException("레디스가 흔들린다"));
+        AtomicReference<Mono<CreditSmoother>> 이월 = new AtomicReference<>(흔들림);
+        AtomicBoolean 발행이_터진다 = new AtomicBoolean(true);
+        AllocationRound round = 이월을_고르는_회차(이월, new AtomicBoolean(true), 발행이_터진다);
+
+        돈다(round);
+        돈다(round);
+        이월.set(Mono.just(CreditSmoother.restore(0.3, new CreditSmoother.Snapshot(200.0, true))));
+        발행이_터진다.set(false);
+        돈다(round);
+
+        round.leadershipAcquired();
+        이월.set(흔들림);
+        발행이_터진다.set(true);
+        돈다(round);
+        // 매번 새로 만든다. 한 벌을 돌려 쓰면 앞 임기가 관측한 스무더가 값 있는 이월로 돌아온다.
+        이월.set(Mono.fromSupplier(() -> CreditSmoother.of(0.3)));
+        발행이_터진다.set(false);
+        돈다(round);
+
+        round.leadershipAcquired();
+        돈다(round);
+
+        이월.set(흔들림);
+        for (int i = 0; i < 3; i++) {
+            round.leadershipAcquired();
+            돈다(round);
+        }
+
+        // **실패는 시도마다 센다.** 한 임기에 한 번만 세면 흔들림이 얼마나 길었는지 못 본다.
+        // 넷의 값을 서로 달리 둔다 — 같으면 세는 자리를 서로 바꿔도 통과한다.
+        assertThat(round.carryoverFailures()).as("못 읽은 시도").isEqualTo(6);
+        assertThat(round.carryoverRestored()).as("값을 이어받은 임기").isEqualTo(1);
+        assertThat(round.carryoverEmpty()).as("읽었는데 이을 값이 없던 임기").isEqualTo(2);
+        assertThat(round.carryoverReplaced()).as("못 받은 채 제 발행이 자리를 덮은 임기")
+                .isEqualTo(3);
+    }
+
+    /**
+     * <b>발행이 된 뒤에는 이월을 다시 안 읽는다.</b> 발행이 이월 자리를 이 리더의 값으로
+     * 덮어, 다시 읽으면 제 값을 앞 리더의 것으로 셀 뿐이다. 읽기가 제 시한에 걸리는 동안
+     * 매 틱 그 몫을 태우지도 않는다.
+     */
+    @Test
+    @DisplayName("발행이_된_뒤에는_이월을_다시_안_읽는다")
+    void 발행이_된_뒤에는_이월을_다시_안_읽는다() {
+        AtomicInteger 시도 = new AtomicInteger();
+        AllocationRound round = 이월을_고르는_회차(new AtomicReference<>(Mono.defer(() -> {
+            시도.incrementAndGet();
+            return Mono.error(new IllegalStateException("시한에 걸린다"));
+        })), new AtomicBoolean(true), new AtomicBoolean(false));
+
+        돈다(round);
+        돈다(round);
+        돈다(round);
+
+        assertThat(시도).as("첫 회차만 읽는다").hasValue(1);
+        assertThat(round.carryoverReplaced()).isEqualTo(1);
+    }
+
+    /**
+     * <b>값 없는 이월이 데워진 임시 평활을 버리면 안 된다.</b> 실패가 이어진 뒤 읽기는
+     * 됐는데 이을 값이 없으면, 콜드를 앉히는 순간 다음 관측이 다시 생으로 나간다.
+     */
+    @Test
+    @DisplayName("값_없는_이월은_임시_평활을_이어_쓴다")
+    void 값_없는_이월은_임시_평활을_이어_쓴다() {
+        AtomicLong 관측 = new AtomicLong(1_000);
+        List<Long> 발행된_크레딧 = new ArrayList<>();
+        AtomicBoolean 발행이_터진다 = new AtomicBoolean(true);
+        AtomicReference<Mono<CreditSmoother>> 이월 = new AtomicReference<>(
+                Mono.error(new IllegalStateException("레디스가 흔들린다")));
+        AllocationRound round = AllocationRound.of(
+                () -> true,
+                () -> Mono.just(new TimedDemands(
+                        List.of(new CouponDemand("c1", 5, 100, QueueMode.ADAPTIVE)), 읽은_시각)),
+                관측::get, () -> 1,
+                grant -> Mono.just(grant.credit()),
+                // 첫 회차는 발행도 터진다 — 되면 이월 자리가 덮여 값 없는 이월이 안 온다.
+                hash -> {
+                    if (발행이_터진다.get()) {
+                        return Mono.error(new IllegalStateException("레디스가 흔들린다"));
+                    }
+                    발행된_크레딧.add(Long.parseLong(hash.get("#credit")));
+                    return Mono.empty();
+                },
+                () -> Instant.ofEpochSecond(읽은_시각),
+                이월::get,
+                SnapshotCodec.create(), () -> 0L);
+
+        돈다(round);
+        이월.set(Mono.just(CreditSmoother.of(0.3)));
+        발행이_터진다.set(false);
+        관측.set(200);
+        돈다(round);
+
+        // 임시 평활 1,000 에 관측 200 이면 760 이다. 콜드를 앉히면 200 이 생으로 나간다.
+        assertThat(발행된_크레딧).containsExactly(760L);
+    }
+
+    /**
+     * <b>평활값을 낸다</b> (CY-865). 크레딧 지표는 발행한 몫이라 평활이 수렴했는지를 못
+     * 본다. 리더가 아니면 굳은 값을 안 낸다 — 강등된 노드의 옛 값이 섞이면 읽을 수 없다.
+     */
+    @Test
+    @DisplayName("평활값을_리더일_때만_낸다")
+    void 평활값을_리더일_때만_낸다() {
+        AtomicBoolean 리더 = new AtomicBoolean(true);
+        AllocationRound round = 이월을_고르는_회차(new AtomicReference<>(Mono.just(
+                CreditSmoother.restore(0.3, new CreditSmoother.Snapshot(200.0, true)))), 리더,
+                new AtomicBoolean(false));
+
+        assertThat(round.smoothedCredit()).as("회차 전에는 값이 없다").isNaN();
+        round.run().block();
+        // 0.3 × 1,000 + 0.7 × 200
+        assertThat(round.smoothedCredit()).isEqualTo(440.0);
+
+        리더.set(false);
+        assertThat(round.smoothedCredit()).as("리더가 아니면 굳은 값을 안 낸다").isNaN();
+
+        리더.set(true);
+        round.leadershipAcquired();
+        assertThat(round.smoothedCredit()).as("다시 쥔 임기는 첫 회차 전까지 앞 임기 값을 안 낸다")
+                .isNaN();
     }
 
     @Test

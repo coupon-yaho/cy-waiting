@@ -1045,6 +1045,23 @@ public final class AllocationRedisPort implements SnapshotSource {
                 .collectMap(Map.Entry::getKey, Map.Entry::getValue);
     }
 
+    /**
+     * 스냅샷에서 고른 자리만 읽는다. <b>없는 자리는 뺀다</b> — 스냅샷은 쿠폰마다 한 자리라
+     * 통째로 읽으면 쿠폰 수만큼 무거워지는데, 이월은 두 자리면 된다.
+     */
+    public Mono<Map<String, String>> loadFields(List<String> fields) {
+        return redis.<String, String>opsForHash().multiGet(RedisKeys.SNAPSHOT, fields)
+                .map(values -> {
+                    Map<String, String> found = new LinkedHashMap<>();
+                    for (int i = 0; i < fields.size(); i++) {
+                        if (values.get(i) != null) {
+                            found.put(fields.get(i), values.get(i));
+                        }
+                    }
+                    return found;
+                });
+    }
+
     private Long toLong(String raw) {
         if (raw == null) {
             return null;

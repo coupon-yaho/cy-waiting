@@ -12,6 +12,9 @@ import com.kafkick.waiting.domain.queue.GraceRetention;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.function.Supplier;
 import reactor.core.publisher.Mono;
 import java.time.Instant;
 import java.util.Optional;
@@ -89,7 +92,8 @@ public class ControlPlaneConfig {
     AllocationRound allocationRound(DemandCollector collector, AllocationRedisPort port,
             GatewayRegistry registry, CapacityCollector capacity, Leadership leadership,
             TunablesRefresh tunables, ControlPlaneProperties properties,
-            SoldOutCleanup cleanup, QueueSweeper sweeper, SnapshotHolder holder) {
+            SoldOutCleanup cleanup, QueueSweeper sweeper, SnapshotHolder holder,
+            Scheduler allocationScheduler) {
         SnapshotCodec codec = SnapshotCodec.create();
         AllocationRound round = AllocationRound.of(leadership::isLeader, collector::collect,
                 capacity::lastKnown,
@@ -98,8 +102,8 @@ public class ControlPlaneConfig {
                 // 번호로 나가고, 그것이 울타리가 막으려던 바로 그 경우다.
                 grant -> port.apply(grant, leadership.fence()),
                 hash -> port.publish(hash, leadership.fence()), Instant::now,
-                () -> port.load().map(hash ->
-                        CreditSmoother.restore(CreditSmoother.DEFAULT_ALPHA, codec.smoothing(hash))),
+                carryover(port::loadFields, codec, properties.scheduler().tick(),
+                        allocationScheduler),
                 codec, capacity::lastFloor, tunables::current,
                 // **유예를 값으로 정한다.** 스냅샷 낡음 한계보다 충분히
                 // 커야 마지막 폴링이 줄을 안 잃는다.
@@ -336,6 +340,21 @@ public class ControlPlaneConfig {
         }
         long published = seen.snapshot().meta().globalCredit();
         return holder.isDataStale(seen) ? Math.min(published, floor) : published;
+    }
+
+    /**
+     * 평활화 이월 읽기. <b>제 시한을 둔다</b> — 가용량과 운영값 갱신이 이미 틱의 4분의 1 씩
+     * 쓰는데, 승계 직후 이 왕복이 나머지를 다 쓰면 전 노드가 낡음으로 넘어간다. 넘기면
+     * 실패로 끝나 회차가 다음에 다시 받는다.
+     */
+    Supplier<Mono<CreditSmoother>> carryover(
+            Function<List<String>, Mono<Map<String, String>>> read, SnapshotCodec codec,
+            Duration tick, Scheduler scheduler) {
+        Duration budget = tick.dividedBy(4);
+        return () -> read.apply(codec.smoothingFields())
+                .timeout(budget, scheduler)
+                .map(hash -> CreditSmoother.restore(CreditSmoother.DEFAULT_ALPHA,
+                        codec.smoothing(hash)));
     }
 
     /**

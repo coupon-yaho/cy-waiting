@@ -61,6 +61,54 @@ class AllocationSchedulerTest {
         scheduler.stop(() -> { });
     }
 
+    /**
+     * <b>리더가 아니던 회차 뒤에는 한 틱을 안 기다린다</b> (CY-928). 승계 첫 틱은 울타리 잠금이
+     * 끝날 때까지 리더로 안 치는데, 잠금이 수 ms 에 끝나도 한 틱을 쉬면 첫 배분이 그만큼 밀려
+     * 승계 게이트의 여유 1틱을 먹는다.
+     */
+    @Test
+    @DisplayName("리더가_아니던_회차_뒤에는_한_틱을_안_기다린다")
+    void 리더가_아니던_회차_뒤에는_한_틱을_안_기다린다() {
+        VirtualTimeScheduler timer = VirtualTimeScheduler.create();
+        리더.set(false);
+        AllocationScheduler scheduler = scheduler(timer);
+        scheduler.start();
+        // 승계는 오래 건너뛰다가 틱 중간에 온다. 첫 건너뜀만 짧게 묻는 구현을 여기서 거른다.
+        timer.advanceTimeBy(FIRST.plus(TICK.multipliedBy(3)).plusMillis(350));
+
+        리더.set(true);
+        // 재질의가 100ms 마다라 6.35 초에 리더가 되면 6.4 초에 돈다. 창을 50ms 로 좁혀야
+        // 간격이 250ms 로 늘어난 구현을 거른다.
+        timer.advanceTimeBy(Duration.ofMillis(50));
+        assertThat(배분).as("잠금이 끝난 뒤 다음 틱까지 안 기다린다").hasValue(1);
+
+        timer.advanceTimeBy(TICK.minusMillis(1));
+        assertThat(배분).as("리더인 회차 뒤에는 다시 한 틱을 쉰다").hasValue(1);
+        timer.advanceTimeBy(Duration.ofMillis(1));
+        assertThat(배분).hasValue(2);
+
+        scheduler.stop(() -> { });
+    }
+
+    /** 틱이 짧게 묻는 간격보다 짧으면 틱을 쓴다. 늘 그 간격을 쓰면 비리더가 오히려 늦게 묻는다. */
+    @Test
+    @DisplayName("틱이_묻는_간격보다_짧으면_틱을_쓴다")
+    void 틱이_묻는_간격보다_짧으면_틱을_쓴다() {
+        VirtualTimeScheduler timer = VirtualTimeScheduler.create();
+        Duration 짧은_틱 = Duration.ofMillis(50);
+        리더.set(false);
+        AllocationScheduler scheduler = AllocationScheduler.of(짧은_틱, Duration.ZERO, 리더::get,
+                () -> Mono.fromRunnable(배분::incrementAndGet), 잰_지연::add, timer);
+        scheduler.start();
+        timer.advanceTimeBy(Duration.ZERO);
+
+        리더.set(true);
+        timer.advanceTimeBy(짧은_틱);
+
+        assertThat(배분).hasValue(1);
+        scheduler.stop(() -> { });
+    }
+
     @Test
     @DisplayName("첫_회차를_미룬다")
     void 첫_회차를_미룬다() {

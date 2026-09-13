@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.data.redis.autoconfigure.DataRedisProperties;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.dao.QueryTimeoutException;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -102,9 +103,27 @@ class LeaderRenewBandScenarioTest {
         return raw == null ? 0 : Long.parseLong(raw.toString());
     }
 
+    /** 유지 구간의 발행 시각. 명령 시한에 걸리면 앞서 본 값을 쓴다 — 그 사이 전진을 못 봤을 뿐이다. */
+    private long 발행_시각_또는(long 앞서_본_값) {
+        try {
+            return 발행_시각();
+        } catch (QueryTimeoutException e) {
+            return 앞서_본_값;
+        }
+    }
+
+    /**
+     * 같은 선을 지나는 카나리의 걸린 시간(ms). <b>명령 시한에 걸리면 상한만큼 걸린 것으로 적는다</b>
+     * — 지연이 상한 가까이라 왕복 비용이 더해지면 끊길 수 있고, 그걸 예외로 두면 유지 구간의
+     * 나머지 관측이 통째로 빠진다. 다른 레디스 오류는 지연이 아니라 그대로 던진다.
+     */
     private long 카나리_지연() {
         long 시작 = System.nanoTime();
-        redis.opsForValue().get("chaos:canary").block(기다림);
+        try {
+            redis.opsForValue().get("chaos:canary").block(기다림);
+        } catch (QueryTimeoutException e) {
+            return redisProperties.getTimeout().toMillis();
+        }
         return Duration.ofNanos(System.nanoTime() - 시작).toMillis();
     }
 
@@ -154,13 +173,14 @@ class LeaderRenewBandScenarioTest {
                             .until(() -> leadership.isLeader() && 발행_시각() > 0);
                     카나리[0] = 카나리_지연();
                     정상_리더[0] = leadership.isLeader();
+                    발행[0] = 발행_시각();
                 })
                 .inject(() -> 지연을_넣는다(지연()))
                 .duringFault(() -> {
                     카나리[1] = 카나리_지연();
                     놓침[0] = 리더가_아닌_표본();
                     등록_실패[0] = 줄_등록이_실패한_수();
-                    발행[0] = 발행_시각();
+                    발행[0] = 발행_시각_또는(발행[0]);
                 })
                 .recover(this::지연을_걷는다)
                 .afterRecovery(() -> {

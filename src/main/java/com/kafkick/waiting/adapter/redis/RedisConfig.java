@@ -1,6 +1,5 @@
 package com.kafkick.waiting.adapter.redis;
 
-import com.kafkick.waiting.control.ControlPlaneProperties;
 import org.springframework.boot.data.redis.autoconfigure.DataRedisProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -16,9 +15,8 @@ import org.springframework.context.annotation.Configuration;
 public class RedisConfig {
 
     @Bean
-    RedisTimeBudget redisTimeBudget(DataRedisProperties properties,
-            ControlPlaneProperties control) {
-        RedisTimeBudget budget = RedisTimeBudget.of(properties, control);
+    RedisTimeBudget redisTimeBudget(DataRedisProperties properties) {
+        RedisTimeBudget budget = RedisTimeBudget.of(properties);
         budget.verify();
         return budget;
     }

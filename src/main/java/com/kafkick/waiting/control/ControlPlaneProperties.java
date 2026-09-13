@@ -36,9 +36,7 @@ public record ControlPlaneProperties(Scheduler scheduler, Leader leader, Capacit
         return new ControlPlaneProperties(
                 // 유예 90틱 = 90초. 폴링 최대 간격 60초의 1.5배다.
                 new Scheduler(Duration.ofSeconds(1), Duration.ofSeconds(3), 1, 90),
-                // **연장 시도는 레디스 명령 상한과 같다.** 짧으면 명령은 되는데 연장만 끊기는
-                // 지연 밴드에서 리더가 0 이 된다. 리스 2초와 연장 예산을 같이 지키는 값이다.
-                new Leader(Duration.ofSeconds(2), Duration.ofMillis(350), Duration.ofMillis(50)),
+                new Leader(Duration.ofSeconds(2), Duration.ofMillis(300), Duration.ofMillis(100)),
                 new Capacity(Duration.ofSeconds(60), Duration.ofSeconds(3), 5, 10_000, 3, 1));
     }
 

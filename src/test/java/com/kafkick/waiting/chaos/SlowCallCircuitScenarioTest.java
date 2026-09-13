@@ -76,7 +76,8 @@ class SlowCallCircuitScenarioTest {
         registry.add("waiting.backend.circuit.minimum-number-of-calls", () -> 표본_하한);
         registry.add("waiting.backend.circuit.sliding-window-size", () -> "10s");
         registry.add("waiting.backend.circuit.slow-call-duration-threshold", () -> 느림_임계);
-        registry.add("waiting.backend.circuit.wait-duration-in-open-state", () -> "1s");    }
+        registry.add("waiting.backend.circuit.wait-duration-in-open-state", () -> "5s");
+    }
 
     @AfterAll
     static void 내린다() {
@@ -154,6 +155,8 @@ class SlowCallCircuitScenarioTest {
         List<Integer> 여는_상태 = new ArrayList<>();
         List<Integer> 유지_상태 = new ArrayList<>();
         long[] 유지중_유입 = new long[1];
+        int[] 열린_때_실패 = {-1};
+        Duration[] 느린_회원_응답 = new Duration[1];
 
         ChaosScenario.named("C8b 뒷단 느림 → 서킷 오픈")
                 .baseline(() -> {
@@ -170,26 +173,36 @@ class SlowCallCircuitScenarioTest {
                     // 회원 번호가 짝수부터라 느린 것과 빠른 것이 번갈아 간다.
                     회원.set(회원.get() + 회원.get() % 2);
                     여는_상태.addAll(여러_번_시도한다(표본_하한));
-                    Awaitility.await().atMost(Duration.ofSeconds(2))
+                    // 열린 순간 바로 잰다. 대기가 끝나 half-open 으로 가면 지표가 새로 시작한다.
+                    Awaitility.await().pollDelay(Duration.ZERO).pollInterval(Duration.ofMillis(10))
+                            .atMost(Duration.ofSeconds(2))
                             .until(() -> 서킷().getState() == CircuitBreaker.State.OPEN);
+                    열린_때_실패[0] = 서킷().getMetrics().getNumberOfFailedCalls();
                     long 열린_뒤 = 뒷단.받은_수();
                     유지_상태.addAll(여러_번_시도한다(3));
                     유지중_유입[0] = 뒷단.받은_수() - 열린_뒤;
                 })
                 .recover(() -> 느리다.set(false))
-                .afterRecovery(() -> Awaitility.await().atMost(Duration.ofSeconds(10))
-                        .until(() -> 서킷().getState() != CircuitBreaker.State.OPEN))
+                .afterRecovery(() -> {
+                    Awaitility.await().atMost(Duration.ofSeconds(10))
+                            .until(() -> 서킷().getState() != CircuitBreaker.State.OPEN);
+                    느린_회원_응답[0] = 뒷단에_직접_묻는다();
+                })
                 .assertEntry(() -> RecoveryCriteria.violations(
                         다_통과했다("정상", 정상_상태)))
                 .assertDuring(() -> RecoveryCriteria.violations(
                         // **실패 없이 열렸는가.** 상한 안에 답했으니 5xx 도 타임아웃도 없어야
                         // 한다. 섞이면 느린 호출 배선이 죽어도 열린다.
                         다_통과했다("여는 구간", 여는_상태),
-                        느린_호출로_열렸다(),
+                        느린_호출로_열렸다(열린_때_실패[0]),
                         유입이_멎었다(유지중_유입[0]),
                         줄에_세웠다(유지_상태)))
+                // **CLOSED 까지는 여기서 못 잰다** (CY-813). half-open 이면 판정이 전원을 줄에
+                // 세우는데 스케줄러를 껐다. 대기가 지나 열린 채로 안 굳는지까지만 본다 —
+                // 이것은 뒷단이 느린 채여도 참이라, 느림을 걷었는지는 하네스 확인으로 따로 본다.
                 .assertRecovery(() -> RecoveryCriteria.violations(
                         열린_채로_안_굳었다(),
+                        느림이_걷혔다(느린_회원_응답[0]),
                         뒷단.중복_수신이_없다()))
                 .run();
     }
@@ -200,13 +213,28 @@ class SlowCallCircuitScenarioTest {
     }
 
     /** 느린 호출 비율이 문턱을 넘어 열렸고, 실패율로 연 것이 아니다. */
-    private Optional<String> 느린_호출로_열렸다() {
-        CircuitBreaker.Metrics 지표 = 서킷().getMetrics();
-        return 느림_초과.get() == 1 && 실패_초과.get() == 0 && 지표.getNumberOfFailedCalls() == 0
+    private Optional<String> 느린_호출로_열렸다(int 열린_때_실패) {
+        return 느림_초과.get() == 1 && 실패_초과.get() == 0 && 열린_때_실패 == 0
                 ? Optional.empty()
-                : Optional.of("느린 호출로 안 열렸다 — 느림 초과 %d, 실패 초과 %d, 실패 %d, 상태 %s"
-                        .formatted(느림_초과.get(), 실패_초과.get(),
-                                지표.getNumberOfFailedCalls(), 서킷().getState()));
+                : Optional.of("느린 호출로 안 열렸다 — 느림 초과 %d, 실패 초과 %d, 열린 때 실패 %d"
+                        .formatted(느림_초과.get(), 실패_초과.get(), 열린_때_실패));
+    }
+
+    /** 하네스 확인이다. 느리던 짝수 회원으로 스텁을 직접 불러 걸린 시간을 잰다. */
+    private Duration 뒷단에_직접_묻는다() {
+        long 시작 = System.nanoTime();
+        WebTestClient.bindToServer()
+                .baseUrl("http://localhost:" + 뒷단.port())
+                .responseTimeout(Duration.ofSeconds(2))
+                .build()
+                .get().uri("/probe").header("X-Member-Id", "2")
+                .exchange().expectStatus().isOk();
+        return Duration.ofNanos(System.nanoTime() - 시작);
+    }
+
+    private Optional<String> 느림이_걷혔다(Duration 걸림) {
+        return 걸림 != null && 걸림.compareTo(느림_임계) < 0 ? Optional.empty()
+                : Optional.of("하네스 — 느림을 걷었는데 스텁이 %s 걸렸다".formatted(걸림));
     }
 
     private Optional<String> 유입이_멎었다(long 유입) {

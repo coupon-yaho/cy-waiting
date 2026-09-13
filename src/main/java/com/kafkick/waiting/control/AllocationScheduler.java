@@ -31,6 +31,12 @@ public final class AllocationScheduler {
     private final LongConsumer lagNanos;
     private final Scheduler timer;
 
+    /** 리더가 아닐 때 다시 묻는 간격. 틱보다 짧아야 뜻이 있다 — 길면 틱을 쓴다. */
+    private static final Duration IDLE_POLL = Duration.ofMillis(100);
+
+    /** 직전 회차가 리더가 아니라 건너뛰었는가. 루프 스레드 하나만 쓰고 읽는다. */
+    private volatile boolean lastSkipped;
+
     private final AtomicBoolean running = new AtomicBoolean();
     private final FailureWindow failures;
     private volatile Disposable subscription;
@@ -88,9 +94,21 @@ public final class AllocationScheduler {
     private Flux<Void> loop() {
         return Mono.defer(this::round)
                 .then()
-                .repeatWhen(done -> done.delayElements(tick, timer))
+                .repeatWhen(done -> done.concatMap(ignored -> Mono.delay(nextDelay(), timer)))
                 .delaySubscription(firstTickDelay, timer)
                 .subscribeOn(timer);
+    }
+
+    /**
+     * 다음 회차까지 쉴 시간. <b>리더가 아니던 회차 뒤에는 짧게 다시 묻는다</b> — 승계 첫 틱은
+     * 울타리 잠금이 끝날 때까지 리더로 안 치는데, 한 틱을 다 쉬면 첫 배분이 그만큼 밀린다.
+     * 묻는 것은 로컬 판정이라 비리더가 자주 물어도 레디스를 안 친다.
+     */
+    private Duration nextDelay() {
+        if (!lastSkipped) {
+            return tick;
+        }
+        return IDLE_POLL.compareTo(tick) < 0 ? IDLE_POLL : tick;
     }
 
     /**
@@ -113,7 +131,8 @@ public final class AllocationScheduler {
      * 않고 전 노드가 낡은 값으로 판정하다 결국 fail-open 하므로, 터지거나 멈춰도 루프는 돈다.
      */
     private Mono<Void> round() {
-        if (!isLeader.getAsBoolean()) {
+        lastSkipped = !isLeader.getAsBoolean();
+        if (lastSkipped) {
             return Mono.empty();
         }
         long startedAt = timer.now(NANOSECONDS);

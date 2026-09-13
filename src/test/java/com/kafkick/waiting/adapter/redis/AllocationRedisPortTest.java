@@ -652,6 +652,21 @@ class AllocationRedisPortTest extends RedisContainerSupport {
                 .isEqualTo(Long.toString(임기));
     }
 
+    /**
+     * <b>이월에 필요한 자리만 읽는다</b> (CY-863). 스냅샷에는 쿠폰마다 한 자리가 있어,
+     * 두 자리를 얻자고 통째로 끌어오면 쿠폰 수만큼 왕복이 무거워진다.
+     */
+    @Test
+    @DisplayName("스냅샷에서_고른_자리만_읽는다")
+    void 스냅샷에서_고른_자리만_읽는다() {
+        port.publish(Map.of("c1", "쿠폰", "#ewma", "200.0", "#ewmaSeeded", "1"), 임기)
+                .block(WAIT);
+
+        assertThat(port.loadFields(List.of("#ewma", "#ewmaSeeded", "#없는자리")).block(WAIT))
+                .as("없는 자리는 빼고, 안 고른 쿠폰은 안 온다")
+                .containsExactlyInAnyOrderEntriesOf(Map.of("#ewma", "200.0", "#ewmaSeeded", "1"));
+    }
+
     /** 거절이 울타리를 낮추면 같은 번호로 다시 시도했을 때 통과한다. */
     @Test
     @DisplayName("거절을_되풀이해도_계속_막힌다")

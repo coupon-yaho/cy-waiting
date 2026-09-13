@@ -102,8 +102,8 @@ public class ControlPlaneConfig {
                 // 번호로 나가고, 그것이 울타리가 막으려던 바로 그 경우다.
                 grant -> port.apply(grant, leadership.fence()),
                 hash -> port.publish(hash, leadership.fence()), Instant::now,
-                carryover(port::loadFields, codec,
-                        properties.scheduler().tick().dividedBy(4), allocationScheduler),
+                carryover(port::loadFields, codec, properties.scheduler().tick(),
+                        allocationScheduler),
                 codec, capacity::lastFloor, tunables::current,
                 // **유예를 값으로 정한다.** 스냅샷 낡음 한계보다 충분히
                 // 커야 마지막 폴링이 줄을 안 잃는다.
@@ -349,7 +349,8 @@ public class ControlPlaneConfig {
      */
     Supplier<Mono<CreditSmoother>> carryover(
             Function<List<String>, Mono<Map<String, String>>> read, SnapshotCodec codec,
-            Duration budget, Scheduler scheduler) {
+            Duration tick, Scheduler scheduler) {
+        Duration budget = tick.dividedBy(4);
         return () -> read.apply(codec.smoothingFields())
                 .timeout(budget, scheduler)
                 .map(hash -> CreditSmoother.restore(CreditSmoother.DEFAULT_ALPHA,

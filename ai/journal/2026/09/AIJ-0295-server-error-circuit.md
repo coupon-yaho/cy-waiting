@@ -5,7 +5,7 @@ kind: fix
 plan: [08-resilience]
 phase: 9
 jira: CY-853
-commits: [e2a62ce, 3552b30]
+commits: [22e4900, 4507636, d76d6a2, 871b1a6]
 agent: claude-opus-5
 confidence: high
 promoted-to:

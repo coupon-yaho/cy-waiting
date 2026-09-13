@@ -5,7 +5,7 @@ kind: fix
 plan: [06-protection]
 phase: 9
 jira: CY-869
-commits: [04212b8, 47a446c]
+commits: [4d7af2f, 79a63b9]
 agent: claude-opus-5
 confidence: high
 promoted-to:

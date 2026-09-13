@@ -77,12 +77,14 @@ class AllocationSchedulerTest {
         timer.advanceTimeBy(FIRST.plus(TICK.multipliedBy(3)).plusMillis(350));
 
         리더.set(true);
-        timer.advanceTimeBy(Duration.ofMillis(150));
+        // 재질의가 100ms 마다라 6.35 초에 리더가 되면 6.4 초에 돈다. 창을 50ms 로 좁혀야
+        // 간격이 250ms 로 늘어난 구현을 거른다.
+        timer.advanceTimeBy(Duration.ofMillis(50));
         assertThat(배분).as("잠금이 끝난 뒤 다음 틱까지 안 기다린다").hasValue(1);
 
-        timer.advanceTimeBy(TICK.minusMillis(150));
+        timer.advanceTimeBy(TICK.minusMillis(1));
         assertThat(배분).as("리더인 회차 뒤에는 다시 한 틱을 쉰다").hasValue(1);
-        timer.advanceTimeBy(Duration.ofMillis(150));
+        timer.advanceTimeBy(Duration.ofMillis(1));
         assertThat(배분).hasValue(2);
 
         scheduler.stop(() -> { });

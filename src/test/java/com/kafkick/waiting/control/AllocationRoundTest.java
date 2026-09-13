@@ -192,6 +192,64 @@ class AllocationRoundTest {
         assertThat(발행된_크레딧).containsExactly(1_000L, 200L);
     }
 
+    /** 이월을 밖에서 골라 주는 회차. 관측은 1,000 으로 고정이다. */
+    private AllocationRound 이월을_고르는_회차(AtomicReference<Mono<CreditSmoother>> 이월,
+            AtomicBoolean 리더) {
+        return AllocationRound.of(
+                리더::get,
+                () -> Mono.just(new TimedDemands(
+                        List.of(new CouponDemand("c1", 5, 100, QueueMode.ADAPTIVE)), 읽은_시각)),
+                () -> 1_000, () -> 1,
+                grant -> Mono.just(grant.credit()),
+                hash -> Mono.empty(),
+                () -> Instant.ofEpochSecond(읽은_시각),
+                이월::get,
+                SnapshotCodec.create(), () -> 0L);
+    }
+
+    /**
+     * <b>이월의 결과를 갈라 센다</b> (CY-865). 버린 것과 받은 것이 안 남으면 승계 뒤의
+     * 계단이 이월을 못 받아서인지, 받을 값이 없어서인지 못 가른다.
+     */
+    @Test
+    @DisplayName("이월_결과를_받음_없음_실패로_갈라_센다")
+    void 이월_결과를_받음_없음_실패로_갈라_센다() {
+        AtomicReference<Mono<CreditSmoother>> 이월 = new AtomicReference<>(
+                Mono.error(new IllegalStateException("레디스가 흔들린다")));
+        AllocationRound round = 이월을_고르는_회차(이월, new AtomicBoolean(true));
+
+        round.run().block();
+        이월.set(Mono.just(CreditSmoother.restore(0.3, new CreditSmoother.Snapshot(200.0, true))));
+        round.run().block();
+        round.leadershipAcquired();
+        이월.set(Mono.just(CreditSmoother.of(0.3)));
+        round.run().block();
+
+        assertThat(round.carryoverFailed()).as("못 읽음").isEqualTo(1);
+        assertThat(round.carryoverRestored()).as("값을 이어받음").isEqualTo(1);
+        assertThat(round.carryoverEmpty()).as("읽었는데 이을 값이 없음").isEqualTo(1);
+    }
+
+    /**
+     * <b>평활값을 낸다</b> (CY-865). 크레딧 지표는 발행한 몫이라 평활이 수렴했는지를 못
+     * 본다. 리더가 아니면 굳은 값을 안 낸다 — 강등된 노드의 옛 값이 섞이면 읽을 수 없다.
+     */
+    @Test
+    @DisplayName("평활값을_리더일_때만_낸다")
+    void 평활값을_리더일_때만_낸다() {
+        AtomicBoolean 리더 = new AtomicBoolean(true);
+        AllocationRound round = 이월을_고르는_회차(new AtomicReference<>(Mono.just(
+                CreditSmoother.restore(0.3, new CreditSmoother.Snapshot(200.0, true)))), 리더);
+
+        assertThat(round.smoothedCredit()).as("회차 전에는 값이 없다").isNaN();
+        round.run().block();
+        // 0.3 × 1,000 + 0.7 × 200
+        assertThat(round.smoothedCredit()).isEqualTo(440.0);
+
+        리더.set(false);
+        assertThat(round.smoothedCredit()).as("리더가 아니면 굳은 값을 안 낸다").isNaN();
+    }
+
     @Test
     @DisplayName("발행이_실패하면_지우지_않고_다음_틱에_다시_온다")
     void 발행이_실패하면_지우지_않고_다음_틱에_다시_온다() {

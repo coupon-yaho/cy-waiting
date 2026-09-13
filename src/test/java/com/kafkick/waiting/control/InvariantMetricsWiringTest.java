@@ -43,6 +43,10 @@ class InvariantMetricsWiringTest {
             "waiting.allocation.stock.unknown.ticks",
             "waiting.snapshot.stock.unknown.dropped");
 
+    /** 이월 결과 계수. 결과만 라벨로 갈라 가짓수가 셋으로 묶인다. */
+    private static final String 이월 =
+            "waiting_allocation_carryover_total{application=\"waiting\",outcome=\"";
+
     @Test
     @DisplayName("선행_지표가_스크레이프에_나온다")
     void 선행_지표가_스크레이프에_나온다() {
@@ -68,7 +72,13 @@ class InvariantMetricsWiringTest {
                 .contains("waiting_circuit_wired")
                 // 회복 봉우리를 정상과 견주는 재료 (RC4). 판정에는 아직 안 쓰지만
                 // 밖에서 읽을 수 있어야 그 값이 맞는지 다음 사람이 본다.
-                .contains("waiting_admission_forwarded_rate");
+                .contains("waiting_admission_forwarded_rate")
+                // 이월을 받았는지와 평활이 어디로 수렴하는지 (CY-865). 크레딧 지표는
+                // 발행한 몫이라 둘 다 못 보여 준다.
+                .contains(이월 + "restored\"}")
+                .contains(이월 + "empty\"}")
+                .contains(이월 + "failed\"}")
+                .contains("waiting_allocation_smoothed_credit");
     }
 
     /**

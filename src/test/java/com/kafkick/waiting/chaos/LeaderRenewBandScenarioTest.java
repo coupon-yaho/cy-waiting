@@ -46,6 +46,9 @@ class LeaderRenewBandScenarioTest {
     /** 유지 구간에 줄에 세워 볼 사람 수. */
     private static final int 등록_수 = 5;
 
+    /** 줄에 세우는 시각. 재는 것은 등록이 되는가이지 순번이 아니라 고정한다. */
+    private static final Instant 등록_시각 = Instant.parse("2026-09-13T00:00:00Z");
+
     private static final Duration 기다림 = Duration.ofSeconds(20);
 
     private static final BackendStub 뒷단 = BackendStub.항상_받는다();
@@ -126,7 +129,7 @@ class LeaderRenewBandScenarioTest {
         int 실패 = 0;
         for (int i = 0; i < 등록_수; i++) {
             try {
-                queue.enqueue(COUPON, "c2b-" + i, 1_000, Instant.now()).block(기다림);
+                queue.enqueue(COUPON, "c2b-" + i, 1_000, 등록_시각).block(기다림);
             } catch (RuntimeException e) {
                 실패++;
             }

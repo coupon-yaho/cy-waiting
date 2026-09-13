@@ -2,6 +2,7 @@ package com.kafkick.waiting.chaos;
 
 import java.util.Optional;
 import java.util.function.BooleanSupplier;
+import java.util.function.Predicate;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -25,13 +26,13 @@ public final class BackendStub implements AutoCloseable {
     private final Set<String> seen = ConcurrentHashMap.newKeySet();
     private final DisposableServer server;
 
-    private BackendStub(BooleanSupplier stalled, BooleanSupplier failing) {
+    private BackendStub(BooleanSupplier stalled, Predicate<String> failing) {
         this.server = HttpServer.create()
                 .port(0)
                 .handle((request, response) -> {
                     received.incrementAndGet();
-                    perCoupon.computeIfAbsent(쿠폰을_뽑는다(request.uri()),
-                            key -> new AtomicLong()).incrementAndGet();
+                    String couponId = 쿠폰을_뽑는다(request.uri());
+                    perCoupon.computeIfAbsent(couponId, key -> new AtomicLong()).incrementAndGet();
                     // 회원 번호는 시험 전체에서 안 겹치게 발급한다. 겹쳐
                     // 도착하면 게이트웨이가 한 요청을 두 번 보낸 것이다.
                     String member = request.requestHeaders().get("X-Member-Id");
@@ -44,24 +45,32 @@ public final class BackendStub implements AutoCloseable {
                     if (stalled.getAsBoolean()) {
                         return Mono.never();
                     }
-                    return response.status(failing.getAsBoolean() ? 500 : 200).send();
+                    return response.status(failing.test(couponId) ? 500 : 200).send();
                 })
                 .bindNow();
     }
 
     /** 늘 200 을 내는 뒷단. */
     public static BackendStub 항상_받는다() {
-        return new BackendStub(() -> false, () -> false);
+        return new BackendStub(() -> false, couponId -> false);
     }
 
     /** 스위치가 켜지면 응답을 안 내는 뒷단. 무응답 갈래를 만든다. */
     public static BackendStub 멎을_수_있다(BooleanSupplier 멎었나) {
-        return new BackendStub(멎었나, () -> false);
+        return new BackendStub(멎었나, couponId -> false);
     }
 
     /** 스위치가 켜지면 5xx 를 내는 뒷단. 응답은 오는데 실패인 갈래다. */
     public static BackendStub 실패할_수_있다(BooleanSupplier 실패하나) {
-        return new BackendStub(() -> false, 실패하나);
+        return new BackendStub(() -> false, couponId -> 실패하나.getAsBoolean());
+    }
+
+    /**
+     * 고른 쿠폰만 5xx 를 내는 뒷단. <b>서킷은 뒷단 전체 하나라</b> 쿠폰 하나의 실패가 무관한
+     * 쿠폰까지 막는지를 이것으로 잰다. 쿠폰 아닌 경로(프로브)는 빈 이름으로 묻는다.
+     */
+    public static BackendStub 쿠폰만_실패한다(Predicate<String> 실패하는_쿠폰) {
+        return new BackendStub(() -> false, 실패하는_쿠폰);
     }
 
     public int port() {

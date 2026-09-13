@@ -34,7 +34,7 @@ public final class AllocationScheduler {
     /** 리더가 아닐 때 다시 묻는 간격. 틱보다 짧아야 뜻이 있다 — 길면 틱을 쓴다. */
     private static final Duration IDLE_POLL = Duration.ofMillis(100);
 
-    /** 직전 회차가 리더가 아니라 건너뛰었는가. 루프 스레드 하나만 쓰고 읽는다. */
+    /** 직전 회차가 리더가 아니라 건너뛰었는가. 회차 완료 신호가 다른 스레드에서 읽을 수 있다. */
     private volatile boolean lastSkipped;
 
     private final AtomicBoolean running = new AtomicBoolean();

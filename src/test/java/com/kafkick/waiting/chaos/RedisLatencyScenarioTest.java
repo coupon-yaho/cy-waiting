@@ -44,7 +44,7 @@ import reactor.netty.DisposableServer;
 import reactor.netty.http.server.HttpServer;
 
 /**
- * C2 — Redis 지연 500ms → 해제 (8.3.4 · 5절).
+ * C2 — Redis 지연 → 해제 (8.3.4 · 5절).
  *
  * <p><b>판정이 Redis 를 안 치므로 발급 지연이 변하면 안 된다.</b> 변한다면
  * 어딘가에서 치고 있다는 뜻이다 — 불변식 1 의 실전 검증이다.
@@ -59,16 +59,16 @@ class RedisLatencyScenarioTest {
     private static final String COUPON = "c1";
 
     /** 레디스 명령 상한. 이 위로 넣으면 지연이 아니라 정지가 된다. */
-    private static final Duration 명령_상한 = Duration.ofMillis(500);
+    private static final Duration 명령_상한 = Duration.ofMillis(350);
 
     /**
      * 주입할 지연. <b>상한의 0.6 배다.</b>
      *
      * <p>상한과 같은 값을 넣으면 러너가 조금만 느려져도 전건 타임아웃으로
-     * 뒤집혀, 지연 시나리오가 말없이 정지 시나리오가 된다. 실측으로 520ms
-     * 에서 이미 같은 배치 안에서 성공과 타임아웃이 갈렸다.
+     * 뒤집혀, 지연 시나리오가 말없이 정지 시나리오가 된다. 상한이 500ms 이던 때
+     * 520ms 에서 이미 같은 배치 안에서 성공과 타임아웃이 갈렸다.
      */
-    private static final Duration 지연 = Duration.ofMillis(300);
+    private static final Duration 지연 = Duration.ofMillis(210);
 
     /**
      * 판정이 늦어져도 되는 폭. <b>주입량에 묶는다.</b>

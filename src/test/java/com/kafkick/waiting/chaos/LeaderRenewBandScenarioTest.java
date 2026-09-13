@@ -33,14 +33,14 @@ class LeaderRenewBandScenarioTest {
 
     private static final String COUPON = "c2b-idle";
 
-    /** 연장 한 번의 상한과 명령 상한 사이. 명령은 성공하고 연장만 시한에 걸린다. */
-    private static final Duration 지연 = Duration.ofMillis(400);
+    /**
+     * 명령 상한(350ms) 바로 아래. <b>옛 설정(연장 300ms · 명령 500ms)에서는 연장만 끊기는
+     * 밴드 안이었다.</b> 두 상한이 같아진 지금은 명령도 되고 연장도 돼야 한다.
+     */
+    private static final Duration 지연 = Duration.ofMillis(300);
 
     /** 리스(2초)를 여러 번 넘길 만큼 둔다. 한 리스 안이면 모름이 리더로 버틴다. */
     private static final Duration 유지 = Duration.ofSeconds(6);
-
-    /** 유지 구간에 발행이 전진해야 하는 최소 초. 틱이 1초라 절반 넘게 멎으면 못 넘는다. */
-    private static final long 최소_전진_초 = 3;
 
     private static final Duration 기다림 = Duration.ofSeconds(20);
 
@@ -88,8 +88,8 @@ class LeaderRenewBandScenarioTest {
     }
 
     @Test
-    @DisplayName("C2b_연장만_끊기는_지연에서도_배분이_안_멎는다")
-    void C2b_연장만_끊기는_지연에서도_배분이_안_멎는다() {
+    @DisplayName("C2b_명령_상한_아래_지연에서_리더를_안_놓는다")
+    void C2b_명령_상한_아래_지연에서_리더를_안_놓는다() {
         long[] 발행 = new long[3];
         long[] 카나리 = new long[2];
         boolean[] 리더 = new boolean[1];
@@ -121,8 +121,10 @@ class LeaderRenewBandScenarioTest {
                         주입이_걸렸다(카나리[0], 카나리[1]),
                         // **리더를 놓지 않는다.** 명령은 되는데 연장만 시한에 걸려
                         // 리스를 잃으면, 지연이 이어지는 내내 아무도 배분을 안 돈다.
-                        리더를_지켰다(리더[0]),
-                        배분이_안_멎었다(발행[0], 발행[1])))
+                        리더를_지켰다(리더[0])))
+                // **발행 전진은 여기서 안 판정한다** (CY-927). 리더를 지켜도 회차가 레디스
+                // 왕복을 차례로 여러 번 해 이 지연에서는 틱 시한 안에 못 끝난다 — 연장
+                // 밴드와 다른 한계라, 섞으면 이 시나리오가 무엇을 쟀는지 못 가린다.
                 .assertRecovery(() -> RecoveryCriteria.violations(
                         배분이_돌아왔다(발행[1], 발행[2])))
                 .run();
@@ -141,12 +143,6 @@ class LeaderRenewBandScenarioTest {
     private Optional<String> 리더를_지켰다(boolean 리더) {
         return 리더 ? Optional.empty()
                 : Optional.of("유지 — 연장 밴드 지연에서 리더를 놓았다 (리스 %s 넘게)".formatted(유지));
-    }
-
-    private Optional<String> 배분이_안_멎었다(long 전, long 후) {
-        return 후 - 전 >= 최소_전진_초 ? Optional.empty()
-                : Optional.of("유지 — %s 동안 발행이 %d초만 전진했다 (%d → %d)"
-                        .formatted(유지, 후 - 전, 전, 후));
     }
 
     private Optional<String> 배분이_돌아왔다(long 전, long 후) {

@@ -1,5 +1,6 @@
 package com.kafkick.waiting.chaos;
 
+import java.time.Duration;
 import java.util.Optional;
 import java.util.function.BooleanSupplier;
 import java.util.function.Predicate;
@@ -27,6 +28,11 @@ public final class BackendStub implements AutoCloseable {
     private final DisposableServer server;
 
     private BackendStub(BooleanSupplier stalled, Predicate<String> failing) {
+        this(stalled, failing, member -> false, Duration.ZERO);
+    }
+
+    private BackendStub(BooleanSupplier stalled, Predicate<String> failing,
+            Predicate<String> slowMember, Duration delay) {
         this.server = HttpServer.create()
                 .port(0)
                 .handle((request, response) -> {
@@ -45,7 +51,13 @@ public final class BackendStub implements AutoCloseable {
                     if (stalled.getAsBoolean()) {
                         return Mono.never();
                     }
-                    return response.status(failing.test(couponId) ? 500 : 200).send();
+                    int status = failing.test(couponId) ? 500 : 200;
+                    // **느린 것은 늦게라도 답한다.** 응답 상한 안에 오므로 실패가 아니라
+                    // 느린 호출로만 세어진다.
+                    if (member != null && slowMember.test(member)) {
+                        return Mono.delay(delay).then(response.status(status).send());
+                    }
+                    return response.status(status).send();
                 })
                 .bindNow();
     }
@@ -71,6 +83,11 @@ public final class BackendStub implements AutoCloseable {
      */
     public static BackendStub 쿠폰만_실패한다(Predicate<String> 실패하는_쿠폰) {
         return new BackendStub(() -> false, 실패하는_쿠폰);
+    }
+
+    /** 고른 회원에게만 {@code 지연} 뒤 200 을 내는 뒷단. 느린 호출 갈래를 만든다. */
+    public static BackendStub 늦게_답한다(Predicate<String> 느린_회원, Duration 지연) {
+        return new BackendStub(() -> false, couponId -> false, 느린_회원, 지연);
     }
 
     public int port() {

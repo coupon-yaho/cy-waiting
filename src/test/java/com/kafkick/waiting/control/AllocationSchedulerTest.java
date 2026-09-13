@@ -71,13 +71,40 @@ class AllocationSchedulerTest {
     void 리더가_아니던_회차_뒤에는_한_틱을_안_기다린다() {
         VirtualTimeScheduler timer = VirtualTimeScheduler.create();
         리더.set(false);
-        scheduler(timer).start();
-        timer.advanceTimeBy(FIRST);
+        AllocationScheduler scheduler = scheduler(timer);
+        scheduler.start();
+        // 승계는 오래 건너뛰다가 틱 중간에 온다. 첫 건너뜀만 짧게 묻는 구현을 여기서 거른다.
+        timer.advanceTimeBy(FIRST.plus(TICK.multipliedBy(3)).plusMillis(350));
 
         리더.set(true);
-        timer.advanceTimeBy(TICK.dividedBy(2));
-
+        timer.advanceTimeBy(Duration.ofMillis(150));
         assertThat(배분).as("잠금이 끝난 뒤 다음 틱까지 안 기다린다").hasValue(1);
+
+        timer.advanceTimeBy(TICK.minusMillis(150));
+        assertThat(배분).as("리더인 회차 뒤에는 다시 한 틱을 쉰다").hasValue(1);
+        timer.advanceTimeBy(Duration.ofMillis(150));
+        assertThat(배분).hasValue(2);
+
+        scheduler.stop(() -> { });
+    }
+
+    /** 틱이 짧게 묻는 간격보다 짧으면 틱을 쓴다. 늘 그 간격을 쓰면 비리더가 오히려 늦게 묻는다. */
+    @Test
+    @DisplayName("틱이_묻는_간격보다_짧으면_틱을_쓴다")
+    void 틱이_묻는_간격보다_짧으면_틱을_쓴다() {
+        VirtualTimeScheduler timer = VirtualTimeScheduler.create();
+        Duration 짧은_틱 = Duration.ofMillis(50);
+        리더.set(false);
+        AllocationScheduler scheduler = AllocationScheduler.of(짧은_틱, Duration.ZERO, 리더::get,
+                () -> Mono.fromRunnable(배분::incrementAndGet), 잰_지연::add, timer);
+        scheduler.start();
+        timer.advanceTimeBy(Duration.ZERO);
+
+        리더.set(true);
+        timer.advanceTimeBy(짧은_틱);
+
+        assertThat(배분).hasValue(1);
+        scheduler.stop(() -> { });
     }
 
     @Test

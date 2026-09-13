@@ -3,6 +3,7 @@ package com.kafkick.waiting.control;
 import com.kafkick.waiting.adapter.redis.AllocationRedisPort;
 import com.kafkick.waiting.domain.routing.AllowedDestinations;
 import com.kafkick.waiting.routing.RoutingProperties;
+import java.time.Clock;
 import java.time.Duration;
 import com.kafkick.waiting.adapter.redis.LeaderRedisPort;
 import com.kafkick.waiting.domain.allocation.CreditSmoother;
@@ -389,18 +390,30 @@ public class ControlPlaneConfig {
             QueueSweeper sweeper, SnapshotHolder holder, GatewayRegistry registry,
             AllocationRedisPort port) {
         SealGate gate = SealGate.of(leadership::isLeader);
+        // **발행 시각과 같은 시계를 쓴다.** 회차는 실시계로 발행 시각을 찍는데 판정용 시계
+        // 빈은 시험이 고정하기도 해, 그 둘을 견주면 첫 회차가 영영 안 돈다.
+        HandoverSpacing spacing = HandoverSpacing.of(Clock.systemUTC(),
+                properties.scheduler().tick());
+        Runnable gained = onLeadershipGained(collector, capacity, cleanup, sweeper, round, holder,
+                registry, sealFences(port, leadership, gate, properties.scheduler().tick(),
+                        allocationScheduler));
+        BooleanSupplier leading = leaderTick(leadership::isLeader, leadership::fence, gate,
+                () -> {
+                    // **앞 리더의 마지막 회차에서 한 틱 떨어뜨린다.** 정상 인계는 틈이
+                    // 짧아 두 리더의 몫이 1초 안에 겹친다.
+                    GatewaySnapshot seen = holder.view().snapshot();
+                    spacing.armedFrom(seen.isPublished() ? seen.publishedAt() : null);
+                    gained.run();
+                },
+                () -> {
+                    capacity.leadershipChanged();
+                    sweeper.leadershipLost();
+                });
         return AllocationScheduler.of(properties.scheduler().tick(),
                 properties.scheduler().firstTickDelay(),
                 // **승계는 유예를 처음부터 준다.** 비리더 구간에 얼어 있던 실패
                 // 횟수를 이어 쓰면 재승계 첫 회차가 곧바로 크레딧을 깎는다.
-                leaderTick(leadership::isLeader, leadership::fence, gate,
-                        onLeadershipGained(collector, capacity, cleanup, sweeper, round, holder,
-                                registry, sealFences(port, leadership, gate,
-                                        properties.scheduler().tick(), allocationScheduler)),
-                        () -> {
-                            capacity.leadershipChanged();
-                            sweeper.leadershipLost();
-                        }),
+                () -> leading.getAsBoolean() && spacing.getAsBoolean(),
                 // **운영 값을 먼저 읽고 배분한다.** 순서가 뒤면 방금 바꾼 값이
                 // 한 틱 늦게 나가고, 장애 중의 한 틱은 길다.
                 () -> capacity.refresh().then(tunables.refresh()).then(round.run()),

@@ -1,9 +1,9 @@
 package com.kafkick.waiting.chaos;
 
 import com.kafkick.waiting.adapter.redis.RedisKeys;
+import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.api.sync.RedisCommands;
-import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -20,19 +20,22 @@ public final class QueueSeed {
 
     private static final int SHARD = 0;
 
+    /** 바닥값의 수명. 등록 경로가 스크립트에 넘기는 값과 같다. */
+    static final long MAX_SCORE_TTL_SEC = 86_400;
+
     private QueueSeed() {
     }
 
     /**
      * {@code n} 명을 줄에 세우고 이름별 자리를 돌려준다. 점수는 레디스 시계의
      * 마이크로초라 배분이 올리는 임계와 같은 자에 있고, 생존 신호와 바닥값도
-     * 함께 써서 스위퍼가 살아 있는 줄로 읽는다.
+     * 함께 써서 스위퍼가 살아 있는 줄로 읽는다. 생존 수명도 등록 경로와 같은 정책에서 가져온다.
      */
     public static Map<String, Double> 줄을_세운다(StatefulRedisConnection<String, String> 연결,
-            String couponId, int n, Duration aliveTtl) {
+            String couponId, int n) {
         RedisCommands<String, String> redis = 연결.sync();
         long 지금_마이크로 = 서버_시각_마이크로(redis);
-        long 만료_초 = 지금_마이크로 / 1_000_000 + aliveTtl.toSeconds();
+        long 만료_초 = 지금_마이크로 / 1_000_000 + PollIntervalPolicy.aliveTtl().toSeconds();
         String queue = RedisKeys.queue(couponId, SHARDS, SHARD);
         String alive = RedisKeys.alive(couponId, SHARDS, SHARD);
 
@@ -44,8 +47,11 @@ public final class QueueSeed {
             redis.zadd(alive, 만료_초, member);
             자리.put(member, score);
         }
-        redis.set(RedisKeys.maxScore(couponId, SHARDS, SHARD),
-                String.valueOf(지금_마이크로 + n));
+        // 등록 스크립트처럼 마지막 점수를 수명과 함께 쓴다. 수명 없는 키는 프로덕션에 없다.
+        if (n > 0) {
+            redis.setex(RedisKeys.maxScore(couponId, SHARDS, SHARD), MAX_SCORE_TTL_SEC,
+                    String.valueOf(지금_마이크로 + n - 1));
+        }
         return 자리;
     }
 

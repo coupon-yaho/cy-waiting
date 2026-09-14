@@ -12,7 +12,6 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -78,7 +77,6 @@ class LeaderKillScenarioTest {
     private static final Duration 기다림 = Duration.ofSeconds(20);
 
     private static final int 줄_선_사람 = 5;
-
     /** 각 구간에 보내는 요청 수. 정상 구간과 같아야 비교가 성립한다. */
     private static final int 보낼_수 = 20;
 
@@ -194,16 +192,15 @@ class LeaderKillScenarioTest {
                 .build();
     }
 
-    /** 재료를 심는다. 줄이 선 쿠폰과 한산한 쿠폰을 나란히 둔다. */
-    private void 재료를_심는다() {
+    /**
+     * 재료를 심는다. 줄이 선 쿠폰과 한산한 쿠폰을 나란히 둔다. <b>줄은 등록 스크립트와 같은
+     * 모양으로 세운다</b> — 점수만 넣으면 스위퍼가 못 보고, 첫 배분이 임계를 올리면 창 밖이 된다.
+     */
+    private void 재료를_심는다(StatefulRedisConnection<String, String> 연결) {
         redis.opsForSet().add(RedisKeys.ACTIVE_COUPONS, COUPON, 한산한_쿠폰).block(기다림);
         redis.opsForValue().set(RedisKeys.stock(COUPON), "50").block(기다림);
         redis.opsForValue().set(RedisKeys.stock(한산한_쿠폰), "100000").block(기다림);
-        for (int i = 0; i < 줄_선_사람; i++) {
-            redis.opsForZSet()
-                    .add(RedisKeys.queue(COUPON, 1, 0), "q" + i, 100 + i)
-                    .block(기다림);
-        }
+        QueueSeed.줄을_세운다(연결, COUPON, 줄_선_사람);
     }
 
 
@@ -229,20 +226,6 @@ class LeaderKillScenarioTest {
         return 상태;
     }
 
-    /** 줄에 선 사람들의 자리. 이름으로 짚어야 같은 값을 가진 둘이 안 섞인다. */
-    private Map<String, Double> 자리들() {
-        Map<String, Double> 자리 = new LinkedHashMap<>();
-        for (int i = 0; i < 줄_선_사람; i++) {
-            String member = "q" + i;
-            Double score = redis.opsForZSet()
-                    .score(RedisKeys.queue(COUPON, 1, 0), member).block(기다림);
-            if (score != null) {
-                자리.put(member, score);
-            }
-        }
-        return 자리;
-    }
-
     /** 죽은 리더가 락을 넘겨받는다. 만료와 획득이 한 회차라 앱이 못 끼어든다. */
     private void 죽은_리더가_락을_쥔다(LeaderFaults 락) {
         assertThat(락.죽은_리더가_넘겨받는다(죽은_리더, 죽은_리스)).isTrue();
@@ -258,12 +241,12 @@ class LeaderKillScenarioTest {
     @Test
     @DisplayName("C4_리더가_죽고_승계된다")
     void C4_리더가_죽고_승계된다() {
-        재료를_심는다();
-        Awaitility.await().atMost(기다림).until(leadership::isLeader);
-        Awaitility.await().atMost(기다림).until(() -> !holder.isDataStale());
-
         StatefulRedisConnection<String, String> 연결 = faults.연결한다();
         try {
+            재료를_심는다(연결);
+            Awaitility.await().atMost(기다림).until(leadership::isLeader);
+            Awaitility.await().atMost(기다림).until(() -> !holder.isDataStale());
+
             LeaderFaults 락 = LeaderFaults.of(연결);
             List<Integer> 정상_상태 = new ArrayList<>();
             List<Integer> 장애중_상태 = new ArrayList<>();
@@ -279,7 +262,7 @@ class LeaderKillScenarioTest {
 
             ChaosScenario.named("C4 리더 강제 종료")
                     .baseline(() -> {
-                        장애_전_자리 = 자리들();
+                        장애_전_자리 = QueueSeed.자리들(연결, COUPON, 줄_선_사람);
                         한산한_쿠폰_도착[0] = 잰다(한산한_쿠폰,
                                 () -> 정상_상태.addAll(
                                         여러_번_시도한다(한산한_쿠폰, 한산한_보낼_수, 1_100)));
@@ -327,7 +310,7 @@ class LeaderKillScenarioTest {
                         낡음이_걷히기까지 = Duration.between(승계를_기다린_시각, clock.instant());
                         long 회복_전 = 받은_수(한산한_쿠폰);
                         회복_상태.addAll(여러_번_시도한다(한산한_쿠폰, 한산한_보낼_수, 3_000));
-                        회복_뒤_자리 = 자리들();
+                        회복_뒤_자리 = QueueSeed.자리들(연결, COUPON, 줄_선_사람);
                         한산한_쿠폰_도착[2] = 받은_수(한산한_쿠폰) - 회복_전;
                         줄_쿠폰_도착[2] = 잰다(COUPON,
                                 () -> 회복_줄_상태.addAll(
@@ -360,10 +343,9 @@ class LeaderKillScenarioTest {
                             // 낡음이 오래 남으면 그동안 fail-open 이 열려 있다.
                             RecoveryCriteria.slowVerdictReturn(
                                     낡음이_걷히기까지, 낡음이_걷힐_한계),
-                            // **RC5 는 여기서 깨질 수 없다** (CY-822). 자리를
-                            // 걷는 것은 스위퍼인데, 기동 첫 틱의 낡음이 재개
-                            // 유예를 시험 수명보다 길게 걸어 한 번도 안 돈다.
-                            // 초록이지만 증거가 아니라, 재는 척하는 자리다.
+                            // **RC5 는 여기서 깨질 수 없다** (CY-844). 앞줄
+                            // 제거가 리더 획득마다 거는 재개 유예에 걸려 시험
+                            // 수명 안에 안 돈다. 초록이지만 증거가 아니다.
                             RecoveryCriteria.seatLost(장애_전_자리, 회복_뒤_자리)))
                     // **RC1·RC2·RC4·RC6 은 여기서 안 잰다.** 이 시나리오는
                     // 레디스가 살아 있어 줄이 안 사라지므로 RC2 를 잴 수 있지만,

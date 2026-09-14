@@ -3,6 +3,7 @@ package com.kafkick.waiting.chaos;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.kafkick.waiting.adapter.redis.RedisKeys;
+import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import io.lettuce.core.ScriptOutputType;
 import io.lettuce.core.api.StatefulRedisConnection;
 import java.nio.charset.StandardCharsets;
@@ -26,8 +27,8 @@ class QueueSeedTest {
 
     private static final int 줄_선_사람 = 3;
 
-    /** 심어 둔 줄의 생존 신호 수명. */
-    private static final Duration 수명 = Duration.ofMinutes(5);
+    /** 심어 둔 줄의 생존 신호 수명. 픽스처가 등록 경로와 같은 정책을 쓴다. */
+    private static final Duration 수명 = PollIntervalPolicy.aliveTtl();
 
     private static RedisFaults faults;
 
@@ -52,7 +53,7 @@ class QueueSeedTest {
     @Test
     @DisplayName("등록_스크립트가_이미_선_사람으로_알아본다")
     void 등록_스크립트가_이미_선_사람으로_알아본다() {
-        Map<String, Double> 자리 = QueueSeed.줄을_세운다(연결, COUPON, 줄_선_사람, 수명);
+        Map<String, Double> 자리 = QueueSeed.줄을_세운다(연결, COUPON, 줄_선_사람);
 
         List<Object> 결과 = 다시_등록한다("q0");
 
@@ -64,7 +65,7 @@ class QueueSeedTest {
     @Test
     @DisplayName("점수가_배분_임계와_같은_자에_있다")
     void 점수가_배분_임계와_같은_자에_있다() {
-        Map<String, Double> 자리 = QueueSeed.줄을_세운다(연결, COUPON + "-scale", 줄_선_사람, 수명);
+        Map<String, Double> 자리 = QueueSeed.줄을_세운다(연결, COUPON + "-scale", 줄_선_사람);
 
         // 레디스 시계의 마이크로초다. 초 단위나 작은 정수로 넣으면 첫 배분이
         // 임계를 그 위로 올리는 순간 심어 둔 줄이 통째로 스위프 창 밖으로 나간다.
@@ -79,7 +80,7 @@ class QueueSeedTest {
     @DisplayName("생존_신호가_만료_시각으로_들어간다")
     void 생존_신호가_만료_시각으로_들어간다() {
         String coupon = COUPON + "-alive";
-        QueueSeed.줄을_세운다(연결, coupon, 줄_선_사람, 수명);
+        QueueSeed.줄을_세운다(연결, coupon, 줄_선_사람);
 
         // 초 단위다. 스위퍼가 지금 시각과 비교하므로 마이크로초로 넣으면
         // 영영 살아 있는 것으로 읽혀 이탈자 청소가 아무도 안 걷는다.
@@ -89,6 +90,22 @@ class QueueSeedTest {
                 .hasSize(줄_선_사람)
                 .allSatisfy(항목 -> assertThat((long) 항목.getScore())
                         .isBetween(지금_초, 지금_초 + 수명.toSeconds() + 5));
+    }
+
+    /** 바닥값은 등록 스크립트처럼 마지막 점수이고 수명이 걸린다. */
+    @Test
+    @DisplayName("바닥값이_마지막_점수이고_수명이_걸린다")
+    void 바닥값이_마지막_점수이고_수명이_걸린다() {
+        String coupon = COUPON + "-floor";
+        var 자리 = QueueSeed.줄을_세운다(연결, coupon, 줄_선_사람);
+        String key = RedisKeys.maxScore(coupon, 1, 0);
+
+        double 마지막 = 자리.values().stream().mapToDouble(Double::doubleValue).max().orElseThrow();
+        assertThat(Double.parseDouble(연결.sync().get(key))).isEqualTo(마지막);
+        // 수명이 없으면 -1 이고, 생존 수명(수백 초)을 잘못 쓰면 하루에 한참 못 미친다. 경과 시간에
+        // 안 흔들리게 폭을 한 시간으로 둔다.
+        assertThat(연결.sync().ttl(key))
+                .isBetween(QueueSeed.MAX_SCORE_TTL_SEC - 3_600, QueueSeed.MAX_SCORE_TTL_SEC);
     }
 
     private List<Object> 다시_등록한다(String member) {

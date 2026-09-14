@@ -63,8 +63,6 @@ class SplitBrainScenarioTest {
     /** 상태가 바뀌기를 기다리는 예산. */
     private static final Duration 전이_한계 = Duration.ofSeconds(20);
 
-    /** 심어 둔 줄의 생존 신호 수명. 시험 수명보다 길어야 스위퍼가 살아 있다고 읽는다. */
-    private static final Duration 생존_수명 = Duration.ofMinutes(5);
 
     /** 재료가 낡아 fail-open 으로 열린 판정. */
     private static final String 낡아서_열림 = "PASS_FAIL_OPEN";
@@ -156,7 +154,7 @@ class SplitBrainScenarioTest {
         redis.opsForSet().add(RedisKeys.ACTIVE_COUPONS, COUPON, 한산한_쿠폰).block(레디스_한계);
         redis.opsForValue().set(RedisKeys.stock(COUPON), "50").block(레디스_한계);
         redis.opsForValue().set(RedisKeys.stock(한산한_쿠폰), "100000").block(레디스_한계);
-        QueueSeed.줄을_세운다(연결, COUPON, 줄_선_사람, 생존_수명);
+        QueueSeed.줄을_세운다(연결, COUPON, 줄_선_사람);
     }
 
     /** 판정이 멈추지 않는다. 분단은 제어 평면의 일이지 이 노드 응답의 일이 아니다. */

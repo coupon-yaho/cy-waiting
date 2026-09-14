@@ -22,7 +22,10 @@ public final class SnapshotRecoveryWatch {
         this.holder = Objects.requireNonNull(holder, "holder 는 필수다");
     }
 
-    /** <b>시계를 안 받는다</b> — 홀더와 다른 시계로 받아온 시각을 되짚으면 둘의 차이만큼 판정이 어긋난다. */
+    /**
+     * 주어진 홀더 하나만 들여다보는 관측기를 만든다. <b>시계를 안 받는다</b> — 홀더와 다른 시계로 받아온 시각을
+     * 되짚으면 둘의 차이만큼 판정이 어긋난다.
+     */
     public static SnapshotRecoveryWatch of(SnapshotHolder holder) {
         return new SnapshotRecoveryWatch(holder);
     }

@@ -3,6 +3,10 @@ package com.kafkick.waiting.chaos;
 import eu.rekawek.toxiproxy.Proxy;
 import eu.rekawek.toxiproxy.model.ToxicDirection;
 import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.net.SocketTimeoutException;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.Network;
@@ -93,6 +97,29 @@ public final class RedisWireFaults implements AutoCloseable {
         proxy.toxics().timeout(끊김, ToxicDirection.DOWNSTREAM, 0);
         proxy.disable();
         proxy.enable();
+    }
+
+    /**
+     * 새 연결이 정말 매달리는가. <b>하네스 자기검증이다</b> — 프록시 동작이 바뀌어 거부로 떨어지면 매달림 판이
+     * 조용히 재기동 판이 되고, 재연결 지연 상한이 빠져도 초록이다. 붙기는 붙고 PING 에 답이 안 와야 참이다.
+     */
+    public boolean 새_연결이_매달린다(Duration 기다림) {
+        try (Socket socket = new Socket()) {
+            // 붙는 것부터 실패하면 매달림이 아니라 거부나 유실이다.
+            socket.connect(new InetSocketAddress(호스트(), 포트()), (int) 기다림.toMillis());
+            socket.setSoTimeout((int) 기다림.toMillis());
+            socket.getOutputStream().write("PING\r\n".getBytes(StandardCharsets.US_ASCII));
+            socket.getOutputStream().flush();
+            try {
+                socket.getInputStream().read();
+                // 답이 왔거나 끊겼다. 어느 쪽이든 매달림이 아니다.
+                return false;
+            } catch (SocketTimeoutException e) {
+                return true;
+            }
+        } catch (IOException e) {
+            return false;
+        }
     }
 
     /** 넣은 장애를 전부 걷는다. */

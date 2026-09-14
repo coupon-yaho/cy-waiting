@@ -79,24 +79,30 @@ class RedisWireOutageSnapshotScenarioTest {
     private Clock clock;
 
     /** 장애 한 판. 주입 방식만 다르고 판정은 같다. */
-    private interface 주입 {
+    private interface FaultInjection {
         void 넣는다() throws IOException;
     }
 
+    /**
+     * 붙은 연결이 응답을 못 받는다. <b>회복은 버려진 바이트 뒤에서의 회복이다</b> — 실제 TCP 는 흐름 중간에 바이트를
+     * 조용히 잃지 않는다. 이 판이 제대로 재는 것은 루프 정지 0 과 낡음 진입이다.
+     */
     @Test
     @DisplayName("C1c_붙은_연결이_응답을_안_받다_돌아오면_5초_안에_낡음이_풀린다")
     void C1c_붙은_연결이_응답을_안_받다_돌아오면_5초_안에_낡음이_풀린다() {
-        돌린다("C1c 레디스 회선 블랙홀", 선::끊는다);
+        돌린다("C1c 레디스 회선 블랙홀", 선::끊는다, false);
     }
 
+    /** 재연결이 연결 상한까지 매달린다. 재연결 지연 상한이 빠진 회귀는 이 판만 잡는다. */
     @Test
     @DisplayName("C1c_재연결이_매달리다_돌아오면_5초_안에_낡음이_풀린다")
     void C1c_재연결이_매달리다_돌아오면_5초_안에_낡음이_풀린다() {
-        돌린다("C1c 레디스 재연결 매달림", 선::재연결을_매단다);
+        돌린다("C1c 레디스 재연결 매달림", 선::재연결을_매단다, true);
     }
 
-    private void 돌린다(String 이름, 주입 장애) {
+    private void 돌린다(String 이름, FaultInjection 장애, boolean 매달림을_확인한다) {
         SnapshotRecoveryWatch 관측 = SnapshotRecoveryWatch.of(holder, clock);
+        boolean[] 매달렸다 = {!매달림을_확인한다};
         Duration[] 멎은_뒤_나이 = new Duration[1];
         Duration[] 가장_긴_틱_나이 = new Duration[1];
         boolean[] 낡음에_들었다 = new boolean[1];
@@ -121,6 +127,9 @@ class RedisWireOutageSnapshotScenarioTest {
                     }
                 })
                 .duringFault(() -> {
+                    if (매달림을_확인한다) {
+                        매달렸다[0] = 선.새_연결이_매달린다(Duration.ofMillis(500));
+                    }
                     멎은_뒤_나이[0] = 관측.받아오기가_멎을_때까지(멎은_나이, 기다림);
                     가장_긴_틱_나이[0] = 관측.가장_긴_틱_나이(루프_관찰);
                     관측.멎은_채로_둔다(오래_끊는다, 멎은_나이);
@@ -138,9 +147,12 @@ class RedisWireOutageSnapshotScenarioTest {
                         관측.새_발행으로_낡음이_풀리기까지(걷은_시각[0], 앞_발행[0], 기다림))
                 .assertEntry(ChaosScenario.Verdict.none())
                 .assertDuring(() -> RecoveryCriteria.violations(
-                        멎은_뒤_나이[0].compareTo(멎은_나이) > 0 ? Optional.empty()
+                        매달렸다[0] ? Optional.empty()
+                                : Optional.of("하네스 — 새 연결이 매달리지 않는다. 거부나 응답으로 떨어졌다"),
+                        멎은_뒤_나이[0] != null ? Optional.empty()
                                 : Optional.of("전제 — 회선을 끊었는데 받아오기가 안 멎었다"),
-                        가장_긴_틱_나이[0].compareTo(루프_한계) < 0 ? Optional.empty()
+                        가장_긴_틱_나이[0] != null && 가장_긴_틱_나이[0].compareTo(루프_한계) < 0
+                                ? Optional.empty()
                                 : Optional.of("회선이 끊긴 동안 갱신 루프가 %s 멎었다 (한계 %s)"
                                         .formatted(가장_긴_틱_나이[0], 루프_한계)),
                         // 계획서 유지 기대 — 낡음에 든다. 안 들면 fail-open 갈래를 안 밟는다.

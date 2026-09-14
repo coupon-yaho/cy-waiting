@@ -1,7 +1,7 @@
 package com.kafkick.waiting.chaos;
 
+import com.kafkick.waiting.control.GatewaySnapshot;
 import com.kafkick.waiting.control.SnapshotHolder;
-import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Objects;
@@ -17,16 +17,23 @@ public final class SnapshotRecoveryWatch {
     private static final Duration POLL = Duration.ofMillis(50);
 
     private final SnapshotHolder holder;
-    private final Clock clock;
 
-    private SnapshotRecoveryWatch(SnapshotHolder holder, Clock clock) {
+    private SnapshotRecoveryWatch(SnapshotHolder holder) {
         this.holder = Objects.requireNonNull(holder, "holder 는 필수다");
-        this.clock = Objects.requireNonNull(clock, "clock 은 필수다");
     }
 
-    /** 홀더와 같은 시계를 준다. 다른 시계면 받아온 시각이 어긋난다. */
-    public static SnapshotRecoveryWatch of(SnapshotHolder holder, Clock clock) {
-        return new SnapshotRecoveryWatch(holder, clock);
+    /** <b>시계를 안 받는다</b> — 홀더와 다른 시계로 받아온 시각을 되짚으면 둘의 차이만큼 판정이 어긋난다. */
+    public static SnapshotRecoveryWatch of(SnapshotHolder holder) {
+        return new SnapshotRecoveryWatch(holder);
+    }
+
+    /** 회복을 재기 시작한 순간. 단조 시각과 그때 들고 있던 스냅샷을 함께 든다. */
+    public record Mark(long nanos, GatewaySnapshot held) {
+    }
+
+    /** 지금을 표시한다. 장애를 걷은 직후에 부른다. */
+    public Mark 표시한다() {
+        return new Mark(System.nanoTime(), holder.current());
     }
 
     /** 받아오기가 멎었다고 볼 만큼 나이가 찰 때까지 기다린다. 멎은 뒤의 나이를 돌려준다. */
@@ -61,32 +68,35 @@ public final class SnapshotRecoveryWatch {
         return holder.view().snapshot().publishedAt();
     }
 
-    /** {@code 부터} 뒤에 발행된 스냅샷을 다시 받기까지. 한계 안에 못 받으면 null. */
-    public Duration 다시_받기까지(Instant 부터, Duration 한계) {
+    /**
+     * 표시 뒤로 스냅샷을 다시 받기까지. 한계 안에 못 받으면 null. <b>받은 것을 객체가 바뀐 것으로 가른다</b> —
+     * 성공한 받아오기만 새로 풀어 갈아 끼우고, 실패한 회차는 들고 있던 것을 그대로 둔다.
+     */
+    public Duration 다시_받기까지(Mark 표시, Duration 한계) {
         try {
             Awaitility.await().pollInterval(POLL).atMost(한계)
-                    .until(() -> 받아온_시각().isAfter(부터) && holder.view().snapshot().isPublished());
-            return Duration.between(부터, 받아온_시각());
+                    .until(() -> holder.current() != 표시.held() && holder.view().snapshot().isPublished());
+            return 지난_시간(표시);
         } catch (ConditionTimeoutException e) {
             return null;
         }
     }
 
     /**
-     * {@code 부터} 뒤로 <b>새 발행</b>을 받아 낡음이 풀리기까지. 한계 안에 안 풀리면 null. 옛 해시를 다시
-     * 받는 것만 보면 리더가 한 번도 발행 못 해도 참이라 따로 잰다.
+     * 표시 뒤로 <b>새 발행</b>을 받아 낡음이 풀리기까지. 한계 안에 안 풀리면 null. 옛 해시를 다시 받는 것만 보면
+     * 리더가 한 번도 발행 못 해도 참이라 따로 잰다.
      */
-    public Duration 새_발행으로_낡음이_풀리기까지(Instant 부터, Instant 앞_발행, Duration 한계) {
+    public Duration 새_발행으로_낡음이_풀리기까지(Mark 표시, Instant 앞_발행, Duration 한계) {
         try {
             Awaitility.await().pollInterval(POLL).atMost(한계)
                     .until(() -> 들고_있는_발행().isAfter(앞_발행) && !holder.isDataStale());
-            return Duration.between(부터, clock.instant());
+            return 지난_시간(표시);
         } catch (ConditionTimeoutException e) {
             return null;
         }
     }
 
-    private Instant 받아온_시각() {
-        return clock.instant().minus(holder.fetchAge());
+    private static Duration 지난_시간(Mark 표시) {
+        return Duration.ofNanos(System.nanoTime() - 표시.nanos());
     }
 }

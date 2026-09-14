@@ -5,7 +5,6 @@ import com.kafkick.waiting.control.Leadership;
 import com.kafkick.waiting.control.SnapshotHolder;
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
@@ -75,9 +74,6 @@ class RedisWireOutageSnapshotScenarioTest {
     @Autowired
     private SnapshotHolder holder;
 
-    @Autowired
-    private Clock clock;
-
     /** 장애 한 판. 주입 방식만 다르고 판정은 같다. */
     private interface FaultInjection {
         void 넣는다() throws IOException;
@@ -101,13 +97,13 @@ class RedisWireOutageSnapshotScenarioTest {
     }
 
     private void 돌린다(String 이름, FaultInjection 장애, boolean 매달림을_확인한다) {
-        SnapshotRecoveryWatch 관측 = SnapshotRecoveryWatch.of(holder, clock);
+        SnapshotRecoveryWatch 관측 = SnapshotRecoveryWatch.of(holder);
         boolean[] 매달렸다 = {!매달림을_확인한다};
         Duration[] 멎은_뒤_나이 = new Duration[1];
         Duration[] 가장_긴_틱_나이 = new Duration[1];
         boolean[] 낡음에_들었다 = new boolean[1];
         Instant[] 앞_발행 = new Instant[1];
-        Instant[] 걷은_시각 = new Instant[1];
+        SnapshotRecoveryWatch.Mark[] 걷음 = new SnapshotRecoveryWatch.Mark[1];
         Duration[] 새_발행까지 = new Duration[1];
 
         ChaosScenario.named(이름)
@@ -141,10 +137,10 @@ class RedisWireOutageSnapshotScenarioTest {
                     } catch (IOException e) {
                         throw new UncheckedIOException(e);
                     }
-                    걷은_시각[0] = clock.instant();
+                    걷음[0] = 관측.표시한다();
                 })
                 .afterRecovery(() -> 새_발행까지[0] =
-                        관측.새_발행으로_낡음이_풀리기까지(걷은_시각[0], 앞_발행[0], 기다림))
+                        관측.새_발행으로_낡음이_풀리기까지(걷음[0], 앞_발행[0], 기다림))
                 .assertEntry(ChaosScenario.Verdict.none())
                 .assertDuring(() -> RecoveryCriteria.violations(
                         매달렸다[0] ? Optional.empty()

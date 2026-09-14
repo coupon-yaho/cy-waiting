@@ -3,7 +3,6 @@ package com.kafkick.waiting.chaos;
 import com.kafkick.waiting.adapter.redis.RedisKeys;
 import com.kafkick.waiting.control.Leadership;
 import com.kafkick.waiting.control.SnapshotHolder;
-import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
@@ -76,17 +75,14 @@ class RedisRestartSnapshotScenarioTest {
     @Autowired
     private SnapshotHolder holder;
 
-    @Autowired
-    private Clock clock;
-
     @Test
     @DisplayName("C1b_레디스가_살아나면_5초_안에_스냅샷을_다시_받는다")
     void C1b_레디스가_살아나면_5초_안에_스냅샷을_다시_받는다() {
-        SnapshotRecoveryWatch 관측 = SnapshotRecoveryWatch.of(holder, clock);
+        SnapshotRecoveryWatch 관측 = SnapshotRecoveryWatch.of(holder);
         boolean[] 발행을_지웠다 = new boolean[1];
         Duration[] 멎은_뒤_나이 = new Duration[1];
         Duration[] 가장_긴_틱_나이 = new Duration[1];
-        Instant[] 준비된_시각 = new Instant[1];
+        SnapshotRecoveryWatch.Mark[] 준비됨 = new SnapshotRecoveryWatch.Mark[1];
         Duration[] 재적재까지 = new Duration[1];
         Instant[] 죽기_전_발행 = new Instant[1];
         Duration[] 새_발행까지 = new Duration[1];
@@ -115,13 +111,13 @@ class RedisRestartSnapshotScenarioTest {
                 })
                 .recover(() -> {
                     faults.붙인다();
-                    준비된_시각[0] = clock.instant();
+                    준비됨[0] = 관측.표시한다();
                 })
                 .afterRecovery(() -> {
-                    재적재까지[0] = 관측.다시_받기까지(준비된_시각[0], 기다림);
+                    재적재까지[0] = 관측.다시_받기까지(준비됨[0], 기다림);
                     // **새 발행까지 따로 잰다.** 영속이라 옛 해시가 남아 위 판정은 리더가 한 번도 발행을
                     // 못 해도 초록이다. 그동안 재료 나이가 늘어 낡음이 안 풀린다.
-                    새_발행까지[0] = 관측.새_발행으로_낡음이_풀리기까지(준비된_시각[0], 죽기_전_발행[0], 기다림);
+                    새_발행까지[0] = 관측.새_발행으로_낡음이_풀리기까지(준비됨[0], 죽기_전_발행[0], 기다림);
                 })
                 .assertEntry(ChaosScenario.Verdict.none())
                 .assertDuring(() -> RecoveryCriteria.violations(

@@ -156,6 +156,7 @@ class SlowCallCircuitScenarioTest {
         List<Integer> 유지_상태 = new ArrayList<>();
         long[] 유지중_유입 = new long[1];
         int[] 열린_때_실패 = {-1};
+        long[] 여는_구간_지연 = new long[1];
         long[] 느린_회원_응답 = {-1};
 
         ChaosScenario.named("C8b 뒷단 느림 → 서킷 오픈")
@@ -172,7 +173,9 @@ class SlowCallCircuitScenarioTest {
                 .duringFault(() -> {
                     // 회원 번호가 짝수부터라 느린 것과 빠른 것이 번갈아 간다.
                     회원.set(회원.get() + 회원.get() % 2);
+                    long 지연_전 = 뒷단.늦게_답한_수();
                     여는_상태.addAll(여러_번_시도한다(표본_하한));
+                    여는_구간_지연[0] = 뒷단.늦게_답한_수() - 지연_전;
                     // 열린 순간 바로 잰다. 대기가 끝나 half-open 으로 가면 지표가 새로 시작한다.
                     Awaitility.await().pollDelay(Duration.ZERO).pollInterval(Duration.ofMillis(10))
                             .atMost(Duration.ofSeconds(2))
@@ -194,6 +197,8 @@ class SlowCallCircuitScenarioTest {
                         // **실패 없이 열렸는가.** 상한 안에 답했으니 5xx 도 타임아웃도 없어야
                         // 한다. 섞이면 느린 호출 배선이 죽어도 열린다.
                         다_통과했다("여는 구간", 여는_상태),
+                        // 느린 호출이 스텁의 지연 갈래에서 왔는가. 환경 지연으로 열린 것을 거른다.
+                        절반이_늦게_답했다(여는_구간_지연[0]),
                         느린_호출로_열렸다(열린_때_실패[0]),
                         유입이_멎었다(유지중_유입[0]),
                         줄에_세웠다(유지_상태)))
@@ -230,6 +235,12 @@ class SlowCallCircuitScenarioTest {
                 .get().uri("/probe").header("X-Member-Id", "2")
                 .exchange().expectStatus().isOk();
         return 뒷단.늦게_답한_수() - 전;
+    }
+
+    private Optional<String> 절반이_늦게_답했다(long 지연_수) {
+        return 지연_수 == 표본_하한 / 2 ? Optional.empty()
+                : Optional.of("여는 구간 — 늦게 답한 것이 %d 건이다 (기대 %d)"
+                        .formatted(지연_수, 표본_하한 / 2));
     }
 
     private Optional<String> 느림이_걷혔다(long 늦게_답한_증가) {

@@ -37,6 +37,9 @@ class RedisRestartSnapshotScenarioTest {
     /** 계획서가 요구하는 재적재 한계. */
     private static final Duration 재적재_한계 = Duration.ofSeconds(5);
 
+    /** 받아오기가 멎은 채로 두는 시간. 재연결 지연이 수 초로 불어날 만큼 길어야 한다. */
+    private static final Duration 오래_죽인다 = Duration.ofSeconds(10);
+
     /** 받아오기가 멎었다고 볼 나이. 갱신 주기보다 넉넉히 길어야 한 번 늦은 것과 갈린다. */
     private static final Duration 멎은_나이 = Duration.ofSeconds(3);
 
@@ -90,6 +93,8 @@ class RedisRestartSnapshotScenarioTest {
         Duration[] 가장_긴_틱_나이 = new Duration[1];
         Instant[] 준비된_시각 = new Instant[1];
         Duration[] 재적재까지 = new Duration[1];
+        Instant[] 죽기_전_발행 = new Instant[1];
+        Duration[] 새_발행까지 = new Duration[1];
 
         ChaosScenario.named("C1b 레디스 재기동 뒤 첫 스냅샷")
                 .baseline(() -> {
@@ -100,7 +105,10 @@ class RedisRestartSnapshotScenarioTest {
                             .until(() -> holder.view().snapshot().isPublished()
                                     && holder.fetchAge().compareTo(Duration.ofSeconds(2)) < 0);
                 })
-                .inject(() -> faults.끊는다())
+                .inject(() -> {
+                    죽기_전_발행[0] = holder.view().snapshot().publishedAt();
+                    faults.끊는다();
+                })
                 .duringFault(() -> {
                     // **받아오기가 정말 레디스를 치는가.** 안 멎으면 아래 재적재는 아무것도 안 잰다.
                     Awaitility.await().atMost(기다림)
@@ -108,6 +116,10 @@ class RedisRestartSnapshotScenarioTest {
                     멎은_뒤_나이[0] = holder.fetchAge();
                     가장_긴_틱_나이[0] = 틱_나이를_지켜본다(루프_관찰);
                     발행을_지웠다[0] = !holder.view().snapshot().isPublished();
+                    // **오래 죽인다.** 재연결 지연은 실패가 쌓일수록 는다. 짧게 죽이면 지연이 작을 때
+                    // 살아나 상한이 빠져도 초록이다 — 상한 없이 이 길이면 16초가 걸렸다.
+                    Awaitility.await().during(오래_죽인다).atMost(오래_죽인다.plusSeconds(2))
+                            .until(() -> holder.fetchAge().compareTo(멎은_나이) > 0);
                 })
                 .recover(() -> {
                     faults.붙인다();
@@ -122,6 +134,16 @@ class RedisRestartSnapshotScenarioTest {
                     } catch (ConditionTimeoutException e) {
                         재적재까지[0] = null;
                     }
+                    // **새 발행까지 따로 잰다.** 영속이라 옛 해시가 남아 위 판정은 리더가 한 번도 발행을
+                    // 못 해도 초록이다. 그동안 재료 나이가 늘어 낡음이 안 풀린다.
+                    try {
+                        Awaitility.await().pollInterval(Duration.ofMillis(50)).atMost(기다림)
+                                .until(() -> holder.view().snapshot().publishedAt()
+                                        .isAfter(죽기_전_발행[0]) && !holder.isDataStale());
+                        새_발행까지[0] = Duration.between(준비된_시각[0], clock.instant());
+                    } catch (ConditionTimeoutException e) {
+                        새_발행까지[0] = null;
+                    }
                 })
                 .assertEntry(ChaosScenario.Verdict.none())
                 .assertDuring(() -> RecoveryCriteria.violations(
@@ -133,7 +155,8 @@ class RedisRestartSnapshotScenarioTest {
                                 ? Optional.of("레디스가 죽자 발행된 스냅샷을 버렸다")
                                 : Optional.empty()))
                 .assertRecovery(() -> RecoveryCriteria.violations(
-                        제때_다시_받았다(재적재까지[0])))
+                        제때_다시_받았다(재적재까지[0]),
+                        새_발행으로_낡음이_풀렸다(새_발행까지[0])))
                 .run();
     }
 
@@ -161,6 +184,14 @@ class RedisRestartSnapshotScenarioTest {
     private Optional<String> 받아오기가_멎었다(Duration 나이) {
         return 나이 != null && 나이.compareTo(멎은_나이) > 0 ? Optional.empty()
                 : Optional.of("전제 — 레디스를 죽였는데 받아오기가 안 멎었다: 나이 %s".formatted(나이));
+    }
+
+    private Optional<String> 새_발행으로_낡음이_풀렸다(Duration 걸림) {
+        if (걸림 == null) {
+            return Optional.of("레디스가 살아났는데 %s 안에 새 발행으로 낡음이 안 풀렸다".formatted(기다림));
+        }
+        return 걸림.compareTo(재적재_한계) <= 0 ? Optional.empty()
+                : Optional.of("새 발행으로 낡음이 풀리기까지 %s 걸렸다 (한계 %s)".formatted(걸림, 재적재_한계));
     }
 
     private Optional<String> 제때_다시_받았다(Duration 걸림) {

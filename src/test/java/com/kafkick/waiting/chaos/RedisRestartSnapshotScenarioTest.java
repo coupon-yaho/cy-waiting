@@ -42,6 +42,12 @@ class RedisRestartSnapshotScenarioTest {
 
     private static final Duration 기다림 = Duration.ofSeconds(20);
 
+    /** 루프를 지켜보는 시간. 갱신 주기(1초)와 회차 상한을 여러 번 넘겨야 멎은 것이 드러난다. */
+    private static final Duration 루프_관찰 = Duration.ofSeconds(4);
+
+    /** 루프가 돈 뒤 나이의 한계. 주기와 회차 상한의 합보다 넉넉하고 받아오기가 멎은 나이보다 짧다. */
+    private static final Duration 루프_한계 = Duration.ofMillis(2_500);
+
     private static RedisFaults faults;
 
     @DynamicPropertySource
@@ -81,6 +87,7 @@ class RedisRestartSnapshotScenarioTest {
     void C1b_레디스가_살아나면_5초_안에_스냅샷을_다시_받는다() {
         boolean[] 발행을_지웠다 = new boolean[1];
         Duration[] 멎은_뒤_나이 = new Duration[1];
+        Duration[] 가장_긴_틱_나이 = new Duration[1];
         Instant[] 준비된_시각 = new Instant[1];
         Duration[] 재적재까지 = new Duration[1];
 
@@ -99,6 +106,7 @@ class RedisRestartSnapshotScenarioTest {
                     Awaitility.await().atMost(기다림)
                             .until(() -> holder.fetchAge().compareTo(멎은_나이) > 0);
                     멎은_뒤_나이[0] = holder.fetchAge();
+                    가장_긴_틱_나이[0] = 틱_나이를_지켜본다(루프_관찰);
                     발행을_지웠다[0] = !holder.view().snapshot().isPublished();
                 })
                 .recover(() -> {
@@ -118,6 +126,8 @@ class RedisRestartSnapshotScenarioTest {
                 .assertEntry(ChaosScenario.Verdict.none())
                 .assertDuring(() -> RecoveryCriteria.violations(
                         받아오기가_멎었다(멎은_뒤_나이[0]),
+                        // 계획서 유지 기대 — 받아오기는 멎어도 갱신 루프는 안 멎는다 (CY-828).
+                        루프가_안_멎었다(가장_긴_틱_나이[0]),
                         // 계획서 진입 기대 — 스냅샷을 지우지 않는다.
                         발행을_지웠다[0]
                                 ? Optional.of("레디스가 죽자 발행된 스냅샷을 버렸다")
@@ -125,6 +135,27 @@ class RedisRestartSnapshotScenarioTest {
                 .assertRecovery(() -> RecoveryCriteria.violations(
                         제때_다시_받았다(재적재까지[0])))
                 .run();
+    }
+
+    /** 유지 구간 동안 루프가 돈 뒤의 나이를 촘촘히 보고 가장 긴 값을 돌려준다. */
+    private Duration 틱_나이를_지켜본다(Duration 동안) {
+        Duration[] 가장_긴 = {Duration.ZERO};
+        // 조건이 늘 참이라 during 동안 표본만 모은다.
+        Awaitility.await().during(동안).atMost(동안.plusSeconds(2))
+                .pollInterval(Duration.ofMillis(50))
+                .until(() -> {
+                    Duration 나이 = holder.tickAge();
+                    if (나이.compareTo(가장_긴[0]) > 0) {
+                        가장_긴[0] = 나이;
+                    }
+                    return true;
+                });
+        return 가장_긴[0];
+    }
+
+    private Optional<String> 루프가_안_멎었다(Duration 가장_긴) {
+        return 가장_긴 != null && 가장_긴.compareTo(루프_한계) < 0 ? Optional.empty()
+                : Optional.of("레디스가 죽은 동안 갱신 루프가 %s 멎었다 (한계 %s)".formatted(가장_긴, 루프_한계));
     }
 
     private Optional<String> 받아오기가_멎었다(Duration 나이) {

@@ -40,6 +40,24 @@ class RedisReconnectDelayTest {
         }
     }
 
+    /** 흔들어도 절반은 지킨다. 0 까지 흔들면 몇 노드가 살아나는 레디스를 쉼 없이 두드린다. */
+    @Test
+    @DisplayName("상한에서도_절반은_기다린다")
+    void 상한에서도_절반은_기다린다() {
+        Delay 지연 = 걸린_지연();
+
+        for (int i = 0; i < 50; i++) {
+            assertThat(지연.createDelay(30)).isBetween(상한.dividedBy(2), 상한);
+        }
+    }
+
+    /** 첫 재시도는 짧다. 순간 끊김은 상한까지 기다릴 까닭이 없다. */
+    @Test
+    @DisplayName("첫_재시도는_짧게_기다린다")
+    void 첫_재시도는_짧게_기다린다() {
+        assertThat(걸린_지연().createDelay(1)).isLessThanOrEqualTo(Duration.ofMillis(100));
+    }
+
     /** <b>흔들어 준다.</b> 전 노드가 같은 박자로 재연결하면 살아난 레디스를 한꺼번에 때린다. */
     @Test
     @DisplayName("상한에서도_재연결_시각이_노드마다_흩어진다")

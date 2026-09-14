@@ -29,5 +29,7 @@ class CappedJitterDelayTest {
 
         assertThat(지연.createDelay(0)).isBetween(Duration.ofMillis(50), Duration.ofMillis(100));
         assertThat(지연.createDelay(-3)).isBetween(Duration.ofMillis(50), Duration.ofMillis(100));
+        assertThat(지연.createDelay(Long.MIN_VALUE)).as("빼기가 넘쳐 상한으로 가면 안 된다")
+                .isBetween(Duration.ofMillis(50), Duration.ofMillis(100));
     }
 }

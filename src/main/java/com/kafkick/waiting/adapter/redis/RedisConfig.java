@@ -16,7 +16,7 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class RedisConfig {
 
-    /** 재연결 지연 상한. 이것에 갱신 한 주기를 더해도 첫 스냅샷 한계(5초) 안에 든다. */
+    /** 재연결 지연 상한. 연결 상한(1초)·리더 재획득·틱·갱신 주기를 더해도 첫 스냅샷 한계(5초) 안에 든다. */
     static final Duration RECONNECT_DELAY_CAP = Duration.ofSeconds(1);
 
     /** 첫 재시도 지연의 바탕. 짧은 끊김은 수십 ms 안에 다시 붙는다. */

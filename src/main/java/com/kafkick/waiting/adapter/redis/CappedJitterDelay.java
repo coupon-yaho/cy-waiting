@@ -11,8 +11,8 @@ import java.util.concurrent.ThreadLocalRandom;
  */
 final class CappedJitterDelay extends Delay {
 
-    /** 두 배로 늘리는 횟수의 상한. 이보다 크면 곱이 넘친다. */
-    private static final int MAX_DOUBLINGS = 30;
+    /** 두 배로 늘리는 횟수의 상한. 밀기 자리 수를 넘지 않게만 막고, 넘침은 상한과 먼저 견줘 피한다. */
+    private static final int MAX_DOUBLINGS = 62;
 
     private final long baseNanos;
     private final long capNanos;
@@ -33,7 +33,8 @@ final class CappedJitterDelay extends Delay {
     @Override
     public Duration createDelay(long attempt) {
         int doublings = (int) Math.clamp(attempt - 1, 0, MAX_DOUBLINGS);
-        long ceiling = Math.min(capNanos, baseNanos << doublings);
+        // **밀기 전에 상한과 견준다.** 밀고 나서 견주면 넘친 음수가 상한보다 작아 골라지고, 난수 범위가 음수라 던진다.
+        long ceiling = baseNanos > (capNanos >> doublings) ? capNanos : baseNanos << doublings;
         long half = ceiling / 2;
         return Duration.ofNanos(half + ThreadLocalRandom.current().nextLong(ceiling - half + 1));
     }

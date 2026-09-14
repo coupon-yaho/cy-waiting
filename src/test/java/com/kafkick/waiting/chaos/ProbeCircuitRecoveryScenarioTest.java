@@ -142,6 +142,9 @@ class ProbeCircuitRecoveryScenarioTest {
     void 뒷단을_되돌린다() {
         멎었다.set(false);
         남은_프로브_실패.set(0);
+        // 컨텍스트를 시험끼리 공유한다. 앞 시험이 열린 채로 끝나면 다음 시험이 장애 없이 연 것으로 읽는다.
+        circuits.find("backend").ifPresent(CircuitBreaker::reset);
+        반쯤_열린_시각.clear();
     }
 
     private void 발급을_시도한다(int 횟수) {

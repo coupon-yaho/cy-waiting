@@ -80,6 +80,14 @@ public final class BackendStub implements AutoCloseable {
         return new BackendStub(멎었나, couponId -> false);
     }
 
+    /**
+     * 스위치가 켜지면 멎고, 고른 쿠폰에는 5xx 를 내는 뒷단. 쿠폰 아닌 경로(프로브)는 빈 이름으로 묻는다 —
+     * 살아난 뒤에도 프로브 몇 번을 실패시켜 회복 시도가 쌓이는 판을 만든다.
+     */
+    public static BackendStub 멎거나_실패할_수_있다(BooleanSupplier 멎었나, Predicate<String> 실패하는_쿠폰) {
+        return new BackendStub(멎었나, 실패하는_쿠폰);
+    }
+
     /** 스위치가 켜지면 5xx 를 내는 뒷단. 응답은 오는데 실패인 갈래다. */
     public static BackendStub 실패할_수_있다(BooleanSupplier 실패하나) {
         return new BackendStub(() -> false, couponId -> 실패하나.getAsBoolean());

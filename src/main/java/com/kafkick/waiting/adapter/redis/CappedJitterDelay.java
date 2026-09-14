@@ -32,7 +32,8 @@ final class CappedJitterDelay extends Delay {
 
     @Override
     public Duration createDelay(long attempt) {
-        int doublings = (int) Math.clamp(attempt - 1, 0, MAX_DOUBLINGS);
+        // 빼기 전에 거른다. 가장 작은 값에서 1 을 빼면 가장 큰 값이 되어 상한으로 간다.
+        int doublings = attempt <= 1 ? 0 : (int) Math.min(attempt - 1, MAX_DOUBLINGS);
         // **밀기 전에 상한과 견준다.** 밀고 나서 견주면 넘친 음수가 상한보다 작아 골라지고, 난수 범위가 음수라 던진다.
         long ceiling = baseNanos > (capNanos >> doublings) ? capNanos : baseNanos << doublings;
         long half = ceiling / 2;

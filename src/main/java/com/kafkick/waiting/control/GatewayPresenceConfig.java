@@ -58,12 +58,7 @@ public class GatewayPresenceConfig {
                 () -> port.leave(instanceId),
                 registry::observed,
                 // 놓침은 상한 바깥에서 센다 — 무응답이 오류로 안 오기 때문이다.
-                () -> {
-                    registry.circuitMissed(circuit.now());
-                    // 통과 수에는 분모 같은 유지 근거가 없다. 낡은 값을 "지금" 이라는
-                    // 이름으로 내보내면 장애 내내 지나간 부하를 보고한다.
-                    registry.passUnknown();
-                },
+                missStep(circuit::now, registry),
                 properties.scheduler().tick(),
                 properties.leader().attempt());
     }
@@ -76,6 +71,20 @@ public class GatewayPresenceConfig {
     long voteFreshSec(Duration tick, long reapAfterSec) {
         long millis = tick.multipliedBy(VOTE_FRESH_TICKS).toMillis();
         return Math.clamp(Math.ceilDiv(millis, 1000L), 1, reapAfterSec);
+    }
+
+    /**
+     * 하트비트를 놓친 회차. <b>분모의 감소 연속을 끊는다</b> — 안 끊으면 레디스가 흔들리는 동안 늦은
+     * 표로 적게 센 관측이 실패를 사이에 두고 연속으로 쌓여, 멀쩡한 노드가 분모에서 빠진다.
+     */
+    Runnable missStep(Supplier<CircuitState> local, GatewayRegistry registry) {
+        return () -> {
+            registry.circuitMissed(local.get());
+            registry.observationFailed();
+            // 통과 수에는 분모 같은 유지 근거가 없다. 낡은 값을 "지금" 이라는
+            // 이름으로 내보내면 장애 내내 지나간 부하를 보고한다.
+            registry.passUnknown();
+        };
     }
 
     /** 이 노드가 최근에 뒷단으로 보낸 초당 수. 아직 안 붙었으면 음수("모름")다. */

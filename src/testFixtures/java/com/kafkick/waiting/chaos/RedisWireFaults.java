@@ -85,6 +85,16 @@ public final class RedisWireFaults implements AutoCloseable {
         proxy.toxics().timeout(끊김, ToxicDirection.DOWNSTREAM, 0);
     }
 
+    /**
+     * 붙은 연결을 끊고 <b>새 연결은 받아만 주고 아무것도 안 보낸다.</b> 클라이언트는 곧바로 재연결을 시도하는데
+     * 거부가 아니라 매달림이라, 시도마다 연결 상한까지 기다린다 — 프로세스가 죽은 판보다 회복이 늦는 쪽이다.
+     */
+    public void 재연결을_매단다() throws IOException {
+        proxy.toxics().timeout(끊김, ToxicDirection.DOWNSTREAM, 0);
+        proxy.disable();
+        proxy.enable();
+    }
+
     /** 넣은 장애를 전부 걷는다. */
     public void 걷는다() throws IOException {
         for (var toxic : proxy.toxics().getAll()) {

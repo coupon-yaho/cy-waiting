@@ -6,16 +6,16 @@ import com.kafkick.waiting.adapter.redis.GatewayRedisPort;
 import com.kafkick.waiting.domain.admission.CircuitState;
 import com.kafkick.waiting.gateway.CircuitStateReader;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
-import java.io.IOException;
-import java.net.ServerSocket;
-import java.time.Duration;
-import org.awaitility.Awaitility;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.support.StaticListableBeanFactory;
-import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
+import org.springframework.dao.DataAccessException;
+import org.springframework.data.redis.RedisConnectionFailureException;
+import org.springframework.data.redis.connection.ReactiveRedisClusterConnection;
+import org.springframework.data.redis.connection.ReactiveRedisConnection;
+import org.springframework.data.redis.connection.ReactiveRedisConnectionFactory;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
-import reactor.core.scheduler.Schedulers;
+import reactor.test.scheduler.VirtualTimeScheduler;
 
 /**
  * 하트비트를 놓친 회차의 배선 (CY-838).
@@ -61,41 +61,52 @@ class GatewayPresenceMissTest {
     }
 
     /**
-     * <b>빈이 만든 루프로 잰다.</b> 놓침 경로를 떼어 낸 메서드만 부르면, 빈이 다시 람다로 돌아가도
-     * 초록이다 — 이번 결함이 바로 그 모양이었다. 아무도 안 듣는 포트로 하트비트를 실패시킨다.
+     * <b>빈이 만든 루프로 잰다.</b> 떼어 낸 메서드만 부르면 빈이 다시 람다로 돌아가도 초록이다 — 이번
+     * 결함이 그 모양이었다. 연결을 곧바로 던지게 해 하트비트를 동기로 실패시키고, 가상 시간으로 한 회차만 돈다.
      */
     @Test
     @DisplayName("빈이_만든_루프가_놓침에서_감소_연속을_끊는다")
-    void 빈이_만든_루프가_놓침에서_감소_연속을_끊는다() throws IOException {
+    void 빈이_만든_루프가_놓침에서_감소_연속을_끊는다() {
         GatewayRegistry registry = GatewayRegistry.of(감소_확정_수, 노드);
         registry.observed(노드 - 1);
         registry.observed(노드 - 1);
         registry.passObserved(100, 노드, 노드);
 
-        LettuceConnectionFactory factory = new LettuceConnectionFactory("localhost", 빈_포트());
-        factory.afterPropertiesSet();
-        factory.start();
         GatewayHeartbeatLoop loop = config.gatewayHeartbeatLoop(
-                GatewayRedisPort.of(new ReactiveStringRedisTemplate(factory)), registry,
+                GatewayRedisPort.of(new ReactiveStringRedisTemplate(끊긴_연결())), registry,
                 ControlPlaneProperties.defaults(),
                 CircuitStateReader.of(CircuitBreakerRegistry.ofDefaults(), "backend"),
                 new StaticListableBeanFactory().getBeanProvider(PassRateSource.class));
+        VirtualTimeScheduler 시계 = VirtualTimeScheduler.create();
         try {
-            loop.start(Schedulers.newSingle("miss-wiring"));
-            // 통과 수가 모름이 되면 놓침 한 회차가 끝났다.
-            Awaitility.await().atMost(Duration.ofSeconds(10)).until(() -> registry.passRate() == -1);
+            loop.start(시계);
+            시계.advanceTime();
         } finally {
             loop.stop();
-            factory.destroy();
         }
 
+        assertThat(registry.passRate()).as("전제 — 놓침 한 회차가 돌았다").isEqualTo(-1);
         registry.observed(노드 - 1);
         assertThat(registry.count()).as("놓침을 사이에 둔 관측은 연속이 아니다").isEqualTo(노드);
     }
 
-    private static int 빈_포트() throws IOException {
-        try (ServerSocket socket = new ServerSocket(0)) {
-            return socket.getLocalPort();
-        }
+    /** 연결을 달라는 순간 던진다. 레디스 없이 하트비트 실패를 만든다. */
+    private static ReactiveRedisConnectionFactory 끊긴_연결() {
+        return new ReactiveRedisConnectionFactory() {
+            @Override
+            public ReactiveRedisConnection getReactiveConnection() {
+                throw new RedisConnectionFailureException("끊겼다");
+            }
+
+            @Override
+            public ReactiveRedisClusterConnection getReactiveClusterConnection() {
+                throw new RedisConnectionFailureException("끊겼다");
+            }
+
+            @Override
+            public DataAccessException translateExceptionIfPossible(RuntimeException ex) {
+                return null;
+            }
+        };
     }
 }

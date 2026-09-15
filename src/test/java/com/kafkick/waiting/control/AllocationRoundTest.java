@@ -2041,6 +2041,41 @@ class AllocationRoundTest {
         시계.advanceTimeBy(Duration.ofMillis(100));
     }
 
+    /**
+     * <b>수요는 읽기와 동시에 읽고, 나누기는 읽기가 끝난 뒤에 한다</b> (CY-927). 운영값을 읽기 전에 나누면 방금 바꾼 값이
+     * 한 틱 늦게 나가고, 읽기가 끝날 때까지 수요 읽기를 미루면 그 왕복이 틱을 먹는다.
+     */
+    @Test
+    @DisplayName("수요는_읽기와_동시에_읽고_적용은_읽기_뒤에_보낸다")
+    void 수요는_읽기와_동시에_읽고_적용은_읽기_뒤에_보낸다() {
+        VirtualTimeScheduler 시계 = VirtualTimeScheduler.create();
+        AtomicLong 수요_읽은_시각 = new AtomicLong(-1);
+        AtomicLong 적용_시각 = new AtomicLong(-1);
+        AllocationRound round = AllocationRound.of(
+                () -> true,
+                () -> Mono.fromSupplier(() -> {
+                    수요_읽은_시각.set(시계.now(TimeUnit.MILLISECONDS));
+                    return new TimedDemands(List.of(new CouponDemand("c1", 10, 100)), 읽은_시각);
+                }),
+                () -> 30L, () -> 1,
+                grant -> {
+                    적용_시각.set(시계.now(TimeUnit.MILLISECONDS));
+                    return Mono.just(grant.credit());
+                },
+                hash -> Mono.empty(),
+                () -> Instant.ofEpochSecond(1_700_000_000L),
+                () -> Mono.just(CreditSmoother.of(1.0)),
+                SnapshotCodec.create(), () -> 0L);
+
+        round.run(Mono.delay(Duration.ofMillis(250), 시계).then()).subscribe();
+        시계.advanceTime();
+        assertThat(수요_읽은_시각.get()).as("수요는 읽기를 안 기다린다").isZero();
+        assertThat(적용_시각.get()).as("읽기가 안 끝났으면 안 나눈다").isEqualTo(-1);
+
+        시계.advanceTimeBy(Duration.ofMillis(250));
+        assertThat(적용_시각.get()).isEqualTo(250);
+    }
+
     @Test
     @DisplayName("대상이_없어도_발행은_한다")
     void 대상이_없어도_발행은_한다() {

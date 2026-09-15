@@ -573,9 +573,16 @@ class LeaderElectionTest extends RedisContainerSupport {
     @Test
     @DisplayName("메모리_상한에서도_내_리더를_연장한다")
     void 메모리_상한에서도_내_리더를_연장한다() throws Exception {
-        assertThat(acquired(tryAcquire("holder"))).isTrue();
+        List<Object> 처음 = tryAcquire("holder");
+        assertThat(acquired(처음)).isTrue();
 
-        메모리_상한에서(() -> assertThat(acquired(tryAcquire("holder"))).isTrue());
+        메모리_상한에서(() -> {
+            List<Object> 연장 = tryAcquire("holder");
+            assertThat(acquired(연장)).isTrue();
+            // **같은 펜스여야 연장이다.** 리스가 끝나 새로 잡아도 획득은 참이고, 그때는 번호가 오른다.
+            assertThat(String.valueOf(연장.get(3))).as("연장은 번호를 안 바꾼다")
+                    .isEqualTo(String.valueOf(처음.get(3)));
+        });
     }
 
     private interface Body {

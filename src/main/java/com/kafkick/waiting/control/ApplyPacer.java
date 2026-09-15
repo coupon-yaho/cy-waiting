@@ -23,6 +23,14 @@ public final class ApplyPacer {
     /** 마지막 적용 시각(나노). */
     private volatile long lastNanos;
 
+    /** 마지막 적용 회차가 읽는 데 쓴 시간(나노). 대기는 뺀다. */
+    private volatile long readNanos;
+
+    private volatile boolean started;
+
+    /** 마지막 회차가 읽기를 시작한 시각(나노). */
+    private volatile long startedNanos;
+
     private ApplyPacer(Duration spacing, Scheduler timer) {
         this.spacing = spacing;
         this.timer = timer;
@@ -40,11 +48,22 @@ public final class ApplyPacer {
 
     /** 회차가 읽기를 시작했다. */
     public void roundStarted() {
+        if (timer != null) {
+            startedNanos = timer.now(TimeUnit.NANOSECONDS);
+            started = true;
+        }
     }
 
-    /** 다음 회차를 이만큼 늦게 시작해야 적용이 차례를 안 기다린다. */
+    /**
+     * 다음 회차를 이만큼 늦게 시작해야 적용이 차례를 안 기다린다. <b>앞 회차가 읽는 데 쓴 만큼 당긴다</b> — 회차 안에서
+     * 기다리면 그 대기가 틱 시한을 먹어 발행이 잘린다.
+     */
     public Duration holdOff() {
-        return Duration.ZERO;
+        if (timer == null || !applied) {
+            return Duration.ZERO;
+        }
+        long left = lastNanos + spacing.toNanos() - readNanos - timer.now(TimeUnit.NANOSECONDS);
+        return left > 0 ? Duration.ofNanos(left) : Duration.ZERO;
     }
 
     /** 차례가 올 때까지 기다리고 이번 적용을 표시한다. 기다리다 취소되면 표시하지 않는다. */
@@ -53,10 +72,13 @@ public final class ApplyPacer {
             return Mono.empty();
         }
         return Mono.defer(() -> {
-            long left = applied ? spacing.toNanos() - (timer.now(TimeUnit.NANOSECONDS) - lastNanos) : 0;
+            long now = timer.now(TimeUnit.NANOSECONDS);
+            long read = started ? now - startedNanos : 0;
+            long left = applied ? spacing.toNanos() - (now - lastNanos) : 0;
             Mono<Void> wait = left > 0 ? Mono.delay(Duration.ofNanos(left), timer).then() : Mono.empty();
             return wait.then(Mono.fromRunnable(() -> {
                 lastNanos = timer.now(TimeUnit.NANOSECONDS);
+                readNanos = read;
                 applied = true;
             }));
         });

@@ -96,7 +96,7 @@ public class ControlPlaneConfig {
             GatewayRegistry registry, CapacityCollector capacity, Leadership leadership,
             TunablesRefresh tunables, ControlPlaneProperties properties,
             SoldOutCleanup cleanup, QueueSweeper sweeper, SnapshotHolder holder,
-            Scheduler allocationScheduler) {
+            Scheduler allocationScheduler, ApplyPacer applyPacer) {
         SnapshotCodec codec = SnapshotCodec.create();
         AllocationRound round = AllocationRound.of(leadership::isLeader, collector::collect,
                 capacity::lastKnown,
@@ -131,7 +131,7 @@ public class ControlPlaneConfig {
                 // 인스턴스의 램프가 깎은 몫이 여기에도 실린다.
                 capacity::routable);
         // 회차 시작 간격만 틱에 맞추면 적용 둘이 1초 안에 들어갈 수 있다. 적용끼리 한 틱을 띄운다.
-        round.pacedBy(ApplyPacer.of(properties.scheduler().tick(), allocationScheduler));
+        round.pacedBy(applyPacer);
         return round;
     }
 
@@ -422,7 +422,7 @@ public class ControlPlaneConfig {
             AllocationRound round, CapacityRefresh capacity, CapacityCollector collector,
             TunablesRefresh tunables, Scheduler allocationScheduler, SoldOutCleanup cleanup,
             QueueSweeper sweeper, SnapshotHolder holder, GatewayRegistry registry,
-            AllocationRedisPort port) {
+            AllocationRedisPort port, ApplyPacer applyPacer) {
         SealGate gate = SealGate.of(leadership::isLeader);
         Runnable gained = onLeadershipGained(collector, capacity, cleanup, sweeper, round, holder,
                 registry, sealFences(port, leadership, gate, properties.scheduler().tick(),
@@ -439,6 +439,12 @@ public class ControlPlaneConfig {
                         holder::view,
                         HandoverSpacing.of(System::nanoTime, properties.scheduler().tick())),
                 allocationTickStep(capacity::refresh, tunables::refresh, round::run),
-                nanos -> { }, allocationScheduler);
+                nanos -> { }, allocationScheduler, applyPacer::holdOff);
+    }
+
+    /** 적용 간격. 회차는 차례를 기다리고, 스케줄러는 그 차례만큼 시작을 늦춘다. */
+    @Bean
+    ApplyPacer applyPacer(ControlPlaneProperties properties, Scheduler allocationScheduler) {
+        return ApplyPacer.of(properties.scheduler().tick(), allocationScheduler);
     }
 }

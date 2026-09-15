@@ -324,11 +324,14 @@ public final class AllocationRound {
         // **재료를 읽은 시각을 재료와 같이 받는다.** 회차가 끝난 시각으로 찍으면
         // 나이가 회차 지속 시간만큼 어리고, 리더 벽시계로 찍으면 노드마다 다르게
         // 낡는다 — 둘 다 낡음 판정을 흔든다.
-        Mono<TimedDemands> read = seeded().then(Mono.defer(demands)).cache();
-        // 수요 읽기의 실패로 운영값 읽기를 취소하지 않는다. 실패는 두 읽기가 끝난 뒤에 올린다.
-        return Mono.when(reads, read.then().onErrorResume(e -> Mono.empty()))
-                .then(read)
-                .flatMap(timed -> allocate(timed.demands(), Instant.ofEpochSecond(timed.readAt())));
+        return Mono.defer(() -> {
+            pacer.roundStarted();
+            Mono<TimedDemands> read = seeded().then(Mono.defer(demands)).cache();
+            // 수요 읽기의 실패로 운영값 읽기를 취소하지 않는다. 실패는 두 읽기가 끝난 뒤에 올린다.
+            return Mono.when(reads, read.then().onErrorResume(e -> Mono.empty()))
+                    .then(read)
+                    .flatMap(timed -> allocate(timed.demands(), Instant.ofEpochSecond(timed.readAt())));
+        });
     }
 
     /**

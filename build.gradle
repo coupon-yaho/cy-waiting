@@ -368,8 +368,15 @@ pitest {
     //
     // **routing 도 넣는다.** 고르개에 넘길 후보를 거르고 실패를 세는 코드가
     // 여기 있는데 범위 밖이라, 그 자리를 지워도 시험이 초록인 채로 지나갔다.
+    //
+    // **카오스 판정기도 넣는다 (CY-815).** 판정기가 범위 밖이라 한계 부등호를 한 칸 옮겨도
+    // 초록이었다 — 둘만 돌려 111 중 97 이 죽었다. 픽스처 소스셋을 같이 넘기고 판정기
+    // 클래스만 짚는다. 패키지째 넣으면 대상 시험도 패키지째 끌려와 컨테이너를 띄운다.
     targetClasses = ['com.kafkick.waiting.domain.*', 'com.kafkick.waiting.control.*',
-                     'com.kafkick.waiting.gateway.*', 'com.kafkick.waiting.routing.*']
+                     'com.kafkick.waiting.gateway.*', 'com.kafkick.waiting.routing.*',
+                     'com.kafkick.waiting.chaos.RecoveryCriteria*',
+                     'com.kafkick.waiting.chaos.BackendRpsRecorder*']
+    mainSourceSets = [sourceSets.main, sourceSets.testFixtures]
     // 대상이 0건일 때 로컬 실행을 막지 않는다 — 페이즈 초기에 그랬다.
     // **CI 에서는 0 을 통과로 두지 않는다.** 대상 지정이 비면 뮤테이션 잡이
     // 잡는다 (.github/workflows/_test.yml).

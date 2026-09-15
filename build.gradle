@@ -132,6 +132,9 @@ dependencies {
     // **스타터가 아니라 코어만 넣는다.** 스타터는 로깅까지 얹어 픽스처의 api 로
     // 시험 런타임에 전파된다 — 필요한 것은 SpringApplicationBuilder 하나다.
     testFixturesApi 'org.springframework.boot:spring-boot'
+    // 회복을 기다리는 관측도 픽스처다 (CY-930). 시나리오마다 대기 조건을 다시 쓰면
+    // "첫 스냅샷 5초" 가 시나리오마다 다른 것을 잰다. 버전은 부트 BOM 이 잡는다.
+    testFixturesImplementation 'org.awaitility:awaitility'
 }
 
 // ── 테스트 계층 ──────────────────────────────────────────────────────────────

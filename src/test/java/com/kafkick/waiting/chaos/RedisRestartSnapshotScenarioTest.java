@@ -3,12 +3,10 @@ package com.kafkick.waiting.chaos;
 import com.kafkick.waiting.adapter.redis.RedisKeys;
 import com.kafkick.waiting.control.Leadership;
 import com.kafkick.waiting.control.SnapshotHolder;
-import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
 import org.awaitility.Awaitility;
-import org.awaitility.core.ConditionTimeoutException;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -77,21 +75,14 @@ class RedisRestartSnapshotScenarioTest {
     @Autowired
     private SnapshotHolder holder;
 
-    @Autowired
-    private Clock clock;
-
-    /** 마지막으로 받아온 시각. 실패한 받아오기는 이것을 안 움직인다. */
-    private Instant 받아온_시각() {
-        return clock.instant().minus(holder.fetchAge());
-    }
-
     @Test
     @DisplayName("C1b_레디스가_살아나면_5초_안에_스냅샷을_다시_받는다")
     void C1b_레디스가_살아나면_5초_안에_스냅샷을_다시_받는다() {
+        SnapshotRecoveryWatch 관측 = SnapshotRecoveryWatch.of(holder);
         boolean[] 발행을_지웠다 = new boolean[1];
         Duration[] 멎은_뒤_나이 = new Duration[1];
         Duration[] 가장_긴_틱_나이 = new Duration[1];
-        Instant[] 준비된_시각 = new Instant[1];
+        SnapshotRecoveryWatch.Mark[] 준비됨 = new SnapshotRecoveryWatch.Mark[1];
         Duration[] 재적재까지 = new Duration[1];
         Instant[] 죽기_전_발행 = new Instant[1];
         Duration[] 새_발행까지 = new Duration[1];
@@ -106,44 +97,27 @@ class RedisRestartSnapshotScenarioTest {
                                     && holder.fetchAge().compareTo(Duration.ofSeconds(2)) < 0);
                 })
                 .inject(() -> {
-                    죽기_전_발행[0] = holder.view().snapshot().publishedAt();
+                    죽기_전_발행[0] = 관측.들고_있는_발행();
                     faults.끊는다();
                 })
                 .duringFault(() -> {
                     // **받아오기가 정말 레디스를 치는가.** 안 멎으면 아래 재적재는 아무것도 안 잰다.
-                    Awaitility.await().atMost(기다림)
-                            .until(() -> holder.fetchAge().compareTo(멎은_나이) > 0);
-                    멎은_뒤_나이[0] = holder.fetchAge();
-                    가장_긴_틱_나이[0] = 틱_나이를_지켜본다(루프_관찰);
+                    멎은_뒤_나이[0] = 관측.받아오기가_멎을_때까지(멎은_나이, 기다림);
+                    가장_긴_틱_나이[0] = 관측.가장_긴_틱_나이(루프_관찰);
                     발행을_지웠다[0] = !holder.view().snapshot().isPublished();
                     // **오래 죽인다.** 재연결 지연은 실패가 쌓일수록 는다. 짧게 죽이면 지연이 작을 때
                     // 살아나 상한이 빠져도 초록이다 — 상한 없이 이 길이면 16초가 걸렸다.
-                    Awaitility.await().during(오래_죽인다).atMost(오래_죽인다.plusSeconds(2))
-                            .until(() -> holder.fetchAge().compareTo(멎은_나이) > 0);
+                    관측.멎은_채로_둔다(오래_죽인다, 멎은_나이);
                 })
                 .recover(() -> {
                     faults.붙인다();
-                    준비된_시각[0] = clock.instant();
+                    준비됨[0] = 관측.표시한다();
                 })
                 .afterRecovery(() -> {
-                    try {
-                        Awaitility.await().pollInterval(Duration.ofMillis(50)).atMost(기다림)
-                                .until(() -> 받아온_시각().isAfter(준비된_시각[0])
-                                        && holder.view().snapshot().isPublished());
-                        재적재까지[0] = Duration.between(준비된_시각[0], 받아온_시각());
-                    } catch (ConditionTimeoutException e) {
-                        재적재까지[0] = null;
-                    }
+                    재적재까지[0] = 관측.다시_받기까지(준비됨[0], 기다림);
                     // **새 발행까지 따로 잰다.** 영속이라 옛 해시가 남아 위 판정은 리더가 한 번도 발행을
                     // 못 해도 초록이다. 그동안 재료 나이가 늘어 낡음이 안 풀린다.
-                    try {
-                        Awaitility.await().pollInterval(Duration.ofMillis(50)).atMost(기다림)
-                                .until(() -> holder.view().snapshot().publishedAt()
-                                        .isAfter(죽기_전_발행[0]) && !holder.isDataStale());
-                        새_발행까지[0] = Duration.between(준비된_시각[0], clock.instant());
-                    } catch (ConditionTimeoutException e) {
-                        새_발행까지[0] = null;
-                    }
+                    새_발행까지[0] = 관측.새_발행으로_낡음이_풀리기까지(준비됨[0], 죽기_전_발행[0], 기다림);
                 })
                 .assertEntry(ChaosScenario.Verdict.none())
                 .assertDuring(() -> RecoveryCriteria.violations(
@@ -158,22 +132,6 @@ class RedisRestartSnapshotScenarioTest {
                         제때_다시_받았다(재적재까지[0]),
                         새_발행으로_낡음이_풀렸다(새_발행까지[0])))
                 .run();
-    }
-
-    /** 유지 구간 동안 루프가 돈 뒤의 나이를 촘촘히 보고 가장 긴 값을 돌려준다. */
-    private Duration 틱_나이를_지켜본다(Duration 동안) {
-        Duration[] 가장_긴 = {Duration.ZERO};
-        // 조건이 늘 참이라 during 동안 표본만 모은다.
-        Awaitility.await().during(동안).atMost(동안.plusSeconds(2))
-                .pollInterval(Duration.ofMillis(50))
-                .until(() -> {
-                    Duration 나이 = holder.tickAge();
-                    if (나이.compareTo(가장_긴[0]) > 0) {
-                        가장_긴[0] = 나이;
-                    }
-                    return true;
-                });
-        return 가장_긴[0];
     }
 
     private Optional<String> 루프가_안_멎었다(Duration 가장_긴) {

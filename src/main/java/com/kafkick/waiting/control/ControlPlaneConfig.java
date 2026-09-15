@@ -402,6 +402,15 @@ public class ControlPlaneConfig {
     }
 
     /**
+     * 한 틱. <b>운영 값을 먼저 읽고 배분한다</b> — 뒤면 방금 바꾼 값이 한 틱 늦게 나간다. 두 읽기는 <b>동시에</b> 돈다 —
+     * 차례로 돌리면 레디스가 느린 날 각자 시한까지 기다려 틱의 절반을 먹고 회차가 잘린다.
+     */
+    Supplier<Mono<Void>> allocationTickStep(Supplier<Mono<Void>> capacity,
+            Supplier<Mono<Void>> tunables, Supplier<Mono<Void>> round) {
+        return () -> Mono.when(Mono.defer(capacity), Mono.defer(tunables)).then(Mono.defer(round));
+    }
+
+    /**
      * 배분 틱. <b>재료를 먼저 읽고 배분한다</b> — 안 읽으면 수집기가 첫 하한을 영영 답으로
      * 내고, 그 하한에서는 한산 통과 상한이 0 이라 대기열이 통째로 켜진다. 읽기가 실패하면
      * 수집을 건너뛴다.
@@ -427,9 +436,7 @@ public class ControlPlaneConfig {
                                 }),
                         holder::view,
                         HandoverSpacing.of(System::nanoTime, properties.scheduler().tick())),
-                // **운영 값을 먼저 읽고 배분한다.** 순서가 뒤면 방금 바꾼 값이
-                // 한 틱 늦게 나가고, 장애 중의 한 틱은 길다.
-                () -> capacity.refresh().then(tunables.refresh()).then(round.run()),
+                allocationTickStep(capacity::refresh, tunables::refresh, round::run),
                 nanos -> { }, allocationScheduler);
     }
 }

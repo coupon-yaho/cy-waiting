@@ -759,6 +759,22 @@ public final class AllocationRedisPort implements SnapshotSource {
     }
 
     /**
+     * 이 쿠폰들 가운데 가장 최근 적용의 나이. <b>적용 표의 남은 수명으로 잰다</b> — 적용과 잠금이 표에 같은 수명을 새로
+     * 걸므로 추가 쓰기 없이 나이가 나온다. 잠금도 적용으로 치므로 더 기다리는 쪽으로만 틀린다. 표가 없으면 비어 있다.
+     */
+    public Mono<Optional<Duration>> lastApplyAge(Collection<String> couponIds) {
+        return Flux.fromIterable(couponIds)
+                .flatMap(couponId -> redis.getExpire(RedisKeys.applyFence(couponId, shards, 0)),
+                        MAX_CONCURRENT_READS)
+                // 수명이 없는 표(0)는 나이를 모른다. 이 경로로는 안 생긴다.
+                .filter(left -> left.isPositive())
+                .map(left -> left.compareTo(fenceTtl) >= 0 ? Duration.ZERO : fenceTtl.minus(left))
+                .reduce((a, b) -> a.compareTo(b) <= 0 ? a : b)
+                .map(Optional::of)
+                .defaultIfEmpty(Optional.empty());
+    }
+
+    /**
      * 활성 쿠폰의 문을 새 임기로 잠근다. <b>승계 직후에 부른다</b> — 적용만으로는
      * 그 쿠폰에 크레딧이 갈 때까지 표에 옛 임기가 남고, 그 창에 유령이 먼저
      * 도착하면 자기 번호와 같아서 통과한다.
@@ -768,11 +784,6 @@ public final class AllocationRedisPort implements SnapshotSource {
      *
      * @return 잠근 쿠폰 수. 넘긴 수보다 적으면 그만큼 못 잠갔다
      */
-    /** 이 쿠폰들 가운데 가장 최근 적용의 나이. 적용 표가 하나도 없으면 비어 있다. */
-    public Mono<Optional<Duration>> lastApplyAge(Collection<String> couponIds) {
-        return Mono.just(Optional.empty());
-    }
-
     public Mono<Long> sealFences(Collection<String> couponIds, long fence) {
         // **승계에서 창을 닫는다.** 리더십을 잃으면 정리가 안 돌아 해제가 영영
         // 안 찍히고, 다음 사건은 진입이 이미 열려 있어 한 줄도 안 남는다.

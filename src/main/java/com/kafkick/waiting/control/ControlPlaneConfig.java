@@ -294,6 +294,12 @@ public class ControlPlaneConfig {
             // 갱신이 실패한 구간에 새로 활성이 된 쿠폰이 빠지고, 그 쿠폰이 정확히
             // 유령의 지연된 몫을 받는 자리다.
             Mono<Long> coupons = port.activeCoupons()
+                    // **잠그기 전에 앞 리더의 마지막 적용 나이를 읽는다** (CY-933). 잠금이 표의 수명을 새로 걸고,
+                    // 승계 대기는 발행 나이만 봐 발행이 잘린 채 넘겨받으면 첫 적용이 앞 적용과 겹친다.
+                    .flatMap(active -> port.lastApplyAge(active)
+                            .doOnNext(age -> age.ifPresent(pacer::appliedAgo))
+                            .onErrorResume(e -> Mono.empty())
+                            .then(Mono.just(active)))
                     .flatMap(active -> port.sealFences(active, fence)
                             .doOnNext(locked -> {
                                 if (locked < active.size()) {
@@ -432,7 +438,7 @@ public class ControlPlaneConfig {
         SealGate gate = SealGate.of(leadership::isLeader);
         Runnable gained = onLeadershipGained(collector, capacity, cleanup, sweeper, round, holder,
                 registry, sealFences(port, leadership, gate, properties.scheduler().tick(),
-                        allocationScheduler));
+                        allocationScheduler, applyPacer));
         return AllocationScheduler.of(properties.scheduler().tick(),
                 properties.scheduler().firstTickDelay(),
                 // **승계는 유예를 처음부터 준다.** 비리더 구간에 얼어 있던 실패

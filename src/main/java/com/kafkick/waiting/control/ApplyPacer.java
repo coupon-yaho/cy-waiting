@@ -48,6 +48,16 @@ public final class ApplyPacer {
 
     /** 이만큼 전에 적용이 나갔다. 승계한 노드가 앞 리더의 적용을 이어 받는다. */
     public void appliedAgo(Duration age) {
+        if (timer == null || age.isNegative()) {
+            return;
+        }
+        long at = timer.now(TimeUnit.NANOSECONDS) - age.toNanos();
+        // 제 적용이 더 최근이면 그것을 둔다. 나노 시각은 차이로만 견준다.
+        if (!applied || at - lastNanos > 0) {
+            lastNanos = at;
+            readNanos = 0;
+            applied = true;
+        }
     }
 
     /** 회차가 읽기를 시작했다. */

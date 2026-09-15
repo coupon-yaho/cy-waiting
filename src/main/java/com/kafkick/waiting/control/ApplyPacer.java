@@ -20,15 +20,16 @@ public final class ApplyPacer {
     /** 적용한 적이 있는가. <b>시각의 부호로 표시하지 않는다</b> — 단조 시계는 음수일 수 있다. */
     private volatile boolean applied;
 
-    /** 마지막 적용 시각(나노). */
+    /** 마지막 적용 시각(나노). <b>보낸 시각이다</b> — 끝난 시각으로 재면 주기가 적용 왕복만큼 더 는다. */
     private volatile long lastNanos;
 
-    /** 마지막 적용 회차가 읽는 데 쓴 시간(나노). 대기는 뺀다. */
+    /** 마지막 적용 회차가 읽는 데 쓴 시간(나노). 다음 시작을 이만큼 당겨야 회차 안 대기가 틱 시한을 안 먹는다. */
     private volatile long readNanos;
 
+    /** 회차가 읽기 시작을 알렸는가. 안 알린 회차는 읽기 시간을 0 으로 쳐 더 기다리는 쪽으로만 틀린다. */
     private volatile boolean started;
 
-    /** 마지막 회차가 읽기를 시작한 시각(나노). */
+    /** 마지막 회차가 읽기를 시작한 시각(나노). 적용 차례에서 빼 읽기 시간을 얻는다. */
     private volatile long startedNanos;
 
     private ApplyPacer(Duration spacing, Scheduler timer) {

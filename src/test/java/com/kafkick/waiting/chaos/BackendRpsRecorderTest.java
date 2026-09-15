@@ -257,4 +257,39 @@ class BackendRpsRecorderTest {
         assertThat(기록.sumIn(시작.plusSeconds(9), 시작.plusSeconds(10))).isZero();
         assertThat(기록.sumIn(시작.plusSeconds(2), 시작)).as("역구간").isZero();
     }
+
+    /** 총량도 끝 초를 안 센다. 끝을 넣으면 다음 구간의 첫 초가 두 번 세어진다 (CY-815). */
+    @Test
+    @DisplayName("구간_총량은_끝_초를_안_센다")
+    void 구간_총량은_끝_초를_안_센다() {
+        BackendRpsRecorder 기록 = 기록기();
+        기록.sample(시작);
+        초가_지난다(기록, 시작.plusSeconds(1), 3);
+        초가_지난다(기록, 시작.plusSeconds(2), 7);
+
+        assertThat(기록.sumIn(시작, 시작.plusSeconds(1))).isEqualTo(3);
+    }
+
+    /** 평균도 끝 초를 안 센다. 끝을 넣으면 분모는 그대로인데 분자만 한 초 늘어 평균이 부푼다 (CY-815). */
+    @Test
+    @DisplayName("구간_평균은_끝_초를_안_센다")
+    void 구간_평균은_끝_초를_안_센다() {
+        BackendRpsRecorder 기록 = 기록기();
+        기록.sample(시작);
+        초가_지난다(기록, 시작.plusSeconds(1), 3);
+        초가_지난다(기록, 시작.plusSeconds(2), 7);
+
+        assertThat(기록.averageRps(시작, 시작.plusSeconds(1))).isEqualTo(3.0);
+    }
+
+    /** 한 초가 안 되는 구간은 평균이 0 이다. 걸친 초에 도착이 있어도 0 으로 나누지 않는다 (CY-815). */
+    @Test
+    @DisplayName("한_초가_안_되는_구간은_도착이_있어도_평균이_영이다")
+    void 한_초가_안_되는_구간은_도착이_있어도_평균이_영이다() {
+        BackendRpsRecorder 기록 = 기록기();
+        기록.sample(시작);
+        초가_지난다(기록, 시작.plusSeconds(1), 5);
+
+        assertThat(기록.averageRps(시작.plusMillis(500), 시작.plusMillis(1_400))).isZero();
+    }
 }

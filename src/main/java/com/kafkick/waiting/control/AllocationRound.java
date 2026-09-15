@@ -16,6 +16,7 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -492,7 +493,8 @@ public final class AllocationRound {
         // 전진시키면 다음 발행이 실제로 나간 값의 배수에서 시작한다.
         ReleaseRamp.State before = releaseRamp.snapshot();
         long credit = releaseRamp.next(allowed, Math.max(floorNow, r1Minimum), gatedNow);
-        Map<String, Long> granted = new LinkedHashMap<>();
+        // 적용이 동시에 돌며 실패한 몫을 접으므로 잠근다. 순서는 발행이 쓰므로 그대로 둔다.
+        Map<String, Long> granted = Collections.synchronizedMap(new LinkedHashMap<>());
         allocator.allocate(credit, collected).forEach(g -> granted.put(g.couponId(), g.credit()));
 
         if (lostLeadership()) {
@@ -503,7 +505,9 @@ public final class AllocationRound {
         AtomicBoolean anyFailed = new AtomicBoolean();
         AtomicBoolean published = new AtomicBoolean();
         return Flux.fromIterable(collected)
-                .concatMap(demand -> applyOne(demand, granted, anyFailed))
+                // **동시에 보낸다.** 차례로 보내면 왕복이 쿠폰 수만큼 쌓여 레디스가 느린 날 회차가 틱을
+                // 넘기고 발행이 잘린다. 옛 임기의 쓰기는 적용 스크립트의 펜스가 막는다.
+                .flatMap(demand -> applyOne(demand, granted, anyFailed), Math.max(1, collected.size()))
                 .reduce(0L, Long::sum)
                 // **실제로 들어온 수는 나눠 준 수와 다르다.** 큐가 몫보다 짧으면
                 // 남고, 적용이 실패하면 0 이다. 안 남기면 크레딧이 어디서 새는지

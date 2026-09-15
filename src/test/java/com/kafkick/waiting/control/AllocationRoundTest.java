@@ -31,6 +31,7 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -44,6 +45,7 @@ import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 import reactor.core.Disposable;
 import reactor.core.publisher.Mono;
+import reactor.test.scheduler.VirtualTimeScheduler;
 
 /**
  * 한 회차. 수요를 모아 크레딧을 나누고 적용한 뒤 발행한다.
@@ -2004,6 +2006,39 @@ class AllocationRoundTest {
         assertThat(적용).containsExactly("c1");
         // 발행도 안 나간다. 나갔으면 새 리더가 나눠 준 몫을 한 번 더 광고한다.
         assertThat(발행).isEmpty();
+    }
+
+    /**
+     * <b>쿠폰별 적용은 동시에 나간다</b> (CY-927). 차례로 보내면 레디스 왕복이 쿠폰 수만큼 쌓여 지연 200ms 에서 회차가
+     * 틱을 넘기고 발행이 절반으로 준다. 옛 임기의 쓰기는 적용 스크립트의 펜스가 막는다 — 위 순차 재확인 시험은 동기로
+     * 잃는 경우만 남는다.
+     */
+    @Test
+    @DisplayName("쿠폰별_적용을_동시에_보낸다")
+    void 쿠폰별_적용을_동시에_보낸다() {
+        VirtualTimeScheduler 시계 = VirtualTimeScheduler.create();
+        List<Long> 보낸_시각 = new CopyOnWriteArrayList<>();
+        AllocationRound round = AllocationRound.of(
+                () -> true,
+                () -> Mono.just(new TimedDemands(
+                        List.of(new CouponDemand("c1", 10, 100), new CouponDemand("c2", 10, 100),
+                                new CouponDemand("c3", 10, 100)),
+                        읽은_시각)),
+                () -> 30L, () -> 1,
+                grant -> {
+                    보낸_시각.add(시계.now(TimeUnit.MILLISECONDS));
+                    return Mono.delay(Duration.ofMillis(100), 시계).thenReturn(grant.credit());
+                },
+                hash -> Mono.empty(),
+                () -> Instant.ofEpochSecond(1_700_000_000L),
+                () -> Mono.just(CreditSmoother.of(1.0)),
+                SnapshotCodec.create(), () -> 0L);
+
+        round.run().subscribe();
+        시계.advanceTime();
+
+        assertThat(보낸_시각).as("셋이 같은 순간에 나간다").containsExactly(0L, 0L, 0L);
+        시계.advanceTimeBy(Duration.ofMillis(100));
     }
 
     @Test

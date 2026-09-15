@@ -103,8 +103,7 @@ public final class AllocationRedisPort implements SnapshotSource {
      * <p>리더가 매 틱 다시 쓰므로 막아야 할 창이 리스 하나 더하기 틱뿐이다. 길게
      * 두면 시계가 뒤로 간 리더가 그 시간 내내 발행을 못 하고, 그동안 전 노드가
      * 얼어붙은 재료를 읽는다 — 이 울타리가 막으려던 것보다 나쁘다. 짧아서 생기는
-     * 구멍은 없다: 울타리 거절은 수명을 갱신하지 않아 만료는 리스를 잃었다는 뜻이고,
-     * 상한이나 시한으로 못 나간 발행은 수명을 다시 건다 (CY-932).
+     * 구멍도 없다: 울타리 거절만 수명을 안 갱신하고, 못 나간 발행은 다시 건다 (CY-932).
      */
     private static final Duration MIN_SNAPSHOT_FENCE_TTL = Duration.ofSeconds(10);
 

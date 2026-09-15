@@ -1455,6 +1455,40 @@ class AllocationRoundTest {
     }
 
     /**
+     * <b>승계가 예산 초과 창도 닫는다</b> (CY-824). 창이 리더 메모리라 죽은 리더가 연 채로 사라지면 진입 경고 하나에
+     * 해제가 영영 안 생긴다. 다음 사건은 이미 열려 있어 한 줄도 안 남는다.
+     */
+    @Test
+    @DisplayName("승계가_예산_초과_창을_닫는다")
+    void 승계가_예산_초과_창을_닫는다() {
+        AtomicReference<CircuitState> 서킷 = new AtomicReference<>(CircuitState.CLOSED);
+        // 하한이 관측보다 높으면 나눠 준 예산이 뒷단이 받는다는 것을 넘는다.
+        AllocationRound round = 서킷_있는_회차(서킷, 10, () -> 5_000, 1,
+                List.of(new CouponDemand("c1", 20_000, 1_000_000)), () -> true);
+        round.run().block();
+        assertThat(로그_메시지()).anyMatch(m -> m.startsWith("뒷단이 받는다는 것보다 많이 나눠 준다"));
+
+        round.leadershipAcquired();
+
+        assertThat(로그_메시지()).as("닫으면서 그동안의 틱을 남긴다")
+                .anyMatch(m -> m.startsWith("리더십이 갈렸다 — 배분 예산 초과 창을 닫는다"));
+    }
+
+    /** 적용 실패 창도 같다. 열어 둔 채 승계하면 새 리더의 첫 복귀 로그가 남의 구간까지 센다. */
+    @Test
+    @DisplayName("승계가_적용_실패_창을_닫는다")
+    void 승계가_적용_실패_창을_닫는다() {
+        AllocationRound round = 비동기_회차(() -> true, List.of(new CouponDemand("c1", 10, 100)),
+                grant -> Mono.error(new IllegalStateException("끊겼다")));
+        round.run().block();
+        assertThat(로그_메시지()).anyMatch(m -> m.startsWith("배분 적용 실패"));
+
+        round.leadershipAcquired();
+
+        assertThat(로그_메시지()).anyMatch(m -> m.startsWith("리더십이 갈렸다 — 적용 실패 창을 닫는다"));
+    }
+
+    /**
      * <b>접힌 회차는 램프 기준을 안 움직인다.</b> 발행이 안 된 회차가 기준을
      * 올리면 다음 발행이 실제로 나간 값의 배수에서 시작한다.
      */

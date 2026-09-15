@@ -1,9 +1,11 @@
 package com.kafkick.waiting.adapter.redis;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -69,6 +71,25 @@ class ScriptsUnderMemoryLimitTest extends RedisContainerSupport {
     @DisplayName("메모리_상한에서도_발행의_문을_잠근다")
     void 메모리_상한에서도_발행의_문을_잠근다() throws Exception {
         메모리_상한에서(() -> assertThat(port.sealSnapshotFence(FENCE).block(WAIT)).isEqualTo(1));
+    }
+
+    /**
+     * <b>상한 중 발행이 거부되면 발행의 문을 다시 잠근다.</b> 그 표는 발행이 매 틱 수명을 새로 거는데, 상한이 수명보다
+     * 길면 봉인이 사라진 채 풀려 멎었던 옛 리더의 발행이 새 리더보다 먼저 들어간다.
+     */
+    @Test
+    @DisplayName("메모리_상한에서_발행이_거부되면_발행의_문을_다시_잠근다")
+    void 메모리_상한에서_발행이_거부되면_발행의_문을_다시_잠근다() throws Exception {
+        redis.opsForValue().set(RedisKeys.SNAPSHOT_FENCE, Long.toString(FENCE), Duration.ofSeconds(2)).block(WAIT);
+
+        메모리_상한에서(() -> {
+            assertThatThrownBy(() -> port.publish(Map.of("f", "v"), FENCE).block(WAIT))
+                    .as("발행은 사람 수만큼 쓰는 스크립트라 거부된다").isNotInstanceOf(AllocationRedisPort.FencedOutException.class);
+
+            assertThat(redis.getExpire(RedisKeys.SNAPSHOT_FENCE).block(WAIT))
+                    .as("수명을 다시 걸었다").isGreaterThan(Duration.ofSeconds(2));
+            assertThat(redis.opsForValue().get(RedisKeys.SNAPSHOT_FENCE).block(WAIT)).isEqualTo(Long.toString(FENCE));
+        });
     }
 
     /** 매진 큐 삭제는 메모리를 줄이는 길이다. 막히면 풀리는 길이 수명 만료와 운영자뿐이다. */

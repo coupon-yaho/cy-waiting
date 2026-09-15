@@ -281,6 +281,12 @@ public class ControlPlaneConfig {
      */
     Runnable sealFences(AllocationRedisPort port, Leadership leadership, SealGate gate,
             Duration deadline, Scheduler scheduler) {
+        return sealFences(port, leadership, gate, deadline, scheduler, ApplyPacer.none());
+    }
+
+    /** 잠그기 전에 앞 리더의 마지막 적용 나이를 페이서에 넘긴다. */
+    Runnable sealFences(AllocationRedisPort port, Leadership leadership, SealGate gate,
+            Duration deadline, Scheduler scheduler, ApplyPacer pacer) {
         return () -> {
             long generation = gate.sealing();
             long fence = leadership.fence();

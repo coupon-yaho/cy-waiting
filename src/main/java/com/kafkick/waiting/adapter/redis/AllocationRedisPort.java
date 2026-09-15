@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -767,6 +768,11 @@ public final class AllocationRedisPort implements SnapshotSource {
      *
      * @return 잠근 쿠폰 수. 넘긴 수보다 적으면 그만큼 못 잠갔다
      */
+    /** 이 쿠폰들 가운데 가장 최근 적용의 나이. 적용 표가 하나도 없으면 비어 있다. */
+    public Mono<Optional<Duration>> lastApplyAge(Collection<String> couponIds) {
+        return Mono.just(Optional.empty());
+    }
+
     public Mono<Long> sealFences(Collection<String> couponIds, long fence) {
         // **승계에서 창을 닫는다.** 리더십을 잃으면 정리가 안 돌아 해제가 영영
         // 안 찍히고, 다음 사건은 진입이 이미 열려 있어 한 줄도 안 남는다.

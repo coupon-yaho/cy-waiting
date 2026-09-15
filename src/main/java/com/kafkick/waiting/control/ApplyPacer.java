@@ -46,6 +46,10 @@ public final class ApplyPacer {
         return NONE;
     }
 
+    /** 이만큼 전에 적용이 나갔다. 승계한 노드가 앞 리더의 적용을 이어 받는다. */
+    public void appliedAgo(Duration age) {
+    }
+
     /** 회차가 읽기를 시작했다. */
     public void roundStarted() {
         if (timer != null) {

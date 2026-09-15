@@ -137,6 +137,40 @@ class SealFencesWiringTest {
         }
     }
 
+    /**
+     * <b>승계가 앞 리더의 마지막 적용에서 한 틱을 잇는다</b> (CY-933). 승계 대기는 발행 나이만 봐서, 발행이 잘리고 적용만
+     * 들어간 뒤 넘겨받으면 새 리더의 첫 적용이 1초 안에 겹쳐 두 틱 몫이 들어간다.
+     */
+    @Test
+    @DisplayName("승계가_앞_리더의_마지막_적용에서_간격을_잇는다")
+    void 승계가_앞_리더의_마지막_적용에서_간격을_잇는다() {
+        // 300ms 전에 앞 리더가 적용했다. 적용은 표에 운영 수명(1시간)을 새로 건다.
+        redis.opsForValue().set(RedisKeys.applyFence(COUPON, SHARDS, 0), Long.toString(임기 - 1),
+                Duration.ofHours(1).minusMillis(300)).block(기다림);
+        SealGate gate = SealGate.of(() -> true);
+        ApplyPacer pacer = ApplyPacer.of(Duration.ofSeconds(1), Schedulers.parallel());
+
+        new ControlPlaneConfig().sealFences(port, 리더가_된다(), gate, 기다림, Schedulers.parallel(), pacer)
+                .run();
+        Awaitility.await().atMost(기다림).until(gate::getAsBoolean);
+
+        assertThat(pacer.holdOff()).as("한 틱에서 앞 적용의 나이를 뺀 만큼 남는다")
+                .isGreaterThan(Duration.ofMillis(300)).isLessThanOrEqualTo(Duration.ofMillis(700));
+    }
+
+    @Test
+    @DisplayName("앞_적용이_없으면_간격을_안_둔다")
+    void 앞_적용이_없으면_간격을_안_둔다() {
+        SealGate gate = SealGate.of(() -> true);
+        ApplyPacer pacer = ApplyPacer.of(Duration.ofSeconds(1), Schedulers.parallel());
+
+        new ControlPlaneConfig().sealFences(port, 리더가_된다(), gate, 기다림, Schedulers.parallel(), pacer)
+                .run();
+        Awaitility.await().atMost(기다림).until(gate::getAsBoolean);
+
+        assertThat(pacer.holdOff()).isZero();
+    }
+
     private Leadership 리더가_된다() {
         Leadership leadership = Leadership.of("node-1", 리스, 시도,
                 () -> Mono.just(LeaderLock.mine("node-1", 리스.toMillis(), 임기)), Mono::empty);

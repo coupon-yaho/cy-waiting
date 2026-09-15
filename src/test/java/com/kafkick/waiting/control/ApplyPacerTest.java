@@ -84,6 +84,21 @@ class ApplyPacerTest {
         assertThat(pacer.holdOff()).as("이미 지났다").isZero();
     }
 
+    /** 승계한 노드는 앞 리더의 마지막 적용에서 한 틱을 잇는다. 제 적용만 보면 첫 적용이 앞 리더 것과 겹친다. */
+    @Test
+    @DisplayName("앞_리더의_적용_나이를_이어_받는다")
+    void 앞_리더의_적용_나이를_이어_받는다() {
+        ApplyPacer pacer = ApplyPacer.of(TICK, 시계);
+        pacer.appliedAgo(Duration.ofMillis(300));
+
+        assertThat(pacer.holdOff()).isEqualTo(Duration.ofMillis(700));
+        차례를_받는다(pacer);
+        시계.advanceTimeBy(Duration.ofMillis(699));
+        assertThat(차례).isEmpty();
+        시계.advanceTimeBy(Duration.ofMillis(1));
+        assertThat(차례).containsExactly(700L);
+    }
+
     @Test
     @DisplayName("한_틱이_넘게_지났으면_안_기다린다")
     void 한_틱이_넘게_지났으면_안_기다린다() {

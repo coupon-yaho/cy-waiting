@@ -115,6 +115,35 @@ public final class RedisFaults implements AutoCloseable {
         return client.connect();
     }
 
+    /**
+     * 메모리 상한을 사용량 아래로 내려 쓰기를 거부하게 한다. <b>실제로 거부되는지 확인한다</b> — 안 먹었으면 평시를 잰다.
+     *
+     * @return 되돌릴 원래 상한
+     */
+    public String 메모리_상한을_내린다() {
+        try (StatefulRedisConnection<String, String> 연결 = 연결한다()) {
+            String 원래 = 연결.sync().configGet("maxmemory").get("maxmemory");
+            연결.sync().configSet("maxmemory", "1");
+            try {
+                연결.sync().set("chaos:oom-probe", "x");
+            } catch (RuntimeException e) {
+                if (String.valueOf(e.getMessage()).contains("OOM")) {
+                    return 원래;
+                }
+                throw e;
+            }
+            연결.sync().configSet("maxmemory", 원래);
+            throw new IllegalStateException("상한을 내렸는데 쓰기가 거부되지 않는다");
+        }
+    }
+
+    public void 메모리_상한을_되돌린다(String 원래) {
+        try (StatefulRedisConnection<String, String> 연결 = 연결한다()) {
+            연결.sync().configSet("maxmemory", 원래);
+            연결.sync().del("chaos:oom-probe");
+        }
+    }
+
     /** 프로세스를 끊는다. 곱게 내리지 않는다 — 장애는 절차를 밟지 않는다. */
     public void 끊는다() {
         container.getDockerClient()

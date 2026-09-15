@@ -38,6 +38,15 @@ public final class ApplyPacer {
         return NONE;
     }
 
+    /** 회차가 읽기를 시작했다. */
+    public void roundStarted() {
+    }
+
+    /** 다음 회차를 이만큼 늦게 시작해야 적용이 차례를 안 기다린다. */
+    public Duration holdOff() {
+        return Duration.ZERO;
+    }
+
     /** 차례가 올 때까지 기다리고 이번 적용을 표시한다. 기다리다 취소되면 표시하지 않는다. */
     public Mono<Void> turn() {
         if (timer == null) {

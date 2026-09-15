@@ -48,6 +48,42 @@ class ApplyPacerTest {
         assertThat(차례).containsExactly(0L, 1000L);
     }
 
+    /** 기다린 차례는 기다림이 끝난 시각으로 표시한다. 기다리기 전 시각이면 다음 차례가 그만큼 당겨진다. */
+    @Test
+    @DisplayName("기다린_차례는_기다림이_끝난_시각으로_표시한다")
+    void 기다린_차례는_기다림이_끝난_시각으로_표시한다() {
+        ApplyPacer pacer = ApplyPacer.of(TICK, 시계);
+        차례를_받는다(pacer);
+        시계.advanceTimeBy(Duration.ofMillis(300));
+        차례를_받는다(pacer);
+        시계.advanceTimeBy(Duration.ofMillis(1_000));
+
+        차례를_받는다(pacer);
+        시계.advanceTimeBy(Duration.ofMillis(700));
+
+        assertThat(차례).containsExactly(0L, 1000L, 2000L);
+    }
+
+    /**
+     * <b>다음 회차는 앞 적용에서 한 틱 뒤, 앞 회차가 읽는 데 쓴 만큼 당겨 시작한다</b> (CY-927). 그러면 회차 안의 대기가
+     * 지연의 흔들림만큼으로 줄어 틱 시한을 안 먹는다.
+     */
+    @Test
+    @DisplayName("다음_시작은_앞_회차의_읽기만큼_당긴다")
+    void 다음_시작은_앞_회차의_읽기만큼_당긴다() {
+        ApplyPacer pacer = ApplyPacer.of(TICK, 시계);
+        assertThat(pacer.holdOff()).as("적용한 적이 없다").isZero();
+
+        pacer.roundStarted();
+        시계.advanceTimeBy(Duration.ofMillis(200));
+        차례를_받는다(pacer);
+        시계.advanceTimeBy(Duration.ofMillis(300));
+
+        assertThat(pacer.holdOff()).isEqualTo(Duration.ofMillis(500));
+        시계.advanceTimeBy(Duration.ofMillis(600));
+        assertThat(pacer.holdOff()).as("이미 지났다").isZero();
+    }
+
     @Test
     @DisplayName("한_틱이_넘게_지났으면_안_기다린다")
     void 한_틱이_넘게_지났으면_안_기다린다() {

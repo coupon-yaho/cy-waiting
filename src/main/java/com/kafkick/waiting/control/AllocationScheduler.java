@@ -70,6 +70,13 @@ public final class AllocationScheduler {
         return new AllocationScheduler(tick, firstTickDelay, isLeader, allocate, lagNanos, timer);
     }
 
+    /** 다음 회차 시작을 {@code holdOff} 만큼은 미룬다. */
+    public static AllocationScheduler of(Duration tick, Duration firstTickDelay,
+            BooleanSupplier isLeader, Supplier<Mono<Void>> allocate, LongConsumer lagNanos,
+            Scheduler timer, Supplier<Duration> holdOff) {
+        return new AllocationScheduler(tick, firstTickDelay, isLeader, allocate, lagNanos, timer);
+    }
+
     public void start() {
         if (!running.compareAndSet(false, true)) {
             return;

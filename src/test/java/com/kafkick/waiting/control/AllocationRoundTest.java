@@ -1987,11 +1987,51 @@ class AllocationRoundTest {
                             .thenReturn(grant.credit());
                 });
 
-        round.run().subscribe();
+        AtomicBoolean 끝났다 = new AtomicBoolean();
+        round.run().doOnSuccess(v -> 끝났다.set(true)).subscribe();
         시계.advanceTimeBy(Duration.ofMillis(300));
 
         assertThat(적용).as("둘 다 잃기 전에 나갔다").containsExactlyInAnyOrder("c1", "c2");
         assertThat(발행).isEmpty();
+        assertThat(끝났다).as("발행을 접고 회차는 끝난다").isTrue();
+    }
+
+    /** 차례를 기다리는 사이에 잃으면 적용을 안 보낸다. 새 리더가 펜스를 올리기 전이면 옛 임기의 적용이 들어간다. */
+    @Test
+    @DisplayName("차례를_기다리다_잃으면_적용하지_않는다")
+    void 차례를_기다리다_잃으면_적용하지_않는다() {
+        VirtualTimeScheduler 시계 = VirtualTimeScheduler.create();
+        AtomicBoolean 리더 = new AtomicBoolean(true);
+        AllocationRound round = 비동기_회차(리더::get, List.of(new CouponDemand("c1", 10, 100)),
+                grant -> {
+                    적용.add(grant.couponId());
+                    return Mono.just(grant.credit());
+                });
+        round.pacedBy(ApplyPacer.of(Duration.ofSeconds(1), 시계));
+        round.run().subscribe();
+        시계.advanceTimeBy(Duration.ofMillis(300));
+
+        round.run().subscribe();
+        리더.set(false);
+        시계.advanceTimeBy(Duration.ofSeconds(1));
+
+        assertThat(적용).containsExactly("c1");
+    }
+
+    /** 회차는 읽기를 시작할 때 페이서에 알린다. 안 알리면 다음 시작을 읽기만큼 당기지 못해 대기가 틱 시한을 먹는다. */
+    @Test
+    @DisplayName("회차가_읽기_시작을_알린다")
+    void 회차가_읽기_시작을_알린다() {
+        VirtualTimeScheduler 시계 = VirtualTimeScheduler.create();
+        ApplyPacer pacer = ApplyPacer.of(Duration.ofSeconds(1), 시계);
+        AllocationRound round = 비동기_회차(() -> true, List.of(new CouponDemand("c1", 10, 100)),
+                grant -> Mono.just(grant.credit()));
+        round.pacedBy(pacer);
+
+        round.run(Mono.delay(Duration.ofMillis(200), 시계).then()).subscribe();
+        시계.advanceTimeBy(Duration.ofMillis(200));
+
+        assertThat(pacer.holdOff()).isEqualTo(Duration.ofMillis(800));
     }
 
     private AllocationRound 비동기_회차(BooleanSupplier 리더, List<CouponDemand> 수요,
@@ -2082,6 +2122,12 @@ class AllocationRoundTest {
 
         시계.advanceTimeBy(Duration.ofMillis(1));
         assertThat(적용_시각).containsExactly(0L, 1000L);
+
+        // 기다린 적용 뒤의 회차도 그 적용에서 한 틱을 띄운다.
+        시계.advanceTimeBy(Duration.ofMillis(300));
+        round.run().subscribe();
+        시계.advanceTimeBy(Duration.ofMillis(700));
+        assertThat(적용_시각).containsExactly(0L, 1000L, 2000L);
     }
 
     /** 몫이 없는 회차는 발행만 한다. 간격을 기다리면 낡음 판정이 스케줄러가 멎은 것으로 본다. */

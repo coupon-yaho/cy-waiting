@@ -166,6 +166,27 @@ class AllocationSchedulerTest {
                 .isEqualTo(한_회차_길이.plus(TICK.dividedBy(4)).toMillis()));
     }
 
+    /**
+     * <b>적용 차례가 멀면 시작을 그만큼 미룬다</b> (CY-927). 회차 안에서 차례를 기다리면 그 대기가 틱 시한을 먹어
+     * 발행이 잘린다.
+     */
+    @Test
+    @DisplayName("적용_차례가_멀면_시작을_미룬다")
+    void 적용_차례가_멀면_시작을_미룬다() {
+        VirtualTimeScheduler timer = VirtualTimeScheduler.create();
+        List<Long> 시작 = new CopyOnWriteArrayList<>();
+        AllocationScheduler scheduler = AllocationScheduler.of(TICK, FIRST, 리더::get,
+                () -> Mono.fromRunnable(() -> 시작.add(timer.now(TimeUnit.MILLISECONDS))), 잰_지연::add, timer,
+                () -> Duration.ofMillis(1_400));
+        scheduler.start();
+
+        timer.advanceTimeBy(FIRST.plus(Duration.ofMillis(1_399)));
+        assertThat(시작).hasSize(1);
+        timer.advanceTimeBy(Duration.ofMillis(1));
+        assertThat(시작).hasSize(2);
+        scheduler.stop(() -> { });
+    }
+
     /** 틱에서 잘린 회차도 걸린 시간을 적는다. 안 적으면 앞 회차 값으로 곧바로 다음을 돌아 느린 레디스를 쉼 없이 두드린다. */
     @Test
     @DisplayName("틱에서_잘린_회차_뒤에도_최소_간격을_쉰다")

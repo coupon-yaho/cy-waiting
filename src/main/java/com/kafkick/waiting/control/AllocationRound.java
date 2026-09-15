@@ -302,12 +302,20 @@ public final class AllocationRound {
     }
 
     public Mono<Void> run() {
+        return run(Mono.empty());
+    }
+
+    /**
+     * 운영값 읽기와 <b>동시에</b> 수요를 읽고, 두 읽기가 다 끝난 뒤에 나눈다. 앞에 차례로 두면 레디스가 느린 날 그
+     * 왕복이 틱을 먹고, 나누기를 먼저 하면 방금 바꾼 운영값이 한 틱 늦게 나간다.
+     */
+    public Mono<Void> run(Mono<Void> reads) {
         // **재료를 읽은 시각을 재료와 같이 받는다.** 회차가 끝난 시각으로 찍으면
         // 나이가 회차 지속 시간만큼 어리고, 리더 벽시계로 찍으면 노드마다 다르게
         // 낡는다 — 둘 다 낡음 판정을 흔든다.
-        return seeded().then(demands.get()
-                .flatMap(read -> allocate(read.demands(),
-                        Instant.ofEpochSecond(read.readAt()))));
+        return Mono.zip(seeded().then(demands.get()), reads.thenReturn(Boolean.TRUE))
+                .flatMap(both -> allocate(both.getT1().demands(),
+                        Instant.ofEpochSecond(both.getT1().readAt())));
     }
 
     /**

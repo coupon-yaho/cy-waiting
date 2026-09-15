@@ -402,12 +402,12 @@ public class ControlPlaneConfig {
     }
 
     /**
-     * 한 틱. <b>운영 값을 먼저 읽고 배분한다</b> — 뒤면 방금 바꾼 값이 한 틱 늦게 나간다. 두 읽기는 <b>동시에</b> 돈다 —
-     * 차례로 돌리면 레디스가 느린 날 각자 시한까지 기다려 틱의 절반을 먹고 회차가 잘린다.
+     * 한 틱. 가용량과 운영값을 <b>동시에</b> 읽어 회차에 넘기고, 회차는 그 읽기와 동시에 수요를 읽는다 — 차례로 두면
+     * 레디스가 느린 날 각자 시한까지 기다려 틱을 먹고 회차가 잘린다. 나누기는 회차가 읽기 뒤로 미룬다.
      */
     Supplier<Mono<Void>> allocationTickStep(Supplier<Mono<Void>> capacity,
-            Supplier<Mono<Void>> tunables, Supplier<Mono<Void>> round) {
-        return () -> Mono.when(Mono.defer(capacity), Mono.defer(tunables)).then(Mono.defer(round));
+            Supplier<Mono<Void>> tunables, Function<Mono<Void>, Mono<Void>> round) {
+        return () -> round.apply(Mono.when(Mono.defer(capacity), Mono.defer(tunables)));
     }
 
     /**

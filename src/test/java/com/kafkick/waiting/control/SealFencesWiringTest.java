@@ -144,11 +144,11 @@ class SealFencesWiringTest {
     @Test
     @DisplayName("승계가_앞_리더의_마지막_적용에서_간격을_잇는다")
     void 승계가_앞_리더의_마지막_적용에서_간격을_잇는다() {
-        // 300ms 전에 앞 리더가 적용했다. 적용은 표에 운영 수명(1시간)을 새로 건다.
+        // 앞 리더가 이 노드(1시간)보다 긴 수명으로 표를 썼다. 나이가 0 으로 잘려 한 틱을 다 기다린다 —
+        // 레디스의 실제 시간이 흘러도 값이 안 바뀐다. 나이 변환 자체는 FenceSealTest 가 본다.
         redis.opsForValue().set(RedisKeys.applyFence(COUPON, SHARDS, 0), Long.toString(임기 - 1),
-                Duration.ofHours(1).minusMillis(300)).block(기다림);
+                Duration.ofHours(2)).block(기다림);
         SealGate gate = SealGate.of(() -> true);
-        // 페이서 시계는 가상이라 안 흐른다. 흐르는 것은 레디스 표의 수명뿐이고, 그것은 나이를 늘리기만 한다.
         VirtualTimeScheduler 페이서_시계 = VirtualTimeScheduler.create();
         ApplyPacer pacer = ApplyPacer.of(Duration.ofSeconds(1), 페이서_시계);
 
@@ -156,9 +156,8 @@ class SealFencesWiringTest {
                 .run();
         Awaitility.await().atMost(기다림).until(gate::getAsBoolean);
 
-        assertThat(pacer.holdOff()).as("한 틱에서 300ms 이상인 나이를 뺐다")
-                .isPositive().isLessThanOrEqualTo(Duration.ofMillis(700));
-        페이서_시계.advanceTimeBy(Duration.ofMillis(700));
+        assertThat(pacer.holdOff()).as("앞 적용이 방금이라 한 틱을 다 기다린다").isEqualTo(Duration.ofSeconds(1));
+        페이서_시계.advanceTimeBy(Duration.ofSeconds(1));
         assertThat(pacer.holdOff()).as("앞 적용에서 한 틱이 지났다").isZero();
     }
 

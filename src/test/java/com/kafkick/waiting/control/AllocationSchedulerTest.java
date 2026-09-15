@@ -8,6 +8,7 @@ import ch.qos.logback.core.read.ListAppender;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
@@ -126,24 +127,43 @@ class AllocationSchedulerTest {
         scheduler.stop(() -> { });
     }
 
-    @Test
-    @DisplayName("한_회차가_끝나야_다음_지연이_시작된다")
-    void 한_회차가_끝나야_다음_지연이_시작된다() {
-        // 고정 간격이면 느린 구간에 틱이 쌓였다가 회복하는 순간 한꺼번에 터진다.
-        // 한 회차가 0.6틱 걸리면 완료 후 지연은 1.6틱마다 도는데, 고정 간격은
-        // 그대로 1틱마다 돈다 — 3틱을 흘리면 2번과 3번으로 갈린다.
+    /** 회차가 이만큼 걸릴 때 회차 시작 시각들의 간격(ms). 처음 셋만 본다. */
+    private List<Long> 시작_간격(Duration 한_회차_길이) {
         VirtualTimeScheduler timer = VirtualTimeScheduler.create();
-        Duration 한_회차_길이 = TICK.multipliedBy(6).dividedBy(10);
+        List<Long> 시작 = new CopyOnWriteArrayList<>();
         AllocationScheduler scheduler = scheduler(timer, () -> Mono.defer(() -> {
-            배분.incrementAndGet();
+            시작.add(timer.now(TimeUnit.MILLISECONDS));
             return Mono.<Void>empty().delaySubscription(한_회차_길이, timer);
         }));
         scheduler.start();
-
-        timer.advanceTimeBy(FIRST.plus(TICK.multipliedBy(3)));
-
-        assertThat(배분).hasValue(2);
+        // 완료 뒤 한 틱을 통째로 쉬는 옛 동작도 셋은 시작하게 넉넉히 흘린다. 모자라면 간격이 아니라 개수로 빨개진다.
+        timer.advanceTimeBy(FIRST.plus(TICK.multipliedBy(4)));
         scheduler.stop(() -> { });
+        return List.of(시작.get(1) - 시작.get(0), 시작.get(2) - 시작.get(1));
+    }
+
+    /**
+     * <b>틱 간격을 지킨다</b> (CY-927). 완료 뒤 한 틱을 통째로 쉬면 회차가 걸린 만큼 주기가 늘어, 레디스가 느린 날
+     * 회차가 1초 걸리면 2초마다 한 번 발행한다 — 지연 200ms 에서 발행이 절반이었다.
+     */
+    @Test
+    @DisplayName("회차가_틱보다_짧으면_시작_간격이_한_틱이다")
+    void 회차가_틱보다_짧으면_시작_간격이_한_틱이다() {
+        assertThat(시작_간격(TICK.multipliedBy(6).dividedBy(10)))
+                .containsExactly(TICK.toMillis(), TICK.toMillis());
+    }
+
+    /**
+     * <b>끝난 뒤 최소 간격은 쉰다.</b> 고정 간격이면 느린 구간에 틱이 쌓였다가 회복하는 순간 한꺼번에 터지고, 틱을
+     * 다 쓴 회차 뒤에 곧바로 다음을 돌면 느린 레디스를 쉼 없이 두드린다. 최소 간격은 틱의 4분의 1이다.
+     */
+    @Test
+    @DisplayName("회차가_길면_끝난_뒤_최소_간격을_쉰다")
+    void 회차가_길면_끝난_뒤_최소_간격을_쉰다() {
+        Duration 한_회차_길이 = TICK.multipliedBy(9).dividedBy(10);
+
+        assertThat(시작_간격(한_회차_길이)).allSatisfy(간격 -> assertThat(간격)
+                .isEqualTo(한_회차_길이.plus(TICK.dividedBy(4)).toMillis()));
     }
 
     @Test

@@ -811,6 +811,9 @@ public final class AllocationRedisPort implements SnapshotSource {
 
     /** 쿠폰 하나의 잠금 결과. 수명이 없거나(-1) 표가 없으면(-2) 나이를 모른다. */
     private FenceSeal sealOf(List<?> reply) {
+        if (reply.size() != 2) {
+            throw new IllegalStateException("잠금 응답은 두 칸이어야 한다: " + reply);
+        }
         long locked = ((Number) reply.get(0)).longValue();
         long left = ((Number) reply.get(1)).longValue();
         if (left <= 0) {

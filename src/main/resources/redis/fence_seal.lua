@@ -5,7 +5,13 @@
 -- ARGV[1]  잠글 임기. 0 이면 리더가 아니다
 -- ARGV[2]  울타리 표의 수명(ms)
 --
--- 반환  1 이면 잠갔다, 0 이면 안 했다
+-- 반환  {잠갔나, 덮기 전 입장 표의 남은 수명(ms)}
+--   잠갔나      1 이면 잠갔다, 0 이면 안 했다
+--   남은 수명   PTTL 그대로다. 표가 없으면 -2, 수명이 없으면 -1
+--
+-- **덮기 전에 수명을 읽는다.** 적용이 통과할 때마다 표에 같은 수명을 새로 걸므로 남은 수명이 곧
+-- 마지막 적용의 나이다. 따로 읽으면 쿠폰마다 왕복이 늘어 승계 잠금의 시한을 먹고, 읽은 뒤 잠그기 전에
+-- 들어온 앞 리더의 적용이 나이에서 빠진다.
 --
 -- **한 번에 잠근다.** 표마다 왕복하면 승계 뒤 배분이 안 도는 시간이 그만큼
 -- 곱해진다 — 쿠폰이 만 개면 초 단위다. 두 키는 태그가 같아 슬롯이 안 갈린다.
@@ -36,9 +42,10 @@ end
 -- **인자를 다 본 뒤에 분기한다.** 먼저 되돌아가면 수명이 쓰레기여도 조용히 지나가고,
 -- 그 오타는 리더가 된 노드에서만 드러난다.
 if fence <= 0 then
-    return 0
+    return {0, -2}
 end
 
+local left = redis.call('PTTL', KEYS[1])
 local mark = string.format('%.0f', fence)
 redis.call('SET', KEYS[1], mark, 'PX', ttl)
 
@@ -47,4 +54,4 @@ local seen = tonumber(redis.call('GET', KEYS[2]))
 if seen == nil or seen ~= seen or fence >= seen then
     redis.call('SET', KEYS[2], mark, 'PX', ttl)
 end
-return 1
+return {1, left}

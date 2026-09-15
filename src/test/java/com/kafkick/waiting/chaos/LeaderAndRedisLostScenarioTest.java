@@ -360,7 +360,12 @@ class LeaderAndRedisLostScenarioTest {
                 })
                 .recover(() -> {
                     faults.붙인다();
-                    락.lease를_만료시킨다(Duration.ofMillis(1));
+                    // 재시작 전에 연 연결은 끊긴 줄 모른 채 첫 명령에서 터진다. 새로 연다.
+                    LeaderFaults 새_락 = LeaderFaults.of(faults.연결한다());
+                    assertThat(새_락.현재_소유자())
+                            .as("전제 — 영속이라 재시작 뒤에도 죽은 리더의 락이 남는다").isEqualTo(죽은_리더);
+                    assertThat(새_락.lease를_만료시킨다(Duration.ofMillis(1)))
+                            .as("죽은 리더의 락에 만료가 걸린다").isTrue();
                     // **컨테이너가 뜨는 시간은 안 센다.** 그건 도커를 재는 것이고,
                     // 여기서 잴 것은 레디스가 돌아온 뒤 게이트웨이가 fail-open 을
                     // 그만두기까지다 — 그동안 줄이 계속 추월당한다.

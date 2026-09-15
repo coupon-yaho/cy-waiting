@@ -31,18 +31,25 @@ public final class AllocationScheduler {
     private final LongConsumer lagNanos;
     private final Scheduler timer;
 
+    /** 다음 회차를 적어도 이만큼 미룬다. 적용 차례를 회차 안에서 기다리면 틱 시한을 먹는다. */
+    private final Supplier<Duration> holdOff;
+
     /** 리더가 아닐 때 다시 묻는 간격. 틱보다 짧아야 뜻이 있다 — 길면 틱을 쓴다. */
     private static final Duration IDLE_POLL = Duration.ofMillis(100);
 
     /** 직전 회차가 리더가 아니라 건너뛰었는가. 회차 완료 신호가 다른 스레드에서 읽을 수 있다. */
     private volatile boolean lastSkipped;
 
+    /** 직전 리더 회차가 걸린 시간(나노). 다음 지연을 틱에 맞추는 데 쓴다. */
+    private volatile long lastRoundNanos;
+
     private final AtomicBoolean running = new AtomicBoolean();
     private final FailureWindow failures;
     private volatile Disposable subscription;
 
     private AllocationScheduler(Duration tick, Duration firstTickDelay, BooleanSupplier isLeader,
-            Supplier<Mono<Void>> allocate, LongConsumer lagNanos, Scheduler timer) {
+            Supplier<Mono<Void>> allocate, LongConsumer lagNanos, Scheduler timer,
+            Supplier<Duration> holdOff) {
         if (tick == null || tick.isZero() || tick.isNegative()) {
             throw new IllegalArgumentException("tick 은 양수여야 한다: %s".formatted(tick));
         }
@@ -56,6 +63,7 @@ public final class AllocationScheduler {
         this.allocate = Objects.requireNonNull(allocate, "allocate 는 필수다");
         this.lagNanos = Objects.requireNonNull(lagNanos, "lagNanos 는 필수다");
         this.timer = Objects.requireNonNull(timer, "timer 는 필수다");
+        this.holdOff = Objects.requireNonNull(holdOff, "holdOff 는 필수다");
         // 시계를 스케줄러에서 가져온다. 억제 로그의 지속 시간만 실시간을 타면
         // 그 값을 시험이 못 잰다.
         this.failures = FailureWindow.of(() -> timer.now(NANOSECONDS));
@@ -64,7 +72,15 @@ public final class AllocationScheduler {
     public static AllocationScheduler of(Duration tick, Duration firstTickDelay,
             BooleanSupplier isLeader, Supplier<Mono<Void>> allocate, LongConsumer lagNanos,
             Scheduler timer) {
-        return new AllocationScheduler(tick, firstTickDelay, isLeader, allocate, lagNanos, timer);
+        return new AllocationScheduler(tick, firstTickDelay, isLeader, allocate, lagNanos, timer,
+                () -> Duration.ZERO);
+    }
+
+    /** 다음 회차 시작을 {@code holdOff} 만큼은 미룬다. */
+    public static AllocationScheduler of(Duration tick, Duration firstTickDelay,
+            BooleanSupplier isLeader, Supplier<Mono<Void>> allocate, LongConsumer lagNanos,
+            Scheduler timer, Supplier<Duration> holdOff) {
+        return new AllocationScheduler(tick, firstTickDelay, isLeader, allocate, lagNanos, timer, holdOff);
     }
 
     public void start() {
@@ -106,7 +122,13 @@ public final class AllocationScheduler {
      */
     private Duration nextDelay() {
         if (!lastSkipped) {
-            return tick;
+            // **틱에서 회차가 걸린 만큼 뺀다.** 통째로 쉬면 레디스가 느린 날 회차 시간만큼 주기가 늘어 발행이 준다.
+            // 밀린 틱을 만회하지는 않고, 틱을 다 쓴 회차 뒤에도 4분의 1은 쉰다 — 느린 레디스를 쉼 없이 안 두드린다.
+            Duration left = tick.minusNanos(lastRoundNanos);
+            Duration minimumGap = tick.dividedBy(4);
+            Duration gap = left.compareTo(minimumGap) < 0 ? minimumGap : left;
+            Duration held = holdOff.get();
+            return held.compareTo(gap) > 0 ? held : gap;
         }
         return IDLE_POLL.compareTo(tick) < 0 ? IDLE_POLL : tick;
     }
@@ -143,6 +165,8 @@ public final class AllocationScheduler {
                 .doOnSuccess(ignored -> recovered())
                 .doOnError(this::failed)
                 .onErrorResume(e -> Mono.empty())
+                // 끝나는 신호보다 먼저 적는다. 끝난 뒤에 적으면 반복이 다음 지연을 먼저 계산해 옛 값을 쓴다.
+                .doOnTerminate(() -> lastRoundNanos = timer.now(NANOSECONDS) - startedAt)
                 .doFinally(signal ->
                         lagNanos.accept(timer.now(NANOSECONDS) - startedAt));
     }

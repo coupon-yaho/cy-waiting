@@ -31,6 +31,7 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -44,6 +45,7 @@ import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 import reactor.core.Disposable;
 import reactor.core.publisher.Mono;
+import reactor.test.scheduler.VirtualTimeScheduler;
 
 /**
  * 한 회차. 수요를 모아 크레딧을 나누고 적용한 뒤 발행한다.
@@ -1967,29 +1969,75 @@ class AllocationRoundTest {
     }
 
     /**
-     * <b>쿠폰 사이에서 잃는 것이 실제 모습이다.</b> 회차 진입에서만 보면, 첫 쿠폰을
-     * 쓰는 동안 리스가 끝난 회차가 남은 쿠폰에 계속 임계를 쓴다.
-     *
-     * <p>둘째 쿠폰에 임계를 쓰면 새 리더가 쓴 값을 덮고, 발행까지 나가면 새 리더가
-     * 이미 나눠 준 크레딧을 스냅샷이 한 번 더 광고한다 — 불변식 2 다.
+     * <b>적용 중에 잃으면 발행하지 않는다.</b> 적용은 동시에 나가 둘째 쿠폰도 이미 보냈다 — 그 쓰기는 적용 스크립트의
+     * 펜스가 막는다(`옛_임기의_적용은_안_들인다`). 발행까지 나가면 새 리더가 나눠 준 몫을 한 번 더 광고한다.
      */
     @Test
-    @DisplayName("쿠폰_사이에서_잃으면_남은_몫이_0이_된다")
-    void 쿠폰_사이에서_잃으면_남은_몫이_0이_된다() {
+    @DisplayName("적용_중에_잃으면_발행하지_않는다")
+    void 적용_중에_잃으면_발행하지_않는다() {
+        VirtualTimeScheduler 시계 = VirtualTimeScheduler.create();
         AtomicBoolean 리더 = new AtomicBoolean(true);
-        AllocationRound round = AllocationRound.of(
-                리더::get,
-                () -> Mono.just(new TimedDemands(
-                        List.of(new CouponDemand("c1", 10, 100),
-                                new CouponDemand("c2", 10, 100)),
-                        읽은_시각)),
-                () -> 8L, () -> 1,
+        AllocationRound round = 비동기_회차(리더::get,
+                List.of(new CouponDemand("c1", 10, 100), new CouponDemand("c2", 10, 100)),
                 grant -> {
-                    // 첫 쿠폰을 쓰는 순간 리스가 끝난다.
-                    리더.set(false);
+                    적용.add(grant.couponId());
+                    // 첫 쿠폰의 답이 오는 순간 리스가 끝났다.
+                    return Mono.delay(Duration.ofMillis(grant.couponId().equals("c1") ? 100 : 200), 시계)
+                            .doOnNext(t -> 리더.set(false))
+                            .thenReturn(grant.credit());
+                });
+
+        AtomicBoolean 끝났다 = new AtomicBoolean();
+        round.run().doOnSuccess(v -> 끝났다.set(true)).subscribe();
+        시계.advanceTimeBy(Duration.ofMillis(300));
+
+        assertThat(적용).as("둘 다 잃기 전에 나갔다").containsExactlyInAnyOrder("c1", "c2");
+        assertThat(발행).isEmpty();
+        assertThat(끝났다).as("발행을 접고 회차는 끝난다").isTrue();
+    }
+
+    /** 차례를 기다리는 사이에 잃으면 적용을 안 보낸다. 새 리더가 펜스를 올리기 전이면 옛 임기의 적용이 들어간다. */
+    @Test
+    @DisplayName("차례를_기다리다_잃으면_적용하지_않는다")
+    void 차례를_기다리다_잃으면_적용하지_않는다() {
+        VirtualTimeScheduler 시계 = VirtualTimeScheduler.create();
+        AtomicBoolean 리더 = new AtomicBoolean(true);
+        AllocationRound round = 비동기_회차(리더::get, List.of(new CouponDemand("c1", 10, 100)),
+                grant -> {
                     적용.add(grant.couponId());
                     return Mono.just(grant.credit());
-                },
+                });
+        round.pacedBy(ApplyPacer.of(Duration.ofSeconds(1), 시계));
+        round.run().subscribe();
+        시계.advanceTimeBy(Duration.ofMillis(300));
+
+        round.run().subscribe();
+        리더.set(false);
+        시계.advanceTimeBy(Duration.ofSeconds(1));
+
+        assertThat(적용).containsExactly("c1");
+    }
+
+    /** 회차는 읽기를 시작할 때 페이서에 알린다. 안 알리면 다음 시작을 읽기만큼 당기지 못해 대기가 틱 시한을 먹는다. */
+    @Test
+    @DisplayName("회차가_읽기_시작을_알린다")
+    void 회차가_읽기_시작을_알린다() {
+        VirtualTimeScheduler 시계 = VirtualTimeScheduler.create();
+        ApplyPacer pacer = ApplyPacer.of(Duration.ofSeconds(1), 시계);
+        AllocationRound round = 비동기_회차(() -> true, List.of(new CouponDemand("c1", 10, 100)),
+                grant -> Mono.just(grant.credit()));
+        round.pacedBy(pacer);
+
+        round.run(Mono.delay(Duration.ofMillis(200), 시계).then()).subscribe();
+        시계.advanceTimeBy(Duration.ofMillis(200));
+
+        assertThat(pacer.holdOff()).isEqualTo(Duration.ofMillis(800));
+    }
+
+    private AllocationRound 비동기_회차(BooleanSupplier 리더, List<CouponDemand> 수요,
+            Function<Grant, Mono<Long>> 적용하기) {
+        return AllocationRound.of(리더, () -> Mono.just(new TimedDemands(수요, 읽은_시각)),
+                () -> 1_000L, () -> 1, 적용하기,
                 hash -> {
                     발행.put("last", hash);
                     return Mono.empty();
@@ -1997,13 +2045,174 @@ class AllocationRoundTest {
                 () -> Instant.ofEpochSecond(1_700_000_000L),
                 () -> Mono.just(CreditSmoother.of(1.0)),
                 SnapshotCodec.create(), () -> 0L);
+    }
 
-        round.run().block();
+    /** 적용은 레디스 쓰기 상한(16)을 안 넘겨 보낸다. 쿠폰이 많은 날 연결 하나에 한꺼번에 쌓지 않는다. */
+    @Test
+    @DisplayName("적용은_열여섯까지만_동시에_보낸다")
+    void 적용은_열여섯까지만_동시에_보낸다() {
+        VirtualTimeScheduler 시계 = VirtualTimeScheduler.create();
+        List<CouponDemand> 수요 = new ArrayList<>();
+        for (int i = 0; i < 20; i++) {
+            수요.add(new CouponDemand("c" + i, 10, 100));
+        }
+        AllocationRound round = 비동기_회차(() -> true, 수요, grant -> {
+            적용.add(grant.couponId());
+            return Mono.delay(Duration.ofMillis(100), 시계).thenReturn(grant.credit());
+        });
 
-        // 옛 리더가 둘째 쿠폰의 임계를 쓰면 새 리더가 쓴 값을 덮는다.
-        assertThat(적용).containsExactly("c1");
-        // 발행도 안 나간다. 나갔으면 새 리더가 나눠 준 몫을 한 번 더 광고한다.
-        assertThat(발행).isEmpty();
+        round.run().subscribe();
+        시계.advanceTime();
+        assertThat(적용).hasSize(16);
+
+        시계.advanceTimeBy(Duration.ofMillis(100));
+        assertThat(적용).hasSize(20);
+    }
+
+    /**
+     * <b>수요 읽기가 실패해도 운영값 읽기를 끊지 않는다.</b> 끊으면 가용량·운영값 갱신이 중간에 취소돼, 수요를 못 읽는
+     * 동안 게이트웨이가 옛 운영값에 머문다.
+     */
+    @Test
+    @DisplayName("수요_읽기가_실패해도_운영값_읽기를_끊지_않는다")
+    void 수요_읽기가_실패해도_운영값_읽기를_끊지_않는다() {
+        VirtualTimeScheduler 시계 = VirtualTimeScheduler.create();
+        AtomicBoolean 끊겼다 = new AtomicBoolean();
+        AtomicBoolean 끝났다 = new AtomicBoolean();
+        AllocationRound round = AllocationRound.of(() -> true,
+                () -> Mono.error(new IllegalStateException("수요 못 읽음")),
+                () -> 30L, () -> 1, grant -> Mono.just(grant.credit()), hash -> Mono.empty(),
+                () -> Instant.ofEpochSecond(1_700_000_000L),
+                () -> Mono.just(CreditSmoother.of(1.0)),
+                SnapshotCodec.create(), () -> 0L);
+        AtomicReference<Throwable> 결과 = new AtomicReference<>();
+
+        round.run(Mono.delay(Duration.ofMillis(250), 시계).then()
+                        .doOnCancel(() -> 끊겼다.set(true))
+                        .doOnSuccess(v -> 끝났다.set(true)))
+                .subscribe(v -> { }, 결과::set);
+        시계.advanceTimeBy(Duration.ofMillis(250));
+
+        assertThat(끊겼다).isFalse();
+        assertThat(끝났다).isTrue();
+        assertThat(결과.get()).as("실패는 그대로 올린다").hasMessage("수요 못 읽음");
+    }
+
+    /**
+     * <b>적용은 앞 회차 적용에서 한 틱 떨어져 나간다</b> (CY-927). 회차 시작 간격은 최소 틱의 4분의 1이라, 끝에
+     * 적용한 느린 회차 뒤에 빠른 회차가 곧바로 적용하면 두 틱 몫이 1초 안에 들어간다.
+     */
+    @Test
+    @DisplayName("적용은_앞_회차_적용에서_한_틱을_띄운다")
+    void 적용은_앞_회차_적용에서_한_틱을_띄운다() {
+        VirtualTimeScheduler 시계 = VirtualTimeScheduler.create();
+        List<Long> 적용_시각 = new CopyOnWriteArrayList<>();
+        AllocationRound round = 비동기_회차(() -> true, List.of(new CouponDemand("c1", 10, 100)),
+                grant -> {
+                    적용_시각.add(시계.now(TimeUnit.MILLISECONDS));
+                    return Mono.just(grant.credit());
+                });
+        round.pacedBy(ApplyPacer.of(Duration.ofSeconds(1), 시계));
+
+        round.run().subscribe();
+        시계.advanceTimeBy(Duration.ofMillis(300));
+        round.run().subscribe();
+        시계.advanceTimeBy(Duration.ofMillis(699));
+        assertThat(적용_시각).containsExactly(0L);
+
+        시계.advanceTimeBy(Duration.ofMillis(1));
+        assertThat(적용_시각).containsExactly(0L, 1000L);
+
+        // 기다린 적용 뒤의 회차도 그 적용에서 한 틱을 띄운다.
+        시계.advanceTimeBy(Duration.ofMillis(300));
+        round.run().subscribe();
+        시계.advanceTimeBy(Duration.ofMillis(700));
+        assertThat(적용_시각).containsExactly(0L, 1000L, 2000L);
+    }
+
+    /** 몫이 없는 회차는 발행만 한다. 간격을 기다리면 낡음 판정이 스케줄러가 멎은 것으로 본다. */
+    @Test
+    @DisplayName("몫이_없는_회차는_간격을_안_기다린다")
+    void 몫이_없는_회차는_간격을_안_기다린다() {
+        VirtualTimeScheduler 시계 = VirtualTimeScheduler.create();
+        ApplyPacer pacer = ApplyPacer.of(Duration.ofSeconds(1), 시계);
+        pacer.turn().subscribe();
+        AllocationRound round = 비동기_회차(() -> true, List.of(new CouponDemand("c1", 0, 100)),
+                grant -> Mono.just(grant.credit()));
+        round.pacedBy(pacer);
+
+        round.run().subscribe();
+        시계.advanceTime();
+
+        assertThat(발행).containsKey("last");
+    }
+
+    /**
+     * <b>쿠폰별 적용은 동시에 나간다</b> (CY-927). 차례로 보내면 레디스 왕복이 쿠폰 수만큼 쌓여 지연 200ms 에서 회차가
+     * 틱을 넘기고 발행이 절반으로 준다. 옛 임기의 쓰기는 적용 스크립트의 펜스가 막는다 — 위 순차 재확인 시험은 동기로
+     * 잃는 경우만 남는다.
+     */
+    @Test
+    @DisplayName("쿠폰별_적용을_동시에_보낸다")
+    void 쿠폰별_적용을_동시에_보낸다() {
+        VirtualTimeScheduler 시계 = VirtualTimeScheduler.create();
+        List<Long> 보낸_시각 = new CopyOnWriteArrayList<>();
+        AllocationRound round = AllocationRound.of(
+                () -> true,
+                () -> Mono.just(new TimedDemands(
+                        List.of(new CouponDemand("c1", 10, 100), new CouponDemand("c2", 10, 100),
+                                new CouponDemand("c3", 10, 100)),
+                        읽은_시각)),
+                () -> 30L, () -> 1,
+                grant -> {
+                    보낸_시각.add(시계.now(TimeUnit.MILLISECONDS));
+                    return Mono.delay(Duration.ofMillis(100), 시계).thenReturn(grant.credit());
+                },
+                hash -> Mono.empty(),
+                () -> Instant.ofEpochSecond(1_700_000_000L),
+                () -> Mono.just(CreditSmoother.of(1.0)),
+                SnapshotCodec.create(), () -> 0L);
+
+        round.run().subscribe();
+        시계.advanceTime();
+
+        assertThat(보낸_시각).as("셋이 같은 순간에 나간다").containsExactly(0L, 0L, 0L);
+        시계.advanceTimeBy(Duration.ofMillis(100));
+    }
+
+    /**
+     * <b>수요는 읽기와 동시에 읽고, 나누기는 읽기가 끝난 뒤에 한다</b> (CY-927). 운영값을 읽기 전에 나누면 방금 바꾼 값이
+     * 한 틱 늦게 나가고, 읽기가 끝날 때까지 수요 읽기를 미루면 그 왕복이 틱을 먹는다.
+     */
+    @Test
+    @DisplayName("수요는_읽기와_동시에_읽고_적용은_읽기_뒤에_보낸다")
+    void 수요는_읽기와_동시에_읽고_적용은_읽기_뒤에_보낸다() {
+        VirtualTimeScheduler 시계 = VirtualTimeScheduler.create();
+        AtomicLong 수요_읽은_시각 = new AtomicLong(-1);
+        AtomicLong 적용_시각 = new AtomicLong(-1);
+        AllocationRound round = AllocationRound.of(
+                () -> true,
+                () -> Mono.fromSupplier(() -> {
+                    수요_읽은_시각.set(시계.now(TimeUnit.MILLISECONDS));
+                    return new TimedDemands(List.of(new CouponDemand("c1", 10, 100)), 읽은_시각);
+                }),
+                () -> 30L, () -> 1,
+                grant -> {
+                    적용_시각.set(시계.now(TimeUnit.MILLISECONDS));
+                    return Mono.just(grant.credit());
+                },
+                hash -> Mono.empty(),
+                () -> Instant.ofEpochSecond(1_700_000_000L),
+                () -> Mono.just(CreditSmoother.of(1.0)),
+                SnapshotCodec.create(), () -> 0L);
+
+        round.run(Mono.delay(Duration.ofMillis(250), 시계).then()).subscribe();
+        시계.advanceTime();
+        assertThat(수요_읽은_시각.get()).as("수요는 읽기를 안 기다린다").isZero();
+        assertThat(적용_시각.get()).as("읽기가 안 끝났으면 안 나눈다").isEqualTo(-1);
+
+        시계.advanceTimeBy(Duration.ofMillis(250));
+        assertThat(적용_시각.get()).isEqualTo(250);
     }
 
     @Test

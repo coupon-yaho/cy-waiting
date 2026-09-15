@@ -16,6 +16,7 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -43,6 +44,9 @@ import reactor.core.publisher.Mono;
 public final class AllocationRound {
 
     private static final Logger log = LoggerFactory.getLogger(AllocationRound.class);
+
+    /** 동시 적용 상한. 레디스 어댑터의 쓰기 상한과 같다. */
+    private static final int MAX_CONCURRENT_APPLIES = 16;
 
     /** 이탈자 청소. <b>멈추는 판단을 안에 들고 있다.</b> */
     private final QueueSweeper sweeper;
@@ -98,6 +102,9 @@ public final class AllocationRound {
 
     /** 마지막 회차의 평활값. 지표 스레드가 읽는다. 임기가 바뀌면 비운다. */
     private volatile double smoothedCredit = Double.NaN;
+
+    /** 적용 간격. 배선 전에는 안 둔다. */
+    private volatile ApplyPacer pacer = ApplyPacer.none();
 
     /**
      * 읽은 이월을 자리에 앉힌다. <b>값이 없으면 이 임기의 평활을 앉힌다</b> — 콜드를 앉히면
@@ -300,13 +307,31 @@ public final class AllocationRound {
                 clock, restore, codec, creditFloor, Optional::empty);
     }
 
+    /** 적용 간격을 둔다. 배선이 한 번 건다. */
+    public void pacedBy(ApplyPacer pacer) {
+        this.pacer = Objects.requireNonNull(pacer, "pacer 는 필수다");
+    }
+
     public Mono<Void> run() {
+        return run(Mono.empty());
+    }
+
+    /**
+     * 운영값 읽기와 <b>동시에</b> 수요를 읽고, 두 읽기가 다 끝난 뒤에 나눈다. 앞에 차례로 두면 레디스가 느린 날 그
+     * 왕복이 틱을 먹고, 나누기를 먼저 하면 방금 바꾼 운영값이 한 틱 늦게 나간다.
+     */
+    public Mono<Void> run(Mono<Void> reads) {
         // **재료를 읽은 시각을 재료와 같이 받는다.** 회차가 끝난 시각으로 찍으면
         // 나이가 회차 지속 시간만큼 어리고, 리더 벽시계로 찍으면 노드마다 다르게
         // 낡는다 — 둘 다 낡음 판정을 흔든다.
-        return seeded().then(demands.get()
-                .flatMap(read -> allocate(read.demands(),
-                        Instant.ofEpochSecond(read.readAt()))));
+        return Mono.defer(() -> {
+            pacer.roundStarted();
+            Mono<TimedDemands> read = seeded().then(Mono.defer(demands)).cache();
+            // 수요 읽기의 실패로 운영값 읽기를 취소하지 않는다. 실패는 두 읽기가 끝난 뒤에 올린다.
+            return Mono.when(reads, read.then().onErrorResume(e -> Mono.empty()))
+                    .then(read)
+                    .flatMap(timed -> allocate(timed.demands(), Instant.ofEpochSecond(timed.readAt())));
+        });
     }
 
     /**
@@ -492,7 +517,8 @@ public final class AllocationRound {
         // 전진시키면 다음 발행이 실제로 나간 값의 배수에서 시작한다.
         ReleaseRamp.State before = releaseRamp.snapshot();
         long credit = releaseRamp.next(allowed, Math.max(floorNow, r1Minimum), gatedNow);
-        Map<String, Long> granted = new LinkedHashMap<>();
+        // 적용이 동시에 돌며 실패한 몫을 접으므로 잠근다. 순서는 발행이 쓰므로 그대로 둔다.
+        Map<String, Long> granted = Collections.synchronizedMap(new LinkedHashMap<>());
         allocator.allocate(credit, collected).forEach(g -> granted.put(g.couponId(), g.credit()));
 
         if (lostLeadership()) {
@@ -502,8 +528,12 @@ public final class AllocationRound {
         watchBudget(credit, observed);
         AtomicBoolean anyFailed = new AtomicBoolean();
         AtomicBoolean published = new AtomicBoolean();
-        return Flux.fromIterable(collected)
-                .concatMap(demand -> applyOne(demand, granted, anyFailed))
+        boolean anyCredit = granted.values().stream().anyMatch(c -> c > 0);
+        return (anyCredit ? pacer.turn() : Mono.<Void>empty())
+                .thenMany(Flux.fromIterable(collected))
+                // **동시에 보낸다.** 차례로 보내면 왕복이 쿠폰 수만큼 쌓여 레디스가 느린 날 회차가 틱을
+                // 넘기고 발행이 잘린다. 옛 임기의 쓰기는 적용 스크립트의 펜스가 막는다.
+                .flatMap(demand -> applyOne(demand, granted, anyFailed), MAX_CONCURRENT_APPLIES)
                 .reduce(0L, Long::sum)
                 // **실제로 들어온 수는 나눠 준 수와 다르다.** 큐가 몫보다 짧으면
                 // 남고, 적용이 실패하면 0 이다. 안 남기면 크레딧이 어디서 새는지

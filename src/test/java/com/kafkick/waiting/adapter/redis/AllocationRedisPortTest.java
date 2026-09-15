@@ -478,6 +478,36 @@ class AllocationRedisPortTest extends RedisContainerSupport {
                 .as("시계가 뒤로 간 새 리더도 들일 수 있어야 한다").isEqualTo(2);
     }
 
+    /**
+     * <b>잠금은 덮기 직전 적용 표의 남은 수명으로 마지막 적용의 나이를 준다</b> (CY-933). 따로 읽으면 쿠폰마다 왕복이
+     * 늘어 잠금 시한을 먹고, 읽기와 잠금 사이에 들어온 앞 리더의 적용이 나이에서 빠진다. 쿠폰 중 가장 어린 나이다.
+     */
+    @Test
+    @DisplayName("잠금이_덮기_전_가장_최근_적용의_나이를_준다")
+    void 잠금이_덮기_전_가장_최근_적용의_나이를_준다() {
+        Duration 수명 = Duration.ofHours(1);
+        redis.opsForValue().set(RedisKeys.applyFence("c1", SHARDS, 0), Long.toString(임기 - 1),
+                수명.minusMinutes(30)).block(WAIT);
+        redis.opsForValue().set(RedisKeys.applyFence("c2", SHARDS, 0), Long.toString(임기 - 1),
+                수명.minusMillis(300)).block(WAIT);
+
+        FenceSeal 결과 = port.sealFencesAndAge(List.of("c1", "c2", "c3"), 임기).block(WAIT);
+
+        assertThat(결과.locked()).isEqualTo(3);
+        // 하한은 덮기 전에 읽었다는 증거다. 실제 시간에 묶이는 상한은 안 둔다 — 변환과 가장 어린 쪽 고르기는
+        // FenceSealTest 가 정확한 값으로 본다.
+        assertThat(결과.lastApplyAge()).hasValueSatisfying(age -> assertThat(age)
+                .isGreaterThanOrEqualTo(Duration.ofMillis(300)));
+        assertThat(redis.opsForValue().get(RedisKeys.applyFence("c2", SHARDS, 0)).block(WAIT))
+                .as("나이를 읽고 나서 잠갔다").isEqualTo(Long.toString(임기));
+    }
+
+    @Test
+    @DisplayName("적용_표가_없으면_나이가_비어_있다")
+    void 적용_표가_없으면_나이가_비어_있다() {
+        assertThat(port.sealFencesAndAge(List.of("c1"), 임기).block(WAIT).lastApplyAge()).isEmpty();
+    }
+
     /** 리더가 아니면 안 잠근다. 강등된 노드가 문을 제 번호로 되돌리면 안 된다. */
     @Test
     @DisplayName("리더가_아니면_안_잠근다")

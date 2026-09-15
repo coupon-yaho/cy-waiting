@@ -600,7 +600,7 @@ class LeaderElectionTest extends RedisContainerSupport {
         return 줄[줄.length - 1].trim();
     }
 
-    /** 쓰기 명령 하나를 보내 OOM 으로 거부되는지 본다. */
+    /** 상한이 안 먹었으면 획득 시험이 거짓 초록이다. 스크립트 밖 쓰기로 거부부터 확인한다. */
     private boolean 메모리가_막혔다() throws IOException, InterruptedException {
         return REDIS.execInContainer("redis-cli", "SET", "test:oom-probe", "x").getStdout().contains("OOM");
     }

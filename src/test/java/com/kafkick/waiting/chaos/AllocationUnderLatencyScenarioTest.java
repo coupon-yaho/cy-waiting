@@ -53,6 +53,9 @@ class AllocationUnderLatencyScenarioTest {
      */
     private static final int 최소_발행 = 5;
 
+    /** 발행이 안 바뀐 가장 긴 시간의 한계. 고친 뒤 세 번 다 1.31초였고, 완료 뒤 한 틱을 통째로 쉬던 옛 주기는 2초를 넘는다. */
+    private static final Duration 최대_틈 = Duration.ofSeconds(2);
+
     private static final Duration 기다림 = Duration.ofSeconds(20);
 
     private static RedisWireFaults 선;
@@ -110,6 +113,9 @@ class AllocationUnderLatencyScenarioTest {
         long[] 발행_수 = new long[1];
         long[] 들인_수 = new long[1];
         long[] 낡은_표본 = new long[1];
+        long[] 최대_틈_ms = new long[1];
+        double[] 느리기_전_초과 = new double[1];
+        double[] 초과 = new double[1];
 
         ChaosScenario.named("C2c 레디스 지연 중 발행")
                 .baseline(() -> {
@@ -133,13 +139,24 @@ class AllocationUnderLatencyScenarioTest {
                     // 지연이 붙은 뒤의 첫 발행부터 센다. 붙기 전에 나간 회차를 섞지 않는다.
                     느리기_전_발행[0] = 관측.들고_있는_발행();
                     느리기_전_들인_수[0] = (long) round.admitted();
+                    느리기_전_초과[0] = round.enteredOvershoot();
                 })
                 .duringFault(() -> {
                     long[] 잃은_표본 = new long[1];
                     Set<Instant> 본_발행 = new HashSet<>();
+                    Instant[] 앞_발행 = {느리기_전_발행[0]};
+                    long[] 바뀐_시각 = {System.nanoTime()};
                     Awaitility.await().during(전진_창).atMost(전진_창.plusSeconds(2))
                             .pollInterval(Duration.ofMillis(100)).until(() -> {
-                                본_발행.add(holder.view().snapshot().publishedAt());
+                                Instant 지금_발행 = holder.view().snapshot().publishedAt();
+                                본_발행.add(지금_발행);
+                                long 지금 = System.nanoTime();
+                                if (!지금_발행.equals(앞_발행[0])) {
+                                    앞_발행[0] = 지금_발행;
+                                    바뀐_시각[0] = 지금;
+                                }
+                                최대_틈_ms[0] = Math.max(최대_틈_ms[0],
+                                        Duration.ofNanos(지금 - 바뀐_시각[0]).toMillis());
                                 if (!leadership.isLeader()) {
                                     잃은_표본[0]++;
                                 }
@@ -150,6 +167,7 @@ class AllocationUnderLatencyScenarioTest {
                             });
                     발행_수[0] = 본_발행.stream().filter(t -> t.isAfter(느리기_전_발행[0])).count();
                     들인_수[0] = (long) round.admitted() - 느리기_전_들인_수[0];
+                    초과[0] = round.enteredOvershoot() - 느리기_전_초과[0];
                     리더를_지켰다[0] = 잃은_표본[0] == 0;
                 })
                 .recover(() -> {
@@ -174,6 +192,12 @@ class AllocationUnderLatencyScenarioTest {
                         // 발행이 드문드문 올라도 틈이 낡음 한계를 넘으면 노드들이 줄을 통째로 켠다.
                         낡은_표본[0] == 0 ? Optional.empty()
                                 : Optional.of("지연 %s 동안 재료가 낡은 표본 %d".formatted(지연(), 낡은_표본[0])),
+                        // 초 단위 발행 시각이라 개수는 경계에서 겹친다. 틈은 겹침에 안 흔들린다.
+                        최대_틈_ms[0] <= 최대_틈.toMillis() ? Optional.empty()
+                                : Optional.of("지연 %s 동안 발행 사이 틈 %dms".formatted(지연(), 최대_틈_ms[0])),
+                        // 적용이 몰려 한 회차 예산을 넘겨 들이면 초과 발급의 직접 증거다.
+                        초과[0] == 0 ? Optional.empty()
+                                : Optional.of("지연 %s 동안 예산을 넘겨 들인 인원 %.0f".formatted(지연(), 초과[0])),
                         // 발행만 오르고 적용이 전부 실패하면 줄은 멎은 채 초록이다.
                         들인_수[0] > 0 ? Optional.empty()
                                 : Optional.of("지연 %s 동안 들인 인원이 없다".formatted(지연()))))

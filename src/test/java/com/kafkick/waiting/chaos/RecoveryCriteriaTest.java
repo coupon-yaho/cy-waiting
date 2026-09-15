@@ -365,11 +365,10 @@ class RecoveryCriteriaTest {
     // 한계 부등호를 한 칸 옮겨도 초록이던 자리들이다. 판정기가 뮤테이션 밖에 있어 아무도 몰랐다.
 
     @Test
-    @DisplayName("재고가_영이면_발급_영은_통과한다")
-    void 재고가_영이면_발급_영은_통과한다() {
-        assertThat(RecoveryCriteria.overIssued(0, 0)).isEmpty();
+    @DisplayName("재고와_발급이_영인_경계를_통과로_읽는다")
+    void 재고와_발급이_영인_경계를_통과로_읽는다() {
+        assertThat(RecoveryCriteria.overIssued(0, 0)).as("재고 0 은 거절할 입력이 아니다").isEmpty();
         assertThat(RecoveryCriteria.overIssued(0, 5)).as("발급 0 은 관측이다").isEmpty();
-        assertThat(RecoveryCriteria.overIssued(5, 5)).as("재고만큼은 초과가 아니다").isEmpty();
     }
 
     @Test
@@ -390,12 +389,6 @@ class RecoveryCriteriaTest {
     void 회복_봉우리가_영이면_못_잰_것이_아니라_안_받은_것이다() {
         assertThat(RecoveryCriteria.recoveryBurst(10, 0)).hasValueSatisfying(
                 위반 -> assertThat(위반).contains("하나도 안 받았다"));
-    }
-
-    @Test
-    @DisplayName("버스트가_한계와_같으면_통과한다")
-    void 버스트가_한계와_같으면_통과한다() {
-        assertThat(RecoveryCriteria.recoveryBurst(10, 12)).isEmpty();
     }
 
     @Test

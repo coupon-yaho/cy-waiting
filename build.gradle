@@ -371,11 +371,17 @@ pitest {
     //
     // **카오스 판정기도 넣는다 (CY-815).** 판정기가 범위 밖이라 한계 부등호를 한 칸 옮겨도
     // 초록이었다 — 둘만 돌려 111 중 97 이 죽었다. 픽스처 소스셋을 같이 넘기고 판정기
-    // 클래스만 짚는다. 패키지째 넣으면 대상 시험도 패키지째 끌려와 컨테이너를 띄운다.
+    // 클래스만 **이름으로** 짚는다. 패키지째나 접두어로 넣으면 대상 시험도 같은 패턴으로
+    // 끌려와, 비슷한 이름의 시나리오 하나가 생기는 날 컨테이너를 띄운다.
     targetClasses = ['com.kafkick.waiting.domain.*', 'com.kafkick.waiting.control.*',
                      'com.kafkick.waiting.gateway.*', 'com.kafkick.waiting.routing.*',
-                     'com.kafkick.waiting.chaos.RecoveryCriteria*',
-                     'com.kafkick.waiting.chaos.BackendRpsRecorder*']
+                     'com.kafkick.waiting.chaos.RecoveryCriteria',
+                     'com.kafkick.waiting.chaos.BackendRpsRecorder']
+    // 대상 시험은 기본이 대상 클래스 패턴이라, 판정기를 이름으로 짚으면 그 시험이 빠진다.
+    targetTests = ['com.kafkick.waiting.domain.*', 'com.kafkick.waiting.control.*',
+                   'com.kafkick.waiting.gateway.*', 'com.kafkick.waiting.routing.*',
+                   'com.kafkick.waiting.chaos.RecoveryCriteriaTest',
+                   'com.kafkick.waiting.chaos.BackendRpsRecorderTest']
     mainSourceSets = [sourceSets.main, sourceSets.testFixtures]
     // 대상이 0건일 때 로컬 실행을 막지 않는다 — 페이즈 초기에 그랬다.
     // **CI 에서는 0 을 통과로 두지 않는다.** 대상 지정이 비면 뮤테이션 잡이
@@ -399,6 +405,13 @@ pitest {
             'com.kafkick.waiting.routing.*Config',
             'com.kafkick.waiting.routing.RoutingAttributes',
             'com.kafkick.waiting.routing.ReservedInstance',
+            // **픽스처는 대상이 아니다.** 픽스처 소스셋을 넘기면 위 패키지 패턴이 같은 패키지의
+            // 픽스처까지 잡는다. 픽스처 뮤턴트는 프로덕션 생존율을 가리는 잡음이다.
+            'com.kafkick.waiting.domain.coupon.CouponStates',
+            'com.kafkick.waiting.domain.coupon.SnapshotMetas',
+            'com.kafkick.waiting.control.SweepGates',
+            'com.kafkick.waiting.control.TickedLeadership',
+            'com.kafkick.waiting.gateway.FakeQueuePort',
     ]
     // **PIT 은 정수 백분율로 비교한다.** 89.9% 가 90 으로 반올림돼 통과하므로
     // 이 한 줄만으로는 "생존 ≤ 10%" 가 지켜지지 않는다. 반올림 없는 비율은

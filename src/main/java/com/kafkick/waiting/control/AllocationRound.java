@@ -301,6 +301,10 @@ public final class AllocationRound {
                 clock, restore, codec, creditFloor, Optional::empty);
     }
 
+    /** 적용 간격을 둔다. 배선이 한 번 건다. */
+    public void pacedBy(ApplyPacer pacer) {
+    }
+
     public Mono<Void> run() {
         return run(Mono.empty());
     }

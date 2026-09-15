@@ -166,6 +166,14 @@ class AllocationSchedulerTest {
                 .isEqualTo(한_회차_길이.plus(TICK.dividedBy(4)).toMillis()));
     }
 
+    /** 틱에서 잘린 회차도 걸린 시간을 적는다. 안 적으면 앞 회차 값으로 곧바로 다음을 돌아 느린 레디스를 쉼 없이 두드린다. */
+    @Test
+    @DisplayName("틱에서_잘린_회차_뒤에도_최소_간격을_쉰다")
+    void 틱에서_잘린_회차_뒤에도_최소_간격을_쉰다() {
+        assertThat(시작_간격(TICK.multipliedBy(10)))
+                .containsExactly(TICK.plus(TICK.dividedBy(4)).toMillis(), TICK.plus(TICK.dividedBy(4)).toMillis());
+    }
+
     @Test
     @DisplayName("한_회차가_터져도_루프는_돈다")
     void 한_회차가_터져도_루프는_돈다() {

@@ -81,6 +81,7 @@ class MemoryLimitHandoverScenarioTest {
         String[] 발행_표 = new String[1];
         String[] 유지_끝_발행_표 = new String[1];
         boolean[] 유령을_막았다 = new boolean[1];
+        long[] 표_수명_ms = new long[1];
         String[] 막히기_전_임계 = new String[1];
         String[] 유지_끝_임계 = new String[1];
         double[] 앞_초과 = new double[1];
@@ -102,7 +103,9 @@ class MemoryLimitHandoverScenarioTest {
                     막히기_전_임계[0] = 연결.sync().get(RedisKeys.admitted(COUPON, 1, 0));
                     앞_임기[0] = leadership.fence();
                     // 리스를 끝내 승계를 만든다. 이 노드가 새 임기로 다시 잡고 승계 봉인을 돈다.
-                    락.lease를_만료시킨다(Duration.ofMillis(1));
+                    if (!락.lease를_만료시킨다(Duration.ofMillis(1))) {
+                        throw new IllegalStateException("리스를 못 끝냈다 — 승계를 안 만들었다");
+                    }
                     try {
                         Awaitility.await().atMost(기다림).pollInterval(Duration.ofMillis(50))
                                 .until(() -> leadership.isLeader() && leadership.fence() > 앞_임기[0]);
@@ -117,6 +120,7 @@ class MemoryLimitHandoverScenarioTest {
                     }
                     봉인된_표[0] = 연결.sync().get(RedisKeys.applyFence(COUPON, 1, 0));
                     발행_표[0] = 연결.sync().get(RedisKeys.SNAPSHOT_FENCE);
+                    표_수명_ms[0] = 연결.sync().pttl(RedisKeys.SNAPSHOT_FENCE);
                 })
                 .duringFault(() -> {
                     Awaitility.await().pollDelay(유지_창).atMost(유지_창.plusSeconds(1)).until(() -> true);
@@ -124,7 +128,9 @@ class MemoryLimitHandoverScenarioTest {
                     유지_끝_발행_표[0] = 연결.sync().get(RedisKeys.SNAPSHOT_FENCE);
                 })
                 .recover(() -> {
-                    faults.메모리_상한을_되돌린다(원래_상한[0]);
+                    if (원래_상한[0] != null) {
+                        faults.메모리_상한을_되돌린다(원래_상한[0]);
+                    }
                     // 풀리는 순간 멎었던 옛 리더의 적용이 먼저 닿는 경우다. 봉인이 섰으면 막힌다.
                     try {
                         port.apply(new Grant(COUPON, 1), 앞_임기[0]).block(기다림);
@@ -148,7 +154,11 @@ class MemoryLimitHandoverScenarioTest {
                                 : Optional.of("상한 중 승계 봉인이 안 섰다 — 표 %s, 새 임기 %d"
                                         .formatted(봉인된_표[0], 새_임기[0])),
                         Long.toString(새_임기[0]).equals(발행_표[0]) ? Optional.empty()
-                                : Optional.of("상한 중 발행 봉인이 안 섰다 — 표 %s".formatted(발행_표[0]))))
+                                : Optional.of("상한 중 발행 봉인이 안 섰다 — 표 %s".formatted(발행_표[0])),
+                        // 전제 — 표 수명이 유지 창보다 짧아야 "봉인이 남는다" 판정이 무언가를 잰다.
+                        표_수명_ms[0] < 유지_창.toMillis() ? Optional.empty()
+                                : Optional.of("전제 — 발행 표 수명 %dms 가 유지 창 %s 보다 길다"
+                                        .formatted(표_수명_ms[0], 유지_창))))
                 .assertDuring(() -> RecoveryCriteria.violations(
                         // 적용은 사람 수만큼 쓰는 스크립트라 상한에서 거부되는 것이 맞다.
                         막히기_전_임계[0].equals(유지_끝_임계[0]) ? Optional.empty()
@@ -166,5 +176,6 @@ class MemoryLimitHandoverScenarioTest {
                                 : Optional.of("예산을 넘겨 들였다 — %.0f 명"
                                         .formatted(round.enteredOvershoot() - 앞_초과[0]))))
                 .run();
+        연결.close();
     }
 }

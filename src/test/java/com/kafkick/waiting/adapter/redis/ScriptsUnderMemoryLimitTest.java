@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -82,11 +83,17 @@ class ScriptsUnderMemoryLimitTest extends RedisContainerSupport {
         redis.opsForValue().set(RedisKeys.SNAPSHOT_FENCE, Long.toString(FENCE), Duration.ofSeconds(2)).block(WAIT);
 
         메모리_상한에서(() -> {
-            assertThatThrownBy(() -> port.publish(Map.of("f", "v"), FENCE).block(WAIT))
-                    .as("발행은 사람 수만큼 쓰는 스크립트라 거부된다").isNotInstanceOf(AllocationRedisPort.FencedOutException.class);
-
             assertThat(redis.getExpire(RedisKeys.SNAPSHOT_FENCE).block(WAIT))
-                    .as("수명을 다시 걸었다").isGreaterThan(Duration.ofSeconds(2));
+                    .as("전제 — 표가 아직 살아 있다. 만료됐으면 다시 거는 것이 아니라 새로 거는 것을 잰다")
+                    .isPositive();
+            assertThatThrownBy(() -> port.publish(Map.of("f", "v"), FENCE).block(WAIT))
+                    .as("발행은 사람 수만큼 쓰는 스크립트라 상한에서 거부된다")
+                    .isNotInstanceOf(AllocationRedisPort.FencedOutException.class)
+                    .rootCause().hasMessageContaining("OOM");
+
+            // 재봉인은 회차에서 떼어 보낸다. 곧 도착한다.
+            Awaitility.await().atMost(WAIT).pollInterval(Duration.ofMillis(50)).until(() ->
+                    redis.getExpire(RedisKeys.SNAPSHOT_FENCE).block(WAIT).compareTo(Duration.ofSeconds(2)) > 0);
             assertThat(redis.opsForValue().get(RedisKeys.SNAPSHOT_FENCE).block(WAIT)).isEqualTo(Long.toString(FENCE));
         });
     }

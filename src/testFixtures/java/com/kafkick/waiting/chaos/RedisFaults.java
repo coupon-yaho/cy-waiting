@@ -118,6 +118,9 @@ public final class RedisFaults implements AutoCloseable {
     /**
      * 메모리 상한을 사용량 아래로 내려 쓰기를 거부하게 한다. <b>실제로 거부되는지 확인한다</b> — 안 먹었으면 평시를 잰다.
      *
+     * <p>통합 시험 쪽에는 같은 일을 도커 명령으로 하는 자리가 따로 있다. 이 픽스처의 컨테이너는 포트를 고정해 따로 띄우고
+     * 끊었다 붙이므로, 그쪽 정적 컨테이너와 합칠 수 없다.
+     *
      * @return 되돌릴 원래 상한
      */
     public String 메모리_상한을_내린다() {
@@ -137,10 +140,15 @@ public final class RedisFaults implements AutoCloseable {
         }
     }
 
+    /** 되돌린 값을 다시 읽어 확인한다. 복구가 조용히 실패하면 뒤 판정이 전부 엉뚱한 원인으로 깨진다. */
     public void 메모리_상한을_되돌린다(String 원래) {
         try (StatefulRedisConnection<String, String> 연결 = 연결한다()) {
             연결.sync().configSet("maxmemory", 원래);
             연결.sync().del("chaos:oom-probe");
+            String 지금 = 연결.sync().configGet("maxmemory").get("maxmemory");
+            if (!원래.equals(지금)) {
+                throw new IllegalStateException("상한을 못 되돌렸다: %s".formatted(지금));
+            }
         }
     }
 

@@ -263,12 +263,13 @@ class AllocationApplyTest extends RedisContainerSupport {
     @Test
     @DisplayName("잠금은_리더가_아니면_안_쓴다")
     void 잠금은_리더가_아니면_안_쓴다() {
-        RedisScript<Long> seal = RedisScript.of(
-                new ClassPathResource("redis/fence_seal.lua"), Long.class);
+        @SuppressWarnings("rawtypes")
+        RedisScript<List> seal = RedisScript.of(
+                new ClassPathResource("redis/fence_seal.lua"), List.class);
 
-        Long 잠갔나 = redis.execute(seal, List.of(FENCE, DROP_FENCE), List.of("0", 수명)).blockLast(WAIT);
+        List<?> 결과 = redis.execute(seal, List.of(FENCE, DROP_FENCE), List.of("0", 수명)).blockLast(WAIT);
 
-        assertThat(잠갔나).as("안 잠갔으면 0 을 내야 부르는 쪽이 셀 수 있다").isZero();
+        assertThat(결과.get(0)).as("안 잠갔으면 0 을 내야 부르는 쪽이 셀 수 있다").isEqualTo(0L);
         assertThat(redis.hasKey(FENCE).block(WAIT)).isFalse();
     }
 
@@ -276,8 +277,9 @@ class AllocationApplyTest extends RedisContainerSupport {
     @Test
     @DisplayName("잠금은_수명을_안_주면_거절한다")
     void 잠금은_수명을_안_주면_거절한다() {
-        RedisScript<Long> seal = RedisScript.of(
-                new ClassPathResource("redis/fence_seal.lua"), Long.class);
+        @SuppressWarnings("rawtypes")
+        RedisScript<List> seal = RedisScript.of(
+                new ClassPathResource("redis/fence_seal.lua"), List.class);
 
         assertThatThrownBy(() ->
                 redis.execute(seal, List.of(FENCE, DROP_FENCE), List.of(임기, "0")).blockLast(WAIT))

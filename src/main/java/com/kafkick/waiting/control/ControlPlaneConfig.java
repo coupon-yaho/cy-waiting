@@ -1,6 +1,7 @@
 package com.kafkick.waiting.control;
 
 import com.kafkick.waiting.adapter.redis.AllocationRedisPort;
+import com.kafkick.waiting.adapter.redis.FenceSeal;
 import com.kafkick.waiting.domain.routing.AllowedDestinations;
 import com.kafkick.waiting.routing.RoutingProperties;
 import java.time.Duration;
@@ -294,13 +295,16 @@ public class ControlPlaneConfig {
             // 갱신이 실패한 구간에 새로 활성이 된 쿠폰이 빠지고, 그 쿠폰이 정확히
             // 유령의 지연된 몫을 받는 자리다.
             Mono<Long> coupons = port.activeCoupons()
-                    // **잠그기 전에 앞 리더의 마지막 적용 나이를 읽는다** (CY-933). 잠금이 표의 수명을 새로 걸고,
-                    // 승계 대기는 발행 나이만 봐 발행이 잘린 채 넘겨받으면 첫 적용이 앞 적용과 겹친다.
-                    .flatMap(active -> port.lastApplyAge(active)
-                            .doOnNext(age -> age.ifPresent(pacer::appliedAgo))
-                            .onErrorResume(e -> Mono.empty())
-                            .then(Mono.just(active)))
-                    .flatMap(active -> port.sealFences(active, fence)
+                    .flatMap(active -> port.sealFencesAndAge(active, fence)
+                            // **앞 리더의 마지막 적용에서 첫 적용을 띄운다** (CY-933). 승계 대기는 발행 나이만 봐서,
+                            // 발행이 잘린 채 넘겨받으면 첫 적용이 앞 적용과 1초 안에 겹친다.
+                            .doOnNext(seal -> seal.lastApplyAge().ifPresent(age -> {
+                                if (age.compareTo(deadline) < 0) {
+                                    log.info("승계 첫 적용을 앞 리더 적용에서 띄운다 — 앞 적용 {}ms 전", age.toMillis());
+                                }
+                                pacer.appliedAgo(age);
+                            }))
+                            .map(FenceSeal::locked)
                             .doOnNext(locked -> {
                                 if (locked < active.size()) {
                                     log.warn("울타리를 다 못 잠갔다 — {}/{} 개, 임기 {}. "

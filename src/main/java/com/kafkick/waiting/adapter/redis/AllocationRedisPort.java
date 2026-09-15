@@ -116,8 +116,9 @@ public final class AllocationRedisPort implements SnapshotSource {
     private static final RedisScript<List> SWEEP =
             RedisScript.of(new ClassPathResource("redis/sweep.lua"), List.class);
 
-    private static final RedisScript<Long> SEAL_FENCES =
-            RedisScript.of(new ClassPathResource("redis/fence_seal.lua"), Long.class);
+    @SuppressWarnings("rawtypes")
+    private static final RedisScript<List> SEAL_FENCES =
+            RedisScript.of(new ClassPathResource("redis/fence_seal.lua"), List.class);
 
     private static final RedisScript<Long> SEAL_SNAPSHOT_FENCE =
             RedisScript.of(new ClassPathResource("redis/snapshot_fence_seal.lua"), Long.class);
@@ -758,27 +759,6 @@ public final class AllocationRedisPort implements SnapshotSource {
                 .map(Number::longValue);
     }
 
-    /** 잠그고, 덮기 직전 적용 표에서 읽은 가장 최근 적용의 나이를 같이 준다. */
-    public Mono<FenceSeal> sealFencesAndAge(Collection<String> couponIds, long fence) {
-        return sealFences(couponIds, fence).map(locked -> new FenceSeal(locked, Optional.empty()));
-    }
-
-    /**
-     * 이 쿠폰들 가운데 가장 최근 적용의 나이. <b>적용 표의 남은 수명으로 잰다</b> — 적용과 잠금이 표에 같은 수명을 새로
-     * 걸므로 추가 쓰기 없이 나이가 나온다. 잠금도 적용으로 치므로 더 기다리는 쪽으로만 틀린다. 표가 없으면 비어 있다.
-     */
-    public Mono<Optional<Duration>> lastApplyAge(Collection<String> couponIds) {
-        return Flux.fromIterable(couponIds)
-                .flatMap(couponId -> redis.getExpire(RedisKeys.applyFence(couponId, shards, 0)),
-                        MAX_CONCURRENT_READS)
-                // 수명이 없는 표(0)는 나이를 모른다. 이 경로로는 안 생긴다.
-                .filter(left -> left.isPositive())
-                .map(left -> left.compareTo(fenceTtl) >= 0 ? Duration.ZERO : fenceTtl.minus(left))
-                .reduce((a, b) -> a.compareTo(b) <= 0 ? a : b)
-                .map(Optional::of)
-                .defaultIfEmpty(Optional.empty());
-    }
-
     /**
      * 활성 쿠폰의 문을 새 임기로 잠근다. <b>승계 직후에 부른다</b> — 적용만으로는
      * 그 쿠폰에 크레딧이 갈 때까지 표에 옛 임기가 남고, 그 창에 유령이 먼저
@@ -790,13 +770,21 @@ public final class AllocationRedisPort implements SnapshotSource {
      * @return 잠근 쿠폰 수. 넘긴 수보다 적으면 그만큼 못 잠갔다
      */
     public Mono<Long> sealFences(Collection<String> couponIds, long fence) {
+        return sealFencesAndAge(couponIds, fence).map(FenceSeal::locked);
+    }
+
+    /**
+     * 잠그고, <b>덮기 직전</b> 입장 표의 남은 수명으로 잰 가장 최근 적용의 나이를 같이 준다 (CY-933). 적용과 잠금이 표에
+     * 같은 수명을 새로 걸어 남은 수명이 곧 나이다. 잠금도 적용으로 읽히지만 더 기다리는 쪽으로만 틀린다.
+     */
+    public Mono<FenceSeal> sealFencesAndAge(Collection<String> couponIds, long fence) {
         // **승계에서 창을 닫는다.** 리더십을 잃으면 정리가 안 돌아 해제가 영영
         // 안 찍히고, 다음 사건은 진입이 이미 열려 있어 한 줄도 안 남는다.
         dropFencedWindow.exited().ifPresent(recovered ->
                 log.info("매진 큐 삭제 막힘 구간이 승계로 끝났다 — {}초 동안 {}회차",
                         recovered.elapsedSeconds(), recovered.swallowed()));
         if (fence <= 0 || couponIds.isEmpty()) {
-            return Mono.just(0L);
+            return Mono.just(FenceSeal.NONE);
         }
         // **샤드 0 만 잠근다.** 매진 큐 삭제 자체가 샤드가 여럿이면 거절하므로
         // 지금은 맞지만, 그 빗장을 푸는 날 나머지 샤드의 문이 안 잠긴 채로
@@ -814,11 +802,23 @@ public final class AllocationRedisPort implements SnapshotSource {
                         .next()
                         // **스크립트가 낸 값을 그대로 접는다.** 1 로 갈면 "예외가 안
                         // 난 수" 가 되어, 안 잠근 것을 잠갔다고 센다.
-                        .map(Number::longValue)
+                        .map(this::sealOf)
                         // 하나가 실패해도 나머지는 잠근다. 못 잠근 쿠폰은 그 자리에서
                         // 다시 막는다 — 안 잠긴 채로 지나가지 않는다.
-                        .onErrorReturn(0L), MAX_CONCURRENT_WRITES)
-                .reduce(0L, Long::sum);
+                        .onErrorReturn(FenceSeal.NONE), MAX_CONCURRENT_WRITES)
+                .reduce(FenceSeal.NONE, FenceSeal::plus);
+    }
+
+    /** 쿠폰 하나의 잠금 결과. 수명이 없거나(-1) 표가 없으면(-2) 나이를 모른다. */
+    private FenceSeal sealOf(List<?> reply) {
+        long locked = ((Number) reply.get(0)).longValue();
+        long left = ((Number) reply.get(1)).longValue();
+        if (left <= 0) {
+            return new FenceSeal(locked, Optional.empty());
+        }
+        Duration remaining = Duration.ofMillis(left);
+        return new FenceSeal(locked, Optional.of(remaining.compareTo(fenceTtl) >= 0
+                ? Duration.ZERO : fenceTtl.minus(remaining)));
     }
 
     /** 옛 임기라 막힌 매진 큐 삭제 건수. */

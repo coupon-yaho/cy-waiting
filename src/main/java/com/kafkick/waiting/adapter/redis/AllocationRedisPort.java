@@ -758,6 +758,11 @@ public final class AllocationRedisPort implements SnapshotSource {
                 .map(Number::longValue);
     }
 
+    /** 잠그고, 덮기 직전 적용 표에서 읽은 가장 최근 적용의 나이를 같이 준다. */
+    public Mono<FenceSeal> sealFencesAndAge(Collection<String> couponIds, long fence) {
+        return sealFences(couponIds, fence).map(locked -> new FenceSeal(locked, Optional.empty()));
+    }
+
     /**
      * 이 쿠폰들 가운데 가장 최근 적용의 나이. <b>적용 표의 남은 수명으로 잰다</b> — 적용과 잠금이 표에 같은 수명을 새로
      * 걸므로 추가 쓰기 없이 나이가 나온다. 잠금도 적용으로 치므로 더 기다리는 쪽으로만 틀린다. 표가 없으면 비어 있다.

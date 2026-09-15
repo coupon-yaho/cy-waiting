@@ -99,6 +99,20 @@ class ApplyPacerTest {
         assertThat(차례).containsExactly(700L);
     }
 
+    /** 제 적용이 더 최근이면 앞 리더의 나이로 덮지 않는다. 덮으면 간격이 그만큼 당겨진다. */
+    @Test
+    @DisplayName("제_적용이_더_최근이면_앞_리더_나이로_안_덮는다")
+    void 제_적용이_더_최근이면_앞_리더_나이로_안_덮는다() {
+        ApplyPacer pacer = ApplyPacer.of(TICK, 시계);
+        시계.advanceTimeBy(Duration.ofMillis(1_000));
+        차례를_받는다(pacer);
+        시계.advanceTimeBy(Duration.ofMillis(100));
+
+        pacer.appliedAgo(Duration.ofMillis(500));
+
+        assertThat(pacer.holdOff()).isEqualTo(Duration.ofMillis(900));
+    }
+
     @Test
     @DisplayName("한_틱이_넘게_지났으면_안_기다린다")
     void 한_틱이_넘게_지났으면_안_기다린다() {

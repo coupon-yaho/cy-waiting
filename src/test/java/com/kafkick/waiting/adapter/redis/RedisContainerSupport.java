@@ -1,5 +1,8 @@
 package com.kafkick.waiting.adapter.redis;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.io.IOException;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.GenericContainer;
@@ -35,6 +38,39 @@ public abstract class RedisContainerSupport {
 
     static {
         REDIS.start();
+    }
+
+    /** 상한을 건 채 돌릴 본문. */
+    interface Body {
+        void run() throws Exception;
+    }
+
+    /**
+     * 사용량 아래로 상한을 내린 채 돌리고 되돌린다. <b>되돌린 값을 다시 읽어 확인한다</b> — 컨테이너를 JVM 안의
+     * 다른 시험과 나눠 써, 복구가 조용히 실패하면 뒤 시험이 전부 엉뚱한 원인으로 깨진다.
+     */
+    static void 메모리_상한에서(Body body) throws Exception {
+        String 원래 = 설정을_읽는다("maxmemory");
+        assertThat(원래).as("전제 — 원래 상한을 읽었다").matches("\\d+");
+        REDIS.execInContainer("redis-cli", "CONFIG", "SET", "maxmemory", "1");
+        try {
+            assertThat(메모리가_막혔다()).as("전제 — 쓰기가 거부되는 상태다").isTrue();
+            body.run();
+        } finally {
+            REDIS.execInContainer("redis-cli", "CONFIG", "SET", "maxmemory", 원래);
+            REDIS.execInContainer("redis-cli", "DEL", "test:oom-probe");
+            assertThat(설정을_읽는다("maxmemory")).as("상한을 되돌렸다").isEqualTo(원래);
+        }
+    }
+
+    static String 설정을_읽는다(String 이름) throws IOException, InterruptedException {
+        String[] 줄 = REDIS.execInContainer("redis-cli", "CONFIG", "GET", 이름).getStdout().trim().split("\n");
+        return 줄[줄.length - 1].trim();
+    }
+
+    /** 상한이 안 먹었으면 시험이 거짓 초록이다. 스크립트 밖 쓰기로 거부부터 확인한다. */
+    static boolean 메모리가_막혔다() throws IOException, InterruptedException {
+        return REDIS.execInContainer("redis-cli", "SET", "test:oom-probe", "x").getStdout().contains("OOM");
     }
 
     @DynamicPropertySource

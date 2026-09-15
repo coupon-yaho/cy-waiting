@@ -917,6 +917,11 @@ public final class AllocationRedisPort implements SnapshotSource {
                     return Mono.<List<?>>error(new FencedOutException(fence, blockedBy));
                 })
                 .doOnSuccess(done -> watchTrim(dropped))
+                // **거부된 발행은 문의 수명을 다시 건다** (CY-932). 표는 발행이 매 틱 새로 거는데, 메모리 상한이 그
+                // 수명보다 길면 봉인이 사라진 채 풀려 멎었던 옛 리더의 발행이 먼저 들어간다. 울타리 거절은 제외한다.
+                .onErrorResume(e -> e instanceof FencedOutException
+                        ? Mono.error(e)
+                        : sealSnapshotFence(fence).onErrorResume(sealError -> Mono.empty()).then(Mono.error(e)))
                 .then();
     }
 

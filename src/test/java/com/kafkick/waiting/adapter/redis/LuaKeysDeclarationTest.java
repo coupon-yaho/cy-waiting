@@ -106,11 +106,16 @@ class LuaKeysDeclarationTest {
         }
     }
 
-    /** 첫 코드 줄 전까지의 주석 블록. */
+    /** 첫 코드 줄 전까지의 주석 블록. 첫 줄의 스크립트 플래그(셔뱅)는 코드가 아니라 건너뛴다. */
     private String headerOf(Path script) throws IOException {
         StringBuilder header = new StringBuilder();
-        for (String line : Files.readAllLines(script, StandardCharsets.UTF_8)) {
+        List<String> lines = Files.readAllLines(script, StandardCharsets.UTF_8);
+        for (int i = 0; i < lines.size(); i++) {
+            String line = lines.get(i);
             String trimmed = line.strip();
+            if (i == 0 && trimmed.startsWith("#!")) {
+                continue;
+            }
             if (!trimmed.isEmpty() && !trimmed.startsWith("--")) {
                 break;
             }

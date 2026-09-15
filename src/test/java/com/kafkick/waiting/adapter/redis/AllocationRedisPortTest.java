@@ -494,9 +494,10 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         FenceSeal 결과 = port.sealFencesAndAge(List.of("c1", "c2", "c3"), 임기).block(WAIT);
 
         assertThat(결과.locked()).isEqualTo(3);
-        // 시간은 흐르기만 해 나이는 300ms 아래로 안 가고, 30분 쪽을 골랐다면 1분 아래일 수 없다.
+        // 하한은 덮기 전에 읽었다는 증거다. 30분 쪽을 골랐는지만 가르므로 상한은 30분이다 — 명령마다 5초 시한이라
+        // 시험이 거기까지 늘어질 수 없다. 변환과 가장 어린 쪽 고르기의 정확한 값은 FenceSealTest 가 본다.
         assertThat(결과.lastApplyAge()).as("표가 있는 두 쿠폰 중 어린 쪽이다").hasValueSatisfying(age -> assertThat(age)
-                .isGreaterThanOrEqualTo(Duration.ofMillis(300)).isLessThan(Duration.ofMinutes(1)));
+                .isGreaterThanOrEqualTo(Duration.ofMillis(300)).isLessThan(Duration.ofMinutes(30)));
         assertThat(redis.opsForValue().get(RedisKeys.applyFence("c2", SHARDS, 0)).block(WAIT))
                 .as("나이를 읽고 나서 잠갔다").isEqualTo(Long.toString(임기));
     }

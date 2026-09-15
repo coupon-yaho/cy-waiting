@@ -114,6 +114,7 @@ class AllocationUnderLatencyScenarioTest {
         long[] 들인_수 = new long[1];
         long[] 낡은_표본 = new long[1];
         long[] 최대_틈_ms = new long[1];
+        long[] 주입_시각 = new long[1];
         double[] 느리기_전_초과 = new double[1];
         double[] 초과 = new double[1];
 
@@ -138,6 +139,8 @@ class AllocationUnderLatencyScenarioTest {
                     왕복[0] = Duration.ofNanos(System.nanoTime() - 앞).toMillis();
                     // 지연이 붙은 뒤의 첫 발행부터 센다. 붙기 전에 나간 회차를 섞지 않는다.
                     느리기_전_발행[0] = 관측.들고_있는_발행();
+                    // 틈은 주입 시각부터 잰다. 주입 직후가 가장 긴 틈이 생기는 구간이다.
+                    주입_시각[0] = System.nanoTime();
                     느리기_전_들인_수[0] = (long) round.admitted();
                     느리기_전_초과[0] = round.enteredOvershoot();
                 })
@@ -145,7 +148,7 @@ class AllocationUnderLatencyScenarioTest {
                     long[] 잃은_표본 = new long[1];
                     Set<Instant> 본_발행 = new HashSet<>();
                     Instant[] 앞_발행 = {느리기_전_발행[0]};
-                    long[] 바뀐_시각 = {System.nanoTime()};
+                    long[] 바뀐_시각 = {주입_시각[0]};
                     Awaitility.await().during(전진_창).atMost(전진_창.plusSeconds(2))
                             .pollInterval(Duration.ofMillis(100)).until(() -> {
                                 Instant 지금_발행 = holder.view().snapshot().publishedAt();

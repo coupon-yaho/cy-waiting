@@ -285,7 +285,10 @@ public class ControlPlaneConfig {
         return sealFences(port, leadership, gate, deadline, scheduler, ApplyPacer.none());
     }
 
-    /** 잠그기 전에 앞 리더의 마지막 적용 나이를 페이서에 넘긴다. */
+    /**
+     * 잠그면서 앞 리더의 마지막 적용 나이를 페이서에 넘긴다. <b>승계 대기는 발행 나이만 본다</b> — 발행이 잘리고 적용만
+     * 들어간 채 넘겨받으면 새 리더의 첫 적용이 앞 적용과 1초 안에 겹쳐 뒷단 유입이 두 배가 된다.
+     */
     Runnable sealFences(AllocationRedisPort port, Leadership leadership, SealGate gate,
             Duration deadline, Scheduler scheduler, ApplyPacer pacer) {
         return () -> {
@@ -458,7 +461,10 @@ public class ControlPlaneConfig {
                 nanos -> { }, allocationScheduler, applyPacer::holdOff);
     }
 
-    /** 적용 간격. 회차는 차례를 기다리고, 스케줄러는 그 차례만큼 시작을 늦춘다. */
+    /**
+     * 적용 간격. <b>적용 한 번이 한 틱 몫을 들인다</b> — 회차 시작 간격만 틱에 맞추면 느린 회차 끝의 적용과 다음 회차의
+     * 적용이 1초 안에 겹친다. 회차와 스케줄러와 승계 잠금이 같은 인스턴스를 봐야 간격이 이어진다.
+     */
     @Bean
     ApplyPacer applyPacer(ControlPlaneProperties properties, Scheduler allocationScheduler) {
         return ApplyPacer.of(properties.scheduler().tick(), allocationScheduler);

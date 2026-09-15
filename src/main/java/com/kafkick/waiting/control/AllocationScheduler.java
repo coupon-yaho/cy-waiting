@@ -37,6 +37,9 @@ public final class AllocationScheduler {
     /** 직전 회차가 리더가 아니라 건너뛰었는가. 회차 완료 신호가 다른 스레드에서 읽을 수 있다. */
     private volatile boolean lastSkipped;
 
+    /** 직전 리더 회차가 걸린 시간(나노). 다음 지연을 틱에 맞추는 데 쓴다. */
+    private volatile long lastRoundNanos;
+
     private final AtomicBoolean running = new AtomicBoolean();
     private final FailureWindow failures;
     private volatile Disposable subscription;
@@ -106,7 +109,11 @@ public final class AllocationScheduler {
      */
     private Duration nextDelay() {
         if (!lastSkipped) {
-            return tick;
+            // **틱에서 회차가 걸린 만큼 뺀다.** 통째로 쉬면 레디스가 느린 날 회차 시간만큼 주기가 늘어 발행이 준다.
+            // 밀린 틱을 만회하지는 않고, 틱을 다 쓴 회차 뒤에도 4분의 1은 쉰다 — 느린 레디스를 쉼 없이 안 두드린다.
+            Duration left = tick.minusNanos(lastRoundNanos);
+            Duration minimumGap = tick.dividedBy(4);
+            return left.compareTo(minimumGap) < 0 ? minimumGap : left;
         }
         return IDLE_POLL.compareTo(tick) < 0 ? IDLE_POLL : tick;
     }
@@ -143,6 +150,8 @@ public final class AllocationScheduler {
                 .doOnSuccess(ignored -> recovered())
                 .doOnError(this::failed)
                 .onErrorResume(e -> Mono.empty())
+                // 끝나는 신호보다 먼저 적는다. 끝난 뒤에 적으면 반복이 다음 지연을 먼저 계산해 옛 값을 쓴다.
+                .doOnTerminate(() -> lastRoundNanos = timer.now(NANOSECONDS) - startedAt)
                 .doFinally(signal ->
                         lagNanos.accept(timer.now(NANOSECONDS) - startedAt));
     }

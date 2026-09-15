@@ -2,11 +2,13 @@ package com.kafkick.waiting.control;
 
 import java.time.Duration;
 import java.util.Objects;
+import java.util.concurrent.TimeUnit;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
 
 /**
- * 회차의 적용을 앞 회차 적용에서 한 틱 떨어뜨린다. 적용 한 번이 한 틱 몫을 들인다.
+ * 회차의 적용을 앞 회차 적용에서 한 틱 떨어뜨린다. <b>적용 한 번이 한 틱 몫을 들인다</b> — 회차 시작 간격만 맞추면
+ * 끝에 적용한 느린 회차 뒤에 빠른 회차가 곧바로 적용해 두 틱 몫이 1초 안에 들어간다.
  */
 public final class ApplyPacer {
 
@@ -14,6 +16,12 @@ public final class ApplyPacer {
 
     private final Duration spacing;
     private final Scheduler timer;
+
+    /** 적용한 적이 있는가. <b>시각의 부호로 표시하지 않는다</b> — 단조 시계는 음수일 수 있다. */
+    private volatile boolean applied;
+
+    /** 마지막 적용 시각(나노). */
+    private volatile long lastNanos;
 
     private ApplyPacer(Duration spacing, Scheduler timer) {
         this.spacing = spacing;
@@ -30,8 +38,18 @@ public final class ApplyPacer {
         return NONE;
     }
 
-    /** 차례가 올 때까지 기다리고 이번 적용을 표시한다. */
+    /** 차례가 올 때까지 기다리고 이번 적용을 표시한다. 기다리다 취소되면 표시하지 않는다. */
     public Mono<Void> turn() {
-        return Mono.empty();
+        if (timer == null) {
+            return Mono.empty();
+        }
+        return Mono.defer(() -> {
+            long left = applied ? spacing.toNanos() - (timer.now(TimeUnit.NANOSECONDS) - lastNanos) : 0;
+            Mono<Void> wait = left > 0 ? Mono.delay(Duration.ofNanos(left), timer).then() : Mono.empty();
+            return wait.then(Mono.fromRunnable(() -> {
+                lastNanos = timer.now(TimeUnit.NANOSECONDS);
+                applied = true;
+            }));
+        });
     }
 }

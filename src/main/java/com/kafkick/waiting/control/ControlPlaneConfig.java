@@ -130,6 +130,8 @@ public class ControlPlaneConfig {
                 // 레디스를 치지 않으려면 이 길밖에 없다. 합산에 든 값 그대로라 갓 뜬
                 // 인스턴스의 램프가 깎은 몫이 여기에도 실린다.
                 capacity::routable);
+        // 회차 시작 간격만 틱에 맞추면 적용 둘이 1초 안에 들어갈 수 있다. 적용끼리 한 틱을 띄운다.
+        round.pacedBy(ApplyPacer.of(properties.scheduler().tick(), allocationScheduler));
         return round;
     }
 

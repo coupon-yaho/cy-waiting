@@ -409,6 +409,14 @@ public final class AllocationRound {
                 "리더십이 갈렸다 — 조임 창을 닫는다. 그동안 {}틱 조였다", r.swallowed()));
         ramping.exited().ifPresent(r -> log.info(
                 "리더십이 갈렸다 — 램프 창을 닫는다. 그동안 {}틱 올렸다", r.swallowed()));
+        // **나머지 창도 같이 닫는다** (CY-824). 창이 리더 메모리라 열어 둔 채 넘기면 진입 경고 하나에 해제가
+        // 영영 없고, 다음 사건은 이미 열려 있어 한 줄도 안 남는다.
+        overshoot.exited().ifPresent(r -> log.info(
+                "리더십이 갈렸다 — 배분 예산 초과 창을 닫는다. 그동안 {}틱 넘겼다", r.swallowed()));
+        pollOvershoot.exited().ifPresent(r -> log.info(
+                "리더십이 갈렸다 — 폴링 예산 초과 창을 닫는다. 그동안 {}틱 넘겼다", r.swallowed()));
+        failures.exited().ifPresent(r -> log.info(
+                "리더십이 갈렸다 — 적용 실패 창을 닫는다. 그동안 {}회차 실패했다", r.swallowed()));
         // **램프 기준은 안 버린다.** 브레이크라서 그렇다 — 모른다는 것이 놓을 이유가
         // 되면 회복 도중 승계가 끼는 순간 계단이 복원된다. 회차 타임아웃과 레디스
         // 압박이 겹치는 구간이 곧 리더가 바뀌기 가장 쉬운 구간이라 드물지도 않다.

@@ -487,15 +487,18 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     void 잠금이_덮기_전_가장_최근_적용의_나이를_준다() {
         Duration 수명 = Duration.ofHours(1);
         redis.opsForValue().set(RedisKeys.applyFence("c1", SHARDS, 0), Long.toString(임기 - 1),
-                수명.minusMillis(800)).block(WAIT);
+                수명.minusMinutes(30)).block(WAIT);
         redis.opsForValue().set(RedisKeys.applyFence("c2", SHARDS, 0), Long.toString(임기 - 1),
                 수명.minusMillis(300)).block(WAIT);
 
         FenceSeal 결과 = port.sealFencesAndAge(List.of("c1", "c2", "c3"), 임기).block(WAIT);
 
         assertThat(결과.locked()).isEqualTo(3);
+        // 시간은 흐르기만 해 나이는 300ms 아래로 안 가고, 30분 쪽을 골랐다면 1분 아래일 수 없다.
         assertThat(결과.lastApplyAge()).as("표가 있는 두 쿠폰 중 어린 쪽이다").hasValueSatisfying(age -> assertThat(age)
-                .isGreaterThanOrEqualTo(Duration.ofMillis(300)).isLessThan(Duration.ofMillis(800)));
+                .isGreaterThanOrEqualTo(Duration.ofMillis(300)).isLessThan(Duration.ofMinutes(1)));
+        assertThat(redis.opsForValue().get(RedisKeys.applyFence("c2", SHARDS, 0)).block(WAIT))
+                .as("나이를 읽고 나서 잠갔다").isEqualTo(Long.toString(임기));
     }
 
     @Test

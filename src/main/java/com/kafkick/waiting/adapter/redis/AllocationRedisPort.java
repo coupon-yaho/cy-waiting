@@ -814,14 +814,7 @@ public final class AllocationRedisPort implements SnapshotSource {
         if (reply.size() != 2) {
             throw new IllegalStateException("잠금 응답은 두 칸이어야 한다: " + reply);
         }
-        long locked = ((Number) reply.get(0)).longValue();
-        long left = ((Number) reply.get(1)).longValue();
-        if (left <= 0) {
-            return new FenceSeal(locked, Optional.empty());
-        }
-        Duration remaining = Duration.ofMillis(left);
-        return new FenceSeal(locked, Optional.of(remaining.compareTo(fenceTtl) >= 0
-                ? Duration.ZERO : fenceTtl.minus(remaining)));
+        return FenceSeal.of(((Number) reply.get(0)).longValue(), ((Number) reply.get(1)).longValue(), fenceTtl);
     }
 
     /** 옛 임기라 막힌 매진 큐 삭제 건수. */

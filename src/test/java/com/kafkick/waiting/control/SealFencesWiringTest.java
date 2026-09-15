@@ -148,21 +148,25 @@ class SealFencesWiringTest {
         redis.opsForValue().set(RedisKeys.applyFence(COUPON, SHARDS, 0), Long.toString(임기 - 1),
                 Duration.ofHours(1).minusMillis(300)).block(기다림);
         SealGate gate = SealGate.of(() -> true);
-        ApplyPacer pacer = ApplyPacer.of(Duration.ofSeconds(1), Schedulers.parallel());
+        // 페이서 시계는 가상이라 안 흐른다. 흐르는 것은 레디스 표의 수명뿐이고, 그것은 나이를 늘리기만 한다.
+        VirtualTimeScheduler 페이서_시계 = VirtualTimeScheduler.create();
+        ApplyPacer pacer = ApplyPacer.of(Duration.ofSeconds(1), 페이서_시계);
 
         new ControlPlaneConfig().sealFences(port, 리더가_된다(), gate, 기다림, Schedulers.parallel(), pacer)
                 .run();
         Awaitility.await().atMost(기다림).until(gate::getAsBoolean);
 
-        assertThat(pacer.holdOff()).as("한 틱에서 앞 적용의 나이를 뺀 만큼 남는다")
-                .isGreaterThan(Duration.ofMillis(300)).isLessThanOrEqualTo(Duration.ofMillis(700));
+        assertThat(pacer.holdOff()).as("한 틱에서 300ms 이상인 나이를 뺐다")
+                .isPositive().isLessThanOrEqualTo(Duration.ofMillis(700));
+        페이서_시계.advanceTimeBy(Duration.ofMillis(700));
+        assertThat(pacer.holdOff()).as("앞 적용에서 한 틱이 지났다").isZero();
     }
 
     @Test
     @DisplayName("앞_적용이_없으면_간격을_안_둔다")
     void 앞_적용이_없으면_간격을_안_둔다() {
         SealGate gate = SealGate.of(() -> true);
-        ApplyPacer pacer = ApplyPacer.of(Duration.ofSeconds(1), Schedulers.parallel());
+        ApplyPacer pacer = ApplyPacer.of(Duration.ofSeconds(1), VirtualTimeScheduler.create());
 
         new ControlPlaneConfig().sealFences(port, 리더가_된다(), gate, 기다림, Schedulers.parallel(), pacer)
                 .run();

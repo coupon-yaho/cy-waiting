@@ -553,4 +553,55 @@ class LeaderElectionTest extends RedisContainerSupport {
         assertThat(m.find()).as("상수 이름이 바뀌면 이 시험부터 고친다").isTrue();
         assertThat(Long.parseLong(m.group(1))).isEqualTo(ROLLOUT_MARGIN_US);
     }
+
+    /**
+     * <b>메모리 상한에서도 후임이 선다</b> (CY-296). 연장은 메모리를 안 늘려 거부되지 않는데 신규 획득은
+     * 거부되면, 리더가 내려간 순간 아무도 못 잡아 배분이 영영 멎는다. 해제 조건이 없다.
+     */
+    @Test
+    @DisplayName("메모리_상한에서도_비어_있는_리더를_잡는다")
+    void 메모리_상한에서도_비어_있는_리더를_잡는다() throws Exception {
+        메모리_상한에서(() -> {
+            assertThat(메모리가_막혔다()).as("전제 — 쓰기가 거부되는 상태다").isTrue();
+
+            List<Object> r = tryAcquire("successor");
+
+            assertThat(acquired(r)).as("후임이 리더를 잡는다").isTrue();
+            assertThat(Long.parseLong(String.valueOf(r.get(3)))).as("펜스 번호가 매겨진다").isPositive();
+        });
+    }
+
+    /** 연장은 원래 됐다. 고친 뒤에도 그대로여야 한다 — 상한에서 리더가 스스로 내려가면 배분이 끊긴다. */
+    @Test
+    @DisplayName("메모리_상한에서도_내_리더를_연장한다")
+    void 메모리_상한에서도_내_리더를_연장한다() throws Exception {
+        assertThat(acquired(tryAcquire("holder"))).isTrue();
+
+        메모리_상한에서(() -> assertThat(acquired(tryAcquire("holder"))).isTrue());
+    }
+
+    private interface Body {
+        void run() throws Exception;
+    }
+
+    /** 사용량 아래로 상한을 내린 채 돌리고 반드시 되돌린다. 컨테이너를 다른 시험과 나눠 쓴다. */
+    private void 메모리_상한에서(Body body) throws Exception {
+        String 원래 = 설정을_읽는다("maxmemory");
+        REDIS.execInContainer("redis-cli", "CONFIG", "SET", "maxmemory", "1");
+        try {
+            body.run();
+        } finally {
+            REDIS.execInContainer("redis-cli", "CONFIG", "SET", "maxmemory", 원래);
+        }
+    }
+
+    private String 설정을_읽는다(String 이름) throws IOException, InterruptedException {
+        String[] 줄 = REDIS.execInContainer("redis-cli", "CONFIG", "GET", 이름).getStdout().trim().split("\n");
+        return 줄[줄.length - 1].trim();
+    }
+
+    /** 쓰기 명령 하나를 보내 OOM 으로 거부되는지 본다. */
+    private boolean 메모리가_막혔다() throws IOException, InterruptedException {
+        return REDIS.execInContainer("redis-cli", "SET", "test:oom-probe", "x").getStdout().contains("OOM");
+    }
 }

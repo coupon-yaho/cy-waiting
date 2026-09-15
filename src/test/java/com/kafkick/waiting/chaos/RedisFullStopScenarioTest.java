@@ -488,9 +488,9 @@ class RedisFullStopScenarioTest {
                         // 발급만 때리므로 수신 수가 곧 발급 시도다.
                         RecoveryCriteria.overIssued(유입.total(), 재고),
                         // RC6 — 회복 뒤 유입이 정상 수준으로 돌아온다.
-                        // 분포를 이름에 싣는다. CI 에서만 간헐로 벌어져 응답 코드가 원인을 가르는 유일한 단서다 (CY-934).
-                        RecoveryCriteria.notConverged("판정 통과 비율 (회복 분포 %s)".formatted(분포(회복_상태)),
-                                통과_비율(정상_상태), 통과_비율(회복_상태)),
+                        // 분포를 같이 싣는다. CI 에서만 간헐로 벌어져 응답 코드가 원인을 가르는 유일한 단서다 (CY-934).
+                        RecoveryCriteria.notConverged("판정 통과 비율", 통과_비율(정상_상태),
+                                통과_비율(회복_상태), "회복 분포 %s".formatted(분포(회복_상태))),
                         // **RC5 는 여기서 못 잰다** (CY-809). 픽스처가
                         // `--appendonly no` 로 띄우므로 컨테이너를 끊었다 붙이면
                         // 줄이 통째로 사라진다. 계획서가 요구하는 "큐 순번 전원
@@ -566,11 +566,12 @@ class RedisFullStopScenarioTest {
                 : Optional.of("줄이 살아남았다 — 영속성이 켜졌다면 이제 RC5 로 잰다 (CY-809)");
     }
 
-    /** 통과 비율. RC6 이 이것으로 판정 분포의 수렴을 본다. */
+    /** 응답 코드별 개수. 비율만 보면 5xx 와 줄 세움을 못 가른다 — 간헐 실패의 원인은 그 차이에 있다. */
     private Map<Integer, Long> 분포(List<Integer> 상태) {
         return 상태.stream().collect(Collectors.groupingBy(s -> s, TreeMap::new, Collectors.counting()));
     }
 
+    /** 통과 비율. RC6 이 이것으로 판정 분포의 수렴을 본다. */
     private double 통과_비율(List<Integer> 상태) {
         return 상태.isEmpty() ? 0
                 : (double) 상태.stream().filter(s -> s < 300).count() / 상태.size();

@@ -562,8 +562,6 @@ class LeaderElectionTest extends RedisContainerSupport {
     @DisplayName("메모리_상한에서도_비어_있는_리더를_잡는다")
     void 메모리_상한에서도_비어_있는_리더를_잡는다() throws Exception {
         메모리_상한에서(() -> {
-            assertThat(메모리가_막혔다()).as("전제 — 쓰기가 거부되는 상태다").isTrue();
-
             List<Object> r = tryAcquire("successor");
 
             assertThat(acquired(r)).as("후임이 리더를 잡는다").isTrue();
@@ -584,14 +582,21 @@ class LeaderElectionTest extends RedisContainerSupport {
         void run() throws Exception;
     }
 
-    /** 사용량 아래로 상한을 내린 채 돌리고 반드시 되돌린다. 컨테이너를 다른 시험과 나눠 쓴다. */
+    /**
+     * 사용량 아래로 상한을 내린 채 돌리고 되돌린다. <b>되돌린 값을 다시 읽어 확인한다</b> — 컨테이너를 JVM 안의
+     * 다른 시험과 나눠 써, 복구가 조용히 실패하면 뒤 시험이 전부 엉뚱한 원인으로 깨진다.
+     */
     private void 메모리_상한에서(Body body) throws Exception {
         String 원래 = 설정을_읽는다("maxmemory");
+        assertThat(원래).as("전제 — 원래 상한을 읽었다").matches("\\d+");
         REDIS.execInContainer("redis-cli", "CONFIG", "SET", "maxmemory", "1");
         try {
+            assertThat(메모리가_막혔다()).as("전제 — 쓰기가 거부되는 상태다").isTrue();
             body.run();
         } finally {
             REDIS.execInContainer("redis-cli", "CONFIG", "SET", "maxmemory", 원래);
+            REDIS.execInContainer("redis-cli", "DEL", "test:oom-probe");
+            assertThat(설정을_읽는다("maxmemory")).as("상한을 되돌렸다").isEqualTo(원래);
         }
     }
 

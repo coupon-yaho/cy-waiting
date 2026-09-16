@@ -5,6 +5,7 @@ import static org.awaitility.Awaitility.await;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.entry;
 
+import com.kafkick.waiting.control.RewindCheck;
 import com.kafkick.waiting.domain.allocation.Grant;
 import com.kafkick.waiting.domain.coupon.QueueMode;
 import java.time.Duration;
@@ -506,6 +507,117 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     @DisplayName("적용_표가_없으면_나이가_비어_있다")
     void 적용_표가_없으면_나이가_비어_있다() {
         assertThat(port.sealFencesAndAge(List.of("c1"), 임기).block(WAIT).lastApplyAge()).isEmpty();
+    }
+
+    /**
+     * <b>우리가 쓴 임계가 사라지면 되감기다</b> (CY-856). 줄과 임계는 같은 슬롯이라 함께 되감겨, 임계 이하 인원으로는
+     * 안 보인다. 쓴 값을 기억해 견주는 것이 유일한 신호다.
+     */
+    @Test
+    @DisplayName("쓴_임계보다_뒤로_간_쿠폰을_센다")
+    void 쓴_임계보다_뒤로_간_쿠폰을_센다() {
+        줄_세운다("c1", 10, 20, 30);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        // 되감기를 흉내 낸다 — 우리가 쓴 값이 옛 값으로 돌아갔다.
+        redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "10").block(WAIT);
+
+        assertThat(port.rewindCheck(List.of("c1")).block(WAIT))
+                .isEqualTo(RewindCheck.seen(List.of("c1"), 1));
+    }
+
+    @Test
+    @DisplayName("임계가_그대로면_안_센다")
+    void 임계가_그대로면_안_센다() {
+        줄_세운다("c1", 10, 20, 30);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+
+        assertThat(port.rewindCheck(List.of("c1")).block(WAIT))
+                .as("견줬는데 안 감겼다 — 못 잰 것과 다르다").isEqualTo(RewindCheck.seen(List.of(), 1));
+    }
+
+    /** 이 노드가 쓴 적 없는 쿠폰은 견줄 값이 없다. 모르는 것을 되감기로 세면 승계 직후마다 거짓 경보다. */
+    @Test
+    @DisplayName("쓴_적_없는_쿠폰은_안_센다")
+    void 쓴_적_없는_쿠폰은_안_센다() {
+        줄_세운다("c2", 10, 20, 30);
+        redis.opsForValue().set(RedisKeys.admitted("c2", SHARDS, 0), "10").block(WAIT);
+
+        assertThat(port.rewindCheck(List.of("c2")).block(WAIT))
+                .as("기준이 없으면 못 잰 것이다").isEqualTo(RewindCheck.NONE);
+    }
+
+    /** 임계 키가 사라진 것도 되감기다. 우리가 쓴 값이 없어진 자리다. */
+    @Test
+    @DisplayName("임계가_사라진_쿠폰도_센다")
+    void 임계가_사라진_쿠폰도_센다() {
+        줄_세운다("c1", 10, 20, 30);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        redis.delete(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT);
+
+        assertThat(port.rewindCheck(List.of("c1")).block(WAIT))
+                .isEqualTo(RewindCheck.seen(List.of("c1"), 1));
+    }
+
+    /** 되감기가 활성 목록까지 되돌리면 가장 심하게 감긴 쿠폰이 이번 회차 대상에서 빠진다. 기준이 있으면 본다. */
+    @Test
+    @DisplayName("이번_회차_대상이_아니어도_기준이_있으면_본다")
+    void 이번_회차_대상이_아니어도_기준이_있으면_본다() {
+        줄_세운다("c1", 10, 20, 30);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "10").block(WAIT);
+
+        assertThat(port.rewindCheck(List.of()).block(WAIT))
+                .isEqualTo(RewindCheck.seen(List.of("c1"), 1));
+    }
+
+    /** 활성에서 빠진 쿠폰의 기준은 버린다. 안 버리면 이 맵만 역사상 쿠폰 수로 자란다. */
+    @Test
+    @DisplayName("활성에서_빠진_기준은_버린다")
+    void 활성에서_빠진_기준은_버린다() {
+        줄_세운다("c1", 10, 20, 30);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+
+        port.forgetInactive(List.of("c9"));
+
+        assertThat(port.rewindCheck(List.of("c1")).block(WAIT)).isEqualTo(RewindCheck.NONE);
+    }
+
+    /** 한 번도 안 들인 줄은 임계가 없다. 그 -1 을 기준으로 넣으면 그 쿠폰이 실패 뒤마다 거짓 되감기로 잡힌다. */
+    @Test
+    @DisplayName("한_번도_안_들인_쿠폰은_기준을_안_잡는다")
+    void 한_번도_안_들인_쿠폰은_기준을_안_잡는다() {
+        // 큐가 비어 아무도 안 들어간다 — 스크립트가 임계를 안 쓴다.
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+
+        assertThat(port.rewindCheck(List.of("c1")).block(WAIT)).isEqualTo(RewindCheck.NONE);
+    }
+
+    /** 기준은 적용마다 새로 잡는다. 첫 값에 얼어붙으면 그 뒤의 되감기를 못 본다. */
+    @Test
+    @DisplayName("기준은_적용마다_새로_잡는다")
+    void 기준은_적용마다_새로_잡는다() {
+        줄_세운다("c1", 10, 20, 30, 40, 50);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        String 중간 = redis.opsForValue().get(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+
+        // 두 번째 적용 전 값으로 되돌린다 — 첫 값에 얼어붙었으면 안 잡힌다.
+        redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), 중간).block(WAIT);
+
+        assertThat(port.rewindCheck(List.of("c1")).block(WAIT))
+                .isEqualTo(RewindCheck.seen(List.of("c1"), 1));
+    }
+
+    /** 깨진 임계는 되감기로 안 센다. 값이 깨진 순간 전 쿠폰이 경보되면 신호가 소음이 된다. */
+    @Test
+    @DisplayName("깨진_임계는_되감기로_안_센다")
+    void 깨진_임계는_되감기로_안_센다() {
+        줄_세운다("c1", 10, 20, 30);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "깨진값").block(WAIT);
+
+        assertThat(port.rewindCheck(List.of("c1")).block(WAIT))
+                .isEqualTo(RewindCheck.seen(List.of(), 1));
     }
 
     /** 리더가 아니면 안 잠근다. 강등된 노드가 문을 제 번호로 되돌리면 안 된다. */

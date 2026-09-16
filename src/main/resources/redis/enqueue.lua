@@ -101,9 +101,10 @@ if floor >= score then
     applied = 1
 end
 
--- **복제 단위로는 함께 움직인다.** 효과 기반 복제라 이 쓰기는 복제본과 AOF 에 통째로
--- 가거나 통째로 안 간다. 다만 스크립트 안의 롤백은 없어서 실패할 수 있는 인자 검증을
--- 전부 위로 올려 뒀다 — 여기 남는 실패 경로는 maxmemory 로 막는 메모리 부족뿐이다.
+-- **세 쓰기는 함께 가거나 함께 안 간다.** 복제본은 효과 기반 복제가 한 단위로 보내고,
+-- AOF 는 적재가 잘려도 마지막 유효 명령까지만 되감아(`aof-load-truncated yes`) 중간에
+-- 끊긴 명령을 통째로 뺀다. 스크립트 안의 롤백은 없어서 실패할 수 있는 인자 검증을 전부
+-- 위로 올려 뒀다 — 여기 남는 실패 경로는 maxmemory 로 막는 메모리 부족뿐이다.
 redis.call('ZADD', KEYS[1], score, ARGV[1])
 redis.call('SET', KEYS[2], score, 'EX', scoreTtl)
 redis.call('ZADD', KEYS[3], now + aliveTtl, ARGV[1])

@@ -1,18 +1,19 @@
 package com.kafkick.waiting.adapter.redis;
 
-import io.micrometer.core.instrument.Timer;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
-import java.util.concurrent.TimeUnit;
-
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.kafkick.waiting.domain.queue.QueueEntry;
-import com.kafkick.waiting.gateway.QueuePort;
 import com.kafkick.waiting.domain.queue.QueueState;
+import com.kafkick.waiting.gateway.QueuePort;
+import io.micrometer.core.instrument.Timer;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -33,6 +34,7 @@ class QueueRedisPortTest extends RedisContainerSupport {
     private static final String COUPON = "qp";
     private static final int SHARDS = 1;
     private static final Duration WAIT = Duration.ofSeconds(10);
+    private static final String 등록_왕복 = "waiting.queue.enqueue.latency";
     private static final Instant 지금 = Instant.parse("2026-08-24T00:00:00Z");
 
     private static LettuceConnectionFactory factory;
@@ -65,28 +67,6 @@ class QueueRedisPortTest extends RedisContainerSupport {
      * 전부 통과합니다. 이 패키지는 뮤테이션 범위 밖이라 여기가 유일한 방어이고,
      * 자리를 바꾸면 처음 온 사람이 "돌아오신 걸 환영합니다" 를 받습니다.
      */
-    /**
-     * <b>등록의 레디스 왕복만 따로 잰다</b> (CY-936). 응답 전체의 분위수에는 판정·라우팅·뒷단이 섞여 있어, 착수
-     * 게이트가 보라는 등록 p99 를 못 읽는다.
-     */
-    @Test
-    @DisplayName("등록_왕복을_타이머에_남긴다")
-    void 등록_왕복을_타이머에_남긴다() {
-        SimpleMeterRegistry 미터 = new SimpleMeterRegistry();
-        QueueRedisPort 잰다 = QueueRedisPort.of(redis, SHARDS, 미터);
-
-        잰다.enqueue(COUPON, "timer-1", QueuePort.NO_LIMIT, 지금).block(WAIT);
-
-        // **get 은 없으면 그 자리에서 터진다.** 널 검사로 두면 "있다" 만 보고 값은 안 본다.
-        Timer 타이머 = 미터.get("waiting.queue.enqueue.redis").timer();
-        assertThat(타이머.count()).as("왕복 한 번이 한 표본이다").isEqualTo(1);
-        assertThat(타이머.totalTime(TimeUnit.NANOSECONDS)).isPositive();
-        // **분위수를 내는 타이머여야 한다.** 개수만 세면 착수 게이트가 읽을 값이 없다.
-        assertThat(타이머.takeSnapshot().percentileValues())
-                .extracting(잰값 -> 잰값.percentile())
-                .containsExactly(0.5, 0.95, 0.99);
-    }
-
     @Test
     @DisplayName("재방문_여부를_자리에서_제대로_읽는다")
     void 재방문_여부를_자리에서_제대로_읽는다() {
@@ -327,5 +307,69 @@ class QueueRedisPortTest extends RedisContainerSupport {
         assertThat(결과).extracting(QueueEntry::score).containsOnly(결과.get(0).score());
         assertThat(redis.opsForZSet().size(RedisKeys.queue(COUPON, SHARDS, 0)).block(WAIT))
                 .isEqualTo(1);
+    }
+
+    /**
+     * <b>등록의 레디스 왕복만 따로 잰다</b> (CY-936). 응답 전체의 분위수에는 판정·라우팅·뒷단이 섞여 있어, 착수
+     * 게이트가 보라는 등록 p99 를 못 읽는다.
+     */
+    @Test
+    @DisplayName("등록_왕복을_타이머에_남긴다")
+    void 등록_왕복을_타이머에_남긴다() {
+        SimpleMeterRegistry 미터 = new SimpleMeterRegistry();
+        QueueRedisPort 잰다 = QueueRedisPort.of(redis, SHARDS, 미터);
+
+        잰다.enqueue(COUPON, "timer-1", QueuePort.NO_LIMIT, 지금).block(WAIT);
+
+        // **get 은 없으면 그 자리에서 터진다.** 널 검사로 두면 "있다" 만 보고 값은 안 본다.
+        Timer 타이머 = 미터.get(등록_왕복).tag("outcome", "success").timer();
+        assertThat(타이머.count()).as("왕복 한 번이 한 표본이다").isEqualTo(1);
+        assertThat(타이머.totalTime(TimeUnit.NANOSECONDS)).isPositive();
+        // **분위수를 내는 타이머여야 한다.** 개수만 세면 착수 게이트가 읽을 값이 없다.
+        assertThat(타이머.takeSnapshot().percentileValues())
+                .extracting(잰값 -> 잰값.percentile())
+                .containsExactly(0.5, 0.95, 0.99);
+    }
+
+    /** 실패한 왕복도 시간을 썼다. 성공과 안 섞는다 — 즉시 실패가 쏟아지면 분위수가 오히려 내려간다. */
+    @Test
+    @DisplayName("실패한_왕복은_따로_센다")
+    void 실패한_왕복은_따로_센다() {
+        SimpleMeterRegistry 미터 = new SimpleMeterRegistry();
+        // **아무도 안 듣는 포트로 보낸다.** 인자 검증은 왕복 전에 끝나 이 타이머가 셀 일이 아니다.
+        LettuceConnectionFactory 끊긴_곳 = new LettuceConnectionFactory(
+                new RedisStandaloneConfiguration(REDIS.getHost(), 1),
+                LettuceClientConfiguration.builder().commandTimeout(Duration.ofSeconds(2)).build());
+        끊긴_곳.afterPropertiesSet();
+        QueueRedisPort 잰다 =
+                QueueRedisPort.of(new ReactiveStringRedisTemplate(끊긴_곳), SHARDS, 미터);
+
+        try {
+            assertThatThrownBy(() -> 잰다.enqueue(COUPON, "m1", QueuePort.NO_LIMIT, 지금).block(WAIT))
+                    .isInstanceOf(RuntimeException.class);
+
+            assertThat(미터.get(등록_왕복).tag("outcome", "error").timer().count())
+                    .as("실패한 왕복").isEqualTo(1);
+            assertThat(미터.get(등록_왕복).tag("outcome", "success").timer().count())
+                    .as("성공과 안 섞는다").isZero();
+        } finally {
+            끊긴_곳.destroy();
+        }
+    }
+
+    /**
+     * <b>끊긴 왕복도 잰다</b>. 취소되는 요청은 통계적으로 오래 걸린 쪽이라, 그것만 빠진 분위수는 착수 게이트가
+     * 보라는 꼬리를 정확히 지운다.
+     */
+    @Test
+    @DisplayName("취소된_왕복도_센다")
+    void 취소된_왕복도_센다() {
+        SimpleMeterRegistry 미터 = new SimpleMeterRegistry();
+        QueueRedisPort 잰다 = QueueRedisPort.of(redis, SHARDS, 미터);
+
+        잰다.enqueue(COUPON, "timer-cancel", QueuePort.NO_LIMIT, 지금).subscribe().dispose();
+
+        Awaitility.await().atMost(WAIT).until(() -> 미터.find(등록_왕복)
+                .timers().stream().mapToLong(Timer::count).sum() >= 1);
     }
 }

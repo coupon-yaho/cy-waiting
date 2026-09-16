@@ -14,6 +14,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.TreeMap;
+import java.util.stream.Collectors;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.DisplayName;
@@ -190,8 +192,8 @@ class SplitBrainScenarioTest {
 
     /** 응답 코드 분포. 비율만 보면 무엇으로 갈렸는지가 안 남는다. */
     private Map<Integer, Long> 분포(List<Integer> 상태) {
-        return 상태.stream().collect(java.util.stream.Collectors.groupingBy(
-                status -> status, java.util.TreeMap::new, java.util.stream.Collectors.counting()));
+        return 상태.stream().collect(Collectors.groupingBy(
+                status -> status, TreeMap::new, Collectors.counting()));
     }
 
     /** 판정이 멈추지 않는다. 분단은 제어 평면의 일이지 이 노드 응답의 일이 아니다. */

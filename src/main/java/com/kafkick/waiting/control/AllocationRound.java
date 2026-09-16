@@ -103,6 +103,18 @@ public final class AllocationRound {
     /** 마지막 회차의 평활값. 지표 스레드가 읽는다. 임기가 바뀌면 비운다. */
     private volatile double smoothedCredit = Double.NaN;
 
+    /**
+     * 저장소가 뒤로 감긴 사실을 잡는 신호 (CY-856). <b>실패 뒤 첫 회차에만 센다</b> — 평시에 재면 쿠폰마다 왕복이
+     * 늘고, 되감기는 재접속 직후에만 드러난다. 배선 전에는 안 잰다.
+     */
+    private volatile Function<List<String>, Mono<Long>> backlog;
+
+    /** 직전 회차가 터졌는가. 터진 다음 회차가 신호를 재는 자리다. */
+    private final AtomicBoolean roundFailed = new AtomicBoolean();
+
+    /** 마지막으로 센 임계 이하 인원. 되감기 직후에 튄다. */
+    private volatile double admittedBacklog = Double.NaN;
+
     /** 적용 간격. 배선 전에는 안 둔다. */
     private volatile ApplyPacer pacer = ApplyPacer.none();
 
@@ -309,11 +321,12 @@ public final class AllocationRound {
 
     /** 되감기 신호를 잴 자리. 배선이 한 번 건다. */
     public void measuringBacklogWith(Function<List<String>, Mono<Long>> backlog) {
+        this.backlog = Objects.requireNonNull(backlog, "backlog 는 필수다");
     }
 
     /** 실패 뒤 첫 회차에 센 임계 이하 인원. 아직 안 쟀으면 NaN 이다. */
     public double admittedBacklog() {
-        return Double.NaN;
+        return admittedBacklog;
     }
 
     /** 적용 간격을 둔다. 배선이 한 번 건다. */
@@ -339,7 +352,9 @@ public final class AllocationRound {
             // 수요 읽기의 실패로 운영값 읽기를 취소하지 않는다. 실패는 두 읽기가 끝난 뒤에 올린다.
             return Mono.when(reads, read.then().onErrorResume(e -> Mono.empty()))
                     .then(read)
-                    .flatMap(timed -> allocate(timed.demands(), Instant.ofEpochSecond(timed.readAt())));
+                    .flatMap(timed -> allocate(timed.demands(), Instant.ofEpochSecond(timed.readAt())))
+                    // 터진 회차를 적어 둔다. 재접속 뒤 첫 회차가 되감기 신호를 재는 자리다.
+                    .doOnError(e -> roundFailed.set(true));
         });
     }
 
@@ -607,11 +622,30 @@ public final class AllocationRound {
                         .then(Mono.defer(() -> cleanUp(collected, granted)))
                         // **정리 뒤에 쓴다.** 앞에 두면 곧 지울 줄을 훑느라
                         // 예산을 쓴다.
-                        .then(Mono.defer(() -> sweepUp(collected, granted)))))
+                        .then(Mono.defer(() -> sweepUp(collected, granted)))
+                        .then(Mono.defer(() -> watchRewind(collected)))))
                 // 발행까지 못 간 회차가 기준을 올리면 다음 성공이 그 배수의
                 // 배수에서 시작한다. 틱을 넘겨 잘린 회차는 오류가 아니라 취소다.
                 .doOnError(e -> restoreUnpublished(published, before))
                 .doOnCancel(() -> restoreUnpublished(published, before));
+    }
+
+    /**
+     * 되감기 신호를 잰다. <b>터진 회차 다음에만 읽는다</b> — 되감기는 재접속 직후에만 드러나고, 평시에 재면 쿠폰마다
+     * 왕복이 는다. 읽기가 실패해도 회차는 그대로 끝낸다 — 신호 하나 때문에 배분을 세우지 않는다.
+     */
+    private Mono<Void> watchRewind(List<CouponDemand> collected) {
+        Function<List<String>, Mono<Long>> reader = backlog;
+        if (reader == null || collected.isEmpty() || !roundFailed.compareAndSet(true, false)) {
+            return Mono.empty();
+        }
+        return reader.apply(collected.stream().map(CouponDemand::couponId).toList())
+                .doOnNext(below -> {
+                    admittedBacklog = below;
+                    log.info("재접속 뒤 첫 회차 — 임계 이하 인원 {}. 되감기면 이 값이 튄다", below);
+                })
+                .onErrorResume(e -> Mono.empty())
+                .then();
     }
 
     /**

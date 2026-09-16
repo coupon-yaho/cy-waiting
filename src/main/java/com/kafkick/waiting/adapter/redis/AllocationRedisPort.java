@@ -30,6 +30,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.data.domain.Range;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Component;
@@ -508,6 +509,41 @@ public final class AllocationRedisPort implements SnapshotSource {
                 .flatMap(couponId -> shardSizes(couponId)
                         .map(size -> Map.entry(couponId, size)), MAX_CONCURRENT_READS)
                 .collectMap(Map.Entry::getKey, Map.Entry::getValue);
+    }
+
+    /**
+     * 임계 이하로 줄에 남은 인원 (CY-856). <b>되감기를 직접 잡는 검출기는 아니다</b> — 재접속 직후에 이 값이 튄다.
+     * 임계 위는 아직 차례가 안 온 사람이라 안 센다. 임계가 없으면 아무도 안 들어간 줄이라 0 이다.
+     */
+    public Mono<Long> admittedBacklog(List<String> couponIds) {
+        return Flux.fromIterable(couponIds)
+                .flatMap(this::shardBacklog, MAX_CONCURRENT_READS)
+                .reduce(0L, Long::sum);
+    }
+
+    private Mono<Long> shardBacklog(String couponId) {
+        List<Integer> shardNumbers = new ArrayList<>(shards);
+        for (int shard = 0; shard < shards; shard++) {
+            shardNumbers.add(shard);
+        }
+        return Flux.fromIterable(shardNumbers)
+                .flatMap(shard -> redis.opsForValue().get(RedisKeys.admitted(couponId, shards, shard))
+                        .map(this::scoreOf)
+                        .filter(threshold -> threshold >= 0)
+                        .flatMap(threshold -> redis.opsForZSet().count(
+                                RedisKeys.queue(couponId, shards, shard),
+                                Range.closed(Double.NEGATIVE_INFINITY, threshold)))
+                        .defaultIfEmpty(0L))
+                .reduce(0L, Long::sum);
+    }
+
+    /** 깨진 임계는 안 센다. 신호 하나 때문에 회차를 터뜨리지 않는다. */
+    private double scoreOf(String raw) {
+        try {
+            return Double.parseDouble(raw);
+        } catch (NumberFormatException e) {
+            return -1;
+        }
     }
 
     private Mono<Long> shardSizes(String couponId) {

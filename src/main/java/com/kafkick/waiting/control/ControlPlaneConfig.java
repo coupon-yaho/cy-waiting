@@ -133,6 +133,8 @@ public class ControlPlaneConfig {
                 capacity::routable);
         // 회차 시작 간격만 틱에 맞추면 적용 둘이 1초 안에 들어갈 수 있다. 적용끼리 한 틱을 띄운다.
         round.pacedBy(applyPacer);
+        // 되감기를 직접 잡는 신호가 없다. 재접속 뒤 첫 회차에만 임계 이하 인원을 세어 지표로 낸다 (CY-856).
+        round.measuringBacklogWith(port::admittedBacklog);
         return round;
     }
 

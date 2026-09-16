@@ -88,6 +88,11 @@ public final class InvariantMetrics {
                 InvariantMetrics::carryoverFailures,
                 "평활화 이월 읽기가 실패한 누적 시도 수. 흔들림이 얼마나 길었는지를 본다");
         // **게이지다.** 리더가 아니면 NaN 이라 노드마다 하나만 값을 낸다.
+        Gauge.builder("waiting.queue.admitted.backlog", metrics,
+                        InvariantMetrics::admittedBacklog)
+                .description("재접속 뒤 첫 회차에 센 임계 이하 인원. 되감기면 이 값이 튄다")
+                .strongReference(true)
+                .register(meters);
         Gauge.builder("waiting.allocation.smoothed.credit", metrics,
                         InvariantMetrics::smoothedCredit)
                 .description("배분이 쓰는 평활값. 발행한 몫과 달리 평활의 수렴을 보여 준다")
@@ -119,6 +124,11 @@ public final class InvariantMetrics {
 
     private double carryoverFailures() {
         return round.carryoverFailures();
+    }
+
+    /** 되감기 신호. 재접속 뒤 첫 회차에만 갱신되므로 게이지가 그 사이 값을 붙들고 있는 것이 맞다. */
+    private double admittedBacklog() {
+        return round.admittedBacklog();
     }
 
     private double smoothedCredit() {

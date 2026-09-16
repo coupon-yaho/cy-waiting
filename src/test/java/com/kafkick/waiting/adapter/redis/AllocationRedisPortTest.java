@@ -508,6 +508,28 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         assertThat(port.sealFencesAndAge(List.of("c1"), 임기).block(WAIT).lastApplyAge()).isEmpty();
     }
 
+    /**
+     * <b>임계 이하 인원을 센다</b> (CY-856). 저장소가 뒤로 감긴 사실을 잡는 신호가 없다 — 되감기 직후 이 값이 튄다.
+     * 임계 위는 아직 차례가 안 온 사람이라 안 센다.
+     */
+    @Test
+    @DisplayName("임계_이하_인원을_센다")
+    void 임계_이하_인원을_센다() {
+        줄_세운다("c1", 10, 20, 30, 40, 50);
+        redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "30").block(WAIT);
+
+        assertThat(port.admittedBacklog(List.of("c1")).block(WAIT)).isEqualTo(3);
+    }
+
+    /** 임계가 없으면 아무도 안 들어간 줄이다. 0 으로 센다 — 없는 값을 큰 수로 접으면 신호가 늘 튄다. */
+    @Test
+    @DisplayName("임계가_없으면_0_이다")
+    void 임계가_없으면_0_이다() {
+        줄_세운다("c1", 10, 20, 30);
+
+        assertThat(port.admittedBacklog(List.of("c1")).block(WAIT)).isZero();
+    }
+
     /** 리더가 아니면 안 잠근다. 강등된 노드가 문을 제 번호로 되돌리면 안 된다. */
     @Test
     @DisplayName("리더가_아니면_안_잠근다")

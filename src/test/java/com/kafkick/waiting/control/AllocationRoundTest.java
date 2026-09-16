@@ -1527,7 +1527,7 @@ class AllocationRoundTest {
                 () -> Mono.just(CreditSmoother.of(1.0)), SnapshotCodec.create(), () -> 0L);
         round.measuringRewindWith(쿠폰 -> {
             센_쿠폰.add(쿠폰);
-            return Mono.just(new RewindCheck(List.of("c1"), 1));
+            return Mono.just(RewindCheck.seen(List.of("c1"), 1));
         }, ids -> { });
 
         assertThatThrownBy(() -> round.run().block()).hasMessage("끊겼다");
@@ -1536,6 +1536,7 @@ class AllocationRoundTest {
 
         assertThat(센_쿠폰).as("실패 뒤 첫 회차에 한 번").containsExactly(List.of("c1"));
         assertThat(round.rewoundCoupons()).isEqualTo(1);
+        assertThat(round.rewoundEvents()).as("지나간 사건은 누적으로 센다").isEqualTo(1);
 
         round.run().block();
         assertThat(센_쿠폰).as("평시 회차는 안 센다").hasSize(1);
@@ -1560,7 +1561,7 @@ class AllocationRoundTest {
                 () -> Mono.just(CreditSmoother.of(1.0)), SnapshotCodec.create(), () -> 0L);
         round.measuringRewindWith(쿠폰 -> {
             센_쿠폰.add(쿠폰);
-            return Mono.just(new RewindCheck(List.of(), 1));
+            return Mono.just(RewindCheck.seen(List.of(), 1));
         }, ids -> { });
 
         // 틱 시한이 잘라 내는 것과 같다 — 오류가 아니라 취소다.
@@ -1569,6 +1570,8 @@ class AllocationRoundTest {
         round.run().block();
 
         assertThat(센_쿠폰).containsExactly(List.of("c1"));
+        assertThat(round.rewoundCoupons()).as("깨끗하면 0 이다 — NaN 이면 못 잰 것과 안 갈린다").isEqualTo(0);
+        assertThat(round.rewoundEvents()).as("되감기 없는 회차는 사건이 아니다").isZero();
     }
 
     /** 신호를 못 재면 다음 회차가 다시 잰다. 재접속 직후는 이 읽기가 실패할 확률이 가장 높은 구간이다. */
@@ -1585,7 +1588,7 @@ class AllocationRoundTest {
                 () -> Mono.just(CreditSmoother.of(1.0)), SnapshotCodec.create(), () -> 0L);
         round.measuringRewindWith(쿠폰 -> 시도.incrementAndGet() == 1
                 ? Mono.error(new IllegalStateException("못 읽었다"))
-                : Mono.just(new RewindCheck(List.of("c1", "c2", "c3"), 5)), ids -> { });
+                : Mono.just(RewindCheck.seen(List.of("c1", "c2", "c3"), 5)), ids -> { });
 
         assertThatThrownBy(() -> round.run().block()).hasMessage("끊겼다");
         터진다.set(false);
@@ -1611,7 +1614,7 @@ class AllocationRoundTest {
                 () -> 10L, () -> 1, grant -> Mono.just(grant.credit()), hash -> Mono.empty(),
                 () -> Instant.ofEpochSecond(1_700_000_000L),
                 () -> Mono.just(CreditSmoother.of(1.0)), SnapshotCodec.create(), () -> 0L);
-        round.measuringRewindWith(쿠폰 -> Mono.just(new RewindCheck(List.of("c1"), 1)), ids -> { });
+        round.measuringRewindWith(쿠폰 -> Mono.just(RewindCheck.seen(List.of("c1"), 1)), ids -> { });
         assertThatThrownBy(() -> round.run().block()).hasMessage("끊겼다");
         터진다.set(false);
         round.run().block();
@@ -1624,33 +1627,34 @@ class AllocationRoundTest {
 
     /**
      * <b>측정이 적용보다 먼저다</b> (CY-856). 적용이 임계를 다시 쓰면 견줄 기준이 방금 쓴 값이 되어 되감기가 0 이 된다 —
-     * 몫을 받은 쿠폰이 곧 되감기가 해를 끼치는 쿠폰이다.
+     * 몫을 받은 쿠폰이 곧 되감기가 해를 끼치는 쿠폰이다. 적용이 기준을 덮은 뒤에 재면 아래 값이 0 이 된다.
      */
     @Test
     @DisplayName("되감기는_적용보다_먼저_잰다")
     void 되감기는_적용보다_먼저_잰다() {
         AtomicBoolean 터진다 = new AtomicBoolean(true);
-        List<String> 순서 = new CopyOnWriteArrayList<>();
+        AtomicBoolean 적용이_기준을_덮었다 = new AtomicBoolean();
         AllocationRound round = AllocationRound.of(() -> true,
                 () -> 터진다.get() ? Mono.error(new IllegalStateException("끊겼다"))
                         : Mono.just(new TimedDemands(List.of(new CouponDemand("c1", 10, 100)), 읽은_시각)),
                 () -> 10L, () -> 1,
                 grant -> {
-                    순서.add("적용");
+                    적용이_기준을_덮었다.set(true);
                     return Mono.just(grant.credit());
                 },
                 hash -> Mono.empty(), () -> Instant.ofEpochSecond(1_700_000_000L),
                 () -> Mono.just(CreditSmoother.of(1.0)), SnapshotCodec.create(), () -> 0L);
-        round.measuringRewindWith(쿠폰 -> {
-            순서.add("측정");
-            return Mono.just(new RewindCheck(List.of(), 1));
-        }, ids -> { });
+        // 기준이 덮이면 되감기가 안 보인다 — 실제 어댑터가 그렇게 동작한다.
+        round.measuringRewindWith(쿠폰 -> Mono.fromCallable(() -> 적용이_기준을_덮었다.get()
+                ? RewindCheck.seen(List.of(), 1)
+                : RewindCheck.seen(List.of("c1"), 1)), ids -> { });
 
         assertThatThrownBy(() -> round.run().block()).hasMessage("끊겼다");
         터진다.set(false);
         round.run().block();
 
-        assertThat(순서).containsExactly("측정", "적용");
+        assertThat(round.rewoundCoupons()).as("적용 뒤에 재면 0 이 된다").isEqualTo(1);
+        assertThat(round.rewoundEvents()).isEqualTo(1);
     }
 
     /** 기준이 하나도 없으면 깨끗한 것이 아니라 못 잰 것이다. 승계 직후의 새 리더가 그 자리다. */
@@ -1664,14 +1668,24 @@ class AllocationRoundTest {
                 () -> 10L, () -> 1, grant -> Mono.just(grant.credit()), hash -> Mono.empty(),
                 () -> Instant.ofEpochSecond(1_700_000_000L),
                 () -> Mono.just(CreditSmoother.of(1.0)), SnapshotCodec.create(), () -> 0L);
-        round.measuringRewindWith(쿠폰 -> Mono.just(RewindCheck.NONE), ids -> { });
+        AtomicBoolean 기준이_있다 = new AtomicBoolean(true);
+        round.measuringRewindWith(쿠폰 -> Mono.just(기준이_있다.get()
+                ? RewindCheck.seen(List.of("c1"), 1) : RewindCheck.NONE), ids -> { });
 
         assertThatThrownBy(() -> round.run().block()).hasMessage("끊겼다");
         터진다.set(false);
         round.run().block();
+        assertThat(round.rewoundCoupons()).as("한 번은 쟀다").isEqualTo(1);
 
-        assertThat(round.rewoundCoupons()).isNaN();
-        assertThat(round.rewindUnmeasured()).isEqualTo(1);
+        // 기준을 잃은 채 다음 장애를 맞는다 — 승계한 노드가 그 자리다.
+        기준이_있다.set(false);
+        터진다.set(true);
+        assertThatThrownBy(() -> round.run().block()).hasMessage("끊겼다");
+        터진다.set(false);
+        round.run().block();
+
+        assertThat(round.rewoundCoupons()).as("깨끗한 것이 아니라 못 잰 것이다").isNaN();
+        assertThat(round.rewindNoBaseline()).isEqualTo(1);
     }
 
     /** 잴 것이 없는 회차에만 기준을 버린다. 측정이 밀린 동안 버리면 기준째로 사라진다. */
@@ -1686,8 +1700,11 @@ class AllocationRoundTest {
                 () -> 10L, () -> 1, grant -> Mono.just(grant.credit()), hash -> Mono.empty(),
                 () -> Instant.ofEpochSecond(1_700_000_000L),
                 () -> Mono.just(CreditSmoother.of(1.0)), SnapshotCodec.create(), () -> 0L);
-        round.measuringRewindWith(쿠폰 -> Mono.just(new RewindCheck(List.of(), 1)),
-                ids -> 버린_횟수.incrementAndGet());
+        List<List<String>> 버린_쿠폰 = new CopyOnWriteArrayList<>();
+        round.measuringRewindWith(쿠폰 -> Mono.just(RewindCheck.seen(List.of(), 1)), ids -> {
+            버린_횟수.incrementAndGet();
+            버린_쿠폰.add(ids);
+        });
 
         assertThatThrownBy(() -> round.run().block()).hasMessage("끊겼다");
         터진다.set(false);
@@ -1697,6 +1714,8 @@ class AllocationRoundTest {
         round.run().block();
 
         assertThat(버린_횟수).hasValue(1);
+        assertThat(버린_쿠폰).as("남길 쿠폰을 넘긴다 — 빈 목록을 넘기면 기준이 통째로 사라진다")
+                .containsExactly(List.of("c1"));
     }
 
     /** 안 연 창은 닫았다고 적지 않는다. 승계마다 0 짜리 해제가 세 줄씩 나가면 짝을 세는 뜻이 사라진다. */

@@ -134,10 +134,13 @@ public class ControlPlaneConfig {
         // 회차 시작 간격만 틱에 맞추면 적용 둘이 1초 안에 들어갈 수 있다. 적용끼리 한 틱을 띄운다.
         round.pacedBy(applyPacer);
         // 되감기를 직접 잡는 신호가 없다. 실패 뒤 첫 회차에 우리가 쓴 임계와 견줘 지표로 낸다 (CY-856).
-        round.measuringRewindWith(
-                ids -> port.rewoundCoupons(ids).timeout(properties.scheduler().tick().dividedBy(4),
-                        allocationScheduler),
-                port::forgetInactive);
+        // 샤드가 여럿이면 샤드 0 만 봐 신호가 1/N 로 줄어든다. 그때는 아예 안 건다.
+        if (properties.scheduler().shards() == 1) {
+            round.measuringRewindWith(
+                    ids -> port.rewindCheck(ids).timeout(properties.scheduler().tick().dividedBy(4),
+                            allocationScheduler),
+                    port::forgetInactive);
+        }
         return round;
     }
 

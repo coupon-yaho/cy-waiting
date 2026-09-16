@@ -125,6 +125,12 @@ public final class AllocationRound {
     /** 되감기를 본 회차의 누적 수. */
     private final AtomicLong rewoundEvents = new AtomicLong();
 
+    /** 견줄 기준이 없어 못 잰 누적 횟수. 읽기 실패와 뜻이 달라 따로 센다 — 이쪽은 다시 안 잰다. */
+    private final AtomicLong rewindNoBaseline = new AtomicLong();
+
+    /** 되감기 신호를 못 재는 구간. 회복 구간이 이 읽기가 가장 잘 실패하는 구간이다. */
+    private final FailureWindow rewindFailures = FailureWindow.create();
+
     /** 로그에 싣는 쿠폰 수의 상한. 다 실으면 한 줄이 수천 자가 된다. */
     private static final int REWOUND_LOG_LIMIT = 10;
 
@@ -665,17 +671,26 @@ public final class AllocationRound {
         Function<List<String>, Mono<RewindCheck>> reader = rewound;
         List<String> ids = collected.stream().map(CouponDemand::couponId).toList();
         if (reader == null || !roundFailed.compareAndSet(true, false)) {
-            // 잴 것이 없는 회차에만 버린다. 측정이 밀린 동안 버리면 기준째로 사라진다.
-            forgetInactive.accept(ids);
+            // **잴 것이 없는 회차에만 버린다.** 측정이 밀린 동안 버리면 기준째로 사라진다. 활성이 빈 회차도 안 버린다 —
+            // 되감기가 활성 목록을 비우는 경우가 있어, 그 회차가 증거를 지우면 다음 실패에 잴 기준이 없다.
+            if (!ids.isEmpty()) {
+                forgetInactive.accept(ids);
+            }
             return Mono.empty();
         }
         return reader.apply(ids)
                 .doOnNext(this::rewindSeen)
+                .doOnSuccess(done -> rewindFailures.exited().ifPresent(recovered -> log.info(
+                        "되감기 신호를 다시 잰다 — {}초 만에, 그동안 {}회차 못 쟀다",
+                        recovered.elapsedSeconds(), recovered.swallowed())))
                 .onErrorResume(e -> {
                     // 다음 회차가 다시 잰다. 조용히 버리면 그 장애의 되감기 여부를 영영 모른다.
                     roundFailed.set(true);
                     rewindUnmeasured.incrementAndGet();
-                    log.warn("되감기 신호를 못 쟀다 — 다음 회차에 다시 잰다", e);
+                    // 회복 구간이 이 읽기가 가장 잘 실패하는 구간이다. 구간의 첫 건만 남긴다.
+                    if (rewindFailures.entered()) {
+                        log.warn("되감기 신호를 못 쟀다 — 다음 회차에 다시 잰다: {}", e.toString());
+                    }
                     return Mono.empty();
                 })
                 .then();
@@ -685,7 +700,7 @@ public final class AllocationRound {
     private void rewindSeen(RewindCheck seen) {
         if (seen.measured() == 0) {
             rewoundCoupons = Double.NaN;
-            rewindUnmeasured.incrementAndGet();
+            rewindNoBaseline.incrementAndGet();
             log.info("되감기를 견줄 기준이 없다 — 이 노드가 아직 아무 쿠폰에도 안 들였다");
             return;
         }
@@ -695,8 +710,8 @@ public final class AllocationRound {
             return;
         }
         rewoundEvents.incrementAndGet();
-        log.warn("저장소가 뒤로 감겼다 — 우리가 쓴 임계보다 작은 쿠폰 {}개(견준 {}개). 앞선 쿠폰: {}. "
-                        + "이미 통과한 사람이 다시 들어올 수 있다",
+        log.warn("저장소가 뒤로 감겼다 — rewound={}, measured={}, coupons={}. 이미 통과한 사람이 다시 "
+                        + "들어올 수 있다. 초과 발급과 순번 역행을 그 쿠폰들에서 확인하라",
                 seen.rewound().size(), seen.measured(),
                 seen.rewound().stream().limit(REWOUND_LOG_LIMIT).toList());
     }
@@ -704,6 +719,11 @@ public final class AllocationRound {
     /** 되감긴 회차의 누적 수. 게이지는 마지막 값을 붙들고 있어 지나간 사건을 이걸로 센다. */
     public double rewoundEvents() {
         return rewoundEvents.get();
+    }
+
+    /** 견줄 기준이 없어 못 잰 누적 횟수. */
+    public double rewindNoBaseline() {
+        return rewindNoBaseline.get();
     }
 
     /** 되감기 신호를 못 잰 누적 횟수. */

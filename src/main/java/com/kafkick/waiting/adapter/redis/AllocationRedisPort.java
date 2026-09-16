@@ -527,7 +527,7 @@ public final class AllocationRedisPort implements SnapshotSource {
      * <p>기준이 있는 쿠폰은 <b>이번 회차 대상이 아니어도</b> 본다 — 되감기가 활성 목록까지 되돌리면 가장 심하게
      * 감긴 쿠폰이 대상에서 빠진다.
      */
-    public Mono<RewindCheck> rewoundCoupons(Collection<String> couponIds) {
+    public Mono<RewindCheck> rewindCheck(Collection<String> couponIds) {
         if (shards != 1) {
             return Mono.error(new IllegalStateException(
                     "샤드가 여럿이면 되감기를 다 못 본다: %d".formatted(shards)));
@@ -537,7 +537,7 @@ public final class AllocationRedisPort implements SnapshotSource {
         return Flux.fromIterable(targets)
                 .flatMap(this::rewoundIfBehind, MAX_CONCURRENT_READS)
                 .collectList()
-                .map(seen -> new RewindCheck(
+                .map(seen -> RewindCheck.seen(
                         seen.stream().filter(Map.Entry::getValue).map(Map.Entry::getKey).toList(),
                         seen.size()));
     }
@@ -909,10 +909,11 @@ public final class AllocationRedisPort implements SnapshotSource {
                     // 거절로 오독된다.
                     if (counts.size() < 3) {
                         // **쓴 임계를 기억한다** (CY-856). 되감기는 우리가 쓴 값이 사라지는 것으로만 보인다.
-                        // 못 읽은 값은 안 넣는다 — 넣으면 그 쿠폰이 다음 적용까지 영구 거짓 양성이다.
+                        // 못 읽은 값과 <b>한 번도 안 들인 줄(-1)</b>은 안 넣는다 — 넣으면 키가 없는 그 쿠폰이
+                        // 실패 뒤마다 거짓 되감기로 잡힌다.
                         parsed(String.valueOf(counts.get(0)))
-                                .ifPresent(threshold ->
-                                        lastAdmitted.put(grant.couponId(), threshold));
+                                .stream().filter(threshold -> threshold >= 0)
+                                .forEach(threshold -> lastAdmitted.put(grant.couponId(), threshold));
                         return Mono.just(Long.parseLong(String.valueOf(counts.get(1))));
                     }
                     applyFenced.incrementAndGet();

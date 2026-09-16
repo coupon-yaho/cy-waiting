@@ -27,6 +27,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.IntSupplier;
 import java.util.function.LongSupplier;
@@ -107,7 +108,10 @@ public final class AllocationRound {
      * 저장소가 뒤로 감긴 사실을 잡는 신호 (CY-856). <b>실패 뒤 첫 회차에만 센다</b> — 평시에 재면 쿠폰마다 왕복이
      * 늘고, 되감기는 재접속 직후에만 드러난다. 배선 전에는 안 잰다.
      */
-    private volatile Function<List<String>, Mono<Long>> rewound;
+    private volatile Function<List<String>, Mono<RewindCheck>> rewound;
+
+    /** 활성에서 빠진 쿠폰의 기준을 버리는 자리. 측정이 밀린 동안에는 안 버린다. */
+    private volatile Consumer<List<String>> forgetInactive = ids -> { };
 
     /** 직전 회차가 터졌는가. 터진 다음 회차가 신호를 재는 자리다. */
     private final AtomicBoolean roundFailed = new AtomicBoolean();
@@ -117,6 +121,12 @@ public final class AllocationRound {
 
     /** 신호를 못 잰 누적 횟수. 0 이 아니면 그 장애의 되감기 여부를 모른다. */
     private final AtomicLong rewindUnmeasured = new AtomicLong();
+
+    /** 되감기를 본 회차의 누적 수. */
+    private final AtomicLong rewoundEvents = new AtomicLong();
+
+    /** 로그에 싣는 쿠폰 수의 상한. 다 실으면 한 줄이 수천 자가 된다. */
+    private static final int REWOUND_LOG_LIMIT = 10;
 
     /** 적용 간격. 배선 전에는 안 둔다. */
     private volatile ApplyPacer pacer = ApplyPacer.none();
@@ -323,8 +333,10 @@ public final class AllocationRound {
     }
 
     /** 되감기 신호를 잴 자리. 배선이 한 번 건다. */
-    public void measuringRewindWith(Function<List<String>, Mono<Long>> rewound) {
+    public void measuringRewindWith(Function<List<String>, Mono<RewindCheck>> rewound,
+            Consumer<List<String>> forgetInactive) {
         this.rewound = Objects.requireNonNull(rewound, "rewound 는 필수다");
+        this.forgetInactive = Objects.requireNonNull(forgetInactive, "forgetInactive 는 필수다");
     }
 
     /**
@@ -591,7 +603,9 @@ public final class AllocationRound {
         AtomicBoolean anyFailed = new AtomicBoolean();
         AtomicBoolean published = new AtomicBoolean();
         boolean anyCredit = granted.values().stream().anyMatch(c -> c > 0);
-        return (anyCredit ? pacer.turn() : Mono.<Void>empty())
+        // **적용보다 먼저 잰다** (CY-856). 적용이 임계를 다시 쓰면 견줄 기준이 방금 쓴 값이 되어 되감기가 0 이 된다.
+        return watchRewind(collected)
+                .then(anyCredit ? pacer.turn() : Mono.<Void>empty())
                 .thenMany(Flux.fromIterable(collected))
                 // **동시에 보낸다.** 차례로 보내면 왕복이 쿠폰 수만큼 쌓여 레디스가 느린 날 회차가 틱을
                 // 넘기고 발행이 잘린다. 옛 임기의 쓰기는 적용 스크립트의 펜스가 막는다.
@@ -636,8 +650,7 @@ public final class AllocationRound {
                         .then(Mono.defer(() -> cleanUp(collected, granted)))
                         // **정리 뒤에 쓴다.** 앞에 두면 곧 지울 줄을 훑느라
                         // 예산을 쓴다.
-                        .then(Mono.defer(() -> sweepUp(collected, granted)))
-                        .then(Mono.defer(() -> watchRewind(collected)))))
+                        .then(Mono.defer(() -> sweepUp(collected, granted)))))
                 // 발행까지 못 간 회차가 기준을 올리면 다음 성공이 그 배수의
                 // 배수에서 시작한다. 틱을 넘겨 잘린 회차는 오류가 아니라 취소다.
                 .doOnError(e -> restoreUnpublished(published, before))
@@ -645,19 +658,19 @@ public final class AllocationRound {
     }
 
     /**
-     * 되감기 신호를 잰다. <b>터진 회차 다음에만 읽는다</b> — 되감기는 재접속 직후에만 드러나고, 평시에 재면 쿠폰마다
-     * 왕복이 는다. 못 재면 표시를 되돌려 다음 회차가 다시 잰다 — 이 읽기가 실패할 확률이 가장 높은 구간이다.
+     * 되감기 신호를 잰다. <b>터진 회차 다음, 적용 앞에서 읽는다</b> — 적용이 임계를 다시 쓰면 기준이 방금 쓴 값이 되고,
+     * 되감기가 해를 끼치는 쿠폰이 정확히 그 쿠폰들이다. 못 재면 표시를 되돌려 다음 회차가 다시 잰다.
      */
     private Mono<Void> watchRewind(List<CouponDemand> collected) {
-        Function<List<String>, Mono<Long>> reader = rewound;
-        if (reader == null || collected.isEmpty() || !roundFailed.compareAndSet(true, false)) {
+        Function<List<String>, Mono<RewindCheck>> reader = rewound;
+        List<String> ids = collected.stream().map(CouponDemand::couponId).toList();
+        if (reader == null || !roundFailed.compareAndSet(true, false)) {
+            // 잴 것이 없는 회차에만 버린다. 측정이 밀린 동안 버리면 기준째로 사라진다.
+            forgetInactive.accept(ids);
             return Mono.empty();
         }
-        return reader.apply(collected.stream().map(CouponDemand::couponId).toList())
-                .doOnNext(behind -> {
-                    rewoundCoupons = behind;
-                    log.info("직전 회차 실패 뒤 첫 회차 — 우리가 쓴 임계보다 뒤로 간 쿠폰 {}개", behind);
-                })
+        return reader.apply(ids)
+                .doOnNext(this::rewindSeen)
                 .onErrorResume(e -> {
                     // 다음 회차가 다시 잰다. 조용히 버리면 그 장애의 되감기 여부를 영영 모른다.
                     roundFailed.set(true);
@@ -666,6 +679,31 @@ public final class AllocationRound {
                     return Mono.empty();
                 })
                 .then();
+    }
+
+    /** 본 것을 남긴다. <b>기준이 없으면 깨끗한 것이 아니라 못 잰 것이다.</b> */
+    private void rewindSeen(RewindCheck seen) {
+        if (seen.measured() == 0) {
+            rewoundCoupons = Double.NaN;
+            rewindUnmeasured.incrementAndGet();
+            log.info("되감기를 견줄 기준이 없다 — 이 노드가 아직 아무 쿠폰에도 안 들였다");
+            return;
+        }
+        rewoundCoupons = seen.rewound().size();
+        if (seen.rewound().isEmpty()) {
+            log.debug("직전 회차 실패 뒤 첫 회차 — 되감긴 쿠폰 없다. 쿠폰 {}개를 견줬다", seen.measured());
+            return;
+        }
+        rewoundEvents.incrementAndGet();
+        log.warn("저장소가 뒤로 감겼다 — 우리가 쓴 임계보다 작은 쿠폰 {}개(견준 {}개). 앞선 쿠폰: {}. "
+                        + "이미 통과한 사람이 다시 들어올 수 있다",
+                seen.rewound().size(), seen.measured(),
+                seen.rewound().stream().limit(REWOUND_LOG_LIMIT).toList());
+    }
+
+    /** 되감긴 회차의 누적 수. 게이지는 마지막 값을 붙들고 있어 지나간 사건을 이걸로 센다. */
+    public double rewoundEvents() {
+        return rewoundEvents.get();
     }
 
     /** 되감기 신호를 못 잰 누적 횟수. */

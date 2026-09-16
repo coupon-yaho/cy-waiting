@@ -12,6 +12,7 @@ import com.kafkick.waiting.control.SnapshotSource;
 import com.kafkick.waiting.domain.allocation.Grant;
 import com.kafkick.waiting.domain.coupon.QueueMode;
 import com.kafkick.waiting.control.QueueSweeper;
+import com.kafkick.waiting.control.RewindCheck;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 import java.time.Duration;
@@ -21,7 +22,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.LinkedHashSet;
 import java.util.Objects;
+import java.util.OptionalDouble;
+import java.util.Set;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -517,26 +521,51 @@ public final class AllocationRedisPort implements SnapshotSource {
     }
 
     /**
-     * 이 노드가 마지막으로 쓴 임계보다 <b>뒤로 간</b> 쿠폰 수 (CY-856). 저장소가 되감기면 우리가 쓴 값이 사라진다 —
-     * 줄과 임계는 같은 슬롯이라 함께 되감겨 "임계 이하 인원" 으로는 안 보인다. 쓴 값을 기억해 견주는 것이 유일한 신호다.
+     * 이 노드가 마지막으로 쓴 임계보다 <b>뒤로 간</b> 쿠폰들 (CY-856). 줄과 임계는 같은 슬롯이라 함께 되감겨
+     * "임계 이하 인원" 으로는 안 보인다. 쓴 값을 기억해 견주는 것이 유일한 신호다.
+     *
+     * <p>기준이 있는 쿠폰은 <b>이번 회차 대상이 아니어도</b> 본다 — 되감기가 활성 목록까지 되돌리면 가장 심하게
+     * 감긴 쿠폰이 대상에서 빠진다.
      */
-    public Mono<Long> rewoundCoupons(List<String> couponIds) {
-        return Flux.fromIterable(couponIds)
-                .filter(lastAdmitted::containsKey)
-                .flatMap(couponId -> redis.opsForValue().get(RedisKeys.admitted(couponId, shards, 0))
-                        .map(this::scoreOf)
-                        .defaultIfEmpty(-1.0)
-                        // 키가 사라진 것도 되감기다. 우리가 쓴 값이 없어진 자리다.
-                        .map(now -> now < lastAdmitted.get(couponId) ? 1L : 0L), MAX_CONCURRENT_READS)
-                .reduce(0L, Long::sum);
+    public Mono<RewindCheck> rewoundCoupons(Collection<String> couponIds) {
+        if (shards != 1) {
+            return Mono.error(new IllegalStateException(
+                    "샤드가 여럿이면 되감기를 다 못 본다: %d".formatted(shards)));
+        }
+        Set<String> targets = new LinkedHashSet<>(couponIds);
+        targets.addAll(lastAdmitted.keySet());
+        return Flux.fromIterable(targets)
+                .flatMap(this::rewoundIfBehind, MAX_CONCURRENT_READS)
+                .collectList()
+                .map(seen -> new RewindCheck(
+                        seen.stream().filter(Map.Entry::getValue).map(Map.Entry::getKey).toList(),
+                        seen.size()));
     }
 
-    /** 깨진 임계는 뒤로 간 것으로 안 센다. 신호 하나 때문에 거짓 경보를 내지 않는다. */
-    private double scoreOf(String raw) {
+    /** 기준이 없으면 안 본다. 모르는 것을 되감기로 세면 승계 직후마다 거짓 경보다. */
+    private Mono<Map.Entry<String, Boolean>> rewoundIfBehind(String couponId) {
+        Double written = lastAdmitted.get(couponId);
+        if (written == null) {
+            return Mono.empty();
+        }
+        return redis.opsForValue().get(RedisKeys.admitted(couponId, shards, 0))
+                .map(raw -> parsed(raw).orElse(Double.MAX_VALUE))
+                // 키가 사라진 것도 되감기다. 우리가 쓴 값이 없어진 자리다.
+                .defaultIfEmpty(Double.NEGATIVE_INFINITY)
+                .map(now -> Map.entry(couponId, now < written));
+    }
+
+    /** 활성에서 빠진 쿠폰의 기준을 버린다. 안 버리면 이 맵만 역사상 쿠폰 수로 자란다. */
+    public void forgetInactive(Collection<String> active) {
+        lastAdmitted.keySet().retainAll(active);
+    }
+
+    /** 깨진 값은 비운다. <b>저장과 읽기의 폴백이 반대 방향</b>이라 한 함수로 접으면 한쪽이 거짓 양성이 된다. */
+    private OptionalDouble parsed(String raw) {
         try {
-            return Double.parseDouble(raw);
+            return OptionalDouble.of(Double.parseDouble(raw));
         } catch (NumberFormatException e) {
-            return Double.MAX_VALUE;
+            return OptionalDouble.empty();
         }
     }
 
@@ -880,7 +909,10 @@ public final class AllocationRedisPort implements SnapshotSource {
                     // 거절로 오독된다.
                     if (counts.size() < 3) {
                         // **쓴 임계를 기억한다** (CY-856). 되감기는 우리가 쓴 값이 사라지는 것으로만 보인다.
-                        lastAdmitted.put(grant.couponId(), scoreOf(String.valueOf(counts.get(0))));
+                        // 못 읽은 값은 안 넣는다 — 넣으면 그 쿠폰이 다음 적용까지 영구 거짓 양성이다.
+                        parsed(String.valueOf(counts.get(0)))
+                                .ifPresent(threshold ->
+                                        lastAdmitted.put(grant.couponId(), threshold));
                         return Mono.just(Long.parseLong(String.valueOf(counts.get(1))));
                     }
                     applyFenced.incrementAndGet();

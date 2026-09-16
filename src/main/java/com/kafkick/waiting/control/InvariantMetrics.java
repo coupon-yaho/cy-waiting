@@ -93,11 +93,11 @@ public final class InvariantMetrics {
                 .description("실패 뒤 첫 회차에 센, 이 노드가 쓴 임계보다 뒤로 간 쿠폰 수")
                 .strongReference(true)
                 .register(meters);
-        Gauge.builder("waiting.redis.rewind.unmeasured", metrics,
-                        InvariantMetrics::rewindUnmeasured)
-                .description("되감기 신호를 못 잰 누적 횟수. 0 이 아니면 그 장애의 되감기 여부를 모른다")
-                .strongReference(true)
-                .register(meters);
+        metrics.count(meters, "waiting.redis.rewind.unmeasured",
+                InvariantMetrics::rewindUnmeasured,
+                "되감기 신호를 못 잰 누적 횟수. 0 이 아니면 그 장애의 되감기 여부를 모른다");
+        metrics.count(meters, "waiting.redis.rewound.events", InvariantMetrics::rewoundEvents,
+                "되감기를 본 회차의 누적 수. 게이지는 마지막 값을 붙들고 있다");
         Gauge.builder("waiting.allocation.smoothed.credit", metrics,
                         InvariantMetrics::smoothedCredit)
                 .description("배분이 쓰는 평활값. 발행한 몫과 달리 평활의 수렴을 보여 준다")
@@ -136,9 +136,14 @@ public final class InvariantMetrics {
         return round.rewoundCoupons();
     }
 
-    /** 신호를 못 잰 횟수. 0 이 아니면 그 장애의 되감기 여부를 모른다. */
+    /** 신호를 못 잰 누적 횟수. 0 이 아니면 그 장애의 되감기 여부를 모른다. */
     private double rewindUnmeasured() {
         return round.rewindUnmeasured();
+    }
+
+    /** 되감기를 본 회차의 누적 수. 게이지는 마지막 값을 붙들고 있어 지나간 사건을 이걸로 센다. */
+    private double rewoundEvents() {
+        return round.rewoundEvents();
     }
 
     private double smoothedCredit() {

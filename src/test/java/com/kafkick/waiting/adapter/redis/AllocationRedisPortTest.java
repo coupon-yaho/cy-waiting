@@ -5,6 +5,7 @@ import static org.awaitility.Awaitility.await;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.entry;
 
+import com.kafkick.waiting.control.RewindCheck;
 import com.kafkick.waiting.domain.allocation.Grant;
 import com.kafkick.waiting.domain.coupon.QueueMode;
 import java.time.Duration;
@@ -520,7 +521,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         // 되감기를 흉내 낸다 — 우리가 쓴 값이 옛 값으로 돌아갔다.
         redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "10").block(WAIT);
 
-        assertThat(port.rewoundCoupons(List.of("c1")).block(WAIT)).isEqualTo(1);
+        assertThat(port.rewoundCoupons(List.of("c1")).block(WAIT).rewound()).containsExactly("c1");
     }
 
     @Test
@@ -529,7 +530,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         줄_세운다("c1", 10, 20, 30);
         port.apply(new Grant("c1", 2), 임기).block(WAIT);
 
-        assertThat(port.rewoundCoupons(List.of("c1")).block(WAIT)).isZero();
+        assertThat(port.rewoundCoupons(List.of("c1")).block(WAIT).rewound()).isEmpty();
     }
 
     /** 이 노드가 쓴 적 없는 쿠폰은 견줄 값이 없다. 모르는 것을 되감기로 세면 승계 직후마다 거짓 경보다. */
@@ -539,7 +540,42 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         줄_세운다("c2", 10, 20, 30);
         redis.opsForValue().set(RedisKeys.admitted("c2", SHARDS, 0), "10").block(WAIT);
 
-        assertThat(port.rewoundCoupons(List.of("c2")).block(WAIT)).isZero();
+        assertThat(port.rewoundCoupons(List.of("c2")).block(WAIT))
+                .as("기준이 없으면 못 잰 것이다").isEqualTo(RewindCheck.NONE);
+    }
+
+    /** 임계 키가 사라진 것도 되감기다. 우리가 쓴 값이 없어진 자리다. */
+    @Test
+    @DisplayName("임계가_사라진_쿠폰도_센다")
+    void 임계가_사라진_쿠폰도_센다() {
+        줄_세운다("c1", 10, 20, 30);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        redis.delete(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT);
+
+        assertThat(port.rewoundCoupons(List.of("c1")).block(WAIT).rewound()).containsExactly("c1");
+    }
+
+    /** 되감기가 활성 목록까지 되돌리면 가장 심하게 감긴 쿠폰이 이번 회차 대상에서 빠진다. 기준이 있으면 본다. */
+    @Test
+    @DisplayName("이번_회차_대상이_아니어도_기준이_있으면_본다")
+    void 이번_회차_대상이_아니어도_기준이_있으면_본다() {
+        줄_세운다("c1", 10, 20, 30);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "10").block(WAIT);
+
+        assertThat(port.rewoundCoupons(List.of()).block(WAIT).rewound()).containsExactly("c1");
+    }
+
+    /** 활성에서 빠진 쿠폰의 기준은 버린다. 안 버리면 이 맵만 역사상 쿠폰 수로 자란다. */
+    @Test
+    @DisplayName("활성에서_빠진_기준은_버린다")
+    void 활성에서_빠진_기준은_버린다() {
+        줄_세운다("c1", 10, 20, 30);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+
+        port.forgetInactive(List.of("c9"));
+
+        assertThat(port.rewoundCoupons(List.of("c1")).block(WAIT)).isEqualTo(RewindCheck.NONE);
     }
 
     /** 리더가 아니면 안 잠근다. 강등된 노드가 문을 제 번호로 되돌리면 안 된다. */

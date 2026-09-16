@@ -107,6 +107,9 @@ class LongHandoverCarryoverScenarioTest {
     @Autowired
     private ControlPlaneLifecycle 수명;
 
+    /** 보고 픽스처. 신선도를 앱과 같은 기준으로 보려고 든다. */
+    private BackendReports 보고기;
+
     @Test
     @DisplayName("C4c_오래_갈렸다_돌아온_리더가_이월받은_값에서_시작한다")
     void C4c_오래_갈렸다_돌아온_리더가_이월받은_값에서_시작한다() {
@@ -115,6 +118,8 @@ class LongHandoverCarryoverScenarioTest {
         AtomicLong 보고한_수 = new AtomicLong();
         long[] 회복_전_보고_수 = new long[1];
         double[] 회복_전_이월 = new double[2];
+        boolean[] 갈린_동안_신선 = new boolean[1];
+        boolean[] 회복_뒤_신선 = new boolean[1];
         long[] 되찾은_몫 = new long[1];
         boolean[] 첫_노드가_내려왔다 = new boolean[1];
         double[] 갈리기_전_평활 = new double[1];
@@ -127,7 +132,11 @@ class LongHandoverCarryoverScenarioTest {
         ChaosScenario.named("C4c 오래 갈린 승계")
                 .baseline(() -> {
                     재료를_심는다(연결);
+                    // **시계는 실시계다.** 신선도는 앱이 레디스 시각과 견줘 판정하므로, 보고 시각을 고정하면 그
+                    // 판정이 통째로 무의미해진다(TS-4 의 예외 — 픽스처가 아니라 저장소가 시각의 주인이다).
+                    // 태스크가 밀려 보고가 낡는 위험은 아래에서 앱과 같은 기준으로 직접 본다.
                     BackendReports 보고기 = BackendReports.실시계로(연결, Duration.ofSeconds(3));
+                    this.보고기 = 보고기;
                     // **되던 것을 세고 터진 것도 센다.** 반복 태스크는 던지면 영구히 취소되는데 그 사실이 조용하다.
                     보고_태스크[0] = 보고.scheduleAtFixedRate(() -> {
                         try {
@@ -168,6 +177,7 @@ class LongHandoverCarryoverScenarioTest {
                                 .until(() -> 둘째_회차.smoothedCredit() > 0
                                         && 둘째_회차.smoothedCredit() <= 열화_가용량 * 1.2);
                         첫_노드가_내려왔다[0] = !첫_노드.isLeader();
+                        갈린_동안_신선[0] = 보고가_신선한가();
                         갈린_동안_평활[0] = 둘째_회차.smoothedCredit();
                         갈린_동안_몫[0] = 발행된_몫();
                     }
@@ -195,6 +205,7 @@ class LongHandoverCarryoverScenarioTest {
                                     && !Double.isNaN(round.smoothedCredit()));
                     되찾은_평활[0] = round.smoothedCredit();
                     되찾은_몫[0] = 발행된_몫();
+                    회복_뒤_신선[0] = 보고가_신선한가();
                 })
                 .assertEntry(() -> RecoveryCriteria.violations(
                         갈리기_전_평활[0] > 평시_가용량 * 0.8 ? Optional.empty()
@@ -203,6 +214,8 @@ class LongHandoverCarryoverScenarioTest {
                         둘째가_돌았다[0] ? Optional.empty() : Optional.of("전제 — 둘째가 안 이어받았다"),
                         첫_노드가_내려왔다[0] ? Optional.empty()
                                 : Optional.of("첫 노드가 안 내려왔다 — 승계가 아니라 분단이다"),
+                        // 태스크가 밀리면 보고가 낡아 크레딧이 하한으로 내려간다 — 그 사실을 직접 본다.
+                        갈린_동안_신선[0] ? Optional.empty() : Optional.of("갈린 동안 보고가 낡았다"),
                         // 하한도 본다. 보고가 낡아 떨어지면 크레딧이 하한으로 내려가 상한만으로는 통과한다.
                         갈린_동안_평활[0] >= 열화_가용량 * 0.5 && 갈린_동안_평활[0] <= 열화_가용량 * 1.2
                                 ? Optional.empty()
@@ -238,6 +251,7 @@ class LongHandoverCarryoverScenarioTest {
                         // 보고가 멎으면 크레딧이 하한으로 떨어져 위 상한들이 공짜로 통과한다.
                         보고한_수.get() > 회복_전_보고_수[0] ? Optional.empty()
                                 : Optional.of("회복 구간에 가용량 보고가 한 번도 안 닿았다"),
+                        회복_뒤_신선[0] ? Optional.empty() : Optional.of("회복 구간에 보고가 낡았다"),
                         // 쿠폰이 발행에서 빠지면 줄이 영영 안 빠지는데 상한 판정은 그것을 통과시킨다.
                         되찾은_몫[0] > 0 ? Optional.empty()
                                 : Optional.of("되찾은 발행에 이 쿠폰의 몫이 없다: %d".formatted(되찾은_몫[0]))))
@@ -252,6 +266,11 @@ class LongHandoverCarryoverScenarioTest {
         redis.opsForSet().add(RedisKeys.ACTIVE_COUPONS, COUPON).block(기다림);
         redis.opsForValue().set(RedisKeys.stock(COUPON), "1000000").block(기다림);
         QueueSeed.줄을_세운다(연결, COUPON, 줄_선_사람);
+    }
+
+    /** 보고가 앱이 보는 기준으로 신선한가. 태스크가 밀려 낡으면 크레딧이 하한으로 내려간다. */
+    private boolean 보고가_신선한가() {
+        return 보고기 != null && 보고기.신선한_보고().containsKey("c4c-be");
     }
 
     /** 지금 발행에 실린 이 쿠폰의 몫. 노드들이 실제로 읽는 값이 이것이다. */

@@ -1455,6 +1455,105 @@ class AllocationRoundTest {
     }
 
     /**
+     * <b>승계가 예산 초과 창도 닫는다</b> (CY-824). 창이 리더 메모리라 죽은 리더가 연 채로 사라지면 진입 경고 하나에
+     * 해제가 영영 안 생긴다. 다음 사건은 이미 열려 있어 한 줄도 안 남는다.
+     */
+    @Test
+    @DisplayName("승계가_예산_초과_창을_닫는다")
+    void 승계가_예산_초과_창을_닫는다() {
+        // **뒷단이 떨어져도 평활은 앞 값을 여러 틱 나눠 준다.** 그 구간이 예산 초과다 — 하한이 관측보다 높은
+        // 조합은 배선에서 안 나온다. 수집기가 하한이 답이 된 회차의 값을 그대로 관측으로 싣는다.
+        AtomicLong 관측 = new AtomicLong(7_300);
+        AllocationRound round = AllocationRound.of(() -> true,
+                () -> Mono.just(new TimedDemands(List.of(new CouponDemand("c1", 20_000, 1_000_000)), 읽은_시각)),
+                관측::get, () -> 1,
+                grant -> Mono.just(grant.credit()), hash -> Mono.empty(),
+                () -> Instant.ofEpochSecond(1_700_000_000L),
+                () -> Mono.just(CreditSmoother.of(0.2)), SnapshotCodec.create(), () -> 0L);
+        round.run().block();
+        관측.set(10);
+        round.run().block();
+        round.run().block();
+        round.run().block();
+        assertThat(로그_메시지()).as("진입은 구간의 첫 회차에만")
+                .filteredOn(m -> m.startsWith("뒷단이 받는다는 것보다 많이 나눠 준다")).hasSize(1);
+
+        round.leadershipAcquired();
+
+        assertThat(로그_인자("리더십이 갈렸다 — 배분 예산 초과 창을 닫는다")[0])
+                .as("닫으면서 그동안 넘긴 틱을 남긴다 — 회차마다 하나씩").isEqualTo(3L);
+    }
+
+    /**
+     * <b>강등이 창을 닫으면서 리더 구간의 길이를 남긴다</b> (CY-824). 되찾는 자리에서 닫으면 그 사이 비리더 구간이
+     * 섞여 장애가 실제보다 길게 읽힌다.
+     */
+    @Test
+    @DisplayName("강등이_창을_닫고_리더_구간을_남긴다")
+    void 강등이_창을_닫고_리더_구간을_남긴다() {
+        AllocationRound round = 비동기_회차(() -> true, List.of(new CouponDemand("c1", 10, 100)),
+                grant -> Mono.error(new IllegalStateException("끊겼다")));
+        round.run().block();
+
+        round.leadershipLost();
+
+        assertThat(로그_인자("리더십을 잃었다 — 적용 실패 창을 닫는다"))
+                .as("리더 구간의 초와 삼킨 건수를 같이 남긴다").hasSize(2)
+                .satisfies(인자 -> {
+                    // 한 회차만 돌아 초 단위로는 0 이다. 여기가 비리더 구간을 담으면 0 이 아니게 된다.
+                    assertThat(인자[0]).isEqualTo(0L);
+                    assertThat(인자[1]).isEqualTo(1L);
+                });
+        // 이미 닫힌 창을 되찾는 자리에서 또 적지 않는다.
+        round.leadershipAcquired();
+        assertThat(로그_메시지()).noneMatch(m -> m.startsWith("리더십이 갈렸다 — 적용 실패 창을 닫는다"));
+    }
+
+    /** 안 연 창은 닫았다고 적지 않는다. 승계마다 0 짜리 해제가 세 줄씩 나가면 짝을 세는 뜻이 사라진다. */
+    @Test
+    @DisplayName("승계가_안_연_창은_닫았다고_안_적는다")
+    void 승계가_안_연_창은_닫았다고_안_적는다() {
+        AllocationRound round = round(List.of(new CouponDemand("c1", 10, 100)), 1_000, 1);
+        round.run().block();
+
+        round.leadershipAcquired();
+
+        assertThat(로그_메시지()).noneMatch(m -> m.contains("창을 닫는다"));
+    }
+
+    /** 폴링 예산 초과 창도 같은 자리에서 닫는다. 이 창만 빠지면 그 지표의 해제가 승계에서 영영 안 찍힌다. */
+    @Test
+    @DisplayName("승계가_폴링_예산_초과_창을_닫는다")
+    void 승계가_폴링_예산_초과_창을_닫는다() {
+        AllocationRound round = round(() -> List.of(new CouponDemand("c1", 100_000, 1_000_000)), 10, 1);
+        round.run().block();
+        round.run().block();
+        assertThat(로그_메시지()).anyMatch(m -> m.startsWith("폴링 예산 초과 —"));
+
+        round.leadershipAcquired();
+
+        assertThat(로그_인자("리더십이 갈렸다 — 폴링 예산 초과 창을 닫는다")[0])
+                .as("닫으면서 그동안 넘긴 틱을 남긴다 — 회차마다 하나씩").isEqualTo(2L);
+    }
+
+    /** 적용 실패 창도 같다. 열어 둔 채 승계하면 새 리더의 첫 복귀 로그가 남의 구간까지 센다. */
+    @Test
+    @DisplayName("승계가_적용_실패_창을_닫는다")
+    void 승계가_적용_실패_창을_닫는다() {
+        // 한 회차에 쿠폰 둘이 실패한다. 회차로 세면 1 이라 단위가 갈린다.
+        AllocationRound round = 비동기_회차(() -> true,
+                List.of(new CouponDemand("c1", 10, 100), new CouponDemand("c2", 10, 100)),
+                grant -> Mono.error(new IllegalStateException("끊겼다")));
+        round.run().block();
+        assertThat(로그_메시지()).anyMatch(m -> m.startsWith("배분 적용 실패"));
+
+        round.leadershipAcquired();
+
+        assertThat(로그_인자("리더십이 갈렸다 — 적용 실패 창을 닫는다")[0])
+                .as("센 것은 회차가 아니라 쿠폰별 실패 건수다").isEqualTo(2L);
+    }
+
+    /**
      * <b>접힌 회차는 램프 기준을 안 움직인다.</b> 발행이 안 된 회차가 기준을
      * 올리면 다음 발행이 실제로 나간 값의 배수에서 시작한다.
      */

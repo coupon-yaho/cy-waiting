@@ -454,6 +454,8 @@ public class ControlPlaneConfig {
                                 () -> {
                                     capacity.leadershipChanged();
                                     sweeper.leadershipLost();
+                                    // 창은 여기서 닫아야 지속 시간이 리더 구간만 담는다 (CY-824).
+                                    round.leadershipLost();
                                 }),
                         holder::view,
                         HandoverSpacing.of(System::nanoTime, properties.scheduler().tick())),

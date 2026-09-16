@@ -10,7 +10,6 @@ import io.micrometer.core.instrument.MockClock;
 import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.simple.SimpleConfig;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
-import java.net.ServerSocket;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -27,6 +26,8 @@ import org.springframework.data.redis.connection.lettuce.LettuceClientConfigurat
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
+import org.springframework.data.redis.core.script.RedisScript;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 /**
@@ -39,7 +40,7 @@ class QueueRedisPortTest extends RedisContainerSupport {
     private static final String COUPON = "qp";
     private static final int SHARDS = 1;
     private static final Duration WAIT = Duration.ofSeconds(10);
-    private static final String 등록_왕복 = "waiting.queue.enqueue.latency";
+    private static final String 등록_왕복 = QueueRedisPort.ENQUEUE_LATENCY;
     private static final Instant 지금 = Instant.parse("2026-08-24T00:00:00Z");
 
     private static LettuceConnectionFactory factory;
@@ -369,35 +370,38 @@ class QueueRedisPortTest extends RedisContainerSupport {
 
     /**
      * <b>끊긴 왕복도 잰다</b>. 취소되는 요청은 통계적으로 오래 걸린 쪽이라, 그것만 빠진 분위수는 착수 게이트가
-     * 보라는 꼬리를 정확히 지운다. 성공 칸에 담기면 게이트가 읽는 값이 반대로 부푼다.
+     * 보라는 꼬리를 정확히 지운다. 성공에도 실패에도 안 담는다.
      */
     @Test
-    @DisplayName("취소된_왕복도_센다")
-    void 취소된_왕복도_센다() throws Exception {
+    @DisplayName("취소된_왕복도_따로_센다")
+    void 취소된_왕복도_따로_센다() {
         SimpleMeterRegistry 미터 = new SimpleMeterRegistry();
-        // **답이 영영 안 오는 곳으로 보낸다.** 살아 있는 레디스로 보내면 왕복이 먼저 끝나 취소 경로를
-        // 한 번도 안 밟고 초록이 된다 — 빨개지는 플래키보다 나쁘다.
-        try (ServerSocket 대답_없는_곳 = new ServerSocket(0)) {
-            LettuceConnectionFactory 연결 = new LettuceConnectionFactory(
-                    new RedisStandaloneConfiguration("127.0.0.1", 대답_없는_곳.getLocalPort()),
-                    LettuceClientConfiguration.builder().commandTimeout(WAIT).build());
-            연결.afterPropertiesSet();
-            QueueRedisPort 잰다 = QueueRedisPort.of(new ReactiveStringRedisTemplate(연결), SHARDS, 미터);
+        QueueRedisPort 잰다 = QueueRedisPort.of(대답이_없는_레디스(), SHARDS, 미터);
 
-            try {
-                잰다.enqueue(COUPON, "m1", QueuePort.NO_LIMIT, 지금)
-                        .subscribe(자리 -> { }, 오류 -> { }).dispose();
+        // 답이 영영 안 오므로 여기서 끊는 것은 반드시 왕복 도중이다. 살아 있는 레디스로 보내면 왕복이
+        // 먼저 끝나 취소 경로를 한 번도 안 밟고 초록이 된다.
+        잰다.enqueue(COUPON, "m1", QueuePort.NO_LIMIT, 지금).subscribe(자리 -> { }, 오류 -> { })
+                .dispose();
 
-                Awaitility.await().atMost(WAIT).untilAsserted(() -> {
-                    assertThat(미터.get(등록_왕복).tag("outcome", "error").timer().count())
-                            .as("끊긴 왕복").isEqualTo(1);
-                    assertThat(미터.get(등록_왕복).tag("outcome", "success").timer().count())
-                            .as("성공 칸에 안 담긴다").isZero();
-                });
-            } finally {
-                연결.destroy();
+        Awaitility.await().atMost(WAIT).untilAsserted(() -> {
+            assertThat(미터.get(등록_왕복).tag("outcome", "cancelled").timer().count())
+                    .as("끊긴 왕복").isEqualTo(1);
+            assertThat(미터.get(등록_왕복).tag("outcome", "success").timer().count())
+                    .as("성공 칸에 안 담긴다").isZero();
+            // **실패 칸에도 안 담는다.** 몰릴 때 끊는 것은 정상이라, 섞이면 에러율이 장애로 읽힌다.
+            assertThat(미터.get(등록_왕복).tag("outcome", "error").timer().count())
+                    .as("실패 칸에도 안 담긴다").isZero();
+        });
+    }
+
+    /** 스크립트를 받아 놓고 아무것도 안 내는 레디스. 취소를 경합 없이 만든다. */
+    private ReactiveStringRedisTemplate 대답이_없는_레디스() {
+        return new ReactiveStringRedisTemplate(factory) {
+            @Override
+            public <T> Flux<T> execute(RedisScript<T> script, List<String> keys, List<?> args) {
+                return Flux.never();
             }
-        }
+        };
     }
 
     /**
@@ -413,10 +417,13 @@ class QueueRedisPortTest extends RedisContainerSupport {
 
         Mono<QueueEntry> 한_번_만든_것 = 잰다.enqueue(COUPON, "m1", QueuePort.NO_LIMIT, 지금);
         한_번_만든_것.block(WAIT);
+        Timer 타이머 = 미터.get(등록_왕복).tag("outcome", "success").timer();
+        // **첫 표본이 들어온 뒤에 시계를 민다.** block 은 값이 오면 돌아오므로, 먼저 밀면 첫 표본이
+        // 5 초로 기록돼 무엇을 재는 시험인지가 뒤집힌다.
+        표본을_기다린다(타이머, 1);
         시계.add(Duration.ofSeconds(5));
         한_번_만든_것.block(WAIT);
 
-        Timer 타이머 = 미터.get(등록_왕복).tag("outcome", "success").timer();
         표본을_기다린다(타이머, 2);
         assertThat(타이머.max(TimeUnit.SECONDS)).as("기다린 시간이 아니라 왕복").isLessThan(5);
     }
@@ -430,7 +437,8 @@ class QueueRedisPortTest extends RedisContainerSupport {
     void 몇_분_뒤_스크랩에도_분위수가_남는다() {
         MockClock 시계 = new MockClock();
         SimpleMeterRegistry 미터 = new SimpleMeterRegistry(SimpleConfig.DEFAULT, 시계);
-        QueueRedisPort.of(redis, SHARDS, 미터);
+        QueueRedisPort 잰다 = QueueRedisPort.of(redis, SHARDS, 미터);
+        잰다.enqueue(COUPON, "m1", QueuePort.NO_LIMIT, 지금).block(WAIT);
 
         // **표본은 직접 넣는다.** 목 시계에서는 왕복이 0 초라 분위수가 0 으로 남아, 창이 살았는지
         // 죽었는지를 못 가른다. 재는 것은 창의 길이다.

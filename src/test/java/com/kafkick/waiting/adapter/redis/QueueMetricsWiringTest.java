@@ -3,6 +3,7 @@ package com.kafkick.waiting.adapter.redis;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
+import java.time.Duration;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -35,6 +36,11 @@ class QueueMetricsWiringTest {
         // **성공과 실패를 가른 라벨까지 본다.** 라벨이 사라지면 판정기가 취소까지 섞인 값을 읽는다.
         assertThat(스크레이프).contains(등록_왕복 + "_count{application=\"waiting\",outcome=\"success\"");
         assertThat(스크레이프).contains(등록_왕복 + "_count{application=\"waiting\",outcome=\"error\"");
-        // 분위수 줄은 표본이 있어야 나온다 — 그 설정은 어댑터 시험이 문다. 여기서 무는 것은 이름과 라벨이다.
+        assertThat(스크레이프).contains(등록_왕복 + "_count{application=\"waiting\",outcome=\"cancelled\"");
+        // **분위수 줄까지 본다.** 히스토그램을 같이 내면 이 줄이 통째로 사라지는데, 어댑터 시험은 제
+        // 레지스트리를 읽어 초록이고 러너는 "없음" 한 줄만 낸다 — 실제로 그렇게 회차 하나를 버렸다.
+        registry.get(QueueRedisPort.ENQUEUE_LATENCY).tag("outcome", "success").timer()
+                .record(Duration.ofMillis(3));
+        assertThat(registry.scrape()).contains("quantile=\"0.99\"");
     }
 }

@@ -41,6 +41,12 @@ class QueueMetricsWiringTest {
         // 레지스트리를 읽어 초록이고 러너는 "없음" 한 줄만 낸다 — 실제로 그렇게 회차 하나를 버렸다.
         registry.get(QueueRedisPort.ENQUEUE_LATENCY).tag("outcome", "success").timer()
                 .record(Duration.ofMillis(3));
-        assertThat(registry.scrape()).contains("quantile=\"0.99\"");
+        // **같은 계열에서 본다.** 이름과 라벨을 따로 보면 다른 지표의 분위수 줄로도 통과한다.
+        assertThat(registry.scrape().lines()
+                .filter(줄 -> 줄.startsWith(등록_왕복 + "{"))
+                .filter(줄 -> 줄.contains("outcome=\"success\""))
+                .filter(줄 -> 줄.contains("quantile=\"0.99\""))
+                .toList())
+                .as("등록 성공의 99 분위수 줄").hasSize(1);
     }
 }

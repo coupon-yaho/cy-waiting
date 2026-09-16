@@ -359,7 +359,8 @@ class QueueRedisPortTest extends RedisContainerSupport {
                     .isInstanceOf(RedisConnectionFailureException.class);
 
             Timer 실패 = 미터.get(등록_왕복).tag("outcome", "error").timer();
-            assertThat(실패.count()).as("실패한 왕복").isEqualTo(1);
+            // **block 은 오류를 받고 돌아온다.** 표본은 그 뒤에 들어오므로 그 자리에서 세면 0 일 때가 있다.
+            표본을_기다린다(실패, 1);
             assertThat(실패.totalTime(TimeUnit.NANOSECONDS)).as("쓴 시간").isPositive();
             assertThat(미터.get(등록_왕복).tag("outcome", "success").timer().count())
                     .as("성공과 안 섞는다").isZero();

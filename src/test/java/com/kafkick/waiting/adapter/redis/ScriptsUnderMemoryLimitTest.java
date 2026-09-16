@@ -80,10 +80,12 @@ class ScriptsUnderMemoryLimitTest extends RedisContainerSupport {
     @Test
     @DisplayName("메모리_상한에서_발행이_거부되면_발행의_문을_다시_잠근다")
     void 메모리_상한에서_발행이_거부되면_발행의_문을_다시_잠근다() throws Exception {
-        redis.opsForValue().set(RedisKeys.SNAPSHOT_FENCE, Long.toString(FENCE), Duration.ofSeconds(2)).block(WAIT);
+        // 재봉인 수명(10초)보다 짧게 두되, 상한을 거는 컨테이너 명령 사이에 안 만료될 만큼은 길게 둔다.
+        redis.opsForValue().set(RedisKeys.SNAPSHOT_FENCE, Long.toString(FENCE), Duration.ofSeconds(5)).block(WAIT);
 
         메모리_상한에서(() -> {
-            assertThat(redis.getExpire(RedisKeys.SNAPSHOT_FENCE).block(WAIT))
+            Duration 발행_전 = redis.getExpire(RedisKeys.SNAPSHOT_FENCE).block(WAIT);
+            assertThat(발행_전)
                     .as("전제 — 표가 아직 살아 있다. 만료됐으면 다시 거는 것이 아니라 새로 거는 것을 잰다")
                     .isPositive();
             assertThatThrownBy(() -> port.publish(Map.of("f", "v"), FENCE).block(WAIT))
@@ -91,9 +93,9 @@ class ScriptsUnderMemoryLimitTest extends RedisContainerSupport {
                     .isNotInstanceOf(AllocationRedisPort.FencedOutException.class)
                     .rootCause().hasMessageContaining("OOM");
 
-            // 재봉인은 회차에서 떼어 보낸다. 곧 도착한다.
+            // 재봉인은 회차에서 떼어 보낸다. 곧 도착한다. 수명은 줄기만 하므로 늘었으면 다시 건 것이다.
             Awaitility.await().atMost(WAIT).pollInterval(Duration.ofMillis(50)).until(() ->
-                    redis.getExpire(RedisKeys.SNAPSHOT_FENCE).block(WAIT).compareTo(Duration.ofSeconds(2)) > 0);
+                    redis.getExpire(RedisKeys.SNAPSHOT_FENCE).block(WAIT).compareTo(발행_전) > 0);
             assertThat(redis.opsForValue().get(RedisKeys.SNAPSHOT_FENCE).block(WAIT)).isEqualTo(Long.toString(FENCE));
         });
     }

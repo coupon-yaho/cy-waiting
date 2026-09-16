@@ -307,6 +307,15 @@ public final class AllocationRound {
                 clock, restore, codec, creditFloor, Optional::empty);
     }
 
+    /** 되감기 신호를 잴 자리. 배선이 한 번 건다. */
+    public void measuringBacklogWith(Function<List<String>, Mono<Long>> backlog) {
+    }
+
+    /** 실패 뒤 첫 회차에 센 임계 이하 인원. 아직 안 쟀으면 NaN 이다. */
+    public double admittedBacklog() {
+        return Double.NaN;
+    }
+
     /** 적용 간격을 둔다. 배선이 한 번 건다. */
     public void pacedBy(ApplyPacer pacer) {
         this.pacer = Objects.requireNonNull(pacer, "pacer 는 필수다");

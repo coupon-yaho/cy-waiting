@@ -1,6 +1,7 @@
 package com.kafkick.waiting.control;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.within;
 
 import ch.qos.logback.classic.Level;
@@ -1507,6 +1508,37 @@ class AllocationRoundTest {
         // 이미 닫힌 창을 되찾는 자리에서 또 적지 않는다.
         round.leadershipAcquired();
         assertThat(로그_메시지()).noneMatch(m -> m.startsWith("리더십이 갈렸다 — 적용 실패 창을 닫는다"));
+    }
+
+    /**
+     * <b>읽기가 실패한 뒤 첫 회차에서만 임계 이하 인원을 센다</b> (CY-856). 저장소가 뒤로 감긴 사실 자체를 잡는 신호가
+     * 없다. 되감기 직후에 이 값이 튄다 — 깨끗한 검출기는 아니라 지표로만 낸다. 평시에 재면 쿠폰마다 왕복이 는다.
+     */
+    @Test
+    @DisplayName("실패_뒤_첫_회차만_임계_이하_인원을_센다")
+    void 실패_뒤_첫_회차만_임계_이하_인원을_센다() {
+        AtomicBoolean 터진다 = new AtomicBoolean(true);
+        List<List<String>> 센_쿠폰 = new CopyOnWriteArrayList<>();
+        AllocationRound round = AllocationRound.of(() -> true,
+                () -> 터진다.get() ? Mono.error(new IllegalStateException("끊겼다"))
+                        : Mono.just(new TimedDemands(List.of(new CouponDemand("c1", 10, 100)), 읽은_시각)),
+                () -> 10L, () -> 1, grant -> Mono.just(grant.credit()), hash -> Mono.empty(),
+                () -> Instant.ofEpochSecond(1_700_000_000L),
+                () -> Mono.just(CreditSmoother.of(1.0)), SnapshotCodec.create(), () -> 0L);
+        round.measuringBacklogWith(쿠폰 -> {
+            센_쿠폰.add(쿠폰);
+            return Mono.just(7L);
+        });
+
+        assertThatThrownBy(() -> round.run().block()).hasMessage("끊겼다");
+        터진다.set(false);
+        round.run().block();
+
+        assertThat(센_쿠폰).as("실패 뒤 첫 회차에 한 번").containsExactly(List.of("c1"));
+        assertThat(round.admittedBacklog()).isEqualTo(7);
+
+        round.run().block();
+        assertThat(센_쿠폰).as("평시 회차는 안 센다").hasSize(1);
     }
 
     /** 안 연 창은 닫았다고 적지 않는다. 승계마다 0 짜리 해제가 세 줄씩 나가면 짝을 세는 뜻이 사라진다. */

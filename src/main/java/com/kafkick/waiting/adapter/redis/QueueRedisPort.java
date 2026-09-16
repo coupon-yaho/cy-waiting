@@ -10,6 +10,9 @@ import java.util.List;
 import java.util.Objects;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.ClassPathResource;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import com.kafkick.waiting.domain.queue.GraceRetention;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
@@ -58,25 +61,39 @@ public final class QueueRedisPort implements QueuePort {
     private final ReactiveStringRedisTemplate redis;
     private final int shards;
 
+    /** 등록 왕복의 분위수. Phase 10 착수 게이트가 읽는 값이다. */
+    private final Timer enqueueLatency;
+
     /**
      * <b>값은 설정에서 받는다.</b> 상수로 복제하면 검증기가 안 보는 값이
      * 실제로 쓰이는 값이 된다.
      */
     @Autowired
-    QueueRedisPort(ReactiveStringRedisTemplate redis, ControlPlaneProperties properties) {
-        this(redis, properties.scheduler().shards());
+    QueueRedisPort(ReactiveStringRedisTemplate redis, ControlPlaneProperties properties,
+            MeterRegistry meters) {
+        this(redis, properties.scheduler().shards(), meters);
     }
 
-    private QueueRedisPort(ReactiveStringRedisTemplate redis, int shards) {
+    private QueueRedisPort(ReactiveStringRedisTemplate redis, int shards, MeterRegistry meters) {
         if (shards < 1) {
             throw new IllegalArgumentException("shards 는 1 이상이어야 한다: %d".formatted(shards));
         }
         this.redis = Objects.requireNonNull(redis, "redis 는 필수다");
         this.shards = shards;
+        Objects.requireNonNull(meters, "meters 는 필수다");
+        this.enqueueLatency = Timer.builder("waiting.queue.enqueue.redis")
+                .description("등록 스크립트의 레디스 왕복. 응답 전체가 아니라 이 구간이 샤딩 판단의 재료다")
+                .publishPercentiles(0.5, 0.95, 0.99)
+                .register(meters);
     }
 
     public static QueueRedisPort of(ReactiveStringRedisTemplate redis, int shards) {
-        return new QueueRedisPort(redis, shards);
+        return of(redis, shards, new SimpleMeterRegistry());
+    }
+
+    /** 등록 왕복을 잰다 (CY-936). 착수 게이트가 보라는 분위수는 응답 전체가 아니라 이 구간이다. */
+    public static QueueRedisPort of(ReactiveStringRedisTemplate redis, int shards, MeterRegistry meters) {
+        return new QueueRedisPort(redis, shards, meters);
     }
 
     /**
@@ -89,6 +106,8 @@ public final class QueueRedisPort implements QueuePort {
     @Override
     public Mono<QueueEntry> enqueue(String couponId, String memberId, long maxLen, Instant now) {
         int shard = ShardHash.shardOf(memberId, shards);
+        // **왕복만 잰다.** 판정·라우팅·뒷단이 섞인 응답 분위수로는 샤딩이 필요한지 못 읽는다 (CY-936).
+        Timer.Sample sample = Timer.start();
         return redis.execute(ENQUEUE,
                         List.of(RedisKeys.queue(couponId, shards, shard),
                                 RedisKeys.maxScore(couponId, shards, shard),
@@ -102,7 +121,9 @@ public final class QueueRedisPort implements QueuePort {
                 // **빈 결과를 성공으로 안 본다.** 그대로 두면 등록도 거절도 아닌
                 // 채로 200 이 나가고, 실패 경로가 통째로 안 돈다.
                 .switchIfEmpty(Mono.error(new IllegalStateException("등록 결과가 비었다")))
-                .map(this::toEntry);
+                .map(this::toEntry)
+                // 실패한 왕복도 시간을 썼다. 성공만 재면 느려진 구간이 통째로 안 보인다.
+                .doOnTerminate(() -> sample.stop(enqueueLatency));
     }
 
     /**

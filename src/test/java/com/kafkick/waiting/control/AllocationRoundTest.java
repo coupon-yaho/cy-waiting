@@ -386,6 +386,44 @@ class AllocationRoundTest {
     }
 
     /**
+     * <b>유예를 이미 채운 줄은 발행이 못 나가도 지운다</b> (CY-935).
+     *
+     * <p>상한에 닿으면 발행의 첫 쓰기가 거부된다. 정리를 발행에 묶어 두면 줄을 지워 메모리를
+     * 줄일 유일한 경로가 같이 막혀, 운영자가 한도를 올려야만 풀린다.
+     */
+    @Test
+    @DisplayName("발행이_실패해도_유예를_채운_줄은_지운다")
+    void 발행이_실패해도_유예를_채운_줄은_지운다() {
+        List<String> 지운_것 = new ArrayList<>();
+        AtomicBoolean 발행이_된다 = new AtomicBoolean(true);
+        SoldOutCleanup cleanup = SoldOutCleanup.of(1, new SimpleMeterRegistry());
+        AllocationRound round = AllocationRound.of(
+                () -> true,
+                () -> Mono.just(new TimedDemands(
+                        List.of(new CouponDemand("c1", 0, 0, QueueMode.ADAPTIVE)), 읽은_시각)),
+                () -> 1_000, () -> 1,
+                grant -> Mono.just(grant.credit()),
+                hash -> 발행이_된다.get() ? Mono.empty()
+                        : Mono.error(new IllegalStateException("상한이라 못 쓴다")),
+                () -> Instant.ofEpochSecond(읽은_시각),
+                () -> Mono.just(CreditSmoother.of(1.0)),
+                SnapshotCodec.create(), () -> 0L, Optional::empty,
+                cleanup, ids -> {
+                    지운_것.addAll(ids);
+                    return Mono.just(ids);
+                }, ids -> Mono.just(ids), 안_걷는_스위퍼(), () -> false, () -> CircuitState.CLOSED);
+
+        // 유예를 채울 때까지는 발행이 나간다. 여기까지는 지울 때가 아니다.
+        round.run().block();
+        assertThat(지운_것).as("유예 전").isEmpty();
+
+        발행이_된다.set(false);
+        round.run().onErrorResume(e -> Mono.empty()).block();
+
+        assertThat(지운_것).as("유예를 채운 줄").containsExactly("c1");
+    }
+
+    /**
      * <b>리더가 아니면 안 지웁니다.</b>
      *
      * <p>회차 안에서 유일하게 되돌릴 수 없는 쓰기입니다. 회차가 도는 사이에 리스가

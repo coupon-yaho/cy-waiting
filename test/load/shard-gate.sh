@@ -38,6 +38,14 @@ case "$OUT_SUMMARY" in
     *.json) ;;
     *) echo "OUT_SUMMARY 는 .json 이어야 한다: '$OUT_SUMMARY'"; exit 2 ;;
 esac
+# 등록 왕복 산출물도 지우기 전에 검사한다. 뒤에서 검사하면 오타 하나가 엉뚱한 파일을
+# 지운 사실이 회차를 다 돌린 뒤에 드러난다.
+OUT_ENQUEUE="${OUT_ENQUEUE:-${OUT_SUMMARY%.json}-enqueue.txt}"
+case "$OUT_ENQUEUE" in
+    *.txt) ;;
+    *) echo "OUT_ENQUEUE 는 .txt 여야 한다: '$OUT_ENQUEUE'"; exit 2 ;;
+esac
+OUT_ENQUEUE_BASE="${OUT_ENQUEUE%.txt}-base.txt"
 # 아래에서 `tee` 로 덮어쓴다. 요약과 같은 이유로 무엇을 지우는지 보고 간다.
 OUT_LOG="${OUT_LOG:-k6-spike${pinned:+-pinned}.log}"
 case "$OUT_LOG" in
@@ -76,12 +84,13 @@ $COMPOSE up -d --wait --wait-timeout 240 || { echo "스택을 못 세웠다"; ex
 # **줄 키만 지우면 안 된다.** 입장 커서와 최대 순번이 남으면 리더가 줄을
 # 비었다고 안 보고 쿠폰을 QUEUEING 으로 되돌리며, 판정은 IDLE 이 아니면 무조건
 # 줄에 세운다(추월 금지) — 첫 요청부터 202 이거나 QUEUE_FULL 이다.
-# **쿠폰별 키 여섯을 다 지운다.** 셋만 지우면 이탈 기록과 생존 신호와 배분
+# **쿠폰별 키 일곱을 다 지운다.** 셋만 지우면 이탈 기록과 생존 신호와 배분
 # 펜스가 앞 회차 값을 들고 넘어가, 새 회차의 첫 배분이 앞 회차의 펜스를 본다.
 # 재고(`stock:`)는 시더가 관리하므로 안 건드린다.
 $COMPOSE exec -T redis redis-cli DEL \
     "queue:{$COUPON}" "admitted:{$COUPON}" "maxscore:{$COUPON}" \
-    "grace:{$COUPON}" "alive:{$COUPON}" "dropfence:{$COUPON}" >/dev/null 2>&1
+    "grace:{$COUPON}" "alive:{$COUPON}" "dropfence:{$COUPON}" \
+    "applyfence:{$COUPON}" >/dev/null 2>&1
 
 state=""
 for _ in $(seq 1 30); do
@@ -101,7 +110,15 @@ sleep "${SNAPSHOT_SETTLE_SEC:-2}"
 # **앞 회차의 산출물이 남으면 안 된다.** k6 가 요약을 못 남기고 죽거나 프로브가
 # 뜨기 전에 끝나면, 앞 회차의 것이 이번 회차 것과 짝지어져 판정을 낸다 — 앞
 # 회차가 남긴 것 때문에 판정이 갈렸다는 것이 바로 이 러너를 만든 이유다.
-rm -f "$OUT_SUMMARY" "$OUT_OPS" "${OUT_ENQUEUE:-${OUT_SUMMARY%.json}-enqueue.txt}"
+rm -f "$OUT_SUMMARY" "$OUT_OPS" "$OUT_ENQUEUE" "$OUT_ENQUEUE_BASE"
+
+# **부하 전 개수를 먼저 적어 둔다** (CY-936). 개수는 누적이고 분위수 창은 10 분마다 도므로,
+# 증분을 안 보면 이번 회차에 등록이 0 건이어도 예열 때의 값이 회차 값으로 인용된다.
+scrape_enqueue() {
+    $COMPOSE exec -T gateway wget -qO- http://localhost:8081/actuator/prometheus 2>/dev/null \
+        | grep '^waiting_queue_enqueue_latency_seconds' > "$1" || true
+}
+scrape_enqueue "$OUT_ENQUEUE_BASE"
 
 test/load/redis-probe.sh "$OUT_OPS" &
 probe=$!
@@ -156,15 +173,9 @@ kill "$probe" 2>/dev/null
 wait "$probe" 2>/dev/null
 trap - EXIT
 
-# **등록 왕복의 분위수를 내리기 전에 긁는다** (CY-936). 응답 분위수에는 판정·라우팅·뒷단이
+# **등록 왕복의 분위수를 내리기 전에 scrape_enqueue** (CY-936). 응답 분위수에는 판정·라우팅·뒷단이
 # 섞여 있어 착수 게이트가 보라는 값이 아니다. 스택을 내리면 이 값도 같이 사라진다.
-OUT_ENQUEUE=${OUT_ENQUEUE:-${OUT_SUMMARY%.json}-enqueue.txt}
-case "$OUT_ENQUEUE" in
-    *.txt) ;;
-    *) echo "OUT_ENQUEUE 는 .txt 여야 한다: '$OUT_ENQUEUE'"; exit 2 ;;
-esac
-$COMPOSE exec -T gateway wget -qO- http://localhost:8081/actuator/prometheus 2>/dev/null \
-    | grep '^waiting_queue_enqueue_latency_seconds' > "$OUT_ENQUEUE" || true
+scrape_enqueue "$OUT_ENQUEUE"
 # **못 긁은 것과 등록이 0 건인 것은 다르다.** 둘 다 "없음" 으로 적히므로 여기서 갈라 둔다.
 if [ ! -s "$OUT_ENQUEUE" ]; then
     echo "::warning title=착수 판정::등록 왕복 지표를 못 긁었다 — 노드가 여럿이거나 관리 포트가 바뀌었다"
@@ -177,4 +188,4 @@ if [ "$rc" -ne 0 ]; then
     echo "::error title=착수 판정::k6 가 ${rc} 로 끝났다 — 이 회차로는 판정하지 않는다"
     exit 1
 fi
-test/load/evaluate-shard-gate.sh "$OUT_OPS" "$OUT_SUMMARY" "$OUT_ENQUEUE"
+test/load/evaluate-shard-gate.sh "$OUT_OPS" "$OUT_SUMMARY" "$OUT_ENQUEUE" "$OUT_ENQUEUE_BASE"

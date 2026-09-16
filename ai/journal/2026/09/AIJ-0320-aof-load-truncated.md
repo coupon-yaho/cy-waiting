@@ -5,7 +5,7 @@ kind: fix
 plan: [08-resilience]
 phase: 9
 jira: CY-855
-commits: [80ff915]
+commits: [dc70470, 80ff915]
 agent: claude-opus-5
 confidence: high
 promoted-to:
@@ -23,7 +23,8 @@ promoted-to:
 
 - 근거를 적재 되감기로 다시 적었다. 잘린 AOF 는 마지막 유효 명령까지 되감고, MULTI 안에서 끊기면 그 앞까지 간다
 - `aof-load-truncated yes` 를 설정 파일에 못 박았다. 기본값이지만 근거가 여기 걸려 있으므로 값이 바뀌면 전제가 깨진다
-- 설정 시험에 그 항목을 넣었다. 문서가 아니라 실제로 도는 레디스의 값을 본다
+- 설정 시험에 그 항목을 넣었다. 설정 파일에 값이 박혀 있는지 본다 — 기본값과 같은 항목이라 런타임 값을 재면
+  줄을 지워도 초록이다
 
 ## 왜 끄면 안 되나
 

@@ -66,7 +66,7 @@ class PersistencePolicyTest {
      */
     @Test
     @DisplayName("잘린_적재를_마지막_유효_명령까지_되감는다")
-    void 잘린_적재를_마지막_유효_명령까지_되감는다() throws Exception {
+    void 잘린_적재를_마지막_유효_명령까지_되감는다() throws IOException {
         assertThat(config()).containsEntry("aof-load-truncated", "yes");
     }
 

@@ -1470,8 +1470,22 @@ class AllocationRoundTest {
 
         round.leadershipAcquired();
 
-        assertThat(로그_메시지()).as("닫으면서 그동안의 틱을 남긴다")
-                .anyMatch(m -> m.startsWith("리더십이 갈렸다 — 배분 예산 초과 창을 닫는다"));
+        assertThat(로그_인자("리더십이 갈렸다 — 배분 예산 초과 창을 닫는다")[0])
+                .as("닫으면서 그동안 넘긴 틱을 남긴다").isEqualTo(1L);
+    }
+
+    /** 폴링 예산 초과 창도 같은 자리에서 닫는다. 이 창만 빠지면 그 지표의 해제가 승계에서 영영 안 찍힌다. */
+    @Test
+    @DisplayName("승계가_폴링_예산_초과_창을_닫는다")
+    void 승계가_폴링_예산_초과_창을_닫는다() {
+        AllocationRound round = round(() -> List.of(new CouponDemand("c1", 100_000, 1_000_000)), 10, 1);
+        round.run().block();
+        assertThat(로그_메시지()).anyMatch(m -> m.startsWith("폴링 예산 초과 —"));
+
+        round.leadershipAcquired();
+
+        assertThat(로그_인자("리더십이 갈렸다 — 폴링 예산 초과 창을 닫는다")[0])
+                .as("닫으면서 그동안 넘긴 틱을 남긴다").isEqualTo(1L);
     }
 
     /** 적용 실패 창도 같다. 열어 둔 채 승계하면 새 리더의 첫 복귀 로그가 남의 구간까지 센다. */
@@ -1485,7 +1499,8 @@ class AllocationRoundTest {
 
         round.leadershipAcquired();
 
-        assertThat(로그_메시지()).anyMatch(m -> m.startsWith("리더십이 갈렸다 — 적용 실패 창을 닫는다"));
+        assertThat(로그_인자("리더십이 갈렸다 — 적용 실패 창을 닫는다")[0])
+                .as("센 것은 회차가 아니라 쿠폰별 실패 건수다").isEqualTo(1L);
     }
 
     /**

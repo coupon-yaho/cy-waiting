@@ -109,13 +109,34 @@ enq() {
 }
 MIN_SAMPLES=1 run_case "등록 왕복 p99 를 초에서 ms 로 읽는다" 0 "등록 왕복 p99(ms) — 기록만 *12.3" \
     -- "$(samples s.txt 6001)" "$work/ok.json" \
-       "$(enq enq.txt 'waiting_queue_enqueue_redis_seconds{quantile="0.99",} 0.0123
+       "$(enq enq.txt 'waiting_queue_enqueue_latency_seconds{quantile="0.99",} 0.0123
+waiting_queue_enqueue_latency_seconds_count{outcome="success",} 5000.0
+')"
+# **표본이 없으면 0 이 아니라 없음이다.** 창이 비면 분위수 줄은 0 으로 남는데, 그대로 적으면
+# 등록이 한 건도 없던 회차가 가장 좋아 보이는 값으로 인용된다.
+MIN_SAMPLES=1 run_case "표본이 없으면 0 을 안 적는다" 0 "등록 왕복 p99(ms) — 기록만 *없음" \
+    -- "$(samples s.txt 6001)" "$work/ok.json" \
+       "$(enq enq0.txt 'waiting_queue_enqueue_latency_seconds{quantile="0.99",} 0.0
+waiting_queue_enqueue_latency_seconds_count{outcome="success",} 0.0
+')"
+MIN_SAMPLES=1 run_case "숫자가 아니면 안 적는다" 0 "등록 왕복 p99(ms) — 기록만 *없음" \
+    -- "$(samples s.txt 6001)" "$work/ok.json" \
+       "$(enq enqnan.txt 'waiting_queue_enqueue_latency_seconds{quantile="0.99",} NaN
+waiting_queue_enqueue_latency_seconds_count{outcome="success",} 12.0
 ')"
 MIN_SAMPLES=1 run_case "등록 왕복 파일이 없으면 없음이다" 0 "등록 왕복 p99(ms) — 기록만 *없음" \
     -- "$(samples s.txt 6001)" "$work/ok.json" "$work/없는파일.txt"
+# **응답 p99 로 뻗지 않는지도 본다.** 폴백이 다른 지표로 뻗으면 섞인 값을 등록으로 읽는다.
+MIN_SAMPLES=1 run_case "응답 p99 로 안 채운다" 0 "등록 왕복 p99(ms) — 기록만 *없음" \
+    -- "$(samples s.txt 6001)" \
+       "$(summary both.json '{"metrics":{"http_req_duration":{"values":{"p(99)":111.1}},"queued_responses":{"values":{"count":5000}}}}')" \
+       "$(enq enq_only95.txt 'waiting_queue_enqueue_latency_seconds{application="waiting",quantile="0.95",} 0.0099
+waiting_queue_enqueue_latency_seconds_count{application="waiting",outcome="success",} 7.0
+')"
 MIN_SAMPLES=1 run_case "그 분위수가 없으면 안 채운다" 0 "등록 왕복 p99(ms) — 기록만 *없음" \
     -- "$(samples s.txt 6001)" "$work/ok.json" \
-       "$(enq enq95.txt 'waiting_queue_enqueue_redis_seconds{quantile="0.95",} 0.0099
+       "$(enq enq95.txt 'waiting_queue_enqueue_latency_seconds{quantile="0.95",} 0.0099
+waiting_queue_enqueue_latency_seconds_count{outcome="success",} 7.0
 ')"
 
 MIN_SAMPLES=1 run_case "p99 가 없으면 다른 값으로 안 채운다" 1 "p99(ms) — 기록만 *없음" \

@@ -89,9 +89,19 @@ printf '  %-28s %s\n' "응답 p99(ms) — 기록만" "${p99:-없음}"
 # **등록 왕복만 뗀 분위수** (CY-936). 위 응답 p99 에는 판정·라우팅·뒷단이 섞여 있어
 # 샤딩을 정하는 자리에서 읽을 값이 아니다. 여기도 기록만 한다 — 절대 예산은 D-L1 이 정한다.
 if [ -n "${enqueue:-}" ] && [ -s "$enqueue" ]; then
-    enq99=$(awk -F'[{}=," ]+' '/quantile="0.99"/ {print $(NF)}' "$enqueue" | tail -1)
-    if [ -n "$enq99" ]; then
-        enq99_ms=$(awk -v v="$enq99" 'BEGIN {printf "%.1f", v * 1000}')
+    # **표본이 없으면 없다고 적는다.** 창이 비면 분위수 줄은 사라지지 않고 0 으로 남는다 —
+    # 그대로 적으면 등록이 한 건도 없던 회차가 "0.0ms" 라는 가장 좋아 보이는 값으로 인용된다.
+    samples_seen=$(awk '/^waiting_queue_enqueue_latency_seconds_count/ {n += $NF} END {printf "%d", n}' \
+        "$enqueue")
+    if [ "${samples_seen:-0}" -gt 0 ]; then
+        # **계열이 여럿이면 가장 큰 것을 집는다.** 라벨이 하나 늘 때 tail 로 집으면 값이 조용히 바뀐다.
+        enq99=$(awk -F'[{}=," ]+' '/quantile="0.99"/ {print $(NF)}' "$enqueue" | sort -g | tail -1)
+        case "$enq99" in
+            ''|*[!0-9.eE+-]*) enq99= ;;   # NaN 도 여기서 걸린다
+        esac
+        if [ -n "$enq99" ]; then
+            enq99_ms=$(awk -v v="$enq99" 'BEGIN {printf "%.1f", v * 1000}')
+        fi
     fi
 fi
 printf '  %-28s %s\n' "등록 왕복 p99(ms) — 기록만" "${enq99_ms:-없음}"

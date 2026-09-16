@@ -101,7 +101,7 @@ sleep "${SNAPSHOT_SETTLE_SEC:-2}"
 # **앞 회차의 산출물이 남으면 안 된다.** k6 가 요약을 못 남기고 죽거나 프로브가
 # 뜨기 전에 끝나면, 앞 회차의 것이 이번 회차 것과 짝지어져 판정을 낸다 — 앞
 # 회차가 남긴 것 때문에 판정이 갈렸다는 것이 바로 이 러너를 만든 이유다.
-rm -f "$OUT_SUMMARY" "$OUT_OPS"
+rm -f "$OUT_SUMMARY" "$OUT_OPS" "${OUT_ENQUEUE:-${OUT_SUMMARY%.json}-enqueue.txt}"
 
 test/load/redis-probe.sh "$OUT_OPS" &
 probe=$!
@@ -159,8 +159,16 @@ trap - EXIT
 # **등록 왕복의 분위수를 내리기 전에 긁는다** (CY-936). 응답 분위수에는 판정·라우팅·뒷단이
 # 섞여 있어 착수 게이트가 보라는 값이 아니다. 스택을 내리면 이 값도 같이 사라진다.
 OUT_ENQUEUE=${OUT_ENQUEUE:-${OUT_SUMMARY%.json}-enqueue.txt}
+case "$OUT_ENQUEUE" in
+    *.txt) ;;
+    *) echo "OUT_ENQUEUE 는 .txt 여야 한다: '$OUT_ENQUEUE'"; exit 2 ;;
+esac
 $COMPOSE exec -T gateway wget -qO- http://localhost:8081/actuator/prometheus 2>/dev/null \
-    | grep '^waiting_queue_enqueue_redis_seconds' > "$OUT_ENQUEUE" || true
+    | grep '^waiting_queue_enqueue_latency_seconds' > "$OUT_ENQUEUE" || true
+# **못 긁은 것과 등록이 0 건인 것은 다르다.** 둘 다 "없음" 으로 적히므로 여기서 갈라 둔다.
+if [ ! -s "$OUT_ENQUEUE" ]; then
+    echo "::warning title=착수 판정::등록 왕복 지표를 못 긁었다 — 노드가 여럿이거나 관리 포트가 바뀌었다"
+fi
 
 echo "k6=$rc · 레디스 고정 ${pinned:+켬}${pinned:-끔}"
 # **k6 가 빨개진 회차는 판정하지 않는다.** 임계 위반(99)은 줄이 안 섰거나 다

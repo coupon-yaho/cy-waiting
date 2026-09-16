@@ -133,10 +133,22 @@ public final class RedisFaults implements AutoCloseable {
                 if (String.valueOf(e.getMessage()).contains("OOM")) {
                     return 원래;
                 }
+                // **예상 못 한 실패에서도 되돌린다.** 상한이 남으면 뒤 단계와 다음 시험이 전부 엉뚱한 원인으로 깨진다.
+                되돌리기를_시도한다(연결, 원래, e);
                 throw e;
             }
             연결.sync().configSet("maxmemory", 원래);
             throw new IllegalStateException("상한을 내렸는데 쓰기가 거부되지 않는다");
+        }
+    }
+
+    /** 되돌리기가 또 실패하면 원래 예외에 붙인다. 그것이 진짜 원인이다. */
+    private static void 되돌리기를_시도한다(StatefulRedisConnection<String, String> 연결, String 원래,
+            RuntimeException 원인) {
+        try {
+            연결.sync().configSet("maxmemory", 원래);
+        } catch (RuntimeException e) {
+            원인.addSuppressed(e);
         }
     }
 

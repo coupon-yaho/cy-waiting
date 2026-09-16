@@ -156,8 +156,9 @@ class MemoryLimitHandoverScenarioTest {
                         Long.toString(새_임기[0]).equals(발행_표[0]) ? Optional.empty()
                                 : Optional.of("상한 중 발행 봉인이 안 섰다 — 표 %s".formatted(발행_표[0])),
                         // 전제 — 표 수명이 유지 창보다 짧아야 "봉인이 남는다" 판정이 무언가를 잰다.
-                        표_수명_ms[0] < 유지_창.toMillis() ? Optional.empty()
-                                : Optional.of("전제 — 발행 표 수명 %dms 가 유지 창 %s 보다 길다"
+                        // 음수는 수명이 없다는 뜻이다. 영구 표는 재봉인 없이도 남아 이 판정이 아무것도 안 잰다.
+                        표_수명_ms[0] > 0 && 표_수명_ms[0] < 유지_창.toMillis() ? Optional.empty()
+                                : Optional.of("전제 — 발행 표 수명 %dms 가 유지 창 %s 안에 안 든다"
                                         .formatted(표_수명_ms[0], 유지_창))))
                 .assertDuring(() -> RecoveryCriteria.violations(
                         // 적용은 사람 수만큼 쓰는 스크립트라 상한에서 거부되는 것이 맞다.

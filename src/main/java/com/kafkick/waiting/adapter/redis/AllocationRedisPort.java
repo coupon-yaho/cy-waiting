@@ -878,6 +878,22 @@ public final class AllocationRedisPort implements SnapshotSource {
      * @param fence 이 발행의 임기. 옛 임기는 새 임기를 못 덮는다. 0 이면 리더가 아니다
      */
     public Mono<Void> publish(Map<String, String> hash, long fence) {
+        // **검증까지 안에 둔다.** 밖에서 되돌아가면 그 실패는 재봉인을 안 태우고, 그것이 이어지면 표가 수명을 다한다.
+        return Mono.defer(() -> published(hash, fence))
+                // **못 나간 발행은 문의 수명을 다시 건다** (CY-932). 표는 발행이 매 틱 새로 거는데, 메모리 상한이 그
+                // 수명보다 길면 봉인이 사라진 채 풀려 멎었던 옛 리더의 발행이 먼저 들어간다.
+                .doOnError(e -> {
+                    if (!(e instanceof FencedOutException)) {
+                        resealSnapshotFence(fence);
+                    }
+                })
+                // **틱 시한에 잘린 회차도 덮는다.** 상한은 거절만 내는 것이 아니라 느리게도 만든다.
+                .doOnCancel(() -> resealSnapshotFence(fence))
+                .then();
+    }
+
+    /** 실제 발행. 재봉인은 부르는 쪽이 건다. */
+    private Mono<?> published(Map<String, String> hash, long fence) {
         if (hash.isEmpty()) {
             return Mono.error(new IllegalArgumentException("빈 스냅샷은 발행하지 않는다"));
         }
@@ -914,17 +930,7 @@ public final class AllocationRedisPort implements SnapshotSource {
                     }
                     return Mono.<List<?>>error(new FencedOutException(fence, blockedBy));
                 })
-                .doOnSuccess(done -> watchTrim(dropped))
-                // **못 나간 발행은 문의 수명을 다시 건다** (CY-932). 표는 발행이 매 틱 새로 거는데, 메모리 상한이 그
-                // 수명보다 길면 봉인이 사라진 채 풀려 멎었던 옛 리더의 발행이 먼저 들어간다.
-                .doOnError(e -> {
-                    if (!(e instanceof FencedOutException)) {
-                        resealSnapshotFence(fence);
-                    }
-                })
-                // **틱 시한에 잘린 회차도 덮는다.** 상한은 거절만 내는 것이 아니라 느리게도 만든다.
-                .doOnCancel(() -> resealSnapshotFence(fence))
-                .then();
+                .doOnSuccess(done -> watchTrim(dropped));
     }
 
     /**

@@ -1461,17 +1461,39 @@ class AllocationRoundTest {
     @Test
     @DisplayName("승계가_예산_초과_창을_닫는다")
     void 승계가_예산_초과_창을_닫는다() {
-        AtomicReference<CircuitState> 서킷 = new AtomicReference<>(CircuitState.CLOSED);
-        // 하한이 관측보다 높으면 나눠 준 예산이 뒷단이 받는다는 것을 넘는다.
-        AllocationRound round = 서킷_있는_회차(서킷, 10, () -> 5_000, 1,
-                List.of(new CouponDemand("c1", 20_000, 1_000_000)), () -> true);
+        // **뒷단이 떨어져도 평활은 앞 값을 여러 틱 나눠 준다.** 그 구간이 예산 초과다 — 하한이 관측보다 높은
+        // 조합은 배선에서 안 나온다. 수집기가 하한이 답이 된 회차의 값을 그대로 관측으로 싣는다.
+        AtomicLong 관측 = new AtomicLong(7_300);
+        AllocationRound round = AllocationRound.of(() -> true,
+                () -> Mono.just(new TimedDemands(List.of(new CouponDemand("c1", 20_000, 1_000_000)), 읽은_시각)),
+                관측::get, () -> 1,
+                grant -> Mono.just(grant.credit()), hash -> Mono.empty(),
+                () -> Instant.ofEpochSecond(1_700_000_000L),
+                () -> Mono.just(CreditSmoother.of(0.2)), SnapshotCodec.create(), () -> 0L);
         round.run().block();
-        assertThat(로그_메시지()).anyMatch(m -> m.startsWith("뒷단이 받는다는 것보다 많이 나눠 준다"));
+        관측.set(10);
+        round.run().block();
+        round.run().block();
+        round.run().block();
+        assertThat(로그_메시지()).as("진입은 구간의 첫 회차에만")
+                .filteredOn(m -> m.startsWith("뒷단이 받는다는 것보다 많이 나눠 준다")).hasSize(1);
 
         round.leadershipAcquired();
 
         assertThat(로그_인자("리더십이 갈렸다 — 배분 예산 초과 창을 닫는다")[0])
-                .as("닫으면서 그동안 넘긴 틱을 남긴다").isEqualTo(1L);
+                .as("닫으면서 그동안 넘긴 틱을 남긴다 — 회차마다 하나씩").isEqualTo(3L);
+    }
+
+    /** 안 연 창은 닫았다고 적지 않는다. 승계마다 0 짜리 해제가 세 줄씩 나가면 짝을 세는 뜻이 사라진다. */
+    @Test
+    @DisplayName("승계가_안_연_창은_닫았다고_안_적는다")
+    void 승계가_안_연_창은_닫았다고_안_적는다() {
+        AllocationRound round = round(List.of(new CouponDemand("c1", 10, 100)), 1_000, 1);
+        round.run().block();
+
+        round.leadershipAcquired();
+
+        assertThat(로그_메시지()).noneMatch(m -> m.contains("창을 닫는다"));
     }
 
     /** 폴링 예산 초과 창도 같은 자리에서 닫는다. 이 창만 빠지면 그 지표의 해제가 승계에서 영영 안 찍힌다. */
@@ -1480,19 +1502,22 @@ class AllocationRoundTest {
     void 승계가_폴링_예산_초과_창을_닫는다() {
         AllocationRound round = round(() -> List.of(new CouponDemand("c1", 100_000, 1_000_000)), 10, 1);
         round.run().block();
+        round.run().block();
         assertThat(로그_메시지()).anyMatch(m -> m.startsWith("폴링 예산 초과 —"));
 
         round.leadershipAcquired();
 
         assertThat(로그_인자("리더십이 갈렸다 — 폴링 예산 초과 창을 닫는다")[0])
-                .as("닫으면서 그동안 넘긴 틱을 남긴다").isEqualTo(1L);
+                .as("닫으면서 그동안 넘긴 틱을 남긴다 — 회차마다 하나씩").isEqualTo(2L);
     }
 
     /** 적용 실패 창도 같다. 열어 둔 채 승계하면 새 리더의 첫 복귀 로그가 남의 구간까지 센다. */
     @Test
     @DisplayName("승계가_적용_실패_창을_닫는다")
     void 승계가_적용_실패_창을_닫는다() {
-        AllocationRound round = 비동기_회차(() -> true, List.of(new CouponDemand("c1", 10, 100)),
+        // 한 회차에 쿠폰 둘이 실패한다. 회차로 세면 1 이라 단위가 갈린다.
+        AllocationRound round = 비동기_회차(() -> true,
+                List.of(new CouponDemand("c1", 10, 100), new CouponDemand("c2", 10, 100)),
                 grant -> Mono.error(new IllegalStateException("끊겼다")));
         round.run().block();
         assertThat(로그_메시지()).anyMatch(m -> m.startsWith("배분 적용 실패"));
@@ -1500,7 +1525,7 @@ class AllocationRoundTest {
         round.leadershipAcquired();
 
         assertThat(로그_인자("리더십이 갈렸다 — 적용 실패 창을 닫는다")[0])
-                .as("센 것은 회차가 아니라 쿠폰별 실패 건수다").isEqualTo(1L);
+                .as("센 것은 회차가 아니라 쿠폰별 실패 건수다").isEqualTo(2L);
     }
 
     /**

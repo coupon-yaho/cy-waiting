@@ -114,6 +114,7 @@ class LongHandoverCarryoverScenarioTest {
         AtomicLong 보고할_가용량 = new AtomicLong(평시_가용량);
         AtomicLong 보고한_수 = new AtomicLong();
         long[] 회복_전_보고_수 = new long[1];
+        double[] 회복_전_이월 = new double[2];
         long[] 되찾은_몫 = new long[1];
         boolean[] 첫_노드가_내려왔다 = new boolean[1];
         double[] 갈리기_전_평활 = new double[1];
@@ -135,7 +136,10 @@ class LongHandoverCarryoverScenarioTest {
                         } catch (Throwable e) {
                             보고가_터진_수.incrementAndGet();
                         }
-                    }, 0, 500, TimeUnit.MILLISECONDS);
+                    // **보고 간격을 신선도(3초)보다 훨씬 짧게 둔다.** 시계를 고정하면 신선도 판정이 통째로
+                    // 무의미해진다 — 앱은 레디스 시각과 견주므로, 막을 것은 보고가 밀려 낡는 것이고 그것은
+                    // 위 판정의 평활 하한이 잡는다.
+                    }, 0, 250, TimeUnit.MILLISECONDS);
                     Awaitility.await().alias("첫 노드가 리더를 쥔다").atMost(기다림).until(첫_노드::isLeader);
                     // 평활이 평시 값에 붙을 때까지 돈다. 안 붙으면 되찾은 값과 견줄 기준이 없다.
                     Awaitility.await().alias("평활이 평시 가용량에 붙는다").atMost(기다림)
@@ -158,10 +162,11 @@ class LongHandoverCarryoverScenarioTest {
                         // 순간 덜 수렴한 채 회복으로 넘어가 이 시나리오가 재려던 조건이 안 만들어진다.
                         AllocationRound 둘째_회차 = 둘째.빈("allocationRound", AllocationRound.class);
                         Awaitility.await().alias("둘째의 평활이 열화 값에 붙는다")
+                                // 구간 내내 첫 노드는 리더가 아니어야 한다 — 둘이 다 리더면 승계가 아니라 분단이다.
+                                .failFast("첫 노드가 다시 리더가 됐다", 첫_노드::isLeader)
                                 .atMost(갈린_구간.plusSeconds(20)).pollInterval(Duration.ofMillis(500))
                                 .until(() -> 둘째_회차.smoothedCredit() > 0
                                         && 둘째_회차.smoothedCredit() <= 열화_가용량 * 1.2);
-                        // 그 구간 내내 첫 노드는 리더가 아니어야 한다 — 둘이 다 리더면 승계가 아니라 분단이다.
                         첫_노드가_내려왔다[0] = !첫_노드.isLeader();
                         갈린_동안_평활[0] = 둘째_회차.smoothedCredit();
                         갈린_동안_몫[0] = 발행된_몫();
@@ -174,6 +179,9 @@ class LongHandoverCarryoverScenarioTest {
                     // **되찾기 전에 기준을 잡는다.** 리더 표시를 기다린 뒤에 잡으면 새 임기의 첫 회차를 이미 놓친다.
                     되찾기_전[0] = holder.view().snapshot().publishedAt();
                     회복_전_보고_수[0] = 보고한_수.get();
+                    // **이월 계수는 누적이다.** 앞 임기에 받은 것으로 통과하지 않게 델타로 본다.
+                    회복_전_이월[0] = round.carryoverRestored();
+                    회복_전_이월[1] = round.carryoverEmpty();
                     수명.start();
                     Awaitility.await().alias("첫 노드가 리더를 되찾는다").atMost(기다림)
                             .until(첫_노드::isLeader);
@@ -195,7 +203,9 @@ class LongHandoverCarryoverScenarioTest {
                         둘째가_돌았다[0] ? Optional.empty() : Optional.of("전제 — 둘째가 안 이어받았다"),
                         첫_노드가_내려왔다[0] ? Optional.empty()
                                 : Optional.of("첫 노드가 안 내려왔다 — 승계가 아니라 분단이다"),
-                        갈린_동안_평활[0] > 0 && 갈린_동안_평활[0] <= 열화_가용량 * 1.2 ? Optional.empty()
+                        // 하한도 본다. 보고가 낡아 떨어지면 크레딧이 하한으로 내려가 상한만으로는 통과한다.
+                        갈린_동안_평활[0] >= 열화_가용량 * 0.5 && 갈린_동안_평활[0] <= 열화_가용량 * 1.2
+                                ? Optional.empty()
                                 : Optional.of("전제 — 둘째의 평활이 열화 값에 안 붙었다: %.0f"
                                         .formatted(갈린_동안_평활[0])),
                         갈린_동안_몫[0] > 0 && 갈린_동안_몫[0] <= 갈린_상한 ? Optional.empty()
@@ -213,10 +223,14 @@ class LongHandoverCarryoverScenarioTest {
                                 : Optional.of("되찾은 평활이 %.0f — 이월이 0 을 물고 왔다"
                                         .formatted(되찾은_평활[0])),
                         // **이월을 실제로 받았는지 계수로 본다.** 못 받아도 관측이 답이 되면 값만으로는 안 갈린다.
-                        round.carryoverRestored() >= 1 ? Optional.empty()
-                                : Optional.of("이월을 한 번도 안 받았다 — 받음 %.0f, 없음 %.0f, 실패 %.0f"
+                        round.carryoverRestored() > 회복_전_이월[0] ? Optional.empty()
+                                : Optional.of("되찾고 이월을 안 받았다 — 받음 %.0f, 없음 %.0f, 실패 %.0f"
                                         .formatted(round.carryoverRestored(), round.carryoverEmpty(),
                                                 round.carryoverFailures())),
+                        // 빈 이월은 관측에서 시작한 것이다 — 값만 보면 이월받은 것과 안 갈린다.
+                        round.carryoverEmpty() == 회복_전_이월[1] ? Optional.empty()
+                                : Optional.of("되찾을 때 이월이 비어 있었다 — 없음 %.0f"
+                                        .formatted(round.carryoverEmpty())),
                         round.carryoverFailures() == 0 ? Optional.empty()
                                 : Optional.of("이월 읽기가 %.0f번 실패했다".formatted(round.carryoverFailures())),
                         보고가_터진_수.get() == 0 ? Optional.empty()

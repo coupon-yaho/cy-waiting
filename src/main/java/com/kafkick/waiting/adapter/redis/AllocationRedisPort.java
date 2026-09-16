@@ -103,7 +103,7 @@ public final class AllocationRedisPort implements SnapshotSource {
      * <p>리더가 매 틱 다시 쓰므로 막아야 할 창이 리스 하나 더하기 틱뿐이다. 길게
      * 두면 시계가 뒤로 간 리더가 그 시간 내내 발행을 못 하고, 그동안 전 노드가
      * 얼어붙은 재료를 읽는다 — 이 울타리가 막으려던 것보다 나쁘다. 짧아서 생기는
-     * 구멍은 없다: 거절은 수명을 갱신하지 않으므로 만료는 리스를 잃었다는 뜻이다.
+     * 구멍도 없다: 울타리 거절만 수명을 안 갱신하고, 못 나간 발행은 다시 건다 (CY-932).
      */
     private static final Duration MIN_SNAPSHOT_FENCE_TTL = Duration.ofSeconds(10);
 
@@ -158,6 +158,11 @@ public final class AllocationRedisPort implements SnapshotSource {
     private final FailureWindow publishFence = FailureWindow.create();
 
     private final AtomicLong publishFenced = new AtomicLong();
+
+    /** 발행의 문을 다시 못 잠근 구간. 그 사이 표가 만료되면 봉인 없이 풀린다. */
+    private final FailureWindow resealFence = FailureWindow.create();
+
+    private final AtomicLong resealFailed = new AtomicLong();
 
     /** 울타리가 막은 입장 적용 건수. <b>회차가 아니라 쿠폰 단위다</b>. */
     private final AtomicLong applyFenced = new AtomicLong();
@@ -873,6 +878,22 @@ public final class AllocationRedisPort implements SnapshotSource {
      * @param fence 이 발행의 임기. 옛 임기는 새 임기를 못 덮는다. 0 이면 리더가 아니다
      */
     public Mono<Void> publish(Map<String, String> hash, long fence) {
+        // **검증까지 안에 둔다.** 밖에서 되돌아가면 그 실패는 재봉인을 안 태우고, 그것이 이어지면 표가 수명을 다한다.
+        return Mono.defer(() -> published(hash, fence))
+                // **못 나간 발행은 문의 수명을 다시 건다** (CY-932). 표는 발행이 매 틱 새로 거는데, 메모리 상한이 그
+                // 수명보다 길면 봉인이 사라진 채 풀려 멎었던 옛 리더의 발행이 먼저 들어간다.
+                .doOnError(e -> {
+                    if (!(e instanceof FencedOutException)) {
+                        resealSnapshotFence(fence);
+                    }
+                })
+                // **틱 시한에 잘린 회차도 덮는다.** 상한은 거절만 내는 것이 아니라 느리게도 만든다.
+                .doOnCancel(() -> resealSnapshotFence(fence))
+                .then();
+    }
+
+    /** 실제 발행. 재봉인은 부르는 쪽이 건다. */
+    private Mono<?> published(Map<String, String> hash, long fence) {
         if (hash.isEmpty()) {
             return Mono.error(new IllegalArgumentException("빈 스냅샷은 발행하지 않는다"));
         }
@@ -909,8 +930,27 @@ public final class AllocationRedisPort implements SnapshotSource {
                     }
                     return Mono.<List<?>>error(new FencedOutException(fence, blockedBy));
                 })
-                .doOnSuccess(done -> watchTrim(dropped))
-                .then();
+                .doOnSuccess(done -> watchTrim(dropped));
+    }
+
+    /**
+     * 발행의 문을 다시 잠근다. <b>회차에서 떼어 보낸다</b> — 회차 안에서 기다리면 남은 틱 예산을 먹고, 뒤에 붙는 시한
+     * 초과가 원래 원인을 덮는다. 쿠폰 쪽 표는 수명이 한 시간이라 같은 창이 없다.
+     */
+    private void resealSnapshotFence(long fence) {
+        sealSnapshotFence(fence)
+                .doOnError(e -> {
+                    resealFailed.incrementAndGet();
+                    if (resealFence.entered()) {
+                        log.error("발행 울타리를 다시 못 잠갔다 — 임기 {}. 표가 수명을 다해 사라지면 "
+                                + "멎었던 옛 리더의 발행이 먼저 들어간다", fence, e);
+                    }
+                })
+                .doOnSuccess(done -> resealFence.exited().ifPresent(recovered -> log.info(
+                        "발행 울타리를 다시 잠갔다 — {}초 만에, 그동안 {}번 실패",
+                        recovered.elapsedSeconds(), recovered.swallowed())))
+                .onErrorResume(e -> Mono.empty())
+                .subscribe();
     }
 
     /**
@@ -928,6 +968,11 @@ public final class AllocationRedisPort implements SnapshotSource {
     /** 울타리가 발행을 거절한 회차 수. 0 이 아니면 이 노드의 재료가 안 나갔다. */
     public double publishFenced() {
         return publishFenced.get();
+    }
+
+    /** 발행의 문을 다시 못 잠근 누적 횟수. 0 이 아니면 봉인 없이 풀릴 수 있었다. */
+    public double resealFailed() {
+        return resealFailed.get();
     }
 
     /** 울타리가 입장 적용을 거절한 건수. 쿠폰마다 오르므로 회차 수가 아니다. */

@@ -157,9 +157,12 @@ Lettuce는 커넥션 하나에 명령을 멀티플렉싱한다. 논블로킹 사
 
 ---
 
-## RD-12 · SHOULD · `allow-oom` 은 쓰는 양이 고정된 제어 스크립트에만 붙인다
+## RD-12 · SHOULD · `allow-oom` 은 사람 수에 비례하지 않는 제어 스크립트에만 붙인다
 
 배선은 `noeviction` 이라 한도에 닿으면 메모리를 늘리는 쓰기만 거부된다. 리더 락처럼 **거부되면 해제 조건이
 사라지는** 스크립트는 `#!lua flags=allow-oom` 으로 돌린다 — 쓰는 키 수가 고정이라 넘치는 양이 없다.
 줄 등록·배분 적용처럼 사람 수만큼 쓰는 스크립트에는 붙이지 않는다. 한도가 이름만 남는다.
-근거: [AIJ-0313](../journal/2026/09/AIJ-0313-leader-under-memory-limit.md)
+승계 봉인(`fence_seal`·`snapshot_fence_seal`)도 붙인다 — 활성 쿠폰 수에 비례하고 사람 수에는 비례하지 않는다.
+이탈자 청소(`sweep`)는 걷는 사람 수만큼 기록을 써 안 붙인다. 붙이기 전에 **운영 경로에서 상한 중에 실제로 불리는지** 본다 —
+안 불리는 허용은 문서만 거짓으로 만든다.
+근거: [AIJ-0313](../journal/2026/09/AIJ-0313-leader-under-memory-limit.md), [AIJ-0317](../journal/2026/09/AIJ-0317-oom-release-scripts.md)

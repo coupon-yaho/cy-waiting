@@ -1720,22 +1720,24 @@ class AllocationRoundTest {
 
     /**
      * <b>읽는 사이에 임기가 갈리면 버린다</b> (CY-856). 읽기는 임기가 갈려도 안 끊기고, 그 결과가 새 임기의 지표로
-     * 들어가면 지나간 사건이 지금 값처럼 보인다.
+     * 들어가면 지나간 사건이 지금 값처럼 보인다. 새 임기가 연 실패 창도 그 완료가 닫으면 안 된다.
      */
     @Test
     @DisplayName("임기가_갈린_뒤_온_측정은_버린다")
     void 임기가_갈린_뒤_온_측정은_버린다() {
         VirtualTimeScheduler 시계 = VirtualTimeScheduler.create();
         AtomicBoolean 터진다 = new AtomicBoolean(true);
+        AtomicInteger 측정_횟수 = new AtomicInteger();
         AllocationRound round = AllocationRound.of(() -> true,
                 () -> 터진다.get() ? Mono.error(new IllegalStateException("끊겼다"))
                         : Mono.just(new TimedDemands(List.of(new CouponDemand("c1", 10, 100)), 읽은_시각)),
                 () -> 10L, () -> 1, grant -> Mono.just(grant.credit()), hash -> Mono.empty(),
                 () -> Instant.ofEpochSecond(1_700_000_000L),
                 () -> Mono.just(CreditSmoother.of(1.0)), SnapshotCodec.create(), () -> 0L);
-        // 측정이 늦게 온다 — 그 사이에 임기가 갈린다.
-        round.measuringRewindWith(쿠폰 -> Mono.delay(Duration.ofMillis(300), 시계)
-                .thenReturn(RewindCheck.seen(List.of("c1"), 1)), ids -> { });
+        // 첫 측정은 늦게 온다. 그 사이에 임기가 갈리고, 새 임기의 측정은 실패해 창을 연다.
+        round.measuringRewindWith(쿠폰 -> 측정_횟수.incrementAndGet() == 1
+                ? Mono.delay(Duration.ofMillis(300), 시계).thenReturn(RewindCheck.seen(List.of("c1"), 1))
+                : Mono.error(new IllegalStateException("못 읽었다")), ids -> { });
 
         assertThatThrownBy(() -> round.run().block()).hasMessage("끊겼다");
         터진다.set(false);
@@ -1743,6 +1745,15 @@ class AllocationRoundTest {
         시계.advanceTimeBy(Duration.ofMillis(100));
         round.leadershipLost();
         round.leadershipAcquired();
+        // 새 임기가 실패해 창이 열린다.
+        터진다.set(true);
+        assertThatThrownBy(() -> round.run().block()).hasMessage("끊겼다");
+        터진다.set(false);
+        round.run().block();
+        assertThat(로그_메시지()).as("전제 — 새 임기의 창이 열렸다")
+                .anyMatch(m -> m.startsWith("되감기 신호를 못 쟀다"));
+
+        // 이제 앞 임기의 측정이 도착한다.
         시계.advanceTimeBy(Duration.ofMillis(200));
 
         assertThat(round.rewoundCoupons()).as("지나간 임기의 사건은 안 싣는다").isNaN();

@@ -17,11 +17,13 @@ import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -48,6 +50,9 @@ public final class AllocationRound {
 
     /** 동시 적용 상한. 레디스 어댑터의 쓰기 상한과 같다. */
     private static final int MAX_CONCURRENT_APPLIES = 16;
+
+    /** 매진이 발행에 실려 나간 쿠폰. 발행이 못 나간 회차는 이 줄만 지운다 (CY-935). */
+    private final Set<String> announced = new HashSet<>();
 
     /** 이탈자 청소. <b>멈추는 판단을 안에 들고 있다.</b> */
     private final QueueSweeper sweeper;
@@ -476,6 +481,9 @@ public final class AllocationRound {
         smoother.set(null);
         interim.set(null);
         smoothedCredit = Double.NaN;
+        // 나간 매진 표시도 임기마다 비운다. 앞 임기에 나간 것을 이 임기가 나갔다고 읽으면,
+        // 승계 직후 아직 아무 노드도 못 받은 매진의 줄을 지운다.
+        announced.clear();
         // 되감기 신호도 임기마다 비운다. 앞 임기의 값이 이번 임기 것으로 읽힌다.
         rewoundCoupons = Double.NaN;
         roundFailed.set(false);
@@ -660,6 +668,9 @@ public final class AllocationRound {
                         .doOnSuccess(done -> {
                             published.set(true);
                             watchRamp(gatedNow, credit, target);
+                            // **나간 매진을 적어 둔다.** 노드가 모르는 채로 줄이 사라지면 낡은
+                            // 스냅샷을 든 노드가 그 사람을 맨 뒤에 세운다 — 순번 역행이다.
+                            announce(couponsOf(collected, granted));
                         })
                         // **발행 뒤에 지운다.** 앞에 두면 방금 지운 큐가 이번
                         // 재료에 아직 대기자로 실려 없는 줄에 크레딧이 나간다. 미루지
@@ -667,7 +678,12 @@ public final class AllocationRound {
                         .then(Mono.defer(() -> cleanUp(collected, granted)))
                         // **정리 뒤에 쓴다.** 앞에 두면 곧 지울 줄을 훑느라
                         // 예산을 쓴다.
-                        .then(Mono.defer(() -> sweepUp(collected, granted)))))
+                        .then(Mono.defer(() -> sweepUp(collected, granted)))
+                        // **발행이 못 나가도 이미 나간 매진은 정리한다.** 상한에 닿으면 발행의
+                        // 첫 쓰기가 거부되는데, 거기 묶어 두면 줄을 지워 메모리를 줄일 유일한
+                        // 경로가 같이 막혀 운영자가 한도를 올려야만 풀린다.
+                        .onErrorResume(e -> cleanUp(announced(couponsOf(collected, granted)))
+                                .then(Mono.error(e)))))
                 // 발행까지 못 간 회차가 기준을 올리면 다음 성공이 그 배수의
                 // 배수에서 시작한다. 틱을 넘겨 잘린 회차는 오류가 아니라 취소다.
                 .doOnError(e -> restoreUnpublished(published, before))
@@ -775,7 +791,34 @@ public final class AllocationRound {
      * <p><b>정리 실패가 배분을 막지 않는다.</b> 다음 틱에 다시 온다.
      */
     private Mono<Void> cleanUp(List<CouponDemand> collected, Map<String, Long> granted) {
-        List<String> due = cleanup.due(couponsOf(collected, granted));
+        return cleanUp(couponsOf(collected, granted));
+    }
+
+    /** 이미 나간 매진만 남긴다. 발행이 못 나간 회차는 이것만 본다. */
+    private Map<String, CouponState> announced(Map<String, CouponState> coupons) {
+        Map<String, CouponState> left = new LinkedHashMap<>();
+        coupons.forEach((couponId, state) -> {
+            if (announced.contains(couponId)) {
+                left.put(couponId, state);
+            }
+        });
+        return left;
+    }
+
+    /** 발행에 실린 매진을 적고, 재입고된 쿠폰은 지운다. */
+    private void announce(Map<String, CouponState> coupons) {
+        coupons.forEach((couponId, state) -> {
+            if (state.soldOut()) {
+                announced.add(couponId);
+            } else {
+                announced.remove(couponId);
+            }
+        });
+        announced.retainAll(coupons.keySet());
+    }
+
+    private Mono<Void> cleanUp(Map<String, CouponState> coupons) {
+        List<String> due = cleanup.due(coupons);
         List<String> claimed = cleanup.claimed();
         if (due.isEmpty() && claimed.isEmpty()) {
             return Mono.empty();

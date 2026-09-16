@@ -1499,7 +1499,11 @@ class AllocationRoundTest {
 
         assertThat(로그_인자("리더십을 잃었다 — 적용 실패 창을 닫는다"))
                 .as("리더 구간의 초와 삼킨 건수를 같이 남긴다").hasSize(2)
-                .satisfies(인자 -> assertThat(인자[1]).isEqualTo(1L));
+                .satisfies(인자 -> {
+                    // 한 회차만 돌아 초 단위로는 0 이다. 여기가 비리더 구간을 담으면 0 이 아니게 된다.
+                    assertThat(인자[0]).isEqualTo(0L);
+                    assertThat(인자[1]).isEqualTo(1L);
+                });
         // 이미 닫힌 창을 되찾는 자리에서 또 적지 않는다.
         round.leadershipAcquired();
         assertThat(로그_메시지()).noneMatch(m -> m.startsWith("리더십이 갈렸다 — 적용 실패 창을 닫는다"));

@@ -156,6 +156,12 @@ kill "$probe" 2>/dev/null
 wait "$probe" 2>/dev/null
 trap - EXIT
 
+# **등록 왕복의 분위수를 내리기 전에 긁는다** (CY-936). 응답 분위수에는 판정·라우팅·뒷단이
+# 섞여 있어 착수 게이트가 보라는 값이 아니다. 스택을 내리면 이 값도 같이 사라진다.
+OUT_ENQUEUE=${OUT_ENQUEUE:-${OUT_SUMMARY%.json}-enqueue.txt}
+$COMPOSE exec -T gateway wget -qO- http://localhost:8081/actuator/prometheus 2>/dev/null \
+    | grep '^waiting_queue_enqueue_redis_seconds' > "$OUT_ENQUEUE" || true
+
 echo "k6=$rc · 레디스 고정 ${pinned:+켬}${pinned:-끔}"
 # **k6 가 빨개진 회차는 판정하지 않는다.** 임계 위반(99)은 줄이 안 섰거나 다
 # 못 던졌다는 뜻이고, 그 회차의 봉우리는 재려던 것이 아니다.
@@ -163,4 +169,4 @@ if [ "$rc" -ne 0 ]; then
     echo "::error title=착수 판정::k6 가 ${rc} 로 끝났다 — 이 회차로는 판정하지 않는다"
     exit 1
 fi
-test/load/evaluate-shard-gate.sh "$OUT_OPS" "$OUT_SUMMARY"
+test/load/evaluate-shard-gate.sh "$OUT_OPS" "$OUT_SUMMARY" "$OUT_ENQUEUE"

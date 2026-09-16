@@ -101,6 +101,23 @@ MIN_SAMPLES=1 run_case "values 아래의 p99 를 읽는다" 1 "기록만 *123.4"
 MIN_SAMPLES=1 run_case "바로 아래의 p99 도 읽는다" 1 "기록만 *222.5" \
     -- "$(samples s.txt 6001)" \
        "$(summary p99.json '{"metrics":{"http_req_duration":{"p(99)":222.5}}}')"
+# **등록 왕복의 분위수도 같은 규약이다** (CY-936). 파일이 없거나 그 분위수가 없으면
+# "없음" 이고, 다른 값으로 안 채운다 — 응답 p99 로 채우면 섞인 값을 등록으로 읽는다.
+enq() {
+    printf '%s' "$2" > "$work/$1"
+    printf '%s' "$work/$1"
+}
+MIN_SAMPLES=1 run_case "등록 왕복 p99 를 초에서 ms 로 읽는다" 0 "등록 왕복 p99(ms) — 기록만 *12.3" \
+    -- "$(samples s.txt 6001)" "$work/ok.json" \
+       "$(enq enq.txt 'waiting_queue_enqueue_redis_seconds{quantile="0.99",} 0.0123
+')"
+MIN_SAMPLES=1 run_case "등록 왕복 파일이 없으면 없음이다" 0 "등록 왕복 p99(ms) — 기록만 *없음" \
+    -- "$(samples s.txt 6001)" "$work/ok.json" "$work/없는파일.txt"
+MIN_SAMPLES=1 run_case "그 분위수가 없으면 안 채운다" 0 "등록 왕복 p99(ms) — 기록만 *없음" \
+    -- "$(samples s.txt 6001)" "$work/ok.json" \
+       "$(enq enq95.txt 'waiting_queue_enqueue_redis_seconds{quantile="0.95",} 0.0099
+')"
+
 MIN_SAMPLES=1 run_case "p99 가 없으면 다른 값으로 안 채운다" 1 "p99(ms) — 기록만 *없음" \
     -- "$(samples s.txt 6001)" \
        "$(summary p99.json '{"metrics":{"http_req_duration":{"values":{"p(95)":99.9}}}}')"

@@ -31,6 +31,8 @@ summary=${2:?k6 요약 파일}
 # 이 게이트는 못 가른다. 지연 예산이 서거나(D-L1) 레디스만 때려 CPU-지연
 # 무릎을 찾기 전까지 **이 수를 근거로 인용하지 않는다.**
 threshold_pct=${SHARD_THRESHOLD_PCT:-60}
+# 세 번째 인자는 등록 왕복의 분위수 파일이다. 없으면 없다고 적는다.
+enqueue=${3:-}
 
 if [ ! -s "$samples" ]; then
     echo "::error title=착수 판정::표본이 비었다 — 프로브가 안 돌았다"
@@ -83,6 +85,16 @@ printf '  %-28s %s.%02d%%\n' "평균 CPU" "$((mean / 100))" "$((mean % 100))"
 p99=$(jq -r '(.metrics.http_req_duration.values["p(99)"]
     // .metrics.http_req_duration["p(99)"]) // empty' "$summary" 2>/dev/null)
 printf '  %-28s %s\n' "응답 p99(ms) — 기록만" "${p99:-없음}"
+
+# **등록 왕복만 뗀 분위수** (CY-936). 위 응답 p99 에는 판정·라우팅·뒷단이 섞여 있어
+# 샤딩을 정하는 자리에서 읽을 값이 아니다. 여기도 기록만 한다 — 절대 예산은 D-L1 이 정한다.
+if [ -n "${enqueue:-}" ] && [ -s "$enqueue" ]; then
+    enq99=$(awk -F'[{}=," ]+' '/quantile="0.99"/ {print $(NF)}' "$enqueue" | tail -1)
+    if [ -n "$enq99" ]; then
+        enq99_ms=$(awk -v v="$enq99" 'BEGIN {printf "%.1f", v * 1000}')
+    fi
+fi
+printf '  %-28s %s\n' "등록 왕복 p99(ms) — 기록만" "${enq99_ms:-없음}"
 
 rate=$(jq -r '(.metrics.http_reqs.values.rate
     // .metrics.http_reqs.rate) // empty' "$summary" 2>/dev/null)

@@ -1,5 +1,9 @@
 package com.kafkick.waiting.adapter.redis;
 
+import io.micrometer.core.instrument.Timer;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.util.concurrent.TimeUnit;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.kafkick.waiting.domain.queue.QueueEntry;
@@ -61,6 +65,24 @@ class QueueRedisPortTest extends RedisContainerSupport {
      * 전부 통과합니다. 이 패키지는 뮤테이션 범위 밖이라 여기가 유일한 방어이고,
      * 자리를 바꾸면 처음 온 사람이 "돌아오신 걸 환영합니다" 를 받습니다.
      */
+    /**
+     * <b>등록의 레디스 왕복만 따로 잰다</b> (CY-936). 응답 전체의 분위수에는 판정·라우팅·뒷단이 섞여 있어, 착수
+     * 게이트가 보라는 등록 p99 를 못 읽는다.
+     */
+    @Test
+    @DisplayName("등록_왕복을_타이머에_남긴다")
+    void 등록_왕복을_타이머에_남긴다() {
+        SimpleMeterRegistry 미터 = new SimpleMeterRegistry();
+        QueueRedisPort 잰다 = QueueRedisPort.of(redis, SHARDS, 미터);
+
+        잰다.enqueue(COUPON, "timer-1", QueuePort.NO_LIMIT, 지금).block(WAIT);
+
+        Timer 타이머 = 미터.find("waiting.queue.enqueue.redis").timer();
+        assertThat(타이머).as("등록 왕복의 타이머가 있어야 분위수를 읽는다").isNotNull();
+        assertThat(타이머.count()).isEqualTo(1);
+        assertThat(타이머.totalTime(TimeUnit.NANOSECONDS)).isPositive();
+    }
+
     @Test
     @DisplayName("재방문_여부를_자리에서_제대로_읽는다")
     void 재방문_여부를_자리에서_제대로_읽는다() {

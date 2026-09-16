@@ -99,7 +99,7 @@ public final class QueueRedisPort implements QueuePort {
      */
     private Timer enqueueTimer(String outcome) {
         return Timer.builder(ENQUEUE_LATENCY)
-                .description("등록 스크립트의 레디스 왕복. 한 노드의 값이다")
+                .description("등록 스크립트를 부른 시점부터 결과까지. 클라이언트 대기도 들어간다")
                 .tag("outcome", outcome)
                 .publishPercentiles(0.5, 0.95, 0.99)
                 .distributionStatisticExpiry(Duration.ofMinutes(10))

@@ -88,9 +88,14 @@ public final class InvariantMetrics {
                 InvariantMetrics::carryoverFailures,
                 "평활화 이월 읽기가 실패한 누적 시도 수. 흔들림이 얼마나 길었는지를 본다");
         // **게이지다.** 리더가 아니면 NaN 이라 노드마다 하나만 값을 낸다.
-        Gauge.builder("waiting.queue.admitted.backlog", metrics,
-                        InvariantMetrics::admittedBacklog)
-                .description("재접속 뒤 첫 회차에 센 임계 이하 인원. 되감기면 이 값이 튄다")
+        Gauge.builder("waiting.redis.rewound.coupons", metrics,
+                        InvariantMetrics::rewoundCoupons)
+                .description("실패 뒤 첫 회차에 센, 이 노드가 쓴 임계보다 뒤로 간 쿠폰 수")
+                .strongReference(true)
+                .register(meters);
+        Gauge.builder("waiting.redis.rewind.unmeasured", metrics,
+                        InvariantMetrics::rewindUnmeasured)
+                .description("되감기 신호를 못 잰 누적 횟수. 0 이 아니면 그 장애의 되감기 여부를 모른다")
                 .strongReference(true)
                 .register(meters);
         Gauge.builder("waiting.allocation.smoothed.credit", metrics,
@@ -126,9 +131,14 @@ public final class InvariantMetrics {
         return round.carryoverFailures();
     }
 
-    /** 되감기 신호. 재접속 뒤 첫 회차에만 갱신되므로 게이지가 그 사이 값을 붙들고 있는 것이 맞다. */
-    private double admittedBacklog() {
-        return round.admittedBacklog();
+    /** 되감기 신호. 실패 뒤 첫 회차에만 갱신되므로 게이지가 그 사이 값을 붙들고 있는 것이 맞다. */
+    private double rewoundCoupons() {
+        return round.rewoundCoupons();
+    }
+
+    /** 신호를 못 잰 횟수. 0 이 아니면 그 장애의 되감기 여부를 모른다. */
+    private double rewindUnmeasured() {
+        return round.rewindUnmeasured();
     }
 
     private double smoothedCredit() {

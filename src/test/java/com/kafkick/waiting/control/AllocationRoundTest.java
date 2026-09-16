@@ -1511,12 +1511,12 @@ class AllocationRoundTest {
     }
 
     /**
-     * <b>읽기가 실패한 뒤 첫 회차에서만 임계 이하 인원을 센다</b> (CY-856). 저장소가 뒤로 감긴 사실 자체를 잡는 신호가
-     * 없다. 되감기 직후에 이 값이 튄다 — 깨끗한 검출기는 아니라 지표로만 낸다. 평시에 재면 쿠폰마다 왕복이 는다.
+     * <b>회차가 터진 뒤 첫 회차에서만 되감기를 센다</b> (CY-856). 저장소가 뒤로 감긴 사실 자체를 잡는 신호가 없다.
+     * 평시에 재면 쿠폰마다 왕복이 늘고, 되감기는 재접속 직후에만 드러난다.
      */
     @Test
-    @DisplayName("실패_뒤_첫_회차만_임계_이하_인원을_센다")
-    void 실패_뒤_첫_회차만_임계_이하_인원을_센다() {
+    @DisplayName("실패_뒤_첫_회차만_되감기를_센다")
+    void 실패_뒤_첫_회차만_되감기를_센다() {
         AtomicBoolean 터진다 = new AtomicBoolean(true);
         List<List<String>> 센_쿠폰 = new CopyOnWriteArrayList<>();
         AllocationRound round = AllocationRound.of(() -> true,
@@ -1525,7 +1525,7 @@ class AllocationRoundTest {
                 () -> 10L, () -> 1, grant -> Mono.just(grant.credit()), hash -> Mono.empty(),
                 () -> Instant.ofEpochSecond(1_700_000_000L),
                 () -> Mono.just(CreditSmoother.of(1.0)), SnapshotCodec.create(), () -> 0L);
-        round.measuringBacklogWith(쿠폰 -> {
+        round.measuringRewindWith(쿠폰 -> {
             센_쿠폰.add(쿠폰);
             return Mono.just(7L);
         });
@@ -1535,10 +1535,91 @@ class AllocationRoundTest {
         round.run().block();
 
         assertThat(센_쿠폰).as("실패 뒤 첫 회차에 한 번").containsExactly(List.of("c1"));
-        assertThat(round.admittedBacklog()).isEqualTo(7);
+        assertThat(round.rewoundCoupons()).isEqualTo(7);
 
         round.run().block();
         assertThat(센_쿠폰).as("평시 회차는 안 센다").hasSize(1);
+    }
+
+    /**
+     * <b>틱에서 잘린 회차도 실패다</b> (CY-856). 느려진 레디스는 오류가 아니라 취소로 끝나는데, 되감기를 만드는
+     * failover 가 바로 그 갈래다. 취소를 안 세면 신호가 영영 안 나간다.
+     */
+    @Test
+    @DisplayName("취소된_회차_뒤에도_되감기를_센다")
+    void 취소된_회차_뒤에도_되감기를_센다() {
+        VirtualTimeScheduler 시계 = VirtualTimeScheduler.create();
+        AtomicBoolean 느리다 = new AtomicBoolean(true);
+        List<List<String>> 센_쿠폰 = new CopyOnWriteArrayList<>();
+        AllocationRound round = AllocationRound.of(() -> true,
+                () -> 느리다.get()
+                        ? Mono.delay(Duration.ofSeconds(10), 시계).then(Mono.empty())
+                        : Mono.just(new TimedDemands(List.of(new CouponDemand("c1", 10, 100)), 읽은_시각)),
+                () -> 10L, () -> 1, grant -> Mono.just(grant.credit()), hash -> Mono.empty(),
+                () -> Instant.ofEpochSecond(1_700_000_000L),
+                () -> Mono.just(CreditSmoother.of(1.0)), SnapshotCodec.create(), () -> 0L);
+        round.measuringRewindWith(쿠폰 -> {
+            센_쿠폰.add(쿠폰);
+            return Mono.just(2L);
+        });
+
+        // 틱 시한이 잘라 내는 것과 같다 — 오류가 아니라 취소다.
+        round.run().subscribe().dispose();
+        느리다.set(false);
+        round.run().block();
+
+        assertThat(센_쿠폰).containsExactly(List.of("c1"));
+    }
+
+    /** 신호를 못 재면 다음 회차가 다시 잰다. 재접속 직후는 이 읽기가 실패할 확률이 가장 높은 구간이다. */
+    @Test
+    @DisplayName("되감기를_못_재면_다음_회차가_다시_잰다")
+    void 되감기를_못_재면_다음_회차가_다시_잰다() {
+        AtomicBoolean 터진다 = new AtomicBoolean(true);
+        AtomicInteger 시도 = new AtomicInteger();
+        AllocationRound round = AllocationRound.of(() -> true,
+                () -> 터진다.get() ? Mono.error(new IllegalStateException("끊겼다"))
+                        : Mono.just(new TimedDemands(List.of(new CouponDemand("c1", 10, 100)), 읽은_시각)),
+                () -> 10L, () -> 1, grant -> Mono.just(grant.credit()), hash -> Mono.empty(),
+                () -> Instant.ofEpochSecond(1_700_000_000L),
+                () -> Mono.just(CreditSmoother.of(1.0)), SnapshotCodec.create(), () -> 0L);
+        round.measuringRewindWith(쿠폰 -> 시도.incrementAndGet() == 1
+                ? Mono.error(new IllegalStateException("못 읽었다"))
+                : Mono.just(3L));
+
+        assertThatThrownBy(() -> round.run().block()).hasMessage("끊겼다");
+        터진다.set(false);
+        round.run().block();
+        assertThat(round.rewindUnmeasured()).as("한 번 놓쳤다").isEqualTo(1);
+        assertThat(round.rewoundCoupons()).as("아직 못 쟀다").isNaN();
+
+        round.run().block();
+
+        assertThat(round.rewoundCoupons()).isEqualTo(3);
+        assertThat(시도).hasValue(2);
+    }
+
+    /** 강등된 노드는 옛 값을 안 낸다. 안 내리면 장애가 끝난 뒤에도 대시보드에 그 값이 붙는다. */
+    @Test
+    @DisplayName("강등되면_되감기_값을_안_낸다")
+    void 강등되면_되감기_값을_안_낸다() {
+        AtomicBoolean 리더 = new AtomicBoolean(true);
+        AtomicBoolean 터진다 = new AtomicBoolean(true);
+        AllocationRound round = AllocationRound.of(리더::get,
+                () -> 터진다.get() ? Mono.error(new IllegalStateException("끊겼다"))
+                        : Mono.just(new TimedDemands(List.of(new CouponDemand("c1", 10, 100)), 읽은_시각)),
+                () -> 10L, () -> 1, grant -> Mono.just(grant.credit()), hash -> Mono.empty(),
+                () -> Instant.ofEpochSecond(1_700_000_000L),
+                () -> Mono.just(CreditSmoother.of(1.0)), SnapshotCodec.create(), () -> 0L);
+        round.measuringRewindWith(쿠폰 -> Mono.just(5L));
+        assertThatThrownBy(() -> round.run().block()).hasMessage("끊겼다");
+        터진다.set(false);
+        round.run().block();
+        assertThat(round.rewoundCoupons()).isEqualTo(5);
+
+        리더.set(false);
+
+        assertThat(round.rewoundCoupons()).isNaN();
     }
 
     /** 안 연 창은 닫았다고 적지 않는다. 승계마다 0 짜리 해제가 세 줄씩 나가면 짝을 세는 뜻이 사라진다. */

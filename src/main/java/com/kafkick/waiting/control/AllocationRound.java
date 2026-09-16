@@ -107,13 +107,16 @@ public final class AllocationRound {
      * 저장소가 뒤로 감긴 사실을 잡는 신호 (CY-856). <b>실패 뒤 첫 회차에만 센다</b> — 평시에 재면 쿠폰마다 왕복이
      * 늘고, 되감기는 재접속 직후에만 드러난다. 배선 전에는 안 잰다.
      */
-    private volatile Function<List<String>, Mono<Long>> backlog;
+    private volatile Function<List<String>, Mono<Long>> rewound;
 
     /** 직전 회차가 터졌는가. 터진 다음 회차가 신호를 재는 자리다. */
     private final AtomicBoolean roundFailed = new AtomicBoolean();
 
-    /** 마지막으로 센 임계 이하 인원. 되감기 직후에 튄다. */
-    private volatile double admittedBacklog = Double.NaN;
+    /** 마지막으로 센 되감긴 쿠폰 수. */
+    private volatile double rewoundCoupons = Double.NaN;
+
+    /** 신호를 못 잰 누적 횟수. 0 이 아니면 그 장애의 되감기 여부를 모른다. */
+    private final AtomicLong rewindUnmeasured = new AtomicLong();
 
     /** 적용 간격. 배선 전에는 안 둔다. */
     private volatile ApplyPacer pacer = ApplyPacer.none();
@@ -320,13 +323,16 @@ public final class AllocationRound {
     }
 
     /** 되감기 신호를 잴 자리. 배선이 한 번 건다. */
-    public void measuringBacklogWith(Function<List<String>, Mono<Long>> backlog) {
-        this.backlog = Objects.requireNonNull(backlog, "backlog 는 필수다");
+    public void measuringRewindWith(Function<List<String>, Mono<Long>> rewound) {
+        this.rewound = Objects.requireNonNull(rewound, "rewound 는 필수다");
     }
 
-    /** 실패 뒤 첫 회차에 센 임계 이하 인원. 아직 안 쟀으면 NaN 이다. */
-    public double admittedBacklog() {
-        return admittedBacklog;
+    /**
+     * 실패 뒤 첫 회차에 센 되감긴 쿠폰 수. <b>리더가 아니면 NaN 이다</b> — 강등된 노드가 옛 값을 계속 내면 장애가
+     * 끝난 뒤에도 대시보드에 그 값이 붙는다. 아직 안 쟀어도 NaN 이다.
+     */
+    public double rewoundCoupons() {
+        return stillLeader.getAsBoolean() ? rewoundCoupons : Double.NaN;
     }
 
     /** 적용 간격을 둔다. 배선이 한 번 건다. */
@@ -354,7 +360,10 @@ public final class AllocationRound {
                     .then(read)
                     .flatMap(timed -> allocate(timed.demands(), Instant.ofEpochSecond(timed.readAt())))
                     // 터진 회차를 적어 둔다. 재접속 뒤 첫 회차가 되감기 신호를 재는 자리다.
-                    .doOnError(e -> roundFailed.set(true));
+                    .doOnError(e -> roundFailed.set(true))
+                    // **틱에서 잘린 회차도 실패다.** 느려진 레디스는 오류가 아니라 취소로 끝나는데,
+                    // 되감기를 만드는 failover 가 바로 그 갈래다.
+                    .doOnCancel(() -> roundFailed.set(true));
         });
     }
 
@@ -416,6 +425,8 @@ public final class AllocationRound {
         failures.exited().ifPresent(r -> log.info(
                 "리더십을 잃었다 — 적용 실패 창을 닫는다. {}초 동안 {}건 실패했다",
                 r.elapsedSeconds(), r.swallowed()));
+        // 되감기 표시도 임기를 안 넘긴다. 넘기면 되찾은 노드가 옛 사건을 지금 값처럼 낸다.
+        roundFailed.set(false);
     }
 
     /**
@@ -437,6 +448,9 @@ public final class AllocationRound {
         smoother.set(null);
         interim.set(null);
         smoothedCredit = Double.NaN;
+        // 되감기 신호도 임기마다 비운다. 앞 임기의 값이 이번 임기 것으로 읽힌다.
+        rewoundCoupons = Double.NaN;
+        roundFailed.set(false);
         // **이월 실패 창도 닫는다.** 조용히 버리면 찍힌 진입 경고에 해제가 영영 없다.
         int missed = carryoverMisses.getAndSet(0);
         if (missed > 0) {
@@ -632,20 +646,31 @@ public final class AllocationRound {
 
     /**
      * 되감기 신호를 잰다. <b>터진 회차 다음에만 읽는다</b> — 되감기는 재접속 직후에만 드러나고, 평시에 재면 쿠폰마다
-     * 왕복이 는다. 읽기가 실패해도 회차는 그대로 끝낸다 — 신호 하나 때문에 배분을 세우지 않는다.
+     * 왕복이 는다. 못 재면 표시를 되돌려 다음 회차가 다시 잰다 — 이 읽기가 실패할 확률이 가장 높은 구간이다.
      */
     private Mono<Void> watchRewind(List<CouponDemand> collected) {
-        Function<List<String>, Mono<Long>> reader = backlog;
+        Function<List<String>, Mono<Long>> reader = rewound;
         if (reader == null || collected.isEmpty() || !roundFailed.compareAndSet(true, false)) {
             return Mono.empty();
         }
         return reader.apply(collected.stream().map(CouponDemand::couponId).toList())
-                .doOnNext(below -> {
-                    admittedBacklog = below;
-                    log.info("재접속 뒤 첫 회차 — 임계 이하 인원 {}. 되감기면 이 값이 튄다", below);
+                .doOnNext(behind -> {
+                    rewoundCoupons = behind;
+                    log.info("직전 회차 실패 뒤 첫 회차 — 우리가 쓴 임계보다 뒤로 간 쿠폰 {}개", behind);
                 })
-                .onErrorResume(e -> Mono.empty())
+                .onErrorResume(e -> {
+                    // 다음 회차가 다시 잰다. 조용히 버리면 그 장애의 되감기 여부를 영영 모른다.
+                    roundFailed.set(true);
+                    rewindUnmeasured.incrementAndGet();
+                    log.warn("되감기 신호를 못 쟀다 — 다음 회차에 다시 잰다", e);
+                    return Mono.empty();
+                })
                 .then();
+    }
+
+    /** 되감기 신호를 못 잰 누적 횟수. */
+    public double rewindUnmeasured() {
+        return rewindUnmeasured.get();
     }
 
     /**

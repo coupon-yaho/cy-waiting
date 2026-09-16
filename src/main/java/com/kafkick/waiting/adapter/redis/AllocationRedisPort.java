@@ -30,7 +30,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.ClassPathResource;
-import org.springframework.data.domain.Range;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Component;
@@ -178,6 +177,12 @@ public final class AllocationRedisPort implements SnapshotSource {
     private final AtomicLong markersDropped = new AtomicLong();
     /** 신선도의 기준 시각. 뒤로 가는 것을 여기서 막는다. */
     private final ServerClock serverClock = ServerClock.create();
+
+    /**
+     * 쿠폰별로 <b>이 노드가 마지막으로 쓴 임계</b>. 되감기 신호가 견주는 값이다 (CY-856). 활성 쿠폰 수만큼만 자란다 —
+     * 적용이 도는 쿠폰이 곧 활성 쿠폰이다.
+     */
+    private final Map<String, Double> lastAdmitted = new ConcurrentHashMap<>();
 
     /** 마지막으로 성공한 정책 회차. 읽기가 실패하면 여기로 되돌아간다. */
     private final AtomicReference<Map<String, QueueMode>> lastModes =
@@ -512,37 +517,26 @@ public final class AllocationRedisPort implements SnapshotSource {
     }
 
     /**
-     * 임계 이하로 줄에 남은 인원 (CY-856). <b>되감기를 직접 잡는 검출기는 아니다</b> — 재접속 직후에 이 값이 튄다.
-     * 임계 위는 아직 차례가 안 온 사람이라 안 센다. 임계가 없으면 아무도 안 들어간 줄이라 0 이다.
+     * 이 노드가 마지막으로 쓴 임계보다 <b>뒤로 간</b> 쿠폰 수 (CY-856). 저장소가 되감기면 우리가 쓴 값이 사라진다 —
+     * 줄과 임계는 같은 슬롯이라 함께 되감겨 "임계 이하 인원" 으로는 안 보인다. 쓴 값을 기억해 견주는 것이 유일한 신호다.
      */
-    public Mono<Long> admittedBacklog(List<String> couponIds) {
+    public Mono<Long> rewoundCoupons(List<String> couponIds) {
         return Flux.fromIterable(couponIds)
-                .flatMap(this::shardBacklog, MAX_CONCURRENT_READS)
-                .reduce(0L, Long::sum);
-    }
-
-    private Mono<Long> shardBacklog(String couponId) {
-        List<Integer> shardNumbers = new ArrayList<>(shards);
-        for (int shard = 0; shard < shards; shard++) {
-            shardNumbers.add(shard);
-        }
-        return Flux.fromIterable(shardNumbers)
-                .flatMap(shard -> redis.opsForValue().get(RedisKeys.admitted(couponId, shards, shard))
+                .filter(lastAdmitted::containsKey)
+                .flatMap(couponId -> redis.opsForValue().get(RedisKeys.admitted(couponId, shards, 0))
                         .map(this::scoreOf)
-                        .filter(threshold -> threshold >= 0)
-                        .flatMap(threshold -> redis.opsForZSet().count(
-                                RedisKeys.queue(couponId, shards, shard),
-                                Range.closed(Double.NEGATIVE_INFINITY, threshold)))
-                        .defaultIfEmpty(0L))
+                        .defaultIfEmpty(-1.0)
+                        // 키가 사라진 것도 되감기다. 우리가 쓴 값이 없어진 자리다.
+                        .map(now -> now < lastAdmitted.get(couponId) ? 1L : 0L), MAX_CONCURRENT_READS)
                 .reduce(0L, Long::sum);
     }
 
-    /** 깨진 임계는 안 센다. 신호 하나 때문에 회차를 터뜨리지 않는다. */
+    /** 깨진 임계는 뒤로 간 것으로 안 센다. 신호 하나 때문에 거짓 경보를 내지 않는다. */
     private double scoreOf(String raw) {
         try {
             return Double.parseDouble(raw);
         } catch (NumberFormatException e) {
-            return -1;
+            return Double.MAX_VALUE;
         }
     }
 
@@ -885,6 +879,8 @@ public final class AllocationRedisPort implements SnapshotSource {
                     // 정상 회차와 같은 값이라, 그것으로 가르면 새 쿠폰과 빈 큐가
                     // 거절로 오독된다.
                     if (counts.size() < 3) {
+                        // **쓴 임계를 기억한다** (CY-856). 되감기는 우리가 쓴 값이 사라지는 것으로만 보인다.
+                        lastAdmitted.put(grant.couponId(), scoreOf(String.valueOf(counts.get(0))));
                         return Mono.just(Long.parseLong(String.valueOf(counts.get(1))));
                     }
                     applyFenced.incrementAndGet();

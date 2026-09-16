@@ -509,25 +509,37 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     }
 
     /**
-     * <b>임계 이하 인원을 센다</b> (CY-856). 저장소가 뒤로 감긴 사실을 잡는 신호가 없다 — 되감기 직후 이 값이 튄다.
-     * 임계 위는 아직 차례가 안 온 사람이라 안 센다.
+     * <b>우리가 쓴 임계가 사라지면 되감기다</b> (CY-856). 줄과 임계는 같은 슬롯이라 함께 되감겨, 임계 이하 인원으로는
+     * 안 보인다. 쓴 값을 기억해 견주는 것이 유일한 신호다.
      */
     @Test
-    @DisplayName("임계_이하_인원을_센다")
-    void 임계_이하_인원을_센다() {
-        줄_세운다("c1", 10, 20, 30, 40, 50);
-        redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "30").block(WAIT);
+    @DisplayName("쓴_임계보다_뒤로_간_쿠폰을_센다")
+    void 쓴_임계보다_뒤로_간_쿠폰을_센다() {
+        줄_세운다("c1", 10, 20, 30);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        // 되감기를 흉내 낸다 — 우리가 쓴 값이 옛 값으로 돌아갔다.
+        redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "10").block(WAIT);
 
-        assertThat(port.admittedBacklog(List.of("c1")).block(WAIT)).isEqualTo(3);
+        assertThat(port.rewoundCoupons(List.of("c1")).block(WAIT)).isEqualTo(1);
     }
 
-    /** 임계가 없으면 아무도 안 들어간 줄이다. 0 으로 센다 — 없는 값을 큰 수로 접으면 신호가 늘 튄다. */
     @Test
-    @DisplayName("임계가_없으면_0_이다")
-    void 임계가_없으면_0_이다() {
+    @DisplayName("임계가_그대로면_안_센다")
+    void 임계가_그대로면_안_센다() {
         줄_세운다("c1", 10, 20, 30);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
 
-        assertThat(port.admittedBacklog(List.of("c1")).block(WAIT)).isZero();
+        assertThat(port.rewoundCoupons(List.of("c1")).block(WAIT)).isZero();
+    }
+
+    /** 이 노드가 쓴 적 없는 쿠폰은 견줄 값이 없다. 모르는 것을 되감기로 세면 승계 직후마다 거짓 경보다. */
+    @Test
+    @DisplayName("쓴_적_없는_쿠폰은_안_센다")
+    void 쓴_적_없는_쿠폰은_안_센다() {
+        줄_세운다("c2", 10, 20, 30);
+        redis.opsForValue().set(RedisKeys.admitted("c2", SHARDS, 0), "10").block(WAIT);
+
+        assertThat(port.rewoundCoupons(List.of("c2")).block(WAIT)).isZero();
     }
 
     /** 리더가 아니면 안 잠근다. 강등된 노드가 문을 제 번호로 되돌리면 안 된다. */

@@ -53,11 +53,8 @@ class AllocationUnderLatencyScenarioTest {
      */
     private static final int 최소_발행 = 5;
 
-    /**
-     * 발행이 안 바뀐 가장 긴 시간의 한계. 로컬에서 세 번 다 1.31초였고 CI 에서 2.005초가 나왔다 — 한계를 세 틱으로
-     * 둔다. 촘촘한 쪽은 발행 수가 든다. 완료 뒤 한 틱을 통째로 쉬던 옛 주기는 여기서도 넘는다.
-     */
-    private static final Duration 최대_틈 = Duration.ofSeconds(3);
+    /** 발행 사이 틈의 한계를 세는 단위. <b>틱은 설정값이라 상수로 박으면 계약과 끊긴다.</b> */
+    private static final int 한계_틱 = 3;
 
     private static final Duration 기다림 = Duration.ofSeconds(20);
 
@@ -100,6 +97,14 @@ class AllocationUnderLatencyScenarioTest {
      */
     private Duration 지연() {
         return properties.leader().attempt().minusMillis(100);
+    }
+
+    /**
+     * 발행이 안 바뀐 가장 긴 시간의 한계. <b>틱에서 끌어온다</b> — 설정이 바뀌면 같이 움직여야 하고, 상수로
+     * 박으면 발행 주기를 어긴 회귀를 그대로 통과시킨다. 로컬은 세 번 다 1.31초, CI 에서 2.005초가 나왔다.
+     */
+    private Duration 최대_틈() {
+        return properties.scheduler().tick().multipliedBy(한계_틱);
     }
 
     @Test
@@ -199,8 +204,9 @@ class AllocationUnderLatencyScenarioTest {
                         낡은_표본[0] == 0 ? Optional.empty()
                                 : Optional.of("지연 %s 동안 재료가 낡은 표본 %d".formatted(지연(), 낡은_표본[0])),
                         // 초 단위 발행 시각이라 개수는 경계에서 겹친다. 틈은 겹침에 안 흔들린다.
-                        최대_틈_ms[0] <= 최대_틈.toMillis() ? Optional.empty()
-                                : Optional.of("지연 %s 동안 발행 사이 틈 %dms".formatted(지연(), 최대_틈_ms[0])),
+                        최대_틈_ms[0] <= 최대_틈().toMillis() ? Optional.empty()
+                                : Optional.of("지연 %s 동안 발행 사이 틈 %dms (한계 %s)"
+                                        .formatted(지연(), 최대_틈_ms[0], 최대_틈())),
                         // 적용이 몰려 한 회차 예산을 넘겨 들이면 초과 발급의 직접 증거다.
                         초과[0] == 0 ? Optional.empty()
                                 : Optional.of("지연 %s 동안 예산을 넘겨 들인 인원 %.0f".formatted(지연(), 초과[0])),

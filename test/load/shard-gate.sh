@@ -119,6 +119,9 @@ scrape_enqueue() {
         | grep '^waiting_queue_enqueue_latency_seconds' > "$1" || true
 }
 scrape_enqueue "$OUT_ENQUEUE_BASE"
+if [ ! -s "$OUT_ENQUEUE_BASE" ]; then
+    echo "::warning title=착수 판정::회차 전 등록 지표를 못 긁었다 — 등록 p99 는 안 적는다"
+fi
 
 test/load/redis-probe.sh "$OUT_OPS" &
 probe=$!
@@ -156,8 +159,11 @@ fi
 rc=0
 $runner k6 run --summary-export="$OUT_SUMMARY" test/load/open-spike.js 2>&1 \
     | tee "$OUT_LOG"
-rc=${PIPESTATUS[0]}
-tee_rc=${PIPESTATUS[1]}
+# **둘을 한 번에 집는다.** 앞 줄에 대입을 하나만 끼워도 PIPESTATUS 가 그 대입의 것으로 바뀌어,
+# 둘째를 읽는 순간 미설정으로 죽는다 — 판정기까지 못 가고 회차가 통째로 버려졌다.
+pipe_rc=("${PIPESTATUS[@]}")
+rc=${pipe_rc[0]}
+tee_rc=${pipe_rc[1]}
 
 # **로그가 안 남았으면 그렇다고 말한다.** 로그를 남기는 것이 이 줄의 목적인데
 # 실패를 넘기면, 임계가 깨졌을 때 무엇이 섞였는지 다시 못 본다 — 그것 때문에
@@ -173,7 +179,7 @@ kill "$probe" 2>/dev/null
 wait "$probe" 2>/dev/null
 trap - EXIT
 
-# **등록 왕복의 분위수를 내리기 전에 scrape_enqueue** (CY-936). 응답 분위수에는 판정·라우팅·뒷단이
+# **등록 왕복의 분위수를 스택 내리기 전에 긁는다** (CY-936). 응답 분위수에는 판정·라우팅·뒷단이
 # 섞여 있어 착수 게이트가 보라는 값이 아니다. 스택을 내리면 이 값도 같이 사라진다.
 scrape_enqueue "$OUT_ENQUEUE"
 # **못 긁은 것과 등록이 0 건인 것은 다르다.** 둘 다 "없음" 으로 적히므로 여기서 갈라 둔다.

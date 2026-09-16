@@ -6,8 +6,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.kafkick.waiting.domain.queue.QueueEntry;
 import com.kafkick.waiting.domain.queue.QueueState;
 import com.kafkick.waiting.gateway.QueuePort;
+import io.micrometer.core.instrument.MockClock;
 import io.micrometer.core.instrument.Timer;
+import io.micrometer.core.instrument.simple.SimpleConfig;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.net.ServerSocket;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -22,7 +25,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceClientConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
+import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
+import reactor.core.publisher.Mono;
 
 /**
  * 큐 등록과 순번 조회. <b>요청 경로에서 레디스를 치는 유일한 자리다</b> (RD-4) —
@@ -323,6 +328,8 @@ class QueueRedisPortTest extends RedisContainerSupport {
 
         // **get 은 없으면 그 자리에서 터진다.** 널 검사로 두면 "있다" 만 보고 값은 안 본다.
         Timer 타이머 = 미터.get(등록_왕복).tag("outcome", "success").timer();
+        // **block 은 값이 오면 돌아온다.** 마침 신호는 그 뒤에 오므로 그 자리에서 세면 0 일 때가 있다.
+        표본을_기다린다(타이머, 1);
         assertThat(타이머.count()).as("왕복 한 번이 한 표본이다").isEqualTo(1);
         assertThat(타이머.totalTime(TimeUnit.NANOSECONDS)).isPositive();
         // **분위수를 내는 타이머여야 한다.** 개수만 세면 착수 게이트가 읽을 값이 없다.
@@ -345,11 +352,14 @@ class QueueRedisPortTest extends RedisContainerSupport {
                 QueueRedisPort.of(new ReactiveStringRedisTemplate(끊긴_곳), SHARDS, 미터);
 
         try {
+            // **구체 타입으로 못 박는다.** RuntimeException 으로 두면 빈 결과나 NPE 도 통과해,
+            // "레디스까지 갔다 온 실패를 센다" 는 이 시험의 주장이 조용히 거짓이 된다.
             assertThatThrownBy(() -> 잰다.enqueue(COUPON, "m1", QueuePort.NO_LIMIT, 지금).block(WAIT))
-                    .isInstanceOf(RuntimeException.class);
+                    .isInstanceOf(RedisConnectionFailureException.class);
 
-            assertThat(미터.get(등록_왕복).tag("outcome", "error").timer().count())
-                    .as("실패한 왕복").isEqualTo(1);
+            Timer 실패 = 미터.get(등록_왕복).tag("outcome", "error").timer();
+            assertThat(실패.count()).as("실패한 왕복").isEqualTo(1);
+            assertThat(실패.totalTime(TimeUnit.NANOSECONDS)).as("쓴 시간").isPositive();
             assertThat(미터.get(등록_왕복).tag("outcome", "success").timer().count())
                     .as("성공과 안 섞는다").isZero();
         } finally {
@@ -359,17 +369,82 @@ class QueueRedisPortTest extends RedisContainerSupport {
 
     /**
      * <b>끊긴 왕복도 잰다</b>. 취소되는 요청은 통계적으로 오래 걸린 쪽이라, 그것만 빠진 분위수는 착수 게이트가
-     * 보라는 꼬리를 정확히 지운다.
+     * 보라는 꼬리를 정확히 지운다. 성공 칸에 담기면 게이트가 읽는 값이 반대로 부푼다.
      */
     @Test
     @DisplayName("취소된_왕복도_센다")
-    void 취소된_왕복도_센다() {
+    void 취소된_왕복도_센다() throws Exception {
         SimpleMeterRegistry 미터 = new SimpleMeterRegistry();
+        // **답이 영영 안 오는 곳으로 보낸다.** 살아 있는 레디스로 보내면 왕복이 먼저 끝나 취소 경로를
+        // 한 번도 안 밟고 초록이 된다 — 빨개지는 플래키보다 나쁘다.
+        try (ServerSocket 대답_없는_곳 = new ServerSocket(0)) {
+            LettuceConnectionFactory 연결 = new LettuceConnectionFactory(
+                    new RedisStandaloneConfiguration("127.0.0.1", 대답_없는_곳.getLocalPort()),
+                    LettuceClientConfiguration.builder().commandTimeout(WAIT).build());
+            연결.afterPropertiesSet();
+            QueueRedisPort 잰다 = QueueRedisPort.of(new ReactiveStringRedisTemplate(연결), SHARDS, 미터);
+
+            try {
+                잰다.enqueue(COUPON, "m1", QueuePort.NO_LIMIT, 지금)
+                        .subscribe(자리 -> { }, 오류 -> { }).dispose();
+
+                Awaitility.await().atMost(WAIT).untilAsserted(() -> {
+                    assertThat(미터.get(등록_왕복).tag("outcome", "error").timer().count())
+                            .as("끊긴 왕복").isEqualTo(1);
+                    assertThat(미터.get(등록_왕복).tag("outcome", "success").timer().count())
+                            .as("성공 칸에 안 담긴다").isZero();
+                });
+            } finally {
+                연결.destroy();
+            }
+        }
+    }
+
+    /**
+     * <b>구독마다 새로 잰다</b>. 조립 자리에서 재면 재구독이 한 번만 붙어도 앞 구독의 시작 시각을 그대로
+     * 써, 게이트가 읽는 분위수가 실제 왕복이 아니라 기다린 시간이 된다.
+     */
+    @Test
+    @DisplayName("재구독하면_처음부터_다시_잰다")
+    void 재구독하면_처음부터_다시_잰다() {
+        MockClock 시계 = new MockClock();
+        SimpleMeterRegistry 미터 = new SimpleMeterRegistry(SimpleConfig.DEFAULT, 시계);
         QueueRedisPort 잰다 = QueueRedisPort.of(redis, SHARDS, 미터);
 
-        잰다.enqueue(COUPON, "timer-cancel", QueuePort.NO_LIMIT, 지금).subscribe().dispose();
+        Mono<QueueEntry> 한_번_만든_것 = 잰다.enqueue(COUPON, "m1", QueuePort.NO_LIMIT, 지금);
+        한_번_만든_것.block(WAIT);
+        시계.add(Duration.ofSeconds(5));
+        한_번_만든_것.block(WAIT);
 
-        Awaitility.await().atMost(WAIT).until(() -> 미터.find(등록_왕복)
-                .timers().stream().mapToLong(Timer::count).sum() >= 1);
+        Timer 타이머 = 미터.get(등록_왕복).tag("outcome", "success").timer();
+        표본을_기다린다(타이머, 2);
+        assertThat(타이머.max(TimeUnit.SECONDS)).as("기다린 시간이 아니라 왕복").isLessThan(5);
+    }
+
+    /**
+     * <b>창이 회차를 덮는다</b>. 기본 2 분 창이면 회차가 길어질수록 봉우리가 아니라 꼬리만 남고, 스크랩이
+     * 조금만 늦어도 0 이 적힌다.
+     */
+    @Test
+    @DisplayName("몇_분_뒤_스크랩에도_분위수가_남는다")
+    void 몇_분_뒤_스크랩에도_분위수가_남는다() {
+        MockClock 시계 = new MockClock();
+        SimpleMeterRegistry 미터 = new SimpleMeterRegistry(SimpleConfig.DEFAULT, 시계);
+        QueueRedisPort.of(redis, SHARDS, 미터);
+
+        // **표본은 직접 넣는다.** 목 시계에서는 왕복이 0 초라 분위수가 0 으로 남아, 창이 살았는지
+        // 죽었는지를 못 가른다. 재는 것은 창의 길이다.
+        미터.get(등록_왕복).tag("outcome", "success").timer().record(Duration.ofMillis(50));
+        시계.add(Duration.ofMinutes(3));
+
+        assertThat(미터.get(등록_왕복).tag("outcome", "success").timer().takeSnapshot()
+                .percentileValues())
+                .as("3 분 전 표본이 아직 창 안이다")
+                .anySatisfy(잰값 -> assertThat(잰값.value(TimeUnit.NANOSECONDS)).isPositive());
+    }
+
+    /** 마침 신호는 block 이 돌아온 뒤에 온다. 그 자리에서 세면 표본이 아직 안 들어와 있다. */
+    private void 표본을_기다린다(Timer 타이머, long 몇) {
+        Awaitility.await().atMost(WAIT).until(() -> 타이머.count() == 몇);
     }
 }

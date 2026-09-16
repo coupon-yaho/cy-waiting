@@ -1747,6 +1747,8 @@ class AllocationRoundTest {
 
         assertThat(round.rewoundCoupons()).as("지나간 임기의 사건은 안 싣는다").isNaN();
         assertThat(round.rewoundEvents()).isZero();
+        // 걸러진 완료가 새 임기의 창을 닫으면 그 구간의 해제 로그가 사라진다.
+        assertThat(로그_메시지()).noneMatch(m -> m.startsWith("되감기 신호를 다시 잰다"));
     }
 
     /** 안 연 창은 닫았다고 적지 않는다. 승계마다 0 짜리 해제가 세 줄씩 나가면 짝을 세는 뜻이 사라진다. */

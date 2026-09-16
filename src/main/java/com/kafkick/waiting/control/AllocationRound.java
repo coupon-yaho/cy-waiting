@@ -693,9 +693,15 @@ public final class AllocationRound {
         return reader.apply(ids)
                 .filter(seen -> sameTerm(startedTerm))
                 .doOnNext(this::rewindSeen)
-                .doOnSuccess(done -> rewindFailures.exited().ifPresent(recovered -> log.info(
-                        "되감기 신호를 다시 잰다 — {}초 만에, 그동안 {}회차 못 쟀다",
-                        recovered.elapsedSeconds(), recovered.swallowed())))
+                .doOnSuccess(done -> {
+                    // **닫는 것도 같은 임기만 한다.** 걸러진 완료가 새 임기의 창을 닫으면 그 구간의 해제 로그가 사라진다.
+                    if (!sameTerm(startedTerm)) {
+                        return;
+                    }
+                    rewindFailures.exited().ifPresent(recovered -> log.info(
+                            "되감기 신호를 다시 잰다 — {}초 만에, 그동안 {}회차 못 쟀다",
+                            recovered.elapsedSeconds(), recovered.swallowed()));
+                })
                 .onErrorResume(e -> {
                     if (!sameTerm(startedTerm)) {
                         return Mono.empty();

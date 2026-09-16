@@ -379,6 +379,22 @@ public final class AllocationRound {
     }
 
     /**
+     * 리더십을 잃었다. <b>창은 여기서 닫아야 지속 시간이 리더 구간만 담는다</b> — 되찾는 자리에서 닫으면 비리더
+     * 구간이 섞여 장애가 실제보다 길게 읽힌다.
+     */
+    public void leadershipLost() {
+        overshoot.exited().ifPresent(r -> log.info(
+                "리더십을 잃었다 — 배분 예산 초과 창을 닫는다. {}초 동안 {}틱 넘겼다",
+                r.elapsedSeconds(), r.swallowed()));
+        pollOvershoot.exited().ifPresent(r -> log.info(
+                "리더십을 잃었다 — 폴링 예산 초과 창을 닫는다. {}초 동안 {}틱 넘겼다",
+                r.elapsedSeconds(), r.swallowed()));
+        failures.exited().ifPresent(r -> log.info(
+                "리더십을 잃었다 — 적용 실패 창을 닫는다. {}초 동안 {}건 실패했다",
+                r.elapsedSeconds(), r.swallowed()));
+    }
+
+    /**
      * 리더가 됐다. 조인 적 없는 노드는 램프가 안 걸려 첫 회차가 목표까지 뛴다.
      *
      * @param publishedCredit 마지막으로 본 발행 몫. 모르면 음수 — 앞 임기 기준을 잇는다
@@ -409,8 +425,8 @@ public final class AllocationRound {
                 "리더십이 갈렸다 — 조임 창을 닫는다. 그동안 {}틱 조였다", r.swallowed()));
         ramping.exited().ifPresent(r -> log.info(
                 "리더십이 갈렸다 — 램프 창을 닫는다. 그동안 {}틱 올렸다", r.swallowed()));
-        // **나머지 창도 같이 닫는다** (CY-824). 창이 리더 메모리라 열어 둔 채 넘기면 진입 경고 하나에 해제가
-        // 영영 없고, 다음 사건은 이미 열려 있어 한 줄도 안 남는다.
+        // **나머지 창도 같이 닫는다** (CY-824). 강등에서 이미 닫았으면 여기서는 아무 일도 안 한다 — 강등 콜백을
+        // 못 받고 넘어온 경우에만 남는 그물이다. 지속 시간은 비리더 구간이 섞여 강등 쪽에서만 적는다.
         overshoot.exited().ifPresent(r -> log.info(
                 "리더십이 갈렸다 — 배분 예산 초과 창을 닫는다. 그동안 {}틱 넘겼다", r.swallowed()));
         pollOvershoot.exited().ifPresent(r -> log.info(

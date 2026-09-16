@@ -1484,6 +1484,27 @@ class AllocationRoundTest {
                 .as("닫으면서 그동안 넘긴 틱을 남긴다 — 회차마다 하나씩").isEqualTo(3L);
     }
 
+    /**
+     * <b>강등이 창을 닫으면서 리더 구간의 길이를 남긴다</b> (CY-824). 되찾는 자리에서 닫으면 그 사이 비리더 구간이
+     * 섞여 장애가 실제보다 길게 읽힌다.
+     */
+    @Test
+    @DisplayName("강등이_창을_닫고_리더_구간을_남긴다")
+    void 강등이_창을_닫고_리더_구간을_남긴다() {
+        AllocationRound round = 비동기_회차(() -> true, List.of(new CouponDemand("c1", 10, 100)),
+                grant -> Mono.error(new IllegalStateException("끊겼다")));
+        round.run().block();
+
+        round.leadershipLost();
+
+        assertThat(로그_인자("리더십을 잃었다 — 적용 실패 창을 닫는다"))
+                .as("리더 구간의 초와 삼킨 건수를 같이 남긴다").hasSize(2)
+                .satisfies(인자 -> assertThat(인자[1]).isEqualTo(1L));
+        // 이미 닫힌 창을 되찾는 자리에서 또 적지 않는다.
+        round.leadershipAcquired();
+        assertThat(로그_메시지()).noneMatch(m -> m.startsWith("리더십이 갈렸다 — 적용 실패 창을 닫는다"));
+    }
+
     /** 안 연 창은 닫았다고 적지 않는다. 승계마다 0 짜리 해제가 세 줄씩 나가면 짝을 세는 뜻이 사라진다. */
     @Test
     @DisplayName("승계가_안_연_창은_닫았다고_안_적는다")

@@ -60,6 +60,16 @@ class PersistencePolicyTest {
         assertThat(config().get("maxmemory")).isNotEqualTo("0");
     }
 
+    /**
+     * <b>잘린 적재는 마지막 유효 명령까지만 되감는다</b> (CY-855). 스크립트 쓰기가 AOF 에서 통째로 가거나 통째로 안
+     * 가는 근거가 이것이다 — 되감기를 끄면 레디스가 아예 안 떠서 회복이 운영자 손으로 넘어간다.
+     */
+    @Test
+    @DisplayName("잘린_적재를_마지막_유효_명령까지_되감는다")
+    void 잘린_적재를_마지막_유효_명령까지_되감는다() throws Exception {
+        assertThat(config()).containsEntry("aof-load-truncated", "yes");
+    }
+
     @Test
     @DisplayName("다시_쓰는_동안에도_동기화를_멈추지_않는다")
     void 다시_쓰는_동안에도_동기화를_멈추지_않는다() throws IOException {

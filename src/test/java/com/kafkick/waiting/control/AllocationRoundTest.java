@@ -1572,7 +1572,9 @@ class AllocationRoundTest {
         터진다.set(false);
         round.run().block();
 
-        assertThat(센_쿠폰).as("실패 뒤 첫 회차에 한 번").containsExactly(List.of("c1"));
+        // **몇 번 쟀는지를 본다.** 넘기는 목록은 비어 있다 — 읽는 쪽이 자기가 쓴 임계와 합쳐 보므로
+        // 회차의 쿠폰은 보탤 것이 없고, 안 넘겨야 수요를 기다리지 않고 나란히 낼 수 있다 (CY-939).
+        assertThat(센_쿠폰).as("실패 뒤 첫 회차에 한 번").hasSize(1);
         assertThat(round.rewoundCoupons()).isEqualTo(1);
         assertThat(round.rewoundEvents()).as("지나간 사건은 누적으로 센다").isEqualTo(1);
 
@@ -1607,7 +1609,7 @@ class AllocationRoundTest {
         느리다.set(false);
         round.run().block();
 
-        assertThat(센_쿠폰).containsExactly(List.of("c1"));
+        assertThat(센_쿠폰).as("취소 뒤 첫 회차에 한 번").hasSize(1);
         assertThat(round.rewoundCoupons()).as("깨끗하면 0 이다 — NaN 이면 못 잰 것과 안 갈린다").isEqualTo(0);
         assertThat(round.rewoundEvents()).as("되감기 없는 회차는 사건이 아니다").isZero();
     }

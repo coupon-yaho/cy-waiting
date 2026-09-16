@@ -51,6 +51,9 @@ public final class AllocationRound {
     /** 동시 적용 상한. 레디스 어댑터의 쓰기 상한과 같다. */
     private static final int MAX_CONCURRENT_APPLIES = 16;
 
+    /** 이번 회차가 되감기를 쟀는가. 잰 회차는 목록을 안 버린다. */
+    private final AtomicBoolean rewindMeasured = new AtomicBoolean();
+
     /** 매진이 발행에 실려 나간 쿠폰. 발행이 못 나간 회차는 이 줄만 지운다 (CY-935). */
     private final Set<String> announced = new HashSet<>();
 
@@ -385,7 +388,9 @@ public final class AllocationRound {
             pacer.roundStarted();
             Mono<TimedDemands> read = seeded().then(Mono.defer(demands)).cache();
             // 수요 읽기의 실패로 운영값 읽기를 취소하지 않는다. 실패는 두 읽기가 끝난 뒤에 올린다.
-            return Mono.when(reads, read.then().onErrorResume(e -> Mono.empty()))
+            // **되감기도 여기서 같이 낸다** (CY-939). 적용 앞이라는 순서는 지키면서 왕복을 겹친다 —
+            // 차례로 두면 레디스가 느린 날 그 왕복이 틱을 먹어 발행이 한 틱을 통째로 쉰다.
+            return Mono.when(reads, read.then().onErrorResume(e -> Mono.empty()), watchRewind())
                     .then(read)
                     .flatMap(timed -> allocate(timed.demands(), Instant.ofEpochSecond(timed.readAt())))
                     // 터진 회차를 적어 둔다. 재접속 뒤 첫 회차가 되감기 신호를 재는 자리다.
@@ -628,9 +633,8 @@ public final class AllocationRound {
         AtomicBoolean anyFailed = new AtomicBoolean();
         AtomicBoolean published = new AtomicBoolean();
         boolean anyCredit = granted.values().stream().anyMatch(c -> c > 0);
-        // **적용보다 먼저 잰다** (CY-856). 적용이 임계를 다시 쓰면 견줄 기준이 방금 쓴 값이 되어 되감기가 0 이 된다.
-        return watchRewind(collected)
-                .then(anyCredit ? pacer.turn() : Mono.<Void>empty())
+        rememberIds(collected);
+        return (anyCredit ? pacer.turn() : Mono.<Void>empty())
                 .thenMany(Flux.fromIterable(collected))
                 // **동시에 보낸다.** 차례로 보내면 왕복이 쿠폰 수만큼 쌓여 레디스가 느린 날 회차가 틱을
                 // 넘기고 발행이 잘린다. 옛 임기의 쓰기는 적용 스크립트의 펜스가 막는다.
@@ -694,17 +698,16 @@ public final class AllocationRound {
      * 되감기 신호를 잰다. <b>터진 회차 다음, 적용 앞에서 읽는다</b> — 적용이 임계를 다시 쓰면 기준이 방금 쓴 값이 되고,
      * 되감기가 해를 끼치는 쿠폰이 정확히 그 쿠폰들이다. 못 재면 표시를 되돌려 다음 회차가 다시 잰다.
      */
-    private Mono<Void> watchRewind(List<CouponDemand> collected) {
+    private Mono<Void> watchRewind() {
         Function<List<String>, Mono<RewindCheck>> reader = rewound;
-        List<String> ids = collected.stream().map(CouponDemand::couponId).toList();
+        // **회차의 목록을 안 넘긴다.** 읽는 쪽이 자기가 쓴 임계와 합쳐 보므로, 이 회차의 쿠폰은 보탤 것이
+        // 없다 — 안 넘기면 수요를 기다리지 않아도 돼 읽기를 처음부터 나란히 낼 수 있다 (CY-939).
+        List<String> ids = List.of();
         if (reader == null || !roundFailed.compareAndSet(true, false)) {
-            // **잴 것이 없는 회차에만 버린다.** 측정이 밀린 동안 버리면 기준째로 사라진다. 활성이 빈 회차도 안 버린다 —
-            // 되감기가 활성 목록을 비우는 경우가 있어, 그 회차가 증거를 지우면 다음 실패에 잴 기준이 없다.
-            if (!ids.isEmpty()) {
-                forgetInactive.accept(ids);
-            }
+            rewindMeasured.set(false);
             return Mono.empty();
         }
+        rewindMeasured.set(true);
         long startedTerm = term.get();
         return reader.apply(ids)
                 .filter(seen -> sameTerm(startedTerm))
@@ -732,6 +735,17 @@ public final class AllocationRound {
                     return Mono.empty();
                 })
                 .then();
+    }
+
+    /**
+     * 활성에서 빠진 쿠폰의 기준을 버린다. <b>잰 회차에는 안 버린다</b> — 측정이 밀린 동안 버리면 기준째로
+     * 사라지고, 되감기가 활성 목록을 비운 회차가 증거를 지우면 다음 실패에 잴 기준이 없다.
+     */
+    private void rememberIds(List<CouponDemand> collected) {
+        List<String> ids = collected.stream().map(CouponDemand::couponId).toList();
+        if (!ids.isEmpty() && !rewindMeasured.get()) {
+            forgetInactive.accept(ids);
+        }
     }
 
     /** 읽는 사이에 임기가 갈렸으면 버린다. 지나간 임기의 사건이 지금 값으로 들어간다. */

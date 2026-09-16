@@ -118,13 +118,13 @@ class LongHandoverCarryoverScenarioTest {
 
     /** 마지막으로 보고가 닿은 시각(나노). */
     private final AtomicLong 마지막_보고 = new AtomicLong(System.nanoTime());
+    private final AtomicLong 보고한_수 = new AtomicLong();
 
     @Test
     @DisplayName("C4c_오래_갈렸다_돌아온_리더가_이월받은_값에서_시작한다")
     void C4c_오래_갈렸다_돌아온_리더가_이월받은_값에서_시작한다() {
         StatefulRedisConnection<String, String> 연결 = faults.연결한다();
         AtomicLong 보고할_가용량 = new AtomicLong(평시_가용량);
-        AtomicLong 보고한_수 = new AtomicLong();
         long[] 회복_전_보고_수 = new long[1];
         double[] 회복_전_이월 = new double[2];
         boolean[] 갈린_동안_신선 = new boolean[1];
@@ -141,19 +141,21 @@ class LongHandoverCarryoverScenarioTest {
         ChaosScenario.named("C4c 오래 갈린 승계")
                 .baseline(() -> {
                     재료를_심는다(연결);
-                    // **시계는 실시계다.** 신선도는 앱이 레디스 시각과 견줘 판정하므로, 보고 시각을 고정하면 그
-                    // 판정이 통째로 무의미해진다(TS-4 의 예외 — 픽스처가 아니라 저장소가 시각의 주인이다).
-                    // 태스크가 밀려 보고가 낡는 위험은 아래에서 앱과 같은 기준으로 직접 본다.
+                    // RULE-EXCEPTION(TS-4): 신선도는 앱이 레디스 시각과 견줘 판정한다. 보고 시각을 고정하면
+                    // 저장소 시각만 흐르고 보고는 안 흘러, 승계와 무관하게 영영 낡은 것으로 읽힌다 — 이 시나리오가
+                    // 재려는 이월이 통째로 안 돈다. 태스크가 밀려 낡는 위험은 앱과 같은 기준으로 아래에서 직접 본다.
                     BackendReports 보고기 = BackendReports.실시계로(연결, 신선도);
                     this.보고기 = 보고기;
                     // **되던 것을 세고 터진 것도 센다.** 반복 태스크는 던지면 영구히 취소되는데 그 사실이 조용하다.
                     보고_태스크[0] = 보고.scheduleAtFixedRate(() -> {
                         try {
                             보고기.보고한다("c4c-be", 보고할_가용량.get());
-                            보고한_수.incrementAndGet();
                             long 지금 = System.nanoTime();
                             long 공백 = Duration.ofNanos(지금 - 마지막_보고.getAndSet(지금)).toMillis();
                             보고_최대_공백.accumulateAndGet(공백, Math::max);
+                            // **공백을 적은 뒤에 센다.** 순서가 반대면 구간 경계에서 기다리던 쪽이 아직 안 적힌
+                            // 공백을 0 으로 지운다.
+                            보고한_수.incrementAndGet();
                         } catch (Throwable e) {
                             보고가_터진_수.incrementAndGet();
                         }
@@ -292,9 +294,14 @@ class LongHandoverCarryoverScenarioTest {
         return 보고기 != null && 보고기.신선한_보고().containsKey("c4c-be");
     }
 
-    /** 이 지점부터 다시 공백을 잰다. */
+    /**
+     * 성공한 보고 하나를 본 뒤부터 다시 잰다. <b>시각을 손으로 덮지 않는다</b> — 덮으면 경계를 가로지른
+     * 공백이 경계 뒤의 짧은 공백으로 기록돼, 밀렸다 재개된 구간이 초록으로 지나간다.
+     */
     private void 공백을_다시_잰다() {
-        마지막_보고.set(System.nanoTime());
+        long 본_수 = 보고한_수.get();
+        Awaitility.await().alias("보고 하나가 들어온다").atMost(기다림)
+                .pollInterval(Duration.ofMillis(50)).until(() -> 보고한_수.get() > 본_수);
         보고_최대_공백.set(0);
     }
 

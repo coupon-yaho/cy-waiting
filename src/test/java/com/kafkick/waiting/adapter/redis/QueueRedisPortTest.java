@@ -77,10 +77,14 @@ class QueueRedisPortTest extends RedisContainerSupport {
 
         잰다.enqueue(COUPON, "timer-1", QueuePort.NO_LIMIT, 지금).block(WAIT);
 
-        Timer 타이머 = 미터.find("waiting.queue.enqueue.redis").timer();
-        assertThat(타이머).as("등록 왕복의 타이머가 있어야 분위수를 읽는다").isNotNull();
-        assertThat(타이머.count()).isEqualTo(1);
+        // **get 은 없으면 그 자리에서 터진다.** 널 검사로 두면 "있다" 만 보고 값은 안 본다.
+        Timer 타이머 = 미터.get("waiting.queue.enqueue.redis").timer();
+        assertThat(타이머.count()).as("왕복 한 번이 한 표본이다").isEqualTo(1);
         assertThat(타이머.totalTime(TimeUnit.NANOSECONDS)).isPositive();
+        // **분위수를 내는 타이머여야 한다.** 개수만 세면 착수 게이트가 읽을 값이 없다.
+        assertThat(타이머.takeSnapshot().percentileValues())
+                .extracting(잰값 -> 잰값.percentile())
+                .containsExactly(0.5, 0.95, 0.99);
     }
 
     @Test

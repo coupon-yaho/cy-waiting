@@ -521,11 +521,9 @@ public final class AllocationRedisPort implements SnapshotSource {
     }
 
     /**
-     * 이 노드가 마지막으로 쓴 임계보다 <b>뒤로 간</b> 쿠폰들 (CY-856). 줄과 임계는 같은 슬롯이라 함께 되감겨
-     * "임계 이하 인원" 으로는 안 보인다. 쓴 값을 기억해 견주는 것이 유일한 신호다.
-     *
-     * <p>기준이 있는 쿠폰은 <b>이번 회차 대상이 아니어도</b> 본다 — 되감기가 활성 목록까지 되돌리면 가장 심하게
-     * 감긴 쿠폰이 대상에서 빠진다.
+     * 이 노드가 쓴 임계보다 <b>뒤로 간</b> 쿠폰들 (CY-856). 줄과 임계가 같은 슬롯이라 함께 되감겨, 쓴 값을 기억해
+     * 견주는 것 말고는 신호가 없다. 기준이 있으면 이번 회차 대상이 아니어도 본다 — 되감기가 활성 목록까지
+     * 되돌리면 가장 심하게 감긴 쿠폰이 대상에서 빠진다.
      */
     public Mono<RewindCheck> rewindCheck(Collection<String> couponIds) {
         if (shards != 1) {

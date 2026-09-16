@@ -3,10 +3,11 @@ package com.kafkick.waiting.control;
 import java.util.List;
 
 /**
- * 되감기 점검 결과 (CY-856).
+ * 되감기 점검 결과 (CY-856). <b>본 수를 같이 든다</b> — 0 은 깨끗한 것이 아니라 못 잰 것이고, 둘을 한 값으로 접으면
+ * 기준이 없는 새 리더가 "이상 없음" 으로 읽힌다.
  *
  * @param rewound  이 노드가 쓴 임계보다 뒤로 간 쿠폰들
- * @param measured 견줄 기준이 있어 실제로 본 쿠폰 수. 0 이면 못 잰 것이지 깨끗한 것이 아니다
+ * @param measured 견줄 기준이 있어 실제로 본 쿠폰 수
  */
 public record RewindCheck(List<String> rewound, int measured) {
 

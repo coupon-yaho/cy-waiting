@@ -131,6 +131,12 @@ public final class AllocationRound {
     /** 되감기 신호를 못 재는 구간. 회복 구간이 이 읽기가 가장 잘 실패하는 구간이다. */
     private final FailureWindow rewindFailures = FailureWindow.create();
 
+    /**
+     * 이 노드가 본 임기의 세대. <b>늦게 온 측정을 버리는 표다</b> — 읽기는 임기가 갈려도 안 끊기고, 그 결과가 새 임기의
+     * 지표로 들어가면 지나간 사건이 지금 값처럼 보인다.
+     */
+    private final AtomicLong term = new AtomicLong();
+
     /** 로그에 싣는 쿠폰 수의 상한. 다 실으면 한 줄이 수천 자가 된다. */
     private static final int REWOUND_LOG_LIMIT = 10;
 
@@ -445,6 +451,10 @@ public final class AllocationRound {
                 r.elapsedSeconds(), r.swallowed()));
         // 되감기 표시도 임기를 안 넘긴다. 넘기면 되찾은 노드가 옛 사건을 지금 값처럼 낸다.
         roundFailed.set(false);
+        rewindFailures.exited().ifPresent(r -> log.info(
+                "리더십을 잃었다 — 되감기 측정 실패 창을 닫는다. {}초 동안 {}회차 못 쟀다",
+                r.elapsedSeconds(), r.swallowed()));
+        term.incrementAndGet();
     }
 
     /**
@@ -469,6 +479,7 @@ public final class AllocationRound {
         // 되감기 신호도 임기마다 비운다. 앞 임기의 값이 이번 임기 것으로 읽힌다.
         rewoundCoupons = Double.NaN;
         roundFailed.set(false);
+        term.incrementAndGet();
         // **이월 실패 창도 닫는다.** 조용히 버리면 찍힌 진입 경고에 해제가 영영 없다.
         int missed = carryoverMisses.getAndSet(0);
         if (missed > 0) {
@@ -678,12 +689,17 @@ public final class AllocationRound {
             }
             return Mono.empty();
         }
+        long startedTerm = term.get();
         return reader.apply(ids)
+                .filter(seen -> sameTerm(startedTerm))
                 .doOnNext(this::rewindSeen)
                 .doOnSuccess(done -> rewindFailures.exited().ifPresent(recovered -> log.info(
                         "되감기 신호를 다시 잰다 — {}초 만에, 그동안 {}회차 못 쟀다",
                         recovered.elapsedSeconds(), recovered.swallowed())))
                 .onErrorResume(e -> {
+                    if (!sameTerm(startedTerm)) {
+                        return Mono.empty();
+                    }
                     // 다음 회차가 다시 잰다. 조용히 버리면 그 장애의 되감기 여부를 영영 모른다.
                     roundFailed.set(true);
                     rewindUnmeasured.incrementAndGet();
@@ -694,6 +710,11 @@ public final class AllocationRound {
                     return Mono.empty();
                 })
                 .then();
+    }
+
+    /** 읽는 사이에 임기가 갈렸으면 버린다. 지나간 임기의 사건이 지금 값으로 들어간다. */
+    private boolean sameTerm(long startedTerm) {
+        return term.get() == startedTerm;
     }
 
     /** 본 것을 남긴다. <b>기준이 없으면 깨끗한 것이 아니라 못 잰 것이다.</b> */

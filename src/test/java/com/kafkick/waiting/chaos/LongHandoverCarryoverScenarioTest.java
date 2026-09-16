@@ -64,6 +64,9 @@ class LongHandoverCarryoverScenarioTest {
     /** 둘째가 도는 구간. 평활이 열화 값에 수렴할 만큼은 돌아야 이월이 뜻을 가진다. */
     private static final Duration 갈린_구간 = Duration.ofSeconds(15);
 
+    /** 보고의 신선도 창. 앱이 이 값으로 낡은 보고를 뺀다. */
+    private static final Duration 신선도 = Duration.ofSeconds(3);
+
     private static final BackendStub 뒷단 = BackendStub.항상_받는다();
 
     private static final ScheduledExecutorService 보고 =
@@ -110,6 +113,12 @@ class LongHandoverCarryoverScenarioTest {
     /** 보고 픽스처. 신선도를 앱과 같은 기준으로 보려고 든다. */
     private BackendReports 보고기;
 
+    /** 보고 사이의 가장 긴 공백(ms). 태스크가 밀린 사실은 구간의 한 점이 아니라 이 값이 든다. */
+    private final AtomicLong 보고_최대_공백 = new AtomicLong();
+
+    /** 마지막으로 보고가 닿은 시각(나노). */
+    private final AtomicLong 마지막_보고 = new AtomicLong(System.nanoTime());
+
     @Test
     @DisplayName("C4c_오래_갈렸다_돌아온_리더가_이월받은_값에서_시작한다")
     void C4c_오래_갈렸다_돌아온_리더가_이월받은_값에서_시작한다() {
@@ -135,13 +144,16 @@ class LongHandoverCarryoverScenarioTest {
                     // **시계는 실시계다.** 신선도는 앱이 레디스 시각과 견줘 판정하므로, 보고 시각을 고정하면 그
                     // 판정이 통째로 무의미해진다(TS-4 의 예외 — 픽스처가 아니라 저장소가 시각의 주인이다).
                     // 태스크가 밀려 보고가 낡는 위험은 아래에서 앱과 같은 기준으로 직접 본다.
-                    BackendReports 보고기 = BackendReports.실시계로(연결, Duration.ofSeconds(3));
+                    BackendReports 보고기 = BackendReports.실시계로(연결, 신선도);
                     this.보고기 = 보고기;
                     // **되던 것을 세고 터진 것도 센다.** 반복 태스크는 던지면 영구히 취소되는데 그 사실이 조용하다.
                     보고_태스크[0] = 보고.scheduleAtFixedRate(() -> {
                         try {
                             보고기.보고한다("c4c-be", 보고할_가용량.get());
                             보고한_수.incrementAndGet();
+                            long 지금 = System.nanoTime();
+                            long 공백 = Duration.ofNanos(지금 - 마지막_보고.getAndSet(지금)).toMillis();
+                            보고_최대_공백.accumulateAndGet(공백, Math::max);
                         } catch (Throwable e) {
                             보고가_터진_수.incrementAndGet();
                         }
@@ -165,6 +177,9 @@ class LongHandoverCarryoverScenarioTest {
                             "http://localhost:" + 뒷단.port(), true)) {
                         Awaitility.await().alias("둘째가 이어받는다").atMost(기다림).until(둘째::리더인가);
                         둘째가_돌았다[0] = true;
+                        // **둘째가 뜨는 동안의 공백은 안 센다.** 컨텍스트 기동이 CPU 를 먹어 보고 태스크가 밀리는데,
+                        // 그것은 하네스 사정이고 이 시나리오가 재려는 것이 아니다. 재는 구간은 여기서부터다.
+                        공백을_다시_잰다();
                         // **틱 수로 기다린다.** 발행 몫만 보면 승계 직후 램프가 낮게 시작해 곧바로 만족된다 —
                         // 그때는 평활이 아직 평시 값이라 이월이 아무것도 안 잰다.
                         // **둘째의 평활이 열화 값에 수렴할 때까지 기다린다.** 시간으로 기다리면 틱 설정이 바뀌는
@@ -177,7 +192,7 @@ class LongHandoverCarryoverScenarioTest {
                                 .until(() -> 둘째_회차.smoothedCredit() > 0
                                         && 둘째_회차.smoothedCredit() <= 열화_가용량 * 1.2);
                         첫_노드가_내려왔다[0] = !첫_노드.isLeader();
-                        갈린_동안_신선[0] = 보고가_신선한가();
+                        갈린_동안_신선[0] = 보고가_신선한가() && 공백이_신선도_안인가();
                         갈린_동안_평활[0] = 둘째_회차.smoothedCredit();
                         갈린_동안_몫[0] = 발행된_몫();
                     }
@@ -189,6 +204,8 @@ class LongHandoverCarryoverScenarioTest {
                     // **되찾기 전에 기준을 잡는다.** 리더 표시를 기다린 뒤에 잡으면 새 임기의 첫 회차를 이미 놓친다.
                     되찾기_전[0] = holder.view().snapshot().publishedAt();
                     회복_전_보고_수[0] = 보고한_수.get();
+                    // 구간마다 공백을 새로 잰다. 앞 구간의 공백이 뒤 구간 판정을 깨면 원인이 흐려진다.
+                    공백을_다시_잰다();
                     // **이월 계수는 누적이다.** 앞 임기에 받은 것으로 통과하지 않게 델타로 본다.
                     회복_전_이월[0] = round.carryoverRestored();
                     회복_전_이월[1] = round.carryoverEmpty();
@@ -205,7 +222,7 @@ class LongHandoverCarryoverScenarioTest {
                                     && !Double.isNaN(round.smoothedCredit()));
                     되찾은_평활[0] = round.smoothedCredit();
                     되찾은_몫[0] = 발행된_몫();
-                    회복_뒤_신선[0] = 보고가_신선한가();
+                    회복_뒤_신선[0] = 보고가_신선한가() && 공백이_신선도_안인가();
                 })
                 .assertEntry(() -> RecoveryCriteria.violations(
                         갈리기_전_평활[0] > 평시_가용량 * 0.8 ? Optional.empty()
@@ -215,7 +232,8 @@ class LongHandoverCarryoverScenarioTest {
                         첫_노드가_내려왔다[0] ? Optional.empty()
                                 : Optional.of("첫 노드가 안 내려왔다 — 승계가 아니라 분단이다"),
                         // 태스크가 밀리면 보고가 낡아 크레딧이 하한으로 내려간다 — 그 사실을 직접 본다.
-                        갈린_동안_신선[0] ? Optional.empty() : Optional.of("갈린 동안 보고가 낡았다"),
+                        갈린_동안_신선[0] ? Optional.empty()
+                                : Optional.of("갈린 동안 보고가 낡았다 — 최대 공백 %dms".formatted(보고_최대_공백.get())),
                         // 하한도 본다. 보고가 낡아 떨어지면 크레딧이 하한으로 내려가 상한만으로는 통과한다.
                         갈린_동안_평활[0] >= 열화_가용량 * 0.5 && 갈린_동안_평활[0] <= 열화_가용량 * 1.2
                                 ? Optional.empty()
@@ -251,7 +269,8 @@ class LongHandoverCarryoverScenarioTest {
                         // 보고가 멎으면 크레딧이 하한으로 떨어져 위 상한들이 공짜로 통과한다.
                         보고한_수.get() > 회복_전_보고_수[0] ? Optional.empty()
                                 : Optional.of("회복 구간에 가용량 보고가 한 번도 안 닿았다"),
-                        회복_뒤_신선[0] ? Optional.empty() : Optional.of("회복 구간에 보고가 낡았다"),
+                        회복_뒤_신선[0] ? Optional.empty()
+                                : Optional.of("회복 구간에 보고가 낡았다 — 최대 공백 %dms".formatted(보고_최대_공백.get())),
                         // 쿠폰이 발행에서 빠지면 줄이 영영 안 빠지는데 상한 판정은 그것을 통과시킨다.
                         되찾은_몫[0] > 0 ? Optional.empty()
                                 : Optional.of("되찾은 발행에 이 쿠폰의 몫이 없다: %d".formatted(되찾은_몫[0]))))
@@ -271,6 +290,17 @@ class LongHandoverCarryoverScenarioTest {
     /** 보고가 앱이 보는 기준으로 신선한가. 태스크가 밀려 낡으면 크레딧이 하한으로 내려간다. */
     private boolean 보고가_신선한가() {
         return 보고기 != null && 보고기.신선한_보고().containsKey("c4c-be");
+    }
+
+    /** 이 지점부터 다시 공백을 잰다. */
+    private void 공백을_다시_잰다() {
+        마지막_보고.set(System.nanoTime());
+        보고_최대_공백.set(0);
+    }
+
+    /** 구간 내내 공백이 신선도 창 안이었는가. 한 점만 보면 밀렸다 재개된 구간이 초록으로 지나간다. */
+    private boolean 공백이_신선도_안인가() {
+        return 보고_최대_공백.get() < 신선도.toMillis();
     }
 
     /** 지금 발행에 실린 이 쿠폰의 몫. 노드들이 실제로 읽는 값이 이것이다. */

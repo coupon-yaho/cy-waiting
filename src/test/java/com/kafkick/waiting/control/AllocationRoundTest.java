@@ -58,6 +58,14 @@ import reactor.test.scheduler.VirtualTimeScheduler;
 class AllocationRoundTest {
 
     private final List<String> 적용 = new CopyOnWriteArrayList<>();
+
+    /**
+     * 몫이 실제로 나간 적용만. <b>기다리는 쿠폰은 몫이 0 이어도 적용을 부른다</b> (CY-942) — 사라진 입장 커서를 되살리는
+     * 호출이라 아무도 안 들인다. "몫이 나갔나" 를 묻는 시험이 그 호출까지 세면 뜻이 흐려진다.
+     */
+    private List<String> 나간_몫() {
+        return 적용.stream().filter(entry -> !entry.endsWith("=0")).toList();
+    }
     private ListAppender<ILoggingEvent> 로그;
     private Level 원래_수준;
 
@@ -1267,7 +1275,7 @@ class AllocationRoundTest {
 
         round.run().block();
 
-        assertThat(적용).as("첫 회차부터 아무 몫도 안 나간다").isEmpty();
+        assertThat(나간_몫()).as("첫 회차부터 아무 몫도 안 나간다").isEmpty();
     }
 
     /** 하한이 걸려 있어도 안 나간다. 하한은 평활 뒤라 감싼 자리를 비켜 간다. */
@@ -1279,7 +1287,7 @@ class AllocationRoundTest {
 
         round.run().block();
 
-        assertThat(적용).isEmpty();
+        assertThat(나간_몫()).isEmpty();
     }
 
     /**
@@ -2142,7 +2150,7 @@ class AllocationRoundTest {
         round(List.of(new CouponDemand("lost", 100_000, 0, QueueMode.ADAPTIVE),
                 new CouponDemand("live", 100, 100, QueueMode.ADAPTIVE)), 100, 1)
                 .run().block();
-        assertThat(적용).as("접으면 산 쿠폰이 다 가져간다").containsExactly("live=100");
+        assertThat(나간_몫()).as("접으면 산 쿠폰이 다 가져간다").containsExactly("live=100");
         적용.clear();
 
         AllocationRound round = round(List.of(

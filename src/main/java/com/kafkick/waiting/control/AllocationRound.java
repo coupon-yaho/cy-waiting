@@ -823,8 +823,8 @@ public final class AllocationRound {
             return;
         }
         rewoundEvents.incrementAndGet();
-        log.warn("저장소가 뒤로 감겼다 — rewound={}, measured={}, coupons={}. 이미 통과한 사람이 다시 "
-                        + "들어올 수 있다. 초과 발급과 순번 역행을 그 쿠폰들에서 확인하라",
+        log.warn("저장소가 뒤로 감겼다 — rewound={}, measured={}, coupons={}. 이번 회차의 적용이 입장 커서를 "
+                        + "되살린다. 리더가 바뀌었으면 기억이 없어 못 되살리니 그 쿠폰들의 순번 역행을 확인하라",
                 seen.rewound().size(), seen.measured(),
                 seen.rewound().stream().limit(REWOUND_LOG_LIMIT).toList());
     }
@@ -1036,7 +1036,10 @@ public final class AllocationRound {
     private Mono<Long> applyOne(CouponDemand demand, Map<String, Long> granted,
             AtomicBoolean anyFailed) {
         long credit = granted.getOrDefault(demand.couponId(), 0L);
-        if (credit <= 0) {
+        // **기다리는 사람이 있으면 크레딧이 0 이어도 부른다** (CY-942). 적용이 사라진 입장 커서를 되살리는 자리라,
+        // 서킷이 열린 동안 안 부르면 그 내내 순번이 뛰고 청소가 들인 사람을 걷는다. 한산한 쿠폰은 지킬 사람이
+        // 없으니 안 부른다 — 수백 개면 그만큼 왕복이 늘어 틱이 밀린다.
+        if (credit <= 0 && demand.waiting() <= 0) {
             return Mono.just(0L);
         }
         // **쓰기 직전에 다시 묻는다.** 쿠폰이 많으면 이 루프가 한 틱을 꽉 채우고,

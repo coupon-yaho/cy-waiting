@@ -335,8 +335,9 @@ report_calls() {
                     # 열린 자리를 먹으면 차례가 온 사람이 폴백으로 떨어지는데,
                     # 그 수가 안 나오면 예산을 정할 재료가 회차를 돌려도 안 생긴다.
                     if (ln[n] > fn[n] || lp[n] > fp[n] || lb[n] > fb[n]) {
-                        printf "  %s %s 못 들어간 요청 %d건 · 프로브 표본 %d건 · "
-                                "프로브가 만난 포화 %d건\n",
+                        # **한 줄로 둔다.** awk 는 줄이 바뀌면 문장이 끝나, 형식 문자열을
+                        # 쪼개면 구문 오류로 죽는다 — 그 자리가 판정의 마지막 출력이다.
+                        printf "  %s %s 못 들어간 요청 %d건 · 프로브 표본 %d건 · 프로브가 만난 포화 %d건\n", \
                                 n, label, ln[n] - fn[n], lp[n] - fp[n], lb[n] - fb[n]
                     }
                 }
@@ -435,6 +436,8 @@ total_sec=$((NORMAL_SEC + SETTLE_SEC + HOLD_SEC + RECOVER_SEC + tail_sec + 5))
 # 2026-09-09 이 기계에서 500 으로 1,020 회를, 1,500 으로 168 회를 흘렸는데 두 번
 # 다 풀을 **전부** 썼다. 용량이 아니라 리더를 죽이는 창에서 VU 가 물려 있는
 # 것이라, 늘리는 것으로는 안 없어진다. 흘린 회차는 통째로 판정 불가다.
+# 시한은 이 산정식 안쪽이어야 한다. 시한이 더 길면 매달린 VU 가 풀을 넘겨
+# 회차를 흘리고, 흘린 회차는 통째로 판정 불가다.
 vus=${VUS:-$(( RATE * (FAULT_LATENCY_MS / 1000 + 2) * 3 / 2 + 50 ))}
 case "$vus" in
     ''|*[!0-9]*) echo "VUS 는 양의 정수여야 한다: '$vus'"; exit 2 ;;
@@ -446,6 +449,7 @@ esac
 holders=${HOLDERS:-$(( RATE + 20 ))}
 BASE_URLS="$bases" RATE="$RATE" DURATION="${total_sec}s" COUPON="$COUPON" VUS="$vus" \
     HOLDERS="$holders" \
+    REQ_TIMEOUT="${REQ_TIMEOUT:-$(( FAULT_LATENCY_MS + 2000 ))ms}" \
     k6 run --quiet --summary-export="$work/k6.json" test/load/circuit-recovery.js \
     >"$work/k6.log" 2>&1 &
 loadpid=$!

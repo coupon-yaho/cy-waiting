@@ -14,7 +14,7 @@
 // 차례가 오면 표를 들고 다시 발급을 부른다.
 import http from 'k6/http';
 import { sleep } from 'k6';
-import { Counter } from 'k6/metrics';
+import { Counter, Rate } from 'k6/metrics';
 
 // 끊는 것도 줄 세우는 것도 판정이 낸 정상 동작이다 (O-7). 느린 구간의 503 을
 // 실패로 세면 이 시나리오가 자기 자극 때문에 빨개진다.
@@ -54,6 +54,12 @@ export const options = {
     dropped_iterations: ['count==0'],
     // 판정 밖 응답이 섞이면 배선이 어긋난 것이다. 안 걸면 전량이 그것이어도 초록이다.
     circuit_off_judgement: ['count==0'],
+    // **아무것도 안 잰 회차를 초록으로 끝내지 않는다.** 표를 들고 뒷단에 닿은 것이
+    // 하나도 없으면 회복 봉우리를 잴 재료가 없다.
+    circuit_redeemed: ['count>0'],
+    // **매달린 대는 죽은 대가 아니지만 정상도 아니다.** 시한 초과를 어느 계수에도
+    // 안 담으면, 게이트웨이가 붙은 채 안 답하는 회차가 조용히 초록으로 끝난다.
+    circuit_timeout_rate: ['rate<0.05'],
   },
 };
 
@@ -71,6 +77,20 @@ let queueToken = null;
 let entryToken = null;
 let member = 0;
 
+/**
+ * 한 요청이 매달릴 수 있는 시간. **리더를 죽이는 순간 그 대로 나간 요청이 문제다** — 기본 시한(60초)까지
+ * 매달리면 그 VU 가 회차 내내 묶여, 풀을 다 써도 회차를 흘린다. 흘린 회차는 통째로 판정 불가다 (CY-907).
+ */
+const REQ_TIMEOUT = __ENV.REQ_TIMEOUT || '5s';
+
+/** k6 가 시한 초과에 붙이는 코드. 연결 실패(1211 계열)와 갈라야 죽은 대를 잘못 안 짚는다. */
+const TIMEOUT_CODE = 1050;
+
+/** 요청 인자. 시한을 한 곳에서 준다 — 자리마다 쓰면 하나를 빠뜨려도 안 보인다. */
+function params(extra) {
+  return { headers: headers(extra), timeout: REQ_TIMEOUT };
+}
+
 function headers(extra) {
   return Object.assign({
     'X-Member-Id': String(member),
@@ -81,13 +101,25 @@ function headers(extra) {
 }
 
 const gatewayDown = new Counter('circuit_gateway_down');
+const timedOut = new Rate('circuit_timeout_rate');
+
+/**
+ * 시한 초과 표본. **모든 응답에서 한 번씩 부른다** — 성공한 폴링은 `tally` 를 안 거치므로 거기서 세면
+ * 분모만 빠져, 정상인 회차일수록 비율이 부풀어 문턱이 엉뚱하게 걸린다.
+ */
+function observeTimeout(r) {
+  timedOut.add(r.status === 0 && r.error_code === TIMEOUT_CODE);
+}
 
 function tally(r) {
   // **연결 자체가 안 된 것은 판정이 아니다.** 죽인 리더로 간 요청이라, 판정 밖
   // 응답으로 세면 우리가 만든 자극이 회차를 무효로 만든다.
   if (r.status === 0) {
     gatewayDown.add(1);
-    if (r.request && r.request.url) {
+    // **시한 초과는 죽은 것이 아니다.** 자극이 지연이라 살아 있는 대도 늦을 수 있는데, 그것으로 명단에서
+    // 빼면 그 VU 가 멀쩡한 대에 영영 안 쏜다 — 회복 구간의 유입이 VU 마다 달라져 판정이 흔들린다.
+    // 붙지도 못한 것만 죽은 것으로 본다.
+    if (r.error_code !== TIMEOUT_CODE && r.request && r.request.url) {
       const hit = BASES.find((b) => r.request.url.indexOf(b) === 0);
       if (hit) {
         down[hit] = true;
@@ -136,10 +168,17 @@ export function holder() {
   sleep(wait);
 }
 
-// 기본 시나리오도 제품이 말한 간격을 지킨다. 안 지키면 표를 든 VU 가 다음
-// 회차를 곧바로 집어, 재려던 회복 봉우리를 하네스가 만든다.
+/**
+ * 유입 시나리오는 **새로 오는 사람만** 만든다. 표를 들고 다시 오는 사람은 홀더가 맡는다.
+ *
+ * <p>여기서 제품이 준 간격만큼 자면 그 VU 가 묶인다. 도착 간격은 유입률이 정하지 이 잠이 정하지 않으므로,
+ * 자는 동안 풀이 마르고 회차를 흘린다 — 흘린 회차는 통째로 판정 불가다. 실측 855회, 풀 495 전부 소진
+ * (CY-907). 표를 안 들고 끝내므로 촘촘히 되묻는 일도 없다.
+ */
 export default function () {
-  sleep(step());
+  reset();
+  step();
+  reset();
 }
 
 // 제품이 실은 재시도 간격(초). 안 실렸으면 기본 폴링 주기를 쓴다.
@@ -157,7 +196,8 @@ function step() {
   // 3. 차례가 왔다. 표를 들고 다시 부른다 — **이 요청이 뒷단에 닿는다.**
   if (entryToken !== null) {
     const r = http.post(`${base()}/api/v1/coupons/${COUPON}/issue`, null,
-        { headers: headers({ 'Entry-Token': entryToken }) });
+        params({ 'Entry-Token': entryToken }));
+    observeTimeout(r);
     tally(r);
     if (r.status === 200) {
       redeemed.add(1);
@@ -182,7 +222,8 @@ function step() {
   // 2. 줄에 서 있다. 순번을 묻는다.
   if (queueToken !== null) {
     const r = http.get(`${base()}/api/v1/coupons/${COUPON}/queue`,
-        { headers: headers({ 'Queue-Token': queueToken }) });
+        params({ 'Queue-Token': queueToken }));
+    observeTimeout(r);
     if (r.status !== 200) {
       tally(r);
       // **줄에 선 사람을 폴링 한 번 실패로 버리지 않는다.** 버려도 레디스의 줄
@@ -217,8 +258,8 @@ function step() {
   }
 
   // 1. 아직 안 섰다. 발급을 부른다.
-  const r = http.post(`${base()}/api/v1/coupons/${COUPON}/issue`, null,
-      { headers: headers() });
+  const r = http.post(`${base()}/api/v1/coupons/${COUPON}/issue`, null, params());
+  observeTimeout(r);
   tally(r);
   if (r.status === 0) {
     return DEFAULT_WAIT_SEC;

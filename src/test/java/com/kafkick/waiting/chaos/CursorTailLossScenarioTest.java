@@ -24,9 +24,8 @@ import org.springframework.data.redis.core.script.RedisScript;
 /**
  * C13c — 입장 커서의 꼬리가 유실된다 (CY-946).
  *
- * <p>무엇을 왜 재는지는 {@code plan/08-resilience.md} 의 C13 절이 든다. 여기는 그것을 어떻게 판정하는가만
- * 든다. 복제본 승격과 AOF 잘림은 마지막 쓰기 몇 개를 뺀다 — 커서와 그 커서를 만든 등록이 같이 빠지는 것이
- * 이 시나리오다.
+ * <p>무엇을 왜 재는지는 {@code plan/08-resilience.md} 의 C13 절이 든다. 유실은 마지막 등록의 세 쓰기와 그 뒤의
+ * 커서 쓰기로 만든다 — 잘림이 빼는 것은 끝에서부터다. 되살리기 전 창(CY-944)은 여기서 안 닫힌다.
  */
 @Tag("chaos")
 class CursorTailLossScenarioTest {
@@ -47,6 +46,9 @@ class CursorTailLossScenarioTest {
     private static final String ALIVE_TTL = "250";
     private static final String 큐_상한 = "-1";
     private static final String 이탈_보관 = "600";
+
+    /** 이 회차가 들이는 인원. 순번이 뛰는 폭이 이 값과 같아야 한다. */
+    private static final int 들이는_인원 = 2;
 
     private static RedisFaults faults;
 
@@ -116,62 +118,101 @@ class CursorTailLossScenarioTest {
         return raw == null ? -1 : Long.parseLong(raw);
     }
 
-    /** 꼬리 유실. <b>커서와 그 커서를 만든 등록이 같이 빠진다</b> — 등록이 살아남으면 바닥값이 새 점수를 이미 민다. */
-    private void 꼬리를_잃는다(String... members) {
-        redis.delete(RedisKeys.admitted(COUPON, SHARDS, SHARD)).block(기다림);
-        for (String member : members) {
-            redis.opsForZSet().remove(RedisKeys.queue(COUPON, SHARDS, SHARD), member).block(기다림);
+    /**
+     * 꼬리를 자른다. 마지막 등록의 세 쓰기와 그 뒤의 커서 쓰기가 같이 빠진다.
+     *
+     * @param 커서_되감김 커서가 남되 옛 값으로 돌아간 모양. 0 이면 커서 자체가 사라진 모양이다
+     */
+    private void 꼬리를_자른다(String 마지막, long 앞사람_점수, long 커서_되감김) {
+        redis.opsForZSet().remove(RedisKeys.queue(COUPON, SHARDS, SHARD), 마지막).block(기다림);
+        redis.opsForZSet().remove(RedisKeys.alive(COUPON, SHARDS, SHARD), 마지막).block(기다림);
+        redis.opsForValue().set(RedisKeys.maxScore(COUPON, SHARDS, SHARD),
+                String.valueOf(앞사람_점수)).block(기다림);
+        if (커서_되감김 > 0) {
+            redis.opsForValue().set(RedisKeys.admitted(COUPON, SHARDS, SHARD),
+                    String.valueOf(커서_되감김)).block(기다림);
+        } else {
+            redis.delete(RedisKeys.admitted(COUPON, SHARDS, SHARD)).block(기다림);
         }
     }
 
     /**
-     * <b>커서를 잃어도 순번이 뛰지 않는다.</b>
+     * <b>진입 — 커서를 잃으면 순번이 입장자 수만큼 뛴다.</b>
      *
-     * <p>순번과 총원은 커서 위에서 센다. 커서가 사라지면 줄 머리부터 다시 세어 뒤에 선 사람의 순번이 입장자
-     * 수만큼 뛴다 — 사용자가 보기엔 줄이 뒤로 간 것이고, 그것이 불변식 3 이다.
+     * <p>순번과 총원은 커서 위에서 센다. 커서가 사라지면 줄 머리부터 다시 세어, 뒤에 선 사람에게는 줄이 뒤로
+     * 간 것으로 보인다. 그것이 불변식 3 이다.
      */
     @Test
-    @DisplayName("진입_커서를_잃으면_순번이_뛴다")
-    void 진입_커서를_잃으면_순번이_뛴다() {
+    @DisplayName("진입_커서를_잃으면_순번이_입장자_수만큼_뛴다")
+    void 진입_커서를_잃으면_순번이_입장자_수만큼_뛴다() {
         세운다("m1");
         세운다("m2");
+        long m3 = 점수(세운다("m3"));
+        세운다("m4");
+        port.apply(new Grant(COUPON, 들이는_인원), 임기).block(기다림);
         long 유실_전_순번 = 순번(세운다("m3"));
-        port.apply(new Grant(COUPON, 2), 임기).block(기다림);
-        long 들이기_뒤_순번 = 순번(세운다("m3"));
 
-        꼬리를_잃는다("m2");
+        꼬리를_자른다("m4", m3, 0);
         long 유실_중_순번 = 순번(세운다("m3"));
 
-        assertThat(들이기_뒤_순번).as("둘을 들였으니 앞의 둘이 빠진다").isZero();
-        assertThat(유실_전_순번).as("들이기 전에는 앞에 둘").isEqualTo(2);
-        assertThat(유실_중_순번).as("커서가 없으면 줄 머리부터 다시 센다").isGreaterThan(들이기_뒤_순번);
+        assertThat(유실_전_순번).as("커서 바로 위라 앞에 아무도 없다").isZero();
+        assertThat(유실_중_순번 - 유실_전_순번).as("들인 인원만큼 뛴다").isEqualTo(들이는_인원);
     }
 
     /**
-     * <b>유지 — 되살림이 순번을 돌려놓고, 그 사이 선 사람은 커서 위에 선다.</b>
+     * <b>유지 — 되살림이 커서와 순번을 돌려놓는다.</b>
      *
-     * <p>되살림이 커서를 원래대로 올리는데, 그 사이 등록한 사람의 점수가 커서 아래에 있으면 되살림 순간
-     * 크레딧 없이 들어간다. 등록 스크립트가 점수를 커서 위로 미는 것이 그 방어다.
+     * <p>크레딧이 0 이어도 되살린다. 들이는 일이 아니라 들인 기록을 돌려놓는 일이다.
      */
     @Test
-    @DisplayName("유지_되살림이_순번을_돌려놓고_사이의_등록은_커서_위에_선다")
-    void 유지_되살림이_순번을_돌려놓고_사이의_등록은_커서_위에_선다() {
+    @DisplayName("유지_되살림이_커서와_순번을_돌려놓는다")
+    void 유지_되살림이_커서와_순번을_돌려놓는다() {
         세운다("m1");
-        세운다("m2");
-        세운다("m3");
-        port.apply(new Grant(COUPON, 2), 임기).block(기다림);
+        long m2 = 점수(세운다("m2"));
+        long m3 = 점수(세운다("m3"));
+        세운다("m4");
+        port.apply(new Grant(COUPON, 들이는_인원), 임기).block(기다림);
         long 유실_전_커서 = 커서();
-        long 유실_전_순번 = 순번(세운다("m3"));
+        // 커서 위에 한 사람을 더 세워 기대 순번이 0 이 아니게 만든다 — 0 == 0 은 아무것도 안 재는 단언이다.
+        세운다("m5");
+        long 유실_전_순번 = 순번(세운다("m5"));
 
-        꼬리를_잃는다("m2");
-        long 사이_점수 = 점수(세운다("m4"));
-        // 크레딧이 0 이어도 되살린다. 들이는 일이 아니라 들인 기록을 돌려놓는 일이다.
+        꼬리를_자른다("m4", m3, 0);
+        long 유실_중_순번 = 순번(세운다("m5"));
+        port.apply(new Grant(COUPON, 0), 임기).block(기다림);
+        long 되살린_뒤_순번 = 순번(세운다("m5"));
+
+        assertThat(유실_전_커서).as("둘째 사람까지 들였다").isEqualTo(m2);
+        assertThat(유실_전_순번).as("커서 위에 m3·m4 가 있다").isEqualTo(2);
+        assertThat(커서()).as("되살린 커서는 잃기 전 값이다").isEqualTo(유실_전_커서);
+        assertThat(유실_중_순번 - 되살린_뒤_순번).as("커서를 잃어 뛰었던 만큼 되돌아온다")
+                .isEqualTo(들이는_인원);
+        // 꼬리에 m4 의 등록도 같이 빠졌다. 그 한 자리는 되살림이 돌려놓는 것이 아니다.
+        assertThat(되살린_뒤_순번).as("남는 차이는 잃은 등록 한 자리뿐").isEqualTo(유실_전_순번 - 1);
+        assertThat(port.healed()).as("되살림을 센다").isEqualTo(1);
+    }
+
+    /**
+     * <b>유지 변종 — 커서가 남되 옛 값으로 돌아간다.</b>
+     *
+     * <p>복제본이 몇 회차 뒤진 채 승격하면 커서가 사라지는 대신 옛 값으로 되돌아간다. 이때만 되살린 폭을 잴 수
+     * 있다 — 커서가 아예 없으면 폭을 모른다.
+     */
+    @Test
+    @DisplayName("유지_되감긴_커서는_폭까지_센다")
+    void 유지_되감긴_커서는_폭까지_센다() {
+        long m1 = 점수(세운다("m1"));
+        long m2 = 점수(세운다("m2"));
+        long m3 = 점수(세운다("m3"));
+        세운다("m4");
+        port.apply(new Grant(COUPON, 들이는_인원), 임기).block(기다림);
+
+        꼬리를_자른다("m4", m3, m1);
         port.apply(new Grant(COUPON, 0), 임기).block(기다림);
 
-        assertThat(커서()).as("되살린 커서는 잃기 전 값 이상이다").isGreaterThanOrEqualTo(유실_전_커서);
-        assertThat(사이_점수).as("되살림 전에 선 사람도 커서 위에 선다").isGreaterThan(커서());
-        assertThat(순번(세운다("m3"))).as("되살림이 순번을 돌려놓는다").isEqualTo(유실_전_순번);
-        assertThat(port.healed()).as("되살림을 센다").isEqualTo(1);
+        assertThat(커서()).as("되살린 커서는 잃기 전 값이다").isEqualTo(m2);
+        assertThat(port.healed()).isEqualTo(1);
+        assertThat(port.healedSpan()).as("되감긴 값에서 잃기 전 값까지").isEqualTo(m2 - m1);
     }
 
     /**
@@ -187,9 +228,9 @@ class CursorTailLossScenarioTest {
         세운다("m2");
         long m3 = 점수(세운다("m3"));
         세운다("m4");
-        port.apply(new Grant(COUPON, 2), 임기).block(기다림);
+        port.apply(new Grant(COUPON, 들이는_인원), 임기).block(기다림);
 
-        꼬리를_잃는다("m2");
+        꼬리를_자른다("m4", m3, 0);
         long 들인_수 = port.apply(new Grant(COUPON, 1), 임기).block(기다림);
 
         assertThat(들인_수).as("몫만큼만 들인다").isEqualTo(1);

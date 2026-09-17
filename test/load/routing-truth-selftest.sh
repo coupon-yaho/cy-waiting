@@ -26,13 +26,7 @@ rejecting() {
     printf '%s' "$path"
 }
 
-summary() {
-    local path=$work/$1
-    printf '%s' "$2" > "$path"
-    printf '%s' "$path"
-}
-
-ok=$(summary ok.json '{"metrics":{"dropped_iterations":{"values":{"count":2520}}}}')
+ok=$(fixture ok.json '{"metrics":{"dropped_iterations":{"values":{"count":2520}}}}')
 
 echo "라우팅 비교 자기검증"
 
@@ -93,9 +87,9 @@ run_case "밀어낸 건이 있으면 판정 불가" 1 "밀어냈다" \
 # **요약이 깨졌으면 0 으로 안 읽는다.** 잘린 요약으로도 판정이 나면, 두 방식이
 # 같은 부하를 받았다는 증거가 없는 채로 몫만 비교하게 된다.
 run_case "요약이 깨졌으면 판정 불가" 1 "못 읽었다" \
-    -- "$(result seen2.txt 1071 3214 3215)" "$(summary broken.json '{"metrics":')"
+    -- "$(result seen2.txt 1071 3214 3215)" "$(fixture broken.json '{"metrics":')"
 run_case "흘린 회차 계수가 없으면 판정 불가" 1 "못 읽었다" \
-    -- "$(result seen3.txt 1071 3214 3215)" "$(summary nodrop.json '{"metrics":{}}')"
+    -- "$(result seen3.txt 1071 3214 3215)" "$(fixture nodrop.json '{"metrics":{}}')"
 
 [ "$selftest_failed" -eq 0 ] && echo "라우팅 비교 자기검증 통과" \
     || echo "라우팅 비교 자기검증 실패"

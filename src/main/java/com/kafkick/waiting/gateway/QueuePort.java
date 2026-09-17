@@ -24,6 +24,17 @@ public interface QueuePort {
      */
     Mono<QueueEntry> enqueue(String couponId, String memberId, long maxLen, Instant now);
 
+    /**
+     * 줄에 세우되 점수를 발행된 입장 커서 위에 세운다 (CY-944). 커서는 <b>점수 하한으로만</b> 쓴다 — 입장도 순번도
+     * 레디스 커서만 정한다.
+     *
+     * @param cursorHint 스냅샷이 실어 온 입장 커서. 모르면 {@code -1}
+     */
+    default Mono<QueueEntry> enqueue(String couponId, String memberId, long maxLen, Instant now,
+            long cursorHint) {
+        return enqueue(couponId, memberId, maxLen, now);
+    }
+
     /** 지금 어디쯤인가. 조회가 곧 생존 신호다. */
     Mono<QueueEntry> status(String couponId, String memberId, Instant now);
 }

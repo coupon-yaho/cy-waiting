@@ -562,6 +562,18 @@ public final class AllocationRedisPort implements SnapshotSource {
         return threshold == null ? "-1" : String.format(Locale.ROOT, "%.0f", threshold);
     }
 
+    /** 발행에 실을 쿠폰별 임계 기억 (CY-944). 노드가 등록 점수의 하한으로 쓴다. */
+    public Map<String, Long> writtenCursors() {
+        return Map.of();
+    }
+
+    /**
+     * 승계한 리더의 기억을 발행된 커서로 채운다 (CY-944). 안 채우면 승계가 겹친 유실을 못 되살린다 — 복제본 승격은
+     * 리더 리스도 흔들어 승계를 부르기 쉽다.
+     */
+    public void seedWritten(Map<String, Long> published) {
+    }
+
     /** 활성에서 빠진 쿠폰의 기준을 버린다. 안 버리면 이 맵만 역사상 쿠폰 수로 자란다. */
     public void forgetInactive(Collection<String> active) {
         lastAdmitted.keySet().retainAll(active);

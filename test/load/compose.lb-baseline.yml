@@ -1,0 +1,38 @@
+# 앞단 LB 기준선 스택. **LB 와 정적 응답 origin 만 띄운다.**
+#
+# 게이트웨이·레디스를 같이 띄우면 그 코어가 기준선에 섞인다. LB 는 경유 회차와 같은 이미지·코어·프록시 설정이라
+# 두 값을 뺄 수 있다. origin 은 게이트웨이 자리를 채우는 정적 응답이다.
+#
+#   사용: docker compose -p lb-baseline -f compose.lb-baseline.yml up -d --wait
+services:
+  origin:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./lb/origin.conf:/etc/nginx/nginx.conf:ro
+    cpus: 2
+    ulimits:
+      nofile: { soft: 65536, hard: 65536 }
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8071/origin/health"]
+      interval: 1s
+      timeout: 2s
+      retries: 20
+
+  lb:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./lb/dummy.conf:/etc/nginx/nginx.conf:ro
+    # **코어는 2 로 박는다.** 설정의 워커 수가 2 라, 한도만 바꾸면 워커와 한도가 갈려 원인 판정의 LB 선이 틀어진다.
+    cpus: 2
+    # 워커의 worker_rlimit_nofile 이 이 한도를 넘지 못한다.
+    ulimits:
+      nofile: { soft: 65536, hard: 65536 }
+    depends_on:
+      origin: { condition: service_healthy }
+    ports:
+      - "18070:8070"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8070/lb/health"]
+      interval: 1s
+      timeout: 2s
+      retries: 20

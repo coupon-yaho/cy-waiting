@@ -8,8 +8,9 @@
 # 표본은 회차 동안 쌓인 `종류<TAB>이름<TAB>값` 이다. CPU 는 한 코어가 100, 호스트는 유휴 백분율.
 #
 # **원인은 이 순서로 가른다.** 호스트가 말랐으면 게이트웨이가 한도에 붙은 것도 k6 와 코어를 다툰 결과일 수
-# 있어 먼저 본다. 그다음 공유 자원인 레디스(한 스레드라 한 코어가 한도) — 붙었으면 게이트웨이를 늘려도 안
-# 풀린다. 그다음 게이트웨이 — 전 대가 붙어야 한다. 한 대만 붙은 것은 고르게 안 나뉜 하네스 쪽이다.
+# 있어 먼저 본다. LB 를 지나는 회차(`LB_CPUS`)면 그다음 LB — 앞단이 막히면 뒤로 부하가 안 간다. 그다음 공유
+# 자원인 레디스(한 스레드라 한 코어가 한도) — 붙었으면 게이트웨이를 늘려도 안 풀린다. 그다음 게이트웨이 — 전
+# 대가 붙어야 한다. 한 대만 붙은 것은 고르게 안 나뉜 하네스 쪽이다.
 set -uo pipefail
 
 # 2 는 계기를 고치라는 뜻이다. 원인을 가른 회차는 원인과 상관없이 0 이다 — 원인이 제품이라는 것이 이
@@ -39,6 +40,19 @@ saturation=${SATURATION_PCT:-90}
 host_floor=${HOST_IDLE_FLOOR_PCT:-10}
 # 회차 중간의 한 순간을 천장 원인으로 적지 않는다.
 min_samples=${MIN_SAMPLES:-3}
+# LB 를 지나는 회차의 LB 코어 한도. 비우면 LB 를 안 본다.
+lb_cpus=${LB_CPUS:-}
+# **LB 는 CPU 말고 연결 한도에서도 막힌다.** 러너가 회차 중 nginx 가 낸 연결 한도·accept 실패 줄 수를 넘긴다.
+lb_errors=${LB_CONN_ERRORS:-0}
+case "$lb_errors" in
+    ''|*[!0-9]*) echo "::error title=천장 원인::LB 연결 오류 수가 0 이상의 정수가 아니다: '$lb_errors' — 판정 불가"
+        exit "$UNMEASURABLE" ;;
+esac
+if [ -n "$lb_cpus" ] && { ! printf '%s' "$lb_cpus" | grep -Eq '^[0-9]+(\.[0-9]+)?$' \
+        || awk -v c="$lb_cpus" 'BEGIN{ exit (c > 0) ? 1 : 0 }'; }; then
+    echo "::error title=천장 원인::LB 코어 한도가 양수가 아니다: '$lb_cpus' — 판정 불가"
+    exit "$UNMEASURABLE"
+fi
 # **뜬 대수를 표본에서 세지 않는다.** 한 대가 표집에 안 잡히면 남은 대만 붙어도 "모두" 가 된다.
 expected=${GATEWAYS:-1}
 
@@ -60,21 +74,25 @@ done
 # **평균이 아니라 가운데 값으로 가른다.** 표집은 k6 가 VU 를 띄우기 전과 끝난 뒤에 걸쳐, 앞뒤 한가한 표본 몇
 # 개가 평균을 선 너머로 옮긴다.
 awk -F '\t' -v cpus="$cpus" -v sat="$saturation" -v floor="$host_floor" -v need="$min_samples" \
-        -v expected="$expected" '
+        -v expected="$expected" -v lb_cpus="$lb_cpus" -v lb_errors="$lb_errors" '
     function num(v) { return v ~ /^-?[0-9]+(\.[0-9]+)?$/ }
     function median(key, n,    i, j, t, a) {
         for (i = 1; i <= n; i++) a[i] = vals[key, i]
         for (i = 2; i <= n; i++) { t = a[i]; for (j = i - 1; j >= 1 && a[j] > t; j--) a[j + 1] = a[j]; a[j + 1] = t }
         return (n % 2) ? a[(n + 1) / 2] : (a[n / 2] + a[n / 2 + 1]) / 2
     }
-    function add(key, v) { vals[key, ++cnt[key]] = v }
+    function add(key, v) { vals[key, ++cnt[key]] = v
+        if (!((key) in hi) || v > hi[key]) hi[key] = v
+        if (!((key) in lo) || v < lo[key]) lo[key] = v }
     $0 ~ /^#/ || NF < 3 { next }
     !num($3) { bad = 1; next }
     # 범위 밖 값은 계기 고장이다. 유휴 -1 이 마름으로 읽히면 고장이 원인으로 적힌다.
     $1 == "cpu" && $3 < 0 { bad = 1; next }
     $1 == "idle" && ($3 < 0 || $3 > 100) { bad = 1; next }
-    $1 == "cpu" && $2 ~ /gateway/ { if (!(("gw " $2) in cnt)) gws[++ng] = $2; add("gw " $2, $3); next }
-    $1 == "cpu" && $2 ~ /redis/   { add("redis", $3); next }
+    # 서비스 자리(`<프로젝트>-<서비스>-<번호>`)로만 가른다. 프로젝트 이름에 같은 말이 들어가도 안 섞인다.
+    $1 == "cpu" && $2 ~ /-gateway-[0-9]+$/ { if (!(("gw " $2) in cnt)) gws[++ng] = $2; add("gw " $2, $3); next }
+    $1 == "cpu" && $2 ~ /-redis-[0-9]+$/ { add("redis", $3); next }
+    $1 == "cpu" && $2 ~ /-lb-[0-9]+$/ { add("lb", $3); next }
     $1 == "idle"                  { add("idle", $3); next }
     END {
         if (bad) { print "::error title=천장 원인::숫자가 아니거나 범위 밖인 표본이 있다 — 판정 불가"; exit 2 }
@@ -85,18 +103,25 @@ awk -F '\t' -v cpus="$cpus" -v sat="$saturation" -v floor="$host_floor" -v need=
             g = gws[i]; n = cnt["gw " g]
             if (n < need) { printf "::error title=천장 원인::%s 표본이 %d 개다 — 판정 불가\n", g, n; exit 2 }
             m = median("gw " g, n)
-            printf "  %s CPU 가운데 %.1f%% (한도 %s 코어, 붙음 선 %.1f%%)\n", g, m, cpus, limit
+            printf "  %s CPU 가운데 %.1f%% (최대 %.1f%%, 한도 %s 코어, 붙음 선 %.1f%%)\n", g, m, hi["gw " g], cpus, limit
             if (m >= limit) saturated++
         }
         if (cnt["idle"] < need) { printf "::error title=천장 원인::호스트 표본이 %d 개다 — 판정 불가\n", cnt["idle"]; exit 2 }
         idle = median("idle", cnt["idle"])
-        printf "  호스트 유휴 가운데 %.1f%% (마름 선 %.1f%%)\n", idle, floor
+        printf "  호스트 유휴 가운데 %.1f%% (최저 %.1f%%, 마름 선 %.1f%%)\n", idle, lo["idle"], floor
         # 레디스를 먼저 보는데 그 표집이 빠지면 순서가 조용히 사라진다.
         if (cnt["redis"] < need) { printf "::error title=천장 원인::레디스 표본이 %d 개다 — 판정 불가\n", cnt["redis"]; exit 2 }
         redis = median("redis", cnt["redis"])
-        printf "  레디스 CPU 가운데 %.1f%%\n", redis
+        printf "  레디스 CPU 가운데 %.1f%% (최대 %.1f%%)\n", redis, hi["redis"]
+        if (lb_cpus != "") {
+            if (cnt["lb"] < need) { printf "::error title=천장 원인::LB 표본이 %d 개다 — 판정 불가\n", cnt["lb"]; exit 2 }
+            lb = median("lb", cnt["lb"]); lb_limit = lb_cpus * 100 * sat / 100
+            printf "  LB CPU 가운데 %.1f%% (최대 %.1f%%, 한도 %s 코어, 붙음 선 %.1f%%)\n", lb, hi["lb"], lb_cpus, lb_limit
+        }
 
         if (idle < floor)                  { print "원인: 호스트 — 하네스와 코어를 다퉈 이 천장은 게이트웨이의 것이 아니다"; exit 0 }
+        if (lb_cpus != "" && lb_errors > 0) { printf "원인: LB — 연결 한도에서 막혔다 (오류 %d 건)\n", lb_errors; exit 0 }
+        if (lb_cpus != "" && lb >= lb_limit) { print "원인: LB — 앞단이 코어 한도에 붙었다"; exit 0 }
         if (redis >= sat)                  { print "원인: 레디스 — 한 스레드가 한 코어에 붙었다"; exit 0 }
         if (saturated == ng)               { printf "원인: 게이트웨이 — %d 대 모두 코어 한도에 붙었다\n", ng; exit 0 }
         printf "원인: 가르지 못함 — 붙은 자리가 없다 (게이트웨이 %d/%d 대)\n", saturated, ng

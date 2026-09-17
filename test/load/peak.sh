@@ -34,6 +34,16 @@ if [ "$GATEWAYS" -gt 1 ]; then
     COMPOSE="$COMPOSE -f test/load/compose.multi.yml"
 fi
 
+# **LB 를 지나는 회차.** 실제 요청 경로다. 대신 LB 가 측정에 섞이므로 원인 판정이 LB 도 보고, 오버헤드는
+# 같은 코어 한도의 기준선(`lb-baseline.sh`)을 빼서 읽는다.
+VIA_LB=${VIA_LB:-0}
+case "$VIA_LB" in
+    0) lb_env="" ;;
+    # LB 코어는 compose 와 nginx 워커 수에 2 로 박혀 있다. 원인 판정의 LB 선도 그 값이다.
+    1) COMPOSE="$COMPOSE -f test/load/compose.lb.yml"; lb_env=2 ;;
+    *) echo "::error title=현재 최대치::VIA_LB 는 0 이나 1 이어야 한다: '$VIA_LB'"; exit 2 ;;
+esac
+
 # peak.js 가 두 쿠폰을 박아 두고 있다. 여기만 바꾸면 다른 쿠폰을 비우고 이 쿠폰을
 # 때리게 된다 — 시나리오를 고칠 때 같이 고친다.
 COUPONS="c1 c2"
@@ -79,7 +89,8 @@ jar=${WAITING_JAR:-build/libs/waiting.jar}
 
 # **이미지를 먼저 짓는다.** compose 는 JAR 이 바뀌어도 있는 이미지를 그대로 쓴다.
 $COMPOSE build gateway backend >/dev/null 2>&1 || { echo "이미지를 못 지었다"; exit 2; }
-$COMPOSE rm -sf gateway warmup >/dev/null 2>&1
+# LB 도 같이 지운다. 남은 LB 는 기동 때 풀어 둔 옛 게이트웨이 주소를 계속 쓴다.
+$COMPOSE rm -sf gateway warmup lb >/dev/null 2>&1
 $COMPOSE up -d --wait --wait-timeout 240 --scale gateway="$GATEWAYS" \
     || { echo "스택을 못 세웠다"; exit 2; }
 
@@ -93,8 +104,20 @@ for idx in $(seq 1 "$GATEWAYS"); do
     esac
     bases="${bases:+$bases,}http://localhost:$port"
 done
-export BASE_URLS=$bases
 echo "게이트웨이 ${GATEWAYS}대: $bases"
+# LB 를 지나면 k6 는 LB 한 곳만 친다. 나누기는 LB 가 한다.
+if [ "$VIA_LB" = 1 ]; then
+    # **LB 가 모든 대를 아는지 본다.** 모자라면 한 대로 몰면서 여럿에 나눴다고 적는다.
+    resolved=$($COMPOSE exec -T lb nslookup gateway 127.0.0.11 2>/dev/null \
+        | awk '/^Name:/ { name = 1 } name && /^Address/ { n++ } END { print n + 0 }')
+    if [ "$resolved" != "$GATEWAYS" ]; then
+        echo "::error title=현재 최대치::LB 가 게이트웨이 주소를 ${resolved} 개 안다 (기대 ${GATEWAYS})"
+        exit 2
+    fi
+    bases=http://localhost:18070
+    echo "LB 경유: $bases"
+fi
+export BASE_URLS=$bases
 
 rm -rf "$OUT_DIR"; mkdir -p "$OUT_DIR"
 : > "$OUT_TABLE"
@@ -219,9 +242,10 @@ for rate in $RATES; do
     fi
 
     metrics "$before"
+    round_started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     # 정지 파일은 띄우기 전에 여기서 지운다. 자식이 지우면 곧바로 끝난 회차의 정지 신호를 먹는다.
     rm -f "$cpu.stop"
-    peak_sample_cpu "$cpu" "$PROJECT" "$$" &
+    peak_sample_cpu "$cpu" "$PROJECT" "$$" "$(( $(date +%s) + DURATION_SEC ))" &
     sampler=$!
     VUS=$vus RATE=$rate DURATION=$DURATION k6 run --summary-export="$summary" \
         test/load/peak.js 2>&1 | tee "$log"
@@ -229,8 +253,17 @@ for rate in $RATES; do
     stop_sampler
     metrics "$after"
 
+    # LB 가 CPU 말고 연결 한도에서 막힌 칸을 센다. CPU 는 한가한데 연결이 막히면 표본만으로는 안 보인다.
+    lb_errors=0
+    if [ "$VIA_LB" = 1 ]; then
+        # **회차가 시작한 시각부터 읽는다.** 경과 시간으로 물으면 표집기 정지와 지표 긁기에 든 시간만큼 앞이
+        # 잘려, 초반에만 난 연결 오류를 못 본다.
+        lb_errors=$($COMPOSE logs --since "$round_started_at" lb 2>/dev/null \
+            | grep -cE 'worker_connections are not enough|accept4\(\) failed|Cannot assign requested address')
+    fi
+
     # 천장 원인은 회차마다 남긴다. 사다리가 멈춘 칸의 것이 그 천장의 원인이다.
-    GATEWAYS=$GATEWAYS GATEWAY_CPUS=$bottleneck_cpus test/load/evaluate-bottleneck.sh "$cpu" \
+    LB_CONN_ERRORS=$lb_errors LB_CPUS=$lb_env GATEWAYS=$GATEWAYS GATEWAY_CPUS=$bottleneck_cpus test/load/evaluate-bottleneck.sh "$cpu" \
         > "$OUT_DIR/bottleneck-$rate.txt" 2>&1
     sed 's/^/    /' "$OUT_DIR/bottleneck-$rate.txt"
 

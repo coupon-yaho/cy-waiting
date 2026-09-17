@@ -68,6 +68,30 @@ peak_warm_converged() {
     awk -v p="$p99" -v m="$2" 'BEGIN{ exit (p <= m) ? 0 : 1 }'
 }
 
+# **걸린 요청을 가린다.** 흘린 회차 없이 보낸 건수는 찼는데 실측 유입만 모자라면, 끝나지 않은 요청이 회차를
+# 늘린 것이다. k6 는 유입률을 전체 시간으로 나누므로 그대로 두면 생성기 한계로 읽힌다. 0 걸렸다 · 1 아니다 · 2 못 읽는다.
+#
+#   사용: peak_hung <요약> <요청 유입> <회차 초> <허용 오차>
+peak_hung() {
+    python3 - "$@" <<'PY'
+import json, sys
+try:
+    m = json.load(open(sys.argv[1])).get('metrics', {})
+    rate, sec, tol = float(sys.argv[2]), float(sys.argv[3]), float(sys.argv[4])
+except Exception:
+    sys.exit(2)
+def val(name, key):
+    node = m.get(name, {})
+    v = node.get('values', {}).get(key, node.get(key))
+    return v if isinstance(v, (int, float)) else None
+count, actual = val('iterations', 'count'), val('http_reqs', 'rate')
+if count is None or actual is None:
+    sys.exit(2)
+dropped = val('dropped_iterations', 'count') or 0
+sys.exit(0 if dropped == 0 and count >= rate * sec * tol and actual < rate * tol else 1)
+PY
+}
+
 # **깨진 임계를 가려 읽는다.** k6 는 어느 임계가 깨져도 99 로 끝난다. 통째로
 # 정상으로 읽으면 게이트웨이가 연결을 끊은 회차가 `ok` 로 표에 남고, 그 수가
 # "현재 최대치" 로 계획서에 간다.
@@ -131,14 +155,16 @@ peak_host_idle_pct() {
 }
 
 # **회차 동안 CPU 를 쌓는다.** 천장이 났을 때 그것이 하네스의 것인지 게이트웨이의 것인지 가를 재료다.
-# `<표본 파일>.stop` 이 생기거나 러너가 사라지면 그 바퀴를 마치고 멈춘다 — 한 바퀴가 2초쯤 든다. 정지 파일은
-# 부르는 쪽이 띄우기 전에 지운다.
+# `<표본 파일>.stop` 이 생기거나, 러너가 사라지거나, 기한(epoch 초)이 지나면 그 바퀴를 마치고 멈춘다 — 한 바퀴가
+# 2초쯤 든다. **기한은 회차 끝이다.** k6 가 걸린 요청으로 더 도는 동안의 한가한 표본이 붙었던 자리를 가린다.
+# 정지 파일은 부르는 쪽이 띄우기 전에 지운다.
 #
-#   사용: peak_sample_cpu <표본 파일> <프로젝트> <러너 PID> & sampler=$!
+#   사용: peak_sample_cpu <표본 파일> <프로젝트> <러너 PID> [기한] & sampler=$!
 peak_sample_cpu() {
-    local out=$1 project=$2 owner=$3
+    local out=$1 project=$2 owner=$3 deadline=${4:-}
     : > "$out"
-    while [ ! -e "$out.stop" ] && kill -0 "$owner" 2>/dev/null; do
+    while [ ! -e "$out.stop" ] && kill -0 "$owner" 2>/dev/null \
+            && { [ -z "$deadline" ] || [ "$(date +%s)" -lt "$deadline" ]; }; do
         docker stats --no-stream --format '{{.Name}}\t{{.CPUPerc}}' 2>/dev/null \
             | peak_cpu_lines "$project" >> "$out"
         printf 'idle\thost\t%s\n' "$(peak_host_idle_pct)" >> "$out"

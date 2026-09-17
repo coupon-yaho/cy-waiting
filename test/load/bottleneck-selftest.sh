@@ -62,6 +62,12 @@ GATEWAYS=2 GATEWAY_CPUS=1 run_case "한 대만 붙었으면 게이트웨이가 �
 GATEWAYS=2 GATEWAY_CPUS=2 run_case "기대한 대수보다 표본의 대가 적으면 판정 불가" 2 "판정 불가" \
     -- "$(samples missing.tsv 190.0 30.0 40.0)"
 
+# **가운데 값만 찍으면 뒤늦게 붙은 자리가 안 보인다.** 유입이 천장에 닿는 칸은 회차 뒤쪽에서만 붙는다.
+late=$(fixture late.tsv "$(for _ in 1 2 3; do printf 'cpu\tload-gateway-1\t100.0\ncpu\tload-redis-1\t20.0\nidle\thost\t60.0\n'; done
+    for _ in 1 2; do printf 'cpu\tload-gateway-1\t200.0\ncpu\tload-redis-1\t20.0\nidle\thost\t12.0\n'; done)")
+GATEWAY_CPUS=2 run_case "붙음은 가운데 값으로 가르되 최댓값을 같이 적는다" 0 "가운데 100.0% (최대 200.0%" -- "$late"
+GATEWAY_CPUS=2 run_case "호스트는 가장 낮은 유휴를 같이 적는다" 0 "유휴 가운데 60.0% (최저 12.0%" -- "$late"
+
 # **공유 자원이 먼저다.** 레디스가 붙었으면 게이트웨이를 늘려도 안 풀린다 — 둘 다 붙은 칸을 게이트웨이로 적으면
 # 증설 효율이 그 칸을 나눈다.
 GATEWAY_CPUS=2 run_case "게이트웨이와 레디스가 둘 다 붙었으면 레디스" 0 "원인: 레디스" \
@@ -87,6 +93,62 @@ GATEWAY_CPUS=2 run_case "끝난 뒤 표본이 붙음을 가리지 않는다" 0 "
 
 GATEWAY_CPUS=1.5 run_case "코어 한도를 소수 그대로 적는다" 0 "1.5 코어" \
     -- "$(samples frac.tsv 140.0 30.0 40.0)"
+
+# **LB 를 지나는 회차는 LB 도 본다.** 앞단이 코어에 붙은 칸을 게이트웨이 천장으로 적으면 증설 효율이 LB 를 나눈다.
+lb_samples() {
+    local name=$1 gateway=$2 lb=$3
+    fixture "$name" "$(for _ in 1 2 3 4 5; do
+        printf 'cpu\tload-gateway-1\t%s\ncpu\tload-redis-1\t30.0\ncpu\tload-lb-1\t%s\nidle\thost\t40.0\n' "$gateway" "$lb"
+    done)"
+}
+LB_CPUS=2 GATEWAY_CPUS=2 run_case "LB 가 한도에 붙었으면 LB" 0 "원인: LB" -- "$(lb_samples lb_sat.tsv 190.0 190.0)"
+LB_CPUS=2 GATEWAY_CPUS=2 run_case "LB 90% 바로 아래면 LB 가 아니다" 0 "원인: 게이트웨이" -- "$(lb_samples lb_below.tsv 190.0 179.0)"
+LB_CPUS=2 GATEWAY_CPUS=2 run_case "LB 를 지나는데 LB 표본이 없으면 판정 불가" 2 "판정 불가" \
+    -- "$(samples lb_missing.tsv 190.0 30.0 40.0)"
+LB_CPUS=abc GATEWAY_CPUS=2 run_case "LB 코어 한도가 양수가 아니면 판정 불가" 2 "판정 불가" -- "$(lb_samples lb_bad.tsv 190.0 50.0)"
+# LB 선은 LB 코어로 잡는다. 게이트웨이 코어로 잡으면 게이트웨이가 4 코어일 때 LB 가 붙어도 못 본다.
+LB_CPUS=2 GATEWAY_CPUS=4 run_case "LB 선은 게이트웨이 코어가 아니라 LB 코어로 잡는다" 0 "원인: LB" \
+    -- "$(lb_samples lb_gw4.tsv 300.0 190.0)"
+LB_CPUS=2 GATEWAY_CPUS=2 run_case "LB 90% 정확히는 LB" 0 "원인: LB" -- "$(lb_samples lb_edge.tsv 190.0 180.0)"
+LB_CPUS=0 GATEWAY_CPUS=2 run_case "LB 코어 한도 0 은 판정 불가" 2 "판정 불가" -- "$(lb_samples lb_zero.tsv 190.0 50.0)"
+LB_CPUS=2 GATEWAY_CPUS=2 run_case "LB 표본이 셋 미만이면 판정 불가" 2 "판정 불가" \
+    -- "$(fixture lb_short.tsv "$(for i in 1 2 3 4 5; do
+        printf 'cpu\tload-gateway-1\t190.0\ncpu\tload-redis-1\t30.0\nidle\thost\t40.0\n'
+        [ "$i" -le 2 ] && printf 'cpu\tload-lb-1\t50.0\n'
+    done)")"
+# **이름은 서비스 자리로만 가른다.** 프로젝트 이름에 lb 나 gateway 가 들어가면 뒷단이 LB 나 게이트웨이로 세어진다.
+LB_CPUS=2 GATEWAY_CPUS=2 run_case "프로젝트 이름의 lb 는 LB 표본이 아니다" 0 "원인: 게이트웨이" \
+    -- "$(fixture lb_name.tsv "$(for _ in 1 2 3 4 5; do
+        printf 'cpu\tscale-lb-x-gateway-1\t190.0\ncpu\tscale-lb-x-redis-1\t30.0\ncpu\tscale-lb-x-lb-1\t50.0\n'
+        printf 'cpu\tscale-lb-x-backend-1\t195.0\ncpu\tscale-lb-x-seeder-1\t195.0\nidle\thost\t40.0\n'
+    done)")"
+GATEWAY_CPUS=2 run_case "프로젝트 이름의 gateway 는 게이트웨이 표본이 아니다" 0 "원인: 게이트웨이" \
+    -- "$(fixture gw_name.tsv "$(for _ in 1 2 3 4 5; do
+        printf 'cpu\tgateway-test-gateway-1\t190.0\ncpu\tgateway-test-redis-1\t30.0\ncpu\tgateway-test-backend-1\t10.0\nidle\thost\t40.0\n'
+    done)")"
+
+# **LB 는 CPU 말고 연결 한도에서도 막힌다.** 러너가 회차 중 nginx 가 낸 연결 한도·accept 실패 줄 수를 넘긴다.
+LB_CONN_ERRORS=3 LB_CPUS=2 GATEWAY_CPUS=2 run_case "LB 연결 오류가 있으면 CPU 가 한가해도 LB" 0 "원인: LB" \
+    -- "$(lb_samples lb_conn.tsv 190.0 60.0)"
+LB_CONN_ERRORS=0 LB_CPUS=2 GATEWAY_CPUS=2 run_case "LB 연결 오류가 0 이면 LB 가 아니다" 0 "원인: 게이트웨이" \
+    -- "$(lb_samples lb_conn0.tsv 190.0 60.0)"
+LB_CONN_ERRORS=abc LB_CPUS=2 GATEWAY_CPUS=2 run_case "LB 연결 오류 수가 정수가 아니면 판정 불가" 2 "판정 불가" \
+    -- "$(lb_samples lb_conn_bad.tsv 190.0 60.0)"
+GATEWAY_CPUS=2 run_case "프로젝트 이름의 redis 는 레디스 표본이 아니다" 0 "원인: 게이트웨이" \
+    -- "$(fixture redis_name.tsv "$(for _ in 1 2 3 4 5; do
+        printf 'cpu\tredis-lab-gateway-1\t190.0\ncpu\tredis-lab-redis-1\t30.0\ncpu\tredis-lab-backend-1\t99.0\nidle\thost\t40.0\n'
+    done)")"
+
+# 호스트가 먼저다. 호스트가 말랐으면 LB 가 붙은 것도 k6 와 코어를 다툰 결과일 수 있다.
+host_lb=$(fixture host_lb.tsv "$(for _ in 1 2 3 4 5; do
+    printf 'cpu\tload-gateway-1\t190.0\ncpu\tload-redis-1\t30.0\ncpu\tload-lb-1\t195.0\nidle\thost\t5.0\n'
+done)")
+LB_CPUS=2 GATEWAY_CPUS=2 run_case "호스트가 마르면 LB 가 붙어도 호스트" 0 "원인: 호스트" -- "$host_lb"
+# LB 가 공유 자원인 레디스보다 앞이다 — 앞단이 막히면 레디스까지 부하가 안 간다.
+LB_CPUS=2 GATEWAY_CPUS=2 run_case "LB 와 레디스가 둘 다 붙었으면 LB" 0 "원인: LB" \
+    -- "$(fixture lb_redis.tsv "$(for _ in 1 2 3 4 5; do
+        printf 'cpu\tload-gateway-1\t100.0\ncpu\tload-redis-1\t95.0\ncpu\tload-lb-1\t190.0\nidle\thost\t40.0\n'
+    done)")"
 
 # **못 잰 것을 판정하지 않는다.** 표본이 모자라면 회차 중간의 한 순간을 천장 원인으로 적게 된다.
 GATEWAY_CPUS=2 run_case "표본이 셋 미만이면 판정 불가" 2 "판정 불가" \

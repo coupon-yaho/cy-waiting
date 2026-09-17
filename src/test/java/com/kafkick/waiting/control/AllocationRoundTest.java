@@ -2383,6 +2383,22 @@ class AllocationRoundTest {
         assertThat(적용).containsExactly("c1=4");
     }
 
+    /**
+     * <b>기다리는 사람이 있으면 크레딧이 0 이어도 적용을 부른다</b> (CY-942). 적용 스크립트가 사라진 입장 커서를
+     * 되살리는 자리라, 서킷이 열려 크레딧이 0 인 동안 안 부르면 그 내내 순번이 뛴 채로 보이고 청소가 들인 사람을
+     * 이탈로 걷는다. 한산한 쿠폰(대기자 0)은 여전히 안 건드린다 — 지킬 사람이 없다.
+     */
+    @Test
+    @DisplayName("크레딧이_0_이어도_기다리는_쿠폰은_적용을_부른다")
+    void 크레딧이_0_이어도_기다리는_쿠폰은_적용을_부른다() {
+        AllocationRound round = round(
+                List.of(new CouponDemand("c1", 10, 100), new CouponDemand("c2", 0, 100)), 0, 1);
+
+        round.run().block();
+
+        assertThat(적용).as("기다리는 쿠폰만, 들이지 않는 몫으로").containsExactly("c1=0");
+    }
+
     @Test
     @DisplayName("들인_인원을_남긴다")
     void 들인_인원을_남긴다() {

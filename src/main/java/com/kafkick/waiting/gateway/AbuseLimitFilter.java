@@ -17,6 +17,7 @@ import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
 import java.time.Clock;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ThreadLocalRandom;
@@ -265,7 +266,7 @@ public final class AbuseLimitFilter implements WebFilter {
         boolean prefix = address.length == V6_BYTES && !mappedV4(address);
         if (prefix) {
             key = address.clone();
-            java.util.Arrays.fill(key, V6_PREFIX_BYTES, V6_BYTES, (byte) 0);
+            Arrays.fill(key, V6_PREFIX_BYTES, V6_BYTES, (byte) 0);
         }
         try {
             String text = InetAddress.getByAddress(key).getHostAddress();

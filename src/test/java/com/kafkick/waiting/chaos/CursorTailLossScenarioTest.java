@@ -41,6 +41,9 @@ class CursorTailLossScenarioTest {
     /** 임기. 이 시나리오는 울타리를 재지 않으므로 한 번호로 고정한다. */
     private static final long 임기 = 1_770_000_000_123_456L;
 
+    /** 등록이 쓰는 지금 시각(초). <b>벽시계를 안 읽는다</b> — 읽으면 회차마다 다른 값이 들어간다. */
+    private static final String 지금 = "1770000000";
+
     /** 등록 스크립트 인자. 수명과 상한은 이 시나리오의 초점이 아니라 넉넉히 준다. */
     private static final String MAXSCORE_TTL = "3600";
     private static final String ALIVE_TTL = "250";
@@ -100,8 +103,7 @@ class CursorTailLossScenarioTest {
                         RedisKeys.alive(COUPON, SHARDS, SHARD),
                         RedisKeys.admitted(COUPON, SHARDS, SHARD),
                         RedisKeys.grace(COUPON, SHARDS, SHARD)),
-                List.of(member, MAXSCORE_TTL, ALIVE_TTL, 큐_상한,
-                        String.valueOf(System.currentTimeMillis() / 1000), 이탈_보관))
+                List.of(member, MAXSCORE_TTL, ALIVE_TTL, 큐_상한, 지금, 이탈_보관))
                 .blockLast(기다림);
     }
 

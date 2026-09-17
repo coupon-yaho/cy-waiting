@@ -13,7 +13,7 @@ services:
     ports:
       - "18070:8070"
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8070/lb/health"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8070/lb/health"]
       interval: 1s
       timeout: 2s
       retries: 20

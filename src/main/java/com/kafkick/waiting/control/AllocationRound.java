@@ -941,8 +941,7 @@ public final class AllocationRound {
     /**
      * 이탈자를 걷어 낸다. 멈춰야 할 구간은 스위퍼가 안다.
      *
-     * <p><b>이번 회차에 적용이 실패한 쿠폰은 뺀다</b> (CY-947). 그 쿠폰의 입장 커서는 되살려지지 않은 채로
-     * 남는데, 그 위에서 앞줄을 걷으면 입장 판정을 받고 폴링을 멈춘 사람이 이탈로 걷힌다. 다음 틱에 다시 온다.
+     * <p>적용이 실패한 쿠폰을 넘기는 이유는 CY-947 이다 — 못 되살린 커서 위에서 걷으면 들인 사람이 걷힌다.
      */
     private Mono<Void> sweepUp(List<CouponDemand> collected, Map<String, Long> granted,
             Set<String> applyFailed) {

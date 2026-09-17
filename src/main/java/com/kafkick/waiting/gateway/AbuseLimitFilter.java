@@ -254,9 +254,8 @@ public final class AbuseLimitFilter implements WebFilter {
     /**
      * 바이트에서 되만든 주소 문자열. 같은 주소는 반드시 같은 키가 된다.
      *
-     * <p><b>v6 는 /64 로 묶는다</b> (CY-940). 하나의 /64 가 주소를 1.8e19 개 주므로, 주소마다 키를 만들면
-     * 주소당 상한이 매 요청 새 예산으로 리셋되고 키 공간도 유계가 아니다. v4 와 v4-mapped 는 그대로 둔다 —
-     * 묶으면 한 주소가 아니라 대역 하나가 한 몫을 나눠 쓴다.
+     * <p><b>v6 는 /64 로 묶는다</b> (CY-940). 주소마다 키를 만들면 상한이 매 요청 새 예산으로 리셋된다.
+     * v4 와 v4-mapped 는 묶으면 대역 하나가 한 몫을 나눠 쓴다.
      */
     private String canonical(byte[] address) {
         if (address == null) {
@@ -277,12 +276,9 @@ public final class AbuseLimitFilter implements WebFilter {
     }
 
     /**
-     * 소켓 주소의 키. 앞단이 없는 배포도 전달 헤더 경로와 같은 함수를 쓴다 — 안 그러면 직결 v6 가 주소를 돌려
-     * 상한을 우회한다.
+     * 소켓 주소의 키. 전달 헤더 경로와 같은 함수를 쓴다 — 안 그러면 직결 v6 가 주소를 돌려 상한을 우회한다.
      *
-     * <p><b>못 읽으면 원문을 쓴다.</b> 소켓이 준 값은 사용자가 채운 것이 아니라 커널이 안 주소다. 스코프가
-     * 붙은 링크 로컬(`fe80::1%eth0`)처럼 리터럴로 안 읽히는 모양이 있는데, 그것을 거절로 바꾸면 되던 연결이
-     * 끊긴다. 존은 떼고 접는다.
+     * <p><b>못 읽으면 원문을 쓴다.</b> 커널이 준 값이라 거절로 바꾸면 되던 연결이 끊긴다.
      */
     private String foldedSocket(String socket) {
         if (socket == null) {

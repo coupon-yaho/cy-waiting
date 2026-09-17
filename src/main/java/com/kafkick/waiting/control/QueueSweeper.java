@@ -134,6 +134,10 @@ public final class QueueSweeper {
         fenceWindow.exited().ifPresent(r -> log.info(
                 "리더십을 잃어 청소의 울타리 구간을 닫는다 — {}초 동안 {}회차",
                 r.elapsedSeconds(), r.swallowed()));
+        // 적용 실패로 미룬 구간도 같이 닫는다. 안 닫으면 다음 해제 로그가 비리더 구간까지 길이에 담는다.
+        excludeWindow.exited().ifPresent(r -> log.info(
+                "리더십을 잃어 적용 실패로 미룬 구간을 닫는다 — {}초 동안 {}틱",
+                r.elapsedSeconds(), r.swallowed()));
     }
 
     /**
@@ -177,9 +181,8 @@ public final class QueueSweeper {
     /**
      * 이번 틱의 청소.
      *
-     * @param applyFailed 이번 회차에 적용이 실패한 쿠폰 (CY-947). <b>앞줄 제거에서만 뺀다</b> — 커서를 못
-     *     되살린 채 앞줄을 걷으면 들인 사람이 이탈로 걷힌다. 게이트에는 전체를 넘긴다: 맵에서 빼면 그 쿠폰의
-     *     재개 유예 기록까지 사라져, 다음 틱에 유예 없이 걷는다
+     * @param applyFailed 적용이 실패한 쿠폰 (CY-947). 게이트에는 전체를 넘긴다 — 맵에서 빼면 그 쿠폰의 재개
+     *     유예까지 사라져, 다음 틱에 유예 없이 걷는다
      */
     public Mono<SweepResult> run(Map<String, CouponState> coupons, boolean dataStale,
             Set<String> applyFailed) {

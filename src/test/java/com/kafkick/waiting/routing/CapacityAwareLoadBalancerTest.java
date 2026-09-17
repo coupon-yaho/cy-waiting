@@ -11,6 +11,7 @@ import com.kafkick.waiting.domain.routing.WeightedRoundRobin;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.Deque;
 import java.util.List;
 import java.util.Map;
@@ -195,6 +196,31 @@ class CapacityAwareLoadBalancerTest {
                 .choose((Request<?>) null).block();
 
         assertThat(여유).as("0 이 1 로 안 오른다").containsExactly(0L);
+    }
+
+    /**
+     * <b>도로 넣는 구간에서는 여유 비례를 지킨다</b> (CY-924). 그 구간의 후보는 도로 넣은 대뿐이라
+     * 램프로 눌러 봐야 유입이 안 준다 — 전부 1 로 눌리면 고르개가 절대 물린 건수를 균등화하고,
+     * 그건 여유가 큰 대와 작은 대를 같이 취급하는 것이다.
+     */
+    @Test
+    @DisplayName("도로_넣는_구간은_여유_비례를_지킨다")
+    void 도로_넣는_구간은_여유_비례를_지킨다() {
+        for (int i = 0; i < 3; i++) {
+            배제기.failed("be-1", 지금);
+            배제기.failed("be-2", 지금);
+        }
+
+        Map<String, Long> 본_여유 = new LinkedHashMap<>();
+        CapacityAwareLoadBalancer.of(목록(인스턴스("be-1", "100"), 인스턴스("be-2", "25")),
+                        candidates -> {
+                            candidates.forEach(c -> 본_여유.put(c.instanceId(), c.credits()));
+                            return candidates.stream().findFirst();
+                        }, 레지스트리, 배제기, () -> 지금, 상한)
+                .choose((Request<?>) null).block();
+
+        assertThat(본_여유).as("둘 다 후보이고 비례가 남는다")
+                .containsEntry("be-1", 100L).containsEntry("be-2", 25L);
     }
 
     /**

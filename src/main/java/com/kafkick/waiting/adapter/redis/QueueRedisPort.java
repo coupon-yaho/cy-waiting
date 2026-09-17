@@ -208,8 +208,11 @@ public final class QueueRedisPort implements QueuePort {
             return QueueEntry.notQueued();
         }
         // 조회는 재방문을 안 말한다 — 그것은 등록 결과에만 있는 사실이다.
+        // **총원도 같은 환산을 탄다** (CY-827). 앞 인원만 전체 등수로 바꾸면 둘의 기준이 갈린다.
+        long total = number(raw.get(3));
         return new QueueEntry(state, globalRank(number(raw.get(1))),
-                number(raw.get(2)), true, false, false);
+                number(raw.get(2)), true, false, false,
+                total < 0 ? QueueEntry.UNKNOWN_TOTAL : globalRank(total));
     }
 
     /**

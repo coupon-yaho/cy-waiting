@@ -135,8 +135,15 @@ public final class FakeQueuePort implements QueuePort {
             return Mono.just(new QueueEntry(QueueState.ADMITTED, 0,
                     queued.get(memberId), true, false, false));
         }
+        // **총원도 같이 낸다** (CY-827). 스크립트가 한 번에 세는 값이라, 픽스처가 안 내면 게이트웨이
+        // 시험이 그 필드를 한 번도 안 밟는다.
         return Mono.just(new QueueEntry(QueueState.WAITING, rank,
-                queued.get(memberId), true, false, false));
+                queued.get(memberId), true, false, false, totalOf(couponId)));
+    }
+
+    /** 기다리는 총원. 이 픽스처는 입장자를 큐에서 바로 빼므로 큐 크기가 곧 총원이다. */
+    private long totalOf(String couponId) {
+        return queues.getOrDefault(couponId, Map.of()).size();
     }
 
     private long rankOf(String couponId, String memberId) {

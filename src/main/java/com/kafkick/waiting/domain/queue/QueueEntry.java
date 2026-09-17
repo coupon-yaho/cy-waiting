@@ -13,7 +13,10 @@ import java.util.Objects;
  *                 자리를 비웠다는 것은 다시 설 때 한 번만 알려 줄 수 있다
  */
 public record QueueEntry(QueueState state, long rank, long score,
-        boolean alreadyQueued, boolean clockWentBack, boolean rejoined) {
+        boolean alreadyQueued, boolean clockWentBack, boolean rejoined, long total) {
+
+    /** 총원을 모르는 자리. 등록 결과와 유예로 되읽은 입장이 여기다. */
+    public static final long UNKNOWN_TOTAL = -1;
 
     /** 줄에 없다는 뜻. 0번째와 구분하려면 음수여야 한다. */
     public static final long NONE = -1;
@@ -40,6 +43,12 @@ public record QueueEntry(QueueState state, long rank, long score,
         rejoined = rejoined && state == QueueState.WAITING && !alreadyQueued;
     }
 
+    /** 총원을 안 싣는 자리. 등록 결과는 왕복을 늘리지 않으려고 세지 않는다. */
+    public QueueEntry(QueueState state, long rank, long score,
+            boolean alreadyQueued, boolean clockWentBack, boolean rejoined) {
+        this(state, rank, score, alreadyQueued, clockWentBack, rejoined, UNKNOWN_TOTAL);
+    }
+
     /** 줄에 없다. 아직 안 섰거나 이탈로 지워졌다. */
     public static QueueEntry notQueued() {
         return new QueueEntry(QueueState.NOT_QUEUED, NONE, NONE, false, false, false);
@@ -48,6 +57,17 @@ public record QueueEntry(QueueState state, long rank, long score,
     /** 줄이 꽉 차 못 섰다. */
     public static QueueEntry rejected() {
         return new QueueEntry(QueueState.REJECTED, NONE, NONE, false, false, false);
+    }
+
+    /**
+     * 내 뒤에 선 사람 수. <b>총원과 앞 인원을 같은 기준으로 센 값에서만 뽑는다</b> — 따로 읽으면
+     * "앞에 100명인데 총 80명" 이 나온다 (CY-827). 모르면 {@link #UNKNOWN_TOTAL}.
+     */
+    public long behind() {
+        if (total == UNKNOWN_TOTAL || state != QueueState.WAITING) {
+            return UNKNOWN_TOTAL;
+        }
+        return Math.max(0, total - rank - 1);
     }
 
     /** 줄에 자리가 있는가. 거절은 상한에 걸린 것뿐이다. */

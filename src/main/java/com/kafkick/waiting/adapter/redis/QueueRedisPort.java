@@ -198,7 +198,7 @@ public final class QueueRedisPort implements QueuePort {
         if (score < 0) {
             return QueueEntry.rejected();
         }
-        return new QueueEntry(QueueState.WAITING, globalRank(number(raw.get(3))), score,
+        return QueueEntry.withoutTotal(QueueState.WAITING, globalRank(number(raw.get(3))), score,
                 number(raw.get(2)) == 1, number(raw.get(1)) == 1, number(raw.get(4)) == 1);
     }
 
@@ -228,6 +228,9 @@ public final class QueueRedisPort implements QueuePort {
     /**
      * 총원의 전체 환산. <b>나는 한 명이지 샤드 수만큼이 아니다</b> — 총원을 통째로 곱하면
      * 자기 자신도 같이 불어나, 줄 맨 뒤 사람이 뒤에 {@code 샤드 수 - 1} 명이 있다고 본다.
+     *
+     * <p>앞 인원과 같은 추정이다. 정확히 세려면 샤드를 다 읽어야 하는데, 그것은 조회 한 번이 샤드
+     * 수만큼 왕복한다는 뜻이라 불변식 1 과 바꿀 수 없다.
      */
     private long globalTotal(long localTotal) {
         return globalRank(localTotal - 1) + 1;

@@ -6,6 +6,8 @@ import java.util.Objects;
  * 줄에서의 자리. 순번은 벽시계라 안 변하고, 앞의 인원은 앞사람이 빠지면 줄어든다.
  *
  * @param rank 내 앞의 인원. 줄에 없으면 {@code -1}
+ * @param total <b>기다리는 총원의 추정값.</b> 샤드가 여럿이면 제 샤드에서 센 수를 환산한 것이라
+ *              샤드별 인원이 고르지 않으면 실제와 다르다 — 앞 인원과 같은 성격이다
  * @param score 이 사람의 순번(마이크로초). 줄에 없으면 {@code -1}
  * @param alreadyQueued 이미 서 있던 사람인가. 새로고침 연타를 가른다
  * @param clockWentBack 바닥값이 적용됐는가. 참이면 시계가 뒤로 갔다는 뜻이다
@@ -50,19 +52,20 @@ public record QueueEntry(QueueState state, long rank, long score,
     }
 
     /** 총원을 안 싣는 자리. 등록 결과는 왕복을 늘리지 않으려고 세지 않는다. */
-    public QueueEntry(QueueState state, long rank, long score,
+    public static QueueEntry withoutTotal(QueueState state, long rank, long score,
             boolean alreadyQueued, boolean clockWentBack, boolean rejoined) {
-        this(state, rank, score, alreadyQueued, clockWentBack, rejoined, UNKNOWN_TOTAL);
+        return new QueueEntry(state, rank, score,
+                alreadyQueued, clockWentBack, rejoined, UNKNOWN_TOTAL);
     }
 
     /** 줄에 없다. 아직 안 섰거나 이탈로 지워졌다. */
     public static QueueEntry notQueued() {
-        return new QueueEntry(QueueState.NOT_QUEUED, NONE, NONE, false, false, false);
+        return withoutTotal(QueueState.NOT_QUEUED, NONE, NONE, false, false, false);
     }
 
     /** 줄이 꽉 차 못 섰다. */
     public static QueueEntry rejected() {
-        return new QueueEntry(QueueState.REJECTED, NONE, NONE, false, false, false);
+        return withoutTotal(QueueState.REJECTED, NONE, NONE, false, false, false);
     }
 
     /**

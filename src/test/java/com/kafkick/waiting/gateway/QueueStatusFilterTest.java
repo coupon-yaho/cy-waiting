@@ -595,6 +595,25 @@ class QueueStatusFilterTest {
         assertThat(data.get("behind").asLong()).as("내 뒤").isEqualTo(1);
     }
 
+    /**
+     * <b>모르면 아예 안 싣는다</b> (CY-827). 0 으로 채우면 줄이 빈 것과 못 센 것이 같은 값이 되고,
+     * 화면은 그것을 "다 빠졌다" 로 읽는다.
+     */
+    @Test
+    @DisplayName("총원을_모르면_두_필드를_뺀다")
+    void 총원을_모르면_두_필드를_뺀다() {
+        줄.총원을_모른다();
+        줄.enqueue(COUPON, "앞사람", NO_LIMIT, 지금).block();
+        줄.enqueue(COUPON, MEMBER, NO_LIMIT, 지금).block();
+
+        MockServerWebExchange exchange = 토큰으로_조회한다(tokens.issue(COUPON, MEMBER, 지금));
+
+        JsonNode data = 본문(exchange).get("data");
+        assertThat(data.get("position").asLong()).as("앞 인원은 그대로 낸다").isEqualTo(1);
+        assertThat(data.get("totalWaiting")).as("모르면 뺀다").isNull();
+        assertThat(data.get("behind")).as("모르면 뺀다").isNull();
+    }
+
     @Test
     @DisplayName("기다리는_중이면_순번을_준다")
     void 기다리는_중이면_순번을_준다() {

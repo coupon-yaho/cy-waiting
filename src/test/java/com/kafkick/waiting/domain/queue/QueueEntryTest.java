@@ -120,12 +120,37 @@ class QueueEntryTest {
         assertThat(총원을_모르는_사람.behind()).as("모르면 모른다고 낸다")
                 .isEqualTo(QueueEntry.UNKNOWN_TOTAL);
 
-        QueueEntry 입장한_사람 = new QueueEntry(QueueState.ADMITTED, 0, 100, true, false, false, 3);
+        QueueEntry 입장한_사람 =
+                new QueueEntry(QueueState.ADMITTED, 0, 100, true, false, false);
         assertThat(입장한_사람.behind()).as("줄을 떠난 사람의 뒤는 뜻이 없다")
                 .isEqualTo(QueueEntry.UNKNOWN_TOTAL);
+    }
 
-        // **음수를 안 낸다.** 기준이 어긋난 값이 들어와도 화면에 -1 명이 나가면 안 된다.
-        QueueEntry 어긋난_값 = new QueueEntry(QueueState.WAITING, 5, 100, true, false, false, 2);
-        assertThat(어긋난_값.behind()).as("어긋나면 0").isZero();
+    /**
+     * <b>어긋난 값은 만들어지지 않는다.</b> 총원은 나를 포함해 세므로 앞 인원보다 크다 — 조용히 0 으로
+     * 고쳐 주면 두 값을 다른 기준으로 읽은 결함이 화면까지 가서야 드러난다.
+     */
+    @Test
+    @DisplayName("총원이_앞_인원보다_작으면_못_만든다")
+    void 총원이_앞_인원보다_작으면_못_만든다() {
+        assertThatThrownBy(() ->
+                new QueueEntry(QueueState.WAITING, 5, 100, true, false, false, 2))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("total=2");
+
+        assertThatThrownBy(() ->
+                new QueueEntry(QueueState.ADMITTED, 0, 100, true, false, false, 3))
+                .as("줄을 떠났으면 총원을 안 든다")
+                .isInstanceOf(IllegalArgumentException.class);
+
+        assertThatThrownBy(() ->
+                new QueueEntry(QueueState.NOT_QUEUED, QueueEntry.NONE, QueueEntry.NONE, false, false, false, 3))
+                .as("줄에 없으면 총원도 없다")
+                .isInstanceOf(IllegalArgumentException.class);
+
+        assertThatThrownBy(() ->
+                new QueueEntry(QueueState.REJECTED, QueueEntry.NONE, QueueEntry.NONE, false, false, false, 0))
+                .as("못 선 사람도 총원을 안 든다")
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }

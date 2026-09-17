@@ -141,10 +141,21 @@ public final class FakeQueuePort implements QueuePort {
                 queued.get(memberId), true, false, false, totalOf(couponId)));
     }
 
-    /** 기다리는 총원. 이 픽스처는 입장자를 큐에서 바로 빼므로 큐 크기가 곧 총원이다. */
-    private long totalOf(String couponId) {
-        return queues.getOrDefault(couponId, Map.of()).size();
+    /** 총원을 모르는 판. 실물은 유예로 되읽은 자리에서 이 상태가 된다. */
+    public void 총원을_모른다() {
+        총원을_센다 = false;
     }
+
+    /**
+     * 기다리는 총원. <b>이 픽스처는 입장자를 큐에서 안 뺀다</b> — 실물은 입장 커서 위에서 세므로 둘의
+     * 기준이 다르다. 앞 인원도 같은 집합에서 세니 뒷사람 수는 맞지만, 커서 의미론은 여기서 안 밟힌다.
+     */
+    private long totalOf(String couponId) {
+        return 총원을_센다 ? queues.getOrDefault(couponId, Map.of()).size()
+                : QueueEntry.UNKNOWN_TOTAL;
+    }
+
+    private boolean 총원을_센다 = true;
 
     private long rankOf(String couponId, String memberId) {
         return queues.getOrDefault(couponId, Map.of()).keySet().stream()

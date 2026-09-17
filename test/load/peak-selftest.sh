@@ -177,6 +177,24 @@ lib_case "우리 컨테이너만 · 백분율 기호를 뗀다" \
     "$(printf '%s\n' "$stats" | peak_cpu_lines load)"
 lib_case "빈 입력은 빈 출력" "" "$(printf '' | peak_cpu_lines load)"
 
+# 대마다 긁은 판정 계수를 품질별로 합친다 (10.7.3). 이어 붙이면 판정기가 같은 시계열이 둘이라고 멈추고,
+# 대마다 비율을 내 평균하면 적게 받은 대의 비율이 많이 받은 대만큼 무겁게 섞인다.
+gw1=$work/gw1.prom
+gw2=$work/gw2.prom
+printf '%s\n' '# HELP waiting_judgement_total x' \
+    'waiting_judgement_total{application="waiting",quality="fresh"} 900.0' \
+    'waiting_judgement_total{application="waiting",quality="degraded"} 10.0' \
+    'other_metric 5.0' > "$gw1"
+printf '%s\n' 'waiting_judgement_total{application="waiting",quality="fresh"} 100.0' > "$gw2"
+merged=$(peak_merge_judgement "$gw1" "$gw2")
+lib_case "품질별로 대들을 합친다 · 신선" \
+    'waiting_judgement_total{application="waiting",quality="fresh"} 1000.0' \
+    "$(printf '%s\n' "$merged" | grep 'quality="fresh"')"
+lib_case "한 대에만 있는 품질도 싣는다 · 열화" \
+    'waiting_judgement_total{application="waiting",quality="degraded"} 10.0' \
+    "$(printf '%s\n' "$merged" | grep 'quality="degraded"')"
+lib_case "품질마다 한 줄뿐이다" 2 "$(printf '%s\n' "$merged" | grep -c '^waiting_judgement_total')"
+
 # 종료 코드 해석. 99 를 통째로 정상으로 읽으면 연결을 끊은 회차가 ok 로 남는다.
 thr() { printf '{"metrics":{%s}}' "$1" > "$work/$2"; printf '%s' "$work/$2"; }
 only_drop=$(thr '"dropped_iterations":{"thresholds":{"count==0":true}}' drop.json)

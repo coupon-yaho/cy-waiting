@@ -902,6 +902,11 @@ public final class AllocationRedisPort implements SnapshotSource {
      * @param fence 이 회차의 임기. 옛 임기는 임계를 안 올린다. 0 이면 리더가 아니다
      */
     public Mono<Long> apply(Grant grant, long fence) {
+        // **되살릴 기억이 없는 크레딧 0 적용은 안 보낸다** (CY-942). 들일 몫도 되살릴 임계도 없어 스크립트가 할 일이 없고,
+        // 서킷이 열린 동안 대기 쿠폰마다 왕복이 붙어 느린 레디스에서 회차가 틱을 넘긴다.
+        if (grant.credit() == 0 && !lastAdmitted.containsKey(grant.couponId())) {
+            return Mono.just(0L);
+        }
         return redis.execute(APPLY,
                         List.of(RedisKeys.queue(grant.couponId(), shards, 0),
                                 RedisKeys.admitted(grant.couponId(), shards, 0),

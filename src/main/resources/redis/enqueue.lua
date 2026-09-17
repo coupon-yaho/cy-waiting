@@ -17,7 +17,7 @@
 --
 -- 반환  {score, floorApplied, alreadyQueued, rank, rejoined}
 --   score          이 사람의 순번. 거부되면 '-1'
---   floorApplied   바닥값이 적용됐는가. 1 이면 시계가 뒤로 갔다는 뜻이다
+--   floorApplied   바닥값이나 입장 커서가 점수를 밀어 올렸는가. 1 이면 시계가 뒤로 갔다는 뜻이다
 --   alreadyQueued  이미 줄에 있었는가. 1 이면 순번을 그대로 돌려준 것이다
 --   rank           내 앞의 인원. 거부되면 -1
 --   rejoined       자리를 비웠다 돌아왔는가
@@ -100,6 +100,14 @@ local floor = tonumber(redis.call('GET', KEYS[2]) or 0)
 local applied = 0
 if floor >= score then
     score = floor + 1
+    applied = 1
+end
+-- **입장 커서 위에 세운다** (CY-942). 시계가 뒤처진 복제본이 승격되면 새 점수가 커서 아래로 나오고, 그 사람은
+-- 첫 폴링에 바로 입장이 된다 — 배분이 크레딧을 안 쓴 사람이 줄 선 사람을 앞지른다. 바닥값만으로는 못 막는다:
+-- 바닥값은 복제된 점수 위만 보장하고, 배분이 되살린 커서는 그보다 앞설 수 있다. 정상 구간에서 커서는 이미
+-- 선 사람의 점수라 시계보다 뒤에 있으므로, 이 갈래에 들어오면 시계가 뒤로 간 것이다.
+if admitted >= 0 and admitted >= score then
+    score = math.floor(admitted) + 1
     applied = 1
 end
 

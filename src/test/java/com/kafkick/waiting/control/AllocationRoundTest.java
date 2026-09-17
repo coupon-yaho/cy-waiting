@@ -58,6 +58,14 @@ import reactor.test.scheduler.VirtualTimeScheduler;
 class AllocationRoundTest {
 
     private final List<String> 적용 = new CopyOnWriteArrayList<>();
+
+    /**
+     * 몫이 실제로 나간 적용만. <b>기다리는 쿠폰은 몫이 0 이어도 적용을 부른다</b> (CY-942) — 사라진 입장 커서를 되살리는
+     * 호출이라 아무도 안 들인다. "몫이 나갔나" 를 묻는 시험이 그 호출까지 세면 뜻이 흐려진다.
+     */
+    private List<String> 나간_몫() {
+        return 적용.stream().filter(entry -> !entry.endsWith("=0")).toList();
+    }
     private ListAppender<ILoggingEvent> 로그;
     private Level 원래_수준;
 
@@ -1267,7 +1275,9 @@ class AllocationRoundTest {
 
         round.run().block();
 
-        assertThat(적용).as("첫 회차부터 아무 몫도 안 나간다").isEmpty();
+        assertThat(나간_몫()).as("첫 회차부터 아무 몫도 안 나간다").isEmpty();
+        // 열린 동안에도 되살림 호출은 나간다 (CY-942). 서킷 경로가 갈라지면 이 줄이 조용해진다.
+        assertThat(적용).as("되살림 전용 호출").containsExactly("c1=0");
     }
 
     /** 하한이 걸려 있어도 안 나간다. 하한은 평활 뒤라 감싼 자리를 비켜 간다. */
@@ -1279,7 +1289,7 @@ class AllocationRoundTest {
 
         round.run().block();
 
-        assertThat(적용).isEmpty();
+        assertThat(나간_몫()).isEmpty();
     }
 
     /**
@@ -2142,7 +2152,7 @@ class AllocationRoundTest {
         round(List.of(new CouponDemand("lost", 100_000, 0, QueueMode.ADAPTIVE),
                 new CouponDemand("live", 100, 100, QueueMode.ADAPTIVE)), 100, 1)
                 .run().block();
-        assertThat(적용).as("접으면 산 쿠폰이 다 가져간다").containsExactly("live=100");
+        assertThat(나간_몫()).as("접으면 산 쿠폰이 다 가져간다").containsExactly("live=100");
         적용.clear();
 
         AllocationRound round = round(List.of(
@@ -2381,6 +2391,22 @@ class AllocationRoundTest {
         round.run().block();
 
         assertThat(적용).containsExactly("c1=4");
+    }
+
+    /**
+     * <b>기다리는 사람이 있으면 크레딧이 0 이어도 적용을 부른다</b> (CY-942). 적용 스크립트가 사라진 입장 커서를
+     * 되살리는 자리라, 서킷이 열려 크레딧이 0 인 동안 안 부르면 그 내내 순번이 뛴 채로 보이고 청소가 들인 사람을
+     * 이탈로 걷는다. 한산한 쿠폰(대기자 0)은 여전히 안 건드린다 — 지킬 사람이 없다.
+     */
+    @Test
+    @DisplayName("크레딧이_0_이어도_기다리는_쿠폰은_적용을_부른다")
+    void 크레딧이_0_이어도_기다리는_쿠폰은_적용을_부른다() {
+        AllocationRound round = round(
+                List.of(new CouponDemand("c1", 10, 100), new CouponDemand("c2", 0, 100)), 0, 1);
+
+        round.run().block();
+
+        assertThat(적용).as("기다리는 쿠폰만, 들이지 않는 몫으로").containsExactly("c1=0");
     }
 
     @Test

@@ -10,7 +10,7 @@ import java.util.Objects;
  *              샤드별 인원이 고르지 않으면 실제와 다르다 — 앞 인원과 같은 성격이다
  * @param score 이 사람의 순번(마이크로초). 줄에 없으면 {@code -1}
  * @param alreadyQueued 이미 서 있던 사람인가. 새로고침 연타를 가른다
- * @param clockWentBack 바닥값이 적용됐는가. 참이면 시계가 뒤로 갔다는 뜻이다
+ * @param clockWentBack 바닥값이나 입장 커서가 점수를 밀어 올렸는가. 참이면 시계가 뒤로 갔다는 뜻이다
  * @param rejoined <b>등록 결과에만 있는 사실이다.</b> 조회는 항상 거짓을 싣는다 —
  *                 자리를 비웠다는 것은 다시 설 때 한 번만 알려 줄 수 있다
  */

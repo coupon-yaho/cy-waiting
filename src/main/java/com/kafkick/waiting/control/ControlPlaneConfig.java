@@ -284,12 +284,8 @@ public class ControlPlaneConfig {
     }
 
     /**
-     * 승계 직후 활성 쿠폰의 문을 잠근다. <b>못 잠가도 회차는 돈다</b> — 안 잠긴
-     * 쿠폰은 적용이 그 자리에서 다시 막으므로, 여기서 막으면 회복만 늦어진다.
-     *
-     * <p><b>매진 큐 삭제의 문도 같이 잠근다</b> (CY-894). 그쪽 표는 후보가 될 때
-     * 서므로 승계와 첫 틱 사이가 비고, 그 창의 쓰기는 되돌릴 수 없다. 한 스크립트로
-     * 둘을 잠근다 — 표마다 왕복하면 배분이 안 도는 시간이 곱해진다.
+     * 승계 직후 활성 쿠폰과 매진 큐 삭제의 문을 한 스크립트로 잠근다 (CY-894). <b>못 잠가도 회차는 돈다</b> — 안 잠긴
+     * 쿠폰은 크레딧이 붙은 적용이 다시 막는다. 크레딧 0 인 동안은 새 임기를 안 찍어 옛 리더의 늦은 몫이 지나갈 수 있다.
      */
     Runnable sealFences(AllocationRedisPort port, Leadership leadership, SealGate gate,
             Duration deadline, Scheduler scheduler) {

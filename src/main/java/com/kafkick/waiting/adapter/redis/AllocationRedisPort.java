@@ -553,6 +553,15 @@ public final class AllocationRedisPort implements SnapshotSource {
                 .map(now -> Map.entry(couponId, now < written));
     }
 
+    /**
+     * 울타리를 넘은 적용이 본 임계의 최댓값. <b>스크립트가 되살리는 근거다</b> (CY-942) — 되감기를 세기만 하면 세는
+     * 동안 순번이 뛰고 크레딧이 샌다. 모르면 {@code -1} 이라 스크립트가 안 건드린다.
+     */
+    private String written(String couponId) {
+        Double threshold = lastAdmitted.get(couponId);
+        return threshold == null ? "-1" : String.format(Locale.ROOT, "%.0f", threshold);
+    }
+
     /** 활성에서 빠진 쿠폰의 기준을 버린다. 안 버리면 이 맵만 역사상 쿠폰 수로 자란다. */
     public void forgetInactive(Collection<String> active) {
         lastAdmitted.keySet().retainAll(active);
@@ -893,12 +902,17 @@ public final class AllocationRedisPort implements SnapshotSource {
      * @param fence 이 회차의 임기. 옛 임기는 임계를 안 올린다. 0 이면 리더가 아니다
      */
     public Mono<Long> apply(Grant grant, long fence) {
+        // **되살릴 기억이 없는 크레딧 0 적용은 안 보낸다** (CY-942). 들일 몫도 되살릴 임계도 없어 스크립트가 할 일이 없고,
+        // 서킷이 열린 동안 대기 쿠폰마다 왕복이 붙어 느린 레디스에서 회차가 틱을 넘긴다.
+        if (grant.credit() == 0 && !lastAdmitted.containsKey(grant.couponId())) {
+            return Mono.just(0L);
+        }
         return redis.execute(APPLY,
                         List.of(RedisKeys.queue(grant.couponId(), shards, 0),
                                 RedisKeys.admitted(grant.couponId(), shards, 0),
                                 RedisKeys.applyFence(grant.couponId(), shards, 0)),
                         List.of(Long.toString(grant.credit()), Long.toString(fence),
-                                Long.toString(fenceTtl.toMillis())))
+                                Long.toString(fenceTtl.toMillis()), written(grant.couponId())))
                 .next()
                 .flatMap(result -> {
                     List<?> counts = (List<?>) result;
@@ -911,7 +925,10 @@ public final class AllocationRedisPort implements SnapshotSource {
                         // 실패 뒤마다 거짓 되감기로 잡힌다.
                         parsed(String.valueOf(counts.get(0)))
                                 .stream().filter(threshold -> threshold >= 0)
-                                .forEach(threshold -> lastAdmitted.put(grant.couponId(), threshold));
+                                // **최댓값으로 합친다.** 틱에 잘린 회차의 꼬리가 다음 회차보다 늦게 착륙하면
+                                // 기억이 뒤로 가고, 되살림이 그 사이로 감긴 커서를 못 본다.
+                                .forEach(threshold -> lastAdmitted.merge(grant.couponId(), threshold,
+                                        Math::max));
                         return Mono.just(Long.parseLong(String.valueOf(counts.get(1))));
                     }
                     applyFenced.incrementAndGet();

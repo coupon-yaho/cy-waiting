@@ -510,6 +510,148 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     }
 
     /**
+     * <b>우리가 쓴 임계가 사라지면 다음 적용이 되살린다</b> (CY-942). 순번과 총원이 임계 위에서 세므로, 안 되살리면
+     * 뒤에 선 사람의 순번이 입장자 수만큼 뛴다. 그리고 줄 머리부터 다시 세어 이미 들인 사람에게 크레딧을 또 쓴다.
+     */
+    @Test
+    @DisplayName("사라진_임계를_다음_적용이_되살린다")
+    void 사라진_임계를_다음_적용이_되살린다() {
+        줄_세운다("c1", 10, 20, 30, 40);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        redis.delete(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT);
+
+        long 들인_수 = port.apply(new Grant("c1", 1), 임기).block(WAIT);
+
+        assertThat(redis.opsForValue().get(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT))
+                .as("쓴 임계 위에서 한 명 더").isEqualTo("30");
+        // 되살림이 없어도 한 명은 들어간다(10). 크레딧 재소비를 무는 것은 위의 임계 단언이다.
+        assertThat(들인_수).as("몫만큼 들인다").isEqualTo(1);
+    }
+
+    /**
+     * <b>되찾은 옛 리더는 앞선 임계를 안 낮춘다.</b> 리더를 잃은 사이 다른 리더가 임계를 올렸으면, 옛 리더의 기억은
+     * 낡았다. 되살림이 "기억이 레디스보다 앞설 때만" 이 아니면 커서를 끌어내려 들인 사람을 대기로 돌린다.
+     */
+    @Test
+    @DisplayName("되찾은_옛_리더는_앞선_임계를_안_낮춘다")
+    void 되찾은_옛_리더는_앞선_임계를_안_낮춘다() {
+        줄_세운다("c1", 10, 20, 30, 40);
+        AllocationRedisPort 옛_리더 = port;
+        옛_리더.apply(new Grant("c1", 2), 임기).block(WAIT);
+        AllocationRedisPort 새_리더 = AllocationRedisPort.of(redis, SHARDS);
+        새_리더.apply(new Grant("c1", 1), 임기 + 1).block(WAIT);
+
+        long 들인_수 = 옛_리더.apply(new Grant("c1", 0), 임기 + 2).block(WAIT);
+
+        assertThat(redis.opsForValue().get(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT))
+                .as("낡은 기억 20 으로 안 내린다").isEqualTo("30");
+        assertThat(들인_수).isZero();
+    }
+
+    /**
+     * <b>되살릴 기억이 없는 크레딧 0 적용은 레디스를 안 친다</b> (CY-942). 서킷이 열리면 대기 쿠폰마다 부르는데, 한 번도
+     * 안 들인 쿠폰은 되살릴 것이 없다 — 왕복만 늘어 느린 레디스에서 회차가 틱을 넘긴다.
+     */
+    @Test
+    @DisplayName("되살릴_기억이_없는_크레딧_0_적용은_레디스를_안_친다")
+    void 되살릴_기억이_없는_크레딧_0_적용은_레디스를_안_친다() {
+        줄_세운다("c1", 10, 20);
+        redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "20").block(WAIT);
+
+        long 들인_수 = port.apply(new Grant("c1", 0), 임기).block(WAIT);
+        // 레디스를 쳤다면 스크립트가 임계 20 을 돌려주고 포트가 그것을 기억한다. 그 기억은 되감기 기준이 된다.
+        redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "10").block(WAIT);
+
+        assertThat(들인_수).isZero();
+        assertThat(port.rewindCheck(List.of("c1")).block(WAIT))
+                .as("왕복이 없었으니 기억도 기준도 없다").isEqualTo(RewindCheck.NONE);
+        assertThat(redis.hasKey(RedisKeys.applyFence("c1", SHARDS, 0)).block(WAIT))
+                .as("울타리 표도 안 만든다").isFalse();
+    }
+
+    /**
+     * <b>할 일 없는 크레딧 0 적용은 울타리 임기를 안 덮는다</b> (CY-942). 승계 봉인은 울타리 표의 남은 수명을 마지막 적용의
+     * 나이로 읽는다. 아무도 안 들이는 호출이 매 틱 표를 새로 걸면 새 리더의 첫 적용이 한 틱 밀린다.
+     */
+    @Test
+    @DisplayName("할_일_없는_크레딧_0_적용은_울타리_임기를_안_덮는다")
+    void 할_일_없는_크레딧_0_적용은_울타리_임기를_안_덮는다() {
+        줄_세운다("c1", 10, 20, 30);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+
+        port.apply(new Grant("c1", 0), 임기 + 1).block(WAIT);
+
+        assertThat(redis.opsForValue().get(RedisKeys.applyFence("c1", SHARDS, 0)).block(WAIT))
+                .as("아무것도 안 썼으니 앞 임기 그대로").isEqualTo(Long.toString(임기));
+    }
+
+    /**
+     * <b>되살린 회차는 크레딧이 0 이어도 울타리를 건다.</b> 되살림도 쓰기다. 안 걸면 표에 옛 임기가 남거나 수명이 다해 사라지고,
+     * 승계 봉인이 마지막 쓰기의 나이를 실제보다 늙게 읽어 옛 임기 유령이 그 뒤에 임계를 올릴 틈이 생긴다.
+     */
+    @Test
+    @DisplayName("되살린_회차는_울타리를_건다")
+    void 되살린_회차는_울타리를_건다() {
+        줄_세운다("c1", 10, 20, 30);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        redis.delete(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT);
+
+        port.apply(new Grant("c1", 0), 임기 + 1).block(WAIT);
+
+        assertThat(redis.opsForValue().get(RedisKeys.applyFence("c1", SHARDS, 0)).block(WAIT))
+                .as("되살린 임기로").isEqualTo(Long.toString(임기 + 1));
+        assertThat(redis.getExpire(RedisKeys.applyFence("c1", SHARDS, 0)).block(WAIT))
+                .as("수명도 준다").isPositive();
+    }
+
+    /** 사라진 것만이 아니다. 복제본 승격은 흔히 옛 값을 남긴다. */
+    @Test
+    @DisplayName("옛_값으로_돌아간_임계도_되살린다")
+    void 옛_값으로_돌아간_임계도_되살린다() {
+        줄_세운다("c1", 10, 20, 30, 40);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "10").block(WAIT);
+
+        port.apply(new Grant("c1", 1), 임기).block(WAIT);
+
+        assertThat(redis.opsForValue().get(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT))
+                .isEqualTo("30");
+    }
+
+    /**
+     * <b>크레딧이 없어도 되살린다.</b> 되살림은 들이는 일이 아니라 이미 들인 기록을 돌려놓는 일이다. 크레딧이 0 인
+     * 회차가 이어지는 동안 안 되살리면, 그 내내 순번이 뛴 채로 보이고 청소가 들인 사람을 이탈로 걷는다.
+     */
+    @Test
+    @DisplayName("크레딧이_없어도_사라진_임계는_되살린다")
+    void 크레딧이_없어도_사라진_임계는_되살린다() {
+        줄_세운다("c1", 10, 20, 30);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        redis.delete(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT);
+
+        long 들인_수 = port.apply(new Grant("c1", 0), 임기).block(WAIT);
+
+        assertThat(redis.opsForValue().get(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT))
+                .isEqualTo("20");
+        assertThat(들인_수).as("들인 사람은 없다").isZero();
+    }
+
+    /** 옛 임기는 되살리지도 못한다. 울타리를 넘는 쓰기는 되살림이라는 이름으로도 안 된다. */
+    @Test
+    @DisplayName("옛_임기는_임계를_되살리지_못한다")
+    void 옛_임기는_임계를_되살리지_못한다() {
+        줄_세운다("c1", 10, 20, 30);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        redis.delete(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT);
+
+        assertThatThrownBy(() -> port.apply(new Grant("c1", 0), 임기 - 1).block(WAIT))
+                .isInstanceOf(AllocationRedisPort.FencedOutException.class);
+
+        assertThat(redis.opsForValue().get(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT))
+                .as("안 썼다").isNull();
+    }
+
+    /**
      * <b>우리가 쓴 임계가 사라지면 되감기다</b> (CY-856). 줄과 임계는 같은 슬롯이라 함께 되감겨, 임계 이하 인원으로는
      * 안 보인다. 쓴 값을 기억해 견주는 것이 유일한 신호다.
      */

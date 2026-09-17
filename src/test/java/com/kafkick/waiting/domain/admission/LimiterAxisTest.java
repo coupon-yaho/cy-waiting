@@ -26,6 +26,7 @@ class LimiterAxisTest {
             limiter.tryAcquire(Axis.PRIMARY, "m" + i, 5, 지금);
         }
 
+        assertThat(limiter.saturated(Axis.PRIMARY, 지금)).as("전제 — 한 축이 찼다").isTrue();
         assertThat(limiter.tryAcquire(Axis.SECONDARY, "10.0.0.1", 200, 지금))
                 .as("다른 축의 새 키").isTrue();
     }
@@ -66,8 +67,8 @@ class LimiterAxisTest {
         SecondWindowLimiter limiter = SecondWindowLimiter.withMaxKeys(1);
         limiter.tryAcquire(Axis.SECONDARY, "m1", 5, 지금);
 
-        assertThat(limiter.saturated(Axis.SECONDARY)).as("채운 축").isTrue();
-        assertThat(limiter.saturated(Axis.PRIMARY)).as("안 채운 축").isFalse();
+        assertThat(limiter.saturated(Axis.SECONDARY, 지금)).as("채운 축").isTrue();
+        assertThat(limiter.saturated(Axis.PRIMARY, 지금)).as("안 채운 축").isFalse();
     }
 
     /** 축이 갈리면 키가 같아도 예산은 둘이다. 한 요청이 2 를 쓰는 것과 갈라야 한다. */
@@ -78,6 +79,8 @@ class LimiterAxisTest {
 
         assertThat(limiter.tryAcquireAll(Axis.SECONDARY, "x", 1, Axis.PRIMARY, "x", 1, 지금))
                 .isEqualTo(AcquireResult.ACQUIRED);
+        // **자리를 둘 잡았는지 본다.** 하나면 같은 키로 보고 한쪽만 깎은 것이다 — 축 구분이 없는 것과 같다.
+        assertThat(limiter.size()).as("두 축이 각각 자리를 잡는다").isEqualTo(2);
         assertThat(limiter.tryAcquireAll(Axis.SECONDARY, "x", 1, Axis.PRIMARY, "x", 1, 지금))
                 .as("각 축이 제 상한을 따로 센다").isEqualTo(AcquireResult.COUPON_EXHAUSTED);
     }
@@ -86,12 +89,12 @@ class LimiterAxisTest {
     @Test
     @DisplayName("축을_안_주면_앞_축이다")
     void 축을_안_주면_앞_축이다() {
-        SecondWindowLimiter limiter = SecondWindowLimiter.withMaxKeys(1);
+        SecondWindowLimiter limiter = SecondWindowLimiter.withMaxKeys(2);
 
-        assertThat(limiter.tryAcquire("c1", 5, 지금)).isTrue();
-        assertThat(limiter.tryAcquire(Axis.PRIMARY, "c1", 5, 지금))
-                .as("같은 자리를 쓴다").isTrue();
-        assertThat(limiter.tryAcquire("c2", 5, 지금))
-                .as("자리가 하나라 새 키는 못 받는다").isFalse();
+        // **같은 통을 쓰는지 예산으로 본다.** 자리만 보면 기본 축이 뒤 축으로 바뀌어도 통과한다.
+        assertThat(limiter.tryAcquire("c1", 1, 지금)).isTrue();
+        assertThat(limiter.tryAcquire(Axis.PRIMARY, "c1", 1, 지금))
+                .as("이미 그 통에서 1 을 썼다").isFalse();
+        assertThat(limiter.size()).as("키는 하나다").isEqualTo(1);
     }
 }

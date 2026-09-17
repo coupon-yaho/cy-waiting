@@ -87,6 +87,7 @@ class RedisRestartSnapshotScenarioTest {
         Instant[] 죽기_전_발행 = new Instant[1];
         Duration[] 새_발행까지 = new Duration[1];
         boolean[] 낡음에_들어갔다 = new boolean[1];
+        Duration[] 낡을_때_나이 = new Duration[1];
 
         ChaosScenario.named("C1b 레디스 재기동 뒤 첫 스냅샷")
                 .baseline(() -> {
@@ -112,6 +113,8 @@ class RedisRestartSnapshotScenarioTest {
                     // **낡음에 들어간 것을 보고 나간다** (CY-818). 안 들어갔으면 아래 회복 판정은
                     // 풀 것이 없는 낡음을 푼 셈이라 아무것도 안 잰다.
                     낡음에_들어갔다[0] = holder.isDataStale();
+                    // 판정 시점이 아니라 관측 시점의 값을 남긴다. 나중에 읽으면 빨개진 이유와 다른 수다.
+                    낡을_때_나이[0] = holder.dataAge();
                 })
                 .recover(() -> {
                     faults.붙인다();
@@ -135,7 +138,7 @@ class RedisRestartSnapshotScenarioTest {
                         // 계획서 유지 기대 — 재료가 낡음 문턱을 넘는다.
                         낡음에_들어갔다[0] ? Optional.empty()
                                 : Optional.of("%s 를 죽여 뒀는데 낡음에 안 들어갔다 — 나이 %s"
-                                        .formatted(오래_죽인다, holder.fetchAge()))))
+                                        .formatted(오래_죽인다, 낡을_때_나이[0]))))
                 .assertRecovery(() -> RecoveryCriteria.violations(
                         제때_다시_받았다(재적재까지[0]),
                         새_발행으로_낡음이_풀렸다(새_발행까지[0])))

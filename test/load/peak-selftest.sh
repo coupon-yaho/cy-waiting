@@ -169,6 +169,14 @@ lib_case "중첩형 도착률" 1234.5000 "$(peak_summary_value "$nested" rate)"
 lib_case "중첩형 응답 p99" 9.5000 "$(peak_summary_value "$nested" p99)"
 lib_case "없는 파일은 빈 값" "" "$(peak_summary_value "$work/none.json" rate)"
 
+# docker stats 한 벌을 표본 줄로 옮긴다 (10.7.4). 남의 프로젝트 컨테이너가 섞이면 그 CPU 가 천장 원인에
+# 끼고, `%` 를 안 떼면 판정기가 숫자가 아닌 표본으로 읽어 매 회차 판정 불가가 된다.
+stats=$(printf 'load-gateway-1\t95.30%%\nsearch-cache\t88.00%%\nload-redis-1\t12.05%%\n')
+lib_case "우리 컨테이너만 · 백분율 기호를 뗀다" \
+    "$(printf 'cpu\tload-gateway-1\t95.30\ncpu\tload-redis-1\t12.05')" \
+    "$(printf '%s\n' "$stats" | peak_cpu_lines load)"
+lib_case "빈 입력은 빈 출력" "" "$(printf '' | peak_cpu_lines load)"
+
 # 종료 코드 해석. 99 를 통째로 정상으로 읽으면 연결을 끊은 회차가 ok 로 남는다.
 thr() { printf '{"metrics":{%s}}' "$1" > "$work/$2"; printf '%s' "$work/$2"; }
 only_drop=$(thr '"dropped_iterations":{"thresholds":{"count==0":true}}' drop.json)

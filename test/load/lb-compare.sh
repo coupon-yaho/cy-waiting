@@ -35,8 +35,10 @@ VIA_LB=1 RATES="$RATES" DURATION="$DURATION" OUT_DIR="$out/peak" OUT_TABLE="$out
     test/load/peak.sh > "$out/peak.log" 2>&1
 peak_rc=$?
 sed 's/^/    /' "$out/peak.log" | tail -12
-if [ "$peak_rc" = 2 ]; then
-    echo "::error title=LB 비교::경유 회차를 못 쟀다 — 계기를 먼저 본다"
+# **0 이 아니면 멈춘다.** 2 만 보면 가장 낮은 회차부터 무너진 표(1)나 중간에 끊긴 표(130)가 판정기로 넘어가,
+# 부분 표로 감당과 오버헤드가 나온다.
+if [ "$peak_rc" != 0 ]; then
+    echo "::error title=LB 비교::경유 회차가 안 섰다 (종료 $peak_rc) — 그 표는 평가하지 않는다"
     exit 2
 fi
 

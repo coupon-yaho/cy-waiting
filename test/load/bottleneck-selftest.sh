@@ -121,6 +121,18 @@ GATEWAY_CPUS=2 run_case "프로젝트 이름의 gateway 는 게이트웨이 표�
         printf 'cpu\tgateway-test-gateway-1\t190.0\ncpu\tgateway-test-redis-1\t30.0\ncpu\tgateway-test-backend-1\t10.0\nidle\thost\t40.0\n'
     done)")"
 
+# **LB 는 CPU 말고 연결 한도에서도 막힌다.** 러너가 회차 중 nginx 가 낸 연결 한도·accept 실패 줄 수를 넘긴다.
+LB_CONN_ERRORS=3 LB_CPUS=2 GATEWAY_CPUS=2 run_case "LB 연결 오류가 있으면 CPU 가 한가해도 LB" 0 "원인: LB" \
+    -- "$(lb_samples lb_conn.tsv 190.0 60.0)"
+LB_CONN_ERRORS=0 LB_CPUS=2 GATEWAY_CPUS=2 run_case "LB 연결 오류가 0 이면 LB 가 아니다" 0 "원인: 게이트웨이" \
+    -- "$(lb_samples lb_conn0.tsv 190.0 60.0)"
+LB_CONN_ERRORS=abc LB_CPUS=2 GATEWAY_CPUS=2 run_case "LB 연결 오류 수가 정수가 아니면 판정 불가" 2 "판정 불가" \
+    -- "$(lb_samples lb_conn_bad.tsv 190.0 60.0)"
+GATEWAY_CPUS=2 run_case "프로젝트 이름의 redis 는 레디스 표본이 아니다" 0 "원인: 게이트웨이" \
+    -- "$(fixture redis_name.tsv "$(for _ in 1 2 3 4 5; do
+        printf 'cpu\tredis-lab-gateway-1\t190.0\ncpu\tredis-lab-redis-1\t30.0\ncpu\tredis-lab-backend-1\t99.0\nidle\thost\t40.0\n'
+    done)")"
+
 # 호스트가 먼저다. 호스트가 말랐으면 LB 가 붙은 것도 k6 와 코어를 다툰 결과일 수 있다.
 host_lb=$(fixture host_lb.tsv "$(for _ in 1 2 3 4 5; do
     printf 'cpu\tload-gateway-1\t190.0\ncpu\tload-redis-1\t30.0\ncpu\tload-lb-1\t195.0\nidle\thost\t5.0\n'

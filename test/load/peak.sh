@@ -244,7 +244,7 @@ for rate in $RATES; do
     metrics "$before"
     # 정지 파일은 띄우기 전에 여기서 지운다. 자식이 지우면 곧바로 끝난 회차의 정지 신호를 먹는다.
     rm -f "$cpu.stop"
-    peak_sample_cpu "$cpu" "$PROJECT" "$$" &
+    peak_sample_cpu "$cpu" "$PROJECT" "$$" "$(( $(date +%s) + DURATION_SEC ))" &
     sampler=$!
     VUS=$vus RATE=$rate DURATION=$DURATION k6 run --summary-export="$summary" \
         test/load/peak.js 2>&1 | tee "$log"
@@ -263,12 +263,6 @@ for rate in $RATES; do
     # **깨진 임계를 가려 읽는다.** 통째로 정상으로 읽으면 게이트웨이가 연결을
     # 끊은 회차가 `ok` 로 표에 남고, 그 수가 계획서로 간다.
     k6_verdict=$(peak_verdict_from_k6 "$k6_rc" "$summary")
-    if peak_hung "$summary" "$rate" "$DURATION_SEC" "$TOLERANCE"; then
-        echo "  요청이 끝나지 않아 회차가 늘었다 (${actual}/${rate}) — 이 회차는 판정 불가"
-        printf '%s\t%s\tunmeasurable\t%s\n' "$rate" "$actual" "$p99" >> "$OUT_TABLE"
-        stop_rate=${stop_rate:-$rate}
-        break
-    fi
     if [ -z "$actual" ] || [ -z "$p99" ]; then
         echo "  요약에서 값을 못 읽었다 — 이 회차는 판정 불가"
         printf '%s\t0\tunmeasurable\t0\n' "$rate" >> "$OUT_TABLE"

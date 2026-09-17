@@ -4,7 +4,7 @@
 # **LB 뒤에 더미 응답만 두고 유입을 올린다.** 최대치 회차가 LB 를 지나면 LB 몫이 측정에 섞이는데, 그 몫을 따로
 # 재 두지 않으면 느려진 것이 누구 탓인지 말할 수 없다. 표는 최대치 러너와 같은 형식이라 최대치 판정기가 읽는다.
 #
-# 이 스택은 끝나면 내린다. 게이트웨이 스택과 포트가 겹치지 않지만 코어는 나눠 쓴다.
+# 이 스택은 끝나면 내린다. LB 경유 회차(`VIA_LB=1`)와 같은 18070 을 열어, 그 스택이 떠 있으면 올리기에서 끊긴다.
 set -uo pipefail
 
 cd "$(git rev-parse --show-toplevel)" || exit 1
@@ -61,7 +61,7 @@ for rate in $RATES; do
     # 경합이 다르다. 뺀 값을 읽을 때 그 차이를 볼 재료다.
     cpu=$OUT_DIR/cpu-$rate.tsv
     rm -f "$cpu.stop"
-    peak_sample_cpu "$cpu" lb-baseline "$$" &
+    peak_sample_cpu "$cpu" lb-baseline "$$" "$(( $(date +%s) + DURATION_SEC ))" &
     sampler=$!
     VUS=$vus RATE=$rate DURATION=$DURATION k6 run --summary-export="$summary" \
         test/load/lb-baseline.js > "$OUT_DIR/k6-$rate.log" 2>&1
@@ -87,7 +87,8 @@ for rate in $RATES; do
     fi
     # 드롭만 깨진 칸은 실측으로 가른다. 실패 응답이 섞이면 LB 가 못 받은 것이다.
     verdict=$(peak_verdict_from_k6 "$k6_rc" "$summary")
-    # 걸린 요청이 회차를 늘린 칸은 생성기 한계가 아니다 — 파일 한도가 기준선을 반으로 자른 모양이다.
+    # 걸린 요청이 회차를 늘린 칸은 생성기 한계가 아니다 — 파일 한도가 기준선을 반으로 자른 모양이다. 뒤에 제품이
+    # 없는 이 러너에서만 계기 탓으로 친다. 최대치 러너에서는 게이트웨이가 요청을 붙잡은 것일 수 있다.
     if peak_hung "$summary" "$rate" "$DURATION_SEC" "$TOLERANCE"; then
         echo "  요청이 끝나지 않아 회차가 늘었다 — 판정 불가"
         verdict=unmeasurable

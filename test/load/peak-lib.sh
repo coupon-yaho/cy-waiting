@@ -155,14 +155,16 @@ peak_host_idle_pct() {
 }
 
 # **회차 동안 CPU 를 쌓는다.** 천장이 났을 때 그것이 하네스의 것인지 게이트웨이의 것인지 가를 재료다.
-# `<표본 파일>.stop` 이 생기거나 러너가 사라지면 그 바퀴를 마치고 멈춘다 — 한 바퀴가 2초쯤 든다. 정지 파일은
-# 부르는 쪽이 띄우기 전에 지운다.
+# `<표본 파일>.stop` 이 생기거나, 러너가 사라지거나, 기한(epoch 초)이 지나면 그 바퀴를 마치고 멈춘다 — 한 바퀴가
+# 2초쯤 든다. **기한은 회차 끝이다.** k6 가 걸린 요청으로 더 도는 동안의 한가한 표본이 붙었던 자리를 가린다.
+# 정지 파일은 부르는 쪽이 띄우기 전에 지운다.
 #
-#   사용: peak_sample_cpu <표본 파일> <프로젝트> <러너 PID> & sampler=$!
+#   사용: peak_sample_cpu <표본 파일> <프로젝트> <러너 PID> [기한] & sampler=$!
 peak_sample_cpu() {
-    local out=$1 project=$2 owner=$3
+    local out=$1 project=$2 owner=$3 deadline=${4:-}
     : > "$out"
-    while [ ! -e "$out.stop" ] && kill -0 "$owner" 2>/dev/null; do
+    while [ ! -e "$out.stop" ] && kill -0 "$owner" 2>/dev/null \
+            && { [ -z "$deadline" ] || [ "$(date +%s)" -lt "$deadline" ]; }; do
         docker stats --no-stream --format '{{.Name}}\t{{.CPUPerc}}' 2>/dev/null \
             | peak_cpu_lines "$project" >> "$out"
         printf 'idle\thost\t%s\n' "$(peak_host_idle_pct)" >> "$out"

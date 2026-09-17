@@ -393,6 +393,50 @@ class AbuseLimitFilterTest {
     }
 
     /**
+     * <b>v6 는 /64 로 묶는다</b> (CY-940). 하나의 /64 가 주소를 1.8e19 개 주므로, 주소마다 키를 만들면 상한이
+     * 매 요청 새 예산으로 리셋되고 키 공간도 무한이다. 묶으면 주소당 상한이 다시 뜻을 갖는다.
+     */
+    @Test
+    @DisplayName("같은_64_안에서_주소를_돌려도_한_몫이다")
+    void 같은_64_안에서_주소를_돌려도_한_몫이다() {
+        int 앞서_통과 = 다음으로_감.get();
+        for (int i = 0; i < 200; i++) {
+            태운다(ISSUE, String.valueOf(3_000 + i), "2001:db8:1:2::" + Integer.toHexString(i + 1));
+        }
+
+        MockServerWebExchange 넘긴_것 = 태운다(ISSUE, "7777", "2001:db8:1:2::ffff");
+
+        assertThat(다음으로_감.get() - 앞서_통과).as("상한까지는 다 지나간다").isEqualTo(200);
+        assertThat(넘긴_것.getResponse().getStatusCode())
+                .as("주소를 돌려도 같은 /64 의 몫을 쓴다").isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+    }
+
+    @Test
+    @DisplayName("다른_64_는_제_몫이_그대로다")
+    void 다른_64_는_제_몫이_그대로다() {
+        for (int i = 0; i < 200; i++) {
+            태운다(ISSUE, String.valueOf(4_000 + i), "2001:db8:1:3::" + Integer.toHexString(i + 1));
+        }
+
+        assertThat(태운다(ISSUE, "6666", "2001:db8:1:4::1").getResponse().getStatusCode())
+                .as("옆 /64 는 안 깎인다").isNull();
+    }
+
+    /** v4 와 v4-mapped 는 지금 키 모양 그대로다. 묶으면 한 주소가 아니라 대역이 한 몫을 쓴다. */
+    @Test
+    @DisplayName("v4_는_주소마다_제_몫이다")
+    void v4_는_주소마다_제_몫이다() {
+        for (int i = 0; i < 200; i++) {
+            태운다(ISSUE, String.valueOf(5_000 + i), "10.1.2.3");
+        }
+
+        assertThat(태운다(ISSUE, "5555", "10.1.2.3").getResponse().getStatusCode())
+                .as("같은 v4 는 제 상한에 걸린다").isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        assertThat(태운다(ISSUE, "5556", "10.1.2.4").getResponse().getStatusCode())
+                .as("옆 v4 주소는 제 몫이 그대로다").isNull();
+    }
+
+    /**
      * <b>접혀도 이미 아는 사람은 상한을 받는다</b> (CY-925). 자리를 못 얻은 사람만 접히고, 추적 중인
      * 회원은 그대로 제 상한에 걸려야 한다 — 축을 통째로 건너뛰면 한 사람이 주소 상한까지 쏠 수 있다.
      */

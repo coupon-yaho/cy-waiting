@@ -554,8 +554,8 @@ public final class AllocationRedisPort implements SnapshotSource {
     }
 
     /**
-     * 이 쿠폰에 마지막으로 쓴 임계. <b>스크립트가 되살리는 근거다</b> (CY-942) — 되감기를 세기만 하면 세는 동안 순번이
-     * 뛰고 크레딧이 샌다. 모르면 {@code -1} 이라 스크립트가 안 건드린다.
+     * 울타리를 넘은 적용이 본 임계의 최댓값. <b>스크립트가 되살리는 근거다</b> (CY-942) — 되감기를 세기만 하면 세는
+     * 동안 순번이 뛰고 크레딧이 샌다. 모르면 {@code -1} 이라 스크립트가 안 건드린다.
      */
     private String written(String couponId) {
         Double threshold = lastAdmitted.get(couponId);
@@ -920,7 +920,10 @@ public final class AllocationRedisPort implements SnapshotSource {
                         // 실패 뒤마다 거짓 되감기로 잡힌다.
                         parsed(String.valueOf(counts.get(0)))
                                 .stream().filter(threshold -> threshold >= 0)
-                                .forEach(threshold -> lastAdmitted.put(grant.couponId(), threshold));
+                                // **최댓값으로 합친다.** 틱에 잘린 회차의 꼬리가 다음 회차보다 늦게 착륙하면
+                                // 기억이 뒤로 가고, 되살림이 그 사이로 감긴 커서를 못 본다.
+                                .forEach(threshold -> lastAdmitted.merge(grant.couponId(), threshold,
+                                        Math::max));
                         return Mono.just(Long.parseLong(String.valueOf(counts.get(1))));
                     }
                     applyFenced.incrementAndGet();

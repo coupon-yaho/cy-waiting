@@ -39,6 +39,26 @@ run_case "기준선 칸의 실측이 모자라면 빼지 않는다" 0 "요청 80
 run_case "실측이 허용 오차 정확히면 선 칸이다" 0 "오버헤드 p99 157.0 ms" \
     -- "$peak" "$(steps lb_edge.tsv "$(printf '8000\t7600\tok\t3.5')")"
 
+# 선 칸 조건 둘을 양쪽에서 다 본다. 드롭만 난 회차는 판정이 ok 로 오고, LB 가 실패를 빨리 돌려준 칸은 실측이 찬다.
+run_case "회차 칸의 실측이 모자라면 빼지 않는다" 0 "요청 8000/초 · 짝 없음 — 회차 칸이 안 섰다" \
+    -- "$(steps peak_drop.tsv "$(printf '4000\t3990\tok\t30.0')" "$(printf '8000\t7000\tok\t160.5')")" "$lb"
+run_case "기준선 칸의 판정이 ok 가 아니면 빼지 않는다" 0 "요청 8000/초 · 짝 없음 — 기준선 칸이 안 섰다" \
+    -- "$peak" "$(steps lb_under.tsv "$(printf '4000\t3999\tok\t2.0')" "$(printf '8000\t7999\tunder\t3.5')")"
+
+# **최대치 판정기와 같은 규칙이다.** 멈춘 칸 위에 다시 선 칸은 사다리가 이어지지 않은 것이라 안 쓴다.
+gap=$(steps peak_gap.tsv "$(printf '4000\t3990\tok\t30.0')" "$(printf '8000\t5000\tok\t160.5')" \
+    "$(printf '16000\t15900\tok\t300.0')")
+lb_wide=$(steps lb_wide.tsv "$(printf '4000\t3999\tok\t2.0')" "$(printf '8000\t7999\tok\t3.5')" \
+    "$(printf '16000\t15999\tok\t9.0')")
+run_case "회차가 멈춘 칸 위는 빼지 않는다" 0 "요청 16000/초 · 짝 없음 — 회차가 앞 칸에서 멈췄다" -- "$gap" "$lb_wide"
+run_case "기준선이 멈춘 칸 위는 빼지 않는다" 0 "요청 16000/초 · 짝 없음 — 기준선이 앞 칸에서 멈췄다" \
+    -- "$(steps peak_all.tsv "$(printf '4000\t3990\tok\t30.0')" "$(printf '16000\t15900\tok\t300.0')")" \
+    "$(steps lb_gap.tsv "$(printf '4000\t3999\tok\t2.0')" "$(printf '8000\t5000\tok\t3.5')" "$(printf '16000\t15999\tok\t9.0')")"
+run_case "실측이 요청을 크게 넘으면 계기를 본다" 2 "판정 불가" \
+    -- "$(steps peak_over.tsv "$(printf '4000\t4300\tok\t30.0')")" "$lb"
+run_case "같은 요청 유입이 두 줄이면 판정 불가" 2 "판정 불가" \
+    -- "$peak" "$(steps lb_dup.tsv "$(printf '4000\t3999\tok\t2.0')" "$(printf '4000\t3999\tok\t9.0')")"
+
 run_case "짝이 하나도 없으면 판정 불가" 2 "판정 불가" \
     -- "$peak" "$(steps lb_other.tsv "$(printf '2000\t1999\tok\t2.0')")"
 run_case "표가 없으면 판정 불가" 2 "판정 불가" -- "$peak" "$work/없는표.tsv"

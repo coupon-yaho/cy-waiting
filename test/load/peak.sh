@@ -146,20 +146,33 @@ echo "현재 최대치 회차 · 사다리 [$RATES] · 회차당 $DURATION"
 # 응답 기준을 걸었을 때 천장이 예열 자리로 잡힌다 (O-5 가 같은 이유로 나왔다).
 warm_rate=${WARMUP_RATE:-500}
 warm_dur=${WARMUP_DURATION:-20s}
+# **예열은 수렴할 때까지 되풀이한다.** 2 코어 한 대는 500/초 첫 예열을 p99 20초로 뒤집어써, 그 뒤 첫 칸이
+# 예열 노릇을 했다.
+warm_p99_ms=${WARMUP_P99_MS:-100}
+warm_rounds=${WARMUP_ROUNDS:-5}
 if [ "$warm_rate" != 0 ]; then
-    echo "── 예열 ${warm_rate}/초 · ${warm_dur} (표에 안 넣는다)"
-    empty_queues
-    wait_idle || { echo "::error title=현재 최대치::줄 모드가 안 꺼진다"; exit 2; }
-    RATE=$warm_rate DURATION=$warm_dur k6 run \
-        --summary-export="$OUT_DIR/k6-warmup.json" test/load/peak.js \
-        > "$OUT_DIR/k6-warmup.log" 2>&1
-    # **예열이 돌았는지 본다.** 안 돌면 첫 회차가 갓 뜬 JVM 을 그대로 재는데,
-    # 예열을 넣은 이유가 정확히 그것을 표에서 빼는 것이다. 조용히 넘기면
-    # 사다리의 첫 칸이 늘 느리고 그 이유를 아무도 모른다.
-    if [ -z "$(peak_summary_value "$OUT_DIR/k6-warmup.json" rate)" ]; then
-        echo "::error title=현재 최대치::예열 회차가 안 돌았다 — 첫 회차가 예열을 뒤집어쓴다"
-        exit 2
-    fi
+    warm_vus=${VUS:-$(peak_vus "$warm_rate" "$(peak_duration_sec "$warm_dur")")}
+    round=1
+    while :; do
+        echo "── 예열 ${warm_rate}/초 · ${warm_dur} · ${round} 번째 (표에 안 넣는다)"
+        empty_queues
+        wait_idle || { echo "::error title=현재 최대치::줄 모드가 안 꺼진다"; exit 2; }
+        VUS=$warm_vus RATE=$warm_rate DURATION=$warm_dur k6 run \
+            --summary-export="$OUT_DIR/k6-warmup.json" test/load/peak.js \
+            > "$OUT_DIR/k6-warmup.log" 2>&1
+        peak_warm_converged "$OUT_DIR/k6-warmup.json" "$warm_p99_ms"
+        case $? in
+            0) break ;;
+            # **예열이 돌았는지 본다.** 안 돌면 첫 회차가 갓 뜬 JVM 을 그대로 잰다.
+            2) echo "::error title=현재 최대치::예열 회차가 안 돌았다 — 첫 회차가 예열을 뒤집어쓴다"; exit 2 ;;
+        esac
+        echo "    예열 p99 $(peak_summary_value "$OUT_DIR/k6-warmup.json" p99)ms — ${warm_p99_ms}ms 위라 한 번 더"
+        if [ "$round" -ge "$warm_rounds" ]; then
+            echo "::error title=현재 최대치::예열이 ${warm_rounds} 번에도 수렴 안 했다 — 예열 유입을 낮춘다"
+            exit 2
+        fi
+        round=$((round + 1))
+    done
 fi
 
 printf '# 요청유입\t실측유입\t판정\t응답p99ms\n' >> "$OUT_TABLE"

@@ -68,6 +68,30 @@ peak_warm_converged() {
     awk -v p="$p99" -v m="$2" 'BEGIN{ exit (p <= m) ? 0 : 1 }'
 }
 
+# **걸린 요청을 가린다.** 흘린 회차 없이 보낸 건수는 찼는데 실측 유입만 모자라면, 끝나지 않은 요청이 회차를
+# 늘린 것이다. k6 는 유입률을 전체 시간으로 나누므로 그대로 두면 생성기 한계로 읽힌다. 0 걸렸다 · 1 아니다 · 2 못 읽는다.
+#
+#   사용: peak_hung <요약> <요청 유입> <회차 초> <허용 오차>
+peak_hung() {
+    python3 - "$@" <<'PY'
+import json, sys
+try:
+    m = json.load(open(sys.argv[1])).get('metrics', {})
+    rate, sec, tol = float(sys.argv[2]), float(sys.argv[3]), float(sys.argv[4])
+except Exception:
+    sys.exit(2)
+def val(name, key):
+    node = m.get(name, {})
+    v = node.get('values', {}).get(key, node.get(key))
+    return v if isinstance(v, (int, float)) else None
+count, actual = val('iterations', 'count'), val('http_reqs', 'rate')
+if count is None or actual is None:
+    sys.exit(2)
+dropped = val('dropped_iterations', 'count') or 0
+sys.exit(0 if dropped == 0 and count >= rate * sec * tol and actual < rate * tol else 1)
+PY
+}
+
 # **깨진 임계를 가려 읽는다.** k6 는 어느 임계가 깨져도 99 로 끝난다. 통째로
 # 정상으로 읽으면 게이트웨이가 연결을 끊은 회차가 `ok` 로 표에 남고, 그 수가
 # "현재 최대치" 로 계획서에 간다.

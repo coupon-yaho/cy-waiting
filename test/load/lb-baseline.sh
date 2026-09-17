@@ -63,6 +63,11 @@ for rate in $RATES; do
     fi
     # 드롭만 깨진 칸은 실측으로 가른다. 실패 응답이 섞이면 LB 가 못 받은 것이다.
     verdict=$(peak_verdict_from_k6 "$k6_rc" "$summary")
+    # 걸린 요청이 회차를 늘린 칸은 생성기 한계가 아니다 — 파일 한도가 기준선을 반으로 자른 모양이다.
+    if peak_hung "$summary" "$rate" "$DURATION_SEC" "$TOLERANCE"; then
+        echo "  요청이 끝나지 않아 회차가 늘었다 — 판정 불가"
+        verdict=unmeasurable
+    fi
     printf '%s\t%s\t%s\t%s\n' "$rate" "$actual" "$verdict" "$p99" >> "$OUT_TABLE"
     echo "  실측 ${actual}/초 · p99 ${p99}ms · ${verdict}"
 

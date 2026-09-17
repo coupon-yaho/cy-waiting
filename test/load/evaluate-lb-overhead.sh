@@ -37,10 +37,19 @@ awk -F '\t' -v t="$tolerance" '
     NF < 4 || !num($1) || !num($2) || !num($4) {
         printf "::error title=LB 오버헤드::%s 번째 표 %d 번째 줄을 못 읽는다 (판정 불가)\n", file, FNR; bad = 1; exit
     }
+    # 실측이 요청을 넘는 줄은 계기가 틀어진 것이다 — 최대치 판정기와 같은 여유다.
+    $2 > $1 * 1.05 {
+        printf "::error title=LB 오버헤드::%s 번째 표 %d 번째 줄의 실측이 요청을 넘는다 — 계기를 본다 (판정 불가)\n", file, FNR; bad = 1; exit
+    }
+    (file SUBSEP $1) in seen {
+        printf "::error title=LB 오버헤드::%s 번째 표에 요청 유입 %s 가 두 줄이다 (판정 불가)\n", file, $1; bad = 1; exit
+    }
     {
+        seen[file, $1] = 1
         stood = ($3 == "ok" && $2 >= $1 * t)
-        if (file == 1) { order[++n] = $1; peak_ok[$1] = stood; peak_p99[$1] = $4 }
-        else           { lb_seen[$1] = 1; lb_ok[$1] = stood; lb_p99[$1] = $4 }
+        # **멈춘 칸 위는 안 쓴다.** 사다리가 이어지지 않은 칸이다 — 최대치 판정기도 버린다.
+        if (file == 1) { order[++n] = $1; peak_ok[$1] = stood; peak_p99[$1] = $4; peak_above[$1] = peak_broke; if (!stood) peak_broke = 1 }
+        else           { lb_seen[$1] = 1; lb_ok[$1] = stood; lb_p99[$1] = $4; lb_above[$1] = lb_broke; if (!stood) lb_broke = 1 }
     }
     END {
         if (bad) exit 2
@@ -48,8 +57,10 @@ awk -F '\t' -v t="$tolerance" '
         for (i = 1; i <= n; i++) {
             r = order[i]
             if (!peak_ok[r])       { printf "  요청 %s/초 · 짝 없음 — 회차 칸이 안 섰다\n", r; continue }
+            if (peak_above[r])     { printf "  요청 %s/초 · 짝 없음 — 회차가 앞 칸에서 멈췄다\n", r; continue }
             if (!(r in lb_seen))   { printf "  요청 %s/초 · 짝 없음 — 기준선에 같은 유입이 없다\n", r; continue }
             if (!lb_ok[r])         { printf "  요청 %s/초 · 짝 없음 — 기준선 칸이 안 섰다\n", r; continue }
+            if (lb_above[r])       { printf "  요청 %s/초 · 짝 없음 — 기준선이 앞 칸에서 멈췄다\n", r; continue }
             printf "  요청 %s/초 · 게이트웨이 p99 %.1f ms · 기준선 p99 %.1f ms · 오버헤드 p99 %.1f ms\n",
                 r, peak_p99[r], lb_p99[r], peak_p99[r] - lb_p99[r]
             pairs++

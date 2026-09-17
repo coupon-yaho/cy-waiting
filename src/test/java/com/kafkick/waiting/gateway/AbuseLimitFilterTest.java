@@ -170,7 +170,7 @@ class AbuseLimitFilterTest {
         }
 
         // 정상 사용자가 걸리는지 보려면 사유가 갈려 있어야 한다.
-        assertThat(meters.getMeters()).singleElement().satisfies(m ->
+        assertThat(meters.find("waiting.abuse").counters()).singleElement().satisfies(m ->
                 assertThat(m.getId().getTag("key")).isEqualTo("member"));
     }
 
@@ -377,14 +377,19 @@ class AbuseLimitFilterTest {
     @DisplayName("같은_v6_주소는_표기가_달라도_한_몫이다")
     void 같은_v6_주소는_표기가_달라도_한_몫이다() {
         // **회원을 매번 다르게 한다.** 같은 회원이면 사람당 상한이 먼저 걸려 주소 몫이 안 깎인다.
+        int 앞서_통과 = 다음으로_감.get();
         for (int i = 0; i < 200; i++) {
             태운다(ISSUE, String.valueOf(1_000 + i), i % 2 == 0 ? "::1" : "0:0:0:0:0:0:0:1");
         }
 
         MockServerWebExchange 넘긴_것 = 태운다(ISSUE, "9999", "::0001");
 
+        // 막는 쪽만 보면 v6 를 통째로 거절하는 회귀도 초록으로 지나간다.
+        assertThat(다음으로_감.get() - 앞서_통과).as("표기가 갈려도 200 건은 다 지나간다").isEqualTo(200);
         assertThat(넘긴_것.getResponse().getStatusCode())
                 .as("표기를 바꿔도 같은 주소의 몫을 쓴다").isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        assertThat(태운다(ISSUE, "8888", "::2").getResponse().getStatusCode())
+                .as("다른 주소는 제 몫이 그대로다").isNull();
     }
 
     /**
@@ -414,7 +419,7 @@ class AbuseLimitFilterTest {
         assertThat(마지막.getResponse().getStatusCode())
                 .as("아는 회원은 사람당 상한에 걸린다").isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
         assertThat(meters.get("waiting.abuse").tag("key", "member").counter().count())
-                .as("사람당 상한으로 막았다고 센다").isGreaterThan(0);
+                .as("아는 회원은 열 번 중 여섯이 사람당 상한에 걸린다").isEqualTo(6);
     }
 
     @Test
@@ -431,9 +436,9 @@ class AbuseLimitFilterTest {
         태운다(좁은_필터, "new-member", "10.0.0.2", 통과);
 
         assertThat(meters.get("waiting.abuse.folded").counter().count())
-                .as("접고 통과한 수").isGreaterThan(0);
-        assertThat(meters.find("waiting.abuse").tag("key", "folded").counter())
-                .as("거절 지표에 섞지 않는다").isNull();
+                .as("접고 통과한 수").isEqualTo(4);
+        assertThat(meters.find("waiting.abuse").counters())
+                .as("거절이 없었으니 거절 지표도 없다").isEmpty();
     }
 
     /**
@@ -455,7 +460,7 @@ class AbuseLimitFilterTest {
 
         assertThat(막힌_것.getResponse().getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
         assertThat(meters.get("waiting.abuse").tag("key", "keyspace").counter().count())
-                .as("접힘과 다른 이름으로 센다").isGreaterThan(0);
+                .as("접힘과 다른 이름으로 센다").isEqualTo(1);
     }
 
     /**
@@ -469,11 +474,14 @@ class AbuseLimitFilterTest {
         AbuseLimitFilter 좁은_필터 = AbuseLimitFilter.withLimiter(
                 시계, meters, () -> 0.5, TrustedProxies.of(List.of("127.0.0.1")), 좁은_것);
         AtomicInteger 통과 = new AtomicInteger();
+        // 주소를 돌려 쓴다. 매번 새 주소면 주소 축이 먼저 차서 식별자 축은 밟지도 못한다.
         for (int i = 0; i < 3_000; i++) {
-            태운다(좁은_필터, "m" + i, "10." + (i % 251) + "." + (i % 253) + ".1", 통과);
+            태운다(좁은_필터, "m" + i, "10.0.0." + (i % 40), 통과);
         }
 
-        assertThat(좁은_것.size()).isLessThanOrEqualTo(좁은_것.totalMaxKeys());
+        assertThat(좁은_것.saturated(SecondWindowLimiter.Axis.SECONDARY, 지금.getEpochSecond()))
+                .as("식별자 축이 찼다").isTrue();
+        assertThat(좁은_것.size()).as("주소 40 + 식별자 100").isEqualTo(140);
     }
 
     @Test

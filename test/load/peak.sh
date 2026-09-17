@@ -97,19 +97,14 @@ echo "게이트웨이 ${GATEWAYS}대: $bases"
 rm -rf "$OUT_DIR"; mkdir -p "$OUT_DIR"
 : > "$OUT_TABLE"
 
-# **대마다 긁어 품질별로 합친다.** 한 대만 긁으면 나머지 대가 판정한 요청이 분모에서 빠진다.
+# **대마다 따로 긁는다.** 파일은 `<경로>.<대 번호>` 다. 못 긁은 대는 빈 파일로 남고 판정기가 판정 불가로 낸다.
 metrics() {
-    local idx parts=()
+    local idx
     for idx in $(seq 1 "$GATEWAYS"); do
         $COMPOSE exec -T --index "$idx" gateway \
-            wget -qO- http://localhost:8081/actuator/prometheus 2>/dev/null > "$1.$idx"
-        parts+=("$1.$idx")
+            wget -qO- http://localhost:8081/actuator/prometheus 2>/dev/null > "$1.$idx" \
+            || : > "$1.$idx"
     done
-    if [ "$GATEWAYS" -eq 1 ]; then
-        mv "$1.1" "$1"
-    else
-        peak_merge_judgement "${parts[@]}" > "$1"
-    fi
 }
 
 # **줄 키를 다 지운다.** 셋만 지우면 이탈 기록과 생존 신호와 배분 펜스가 앞
@@ -231,16 +226,20 @@ for rate in $RATES; do
         break
     fi
 
-    # 판정 비율은 그 자가 낸다. 여기서 다시 셈하면 둘이 갈린다.
-    if EXPECT_TOTAL=$(awk -v r="$rate" -v d="$DURATION_SEC" 'BEGIN{ printf "%d", r * d }') \
-            test/load/evaluate-judged.sh "$before" "$after" > "$OUT_DIR/judged-$rate.txt" 2>&1; then
-        verdict=ok
-    else
+    # 판정 비율은 그 자가 낸다. 여기서 다시 셈하면 둘이 갈린다. **대마다 부르고 가장 나쁜 것을 쓴다.**
+    verdicts=()
+    : > "$OUT_DIR/judged-$rate.txt"
+    for idx in $(seq 1 "$GATEWAYS"); do
+        EXPECT_TOTAL=$(awk -v r="$rate" -v d="$DURATION_SEC" -v n="$GATEWAYS" 'BEGIN{ printf "%d", r * d / n }') \
+            test/load/evaluate-judged.sh "$before.$idx" "$after.$idx" > "$OUT_DIR/judged-$rate.$idx.txt" 2>&1
         case $? in
-            1) verdict=under ;;
-            *) verdict=unmeasurable ;;
+            0) verdicts+=(ok) ;;
+            1) verdicts+=(under) ;;
+            *) verdicts+=(unmeasurable) ;;
         esac
-    fi
+        { echo "게이트웨이 $idx"; cat "$OUT_DIR/judged-$rate.$idx.txt"; } >> "$OUT_DIR/judged-$rate.txt"
+    done
+    verdict=$(peak_worst_verdict "${verdicts[@]}")
     sed 's/^/    /' "$OUT_DIR/judged-$rate.txt"
 
     printf '%s\t%s\t%s\t%s\n' "$rate" "$actual" "$verdict" "$p99" >> "$OUT_TABLE"

@@ -182,7 +182,13 @@ for rate in $RATES; do
     metrics "$before"
     peak_sample_cpu "$cpu" load &
     sampler=$!
-    RATE=$rate DURATION=$DURATION k6 run --summary-export="$summary" \
+    # 풀을 유입에 맞춘다. 고정 2000 이면 낮은 칸에서 폴링 갈래가 표 없이 돌아 임계가 깨진다.
+    vus=${VUS:-$(peak_vus "$rate" "$DURATION_SEC")}
+    if [ "$vus" = 0 ]; then
+        echo "::error title=현재 최대치::유입 '$rate' 로 VU 풀을 못 잡는다 — 정수여야 한다"
+        exit 2
+    fi
+    VUS=$vus RATE=$rate DURATION=$DURATION k6 run --summary-export="$summary" \
         test/load/peak.js 2>&1 | tee "$log"
     k6_rc=${PIPESTATUS[0]}
     kill "$sampler" 2>/dev/null

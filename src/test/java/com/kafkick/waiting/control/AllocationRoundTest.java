@@ -1276,6 +1276,8 @@ class AllocationRoundTest {
         round.run().block();
 
         assertThat(나간_몫()).as("첫 회차부터 아무 몫도 안 나간다").isEmpty();
+        // 열린 동안에도 되살림 호출은 나간다 (CY-942). 서킷 경로가 갈라지면 이 줄이 조용해진다.
+        assertThat(적용).as("되살림 전용 호출").containsExactly("c1=0");
     }
 
     /** 하한이 걸려 있어도 안 나간다. 하한은 평활 뒤라 감싼 자리를 비켜 간다. */

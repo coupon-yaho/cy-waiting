@@ -524,7 +524,8 @@ class AllocationRedisPortTest extends RedisContainerSupport {
 
         assertThat(redis.opsForValue().get(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT))
                 .as("쓴 임계 위에서 한 명 더").isEqualTo("30");
-        assertThat(들인_수).as("이미 들인 사람에게 크레딧을 다시 안 쓴다").isEqualTo(1);
+        // 되살림이 없어도 한 명은 들어간다(10). 크레딧 재소비를 무는 것은 위의 임계 단언이다.
+        assertThat(들인_수).as("몫만큼 들인다").isEqualTo(1);
     }
 
     /**
@@ -545,6 +546,38 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         assertThat(redis.opsForValue().get(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT))
                 .as("낡은 기억 20 으로 안 내린다").isEqualTo("30");
         assertThat(들인_수).isZero();
+    }
+
+    /**
+     * <b>되살릴 기억이 없는 크레딧 0 적용은 레디스를 안 친다</b> (CY-942). 서킷이 열리면 대기 쿠폰마다 부르는데, 한 번도
+     * 안 들인 쿠폰은 되살릴 것이 없다 — 왕복만 늘어 느린 레디스에서 회차가 틱을 넘긴다.
+     */
+    @Test
+    @DisplayName("되살릴_기억이_없는_크레딧_0_적용은_레디스를_안_친다")
+    void 되살릴_기억이_없는_크레딧_0_적용은_레디스를_안_친다() {
+        줄_세운다("c1", 10, 20);
+
+        long 들인_수 = port.apply(new Grant("c1", 0), 임기).block(WAIT);
+
+        assertThat(들인_수).isZero();
+        assertThat(redis.hasKey(RedisKeys.applyFence("c1", SHARDS, 0)).block(WAIT))
+                .as("울타리 표도 안 만든다").isFalse();
+    }
+
+    /**
+     * <b>할 일 없는 크레딧 0 적용은 울타리 임기를 안 덮는다</b> (CY-942). 승계 봉인은 울타리 표의 남은 수명을 마지막 적용의
+     * 나이로 읽는다. 아무도 안 들이는 호출이 매 틱 표를 새로 걸면 새 리더의 첫 적용이 한 틱 밀린다.
+     */
+    @Test
+    @DisplayName("할_일_없는_크레딧_0_적용은_울타리_임기를_안_덮는다")
+    void 할_일_없는_크레딧_0_적용은_울타리_임기를_안_덮는다() {
+        줄_세운다("c1", 10, 20, 30);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+
+        port.apply(new Grant("c1", 0), 임기 + 1).block(WAIT);
+
+        assertThat(redis.opsForValue().get(RedisKeys.applyFence("c1", SHARDS, 0)).block(WAIT))
+                .as("아무것도 안 썼으니 앞 임기 그대로").isEqualTo(Long.toString(임기));
     }
 
     /** 사라진 것만이 아니다. 복제본 승격은 흔히 옛 값을 남긴다. */

@@ -35,6 +35,10 @@ public final class RedisWireFaults implements AutoCloseable {
     private final ToxiproxyContainer toxiproxy;
     private final Proxy proxy;
 
+    /** 문마다 다른 듣는 포트. 8666 은 첫 문이 쓴다. */
+    private final java.util.concurrent.atomic.AtomicInteger 다음_포트 =
+            new java.util.concurrent.atomic.AtomicInteger(8667);
+
     private RedisWireFaults(Network network, GenericContainer<?> redis,
             ToxiproxyContainer toxiproxy, Proxy proxy) {
         this.network = network;
@@ -67,6 +71,47 @@ public final class RedisWireFaults implements AutoCloseable {
             redis.stop();
             network.close();
             throw new IllegalStateException("프록시를 못 세웠다", e);
+        }
+    }
+
+    /** 앱이 붙을 주소. 문 하나를 통째로 넘길 때 쓴다. */
+    public String 주소() {
+        return "redis://%s:%d".formatted(호스트(), 포트());
+    }
+
+    /**
+     * 같은 레디스로 가는 문을 하나 더 연다 (CY-862). <b>노드마다 다른 문을 주면 한쪽만 끊을 수 있다</b> —
+     * 문이 하나면 끊는 순간 전 노드가 같이 못 쓰고, 비대칭 장애를 아예 못 만든다.
+     */
+    public Gate 문을_하나_더() {
+        int 듣는_포트 = 다음_포트.getAndIncrement();
+        try {
+            Proxy 새_문 = new eu.rekawek.toxiproxy.ToxiproxyClient(
+                    toxiproxy.getHost(), toxiproxy.getControlPort())
+                    .createProxy("redis-" + 듣는_포트, "0.0.0.0:" + 듣는_포트, "redis:6379");
+            return new Gate(새_문, 호스트(), toxiproxy.getMappedPort(듣는_포트));
+        } catch (IOException e) {
+            throw new IllegalStateException("문을 더 못 열었다: " + 듣는_포트, e);
+        }
+    }
+
+    /** 문 하나. 끊고 걷는 것이 이 문에만 걸린다. */
+    public record Gate(Proxy proxy, String 호스트, int 포트) {
+
+        public String 주소() {
+            return "redis://%s:%d".formatted(호스트, 포트);
+        }
+
+        /** 이 문만 끊는다. 붙어는 있는데 아무것도 안 오는 상태다. */
+        public void 끊는다() throws IOException {
+            proxy.toxics().timeout(끊김, ToxicDirection.DOWNSTREAM, 0);
+        }
+
+        /** 이 문의 장애만 걷는다. */
+        public void 걷는다() throws IOException {
+            for (var toxic : proxy.toxics().getAll()) {
+                toxic.remove();
+            }
         }
     }
 

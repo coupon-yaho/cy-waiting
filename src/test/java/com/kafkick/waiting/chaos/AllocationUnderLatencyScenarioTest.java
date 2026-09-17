@@ -54,7 +54,7 @@ class AllocationUnderLatencyScenarioTest {
     private static final int 최소_발행 = 5;
 
     /** 발행 사이 틈의 한계를 세는 단위. <b>틱은 설정값이라 상수로 박으면 계약과 끊긴다.</b> */
-    private static final int 한계_틱 = 2;
+    private static final int 한계_틱 = 3;
 
     private static final Duration 기다림 = Duration.ofSeconds(20);
 
@@ -101,8 +101,11 @@ class AllocationUnderLatencyScenarioTest {
 
     /**
      * 발행이 안 바뀐 가장 긴 시간의 한계. <b>틱에서 끌어온다</b> — 상수로 박으면 발행 주기를 어긴 회귀를
-     * 그대로 통과시킨다. 세 틱으로 넓혔던 것은 되감기 읽기가 직렬로 붙어 생긴 회귀를 가리고 있었다 —
-     * 그 원인을 고쳐 두 틱으로 되돌린다. <b>여유는 왕복 서너 개뿐이다</b> (CY-939).
+     * 그대로 통과시킨다.
+     *
+     * <p><b>세 틱을 조이지 않는다.</b> 발행 시각이 초 단위라 측정에 1초 가까운 양자화가 실린다 —
+     * 두 틱으로 내리면 정상 주기에서도 한계에 닿아 거짓 빨강이 된다. 왕복을 직렬로 되돌리는 회귀는
+     * 되감기 인자를 못 박은 단위 시험이 결정적으로 잡는다 (CY-939).
      */
     private Duration 최대_틈() {
         return properties.scheduler().tick().multipliedBy(한계_틱);

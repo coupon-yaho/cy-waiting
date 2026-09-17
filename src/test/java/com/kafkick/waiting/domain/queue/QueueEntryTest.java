@@ -104,4 +104,28 @@ class QueueEntryTest {
         assertThat(new QueueEntry(QueueState.ADMITTED, 0, 1, true, false, true).rejoined())
                 .as("차례가 온 사람").isFalse();
     }
+
+    /**
+     * <b>내 뒤는 총원과 앞 인원을 같은 기준으로 센 값에서만 나온다</b> (CY-827). 따로 읽으면
+     * "앞에 100명인데 총 80명" 이 되고, 그 상태로 뺄셈을 하면 음수가 화면에 나간다.
+     */
+    @Test
+    @DisplayName("뒷사람_수는_같은_기준에서만_낸다")
+    void 뒷사람_수는_같은_기준에서만_낸다() {
+        QueueEntry 기다리는_사람 = new QueueEntry(QueueState.WAITING, 1, 100, true, false, false, 3);
+        assertThat(기다리는_사람.behind()).as("총원 3 · 앞 1 · 나 1").isEqualTo(1);
+
+        QueueEntry 총원을_모르는_사람 =
+                new QueueEntry(QueueState.WAITING, 1, 100, true, false, false);
+        assertThat(총원을_모르는_사람.behind()).as("모르면 모른다고 낸다")
+                .isEqualTo(QueueEntry.UNKNOWN_TOTAL);
+
+        QueueEntry 입장한_사람 = new QueueEntry(QueueState.ADMITTED, 0, 100, true, false, false, 3);
+        assertThat(입장한_사람.behind()).as("줄을 떠난 사람의 뒤는 뜻이 없다")
+                .isEqualTo(QueueEntry.UNKNOWN_TOTAL);
+
+        // **음수를 안 낸다.** 기준이 어긋난 값이 들어와도 화면에 -1 명이 나가면 안 된다.
+        QueueEntry 어긋난_값 = new QueueEntry(QueueState.WAITING, 5, 100, true, false, false, 2);
+        assertThat(어긋난_값.behind()).as("어긋나면 0").isZero();
+    }
 }

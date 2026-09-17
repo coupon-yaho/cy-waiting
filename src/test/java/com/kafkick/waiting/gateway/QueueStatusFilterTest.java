@@ -576,6 +576,25 @@ class QueueStatusFilterTest {
         assertThat(data.get("etaSeconds").asLong()).isEqualTo(450);
     }
 
+    /**
+     * <b>총원과 뒷사람 수를 같이 준다</b> (CY-827). 앞 인원만 주면 화면이 "얼마나 남았나" 를 못 그리고,
+     * 따로 읽어 채우면 앞 인원과 기준이 갈려 "앞에 100명인데 총 80명" 이 된다.
+     */
+    @Test
+    @DisplayName("총원과_뒷사람_수를_같이_싣는다")
+    void 총원과_뒷사람_수를_같이_싣는다() {
+        줄.enqueue(COUPON, "앞사람", NO_LIMIT, 지금).block();
+        줄.enqueue(COUPON, MEMBER, NO_LIMIT, 지금).block();
+        줄.enqueue(COUPON, "뒷사람", NO_LIMIT, 지금).block();
+
+        MockServerWebExchange exchange = 토큰으로_조회한다(tokens.issue(COUPON, MEMBER, 지금));
+
+        JsonNode data = 본문(exchange).get("data");
+        assertThat(data.get("position").asLong()).as("내 앞").isEqualTo(1);
+        assertThat(data.get("totalWaiting").asLong()).as("기다리는 총원").isEqualTo(3);
+        assertThat(data.get("behind").asLong()).as("내 뒤").isEqualTo(1);
+    }
+
     @Test
     @DisplayName("기다리는_중이면_순번을_준다")
     void 기다리는_중이면_순번을_준다() {

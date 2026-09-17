@@ -2,9 +2,12 @@ package com.kafkick.waiting.chaos;
 
 import com.kafkick.waiting.adapter.redis.RedisKeys;
 import com.kafkick.waiting.control.SnapshotHolder;
+import com.kafkick.waiting.domain.queue.QueueToken;
 import io.lettuce.core.RedisException;
 import io.lettuce.core.api.StatefulRedisConnection;
 import java.time.Duration;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -58,6 +61,12 @@ class PersistenceRecoveryScenarioTest {
     /** 증발할 수도 있는 사람들. 죽기 직전에 등록해 everysec 창에 걸친다. */
     private static final int 증발할_회원 = 2_000;
 
+    /**
+     * 입장까지 간 사람. <b>덧붙이기를 멈춘 뒤에 입장한다</b> — 큐에서 빼는 쓰기가 파일에 안 남아,
+     * 되살아나면 임계 아래에 다시 선 모양이 된다 (CY-854).
+     */
+    private static final int 입장할_회원 = 4_000;
+
     private static final Duration 기다림 = Duration.ofSeconds(30);
 
 
@@ -101,6 +110,9 @@ class PersistenceRecoveryScenarioTest {
     @Autowired
     private SnapshotHolder holder;
 
+    @Autowired
+    private QueueToken 줄_토큰;
+
     private WebTestClient 클라이언트() {
         return WebTestClient.bindToServer()
                 .baseUrl("http://localhost:" + port)
@@ -117,6 +129,35 @@ class PersistenceRecoveryScenarioTest {
                 .returnResult(Void.class)
                 .getStatus()
                 .value();
+    }
+
+    /** 입장으로 바뀔 때까지 묻는다. 배분이 임계를 올리는 데 몇 틱이 걸린다. */
+    private boolean 입장할_때까지_묻는다(int member) {
+        try {
+            Awaitility.await().alias("입장까지 간다").atMost(기다림)
+                    .pollInterval(Duration.ofMillis(200))
+                    .until(() -> 순번을_묻는다(member).contains("\"ADMITTED\""));
+            return true;
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    /**
+     * 줄을 치고 <b>본문의 상태</b>를 낸다. 코드로는 못 가른다 — 대기도 미등록도 200 이고,
+     * 입장만 토큰을 싣는다.
+     */
+    private String 순번을_묻는다(int member) {
+        byte[] 본문 = 클라이언트().get()
+                .uri("/api/v1/coupons/" + COUPON + "/queue")
+                .header("X-Member-Id", String.valueOf(member))
+                .header("X-Member-Grade", "GOLD")
+                .header("Queue-Token",
+                        줄_토큰.issue(COUPON, String.valueOf(member), Instant.now()))
+                .exchange()
+                .returnResult(byte[].class)
+                .getResponseBodyContent();
+        return 본문 == null ? "" : new String(본문, StandardCharsets.UTF_8);
     }
 
     private List<Integer> 여러_번_시도한다(String couponId, int 횟수, int 시작_회원) {
@@ -177,6 +218,10 @@ class PersistenceRecoveryScenarioTest {
             long[] 진입_임계 = new long[1];
             BackendReports[] 보고기 = new BackendReports[1];
             long[] 회복_임계 = new long[1];
+            boolean[] 입장했다 = new boolean[1];
+            boolean[] 입장자가_큐에서_빠졌다 = new boolean[1];
+            boolean[] 입장자가_되살아났다 = new boolean[1];
+            String[] 되살아난_뒤_응답 = new String[1];
 
             ChaosScenario.named("C12 영속 복구")
                     .baseline(() -> {
@@ -200,6 +245,9 @@ class PersistenceRecoveryScenarioTest {
                                 여러_번_시도한다(한산한_쿠폰[0], 한산한_보낼_수, 100)));
                         줄_도착[0] = 뒷단까지_센다(COUPON, () -> 정상_줄_상태.addAll(
                                 여러_번_시도한다(COUPON, 보낼_수, 살아남을_회원)));
+                        // **입장까지 갈 사람을 먼저 줄에 세운다** (CY-854). 등록은 디스크에 남고
+                        // 빼기만 유실돼야 "임계는 앞서고 큐만 뒤로 간" 모양이 만들어진다.
+                        여러_번_시도한다(COUPON, 1, 입장할_회원);
                         // **여기까지를 디스크에 못 박는다.** everysec 은 마지막
                         // 1초를 잃는데, 그 1초 안에 살아남을 무리가 들어가면
                         // 이 시험이 재는 것이 통째 유실(C1)이 되어 버린다.
@@ -226,6 +274,10 @@ class PersistenceRecoveryScenarioTest {
                         // everysec 창이 통째로 날아간 최악의 경우와 같은 모양이다.
                         덧붙이기를_멈춘다();
                         여러_번_시도한다(COUPON, 보낼_수, 증발할_회원);
+                        // **여기서 입장시킨다** (CY-854). 큐에서 빼는 것은 폴링이고, 그 쓰기가
+                        // 파일에 안 남으면 되살아난 뒤 임계 아래에 다시 선 모양이 된다.
+                        입장했다[0] = 입장할_때까지_묻는다(입장할_회원);
+                        입장자가_큐에서_빠졌다[0] = 자리들(입장할_회원, 1).isEmpty();
                         faults.끊는다();
                     })
                     .duringFault(() -> {
@@ -258,6 +310,11 @@ class PersistenceRecoveryScenarioTest {
                         줄_도착[2] = 뒷단까지_센다(COUPON, () -> 재등록_상태.addAll(
                                 여러_번_시도한다(COUPON, 보낼_수, 증발할_회원)));
                         재등록_자리.putAll(자리들(증발할_회원, 보낼_수));
+                        // **되살아났는지 보고, 그 사람에게 무엇이 나가는지 본다.** 임계는 앞서 있고
+                        // 큐만 뒤로 갔으므로 다시 물으면 곧바로 입장이어야 한다 — 새 순번으로 뒤에
+                        // 세우면 그것이 순번 역행이다.
+                        입장자가_되살아났다[0] = !자리들(입장할_회원, 1).isEmpty();
+                        되살아난_뒤_응답[0] = 순번을_묻는다(입장할_회원);
                     })
                     .assertEntry(() -> RecoveryCriteria.violations(
                             대조군이_받았다("정상", 정상_상태),
@@ -292,6 +349,21 @@ class PersistenceRecoveryScenarioTest {
                             // 살아남으면 재등록 갈래가 한 번도 안 돌아, 아래
                             // 추월 판정이 재는 척하는 자리가 된다.
                             증발이_일어났다(증발_뒤_자리),
+                            // **전제 — 입장까지 간 사람이 실제로 있었다.** 없으면 아래 판정이
+                            // 재는 척하는 자리가 된다 (CY-854).
+                            입장했다[0] && 입장자가_큐에서_빠졌다[0] ? Optional.empty()
+                                    : Optional.of("입장자를 못 만들었다 — 입장 %s, 큐에서 빠짐 %s"
+                                            .formatted(입장했다[0], 입장자가_큐에서_빠졌다[0])),
+                            // **되살아난 입장자는 다시 입장으로 답한다.** 임계가 앞서 있으므로
+                            // 곧바로 입장이어야 하고, 202 면 그 사람이 새 순번으로 다시 선 것이다.
+                            // **전제 — 되살아남이 실제로 일어났다.** 안 일어나면 아래 판정이
+                            // 재는 척하는 자리가 된다. 등록은 내려쓰고 빼기만 유실시켜 만든다.
+                            입장자가_되살아났다[0] ? Optional.empty()
+                                    : Optional.of("입장자가 안 되살아났다 — 유실 창이 빗나갔다"),
+                            !입장자가_되살아났다[0] || 되살아난_뒤_응답[0].contains("\"ADMITTED\"")
+                                    ? Optional.empty()
+                                    : Optional.of("되살아난 입장자가 다시 줄에 섰다 — 응답 %s"
+                                            .formatted(되살아난_뒤_응답[0])),
                             // RC5 — 남은 사람의 자리는 안 움직인다.
                             //
                             // **추리지 않는다.** 사라진 사람을 비교 집합에서

@@ -1,5 +1,6 @@
 package com.kafkick.waiting.domain.admission;
 
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -13,7 +14,9 @@ public class SecondWindowLimiter {
     /** 키가 클라이언트 입력에서 오므로 상한이 없으면 메모리가 무한히 는다. */
     private final int maxKeys;
 
-    private final Map<String, Long> used = new HashMap<>();
+    /** 축마다 따로 센다. 자리를 같이 쓰면 채워지는 축이 다른 축의 새 키를 막는다 (CY-925). */
+    private final Map<Axis, Map<String, Long>> used = new EnumMap<>(Axis.class);
+
     private long windowSecond = Long.MIN_VALUE;
 
     /** 키 상한을 정해 만든다. 0 이하는 1 로 올린다 — 상한이 없는 리미터는 없다. */
@@ -23,6 +26,9 @@ public class SecondWindowLimiter {
 
     SecondWindowLimiter(int maxKeys) {
         this.maxKeys = Math.max(1, maxKeys);
+        for (Axis axis : Axis.values()) {
+            used.put(axis, new HashMap<>());
+        }
     }
 
     /**
@@ -33,20 +39,29 @@ public class SecondWindowLimiter {
      * @param epochSecond  주입받은 시각. 도메인은 시계를 부르지 않는다
      */
     public synchronized boolean tryAcquire(String key, long cap, long epochSecond) {
+        return tryAcquire(Axis.PRIMARY, key, cap, epochSecond);
+    }
+
+    /**
+     * 축을 지정해 차감한다. <b>축마다 키 자리를 따로 준다</b> — 클라이언트가 값을 바꿔가며 채울 수 있는 축이
+     * 있으면, 자리를 같이 쓸 때 그 축이 다른 축의 새 키까지 막는다.
+     */
+    public synchronized boolean tryAcquire(Axis axis, String key, long cap, long epochSecond) {
         if (cap <= 0) {
             return false;
         }
         rollWindow(epochSecond);
 
-        long current = used.getOrDefault(key, 0L);
+        Map<String, Long> counts = used.get(axis);
+        long current = counts.getOrDefault(key, 0L);
         if (current >= cap) {
             return false;
         }
-        if (current == 0 && used.size() >= maxKeys) {
+        if (current == 0 && counts.size() >= maxKeys) {
             // 자리 없이 통과시키면 상한이 무의미해진다.
             return false;
         }
-        used.put(key, current + 1);
+        counts.put(key, current + 1);
         return true;
     }
 
@@ -58,44 +73,58 @@ public class SecondWindowLimiter {
      */
     public synchronized AcquireResult tryAcquireAll(
             String couponKey, long couponCap, String globalKey, long globalCap, long epochSecond) {
+        return tryAcquireAll(Axis.PRIMARY, couponKey, couponCap,
+                Axis.PRIMARY, globalKey, globalCap, epochSecond);
+    }
+
+    /** 축을 갈라 전부-아니면-전무로 획득한다. 자리 부족은 축마다 따로 판정한다. */
+    public synchronized AcquireResult tryAcquireAll(
+            Axis couponAxis, String couponKey, long couponCap,
+            Axis globalAxis, String globalKey, long globalCap, long epochSecond) {
 
         rollWindow(epochSecond);
+        Map<String, Long> coupons = used.get(couponAxis);
+        Map<String, Long> globals = used.get(globalAxis);
 
         // 두 키가 같으면 예산도 하나다. 따로 차감하면 요청 하나가 2 를 소비해
         // 상한의 절반만 통과시킨다.
-        if (couponKey.equals(globalKey)) {
+        if (couponAxis == globalAxis && couponKey.equals(globalKey)) {
             long cap = Math.min(couponCap, globalCap);
-            if (!hasRoom(couponKey, cap)) {
+            if (!hasRoom(coupons, couponKey, cap)) {
                 return couponCap <= globalCap
                         ? AcquireResult.COUPON_EXHAUSTED
                         : AcquireResult.GLOBAL_EXHAUSTED;
             }
-            if (!hasSlots(used.containsKey(couponKey) ? 0 : 1)) {
+            if (!hasSlots(coupons, coupons.containsKey(couponKey) ? 0 : 1)) {
                 return AcquireResult.KEY_SATURATED;
             }
-            used.merge(couponKey, 1L, Long::sum);
+            coupons.merge(couponKey, 1L, Long::sum);
             return AcquireResult.ACQUIRED;
         }
 
         // 신규 키가 몇 개 들어오는지 먼저 센다. 하나씩 검사하면 마지막 슬롯
         // 하나를 두 키가 함께 차지해 상한을 넘긴다.
-        int incoming = (used.containsKey(couponKey) ? 0 : 1)
-                + (used.containsKey(globalKey) ? 0 : 1);
+        int incomingCoupon = coupons.containsKey(couponKey) ? 0 : 1;
+        int incomingGlobal = globals.containsKey(globalKey) ? 0 : 1;
 
         // 예산을 먼저 본다. 예산이 마른 것과 자리가 없는 것은 대응이 다르고,
         // 예산이 말랐으면 그 키는 이미 자리를 잡고 있어 자리 문제가 아니다.
-        if (!hasRoom(couponKey, couponCap)) {
+        if (!hasRoom(coupons, couponKey, couponCap)) {
             return AcquireResult.COUPON_EXHAUSTED;
         }
-        if (!hasRoom(globalKey, globalCap)) {
+        if (!hasRoom(globals, globalKey, globalCap)) {
             return AcquireResult.GLOBAL_EXHAUSTED;
         }
-        if (!hasSlots(incoming)) {
+        // 같은 축이면 자리를 함께 세야 마지막 한 자리를 두 키가 나눠 갖지 않는다.
+        boolean sameAxis = couponAxis == globalAxis;
+        if (sameAxis
+                ? !hasSlots(coupons, incomingCoupon + incomingGlobal)
+                : !hasSlots(coupons, incomingCoupon) || !hasSlots(globals, incomingGlobal)) {
             return AcquireResult.KEY_SATURATED;
         }
 
-        used.merge(couponKey, 1L, Long::sum);
-        used.merge(globalKey, 1L, Long::sum);
+        coupons.merge(couponKey, 1L, Long::sum);
+        globals.merge(globalKey, 1L, Long::sum);
         return AcquireResult.ACQUIRED;
     }
 
@@ -107,18 +136,23 @@ public class SecondWindowLimiter {
         return maxKeys;
     }
 
-    /** 지금 들고 있는 키 수. 상한이 지켜지는지 시험하려고 노출한다. */
+    /** 지금 들고 있는 키 수. 상한이 지켜지는지 시험하려고 노출한다. 축의 합이다. */
     public synchronized int size() {
-        return used.size();
+        return used.values().stream().mapToInt(Map::size).sum();
     }
 
-    private boolean hasRoom(String key, long cap) {
-        return cap > 0 && used.getOrDefault(key, 0L) < cap;
+    /** 그 축이 자리를 다 썼는가. 부르는 쪽이 처분을 정한다 — 거절과 축을 접는 것은 다르다. */
+    public synchronized boolean saturated(Axis axis) {
+        return used.get(axis).size() >= maxKeys;
+    }
+
+    private boolean hasRoom(Map<String, Long> counts, String key, long cap) {
+        return cap > 0 && counts.getOrDefault(key, 0L) < cap;
     }
 
     /** 새로 들어올 키 {@code incomingKeys} 개를 받을 자리가 남았는가. */
-    private boolean hasSlots(int incomingKeys) {
-        return used.size() + incomingKeys <= maxKeys;
+    private boolean hasSlots(Map<String, Long> counts, int incomingKeys) {
+        return counts.size() + incomingKeys <= maxKeys;
     }
 
     /**
@@ -132,7 +166,18 @@ public class SecondWindowLimiter {
             return;
         }
         windowSecond = epochSecond;
-        used.clear();
+        used.values().forEach(Map::clear);
+    }
+
+    /**
+     * 예산을 가르는 축. <b>축마다 키 자리를 따로 준다</b> — 한 축이 클라이언트 입력에서 오면 그 축은
+     * 채워질 수 있고, 자리를 같이 쓰면 그때 정상 쪽이 막힌다.
+     */
+    public enum Axis {
+        /** 축을 안 주면 여기다. 쿠폰·노드 전역처럼 값 공간이 코드에서 정해지는 쪽이다. */
+        PRIMARY,
+        /** 값 공간이 다른 축. 두 축이 서로의 자리를 못 먹는다. */
+        SECONDARY
     }
 
     /** 획득 실패 시 어느 예산이 부족했는지. 대응이 다르므로 구분한다. */

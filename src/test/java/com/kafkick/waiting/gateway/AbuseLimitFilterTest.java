@@ -307,6 +307,66 @@ class AbuseLimitFilterTest {
         assertThat(좁은_것.size()).isLessThanOrEqualTo(100);
     }
 
+    /**
+     * <b>식별자 축이 차면 그 축을 접는다</b> (CY-925). 식별자에 서명이 없어 값을 바꿔가며 자리를 채울 수
+     * 있는데, 거절로 두면 채운 쪽이 아니라 새로 온 대기자가 막힌다.
+     */
+    @Test
+    @DisplayName("식별자_자리가_차도_새_대기자가_들어온다")
+    void 식별자_자리가_차도_새_대기자가_들어온다() {
+        SecondWindowLimiter 좁은_것 = SecondWindowLimiter.withMaxKeys(2);
+        AbuseLimitFilter 좁은_필터 = AbuseLimitFilter.withLimiter(
+                시계, meters, () -> 0.5, TrustedProxies.of(List.of("127.0.0.1")), 좁은_것);
+        AtomicInteger 통과 = new AtomicInteger();
+        for (int i = 0; i < 5; i++) {
+            태운다(좁은_필터, "flood" + i, "10.0.0.1", 통과);
+        }
+
+        assertThat(좁은_것.saturated(SecondWindowLimiter.Axis.SECONDARY))
+                .as("전제 — 식별자 축이 찼다").isTrue();
+
+        int 앞서_통과 = 통과.get();
+        MockServerWebExchange 새_대기자 = 태운다(좁은_필터, "new-member", "10.0.0.2", 통과);
+
+        assertThat(통과.get()).as("주소 축으로 판정해 통과한다").isEqualTo(앞서_통과 + 1);
+        assertThat(새_대기자.getResponse().getStatusCode()).isNull();
+    }
+
+    /** 접어도 주소 축은 그대로 판정한다. 접는 것이 여는 것이 되면 그 자체가 통로다. */
+    @Test
+    @DisplayName("접어도_주소_상한은_그대로다")
+    void 접어도_주소_상한은_그대로다() {
+        SecondWindowLimiter 좁은_것 = SecondWindowLimiter.withMaxKeys(2);
+        AbuseLimitFilter 좁은_필터 = AbuseLimitFilter.withLimiter(
+                시계, meters, () -> 0.5, TrustedProxies.of(List.of("127.0.0.1")), 좁은_것);
+        AtomicInteger 통과 = new AtomicInteger();
+        for (int i = 0; i < 3; i++) {
+            태운다(좁은_필터, "flood" + i, "10.0.0.1", 통과);
+        }
+
+        MockServerWebExchange 마지막 = null;
+        for (int i = 0; i < 300; i++) {
+            마지막 = 태운다(좁은_필터, "m" + i, "10.0.0.1", 통과);
+        }
+
+        assertThat(마지막.getResponse().getStatusCode())
+                .as("주소 상한을 넘기면 막힌다").isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+    }
+
+    private MockServerWebExchange 태운다(AbuseLimitFilter 필터, String member, String ip,
+            AtomicInteger 통과) {
+        MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest
+                .method(HttpMethod.POST, ISSUE)
+                .remoteAddress(new InetSocketAddress("127.0.0.1", 12345))
+                .header("X-Member-Id", member)
+                .header("X-Forwarded-For", ip));
+        필터.filter(exchange, e -> {
+            통과.incrementAndGet();
+            return Mono.empty();
+        }).block();
+        return exchange;
+    }
+
     @Test
     @DisplayName("남의_경로는_그대로_흘려보낸다")
     void 남의_경로는_그대로_흘려보낸다() {

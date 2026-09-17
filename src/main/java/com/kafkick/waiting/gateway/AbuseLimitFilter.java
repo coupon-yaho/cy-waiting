@@ -233,13 +233,12 @@ public final class AbuseLimitFilter implements WebFilter {
         String socket = socketAddress(exchange);
         // **신뢰 판정은 원문으로 한다.** 접은 주소로 물으면 신뢰 대역의 경계가 달라진다.
         if (socket == null || !trusted.isTrusted(socket)) {
-            // 앞단이 없는 배포도 같은 키 함수를 쓴다 — 안 그러면 직결 v6 가 주소를 돌려 상한을 우회한다.
-            return canonical(IpLiteral.parse(socket));
+            return foldedSocket(socket);
         }
         // 프록시가 자기 앞의 주소를 뒤에 붙이므로 우리가 아는 홉이 넣은 값은 마지막이다.
         List<String> forwarded = exchange.getRequest().getHeaders().get(FORWARDED_FOR);
         if (forwarded == null || forwarded.isEmpty()) {
-            return canonical(IpLiteral.parse(socket));
+            return foldedSocket(socket);
         }
         String last = forwarded.get(forwarded.size() - 1);
         String candidate = last.substring(last.lastIndexOf(',') + 1).trim();
@@ -274,6 +273,23 @@ public final class AbuseLimitFilter implements WebFilter {
         } catch (UnknownHostException e) {
             return null;
         }
+    }
+
+    /**
+     * 소켓 주소의 키. 앞단이 없는 배포도 전달 헤더 경로와 같은 함수를 쓴다 — 안 그러면 직결 v6 가 주소를 돌려
+     * 상한을 우회한다.
+     *
+     * <p><b>못 읽으면 원문을 쓴다.</b> 소켓이 준 값은 사용자가 채운 것이 아니라 커널이 안 주소다. 스코프가
+     * 붙은 링크 로컬(`fe80::1%eth0`)처럼 리터럴로 안 읽히는 모양이 있는데, 그것을 거절로 바꾸면 되던 연결이
+     * 끊긴다. 존은 떼고 접는다.
+     */
+    private String foldedSocket(String socket) {
+        if (socket == null) {
+            return null;
+        }
+        int zone = socket.indexOf('%');
+        String folded = canonical(IpLiteral.parse(zone < 0 ? socket : socket.substring(0, zone)));
+        return folded != null ? folded : socket;
     }
 
     /** v4-mapped v6 (::ffff:a.b.c.d). 묶으면 v4 대역 하나가 한 몫이 되므로 주소 그대로 쓴다. */

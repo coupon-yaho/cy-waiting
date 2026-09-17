@@ -6,7 +6,10 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.kafkick.waiting.MutableClock;
 import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
+import java.net.Inet6Address;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.UnknownHostException;
 import java.time.Duration;
 import java.util.List;
 import java.time.Instant;
@@ -433,9 +436,17 @@ class AbuseLimitFilterTest {
 
     /** 전달 헤더 없이 소켓 주소로만 오는 요청. 앞단이 없는 배포의 모양이다. */
     private MockServerWebExchange 소켓으로_태운다(String member, String ip) {
+        return 소켓으로_태운다(member, new InetSocketAddress(ip, 12345));
+    }
+
+    private MockServerWebExchange 소켓으로_태운다(String member, InetAddress ip) {
+        return 소켓으로_태운다(member, new InetSocketAddress(ip, 12345));
+    }
+
+    private MockServerWebExchange 소켓으로_태운다(String member, InetSocketAddress remote) {
         MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest
                 .method(HttpMethod.POST, ISSUE)
-                .remoteAddress(new InetSocketAddress(ip, 12345))
+                .remoteAddress(remote)
                 .header("X-Member-Id", member));
         filter.filter(exchange, e -> {
             다음으로_감.incrementAndGet();
@@ -509,15 +520,25 @@ class AbuseLimitFilterTest {
     /** 스코프가 붙은 소켓 주소. 존을 떼고 접는다 — 못 읽는다고 막으면 되던 연결이 끊긴다. */
     @Test
     @DisplayName("스코프가_붙은_소켓_주소도_64_로_묶는다")
-    void 스코프가_붙은_소켓_주소도_64_로_묶는다() {
+    void 스코프가_붙은_소켓_주소도_64_로_묶는다() throws Exception {
         int 앞서_통과 = 다음으로_감.get();
         for (int i = 0; i < 200; i++) {
-            소켓으로_태운다(String.valueOf(14_000 + i), "fe80::" + Integer.toHexString(i + 1) + "%eth0");
+            소켓으로_태운다(String.valueOf(14_000 + i), 존이_붙은_주소(i + 1));
         }
 
         assertThat(다음으로_감.get() - 앞서_통과).as("막지 않는다").isEqualTo(200);
-        assertThat(소켓으로_태운다("1499", "fe80::ffff%eth0").getResponse().getStatusCode())
+        assertThat(소켓으로_태운다("1499", 존이_붙은_주소(0xffff)).getResponse().getStatusCode())
                 .as("존을 떼고 같은 /64 로 묶는다").isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+    }
+
+    /** `fe80::N%2`. 인터페이스 이름 대신 번호를 써 어느 기계에서나 같은 주소가 나온다. */
+    private InetAddress 존이_붙은_주소(int 뒷자리) throws UnknownHostException {
+        byte[] bytes = new byte[16];
+        bytes[0] = (byte) 0xfe;
+        bytes[1] = (byte) 0x80;
+        bytes[14] = (byte) (뒷자리 >> 8);
+        bytes[15] = (byte) 뒷자리;
+        return Inet6Address.getByAddress(null, bytes, 2);
     }
 
     @Test

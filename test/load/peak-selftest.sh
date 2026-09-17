@@ -185,7 +185,7 @@ lib_case "중첩형 도착률" 1234.5000 "$(peak_summary_value "$nested" rate)"
 lib_case "중첩형 응답 p99" 9.5000 "$(peak_summary_value "$nested" p99)"
 lib_case "없는 파일은 빈 값" "" "$(peak_summary_value "$work/none.json" rate)"
 
-# docker stats 한 벌을 표본 줄로 옮긴다 (10.7.4). 남의 프로젝트 컨테이너가 섞이면 그 CPU 가 천장 원인에
+# docker stats 한 벌을 표본 줄로 옮긴다. 남의 프로젝트 컨테이너가 섞이면 그 CPU 가 천장 원인에
 # 끼고, `%` 를 안 떼면 판정기가 숫자가 아닌 표본으로 읽어 매 회차 판정 불가가 된다.
 stats=$(printf 'load-gateway-1\t95.30%%\nsearch-cache\t88.00%%\nload-redis-1\t12.05%%\n')
 lib_case "우리 컨테이너만 · 백분율 기호를 뗀다" \

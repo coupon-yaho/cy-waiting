@@ -545,6 +545,25 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         assertThat(port.healedSpan()).as("되살린 폭의 합 (20 - 10)").isEqualTo(10);
     }
 
+    /**
+     * <b>폭은 되살린 만큼이다.</b> 같은 회차의 입장까지 더하면 뜨거운 쿠폰일수록 부풀어, 작은 되살림과
+     * 큰 되살림을 가르려던 지표가 그 구분을 잃는다.
+     */
+    @Test
+    @DisplayName("같은_회차의_입장은_되살린_폭에_안_넣는다")
+    void 같은_회차의_입장은_되살린_폭에_안_넣는다() {
+        줄_세운다("c1", 10, 20, 30, 40);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "10").block(WAIT);
+
+        port.apply(new Grant("c1", 1), 임기).block(WAIT);
+
+        assertThat(redis.opsForValue().get(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT))
+                .as("되살린 뒤 한 명 더 들인다").isEqualTo("30");
+        assertThat(port.healed()).isEqualTo(1);
+        assertThat(port.healedSpan()).as("10 에서 20 으로 되살린 폭").isEqualTo(10);
+    }
+
     /** 커서가 아예 없던 되살림도 센다. 폭은 못 재므로 합에 안 넣는다 — 안 그러면 임계값 자체가 폭으로 들어간다. */
     @Test
     @DisplayName("커서가_없던_되살림은_폭에_안_넣는다")

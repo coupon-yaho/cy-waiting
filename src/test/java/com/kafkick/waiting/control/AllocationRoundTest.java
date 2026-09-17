@@ -654,6 +654,56 @@ class AllocationRoundTest {
     }
 
     /**
+     * <b>적용 실패가 그 쿠폰의 재개 유예를 지우면 안 됩니다</b> (CY-947).
+     *
+     * <p>게이트는 넘겨받은 맵을 이번 틱의 전부로 보고, 없는 쿠폰의 유예 기록을 지웁니다. 실패한 쿠폰을 맵에서
+     * 빼면 한 틱을 보호하는 대신 5분짜리 유예를 버리고, 다음 틱에 밀린 폴링이 안 온 앞줄이 걷힙니다.
+     */
+    @Test
+    @DisplayName("적용이_실패해도_재개_유예는_남는다")
+    void 적용이_실패해도_재개_유예는_남는다() {
+        AtomicBoolean 낡음 = new AtomicBoolean(true);
+        AtomicBoolean 실패 = new AtomicBoolean(false);
+        List<List<String>> 틱마다_쓴_쿠폰 = new ArrayList<>();
+        AllocationRound round = AllocationRound.of(
+                () -> true,
+                () -> Mono.just(new TimedDemands(
+                        List.of(new CouponDemand("c1", 100, 1_000, QueueMode.ADAPTIVE),
+                                new CouponDemand("c2", 100, 1_000, QueueMode.ADAPTIVE)),
+                        읽은_시각)),
+                () -> 1_000, () -> 1,
+                grant -> 실패.get() && "c1".equals(grant.couponId())
+                        ? Mono.error(new IllegalStateException("적용이 시한에 걸렸다"))
+                        : Mono.just(grant.credit()),
+                hash -> Mono.empty(),
+                () -> Instant.ofEpochSecond(읽은_시각),
+                () -> Mono.just(CreditSmoother.of(1.0)),
+                SnapshotCodec.create(), () -> 0L, Optional::empty,
+                SoldOutCleanup.of(1, new SimpleMeterRegistry()),
+                ids -> Mono.just(List.of()),
+                ids -> Mono.just(List.of()),
+                QueueSweeper.of(
+                        SweepGates.warmed(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
+                        (ids, limit, removeFront) -> {
+                            틱마다_쓴_쿠폰.add(List.copyOf(ids));
+                            return Mono.just(QueueSweeper.SweepResult.NOTHING);
+                        }), 낡음::get, () -> CircuitState.CLOSED);
+
+        // 낡은 틱이 두 쿠폰에 유예를 심는다.
+        round.run().block();
+        낡음.set(false);
+        // 유예 안에서 c1 의 적용만 한 틱 실패한다.
+        실패.set(true);
+        round.run().onErrorResume(e -> Mono.empty()).block();
+        실패.set(false);
+        round.run().block();
+
+        assertThat(틱마다_쓴_쿠폰.get(틱마다_쓴_쿠폰.size() - 1))
+                .as("유예가 남아 있으므로 실패했던 쿠폰도 앞줄 제거 대상이 아니다")
+                .doesNotContain("c1");
+    }
+
+    /**
      * <b>발행이 막힌 회차는 아무도 안 걷습니다.</b>
      *
      * <p>이탈자 청소에는 울타리 인자가 없습니다. 유령이 못 걷는 것은 청소가 발행

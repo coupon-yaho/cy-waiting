@@ -412,6 +412,38 @@ class AbuseLimitFilterTest {
                 .as("주소를 돌려도 같은 /64 의 몫을 쓴다").isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
     }
 
+    /**
+     * <b>앞단이 없는 배포에서도 묶는다</b> (CY-940). 신뢰 홉이 아니거나 전달 헤더가 없으면 소켓 주소를 키로
+     * 쓰는데, 거기를 안 묶으면 직결 v6 클라이언트가 주소를 돌려 상한을 통째로 우회한다.
+     */
+    @Test
+    @DisplayName("전달_헤더가_없어도_소켓_주소를_64_로_묶는다")
+    void 전달_헤더가_없어도_소켓_주소를_64_로_묶는다() {
+        int 앞서_통과 = 다음으로_감.get();
+        for (int i = 0; i < 200; i++) {
+            소켓으로_태운다(String.valueOf(8_000 + i), "2001:db8:5:5::" + Integer.toHexString(i + 1));
+        }
+
+        assertThat(다음으로_감.get() - 앞서_통과).as("상한까지는 다 지나간다").isEqualTo(200);
+        assertThat(소켓으로_태운다("4444", "2001:db8:5:5::ffff").getResponse().getStatusCode())
+                .as("주소를 돌려도 같은 /64 의 몫을 쓴다").isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        assertThat(소켓으로_태운다("4445", "2001:db8:5:6::1").getResponse().getStatusCode())
+                .as("옆 /64 는 안 깎인다").isNull();
+    }
+
+    /** 전달 헤더 없이 소켓 주소로만 오는 요청. 앞단이 없는 배포의 모양이다. */
+    private MockServerWebExchange 소켓으로_태운다(String member, String ip) {
+        MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest
+                .method(HttpMethod.POST, ISSUE)
+                .remoteAddress(new InetSocketAddress(ip, 12345))
+                .header("X-Member-Id", member));
+        filter.filter(exchange, e -> {
+            다음으로_감.incrementAndGet();
+            return Mono.empty();
+        }).block();
+        return exchange;
+    }
+
     @Test
     @DisplayName("다른_64_는_제_몫이_그대로다")
     void 다른_64_는_제_몫이_그대로다() {

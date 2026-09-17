@@ -193,23 +193,14 @@ lib_case "우리 컨테이너만 · 백분율 기호를 뗀다" \
     "$(printf '%s\n' "$stats" | peak_cpu_lines load)"
 lib_case "빈 입력은 빈 출력" "" "$(printf '' | peak_cpu_lines load)"
 
-# 대마다 긁은 판정 계수를 품질별로 합친다 (10.7.3). 이어 붙이면 판정기가 같은 시계열이 둘이라고 멈추고,
-# 대마다 비율을 내 평균하면 적게 받은 대의 비율이 많이 받은 대만큼 무겁게 섞인다.
-gw1=$work/gw1.prom
-gw2=$work/gw2.prom
-printf '%s\n' '# HELP waiting_judgement_total x' \
-    'waiting_judgement_total{application="waiting",quality="fresh"} 900.0' \
-    'waiting_judgement_total{application="waiting",quality="degraded"} 10.0' \
-    'other_metric 5.0' > "$gw1"
-printf '%s\n' 'waiting_judgement_total{application="waiting",quality="fresh"} 100.0' > "$gw2"
-merged=$(peak_merge_judgement "$gw1" "$gw2")
-lib_case "품질별로 대들을 합친다 · 신선" \
-    'waiting_judgement_total{application="waiting",quality="fresh"} 1000.0' \
-    "$(printf '%s\n' "$merged" | grep 'quality="fresh"')"
-lib_case "한 대에만 있는 품질도 싣는다 · 열화" \
-    'waiting_judgement_total{application="waiting",quality="degraded"} 10.0' \
-    "$(printf '%s\n' "$merged" | grep 'quality="degraded"')"
-lib_case "품질마다 한 줄뿐이다" 2 "$(printf '%s\n' "$merged" | grep -c '^waiting_judgement_total')"
+# 대마다 낸 판정 비율을 모은다. **합산하지 않는다** — 한 대가 다시 떴거나 못 긁은 칸이 다른 대의 계수에 묻힌다.
+# 가장 나쁜 것을 쓴다. 판정 불가가 미달보다 앞이다 — 한 대를 못 잰 칸은 나머지가 미달이어도 제품 탓으로 못 읽는다.
+lib_case "모두 서면 ok" ok "$(peak_worst_verdict ok ok)"
+lib_case "한 대만 미달이어도 미달" under "$(peak_worst_verdict ok under)"
+lib_case "한 대만 못 쟀어도 판정 불가" unmeasurable "$(peak_worst_verdict ok unmeasurable)"
+lib_case "판정 불가가 미달보다 앞" unmeasurable "$(peak_worst_verdict under unmeasurable ok)"
+lib_case "모르는 판정은 판정 불가" unmeasurable "$(peak_worst_verdict ok 뭔가)"
+lib_case "받은 것이 없으면 판정 불가" unmeasurable "$(peak_worst_verdict)"
 
 # 종료 코드 해석. 99 를 통째로 정상으로 읽으면 연결을 끊은 회차가 ok 로 남는다.
 thr() { printf '{"metrics":{%s}}' "$1" > "$work/$2"; printf '%s' "$work/$2"; }

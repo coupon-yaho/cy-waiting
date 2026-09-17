@@ -25,7 +25,7 @@ echo "LB 기준선 감당 자기검증"
 
 # **멈춘 칸까지 센다.** 회차가 그 유입을 LB 에 실었으니, LB 가 거기까지 받아야 그 칸의 멈춤을 게이트웨이 탓으로 읽는다.
 run_case "기준선이 회차의 가장 높은 요청 유입 위에서 서면 감당" 0 "감당" \
-    -- "$(steps lb_high.tsv "$(printf '16000\t15990\tok\t2')" "$(printf '32000\t25000\tok\t9')")" "$peak"
+    -- "$(steps lb_high.tsv "$(printf '16000\t15990\tok\t2')" "$(printf '32000\t31000\tok\t9')")" "$peak"
 run_case "같은 요청 유입에서 서면 감당" 0 "감당" \
     -- "$(steps lb_same.tsv "$(printf '16000\t15990\tok\t2')" "$(printf '32000\t25000\tok\t9')")" \
     "$(steps peak_same.tsv "$(printf '16000\t14600\tok\t900')")"
@@ -34,7 +34,15 @@ run_case "기준선이 낮은 칸에서 멈추면 판정 불가" 2 "못 감당" 
 # 회차가 선 칸은 8000 이지만 16000 을 실었다.
 run_case "회차의 선 칸이 아니라 실은 칸과 견준다" 2 "못 감당" \
     -- "$(steps lb_mid.tsv "$(printf '8000\t7990\tok\t2')" "$(printf '16000\t12000\tok\t9')")" \
-    "$(steps peak_stop.tsv "$(printf '8000\t7950\tok\t160')" "$(printf '16000\t9000\tok\t900')")"
+    "$(steps peak_stop.tsv "$(printf '8000\t7950\tok\t160')" "$(printf '16000\t7000\tok\t900')")"
+# 요약을 못 읽은 칸도 실었던 칸이다. 실측이 0 이라고 건너뛰면 필요한 유입이 낮아져 거짓 감당이 난다.
+run_case "판정 불가로 멈춘 칸까지 센다" 2 "못 감당" \
+    -- "$(steps lb_unm.tsv "$(printf '8000\t7990\tok\t2')" "$(printf '16000\t12000\tok\t9')")" \
+    "$(steps peak_unm.tsv "$(printf '8000\t7950\tok\t160')" "$(printf '16000\t0\tunmeasurable\t0')")"
+# **응답 기준을 물려받지 않는다.** 최대치 판정기의 응답 기준이 새어 들어오면 멀쩡한 기준선 칸이 안 선 칸이 된다.
+PEAK_LATENCY_P99_MS=1 run_case "응답 기준 환경변수를 물려받지 않는다" 0 "감당" \
+    -- "$(steps lb_lat.tsv "$(printf '16000\t15990\tok\t2')")" "$peak"
+
 # **아래 경계로 충분하다.** 기준선이 천장을 못 봤어도 거기까지는 받았다.
 run_case "기준선이 천장을 못 봤어도 그 칸까지 섰으면 감당" 0 "감당" \
     -- "$(steps lb_open.tsv "$(printf '8000\t7990\tok\t2')" "$(printf '16000\t15990\tok\t3')")" "$peak"

@@ -52,11 +52,8 @@ public final class AllocationRound {
     /** 동시 적용 상한. 레디스 어댑터의 쓰기 상한과 같다. */
     private static final int MAX_CONCURRENT_APPLIES = 16;
 
-    /** 이번 회차가 정리를 이미 돌았는가. 실패 갈래가 같은 회차에 또 세는 것을 막는다. */
-    private final AtomicBoolean cleanedUp = new AtomicBoolean();
-
-    /** 이번 회차가 되감기를 쟀는가. 잰 회차는 목록을 안 버린다. */
-    private final AtomicBoolean rewindMeasured = new AtomicBoolean();
+    /** 회차 상태를 구독마다 따로 담는 자리. 인스턴스 필드로 두면 겹친 구독이 서로의 표시를 덮는다. */
+    private static final String ROUND_STATE = "allocation.round.state";
 
     /**
      * 매진이 발행에 실려 나간 쿠폰. 발행이 못 나간 회차는 이 줄만 지운다 (CY-935).
@@ -394,7 +391,6 @@ public final class AllocationRound {
         // 낡는다 — 둘 다 낡음 판정을 흔든다.
         return Mono.defer(() -> {
             pacer.roundStarted();
-            cleanedUp.set(false);
             Mono<TimedDemands> read = seeded().then(Mono.defer(demands)).cache();
             // 수요 읽기의 실패로 운영값 읽기를 취소하지 않는다. 실패는 두 읽기가 끝난 뒤에 올린다.
             // **되감기도 여기서 같이 낸다** (CY-939). 적용 앞이라는 순서는 지키면서 왕복을 겹친다 —
@@ -407,7 +403,9 @@ public final class AllocationRound {
                     // **틱에서 잘린 회차도 실패다.** 느려진 레디스는 오류가 아니라 취소로 끝나는데,
                     // 되감기를 만드는 failover 가 바로 그 갈래다.
                     .doOnCancel(() -> roundFailed.set(true));
-        });
+        // **구독마다 새 상태를 단다** — 틱에 잘린 회차의 꼬리가 다음 회차와 겹치면, 한 구독의 표시가
+        // 다른 구독의 판단을 바꾼다. 정리를 두 번 돌거나 기준을 잘못 버리는 자리다.
+        }).contextWrite(ctx -> ctx.put(ROUND_STATE, new RoundState()));
     }
 
     /**
@@ -655,7 +653,18 @@ public final class AllocationRound {
         AtomicBoolean anyFailed = new AtomicBoolean();
         AtomicBoolean published = new AtomicBoolean();
         boolean anyCredit = granted.values().stream().anyMatch(c -> c > 0);
-        rememberIds(collected);
+        return Mono.deferContextual(ctx -> {
+            rememberIds(state(ctx), collected);
+            return runRound(collected, granted, credit, readAt, current, anyFailed, published,
+                    anyCredit, before, gatedNow, target);
+        });
+    }
+
+    /** 적용부터 발행·정리·걷기까지. 구독 문맥을 받은 뒤에 도는 자리다. */
+    private Mono<Void> runRound(List<CouponDemand> collected, Map<String, Long> granted,
+            long credit, Instant readAt, CreditSmoother current, AtomicBoolean anyFailed,
+            AtomicBoolean published, boolean anyCredit, ReleaseRamp.State before,
+            boolean gatedNow, long target) {
         return (anyCredit ? pacer.turn() : Mono.<Void>empty())
                 .thenMany(Flux.fromIterable(collected))
                 // **동시에 보낸다.** 차례로 보내면 왕복이 쿠폰 수만큼 쌓여 레디스가 느린 날 회차가 틱을
@@ -711,8 +720,9 @@ public final class AllocationRound {
                         //
                         // **한 회차에 두 번 안 센다.** 정리가 터져 여기로 와도 다시 세면 유예 셈이
                         // 두 번 올라 덜 채운 줄이 지워진다 — 되돌릴 수 없는 쓰기다.
-                        .onErrorResume(e -> (cleanedUp.get() ? Mono.<Void>empty()
-                                : cleanUp(announced(couponsOf(collected, granted))))
+                        .onErrorResume(e -> Mono.deferContextual(ctx ->
+                                state(ctx).cleanedUp.get() ? Mono.<Void>empty()
+                                        : cleanUp(announced(couponsOf(collected, granted))))
                                 .then(Mono.error(e)))))
                 // 발행까지 못 간 회차가 기준을 올리면 다음 성공이 그 배수의
                 // 배수에서 시작한다. 틱을 넘겨 잘린 회차는 오류가 아니라 취소다.
@@ -725,15 +735,19 @@ public final class AllocationRound {
      * 되감기가 해를 끼치는 쿠폰이 정확히 그 쿠폰들이다. 못 재면 표시를 되돌려 다음 회차가 다시 잰다.
      */
     private Mono<Void> watchRewind() {
+        return Mono.deferContextual(ctx -> watchRewind(state(ctx)));
+    }
+
+    private Mono<Void> watchRewind(RoundState state) {
         Function<List<String>, Mono<RewindCheck>> reader = rewound;
         // **회차의 목록을 안 넘긴다.** 읽는 쪽이 자기가 쓴 임계와 합쳐 보므로, 이 회차의 쿠폰은 보탤 것이
         // 없다 — 안 넘기면 수요를 기다리지 않아도 돼 읽기를 처음부터 나란히 낼 수 있다 (CY-939).
         List<String> ids = List.of();
         if (reader == null || !roundFailed.compareAndSet(true, false)) {
-            rewindMeasured.set(false);
+            state.rewindMeasured.set(false);
             return Mono.empty();
         }
-        rewindMeasured.set(true);
+        state.rewindMeasured.set(true);
         long startedTerm = term.get();
         return reader.apply(ids)
                 .filter(seen -> sameTerm(startedTerm))
@@ -767,11 +781,26 @@ public final class AllocationRound {
      * 활성에서 빠진 쿠폰의 기준을 버린다. <b>잰 회차에는 안 버린다</b> — 측정이 밀린 동안 버리면 기준째로
      * 사라지고, 되감기가 활성 목록을 비운 회차가 증거를 지우면 다음 실패에 잴 기준이 없다.
      */
-    private void rememberIds(List<CouponDemand> collected) {
+    private void rememberIds(RoundState state, List<CouponDemand> collected) {
         List<String> ids = collected.stream().map(CouponDemand::couponId).toList();
-        if (!ids.isEmpty() && !rewindMeasured.get()) {
+        if (!ids.isEmpty() && !state.rewindMeasured.get()) {
             forgetInactive.accept(ids);
         }
+    }
+
+    /** 이 구독의 회차 상태. 없으면 구독 밖에서 부른 것이다 — 그건 배선이 틀린 것이다. */
+    private RoundState state(reactor.util.context.ContextView ctx) {
+        return ctx.get(ROUND_STATE);
+    }
+
+    /** 한 구독이 도는 동안의 표시들. 겹친 구독끼리 안 섞이게 구독 문맥에 단다. */
+    private static final class RoundState {
+
+        /** 이 구독이 정리를 이미 돌았는가. 실패 갈래가 같은 구독에서 또 세는 것을 막는다. */
+        private final AtomicBoolean cleanedUp = new AtomicBoolean();
+
+        /** 이 구독이 되감기를 쟀는가. 잰 구독은 목록을 안 버린다. */
+        private final AtomicBoolean rewindMeasured = new AtomicBoolean();
     }
 
     /** 읽는 사이에 임기가 갈렸으면 버린다. 지나간 임기의 사건이 지금 값으로 들어간다. */
@@ -831,9 +860,11 @@ public final class AllocationRound {
      * <p><b>정리 실패가 배분을 막지 않는다.</b> 다음 틱에 다시 온다.
      */
     private Mono<Void> cleanUp(List<CouponDemand> collected, Map<String, Long> granted) {
-        // **돌았다고 먼저 적는다.** 터져도 실패 갈래가 같은 회차에 다시 세면 유예가 두 배로 오른다.
-        cleanedUp.set(true);
-        return cleanUp(couponsOf(collected, granted));
+        // **돌았다고 먼저 적는다.** 터져도 실패 갈래가 같은 구독에서 다시 세면 유예가 두 배로 오른다.
+        return Mono.deferContextual(ctx -> {
+            state(ctx).cleanedUp.set(true);
+            return cleanUp(couponsOf(collected, granted));
+        });
     }
 
     /** 이미 나간 매진만 남긴다. 발행이 못 나간 회차는 이것만 본다. */

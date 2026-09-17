@@ -47,7 +47,7 @@ for pair in "N:$one_cause" "2N:$two_cause"; do
 done
 one_n=$(gateway_count "$one_cause")
 two_n=$(gateway_count "$two_cause")
-if [ "$two_n" -ne $((one_n * 2)) ]; then
+if [ "$one_n" -le 0 ] || [ "$two_n" -ne $((one_n * 2)) ]; then
     echo "::error title=증설 효율::대수가 N 과 2N 이 아니다 — ${one_n} 대와 ${two_n} 대 (판정 불가)"
     exit "$UNMEASURABLE"
 fi

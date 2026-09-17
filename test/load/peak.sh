@@ -26,7 +26,7 @@ bottleneck_cpus=${GATEWAY_CPUS:-$(nproc)}
 # **게이트웨이 대수.** 여럿이면 유입을 고르게 나누고 판정 비율은 대마다 낸다.
 GATEWAYS=${GATEWAYS:-1}
 case "$GATEWAYS" in
-    ''|*[!0-9]*|0) echo "::error title=현재 최대치::GATEWAYS 는 양의 정수여야 한다: '$GATEWAYS'"; exit 2 ;;
+    ''|*[!0-9]*|0*|??????????*) echo "::error title=현재 최대치::GATEWAYS 는 아홉 자리 이하의 양의 정수여야 한다: '$GATEWAYS'"; exit 2 ;;
 esac
 # 표집기가 컨테이너 이름 앞머리로 우리 것만 고른다. compose 가 쓰는 프로젝트 이름과 같아야 한다.
 PROJECT=${COMPOSE_PROJECT_NAME:-load}
@@ -149,7 +149,7 @@ warm_p99_ms=${WARMUP_P99_MS:-100}
 warm_rounds=${WARMUP_ROUNDS:-5}
 # 숫자가 아니면 횟수 비교가 늘 거짓이라 수렴 안 하는 예열이 끝없이 돈다.
 case "$warm_rounds" in
-    ''|*[!0-9]*|0) echo "::error title=현재 최대치::WARMUP_ROUNDS 는 양의 정수여야 한다: '$warm_rounds'"; exit 2 ;;
+    ''|*[!0-9]*|0*|??????????*) echo "::error title=현재 최대치::WARMUP_ROUNDS 는 아홉 자리 이하의 양의 정수여야 한다: '$warm_rounds'"; exit 2 ;;
 esac
 if [ "$warm_rate" != 0 ]; then
     warm_vus=${VUS:-$(peak_vus "$warm_rate" "$(peak_duration_sec "$warm_dur")")}

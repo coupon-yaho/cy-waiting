@@ -45,10 +45,11 @@ peak_duration_sec() {
 
 # **VU 풀은 VU 당 100 회가 되게 잡는다.** 표가 VU 마다 하나라 VU 당 회차가 적으면 폴링 갈래가 표 없이
 # 진입으로 돌고, 그 몫은 대략 VU 당 회차에 반비례한다. 하한 50 은 낮은 유입의 동시 요청 몫이다.
-# 못 읽는 입력은 0 을 내고 부르는 쪽이 회차를 돌리기 전에 끊는다.
+# 못 읽는 입력은 0 을 내고 부르는 쪽이 회차를 돌리기 전에 끊는다. 아홉 자리까지만 받는다 — 곱이 bash 정수를
+# 넘으면 음수가 되어 하한으로 조용히 줄어든다.
 peak_vus() {
-    case "${1:-}" in ''|*[!0-9]*) echo 0; return ;; esac
-    case "${2:-}" in ''|*[!0-9]*) echo 0; return ;; esac
+    case "${1:-}" in ''|*[!0-9]*|??????????*) echo 0; return ;; esac
+    case "${2:-}" in ''|*[!0-9]*|??????????*) echo 0; return ;; esac
     if [ "$1" -eq 0 ] || [ "$2" -eq 0 ]; then echo 0; return; fi
     local vus=$(( $1 * $2 / 100 ))
     echo $(( vus > 50 ? vus : 50 ))
@@ -59,6 +60,7 @@ peak_vus() {
 peak_warm_converged() {
     local p99
     printf '%s' "${2:-}" | grep -Eq '^[0-9]+(\.[0-9]+)?$' || return 2
+    awk -v m="$2" 'BEGIN{ exit (m > 0) ? 0 : 1 }' || return 2
     p99=$(peak_summary_value "$1" p99)
     [ -n "$p99" ] || return 2
     awk -v p="$p99" -v m="$2" 'BEGIN{ exit (p <= m) ? 0 : 1 }'

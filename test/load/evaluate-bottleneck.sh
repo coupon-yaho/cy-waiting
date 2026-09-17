@@ -70,11 +70,14 @@ awk -F '\t' -v cpus="$cpus" -v sat="$saturation" -v floor="$host_floor" -v need=
     function add(key, v) { vals[key, ++cnt[key]] = v }
     $0 ~ /^#/ || NF < 3 { next }
     !num($3) { bad = 1; next }
+    # 범위 밖 값은 계기 고장이다. 유휴 -1 이 마름으로 읽히면 고장이 원인으로 적힌다.
+    $1 == "cpu" && $3 < 0 { bad = 1; next }
+    $1 == "idle" && ($3 < 0 || $3 > 100) { bad = 1; next }
     $1 == "cpu" && $2 ~ /gateway/ { if (!(("gw " $2) in cnt)) gws[++ng] = $2; add("gw " $2, $3); next }
     $1 == "cpu" && $2 ~ /redis/   { add("redis", $3); next }
     $1 == "idle"                  { add("idle", $3); next }
     END {
-        if (bad) { print "::error title=천장 원인::숫자가 아닌 표본이 있다 — 판정 불가"; exit 2 }
+        if (bad) { print "::error title=천장 원인::숫자가 아니거나 범위 밖인 표본이 있다 — 판정 불가"; exit 2 }
         if (ng == 0) { print "::error title=천장 원인::게이트웨이 표본이 없다 — 판정 불가"; exit 2 }
         if (ng != expected) { printf "::error title=천장 원인::게이트웨이 표본이 %d 대다 (기대 %d 대) — 판정 불가\n", ng, expected; exit 2 }
         saturated = 0; limit = cpus * 100 * sat / 100

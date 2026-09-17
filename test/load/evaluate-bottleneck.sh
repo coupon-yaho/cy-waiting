@@ -88,11 +88,13 @@ awk -F '\t' -v cpus="$cpus" -v sat="$saturation" -v floor="$host_floor" -v need=
         if (cnt["idle"] < need) { printf "::error title=천장 원인::호스트 표본이 %d 개다 — 판정 불가\n", cnt["idle"]; exit 2 }
         idle = median("idle", cnt["idle"])
         printf "  호스트 유휴 가운데 %.1f%% (마름 선 %.1f%%)\n", idle, floor
-        has_redis = cnt["redis"] > 0
-        if (has_redis) { redis = median("redis", cnt["redis"]); printf "  레디스 CPU 가운데 %.1f%%\n", redis }
+        # 레디스를 먼저 보는데 그 표집이 빠지면 순서가 조용히 사라진다.
+        if (cnt["redis"] < need) { printf "::error title=천장 원인::레디스 표본이 %d 개다 — 판정 불가\n", cnt["redis"]; exit 2 }
+        redis = median("redis", cnt["redis"])
+        printf "  레디스 CPU 가운데 %.1f%%\n", redis
 
         if (idle < floor)                  { print "원인: 호스트 — 하네스와 코어를 다퉈 이 천장은 게이트웨이의 것이 아니다"; exit 0 }
-        if (has_redis && redis >= sat)     { print "원인: 레디스 — 한 스레드가 한 코어에 붙었다"; exit 0 }
+        if (redis >= sat)                  { print "원인: 레디스 — 한 스레드가 한 코어에 붙었다"; exit 0 }
         if (saturated == ng)               { printf "원인: 게이트웨이 — %d 대 모두 코어 한도에 붙었다\n", ng; exit 0 }
         printf "원인: 가르지 못함 — 붙은 자리가 없다 (게이트웨이 %d/%d 대)\n", saturated, ng
         exit 0

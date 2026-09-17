@@ -249,17 +249,46 @@ public final class AbuseLimitFilter implements WebFilter {
         return canonical(IpLiteral.parse(candidate));
     }
 
-    /** 바이트에서 되만든 주소 문자열. 같은 주소는 반드시 같은 키가 된다. */
+    /**
+     * 바이트에서 되만든 주소 문자열. 같은 주소는 반드시 같은 키가 된다.
+     *
+     * <p><b>v6 는 /64 로 묶는다</b> (CY-940). 하나의 /64 가 주소를 1.8e19 개 주므로, 주소마다 키를 만들면
+     * 주소당 상한이 매 요청 새 예산으로 리셋되고 키 공간도 유계가 아니다. v4 와 v4-mapped 는 그대로 둔다 —
+     * 묶으면 한 주소가 아니라 대역 하나가 한 몫을 나눠 쓴다.
+     */
     private String canonical(byte[] address) {
         if (address == null) {
             return null;
         }
+        byte[] key = address;
+        boolean prefix = address.length == V6_BYTES && !mappedV4(address);
+        if (prefix) {
+            key = address.clone();
+            java.util.Arrays.fill(key, V6_PREFIX_BYTES, V6_BYTES, (byte) 0);
+        }
         try {
-            return InetAddress.getByAddress(address).getHostAddress();
+            String text = InetAddress.getByAddress(key).getHostAddress();
+            return prefix ? text + "/64" : text;
         } catch (UnknownHostException e) {
             return null;
         }
     }
+
+    /** v4-mapped v6 (::ffff:a.b.c.d). 묶으면 v4 대역 하나가 한 몫이 되므로 주소 그대로 쓴다. */
+    private boolean mappedV4(byte[] address) {
+        for (int i = 0; i < 10; i++) {
+            if (address[i] != 0) {
+                return false;
+            }
+        }
+        return address[10] == (byte) 0xff && address[11] == (byte) 0xff;
+    }
+
+    /** v6 주소의 바이트 수. */
+    private static final int V6_BYTES = 16;
+
+    /** /64 가 차지하는 바이트 수. 뒤는 인터페이스 식별자라 주인이 마음대로 바꾼다. */
+    private static final int V6_PREFIX_BYTES = 8;
 
     /** 주소 축의 키. 두 곳에서 만들면 한쪽만 고쳐도 조용히 갈린다. */
     private String addressKey(String ip) {

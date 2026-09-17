@@ -388,8 +388,9 @@ class AbuseLimitFilterTest {
         assertThat(다음으로_감.get() - 앞서_통과).as("표기가 갈려도 200 건은 다 지나간다").isEqualTo(200);
         assertThat(넘긴_것.getResponse().getStatusCode())
                 .as("표기를 바꿔도 같은 주소의 몫을 쓴다").isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
-        assertThat(태운다(ISSUE, "8888", "::2").getResponse().getStatusCode())
-                .as("다른 주소는 제 몫이 그대로다").isNull();
+        // /64 로 묶으므로(CY-940) "다른 주소" 는 다른 /64 여야 한다. ::2 는 ::1 과 같은 묶음이다.
+        assertThat(태운다(ISSUE, "8888", "2001:db8:9:9::2").getResponse().getStatusCode())
+                .as("다른 /64 는 제 몫이 그대로다").isNull();
     }
 
     /**

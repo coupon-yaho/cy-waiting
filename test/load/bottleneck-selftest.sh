@@ -91,6 +91,11 @@ GATEWAY_CPUS=1.5 run_case "코어 한도를 소수 그대로 적는다" 0 "1.5 �
 # **못 잰 것을 판정하지 않는다.** 표본이 모자라면 회차 중간의 한 순간을 천장 원인으로 적게 된다.
 GATEWAY_CPUS=2 run_case "표본이 셋 미만이면 판정 불가" 2 "판정 불가" \
     -- "$(samples short.tsv 190.0 30.0 40.0 2)"
+GATEWAY_CPUS=2 run_case "표본이 정확히 셋이면 판정한다" 0 "원인: 게이트웨이" \
+    -- "$(samples three.tsv 190.0 30.0 40.0 3)"
+GATEWAY_CPUS=2 run_case "호스트 표본만 셋 미만이어도 판정 불가" 2 "판정 불가" \
+    -- "$(fixture idle_short.tsv "$(for _ in 1 2 3 4 5; do printf 'cpu\tload-gateway-1\t190.0\n'; done
+        printf 'idle\thost\t40.0\nidle\thost\t40.0\n')")"
 # 표본 수는 대마다 따로 본다. 호스트 표본이 충분해도 한 대가 모자라면 못 잰다.
 GATEWAY_CPUS=2 run_case "게이트웨이 표본만 셋 미만이어도 판정 불가" 2 "판정 불가" \
     -- "$(fixture gw_short.tsv "$(printf 'cpu\tload-gateway-1\t190.0\nidle\thost\t40.0\n'

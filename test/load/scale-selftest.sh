@@ -96,6 +96,10 @@ run_case "N 대 천장이 호스트면 판정 불가" 2 "판정 불가" \
 run_case "2N 대 천장을 못 가렸으면 판정 불가" 2 "판정 불가" \
     -- "$one" "$one_cause" \
     "$(steps u2.tsv "$(printf '3600\t3582\tok\t40')" "$stop")" "$(cause u2-cause.txt "$undecided")"
+# 원인 줄은 줄 머리에서만 읽는다. 표본 줄이나 오류 문구 속의 같은 말을 원인으로 읽으면 안 된다.
+run_case "원인 문구가 줄 머리에 없으면 판정 불가" 2 "판정 불가" \
+    -- "$one" "$one_cause" \
+    "$(steps mid2.tsv "$(printf '3600\t3582\tok\t40')" "$stop")" "$(cause mid2-cause.txt "  이전 칸 $gw2")"
 run_case "원인 줄이 없으면 판정 불가" 2 "판정 불가" \
     -- "$one" "$one_cause" \
     "$(steps n2.tsv "$(printf '3600\t3582\tok\t40')" "$stop")" "$(cause n2-cause.txt '표본이 모자라다')"

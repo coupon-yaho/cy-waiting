@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# 천장 원인 (10.7.4).
+# 천장 원인.
 #
 # **천장이 났다는 것과 어디서 났는지는 다르다.** 현재 최대치 러너는 회차가 안 서면 멈추는데, 하네스가
-# 못 만든 것과 게이트웨이가 못 버틴 것이 같은 멈춤으로 보인다. 그 둘을 안 가르면 증설 효율(10.7.3)이
+# 못 만든 것과 게이트웨이가 못 버틴 것이 같은 멈춤으로 보인다. 그 둘을 안 가르면 증설 효율이
 # 하네스의 한계를 나눈 수가 된다.
 #
-# 표본은 회차 동안 초마다 쌓인 `종류<TAB>이름<TAB>값` 이다. CPU 는 한 코어가 100, 호스트는 유휴 백분율.
+# 표본은 회차 동안 쌓인 `종류<TAB>이름<TAB>값` 이다. CPU 는 한 코어가 100, 호스트는 유휴 백분율.
 #
 # **원인은 이 순서로 가른다.** 호스트가 말랐으면 게이트웨이가 한도에 붙은 것도 k6 와 코어를 다툰 결과일 수
-# 있어 먼저 본다. 그다음 게이트웨이 — 대가 여럿이면 전 대가 붙어야 한다. 한 대만 붙은 것은 고르게 안 나뉜
-# 하네스 쪽이다. 그다음 레디스(한 스레드라 한 코어가 한도). 아무도 안 붙었으면 가르지 못한다고 적는다.
+# 있어 먼저 본다. 그다음 공유 자원인 레디스(한 스레드라 한 코어가 한도) — 붙었으면 게이트웨이를 늘려도 안
+# 풀린다. 그다음 게이트웨이 — 전 대가 붙어야 한다. 한 대만 붙은 것은 고르게 안 나뉜 하네스 쪽이다.
 set -uo pipefail
 
 # 2 는 계기를 고치라는 뜻이다. 원인을 가른 회차는 원인과 상관없이 0 이다 — 원인이 제품이라는 것이 이
@@ -39,35 +39,62 @@ saturation=${SATURATION_PCT:-90}
 host_floor=${HOST_IDLE_FLOOR_PCT:-10}
 # 회차 중간의 한 순간을 천장 원인으로 적지 않는다.
 min_samples=${MIN_SAMPLES:-3}
+# **뜬 대수를 표본에서 세지 않는다.** 한 대가 표집에 안 잡히면 남은 대만 붙어도 "모두" 가 된다.
+expected=${GATEWAYS:-1}
 
-awk -F '\t' -v cpus="$cpus" -v sat="$saturation" -v floor="$host_floor" -v need="$min_samples" '
+# **기준도 확인한다.** 오타가 awk 에서 0 이 되면 모든 대가 붙은 것으로 나와 게이트웨이 천장이 된다.
+for pct in "붙음 선:$saturation" "마름 선:$host_floor"; do
+    if ! printf '%s' "${pct#*:}" | grep -Eq '^[0-9]+(\.[0-9]+)?$' \
+            || awk -v v="${pct#*:}" 'BEGIN{ exit (v > 0 && v <= 100) ? 1 : 0 }'; then
+        echo "::error title=천장 원인::${pct%%:*}이 0 초과 100 이하의 백분율이 아니다: '${pct#*:}' — 판정 불가"
+        exit "$UNMEASURABLE"
+    fi
+done
+for count in "최소 표본:$min_samples" "기대 대수:$expected"; do
+    case "${count#*:}" in
+        ''|*[!0-9]*|0) echo "::error title=천장 원인::${count%%:*}가 양의 정수가 아니다: '${count#*:}' — 판정 불가"
+            exit "$UNMEASURABLE" ;;
+    esac
+done
+
+# **평균이 아니라 가운데 값으로 가른다.** 표집은 k6 가 VU 를 띄우기 전과 끝난 뒤에 걸쳐, 앞뒤 한가한 표본 몇
+# 개가 평균을 선 너머로 옮긴다.
+awk -F '\t' -v cpus="$cpus" -v sat="$saturation" -v floor="$host_floor" -v need="$min_samples" \
+        -v expected="$expected" '
     function num(v) { return v ~ /^-?[0-9]+(\.[0-9]+)?$/ }
+    function median(key, n,    i, j, t, a) {
+        for (i = 1; i <= n; i++) a[i] = vals[key, i]
+        for (i = 2; i <= n; i++) { t = a[i]; for (j = i - 1; j >= 1 && a[j] > t; j--) a[j + 1] = a[j]; a[j + 1] = t }
+        return (n % 2) ? a[(n + 1) / 2] : (a[n / 2] + a[n / 2 + 1]) / 2
+    }
+    function add(key, v) { vals[key, ++cnt[key]] = v }
     $0 ~ /^#/ || NF < 3 { next }
     !num($3) { bad = 1; next }
-    $1 == "cpu" && $2 ~ /gateway/ { gw_sum[$2] += $3; gw_n[$2]++; next }
-    $1 == "cpu" && $2 ~ /redis/   { redis_sum += $3; redis_n++; next }
-    $1 == "idle"                  { idle_sum += $3; idle_n++; next }
+    $1 == "cpu" && $2 ~ /gateway/ { if (!(("gw " $2) in cnt)) gws[++ng] = $2; add("gw " $2, $3); next }
+    $1 == "cpu" && $2 ~ /redis/   { add("redis", $3); next }
+    $1 == "idle"                  { add("idle", $3); next }
     END {
         if (bad) { print "::error title=천장 원인::숫자가 아닌 표본이 있다 — 판정 불가"; exit 2 }
-        gateways = 0; saturated = 0; limit = cpus * 100 * sat / 100
-        for (g in gw_n) {
-            if (gw_n[g] < need) { printf "::error title=천장 원인::%s 표본이 %d 개다 — 판정 불가\n", g, gw_n[g]; exit 2 }
-            gateways++
-            mean = gw_sum[g] / gw_n[g]
-            printf "  %s CPU 평균 %.1f%% (한도 %d 코어, 붙음 선 %.1f%%)\n", g, mean, cpus, limit
-            if (mean >= limit) saturated++
+        if (ng == 0) { print "::error title=천장 원인::게이트웨이 표본이 없다 — 판정 불가"; exit 2 }
+        if (ng != expected) { printf "::error title=천장 원인::게이트웨이 표본이 %d 대다 (기대 %d 대) — 판정 불가\n", ng, expected; exit 2 }
+        saturated = 0; limit = cpus * 100 * sat / 100
+        for (i = 1; i <= ng; i++) {
+            g = gws[i]; n = cnt["gw " g]
+            if (n < need) { printf "::error title=천장 원인::%s 표본이 %d 개다 — 판정 불가\n", g, n; exit 2 }
+            m = median("gw " g, n)
+            printf "  %s CPU 가운데 %.1f%% (한도 %s 코어, 붙음 선 %.1f%%)\n", g, m, cpus, limit
+            if (m >= limit) saturated++
         }
-        if (gateways == 0) { print "::error title=천장 원인::게이트웨이 표본이 없다 — 판정 불가"; exit 2 }
-        if (idle_n < need) { printf "::error title=천장 원인::호스트 표본이 %d 개다 — 판정 불가\n", idle_n; exit 2 }
-        idle = idle_sum / idle_n
-        printf "  호스트 유휴 평균 %.1f%% (마름 선 %.1f%%)\n", idle, floor
-        redis = redis_n > 0 ? redis_sum / redis_n : 0
-        if (redis_n > 0) printf "  레디스 CPU 평균 %.1f%%\n", redis
+        if (cnt["idle"] < need) { printf "::error title=천장 원인::호스트 표본이 %d 개다 — 판정 불가\n", cnt["idle"]; exit 2 }
+        idle = median("idle", cnt["idle"])
+        printf "  호스트 유휴 가운데 %.1f%% (마름 선 %.1f%%)\n", idle, floor
+        has_redis = cnt["redis"] > 0
+        if (has_redis) { redis = median("redis", cnt["redis"]); printf "  레디스 CPU 가운데 %.1f%%\n", redis }
 
-        if (idle < floor)           { print "원인: 호스트 — 하네스와 코어를 다퉈 이 천장은 게이트웨이의 것이 아니다"; exit 0 }
-        if (saturated == gateways)  { printf "원인: 게이트웨이 — %d 대 모두 코어 한도에 붙었다\n", gateways; exit 0 }
-        if (redis_n > 0 && redis >= sat) { print "원인: 레디스 — 한 스레드가 한 코어에 붙었다"; exit 0 }
-        printf "원인: 가르지 못함 — 붙은 자리가 없다 (게이트웨이 %d/%d 대)\n", saturated, gateways
+        if (idle < floor)                  { print "원인: 호스트 — 하네스와 코어를 다퉈 이 천장은 게이트웨이의 것이 아니다"; exit 0 }
+        if (has_redis && redis >= sat)     { print "원인: 레디스 — 한 스레드가 한 코어에 붙었다"; exit 0 }
+        if (saturated == ng)               { printf "원인: 게이트웨이 — %d 대 모두 코어 한도에 붙었다\n", ng; exit 0 }
+        printf "원인: 가르지 못함 — 붙은 자리가 없다 (게이트웨이 %d/%d 대)\n", saturated, ng
         exit 0
     }
 ' "$samples"

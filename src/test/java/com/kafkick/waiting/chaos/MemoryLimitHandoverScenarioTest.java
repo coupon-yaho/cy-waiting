@@ -93,6 +93,8 @@ class MemoryLimitHandoverScenarioTest {
         boolean[] 재개했다 = new boolean[1];
         boolean[] 상한_중_지웠다 = new boolean[1];
         long[] 남은_줄 = new long[1];
+        long[] 지우기_전_줄 = new long[1];
+        long[] 임기_기록 = new long[1];
 
         ChaosScenario.named("C22b 상한 중 승계")
                 .baseline(() -> {
@@ -137,6 +139,9 @@ class MemoryLimitHandoverScenarioTest {
                     // **상한 중에 실제로 지워지는지 본다.** 유예는 폴링 최대 간격보다 길어 회차가
                     // 창 안에 못 채운다 — 지우는 쓰기 자체가 거부되지 않는지를 여기서 잰다.
                     long 임기 = leadership.fence();
+                    임기_기록[0] = 임기;
+                    // **지우기 전에 줄이 있었는지 본다.** 없으면 스크립트가 1 을 돌려줘도 아무것도 안 잰다.
+                    지우기_전_줄[0] = 연결.sync().exists(RedisKeys.queue(매진_쿠폰, 1, 0));
                     port.claimSoldOutQueues(List.of(매진_쿠폰), 임기).block(기다림);
                     상한_중_지웠다[0] = Objects.requireNonNullElse(
                             port.dropSoldOutQueues(List.of(매진_쿠폰), 임기).block(기다림),
@@ -189,8 +194,11 @@ class MemoryLimitHandoverScenarioTest {
                                 : Optional.of("상한 %s 끝에 발행 봉인이 사라졌다 — 표 %s"
                                         .formatted(유지_창, 유지_끝_발행_표[0])),
                         // 지우는 쪽은 메모리를 줄인다. 여기가 막히면 한도를 푸는 경로가 없다 (CY-935).
+                        지우기_전_줄[0] == 1 ? Optional.empty()
+                                : Optional.of("전제 — 지우기 전에 매진 줄이 없었다"),
                         상한_중_지웠다[0] ? Optional.empty()
-                                : Optional.of("상한 중에 매진 큐를 못 지웠다"),
+                                : Optional.of("상한 중에 매진 큐를 못 지웠다 — 임기 %d"
+                                        .formatted(임기_기록[0])),
                         남은_줄[0] == 0 ? Optional.empty()
                                 : Optional.of("지웠다는데 줄 키가 남았다 — exists %d".formatted(남은_줄[0]))))
                 .assertRecovery(() -> RecoveryCriteria.violations(

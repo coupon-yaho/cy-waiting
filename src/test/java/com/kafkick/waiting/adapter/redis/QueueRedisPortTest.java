@@ -249,31 +249,6 @@ class QueueRedisPortTest extends RedisContainerSupport {
     }
 
     /**
-     * <b>되살리기 전 창에 선 사람은 되살림 뒤에도 대기다</b> (CY-944). 그 창에서는 레디스 커서가 옛 값이라 등록이
-     * 참 커서를 모른다. 시계가 뒤진 복제본이면 점수가 참 커서 아래에 서고, 되살림이 그 사람을 크레딧 없이 들인다.
-     * 노드는 발행된 커서를 안다 — 그 값을 점수 하한으로 넘긴다.
-     */
-    @Test
-    @DisplayName("되살리기_전에_선_사람은_되살림_뒤에도_대기다")
-    void 되살리기_전에_선_사람은_되살림_뒤에도_대기다() {
-        AllocationRedisPort 리더 = AllocationRedisPort.of(redis, SHARDS);
-        long 임기 = 1_770_000_000_123_456L;
-        QueueEntry 첫째 = 등록("m1");
-        // 참 커서가 레디스 시계보다 한참 앞선다. 시계가 뒤진 복제본으로 넘어간 판과 같다.
-        long 참_커서 = 첫째.score() + 1_000_000_000_000L;
-        redis.opsForValue().set(RedisKeys.admitted(COUPON, SHARDS, 0), Long.toString(참_커서)).block(WAIT);
-        리더.apply(new Grant(COUPON, 0), 임기).block(WAIT);
-        redis.delete(RedisKeys.admitted(COUPON, SHARDS, 0)).block(WAIT);
-
-        QueueEntry 창에_선_사람 = port.enqueue(COUPON, "m9", QueuePort.NO_LIMIT, 지금, 참_커서).block(WAIT);
-        리더.apply(new Grant(COUPON, 0), 임기).block(WAIT);
-
-        assertThat(창에_선_사람.score()).as("발행된 커서 위에 선다").isEqualTo(참_커서 + 1);
-        assertThat(port.status(COUPON, "m9", 지금).block(WAIT).state())
-                .as("되살림이 크레딧 없이 안 들인다").isEqualTo(QueueState.WAITING);
-    }
-
-    /**
      * <b>새로 선 사람은 늘 입장 커서 위에 선다</b> (CY-942). 시계가 뒤처진 복제본이 승격되면 새 점수가 커서 아래로
      * 나오고, 그 사람은 첫 폴링에 바로 입장이 된다 — 배분이 크레딧을 안 쓴 사람이 줄 선 사람을 앞지른다.
      * 커서를 되살리는 쪽이 이 길을 여므로 둘은 같이 간다.

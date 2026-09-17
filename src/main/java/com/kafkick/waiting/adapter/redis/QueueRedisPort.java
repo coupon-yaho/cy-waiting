@@ -83,9 +83,6 @@ public final class QueueRedisPort implements QueuePort {
      */
     private final Timer enqueueCancelled;
 
-    /** 커서를 모르는 등록. 스크립트가 없는 것으로 읽는다. */
-    private static final long NO_CURSOR_HINT = -1;
-
     /**
      * <b>값은 설정에서 받는다.</b> 상수로 복제하면 검증기가 안 보는 값이
      * 실제로 쓰이는 값이 된다.
@@ -142,19 +139,13 @@ public final class QueueRedisPort implements QueuePort {
      */
     @Override
     public Mono<QueueEntry> enqueue(String couponId, String memberId, long maxLen, Instant now) {
-        return enqueue(couponId, memberId, maxLen, now, NO_CURSOR_HINT);
-    }
-
-    @Override
-    public Mono<QueueEntry> enqueue(String couponId, String memberId, long maxLen, Instant now,
-            long cursorHint) {
         int shard = ShardHash.shardOf(memberId, shards);
-        return Mono.defer(() -> timedEnqueue(couponId, memberId, maxLen, now, shard, cursorHint));
+        return Mono.defer(() -> timedEnqueue(couponId, memberId, maxLen, now, shard));
     }
 
     /** 구독마다 새로 잰다. 조립에서 재면 재구독이 한 번만 붙어도 같은 표본을 두 번 쓴다. */
     private Mono<QueueEntry> timedEnqueue(String couponId, String memberId, long maxLen,
-            Instant now, int shard, long cursorHint) {
+            Instant now, int shard) {
         Timer.Sample sample = Timer.start(meters);
         return redis.execute(ENQUEUE,
                         List.of(RedisKeys.queue(couponId, shards, shard),
@@ -164,7 +155,7 @@ public final class QueueRedisPort implements QueuePort {
                                 RedisKeys.grace(couponId, shards, shard)),
                         List.of(memberId, MAX_SCORE_TTL_SEC, ALIVE_TTL_SEC,
                                 Long.toString(maxLen), Long.toString(now.getEpochSecond()),
-                                Long.toString(GraceRetention.SECONDS), Long.toString(cursorHint)))
+                                Long.toString(GraceRetention.SECONDS)))
                 .next()
                 // **빈 결과를 성공으로 안 본다.** 그대로 두면 등록도 거절도 아닌
                 // 채로 200 이 나가고, 실패 경로가 통째로 안 돈다.

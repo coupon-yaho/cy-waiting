@@ -157,9 +157,6 @@ public final class AllocationRound {
     /** 적용 간격. 배선 전에는 안 둔다. */
     private volatile ApplyPacer pacer = ApplyPacer.none();
 
-    /** 발행에 실을 쿠폰별 입장 커서 (CY-944). 배선 전에는 안 싣는다. */
-    private volatile Supplier<Map<String, Long>> cursors = Map::of;
-
     /**
      * 읽은 이월을 자리에 앉힌다. <b>값이 없으면 이 임기의 평활을 앉힌다</b> — 콜드를 앉히면
      * 데워진 임시 평활이 버려져 다음 관측이 다시 생으로 나간다.
@@ -379,11 +376,6 @@ public final class AllocationRound {
     /** 적용 간격을 둔다. 배선이 한 번 건다. */
     public void pacedBy(ApplyPacer pacer) {
         this.pacer = Objects.requireNonNull(pacer, "pacer 는 필수다");
-    }
-
-    /** 발행하는 스냅샷에 실을 입장 커서. 노드가 등록 점수의 하한으로 쓴다 (CY-944). */
-    public void publishesCursors(Supplier<Map<String, Long>> cursors) {
-        this.cursors = Objects.requireNonNull(cursors, "cursors 는 필수다");
     }
 
     public Mono<Void> run() {
@@ -1117,7 +1109,7 @@ public final class AllocationRound {
     private GatewaySnapshot snapshot(List<CouponDemand> collected, Map<String, Long> granted,
             long credit, Instant readAt, Tunables applied, double pollScale) {
         return new GatewaySnapshot(couponsOf(collected, granted),
-                meta(credit, applied).withPollScale(pollScale), readAt, routable.get(), cursors.get());
+                meta(credit, applied).withPollScale(pollScale), readAt, routable.get());
     }
 
     // **노드 수 방어를 여기서 다시 쓰지 않는다.** 사본이 생기면 둘 중 하나만

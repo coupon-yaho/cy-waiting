@@ -5,7 +5,6 @@ import com.kafkick.waiting.adapter.redis.FenceSeal;
 import com.kafkick.waiting.domain.routing.AllowedDestinations;
 import com.kafkick.waiting.routing.RoutingProperties;
 import java.time.Duration;
-import java.util.function.Consumer;
 import com.kafkick.waiting.adapter.redis.LeaderRedisPort;
 import com.kafkick.waiting.domain.allocation.CreditSmoother;
 import io.micrometer.core.instrument.FunctionCounter;
@@ -134,8 +133,6 @@ public class ControlPlaneConfig {
                 capacity::routable);
         // 회차 시작 간격만 틱에 맞추면 적용 둘이 1초 안에 들어갈 수 있다. 적용끼리 한 틱을 띄운다.
         round.pacedBy(applyPacer);
-        // 발행에 입장 커서를 싣는다 (CY-944). 노드가 등록 점수 하한으로, 승계한 리더가 기억의 씨앗으로 쓴다.
-        round.publishesCursors(port::writtenCursors);
         // 되감기를 직접 잡는 신호가 없다. 실패 뒤 첫 회차에 우리가 쓴 임계와 견줘 지표로 낸다 (CY-856).
         // 샤드가 여럿이면 샤드 0 만 봐 신호가 1/N 로 줄어든다. 그때는 아예 안 건다.
         if (properties.scheduler().shards() == 1) {
@@ -259,8 +256,7 @@ public class ControlPlaneConfig {
      */
     Runnable onLeadershipGained(CapacityCollector collector, CapacityRefresh capacity,
             SoldOutCleanup cleanup, QueueSweeper sweeper, AllocationRound round,
-            SnapshotHolder holder, GatewayRegistry registry, Runnable sealFences,
-            Consumer<Map<String, Long>> seedCursors) {
+            SnapshotHolder holder, GatewayRegistry registry, Runnable sealFences) {
         return () -> {
             // **문을 먼저 잠근다.** 적용만으로는 그 쿠폰에 크레딧이 갈 때까지 표에
             // 옛 임기가 남고, 그 창에 유령이 먼저 도착하면 자기 번호와 같아서
@@ -272,9 +268,6 @@ public class ControlPlaneConfig {
             // 한 번도 못 본다. 램프 출발점은 발행된 몫이되 낡으면 한산 통과가 살아 있는
             // 최소 몫 — 0 에서 오르면 한산한 쿠폰이 줄을 서고, 낡은 큰 값은 브레이크를 푼다.
             SnapshotHolder.View seen = holder.view();
-            // **발행된 입장 커서로 기억을 채운다** (CY-944). 복제본 승격은 리더 리스도 흔들어 승계를 부르기 쉽고, 기억
-            // 없는 새 리더는 사라진 커서를 못 되살린다. 옛 리더가 발행한 값이 이 노드의 스냅샷에 남아 있다.
-            seedCursors.accept(seen.snapshot().cursors());
             // **나간 매진을 스냅샷에서 이어 받는다** (CY-935). 표시가 리더 메모리라 승계에서
             // 사라지는데, 상한 중에는 발행이 늘 거부돼 새 리더가 다시 채울 길이 없다.
             round.leadershipAcquired(startingCredit(seen, holder, registry),
@@ -474,7 +467,7 @@ public class ControlPlaneConfig {
         SealGate gate = SealGate.of(leadership::isLeader);
         Runnable gained = onLeadershipGained(collector, capacity, cleanup, sweeper, round, holder,
                 registry, sealFences(port, leadership, gate, properties.scheduler().tick(),
-                        allocationScheduler, applyPacer), port::seedWritten);
+                        allocationScheduler, applyPacer));
         return AllocationScheduler.of(properties.scheduler().tick(),
                 properties.scheduler().firstTickDelay(),
                 // **승계는 유예를 처음부터 준다.** 비리더 구간에 얼어 있던 실패

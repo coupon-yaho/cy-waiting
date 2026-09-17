@@ -2378,19 +2378,6 @@ class AllocationRoundTest {
                 .isEqualTo(7);
     }
 
-    /** <b>발행에 입장 커서를 싣는다</b> (CY-944). 노드가 등록 점수의 하한으로 쓰고, 승계한 리더가 기억의 씨앗으로 쓴다. */
-    @Test
-    @DisplayName("발행에_입장_커서를_싣는다")
-    void 발행에_입장_커서를_싣는다() {
-        AllocationRound round = round(List.of(new CouponDemand("c1", 10, 100)), 8, 1);
-        round.publishesCursors(() -> Map.of("c1", 1_789_651_782_355_052L));
-
-        round.run().block();
-
-        assertThat(SnapshotCodec.create().decode(발행.get("last")).cursorOf("c1"))
-                .isEqualTo(1_789_651_782_355_052L);
-    }
-
     @Test
     @DisplayName("몫이_없는_쿠폰은_안_건드린다")
     void 몫이_없는_쿠폰은_안_건드린다() {

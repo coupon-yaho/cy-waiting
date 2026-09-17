@@ -15,13 +15,9 @@ import java.util.Map;
  * @param meta        전 쿠폰 공통 값
  * @param publishedAt <b>스케줄러가 발행한 시각.</b> 로컬 수신 시각만 쓰면 스케줄러가 죽어도 속는다
  * @param instances   라우팅에 쓸 뒷단 목록. <b>비어 있을 수 있다</b> — 옛 리더거나 주소 없는 인스턴스뿐이다
- * @param cursors     쿠폰별 입장 커서. 등록 점수의 하한으로만 쓴다 (CY-944). <b>비어 있을 수 있다</b> — 옛 리더다
  */
 public record GatewaySnapshot(Map<String, CouponState> coupons, SnapshotMeta meta,
-        Instant publishedAt, List<InstanceRouting> instances, Map<String, Long> cursors) {
-
-    /** 커서를 모르는 자리. 스크립트가 없는 것으로 읽는 값과 같다. */
-    public static final long NO_CURSOR = -1;
+        Instant publishedAt, List<InstanceRouting> instances) {
 
     /** 첫 갱신 전. {@link Instant#EPOCH} 이라 어떤 임계로도 낡음이다. */
     public static final GatewaySnapshot EMPTY =
@@ -33,21 +29,9 @@ public record GatewaySnapshot(Map<String, CouponState> coupons, SnapshotMeta met
         this(coupons, meta, publishedAt, List.of());
     }
 
-    /** 커서가 없는 스냅샷. 커서를 싣기 전의 리더와 그것을 안 쓰는 시험이 이 자리다. */
-    public GatewaySnapshot(Map<String, CouponState> coupons, SnapshotMeta meta,
-            Instant publishedAt, List<InstanceRouting> instances) {
-        this(coupons, meta, publishedAt, instances, Map.of());
-    }
-
     public GatewaySnapshot {
         coupons = Map.copyOf(coupons);
         instances = List.copyOf(instances);
-        cursors = Map.copyOf(cursors);
-    }
-
-    /** 그 쿠폰의 입장 커서. 모르면 {@link #NO_CURSOR}. */
-    public long cursorOf(String couponId) {
-        return cursors.getOrDefault(couponId, NO_CURSOR);
     }
 
     /**

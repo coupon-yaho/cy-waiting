@@ -7,6 +7,7 @@ import com.kafkick.waiting.domain.queue.EtaPolicy;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import com.kafkick.waiting.domain.net.IpLiteral;
 import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -56,6 +57,12 @@ public final class AbuseLimitFilter implements WebFilter {
     /** 접은 채로 통과한 수. 거절 지표와 섞으면 통제가 꺼진 구간이 남용 급증으로 읽힌다. */
     private static final String FOLDED = "waiting.abuse.folded";
 
+    /** 접힘을 이만큼 더 들고 있는다. 매 초 비는 창을 해제로 읽지 않으려는 늦춤이다. */
+    private static final long FOLD_LINGER_SECONDS = 3;
+
+    /** 지금 접혀 있는가. 계수만으로는 "아직 꺼져 있는가" 를 못 묻는다. */
+    private static final String FOLDING = "waiting.abuse.folding";
+
     private static final Logger log = LoggerFactory.getLogger(AbuseLimitFilter.class);
 
     /** 발급 경로의 사람당 초당 상한. 사람이 손으로 누를 수 있는 수의 몇 배다. */
@@ -92,6 +99,9 @@ public final class AbuseLimitFilter implements WebFilter {
 
     /** 접은 채로 지나간 수. 풀릴 때 한 번에 낸다. */
     private final AtomicLong foldedPassed = new AtomicLong();
+
+    /** 마지막으로 축이 차 있던 초. 이 시각에서 늦춤만큼 지나야 해제로 친다. */
+    private final AtomicLong foldSaturatedAt = new AtomicLong();
     private final TrustedProxies trusted;
     private final Clock clock;
     private final MeterRegistry meters;
@@ -111,6 +121,8 @@ public final class AbuseLimitFilter implements WebFilter {
         this.meters = Objects.requireNonNull(meters, "meters 는 필수다");
         this.random = Objects.requireNonNull(random, "random 은 필수다");
         this.error = ApiError.of(clock);
+        Gauge.builder(FOLDING, foldingSince, since -> since.get() == 0 ? 0 : 1)
+                .register(this.meters);
     }
 
     /** 흔들림의 난수원은 스레드마다 따로 둔다 — 공유하면 그 자체가 경합점이다. */
@@ -155,7 +167,7 @@ public final class AbuseLimitFilter implements WebFilter {
         long ipCap = polling ? IP_POLL_CAP : IP_ISSUE_CAP;
         if (member == null) {
             // 형식 검증이 앞에서 걸렀어야 한다. 주소 상한만으로 간다.
-            return byAddressOnly(exchange, chain, ip, ipCap, nowSec, "ip", false);
+            return byAddressOnly(exchange, chain, ip, ipCap, nowSec, false);
         }
         // **한 걸음에 둘 다 잡는다.** 따로 차감하면 뒤에서 거부됐을 때 앞의 몫이
         // 이미 깎여, 통과한 요청이 하나도 없는데 예산이 빈다.
@@ -165,7 +177,7 @@ public final class AbuseLimitFilter implements WebFilter {
                 Axis.PRIMARY, addressKey(ip), ipCap, nowSec);
         return switch (acquired) {
             case ACQUIRED -> {
-                foldEnded(nowSec);
+                foldMaybeEnded(nowSec);
                 yield chain.filter(exchange);
             }
             case COUPON_EXHAUSTED -> reject(exchange, "member");
@@ -174,9 +186,8 @@ public final class AbuseLimitFilter implements WebFilter {
             // 채울 수 있는데, 거절로 두면 채운 쪽이 아니라 새로 온 대기자가 막힌다. 주소 축은
             // 신뢰 홉 검사로 닫혀 있어 그쪽만으로도 한 대의 처리량은 잡힌다.
             // 주소 축이 찬 것이라면 접을 곳이 없다. 같은 태그로 묶으면 운영자가 둘을 못 가른다.
-            case KEY_SATURATED -> limiter.saturated(Axis.SECONDARY, nowSec)
-                    ? byAddressOnly(exchange, chain, ip, ipCap, nowSec, "saturated", true)
-                    : reject(exchange, "keyspace");
+            case KEY_SATURATED -> byAddressOnly(exchange, chain, ip, ipCap, nowSec,
+                    limiter.saturated(Axis.SECONDARY, nowSec));
         };
     }
 
@@ -187,9 +198,12 @@ public final class AbuseLimitFilter implements WebFilter {
      * 운영자 눈에 "포화 없음" 으로 보인다.
      */
     private Mono<Void> byAddressOnly(ServerWebExchange exchange, WebFilterChain chain,
-            String ip, long ipCap, long nowSec, String outcome, boolean folded) {
+            String ip, long ipCap, long nowSec, boolean folded) {
         if (!limiter.tryAcquire(Axis.PRIMARY, addressKey(ip), ipCap, nowSec)) {
-            return reject(exchange, outcome);
+            // **접을 곳이 없는 쪽을 따로 센다.** 주소 축이 차서 막힌 것을 주소 상한 초과와 같은
+            // 이름으로 묶으면, 접힘보다 심각한 상태가 평소 신호에 섞여 안 보인다.
+            return reject(exchange,
+                    limiter.saturated(Axis.PRIMARY, nowSec) ? "keyspace" : "ip");
         }
         if (folded) {
             // **거절 지표와 섞지 않는다.** 같은 메터에 얹으면 접힌 구간의 통과가 "막은 수" 로 합산된다.
@@ -250,10 +264,11 @@ public final class AbuseLimitFilter implements WebFilter {
     }
 
     /**
-     * 접힘이 시작됐다. <b>통제 하나가 꺼지는 전이라 한 번은 남긴다</b> — 창이 매 초 비워져 매번 찍으면
-     * 그 구간이 로그를 덮는다. 풀릴 때 지속 시간과 통과 수를 짝으로 낸다.
+     * 접힘이 시작됐다. <b>통제 하나가 꺼지는 전이라 한 번은 남긴다.</b> 두 번째 줄부터는 같은 사건이고,
+     * 공격이 이어지는 내내 찍으면 그 구간이 로그를 덮는다.
      */
     private void foldStarted(long nowSec) {
+        foldSaturatedAt.set(nowSec);
         if (foldingSince.compareAndSet(0, nowSec)) {
             log.warn("식별자 축이 찼다 — 사람당 상한을 접고 주소 상한만으로 판정한다. "
                     + "키 상한과 유입을 함께 본다");
@@ -261,10 +276,17 @@ public final class AbuseLimitFilter implements WebFilter {
         foldedPassed.incrementAndGet();
     }
 
-    /** 접힘이 풀렸다. 안 남기면 언제까지 상한 없이 돌았는지를 못 읽는다. */
-    private void foldEnded(long nowSec) {
-        long since = foldingSince.getAndSet(0);
-        if (since != 0) {
+    /**
+     * 접힘이 풀렸는가. <b>창이 비는 것은 해제가 아니다</b> — 리미터가 매 초 두 축을 통째로 비우므로 새 초의
+     * 첫 요청은 늘 통과한다. 그것을 해제로 읽으면 공격 내내 진입과 해제가 초당 한 쌍씩 나가고, 남는 지속
+     * 시간은 언제나 1초라 얼마나 오래 접혀 있었는지를 아무 줄도 말해 주지 않는다.
+     */
+    private void foldMaybeEnded(long nowSec) {
+        long since = foldingSince.get();
+        if (since == 0 || nowSec - foldSaturatedAt.get() < FOLD_LINGER_SECONDS) {
+            return;
+        }
+        if (foldingSince.compareAndSet(since, 0)) {
             log.info("식별자 축이 풀렸다 — {}초 동안 접은 채 {}건이 지나갔다",
                     Math.max(0, nowSec - since), foldedPassed.getAndSet(0));
         }

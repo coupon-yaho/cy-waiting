@@ -212,7 +212,7 @@ public final class QueueRedisPort implements QueuePort {
         long total = number(raw.get(3));
         return new QueueEntry(state, globalRank(number(raw.get(1))),
                 number(raw.get(2)), true, false, false,
-                total < 0 ? QueueEntry.UNKNOWN_TOTAL : globalRank(total));
+                total < 0 ? QueueEntry.UNKNOWN_TOTAL : globalTotal(total));
     }
 
     /**
@@ -223,6 +223,14 @@ public final class QueueRedisPort implements QueuePort {
      */
     private long globalRank(long localRank) {
         return RankEstimator.globalRank(localRank, shards);
+    }
+
+    /**
+     * 총원의 전체 환산. <b>나는 한 명이지 샤드 수만큼이 아니다</b> — 총원을 통째로 곱하면
+     * 자기 자신도 같이 불어나, 줄 맨 뒤 사람이 뒤에 {@code 샤드 수 - 1} 명이 있다고 본다.
+     */
+    private long globalTotal(long localTotal) {
+        return globalRank(localTotal - 1) + 1;
     }
 
     /**

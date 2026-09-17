@@ -46,7 +46,8 @@ public final class QueueResponse {
      */
     public Mono<Void> status(ServerWebExchange exchange, QueueState state, long position,
             long etaSec, long pollAfterSec) {
-        return status(exchange, state, position, etaSec, pollAfterSec, QueueEntry.UNKNOWN_TOTAL);
+        return status(exchange, state, position, etaSec, pollAfterSec,
+                QueueEntry.UNKNOWN_TOTAL, QueueEntry.UNKNOWN_TOTAL);
     }
 
     /**
@@ -54,7 +55,7 @@ public final class QueueResponse {
      * 것과 못 센 것이 같은 값이 되고, 화면은 그 둘을 다르게 보여 줘야 한다.
      */
     public Mono<Void> status(ServerWebExchange exchange, QueueState state, long position,
-            long etaSec, long pollAfterSec, long total) {
+            long etaSec, long pollAfterSec, long total, long behind) {
         // **전수로 적는다.** 빠뜨린 상태가 조용히 매진으로 나가면, 기다리던
         // 사람에게 끝났다고 말하는 셈이다.
         String data = switch (state) {
@@ -63,7 +64,7 @@ public final class QueueResponse {
                     .formatted(position, etaSec) : """
                     {"status":"WAITING","position":%d,"etaSeconds":%d,\
                     "totalWaiting":%d,"behind":%d}"""
-                    .formatted(position, etaSec, total, Math.max(0, total - position - 1));
+                    .formatted(position, etaSec, total, behind);
             // 입장은 토큰을 실어야 하므로 여기로 안 온다.
             case ADMITTED -> throw new IllegalArgumentException("입장은 따로 쓴다: " + state);
             // 줄에 없다. 이탈로 걷혔거나 큐가 정리됐다 — 어느 쪽이든 다시 서야 한다.

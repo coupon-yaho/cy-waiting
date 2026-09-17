@@ -227,7 +227,7 @@ public final class QueueStatusFilter implements WebFilter {
         double etaSec = EtaPolicy.etaSec(entry.rank(), credit(view, couponId));
         return response.status(exchange, entry.state(), entry.rank(),
                 EtaPolicy.reportSec(etaSec),
-                POLL.intervalSec(etaSec, random, pollScale(view)), entry.total());
+                POLL.intervalSec(etaSec, random, pollScale(view)), entry.total(), entry.behind());
     }
 
     /**

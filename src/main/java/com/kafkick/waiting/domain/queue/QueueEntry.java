@@ -27,15 +27,21 @@ public record QueueEntry(QueueState state, long rank, long score,
         // 전제로 통과하는 시험이 생기고, 운영이 못 만드는 상태를 재게 된다.
         boolean ok = switch (state) {
             // 줄에 없다. 자리를 들고 있으면 안 된다.
-            case NOT_QUEUED, REJECTED -> rank == NONE && score == NONE;
-            case WAITING -> rank >= 0 && score >= 0;
+            case NOT_QUEUED, REJECTED -> rank == NONE && score == NONE
+                    && total == UNKNOWN_TOTAL;
+            // **총원은 나를 포함해 센다.** 그래서 앞 인원보다 반드시 크다 — 아니면 두 값을
+            // 다른 기준으로 읽은 것이고, 그대로 두면 "앞에 100명인데 총 80명" 이 나간다.
+            case WAITING -> rank >= 0 && score >= 0
+                    && (total == UNKNOWN_TOTAL || total > rank);
             // 차례가 왔다. 큐에서 빠졌으므로 앞에 아무도 없고, 유예 기록으로
-            // 되읽은 경우에는 순번을 모른다.
-            case ADMITTED -> rank == 0 && (score >= 0 || score == NONE);
+            // 되읽은 경우에는 순번을 모른다. 줄을 벗어났으니 총원도 안 든다.
+            case ADMITTED -> rank == 0 && (score >= 0 || score == NONE)
+                    && total == UNKNOWN_TOTAL;
         };
         if (!ok) {
             throw new IllegalArgumentException(
-                    "%s 가 가질 수 없는 값이다: rank=%d score=%d".formatted(state, rank, score));
+                    "%s 가 가질 수 없는 값이다: rank=%d score=%d total=%d"
+                            .formatted(state, rank, score, total));
         }
         // **재방문은 새로 선 사람에게만 있다.** 던지지 않고 낮추는 것은, 등록 결과를
         // 만들다 던지면 부르는 쪽이 삼켜 fail-open 으로 흘리기 때문이다 — 보고용 값
@@ -62,12 +68,14 @@ public record QueueEntry(QueueState state, long rank, long score,
     /**
      * 내 뒤에 선 사람 수. <b>총원과 앞 인원을 같은 기준으로 센 값에서만 뽑는다</b> — 따로 읽으면
      * "앞에 100명인데 총 80명" 이 나온다 (CY-827). 모르면 {@link #UNKNOWN_TOTAL}.
+     *
+     * <p>상태는 안 본다 — 총원을 드는 것은 {@code WAITING} 뿐이라고 생성자가 이미 막았다.
      */
     public long behind() {
-        if (total == UNKNOWN_TOTAL || state != QueueState.WAITING) {
+        if (total == UNKNOWN_TOTAL) {
             return UNKNOWN_TOTAL;
         }
-        return Math.max(0, total - rank - 1);
+        return total - rank - 1;
     }
 
     /** 줄에 자리가 있는가. 거절은 상한에 걸린 것뿐이다. */

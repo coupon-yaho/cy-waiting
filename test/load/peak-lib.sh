@@ -50,8 +50,10 @@ peak_duration_sec() {
 peak_vus() {
     case "${1:-}" in ''|*[!0-9]*|??????????*) echo 0; return ;; esac
     case "${2:-}" in ''|*[!0-9]*|??????????*) echo 0; return ;; esac
-    if [ "$1" -eq 0 ] || [ "$2" -eq 0 ]; then echo 0; return; fi
-    local vus=$(( $1 * $2 / 100 ))
+    # 선행 0 을 10진수로 읽는다. bash 산술은 008 을 오류로, 010 을 8 로 읽는다.
+    local rate=$((10#$1)) sec=$((10#$2))
+    if [ "$rate" -eq 0 ] || [ "$sec" -eq 0 ]; then echo 0; return; fi
+    local vus=$(( rate * sec / 100 ))
     echo $(( vus > 50 ? vus : 50 ))
 }
 

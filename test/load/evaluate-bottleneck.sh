@@ -42,6 +42,12 @@ host_floor=${HOST_IDLE_FLOOR_PCT:-10}
 min_samples=${MIN_SAMPLES:-3}
 # LB 를 지나는 회차의 LB 코어 한도. 비우면 LB 를 안 본다.
 lb_cpus=${LB_CPUS:-}
+# **LB 는 CPU 말고 연결 한도에서도 막힌다.** 러너가 회차 중 nginx 가 낸 연결 한도·accept 실패 줄 수를 넘긴다.
+lb_errors=${LB_CONN_ERRORS:-0}
+case "$lb_errors" in
+    ''|*[!0-9]*) echo "::error title=천장 원인::LB 연결 오류 수가 0 이상의 정수가 아니다: '$lb_errors' — 판정 불가"
+        exit "$UNMEASURABLE" ;;
+esac
 if [ -n "$lb_cpus" ] && { ! printf '%s' "$lb_cpus" | grep -Eq '^[0-9]+(\.[0-9]+)?$' \
         || awk -v c="$lb_cpus" 'BEGIN{ exit (c > 0) ? 1 : 0 }'; }; then
     echo "::error title=천장 원인::LB 코어 한도가 양수가 아니다: '$lb_cpus' — 판정 불가"
@@ -68,7 +74,7 @@ done
 # **평균이 아니라 가운데 값으로 가른다.** 표집은 k6 가 VU 를 띄우기 전과 끝난 뒤에 걸쳐, 앞뒤 한가한 표본 몇
 # 개가 평균을 선 너머로 옮긴다.
 awk -F '\t' -v cpus="$cpus" -v sat="$saturation" -v floor="$host_floor" -v need="$min_samples" \
-        -v expected="$expected" -v lb_cpus="$lb_cpus" '
+        -v expected="$expected" -v lb_cpus="$lb_cpus" -v lb_errors="$lb_errors" '
     function num(v) { return v ~ /^-?[0-9]+(\.[0-9]+)?$/ }
     function median(key, n,    i, j, t, a) {
         for (i = 1; i <= n; i++) a[i] = vals[key, i]
@@ -112,6 +118,7 @@ awk -F '\t' -v cpus="$cpus" -v sat="$saturation" -v floor="$host_floor" -v need=
         }
 
         if (idle < floor)                  { print "원인: 호스트 — 하네스와 코어를 다퉈 이 천장은 게이트웨이의 것이 아니다"; exit 0 }
+        if (lb_cpus != "" && lb_errors > 0) { printf "원인: LB — 연결 한도에서 막혔다 (오류 %d 건)\n", lb_errors; exit 0 }
         if (lb_cpus != "" && lb >= lb_limit) { print "원인: LB — 앞단이 코어 한도에 붙었다"; exit 0 }
         if (redis >= sat)                  { print "원인: 레디스 — 한 스레드가 한 코어에 붙었다"; exit 0 }
         if (saturated == ng)               { printf "원인: 게이트웨이 — %d 대 모두 코어 한도에 붙었다\n", ng; exit 0 }

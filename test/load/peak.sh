@@ -252,8 +252,15 @@ for rate in $RATES; do
     stop_sampler
     metrics "$after"
 
+    # LB 가 CPU 말고 연결 한도에서 막힌 칸을 센다. CPU 는 한가한데 연결이 막히면 표본만으로는 안 보인다.
+    lb_errors=0
+    if [ "$VIA_LB" = 1 ]; then
+        lb_errors=$($COMPOSE logs --since "${DURATION_SEC}s" lb 2>/dev/null \
+            | grep -cE 'worker_connections are not enough|accept4\(\) failed|Cannot assign requested address')
+    fi
+
     # 천장 원인은 회차마다 남긴다. 사다리가 멈춘 칸의 것이 그 천장의 원인이다.
-    LB_CPUS=$lb_env GATEWAYS=$GATEWAYS GATEWAY_CPUS=$bottleneck_cpus test/load/evaluate-bottleneck.sh "$cpu" \
+    LB_CONN_ERRORS=$lb_errors LB_CPUS=$lb_env GATEWAYS=$GATEWAYS GATEWAY_CPUS=$bottleneck_cpus test/load/evaluate-bottleneck.sh "$cpu" \
         > "$OUT_DIR/bottleneck-$rate.txt" 2>&1
     sed 's/^/    /' "$OUT_DIR/bottleneck-$rate.txt"
 

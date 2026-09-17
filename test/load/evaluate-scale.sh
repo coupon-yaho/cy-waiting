@@ -6,7 +6,7 @@
 # **두 천장이 모두 게이트웨이의 것일 때만 나눈다.** 한쪽이 하네스 천장(호스트가 말랐거나 원인을 못 가림)이면 그
 # 나눗셈은 게이트웨이가 아니라 k6 를 잰다. 원인은 러너가 멈춘 회차의 천장 원인 판정(10.7.4)이 낸다.
 #
-# **천장은 선 회차 중 가장 높은 실측 유입이다.** 요청 유입으로 재면 하네스가 못 만든 몫까지 천장에 들어간다.
+# **천장은 최대치 판정기(10.7.2)가 낸 현재 최대치다.** 요청 유입으로 재면 하네스가 못 만든 몫까지 천장에 들어간다.
 set -uo pipefail
 
 UNMEASURABLE=2
@@ -25,11 +25,11 @@ if ! printf '%s' "$target" | grep -Eq '^[0-9]+(\.[0-9]+)?$' \
     exit "$UNMEASURABLE"
 fi
 
-# 그 표의 천장. 선 회차가 없으면 빈 값이다.
+# 그 표의 천장. **선 칸을 여기서 다시 고르지 않는다** — 최대치 판정기와 갈리면 계획서의 두 수가 다른 천장을
+# 말한다. 천장을 못 봤거나 선 칸이 없으면 빈 값이다.
 ceiling() {
-    awk -F '\t' '$0 !~ /^#/ && NF >= 3 && $3 == "ok" && $2 ~ /^[0-9]+(\.[0-9]+)?$/ {
-        if ($2 > max) max = $2; found = 1 }
-        END { if (found) printf "%s", max }' "$1" 2>/dev/null
+    PEAK_FLOOR='' PEAK_REQUIRE_CEILING=1 "$(dirname "$0")/evaluate-peak.sh" "$1" 2>/dev/null \
+        | awk '/현재 최대치\(실측 유입\)/ { printf "%s", $NF; exit }'
 }
 
 # 천장이 게이트웨이의 것인가. 원인 줄을 못 찾으면 모르는 것이다.
@@ -55,11 +55,10 @@ if [ -z "$one" ] || [ -z "$two" ]; then
 fi
 
 # **곱으로 견준다.** 나눈 비율을 기준과 견주면 기준 정확히가 부동소수 오차로 한쪽에 떨어진다.
-awk -v one="$one" -v two="$two" -v t="$target" 'BEGIN{
+if awk -v one="$one" -v two="$two" -v t="$target" 'BEGIN{
     printf "N 대 천장 %.0f/초 · 2N 대 천장 %.0f/초 · 효율 %.1f%% (기준 %s%%)\n", one, two, 100 * two / (2 * one), t
     exit (two * 100 >= t * 2 * one) ? 0 : 1
-}'
-if [ $? -eq 0 ]; then
+}'; then
     echo "판정: 충족"
     exit 0
 fi

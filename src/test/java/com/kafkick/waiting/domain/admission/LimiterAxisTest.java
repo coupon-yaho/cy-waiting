@@ -26,7 +26,7 @@ class LimiterAxisTest {
             limiter.tryAcquire(Axis.PRIMARY, "m" + i, 5, 지금);
         }
 
-        assertThat(limiter.saturated(Axis.PRIMARY)).as("전제 — 한 축이 찼다").isTrue();
+        assertThat(limiter.saturated(Axis.PRIMARY, 지금)).as("전제 — 한 축이 찼다").isTrue();
         assertThat(limiter.tryAcquire(Axis.SECONDARY, "10.0.0.1", 200, 지금))
                 .as("다른 축의 새 키").isTrue();
     }
@@ -67,8 +67,8 @@ class LimiterAxisTest {
         SecondWindowLimiter limiter = SecondWindowLimiter.withMaxKeys(1);
         limiter.tryAcquire(Axis.SECONDARY, "m1", 5, 지금);
 
-        assertThat(limiter.saturated(Axis.SECONDARY)).as("채운 축").isTrue();
-        assertThat(limiter.saturated(Axis.PRIMARY)).as("안 채운 축").isFalse();
+        assertThat(limiter.saturated(Axis.SECONDARY, 지금)).as("채운 축").isTrue();
+        assertThat(limiter.saturated(Axis.PRIMARY, 지금)).as("안 채운 축").isFalse();
     }
 
     /** 축이 갈리면 키가 같아도 예산은 둘이다. 한 요청이 2 를 쓰는 것과 갈라야 한다. */

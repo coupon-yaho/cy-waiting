@@ -81,7 +81,9 @@ awk -F '\t' -v cpus="$cpus" -v sat="$saturation" -v floor="$host_floor" -v need=
         for (i = 2; i <= n; i++) { t = a[i]; for (j = i - 1; j >= 1 && a[j] > t; j--) a[j + 1] = a[j]; a[j + 1] = t }
         return (n % 2) ? a[(n + 1) / 2] : (a[n / 2] + a[n / 2 + 1]) / 2
     }
-    function add(key, v) { vals[key, ++cnt[key]] = v }
+    function add(key, v) { vals[key, ++cnt[key]] = v
+        if (!((key) in hi) || v > hi[key]) hi[key] = v
+        if (!((key) in lo) || v < lo[key]) lo[key] = v }
     $0 ~ /^#/ || NF < 3 { next }
     !num($3) { bad = 1; next }
     # 범위 밖 값은 계기 고장이다. 유휴 -1 이 마름으로 읽히면 고장이 원인으로 적힌다.
@@ -101,20 +103,20 @@ awk -F '\t' -v cpus="$cpus" -v sat="$saturation" -v floor="$host_floor" -v need=
             g = gws[i]; n = cnt["gw " g]
             if (n < need) { printf "::error title=천장 원인::%s 표본이 %d 개다 — 판정 불가\n", g, n; exit 2 }
             m = median("gw " g, n)
-            printf "  %s CPU 가운데 %.1f%% (한도 %s 코어, 붙음 선 %.1f%%)\n", g, m, cpus, limit
+            printf "  %s CPU 가운데 %.1f%% (최대 %.1f%%, 한도 %s 코어, 붙음 선 %.1f%%)\n", g, m, hi["gw " g], cpus, limit
             if (m >= limit) saturated++
         }
         if (cnt["idle"] < need) { printf "::error title=천장 원인::호스트 표본이 %d 개다 — 판정 불가\n", cnt["idle"]; exit 2 }
         idle = median("idle", cnt["idle"])
-        printf "  호스트 유휴 가운데 %.1f%% (마름 선 %.1f%%)\n", idle, floor
+        printf "  호스트 유휴 가운데 %.1f%% (최저 %.1f%%, 마름 선 %.1f%%)\n", idle, lo["idle"], floor
         # 레디스를 먼저 보는데 그 표집이 빠지면 순서가 조용히 사라진다.
         if (cnt["redis"] < need) { printf "::error title=천장 원인::레디스 표본이 %d 개다 — 판정 불가\n", cnt["redis"]; exit 2 }
         redis = median("redis", cnt["redis"])
-        printf "  레디스 CPU 가운데 %.1f%%\n", redis
+        printf "  레디스 CPU 가운데 %.1f%% (최대 %.1f%%)\n", redis, hi["redis"]
         if (lb_cpus != "") {
             if (cnt["lb"] < need) { printf "::error title=천장 원인::LB 표본이 %d 개다 — 판정 불가\n", cnt["lb"]; exit 2 }
             lb = median("lb", cnt["lb"]); lb_limit = lb_cpus * 100 * sat / 100
-            printf "  LB CPU 가운데 %.1f%% (한도 %s 코어, 붙음 선 %.1f%%)\n", lb, lb_cpus, lb_limit
+            printf "  LB CPU 가운데 %.1f%% (최대 %.1f%%, 한도 %s 코어, 붙음 선 %.1f%%)\n", lb, hi["lb"], lb_cpus, lb_limit
         }
 
         if (idle < floor)                  { print "원인: 호스트 — 하네스와 코어를 다퉈 이 천장은 게이트웨이의 것이 아니다"; exit 0 }

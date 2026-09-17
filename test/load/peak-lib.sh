@@ -119,3 +119,22 @@ peak_sample_cpu() {
     done
 }
 
+# 대마다 긁은 판정 계수를 품질별로 합친다 (10.7.3). **합의 비율이어야 한다** — 대마다 비율을 내 평균하면 적게
+# 받은 대가 많이 받은 대만큼 무겁게 섞인다. 이어 붙이면 판정기가 같은 시계열이 둘이라고 멈춘다.
+#
+#   사용: peak_merge_judgement <대 1 지표> <대 2 지표> ...
+peak_merge_judgement() {
+    awk '
+        /^waiting_judgement_total\{/ {
+            if (match($0, /quality="[^"]*"/) == 0) next
+            q = substr($0, RSTART + 9, RLENGTH - 10)
+            if (!(q in sum)) order[++n] = q
+            sum[q] += $NF
+        }
+        END {
+            for (i = 1; i <= n; i++)
+                printf "waiting_judgement_total{application=\"waiting\",quality=\"%s\"} %.1f\n", order[i], sum[order[i]]
+        }
+    ' "$@"
+}
+

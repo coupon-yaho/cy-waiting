@@ -3,6 +3,7 @@ package com.kafkick.waiting.adapter.redis;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.kafkick.waiting.domain.allocation.Grant;
 import com.kafkick.waiting.domain.queue.QueueEntry;
 import com.kafkick.waiting.domain.queue.QueueState;
 import com.kafkick.waiting.gateway.QueuePort;
@@ -221,6 +222,33 @@ class QueueRedisPortTest extends RedisContainerSupport {
     }
 
     /**
+     * <b>되살림이 순번을 돌려놓는다</b> (CY-942). 키 문자열만 보는 시험으로는 누가 언제 되살리는지, 되살린 뒤 조회가
+     * 정말 돌아오는지를 못 본다. 등록 · 배분 · 유실 · 되살림 · 조회를 한 흐름으로 잇는다.
+     */
+    @Test
+    @DisplayName("되살린_커서로_순번이_돌아온다")
+    void 되살린_커서로_순번이_돌아온다() {
+        AllocationRedisPort 리더 = AllocationRedisPort.of(redis, SHARDS);
+        long 임기 = 1_770_000_000_123_456L;
+        등록("m1");
+        등록("m2");
+        등록("m3");
+        리더.apply(new Grant(COUPON, 2), 임기).block(WAIT);
+        assertThat(port.status(COUPON, "m3", 지금).block(WAIT).rank()).as("전제 — 들인 둘은 앞이 아니다").isZero();
+
+        redis.delete(RedisKeys.admitted(COUPON, SHARDS, 0)).block(WAIT);
+        assertThat(port.status(COUPON, "m3", 지금).block(WAIT).rank()).as("전제 — 유실로 순번이 뛰었다").isEqualTo(2);
+
+        리더.apply(new Grant(COUPON, 0), 임기).block(WAIT);
+
+        QueueEntry 셋째 = port.status(COUPON, "m3", 지금).block(WAIT);
+        assertThat(셋째.rank()).as("되살린 뒤 다시 앞이 비었다").isZero();
+        assertThat(셋째.total()).as("기다리는 사람은 셋째뿐").isEqualTo(1);
+        assertThat(port.status(COUPON, "m1", 지금).block(WAIT).state())
+                .as("들인 사람은 입장으로 돌아온다").isEqualTo(QueueState.ADMITTED);
+    }
+
+    /**
      * <b>새로 선 사람은 늘 입장 커서 위에 선다</b> (CY-942). 시계가 뒤처진 복제본이 승격되면 새 점수가 커서 아래로
      * 나오고, 그 사람은 첫 폴링에 바로 입장이 된다 — 배분이 크레딧을 안 쓴 사람이 줄 선 사람을 앞지른다.
      * 커서를 되살리는 쪽이 이 길을 여므로 둘은 같이 간다.
@@ -229,7 +257,7 @@ class QueueRedisPortTest extends RedisContainerSupport {
     @DisplayName("커서가_시계보다_앞서도_새로_선_사람은_커서_위에_선다")
     void 커서가_시계보다_앞서도_새로_선_사람은_커서_위에_선다() {
         QueueEntry 첫째 = 등록("m1");
-        // 커서가 레디스 시계보다 한참 앞서 있다. 시계가 그만큼 뒤처진 복제본으로 넘어간 판과 같다.
+        // 커서가 레디스 시계보다 한참 앞서 있다. 시계가 뒤처진 복제본에서 배분이 커서를 되살린 판이 이렇다.
         long 앞선_커서 = 첫째.score() + 1_000_000_000_000L;
         redis.opsForValue().set(RedisKeys.admitted(COUPON, SHARDS, 0),
                 Long.toString(앞선_커서)).block(WAIT);
@@ -237,7 +265,8 @@ class QueueRedisPortTest extends RedisContainerSupport {
         QueueEntry 새로_선_사람 = 등록("m9");
         QueueEntry 조회 = port.status(COUPON, "m9", 지금).block(WAIT);
 
-        assertThat(새로_선_사람.score()).as("커서 위에 선다").isGreaterThan(앞선_커서);
+        assertThat(새로_선_사람.score()).as("커서 바로 위에 선다").isEqualTo(앞선_커서 + 1);
+        assertThat(새로_선_사람.rank()).as("커서 아래는 앞 인원이 아니다").isZero();
         assertThat(조회.state()).as("크레딧 없이 안 들어간다").isEqualTo(QueueState.WAITING);
         assertThat(새로_선_사람.clockWentBack()).as("시계가 뒤로 간 것으로 센다").isTrue();
     }

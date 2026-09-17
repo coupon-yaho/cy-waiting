@@ -527,6 +527,26 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         assertThat(들인_수).as("이미 들인 사람에게 크레딧을 다시 안 쓴다").isEqualTo(1);
     }
 
+    /**
+     * <b>되찾은 옛 리더는 앞선 임계를 안 낮춘다.</b> 리더를 잃은 사이 다른 리더가 임계를 올렸으면, 옛 리더의 기억은
+     * 낡았다. 되살림이 "기억이 레디스보다 앞설 때만" 이 아니면 커서를 끌어내려 들인 사람을 대기로 돌린다.
+     */
+    @Test
+    @DisplayName("되찾은_옛_리더는_앞선_임계를_안_낮춘다")
+    void 되찾은_옛_리더는_앞선_임계를_안_낮춘다() {
+        줄_세운다("c1", 10, 20, 30, 40);
+        AllocationRedisPort 옛_리더 = port;
+        옛_리더.apply(new Grant("c1", 2), 임기).block(WAIT);
+        AllocationRedisPort 새_리더 = AllocationRedisPort.of(redis, SHARDS);
+        새_리더.apply(new Grant("c1", 1), 임기 + 1).block(WAIT);
+
+        long 들인_수 = 옛_리더.apply(new Grant("c1", 0), 임기 + 2).block(WAIT);
+
+        assertThat(redis.opsForValue().get(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT))
+                .as("낡은 기억 20 으로 안 내린다").isEqualTo("30");
+        assertThat(들인_수).isZero();
+    }
+
     /** 사라진 것만이 아니다. 복제본 승격은 흔히 옛 값을 남긴다. */
     @Test
     @DisplayName("옛_값으로_돌아간_임계도_되살린다")

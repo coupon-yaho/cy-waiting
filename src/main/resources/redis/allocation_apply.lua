@@ -10,13 +10,14 @@
 --          수가 아니면 없는 것으로 본다 — 앞 세 인자와 달리 오류로 막지 않는다. 되살림은 덧붙은 방어라,
 --          조립이 틀린 날 적용 전체를 멈추는 것보다 방어 하나를 잃는 쪽이 낫다
 --
--- 반환  {임계, 들인 인원}. 첫 칸은 문자열, 둘째는 정수다
+-- 반환  {임계, 들인 인원, 되살리기 전 임계}. 첫 칸과 셋째 칸은 문자열, 둘째는 정수다
 --        울타리가 막았으면 {'-1', -1, 막은 임기}. 막은 임기도 문자열이다
---   임계      새 입장 임계. 안 바뀌었으면 이전 값, 되살렸으면 되살린 값
---   들인 인원  임계 위로 새로 들어온 사람 수
+--   임계            새 입장 임계. 안 바뀌었으면 이전 값, 되살렸으면 되살린 값
+--   들인 인원        임계 위로 새로 들어온 사람 수
+--   되살리기 전 임계  되살렸을 때만 찬다. 없던 커서는 '-1' 이다. 폭은 부르는 쪽이 뺀다 (CY-945)
 --
---   **거절을 칸 수로 가른다.** `{-1, 0}` 은 임계가 없고 들일 사람도 없는 정상
---   회차와 같은 값이라, 그것으로 가르면 새 쿠폰과 빈 큐가 거절로 오독된다.
+--   **거절은 들인 인원으로 가른다.** 정상 회차의 들인 인원은 0 이상이라 -1 이 거절의 표식이다. 칸 수로 가르면
+--   되살림 칸이 붙는 순간 정상 회차가 거절로 오독된다.
 --
 -- **수를 문자열로 만들 때 tostring 을 쓰지 않는다.** Lua 5.1 은 %.14g 로
 -- 찍는데 마이크로초 score 는 16자리라 과학 표기로 접히며 최대 100μs 가
@@ -91,7 +92,10 @@ end
 -- 등록이 커서 위에 세운다. 크레딧이 0 이어도 되살린다. 들이는 일이 아니라 들인 기록을 돌려놓는 일이다.
 local written = tonumber(ARGV[4])
 local healed = false
+-- 되살리기 전 임계. 안 되살린 회차는 빈 문자열이라 부르는 쪽이 "되살림 없음" 으로 읽는다 (CY-945).
+local healedFrom = ''
 if written ~= nil and written == written and written ~= math.huge and written > current then
+    healedFrom = string.format('%.0f', current)
     current = math.floor(written)
     redis.call('SET', KEYS[2], string.format('%.0f', current))
     healed = true
@@ -104,7 +108,7 @@ end
 
 if admit == 0 then
     -- 크레딧이 없다. **임계를 낮추지 않는다** — 낮추면 통과한 사람이 되돌아온다.
-    return {string.format('%.0f', current), 0}
+    return {string.format('%.0f', current), 0, healedFrom}
 end
 
 -- **이미 임계 아래인 사람은 세지 않는다.** 앞에서부터 세면 통과한 사람 자리에
@@ -122,16 +126,16 @@ else
     local last = redis.call('ZRANGE', KEYS[1], -1, -1, 'WITHSCORES')
     if #last == 0 then
         -- 큐가 비었다. 들일 사람이 없으니 임계도 그대로다.
-        return {string.format('%.0f', current), 0}
+        return {string.format('%.0f', current), 0, healedFrom}
     end
     threshold = tonumber(last[2])
 end
 
 if threshold <= current then
-    return {string.format('%.0f', current), 0}
+    return {string.format('%.0f', current), 0, healedFrom}
 end
 
 local exact = string.format('%.0f', threshold)
 local entering = redis.call('ZCOUNT', KEYS[1], from, exact)
 redis.call('SET', KEYS[2], exact)
-return {exact, entering}
+return {exact, entering, healedFrom}

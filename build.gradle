@@ -166,6 +166,10 @@ tasks.named('test') {
     useJUnitPlatform {
         excludeTags 'integration', 'context', 'chaos'
     }
+    // **태그 없는 컨텍스트 시험도 레디스 없이 돈다.** context 계층과 같은 이유다 — 주소를 안 박으면 로컬 6379 에
+    // 떠 있는 아무 레디스에나 붙는다. 이 계층의 시험은 연결을 안 맺지만, 맺는 시험이 생기는 순간 남의 데이터에 쓴다.
+    systemProperty 'spring.data.redis.host', '127.0.0.1'
+    systemProperty 'spring.data.redis.port', '1'
     // **계획서도 시험의 입력이다.** 게이트와 시험을 잇는 표를 계획서에서 읽는
     // 시험이 있는데, 그레이들이 이 경로를 모르면 계획서만 고친 판에서 그 시험이
     // 안 돈다 — 게이트를 지워도 로컬은 초록이다.

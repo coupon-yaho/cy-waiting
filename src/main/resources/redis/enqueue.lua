@@ -17,7 +17,7 @@
 --
 -- 반환  {score, floorApplied, alreadyQueued, rank, rejoined}
 --   score          이 사람의 순번. 거부되면 '-1'
---   floorApplied   바닥값이 적용됐는가. 1 이면 시계가 뒤로 갔다는 뜻이다
+--   floorApplied   바닥값이나 입장 커서가 점수를 밀어 올렸는가. 1 이면 시계가 뒤로 갔다는 뜻이다
 --   alreadyQueued  이미 줄에 있었는가. 1 이면 순번을 그대로 돌려준 것이다
 --   rank           내 앞의 인원. 거부되면 -1
 --   rejoined       자리를 비웠다 돌아왔는가

@@ -83,6 +83,12 @@ public final class SnapshotCodec {
      */
     public static final String STOCK_UNKNOWN_FIELD = "#u:";
 
+    /**
+     * 쿠폰별 입장 커서 (CY-944). 예약 자리라 옛 노드가 건너뛰고, 없으면 모르는 것으로 읽는다. 노드는 이 값을 등록 점수의
+     * 하한으로만 쓴다 — 입장도 순번도 레디스 커서가 정한다.
+     */
+    public static final String CURSOR_FIELD = "#a:";
+
     /** {@link Instant#MAX} 를 넘으면 생성자가 던진다 — 넘기지 않고 걸러낸다. */
     private static final long MAX_EPOCH_SECOND = Instant.MAX.getEpochSecond();
 
@@ -109,6 +115,12 @@ public final class SnapshotCodec {
                 if (!state.stockKnown()) {
                     hash.put(STOCK_UNKNOWN_FIELD + couponId, "1");
                 }
+            }
+        });
+        snapshot.cursors().forEach((couponId, cursor) -> {
+            // 쿠폰 자리와 같은 이유로 예약 접두사를 단 이름은 안 싣는다. 모르는 값은 싣지 않는다.
+            if (!couponId.startsWith(RESERVED) && cursor >= 0) {
+                hash.put(CURSOR_FIELD + couponId, Long.toString(cursor));
             }
         });
         hash.put(CREDIT, Long.toString(snapshot.meta().globalCredit()));
@@ -199,7 +211,29 @@ public final class SnapshotCodec {
             }
         });
         return new GatewaySnapshot(coupons, toMeta(hash), publishedAtOf(hash),
-                decodeInstances(hash.get(INSTANCES)));
+                decodeInstances(hash.get(INSTANCES)), cursorsOf(hash));
+    }
+
+    /**
+     * 실려 온 입장 커서. <b>깨진 값은 모르는 것으로 읽는다</b> — 하한을 잘못 세우면 새로 선 사람이 뒤로 밀리고,
+     * 안 세우면 방어 하나를 잃을 뿐이다.
+     */
+    private Map<String, Long> cursorsOf(Map<String, String> hash) {
+        Map<String, Long> cursors = new LinkedHashMap<>();
+        hash.forEach((field, raw) -> {
+            if (!field.startsWith(CURSOR_FIELD)) {
+                return;
+            }
+            try {
+                long cursor = Long.parseLong(raw.trim());
+                if (cursor >= 0) {
+                    cursors.put(field.substring(CURSOR_FIELD.length()), cursor);
+                }
+            } catch (NumberFormatException e) {
+                // 모르는 것으로 둔다.
+            }
+        });
+        return cursors;
     }
 
     /** 실을 수 없는 줄은 뺀다. 식별자에 구분자가 섞이면 그 줄이 통째로 어긋난다. */

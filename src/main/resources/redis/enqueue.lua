@@ -14,6 +14,8 @@
 --          비교하므로 샤드가 여럿이 되면 나눠 넘겨야 한다 (지금은 샤드 1 만 허용)
 -- ARGV[5]  지금 시각(초). 생존 신호의 만료 시각을 계산한다
 -- ARGV[6]  이탈 기록 보관 기간(초). 이보다 낡은 기록은 재방문으로 안 본다
+-- ARGV[7]  스냅샷이 실어 온 입장 커서. 모르면 -1. **점수 하한으로만 쓴다** (CY-944) — 입장·순번·상한은 레디스
+--          커서가 정한다. 수가 아니면 없는 것으로 본다: 하한 하나를 잃는 쪽이 등록을 실패시키는 것보다 낫다
 --
 -- 반환  {score, floorApplied, alreadyQueued, rank, rejoined}
 --   score          이 사람의 순번. 거부되면 '-1'
@@ -108,6 +110,15 @@ end
 -- 선 사람의 점수라 시계보다 뒤에 있으므로, 이 갈래에 들어오면 시계가 뒤로 간 것이다.
 if admitted >= 0 and admitted >= score then
     score = math.floor(admitted) + 1
+    applied = 1
+end
+-- **발행된 커서 위에도 세운다** (CY-944). 커서의 마지막 쓰기가 빠진 창에서는 레디스 커서가 옛 값이라, 위 하한만으로는
+-- 참 커서 아래 점수가 나온다. 그러면 리더가 커서를 되살리는 순간 이 사람이 크레딧 없이 들어간다. 노드가 아는
+-- 참 커서는 스냅샷에만 있다. 뒤로 밀기만 하므로 틀린 사람을 들이지 않는다.
+local cursorHint = tonumber(ARGV[7])
+if cursorHint ~= nil and cursorHint == cursorHint and cursorHint ~= math.huge
+        and cursorHint >= score then
+    score = math.floor(cursorHint) + 1
     applied = 1
 end
 

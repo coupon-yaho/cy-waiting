@@ -1117,7 +1117,7 @@ public final class AllocationRound {
     private GatewaySnapshot snapshot(List<CouponDemand> collected, Map<String, Long> granted,
             long credit, Instant readAt, Tunables applied, double pollScale) {
         return new GatewaySnapshot(couponsOf(collected, granted),
-                meta(credit, applied).withPollScale(pollScale), readAt, routable.get());
+                meta(credit, applied).withPollScale(pollScale), readAt, routable.get(), cursors.get());
     }
 
     // **노드 수 방어를 여기서 다시 쓰지 않는다.** 사본이 생기면 둘 중 하나만

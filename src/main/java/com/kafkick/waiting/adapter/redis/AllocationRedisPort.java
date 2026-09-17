@@ -564,7 +564,9 @@ public final class AllocationRedisPort implements SnapshotSource {
 
     /** 발행에 실을 쿠폰별 임계 기억 (CY-944). 노드가 등록 점수의 하한으로 쓴다. */
     public Map<String, Long> writtenCursors() {
-        return Map.of();
+        Map<String, Long> cursors = new LinkedHashMap<>();
+        lastAdmitted.forEach((couponId, threshold) -> cursors.put(couponId, threshold.longValue()));
+        return cursors;
     }
 
     /**
@@ -572,6 +574,12 @@ public final class AllocationRedisPort implements SnapshotSource {
      * 리더 리스도 흔들어 승계를 부르기 쉽다.
      */
     public void seedWritten(Map<String, Long> published) {
+        // **최댓값으로 합친다.** 낡은 스냅샷이 앞선 기억을 덮으면 그 사이로 감긴 커서를 못 본다.
+        published.forEach((couponId, cursor) -> {
+            if (cursor != null && cursor >= 0) {
+                lastAdmitted.merge(couponId, cursor.doubleValue(), Math::max);
+            }
+        });
     }
 
     /** 활성에서 빠진 쿠폰의 기준을 버린다. 안 버리면 이 맵만 역사상 쿠폰 수로 자란다. */

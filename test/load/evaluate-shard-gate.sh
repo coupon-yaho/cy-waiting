@@ -31,6 +31,10 @@ summary=${2:?k6 요약 파일}
 # 이 게이트는 못 가른다. 지연 예산이 서거나(D-L1) 레디스만 때려 CPU-지연
 # 무릎을 찾기 전까지 **이 수를 근거로 인용하지 않는다.**
 threshold_pct=${SHARD_THRESHOLD_PCT:-60}
+# 세 번째 인자는 등록 왕복의 분위수 파일이다. 없으면 없다고 적는다.
+enqueue=${3:-}
+# 회차 전에 긁은 같은 지표. 개수의 증분을 보는 데만 쓴다.
+enqueue_base=${4:-}
 
 if [ ! -s "$samples" ]; then
     echo "::error title=착수 판정::표본이 비었다 — 프로브가 안 돌았다"
@@ -83,6 +87,38 @@ printf '  %-28s %s.%02d%%\n' "평균 CPU" "$((mean / 100))" "$((mean % 100))"
 p99=$(jq -r '(.metrics.http_req_duration.values["p(99)"]
     // .metrics.http_req_duration["p(99)"]) // empty' "$summary" 2>/dev/null)
 printf '  %-28s %s\n' "응답 p99(ms) — 기록만" "${p99:-없음}"
+
+# **등록 왕복만 뗀 분위수** (CY-936). 위 응답 p99 에는 판정·라우팅·뒷단이 섞여 있어
+# 샤딩을 정하는 자리에서 읽을 값이 아니다. 여기도 기록만 한다 — 절대 예산은 D-L1 이 정한다.
+enqueue_ok_count() {
+    [ -n "${1:-}" ] && [ -s "$1" ] || { echo 0; return; }
+    awk '/^waiting_queue_enqueue_latency_seconds_count/ && /outcome="success"/ {n += $NF}
+         END {printf "%d", n}' "$1"
+}
+
+if [ -n "${enqueue:-}" ] && [ -s "$enqueue" ] \
+        && [ -n "${enqueue_base:-}" ] && [ -s "$enqueue_base" ]; then
+    # **기준 스크랩이 없으면 증분을 못 본다.** 없는 것을 0 으로 읽으면 누적 전체가 증분이 되어,
+    # 이 가드가 조용히 풀린다 — 없을 때는 안 적는다.
+    # **개수는 누적인데 분위수 창은 10 분마다 돈다.** 누적값만 보면, 이번 회차에 등록이 한 건도
+    # 없고 예열 때의 표본만 창에 남은 회차가 그 값을 "이번 회차의 등록 p99" 로 인용한다.
+    # 회차 전후의 증분으로 가른다.
+    measured=$(( $(enqueue_ok_count "$enqueue") - $(enqueue_ok_count "$enqueue_base") ))
+    if [ "$measured" -gt 0 ]; then
+        # **성공 계열만 읽는다.** 실패·취소 타이머에는 왕복이 아니라 끊길 때까지의 시간이 쌓인다 —
+        # 두 계열에서 큰 쪽을 집으면 취소 몇 건이 회차의 등록 p99 를 통째로 바꾼다.
+        enq99=$(awk '/quantile="0.99"/ && /outcome="success"/ {print $NF}' "$enqueue" \
+            | sort -g | tail -1)
+        case "$enq99" in
+            ''|*[!0-9.eE+-]*) enq99= ;;   # NaN 도 여기서 걸린다
+        esac
+        if [ -n "$enq99" ]; then
+            enq99_ms=$(awk -v v="$enq99" 'BEGIN {printf "%.1f", v * 1000}')
+        fi
+    fi
+fi
+# **한 노드의 값이다.** 노드마다 계산된 분위수는 합산할 수 없어, 여럿이면 그중 가장 큰 계열이다.
+printf '  %-28s %s\n' "등록 왕복 p99(ms) — 한 노드" "${enq99_ms:-없음}"
 
 rate=$(jq -r '(.metrics.http_reqs.values.rate
     // .metrics.http_reqs.rate) // empty' "$summary" 2>/dev/null)

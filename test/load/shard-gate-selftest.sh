@@ -101,6 +101,104 @@ MIN_SAMPLES=1 run_case "values 아래의 p99 를 읽는다" 1 "기록만 *123.4"
 MIN_SAMPLES=1 run_case "바로 아래의 p99 도 읽는다" 1 "기록만 *222.5" \
     -- "$(samples s.txt 6001)" \
        "$(summary p99.json '{"metrics":{"http_req_duration":{"p(99)":222.5}}}')"
+# **등록 왕복의 분위수도 같은 규약이다** (CY-936). 파일이 없거나 그 분위수가 없으면
+# "없음" 이고, 다른 값으로 안 채운다 — 응답 p99 로 채우면 섞인 값을 등록으로 읽는다.
+enq() {
+    printf '%s' "$2" > "$work/$1"
+    printf '%s' "$work/$1"
+}
+
+# 회차 전 기준. 증분을 보는 사례들이 공유한다.
+zero_base=$(enq base0.txt 'waiting_queue_enqueue_latency_seconds_count{outcome="success",} 0.0
+')
+MIN_SAMPLES=1 run_case "등록 왕복 p99 를 초에서 ms 로 읽는다" 0 "등록 왕복 p99(ms) — 한 노드 *12.3" \
+    -- "$(samples s.txt 6001)" "$work/ok.json" \
+       "$(enq enq.txt 'waiting_queue_enqueue_latency_seconds{outcome="success",quantile="0.99",} 0.0123
+waiting_queue_enqueue_latency_seconds_count{outcome="success",} 5000.0
+')" \
+       "$zero_base"
+# **표본이 없으면 0 이 아니라 없음이다.** 창이 비면 분위수 줄은 0 으로 남는데, 그대로 적으면
+# 등록이 한 건도 없던 회차가 가장 좋아 보이는 값으로 인용된다.
+MIN_SAMPLES=1 run_case "표본이 없으면 0 을 안 적는다" 0 "등록 왕복 p99(ms) — 한 노드 *없음" \
+    -- "$(samples s.txt 6001)" "$work/ok.json" \
+       "$(enq enq0.txt 'waiting_queue_enqueue_latency_seconds{outcome="success",quantile="0.99",} 0.0
+waiting_queue_enqueue_latency_seconds_count{outcome="success",} 0.0
+')" \
+       "$zero_base"
+MIN_SAMPLES=1 run_case "숫자가 아니면 안 적는다" 0 "등록 왕복 p99(ms) — 한 노드 *없음" \
+    -- "$(samples s.txt 6001)" "$work/ok.json" \
+       "$(enq enqnan.txt 'waiting_queue_enqueue_latency_seconds{outcome="success",quantile="0.99",} NaN
+waiting_queue_enqueue_latency_seconds_count{outcome="success",} 12.0
+')" \
+       "$zero_base"
+MIN_SAMPLES=1 run_case "등록 왕복 파일이 없으면 없음이다" 0 "등록 왕복 p99(ms) — 한 노드 *없음" \
+    -- "$(samples s.txt 6001)" "$work/ok.json" "$work/없는파일.txt" "$zero_base"
+# **응답 p99 로 뻗지 않는지도 본다.** 폴백이 다른 지표로 뻗으면 섞인 값을 등록으로 읽는다.
+MIN_SAMPLES=1 run_case "응답 p99 로 안 채운다" 0 "등록 왕복 p99(ms) — 한 노드 *없음" \
+    -- "$(samples s.txt 6001)" \
+       "$(summary both.json '{"metrics":{"http_req_duration":{"values":{"p(99)":111.1}},"queued_responses":{"values":{"count":5000}}}}')" \
+       "$(enq enq_only95.txt 'waiting_queue_enqueue_latency_seconds{application="waiting",outcome="success",quantile="0.95",} 0.0099
+waiting_queue_enqueue_latency_seconds_count{application="waiting",outcome="success",} 7.0
+')" \
+       "$zero_base"
+MIN_SAMPLES=1 run_case "그 분위수가 없으면 안 채운다" 0 "등록 왕복 p99(ms) — 한 노드 *없음" \
+    -- "$(samples s.txt 6001)" "$work/ok.json" \
+       "$(enq enq95.txt 'waiting_queue_enqueue_latency_seconds{outcome="success",quantile="0.95",} 0.0099
+waiting_queue_enqueue_latency_seconds_count{outcome="success",} 7.0
+')" \
+       "$zero_base"
+# **실패·취소 계열을 등록 왕복으로 읽지 않는다.** 그 타이머에는 왕복이 아니라 끊길 때까지의
+# 시간이 쌓여서, 취소 몇 건이 회차의 등록 p99 를 통째로 바꾼다.
+MIN_SAMPLES=1 run_case "실패 계열이 커도 성공 값을 적는다" 0 "등록 왕복 p99(ms) — 한 노드 *12.3" \
+    -- "$(samples s.txt 6001)" "$work/ok.json" \
+       "$(enq enq_both.txt 'waiting_queue_enqueue_latency_seconds{outcome="success",quantile="0.99",} 0.0123
+waiting_queue_enqueue_latency_seconds{outcome="error",quantile="0.99",} 2.0
+waiting_queue_enqueue_latency_seconds_count{outcome="success",} 19000.0
+waiting_queue_enqueue_latency_seconds_count{outcome="error",} 40.0
+')" \
+       "$zero_base"
+# **개수는 누적이라 증분으로 본다.** 이번 회차에 등록이 0 건이어도 앞 회차의 표본이 창에 남아
+# 있으면 그 값이 "이번 회차" 로 인용된다.
+MIN_SAMPLES=1 run_case "회차에 등록이 없으면 안 적는다" 0 "등록 왕복 p99(ms) — 한 노드 *없음" \
+    -- "$(samples s.txt 6001)" "$work/ok.json" \
+       "$(enq enq_same.txt 'waiting_queue_enqueue_latency_seconds{outcome="success",quantile="0.99",} 0.0123
+waiting_queue_enqueue_latency_seconds_count{outcome="success",} 5000.0
+')" \
+       "$(enq enq_same_base.txt 'waiting_queue_enqueue_latency_seconds_count{outcome="success",} 5000.0
+')"
+# **계열이 여럿이면 가장 큰 것을 집는다.** 큰 값을 가운데 둬, 정렬을 빼거나 최솟값을 집는 쪽으로
+# 바꾸면 빨개지게 한다 — 가장 좋아 보이는 값이 인용되는 것을 막는 것이 이 판정의 존재 이유다.
+MIN_SAMPLES=1 run_case "성공 계열이 여럿이면 큰 쪽" 0 "등록 왕복 p99(ms) — 한 노드 *12.3" \
+    -- "$(samples s.txt 6001)" "$work/ok.json" \
+       "$(enq enq_two.txt 'waiting_queue_enqueue_latency_seconds{instance="a",outcome="success",quantile="0.99",} 0.0099
+waiting_queue_enqueue_latency_seconds{instance="b",outcome="success",quantile="0.99",} 0.0123
+waiting_queue_enqueue_latency_seconds{instance="c",outcome="success",quantile="0.99",} 0.0101
+waiting_queue_enqueue_latency_seconds_count{instance="a",outcome="success",} 5000.0
+')" \
+       "$zero_base"
+# **성공이 한 건도 없던 회차는 없음이다.** 실패만 쌓인 회차가 실패 계열의 작은 값을 등록 p99 로
+# 인용하면, 가장 나쁜 회차가 가장 좋은 수로 적힌다.
+MIN_SAMPLES=1 run_case "성공이 0 이면 실패 값을 안 적는다" 0 "등록 왕복 p99(ms) — 한 노드 *없음" \
+    -- "$(samples s.txt 6001)" "$work/ok.json" \
+       "$(enq enq_err.txt 'waiting_queue_enqueue_latency_seconds{outcome="error",quantile="0.99",} 0.001
+waiting_queue_enqueue_latency_seconds_count{outcome="error",} 20000.0
+waiting_queue_enqueue_latency_seconds_count{outcome="success",} 0.0
+')" \
+       "$zero_base"
+# **기준 스크랩이 없으면 안 적는다.** 없는 것을 0 으로 읽으면 누적 전체가 증분이 되어 가드가 풀린다.
+MIN_SAMPLES=1 run_case "기준이 없으면 안 적는다" 0 "등록 왕복 p99(ms) — 한 노드 *없음" \
+    -- "$(samples s.txt 6001)" "$work/ok.json" \
+       "$(enq enq_nobase.txt 'waiting_queue_enqueue_latency_seconds{outcome="success",quantile="0.99",} 0.0123
+waiting_queue_enqueue_latency_seconds_count{outcome="success",} 5000.0
+')"
+MIN_SAMPLES=1 run_case "증분이 있으면 적는다" 0 "등록 왕복 p99(ms) — 한 노드 *12.3" \
+    -- "$(samples s.txt 6001)" "$work/ok.json" \
+       "$(enq enq_more.txt 'waiting_queue_enqueue_latency_seconds{outcome="success",quantile="0.99",} 0.0123
+waiting_queue_enqueue_latency_seconds_count{outcome="success",} 9000.0
+')" \
+       "$(enq enq_more_base.txt 'waiting_queue_enqueue_latency_seconds_count{outcome="success",} 5000.0
+')"
+
 MIN_SAMPLES=1 run_case "p99 가 없으면 다른 값으로 안 채운다" 1 "p99(ms) — 기록만 *없음" \
     -- "$(samples s.txt 6001)" \
        "$(summary p99.json '{"metrics":{"http_req_duration":{"values":{"p(95)":99.9}}}}')"

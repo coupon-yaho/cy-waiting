@@ -10,6 +10,7 @@ import com.kafkick.waiting.domain.coupon.QueueMode;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.function.Consumer;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
@@ -63,6 +64,26 @@ class LeadershipGainedWiringTest {
 
         assertThat(gate.removalHeld()).isTrue();
         assertThat(gate.sweepable(줄이_선_쿠폰, false)).isEmpty();
+    }
+
+    /**
+     * <b>리더가 되면 발행된 입장 커서로 기억을 채운다</b> (CY-944). 복제본 승격은 리더 리스도 흔들어 승계를 부르기 쉽고,
+     * 기억 없는 새 리더는 사라진 커서를 못 되살린다 — 청소 유예가 풀리는 첫 틱에 들인 사람을 걷는다. 옛 리더가 발행한
+     * 커서가 이 노드의 스냅샷에 남아 있다.
+     */
+    @Test
+    @DisplayName("리더가_되면_발행된_커서로_기억을_채운다")
+    void 리더가_되면_발행된_커서로_기억을_채운다() {
+        SnapshotHolder holder = SnapshotHolder.of(Duration.ofSeconds(3), Duration.ofSeconds(10),
+                Clock.systemUTC());
+        holder.replace(new GatewaySnapshot(Map.of(), new SnapshotMeta(10, 1), Instant.now(), List.of(),
+                Map.of("c1", 1_789_651_782_355_052L)));
+        List<Map<String, Long>> 받은_씨앗 = new ArrayList<>();
+
+        onLeadershipGained(안_걷는_스위퍼(), 이월을_기록하는_회차(new ArrayList<>(), new AtomicReference<>(0.0)),
+                holder, 받은_씨앗::add).run();
+
+        assertThat(받은_씨앗).containsExactly(Map.of("c1", 1_789_651_782_355_052L));
     }
 
     /**
@@ -167,6 +188,13 @@ class LeadershipGainedWiringTest {
     }
 
     private Runnable onLeadershipGained(QueueSweeper sweeper, AllocationRound round) {
+        return onLeadershipGained(sweeper, round,
+                SnapshotHolder.of(Duration.ofSeconds(3), Duration.ofSeconds(10), Clock.systemUTC()),
+                커서 -> { });
+    }
+
+    private Runnable onLeadershipGained(QueueSweeper sweeper, AllocationRound round,
+            SnapshotHolder holder, Consumer<Map<String, Long>> 씨앗) {
         ControlPlaneProperties.Capacity 설정 = ControlPlaneProperties.defaults().capacity();
         CapacityCollector collector = CapacityCollector.of(설정.rampUp(), 설정.freshness(),
                 설정.floor(), 설정.perInstanceCap(),
@@ -175,11 +203,8 @@ class LeadershipGainedWiringTest {
                 CapacityRefresh.of(Mono::empty, collector, () -> 1, Duration.ofSeconds(1),
                         Schedulers.immediate(), new SimpleMeterRegistry()),
                 SoldOutCleanup.of(1, new SimpleMeterRegistry()),
-                sweeper, round,
-                // 재료가 없으면 발행 몫을 모른다 — 램프는 그때 손대지 않는다.
-                SnapshotHolder.of(Duration.ofSeconds(3), Duration.ofSeconds(10),
-                        Clock.systemUTC()),
-                GatewayRegistry.of(1, 3), 잠금);
+                sweeper, round, holder,
+                GatewayRegistry.of(1, 3), 잠금, 씨앗);
     }
 
     /** 승계 때 문을 잠근 횟수. 안 세면 이 줄이 빠져도 전 시험이 초록이다. */

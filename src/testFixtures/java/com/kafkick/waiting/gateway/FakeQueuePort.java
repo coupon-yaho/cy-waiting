@@ -99,6 +99,14 @@ public final class FakeQueuePort implements QueuePort {
 
     @Override
     public Mono<QueueEntry> enqueue(String couponId, String memberId, long maxLen, Instant now) {
+        return enqueue(couponId, memberId, maxLen, now, -1);
+    }
+
+    /** 필터가 스냅샷 커서를 실제로 넘기는지 보려고 받은 값을 남긴다 (CY-944). */
+    @Override
+    public Mono<QueueEntry> enqueue(String couponId, String memberId, long maxLen, Instant now,
+            long cursorHint) {
+        받은_커서 = cursorHint;
         등록_호출.incrementAndGet();
         // **잘못된 상한을 받아 주지 않는다.** 실물은 거절하는데 여기서 통과시키면
         // 그 회귀를 게이트웨이 시험이 못 본다.
@@ -165,6 +173,13 @@ public final class FakeQueuePort implements QueuePort {
     }
 
     private boolean 총원을_센다 = true;
+
+    private volatile long 받은_커서 = Long.MIN_VALUE;
+
+    /** 마지막 등록이 받은 커서 힌트. 한 번도 안 불렸으면 {@link Long#MIN_VALUE}. */
+    public long 받은_커서() {
+        return 받은_커서;
+    }
 
     /** 차례가 와서 커서 위로 올라간 사람. 실물은 이들을 앞 인원에서도 총원에서도 뺀다. */
     private final Map<String, Set<String>> 입장한_사람 = new LinkedHashMap<>();

@@ -188,6 +188,21 @@ class AdmissionGatewayFilterTest {
     }
 
     /**
+     * <b>발행된 입장 커서를 등록에 넘깁니다</b> (CY-944). 커서의 마지막 쓰기가 빠진 창에서 레디스는 참 커서를 모릅니다.
+     * 노드가 아는 값은 스냅샷에만 있고, 안 넘기면 그 창에 선 사람이 되살림 뒤 크레딧 없이 들어갑니다.
+     */
+    @Test
+    @DisplayName("발행된_입장_커서를_등록에_넘긴다")
+    void 발행된_입장_커서를_등록에_넘긴다() {
+        holder.replace(new GatewaySnapshot(Map.of(COUPON, CouponStates.queueing(10, 1_000, 100)),
+                META, 지금, List.of(), Map.of(COUPON, 1_789_651_782_355_052L)));
+
+        태운다(COUPON);
+
+        assertThat(줄.받은_커서()).isEqualTo(1_789_651_782_355_052L);
+    }
+
+    /**
      * <b>순번 역행의 선행 신호를 셉니다</b> (F2 · 8.4.5).
      *
      * <p>바닥값이 적용됐다는 것은 레디스 시계가 뒤로 갔다는 뜻입니다. 그 자체로는

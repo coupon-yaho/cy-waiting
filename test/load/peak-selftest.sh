@@ -168,6 +168,9 @@ lib_case "시간이 0 이면 0" 0 "$(peak_vus 1000 0)"
 lib_case "유입이 열 자리면 0" 0 "$(peak_vus 1000000000 30)"
 lib_case "시간이 열 자리면 0" 0 "$(peak_vus 1000 1000000000)"
 lib_case "아홉 자리는 받는다" 2999999997 "$(peak_vus 999999999 300)"
+# 선행 0 은 10진수로 읽는다. bash 산술은 008 을 오류로, 010 을 8 로 읽는다.
+lib_case "선행 0 이 있어도 10진수다" 100 "$(peak_vus 010 1000 2>/dev/null)"
+lib_case "8진수로 못 읽는 선행 0 도 받는다" 50 "$(peak_vus 008 10 2>/dev/null)"
 
 # 예열 수렴. 갓 뜬 한 대가 2 코어에서 500/초 예열을 p99 20초로 뒤집어써, 첫 칸이 예열 노릇을 했다.
 warm() { printf '{"metrics":{"http_req_duration":{"p(99)":%s}}}' "$1" > "$work/$2"; printf '%s' "$work/$2"; }

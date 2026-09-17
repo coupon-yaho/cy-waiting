@@ -11,8 +11,11 @@ import java.util.Map;
  */
 public class SecondWindowLimiter {
 
-    /** 키가 클라이언트 입력에서 오므로 상한이 없으면 메모리가 무한히 는다. */
+    /** 키가 클라이언트 입력에서 오므로 상한이 없으면 메모리가 무한히 는다. <b>축마다 따로 적용된다.</b> */
     private final int maxKeys;
+
+    /** 뒤 축의 자리. 값 공간이 넓은 축은 더 줘야, 정상 피크가 스스로 포화를 만들지 않는다. */
+    private final int secondaryMaxKeys;
 
     /** 축마다 따로 센다. 자리를 같이 쓰면 채워지는 축이 다른 축의 새 키를 막는다 (CY-925). */
     private final Map<Axis, Map<String, Long>> used = new EnumMap<>(Axis.class);
@@ -24,8 +27,21 @@ public class SecondWindowLimiter {
         return new SecondWindowLimiter(maxKeys);
     }
 
+    /**
+     * 축마다 다른 자리를 준다. <b>값 공간이 넓은 축은 더 받아야 한다</b> — 같은 수로 두면 정상 피크가
+     * 그 축을 채우고, 그때 부르는 쪽의 처분(축을 접는 것)이 공격이 아니라 성수기에 걸린다.
+     */
+    public static SecondWindowLimiter withMaxKeys(int primaryMaxKeys, int secondaryMaxKeys) {
+        return new SecondWindowLimiter(primaryMaxKeys, secondaryMaxKeys);
+    }
+
     SecondWindowLimiter(int maxKeys) {
+        this(maxKeys, maxKeys);
+    }
+
+    SecondWindowLimiter(int maxKeys, int secondaryMaxKeys) {
         this.maxKeys = Math.max(1, maxKeys);
+        this.secondaryMaxKeys = Math.max(1, secondaryMaxKeys);
         for (Axis axis : Axis.values()) {
             used.put(axis, new HashMap<>());
         }
@@ -57,7 +73,7 @@ public class SecondWindowLimiter {
         if (current >= cap) {
             return false;
         }
-        if (current == 0 && counts.size() >= maxKeys) {
+        if (current == 0 && counts.size() >= maxKeys(axis)) {
             // 자리 없이 통과시키면 상한이 무의미해진다.
             return false;
         }
@@ -95,7 +111,7 @@ public class SecondWindowLimiter {
                         ? AcquireResult.COUPON_EXHAUSTED
                         : AcquireResult.GLOBAL_EXHAUSTED;
             }
-            if (!hasSlots(coupons, coupons.containsKey(couponKey) ? 0 : 1)) {
+            if (!hasSlots(coupons, couponAxis, coupons.containsKey(couponKey) ? 0 : 1)) {
                 return AcquireResult.KEY_SATURATED;
             }
             coupons.merge(couponKey, 1L, Long::sum);
@@ -118,8 +134,9 @@ public class SecondWindowLimiter {
         // 같은 축이면 자리를 함께 세야 마지막 한 자리를 두 키가 나눠 갖지 않는다.
         boolean sameAxis = couponAxis == globalAxis;
         if (sameAxis
-                ? !hasSlots(coupons, incomingCoupon + incomingGlobal)
-                : !hasSlots(coupons, incomingCoupon) || !hasSlots(globals, incomingGlobal)) {
+                ? !hasSlots(coupons, couponAxis, incomingCoupon + incomingGlobal)
+                : !hasSlots(coupons, couponAxis, incomingCoupon)
+                        || !hasSlots(globals, globalAxis, incomingGlobal)) {
             return AcquireResult.KEY_SATURATED;
         }
 
@@ -129,8 +146,8 @@ public class SecondWindowLimiter {
     }
 
     /**
-     * 담을 수 있는 키 수. <b>이 타입은 쿠폰 전용이 아니다</b> — 클라이언트 식별자로
-     * 세는 인스턴스도 있고 그쪽 상한은 다르다. 무엇으로 셀지는 만드는 자리가 정한다.
+     * 담을 수 있는 키 수. <b>축마다 따로 걸린다</b> — 전체 합이 아니다. 이 타입은 쿠폰 전용이 아니라
+     * 클라이언트 식별자로 세는 인스턴스도 있고, 그쪽 상한은 다르다.
      */
     public int maxKeys() {
         return maxKeys;
@@ -143,7 +160,12 @@ public class SecondWindowLimiter {
 
     /** 그 축이 자리를 다 썼는가. 부르는 쪽이 처분을 정한다 — 거절과 축을 접는 것은 다르다. */
     public synchronized boolean saturated(Axis axis) {
-        return used.get(axis).size() >= maxKeys;
+        return used.get(axis).size() >= maxKeys(axis);
+    }
+
+    /** 그 축의 자리 수. 축마다 값 공간이 달라 같은 수로 두면 넓은 쪽이 먼저 찬다. */
+    public int maxKeys(Axis axis) {
+        return axis == Axis.SECONDARY ? secondaryMaxKeys : maxKeys;
     }
 
     private boolean hasRoom(Map<String, Long> counts, String key, long cap) {
@@ -151,8 +173,8 @@ public class SecondWindowLimiter {
     }
 
     /** 새로 들어올 키 {@code incomingKeys} 개를 받을 자리가 남았는가. */
-    private boolean hasSlots(Map<String, Long> counts, int incomingKeys) {
-        return counts.size() + incomingKeys <= maxKeys;
+    private boolean hasSlots(Map<String, Long> counts, Axis axis, int incomingKeys) {
+        return counts.size() + incomingKeys <= maxKeys(axis);
     }
 
     /**

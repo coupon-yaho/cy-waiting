@@ -64,6 +64,10 @@ class InvariantMetricsWiringTest {
                 // 막힌 구간의 길이를 그것만으로는 못 센다.
                 .contains("waiting_snapshot_publish_fenced_total")
                 .contains("waiting_allocation_apply_fenced_total")
+                // 되살림 (CY-945). 실패 없이 흡수된 승격은 이 둘로만 보인다 — 폭까지 있어야 한 번의 큰
+                // 되살림과 잦은 작은 되살림이 갈린다.
+                .contains("waiting_allocation_heal_events_total")
+                .contains("waiting_allocation_heal_span_total")
                 // 되돌릴 수 없는 쓰기가 막힌 수 (CY-894). 안 내면 그 창 동안 죽은
                 // 줄이 폴링 예산을 먹는데 아무도 못 본다.
                 .contains("waiting_queue_drop_fenced_total")

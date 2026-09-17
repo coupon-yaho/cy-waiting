@@ -127,14 +127,14 @@ peak_host_idle_pct() {
 }
 
 # **회차 동안 CPU 를 쌓는다.** 천장이 났을 때 그것이 하네스의 것인지 게이트웨이의 것인지 가를 재료다.
-# 백그라운드로 띄우고 `<표본 파일>.stop` 을 만들면 그 바퀴를 마치고 멈춘다 — 한 바퀴가 2초쯤 든다.
+# `<표본 파일>.stop` 이 생기거나 러너가 사라지면 그 바퀴를 마치고 멈춘다 — 한 바퀴가 2초쯤 든다. 정지 파일은
+# 부르는 쪽이 띄우기 전에 지운다.
 #
-#   사용: peak_sample_cpu <표본 파일> <프로젝트> & sampler=$!
+#   사용: peak_sample_cpu <표본 파일> <프로젝트> <러너 PID> & sampler=$!
 peak_sample_cpu() {
-    local out=$1 project=$2
+    local out=$1 project=$2 owner=$3
     : > "$out"
-    rm -f "$out.stop"
-    while [ ! -e "$out.stop" ]; do
+    while [ ! -e "$out.stop" ] && kill -0 "$owner" 2>/dev/null; do
         docker stats --no-stream --format '{{.Name}}\t{{.CPUPerc}}' 2>/dev/null \
             | peak_cpu_lines "$project" >> "$out"
         printf 'idle\thost\t%s\n' "$(peak_host_idle_pct)" >> "$out"

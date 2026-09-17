@@ -184,8 +184,8 @@ fi
 
 printf '# 요청유입\t실측유입\t판정\t응답p99ms\n' >> "$OUT_TABLE"
 
-# **표집기는 정지 파일로 멈춘다.** kill 은 돌고 있는 docker stats 를 못 죽여 k6 가 끝난 뒤 한 벌이 더 붙고,
-# 러너가 중간에 죽으면 루프가 남아 다음 실행의 호스트 유휴를 깎는다.
+# **표집기는 정지 파일로 멈춘다.** 러너가 중간에 끝나면 루프가 남아 다음 실행의 호스트 유휴를 깎는다. 돌던
+# 한 바퀴는 마치므로 k6 뒤 표본 한 벌이 붙는데, 그것은 판정기의 가운데 값이 흡수한다.
 sampler=""
 stop_sampler() {
     [ -n "$sampler" ] || return 0
@@ -219,7 +219,9 @@ for rate in $RATES; do
     fi
 
     metrics "$before"
-    peak_sample_cpu "$cpu" "$PROJECT" &
+    # 정지 파일은 띄우기 전에 여기서 지운다. 자식이 지우면 곧바로 끝난 회차의 정지 신호를 먹는다.
+    rm -f "$cpu.stop"
+    peak_sample_cpu "$cpu" "$PROJECT" "$$" &
     sampler=$!
     VUS=$vus RATE=$rate DURATION=$DURATION k6 run --summary-export="$summary" \
         test/load/peak.js 2>&1 | tee "$log"
@@ -241,13 +243,13 @@ for rate in $RATES; do
     if [ -z "$actual" ] || [ -z "$p99" ]; then
         echo "  요약에서 값을 못 읽었다 — 이 회차는 판정 불가"
         printf '%s\t0\tunmeasurable\t0\n' "$rate" >> "$OUT_TABLE"
-        stop_cause=${stop_cause:-$OUT_DIR/bottleneck-$rate.txt}
+        stop_rate=${stop_rate:-$rate}
         break
     fi
     if [ "$k6_verdict" != ok ]; then
         echo "  k6 임계가 ${k6_verdict} 로 갈렸다 (종료 ${k6_rc})"
         printf '%s\t%s\t%s\t%s\n' "$rate" "$actual" "$k6_verdict" "$p99" >> "$OUT_TABLE"
-        stop_cause=${stop_cause:-$OUT_DIR/bottleneck-$rate.txt}
+        stop_rate=${stop_rate:-$rate}
         break
     fi
 
@@ -279,16 +281,16 @@ for rate in $RATES; do
         stood=0
     fi
     if [ "$stood" = 0 ]; then
-        stop_cause=${stop_cause:-$OUT_DIR/bottleneck-$rate.txt}
+        stop_rate=${stop_rate:-$rate}
         [ "$STOP_AT_CEILING" = 1 ] && { echo "  사다리를 멈춘다"; break; }
     fi
 done
 
 echo
-if [ -n "${stop_cause:-}" ]; then
-    echo "멈춘 칸의 $(grep -m1 '^원인' "$stop_cause" || echo '원인: 판정 불가')"
-    # 증설 효율 판정기가 이 파일로 두 천장이 게이트웨이의 것인지 본다.
-    cp "$stop_cause" "$OUT_DIR/ceiling-cause.txt"
+if [ -n "${stop_rate:-}" ]; then
+    echo "멈춘 칸의 $(grep -m1 '^원인' "$OUT_DIR/bottleneck-$stop_rate.txt" || echo '원인: 판정 불가')"
+    # 증설 효율 판정기가 이 파일로 두 천장이 게이트웨이의 것인지, 멈춘 칸의 것인지 본다.
+    { cat "$OUT_DIR/bottleneck-$stop_rate.txt"; echo "멈춘 칸: $stop_rate"; } > "$OUT_DIR/ceiling-cause.txt"
 else
     echo "천장을 못 봐 원인 파일을 안 남긴다"
 fi

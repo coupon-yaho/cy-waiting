@@ -39,6 +39,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.util.context.ContextView;
 
 /**
  * 한 회차. 수요를 모아 크레딧을 나누고 적용한 뒤 발행한다. <b>대기 수는 한 번만 읽는다</b>
@@ -789,7 +790,7 @@ public final class AllocationRound {
     }
 
     /** 이 구독의 회차 상태. 없으면 구독 밖에서 부른 것이다 — 그건 배선이 틀린 것이다. */
-    private RoundState state(reactor.util.context.ContextView ctx) {
+    private RoundState state(ContextView ctx) {
         return ctx.get(ROUND_STATE);
     }
 

@@ -220,6 +220,28 @@ class QueueRedisPortTest extends RedisContainerSupport {
         assertThat(셋째.score()).as("전제 — 셋째가 뒤에 섰다").isGreaterThan(첫째.score());
     }
 
+    /**
+     * <b>새로 선 사람은 늘 입장 커서 위에 선다</b> (CY-942). 시계가 뒤처진 복제본이 승격되면 새 점수가 커서 아래로
+     * 나오고, 그 사람은 첫 폴링에 바로 입장이 된다 — 배분이 크레딧을 안 쓴 사람이 줄 선 사람을 앞지른다.
+     * 커서를 되살리는 쪽이 이 길을 여므로 둘은 같이 간다.
+     */
+    @Test
+    @DisplayName("커서가_시계보다_앞서도_새로_선_사람은_커서_위에_선다")
+    void 커서가_시계보다_앞서도_새로_선_사람은_커서_위에_선다() {
+        QueueEntry 첫째 = 등록("m1");
+        // 커서가 레디스 시계보다 한참 앞서 있다. 시계가 그만큼 뒤처진 복제본으로 넘어간 판과 같다.
+        long 앞선_커서 = 첫째.score() + 1_000_000_000_000L;
+        redis.opsForValue().set(RedisKeys.admitted(COUPON, SHARDS, 0),
+                Long.toString(앞선_커서)).block(WAIT);
+
+        QueueEntry 새로_선_사람 = 등록("m9");
+        QueueEntry 조회 = port.status(COUPON, "m9", 지금).block(WAIT);
+
+        assertThat(새로_선_사람.score()).as("커서 위에 선다").isGreaterThan(앞선_커서);
+        assertThat(조회.state()).as("크레딧 없이 안 들어간다").isEqualTo(QueueState.WAITING);
+        assertThat(새로_선_사람.clockWentBack()).as("시계가 뒤로 간 것으로 센다").isTrue();
+    }
+
     @Test
     @DisplayName("차례가_오면_입장이다")
     void 차례가_오면_입장이다() {

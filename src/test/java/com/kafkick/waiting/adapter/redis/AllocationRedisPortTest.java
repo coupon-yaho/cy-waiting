@@ -510,6 +510,71 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     }
 
     /**
+     * <b>우리가 쓴 임계가 사라지면 다음 적용이 되살린다</b> (CY-942). 순번과 총원이 임계 위에서 세므로, 안 되살리면
+     * 뒤에 선 사람의 순번이 입장자 수만큼 뛴다. 그리고 줄 머리부터 다시 세어 이미 들인 사람에게 크레딧을 또 쓴다.
+     */
+    @Test
+    @DisplayName("사라진_임계를_다음_적용이_되살린다")
+    void 사라진_임계를_다음_적용이_되살린다() {
+        줄_세운다("c1", 10, 20, 30, 40);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        redis.delete(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT);
+
+        long 들인_수 = port.apply(new Grant("c1", 1), 임기).block(WAIT);
+
+        assertThat(redis.opsForValue().get(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT))
+                .as("쓴 임계 위에서 한 명 더").isEqualTo("30");
+        assertThat(들인_수).as("이미 들인 사람에게 크레딧을 다시 안 쓴다").isEqualTo(1);
+    }
+
+    /** 사라진 것만이 아니다. 복제본 승격은 흔히 옛 값을 남긴다. */
+    @Test
+    @DisplayName("옛_값으로_돌아간_임계도_되살린다")
+    void 옛_값으로_돌아간_임계도_되살린다() {
+        줄_세운다("c1", 10, 20, 30, 40);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "10").block(WAIT);
+
+        port.apply(new Grant("c1", 1), 임기).block(WAIT);
+
+        assertThat(redis.opsForValue().get(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT))
+                .isEqualTo("30");
+    }
+
+    /**
+     * <b>크레딧이 없어도 되살린다.</b> 되살림은 들이는 일이 아니라 이미 들인 기록을 돌려놓는 일이다. 크레딧이 0 인
+     * 회차가 이어지는 동안 안 되살리면, 그 내내 순번이 뛴 채로 보이고 청소가 들인 사람을 이탈로 걷는다.
+     */
+    @Test
+    @DisplayName("크레딧이_없어도_사라진_임계는_되살린다")
+    void 크레딧이_없어도_사라진_임계는_되살린다() {
+        줄_세운다("c1", 10, 20, 30);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        redis.delete(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT);
+
+        long 들인_수 = port.apply(new Grant("c1", 0), 임기).block(WAIT);
+
+        assertThat(redis.opsForValue().get(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT))
+                .isEqualTo("20");
+        assertThat(들인_수).as("들인 사람은 없다").isZero();
+    }
+
+    /** 옛 임기는 되살리지도 못한다. 울타리를 넘는 쓰기는 되살림이라는 이름으로도 안 된다. */
+    @Test
+    @DisplayName("옛_임기는_임계를_되살리지_못한다")
+    void 옛_임기는_임계를_되살리지_못한다() {
+        줄_세운다("c1", 10, 20, 30);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        redis.delete(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT);
+
+        assertThatThrownBy(() -> port.apply(new Grant("c1", 0), 임기 - 1).block(WAIT))
+                .isInstanceOf(AllocationRedisPort.FencedOutException.class);
+
+        assertThat(redis.opsForValue().get(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT))
+                .as("안 썼다").isNull();
+    }
+
+    /**
      * <b>우리가 쓴 임계가 사라지면 되감기다</b> (CY-856). 줄과 임계는 같은 슬롯이라 함께 되감겨, 임계 이하 인원으로는
      * 안 보인다. 쓴 값을 기억해 견주는 것이 유일한 신호다.
      */

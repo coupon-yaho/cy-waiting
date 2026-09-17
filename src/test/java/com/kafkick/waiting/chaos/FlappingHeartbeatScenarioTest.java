@@ -29,25 +29,21 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.reactive.server.WebTestClient;
 
 /**
- * C6c — 리더는 정상인데 동료만 레디스를 못 쓴다 (CY-931).
+ * C6d — 하트비트가 흔들린다 (CY-931).
  *
- * <p>전 노드가 같이 끊기는 판은 분모가 안 움직인다 — 관측 실패는 직전 값을 지키기 때문이다. 한쪽만 끊기면
- * 다르다: 리더의 하트비트 스크립트가 살아 있는 노드를 적게 세고, 그 값이 연속으로 오면 분모가 내려간다.
- * 그동안 끊긴 동료는 낡은 재료로 <b>제 몫을 계속 통과시킨다</b> — 두 값이 겹치는 창이 여기서만 생긴다.
- *
- * <p>재는 것은 하나다. <b>그 창에서 뒷단에 닿은 총합이 전역 크레딧을 안 넘는다</b> (불변식 2의 앞단).
+ * <p>간헐적으로 놓치는 것과 노드가 없어진 것은 다르다. 놓침으로 분모를 내리면 남은 노드가 큰 몫을 써서
+ * 초과 발급 방향으로 간다 — 그래서 감소는 연속 관측 뒤에만 확정한다. 그 경계를 여기서 잰다.
  */
 @Tag("chaos")
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = "waiting.scheduler.enabled=true")
-class AsymmetricRedisLossScenarioTest {
+class FlappingHeartbeatScenarioTest {
 
-    private static final String COUPON = "c6c-idle";
+    private static final String COUPON = "c6d-idle";
 
     private static final Duration 기다림 = Duration.ofSeconds(30);
 
-    /** 분모가 내려오기를 기다리는 한계. 감소는 연속 관측 뒤라 틱 여럿이 든다. */
     private static final Duration 분모_한계 = Duration.ofSeconds(20);
 
     private static final int 보낼_수 = 12;
@@ -86,58 +82,64 @@ class AsymmetricRedisLossScenarioTest {
     @Autowired
     private GatewayRegistry 노드_수;
 
+    /**
+     * <b>흔들리는 동안에는 분모를 안 내린다</b> (CY-931). 하트비트를 간헐적으로 놓치는 것과 노드가 없어진
+     * 것은 다르다 — 놓침으로 분모를 내리면 남은 노드가 큰 몫을 써서 초과 발급 방향으로 간다.
+     */
     @Test
-    @DisplayName("C6c_동료만_레디스를_못_써도_총합이_크레딧을_안_넘는다")
-    void C6c_동료만_레디스를_못_써도_총합이_크레딧을_안_넘는다() throws Exception {
+    @DisplayName("C6d_하트비트가_흔들리는_동안은_분모를_안_내린다")
+    void C6d_하트비트가_흔들리는_동안은_분모를_안_내린다() throws Exception {
         StatefulRedisConnection<String, String> 연결 = 선.연결한다();
         try (SecondNode 둘째 = SecondNode.띄운다(WaitingApplication.class, 둘째_문.주소(),
                 "http://localhost:" + 뒷단.port(), false)) {
-            List<Integer> 정상_상태 = new ArrayList<>();
-            List<Integer> 끊긴_뒤_첫_노드 = new ArrayList<>();
-            List<Integer> 끊긴_뒤_둘째 = new ArrayList<>();
             int[] 정상_분모 = new int[1];
-            int[] 내려간_분모 = new int[1];
+            int[] 흔들리는_동안_최소 = {Integer.MAX_VALUE};
+            boolean[] 멎은_뒤_내려왔다 = new boolean[1];
             long[] 크레딧 = new long[1];
-            long[] 도착 = new long[2];
+            long[] 도착 = new long[1];
             long[] 걸린 = new long[1];
-            boolean[] 분모가_내려왔다 = new boolean[1];
+            List<Integer> 흔들리는_동안 = new ArrayList<>();
 
-            ChaosScenario.named("C6c 비대칭 레디스 소실")
+            ChaosScenario.named("C6d 하트비트 흔들림")
                     .baseline(() -> {
                         재료를_심는다();
                         BackendReports 보고기 = BackendReports.실시계로(연결, Duration.ofSeconds(30));
-                        보고기.보고한다("c6c-be", 1_000);
+                        보고기.보고한다("c6d-be", 1_000);
                         Awaitility.await().alias("첫 스냅샷이 닿는다").atMost(기다림)
                                 .until(() -> !holder.isDataStale());
-                        // 둘이 다 등록돼야 분모가 2 다. 아니면 이 시나리오가 재는 창이 안 생긴다.
                         Awaitility.await().alias("둘째가 등록된다").atMost(기다림)
                                 .until(() -> 노드_수.count() >= 2);
                         정상_분모[0] = 노드_수.count();
                         크레딧[0] = holder.view().snapshot().meta().globalCredit();
-                        도착[0] = 뒷단까지_센다(() -> {
-                            정상_상태.addAll(여러_번_시도한다(port, 보낼_수, 1_000));
-                            정상_상태.addAll(여러_번_시도한다(둘째.port(), 보낼_수, 2_000));
-                        });
                     })
                     .inject(() -> 끊는다(둘째_문))
                     .duringFault(() -> {
-                        // **분모가 실제로 내려와야 이 시나리오가 무언가를 잰다.** 안 내려오면
-                        // 두 노드가 같은 분모를 쓰는 평시와 다르지 않다.
-                        try {
-                            Awaitility.await().alias("리더가 적게 센 값을 확정한다")
-                                    .atMost(분모_한계).pollInterval(Duration.ofMillis(200))
-                                    .until(() -> 노드_수.count() < 정상_분모[0]);
-                            분모가_내려왔다[0] = true;
-                        } catch (RuntimeException e) {
-                            분모가_내려왔다[0] = false;
+                        // **끊었다 붙였다를 되풀이한다.** 하트비트가 가끔 닿으면 관측이 끊겨, 감소를
+                        // 확정하는 연속 셈이 매번 0 으로 돌아가야 한다.
+                        for (int i = 0; i < 6; i++) {
+                            흔들리는_동안_최소[0] = Math.min(흔들리는_동안_최소[0], 노드_수.count());
+                            쉰다(700);
+                            걷는다(둘째_문);
+                            쉰다(700);
+                            흔들리는_동안_최소[0] = Math.min(흔들리는_동안_최소[0], 노드_수.count());
+                            끊는다(둘째_문);
                         }
-                        내려간_분모[0] = 노드_수.count();
                         long 시작 = System.nanoTime();
-                        도착[1] = 뒷단까지_센다(() -> {
-                            끊긴_뒤_첫_노드.addAll(여러_번_시도한다(port, 보낼_수, 3_000));
-                            끊긴_뒤_둘째.addAll(여러_번_시도한다(둘째.port(), 보낼_수, 4_000));
+                        도착[0] = 뒷단까지_센다(() -> {
+                            흔들리는_동안.addAll(여러_번_시도한다(port, 보낼_수, 5_000));
+                            흔들리는_동안.addAll(여러_번_시도한다(둘째.port(), 보낼_수, 6_000));
                         });
                         걸린[0] = System.nanoTime() - 시작;
+                        // **멎은 뒤에는 내려와야 한다.** 흔들림과 소실을 같은 값으로 두면 죽은 노드가
+                        // 영영 분모에 남아 전 노드가 작은 몫을 쓴다.
+                        try {
+                            Awaitility.await().alias("멎은 뒤 감소가 확정된다")
+                                    .atMost(분모_한계).pollInterval(Duration.ofMillis(200))
+                                    .until(() -> 노드_수.count() < 정상_분모[0]);
+                            멎은_뒤_내려왔다[0] = true;
+                        } catch (RuntimeException e) {
+                            멎은_뒤_내려왔다[0] = false;
+                        }
                     })
                     .recover(() -> 걷는다(둘째_문))
                     .afterRecovery(() -> Awaitility.await().alias("분모가 돌아온다")
@@ -145,24 +147,18 @@ class AsymmetricRedisLossScenarioTest {
                             .until(() -> 노드_수.count() >= 정상_분모[0]))
                     .assertEntry(() -> RecoveryCriteria.violations(
                             정상_분모[0] >= 2 ? Optional.empty()
-                                    : Optional.of("전제 — 분모가 2 가 아니다: %d".formatted(정상_분모[0])),
-                            도착[0] > 0 ? Optional.empty()
-                                    : Optional.of("전제 — 평시에 뒷단까지 간 요청이 없다")))
+                                    : Optional.of("전제 — 분모가 2 가 아니다: %d".formatted(정상_분모[0]))))
                     .assertDuring(() -> RecoveryCriteria.violations(
-                            분모가_내려왔다[0] ? Optional.empty()
-                                    : Optional.of("한쪽만 끊었는데 분모가 그대로다 — %d"
-                                            .formatted(내려간_분모[0])),
-                            // **끊긴 노드는 전면 차단만 아니면 된다.** 재료가 낡으면 fail-open 상한이
-                            // 걸려 일부가 503 으로 나가는 것이 맞는 동작이다 — 상한이 없는 쪽이 사고다.
-                            전면_차단이_아니다("끊긴 노드", 끊긴_뒤_둘째),
-                            // **붙어 있는 노드는 멎지 않는다.** 여기서 5xx 가 나오면 한쪽 장애가
-                            // 멀쩡한 노드로 번진 것이다.
-                            멎지_않았다("첫 노드", 끊긴_뒤_첫_노드),
-                            // **두 값이 겹치는 창의 총합.** 리더는 작은 분모로 제 몫을 키우고,
-                            // 끊긴 동료는 낡은 재료로 옛 몫을 계속 쓴다.
-                            도착[1] <= 허용(크레딧[0], 걸린[0]) ? Optional.empty()
-                                    : Optional.of("끊긴 창에서 뒷단에 %d 건 닿았다 — 허용 %d (크레딧 %d)"
-                                            .formatted(도착[1], 허용(크레딧[0], 걸린[0]), 크레딧[0]))))
+                            흔들리는_동안_최소[0] >= 정상_분모[0] ? Optional.empty()
+                                    : Optional.of("흔들리는 동안 분모가 내려갔다 — 최소 %d"
+                                            .formatted(흔들리는_동안_최소[0])),
+                            멎은_뒤_내려왔다[0] ? Optional.empty()
+                                    : Optional.of("멎은 뒤에도 분모가 그대로다 — %d"
+                                            .formatted(노드_수.count())),
+                            전면_차단이_아니다("흔들리는 동안", 흔들리는_동안),
+                            도착[0] <= 허용(크레딧[0], 걸린[0]) ? Optional.empty()
+                                    : Optional.of("흔들리는 창에서 뒷단에 %d 건 닿았다 — 허용 %d (크레딧 %d)"
+                                            .formatted(도착[0], 허용(크레딧[0], 걸린[0]), 크레딧[0]))))
                     .assertRecovery(() -> RecoveryCriteria.violations(
                             노드_수.count() >= 정상_분모[0] ? Optional.empty()
                                     : Optional.of("걷었는데 분모가 안 돌아왔다 — %d"

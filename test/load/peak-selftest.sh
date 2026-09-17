@@ -157,6 +157,14 @@ lib_case "단위가 없으면 0" 0 "$(peak_duration_sec 30)"
 lib_case "못 읽는 형식은 0" 0 "$(peak_duration_sec abc)"
 lib_case "빈 값은 0" 0 "$(peak_duration_sec '')"
 
+# VU 풀. 표가 VU 마다 하나라, VU 당 회차가 적으면 폴링 갈래가 표 없이 진입으로 돌아 섞은 비율이 깨진다.
+# 1000/초·20초를 2000 VU 에 나누면 VU 당 10 회라 그 몫이 25% 였다.
+lib_case "VU 당 100 회가 되게 나눈다" 200 "$(peak_vus 1000 20)"
+lib_case "시간이 길면 풀이 커진다" 2400 "$(peak_vus 8000 30)"
+lib_case "낮은 유입에도 하한 50" 50 "$(peak_vus 100 20)"
+lib_case "유입이 정수가 아니면 0" 0 "$(peak_vus abc 20)"
+lib_case "시간이 0 이면 0" 0 "$(peak_vus 1000 0)"
+
 # 요약의 두 모양. 하나만 보면 k6 판이 바뀌는 순간 전 회차가 판정 불가가 된다.
 flat=$work/flat.json
 printf '%s' '{"metrics":{"http_reqs":{"rate":1234.5},"http_req_duration":{"p(99)":9.5}}}' \

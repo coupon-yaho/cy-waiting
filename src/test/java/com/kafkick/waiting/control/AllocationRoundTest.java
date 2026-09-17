@@ -615,6 +615,45 @@ class AllocationRoundTest {
     }
 
     /**
+     * <b>적용이 실패한 쿠폰은 같은 회차에 안 걷습니다</b> (CY-947).
+     *
+     * <p>적용이 시한에 걸리면 그 쿠폰의 입장 커서는 되살려지지 않은 채로 남습니다. 그 위에서 청소가 앞줄을
+     * 걷으면, 입장 판정을 받고 폴링을 멈춘 사람이 이탈로 걷힙니다. 다른 쿠폰의 청소는 그대로 돕니다.
+     */
+    @Test
+    @DisplayName("적용이_실패한_쿠폰은_같은_회차에_안_걷는다")
+    void 적용이_실패한_쿠폰은_같은_회차에_안_걷는다() {
+        List<String> 쓴_쿠폰 = new ArrayList<>();
+        AllocationRound round = AllocationRound.of(
+                () -> true,
+                () -> Mono.just(new TimedDemands(
+                        List.of(new CouponDemand("c1", 100, 1_000, QueueMode.ADAPTIVE),
+                                new CouponDemand("c2", 100, 1_000, QueueMode.ADAPTIVE)),
+                        읽은_시각)),
+                () -> 1_000, () -> 1,
+                grant -> "c1".equals(grant.couponId())
+                        ? Mono.error(new IllegalStateException("적용이 시한에 걸렸다"))
+                        : Mono.just(grant.credit()),
+                hash -> Mono.empty(),
+                () -> Instant.ofEpochSecond(읽은_시각),
+                () -> Mono.just(CreditSmoother.of(1.0)),
+                SnapshotCodec.create(), () -> 0L, Optional::empty,
+                SoldOutCleanup.of(1, new SimpleMeterRegistry()),
+                ids -> Mono.just(List.of()),
+                ids -> Mono.just(List.of()),
+                QueueSweeper.of(
+                        SweepGates.warmed(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
+                        (ids, limit, removeFront) -> {
+                            쓴_쿠폰.addAll(ids);
+                            return Mono.just(QueueSweeper.SweepResult.NOTHING);
+                        }), () -> false, () -> CircuitState.CLOSED);
+
+        round.run().onErrorResume(e -> Mono.empty()).block();
+
+        assertThat(쓴_쿠폰).as("실패한 쿠폰만 뺀다").containsExactly("c2");
+    }
+
+    /**
      * <b>발행이 막힌 회차는 아무도 안 걷습니다.</b>
      *
      * <p>이탈자 청소에는 울타리 인자가 없습니다. 유령이 못 걷는 것은 청소가 발행

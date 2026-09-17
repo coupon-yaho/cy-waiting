@@ -100,6 +100,27 @@ LB_CPUS=2 GATEWAY_CPUS=2 run_case "LB 90% 바로 아래면 LB 가 아니다" 0 "
 LB_CPUS=2 GATEWAY_CPUS=2 run_case "LB 를 지나는데 LB 표본이 없으면 판정 불가" 2 "판정 불가" \
     -- "$(samples lb_missing.tsv 190.0 30.0 40.0)"
 LB_CPUS=abc GATEWAY_CPUS=2 run_case "LB 코어 한도가 양수가 아니면 판정 불가" 2 "판정 불가" -- "$(lb_samples lb_bad.tsv 190.0 50.0)"
+# LB 선은 LB 코어로 잡는다. 게이트웨이 코어로 잡으면 게이트웨이가 4 코어일 때 LB 가 붙어도 못 본다.
+LB_CPUS=2 GATEWAY_CPUS=4 run_case "LB 선은 게이트웨이 코어가 아니라 LB 코어로 잡는다" 0 "원인: LB" \
+    -- "$(lb_samples lb_gw4.tsv 300.0 190.0)"
+LB_CPUS=2 GATEWAY_CPUS=2 run_case "LB 90% 정확히는 LB" 0 "원인: LB" -- "$(lb_samples lb_edge.tsv 190.0 180.0)"
+LB_CPUS=0 GATEWAY_CPUS=2 run_case "LB 코어 한도 0 은 판정 불가" 2 "판정 불가" -- "$(lb_samples lb_zero.tsv 190.0 50.0)"
+LB_CPUS=2 GATEWAY_CPUS=2 run_case "LB 표본이 셋 미만이면 판정 불가" 2 "판정 불가" \
+    -- "$(fixture lb_short.tsv "$(for i in 1 2 3 4 5; do
+        printf 'cpu\tload-gateway-1\t190.0\ncpu\tload-redis-1\t30.0\nidle\thost\t40.0\n'
+        [ "$i" -le 2 ] && printf 'cpu\tload-lb-1\t50.0\n'
+    done)")"
+# **이름은 서비스 자리로만 가른다.** 프로젝트 이름에 lb 나 gateway 가 들어가면 뒷단이 LB 나 게이트웨이로 세어진다.
+LB_CPUS=2 GATEWAY_CPUS=2 run_case "프로젝트 이름의 lb 는 LB 표본이 아니다" 0 "원인: 게이트웨이" \
+    -- "$(fixture lb_name.tsv "$(for _ in 1 2 3 4 5; do
+        printf 'cpu\tscale-lb-x-gateway-1\t190.0\ncpu\tscale-lb-x-redis-1\t30.0\ncpu\tscale-lb-x-lb-1\t50.0\n'
+        printf 'cpu\tscale-lb-x-backend-1\t195.0\ncpu\tscale-lb-x-seeder-1\t195.0\nidle\thost\t40.0\n'
+    done)")"
+GATEWAY_CPUS=2 run_case "프로젝트 이름의 gateway 는 게이트웨이 표본이 아니다" 0 "원인: 게이트웨이" \
+    -- "$(fixture gw_name.tsv "$(for _ in 1 2 3 4 5; do
+        printf 'cpu\tgateway-test-gateway-1\t190.0\ncpu\tgateway-test-redis-1\t30.0\ncpu\tgateway-test-backend-1\t10.0\nidle\thost\t40.0\n'
+    done)")"
+
 # 호스트가 먼저다. 호스트가 말랐으면 LB 가 붙은 것도 k6 와 코어를 다툰 결과일 수 있다.
 host_lb=$(fixture host_lb.tsv "$(for _ in 1 2 3 4 5; do
     printf 'cpu\tload-gateway-1\t190.0\ncpu\tload-redis-1\t30.0\ncpu\tload-lb-1\t195.0\nidle\thost\t5.0\n'

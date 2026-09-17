@@ -117,6 +117,14 @@ jobs:
       - name: 증설 효율 자기검증
         run: test/load/scale-selftest.sh
 
+      # **LB 가 못 받은 부하를 게이트웨이 수치로 적지 않는다.** 감당 판정과 기준선 빼기가 조용히 틀리면 LB 몫이
+      # 게이트웨이 오버헤드로 계획서에 간다.
+      - name: LB 기준선 감당 자기검증
+        run: test/load/lb-cover-selftest.sh
+
+      - name: LB 오버헤드 산출 자기검증
+        run: test/load/lb-overhead-selftest.sh
+
       # **합성 프로브가 이 경로를 친다.** 정적 200 을 주면 뒷단이 느리거나 죽어
       # 있어도 서킷이 닫혀 회복이 거짓이 된다.
       - name: 뒷단 스텁 자기검증

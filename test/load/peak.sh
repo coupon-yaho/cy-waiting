@@ -39,7 +39,8 @@ fi
 VIA_LB=${VIA_LB:-0}
 case "$VIA_LB" in
     0) lb_env="" ;;
-    1) COMPOSE="$COMPOSE -f test/load/compose.lb.yml"; lb_env=${LB_CPUS:-2} ;;
+    # LB 코어는 compose 와 nginx 워커 수에 2 로 박혀 있다. 원인 판정의 LB 선도 그 값이다.
+    1) COMPOSE="$COMPOSE -f test/load/compose.lb.yml"; lb_env=2 ;;
     *) echo "::error title=현재 최대치::VIA_LB 는 0 이나 1 이어야 한다: '$VIA_LB'"; exit 2 ;;
 esac
 
@@ -88,7 +89,8 @@ jar=${WAITING_JAR:-build/libs/waiting.jar}
 
 # **이미지를 먼저 짓는다.** compose 는 JAR 이 바뀌어도 있는 이미지를 그대로 쓴다.
 $COMPOSE build gateway backend >/dev/null 2>&1 || { echo "이미지를 못 지었다"; exit 2; }
-$COMPOSE rm -sf gateway warmup >/dev/null 2>&1
+# LB 도 같이 지운다. 남은 LB 는 기동 때 풀어 둔 옛 게이트웨이 주소를 계속 쓴다.
+$COMPOSE rm -sf gateway warmup lb >/dev/null 2>&1
 $COMPOSE up -d --wait --wait-timeout 240 --scale gateway="$GATEWAYS" \
     || { echo "스택을 못 세웠다"; exit 2; }
 
@@ -105,6 +107,13 @@ done
 echo "게이트웨이 ${GATEWAYS}대: $bases"
 # LB 를 지나면 k6 는 LB 한 곳만 친다. 나누기는 LB 가 한다.
 if [ "$VIA_LB" = 1 ]; then
+    # **LB 가 모든 대를 아는지 본다.** 모자라면 한 대로 몰면서 여럿에 나눴다고 적는다.
+    resolved=$($COMPOSE exec -T lb nslookup gateway 127.0.0.11 2>/dev/null \
+        | awk '/^Name:/ { name = 1 } name && /^Address/ { n++ } END { print n + 0 }')
+    if [ "$resolved" != "$GATEWAYS" ]; then
+        echo "::error title=현재 최대치::LB 가 게이트웨이 주소를 ${resolved} 개 안다 (기대 ${GATEWAYS})"
+        exit 2
+    fi
     bases=http://localhost:18070
     echo "LB 경유: $bases"
 fi

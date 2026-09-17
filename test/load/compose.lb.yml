@@ -6,7 +6,8 @@ services:
     image: nginx:1.27-alpine
     volumes:
       - ./lb/gateway.conf:/etc/nginx/nginx.conf:ro
-    cpus: ${LB_CPUS:-2}
+    # **코어는 2 로 박는다.** 설정의 워커 수가 2 라, 한도만 바꾸면 워커와 한도가 갈려 원인 판정의 LB 선이 틀어진다.
+    cpus: 2
     # 워커의 worker_rlimit_nofile 이 이 한도를 넘지 못한다.
     ulimits:
       nofile: { soft: 65536, hard: 65536 }

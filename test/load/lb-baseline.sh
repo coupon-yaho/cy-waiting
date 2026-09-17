@@ -34,7 +34,14 @@ OUT_DIR=${OUT_DIR:-lb-out}
 
 command -v k6 >/dev/null || { echo "::error title=LB 기준선::k6 가 없다"; exit 2; }
 
-trap '$COMPOSE down -v >/dev/null 2>&1' EXIT
+# 표집기는 정지 파일로 멈추고, 끝나면 스택을 내린다.
+sampler="" cpu=""
+cleanup() {
+    if [ -n "$sampler" ]; then touch "$cpu.stop"; wait "$sampler" 2>/dev/null; fi
+    $COMPOSE down -v >/dev/null 2>&1
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
 $COMPOSE up -d --wait --wait-timeout 60 || { echo "::error title=LB 기준선::LB 를 못 세웠다"; exit 2; }
 
 rm -rf "$OUT_DIR"; mkdir -p "$OUT_DIR"
@@ -50,9 +57,26 @@ for rate in $RATES; do
         exit 2
     fi
     summary=$OUT_DIR/k6-$rate.json
+    # **기준선도 CPU 를 남긴다.** 경유 회차는 게이트웨이·레디스와 호스트를 나눠, 같은 유입이라도 LB 가 받는
+    # 경합이 다르다. 뺀 값을 읽을 때 그 차이를 볼 재료다.
+    cpu=$OUT_DIR/cpu-$rate.tsv
+    rm -f "$cpu.stop"
+    peak_sample_cpu "$cpu" lb-baseline "$$" &
+    sampler=$!
     VUS=$vus RATE=$rate DURATION=$DURATION k6 run --summary-export="$summary" \
         test/load/lb-baseline.js > "$OUT_DIR/k6-$rate.log" 2>&1
     k6_rc=$?
+    touch "$cpu.stop"
+    wait "$sampler" 2>/dev/null
+    sampler=""
+    awk -F '\t' '
+        function med(k,    i, j, t, n) { n = c[k]; for (i = 2; i <= n; i++) { t = v[k, i]; for (j = i - 1; j >= 1 && v[k, j] > t; j--) v[k, j + 1] = v[k, j]; v[k, j + 1] = t }
+            return n ? ((n % 2) ? v[k, (n + 1) / 2] : (v[k, n / 2] + v[k, n / 2 + 1]) / 2) : -1 }
+        $1 == "cpu" && $2 ~ /-lb-[0-9]+$/     { v["lb", ++c["lb"]] = $3 }
+        $1 == "cpu" && $2 ~ /-origin-[0-9]+$/ { v["origin", ++c["origin"]] = $3 }
+        $1 == "idle"                          { v["idle", ++c["idle"]] = $3 }
+        END { printf "  LB CPU 가운데 %.1f%% · origin CPU 가운데 %.1f%% · 호스트 유휴 가운데 %.1f%%\n", med("lb"), med("origin"), med("idle") }
+    ' "$cpu"
 
     actual=$(peak_summary_value "$summary" rate)
     p99=$(peak_summary_value "$summary" p99)

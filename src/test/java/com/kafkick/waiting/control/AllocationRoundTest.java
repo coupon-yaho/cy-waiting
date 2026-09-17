@@ -650,7 +650,8 @@ class AllocationRoundTest {
 
         round.run().onErrorResume(e -> Mono.empty()).block();
 
-        assertThat(쓴_쿠폰).as("실패한 쿠폰만 뺀다").containsExactly("c2");
+        // **긍정까지 본다.** 빠졌다는 것만 보면 게이트가 아무것도 안 내는 회귀도 초록이다.
+        assertThat(쓴_쿠폰).as("실패한 쿠폰만 빼고 나머지는 그대로 쓴다").containsExactly("c2");
     }
 
     /**
@@ -701,6 +702,8 @@ class AllocationRoundTest {
         assertThat(틱마다_쓴_쿠폰.stream().flatMap(List::stream).toList())
                 .as("유예가 남아 있으므로 실패했던 쿠폰은 어느 틱에서도 앞줄 제거 대상이 아니다")
                 .doesNotContain("c1");
+        // **대조군.** 실패가 없었으면 유예가 풀린 뒤 둘 다 대상이 된다 — 유예가 원인이라는 것을 이 줄이 고정한다.
+        assertThat(틱마다_쓴_쿠폰).as("유예 중에는 아무도 안 걷는다").allMatch(List::isEmpty);
     }
 
     /**

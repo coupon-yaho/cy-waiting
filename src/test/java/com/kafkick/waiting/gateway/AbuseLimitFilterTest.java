@@ -351,6 +351,8 @@ class AbuseLimitFilterTest {
 
         assertThat(마지막.getResponse().getStatusCode())
                 .as("주소 상한을 넘기면 막힌다").isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        // **받는 쪽도 센다.** 막는 것만 보면 경계가 한 칸 밀려도 통과한다.
+        assertThat(통과.get()).as("주소 상한만큼만 지나간다").isEqualTo(200);
     }
 
     private MockServerWebExchange 태운다(AbuseLimitFilter 필터, String member, String ip,
@@ -365,6 +367,72 @@ class AbuseLimitFilterTest {
             return Mono.empty();
         }).block();
         return exchange;
+    }
+
+    /**
+     * <b>같은 주소는 같은 키다</b> (CY-925). v6 는 한 주소를 여러 모양으로 적을 수 있어, 원문을 키로 쓰면
+     * 표기만 바꿔 상한을 통째로 우회한다 — 접힌 구간에서는 이 축이 유일한 문이다.
+     */
+    @Test
+    @DisplayName("같은_v6_주소는_표기가_달라도_한_몫이다")
+    void 같은_v6_주소는_표기가_달라도_한_몫이다() {
+        // **회원을 매번 다르게 한다.** 같은 회원이면 사람당 상한이 먼저 걸려 주소 몫이 안 깎인다.
+        for (int i = 0; i < 200; i++) {
+            태운다(ISSUE, String.valueOf(1_000 + i), i % 2 == 0 ? "::1" : "0:0:0:0:0:0:0:1");
+        }
+
+        MockServerWebExchange 넘긴_것 = 태운다(ISSUE, "9999", "::0001");
+
+        assertThat(넘긴_것.getResponse().getStatusCode())
+                .as("표기를 바꿔도 같은 주소의 몫을 쓴다").isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+    }
+
+    /** 접고 통과한 것도 센다. 거절만 세면 통제가 꺼진 구간이 지표에서 조용해진다. */
+    /**
+     * <b>접혀도 이미 아는 사람은 상한을 받는다</b> (CY-925). 자리를 못 얻은 사람만 접히고, 추적 중인
+     * 회원은 그대로 제 상한에 걸려야 한다 — 축을 통째로 건너뛰면 한 사람이 주소 상한까지 쏠 수 있다.
+     */
+    @Test
+    @DisplayName("접혀도_아는_회원은_제_상한을_받는다")
+    void 접혀도_아는_회원은_제_상한을_받는다() {
+        SecondWindowLimiter 좁은_것 = SecondWindowLimiter.withMaxKeys(2);
+        AbuseLimitFilter 좁은_필터 = AbuseLimitFilter.withLimiter(
+                시계, meters, () -> 0.5, TrustedProxies.of(List.of("127.0.0.1")), 좁은_것);
+        AtomicInteger 통과 = new AtomicInteger();
+        // 먼저 자리를 잡은 회원. 그 뒤 다른 식별자로 축을 채운다.
+        태운다(좁은_필터, "known", "10.0.0.1", 통과);
+        for (int i = 0; i < 4; i++) {
+            태운다(좁은_필터, "flood" + i, "10.0.0.1", 통과);
+        }
+        assertThat(좁은_것.saturated(SecondWindowLimiter.Axis.SECONDARY))
+                .as("전제 — 식별자 축이 찼다").isTrue();
+
+        MockServerWebExchange 마지막 = null;
+        for (int i = 0; i < 10; i++) {
+            마지막 = 태운다(좁은_필터, "known", "10.0.0.1", 통과);
+        }
+
+        assertThat(마지막.getResponse().getStatusCode())
+                .as("아는 회원은 사람당 상한에 걸린다").isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        assertThat(meters.get("waiting.abuse").tag("key", "member").counter().count())
+                .as("사람당 상한으로 막았다고 센다").isGreaterThan(0);
+    }
+
+    @Test
+    @DisplayName("접고_통과한_것을_센다")
+    void 접고_통과한_것을_센다() {
+        SecondWindowLimiter 좁은_것 = SecondWindowLimiter.withMaxKeys(2);
+        AbuseLimitFilter 좁은_필터 = AbuseLimitFilter.withLimiter(
+                시계, meters, () -> 0.5, TrustedProxies.of(List.of("127.0.0.1")), 좁은_것);
+        AtomicInteger 통과 = new AtomicInteger();
+        for (int i = 0; i < 5; i++) {
+            태운다(좁은_필터, "flood" + i, "10.0.0.1", 통과);
+        }
+
+        태운다(좁은_필터, "new-member", "10.0.0.2", 통과);
+
+        assertThat(meters.get("waiting.abuse").tag("key", "folded").counter().count())
+                .as("접고 통과한 수").isGreaterThan(0);
     }
 
     @Test

@@ -200,6 +200,14 @@ tasks.named('test') {
         filter {
             failOnNoMatchingTests = false
         }
+        if (layer == 'context') {
+            // **이 계층의 계약은 "레디스 없음" 이다.** CI 러너에는 거기 레디스가 없어 등록이 실패하고
+            // fail-open 으로 흐르는데, 주소를 안 박으면 기본 6379 로 붙는다 — 로컬에 아무 레디스나 떠
+            // 있으면 판정이 뒤집히고 그 레디스에 키를 쓴다. 닿지 않는 포트로 못 박는다. 레디스를
+            // 쓰는 시험은 제 주소를 직접 넘기므로 이 값보다 앞선다.
+            systemProperty 'spring.data.redis.host', '127.0.0.1'
+            systemProperty 'spring.data.redis.port', '1'
+        }
     }
 }
 

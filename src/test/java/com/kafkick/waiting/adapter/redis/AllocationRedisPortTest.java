@@ -556,10 +556,15 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     @DisplayName("되살릴_기억이_없는_크레딧_0_적용은_레디스를_안_친다")
     void 되살릴_기억이_없는_크레딧_0_적용은_레디스를_안_친다() {
         줄_세운다("c1", 10, 20);
+        redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "20").block(WAIT);
 
         long 들인_수 = port.apply(new Grant("c1", 0), 임기).block(WAIT);
+        // 레디스를 쳤다면 스크립트가 임계 20 을 돌려주고 포트가 그것을 기억한다. 그 기억은 되감기 기준이 된다.
+        redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "10").block(WAIT);
 
         assertThat(들인_수).isZero();
+        assertThat(port.rewindCheck(List.of("c1")).block(WAIT))
+                .as("왕복이 없었으니 기억도 기준도 없다").isEqualTo(RewindCheck.NONE);
         assertThat(redis.hasKey(RedisKeys.applyFence("c1", SHARDS, 0)).block(WAIT))
                 .as("울타리 표도 안 만든다").isFalse();
     }
@@ -578,6 +583,25 @@ class AllocationRedisPortTest extends RedisContainerSupport {
 
         assertThat(redis.opsForValue().get(RedisKeys.applyFence("c1", SHARDS, 0)).block(WAIT))
                 .as("아무것도 안 썼으니 앞 임기 그대로").isEqualTo(Long.toString(임기));
+    }
+
+    /**
+     * <b>되살린 회차는 크레딧이 0 이어도 울타리를 건다.</b> 되살림도 쓰기다. 안 걸면 표에 옛 임기가 남거나 수명이 다해 사라지고,
+     * 승계 봉인이 마지막 쓰기의 나이를 실제보다 늙게 읽어 옛 임기 유령이 그 뒤에 임계를 올릴 틈이 생긴다.
+     */
+    @Test
+    @DisplayName("되살린_회차는_울타리를_건다")
+    void 되살린_회차는_울타리를_건다() {
+        줄_세운다("c1", 10, 20, 30);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        redis.delete(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT);
+
+        port.apply(new Grant("c1", 0), 임기 + 1).block(WAIT);
+
+        assertThat(redis.opsForValue().get(RedisKeys.applyFence("c1", SHARDS, 0)).block(WAIT))
+                .as("되살린 임기로").isEqualTo(Long.toString(임기 + 1));
+        assertThat(redis.getExpire(RedisKeys.applyFence("c1", SHARDS, 0)).block(WAIT))
+                .as("수명도 준다").isPositive();
     }
 
     /** 사라진 것만이 아니다. 복제본 승격은 흔히 옛 값을 남긴다. */

@@ -81,9 +81,10 @@ awk -F '\t' -v cpus="$cpus" -v sat="$saturation" -v floor="$host_floor" -v need=
     # 범위 밖 값은 계기 고장이다. 유휴 -1 이 마름으로 읽히면 고장이 원인으로 적힌다.
     $1 == "cpu" && $3 < 0 { bad = 1; next }
     $1 == "idle" && ($3 < 0 || $3 > 100) { bad = 1; next }
-    $1 == "cpu" && $2 ~ /gateway/ { if (!(("gw " $2) in cnt)) gws[++ng] = $2; add("gw " $2, $3); next }
-    $1 == "cpu" && $2 ~ /redis/   { add("redis", $3); next }
-    $1 == "cpu" && $2 ~ /-lb-/    { add("lb", $3); next }
+    # 서비스 자리(`<프로젝트>-<서비스>-<번호>`)로만 가른다. 프로젝트 이름에 같은 말이 들어가도 안 섞인다.
+    $1 == "cpu" && $2 ~ /-gateway-[0-9]+$/ { if (!(("gw " $2) in cnt)) gws[++ng] = $2; add("gw " $2, $3); next }
+    $1 == "cpu" && $2 ~ /-redis-[0-9]+$/ { add("redis", $3); next }
+    $1 == "cpu" && $2 ~ /-lb-[0-9]+$/ { add("lb", $3); next }
     $1 == "idle"                  { add("idle", $3); next }
     END {
         if (bad) { print "::error title=천장 원인::숫자가 아니거나 범위 밖인 표본이 있다 — 판정 불가"; exit 2 }

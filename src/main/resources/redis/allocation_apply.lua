@@ -6,6 +6,7 @@
 -- ARGV[1]  이번 회차에 들일 인원. 0 이상의 정수
 -- ARGV[2]  이 회차의 임기(펜스 번호). 0 이면 리더가 아니다
 -- ARGV[3]  울타리 표의 수명(ms)
+-- ARGV[4]  이 리더가 이 쿠폰에 마지막으로 쓴 임계. 모르면 -1. **레디스 값보다 앞서면 되살린다** (CY-942)
 --
 -- 반환  {임계, 들인 인원}. 첫 칸은 문자열, 둘째는 정수다
 --        울타리가 막았으면 {'-1', -1, 막은 임기}. 막은 임기도 문자열이다
@@ -81,6 +82,16 @@ if raw then
             or current == -math.huge then
         return redis.error_reply('임계가 수가 아니다 — 낮추지 않는다: ' .. tostring(raw))
     end
+end
+
+-- **우리가 쓴 임계가 사라졌으면 되살린다** (CY-942). 복제본 승격이나 AOF 잘림은 마지막 쓰기를 뺀다. 그대로
+-- 두면 줄 머리부터 다시 세어 들인 사람에게 크레딧을 또 쓰고, 순번이 입장자 수만큼 뛰고, 청소가 들인 사람을
+-- 이탈로 걷는다. 이 값은 울타리를 넘은 리더가 실제로 쓴 것이라 틀린 사람을 들이지 않는다 — 새로 선 사람은
+-- 등록이 커서 위에 세운다. 크레딧이 0 이어도 되살린다. 들이는 일이 아니라 들인 기록을 돌려놓는 일이다.
+local written = tonumber(ARGV[4])
+if written ~= nil and written == written and written ~= math.huge and written > current then
+    current = math.floor(written)
+    redis.call('SET', KEYS[2], string.format('%.0f', current))
 end
 
 if admit == 0 then

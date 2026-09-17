@@ -553,6 +553,15 @@ public final class AllocationRedisPort implements SnapshotSource {
                 .map(now -> Map.entry(couponId, now < written));
     }
 
+    /**
+     * 이 쿠폰에 마지막으로 쓴 임계. <b>스크립트가 되살리는 근거다</b> (CY-942) — 되감기를 세기만 하면 세는 동안 순번이
+     * 뛰고 크레딧이 샌다. 모르면 {@code -1} 이라 스크립트가 안 건드린다.
+     */
+    private String written(String couponId) {
+        Double threshold = lastAdmitted.get(couponId);
+        return threshold == null ? "-1" : String.format(Locale.ROOT, "%.0f", threshold);
+    }
+
     /** 활성에서 빠진 쿠폰의 기준을 버린다. 안 버리면 이 맵만 역사상 쿠폰 수로 자란다. */
     public void forgetInactive(Collection<String> active) {
         lastAdmitted.keySet().retainAll(active);
@@ -898,7 +907,7 @@ public final class AllocationRedisPort implements SnapshotSource {
                                 RedisKeys.admitted(grant.couponId(), shards, 0),
                                 RedisKeys.applyFence(grant.couponId(), shards, 0)),
                         List.of(Long.toString(grant.credit()), Long.toString(fence),
-                                Long.toString(fenceTtl.toMillis())))
+                                Long.toString(fenceTtl.toMillis()), written(grant.couponId())))
                 .next()
                 .flatMap(result -> {
                     List<?> counts = (List<?>) result;

@@ -23,6 +23,15 @@ if [ -n "${GATEWAY_CPUS:-}" ]; then
 fi
 bottleneck_cpus=${GATEWAY_CPUS:-$(nproc)}
 
+# **게이트웨이 대수** (10.7.3). 여럿이면 유입을 고르게 나누고 판정 계수는 대들의 합으로 센다.
+GATEWAYS=${GATEWAYS:-1}
+case "$GATEWAYS" in
+    ''|*[!0-9]*|0) echo "GATEWAYS 는 양의 정수여야 한다: '$GATEWAYS'"; exit 2 ;;
+esac
+if [ "$GATEWAYS" -gt 1 ]; then
+    COMPOSE="$COMPOSE -f test/load/compose.multi.yml"
+fi
+
 # peak.js 가 두 쿠폰을 박아 두고 있다. 여기만 바꾸면 다른 쿠폰을 비우고 이 쿠폰을
 # 때리게 된다 — 시나리오를 고칠 때 같이 고친다.
 COUPONS="c1 c2"
@@ -69,14 +78,38 @@ jar=${WAITING_JAR:-build/libs/waiting.jar}
 # **이미지를 먼저 짓는다.** compose 는 JAR 이 바뀌어도 있는 이미지를 그대로 쓴다.
 $COMPOSE build gateway backend >/dev/null 2>&1 || { echo "이미지를 못 지었다"; exit 2; }
 $COMPOSE rm -sf gateway warmup >/dev/null 2>&1
-$COMPOSE up -d --wait --wait-timeout 240 || { echo "스택을 못 세웠다"; exit 2; }
+$COMPOSE up -d --wait --wait-timeout 240 --scale gateway="$GATEWAYS" \
+    || { echo "스택을 못 세웠다"; exit 2; }
+
+# **실제로 열린 포트를 찾는다.** 범위로 열면 어느 대가 어느 포트를 받는지 순서가 안 정해진다. 박아 두면 한 대에만
+# 전부 보내면서 여럿에 나눠 보냈다고 적는다.
+bases=""
+for idx in $(seq 1 "$GATEWAYS"); do
+    port=$($COMPOSE port --index "$idx" gateway 8080 2>/dev/null | sed 's/.*://')
+    case "$port" in
+        ''|*[!0-9]*) echo "게이트웨이 $idx 의 포트를 못 찾았다"; exit 2 ;;
+    esac
+    bases="${bases:+$bases,}http://localhost:$port"
+done
+export BASE_URLS=$bases
+echo "게이트웨이 ${GATEWAYS}대: $bases"
 
 rm -rf "$OUT_DIR"; mkdir -p "$OUT_DIR"
 : > "$OUT_TABLE"
 
+# **대마다 긁어 품질별로 합친다.** 한 대만 긁으면 나머지 대가 판정한 요청이 분모에서 빠진다.
 metrics() {
-    $COMPOSE exec -T gateway wget -qO- http://localhost:8081/actuator/prometheus 2>/dev/null \
-        > "$1"
+    local idx parts=()
+    for idx in $(seq 1 "$GATEWAYS"); do
+        $COMPOSE exec -T --index "$idx" gateway \
+            wget -qO- http://localhost:8081/actuator/prometheus 2>/dev/null > "$1.$idx"
+        parts+=("$1.$idx")
+    done
+    if [ "$GATEWAYS" -eq 1 ]; then
+        mv "$1.1" "$1"
+    else
+        peak_merge_judgement "${parts[@]}" > "$1"
+    fi
 }
 
 # **줄 키를 다 지운다.** 셋만 지우면 이탈 기록과 생존 신호와 배분 펜스가 앞
@@ -209,5 +242,7 @@ done
 echo
 if [ -n "${last_bottleneck:-}" ]; then
     echo "마지막 회차의 $(grep -m1 '^원인' "$last_bottleneck" || echo '원인: 판정 불가')"
+    # 증설 효율 판정기가 이 파일로 두 천장이 게이트웨이의 것인지 본다 (10.7.3).
+    cp "$last_bottleneck" "$OUT_DIR/ceiling-cause.txt"
 fi
 test/load/evaluate-peak.sh "$OUT_TABLE"

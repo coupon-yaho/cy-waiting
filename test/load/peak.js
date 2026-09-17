@@ -16,7 +16,13 @@ import { Counter, Rate } from 'k6/metrics';
 // 끊는 것도 줄 세우는 것도 정상 동작이다. 판정이 낸 것은 실패로 안 센다 (O-7).
 http.setResponseCallback(http.expectedStatuses(200, 202, 429, 503));
 
-const BASE = __ENV.BASE_URL || 'http://localhost:18080';
+// **여러 대면 고르게 나눈다** (10.7.3). 앞단 LB 가 하는 일이다 — 한 대에 몰면 여럿에 나눠 보냈다고 적은 채
+// 한 대의 천장을 잰다. 한 대면 옛 회차와 같다.
+const BASES = (__ENV.BASE_URLS || __ENV.BASE_URL || 'http://localhost:18080').split(',');
+
+function base() {
+  return BASES[(__VU + __ITER) % BASES.length];
+}
 const RATE = Number(__ENV.RATE || '8000');
 const DURATION = __ENV.DURATION || '30s';
 
@@ -150,7 +156,7 @@ export default function () {
       return;
     }
     polled.add(1);
-    const r = http.get(`${BASE}/api/v1/coupons/c2/queue`,
+    const r = http.get(`${base()}/api/v1/coupons/c2/queue`,
         { headers: Object.assign(headers(member), { 'Queue-Token': token }) });
     check(r, { '폴링이 판정을 지난다': tallyPoll });
     return;
@@ -165,13 +171,13 @@ export default function () {
   // 수만이 몰린다. 그래서 여기서 202 가 나오는 것은 결함이 아니라 판정이다.
   // 줄 없이 지나가는 것을 확인하는 자리는 `idle-coupon.js` 다.
   passed.add(1);
-  const r = http.post(`${BASE}/api/v1/coupons/c1/issue`, null, { headers: headers(member) });
+  const r = http.post(`${base()}/api/v1/coupons/c1/issue`, null, { headers: headers(member) });
   check(r, { '통과가 판정을 지난다': tallyIssue });
 }
 
 function enter(member) {
   entered.add(1);
-  const r = http.post(`${BASE}/api/v1/coupons/c2/issue`, null, { headers: headers(member) });
+  const r = http.post(`${base()}/api/v1/coupons/c2/issue`, null, { headers: headers(member) });
   if (r.status === 202) {
     try {
       token = r.json().data.queueToken || token;

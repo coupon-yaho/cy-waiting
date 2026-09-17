@@ -181,6 +181,24 @@ peak_warm_converged "$work/none.json" 100; lib_case "요약이 없으면 못 읽
 peak_warm_converged "$(warm 42.0 warm-bad.json)" abc; lib_case "선이 수가 아니면 못 읽는다" 2 "$?"
 peak_warm_converged "$(warm 42.0 warm-zero.json)" 0; lib_case "선이 0 이면 못 읽는다" 2 "$?"
 
+# **걸린 요청.** 흘린 회차 없이 보낸 건수는 찼는데 실측 유입만 모자라면, 끝나지 않은 요청이 회차를 늘린 것이다.
+# k6 는 유입률을 전체 시간으로 나누므로 그 칸이 생성기 한계로 읽힌다. LB 파일 한도 결함이 이 모양이었다.
+summ() { printf '%s' "$1" > "$work/$2"; printf '%s' "$work/$2"; }
+peak_hung "$(summ '{"metrics":{"iterations":{"count":239629},"http_reqs":{"rate":3993.18},"dropped_iterations":{"count":0}}}' hung.json)" 8000 30 0.95
+lib_case "건수는 찼는데 유입이 모자라면 걸렸다" 0 "$?"
+peak_hung "$(summ '{"metrics":{"iterations":{"count":239629},"http_reqs":{"rate":3993.18}}}' hung_nodrop.json)" 8000 30 0.95
+lib_case "드롭 계수가 없으면 0 으로 본다" 0 "$?"
+peak_hung "$(summ '{"metrics":{"iterations":{"values":{"count":239629}},"http_reqs":{"values":{"rate":3993.18}}}}' hung_nested.json)" 8000 30 0.95
+lib_case "중첩형 요약도 읽는다" 0 "$?"
+peak_hung "$(summ '{"metrics":{"iterations":{"count":240001},"http_reqs":{"rate":7998.7},"dropped_iterations":{"count":0}}}' stood.json)" 8000 30 0.95
+lib_case "유입이 찼으면 걸리지 않았다" 1 "$?"
+peak_hung "$(summ '{"metrics":{"iterations":{"count":120000},"http_reqs":{"rate":4000.0},"dropped_iterations":{"count":120000}}}' short.json)" 8000 30 0.95
+lib_case "흘린 회차가 있으면 걸린 것이 아니다" 1 "$?"
+peak_hung "$(summ '{"metrics":{"iterations":{"count":150000},"http_reqs":{"rate":4000.0},"dropped_iterations":{"count":0}}}' few.json)" 8000 30 0.95
+lib_case "건수가 모자라면 걸린 것이 아니다" 1 "$?"
+peak_hung "$work/없는요약.json" 8000 30 0.95
+lib_case "요약이 없으면 못 읽는다" 2 "$?"
+
 # 요약의 두 모양. 하나만 보면 k6 판이 바뀌는 순간 전 회차가 판정 불가가 된다.
 flat=$work/flat.json
 printf '%s' '{"metrics":{"http_reqs":{"rate":1234.5},"http_req_duration":{"p(99)":9.5}}}' \

@@ -16,18 +16,20 @@ cd "$(git rev-parse --show-toplevel)" || exit 1
 
 COMPOSE="docker compose -f test/load/compose.yml"
 
-# **코어 한도를 주면 천장 원인이 뜻을 갖는다** (10.7.4). 한도가 없으면 게이트웨이가 호스트 코어를 다 쓸 수
+# **코어 한도를 주면 천장 원인이 뜻을 갖는다.** 한도가 없으면 게이트웨이가 호스트 코어를 다 쓸 수
 # 있어, 게이트웨이가 붙는 것과 호스트가 마르는 것이 같은 일이 된다. 안 주면 옛 회차와 같은 조건으로 돈다.
 if [ -n "${GATEWAY_CPUS:-}" ]; then
     COMPOSE="$COMPOSE -f test/load/compose.limits.yml"
 fi
 bottleneck_cpus=${GATEWAY_CPUS:-$(nproc)}
 
-# **게이트웨이 대수** (10.7.3). 여럿이면 유입을 고르게 나누고 판정 계수는 대들의 합으로 센다.
+# **게이트웨이 대수.** 여럿이면 유입을 고르게 나누고 판정 비율은 대마다 낸다.
 GATEWAYS=${GATEWAYS:-1}
 case "$GATEWAYS" in
-    ''|*[!0-9]*|0) echo "GATEWAYS 는 양의 정수여야 한다: '$GATEWAYS'"; exit 2 ;;
+    ''|*[!0-9]*|0) echo "::error title=현재 최대치::GATEWAYS 는 양의 정수여야 한다: '$GATEWAYS'"; exit 2 ;;
 esac
+# 표집기가 컨테이너 이름 앞머리로 우리 것만 고른다. compose 가 쓰는 프로젝트 이름과 같아야 한다.
+PROJECT=${COMPOSE_PROJECT_NAME:-load}
 if [ "$GATEWAYS" -gt 1 ]; then
     COMPOSE="$COMPOSE -f test/load/compose.multi.yml"
 fi
@@ -145,13 +147,23 @@ warm_dur=${WARMUP_DURATION:-20s}
 # 예열 노릇을 했다.
 warm_p99_ms=${WARMUP_P99_MS:-100}
 warm_rounds=${WARMUP_ROUNDS:-5}
+# 숫자가 아니면 횟수 비교가 늘 거짓이라 수렴 안 하는 예열이 끝없이 돈다.
+case "$warm_rounds" in
+    ''|*[!0-9]*|0) echo "::error title=현재 최대치::WARMUP_ROUNDS 는 양의 정수여야 한다: '$warm_rounds'"; exit 2 ;;
+esac
 if [ "$warm_rate" != 0 ]; then
     warm_vus=${VUS:-$(peak_vus "$warm_rate" "$(peak_duration_sec "$warm_dur")")}
+    if [ "$warm_vus" = 0 ]; then
+        echo "::error title=현재 최대치::예열 '$warm_rate/초 · $warm_dur' 로 VU 풀을 못 잡는다"
+        exit 2
+    fi
     round=1
     while :; do
         echo "── 예열 ${warm_rate}/초 · ${warm_dur} · ${round} 번째 (표에 안 넣는다)"
         empty_queues
         wait_idle || { echo "::error title=현재 최대치::줄 모드가 안 꺼진다"; exit 2; }
+        # 앞 번의 요약을 남기면 k6 가 못 뜬 번에 그 p99 를 읽는다.
+        rm -f "$OUT_DIR/k6-warmup.json"
         VUS=$warm_vus RATE=$warm_rate DURATION=$warm_dur k6 run \
             --summary-export="$OUT_DIR/k6-warmup.json" test/load/peak.js \
             > "$OUT_DIR/k6-warmup.log" 2>&1
@@ -172,6 +184,18 @@ fi
 
 printf '# 요청유입\t실측유입\t판정\t응답p99ms\n' >> "$OUT_TABLE"
 
+# **표집기는 정지 파일로 멈춘다.** kill 은 돌고 있는 docker stats 를 못 죽여 k6 가 끝난 뒤 한 벌이 더 붙고,
+# 러너가 중간에 죽으면 루프가 남아 다음 실행의 호스트 유휴를 깎는다.
+sampler=""
+stop_sampler() {
+    [ -n "$sampler" ] || return 0
+    touch "$cpu.stop"
+    wait "$sampler" 2>/dev/null
+    sampler=""
+}
+trap stop_sampler EXIT
+trap 'exit 130' INT TERM
+
 for rate in $RATES; do
     echo "── 요청 유입 ${rate}/초"
     empty_queues
@@ -187,27 +211,26 @@ for rate in $RATES; do
 
     cpu=$OUT_DIR/cpu-$rate.tsv
 
-    metrics "$before"
-    peak_sample_cpu "$cpu" load &
-    sampler=$!
     # 풀을 유입에 맞춘다. 고정 2000 이면 낮은 칸에서 폴링 갈래가 표 없이 돌아 임계가 깨진다.
     vus=${VUS:-$(peak_vus "$rate" "$DURATION_SEC")}
     if [ "$vus" = 0 ]; then
         echo "::error title=현재 최대치::유입 '$rate' 로 VU 풀을 못 잡는다 — 정수여야 한다"
         exit 2
     fi
+
+    metrics "$before"
+    peak_sample_cpu "$cpu" "$PROJECT" &
+    sampler=$!
     VUS=$vus RATE=$rate DURATION=$DURATION k6 run --summary-export="$summary" \
         test/load/peak.js 2>&1 | tee "$log"
     k6_rc=${PIPESTATUS[0]}
-    kill "$sampler" 2>/dev/null
-    wait "$sampler" 2>/dev/null
+    stop_sampler
     metrics "$after"
 
     # 천장 원인은 회차마다 남긴다. 사다리가 멈춘 칸의 것이 그 천장의 원인이다.
-    GATEWAY_CPUS=$bottleneck_cpus test/load/evaluate-bottleneck.sh "$cpu" \
+    GATEWAYS=$GATEWAYS GATEWAY_CPUS=$bottleneck_cpus test/load/evaluate-bottleneck.sh "$cpu" \
         > "$OUT_DIR/bottleneck-$rate.txt" 2>&1
-    last_bottleneck=$OUT_DIR/bottleneck-$rate.txt
-    sed 's/^/    /' "$last_bottleneck"
+    sed 's/^/    /' "$OUT_DIR/bottleneck-$rate.txt"
 
     actual=$(peak_summary_value "$summary" rate)
     p99=$(peak_summary_value "$summary" p99)
@@ -218,11 +241,13 @@ for rate in $RATES; do
     if [ -z "$actual" ] || [ -z "$p99" ]; then
         echo "  요약에서 값을 못 읽었다 — 이 회차는 판정 불가"
         printf '%s\t0\tunmeasurable\t0\n' "$rate" >> "$OUT_TABLE"
+        stop_cause=${stop_cause:-$OUT_DIR/bottleneck-$rate.txt}
         break
     fi
     if [ "$k6_verdict" != ok ]; then
         echo "  k6 임계가 ${k6_verdict} 로 갈렸다 (종료 ${k6_rc})"
         printf '%s\t%s\t%s\t%s\n' "$rate" "$actual" "$k6_verdict" "$p99" >> "$OUT_TABLE"
+        stop_cause=${stop_cause:-$OUT_DIR/bottleneck-$rate.txt}
         break
     fi
 
@@ -244,23 +269,27 @@ for rate in $RATES; do
 
     printf '%s\t%s\t%s\t%s\n' "$rate" "$actual" "$verdict" "$p99" >> "$OUT_TABLE"
 
-    if [ "$STOP_AT_CEILING" = 1 ]; then
-        if awk -v a="$actual" -v r="$rate" -v t="$TOLERANCE" \
-                'BEGIN{ exit (a >= r * t) ? 1 : 0 }'; then
-            echo "  하네스가 이 유입을 못 만들었다 (${actual}/${rate}) — 사다리를 멈춘다"
-            break
-        fi
-        if [ "$verdict" != ok ]; then
-            echo "  이 회차가 안 섰다 (${verdict}) — 사다리를 멈춘다"
-            break
-        fi
+    # **천장 원인은 처음 안 선 칸의 것이다.** 사다리를 멈추지 않으면 맨 윗칸이 다른 회차의 원인을 낸다.
+    stood=1
+    if awk -v a="$actual" -v r="$rate" -v t="$TOLERANCE" 'BEGIN{ exit (a >= r * t) ? 1 : 0 }'; then
+        echo "  하네스가 이 유입을 못 만들었다 (${actual}/${rate})"
+        stood=0
+    elif [ "$verdict" != ok ]; then
+        echo "  이 회차가 안 섰다 (${verdict})"
+        stood=0
+    fi
+    if [ "$stood" = 0 ]; then
+        stop_cause=${stop_cause:-$OUT_DIR/bottleneck-$rate.txt}
+        [ "$STOP_AT_CEILING" = 1 ] && { echo "  사다리를 멈춘다"; break; }
     fi
 done
 
 echo
-if [ -n "${last_bottleneck:-}" ]; then
-    echo "마지막 회차의 $(grep -m1 '^원인' "$last_bottleneck" || echo '원인: 판정 불가')"
-    # 증설 효율 판정기가 이 파일로 두 천장이 게이트웨이의 것인지 본다 (10.7.3).
-    cp "$last_bottleneck" "$OUT_DIR/ceiling-cause.txt"
+if [ -n "${stop_cause:-}" ]; then
+    echo "멈춘 칸의 $(grep -m1 '^원인' "$stop_cause" || echo '원인: 판정 불가')"
+    # 증설 효율 판정기가 이 파일로 두 천장이 게이트웨이의 것인지 본다.
+    cp "$stop_cause" "$OUT_DIR/ceiling-cause.txt"
+else
+    echo "천장을 못 봐 원인 파일을 안 남긴다"
 fi
 test/load/evaluate-peak.sh "$OUT_TABLE"

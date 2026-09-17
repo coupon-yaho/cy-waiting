@@ -16,7 +16,7 @@ import { Counter, Rate } from 'k6/metrics';
 // 끊는 것도 줄 세우는 것도 정상 동작이다. 판정이 낸 것은 실패로 안 센다 (O-7).
 http.setResponseCallback(http.expectedStatuses(200, 202, 429, 503));
 
-// **여러 대면 고르게 나눈다** (10.7.3). 앞단 LB 가 하는 일이다 — 한 대에 몰면 여럿에 나눠 보냈다고 적은 채
+// **여러 대면 고르게 나눈다.** 앞단 LB 가 하는 일이다 — 한 대에 몰면 여럿에 나눠 보냈다고 적은 채
 // 한 대의 천장을 잰다. 한 대면 옛 회차와 같다.
 const BASES = (__ENV.BASE_URLS || __ENV.BASE_URL || 'http://localhost:18080').split(',');
 

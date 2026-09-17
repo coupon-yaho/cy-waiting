@@ -107,7 +107,7 @@ else:
 PY
 }
 
-# docker stats 한 벌을 표본 줄로 옮긴다 (10.7.4). **우리 프로젝트 컨테이너만** 남긴다 — 같은 호스트의 남의
+# docker stats 한 벌을 표본 줄로 옮긴다. **우리 프로젝트 컨테이너만** 남긴다 — 같은 호스트의 남의
 # 컨테이너 CPU 가 천장 원인에 끼면 안 된다. `%` 를 뗀다 — 판정기는 숫자만 받는다.
 #
 #   사용: docker stats --no-stream --format '{{.Name}}\t{{.CPUPerc}}' | peak_cpu_lines <프로젝트>
@@ -126,14 +126,15 @@ peak_host_idle_pct() {
         printf "%.1f", (t > 0) ? 100 * (y[2] - x[2]) / t : 0 }'
 }
 
-# **회차 동안 CPU 를 쌓는다** (10.7.4). 천장이 났을 때 그것이 하네스의 것인지 게이트웨이의 것인지 가를
-# 재료다. 백그라운드로 띄우고 회차가 끝나면 죽인다 — 한 바퀴가 docker stats 표집과 유휴 측정으로 2초쯤 든다.
+# **회차 동안 CPU 를 쌓는다.** 천장이 났을 때 그것이 하네스의 것인지 게이트웨이의 것인지 가를 재료다.
+# 백그라운드로 띄우고 `<표본 파일>.stop` 을 만들면 그 바퀴를 마치고 멈춘다 — 한 바퀴가 2초쯤 든다.
 #
 #   사용: peak_sample_cpu <표본 파일> <프로젝트> & sampler=$!
 peak_sample_cpu() {
     local out=$1 project=$2
     : > "$out"
-    while :; do
+    rm -f "$out.stop"
+    while [ ! -e "$out.stop" ]; do
         docker stats --no-stream --format '{{.Name}}\t{{.CPUPerc}}' 2>/dev/null \
             | peak_cpu_lines "$project" >> "$out"
         printf 'idle\thost\t%s\n' "$(peak_host_idle_pct)" >> "$out"

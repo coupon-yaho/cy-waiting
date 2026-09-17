@@ -8,6 +8,7 @@ import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.Network;
 import org.testcontainers.toxiproxy.ToxiproxyContainer;
@@ -36,8 +37,7 @@ public final class RedisWireFaults implements AutoCloseable {
     private final Proxy proxy;
 
     /** 문마다 다른 듣는 포트. 8666 은 첫 문이 쓴다. */
-    private final java.util.concurrent.atomic.AtomicInteger 다음_포트 =
-            new java.util.concurrent.atomic.AtomicInteger(8667);
+    private final AtomicInteger 다음_포트 = new AtomicInteger(8667);
 
     private RedisWireFaults(Network network, GenericContainer<?> redis,
             ToxiproxyContainer toxiproxy, Proxy proxy) {

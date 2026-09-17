@@ -2,6 +2,8 @@ package com.kafkick.waiting.chaos;
 
 import eu.rekawek.toxiproxy.Proxy;
 import eu.rekawek.toxiproxy.model.ToxicDirection;
+import io.lettuce.core.RedisClient;
+import io.lettuce.core.api.StatefulRedisConnection;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
@@ -74,6 +76,11 @@ public final class RedisWireFaults implements AutoCloseable {
         }
     }
 
+    /** 시험이 직접 칠 연결. 프록시를 지나므로 앱과 같은 길을 본다. */
+    public StatefulRedisConnection<String, String> 연결한다() {
+        return RedisClient.create(주소()).connect();
+    }
+
     /** 앱이 붙을 주소. 문 하나를 통째로 넘길 때 쓴다. */
     public String 주소() {
         return "redis://%s:%d".formatted(호스트(), 포트());
@@ -102,9 +109,13 @@ public final class RedisWireFaults implements AutoCloseable {
             return "redis://%s:%d".formatted(호스트, 포트);
         }
 
-        /** 이 문만 끊는다. 붙어는 있는데 아무것도 안 오는 상태다. */
+        /**
+         * 이 문만 끊는다. <b>양쪽을 다 막는다</b> — 내려오는 쪽만 막으면 쓰기는 그대로 닿아, 끊긴
+         * 노드의 하트비트가 계속 찍힌다. 그러면 다른 노드가 그 노드를 죽은 것으로 안 본다.
+         */
         public void 끊는다() throws IOException {
             proxy.toxics().timeout(끊김, ToxicDirection.DOWNSTREAM, 0);
+            proxy.toxics().timeout(끊김 + "-위", ToxicDirection.UPSTREAM, 0);
         }
 
         /** 이 문의 장애만 걷는다. */

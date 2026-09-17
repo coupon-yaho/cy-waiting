@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# 게이트웨이 증설 효율 (10.7.3 · G10.11).
+# 게이트웨이 증설 효율.
 #
 # N 대와 2N 대의 현재 최대치를 견준다. 효율 = 2N 대 천장 ÷ (2 × N 대 천장). 기준은 70% 이상이다.
 #
 # **두 천장이 모두 게이트웨이의 것일 때만 나눈다.** 한쪽이 하네스 천장(호스트가 말랐거나 원인을 못 가림)이면 그
-# 나눗셈은 게이트웨이가 아니라 k6 를 잰다. 원인은 러너가 멈춘 회차의 천장 원인 판정(10.7.4)이 낸다.
+# 나눗셈은 게이트웨이가 아니라 k6 를 잰다. 원인은 러너가 멈춘 칸의 천장 원인 판정이 낸다.
 #
-# **천장은 최대치 판정기(10.7.2)가 낸 현재 최대치다.** 요청 유입으로 재면 하네스가 못 만든 몫까지 천장에 들어간다.
+# **천장은 최대치 판정기가 낸 현재 최대치다.** 선 칸을 여기서 다시 고르면 두 판정기가 다른 천장을 말한다.
 set -uo pipefail
 
 UNMEASURABLE=2
@@ -24,41 +24,65 @@ if ! printf '%s' "$target" | grep -Eq '^[0-9]+(\.[0-9]+)?$' \
     echo "::error title=증설 효율::기준이 0 초과 100 이하의 백분율이 아니다: '$target' (판정 불가)"
     exit "$UNMEASURABLE"
 fi
+# **두 배를 넘는 증설은 없다.** 이 위면 두 표가 다른 일을 잰 것이다 — 결과 섞임이 전체 유입을 따라 바뀌면
+# 싼 거절 몫이 늘어 대당 처리량이 부푼다.
+ceiling_pct=110
 
-# 그 표의 천장. **선 칸을 여기서 다시 고르지 않는다** — 최대치 판정기와 갈리면 계획서의 두 수가 다른 천장을
-# 말한다. 천장을 못 봤거나 선 칸이 없으면 빈 값이다.
-ceiling() {
-    PEAK_FLOOR='' PEAK_REQUIRE_CEILING=1 "$(dirname "$0")/evaluate-peak.sh" "$1" 2>/dev/null \
-        | awk '/현재 최대치\(실측 유입\)/ { printf "%s", $NF; exit }'
-}
-
-# 천장이 게이트웨이의 것인가. 원인 줄을 못 찾으면 모르는 것이다.
-gateway_bound() {
-    grep -q '^원인: 게이트웨이' "$1" 2>/dev/null
+# 원인 줄에서 게이트웨이 천장의 대수를 뽑는다. 게이트웨이 천장이 아니면 빈 값이다.
+gateway_count() {
+    sed -n 's/^원인: 게이트웨이 — \([0-9][0-9]*\) 대 모두.*/\1/p' "$1" 2>/dev/null | head -n 1
 }
 
 for pair in "N:$one_cause" "2N:$two_cause"; do
     label=${pair%%:*}
     file=${pair#*:}
-    if ! gateway_bound "$file"; then
+    if [ -z "$(gateway_count "$file")" ]; then
         found=$(grep -m1 '^원인' "$file" 2>/dev/null || echo '원인 줄 없음')
         echo "::error title=증설 효율::$label 대 천장이 게이트웨이의 것이 아니다 — $found (판정 불가)"
         exit "$UNMEASURABLE"
     fi
 done
-
-one=$(ceiling "$one_steps")
-two=$(ceiling "$two_steps")
-if [ -z "$one" ] || [ -z "$two" ]; then
-    echo "::error title=증설 효율::선 회차가 없는 표가 있다 — N 대 '${one:-없음}', 2N 대 '${two:-없음}' (판정 불가)"
+one_n=$(gateway_count "$one_cause")
+two_n=$(gateway_count "$two_cause")
+if [ "$two_n" -ne $((one_n * 2)) ]; then
+    echo "::error title=증설 효율::대수가 N 과 2N 이 아니다 — ${one_n} 대와 ${two_n} 대 (판정 불가)"
     exit "$UNMEASURABLE"
 fi
 
-# **곱으로 견준다.** 나눈 비율을 기준과 견주면 기준 정확히가 부동소수 오차로 한쪽에 떨어진다.
-if awk -v one="$one" -v two="$two" -v t="$target" 'BEGIN{
+# 그 표의 천장. 못 읽으면 최대치 판정기의 이유를 그대로 넘기고 판정 불가로 끝낸다.
+#
+# **멈춤의 종류는 판정 불가만 거른다.** 코어가 붙으면 도착도 모자라 최대치 판정기가 하네스 멈춤으로 적는데,
+# 어디서 막혔는지는 위의 원인 판정이 이미 갈랐다.
+ceiling() {
+    local label=$1 table=$2 report value kind
+    report=$(PEAK_FLOOR='' PEAK_REQUIRE_CEILING=1 "$(dirname "$0")/evaluate-peak.sh" "$table" 2>&1)
+    value=$(printf '%s\n' "$report" | awk '/현재 최대치\(실측 유입\)/ { print $NF; exit }')
+    kind=$(printf '%s\n' "$report" | sed -n 's/^ *천장의 종류 *//p' | head -n 1)
+    if [ -z "$value" ]; then
+        echo "::error title=증설 효율::$label 대 표에서 천장을 못 읽었다 (판정 불가)" >&2
+        printf '%s\n' "$report" | grep -E '::error|^판정|천장의 종류|가장 낮은' | sed 's/^/  /' >&2
+        return 1
+    fi
+    case "$kind" in
+        '판정 불가'*)
+            echo "::error title=증설 효율::$label 대 표가 못 잰 칸에서 멈췄다 — $kind (판정 불가)" >&2
+            return 1 ;;
+    esac
+    printf '%s' "$value"
+}
+
+one=$(ceiling N "$one_steps" 2>&1) || { printf '%s\n' "$one"; exit "$UNMEASURABLE"; }
+two=$(ceiling 2N "$two_steps" 2>&1) || { printf '%s\n' "$two"; exit "$UNMEASURABLE"; }
+
+awk -v one="$one" -v two="$two" -v t="$target" 'BEGIN{
     printf "N 대 천장 %.0f/초 · 2N 대 천장 %.0f/초 · 효율 %.1f%% (기준 %s%%)\n", one, two, 100 * two / (2 * one), t
-    exit (two * 100 >= t * 2 * one) ? 0 : 1
-}'; then
+}'
+# **곱으로 견준다.** 나눈 비율을 기준과 견주면 기준 정확히가 부동소수 오차로 한쪽에 떨어진다.
+if awk -v one="$one" -v two="$two" -v c="$ceiling_pct" 'BEGIN{ exit (two * 100 > c * 2 * one) ? 0 : 1 }'; then
+    echo "::error title=증설 효율::효율이 ${ceiling_pct}% 를 넘는다 — 두 표의 결과 섞임이 다르다 (판정 불가)"
+    exit "$UNMEASURABLE"
+fi
+if awk -v one="$one" -v two="$two" -v t="$target" 'BEGIN{ exit (two * 100 >= t * 2 * one) ? 0 : 1 }'; then
     echo "판정: 충족"
     exit 0
 fi

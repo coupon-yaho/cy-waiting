@@ -25,7 +25,8 @@ for f in "$lb_table" "$peak_table"; do
     fi
 done
 
-report=$(PEAK_FLOOR='' "$(dirname "$0")/evaluate-peak.sh" "$lb_table" 2>&1)
+# 바닥과 응답 기준은 물려받지 않는다. 최대치 회차에 건 응답 기준이 새면 멀쩡한 기준선 칸이 안 선 칸이 된다.
+report=$(PEAK_FLOOR='' PEAK_LATENCY_P99_MS='' "$(dirname "$0")/evaluate-peak.sh" "$lb_table" 2>&1)
 covered=$(printf '%s\n' "$report" | sed -n 's/^ *그때의 요청 유입 *\([0-9][0-9.]*\).*/\1/p' | head -n 1)
 if [ -z "$covered" ]; then
     echo "::error title=LB 기준선 감당::기준선에 선 칸이 없다 (판정 불가)"

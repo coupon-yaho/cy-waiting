@@ -10,6 +10,9 @@ services:
     volumes:
       - ./lb/dummy.conf:/etc/nginx/nginx.conf:ro
     cpus: ${LB_CPUS:-2}
+    # 워커의 worker_rlimit_nofile 이 이 한도를 넘지 못한다.
+    ulimits:
+      nofile: { soft: 65536, hard: 65536 }
     ports:
       - "18070:8070"
     healthcheck:

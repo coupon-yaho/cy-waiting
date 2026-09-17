@@ -62,6 +62,12 @@ GATEWAYS=2 GATEWAY_CPUS=1 run_case "한 대만 붙었으면 게이트웨이가 �
 GATEWAYS=2 GATEWAY_CPUS=2 run_case "기대한 대수보다 표본의 대가 적으면 판정 불가" 2 "판정 불가" \
     -- "$(samples missing.tsv 190.0 30.0 40.0)"
 
+# **가운데 값만 찍으면 뒤늦게 붙은 자리가 안 보인다.** 유입이 천장에 닿는 칸은 회차 뒤쪽에서만 붙는다.
+late=$(fixture late.tsv "$(for _ in 1 2 3; do printf 'cpu\tload-gateway-1\t100.0\ncpu\tload-redis-1\t20.0\nidle\thost\t60.0\n'; done
+    for _ in 1 2; do printf 'cpu\tload-gateway-1\t200.0\ncpu\tload-redis-1\t20.0\nidle\thost\t12.0\n'; done)")
+GATEWAY_CPUS=2 run_case "붙음은 가운데 값으로 가르되 최댓값을 같이 적는다" 0 "가운데 100.0% (최대 200.0%" -- "$late"
+GATEWAY_CPUS=2 run_case "호스트는 가장 낮은 유휴를 같이 적는다" 0 "유휴 가운데 60.0% (최저 12.0%" -- "$late"
+
 # **공유 자원이 먼저다.** 레디스가 붙었으면 게이트웨이를 늘려도 안 풀린다 — 둘 다 붙은 칸을 게이트웨이로 적으면
 # 증설 효율이 그 칸을 나눈다.
 GATEWAY_CPUS=2 run_case "게이트웨이와 레디스가 둘 다 붙었으면 레디스" 0 "원인: 레디스" \

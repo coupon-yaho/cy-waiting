@@ -3,6 +3,7 @@ package com.kafkick.waiting.domain.admission;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * 초 단위 고정 윈도우 리미터. <b>경로별로 나누지 않는다</b> — 각자 카운터를 들면
@@ -16,6 +17,9 @@ public class SecondWindowLimiter {
 
     /** 뒤 축의 자리. 값 공간이 넓은 축은 더 줘야, 정상 피크가 스스로 포화를 만들지 않는다. */
     private final int secondaryMaxKeys;
+
+    /** 축별 자리. <b>삼항으로 갈라 두면 축이 하나 늘 때 새 축이 조용히 앞 축의 상한을 물려받는다.</b> */
+    private final Map<Axis, Integer> limits = new EnumMap<>(Axis.class);
 
     /** 축마다 따로 센다. 자리를 같이 쓰면 채워지는 축이 다른 축의 새 키를 막는다 (CY-925). */
     private final Map<Axis, Map<String, Long>> used = new EnumMap<>(Axis.class);
@@ -42,8 +46,11 @@ public class SecondWindowLimiter {
     SecondWindowLimiter(int maxKeys, int secondaryMaxKeys) {
         this.maxKeys = Math.max(1, maxKeys);
         this.secondaryMaxKeys = Math.max(1, secondaryMaxKeys);
+        limits.put(Axis.PRIMARY, this.maxKeys);
+        limits.put(Axis.SECONDARY, this.secondaryMaxKeys);
         for (Axis axis : Axis.values()) {
             used.put(axis, new HashMap<>());
+            Objects.requireNonNull(limits.get(axis), () -> axis + " 축의 자리를 안 정했다");
         }
     }
 
@@ -153,19 +160,29 @@ public class SecondWindowLimiter {
         return maxKeys;
     }
 
+    /** 축을 다 합친 자리. {@link #size()} 와 짝이다 — {@link #maxKeys()} 는 앞 축뿐이라 짝이 아니다. */
+    public int totalMaxKeys() {
+        return limits.values().stream().mapToInt(Integer::intValue).sum();
+    }
+
     /** 지금 들고 있는 키 수. 상한이 지켜지는지 시험하려고 노출한다. 축의 합이다. */
     public synchronized int size() {
         return used.values().stream().mapToInt(Map::size).sum();
     }
 
-    /** 그 축이 자리를 다 썼는가. 부르는 쪽이 처분을 정한다 — 거절과 축을 접는 것은 다르다. */
-    public synchronized boolean saturated(Axis axis) {
+    /**
+     * 그 축이 자리를 다 썼는가. 부르는 쪽이 처분을 정한다 — 거절과 축을 접는 것은 다르다.
+     *
+     * <p><b>시각을 받는다.</b> 안 받으면 초가 바뀌고 아직 아무도 안 잡았을 때 지난 초의 점유를 답한다.
+     */
+    public synchronized boolean saturated(Axis axis, long epochSecond) {
+        rollWindow(epochSecond);
         return used.get(axis).size() >= maxKeys(axis);
     }
 
     /** 그 축의 자리 수. 축마다 값 공간이 달라 같은 수로 두면 넓은 쪽이 먼저 찬다. */
     public int maxKeys(Axis axis) {
-        return axis == Axis.SECONDARY ? secondaryMaxKeys : maxKeys;
+        return limits.get(axis);
     }
 
     private boolean hasRoom(Map<String, Long> counts, String key, long cap) {

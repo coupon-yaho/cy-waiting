@@ -16,6 +16,13 @@ cd "$(git rev-parse --show-toplevel)" || exit 1
 
 COMPOSE="docker compose -f test/load/compose.yml"
 
+# **코어 한도를 주면 천장 원인이 뜻을 갖는다** (10.7.4). 한도가 없으면 게이트웨이가 호스트 코어를 다 쓸 수
+# 있어, 게이트웨이가 붙는 것과 호스트가 마르는 것이 같은 일이 된다. 안 주면 옛 회차와 같은 조건으로 돈다.
+if [ -n "${GATEWAY_CPUS:-}" ]; then
+    COMPOSE="$COMPOSE -f test/load/compose.limits.yml"
+fi
+bottleneck_cpus=${GATEWAY_CPUS:-$(nproc)}
+
 # peak.js 가 두 쿠폰을 박아 두고 있다. 여기만 바꾸면 다른 쿠폰을 비우고 이 쿠폰을
 # 때리게 된다 — 시나리오를 고칠 때 같이 고친다.
 COUPONS="c1 c2"
@@ -137,11 +144,23 @@ for rate in $RATES; do
     summary=$OUT_DIR/k6-$rate.json
     log=$OUT_DIR/k6-$rate.log
 
+    cpu=$OUT_DIR/cpu-$rate.tsv
+
     metrics "$before"
+    peak_sample_cpu "$cpu" load &
+    sampler=$!
     RATE=$rate DURATION=$DURATION k6 run --summary-export="$summary" \
         test/load/peak.js 2>&1 | tee "$log"
     k6_rc=${PIPESTATUS[0]}
+    kill "$sampler" 2>/dev/null
+    wait "$sampler" 2>/dev/null
     metrics "$after"
+
+    # 천장 원인은 회차마다 남긴다. 사다리가 멈춘 칸의 것이 그 천장의 원인이다.
+    GATEWAY_CPUS=$bottleneck_cpus test/load/evaluate-bottleneck.sh "$cpu" \
+        > "$OUT_DIR/bottleneck-$rate.txt" 2>&1
+    last_bottleneck=$OUT_DIR/bottleneck-$rate.txt
+    sed 's/^/    /' "$last_bottleneck"
 
     actual=$(peak_summary_value "$summary" rate)
     p99=$(peak_summary_value "$summary" p99)
@@ -188,4 +207,7 @@ for rate in $RATES; do
 done
 
 echo
+if [ -n "${last_bottleneck:-}" ]; then
+    echo "마지막 회차의 $(grep -m1 '^원인' "$last_bottleneck" || echo '원인: 판정 불가')"
+fi
 test/load/evaluate-peak.sh "$OUT_TABLE"

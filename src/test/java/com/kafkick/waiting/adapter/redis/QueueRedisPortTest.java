@@ -198,6 +198,28 @@ class QueueRedisPortTest extends RedisContainerSupport {
         assertThat(조회.rank()).isNegative();
     }
 
+    /**
+     * <b>앞 인원과 총원이 같은 기준으로 세어진다</b> (CY-827). 입장한 사람은 폴링해 와야 큐에서 빠지므로,
+     * 안 온 사람이 앞 인원에 계속 잡힌다 — 앞에 100명인데 총 80명 같은 모순이 그렇게 난다.
+     */
+    @Test
+    @DisplayName("입장_커서_아래는_앞_인원에서_뺀다")
+    void 입장_커서_아래는_앞_인원에서_뺀다() {
+        QueueEntry 첫째 = 등록("m1");
+        등록("m2");
+        QueueEntry 셋째 = 등록("m3");
+        // 배분이 첫째까지 들였다. 첫째는 아직 폴링을 안 해 큐에 남아 있다.
+        redis.opsForValue().set(RedisKeys.admitted(COUPON, SHARDS, 0),
+                Long.toString(첫째.score())).block(WAIT);
+
+        QueueEntry 본_것 = port.status(COUPON, "m3", 지금).block(WAIT);
+
+        assertThat(본_것.rank()).as("아직 기다리는 앞사람만").isEqualTo(1);
+        assertThat(본_것.total()).as("기다리는 총원").isEqualTo(2);
+        assertThat(본_것.behind()).as("내 뒤").isZero();
+        assertThat(셋째.score()).as("전제 — 셋째가 뒤에 섰다").isGreaterThan(첫째.score());
+    }
+
     @Test
     @DisplayName("차례가_오면_입장이다")
     void 차례가_오면_입장이다() {

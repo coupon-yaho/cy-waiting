@@ -198,7 +198,7 @@ public final class QueueRedisPort implements QueuePort {
         if (score < 0) {
             return QueueEntry.rejected();
         }
-        return new QueueEntry(QueueState.WAITING, globalRank(number(raw.get(3))), score,
+        return QueueEntry.withoutTotal(QueueState.WAITING, globalRank(number(raw.get(3))), score,
                 number(raw.get(2)) == 1, number(raw.get(1)) == 1, number(raw.get(4)) == 1);
     }
 
@@ -208,8 +208,11 @@ public final class QueueRedisPort implements QueuePort {
             return QueueEntry.notQueued();
         }
         // 조회는 재방문을 안 말한다 — 그것은 등록 결과에만 있는 사실이다.
+        // **총원도 같은 환산을 탄다** (CY-827). 앞 인원만 전체 등수로 바꾸면 둘의 기준이 갈린다.
+        long total = number(raw.get(3));
         return new QueueEntry(state, globalRank(number(raw.get(1))),
-                number(raw.get(2)), true, false, false);
+                number(raw.get(2)), true, false, false,
+                total < 0 ? QueueEntry.UNKNOWN_TOTAL : globalTotal(total));
     }
 
     /**
@@ -220,6 +223,15 @@ public final class QueueRedisPort implements QueuePort {
      */
     private long globalRank(long localRank) {
         return RankEstimator.globalRank(localRank, shards);
+    }
+
+    /**
+     * 총원의 전체 환산. <b>나는 한 명이지 샤드 수만큼이 아니다</b> — 통째로 곱하면 자기 자신도 불어나
+     * 줄 맨 뒤 사람이 뒤에 {@code 샤드 수 - 1} 명을 본다. 정확히 세려면 샤드를 다 읽어야 하는데,
+     * 조회 한 번이 샤드 수만큼 왕복한다는 뜻이라 불변식 1 과 바꿀 수 없다.
+     */
+    private long globalTotal(long localTotal) {
+        return globalRank(localTotal - 1) + 1;
     }
 
     /**

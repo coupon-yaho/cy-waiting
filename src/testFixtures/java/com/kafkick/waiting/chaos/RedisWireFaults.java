@@ -1,13 +1,19 @@
 package com.kafkick.waiting.chaos;
 
 import eu.rekawek.toxiproxy.Proxy;
+import eu.rekawek.toxiproxy.ToxiproxyClient;
 import eu.rekawek.toxiproxy.model.ToxicDirection;
+import io.lettuce.core.RedisClient;
+import io.lettuce.core.api.StatefulRedisConnection;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.Network;
 import org.testcontainers.toxiproxy.ToxiproxyContainer;
@@ -35,6 +41,15 @@ public final class RedisWireFaults implements AutoCloseable {
     private final ToxiproxyContainer toxiproxy;
     private final Proxy proxy;
 
+    /** 컨테이너가 미리 노출하는 마지막 포트. 8666 부터 서른둘이다. */
+    private static final int 마지막_포트 = 8697;
+
+    /** 문마다 다른 듣는 포트. 8666 은 첫 문이 쓴다. */
+    private final AtomicInteger 다음_포트 = new AtomicInteger(8667);
+
+    /** 시험에 내준 클라이언트. 안 내리면 실행마다 Netty 이벤트 루프가 쌓인다. */
+    private final List<RedisClient> 내준_것 = new CopyOnWriteArrayList<>();
+
     private RedisWireFaults(Network network, GenericContainer<?> redis,
             ToxiproxyContainer toxiproxy, Proxy proxy) {
         this.network = network;
@@ -58,7 +73,7 @@ public final class RedisWireFaults implements AutoCloseable {
         ToxiproxyContainer toxiproxy = new ToxiproxyContainer(PROXY_IMAGE).withNetwork(network);
         toxiproxy.start();
         try {
-            Proxy proxy = new eu.rekawek.toxiproxy.ToxiproxyClient(
+            Proxy proxy = new ToxiproxyClient(
                     toxiproxy.getHost(), toxiproxy.getControlPort())
                     .createProxy("redis", "0.0.0.0:8666", "redis:6379");
             return new RedisWireFaults(network, redis, toxiproxy, proxy);
@@ -67,6 +82,68 @@ public final class RedisWireFaults implements AutoCloseable {
             redis.stop();
             network.close();
             throw new IllegalStateException("프록시를 못 세웠다", e);
+        }
+    }
+
+    /**
+     * 시험이 직접 칠 연결. 프록시를 지나므로 앱과 같은 길을 본다.
+     *
+     * <p>클라이언트는 이쪽이 들고 {@link #close()} 에서 내린다 — 부르는 쪽이 연결만 닫으면 이벤트
+     * 루프가 안 내려가고, 시나리오마다 스레드가 쌓인다.
+     */
+    public StatefulRedisConnection<String, String> 연결한다() {
+        RedisClient 클라이언트 = RedisClient.create(주소());
+        내준_것.add(클라이언트);
+        return 클라이언트.connect();
+    }
+
+    /** 앱이 붙을 주소. 문 하나를 통째로 넘길 때 쓴다. */
+    public String 주소() {
+        return "redis://%s:%d".formatted(호스트(), 포트());
+    }
+
+    /**
+     * 같은 레디스로 가는 문을 하나 더 연다 (CY-862). <b>노드마다 다른 문을 주면 한쪽만 끊을 수 있다</b> —
+     * 문이 하나면 끊는 순간 전 노드가 같이 못 쓰고, 비대칭 장애를 아예 못 만든다.
+     */
+    public Gate 문을_하나_더() {
+        int 듣는_포트 = 다음_포트.getAndIncrement();
+        if (듣는_포트 > 마지막_포트) {
+            // 컨테이너가 미리 연 범위 밖이다. 그냥 두면 매핑에서 엉뚱한 예외가 난다.
+            throw new IllegalStateException("문은 %d 개까지다: %d".formatted(
+                    마지막_포트 - 8666 + 1, 듣는_포트));
+        }
+        try {
+            Proxy 새_문 = new ToxiproxyClient(
+                    toxiproxy.getHost(), toxiproxy.getControlPort())
+                    .createProxy("redis-" + 듣는_포트, "0.0.0.0:" + 듣는_포트, "redis:6379");
+            return new Gate(새_문, 호스트(), toxiproxy.getMappedPort(듣는_포트));
+        } catch (IOException e) {
+            throw new IllegalStateException("문을 더 못 열었다: " + 듣는_포트, e);
+        }
+    }
+
+    /** 문 하나. 끊고 걷는 것이 이 문에만 걸린다. */
+    public record Gate(Proxy proxy, String 호스트, int 포트) {
+
+        public String 주소() {
+            return "redis://%s:%d".formatted(호스트, 포트);
+        }
+
+        /**
+         * 이 문만 끊는다. <b>양쪽을 다 막는다</b> — 내려오는 쪽만 막으면 쓰기는 그대로 닿아, 끊긴
+         * 노드의 하트비트가 계속 찍힌다. 그러면 다른 노드가 그 노드를 죽은 것으로 안 본다.
+         */
+        public void 끊는다() throws IOException {
+            proxy.toxics().timeout(끊김, ToxicDirection.DOWNSTREAM, 0);
+            proxy.toxics().timeout(끊김 + "-위", ToxicDirection.UPSTREAM, 0);
+        }
+
+        /** 이 문의 장애만 걷는다. */
+        public void 걷는다() throws IOException {
+            for (var toxic : proxy.toxics().getAll()) {
+                toxic.remove();
+            }
         }
     }
 
@@ -84,7 +161,12 @@ public final class RedisWireFaults implements AutoCloseable {
         proxy.toxics().latency(지연, ToxicDirection.DOWNSTREAM, 만큼.toMillis());
     }
 
-    /** 회선을 끊는다. 붙어는 있는데 아무것도 안 오는 상태다. */
+    /**
+     * 회선을 끊는다. 붙어는 있는데 아무것도 안 오는 상태다.
+     *
+     * <p><b>내려오는 쪽만 막는다.</b> 쓰기는 그대로 닿으므로 끊긴 노드의 하트비트가 계속 찍힌다 —
+     * 다른 노드가 죽은 것으로 봐야 하는 판이면 {@link Gate#끊는다()} 쪽을 쓴다.
+     */
     public void 끊는다() throws IOException {
         proxy.toxics().timeout(끊김, ToxicDirection.DOWNSTREAM, 0);
     }
@@ -131,6 +213,7 @@ public final class RedisWireFaults implements AutoCloseable {
 
     @Override
     public void close() {
+        내준_것.forEach(RedisClient::shutdown);
         toxiproxy.stop();
         redis.stop();
         network.close();

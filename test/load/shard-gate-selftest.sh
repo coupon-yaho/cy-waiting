@@ -35,13 +35,6 @@ many() {
     printf '%s' "$path"
 }
 
-# 요약 JSON 을 만들고 이름을 낸다.
-summary() {
-    local path=$work/$1
-    printf '%s' "$2" > "$path"
-    printf '%s' "$path"
-}
-
 echo "착수 판정 자기검증"
 
 # **문턱 계산을 본다.** 표본 수 조건은 아래에 제 사례가 있으므로 여기서는 푼다.
@@ -97,23 +90,18 @@ run_case "그것을 넘으면 판정 불가" 1 "계기를 먼저 본다" \
 # 앞에 찍히므로 대조에는 지장이 없다.
 MIN_SAMPLES=1 run_case "values 아래의 p99 를 읽는다" 1 "기록만 *123.4" \
     -- "$(samples s.txt 6001)" \
-       "$(summary p99.json '{"metrics":{"http_req_duration":{"values":{"p(99)":123.4}}}}')"
+       "$(fixture p99.json '{"metrics":{"http_req_duration":{"values":{"p(99)":123.4}}}}')"
 MIN_SAMPLES=1 run_case "바로 아래의 p99 도 읽는다" 1 "기록만 *222.5" \
     -- "$(samples s.txt 6001)" \
-       "$(summary p99.json '{"metrics":{"http_req_duration":{"p(99)":222.5}}}')"
+       "$(fixture p99.json '{"metrics":{"http_req_duration":{"p(99)":222.5}}}')"
 # **등록 왕복의 분위수도 같은 규약이다** (CY-936). 파일이 없거나 그 분위수가 없으면
 # "없음" 이고, 다른 값으로 안 채운다 — 응답 p99 로 채우면 섞인 값을 등록으로 읽는다.
-enq() {
-    printf '%s' "$2" > "$work/$1"
-    printf '%s' "$work/$1"
-}
-
 # 회차 전 기준. 증분을 보는 사례들이 공유한다.
-zero_base=$(enq base0.txt 'waiting_queue_enqueue_latency_seconds_count{outcome="success",} 0.0
+zero_base=$(fixture base0.txt 'waiting_queue_enqueue_latency_seconds_count{outcome="success",} 0.0
 ')
 MIN_SAMPLES=1 run_case "등록 왕복 p99 를 초에서 ms 로 읽는다" 0 "등록 왕복 p99(ms) — 한 노드 *12.3" \
     -- "$(samples s.txt 6001)" "$work/ok.json" \
-       "$(enq enq.txt 'waiting_queue_enqueue_latency_seconds{outcome="success",quantile="0.99",} 0.0123
+       "$(fixture enq.txt 'waiting_queue_enqueue_latency_seconds{outcome="success",quantile="0.99",} 0.0123
 waiting_queue_enqueue_latency_seconds_count{outcome="success",} 5000.0
 ')" \
        "$zero_base"
@@ -121,13 +109,13 @@ waiting_queue_enqueue_latency_seconds_count{outcome="success",} 5000.0
 # 등록이 한 건도 없던 회차가 가장 좋아 보이는 값으로 인용된다.
 MIN_SAMPLES=1 run_case "표본이 없으면 0 을 안 적는다" 0 "등록 왕복 p99(ms) — 한 노드 *없음" \
     -- "$(samples s.txt 6001)" "$work/ok.json" \
-       "$(enq enq0.txt 'waiting_queue_enqueue_latency_seconds{outcome="success",quantile="0.99",} 0.0
+       "$(fixture enq0.txt 'waiting_queue_enqueue_latency_seconds{outcome="success",quantile="0.99",} 0.0
 waiting_queue_enqueue_latency_seconds_count{outcome="success",} 0.0
 ')" \
        "$zero_base"
 MIN_SAMPLES=1 run_case "숫자가 아니면 안 적는다" 0 "등록 왕복 p99(ms) — 한 노드 *없음" \
     -- "$(samples s.txt 6001)" "$work/ok.json" \
-       "$(enq enqnan.txt 'waiting_queue_enqueue_latency_seconds{outcome="success",quantile="0.99",} NaN
+       "$(fixture enqnan.txt 'waiting_queue_enqueue_latency_seconds{outcome="success",quantile="0.99",} NaN
 waiting_queue_enqueue_latency_seconds_count{outcome="success",} 12.0
 ')" \
        "$zero_base"
@@ -136,14 +124,14 @@ MIN_SAMPLES=1 run_case "등록 왕복 파일이 없으면 없음이다" 0 "등�
 # **응답 p99 로 뻗지 않는지도 본다.** 폴백이 다른 지표로 뻗으면 섞인 값을 등록으로 읽는다.
 MIN_SAMPLES=1 run_case "응답 p99 로 안 채운다" 0 "등록 왕복 p99(ms) — 한 노드 *없음" \
     -- "$(samples s.txt 6001)" \
-       "$(summary both.json '{"metrics":{"http_req_duration":{"values":{"p(99)":111.1}},"queued_responses":{"values":{"count":5000}}}}')" \
-       "$(enq enq_only95.txt 'waiting_queue_enqueue_latency_seconds{application="waiting",outcome="success",quantile="0.95",} 0.0099
+       "$(fixture both.json '{"metrics":{"http_req_duration":{"values":{"p(99)":111.1}},"queued_responses":{"values":{"count":5000}}}}')" \
+       "$(fixture enq_only95.txt 'waiting_queue_enqueue_latency_seconds{application="waiting",outcome="success",quantile="0.95",} 0.0099
 waiting_queue_enqueue_latency_seconds_count{application="waiting",outcome="success",} 7.0
 ')" \
        "$zero_base"
 MIN_SAMPLES=1 run_case "그 분위수가 없으면 안 채운다" 0 "등록 왕복 p99(ms) — 한 노드 *없음" \
     -- "$(samples s.txt 6001)" "$work/ok.json" \
-       "$(enq enq95.txt 'waiting_queue_enqueue_latency_seconds{outcome="success",quantile="0.95",} 0.0099
+       "$(fixture enq95.txt 'waiting_queue_enqueue_latency_seconds{outcome="success",quantile="0.95",} 0.0099
 waiting_queue_enqueue_latency_seconds_count{outcome="success",} 7.0
 ')" \
        "$zero_base"
@@ -151,7 +139,7 @@ waiting_queue_enqueue_latency_seconds_count{outcome="success",} 7.0
 # 시간이 쌓여서, 취소 몇 건이 회차의 등록 p99 를 통째로 바꾼다.
 MIN_SAMPLES=1 run_case "실패 계열이 커도 성공 값을 적는다" 0 "등록 왕복 p99(ms) — 한 노드 *12.3" \
     -- "$(samples s.txt 6001)" "$work/ok.json" \
-       "$(enq enq_both.txt 'waiting_queue_enqueue_latency_seconds{outcome="success",quantile="0.99",} 0.0123
+       "$(fixture enq_both.txt 'waiting_queue_enqueue_latency_seconds{outcome="success",quantile="0.99",} 0.0123
 waiting_queue_enqueue_latency_seconds{outcome="error",quantile="0.99",} 2.0
 waiting_queue_enqueue_latency_seconds_count{outcome="success",} 19000.0
 waiting_queue_enqueue_latency_seconds_count{outcome="error",} 40.0
@@ -161,16 +149,16 @@ waiting_queue_enqueue_latency_seconds_count{outcome="error",} 40.0
 # 있으면 그 값이 "이번 회차" 로 인용된다.
 MIN_SAMPLES=1 run_case "회차에 등록이 없으면 안 적는다" 0 "등록 왕복 p99(ms) — 한 노드 *없음" \
     -- "$(samples s.txt 6001)" "$work/ok.json" \
-       "$(enq enq_same.txt 'waiting_queue_enqueue_latency_seconds{outcome="success",quantile="0.99",} 0.0123
+       "$(fixture enq_same.txt 'waiting_queue_enqueue_latency_seconds{outcome="success",quantile="0.99",} 0.0123
 waiting_queue_enqueue_latency_seconds_count{outcome="success",} 5000.0
 ')" \
-       "$(enq enq_same_base.txt 'waiting_queue_enqueue_latency_seconds_count{outcome="success",} 5000.0
+       "$(fixture enq_same_base.txt 'waiting_queue_enqueue_latency_seconds_count{outcome="success",} 5000.0
 ')"
 # **계열이 여럿이면 가장 큰 것을 집는다.** 큰 값을 가운데 둬, 정렬을 빼거나 최솟값을 집는 쪽으로
 # 바꾸면 빨개지게 한다 — 가장 좋아 보이는 값이 인용되는 것을 막는 것이 이 판정의 존재 이유다.
 MIN_SAMPLES=1 run_case "성공 계열이 여럿이면 큰 쪽" 0 "등록 왕복 p99(ms) — 한 노드 *12.3" \
     -- "$(samples s.txt 6001)" "$work/ok.json" \
-       "$(enq enq_two.txt 'waiting_queue_enqueue_latency_seconds{instance="a",outcome="success",quantile="0.99",} 0.0099
+       "$(fixture enq_two.txt 'waiting_queue_enqueue_latency_seconds{instance="a",outcome="success",quantile="0.99",} 0.0099
 waiting_queue_enqueue_latency_seconds{instance="b",outcome="success",quantile="0.99",} 0.0123
 waiting_queue_enqueue_latency_seconds{instance="c",outcome="success",quantile="0.99",} 0.0101
 waiting_queue_enqueue_latency_seconds_count{instance="a",outcome="success",} 5000.0
@@ -180,7 +168,7 @@ waiting_queue_enqueue_latency_seconds_count{instance="a",outcome="success",} 500
 # 인용하면, 가장 나쁜 회차가 가장 좋은 수로 적힌다.
 MIN_SAMPLES=1 run_case "성공이 0 이면 실패 값을 안 적는다" 0 "등록 왕복 p99(ms) — 한 노드 *없음" \
     -- "$(samples s.txt 6001)" "$work/ok.json" \
-       "$(enq enq_err.txt 'waiting_queue_enqueue_latency_seconds{outcome="error",quantile="0.99",} 0.001
+       "$(fixture enq_err.txt 'waiting_queue_enqueue_latency_seconds{outcome="error",quantile="0.99",} 0.001
 waiting_queue_enqueue_latency_seconds_count{outcome="error",} 20000.0
 waiting_queue_enqueue_latency_seconds_count{outcome="success",} 0.0
 ')" \
@@ -188,37 +176,37 @@ waiting_queue_enqueue_latency_seconds_count{outcome="success",} 0.0
 # **기준 스크랩이 없으면 안 적는다.** 없는 것을 0 으로 읽으면 누적 전체가 증분이 되어 가드가 풀린다.
 MIN_SAMPLES=1 run_case "기준이 없으면 안 적는다" 0 "등록 왕복 p99(ms) — 한 노드 *없음" \
     -- "$(samples s.txt 6001)" "$work/ok.json" \
-       "$(enq enq_nobase.txt 'waiting_queue_enqueue_latency_seconds{outcome="success",quantile="0.99",} 0.0123
+       "$(fixture enq_nobase.txt 'waiting_queue_enqueue_latency_seconds{outcome="success",quantile="0.99",} 0.0123
 waiting_queue_enqueue_latency_seconds_count{outcome="success",} 5000.0
 ')"
 MIN_SAMPLES=1 run_case "증분이 있으면 적는다" 0 "등록 왕복 p99(ms) — 한 노드 *12.3" \
     -- "$(samples s.txt 6001)" "$work/ok.json" \
-       "$(enq enq_more.txt 'waiting_queue_enqueue_latency_seconds{outcome="success",quantile="0.99",} 0.0123
+       "$(fixture enq_more.txt 'waiting_queue_enqueue_latency_seconds{outcome="success",quantile="0.99",} 0.0123
 waiting_queue_enqueue_latency_seconds_count{outcome="success",} 9000.0
 ')" \
-       "$(enq enq_more_base.txt 'waiting_queue_enqueue_latency_seconds_count{outcome="success",} 5000.0
+       "$(fixture enq_more_base.txt 'waiting_queue_enqueue_latency_seconds_count{outcome="success",} 5000.0
 ')"
 
 MIN_SAMPLES=1 run_case "p99 가 없으면 다른 값으로 안 채운다" 1 "p99(ms) — 기록만 *없음" \
     -- "$(samples s.txt 6001)" \
-       "$(summary p99.json '{"metrics":{"http_req_duration":{"values":{"p(95)":99.9}}}}')"
+       "$(fixture p99.json '{"metrics":{"http_req_duration":{"values":{"p(95)":99.9}}}}')"
 
 # **유입도 남는지 본다.** 안 남으면 회차마다 값이 갈렸을 때 부하가 달랐던
 # 것인지 배선이 달랐던 것인지 산출물만 보고 못 가른다.
 MIN_SAMPLES=1 run_case "values 아래의 유입을 읽는다" 1 "기록만 *1656.7" \
     -- "$(samples s.txt 6001)" \
-       "$(summary rate.json '{"metrics":{"http_reqs":{"values":{"rate":1656.7}}}}')"
+       "$(fixture rate.json '{"metrics":{"http_reqs":{"values":{"rate":1656.7}}}}')"
 MIN_SAMPLES=1 run_case "바로 아래의 유입도 읽는다" 1 "기록만 *856.9" \
     -- "$(samples s.txt 6001)" \
-       "$(summary rate.json '{"metrics":{"http_reqs":{"rate":856.9}}}')"
+       "$(fixture rate.json '{"metrics":{"http_reqs":{"rate":856.9}}}')"
 MIN_SAMPLES=1 run_case "유입이 없으면 다른 값으로 안 채운다" 1 "req/s — 기록만 *없음" \
     -- "$(samples s.txt 6001)" \
-       "$(summary rate.json '{"metrics":{"http_reqs":{"values":{"count":20000}}}}')"
+       "$(fixture rate.json '{"metrics":{"http_reqs":{"values":{"count":20000}}}}')"
 
 # **폴백이 다른 지표로 뻗는 것까지 본다.** 위 사례들은 반증 JSON 에 한 지표만
 # 담아서, p99 가 없을 때 유입으로 채우는 결함은 안 잡힌다. 둘을 서로 다른
 # 값으로 한 JSON 에 담고 각 줄이 제 값을 내는지 따로 본다.
-both=$(summary both.json '{"metrics":{"http_req_duration":{"values":{"p(99)":111.1}},
+both=$(fixture both.json '{"metrics":{"http_req_duration":{"values":{"p(99)":111.1}},
     "http_reqs":{"values":{"rate":222.2}},
     "queued_responses":{"values":{"count":5000}}}}')
 MIN_SAMPLES=1 run_case "p99 자리에 유입이 안 온다" 0 "p99(ms) — 기록만 *111.1" \
@@ -235,23 +223,23 @@ MIN_SAMPLES=1 run_case "유입 자리에 p99 가 안 온다" 0 "req/s — 기록
 MIN_SAMPLES=1 MIN_QUEUED=1000 \
     run_case "줄에 선 것이 0 이면 판정 불가" 1 "안 닿았다" \
     -- "$(samples s.txt 6001)" \
-       "$(summary q.json '{"metrics":{"queued_responses":{"values":{"count":0}}}}')"
+       "$(fixture q.json '{"metrics":{"queued_responses":{"values":{"count":0}}}}')"
 MIN_SAMPLES=1 MIN_QUEUED=1000 \
     run_case "카운터가 아예 없어도 판정 불가" 1 "안 닿았다" \
     -- "$(samples s.txt 6001)" \
-       "$(summary q.json '{"metrics":{"http_req_duration":{"values":{"p(99)":1.0}}}}')"
+       "$(fixture q.json '{"metrics":{"http_req_duration":{"values":{"p(99)":1.0}}}}')"
 MIN_SAMPLES=1 MIN_QUEUED=1000 \
     run_case "세 자릿수도 판정 불가" 1 "안 닿았다" \
     -- "$(samples s.txt 6001)" \
-       "$(summary q.json '{"metrics":{"queued_responses":{"values":{"count":135}}}}')"
+       "$(fixture q.json '{"metrics":{"queued_responses":{"values":{"count":135}}}}')"
 MIN_SAMPLES=1 MIN_QUEUED=1000 \
     run_case "충분히 줄에 섰으면 판정한다" 0 "착수" \
     -- "$(samples s.txt 6001)" \
-       "$(summary q.json '{"metrics":{"queued_responses":{"values":{"count":5000}}}}')"
+       "$(fixture q.json '{"metrics":{"queued_responses":{"values":{"count":5000}}}}')"
 MIN_SAMPLES=1 MIN_QUEUED=1000 \
     run_case "카운터가 바로 아래 있어도 읽는다" 0 "착수" \
     -- "$(samples s.txt 6001)" \
-       "$(summary q.json '{"metrics":{"queued_responses":{"count":5000}}}')"
+       "$(fixture q.json '{"metrics":{"queued_responses":{"count":5000}}}')"
 
 # **기본값을 못 박는다.** 위 사례들이 전부 하한과 한계를 주입하는데 러너는 안
 # 준다 — 실제 판정은 기본값으로 돈다. 주입 없이 도는 사례가 없으면 기본값을
@@ -261,10 +249,10 @@ MIN_SAMPLES=1 MIN_QUEUED=1000 \
 # **문턱을 양쪽에서** 박는다 — 문턱이 커지면 위 사례가 죽고 작아지면 아래가 죽는다.
 MIN_SAMPLES=1 run_case "기본 하한 바로 아래는 판정 불가" 1 "최소 1000" \
     -- "$(samples s.txt 6001)" \
-       "$(summary d.json '{"metrics":{"queued_responses":{"values":{"count":999}}}}')"
+       "$(fixture d.json '{"metrics":{"queued_responses":{"values":{"count":999}}}}')"
 MIN_SAMPLES=1 run_case "기본 하한에 닿으면 판정한다" 0 "착수" \
     -- "$(samples s.txt 6001)" \
-       "$(summary d.json '{"metrics":{"queued_responses":{"values":{"count":1000}}}}')"
+       "$(fixture d.json '{"metrics":{"queued_responses":{"values":{"count":1000}}}}')"
 MIN_SAMPLES=1 run_case "기본 문턱으로 경계 바로 아래는 보류" 0 "판정: 보류" \
     -- "$(samples s.txt 5999)" "$work/ok.json"
 

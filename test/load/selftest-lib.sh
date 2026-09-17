@@ -7,6 +7,7 @@
 #
 #   사용: . test/load/selftest-lib.sh
 #         run_case <이름> <기대 종료코드> <기대 문구> -- <판정기 인자...>
+#         fixture <파일명> <내용>      # $work 에 쓰고 경로를 낸다
 #         환경 설정은 부르는 쪽이 앞에 붙인다.
 
 [ -n "${SELFTEST_LIB_LOADED:-}" ] && return 0
@@ -36,4 +37,14 @@ run_case() {
         printf '%s\n' "$out" | sed 's/^/      /'
         selftest_failed=1
     fi
+}
+
+# 표본 파일 하나를 만들고 **경로를 낸다.** 이름만 다른 같은 함수가 파일마다 있었고
+# (`summary`·`enq`), 형식이 하나 바뀌면 나머지가 조용히 갈렸다.
+#
+# `$work` 는 부르는 쪽이 만든다 — 지우는 책임도 거기 있다.
+fixture() {
+    local path=$work/$1
+    printf '%s' "$2" > "$path"
+    printf '%s' "$path"
 }

@@ -6,7 +6,10 @@
 # 기준선은 최대치 판정기가 선 칸으로 본 가장 높은 요청 유입이다 — 천장을 못 봤으면 아래 경계로 충분하다. 회차는
 # 멈춘 칸까지 센다. 그 칸의 유입을 LB 에 실었으니 LB 가 거기까지 받아야 그 멈춤을 게이트웨이 쪽으로 읽는다.
 #
-#   사용: evaluate-lb-cover.sh <기준선 표> <회차 표>
+# **멈춤의 원인이 LB 면 감당한 것이 아니다.** 기준선은 CPU 로만 본 것이라, 경유 회차가 LB 의 연결 한도에서 막힌
+# 칸을 못 가른다. 회차의 원인 파일을 같이 주면 그것도 본다.
+#
+#   사용: evaluate-lb-cover.sh <기준선 표> <회차 표> [회차 원인 파일]
 #   종료: 0 감당 · 2 못 감당하거나 못 읽음
 set -uo pipefail
 
@@ -16,7 +19,7 @@ if [ $# -lt 2 ]; then
     echo "::error title=LB 기준선 감당::표 둘이 필요하다 — 기준선 표, 회차 표 (판정 불가)"
     exit "$UNMEASURABLE"
 fi
-lb_table=$1 peak_table=$2
+lb_table=$1 peak_table=$2 peak_cause=${3:-}
 
 for f in "$lb_table" "$peak_table"; do
     if [ ! -s "$f" ]; then
@@ -26,6 +29,11 @@ for f in "$lb_table" "$peak_table"; do
 done
 
 # 바닥과 응답 기준은 물려받지 않는다. 최대치 회차에 건 응답 기준이 새면 멀쩡한 기준선 칸이 안 선 칸이 된다.
+if [ -n "$peak_cause" ] && grep -q '^원인: LB' "$peak_cause" 2>/dev/null; then
+    echo "::error title=LB 기준선 감당::회차가 LB 에서 막혔다 — $(grep -m1 '^원인' "$peak_cause") (판정 불가)"
+    exit "$UNMEASURABLE"
+fi
+
 report=$(PEAK_FLOOR='' PEAK_LATENCY_P99_MS='' "$(dirname "$0")/evaluate-peak.sh" "$lb_table" 2>&1)
 covered=$(printf '%s\n' "$report" | sed -n 's/^ *그때의 요청 유입 *\([0-9][0-9.]*\).*/\1/p' | head -n 1)
 if [ -z "$covered" ]; then

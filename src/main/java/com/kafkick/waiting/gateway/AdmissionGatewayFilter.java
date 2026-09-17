@@ -384,7 +384,8 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
             exchange.getAttributes().put(DECISION, cached);
             count(cached.name());
             soldOutHits.increment();
-            return route(exchange, chain, cached, couponId, state, view.snapshot().meta());
+            return route(exchange, chain, cached, couponId, state, view.snapshot().meta(),
+                    view.snapshot().cursorOf(couponId));
         }
         AdmissionDecision decision = decider.decide(new AdmissionRequest(
                 couponId, state, view.snapshot().meta(),
@@ -405,7 +406,8 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
         if (decision.onlyFromStaleMaterial()) {
             degraded(exchange);
         }
-        return route(exchange, chain, decision, couponId, state, view.snapshot().meta());
+        return route(exchange, chain, decision, couponId, state, view.snapshot().meta(),
+                view.snapshot().cursorOf(couponId));
     }
 
     /**
@@ -459,7 +461,8 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
     }
 
     private Mono<Void> route(ServerWebExchange exchange, GatewayFilterChain chain,
-            AdmissionDecision decision, String couponId, CouponState state, SnapshotMeta meta) {
+            AdmissionDecision decision, String couponId, CouponState state, SnapshotMeta meta,
+            long cursorHint) {
         if (decision.isPass()) {
             // **판정이 쓴 예산을 그대로 받는다.** 여기서 credit 을 다시 꺼내면
             // 한산 통과가 0 을 받고, 0 은 상한으로 쓰이는 순간 전면 차단이다.
@@ -467,7 +470,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
                     decider.admittedRatePerSec(decision, state, meta), meta);
         }
         if (decision.isEnqueue()) {
-            return enqueue(exchange, chain, couponId, state, meta);
+            return enqueue(exchange, chain, couponId, state, meta, cursorHint);
         }
         return error.write(exchange, rejection.code(decision),
                 rejection.retryAfterSec(decision, random, meta.pollScale()));
@@ -478,7 +481,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
      * 통과한 사람은 여기 안 온다.
      */
     private Mono<Void> enqueue(ServerWebExchange exchange, GatewayFilterChain chain,
-            String couponId, CouponState state, SnapshotMeta meta) {
+            String couponId, CouponState state, SnapshotMeta meta, long cursorHint) {
         String memberId = exchange.getRequest().getHeaders().getFirst(MEMBER_ID);
         if (memberId == null) {
             // 형식 검증이 앞에서 걸렀어야 한다. 여기 오면 배선이 틀린 것이다.
@@ -489,7 +492,9 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
         // 상한 함수는 사다리 6번과 일부러 다르고 MAX_ETA_SEC 만 같다 — 인자까지
         // 갈라지면 6번이 건 상한과 실제 등록 상한의 근거가 어긋난다.
         long capacity = decider.queueCapacity(state, MAX_ETA_SEC);
-        return queue.enqueue(couponId, memberId, capacity, clock.instant())
+        // **발행된 입장 커서를 넘긴다** (CY-944). 커서의 마지막 쓰기가 빠진 창에서 레디스는 참 커서를 모르고, 노드가
+        // 아는 값은 판정에 쓴 이 스냅샷에만 있다. 점수 하한으로만 쓰인다.
+        return queue.enqueue(couponId, memberId, capacity, clock.instant(), cursorHint)
                 // **여기까지만 열어 준다.** 뒤에 붙이면 줄에 선 사람이 응답을
                 // 못 써서 뒷단까지 가고, 자리를 쥔 채로 재고까지 먹는다.
                 .onErrorResume(e -> {

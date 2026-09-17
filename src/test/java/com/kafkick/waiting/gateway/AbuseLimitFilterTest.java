@@ -444,6 +444,82 @@ class AbuseLimitFilterTest {
         return exchange;
     }
 
+    /** 인터페이스 식별자는 주인이 마음대로 바꾼다. 윗 비트만 돌려도 같은 /64 면 한 몫이어야 한다. */
+    @Test
+    @DisplayName("인터페이스_식별자_윗비트를_돌려도_한_몫이다")
+    void 인터페이스_식별자_윗비트를_돌려도_한_몫이다() {
+        for (int i = 0; i < 200; i++) {
+            태운다(ISSUE, String.valueOf(11_000 + i), "2001:db8:7:7:" + Integer.toHexString(i + 1) + "::1");
+        }
+
+        assertThat(태운다(ISSUE, "1199", "2001:db8:7:7:ffff::9").getResponse().getStatusCode())
+                .as("윗 비트를 돌려도 같은 /64 의 몫을 쓴다").isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+    }
+
+    /** v4-mapped 는 묶지 않는다. 묶으면 v4 인터넷 전체가 한 키를 나눠 쓴다. */
+    @Test
+    @DisplayName("v4_mapped_는_주소마다_제_몫이다")
+    void v4_mapped_는_주소마다_제_몫이다() {
+        for (int i = 0; i < 200; i++) {
+            태운다(ISSUE, String.valueOf(12_000 + i), "::ffff:10.9.9.9");
+        }
+
+        assertThat(태운다(ISSUE, "1299", "::ffff:10.9.9.9").getResponse().getStatusCode())
+                .as("같은 주소는 제 상한에 걸린다").isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        assertThat(태운다(ISSUE, "1298", "::ffff:10.9.9.10").getResponse().getStatusCode())
+                .as("옆 주소는 제 몫이 그대로다").isNull();
+    }
+
+    /**
+     * <b>신뢰 판정은 접기 전 원문으로 한다.</b> 접은 문자열로 물으면 v6 앞단이 신뢰 대역에서 빠지고, 그 프록시
+     * 뒤 전원이 한 키를 나눠 쓰다 정상 사용자가 막힌다.
+     */
+    @Test
+    @DisplayName("v6_앞단도_신뢰_대역이면_전달_헤더를_쓴다")
+    void v6_앞단도_신뢰_대역이면_전달_헤더를_쓴다() {
+        AbuseLimitFilter 필터 = AbuseLimitFilter.of(시계, new SimpleMeterRegistry(), () -> 0.5,
+                TrustedProxies.of(List.of("2001:db8:aa::/48")));
+        AtomicInteger 통과 = new AtomicInteger();
+
+        for (int i = 0; i < 200; i++) {
+            프록시_뒤로_태운다(필터, "2001:db8:aa::9", String.valueOf(13_000 + i), "2001:db8:b:b::1", 통과);
+        }
+
+        assertThat(통과.get()).as("전달 헤더의 주소가 키라 상한까지 지나간다").isEqualTo(200);
+        assertThat(프록시_뒤로_태운다(필터, "2001:db8:aa::9", "1399", "2001:db8:b:b::2", 통과)
+                .getResponse().getStatusCode())
+                .as("같은 /64 의 몫을 쓴다").isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+    }
+
+    /** v6 앞단을 지나온 요청. 소켓은 프록시, 전달 헤더는 사용자 주소다. */
+    private MockServerWebExchange 프록시_뒤로_태운다(AbuseLimitFilter 필터, String 프록시, String member,
+            String ip, AtomicInteger 통과) {
+        MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest
+                .method(HttpMethod.POST, ISSUE)
+                .remoteAddress(new InetSocketAddress(프록시, 12345))
+                .header("X-Member-Id", member)
+                .header("X-Forwarded-For", ip));
+        필터.filter(exchange, e -> {
+            통과.incrementAndGet();
+            return Mono.empty();
+        }).block();
+        return exchange;
+    }
+
+    /** 스코프가 붙은 소켓 주소. 존을 떼고 접는다 — 못 읽는다고 막으면 되던 연결이 끊긴다. */
+    @Test
+    @DisplayName("스코프가_붙은_소켓_주소도_64_로_묶는다")
+    void 스코프가_붙은_소켓_주소도_64_로_묶는다() {
+        int 앞서_통과 = 다음으로_감.get();
+        for (int i = 0; i < 200; i++) {
+            소켓으로_태운다(String.valueOf(14_000 + i), "fe80::" + Integer.toHexString(i + 1) + "%eth0");
+        }
+
+        assertThat(다음으로_감.get() - 앞서_통과).as("막지 않는다").isEqualTo(200);
+        assertThat(소켓으로_태운다("1499", "fe80::ffff%eth0").getResponse().getStatusCode())
+                .as("존을 떼고 같은 /64 로 묶는다").isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+    }
+
     @Test
     @DisplayName("다른_64_는_제_몫이_그대로다")
     void 다른_64_는_제_몫이_그대로다() {

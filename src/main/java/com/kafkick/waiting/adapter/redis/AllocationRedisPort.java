@@ -177,6 +177,9 @@ public final class AllocationRedisPort implements SnapshotSource {
     /** 되살린 폭의 합. <b>커서가 아예 없던 되살림은 안 넣는다</b> — 폭을 모르는 것과 0 은 다르다. */
     private final AtomicLong healedSpan = new AtomicLong();
 
+    /** 되살림이 이어지는 구간. 진입과 해제만 남긴다 — 승격은 쿠폰 전체를 한꺼번에 되감는다. */
+    private final FailureWindow healing = FailureWindow.create();
+
 
     /**
      * 상한을 넘겨 버린 미상 표시의 누적 수. <b>0 이 아니면 거짓 매진이 나갔다.</b>
@@ -1078,28 +1081,28 @@ public final class AllocationRedisPort implements SnapshotSource {
     }
 
     /**
-     * 되살림을 센다 (CY-945). 셋째 칸이 <b>되살리기 전 임계</b>다 — 비어 있으면 안 되살린 회차이고,
-     * -1 이면 커서가 아예 없던 회차다.
+     * 되살림을 센다 (CY-945). 셋째 칸이 <b>되살린 폭</b>이다 — 비어 있으면 안 되살린 회차이고, -1 이면
+     * 커서가 아예 없어 폭을 모르는 회차다.
+     *
+     * <p><b>로그는 구간의 첫 건만 남긴다.</b> 복제본 승격은 쿠폰 전체를 한꺼번에 되감으므로 쿠폰마다 찍으면
+     * 한 틱에 쿠폰 수만큼 쌓인다 — 장애 중 가장 읽어야 할 때의 폭포다. 건수와 폭은 지표가 낸다.
      */
     private void countHeal(String couponId, List<?> counts) {
-        if (counts.size() < 3) {
-            return;
-        }
-        String from = String.valueOf(counts.get(2));
-        if (from.isEmpty()) {
+        if (counts.size() < 3 || String.valueOf(counts.get(2)).isEmpty()) {
+            healing.exited().ifPresent(r -> log.info(
+                    "입장 커서 되살림이 멎었다 — {}초 동안 {}건", r.elapsedSeconds(), r.swallowed()));
             return;
         }
         healed.incrementAndGet();
-        long before = Long.parseLong(from);
-        long after = (long) parsed(String.valueOf(counts.get(0))).orElse(before);
-        // **폭을 모르는 것과 0 은 다르다.** 없던 커서의 임계값을 폭으로 더하면 마이크로초 시각이 그대로 들어간다.
-        if (before < 0) {
-            log.warn("입장 커서를 되살렸다 — 쿠폰 {}, 커서가 없었고 {} 로 되돌렸다", couponId, after);
-            return;
+        long span = Long.parseLong(String.valueOf(counts.get(2)));
+        // **폭을 모르는 것과 0 은 다르다.** 커서가 없던 되살림은 합에 안 넣는다.
+        if (span >= 0) {
+            healedSpan.addAndGet(span);
         }
-        long span = after - before;
-        healedSpan.addAndGet(span);
-        log.warn("입장 커서를 되살렸다 — 쿠폰 {}, {} 에서 {} 로 {} 만큼", couponId, before, after, span);
+        if (healing.entered()) {
+            log.warn("입장 커서를 되살렸다 — 쿠폰 {}, 폭 {} (음수면 커서가 없어 폭을 모른다). "
+                    + "이어지는 건은 지표로 센다", couponId, span);
+        }
     }
 
     /**

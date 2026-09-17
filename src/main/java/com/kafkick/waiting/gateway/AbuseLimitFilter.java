@@ -231,13 +231,15 @@ public final class AbuseLimitFilter implements WebFilter {
      */
     private String clientIp(ServerWebExchange exchange) {
         String socket = socketAddress(exchange);
+        // **신뢰 판정은 원문으로 한다.** 접은 주소로 물으면 신뢰 대역의 경계가 달라진다.
         if (socket == null || !trusted.isTrusted(socket)) {
-            return socket;
+            // 앞단이 없는 배포도 같은 키 함수를 쓴다 — 안 그러면 직결 v6 가 주소를 돌려 상한을 우회한다.
+            return canonical(IpLiteral.parse(socket));
         }
         // 프록시가 자기 앞의 주소를 뒤에 붙이므로 우리가 아는 홉이 넣은 값은 마지막이다.
         List<String> forwarded = exchange.getRequest().getHeaders().get(FORWARDED_FOR);
         if (forwarded == null || forwarded.isEmpty()) {
-            return socket;
+            return canonical(IpLiteral.parse(socket));
         }
         String last = forwarded.get(forwarded.size() - 1);
         String candidate = last.substring(last.lastIndexOf(',') + 1).trim();

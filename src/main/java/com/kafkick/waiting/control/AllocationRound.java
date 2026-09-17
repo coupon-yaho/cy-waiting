@@ -949,16 +949,13 @@ public final class AllocationRound {
         if (lostLeadership()) {
             return Mono.empty();
         }
-        Map<String, CouponState> coupons = couponsOf(collected, granted);
-        applyFailed.forEach(coupons::remove);
-        if (coupons.isEmpty()) {
-            return Mono.empty();
-        }
-        return sweeper.run(coupons,
+        // **맵은 줄이지 않는다.** 게이트가 넘겨받은 맵을 이번 틱의 전부로 보고 없는 쿠폰의 재개 유예를
+        // 지우므로, 여기서 빼면 한 틱을 보호하는 대신 그 쿠폰의 유예가 통째로 사라진다.
+        return sweeper.run(couponsOf(collected, granted),
                 // **리더가 신선한 것과 노드들이 신선한 것은 다르다.** 생존 신호는 노드
                 // 쪽 폴링이 갱신하므로 그쪽이 멎어도 리더의 수요 읽기는 성공한다. 이
                 // 노드도 게이트웨이라 자기 재료의 나이가 그 신호에 가장 가깝다.
-                dataStale.getAsBoolean()).then();
+                dataStale.getAsBoolean(), applyFailed).then();
     }
 
     /**

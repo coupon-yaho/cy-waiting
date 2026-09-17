@@ -87,24 +87,39 @@ class AllocationApplyTest extends RedisContainerSupport {
 
     /**
      * <b>되살린 폭을 돌려준다</b> (CY-945). 되살림이 일어난 사실과 그 폭이 어디에도 안 남아, 실패 없이 흡수된
-     * 승격은 조용히 지나간다. 셋째 칸에 되살리기 전 임계를 싣는다 — 폭은 부르는 쪽이 뺀다.
+     * 승격은 조용히 지나간다. 셋째 칸은 <b>폭</b>이다 — 첫 칸은 이 회차의 입장까지 반영한 값이라 그것으로 빼면
+     * 뜨거운 쿠폰일수록 부푼다.
      */
     @Test
-    @DisplayName("되살린_회차는_되살리기_전_임계를_돌려준다")
-    void 되살린_회차는_되살리기_전_임계를_돌려준다() {
+    @DisplayName("되살린_회차는_되살린_폭을_돌려준다")
+    void 되살린_회차는_되살린_폭을_돌려준다() {
         줄_세운다(10, 20, 30);
         배분(2);
-        redis.opsForValue().set(ADMITTED, "10").block(WAIT);
+        redis.opsForValue().set(ADMITTED, "5").block(WAIT);
 
         List<Object> 결과 = 배분(0, "20");
 
         assertThat(String.valueOf(결과.get(0))).isEqualTo("20");
-        assertThat(String.valueOf(결과.get(2))).isEqualTo("10");
+        assertThat(String.valueOf(결과.get(2))).as("5 에서 20 으로 되살린 폭").isEqualTo("15");
     }
 
     @Test
-    @DisplayName("임계가_사라진_회차는_되살리기_전_칸이_없음이다")
-    void 임계가_사라진_회차는_되살리기_전_칸이_없음이다() {
+    @DisplayName("같은_회차의_입장은_폭에_안_든다")
+    void 같은_회차의_입장은_폭에_안_든다() {
+        줄_세운다(10, 20, 30, 40);
+        배분(2);
+        redis.opsForValue().set(ADMITTED, "10").block(WAIT);
+
+        List<Object> 결과 = 배분(1, "20");
+
+        assertThat(String.valueOf(결과.get(0))).as("되살린 뒤 한 명 더 들인다").isEqualTo("30");
+        assertThat(String.valueOf(결과.get(2))).as("되살린 폭만").isEqualTo("10");
+    }
+
+    /** 커서가 아예 없던 회차는 폭을 모른다. -1 이 그 뜻이다 — 임계값 자체를 폭으로 내면 시각이 들어간다. */
+    @Test
+    @DisplayName("커서가_없던_되살림은_폭이_음수다")
+    void 커서가_없던_되살림은_폭이_음수다() {
         줄_세운다(10, 20, 30);
         배분(2);
         redis.delete(ADMITTED).block(WAIT);

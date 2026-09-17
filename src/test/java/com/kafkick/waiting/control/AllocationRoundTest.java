@@ -698,8 +698,8 @@ class AllocationRoundTest {
         실패.set(false);
         round.run().block();
 
-        assertThat(틱마다_쓴_쿠폰.get(틱마다_쓴_쿠폰.size() - 1))
-                .as("유예가 남아 있으므로 실패했던 쿠폰도 앞줄 제거 대상이 아니다")
+        assertThat(틱마다_쓴_쿠폰.stream().flatMap(List::stream).toList())
+                .as("유예가 남아 있으므로 실패했던 쿠폰은 어느 틱에서도 앞줄 제거 대상이 아니다")
                 .doesNotContain("c1");
     }
 

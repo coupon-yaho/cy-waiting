@@ -102,6 +102,9 @@ public final class AbuseLimitFilter implements WebFilter {
 
     /** 마지막으로 축이 차 있던 초. 이 시각에서 늦춤만큼 지나야 해제로 친다. */
     private final AtomicLong foldSaturatedAt = new AtomicLong();
+
+    /** 접힘의 진입과 해제를 한 걸음으로 묶는다. 갈라 두면 해제가 새 포화를 덮어 진입 줄이 사라진다. */
+    private final Object foldLock = new Object();
     private final TrustedProxies trusted;
     private final Clock clock;
     private final MeterRegistry meters;
@@ -268,10 +271,12 @@ public final class AbuseLimitFilter implements WebFilter {
      * 공격이 이어지는 내내 찍으면 그 구간이 로그를 덮는다.
      */
     private void foldStarted(long nowSec) {
-        foldSaturatedAt.set(nowSec);
-        if (foldingSince.compareAndSet(0, nowSec)) {
-            log.warn("식별자 축이 찼다 — 사람당 상한을 접고 주소 상한만으로 판정한다. "
-                    + "키 상한과 유입을 함께 본다");
+        synchronized (foldLock) {
+            foldSaturatedAt.set(nowSec);
+            if (foldingSince.compareAndSet(0, nowSec)) {
+                log.warn("식별자 축이 찼다 — 사람당 상한을 접고 주소 상한만으로 판정한다. "
+                        + "키 상한과 유입을 함께 본다");
+            }
         }
         foldedPassed.incrementAndGet();
     }
@@ -282,11 +287,17 @@ public final class AbuseLimitFilter implements WebFilter {
      * 시간은 언제나 1초라 얼마나 오래 접혀 있었는지를 아무 줄도 말해 주지 않는다.
      */
     private void foldMaybeEnded(long nowSec) {
-        long since = foldingSince.get();
-        if (since == 0 || nowSec - foldSaturatedAt.get() < FOLD_LINGER_SECONDS) {
+        // **정상 경로는 여기서 끝난다.** 접혀 있지 않으면 잠금까지 안 간다 — 요청마다 부르는 자리라
+        // 여기서 걸어 잠그면 통제가 멀쩡한 구간이 필터 하나로 직렬화된다.
+        if (foldingSince.get() == 0) {
             return;
         }
-        if (foldingSince.compareAndSet(since, 0)) {
+        synchronized (foldLock) {
+            long since = foldingSince.get();
+            if (since == 0 || nowSec - foldSaturatedAt.get() < FOLD_LINGER_SECONDS) {
+                return;
+            }
+            foldingSince.set(0);
             log.info("식별자 축이 풀렸다 — {}초 동안 접은 채 {}건이 지나갔다",
                     Math.max(0, nowSec - since), foldedPassed.getAndSet(0));
         }

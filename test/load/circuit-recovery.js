@@ -103,12 +103,19 @@ function headers(extra) {
 const gatewayDown = new Counter('circuit_gateway_down');
 const timedOut = new Rate('circuit_timeout_rate');
 
+/**
+ * 시한 초과 표본. **모든 응답에서 한 번씩 부른다** — 성공한 폴링은 `tally` 를 안 거치므로 거기서 세면
+ * 분모만 빠져, 정상인 회차일수록 비율이 부풀어 문턱이 엉뚱하게 걸린다.
+ */
+function observeTimeout(r) {
+  timedOut.add(r.status === 0 && r.error_code === TIMEOUT_CODE);
+}
+
 function tally(r) {
   // **연결 자체가 안 된 것은 판정이 아니다.** 죽인 리더로 간 요청이라, 판정 밖
   // 응답으로 세면 우리가 만든 자극이 회차를 무효로 만든다.
   if (r.status === 0) {
     gatewayDown.add(1);
-    timedOut.add(r.error_code === TIMEOUT_CODE);
     // **시한 초과는 죽은 것이 아니다.** 자극이 지연이라 살아 있는 대도 늦을 수 있는데, 그것으로 명단에서
     // 빼면 그 VU 가 멀쩡한 대에 영영 안 쏜다 — 회복 구간의 유입이 VU 마다 달라져 판정이 흔들린다.
     // 붙지도 못한 것만 죽은 것으로 본다.
@@ -120,7 +127,6 @@ function tally(r) {
     }
     return;
   }
-  timedOut.add(false);
   if (r.status === 200) {
     passed.add(1);
   } else if (r.status === 202) {
@@ -191,6 +197,7 @@ function step() {
   if (entryToken !== null) {
     const r = http.post(`${base()}/api/v1/coupons/${COUPON}/issue`, null,
         params({ 'Entry-Token': entryToken }));
+    observeTimeout(r);
     tally(r);
     if (r.status === 200) {
       redeemed.add(1);
@@ -216,6 +223,7 @@ function step() {
   if (queueToken !== null) {
     const r = http.get(`${base()}/api/v1/coupons/${COUPON}/queue`,
         params({ 'Queue-Token': queueToken }));
+    observeTimeout(r);
     if (r.status !== 200) {
       tally(r);
       // **줄에 선 사람을 폴링 한 번 실패로 버리지 않는다.** 버려도 레디스의 줄
@@ -251,6 +259,7 @@ function step() {
 
   // 1. 아직 안 섰다. 발급을 부른다.
   const r = http.post(`${base()}/api/v1/coupons/${COUPON}/issue`, null, params());
+  observeTimeout(r);
   tally(r);
   if (r.status === 0) {
     return DEFAULT_WAIT_SEC;

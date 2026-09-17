@@ -529,6 +529,48 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     }
 
     /**
+     * <b>되살림을 센다</b> (CY-945). 실패 없이 흡수된 승격은 되살림만 조용히 일어나고, 그 사실이 어디에도 안 남으면
+     * 다음 재측정이 깨끗하게 나온다. 폭까지 세야 한 번의 큰 되살림과 잦은 작은 되살림을 가른다.
+     */
+    @Test
+    @DisplayName("되살린_회차를_폭까지_센다")
+    void 되살린_회차를_폭까지_센다() {
+        줄_세운다("c1", 10, 20, 30, 40);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "10").block(WAIT);
+
+        port.apply(new Grant("c1", 0), 임기).block(WAIT);
+
+        assertThat(port.healed()).as("되살린 회차 수").isEqualTo(1);
+        assertThat(port.healedSpan()).as("되살린 폭의 합 (20 - 10)").isEqualTo(10);
+    }
+
+    /** 커서가 아예 없던 되살림도 센다. 폭은 못 재므로 합에 안 넣는다 — 안 그러면 임계값 자체가 폭으로 들어간다. */
+    @Test
+    @DisplayName("커서가_없던_되살림은_폭에_안_넣는다")
+    void 커서가_없던_되살림은_폭에_안_넣는다() {
+        줄_세운다("c1", 10, 20, 30, 40);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        redis.delete(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT);
+
+        port.apply(new Grant("c1", 0), 임기).block(WAIT);
+
+        assertThat(port.healed()).isEqualTo(1);
+        assertThat(port.healedSpan()).isZero();
+    }
+
+    @Test
+    @DisplayName("되살림이_없는_회차는_안_센다")
+    void 되살림이_없는_회차는_안_센다() {
+        줄_세운다("c1", 10, 20, 30, 40);
+
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+
+        assertThat(port.healed()).isZero();
+        assertThat(port.healedSpan()).isZero();
+    }
+
+    /**
      * <b>되찾은 옛 리더는 앞선 임계를 안 낮춘다.</b> 리더를 잃은 사이 다른 리더가 임계를 올렸으면, 옛 리더의 기억은
      * 낡았다. 되살림이 "기억이 레디스보다 앞설 때만" 이 아니면 커서를 끌어내려 들인 사람을 대기로 돌린다.
      */

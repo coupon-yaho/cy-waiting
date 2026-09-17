@@ -103,7 +103,7 @@ GATEWAY_CPUS=2 run_case "게이트웨이 표본만 셋 미만이어도 판정 �
         for _ in 1 2 3; do printf 'idle\thost\t40.0\ncpu\tload-redis-1\t30.0\n'; done)")"
 # 숫자가 아닌 표본 하나를 빼고 평균하면 남은 표본이 조용히 판정한다.
 GATEWAY_CPUS=2 run_case "숫자가 아닌 표본이 하나만 섞여도 판정 불가" 2 "판정 불가" \
-    -- "$(fixture one_nan.tsv "$(for _ in 1 2 3 4; do printf 'cpu\tload-gateway-1\t190.0\nidle\thost\t40.0\n'; done
+    -- "$(fixture one_nan.tsv "$(for _ in 1 2 3 4; do printf 'cpu\tload-gateway-1\t190.0\ncpu\tload-redis-1\t30.0\nidle\thost\t40.0\n'; done
         printf 'cpu\tload-gateway-1\t--\nidle\thost\t40.0\n')")"
 # **레디스도 표본을 요구한다.** 레디스를 먼저 보는데 그 표집이 빠지면 순서가 조용히 사라진다.
 GATEWAY_CPUS=2 run_case "레디스 표본이 없으면 판정 불가" 2 "판정 불가" \

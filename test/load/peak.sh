@@ -242,6 +242,7 @@ for rate in $RATES; do
     fi
 
     metrics "$before"
+    round_started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     # 정지 파일은 띄우기 전에 여기서 지운다. 자식이 지우면 곧바로 끝난 회차의 정지 신호를 먹는다.
     rm -f "$cpu.stop"
     peak_sample_cpu "$cpu" "$PROJECT" "$$" "$(( $(date +%s) + DURATION_SEC ))" &
@@ -255,7 +256,9 @@ for rate in $RATES; do
     # LB 가 CPU 말고 연결 한도에서 막힌 칸을 센다. CPU 는 한가한데 연결이 막히면 표본만으로는 안 보인다.
     lb_errors=0
     if [ "$VIA_LB" = 1 ]; then
-        lb_errors=$($COMPOSE logs --since "${DURATION_SEC}s" lb 2>/dev/null \
+        # **회차가 시작한 시각부터 읽는다.** 경과 시간으로 물으면 표집기 정지와 지표 긁기에 든 시간만큼 앞이
+        # 잘려, 초반에만 난 연결 오류를 못 본다.
+        lb_errors=$($COMPOSE logs --since "$round_started_at" lb 2>/dev/null \
             | grep -cE 'worker_connections are not enough|accept4\(\) failed|Cannot assign requested address')
     fi
 

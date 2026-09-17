@@ -63,7 +63,9 @@ for rate in $RATES; do
     rm -f "$cpu.stop"
     peak_sample_cpu "$cpu" lb-baseline "$$" "$(( $(date +%s) + DURATION_SEC ))" &
     sampler=$!
-    VUS=$vus RATE=$rate DURATION=$DURATION k6 run --summary-export="$summary" \
+    # **대상을 못 박는다.** 물려받은 BASE_URL 이 있으면 이 스택 대신 남의 주소를 재고, 그 표가 기준선으로 쓰인다.
+    BASE_URL=http://localhost:18070 VUS=$vus RATE=$rate DURATION=$DURATION \
+        k6 run --summary-export="$summary" \
         test/load/lb-baseline.js > "$OUT_DIR/k6-$rate.log" 2>&1
     k6_rc=$?
     touch "$cpu.stop"

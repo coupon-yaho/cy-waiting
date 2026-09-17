@@ -68,12 +68,7 @@ if seenFence ~= nil and seenFence == seenFence and fence < seenFence then
 end
 -- **수명을 준다.** 이 표는 쿠폰별이라 그 쿠폰이 한산하면 갱신이 안 온다 — 스냅샷
 -- 울타리처럼 짧게 두면 그 사이 문이 통째로 사라진다. 그래서 쿠폰별 표와 같은
--- 수명을 쓴다. 길어서 생기는 영구 차단은 승계 때 문을 다시 잠그는 것이 푼다.
--- **쓰는 회차만 건다** (아래). 아무것도 안 쓰는 크레딧 0 호출이 매 틱 걸면 승계 봉인이 표의 남은 수명을
--- 마지막 적용의 나이로 읽어 새 리더의 첫 적용이 밀린다.
-local function sealFence()
-    redis.call('SET', KEYS[3], string.format('%.0f', fence), 'PX', fenceTtl)
-end
+-- 수명을 쓴다. 길어서 생기는 영구 차단은 승계 때 문을 다시 잠그는 것이 푼다. 거는 자리는 아래 되살림 뒤다.
 
 
 -- **없는 것과 깨진 것을 가른다.** 둘 다 -1 로 접으면 큐 맨 앞부터 다시 세어
@@ -98,12 +93,13 @@ local written = tonumber(ARGV[4])
 local healed = false
 if written ~= nil and written == written and written ~= math.huge and written > current then
     current = math.floor(written)
-    sealFence()
     redis.call('SET', KEYS[2], string.format('%.0f', current))
     healed = true
 end
-if admit > 0 and not healed then
-    sealFence()
+-- **크레딧이 있거나 되살린 회차만 건다.** 크레딧 0 에 되살릴 것도 없는 호출이 매 틱 걸면, 승계 봉인이 표의 남은
+-- 수명을 마지막 적용의 나이로 읽어 새 리더의 첫 적용이 밀린다.
+if admit > 0 or healed then
+    redis.call('SET', KEYS[3], string.format('%.0f', fence), 'PX', fenceTtl)
 end
 
 if admit == 0 then

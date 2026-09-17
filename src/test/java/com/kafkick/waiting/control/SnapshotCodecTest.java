@@ -247,6 +247,44 @@ class SnapshotCodecTest {
      * <b>라우팅 목록이 스냅샷에 실린다.</b> 보고는 리더만 읽으므로, 요청 경로가
      * 레디스를 안 치려면(불변식 1) 판정 재료에 실어 보내야 한다.
      */
+    /**
+     * <b>입장 커서를 싣고 읽는다</b> (CY-944). 노드가 등록 점수의 하한으로 쓴다 — 커서의 마지막 쓰기가 빠진 창에 선
+     * 사람이 되살림 뒤 크레딧 없이 들어가지 않게 한다.
+     */
+    @Test
+    @DisplayName("입장_커서를_싣고_읽는다")
+    void 입장_커서를_싣고_읽는다() {
+        SnapshotCodec codec = SnapshotCodec.create();
+        GatewaySnapshot 원본 = new GatewaySnapshot(
+                Map.of("c1", CouponState.idle(500), "c2", CouponState.idle(500)), new SnapshotMeta(10, 1),
+                Instant.ofEpochSecond(1_787_184_000L), List.of(),
+                Map.of("c1", 1_789_651_782_355_052L));
+
+        GatewaySnapshot 되돌린 = codec.decode(codec.encode(원본,
+                CreditSmoother.Snapshot.empty(), QueueingHysteresis.Snapshot.empty()));
+
+        assertThat(되돌린.cursorOf("c1")).as("16자리 마이크로초가 안 접힌다").isEqualTo(1_789_651_782_355_052L);
+        assertThat(되돌린.cursorOf("c2")).as("안 실은 쿠폰은 모른다").isEqualTo(GatewaySnapshot.NO_CURSOR);
+        assertThat(되돌린.coupons()).as("커서 칸은 쿠폰으로 안 센다").containsOnlyKeys("c1", "c2");
+    }
+
+    /** 옛 리더는 커서를 안 싣는다. 깨진 값도 정상 입력이다 — 모르는 것으로 읽는다. */
+    @Test
+    @DisplayName("커서가_없거나_깨졌으면_모르는_것으로_읽는다")
+    void 커서가_없거나_깨졌으면_모르는_것으로_읽는다() {
+        GatewaySnapshot s = SnapshotCodec.create().decode(해시(
+                "#credit", "1000", "#nodes", "2", "#published", "1787184000",
+                "#a:c2", "abc",
+                "#a:c3", "-5",
+                "c1", "ADAPTIVE:IDLE:0:500:0",
+                "c2", "ADAPTIVE:IDLE:0:500:0",
+                "c3", "ADAPTIVE:IDLE:0:500:0"));
+
+        assertThat(s.cursorOf("c1")).isEqualTo(GatewaySnapshot.NO_CURSOR);
+        assertThat(s.cursorOf("c2")).isEqualTo(GatewaySnapshot.NO_CURSOR);
+        assertThat(s.cursorOf("c3")).isEqualTo(GatewaySnapshot.NO_CURSOR);
+    }
+
     @Test
     @DisplayName("라우팅_목록을_싣고_읽는다")
     void 라우팅_목록을_싣고_읽는다() {

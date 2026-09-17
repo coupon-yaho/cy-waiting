@@ -547,6 +547,39 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         assertThat(들인_수).isZero();
     }
 
+    /**
+     * <b>승계한 리더는 발행된 커서로 되살린다</b> (CY-944). 복제본 승격은 리더 리스도 흔들어 승계를 부르기 쉽고, 새 리더는
+     * 기억이 없어 못 되살린다. 옛 리더가 발행한 커서가 노드마다 남아 있으니 그것으로 기억을 채운다.
+     */
+    @Test
+    @DisplayName("승계한_리더는_발행된_커서로_되살린다")
+    void 승계한_리더는_발행된_커서로_되살린다() {
+        줄_세운다("c1", 10, 20, 30, 40);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        Map<String, Long> 발행된_커서 = port.writtenCursors();
+        redis.delete(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT);
+
+        AllocationRedisPort 새_리더 = AllocationRedisPort.of(redis, SHARDS);
+        새_리더.seedWritten(발행된_커서);
+        새_리더.apply(new Grant("c1", 0), 임기 + 1).block(WAIT);
+
+        assertThat(발행된_커서).as("전제 — 쓴 커서를 내보낸다").containsExactly(entry("c1", 20L));
+        assertThat(redis.opsForValue().get(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT))
+                .as("기억 없이 승계했어도 되살린다").isEqualTo("20");
+    }
+
+    /** 씨앗은 기억을 낮추지 않는다. 낡은 스냅샷이 앞선 기억을 덮으면 그 사이로 감긴 커서를 못 본다. */
+    @Test
+    @DisplayName("낡은_씨앗은_앞선_기억을_안_낮춘다")
+    void 낡은_씨앗은_앞선_기억을_안_낮춘다() {
+        줄_세운다("c1", 10, 20, 30, 40);
+        port.apply(new Grant("c1", 3), 임기).block(WAIT);
+
+        port.seedWritten(Map.of("c1", 10L, "c9", 70L));
+
+        assertThat(port.writtenCursors()).containsOnly(entry("c1", 30L), entry("c9", 70L));
+    }
+
     /** 사라진 것만이 아니다. 복제본 승격은 흔히 옛 값을 남긴다. */
     @Test
     @DisplayName("옛_값으로_돌아간_임계도_되살린다")

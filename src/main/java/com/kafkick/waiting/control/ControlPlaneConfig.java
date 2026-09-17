@@ -268,7 +268,10 @@ public class ControlPlaneConfig {
             // 한 번도 못 본다. 램프 출발점은 발행된 몫이되 낡으면 한산 통과가 살아 있는
             // 최소 몫 — 0 에서 오르면 한산한 쿠폰이 줄을 서고, 낡은 큰 값은 브레이크를 푼다.
             SnapshotHolder.View seen = holder.view();
-            round.leadershipAcquired(startingCredit(seen, holder, registry));
+            // **나간 매진을 스냅샷에서 이어 받는다** (CY-935). 표시가 리더 메모리라 승계에서
+            // 사라지는데, 상한 중에는 발행이 늘 거부돼 새 리더가 다시 채울 길이 없다.
+            round.leadershipAcquired(startingCredit(seen, holder, registry),
+                    publishedSoldOut(seen));
             // **매진 유예를 처음부터 준다.** 얼어 있던 셈을 이어 쓰면 유예가
             // 설정값이 아니라 "내가 리더였던 틱 수" 가 되고, 그 둘은 장애
             // 중에 갈린다.
@@ -368,6 +371,17 @@ public class ControlPlaneConfig {
      *
      * @return 기동 직후면 음수(램프 없음), 그 밖에는 발행 몫이나 한산 통과 최소 몫 이하
      */
+    /** 발행된 스냅샷이 매진이라고 적은 쿠폰들. 노드가 이미 받아 간 사실이라 그 줄은 지워도 된다. */
+    private List<String> publishedSoldOut(SnapshotHolder.View seen) {
+        if (!seen.snapshot().isPublished()) {
+            return List.of();
+        }
+        return seen.snapshot().coupons().entrySet().stream()
+                .filter(each -> each.getValue().soldOut())
+                .map(Map.Entry::getKey)
+                .toList();
+    }
+
     long startingCredit(SnapshotHolder.View seen, SnapshotHolder holder,
             GatewayRegistry registry) {
         long floor = CapacityCollector.idleMinimum(registry.count());

@@ -32,6 +32,8 @@ import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import com.kafkick.waiting.domain.admission.CircuitState;
+import com.kafkick.waiting.gateway.CircuitStateReader;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
@@ -209,6 +211,10 @@ class RedisFullStopScenarioTest {
     /** 자리는 응답에 안 실린다. RC5 를 재려면 줄을 직접 봐야 한다. */
     @Autowired
     private ReactiveStringRedisTemplate redis;
+
+    /** 회복 구간의 서킷. <b>CI 에서만 벌어지는 회차의 단서다</b> — 열린 채면 뒷단에 하나도 안 닿는다 (CY-934). */
+    @Autowired
+    private CircuitStateReader 서킷;
 
     private WebTestClient 클라이언트() {
         return WebTestClient.bindToServer()
@@ -421,6 +427,7 @@ class RedisFullStopScenarioTest {
     @DisplayName("C1_레디스가_죽었다_살아난다")
     void C1_레디스가_죽었다_살아난다() {
         BackendRpsRecorder 유입 = new BackendRpsRecorder(뒷단::받은_수);
+        CircuitState[] 회복_서킷 = new CircuitState[1];
         List<Integer> 정상_상태 = new ArrayList<>();
         List<Integer> 장애중_상태 = new ArrayList<>();
         List<Integer> 회복_상태 = new ArrayList<>();
@@ -468,6 +475,9 @@ class RedisFullStopScenarioTest {
                     // 회귀는 여기서만 보인다 — 응답도 판정에 넣는다.
                     확인_뒤_상태.addAll(여러_번_시도한다(보낼_수, 5_000));
                     회복_상태.addAll(확인_뒤_상태);
+                    // **판정이 빨개진 뒤에는 못 읽는다.** 서킷은 그때 이미 닫혀 있을 수 있어,
+                    // 회복 창이 끝나는 이 자리에서 집어 둔다.
+                    회복_서킷[0] = 서킷.now();
                     유입.sample(지금.plusSeconds(4));
                 })
                 // **진입 판정은 주입 직후, 유지 구간이 시작되기 전이다.**
@@ -490,7 +500,8 @@ class RedisFullStopScenarioTest {
                         // RC6 — 회복 뒤 유입이 정상 수준으로 돌아온다.
                         // 분포를 같이 싣는다. CI 에서만 간헐로 벌어져 응답 코드가 원인을 가르는 유일한 단서다 (CY-934).
                         RecoveryCriteria.notConverged("판정 통과 비율", 통과_비율(정상_상태),
-                                통과_비율(회복_상태), "회복 분포 %s".formatted(분포(회복_상태))),
+                                통과_비율(회복_상태), "회복 분포 %s · 서킷 %s"
+                                        .formatted(분포(회복_상태), 회복_서킷[0])),
                         // **RC5 는 여기서 못 잰다** (CY-809). 픽스처가
                         // `--appendonly no` 로 띄우므로 컨테이너를 끊었다 붙이면
                         // 줄이 통째로 사라진다. 계획서가 요구하는 "큐 순번 전원

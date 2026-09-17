@@ -7,6 +7,8 @@ import com.kafkick.waiting.control.Leadership;
 import com.kafkick.waiting.domain.allocation.Grant;
 import io.lettuce.core.api.StatefulRedisConnection;
 import java.time.Duration;
+import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import org.awaitility.Awaitility;
 import org.awaitility.core.ConditionTimeoutException;
@@ -33,6 +35,9 @@ import org.springframework.test.context.DynamicPropertySource;
 class MemoryLimitHandoverScenarioTest {
 
     private static final String COUPON = "c22b-queued";
+
+    /** 매진된 채 줄만 남은 쿠폰. 상한을 푸는 유일한 경로가 이 줄을 지우는 것이다 (CY-935). */
+    private static final String 매진_쿠폰 = "c22b-soldout";
 
     /** 창 동안 다 빠지지 않을 만큼. 빠지면 멎음이 상한 때문인지 줄 때문인지 못 가른다. */
     private static final int 줄_길이 = 3_000;
@@ -86,12 +91,20 @@ class MemoryLimitHandoverScenarioTest {
         String[] 유지_끝_임계 = new String[1];
         double[] 앞_초과 = new double[1];
         boolean[] 재개했다 = new boolean[1];
+        boolean[] 상한_중_지웠다 = new boolean[1];
+        long[] 남은_줄 = new long[1];
+        long[] 지우기_전_줄 = new long[1];
+        long[] 임기_기록 = new long[1];
 
         ChaosScenario.named("C22b 상한 중 승계")
                 .baseline(() -> {
                     연결.sync().sadd(RedisKeys.ACTIVE_COUPONS, COUPON);
                     연결.sync().set(RedisKeys.stock(COUPON), "100000");
                     QueueSeed.줄을_세운다(연결, COUPON, 줄_길이);
+                    // 매진인데 줄만 남은 쿠폰. 정리가 안 돌면 이 줄이 메모리를 잡은 채로 남는다.
+                    연결.sync().sadd(RedisKeys.ACTIVE_COUPONS, 매진_쿠폰);
+                    연결.sync().set(RedisKeys.stock(매진_쿠폰), "0");
+                    QueueSeed.줄을_세운다(연결, 매진_쿠폰, 줄_길이);
                     Awaitility.await().atMost(기다림).until(leadership::isLeader);
                     // 평시에 들이고 있어야 상한 중 멎음이 뜻을 가진다.
                     Awaitility.await().atMost(기다림)
@@ -123,6 +136,17 @@ class MemoryLimitHandoverScenarioTest {
                     표_수명_ms[0] = 연결.sync().pttl(RedisKeys.SNAPSHOT_FENCE);
                 })
                 .duringFault(() -> {
+                    // **상한 중에 실제로 지워지는지 본다.** 유예는 폴링 최대 간격보다 길어 회차가
+                    // 창 안에 못 채운다 — 지우는 쓰기 자체가 거부되지 않는지를 여기서 잰다.
+                    long 임기 = leadership.fence();
+                    임기_기록[0] = 임기;
+                    // **지우기 전에 줄이 있었는지 본다.** 없으면 스크립트가 1 을 돌려줘도 아무것도 안 잰다.
+                    지우기_전_줄[0] = 연결.sync().exists(RedisKeys.queue(매진_쿠폰, 1, 0));
+                    port.claimSoldOutQueues(List.of(매진_쿠폰), 임기).block(기다림);
+                    상한_중_지웠다[0] = Objects.requireNonNullElse(
+                            port.dropSoldOutQueues(List.of(매진_쿠폰), 임기).block(기다림),
+                            List.<String>of()).contains(매진_쿠폰);
+                    남은_줄[0] = 연결.sync().exists(RedisKeys.queue(매진_쿠폰, 1, 0));
                     Awaitility.await().pollDelay(유지_창).atMost(유지_창.plusSeconds(1)).until(() -> true);
                     유지_끝_임계[0] = 연결.sync().get(RedisKeys.admitted(COUPON, 1, 0));
                     유지_끝_발행_표[0] = 연결.sync().get(RedisKeys.SNAPSHOT_FENCE);
@@ -168,7 +192,15 @@ class MemoryLimitHandoverScenarioTest {
                         // 발행이 거부되는 동안 표의 수명이 끝나면 봉인이 사라진 채 풀린다.
                         Long.toString(새_임기[0]).equals(유지_끝_발행_표[0]) ? Optional.empty()
                                 : Optional.of("상한 %s 끝에 발행 봉인이 사라졌다 — 표 %s"
-                                        .formatted(유지_창, 유지_끝_발행_표[0]))))
+                                        .formatted(유지_창, 유지_끝_발행_표[0])),
+                        // 지우는 쪽은 메모리를 줄인다. 여기가 막히면 한도를 푸는 경로가 없다 (CY-935).
+                        지우기_전_줄[0] == 1 ? Optional.empty()
+                                : Optional.of("전제 — 지우기 전에 매진 줄이 없었다"),
+                        상한_중_지웠다[0] ? Optional.empty()
+                                : Optional.of("상한 중에 매진 큐를 못 지웠다 — 임기 %d"
+                                        .formatted(임기_기록[0])),
+                        남은_줄[0] == 0 ? Optional.empty()
+                                : Optional.of("지웠다는데 줄 키가 남았다 — exists %d".formatted(남은_줄[0]))))
                 .assertRecovery(() -> RecoveryCriteria.violations(
                         유령을_막았다[0] ? Optional.empty() : Optional.of("풀린 순간 옛 임기의 적용이 통과했다"),
                         재개했다[0] ? Optional.empty()

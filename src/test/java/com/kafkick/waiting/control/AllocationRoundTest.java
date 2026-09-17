@@ -386,6 +386,122 @@ class AllocationRoundTest {
     }
 
     /**
+     * <b>유예를 이미 채운 줄은 발행이 못 나가도 지운다</b> (CY-935).
+     *
+     * <p>상한에 닿으면 발행의 첫 쓰기가 거부된다. 정리를 발행에 묶어 두면 줄을 지워 메모리를
+     * 줄일 유일한 경로가 같이 막혀, 운영자가 한도를 올려야만 풀린다.
+     */
+    @Test
+    @DisplayName("발행이_실패해도_유예를_채운_줄은_지운다")
+    void 발행이_실패해도_유예를_채운_줄은_지운다() {
+        List<String> 지운_것 = new ArrayList<>();
+        AtomicBoolean 발행이_된다 = new AtomicBoolean(true);
+        SoldOutCleanup cleanup = SoldOutCleanup.of(1, new SimpleMeterRegistry());
+        AllocationRound round = AllocationRound.of(
+                () -> true,
+                () -> Mono.just(new TimedDemands(
+                        List.of(new CouponDemand("c1", 0, 0, QueueMode.ADAPTIVE)), 읽은_시각)),
+                () -> 1_000, () -> 1,
+                grant -> Mono.just(grant.credit()),
+                hash -> 발행이_된다.get() ? Mono.empty()
+                        : Mono.error(new IllegalStateException("상한이라 못 쓴다")),
+                () -> Instant.ofEpochSecond(읽은_시각),
+                () -> Mono.just(CreditSmoother.of(1.0)),
+                SnapshotCodec.create(), () -> 0L, Optional::empty,
+                cleanup, ids -> {
+                    지운_것.addAll(ids);
+                    return Mono.just(ids);
+                }, ids -> Mono.just(ids), 안_걷는_스위퍼(), () -> false, () -> CircuitState.CLOSED);
+
+        // 유예를 채울 때까지는 발행이 나간다. 여기까지는 지울 때가 아니다.
+        round.run().block();
+        assertThat(지운_것).as("유예 전").isEmpty();
+
+        발행이_된다.set(false);
+        round.run().onErrorResume(e -> Mono.empty()).block();
+
+        assertThat(지운_것).as("유예를 채운 줄").containsExactly("c1");
+    }
+
+    /**
+     * <b>안 나간 매진의 셈을 실패 회차가 지우지 않는다</b> (CY-935). 걸러 낸 지도를 정리에 넘기므로,
+     * 거기 없는 쿠폰의 유예 셈까지 같이 버리면 상한이 길어질수록 아무도 유예를 못 채운다.
+     */
+    @Test
+    @DisplayName("실패_회차가_안_나간_매진의_셈을_안_버린다")
+    void 실패_회차가_안_나간_매진의_셈을_안_버린다() {
+        List<String> 지운_것 = new ArrayList<>();
+        AtomicBoolean 발행이_된다 = new AtomicBoolean(true);
+        SoldOutCleanup cleanup = SoldOutCleanup.of(1, new SimpleMeterRegistry());
+        AllocationRound round = AllocationRound.of(
+                () -> true,
+                () -> Mono.just(new TimedDemands(List.of(
+                        new CouponDemand("c1", 0, 0, QueueMode.ADAPTIVE),
+                        new CouponDemand("c2", 0, 0, QueueMode.ADAPTIVE)), 읽은_시각)),
+                () -> 1_000, () -> 1,
+                grant -> Mono.just(grant.credit()),
+                hash -> 발행이_된다.get() ? Mono.empty()
+                        : Mono.error(new IllegalStateException("상한이라 못 쓴다")),
+                () -> Instant.ofEpochSecond(읽은_시각),
+                () -> Mono.just(CreditSmoother.of(1.0)),
+                SnapshotCodec.create(), () -> 0L, Optional::empty,
+                cleanup, ids -> {
+                    지운_것.addAll(ids);
+                    return Mono.just(ids);
+                }, ids -> Mono.just(ids), 안_걷는_스위퍼(), () -> false, () -> CircuitState.CLOSED);
+
+        // c1 만 발행에 실렸다고 두고 시작한다. c2 는 노드가 아직 매진을 모르는 쿠폰이다.
+        round.leadershipAcquired(-1, List.of("c1"));
+        발행이_된다.set(false);
+        for (int i = 0; i < 4; i++) {
+            round.run().onErrorResume(e -> Mono.empty()).block();
+        }
+
+        assertThat(지운_것).as("나간 매진만, 한 번만 지운다").containsExactlyInAnyOrder("c1");
+        // **c2 의 셈은 남아 있어야 한다.** 실패 회차마다 버리면 상한이 풀린 뒤에도 유예를 못 채운다.
+        발행이_된다.set(true);
+        round.run().block();
+        round.run().block();
+
+        assertThat(지운_것).as("발행이 살아나면 c2 도 유예를 채운다")
+                .containsExactlyInAnyOrder("c1", "c2");
+    }
+
+    /**
+     * <b>승계해도 정리가 죽지 않는다</b> (CY-935). 표시는 리더 메모리라 승계에서 사라지는데, 상한 중에는
+     * 발행이 늘 거부돼 새 리더가 다시 채울 길이 없다 — 발행된 스냅샷에서 씨앗을 받는다.
+     */
+    @Test
+    @DisplayName("승계_뒤에도_이미_나간_매진은_지운다")
+    void 승계_뒤에도_이미_나간_매진은_지운다() {
+        List<String> 지운_것 = new ArrayList<>();
+        SoldOutCleanup cleanup = SoldOutCleanup.of(1, new SimpleMeterRegistry());
+        AllocationRound round = AllocationRound.of(
+                () -> true,
+                () -> Mono.just(new TimedDemands(
+                        List.of(new CouponDemand("c1", 0, 0, QueueMode.ADAPTIVE)), 읽은_시각)),
+                () -> 1_000, () -> 1,
+                grant -> Mono.just(grant.credit()),
+                hash -> Mono.error(new IllegalStateException("상한이라 못 쓴다")),
+                () -> Instant.ofEpochSecond(읽은_시각),
+                () -> Mono.just(CreditSmoother.of(1.0)),
+                SnapshotCodec.create(), () -> 0L, Optional::empty,
+                cleanup, ids -> {
+                    지운_것.addAll(ids);
+                    return Mono.just(ids);
+                }, ids -> Mono.just(ids), 안_걷는_스위퍼(), () -> false, () -> CircuitState.CLOSED);
+
+        // 앞 리더가 발행한 스냅샷이 c1 을 매진으로 적었다. 노드는 이미 그것을 받아 갔다.
+        round.leadershipAcquired(-1, List.of("c1"));
+        // 발행은 내내 거부된다. 그래도 유예는 돌고, 채운 줄은 지워야 한다.
+        round.run().onErrorResume(e -> Mono.empty()).block();
+        assertThat(지운_것).as("유예 전").isEmpty();
+        round.run().onErrorResume(e -> Mono.empty()).block();
+
+        assertThat(지운_것).as("승계 뒤에도 지운다").containsExactly("c1");
+    }
+
+    /**
      * <b>리더가 아니면 안 지웁니다.</b>
      *
      * <p>회차 안에서 유일하게 되돌릴 수 없는 쓰기입니다. 회차가 도는 사이에 리스가
@@ -1534,7 +1650,9 @@ class AllocationRoundTest {
         터진다.set(false);
         round.run().block();
 
-        assertThat(센_쿠폰).as("실패 뒤 첫 회차에 한 번").containsExactly(List.of("c1"));
+        // **인자까지 못 박는다.** 회차의 목록을 다시 넘기면 수요 읽기를 기다리게 돼 직렬로 돌아간다 —
+        // 읽는 쪽이 자기가 쓴 임계와 합쳐 보므로 넘길 것이 없다 (CY-939).
+        assertThat(센_쿠폰).as("실패 뒤 첫 회차에 한 번, 목록은 비운 채").containsExactly(List.of());
         assertThat(round.rewoundCoupons()).isEqualTo(1);
         assertThat(round.rewoundEvents()).as("지나간 사건은 누적으로 센다").isEqualTo(1);
 
@@ -1569,7 +1687,7 @@ class AllocationRoundTest {
         느리다.set(false);
         round.run().block();
 
-        assertThat(센_쿠폰).containsExactly(List.of("c1"));
+        assertThat(센_쿠폰).as("취소 뒤 첫 회차에 한 번, 목록은 비운 채").containsExactly(List.of());
         assertThat(round.rewoundCoupons()).as("깨끗하면 0 이다 — NaN 이면 못 잰 것과 안 갈린다").isEqualTo(0);
         assertThat(round.rewoundEvents()).as("되감기 없는 회차는 사건이 아니다").isZero();
     }

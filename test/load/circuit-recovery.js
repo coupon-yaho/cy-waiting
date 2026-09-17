@@ -77,6 +77,9 @@ let member = 0;
  */
 const REQ_TIMEOUT = __ENV.REQ_TIMEOUT || '5s';
 
+/** k6 가 시한 초과에 붙이는 코드. 연결 실패(1211 계열)와 갈라야 죽은 대를 잘못 안 짚는다. */
+const TIMEOUT_CODE = 1050;
+
 /** 요청 인자. 시한을 한 곳에서 준다 — 자리마다 쓰면 하나를 빠뜨려도 안 보인다. */
 function params(extra) {
   return { headers: headers(extra), timeout: REQ_TIMEOUT };
@@ -98,7 +101,10 @@ function tally(r) {
   // 응답으로 세면 우리가 만든 자극이 회차를 무효로 만든다.
   if (r.status === 0) {
     gatewayDown.add(1);
-    if (r.request && r.request.url) {
+    // **시한 초과는 죽은 것이 아니다.** 자극이 지연이라 살아 있는 대도 늦을 수 있는데, 그것으로 명단에서
+    // 빼면 그 VU 가 멀쩡한 대에 영영 안 쏜다 — 회복 구간의 유입이 VU 마다 달라져 판정이 흔들린다.
+    // 붙지도 못한 것만 죽은 것으로 본다.
+    if (r.error_code !== TIMEOUT_CODE && r.request && r.request.url) {
       const hit = BASES.find((b) => r.request.url.indexOf(b) === 0);
       if (hit) {
         down[hit] = true;

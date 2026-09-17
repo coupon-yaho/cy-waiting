@@ -447,6 +447,7 @@ esac
 holders=${HOLDERS:-$(( RATE + 20 ))}
 BASE_URLS="$bases" RATE="$RATE" DURATION="${total_sec}s" COUPON="$COUPON" VUS="$vus" \
     HOLDERS="$holders" \
+    REQ_TIMEOUT="${REQ_TIMEOUT:-$(( FAULT_LATENCY_MS * 3 ))ms}" \
     k6 run --quiet --summary-export="$work/k6.json" test/load/circuit-recovery.js \
     >"$work/k6.log" 2>&1 &
 loadpid=$!

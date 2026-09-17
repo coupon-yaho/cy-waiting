@@ -16,14 +16,15 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Collection;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -54,8 +55,12 @@ public final class AllocationRound {
     /** 이번 회차가 되감기를 쟀는가. 잰 회차는 목록을 안 버린다. */
     private final AtomicBoolean rewindMeasured = new AtomicBoolean();
 
-    /** 매진이 발행에 실려 나간 쿠폰. 발행이 못 나간 회차는 이 줄만 지운다 (CY-935). */
-    private final Set<String> announced = new HashSet<>();
+    /**
+     * 매진이 발행에 실려 나간 쿠폰. 발행이 못 나간 회차는 이 줄만 지운다 (CY-935).
+     *
+     * <p><b>동시성 집합이다</b> — 채우는 곳은 발행 응답(레디스 스레드)이고 비우는 곳은 승계 콜백이다.
+     */
+    private final Set<String> announced = ConcurrentHashMap.newKeySet();
 
     /** 이탈자 청소. <b>멈추는 판단을 안에 들고 있다.</b> */
     private final QueueSweeper sweeper;
@@ -473,6 +478,17 @@ public final class AllocationRound {
      * @param publishedCredit 마지막으로 본 발행 몫. 모르면 음수 — 앞 임기 기준을 잇는다
      */
     public void leadershipAcquired(long publishedCredit) {
+        leadershipAcquired(publishedCredit, List.of());
+    }
+
+    /**
+     * 승계한다. <b>발행된 스냅샷의 매진 쿠폰을 씨앗으로 받는다</b> (CY-935) — 표시가 리더 메모리라
+     * 승계에서 사라지는데, 상한 중에는 발행이 늘 거부돼 새 리더가 그것을 다시 채울 길이 없다.
+     * 그러면 줄을 지워 메모리를 줄일 경로가 승계 한 번에 죽는다.
+     *
+     * @param publishedSoldOut 발행된 스냅샷이 매진이라고 적은 쿠폰들. 노드가 이미 받아 간 사실이다
+     */
+    public void leadershipAcquired(long publishedCredit, Collection<String> publishedSoldOut) {
         if (publishedCredit >= 0) {
             releaseRamp.resumeFrom(publishedCredit);
             // **원인을 적어 둔다.** 안 적으면 다음 회차의 램프 진입 로그가
@@ -486,9 +502,11 @@ public final class AllocationRound {
         smoother.set(null);
         interim.set(null);
         smoothedCredit = Double.NaN;
-        // 나간 매진 표시도 임기마다 비운다. 앞 임기에 나간 것을 이 임기가 나갔다고 읽으면,
-        // 승계 직후 아직 아무 노드도 못 받은 매진의 줄을 지운다.
+        // 나간 매진 표시는 발행된 스냅샷에서 다시 세운다. 앞 임기의 메모리를 이어 쓰면 아직 아무
+        // 노드도 못 받은 매진의 줄을 지우고, 통째로 비우면 상한 중 승계에서 정리가 영영 안 돈다.
         announced.clear();
+        announced.addAll(publishedSoldOut);
+
         // 되감기 신호도 임기마다 비운다. 앞 임기의 값이 이번 임기 것으로 읽힌다.
         rewoundCoupons = Double.NaN;
         roundFailed.set(false);

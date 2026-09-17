@@ -43,8 +43,12 @@ run_case() {
 # (`summary`·`enq`), 형식이 하나 바뀌면 나머지가 조용히 갈렸다.
 #
 # `$work` 는 부르는 쪽이 만든다 — 지우는 책임도 거기 있다.
+# **부르는 자리마다 다른 파일을 준다.** 이름을 그대로 쓰면 같은 이름의 두 번째 표본이 앞의 것을
+# 덮어, 경로를 변수에 잡아 둔 자리가 그 뒤로 엉뚱한 입력을 가리킨다 — 사례가 조용히 딴것을 잰다.
+fixture_seq=0
 fixture() {
-    local path=$work/$1
+    fixture_seq=$(( fixture_seq + 1 ))
+    local path=$work/$fixture_seq-$1
     printf '%s' "$2" > "$path"
     printf '%s' "$path"
 }

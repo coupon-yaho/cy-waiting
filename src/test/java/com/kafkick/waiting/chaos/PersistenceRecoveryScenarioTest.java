@@ -7,7 +7,7 @@ import io.lettuce.core.RedisException;
 import io.lettuce.core.api.StatefulRedisConnection;
 import java.time.Duration;
 import java.nio.charset.StandardCharsets;
-import java.time.Instant;
+import java.time.Clock;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -113,6 +113,9 @@ class PersistenceRecoveryScenarioTest {
     @Autowired
     private QueueToken 줄_토큰;
 
+    @Autowired
+    private Clock 시계;
+
     private WebTestClient 클라이언트() {
         return WebTestClient.bindToServer()
                 .baseUrl("http://localhost:" + port)
@@ -153,7 +156,7 @@ class PersistenceRecoveryScenarioTest {
                 .header("X-Member-Id", String.valueOf(member))
                 .header("X-Member-Grade", "GOLD")
                 .header("Queue-Token",
-                        줄_토큰.issue(COUPON, String.valueOf(member), Instant.now()))
+                        줄_토큰.issue(COUPON, String.valueOf(member), 시계.instant()))
                 .exchange()
                 .returnResult(byte[].class)
                 .getResponseBodyContent();

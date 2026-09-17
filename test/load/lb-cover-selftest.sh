@@ -47,6 +47,14 @@ PEAK_LATENCY_P99_MS=1 run_case "응답 기준 환경변수를 물려받지 않�
 run_case "기준선이 천장을 못 봤어도 그 칸까지 섰으면 감당" 0 "감당" \
     -- "$(steps lb_open.tsv "$(printf '8000\t7990\tok\t2')" "$(printf '16000\t15990\tok\t3')")" "$peak"
 
+# **멈춤의 원인이 LB 면 감당한 것이 아니다.** 기준선은 CPU 로만 본 것이라, 경유 회차가 LB 에서 막힌 칸을 못 가른다.
+lb_ok=$(steps lb_cause_ok.tsv "$(printf '16000\t15990\tok\t2')")
+run_case "경유 회차의 멈춤이 LB 면 판정 불가" 2 "판정 불가" \
+    -- "$lb_ok" "$peak" "$(fixture cause_lb.txt '원인: LB — 연결 한도에서 막혔다 (오류 3 건)')"
+run_case "멈춤이 게이트웨이면 감당" 0 "감당" \
+    -- "$lb_ok" "$peak" "$(fixture cause_gw.txt '원인: 게이트웨이 — 1 대 모두 코어 한도에 붙었다')"
+run_case "원인 파일이 없어도 유입만으로 판정한다" 0 "감당" -- "$lb_ok" "$peak"
+
 # 못 읽는 것은 감당했다고 적지 않는다.
 run_case "기준선에 선 칸이 없으면 판정 불가" 2 "판정 불가" \
     -- "$(steps lb_none.tsv "$(printf '4000\t2000\tok\t2')")" "$peak"

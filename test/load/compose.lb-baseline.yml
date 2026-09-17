@@ -1,0 +1,19 @@
+# 앞단 LB 기준선 스택. **LB 하나만 띄운다.**
+#
+# 게이트웨이·레디스를 같이 띄우면 그 코어가 기준선에 섞인다. 경유 회차의 LB 와 같은 이미지·코어 한도로 두어
+# 두 값을 뺄 수 있게 한다.
+#
+#   사용: docker compose -p lb-baseline -f compose.lb-baseline.yml up -d --wait
+services:
+  lb:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./lb/dummy.conf:/etc/nginx/nginx.conf:ro
+    cpus: ${LB_CPUS:-2}
+    ports:
+      - "18070:8070"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8070/lb/health"]
+      interval: 1s
+      timeout: 2s
+      retries: 20

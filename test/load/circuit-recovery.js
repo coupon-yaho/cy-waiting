@@ -14,7 +14,7 @@
 // 차례가 오면 표를 들고 다시 발급을 부른다.
 import http from 'k6/http';
 import { sleep } from 'k6';
-import { Counter } from 'k6/metrics';
+import { Counter, Rate } from 'k6/metrics';
 
 // 끊는 것도 줄 세우는 것도 판정이 낸 정상 동작이다 (O-7). 느린 구간의 503 을
 // 실패로 세면 이 시나리오가 자기 자극 때문에 빨개진다.
@@ -54,6 +54,12 @@ export const options = {
     dropped_iterations: ['count==0'],
     // 판정 밖 응답이 섞이면 배선이 어긋난 것이다. 안 걸면 전량이 그것이어도 초록이다.
     circuit_off_judgement: ['count==0'],
+    // **아무것도 안 잰 회차를 초록으로 끝내지 않는다.** 표를 들고 뒷단에 닿은 것이
+    // 하나도 없으면 회복 봉우리를 잴 재료가 없다.
+    circuit_redeemed: ['count>0'],
+    // **매달린 대는 죽은 대가 아니지만 정상도 아니다.** 시한 초과를 어느 계수에도
+    // 안 담으면, 게이트웨이가 붙은 채 안 답하는 회차가 조용히 초록으로 끝난다.
+    circuit_timeout_rate: ['rate<0.05'],
   },
 };
 
@@ -95,12 +101,14 @@ function headers(extra) {
 }
 
 const gatewayDown = new Counter('circuit_gateway_down');
+const timedOut = new Rate('circuit_timeout_rate');
 
 function tally(r) {
   // **연결 자체가 안 된 것은 판정이 아니다.** 죽인 리더로 간 요청이라, 판정 밖
   // 응답으로 세면 우리가 만든 자극이 회차를 무효로 만든다.
   if (r.status === 0) {
     gatewayDown.add(1);
+    timedOut.add(r.error_code === TIMEOUT_CODE);
     // **시한 초과는 죽은 것이 아니다.** 자극이 지연이라 살아 있는 대도 늦을 수 있는데, 그것으로 명단에서
     // 빼면 그 VU 가 멀쩡한 대에 영영 안 쏜다 — 회복 구간의 유입이 VU 마다 달라져 판정이 흔들린다.
     // 붙지도 못한 것만 죽은 것으로 본다.
@@ -112,6 +120,7 @@ function tally(r) {
     }
     return;
   }
+  timedOut.add(false);
   if (r.status === 200) {
     passed.add(1);
   } else if (r.status === 202) {

@@ -41,6 +41,9 @@ class QueueRedisPortTest extends RedisContainerSupport {
     private static final int SHARDS = 1;
     private static final Duration WAIT = Duration.ofSeconds(10);
     private static final String 등록_왕복 = QueueRedisPort.ENQUEUE_LATENCY;
+
+    /** 더블이 왕복 도중에 미는 시간. 잰 값이 이 값과 같아야 구간이 맞는 것이다. */
+    private static final Duration 걸린_시간 = Duration.ofMillis(37);
     private static final Instant 지금 = Instant.parse("2026-08-24T00:00:00Z");
 
     private static LettuceConnectionFactory factory;
@@ -322,8 +325,11 @@ class QueueRedisPortTest extends RedisContainerSupport {
     @Test
     @DisplayName("등록_왕복을_타이머에_남긴다")
     void 등록_왕복을_타이머에_남긴다() {
-        SimpleMeterRegistry 미터 = new SimpleMeterRegistry();
-        QueueRedisPort 잰다 = QueueRedisPort.of(redis, SHARDS, 미터);
+        // **시계를 주입한다.** 실시계로 재면 단언이 왕복 속도와 스케줄러 지연에 걸린다 — 더블이 왕복
+        // 도중에 시계를 밀어, 잰 값이 실제로 그 구간인지까지 못 박는다.
+        MockClock 시계 = new MockClock();
+        SimpleMeterRegistry 미터 = new SimpleMeterRegistry(SimpleConfig.DEFAULT, 시계);
+        QueueRedisPort 잰다 = QueueRedisPort.of(왕복이_걸리는_레디스(시계, 걸린_시간), SHARDS, 미터);
 
         잰다.enqueue(COUPON, "timer-1", QueuePort.NO_LIMIT, 지금).block(WAIT);
 
@@ -332,7 +338,8 @@ class QueueRedisPortTest extends RedisContainerSupport {
         // **block 은 값이 오면 돌아온다.** 마침 신호는 그 뒤에 오므로 그 자리에서 세면 0 일 때가 있다.
         표본을_기다린다(타이머, 1);
         assertThat(타이머.count()).as("왕복 한 번이 한 표본이다").isEqualTo(1);
-        assertThat(타이머.totalTime(TimeUnit.NANOSECONDS)).isPositive();
+        assertThat(타이머.totalTime(TimeUnit.MILLISECONDS))
+                .as("왕복 구간만 잰다").isEqualTo(걸린_시간.toMillis());
         // **분위수를 내는 타이머여야 한다.** 개수만 세면 착수 게이트가 읽을 값이 없다.
         assertThat(타이머.takeSnapshot().percentileValues())
                 .extracting(잰값 -> 잰값.percentile())
@@ -343,14 +350,15 @@ class QueueRedisPortTest extends RedisContainerSupport {
     @Test
     @DisplayName("실패한_왕복은_따로_센다")
     void 실패한_왕복은_따로_센다() {
-        SimpleMeterRegistry 미터 = new SimpleMeterRegistry();
+        MockClock 시계 = new MockClock();
+        SimpleMeterRegistry 미터 = new SimpleMeterRegistry(SimpleConfig.DEFAULT, 시계);
         // **아무도 안 듣는 포트로 보낸다.** 인자 검증은 왕복 전에 끝나 이 타이머가 셀 일이 아니다.
         LettuceConnectionFactory 끊긴_곳 = new LettuceConnectionFactory(
                 new RedisStandaloneConfiguration(REDIS.getHost(), 1),
                 LettuceClientConfiguration.builder().commandTimeout(Duration.ofSeconds(2)).build());
         끊긴_곳.afterPropertiesSet();
         QueueRedisPort 잰다 =
-                QueueRedisPort.of(new ReactiveStringRedisTemplate(끊긴_곳), SHARDS, 미터);
+                QueueRedisPort.of(왕복이_걸리는_레디스(끊긴_곳, 시계, 걸린_시간), SHARDS, 미터);
 
         try {
             // **구체 타입으로 못 박는다.** RuntimeException 으로 두면 빈 결과나 NPE 도 통과해,
@@ -361,7 +369,8 @@ class QueueRedisPortTest extends RedisContainerSupport {
             Timer 실패 = 미터.get(등록_왕복).tag("outcome", "error").timer();
             // **block 은 오류를 받고 돌아온다.** 표본은 그 뒤에 들어오므로 그 자리에서 세면 0 일 때가 있다.
             표본을_기다린다(실패, 1);
-            assertThat(실패.totalTime(TimeUnit.NANOSECONDS)).as("쓴 시간").isPositive();
+            assertThat(실패.totalTime(TimeUnit.MILLISECONDS))
+                    .as("실패도 그 구간을 쓴다").isEqualTo(걸린_시간.toMillis());
             assertThat(미터.get(등록_왕복).tag("outcome", "success").timer().count())
                     .as("성공과 안 섞는다").isZero();
         } finally {
@@ -393,6 +402,25 @@ class QueueRedisPortTest extends RedisContainerSupport {
             assertThat(미터.get(등록_왕복).tag("outcome", "error").timer().count())
                     .as("실패 칸에도 안 담긴다").isZero();
         });
+    }
+
+    /** 왕복 도중에 시계를 미는 레디스. 잰 값이 실제로 그 구간인지 못 박는다. */
+    private ReactiveStringRedisTemplate 왕복이_걸리는_레디스(MockClock 시계, Duration 걸린) {
+        return 왕복이_걸리는_레디스(factory, 시계, 걸린);
+    }
+
+    private ReactiveStringRedisTemplate 왕복이_걸리는_레디스(LettuceConnectionFactory 연결,
+            MockClock 시계, Duration 걸린) {
+        return new ReactiveStringRedisTemplate(연결) {
+            @Override
+            public <T> Flux<T> execute(RedisScript<T> script, List<String> keys, List<?> args) {
+                // **구독하자마자 민다.** 끝나는 자리에 두면 실패 경로에서 포트가 먼저 멈춰 0 이 찍힌다.
+                return Flux.defer(() -> {
+                    시계.add(걸린);
+                    return super.execute(script, keys, args);
+                });
+            }
+        };
     }
 
     /** 스크립트를 받아 놓고 아무것도 안 내는 레디스. 취소를 경합 없이 만든다. */

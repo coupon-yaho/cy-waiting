@@ -165,6 +165,14 @@ lib_case "낮은 유입에도 하한 50" 50 "$(peak_vus 100 20)"
 lib_case "유입이 정수가 아니면 0" 0 "$(peak_vus abc 20)"
 lib_case "시간이 0 이면 0" 0 "$(peak_vus 1000 0)"
 
+# 예열 수렴. 갓 뜬 한 대가 2 코어에서 500/초 예열을 p99 20초로 뒤집어써, 첫 칸이 예열 노릇을 했다.
+warm() { printf '{"metrics":{"http_req_duration":{"p(99)":%s}}}' "$1" > "$work/$2"; printf '%s' "$work/$2"; }
+peak_warm_converged "$(warm 42.0 warm-ok.json)" 100; lib_case "p99 가 선 아래면 수렴" 0 "$?"
+peak_warm_converged "$(warm 100.0 warm-edge.json)" 100; lib_case "선 정확히는 수렴" 0 "$?"
+peak_warm_converged "$(warm 20198.7 warm-cold.json)" 100; lib_case "선 위면 덜 됐다" 1 "$?"
+peak_warm_converged "$work/none.json" 100; lib_case "요약이 없으면 못 읽는다" 2 "$?"
+peak_warm_converged "$(warm 42.0 warm-bad.json)" abc; lib_case "선이 수가 아니면 못 읽는다" 2 "$?"
+
 # 요약의 두 모양. 하나만 보면 k6 판이 바뀌는 순간 전 회차가 판정 불가가 된다.
 flat=$work/flat.json
 printf '%s' '{"metrics":{"http_reqs":{"rate":1234.5},"http_req_duration":{"p(99)":9.5}}}' \

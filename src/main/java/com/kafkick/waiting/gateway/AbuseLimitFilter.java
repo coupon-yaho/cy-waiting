@@ -2,6 +2,7 @@ package com.kafkick.waiting.gateway;
 
 import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
 import com.kafkick.waiting.domain.admission.SecondWindowLimiter.AcquireResult;
+import com.kafkick.waiting.domain.admission.SecondWindowLimiter.Axis;
 import com.kafkick.waiting.domain.queue.EtaPolicy;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import com.kafkick.waiting.domain.net.IpLiteral;
@@ -69,7 +70,7 @@ public final class AbuseLimitFilter implements WebFilter {
 
     private static final PollIntervalPolicy POLL = PollIntervalPolicy.standard();
 
-    private final SecondWindowLimiter limiter = SecondWindowLimiter.withMaxKeys(MAX_KEYS);
+    private final SecondWindowLimiter limiter;
     private final TrustedProxies trusted;
     private final Clock clock;
     private final MeterRegistry meters;
@@ -78,6 +79,12 @@ public final class AbuseLimitFilter implements WebFilter {
 
     private AbuseLimitFilter(Clock clock, MeterRegistry meters, DoubleSupplier random,
             TrustedProxies trusted) {
+        this(clock, meters, random, trusted, SecondWindowLimiter.withMaxKeys(MAX_KEYS));
+    }
+
+    private AbuseLimitFilter(Clock clock, MeterRegistry meters, DoubleSupplier random,
+            TrustedProxies trusted, SecondWindowLimiter limiter) {
+        this.limiter = Objects.requireNonNull(limiter, "limiter 는 필수다");
         this.trusted = Objects.requireNonNull(trusted, "trusted 는 필수다");
         this.clock = Objects.requireNonNull(clock, "clock 은 필수다");
         this.meters = Objects.requireNonNull(meters, "meters 는 필수다");
@@ -93,6 +100,12 @@ public final class AbuseLimitFilter implements WebFilter {
 
     public static AbuseLimitFilter of(Clock clock, MeterRegistry meters, TrustedProxies trusted) {
         return new AbuseLimitFilter(clock, meters, trusted);
+    }
+
+    /** 리미터를 좁게 줘 포화를 만든다. <b>시험 자리다</b> — 운영은 키 상한이 십만이라 못 채운다. */
+    static AbuseLimitFilter withLimiter(Clock clock, MeterRegistry meters, DoubleSupplier random,
+            TrustedProxies trusted, SecondWindowLimiter limiter) {
+        return new AbuseLimitFilter(clock, meters, random, trusted, limiter);
     }
 
     /** 난수원을 받는다. 고정하지 못하면 흔들림이 실제로 붙었는지 못 잰다. */
@@ -118,25 +131,34 @@ public final class AbuseLimitFilter implements WebFilter {
             // 우회 통로가 된다 — 상한 없는 경로를 남기는 셈이다.
             return reject(exchange, "no-address");
         }
+        long ipCap = polling ? IP_POLL_CAP : IP_ISSUE_CAP;
         if (member == null) {
             // 형식 검증이 앞에서 걸렀어야 한다. 주소 상한만으로 간다.
-            return limiter.tryAcquire("abuse:i:" + ip,
-                    polling ? IP_POLL_CAP : IP_ISSUE_CAP, nowSec)
-                    ? chain.filter(exchange)
-                    : reject(exchange, "ip");
+            return byAddressOnly(exchange, chain, ip, ipCap, nowSec, "ip");
         }
         // **한 걸음에 둘 다 잡는다.** 따로 차감하면 뒤에서 거부됐을 때 앞의 몫이
         // 이미 깎여, 통과한 요청이 하나도 없는데 예산이 빈다.
         AcquireResult acquired = limiter.tryAcquireAll(
-                "abuse:m:" + member, polling ? MEMBER_POLL_CAP : MEMBER_ISSUE_CAP,
-                "abuse:i:" + ip, polling ? IP_POLL_CAP : IP_ISSUE_CAP, nowSec);
+                Axis.SECONDARY, "abuse:m:" + member,
+                polling ? MEMBER_POLL_CAP : MEMBER_ISSUE_CAP,
+                Axis.PRIMARY, "abuse:i:" + ip, ipCap, nowSec);
         return switch (acquired) {
             case ACQUIRED -> chain.filter(exchange);
             case COUPON_EXHAUSTED -> reject(exchange, "member");
             case GLOBAL_EXHAUSTED -> reject(exchange, "ip");
-            // 키가 상한에 닿았다. 남용과 구별이 안 되지만 열어 주면 그것이 곧 통로다.
-            case KEY_SATURATED -> reject(exchange, "saturated");
+            // **식별자 축이 찼으면 그 축을 접는다** (CY-925). 식별자에 서명이 없어 값을 바꿔가며
+            // 채울 수 있는데, 거절로 두면 채운 쪽이 아니라 새로 온 대기자가 막힌다. 주소 축은
+            // 신뢰 홉 검사로 닫혀 있어 그쪽만으로도 한 대의 처리량은 잡힌다.
+            case KEY_SATURATED -> byAddressOnly(exchange, chain, ip, ipCap, nowSec, "saturated");
         };
+    }
+
+    /** 식별자 축을 접고 주소 축만으로 본다. 여는 것이 아니라 축을 하나 줄이는 것이다. */
+    private Mono<Void> byAddressOnly(ServerWebExchange exchange, WebFilterChain chain,
+            String ip, long ipCap, long nowSec, String outcome) {
+        return limiter.tryAcquire(Axis.PRIMARY, "abuse:i:" + ip, ipCap, nowSec)
+                ? chain.filter(exchange)
+                : reject(exchange, outcome);
     }
 
     /**

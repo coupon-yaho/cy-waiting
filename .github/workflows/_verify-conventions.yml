@@ -110,6 +110,13 @@ jobs:
       - name: 최대치 자기검증
         run: test/load/peak-selftest.sh
 
+      # **증설 효율의 전제다.** 하네스가 못 만든 천장이 게이트웨이 천장으로 적히면 그 둘을 나눈 수가 계획서로 간다.
+      - name: 천장 원인 자기검증
+        run: test/load/bottleneck-selftest.sh
+
+      - name: 증설 효율 자기검증
+        run: test/load/scale-selftest.sh
+
       # **합성 프로브가 이 경로를 친다.** 정적 200 을 주면 뒷단이 느리거나 죽어
       # 있어도 서킷이 닫혀 회복이 거짓이 된다.
       - name: 뒷단 스텁 자기검증

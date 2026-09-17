@@ -16,6 +16,24 @@ cd "$(git rev-parse --show-toplevel)" || exit 1
 
 COMPOSE="docker compose -f test/load/compose.yml"
 
+# **코어 한도를 주면 천장 원인이 뜻을 갖는다.** 한도가 없으면 게이트웨이가 호스트 코어를 다 쓸 수
+# 있어, 게이트웨이가 붙는 것과 호스트가 마르는 것이 같은 일이 된다. 안 주면 옛 회차와 같은 조건으로 돈다.
+if [ -n "${GATEWAY_CPUS:-}" ]; then
+    COMPOSE="$COMPOSE -f test/load/compose.limits.yml"
+fi
+bottleneck_cpus=${GATEWAY_CPUS:-$(nproc)}
+
+# **게이트웨이 대수.** 여럿이면 유입을 고르게 나누고 판정 비율은 대마다 낸다.
+GATEWAYS=${GATEWAYS:-1}
+case "$GATEWAYS" in
+    ''|*[!0-9]*|0*|??????????*) echo "::error title=현재 최대치::GATEWAYS 는 아홉 자리 이하의 양의 정수여야 한다: '$GATEWAYS'"; exit 2 ;;
+esac
+# 표집기가 컨테이너 이름 앞머리로 우리 것만 고른다. compose 가 쓰는 프로젝트 이름과 같아야 한다.
+PROJECT=${COMPOSE_PROJECT_NAME:-load}
+if [ "$GATEWAYS" -gt 1 ]; then
+    COMPOSE="$COMPOSE -f test/load/compose.multi.yml"
+fi
+
 # peak.js 가 두 쿠폰을 박아 두고 있다. 여기만 바꾸면 다른 쿠폰을 비우고 이 쿠폰을
 # 때리게 된다 — 시나리오를 고칠 때 같이 고친다.
 COUPONS="c1 c2"
@@ -62,14 +80,33 @@ jar=${WAITING_JAR:-build/libs/waiting.jar}
 # **이미지를 먼저 짓는다.** compose 는 JAR 이 바뀌어도 있는 이미지를 그대로 쓴다.
 $COMPOSE build gateway backend >/dev/null 2>&1 || { echo "이미지를 못 지었다"; exit 2; }
 $COMPOSE rm -sf gateway warmup >/dev/null 2>&1
-$COMPOSE up -d --wait --wait-timeout 240 || { echo "스택을 못 세웠다"; exit 2; }
+$COMPOSE up -d --wait --wait-timeout 240 --scale gateway="$GATEWAYS" \
+    || { echo "스택을 못 세웠다"; exit 2; }
+
+# **실제로 열린 포트를 찾는다.** 범위로 열면 어느 대가 어느 포트를 받는지 순서가 안 정해진다. 박아 두면 한 대에만
+# 전부 보내면서 여럿에 나눠 보냈다고 적는다.
+bases=""
+for idx in $(seq 1 "$GATEWAYS"); do
+    port=$($COMPOSE port --index "$idx" gateway 8080 2>/dev/null | sed 's/.*://')
+    case "$port" in
+        ''|*[!0-9]*) echo "게이트웨이 $idx 의 포트를 못 찾았다"; exit 2 ;;
+    esac
+    bases="${bases:+$bases,}http://localhost:$port"
+done
+export BASE_URLS=$bases
+echo "게이트웨이 ${GATEWAYS}대: $bases"
 
 rm -rf "$OUT_DIR"; mkdir -p "$OUT_DIR"
 : > "$OUT_TABLE"
 
+# **대마다 따로 긁는다.** 파일은 `<경로>.<대 번호>` 다. 못 긁은 대는 빈 파일로 남고 판정기가 판정 불가로 낸다.
 metrics() {
-    $COMPOSE exec -T gateway wget -qO- http://localhost:8081/actuator/prometheus 2>/dev/null \
-        > "$1"
+    local idx
+    for idx in $(seq 1 "$GATEWAYS"); do
+        $COMPOSE exec -T --index "$idx" gateway \
+            wget -qO- http://localhost:8081/actuator/prometheus 2>/dev/null > "$1.$idx" \
+            || : > "$1.$idx"
+    done
 }
 
 # **줄 키를 다 지운다.** 셋만 지우면 이탈 기록과 생존 신호와 배분 펜스가 앞
@@ -106,23 +143,58 @@ echo "현재 최대치 회차 · 사다리 [$RATES] · 회차당 $DURATION"
 # 응답 기준을 걸었을 때 천장이 예열 자리로 잡힌다 (O-5 가 같은 이유로 나왔다).
 warm_rate=${WARMUP_RATE:-500}
 warm_dur=${WARMUP_DURATION:-20s}
+# **예열은 수렴할 때까지 되풀이한다.** 2 코어 한 대는 500/초 첫 예열을 p99 20초로 뒤집어써, 그 뒤 첫 칸이
+# 예열 노릇을 했다.
+warm_p99_ms=${WARMUP_P99_MS:-100}
+warm_rounds=${WARMUP_ROUNDS:-5}
+# 숫자가 아니면 횟수 비교가 늘 거짓이라 수렴 안 하는 예열이 끝없이 돈다.
+case "$warm_rounds" in
+    ''|*[!0-9]*|0*|??????????*) echo "::error title=현재 최대치::WARMUP_ROUNDS 는 아홉 자리 이하의 양의 정수여야 한다: '$warm_rounds'"; exit 2 ;;
+esac
 if [ "$warm_rate" != 0 ]; then
-    echo "── 예열 ${warm_rate}/초 · ${warm_dur} (표에 안 넣는다)"
-    empty_queues
-    wait_idle || { echo "::error title=현재 최대치::줄 모드가 안 꺼진다"; exit 2; }
-    RATE=$warm_rate DURATION=$warm_dur k6 run \
-        --summary-export="$OUT_DIR/k6-warmup.json" test/load/peak.js \
-        > "$OUT_DIR/k6-warmup.log" 2>&1
-    # **예열이 돌았는지 본다.** 안 돌면 첫 회차가 갓 뜬 JVM 을 그대로 재는데,
-    # 예열을 넣은 이유가 정확히 그것을 표에서 빼는 것이다. 조용히 넘기면
-    # 사다리의 첫 칸이 늘 느리고 그 이유를 아무도 모른다.
-    if [ -z "$(peak_summary_value "$OUT_DIR/k6-warmup.json" rate)" ]; then
-        echo "::error title=현재 최대치::예열 회차가 안 돌았다 — 첫 회차가 예열을 뒤집어쓴다"
+    warm_vus=${VUS:-$(peak_vus "$warm_rate" "$(peak_duration_sec "$warm_dur")")}
+    if [ "$warm_vus" = 0 ]; then
+        echo "::error title=현재 최대치::예열 '$warm_rate/초 · $warm_dur' 로 VU 풀을 못 잡는다"
         exit 2
     fi
+    round=1
+    while :; do
+        echo "── 예열 ${warm_rate}/초 · ${warm_dur} · ${round} 번째 (표에 안 넣는다)"
+        empty_queues
+        wait_idle || { echo "::error title=현재 최대치::줄 모드가 안 꺼진다"; exit 2; }
+        # 앞 번의 요약을 남기면 k6 가 못 뜬 번에 그 p99 를 읽는다.
+        rm -f "$OUT_DIR/k6-warmup.json"
+        VUS=$warm_vus RATE=$warm_rate DURATION=$warm_dur k6 run \
+            --summary-export="$OUT_DIR/k6-warmup.json" test/load/peak.js \
+            > "$OUT_DIR/k6-warmup.log" 2>&1
+        peak_warm_converged "$OUT_DIR/k6-warmup.json" "$warm_p99_ms"
+        case $? in
+            0) break ;;
+            # **예열이 돌았는지 본다.** 안 돌면 첫 회차가 갓 뜬 JVM 을 그대로 잰다.
+            2) echo "::error title=현재 최대치::예열 회차가 안 돌았다 — 첫 회차가 예열을 뒤집어쓴다"; exit 2 ;;
+        esac
+        echo "    예열 p99 $(peak_summary_value "$OUT_DIR/k6-warmup.json" p99)ms — ${warm_p99_ms}ms 위라 한 번 더"
+        if [ "$round" -ge "$warm_rounds" ]; then
+            echo "::error title=현재 최대치::예열이 ${warm_rounds} 번에도 수렴 안 했다 — 예열 유입을 낮춘다"
+            exit 2
+        fi
+        round=$((round + 1))
+    done
 fi
 
 printf '# 요청유입\t실측유입\t판정\t응답p99ms\n' >> "$OUT_TABLE"
+
+# **표집기는 정지 파일로 멈춘다.** 러너가 중간에 끝나면 루프가 남아 다음 실행의 호스트 유휴를 깎는다. 돌던
+# 한 바퀴는 마치므로 k6 뒤 표본 한 벌이 붙는데, 그것은 판정기의 가운데 값이 흡수한다.
+sampler=""
+stop_sampler() {
+    [ -n "$sampler" ] || return 0
+    touch "$cpu.stop"
+    wait "$sampler" 2>/dev/null
+    sampler=""
+}
+trap stop_sampler EXIT
+trap 'exit 130' INT TERM
 
 for rate in $RATES; do
     echo "── 요청 유입 ${rate}/초"
@@ -137,11 +209,30 @@ for rate in $RATES; do
     summary=$OUT_DIR/k6-$rate.json
     log=$OUT_DIR/k6-$rate.log
 
+    cpu=$OUT_DIR/cpu-$rate.tsv
+
+    # 풀을 유입에 맞춘다. 고정 2000 이면 낮은 칸에서 폴링 갈래가 표 없이 돌아 임계가 깨진다.
+    vus=${VUS:-$(peak_vus "$rate" "$DURATION_SEC")}
+    if [ "$vus" = 0 ]; then
+        echo "::error title=현재 최대치::유입 '$rate' 로 VU 풀을 못 잡는다 — 정수여야 한다"
+        exit 2
+    fi
+
     metrics "$before"
-    RATE=$rate DURATION=$DURATION k6 run --summary-export="$summary" \
+    # 정지 파일은 띄우기 전에 여기서 지운다. 자식이 지우면 곧바로 끝난 회차의 정지 신호를 먹는다.
+    rm -f "$cpu.stop"
+    peak_sample_cpu "$cpu" "$PROJECT" "$$" &
+    sampler=$!
+    VUS=$vus RATE=$rate DURATION=$DURATION k6 run --summary-export="$summary" \
         test/load/peak.js 2>&1 | tee "$log"
     k6_rc=${PIPESTATUS[0]}
+    stop_sampler
     metrics "$after"
+
+    # 천장 원인은 회차마다 남긴다. 사다리가 멈춘 칸의 것이 그 천장의 원인이다.
+    GATEWAYS=$GATEWAYS GATEWAY_CPUS=$bottleneck_cpus test/load/evaluate-bottleneck.sh "$cpu" \
+        > "$OUT_DIR/bottleneck-$rate.txt" 2>&1
+    sed 's/^/    /' "$OUT_DIR/bottleneck-$rate.txt"
 
     actual=$(peak_summary_value "$summary" rate)
     p99=$(peak_summary_value "$summary" p99)
@@ -152,40 +243,55 @@ for rate in $RATES; do
     if [ -z "$actual" ] || [ -z "$p99" ]; then
         echo "  요약에서 값을 못 읽었다 — 이 회차는 판정 불가"
         printf '%s\t0\tunmeasurable\t0\n' "$rate" >> "$OUT_TABLE"
+        stop_rate=${stop_rate:-$rate}
         break
     fi
     if [ "$k6_verdict" != ok ]; then
         echo "  k6 임계가 ${k6_verdict} 로 갈렸다 (종료 ${k6_rc})"
         printf '%s\t%s\t%s\t%s\n' "$rate" "$actual" "$k6_verdict" "$p99" >> "$OUT_TABLE"
+        stop_rate=${stop_rate:-$rate}
         break
     fi
 
-    # 판정 비율은 그 자가 낸다. 여기서 다시 셈하면 둘이 갈린다.
-    if EXPECT_TOTAL=$(awk -v r="$rate" -v d="$DURATION_SEC" 'BEGIN{ printf "%d", r * d }') \
-            test/load/evaluate-judged.sh "$before" "$after" > "$OUT_DIR/judged-$rate.txt" 2>&1; then
-        verdict=ok
-    else
+    # 판정 비율은 그 자가 낸다. 여기서 다시 셈하면 둘이 갈린다. **대마다 부르고 가장 나쁜 것을 쓴다.**
+    verdicts=()
+    : > "$OUT_DIR/judged-$rate.txt"
+    for idx in $(seq 1 "$GATEWAYS"); do
+        EXPECT_TOTAL=$(awk -v r="$rate" -v d="$DURATION_SEC" -v n="$GATEWAYS" 'BEGIN{ printf "%d", r * d / n }') \
+            test/load/evaluate-judged.sh "$before.$idx" "$after.$idx" > "$OUT_DIR/judged-$rate.$idx.txt" 2>&1
         case $? in
-            1) verdict=under ;;
-            *) verdict=unmeasurable ;;
+            0) verdicts+=(ok) ;;
+            1) verdicts+=(under) ;;
+            *) verdicts+=(unmeasurable) ;;
         esac
-    fi
+        { echo "게이트웨이 $idx"; cat "$OUT_DIR/judged-$rate.$idx.txt"; } >> "$OUT_DIR/judged-$rate.txt"
+    done
+    verdict=$(peak_worst_verdict "${verdicts[@]}")
     sed 's/^/    /' "$OUT_DIR/judged-$rate.txt"
 
     printf '%s\t%s\t%s\t%s\n' "$rate" "$actual" "$verdict" "$p99" >> "$OUT_TABLE"
 
-    if [ "$STOP_AT_CEILING" = 1 ]; then
-        if awk -v a="$actual" -v r="$rate" -v t="$TOLERANCE" \
-                'BEGIN{ exit (a >= r * t) ? 1 : 0 }'; then
-            echo "  하네스가 이 유입을 못 만들었다 (${actual}/${rate}) — 사다리를 멈춘다"
-            break
-        fi
-        if [ "$verdict" != ok ]; then
-            echo "  이 회차가 안 섰다 (${verdict}) — 사다리를 멈춘다"
-            break
-        fi
+    # **천장 원인은 처음 안 선 칸의 것이다.** 사다리를 멈추지 않으면 맨 윗칸이 다른 회차의 원인을 낸다.
+    stood=1
+    if awk -v a="$actual" -v r="$rate" -v t="$TOLERANCE" 'BEGIN{ exit (a >= r * t) ? 1 : 0 }'; then
+        echo "  하네스가 이 유입을 못 만들었다 (${actual}/${rate})"
+        stood=0
+    elif [ "$verdict" != ok ]; then
+        echo "  이 회차가 안 섰다 (${verdict})"
+        stood=0
+    fi
+    if [ "$stood" = 0 ]; then
+        stop_rate=${stop_rate:-$rate}
+        [ "$STOP_AT_CEILING" = 1 ] && { echo "  사다리를 멈춘다"; break; }
     fi
 done
 
 echo
+if [ -n "${stop_rate:-}" ]; then
+    echo "멈춘 칸의 $(grep -m1 '^원인' "$OUT_DIR/bottleneck-$stop_rate.txt" || echo '원인: 판정 불가')"
+    # 증설 효율 판정기가 이 파일로 두 천장이 게이트웨이의 것인지, 멈춘 칸의 것인지 본다.
+    { cat "$OUT_DIR/bottleneck-$stop_rate.txt"; echo "멈춘 칸: $stop_rate"; } > "$OUT_DIR/ceiling-cause.txt"
+else
+    echo "천장을 못 봐 원인 파일을 안 남긴다"
+fi
 test/load/evaluate-peak.sh "$OUT_TABLE"

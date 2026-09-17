@@ -34,6 +34,15 @@ if [ "$GATEWAYS" -gt 1 ]; then
     COMPOSE="$COMPOSE -f test/load/compose.multi.yml"
 fi
 
+# **LB 를 지나는 회차.** 실제 요청 경로다. 대신 LB 가 측정에 섞이므로 원인 판정이 LB 도 보고, 오버헤드는
+# 같은 코어 한도의 기준선(`lb-baseline.sh`)을 빼서 읽는다.
+VIA_LB=${VIA_LB:-0}
+case "$VIA_LB" in
+    0) lb_env="" ;;
+    1) COMPOSE="$COMPOSE -f test/load/compose.lb.yml"; lb_env=${LB_CPUS:-2} ;;
+    *) echo "::error title=현재 최대치::VIA_LB 는 0 이나 1 이어야 한다: '$VIA_LB'"; exit 2 ;;
+esac
+
 # peak.js 가 두 쿠폰을 박아 두고 있다. 여기만 바꾸면 다른 쿠폰을 비우고 이 쿠폰을
 # 때리게 된다 — 시나리오를 고칠 때 같이 고친다.
 COUPONS="c1 c2"
@@ -93,8 +102,13 @@ for idx in $(seq 1 "$GATEWAYS"); do
     esac
     bases="${bases:+$bases,}http://localhost:$port"
 done
-export BASE_URLS=$bases
 echo "게이트웨이 ${GATEWAYS}대: $bases"
+# LB 를 지나면 k6 는 LB 한 곳만 친다. 나누기는 LB 가 한다.
+if [ "$VIA_LB" = 1 ]; then
+    bases=http://localhost:18070
+    echo "LB 경유: $bases"
+fi
+export BASE_URLS=$bases
 
 rm -rf "$OUT_DIR"; mkdir -p "$OUT_DIR"
 : > "$OUT_TABLE"
@@ -230,7 +244,7 @@ for rate in $RATES; do
     metrics "$after"
 
     # 천장 원인은 회차마다 남긴다. 사다리가 멈춘 칸의 것이 그 천장의 원인이다.
-    GATEWAYS=$GATEWAYS GATEWAY_CPUS=$bottleneck_cpus test/load/evaluate-bottleneck.sh "$cpu" \
+    LB_CPUS=$lb_env GATEWAYS=$GATEWAYS GATEWAY_CPUS=$bottleneck_cpus test/load/evaluate-bottleneck.sh "$cpu" \
         > "$OUT_DIR/bottleneck-$rate.txt" 2>&1
     sed 's/^/    /' "$OUT_DIR/bottleneck-$rate.txt"
 

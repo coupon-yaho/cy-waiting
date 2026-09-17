@@ -1,0 +1,18 @@
+# 게이트웨이들 앞에 LB 를 세우는 겹침.
+#
+# **기준선과 같은 이미지·코어 한도다.** 다르면 경유 회차의 p99 에서 기준선을 뺀 값에 LB 차이가 섞인다.
+services:
+  lb:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./lb/gateway.conf:/etc/nginx/nginx.conf:ro
+    cpus: ${LB_CPUS:-2}
+    depends_on:
+      gateway: { condition: service_healthy }
+    ports:
+      - "18070:8070"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8070/lb/health"]
+      interval: 1s
+      timeout: 2s
+      retries: 20

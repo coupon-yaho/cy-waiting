@@ -3,6 +3,7 @@ package com.kafkick.waiting.chaos;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.lettuce.core.RedisClient;
+import io.lettuce.core.RedisURI;
 import io.lettuce.core.api.StatefulRedisConnection;
 import java.time.Duration;
 import org.junit.jupiter.api.AfterAll;
@@ -71,11 +72,17 @@ class PerNodeGateTest {
         }
     }
 
-    /** 끊긴 문은 명령이 안 돌아온다. 붙는 것과 답이 오는 것은 다르다. */
+    /**
+     * 끊긴 문은 명령이 안 돌아온다. 붙는 것과 답이 오는 것은 다르다.
+     *
+     * <p><b>시한을 주소에 건다.</b> 끊김은 TCP 는 받아 주고 데이터만 막으므로 걸리는 자리가
+     * {@code connect()} 안의 초기화다 — 연결을 받은 뒤 거는 시한은 그 대기를 안 묶고, 기본 1분이 선다.
+     */
     private boolean 읽어진다(String url) {
-        RedisClient client = RedisClient.create(url);
+        RedisURI 주소 = RedisURI.create(url);
+        주소.setTimeout(기다림);
+        RedisClient client = RedisClient.create(주소);
         try (StatefulRedisConnection<String, String> 연결 = client.connect()) {
-            연결.setTimeout(기다림);
             연결.sync().get("gate");
             return true;
         } catch (RuntimeException e) {

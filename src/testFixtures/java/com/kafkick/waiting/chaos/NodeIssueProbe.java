@@ -33,7 +33,7 @@ public final class NodeIssueProbe {
                 : Optional.of("%s — 전원이 5xx 다 (보낸 %d)".formatted(이름, 상태.size()));
     }
 
-    /** 5xx 가 섞였는가. 끊긴 노드도 판정은 내야 한다 — 못 내면 그 구간이 통째로 안 보인다. */
+    /** 5xx 가 하나도 없는가. 붙어 있는 노드에 쓴다 — 여기서 5xx 가 나오면 장애가 번진 것이다. */
     public static Optional<String> 멎지_않았다(String 이름, List<Integer> 상태) {
         if (상태.isEmpty()) {
             return Optional.of("%s — 보낸 것이 없다".formatted(이름));

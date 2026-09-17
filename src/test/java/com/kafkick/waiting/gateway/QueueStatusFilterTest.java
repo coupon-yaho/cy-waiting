@@ -693,10 +693,11 @@ class QueueStatusFilterTest {
         assertThat(토큰으로_조회한다(tokens.issue(COUPON, "앞사람", 지금))
                 .getResponse().getBodyAsString().block())
                 .contains("\"status\":\"ADMITTED\"");
+        // 앞사람이 커서 위로 올라갔으니 내 앞은 비었다. 실물도 커서 위에서 센다 (CY-827).
         assertThat(토큰으로_조회한다(tokens.issue(COUPON, MEMBER, 지금))
                 .getResponse().getBodyAsString().block())
                 .contains("\"status\":\"WAITING\"")
-                .contains("\"position\":1");
+                .contains("\"position\":0");
     }
 
     @Test

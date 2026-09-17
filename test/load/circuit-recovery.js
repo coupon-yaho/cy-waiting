@@ -71,6 +71,17 @@ let queueToken = null;
 let entryToken = null;
 let member = 0;
 
+/**
+ * 한 요청이 매달릴 수 있는 시간. **리더를 죽이는 순간 그 대로 나간 요청이 문제다** — 기본 시한(60초)까지
+ * 매달리면 그 VU 가 회차 내내 묶여, 풀을 다 써도 회차를 흘린다. 흘린 회차는 통째로 판정 불가다 (CY-907).
+ */
+const REQ_TIMEOUT = __ENV.REQ_TIMEOUT || '5s';
+
+/** 요청 인자. 시한을 한 곳에서 준다 — 자리마다 쓰면 하나를 빠뜨려도 안 보인다. */
+function params(extra) {
+  return { headers: headers(extra), timeout: REQ_TIMEOUT };
+}
+
 function headers(extra) {
   return Object.assign({
     'X-Member-Id': String(member),
@@ -136,10 +147,17 @@ export function holder() {
   sleep(wait);
 }
 
-// 기본 시나리오도 제품이 말한 간격을 지킨다. 안 지키면 표를 든 VU 가 다음
-// 회차를 곧바로 집어, 재려던 회복 봉우리를 하네스가 만든다.
+/**
+ * 유입 시나리오는 **새로 오는 사람만** 만든다. 표를 들고 다시 오는 사람은 홀더가 맡는다.
+ *
+ * <p>여기서 제품이 준 간격만큼 자면 그 VU 가 묶인다. 도착 간격은 유입률이 정하지 이 잠이 정하지 않으므로,
+ * 자는 동안 풀이 마르고 회차를 흘린다 — 흘린 회차는 통째로 판정 불가다. 실측 855회, 풀 495 전부 소진
+ * (CY-907). 표를 안 들고 끝내므로 촘촘히 되묻는 일도 없다.
+ */
 export default function () {
-  sleep(step());
+  reset();
+  step();
+  reset();
 }
 
 // 제품이 실은 재시도 간격(초). 안 실렸으면 기본 폴링 주기를 쓴다.
@@ -157,7 +175,7 @@ function step() {
   // 3. 차례가 왔다. 표를 들고 다시 부른다 — **이 요청이 뒷단에 닿는다.**
   if (entryToken !== null) {
     const r = http.post(`${base()}/api/v1/coupons/${COUPON}/issue`, null,
-        { headers: headers({ 'Entry-Token': entryToken }) });
+        params({ 'Entry-Token': entryToken }));
     tally(r);
     if (r.status === 200) {
       redeemed.add(1);
@@ -182,7 +200,7 @@ function step() {
   // 2. 줄에 서 있다. 순번을 묻는다.
   if (queueToken !== null) {
     const r = http.get(`${base()}/api/v1/coupons/${COUPON}/queue`,
-        { headers: headers({ 'Queue-Token': queueToken }) });
+        params({ 'Queue-Token': queueToken }));
     if (r.status !== 200) {
       tally(r);
       // **줄에 선 사람을 폴링 한 번 실패로 버리지 않는다.** 버려도 레디스의 줄
@@ -217,8 +235,7 @@ function step() {
   }
 
   // 1. 아직 안 섰다. 발급을 부른다.
-  const r = http.post(`${base()}/api/v1/coupons/${COUPON}/issue`, null,
-      { headers: headers() });
+  const r = http.post(`${base()}/api/v1/coupons/${COUPON}/issue`, null, params());
   tally(r);
   if (r.status === 0) {
     return DEFAULT_WAIT_SEC;

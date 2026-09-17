@@ -119,6 +119,9 @@ run_case "원인 줄이 없으면 판정 불가" 2 "판정 불가" \
 run_case "선 칸이 없으면 최대치 판정기의 이유를 낸다" 2 "가장 낮은 회차부터" \
     -- "$(steps none.tsv "$(printf '1000\t998\tunder\t900')")" "$(cause none-cause.txt "$gw1" 1000)" \
     "$two" "$two_cause"
+run_case "대수가 0 이면 판정 불가" 2 "판정 불가" \
+    -- "$one" "$(cause zero1.txt "원인: 게이트웨이 — 0 대 모두 코어 한도에 붙었다" 2100)" \
+    "$two" "$(cause zero2.txt "원인: 게이트웨이 — 0 대 모두 코어 한도에 붙었다" 3700)"
 run_case "인자가 모자라면 판정 불가" 2 "판정 불가" -- "$one" "$one_cause"
 SCALE_TARGET_PCT=abc run_case "기준이 백분율이 아니면 판정 불가" 2 "판정 불가" \
     -- "$one" "$one_cause" "$two" "$two_cause"

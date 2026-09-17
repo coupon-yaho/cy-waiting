@@ -115,6 +115,10 @@ GATEWAY_CPUS=2 run_case "게이트웨이 표본이 없으면 판정 불가" 2 "�
     -- "$(fixture nogw.tsv "$(printf 'idle\thost\t40.0\nidle\thost\t40.0\nidle\thost\t40.0\n')")"
 GATEWAY_CPUS=2 run_case "숫자가 아니면 판정 불가" 2 "판정 불가" \
     -- "$(fixture nan.tsv "$(for _ in 1 2 3; do printf 'cpu\tload-gateway-1\t--\nidle\thost\t40.0\n'; done)")"
+# **값의 범위도 본다.** 유휴 -1 이 호스트 마름으로, 150 이 여유로 읽히면 계기 고장이 원인으로 적힌다.
+GATEWAY_CPUS=2 run_case "호스트 유휴가 음수면 판정 불가" 2 "판정 불가" -- "$(samples neg_idle.tsv 190.0 30.0 -1.0)"
+GATEWAY_CPUS=2 run_case "호스트 유휴가 100 을 넘으면 판정 불가" 2 "판정 불가" -- "$(samples big_idle.tsv 190.0 30.0 150.0)"
+GATEWAY_CPUS=2 run_case "CPU 가 음수면 판정 불가" 2 "판정 불가" -- "$(samples neg_cpu.tsv 190.0 -5.0 40.0)"
 GATEWAY_CPUS=2 run_case "파일이 없으면 판정 불가" 2 "판정 불가" -- "$work/없는파일.tsv"
 GATEWAY_CPUS=2 run_case "인자가 없으면 판정 불가" 2 "판정 불가" --
 # **기준도 확인한다.** 오타 하나가 awk 에서 0 이 되면 모든 대가 붙은 것으로 나와 게이트웨이 천장이 된다.

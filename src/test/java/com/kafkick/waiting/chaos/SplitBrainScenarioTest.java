@@ -156,7 +156,12 @@ class SplitBrainScenarioTest {
         return 상태;
     }
 
-    /** 초당 예산 안에서 보낸다. 대조군은 수가 있어야 비율이 서고, 몰아서 보내면 한산하지 않게 된다. */
+    /**
+     * 초당 예산 안에서 보낸다. 대조군은 수가 있어야 비율이 서고, 몰아서 보내면 한산하지 않게 된다.
+     *
+     * <p>RULE-EXCEPTION(TS-4): 이 간격은 벽시계로 둔다. 재는 것이 실제 분단·리스·스케줄러의 경합이라,
+     * 시각을 고정하면 그 경합이 사라져 다른 것을 재게 된다. 초당 창의 경계는 리미터 단위 시험이 결정적으로 문다.
+     */
     private List<Integer> 사이를_두고_시도한다(String couponId, int 횟수, int 시작_회원) {
         List<Integer> 상태 = new ArrayList<>();
         for (int i = 0; i < 횟수; i++) {

@@ -457,13 +457,14 @@ class AllocationRoundTest {
             round.run().onErrorResume(e -> Mono.empty()).block();
         }
 
-        assertThat(지운_것).as("나간 매진만 지운다").containsOnly("c1");
+        assertThat(지운_것).as("나간 매진만, 한 번만 지운다").containsExactlyInAnyOrder("c1");
         // **c2 의 셈은 남아 있어야 한다.** 실패 회차마다 버리면 상한이 풀린 뒤에도 유예를 못 채운다.
         발행이_된다.set(true);
         round.run().block();
         round.run().block();
 
-        assertThat(지운_것).as("발행이 살아나면 c2 도 유예를 채운다").contains("c2");
+        assertThat(지운_것).as("발행이 살아나면 c2 도 유예를 채운다")
+                .containsExactlyInAnyOrder("c1", "c2");
     }
 
     /**

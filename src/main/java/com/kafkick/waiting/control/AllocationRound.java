@@ -52,6 +52,9 @@ public final class AllocationRound {
     /** 동시 적용 상한. 레디스 어댑터의 쓰기 상한과 같다. */
     private static final int MAX_CONCURRENT_APPLIES = 16;
 
+    /** 이번 회차가 정리를 이미 돌았는가. 실패 갈래가 같은 회차에 또 세는 것을 막는다. */
+    private final AtomicBoolean cleanedUp = new AtomicBoolean();
+
     /** 이번 회차가 되감기를 쟀는가. 잰 회차는 목록을 안 버린다. */
     private final AtomicBoolean rewindMeasured = new AtomicBoolean();
 
@@ -391,6 +394,7 @@ public final class AllocationRound {
         // 낡는다 — 둘 다 낡음 판정을 흔든다.
         return Mono.defer(() -> {
             pacer.roundStarted();
+            cleanedUp.set(false);
             Mono<TimedDemands> read = seeded().then(Mono.defer(demands)).cache();
             // 수요 읽기의 실패로 운영값 읽기를 취소하지 않는다. 실패는 두 읽기가 끝난 뒤에 올린다.
             // **되감기도 여기서 같이 낸다** (CY-939). 적용 앞이라는 순서는 지키면서 왕복을 겹친다 —
@@ -704,7 +708,11 @@ public final class AllocationRound {
                         // **발행이 못 나가도 이미 나간 매진은 정리한다.** 상한에 닿으면 발행의
                         // 첫 쓰기가 거부되는데, 거기 묶어 두면 줄을 지워 메모리를 줄일 유일한
                         // 경로가 같이 막혀 운영자가 한도를 올려야만 풀린다.
-                        .onErrorResume(e -> cleanUp(announced(couponsOf(collected, granted)))
+                        //
+                        // **한 회차에 두 번 안 센다.** 정리가 터져 여기로 와도 다시 세면 유예 셈이
+                        // 두 번 올라 덜 채운 줄이 지워진다 — 되돌릴 수 없는 쓰기다.
+                        .onErrorResume(e -> (cleanedUp.get() ? Mono.<Void>empty()
+                                : cleanUp(announced(couponsOf(collected, granted))))
                                 .then(Mono.error(e)))))
                 // 발행까지 못 간 회차가 기준을 올리면 다음 성공이 그 배수의
                 // 배수에서 시작한다. 틱을 넘겨 잘린 회차는 오류가 아니라 취소다.
@@ -823,6 +831,8 @@ public final class AllocationRound {
      * <p><b>정리 실패가 배분을 막지 않는다.</b> 다음 틱에 다시 온다.
      */
     private Mono<Void> cleanUp(List<CouponDemand> collected, Map<String, Long> granted) {
+        // **돌았다고 먼저 적는다.** 터져도 실패 갈래가 같은 회차에 다시 세면 유예가 두 배로 오른다.
+        cleanedUp.set(true);
         return cleanUp(couponsOf(collected, granted));
     }
 

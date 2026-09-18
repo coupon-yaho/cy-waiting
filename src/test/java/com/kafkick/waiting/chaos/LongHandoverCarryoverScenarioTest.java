@@ -136,6 +136,9 @@ class LongHandoverCarryoverScenarioTest {
     /** 보고 픽스처. 신선도를 앱과 같은 기준으로 보려고 든다. */
     private BackendReports 보고기;
 
+    /** 표본을 뜨는 내내 첫 노드가 리더였는가. 발행 해시에는 발행자 표시가 없다. */
+    private boolean 표본_구간_리더 = true;
+
     /** 보고 사이의 가장 긴 공백(ms). 태스크가 밀린 사실은 구간의 한 점이 아니라 이 값이 든다. */
     private final AtomicLong 보고_최대_공백 = new AtomicLong();
 
@@ -220,8 +223,10 @@ class LongHandoverCarryoverScenarioTest {
                                 .until(() -> {
                                     Map<String, String> 해시 = 발행_해시();
                                     붙은_발행.set(해시);
-                                    return 평활값(해시) > 0 && 평활값(해시) <= 열화_가용량 * 1.2
-                                            && 몫(해시) > 0;
+                                    double 평활 = 평활값(해시);
+                                    // **몫은 조건에 안 넣는다.** 넣으면 그 쿠폰이 빠진 발행을 건너뛰고
+                                    // 좋은 회차 하나를 골라, 아래 몫 판정이 공짜로 통과한다.
+                                    return 평활 > 0 && 평활 <= 열화_가용량 * 1.2;
                                 });
                         첫_노드가_내려왔다[0] = !첫_노드.isLeader();
                         갈린_동안_신선[0] = 보고가_신선한가() && 공백이_신선도_안인가();
@@ -306,10 +311,13 @@ class LongHandoverCarryoverScenarioTest {
                         // 쿠폰이 발행에서 빠지면 줄이 영영 안 빠지는데 상한 판정은 그것을 통과시킨다.
                         되찾은_몫[0] > 0 ? Optional.empty()
                                 : Optional.of("되찾은 발행에 이 쿠폰의 몫이 없다: %d".formatted(되찾은_몫[0])),
-                        // **비유한값을 제 이름으로 떨군다.** 리더가 아니면 평활이 NaN 이라, 안 가르면
-                        // 리더십이 깜빡인 사건이 수렴 결함으로 둔갑한다.
+                        // **발행자가 해시에 안 적힌다.** 첫 노드가 리더를 잃은 구간의 값을 제 것으로 읽으면
+                        // 이 시나리오가 재려는 이월이 통째로 딴 노드 것이 된다.
+                        표본_구간_리더 ? Optional.empty()
+                                : Optional.of("표본을 뜨는 동안 첫 노드가 리더를 잃었다"),
+                        // 표본이 비거나 깨진 값이 섞이면 아래 모양 판정이 뜻을 잃는다.
                         유한한가(회복_시계열) ? Optional.empty()
-                                : Optional.of("회복 구간에 평활이 NaN 이었다 — 리더십이 깜빡였다: %s"
+                                : Optional.of("회복 구간의 평활이 유한값이 아니다: %s"
                                         .formatted(회복_시계열)),
                         내려간_횟수(회복_시계열) == 0 ? Optional.empty()
                                 : Optional.of("회복 뒤 평활이 %d번 내려갔다 — %s"
@@ -370,6 +378,9 @@ class LongHandoverCarryoverScenarioTest {
             Map<String, String> 해시 = 다음_발행을_기다린다(앞선_발행);
             앞선_발행 = 발행_시각(해시);
             값.add(평활값(해시));
+            // **누가 발행했는지는 해시에 안 적힌다.** 첫 노드가 중간에 리더를 잃으면 남의 값을 제 것으로
+            // 읽으므로, 구간 내내 쥐고 있었는지를 따로 본다.
+            표본_구간_리더 &= 첫_노드.isLeader();
         }
         return 값;
     }
@@ -377,7 +388,8 @@ class LongHandoverCarryoverScenarioTest {
     /** 앞선 발행보다 새로운 발행이 실릴 때까지 기다리고 그 해시를 돌려준다. */
     private Map<String, String> 다음_발행을_기다린다(Instant 앞선_발행) {
         AtomicReference<Map<String, String>> 본_것 = new AtomicReference<>();
-        Awaitility.await().alias("다음 발행").atMost(기다림).pollInterval(Duration.ofMillis(50))
+        // 발행 시각이 초 해상도라 더 잘게 물어도 사는 값이 없다.
+        Awaitility.await().alias("다음 발행").atMost(기다림).pollInterval(Duration.ofMillis(200))
                 .until(() -> {
                     Map<String, String> 해시 = 발행_해시();
                     본_것.set(해시);
@@ -402,7 +414,7 @@ class LongHandoverCarryoverScenarioTest {
         return 평활.seeded() ? 평활.value() : Double.NaN;
     }
 
-    /** 표본이 전부 유한한가. 리더가 아니면 평활이 NaN 이라 이것부터 가른다. */
+    /** 표본이 전부 유한한가. 발행에 평활이 안 실린 회차를 이것부터 가른다. */
     private static boolean 유한한가(List<Double> 값) {
         return !값.isEmpty() && 값.stream().allMatch(Double::isFinite);
     }

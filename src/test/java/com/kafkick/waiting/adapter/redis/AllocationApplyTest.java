@@ -66,6 +66,13 @@ class AllocationApplyTest extends RedisContainerSupport {
                 List.of(String.valueOf(admit), 임기, 수명)).blockLast(WAIT);
     }
 
+    /** 되살릴 기억을 같이 넘기는 배분. 네 번째 인자가 이 리더가 이 쿠폰에서 본 임계의 최댓값이다. */
+    @SuppressWarnings("unchecked")
+    private List<Object> 배분(long admit, String 기억) {
+        return (List<Object>) redis.execute(apply, List.of(QUEUE, ADMITTED, FENCE),
+                List.of(String.valueOf(admit), 임기, 수명, 기억)).blockLast(WAIT);
+    }
+
     private long 임계() {
         return Long.parseLong(String.valueOf(배분(0).get(0)));
     }
@@ -77,6 +84,78 @@ class AllocationApplyTest extends RedisContainerSupport {
      * 재면 문자열로 만들 때 접히는 결함을 통째로 못 본다.
      */
     private static final long 마이크로초 = 1_700_000_000_123_456L;
+
+    /**
+     * <b>되살린 폭을 돌려준다</b> (CY-945). 되살림이 일어난 사실과 그 폭이 어디에도 안 남아, 실패 없이 흡수된
+     * 승격은 조용히 지나간다. 셋째 칸은 <b>폭</b>이다 — 첫 칸은 이 회차의 입장까지 반영한 값이라 그것으로 빼면
+     * 뜨거운 쿠폰일수록 부푼다.
+     */
+    @Test
+    @DisplayName("되살린_회차는_되살린_폭을_돌려준다")
+    void 되살린_회차는_되살린_폭을_돌려준다() {
+        줄_세운다(10, 20, 30);
+        배분(2);
+        redis.opsForValue().set(ADMITTED, "5").block(WAIT);
+
+        List<Object> 결과 = 배분(0, "20");
+
+        assertThat(String.valueOf(결과.get(0))).isEqualTo("20");
+        assertThat(String.valueOf(결과.get(2))).as("5 에서 20 으로 되살린 폭").isEqualTo("15");
+    }
+
+    @Test
+    @DisplayName("같은_회차의_입장은_폭에_안_든다")
+    void 같은_회차의_입장은_폭에_안_든다() {
+        줄_세운다(10, 20, 30, 40);
+        배분(2);
+        redis.opsForValue().set(ADMITTED, "10").block(WAIT);
+
+        List<Object> 결과 = 배분(1, "20");
+
+        assertThat(String.valueOf(결과.get(0))).as("되살린 뒤 한 명 더 들인다").isEqualTo("30");
+        assertThat(String.valueOf(결과.get(2))).as("되살린 폭만").isEqualTo("10");
+    }
+
+    /** 커서가 아예 없던 회차는 폭을 모른다. -1 이 그 뜻이다 — 임계값 자체를 폭으로 내면 시각이 들어간다. */
+    @Test
+    @DisplayName("커서가_없던_되살림은_폭이_음수다")
+    void 커서가_없던_되살림은_폭이_음수다() {
+        줄_세운다(10, 20, 30);
+        배분(2);
+        redis.delete(ADMITTED).block(WAIT);
+
+        List<Object> 결과 = 배분(0, "20");
+
+        assertThat(String.valueOf(결과.get(0))).isEqualTo("20");
+        assertThat(String.valueOf(결과.get(2))).isEqualTo("-1");
+    }
+
+    @Test
+    @DisplayName("되살림이_없으면_셋째_칸이_빈다")
+    void 되살림이_없으면_셋째_칸이_빈다() {
+        줄_세운다(10, 20, 30);
+        배분(2);
+
+        List<Object> 결과 = 배분(0, "10");
+
+        assertThat(결과).hasSize(3);
+        assertThat(String.valueOf(결과.get(2))).isEmpty();
+    }
+
+    /** 울타리 거절은 <b>들인 인원 -1</b> 로 가른다. 칸 수로 가르면 되살림 칸이 붙는 순간 정상 회차가 거절로 읽힌다. */
+    @Test
+    @DisplayName("울타리_거절은_들인_인원이_음수다")
+    void 울타리_거절은_들인_인원이_음수다() {
+        줄_세운다(10, 20, 30);
+        배분(1);
+
+        @SuppressWarnings("unchecked")
+        List<Object> 결과 = (List<Object>) redis.execute(apply, List.of(QUEUE, ADMITTED, FENCE),
+                List.of("1", "1", 수명)).blockLast(WAIT);
+
+        assertThat(Long.parseLong(String.valueOf(결과.get(1)))).isEqualTo(-1);
+        assertThat(String.valueOf(결과.get(2))).isEqualTo(임기);
+    }
 
     @Test
     @DisplayName("크레딧만큼의_사람이_임계_안에_들어온다")

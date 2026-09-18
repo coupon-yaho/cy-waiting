@@ -171,6 +171,15 @@ public final class AllocationRedisPort implements SnapshotSource {
     /** 울타리가 막은 입장 적용 건수. <b>회차가 아니라 쿠폰 단위다</b>. */
     private final AtomicLong applyFenced = new AtomicLong();
 
+    /** 사라진 임계를 되살린 적용 건수 (CY-945). 실패 없이 흡수된 승격은 이 값으로만 보인다. */
+    private final AtomicLong healed = new AtomicLong();
+
+    /** 되살린 폭의 합. <b>커서가 아예 없던 되살림은 안 넣는다</b> — 폭을 모르는 것과 0 은 다르다. */
+    private final AtomicLong healedSpan = new AtomicLong();
+
+    /** 되살림이 이어지는 구간. 진입과 해제만 남긴다 — 승격은 쿠폰 전체를 한꺼번에 되감는다. */
+    private final FailureWindow healing = FailureWindow.create();
+
 
     /**
      * 상한을 넘겨 버린 미상 표시의 누적 수. <b>0 이 아니면 거짓 매진이 나갔다.</b>
@@ -916,10 +925,11 @@ public final class AllocationRedisPort implements SnapshotSource {
                 .next()
                 .flatMap(result -> {
                     List<?> counts = (List<?>) result;
-                    // **칸 수로 가른다.** {-1, 0} 은 임계가 없고 들일 사람도 없는
-                    // 정상 회차와 같은 값이라, 그것으로 가르면 새 쿠폰과 빈 큐가
-                    // 거절로 오독된다.
-                    if (counts.size() < 3) {
+                    // **들인 인원으로 가른다.** 정상 회차는 0 이상이라 -1 이 거절의 표식이다. 칸 수로 가르면
+                    // 되살림 칸이 붙는 순간 정상 회차가 거절로 오독된다 (CY-945).
+                    long entered = Long.parseLong(String.valueOf(counts.get(1)));
+                    if (entered >= 0) {
+                        countHeal(grant.couponId(), counts);
                         // **쓴 임계를 기억한다** (CY-856). 되감기는 우리가 쓴 값이 사라지는 것으로만 보인다.
                         // 못 읽은 값과 <b>한 번도 안 들인 줄(-1)</b>은 안 넣는다 — 넣으면 키가 없는 그 쿠폰이
                         // 실패 뒤마다 거짓 되감기로 잡힌다.
@@ -929,7 +939,7 @@ public final class AllocationRedisPort implements SnapshotSource {
                                 // 기억이 뒤로 가고, 되살림이 그 사이로 감긴 커서를 못 본다.
                                 .forEach(threshold -> lastAdmitted.merge(grant.couponId(), threshold,
                                         Math::max));
-                        return Mono.just(Long.parseLong(String.valueOf(counts.get(1))));
+                        return Mono.just(entered);
                     }
                     applyFenced.incrementAndGet();
                     // **오류로 올린다.** 회차가 몫을 0 으로 접는 자리가 이미 있고,
@@ -1058,6 +1068,41 @@ public final class AllocationRedisPort implements SnapshotSource {
     /** 울타리가 입장 적용을 거절한 건수. 쿠폰마다 오르므로 회차 수가 아니다. */
     public double applyFenced() {
         return applyFenced.get();
+    }
+
+    /** 사라진 임계를 되살린 건수. 0 이 아니면 그 사이 승격이나 잘림이 있었다. */
+    public double healed() {
+        return healed.get();
+    }
+
+    /** 되살린 폭의 합. 커서가 아예 없던 되살림은 폭을 몰라 안 들어간다. */
+    public double healedSpan() {
+        return healedSpan.get();
+    }
+
+    /**
+     * 되살림을 센다 (CY-945). 셋째 칸이 <b>되살린 폭</b>이다 — 비어 있으면 안 되살린 회차이고, -1 이면
+     * 커서가 아예 없어 폭을 모르는 회차다.
+     *
+     * <p><b>로그는 구간의 첫 건만 남긴다.</b> 복제본 승격은 쿠폰 전체를 한꺼번에 되감으므로 쿠폰마다 찍으면
+     * 한 틱에 쿠폰 수만큼 쌓인다 — 장애 중 가장 읽어야 할 때의 폭포다. 건수와 폭은 지표가 낸다.
+     */
+    private void countHeal(String couponId, List<?> counts) {
+        if (counts.size() < 3 || String.valueOf(counts.get(2)).isEmpty()) {
+            healing.exited().ifPresent(r -> log.info(
+                    "입장 커서 되살림이 멎었다 — {}초 동안 {}건", r.elapsedSeconds(), r.swallowed()));
+            return;
+        }
+        healed.incrementAndGet();
+        long span = Long.parseLong(String.valueOf(counts.get(2)));
+        // **폭을 모르는 것과 0 은 다르다.** 커서가 없던 되살림은 합에 안 넣는다.
+        if (span >= 0) {
+            healedSpan.addAndGet(span);
+        }
+        if (healing.entered()) {
+            log.warn("입장 커서를 되살렸다 — 쿠폰 {}, 폭 {} (음수면 커서가 없어 폭을 모른다). "
+                    + "이어지는 건은 지표로 센다", couponId, span);
+        }
     }
 
     /**

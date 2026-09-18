@@ -29,7 +29,9 @@ class SealOrderTest {
      */
     private static final String 정리 = ".then(Mono.defer(() -> cleanUp(collected, granted)))";
 
-    private static final String 청소 = ".then(Mono.defer(() -> sweepUp(collected, granted)))";
+    /** 인자의 마지막은 이번 회차에 적용이 실패한 쿠폰이다 (CY-947). 그 쿠폰은 같은 회차에 안 걷는다. */
+    private static final String 청소 =
+            ".then(Mono.defer(() -> sweepUp(collected, granted, applyFailed)))";
 
     @Test
     @DisplayName("정리와_청소가_발행_뒤에_한_번씩_매달린다")

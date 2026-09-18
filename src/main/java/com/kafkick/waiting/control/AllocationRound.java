@@ -666,11 +666,14 @@ public final class AllocationRound {
             long credit, Instant readAt, CreditSmoother current, AtomicBoolean anyFailed,
             AtomicBoolean published, boolean anyCredit, ReleaseRamp.State before,
             boolean gatedNow, long target) {
+        // 적용이 실패한 쿠폰. 동시에 보내므로 여러 갈래가 함께 쓴다.
+        Set<String> applyFailed = ConcurrentHashMap.newKeySet();
         return (anyCredit ? pacer.turn() : Mono.<Void>empty())
                 .thenMany(Flux.fromIterable(collected))
                 // **동시에 보낸다.** 차례로 보내면 왕복이 쿠폰 수만큼 쌓여 레디스가 느린 날 회차가 틱을
                 // 넘기고 발행이 잘린다. 옛 임기의 쓰기는 적용 스크립트의 펜스가 막는다.
-                .flatMap(demand -> applyOne(demand, granted, anyFailed), MAX_CONCURRENT_APPLIES)
+                .flatMap(demand -> applyOne(demand, granted, anyFailed, applyFailed),
+                        MAX_CONCURRENT_APPLIES)
                 .reduce(0L, Long::sum)
                 // **실제로 들어온 수는 나눠 준 수와 다르다.** 큐가 몫보다 짧으면
                 // 남고, 적용이 실패하면 0 이다. 안 남기면 크레딧이 어디서 새는지
@@ -714,7 +717,7 @@ public final class AllocationRound {
                         .then(Mono.defer(() -> cleanUp(collected, granted)))
                         // **정리 뒤에 쓴다.** 앞에 두면 곧 지울 줄을 훑느라
                         // 예산을 쓴다.
-                        .then(Mono.defer(() -> sweepUp(collected, granted)))
+                        .then(Mono.defer(() -> sweepUp(collected, granted, applyFailed)))
                         // **발행이 못 나가도 이미 나간 매진은 정리한다.** 상한에 닿으면 발행의
                         // 첫 쓰기가 거부되는데, 거기 묶어 두면 줄을 지워 메모리를 줄일 유일한
                         // 경로가 같이 막혀 운영자가 한도를 올려야만 풀린다.
@@ -935,16 +938,23 @@ public final class AllocationRound {
                 .then());
     }
 
-    /** 이탈자를 걷어 낸다. 멈춰야 할 구간은 스위퍼가 안다. */
-    private Mono<Void> sweepUp(List<CouponDemand> collected, Map<String, Long> granted) {
+    /**
+     * 이탈자를 걷어 낸다. 멈춰야 할 구간은 스위퍼가 안다.
+     *
+     * <p>적용이 실패한 쿠폰을 넘기는 이유는 CY-947 이다 — 못 되살린 커서 위에서 걷으면 들인 사람이 걷힌다.
+     */
+    private Mono<Void> sweepUp(List<CouponDemand> collected, Map<String, Long> granted,
+            Set<String> applyFailed) {
         if (lostLeadership()) {
             return Mono.empty();
         }
+        // **맵은 줄이지 않는다.** 게이트가 넘겨받은 맵을 이번 틱의 전부로 보고 없는 쿠폰의 재개 유예를
+        // 지우므로, 여기서 빼면 한 틱을 보호하는 대신 그 쿠폰의 유예가 통째로 사라진다.
         return sweeper.run(couponsOf(collected, granted),
                 // **리더가 신선한 것과 노드들이 신선한 것은 다르다.** 생존 신호는 노드
                 // 쪽 폴링이 갱신하므로 그쪽이 멎어도 리더의 수요 읽기는 성공한다. 이
                 // 노드도 게이트웨이라 자기 재료의 나이가 그 신호에 가장 가깝다.
-                dataStale.getAsBoolean()).then();
+                dataStale.getAsBoolean(), applyFailed).then();
     }
 
     /**
@@ -1034,7 +1044,7 @@ public final class AllocationRound {
      * 되어 매진으로 보이는데, 적용이 안 된 것과 매진은 전혀 다른 상태다.
      */
     private Mono<Long> applyOne(CouponDemand demand, Map<String, Long> granted,
-            AtomicBoolean anyFailed) {
+            AtomicBoolean anyFailed, Set<String> applyFailed) {
         long credit = granted.getOrDefault(demand.couponId(), 0L);
         // **기다리는 사람이 있으면 크레딧이 0 이어도 부른다** (CY-942). 적용이 사라진 입장 커서를 되살리는 자리라,
         // 서킷이 열린 동안 안 부르면 그 내내 순번이 뛰고 청소가 들인 사람을 걷는다. 한산한 쿠폰은 지킬 사람이
@@ -1052,6 +1062,8 @@ public final class AllocationRound {
                 // 쿠폰마다 찍으면 단절 한 번에 쿠폰 수만큼 곱해진다.
                 .doOnError(e -> {
                     anyFailed.set(true);
+                    // **같은 회차의 청소에서 뺀다** (CY-947). 커서를 못 되살린 채 앞줄을 걷으면 들인 사람이 이탈로 걷힌다.
+                    applyFailed.add(demand.couponId());
                     // 임계가 안 올라갔으니 몫도 0 으로 접는다. 안 그러면 노드들이
                     // 일어나지 않은 배수율로 대기 시간을 계산한다.
                     granted.put(demand.couponId(), 0L);

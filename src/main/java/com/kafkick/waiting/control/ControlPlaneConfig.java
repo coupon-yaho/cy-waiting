@@ -205,6 +205,16 @@ public class ControlPlaneConfig {
                         AllocationRedisPort::applyFenced)
                 .description("울타리가 막은 입장 적용 건수. 쿠폰마다 오르므로 회차 수가 아니다")
                 .register(meters);
+        // **되살림은 실패 없이 지나간다** (CY-945). 되감기 신호는 회차가 실패한 뒤에만 재므로, 흡수된 승격은
+        // 되살림만 조용히 일어난다. 폭까지 내야 한 번의 큰 되살림과 잦은 작은 되살림이 갈린다.
+        FunctionCounter.builder("waiting.allocation.heal.events", port,
+                        AllocationRedisPort::healed)
+                .description("사라진 입장 커서를 되살린 건수. 0 이 아니면 그 사이 승격이나 잘림이 있었다")
+                .register(meters);
+        FunctionCounter.builder("waiting.allocation.heal.span", port,
+                        AllocationRedisPort::healedSpan)
+                .description("되살린 폭의 합(마이크로초 score). 커서가 없던 되살림은 폭을 몰라 안 들어간다")
+                .register(meters);
         return InvariantMetrics.bind(round, port.clockSkew(), meters, port::markersDropped,
                 registry::passRate);
     }

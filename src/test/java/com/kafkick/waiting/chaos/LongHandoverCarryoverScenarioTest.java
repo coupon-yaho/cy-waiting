@@ -66,11 +66,23 @@ class LongHandoverCarryoverScenarioTest {
     /** 둘째가 도는 구간. 평활이 열화 값에 수렴할 만큼은 돌아야 이월이 뜻을 가진다. */
     private static final Duration 갈린_구간 = Duration.ofSeconds(15);
 
-    /** 회복 뒤 진동을 보는 틱 수. 평활이 열화 값에서 평시로 올라오는 구간을 덮어야 한다. */
-    private static final int 진동_표본 = 8;
+    /** 회복 뒤 수렴을 보는 발행 수. 평활이 이월값에서 평시로 올라오는 구간을 덮어야 한다. */
+    private static final int 수렴_표본 = 8;
 
-    /** 방향이 바뀐 것으로 치는 최소 폭. 잔떨림을 진동으로 세면 이 판정이 하네스 잡음을 잰다. */
-    private static final double 진동_사각지대 = 평시_가용량 * 0.01;
+    /** 내려간 것으로 치는 최소 폭. 잔떨림을 내림으로 세면 이 판정이 하네스 잡음을 잰다. */
+    private static final double 내림_사각지대 = 평시_가용량 * 0.01;
+
+    /** 마지막 표본이 닿아야 하는 값. 여기 못 닿으면 평활이 중간에 멎은 것이다. */
+    private static final double 수렴_하한 = 평시_가용량 * 0.9;
+
+    /**
+     * 평활 계수. <b>제품 상수를 읽지 않고 옮겨 적는다</b> — 읽어 오면 계수를 바꾸는 뮤턴트를 판정이 같이
+     * 따라가, 계단을 계단으로 안 본다.
+     */
+    private static final double 설계_알파 = 0.3;
+
+    /** 한 틱 상승폭에 주는 여유. 보고 지터로 관측이 조금 흔들려도 통과해야 한다. */
+    private static final double 상승_여유 = 1.3;
 
     /** 보고의 신선도 창. 앱이 이 값으로 낡은 보고를 뺀다. */
     private static final Duration 신선도 = Duration.ofSeconds(3);
@@ -233,9 +245,9 @@ class LongHandoverCarryoverScenarioTest {
                                     && !Double.isNaN(round.smoothedCredit()));
                     되찾은_평활[0] = round.smoothedCredit();
                     되찾은_몫[0] = 발행된_몫();
-                    // **진동은 한 점으로 안 보인다.** 이월이 깨지면 평활이 오르내리는데, 회복 뒤 한 번만 읽으면
-                    // 그 순간이 골이든 마루든 값 하나로는 안 갈린다.
-                    회복_시계열.addAll(틱마다_평활을_잰다(진동_표본));
+                    // **수렴은 한 점으로 안 보인다.** 이월받은 값에서 평시까지 올라오는 길이 이 시나리오가
+                    // 재려는 것인데, 회복 뒤 한 번만 읽으면 출발점만 보고 도착을 안 본다.
+                    회복_시계열.addAll(발행마다_평활을_잰다(수렴_표본));
                     회복_뒤_신선[0] = 보고가_신선한가() && 공백이_신선도_안인가();
                 })
                 .assertEntry(() -> RecoveryCriteria.violations(
@@ -288,12 +300,21 @@ class LongHandoverCarryoverScenarioTest {
                         // 쿠폰이 발행에서 빠지면 줄이 영영 안 빠지는데 상한 판정은 그것을 통과시킨다.
                         되찾은_몫[0] > 0 ? Optional.empty()
                                 : Optional.of("되찾은 발행에 이 쿠폰의 몫이 없다: %d".formatted(되찾은_몫[0])),
-                        방향_전환(회복_시계열) == 0 ? Optional.empty()
-                                : Optional.of("회복 뒤 평활이 %d번 방향을 바꿨다 — %s"
-                                        .formatted(방향_전환(회복_시계열), 회복_시계열)),
-                        // **오른 적이 있어야 위 판정이 뜻을 가진다.** 굳어 있는 시계열은 전환도 0 이다.
-                        올랐는가(회복_시계열) ? Optional.empty()
-                                : Optional.of("회복 뒤 평활이 안 올랐다 — %s".formatted(회복_시계열))))
+                        // **비유한값을 제 이름으로 떨군다.** 리더가 아니면 평활이 NaN 이라, 안 가르면
+                        // 리더십이 깜빡인 사건이 수렴 결함으로 둔갑한다.
+                        유한한가(회복_시계열) ? Optional.empty()
+                                : Optional.of("회복 구간에 평활이 NaN 이었다 — 리더십이 깜빡였다: %s"
+                                        .formatted(회복_시계열)),
+                        내려간_횟수(회복_시계열) == 0 ? Optional.empty()
+                                : Optional.of("회복 뒤 평활이 %d번 내려갔다 — %s"
+                                        .formatted(내려간_횟수(회복_시계열), 회복_시계열)),
+                        // **도착을 본다.** 안 보면 이월값 근처에서 멎은 평활도 내림 0 으로 통과한다.
+                        수렴했는가(회복_시계열) ? Optional.empty()
+                                : Optional.of("회복 뒤 평활이 %.0f 까지 안 올라왔다 — %s"
+                                        .formatted(수렴_하한, 회복_시계열)),
+                        // **위로 튀는 것이 이월 결함의 모양이다.** 내림만 보면 이월이 첫 틱 뒤에 풀려
+                        // 관측치로 계단처럼 뛰는 것을 통과시킨다.
+                        계단(회복_시계열)))
                 .run();
         if (보고_태스크[0] != null) {
             보고_태스크[0].cancel(false);
@@ -333,7 +354,7 @@ class LongHandoverCarryoverScenarioTest {
      *
      * @param 표본 몇 번의 발행을 볼 것인가
      */
-    private List<Double> 틱마다_평활을_잰다(int 표본) {
+    private List<Double> 발행마다_평활을_잰다(int 표본) {
         List<Double> 값 = new ArrayList<>();
         Instant[] 앞선_발행 = {holder.view().snapshot().publishedAt()};
         for (int i = 0; i < 표본; i++) {
@@ -345,27 +366,42 @@ class LongHandoverCarryoverScenarioTest {
         return 값;
     }
 
-    /** 시계열이 오르내린 횟수. 사각지대보다 작은 차이는 안 센다. */
-    private static int 방향_전환(List<Double> 값) {
-        int 전환 = 0;
-        int 방향 = 0;
-        for (int i = 1; i < 값.size(); i++) {
-            double 차 = 값.get(i) - 값.get(i - 1);
-            if (Math.abs(차) < 진동_사각지대) {
-                continue;
-            }
-            int 이번 = 차 > 0 ? 1 : -1;
-            if (방향 != 0 && 이번 != 방향) {
-                전환++;
-            }
-            방향 = 이번;
-        }
-        return 전환;
+    /** 표본이 전부 유한한가. 리더가 아니면 평활이 NaN 이라 이것부터 가른다. */
+    private static boolean 유한한가(List<Double> 값) {
+        return !값.isEmpty() && 값.stream().allMatch(Double::isFinite);
     }
 
-    /** 이월받은 값에서 평시로 올라오는 구간인가. 안 오르면 진동 판정이 아무것도 안 잰다. */
-    private static boolean 올랐는가(List<Double> 값) {
-        return !값.isEmpty() && 값.get(값.size() - 1) - 값.get(0) > 진동_사각지대;
+    /** 내려간 횟수. 사각지대보다 작은 차이는 안 센다. */
+    private static int 내려간_횟수(List<Double> 값) {
+        int 내림 = 0;
+        for (int i = 1; i < 값.size(); i++) {
+            if (값.get(i - 1) - 값.get(i) > 내림_사각지대) {
+                내림++;
+            }
+        }
+        return 내림;
+    }
+
+    /** 평시 값 가까이 올라왔는가. 안 보면 이월값 근처에서 멎은 평활이 내림 0 으로 통과한다. */
+    private static boolean 수렴했는가(List<Double> 값) {
+        return !값.isEmpty() && 값.get(값.size() - 1) >= 수렴_하한;
+    }
+
+    /**
+     * 한 틱에 평활이 설명 못 할 만큼 올랐는가. 합법 상승폭은 {@code 알파 × (관측 − 앞값)} 이다.
+     *
+     * <p>이월이 풀려 관측치를 다시 초기값으로 먹으면 그 폭을 몇 배로 넘는다.
+     */
+    private static Optional<String> 계단(List<Double> 값) {
+        for (int i = 1; i < 값.size(); i++) {
+            double 앞 = 값.get(i - 1);
+            double 허용 = 설계_알파 * (평시_가용량 - 앞) * 상승_여유;
+            if (값.get(i) - 앞 > 허용) {
+                return Optional.of("평활이 한 틱에 %.0f 올랐다 — 평활이 아니라 재시드다 (허용 %.0f): %s"
+                        .formatted(값.get(i) - 앞, 허용, 값));
+            }
+        }
+        return Optional.empty();
     }
 
     /** 지금 발행에 실린 이 쿠폰의 몫. 노드들이 실제로 읽는 값이 이것이다. */

@@ -253,7 +253,7 @@ class LongHandoverCarryoverScenarioTest {
                 .afterRecovery(() -> {
                     // **새 발행이 나온 뒤에 읽는다.** 리더 표시는 회차보다 먼저 서므로, 바로 읽으면 앞 임기의
                     // 굳은 값을 되찾은 값으로 오독한다. 평활과 몫은 그 한 발행에서 같이 꺼낸다.
-                    Map<String, String> 되찾은_발행 = 다음_발행을_기다린다(되찾기_전[0]);
+                    Map<String, String> 되찾은_발행 = 되찾은_뒤의_발행(되찾기_전[0]);
                     되찾은_평활[0] = 평활값(되찾은_발행);
                     되찾은_몫[0] = 몫(되찾은_발행);
                     // **수렴은 한 점으로 안 보인다.** 이월받은 값에서 평시까지 올라오는 길이 이 시나리오가
@@ -364,6 +364,14 @@ class LongHandoverCarryoverScenarioTest {
     }
 
     /**
+     * 발행 하나를 가리키는 표.
+     *
+     * <p><b>시각만으로는 못 가른다.</b> 발행 시각은 초 해상도인데, 회차가 틱을 다 쓰면 다음 회차가
+     * 틱의 4분의 1 만에 돌아 같은 초에 발행 둘이 든다. 그때 뒤엣것만 보면 앞엣것이 표본에서 빠진다.
+     */
+    private record Publication(Instant 시각, double 평활) { }
+
+    /**
      * 발행마다 평활을 한 번씩 잰다. 시간으로 나눠 재면 틱 설정이 바뀌는 순간 한 틱을 두 번 센다.
      *
      * <p><b>발행 시각과 평활을 같은 읽기에서 꺼낸다</b> (CY-962). 나눠 읽으면 받아오기가 밀린 회차에
@@ -373,11 +381,10 @@ class LongHandoverCarryoverScenarioTest {
      */
     private List<Double> 발행마다_평활을_잰다(int 표본) {
         List<Double> 값 = new ArrayList<>();
-        Instant 앞선_발행 = 발행_시각(발행_해시());
+        Publication 앞선 = 표(발행_해시());
         for (int i = 0; i < 표본; i++) {
-            Map<String, String> 해시 = 다음_발행을_기다린다(앞선_발행);
-            앞선_발행 = 발행_시각(해시);
-            값.add(평활값(해시));
+            앞선 = 다음_발행을_기다린다(앞선);
+            값.add(앞선.평활());
             // **누가 발행했는지는 해시에 안 적힌다.** 첫 노드가 중간에 리더를 잃으면 남의 값을 제 것으로
             // 읽으므로, 구간 내내 쥐고 있었는지를 따로 본다.
             표본_구간_리더 &= 첫_노드.isLeader();
@@ -385,15 +392,32 @@ class LongHandoverCarryoverScenarioTest {
         return 값;
     }
 
-    /** 앞선 발행보다 새로운 발행이 실릴 때까지 기다리고 그 해시를 돌려준다. */
-    private Map<String, String> 다음_발행을_기다린다(Instant 앞선_발행) {
+    /** 앞선 것과 다른 발행이 실릴 때까지 기다리고 그 표를 돌려준다. */
+    private Publication 다음_발행을_기다린다(Publication 앞선) {
+        AtomicReference<Publication> 본_것 = new AtomicReference<>();
+        // **틱의 4분의 1 까지 좁혀질 수 있다.** 그보다 성기게 물으면 짧은 간격의 발행을 건너뛴다.
+        Awaitility.await().alias("다음 발행").atMost(기다림).pollInterval(Duration.ofMillis(100))
+                .until(() -> {
+                    Publication 지금 = 표(발행_해시());
+                    본_것.set(지금);
+                    return !지금.equals(앞선);
+                });
+        return 본_것.get();
+    }
+
+    private Publication 표(Map<String, String> 해시) {
+        return new Publication(발행_시각(해시), 평활값(해시));
+    }
+
+    /** 되찾기 전 시각보다 새로운 발행을 기다리고 그 해시를 돌려준다. */
+    private Map<String, String> 되찾은_뒤의_발행(Instant 되찾기_전) {
         AtomicReference<Map<String, String>> 본_것 = new AtomicReference<>();
-        // 발행 시각이 초 해상도라 더 잘게 물어도 사는 값이 없다.
-        Awaitility.await().alias("다음 발행").atMost(기다림).pollInterval(Duration.ofMillis(200))
+        Awaitility.await().alias("되찾은 리더가 새로 발행한다").atMost(기다림)
+                .pollInterval(Duration.ofMillis(100))
                 .until(() -> {
                     Map<String, String> 해시 = 발행_해시();
                     본_것.set(해시);
-                    return 발행_시각(해시).isAfter(앞선_발행);
+                    return 발행_시각(해시).isAfter(되찾기_전);
                 });
         return 본_것.get();
     }

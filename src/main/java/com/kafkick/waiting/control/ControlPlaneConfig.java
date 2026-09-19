@@ -215,17 +215,6 @@ public class ControlPlaneConfig {
                         AllocationRedisPort::healedSpan)
                 .description("되살린 폭의 합(마이크로초 score). 커서가 없던 되살림은 폭을 몰라 안 들어간다")
                 .register(meters);
-        // **폭은 사람 수가 아니다** (CY-958). 마이크로초 합이라 운영자가 인원으로 못 환산한다.
-        // 커서 아래 인원에서 이 리더가 들인 수를 빼면 크레딧 없이 들어간 사람의 하한이 나온다.
-        FunctionCounter.builder("waiting.allocation.heal.excess", port,
-                        AllocationRedisPort::healExcess)
-                .description("되살림이 드러낸 초과 입장의 하한 합. 실제 초과보다 작거나 같다")
-                .register(meters);
-        // **센 것과 갚은 것을 같이 낸다** (CY-957). 둘이 오래 벌어지면 빚이 안 줄고 있다는 뜻이다.
-        FunctionCounter.builder("waiting.allocation.heal.repaid", port,
-                        AllocationRedisPort::repaid)
-                .description("되살림 초과분을 회수하느라 덜 들인 누적 인원")
-                .register(meters);
         // **거부와 단절을 가른다** (CY-970). 상한 중에는 하트비트가 초록이라 노드 쪽이 조용하고,
         // 재료가 낡았다는 신호만으로는 메모리를 줄여야 하는지 연결을 기다려야 하는지가 안 짚인다.
         FunctionCounter.builder("waiting.redis.write.refused", port,

@@ -105,7 +105,7 @@ redis.call('SET', KEYS[2], t, 'EX', 86400)
 
 | 항목 | 요구 |
 |---|---|
-| Redis 버전 | **7.x 이상.** Lua 의 `TIME` + 효과 기반 복제(5+), `ZRANDMEMBER`(6.2+) |
+| Redis 버전 | **7.x 이상.** Lua 의 `TIME` + 효과 기반 복제(5+), `ZRANDMEMBER`(6.2+), 스크립트 플래그(7.0+) |
 | 시계 동기화 | **slew 보정만.** step 보정(`makestep`)은 쓰지 않는다 |
 
 시계가 크게 뒤로 가면 `maxscore` 가 순서는 지키지만 그 구간 전체가 `floor+1` 로

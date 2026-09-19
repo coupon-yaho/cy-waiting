@@ -215,6 +215,13 @@ public class ControlPlaneConfig {
                         AllocationRedisPort::healedSpan)
                 .description("되살린 폭의 합(마이크로초 score). 커서가 없던 되살림은 폭을 몰라 안 들어간다")
                 .register(meters);
+        // **거부와 단절을 가른다** (CY-970). 상한 중에는 하트비트가 초록이라 노드 쪽이 조용하고,
+        // 재료가 낡았다는 신호만으로는 메모리를 줄여야 하는지 연결을 기다려야 하는지가 안 짚인다.
+        FunctionCounter.builder("waiting.redis.write.refused", port,
+                        AllocationRedisPort::writeRefused)
+                .tag("path", "publish")
+                .description("레디스가 상한으로 거부한 발행 건수")
+                .register(meters);
         return InvariantMetrics.bind(round, port.clockSkew(), meters, port::markersDropped,
                 registry::passRate);
     }

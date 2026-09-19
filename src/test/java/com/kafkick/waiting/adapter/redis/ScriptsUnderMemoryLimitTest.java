@@ -3,6 +3,8 @@ package com.kafkick.waiting.adapter.redis;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.kafkick.waiting.control.GatewayHeartbeatLoop;
+import com.kafkick.waiting.domain.admission.CircuitState;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -15,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
+import org.springframework.test.annotation.DirtiesContext;
 
 /**
  * <b>메모리 상한에서도 승계 봉인이 선다</b> (CY-932).
@@ -24,6 +27,8 @@ import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
  */
 @Tag("integration")
 @SpringBootTest
+// 하트비트 루프를 멈춘 채로 두면 뒤 시험이 멈춘 루프를 물려받는다.
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class ScriptsUnderMemoryLimitTest extends RedisContainerSupport {
 
     private static final Duration WAIT = Duration.ofSeconds(5);
@@ -35,10 +40,15 @@ class ScriptsUnderMemoryLimitTest extends RedisContainerSupport {
     @Autowired
     private ReactiveStringRedisTemplate redis;
 
+    /** 매 틱 자기를 등록하는 배경 루프. 운영 키를 쓰는 시험이라 자리를 못 가르니 멈춘다. */
+    @Autowired
+    private GatewayHeartbeatLoop 하트비트;
+
     private AllocationRedisPort port;
 
     @BeforeEach
     void 준비() {
+        하트비트.stop();
         port = AllocationRedisPort.of(redis, 1);
         비운다();
     }
@@ -51,6 +61,79 @@ class ScriptsUnderMemoryLimitTest extends RedisContainerSupport {
     private void 비운다() {
         redis.delete(RedisKeys.applyFence(COUPON, 1, 0), RedisKeys.dropFence(COUPON, 1, 0),
                 RedisKeys.SNAPSHOT_FENCE).block(WAIT);
+        redis.opsForHash().remove(RedisKeys.INSTANCES,
+                "oom-node", "#c:oom-node", "#p:oom-node").block(WAIT);
+        redis.delete("test:oom-write-probe").block(WAIT);
+        redis.delete(RedisKeys.queue(COUPON, 1, 0), RedisKeys.alive(COUPON, 1, 0),
+                RedisKeys.stock(COUPON)).block(WAIT);
+    }
+
+    /**
+     * 하트비트가 거부되면 산 노드가 분모에서 빠진다. 남은 노드가 그만큼 큰 몫을 쓰므로 유입이 예산을 넘는다.
+     *
+     * <p>상한 중에도 계속 불리는 경로라, 쓰는 양이 노드 수에만 비례한다는 조건과 함께 RD-12 의 대상이다.
+     */
+    @Test
+    @DisplayName("메모리_상한에서도_하트비트가_남는다")
+    void 메모리_상한에서도_하트비트가_남는다() throws Exception {
+        GatewayRedisPort gateway = GatewayRedisPort.of(redis);
+
+        메모리_상한에서(() -> {
+            assertThatThrownBy(() -> redis.opsForValue().set("test:oom-write-probe", "1").block(WAIT))
+                    .as("전제 — 상한이 실제로 걸려 메모리를 늘리는 쓰기가 막힌다")
+                    .rootCause().hasMessageContaining("OOM");
+
+            gateway.beat("oom-node", 30, 3, CircuitState.CLOSED, 0).block(WAIT);
+
+            assertThat(redis.opsForHash().hasKey(RedisKeys.INSTANCES, "oom-node").block(WAIT))
+                    .as("상한 중에도 제 자리를 남긴다").isTrue();
+        });
+    }
+
+    /**
+     * 매진 큐 정리가 거부되면 상한을 푸는 길이 막힌다 — 메모리를 줄이는 쪽이 이 정리다.
+     *
+     * <p>표만 세우는 갈래도 쿠폰마다 수명 있는 키 하나라 사람 수에 안 비례한다 (RD-12).
+     */
+    @Test
+    @DisplayName("메모리_상한에서도_매진_큐를_지운다")
+    void 메모리_상한에서도_매진_큐를_지운다() throws Exception {
+        redis.opsForZSet().add(RedisKeys.queue(COUPON, 1, 0), "m1", 1).block(WAIT);
+        redis.opsForValue().set(RedisKeys.stock(COUPON), "0").block(WAIT);
+        // 표가 없으면 안 지운다. 후보로 오른 첫 회차에 서는 것이라 상한 전에 세운다.
+        port.sealFences(List.of(COUPON), FENCE).block(WAIT);
+
+        메모리_상한에서(() -> {
+            assertThatThrownBy(() -> redis.opsForValue().set("test:oom-write-probe", "1").block(WAIT))
+                    .as("전제 — 상한이 실제로 걸려 메모리를 늘리는 쓰기가 막힌다")
+                    .rootCause().hasMessageContaining("OOM");
+
+            assertThat(port.dropSoldOutQueues(List.of(COUPON), FENCE).block(WAIT))
+                    .as("상한 중에도 매진 줄을 지운다").containsExactly(COUPON);
+            // 돌려준 값만 보면 1 을 내고 안 지우는 회귀가 통과한다.
+            assertThat(redis.hasKey(RedisKeys.queue(COUPON, 1, 0)).block(WAIT))
+                    .as("줄이 실제로 사라졌다").isFalse();
+        });
+    }
+
+    /**
+     * 거부와 단절을 지표가 갈라 준다 (CY-970).
+     *
+     * <p>상한 중에는 하트비트가 초록이라 노드 쪽이 조용하다. 재료가 낡았다는 신호만으로는 메모리를
+     * 줄여야 하는지 연결을 기다려야 하는지가 안 짚인다.
+     */
+    @Test
+    @DisplayName("상한이_거부한_발행을_센다")
+    void 상한이_거부한_발행을_센다() throws Exception {
+        double 앞 = port.writeRefused();
+
+        메모리_상한에서(() -> {
+            assertThatThrownBy(() -> port.publish(Map.of("f", "v"), FENCE).block(WAIT))
+                    .as("발행은 사람 수만큼 쓰는 스크립트라 상한에서 거부된다")
+                    .rootCause().hasMessageContaining("OOM");
+
+            assertThat(port.writeRefused()).as("거부를 센다").isGreaterThan(앞);
+        });
     }
 
     /** 승계 잠금이 거부되면 게이트가 안 잠긴 채 열려, 쓰기가 풀리는 순간 유령의 지연된 몫이 먼저 들어간다. */

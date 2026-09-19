@@ -5,12 +5,14 @@ import com.kafkick.waiting.domain.queue.QueueEntry;
 import com.kafkick.waiting.domain.queue.RankEstimator;
 import com.kafkick.waiting.domain.queue.QueueState;
 import com.kafkick.waiting.gateway.QueuePort;
+import io.micrometer.core.instrument.FunctionCounter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.Objects;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.ClassPathResource;
@@ -77,6 +79,9 @@ public final class QueueRedisPort implements QueuePort {
      */
     private final Timer enqueueFailed;
 
+    /** 레디스가 등록을 거부한 수. 단절과 가른다 — 앞은 메모리를 줄여야 풀린다 (CY-970). */
+    private final AtomicLong writeRefused = new AtomicLong();
+
     /**
      * 끊긴 왕복. <b>실패와도 안 섞는다</b> — 몰릴 때 클라이언트가 끊는 것은 정상 사건이라, 실패 칸에 담으면
      * 그 칸을 에러율로 보는 쪽이 레디스 장애로 읽는다.
@@ -117,6 +122,12 @@ public final class QueueRedisPort implements QueuePort {
         this.enqueueOk = enqueueTimer("success");
         this.enqueueFailed = enqueueTimer("error");
         this.enqueueCancelled = enqueueTimer("cancelled");
+        // **거부와 단절을 가른다** (CY-970). 상한 중에는 하트비트가 초록이라 노드 쪽이 조용하고,
+        // 재료가 낡았다는 신호만으로는 메모리를 줄여야 하는지 연결을 기다려야 하는지가 안 짚인다.
+        FunctionCounter.builder("waiting.redis.write.refused", this, QueueRedisPort::writeRefused)
+                .tag("path", "enqueue")
+                .description("레디스가 상한으로 거부한 등록 건수")
+                .register(meters);
     }
 
     /** 지표를 아무 데도 안 내는 자리. <b>시험용이다</b> — 운영 배선은 레지스트리를 받는 쪽을 쓴다. */
@@ -161,9 +172,20 @@ public final class QueueRedisPort implements QueuePort {
                 // 채로 200 이 나가고, 실패 경로가 통째로 안 돈다.
                 .switchIfEmpty(Mono.error(new IllegalStateException("등록 결과가 비었다")))
                 .map(this::toEntry)
+                // 거부와 단절은 대처가 다르다. 앞은 메모리를 줄여야 풀린다 (CY-970).
+                .doOnError(e -> {
+                    if (WriteRefusal.refused(e)) {
+                        writeRefused.incrementAndGet();
+                    }
+                })
                 // **취소도 끝난 것이다.** 끊긴 요청은 통계적으로 오래 걸린 쪽이라, 그것만 빠진 분위수는
                 // 게이트가 보라는 꼬리를 정확히 지운다.
                 .doFinally(signal -> sample.stop(outcomeOf(signal)));
+    }
+
+    /** 레디스가 등록을 거부한 수. 부르는 쪽이 지표로 낸다. */
+    public double writeRefused() {
+        return writeRefused.get();
     }
 
     private Timer outcomeOf(SignalType signal) {

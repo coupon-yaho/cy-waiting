@@ -3,6 +3,7 @@ package com.kafkick.waiting.adapter.redis;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.kafkick.waiting.control.LeaderLock;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -50,7 +51,30 @@ class ScriptsUnderMemoryLimitTest extends RedisContainerSupport {
 
     private void 비운다() {
         redis.delete(RedisKeys.applyFence(COUPON, 1, 0), RedisKeys.dropFence(COUPON, 1, 0),
-                RedisKeys.SNAPSHOT_FENCE).block(WAIT);
+                RedisKeys.SNAPSHOT_FENCE, RedisKeys.LEADER, RedisKeys.LEADER_GENERATION).block(WAIT);
+    }
+
+    /**
+     * 상한에서 리더를 못 잡으면 배분이 영영 멎는다 — 메모리를 줄이는 청소를 도는 것이 리더다.
+     *
+     * <p>획득 스크립트의 {@code allow-oom} 이 그것을 막는다. 그 선언이 사라지는 것을 무는 자리가
+     * 여기 말고 없다.
+     */
+    @Test
+    @DisplayName("메모리_상한에서도_리더를_잡는다")
+    void 메모리_상한에서도_리더를_잡는다() throws Exception {
+        LeaderRedisPort leader = new LeaderRedisPort(redis, Duration.ofSeconds(2));
+
+        메모리_상한에서(() -> {
+            assertThatThrownBy(() -> redis.opsForValue().set("oom-write-probe", "1").block(WAIT))
+                    .as("전제 — 상한이 실제로 걸려 메모리를 늘리는 쓰기가 막힌다")
+                    .rootCause().hasMessageContaining("OOM");
+
+            LeaderLock 잡은_것 = leader.acquire("oom-owner").block(WAIT);
+
+            assertThat(잡은_것.acquired()).as("상한 중에도 잡는다").isTrue();
+            assertThat(잡은_것.fence()).as("임기를 매긴다").isPositive();
+        });
     }
 
     /** 승계 잠금이 거부되면 게이트가 안 잠긴 채 열려, 쓰기가 풀리는 순간 유령의 지연된 몫이 먼저 들어간다. */

@@ -177,6 +177,9 @@ public final class AllocationRedisPort implements SnapshotSource {
     /** 되살린 폭의 합. <b>커서가 아예 없던 되살림은 안 넣는다</b> — 폭을 모르는 것과 0 은 다르다. */
     private final AtomicLong healedSpan = new AtomicLong();
 
+    /** 되살림이 드러낸 초과 입장의 하한 합. 폭과 달리 사람 수라 운영자가 바로 읽는다 (CY-958). */
+    private final AtomicLong healExcess = new AtomicLong();
+
     /** 되살림이 이어지는 구간. 진입과 해제만 남긴다 — 승격은 쿠폰 전체를 한꺼번에 되감는다. */
     private final FailureWindow healing = FailureWindow.create();
 
@@ -199,6 +202,12 @@ public final class AllocationRedisPort implements SnapshotSource {
      * 적용이 도는 쿠폰이 곧 활성 쿠폰이다.
      */
     private final Map<String, Double> lastAdmitted = new ConcurrentHashMap<>();
+
+    /**
+     * 이 임기에 쿠폰마다 들인 누적 인원. <b>되살림 기억과 수명이 같아야 한다</b> — 승계로 기억이
+     * 버려지면 이 수도 같이 버려져야 남의 임기 입장을 제 것으로 빼지 않는다 (CY-958).
+     */
+    private final Map<String, Long> enteredSince = new ConcurrentHashMap<>();
 
     /** 마지막으로 성공한 정책 회차. 읽기가 실패하면 여기로 되돌아간다. */
     private final AtomicReference<Map<String, QueueMode>> lastModes =
@@ -577,6 +586,7 @@ public final class AllocationRedisPort implements SnapshotSource {
     /** 활성에서 빠진 쿠폰의 기준을 버린다. 안 버리면 이 맵만 역사상 쿠폰 수로 자란다. */
     public void forgetInactive(Collection<String> active) {
         lastAdmitted.keySet().retainAll(active);
+        enteredSince.keySet().retainAll(active);
     }
 
     /** 깨진 값은 비운다. <b>저장과 읽기의 폴백이 반대 방향</b>이라 한 함수로 접으면 한쪽이 거짓 양성이 된다. */
@@ -932,6 +942,11 @@ public final class AllocationRedisPort implements SnapshotSource {
                     // 되살림 칸이 붙는 순간 정상 회차가 거절로 오독된다 (CY-945).
                     long entered = Long.parseLong(String.valueOf(counts.get(1)));
                     if (entered >= 0) {
+                        // **되살림을 세기 전에 더한다.** 이 회차의 입장도 커서 아래에 드므로, 나중에
+                        // 더하면 그만큼이 초과로 잡힌다.
+                        if (entered > 0) {
+                            enteredSince.merge(grant.couponId(), entered, Long::sum);
+                        }
                         countHeal(grant.couponId(), counts);
                         // **쓴 임계를 기억한다** (CY-856). 되감기는 우리가 쓴 값이 사라지는 것으로만 보인다.
                         // 못 읽은 값과 <b>한 번도 안 들인 줄(-1)</b>은 안 넣는다 — 넣으면 키가 없는 그 쿠폰이
@@ -1076,6 +1091,11 @@ public final class AllocationRedisPort implements SnapshotSource {
         return applyFenced.get();
     }
 
+    /** 되살림이 드러낸 초과 입장의 하한 합. 부르는 쪽이 지표로 낸다. */
+    public double healExcess() {
+        return healExcess.get();
+    }
+
     /** 레디스가 발행을 거부한 수. 부르는 쪽이 지표로 낸다. */
     public double writeRefused() {
         return writeRefused.get();
@@ -1110,10 +1130,29 @@ public final class AllocationRedisPort implements SnapshotSource {
         if (span >= 0) {
             healedSpan.addAndGet(span);
         }
+        long excess = countExcess(couponId, counts);
         if (healing.entered()) {
-            log.warn("입장 커서를 되살렸다 — 쿠폰 {}, 폭 {} (음수면 커서가 없어 폭을 모른다). "
-                    + "이어지는 건은 지표로 센다", couponId, span);
+            log.warn("입장 커서를 되살렸다 — 쿠폰 {}, 폭 {} (음수면 커서가 없어 폭을 모른다), "
+                    + "크레딧 없이 들어간 사람 {}명 이상. 이어지는 건은 지표로 센다",
+                    couponId, span, excess);
         }
+    }
+
+    /**
+     * 되살림이 드러낸 초과 입장의 하한. <b>과공제가 안 생기는 방향으로만 센다</b> — 꼬리에 빠진 등록만큼
+     * 차이가 작게 나오므로 실제 초과보다 작거나 같다.
+     */
+    private long countExcess(String couponId, List<?> counts) {
+        if (counts.size() < 4 || String.valueOf(counts.get(3)).isEmpty()) {
+            return 0;
+        }
+        long below = Long.parseLong(String.valueOf(counts.get(3)));
+        long excess = below - enteredSince.getOrDefault(couponId, 0L);
+        if (excess > 0) {
+            healExcess.addAndGet(excess);
+            return excess;
+        }
+        return 0;
     }
 
     /**

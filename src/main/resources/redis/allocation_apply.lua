@@ -10,12 +10,14 @@
 --          수가 아니면 없는 것으로 본다 — 앞 세 인자와 달리 오류로 막지 않는다. 되살림은 덧붙은 방어라,
 --          조립이 틀린 날 적용 전체를 멈추는 것보다 방어 하나를 잃는 쪽이 낫다
 --
--- 반환  {임계, 들인 인원, 되살린 폭}. 첫 칸과 셋째 칸은 문자열, 둘째는 정수다
---        울타리가 막았으면 {'-1', -1, 막은 임기}. 막은 임기도 문자열이다
+-- 반환  {임계, 들인 인원, 되살린 폭, 커서 아래 인원}. 둘째만 정수이고 나머지는 문자열이다
+--        울타리가 막았으면 {'-1', -1, 막은 임기, ''}. 막은 임기도 문자열이다
 --   임계            새 입장 임계. 안 바뀌었으면 이전 값, 되살렸으면 되살린 값
 --   들인 인원        임계 위로 새로 들어온 사람 수
 --   되살린 폭        되살렸을 때만 찬다. 없던 커서는 '-1' 이다 — 폭을 모른다는 뜻이다 (CY-945).
 --                    **이 회차의 입장은 안 든다** — 첫 칸은 입장까지 반영한 값이라 그것으로 빼면 부푼다
+--   커서 아래 인원    되살렸을 때만 찬다 (CY-957). 리더가 기억하는 입장자 수와 견주면 초과분의 하한이
+--                    나온다. 안 되살린 회차에 세면 한산한 쿠폰에도 매 틱 훑기가 붙는다
 --
 --   **거절은 들인 인원으로 가른다.** 정상 회차의 들인 인원은 0 이상이라 -1 이 거절의 표식이다. 칸 수로 가르면
 --   되살림 칸이 붙는 순간 정상 회차가 거절로 오독된다.
@@ -58,7 +60,7 @@ end
 -- **0 은 리더가 아니라는 뜻이다.** 강등된 노드가 그 값을 들고 나오므로, 안 막으면
 -- 리더가 아닌 노드가 사람을 들인다.
 if fence <= 0 then
-    return {'-1', -1, '0'}
+    return {'-1', -1, '0', ''}
 end
 
 -- **옛 임기는 안 들인다.** 승계 뒤 깨어난 유령의 회차는 이미 제 몫을 계산한
@@ -66,7 +68,7 @@ end
 -- 같은 번호의 재시도는 막지 않는다 — 막으면 실패한 회차가 영영 안 된다.
 local seenFence = tonumber(redis.call('GET', KEYS[3]))
 if seenFence ~= nil and seenFence == seenFence and fence < seenFence then
-    return {'-1', -1, string.format('%.0f', seenFence)}
+    return {'-1', -1, string.format('%.0f', seenFence), ''}
 end
 -- **수명을 준다.** 이 표는 쿠폰별이라 그 쿠폰이 한산하면 갱신이 안 온다 — 스냅샷
 -- 울타리처럼 짧게 두면 그 사이 문이 통째로 사라진다. 그래서 쿠폰별 표와 같은
@@ -95,6 +97,8 @@ local written = tonumber(ARGV[4])
 local healed = false
 -- 되살린 폭. 안 되살린 회차는 빈 문자열이라 부르는 쪽이 "되살림 없음" 으로 읽는다 (CY-945).
 local healedFrom = ''
+-- 되살린 커서 아래 인원. 되살린 회차만 센다 (CY-957).
+local belowCursor = ''
 if written ~= nil and written == written and written ~= math.huge and written > current then
     local before = current
     current = math.floor(written)
@@ -102,6 +106,9 @@ if written ~= nil and written == written and written ~= math.huge and written > 
     healedFrom = before < 0 and '-1' or string.format('%.0f', current - before)
     redis.call('SET', KEYS[2], string.format('%.0f', current))
     healed = true
+    -- **되살린 뒤에 센다.** 되살리기 전 커서로 세면 그 사이에 선 사람이 안 들어간다.
+    belowCursor = string.format('%d',
+            redis.call('ZCOUNT', KEYS[1], '-inf', string.format('%.0f', current)))
 end
 -- **크레딧이 있거나 되살린 회차만 건다.** 크레딧 0 에 되살릴 것도 없는 호출이 매 틱 걸면, 승계 봉인이 표의 남은
 -- 수명을 마지막 적용의 나이로 읽어 새 리더의 첫 적용이 밀린다.
@@ -111,7 +118,7 @@ end
 
 if admit == 0 then
     -- 크레딧이 없다. **임계를 낮추지 않는다** — 낮추면 통과한 사람이 되돌아온다.
-    return {string.format('%.0f', current), 0, healedFrom}
+    return {string.format('%.0f', current), 0, healedFrom, belowCursor}
 end
 
 -- **이미 임계 아래인 사람은 세지 않는다.** 앞에서부터 세면 통과한 사람 자리에
@@ -129,16 +136,16 @@ else
     local last = redis.call('ZRANGE', KEYS[1], -1, -1, 'WITHSCORES')
     if #last == 0 then
         -- 큐가 비었다. 들일 사람이 없으니 임계도 그대로다.
-        return {string.format('%.0f', current), 0, healedFrom}
+        return {string.format('%.0f', current), 0, healedFrom, belowCursor}
     end
     threshold = tonumber(last[2])
 end
 
 if threshold <= current then
-    return {string.format('%.0f', current), 0, healedFrom}
+    return {string.format('%.0f', current), 0, healedFrom, belowCursor}
 end
 
 local exact = string.format('%.0f', threshold)
 local entering = redis.call('ZCOUNT', KEYS[1], from, exact)
 redis.call('SET', KEYS[2], exact)
-return {exact, entering, healedFrom}
+return {exact, entering, healedFrom, belowCursor}

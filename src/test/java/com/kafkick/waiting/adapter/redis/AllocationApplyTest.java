@@ -167,7 +167,7 @@ class AllocationApplyTest extends RedisContainerSupport {
 
         List<Object> 결과 = 배분(0, "10");
 
-        assertThat(결과).hasSize(3);
+        assertThat(결과).hasSize(4);
         assertThat(String.valueOf(결과.get(2))).isEmpty();
     }
 

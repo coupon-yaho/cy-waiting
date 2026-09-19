@@ -116,6 +116,7 @@ class MemoryLimitHandoverScenarioTest {
                     막히기_전_임계[0] = 연결.sync().get(RedisKeys.admitted(COUPON, 1, 0));
                     앞_임기[0] = leadership.fence();
                     // 리스를 끝내 승계를 만든다. 이 노드가 새 임기로 다시 잡고 승계 봉인을 돈다.
+                    // 상한 중에도 잡힌다 — 획득 스크립트가 allow-oom 이다. LeaderElectionTest 가 문다.
                     if (!락.lease를_만료시킨다(Duration.ofMillis(1))) {
                         throw new IllegalStateException("리스를 못 끝냈다 — 승계를 안 만들었다");
                     }

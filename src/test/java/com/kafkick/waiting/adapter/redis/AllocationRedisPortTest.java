@@ -579,6 +579,41 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     }
 
     /**
+     * <b>초과분을 다음 회차에서 회수한다</b> (CY-957). 이미 들어간 사람을 되돌릴 수는 없으니, 그만큼
+     * 덜 들여 유입을 예산으로 되돌린다.
+     */
+    @Test
+    @DisplayName("초과분만큼_다음_회차가_덜_들인다")
+    void 초과분만큼_다음_회차가_덜_들인다() {
+        줄_세운다("c1", 10, 20, 30, 40, 50, 60);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "10").block(WAIT);
+        줄_세운다("c1", 12, 15);
+        port.apply(new Grant("c1", 0), 임기).block(WAIT);
+
+        Long 들인_수 = port.apply(new Grant("c1", 3), 임기).block(WAIT);
+
+        assertThat(port.healExcess()).as("전제 — 초과가 둘이다").isEqualTo(2);
+        assertThat(들인_수).as("셋 중 둘을 회수해 하나만 들인다").isEqualTo(1);
+    }
+
+    /** 회수는 한 번이다. 갚은 뒤 회차는 몫을 그대로 쓴다. */
+    @Test
+    @DisplayName("갚고_나면_몫을_그대로_쓴다")
+    void 갚고_나면_몫을_그대로_쓴다() {
+        줄_세운다("c1", 10, 20, 30, 40, 50, 60);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "10").block(WAIT);
+        줄_세운다("c1", 12, 15);
+        port.apply(new Grant("c1", 0), 임기).block(WAIT);
+        port.apply(new Grant("c1", 3), 임기).block(WAIT);
+
+        Long 들인_수 = port.apply(new Grant("c1", 2), 임기).block(WAIT);
+
+        assertThat(들인_수).as("빚이 없으니 둘 다 들인다").isEqualTo(2);
+    }
+
+    /**
      * <b>폭은 되살린 만큼이다.</b> 같은 회차의 입장까지 더하면 뜨거운 쿠폰일수록 부풀어, 작은 되살림과
      * 큰 되살림을 가르려던 지표가 그 구분을 잃는다.
      */

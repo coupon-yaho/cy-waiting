@@ -3,6 +3,7 @@ package com.kafkick.waiting.adapter.redis;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.kafkick.waiting.control.GatewayHeartbeatLoop;
 import com.kafkick.waiting.domain.admission.CircuitState;
 import java.time.Duration;
 import java.util.List;
@@ -36,10 +37,15 @@ class ScriptsUnderMemoryLimitTest extends RedisContainerSupport {
     @Autowired
     private ReactiveStringRedisTemplate redis;
 
+    /** 매 틱 자기를 등록하는 배경 루프. 운영 키를 쓰는 시험이라 자리를 못 가르니 멈춘다. */
+    @Autowired
+    private GatewayHeartbeatLoop 하트비트;
+
     private AllocationRedisPort port;
 
     @BeforeEach
     void 준비() {
+        하트비트.stop();
         port = AllocationRedisPort.of(redis, 1);
         비운다();
     }
@@ -52,7 +58,9 @@ class ScriptsUnderMemoryLimitTest extends RedisContainerSupport {
     private void 비운다() {
         redis.delete(RedisKeys.applyFence(COUPON, 1, 0), RedisKeys.dropFence(COUPON, 1, 0),
                 RedisKeys.SNAPSHOT_FENCE).block(WAIT);
-        redis.opsForHash().remove(RedisKeys.INSTANCES, "oom-node").block(WAIT);
+        redis.opsForHash().remove(RedisKeys.INSTANCES,
+                "oom-node", "#c:oom-node", "#p:oom-node").block(WAIT);
+        redis.delete("test:oom-write-probe").block(WAIT);
         redis.delete(RedisKeys.queue(COUPON, 1, 0), RedisKeys.alive(COUPON, 1, 0),
                 RedisKeys.stock(COUPON)).block(WAIT);
     }
@@ -68,12 +76,14 @@ class ScriptsUnderMemoryLimitTest extends RedisContainerSupport {
         GatewayRedisPort gateway = GatewayRedisPort.of(redis);
 
         메모리_상한에서(() -> {
-            assertThatThrownBy(() -> redis.opsForValue().set("oom-write-probe", "1").block(WAIT))
+            assertThatThrownBy(() -> redis.opsForValue().set("test:oom-write-probe", "1").block(WAIT))
                     .as("전제 — 상한이 실제로 걸려 메모리를 늘리는 쓰기가 막힌다")
                     .rootCause().hasMessageContaining("OOM");
 
-            assertThat(gateway.beat("oom-node", 30, 3, CircuitState.CLOSED, 0).block(WAIT).alive())
-                    .as("상한 중에도 제 자리를 남긴다").isPositive();
+            gateway.beat("oom-node", 30, 3, CircuitState.CLOSED, 0).block(WAIT);
+
+            assertThat(redis.opsForHash().hasKey(RedisKeys.INSTANCES, "oom-node").block(WAIT))
+                    .as("상한 중에도 제 자리를 남긴다").isTrue();
         });
     }
 
@@ -91,7 +101,7 @@ class ScriptsUnderMemoryLimitTest extends RedisContainerSupport {
         port.sealFences(List.of(COUPON), FENCE).block(WAIT);
 
         메모리_상한에서(() -> {
-            assertThatThrownBy(() -> redis.opsForValue().set("oom-write-probe", "1").block(WAIT))
+            assertThatThrownBy(() -> redis.opsForValue().set("test:oom-write-probe", "1").block(WAIT))
                     .as("전제 — 상한이 실제로 걸려 메모리를 늘리는 쓰기가 막힌다")
                     .rootCause().hasMessageContaining("OOM");
 

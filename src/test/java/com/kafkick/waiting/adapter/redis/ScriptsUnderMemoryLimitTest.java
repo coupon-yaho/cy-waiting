@@ -3,6 +3,7 @@ package com.kafkick.waiting.adapter.redis;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.kafkick.waiting.domain.admission.CircuitState;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -51,6 +52,27 @@ class ScriptsUnderMemoryLimitTest extends RedisContainerSupport {
     private void 비운다() {
         redis.delete(RedisKeys.applyFence(COUPON, 1, 0), RedisKeys.dropFence(COUPON, 1, 0),
                 RedisKeys.SNAPSHOT_FENCE).block(WAIT);
+        redis.opsForHash().remove(RedisKeys.INSTANCES, "oom-node").block(WAIT);
+    }
+
+    /**
+     * 하트비트가 거부되면 산 노드가 분모에서 빠진다. 남은 노드가 그만큼 큰 몫을 쓰므로 유입이 예산을 넘는다.
+     *
+     * <p>상한 중에도 계속 불리는 경로라, 쓰는 양이 노드 수에만 비례한다는 조건과 함께 RD-12 의 대상이다.
+     */
+    @Test
+    @DisplayName("메모리_상한에서도_하트비트가_남는다")
+    void 메모리_상한에서도_하트비트가_남는다() throws Exception {
+        GatewayRedisPort gateway = GatewayRedisPort.of(redis);
+
+        메모리_상한에서(() -> {
+            assertThatThrownBy(() -> redis.opsForValue().set("oom-write-probe", "1").block(WAIT))
+                    .as("전제 — 상한이 실제로 걸려 메모리를 늘리는 쓰기가 막힌다")
+                    .rootCause().hasMessageContaining("OOM");
+
+            assertThat(gateway.beat("oom-node", 30, 3, CircuitState.CLOSED, 0).block(WAIT).alive())
+                    .as("상한 중에도 제 자리를 남긴다").isPositive();
+        });
     }
 
     /** 승계 잠금이 거부되면 게이트가 안 잠긴 채 열려, 쓰기가 풀리는 순간 유령의 지연된 몫이 먼저 들어간다. */

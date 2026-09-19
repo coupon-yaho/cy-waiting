@@ -103,6 +103,35 @@ class AllocationApplyTest extends RedisContainerSupport {
         assertThat(String.valueOf(결과.get(2))).as("5 에서 20 으로 되살린 폭").isEqualTo("15");
     }
 
+    /**
+     * 되살린 커서 아래 인원을 같이 돌려준다 (CY-957).
+     *
+     * <p>리더가 기억하는 입장자 수와 견주면 초과분의 하한이 나온다. 그 차이만큼 다음 크레딧에서
+     * 깎으면 과공제 없이 회수된다.
+     */
+    @Test
+    @DisplayName("되살린_회차는_커서_아래_인원을_돌려준다")
+    void 되살린_회차는_커서_아래_인원을_돌려준다() {
+        줄_세운다(10, 20, 30);
+        배분(2);
+        redis.opsForValue().set(ADMITTED, "5").block(WAIT);
+
+        List<Object> 결과 = 배분(0, "20");
+
+        assertThat(String.valueOf(결과.get(3))).as("20 이하가 둘이다").isEqualTo("2");
+    }
+
+    /** 안 되살린 회차는 셈하지 않는다. 매 틱 세면 한산한 쿠폰에도 훑기가 붙는다. */
+    @Test
+    @DisplayName("안_되살린_회차는_인원을_안_센다")
+    void 안_되살린_회차는_인원을_안_센다() {
+        줄_세운다(10, 20, 30);
+
+        List<Object> 결과 = 배분(1);
+
+        assertThat(String.valueOf(결과.get(3))).isEmpty();
+    }
+
     @Test
     @DisplayName("같은_회차의_입장은_폭에_안_든다")
     void 같은_회차의_입장은_폭에_안_든다() {

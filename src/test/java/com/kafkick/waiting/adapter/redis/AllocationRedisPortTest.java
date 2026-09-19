@@ -546,6 +546,39 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     }
 
     /**
+     * <b>되살림의 영향을 사람 수로 낸다</b> (CY-958). 폭은 마이크로초라 운영자가 인원으로 못 환산한다.
+     *
+     * <p>커서 아래 인원에서 이 리더가 들인 수를 빼면 크레딧 없이 들어간 사람의 하한이 나온다.
+     */
+    @Test
+    @DisplayName("되살림의_초과분을_사람_수로_센다")
+    void 되살림의_초과분을_사람_수로_센다() {
+        줄_세운다("c1", 10, 20, 30, 40);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "10").block(WAIT);
+
+        port.apply(new Grant("c1", 0), 임기).block(WAIT);
+
+        // 커서 20 아래가 둘인데 이 리더가 들인 것도 둘이라 초과가 없다.
+        assertThat(port.healExcess()).as("들인 만큼만 있으면 초과가 0").isZero();
+    }
+
+    /** 되살림 전에 선 사람은 커서 아래에 더해지는데 이 리더가 들인 적이 없다. 그 차이가 초과다. */
+    @Test
+    @DisplayName("되살림_전에_선_사람이_초과로_잡힌다")
+    void 되살림_전에_선_사람이_초과로_잡힌다() {
+        줄_세운다("c1", 10, 20, 30, 40);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "10").block(WAIT);
+        // 커서를 잃은 동안 둘이 더 섰다. 되살리면 그 둘이 커서 아래로 들어간다.
+        줄_세운다("c1", 12, 15);
+
+        port.apply(new Grant("c1", 0), 임기).block(WAIT);
+
+        assertThat(port.healExcess()).as("커서 아래 넷 중 들인 것은 둘").isEqualTo(2);
+    }
+
+    /**
      * <b>폭은 되살린 만큼이다.</b> 같은 회차의 입장까지 더하면 뜨거운 쿠폰일수록 부풀어, 작은 되살림과
      * 큰 되살림을 가르려던 지표가 그 구분을 잃는다.
      */

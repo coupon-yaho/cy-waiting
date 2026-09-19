@@ -39,13 +39,14 @@ class WriteRefusalTest {
         assertThat(WriteRefusal.refused(null)).isFalse();
     }
 
-    /** 원인이 제 자신을 가리키면 훑기가 안 끝난다. */
+    /** 원인이 고리를 이루면 훑기가 안 끝난다. 자바는 자기 자신만 막는다. */
     @Test
     @DisplayName("원인이_도는_예외도_끝난다")
     void 원인이_도는_예외도_끝난다() {
-        Throwable 도는_것 = new IllegalStateException("돈다");
-        도는_것.initCause(도는_것);
+        Throwable 앞 = new IllegalStateException("앞");
+        Throwable 뒤 = new IllegalStateException("뒤", 앞);
+        앞.initCause(뒤);
 
-        assertThat(WriteRefusal.refused(도는_것)).isFalse();
+        assertThat(WriteRefusal.refused(앞)).isFalse();
     }
 }

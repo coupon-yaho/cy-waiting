@@ -116,6 +116,26 @@ class ScriptsUnderMemoryLimitTest extends RedisContainerSupport {
         });
     }
 
+    /**
+     * 거부와 단절을 지표가 갈라 준다 (CY-970).
+     *
+     * <p>상한 중에는 하트비트가 초록이라 노드 쪽이 조용하다. 재료가 낡았다는 신호만으로는 메모리를
+     * 줄여야 하는지 연결을 기다려야 하는지가 안 짚인다.
+     */
+    @Test
+    @DisplayName("상한이_거부한_발행을_센다")
+    void 상한이_거부한_발행을_센다() throws Exception {
+        double 앞 = port.writeRefused();
+
+        메모리_상한에서(() -> {
+            assertThatThrownBy(() -> port.publish(Map.of("f", "v"), FENCE).block(WAIT))
+                    .as("발행은 사람 수만큼 쓰는 스크립트라 상한에서 거부된다")
+                    .rootCause().hasMessageContaining("OOM");
+
+            assertThat(port.writeRefused()).as("거부를 센다").isGreaterThan(앞);
+        });
+    }
+
     /** 승계 잠금이 거부되면 게이트가 안 잠긴 채 열려, 쓰기가 풀리는 순간 유령의 지연된 몫이 먼저 들어간다. */
     @Test
     @DisplayName("메모리_상한에서도_입장과_삭제의_문을_잠근다")

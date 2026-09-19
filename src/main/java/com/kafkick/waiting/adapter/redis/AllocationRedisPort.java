@@ -188,6 +188,9 @@ public final class AllocationRedisPort implements SnapshotSource {
      * 쪽만 세는 셈이다.
      */
     private final AtomicLong markersDropped = new AtomicLong();
+
+    /** 레디스가 발행을 거부한 수. 단절과 가른다 — 앞은 메모리를 줄여야 풀린다 (CY-970). */
+    private final AtomicLong writeRefused = new AtomicLong();
     /** 신선도의 기준 시각. 뒤로 가는 것을 여기서 막는다. */
     private final ServerClock serverClock = ServerClock.create();
 
@@ -973,6 +976,9 @@ public final class AllocationRedisPort implements SnapshotSource {
                 // **못 나간 발행은 문의 수명을 다시 건다** (CY-932). 표는 발행이 매 틱 새로 거는데, 메모리 상한이 그
                 // 수명보다 길면 봉인이 사라진 채 풀려 멎었던 옛 리더의 발행이 먼저 들어간다.
                 .doOnError(e -> {
+                    if (WriteRefusal.refused(e)) {
+                        writeRefused.incrementAndGet();
+                    }
                     if (!(e instanceof FencedOutException)) {
                         resealSnapshotFence(fence);
                     }
@@ -1068,6 +1074,11 @@ public final class AllocationRedisPort implements SnapshotSource {
     /** 울타리가 입장 적용을 거절한 건수. 쿠폰마다 오르므로 회차 수가 아니다. */
     public double applyFenced() {
         return applyFenced.get();
+    }
+
+    /** 레디스가 발행을 거부한 수. 부르는 쪽이 지표로 낸다. */
+    public double writeRefused() {
+        return writeRefused.get();
     }
 
     /** 사라진 임계를 되살린 건수. 0 이 아니면 그 사이 승격이나 잘림이 있었다. */

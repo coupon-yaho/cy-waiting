@@ -116,6 +116,9 @@ class MemoryLimitHandoverScenarioTest {
                     막히기_전_임계[0] = 연결.sync().get(RedisKeys.admitted(COUPON, 1, 0));
                     앞_임기[0] = leadership.fence();
                     // 리스를 끝내 승계를 만든다. 이 노드가 새 임기로 다시 잡고 승계 봉인을 돈다.
+                    // **상한 중에도 잡힌다** (CY-964). 획득 스크립트가 첫 줄에 `allow-oom` 을 달아서다 —
+                    // 안 달면 아무도 못 잡아 배분이 영영 멎는다. 상한에서 거절되는 것은 그 밖의 쓰기이고,
+                    // 리스를 끝내는 `PEXPIRE` 는 애초에 거절 대상이 아니다.
                     if (!락.lease를_만료시킨다(Duration.ofMillis(1))) {
                         throw new IllegalStateException("리스를 못 끝냈다 — 승계를 안 만들었다");
                     }

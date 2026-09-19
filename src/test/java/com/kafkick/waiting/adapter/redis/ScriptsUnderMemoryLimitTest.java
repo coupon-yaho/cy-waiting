@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
+import org.springframework.test.annotation.DirtiesContext;
 
 /**
  * <b>메모리 상한에서도 승계 봉인이 선다</b> (CY-932).
@@ -26,6 +27,8 @@ import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
  */
 @Tag("integration")
 @SpringBootTest
+// 하트비트 루프를 멈춘 채로 두면 뒤 시험이 멈춘 루프를 물려받는다.
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class ScriptsUnderMemoryLimitTest extends RedisContainerSupport {
 
     private static final Duration WAIT = Duration.ofSeconds(5);
@@ -107,6 +110,9 @@ class ScriptsUnderMemoryLimitTest extends RedisContainerSupport {
 
             assertThat(port.dropSoldOutQueues(List.of(COUPON), FENCE).block(WAIT))
                     .as("상한 중에도 매진 줄을 지운다").containsExactly(COUPON);
+            // 돌려준 값만 보면 1 을 내고 안 지우는 회귀가 통과한다.
+            assertThat(redis.hasKey(RedisKeys.queue(COUPON, 1, 0)).block(WAIT))
+                    .as("줄이 실제로 사라졌다").isFalse();
         });
     }
 

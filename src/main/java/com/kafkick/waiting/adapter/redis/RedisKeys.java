@@ -25,12 +25,9 @@ public final class RedisKeys {
     public static final String LEADER = "scheduler:leader";
 
     /**
-     * 임기를 세는 값. <b>해시 태그가 리더 키와 같은 슬롯에 묶는다</b> — 태그 없는
-     * {@code scheduler:leader} 는 키 전체로 슬롯을 정하므로 태그 안의 글자가 같으면
-     * 두 키가 같은 슬롯이다 (RD-2). 그래서 리더 키 이름을 안 바꾸고 같이 읽는다.
-     *
-     * <p><b>접두어를 붙이면 이 등식이 깨진다.</b> 리더 키는 접두어까지 해시하는데 이 키는 태그만
-     * 해시한다. 붙이는 날 태그 안에 접두어를 같이 넣는다.
+     * 임기를 세는 값. <b>해시 태그가 리더 키와 같은 슬롯에 묶는다</b> — 태그 안의 글자가 리더 키와
+     * 같아서다 (RD-2). <b>접두어를 붙이면 그 등식이 깨진다</b> — 리더 키는 접두어까지 해시하는데
+     * 이 키는 태그만 해시한다. 붙이는 날 태그 안에 접두어를 같이 넣는다.
      */
     public static final String LEADER_GENERATION = "{scheduler:leader}:gen";
 

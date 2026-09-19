@@ -53,6 +53,8 @@ class ScriptsUnderMemoryLimitTest extends RedisContainerSupport {
         redis.delete(RedisKeys.applyFence(COUPON, 1, 0), RedisKeys.dropFence(COUPON, 1, 0),
                 RedisKeys.SNAPSHOT_FENCE).block(WAIT);
         redis.opsForHash().remove(RedisKeys.INSTANCES, "oom-node").block(WAIT);
+        redis.delete(RedisKeys.queue(COUPON, 1, 0), RedisKeys.alive(COUPON, 1, 0),
+                RedisKeys.stock(COUPON)).block(WAIT);
     }
 
     /**
@@ -72,6 +74,29 @@ class ScriptsUnderMemoryLimitTest extends RedisContainerSupport {
 
             assertThat(gateway.beat("oom-node", 30, 3, CircuitState.CLOSED, 0).block(WAIT).alive())
                     .as("상한 중에도 제 자리를 남긴다").isPositive();
+        });
+    }
+
+    /**
+     * 매진 큐 정리가 거부되면 상한을 푸는 길이 막힌다 — 메모리를 줄이는 쪽이 이 정리다.
+     *
+     * <p>표만 세우는 갈래도 쿠폰마다 수명 있는 키 하나라 사람 수에 안 비례한다 (RD-12).
+     */
+    @Test
+    @DisplayName("메모리_상한에서도_매진_큐를_지운다")
+    void 메모리_상한에서도_매진_큐를_지운다() throws Exception {
+        redis.opsForZSet().add(RedisKeys.queue(COUPON, 1, 0), "m1", 1).block(WAIT);
+        redis.opsForValue().set(RedisKeys.stock(COUPON), "0").block(WAIT);
+        // 표가 없으면 안 지운다. 후보로 오른 첫 회차에 서는 것이라 상한 전에 세운다.
+        port.sealFences(List.of(COUPON), FENCE).block(WAIT);
+
+        메모리_상한에서(() -> {
+            assertThatThrownBy(() -> redis.opsForValue().set("oom-write-probe", "1").block(WAIT))
+                    .as("전제 — 상한이 실제로 걸려 메모리를 늘리는 쓰기가 막힌다")
+                    .rootCause().hasMessageContaining("OOM");
+
+            assertThat(port.dropSoldOutQueues(List.of(COUPON), FENCE).block(WAIT))
+                    .as("상한 중에도 매진 줄을 지운다").containsExactly(COUPON);
         });
     }
 

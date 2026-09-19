@@ -180,6 +180,15 @@ public final class AllocationRedisPort implements SnapshotSource {
     /** 되살림이 드러낸 초과 입장의 하한 합. 폭과 달리 사람 수라 운영자가 바로 읽는다 (CY-958). */
     private final AtomicLong healExcess = new AtomicLong();
 
+    /**
+     * 쿠폰마다 아직 안 갚은 초과분 (CY-957). <b>이미 들어간 사람은 못 되돌린다</b> — 그만큼 덜 들여
+     * 유입을 예산으로 되돌린다. 하한이라 덜 갚는 쪽으로만 틀린다.
+     */
+    private final Map<String, Long> owed = new ConcurrentHashMap<>();
+
+    /** 갚은 누적. 회수가 실제로 돌았는지를 이것으로 본다. */
+    private final AtomicLong repaid = new AtomicLong();
+
     /** 되살림이 이어지는 구간. 진입과 해제만 남긴다 — 승격은 쿠폰 전체를 한꺼번에 되감는다. */
     private final FailureWindow healing = FailureWindow.create();
 
@@ -587,6 +596,7 @@ public final class AllocationRedisPort implements SnapshotSource {
     public void forgetInactive(Collection<String> active) {
         lastAdmitted.keySet().retainAll(active);
         enteredSince.keySet().retainAll(active);
+        owed.keySet().retainAll(active);
     }
 
     /** 깨진 값은 비운다. <b>저장과 읽기의 폴백이 반대 방향</b>이라 한 함수로 접으면 한쪽이 거짓 양성이 된다. */
@@ -929,11 +939,12 @@ public final class AllocationRedisPort implements SnapshotSource {
         if (grant.credit() == 0 && !lastAdmitted.containsKey(grant.couponId())) {
             return Mono.just(0L);
         }
+        long credit = withheld(grant);
         return redis.execute(APPLY,
                         List.of(RedisKeys.queue(grant.couponId(), shards, 0),
                                 RedisKeys.admitted(grant.couponId(), shards, 0),
                                 RedisKeys.applyFence(grant.couponId(), shards, 0)),
-                        List.of(Long.toString(grant.credit()), Long.toString(fence),
+                        List.of(Long.toString(credit), Long.toString(fence),
                                 Long.toString(fenceTtl.toMillis()), written(grant.couponId())))
                 .next()
                 .flatMap(result -> {
@@ -1091,6 +1102,11 @@ public final class AllocationRedisPort implements SnapshotSource {
         return applyFenced.get();
     }
 
+    /** 회수로 덜 들인 누적 인원. 부르는 쪽이 지표로 낸다. */
+    public double repaid() {
+        return repaid.get();
+    }
+
     /** 되살림이 드러낸 초과 입장의 하한 합. 부르는 쪽이 지표로 낸다. */
     public double healExcess() {
         return healExcess.get();
@@ -1139,6 +1155,27 @@ public final class AllocationRedisPort implements SnapshotSource {
     }
 
     /**
+     * 빚만큼 덜 들인다. <b>한 회차가 제 몫보다 많이 갚지는 않는다</b> — 남은 빚은 다음 회차로 넘어가,
+     * 큰 초과가 한 쿠폰의 줄을 한꺼번에 세우지 않는다.
+     */
+    private long withheld(Grant grant) {
+        Long debt = owed.get(grant.couponId());
+        if (debt == null || debt <= 0 || grant.credit() <= 0) {
+            return grant.credit();
+        }
+        long pay = Math.min(debt, grant.credit());
+        if (pay >= debt) {
+            owed.remove(grant.couponId());
+        } else {
+            owed.put(grant.couponId(), debt - pay);
+        }
+        repaid.addAndGet(pay);
+        log.info("되살림 초과분을 갚는다 — 쿠폰 {}, 이번에 {} 덜 들인다, 남은 빚 {}",
+                grant.couponId(), pay, debt - pay);
+        return grant.credit() - pay;
+    }
+
+    /**
      * 되살림이 드러낸 초과 입장의 하한. <b>과공제가 안 생기는 방향으로만 센다</b> — 꼬리에 빠진 등록만큼
      * 차이가 작게 나오므로 실제 초과보다 작거나 같다.
      */
@@ -1150,6 +1187,7 @@ public final class AllocationRedisPort implements SnapshotSource {
         long excess = below - enteredSince.getOrDefault(couponId, 0L);
         if (excess > 0) {
             healExcess.addAndGet(excess);
+            owed.merge(couponId, excess, Long::sum);
             return excess;
         }
         return 0;

@@ -221,6 +221,11 @@ public class ControlPlaneConfig {
                         AllocationRedisPort::healExcess)
                 .description("되살림이 드러낸 초과 입장의 하한 합. 실제 초과보다 작거나 같다")
                 .register(meters);
+        // **센 것과 갚은 것을 같이 낸다** (CY-957). 둘이 오래 벌어지면 빚이 안 줄고 있다는 뜻이다.
+        FunctionCounter.builder("waiting.allocation.heal.repaid", port,
+                        AllocationRedisPort::repaid)
+                .description("되살림 초과분을 회수하느라 덜 들인 누적 인원")
+                .register(meters);
         // **거부와 단절을 가른다** (CY-970). 상한 중에는 하트비트가 초록이라 노드 쪽이 조용하고,
         // 재료가 낡았다는 신호만으로는 메모리를 줄여야 하는지 연결을 기다려야 하는지가 안 짚인다.
         FunctionCounter.builder("waiting.redis.write.refused", port,

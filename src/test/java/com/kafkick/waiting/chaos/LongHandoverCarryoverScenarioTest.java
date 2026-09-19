@@ -5,19 +5,22 @@ import com.kafkick.waiting.adapter.redis.RedisKeys;
 import com.kafkick.waiting.control.AllocationRound;
 import com.kafkick.waiting.control.ControlPlaneLifecycle;
 import com.kafkick.waiting.control.Leadership;
-import com.kafkick.waiting.control.SnapshotHolder;
+import com.kafkick.waiting.control.SnapshotCodec;
+import com.kafkick.waiting.domain.allocation.CreditSmoother;
 import com.kafkick.waiting.domain.coupon.CouponState;
 import io.lettuce.core.api.StatefulRedisConnection;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.DisplayName;
@@ -122,16 +125,19 @@ class LongHandoverCarryoverScenarioTest {
     private Leadership 첫_노드;
 
     @Autowired
-    private SnapshotHolder holder;
-
-    @Autowired
     private AllocationRound round;
 
     @Autowired
     private ControlPlaneLifecycle 수명;
 
+    /** 발행 해시를 읽는 자리. 노드가 실제로 넘겨받는 값을 재려고 든다. */
+    private final SnapshotCodec codec = SnapshotCodec.create();
+
     /** 보고 픽스처. 신선도를 앱과 같은 기준으로 보려고 든다. */
     private BackendReports 보고기;
+
+    /** 표본을 뜨는 내내 첫 노드가 리더였는가. 발행 해시에는 발행자 표시가 없다. */
+    private boolean 표본_구간_리더 = true;
 
     /** 보고 사이의 가장 긴 공백(ms). 태스크가 밀린 사실은 구간의 한 점이 아니라 이 값이 든다. */
     private final AtomicLong 보고_최대_공백 = new AtomicLong();
@@ -152,7 +158,7 @@ class LongHandoverCarryoverScenarioTest {
         long[] 되찾은_몫 = new long[1];
         boolean[] 첫_노드가_내려왔다 = new boolean[1];
         double[] 갈리기_전_평활 = new double[1];
-        Instant[] 되찾기_전 = new Instant[1];
+        Publication[] 되찾기_전 = new Publication[1];
         long[] 갈린_동안_몫 = new long[1];
         double[] 갈린_동안_평활 = new double[1];
         double[] 되찾은_평활 = new double[1];
@@ -207,17 +213,25 @@ class LongHandoverCarryoverScenarioTest {
                         // 그때는 평활이 아직 평시 값이라 이월이 아무것도 안 잰다.
                         // **둘째의 평활이 열화 값에 수렴할 때까지 기다린다.** 시간으로 기다리면 틱 설정이 바뀌는
                         // 순간 덜 수렴한 채 회복으로 넘어가 이 시나리오가 재려던 조건이 안 만들어진다.
-                        AllocationRound 둘째_회차 = 둘째.빈("allocationRound", AllocationRound.class);
+                        // **판정 둘을 같은 발행에서 읽는다** (CY-960). 나눠 읽으면 평활이 붙기를 기다린 뒤에
+                        // 그 쿠폰이 아직 안 실린 발행의 몫을 읽어, 다섯 회차에 한 번 빨개진다.
+                        AtomicReference<Map<String, String>> 붙은_발행 = new AtomicReference<>();
                         Awaitility.await().alias("둘째의 평활이 열화 값에 붙는다")
                                 // 구간 내내 첫 노드는 리더가 아니어야 한다 — 둘이 다 리더면 승계가 아니라 분단이다.
                                 .failFast("첫 노드가 다시 리더가 됐다", 첫_노드::isLeader)
                                 .atMost(갈린_구간.plusSeconds(20)).pollInterval(Duration.ofMillis(500))
-                                .until(() -> 둘째_회차.smoothedCredit() > 0
-                                        && 둘째_회차.smoothedCredit() <= 열화_가용량 * 1.2);
+                                .until(() -> {
+                                    Map<String, String> 해시 = 발행_해시();
+                                    붙은_발행.set(해시);
+                                    double 평활 = 평활값(해시);
+                                    // **몫은 조건에 안 넣는다.** 넣으면 그 쿠폰이 빠진 발행을 건너뛰고
+                                    // 좋은 회차 하나를 골라, 아래 몫 판정이 공짜로 통과한다.
+                                    return 평활 > 0 && 평활 <= 열화_가용량 * 1.2;
+                                });
                         첫_노드가_내려왔다[0] = !첫_노드.isLeader();
                         갈린_동안_신선[0] = 보고가_신선한가() && 공백이_신선도_안인가();
-                        갈린_동안_평활[0] = 둘째_회차.smoothedCredit();
-                        갈린_동안_몫[0] = 발행된_몫();
+                        갈린_동안_평활[0] = 평활값(붙은_발행.get());
+                        갈린_동안_몫[0] = 몫(붙은_발행.get());
                     }
                 })
                 .recover(() -> {
@@ -225,7 +239,7 @@ class LongHandoverCarryoverScenarioTest {
                     // 그대로에서 시작한다 — 두 경우가 갈리는 유일한 배치다.
                     보고할_가용량.set(평시_가용량);
                     // **되찾기 전에 기준을 잡는다.** 리더 표시를 기다린 뒤에 잡으면 새 임기의 첫 회차를 이미 놓친다.
-                    되찾기_전[0] = holder.view().snapshot().publishedAt();
+                    되찾기_전[0] = 표(발행_해시());
                     회복_전_보고_수[0] = 보고한_수.get();
                     // 구간마다 공백을 새로 잰다. 앞 구간의 공백이 뒤 구간 판정을 깨면 원인이 흐려진다.
                     공백을_다시_잰다();
@@ -238,13 +252,10 @@ class LongHandoverCarryoverScenarioTest {
                 })
                 .afterRecovery(() -> {
                     // **새 발행이 나온 뒤에 읽는다.** 리더 표시는 회차보다 먼저 서므로, 바로 읽으면 앞 임기의
-                    // 굳은 값을 되찾은 값으로 오독한다.
-                    Awaitility.await().alias("되찾은 리더가 새로 발행한다").atMost(기다림)
-                            .pollInterval(Duration.ofMillis(100))
-                            .until(() -> holder.view().snapshot().publishedAt().isAfter(되찾기_전[0])
-                                    && !Double.isNaN(round.smoothedCredit()));
-                    되찾은_평활[0] = round.smoothedCredit();
-                    되찾은_몫[0] = 발행된_몫();
+                    // 굳은 값을 되찾은 값으로 오독한다. 평활과 몫은 그 한 발행에서 같이 꺼낸다.
+                    Map<String, String> 되찾은_발행 = 다음_발행을_기다린다(되찾기_전[0]);
+                    되찾은_평활[0] = 평활값(되찾은_발행);
+                    되찾은_몫[0] = 몫(되찾은_발행);
                     // **수렴은 한 점으로 안 보인다.** 이월받은 값에서 평시까지 올라오는 길이 이 시나리오가
                     // 재려는 것인데, 회복 뒤 한 번만 읽으면 출발점만 보고 도착을 안 본다.
                     회복_시계열.addAll(발행마다_평활을_잰다(수렴_표본));
@@ -300,10 +311,13 @@ class LongHandoverCarryoverScenarioTest {
                         // 쿠폰이 발행에서 빠지면 줄이 영영 안 빠지는데 상한 판정은 그것을 통과시킨다.
                         되찾은_몫[0] > 0 ? Optional.empty()
                                 : Optional.of("되찾은 발행에 이 쿠폰의 몫이 없다: %d".formatted(되찾은_몫[0])),
-                        // **비유한값을 제 이름으로 떨군다.** 리더가 아니면 평활이 NaN 이라, 안 가르면
-                        // 리더십이 깜빡인 사건이 수렴 결함으로 둔갑한다.
+                        // **발행자가 해시에 안 적힌다.** 첫 노드가 리더를 잃은 구간의 값을 제 것으로 읽으면
+                        // 이 시나리오가 재려는 이월이 통째로 딴 노드 것이 된다.
+                        표본_구간_리더 ? Optional.empty()
+                                : Optional.of("표본을 뜨는 동안 첫 노드가 리더를 잃었다"),
+                        // 표본이 비거나 깨진 값이 섞이면 아래 모양 판정이 뜻을 잃는다.
                         유한한가(회복_시계열) ? Optional.empty()
-                                : Optional.of("회복 구간에 평활이 NaN 이었다 — 리더십이 깜빡였다: %s"
+                                : Optional.of("회복 구간의 평활이 유한값이 아니다: %s"
                                         .formatted(회복_시계열)),
                         내려간_횟수(회복_시계열) == 0 ? Optional.empty()
                                 : Optional.of("회복 뒤 평활이 %d번 내려갔다 — %s"
@@ -350,23 +364,68 @@ class LongHandoverCarryoverScenarioTest {
     }
 
     /**
+     * 발행 하나를 가리키는 표.
+     *
+     * <p><b>시각만으로는 못 가른다.</b> 발행 시각은 초 해상도인데, 회차가 틱을 다 쓰면 다음 회차가
+     * 틱의 4분의 1 만에 돌아 같은 초에 발행 둘이 든다. 그때 뒤엣것만 보면 앞엣것이 표본에서 빠진다.
+     */
+    private record Publication(Instant 시각, double 평활) { }
+
+    /**
      * 발행마다 평활을 한 번씩 잰다. 시간으로 나눠 재면 틱 설정이 바뀌는 순간 한 틱을 두 번 센다.
+     *
+     * <p><b>발행 시각과 평활을 같은 읽기에서 꺼낸다</b> (CY-962). 나눠 읽으면 받아오기가 밀린 회차에
+     * 다음 값을 읽어 표본 하나가 조용히 사라진다. 노드가 실제로 넘겨받는 값을 재는 것이기도 하다.
      *
      * @param 표본 몇 번의 발행을 볼 것인가
      */
     private List<Double> 발행마다_평활을_잰다(int 표본) {
         List<Double> 값 = new ArrayList<>();
-        Instant[] 앞선_발행 = {holder.view().snapshot().publishedAt()};
+        Publication 앞선 = 표(발행_해시());
         for (int i = 0; i < 표본; i++) {
-            Awaitility.await().alias("다음 발행").atMost(기다림).pollInterval(Duration.ofMillis(50))
-                    .until(() -> holder.view().snapshot().publishedAt().isAfter(앞선_발행[0]));
-            앞선_발행[0] = holder.view().snapshot().publishedAt();
-            값.add(round.smoothedCredit());
+            앞선 = 표(다음_발행을_기다린다(앞선));
+            값.add(앞선.평활());
+            // **누가 발행했는지는 해시에 안 적힌다.** 첫 노드가 중간에 리더를 잃으면 남의 값을 제 것으로
+            // 읽으므로, 구간 내내 쥐고 있었는지를 따로 본다.
+            표본_구간_리더 &= 첫_노드.isLeader();
         }
         return 값;
     }
 
-    /** 표본이 전부 유한한가. 리더가 아니면 평활이 NaN 이라 이것부터 가른다. */
+    /** 앞선 것과 다른 발행이 실릴 때까지 기다리고 그 해시를 돌려준다. */
+    private Map<String, String> 다음_발행을_기다린다(Publication 앞선) {
+        AtomicReference<Map<String, String>> 본_것 = new AtomicReference<>();
+        // **틱의 4분의 1 까지 좁혀질 수 있다.** 그보다 성기게 물으면 짧은 간격의 발행을 건너뛴다.
+        Awaitility.await().alias("다음 발행").atMost(기다림).pollInterval(Duration.ofMillis(100))
+                .until(() -> {
+                    Map<String, String> 해시 = 발행_해시();
+                    본_것.set(해시);
+                    return !표(해시).equals(앞선);
+                });
+        return 본_것.get();
+    }
+
+    private Publication 표(Map<String, String> 해시) {
+        return new Publication(발행_시각(해시), 평활값(해시));
+    }
+
+    private Map<String, String> 발행_해시() {
+        return redis.<String, String>opsForHash()
+                .entries(RedisKeys.SNAPSHOT).collectMap(Map.Entry::getKey, Map.Entry::getValue)
+                .block(기다림);
+    }
+
+    private Instant 발행_시각(Map<String, String> 해시) {
+        return 해시 == null || 해시.isEmpty() ? Instant.EPOCH : codec.decode(해시).publishedAt();
+    }
+
+    /** 발행에 실린 평활값. 안 실렸으면 이월할 것이 없다는 뜻이라 NaN 으로 둔다. */
+    private double 평활값(Map<String, String> 해시) {
+        CreditSmoother.Snapshot 평활 = codec.smoothing(해시);
+        return 평활.seeded() ? 평활.value() : Double.NaN;
+    }
+
+    /** 표본이 전부 유한한가. 발행에 평활이 안 실린 회차를 이것부터 가른다. */
     private static boolean 유한한가(List<Double> 값) {
         return !값.isEmpty() && 값.stream().allMatch(Double::isFinite);
     }
@@ -404,9 +463,12 @@ class LongHandoverCarryoverScenarioTest {
         return Optional.empty();
     }
 
-    /** 지금 발행에 실린 이 쿠폰의 몫. 노드들이 실제로 읽는 값이 이것이다. */
-    private long 발행된_몫() {
-        CouponState 상태 = holder.view().snapshot().coupons().get(COUPON);
+    /** 그 발행에 실린 이 쿠폰의 몫. 노드들이 실제로 읽는 값이 이것이다. */
+    private long 몫(Map<String, String> 해시) {
+        if (해시 == null || 해시.isEmpty()) {
+            return -1;
+        }
+        CouponState 상태 = codec.decode(해시).coupons().get(COUPON);
         return 상태 == null ? -1 : 상태.credit();
     }
 }

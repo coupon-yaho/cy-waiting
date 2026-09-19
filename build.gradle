@@ -160,6 +160,13 @@ tasks.withType(Test).configureEach {
     // 스냅샷을 직접 다루는 시험이 자기가 만든 상태를 잃고, 실패가 코드
     // 결함인지 간섭인지 못 가리게 된다. 배선을 재는 시험만 다시 켠다.
     systemProperty 'spring.profiles.active', 'test'
+    // **실패 메시지를 로그에 싣는다.** 기본값은 예외 종류와 줄 번호뿐이라, 카오스가 빨개지면
+    // 어느 판정이 깨졌는지 보려고 리포트 아티팩트를 받아야 했다. 실패한 것만 싣는다 (CY-965).
+    testLogging {
+        events 'failed'
+        exceptionFormat = 'full'
+        showStackTraces = false
+    }
 }
 
 tasks.named('test') {

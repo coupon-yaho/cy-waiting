@@ -236,14 +236,14 @@ class CursorHealWindowScenarioTest {
     }
 
     /**
-     * <b>바닥값만 사라져도 같은 창이 열리고, 훨씬 넓다</b> (CY-959).
+     * <b>커서를 만든 등록이 살아남아도 바닥값이 만료되면 창이 열린다</b> (CY-959).
      *
-     * <p>바닥값 키에는 수명이 있는데 큐에는 없다. 만료나 축출로 바닥이 사라지면 커서를 만든 등록이
-     * 살아남아도 새 점수가 실시각 그대로 나온다 — 앞선 시계와의 차이만큼 창이 벌어진다.
+     * <p>폴링은 생존 신호만 갱신하고 바닥값은 등록만 쓴다. 그래서 기존 대기자가 계속 폴링하는 동안
+     * 신규 등록이 하루 없으면 바닥값만 만료된다 — 큐도 생존 신호도 멀쩡한 채로.
      */
     @Test
-    @DisplayName("유지_바닥값이_사라지면_창이_넓어진다")
-    void 유지_바닥값이_사라지면_창이_넓어진다() {
+    @DisplayName("유지_바닥값이_만료되면_창이_인원으로_안_닫힌다")
+    void 유지_바닥값이_만료되면_창이_인원으로_안_닫힌다() {
         long 바닥 = 레디스_시각() + 앞선_시계;
         옛_마스터가_세운다("m1", 바닥 - 1);
         옛_마스터가_세운다("m2", 바닥);
@@ -253,16 +253,27 @@ class CursorHealWindowScenarioTest {
         port.apply(new Grant(COUPON, 3), 임기).block(기다림);
         redis.delete(RedisKeys.admitted(COUPON, SHARDS, SHARD),
                 RedisKeys.maxScore(COUPON, SHARDS, SHARD)).block(기다림);
+        assertThat(커서()).as("전제 — 커서도 같이 유실됐다").isEqualTo(-1);
 
-        List<Object> 창_안 = 세운다("late");
+        long 등록_전 = 레디스_시각();
+        List<Object> 첫째 = 세운다("late");
+        long 등록_후 = 레디스_시각();
+        // **다시 깔린 바닥 위에 선다.** 그래도 커서 아래라, 이 창은 인원으로 안 닫힌다.
+        List<Object> 둘째 = 세운다("late2");
         port.apply(new Grant(COUPON, 0), 임기).block(기다림);
 
-        assertThat(밀려_올라갔나(창_안)).as("밀어 올릴 바닥이 없다").isFalse();
+        assertThat(밀려_올라갔나(첫째)).as("밀어 올릴 바닥이 없다").isFalse();
+        assertThat(점수(첫째)).as("밀린 데 없이 실시각 그대로 선다").isBetween(등록_전, 등록_후);
         assertThat(커서()).as("되살림이 참 커서를 돌려놓는다").isEqualTo(참_커서);
-        assertThat(점수(창_안)).as("크레딧 없이 들어간다").isLessThanOrEqualTo(참_커서);
-        // 바닥이 남았다면 폭이 창_폭 이었다. 사라지니 앞선 시계만큼 벌어진다.
-        assertThat(참_커서 - 점수(창_안)).as("창이 앞선 시계만큼 넓어진다")
-                .isGreaterThan(앞선_시계 / 2);
+        assertThat(상태("late")).as("크레딧 없이 입장으로 읽힌다").isEqualTo(QueueState.ADMITTED);
+        // 바닥이 남았다면 폭이 창_폭 이었다. 만료되니 앞선 시계만큼 벌어진다.
+        // 아래를 1초 여유로 두는 것은 앞선 시계를 재는 자리와 등록 사이에 셋업이 끼어서다.
+        assertThat(참_커서 - 점수(첫째)).as("폭이 앞선 시계만큼이다")
+                .isBetween(앞선_시계 - 1_000_000, 앞선_시계 + 창_폭);
+        // **둘째도 실시각에 선다.** 첫째가 바닥을 다시 깔았지만 시계가 이미 그 위라 안 밀린다.
+        assertThat(점수(둘째)).as("뒤에 서지만 여전히 커서 아래다 — 인원으로 안 닫힌다")
+                .isGreaterThan(점수(첫째)).isLessThanOrEqualTo(참_커서);
+        assertThat(상태("late2")).as("둘째도 크레딧 없이 들어간다").isEqualTo(QueueState.ADMITTED);
     }
 
     /**

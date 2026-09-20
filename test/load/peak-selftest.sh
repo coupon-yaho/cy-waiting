@@ -261,5 +261,22 @@ nest_bad=$(thr '"http_req_failed":{"thresholds":{"rate<0.01":{"ok":false}}}' nes
 lib_case "중첩형에서 통과한 임계는 안 깨진 것" ok "$(peak_verdict_from_k6 99 "$nest_ok")"
 lib_case "중첩형에서 깨진 임계는 안 선다" under "$(peak_verdict_from_k6 99 "$nest_bad")"
 
+# **생성기가 여럿인 회차.** 유입은 더하고 분위수는 못 더한다 — 나눠서 잰 분위수를
+# 합치는 식은 없어서, 최댓값을 하한으로 든다.
+gen() {
+    local path=$work/$1
+    printf '{"metrics":{"http_reqs":{"rate":%s},"http_req_duration":{"p(99)":%s}}}' "$2" "$3" > "$path"
+    printf '%s' "$path"
+}
+g1=$(gen g1.json 1200.5 310)
+g2=$(gen g2.json 800.25 420)
+lib_case "생성기 둘의 유입은 더한다" 2000.7500 "$(peak_merged_value rate "$g1" "$g2")"
+lib_case "생성기 둘의 p99 는 큰 쪽을 든다" 420.0000 "$(peak_merged_value p99 "$g1" "$g2")"
+lib_case "하나면 그 값 그대로" 1200.5000 "$(peak_merged_value rate "$g1")"
+# **못 읽은 요약을 0 으로 세지 않는다.** 그러면 죽은 생성기가 "유입이 적었다" 로
+# 읽혀, 하네스 고장이 제품의 천장으로 적힌다.
+missing=$work/none.json
+lib_case "못 읽은 요약이 있으면 판정 불가" "" "$(peak_merged_value rate "$g1" "$missing")"
+
 [ "$selftest_failed" -eq 0 ] && echo "최대치 자기검증 통과" || echo "최대치 자기검증 실패"
 exit "$selftest_failed"

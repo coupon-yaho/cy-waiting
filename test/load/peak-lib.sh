@@ -30,6 +30,37 @@ PY
 # **회차 길이를 초로 푼다.** `${D%s}` 로 끝 글자만 떼면 `1m` 이 1 이 되어, 기대
 # 건수가 60 분의 1 로 내려가고 "부하가 안 닿았다" 가드가 사실상 사라진다.
 # 못 읽는 형식은 0 을 내고 부르는 쪽이 회차를 돌리기 전에 끊는다.
+# 생성기 여럿의 요약을 하나로 합친다. 첫 인자가 `rate` 면 더하고 `p99` 면 큰 쪽을 든다.
+#
+# **분위수는 못 더한다.** 나눠서 잰 p99 를 합치는 식은 없다 — 버킷을 합쳐야 나온다. 그래서
+# 최댓값을 든다. 그 값은 함대 p99 의 **하한**이고, 인용할 때 그렇게 적는다.
+#
+# **하나라도 못 읽으면 아무것도 안 낸다.** 0 으로 세면 죽은 생성기가 "유입이 적었다" 로 읽혀,
+# 하네스 고장이 제품의 천장으로 적힌다.
+peak_merged_value() {
+    local kind=$1
+    shift
+    python3 - "$kind" "$@" <<'MERGE'
+import json, sys
+kind = sys.argv[1]
+vals = []
+for path in sys.argv[2:]:
+    try:
+        d = json.load(open(path))
+    except Exception:
+        sys.exit(0)
+    m = d.get('metrics', {})
+    name, key = ('http_reqs', 'rate') if kind == 'rate' else ('http_req_duration', 'p(99)')
+    node = m.get(name, {})
+    v = node.get('values', {}).get(key, node.get(key))
+    if not isinstance(v, (int, float)):
+        sys.exit(0)
+    vals.append(float(v))
+if not vals:
+    sys.exit(0)
+print(f'{sum(vals) if kind == "rate" else max(vals):.4f}')
+MERGE
+}
 peak_duration_sec() {
     printf '%s\n' "$1" | awk '
         {

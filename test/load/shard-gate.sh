@@ -22,16 +22,25 @@ case "${PINNED:-}" in
     ''|0|false|no) pinned="" ;;
     *) pinned=" -f test/load/compose.pinned.yml" ;;
 esac
-COMPOSE="docker compose -f test/load/compose.yml$pinned"
+# **왕복을 대기와 실행으로 가르는 계기를 켠다.** 기본은 안 한다 — 등록 한 건이
+# 명령 아홉을 쳐서 기록도 아홉 번 돌아, 켠 회차의 처리량은 다른 회차의 천장과
+# 나란히 적을 값이 아니다. 병목의 자리를 가를 때만 켠다.
+#
+#   LATENCY=1 test/load/shard-gate.sh
+case "${LATENCY:-}" in
+    ''|0|false|no) latency="" ;;
+    *) latency=" -f test/load/compose.latency.yml" ;;
+esac
+COMPOSE="docker compose -f test/load/compose.yml$pinned$latency"
 # **쿠폰은 노브가 아니다.** `open-spike.js` 가 `c2` 를 박아 두고 있어서, 여기만
 # 바꾸면 c3 을 비우고 c3 이 IDLE 인 것을 본 뒤 c2 를 때린다 — 빈 줄 보증이
 # 통째로 다른 쿠폰 얘기가 된다. 시나리오를 고칠 때 같이 고친다.
 COUPON=c2
-OUT_OPS="${OUT_OPS:-redis-ops${pinned:+-pinned}.txt}"
+OUT_OPS="${OUT_OPS:-redis-ops${pinned:+-pinned}${latency:+-latency}.txt}"
 # **산출물 이름에 조건을 싣는다.** 고정한 회차와 안 한 회차가 같은 파일에
 # 덮이면 나중에 어느 조건에서 나온 값인지 못 가른다 — 그 둘을 한 표에 넣는
 # 것이 정확히 이 페이즈가 되풀이한 오류다.
-OUT_SUMMARY="${OUT_SUMMARY:-k6-summary${pinned:+-pinned}.json}"
+OUT_SUMMARY="${OUT_SUMMARY:-k6-summary${pinned:+-pinned}${latency:+-latency}.json}"
 # 아래에서 앞 회차의 요약을 지운다. 환경에서 온 값을 그대로 지우므로 무엇을
 # 지우는지는 확인하고 간다.
 case "$OUT_SUMMARY" in
@@ -47,7 +56,7 @@ case "$OUT_ENQUEUE" in
 esac
 OUT_ENQUEUE_BASE="${OUT_ENQUEUE%.txt}-base.txt"
 # 아래에서 `tee` 로 덮어쓴다. 요약과 같은 이유로 무엇을 지우는지 보고 간다.
-OUT_LOG="${OUT_LOG:-k6-spike${pinned:+-pinned}.log}"
+OUT_LOG="${OUT_LOG:-k6-spike${pinned:+-pinned}${latency:+-latency}.log}"
 case "$OUT_LOG" in
     *.log) ;;
     *) echo "OUT_LOG 는 .log 여야 한다: '$OUT_LOG'"; exit 2 ;;
@@ -114,9 +123,12 @@ rm -f "$OUT_SUMMARY" "$OUT_OPS" "$OUT_ENQUEUE" "$OUT_ENQUEUE_BASE"
 
 # **부하 전 개수를 먼저 적어 둔다** (CY-936). 개수는 누적이고 분위수 창은 10 분마다 도므로,
 # 증분을 안 보면 이번 회차에 등록이 0 건이어도 예열 때의 값이 회차 값으로 인용된다.
+#
+# **명령별 지연도 같이 긁는다.** `LATENCY=1` 이 아니면 그 줄이 아예 안 나오므로, 없다는
+# 것이 곧 안 켠 회차라는 뜻이다 — 빈 값을 0 으로 읽지 않는다.
 scrape_enqueue() {
     $COMPOSE exec -T gateway wget -qO- http://localhost:8081/actuator/prometheus 2>/dev/null \
-        | grep '^waiting_queue_enqueue_latency_seconds' > "$1" || true
+        | grep -E '^(waiting_queue_enqueue_latency_seconds|lettuce_command_)' > "$1" || true
 }
 scrape_enqueue "$OUT_ENQUEUE_BASE"
 if [ ! -s "$OUT_ENQUEUE_BASE" ]; then

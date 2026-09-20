@@ -271,6 +271,8 @@ class CursorHealWindowScenarioTest {
         assertThat(참_커서 - 점수(첫째)).as("폭이 앞선 시계만큼이다")
                 .isBetween(앞선_시계 - 1_000_000, 앞선_시계 + 창_폭);
         // **둘째도 실시각에 선다.** 첫째가 바닥을 다시 깔았지만 시계가 이미 그 위라 안 밀린다.
+        // 점수만 보면 밀린 경로(바닥+1)에서도 커진다. 안 밀린 것을 따로 봐야 기제가 갈린다.
+        assertThat(밀려_올라갔나(둘째)).as("다시 깔린 바닥을 시계가 이미 지났다").isFalse();
         assertThat(점수(둘째)).as("뒤에 서지만 여전히 커서 아래다 — 인원으로 안 닫힌다")
                 .isGreaterThan(점수(첫째)).isLessThanOrEqualTo(참_커서);
         assertThat(상태("late2")).as("둘째도 크레딧 없이 들어간다").isEqualTo(QueueState.ADMITTED);

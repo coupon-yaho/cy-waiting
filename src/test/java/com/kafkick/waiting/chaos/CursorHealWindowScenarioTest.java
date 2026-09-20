@@ -236,6 +236,36 @@ class CursorHealWindowScenarioTest {
     }
 
     /**
+     * <b>바닥값만 사라져도 같은 창이 열리고, 훨씬 넓다</b> (CY-959).
+     *
+     * <p>바닥값 키에는 수명이 있는데 큐에는 없다. 만료나 축출로 바닥이 사라지면 커서를 만든 등록이
+     * 살아남아도 새 점수가 실시각 그대로 나온다 — 앞선 시계와의 차이만큼 창이 벌어진다.
+     */
+    @Test
+    @DisplayName("유지_바닥값이_사라지면_창이_넓어진다")
+    void 유지_바닥값이_사라지면_창이_넓어진다() {
+        long 바닥 = 레디스_시각() + 앞선_시계;
+        옛_마스터가_세운다("m1", 바닥 - 1);
+        옛_마스터가_세운다("m2", 바닥);
+        long 참_커서 = 바닥 + 창_폭;
+        // 커서를 만든 등록은 살아남는다. 사라지는 것은 커서와 바닥값뿐이다.
+        옛_마스터가_세운다("m3", 참_커서);
+        port.apply(new Grant(COUPON, 3), 임기).block(기다림);
+        redis.delete(RedisKeys.admitted(COUPON, SHARDS, SHARD),
+                RedisKeys.maxScore(COUPON, SHARDS, SHARD)).block(기다림);
+
+        List<Object> 창_안 = 세운다("late");
+        port.apply(new Grant(COUPON, 0), 임기).block(기다림);
+
+        assertThat(밀려_올라갔나(창_안)).as("밀어 올릴 바닥이 없다").isFalse();
+        assertThat(커서()).as("되살림이 참 커서를 돌려놓는다").isEqualTo(참_커서);
+        assertThat(점수(창_안)).as("크레딧 없이 들어간다").isLessThanOrEqualTo(참_커서);
+        // 바닥이 남았다면 폭이 창_폭 이었다. 사라지니 앞선 시계만큼 벌어진다.
+        assertThat(참_커서 - 점수(창_안)).as("창이 앞선 시계만큼 넓어진다")
+                .isGreaterThan(앞선_시계 / 2);
+    }
+
+    /**
      * <b>회복 — 되살린 뒤의 등록은 커서 위에 선다.</b>
      *
      * <p>창을 닫는 것은 되살림 자체다. 커서가 돌아온 순간부터 등록이 그 위에 세우므로, 창은 유실부터 다음

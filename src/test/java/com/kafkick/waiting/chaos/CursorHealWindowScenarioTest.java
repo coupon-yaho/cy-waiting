@@ -140,6 +140,10 @@ class CursorHealWindowScenarioTest {
         return raw == null ? -1 : Long.parseLong(raw);
     }
 
+    private Double 큐_점수(String member) {
+        return redis.opsForZSet().score(RedisKeys.queue(COUPON, SHARDS, SHARD), member).block(기다림);
+    }
+
     private QueueState 상태(String member) {
         return 큐.status(COUPON, member, 지금).block(기다림).state();
     }
@@ -244,7 +248,8 @@ class CursorHealWindowScenarioTest {
     @Test
     @DisplayName("유지_바닥값이_만료되면_창이_인원으로_안_닫힌다")
     void 유지_바닥값이_만료되면_창이_인원으로_안_닫힌다() {
-        long 바닥 = 레디스_시각() + 앞선_시계;
+        long 시작 = 레디스_시각();
+        long 바닥 = 시작 + 앞선_시계;
         옛_마스터가_세운다("m1", 바닥 - 1);
         옛_마스터가_세운다("m2", 바닥);
         long 참_커서 = 바닥 + 창_폭;
@@ -254,11 +259,12 @@ class CursorHealWindowScenarioTest {
         redis.delete(RedisKeys.admitted(COUPON, SHARDS, SHARD),
                 RedisKeys.maxScore(COUPON, SHARDS, SHARD)).block(기다림);
         assertThat(커서()).as("전제 — 커서도 같이 유실됐다").isEqualTo(-1);
+        assertThat(큐_점수("m3")).as("전제 — 커서를 만든 등록은 살아남았다")
+                .isEqualTo((double) 참_커서);
 
         long 등록_전 = 레디스_시각();
         List<Object> 첫째 = 세운다("late");
         long 등록_후 = 레디스_시각();
-        // **다시 깔린 바닥 위에 선다.** 그래도 커서 아래라, 이 창은 인원으로 안 닫힌다.
         List<Object> 둘째 = 세운다("late2");
         port.apply(new Grant(COUPON, 0), 임기).block(기다림);
 
@@ -267,11 +273,11 @@ class CursorHealWindowScenarioTest {
         assertThat(커서()).as("되살림이 참 커서를 돌려놓는다").isEqualTo(참_커서);
         assertThat(상태("late")).as("크레딧 없이 입장으로 읽힌다").isEqualTo(QueueState.ADMITTED);
         // 바닥이 남았다면 폭이 창_폭 이었다. 만료되니 앞선 시계만큼 벌어진다.
-        // 아래를 1초 여유로 두는 것은 앞선 시계를 재는 자리와 등록 사이에 셋업이 끼어서다.
+        long 셋업 = 등록_후 - 시작;
+        assertThat(셋업).as("셋업 경과가 앞선 시계에 안 묻힌다").isLessThan(앞선_시계 / 10);
         assertThat(참_커서 - 점수(첫째)).as("폭이 앞선 시계만큼이다")
-                .isBetween(앞선_시계 - 1_000_000, 앞선_시계 + 창_폭);
-        // **둘째도 실시각에 선다.** 첫째가 바닥을 다시 깔았지만 시계가 이미 그 위라 안 밀린다.
-        // 점수만 보면 밀린 경로(바닥+1)에서도 커진다. 안 밀린 것을 따로 봐야 기제가 갈린다.
+                .isBetween(앞선_시계 + 창_폭 - 셋업, 앞선_시계 + 창_폭);
+        // 점수만 보면 밀린 경로에서도 커진다. 안 밀린 것을 따로 봐야 기제가 갈린다.
         assertThat(밀려_올라갔나(둘째)).as("다시 깔린 바닥을 시계가 이미 지났다").isFalse();
         assertThat(점수(둘째)).as("뒤에 서지만 여전히 커서 아래다 — 인원으로 안 닫힌다")
                 .isGreaterThan(점수(첫째)).isLessThanOrEqualTo(참_커서);

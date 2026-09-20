@@ -62,12 +62,17 @@ class RedisCommandLatencyWiringTest extends RedisContainerSupport {
 
         String 스크레이프 = registry.scrape();
 
-        assertThat(스크레이프).as("첫 응답 줄").contains(첫_응답 + "_count{");
-        assertThat(스크레이프).as("완료 줄").contains(완료 + "_count{");
-        // **명령 라벨이 사라지면 등록이 폴링·배분과 한 통이 된다.** 지금도 전부 EVALSHA 라 한
-        // 통이지만, 라벨까지 없어지면 그 사실조차 안 보인다.
-        assertThat(스크레이프.lines().filter(줄 -> 줄.startsWith(첫_응답 + "_count{"))
-                .filter(줄 -> 줄.contains("command=\"SET\"")).toList())
-                .as("친 명령이 제 이름으로 선다").hasSize(1);
+        // **둘 다 친 명령으로 찾는다.** 이름만 보면 다른 명령의 줄로도 통과하고, 그러면 한쪽
+        // 타이머가 통째로 안 나와도 초록이다. 명령 라벨까지 봐야 등록이 폴링·배분과 한 통이라는
+        // 사실도 보인다.
+        assertThat(줄수(스크레이프, 첫_응답)).as("친 명령의 첫 응답 줄").isEqualTo(1);
+        assertThat(줄수(스크레이프, 완료)).as("친 명령의 완료 줄").isEqualTo(1);
+    }
+
+    private long 줄수(String 스크레이프, String 이름) {
+        return 스크레이프.lines()
+                .filter(줄 -> 줄.startsWith(이름 + "_count{"))
+                .filter(줄 -> 줄.contains("command=\"SET\""))
+                .count();
     }
 }

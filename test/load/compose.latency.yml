@@ -1,0 +1,23 @@
+# 명령별 지연 계기를 켠다.
+#
+# **등록 왕복이 반 초인데 레디스가 한가했다.** 착수 판정 회차에서 20k 스파이크의 등록
+# p99 가 520ms 였고 같은 회차의 레디스 봉우리 CPU 는 41% 였다. 등록 타이머는 부른
+# 시점부터 결과까지라 클라이언트 대기가 섞여 있어, 그 반 초가 어디인지 이 값만으로는
+# 못 가른다. 레디스를 쪼개서 줄일 수 있는 몫인지가 여기서 갈린다.
+#
+# 켜면 Lettuce 가 명령마다 `lettuce.command.firstresponse` 와
+# `lettuce.command.completion` 을 낸다. 앞엣것까지가 레디스가 문 몫이고, 등록 타이머와
+# 앞엣것의 차가 우리 쪽 몫이다.
+#
+#   사용: docker compose -f compose.yml -f compose.pinned.yml -f compose.latency.yml up -d
+#
+# **겹침으로 둔다.** 기본은 꺼짐이고 기존 회차의 조건을 안 바꾼다 — 지금까지 잰 값들과
+# 견주려면 그쪽은 그대로여야 한다.
+#
+# **이 계기 자체가 비용이다.** 등록 한 건이 명령 아홉을 치므로 기록도 아홉 번 돈다.
+# 그래서 이 회차의 처리량을 다른 회차의 천장과 나란히 적지 않는다 — 병목의 자리를
+# 가르는 회차이지 최대치를 재는 회차가 아니다.
+services:
+  gateway:
+    environment:
+      WAITING_REDIS_COMMANDLATENCY_ENABLED: "true"

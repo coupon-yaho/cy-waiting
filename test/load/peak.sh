@@ -99,8 +99,12 @@ command -v k6 >/dev/null || { echo "k6 가 없다"; exit 2; }
 #   GENERATORS=box2,box3 test/load/peak.sh
 #
 # **각 대에 저장소와 k6 가 같은 경로로 있어야 한다.** 시나리오 파일을 그쪽에서 읽는다.
-# **분위수는 합쳐도 하한이다** — 나눠서 잰 p99 를 더하는 식은 없어 큰 쪽을 든다.
+# **분위수는 가장 나쁜 대의 값이다** — 더하는 식이 없어 큰 쪽을 들고, 그것은 함대 p99 의 상한이다.
 GENERATORS=${GENERATORS:-}
+# **원격이 칠 주소는 우리가 못 알아낸다.** 이 기계의 `BASE_URLS` 는 localhost 라, 그대로
+# 넘기면 각 생성기가 제 기계의 빈 포트를 친다 — 요청은 다 실패하고 게이트웨이에는 부하가
+# 한 건도 안 간다. 그래서 받는다.
+REMOTE_BASE_URLS=${REMOTE_BASE_URLS:-}
 gen_hosts=()
 if [ -n "$GENERATORS" ]; then
     IFS=',' read -r -a gen_hosts <<< "$GENERATORS"
@@ -108,6 +112,18 @@ if [ -n "$GENERATORS" ]; then
     for h in "${gen_hosts[@]}"; do
         [ -n "$h" ] || { echo "::error title=현재 최대치::GENERATORS 에 빈 항목이 있다"; exit 2; }
     done
+    if [ -z "$REMOTE_BASE_URLS" ]; then
+        echo "::error title=현재 최대치::GENERATORS 를 쓰면 REMOTE_BASE_URLS 가 있어야 한다 — 원격이 칠 주소다"
+        exit 2
+    fi
+    # **CPU 고정을 조용히 버리지 않는다.** 로컬만 묶고 원격은 안 묶으면, 묶었다고 적힌
+    # 회차가 안 묶인 조건으로 돌고 그 값이 표에 들어간다.
+    if [ -n "${K6_CPUS:-}" ]; then
+        for h in "${gen_hosts[@]}"; do
+            ssh "$h" "command -v taskset >/dev/null" \
+                || { echo "::error title=현재 최대치::${h} 에 taskset 이 없다 — K6_CPUS 를 못 건다"; exit 2; }
+        done
+    fi
 fi
 # 이 기계까지 세면 한 대다. 나누는 수는 항상 하나 이상이다.
 gen_count=${#gen_hosts[@]}
@@ -304,21 +320,42 @@ for rate in $RATES; do
         summaries=("$summary")
     else
         pids=()
+        remote_k6=k6
+        [ -n "${K6_CPUS:-}" ] && remote_k6="taskset -c $K6_CPUS k6"
         for i in "${!gen_hosts[@]}"; do
             part=$OUT_DIR/k6-$rate-$i.json
             rm -f "$part"
             summaries+=("$part")
             r=$share; v=$vus_share
             [ "$i" -eq 0 ] && { r=$first_share; v=$first_vus; }
-            ssh "${gen_hosts[$i]}" \
-                "cd '$PWD' && VUS=$v RATE=$r DURATION=$DURATION k6 run \
-                    --summary-export='$part' test/load/peak.js" \
-                > "$OUT_DIR/k6-$rate-$i.log" 2>&1 &
+            # **요약은 원격에 쓰인다.** 같은 경로를 여기서 읽으면 공유 파일시스템이 없는 한
+            # 늘 비고, 그러면 나눈 회차가 언제나 판정 불가가 된다. 돌린 뒤 받아 온다.
+            remote_part="/tmp/peak-$rate-$i.json"
+            gen_run() {
+                local host=$1 idx=$2 vu=$3 rt=$4 out=$5 remote=$6
+                ssh "$host" \
+                    "cd '$PWD' && BASE_URLS='$REMOTE_BASE_URLS' VUS=$vu RATE=$rt \
+                        DURATION=$DURATION $remote_k6 run \
+                        --summary-export='$remote' test/load/peak.js" \
+                    > "$OUT_DIR/k6-$rate-$idx.log" 2>&1
+                local rc=$?
+                ssh "$host" "cat '$remote'; rm -f '$remote'" > "$out" 2>/dev/null
+                return "$rc"
+            }
+            gen_run "${gen_hosts[$i]}" "$i" "$v" "$r" "$part" "$remote_part" &
             pids+=($!)
         done
+        # **대마다 따로 받는다.** 마지막 것만 남기면 멀쩡한 대의 요약을 남의 종료 코드로
+        # 판정해, 한 대의 실패가 회차 전체를 판정 불가로 만든다.
         k6_rc=0
-        for pid in "${pids[@]}"; do
-            wait "$pid" || k6_rc=$?
+        k6_rcs=()
+        for i in "${!pids[@]}"; do
+            if wait "${pids[$i]}"; then
+                k6_rcs[$i]=0
+            else
+                k6_rcs[$i]=$?
+                k6_rc=${k6_rcs[$i]}
+            fi
         done
         cat "$OUT_DIR"/k6-"$rate"-*.log > "$log" 2>/dev/null
         # 합친 요약을 판정기가 읽는 자리에 둔다. 못 읽은 대가 있으면 값이 비어 판정 불가가 된다.
@@ -354,8 +391,8 @@ for rate in $RATES; do
         k6_verdict=$(peak_verdict_from_k6 "$k6_rc" "$summary")
     else
         verdicts=()
-        for part in "${summaries[@]}"; do
-            verdicts+=("$(peak_verdict_from_k6 "$k6_rc" "$part")")
+        for i in "${!summaries[@]}"; do
+            verdicts+=("$(peak_verdict_from_k6 "${k6_rcs[$i]}" "${summaries[$i]}")")
         done
         k6_verdict=$(peak_worst_verdict "${verdicts[@]}")
     fi

@@ -262,7 +262,7 @@ lib_case "중첩형에서 통과한 임계는 안 깨진 것" ok "$(peak_verdict
 lib_case "중첩형에서 깨진 임계는 안 선다" under "$(peak_verdict_from_k6 99 "$nest_bad")"
 
 # **생성기가 여럿인 회차.** 유입은 더하고 분위수는 못 더한다 — 나눠서 잰 분위수를
-# 합치는 식은 없어서, 최댓값을 하한으로 든다.
+# 합치는 식이 없어 가장 나쁜 대의 값을 든다. 그것은 함대 p99 의 상한이다.
 gen() {
     local path=$work/$1
     printf '{"metrics":{"http_reqs":{"rate":%s},"http_req_duration":{"p(99)":%s}}}' "$2" "$3" > "$path"
@@ -271,12 +271,19 @@ gen() {
 g1=$(gen g1.json 1200.5 310)
 g2=$(gen g2.json 800.25 420)
 lib_case "생성기 둘의 유입은 더한다" 2000.7500 "$(peak_merged_value rate "$g1" "$g2")"
-lib_case "생성기 둘의 p99 는 큰 쪽을 든다" 420.0000 "$(peak_merged_value p99 "$g1" "$g2")"
+lib_case "생성기 둘의 p99 는 가장 나쁜 대를 든다" 420.0000 "$(peak_merged_value p99 "$g1" "$g2")"
 lib_case "하나면 그 값 그대로" 1200.5000 "$(peak_merged_value rate "$g1")"
 # **못 읽은 요약을 0 으로 세지 않는다.** 그러면 죽은 생성기가 "유입이 적었다" 로
 # 읽혀, 하네스 고장이 제품의 천장으로 적힌다.
 missing=$work/none.json
 lib_case "못 읽은 요약이 있으면 판정 불가" "" "$(peak_merged_value rate "$g1" "$missing")"
+
+# **종료 코드는 대마다 따로 본다.** 하나로 뭉개면 멀쩡한 대의 요약을 남의 코드로 판정해,
+# 한 대의 실패가 회차 전체를 판정 불가로 만든다.
+ok_sum=$(thr '"http_req_failed":{"thresholds":{"rate<0.01":{"ok":true}}}' mixed_ok.json)
+lib_case "종료 0 인 대는 제 코드로 판정한다" ok "$(peak_verdict_from_k6 0 "$ok_sum")"
+lib_case "남의 99 를 얹으면 판정 불가가 된다" unmeasurable "$(peak_verdict_from_k6 99 "$ok_sum")"
+lib_case "대마다 갈린 판정은 가장 나쁜 것" unmeasurable "$(peak_worst_verdict ok unmeasurable)"
 
 [ "$selftest_failed" -eq 0 ] && echo "최대치 자기검증 통과" || echo "최대치 자기검증 실패"
 exit "$selftest_failed"

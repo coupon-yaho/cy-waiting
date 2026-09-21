@@ -356,6 +356,12 @@ bash_case check-commit-msg.sh "git commit -m 'feat(x): 해시 # 넣고 마침표
 bash_case check-commit-msg.sh "$(printf 'git add x && \\\n  git commit -F - <<%sEOF%s\n그냥 고침\nEOF' "'" "'")" block '줄 이음 뒤의 힙독'
 bash_case check-commit-msg.sh "$(printf 'git commit -F - <<%sEOF%s\n# 안내 줄\nfeat(x): 정상 제목\nEOF' "'" "'")" allow '힙독의 주석 뒤 제목'
 bash_case check-commit-msg.sh "$(printf 'git commit -F - <<-%sEOF%s\n\tfeat(x): 정상 제목\n\tEOF' "'" "'")" allow '탭을 떼는 힙독'
+bash_case check-commit-msg.sh "git status;git commit -m '그냥 고침'" block '공백 없는 세미콜론'
+bash_case check-commit-msg.sh "true&&git commit -m '그냥 고침'" block '공백 없는 앤드'
+bash_case check-commit-msg.sh "$(printf "git status\ngit commit -m '그냥 고침'")" block '개행으로만 나뉜 커밋'
+bash_case check-commit-msg.sh "$(printf "echo 'literal <<true'\ngit commit -m '그냥 고침'\ntrue")" block '인용 안의 힙독 연산자'
+bash_case check-commit-msg.sh "git commit -m 'fix(x): __NO_MESSAGE__ 처리'" allow '표식과 같은 낱말이 든 제목'
+bash_case check-commit-msg.sh "$(printf 'git commit -F - <<%sEOF%s\n EOF\n그냥 고침\nEOF' "'" "'")" block '들여쓴 구분자는 끝이 아니다'
 
 # ── git commit-msg 훅 ────────────────────────────────────────────────────────
 # 도구 훅만 검증하면 터미널 직접 커밋 경로가 비어 있다.

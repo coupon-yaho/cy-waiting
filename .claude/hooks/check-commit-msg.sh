@@ -21,14 +21,6 @@ here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 subjects=$(COMMIT_CMD="$cmd" python3 "$here/commit-subjects.py")
 
-if [[ "$subjects" == *"__UNPARSED__"* ]]; then
-    echo "[WF-1] 명령의 인용 짝이 안 맞는다 — 무엇을 커밋하는지 몰라 막는다." >&2
-    exit 2
-fi
-if [[ "$subjects" == *"__NO_MESSAGE__"* ]]; then
-    echo "[WF-1] 커밋 메시지를 -m 으로 전달한다. 에디터 커밋은 규약 검사를 우회한다." >&2
-    exit 2
-fi
 [[ -z "${subjects//[$'\n'[:space:]]/}" ]] && exit 0
 
 # 규칙은 .githooks/lib/ 하나에만 둔다. 여기에 복사하면 git 훅과 갈라지고,
@@ -36,7 +28,16 @@ fi
 # shellcheck source=../../.githooks/lib/commit-subject-rules.sh
 source "$here/../../.githooks/lib/commit-subject-rules.sh"
 
+# **표식은 줄 전체로 본다.** 부분 문자열로 찾으면 그 낱말이 든 정상 제목이 막힌다.
 while IFS= read -r subject; do
+    if [[ "$subject" == "__UNPARSED__" ]]; then
+        echo "[WF-1] 명령의 인용 짝이 안 맞는다 — 무엇을 커밋하는지 몰라 막는다." >&2
+        exit 2
+    fi
+    if [[ "$subject" == "__NO_MESSAGE__" ]]; then
+        echo "[WF-1] 커밋 메시지를 -m 으로 전달한다. 에디터 커밋은 규약 검사를 우회한다." >&2
+        exit 2
+    fi
     [[ -z "${subject// /}" ]] && continue
     if ! violations=$(check_commit_subject "$subject"); then
         {

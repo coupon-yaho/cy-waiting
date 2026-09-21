@@ -3,6 +3,10 @@
 셸로 자르면 인용 안의 `#`·`|`·`;` 를 문법으로 읽어 제목이 잘리고 세그먼트가 갈린다.
 표준 라이브러리의 셸 렉서를 써서 그것을 피한다.
 
+**인용 상태를 직접 따라간다.** 힙독 연산자와 줄 끝의 명령 경계를 가리려면 그 자리가
+인용 안인지를 알아야 한다. 정규식으로 찾으면 인용 안의 `<<NAME` 도 힙독으로 읽어,
+뒤따르는 커밋 명령이 본문으로 걷혀 검사가 통째로 지나간다.
+
 표준 출력에 제목을 한 줄씩 낸다. 검사할 커밋이 없으면 아무것도 안 낸다.
 두 표식이 따로 있다 — `__UNPARSED__` 는 인용 짝이 안 맞는 것이고,
 `__NO_MESSAGE__` 는 메시지를 안 실은 커밋이다.
@@ -21,36 +25,77 @@ NO_MESSAGE = ("--no-edit", "--amend", "--fixup", "--squash",
               "--reuse-message", "-C", "-c", "--file", "-F")
 
 
+def scan_line(line, quote):
+    """한 줄을 훑어 인용 밖의 힙독 연산자를 모은다. 줄 끝의 인용 상태도 돌려준다.
+
+    인용은 줄을 넘어 이어지므로 상태를 받아서 이어 간다.
+    """
+    opened = []
+    k = 0
+    while k < len(line):
+        ch = line[k]
+        if quote:
+            if quote == '"' and ch == "\\" and k + 1 < len(line):
+                k += 2
+                continue
+            if ch == quote:
+                quote = ""
+            k += 1
+            continue
+        if ch == "\\":
+            k += 2
+            continue
+        if ch in "'\"":
+            quote = ch
+            k += 1
+            continue
+        # 낱말 앞의 `#` 부터는 주석이다. 줄 끝까지 명령이 아니다.
+        if ch == "#" and (k == 0 or line[k - 1] in " \t;&|()<>"):
+            break
+        if line.startswith("<<", k):
+            found = HEREDOC.match(line, k)
+            if found:
+                opened.append((found.group(1), found.group(3)))
+                k = found.end()
+                continue
+            # `<<<` 는 히어 스트링이다. 본문이 뒤따르지 않는다.
+            k += 2
+            continue
+        k += 1
+    return opened, quote
+
+
 def split_heredocs(cmd):
-    """본문을 걷어내고 명령 줄만 남긴다. 본문은 여는 순서대로 따로 모은다.
+    """본문을 걷어내고 명령만 남긴다. 본문은 여는 순서대로 따로 모은다.
 
     본문은 명령이 아니라 자료다. 안 걷으면 본문의 낱말이 명령으로 읽힌다.
+    남은 명령은 **인용 밖의 줄 끝마다 `;` 를 끼워** 한 문자열로 잇는다 — 셸에서 그
+    개행이 명령 구분자라, 공백으로 이으면 뒤따르는 커밋이 앞 명령에 묻힌다.
     """
     # **줄 이음을 먼저 편다.** 역슬래시로 이어 쓰면 힙독 연산자가 둘째 물리적 줄에
     # 오는데, 물리적 줄만 보면 그 본문을 못 찾아 검사가 통째로 지나간다.
     lines = cmd.replace("\\\n", " ").split("\n")
     bodies = []
     code = []
+    quote = ""
     i = 0
     while i < len(lines):
         line = lines[i]
-        code.append(line)
         i += 1
-        found = HEREDOC.search(line)
-        if not found:
-            continue
-        dash, _, delim = found.groups()
-        body = []
-        while i < len(lines):
-            candidate = lines[i]
-            i += 1
-            # `<<-` 는 셸이 선행 탭을 뗀다. 구분자도 들여쓸 수 있다.
-            trimmed = candidate.lstrip("\t") if dash else candidate
-            if trimmed.strip() == delim:
-                break
-            body.append(trimmed)
-        bodies.append(body)
-    return code, bodies
+        opened, quote = scan_line(line, quote)
+        # 인용이 줄을 넘어가면 그 개행은 구분자가 아니라 메시지의 일부다.
+        code.append(line + ("\n" if quote else "\n;"))
+        for dash, delim in opened:
+            body = []
+            while i < len(lines):
+                # `<<-` 는 셸이 선행 탭을 뗀다. 구분자도 그만큼 들여쓸 수 있다.
+                candidate = lines[i].lstrip("\t") if dash else lines[i]
+                i += 1
+                if candidate == delim:
+                    break
+                body.append(candidate)
+            bodies.append(body)
+    return "".join(code), bodies
 
 
 def subject_of(body):
@@ -110,7 +155,12 @@ def main():
     cmd = os.environ.get("COMMIT_CMD", "")
     code, bodies = split_heredocs(cmd)
     try:
-        tokens = shlex.split(" ".join(code), comments=True)
+        # **구분자를 낱말로 떼는 렉서다.** `shlex.split` 은 `a;b` 를 한 낱말로 읽어
+        # 뒤의 커밋이 세그먼트로 안 갈린다 — 검사가 통째로 지나간다.
+        lexer = shlex.shlex(code, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        lexer.commenters = "#"
+        tokens = list(lexer)
     except ValueError:
         # 짝이 안 맞는 인용. 무엇을 실행할지 모르므로 막는 쪽으로 넘긴다.
         print("__UNPARSED__")

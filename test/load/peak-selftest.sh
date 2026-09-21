@@ -289,9 +289,14 @@ lib_case "대마다 갈린 판정은 가장 나쁜 것" unmeasurable "$(peak_wor
 # 뒤가 명령으로 읽힌다. 실수로 들어간 문자에도 조용히 안 깨진다.
 lib_case "평범한 값은 작은따옴표로 감싼다" "'http://a:1,http://b:2'" "$(peak_sh_quote 'http://a:1,http://b:2')"
 lib_case "작은따옴표를 닫고 다시 연다" "'a'\\''b'" "$(peak_sh_quote "a'b")"
-# 인용이 실제로 서는지 껍질에 물어본다. 안 서면 아래가 'x' 가 아닌 것을 낸다.
+# **인용이 실제로 서는지 껍질에 물어본다.** 값을 비교만 하면 감싸기만 하고 이스케이프를
+# 빠뜨린 회귀를 못 잡는다 — 그래서 여기서만 `eval` 을 쓴다. 입력은 시험이 든 상수다.
 lib_case "끼워도 한 낱말로 남는다" "x; echo pwned" \
     "$(eval "printf '%s' $(peak_sh_quote 'x; echo pwned')")"
+# **작은따옴표를 섞는다.** 앞 줄만으로는 감싸기만 해도 통과한다. 인용이 일찍 닫히면 뒤의
+# `#` 가 나머지를 주석으로 먹어 값이 잘린다 — 그 회귀를 무는 것은 이 줄뿐이다.
+lib_case "작은따옴표 뒤의 주석도 한 낱말로 남는다" "x' #; echo pwned" \
+    "$(eval "printf '%s' $(peak_sh_quote "x' #; echo pwned")")"
 lib_case "빈 값도 낱말 하나다" "''" "$(peak_sh_quote '')"
 
 [ "$selftest_failed" -eq 0 ] && echo "최대치 자기검증 통과" || echo "최대치 자기검증 실패"

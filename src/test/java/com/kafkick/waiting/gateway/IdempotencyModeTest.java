@@ -83,6 +83,21 @@ class IdempotencyModeTest {
     }
 
     @Test
+    @DisplayName("끈 모드도 깨진 값은 거절한다 — 안 건드리는 것과 다르다")
+    void 끈_모드도_깨진_값은_거절() {
+        assertThat(키(Mode.OFF).accepts(List.of("order-1")))
+                .as("멀쩡한 한 줄은 그대로 간다").isTrue();
+        assertThat(키(Mode.OFF).accepts(List.of()))
+                .as("안 보낸 것은 막을 것이 없다").isTrue();
+        assertThat(키(Mode.OFF).accepts(List.of("order-1", "order-2")))
+                .as("줄이 둘이면 뒷단이 어느 것을 볼지가 그쪽 구현에 달린다").isFalse();
+        assertThat(키(Mode.OFF).accepts(List.of("")))
+                .as("빈 키를 뒷단이 유효하게 저장하면 전원이 한 레코드로 뭉친다").isFalse();
+        assertThat(키(Mode.OFF).accepts(List.of("a".repeat(200))))
+                .as("상한이 사라지면 요청 하나가 뒷단 저장소를 부풀린다").isFalse();
+    }
+
+    @Test
     @DisplayName("모드를 안 주면 막는다")
     void 모드_없음() {
         assertThatThrownBy(() -> IdempotencyKey.of(null, new SimpleMeterRegistry()))

@@ -294,6 +294,17 @@ file_case guard-paths.sh 'x' 'src/main/java/A.java' allow 'WF-5 일반 경로'
 bash_case guard-paths.sh 'rm -rf ../waiting-legacy/src' block 'WF-5 Bash 삭제 (회귀)'
 bash_case guard-paths.sh 'sed -i s/a/b/ ../waiting-legacy/x.java' block 'WF-5 Bash 수정 (회귀)'
 bash_case guard-paths.sh 'rg AdmissionDecider ../waiting-legacy/src' allow 'WF-5 Bash 읽기는 허용'
+# **도구 이름을 세는 방식은 우회가 쉽다.** 아래가 전부 통과하던 자리다 — 절대경로,
+# 인터프리터, 삭제 플래그, 다른 도구. 막는 형태 하나만 재면 자기검증 초록이
+# "게이트가 선다" 로 읽힌다.
+bash_case guard-paths.sh '/bin/rm -rf ../waiting-legacy/src' block 'WF-5 절대경로 호출'
+bash_case guard-paths.sh 'find ../waiting-legacy -name "*.java" -delete' block 'WF-5 find 삭제'
+bash_case guard-paths.sh 'perl -i -pe s/a/b/ ../waiting-legacy/x.java' block 'WF-5 인터프리터'
+bash_case guard-paths.sh 'touch ../waiting-legacy/x.java' block 'WF-5 touch'
+bash_case guard-paths.sh 'git -C ../waiting-legacy clean -fdx' block 'WF-5 git 쓰기 부명령'
+bash_case guard-paths.sh 'cd ../waiting-legacy' block 'WF-5 디렉터리 진입'
+bash_case guard-paths.sh 'git -C ../waiting-legacy log --oneline' allow 'WF-5 git 읽기 부명령'
+bash_case guard-paths.sh 'cat ../waiting-legacy/README.md' allow 'WF-5 읽기 도구'
 
 echo "check-commit-msg.sh"
 bash_case check-commit-msg.sh "git commit -m 'feat(admission): 상한 계산 추가'" allow '정상'

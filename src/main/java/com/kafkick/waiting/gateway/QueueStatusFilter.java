@@ -35,8 +35,9 @@ import reactor.core.publisher.Mono;
 @Order(FilterOrder.QUEUE_STATUS)
 public final class QueueStatusFilter implements WebFilter {
 
-    private static final PathPattern PATH = PathPatternParser.defaultInstance
-            .parse("/api/v1/coupons/{couponId}/queue");
+    // 규칙 목록이 같은 문자열을 든다. 갈라지면 기동이 실패한다 (RouteRules).
+    private static final PathPattern PATH =
+            PathPatternParser.defaultInstance.parse(RouteRules.QUEUE_PATH);
 
     /**
      * 순번 토큰을 싣는 헤더. <b>쿼리스트링으로 받지 않는다</b> — 앞단 프록시 액세스

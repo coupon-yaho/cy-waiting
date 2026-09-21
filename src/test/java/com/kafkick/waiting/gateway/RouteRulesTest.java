@@ -88,9 +88,18 @@ class RouteRulesTest {
     @DisplayName("줄 조회 규칙은 뒷단 주소를 받지 않는다 — 게이트웨이가 종결한다")
     void 줄_조회는_주소_없음() {
         assertThatThrownBy(() -> new RouteRules(List.of(
-                new Rule("queue", Kind.QUEUE, "GET", List.of("/q/{couponId}"),
+                new Rule("queue", Kind.QUEUE, "GET", List.of(RouteRules.QUEUE_PATH),
                         "http://a:8080"))))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("줄 조회 경로를 바꾸려 들면 막는다 — 필터가 안 따라온다")
+    void 줄_조회_경로는_고정() {
+        assertThatThrownBy(() -> new RouteRules(List.of(
+                new Rule("queue", Kind.QUEUE, "GET", List.of("/q/{couponId}"), null))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(RouteRules.QUEUE_PATH);
     }
 
     @Test

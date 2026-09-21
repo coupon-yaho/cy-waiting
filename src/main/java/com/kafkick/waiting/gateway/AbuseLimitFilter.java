@@ -40,8 +40,9 @@ import reactor.core.publisher.Mono;
 @Order(FilterOrder.ABUSE)
 public final class AbuseLimitFilter implements WebFilter {
 
-    private static final PathPattern QUEUE = PathPatternParser.defaultInstance
-            .parse("/api/v1/coupons/{couponId}/queue");
+    // 규칙 목록이 같은 문자열을 든다. 갈라지면 기동이 실패한다 (RouteRules).
+    private static final PathPattern QUEUE =
+            PathPatternParser.defaultInstance.parse(RouteRules.QUEUE_PATH);
 
     private static final PathPattern API = PathPatternParser.defaultInstance.parse("/api/**");
 

@@ -53,6 +53,10 @@ export const options = {
 
 const queuedResponses = new Counter('queued_responses');
 const shedResponses = new Counter('shed_responses');
+// **통과한 것도 센다.** 등록 타이머는 성공한 등록만 재므로, 쿠폰이 IDLE 인 동안 그냥
+// 지나간 요청은 그 평균에 안 들어간다. 세 갈래를 다 세야 어느 모집단을 잰 회차인지
+// 갈린다 — 안 세면 같은 하네스의 두 평균이 다른 것을 재고도 한 표에 들어간다.
+const passedResponses = new Counter('passed_responses');
 // **폭만 보면 부족하다.** 만 건 중 9,999 건이 한 값이고 하나만 멀리 있어도 폭은
 // 넓다. 그 회차는 회복이 곧 두 번째 스파이크가 되는데 게이트는 초록이다.
 //
@@ -90,6 +94,8 @@ export default function () {
 
   if (queued(issue)) {
     queuedResponses.add(1);
+  } else if (issue.status === 200) {
+    passedResponses.add(1);
   } else if (issue.status === 429 || issue.status === 503) {
     shedResponses.add(1);
     // **다시 올 시각이 흩어져야 한다** (F7). 한 값으로 몰리면 그 초에 같은

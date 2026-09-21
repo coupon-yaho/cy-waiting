@@ -22,16 +22,25 @@ case "${PINNED:-}" in
     ''|0|false|no) pinned="" ;;
     *) pinned=" -f test/load/compose.pinned.yml" ;;
 esac
-COMPOSE="docker compose -f test/load/compose.yml$pinned"
+# **왕복을 대기와 실행으로 가르는 계기를 켠다.** 기본은 안 한다 — 실측으로 등록
+# 한 건에 기록이 1.02 회 돈다. 부풀지는 않지만 공짜도 아니라, 켠 회차의 수를
+# 인용할 때는 켜져 있었다는 것을 같이 적는다.
+#
+#   LATENCY=1 test/load/shard-gate.sh
+case "${LATENCY:-}" in
+    ''|0|false|no) latency="" ;;
+    *) latency=" -f test/load/compose.latency.yml" ;;
+esac
+COMPOSE="docker compose -f test/load/compose.yml$pinned$latency"
 # **쿠폰은 노브가 아니다.** `open-spike.js` 가 `c2` 를 박아 두고 있어서, 여기만
 # 바꾸면 c3 을 비우고 c3 이 IDLE 인 것을 본 뒤 c2 를 때린다 — 빈 줄 보증이
 # 통째로 다른 쿠폰 얘기가 된다. 시나리오를 고칠 때 같이 고친다.
 COUPON=c2
-OUT_OPS="${OUT_OPS:-redis-ops${pinned:+-pinned}.txt}"
+OUT_OPS="${OUT_OPS:-redis-ops${pinned:+-pinned}${latency:+-latency}.txt}"
 # **산출물 이름에 조건을 싣는다.** 고정한 회차와 안 한 회차가 같은 파일에
 # 덮이면 나중에 어느 조건에서 나온 값인지 못 가른다 — 그 둘을 한 표에 넣는
 # 것이 정확히 이 페이즈가 되풀이한 오류다.
-OUT_SUMMARY="${OUT_SUMMARY:-k6-summary${pinned:+-pinned}.json}"
+OUT_SUMMARY="${OUT_SUMMARY:-k6-summary${pinned:+-pinned}${latency:+-latency}.json}"
 # 아래에서 앞 회차의 요약을 지운다. 환경에서 온 값을 그대로 지우므로 무엇을
 # 지우는지는 확인하고 간다.
 case "$OUT_SUMMARY" in
@@ -47,7 +56,7 @@ case "$OUT_ENQUEUE" in
 esac
 OUT_ENQUEUE_BASE="${OUT_ENQUEUE%.txt}-base.txt"
 # 아래에서 `tee` 로 덮어쓴다. 요약과 같은 이유로 무엇을 지우는지 보고 간다.
-OUT_LOG="${OUT_LOG:-k6-spike${pinned:+-pinned}.log}"
+OUT_LOG="${OUT_LOG:-k6-spike${pinned:+-pinned}${latency:+-latency}.log}"
 case "$OUT_LOG" in
     *.log) ;;
     *) echo "OUT_LOG 는 .log 여야 한다: '$OUT_LOG'"; exit 2 ;;
@@ -114,12 +123,20 @@ rm -f "$OUT_SUMMARY" "$OUT_OPS" "$OUT_ENQUEUE" "$OUT_ENQUEUE_BASE"
 
 # **부하 전 개수를 먼저 적어 둔다** (CY-936). 개수는 누적이고 분위수 창은 10 분마다 도므로,
 # 증분을 안 보면 이번 회차에 등록이 0 건이어도 예열 때의 값이 회차 값으로 인용된다.
+#
+# **명령별 지연도 같이 긁는다.** `LATENCY=1` 이 아니면 그 줄이 아예 안 나오므로, 없다는
+# 것이 곧 안 켠 회차라는 뜻이다 — 빈 값을 0 으로 읽지 않는다.
 scrape_enqueue() {
     $COMPOSE exec -T gateway wget -qO- http://localhost:8081/actuator/prometheus 2>/dev/null \
-        | grep '^waiting_queue_enqueue_latency_seconds' > "$1" || true
+        | grep -E '^(waiting_queue_enqueue_latency_seconds|lettuce_command_)' > "$1" || true
+}
+# **파일이 비었는지로 가르면 안 된다.** 계기를 켠 회차는 lettuce 줄이 들어차므로, 등록 지표가
+# 통째로 사라져도 파일이 안 빈다 — 갈라 두려던 "못 긁음" 과 "0 건" 이 다시 붙는다.
+has_enqueue() {
+    grep -q '^waiting_queue_enqueue_latency_seconds' "$1"
 }
 scrape_enqueue "$OUT_ENQUEUE_BASE"
-if [ ! -s "$OUT_ENQUEUE_BASE" ]; then
+if ! has_enqueue "$OUT_ENQUEUE_BASE"; then
     echo "::warning title=착수 판정::회차 전 등록 지표를 못 긁었다 — 등록 p99 는 안 적는다"
 fi
 
@@ -142,6 +159,16 @@ fi
 # 먹으면 레디스만 격리한 뜻이 없다 — 실제로 그 회차에서 응답 중앙값이 10.6 초로
 # 늘고 제어 평면이 250ms 안에 못 읽어 타임아웃이 났다. 레디스 CPU 는 낮은데
 # 나머지가 밀린 것이고, 그러면 재는 것이 또 레디스가 아니다.
+#
+# **다만 생성기와 게이트웨이는 서로 안 갈린다.** 아래 목록은 `compose.pinned.yml`
+# 의 게이트웨이 몫과 **글자 그대로 같다** — 레디스 코어만 비우고 둘은 열한 개를
+# 통째로 나눠 쓴다. 그래서 게이트웨이가 쓴 CPU 중 얼마가 생성기와 다툰 몫인지
+# 이 회차로는 못 가른다. 같은 조건의 두 회차가 유입 1,390 과 2,127 로 갈린 것이
+# 그 징후다 (AIJ-0349).
+#
+# **좁혀서 가르는 길은 막혀 있다.** 게이트웨이 쪽을 좁히면 그쪽이 병목이 되어
+# 재려던 것이 또 바뀐다 — `compose.pinned.yml` 이 그 실측을 든다. 열두 코어
+# 한 대에서는 못 가르고, 생성기가 다른 기계로 나가야 갈린다.
 runner=""
 if [ -n "$pinned" ]; then
     # **없으면 말한다.** 조용히 안 묶으면 격리했다고 믿는 회차가 안 격리된
@@ -183,7 +210,7 @@ trap - EXIT
 # 섞여 있어 착수 게이트가 보라는 값이 아니다. 스택을 내리면 이 값도 같이 사라진다.
 scrape_enqueue "$OUT_ENQUEUE"
 # **못 긁은 것과 등록이 0 건인 것은 다르다.** 둘 다 "없음" 으로 적히므로 여기서 갈라 둔다.
-if [ ! -s "$OUT_ENQUEUE" ]; then
+if ! has_enqueue "$OUT_ENQUEUE"; then
     echo "::warning title=착수 판정::등록 왕복 지표를 못 긁었다 — 노드가 여럿이거나 관리 포트가 바뀌었다"
 fi
 

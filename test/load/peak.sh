@@ -84,6 +84,24 @@ OUT_DIR=${OUT_DIR:-peak-out}
 
 command -v k6 >/dev/null || { echo "k6 가 없다"; exit 2; }
 
+# **생성기를 따로 묶는다.** 안 묶으면 k6 가 게이트웨이·레디스와 같은 코어에 앉아, 게이트웨이가
+# 쓴 CPU 중 얼마가 생성기와 다툰 몫인지 안 갈린다 — 실측에서 같은 조건의 두 회차가 유입 1,390 과
+# 2,127 로 갈렸다. `GATEWAY_CPUS` 와 겹치지 않는 목록을 준다.
+#
+#   K6_CPUS=8-11 GATEWAY_CPUS=6 test/load/peak.sh
+#
+# **묶으면 생성기 용량이 준다.** 그래서 여기서 나온 최대치는 제품의 천장이 아니라 이 조합의
+# 천장이다 — 수를 인용할 때 목록을 같이 적는다.
+K6_RUN=(k6)
+if [ -n "${K6_CPUS:-}" ]; then
+    if ! printf '%s' "$K6_CPUS" | grep -Eq '^[0-9]+([-,][0-9]+)*$'; then
+        echo "::error title=현재 최대치::K6_CPUS 는 taskset 목록이어야 한다: '$K6_CPUS'"
+        exit 2
+    fi
+    command -v taskset >/dev/null || { echo "::error title=현재 최대치::taskset 이 없다"; exit 2; }
+    K6_RUN=(taskset -c "$K6_CPUS" k6)
+fi
+
 jar=${WAITING_JAR:-build/libs/waiting.jar}
 [ -f "$jar" ] || { echo "실행 JAR 이 없다: $jar — ./gradlew build 를 먼저 돌린다"; exit 2; }
 
@@ -187,7 +205,7 @@ if [ "$warm_rate" != 0 ]; then
         wait_idle || { echo "::error title=현재 최대치::줄 모드가 안 꺼진다"; exit 2; }
         # 앞 번의 요약을 남기면 k6 가 못 뜬 번에 그 p99 를 읽는다.
         rm -f "$OUT_DIR/k6-warmup.json"
-        VUS=$warm_vus RATE=$warm_rate DURATION=$warm_dur k6 run \
+        VUS=$warm_vus RATE=$warm_rate DURATION=$warm_dur "${K6_RUN[@]}" run \
             --summary-export="$OUT_DIR/k6-warmup.json" test/load/peak.js \
             > "$OUT_DIR/k6-warmup.log" 2>&1
         peak_warm_converged "$OUT_DIR/k6-warmup.json" "$warm_p99_ms"
@@ -247,7 +265,7 @@ for rate in $RATES; do
     rm -f "$cpu.stop"
     peak_sample_cpu "$cpu" "$PROJECT" "$$" "$(( $(date +%s) + DURATION_SEC ))" &
     sampler=$!
-    VUS=$vus RATE=$rate DURATION=$DURATION k6 run --summary-export="$summary" \
+    VUS=$vus RATE=$rate DURATION=$DURATION "${K6_RUN[@]}" run --summary-export="$summary" \
         test/load/peak.js 2>&1 | tee "$log"
     k6_rc=${PIPESTATUS[0]}
     stop_sampler

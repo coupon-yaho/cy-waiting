@@ -91,9 +91,13 @@ jobs:
           # **`actions/` 를 통째로 넣지 않는다.** 알림이나 판정 액션은 빌드가
           # 아니라 항상 도는 잡에서만 쓰인다. 넣으면 문구 한 줄에 전 테스트가
           # 도는데, 그건 바로 위에서 경계한 그 비용이다.
+          #
+          # **`_security.yml` 도 넣는다.** CVE 잡이 여기 세운 락파일로 스캔하는데,
+          # 그 잡은 코드가 바뀐 PR 에서만 돈다 — 그 워크플로만 고친 PR 은 자기가
+          # 바꾼 것을 한 번도 안 돌리고 머지된다 (CY-978).
           if grep -qvE '^(plan|ai|\.claude|\.github)/|^[A-Z]+\.md$|^\.(coderabbit\.yaml|gitignore|gitattributes)$' <<<"$changed" \
               || grep -qE '^plan/0[456]-' <<<"$changed" \
-              || grep -qE '^\.github/(actions/setup-gradle/|workflows/(pr|_build|_test)\.yml$)' <<<"$changed"; then
+              || grep -qE '^\.github/(actions/setup-gradle/|workflows/(pr|_build|_test|_security)\.yml$)' <<<"$changed"; then
             echo "code=true" >> "$GITHUB_OUTPUT"
           else
             echo "code=false" >> "$GITHUB_OUTPUT"

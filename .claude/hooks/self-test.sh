@@ -582,6 +582,53 @@ echo '돌린 에이전트: 자기검증' >> "$clean_repo/.claude/.agents-reviewe
 failclosed=$(cd /tmp && printf '{"tool_input":{"command":"gh pr create"}}' \
     | "$ROOT/.claude/hooks/guard-pr.sh" >/dev/null 2>&1; echo $?)
 
+# **인용이 깨진 명령은 기본값으로 안 넘어간다.** 쪼개다 실패하면 어느 기준으로 볼지
+# 모르는데, 그때 develop 으로 떨어지면 main 으로 여는 PR 을 develop 기준으로 검사한다.
+# **종료 코드만 보면 안 갈린다.** 이 저장소 상태에서는 다른 이유로도 2 가 나오므로,
+# 쪼개다 실패해서 막았다는 것을 메시지로 못 박는다.
+# **훅마다 시간이 명시돼야 한다.** 안 적으면 기본을 넘겼을 때 차단이 아니라 오류로
+# 처리돼 그대로 나간다 — 가드가 조용히 열린다. 검사는 늘기만 하므로 경계가 다가온다.
+notimeout=$(python3 - "$ROOT/.claude/settings.json" <<'TIMEOUT'
+import json, sys
+d = json.load(open(sys.argv[1]))
+missing = [h.get("command", "").rsplit("/", 1)[-1]
+           for arr in d.get("hooks", {}).values() for m in arr
+           for h in m.get("hooks", []) if "timeout" not in h]
+print(" ".join(missing))
+TIMEOUT
+)
+
+# **자격 확인이 응답을 못 받으면 막아야 한다.** 값으로 보면 빈 문자열이 통과한다 —
+# curl 이 아예 안 도는 경우가 그것이고, 인프라 오류 한 번에 게이트가 사라지는 경로다.
+# 아무것도 안 내는 curl 을 앞에 둬 그 상황을 만든다.
+shim="$tmp/shim"
+mkdir -p "$shim"
+printf '#!/bin/sh\nexit 0\n' > "$shim/curl"
+chmod +x "$shim/curl"
+cat > "$tmp/.env" <<'FAKEENV'
+ATLASSIAN_BASE_URL=https://example.invalid
+ATLASSIAN_USER_EMAIL=probe@example.invalid
+ATLASSIAN_API_TOKEN=probe
+FAKEENV
+# **키는 계획서·규칙에서만 찾는다.** 다른 경로에 넣으면 자격 확인까지 안 가고
+# 그 앞에서 통과해, 시험이 재려던 자리를 못 밟는다.
+mkdir -p "$clean_repo/plan"
+printf '티켓 CY-1 참고\n' >> "$clean_repo/plan/probe.md"
+git -C "$clean_repo" add plan/probe.md >/dev/null 2>&1
+git -C "$clean_repo" -c user.email=t@t -c user.name=t \
+    commit -q --no-verify -m 'docs(probe): 키 한 줄' >/dev/null 2>&1
+nocurl_out=$(cd "$clean_repo" && PATH="$shim:$PATH" "$clean_repo/.claude/hooks/guard-pr.sh" 2>&1 <<'NOCURL'
+{"tool_input":{"command":"gh pr create --base develop"}}
+NOCURL
+)
+nocurl=$?
+
+badquote_out=$(cd "$clean_repo" && "$clean_repo/.claude/hooks/guard-pr.sh" 2>&1 <<'BADQUOTE'
+{"tool_input":{"command":"gh pr create --base main --title \"열린 따옴표"}}
+BADQUOTE
+)
+badquote=$?
+
 if ((probe_seen)); then
     printf '  ok   러너가 변경된 프로브 파일을 본다\n'; pass=$((pass + 1))
 else
@@ -591,6 +638,22 @@ if ((failclosed == 2)); then
     printf '  ok   저장소 밖에서는 막는다 (fail closed)\n'; pass=$((pass + 1))
 else
     printf '  FAIL 저장소 밖인데 통과시켰다 (exit %d)\n' "$failclosed"; fail=$((fail + 1))
+fi
+if [[ -z "${notimeout// /}" ]]; then
+    printf '  ok   훅마다 시간이 명시돼 있다\n'; pass=$((pass + 1))
+else
+    printf '  FAIL 시간이 안 적힌 훅이 있다: %s\n' "$notimeout"; fail=$((fail + 1))
+fi
+if ((nocurl == 2)) && printf '%s' "$nocurl_out" | grep -q '지라에 못 붙어'; then
+    printf '  ok   자격 확인이 응답을 못 받으면 막는다\n'; pass=$((pass + 1))
+else
+    printf '  FAIL 자격 확인이 비었는데 통과시켰다 (exit %d)\n' "$nocurl"; fail=$((fail + 1))
+    printf '       막힌 이유: %s\n' "$(printf '%s' "$nocurl_out" | head -2 | tr '\n' ' ')"
+fi
+if ((badquote == 2)) && printf '%s' "$badquote_out" | grep -q '못 쪼갰다'; then
+    printf '  ok   인용이 깨진 명령은 쪼개다 막는다\n'; pass=$((pass + 1))
+else
+    printf '  FAIL 인용이 깨졌는데 기본 기준으로 넘어갔다 (exit %d)\n' "$badquote"; fail=$((fail + 1))
 fi
 if ((stale == 2)); then
     printf '  ok   낡은 증거는 막는다\n'; pass=$((pass + 1))

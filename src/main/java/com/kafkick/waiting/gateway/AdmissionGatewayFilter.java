@@ -104,7 +104,8 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
     private static final String MEMBER_ID = "X-Member-Id";
 
     /** 발급 계층 명세가 정한 이름. 조회가 준 토큰을 여기 실어 온다. */
-    private static final String ENTRY_TOKEN = "Entry-Token";
+    /** 받는 이름의 기본값. 설정이 바꾸면 {@link #delivery} 가 든다. */
+    private static final String ENTRY_TOKEN = EntryTokenDelivery.DEFAULT_HEADER;
 
     /**
      * 장애 개방이 노드 예산에서 가져다 쓰는 비율.
@@ -153,6 +154,18 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
     private final QueuePort queue;
     private final QueueToken tokens;
     private final EntryToken entryTokens;
+
+    /**
+     * 받는 이름과 뒷단 이름. <b>기본값으로 두면 지금과 같다</b> — 설정을 안 넣은
+     * 배포가 그대로 돈다.
+     */
+    private EntryTokenDelivery delivery = new EntryTokenDelivery(null, null, null);
+
+    /** 시험이 모드를 바꿔 본다. 운영은 생성자가 꽂는다. */
+    AdmissionGatewayFilter withEntryTokenDelivery(EntryTokenDelivery value) {
+        this.delivery = value;
+        return this;
+    }
     private final SecondWindowLimiter limiter;
     private final EnqueueLatch latch;
 
@@ -245,13 +258,14 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
             MeterRegistry meters, QueuePort queue, QueueToken tokens,
             SecondWindowLimiter limiter, EntryToken entryTokens,
             IdempotencyKey idempotency, SoldOutCache soldOutCache,
-            ObjectProvider<CircuitStateReader> circuit) {
+            ObjectProvider<CircuitStateReader> circuit, EntryTokenDelivery delivery) {
         this(holder, decider, clock, meters,
                 () -> ThreadLocalRandom.current().nextDouble(), queue, tokens, limiter,
                 entryTokens, idempotency, System::nanoTime, soldOutCache,
                 // **배분과 같은 것을 쓴다.** 각자 만들면 판정은 열렸다고 보는데
                 // 배분은 아니라고 보는 구간이 생긴다.
                 circuit.getIfAvailable());
+        this.delivery = delivery;
     }
 
     /**
@@ -600,7 +614,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
      * 고쳐야 하는지 알려 주는 셈이다.
      */
     private boolean hasEntryToken(ServerWebExchange exchange, String couponId) {
-        String presented = exchange.getRequest().getHeaders().getFirst(ENTRY_TOKEN);
+        String presented = exchange.getRequest().getHeaders().getFirst(delivery.header());
         String memberId = exchange.getRequest().getHeaders().getFirst(MEMBER_ID);
         // **토큰이 가리키는 사람과 같아야 한다.** 안 보면 남의 토큰을 주워 와도
         // 통하고, 발급은 주워 온 사람 앞으로 나간다.
@@ -657,8 +671,21 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
         // **여기부터 반납이 걸릴 때까지 던질 수 있는 것을 두지 않는다.**
         // **끈 모드면 안 건드린다.** 클라이언트가 보낸 것이 그대로 간다 — 신원
         // 헤더와 같은 원칙이다. 지우지도 넣지도 않는다.
-        ServerWebExchange forwarded = key == null ? exchange : exchange.mutate()
-                .request(r -> r.headers(h -> h.set(IdempotencyKey.HEADER, key)))
+        //
+        // **뒷단 이름이 다르면 바꿔 싣는다.** 옛 이름을 같이 두면 뒷단이 둘 중
+        // 어느 것을 볼지가 그쪽 구현에 달린다.
+        String pass = delivery.renames()
+                ? exchange.getRequest().getHeaders().getFirst(delivery.header()) : null;
+        ServerWebExchange forwarded = key == null && pass == null ? exchange : exchange.mutate()
+                .request(r -> r.headers(h -> {
+                    if (key != null) {
+                        h.set(IdempotencyKey.HEADER, key);
+                    }
+                    if (pass != null) {
+                        h.remove(delivery.header());
+                        h.set(delivery.backendHeader(), pass);
+                    }
+                }))
                 .build();
         return chain.filter(forwarded)
                 // doFinally 는 끝나는 것만 돌려주지 안 끝나는 것을 끝내지 못한다.

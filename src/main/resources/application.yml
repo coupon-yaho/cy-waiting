@@ -177,6 +177,20 @@ waiting:
       - path: /api/v1/coupons
         ttl: 300ms
 
+  entry-token:
+    # 차례가 온 사람에게 입장 토큰을 어디로 주는가. **기본은 지금 동작이다.**
+    #   BODY   — 순번 조회 응답 바디에만
+    #   HEADER — 응답 헤더에만. 노출 목록에 자동으로 오른다
+    #   BOTH   — 둘 다. 클라이언트를 옮기는 동안 쓴다
+    where: ${WAITING_ENTRY_TOKEN_WHERE:BODY}
+    # 클라이언트가 발급 요청에 실어 올 때의 헤더 이름. 게이트웨이가 이 이름으로
+    # 읽고, 안 벗기므로 같은 이름으로 뒷단에 간다.
+    header: ${WAITING_ENTRY_TOKEN_HEADER:Entry-Token}
+    # 뒷단이 다른 이름으로 받아야 하면 여기 적는다. **적으면 받은 이름은 지우고
+    # 이 이름으로 바꿔 싣는다** — 둘을 같이 두면 뒷단이 어느 것을 볼지가 그쪽
+    # 구현에 달린다. 비워 두면 받은 이름 그대로 간다.
+    backend-header: ${WAITING_ENTRY_TOKEN_BACKEND_HEADER:}
+
   idempotency:
     # 뒷단에 무엇을 실을 것인가. **기본은 지금 동작이다.**
     #   UUID — v4 로 맞춘다. 아니면 쿠폰·회원으로 만들어 넣는다

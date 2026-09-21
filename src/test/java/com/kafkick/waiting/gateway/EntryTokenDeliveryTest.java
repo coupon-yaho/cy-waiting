@@ -48,11 +48,20 @@ class EntryTokenDeliveryTest {
     @DisplayName("헤더 이름에 토큰 문자가 아닌 것이 들어가면 막는다")
     void 이름_검증() {
         for (String 나쁜 : new String[] {"Entry Token", "Entry:Token", "엔트리",
-                "Entry\nToken", "", "  "}) {
+                "Entry\nToken", "Entry\rToken", "Entry,Token"}) {
             assertThatThrownBy(() -> new EntryTokenDelivery(Where.BODY, 나쁜, null))
                     .as("'%s' 가 헤더 줄이 되면 헤더가 갈린다", 나쁜)
                     .isInstanceOf(IllegalArgumentException.class);
         }
+    }
+
+    @Test
+    @DisplayName("빈 값은 안 적은 것이다 — 환경변수 기본값이 비어 온다")
+    void 빈_값() {
+        assertThat(new EntryTokenDelivery(Where.BODY, "", "  ").header())
+                .isEqualTo("Entry-Token");
+        assertThat(new EntryTokenDelivery(Where.BODY, "", "  ").backendHeader())
+                .isEqualTo("Entry-Token");
     }
 
     @Test

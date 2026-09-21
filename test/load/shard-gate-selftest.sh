@@ -266,6 +266,30 @@ MIN_SAMPLES=1 run_case "요약 파일이 없으면 막는다" 1 "요약이 없�
 MIN_SAMPLES=1 run_case "요약이 비었으면 막는다" 1 "요약이 없거나 비었다" \
     -- "$(samples s.txt 6001)" "$work/empty.json"
 
+# ── 러너의 노브 검사 ──────────────────────────────────────────────────────
+# **예열 경로는 기본이 꺼짐이라 CI 어디서도 안 돈다.** 그러면 조용히 썩는다.
+# 스택을 안 세워도 재는 것은 입력 검사뿐이므로, 그것만이라도 여기서 문다.
+runner_case() {   # 설명 기대조각 환경...
+    local label=$1 want=$2
+    shift 2
+    local out
+    out=$(env "$@" test/load/shard-gate.sh 2>&1)
+    local code=$?
+    if [ "$code" -eq 2 ] && [[ "$out" == *"$want"* ]]; then
+        printf '  ok   %s\n' "$label"
+    else
+        printf '  FAIL %s (종료 %d)\n    %s\n' "$label" "$code" "${out:0:160}"
+        selftest_failed=$((selftest_failed + 1))
+    fi
+}
+
+runner_case "예열 쿠폰이 재는 쿠폰과 같으면 막는다" "재는 쿠폰과 달라야" \
+    WARMUP_COUPON=c2
+runner_case "예열 인원이 숫자가 아니면 막는다" "음이 아닌 정수" \
+    WARMUP_USERS=abc
+runner_case "가라앉힘이 숫자가 아니면 막는다" "음이 아닌 정수" \
+    WARMUP_SETTLE_SEC=-1
+
 [ "$selftest_failed" -eq 0 ] && echo "착수 판정 자기검증 통과" \
     || echo "착수 판정 자기검증 실패"
 

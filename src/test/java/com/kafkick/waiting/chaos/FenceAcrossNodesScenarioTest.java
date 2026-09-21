@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.kafkick.waiting.WaitingApplication;
 import com.kafkick.waiting.adapter.redis.AllocationRedisPort;
+import com.kafkick.waiting.adapter.redis.RedisKeys;
 import com.kafkick.waiting.domain.allocation.Grant;
 import java.time.Duration;
 import java.util.List;
@@ -15,17 +16,16 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.test.annotation.DirtiesContext;
 
 /**
  * 임기 울타리가 <b>두 노드 사이에서</b> 문으로 서는가 (CY-976).
  *
- * <p>승계 구간에서 불변식 2·3 을 지키는 장치가 울타리인데, 지금까지 그것을 재는 시험은 전부
- * 한 노드에서 유령 임기를 손으로 써 넣어 돌았다. 여기는 둘째 노드가 실제로 봉인한다.
+ * <p>지금까지 이것을 재는 시험은 전부 한 노드에서 유령 임기를 손으로 써 넣어 돌았다. 그
+ * 방식은 봉인 코드를 한 줄도 안 지나므로 스크립트가 숫자를 비교하는지만 잰다. 여기는
+ * 둘째 노드가 실제로 봉인한다.
  */
-// **유령 문자열이 아니라 돈 노드가 막아야 한다.** 리더 키에 소유자만 써 넣는 방식은 봉인
-// 코드를 한 줄도 안 지나므로, 울타리가 실제로 서는지가 아니라 스크립트가 숫자를 비교하는지만
-// 잰다 — 그 구분이 이 시나리오의 전부다.
 @Tag("chaos")
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
@@ -47,6 +47,9 @@ class FenceAcrossNodesScenarioTest {
 
     @Autowired
     private AllocationRedisPort 첫_노드;
+
+    @Autowired
+    private ReactiveStringRedisTemplate redis;
 
     @BeforeAll
     static void 띄운다() {
@@ -85,6 +88,12 @@ class FenceAcrossNodesScenarioTest {
     void 둘째_노드의_봉인이_첫_노드의_낡은_임기를_막는다() {
         // **문이 둘이다.** 쿠폰별 울타리와 발행 울타리를 따로 잠근다 — 승계 배선도 둘 다
         // 부른다. 하나만 잠그면 나머지 한쪽으로 유령이 그대로 나간다.
+        // **지울 것이 있어야 막은 것이 보인다.** 재고 키가 없으면 삭제 스크립트가 "안
+        // 지웠다" 로 끝나고, 그 결과가 막힌 것과 똑같은 빈 목록이다 — 울타리를 빼도
+        // 초록인 단언이 된다. 매진(0)과 줄 하나를 심어 두 경우를 가른다.
+        redis.opsForValue().set(RedisKeys.stock(COUPON), "0").block(기다림);
+        redis.opsForZSet().add(RedisKeys.queue(COUPON, 1, 0), "u1", 1.0).block(기다림);
+
         첫_노드.sealFences(List.of(COUPON), 앞_임기).block(기다림);
         첫_노드.sealSnapshotFence(앞_임기).block(기다림);
         assertThat(막혔나(() -> 첫_노드.apply(new Grant(COUPON, 1), 앞_임기).block(기다림)))
@@ -110,6 +119,10 @@ class FenceAcrossNodesScenarioTest {
                     .as("낡은 임기의 발행이 막힌다 — 안 막히면 낡은 재료가 전 노드로 간다").isTrue();
             assertThat(첫_노드.dropSoldOutQueues(List.of(COUPON), 앞_임기).block(기다림))
                     .as("낡은 임기의 매진 정리가 막힌다 — 되살리는 코드가 없다").isEmpty();
+            // **줄이 남았는지를 직접 본다.** 빈 목록은 막힌 것·지울 게 없는 것·오류를
+            // 삼킨 것 셋을 다 뜻한다. 남은 줄만이 안 지웠다는 사실이다.
+            assertThat(redis.hasKey(RedisKeys.queue(COUPON, 1, 0)).block(기다림))
+                    .as("줄이 그대로 있다 — 지워졌으면 되살릴 수 없다").isTrue();
 
             // **둘째는 통과해야 한다.** 다 막히면 문이 선 것이 아니라 잠긴 것이다.
             assertThat(막혔나(() -> 둘째_포트.apply(new Grant(COUPON, 1), 뒤_임기).block(기다림)))

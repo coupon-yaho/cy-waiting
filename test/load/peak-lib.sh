@@ -64,6 +64,13 @@ if not vals:
 print(f'{sum(vals) if kind == "rate" else max(vals):.4f}')
 MERGE
 }
+# 원격 셸에 끼울 값을 한 낱말로 묶는다.
+#
+# **작은따옴표 안에 값을 그냥 끼우면 안 된다.** 값에 작은따옴표가 하나만 섞여도 거기서 인용이
+# 끝나고 뒤가 명령으로 읽힌다. 주소에 실수로 따옴표가 들어간 경우까지 조용히 안 깨지게 한다.
+peak_sh_quote() {
+    printf "'%s'" "$(printf '%s' "${1-}" | sed "s/'/'\\\\''/g")"
+}
 peak_duration_sec() {
     printf '%s\n' "$1" | awk '
         {

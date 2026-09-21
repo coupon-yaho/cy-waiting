@@ -285,5 +285,14 @@ lib_case "종료 0 인 대는 제 코드로 판정한다" ok "$(peak_verdict_fro
 lib_case "남의 99 를 얹으면 판정 불가가 된다" unmeasurable "$(peak_verdict_from_k6 99 "$ok_sum")"
 lib_case "대마다 갈린 판정은 가장 나쁜 것" unmeasurable "$(peak_worst_verdict ok unmeasurable)"
 
+# **원격 셸에 끼우는 값은 인용한다.** 작은따옴표 하나만 섞여도 거기서 인용이 끝나고
+# 뒤가 명령으로 읽힌다. 실수로 들어간 문자에도 조용히 안 깨진다.
+lib_case "평범한 값은 작은따옴표로 감싼다" "'http://a:1,http://b:2'" "$(peak_sh_quote 'http://a:1,http://b:2')"
+lib_case "작은따옴표를 닫고 다시 연다" "'a'\\''b'" "$(peak_sh_quote "a'b")"
+# 인용이 실제로 서는지 껍질에 물어본다. 안 서면 아래가 'x' 가 아닌 것을 낸다.
+lib_case "끼워도 한 낱말로 남는다" "x; echo pwned" \
+    "$(eval "printf '%s' $(peak_sh_quote 'x; echo pwned')")"
+lib_case "빈 값도 낱말 하나다" "''" "$(peak_sh_quote '')"
+
 [ "$selftest_failed" -eq 0 ] && echo "최대치 자기검증 통과" || echo "최대치 자기검증 실패"
 exit "$selftest_failed"

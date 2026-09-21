@@ -331,15 +331,22 @@ for rate in $RATES; do
             # **요약은 원격에 쓰인다.** 같은 경로를 여기서 읽으면 공유 파일시스템이 없는 한
             # 늘 비고, 그러면 나눈 회차가 언제나 판정 불가가 된다. 돌린 뒤 받아 온다.
             remote_part="/tmp/peak-$rate-$i.json"
+            # **원격에 넘기는 값은 전부 인용한다.** 작은따옴표 하나만 섞여도 거기서 인용이
+            # 끝나고 뒤가 명령으로 읽힌다. 주소·경로에 실수로 들어간 문자에도 안 깨진다.
             gen_run() {
                 local host=$1 idx=$2 vu=$3 rt=$4 out=$5 remote=$6
+                local q_dir q_base q_remote q_dur
+                q_dir=$(peak_sh_quote "$PWD")
+                q_base=$(peak_sh_quote "$REMOTE_BASE_URLS")
+                q_remote=$(peak_sh_quote "$remote")
+                q_dur=$(peak_sh_quote "$DURATION")
                 ssh "$host" \
-                    "cd '$PWD' && BASE_URLS='$REMOTE_BASE_URLS' VUS=$vu RATE=$rt \
-                        DURATION=$DURATION $remote_k6 run \
-                        --summary-export='$remote' test/load/peak.js" \
+                    "cd $q_dir && BASE_URLS=$q_base VUS=$vu RATE=$rt \
+                        DURATION=$q_dur $remote_k6 run \
+                        --summary-export=$q_remote test/load/peak.js" \
                     > "$OUT_DIR/k6-$rate-$idx.log" 2>&1
                 local rc=$?
-                ssh "$host" "cat '$remote'; rm -f '$remote'" > "$out" 2>/dev/null
+                ssh "$host" "cat $q_remote; rm -f $q_remote" > "$out" 2>/dev/null
                 return "$rc"
             }
             gen_run "${gen_hosts[$i]}" "$i" "$v" "$r" "$part" "$remote_part" &

@@ -11,6 +11,7 @@ import com.kafkick.waiting.control.SnapshotHolder;
 import io.micrometer.core.instrument.FunctionCounter;
 import java.util.function.ToDoubleFunction;
 import io.micrometer.core.instrument.MeterRegistry;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -124,11 +125,12 @@ public class IdentityConfig {
     }
 
     /**
-     * 멱등 키는 <b>비밀키를 안 쓴다.</b> 클라이언트가 준 UUID 를 그대로
-     * 넘기고, 도용 방어는 뒷단이 회원과 키의 쌍으로 저장해서 진다.
+     * 멱등 키는 <b>비밀키를 안 쓴다.</b> 클라이언트가 준 값을 넘기고, 도용 방어는
+     * 뒷단이 회원과 키의 쌍으로 저장해서 진다. 무엇을 넘길지는 설정이 고른다.
      */
     @Bean
-    public IdempotencyKey idempotencyKey(MeterRegistry meters) {
-        return IdempotencyKey.passThrough(meters);
+    public IdempotencyKey idempotencyKey(MeterRegistry meters,
+            @Value("${waiting.idempotency.mode:UUID}") IdempotencyKey.Mode mode) {
+        return IdempotencyKey.of(mode, meters);
     }
 }

@@ -647,9 +647,12 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
                 "보호 차단 해제 — {}초 동안 {}건 끊었다",
                 NANOSECONDS.toSeconds(r.elapsedNanos()), r.swallowed()));
         // **여기부터 반납이 걸릴 때까지 던질 수 있는 것을 두지 않는다.**
-        return chain.filter(exchange.mutate()
-                        .request(r -> r.headers(h -> h.set(IdempotencyKey.HEADER, key)))
-                        .build())
+        // **끈 모드면 안 건드린다.** 클라이언트가 보낸 것이 그대로 간다 — 신원
+        // 헤더와 같은 원칙이다. 지우지도 넣지도 않는다.
+        ServerWebExchange forwarded = key == null ? exchange : exchange.mutate()
+                .request(r -> r.headers(h -> h.set(IdempotencyKey.HEADER, key)))
+                .build();
+        return chain.filter(forwarded)
                 // doFinally 는 끝나는 것만 돌려주지 안 끝나는 것을 끝내지 못한다.
                 // 멈춘 뒷단 하나가 격벽을 영구히 닫는 것을 이 상한이 막는다.
                 // 뒷단 응답 타임아웃과는 다르다 — 여기는 자리를 쥐는 시간이다.

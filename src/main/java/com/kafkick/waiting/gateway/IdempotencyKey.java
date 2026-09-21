@@ -6,23 +6,39 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import java.util.Locale;
 import java.util.Objects;
-import java.util.UUID;
 import java.util.regex.Pattern;
 
 /**
  * 게이트웨이가 끊어도 뒷단은 처리했을 수 있다. 재사용 방지는 발급 계층의 멱등성이
- * 지고, 게이트웨이는 같은 시도에 같은 키를 실어 준다. 뒷단 계약이 <b>UUID v4</b> 라
- * 값을 바꾸지 않고 그대로 넘긴다.
+ * 지고, 게이트웨이는 같은 시도에 같은 키를 실어 준다.
+ *
+ * <p>뒷단 계약은 곳마다 다르다. 무엇을 실을지를 {@link Mode} 로 고른다.
  */
 public final class IdempotencyKey {
 
     public static final String HEADER = "Idempotency-Key";
 
+    /** 뒷단에 무엇을 실을 것인가. */
+    public enum Mode {
+        /** UUID v4 로 맞춘다. 아니면 만들어 넣는다. 뒷단 계약이 UUID 일 때. */
+        UUID,
+        /** 클라이언트가 준 값을 그대로 넘긴다. 모양을 안 맞춘다. */
+        RAW,
+        /** 게이트웨이가 헤더를 안 건드린다. 클라이언트가 보낸 것이 그대로 간다. */
+        OFF
+    }
+
+    /**
+     * 원문 모드에서 받아 주는 값. <b>그 값이 뒷단 키가 된다</b> — 헤더를 가르는
+     * 문자나 긴 값을 그대로 넘기면 뒷단의 저장 키가 우리 손을 떠난다.
+     */
+    private static final Pattern RAW_OK = Pattern.compile("^[A-Za-z0-9_.:@=+/-]{1,128}$");
+
     /** 값을 안 줬을 때 떨어질 자리를 가르는 이름공간. 다른 용도와 안 겹치게 한다. */
-    private static final UUID NAMESPACE =
-            UUID.fromString("6ba7b810-9dad-11d1-80b4-00c04fd430c8");
+    private static final String NAMESPACE = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
 
     /**
      * 받아 주는 표기. <b>버전 자리와 변종 자리까지 본다</b> — 모양만 보면 v1·v3 을
@@ -40,10 +56,23 @@ public final class IdempotencyKey {
     /** 값을 줬는데 UUID v4 가 아니다. 클라이언트가 계약을 틀리게 안다는 신호다. */
     private final Counter malformed;
 
-    private IdempotencyKey(MeterRegistry meters) {
+    private final Mode mode;
+
+    private IdempotencyKey(Mode mode, MeterRegistry meters) {
+        this.mode = Objects.requireNonNull(mode, "mode 는 필수다");
         Objects.requireNonNull(meters, "meters 는 필수다");
-        this.missing = meters.counter(FALLBACK_METRIC, "reason", "missing");
-        this.malformed = meters.counter(FALLBACK_METRIC, "reason", "malformed");
+        String name = mode.name().toLowerCase(Locale.ROOT);
+        this.missing = meters.counter(FALLBACK_METRIC, "reason", "missing", "mode", name);
+        this.malformed = meters.counter(FALLBACK_METRIC, "reason", "malformed", "mode", name);
+    }
+
+    /** 모드를 골라 만든다. */
+    public static IdempotencyKey of(Mode mode, MeterRegistry meters) {
+        return new IdempotencyKey(mode, meters);
+    }
+
+    public Mode mode() {
+        return mode;
     }
 
     /**
@@ -51,30 +80,42 @@ public final class IdempotencyKey {
      * 다른 시도가 한 키로 합쳐져 두 번째 발급을 잃어도 운영이 모른다.
      */
     public static IdempotencyKey passThrough(MeterRegistry meters) {
-        return new IdempotencyKey(meters);
+        return new IdempotencyKey(Mode.UUID, meters);
     }
 
     /** 계측 없이 만든다. <b>시험 편의다</b> — 운영은 위 팩토리를 쓴다. */
     public static IdempotencyKey passThrough() {
-        return new IdempotencyKey(new SimpleMeterRegistry());
+        return new IdempotencyKey(Mode.UUID, new SimpleMeterRegistry());
     }
 
     /**
      * 이 시도의 키. <b>시도는 클라이언트가 가른다</b> — 게이트웨이는 무엇이 한 번의
      * 시도인지 모른다. 도용 방어는 뒷단이 회원과 키의 쌍으로 저장해서 진다.
      *
-     * @param clientKey 클라이언트가 준 값. UUID v4 가 아니면 안 준 것으로 본다
+     * @param clientKey 클라이언트가 준 값. 모드가 받아 주는 모양이 아니면 안 준 것으로 본다
+     * @return 실을 값. 끈 모드면 {@code null} 이고 그때는 헤더를 안 건드린다
      */
     public String of(String couponId, String memberId, String clientKey) {
         Objects.requireNonNull(couponId, "couponId 는 필수다");
         Objects.requireNonNull(memberId, "memberId 는 필수다");
-        if (clientKey != null && UUID_V4.matcher(clientKey.trim()).matches()) {
-            // 표기를 맞춘다. 같은 값을 대소문자만 다르게 재시도하면 뒷단이 두
-            // 건으로 본다.
-            return clientKey.trim().toLowerCase(Locale.ROOT);
+        if (mode == Mode.OFF) {
+            return null;
         }
-        (clientKey == null || clientKey.isBlank() ? missing : malformed).increment();
+        String given = clientKey == null ? null : clientKey.trim();
+        if (given != null && accepts(given)) {
+            // 표기를 맞춘다. 같은 값을 대소문자만 다르게 재시도하면 뒷단이 두
+            // 건으로 본다. **원문 모드는 안 맞춘다** — 뒷단이 대소문자를 가르는
+            // 곳이면 우리가 바꾸는 순간 그 키가 다른 것이 된다.
+            return mode == Mode.UUID ? given.toLowerCase(Locale.ROOT) : given;
+        }
+        (given == null || given.isBlank() ? missing : malformed).increment();
         return fallback(couponId, memberId);
+    }
+
+    private boolean accepts(String given) {
+        return mode == Mode.UUID
+                ? UUID_V4.matcher(given).matches()
+                : RAW_OK.matcher(given).matches();
     }
 
     /**
@@ -83,23 +124,27 @@ public final class IdempotencyKey {
      * 안전한 방향으로 치우친다.
      */
     private String fallback(String couponId, String memberId) {
+        // **UUID 를 안 쓰기로 한 곳에 UUID 를 만들어 보내지 않는다.** 모양을 맞추면
+        // 그 뒷단은 우리가 고른 표기를 계약으로 오해한다.
+        if (mode == Mode.RAW) {
+            return "w-" + HexFormat.of().formatHex(sha256(material(couponId, memberId)), 0, 16);
+        }
         // 길이를 같이 넣어야 ("a|b", "c") 와 ("a", "b|c") 가 안 겹친다. 비밀키를 쓰면
         // 회전할 때 진행 중이던 재시도의 키가 바뀌어 이중 발급이 난다. 로케일을 박는
         // 것은 %d 가 노드마다 다르게 찍히면 같은 재시도가 두 키로 갈라져서다.
-        String material = String.format(Locale.ROOT, "%s:%d:%s:%d:%s", NAMESPACE,
-                couponId.length(), couponId, memberId.length(), memberId);
         // nameUUIDFromBytes 는 v3 을 내는데 뒷단 계약이 v4 라 거절당한다. 해시는
         // 그대로 쓰고 버전·변종 자리만 세운다 — 같은 재료에 같은 값이 나온다.
-        byte[] hash = sha256(material);
+        byte[] hash = sha256(material(couponId, memberId));
         hash[6] = (byte) ((hash[6] & 0x0f) | 0x40);
         hash[8] = (byte) ((hash[8] & 0x3f) | 0x80);
-        long high = 0;
-        long low = 0;
-        for (int i = 0; i < 8; i++) {
-            high = (high << 8) | (hash[i] & 0xffL);
-            low = (low << 8) | (hash[i + 8] & 0xffL);
-        }
-        return new UUID(high, low).toString();
+        String hex = HexFormat.of().formatHex(hash, 0, 16);
+        return hex.substring(0, 8) + "-" + hex.substring(8, 12) + "-" + hex.substring(12, 16)
+                + "-" + hex.substring(16, 20) + "-" + hex.substring(20, 32);
+    }
+
+    private String material(String couponId, String memberId) {
+        return String.format(Locale.ROOT, "%s:%d:%s:%d:%s", NAMESPACE,
+                couponId.length(), couponId, memberId.length(), memberId);
     }
 
     private byte[] sha256(String material) {

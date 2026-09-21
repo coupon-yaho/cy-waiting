@@ -380,6 +380,10 @@ jobs:
       - name: 액션 핀 검사
         run: .github/scripts/action-pins.sh
 
+      # 준비를 빠뜨려도 빌드는 초록으로 끝난다. 그래서 사람이 안 본다.
+      - name: Gradle 준비 검사
+        run: .github/scripts/gradle-setup.sh
+
       - name: 문서 앵커 검사
         run: .github/scripts/doc-anchors.sh
 

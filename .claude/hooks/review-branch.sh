@@ -398,7 +398,8 @@ for check in \
     "Loki 라벨:.github/scripts/loki-labels.sh" \
     "대시보드 지표:.github/scripts/dashboard-queries.sh" \
     "알람 규칙:.github/scripts/alert-rules.sh" \
-    "액션 핀:.github/scripts/action-pins.sh"
+    "액션 핀:.github/scripts/action-pins.sh" \
+    "Gradle 준비:.github/scripts/gradle-setup.sh"
 do
     name="${check%%:*}"
     cmd="${check#*:}"

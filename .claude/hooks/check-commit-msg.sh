@@ -16,6 +16,21 @@ cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // empty')
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
+# **표준 입력으로 준 메시지는 명령 안에 있다.** 파일로 준 것과 같게 보고 건너뛰면 이
+# 경로로 커밋하는 동안 규약 검사가 통째로 없는 것이 된다. 힙독 본문의 첫 줄이 제목이다.
+# `<<<` 는 힙독이 아니다.
+heredoc_subject() {
+    local delim
+    delim=$(printf '%s\n' "$cmd" | head -1 \
+        | grep -oE "(^|[^<])<<-?[[:space:]]*['\"]?[^[:space:]'\"<;&|]+" \
+        | tail -1 | sed -E "s/.*<<-?[[:space:]]*['\"]?//")
+    [[ -z "$delim" ]] && return 1
+    printf '%s\n' "$cmd" | awk -v d="$delim" '
+        body && $0 ~ ("^[[:space:]]*" d "[[:space:]]*$") { exit }
+        body && $0 !~ /^[[:space:]]*$/ { print; exit }
+        !body && index($0, "<<") { body = 1 }'
+}
+
 fail() {
     echo "$1" >&2
     exit 2
@@ -70,24 +85,37 @@ check_segment() {
             -*m*) has_msg=1 ;;
         esac
     done
+    local from_stdin=0
     if ((!has_msg)); then
         for ((j = i; j < ${#toks[@]}; j++)); do
             case "${toks[j]}" in
-                --no-edit|--amend|-F|--file|-C|--reuse-message|--fixup|--squash) return 0 ;;
+                -F|--file)
+                    # 다음 토큰이 `-` 면 표준 입력이고, 그 본문이 이 명령 안에 있다.
+                    [[ "${toks[j + 1]:-}" == "-" ]] && from_stdin=1
+                    ((from_stdin)) || return 0 ;;
+                --file=-) from_stdin=1 ;;
+                --no-edit|--amend|-C|--reuse-message|--fixup|--squash) return 0 ;;
             esac
         done
-        fail "[WF-1] 커밋 메시지를 -m 으로 전달한다. 에디터 커밋은 규약 검사를 우회한다."
+        if ((!from_stdin)); then
+            fail "[WF-1] 커밋 메시지를 -m 으로 전달한다. 에디터 커밋은 규약 검사를 우회한다."
+        fi
     fi
 
     # 첫 메시지 값(제목)만 뽑는다. 여럿이면 두 번째부터는 본문이다.
     local subject
-    subject=$(printf '%s' "$seg" \
-        | grep -oE -- "(-[a-zA-Z]*m|--message)[[:space:]=]*(\"[^\"]*\"|'[^']*')" \
-        | head -1 \
-        | sed -E "s/^(-[a-zA-Z]*m|--message)[[:space:]=]*//; s/^[\"']//; s/[\"']\$//")
-
-    if [[ -z "$subject" ]]; then
-        fail "[WF-1] -m 뒤의 메시지를 따옴표로 감싼다."
+    if ((from_stdin)); then
+        subject=$(heredoc_subject) || subject=""
+        # 힙독이 아니면 본문이 진짜 파이프로 온 것이라 여기서는 못 본다.
+        [[ -z "$subject" ]] && return 0
+    else
+        subject=$(printf '%s' "$seg" \
+            | grep -oE -- "(-[a-zA-Z]*m|--message)[[:space:]=]*(\"[^\"]*\"|'[^']*')" \
+            | head -1 \
+            | sed -E "s/^(-[a-zA-Z]*m|--message)[[:space:]=]*//; s/^[\"']//; s/[\"']\$//")
+        if [[ -z "$subject" ]]; then
+            fail "[WF-1] -m 뒤의 메시지를 따옴표로 감싼다."
+        fi
     fi
 
     # 규칙은 .githooks/lib/ 하나에만 둔다. 여기에 복사하면 git 훅과 갈라지고,

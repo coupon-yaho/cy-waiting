@@ -928,6 +928,61 @@ jobs:
     steps:
       - run: echo hi' allow '잡의 outputs·matrix 안의 uses 는 액션이 아니다'
 
+# ── Gradle 준비 게이트 ─────────────────────────────────────────────────────
+# **빠뜨려도 빌드는 초록이다.** 러너에 JDK 가 있어 아무 일도 안 일어난 것처럼
+# 보인다 — 그래서 이 검사가 없으면 아무도 안 본다 (CY-978).
+gradle_setup_case() {   # 워크플로내용 기대(block|allow) 설명
+    local content=$1 expect=$2 label=$3
+    local dir="$tmp/gsetup-$RANDOM"
+    mkdir -p "$dir/.github/workflows"
+    printf '%s\n' "$content" > "$dir/.github/workflows/probe.yml"
+    local out
+    out=$( cd "$dir" && "$ROOT/.github/scripts/gradle-setup.sh" 2>&1 )
+    local code=$?
+    rm -rf "$dir"
+    if [[ $expect == block && $code -ne 0 ]] || [[ $expect == allow && $code -eq 0 ]]; then
+        printf '  ok   %s\n' "$label"; pass=$((pass + 1))
+    else
+        printf '  FAIL %s (종료 %d)\n    %s\n' "$label" "$code" "${out:0:200}"
+        fail=$((fail + 1))
+    fi
+}
+
+echo
+printf '\033[1mGradle 준비 게이트\033[0m\n'
+gradle_setup_case 'name: p
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - run: ./gradlew build' block '준비 없이 gradlew 를 부른다'
+
+gradle_setup_case 'name: p
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ./.github/actions/setup-gradle
+      - run: ./gradlew build' allow '준비한 잡은 통과시킨다'
+
+gradle_setup_case 'name: p
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - run: chmod +x ./gradlew' allow '실행 권한 주기는 호출이 아니다'
+
+gradle_setup_case 'name: p
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - run: .github/scripts/gradle-retry.sh build' block '재시도 감싸개도 gradlew 다'
+
 echo
 printf '통과 %d · 실패 %d\n' "$pass" "$fail"
 ((fail == 0))

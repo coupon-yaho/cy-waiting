@@ -22,13 +22,13 @@ public final class IdempotencyKey {
 
     public static final String HEADER = "Idempotency-Key";
 
-    /** 뒷단에 무엇을 실을 것인가. */
+    /** 뒷단마다 키 계약이 달라서 고르게 한다. 우리가 정할 수 있는 것이 아니다. */
     public enum Mode {
-        /** UUID v4 로 맞춘다. 아니면 만들어 넣는다. 뒷단 계약이 UUID 일 때. */
+        /** 뒷단이 UUID 를 요구한다. 아니면 만들어 넣는다. */
         UUID,
-        /** 클라이언트가 준 값을 그대로 넘긴다. 모양을 안 맞춘다. */
+        /** 뒷단이 제 형식을 쓴다. 모양을 맞추면 우리 표기가 계약으로 오해된다. */
         RAW,
-        /** 게이트웨이가 헤더를 안 건드린다. 클라이언트가 보낸 것이 그대로 간다. */
+        /** 뒷단이 멱등을 제 계약으로 진다. 게이트웨이가 값을 안 만든다. */
         OFF
     }
 
@@ -70,7 +70,6 @@ public final class IdempotencyKey {
         this.malformed = meters.counter(FALLBACK_METRIC, "reason", "malformed", "mode", name);
     }
 
-    /** 모드를 골라 만든다. */
     public static IdempotencyKey of(Mode mode, MeterRegistry meters) {
         return new IdempotencyKey(mode, meters);
     }
@@ -105,7 +104,11 @@ public final class IdempotencyKey {
         if (mode == Mode.OFF) {
             return null;
         }
-        String given = clientKey == null ? null : clientKey.trim();
+        // **원문 모드는 안 깎는다.** 깎으면 `" k "` 와 `"k"` 가 뒷단에서 한 키가
+        // 되어, 서로 다른 두 시도의 두 번째가 재생으로 버려진다. UUID 모드는
+        // 표기를 맞추는 것이 목적이라 깎는다.
+        String given = clientKey == null ? null
+                : mode == Mode.UUID ? clientKey.trim() : clientKey;
         if (given != null && accepts(given)) {
             // 표기를 맞춘다. 같은 값을 대소문자만 다르게 재시도하면 뒷단이 두
             // 건으로 본다. **원문 모드는 안 맞춘다** — 뒷단이 대소문자를 가르는
@@ -129,8 +132,10 @@ public final class IdempotencyKey {
         if (values.size() != 1) {
             return false;
         }
+        // 길이와 허용 문자는 원문 모드와 같은 잣대다. 헤더 줄이 되는 값이라
+        // 모드가 달라도 안전한 범위는 같다.
         String only = values.getFirst();
-        return only != null && !only.isBlank() && only.length() <= MAX_RAW;
+        return only != null && RAW_OK.matcher(only).matches();
     }
 
     private boolean accepts(String given) {

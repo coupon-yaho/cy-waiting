@@ -1761,7 +1761,9 @@ class AdmissionGatewayFilterTest {
                 MockServerHttpRequest.method(HttpMethod.POST,
                                 "/api/v1/coupons/" + COUPON + "/issue")
                         .header("X-Member-Id", MEMBER)
-                        .header(IdempotencyKey.HEADER, "내가-정한-값"));
+                        // 허용 문자로 적는다. 끈 모드도 헤더 줄이 될 수 있는
+                        // 값만 받으므로 한글은 여기서 거절된다.
+                        .header(IdempotencyKey.HEADER, "order-2026-0921-77"));
         exchange.getAttributes().put(
                 ServerWebExchangeUtils.URI_TEMPLATE_VARIABLES_ATTRIBUTE,
                 Map.of("couponId", COUPON));
@@ -1773,7 +1775,7 @@ class AdmissionGatewayFilterTest {
 
         assertThat(실린_키.get())
                 .as("끄면 지우지도 넣지도 않는다 — 신원 헤더와 같은 원칙이다")
-                .isEqualTo("내가-정한-값");
+                .isEqualTo("order-2026-0921-77");
     }
 
     private String 실린_멱등_키() {

@@ -99,6 +99,25 @@ class IdempotencyModeTest {
     }
 
     @Test
+    @DisplayName("원문 모드는 공백을 안 깎는다 — 깎으면 두 시도가 한 키가 된다")
+    void 원문_모드는_공백을_안_깎는다() {
+        assertThat(키(Mode.RAW).of(쿠폰, 회원, " order-1 "))
+                .as("깎으면 ' order-1 ' 과 'order-1' 이 뒷단에서 같은 키가 된다")
+                .isNotEqualTo("order-1");
+    }
+
+    @Test
+    @DisplayName("끈 모드도 허용 문자를 본다")
+    void 끈_모드_문자_검사() {
+        assertThat(키(Mode.OFF).accepts(List.of("a,b")))
+                .as("쉼표는 헤더 목록 구분자다").isFalse();
+        assertThat(키(Mode.OFF).accepts(List.of("a\tb")))
+                .as("탭도 안 받는다").isFalse();
+        assertThat(키(Mode.OFF).accepts(List.of("order.1:a@b")))
+                .as("허용 문자만 있으면 그대로 간다").isTrue();
+    }
+
+    @Test
     @DisplayName("모드를 안 주면 막는다")
     void 모드_없음() {
         assertThatThrownBy(() -> IdempotencyKey.of(null, new SimpleMeterRegistry()))

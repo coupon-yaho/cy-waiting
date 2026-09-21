@@ -7,6 +7,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.regex.Pattern;
@@ -35,7 +36,10 @@ public final class IdempotencyKey {
      * 원문 모드에서 받아 주는 값. <b>그 값이 뒷단 키가 된다</b> — 헤더를 가르는
      * 문자나 긴 값을 그대로 넘기면 뒷단의 저장 키가 우리 손을 떠난다.
      */
-    private static final Pattern RAW_OK = Pattern.compile("^[A-Za-z0-9_.:@=+/-]{1,128}$");
+    private static final int MAX_RAW = 128;
+
+    private static final Pattern RAW_OK =
+            Pattern.compile("^[A-Za-z0-9_.:@=+/-]{1," + MAX_RAW + "}$");
 
     /** 값을 안 줬을 때 떨어질 자리를 가르는 이름공간. 다른 용도와 안 겹치게 한다. */
     private static final String NAMESPACE = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
@@ -110,6 +114,23 @@ public final class IdempotencyKey {
         }
         (given == null || given.isBlank() ? missing : malformed).increment();
         return fallback(couponId, memberId);
+    }
+
+    /**
+     * 끈 모드에서 <b>그대로 보낼 수 있는 값인가</b>. 안 건드리는 것과 아무거나
+     * 통과시키는 것은 다르다 — 신원 헤더가 이미 같은 원칙으로 줄이 둘이면 막는다.
+     *
+     * @param values 클라이언트가 실어 온 줄 전부
+     */
+    public boolean accepts(List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return true;
+        }
+        if (values.size() != 1) {
+            return false;
+        }
+        String only = values.getFirst();
+        return only != null && !only.isBlank() && only.length() <= MAX_RAW;
     }
 
     private boolean accepts(String given) {

@@ -11,7 +11,6 @@ import com.kafkick.waiting.control.SnapshotHolder;
 import io.micrometer.core.instrument.FunctionCounter;
 import java.util.function.ToDoubleFunction;
 import io.micrometer.core.instrument.MeterRegistry;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -20,7 +19,8 @@ import org.springframework.context.annotation.Configuration;
  * 참조하므로, 값을 주고 만들어 주는 자리가 필요하다.
  */
 @Configuration
-@EnableConfigurationProperties({QueueTokenProperties.class, ProxyProperties.class,
+@EnableConfigurationProperties({IdempotencyProperties.class, QueueTokenProperties.class,
+        ProxyProperties.class,
         CoalescingProperties.class, SoldOutCacheProperties.class})
 public class IdentityConfig {
 
@@ -130,7 +130,7 @@ public class IdentityConfig {
      */
     @Bean
     public IdempotencyKey idempotencyKey(MeterRegistry meters,
-            @Value("${waiting.idempotency.mode:UUID}") IdempotencyKey.Mode mode) {
-        return IdempotencyKey.of(mode, meters);
+            IdempotencyProperties properties) {
+        return IdempotencyKey.of(properties.mode(), meters);
     }
 }

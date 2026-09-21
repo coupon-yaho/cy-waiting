@@ -39,7 +39,12 @@ if not files:
 # 통째로 빠진다 — 게이트가 통과 방향으로 틀리는 자리다.
 CALLS = re.compile(r'(^|[\s;&|(=])([\w./${}-]*/)?gradlew\b'
                    r'|(^|[\s;&|(])[\w./${}-]*gradle-retry\.sh\b')
-SETUP = ('/setup-gradle', 'gradle/actions/setup-gradle')
+# **정확히 맞춘다.** 끝만 보면 `evil/actions/setup-gradle@...` 이 준비로 세어진다.
+# 우리 합성 액션은 JDK 고정과 캐시를 둘 다 하므로 단독으로 준비가 되고, 바깥
+# 액션은 캐시만 하므로 JDK 고정이 앞에 같이 서야 한다.
+LOCAL = './.github/actions/setup-gradle'
+CACHE = 'gradle/actions/setup-gradle'
+JDK = 'actions/setup-java'
 # `chmod +x ./gradlew` 는 실행이 아니다. 준비 액션 자신이 그것을 한다.
 # **줄째로 건너뛰지 않는다** — `chmod +x ./gradlew && ./gradlew build` 가
 # 통과 방향으로 빠진다.
@@ -54,12 +59,11 @@ def calls_gradle(run):
     return False
 
 
-def prepares(step):
-    uses = step.get('uses') or ''
-    # `if:` 가 달린 준비는 안 돌 수 있다. 조건 없는 것만 준비로 센다.
+def names(step):
+    """`if:` 가 달린 준비는 안 돌 수 있다. 조건 없는 것만 센다."""
     if step.get('if') is not None:
-        return False
-    return any(uses.endswith(s) or uses.split('@')[0].endswith(s) for s in SETUP)
+        return ''
+    return (step.get('uses') or '').split('@')[0]
 
 
 bad = 0
@@ -83,14 +87,21 @@ for path in files:
         steps = (spec or {}).get('steps') or []
         # **준비가 호출보다 앞에 있어야 한다.** 뒤에 있으면 그 잡은 준비 없이
         # 돈 것이고, 게이트가 막으려던 모양 그대로다.
-        prepared = False
+        jdk = False
+        cache = False
         for step in steps:
-            if prepares(step):
-                prepared = True
-                continue
+            used = names(step)
+            if used == LOCAL:
+                jdk = True
+                cache = True
+            elif used == CACHE:
+                cache = True
+            elif used == JDK:
+                jdk = True
             if calls_gradle(step.get('run') or ''):
-                if not prepared:
-                    print(f"  {path.name}: 잡 '{job}' 이 준비 없이 gradlew 를 부른다",
+                if not (jdk and cache):
+                    missing = 'JDK 고정' if not jdk else 'Gradle 캐시'
+                    print(f"  {path.name}: 잡 '{job}' 이 {missing} 없이 gradlew 를 부른다",
                           file=sys.stderr)
                     bad += 1
                 break

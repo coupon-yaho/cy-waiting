@@ -1027,6 +1027,34 @@ jobs:
       - uses: evil/actions/setup-gradle-x@abc
       - run: ./gradlew build' block '이름이 비슷한 액션은 준비가 아니다'
 
+gradle_setup_case 'name: p
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: evil/actions/setup-gradle@abc
+      - run: ./gradlew build' block '끝만 같은 남의 액션은 준비가 아니다'
+
+gradle_setup_case 'name: p
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: gradle/actions/setup-gradle@abc
+      - run: ./gradlew build' block '캐시만 있고 JDK 고정이 없다'
+
+gradle_setup_case 'name: p
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-java@abc
+      - uses: gradle/actions/setup-gradle@abc
+      - run: ./gradlew build' allow '둘을 따로 붙인 잡은 통과시킨다'
+
 gradle_setup_case '- 최상위가
 - 리스트다' block '매핑이 아니면 막는다'
 

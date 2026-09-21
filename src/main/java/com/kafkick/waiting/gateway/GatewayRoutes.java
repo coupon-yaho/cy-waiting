@@ -32,12 +32,6 @@ public class GatewayRoutes {
     /** 연결 단계에만 무는 재시도 설정. 무엇에 무는지가 밖에서 보여야 한다. */
     private final ConnectRetry connectRetryPolicy = ConnectRetry.singleAttempt();
 
-    /**
-     * 술어는 디코딩해 맞추고 전달은 원본을 그대로 보낸다. 좁히지 않으면 판정한
-     * 값과 뒷단이 받는 값이 갈리고, 그 값이 레디스 키·캐시 키·리미터 키가 된다.
-     */
-    private static final String COUPON_ID = "{couponId:[A-Za-z0-9_-]{1,64}}";
-
     /** 프레임워크가 라우트별 응답 상한을 읽는 키. 이름을 틀리면 조용히 안 걸린다. */
     private static final String RESPONSE_TIMEOUT_ATTR = "response-timeout";
 
@@ -198,6 +192,14 @@ public class GatewayRoutes {
         for (RouteRules.Rule rule : rules.forwarded()) {
             // **규칙이 주소를 적으면 그쪽이 이긴다.** 안 적으면 공통 뒷단으로 간다 —
             // 규칙 하나만 쓰던 배포가 아무것도 안 고치고 그대로 돈다.
+            // **규칙이 주소를 적으면 그 규칙만 균형기 밖으로 나간다.** 규칙의 주소는
+            // http/https 로만 받으므로 `lb://` 가 될 수 없다 — 노드 선택도 재시도도
+            // 그 경로에서 꺼진다. 라우팅을 켠 채로는 그 조합을 안 받는다.
+            if (rule.uri() != null && shared.startsWith("lb://")) {
+                throw new IllegalStateException(
+                        "라우팅이 켜져 있는데 규칙 '" + rule.id() + "' 이 제 주소를 적었다"
+                                + " — 그 경로만 균형기를 우회한다");
+            }
             String uri = rule.uri() != null ? rule.uri() : shared;
             // 죽은 주소로 간 요청이 5xx 로 새면 안 된다. **균형기가 있을 때만 건다** —
             // 단일 주소로 되돌리면 고를 다음 대가 없어 같은 죽은 주소로 두 번 간다.
@@ -211,14 +213,21 @@ public class GatewayRoutes {
                     // 죽는다 (FilterOrder).
                     .filters(f -> {
                         GatewayFilterSpec spec = stripSpoofableClientIp(f);
-                        if (rule.kind() == RouteRules.Kind.ENTRY) {
-                            spec = spec.filter(admission, FilterOrder.ROUTE_ADMISSION)
+                        // **성질이 늘면 여기가 컴파일 에러가 되어야 한다.** `else` 로
+                        // 두면 새 성질에 모으기가 조용히 붙는다.
+                        switch (rule.kind()) {
+                            case ENTRY -> spec = spec
+                                    .filter(admission, FilterOrder.ROUTE_ADMISSION)
                                     .filter(circuit(breakers, rule.id()),
                                             FilterOrder.ROUTE_CIRCUIT);
-                        } else {
                             // **모으기는 조회에만 붙인다.** 발급에 붙이면 같은 응답을
                             // 여럿이 받고, 그건 곧 초과 발급이다.
-                            spec = spec.filter(coalescing, FilterOrder.ROUTE_COALESCING);
+                            case QUERY -> spec = spec
+                                    .filter(coalescing, FilterOrder.ROUTE_COALESCING);
+                            case QUEUE -> throw new IllegalStateException(
+                                    "줄 조회는 라우트가 아니다: " + rule.id());
+                            default -> throw new IllegalStateException(
+                                    "모르는 성질: " + rule.kind());
                         }
                         if (balanced) {
                             spec = spec.filter(connectRetry(retries), FilterOrder.ROUTE_RETRY);

@@ -39,6 +39,10 @@ public record RouteRules(List<Rule> rules) {
         QUEUE
     }
 
+    /** 부작용이 없는 메서드. 진입 규칙은 이것으로 적을 수 없다. */
+    private static final Set<HttpMethod> SAFE_METHODS =
+            Set.of(HttpMethod.GET, HttpMethod.HEAD);
+
     private static final List<Rule> DEFAULTS = List.of(
             new Rule("issue", Kind.ENTRY, "POST",
                     List.of("/api/v1/coupons/" + ID_SLOT + "/issue"), null),
@@ -60,6 +64,8 @@ public record RouteRules(List<Rule> rules) {
                 throw new IllegalArgumentException("라우팅 규칙 이름이 겹친다: " + rule.id());
             }
         }
+        Set<String> paths = new HashSet<>();
+        Set<String> entryBackends = new HashSet<>();
         for (Rule rule : rules) {
             // **바꿀 수 있는 척하지 않는다.** 이 경로는 라우트를 안 타므로 규칙을
             // 고쳐도 필터가 안 따라온다 — 기동은 성공하고 그 경로만 뒷단으로 샌다.
@@ -67,6 +73,25 @@ public record RouteRules(List<Rule> rules) {
                 throw new IllegalArgumentException(
                         "줄 조회 경로는 아직 설정으로 못 바꾼다: " + QUEUE_PATH + " 여야 한다");
             }
+            // **라우트 순서는 선언 순이고 전부 같은 우선순위다.** 경로가 겹치면 앞이
+            // 이기고 뒤는 한 건도 안 받는데, 기동에도 지표에도 안 나온다.
+            for (String path : rule.paths()) {
+                if (!paths.add(rule.method() + " " + path)) {
+                    throw new IllegalArgumentException(
+                            "라우팅 경로가 겹친다: " + rule.method() + " " + path);
+                }
+            }
+            if (rule.kind() == Kind.ENTRY && rule.uri() != null) {
+                entryBackends.add(rule.uri());
+            }
+        }
+        // **서킷이 아직 하나다.** 진입 규칙이 서로 다른 뒷단을 보면 한쪽의 장애가
+        // 다른 쪽까지 폴백으로 보낸다 — 그동안에도 입장은 일어나 크레딧이 깎이고,
+        // 불려 나온 사람의 입장 토큰이 만료되면 줄에 남아 있던 뒷사람이 앞선다.
+        if (entryBackends.size() > 1) {
+            throw new IllegalArgumentException(
+                    "진입 규칙의 뒷단이 둘 이상이다 — 서킷이 아직 하나라 장애가 섞인다: "
+                            + entryBackends);
         }
         rules = List.copyOf(rules);
     }
@@ -108,11 +133,34 @@ public record RouteRules(List<Rule> rules) {
                             "라우팅 규칙 '" + id + "' 의 주소가 뒷단 형식이 아니다: " + uri, e);
                 }
             }
-            // **판정과 줄 조회는 식별자를 경로에서 꺼낸다.** 자리가 없으면 기동은
-            // 성공하고 그 경로만 400 을 낸다 — 부하 시험 전까지 아무도 모른다.
-            if (kind != Kind.QUERY && paths.stream().noneMatch(p -> p.contains(ID_SLOT))) {
+            // **성질과 메서드가 어긋나면 안 된다.** 발급 경로를 조회로 적으면 판정도
+            // 매진 관찰도 안 붙어 뒷단으로 그대로 가고, 기동은 초록이다. 반대로
+            // 조회를 진입으로 적으면 한산한 쿠폰의 조회가 줄로 간다.
+            boolean safe = SAFE_METHODS.contains(resolveMethod(id, method));
+            if (kind == Kind.ENTRY && safe) {
                 throw new IllegalArgumentException(
-                        "라우팅 규칙 '" + id + "' 의 경로에 " + ID_SLOT + " 자리가 없다");
+                        "진입 규칙 '" + id + "' 이 안전한 메서드다: " + method);
+            }
+            if (kind != Kind.ENTRY && !safe) {
+                throw new IllegalArgumentException(
+                        "조회 규칙 '" + id + "' 이 부작용 있는 메서드다: " + method);
+            }
+            // **자리를 경로마다 본다.** 목록 중 하나만 맞으면 통과하던 때는, 자리를
+            // 맞춘 미끼 경로 하나를 두고 다른 경로로 제약을 넓힐 수 있었다.
+            for (String path : paths) {
+                int brace = path.indexOf('{');
+                if (brace >= 0 && !path.startsWith(ID_SLOT, brace)) {
+                    throw new IllegalArgumentException(
+                            "라우팅 규칙 '" + id + "' 의 경로가 식별자 자리를 고쳐 적었다: "
+                                    + path + " — " + ID_SLOT + " 만 쓴다");
+                }
+                // 판정과 줄 조회는 식별자를 경로에서 꺼낸다. 자리가 없으면 기동은
+                // 성공하고 그 경로만 400 을 낸다.
+                if (kind != Kind.QUERY && brace < 0) {
+                    throw new IllegalArgumentException(
+                            "라우팅 규칙 '" + id + "' 의 경로에 " + ID_SLOT + " 자리가 없다: "
+                                    + path);
+                }
             }
             paths = List.copyOf(paths);
         }

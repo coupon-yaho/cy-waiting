@@ -767,20 +767,35 @@ class GatewayRoutesTest {
         RouteRules 규칙 = new RouteRules(List.of(
                 new RouteRules.Rule("v1", RouteRules.Kind.ENTRY, "POST",
                         List.of("/api/v1/x/{couponId}/issue"), "http://a:8080"),
-                new RouteRules.Rule("v2", RouteRules.Kind.ENTRY, "POST",
-                        List.of("/api/v2/x/{couponId}/issue"), "http://b:9090")));
+                new RouteRules.Rule("v2", RouteRules.Kind.QUERY, "GET",
+                        List.of("/api/v2/x/{couponId}"), "http://b:9090")));
 
         RouteLocator 라우터 = 라우터(null, 규칙);
 
         assertThat(주소들(라우터))
                 .as("규칙마다 적은 주소로 가야 한다 — 하나로 뭉치면 규칙이 무의미하다")
                 .containsExactly("http://a:8080", "http://b:9090");
-        assertThat(잡나(라우터, "v1", "/api/v1/x/c1/issue"))
+        assertThat(잡나(라우터, "v1", HttpMethod.POST, "/api/v1/x/c1/issue"))
                 .as("첫 규칙이 제 경로를 잡는다").isTrue();
-        assertThat(잡나(라우터, "v2", "/api/v2/x/c1/issue"))
+        assertThat(잡나(라우터, "v2", HttpMethod.GET, "/api/v2/x/c1"))
                 .as("둘째 규칙이 제 경로를 잡는다").isTrue();
-        assertThat(잡나(라우터, "v1", "/api/v2/x/c1/issue"))
+        assertThat(잡나(라우터, "v1", HttpMethod.POST, "/api/v2/x/c1"))
                 .as("경로가 겹치면 안 된다").isFalse();
+    }
+
+    @Test
+    @DisplayName("라우팅을 켠 채 규칙이 제 주소를 적으면 막는다")
+    void 균형기_우회() {
+        RouteRules 규칙 = new RouteRules(List.of(
+                new RouteRules.Rule("v1", RouteRules.Kind.ENTRY, "POST",
+                        List.of("/api/v1/x/{couponId}/issue"), "http://a:8080")));
+
+        RoutingProperties 켬 = new RoutingProperties(
+                true, "coupon-service", null, null, null, null, null, null, 허용, 허용_포트);
+
+        assertThatThrownBy(() -> 라우터(켬, 규칙).getRoutes().collectList().block())
+                .as("그 경로만 노드 선택과 재시도 밖으로 나간다")
+                .isInstanceOf(IllegalStateException.class);
     }
 
     @Test
@@ -804,9 +819,10 @@ class GatewayRoutesTest {
                 .containsExactly("issue", "coupons");
     }
 
-    private static boolean 잡나(RouteLocator locator, String id, String path) {
+    private static boolean 잡나(RouteLocator locator, String id, HttpMethod method,
+            String path) {
         ServerWebExchange exchange = MockServerWebExchange.from(
-                MockServerHttpRequest.method(HttpMethod.POST, path).build());
+                MockServerHttpRequest.method(method, path).build());
         return Boolean.TRUE.equals(
                 Mono.from(라우트(locator, id).getPredicate().apply(exchange)).block());
     }

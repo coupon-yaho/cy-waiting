@@ -329,6 +329,14 @@ bash_case check-commit-msg.sh "git commit -m 'feat(admission): 한산한 쿠폰�
 bash_case check-commit-msg.sh "git commit -m 'feat(admission): 전역 크레딧으로 상한 계산'" allow '50칸 이내'
 bash_case check-commit-msg.sh "git commit --amend --no-edit" allow '--amend --no-edit'
 bash_case check-commit-msg.sh "git status" allow 'commit 아닌 명령'
+# **두 낱말을 따로 찾으면 양쪽으로 틀린다.** 같은 명령일 필요도 인접할 필요도 없어서
+# 읽기 전용 명령이 막히고, 경로를 붙여 부르면 검사가 통째로 지나간다.
+bash_case check-commit-msg.sh "git log --oneline | grep -m1 commit" allow '읽기 전용인데 낱말만 겹친다'
+bash_case check-commit-msg.sh "git log --format=%s   # 첫 commit 을 본다" allow '주석에 든 낱말'
+bash_case check-commit-msg.sh "/usr/bin/git commit -m '그냥 고침'" block '경로를 붙인 호출'
+bash_case check-commit-msg.sh "git commit -am 'feat(x): 짧은 제목'" allow '-am 형태'
+bash_case check-commit-msg.sh "git commit -am '그냥 이것저것 고침'" block '-am 형태의 위반'
+bash_case check-commit-msg.sh "git status && git commit -m '그냥 고침'" block '둘째 세그먼트의 커밋'
 bash_case check-commit-msg.sh "echo 'nothing to do with version control'" allow '무관한 명령'
 
 # ── git commit-msg 훅 ────────────────────────────────────────────────────────

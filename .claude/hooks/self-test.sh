@@ -338,6 +338,11 @@ bash_case check-commit-msg.sh "git commit -am 'feat(x): 짧은 제목'" allow '-
 bash_case check-commit-msg.sh "git commit -am '그냥 이것저것 고침'" block '-am 형태의 위반'
 bash_case check-commit-msg.sh "git status && git commit -m '그냥 고침'" block '둘째 세그먼트의 커밋'
 bash_case check-commit-msg.sh "echo 'nothing to do with version control'" allow '무관한 명령'
+# **표준 입력으로 준 메시지는 명령 안에 있다.** 파일로 준 것과 같게 보고 건너뛰면,
+# 이 경로로 커밋하는 동안 규약 검사가 통째로 없는 것이 된다 — 실제로 그렇게 됐다.
+bash_case check-commit-msg.sh "$(printf 'git commit -F - <<%sEOF%s\n그냥 이것저것 고침\n\n본문\nEOF' "'" "'")" block '표준 입력 메시지의 위반'
+bash_case check-commit-msg.sh "$(printf 'git commit -F - <<%sEOF%s\nfeat(x): 정상 제목\n\n본문\nEOF' "'" "'")" allow '표준 입력 메시지의 정상'
+bash_case check-commit-msg.sh "git commit -F msg.txt" allow '진짜 파일은 못 본다'
 
 # ── git commit-msg 훅 ────────────────────────────────────────────────────────
 # 도구 훅만 검증하면 터미널 직접 커밋 경로가 비어 있다.

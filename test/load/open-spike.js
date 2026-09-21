@@ -23,6 +23,11 @@ const BASE = __ENV.BASE_URL || 'http://localhost:18080';
 // 생성기를 여러 대로 나눠야 하고, 그건 Phase 10 의 일이다.
 const SPIKE_USERS = Number(__ENV.SPIKE_USERS || '20000');
 
+// **쿠폰을 받는다.** 예열은 재려는 쿠폰이 아니라 다른 쿠폰으로 돌려야 한다 — 같은
+// 쿠폰으로 데우면 크레딧이 올라간 채 본 회차가 시작해 전원이 통과하고, 줄에 선 것이
+// 0 이 된다. JIT 는 JVM 몫이라 어느 쿠폰으로 데워도 같이 데워진다.
+const COUPON = __ENV.COUPON || 'c2';
+
 export const options = {
   // 게이트가 분위수를 읽는다. **p99 를 넣는다** — 샤딩 착수 판정이 기록으로
   // 남기는 값이고, 안 넣으면 요약에 없어 늘 "없음" 이 찍힌다.
@@ -79,7 +84,7 @@ const queued = (r) => {
 
 export default function () {
   const member = __VU * 100000 + __ITER;
-  const issue = http.post(`${BASE}/api/v1/coupons/c2/issue`, null, {
+  const issue = http.post(`${BASE}/api/v1/coupons/${COUPON}/issue`, null, {
     headers: headers(member),
   });
 

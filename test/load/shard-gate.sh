@@ -96,17 +96,22 @@ $COMPOSE up -d --wait --wait-timeout 240 || { echo "스택을 못 세웠다"; ex
 # **쿠폰별 키 일곱을 다 지운다.** 셋만 지우면 이탈 기록과 생존 신호와 배분
 # 펜스가 앞 회차 값을 들고 넘어가, 새 회차의 첫 배분이 앞 회차의 펜스를 본다.
 # 재고(`stock:`)는 시더가 관리하므로 안 건드린다.
-$COMPOSE exec -T redis redis-cli DEL \
-    "queue:{$COUPON}" "admitted:{$COUPON}" "maxscore:{$COUPON}" \
-    "grace:{$COUPON}" "alive:{$COUPON}" "dropfence:{$COUPON}" \
-    "applyfence:{$COUPON}" >/dev/null 2>&1
+empty_and_wait_idle() {
+    $COMPOSE exec -T redis redis-cli DEL \
+        "queue:{$COUPON}" "admitted:{$COUPON}" "maxscore:{$COUPON}" \
+        "grace:{$COUPON}" "alive:{$COUPON}" "dropfence:{$COUPON}" \
+        "applyfence:{$COUPON}" >/dev/null 2>&1
 
-state=""
-for _ in $(seq 1 30); do
-    state=$($COMPOSE exec -T redis redis-cli HGET gw:snapshot "$COUPON" 2>/dev/null)
-    case "$state" in *:IDLE:*) break ;; *) state=""; sleep 1 ;; esac
-done
-if [ -z "$state" ]; then
+    local state _
+    for _ in $(seq 1 30); do
+        state=$($COMPOSE exec -T redis redis-cli HGET gw:snapshot "$COUPON" 2>/dev/null)
+        case "$state" in *:IDLE:*) return 0 ;; esac
+        sleep 1
+    done
+    return 1
+}
+
+if ! empty_and_wait_idle; then
     echo "::error title=착수 판정::줄 모드가 안 꺼진다 — 이 상태로는 못 잰다"
     exit 2
 fi
@@ -182,6 +187,52 @@ if [ -n "$pinned" ]; then
         exit 2
     fi
 fi
+
+# **트래픽으로 예열한다** (CY-975). 예열 컨테이너는 크레딧이 문턱에 닿기를 기다릴 뿐
+# 요청을 한 건도 안 보낸다. 그대로 재면 등록 경로의 JIT 가 식은 채 스파이크를 맞아,
+# 이 회차가 제품이 아니라 계기가 식었다는 사실을 잰다 — 실측으로 등록 평균이 166ms 와
+# 12ms 로 갈렸다 (AIJ-0353).
+case "${WARMUP_SPIKE:-0}" in
+    0|false|no) : ;;
+    *)
+        echo "예열 스파이크"
+        # **종료 코드를 본다.** 안 보면 예열이 한 번도 안 돌아도 조용히 지나가고,
+        # 그러면 "예열을 붙였는데 느려졌다" 같은 엉뚱한 결론이 난다 — 실제로 났다.
+        # `--no-summary` 는 이 k6 판에 없어서 예열이 통째로 안 돌았다.
+        #
+        # **99 는 돌았다는 뜻이다.** 임계 위반이고, 예열은 임계로 판단할 회차가 아니다.
+        # 안 돈 것(플래그 오류·k6 없음)과 갈라야 "예열했다" 가 사실이 된다.
+        # **다른 쿠폰으로 데운다.** 같은 쿠폰으로 돌리면 크레딧이 올라간 채 본 회차가
+        # 시작해 전원이 통과하고 줄에 선 것이 0 이 된다 — 실측에서 뒷단 실패가 58.8%
+        # 였다. JIT 는 JVM 몫이라 어느 쿠폰으로 데워도 같은 경로가 데워진다.
+        # **가볍게 데운다.** 본 회차와 같은 크기로 돌리면 제어 평면이 흔들려 —
+        # 실측에서 리더 확인이 한 번 실패하고 뒷단 실패가 58.8% 였다 — 그 상태로
+        # 본 회차가 시작한다. JIT 는 수천 번이면 붙으므로 그만큼만 친다.
+        COUPON="${WARMUP_COUPON:-c1}" SPIKE_USERS="${WARMUP_USERS:-3000}" \
+            $runner k6 run --summary-mode disabled \
+            test/load/open-spike.js >/dev/null 2>&1
+        warm_rc=$?
+        case "$warm_rc" in
+            0|99) ;;
+            *) echo "::error title=착수 판정::예열 스파이크가 ${warm_rc} 로 끝났다 — 안 돈 것이라 이 회차는 예열 없이 잰 것이 된다"
+               exit 2 ;;
+        esac
+        # 예열 쿠폰의 줄을 치운다. 재는 쿠폰은 안 건드렸으므로 그대로 둔다.
+        $COMPOSE exec -T redis redis-cli DEL \
+            "queue:{${WARMUP_COUPON:-c1}}" "admitted:{${WARMUP_COUPON:-c1}}" \
+            "maxscore:{${WARMUP_COUPON:-c1}}" "grace:{${WARMUP_COUPON:-c1}}" \
+            "alive:{${WARMUP_COUPON:-c1}}" "dropfence:{${WARMUP_COUPON:-c1}}" \
+            "applyfence:{${WARMUP_COUPON:-c1}}" >/dev/null 2>&1
+        # 제어 평면이 가라앉기를 기다린다. 스냅샷 한 주기로는 모자란다.
+        sleep "${WARMUP_SETTLE_SEC:-8}"
+        # **기준선을 다시 뜬다.** 등록 지표에 쿠폰 구분이 없어, 예열 트래픽이 차분에
+        # 그대로 섞인다 — 실측에서 2만 요청 회차의 등록 건수가 21,808 로 찍혔다.
+        scrape_enqueue "$OUT_ENQUEUE_BASE"
+        if ! has_enqueue "$OUT_ENQUEUE_BASE"; then
+            echo "::warning title=착수 판정::예열 뒤 기준선을 못 긁었다 — 등록 p99 는 안 적는다"
+        fi
+        ;;
+esac
 
 rc=0
 $runner k6 run --summary-export="$OUT_SUMMARY" test/load/open-spike.js 2>&1 \

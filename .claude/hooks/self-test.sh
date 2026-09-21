@@ -983,6 +983,53 @@ jobs:
     steps:
       - run: .github/scripts/gradle-retry.sh build' block '재시도 감싸개도 gradlew 다'
 
+gradle_setup_case 'name: p
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - run: chmod +x ./gradlew && ./gradlew build' block '한 줄에 권한과 호출이 같이 온다'
+
+gradle_setup_case 'name: p
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - run: bash gradlew build' block '점슬래시 없는 호출'
+
+gradle_setup_case 'name: p
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - run: ./gradlew build
+      - uses: ./.github/actions/setup-gradle' block '준비가 호출보다 뒤에 있다'
+
+gradle_setup_case 'name: p
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ./.github/actions/setup-gradle
+        if: false
+      - run: ./gradlew build' block '조건이 달린 준비는 준비가 아니다'
+
+gradle_setup_case 'name: p
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: evil/actions/setup-gradle-x@abc
+      - run: ./gradlew build' block '이름이 비슷한 액션은 준비가 아니다'
+
+gradle_setup_case '- 최상위가
+- 리스트다' block '매핑이 아니면 막는다'
+
 echo
 printf '통과 %d · 실패 %d\n' "$pass" "$fail"
 ((fail == 0))

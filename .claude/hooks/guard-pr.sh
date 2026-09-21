@@ -152,11 +152,21 @@ fi
 #
 # 실행하지 않고 쪼갠다 — `xargs` 가 인용을 벗기되 명령을 부르지 않는다. 짝이
 # 안 맞으면 하드 에러이므로 그때는 기본값으로 안 넘어가고 막는다.
+#
+# **프로세스 치환으로 받으면 그 하드 에러가 사라진다.** `mapfile` 의 종료 상태는
+# 제 것이지 안쪽 명령의 것이 아니라, `xargs` 가 잘라도 성공으로 읽는다. 그러면
+# `--base main` 이 유실되고 기본값으로 떨어져, main 으로 여는 PR 을 develop
+# 기준으로 검사한다. 값과 상태를 같이 받는 자리로 옮긴다.
 base=""
-if ! mapfile -t args < <(printf '%s' "$create_line" | xargs -n1 printf '%s\n' 2>/dev/null); then
+if ! split=$(printf '%s' "$create_line" | xargs -n1 printf '%s\n' 2>/dev/null); then
     echo "명령을 못 쪼갰다 — 어느 기준으로 볼지 모르므로 막는다." >&2
     exit 2
 fi
+# `mapfile` 은 bash 4 부터다. 낮은 버전에서 죽으면 훅이 오류로 읽혀 가드가 열린다.
+args=()
+while IFS= read -r tok; do
+    args+=("$tok")
+done <<< "$split"
 for ((i = 0; i < ${#args[@]}; i++)); do
     case "${args[i]}" in
         --base=*) base="${args[i]#--base=}"; break ;;
@@ -221,9 +231,11 @@ if [[ -r "$env_file" ]]; then
             echo "  없는 추적을 있는 척 두지 않는다 — 키를 고치거나 뺀다" >&2
             exit 2
         fi
-        creds=$(printf '%s' "$verdict" | tr ' ' '\n' | grep '^자격:' | cut -d: -f2 || true)
-        if [[ -n "$creds" ]]; then
-            echo "지라에 못 붙어 티켓 키를 못 봤다 (HTTP $creds)." >&2
+        # **값이 아니라 표식으로 본다.** `curl` 이 아예 안 돌면 코드가 빈 문자열이라,
+        # 값으로 보면 그 경우가 통과한다 — 인프라 오류 한 번에 사라지는 그 경로다.
+        if printf '%s' "$verdict" | tr ' ' '\n' | grep -q '^자격:'; then
+            creds=$(printf '%s' "$verdict" | tr ' ' '\n' | grep '^자격:' | cut -d: -f2 || true)
+            echo "지라에 못 붙어 티켓 키를 못 봤다 (HTTP ${creds:-응답 없음})." >&2
             echo "  통과시키면 이 게이트가 인프라 오류 한 번에 조용히 사라진다." >&2
             echo "  ../.env 의 자격 증명을 확인하고 다시 연다." >&2
             exit 2

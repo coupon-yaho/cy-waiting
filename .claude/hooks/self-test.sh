@@ -305,6 +305,14 @@ bash_case guard-paths.sh 'git -C ../waiting-legacy clean -fdx' block 'WF-5 git �
 bash_case guard-paths.sh 'cd ../waiting-legacy' block 'WF-5 디렉터리 진입'
 bash_case guard-paths.sh 'git -C ../waiting-legacy log --oneline' allow 'WF-5 git 읽기 부명령'
 bash_case guard-paths.sh 'cat ../waiting-legacy/README.md' allow 'WF-5 읽기 도구'
+# **이름만으로 읽기 전용이라 할 수 없는 도구가 있다.** 출력 플래그를 가지거나 명령을
+# 실행할 수 있으면 목록에서 뺀다 — 인자까지 가려내는 것은 목록을 세는 것보다 어렵다.
+bash_case guard-paths.sh 'sort f -o ../waiting-legacy/x' block 'WF-5 sort 출력 플래그'
+bash_case guard-paths.sh 'awk "BEGIN{system(\"x ../waiting-legacy/y\")}"' block 'WF-5 awk 명령 실행'
+bash_case guard-paths.sh 'sed "s/a/b/w ../waiting-legacy/x" f' block 'WF-5 sed 쓰기 명령'
+# **첫 도구만 보면 치환 안이 통째로 빠진다.** 껍질이 안쪽을 먼저 실행한다.
+bash_case guard-paths.sh 'echo "$(touch ../waiting-legacy/x)"' block 'WF-5 명령 치환'
+bash_case guard-paths.sh 'echo `touch ../waiting-legacy/x`' block 'WF-5 역따옴표 치환'
 
 echo "check-commit-msg.sh"
 bash_case check-commit-msg.sh "git commit -m 'feat(admission): 상한 계산 추가'" allow '정상'

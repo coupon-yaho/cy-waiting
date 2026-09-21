@@ -26,6 +26,7 @@ jobs:
     outputs:
       jira-key: ${{ steps.jira.outputs.key }}
       code: ${{ steps.changes.outputs.code }}
+      security: ${{ steps.changes.outputs.security }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -91,17 +92,24 @@ jobs:
           # **`actions/` 를 통째로 넣지 않는다.** 알림이나 판정 액션은 빌드가
           # 아니라 항상 도는 잡에서만 쓰인다. 넣으면 문구 한 줄에 전 테스트가
           # 도는데, 그건 바로 위에서 경계한 그 비용이다.
-          #
-          # **`_security.yml` 도 넣는다.** CVE 잡이 여기 세운 락파일로 스캔하는데,
-          # 그 잡은 코드가 바뀐 PR 에서만 돈다 — 그 워크플로만 고친 PR 은 자기가
-          # 바꾼 것을 한 번도 안 돌리고 머지된다 (CY-978).
+
           if grep -qvE '^(plan|ai|\.claude|\.github)/|^[A-Z]+\.md$|^\.(coderabbit\.yaml|gitignore|gitattributes)$' <<<"$changed" \
               || grep -qE '^plan/0[456]-' <<<"$changed" \
-              || grep -qE '^\.github/(actions/setup-gradle/|workflows/(pr|_build|_test|_security)\.yml$)' <<<"$changed"; then
+              || grep -qE '^\.github/(actions/setup-gradle/|workflows/(pr|_build|_test)\.yml$)' <<<"$changed"; then
             echo "code=true" >> "$GITHUB_OUTPUT"
           else
             echo "code=false" >> "$GITHUB_OUTPUT"
             echo "::notice::문서만 변경 — 빌드·테스트를 건너뛴다"
+          fi
+          # **보안 워크플로는 따로 센다.** CVE 잡은 여기서 만든 락파일로 스캔하는데
+          # 코드가 바뀐 PR 에서만 돈다 — 그 워크플로만 고친 PR 은 자기가 바꾼 것을
+          # 한 번도 안 돌리고 머지된다 (CY-978). 그렇다고 `code` 에 넣으면 문구 한
+          # 줄에 전 테스트가 도는 그 비용이 되므로, **그 잡만** 켜는 축을 따로 둔다.
+          if grep -qE '^\.github/(workflows/_security\.yml$|scripts/gradle-setup\.sh$)' \
+              <<<"$changed"; then
+            echo "security=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "security=false" >> "$GITHUB_OUTPUT"
           fi
 
   # ── 2단계: 규범 (코드 유무와 무관하게 항상) ────────────────────────────────
@@ -182,7 +190,8 @@ jobs:
     with:
       mode: pr
       severity: 'CRITICAL,HIGH'
-      cve: ${{ needs.context.outputs.code == 'true' }}
+      cve: ${{ needs.context.outputs.code == 'true'
+        || needs.context.outputs.security == 'true' }}
     permissions:
       contents: read
       security-events: write

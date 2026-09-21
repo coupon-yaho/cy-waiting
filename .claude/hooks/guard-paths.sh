@@ -29,7 +29,14 @@ if [[ -n "$cmd" && "$cmd" == *"waiting-legacy"* ]]; then
     # 절대경로로 부르면 이름 앞이 슬래시라 안 걸리고, 목록에 없는 수단이 전부
     # 지나갔다. 막는 형태 하나만 재던 자기검증은 그동안 초록이었다.
     # 모르는 것은 막는 쪽으로 뒤집는다.
-    allow_re='^(cat|bat|less|more|head|tail|wc|nl|od|xxd|strings|file|stat|du|df|ls|eza|tree|find|fd|grep|rg|egrep|fgrep|diff|cmp|comm|sort|uniq|cut|tr|column|realpath|readlink|dirname|basename|md5sum|sha1sum|sha256sum|jq|yq|awk|sed|git|echo|printf)$'
+    # **이름만으로 읽기 전용이라 할 수 없는 것은 뺀다.** `sort` 는 `-o` 로 파일을 쓰고,
+    # `awk` 는 `system()` 으로 아무 명령이나 부르며, `sed` 는 `w` 로 쓴다. 인자까지
+    # 가려내는 것은 목록을 세는 것보다 어렵다 — 읽기는 다른 도구로 된다.
+    allow_re='^(cat|bat|less|more|head|tail|wc|nl|od|xxd|strings|file|stat|du|df|ls|eza|tree|find|fd|grep|rg|egrep|fgrep|diff|cmp|comm|uniq|cut|tr|column|realpath|readlink|dirname|basename|md5sum|sha1sum|sha256sum|jq|yq|git|echo|printf)$'
+
+    # **치환 안은 못 본다.** 세그먼트의 첫 도구만 보므로 `$( )` 나 역따옴표 안의 명령이
+    # 통째로 빠지는데, 껍질은 그 안쪽을 **먼저** 실행한다. 안전하게 못 가르면 막는다.
+    printf '%s' "$cmd" | grep -qE '[$]\(|`' && deny "$cmd"
 
     # **디렉터리에 들어가는 것부터 막는다.** Bash 도구는 호출 사이에 위치를 지키므로,
     # 들어간 뒤의 상대경로 쓰기는 명령 문자열에 이름이 없어 이 훅을 통째로 지나간다.
@@ -54,10 +61,6 @@ if [[ -n "$cmd" && "$cmd" == *"waiting-legacy"* ]]; then
                 printf '%s' "$seg" \
                     | grep -qE -- '-(delete|exec|execdir|ok|okdir|fprintf|fprint0|fprint|fls)' \
                     && deny "$cmd" ;;
-            sed)
-                printf '%s' "$seg" | grep -qE -- '(^|[[:space:]])-[a-zA-Z]*i' && deny "$cmd" ;;
-            awk)
-                printf '%s' "$seg" | grep -q 'inplace' && deny "$cmd" ;;
             git)
                 # `-C 경로`·`-c 키=값` 뒤의 낱말은 부명령이 아니다. 그것을 건너뛰고 찾는다.
                 sub=$(printf '%s' "$seg" | tr -s ' \t' '\n\n' | grep -v '^$' \

@@ -1058,6 +1058,29 @@ jobs:
 gradle_setup_case '- 최상위가
 - 리스트다' block '매핑이 아니면 막는다'
 
+gradle_setup_case 'name: p
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ./.github/actions/setup-gradle
+        continue-on-error: true
+      - run: ./gradlew build' block '실패해도 넘어가는 준비는 준비가 아니다'
+
+gradle_setup_case 'name: p
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ./.github/actions/setup-gradle
+      - run: ./gradlew build
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - run: ./gradlew build' block '중복 키는 막는다'
+
 echo
 printf '통과 %d · 실패 %d\n' "$pass" "$fail"
 ((fail == 0))

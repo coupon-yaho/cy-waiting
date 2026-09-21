@@ -22,6 +22,29 @@ except ImportError:
     print("  PyYAML 이 없어 검사를 못 한다", file=sys.stderr)
     sys.exit(1)
 
+
+class Strict(yaml.SafeLoader):
+    """중복 키를 덮어쓰지 않고 막는다.
+
+    기본 로더는 마지막 값으로 덮으므로, 원본과 다른 구조를 검사하고 초록을 낸다.
+    GitHub 은 그런 워크플로를 실행 전에 거절하므로 숨은 호출이 도는 것은 아니지만,
+    **검사 결과가 깨진 워크플로를 정상으로 보고하는 것**이 문제다.
+    """
+
+
+def no_duplicates(loader, node, deep=False):
+    seen = set()
+    for key_node, _ in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in seen:
+            raise yaml.YAMLError(f"키가 겹친다: {key}")
+        seen.add(key)
+    return yaml.SafeLoader.construct_mapping(loader, node, deep)
+
+
+Strict.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, no_duplicates)
+
 root = pathlib.Path(sys.argv[1])
 workflows = root / '.github' / 'workflows'
 # **없는 것과 사라진 것을 가른다.** 디렉터리 자체가 없으면 검사 대상이 아니다 —
@@ -60,8 +83,14 @@ def calls_gradle(run):
 
 
 def names(step):
-    """`if:` 가 달린 준비는 안 돌 수 있다. 조건 없는 것만 센다."""
+    """안 돌 수 있거나 실패해도 넘어가는 준비는 준비가 아니다.
+
+    `if:` 가 달리면 그 회차에 안 돌 수 있고, `continue-on-error` 면 실패한 채로
+    다음 스텝이 돈다 — 그러면 러너 기본 JDK 로 gradlew 가 실행된다.
+    """
     if step.get('if') is not None:
+        return ''
+    if step.get('continue-on-error') not in (None, False, 'false'):
         return ''
     return (step.get('uses') or '').split('@')[0]
 
@@ -69,7 +98,7 @@ def names(step):
 bad = 0
 for path in files:
     try:
-        doc = yaml.safe_load(path.read_text(encoding='utf-8'))
+        doc = yaml.load(path.read_text(encoding='utf-8'), Strict)
     except yaml.YAMLError as e:
         print(f"  {path.name}: YAML 을 못 읽는다 — {str(e).splitlines()[0]}", file=sys.stderr)
         bad += 1

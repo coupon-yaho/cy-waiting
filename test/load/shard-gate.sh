@@ -32,10 +32,25 @@ case "${LATENCY:-}" in
     *) latency=" -f test/load/compose.latency.yml" ;;
 esac
 COMPOSE="docker compose -f test/load/compose.yml$pinned$latency"
-# **쿠폰은 노브가 아니다.** `open-spike.js` 가 `c2` 를 박아 두고 있어서, 여기만
-# 바꾸면 c3 을 비우고 c3 이 IDLE 인 것을 본 뒤 c2 를 때린다 — 빈 줄 보증이
-# 통째로 다른 쿠폰 얘기가 된다. 시나리오를 고칠 때 같이 고친다.
-COUPON=c2
+# **시나리오까지 같이 간다.** 여기만 바꾸면 한 쿠폰을 비우고 다른 쿠폰을 때려 빈 줄
+# 보증이 통째로 다른 쿠폰 얘기가 된다. `open-spike.js` 가 `COUPON` 을 읽으므로 자식
+# 환경에 실어서 두 쪽이 같은 값을 본다.
+export COUPON=c2
+# 예열 쿠폰. **재는 쿠폰과 같으면 안 된다** — 크레딧이 올라간 채 본 회차가 시작해
+# 전원이 통과하고, 정리에서 재는 쿠폰의 키를 회차 직전에 지운다.
+WARMUP_COUPON="${WARMUP_COUPON:-c1}"
+if [ "$WARMUP_COUPON" = "$COUPON" ]; then
+    echo "WARMUP_COUPON 은 재는 쿠폰과 달라야 한다: '$WARMUP_COUPON'"; exit 2
+fi
+# **숫자가 아니면 조용히 어긋난다.** `set -e` 가 없어서 `sleep abc` 는 실패만 하고
+# 넘어간다 — 가라앉힘 없이 본 회차가 시작하는데 산출물에 흔적이 없다.
+WARMUP_USERS="${WARMUP_USERS:-3000}"
+WARMUP_SETTLE_SEC="${WARMUP_SETTLE_SEC:-8}"
+for pair in "WARMUP_USERS:$WARMUP_USERS" "WARMUP_SETTLE_SEC:$WARMUP_SETTLE_SEC"; do
+    case "${pair#*:}" in
+        ''|*[!0-9]*) echo "${pair%%:*} 는 음이 아닌 정수여야 한다: '${pair#*:}'"; exit 2 ;;
+    esac
+done
 OUT_OPS="${OUT_OPS:-redis-ops${pinned:+-pinned}${latency:+-latency}.txt}"
 # **산출물 이름에 조건을 싣는다.** 고정한 회차와 안 한 회차가 같은 파일에
 # 덮이면 나중에 어느 조건에서 나온 값인지 못 가른다 — 그 둘을 한 표에 넣는
@@ -84,6 +99,96 @@ $COMPOSE build gateway backend >/dev/null 2>&1 || { echo "이미지를 못 지�
 $COMPOSE rm -sf gateway warmup >/dev/null 2>&1
 $COMPOSE up -d --wait --wait-timeout 240 || { echo "스택을 못 세웠다"; exit 2; }
 
+# **부하 생성기도 레디스 코어를 피한다.** 2 만 VU 를 띄우는 쪽이 호스트를 다
+# 먹으면 레디스만 격리한 뜻이 없다 — 실제로 그 회차에서 응답 중앙값이 10.6 초로
+# 늘고 제어 평면이 250ms 안에 못 읽어 타임아웃이 났다. 레디스 CPU 는 낮은데
+# 나머지가 밀린 것이고, 그러면 재는 것이 또 레디스가 아니다.
+#
+# **다만 생성기와 게이트웨이는 서로 안 갈린다.** 아래 목록은 `compose.pinned.yml`
+# 의 게이트웨이 몫과 **글자 그대로 같다** — 레디스 코어만 비우고 둘은 열한 개를
+# 통째로 나눠 쓴다. 그래서 게이트웨이가 쓴 CPU 중 얼마가 생성기와 다툰 몫인지
+# 이 회차로는 못 가른다. 같은 조건의 두 회차가 유입 1,390 과 2,127 로 갈린 것이
+# 그 징후다 (AIJ-0349).
+#
+# **좁혀서 가르는 길은 막혀 있다.** 게이트웨이 쪽을 좁히면 그쪽이 병목이 되어
+# 재려던 것이 또 바뀐다 — `compose.pinned.yml` 이 그 실측을 든다. 열두 코어
+# 한 대에서는 못 가르고, 생성기가 다른 기계로 나가야 갈린다.
+runner=""
+if [ -n "$pinned" ]; then
+    # **없으면 말한다.** 조용히 안 묶으면 격리했다고 믿는 회차가 안 격리된
+    # 조건으로 돌고, 그 값이 "고정해서 쟀다" 로 기록된다.
+    if command -v taskset >/dev/null 2>&1; then
+        # 코어 지도는 `compose.pinned.yml` 이 든다 — 거기를 고치면 여기도
+        # 고친다. 이 기계(12 코어)를 못 박은 값이다.
+        runner="taskset -c 1-11"
+    else
+        echo "::error title=착수 판정::taskset 이 없다 — 생성기를 격리 못 한다"
+        exit 2
+    fi
+fi
+
+
+# **트래픽으로 예열한다** (CY-975). 예열 컨테이너는 크레딧이 문턱에 닿기를 기다릴 뿐
+# 요청을 한 건도 안 보낸다. 그대로 재면 등록 경로의 JIT 가 식은 채 스파이크를 맞아,
+# 이 회차가 제품이 아니라 계기가 식었다는 사실을 잰다 — 실측으로 등록 평균이 166ms 와
+# 12ms 로 갈렸다 (AIJ-0353).
+#
+# **회차를 비우고 프로브를 띄우기 전에 돈다.** 판정은 레디스 CPU 봉우리를 표본 파일
+# 전체의 최댓값으로 집으므로, 예열 봉우리가 그 파일에 남으면 착수 여부를 예열이
+# 정한다 — 등록 기준선에서 고친 것과 똑같은 오염이다.
+case "${WARMUP_SPIKE:-0}" in
+    0|false|no) : ;;
+    *)
+        echo "예열 스파이크 · 쿠폰 ${WARMUP_COUPON}"
+        warm_summary=$(mktemp)
+        warm_log=$(mktemp)
+        # **다른 쿠폰으로 데운다.** 같은 쿠폰으로 돌리면 크레딧이 올라간 채 본 회차가
+        # 시작해 전원이 통과하고 줄에 선 것이 0 이 된다 — 실측에서 뒷단 실패가 58.8%
+        # 였다. JIT 는 JVM 몫이라 어느 쿠폰으로 데워도 같은 경로가 데워진다.
+        # **가볍게 데운다.** 본 회차와 같은 크기로 돌리면 제어 평면이 흔들려 —
+        # 실측에서 리더 확인이 한 번 실패하고 뒷단 실패가 58.8% 였다 — 그 상태로
+        # 본 회차가 시작한다. JIT 는 수천 번이면 붙으므로 그만큼만 친다.
+        COUPON="$WARMUP_COUPON" SPIKE_USERS="$WARMUP_USERS" \
+            $runner k6 run --summary-export="$warm_summary" \
+            test/load/open-spike.js >"$warm_log" 2>&1
+        warm_rc=$?
+        # **종료 코드를 본다.** 안 보면 예열이 한 번도 안 돌아도 조용히 지나가고,
+        # 그러면 "예열을 붙였는데 느려졌다" 같은 엉뚱한 결론이 난다 — 실제로 났다.
+        # `--no-summary` 는 이 k6 판에 없어서 예열이 통째로 안 돌았다.
+        #
+        # **99 는 돌았다는 뜻이다.** 임계 위반이고, 예열은 임계로 판단할 회차가 아니다.
+        # 안 돈 것(플래그 오류·k6 없음)과 갈라야 "예열했다" 가 사실이 된다.
+        case "$warm_rc" in
+            0|99) ;;
+            *) echo "::error title=착수 판정::예열 스파이크가 ${warm_rc} 로 끝났다 — 안 돈 것이라 이 회차는 예열 없이 잰 것이 된다"
+               tail -20 "$warm_log" >&2
+               exit 2 ;;
+        esac
+        # **돌았다는 것으로는 모자란다.** 데우려는 것이 등록 경로인데, 예열이 통과
+        # 경로로만 빠지면 그 경로를 한 번도 안 지나고 종료 코드는 그대로 99 다 —
+        # 막으려던 조용한 통과가 한 칸 뒤에 다시 서는 셈이다.
+        warm_queued=$(jq -r '(.metrics.queued_responses.values.count
+            // .metrics.queued_responses.count) // 0' "$warm_summary" 2>/dev/null)
+        case "$warm_queued" in
+            ''|0|null) echo "::error title=착수 판정::예열이 줄에 한 건도 안 세웠다 — 등록 경로가 안 데워졌다"
+                       tail -20 "$warm_log" >&2
+                       rm -f "$warm_summary" "$warm_log"
+                       exit 2 ;;
+        esac
+        echo "예열 등록 ${warm_queued} 건"
+        rm -f "$warm_summary" "$warm_log"
+        # 예열 쿠폰의 줄을 치운다. 재는 쿠폰은 아래에서 따로 비우고 IDLE 을 확인한다.
+        $COMPOSE exec -T redis redis-cli DEL \
+            "queue:{$WARMUP_COUPON}" "admitted:{$WARMUP_COUPON}" \
+            "maxscore:{$WARMUP_COUPON}" "grace:{$WARMUP_COUPON}" \
+            "alive:{$WARMUP_COUPON}" "dropfence:{$WARMUP_COUPON}" \
+            "applyfence:{$WARMUP_COUPON}" >/dev/null 2>&1
+        # 제어 평면이 가라앉기를 기다린다. 스냅샷 한 주기로는 모자란다.
+        sleep "$WARMUP_SETTLE_SEC"
+        ;;
+esac
+
+
 # **`routing-lib.sh` 의 `wait_for_idle_queue` 와 같은 절차다.** 그것을 안 부르는
 # 이유는 그 라이브러리가 라우팅 겹침(`compose.routing.yml`)과 스텁 셋의 여유
 # 값을 전제하는데, 이 회차는 CI 와 같은 모양이어야 해서 `compose.yml` 하나로만
@@ -96,17 +201,22 @@ $COMPOSE up -d --wait --wait-timeout 240 || { echo "스택을 못 세웠다"; ex
 # **쿠폰별 키 일곱을 다 지운다.** 셋만 지우면 이탈 기록과 생존 신호와 배분
 # 펜스가 앞 회차 값을 들고 넘어가, 새 회차의 첫 배분이 앞 회차의 펜스를 본다.
 # 재고(`stock:`)는 시더가 관리하므로 안 건드린다.
-$COMPOSE exec -T redis redis-cli DEL \
-    "queue:{$COUPON}" "admitted:{$COUPON}" "maxscore:{$COUPON}" \
-    "grace:{$COUPON}" "alive:{$COUPON}" "dropfence:{$COUPON}" \
-    "applyfence:{$COUPON}" >/dev/null 2>&1
+empty_and_wait_idle() {
+    $COMPOSE exec -T redis redis-cli DEL \
+        "queue:{$COUPON}" "admitted:{$COUPON}" "maxscore:{$COUPON}" \
+        "grace:{$COUPON}" "alive:{$COUPON}" "dropfence:{$COUPON}" \
+        "applyfence:{$COUPON}" >/dev/null 2>&1
 
-state=""
-for _ in $(seq 1 30); do
-    state=$($COMPOSE exec -T redis redis-cli HGET gw:snapshot "$COUPON" 2>/dev/null)
-    case "$state" in *:IDLE:*) break ;; *) state=""; sleep 1 ;; esac
-done
-if [ -z "$state" ]; then
+    local state _
+    for _ in $(seq 1 30); do
+        state=$($COMPOSE exec -T redis redis-cli HGET gw:snapshot "$COUPON" 2>/dev/null)
+        case "$state" in *:IDLE:*) return 0 ;; esac
+        sleep 1
+    done
+    return 1
+}
+
+if ! empty_and_wait_idle; then
     echo "::error title=착수 판정::줄 모드가 안 꺼진다 — 이 상태로는 못 잰다"
     exit 2
 fi
@@ -121,7 +231,9 @@ sleep "${SNAPSHOT_SETTLE_SEC:-2}"
 # 회차가 남긴 것 때문에 판정이 갈렸다는 것이 바로 이 러너를 만든 이유다.
 rm -f "$OUT_SUMMARY" "$OUT_OPS" "$OUT_ENQUEUE" "$OUT_ENQUEUE_BASE"
 
-# **부하 전 개수를 먼저 적어 둔다** (CY-936). 개수는 누적이고 분위수 창은 10 분마다 도므로,
+# **부하 전 개수를 먼저 적어 둔다** (CY-936). 예열은 이 줄보다 앞에서 끝나므로
+# 예열 트래픽은 차분에 안 섞인다 — 등록 지표에 쿠폰 구분이 없어, 앞뒤가 바뀌면
+# 2 만 요청 회차의 등록 건수가 21,808 로 찍힌다. 개수는 누적이고 분위수 창은 10 분마다 도므로,
 # 증분을 안 보면 이번 회차에 등록이 0 건이어도 예열 때의 값이 회차 값으로 인용된다.
 #
 # **명령별 지연도 같이 긁는다.** `LATENCY=1` 이 아니면 그 줄이 아예 안 나오므로, 없다는
@@ -155,34 +267,6 @@ fi
 # **k6 의 출력을 남긴다.** 요약만 남기면 임계가 깨졌을 때 어떤 응답이 섞였는지
 # 를 못 본다 — 요약은 실패 건수를 안 싣는 판이 있어서, 깨진 사실만 알고 원인은
 # 모르는 상태가 된다.
-# **부하 생성기도 레디스 코어를 피한다.** 2 만 VU 를 띄우는 쪽이 호스트를 다
-# 먹으면 레디스만 격리한 뜻이 없다 — 실제로 그 회차에서 응답 중앙값이 10.6 초로
-# 늘고 제어 평면이 250ms 안에 못 읽어 타임아웃이 났다. 레디스 CPU 는 낮은데
-# 나머지가 밀린 것이고, 그러면 재는 것이 또 레디스가 아니다.
-#
-# **다만 생성기와 게이트웨이는 서로 안 갈린다.** 아래 목록은 `compose.pinned.yml`
-# 의 게이트웨이 몫과 **글자 그대로 같다** — 레디스 코어만 비우고 둘은 열한 개를
-# 통째로 나눠 쓴다. 그래서 게이트웨이가 쓴 CPU 중 얼마가 생성기와 다툰 몫인지
-# 이 회차로는 못 가른다. 같은 조건의 두 회차가 유입 1,390 과 2,127 로 갈린 것이
-# 그 징후다 (AIJ-0349).
-#
-# **좁혀서 가르는 길은 막혀 있다.** 게이트웨이 쪽을 좁히면 그쪽이 병목이 되어
-# 재려던 것이 또 바뀐다 — `compose.pinned.yml` 이 그 실측을 든다. 열두 코어
-# 한 대에서는 못 가르고, 생성기가 다른 기계로 나가야 갈린다.
-runner=""
-if [ -n "$pinned" ]; then
-    # **없으면 말한다.** 조용히 안 묶으면 격리했다고 믿는 회차가 안 격리된
-    # 조건으로 돌고, 그 값이 "고정해서 쟀다" 로 기록된다.
-    if command -v taskset >/dev/null 2>&1; then
-        # 코어 지도는 `compose.pinned.yml` 이 든다 — 거기를 고치면 여기도
-        # 고친다. 이 기계(12 코어)를 못 박은 값이다.
-        runner="taskset -c 1-11"
-    else
-        echo "::error title=착수 판정::taskset 이 없다 — 생성기를 격리 못 한다"
-        exit 2
-    fi
-fi
-
 rc=0
 $runner k6 run --summary-export="$OUT_SUMMARY" test/load/open-spike.js 2>&1 \
     | tee "$OUT_LOG"

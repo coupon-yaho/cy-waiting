@@ -329,7 +329,39 @@ bash_case check-commit-msg.sh "git commit -m 'feat(admission): 한산한 쿠폰�
 bash_case check-commit-msg.sh "git commit -m 'feat(admission): 전역 크레딧으로 상한 계산'" allow '50칸 이내'
 bash_case check-commit-msg.sh "git commit --amend --no-edit" allow '--amend --no-edit'
 bash_case check-commit-msg.sh "git status" allow 'commit 아닌 명령'
+# **두 낱말을 따로 찾으면 양쪽으로 틀린다.** 같은 명령일 필요도 인접할 필요도 없어서
+# 읽기 전용 명령이 막히고, 경로를 붙여 부르면 검사가 통째로 지나간다.
+bash_case check-commit-msg.sh "git log --oneline | grep -m1 commit" allow '읽기 전용인데 낱말만 겹친다'
+bash_case check-commit-msg.sh "git log --format=%s   # 첫 commit 을 본다" allow '주석에 든 낱말'
+bash_case check-commit-msg.sh "/usr/bin/git commit -m '그냥 고침'" block '경로를 붙인 호출'
+bash_case check-commit-msg.sh "git commit -am 'feat(x): 짧은 제목'" allow '-am 형태'
+bash_case check-commit-msg.sh "git commit -am '그냥 이것저것 고침'" block '-am 형태의 위반'
+bash_case check-commit-msg.sh "git status && git commit -m '그냥 고침'" block '둘째 세그먼트의 커밋'
 bash_case check-commit-msg.sh "echo 'nothing to do with version control'" allow '무관한 명령'
+# **표준 입력으로 준 메시지는 명령 안에 있다.** 파일로 준 것과 같게 보고 건너뛰면,
+# 이 경로로 커밋하는 동안 규약 검사가 통째로 없는 것이 된다 — 실제로 그렇게 됐다.
+bash_case check-commit-msg.sh "$(printf 'git commit -F - <<%sEOF%s\n그냥 이것저것 고침\n\n본문\nEOF' "'" "'")" block '표준 입력 메시지의 위반'
+bash_case check-commit-msg.sh "$(printf 'git commit -F - <<%sEOF%s\nfeat(x): 정상 제목\n\n본문\nEOF' "'" "'")" allow '표준 입력 메시지의 정상'
+bash_case check-commit-msg.sh "git commit -F msg.txt" allow '진짜 파일은 못 본다'
+# **셸 문법을 모르면 양쪽으로 틀린다.** 값이 붙어 오는 플래그를 못 알아보면 정상 커밋이
+# 막히고, 인용 안의 구분자를 문법으로 읽으면 제목이 잘린다. 그리고 줄 이음 뒤의 힙독은
+# 물리적 줄만 보면 본문을 못 찾아 검사가 통째로 지나간다.
+bash_case check-commit-msg.sh "git commit -Fmsg.txt" allow '붙은 파일 플래그'
+bash_case check-commit-msg.sh "git commit --file=msg.txt" allow '긴 파일 플래그'
+bash_case check-commit-msg.sh "git commit -CHEAD" allow '붙은 재사용 플래그'
+bash_case check-commit-msg.sh "git commit --fixup=HEAD" allow '긴 fixup'
+bash_case check-commit-msg.sh "git commit -m 'feat(x): 해시 # 보존'" allow '인용 안의 해시'
+bash_case check-commit-msg.sh "git commit -m 'feat(x): 파이프 | 보존'" allow '인용 안의 파이프'
+bash_case check-commit-msg.sh "git commit -m 'feat(x): 해시 # 넣고 마침표.'" block '인용 안 해시의 위반'
+bash_case check-commit-msg.sh "$(printf 'git add x && \\\n  git commit -F - <<%sEOF%s\n그냥 고침\nEOF' "'" "'")" block '줄 이음 뒤의 힙독'
+bash_case check-commit-msg.sh "$(printf 'git commit -F - <<%sEOF%s\n# 안내 줄\nfeat(x): 정상 제목\nEOF' "'" "'")" allow '힙독의 주석 뒤 제목'
+bash_case check-commit-msg.sh "$(printf 'git commit -F - <<-%sEOF%s\n\tfeat(x): 정상 제목\n\tEOF' "'" "'")" allow '탭을 떼는 힙독'
+bash_case check-commit-msg.sh "git status;git commit -m '그냥 고침'" block '공백 없는 세미콜론'
+bash_case check-commit-msg.sh "true&&git commit -m '그냥 고침'" block '공백 없는 앤드'
+bash_case check-commit-msg.sh "$(printf "git status\ngit commit -m '그냥 고침'")" block '개행으로만 나뉜 커밋'
+bash_case check-commit-msg.sh "$(printf "echo 'literal <<true'\ngit commit -m '그냥 고침'\ntrue")" block '인용 안의 힙독 연산자'
+bash_case check-commit-msg.sh "git commit -m 'fix(x): __NO_MESSAGE__ 처리'" allow '표식과 같은 낱말이 든 제목'
+bash_case check-commit-msg.sh "$(printf 'git commit -F - <<%sEOF%s\n EOF\n그냥 고침\nEOF' "'" "'")" block '들여쓴 구분자는 끝이 아니다'
 
 # ── git commit-msg 훅 ────────────────────────────────────────────────────────
 # 도구 훅만 검증하면 터미널 직접 커밋 경로가 비어 있다.

@@ -343,6 +343,19 @@ bash_case check-commit-msg.sh "echo 'nothing to do with version control'" allow 
 bash_case check-commit-msg.sh "$(printf 'git commit -F - <<%sEOF%s\n그냥 이것저것 고침\n\n본문\nEOF' "'" "'")" block '표준 입력 메시지의 위반'
 bash_case check-commit-msg.sh "$(printf 'git commit -F - <<%sEOF%s\nfeat(x): 정상 제목\n\n본문\nEOF' "'" "'")" allow '표준 입력 메시지의 정상'
 bash_case check-commit-msg.sh "git commit -F msg.txt" allow '진짜 파일은 못 본다'
+# **셸 문법을 모르면 양쪽으로 틀린다.** 값이 붙어 오는 플래그를 못 알아보면 정상 커밋이
+# 막히고, 인용 안의 구분자를 문법으로 읽으면 제목이 잘린다. 그리고 줄 이음 뒤의 힙독은
+# 물리적 줄만 보면 본문을 못 찾아 검사가 통째로 지나간다.
+bash_case check-commit-msg.sh "git commit -Fmsg.txt" allow '붙은 파일 플래그'
+bash_case check-commit-msg.sh "git commit --file=msg.txt" allow '긴 파일 플래그'
+bash_case check-commit-msg.sh "git commit -CHEAD" allow '붙은 재사용 플래그'
+bash_case check-commit-msg.sh "git commit --fixup=HEAD" allow '긴 fixup'
+bash_case check-commit-msg.sh "git commit -m 'feat(x): 해시 # 보존'" allow '인용 안의 해시'
+bash_case check-commit-msg.sh "git commit -m 'feat(x): 파이프 | 보존'" allow '인용 안의 파이프'
+bash_case check-commit-msg.sh "git commit -m 'feat(x): 해시 # 넣고 마침표.'" block '인용 안 해시의 위반'
+bash_case check-commit-msg.sh "$(printf 'git add x && \\\n  git commit -F - <<%sEOF%s\n그냥 고침\nEOF' "'" "'")" block '줄 이음 뒤의 힙독'
+bash_case check-commit-msg.sh "$(printf 'git commit -F - <<%sEOF%s\n# 안내 줄\nfeat(x): 정상 제목\nEOF' "'" "'")" allow '힙독의 주석 뒤 제목'
+bash_case check-commit-msg.sh "$(printf 'git commit -F - <<-%sEOF%s\n\tfeat(x): 정상 제목\n\tEOF' "'" "'")" allow '탭을 떼는 힙독'
 
 # ── git commit-msg 훅 ────────────────────────────────────────────────────────
 # 도구 훅만 검증하면 터미널 직접 커밋 경로가 비어 있다.

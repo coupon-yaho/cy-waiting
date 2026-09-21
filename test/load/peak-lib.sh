@@ -30,47 +30,6 @@ PY
 # **회차 길이를 초로 푼다.** `${D%s}` 로 끝 글자만 떼면 `1m` 이 1 이 되어, 기대
 # 건수가 60 분의 1 로 내려가고 "부하가 안 닿았다" 가드가 사실상 사라진다.
 # 못 읽는 형식은 0 을 내고 부르는 쪽이 회차를 돌리기 전에 끊는다.
-# 생성기 여럿의 요약을 하나로 합친다. 첫 인자가 `rate` 면 더하고 `p99` 면 큰 쪽을 든다.
-#
-# **분위수는 못 더한다.** 나눠서 잰 p99 를 합치는 식은 없다 — 버킷을 합쳐야 나온다. 그래서
-# 가장 나쁜 대의 값을 든다. 그것은 함대 p99 의 **상한**이다 — 대마다 제 p99 를 넘는 표본이
-# 1% 아래이므로 그 최댓값을 넘는 표본도 전체의 1% 아래다. 작은 대의 느린 꼬리가 전체에서는
-# 1% 에 못 미칠 수 있어 **실제보다 나쁘게 나온다.** 보수적인 대용값으로 읽고, 참값이 필요하면
-# 버킷이나 원시 표본을 합쳐야 한다.
-#
-# **하나라도 못 읽으면 아무것도 안 낸다.** 0 으로 세면 죽은 생성기가 "유입이 적었다" 로 읽혀,
-# 하네스 고장이 제품의 천장으로 적힌다.
-peak_merged_value() {
-    local kind=$1
-    shift
-    python3 - "$kind" "$@" <<'MERGE'
-import json, sys
-kind = sys.argv[1]
-vals = []
-for path in sys.argv[2:]:
-    try:
-        d = json.load(open(path))
-    except Exception:
-        sys.exit(0)
-    m = d.get('metrics', {})
-    name, key = ('http_reqs', 'rate') if kind == 'rate' else ('http_req_duration', 'p(99)')
-    node = m.get(name, {})
-    v = node.get('values', {}).get(key, node.get(key))
-    if not isinstance(v, (int, float)):
-        sys.exit(0)
-    vals.append(float(v))
-if not vals:
-    sys.exit(0)
-print(f'{sum(vals) if kind == "rate" else max(vals):.4f}')
-MERGE
-}
-# 원격 셸에 끼울 값을 한 낱말로 묶는다.
-#
-# **작은따옴표 안에 값을 그냥 끼우면 안 된다.** 값에 작은따옴표가 하나만 섞여도 거기서 인용이
-# 끝나고 뒤가 명령으로 읽힌다. 주소에 실수로 따옴표가 들어간 경우까지 조용히 안 깨지게 한다.
-peak_sh_quote() {
-    printf "'%s'" "$(printf '%s' "${1-}" | sed "s/'/'\\\\''/g")"
-}
 peak_duration_sec() {
     printf '%s\n' "$1" | awk '
         {

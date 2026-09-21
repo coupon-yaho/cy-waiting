@@ -130,8 +130,13 @@ scrape_enqueue() {
     $COMPOSE exec -T gateway wget -qO- http://localhost:8081/actuator/prometheus 2>/dev/null \
         | grep -E '^(waiting_queue_enqueue_latency_seconds|lettuce_command_)' > "$1" || true
 }
+# **파일이 비었는지로 가르면 안 된다.** 계기를 켠 회차는 lettuce 줄이 들어차므로, 등록 지표가
+# 통째로 사라져도 파일이 안 빈다 — 갈라 두려던 "못 긁음" 과 "0 건" 이 다시 붙는다.
+has_enqueue() {
+    grep -q '^waiting_queue_enqueue_latency_seconds' "$1"
+}
 scrape_enqueue "$OUT_ENQUEUE_BASE"
-if [ ! -s "$OUT_ENQUEUE_BASE" ]; then
+if ! has_enqueue "$OUT_ENQUEUE_BASE"; then
     echo "::warning title=착수 판정::회차 전 등록 지표를 못 긁었다 — 등록 p99 는 안 적는다"
 fi
 
@@ -205,7 +210,7 @@ trap - EXIT
 # 섞여 있어 착수 게이트가 보라는 값이 아니다. 스택을 내리면 이 값도 같이 사라진다.
 scrape_enqueue "$OUT_ENQUEUE"
 # **못 긁은 것과 등록이 0 건인 것은 다르다.** 둘 다 "없음" 으로 적히므로 여기서 갈라 둔다.
-if [ ! -s "$OUT_ENQUEUE" ]; then
+if ! has_enqueue "$OUT_ENQUEUE"; then
     echo "::warning title=착수 판정::등록 왕복 지표를 못 긁었다 — 노드가 여럿이거나 관리 포트가 바뀌었다"
 fi
 

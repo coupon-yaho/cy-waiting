@@ -243,6 +243,29 @@ class QueryCoalescingFilterTest {
         assertThat(뒷단).as("뒷단 호출").hasValue(1);
     }
 
+    /** 배선이 모드를 따라 고르는가. 거꾸로 물리면 인증 모드에서 모으기가 꺼지거나 헤더 모드에서 켜진다. */
+    @Test
+    @DisplayName("배선이_인증_모드를_따라_필터를_고른다")
+    void 배선이_인증_모드를_따라_필터를_고른다() {
+        AuthProperties 켬 = new AuthProperties(AuthProperties.Mode.JWT, new AuthProperties.Jwt(
+                "HS256", "0123456789abcdef0123456789abcdef", null, null, null, "waiting",
+                null, null, null, false));
+        IdentityConfig 배선 = new IdentityConfig();
+        AtomicInteger 켠_뒷단 = new AtomicInteger();
+        AtomicInteger 끈_뒷단 = new AtomicInteger();
+        QueryCoalescingFilter 켠_것 = 배선.queryCoalescingFilter(설정, 시계, meters, 켬);
+        QueryCoalescingFilter 끈_것 = 배선.queryCoalescingFilter(설정, 시계, new SimpleMeterRegistry(),
+                new AuthProperties(null, null));
+
+        for (int i = 0; i < 2; i++) {
+            켠_것.filter(토큰_조회(81_290 + i), ex -> 답한다(ex, "목록" + 켠_뒷단.incrementAndGet())).block();
+            끈_것.filter(토큰_조회(81_290 + i), ex -> 답한다(ex, "목록" + 끈_뒷단.incrementAndGet())).block();
+        }
+
+        assertThat(켠_뒷단).hasValue(1);
+        assertThat(끈_뒷단).hasValue(2);
+    }
+
     /** 인증을 켜도 나눠도 된다는 말은 뒷단만 한다. 말이 없으면 각자 간다. */
     @Test
     @DisplayName("인증을_켜도_공유_선언이_없으면_각자_간다")

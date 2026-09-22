@@ -118,8 +118,12 @@ public final class QueryCoalescingFilter implements GatewayFilter {
     /** 키 상한에 닿아 모으기가 멎은 구간. 카운터만 두면 사후에 못 답한다. */
     private final FailureWindow saturation;
 
+    /** 자격 증명을 게이트웨이가 검증했는가. 인증 모드에서만 참이다. */
+    private final boolean credentialsVerified;
+
     private QueryCoalescingFilter(CoalescingProperties props, Clock clock,
-            MeterRegistry meters) {
+            MeterRegistry meters, boolean credentialsVerified) {
+        this.credentialsVerified = credentialsVerified;
         this.props = Objects.requireNonNull(props, "props 는 필수다");
         this.meters = Objects.requireNonNull(meters, "meters 는 필수다");
         this.cache = ResponseCache.ofBytes(clock, props.enabled() ? props.maxCacheBytes() : 1);
@@ -132,7 +136,16 @@ public final class QueryCoalescingFilter implements GatewayFilter {
 
     public static QueryCoalescingFilter of(CoalescingProperties props, Clock clock,
             MeterRegistry meters) {
-        return new QueryCoalescingFilter(props, clock, meters);
+        return new QueryCoalescingFilter(props, clock, meters, false);
+    }
+
+    /**
+     * 인증을 켠 배포. 토큰은 신원 필터가 검증했으므로 토큰을 든 조회도 모은다. 나누는 것은 여전히
+     * 뒷단이 공유를 선언한 응답뿐이다 — RFC 9111 3.5 가 허락하는 범위다.
+     */
+    public static QueryCoalescingFilter forVerifiedCredentials(CoalescingProperties props,
+            Clock clock, MeterRegistry meters) {
+        return new QueryCoalescingFilter(props, clock, meters, true);
     }
 
     /**
@@ -154,9 +167,9 @@ public final class QueryCoalescingFilter implements GatewayFilter {
                 || !props.enabled() || !ttlByPath.containsKey(path)) {
             return chain.filter(exchange);
         }
-        // **자격 증명이 실려 오면 안 모은다.** 하나로 모으면 그 값이 다른 사람이
-        // 같은 응답을 받는다.
-        if (hasCredential(exchange)) {
+        // **모르는 자격 증명이 실려 오면 안 모은다.** 하나로 모으면 그 값이 다른 사람이
+        // 같은 응답을 받는다. 게이트웨이가 검증한 토큰이면 공유 선언을 보고 나눈다.
+        if (!credentialsVerified && hasCredential(exchange)) {
             count("skipped", "credential");
             return chain.filter(exchange);
         }

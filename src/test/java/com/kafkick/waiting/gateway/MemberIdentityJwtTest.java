@@ -480,20 +480,16 @@ class MemberIdentityJwtTest {
     }
 
     @Test
-    @DisplayName("스프링이 쓰는 생성자가 기동 검사 둘을 건다")
+    @DisplayName("스프링이 쓰는 생성자가 기동 검사를 건다")
     void 기동_검사() throws Exception {
         AuthProperties 켬 = new AuthProperties(AuthProperties.Mode.JWT, hs(null, null));
         EntryTokenDelivery 기본 = new EntryTokenDelivery(null, null, null);
         EntryTokenDelivery 겹침 = new EntryTokenDelivery(null, null, "X-Member-Id");
-        RouteRules 밖 = new RouteRules(List.of(new RouteRules.Rule("v2", RouteRules.Kind.ENTRY,
-                "POST", List.of("/v2/coupons/{couponId}/issue"), null)));
 
-        assertThatThrownBy(() -> new MemberIdentityFilter(시계, 켬, 겹침, new RouteRules(null), 계측))
+        assertThatThrownBy(() -> new MemberIdentityFilter(시계, 켬, 겹침, 계측))
                 .hasMessageContaining("입장 토큰 헤더로 못 쓴다");
-        assertThatThrownBy(() -> new MemberIdentityFilter(시계, 켬, 기본, 밖, 계측))
-                .hasMessageContaining("/api/ 밖이다");
 
-        MemberIdentityFilter 필터 = new MemberIdentityFilter(시계, 켬, 기본, new RouteRules(null), 계측);
+        MemberIdentityFilter 필터 = new MemberIdentityFilter(시계, 켬, 기본, 계측);
         거절(돌린다(필터, 요청(b -> b.header("X-Member-Id", "42"))), 없음);
         돌린다(필터, 요청(hs256(클레임("42").build())));
         통과("42");

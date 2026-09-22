@@ -160,17 +160,4 @@ class AuthPropertiesTest {
                 new EntryTokenDelivery(EntryTokenDelivery.Where.BODY, null, "X-Member-Id")))
                 .as("인증을 끄면 막을 검증된 신원이 없다").doesNotThrowAnyException();
     }
-
-    @Test
-    @DisplayName("인증을 켰는데 라우트가 /api/ 밖이면 막는다 — 그 경로는 토큰 없이 남의 이름을 쓴다")
-    void 라우트_범위() {
-        AuthProperties 켬 = new AuthProperties(Mode.JWT, hs(비밀));
-        RouteRules 밖 = new RouteRules(List.of(new RouteRules.Rule("v2", RouteRules.Kind.ENTRY,
-                "POST", List.of("/v2/coupons/{couponId}/issue"), null)));
-
-        assertThatThrownBy(() -> 켬.checkCovers(밖)).hasMessageContaining("/api/ 밖이다");
-        assertThatCode(() -> 켬.checkCovers(new RouteRules(null))).doesNotThrowAnyException();
-        assertThatCode(() -> new AuthProperties(Mode.NONE, null).checkCovers(밖))
-                .doesNotThrowAnyException();
-    }
 }

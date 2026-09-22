@@ -198,7 +198,6 @@ waiting:
     mode: ${WAITING_AUTH_MODE:NONE}
     # JWT 일 때만 적는다. 빈 자리를 두면 NONE 에서도 기동이 멈추므로 여기 틀을 안 둔다.
     # 환경 변수로는 WAITING_AUTH_JWT_ALGORITHM 처럼 적는다.
-    # 인증을 켜면 모든 라우트 경로가 /api/ 아래여야 한다. 밖의 경로는 토큰을 안 본다.
     # jwt:
     #   algorithm: RS256        # HS256/384/512 · RS256/384/512 · ES256/384/512. none 은 못 쓴다
     #   secret:                 # HS* 만. HS256 32 · HS384 48 · HS512 64 바이트 이상

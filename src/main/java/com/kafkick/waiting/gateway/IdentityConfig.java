@@ -40,10 +40,8 @@ public class IdentityConfig {
      */
     @Bean
     public QueryCoalescingFilter queryCoalescingFilter(CoalescingProperties props,
-            Clock clock, MeterRegistry meters, AuthProperties auth) {
-        QueryCoalescingFilter filter = auth.mode() == AuthProperties.Mode.JWT
-                ? QueryCoalescingFilter.forVerifiedCredentials(props, clock, meters)
-                : QueryCoalescingFilter.of(props, clock, meters);
+            Clock clock, MeterRegistry meters) {
+        QueryCoalescingFilter filter = QueryCoalescingFilter.of(props, clock, meters);
         // 상한에 닿으면 모으기가 조용히 멎는다. 게이지가 그것을 드러낸다.
         filter.bindMetrics(meters);
         return filter;

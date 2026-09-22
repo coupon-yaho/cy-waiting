@@ -46,6 +46,9 @@ public final class MemberIdentityFilter implements WebFilter {
 
     static final String REJECTED_METRIC = "waiting.auth.rejected";
 
+    /** 이 요청의 토큰을 검증했다는 표식. 뒤의 필터가 설정이 아니라 이 요청을 보고 판단한다. */
+    public static final String VERIFIED = "waiting.identity.verified";
+
     private final ApiError error;
 
     /** 인증을 켰을 때만 있다. 없으면 지금처럼 헤더를 형식만 본다. */
@@ -113,7 +116,7 @@ public final class MemberIdentityFilter implements WebFilter {
                 .onErrorResume(BadJwtException.class, e -> Mono.just(Rejected.INVALID))
                 .onErrorResume(IllegalStateException.class, e -> Mono.just(Rejected.UNAVAILABLE))
                 .flatMap(outcome -> switch (outcome) {
-                    case Verified id -> chain.filter(exchange.mutate().request(r -> r.headers(h -> {
+                    case Verified id -> chain.filter(verified(exchange).mutate().request(r -> r.headers(h -> {
                         h.remove(MEMBER_ID);
                         h.remove(MEMBER_GRADE);
                         h.set(MEMBER_ID, id.member());
@@ -121,6 +124,11 @@ public final class MemberIdentityFilter implements WebFilter {
                     })).build());
                     case Rejected why -> reject(exchange, why);
                 });
+    }
+
+    private ServerWebExchange verified(ServerWebExchange exchange) {
+        exchange.getAttributes().put(VERIFIED, Boolean.TRUE);
+        return exchange;
     }
 
     /** 헤더 모드와 같은 계약을 건다. 토큰이 서명됐다고 뒷단이 모르는 모양을 넘기지 않는다. */

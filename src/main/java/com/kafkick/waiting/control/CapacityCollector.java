@@ -7,9 +7,11 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
@@ -113,6 +115,12 @@ public final class CapacityCollector {
      */
     private final AtomicLong lastDenied = new AtomicLong();
 
+    /** 직전 회차에 과반이 뺐다고 말한 신선한 인스턴스. 이번에 빠지면 풀린 것이라 램프를 다시 태운다. */
+    private Set<String> lastVoted = Set.of();
+
+    /** 끝난 회차에 예산에서 뺀 크레딧. */
+    private final AtomicLong lastEjectedCredit = new AtomicLong();
+
     private CapacityCollector(Duration rampUp, Duration freshness, long floor,
             long perInstanceCap, AllowedDestinations allowed) {
         require(rampUp, "rampUp");
@@ -192,6 +200,13 @@ public final class CapacityCollector {
         deniedThisRound = 0;
         lastDenied.set(0);
         destinationDenied.exited();
+        // 승계는 풀림이 아니다. 남기면 새 리더의 첫 회차에 램프를 다시 탄다.
+        lastVoted = Set.of();
+    }
+
+    /** 끝난 회차에 과반이 뺀 대의 몫이라 예산에서 뺀 크레딧. */
+    public long lastEjectedCredit() {
+        return lastEjectedCredit.get();
     }
 
     /** 마지막 회차에서 보낼 수 있던 인스턴스들. 스냅샷에 실어 전 노드에 보낸다. */
@@ -237,12 +252,37 @@ public final class CapacityCollector {
      * @param now 읽은 시각(초). {@code reportedAt} 과 <b>같은 시계</b>여야 한다
      */
     public long collect(Collection<CapacityReport> reports, long now, int nodes) {
+        return collect(reports, now, nodes, Set.of());
+    }
+
+    /**
+     * @param ejected 클러스터 과반이 뺀 인스턴스. 그 몫은 예산에서 빼고 라우팅 목록에는 남긴다 —
+     *                보낼지는 노드마다 정한다
+     */
+    public long collect(Collection<CapacityReport> reports, long now, int nodes,
+            Set<String> ejected) {
         Map<String, CapacityReport> latest = new HashMap<>();
         for (CapacityReport report : reports) {
             // 버전별 키를 함께 읽으면 같은 인스턴스가 두 번 온다. 세면 두 배다.
             latest.merge(report.instanceId(), report,
                     (a, b) -> a.reportedAt() >= b.reportedAt() ? a : b);
         }
+        Set<String> counted = new HashSet<>();
+        latest.values().stream()
+                .filter(report -> isFresh(report, now) && report.credits() >= 0)
+                .forEach(report -> counted.add(report.instanceId()));
+        Set<String> voted = new HashSet<>(ejected);
+        voted.retainAll(counted);
+        // **풀린 대는 램프를 다시 탄다.** 한 틱에 몫을 돌려주면 방금 앓던 대로 몰린다.
+        for (String id : lastVoted) {
+            if (!voted.contains(id)) {
+                seen.computeIfPresent(id, (key, was) -> new Seen(now, now));
+            }
+        }
+        lastVoted = Set.copyOf(voted);
+        // **전부면 안 뺀다.** 노드마다 다른 대를 빼 합이 전부가 되면 보낼 곳이 0 이다.
+        Set<String> excluded = voted.size() == counted.size() ? Set.of() : voted;
+        long ejectedCredit = 0;
 
         // **라우팅 목록을 같은 회차에서 만든다.** 따로 돌면 합산에 든 인스턴스와
         // 보낼 인스턴스가 갈리고, 그 갈림은 램프 구간에만 나타난다.
@@ -274,7 +314,12 @@ public final class CapacityCollector {
             // 인스턴스가 많고 각자 상한에 가까우면 합이 넘친다. 넘치면 음수가
             // 되어 전역 크레딧이 0 이 된다 — 전면 차단이다.
             long share = usable(report, now);
-            total = saturatedAdd(total, share);
+            // 깎기 전 합에는 남긴다. 배제가 하한 밑으로 만든 부족분은 우리가 만든 것이다.
+            if (excluded.contains(report.instanceId())) {
+                ejectedCredit = saturatedAdd(ejectedCredit, share);
+            } else {
+                total = saturatedAdd(total, share);
+            }
             // 주소를 안 실었거나 허용 밖인 인스턴스는 크레딧에는 들고 라우팅에서만
             // 빠진다. 크레딧에서까지 빼면 그 몫만큼 전역 크레딧이 조용히 줄어,
             // 계약을 아직 안 따르는 배포 구간에 전체가 조여진다.
@@ -284,6 +329,7 @@ public final class CapacityCollector {
                             new InstanceRouting(report.instanceId(), address, share)));
         }
         evictStale(now);
+        lastEjectedCredit.set(ejectedCredit);
         markDeniedWindow();
         publishDenied();
         // **관측이 있었던 회차에서만 태운다.** 한 건도 안 돈 회차가 태우면 다음 회차에

@@ -108,6 +108,9 @@ public final class QueryCoalescingFilter implements GatewayFilter {
     /** 토큰마다 다르다고 뒷단이 말한 경로. 무리를 지으면 토큰 원문이 키가 된다. */
     private final Set<String> credentialVaried = ConcurrentHashMap.newKeySet();
 
+    /** 토큰 갈림으로 흘린 구간을 경로마다 쌍으로 남긴다. 멈춘 때부터 풀린 때까지와 흘린 수가 로그에 남는다. */
+    private final Map<String, FailureWindow> credentialWindows = new ConcurrentHashMap<>();
+
     /** 연속으로 본 선언 수. 한 번이라도 안 오면 0 으로 돌아간다. */
     private final Map<String, AtomicInteger> declaring = new ConcurrentHashMap<>();
 
@@ -167,6 +170,7 @@ public final class QueryCoalescingFilter implements GatewayFilter {
         }
         if (credentialVaried.contains(path) && hasCredential(exchange)) {
             count("skipped", "vary-credential");
+            credentialWindows.computeIfAbsent(path, p -> FailureWindow.create()).entered();
             return passThrough(exchange, chain, path);
         }
         // 범위 요청이 전체를 받거나, 조건부 요청이 조건 없는 200 을 받는다.
@@ -350,8 +354,9 @@ public final class QueryCoalescingFilter implements GatewayFilter {
         }
         byte[] body = join(chunks);
         List<String> learned = keys.learn(path, response.getHeaders());
-        if (variesByCredential(response.getHeaders())) {
-            credentialVaried.add(path);
+        if (variesByCredential(response.getHeaders()) && credentialVaried.add(path)) {
+            credentialWindows.computeIfAbsent(path, p -> FailureWindow.create()).entered();
+            log.warn("토큰 갈림 진입 — {} 의 응답이 Vary: Authorization 이라 토큰을 든 조회를 모으지 않는다", path);
         }
         // **한 번만 만든다.** 응답마다 소문자 사본과 집합을 두세 번 짓는 것은
         // 필터에 준 5ms 예산을 그대로 쓰는 자리다.
@@ -407,7 +412,14 @@ public final class QueryCoalescingFilter implements GatewayFilter {
             learnDeclaration(path, directives(response.getHeaders().getCacheControl()), code);
             // 뒷단이 토큰마다 다르다는 말을 거두면 다시 모은다. 장애 응답으로는 안 배운다.
             if (code < 400 && !variesByCredential(response.getHeaders())) {
-                credentialVaried.remove(path);
+                if (credentialVaried.remove(path)) {
+                    FailureWindow window = credentialWindows.remove(path);
+                    Optional<FailureWindow.Recovered> recovered =
+                            window == null ? Optional.empty() : window.exited();
+                    log.warn("토큰 갈림 해제 — {} 에서 {}초 동안 {}건을 모으지 않고 흘렸다", path,
+                            recovered.map(FailureWindow.Recovered::elapsedSeconds).orElse(0L),
+                            recovered.map(FailureWindow.Recovered::swallowed).orElse(0L));
+                }
             }
             return Mono.empty();
         });

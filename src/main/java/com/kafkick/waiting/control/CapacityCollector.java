@@ -371,25 +371,31 @@ public final class CapacityCollector {
     }
 
     /**
-     * 이번 회차에 예산에서 뺄 인스턴스. <b>전부면 안 뺀다</b> — 노드마다 다른 대를 빼 합이 전부가 되면
-     * 보낼 곳이 0 이다. 전부는 노드의 판정처럼 라우팅할 수 있는 대로 잰다.
+     * 이번 회차에 예산에서 뺄 인스턴스. <b>전부면 안 뺀다</b> — 노드는 보낼 곳이 0 이면 뺀 대를 도로 넣는데,
+     * 예산만 0 이면 한산 통과까지 막힌다. 전부는 노드처럼 몫이 있는 라우팅 가능 대로 잰다.
      */
     private Set<String> excluded(Collection<CapacityReport> reports, long now, Set<String> ejected) {
         Set<String> counted = new HashSet<>();
-        Set<String> routableIds = new HashSet<>();
+        Set<String> serving = new HashSet<>();
+        Set<String> routableServing = new HashSet<>();
         for (CapacityReport report : reports) {
             if (!isFresh(report, now) || report.credits() < 0) {
                 continue;
             }
             counted.add(report.instanceId());
+            if (report.credits() == 0) {
+                continue;
+            }
+            serving.add(report.instanceId());
             if (report.routableAddress().filter(allowed::permits).isPresent()) {
-                routableIds.add(report.instanceId());
+                routableServing.add(report.instanceId());
             }
         }
         Set<String> voted = new HashSet<>(ejected);
         voted.retainAll(counted);
-        Set<String> eligible = routableIds.isEmpty() ? counted : routableIds;
-        if (!voted.isEmpty() && voted.containsAll(eligible)) {
+        // 주소를 싣는 뒷단이 없으면 라우팅이 한 주소로만 가는 배포라 몫이 있는 대 전부로 잰다.
+        Set<String> eligible = routableServing.isEmpty() ? serving : routableServing;
+        if (!voted.isEmpty() && !eligible.isEmpty() && voted.containsAll(eligible)) {
             if (allEjected.entered()) {
                 log.warn("과반이 뺀 뒷단이 보낼 수 있는 대 전부라 예산에서 안 뺀다 — {}대. "
                         + "뒷단 전체의 상태와 서킷을 본다", voted.size());

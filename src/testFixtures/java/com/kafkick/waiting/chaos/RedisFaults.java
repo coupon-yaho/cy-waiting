@@ -178,6 +178,18 @@ public final class RedisFaults implements AutoCloseable {
     }
 
     /**
+     * 프로세스를 얼린다. <b>연결은 산 채로 명령만 매달린다</b> — 죽이면 클라이언트가 끊김을 알아채기
+     * 전에 나간 명령이 리셋을 받아 곧장 실패해, "매달린다" 를 전제로 한 시험이 러너 속도에 갈린다.
+     */
+    public void 얼린다() {
+        container.getDockerClient().pauseContainerCmd(container.getContainerId()).exec();
+    }
+
+    public void 녹인다() {
+        container.getDockerClient().unpauseContainerCmd(container.getContainerId()).exec();
+    }
+
+    /**
      * 다시 뜰 때까지 기다린다.
      *
      * <p>프로브는 <b>제 클라이언트를 매번 닫는다.</b> 목록에 쌓으면 실패한

@@ -120,11 +120,14 @@ class SealFencesWiringTest {
     void 잠금이_시한을_넘기면_문을_연다() {
         SealGate gate = SealGate.of(() -> true);
         Leadership leadership = 리더가_된다();
-        // **잠금 시한은 가상 시간으로 넘긴다.** 레디스가 끊겨 명령은 명령 시한(기다림)까지
+        // **잠금 시한은 가상 시간으로 넘긴다.** 레디스가 얼어 명령은 명령 시한(기다림)까지
         // 매달리므로, 그 전에 문이 열리면 잠금 시한이 연 것이다.
+        //
+        // **죽이지 않고 얼린다** (CY-991). 죽이면 클라이언트가 끊김을 알아채기 전에 나간 명령이
+        // 리셋을 받아 곧장 실패해 문이 시한 전에 열린다 — PIT 처럼 느린 러너에서 그렇게 깨졌다.
         VirtualTimeScheduler 시계 = VirtualTimeScheduler.create();
         Duration 시한 = Duration.ofSeconds(1);
-        faults.끊는다();
+        faults.얼린다();
         try {
             new ControlPlaneConfig().sealFences(port, leadership, gate, 시한, 시계).run();
             assertThat(gate.getAsBoolean()).as("시한 전에는 잠그는 중이다").isFalse();
@@ -133,7 +136,7 @@ class SealFencesWiringTest {
 
             assertThat(gate.getAsBoolean()).as("시한이 지나면 명령 시한을 안 기다리고 연다").isTrue();
         } finally {
-            faults.붙인다();
+            faults.녹인다();
         }
     }
 

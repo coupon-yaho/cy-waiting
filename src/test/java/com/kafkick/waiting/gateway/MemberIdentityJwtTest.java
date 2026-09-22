@@ -16,6 +16,7 @@ import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.PlainJWT;
 import com.nimbusds.jwt.SignedJWT;
 import com.sun.net.httpserver.HttpServer;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyPair;
@@ -67,6 +68,8 @@ class MemberIdentityJwtTest {
 
     private final AtomicReference<HttpHeaders> 넘어간_헤더 = new AtomicReference<>();
 
+    private final SimpleMeterRegistry 계측 = new SimpleMeterRegistry();
+
     private static String hs256(JWTClaimsSet claims) throws Exception {
         return sign(new MACSigner(비밀.getBytes(StandardCharsets.UTF_8)), JWSAlgorithm.HS256, claims);
     }
@@ -108,7 +111,7 @@ class MemberIdentityJwtTest {
     }
 
     private MemberIdentityFilter 필터(Jwt 설정) {
-        return MemberIdentityFilter.jwt(시계, 설정, JwtDecoders.of(설정, 시계));
+        return MemberIdentityFilter.jwt(시계, 설정, JwtDecoders.of(설정, 시계), 계측);
     }
 
     private static Jwt hs(String issuer, String gradeClaim) {
@@ -177,6 +180,8 @@ class MemberIdentityJwtTest {
     @DisplayName("토큰이 없으면 401 이고 무엇을 요구하는지 알린다")
     void 토큰_없음() {
         거절(돌린다(필터(hs(null, null)), 요청(b -> b.header("X-Member-Id", "42"))), 없음);
+        assertThat(계측.counter(MemberIdentityFilter.REJECTED_METRIC, "reason", "missing").count())
+                .isEqualTo(1.0);
     }
 
     @ParameterizedTest(name = "[{index}] {0}")
@@ -213,6 +218,8 @@ class MemberIdentityJwtTest {
                 StandardCharsets.UTF_8)), JWSAlgorithm.HS256, 클레임("42").build());
 
         거절(돌린다(필터(hs(null, null)), 요청(남의_비밀로)), 틀림);
+        assertThat(계측.counter(MemberIdentityFilter.REJECTED_METRIC, "reason", "invalid").count())
+                .isEqualTo(1.0);
     }
 
     @Test
@@ -437,6 +444,8 @@ class MemberIdentityJwtTest {
                     .as("401 이면 클라이언트는 다시 로그인하고, 운영은 장애를 못 본다")
                     .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
             assertThat(넘어간_헤더.get()).isNull();
+            assertThat(계측.counter(MemberIdentityFilter.REJECTED_METRIC, "reason", "unavailable")
+                    .count()).isEqualTo(1.0);
         } finally {
             서버.stop(0);
         }
@@ -470,12 +479,12 @@ class MemberIdentityJwtTest {
         RouteRules 밖 = new RouteRules(List.of(new RouteRules.Rule("v2", RouteRules.Kind.ENTRY,
                 "POST", List.of("/v2/coupons/{couponId}/issue"), null)));
 
-        assertThatThrownBy(() -> new MemberIdentityFilter(시계, 켬, 겹침, new RouteRules(null)))
+        assertThatThrownBy(() -> new MemberIdentityFilter(시계, 켬, 겹침, new RouteRules(null), 계측))
                 .hasMessageContaining("입장 토큰 헤더로 못 쓴다");
-        assertThatThrownBy(() -> new MemberIdentityFilter(시계, 켬, 기본, 밖))
+        assertThatThrownBy(() -> new MemberIdentityFilter(시계, 켬, 기본, 밖, 계측))
                 .hasMessageContaining("/api/ 밖이다");
 
-        MemberIdentityFilter 필터 = new MemberIdentityFilter(시계, 켬, 기본, new RouteRules(null));
+        MemberIdentityFilter 필터 = new MemberIdentityFilter(시계, 켬, 기본, new RouteRules(null), 계측);
         거절(돌린다(필터, 요청(b -> b.header("X-Member-Id", "42"))), 없음);
         돌린다(필터, 요청(hs256(클레임("42").build())));
         통과("42");

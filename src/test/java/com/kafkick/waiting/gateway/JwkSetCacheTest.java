@@ -144,6 +144,28 @@ class JwkSetCacheTest {
     }
 
     @Test
+    @DisplayName("발급자가 돌아오면 새로 받은 것으로 바꾼다")
+    void 회복() throws Exception {
+        응답.set(Mono.just(집합("k1")));
+        키("k1");
+        응답.set(Mono.error(new IllegalStateException("발급자 장애")));
+        흐른다(JwkSetCache.TTL);
+        키("k1");
+        응답.set(Mono.just(집합("k2")));
+        흐른다(JwkSetCache.MIN_INTERVAL);
+
+        assertThat(키("k2")).containsExactly("k2");
+    }
+
+    @Test
+    @DisplayName("본문이 키 집합이 아니면 오류다")
+    void 깨진_본문() {
+        응답.set(Mono.just("not json"));
+
+        assertThatThrownBy(() -> 키("k1")).hasMessageContaining("키 집합을 못 읽었다");
+    }
+
+    @Test
     @DisplayName("버티는 것은 마지막으로 받은 뒤 한 시간까지다 — 발급자를 끊어 뺀 키를 살려 두지 못하게")
     void 버티는_한도() throws Exception {
         응답.set(Mono.just(집합("k1")));

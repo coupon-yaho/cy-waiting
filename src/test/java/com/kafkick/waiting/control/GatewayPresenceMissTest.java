@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.kafkick.waiting.adapter.redis.GatewayRedisPort;
 import com.kafkick.waiting.domain.admission.CircuitState;
+import com.kafkick.waiting.domain.routing.InstanceOutliers;
 import com.kafkick.waiting.gateway.CircuitStateReader;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import org.junit.jupiter.api.DisplayName;
@@ -76,7 +77,8 @@ class GatewayPresenceMissTest {
                 GatewayRedisPort.of(new ReactiveStringRedisTemplate(끊긴_연결())), registry,
                 ControlPlaneProperties.defaults(),
                 CircuitStateReader.of(CircuitBreakerRegistry.ofDefaults(), "backend"),
-                new StaticListableBeanFactory().getBeanProvider(PassRateSource.class));
+                new StaticListableBeanFactory().getBeanProvider(PassRateSource.class),
+                new StaticListableBeanFactory().getBeanProvider(InstanceOutliers.class));
         VirtualTimeScheduler 시계 = VirtualTimeScheduler.create();
         try {
             loop.start(시계);

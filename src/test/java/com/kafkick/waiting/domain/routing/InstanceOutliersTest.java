@@ -887,4 +887,44 @@ class InstanceOutliersTest {
 
         assertThat(outliers.recoveryRemaining("가", 1_000 + 배제_시간.toMillis())).isZero();
     }
+
+    /** 하트비트에 실을 값이다. 지난 목록에 없는 대는 이미 떠난 대라 싣지 않는다. */
+    @Test
+    @DisplayName("지금_뺀_대를_마지막_목록_안에서_낸다")
+    void 지금_뺀_대를_마지막_목록_안에서_낸다() {
+        InstanceOutliers outliers = 배제기();
+        outliers.retain(Set.of("가", "나", "다"), 1_000);
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 1_000);
+            outliers.failed("라", 1_000);
+        }
+
+        assertThat(outliers.ejectedNow(1_000)).containsExactly("가");
+    }
+
+    @Test
+    @DisplayName("전부가_대상이면_아무것도_안_낸다")
+    void 전부가_대상이면_아무것도_안_낸다() {
+        InstanceOutliers outliers = 배제기();
+        outliers.retain(Set.of("가", "나"), 1_000);
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 1_000);
+            outliers.failed("나", 1_000);
+        }
+
+        assertThat(outliers.ejectedNow(1_000)).isEmpty();
+    }
+
+    /** 되돌리는 중인 대는 안 싣는다. 그 몫은 수집의 램프가 맡는다. */
+    @Test
+    @DisplayName("배제_창이_지나면_안_낸다")
+    void 배제_창이_지나면_안_낸다() {
+        InstanceOutliers outliers = 배제기();
+        outliers.retain(Set.of("가", "나"), 1_000);
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 1_000);
+        }
+
+        assertThat(outliers.ejectedNow(1_000 + 배제_시간.toMillis() + 1)).isEmpty();
+    }
 }

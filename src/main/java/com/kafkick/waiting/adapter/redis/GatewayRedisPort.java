@@ -1,8 +1,12 @@
 package com.kafkick.waiting.adapter.redis;
 
 import com.kafkick.waiting.domain.admission.CircuitState;
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.regex.Pattern;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
@@ -42,13 +46,44 @@ public final class GatewayRedisPort {
      * @param reapAfterSec 이보다 오래된 항목은 지운다. 시각은 레디스가 찍는다
      * @param voteFreshSec 표를 인정하는 신선도. 분모의 임계보다 훨씬 짧다
      */
+    /** 배제 목록을 안 싣는다 — 라우팅이 꺼진 노드의 모양이다. 켜진 노드가 부르면 뺀 대의 몫이 예산에 남는다. */
     public Mono<Presence> beat(String instanceId, long reapAfterSec, long voteFreshSec,
             CircuitState circuit, long passedPerSec) {
+        return beat(instanceId, reapAfterSec, voteFreshSec, circuit, passedPerSec, null);
+    }
+
+    /** @param ejected 이 노드가 뺀 인스턴스. null 이면 안 싣는다 — 라우팅이 꺼진 노드다 */
+    public Mono<Presence> beat(String instanceId, long reapAfterSec, long voteFreshSec,
+            CircuitState circuit, long passedPerSec, Collection<String> ejected) {
         return redis.execute(BEAT, List.of(RedisKeys.INSTANCES),
                         List.of(instanceId, Long.toString(reapAfterSec), circuit.name(),
-                                Long.toString(voteFreshSec), passArg(passedPerSec)))
+                                Long.toString(voteFreshSec), passArg(passedPerSec),
+                                ejectArg(ejected)))
                 .next()
                 .map(this::presence);
+    }
+
+    /** 스크립트의 상한과 같아야 한다. */
+    private static final int MAX_EJECT = 32;
+
+    /** 스크립트가 받는 이름과 길이 상한. 이 문자들은 한 바이트라 글자 수가 곧 바이트 수다. */
+    private static final Pattern EJECT_ID = Pattern.compile("[A-Za-z0-9._:-]{1,64}");
+
+    /**
+     * 스크립트가 거절할 이름은 버리고 이름순 앞에서 상한까지만 보낸다. <b>자르지 않는다</b> —
+     * 자르면 다른 인스턴스가 된다. 이름순이라 잘리는 것이 매 틱 같다.
+     */
+    String ejectArg(Collection<String> ejected) {
+        if (ejected == null) {
+            return "";
+        }
+        List<String> ids = ejected.stream()
+                .filter(id -> id != null && EJECT_ID.matcher(id).matches())
+                .distinct()
+                .sorted()
+                .limit(MAX_EJECT)
+                .toList();
+        return ids.isEmpty() ? "," : "," + String.join(",", ids) + ",";
     }
 
     /** 노드 하나가 실을 수 있는 상한. 스크립트의 상한과 같아야 한다. */
@@ -64,8 +99,10 @@ public final class GatewayRedisPort {
         return passedPerSec < 0 ? "" : Long.toString(Math.min(passedPerSec, MAX_PASS));
     }
 
-    /** 스크립트가 돌려주는 칸 수. 이 수가 어긋나면 파서와 스크립트가 갈린 것이다. */
-    private static final int BEAT_FIELDS = 7;
+    /** 스크립트가 돌려주는 머리 칸 수. 뒤로 (인스턴스, 표) 쌍이 붙는다. */
+    private static final int BEAT_HEAD = 8;
+
+    private static final int MAX_RETURNED_PAIRS = 64;
 
     /**
      * <b>칸 수를 검증한다.</b> 스크립트와 이 파서가 갈린 것을 기동 직후에 드러내는
@@ -74,16 +111,28 @@ public final class GatewayRedisPort {
      */
     Presence presence(Object raw) {
         List<?> v = (List<?>) raw;
-        if (v.size() != BEAT_FIELDS) {
+        int tail = v.size() - BEAT_HEAD;
+        if (tail < 0 || tail % 2 != 0 || tail / 2 > MAX_RETURNED_PAIRS) {
             throw new IllegalStateException(
-                    "하트비트가 %d 칸을 줘야 한다: %d".formatted(BEAT_FIELDS, v.size()));
+                    "하트비트가 %d 칸 머리와 짝수 꼬리를 줘야 한다: %d".formatted(BEAT_HEAD, v.size()));
         }
-        int[] at = new int[BEAT_FIELDS];
-        for (int i = 0; i < BEAT_FIELDS; i++) {
-            at[i] = (int) ((Number) v.get(i)).longValue();
+        int[] at = new int[BEAT_HEAD];
+        for (int i = 0; i < BEAT_HEAD; i++) {
+            at[i] = number(v.get(i));
+        }
+        Map<String, Integer> votes = new HashMap<>();
+        for (int i = BEAT_HEAD; i < v.size(); i += 2) {
+            votes.put(String.valueOf(v.get(i)), number(v.get(i + 1)));
         }
         // 둘째 칸은 서버 시각이라 여기서 안 쓴다.
-        return new Presence(at[0], at[2], at[3], at[4], at[5], at[6]);
+        return new Presence(at[0], at[2], at[3], at[4], at[5], at[6], at[7], votes);
+    }
+
+    private int number(Object raw) {
+        if (raw instanceof Number n) {
+            return (int) n.longValue();
+        }
+        throw new IllegalStateException("하트비트의 수 칸이 수가 아니다: " + raw);
     }
 
     /**
@@ -98,9 +147,17 @@ public final class GatewayRedisPort {
      * @param reported 표를 낸 수. 아직 읽는 곳이 없다
      * @param passed   전 노드가 초당 뒷단으로 보낸 수의 합. 회복 봉우리를 잴 재료다
      * @param passReported 그 합에 기여한 수. alive 보다 작으면 합이 "모름" 이다
+     * @param ejectReported 뺀 인스턴스 목록을 실은 수. 판정의 분모가 아니다
+     * @param ejectVotes    인스턴스마다 그것을 뺀 노드 수
      */
     public record Presence(int alive, int open, int halfOpen, int reported, int passed,
-            int passReported) {
+            int passReported, int ejectReported, Map<String, Integer> ejectVotes) {
+
+        /** 배제를 아무도 안 실은 회차. */
+        public static Presence withoutEjection(int alive, int open, int halfOpen, int reported,
+                int passed, int passReported) {
+            return new Presence(alive, open, halfOpen, reported, passed, passReported, 0, Map.of());
+        }
 
         // **스크립트가 못 내는 조합을 픽스처가 만들면 안 된다.** 표를 낸
         // 수가 산 수보다 많은 상태로 배선을 재면, 그 시험은 없는 클러스터를 짚는다.
@@ -115,6 +172,17 @@ public final class GatewayRedisPort {
             if (passReported < 0 || passReported > alive) {
                 throw new IllegalArgumentException(
                         "통과 수를 실은 수는 산 수를 못 넘는다: %d/%d".formatted(passReported, alive));
+            }
+            if (ejectReported < 0 || ejectReported > alive) {
+                throw new IllegalArgumentException(
+                        "배제를 실은 수는 산 수를 못 넘는다: %d/%d".formatted(ejectReported, alive));
+            }
+            ejectVotes = Map.copyOf(ejectVotes);
+            for (int n : ejectVotes.values()) {
+                if (n < 1 || n > ejectReported) {
+                    throw new IllegalArgumentException(
+                            "배제 표는 1..%d 이어야 한다: %d".formatted(ejectReported, n));
+                }
             }
         }
     }

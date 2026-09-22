@@ -3,9 +3,12 @@ package com.kafkick.waiting.control;
 import com.kafkick.waiting.adapter.redis.GatewayRedisPort;
 import com.kafkick.waiting.adapter.redis.GatewayRedisPort.Presence;
 import com.kafkick.waiting.domain.admission.CircuitState;
+import com.kafkick.waiting.domain.routing.InstanceOutliers;
 import com.kafkick.waiting.gateway.CircuitStateReader;
 import java.time.Duration;
+import java.util.Collection;
 import java.util.function.Function;
+import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
@@ -44,7 +47,8 @@ public class GatewayPresenceConfig {
     @Bean
     GatewayHeartbeatLoop gatewayHeartbeatLoop(GatewayRedisPort port,
             GatewayRegistry registry, ControlPlaneProperties properties,
-            CircuitStateReader circuit, ObjectProvider<PassRateSource> passRate) {
+            CircuitStateReader circuit, ObjectProvider<PassRateSource> passRate,
+            ObjectProvider<InstanceOutliers> outliers) {
         String instanceId = Leadership.newOwnerId();
         long reapAfterSec = properties.capacity().freshness().toSeconds();
         long voteFreshSec = voteFreshSec(properties.scheduler().tick(), reapAfterSec);
@@ -52,8 +56,8 @@ public class GatewayPresenceConfig {
                 // **판정 필터가 없어도 돈다.** 이 루프는 그 빈보다 먼저 서고,
                 // 판정 필터가 아직 없으면 "모름" 을 싣는다 — 0 으로 실으면 안 잰
                 // 노드가 잰 노드로 세어져 합이 모자란 것을 못 안다.
-                beatStep(state -> port.beat(instanceId, reapAfterSec, voteFreshSec, state,
-                                passed(passRate)),
+                beatStep(beatCall(port::beat, instanceId, reapAfterSec, voteFreshSec, passRate,
+                                outliers, System::currentTimeMillis),
                         circuit::now, registry),
                 () -> port.leave(instanceId),
                 registry::observed,
@@ -84,7 +88,29 @@ public class GatewayPresenceConfig {
             // 통과 수에는 분모 같은 유지 근거가 없다. 낡은 값을 "지금" 이라는
             // 이름으로 내보내면 장애 내내 지나간 부하를 보고한다.
             registry.passUnknown();
+            registry.ejectionMissed();
         };
+    }
+
+    /** 하트비트 한 번의 인자. 포트의 여섯 인자 호출과 같은 모양이다. */
+    @FunctionalInterface
+    interface BeatPort {
+        Mono<Presence> beat(String instanceId, long reapAfterSec, long voteFreshSec,
+                CircuitState circuit, long passedPerSec, Collection<String> ejected);
+    }
+
+    /** 빈이 쓰는 호출을 시험이 그대로 부르게 뺐다. 인자 하나가 빠지면 그 관측이 조용히 사라진다. */
+    Function<CircuitState, Mono<Presence>> beatCall(BeatPort port, String instanceId,
+            long reapAfterSec, long voteFreshSec, ObjectProvider<PassRateSource> passRate,
+            ObjectProvider<InstanceOutliers> outliers, LongSupplier nowMillis) {
+        return state -> port.beat(instanceId, reapAfterSec, voteFreshSec, state,
+                passed(passRate), ejected(outliers, nowMillis.getAsLong()));
+    }
+
+    /** 이 노드가 지금 뺀 대. 라우팅이 꺼져 배제기가 없으면 null 로 안 싣는다 — 빈 목록과 다르다. */
+    Collection<String> ejected(ObjectProvider<InstanceOutliers> outliers, long nowMillis) {
+        InstanceOutliers source = outliers.getIfAvailable();
+        return source == null ? null : source.ejectedNow(nowMillis);
     }
 
     /** 이 노드가 최근에 뒷단으로 보낸 초당 수. 아직 안 붙었으면 음수("모름")다. */
@@ -105,6 +131,7 @@ public class GatewayPresenceConfig {
                         seen.halfOpen()))
                 .doOnNext(seen -> registry.passObserved(seen.passed(), seen.passReported(),
                         seen.alive()))
+                .doOnNext(seen -> registry.ejectionObserved(seen.alive(), seen.ejectVotes()))
                 .map(Presence::alive);
     }
 }

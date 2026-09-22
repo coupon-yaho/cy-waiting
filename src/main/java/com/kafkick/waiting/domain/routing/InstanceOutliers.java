@@ -125,6 +125,11 @@ public final class InstanceOutliers {
         return out.size() == live.size() ? Set.of() : out;
     }
 
+    /** 하트비트에 실을 값. 지난 목록 안에서만 내고, 되돌리는 중인 대는 안 낸다. */
+    public Set<String> ejectedNow(long nowMillis) {
+        return ejected(lastSeen, nowMillis);
+    }
+
     /**
      * 되돌리는 중이면 아직 안 받아야 할 몫. <b>배제가 풀리는 순간이 절벽이다</b> —
      * 트래픽이 0 이었으니 물린 건수도 0 이라 부하율로 고르면 돌아오는 순간 전량을

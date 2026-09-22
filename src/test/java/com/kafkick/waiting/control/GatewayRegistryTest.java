@@ -3,6 +3,12 @@ package com.kafkick.waiting.control;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.LoggerContext;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -10,6 +16,7 @@ import java.util.concurrent.TimeUnit;
 import com.kafkick.waiting.domain.admission.CircuitState;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 
 /**
  * 배분의 분모.
@@ -297,5 +304,151 @@ class GatewayRegistryTest {
         registry.circuitMissed(CircuitState.OPEN);
 
         assertThat(registry.circuit()).isEqualTo(CircuitState.CLOSED);
+    }
+
+    @Test
+    @DisplayName("관측_전에는_아무것도_안_뺀다")
+    void 관측_전에는_아무것도_안_뺀다() {
+        assertThat(registry().clusterEjected()).isEmpty();
+    }
+
+    /** 빼는 쪽은 예산을 줄이는 방향이라 즉시다. 늦으면 남은 대가 뺀 대의 몫까지 받는다. */
+    @Test
+    @DisplayName("배제는_조이는_방향으로_즉시_반영한다")
+    void 배제는_조이는_방향으로_즉시_반영한다() {
+        GatewayRegistry registry = registry();
+
+        registry.ejectionObserved(3, Map.of("x", 2));
+
+        assertThat(registry.clusterEjected()).containsExactly("x");
+    }
+
+    /** 푸는 쪽은 연속 관측 뒤다. 한 틱 만에 풀면 표 하나가 늦는 것만으로 몫이 들락거린다. */
+    @Test
+    @DisplayName("배제_해제는_연속_관측_뒤에_반영한다")
+    void 배제_해제는_연속_관측_뒤에_반영한다() {
+        GatewayRegistry registry = registry();
+        registry.ejectionObserved(3, Map.of("x", 2));
+
+        for (int i = 0; i < RAMP_DOWN - 1; i++) {
+            registry.ejectionObserved(3, Map.of());
+            assertThat(registry.clusterEjected()).as("%d 번째", i + 1).containsExactly("x");
+        }
+        registry.ejectionObserved(3, Map.of());
+
+        assertThat(registry.clusterEjected()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("해제_도중에_다시_과반이면_연속이_끊긴다")
+    void 해제_도중에_다시_과반이면_연속이_끊긴다() {
+        GatewayRegistry registry = registry();
+        registry.ejectionObserved(3, Map.of("x", 2));
+        registry.ejectionObserved(3, Map.of());
+        registry.ejectionObserved(3, Map.of());
+
+        registry.ejectionObserved(3, Map.of("x", 2));
+        registry.ejectionObserved(3, Map.of());
+        registry.ejectionObserved(3, Map.of());
+
+        assertThat(registry.clusterEjected()).containsExactly("x");
+    }
+
+    /** 레디스가 잠깐 끊겨도 바로 버리지 않는다. 한 틱에 뺀 몫이 돌아오면 그 대로 몰린다. */
+    @Test
+    @DisplayName("하트비트를_놓쳐도_배제를_바로_안_버린다")
+    void 하트비트를_놓쳐도_배제를_바로_안_버린다() {
+        GatewayRegistry registry = registry();
+        registry.ejectionObserved(3, Map.of("x", 2));
+
+        registry.ejectionMissed();
+
+        assertThat(registry.clusterEjected()).containsExactly("x");
+    }
+
+    /** 영영 지키면 레디스 장애가 예산을 계속 깎는다. 이 판단은 원래 없던 것이다. */
+    @Test
+    @DisplayName("연속으로_놓치면_배제를_푼다")
+    void 연속으로_놓치면_배제를_푼다() {
+        GatewayRegistry registry = registry();
+        registry.ejectionObserved(3, Map.of("x", 2));
+
+        for (int i = 0; i < RAMP_DOWN; i++) {
+            registry.ejectionMissed();
+        }
+
+        assertThat(registry.clusterEjected()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("배제_진입과_해제를_쌍으로_남긴다")
+    void 배제_진입과_해제를_쌍으로_남긴다() {
+        Logger logger = ((LoggerContext) LoggerFactory.getILoggerFactory())
+                .getLogger(GatewayRegistry.class);
+        ListAppender<ILoggingEvent> 로그 = new ListAppender<>();
+        로그.start();
+        logger.addAppender(로그);
+        try {
+            GatewayRegistry registry = registry();
+            registry.ejectionObserved(3, Map.of("x", 2));
+            registry.ejectionObserved(3, Map.of("x", 3));
+            for (int i = 0; i < RAMP_DOWN; i++) {
+                registry.ejectionObserved(3, Map.of());
+            }
+        } finally {
+            logger.detachAppender(로그);
+        }
+
+        assertThat(로그.list).filteredOn(줄 -> 줄.getFormattedMessage().contains("instance=x"))
+                .extracting(ILoggingEvent::getLevel)
+                .containsExactly(Level.WARN, Level.INFO);
+        // 몇 대 중 몇 대가 뺐는지가 판단 근거다. 없으면 로그만 보고 경계인지 전면인지 모른다.
+        assertThat(로그.list.get(0).getFormattedMessage()).contains("votes=2", "alive=3");
+        assertThat(로그.list.get(1).getFormattedMessage()).contains("과반이 더는 안 뺀다");
+    }
+
+    /** 놓쳐서 푼 것과 회복해서 푼 것을 가른다. 레디스 순단 뒤의 해제가 회복처럼 읽히면 안 된다. */
+    @Test
+    @DisplayName("놓쳐서_푼_배제는_이유를_남긴다")
+    void 놓쳐서_푼_배제는_이유를_남긴다() {
+        Logger logger = ((LoggerContext) LoggerFactory.getILoggerFactory())
+                .getLogger(GatewayRegistry.class);
+        ListAppender<ILoggingEvent> 로그 = new ListAppender<>();
+        로그.start();
+        logger.addAppender(로그);
+        try {
+            GatewayRegistry registry = registry();
+            registry.ejectionObserved(3, Map.of("x", 2));
+            for (int i = 0; i < RAMP_DOWN; i++) {
+                registry.ejectionMissed();
+            }
+        } finally {
+            logger.detachAppender(로그);
+        }
+
+        assertThat(로그.list).filteredOn(줄 -> 줄.getLevel() == Level.INFO)
+                .singleElement()
+                .extracting(ILoggingEvent::getFormattedMessage)
+                .asString().contains("instance=x", "하트비트를 놓쳐");
+    }
+
+    /** 뒷단이 정하는 이름이다. 제어문자로 로그 줄을 꾸미지 못하게 한다. */
+    @Test
+    @DisplayName("로그의_인스턴스_이름에서_제어문자를_지운다")
+    void 로그의_인스턴스_이름에서_제어문자를_지운다() {
+        Logger logger = ((LoggerContext) LoggerFactory.getILoggerFactory())
+                .getLogger(GatewayRegistry.class);
+        ListAppender<ILoggingEvent> 로그 = new ListAppender<>();
+        로그.start();
+        logger.addAppender(로그);
+        try {
+            registry().ejectionObserved(1, Map.of("a\tb\u001b[31m\u2028c\nd", 1));
+        } finally {
+            logger.detachAppender(로그);
+        }
+
+        assertThat(로그.list.get(0).getFormattedMessage())
+                .contains("instance=a_b_[31m_c_d")
+                .doesNotContain("\t", "\u001b", "\u2028", "\n");
     }
 }

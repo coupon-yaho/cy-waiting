@@ -4,7 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -68,6 +70,30 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
         return (List<Object>) redis.execute(heartbeat, List.of(INSTANCES),
                         List.of(instanceId, reapAfter, circuit, voteFresh, passRate))
                 .blockFirst(WAIT);
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Object> beat(String instanceId, String eject) {
+        return (List<Object>) redis.execute(heartbeat, List.of(INSTANCES),
+                        List.of(instanceId, REAP_AFTER, "CLOSED", VOTE_FRESH, "0", eject))
+                .blockFirst(WAIT);
+    }
+
+    private int ejectReported(List<Object> r) {
+        return at(r, 7);
+    }
+
+    /** 꼬리의 (인스턴스, 표) 쌍. 순서를 지켜 읽는다. */
+    private Map<String, Integer> ejectVotes(List<Object> r) {
+        Map<String, Integer> votes = new LinkedHashMap<>();
+        for (int i = 8; i < r.size(); i += 2) {
+            votes.put(String.valueOf(r.get(i)), at(r, i + 1));
+        }
+        return votes;
+    }
+
+    private String ejectOf(String instanceId) {
+        return redis.<String, String>opsForHash().get(INSTANCES, "#e:" + instanceId).block(WAIT);
     }
 
     private long passed(List<Object> r) {
@@ -188,6 +214,7 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
     @DisplayName("마지막_노드가_나가면_표도_안_남는다")
     void 마지막_노드가_나가면_표도_안_남는다() {
         beat("only", REAP_AFTER, "OPEN", VOTE_FRESH, "40");
+        beat("only", ",x,");
 
         redis.execute(leave, List.of(INSTANCES), List.of("only")).blockFirst(WAIT);
 
@@ -596,5 +623,176 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
 
         assertThat(passed(seen)).isEqualTo(25);
         assertThat(passReported(seen)).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("배제_목록을_노드별_field_에_싣는다")
+    void 배제_목록을_노드별_field_에_싣는다() {
+        beat("a", ",x,y,");
+
+        assertThat(ejectOf("a")).isEqualTo(",x,y,");
+    }
+
+    /** 안 실은 노드는 빈 목록이 아니라 없는 것이다. 롤아웃 중 옛 노드와 라우팅이 꺼진 노드다. */
+    @Test
+    @DisplayName("배제_목록을_안_보내면_field_를_지운다")
+    void 배제_목록을_안_보내면_field_를_지운다() {
+        beat("a", ",x,");
+
+        List<Object> r = beat("a", "");
+
+        assertThat(redis.opsForHash().hasKey(INSTANCES, "#e:a").block(WAIT)).isFalse();
+        assertThat(ejectReported(r)).isZero();
+        assertThat(r).hasSize(8);
+    }
+
+    @Test
+    @DisplayName("빈_배제_목록도_실은_것으로_센다")
+    void 빈_배제_목록도_실은_것으로_센다() {
+        List<Object> r = beat("a", ",");
+
+        assertThat(ejectReported(r)).isEqualTo(1);
+        assertThat(ejectVotes(r)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("인스턴스별_배제_표_수를_돌려준다")
+    void 인스턴스별_배제_표_수를_돌려준다() {
+        beat("a", ",x,y,");
+        beat("b", ",x,");
+
+        List<Object> r = beat("c", "");
+
+        assertThat(alive(r)).isEqualTo(3);
+        assertThat(ejectReported(r)).isEqualTo(2);
+        assertThat(ejectVotes(r)).containsExactly(Map.entry("x", 2), Map.entry("y", 1));
+    }
+
+    @Test
+    @DisplayName("한_노드가_같은_인스턴스를_두_번_실어도_한_표다")
+    void 한_노드가_같은_인스턴스를_두_번_실어도_한_표다() {
+        assertThat(ejectVotes(beat("a", ",x,x,"))).containsExactly(Map.entry("x", 1));
+    }
+
+    @Test
+    @DisplayName("죽은_노드의_배제_표는_안_센다")
+    void 죽은_노드의_배제_표는_안_센다() {
+        redis.<String, String>opsForHash().put(INSTANCES, "dead", "1").block(WAIT);
+        redis.<String, String>opsForHash().put(INSTANCES, "#e:dead", ",x,").block(WAIT);
+
+        List<Object> r = beat("a", ",");
+
+        assertThat(ejectVotes(r)).isEmpty();
+        assertThat(ejectReported(r)).isEqualTo(1);
+        assertThat(redis.opsForHash().hasKey(INSTANCES, "#e:dead").block(WAIT)).isFalse();
+    }
+
+    /** 죽어 가는 노드의 마지막 배제가 임계만큼 살면 그 시간 내내 멀쩡한 대의 몫이 빠진다. */
+    @Test
+    @DisplayName("낡은_배제_표는_안_센다")
+    void 낡은_배제_표는_안_센다() {
+        long now = stamped(beat("a", ","));
+        redis.<String, String>opsForHash()
+                .put(INSTANCES, "stale", String.valueOf(now - 10)).block(WAIT);
+        redis.<String, String>opsForHash().put(INSTANCES, "#e:stale", ",x,").block(WAIT);
+
+        List<Object> r = beat("a", ",");
+
+        assertThat(alive(r)).as("분모에는 들어간다").isEqualTo(2);
+        assertThat(ejectVotes(r)).isEmpty();
+        assertThat(ejectReported(r)).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("주인_없는_배제_목록은_지운다")
+    void 주인_없는_배제_목록은_지운다() {
+        redis.<String, String>opsForHash().put(INSTANCES, "#e:gone", ",x,").block(WAIT);
+
+        beat("a", ",");
+
+        assertThat(redis.opsForHash().hasKey(INSTANCES, "#e:gone").block(WAIT)).isFalse();
+    }
+
+    @Test
+    @DisplayName("표가_많은_인스턴스가_먼저_오고_같으면_이름순이다")
+    void 표가_많은_인스턴스가_먼저_오고_같으면_이름순이다() {
+        beat("a", ",z,y,");
+        beat("b", ",y,");
+
+        List<Object> r = beat("c", ",x,z,");
+
+        assertThat(ejectVotes(r)).containsExactly(
+                Map.entry("y", 2), Map.entry("z", 2), Map.entry("x", 1));
+    }
+
+    /** 반환은 노드 수와 무관하게 묶인다. 잘린 것은 덜 빼는 쪽이다. */
+    @Test
+    @DisplayName("돌려주는_인스턴스에_상한이_있다")
+    void 돌려주는_인스턴스에_상한이_있다() {
+        for (String node : List.of("a", "b", "c")) {
+            StringBuilder list = new StringBuilder(",");
+            for (int i = 0; i < 32; i++) {
+                list.append(node).append(String.format("%02d", i)).append(',');
+            }
+            beat(node, list.toString());
+        }
+
+        Map<String, Integer> votes = ejectVotes(beat("c", ","));
+
+        assertThat(votes).hasSize(64);
+        assertThat(votes.keySet()).first().isEqualTo("a00");
+        assertThat(votes.keySet()).last().isEqualTo("b31");
+    }
+
+    @Test
+    @DisplayName("배제_목록은_쉼표로_감싸야_한다")
+    void 배제_목록은_쉼표로_감싸야_한다() {
+        assertThatThrownBy(() -> beat("a", "x,y"))
+                .hasRootCauseMessage("배제 목록은 쉼표로 감싸야 한다: x,y");
+    }
+
+    @Test
+    @DisplayName("배제_목록이_상한을_넘으면_거절한다")
+    void 배제_목록이_상한을_넘으면_거절한다() {
+        StringBuilder list = new StringBuilder(",");
+        for (int i = 0; i < 33; i++) {
+            list.append('i').append(i).append(',');
+        }
+
+        assertThatThrownBy(() -> beat("a", list.toString()))
+                .hasRootCauseMessage("배제 목록은 32 개까지다: 33");
+    }
+
+    @Test
+    @DisplayName("너무_긴_인스턴스_이름은_거절한다")
+    void 너무_긴_인스턴스_이름은_거절한다() {
+        String longId = "x".repeat(65);
+
+        assertThatThrownBy(() -> beat("a", "," + longId + ","))
+                .hasRootCauseMessage("배제한 인스턴스 이름은 64 바이트까지다: 65");
+    }
+
+    /** 옛 스크립트는 이 field 를 노드 항목으로 읽는다. 시각으로 읽히면 없는 노드가 분모에 든다. */
+    @Test
+    @DisplayName("배제_목록은_옛_파서가_시각으로_못_읽는다")
+    void 배제_목록은_옛_파서가_시각으로_못_읽는다() {
+        beat("a", ",1700000000,");
+
+        String stored = ejectOf("a");
+
+        assertThat(stored).isEqualTo(",1700000000,");
+        assertThat(stored).as("tonumber 가 nil 을 낸다").startsWith(",");
+    }
+
+    @Test
+    @DisplayName("해제하면_배제_목록도_빠진다")
+    void 해제하면_배제_목록도_빠진다() {
+        beat("a", ",x,");
+        beat("b", ",");
+
+        Long removed = redis.execute(leave, List.of(INSTANCES), List.of("a")).blockFirst(WAIT);
+
+        assertThat(removed).as("항목·표·통과 수·배제").isEqualTo(4);
+        assertThat(redis.opsForHash().hasKey(INSTANCES, "#e:a").block(WAIT)).isFalse();
     }
 }

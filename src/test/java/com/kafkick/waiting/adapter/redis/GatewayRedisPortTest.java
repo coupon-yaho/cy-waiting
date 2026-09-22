@@ -6,7 +6,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.kafkick.waiting.control.GatewayHeartbeatLoop;
 import com.kafkick.waiting.domain.admission.CircuitState;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -154,7 +156,7 @@ class GatewayRedisPortTest extends RedisContainerSupport {
         // 롤백 구간에서 옛 스크립트가 돌려주는 모양이다.
         assertThatThrownBy(() -> port.presence(List.of(3L, 1_700_000_000L, 1L)))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("7 칸");
+                .hasMessageContaining("8 칸");
     }
 
     /** 칸 수가 맞으면 자리대로 읽는다. 순서를 바꾸면 여기가 빨개진다. */
@@ -162,7 +164,7 @@ class GatewayRedisPortTest extends RedisContainerSupport {
     @DisplayName("칸_수가_맞으면_자리대로_읽는다")
     void 칸_수가_맞으면_자리대로_읽는다() {
         GatewayRedisPort.Presence seen =
-                port.presence(List.of(9L, 1_700_000_000L, 3L, 2L, 7L, 55L, 6L));
+                port.presence(List.of(9L, 1_700_000_000L, 3L, 2L, 7L, 55L, 6L, 0L));
 
         assertThat(seen).isEqualTo(new GatewayRedisPort.Presence(9, 3, 2, 7, 55, 6));
     }
@@ -223,5 +225,91 @@ class GatewayRedisPortTest extends RedisContainerSupport {
 
         assertThat(잰_영.passReported()).as("0 을 잰 것은 실린다").isEqualTo(1);
         assertThat(잰_영.passed()).isZero();
+    }
+
+    @Test
+    @DisplayName("배제_표를_인스턴스별로_읽는다")
+    void 배제_표를_인스턴스별로_읽는다() {
+        GatewayRedisPort.Presence seen = port.presence(
+                List.of(9L, 1_700_000_000L, 3L, 2L, 7L, 55L, 6L, 4L, "x", 3L, "y", 1L));
+
+        assertThat(seen).isEqualTo(
+                new GatewayRedisPort.Presence(9, 3, 2, 7, 55, 6, 4, Map.of("x", 3, "y", 1)));
+    }
+
+    @Test
+    @DisplayName("꼬리가_홀수면_거절한다")
+    void 꼬리가_홀수면_거절한다() {
+        assertThatThrownBy(() -> port.presence(
+                List.of(9L, 1_700_000_000L, 0L, 0L, 9L, 0L, 0L, 4L, "x")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("짝");
+    }
+
+    @Test
+    @DisplayName("산_수보다_많은_배제_표는_못_만든다")
+    void 산_수보다_많은_배제_표는_못_만든다() {
+        assertThatThrownBy(() -> new GatewayRedisPort.Presence(1, 0, 0, 1, 0, 1, 2, Map.of()))
+                .as("실은 수가 산 수를 넘는다").isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new GatewayRedisPort.Presence(3, 0, 0, 3, 0, 3, 2, Map.of("x", 3)))
+                .as("표가 실은 수를 넘는다").isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new GatewayRedisPort.Presence(3, 0, 0, 3, 0, 3, 2, Map.of("x", 0)))
+                .as("표가 0 인 인스턴스는 안 온다").isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /** 이름순으로 보내야 상한에서 잘리는 것이 결정적이다. */
+    @Test
+    @DisplayName("배제_목록은_정렬해_쉼표로_감싸_보낸다")
+    void 배제_목록은_정렬해_쉼표로_감싸_보낸다() {
+        assertThat(port.ejectArg(List.of("b", "a", "b"))).isEqualTo(",a,b,");
+        assertThat(port.ejectArg(List.of())).as("뺀 대가 없다는 보고").isEqualTo(",");
+        assertThat(port.ejectArg(null)).as("안 실은 것").isEmpty();
+    }
+
+    /** 거절이 심장을 멈추면 안 된다. 스크립트가 거절할 값은 보내기 전에 걸러 낸다. */
+    @Test
+    @DisplayName("상한을_넘는_배제_목록은_잘라_보낸다")
+    void 상한을_넘는_배제_목록은_잘라_보낸다() {
+        List<String> ids = new ArrayList<>();
+        for (int i = 39; i >= 0; i--) {
+            ids.add(String.format("i%02d", i));
+        }
+
+        String sent = port.ejectArg(ids);
+
+        assertThat(sent.split(",", -1)).hasSize(34);
+        assertThat(sent).startsWith(",i00,i01,").endsWith(",i31,");
+    }
+
+    /** 자르면 다른 이름이 된다. 버린다. */
+    @Test
+    @DisplayName("쉼표가_든_이름과_긴_이름은_빼고_보낸다")
+    void 쉼표가_든_이름과_긴_이름은_빼고_보낸다() {
+        assertThat(port.ejectArg(List.of("a,b", "x".repeat(65), "", "ok"))).isEqualTo(",ok,");
+    }
+
+    @Test
+    @DisplayName("배제_표를_실어_세어_받는다")
+    void 배제_표를_실어_세어_받는다() {
+        port.beat("gw-a", REAP_AFTER_SEC, VOTE_FRESH_SEC, CircuitState.CLOSED, 0, List.of("x", "y"))
+                .block(WAIT);
+
+        GatewayRedisPort.Presence seen = port.beat("gw-b", REAP_AFTER_SEC, VOTE_FRESH_SEC,
+                CircuitState.CLOSED, 0, List.of("x")).block(WAIT);
+
+        assertThat(seen.ejectReported()).isEqualTo(2);
+        assertThat(seen.ejectVotes()).isEqualTo(Map.of("x", 2, "y", 1));
+    }
+
+    @Test
+    @DisplayName("배제를_안_실으면_표가_없다")
+    void 배제를_안_실으면_표가_없다() {
+        port.beat("gw-a", REAP_AFTER_SEC, VOTE_FRESH_SEC, CircuitState.CLOSED, 0, List.of("x"))
+                .block(WAIT);
+
+        GatewayRedisPort.Presence seen = 찍는다("gw-a", CircuitState.CLOSED).block(WAIT);
+
+        assertThat(seen.ejectReported()).isZero();
+        assertThat(seen.ejectVotes()).isEmpty();
     }
 }

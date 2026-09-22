@@ -62,7 +62,7 @@ class ScriptsUnderMemoryLimitTest extends RedisContainerSupport {
         redis.delete(RedisKeys.applyFence(COUPON, 1, 0), RedisKeys.dropFence(COUPON, 1, 0),
                 RedisKeys.SNAPSHOT_FENCE).block(WAIT);
         redis.opsForHash().remove(RedisKeys.INSTANCES,
-                "oom-node", "#c:oom-node", "#p:oom-node").block(WAIT);
+                "oom-node", "#c:oom-node", "#p:oom-node", "#e:oom-node").block(WAIT);
         redis.delete("test:oom-write-probe").block(WAIT);
         redis.delete(RedisKeys.queue(COUPON, 1, 0), RedisKeys.alive(COUPON, 1, 0),
                 RedisKeys.stock(COUPON)).block(WAIT);
@@ -83,10 +83,12 @@ class ScriptsUnderMemoryLimitTest extends RedisContainerSupport {
                     .as("전제 — 상한이 실제로 걸려 메모리를 늘리는 쓰기가 막힌다")
                     .rootCause().hasMessageContaining("OOM");
 
-            gateway.beat("oom-node", 30, 3, CircuitState.CLOSED, 0).block(WAIT);
+            gateway.beat("oom-node", 30, 3, CircuitState.CLOSED, 0, List.of("x")).block(WAIT);
 
             assertThat(redis.opsForHash().hasKey(RedisKeys.INSTANCES, "oom-node").block(WAIT))
                     .as("상한 중에도 제 자리를 남긴다").isTrue();
+            assertThat(redis.opsForHash().get(RedisKeys.INSTANCES, "#e:oom-node").block(WAIT))
+                    .as("배제 목록도 같이 실린다").isEqualTo(",x,");
         });
     }
 

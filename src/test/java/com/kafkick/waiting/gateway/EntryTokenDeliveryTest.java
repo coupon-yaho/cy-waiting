@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.kafkick.waiting.gateway.EntryTokenDelivery.Where;
 import org.junit.jupiter.api.DisplayName;
+import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
+import org.springframework.mock.web.server.MockServerWebExchange;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -74,5 +76,36 @@ class EntryTokenDeliveryTest {
                 .containsExactly("X-Gate-Pass");
         assertThat(new EntryTokenDelivery(Where.BOTH, null, null).exposed())
                 .containsExactly("Entry-Token");
+    }
+
+    @Test
+    @DisplayName("헤더 모드는 바디에서 토큰을 빼고 헤더에 싣는다")
+    void 헤더_모드_응답() {
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.get("/api/v1/coupons/c1/queue").build());
+
+        QueueResponse.create(new EntryTokenDelivery(Where.HEADER, "X-Gate-Pass", null))
+                .admitted(exchange, "et_abc", 180).block();
+
+        assertThat(exchange.getResponse().getHeaders().getFirst("X-Gate-Pass"))
+                .isEqualTo("et_abc");
+        assertThat(exchange.getResponse().getBodyAsString().block())
+                .as("둘 다로 두지 않았으면 바디에 남기지 않는다 — 두 곳이면 어느 쪽이 정본인지 흐려진다")
+                .doesNotContain("et_abc")
+                .contains("\"expiresIn\":180");
+    }
+
+    @Test
+    @DisplayName("둘 다 모드는 양쪽에 싣는다")
+    void 둘_다_모드_응답() {
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.get("/api/v1/coupons/c1/queue").build());
+
+        QueueResponse.create(new EntryTokenDelivery(Where.BOTH, null, null))
+                .admitted(exchange, "et_abc", 180).block();
+
+        assertThat(exchange.getResponse().getHeaders().getFirst("Entry-Token"))
+                .isEqualTo("et_abc");
+        assertThat(exchange.getResponse().getBodyAsString().block()).contains("et_abc");
     }
 }

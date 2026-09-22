@@ -1106,13 +1106,13 @@ class CapacityCollectorTest {
                 .as("없는 대가 섞여도 산 대 안에서 전부인지 본다").isEqualTo(100);
     }
 
-    /** 남은 대가 0 이라고 말했으면 그것이 백프레셔다. 앓는 대의 보고로 하한을 얹으면 여유 0 인 대에 밀어 넣는다. */
+    /** 남은 대가 말한 여유가 백프레셔다. 앓는 대의 보고로 하한을 켜면 여유가 모자란 대에 밀어 넣는다. */
     @Test
-    @DisplayName("배제로_남은_대가_0이면_하한을_안_얹는다")
-    void 배제로_남은_대가_0이면_하한을_안_얹는다() {
+    @DisplayName("뺀_대의_보고로_하한을_켜지_않는다")
+    void 뺀_대의_보고로_하한을_켜지_않는다() {
         CapacityCollector collector = collector();
 
-        assertThat(collector.collect(셋(100, 0, 0, NOW), NOW, 1, Set.of("x"))).isZero();
+        assertThat(collector.collect(셋(100, 3, 0, NOW), NOW, 1, Set.of("x"))).isEqualTo(3);
         assertThat(collector.lastFloor()).isZero();
     }
 

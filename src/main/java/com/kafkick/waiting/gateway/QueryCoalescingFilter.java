@@ -105,6 +105,9 @@ public final class QueryCoalescingFilter implements GatewayFilter {
      */
     private final Set<String> declined = ConcurrentHashMap.newKeySet();
 
+    /** 토큰마다 다르다고 뒷단이 말한 경로. 무리를 지으면 토큰 원문이 키가 된다. */
+    private final Set<String> credentialVaried = ConcurrentHashMap.newKeySet();
+
     /** 연속으로 본 선언 수. 한 번이라도 안 오면 0 으로 돌아간다. */
     private final Map<String, AtomicInteger> declaring = new ConcurrentHashMap<>();
 
@@ -161,6 +164,10 @@ public final class QueryCoalescingFilter implements GatewayFilter {
                 exchange.getAttribute(MemberIdentityFilter.VERIFIED))) {
             count("skipped", "credential");
             return chain.filter(exchange);
+        }
+        if (credentialVaried.contains(path) && hasCredential(exchange)) {
+            count("skipped", "vary-credential");
+            return passThrough(exchange, chain, path);
         }
         // 범위 요청이 전체를 받거나, 조건부 요청이 조건 없는 200 을 받는다.
         if (isSpecialRequest(exchange)) {
@@ -343,6 +350,9 @@ public final class QueryCoalescingFilter implements GatewayFilter {
         }
         byte[] body = join(chunks);
         List<String> learned = keys.learn(path, response.getHeaders());
+        if (variesByCredential(response.getHeaders())) {
+            credentialVaried.add(path);
+        }
         // **한 번만 만든다.** 응답마다 소문자 사본과 집합을 두세 번 짓는 것은
         // 필터에 준 5ms 예산을 그대로 쓰는 자리다.
         Set<String> directives = directives(response.getHeaders().getCacheControl());
@@ -393,8 +403,12 @@ public final class QueryCoalescingFilter implements GatewayFilter {
         exchange.getResponse().beforeCommit(() -> {
             ServerHttpResponse response = exchange.getResponse();
             HttpStatusCode status = response.getStatusCode();
-            learnDeclaration(path, directives(response.getHeaders().getCacheControl()),
-                    status == null ? HttpStatus.OK.value() : status.value());
+            int code = status == null ? HttpStatus.OK.value() : status.value();
+            learnDeclaration(path, directives(response.getHeaders().getCacheControl()), code);
+            // 뒷단이 토큰마다 다르다는 말을 거두면 다시 모은다. 장애 응답으로는 안 배운다.
+            if (code < 400 && !variesByCredential(response.getHeaders())) {
+                credentialVaried.remove(path);
+            }
             return Mono.empty();
         });
         return chain.filter(exchange);
@@ -443,8 +457,8 @@ public final class QueryCoalescingFilter implements GatewayFilter {
         if (!headers.getOrEmpty(HttpHeaders.SET_COOKIE).isEmpty()) {
             return "set-cookie";
         }
-        // 토큰마다 다르다는 응답은 모을 것이 없다. 키에 토큰 원문이 쌓이지도 않게 한다.
-        if (headers.getVary().stream().anyMatch(HttpHeaders.AUTHORIZATION::equalsIgnoreCase)) {
+        // 토큰마다 다르다는 응답은 모을 것이 없다.
+        if (variesByCredential(headers)) {
             return "vary-credential";
         }
         if (directives.contains("no-store") || directives.contains("private")
@@ -543,6 +557,10 @@ public final class QueryCoalescingFilter implements GatewayFilter {
         HttpHeaders headers = exchange.getRequest().getHeaders();
         return headers.headerNames().stream()
                 .anyMatch(name -> CREDENTIALS.stream().anyMatch(name::equalsIgnoreCase));
+    }
+
+    private boolean variesByCredential(HttpHeaders headers) {
+        return headers.getVary().stream().anyMatch(HttpHeaders.AUTHORIZATION::equalsIgnoreCase);
     }
 
     private void count(String outcome, String cause) {

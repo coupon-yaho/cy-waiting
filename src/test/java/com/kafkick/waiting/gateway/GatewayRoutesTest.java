@@ -830,7 +830,22 @@ class GatewayRoutesTest {
 
         assertThatThrownBy(() -> 라우터(켬, 규칙).getRoutes().collectList().block())
                 .as("그 경로만 노드 선택과 재시도 밖으로 나간다")
-                .isInstanceOf(IllegalStateException.class);
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("균형기를 우회");
+        assertThatThrownBy(() -> 라우터(켬, 진입_둘("http://a:8080", null))
+                .getRoutes().collectList().block())
+                .as("뒷단이 둘이기도 하지만 운영자가 볼 원인은 우회다")
+                .hasMessageContaining("균형기를 우회");
+    }
+
+    @Test
+    @DisplayName("라우팅을 켜면 주소를 비운 진입 규칙들은 균형기 하나를 본다")
+    void 균형기_하나() {
+        RoutingProperties 켬 = new RoutingProperties(
+                true, "coupon-service", null, null, null, null, null, null, 허용, 허용_포트);
+
+        assertThat(주소들(라우터(켬, 진입_둘(null, null))))
+                .containsExactly("lb://coupon-service", "lb://coupon-service");
     }
 
     @Test

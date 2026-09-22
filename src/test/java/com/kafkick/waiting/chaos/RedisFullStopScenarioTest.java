@@ -12,6 +12,7 @@ import com.kafkick.waiting.domain.allocation.QueueingHysteresis;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import com.kafkick.waiting.domain.coupon.CouponStates;
 import com.kafkick.waiting.control.SnapshotSource;
+import io.lettuce.core.api.StatefulRedisConnection;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -37,6 +38,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import com.kafkick.waiting.domain.admission.CircuitState;
+import com.kafkick.waiting.gateway.AbuseLimitFilter;
 import com.kafkick.waiting.gateway.CircuitStateReader;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -138,9 +140,10 @@ class RedisFullStopScenarioTest {
 
     /**
      * 주소당 발급 상한. <b>고정 시계라 회차 전체에 한 번이다</b> — 남용 제한의 초 창이 안 넘어가므로, 회복을
-     * 기다리며 이만큼을 다 쓰면 그 뒤 발급이 전부 RATE_LIMITED 로 막혀 회복을 못 잰다 (CY-984).
+     * 기다리며 이만큼을 다 쓰면 그 뒤 발급이 전부 RATE_LIMITED 로 막혀 회복을 못 잰다 (CY-984). 줄 조회도 같은
+     * 주소 계수를 올린다.
      */
-    private static final int 주소_발급_예산 = 200;
+    private static final long 주소_발급_예산 = AbuseLimitFilter.IP_ISSUE_CAP;
 
     /** 회복 대기가 발급 예산을 다 써서 멈췄는가. 그러면 회복이 아니라 하네스를 잰 것이다. */
     private boolean 예산이_모자랐다;
@@ -573,17 +576,28 @@ class RedisFullStopScenarioTest {
                 .run();
     }
 
-    /** 앱의 레디스 연결이 응답할 때까지. 한계 안에 안 돌아오면 묶음 루프가 판정한다. */
-    private void 앱의_레디스_연결을_기다린다(Instant 시작, Supplier<Instant> 지금) {
+    /**
+     * 레디스가 명령을 받을 때까지. <b>앱과 다른 연결로 본다</b> — 앱의 연결을 두드리면 재연결을 대신 깨워, 그 창에서만
+     * 보이는 발급 경로의 5xx 를 가린다. 앱 경로의 회복은 묶음 루프가 잰다.
+     */
+    private void 레디스가_받을_때까지_기다린다(Instant 시작, Supplier<Instant> 지금) {
         Duration 남은_시간 = 회복_한계.minus(Duration.between(시작, 지금.get()));
         try {
             Awaitility.await().atMost(남은_시간).pollInterval(Duration.ofMillis(100))
                     .ignoreExceptions()
-                    .until(() -> "PONG".equals(redis.execute(연결 -> 연결.ping())
-                            .blockFirst(Duration.ofSeconds(1))));
+                    .until(() -> {
+                        try (StatefulRedisConnection<String, String> 따로 = faults.연결한다()) {
+                            return "PONG".equals(따로.sync().ping());
+                        }
+                    });
         } catch (ConditionTimeoutException e) {
             // 판정이 이유를 적는다.
         }
+    }
+
+    /** 이 주소가 쓴 남용 제한 계수. 발급과 줄 조회가 같은 주소 계수를 올린다. */
+    private long 주소_계수() {
+        return 줄_선_사람 + 발급_보낸_수 + 줄_조회_분포.values().stream().mapToLong(Long::longValue).sum();
     }
 
     /**
@@ -595,9 +609,14 @@ class RedisFullStopScenarioTest {
         if (!예산이_모자랐다 && 막힌_수 == 0) {
             return Optional.empty();
         }
-        return Optional.of(("하네스 — 주소당 발급 예산 %d 에 걸렸다 (보낸 발급 %d, 막힌 %d, 예산 소진 %s). "
-                + "고정 시계라 회차 전체의 예산이다. 회복이 아니라 대기 루프를 본다")
-                .formatted(주소_발급_예산, 줄_선_사람 + 발급_보낸_수, 막힌_수, 예산이_모자랐다));
+        // **예산에 닿았을 때만 하네스 탓이다.** 그보다 적게 보냈는데 막혔으면 남용 제한이 한도 전에 막은 것이다.
+        if (예산이_모자랐다 || 주소_계수() > 주소_발급_예산) {
+            return Optional.of(("하네스 — 주소당 예산 %d 에 닿았다 (주소 계수 %d, 막힌 %d, 예산 소진 %s). "
+                    + "고정 시계라 회차 전체의 예산이다. 회복이 아니라 대기 루프를 본다")
+                    .formatted(주소_발급_예산, 주소_계수(), 막힌_수, 예산이_모자랐다));
+        }
+        return Optional.of("남용 제한이 한도 전에 막았다 — 주소 계수 %d 로 %d 건이 RATE_LIMITED 다"
+                .formatted(주소_계수(), 막힌_수));
     }
 
     /**
@@ -666,9 +685,9 @@ class RedisFullStopScenarioTest {
      */
     private Duration 판정이_돌아올_때까지_기다린다(List<Integer> 회복_상태, Supplier<Instant> 지금) {
         Instant 시작 = 지금.get();
-        // **요청 없이 먼저 기다린다.** 레디스 연결이 다시 맺히는 동안 묶음을 보내면 느린 러너일수록
-        // 발급 예산을 더 써, 회복한 뒤에 남용 제한에 막힌다. 앱의 연결로 상태를 본다.
-        앱의_레디스_연결을_기다린다(시작, 지금);
+        // **요청 없이 먼저 기다린다.** 레디스가 돌아오기 전에 묶음을 보내면 느린 러너일수록 발급 예산을 더
+        // 써, 회복한 뒤에 남용 제한에 막힌다.
+        레디스가_받을_때까지_기다린다(시작, 지금);
         // **한 묶음이 통과한 것은 돌아왔다는 증거가 아니다.** 레디스가 막 살아난
         // 구간에는 커넥션 풀이 다시 맺히는 중이라 한 묶음이 우연히 통과할 수 있고,
         // 바로 다음 묶음이 5xx 를 낸다 — 그 뒤에 오는 확인 묶음이 그것을 회귀로
@@ -680,7 +699,7 @@ class RedisFullStopScenarioTest {
         int 보낸_묶음_수 = 0;
         while (Duration.between(시작, 지금.get()).compareTo(회복_한계) < 0) {
             // 확인 묶음 몫은 남긴다. 모자라면 멈추고 그 사실을 판정에 싣는다.
-            if (줄_선_사람 + 발급_보낸_수 + 한_묶음_요청_수 + 보낼_수 > 주소_발급_예산) {
+            if (주소_계수() + 한_묶음_요청_수 + 1 + 보낼_수 > 주소_발급_예산) {
                 예산이_모자랐다 = true;
                 return null;
             }

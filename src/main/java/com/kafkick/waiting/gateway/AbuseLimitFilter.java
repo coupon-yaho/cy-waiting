@@ -74,7 +74,7 @@ public final class AbuseLimitFilter implements WebFilter {
      * 주소당 상한. <b>사람당보다 훨씬 크다</b> — NAT 뒤에서는 수백 명이 한 주소를
      * 쓰고, 좁게 잡으면 그들이 통째로 막힌다. 여기서 잡는 것은 한 대의 처리량이다.
      */
-    private static final long IP_ISSUE_CAP = 200;
+    public static final long IP_ISSUE_CAP = 200;
 
     /**
      * 폴링 경로의 상한. <b>발급보다 느슨하다</b> — 1초 간격으로 물으라고 해 놓고 그

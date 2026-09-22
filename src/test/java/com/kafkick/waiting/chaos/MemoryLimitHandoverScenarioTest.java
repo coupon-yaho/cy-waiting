@@ -177,6 +177,9 @@ class MemoryLimitHandoverScenarioTest {
                                         .formatted(봉인된_표[0], 새_임기[0])),
                         Long.toString(새_임기[0]).equals(발행_표[0]) ? Optional.empty()
                                 : Optional.of("상한 중 발행 봉인이 안 섰다 — 표 %s".formatted(발행_표[0])),
+                        // 1ms 창에 갱신이 두 번 넘게 닿는 것은 우연이 아니다 — 갱신 주기가 퇴행했는지 본다.
+                        만료_시도[0] <= 2 ? Optional.empty()
+                                : Optional.of("갱신이 만료를 %d 번 덮었다 — 갱신 주기를 본다".formatted(만료_시도[0] - 1)),
                         // 전제 — 표 수명이 유지 창보다 짧아야 "봉인이 남는다" 판정이 무언가를 잰다.
                         // 음수는 수명이 없다는 뜻이다. 영구 표는 재봉인 없이도 남아 이 판정이 아무것도 안 잰다.
                         표_수명_ms[0] > 0 && 표_수명_ms[0] < 유지_창.toMillis() ? Optional.empty()
@@ -219,12 +222,13 @@ class MemoryLimitHandoverScenarioTest {
     /**
      * 리스를 끝내 새 임기를 세운다. <b>갱신이 만료를 덮을 수 있다</b> — 1ms 창 안에 이 노드의 갱신이 닿으면
      * 획득 스크립트가 같은 임기로 리스를 늘린다. 느린 러너에서 두 명령이 몰려 실제로 그렇게 됐다 (CY-984).
-     * 그때는 장애를 다시 거는 것이지 제품을 봐주는 것이 아니다. 몇 번 걸었는지는 판정에 싣는다.
+     * 갱신은 세는 값을 안 올리고 새 획득은 반드시 올리므로, 그 값이 그대로일 때만 장애를 다시 건다.
      */
     private long 승계를_만든다(LeaderFaults 락, StatefulRedisConnection<String, String> 연결,
             long 앞_임기, int[] 만료_시도) {
         for (int i = 0; i < 만료_시도_상한; i++) {
             만료_시도[0]++;
+            String 앞_세대 = 연결.sync().get(RedisKeys.LEADER_GENERATION);
             if (!락.lease를_만료시킨다(Duration.ofMillis(1))) {
                 throw new IllegalStateException("리스를 못 끝냈다 — 승계를 안 만들었다");
             }
@@ -233,10 +237,16 @@ class MemoryLimitHandoverScenarioTest {
                         .until(() -> leadership.isLeader() && leadership.fence() > 앞_임기);
                 return leadership.fence();
             } catch (ConditionTimeoutException e) {
-                // 락이 옛 임기 그대로 남아 있으면 갱신이 늘린 것이라 다시 건다. 아니면 후임이 정말 안 선 것이다.
                 String 락_값 = 연결.sync().get(RedisKeys.LEADER);
-                if (락_값 == null || !락_값.startsWith(앞_임기 + "|")) {
-                    throw e;
+                boolean 갱신이_덮었다 = 락_값 != null && 락_값.startsWith(앞_임기 + "|")
+                        && Objects.equals(앞_세대, 연결.sync().get(RedisKeys.LEADER_GENERATION));
+                if (!갱신이_덮었다) {
+                    // 새 획득은 섰는데 노드가 아직 모를 수 있다. 남은 시간만큼 더 기다린다.
+                    Duration 남은 = 기다림.minus(승계_한_번.multipliedBy(i + 1L));
+                    Awaitility.await().atMost(남은.isNegative() ? Duration.ZERO : 남은)
+                            .pollInterval(Duration.ofMillis(50))
+                            .until(() -> leadership.isLeader() && leadership.fence() > 앞_임기);
+                    return leadership.fence();
                 }
             }
         }

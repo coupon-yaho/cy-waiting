@@ -414,3 +414,8 @@ jobs:
       # 리포트 잡을 통째로 지운 것과, 리포트가 판정을 안 기다리는 것이다.
       - name: 판정 배선 자기검증
         run: .github/scripts/verdict-needs-selftest.sh
+
+      # **뮤테이션이 빨개졌을 때 로그만으로 위치를 알아야 한다.** 보관이 끝나면
+      # 수만 남는다. 요약이 위치를 실제로 내는지를 잰다.
+      - name: 뮤턴트 위치 요약 자기검증
+        run: .github/scripts/pitest-report-selftest.sh

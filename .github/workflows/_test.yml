@@ -15,6 +15,12 @@ on:
         type: number
         required: false
         default: 20
+      # 비우면 부른 쪽의 커밋이다. 야간이 develop 을 따로 잴 때 쓴다.
+      # 아티팩트 이름에 들어가므로 `/` 가 든 ref 는 못 넘긴다.
+      ref:
+        type: string
+        required: false
+        default: ''
     outputs:
       result:
         value: ${{ jobs.test.outputs.result }}
@@ -24,7 +30,7 @@ permissions:
 
 jobs:
   test:
-    name: ${{ inputs.layer }}
+    name: ${{ inputs.layer }}${{ inputs.ref != '' && format(' ({0})', inputs.ref) || '' }}
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout-minutes }}
     outputs:
@@ -33,6 +39,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ inputs.ref }}
 
       - id: setup
         uses: ./.github/actions/setup-gradle
@@ -62,8 +69,15 @@ jobs:
               ./gradlew --no-daemon pitest 2>&1 | tee build/pitest.log || rc=$?
               # **그레이들의 종료 코드를 잃지 않는다.** 여기서 그냥 exit 1 하면
               # OOM 킬(137)이 1 로 뭉개져, 왜 빨간지 로그를 다 읽어야 안다.
+              # **수만으로는 어디를 볼지 모른다.** 보관이 끝나면 이 줄만 남으니
+              # 위치를 로그와 잡 요약에 같이 쓴다. 요약이 실패해도 판정은 안 바뀐다.
+              locate() {
+                [ -x .github/scripts/pitest-report.sh ] || return 0
+                .github/scripts/pitest-report.sh build/reports/pitest/mutations.xml || true
+              }
               die() {
                 echo "::error::$1"
+                locate
                 if [ "$rc" -ne 0 ]; then exit "$rc"; fi
                 exit 1
               }
@@ -138,6 +152,8 @@ jobs:
                 short=$(( (counted * threshold + 99) / 100 - killed ))
                 die "죽인 뮤턴트가 ${counted}개 중 ${killed}개다 — 임계 ${threshold}% 에 ${short}개 모자라다"
               fi
+              # 통과해도 남긴다. 임계 근처에서 흔들릴 때 어느 뮤턴트가 경계인지 본다.
+              locate
               [ "$rc" -eq 0 ] || exit "$rc"
               ;;
             # 어댑터는 단위·통합 양쪽에서, 게이트웨이는 단위·컨텍스트 양쪽에서
@@ -154,17 +170,18 @@ jobs:
       - if: always() && steps.setup.outputs.buildable == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
-          name: report-${{ inputs.layer }}
+          name: report-${{ inputs.layer }}${{ inputs.ref != '' && format('-{0}', inputs.ref) || '' }}
           path: |
             build/reports/tests/
             build/reports/jacoco/
             build/reports/pitest/
             build/pitest.log
-          retention-days: 2      # 무료 한도. 실패는 당일에 본다
+          # 무료 한도라 짧게 둔다. 뮤테이션은 주말을 넘겨 봐야 해서 길게 둔다.
+          retention-days: ${{ inputs.layer == 'mutation' && 7 || 2 }}
           if-no-files-found: ignore
 
       - name: 잡 요약 기록
         if: always() && steps.setup.outputs.buildable == 'true'
         run: |
-          echo "### 테스트 — ${{ inputs.layer }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "### 테스트 — ${{ inputs.layer }}${{ inputs.ref != '' && format(' ({0})', inputs.ref) || '' }}" >> "$GITHUB_STEP_SUMMARY"
           echo "결과: \`${{ steps.run.outcome }}\`" >> "$GITHUB_STEP_SUMMARY"

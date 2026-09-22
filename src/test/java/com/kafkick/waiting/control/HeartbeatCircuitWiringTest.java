@@ -4,10 +4,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.kafkick.waiting.adapter.redis.GatewayRedisPort.Presence;
 import com.kafkick.waiting.domain.admission.CircuitState;
+import com.kafkick.waiting.domain.routing.InstanceOutliers;
 import java.time.Duration;
 import org.springframework.beans.factory.ObjectProvider;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.DisplayName;
@@ -224,6 +227,75 @@ class HeartbeatCircuitWiringTest {
             @Override
             public PassRateSource getIfUnique() {
                 return source;
+            }
+        };
+    }
+
+    /** 이 노드가 뺀 대가 스크립트 인자로 나가야 한다. 안 나가면 뺀 대의 몫이 예산에 남는다. */
+    @Test
+    @DisplayName("이_노드가_뺀_인스턴스를_실어_보낸다")
+    void 이_노드가_뺀_인스턴스를_실어_보낸다() {
+        InstanceOutliers outliers = InstanceOutliers.of(3, Duration.ofSeconds(15), Duration.ofSeconds(60));
+        outliers.retain(Set.of("가", "나"), 1_000);
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 1_000);
+        }
+
+        assertThat(배선.ejected(공급자(outliers), 1_000)).containsExactly("가");
+    }
+
+    /** 라우팅이 꺼진 노드는 빈 목록이 아니라 안 실은 것이다. 한 주소로만 보내 쏠림을 안 만든다. */
+    @Test
+    @DisplayName("라우팅이_꺼져_있으면_배제_목록을_안_싣는다")
+    void 라우팅이_꺼져_있으면_배제_목록을_안_싣는다() {
+        assertThat(배선.ejected(공급자(null), 1_000)).isNull();
+    }
+
+    @Test
+    @DisplayName("클러스터_배제를_등록부에_적는다")
+    void 클러스터_배제를_등록부에_적는다() {
+        GatewayRegistry registry = 등록부();
+
+        배선.beatStep(circuit -> Mono.just(new Presence(3, 0, 0, 3, 0, 3, 2, Map.of("x", 2))),
+                () -> CircuitState.CLOSED, registry).get().block();
+
+        assertThat(registry.clusterEjected()).containsExactly("x");
+    }
+
+    @Test
+    @DisplayName("놓치면_배제도_놓친_것으로_센다")
+    void 놓치면_배제도_놓친_것으로_센다() {
+        GatewayRegistry registry = 등록부();
+        registry.ejectionObserved(3, Map.of("x", 2));
+
+        Runnable 놓침 = 배선.missStep(() -> CircuitState.CLOSED, registry);
+        for (int i = 0; i < 등록부_감소_틱; i++) {
+            놓침.run();
+        }
+
+        assertThat(registry.clusterEjected()).isEmpty();
+    }
+
+    private <T> ObjectProvider<T> 공급자(T bean) {
+        return new ObjectProvider<>() {
+            @Override
+            public T getObject() {
+                return bean;
+            }
+
+            @Override
+            public T getObject(Object... args) {
+                return bean;
+            }
+
+            @Override
+            public T getIfAvailable() {
+                return bean;
+            }
+
+            @Override
+            public T getIfUnique() {
+                return bean;
             }
         };
     }

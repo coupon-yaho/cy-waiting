@@ -118,8 +118,15 @@ run_case "실측 유입이 숫자가 아니면 판정 불가" 2 "실측 유입" 
     -- "$(table nan2.tsv $'4000\t삼천\tok\t2.1')"
 run_case "응답 p99 가 숫자가 아니면 판정 불가" 2 "응답 p99" \
     -- "$(table nan3.tsv $'4000\t3950\tok\t느림')"
-run_case "칸이 넷을 넘으면 판정 불가" 2 "칸" \
-    -- "$(table long.tsv $'4000\t3950\tok\t2.1\t여분')"
+# 다섯째 칸은 끊긴 몫(%)이다 (CY-990). 증설 효율이 두 표의 섞임을 견주는 재료라 옛 네 칸 표도 받는다.
+run_case "다섯째 칸의 끊긴 몫은 받는다" 0 "4000" \
+    -- "$(table mix.tsv $'4000\t3950\tok\t2.1\t1.5')"
+run_case "못 잰 칸의 끊긴 몫은 - 로 받는다" 0 "판정 불가" \
+    -- "$(table mix_dash.tsv $'4000\t3950\tok\t2.1\t1.5' $'8000\t0\tunmeasurable\t0\t-')"
+run_case "끊긴 몫이 숫자가 아니면 판정 불가" 2 "끊긴 몫" \
+    -- "$(table mix_nan.tsv $'4000\t3950\tok\t2.1\t여분')"
+run_case "칸이 다섯을 넘으면 판정 불가" 2 "칸" \
+    -- "$(table long.tsv $'4000\t3950\tok\t2.1\t1.5\t여분')"
 run_case "요청 유입이 같으면 판정 불가" 2 "오름차순" \
     -- "$(table tie.tsv $'4000\t3950\tok\t2.1' $'4000\t3900\tok\t2.2')"
 # 판정을 못 한 회차는 미달과 다르다. 그 위를 안 쓰되 제품 탓으로 적지 않는다.
@@ -222,6 +229,20 @@ lib_case "중첩형 도착률" 1234.5000 "$(peak_summary_value "$nested" rate)"
 lib_case "중첩형 응답 p99" 9.5000 "$(peak_summary_value "$nested" p99)"
 lib_case "없는 파일은 빈 값" "" "$(peak_summary_value "$work/none.json" rate)"
 
+# 끊긴 몫(%) — 발급 응답 중 판정이 끊은(429·503) 몫 (CY-990). 두 표의 섞임을 견주는 재료다. **폴링은 안 넣는다** —
+# 발급만 세는 계수를 따로 읽는다. 폴링의 끊김이 섞이면 섞임의 차이가 희석된다.
+counts=$work/counts.json
+printf '%s' '{"metrics":{"peak_issue_total":{"count":100},"peak_issue_shed":{"count":5},"peak_shed":{"count":50},"peak_admitted":{"count":900}}}' \
+    > "$counts"
+nested_counts=$work/nested_counts.json
+printf '%s' '{"metrics":{"peak_issue_total":{"values":{"count":80}},"peak_issue_shed":{"values":{"count":20}}}}' \
+    > "$nested_counts"
+lib_case "발급만 센 끊긴 몫 · 폴링 계수는 안 본다" 5.0 "$(peak_shed_pct "$counts")"
+lib_case "중첩형" 25.0 "$(peak_shed_pct "$nested_counts")"
+printf '%s' '{"metrics":{"peak_issue_shed":{"count":3}}}' > "$work/zero.json"
+lib_case "발급이 없으면 -" - "$(peak_shed_pct "$work/zero.json")"
+lib_case "없는 파일은 -" - "$(peak_shed_pct "$work/none.json")"
+
 # docker stats 한 벌을 표본 줄로 옮긴다. 남의 프로젝트 컨테이너가 섞이면 그 CPU 가 천장 원인에
 # 끼고, `%` 를 안 떼면 판정기가 숫자가 아닌 표본으로 읽어 매 회차 판정 불가가 된다.
 stats=$(printf 'load-gateway-1\t95.30%%\nsearch-cache\t88.00%%\nload-redis-1\t12.05%%\n')
@@ -229,6 +250,39 @@ lib_case "우리 컨테이너만 · 백분율 기호를 뗀다" \
     "$(printf 'cpu\tload-gateway-1\t95.30\ncpu\tload-redis-1\t12.05')" \
     "$(printf '%s\n' "$stats" | peak_cpu_lines load)"
 lib_case "빈 입력은 빈 출력" "" "$(printf '' | peak_cpu_lines load)"
+
+# 레디스 명령 수와 네트워크 (CY-990). CPU 로 안 보이는 천장 둘이다.
+info=$(printf '# Stats\r\ntotal_connections_received:12\r\ninstantaneous_ops_per_sec:48123\r\nrejected_connections:0\r\n')
+lib_case "INFO 에서 초당 명령 수를 뽑는다 · 줄 끝 CR 을 뗀다" 48123 "$(printf '%s\n' "$info" | peak_ops_from_info)"
+lib_case "그 줄이 없으면 빈 값" "" "$(printf 'uptime_in_seconds:3\n' | peak_ops_from_info)"
+# 두 번 읽은 누적 바이트의 차분을 Mbit/s 로. 1초에 125,000,000 바이트는 1000 Mbit/s 다.
+lib_case "차분을 Mbit/s 로" 1000.0 "$(peak_net_mbps 0 0 125000000 1000000000)"
+lib_case "반 초면 두 배" 2000.0 "$(peak_net_mbps 0 0 125000000 500000000)"
+lib_case "시간이 안 흘렀으면 빈 값" "" "$(peak_net_mbps 10 5 20 5)"
+lib_case "누적이 줄었으면(재시작) 빈 값" "" "$(peak_net_mbps 500 0 100 1000000000)"
+# /proc/<pid>/net/dev 에서 eth0 의 받은·보낸 바이트 합. 콜론 뒤에 공백이 없어도 읽는다.
+netdev=$(printf 'Inter-|   Receive\n face |bytes\n    lo: 10 1 0 0 0 0 0 0 20 2 0 0 0 0 0 0\n  eth0:1500 9 0 0 0 0 0 0 2500 7 0 0 0 0 0 0\n')
+lib_case "eth0 의 받은·보낸 합" 4000 "$(printf '%s\n' "$netdev" | peak_eth0_bytes)"
+
+# 망 표집은 docker 와 /proc 을 거친다. 이름 칸을 잘못 읽어 표본이 한 줄도 안 쌓이던 적이 있어(CY-990) 가짜 둘로 잰다.
+docker() {
+    case "$1" in
+        ps) printf 'zz-gateway-1\nzz-redis-1\nzz-backend-1\n' ;;
+        inspect) case "$4" in zz-gateway-1) echo 101 ;; zz-redis-1) echo 102 ;; zz-backend-1) echo 103 ;; esac ;;
+    esac
+}
+netdev() {
+    mkdir -p "$work/proc/$1/net"
+    printf 'Inter-|\n face |\n  eth0: %s 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n' "$2" > "$work/proc/$1/net/dev"
+}
+netdev 101 1000; netdev 102 5000; netdev 103 7
+: > "$work/net.state"
+lib_case "첫 바퀴는 앞 값이 없어 안 낸다" "" \
+    "$(PEAK_PROC=$work/proc PEAK_NOW_NS=0 peak_net_lines zz "$work/net.state")"
+netdev 101 1001000; netdev 102 100
+lib_case "두 바퀴째는 Mbit/s · 재시작한 것과 표집 밖의 것은 뺀다" "$(printf 'net\tzz-gateway-1\t8.0')" \
+    "$(PEAK_PROC=$work/proc PEAK_NOW_NS=1000000000 peak_net_lines zz "$work/net.state")"
+unset -f docker netdev
 
 # 대마다 낸 판정 비율을 모은다. **합산하지 않는다** — 한 대가 다시 떴거나 못 긁은 칸이 다른 대의 계수에 묻힌다.
 # 가장 나쁜 것을 쓴다. 판정 불가가 미달보다 앞이다 — 한 대를 못 잰 칸은 나머지가 미달이어도 제품 탓으로 못 읽는다.

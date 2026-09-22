@@ -4,6 +4,9 @@ import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
 import com.kafkick.waiting.domain.admission.CircuitState;
 
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.slf4j.Logger;
@@ -46,6 +49,12 @@ public final class GatewayRegistry {
      */
     private final AtomicReference<Vote> clusterCircuit =
             new AtomicReference<>(new Vote(CircuitState.CLOSED, 0, System.nanoTime()));
+
+    /** 과반이 뺀 인스턴스와 그 진입 시각·푼 방향으로 이어진 관측 수. 서킷과 같은 이유로 한 덩어리다. */
+    private record Held(long enteredAt, int easingStreak) {
+    }
+
+    private final AtomicReference<Map<String, Held>> ejected = new AtomicReference<>(Map.of());
 
     /** 하트비트가 연속으로 못 돈 횟수. 표가 낡았는지를 이걸로 안다. */
     private final AtomicInteger circuitMisses = new AtomicInteger();
@@ -127,6 +136,56 @@ public final class GatewayRegistry {
             log.info("배분 게이트를 푼다 — {} → {}, {}초 동안 조였다, 근거 {}",
                     before.state(), now, heldSec, source);
         }
+    }
+
+    /**
+     * 과반이 뺀 인스턴스. <b>빼는 것은 즉시, 푸는 것은 연속 관측 뒤다.</b> 빼는 쪽은 예산을 줄이는
+     * 방향이고, 한 틱 만에 풀면 표 하나가 늦는 것만으로 몫이 들락거린다.
+     */
+    public void ejectionObserved(int alive, Map<String, Integer> votes) {
+        fold(ClusterEjection.of(alive, votes));
+    }
+
+    /** 놓친 회차는 과반이 없는 관측으로 센다. 영영 지키면 레디스 장애가 예산을 계속 깎는다. */
+    public void ejectionMissed() {
+        fold(Set.of());
+    }
+
+    private void fold(Set<String> seen) {
+        long at = System.nanoTime();
+        Map<String, Held> before = ejected.getAndUpdate(now -> {
+            Map<String, Held> next = new HashMap<>();
+            for (String id : seen) {
+                Held held = now.get(id);
+                next.put(id, new Held(held == null ? at : held.enteredAt(), 0));
+            }
+            now.forEach((id, held) -> {
+                if (!seen.contains(id) && held.easingStreak() + 1 < rampDownTicks) {
+                    next.put(id, new Held(held.enteredAt(), held.easingStreak() + 1));
+                }
+            });
+            return Map.copyOf(next);
+        });
+        // 람다 밖에서 찍는다. CAS 가 재시도하면 같은 줄이 두 번 난다.
+        Map<String, Held> after = ejected.get();
+        after.keySet().stream().filter(id -> !before.containsKey(id)).sorted().forEach(id ->
+                log.warn("과반이 뺀 뒷단의 몫을 예산에서 뺀다 — instance={}", safe(id)));
+        before.forEach((id, held) -> {
+            if (!after.containsKey(id)) {
+                log.info("뒷단의 몫을 예산에 되돌린다 — instance={}, {}초 동안 뺐다", safe(id),
+                        NANOSECONDS.toSeconds(at - held.enteredAt()));
+            }
+        });
+    }
+
+    /** 뒷단이 정하는 값이다. 줄바꿈으로 로그 한 줄을 위조하지 못하게 한다. */
+    private String safe(String instanceId) {
+        return instanceId.replaceAll("[\\r\\n]", "_");
+    }
+
+    /** 수집이 예산에서 뺄 인스턴스. */
+    public Set<String> clusterEjected() {
+        return ejected.get().keySet();
     }
 
     /** 배분이 읽는 값. 관측이 오기 전에는 닫힌 것으로 본다. */

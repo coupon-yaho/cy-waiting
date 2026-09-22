@@ -299,4 +299,50 @@ class HeartbeatCircuitWiringTest {
             }
         };
     }
+
+    /** 분모는 산 수다. 실은 수로 나누면 롤아웃 중 소수가 과반이 되어 옛 노드가 보내는 대의 예산이 지워진다. */
+    @Test
+    @DisplayName("배제_과반의_분모는_실은_수가_아니라_산_수다")
+    void 배제_과반의_분모는_실은_수가_아니라_산_수다() {
+        GatewayRegistry registry = 등록부();
+
+        배선.beatStep(circuit -> Mono.just(new Presence(5, 0, 0, 5, 0, 5, 2, Map.of("x", 2))),
+                () -> CircuitState.CLOSED, registry).get().block();
+
+        assertThat(registry.clusterEjected()).isEmpty();
+    }
+
+    /** 빈이 부르는 것과 같은 호출이다. 여섯째 인자가 빠지면 뺀 대의 몫이 조용히 예산에 남는다. */
+    @Test
+    @DisplayName("하트비트_호출이_지금_뺀_대를_여섯째_인자로_넘긴다")
+    void 하트비트_호출이_지금_뺀_대를_여섯째_인자로_넘긴다() {
+        InstanceOutliers outliers = InstanceOutliers.of(3, Duration.ofSeconds(15), Duration.ofSeconds(60));
+        outliers.retain(Set.of("가", "나"), 1_000);
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 1_000);
+        }
+        AtomicReference<Object> 실린_것 = new AtomicReference<>("안 불림");
+
+        배선.beatCall((id, reap, fresh, circuit, passed, ejected) -> {
+                    실린_것.set(ejected);
+                    return Mono.just(new Presence(1, 0, 0, 1, 0, 1));
+                }, "gw", 3, 3, 단일_공급자(null), 공급자(outliers), () -> 1_000L)
+                .apply(CircuitState.CLOSED).block();
+
+        assertThat(실린_것.get()).isEqualTo(Set.of("가"));
+    }
+
+    @Test
+    @DisplayName("라우팅이_꺼지면_하트비트_호출이_목록을_안_싣는다")
+    void 라우팅이_꺼지면_하트비트_호출이_목록을_안_싣는다() {
+        AtomicReference<Object> 실린_것 = new AtomicReference<>("안 불림");
+
+        배선.beatCall((id, reap, fresh, circuit, passed, ejected) -> {
+                    실린_것.set(ejected);
+                    return Mono.just(new Presence(1, 0, 0, 1, 0, 1));
+                }, "gw", 3, 3, 단일_공급자(null), 공급자(null), () -> 1_000L)
+                .apply(CircuitState.CLOSED).block();
+
+        assertThat(실린_것.get()).isNull();
+    }
 }

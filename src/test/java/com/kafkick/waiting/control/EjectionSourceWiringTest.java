@@ -25,6 +25,18 @@ class EjectionSourceWiringTest {
         return registry;
     }
 
+    /** 기동 때 등록부는 비어 있다. 값을 그때 떠 두면 예산에서 영영 아무것도 안 뺀다. */
+    @Test
+    @DisplayName("공급자는_읽을_때마다_등록부를_본다")
+    void 공급자는_읽을_때마다_등록부를_본다() {
+        GatewayRegistry registry = GatewayRegistry.of(3, 1);
+        var source = 배선.ejectionSource(라우팅(true).getBeanProvider(RoutingProperties.class), registry);
+
+        registry.ejectionObserved(3, Map.of("x", 2));
+
+        assertThat(source.get()).containsExactly("x");
+    }
+
     private StaticListableBeanFactory 라우팅(boolean enabled) {
         StaticListableBeanFactory beans = new StaticListableBeanFactory();
         beans.addBean("routing", new RoutingProperties(enabled, null, null, null, null, null,

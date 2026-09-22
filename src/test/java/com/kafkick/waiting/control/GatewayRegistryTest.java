@@ -402,5 +402,52 @@ class GatewayRegistryTest {
         assertThat(로그.list).filteredOn(줄 -> 줄.getFormattedMessage().contains("instance=x"))
                 .extracting(ILoggingEvent::getLevel)
                 .containsExactly(Level.WARN, Level.INFO);
+        // 몇 대 중 몇 대가 뺐는지가 판단 근거다. 없으면 로그만 보고 경계인지 전면인지 모른다.
+        assertThat(로그.list.get(0).getFormattedMessage()).contains("votes=2", "alive=3");
+    }
+
+    /** 놓쳐서 푼 것과 회복해서 푼 것을 가른다. 레디스 순단 뒤의 해제가 회복처럼 읽히면 안 된다. */
+    @Test
+    @DisplayName("놓쳐서_푼_배제는_이유를_남긴다")
+    void 놓쳐서_푼_배제는_이유를_남긴다() {
+        Logger logger = ((LoggerContext) LoggerFactory.getILoggerFactory())
+                .getLogger(GatewayRegistry.class);
+        ListAppender<ILoggingEvent> 로그 = new ListAppender<>();
+        로그.start();
+        logger.addAppender(로그);
+        try {
+            GatewayRegistry registry = registry();
+            registry.ejectionObserved(3, Map.of("x", 2));
+            for (int i = 0; i < RAMP_DOWN; i++) {
+                registry.ejectionMissed();
+            }
+        } finally {
+            logger.detachAppender(로그);
+        }
+
+        assertThat(로그.list).filteredOn(줄 -> 줄.getLevel() == Level.INFO)
+                .singleElement()
+                .extracting(ILoggingEvent::getFormattedMessage)
+                .asString().contains("instance=x", "하트비트를 놓쳐");
+    }
+
+    /** 뒷단이 정하는 이름이다. 제어문자로 로그 줄을 꾸미지 못하게 한다. */
+    @Test
+    @DisplayName("로그의_인스턴스_이름에서_제어문자를_지운다")
+    void 로그의_인스턴스_이름에서_제어문자를_지운다() {
+        Logger logger = ((LoggerContext) LoggerFactory.getILoggerFactory())
+                .getLogger(GatewayRegistry.class);
+        ListAppender<ILoggingEvent> 로그 = new ListAppender<>();
+        로그.start();
+        logger.addAppender(로그);
+        try {
+            registry().ejectionObserved(1, Map.of("a\tb\u001b[31m\u2028c", 1));
+        } finally {
+            logger.detachAppender(로그);
+        }
+
+        assertThat(로그.list.get(0).getFormattedMessage())
+                .contains("instance=a_b_[31m_c")
+                .doesNotContain("\t", "\u001b", "\u2028");
     }
 }

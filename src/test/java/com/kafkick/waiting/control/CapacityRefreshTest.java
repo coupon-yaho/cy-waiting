@@ -8,6 +8,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Mono;
@@ -136,5 +137,25 @@ class CapacityRefreshTest {
 
         assertThat(collector.lastKnown()).isEqualTo(200);
         assertThat(meters.get("waiting.capacity.ejected.credit").gauge().value()).isEqualTo(300);
+    }
+
+    /** 회차마다 새로 읽는다. 기동 때 한 번 읽고 끝나면 예산에서 영영 아무것도 안 뺀다. */
+    @Test
+    @DisplayName("배제는_회차마다_새로_읽는다")
+    void 배제는_회차마다_새로_읽는다() {
+        CapacityCollector collector = collector();
+        long at = 지금.getEpochSecond();
+        AtomicReference<Set<String>> 배제 = new AtomicReference<>(Set.of());
+        CapacityRefresh refresh = CapacityRefresh.of(
+                () -> Mono.just(new CapacitySample(List.of(
+                        new CapacityReport("x", 300, at), new CapacityReport("y", 200, at)), at)),
+                collector, () -> 1, 배제::get, 예산, Schedulers.immediate(), new SimpleMeterRegistry());
+        refresh.refresh().block();
+        assertThat(collector.lastKnown()).as("전제 — 처음엔 안 뺀다").isEqualTo(500);
+
+        배제.set(Set.of("x"));
+        refresh.refresh().block();
+
+        assertThat(collector.lastKnown()).isEqualTo(200);
     }
 }

@@ -8,6 +8,7 @@ import com.kafkick.waiting.domain.routing.AllowedDestinations;
 import com.kafkick.waiting.domain.routing.InstanceAddress;
 import com.kafkick.waiting.domain.routing.InstanceRouting;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
@@ -1060,7 +1061,7 @@ class CapacityCollectorTest {
     }
 
     /** 첫 회차라 셋 다 이미 돌던 대로 본다. 램프가 아니라 배제만 잰다. */
-    private static List<CapacityReport> 셋(long x, long y, long z, long at) {
+    private List<CapacityReport> 셋(long x, long y, long z, long at) {
         return List.of(report("x", x, at), report("y", y, at), report("z", z, at));
     }
 
@@ -1105,13 +1106,25 @@ class CapacityCollectorTest {
                 .as("없는 대가 섞여도 산 대 안에서 전부인지 본다").isEqualTo(100);
     }
 
-    /** 배제가 만든 부족분은 우리가 만든 것이다. 하한이 없으면 한산 통과가 전면 차단된다. */
+    /** 남은 대가 0 이라고 말했으면 그것이 백프레셔다. 앓는 대의 보고로 하한을 얹으면 여유 0 인 대에 밀어 넣는다. */
     @Test
-    @DisplayName("배제로_하한_밑이면_하한을_건다")
-    void 배제로_하한_밑이면_하한을_건다() {
+    @DisplayName("배제로_남은_대가_0이면_하한을_안_얹는다")
+    void 배제로_남은_대가_0이면_하한을_안_얹는다() {
         CapacityCollector collector = collector();
 
-        long credit = collector.collect(셋(100, 0, 0, NOW), NOW, 1, Set.of("x"));
+        assertThat(collector.collect(셋(100, 0, 0, NOW), NOW, 1, Set.of("x"))).isZero();
+        assertThat(collector.lastFloor()).isZero();
+    }
+
+    /** 램프가 깎은 부족분은 배제가 있어도 우리가 만든 것이다. */
+    @Test
+    @DisplayName("램프가_만든_부족분은_배제가_있어도_하한을_건다")
+    void 램프가_만든_부족분은_배제가_있어도_하한을_건다() {
+        CapacityCollector collector = collector();
+        collector.collect(List.of(report("x", 100, NOW)), NOW, 1, Set.of());
+
+        long credit = collector.collect(List.of(report("x", 100, NOW + 1), report("y", 100, NOW + 1)),
+                NOW + 1, 1, Set.of("x"));
 
         assertThat(credit).isEqualTo(FLOOR);
         assertThat(collector.lastFloor()).isEqualTo(FLOOR);
@@ -1142,15 +1155,51 @@ class CapacityCollectorTest {
         assertThat(collector.collect(셋(100, 100, 100, 끝), 끝, 1, Set.of())).isEqualTo(300);
     }
 
-    /** 안 뺀 것은 풀린 것이 아니다. 입력이 여전히 그 대를 뺐다고 말한다. */
+    /** 뺐던 대가 전부 규칙으로 돌아오는 것도 풀림이다. 한 틱에 몫을 돌려주면 방금 앓던 대로 몰린다. */
     @Test
-    @DisplayName("전부가_대상이라_안_뺀_것은_풀림이_아니다")
-    void 전부가_대상이라_안_뺀_것은_풀림이_아니다() {
+    @DisplayName("전부가_되어_빼지_않게_된_대는_램프를_다시_탄다")
+    void 전부가_되어_빼지_않게_된_대는_램프를_다시_탄다() {
         CapacityCollector collector = collector();
         collector.collect(셋(100, 100, 100, NOW), NOW, 1, Set.of("x"));
 
         assertThat(collector.collect(셋(100, 100, 100, NOW + 1), NOW + 1, 1, Set.of("x", "y", "z")))
-                .isEqualTo(300);
+                .isEqualTo(200);
+        long 절반 = NOW + 1 + RAMP_UP.toSeconds() / 2;
+        assertThat(collector.collect(셋(100, 100, 100, 절반), 절반, 1, Set.of("x", "y", "z")))
+                .isEqualTo(250);
+    }
+
+    /** 뺀 적 없는 대는 풀려도 램프를 안 탄다. 태우면 예산이 한 틱에 하한까지 떨어진다. */
+    @Test
+    @DisplayName("처음부터_전부면_풀려도_절벽이_없다")
+    void 처음부터_전부면_풀려도_절벽이_없다() {
+        CapacityCollector collector = collector();
+        collector.collect(셋(100, 100, 100, NOW), NOW, 1, Set.of("x", "y", "z"));
+
+        assertThat(collector.collect(셋(100, 100, 100, NOW + 1), NOW + 1, 1, Set.of())).isEqualTo(300);
+    }
+
+    /** 노드의 전부 판정은 라우팅 목록으로 한다. 주소 없는 대까지 세면 보낼 곳이 다 빠진 채 그 대 몫만 남는다. */
+    @Test
+    @DisplayName("전부는_라우팅할_수_있는_대로_잰다")
+    void 전부는_라우팅할_수_있는_대로_잰다() {
+        long credit = collector().collect(List.of(
+                주소_있는_보고("x", "10.0.1.7:8080", 100, NOW),
+                주소_있는_보고("y", "10.0.1.8:8080", 100, NOW),
+                report("d", 50, NOW)), NOW, 1, Set.of("x", "y"));
+
+        assertThat(credit).isEqualTo(250);
+    }
+
+    /** 낡은 보고와 음수 보고는 산 대가 아니다. 세면 전부가 전부로 안 보여 다 뺀다. */
+    @Test
+    @DisplayName("낡은_보고와_음수_보고는_전부_판정에_안_든다")
+    void 낡은_보고와_음수_보고는_전부_판정에_안_든다() {
+        List<CapacityReport> reports = new ArrayList<>(셋(100, 100, 100, NOW));
+        reports.add(report("w", 100, NOW - FRESHNESS.toSeconds() - 1));
+        reports.add(report("n", -1, NOW));
+
+        assertThat(collector().collect(reports, NOW, 1, Set.of("x", "y", "z"))).isEqualTo(300);
     }
 
     @Test

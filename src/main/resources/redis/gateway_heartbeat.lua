@@ -102,9 +102,15 @@ end
 -- 쓰는 양을 노드 수에만 비례하게 묶는다 (첫 줄의 allow-oom 근거).
 local eject = ARGV[6]
 local ejecting = eject ~= nil and eject ~= ''
+-- 오류에 입력을 되싣지 않는다. 그 문자열은 예외를 거쳐 로그로 간다.
 if ejecting then
+    -- 이름 수와 길이만 보면 쉼표만으로 된 목록이 상한을 비켜 간다.
+    local maxBytes = MAX_EJECT * (MAX_ID_LEN + 1) + 1
+    if #eject > maxBytes then
+        return redis.error_reply('배제 목록은 ' .. maxBytes .. ' 바이트까지다: ' .. #eject)
+    end
     if string.sub(eject, 1, 1) ~= ',' or string.sub(eject, -1) ~= ',' then
-        return redis.error_reply('배제 목록은 쉼표로 감싸야 한다: ' .. eject)
+        return redis.error_reply('배제 목록은 쉼표로 감싸야 한다: ' .. #eject .. ' 바이트')
     end
     local count = 0
     for id in string.gmatch(eject, '[^,]+') do
@@ -112,6 +118,10 @@ if ejecting then
         if #id > MAX_ID_LEN then
             return redis.error_reply(
                     '배제한 인스턴스 이름은 ' .. MAX_ID_LEN .. ' 바이트까지다: ' .. #id)
+        end
+        -- 뒷단이 정한 이름이 모든 노드의 해시와 로그로 퍼진다. 로캘과 무관하게 바이트로 잰다.
+        if string.find(id, '[^A-Za-z0-9._:-]') then
+            return redis.error_reply('배제한 인스턴스 이름에 허용 밖 문자가 있다')
         end
     end
     if count > MAX_EJECT then

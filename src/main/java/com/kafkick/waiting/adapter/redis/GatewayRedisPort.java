@@ -1,12 +1,12 @@
 package com.kafkick.waiting.adapter.redis;
 
 import com.kafkick.waiting.domain.admission.CircuitState;
-import java.nio.charset.StandardCharsets;
 import java.util.Collection;
-import java.util.LinkedHashMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.regex.Pattern;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
@@ -46,6 +46,7 @@ public final class GatewayRedisPort {
      * @param reapAfterSec 이보다 오래된 항목은 지운다. 시각은 레디스가 찍는다
      * @param voteFreshSec 표를 인정하는 신선도. 분모의 임계보다 훨씬 짧다
      */
+    /** 배제 목록을 안 싣는다 — 라우팅이 꺼진 노드의 모양이다. 켜진 노드가 부르면 뺀 대의 몫이 예산에 남는다. */
     public Mono<Presence> beat(String instanceId, long reapAfterSec, long voteFreshSec,
             CircuitState circuit, long passedPerSec) {
         return beat(instanceId, reapAfterSec, voteFreshSec, circuit, passedPerSec, null);
@@ -65,7 +66,8 @@ public final class GatewayRedisPort {
     /** 스크립트의 상한과 같아야 한다. */
     private static final int MAX_EJECT = 32;
 
-    private static final int MAX_ID_LEN = 64;
+    /** 스크립트가 받는 이름과 길이 상한. 이 문자들은 한 바이트라 글자 수가 곧 바이트 수다. */
+    private static final Pattern EJECT_ID = Pattern.compile("[A-Za-z0-9._:-]{1,64}");
 
     /**
      * 스크립트가 거절할 이름은 버리고 이름순 앞에서 상한까지만 보낸다. <b>자르지 않는다</b> —
@@ -76,8 +78,7 @@ public final class GatewayRedisPort {
             return "";
         }
         List<String> ids = ejected.stream()
-                .filter(id -> id != null && !id.isEmpty() && id.indexOf(',') < 0
-                        && id.getBytes(StandardCharsets.UTF_8).length <= MAX_ID_LEN)
+                .filter(id -> id != null && EJECT_ID.matcher(id).matches())
                 .distinct()
                 .sorted()
                 .limit(MAX_EJECT)
@@ -119,7 +120,7 @@ public final class GatewayRedisPort {
         for (int i = 0; i < BEAT_HEAD; i++) {
             at[i] = number(v.get(i));
         }
-        Map<String, Integer> votes = new LinkedHashMap<>();
+        Map<String, Integer> votes = new HashMap<>();
         for (int i = BEAT_HEAD; i < v.size(); i += 2) {
             votes.put(String.valueOf(v.get(i)), number(v.get(i + 1)));
         }
@@ -128,7 +129,10 @@ public final class GatewayRedisPort {
     }
 
     private int number(Object raw) {
-        return raw instanceof Number n ? (int) n.longValue() : Integer.parseInt(String.valueOf(raw));
+        if (raw instanceof Number n) {
+            return (int) n.longValue();
+        }
+        throw new IllegalStateException("하트비트의 수 칸이 수가 아니다: " + raw);
     }
 
     /**
@@ -150,9 +154,9 @@ public final class GatewayRedisPort {
             int passReported, int ejectReported, Map<String, Integer> ejectVotes) {
 
         /** 배제를 아무도 안 실은 회차. */
-        public Presence(int alive, int open, int halfOpen, int reported, int passed,
-                int passReported) {
-            this(alive, open, halfOpen, reported, passed, passReported, 0, Map.of());
+        public static Presence withoutEjection(int alive, int open, int halfOpen, int reported,
+                int passed, int passReported) {
+            return new Presence(alive, open, halfOpen, reported, passed, passReported, 0, Map.of());
         }
 
         // **스크립트가 못 내는 조합을 픽스처가 만들면 안 된다.** 표를 낸

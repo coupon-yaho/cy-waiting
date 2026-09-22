@@ -16,6 +16,7 @@ on:
         required: false
         default: 20
       # 비우면 부른 쪽의 커밋이다. 야간이 develop 을 따로 잴 때 쓴다.
+      # 아티팩트 이름에 들어가므로 `/` 가 든 ref 는 못 넘긴다.
       ref:
         type: string
         required: false
@@ -182,5 +183,5 @@ jobs:
       - name: 잡 요약 기록
         if: always() && steps.setup.outputs.buildable == 'true'
         run: |
-          echo "### 테스트 — ${{ inputs.layer }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "### 테스트 — ${{ inputs.layer }}${{ inputs.ref != '' && format(' ({0})', inputs.ref) || '' }}" >> "$GITHUB_STEP_SUMMARY"
           echo "결과: \`${{ steps.run.outcome }}\`" >> "$GITHUB_STEP_SUMMARY"

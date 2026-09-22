@@ -8,7 +8,7 @@ jira: CY-996
 agent: claude-opus-5
 confidence: high
 promoted-to:
-commits: [a9172f3c, 49242f2e, 94e5595e]
+commits: [891dc0fc, a9172f3c, 49242f2e, 94e5595e]
 ---
 
 # 뮤테이션 회귀를 develop 에서 먼저 본다

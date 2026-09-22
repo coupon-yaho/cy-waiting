@@ -88,6 +88,7 @@ jobs:
       layer: mutation
       ref: develop
       timeout-minutes: 60
+
   # **G7.5 는 시나리오 행렬에 못 넣는다.** 크레딧을 굶긴 겹침으로 스택을 띄우고
   # 실행 도중 임계를 표본해야 해서, k6 한 회차 돌리고 요약을 보는 틀과 모양이 다르다.
   # 판정 자체는 `gate-selftest.sh` 가 PR 마다 몇 초에 검증한다.

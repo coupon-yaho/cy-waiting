@@ -109,6 +109,10 @@ class AuthPropertiesTest {
         assertThatThrownBy(() -> jwks("file:///etc/keys", true)).hasMessageContaining("https 여야");
         assertThatCode(() -> jwks("http://idp/jwks", true))
                 .as("시험 환경은 명시적으로 연다").doesNotThrowAnyException();
+        for (String 주소 : new String[] {"https:/jwks", "https:jwks", "/jwks", "https:///jwks"}) {
+            assertThatThrownBy(() -> jwks(주소, false)).as("'%s'", 주소)
+                    .hasMessageContaining("jwks-uri");
+        }
     }
 
     @Test

@@ -379,6 +379,13 @@ class MemberIdentityJwtTest {
     }
 
     @Test
+    @DisplayName("EC 알고리즘과 키의 곡선이 어긋나면 기동에서 막는다 — 안 막으면 전원 401 이다")
+    void ec_곡선() throws Exception {
+        assertThatThrownBy(() -> JwtDecoders.of(공개키("ES384", ec()), 시계))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("곡선");
+    }
+
+    @Test
     @DisplayName("다른 EC 키로 서명한 토큰은 401 이다")
     void ec_다른_키() throws Exception {
         String 남의_키로 = sign(new ECDSASigner((ECPrivateKey) ec().getPrivate()), JWSAlgorithm.ES256,

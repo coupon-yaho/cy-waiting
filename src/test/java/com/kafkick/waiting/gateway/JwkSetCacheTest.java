@@ -24,6 +24,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Mono;
+import reactor.test.StepVerifier;
 
 /**
  * 키 집합 캐시 (CY-980). 요점은 <b>인증 없는 요청이 발급자를 두드리지 못하는가</b>다.
@@ -54,7 +55,7 @@ class JwkSetCacheTest {
 
     private final AtomicReference<Mono<String>> 응답 = new AtomicReference<>();
 
-    private final JwkSetCache 캐시 = new JwkSetCache(
+    private final JwkSetCache 캐시 = JwkSetCache.of(
             Mono.defer(() -> {
                 받은_횟수.incrementAndGet();
                 return 응답.get();
@@ -191,10 +192,24 @@ class JwkSetCacheTest {
 
     @Test
     @DisplayName("응답이 안 오면 시한에 끊는다")
-    void 시한() {
+    void 시한() throws Exception {
         응답.set(Mono.never());
+        SignedJWT 요청 = 토큰("k1");
 
-        assertThatThrownBy(() -> 키("k1")).hasRootCauseInstanceOf(
-                TimeoutException.class);
+        StepVerifier.withVirtualTime(() -> 캐시.apply(요청))
+                .expectSubscription()
+                .thenAwait(JwkSetCache.TIMEOUT)
+                .expectError(TimeoutException.class)
+                .verify(Duration.ofSeconds(5));
+    }
+
+    @Test
+    @DisplayName("2048 비트보다 짧은 RSA 키는 받은 집합에서 버린다 — 공개키 설정과 같은 하한이다")
+    void 짧은_rsa_버림() throws Exception {
+        JWK 짧은 = new RSAKeyGenerator(1024, true).keyID("약한").generate().toPublicJWK();
+        JWK 긴 = new RSAKeyGenerator(2048).keyID("k1").generate().toPublicJWK();
+        응답.set(Mono.just(new JWKSet(List.of(짧은, 긴)).toString()));
+
+        assertThat(키("k1")).containsExactly("k1");
     }
 }

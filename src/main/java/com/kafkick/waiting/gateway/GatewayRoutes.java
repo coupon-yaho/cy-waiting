@@ -16,9 +16,12 @@ import org.springframework.cloud.gateway.route.builder.RouteLocatorBuilder;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
-import java.util.TreeSet;
+import java.util.TreeMap;
 import java.util.function.Predicate;
 import org.springframework.http.HttpMethod;
 import org.springframework.web.server.ServerWebExchange;
@@ -184,19 +187,20 @@ public class GatewayRoutes {
 
     /**
      * 진입 규칙의 뒷단은 하나다. 서킷과 배분이 뒷단을 안 가르므로, 둘이면 한쪽 장애가 다른 쪽 발급을
-     * 폴백으로 보낸다. 가르려면 쿠폰이 뒷단에 묶여야 한다 (90-decisions O-13). 주소를 비운 규칙은
-     * 공통 뒷단으로 센다.
+     * 폴백으로 보낸다. 가르려면 쿠폰이 뒷단에 묶여야 한다. 주소를 비운 규칙은 공통 뒷단으로 센다.
      */
     private void requireOneEntryBackend(RouteRules rules, String shared) {
-        Set<String> backends = new TreeSet<>();
+        Map<String, List<String>> byBackend = new TreeMap<>();
         for (RouteRules.Rule rule : rules.rules()) {
             if (rule.kind() == RouteRules.Kind.ENTRY) {
-                backends.add((rule.uri() == null ? shared : rule.uri()).toLowerCase(Locale.ROOT));
+                String backend = (rule.uri() == null ? shared : rule.uri()).toLowerCase(Locale.ROOT);
+                byBackend.computeIfAbsent(backend, key -> new ArrayList<>()).add(rule.id());
             }
         }
-        if (backends.size() > 1) {
+        // 주소는 안 싣는다. 내부 호스트명이 기동 로그로 샌다. 규칙 이름이면 어디를 고칠지 안다.
+        if (byBackend.size() > 1) {
             throw new IllegalStateException("진입 규칙의 뒷단이 둘 이상이다 — 서킷과 배분이 하나라 "
-                    + "장애가 섞인다: " + backends);
+                    + "장애가 섞인다. 뒷단별 규칙: " + byBackend.values());
         }
     }
 
@@ -208,7 +212,6 @@ public class GatewayRoutes {
             RetryGatewayFilterFactory retries) {
         BodyDeadline bodyDeadline = bodyDeadline(backend, meters);
         String shared = backendUri(backend, routing);
-        requireOneEntryBackend(rules, shared);
         RouteLocatorBuilder.Builder built = builder.routes();
         for (RouteRules.Rule rule : rules.forwarded()) {
             // **규칙이 주소를 적으면 그쪽이 이긴다.** 안 적으면 공통 뒷단으로 간다 —
@@ -270,6 +273,8 @@ public class GatewayRoutes {
                     .metadata(CONNECT_TIMEOUT_ATTR, (int) backend.connectTimeout().toMillis())
                     .uri(uri));
         }
+        // 규칙마다 도는 검사 뒤에 둔다. 균형기 우회가 더 정확한 원인이라 그쪽이 먼저 알린다.
+        requireOneEntryBackend(rules, shared);
         return built.build();
     }
 

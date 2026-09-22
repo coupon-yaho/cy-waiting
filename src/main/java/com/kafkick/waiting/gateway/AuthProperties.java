@@ -20,8 +20,6 @@ public record AuthProperties(Mode mode, Jwt jwt) {
     /** Authorization 은 입장 토큰 쪽이 이미 예약해 둔다. */
     private static final Set<String> IDENTITY_HEADERS = Set.of("x-member-id", "x-member-grade");
 
-    /** 신원 필터가 보는 범위. 이 밖의 경로는 토큰을 안 본다. */
-    static final String API_PREFIX = "/api/";
 
     public enum Mode {
         /** 인증 없이 회원 헤더를 형식만 본다. 서명이 없어 값 자체는 못 믿는다. */
@@ -48,21 +46,6 @@ public record AuthProperties(Mode mode, Jwt jwt) {
             if (IDENTITY_HEADERS.contains(name.toLowerCase(Locale.ROOT))) {
                 throw new IllegalArgumentException(
                         "waiting.auth.mode=JWT 에서 입장 토큰 헤더로 못 쓴다: " + name);
-            }
-        }
-    }
-
-    /** 인증을 켰으면 모든 라우트가 신원 필터 안에 있어야 한다. 밖의 경로는 토큰 없이 남의 이름을 쓴다. */
-    public void checkCovers(RouteRules routes) {
-        if (mode != Mode.JWT) {
-            return;
-        }
-        for (RouteRules.Rule rule : routes.rules()) {
-            for (String path : rule.paths()) {
-                if (!path.startsWith(API_PREFIX)) {
-                    throw new IllegalArgumentException("waiting.auth.mode=JWT 에서 라우트 '"
-                            + rule.id() + "' 의 경로가 " + API_PREFIX + " 밖이다: " + path);
-                }
             }
         }
     }

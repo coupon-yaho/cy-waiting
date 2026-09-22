@@ -65,16 +65,16 @@ public final class MemberIdentityFilter implements WebFilter {
 
     @Autowired
     MemberIdentityFilter(Clock clock, AuthProperties auth, EntryTokenDelivery delivery,
-            RouteRules routes, MeterRegistry meters) {
+            MeterRegistry meters) {
         this(clock, auth.jwt(),
                 auth.mode() == AuthProperties.Mode.JWT ? JwtDecoders.of(auth.jwt(), clock) : null,
                 meters);
         auth.checkAgainst(delivery);
-        auth.checkCovers(routes);
     }
 
     public static MemberIdentityFilter of(Clock clock) {
-        return new MemberIdentityFilter(clock, null, null, new SimpleMeterRegistry());
+        return new MemberIdentityFilter(clock, (AuthProperties.Jwt) null, null,
+                new SimpleMeterRegistry());
     }
 
     /** 시험이 검증기를 직접 꽂는다. */

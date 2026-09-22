@@ -1235,4 +1235,34 @@ class CapacityCollectorTest {
         assertThat(collector.collect(셋(100, 100, 100, NOW + 1), NOW + 1, 1, Set.of()))
                 .isEqualTo(300);
     }
+
+    /**
+     * 전부는 노드와 같은 자로 잰다 — 몫이 있는 라우팅 가능 대다. 여유 0 인 대는 노드의 후보가 아니라, 그 대를 세면
+     * 노드는 뺀 대를 도로 넣는데 예산은 0 이 되어 한산 통과까지 막힌다. 열화된 대라도 0 보다 낫다.
+     */
+    @Test
+    @DisplayName("여유_0인_대는_전부_판정에_안_든다")
+    void 여유_0인_대는_전부_판정에_안_든다() {
+        long credit = collector().collect(List.of(
+                주소_있는_보고("a", "10.0.1.7:8080", 50, NOW),
+                주소_있는_보고("b", "10.0.1.8:8080", 50, NOW),
+                주소_있는_보고("c", "10.0.1.9:8080", 0, NOW)), NOW, 2, Set.of("a", "b"));
+
+        assertThat(credit).isEqualTo(100);
+    }
+
+    /** 허용 밖 주소의 대는 노드가 못 보낸다. 그 대를 세면 보낼 곳이 다 빠진 채 그 대 몫만 남는다. */
+    @Test
+    @DisplayName("허용_밖_대는_전부_판정에_안_든다")
+    void 허용_밖_대는_전부_판정에_안_든다() {
+        CapacityCollector collector = CapacityCollector.of(RAMP_UP, FRESHNESS, FLOOR, CAP,
+                AllowedDestinations.of(List.of("10.0.1.0/24"), 포트));
+
+        long credit = collector.collect(List.of(
+                주소_있는_보고("x", "10.0.1.7:8080", 100, NOW),
+                주소_있는_보고("y", "10.0.1.8:8080", 100, NOW),
+                주소_있는_보고("d", "10.9.9.9:8080", 50, NOW)), NOW, 1, Set.of("x", "y"));
+
+        assertThat(credit).isEqualTo(250);
+    }
 }

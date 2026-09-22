@@ -229,16 +229,17 @@ lib_case "중첩형 도착률" 1234.5000 "$(peak_summary_value "$nested" rate)"
 lib_case "중첩형 응답 p99" 9.5000 "$(peak_summary_value "$nested" p99)"
 lib_case "없는 파일은 빈 값" "" "$(peak_summary_value "$work/none.json" rate)"
 
-# 끊긴 몫(%) — 발급 응답 중 판정이 끊은(429·503) 몫 (CY-990). 두 표의 섞임을 견주는 재료다. 폴링은 안 넣는다.
+# 끊긴 몫(%) — 발급 응답 중 판정이 끊은(429·503) 몫 (CY-990). 두 표의 섞임을 견주는 재료다. **폴링은 안 넣는다** —
+# 발급만 세는 계수를 따로 읽는다. 폴링의 끊김이 섞이면 섞임의 차이가 희석된다.
 counts=$work/counts.json
-printf '%s' '{"metrics":{"peak_admitted":{"count":90},"peak_queued":{"count":5},"peak_closed":{"count":0},"peak_shed":{"count":5}}}' \
+printf '%s' '{"metrics":{"peak_issue_total":{"count":100},"peak_issue_shed":{"count":5},"peak_shed":{"count":50},"peak_admitted":{"count":900}}}' \
     > "$counts"
 nested_counts=$work/nested_counts.json
-printf '%s' '{"metrics":{"peak_admitted":{"values":{"count":60}},"peak_shed":{"values":{"count":20}}}}' \
+printf '%s' '{"metrics":{"peak_issue_total":{"values":{"count":80}},"peak_issue_shed":{"values":{"count":20}}}}' \
     > "$nested_counts"
-lib_case "끊긴 몫" 5.0 "$(peak_shed_pct "$counts")"
-lib_case "중첩형 · 없는 계수는 0" 25.0 "$(peak_shed_pct "$nested_counts")"
-printf '%s' '{"metrics":{}}' > "$work/zero.json"
+lib_case "발급만 센 끊긴 몫 · 폴링 계수는 안 본다" 5.0 "$(peak_shed_pct "$counts")"
+lib_case "중첩형" 25.0 "$(peak_shed_pct "$nested_counts")"
+printf '%s' '{"metrics":{"peak_issue_shed":{"count":3}}}' > "$work/zero.json"
 lib_case "발급이 없으면 -" - "$(peak_shed_pct "$work/zero.json")"
 lib_case "없는 파일은 -" - "$(peak_shed_pct "$work/none.json")"
 

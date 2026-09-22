@@ -89,4 +89,23 @@ class AuthPropertiesTest {
     void 식별자_클레임() {
         assertThat(hs(비밀).memberClaim()).isEqualTo("sub");
     }
+
+    @Test
+    @DisplayName("인증을 켰는데 입장 토큰 헤더가 회원 헤더와 같으면 막는다 — 클라이언트 값이 검증된 신원을 덮는다")
+    void 입장_토큰_이름_충돌() {
+        AuthProperties 켬 = new AuthProperties(Mode.JWT, hs(비밀));
+        for (String 이름 : new String[] {"X-Member-Id", "x-member-grade", "Authorization"}) {
+            assertThatThrownBy(() -> 켬.checkAgainst(
+                    new EntryTokenDelivery(EntryTokenDelivery.Where.BODY, null, 이름)))
+                    .as("뒷단 이름 '%s'", 이름).isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> 켬.checkAgainst(
+                    new EntryTokenDelivery(EntryTokenDelivery.Where.BODY, 이름, null)))
+                    .as("받는 이름 '%s'", 이름).isInstanceOf(IllegalArgumentException.class);
+        }
+        assertThatCode(() -> 켬.checkAgainst(new EntryTokenDelivery(null, null, null)))
+                .doesNotThrowAnyException();
+        assertThatCode(() -> new AuthProperties(Mode.NONE, null).checkAgainst(
+                new EntryTokenDelivery(EntryTokenDelivery.Where.BODY, null, "X-Member-Id")))
+                .as("인증을 끄면 막을 검증된 신원이 없다").doesNotThrowAnyException();
+    }
 }

@@ -6,21 +6,26 @@ import com.kafkick.waiting.gateway.AuthProperties.Jwt;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.JWSHeader;
 import com.nimbusds.jose.JWSSigner;
+import com.nimbusds.jose.crypto.ECDSASigner;
 import com.nimbusds.jose.crypto.MACSigner;
 import com.nimbusds.jose.crypto.RSASSASigner;
 import com.nimbusds.jose.jwk.JWKSet;
 import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jwt.JWTClaimsSet;
+import com.nimbusds.jwt.PlainJWT;
 import com.nimbusds.jwt.SignedJWT;
 import com.sun.net.httpserver.HttpServer;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
+import java.security.interfaces.ECPrivateKey;
 import java.security.interfaces.RSAPublicKey;
+import java.security.spec.ECGenParameterSpec;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.Base64;
 import java.util.Date;
 import java.util.concurrent.atomic.AtomicReference;
@@ -43,6 +48,10 @@ class MemberIdentityJwtTest {
 
     private static final String 주소 = "/api/v1/coupons/c1/issue";
 
+    private static final Instant 지금 = Instant.parse("2026-09-22T00:00:00Z");
+
+    private static final Clock 시계 = Clock.fixed(지금, ZoneOffset.UTC);
+
     private final AtomicReference<HttpHeaders> 넘어간_헤더 = new AtomicReference<>();
 
     private static String hs256(JWTClaimsSet claims) throws Exception {
@@ -58,11 +67,11 @@ class MemberIdentityJwtTest {
 
     private static JWTClaimsSet.Builder 클레임(String sub) {
         return new JWTClaimsSet.Builder().subject(sub)
-                .expirationTime(Date.from(Instant.now().plusSeconds(300)));
+                .expirationTime(Date.from(지금.plusSeconds(300)));
     }
 
     private MemberIdentityFilter 필터(Jwt 설정) {
-        return MemberIdentityFilter.jwt(Clock.systemUTC(), 설정, JwtDecoders.of(설정));
+        return MemberIdentityFilter.jwt(시계, 설정, JwtDecoders.of(설정, 시계));
     }
 
     private static Jwt hs(String issuer, String gradeClaim) {
@@ -130,7 +139,7 @@ class MemberIdentityJwtTest {
     @DisplayName("만료된 토큰은 401 이다")
     void 만료() throws Exception {
         String 만료된 = hs256(new JWTClaimsSet.Builder().subject("user-42")
-                .expirationTime(Date.from(Instant.now().minusSeconds(3_600))).build());
+                .expirationTime(Date.from(지금.minusSeconds(3_600))).build());
 
         assertThat(돌린다(필터(hs(null, null)), 요청(만료된, null)).getResponse().getStatusCode())
                 .isEqualTo(HttpStatus.UNAUTHORIZED);
@@ -168,7 +177,8 @@ class MemberIdentityJwtTest {
                 MockServerHttpRequest.get("/actuator/health").build());
         돌린다(필터(hs(null, null)), 교환);
 
-        assertThat(넘어간_헤더.get()).isNotNull();
+        assertThat(교환.getResponse().getStatusCode()).as("401 이 아니다").isNull();
+        assertThat(넘어간_헤더.get()).isEqualTo(교환.getRequest().getHeaders());
     }
 
     @Test
@@ -214,5 +224,61 @@ class MemberIdentityJwtTest {
         } finally {
             서버.stop(0);
         }
+    }
+
+    @Test
+    @DisplayName("EC 공개키로 검증한다")
+    void ec_공개키() throws Exception {
+        KeyPairGenerator 생성 = KeyPairGenerator.getInstance("EC");
+        생성.initialize(new ECGenParameterSpec("secp256r1"));
+        KeyPair 키 = 생성.generateKeyPair();
+        String pem = "-----BEGIN PUBLIC KEY-----\n"
+                + Base64.getMimeEncoder().encodeToString(키.getPublic().getEncoded())
+                + "\n-----END PUBLIC KEY-----";
+        Jwt 설정 = new Jwt("ES256", null, pem, null, null, null, null, null, null);
+        String 토큰 = sign(new ECDSASigner((ECPrivateKey) 키.getPrivate()), JWSAlgorithm.ES256,
+                클레임("user-3").build());
+
+        돌린다(필터(설정), 요청(토큰, null));
+
+        assertThat(넘어간_헤더.get().getFirst("X-Member-Id")).isEqualTo("user-3");
+    }
+
+    @Test
+    @DisplayName("서명 없는 토큰은 401 이다")
+    void 서명_없음() {
+        String 서명없는 = new PlainJWT(클레임("user-42").build()).serialize();
+
+        assertThat(돌린다(필터(hs(null, null)), 요청(서명없는, null)).getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
+
+    @Test
+    @DisplayName("공개키를 HMAC 비밀로 써서 서명한 토큰은 401 이다 — 알고리즘을 고정한 까닭이다")
+    void 알고리즘_바꿔치기() throws Exception {
+        KeyPair 키 = KeyPairGenerator.getInstance("RSA").generateKeyPair();
+        String pem = "-----BEGIN PUBLIC KEY-----\n"
+                + Base64.getMimeEncoder().encodeToString(키.getPublic().getEncoded())
+                + "\n-----END PUBLIC KEY-----";
+        Jwt 설정 = new Jwt("RS256", null, pem, null, null, null, null, null, null);
+        // 공개키는 공개다. 토큰 머리의 알고리즘을 믿으면 누구나 그것을 비밀로 HS256 서명을 만든다.
+        String 위조 = sign(new MACSigner(pem.getBytes(StandardCharsets.UTF_8)), JWSAlgorithm.HS256,
+                클레임("user-42").build());
+
+        assertThat(돌린다(필터(설정), 요청(위조, null)).getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
+
+    @Test
+    @DisplayName("대상을 적었으면 다른 대상의 토큰은 401 이다")
+    void 대상() throws Exception {
+        Jwt 설정 = new Jwt("HS256", 비밀, null, null, null, "waiting", null, null, null);
+        String 남의_대상 = hs256(클레임("user-42").audience("other").build());
+        String 우리_대상 = hs256(클레임("user-42").audience("waiting").build());
+
+        assertThat(돌린다(필터(설정), 요청(남의_대상, null)).getResponse().getStatusCode())
+                .isEqualTo(HttpStatus.UNAUTHORIZED);
+        돌린다(필터(설정), 요청(우리_대상, null));
+        assertThat(넘어간_헤더.get().getFirst("X-Member-Id")).isEqualTo("user-42");
     }
 }

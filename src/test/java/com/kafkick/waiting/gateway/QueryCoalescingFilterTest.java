@@ -212,7 +212,54 @@ class QueryCoalescingFilterTest {
             filter.filter(e, ex -> 답한다(ex, "개인" + 뒷단.incrementAndGet())).block();
         }
 
-        assertThat(뒷단).as("토큰을 든 요청은 각자 간다").hasValue(2);
+        assertThat(뒷단).as("게이트웨이가 모르는 토큰을 든 요청은 각자 간다").hasValue(2);
+    }
+
+    /** 인증을 켠 배포. 신원 필터가 토큰을 검증하고 회원 헤더를 다시 실은 뒤에 온다. */
+    private MockServerWebExchange 토큰_조회(int 회원) {
+        return MockServerWebExchange.from(MockServerHttpRequest.method(HttpMethod.GET, PATH)
+                .header("X-Member-Id", String.valueOf(회원))
+                .header("X-Member-Grade", "GOLD")
+                .header("Authorization", "Bearer 토큰-" + 회원));
+    }
+
+    /**
+     * <b>인증을 켜면 모든 조회에 토큰이 실립니다.</b> 토큰이 있다고 거르면 이 기능이 한 번도 안
+     * 돕니다. 게이트웨이가 검증한 토큰이고, 공유 선언(public)이 있어야만 나누므로 RFC 9111 3.5 가
+     * 허락하는 범위입니다.
+     */
+    @Test
+    @DisplayName("인증을_켜면_검증된_토큰을_든_조회도_모은다")
+    void 인증을_켜면_검증된_토큰을_든_조회도_모은다() {
+        QueryCoalescingFilter 인증 = QueryCoalescingFilter.forVerifiedCredentials(설정, 시계, meters);
+        AtomicInteger 뒷단 = new AtomicInteger();
+
+        for (int i = 0; i < 3; i++) {
+            MockServerWebExchange e = 토큰_조회(81_290 + i);
+            인증.filter(e, ex -> 답한다(ex, "목록" + 뒷단.incrementAndGet())).block();
+            assertThat(본문(e)).isEqualTo("목록1");
+        }
+
+        assertThat(뒷단).as("뒷단 호출").hasValue(1);
+    }
+
+    /** 인증을 켜도 나눠도 된다는 말은 뒷단만 한다. 말이 없으면 각자 간다. */
+    @Test
+    @DisplayName("인증을_켜도_공유_선언이_없으면_각자_간다")
+    void 인증을_켜도_공유_선언이_없으면_각자_간다() {
+        QueryCoalescingFilter 인증 = QueryCoalescingFilter.forVerifiedCredentials(설정, 시계, meters);
+        AtomicInteger 뒷단 = new AtomicInteger();
+
+        for (int i = 0; i < 3; i++) {
+            MockServerWebExchange e = 토큰_조회(81_290 + i);
+            인증.filter(e, ex -> {
+                ex.getResponse().getHeaders().setCacheControl("private");
+                return 답한다(ex, "개인" + 뒷단.incrementAndGet());
+            }).block();
+            assertThat(본문(e)).isEqualTo("개인" + (i + 1));
+        }
+
+        assertThat(뒷단).as("개인화된 응답은 나누지 않는다").hasValue(3);
     }
 
     /**

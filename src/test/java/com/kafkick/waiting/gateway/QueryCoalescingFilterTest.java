@@ -304,6 +304,31 @@ class QueryCoalescingFilterTest {
                 "이력" + e.getRequest().getHeaders().getFirst(HttpHeaders.AUTHORIZATION)));
     }
 
+    /**
+     * 토큰마다 다르다고 배운 경로는 무리를 안 짓고 그대로 흘린다. 무리를 지으면 토큰 원문이 키가 되어 한 사람이
+     * 자리 하나씩을 차지하고, 다른 경로의 모으기까지 포화로 멎는다. 뒷단이 그 말을 거두면 다시 모은다.
+     */
+    @Test
+    @DisplayName("토큰마다_다르다고_배운_경로는_무리를_안_짓고_거두면_다시_모은다")
+    void 토큰마다_다르다고_배운_경로는_무리를_안_짓고_거두면_다시_모은다() {
+        filter.filter(검증된_조회(1), ex -> {
+            ex.getResponse().getHeaders().setVary(List.of(HttpHeaders.AUTHORIZATION));
+            return 답한다(ex, "이력");
+        }).block();
+
+        filter.filter(검증된_조회(2), ex -> 답한다(ex, "목록")).block();
+        assertThat(meters.counter("waiting.coalescing", "outcome", "skipped",
+                "cause", "vary-credential").count()).as("무리를 안 짓고 흘렸다").isEqualTo(1.0);
+
+        AtomicInteger 뒷단 = new AtomicInteger();
+        List<MockServerWebExchange> 요청들 = 동시에_보낸다(20, (ex, n) -> {
+            뒷단.incrementAndGet();
+            return 답한다(ex, "다시");
+        });
+        assertThat(뒷단).as("말을 거둔 뒤에는 다시 모은다").hasValue(1);
+        assertThat(요청들).allSatisfy(e -> assertThat(본문(e)).isEqualTo("다시"));
+    }
+
     /** 리더가 401 을 받아도 뒤따르는 사람의 결과가 아니다. 담기지도 않는다. */
     @Test
     @DisplayName("리더가_401_이면_뒤따르는_요청은_각자_가고_안_담긴다")

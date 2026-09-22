@@ -58,6 +58,22 @@ class EntryTokenDeliveryTest {
     }
 
     @Test
+    @DisplayName("게이트웨이가 쓰는 헤더 이름은 못 고른다 — 클라이언트 값이 그것을 덮는다")
+    void 예약된_이름() {
+        for (String 예약 : new String[] {"X-Member-Id", "x-member-grade", "Idempotency-Key",
+                "Queue-Token", "Authorization", "Host", "Content-Length", "Transfer-Encoding",
+                "Cookie", "Set-Cookie", "X-Real-IP", "X-Forwarded-For", "Forwarded",
+                "Access-Control-Allow-Origin", "Cache-Control", "Content-Type", "Vary"}) {
+            assertThatThrownBy(() -> new EntryTokenDelivery(Where.BODY, null, 예약))
+                    .as("뒷단 이름이 '%s' 면 클라이언트가 그 헤더 값을 정한다", 예약)
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> new EntryTokenDelivery(Where.HEADER, 예약, null))
+                    .as("받는 이름이 '%s' 면 게이트웨이 헤더와 부딪힌다", 예약)
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    @Test
     @DisplayName("빈 값은 안 적은 것이다 — 환경변수 기본값이 비어 온다")
     void 빈_값() {
         assertThat(new EntryTokenDelivery(Where.BODY, "", "  ").header())
@@ -89,6 +105,8 @@ class EntryTokenDeliveryTest {
 
         assertThat(exchange.getResponse().getHeaders().getFirst("X-Gate-Pass"))
                 .isEqualTo("et_abc");
+        assertThat(exchange.getResponse().getHeaders().getCacheControl())
+                .as("헤더로 실어도 캐시에 남으면 안 된다").isEqualTo("no-store");
         assertThat(exchange.getResponse().getBodyAsString().block())
                 .as("둘 다로 두지 않았으면 바디에 남기지 않는다 — 두 곳이면 어느 쪽이 정본인지 흐려진다")
                 .doesNotContain("et_abc")

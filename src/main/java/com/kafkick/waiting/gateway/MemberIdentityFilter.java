@@ -1,5 +1,7 @@
 package com.kafkick.waiting.gateway;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Clock;
 import java.util.List;
 import java.util.Locale;
@@ -7,7 +9,7 @@ import java.util.Set;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.annotation.Order;
 import org.springframework.security.oauth2.jwt.Jwt;
-import org.springframework.security.oauth2.jwt.JwtException;
+import org.springframework.security.oauth2.jwt.BadJwtException;
 import org.springframework.security.oauth2.jwt.ReactiveJwtDecoder;
 import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
@@ -19,9 +21,9 @@ import org.springframework.web.util.pattern.PathPatternParser;
 import reactor.core.publisher.Mono;
 
 /**
- * 회원 헤더의 <b>형식만</b> 본다. 서명이 없어 값 자체는 못 믿고, 막는 것은 깨진
- * 값이 뒷단까지 흘러가는 것뿐이다. 필터 계층에 두는 것은 순번 조회가 라우트를 안
- * 타서, 라우트에만 붙이면 그 경로가 통째로 뚫리기 때문이다.
+ * 회원 신원을 세운다. 기본은 회원 헤더의 형식만 보고, 인증을 켜면 토큰을 검증해 두 헤더를
+ * 다시 싣는다. 필터 계층에 두는 것은 순번 조회가 라우트를 안 타서, 라우트에만 붙이면 그
+ * 경로가 통째로 뚫리기 때문이다.
  */
 @Component
 @Order(FilterOrder.IDENTITY)
@@ -42,6 +44,8 @@ public final class MemberIdentityFilter implements WebFilter {
 
     private static final String BEARER = "bearer ";
 
+    static final String REJECTED_METRIC = "waiting.auth.rejected";
+
     private final ApiError error;
 
     /** 인증을 켰을 때만 있다. 없으면 지금처럼 헤더를 형식만 본다. */
@@ -49,29 +53,34 @@ public final class MemberIdentityFilter implements WebFilter {
 
     private final AuthProperties.Jwt jwt;
 
-    private MemberIdentityFilter(Clock clock, AuthProperties.Jwt jwt, ReactiveJwtDecoder decoder) {
+    private final MeterRegistry meters;
+
+    private MemberIdentityFilter(Clock clock, AuthProperties.Jwt jwt, ReactiveJwtDecoder decoder,
+            MeterRegistry meters) {
         this.error = ApiError.of(clock);
         this.jwt = jwt;
         this.decoder = decoder;
+        this.meters = meters;
     }
 
     @Autowired
     MemberIdentityFilter(Clock clock, AuthProperties auth, EntryTokenDelivery delivery,
-            RouteRules routes) {
+            RouteRules routes, MeterRegistry meters) {
         this(clock, auth.jwt(),
-                auth.mode() == AuthProperties.Mode.JWT ? JwtDecoders.of(auth.jwt(), clock) : null);
+                auth.mode() == AuthProperties.Mode.JWT ? JwtDecoders.of(auth.jwt(), clock) : null,
+                meters);
         auth.checkAgainst(delivery);
         auth.checkCovers(routes);
     }
 
     public static MemberIdentityFilter of(Clock clock) {
-        return new MemberIdentityFilter(clock, (AuthProperties.Jwt) null, null);
+        return new MemberIdentityFilter(clock, null, null, new SimpleMeterRegistry());
     }
 
-    /** 인증을 켠 필터. 시험이 검증기를 직접 꽂는다. */
-    public static MemberIdentityFilter jwt(Clock clock, AuthProperties.Jwt jwt,
-            ReactiveJwtDecoder decoder) {
-        return new MemberIdentityFilter(clock, jwt, decoder);
+    /** 시험이 검증기를 직접 꽂는다. */
+    static MemberIdentityFilter jwt(Clock clock, AuthProperties.Jwt jwt, ReactiveJwtDecoder decoder,
+            MeterRegistry meters) {
+        return new MemberIdentityFilter(clock, jwt, decoder, meters);
     }
 
     @Override
@@ -97,41 +106,40 @@ public final class MemberIdentityFilter implements WebFilter {
     private Mono<Void> authenticated(ServerWebExchange exchange, WebFilterChain chain) {
         String token = bearer(exchange.getRequest().getHeaders().get(HttpHeaders.AUTHORIZATION));
         if (token == null) {
-            return unauthorized(exchange, "Bearer");
+            return reject(exchange, Rejected.MISSING);
         }
-        // **검증 실패만 401 로 바꾼다.** 뒤의 필터에서 난 오류까지 삼키면 장애가 인증 실패로 보인다.
+        // 토큰 탓인 것만 401 이다. 키 조회 실패는 503, 그 밖의 검증기 오류는 그대로 500 으로 간다.
         return decoder.decode(token)
                 .map(this::identity)
-                .onErrorResume(JwtException.class, e -> Mono.just(Identity.INVALID))
-                // 키 집합을 못 받은 것은 토큰 탓이 아니다. 401 이면 클라이언트는 다시 로그인한다.
-                .onErrorResume(IllegalStateException.class, e -> Mono.just(Identity.UNAVAILABLE))
-                .flatMap(id -> {
-                    if (id == Identity.INVALID) {
-                        return unauthorized(exchange, "Bearer error=\"invalid_token\"");
-                    }
-                    if (id == Identity.UNAVAILABLE) {
-                        return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE);
-                    }
-                    return chain.filter(exchange.mutate().request(r -> r.headers(h -> {
+                .onErrorResume(BadJwtException.class, e -> Mono.just(Rejected.INVALID))
+                .onErrorResume(IllegalStateException.class, e -> Mono.just(Rejected.UNAVAILABLE))
+                .flatMap(outcome -> switch (outcome) {
+                    case Verified id -> chain.filter(exchange.mutate().request(r -> r.headers(h -> {
                         h.remove(MEMBER_ID);
                         h.remove(MEMBER_GRADE);
                         h.set(MEMBER_ID, id.member());
                         h.set(MEMBER_GRADE, id.grade());
                     })).build());
+                    case Rejected why -> reject(exchange, why);
                 });
     }
 
     /** 헤더 모드와 같은 계약을 건다. 토큰이 서명됐다고 뒷단이 모르는 모양을 넘기지 않는다. */
-    private Identity identity(Jwt token) {
+    private Outcome identity(Jwt token) {
         String member = token.getClaimAsString(jwt.memberClaim());
         String grade = token.getClaimAsString(jwt.gradeClaim());
         return validId(member == null ? null : List.of(member))
                 && validGrade(grade == null ? null : List.of(grade))
-                ? new Identity(member, grade) : Identity.INVALID;
+                ? new Verified(member, grade) : Rejected.INVALID;
     }
 
-    private Mono<Void> unauthorized(ServerWebExchange exchange, String challenge) {
-        exchange.getResponse().getHeaders().set(HttpHeaders.WWW_AUTHENTICATE, challenge);
+    private Mono<Void> reject(ServerWebExchange exchange, Rejected why) {
+        meters.counter(REJECTED_METRIC, "reason", why.name().toLowerCase(Locale.ROOT)).increment();
+        if (why == Rejected.UNAVAILABLE) {
+            return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE);
+        }
+        exchange.getResponse().getHeaders().set(HttpHeaders.WWW_AUTHENTICATE,
+                why == Rejected.MISSING ? "Bearer" : "Bearer error=\"invalid_token\"");
         return error.write(exchange, ApiError.Code.UNAUTHORIZED);
     }
 
@@ -146,10 +154,16 @@ public final class MemberIdentityFilter implements WebFilter {
         return token.isEmpty() ? null : token;
     }
 
-    /** 검증된 신원. */
-    private record Identity(String member, String grade) {
-        static final Identity INVALID = new Identity("", "");
-        static final Identity UNAVAILABLE = new Identity("", "");
+    private sealed interface Outcome permits Verified, Rejected {
+    }
+
+    private record Verified(String member, String grade) implements Outcome {
+    }
+
+    private enum Rejected implements Outcome {
+        MISSING,
+        INVALID,
+        UNAVAILABLE
     }
 
     /**

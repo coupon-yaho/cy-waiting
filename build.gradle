@@ -97,9 +97,7 @@ dependencies {
     // 가용량 비율 라우팅 (Phase 9.1.2). **디스커버리는 안 붙인다** — 인스턴스
     // 목록은 가용량 보고가 스냅샷에 실어 오고, 공급자는 그것을 로컬에서 읽는다.
     implementation 'org.springframework.cloud:spring-cloud-starter-loadbalancer'
-    // JWT 검증 (CY-980). 판은 부트 BOM 안의 spring-security BOM 이 관리한다. **스타터를 안
-    // 쓴다** — 리소스 서버 스타터는 보안 필터 체인을 통째로 켜서, 우리 필터 순서와 공개 경로가
-    // 그쪽 기본값에 묶인다. 디코더만 가져와 신원 필터 안에서 부른다.
+    // JWT 검증 (CY-980). 버전은 spring-security BOM 이 관리한다. 스타터는 보안 필터 체인을 켜서 안 쓴다.
     implementation 'org.springframework.security:spring-security-oauth2-jose'
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'

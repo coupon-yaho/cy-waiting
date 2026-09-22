@@ -23,7 +23,6 @@ public record AuthProperties(Mode mode, Jwt jwt) {
     /** 신원 필터가 보는 범위. 이 밖의 경로는 토큰을 안 본다. */
     static final String API_PREFIX = "/api/";
 
-    /** 회원 신원의 출처. */
     public enum Mode {
         /** 인증 없이 회원 헤더를 형식만 본다. 서명이 없어 값 자체는 못 믿는다. */
         NONE,

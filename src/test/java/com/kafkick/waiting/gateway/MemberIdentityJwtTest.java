@@ -41,6 +41,8 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
+import org.springframework.security.oauth2.jwt.BadJwtException;
+import org.springframework.security.oauth2.jwt.JwtException;
 import reactor.core.publisher.Mono;
 
 /**
@@ -488,5 +490,25 @@ class MemberIdentityJwtTest {
         거절(돌린다(필터, 요청(b -> b.header("X-Member-Id", "42"))), 없음);
         돌린다(필터, 요청(hs256(클레임("42").build())));
         통과("42");
+    }
+
+    @Test
+    @DisplayName("토큰 탓이 아닌 검증기 오류는 401 로 바꾸지 않는다 — 내부 장애가 다시 로그인하라로 보이면 안 된다")
+    void 검증기_내부_오류() throws Exception {
+        MemberIdentityFilter 내부_오류 = MemberIdentityFilter.jwt(시계, hs(null, null),
+                t -> Mono.error(new JwtException("암호 처리 실패")), 계측);
+        MockServerWebExchange 교환 = 요청(hs256(클레임("42").build()));
+
+        assertThatThrownBy(() -> 돌린다(내부_오류, 교환)).isInstanceOf(JwtException.class);
+        assertThat(교환.getResponse().getStatusCode()).isNull();
+        assertThat(교환.getResponse().getHeaders().getFirst(HttpHeaders.WWW_AUTHENTICATE)).isNull();
+        assertThat(계측.counter(MemberIdentityFilter.REJECTED_METRIC, "reason", "invalid").count())
+                .isZero();
+
+        MemberIdentityFilter 토큰_탓 = MemberIdentityFilter.jwt(시계, hs(null, null),
+                t -> Mono.error(new BadJwtException("서명 틀림")), 계측);
+        거절(돌린다(토큰_탓, 요청(hs256(클레임("42").build()))), 틀림);
+        assertThat(계측.counter(MemberIdentityFilter.REJECTED_METRIC, "reason", "invalid").count())
+                .isEqualTo(1.0);
     }
 }

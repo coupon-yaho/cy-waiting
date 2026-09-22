@@ -27,6 +27,27 @@ if isinstance(v, (int, float)):
 PY
 }
 
+# 끊긴 몫(%) — 발급 응답 중 판정이 끊은(429·503) 몫. 두 표의 결과 섞임을 견주는 재료다 (CY-990). 폴링은 안 넣는다 —
+# 섞임이 바뀌는 자리는 발급이다. 발급이 없거나 못 읽으면 - 다.
+#
+#   사용: peak_shed_pct <k6 요약>
+peak_shed_pct() {
+    python3 - "$1" <<'PY'
+import json, sys
+try:
+    m = json.load(open(sys.argv[1])).get('metrics', {})
+except Exception:
+    print('-'); sys.exit(0)
+def count(name):
+    node = m.get(name, {})
+    v = node.get('values', {}).get('count', node.get('count', 0))
+    return v if isinstance(v, (int, float)) else 0
+shed = count('peak_shed')
+total = sum(count(n) for n in ('peak_admitted', 'peak_queued', 'peak_closed')) + shed
+print(f'{100 * shed / total:.1f}' if total > 0 else '-')
+PY
+}
+
 # **회차 길이를 초로 푼다.** `${D%s}` 로 끝 글자만 떼면 `1m` 이 1 이 되어, 기대
 # 건수가 60 분의 1 로 내려가고 "부하가 안 닿았다" 가드가 사실상 사라진다.
 # 못 읽는 형식은 0 을 내고 부르는 쪽이 회차를 돌리기 전에 끊는다.

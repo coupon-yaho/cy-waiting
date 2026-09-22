@@ -65,7 +65,6 @@ public record RouteRules(List<Rule> rules) {
             }
         }
         Set<String> paths = new HashSet<>();
-        Set<String> entryBackends = new HashSet<>();
         for (Rule rule : rules) {
             // **바꿀 수 있는 척하지 않는다.** 이 경로는 라우트를 안 타므로 규칙을
             // 고쳐도 필터가 안 따라온다 — 기동은 성공하고 그 경로만 뒷단으로 샌다.
@@ -81,17 +80,6 @@ public record RouteRules(List<Rule> rules) {
                             "라우팅 경로가 겹친다: " + rule.method() + " " + path);
                 }
             }
-            if (rule.kind() == Kind.ENTRY && rule.uri() != null) {
-                entryBackends.add(rule.uri());
-            }
-        }
-        // **서킷이 아직 하나다.** 진입 규칙이 서로 다른 뒷단을 보면 한쪽의 장애가
-        // 다른 쪽까지 폴백으로 보낸다 — 그동안에도 입장은 일어나 크레딧이 깎이고,
-        // 불려 나온 사람의 입장 토큰이 만료되면 줄에 남아 있던 뒷사람이 앞선다.
-        if (entryBackends.size() > 1) {
-            throw new IllegalArgumentException(
-                    "진입 규칙의 뒷단이 둘 이상이다 — 서킷이 아직 하나라 장애가 섞인다: "
-                            + entryBackends);
         }
         rules = List.copyOf(rules);
     }

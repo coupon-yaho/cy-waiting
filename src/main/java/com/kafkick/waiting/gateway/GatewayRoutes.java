@@ -16,7 +16,9 @@ import org.springframework.cloud.gateway.route.builder.RouteLocatorBuilder;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import java.time.Duration;
+import java.util.Locale;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.function.Predicate;
 import org.springframework.http.HttpMethod;
 import org.springframework.web.server.ServerWebExchange;
@@ -180,6 +182,24 @@ public class GatewayRoutes {
                 ? backend.uri() : "lb://" + properties.serviceId();
     }
 
+    /**
+     * 진입 규칙의 뒷단은 하나다. 서킷과 배분이 뒷단을 안 가르므로, 둘이면 한쪽 장애가 다른 쪽 발급을
+     * 폴백으로 보낸다. 가르려면 쿠폰이 뒷단에 묶여야 한다 (90-decisions O-13). 주소를 비운 규칙은
+     * 공통 뒷단으로 센다.
+     */
+    private void requireOneEntryBackend(RouteRules rules, String shared) {
+        Set<String> backends = new TreeSet<>();
+        for (RouteRules.Rule rule : rules.rules()) {
+            if (rule.kind() == RouteRules.Kind.ENTRY) {
+                backends.add((rule.uri() == null ? shared : rule.uri()).toLowerCase(Locale.ROOT));
+            }
+        }
+        if (backends.size() > 1) {
+            throw new IllegalStateException("진입 규칙의 뒷단이 둘 이상이다 — 서킷과 배분이 하나라 "
+                    + "장애가 섞인다: " + backends);
+        }
+    }
+
     @Bean
     public RouteLocator routes(RouteLocatorBuilder builder, Backend backend, RouteRules rules,
             AdmissionGatewayFilter admission, QueryCoalescingFilter coalescing,
@@ -188,6 +208,7 @@ public class GatewayRoutes {
             RetryGatewayFilterFactory retries) {
         BodyDeadline bodyDeadline = bodyDeadline(backend, meters);
         String shared = backendUri(backend, routing);
+        requireOneEntryBackend(rules, shared);
         RouteLocatorBuilder.Builder built = builder.routes();
         for (RouteRules.Rule rule : rules.forwarded()) {
             // **규칙이 주소를 적으면 그쪽이 이긴다.** 안 적으면 공통 뒷단으로 간다 —

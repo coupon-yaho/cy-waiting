@@ -115,11 +115,16 @@ public final class CapacityCollector {
      */
     private final AtomicLong lastDenied = new AtomicLong();
 
-    /** 직전 회차에 과반이 뺐다고 말한 신선한 인스턴스. 이번에 빠지면 풀린 것이라 램프를 다시 태운다. */
-    private Set<String> lastVoted = Set.of();
+    /**
+     * 직전 회차에 실제로 예산에서 뺀 인스턴스. 이번에 빠지면 풀린 것이라 램프를 다시 태운다.
+     * <b>표가 아니라 뺀 것으로 잰다</b> — 표로 재면 전부 규칙에 드나들 때 한 틱에 몫이 튄다.
+     */
+    private volatile Set<String> lastExcluded = Set.of();
 
-    /** 끝난 회차에 예산에서 뺀 크레딧. */
     private final AtomicLong lastEjectedCredit = new AtomicLong();
+
+    /** 과반이 뺀 대가 라우팅할 수 있는 대 전부라 안 뺀 구간. */
+    private final FailureWindow allEjected = FailureWindow.create();
 
     private CapacityCollector(Duration rampUp, Duration freshness, long floor,
             long perInstanceCap, AllowedDestinations allowed) {
@@ -201,10 +206,10 @@ public final class CapacityCollector {
         lastDenied.set(0);
         destinationDenied.exited();
         // 승계는 풀림이 아니다. 남기면 새 리더의 첫 회차에 램프를 다시 탄다.
-        lastVoted = Set.of();
+        lastExcluded = Set.of();
     }
 
-    /** 끝난 회차에 과반이 뺀 대의 몫이라 예산에서 뺀 크레딧. */
+    /** 끝난 회차에 예산에서 뺀 크레딧. 0 이면 뺀 것이 없거나 전부라 안 뺀 것이고, 둘은 로그가 가른다. */
     public long lastEjectedCredit() {
         return lastEjectedCredit.get();
     }
@@ -267,21 +272,14 @@ public final class CapacityCollector {
             latest.merge(report.instanceId(), report,
                     (a, b) -> a.reportedAt() >= b.reportedAt() ? a : b);
         }
-        Set<String> counted = new HashSet<>();
-        latest.values().stream()
-                .filter(report -> isFresh(report, now) && report.credits() >= 0)
-                .forEach(report -> counted.add(report.instanceId()));
-        Set<String> voted = new HashSet<>(ejected);
-        voted.retainAll(counted);
+        Set<String> excluded = excluded(latest.values(), now, ejected);
         // **풀린 대는 램프를 다시 탄다.** 한 틱에 몫을 돌려주면 방금 앓던 대로 몰린다.
-        for (String id : lastVoted) {
-            if (!voted.contains(id)) {
+        for (String id : lastExcluded) {
+            if (!excluded.contains(id)) {
                 seen.computeIfPresent(id, (key, was) -> new Seen(now, now));
             }
         }
-        lastVoted = Set.copyOf(voted);
-        // **전부면 안 뺀다.** 노드마다 다른 대를 빼 합이 전부가 되면 보낼 곳이 0 이다.
-        Set<String> excluded = voted.size() == counted.size() ? Set.of() : voted;
+        lastExcluded = Set.copyOf(excluded);
         long ejectedCredit = 0;
 
         // **라우팅 목록을 같은 회차에서 만든다.** 따로 돌면 합산에 든 인스턴스와
@@ -303,7 +301,10 @@ public final class CapacityCollector {
                 continue;
             }
             fresh++;
-            reported = saturatedAdd(reported, Math.min(report.credits(), perInstanceCap));
+            // 뺀 대의 보고는 안 센다. 앓는 대의 여유로 하한을 켜면 여유 0 인 대에 밀어 넣는다.
+            if (!excluded.contains(report.instanceId())) {
+                reported = saturatedAdd(reported, Math.min(report.credits(), perInstanceCap));
+            }
             Seen was = seen.get(report.instanceId());
             // **첫 회차에 본 무리는 이미 돌던 것으로 본다.** 리더가 바뀐 것이 뒷단이
             // 새로 뜬 것은 아니다. 여기서 램프를 걸면 승계마다 크레딧이 0 으로
@@ -314,7 +315,6 @@ public final class CapacityCollector {
             // 인스턴스가 많고 각자 상한에 가까우면 합이 넘친다. 넘치면 음수가
             // 되어 전역 크레딧이 0 이 된다 — 전면 차단이다.
             long share = usable(report, now);
-            // 깎기 전 합에는 남긴다. 배제가 하한 밑으로 만든 부족분은 우리가 만든 것이다.
             if (excluded.contains(report.instanceId())) {
                 ejectedCredit = saturatedAdd(ejectedCredit, share);
             } else {
@@ -368,6 +368,37 @@ public final class CapacityCollector {
         // 멀쩡한 구간에서도 조여진다.
         failedRounds.set(0);
         return credit;
+    }
+
+    /**
+     * 이번 회차에 예산에서 뺄 인스턴스. <b>전부면 안 뺀다</b> — 노드마다 다른 대를 빼 합이 전부가 되면
+     * 보낼 곳이 0 이다. 전부는 노드의 판정처럼 라우팅할 수 있는 대로 잰다.
+     */
+    private Set<String> excluded(Collection<CapacityReport> reports, long now, Set<String> ejected) {
+        Set<String> counted = new HashSet<>();
+        Set<String> routableIds = new HashSet<>();
+        for (CapacityReport report : reports) {
+            if (!isFresh(report, now) || report.credits() < 0) {
+                continue;
+            }
+            counted.add(report.instanceId());
+            if (report.routableAddress().filter(allowed::permits).isPresent()) {
+                routableIds.add(report.instanceId());
+            }
+        }
+        Set<String> voted = new HashSet<>(ejected);
+        voted.retainAll(counted);
+        Set<String> eligible = routableIds.isEmpty() ? counted : routableIds;
+        if (!voted.isEmpty() && voted.containsAll(eligible)) {
+            if (allEjected.entered()) {
+                log.warn("과반이 뺀 뒷단이 보낼 수 있는 대 전부라 예산에서 안 뺀다 — {}대. "
+                        + "뒷단 전체의 상태와 서킷을 본다", voted.size());
+            }
+            return Set.of();
+        }
+        allEjected.exited().ifPresent(recovered ->
+                log.info("전부라 안 빼던 구간이 끝났다 — {}초", recovered.elapsedSeconds()));
+        return voted;
     }
 
     private long saturatedAdd(long a, long b) {

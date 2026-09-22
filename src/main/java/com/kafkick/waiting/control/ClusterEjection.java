@@ -17,7 +17,7 @@ public final class ClusterEjection {
      * @param alive 살아 있는 노드 수. 1 미만이면 관측이 망가진 것이라 아무것도 안 뺀다
      * @param votes 인스턴스마다 그것을 뺀 노드 수
      */
-    public static Set<String> of(int alive, Map<String, Integer> votes) {
+    public static Set<String> majority(int alive, Map<String, Integer> votes) {
         if (alive < 1) {
             return Set.of();
         }

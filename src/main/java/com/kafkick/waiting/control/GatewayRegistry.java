@@ -9,6 +9,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -143,16 +144,19 @@ public final class GatewayRegistry {
      * 방향이고, 한 틱 만에 풀면 표 하나가 늦는 것만으로 몫이 들락거린다.
      */
     public void ejectionObserved(int alive, Map<String, Integer> votes) {
-        fold(ClusterEjection.of(alive, votes));
+        fold(ClusterEjection.majority(alive, votes), id -> "votes=%d alive=%d".formatted(
+                votes.getOrDefault(id, 0), alive), "과반이 더는 안 뺀다");
     }
 
     /** 놓친 회차는 과반이 없는 관측으로 센다. 영영 지키면 레디스 장애가 예산을 계속 깎는다. */
     public void ejectionMissed() {
-        fold(Set.of());
+        fold(Set.of(), id -> "", "하트비트를 놓쳐 판정을 못 이어 간다");
     }
 
-    private void fold(Set<String> seen) {
+    /** 하트비트 루프 한 곳에서만 부른다. 전후 비교는 그 가정 위에 선다. */
+    private void fold(Set<String> seen, Function<String, String> basis, String releaseCause) {
         long at = System.nanoTime();
+        AtomicReference<Map<String, Held>> result = new AtomicReference<>();
         Map<String, Held> before = ejected.getAndUpdate(now -> {
             Map<String, Held> next = new HashMap<>();
             for (String id : seen) {
@@ -164,23 +168,26 @@ public final class GatewayRegistry {
                     next.put(id, new Held(held.enteredAt(), held.easingStreak() + 1));
                 }
             });
-            return Map.copyOf(next);
+            Map<String, Held> after = Map.copyOf(next);
+            result.set(after);
+            return after;
         });
         // 람다 밖에서 찍는다. CAS 가 재시도하면 같은 줄이 두 번 난다.
-        Map<String, Held> after = ejected.get();
+        Map<String, Held> after = result.get();
         after.keySet().stream().filter(id -> !before.containsKey(id)).sorted().forEach(id ->
-                log.warn("과반이 뺀 뒷단의 몫을 예산에서 뺀다 — instance={}", safe(id)));
+                log.warn("과반이 뺀 뒷단의 몫을 예산에서 뺀다 — instance={}, {}. 그 대의 상태와 "
+                        + "waiting.capacity.ejected.credit 을 본다", safe(id), basis.apply(id)));
         before.forEach((id, held) -> {
             if (!after.containsKey(id)) {
-                log.info("뒷단의 몫을 예산에 되돌린다 — instance={}, {}초 동안 뺐다", safe(id),
-                        NANOSECONDS.toSeconds(at - held.enteredAt()));
+                log.info("뒷단의 몫을 예산에 되돌린다 — instance={}, {}초 동안 뺐다, {}", safe(id),
+                        NANOSECONDS.toSeconds(at - held.enteredAt()), releaseCause);
             }
         });
     }
 
-    /** 뒷단이 정하는 값이다. 줄바꿈으로 로그 한 줄을 위조하지 못하게 한다. */
+    /** 뒷단이 정하는 값이다. 제어문자로 로그 한 줄을 꾸미지 못하게 한다. */
     private String safe(String instanceId) {
-        return instanceId.replaceAll("[\\r\\n]", "_");
+        return instanceId.replaceAll("[\\p{Cntrl}\\u2028\\u2029]", "_");
     }
 
     /** 수집이 예산에서 뺄 인스턴스. */

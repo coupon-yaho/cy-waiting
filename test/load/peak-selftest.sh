@@ -118,8 +118,15 @@ run_case "실측 유입이 숫자가 아니면 판정 불가" 2 "실측 유입" 
     -- "$(table nan2.tsv $'4000\t삼천\tok\t2.1')"
 run_case "응답 p99 가 숫자가 아니면 판정 불가" 2 "응답 p99" \
     -- "$(table nan3.tsv $'4000\t3950\tok\t느림')"
-run_case "칸이 넷을 넘으면 판정 불가" 2 "칸" \
-    -- "$(table long.tsv $'4000\t3950\tok\t2.1\t여분')"
+# 다섯째 칸은 끊긴 몫(%)이다 (CY-990). 증설 효율이 두 표의 섞임을 견주는 재료라 옛 네 칸 표도 받는다.
+run_case "다섯째 칸의 끊긴 몫은 받는다" 0 "4000" \
+    -- "$(table mix.tsv $'4000\t3950\tok\t2.1\t1.5')"
+run_case "못 잰 칸의 끊긴 몫은 - 로 받는다" 0 "판정 불가" \
+    -- "$(table mix_dash.tsv $'4000\t3950\tok\t2.1\t1.5' $'8000\t0\tunmeasurable\t0\t-')"
+run_case "끊긴 몫이 숫자가 아니면 판정 불가" 2 "끊긴 몫" \
+    -- "$(table mix_nan.tsv $'4000\t3950\tok\t2.1\t여분')"
+run_case "칸이 다섯을 넘으면 판정 불가" 2 "칸" \
+    -- "$(table long.tsv $'4000\t3950\tok\t2.1\t1.5\t여분')"
 run_case "요청 유입이 같으면 판정 불가" 2 "오름차순" \
     -- "$(table tie.tsv $'4000\t3950\tok\t2.1' $'4000\t3900\tok\t2.2')"
 # 판정을 못 한 회차는 미달과 다르다. 그 위를 안 쓰되 제품 탓으로 적지 않는다.
@@ -221,6 +228,19 @@ lib_case "평면형 도착률" 1234.5000 "$(peak_summary_value "$flat" rate)"
 lib_case "중첩형 도착률" 1234.5000 "$(peak_summary_value "$nested" rate)"
 lib_case "중첩형 응답 p99" 9.5000 "$(peak_summary_value "$nested" p99)"
 lib_case "없는 파일은 빈 값" "" "$(peak_summary_value "$work/none.json" rate)"
+
+# 끊긴 몫(%) — 발급 응답 중 판정이 끊은(429·503) 몫 (CY-990). 두 표의 섞임을 견주는 재료다. 폴링은 안 넣는다.
+counts=$work/counts.json
+printf '%s' '{"metrics":{"peak_admitted":{"count":90},"peak_queued":{"count":5},"peak_closed":{"count":0},"peak_shed":{"count":5}}}' \
+    > "$counts"
+nested_counts=$work/nested_counts.json
+printf '%s' '{"metrics":{"peak_admitted":{"values":{"count":60}},"peak_shed":{"values":{"count":20}}}}' \
+    > "$nested_counts"
+lib_case "끊긴 몫" 5.0 "$(peak_shed_pct "$counts")"
+lib_case "중첩형 · 없는 계수는 0" 25.0 "$(peak_shed_pct "$nested_counts")"
+printf '%s' '{"metrics":{}}' > "$work/zero.json"
+lib_case "발급이 없으면 -" - "$(peak_shed_pct "$work/zero.json")"
+lib_case "없는 파일은 -" - "$(peak_shed_pct "$work/none.json")"
 
 # docker stats 한 벌을 표본 줄로 옮긴다. 남의 프로젝트 컨테이너가 섞이면 그 CPU 가 천장 원인에
 # 끼고, `%` 를 안 떼면 판정기가 숫자가 아닌 표본으로 읽어 매 회차 판정 불가가 된다.

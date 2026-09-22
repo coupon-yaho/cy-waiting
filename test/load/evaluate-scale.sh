@@ -27,6 +27,13 @@ if ! printf '%s' "$target" | grep -Eq '^[0-9]+(\.[0-9]+)?$' \
     echo "::error title=증설 효율::기준이 0 초과 100 이하의 백분율이 아니다: '$target' (판정 불가)"
     exit "$UNMEASURABLE"
 fi
+# **두 표의 결과 섞임이 같아야 나눈다** (CY-990). 멈춘 칸의 끊긴 몫(%p)이 이만큼 넘게 다르면 두 천장은 다른 일을 잰
+# 것이다. 줄 상한에 닿아 싼 거절이 늘면 대당 처리량이 부푼다. 섞임을 같게 두는 방법은 계획서 10.7.3 에 적는다.
+mix_tolerance=${MIX_TOLERANCE_PP:-5}
+if ! printf '%s' "$mix_tolerance" | grep -Eq '^[0-9]+(\.[0-9]+)?$'; then
+    echo "::error title=증설 효율::섞임 허용 차가 수가 아니다: '$mix_tolerance' (판정 불가)"
+    exit "$UNMEASURABLE"
+fi
 # **두 배를 넘는 증설은 없다.** 이 위면 두 표가 다른 일을 잰 것이다 — 결과 섞임이 전체 유입을 따라 바뀌면
 # 싼 거절 몫이 늘어 대당 처리량이 부푼다.
 ceiling_pct=110
@@ -92,6 +99,24 @@ read -r one_lo one_hi <<< "$one"
 read -r two_lo two_hi <<< "$two"
 same_step N "$one_cause" "$one_hi" || exit "$UNMEASURABLE"
 same_step 2N "$two_cause" "$two_hi" || exit "$UNMEASURABLE"
+
+# 그 표의 멈춘 칸의 끊긴 몫. 옛 네 칸 표거나 못 잰 칸이면 빈 값이다.
+shed_at() {
+    awk -F '\t' -v r="$2" '$1 !~ /^#/ && $1 + 0 == r + 0 { print ($5 == "-" ? "" : $5); exit }' "$1"
+}
+one_mix=$(shed_at "$one_steps" "$one_hi")
+two_mix=$(shed_at "$two_steps" "$two_hi")
+if [ -z "$one_mix" ] || [ -z "$two_mix" ]; then
+    echo "::error title=증설 효율::멈춘 칸의 끊긴 몫이 없어 두 표의 결과 섞임을 못 견준다 — '${one_mix:-없음}'·'${two_mix:-없음}' (판정 불가)"
+    exit "$UNMEASURABLE"
+fi
+echo "N 대·2N 대 멈춘 칸 끊긴 몫 ${one_mix}%·${two_mix}% (허용 차 ${mix_tolerance}%p)"
+# **0.1%p 단위 정수로 견준다.** 뺄셈을 부동소수로 견주면 3.3·8.3 처럼 허용 차 정확히가 넘는 쪽으로 떨어진다.
+if awk -v a="$one_mix" -v b="$two_mix" -v t="$mix_tolerance" 'BEGIN{
+        d = int(a * 10 + 0.5) - int(b * 10 + 0.5); if (d < 0) d = -d; exit (d > int(t * 10 + 0.5)) ? 0 : 1 }'; then
+    echo "::error title=증설 효율::두 표의 결과 섞임이 다르다 — 끊긴 몫 ${one_mix}%·${two_mix}% (판정 불가)"
+    exit "$UNMEASURABLE"
+fi
 
 # 아래 끝 = 2N 선 칸 ÷ (2 × N 멈춘 칸), 위 끝 = 2N 멈춘 칸 ÷ (2 × N 선 칸).
 awk -v a="$one_lo" -v b="$one_hi" -v c="$two_lo" -v d="$two_hi" -v t="$target" 'BEGIN{

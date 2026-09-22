@@ -102,7 +102,8 @@ jobs:
   test-mutation:
     needs: build
     uses: ./.github/workflows/_test.yml
-    with: { layer: mutation, timeout-minutes: 40 }
+    # 40 분에 38 분을 썼다. 야간과 같은 60 분으로 둔다.
+    with: { layer: mutation, timeout-minutes: 60 }
 
   # **취약점 스캔이 지금 Java 를 하나도 안 본다** (CI 로그 num=0).
   # Trivy 는 Gradle 을 락파일로만 읽는데 이 저장소에 락파일이 없고, 같은 이유로

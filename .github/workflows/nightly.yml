@@ -80,6 +80,15 @@ jobs:
       scenario: ${{ matrix.scenario }}
       timeout-minutes: 45
 
+  # **develop 도 잰다.** 스케줄은 기본 브랜치에서만 돌아, develop 에 쌓인 뮤테이션
+  # 회귀를 릴리스 PR 에서야 봤다. 그 사이 main 의 야간이 연달아 빨개졌다.
+  mutation-develop:
+    uses: ./.github/workflows/_test.yml
+    with:
+      layer: mutation
+      ref: develop
+      timeout-minutes: 60
+
   # **G7.5 는 시나리오 행렬에 못 넣는다.** 크레딧을 굶긴 겹침으로 스택을 띄우고
   # 실행 도중 임계를 표본해야 해서, k6 한 회차 돌리고 요약을 보는 틀과 모양이 다르다.
   # 판정 자체는 `gate-selftest.sh` 가 PR 마다 몇 초에 검증한다.
@@ -193,7 +202,7 @@ jobs:
   # 밤에 "이상 없음" 이 나간다. 실제로 그렇게 돼 있었다.
   verdict:
     name: 판정
-    needs: [plan, build, test, load, waste, isolation, security]
+    needs: [plan, build, test, mutation-develop, load, waste, isolation, security]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -210,7 +219,7 @@ jobs:
           results: ${{ join(needs.*.result, ' ') }}
 
   report:
-    needs: [plan, build, test, load, waste, isolation, security, verdict]
+    needs: [plan, build, test, mutation-develop, load, waste, isolation, security, verdict]
     if: ${{ !cancelled() }}
     uses: ./.github/workflows/_report.yml
     with:
@@ -222,6 +231,7 @@ jobs:
         계획=${{ needs.plan.result }}
         빌드=${{ needs.build.result }}
         테스트=${{ needs.test.result }}
+        develop 뮤테이션=${{ needs.mutation-develop.result }}
         부하=${{ needs.load.result }}
         쿠폰 격리 (R1)=${{ needs.isolation.result }}
         크레딧 낭비=${{ needs.waste.result }}
@@ -235,6 +245,7 @@ jobs:
           <tr><td>계획</td><td>${{ needs.plan.result }}</td></tr>
           <tr><td>빌드</td><td>${{ needs.build.result }}</td></tr>
           <tr><td>테스트 (전 계층)</td><td>${{ needs.test.result }}</td></tr>
+          <tr><td>develop 뮤테이션</td><td>${{ needs.mutation-develop.result }}</td></tr>
           <tr><td>부하 (9 시나리오)</td><td>${{ needs.load.result }}</td></tr>
           <tr><td>쿠폰 격리 (R1)</td><td>${{ needs.isolation.result }}</td></tr>
           <tr><td>크레딧 낭비 (G7.5)</td><td>${{ needs.waste.result }}</td></tr>

@@ -23,6 +23,9 @@ public record RouteRules(List<Rule> rules) {
 
     static final String ID_PATTERN = "{couponId:[A-Za-z0-9_-]{1,64}}";
 
+    /** 라우트 경로가 있어야 할 곳. 신원 검사·남용 제한·교차 출처가 이 아래에만 걸린다. */
+    static final String API_PREFIX = "/api/";
+
     /**
      * 줄 조회 경로. <b>아직 설정으로 못 바꾼다</b> — 이 경로는 라우트를 안 타서
      * 라우트 밖 필터 둘이 제 패턴으로 직접 맞춘다.
@@ -65,7 +68,6 @@ public record RouteRules(List<Rule> rules) {
             }
         }
         Set<String> paths = new HashSet<>();
-        Set<String> entryBackends = new HashSet<>();
         for (Rule rule : rules) {
             // **바꿀 수 있는 척하지 않는다.** 이 경로는 라우트를 안 타므로 규칙을
             // 고쳐도 필터가 안 따라온다 — 기동은 성공하고 그 경로만 뒷단으로 샌다.
@@ -81,17 +83,6 @@ public record RouteRules(List<Rule> rules) {
                             "라우팅 경로가 겹친다: " + rule.method() + " " + path);
                 }
             }
-            if (rule.kind() == Kind.ENTRY && rule.uri() != null) {
-                entryBackends.add(rule.uri());
-            }
-        }
-        // **서킷이 아직 하나다.** 진입 규칙이 서로 다른 뒷단을 보면 한쪽의 장애가
-        // 다른 쪽까지 폴백으로 보낸다 — 그동안에도 입장은 일어나 크레딧이 깎이고,
-        // 불려 나온 사람의 입장 토큰이 만료되면 줄에 남아 있던 뒷사람이 앞선다.
-        if (entryBackends.size() > 1) {
-            throw new IllegalArgumentException(
-                    "진입 규칙의 뒷단이 둘 이상이다 — 서킷이 아직 하나라 장애가 섞인다: "
-                            + entryBackends);
         }
         rules = List.copyOf(rules);
     }
@@ -148,6 +139,10 @@ public record RouteRules(List<Rule> rules) {
             // **자리를 경로마다 본다.** 목록 중 하나만 맞으면 통과하던 때는, 자리를
             // 맞춘 미끼 경로 하나를 두고 다른 경로로 제약을 넓힐 수 있었다.
             for (String path : paths) {
+                if (!path.startsWith(API_PREFIX)) {
+                    throw new IllegalArgumentException(
+                            "라우팅 규칙 '" + id + "' 의 경로가 " + API_PREFIX + " 밖이다: " + path);
+                }
                 int brace = path.indexOf('{');
                 if (brace >= 0 && !path.startsWith(ID_SLOT, brace)) {
                     throw new IllegalArgumentException(

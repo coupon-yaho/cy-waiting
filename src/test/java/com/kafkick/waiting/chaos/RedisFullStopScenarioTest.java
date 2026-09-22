@@ -12,6 +12,7 @@ import com.kafkick.waiting.domain.allocation.QueueingHysteresis;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import com.kafkick.waiting.domain.coupon.CouponStates;
 import com.kafkick.waiting.control.SnapshotSource;
+import io.lettuce.core.api.StatefulRedisConnection;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -29,12 +30,15 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
+import org.awaitility.Awaitility;
+import org.awaitility.core.ConditionTimeoutException;
 import org.junit.jupiter.api.AfterAll;
 import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import com.kafkick.waiting.domain.admission.CircuitState;
+import com.kafkick.waiting.gateway.AbuseLimitFilter;
 import com.kafkick.waiting.gateway.CircuitStateReader;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -133,6 +137,16 @@ class RedisFullStopScenarioTest {
 
     /** 재고. 이 시나리오가 보내는 전체보다 커야 미달이 위반으로 안 읽힌다. */
     private static final long 재고 = 1_000;
+
+    /**
+     * 주소당 발급 상한. <b>고정 시계라 회차 전체에 한 번이다</b> — 남용 제한의 초 창이 안 넘어가므로, 회복을
+     * 기다리며 이만큼을 다 쓰면 그 뒤 발급이 전부 RATE_LIMITED 로 막혀 회복을 못 잰다 (CY-984). 줄 조회도 같은
+     * 주소 계수를 올린다.
+     */
+    private static final long 주소_발급_예산 = AbuseLimitFilter.IP_ISSUE_CAP;
+
+    /** 회복 대기가 발급 예산을 다 써서 멈췄는가. 그러면 회복이 아니라 하네스를 잰 것이다. */
+    private boolean 예산이_모자랐다;
 
     /** RC3 의 한계. 이 안에 판정이 정상으로 돌아와야 한다. */
     private static final Duration 회복_한계 = Duration.ofSeconds(30);
@@ -521,6 +535,7 @@ class RedisFullStopScenarioTest {
                 // RC4 두 창은 회복을_판정한다 가 붙인다. 창 배치가 판정의
                 // 전부라 흩어 놓으면 조용히 어긋난다.
                 .assertRecovery(() -> 회복을_판정한다(유입, 회복_순간_보낸_수,
+                        하네스가_남용_제한에_안_걸렸다(),
                         RecoveryCriteria.slowVerdictReturn(회복까지_걸린_시간, 회복_한계),
                         // RC1 — 뒷단이 받은 수가 재고를 안 넘는다. 이 시나리오는
                         // 발급만 때리므로 수신 수가 곧 발급 시도다.
@@ -559,6 +574,49 @@ class RedisFullStopScenarioTest {
                         // 묶음에서만 보인다.
                         오백이_안_샌다(확인_뒤_상태)))
                 .run();
+    }
+
+    /**
+     * 레디스가 명령을 받을 때까지. <b>앱과 다른 연결로 본다</b> — 앱의 연결을 두드리면 재연결을 대신 깨워, 그 창에서만
+     * 보이는 발급 경로의 5xx 를 가린다. 앱 경로의 회복은 묶음 루프가 잰다.
+     */
+    private void 레디스가_받을_때까지_기다린다(Instant 시작, Supplier<Instant> 지금) {
+        Duration 남은_시간 = 회복_한계.minus(Duration.between(시작, 지금.get()));
+        try {
+            Awaitility.await().atMost(남은_시간).pollInterval(Duration.ofMillis(100))
+                    .ignoreExceptions()
+                    .until(() -> {
+                        try (StatefulRedisConnection<String, String> 따로 = faults.연결한다()) {
+                            return "PONG".equals(따로.sync().ping());
+                        }
+                    });
+        } catch (ConditionTimeoutException e) {
+            // 판정이 이유를 적는다.
+        }
+    }
+
+    /** 이 주소가 쓴 남용 제한 계수. 발급과 줄 조회가 같은 주소 계수를 올린다. */
+    private long 주소_계수() {
+        return 줄_선_사람 + 발급_보낸_수 + 줄_조회_분포.values().stream().mapToLong(Long::longValue).sum();
+    }
+
+    /**
+     * 하네스가 제 예산에 걸렸는지. <b>걸렸으면 RC4·RC6 이 아니라 이것이 원인이다</b> — 뒷단에 하나도 안 닿고
+     * 통과 비율이 안 돌아오는 모양이 회복 실패와 똑같아 CI 에서 둘이 섞였다 (CY-984).
+     */
+    private Optional<String> 하네스가_남용_제한에_안_걸렸다() {
+        long 막힌_수 = 사유_분포.getOrDefault("RATE_LIMITED", 0L);
+        if (!예산이_모자랐다 && 막힌_수 == 0) {
+            return Optional.empty();
+        }
+        // **예산에 닿았을 때만 하네스 탓이다.** 그보다 적게 보냈는데 막혔으면 남용 제한이 한도 전에 막은 것이다.
+        if (예산이_모자랐다 || 주소_계수() > 주소_발급_예산) {
+            return Optional.of(("하네스 — 주소당 예산 %d 에 닿았다 (주소 계수 %d, 막힌 %d, 예산 소진 %s). "
+                    + "고정 시계라 회차 전체의 예산이다. 회복이 아니라 대기 루프를 본다")
+                    .formatted(주소_발급_예산, 주소_계수(), 막힌_수, 예산이_모자랐다));
+        }
+        return Optional.of("남용 제한이 한도 전에 막았다 — 주소 계수 %d 로 %d 건이 RATE_LIMITED 다"
+                .formatted(주소_계수(), 막힌_수));
     }
 
     /**
@@ -627,6 +685,9 @@ class RedisFullStopScenarioTest {
      */
     private Duration 판정이_돌아올_때까지_기다린다(List<Integer> 회복_상태, Supplier<Instant> 지금) {
         Instant 시작 = 지금.get();
+        // **요청 없이 먼저 기다린다.** 레디스가 돌아오기 전에 묶음을 보내면 느린 러너일수록 발급 예산을 더
+        // 써, 회복한 뒤에 남용 제한에 막힌다.
+        레디스가_받을_때까지_기다린다(시작, 지금);
         // **한 묶음이 통과한 것은 돌아왔다는 증거가 아니다.** 레디스가 막 살아난
         // 구간에는 커넥션 풀이 다시 맺히는 중이라 한 묶음이 우연히 통과할 수 있고,
         // 바로 다음 묶음이 5xx 를 낸다 — 그 뒤에 오는 확인 묶음이 그것을 회귀로
@@ -637,6 +698,11 @@ class RedisFullStopScenarioTest {
         // 사용자로 두 번 발급을 눌러 중복 수신 판정이 엉뚱하게 빨개진다.
         int 보낸_묶음_수 = 0;
         while (Duration.between(시작, 지금.get()).compareTo(회복_한계) < 0) {
+            // 확인 묶음 몫은 남긴다. 모자라면 멈추고 그 사실을 판정에 싣는다.
+            if (주소_계수() + 한_묶음_요청_수 + 1 + 보낼_수 > 주소_발급_예산) {
+                예산이_모자랐다 = true;
+                return null;
+            }
             // **발급과 줄 조회를 다른 리스트로 나눈다.** RC6 은 정상 구간
             // (발급만) 과 같은 재료끼리 비교해야 한다. 한 리스트에 담고 순서로
             // 가르면 두 줄을 바꾸는 것만으로 재료가 갈린다.

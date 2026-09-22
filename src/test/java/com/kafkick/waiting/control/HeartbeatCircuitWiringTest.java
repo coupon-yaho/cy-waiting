@@ -4,10 +4,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.kafkick.waiting.adapter.redis.GatewayRedisPort.Presence;
 import com.kafkick.waiting.domain.admission.CircuitState;
+import com.kafkick.waiting.domain.routing.InstanceOutliers;
 import java.time.Duration;
 import org.springframework.beans.factory.ObjectProvider;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.DisplayName;
@@ -43,7 +48,7 @@ class HeartbeatCircuitWiringTest {
 
         배선.beatStep(circuit -> {
             보낸_것.add(circuit);
-            return Mono.just(new Presence(1, 0, 0, 1, 0, 1));
+            return Mono.just(Presence.withoutEjection(1, 0, 0, 1, 0, 1));
         }, () -> CircuitState.HALF_OPEN, 등록부()).get().block();
 
         assertThat(보낸_것).containsExactly(CircuitState.HALF_OPEN);
@@ -61,7 +66,7 @@ class HeartbeatCircuitWiringTest {
     void 클러스터_판정을_등록부에_적는다() {
         GatewayRegistry registry = 등록부();
 
-        배선.beatStep(circuit -> Mono.just(new Presence(3, 1, 0, 3, 0, 3)),
+        배선.beatStep(circuit -> Mono.just(Presence.withoutEjection(3, 1, 0, 3, 0, 3)),
                 () -> CircuitState.CLOSED, registry).get().block();
 
         assertThat(registry.circuit()).as("소수만 열린 것은 부분 장애다")
@@ -74,7 +79,7 @@ class HeartbeatCircuitWiringTest {
     void 반쯤_열린_표는_전면_정지가_안_된다() {
         GatewayRegistry registry = 등록부();
 
-        배선.beatStep(circuit -> Mono.just(new Presence(3, 0, 3, 3, 0, 3)),
+        배선.beatStep(circuit -> Mono.just(Presence.withoutEjection(3, 0, 3, 3, 0, 3)),
                 () -> CircuitState.CLOSED, registry).get().block();
 
         assertThat(registry.circuit()).isEqualTo(CircuitState.HALF_OPEN);
@@ -164,7 +169,7 @@ class HeartbeatCircuitWiringTest {
     void 합산한_통과_수를_등록부에_적는다() {
         GatewayRegistry 등록부 = 등록부();
 
-        배선.beatStep(circuit -> Mono.just(new Presence(2, 0, 0, 2, 55, 2)),
+        배선.beatStep(circuit -> Mono.just(Presence.withoutEjection(2, 0, 0, 2, 55, 2)),
                 () -> CircuitState.CLOSED, 등록부).get().block();
 
         assertThat(등록부.passRate()).isEqualTo(55);
@@ -180,7 +185,7 @@ class HeartbeatCircuitWiringTest {
     void 덜_실린_합은_모름으로_적는다() {
         GatewayRegistry 등록부 = 등록부();
 
-        배선.beatStep(circuit -> Mono.just(new Presence(3, 0, 0, 3, 55, 2)),
+        배선.beatStep(circuit -> Mono.just(Presence.withoutEjection(3, 0, 0, 3, 55, 2)),
                 () -> CircuitState.CLOSED, 등록부).get().block();
 
         assertThat(등록부.passRate()).isEqualTo(-1);
@@ -226,5 +231,145 @@ class HeartbeatCircuitWiringTest {
                 return source;
             }
         };
+    }
+
+    /** 이 노드가 뺀 대가 스크립트 인자로 나가야 한다. 안 나가면 뺀 대의 몫이 예산에 남는다. */
+    @Test
+    @DisplayName("이_노드가_뺀_인스턴스를_실어_보낸다")
+    void 이_노드가_뺀_인스턴스를_실어_보낸다() {
+        InstanceOutliers outliers = InstanceOutliers.of(3, Duration.ofSeconds(15), Duration.ofSeconds(60));
+        outliers.retain(Set.of("가", "나"), 1_000);
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 1_000);
+        }
+
+        assertThat(배선.ejected(공급자(outliers), 1_000)).containsExactly("가");
+    }
+
+    /** 라우팅이 꺼진 노드는 빈 목록이 아니라 안 실은 것이다. 한 주소로만 보내 쏠림을 안 만든다. */
+    @Test
+    @DisplayName("라우팅이_꺼져_있으면_배제_목록을_안_싣는다")
+    void 라우팅이_꺼져_있으면_배제_목록을_안_싣는다() {
+        assertThat(배선.ejected(공급자(null), 1_000)).isNull();
+    }
+
+    @Test
+    @DisplayName("클러스터_배제를_등록부에_적는다")
+    void 클러스터_배제를_등록부에_적는다() {
+        GatewayRegistry registry = 등록부();
+
+        배선.beatStep(circuit -> Mono.just(new Presence(3, 0, 0, 3, 0, 3, 2, Map.of("x", 2))),
+                () -> CircuitState.CLOSED, registry).get().block();
+
+        assertThat(registry.clusterEjected()).containsExactly("x");
+    }
+
+    @Test
+    @DisplayName("놓치면_배제도_놓친_것으로_센다")
+    void 놓치면_배제도_놓친_것으로_센다() {
+        GatewayRegistry registry = 등록부();
+        registry.ejectionObserved(3, Map.of("x", 2));
+
+        Runnable 놓침 = 배선.missStep(() -> CircuitState.CLOSED, registry);
+        for (int i = 0; i < 등록부_감소_틱; i++) {
+            놓침.run();
+        }
+
+        assertThat(registry.clusterEjected()).isEmpty();
+    }
+
+    private <T> ObjectProvider<T> 공급자(T bean) {
+        return new ObjectProvider<>() {
+            @Override
+            public T getObject() {
+                return bean;
+            }
+
+            @Override
+            public T getObject(Object... args) {
+                return bean;
+            }
+
+            @Override
+            public T getIfAvailable() {
+                return bean;
+            }
+
+            @Override
+            public T getIfUnique() {
+                return bean;
+            }
+        };
+    }
+
+    /** 분모는 산 수다. 실은 수로 나누면 롤아웃 중 소수가 과반이 되어 옛 노드가 보내는 대의 예산이 지워진다. */
+    @Test
+    @DisplayName("배제_과반의_분모는_실은_수가_아니라_산_수다")
+    void 배제_과반의_분모는_실은_수가_아니라_산_수다() {
+        GatewayRegistry registry = 등록부();
+
+        // 표를 낸 수(3)와 실은 수(2) 어느 쪽으로 나눠도 과반이라, 산 수(5)만 안 뺀다.
+        배선.beatStep(circuit -> Mono.just(new Presence(5, 0, 0, 3, 0, 5, 2, Map.of("x", 2))),
+                () -> CircuitState.CLOSED, registry).get().block();
+
+        assertThat(registry.clusterEjected()).isEmpty();
+    }
+
+    /** 빈이 부르는 것과 같은 호출이다. 여섯째 인자가 빠지면 뺀 대의 몫이 조용히 예산에 남는다. */
+    @Test
+    @DisplayName("하트비트_호출이_지금_뺀_대를_여섯째_인자로_넘긴다")
+    void 하트비트_호출이_지금_뺀_대를_여섯째_인자로_넘긴다() {
+        InstanceOutliers outliers = InstanceOutliers.of(3, Duration.ofSeconds(15), Duration.ofSeconds(60));
+        outliers.retain(Set.of("가", "나"), 1_000);
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 1_000);
+        }
+        AtomicReference<Object> 실린_것 = new AtomicReference<>("안 불림");
+
+        배선.beatCall((id, reap, fresh, circuit, passed, ejected) -> {
+                    실린_것.set(ejected);
+                    return Mono.just(Presence.withoutEjection(1, 0, 0, 1, 0, 1));
+                }, "gw", 3, 3, 단일_공급자(null), 공급자(outliers), () -> 1_000L)
+                .apply(CircuitState.CLOSED).block();
+
+        assertThat(실린_것.get()).isEqualTo(Set.of("가"));
+    }
+
+    @Test
+    @DisplayName("라우팅이_꺼지면_하트비트_호출이_목록을_안_싣는다")
+    void 라우팅이_꺼지면_하트비트_호출이_목록을_안_싣는다() {
+        AtomicReference<Object> 실린_것 = new AtomicReference<>("안 불림");
+
+        배선.beatCall((id, reap, fresh, circuit, passed, ejected) -> {
+                    실린_것.set(ejected);
+                    return Mono.just(Presence.withoutEjection(1, 0, 0, 1, 0, 1));
+                }, "gw", 3, 3, 단일_공급자(null), 공급자(null), () -> 1_000L)
+                .apply(CircuitState.CLOSED).block();
+
+        assertThat(실린_것.get()).isNull();
+    }
+
+    /** 시계와 배제기는 부를 때마다 읽는다. 한 번 떠 두면 판정이 기동 시각에 굳는다. 인자 자리도 다 본다. */
+    @Test
+    @DisplayName("하트비트_호출은_부를_때마다_시계를_읽고_자리대로_넘긴다")
+    void 하트비트_호출은_부를_때마다_시계를_읽고_자리대로_넘긴다() {
+        InstanceOutliers outliers = InstanceOutliers.of(3, Duration.ofSeconds(15), Duration.ofSeconds(60));
+        outliers.retain(Set.of("가", "나"), 1_000);
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 1_000);
+        }
+        AtomicLong 시계 = new AtomicLong(1_000);
+        List<List<Object>> 호출 = new ArrayList<>();
+        var 한_번 = 배선.beatCall((id, reap, fresh, circuit, passed, ejected) -> {
+            호출.add(Arrays.asList(id, reap, fresh, circuit, passed, ejected));
+            return Mono.just(Presence.withoutEjection(1, 0, 0, 1, 0, 1));
+        }, "gw", 30, 5, 단일_공급자(() -> 42L), 공급자(outliers), 시계::get);
+
+        한_번.apply(CircuitState.OPEN).block();
+        시계.set(1_000 + Duration.ofSeconds(16).toMillis());
+        한_번.apply(CircuitState.CLOSED).block();
+
+        assertThat(호출.get(0)).containsExactly("gw", 30L, 5L, CircuitState.OPEN, 42L, Set.of("가"));
+        assertThat(호출.get(1).get(5)).as("배제 창이 지났다").isEqualTo(Set.of());
     }
 }

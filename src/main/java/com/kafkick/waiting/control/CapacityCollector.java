@@ -7,9 +7,11 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
@@ -113,6 +115,17 @@ public final class CapacityCollector {
      */
     private final AtomicLong lastDenied = new AtomicLong();
 
+    /**
+     * 직전 회차에 실제로 예산에서 뺀 인스턴스. 이번에 빠지면 풀린 것이라 램프를 다시 태운다.
+     * <b>표가 아니라 뺀 것으로 잰다</b> — 표로 재면 전부 규칙에 드나들 때 한 틱에 몫이 튄다.
+     */
+    private volatile Set<String> lastExcluded = Set.of();
+
+    private final AtomicLong lastEjectedCredit = new AtomicLong();
+
+    /** 과반이 뺀 대가 라우팅할 수 있는 대 전부라 안 뺀 구간. */
+    private final FailureWindow allEjected = FailureWindow.create();
+
     private CapacityCollector(Duration rampUp, Duration freshness, long floor,
             long perInstanceCap, AllowedDestinations allowed) {
         require(rampUp, "rampUp");
@@ -192,6 +205,13 @@ public final class CapacityCollector {
         deniedThisRound = 0;
         lastDenied.set(0);
         destinationDenied.exited();
+        // 승계는 풀림이 아니다. 남기면 새 리더의 첫 회차에 램프를 다시 탄다.
+        lastExcluded = Set.of();
+    }
+
+    /** 끝난 회차에 예산에서 뺀 크레딧. 0 이면 뺀 것이 없거나 전부라 안 뺀 것이고, 둘은 로그가 가른다. */
+    public long lastEjectedCredit() {
+        return lastEjectedCredit.get();
     }
 
     /** 마지막 회차에서 보낼 수 있던 인스턴스들. 스냅샷에 실어 전 노드에 보낸다. */
@@ -237,12 +257,30 @@ public final class CapacityCollector {
      * @param now 읽은 시각(초). {@code reportedAt} 과 <b>같은 시계</b>여야 한다
      */
     public long collect(Collection<CapacityReport> reports, long now, int nodes) {
+        return collect(reports, now, nodes, Set.of());
+    }
+
+    /**
+     * @param ejected 클러스터 과반이 뺀 인스턴스. 그 몫은 예산에서 빼고 라우팅 목록에는 남긴다 —
+     *                보낼지는 노드마다 정한다
+     */
+    public long collect(Collection<CapacityReport> reports, long now, int nodes,
+            Set<String> ejected) {
         Map<String, CapacityReport> latest = new HashMap<>();
         for (CapacityReport report : reports) {
             // 버전별 키를 함께 읽으면 같은 인스턴스가 두 번 온다. 세면 두 배다.
             latest.merge(report.instanceId(), report,
                     (a, b) -> a.reportedAt() >= b.reportedAt() ? a : b);
         }
+        Set<String> excluded = excluded(latest.values(), now, ejected);
+        // **풀린 대는 램프를 다시 탄다.** 한 틱에 몫을 돌려주면 방금 앓던 대로 몰린다.
+        for (String id : lastExcluded) {
+            if (!excluded.contains(id)) {
+                seen.computeIfPresent(id, (key, was) -> new Seen(now, now));
+            }
+        }
+        lastExcluded = Set.copyOf(excluded);
+        long ejectedCredit = 0;
 
         // **라우팅 목록을 같은 회차에서 만든다.** 따로 돌면 합산에 든 인스턴스와
         // 보낼 인스턴스가 갈리고, 그 갈림은 램프 구간에만 나타난다.
@@ -263,7 +301,10 @@ public final class CapacityCollector {
                 continue;
             }
             fresh++;
-            reported = saturatedAdd(reported, Math.min(report.credits(), perInstanceCap));
+            // 뺀 대의 보고는 안 센다. 앓는 대의 여유로 하한을 켜면 여유 0 인 대에 밀어 넣는다.
+            if (!excluded.contains(report.instanceId())) {
+                reported = saturatedAdd(reported, Math.min(report.credits(), perInstanceCap));
+            }
             Seen was = seen.get(report.instanceId());
             // **첫 회차에 본 무리는 이미 돌던 것으로 본다.** 리더가 바뀐 것이 뒷단이
             // 새로 뜬 것은 아니다. 여기서 램프를 걸면 승계마다 크레딧이 0 으로
@@ -274,7 +315,11 @@ public final class CapacityCollector {
             // 인스턴스가 많고 각자 상한에 가까우면 합이 넘친다. 넘치면 음수가
             // 되어 전역 크레딧이 0 이 된다 — 전면 차단이다.
             long share = usable(report, now);
-            total = saturatedAdd(total, share);
+            if (excluded.contains(report.instanceId())) {
+                ejectedCredit = saturatedAdd(ejectedCredit, share);
+            } else {
+                total = saturatedAdd(total, share);
+            }
             // 주소를 안 실었거나 허용 밖인 인스턴스는 크레딧에는 들고 라우팅에서만
             // 빠진다. 크레딧에서까지 빼면 그 몫만큼 전역 크레딧이 조용히 줄어,
             // 계약을 아직 안 따르는 배포 구간에 전체가 조여진다.
@@ -284,6 +329,7 @@ public final class CapacityCollector {
                             new InstanceRouting(report.instanceId(), address, share)));
         }
         evictStale(now);
+        lastEjectedCredit.set(ejectedCredit);
         markDeniedWindow();
         publishDenied();
         // **관측이 있었던 회차에서만 태운다.** 한 건도 안 돈 회차가 태우면 다음 회차에
@@ -322,6 +368,43 @@ public final class CapacityCollector {
         // 멀쩡한 구간에서도 조여진다.
         failedRounds.set(0);
         return credit;
+    }
+
+    /**
+     * 이번 회차에 예산에서 뺄 인스턴스. <b>전부면 안 뺀다</b> — 노드는 보낼 곳이 0 이면 뺀 대를 도로 넣는데,
+     * 예산만 0 이면 한산 통과까지 막힌다. 전부는 노드처럼 몫이 있는 라우팅 가능 대로 잰다.
+     */
+    private Set<String> excluded(Collection<CapacityReport> reports, long now, Set<String> ejected) {
+        Set<String> counted = new HashSet<>();
+        Set<String> serving = new HashSet<>();
+        Set<String> routableServing = new HashSet<>();
+        for (CapacityReport report : reports) {
+            if (!isFresh(report, now) || report.credits() < 0) {
+                continue;
+            }
+            counted.add(report.instanceId());
+            if (report.credits() == 0) {
+                continue;
+            }
+            serving.add(report.instanceId());
+            if (report.routableAddress().filter(allowed::permits).isPresent()) {
+                routableServing.add(report.instanceId());
+            }
+        }
+        Set<String> voted = new HashSet<>(ejected);
+        voted.retainAll(counted);
+        // 주소를 싣는 뒷단이 없으면 라우팅이 한 주소로만 가는 배포라 몫이 있는 대 전부로 잰다.
+        Set<String> eligible = routableServing.isEmpty() ? serving : routableServing;
+        if (!voted.isEmpty() && !eligible.isEmpty() && voted.containsAll(eligible)) {
+            if (allEjected.entered()) {
+                log.warn("과반이 뺀 뒷단이 보낼 수 있는 대 전부라 예산에서 안 뺀다 — {}대. "
+                        + "뒷단 전체의 상태와 서킷을 본다", voted.size());
+            }
+            return Set.of();
+        }
+        allEjected.exited().ifPresent(recovered ->
+                log.info("전부라 안 빼던 구간이 끝났다 — {}초", recovered.elapsedSeconds()));
+        return voted;
     }
 
     private long saturatedAdd(long a, long b) {

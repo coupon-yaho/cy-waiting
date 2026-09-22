@@ -79,6 +79,7 @@
 | RD-1 | Lua는 KEYS에 없는 키를 만지지 않는다 | ✅ |
 | RD-4 | 요청 경로에서 Redis를 치지 않는다 | — |
 | RD-10 | Lua 상단에 KEYS/ARGV 계약 주석 | ✅ |
+| RD-13 | 운영 레디스는 `noeviction` | — (게이지·알람) |
 | WF-1 | Conventional Commits 형식 | ✅ |
 | WF-5 | `waiting-legacy/` 수정 금지 | ✅ |
 | WF-6 | 코드 변경 세션은 journal 엔트리를 남긴다 | 알림 |

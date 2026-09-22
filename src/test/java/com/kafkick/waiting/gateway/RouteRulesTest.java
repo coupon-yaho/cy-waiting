@@ -7,8 +7,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.kafkick.waiting.gateway.RouteRules.Kind;
 import com.kafkick.waiting.gateway.RouteRules.Rule;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.context.properties.bind.BindException;
+import org.springframework.boot.context.properties.bind.Binder;
+import org.springframework.boot.context.properties.source.MapConfigurationPropertySource;
 
 /**
  * 규칙을 <b>기동 때</b> 막는가.
@@ -20,6 +24,10 @@ class RouteRulesTest {
 
     private static Rule 발급(String id, String path, String uri) {
         return new Rule(id, Kind.ENTRY, "POST", List.of(path), uri);
+    }
+
+    private static Rule 발급(String id, List<String> paths) {
+        return new Rule(id, Kind.ENTRY, "POST", paths, null);
     }
 
     @Test
@@ -38,10 +46,10 @@ class RouteRulesTest {
     @DisplayName("이름이 겹치면 막는다")
     void 이름_중복() {
         assertThatThrownBy(() -> new RouteRules(List.of(
-                발급("issue", "/a/{couponId}/x", "http://a:8080"),
-                발급("issue", "/b/{couponId}/x", "http://b:8080"))))
+                발급("issue", "/api/a/{couponId}/x", "http://a:8080"),
+                발급("issue", "/api/b/{couponId}/x", "http://b:8080"))))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("issue");
+                .hasMessageContaining("이름이 겹친다");
     }
 
     @Test
@@ -65,8 +73,9 @@ class RouteRulesTest {
     @DisplayName("주소가 뒷단 형식이 아니면 막는다")
     void 잘못된_주소() {
         assertThatThrownBy(() -> new RouteRules(List.of(
-                발급("issue", "/a/{couponId}/x", "http://a:8080/api"))))
-                .isInstanceOf(IllegalArgumentException.class);
+                발급("issue", "/api/a/{couponId}/x", "http://a:8080/api"))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("뒷단 형식이 아니다");
     }
 
     @Test
@@ -80,8 +89,9 @@ class RouteRulesTest {
     @DisplayName("메서드 이름이 틀리면 막는다")
     void 잘못된_메서드() {
         assertThatThrownBy(() -> new RouteRules(List.of(
-                new Rule("issue", Kind.ENTRY, "POSTT", List.of("/a/{couponId}/x"), null))))
-                .isInstanceOf(IllegalArgumentException.class);
+                new Rule("issue", Kind.ENTRY, "POSTT", List.of("/api/a/{couponId}/x"), null))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("메서드를 모른다");
     }
 
     @Test
@@ -97,7 +107,7 @@ class RouteRulesTest {
     @DisplayName("줄 조회 경로를 바꾸려 들면 막는다 — 필터가 안 따라온다")
     void 줄_조회_경로는_고정() {
         assertThatThrownBy(() -> new RouteRules(List.of(
-                new Rule("queue", Kind.QUEUE, "GET", List.of("/q/{couponId}"), null))))
+                new Rule("queue", Kind.QUEUE, "GET", List.of("/api/q/{couponId}"), null))))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining(RouteRules.QUEUE_PATH);
     }
@@ -134,13 +144,34 @@ class RouteRulesTest {
     }
 
     @Test
-    @DisplayName("진입 규칙이 서로 다른 뒷단을 보면 막는다 — 서킷이 하나다")
-    void 진입_뒷단_둘() {
-        assertThatThrownBy(() -> new RouteRules(List.of(
-                발급("issue", "/api/v1/x/{couponId}/issue", "http://a:8080"),
-                발급("issue-v2", "/api/v2/x/{couponId}/issue", "http://b:9090"))))
-                .as("한 뒷단의 장애가 다른 규칙의 대기자를 같이 민다")
-                .isInstanceOf(IllegalArgumentException.class);
+    @DisplayName("경로가 /api/ 밖이면 막는다 — 신원 검사·남용 제한·교차 출처가 거기에만 걸린다")
+    void api_밖() {
+        for (String 경로 : new String[] {"/v2/x/{couponId}/issue", "/api", "/apix/{couponId}",
+                "/API/v1/x/{couponId}/issue"}) {
+            assertThatThrownBy(() -> new RouteRules(List.of(발급("issue", 경로, null))))
+                    .as("'%s'", 경로).isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("/api/ 밖").hasMessageContaining(경로);
+        }
+        assertThatThrownBy(() -> new Rule("coupons", Kind.QUERY, "GET", List.of("/v2/coupons"), null))
+                .as("조회 규칙도 같다").hasMessageContaining("/api/ 밖");
+        assertThatThrownBy(() -> 발급("issue", List.of("/api/v1/x/{couponId}/issue",
+                "/v2/x/{couponId}/issue")))
+                .as("경로 하나만 밖이어도 막는다 — 첫 경로만 보면 미끼가 된다")
+                .hasMessageContaining("/v2/x/{couponId}/issue");
+    }
+
+    @Test
+    @DisplayName("설정에서 묶을 때도 /api/ 밖 경로는 기동을 막는다")
+    void 설정_바인딩() {
+        Binder 바인더 = new Binder(new MapConfigurationPropertySource(Map.of(
+                "waiting.routes.rules[0].id", "x",
+                "waiting.routes.rules[0].kind", "ENTRY",
+                "waiting.routes.rules[0].method", "POST",
+                "waiting.routes.rules[0].paths[0]", "/v2/x/{couponId}/issue")));
+
+        assertThatThrownBy(() -> 바인더.bind("waiting.routes", RouteRules.class))
+                .isInstanceOf(BindException.class)
+                .rootCause().hasMessageContaining("/api/ 밖");
     }
 
     @Test

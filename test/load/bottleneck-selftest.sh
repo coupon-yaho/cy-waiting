@@ -195,5 +195,65 @@ GATEWAYS=0 GATEWAY_CPUS=2 run_case "기대 대수가 양의 정수가 아니면 
 GATEWAY_CPUS=0 run_case "코어 한도가 양수가 아니면 판정 불가" 2 "판정 불가" \
     -- "$(samples badcpu.tsv 190.0 30.0 40.0)"
 
+# **CPU 만으로는 레디스의 천장을 다 못 본다** (CY-990). 명령이 짧으면 한 스레드가 코어를 안 채운 채 초당 명령 수에서
+# 먼저 붙고, 네트워크는 CPU 가 한가한 채로 막힌다. 두 축은 천장을 적었을 때만 판정에 쓴다 — 천장은 호스트마다 다르다.
+with_axes() {
+    local name=$1 ops=$2 gw_net=$3 redis_net=$4
+    fixture "$name" "$(for _ in 1 2 3 4 5; do
+        printf 'cpu\tload-gateway-1\t120.0\ncpu\tload-redis-1\t40.0\nidle\thost\t40.0\n'
+        printf 'ops\tload-redis-1\t%s\nnet\tload-gateway-1\t%s\nnet\tload-redis-1\t%s\n' "$ops" "$gw_net" "$redis_net"
+    done)"
+}
+REDIS_OPS_CEILING=100000 GATEWAY_CPUS=2 run_case "명령 수가 천장에 붙었으면 레디스" 0 "원인: 레디스 — 명령 수" \
+    -- "$(with_axes ops.tsv 95000 100 100)"
+REDIS_OPS_CEILING=100000 GATEWAY_CPUS=2 run_case "명령 수가 천장 90% 아래면 레디스가 아니다" 0 "원인: 가르지 못함" \
+    -- "$(with_axes ops_below.tsv 89000 100 100)"
+NET_CEILING_MBPS=1000 GATEWAY_CPUS=2 run_case "게이트웨이 망이 천장에 붙었으면 네트워크" 0 "원인: 네트워크 — load-gateway-1" \
+    -- "$(with_axes net_gw.tsv 1000 950 100)"
+NET_CEILING_MBPS=1000 GATEWAY_CPUS=2 run_case "레디스 망이 천장에 붙었으면 네트워크" 0 "원인: 네트워크 — load-redis-1" \
+    -- "$(with_axes net_redis.tsv 1000 100 950)"
+# 공유 자원을 먼저 본다. 명령 수가 붙었으면 망이 같이 찼어도 레디스를 늘려야 풀린다.
+REDIS_OPS_CEILING=100000 NET_CEILING_MBPS=1000 GATEWAY_CPUS=2 run_case "명령 수가 망보다 먼저다" 0 \
+    "원인: 레디스 — 명령 수" -- "$(with_axes both.tsv 95000 950 950)"
+REDIS_OPS_CEILING=100000 GATEWAY_CPUS=2 run_case "호스트가 마르면 명령 수가 붙어도 호스트" 0 \
+    "원인: 호스트" -- "$(fixture host_ops.tsv "$(for _ in 1 2 3 4 5; do
+        printf 'cpu\tload-gateway-1\t120.0\ncpu\tload-redis-1\t40.0\nidle\thost\t5.0\nops\tload-redis-1\t95000\n'
+    done)")"
+# 천장을 안 적으면 그 축은 판정에 안 쓴다. 표본은 보여 준다.
+GATEWAY_CPUS=2 run_case "천장을 안 적으면 명령 수로 안 가른다" 0 "명령 수 가운데 95000" \
+    -- "$(with_axes no_ceiling.tsv 95000 950 950)"
+GATEWAY_CPUS=2 run_case "천장을 안 적으면 원인이 바뀌지 않는다" 0 "원인: 가르지 못함" \
+    -- "$(with_axes no_ceiling2.tsv 95000 950 950)"
+REDIS_OPS_CEILING=100000 GATEWAY_CPUS=2 run_case "천장을 적었는데 명령 수 표본이 없으면 판정 불가" 2 "판정 불가" \
+    -- "$(samples no_ops.tsv 120.0 40.0 40.0)"
+NET_CEILING_MBPS=1000 GATEWAY_CPUS=2 run_case "천장을 적었는데 망 표본이 없으면 판정 불가" 2 "판정 불가" \
+    -- "$(samples no_net.tsv 120.0 40.0 40.0)"
+REDIS_OPS_CEILING=abc GATEWAY_CPUS=2 run_case "명령 수 천장이 수가 아니면 판정 불가" 2 "판정 불가" \
+    -- "$(with_axes bad_ops.tsv 95000 100 100)"
+NET_CEILING_MBPS=0 GATEWAY_CPUS=2 run_case "망 천장이 양수가 아니면 판정 불가" 2 "판정 불가" \
+    -- "$(with_axes bad_net.tsv 1000 100 100)"
+GATEWAY_CPUS=2 run_case "명령 수가 음수면 판정 불가" 2 "판정 불가" \
+    -- "$(with_axes neg_ops.tsv -1 100 100)"
+
+# 경계와 순서. 90% 정확히는 붙은 것이다 — CPU 쪽과 같다.
+REDIS_OPS_CEILING=100000 GATEWAY_CPUS=2 run_case "명령 수 90% 정확히는 레디스" 0 "원인: 레디스 — 명령 수" \
+    -- "$(with_axes ops_edge.tsv 90000 100 100)"
+NET_CEILING_MBPS=1000 GATEWAY_CPUS=2 run_case "망 90% 정확히는 네트워크" 0 "원인: 네트워크" \
+    -- "$(with_axes net_edge.tsv 1000 900 100)"
+# 망이 게이트웨이보다 먼저다. 게이트웨이가 붙은 채 망도 붙었으면 코어를 늘려도 망에서 막힌다.
+NET_CEILING_MBPS=1000 GATEWAY_CPUS=2 run_case "게이트웨이가 붙어도 망이 붙었으면 네트워크" 0 "원인: 네트워크" \
+    -- "$(fixture gw_net.tsv "$(for _ in 1 2 3 4 5; do
+        printf 'cpu\tload-gateway-1\t190.0\ncpu\tload-redis-1\t40.0\nidle\thost\t40.0\nnet\tload-gateway-1\t950\n'
+    done)")"
+GATEWAY_CPUS=2 run_case "망 표본이 음수면 판정 불가" 2 "판정 불가" \
+    -- "$(with_axes neg_net.tsv 1000 -1 100)"
+# **천장을 안 적었으면 망 표본이 모자라도 판정을 안 막는다.** 표집기는 첫 바퀴의 망을 버려 늘 하나 적다.
+short_net=$(fixture short_net.tsv "$(for _ in 1 2 3 4 5; do
+    printf 'cpu\tload-gateway-1\t190.0\ncpu\tload-redis-1\t40.0\nidle\thost\t40.0\n'
+done; printf 'net\tload-lb-1\t5.0\n')")
+GATEWAY_CPUS=2 run_case "천장 없이 망 표본이 모자라면 그 망만 뺀다" 0 "원인: 게이트웨이" -- "$short_net"
+NET_CEILING_MBPS=1000 GATEWAY_CPUS=2 run_case "천장을 적었는데 망 표본이 모자라면 판정 불가" 2 "판정 불가" \
+    -- "$short_net"
+
 [ "$selftest_failed" = 0 ] && echo "천장 원인 자기검증 통과"
 exit "$selftest_failed"

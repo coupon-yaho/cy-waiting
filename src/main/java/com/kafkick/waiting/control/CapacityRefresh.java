@@ -2,6 +2,7 @@ package com.kafkick.waiting.control;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Set;
 import java.util.Objects;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -26,6 +27,7 @@ public final class CapacityRefresh {
     private final Supplier<Mono<CapacitySample>> sample;
     private final CapacityCollector collector;
     private final IntSupplier nodes;
+    private final Supplier<Set<String>> ejected;
     private final Duration budget;
     /** 타임아웃 타이머와 수집이 함께 도는 곳. 배분과 같은 스레드다. */
     private final Scheduler worker;
@@ -37,7 +39,7 @@ public final class CapacityRefresh {
     private final AtomicInteger observed = new AtomicInteger();
 
     private CapacityRefresh(Supplier<Mono<CapacitySample>> sample,
-            CapacityCollector collector, IntSupplier nodes,
+            CapacityCollector collector, IntSupplier nodes, Supplier<Set<String>> ejected,
             Duration budget, Scheduler worker, MeterRegistry meters) {
         if (budget == null || budget.isZero() || budget.isNegative()) {
             throw new IllegalArgumentException("budget 은 양수여야 한다: %s".formatted(budget));
@@ -45,12 +47,15 @@ public final class CapacityRefresh {
         this.sample = Objects.requireNonNull(sample, "sample 은 필수다");
         this.collector = Objects.requireNonNull(collector, "collector 는 필수다");
         this.nodes = Objects.requireNonNull(nodes, "nodes 는 필수다");
+        this.ejected = Objects.requireNonNull(ejected, "ejected 는 필수다");
         this.budget = budget;
         this.worker = Objects.requireNonNull(worker, "worker 는 필수다");
         Objects.requireNonNull(meters, "meters 는 필수다");
         // **게이지로 둔다.** 판정의 분자와 분모라 지금 값이 궁금하지 누적이 아니다.
         meters.gauge("waiting.capacity.credit", credit, AtomicLong::get);
         meters.gauge("waiting.capacity.nodes", observed, AtomicInteger::get);
+        meters.gauge("waiting.capacity.ejected.credit", collector,
+                CapacityCollector::lastEjectedCredit);
         // 못 읽은 회차는 누적이 맞다 — 구간의 길이를 이 값으로 잰다.
         this.readFailed = meters.counter("waiting.capacity.read.failed");
     }
@@ -58,7 +63,14 @@ public final class CapacityRefresh {
     public static CapacityRefresh of(Supplier<Mono<CapacitySample>> sample,
             CapacityCollector collector, IntSupplier nodes,
             Duration budget, Scheduler worker, MeterRegistry meters) {
-        return new CapacityRefresh(sample, collector, nodes, budget, worker, meters);
+        return of(sample, collector, nodes, Set::of, budget, worker, meters);
+    }
+
+    /** @param ejected 클러스터 과반이 뺀 인스턴스. 그 몫을 예산에서 뺀다 */
+    public static CapacityRefresh of(Supplier<Mono<CapacitySample>> sample,
+            CapacityCollector collector, IntSupplier nodes, Supplier<Set<String>> ejected,
+            Duration budget, Scheduler worker, MeterRegistry meters) {
+        return new CapacityRefresh(sample, collector, nodes, ejected, budget, worker, meters);
     }
 
     /**
@@ -83,7 +95,7 @@ public final class CapacityRefresh {
 
     private void collected(List<CapacityReport> read, long now) {
         int seen = nodes.getAsInt();
-        long value = collector.collect(read, now, seen);
+        long value = collector.collect(read, now, seen, ejected.get());
         credit.set(value);
         observed.set(seen);
         // **하한에 박힌 것은 모드 전환이다.** 진입도 해제도 안 남기면, 크레딧이

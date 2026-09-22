@@ -27,6 +27,26 @@ if isinstance(v, (int, float)):
 PY
 }
 
+# 끊긴 몫(%) — 발급 응답 중 판정이 끊은(429·503) 몫. 두 표의 결과 섞임을 견주는 재료다 (CY-990). 폴링은 안 넣는다 —
+# 섞임이 바뀌는 자리는 발급이라, 발급만 센 계수를 읽는다. 발급이 없거나 못 읽으면 - 다.
+#
+#   사용: peak_shed_pct <k6 요약>
+peak_shed_pct() {
+    python3 - "$1" <<'PY'
+import json, sys
+try:
+    m = json.load(open(sys.argv[1])).get('metrics', {})
+except Exception:
+    print('-'); sys.exit(0)
+def count(name):
+    node = m.get(name, {})
+    v = node.get('values', {}).get('count', node.get('count', 0))
+    return v if isinstance(v, (int, float)) else 0
+total = count('peak_issue_total')
+print(f'{100 * count("peak_issue_shed") / total:.1f}' if total > 0 else '-')
+PY
+}
+
 # **회차 길이를 초로 푼다.** `${D%s}` 로 끝 글자만 떼면 `1m` 이 1 이 되어, 기대
 # 건수가 60 분의 1 로 내려가고 "부하가 안 닿았다" 가드가 사실상 사라진다.
 # 못 읽는 형식은 0 을 내고 부르는 쪽이 회차를 돌리기 전에 끊는다.
@@ -143,6 +163,65 @@ peak_cpu_lines() {
     awk -F '\t' -v p="$1-" 'index($1, p) == 1 { v = $2; sub(/%$/, "", v); printf "cpu\t%s\t%s\n", $1, v }'
 }
 
+# 레디스 `INFO stats` 에서 초당 명령 수. 줄 끝 CR 을 뗀다 — 떼지 않으면 판정기가 숫자가 아닌 표본으로 읽는다.
+#
+#   사용: docker exec <레디스> redis-cli INFO stats | peak_ops_from_info
+peak_ops_from_info() {
+    awk -F ':' '/^instantaneous_ops_per_sec:/ { v = $2; gsub(/\r/, "", v); print v; exit }'
+}
+
+# `/proc/<pid>/net/dev` 에서 eth0 이 받고 보낸 누적 바이트의 합. 콜론 뒤에 공백이 없는 줄도 읽는다.
+peak_eth0_bytes() {
+    awk '{ line = $0; sub(/^ +/, "", line)
+           if (line ~ /^eth0:/) { sub(/^eth0:/, "", line); split(line, f, " "); print f[1] + f[9]; exit } }'
+}
+
+# 두 번 읽은 누적 바이트의 차분을 Mbit/s 로. 시간이 안 흘렀거나 누적이 줄었으면(컨테이너 재시작) 빈 값이다.
+#
+#   사용: peak_net_mbps <앞 바이트> <앞 나노초> <지금 바이트> <지금 나노초>
+peak_net_mbps() {
+    awk -v a="$1" -v t0="$2" -v b="$3" -v t1="$4" 'BEGIN {
+        dt = (t1 - t0) / 1e9
+        if (dt > 0 && b >= a) printf "%.1f", (b - a) * 8 / 1e6 / dt }'
+}
+
+# 레디스 한 벌의 초당 명령 수를 표본 줄로. 못 읽으면 안 쓴다 — 판정기가 천장을 적었는데 표본이 모자라면 판정 불가로 낸다.
+peak_redis_ops_line() {
+    local name ops
+    name=$(docker ps --filter "name=^$1-redis-" --format '{{.Names}}' 2>/dev/null | head -n 1)
+    [ -n "$name" ] || return 0
+    ops=$(docker exec "$name" redis-cli INFO stats 2>/dev/null | peak_ops_from_info)
+    [ -n "$ops" ] && printf 'ops\t%s\t%s\n' "$name" "$ops"
+    return 0
+}
+
+# 게이트웨이·레디스·LB 마다 망 Mbit/s 를 표본 줄로. **컨테이너 안에 안 들어간다** — 이미지에 도구가 없을 수 있어
+# 호스트에서 그 프로세스의 net/dev 를 읽는다. 앞 값은 상태 파일에 두고 첫 바퀴는 안 쓴다.
+#
+#   사용: peak_net_lines <프로젝트> <상태 파일>
+peak_net_lines() {
+    local project=$1 state=$2 name pid bytes now prev_bytes prev_ns rate next=""
+    # 시험이 가짜 /proc 과 시각을 넣는 자리다.
+    local proc=${PEAK_PROC:-/proc}
+    while read -r name; do
+        pid=$(docker inspect -f '{{.State.Pid}}' "$name" 2>/dev/null)
+        if [ -z "$pid" ] || [ "$pid" = 0 ] || [ ! -r "$proc/$pid/net/dev" ]; then
+            continue
+        fi
+        bytes=$(peak_eth0_bytes < "$proc/$pid/net/dev")
+        now=${PEAK_NOW_NS:-$(date +%s%N)}
+        [ -n "$bytes" ] || continue
+        read -r prev_bytes prev_ns < <(awk -v n="$name" '$1 == n { print $2, $3; exit }' "$state" 2>/dev/null)
+        if [ -n "${prev_ns:-}" ]; then
+            rate=$(peak_net_mbps "$prev_bytes" "$prev_ns" "$bytes" "$now")
+            [ -n "$rate" ] && printf 'net\t%s\t%s\n' "$name" "$rate"
+        fi
+        next+="$name $bytes $now"$'\n'
+    done < <(docker ps --filter "name=^$project-" --format '{{.Names}}' 2>/dev/null \
+        | grep -E -- '-(gateway|redis|lb)-[0-9]+$')
+    printf '%s' "$next" > "$state"
+}
+
 # 호스트 CPU 유휴 백분율. 한 초 사이 `/proc/stat` 두 번을 차분한다 — 부팅 이후 누적값을 그대로 쓰면
 # 회차와 무관한 평균이 나온다. 유휴에 iowait 를 넣는다: 코어가 놀고 있는 것이다.
 peak_host_idle_pct() {
@@ -163,11 +242,16 @@ peak_host_idle_pct() {
 peak_sample_cpu() {
     local out=$1 project=$2 owner=$3 deadline=${4:-}
     : > "$out"
+    : > "$out.net"
     while [ ! -e "$out.stop" ] && kill -0 "$owner" 2>/dev/null \
             && { [ -z "$deadline" ] || [ "$(date +%s)" -lt "$deadline" ]; }; do
-        docker stats --no-stream --format '{{.Name}}\t{{.CPUPerc}}' 2>/dev/null \
-            | peak_cpu_lines "$project" >> "$out"
-        printf 'idle\thost\t%s\n' "$(peak_host_idle_pct)" >> "$out"
+        {
+            docker stats --no-stream --format '{{.Name}}\t{{.CPUPerc}}' 2>/dev/null \
+                | peak_cpu_lines "$project"
+            peak_redis_ops_line "$project"
+            peak_net_lines "$project" "$out.net"
+            printf 'idle\thost\t%s\n' "$(peak_host_idle_pct)"
+        } >> "$out"
     done
 }
 

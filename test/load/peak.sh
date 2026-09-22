@@ -223,7 +223,7 @@ if [ "$warm_rate" != 0 ]; then
     done
 fi
 
-printf '# 요청유입\t실측유입\t판정\t응답p99ms\n' >> "$OUT_TABLE"
+printf '# 요청유입\t실측유입\t판정\t응답p99ms\t끊긴몫%%\n' >> "$OUT_TABLE"
 
 # **표집기는 정지 파일로 멈춘다.** 러너가 중간에 끝나면 루프가 남아 다음 실행의 호스트 유휴를 깎는다. 돌던
 # 한 바퀴는 마치므로 k6 뒤 표본 한 벌이 붙는데, 그것은 판정기의 가운데 값이 흡수한다.
@@ -293,13 +293,13 @@ for rate in $RATES; do
     k6_verdict=$(peak_verdict_from_k6 "$k6_rc" "$summary")
     if [ -z "$actual" ] || [ -z "$p99" ]; then
         echo "  요약에서 값을 못 읽었다 — 이 회차는 판정 불가"
-        printf '%s\t0\tunmeasurable\t0\n' "$rate" >> "$OUT_TABLE"
+        printf '%s\t0\tunmeasurable\t0\t-\n' "$rate" >> "$OUT_TABLE"
         stop_rate=${stop_rate:-$rate}
         break
     fi
     if [ "$k6_verdict" != ok ]; then
         echo "  k6 임계가 ${k6_verdict} 로 갈렸다 (종료 ${k6_rc})"
-        printf '%s\t%s\t%s\t%s\n' "$rate" "$actual" "$k6_verdict" "$p99" >> "$OUT_TABLE"
+        printf '%s\t%s\t%s\t%s\t%s\n' "$rate" "$actual" "$k6_verdict" "$p99" "$(peak_shed_pct "$summary")" >> "$OUT_TABLE"
         stop_rate=${stop_rate:-$rate}
         break
     fi
@@ -320,7 +320,7 @@ for rate in $RATES; do
     verdict=$(peak_worst_verdict "${verdicts[@]}")
     sed 's/^/    /' "$OUT_DIR/judged-$rate.txt"
 
-    printf '%s\t%s\t%s\t%s\n' "$rate" "$actual" "$verdict" "$p99" >> "$OUT_TABLE"
+    printf '%s\t%s\t%s\t%s\t%s\n' "$rate" "$actual" "$verdict" "$p99" "$(peak_shed_pct "$summary")" >> "$OUT_TABLE"
 
     # **천장 원인은 처음 안 선 칸의 것이다.** 사다리를 멈추지 않으면 맨 윗칸이 다른 회차의 원인을 낸다.
     stood=1

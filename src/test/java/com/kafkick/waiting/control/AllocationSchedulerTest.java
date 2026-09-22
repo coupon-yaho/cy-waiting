@@ -348,4 +348,19 @@ class AllocationSchedulerTest {
                 리더::get, Mono::empty, 잰_지연::add, VirtualTimeScheduler.create()))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageStartingWith("firstTickDelay");
     }
+
+    @Test
+    @DisplayName("다음_회차까지_쉬는_시간은_0_이_아니다")
+    void 다음_회차까지_쉬는_시간은_0_이_아니다() {
+        // **값을 직접 본다** (CY-992). 쉬는 시간이 0 이 되면 루프가 쉼 없이 돌아, 가상 시간으로
+        // 재는 시험은 끝나지 않고 메모리만 태운다 — 그 뮤턴트가 판정 없이 끝나 게이트가 멎었다.
+        Duration 틱 = Duration.ofSeconds(1);
+        AllocationScheduler 쉼없음 = AllocationScheduler.of(틱, Duration.ZERO, () -> true,
+                Mono::empty, nanos -> { }, VirtualTimeScheduler.create(), () -> Duration.ZERO);
+        AllocationScheduler 미룸 = AllocationScheduler.of(틱, Duration.ZERO, () -> true,
+                Mono::empty, nanos -> { }, VirtualTimeScheduler.create(), () -> Duration.ofSeconds(3));
+
+        assertThat(쉼없음.nextDelay()).as("미룰 것이 없으면 틱만큼 쉰다").isEqualTo(틱);
+        assertThat(미룸.nextDelay()).as("미룰 것이 틱보다 길면 그만큼 쉰다").isEqualTo(Duration.ofSeconds(3));
+    }
 }

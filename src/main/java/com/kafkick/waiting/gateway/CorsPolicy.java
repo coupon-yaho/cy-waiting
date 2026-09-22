@@ -70,8 +70,10 @@ public class CorsPolicy {
         // 뒷단이 요구하는 것을 다 넣는다. 하나라도 빠지면 브라우저가 사전 요청에서
         // 막고 본 요청을 아예 안 보낸다 — 그 엔드포인트가 브라우저에서 통째로 안 된다.
         // 이름이 설정이면 그 이름을 받아야 한다. 기본값이면 목록이 전과 같다.
+        // Authorization 은 인증을 켰을 때 토큰이 오는 자리다. 끈 모드에서는 게이트웨이가 안 본다.
         List<String> allowed = new ArrayList<>(List.of("Content-Type", "X-Member-Id",
-                "X-Member-Grade", "Queue-Token", "Idempotency-Key", ApiError.REQUEST_ID));
+                "X-Member-Grade", "Queue-Token", "Idempotency-Key", ApiError.REQUEST_ID,
+                HttpHeaders.AUTHORIZATION));
         if (!allowed.contains(delivery.header())) {
             allowed.add(delivery.header());
         }

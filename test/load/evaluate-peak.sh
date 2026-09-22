@@ -63,13 +63,19 @@ prev_rate=""
 line_no=0
 rows=0
 
-while IFS=$'\t' read -r rate actual verdict p99 rest || [ -n "${rate:-}" ]; do
+while IFS=$'\t' read -r rate actual verdict p99 mix rest || [ -n "${rate:-}" ]; do
     line_no=$((line_no + 1))
     # 빈 줄과 주석은 넘긴다. 표를 사람이 읽을 수 있게 두려고 허용한다.
     case "${rate:-}" in ''|'#'*) continue ;; esac
     rows=$((rows + 1))
-    [ -n "${p99:-}" ] || fail "${line_no} 번째 줄의 칸이 모자란다 — 넷이어야 한다"
-    [ -z "${rest:-}" ] || fail "${line_no} 번째 줄의 칸이 넷을 넘는다"
+    [ -n "${p99:-}" ] || fail "${line_no} 번째 줄의 칸이 모자란다 — 넷이나 다섯이어야 한다"
+    [ -z "${rest:-}" ] || fail "${line_no} 번째 줄의 칸이 다섯을 넘는다"
+    # 다섯째 칸은 끊긴 몫(%)이다. 옛 네 칸 표도 받고, 못 잰 칸은 - 로 적는다.
+    case "${mix:-}" in
+        ''|-) ;;
+        *) printf '%s' "$mix" | grep -Eq "$number" \
+            || fail "${line_no} 번째 줄의 끊긴 몫이 숫자가 아니다: '$mix'" ;;
+    esac
 
     printf '%s' "$rate" | grep -Eq "$number" \
         || fail "${line_no} 번째 줄의 요청 유입이 숫자가 아니다: '$rate'"

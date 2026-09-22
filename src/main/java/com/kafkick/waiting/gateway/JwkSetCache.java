@@ -7,6 +7,7 @@ import java.text.ParseException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
@@ -48,6 +49,8 @@ final class JwkSetCache implements Function<SignedJWT, Flux<JWK>> {
 
     private final AtomicInteger failures = new AtomicInteger();
 
+    private final AtomicBoolean exhausted = new AtomicBoolean();
+
     JwkSetCache(Mono<String> fetch, Clock clock) {
         this.fetch = fetch;
         this.clock = clock;
@@ -62,8 +65,8 @@ final class JwkSetCache implements Function<SignedJWT, Flux<JWK>> {
         }
         // 못 받으면 가진 것으로 버틴다. 발급자 장애가 곧 전원 거절이 되지 않게.
         return refresh(now).flatMapMany(set -> Flux.fromIterable(set.getKeys()))
-                .onErrorResume(e -> snap == null || !now.isBefore(snap.at().plus(STALE_LIMIT))
-                        ? Flux.error(e) : Flux.fromIterable(snap.keys().getKeys()));
+                .onErrorResume(e -> snap != null && snap.usable(now)
+                        ? Flux.fromIterable(snap.keys().getKeys()) : Flux.error(e));
     }
 
     private Mono<JWKSet> refresh(Instant now) {
@@ -89,6 +92,7 @@ final class JwkSetCache implements Function<SignedJWT, Flux<JWK>> {
 
     private void stored(JWKSet set) {
         current.set(new Snapshot(set, clock.instant()));
+        exhausted.set(false);
         Instant since = failingSince.getAndSet(null);
         if (since != null) {
             log.info("키 집합을 다시 받았다 — {}초 동안 {}번 실패",
@@ -96,17 +100,19 @@ final class JwkSetCache implements Function<SignedJWT, Flux<JWK>> {
         }
     }
 
+    /** 상태가 바뀔 때만 남긴다. 그 사이 실패는 세기만 하고 회복 로그가 횟수를 싣는다. */
     private void failed(Throwable e) {
         Instant now = clock.instant();
-        failingSince.compareAndSet(null, now);
-        int n = failures.incrementAndGet();
+        failures.incrementAndGet();
         Snapshot snap = current.get();
-        if (snap != null && now.isBefore(snap.at().plus(STALE_LIMIT))) {
-            log.warn("키 집합을 못 받아 {} 에 받은 것으로 버틴다 ({}번째) — jwks-uri 와 발급자 상태를 본다: {}",
-                    snap.at(), n, e.toString());
-        } else {
-            log.error("쓸 키 집합이 없어 인증 요청이 모두 503 이다 ({}번째) — jwks-uri 와 발급자 상태를 본다: {}",
-                    n, e.toString());
+        boolean usable = snap != null && snap.usable(now);
+        if (failingSince.compareAndSet(null, now) && usable) {
+            log.warn("키 집합을 못 받아 {} 에 받은 것으로 버틴다 — jwks-uri 와 발급자 상태를 본다: {}",
+                    snap.at(), e.toString());
+        }
+        if (!usable && exhausted.compareAndSet(false, true)) {
+            log.error("쓸 키 집합이 없어 인증 요청이 모두 503 이다 — jwks-uri 와 발급자 상태를 본다: {}",
+                    e.toString());
         }
     }
 
@@ -115,6 +121,11 @@ final class JwkSetCache implements Function<SignedJWT, Flux<JWK>> {
         /** 오래됐거나, 모르는 kid 가 왔을 때 다시 받는다. 간격은 {@link #refresh} 가 지킨다. */
         boolean stale(Instant now, String kid) {
             return !now.isBefore(at.plus(TTL)) || (kid != null && keys.getKeyByKeyId(kid) == null);
+        }
+
+        /** 못 받는 동안 버틸 수 있는가. */
+        boolean usable(Instant now) {
+            return now.isBefore(at.plus(STALE_LIMIT));
         }
     }
 

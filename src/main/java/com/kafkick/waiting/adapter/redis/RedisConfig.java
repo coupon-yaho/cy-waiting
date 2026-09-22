@@ -47,14 +47,12 @@ public class RedisConfig {
                 () -> CappedJitterDelay.of(RECONNECT_DELAY_BASE, RECONNECT_DELAY_CAP));
     }
 
-    /** 기동을 막지 않는 점검이다. 제어 평면 쪽 명령이라 요청 경로와 무관하다 (RD-4). */
+    /** 기동을 막지 않는 점검이다. 제어 쪽 루프라 요청 경로와 무관하다. */
     @Bean
     EvictionPolicyCheck evictionPolicyCheck(ReactiveStringRedisTemplate redis,
             MeterRegistry meters) {
         return EvictionPolicyCheck.of(
-                () -> redis.execute(c -> c.serverCommands().getConfig(EVICTION_POLICY))
-                        .next()
-                        .mapNotNull(found -> found.getProperty(EVICTION_POLICY)),
+                () -> redis.execute(c -> c.serverCommands().getConfig(EVICTION_POLICY)).next(),
                 EVICTION_CHECK_INTERVAL, meters);
     }
 

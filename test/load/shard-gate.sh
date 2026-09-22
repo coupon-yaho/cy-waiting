@@ -301,9 +301,19 @@ fi
 # **틱 지연을 같이 적는다** (CY-985). 이 회차가 20,000 동시를 만드는 유일한 자리라, 틱
 # 게이트를 실규모로 재는 곳도 여기다. 판정은 안 건다 — 판정기는 레디스 착수를 보고,
 # 틱 게이트는 Phase 10 표가 든다. 창이 10 분이라 앞 회차가 섞일 수 있어 값만 남긴다.
-tick_p99=$(grep -E '^waiting_allocation_tick_seconds\{.*quantile="0\.99"' "$OUT_ENQUEUE" \
+#
+# **성공한 회차만 본다.** 시한에 걸린 회차는 시한 값으로 잘려 적히므로 따로 센다. 그리고 그
+# 노드가 리더가 아니면 표본이 없어 분위수가 0 으로 나온다 — 0 을 값으로 읽지 않는다.
+tick_ok_count=$(grep -E '^waiting_allocation_tick_seconds_count\{.*outcome="ok"' "$OUT_ENQUEUE" \
     | awk '{print $2}' | head -1)
-echo "틱 지연 p99: ${tick_p99:-못 긁음}초"
+tick_timeouts=$(grep -E '^waiting_allocation_tick_seconds_count\{.*outcome="timeout"' "$OUT_ENQUEUE" \
+    | awk '{print $2}' | head -1)
+tick_p99=$(grep -E '^waiting_allocation_tick_seconds\{.*outcome="ok".*quantile="0\.99"' "$OUT_ENQUEUE" \
+    | awk '{print $2}' | head -1)
+case "${tick_ok_count:-0}" in
+    0|0.0) echo "틱 지연 p99: 못 긁음 — 성공한 회차가 없다 (리더가 아니거나 전부 실패)" ;;
+    *) echo "틱 지연 p99: ${tick_p99}초 (성공 ${tick_ok_count} · 시한 ${tick_timeouts:-0})" ;;
+esac
 echo "k6=$rc · 레디스 고정 ${pinned:+켬}${pinned:-끔}"
 # **k6 가 빨개진 회차는 판정하지 않는다.** 임계 위반(99)은 줄이 안 섰거나 다
 # 못 던졌다는 뜻이고, 그 회차의 봉우리는 재려던 것이 아니다.

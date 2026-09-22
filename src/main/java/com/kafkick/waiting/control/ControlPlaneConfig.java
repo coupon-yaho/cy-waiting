@@ -481,7 +481,7 @@ public class ControlPlaneConfig {
         Runnable gained = onLeadershipGained(collector, capacity, cleanup, sweeper, round, holder,
                 registry, sealFences(port, leadership, gate, properties.scheduler().tick(),
                         allocationScheduler, applyPacer));
-        return AllocationScheduler.of(properties.scheduler().tick(),
+        return AllocationScheduler.observed(properties.scheduler().tick(),
                 properties.scheduler().firstTickDelay(),
                 // **승계는 유예를 처음부터 준다.** 비리더 구간에 얼어 있던 실패
                 // 횟수를 이어 쓰면 재승계 첫 회차가 곧바로 크레딧을 깎는다.

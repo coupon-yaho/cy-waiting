@@ -1,6 +1,7 @@
 package com.kafkick.waiting.gateway;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -29,6 +30,17 @@ class KernelBacklogTest {
         Path 한도 = Files.writeString(폴더.resolve("somaxconn"), "65535");
 
         assertThat(AcceptBacklog.effective(16_384, 한도)).hasValue(16_384);
+    }
+
+    @Test
+    @DisplayName("진짜 proc 파일을 끝까지 읽는다 — 크기를 0 으로 보고하는 파일이다")
+    void 진짜_proc_파일() {
+        Path 진짜 = Path.of("/proc/sys/net/core/somaxconn");
+        assumeTrue(Files.isReadable(진짜), "리눅스가 아니면 잴 것이 없다");
+
+        // 크기에 기대 읽으면 첫 글자만 온다 — 4096 이 4 가 되어 "커널 한도가 1" 같은 거짓 경고가 난다.
+        assertThat(AcceptBacklog.effective(Integer.MAX_VALUE, 진짜).orElseThrow())
+                .as("커널이 받는 가장 작은 한도보다 작으면 잘려 읽은 것이다").isGreaterThanOrEqualTo(128);
     }
 
     @Test

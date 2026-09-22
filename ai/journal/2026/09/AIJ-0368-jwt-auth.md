@@ -2,7 +2,7 @@
 id: AIJ-0368
 date: 2026-09-22
 kind: feature
-plan: []
+plan: [D-A1]
 phase: 10
 jira: CY-980
 agent: claude-opus-5
@@ -54,6 +54,15 @@ commits: []
 - JWKS 를 http 로 받았다. 중간자가 키를 바꿔 끼우면 전원 사칭이다. `allow-http-jwks` 로만 연다
 - 비밀 하한이 HS384·HS512 에서도 32바이트였다. RSA 공개키 크기는 안 봤다
 - 라우트가 `/api/` 밖이면 신원 필터를 안 탄다. 인증을 켰을 때는 기동에서 막는다
+- 재검토에서, 발급자를 못 닿는 동안 받아 둔 키로 끝없이 버티는 것이 나왔다. 마지막으로 받은 뒤 한 시간까지만 버틴다
+
+**스타일 점검이 짚어 고친 것.** 401 은 `BadJwtException` 만이다. 라이브러리는 암호 처리 실패도 `JwtException` 으로
+감싸는데, 그것까지 401 이면 내부 장애가 다시 로그인하라로 보인다. 거절은 사유별(`missing`·`invalid`·`unavailable`)로
+`waiting.auth.rejected` 에 센다. 요청마다 로그를 남기지 않는다. 키 집합 장애는 버티는 동안 WARN, 쓸 키가 없으면 ERROR,
+돌아오면 지속 시간과 실패 횟수를 INFO 로 남긴다. 결과를 가르던 같은 값의 센티넬 둘은 sealed 타입으로 나눴다.
+
+`AuthProperties.Jwt` 는 불변식이 얽혀 있지만 record 로 둔다. 설정 바인딩이 생성자 하나로 값을 받아 거기서 막는 것이
+기동 실패를 가장 앞에 둔다.
 
 ## 버린 것
 

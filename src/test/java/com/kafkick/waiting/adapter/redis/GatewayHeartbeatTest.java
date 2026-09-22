@@ -737,18 +737,20 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
             배제를_싣는다(node, list.toString());
         }
 
-        Map<String, Integer> votes = ejectVotes(배제를_싣는다("c", ","));
+        Map<String, Integer> votes = ejectVotes(배제를_싣는다("d", ","));
 
-        assertThat(votes).hasSize(64);
+        assertThat(votes).as("96 개 중 이름순 앞 64 개").hasSize(64);
         assertThat(votes.keySet()).first().isEqualTo("a00");
         assertThat(votes.keySet()).last().isEqualTo("b31");
+        assertThat(votes.keySet()).noneMatch(id -> id.startsWith("c"));
     }
 
     @Test
     @DisplayName("배제_목록은_쉼표로_감싸야_한다")
     void 배제_목록은_쉼표로_감싸야_한다() {
+        // 입력을 오류에 되싣지 않는다. 그 문자열은 예외를 거쳐 로그로 간다.
         assertThatThrownBy(() -> 배제를_싣는다("a", "x,y"))
-                .hasRootCauseMessage("배제 목록은 쉼표로 감싸야 한다: x,y");
+                .hasRootCauseMessage("배제 목록은 쉼표로 감싸야 한다: 3 바이트");
     }
 
     @Test
@@ -772,18 +774,6 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
                 .hasRootCauseMessage("배제한 인스턴스 이름은 64 바이트까지다: 65");
     }
 
-    /** 옛 스크립트는 이 field 를 노드 항목으로 읽는다. 시각으로 읽히면 없는 노드가 분모에 든다. */
-    @Test
-    @DisplayName("배제_목록은_옛_파서가_시각으로_못_읽는다")
-    void 배제_목록은_옛_파서가_시각으로_못_읽는다() {
-        배제를_싣는다("a", ",1700000000,");
-
-        String stored = ejectOf("a");
-
-        assertThat(stored).isEqualTo(",1700000000,");
-        assertThat(stored).as("tonumber 가 nil 을 낸다").startsWith(",");
-    }
-
     @Test
     @DisplayName("해제하면_배제_목록도_빠진다")
     void 해제하면_배제_목록도_빠진다() {
@@ -793,6 +783,54 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
         Long removed = redis.execute(leave, List.of(INSTANCES), List.of("a")).blockFirst(WAIT);
 
         assertThat(removed).as("항목·표·통과 수·배제").isEqualTo(4);
+        assertThat(redis.opsForHash().hasKey(INSTANCES, "#e:a").block(WAIT)).isFalse();
+    }
+
+    /** 이름 수와 이름 길이만 보면 쉼표만으로 된 목록이 상한을 비켜 간다. allow-oom 이라 한도에서도 써진다. */
+    @Test
+    @DisplayName("쉼표만_긴_목록도_거절한다")
+    void 쉼표만_긴_목록도_거절한다() {
+        String commas = ",".repeat(32 * 65 + 2);
+
+        assertThatThrownBy(() -> 배제를_싣는다("a", commas))
+                .hasRootCauseMessage("배제 목록은 " + (32 * 65 + 1) + " 바이트까지다: " + commas.length());
+        assertThat(redis.opsForHash().hasKey(INSTANCES, "#e:a").block(WAIT)).isFalse();
+    }
+
+    @Test
+    @DisplayName("64_바이트_이름은_받는다")
+    void 육십사_바이트_이름은_받는다() {
+        String id = "x".repeat(64);
+
+        assertThat(ejectVotes(배제를_싣는다("a", "," + id + ","))).containsExactly(Map.entry(id, 1));
+    }
+
+    /** 뒷단이 정한 이름이 모든 노드의 해시와 로그로 퍼진다. 허용 문자만 받는다. */
+    @Test
+    @DisplayName("허용_밖_문자가_든_이름은_거절한다")
+    void 허용_밖_문자가_든_이름은_거절한다() {
+        assertThatThrownBy(() -> 배제를_싣는다("a", ",a\u001bb,"))
+                .hasRootCauseMessage("배제한 인스턴스 이름에 허용 밖 문자가 있다");
+        assertThatThrownBy(() -> 배제를_싣는다("a", ",가,"))
+                .hasRootCauseMessage("배제한 인스턴스 이름에 허용 밖 문자가 있다");
+    }
+
+    /**
+     * 롤아웃 중에는 옛 스크립트가 이 해시를 같이 돈다. 옛 스크립트는 새 field 를 노드 항목으로 읽는데,
+     * 쉼표로 시작해 시각으로 못 읽으니 죽은 것으로 보고 지운다. 분모가 부풀지 않고 덜 빼는 쪽으로 간다.
+     */
+    @Test
+    @DisplayName("옛_스크립트는_배제_목록을_노드로_안_세고_지운다")
+    @SuppressWarnings("unchecked")
+    void 옛_스크립트는_배제_목록을_노드로_안_세고_지운다() {
+        배제를_싣는다("a", ",1700000000,");
+        RedisScript<List> legacy = RedisScript.of(
+                new ClassPathResource("redis/legacy/gateway_heartbeat_before_eject.lua"), List.class);
+
+        List<Object> r = (List<Object>) redis.execute(legacy, List.of(INSTANCES),
+                List.of("b", REAP_AFTER, "CLOSED", VOTE_FRESH, "0")).blockFirst(WAIT);
+
+        assertThat(alive(r)).as("a 와 b 뿐이다").isEqualTo(2);
         assertThat(redis.opsForHash().hasKey(INSTANCES, "#e:a").block(WAIT)).isFalse();
     }
 }

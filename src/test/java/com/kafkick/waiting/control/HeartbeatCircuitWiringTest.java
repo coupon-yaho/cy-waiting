@@ -46,7 +46,7 @@ class HeartbeatCircuitWiringTest {
 
         배선.beatStep(circuit -> {
             보낸_것.add(circuit);
-            return Mono.just(new Presence(1, 0, 0, 1, 0, 1));
+            return Mono.just(Presence.withoutEjection(1, 0, 0, 1, 0, 1));
         }, () -> CircuitState.HALF_OPEN, 등록부()).get().block();
 
         assertThat(보낸_것).containsExactly(CircuitState.HALF_OPEN);
@@ -64,7 +64,7 @@ class HeartbeatCircuitWiringTest {
     void 클러스터_판정을_등록부에_적는다() {
         GatewayRegistry registry = 등록부();
 
-        배선.beatStep(circuit -> Mono.just(new Presence(3, 1, 0, 3, 0, 3)),
+        배선.beatStep(circuit -> Mono.just(Presence.withoutEjection(3, 1, 0, 3, 0, 3)),
                 () -> CircuitState.CLOSED, registry).get().block();
 
         assertThat(registry.circuit()).as("소수만 열린 것은 부분 장애다")
@@ -77,7 +77,7 @@ class HeartbeatCircuitWiringTest {
     void 반쯤_열린_표는_전면_정지가_안_된다() {
         GatewayRegistry registry = 등록부();
 
-        배선.beatStep(circuit -> Mono.just(new Presence(3, 0, 3, 3, 0, 3)),
+        배선.beatStep(circuit -> Mono.just(Presence.withoutEjection(3, 0, 3, 3, 0, 3)),
                 () -> CircuitState.CLOSED, registry).get().block();
 
         assertThat(registry.circuit()).isEqualTo(CircuitState.HALF_OPEN);
@@ -167,7 +167,7 @@ class HeartbeatCircuitWiringTest {
     void 합산한_통과_수를_등록부에_적는다() {
         GatewayRegistry 등록부 = 등록부();
 
-        배선.beatStep(circuit -> Mono.just(new Presence(2, 0, 0, 2, 55, 2)),
+        배선.beatStep(circuit -> Mono.just(Presence.withoutEjection(2, 0, 0, 2, 55, 2)),
                 () -> CircuitState.CLOSED, 등록부).get().block();
 
         assertThat(등록부.passRate()).isEqualTo(55);
@@ -183,7 +183,7 @@ class HeartbeatCircuitWiringTest {
     void 덜_실린_합은_모름으로_적는다() {
         GatewayRegistry 등록부 = 등록부();
 
-        배선.beatStep(circuit -> Mono.just(new Presence(3, 0, 0, 3, 55, 2)),
+        배선.beatStep(circuit -> Mono.just(Presence.withoutEjection(3, 0, 0, 3, 55, 2)),
                 () -> CircuitState.CLOSED, 등록부).get().block();
 
         assertThat(등록부.passRate()).isEqualTo(-1);
@@ -325,7 +325,7 @@ class HeartbeatCircuitWiringTest {
 
         배선.beatCall((id, reap, fresh, circuit, passed, ejected) -> {
                     실린_것.set(ejected);
-                    return Mono.just(new Presence(1, 0, 0, 1, 0, 1));
+                    return Mono.just(Presence.withoutEjection(1, 0, 0, 1, 0, 1));
                 }, "gw", 3, 3, 단일_공급자(null), 공급자(outliers), () -> 1_000L)
                 .apply(CircuitState.CLOSED).block();
 
@@ -339,7 +339,7 @@ class HeartbeatCircuitWiringTest {
 
         배선.beatCall((id, reap, fresh, circuit, passed, ejected) -> {
                     실린_것.set(ejected);
-                    return Mono.just(new Presence(1, 0, 0, 1, 0, 1));
+                    return Mono.just(Presence.withoutEjection(1, 0, 0, 1, 0, 1));
                 }, "gw", 3, 3, 단일_공급자(null), 공급자(null), () -> 1_000L)
                 .apply(CircuitState.CLOSED).block();
 

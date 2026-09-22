@@ -109,7 +109,7 @@ class GatewayRedisPortTest extends RedisContainerSupport {
 
         GatewayRedisPort.Presence seen = 찍는다("gw-c", CircuitState.HALF_OPEN).block(WAIT);
 
-        assertThat(seen).isEqualTo(new GatewayRedisPort.Presence(3, 1, 1, 3, 0, 3));
+        assertThat(seen).isEqualTo(GatewayRedisPort.Presence.withoutEjection(3, 1, 1, 3, 0, 3));
     }
 
     /**
@@ -140,7 +140,7 @@ class GatewayRedisPortTest extends RedisContainerSupport {
         port.leave("gw-a").block(WAIT);
 
         GatewayRedisPort.Presence seen = 찍는다("gw-b", CircuitState.CLOSED).block(WAIT);
-        assertThat(seen).isEqualTo(new GatewayRedisPort.Presence(1, 0, 0, 1, 0, 1));
+        assertThat(seen).isEqualTo(GatewayRedisPort.Presence.withoutEjection(1, 0, 0, 1, 0, 1));
     }
 
     /**
@@ -166,7 +166,7 @@ class GatewayRedisPortTest extends RedisContainerSupport {
         GatewayRedisPort.Presence seen =
                 port.presence(List.of(9L, 1_700_000_000L, 3L, 2L, 7L, 55L, 6L, 0L));
 
-        assertThat(seen).isEqualTo(new GatewayRedisPort.Presence(9, 3, 2, 7, 55, 6));
+        assertThat(seen).isEqualTo(GatewayRedisPort.Presence.withoutEjection(9, 3, 2, 7, 55, 6));
     }
 
     /** 회복 봉우리를 정상과 견주려면 전 노드의 도착 합을 알아야 한다 (RC4). */
@@ -187,7 +187,7 @@ class GatewayRedisPortTest extends RedisContainerSupport {
     @Test
     @DisplayName("산_수보다_많은_표는_못_만든다")
     void 산_수보다_많은_표는_못_만든다() {
-        assertThatThrownBy(() -> new GatewayRedisPort.Presence(1, 0, 0, 2, 0, 1))
+        assertThatThrownBy(() -> GatewayRedisPort.Presence.withoutEjection(1, 0, 0, 2, 0, 1))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -195,7 +195,7 @@ class GatewayRedisPortTest extends RedisContainerSupport {
     @Test
     @DisplayName("산_수보다_많이_실을_수_없다")
     void 산_수보다_많이_실을_수_없다() {
-        assertThatThrownBy(() -> new GatewayRedisPort.Presence(1, 0, 0, 1, 30, 2))
+        assertThatThrownBy(() -> GatewayRedisPort.Presence.withoutEjection(1, 0, 0, 1, 30, 2))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -281,11 +281,43 @@ class GatewayRedisPortTest extends RedisContainerSupport {
         assertThat(sent).startsWith(",i00,i01,").endsWith(",i31,");
     }
 
-    /** 자르면 다른 이름이 된다. 버린다. */
+    /** 자르면 다른 이름이 된다. 버린다. 스크립트가 거절할 이름을 보내면 그 노드의 생존 표시까지 막힌다. */
     @Test
-    @DisplayName("쉼표가_든_이름과_긴_이름은_빼고_보낸다")
-    void 쉼표가_든_이름과_긴_이름은_빼고_보낸다() {
-        assertThat(port.ejectArg(List.of("a,b", "x".repeat(65), "", "ok"))).isEqualTo(",ok,");
+    @DisplayName("스크립트가_거절할_이름은_빼고_보낸다")
+    void 스크립트가_거절할_이름은_빼고_보낸다() {
+        List<String> ids = new ArrayList<>(List.of("a,b", "x".repeat(65), "", "ok", "가", "a\u001bb"));
+        ids.add(null);
+        ids.add("y".repeat(64));
+
+        assertThat(port.ejectArg(ids)).isEqualTo(",ok," + "y".repeat(64) + ",");
+    }
+
+    @Test
+    @DisplayName("상한까지의_꼬리는_받고_넘으면_거절한다")
+    void 상한까지의_꼬리는_받고_넘으면_거절한다() {
+        assertThat(port.presence(꼬리(64)).ejectVotes()).hasSize(64);
+        assertThatThrownBy(() -> port.presence(꼬리(65)))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    /** 머리 칸은 수여야 한다. 문자열을 받아 주면 스크립트가 머리를 바꿔도 조용히 통과한다. */
+    @Test
+    @DisplayName("머리_칸이_수가_아니면_거절한다")
+    void 머리_칸이_수가_아니면_거절한다() {
+        assertThatThrownBy(() -> port.presence(
+                List.of("9", 1_700_000_000L, 0L, 0L, 9L, 0L, 0L, 0L)))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    /** 산 64 대가 저마다 다른 한 대씩 뺀 회차. */
+    private List<Object> 꼬리(int pairs) {
+        List<Object> raw = new ArrayList<>(
+                List.of((long) pairs, 1_700_000_000L, 0L, 0L, (long) pairs, 0L, 0L, (long) pairs));
+        for (int i = 0; i < pairs; i++) {
+            raw.add("i" + i);
+            raw.add(1L);
+        }
+        return raw;
     }
 
     @Test

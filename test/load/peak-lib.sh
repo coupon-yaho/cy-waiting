@@ -189,7 +189,7 @@ peak_net_mbps() {
 # 레디스 한 벌의 초당 명령 수를 표본 줄로. 못 읽으면 안 쓴다 — 판정기가 천장을 적었는데 표본이 모자라면 판정 불가로 낸다.
 peak_redis_ops_line() {
     local name ops
-    name=$(docker ps --filter "name=^$1-redis-" --format '{{.Name}}' 2>/dev/null | head -n 1)
+    name=$(docker ps --filter "name=^$1-redis-" --format '{{.Names}}' 2>/dev/null | head -n 1)
     [ -n "$name" ] || return 0
     ops=$(docker exec "$name" redis-cli INFO stats 2>/dev/null | peak_ops_from_info)
     [ -n "$ops" ] && printf 'ops\t%s\t%s\n' "$name" "$ops"
@@ -216,7 +216,7 @@ peak_net_lines() {
             [ -n "$rate" ] && printf 'net\t%s\t%s\n' "$name" "$rate"
         fi
         next+="$name $bytes $now"$'\n'
-    done < <(docker ps --filter "name=^$project-" --format '{{.Name}}' 2>/dev/null \
+    done < <(docker ps --filter "name=^$project-" --format '{{.Names}}' 2>/dev/null \
         | grep -E -- '-(gateway|redis|lb)-[0-9]+$')
     printf '%s' "$next" > "$state"
 }

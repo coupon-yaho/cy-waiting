@@ -3,7 +3,7 @@
 -- KEYS[1]  gw:instances
 -- ARGV[1]  instanceId
 --
--- 반환  지운 field 수 (0~3). 항목·표·통과 수를 함께 뺀다
+-- 반환  지운 field 수 (0~4). 항목·표·통과 수·배제 목록을 함께 뺀다
 --
 -- 죽음이 아니라 통보라 즉시 빼도 된다. 안 그러면 배포마다 임계 시간 동안
 -- 분모가 부풀어 전 노드가 몫을 덜 쓴다.
@@ -25,4 +25,5 @@ end
 -- **곁딸린 field 도 같이 뺀다.** 하트비트는 항목이 사라진 표를 다음 틱에
 -- 치우지만, 마지막 노드가 나가면 그 틱이 영영 안 온다 — 남은 field 가 다음
 -- 기동까지 살아서 첫 HGETALL 이 그걸 다 읽는다.
-return redis.call('HDEL', KEYS[1], ARGV[1], '#c:' .. ARGV[1], '#p:' .. ARGV[1])
+return redis.call('HDEL', KEYS[1], ARGV[1], '#c:' .. ARGV[1], '#p:' .. ARGV[1],
+        '#e:' .. ARGV[1])

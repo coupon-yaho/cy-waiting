@@ -171,9 +171,13 @@ class IdempotencyKeyTest {
         세는_키.of("c1", "m1", "attempt-1");
         세는_키.of("c1", "m1", CLIENT);
 
-        assertThat(계측.counter("waiting.idempotency.fallback", "reason", "missing").count())
+        // **모드를 같이 싣는다.** 어느 모드에서 떨어졌는지 모르면 계약이 다른
+        // 뒷단에 붙였을 때 그 수가 정상인지 아닌지 가를 수 없다.
+        assertThat(계측.counter("waiting.idempotency.fallback",
+                "reason", "missing", "mode", "uuid").count())
                 .as("값 없음 — 빈 값도 안 준 것이다").isEqualTo(2);
-        assertThat(계측.counter("waiting.idempotency.fallback", "reason", "malformed").count())
+        assertThat(계측.counter("waiting.idempotency.fallback",
+                "reason", "malformed", "mode", "uuid").count())
                 .as("형식 다름 — 제대로 준 값은 안 센다").isEqualTo(1);
     }
 }

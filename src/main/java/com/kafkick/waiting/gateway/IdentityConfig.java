@@ -19,7 +19,8 @@ import org.springframework.context.annotation.Configuration;
  * 참조하므로, 값을 주고 만들어 주는 자리가 필요하다.
  */
 @Configuration
-@EnableConfigurationProperties({QueueTokenProperties.class, ProxyProperties.class,
+@EnableConfigurationProperties({IdempotencyProperties.class, QueueTokenProperties.class,
+        ProxyProperties.class,
         CoalescingProperties.class, SoldOutCacheProperties.class})
 public class IdentityConfig {
 
@@ -124,11 +125,12 @@ public class IdentityConfig {
     }
 
     /**
-     * 멱등 키는 <b>비밀키를 안 쓴다.</b> 클라이언트가 준 UUID 를 그대로
-     * 넘기고, 도용 방어는 뒷단이 회원과 키의 쌍으로 저장해서 진다.
+     * 멱등 키는 <b>비밀키를 안 쓴다.</b> 클라이언트가 준 값을 넘기고, 도용 방어는
+     * 뒷단이 회원과 키의 쌍으로 저장해서 진다. 무엇을 넘길지는 설정이 고른다.
      */
     @Bean
-    public IdempotencyKey idempotencyKey(MeterRegistry meters) {
-        return IdempotencyKey.passThrough(meters);
+    public IdempotencyKey idempotencyKey(MeterRegistry meters,
+            IdempotencyProperties properties) {
+        return IdempotencyKey.of(properties.mode(), meters);
     }
 }

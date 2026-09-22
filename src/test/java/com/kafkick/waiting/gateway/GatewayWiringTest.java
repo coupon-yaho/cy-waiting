@@ -290,11 +290,17 @@ class GatewayWiringTest {
     @Test
     @DisplayName("멱등_키_폴백이_운영_지표로_나간다")
     void 멱등_키_폴백이_운영_지표로_나간다() {
-        double 전 = meters.counter("waiting.idempotency.fallback", "reason", "missing").count();
+        // **태그를 빠짐없이 적는다.** 일부만 적고 조회하면 마이크로미터가 같은 이름의
+        // 다른 모양을 새로 등록해, 스크레이프에 태그 집합이 둘인 계열이 생긴다.
+        double 전 = 폴백_수();
 
         idempotencyKey.of("c1", "m1", null);
 
-        assertThat(meters.counter("waiting.idempotency.fallback", "reason", "missing").count())
-                .isEqualTo(전 + 1);
+        assertThat(폴백_수()).isEqualTo(전 + 1);
+    }
+
+    private double 폴백_수() {
+        return meters.counter("waiting.idempotency.fallback",
+                "reason", "missing", "mode", "uuid").count();
     }
 }

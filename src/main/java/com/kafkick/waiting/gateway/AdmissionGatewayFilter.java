@@ -614,7 +614,8 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
      *
      * <p>한 갈래만 키를 실으면 나머지에서는 클라이언트가 준 값이 그대로 뒷단에
      * 닿는다. 그러면 매 시도 다른 값을 넣어 멱등성을 우회하거나, 남의 키를 주워
-     * 먼저 태워 그 사람의 진짜 시도를 재생으로 버리게 만들 수 있다.
+     * 먼저 태워 그 사람의 진짜 시도를 재생으로 버리게 만들 수 있다. 끈 모드는 그
+     * 값을 일부러 보내는 것이고, 뒷단이 제 계약으로 멱등을 지는 배포용이다.
      */
     private Mono<Void> forward(ServerWebExchange exchange, GatewayFilterChain chain,
             String couponId, long ratePerSec, SnapshotMeta meta) {
@@ -628,6 +629,13 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
         // 자리를 잡기 전에 만든다. 잡은 뒤에 두면 여기서 던지는 순간 반납이 아직
         // 안 걸려 그 자리가 영영 안 돌아온다. 서명 한 번이 더 나가지만, 새는 자리를
         // 손으로 지키는 쪽은 다음에 한 줄이 끼어드는 순간 깨진다.
+        // **안 건드리는 것과 아무거나 통과시키는 것은 다르다.** 끈 모드에서도
+        // 줄이 둘이면 뒷단이 어느 것을 볼지가 그쪽 구현에 달리고, 빈 키를 뒷단이
+        // 유효하게 저장하면 전원이 한 레코드로 뭉친다.
+        if (!idempotency.accepts(headers.get(IdempotencyKey.HEADER))) {
+            count("idempotency-malformed");
+            return error.write(exchange, ApiError.Code.INVALID_REQUEST);
+        }
         String key = idempotency.of(couponId, memberId,
                 headers.getFirst(IdempotencyKey.HEADER));
         // 초당 100건이어도 각각 10초 걸리면 동시 1,000건이라 초당 예산만으로는
@@ -647,9 +655,12 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
                 "보호 차단 해제 — {}초 동안 {}건 끊었다",
                 NANOSECONDS.toSeconds(r.elapsedNanos()), r.swallowed()));
         // **여기부터 반납이 걸릴 때까지 던질 수 있는 것을 두지 않는다.**
-        return chain.filter(exchange.mutate()
-                        .request(r -> r.headers(h -> h.set(IdempotencyKey.HEADER, key)))
-                        .build())
+        // **끈 모드면 안 건드린다.** 클라이언트가 보낸 것이 그대로 간다 — 신원
+        // 헤더와 같은 원칙이다. 지우지도 넣지도 않는다.
+        ServerWebExchange forwarded = key == null ? exchange : exchange.mutate()
+                .request(r -> r.headers(h -> h.set(IdempotencyKey.HEADER, key)))
+                .build();
+        return chain.filter(forwarded)
                 // doFinally 는 끝나는 것만 돌려주지 안 끝나는 것을 끝내지 못한다.
                 // 멈춘 뒷단 하나가 격벽을 영구히 닫는 것을 이 상한이 막는다.
                 // 뒷단 응답 타임아웃과는 다르다 — 여기는 자리를 쥐는 시간이다.

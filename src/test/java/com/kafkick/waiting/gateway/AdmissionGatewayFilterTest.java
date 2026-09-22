@@ -125,6 +125,14 @@ class AdmissionGatewayFilterTest {
             holder, 판정, Clock.fixed(지금, ZoneOffset.UTC), meters, 고정_난수,
             줄, tokens, limiter, entryTokens, 멱등키);
 
+    /** 같은 배선에 모드만 끈 것. 다른 것을 바꾸면 무엇이 재어지는지 흐려진다. */
+    private AdmissionGatewayFilter 끈_필터() {
+        return AdmissionGatewayFilter.withIsolatedSoldOutCache(
+                holder, 판정, Clock.fixed(지금, ZoneOffset.UTC), meters, 고정_난수,
+                줄, tokens, limiter, entryTokens,
+                IdempotencyKey.of(IdempotencyKey.Mode.OFF, new SimpleMeterRegistry()));
+    }
+
     private final AtomicReference<Boolean> 뒷단에_닿음 = new AtomicReference<>(false);
 
     /** 몇 번 닿았나. 한 번이라도 닿았는지만 보면 상한이 무너져도 안 걸린다. */
@@ -1742,6 +1750,32 @@ class AdmissionGatewayFilterTest {
         }).block();
 
         assertThat(실린_키.get()).isNotEqualTo("내가-정한-값");
+    }
+
+    @Test
+    @DisplayName("끈_모드에서는_클라이언트가_준_값이_그대로_간다")
+    void 끈_모드에서는_클라이언트가_준_값이_그대로_간다() {
+        스냅샷을_심는다(CouponStates.idle(1_000), META);
+        AtomicReference<String> 실린_키 = new AtomicReference<>();
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.method(HttpMethod.POST,
+                                "/api/v1/coupons/" + COUPON + "/issue")
+                        .header("X-Member-Id", MEMBER)
+                        // 허용 문자로 적는다. 끈 모드도 헤더 줄이 될 수 있는
+                        // 값만 받으므로 한글은 여기서 거절된다.
+                        .header(IdempotencyKey.HEADER, "order-2026-0921-77"));
+        exchange.getAttributes().put(
+                ServerWebExchangeUtils.URI_TEMPLATE_VARIABLES_ATTRIBUTE,
+                Map.of("couponId", COUPON));
+
+        끈_필터().filter(exchange, e -> {
+            실린_키.set(e.getRequest().getHeaders().getFirst(IdempotencyKey.HEADER));
+            return Mono.empty();
+        }).block();
+
+        assertThat(실린_키.get())
+                .as("끄면 지우지도 넣지도 않는다 — 신원 헤더와 같은 원칙이다")
+                .isEqualTo("order-2026-0921-77");
     }
 
     private String 실린_멱등_키() {

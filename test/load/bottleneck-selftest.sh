@@ -235,5 +235,25 @@ NET_CEILING_MBPS=0 GATEWAY_CPUS=2 run_case "망 천장이 양수가 아니면 �
 GATEWAY_CPUS=2 run_case "명령 수가 음수면 판정 불가" 2 "판정 불가" \
     -- "$(with_axes neg_ops.tsv -1 100 100)"
 
+# 경계와 순서. 90% 정확히는 붙은 것이다 — CPU 쪽과 같다.
+REDIS_OPS_CEILING=100000 GATEWAY_CPUS=2 run_case "명령 수 90% 정확히는 레디스" 0 "원인: 레디스 — 명령 수" \
+    -- "$(with_axes ops_edge.tsv 90000 100 100)"
+NET_CEILING_MBPS=1000 GATEWAY_CPUS=2 run_case "망 90% 정확히는 네트워크" 0 "원인: 네트워크" \
+    -- "$(with_axes net_edge.tsv 1000 900 100)"
+# 망이 게이트웨이보다 먼저다. 게이트웨이가 붙은 채 망도 붙었으면 코어를 늘려도 망에서 막힌다.
+NET_CEILING_MBPS=1000 GATEWAY_CPUS=2 run_case "게이트웨이가 붙어도 망이 붙었으면 네트워크" 0 "원인: 네트워크" \
+    -- "$(fixture gw_net.tsv "$(for _ in 1 2 3 4 5; do
+        printf 'cpu\tload-gateway-1\t190.0\ncpu\tload-redis-1\t40.0\nidle\thost\t40.0\nnet\tload-gateway-1\t950\n'
+    done)")"
+GATEWAY_CPUS=2 run_case "망 표본이 음수면 판정 불가" 2 "판정 불가" \
+    -- "$(with_axes neg_net.tsv 1000 -1 100)"
+# **천장을 안 적었으면 망 표본이 모자라도 판정을 안 막는다.** 표집기는 첫 바퀴의 망을 버려 늘 하나 적다.
+short_net=$(fixture short_net.tsv "$(for _ in 1 2 3 4 5; do
+    printf 'cpu\tload-gateway-1\t190.0\ncpu\tload-redis-1\t40.0\nidle\thost\t40.0\n'
+done; printf 'net\tload-lb-1\t5.0\n')")
+GATEWAY_CPUS=2 run_case "천장 없이 망 표본이 모자라면 그 망만 뺀다" 0 "원인: 게이트웨이" -- "$short_net"
+NET_CEILING_MBPS=1000 GATEWAY_CPUS=2 run_case "천장을 적었는데 망 표본이 모자라면 판정 불가" 2 "판정 불가" \
+    -- "$short_net"
+
 [ "$selftest_failed" = 0 ] && echo "천장 원인 자기검증 통과"
 exit "$selftest_failed"

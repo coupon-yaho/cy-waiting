@@ -139,7 +139,7 @@ SCALE_TARGET_PCT=abc run_case "기준이 백분율이 아니면 판정 불가" 2
 
 # **두 표의 결과 섞임이 같아야 나눈다** (CY-990). 줄 상한에 닿아 싼 거절이 늘면 대당 처리량이 부풀어, 그 두
 # 천장은 다른 일을 잰 것이다. 멈춘 칸의 끊긴 몫을 견준다.
-run_case "멈춘 칸의 끊긴 몫이 크게 다르면 판정 불가" 2 "섞임" \
+run_case "멈춘 칸의 끊긴 몫이 크게 다르면 판정 불가" 2 "섞임이 다르다" \
     -- "$one" "$one_cause" \
     "$(steps mix.tsv "$(printf '2000\t1995\tok\t15\t0.8')" "$(printf '3600\t3582\tok\t40\t20.0')" \
         "$(printf '3700\t3650\tunder\t800\t35.0')")" "$two_cause"
@@ -151,10 +151,28 @@ run_case "섞임을 판정문에 싣는다" 0 "끊긴 몫 1.0%·3.9%" \
     -- "$one" "$one_cause" \
     "$(steps mix_show.tsv "$(printf '2000\t1995\tok\t15\t1.0')" "$(printf '3600\t3582\tok\t40\t2.0')" \
         "$(printf '3700\t3650\tunder\t800\t3.9')")" "$two_cause"
-run_case "끊긴 몫이 없는 옛 표면 판정 불가" 2 "섞임" \
+run_case "끊긴 몫이 없는 옛 표면 판정 불가" 2 "끊긴 몫이 없어" \
     -- "$one" "$one_cause" \
     "$(old_steps old.tsv "$(printf '2000\t1995\tok\t15')" "$(printf '3600\t3582\tok\t40')" \
         "$(printf '3700\t3650\tunder\t800')")" "$two_cause"
+# 허용 차 정확히는 같은 섞임이다. 뺄셈을 부동소수로 견주면 3.3·8.3 이 넘는 쪽으로 떨어진다.
+run_case "허용 차 정확히는 같은 섞임이다" 0 "충족" \
+    -- "$(steps mix_e1.tsv "$(printf '1000\t998\tok\t12\t3.3')" "$(printf '2000\t1990\tok\t30\t3.3')" \
+        "$(printf '2100\t2080\tunder\t900\t3.3')")" "$one_cause" \
+    "$(steps mix_e2.tsv "$(printf '2000\t1995\tok\t15\t8.3')" "$(printf '3600\t3582\tok\t40\t8.3')" \
+        "$(printf '3700\t3650\tunder\t800\t8.3')")" "$two_cause"
+# 멈춘 칸은 마지막 줄이 아닐 수 있다. 응답 기준이 앞당기면 가운데 줄이다.
+PEAK_LATENCY_P99_MS=100 run_case "가운데 줄에서 멈추면 그 칸의 끊긴 몫을 본다" 2 "섞임이 다르다" \
+    -- "$(steps mid1.tsv "$(printf '1000\t998\tok\t12\t1.0')" "$(printf '2000\t1990\tok\t30\t1.0')" \
+        "$(printf '2100\t2080\tok\t900\t1.0')" "$(printf '2200\t2100\tunder\t950\t1.0')")" \
+    "$(cause mid1-cause.txt "$gw1" 2100)" \
+    "$(steps mid2.tsv "$(printf '2000\t1995\tok\t15\t1.0')" "$(printf '3600\t3582\tok\t40\t1.0')" \
+        "$(printf '3700\t3650\tok\t800\t20.0')" "$(printf '3800\t3700\tunder\t900\t1.0')")" \
+    "$(cause mid2-cause.txt "$gw2" 3700)"
+run_case "멈춘 칸의 끊긴 몫이 - 면 판정 불가" 2 "끊긴 몫이 없어" \
+    -- "$one" "$one_cause" \
+    "$(steps dash.tsv "$(printf '2000\t1995\tok\t15\t1.0')" "$(printf '3600\t3582\tok\t40\t1.0')" \
+        "$(printf '3700\t3650\tunder\t800\t-')")" "$two_cause"
 MIX_TOLERANCE_PP=abc run_case "섞임 허용 차가 수가 아니면 판정 불가" 2 "판정 불가" \
     -- "$one" "$one_cause" "$two" "$two_cause"
 

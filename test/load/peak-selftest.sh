@@ -264,6 +264,26 @@ lib_case "누적이 줄었으면(재시작) 빈 값" "" "$(peak_net_mbps 500 0 1
 netdev=$(printf 'Inter-|   Receive\n face |bytes\n    lo: 10 1 0 0 0 0 0 0 20 2 0 0 0 0 0 0\n  eth0:1500 9 0 0 0 0 0 0 2500 7 0 0 0 0 0 0\n')
 lib_case "eth0 의 받은·보낸 합" 4000 "$(printf '%s\n' "$netdev" | peak_eth0_bytes)"
 
+# 망 표집은 docker 와 /proc 을 거친다. 이름 칸을 잘못 읽어 표본이 한 줄도 안 쌓이던 적이 있어(CY-990) 가짜 둘로 잰다.
+docker() {
+    case "$1" in
+        ps) printf 'zz-gateway-1\nzz-redis-1\nzz-backend-1\n' ;;
+        inspect) case "$4" in zz-gateway-1) echo 101 ;; zz-redis-1) echo 102 ;; zz-backend-1) echo 103 ;; esac ;;
+    esac
+}
+netdev() {
+    mkdir -p "$work/proc/$1/net"
+    printf 'Inter-|\n face |\n  eth0: %s 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n' "$2" > "$work/proc/$1/net/dev"
+}
+netdev 101 1000; netdev 102 5000; netdev 103 7
+: > "$work/net.state"
+lib_case "첫 바퀴는 앞 값이 없어 안 낸다" "" \
+    "$(PEAK_PROC=$work/proc PEAK_NOW_NS=0 peak_net_lines zz "$work/net.state")"
+netdev 101 1001000; netdev 102 100
+lib_case "두 바퀴째는 Mbit/s · 재시작한 것과 표집 밖의 것은 뺀다" "$(printf 'net\tzz-gateway-1\t8.0')" \
+    "$(PEAK_PROC=$work/proc PEAK_NOW_NS=1000000000 peak_net_lines zz "$work/net.state")"
+unset -f docker netdev
+
 # 대마다 낸 판정 비율을 모은다. **합산하지 않는다** — 한 대가 다시 떴거나 못 긁은 칸이 다른 대의 계수에 묻힌다.
 # 가장 나쁜 것을 쓴다. 판정 불가가 미달보다 앞이다 — 한 대를 못 잰 칸은 나머지가 미달이어도 제품 탓으로 못 읽는다.
 lib_case "모두 서면 ok" ok "$(peak_worst_verdict ok ok)"

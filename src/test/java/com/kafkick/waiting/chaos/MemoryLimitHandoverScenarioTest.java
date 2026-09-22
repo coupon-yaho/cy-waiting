@@ -91,6 +91,7 @@ class MemoryLimitHandoverScenarioTest {
         String[] 유지_끝_임계 = new String[1];
         double[] 앞_초과 = new double[1];
         boolean[] 재개했다 = new boolean[1];
+        int[] 만료_시도 = new int[1];
         boolean[] 상한_중_지웠다 = new boolean[1];
         long[] 남은_줄 = new long[1];
         long[] 지우기_전_줄 = new long[1];
@@ -117,13 +118,8 @@ class MemoryLimitHandoverScenarioTest {
                     앞_임기[0] = leadership.fence();
                     // 리스를 끝내 승계를 만든다. 이 노드가 새 임기로 다시 잡고 승계 봉인을 돈다.
                     // 상한 중에도 잡힌다 — 획득 스크립트가 allow-oom 이다. LeaderElectionTest 가 문다.
-                    if (!락.lease를_만료시킨다(Duration.ofMillis(1))) {
-                        throw new IllegalStateException("리스를 못 끝냈다 — 승계를 안 만들었다");
-                    }
                     try {
-                        Awaitility.await().atMost(기다림).pollInterval(Duration.ofMillis(50))
-                                .until(() -> leadership.isLeader() && leadership.fence() > 앞_임기[0]);
-                        새_임기[0] = leadership.fence();
+                        새_임기[0] = 승계를_만든다(락, 연결, 앞_임기[0], 만료_시도);
                         Awaitility.await().atMost(기다림).pollInterval(Duration.ofMillis(50)).until(() ->
                                 Long.toString(새_임기[0]).equals(연결.sync().get(RedisKeys.applyFence(COUPON, 1, 0))));
                         // 발행 봉인은 게이트가 안 기다린다. 따로 기다린다.
@@ -174,12 +170,16 @@ class MemoryLimitHandoverScenarioTest {
                 })
                 .assertEntry(() -> RecoveryCriteria.violations(
                         새_임기[0] > 앞_임기[0] ? Optional.empty()
-                                : Optional.of("상한 중에 후임이 안 섰다 — 임기 %d".formatted(leadership.fence())),
+                                : Optional.of("상한 중에 후임이 안 섰다 — 임기 %d, 리스 만료 %d 번"
+                                        .formatted(leadership.fence(), 만료_시도[0])),
                         Long.toString(새_임기[0]).equals(봉인된_표[0]) ? Optional.empty()
                                 : Optional.of("상한 중 승계 봉인이 안 섰다 — 표 %s, 새 임기 %d"
                                         .formatted(봉인된_표[0], 새_임기[0])),
                         Long.toString(새_임기[0]).equals(발행_표[0]) ? Optional.empty()
                                 : Optional.of("상한 중 발행 봉인이 안 섰다 — 표 %s".formatted(발행_표[0])),
+                        // 1ms 창에 갱신이 두 번 넘게 닿는 것은 우연이 아니다 — 갱신 주기가 퇴행했는지 본다.
+                        만료_시도[0] <= 2 ? Optional.empty()
+                                : Optional.of("갱신이 만료를 %d 번 덮었다 — 갱신 주기를 본다".formatted(만료_시도[0] - 1)),
                         // 전제 — 표 수명이 유지 창보다 짧아야 "봉인이 남는다" 판정이 무언가를 잰다.
                         // 음수는 수명이 없다는 뜻이다. 영구 표는 재봉인 없이도 남아 이 판정이 아무것도 안 잰다.
                         표_수명_ms[0] > 0 && 표_수명_ms[0] < 유지_창.toMillis() ? Optional.empty()
@@ -211,5 +211,45 @@ class MemoryLimitHandoverScenarioTest {
                                         .formatted(round.enteredOvershoot() - 앞_초과[0]))))
                 .run();
         연결.close();
+    }
+
+    /** 한 번에 기다리는 시간. 이 안에 새 임기가 안 서면 갱신이 만료를 덮었는지 본다. */
+    private static final Duration 승계_한_번 = Duration.ofSeconds(5);
+
+    /** 만료를 다시 거는 최대 횟수. 이만큼 해도 안 서면 후임이 정말 안 서는 것이다. */
+    private static final int 만료_시도_상한 = 4;
+
+    /**
+     * 리스를 끝내 새 임기를 세운다. <b>갱신이 만료를 덮을 수 있다</b> — 1ms 창 안에 이 노드의 갱신이 닿으면
+     * 획득 스크립트가 같은 임기로 리스를 늘린다. 느린 러너에서 두 명령이 몰려 실제로 그렇게 됐다 (CY-984).
+     * 갱신은 세는 값을 안 올리고 새 획득은 반드시 올리므로, 그 값이 그대로일 때만 장애를 다시 건다.
+     */
+    private long 승계를_만든다(LeaderFaults 락, StatefulRedisConnection<String, String> 연결,
+            long 앞_임기, int[] 만료_시도) {
+        for (int i = 0; i < 만료_시도_상한; i++) {
+            만료_시도[0]++;
+            String 앞_세대 = 연결.sync().get(RedisKeys.LEADER_GENERATION);
+            if (!락.lease를_만료시킨다(Duration.ofMillis(1))) {
+                throw new IllegalStateException("리스를 못 끝냈다 — 승계를 안 만들었다");
+            }
+            try {
+                Awaitility.await().atMost(승계_한_번).pollInterval(Duration.ofMillis(50))
+                        .until(() -> leadership.isLeader() && leadership.fence() > 앞_임기);
+                return leadership.fence();
+            } catch (ConditionTimeoutException e) {
+                String 락_값 = 연결.sync().get(RedisKeys.LEADER);
+                boolean 갱신이_덮었다 = 락_값 != null && 락_값.startsWith(앞_임기 + "|")
+                        && Objects.equals(앞_세대, 연결.sync().get(RedisKeys.LEADER_GENERATION));
+                if (!갱신이_덮었다) {
+                    // 새 획득은 섰는데 노드가 아직 모를 수 있다. 남은 시간만큼 더 기다린다.
+                    Duration 남은 = 기다림.minus(승계_한_번.multipliedBy(i + 1L));
+                    Awaitility.await().atMost(남은.isNegative() ? Duration.ZERO : 남은)
+                            .pollInterval(Duration.ofMillis(50))
+                            .until(() -> leadership.isLeader() && leadership.fence() > 앞_임기);
+                    return leadership.fence();
+                }
+            }
+        }
+        throw new ConditionTimeoutException("리스를 " + 만료_시도_상한 + " 번 끝내도 새 임기가 안 섰다");
     }
 }

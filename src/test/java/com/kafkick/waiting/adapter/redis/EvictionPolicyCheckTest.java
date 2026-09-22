@@ -197,8 +197,8 @@ class EvictionPolicyCheckTest {
     }
 
     @Test
-    @DisplayName("한_번_본_답은_읽기_실패로_안_지운다")
-    void 한_번_본_답은_읽기_실패로_안_지운다() {
+    @DisplayName("한_번_본_답은_순간_실패로_안_지운다")
+    void 한_번_본_답은_순간_실패로_안_지운다() {
         // 레디스가 잠깐 끊겨도 정책은 안 바뀐다. 모름으로 덮으면 위험 알람이 그 구간 꺼진다.
         EvictionPolicyCheck 점검 = 점검기(단독("allkeys-lru"), 실패());
 
@@ -222,36 +222,66 @@ class EvictionPolicyCheckTest {
     }
 
     @Test
+    @DisplayName("연달아_못_읽으면_위험도_버린다")
+    void 연달아_못_읽으면_위험도_버린다() {
+        // 알람이 풀리는 쪽이다. 그래도 옛 위험이 새 안전을 가리는 것보다 낫다.
+        EvictionPolicyCheck 점검 = 점검기(단독("allkeys-lru"), 실패());
+        판정(점검);
+        for (int i = 1; i < EvictionPolicyCheck.STALE_AFTER_FAILURES; i++) {
+            assertThat(판정(점검)).isEqualTo(EvictionPolicyCheck.UNSAFE);
+        }
+
+        assertThat(판정(점검)).isEqualTo(EvictionPolicyCheck.UNKNOWN);
+    }
+
+    @Test
+    @DisplayName("띄엄띄엄_난_실패는_쌓이지_않는다")
+    void 띄엄띄엄_난_실패는_쌓이지_않는다() {
+        // 성공이 실패 수를 안 되돌리면 정상인 레디스에서도 게이지가 모름으로 떨어진다.
+        EvictionPolicyCheck 점검 = 점검기(
+                단독("noeviction"), 실패(), 실패(), 단독("noeviction"), 실패(), 실패());
+        for (int i = 0; i < 6; i++) {
+            판정(점검);
+        }
+
+        assertThat(게이지()).isEqualTo(EvictionPolicyCheck.SAFE);
+    }
+
+    @Test
     @DisplayName("답이_안_오면_시한에서_끊는다")
     void 답이_안_오면_시한에서_끊는다() {
         // 끝나지 않는 회차는 repeatWhen 을 영영 세운다. 전역 명령 시한에 기대지 않는다.
         StepVerifier.withVirtualTime(() -> 점검기(Mono.never()).check())
-                .thenAwait(EvictionPolicyCheck.READ_TIMEOUT)
+                .expectSubscription()
+                .expectNoEvent(EvictionPolicyCheck.READ_TIMEOUT.minusMillis(1))
+                .thenAwait(Duration.ofMillis(1))
                 .expectNext(EvictionPolicyCheck.UNKNOWN)
-                .verifyComplete();
+                .expectComplete()
+                .verify(Duration.ofSeconds(5));
     }
 
     @Test
     @DisplayName("위험은_진입과_해제를_한_번씩_남긴다")
     void 위험은_진입과_해제를_한_번씩_남긴다() {
         EvictionPolicyCheck 점검 = 점검기(
-                단독("noeviction"), 단독("allkeys-lru"), 단독("allkeys-lru"), 단독("noeviction"));
-        for (int i = 0; i < 4; i++) {
+                단독("noeviction"), 단독("allkeys-lru"), 단독("allkeys-lru"), 단독("noeviction"),
+                단독("noeviction"), 단독("allkeys-lru"), 단독("noeviction"));
+        for (int i = 0; i < 7; i++) {
             판정(점검);
         }
 
-        // 사람이 고쳐야 풀리는 상태라 ERROR 다. 5분마다 되풀이하면 그 줄이 묻힌다.
-        assertThat(로그_수(Level.ERROR)).isEqualTo(1);
+        // 사람이 고쳐야 풀리는 상태라 ERROR 다. 5분마다 되풀이하면 그 줄이 묻힌다. 구간마다 한 번이다.
+        assertThat(로그_수(Level.ERROR)).isEqualTo(2);
         assertThat(로그.list).filteredOn(줄 -> 줄.getLevel() == Level.ERROR)
                 .allMatch(줄 -> 줄.getFormattedMessage().contains("policy=allkeys-lru"));
         assertThat(로그.list).filteredOn(줄 -> 줄.getFormattedMessage().contains("돌아왔다"))
-                .hasSize(1);
+                .hasSize(2).allMatch(줄 -> 줄.getLevel() == Level.INFO);
     }
 
     @Test
     @DisplayName("못_읽은_구간은_구간마다_첫_건과_해제를_남긴다")
     void 못_읽은_구간은_구간마다_첫_건과_해제를_남긴다() {
-        EvictionPolicyCheck 점검 = 점검기(실패(), 실패(), 단독("noeviction"), 실패());
+        EvictionPolicyCheck 점검 = 점검기(실패(), Mono.empty(), 단독("noeviction"), Mono.empty());
         for (int i = 0; i < 4; i++) {
             판정(점검);
         }
@@ -261,7 +291,7 @@ class EvictionPolicyCheckTest {
         assertThat(로그.list).filteredOn(줄 -> 줄.getLevel() == Level.WARN)
                 .allMatch(줄 -> 줄.getThrowableProxy() != null);
         assertThat(로그.list).filteredOn(줄 -> 줄.getFormattedMessage().contains("다시 읽었다"))
-                .hasSize(1);
+                .hasSize(1).allMatch(줄 -> 줄.getLevel() == Level.INFO);
     }
 
     @Test

@@ -28,7 +28,7 @@ PY
 }
 
 # 끊긴 몫(%) — 발급 응답 중 판정이 끊은(429·503) 몫. 두 표의 결과 섞임을 견주는 재료다 (CY-990). 폴링은 안 넣는다 —
-# 섞임이 바뀌는 자리는 발급이다. 발급이 없거나 못 읽으면 - 다.
+# 섞임이 바뀌는 자리는 발급이라, 발급만 센 계수를 읽는다. 발급이 없거나 못 읽으면 - 다.
 #
 #   사용: peak_shed_pct <k6 요약>
 peak_shed_pct() {
@@ -42,9 +42,8 @@ def count(name):
     node = m.get(name, {})
     v = node.get('values', {}).get('count', node.get('count', 0))
     return v if isinstance(v, (int, float)) else 0
-shed = count('peak_shed')
-total = sum(count(n) for n in ('peak_admitted', 'peak_queued', 'peak_closed')) + shed
-print(f'{100 * shed / total:.1f}' if total > 0 else '-')
+total = count('peak_issue_total')
+print(f'{100 * count("peak_issue_shed") / total:.1f}' if total > 0 else '-')
 PY
 }
 

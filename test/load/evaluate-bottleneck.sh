@@ -55,7 +55,7 @@ if [ -n "$lb_cpus" ] && { ! printf '%s' "$lb_cpus" | grep -Eq '^[0-9]+(\.[0-9]+)
 fi
 # **CPU 로는 안 보이는 천장 둘** (CY-990). 레디스는 명령이 짧으면 한 스레드가 코어를 안 채운 채 초당 명령 수에서
 # 먼저 붙고, 네트워크는 CPU 가 한가한 채로 막힌다. 천장은 호스트마다 달라 적었을 때만 판정에 쓴다 — 비우면 표본만
-# 보여 준다. 레디스 명령 수는 `redis-benchmark` 로 잰 초당 수, 네트워크는 대마다 받고 보낸 합의 Mbit/s 다.
+# 보여 준다. 레디스 명령 수는 게이트웨이가 쓰는 스크립트 모양으로 잰 초당 수, 네트워크는 대마다 받고 보낸 합의 Mbit/s 다.
 ops_ceiling=${REDIS_OPS_CEILING:-}
 net_ceiling=${NET_CEILING_MBPS:-}
 for axis in "명령 수 천장:$ops_ceiling" "망 천장:$net_ceiling"; do

@@ -51,8 +51,18 @@ const shed = new Counter('peak_shed');
 // "하네스가 못 붙었다" 가 한 수가 된다.
 const offJudgement = new Counter('peak_off_judgement');
 
+// **발급만 센 결과.** 위 계수는 폴링도 올려, 두 표의 섞임을 견줄 때 폴링 몫이 차이를 희석한다 (CY-990).
+const issueTotal = new Counter('peak_issue_total');
+const issueShed = new Counter('peak_issue_shed');
+
 // 발급 요청의 결과. 200 은 뒷단까지 갔다는 뜻이다.
 function tallyIssue(r) {
+  if ([200, 202, 429, 503].includes(r.status)) {
+    issueTotal.add(1);
+  }
+  if (r.status === 429 || r.status === 503) {
+    issueShed.add(1);
+  }
   if (r.status === 200) {
     admitted.add(1);
   } else if (r.status === 202) {

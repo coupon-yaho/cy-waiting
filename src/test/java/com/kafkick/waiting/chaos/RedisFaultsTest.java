@@ -7,6 +7,9 @@ import com.kafkick.waiting.chaos.RedisFaults;
 import io.lettuce.core.RedisConnectionException;
 import io.lettuce.core.api.StatefulRedisConnection;
 import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -86,5 +89,26 @@ class RedisFaultsTest {
         faults.붙인다();
 
         assertThat(faults.주소()).isEqualTo(before);
+    }
+
+    @Test
+    @DisplayName("얼리면_명령이_실패하지_않고_매달렸다가_녹이면_끝난다")
+    void 얼리면_명령이_실패하지_않고_매달렸다가_녹이면_끝난다() throws Exception {
+        // **끊는 것과 다르다.** 끊으면 명령이 곧장 실패할 수 있어 "매달린다" 를 전제로 한 시험이
+        // 러너 속도에 갈렸다 (CY-991). 얼리면 연결이 산 채로 명령만 멈춘다.
+        faults = RedisFaults.시작한다();
+        StatefulRedisConnection<String, String> 연결 = faults.연결한다();
+        assertThat(연결.sync().ping()).isEqualTo("PONG");
+
+        faults.얼린다();
+        CompletableFuture<String> 응답 =
+                연결.async().ping().toCompletableFuture();
+        assertThatThrownBy(() -> 응답.get(500, TimeUnit.MILLISECONDS))
+                .as("얼어 있는 동안은 끝나지 않는다 — 실패로 끝나면 이 시한 전에 다른 예외가 난다")
+                .isInstanceOf(TimeoutException.class);
+
+        faults.녹인다();
+        assertThat(응답.get(10, TimeUnit.SECONDS))
+                .as("녹이면 매달렸던 명령이 그대로 끝난다").isEqualTo("PONG");
     }
 }

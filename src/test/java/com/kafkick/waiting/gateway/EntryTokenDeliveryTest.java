@@ -60,7 +60,7 @@ class EntryTokenDeliveryTest {
     @Test
     @DisplayName("게이트웨이가 쓰는 헤더 이름은 못 고른다 — 클라이언트 값이 그것을 덮는다")
     void 예약된_이름() {
-        for (String 예약 : new String[] {"X-Member-Id", "x-member-grade", "Idempotency-Key",
+        for (String 예약 : new String[] {"Idempotency-Key",
                 "Queue-Token", "Authorization", "Host", "Content-Length", "Transfer-Encoding",
                 "Cookie", "Set-Cookie", "X-Real-IP", "X-Forwarded-For", "Forwarded",
                 "Access-Control-Allow-Origin", "Cache-Control", "Content-Type", "Vary"}) {

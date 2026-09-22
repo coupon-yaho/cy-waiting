@@ -38,8 +38,8 @@ class RouteRulesTest {
     @DisplayName("이름이 겹치면 막는다")
     void 이름_중복() {
         assertThatThrownBy(() -> new RouteRules(List.of(
-                발급("issue", "/a/{couponId}/x", "http://a:8080"),
-                발급("issue", "/b/{couponId}/x", "http://b:8080"))))
+                발급("issue", "/api/a/{couponId}/x", "http://a:8080"),
+                발급("issue", "/api/b/{couponId}/x", "http://b:8080"))))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("issue");
     }
@@ -65,7 +65,7 @@ class RouteRulesTest {
     @DisplayName("주소가 뒷단 형식이 아니면 막는다")
     void 잘못된_주소() {
         assertThatThrownBy(() -> new RouteRules(List.of(
-                발급("issue", "/a/{couponId}/x", "http://a:8080/api"))))
+                발급("issue", "/api/a/{couponId}/x", "http://a:8080/api"))))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -80,7 +80,7 @@ class RouteRulesTest {
     @DisplayName("메서드 이름이 틀리면 막는다")
     void 잘못된_메서드() {
         assertThatThrownBy(() -> new RouteRules(List.of(
-                new Rule("issue", Kind.ENTRY, "POSTT", List.of("/a/{couponId}/x"), null))))
+                new Rule("issue", Kind.ENTRY, "POSTT", List.of("/api/a/{couponId}/x"), null))))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -97,7 +97,7 @@ class RouteRulesTest {
     @DisplayName("줄 조회 경로를 바꾸려 들면 막는다 — 필터가 안 따라온다")
     void 줄_조회_경로는_고정() {
         assertThatThrownBy(() -> new RouteRules(List.of(
-                new Rule("queue", Kind.QUEUE, "GET", List.of("/q/{couponId}"), null))))
+                new Rule("queue", Kind.QUEUE, "GET", List.of("/api/q/{couponId}"), null))))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining(RouteRules.QUEUE_PATH);
     }
@@ -131,6 +131,16 @@ class RouteRulesTest {
                         List.of("/api/v1/coupons/{couponId:.*}"), null))))
                 .as("조회는 자리 검사를 건너뛰어 한 줄이면 됐다")
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("경로가 /api/ 밖이면 막는다 — 신원 검사와 남용 제한이 거기에만 걸린다")
+    void api_밖() {
+        for (String 경로 : new String[] {"/v2/x/{couponId}/issue", "/api", "/apix/{couponId}"}) {
+            assertThatThrownBy(() -> new RouteRules(List.of(발급("issue", 경로, null))))
+                    .as("'%s'", 경로).isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("/api/ 밖");
+        }
     }
 
     @Test

@@ -7,6 +7,7 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Mono;
@@ -117,5 +118,23 @@ class CapacityRefreshTest {
 
         // 직전 값으로 돈다. 못 읽은 것을 관측으로 세면 하한으로 떨어진다.
         assertThat(collector.lastKnown()).isEqualTo(직전);
+    }
+
+    /** 과반이 뺀 대가 수집에 안 가면 그 몫이 예산에 남아 남은 대가 받는다. */
+    @Test
+    @DisplayName("등록부의_배제를_수집에_넘기고_뺀_몫을_게이지로_낸다")
+    void 등록부의_배제를_수집에_넘기고_뺀_몫을_게이지로_낸다() {
+        CapacityCollector collector = collector();
+        SimpleMeterRegistry meters = new SimpleMeterRegistry();
+        long at = 지금.getEpochSecond();
+        CapacityRefresh refresh = CapacityRefresh.of(
+                () -> Mono.just(new CapacitySample(List.of(
+                        new CapacityReport("x", 300, at), new CapacityReport("y", 200, at)), at)),
+                collector, () -> 1, () -> Set.of("x"), 예산, Schedulers.immediate(), meters);
+
+        refresh.refresh().block();
+
+        assertThat(collector.lastKnown()).isEqualTo(200);
+        assertThat(meters.get("waiting.capacity.ejected.credit").gauge().value()).isEqualTo(300);
     }
 }

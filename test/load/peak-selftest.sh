@@ -230,6 +230,19 @@ lib_case "우리 컨테이너만 · 백분율 기호를 뗀다" \
     "$(printf '%s\n' "$stats" | peak_cpu_lines load)"
 lib_case "빈 입력은 빈 출력" "" "$(printf '' | peak_cpu_lines load)"
 
+# 레디스 명령 수와 네트워크 (CY-990). CPU 로 안 보이는 천장 둘이다.
+info=$(printf '# Stats\r\ntotal_connections_received:12\r\ninstantaneous_ops_per_sec:48123\r\nrejected_connections:0\r\n')
+lib_case "INFO 에서 초당 명령 수를 뽑는다 · 줄 끝 CR 을 뗀다" 48123 "$(printf '%s\n' "$info" | peak_ops_from_info)"
+lib_case "그 줄이 없으면 빈 값" "" "$(printf 'uptime_in_seconds:3\n' | peak_ops_from_info)"
+# 두 번 읽은 누적 바이트의 차분을 Mbit/s 로. 1초에 125,000,000 바이트는 1000 Mbit/s 다.
+lib_case "차분을 Mbit/s 로" 1000.0 "$(peak_net_mbps 0 0 125000000 1000000000)"
+lib_case "반 초면 두 배" 2000.0 "$(peak_net_mbps 0 0 125000000 500000000)"
+lib_case "시간이 안 흘렀으면 빈 값" "" "$(peak_net_mbps 10 5 20 5)"
+lib_case "누적이 줄었으면(재시작) 빈 값" "" "$(peak_net_mbps 500 0 100 1000000000)"
+# /proc/<pid>/net/dev 에서 eth0 의 받은·보낸 바이트 합. 콜론 뒤에 공백이 없어도 읽는다.
+netdev=$(printf 'Inter-|   Receive\n face |bytes\n    lo: 10 1 0 0 0 0 0 0 20 2 0 0 0 0 0 0\n  eth0:1500 9 0 0 0 0 0 0 2500 7 0 0 0 0 0 0\n')
+lib_case "eth0 의 받은·보낸 합" 4000 "$(printf '%s\n' "$netdev" | peak_eth0_bytes)"
+
 # 대마다 낸 판정 비율을 모은다. **합산하지 않는다** — 한 대가 다시 떴거나 못 긁은 칸이 다른 대의 계수에 묻힌다.
 # 가장 나쁜 것을 쓴다. 판정 불가가 미달보다 앞이다 — 한 대를 못 잰 칸은 나머지가 미달이어도 제품 탓으로 못 읽는다.
 lib_case "모두 서면 ok" ok "$(peak_worst_verdict ok ok)"

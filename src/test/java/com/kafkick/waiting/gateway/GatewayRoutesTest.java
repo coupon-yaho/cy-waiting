@@ -783,6 +783,41 @@ class GatewayRoutesTest {
                 .as("경로가 겹치면 안 된다").isFalse();
     }
 
+    private static RouteRules 진입_둘(String 첫_주소, String 둘째_주소) {
+        return new RouteRules(List.of(
+                new RouteRules.Rule("v1", RouteRules.Kind.ENTRY, "POST",
+                        List.of("/api/v1/x/{couponId}/issue"), 첫_주소),
+                new RouteRules.Rule("v2", RouteRules.Kind.ENTRY, "POST",
+                        List.of("/api/v2/x/{couponId}/issue"), 둘째_주소)));
+    }
+
+    @Test
+    @DisplayName("진입 규칙이 서로 다른 뒷단을 보면 막는다 — 서킷과 배분이 하나다")
+    void 진입_뒷단_둘() {
+        assertThatThrownBy(() -> 라우터(null, 진입_둘("http://a:8080", "http://b:9090"))
+                .getRoutes().collectList().block())
+                .as("한 뒷단의 장애가 다른 뒷단의 발급까지 폴백으로 보낸다")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("진입 규칙의 뒷단이 둘 이상");
+    }
+
+    @Test
+    @DisplayName("주소를 비운 진입 규칙은 공통 뒷단으로 센다 — 적은 주소와 다르면 뒷단이 둘이다")
+    void 진입_뒷단_공통과_다름() {
+        assertThatThrownBy(() -> 라우터(null, 진입_둘("http://a:8080", null))
+                .getRoutes().collectList().block())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("진입 규칙의 뒷단이 둘 이상");
+    }
+
+    @Test
+    @DisplayName("공통 뒷단과 같은 주소를 적은 진입 규칙은 같은 뒷단이다 — 호스트 대소문자는 안 가린다")
+    void 진입_뒷단_같은_주소() {
+        assertThatCode(() -> 라우터(null, 진입_둘("http://BACKEND:8080", null))
+                .getRoutes().collectList().block())
+                .doesNotThrowAnyException();
+    }
+
     @Test
     @DisplayName("라우팅을 켠 채 규칙이 제 주소를 적으면 막는다")
     void 균형기_우회() {

@@ -404,6 +404,7 @@ class GatewayRegistryTest {
                 .containsExactly(Level.WARN, Level.INFO);
         // 몇 대 중 몇 대가 뺐는지가 판단 근거다. 없으면 로그만 보고 경계인지 전면인지 모른다.
         assertThat(로그.list.get(0).getFormattedMessage()).contains("votes=2", "alive=3");
+        assertThat(로그.list.get(1).getFormattedMessage()).contains("과반이 더는 안 뺀다");
     }
 
     /** 놓쳐서 푼 것과 회복해서 푼 것을 가른다. 레디스 순단 뒤의 해제가 회복처럼 읽히면 안 된다. */
@@ -441,13 +442,13 @@ class GatewayRegistryTest {
         로그.start();
         logger.addAppender(로그);
         try {
-            registry().ejectionObserved(1, Map.of("a\tb\u001b[31m\u2028c", 1));
+            registry().ejectionObserved(1, Map.of("a\tb\u001b[31m\u2028c\nd", 1));
         } finally {
             logger.detachAppender(로그);
         }
 
         assertThat(로그.list.get(0).getFormattedMessage())
-                .contains("instance=a_b_[31m_c")
-                .doesNotContain("\t", "\u001b", "\u2028");
+                .contains("instance=a_b_[31m_c_d")
+                .doesNotContain("\t", "\u001b", "\u2028", "\n");
     }
 }

@@ -344,4 +344,16 @@ class GatewayRedisPortTest extends RedisContainerSupport {
         assertThat(seen.ejectReported()).isZero();
         assertThat(seen.ejectVotes()).isEmpty();
     }
+
+    /** 포트가 보낸 이름을 스크립트가 받아야 한다. 두 문자 집합이 갈리면 하트비트가 실패한다. */
+    @Test
+    @DisplayName("구두점이_든_이름이_포트에서_스크립트까지_간다")
+    void 구두점이_든_이름이_포트에서_스크립트까지_간다() {
+        assertThat(port.ejectArg(List.of("a-b.c:1_2"))).isEqualTo(",a-b.c:1_2,");
+
+        GatewayRedisPort.Presence seen = port.beat("gw-a", REAP_AFTER_SEC, VOTE_FRESH_SEC,
+                CircuitState.CLOSED, 0, List.of("a-b.c:1_2", "10.0.1.7:8080")).block(WAIT);
+
+        assertThat(seen.ejectVotes()).isEqualTo(Map.of("a-b.c:1_2", 1, "10.0.1.7:8080", 1));
+    }
 }

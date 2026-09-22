@@ -833,4 +833,25 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
         assertThat(alive(r)).as("a 와 b 뿐이다").isEqualTo(2);
         assertThat(redis.opsForHash().hasKey(INSTANCES, "#e:a").block(WAIT)).isFalse();
     }
+
+    /** 합법인 가장 긴 목록이다. 상한 식이나 부등호가 틀리면 이 목록을 거절해 그 노드의 생존 표시까지 막힌다. */
+    @Test
+    @DisplayName("가장_긴_합법_목록은_받는다")
+    void 가장_긴_합법_목록은_받는다() {
+        StringBuilder list = new StringBuilder(",");
+        for (int i = 0; i < 32; i++) {
+            list.append(String.format("%02d", i)).append("x".repeat(62)).append(',');
+        }
+        assertThat(list).as("전제 — 상한과 같은 길이다").hasSize(32 * 65 + 1);
+
+        assertThat(ejectVotes(배제를_싣는다("a", list.toString()))).hasSize(32);
+    }
+
+    /** 실제 이름은 대개 구두점을 품는다. 허용 문자 하나가 빠지면 그 대의 배제가 공유되지 않는다. */
+    @Test
+    @DisplayName("구두점이_든_이름을_받는다")
+    void 구두점이_든_이름을_받는다() {
+        assertThat(ejectVotes(배제를_싣는다("a", ",a-b.c:1_2,")))
+                .containsExactly(Map.entry("a-b.c:1_2", 1));
+    }
 }

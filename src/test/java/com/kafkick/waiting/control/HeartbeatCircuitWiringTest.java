@@ -8,9 +8,11 @@ import com.kafkick.waiting.domain.routing.InstanceOutliers;
 import java.time.Duration;
 import org.springframework.beans.factory.ObjectProvider;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.DisplayName;
@@ -306,7 +308,8 @@ class HeartbeatCircuitWiringTest {
     void 배제_과반의_분모는_실은_수가_아니라_산_수다() {
         GatewayRegistry registry = 등록부();
 
-        배선.beatStep(circuit -> Mono.just(new Presence(5, 0, 0, 5, 0, 5, 2, Map.of("x", 2))),
+        // 표를 낸 수(3)와 실은 수(2) 어느 쪽으로 나눠도 과반이라, 산 수(5)만 안 뺀다.
+        배선.beatStep(circuit -> Mono.just(new Presence(5, 0, 0, 3, 0, 5, 2, Map.of("x", 2))),
                 () -> CircuitState.CLOSED, registry).get().block();
 
         assertThat(registry.clusterEjected()).isEmpty();
@@ -344,5 +347,29 @@ class HeartbeatCircuitWiringTest {
                 .apply(CircuitState.CLOSED).block();
 
         assertThat(실린_것.get()).isNull();
+    }
+
+    /** 시계와 배제기는 부를 때마다 읽는다. 한 번 떠 두면 판정이 기동 시각에 굳는다. 인자 자리도 다 본다. */
+    @Test
+    @DisplayName("하트비트_호출은_부를_때마다_시계를_읽고_자리대로_넘긴다")
+    void 하트비트_호출은_부를_때마다_시계를_읽고_자리대로_넘긴다() {
+        InstanceOutliers outliers = InstanceOutliers.of(3, Duration.ofSeconds(15), Duration.ofSeconds(60));
+        outliers.retain(Set.of("가", "나"), 1_000);
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 1_000);
+        }
+        AtomicLong 시계 = new AtomicLong(1_000);
+        List<List<Object>> 호출 = new ArrayList<>();
+        var 한_번 = 배선.beatCall((id, reap, fresh, circuit, passed, ejected) -> {
+            호출.add(Arrays.asList(id, reap, fresh, circuit, passed, ejected));
+            return Mono.just(Presence.withoutEjection(1, 0, 0, 1, 0, 1));
+        }, "gw", 30, 5, 단일_공급자(() -> 42L), 공급자(outliers), 시계::get);
+
+        한_번.apply(CircuitState.OPEN).block();
+        시계.set(1_000 + Duration.ofSeconds(16).toMillis());
+        한_번.apply(CircuitState.CLOSED).block();
+
+        assertThat(호출.get(0)).containsExactly("gw", 30L, 5L, CircuitState.OPEN, 42L, Set.of("가"));
+        assertThat(호출.get(1).get(5)).as("배제 창이 지났다").isEqualTo(Set.of());
     }
 }

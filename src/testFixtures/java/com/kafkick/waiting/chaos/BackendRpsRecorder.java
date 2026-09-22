@@ -6,6 +6,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.function.LongSupplier;
+import java.util.stream.LongStream;
 
 /**
  * 뒷단이 <b>실제로 받은</b> 초당 건수 (RC4).
@@ -73,9 +74,10 @@ public final class BackendRpsRecorder {
         long buckets = last - first + 1;
         // 나머지는 마지막 초에 몰아 준다. 버리면 총합과 버킷 합이 갈린다.
         long each = delta / buckets;
-        for (long s = first; s <= last; s++) {
-            perSecond.merge(s, s == last ? delta - each * (buckets - 1) : each, Long::sum);
-        }
+        // **증가 연산자를 안 쓴다** (CY-992). 그 자리가 감소로 바뀌면 루프가 안 끝나고 표만 채워
+        // 메모리를 태운다 — 판정 없이 끝나 게이트가 멎었다. 범위로 돌면 그런 뮤턴트가 없다.
+        LongStream.rangeClosed(first, last).forEach(s ->
+                perSecond.merge(s, s == last ? delta - each * (buckets - 1) : each, Long::sum));
     }
 
     public long total() {

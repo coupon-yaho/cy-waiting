@@ -73,8 +73,7 @@ public final class MemberIdentityFilter implements WebFilter {
     }
 
     public static MemberIdentityFilter of(Clock clock) {
-        return new MemberIdentityFilter(clock, (AuthProperties.Jwt) null, null,
-                new SimpleMeterRegistry());
+        return jwt(clock, null, null, new SimpleMeterRegistry());
     }
 
     /** 시험이 검증기를 직접 꽂는다. */

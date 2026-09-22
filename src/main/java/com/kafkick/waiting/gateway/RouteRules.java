@@ -23,7 +23,7 @@ public record RouteRules(List<Rule> rules) {
 
     static final String ID_PATTERN = "{couponId:[A-Za-z0-9_-]{1,64}}";
 
-    /** 게이트웨이 필터가 보는 범위. 라우트 경로는 모두 이 아래여야 한다. */
+    /** 라우트 경로가 있어야 할 곳. 신원 검사·남용 제한·교차 출처가 이 아래에만 걸린다. */
     static final String API_PREFIX = "/api/";
 
     /**
@@ -139,7 +139,6 @@ public record RouteRules(List<Rule> rules) {
             // **자리를 경로마다 본다.** 목록 중 하나만 맞으면 통과하던 때는, 자리를
             // 맞춘 미끼 경로 하나를 두고 다른 경로로 제약을 넓힐 수 있었다.
             for (String path : paths) {
-                // 신원 검사·남용 제한·교차 출처 설정이 /api/** 에만 걸린다. 밖의 경로는 셋을 다 건너뛴다.
                 if (!path.startsWith(API_PREFIX)) {
                     throw new IllegalArgumentException(
                             "라우팅 규칙 '" + id + "' 의 경로가 " + API_PREFIX + " 밖이다: " + path);

@@ -20,7 +20,6 @@ public record AuthProperties(Mode mode, Jwt jwt) {
     /** Authorization 은 입장 토큰 쪽이 이미 예약해 둔다. */
     private static final Set<String> IDENTITY_HEADERS = Set.of("x-member-id", "x-member-grade");
 
-
     public enum Mode {
         /** 인증 없이 회원 헤더를 형식만 본다. 서명이 없어 값 자체는 못 믿는다. */
         NONE,

@@ -15,6 +15,7 @@ import org.springframework.cloud.gateway.route.builder.GatewayFilterSpec;
 import org.springframework.cloud.gateway.route.builder.RouteLocatorBuilder;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -193,7 +194,7 @@ public class GatewayRoutes {
         Map<String, List<String>> byBackend = new TreeMap<>();
         for (RouteRules.Rule rule : rules.rules()) {
             if (rule.kind() == RouteRules.Kind.ENTRY) {
-                String backend = (rule.uri() == null ? shared : rule.uri()).toLowerCase(Locale.ROOT);
+                String backend = backendKey(rule.uri() == null ? shared : rule.uri());
                 byBackend.computeIfAbsent(backend, key -> new ArrayList<>()).add(rule.id());
             }
         }
@@ -202,6 +203,15 @@ public class GatewayRoutes {
             throw new IllegalStateException("진입 규칙의 뒷단이 둘 이상이다 — 서킷과 배분이 하나라 "
                     + "장애가 섞인다. 뒷단별 규칙: " + byBackend.values());
         }
+    }
+
+    /** 같은 뒷단이면 같은 값. 스킴·호스트는 대소문자를, 포트는 스킴의 기본값을 맞춘다. */
+    private String backendKey(String uri) {
+        URI parsed = URI.create(uri);
+        String scheme = parsed.getScheme().toLowerCase(Locale.ROOT);
+        int port = parsed.getPort() != -1 ? parsed.getPort()
+                : "https".equals(scheme) ? 443 : "http".equals(scheme) ? 80 : -1;
+        return scheme + "://" + parsed.getHost().toLowerCase(Locale.ROOT) + ":" + port;
     }
 
     @Bean

@@ -1,10 +1,12 @@
 package com.kafkick.waiting.adapter.redis;
 
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Duration;
 import org.springframework.boot.data.redis.autoconfigure.ClientResourcesBuilderCustomizer;
 import org.springframework.boot.data.redis.autoconfigure.DataRedisProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 
 /**
  * 시간 예산 검증.
@@ -22,6 +24,11 @@ public class RedisConfig {
     /** 첫 재시도 지연의 바탕. 짧은 끊김은 수십 ms 안에 다시 붙는다. */
     private static final Duration RECONNECT_DELAY_BASE = Duration.ofMillis(100);
 
+    /** 축출 정책을 다시 읽는 간격. 기동 뒤 CONFIG SET 으로 바뀐 것을 잡는 몫이라 분 단위면 된다. */
+    private static final Duration EVICTION_CHECK_INTERVAL = Duration.ofMinutes(5);
+
+    private static final String EVICTION_POLICY = "maxmemory-policy";
+
     @Bean
     RedisTimeBudget redisTimeBudget(DataRedisProperties properties) {
         RedisTimeBudget budget = RedisTimeBudget.of(properties);
@@ -38,6 +45,15 @@ public class RedisConfig {
         // 공급자로 넘긴다. 상태를 들 수 있는 지연을 연결끼리 나눠 쓰지 않게 한다.
         return builder -> builder.reconnectDelay(
                 () -> CappedJitterDelay.of(RECONNECT_DELAY_BASE, RECONNECT_DELAY_CAP));
+    }
+
+    /** 기동을 막지 않는 점검이다. 제어 쪽 루프라 요청 경로와 무관하다. */
+    @Bean
+    EvictionPolicyCheck evictionPolicyCheck(ReactiveStringRedisTemplate redis,
+            MeterRegistry meters) {
+        return EvictionPolicyCheck.of(
+                () -> redis.execute(c -> c.serverCommands().getConfig(EVICTION_POLICY)).next(),
+                EVICTION_CHECK_INTERVAL, meters);
     }
 
 }

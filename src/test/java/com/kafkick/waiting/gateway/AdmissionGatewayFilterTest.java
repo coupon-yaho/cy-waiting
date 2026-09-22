@@ -1778,6 +1778,59 @@ class AdmissionGatewayFilterTest {
                 .isEqualTo("order-2026-0921-77");
     }
 
+    @Test
+    @DisplayName("뒷단_이름이_다르면_입장_토큰을_바꿔_싣는다")
+    void 뒷단_이름이_다르면_입장_토큰을_바꿔_싣는다() {
+        스냅샷을_심는다(CouponStates.idle(1_000), META);
+        AtomicReference<HttpHeaders> 뒷단_헤더 = new AtomicReference<>();
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.method(HttpMethod.POST,
+                                "/api/v1/coupons/" + COUPON + "/issue")
+                        .header("X-Member-Id", MEMBER)
+                        .header("Entry-Token", "et_something"));
+        exchange.getAttributes().put(
+                ServerWebExchangeUtils.URI_TEMPLATE_VARIABLES_ATTRIBUTE,
+                Map.of("couponId", COUPON));
+
+        filter.withEntryTokenDelivery(new EntryTokenDelivery(
+                        EntryTokenDelivery.Where.BODY, "Entry-Token", "X-Backend-Pass"))
+                .filter(exchange, e -> {
+                    뒷단_헤더.set(e.getRequest().getHeaders());
+                    return Mono.empty();
+                }).block();
+
+        assertThat(뒷단_헤더.get().getFirst("X-Backend-Pass"))
+                .as("뒷단은 제 이름으로 받는다").isEqualTo("et_something");
+        assertThat(뒷단_헤더.get().containsHeader("Entry-Token"))
+                .as("둘을 같이 두면 뒷단이 어느 것을 볼지가 그쪽 구현에 달린다").isFalse();
+    }
+
+    @Test
+    @DisplayName("바꿔_싣는_설정이면_클라이언트가_뒷단_이름을_직접_못_보낸다")
+    void 바꿔_싣는_설정이면_클라이언트가_뒷단_이름을_직접_못_보낸다() {
+        스냅샷을_심는다(CouponStates.idle(1_000), META);
+        AtomicReference<HttpHeaders> 뒷단_헤더 = new AtomicReference<>();
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.method(HttpMethod.POST,
+                                "/api/v1/coupons/" + COUPON + "/issue")
+                        .header("X-Member-Id", MEMBER)
+                        .header("X-Backend-Pass", "forged"));
+        exchange.getAttributes().put(
+                ServerWebExchangeUtils.URI_TEMPLATE_VARIABLES_ATTRIBUTE,
+                Map.of("couponId", COUPON));
+
+        filter.withEntryTokenDelivery(new EntryTokenDelivery(
+                        EntryTokenDelivery.Where.BODY, "Entry-Token", "X-Backend-Pass"))
+                .filter(exchange, e -> {
+                    뒷단_헤더.set(e.getRequest().getHeaders());
+                    return Mono.empty();
+                }).block();
+
+        assertThat(뒷단_헤더.get().containsHeader("X-Backend-Pass"))
+                .as("뒷단 이름은 게이트웨이만 싣는다 — 안 지우면 검증 안 된 값이 그 이름으로 닿는다")
+                .isFalse();
+    }
+
     private String 실린_멱등_키() {
         return 실린_멱등_키(MEMBER);
     }

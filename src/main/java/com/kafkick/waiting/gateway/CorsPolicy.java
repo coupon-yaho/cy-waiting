@@ -1,5 +1,6 @@
 package com.kafkick.waiting.gateway;
 
+import java.util.ArrayList;
 import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -43,8 +44,11 @@ public class CorsPolicy {
         }
     }
 
-    CorsPolicy(Origins origins) {
+    private final EntryTokenDelivery delivery;
+
+    CorsPolicy(Origins origins, EntryTokenDelivery delivery) {
         this.origins = origins;
+        this.delivery = delivery;
     }
 
     /**
@@ -65,11 +69,20 @@ public class CorsPolicy {
         config.setAllowedMethods(List.of(HttpMethod.GET.name(), HttpMethod.POST.name()));
         // 뒷단이 요구하는 것을 다 넣는다. 하나라도 빠지면 브라우저가 사전 요청에서
         // 막고 본 요청을 아예 안 보낸다 — 그 엔드포인트가 브라우저에서 통째로 안 된다.
-        config.setAllowedHeaders(List.of("Content-Type", "X-Member-Id", "X-Member-Grade",
-                "Entry-Token", "Queue-Token", "Idempotency-Key", ApiError.REQUEST_ID));
+        // 이름이 설정이면 그 이름을 받아야 한다. 기본값이면 목록이 전과 같다.
+        List<String> allowed = new ArrayList<>(List.of("Content-Type", "X-Member-Id",
+                "X-Member-Grade", "Queue-Token", "Idempotency-Key", ApiError.REQUEST_ID));
+        if (!allowed.contains(delivery.header())) {
+            allowed.add(delivery.header());
+        }
+        config.setAllowedHeaders(List.copyOf(allowed));
         // **읽게 해 주지 않으면 안 보낸 것과 같다.** 교차 출처 스크립트는 기본
         // 여섯 헤더만 볼 수 있어, 여기 없으면 추적 키도 재시도 안내도 못 읽는다.
-        config.setExposedHeaders(List.of(ApiError.REQUEST_ID, HttpHeaders.RETRY_AFTER));
+        // 입장 토큰을 헤더로 내리면 그것도 같이 올린다.
+        List<String> exposed = new ArrayList<>(
+                List.of(ApiError.REQUEST_ID, HttpHeaders.RETRY_AFTER));
+        exposed.addAll(delivery.exposed());
+        config.setExposedHeaders(List.copyOf(exposed));
         config.setMaxAge(3_600L);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();

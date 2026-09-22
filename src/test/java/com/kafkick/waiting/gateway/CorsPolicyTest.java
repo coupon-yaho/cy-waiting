@@ -21,8 +21,12 @@ import org.springframework.web.server.ServerWebExchange;
  */
 class CorsPolicyTest {
 
-    private final CorsPolicy policy = new CorsPolicy(
-            new CorsPolicy.Origins(List.of("https://front.example")));
+    private final CorsPolicy policy = 정책(new EntryTokenDelivery(null, null, null));
+
+    private static CorsPolicy 정책(EntryTokenDelivery 전달) {
+        return new CorsPolicy(
+                new CorsPolicy.Origins(List.of("https://front.example")), 전달);
+    }
 
     private CorsConfiguration 적용되는_설정(String path) {
         ServerWebExchange exchange = MockServerWebExchange.from(
@@ -141,5 +145,22 @@ class CorsPolicyTest {
     void 순번_토큰_헤더를_허용한다() {
         assertThat(적용되는_설정("/api/v1/coupons/c1/queue").getAllowedHeaders())
                 .contains("Queue-Token");
+    }
+
+    @Test
+    @DisplayName("입장 토큰 헤더 이름을 바꾸면 목록이 따라온다")
+    void 헤더_이름을_바꾸면_목록이_따라온다() {
+        CorsPolicy 바꾼 = 정책(new EntryTokenDelivery(
+                EntryTokenDelivery.Where.HEADER, "X-Gate-Pass", null));
+        CorsConfiguration 설정 = 바꾼.corsConfigurationSource()
+                .getCorsConfiguration(MockServerWebExchange.from(
+                        MockServerHttpRequest.get("/api/v1/coupons").build()));
+
+        assertThat(설정.getAllowedHeaders())
+                .as("받는 이름이 목록에 없으면 사전 요청에서 막힌다")
+                .contains("X-Gate-Pass");
+        assertThat(설정.getExposedHeaders())
+                .as("노출 목록에 없으면 브라우저가 못 읽어 안 보낸 것과 같다")
+                .contains("X-Gate-Pass");
     }
 }

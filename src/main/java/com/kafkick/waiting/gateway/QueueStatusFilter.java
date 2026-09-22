@@ -81,7 +81,7 @@ public final class QueueStatusFilter implements WebFilter {
     private final DoubleSupplier random;
     private final SecondWindowLimiter limiter;
     private final ApiError error;
-    private final QueueResponse response = QueueResponse.create();
+    private QueueResponse response = QueueResponse.create();
 
     /** 실패가 이어진 시간. 요청 수로 세면 피크에서 밀리초 만에 상한에 닿는다. */
     private final FailureAge failing = new FailureAge();
@@ -104,15 +104,17 @@ public final class QueueStatusFilter implements WebFilter {
     @Autowired
     QueueStatusFilter(SnapshotHolder holder, QueuePort queue, QueueToken tokens,
             Clock clock, MeterRegistry meters, SecondWindowLimiter limiter,
-            EntryToken entryTokens) {
+            EntryToken entryTokens, EntryTokenDelivery delivery) {
         this(holder, queue, tokens, clock, meters,
                 () -> ThreadLocalRandom.current().nextDouble(), limiter, entryTokens);
+        this.response = QueueResponse.create(delivery);
     }
 
     public static QueueStatusFilter of(SnapshotHolder holder, QueuePort queue,
             QueueToken tokens, Clock clock, MeterRegistry meters, SecondWindowLimiter limiter,
             EntryToken entryTokens) {
-        return new QueueStatusFilter(holder, queue, tokens, clock, meters, limiter, entryTokens);
+        return new QueueStatusFilter(holder, queue, tokens, clock, meters, limiter, entryTokens,
+                new EntryTokenDelivery(null, null, null));
     }
 
     /** 난수원을 받는다. 고정하지 못하면 흔들림이 실제로 붙었는지 못 잰다. */

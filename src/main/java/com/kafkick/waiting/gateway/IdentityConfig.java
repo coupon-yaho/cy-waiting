@@ -19,7 +19,8 @@ import org.springframework.context.annotation.Configuration;
  * 참조하므로, 값을 주고 만들어 주는 자리가 필요하다.
  */
 @Configuration
-@EnableConfigurationProperties({IdempotencyProperties.class, QueueTokenProperties.class,
+@EnableConfigurationProperties({IdempotencyProperties.class, EntryTokenDelivery.class,
+        QueueTokenProperties.class,
         ProxyProperties.class,
         CoalescingProperties.class, SoldOutCacheProperties.class})
 public class IdentityConfig {

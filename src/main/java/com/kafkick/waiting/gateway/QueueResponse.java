@@ -18,11 +18,18 @@ public final class QueueResponse {
 
     private static final String NO_STORE = "no-store";
 
-    private QueueResponse() {
+    private final EntryTokenDelivery delivery;
+
+    private QueueResponse(EntryTokenDelivery delivery) {
+        this.delivery = delivery;
     }
 
     public static QueueResponse create() {
-        return new QueueResponse();
+        return create(new EntryTokenDelivery(null, null, null));
+    }
+
+    public static QueueResponse create(EntryTokenDelivery delivery) {
+        return new QueueResponse(delivery);
     }
 
     /**
@@ -93,6 +100,16 @@ public final class QueueResponse {
      * 자리에서 주면 안 돌아온 사람 몫이 안 버려진다.
      */
     public Mono<Void> admitted(ServerWebExchange exchange, String entryToken, long expiresIn) {
+        // **헤더로 내리면 여기서 먼저 붙인다.** 본문을 쓰기 시작하면 헤더가
+        // 나가 버려 뒤에서는 못 붙인다.
+        if (delivery.where() != EntryTokenDelivery.Where.BODY) {
+            exchange.getResponse().getHeaders().set(delivery.header(), entryToken);
+        }
+        if (delivery.where() == EntryTokenDelivery.Where.HEADER) {
+            return write(exchange, HttpStatus.OK, """
+                    {"success":true,"data":{"status":"ADMITTED","expiresIn":%d}}"""
+                    .formatted(expiresIn), 0);
+        }
         return write(exchange, HttpStatus.OK, """
                 {"success":true,"data":{"status":"ADMITTED",\
                 "entryToken":"%s","expiresIn":%d}}"""

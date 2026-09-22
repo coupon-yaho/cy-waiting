@@ -73,7 +73,7 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
     }
 
     @SuppressWarnings("unchecked")
-    private List<Object> beat(String instanceId, String eject) {
+    private List<Object> 배제를_싣는다(String instanceId, String eject) {
         return (List<Object>) redis.execute(heartbeat, List.of(INSTANCES),
                         List.of(instanceId, REAP_AFTER, "CLOSED", VOTE_FRESH, "0", eject))
                 .blockFirst(WAIT);
@@ -214,7 +214,7 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
     @DisplayName("마지막_노드가_나가면_표도_안_남는다")
     void 마지막_노드가_나가면_표도_안_남는다() {
         beat("only", REAP_AFTER, "OPEN", VOTE_FRESH, "40");
-        beat("only", ",x,");
+        배제를_싣는다("only", ",x,");
 
         redis.execute(leave, List.of(INSTANCES), List.of("only")).blockFirst(WAIT);
 
@@ -628,7 +628,7 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
     @Test
     @DisplayName("배제_목록을_노드별_field_에_싣는다")
     void 배제_목록을_노드별_field_에_싣는다() {
-        beat("a", ",x,y,");
+        배제를_싣는다("a", ",x,y,");
 
         assertThat(ejectOf("a")).isEqualTo(",x,y,");
     }
@@ -637,9 +637,9 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
     @Test
     @DisplayName("배제_목록을_안_보내면_field_를_지운다")
     void 배제_목록을_안_보내면_field_를_지운다() {
-        beat("a", ",x,");
+        배제를_싣는다("a", ",x,");
 
-        List<Object> r = beat("a", "");
+        List<Object> r = 배제를_싣는다("a", "");
 
         assertThat(redis.opsForHash().hasKey(INSTANCES, "#e:a").block(WAIT)).isFalse();
         assertThat(ejectReported(r)).isZero();
@@ -649,7 +649,7 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
     @Test
     @DisplayName("빈_배제_목록도_실은_것으로_센다")
     void 빈_배제_목록도_실은_것으로_센다() {
-        List<Object> r = beat("a", ",");
+        List<Object> r = 배제를_싣는다("a", ",");
 
         assertThat(ejectReported(r)).isEqualTo(1);
         assertThat(ejectVotes(r)).isEmpty();
@@ -658,10 +658,10 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
     @Test
     @DisplayName("인스턴스별_배제_표_수를_돌려준다")
     void 인스턴스별_배제_표_수를_돌려준다() {
-        beat("a", ",x,y,");
-        beat("b", ",x,");
+        배제를_싣는다("a", ",x,y,");
+        배제를_싣는다("b", ",x,");
 
-        List<Object> r = beat("c", "");
+        List<Object> r = 배제를_싣는다("c", "");
 
         assertThat(alive(r)).isEqualTo(3);
         assertThat(ejectReported(r)).isEqualTo(2);
@@ -671,7 +671,7 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
     @Test
     @DisplayName("한_노드가_같은_인스턴스를_두_번_실어도_한_표다")
     void 한_노드가_같은_인스턴스를_두_번_실어도_한_표다() {
-        assertThat(ejectVotes(beat("a", ",x,x,"))).containsExactly(Map.entry("x", 1));
+        assertThat(ejectVotes(배제를_싣는다("a", ",x,x,"))).containsExactly(Map.entry("x", 1));
     }
 
     @Test
@@ -680,7 +680,7 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
         redis.<String, String>opsForHash().put(INSTANCES, "dead", "1").block(WAIT);
         redis.<String, String>opsForHash().put(INSTANCES, "#e:dead", ",x,").block(WAIT);
 
-        List<Object> r = beat("a", ",");
+        List<Object> r = 배제를_싣는다("a", ",");
 
         assertThat(ejectVotes(r)).isEmpty();
         assertThat(ejectReported(r)).isEqualTo(1);
@@ -691,12 +691,12 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
     @Test
     @DisplayName("낡은_배제_표는_안_센다")
     void 낡은_배제_표는_안_센다() {
-        long now = stamped(beat("a", ","));
+        long now = stamped(배제를_싣는다("a", ","));
         redis.<String, String>opsForHash()
                 .put(INSTANCES, "stale", String.valueOf(now - 10)).block(WAIT);
         redis.<String, String>opsForHash().put(INSTANCES, "#e:stale", ",x,").block(WAIT);
 
-        List<Object> r = beat("a", ",");
+        List<Object> r = 배제를_싣는다("a", ",");
 
         assertThat(alive(r)).as("분모에는 들어간다").isEqualTo(2);
         assertThat(ejectVotes(r)).isEmpty();
@@ -708,7 +708,7 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
     void 주인_없는_배제_목록은_지운다() {
         redis.<String, String>opsForHash().put(INSTANCES, "#e:gone", ",x,").block(WAIT);
 
-        beat("a", ",");
+        배제를_싣는다("a", ",");
 
         assertThat(redis.opsForHash().hasKey(INSTANCES, "#e:gone").block(WAIT)).isFalse();
     }
@@ -716,10 +716,10 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
     @Test
     @DisplayName("표가_많은_인스턴스가_먼저_오고_같으면_이름순이다")
     void 표가_많은_인스턴스가_먼저_오고_같으면_이름순이다() {
-        beat("a", ",z,y,");
-        beat("b", ",y,");
+        배제를_싣는다("a", ",z,y,");
+        배제를_싣는다("b", ",y,");
 
-        List<Object> r = beat("c", ",x,z,");
+        List<Object> r = 배제를_싣는다("c", ",x,z,");
 
         assertThat(ejectVotes(r)).containsExactly(
                 Map.entry("y", 2), Map.entry("z", 2), Map.entry("x", 1));
@@ -734,10 +734,10 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
             for (int i = 0; i < 32; i++) {
                 list.append(node).append(String.format("%02d", i)).append(',');
             }
-            beat(node, list.toString());
+            배제를_싣는다(node, list.toString());
         }
 
-        Map<String, Integer> votes = ejectVotes(beat("c", ","));
+        Map<String, Integer> votes = ejectVotes(배제를_싣는다("c", ","));
 
         assertThat(votes).hasSize(64);
         assertThat(votes.keySet()).first().isEqualTo("a00");
@@ -747,7 +747,7 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
     @Test
     @DisplayName("배제_목록은_쉼표로_감싸야_한다")
     void 배제_목록은_쉼표로_감싸야_한다() {
-        assertThatThrownBy(() -> beat("a", "x,y"))
+        assertThatThrownBy(() -> 배제를_싣는다("a", "x,y"))
                 .hasRootCauseMessage("배제 목록은 쉼표로 감싸야 한다: x,y");
     }
 
@@ -759,7 +759,7 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
             list.append('i').append(i).append(',');
         }
 
-        assertThatThrownBy(() -> beat("a", list.toString()))
+        assertThatThrownBy(() -> 배제를_싣는다("a", list.toString()))
                 .hasRootCauseMessage("배제 목록은 32 개까지다: 33");
     }
 
@@ -768,7 +768,7 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
     void 너무_긴_인스턴스_이름은_거절한다() {
         String longId = "x".repeat(65);
 
-        assertThatThrownBy(() -> beat("a", "," + longId + ","))
+        assertThatThrownBy(() -> 배제를_싣는다("a", "," + longId + ","))
                 .hasRootCauseMessage("배제한 인스턴스 이름은 64 바이트까지다: 65");
     }
 
@@ -776,7 +776,7 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
     @Test
     @DisplayName("배제_목록은_옛_파서가_시각으로_못_읽는다")
     void 배제_목록은_옛_파서가_시각으로_못_읽는다() {
-        beat("a", ",1700000000,");
+        배제를_싣는다("a", ",1700000000,");
 
         String stored = ejectOf("a");
 
@@ -787,8 +787,8 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
     @Test
     @DisplayName("해제하면_배제_목록도_빠진다")
     void 해제하면_배제_목록도_빠진다() {
-        beat("a", ",x,");
-        beat("b", ",");
+        배제를_싣는다("a", ",x,");
+        배제를_싣는다("b", ",");
 
         Long removed = redis.execute(leave, List.of(INSTANCES), List.of("a")).blockFirst(WAIT);
 

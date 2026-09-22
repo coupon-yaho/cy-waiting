@@ -142,7 +142,11 @@ awk -F '\t' -v cpus="$cpus" -v sat="$saturation" -v floor="$host_floor" -v need=
         net_hot = ""; net_hot_v = -1
         for (i = 1; i <= nn; i++) {
             k = "net " nets[i]
-            if (cnt[k] < need) { printf "::error title=천장 원인::%s 망 표본이 %d 개다 — 판정 불가\n", nets[i], cnt[k]; exit 2 }
+            # 천장을 안 적었으면 모자란 망은 보여 주지만 않는다. 표집기가 첫 바퀴의 망을 버려 늘 하나 적다.
+            if (cnt[k] < need) {
+                if (net_ceiling != "") { printf "::error title=천장 원인::%s 망 표본이 %d 개다 — 판정 불가\n", nets[i], cnt[k]; exit 2 }
+                continue
+            }
             v = median(k, cnt[k])
             printf "  %s 망 가운데 %.1f Mbit/s (최대 %.1f, %s)\n", nets[i], v, hi[k],
                 net_ceiling == "" ? "천장 미설정 — 판정에 안 쓴다" : "천장 " net_ceiling " Mbit/s"

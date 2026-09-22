@@ -111,7 +111,9 @@ if [ -z "$one_mix" ] || [ -z "$two_mix" ]; then
     exit "$UNMEASURABLE"
 fi
 echo "N 대·2N 대 멈춘 칸 끊긴 몫 ${one_mix}%·${two_mix}% (허용 차 ${mix_tolerance}%p)"
-if awk -v a="$one_mix" -v b="$two_mix" -v t="$mix_tolerance" 'BEGIN{ d = a - b; if (d < 0) d = -d; exit (d > t) ? 0 : 1 }'; then
+# **0.1%p 단위 정수로 견준다.** 뺄셈을 부동소수로 견주면 3.3·8.3 처럼 허용 차 정확히가 넘는 쪽으로 떨어진다.
+if awk -v a="$one_mix" -v b="$two_mix" -v t="$mix_tolerance" 'BEGIN{
+        d = int(a * 10 + 0.5) - int(b * 10 + 0.5); if (d < 0) d = -d; exit (d > int(t * 10 + 0.5)) ? 0 : 1 }'; then
     echo "::error title=증설 효율::두 표의 결과 섞임이 다르다 — 끊긴 몫 ${one_mix}%·${two_mix}% (판정 불가)"
     exit "$UNMEASURABLE"
 fi

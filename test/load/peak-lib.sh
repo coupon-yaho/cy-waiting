@@ -201,13 +201,15 @@ peak_redis_ops_line() {
 #   사용: peak_net_lines <프로젝트> <상태 파일>
 peak_net_lines() {
     local project=$1 state=$2 name pid bytes now prev_bytes prev_ns rate next=""
+    # 시험이 가짜 /proc 과 시각을 넣는 자리다.
+    local proc=${PEAK_PROC:-/proc}
     while read -r name; do
         pid=$(docker inspect -f '{{.State.Pid}}' "$name" 2>/dev/null)
-        if [ -z "$pid" ] || [ "$pid" = 0 ] || [ ! -r "/proc/$pid/net/dev" ]; then
+        if [ -z "$pid" ] || [ "$pid" = 0 ] || [ ! -r "$proc/$pid/net/dev" ]; then
             continue
         fi
-        bytes=$(peak_eth0_bytes < "/proc/$pid/net/dev")
-        now=$(date +%s%N)
+        bytes=$(peak_eth0_bytes < "$proc/$pid/net/dev")
+        now=${PEAK_NOW_NS:-$(date +%s%N)}
         [ -n "$bytes" ] || continue
         read -r prev_bytes prev_ns < <(awk -v n="$name" '$1 == n { print $2, $3; exit }' "$state" 2>/dev/null)
         if [ -n "${prev_ns:-}" ]; then

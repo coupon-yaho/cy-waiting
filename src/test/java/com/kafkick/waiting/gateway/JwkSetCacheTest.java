@@ -144,6 +144,19 @@ class JwkSetCacheTest {
     }
 
     @Test
+    @DisplayName("버티는 것은 마지막으로 받은 뒤 한 시간까지다 — 발급자를 끊어 뺀 키를 살려 두지 못하게")
+    void 버티는_한도() throws Exception {
+        응답.set(Mono.just(집합("k1")));
+        키("k1");
+        응답.set(Mono.error(new IllegalStateException("발급자 장애")));
+
+        흐른다(JwkSetCache.STALE_LIMIT.minusSeconds(1));
+        assertThat(키("k1")).containsExactly("k1");
+        흐른다(Duration.ofSeconds(1));
+        assertThatThrownBy(() -> 키("k1")).hasMessageContaining("발급자 장애");
+    }
+
+    @Test
     @DisplayName("처음부터 못 받으면 오류이고, 간격 안에서는 다시 안 두드린다")
     void 처음부터_실패() {
         응답.set(Mono.error(new IllegalStateException("발급자 장애")));

@@ -10,13 +10,18 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiFunction;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
+import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 
@@ -66,7 +71,7 @@ class QueryCoalescingFilterTest {
     }
 
     /** 뒷단이 답하는 척한다. 몇 번 불렸는지가 이 시험의 값이다. */
-    private static Mono<Void> 답한다(org.springframework.web.server.ServerWebExchange e,
+    private static Mono<Void> 답한다(ServerWebExchange e,
             String body) {
         // **계약을 지킨 뒷단.** 이미 다른 말을 한 응답은 그대로 둔다 — 덮으면
         // 그 시험이 무엇을 재는지 바뀐다.
@@ -215,74 +220,113 @@ class QueryCoalescingFilterTest {
         assertThat(뒷단).as("게이트웨이가 모르는 토큰을 든 요청은 각자 간다").hasValue(2);
     }
 
-    /** 인증을 켠 배포. 신원 필터가 토큰을 검증하고 회원 헤더를 다시 실은 뒤에 온다. */
-    private MockServerWebExchange 토큰_조회(int 회원) {
-        return MockServerWebExchange.from(MockServerHttpRequest.method(HttpMethod.GET, PATH)
-                .header("X-Member-Id", String.valueOf(회원))
-                .header("X-Member-Grade", "GOLD")
-                .header("Authorization", "Bearer 토큰-" + 회원));
+    /** 인증을 켠 배포. 신원 필터가 토큰을 검증하고 회원 헤더를 다시 실은 뒤, 그 표식을 남긴다. */
+    private MockServerWebExchange 검증된_조회(int 회원) {
+        MockServerWebExchange e = MockServerWebExchange.from(
+                MockServerHttpRequest.method(HttpMethod.GET, PATH)
+                        .header("X-Member-Id", String.valueOf(회원))
+                        .header("X-Member-Grade", "GOLD")
+                        .header("Authorization", "Bearer 토큰-" + 회원));
+        e.getAttributes().put(MemberIdentityFilter.VERIFIED, Boolean.TRUE);
+        return e;
+    }
+
+    /** 무리가 동시에 도착한다. 뒷단은 막아 두었다가 한꺼번에 푼다 — 모으기가 실제로 도는 자리다. */
+    private List<MockServerWebExchange> 동시에_보낸다(int 수,
+            BiFunction<ServerWebExchange, Integer, Mono<Void>> 뒷단) {
+        AtomicInteger 불린_수 = new AtomicInteger();
+        Sinks.Empty<Void> 아직 = Sinks.empty();
+        List<MockServerWebExchange> 요청들 = IntStream.range(0, 수)
+                .mapToObj(i -> 검증된_조회(81_290 + i)).toList();
+        요청들.forEach(e -> filter.filter(e, ex ->
+                뒷단.apply(ex, 불린_수.incrementAndGet()).then(아직.asMono())).subscribe());
+        아직.tryEmitEmpty();
+        return 요청들;
     }
 
     /**
      * <b>인증을 켜면 모든 조회에 토큰이 실립니다.</b> 토큰이 있다고 거르면 이 기능이 한 번도 안
-     * 돕니다. 게이트웨이가 검증한 토큰이고, 공유 선언(public)이 있어야만 나누므로 RFC 9111 3.5 가
-     * 허락하는 범위입니다.
+     * 돕니다. 신원 필터가 검증했다는 표식이 있고 뒷단이 public 을 선언하면 모읍니다 (RFC 9111 3.5).
      */
     @Test
-    @DisplayName("인증을_켜면_검증된_토큰을_든_조회도_모은다")
-    void 인증을_켜면_검증된_토큰을_든_조회도_모은다() {
-        QueryCoalescingFilter 인증 = QueryCoalescingFilter.forVerifiedCredentials(설정, 시계, meters);
+    @DisplayName("검증된_토큰을_든_조회는_동시에_와도_한_번만_부른다")
+    void 검증된_토큰을_든_조회는_동시에_와도_한_번만_부른다() {
         AtomicInteger 뒷단 = new AtomicInteger();
 
-        for (int i = 0; i < 3; i++) {
-            MockServerWebExchange e = 토큰_조회(81_290 + i);
-            인증.filter(e, ex -> 답한다(ex, "목록" + 뒷단.incrementAndGet())).block();
-            assertThat(본문(e)).isEqualTo("목록1");
-        }
+        List<MockServerWebExchange> 요청들 = 동시에_보낸다(100, (ex, n) -> {
+            뒷단.incrementAndGet();
+            return 답한다(ex, "목록");
+        });
 
         assertThat(뒷단).as("뒷단 호출").hasValue(1);
+        assertThat(요청들).allSatisfy(e -> assertThat(본문(e)).isEqualTo("목록"));
     }
 
-    /** 배선이 모드를 따라 고르는가. 거꾸로 물리면 인증 모드에서 모으기가 꺼지거나 헤더 모드에서 켜진다. */
+    /** 표식은 요청마다 신원 필터가 남긴다. 설정이 아니라 이 요청이 검증됐는지를 본다. */
     @Test
-    @DisplayName("배선이_인증_모드를_따라_필터를_고른다")
-    void 배선이_인증_모드를_따라_필터를_고른다() {
-        AuthProperties 켬 = new AuthProperties(AuthProperties.Mode.JWT, new AuthProperties.Jwt(
-                "HS256", "0123456789abcdef0123456789abcdef", null, null, null, "waiting",
-                null, null, null, false));
-        IdentityConfig 배선 = new IdentityConfig();
-        AtomicInteger 켠_뒷단 = new AtomicInteger();
-        AtomicInteger 끈_뒷단 = new AtomicInteger();
-        QueryCoalescingFilter 켠_것 = 배선.queryCoalescingFilter(설정, 시계, meters, 켬);
-        QueryCoalescingFilter 끈_것 = 배선.queryCoalescingFilter(설정, 시계, new SimpleMeterRegistry(),
-                new AuthProperties(null, null));
-
-        for (int i = 0; i < 2; i++) {
-            켠_것.filter(토큰_조회(81_290 + i), ex -> 답한다(ex, "목록" + 켠_뒷단.incrementAndGet())).block();
-            끈_것.filter(토큰_조회(81_290 + i), ex -> 답한다(ex, "목록" + 끈_뒷단.incrementAndGet())).block();
-        }
-
-        assertThat(켠_뒷단).hasValue(1);
-        assertThat(끈_뒷단).hasValue(2);
-    }
-
-    /** 인증을 켜도 나눠도 된다는 말은 뒷단만 한다. 말이 없으면 각자 간다. */
-    @Test
-    @DisplayName("인증을_켜도_공유_선언이_없으면_각자_간다")
-    void 인증을_켜도_공유_선언이_없으면_각자_간다() {
-        QueryCoalescingFilter 인증 = QueryCoalescingFilter.forVerifiedCredentials(설정, 시계, meters);
+    @DisplayName("검증_표식이_없는_토큰은_안_모은다")
+    void 검증_표식이_없는_토큰은_안_모은다() {
         AtomicInteger 뒷단 = new AtomicInteger();
 
-        for (int i = 0; i < 3; i++) {
-            MockServerWebExchange e = 토큰_조회(81_290 + i);
-            인증.filter(e, ex -> {
-                ex.getResponse().getHeaders().setCacheControl("private");
-                return 답한다(ex, "개인" + 뒷단.incrementAndGet());
-            }).block();
+        for (int i = 0; i < 2; i++) {
+            MockServerWebExchange e = 검증된_조회(81_290 + i);
+            e.getAttributes().remove(MemberIdentityFilter.VERIFIED);
+            filter.filter(e, ex -> 답한다(ex, "개인" + 뒷단.incrementAndGet())).block();
             assertThat(본문(e)).isEqualTo("개인" + (i + 1));
         }
 
-        assertThat(뒷단).as("개인화된 응답은 나누지 않는다").hasValue(3);
+        assertThat(뒷단).as("신원 필터를 안 지난 토큰은 각자 간다").hasValue(2);
+    }
+
+    @ParameterizedTest(name = "[{index}] {0}")
+    @ValueSource(strings = {"public, private", "public, no-store", "public, no-cache"})
+    @DisplayName("검증돼도_나누지_말라는_응답은_각자_받는다")
+    void 검증돼도_나누지_말라는_응답은_각자_받는다(String 지시어) {
+        List<MockServerWebExchange> 요청들 = 동시에_보낸다(5, (ex, n) -> {
+            ex.getResponse().getHeaders().setCacheControl(지시어);
+            return 답한다(ex, "개인" + n);
+        });
+
+        assertThat(요청들.stream().map(QueryCoalescingFilterTest::본문).distinct().count())
+                .as("리더의 응답이 무리에 안 간다").isEqualTo(5);
+    }
+
+    /** 토큰마다 다른 응답이라고 뒷단이 말하면 나눌 것이 없다. 원문 토큰이 키로 쌓이지도 않게 한다. */
+    @Test
+    @DisplayName("Vary_가_Authorization_이면_나누지_않는다")
+    void Vary_가_Authorization_이면_나누지_않는다() {
+        List<MockServerWebExchange> 요청들 = 동시에_보낸다(5, (ex, n) -> {
+            ex.getResponse().getHeaders().setVary(List.of(HttpHeaders.AUTHORIZATION));
+            return 답한다(ex, "이력" + ex.getRequest().getHeaders().getFirst(HttpHeaders.AUTHORIZATION));
+        });
+
+        assertThat(요청들).allSatisfy(e -> assertThat(본문(e)).isEqualTo(
+                "이력" + e.getRequest().getHeaders().getFirst(HttpHeaders.AUTHORIZATION)));
+    }
+
+    /** 리더가 401 을 받아도 뒤따르는 사람의 결과가 아니다. 담기지도 않는다. */
+    @Test
+    @DisplayName("리더가_401_이면_뒤따르는_요청은_각자_가고_안_담긴다")
+    void 리더가_401_이면_뒤따르는_요청은_각자_가고_안_담긴다() {
+        AtomicInteger 뒷단 = new AtomicInteger();
+
+        List<MockServerWebExchange> 요청들 = 동시에_보낸다(5, (ex, n) -> {
+            뒷단.incrementAndGet();
+            if (n == 1) {
+                ex.getResponse().setStatusCode(HttpStatus.UNAUTHORIZED);
+                ex.getResponse().getHeaders().setCacheControl("public");
+                return ex.getResponse().setComplete();
+            }
+            return 답한다(ex, "목록");
+        });
+
+        assertThat(요청들.stream().filter(e -> e.getResponse().getStatusCode() == HttpStatus.UNAUTHORIZED))
+                .as("401 은 리더 한 사람만").hasSize(1);
+        assertThat(뒷단).as("뒤따르는 사람은 각자 뒷단에 간다").hasValue(5);
+        MockServerWebExchange 다음 = 검증된_조회(99_999);
+        filter.filter(다음, ex -> 답한다(ex, "새로")).block();
+        assertThat(다음.getResponse().getStatusCode()).as("401 이 담기지 않았다").isEqualTo(HttpStatus.OK);
+        assertThat(본문(다음)).isIn("목록", "새로");
     }
 
     /**

@@ -1,6 +1,8 @@
 package com.kafkick.waiting.gateway;
 
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 import java.util.regex.Pattern;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
@@ -31,6 +33,20 @@ public record EntryTokenDelivery(Where where, String header, String backendHeade
      */
     private static final Pattern TOKEN = Pattern.compile("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$");
 
+    /**
+     * 게이트웨이가 스스로 쓰거나 믿는 이름. <b>여기로 고르면 클라이언트 값이 그것을 덮는다</b>
+     * — 신원·멱등 키·IP·전송 틀·CORS 헤더가 설정 한 줄로 위조된다.
+     */
+    private static final Set<String> RESERVED = Set.of("x-member-id", "x-member-grade",
+            "idempotency-key", "queue-token", "x-request-id", "authorization", "host",
+            "content-length", "transfer-encoding", "connection", "cookie", "set-cookie",
+            "forwarded", "x-real-ip", "true-client-ip", "cf-connecting-ip", "origin",
+            "content-type", "cache-control", "retry-after", "vary");
+
+    /** 이름 묶음. 끝까지 적으면 새 이름 하나가 빠진다. */
+    private static final List<String> RESERVED_PREFIXES =
+            List.of("x-forwarded-", "access-control-");
+
     public EntryTokenDelivery {
         where = where == null ? Where.BODY : where;
         header = name(header, DEFAULT_HEADER);
@@ -57,6 +73,11 @@ public record EntryTokenDelivery(Where where, String header, String backendHeade
         }
         if (!TOKEN.matcher(value).matches()) {
             throw new IllegalArgumentException("헤더 이름에 쓸 수 없는 문자가 있다: " + value);
+        }
+        String lower = value.toLowerCase(Locale.ROOT);
+        if (RESERVED.contains(lower) || RESERVED_PREFIXES.stream().anyMatch(lower::startsWith)) {
+            throw new IllegalArgumentException(
+                    "게이트웨이가 쓰는 헤더라 입장 토큰 이름으로 못 쓴다: " + value);
         }
         return value;
     }

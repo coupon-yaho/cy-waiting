@@ -103,10 +103,6 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
 
     private static final String MEMBER_ID = "X-Member-Id";
 
-    /** 발급 계층 명세가 정한 이름. 조회가 준 토큰을 여기 실어 온다. */
-    /** 받는 이름의 기본값. 설정이 바꾸면 {@link #delivery} 가 든다. */
-    private static final String ENTRY_TOKEN = EntryTokenDelivery.DEFAULT_HEADER;
-
     /**
      * 장애 개방이 노드 예산에서 가져다 쓰는 비율.
      *
@@ -674,16 +670,23 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
         //
         // **뒷단 이름이 다르면 바꿔 싣는다.** 옛 이름을 같이 두면 뒷단이 둘 중
         // 어느 것을 볼지가 그쪽 구현에 달린다.
-        String pass = delivery.renames()
+        //
+        // **뒷단 이름은 게이트웨이만 싣는다.** 받는 이름이 안 왔어도 지운다 — 안 지우면
+        // 클라이언트가 그 이름으로 직접 보낸 값이 검증 없이 뒷단에 닿는다.
+        boolean renames = delivery.renames();
+        String pass = renames
                 ? exchange.getRequest().getHeaders().getFirst(delivery.header()) : null;
-        ServerWebExchange forwarded = key == null && pass == null ? exchange : exchange.mutate()
+        ServerWebExchange forwarded = key == null && !renames ? exchange : exchange.mutate()
                 .request(r -> r.headers(h -> {
                     if (key != null) {
                         h.set(IdempotencyKey.HEADER, key);
                     }
-                    if (pass != null) {
+                    if (renames) {
                         h.remove(delivery.header());
-                        h.set(delivery.backendHeader(), pass);
+                        h.remove(delivery.backendHeader());
+                        if (pass != null) {
+                            h.set(delivery.backendHeader(), pass);
+                        }
                     }
                 }))
                 .build();

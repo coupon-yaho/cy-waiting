@@ -30,6 +30,9 @@ final class JwkSetCache implements Function<SignedJWT, Flux<JWK>> {
 
     static final Duration TIMEOUT = Duration.ofSeconds(3);
 
+    /** 못 받는 동안 받아 둔 키로 버티는 한도. 끝이 없으면 발급자를 끊어 뺀 키를 살려 둔다. */
+    static final Duration STALE_LIMIT = Duration.ofHours(1);
+
     private final Mono<String> fetch;
 
     private final Clock clock;
@@ -52,8 +55,8 @@ final class JwkSetCache implements Function<SignedJWT, Flux<JWK>> {
         }
         // 못 받으면 가진 것으로 버틴다. 발급자 장애가 곧 전원 거절이 되지 않게.
         return refresh(now).flatMapMany(set -> Flux.fromIterable(set.getKeys()))
-                .onErrorResume(e -> snap == null ? Flux.error(e)
-                        : Flux.fromIterable(snap.keys().getKeys()));
+                .onErrorResume(e -> snap == null || !now.isBefore(snap.at().plus(STALE_LIMIT))
+                        ? Flux.error(e) : Flux.fromIterable(snap.keys().getKeys()));
     }
 
     private Mono<JWKSet> refresh(Instant now) {

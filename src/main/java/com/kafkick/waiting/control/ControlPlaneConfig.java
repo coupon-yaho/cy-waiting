@@ -14,6 +14,7 @@ import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
@@ -175,9 +176,18 @@ public class ControlPlaneConfig {
     @Bean
     CapacityRefresh capacityRefresh(AllocationRedisPort port, CapacityCollector capacity,
             GatewayRegistry registry, ControlPlaneProperties properties,
+            ObjectProvider<RoutingProperties> routing,
             Scheduler allocationScheduler, MeterRegistry meters) {
         return CapacityRefresh.of(port::capacitySample, capacity, registry::count,
+                ejectionSource(routing, registry),
                 properties.scheduler().tick().dividedBy(4), allocationScheduler, meters);
+    }
+
+    /** 라우팅이 꺼졌으면 아무것도 안 뺀다. 하트비트가 목록을 안 싣는 것과 따로 둔 겹이다. */
+    Supplier<Set<String>> ejectionSource(ObjectProvider<RoutingProperties> routing,
+            GatewayRegistry registry) {
+        RoutingProperties on = routing.getIfAvailable();
+        return on == null || !on.enabled() ? Set::of : registry::clusterEjected;
     }
 
     /**

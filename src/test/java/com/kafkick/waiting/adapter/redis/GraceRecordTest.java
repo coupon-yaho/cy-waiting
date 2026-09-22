@@ -34,6 +34,7 @@ class GraceRecordTest extends RedisContainerSupport {
     private static final String GRACE = RedisKeys.grace(COUPON, 1, 0);
     private static final String ALIVE = RedisKeys.alive(COUPON, 1, 0);
     private static final String ADMITTED = RedisKeys.admitted(COUPON, 1, 0);
+    private static final String APPLY_FENCE = RedisKeys.applyFence(COUPON, 1, 0);
 
     private static final long NOW = 1_800_000_000L;
     /** 보관 기간. <b>손으로 안 적는다</b> — 토큰 수명과의 관계가 도메인에 있다. */
@@ -80,8 +81,8 @@ class GraceRecordTest extends RedisContainerSupport {
     @SuppressWarnings("unchecked")
     private List<Object> 청소한다(String now) {
         return (List<Object>) redis.execute(sweepScript,
-                        List.of(QUEUE, GRACE, ALIVE, ADMITTED),
-                        List.of("100", now, RETENTION, "1000", "0"))
+                        List.of(QUEUE, GRACE, ALIVE, ADMITTED, APPLY_FENCE),
+                        List.of("100", now, RETENTION, "1000", "0", "1", "1"))
                 .blockFirst(WAIT);
     }
 

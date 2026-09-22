@@ -37,8 +37,12 @@ ai/journal/index.md
 .claude/.agents-reviewed
 
 # 부하 실행 산출물. 저장소에 두면 옛 결과를 새 판정에 쓴다.
-k6-summary.json
-redis-ops.txt
+# **이름에 조건이 붙는다.** 러너가 고정·계기 여부를 파일명에 실으므로 기본 이름만
+# 적으면 조건이 붙은 회차의 산출물이 그대로 남는다.
+k6-summary*.json
+k6-summary*.txt
+k6-spike*.log
+redis-ops*.txt
 redis-slowlog.txt
 routing-truth.txt
 routing-truth-k6.json

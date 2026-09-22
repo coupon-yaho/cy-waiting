@@ -89,6 +89,7 @@ class GatewayRoutesTest {
     private final RouteLocator locator = new GatewayRoutes().routes(
             new RouteLocatorBuilder(컨텍스트),
             new GatewayRoutes.Backend("http://backend:8080", 응답_상한, 연결_상한),
+            new RouteRules(null),
             AdmissionGatewayFilter.withIsolatedSoldOutCache(재료_없는_홀더(),
                     AdmissionDecider.of(공유_리미터, 0.7),
                     Clock.systemUTC(), new SimpleMeterRegistry(),
@@ -647,6 +648,18 @@ class GatewayRoutesTest {
                 .isLessThan(NettyWriteResponseFilter.WRITE_RESPONSE_FILTER_ORDER);
     }
 
+    /** 본문 상한은 응답 상한의 두 배로 실린다. 카오스 시나리오는 실시간이라 이 배수를 못 잰다. */
+    @Test
+    @DisplayName("본문_상한이_응답_상한의_두_배로_실린다")
+    void 본문_상한이_응답_상한의_두_배로_실린다() {
+        Route 발급 = 잡는_라우트(HttpMethod.POST, "/api/v1/coupons/c1/issue");
+
+        BodyDeadline 상한 = 발급.getFilters().stream().map(GatewayRoutesTest::끝까지_벗긴다)
+                .filter(BodyDeadline.class::isInstance).map(BodyDeadline.class::cast)
+                .findFirst().orElseThrow(() -> new AssertionError("본문 상한 필터가 없다"));
+        assertThat(상한.limit()).isEqualTo(응답_상한.multipliedBy(2));
+    }
+
     /**
      * <b>매진 관찰도 쓰기 필터보다 앞이어야 한다.</b>
      *
@@ -722,9 +735,14 @@ class GatewayRoutesTest {
     }
 
     private RouteLocator 라우터(RoutingProperties routing) {
+        return 라우터(routing, new RouteRules(null));
+    }
+
+    private RouteLocator 라우터(RoutingProperties routing, RouteRules 규칙) {
         return new GatewayRoutes().routes(
                 new RouteLocatorBuilder(컨텍스트),
                 new GatewayRoutes.Backend("http://backend:8080", 응답_상한, 연결_상한),
+                규칙,
                 AdmissionGatewayFilter.withIsolatedSoldOutCache(재료_없는_홀더(),
                         AdmissionDecider.of(공유_리미터, 0.7),
                         Clock.systemUTC(), new SimpleMeterRegistry(),
@@ -741,6 +759,72 @@ class GatewayRoutesTest {
                 컨텍스트.getBean(SpringCloudCircuitBreakerResilience4JFilterFactory.class),
                 new SimpleMeterRegistry(), 라우팅(routing),
                 new RetryGatewayFilterFactory());
+    }
+
+    @Test
+    @DisplayName("규칙마다 다른 뒷단으로 보낸다")
+    void 규칙별_뒷단() {
+        RouteRules 규칙 = new RouteRules(List.of(
+                new RouteRules.Rule("v1", RouteRules.Kind.ENTRY, "POST",
+                        List.of("/api/v1/x/{couponId}/issue"), "http://a:8080"),
+                new RouteRules.Rule("v2", RouteRules.Kind.QUERY, "GET",
+                        List.of("/api/v2/x/{couponId}"), "http://b:9090")));
+
+        RouteLocator 라우터 = 라우터(null, 규칙);
+
+        assertThat(주소들(라우터))
+                .as("규칙마다 적은 주소로 가야 한다 — 하나로 뭉치면 규칙이 무의미하다")
+                .containsExactly("http://a:8080", "http://b:9090");
+        assertThat(잡나(라우터, "v1", HttpMethod.POST, "/api/v1/x/c1/issue"))
+                .as("첫 규칙이 제 경로를 잡는다").isTrue();
+        assertThat(잡나(라우터, "v2", HttpMethod.GET, "/api/v2/x/c1"))
+                .as("둘째 규칙이 제 경로를 잡는다").isTrue();
+        assertThat(잡나(라우터, "v1", HttpMethod.POST, "/api/v2/x/c1"))
+                .as("경로가 겹치면 안 된다").isFalse();
+    }
+
+    @Test
+    @DisplayName("라우팅을 켠 채 규칙이 제 주소를 적으면 막는다")
+    void 균형기_우회() {
+        RouteRules 규칙 = new RouteRules(List.of(
+                new RouteRules.Rule("v1", RouteRules.Kind.ENTRY, "POST",
+                        List.of("/api/v1/x/{couponId}/issue"), "http://a:8080")));
+
+        RoutingProperties 켬 = new RoutingProperties(
+                true, "coupon-service", null, null, null, null, null, null, 허용, 허용_포트);
+
+        assertThatThrownBy(() -> 라우터(켬, 규칙).getRoutes().collectList().block())
+                .as("그 경로만 노드 선택과 재시도 밖으로 나간다")
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    @DisplayName("주소를 안 적은 규칙은 공통 뒷단으로 간다")
+    void 주소_생략() {
+        RouteRules 규칙 = new RouteRules(List.of(
+                new RouteRules.Rule("v1", RouteRules.Kind.ENTRY, "POST",
+                        List.of("/api/v1/x/{couponId}/issue"), null)));
+
+        assertThat(주소들(라우터(null, 규칙)))
+                .as("안 적으면 지금 쓰던 주소다 — 규칙 하나짜리 배포가 그대로 돈다")
+                .containsExactly("http://backend:8080");
+    }
+
+    @Test
+    @DisplayName("줄 조회 규칙은 라우트를 만들지 않는다")
+    void 줄_조회는_라우트가_아니다() {
+        assertThat(라우터(null).getRoutes().collectList().block())
+                .extracting(Route::getId)
+                .as("게이트웨이가 종결하는 경로를 라우트로 만들면 뒷단으로 샌다")
+                .containsExactly("issue", "coupons");
+    }
+
+    private static boolean 잡나(RouteLocator locator, String id, HttpMethod method,
+            String path) {
+        ServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.method(method, path).build());
+        return Boolean.TRUE.equals(
+                Mono.from(라우트(locator, id).getPredicate().apply(exchange)).block());
     }
 
     private static List<String> 주소들(RouteLocator locator) {

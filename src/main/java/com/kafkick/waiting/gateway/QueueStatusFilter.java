@@ -35,8 +35,9 @@ import reactor.core.publisher.Mono;
 @Order(FilterOrder.QUEUE_STATUS)
 public final class QueueStatusFilter implements WebFilter {
 
-    private static final PathPattern PATH = PathPatternParser.defaultInstance
-            .parse("/api/v1/coupons/{couponId}/queue");
+    // 규칙 목록이 같은 문자열을 든다. 갈라지면 기동이 실패한다 (RouteRules).
+    private static final PathPattern PATH =
+            PathPatternParser.defaultInstance.parse(RouteRules.QUEUE_PATH);
 
     /**
      * 순번 토큰을 싣는 헤더. <b>쿼리스트링으로 받지 않는다</b> — 앞단 프록시 액세스
@@ -80,7 +81,7 @@ public final class QueueStatusFilter implements WebFilter {
     private final DoubleSupplier random;
     private final SecondWindowLimiter limiter;
     private final ApiError error;
-    private final QueueResponse response = QueueResponse.create();
+    private QueueResponse response = QueueResponse.create();
 
     /** 실패가 이어진 시간. 요청 수로 세면 피크에서 밀리초 만에 상한에 닿는다. */
     private final FailureAge failing = new FailureAge();
@@ -103,15 +104,17 @@ public final class QueueStatusFilter implements WebFilter {
     @Autowired
     QueueStatusFilter(SnapshotHolder holder, QueuePort queue, QueueToken tokens,
             Clock clock, MeterRegistry meters, SecondWindowLimiter limiter,
-            EntryToken entryTokens) {
+            EntryToken entryTokens, EntryTokenDelivery delivery) {
         this(holder, queue, tokens, clock, meters,
                 () -> ThreadLocalRandom.current().nextDouble(), limiter, entryTokens);
+        this.response = QueueResponse.create(delivery);
     }
 
     public static QueueStatusFilter of(SnapshotHolder holder, QueuePort queue,
             QueueToken tokens, Clock clock, MeterRegistry meters, SecondWindowLimiter limiter,
             EntryToken entryTokens) {
-        return new QueueStatusFilter(holder, queue, tokens, clock, meters, limiter, entryTokens);
+        return new QueueStatusFilter(holder, queue, tokens, clock, meters, limiter, entryTokens,
+                new EntryTokenDelivery(null, null, null));
     }
 
     /** 난수원을 받는다. 고정하지 못하면 흔들림이 실제로 붙었는지 못 잰다. */
@@ -227,7 +230,7 @@ public final class QueueStatusFilter implements WebFilter {
         double etaSec = EtaPolicy.etaSec(entry.rank(), credit(view, couponId));
         return response.status(exchange, entry.state(), entry.rank(),
                 EtaPolicy.reportSec(etaSec),
-                POLL.intervalSec(etaSec, random, pollScale(view)));
+                POLL.intervalSec(etaSec, random, pollScale(view)), entry.total(), entry.behind());
     }
 
     /**

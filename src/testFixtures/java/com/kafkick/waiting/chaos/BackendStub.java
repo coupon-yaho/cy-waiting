@@ -1,10 +1,13 @@
 package com.kafkick.waiting.chaos;
 
+import java.time.Duration;
 import java.util.Optional;
 import java.util.function.BooleanSupplier;
+import java.util.function.Predicate;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.netty.DisposableServer;
 import reactor.netty.http.server.HttpServer;
@@ -22,16 +25,22 @@ public final class BackendStub implements AutoCloseable {
     private final AtomicLong received = new AtomicLong();
     private final ConcurrentHashMap<String, AtomicLong> perCoupon = new ConcurrentHashMap<>();
     private final AtomicLong duplicated = new AtomicLong();
+    private final AtomicLong delayed = new AtomicLong();
     private final Set<String> seen = ConcurrentHashMap.newKeySet();
     private final DisposableServer server;
 
-    private BackendStub(BooleanSupplier stalled, BooleanSupplier failing) {
+    private BackendStub(BooleanSupplier stalled, Predicate<String> failing) {
+        this(stalled, () -> false, failing, member -> false, Duration.ZERO);
+    }
+
+    private BackendStub(BooleanSupplier stalled, BooleanSupplier bodyStalled,
+            Predicate<String> failing, Predicate<String> slowMember, Duration delay) {
         this.server = HttpServer.create()
                 .port(0)
                 .handle((request, response) -> {
                     received.incrementAndGet();
-                    perCoupon.computeIfAbsent(쿠폰을_뽑는다(request.uri()),
-                            key -> new AtomicLong()).incrementAndGet();
+                    String couponId = 쿠폰을_뽑는다(request.uri());
+                    perCoupon.computeIfAbsent(couponId, key -> new AtomicLong()).incrementAndGet();
                     // 회원 번호는 시험 전체에서 안 겹치게 발급한다. 겹쳐
                     // 도착하면 게이트웨이가 한 요청을 두 번 보낸 것이다.
                     String member = request.requestHeaders().get("X-Member-Id");
@@ -44,28 +53,72 @@ public final class BackendStub implements AutoCloseable {
                     if (stalled.getAsBoolean()) {
                         return Mono.never();
                     }
-                    return response.status(failing.getAsBoolean() ? 500 : 200).send();
+                    // 헤더와 첫 조각만 보내고 본문을 안 끝낸다. 헤더가 나갔으니 서킷은 성공으로 센다.
+                    if (bodyStalled.getAsBoolean()) {
+                        return response.status(200)
+                                .sendString(Flux.concat(Mono.just("{"), Flux.never()));
+                    }
+                    int status = failing.test(couponId) ? 500 : 200;
+                    // **느린 것은 늦게라도 답한다.** 응답 상한 안에 오므로 실패가 아니라
+                    // 느린 호출로만 세어진다.
+                    if (member != null && slowMember.test(member)) {
+                        delayed.incrementAndGet();
+                        return Mono.delay(delay).then(response.status(status).send());
+                    }
+                    return response.status(status).send();
                 })
                 .bindNow();
     }
 
     /** 늘 200 을 내는 뒷단. */
     public static BackendStub 항상_받는다() {
-        return new BackendStub(() -> false, () -> false);
+        return new BackendStub(() -> false, couponId -> false);
     }
 
     /** 스위치가 켜지면 응답을 안 내는 뒷단. 무응답 갈래를 만든다. */
     public static BackendStub 멎을_수_있다(BooleanSupplier 멎었나) {
-        return new BackendStub(멎었나, () -> false);
+        return new BackendStub(멎었나, couponId -> false);
+    }
+
+    /**
+     * 스위치가 켜지면 멎고, 고른 쿠폰에는 5xx 를 내는 뒷단. 쿠폰 아닌 경로(프로브)는 빈 이름으로 묻는다 —
+     * 살아난 뒤에도 프로브 몇 번을 실패시켜 회복 시도가 쌓이는 판을 만든다.
+     */
+    public static BackendStub 멎거나_실패할_수_있다(BooleanSupplier 멎었나, Predicate<String> 실패하는_쿠폰) {
+        return new BackendStub(멎었나, 실패하는_쿠폰);
     }
 
     /** 스위치가 켜지면 5xx 를 내는 뒷단. 응답은 오는데 실패인 갈래다. */
     public static BackendStub 실패할_수_있다(BooleanSupplier 실패하나) {
-        return new BackendStub(() -> false, 실패하나);
+        return new BackendStub(() -> false, couponId -> 실패하나.getAsBoolean());
+    }
+
+    /**
+     * 고른 쿠폰만 5xx 를 내는 뒷단. <b>서킷은 뒷단 전체 하나라</b> 쿠폰 하나의 실패가 무관한
+     * 쿠폰까지 막는지를 이것으로 잰다. 쿠폰 아닌 경로(프로브)는 빈 이름으로 묻는다.
+     */
+    public static BackendStub 쿠폰만_실패한다(Predicate<String> 실패하는_쿠폰) {
+        return new BackendStub(() -> false, 실패하는_쿠폰);
+    }
+
+    /** 고른 회원에게만 {@code 지연} 뒤 200 을 내는 뒷단. 느린 호출 갈래를 만든다. */
+    public static BackendStub 늦게_답한다(Predicate<String> 느린_회원, Duration 지연) {
+        return new BackendStub(() -> false, () -> false, couponId -> false, 느린_회원, 지연);
+    }
+
+    /** 스위치가 켜지면 헤더 200 뒤 본문을 안 끝내는 뒷단. */
+    public static BackendStub 본문을_안_끝낼_수_있다(BooleanSupplier 본문이_멎었나) {
+        return new BackendStub(() -> false, 본문이_멎었나, couponId -> false, member -> false,
+                Duration.ZERO);
     }
 
     public int port() {
         return server.port();
+    }
+
+    /** 늦게 답하는 갈래를 탄 수. 걸린 시간으로 재면 환경 지연이 섞인다. */
+    public long 늦게_답한_수() {
+        return delayed.get();
     }
 
     public long 받은_수() {

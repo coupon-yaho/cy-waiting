@@ -6,7 +6,9 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.Objects;
+import java.util.function.LongSupplier;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,11 +44,26 @@ public final class QueueSweeper {
     private final Counter expiredGrace;
     private final Counter failed;
 
+    /** 울타리가 막은 쿠폰 수. 이 값만 오르면 청소가 멎은 것이지 걷을 게 없는 것이 아니다. */
+    private final Counter fenced;
+
+    /** 적용이 실패해 앞줄 제거에서 뺀 쿠폰 수 (CY-947). 이 값이 계속 오르면 그 쿠폰의 줄이 안 줄어든다. */
+    private final Counter excluded;
+
+    /** 막힌 구간. 진입과 해제를 쌍으로 남겨 얼마나 오래 멎었는지를 사후에 잰다. */
+    private final FailureWindow fenceWindow;
+
+    /** 적용 실패로 미룬 구간. 실패가 이어지면 그 쿠폰의 앞줄 제거가 그만큼 멎는다. */
+    private final FailureWindow excludeWindow;
+
     private QueueSweeper(SweepGate gate, SweepCall sweep,
-            MeterRegistry meters) {
+            MeterRegistry meters, LongSupplier nanoTicker) {
         this.gate = Objects.requireNonNull(gate, "gate 는 필수다 — 멈추는 판단 없이 쓸면 안 된다");
         this.sweep = Objects.requireNonNull(sweep, "sweep 은 필수다");
         Objects.requireNonNull(meters, "meters 는 필수다");
+        this.fenceWindow = FailureWindow.of(
+                Objects.requireNonNull(nanoTicker, "nanoTicker 는 필수다"));
+        this.excludeWindow = FailureWindow.of(nanoTicker);
         // **걷은 수가 곧 우리 오판일 수도 있다.** 그 값이 튈 때 장애인지 버그인지
         // 가르려면 평시 값을 먼저 알아야 하고, 재려면 자리가 있어야 한다.
         this.swept = meters.counter("waiting.sweep", "kind", "swept");
@@ -55,16 +72,24 @@ public final class QueueSweeper {
         // **"걷을 게 없어서 0" 과 "전부 죽어서 0" 을 가른다.** 안 가르면 청소가
         // 멎은 것이 정상으로 보인다.
         this.failed = meters.counter("waiting.sweep", "kind", "failed");
+        this.fenced = meters.counter("waiting.sweep", "kind", "fenced");
+        this.excluded = meters.counter("waiting.sweep", "kind", "apply-failed");
     }
 
     public static QueueSweeper of(SweepGate gate, SweepCall sweep,
             MeterRegistry meters) {
-        return new QueueSweeper(gate, sweep, meters);
+        return new QueueSweeper(gate, sweep, meters, System::nanoTime);
+    }
+
+    /** 시계를 받는다. 고정하지 못하면 막힌 구간의 길이가 로그에 실리는지 못 잰다. */
+    static QueueSweeper of(SweepGate gate, SweepCall sweep, MeterRegistry meters,
+            LongSupplier nanoTicker) {
+        return new QueueSweeper(gate, sweep, meters, nanoTicker);
     }
 
     /** 계측 없이 만든다. <b>시험 편의다</b> — 운영은 위 팩토리를 쓴다. */
     public static QueueSweeper of(SweepGate gate, SweepCall sweep) {
-        return new QueueSweeper(gate, sweep, new SimpleMeterRegistry());
+        return new QueueSweeper(gate, sweep, new SimpleMeterRegistry(), System::nanoTime);
     }
 
     /**
@@ -79,15 +104,18 @@ public final class QueueSweeper {
     }
 
     /**
-     * 쓸어 낸 결과. <b>실패를 함께 싣는다</b> — 오류를 성공으로 접으면 "걷을 게 없어서 0"
-     * 과 "전부 죽어서 0" 이 같은 값이 되고, 청소가 멎은 것이 정상으로 보인다.
+     * 쓸어 낸 결과. <b>0 의 뜻이 셋이다</b> — 걷을 게 없어서, 전부 죽어서, 울타리가
+     * 앞줄 제거를 막아서다. 안 가르면 청소가 멎은 것이 정상으로 보인다.
+     *
+     * @param fenced 울타리가 앞줄 제거를 막은 <b>쿠폰 수</b>. 회차 수가 아니다
      */
-    public record SweepResult(long swept, long expiredSignals, long expiredGrace, long failed) {
+    public record SweepResult(long swept, long expiredSignals, long expiredGrace, long failed,
+            long fenced) {
 
-        public static final SweepResult NOTHING = new SweepResult(0, 0, 0, 0);
+        public static final SweepResult NOTHING = new SweepResult(0, 0, 0, 0, 0);
 
         /** 한 쿠폰이 실패했다. */
-        public static final SweepResult FAILED = new SweepResult(0, 0, 0, 1);
+        public static final SweepResult FAILED = new SweepResult(0, 0, 0, 1, 0);
     }
 
     /**
@@ -98,15 +126,78 @@ public final class QueueSweeper {
         gate.leadershipAcquired();
     }
 
+    /**
+     * 리더십을 잃었다. <b>막힌 구간을 여기서 닫는다</b> — 비리더 구간에는 청소가 안
+     * 돌아 해제가 영영 안 찍히고, 다음 임기의 막힘이 그 연장으로 삼켜진다.
+     */
+    public void leadershipLost() {
+        fenceWindow.exited().ifPresent(r -> log.info(
+                "리더십을 잃어 청소의 울타리 구간을 닫는다 — {}초 동안 {}회차",
+                r.elapsedSeconds(), r.swallowed()));
+        // 적용 실패로 미룬 구간도 같이 닫는다. 안 닫으면 다음 해제 로그가 비리더 구간까지 길이에 담는다.
+        excludeWindow.exited().ifPresent(r -> log.info(
+                "리더십을 잃어 적용 실패로 미룬 구간을 닫는다 — {}초 동안 {}틱",
+                r.elapsedSeconds(), r.swallowed()));
+    }
+
+    /**
+     * 적용 실패로 앞줄 제거를 건너뛴 구간의 진입과 해제를 남긴다. <b>틱마다 찍지 않는다</b> — 실패가 이어지면
+     * 그 구간 내내 같은 줄이 쌓인다.
+     */
+    private void watchExcluded(long blocked) {
+        if (blocked > 0) {
+            if (excludeWindow.entered()) {
+                log.warn("적용이 실패한 쿠폰 {}개는 이번 틱의 앞줄 제거에서 뺀다 — 커서를 못 되살린 채 걷으면 "
+                        + "들인 사람이 이탈로 걷힌다. 정리는 돈다", blocked);
+            }
+            return;
+        }
+        excludeWindow.exited().ifPresent(r -> log.info(
+                "적용 실패로 미룬 앞줄 제거가 풀렸다 — {}초 동안 {}틱", r.elapsedSeconds(), r.swallowed()));
+    }
+
+    /**
+     * 울타리에 막힌 구간의 진입과 해제를 남긴다. <b>틱마다 찍으면 안 된다</b> —
+     * 유령 구간은 임기가 돌아올 때까지 이어져 매 틱 같은 줄이 쌓인다.
+     */
+    private void watchFence(long blocked) {
+        if (blocked > 0) {
+            if (fenceWindow.entered()) {
+                log.warn("이탈자 청소가 울타리에 막혔다 — 쿠폰 {}개. 앞줄 제거만 멎고 "
+                        + "정리는 돈다. 임기와 적용 울타리를 함께 본다", blocked);
+            }
+            return;
+        }
+        fenceWindow.exited().ifPresent(r -> log.info(
+                "이탈자 청소의 울타리가 풀렸다 — {}초 동안 {}회차", r.elapsedSeconds(),
+                r.swallowed()));
+    }
+
     /** 이번 틱의 청소. <b>청소 실패가 배분을 막지 않는다</b> — 다음 틱에 다시 온다. */
     public Mono<SweepResult> run(Map<String, CouponState> coupons, boolean dataStale) {
-        List<String> targets = gate.sweepable(coupons, dataStale);
+        return run(coupons, dataStale, Set.of());
+    }
+
+    /**
+     * 이번 틱의 청소.
+     *
+     * @param applyFailed 적용이 실패한 쿠폰 (CY-947). 게이트에는 전체를 넘긴다 — 맵에서 빼면 그 쿠폰의 재개
+     *     유예까지 사라져, 다음 틱에 유예 없이 걷는다
+     */
+    public Mono<SweepResult> run(Map<String, CouponState> coupons, boolean dataStale,
+            Set<String> applyFailed) {
+        List<String> sweepable = gate.sweepable(coupons, dataStale);
+        List<String> targets = sweepable.stream().filter(id -> !applyFailed.contains(id)).toList();
+        long held = sweepable.size() - targets.size();
+        excluded.increment(held);
+        watchExcluded(held);
         // **승계 유예 중에도 정리는 돈다.** 앞줄 제거만 접는다 —
         // 대상까지 비우면 만료 신호와 유예 기록이 한 방향으로만 자라고 커서가
         // 전진을 못 한다. 승계가 유예보다 잦으면 청소가 영영 안 돈다.
         boolean removeFront = !targets.isEmpty();
         if (!removeFront) {
-            targets = gate.removalHeld() ? gate.cleanable(coupons) : List.of();
+            // 적용 실패로 앞줄 제거가 비었어도 정리는 돈다 — 줄에서 사람을 빼지 않는 일이다.
+            targets = gate.removalHeld() || held > 0 ? gate.cleanable(coupons) : List.of();
         }
         if (targets.isEmpty()) {
             return Mono.just(SweepResult.NOTHING);
@@ -120,6 +211,8 @@ public final class QueueSweeper {
                     expiredSignals.increment(r.expiredSignals());
                     expiredGrace.increment(r.expiredGrace());
                     failed.increment(r.failed());
+                    fenced.increment(r.fenced());
+                    watchFence(r.fenced());
                     if (r.swept() > 0) {
                         // **걷은 수를 남긴다.** 이탈자와 우리 오판이 같은
                         // 수치로 보이므로, 이 값이 튀는 것이 유일한 신호다.

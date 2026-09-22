@@ -157,6 +157,59 @@ lib_case "단위가 없으면 0" 0 "$(peak_duration_sec 30)"
 lib_case "못 읽는 형식은 0" 0 "$(peak_duration_sec abc)"
 lib_case "빈 값은 0" 0 "$(peak_duration_sec '')"
 
+# VU 풀. 표가 VU 마다 하나라, VU 당 회차가 적으면 폴링 갈래가 표 없이 진입으로 돌아 섞은 비율이 깨진다.
+# 1000/초·20초를 2000 VU 에 나누면 VU 당 10 회라 그 몫이 25% 였다.
+lib_case "VU 당 100 회가 되게 나눈다" 200 "$(peak_vus 1000 20)"
+lib_case "시간이 길면 풀이 커진다" 2400 "$(peak_vus 8000 30)"
+lib_case "낮은 유입에도 하한 50" 50 "$(peak_vus 100 20)"
+lib_case "유입이 정수가 아니면 0" 0 "$(peak_vus abc 20)"
+lib_case "시간이 0 이면 0" 0 "$(peak_vus 1000 0)"
+# bash 정수가 넘치면 곱이 음수가 되어 하한 50 으로 조용히 줄어든다. 표현 범위 안의 자릿수만 받는다.
+lib_case "유입이 열 자리면 0" 0 "$(peak_vus 1000000000 30)"
+lib_case "시간이 열 자리면 0" 0 "$(peak_vus 1000 1000000000)"
+lib_case "아홉 자리는 받는다" 2999999997 "$(peak_vus 999999999 300)"
+# 선행 0 은 10진수로 읽는다. bash 산술은 008 을 오류로, 010 을 8 로 읽는다.
+lib_case "선행 0 이 있어도 10진수다" 100 "$(peak_vus 010 1000 2>/dev/null)"
+lib_case "8진수로 못 읽는 선행 0 도 받는다" 50 "$(peak_vus 008 10 2>/dev/null)"
+
+# 예열 수렴. 갓 뜬 한 대가 2 코어에서 500/초 예열을 p99 20초로 뒤집어써, 첫 칸이 예열 노릇을 했다.
+warm() { printf '{"metrics":{"http_req_duration":{"p(99)":%s}}}' "$1" > "$work/$2"; printf '%s' "$work/$2"; }
+peak_warm_converged "$(warm 42.0 warm-ok.json)" 100; lib_case "p99 가 선 아래면 수렴" 0 "$?"
+peak_warm_converged "$(warm 100.0 warm-edge.json)" 100; lib_case "선 정확히는 수렴" 0 "$?"
+peak_warm_converged "$(warm 20198.7 warm-cold.json)" 100; lib_case "선 위면 덜 됐다" 1 "$?"
+peak_warm_converged "$work/none.json" 100; lib_case "요약이 없으면 못 읽는다" 2 "$?"
+peak_warm_converged "$(warm 42.0 warm-bad.json)" abc; lib_case "선이 수가 아니면 못 읽는다" 2 "$?"
+peak_warm_converged "$(warm 42.0 warm-zero.json)" 0; lib_case "선이 0 이면 못 읽는다" 2 "$?"
+
+# **걸린 요청.** 흘린 회차 없이 보낸 건수는 찼는데 실측 유입만 모자라면, 끝나지 않은 요청이 회차를 늘린 것이다.
+# k6 는 유입률을 전체 시간으로 나누므로 그 칸이 생성기 한계로 읽힌다. LB 파일 한도 결함이 이 모양이었다.
+summ() { printf '%s' "$1" > "$work/$2"; printf '%s' "$work/$2"; }
+peak_hung "$(summ '{"metrics":{"iterations":{"count":239629},"http_reqs":{"rate":3993.18},"dropped_iterations":{"count":0}}}' hung.json)" 8000 30 0.95
+lib_case "건수는 찼는데 유입이 모자라면 걸렸다" 0 "$?"
+peak_hung "$(summ '{"metrics":{"iterations":{"count":239629},"http_reqs":{"rate":3993.18}}}' hung_nodrop.json)" 8000 30 0.95
+lib_case "드롭 계수가 없으면 0 으로 본다" 0 "$?"
+peak_hung "$(summ '{"metrics":{"iterations":{"values":{"count":239629}},"http_reqs":{"values":{"rate":3993.18}}}}' hung_nested.json)" 8000 30 0.95
+lib_case "중첩형 요약도 읽는다" 0 "$?"
+peak_hung "$(summ '{"metrics":{"iterations":{"count":240001},"http_reqs":{"rate":7998.7},"dropped_iterations":{"count":0}}}' stood.json)" 8000 30 0.95
+lib_case "유입이 찼으면 걸리지 않았다" 1 "$?"
+peak_hung "$(summ '{"metrics":{"iterations":{"count":120000},"http_reqs":{"rate":4000.0},"dropped_iterations":{"count":120000}}}' short.json)" 8000 30 0.95
+lib_case "흘린 회차가 있으면 걸린 것이 아니다" 1 "$?"
+peak_hung "$(summ '{"metrics":{"iterations":{"count":150000},"http_reqs":{"rate":4000.0},"dropped_iterations":{"count":0}}}' few.json)" 8000 30 0.95
+lib_case "건수가 모자라면 걸린 것이 아니다" 1 "$?"
+peak_hung "$work/없는요약.json" 8000 30 0.95
+lib_case "요약이 없으면 못 읽는다" 2 "$?"
+# 건수가 찼어도 흘린 회차가 있으면 걸린 것이 아니다. 건수 조건에 먼저 걸리는 픽스처로는 이 조건을 못 잰다.
+peak_hung "$(summ '{"metrics":{"iterations":{"count":239000},"http_reqs":{"rate":3990.0},"dropped_iterations":{"count":500}}}' full_drop.json)" 8000 30 0.95
+lib_case "건수가 찼어도 흘린 회차가 있으면 걸린 것이 아니다" 1 "$?"
+
+# **표집은 회차 길이까지만 한다.** k6 가 걸린 요청 때문에 gracefulStop 동안 더 돌면 한가한 표본이 쌓여, 붙었던
+# 자리의 가운데 값이 선 아래로 내려간다. 기한이 지나면 정지 파일 없이도 그 바퀴를 마치고 멈춘다.
+started=$(date +%s)
+timeout 20 bash -c ". test/load/peak-lib.sh; peak_sample_cpu '$work/deadline.tsv' 없는프로젝트 $$ $((started + 2))"
+lib_case "기한이 지나면 표집기가 멈춘다 (시한 20초에 안 걸린다)" 0 "$?"
+lib_case "기한 뒤 표본이 붙지 않는다 (호스트 표본 셋 이하)" yes \
+    "$([ "$(grep -c '^idle' "$work/deadline.tsv")" -le 3 ] && echo yes || echo no)"
+
 # 요약의 두 모양. 하나만 보면 k6 판이 바뀌는 순간 전 회차가 판정 불가가 된다.
 flat=$work/flat.json
 printf '%s' '{"metrics":{"http_reqs":{"rate":1234.5},"http_req_duration":{"p(99)":9.5}}}' \
@@ -168,6 +221,23 @@ lib_case "평면형 도착률" 1234.5000 "$(peak_summary_value "$flat" rate)"
 lib_case "중첩형 도착률" 1234.5000 "$(peak_summary_value "$nested" rate)"
 lib_case "중첩형 응답 p99" 9.5000 "$(peak_summary_value "$nested" p99)"
 lib_case "없는 파일은 빈 값" "" "$(peak_summary_value "$work/none.json" rate)"
+
+# docker stats 한 벌을 표본 줄로 옮긴다. 남의 프로젝트 컨테이너가 섞이면 그 CPU 가 천장 원인에
+# 끼고, `%` 를 안 떼면 판정기가 숫자가 아닌 표본으로 읽어 매 회차 판정 불가가 된다.
+stats=$(printf 'load-gateway-1\t95.30%%\nsearch-cache\t88.00%%\nload-redis-1\t12.05%%\n')
+lib_case "우리 컨테이너만 · 백분율 기호를 뗀다" \
+    "$(printf 'cpu\tload-gateway-1\t95.30\ncpu\tload-redis-1\t12.05')" \
+    "$(printf '%s\n' "$stats" | peak_cpu_lines load)"
+lib_case "빈 입력은 빈 출력" "" "$(printf '' | peak_cpu_lines load)"
+
+# 대마다 낸 판정 비율을 모은다. **합산하지 않는다** — 한 대가 다시 떴거나 못 긁은 칸이 다른 대의 계수에 묻힌다.
+# 가장 나쁜 것을 쓴다. 판정 불가가 미달보다 앞이다 — 한 대를 못 잰 칸은 나머지가 미달이어도 제품 탓으로 못 읽는다.
+lib_case "모두 서면 ok" ok "$(peak_worst_verdict ok ok)"
+lib_case "한 대만 미달이어도 미달" under "$(peak_worst_verdict ok under)"
+lib_case "한 대만 못 쟀어도 판정 불가" unmeasurable "$(peak_worst_verdict ok unmeasurable)"
+lib_case "판정 불가가 미달보다 앞" unmeasurable "$(peak_worst_verdict under unmeasurable ok)"
+lib_case "모르는 판정은 판정 불가" unmeasurable "$(peak_worst_verdict ok 뭔가)"
+lib_case "받은 것이 없으면 판정 불가" unmeasurable "$(peak_worst_verdict)"
 
 # 종료 코드 해석. 99 를 통째로 정상으로 읽으면 연결을 끊은 회차가 ok 로 남는다.
 thr() { printf '{"metrics":{%s}}' "$1" > "$work/$2"; printf '%s' "$work/$2"; }

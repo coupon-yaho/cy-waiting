@@ -4,6 +4,7 @@ import com.kafkick.waiting.domain.queue.QueueEntry;
 import com.kafkick.waiting.domain.queue.QueueState;
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.Map;
@@ -40,7 +41,6 @@ public final class FakeQueuePort implements QueuePort {
 
     private RuntimeException 터뜨릴_것;
     private boolean 가득_참;
-    private boolean 차례가_옴;
     public static FakeQueuePort create() {
         return new FakeQueuePort();
     }
@@ -69,7 +69,13 @@ public final class FakeQueuePort implements QueuePort {
      * 시험이 만들어진다.
      */
     public FakeQueuePort 차례가_왔다() {
-        this.차례가_옴 = true;
+        // **그때의 맨 앞만 넘긴다.** 실물의 커서는 점수 문턱이라, 한 번 올린 커서가 뒤에 선 사람을
+        // 계속 빨아들이지 않는다.
+        queues.forEach((couponId, 줄) -> 줄.keySet().stream()
+                .filter(id -> !입장한_사람.getOrDefault(couponId, Set.of()).contains(id))
+                .findFirst()
+                .ifPresent(머리 -> 입장한_사람
+                        .computeIfAbsent(couponId, key -> new LinkedHashSet<>()).add(머리)));
         return this;
     }
 
@@ -111,7 +117,7 @@ public final class FakeQueuePort implements QueuePort {
             return Mono.just(QueueEntry.rejected());
         }
         queued.putIfAbsent(memberId, (long) queued.size() + 1);
-        return Mono.just(new QueueEntry(QueueState.WAITING, rankOf(couponId, memberId),
+        return Mono.just(QueueEntry.withoutTotal(QueueState.WAITING, rankOf(couponId, memberId),
                 queued.get(memberId), 있던_사람, 시계가_뒤로_감,
                 // **이미 줄에 선 사람은 기록을 안 본다.** 실물이 그 분기에서
                 // 먼저 돌아가므로, 여기서 소비하면 픽스처가 실제와 달라진다.
@@ -131,16 +137,42 @@ public final class FakeQueuePort implements QueuePort {
         // **차례는 맨 앞부터 온다.** 뒤에 선 사람까지 입장으로 만들면 앞에
         // 사람이 있는 입장이 되고, 그건 운영이 못 만드는 조합이다.
         long rank = rankOf(couponId, memberId);
-        if (차례가_옴 && rank == 0) {
-            return Mono.just(new QueueEntry(QueueState.ADMITTED, 0,
+        // **커서는 그때의 머리를 넘은 것이지 지금 머리를 다시 재는 것이 아니다.** rank 로 판정하면
+        // 앞사람이 커서 위로 올라간 뒤 그다음 사람이 자동으로 입장이 되어, 줄이 통째로 들어간다.
+        if (입장한_사람.getOrDefault(couponId, Set.of()).contains(memberId)) {
+            return Mono.just(QueueEntry.withoutTotal(QueueState.ADMITTED, 0,
                     queued.get(memberId), true, false, false));
         }
+        // **총원도 같이 낸다** (CY-827). 스크립트가 한 번에 세는 값이라, 픽스처가 안 내면 게이트웨이
+        // 시험이 그 필드를 한 번도 안 밟는다.
         return Mono.just(new QueueEntry(QueueState.WAITING, rank,
-                queued.get(memberId), true, false, false));
+                queued.get(memberId), true, false, false, totalOf(couponId)));
     }
 
-    private long rankOf(String couponId, String memberId) {
+    /** 총원을 모르는 판. 실물은 유예로 되읽은 자리에서 이 상태가 된다. */
+    public void 총원을_모른다() {
+        총원을_센다 = false;
+    }
+
+    /** 기다리는 총원. 실물처럼 입장 커서 위로 올라간 사람은 뺀다. */
+    private long totalOf(String couponId) {
+        if (!총원을_센다) {
+            return QueueEntry.UNKNOWN_TOTAL;
+        }
+        Set<String> 나간_사람 = 입장한_사람.getOrDefault(couponId, Set.of());
         return queues.getOrDefault(couponId, Map.of()).keySet().stream()
-                .takeWhile(id -> !id.equals(memberId)).count();
+                .filter(id -> !나간_사람.contains(id)).count();
+    }
+
+    private boolean 총원을_센다 = true;
+
+    /** 차례가 와서 커서 위로 올라간 사람. 실물은 이들을 앞 인원에서도 총원에서도 뺀다. */
+    private final Map<String, Set<String>> 입장한_사람 = new LinkedHashMap<>();
+
+    private long rankOf(String couponId, String memberId) {
+        Set<String> 나간_사람 = 입장한_사람.getOrDefault(couponId, Set.of());
+        return queues.getOrDefault(couponId, Map.of()).keySet().stream()
+                .takeWhile(id -> !id.equals(memberId))
+                .filter(id -> !나간_사람.contains(id)).count();
     }
 }

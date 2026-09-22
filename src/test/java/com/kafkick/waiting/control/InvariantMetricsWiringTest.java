@@ -43,6 +43,22 @@ class InvariantMetricsWiringTest {
             "waiting.allocation.stock.unknown.ticks",
             "waiting.snapshot.stock.unknown.dropped");
 
+    /** 이월 결과 계수. 결과만 라벨로 갈라 가짓수가 셋으로 묶인다. */
+    private static final String 이월 =
+            "waiting_allocation_carryover_total{application=\"waiting\",outcome=\"";
+
+    @Test
+    @DisplayName("틱_지연이_분위수로_나간다")
+    void 틱_지연이_분위수로_나간다() {
+        // **버려지던 값이다.** 스케줄러는 회차마다 걸린 시간을 재서 넘기는데 받는 쪽이
+        // 아무것도 안 해서, 부하 회차에서 틱 지연을 긁을 자리가 없었다 (CY-985).
+        assertThat(registry.scrape())
+                .as("부하 회차가 p99 를 긁는다 — 평균만 나오면 꼬리를 못 본다")
+                .contains("waiting_allocation_tick_seconds{application=\"waiting\",outcome=\"ok\",quantile=\"0.99\"}")
+                // **시한에 걸린 수는 따로 나가야 한다.** 섞이면 그 회차가 시한 값으로 잘려 적힌다.
+                .contains("waiting_allocation_tick_seconds_count{application=\"waiting\",outcome=\"timeout\"}");
+    }
+
     @Test
     @DisplayName("선행_지표가_스크레이프에_나온다")
     void 선행_지표가_스크레이프에_나온다() {
@@ -60,15 +76,31 @@ class InvariantMetricsWiringTest {
                 // 막힌 구간의 길이를 그것만으로는 못 센다.
                 .contains("waiting_snapshot_publish_fenced_total")
                 .contains("waiting_allocation_apply_fenced_total")
+                // 되살림 (CY-945). 실패 없이 흡수된 승격은 이 둘로만 보인다 — 폭까지 있어야 한 번의 큰
+                // 되살림과 잦은 작은 되살림이 갈린다.
+                .contains("waiting_allocation_heal_events_total")
+                .contains("waiting_allocation_heal_span_total")
                 // 되돌릴 수 없는 쓰기가 막힌 수 (CY-894). 안 내면 그 창 동안 죽은
                 // 줄이 폴링 예산을 먹는데 아무도 못 본다.
                 .contains("waiting_queue_drop_fenced_total")
+                // 되감기 신호 (CY-856). 배선이 빠지면 지표가 아예 안 나온다 — NaN 은 "안 쟀다" 와 못 가른다.
+                .contains("waiting_allocation_rewind_coupons")
+                .contains("waiting_allocation_rewind_events_total")
+                .contains("waiting_allocation_rewind_unmeasured_total")
+                .contains("waiting_allocation_rewind_nobaseline_total")
                 // 서킷을 보고 있는가 (F3 · CY-788). 안 보는 것과 닫혀 있는 것이
                 // 같은 값을 내므로, 이 게이지가 없으면 배선이 빠진 것을 못 안다.
                 .contains("waiting_circuit_wired")
                 // 회복 봉우리를 정상과 견주는 재료 (RC4). 판정에는 아직 안 쓰지만
                 // 밖에서 읽을 수 있어야 그 값이 맞는지 다음 사람이 본다.
-                .contains("waiting_admission_forwarded_rate");
+                .contains("waiting_admission_forwarded_rate")
+                // 이월을 받았는지와 평활이 어디로 수렴하는지 (CY-865). 크레딧 지표는
+                // 발행한 몫이라 둘 다 못 보여 준다.
+                .contains(이월 + "restored\"}")
+                .contains(이월 + "empty\"}")
+                .contains(이월 + "replaced\"}")
+                .contains("waiting_allocation_carryover_failures_total")
+                .contains("waiting_allocation_smoothed_credit");
     }
 
     /**

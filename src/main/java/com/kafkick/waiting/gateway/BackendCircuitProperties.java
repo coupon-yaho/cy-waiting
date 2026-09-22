@@ -1,5 +1,6 @@
 package com.kafkick.waiting.gateway;
 
+import com.kafkick.waiting.domain.coupon.Tunables;
 import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
@@ -44,6 +45,11 @@ public record BackendCircuitProperties(
         // 나가는 조건이 없다. 이 레코드가 막겠다고 한 실패 유형 그 자체다.
         check.positive(maxWaitDurationInHalfOpenState, "max-wait-duration-in-half-open-state");
         check.positive(slowCallDurationThreshold, "slow-call-duration-threshold");
+        // **격벽이 끊는 지연의 하한과 견준다.** 그 지연은 배포 없이 하한까지 내려와,
+        // 기본값과 견주면 조정 한 번에 느린 요청이 서킷에 닿기 전에 잘린다.
+        check.below(slowCallDurationThreshold,
+                Duration.ofSeconds(Tunables.MIN_INFLIGHT_SECONDS),
+                "slow-call-duration-threshold", "격벽이 끊는 지연의 하한");
         check.atLeastOne(minimumNumberOfCalls, "minimum-number-of-calls");
         check.atLeastOne(permittedNumberOfCallsInHalfOpenState,
                 "permitted-number-of-calls-in-half-open-state");

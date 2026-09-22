@@ -43,6 +43,55 @@ peak_duration_sec() {
         }'
 }
 
+# **VU 풀은 VU 당 100 회가 되게 잡는다.** 표가 VU 마다 하나라 VU 당 회차가 적으면 폴링 갈래가 표 없이
+# 진입으로 돌고, 그 몫은 대략 VU 당 회차에 반비례한다. 하한 50 은 낮은 유입의 동시 요청 몫이다.
+# 못 읽는 입력은 0 을 내고 부르는 쪽이 회차를 돌리기 전에 끊는다. 아홉 자리까지만 받는다 — 곱이 bash 정수를
+# 넘으면 음수가 되어 하한으로 조용히 줄어든다.
+peak_vus() {
+    case "${1:-}" in ''|*[!0-9]*|??????????*) echo 0; return ;; esac
+    case "${2:-}" in ''|*[!0-9]*|??????????*) echo 0; return ;; esac
+    # 선행 0 을 10진수로 읽는다. bash 산술은 008 을 오류로, 010 을 8 로 읽는다.
+    local rate=$((10#$1)) sec=$((10#$2))
+    if [ "$rate" -eq 0 ] || [ "$sec" -eq 0 ]; then echo 0; return; fi
+    local vus=$(( rate * sec / 100 ))
+    echo $(( vus > 50 ? vus : 50 ))
+}
+
+# **예열이 됐는지는 그 회차의 p99 로 본다.** 한 번 돌렸다는 것만 보면 무너진 예열 뒤의 첫 칸이 예열 노릇을
+# 한다. 0 수렴 · 1 덜 됐다 · 2 못 읽는다.
+peak_warm_converged() {
+    local p99
+    printf '%s' "${2:-}" | grep -Eq '^[0-9]+(\.[0-9]+)?$' || return 2
+    awk -v m="$2" 'BEGIN{ exit (m > 0) ? 0 : 1 }' || return 2
+    p99=$(peak_summary_value "$1" p99)
+    [ -n "$p99" ] || return 2
+    awk -v p="$p99" -v m="$2" 'BEGIN{ exit (p <= m) ? 0 : 1 }'
+}
+
+# **걸린 요청을 가린다.** 흘린 회차 없이 보낸 건수는 찼는데 실측 유입만 모자라면, 끝나지 않은 요청이 회차를
+# 늘린 것이다. k6 는 유입률을 전체 시간으로 나누므로 그대로 두면 생성기 한계로 읽힌다. 0 걸렸다 · 1 아니다 · 2 못 읽는다.
+#
+#   사용: peak_hung <요약> <요청 유입> <회차 초> <허용 오차>
+peak_hung() {
+    python3 - "$@" <<'PY'
+import json, sys
+try:
+    m = json.load(open(sys.argv[1])).get('metrics', {})
+    rate, sec, tol = float(sys.argv[2]), float(sys.argv[3]), float(sys.argv[4])
+except Exception:
+    sys.exit(2)
+def val(name, key):
+    node = m.get(name, {})
+    v = node.get('values', {}).get(key, node.get(key))
+    return v if isinstance(v, (int, float)) else None
+count, actual = val('iterations', 'count'), val('http_reqs', 'rate')
+if count is None or actual is None:
+    sys.exit(2)
+dropped = val('dropped_iterations', 'count') or 0
+sys.exit(0 if dropped == 0 and count >= rate * sec * tol and actual < rate * tol else 1)
+PY
+}
+
 # **깨진 임계를 가려 읽는다.** k6 는 어느 임계가 깨져도 99 로 끝난다. 통째로
 # 정상으로 읽으면 게이트웨이가 연결을 끊은 회차가 `ok` 로 표에 남고, 그 수가
 # "현재 최대치" 로 계획서에 간다.
@@ -85,3 +134,57 @@ else:
     print('ok')
 PY
 }
+
+# docker stats 한 벌을 표본 줄로 옮긴다. **우리 프로젝트 컨테이너만** 남긴다 — 같은 호스트의 남의
+# 컨테이너 CPU 가 천장 원인에 끼면 안 된다. `%` 를 뗀다 — 판정기는 숫자만 받는다.
+#
+#   사용: docker stats --no-stream --format '{{.Name}}\t{{.CPUPerc}}' | peak_cpu_lines <프로젝트>
+peak_cpu_lines() {
+    awk -F '\t' -v p="$1-" 'index($1, p) == 1 { v = $2; sub(/%$/, "", v); printf "cpu\t%s\t%s\n", $1, v }'
+}
+
+# 호스트 CPU 유휴 백분율. 한 초 사이 `/proc/stat` 두 번을 차분한다 — 부팅 이후 누적값을 그대로 쓰면
+# 회차와 무관한 평균이 나온다. 유휴에 iowait 를 넣는다: 코어가 놀고 있는 것이다.
+peak_host_idle_pct() {
+    local a b
+    a=$(awk '/^cpu /{ print $2+$3+$4+$5+$6+$7+$8+$9, $5+$6 }' /proc/stat)
+    sleep 1
+    b=$(awk '/^cpu /{ print $2+$3+$4+$5+$6+$7+$8+$9, $5+$6 }' /proc/stat)
+    awk -v a="$a" -v b="$b" 'BEGIN{ split(a, x, " "); split(b, y, " "); t = y[1] - x[1];
+        printf "%.1f", (t > 0) ? 100 * (y[2] - x[2]) / t : 0 }'
+}
+
+# **회차 동안 CPU 를 쌓는다.** 천장이 났을 때 그것이 하네스의 것인지 게이트웨이의 것인지 가를 재료다.
+# `<표본 파일>.stop` 이 생기거나, 러너가 사라지거나, 기한(epoch 초)이 지나면 그 바퀴를 마치고 멈춘다 — 한 바퀴가
+# 2초쯤 든다. **기한은 회차 끝이다.** k6 가 걸린 요청으로 더 도는 동안의 한가한 표본이 붙었던 자리를 가린다.
+# 정지 파일은 부르는 쪽이 띄우기 전에 지운다.
+#
+#   사용: peak_sample_cpu <표본 파일> <프로젝트> <러너 PID> [기한] & sampler=$!
+peak_sample_cpu() {
+    local out=$1 project=$2 owner=$3 deadline=${4:-}
+    : > "$out"
+    while [ ! -e "$out.stop" ] && kill -0 "$owner" 2>/dev/null \
+            && { [ -z "$deadline" ] || [ "$(date +%s)" -lt "$deadline" ]; }; do
+        docker stats --no-stream --format '{{.Name}}\t{{.CPUPerc}}' 2>/dev/null \
+            | peak_cpu_lines "$project" >> "$out"
+        printf 'idle\thost\t%s\n' "$(peak_host_idle_pct)" >> "$out"
+    done
+}
+
+# 대마다 낸 판정 비율을 모은다. **합산하지 않는다** — 한 대가 다시 떴거나 못 긁은 칸이 다른 대의 계수에 묻힌다.
+# 가장 나쁜 것을 낸다. 판정 불가가 미달보다 앞이다 — 한 대를 못 잰 칸을 제품 탓으로 못 읽는다.
+#
+#   사용: peak_worst_verdict <판정>...
+peak_worst_verdict() {
+    local v worst=ok
+    [ $# -gt 0 ] || { printf 'unmeasurable'; return; }
+    for v in "$@"; do
+        case "$v" in
+            ok) ;;
+            under) [ "$worst" = ok ] && worst=under ;;
+            *) worst=unmeasurable ;;
+        esac
+    done
+    printf '%s' "$worst"
+}
+

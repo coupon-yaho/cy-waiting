@@ -1,6 +1,7 @@
 package com.kafkick.waiting.control;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.within;
 
 import ch.qos.logback.classic.Level;
@@ -31,8 +32,10 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.LongSupplier;
@@ -43,6 +46,7 @@ import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 import reactor.core.Disposable;
 import reactor.core.publisher.Mono;
+import reactor.test.scheduler.VirtualTimeScheduler;
 
 /**
  * 한 회차. 수요를 모아 크레딧을 나누고 적용한 뒤 발행한다.
@@ -54,6 +58,14 @@ import reactor.core.publisher.Mono;
 class AllocationRoundTest {
 
     private final List<String> 적용 = new CopyOnWriteArrayList<>();
+
+    /**
+     * 몫이 실제로 나간 적용만. <b>기다리는 쿠폰은 몫이 0 이어도 적용을 부른다</b> (CY-942) — 사라진 입장 커서를 되살리는
+     * 호출이라 아무도 안 들인다. "몫이 나갔나" 를 묻는 시험이 그 호출까지 세면 뜻이 흐려진다.
+     */
+    private List<String> 나간_몫() {
+        return 적용.stream().filter(entry -> !entry.endsWith("=0")).toList();
+    }
     private ListAppender<ILoggingEvent> 로그;
     private Level 원래_수준;
 
@@ -109,7 +121,12 @@ class AllocationRoundTest {
                         List.of(new CouponDemand("c1", 5, 100, QueueMode.ADAPTIVE)), 읽은_시각)),
                 () -> 1_000, () -> 1,
                 grant -> Mono.just(grant.credit()),
+                // **발행도 같은 레디스라 같이 터진다.** 발행이 되면 이월 자리가 이 리더의
+                // 값으로 덮여, 다시 읽어도 앞 리더의 200 은 없다.
                 hash -> {
+                    if (터진다.get()) {
+                        return Mono.error(new IllegalStateException("레디스가 흔들린다"));
+                    }
                     발행된_크레딧.add(Long.parseLong(hash.get("#credit")));
                     return Mono.empty();
                 },
@@ -123,7 +140,7 @@ class AllocationRoundTest {
                 },
                 SnapshotCodec.create(), () -> 0L);
 
-        round.run().block();
+        round.run().onErrorResume(e -> Mono.empty()).block();
         assertThat(시도.get()).as("한 회차 실패했다").isEqualTo(1);
 
         터진다.set(false);
@@ -134,7 +151,215 @@ class AllocationRoundTest {
         // 이월값 200 과 관측 1,000 사이. 알파가 0.3 이라 440 이 나온다 —
         // 관측치를 생으로 내보내면 1,000 이다.
         assertThat(발행된_크레딧).as("이월을 받은 회차는 평활한 값을 낸다")
-                .containsExactly(1_000L, 440L);
+                .containsExactly(440L);
+    }
+
+    /** 이월이 늘 실패하는 회차. 관측만 바꿔 가며 발행된 몫을 모은다. */
+    private AllocationRound 이월이_안_오는_회차(AtomicLong 관측, List<Long> 발행된_크레딧) {
+        return AllocationRound.of(
+                () -> true,
+                () -> Mono.just(new TimedDemands(
+                        List.of(new CouponDemand("c1", 5, 100, QueueMode.ADAPTIVE)), 읽은_시각)),
+                관측::get, () -> 1,
+                grant -> Mono.just(grant.credit()),
+                hash -> {
+                    발행된_크레딧.add(Long.parseLong(hash.get("#credit")));
+                    return Mono.empty();
+                },
+                () -> Instant.ofEpochSecond(읽은_시각),
+                () -> Mono.error(new IllegalStateException("레디스가 흔들린다")),
+                SnapshotCodec.create(), () -> 0L);
+    }
+
+    /**
+     * <b>이월을 못 받는 동안에도 평활은 이어진다</b> (CY-864). 회차마다 콜드 스무더를
+     * 새로 만들면 실패가 이어지는 내내 관측치가 생으로 나간다 — 승계 직후는 레디스가
+     * 가장 흔들려 그 구간이 길다.
+     */
+    @Test
+    @DisplayName("이월을_못_받는_동안에도_평활이_이어진다")
+    void 이월을_못_받는_동안에도_평활이_이어진다() {
+        AtomicLong 관측 = new AtomicLong(1_000);
+        List<Long> 발행된_크레딧 = new ArrayList<>();
+        AllocationRound round = 이월이_안_오는_회차(관측, 발행된_크레딧);
+
+        round.run().block();
+        관측.set(200);
+        round.run().block();
+
+        // 첫 회차는 견줄 것이 없어 1,000 이다. 둘째는 0.3 × 200 + 0.7 × 1,000 = 760 이다.
+        // 회차마다 콜드로 시작하면 200 이 생으로 나간다.
+        assertThat(발행된_크레딧).containsExactly(1_000L, 760L);
+    }
+
+    /** 임시로 이어 온 평활은 임기에 묶인다. 새 임기가 앞 임기의 콜드 값을 이어 쓰면 안 된다. */
+    @Test
+    @DisplayName("이월_대신_이어_온_평활은_임기가_바뀌면_버린다")
+    void 이월_대신_이어_온_평활은_임기가_바뀌면_버린다() {
+        AtomicLong 관측 = new AtomicLong(1_000);
+        List<Long> 발행된_크레딧 = new ArrayList<>();
+        AllocationRound round = 이월이_안_오는_회차(관측, 발행된_크레딧);
+
+        round.run().block();
+        round.leadershipAcquired();
+        관측.set(200);
+        round.run().block();
+
+        assertThat(발행된_크레딧).containsExactly(1_000L, 200L);
+    }
+
+    /** 이월과 발행 성패를 밖에서 고르는 회차. 관측은 1,000 으로 고정이다. */
+    private AllocationRound 이월을_고르는_회차(AtomicReference<Mono<CreditSmoother>> 이월,
+            AtomicBoolean 리더, AtomicBoolean 발행이_터진다) {
+        return AllocationRound.of(
+                리더::get,
+                () -> Mono.just(new TimedDemands(
+                        List.of(new CouponDemand("c1", 5, 100, QueueMode.ADAPTIVE)), 읽은_시각)),
+                () -> 1_000, () -> 1,
+                grant -> Mono.just(grant.credit()),
+                hash -> 발행이_터진다.get()
+                        ? Mono.error(new IllegalStateException("레디스가 흔들린다"))
+                        : Mono.empty(),
+                () -> Instant.ofEpochSecond(읽은_시각),
+                이월::get,
+                SnapshotCodec.create(), () -> 0L);
+    }
+
+    private static void 돈다(AllocationRound round) {
+        round.run().onErrorResume(e -> Mono.empty()).block();
+    }
+
+    /**
+     * <b>이월의 결과를 갈라 센다</b> (CY-865). 버린 것과 받은 것이 안 남으면 승계 뒤의
+     * 계단이 이월을 못 받아서인지, 받을 값이 없어서인지 못 가른다.
+     */
+    @Test
+    @DisplayName("이월_결과를_받음_없음_실패로_갈라_센다")
+    void 이월_결과를_받음_없음_실패로_갈라_센다() {
+        Mono<CreditSmoother> 흔들림 = Mono.error(new IllegalStateException("레디스가 흔들린다"));
+        AtomicReference<Mono<CreditSmoother>> 이월 = new AtomicReference<>(흔들림);
+        AtomicBoolean 발행이_터진다 = new AtomicBoolean(true);
+        AllocationRound round = 이월을_고르는_회차(이월, new AtomicBoolean(true), 발행이_터진다);
+
+        돈다(round);
+        돈다(round);
+        이월.set(Mono.just(CreditSmoother.restore(0.3, new CreditSmoother.Snapshot(200.0, true))));
+        발행이_터진다.set(false);
+        돈다(round);
+
+        round.leadershipAcquired();
+        이월.set(흔들림);
+        발행이_터진다.set(true);
+        돈다(round);
+        // 매번 새로 만든다. 한 벌을 돌려 쓰면 앞 임기가 관측한 스무더가 값 있는 이월로 돌아온다.
+        이월.set(Mono.fromSupplier(() -> CreditSmoother.of(0.3)));
+        발행이_터진다.set(false);
+        돈다(round);
+
+        round.leadershipAcquired();
+        돈다(round);
+
+        이월.set(흔들림);
+        for (int i = 0; i < 3; i++) {
+            round.leadershipAcquired();
+            돈다(round);
+        }
+
+        // **실패는 시도마다 센다.** 한 임기에 한 번만 세면 흔들림이 얼마나 길었는지 못 본다.
+        // 넷의 값을 서로 달리 둔다 — 같으면 세는 자리를 서로 바꿔도 통과한다.
+        assertThat(round.carryoverFailures()).as("못 읽은 시도").isEqualTo(6);
+        assertThat(round.carryoverRestored()).as("값을 이어받은 임기").isEqualTo(1);
+        assertThat(round.carryoverEmpty()).as("읽었는데 이을 값이 없던 임기").isEqualTo(2);
+        assertThat(round.carryoverReplaced()).as("못 받은 채 제 발행이 자리를 덮은 임기")
+                .isEqualTo(3);
+    }
+
+    /**
+     * <b>발행이 된 뒤에는 이월을 다시 안 읽는다.</b> 발행이 이월 자리를 이 리더의 값으로
+     * 덮어, 다시 읽으면 제 값을 앞 리더의 것으로 셀 뿐이다. 읽기가 제 시한에 걸리는 동안
+     * 매 틱 그 몫을 태우지도 않는다.
+     */
+    @Test
+    @DisplayName("발행이_된_뒤에는_이월을_다시_안_읽는다")
+    void 발행이_된_뒤에는_이월을_다시_안_읽는다() {
+        AtomicInteger 시도 = new AtomicInteger();
+        AllocationRound round = 이월을_고르는_회차(new AtomicReference<>(Mono.defer(() -> {
+            시도.incrementAndGet();
+            return Mono.error(new IllegalStateException("시한에 걸린다"));
+        })), new AtomicBoolean(true), new AtomicBoolean(false));
+
+        돈다(round);
+        돈다(round);
+        돈다(round);
+
+        assertThat(시도).as("첫 회차만 읽는다").hasValue(1);
+        assertThat(round.carryoverReplaced()).isEqualTo(1);
+    }
+
+    /**
+     * <b>값 없는 이월이 데워진 임시 평활을 버리면 안 된다.</b> 실패가 이어진 뒤 읽기는
+     * 됐는데 이을 값이 없으면, 콜드를 앉히는 순간 다음 관측이 다시 생으로 나간다.
+     */
+    @Test
+    @DisplayName("값_없는_이월은_임시_평활을_이어_쓴다")
+    void 값_없는_이월은_임시_평활을_이어_쓴다() {
+        AtomicLong 관측 = new AtomicLong(1_000);
+        List<Long> 발행된_크레딧 = new ArrayList<>();
+        AtomicBoolean 발행이_터진다 = new AtomicBoolean(true);
+        AtomicReference<Mono<CreditSmoother>> 이월 = new AtomicReference<>(
+                Mono.error(new IllegalStateException("레디스가 흔들린다")));
+        AllocationRound round = AllocationRound.of(
+                () -> true,
+                () -> Mono.just(new TimedDemands(
+                        List.of(new CouponDemand("c1", 5, 100, QueueMode.ADAPTIVE)), 읽은_시각)),
+                관측::get, () -> 1,
+                grant -> Mono.just(grant.credit()),
+                // 첫 회차는 발행도 터진다 — 되면 이월 자리가 덮여 값 없는 이월이 안 온다.
+                hash -> {
+                    if (발행이_터진다.get()) {
+                        return Mono.error(new IllegalStateException("레디스가 흔들린다"));
+                    }
+                    발행된_크레딧.add(Long.parseLong(hash.get("#credit")));
+                    return Mono.empty();
+                },
+                () -> Instant.ofEpochSecond(읽은_시각),
+                이월::get,
+                SnapshotCodec.create(), () -> 0L);
+
+        돈다(round);
+        이월.set(Mono.just(CreditSmoother.of(0.3)));
+        발행이_터진다.set(false);
+        관측.set(200);
+        돈다(round);
+
+        // 임시 평활 1,000 에 관측 200 이면 760 이다. 콜드를 앉히면 200 이 생으로 나간다.
+        assertThat(발행된_크레딧).containsExactly(760L);
+    }
+
+    /**
+     * <b>평활값을 낸다</b> (CY-865). 크레딧 지표는 발행한 몫이라 평활이 수렴했는지를 못
+     * 본다. 리더가 아니면 굳은 값을 안 낸다 — 강등된 노드의 옛 값이 섞이면 읽을 수 없다.
+     */
+    @Test
+    @DisplayName("평활값을_리더일_때만_낸다")
+    void 평활값을_리더일_때만_낸다() {
+        AtomicBoolean 리더 = new AtomicBoolean(true);
+        AllocationRound round = 이월을_고르는_회차(new AtomicReference<>(Mono.just(
+                CreditSmoother.restore(0.3, new CreditSmoother.Snapshot(200.0, true)))), 리더,
+                new AtomicBoolean(false));
+
+        assertThat(round.smoothedCredit()).as("회차 전에는 값이 없다").isNaN();
+        round.run().block();
+        // 0.3 × 1,000 + 0.7 × 200
+        assertThat(round.smoothedCredit()).isEqualTo(440.0);
+
+        리더.set(false);
+        assertThat(round.smoothedCredit()).as("리더가 아니면 굳은 값을 안 낸다").isNaN();
+
+        리더.set(true);
+        round.leadershipAcquired();
+        assertThat(round.smoothedCredit()).as("다시 쥔 임기는 첫 회차 전까지 앞 임기 값을 안 낸다")
+                .isNaN();
     }
 
     @Test
@@ -166,6 +391,122 @@ class AllocationRoundTest {
         // 다 안 채우고 지운다.
         assertThat(cleanup.due(Map.of("c1", CouponStates.closed(0))))
                 .as("첫 틱은 아직").isEmpty();
+    }
+
+    /**
+     * <b>유예를 이미 채운 줄은 발행이 못 나가도 지운다</b> (CY-935).
+     *
+     * <p>상한에 닿으면 발행의 첫 쓰기가 거부된다. 정리를 발행에 묶어 두면 줄을 지워 메모리를
+     * 줄일 유일한 경로가 같이 막혀, 운영자가 한도를 올려야만 풀린다.
+     */
+    @Test
+    @DisplayName("발행이_실패해도_유예를_채운_줄은_지운다")
+    void 발행이_실패해도_유예를_채운_줄은_지운다() {
+        List<String> 지운_것 = new ArrayList<>();
+        AtomicBoolean 발행이_된다 = new AtomicBoolean(true);
+        SoldOutCleanup cleanup = SoldOutCleanup.of(1, new SimpleMeterRegistry());
+        AllocationRound round = AllocationRound.of(
+                () -> true,
+                () -> Mono.just(new TimedDemands(
+                        List.of(new CouponDemand("c1", 0, 0, QueueMode.ADAPTIVE)), 읽은_시각)),
+                () -> 1_000, () -> 1,
+                grant -> Mono.just(grant.credit()),
+                hash -> 발행이_된다.get() ? Mono.empty()
+                        : Mono.error(new IllegalStateException("상한이라 못 쓴다")),
+                () -> Instant.ofEpochSecond(읽은_시각),
+                () -> Mono.just(CreditSmoother.of(1.0)),
+                SnapshotCodec.create(), () -> 0L, Optional::empty,
+                cleanup, ids -> {
+                    지운_것.addAll(ids);
+                    return Mono.just(ids);
+                }, ids -> Mono.just(ids), 안_걷는_스위퍼(), () -> false, () -> CircuitState.CLOSED);
+
+        // 유예를 채울 때까지는 발행이 나간다. 여기까지는 지울 때가 아니다.
+        round.run().block();
+        assertThat(지운_것).as("유예 전").isEmpty();
+
+        발행이_된다.set(false);
+        round.run().onErrorResume(e -> Mono.empty()).block();
+
+        assertThat(지운_것).as("유예를 채운 줄").containsExactly("c1");
+    }
+
+    /**
+     * <b>안 나간 매진의 셈을 실패 회차가 지우지 않는다</b> (CY-935). 걸러 낸 지도를 정리에 넘기므로,
+     * 거기 없는 쿠폰의 유예 셈까지 같이 버리면 상한이 길어질수록 아무도 유예를 못 채운다.
+     */
+    @Test
+    @DisplayName("실패_회차가_안_나간_매진의_셈을_안_버린다")
+    void 실패_회차가_안_나간_매진의_셈을_안_버린다() {
+        List<String> 지운_것 = new ArrayList<>();
+        AtomicBoolean 발행이_된다 = new AtomicBoolean(true);
+        SoldOutCleanup cleanup = SoldOutCleanup.of(1, new SimpleMeterRegistry());
+        AllocationRound round = AllocationRound.of(
+                () -> true,
+                () -> Mono.just(new TimedDemands(List.of(
+                        new CouponDemand("c1", 0, 0, QueueMode.ADAPTIVE),
+                        new CouponDemand("c2", 0, 0, QueueMode.ADAPTIVE)), 읽은_시각)),
+                () -> 1_000, () -> 1,
+                grant -> Mono.just(grant.credit()),
+                hash -> 발행이_된다.get() ? Mono.empty()
+                        : Mono.error(new IllegalStateException("상한이라 못 쓴다")),
+                () -> Instant.ofEpochSecond(읽은_시각),
+                () -> Mono.just(CreditSmoother.of(1.0)),
+                SnapshotCodec.create(), () -> 0L, Optional::empty,
+                cleanup, ids -> {
+                    지운_것.addAll(ids);
+                    return Mono.just(ids);
+                }, ids -> Mono.just(ids), 안_걷는_스위퍼(), () -> false, () -> CircuitState.CLOSED);
+
+        // c1 만 발행에 실렸다고 두고 시작한다. c2 는 노드가 아직 매진을 모르는 쿠폰이다.
+        round.leadershipAcquired(-1, List.of("c1"));
+        발행이_된다.set(false);
+        for (int i = 0; i < 4; i++) {
+            round.run().onErrorResume(e -> Mono.empty()).block();
+        }
+
+        assertThat(지운_것).as("나간 매진만, 한 번만 지운다").containsExactlyInAnyOrder("c1");
+        // **c2 의 셈은 남아 있어야 한다.** 실패 회차마다 버리면 상한이 풀린 뒤에도 유예를 못 채운다.
+        발행이_된다.set(true);
+        round.run().block();
+        round.run().block();
+
+        assertThat(지운_것).as("발행이 살아나면 c2 도 유예를 채운다")
+                .containsExactlyInAnyOrder("c1", "c2");
+    }
+
+    /**
+     * <b>승계해도 정리가 죽지 않는다</b> (CY-935). 표시는 리더 메모리라 승계에서 사라지는데, 상한 중에는
+     * 발행이 늘 거부돼 새 리더가 다시 채울 길이 없다 — 발행된 스냅샷에서 씨앗을 받는다.
+     */
+    @Test
+    @DisplayName("승계_뒤에도_이미_나간_매진은_지운다")
+    void 승계_뒤에도_이미_나간_매진은_지운다() {
+        List<String> 지운_것 = new ArrayList<>();
+        SoldOutCleanup cleanup = SoldOutCleanup.of(1, new SimpleMeterRegistry());
+        AllocationRound round = AllocationRound.of(
+                () -> true,
+                () -> Mono.just(new TimedDemands(
+                        List.of(new CouponDemand("c1", 0, 0, QueueMode.ADAPTIVE)), 읽은_시각)),
+                () -> 1_000, () -> 1,
+                grant -> Mono.just(grant.credit()),
+                hash -> Mono.error(new IllegalStateException("상한이라 못 쓴다")),
+                () -> Instant.ofEpochSecond(읽은_시각),
+                () -> Mono.just(CreditSmoother.of(1.0)),
+                SnapshotCodec.create(), () -> 0L, Optional::empty,
+                cleanup, ids -> {
+                    지운_것.addAll(ids);
+                    return Mono.just(ids);
+                }, ids -> Mono.just(ids), 안_걷는_스위퍼(), () -> false, () -> CircuitState.CLOSED);
+
+        // 앞 리더가 발행한 스냅샷이 c1 을 매진으로 적었다. 노드는 이미 그것을 받아 갔다.
+        round.leadershipAcquired(-1, List.of("c1"));
+        // 발행은 내내 거부된다. 그래도 유예는 돌고, 채운 줄은 지워야 한다.
+        round.run().onErrorResume(e -> Mono.empty()).block();
+        assertThat(지운_것).as("유예 전").isEmpty();
+        round.run().onErrorResume(e -> Mono.empty()).block();
+
+        assertThat(지운_것).as("승계 뒤에도 지운다").containsExactly("c1");
     }
 
     /**
@@ -271,6 +612,98 @@ class AllocationRoundTest {
         round.run().block();
 
         assertThat(쓴_쿠폰).as("줄이 선 쿠폰을 쓸러 간다").containsExactly("c1");
+    }
+
+    /**
+     * <b>적용이 실패한 쿠폰은 같은 회차에 안 걷습니다</b> (CY-947).
+     *
+     * <p>적용이 시한에 걸리면 그 쿠폰의 입장 커서는 되살려지지 않은 채로 남습니다. 그 위에서 청소가 앞줄을
+     * 걷으면, 입장 판정을 받고 폴링을 멈춘 사람이 이탈로 걷힙니다. 다른 쿠폰의 청소는 그대로 돕니다.
+     */
+    @Test
+    @DisplayName("적용이_실패한_쿠폰은_같은_회차에_안_걷는다")
+    void 적용이_실패한_쿠폰은_같은_회차에_안_걷는다() {
+        List<String> 쓴_쿠폰 = new ArrayList<>();
+        AllocationRound round = AllocationRound.of(
+                () -> true,
+                () -> Mono.just(new TimedDemands(
+                        List.of(new CouponDemand("c1", 100, 1_000, QueueMode.ADAPTIVE),
+                                new CouponDemand("c2", 100, 1_000, QueueMode.ADAPTIVE)),
+                        읽은_시각)),
+                () -> 1_000, () -> 1,
+                grant -> "c1".equals(grant.couponId())
+                        ? Mono.error(new IllegalStateException("적용이 시한에 걸렸다"))
+                        : Mono.just(grant.credit()),
+                hash -> Mono.empty(),
+                () -> Instant.ofEpochSecond(읽은_시각),
+                () -> Mono.just(CreditSmoother.of(1.0)),
+                SnapshotCodec.create(), () -> 0L, Optional::empty,
+                SoldOutCleanup.of(1, new SimpleMeterRegistry()),
+                ids -> Mono.just(List.of()),
+                ids -> Mono.just(List.of()),
+                QueueSweeper.of(
+                        SweepGates.warmed(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
+                        (ids, limit, removeFront) -> {
+                            쓴_쿠폰.addAll(ids);
+                            return Mono.just(QueueSweeper.SweepResult.NOTHING);
+                        }), () -> false, () -> CircuitState.CLOSED);
+
+        round.run().onErrorResume(e -> Mono.empty()).block();
+
+        // **긍정까지 본다.** 빠졌다는 것만 보면 게이트가 아무것도 안 내는 회귀도 초록이다.
+        assertThat(쓴_쿠폰).as("실패한 쿠폰만 빼고 나머지는 그대로 쓴다").containsExactly("c2");
+    }
+
+    /**
+     * <b>적용 실패가 그 쿠폰의 재개 유예를 지우면 안 됩니다</b> (CY-947).
+     *
+     * <p>게이트는 넘겨받은 맵을 이번 틱의 전부로 보고, 없는 쿠폰의 유예 기록을 지웁니다. 실패한 쿠폰을 맵에서
+     * 빼면 한 틱을 보호하는 대신 5분짜리 유예를 버리고, 다음 틱에 밀린 폴링이 안 온 앞줄이 걷힙니다.
+     */
+    @Test
+    @DisplayName("적용이_실패해도_재개_유예는_남는다")
+    void 적용이_실패해도_재개_유예는_남는다() {
+        AtomicBoolean 낡음 = new AtomicBoolean(true);
+        AtomicBoolean 실패 = new AtomicBoolean(false);
+        List<List<String>> 틱마다_쓴_쿠폰 = new ArrayList<>();
+        AllocationRound round = AllocationRound.of(
+                () -> true,
+                () -> Mono.just(new TimedDemands(
+                        List.of(new CouponDemand("c1", 100, 1_000, QueueMode.ADAPTIVE),
+                                new CouponDemand("c2", 100, 1_000, QueueMode.ADAPTIVE)),
+                        읽은_시각)),
+                () -> 1_000, () -> 1,
+                grant -> 실패.get() && "c1".equals(grant.couponId())
+                        ? Mono.error(new IllegalStateException("적용이 시한에 걸렸다"))
+                        : Mono.just(grant.credit()),
+                hash -> Mono.empty(),
+                () -> Instant.ofEpochSecond(읽은_시각),
+                () -> Mono.just(CreditSmoother.of(1.0)),
+                SnapshotCodec.create(), () -> 0L, Optional::empty,
+                SoldOutCleanup.of(1, new SimpleMeterRegistry()),
+                ids -> Mono.just(List.of()),
+                ids -> Mono.just(List.of()),
+                QueueSweeper.of(
+                        SweepGates.warmed(Duration.ofSeconds(1), PollIntervalPolicy.aliveTtl()),
+                        (ids, limit, removeFront) -> {
+                            틱마다_쓴_쿠폰.add(List.copyOf(ids));
+                            return Mono.just(QueueSweeper.SweepResult.NOTHING);
+                        }), 낡음::get, () -> CircuitState.CLOSED);
+
+        // 낡은 틱이 두 쿠폰에 유예를 심는다.
+        round.run().block();
+        낡음.set(false);
+        // 유예 안에서 c1 의 적용만 한 틱 실패한다.
+        실패.set(true);
+        round.run().onErrorResume(e -> Mono.empty()).block();
+        실패.set(false);
+        round.run().block();
+
+        assertThat(틱마다_쓴_쿠폰.stream().flatMap(List::stream).toList())
+                .as("유예가 남아 있으므로 실패했던 쿠폰은 어느 틱에서도 앞줄 제거 대상이 아니다")
+                .doesNotContain("c1");
+        // **대조군.** 실패가 없었으면 유예가 풀린 뒤 둘 다 대상이 된다 — 유예가 원인이라는 것을 이 줄이 고정한다.
+        assertThat(틱마다_쓴_쿠폰).as("유예 중에는 아무도 안 걷는다").allMatch(List::isEmpty);
     }
 
     /**
@@ -934,7 +1367,9 @@ class AllocationRoundTest {
 
         round.run().block();
 
-        assertThat(적용).as("첫 회차부터 아무 몫도 안 나간다").isEmpty();
+        assertThat(나간_몫()).as("첫 회차부터 아무 몫도 안 나간다").isEmpty();
+        // 열린 동안에도 되살림 호출은 나간다 (CY-942). 서킷 경로가 갈라지면 이 줄이 조용해진다.
+        assertThat(적용).as("되살림 전용 호출").containsExactly("c1=0");
     }
 
     /** 하한이 걸려 있어도 안 나간다. 하한은 평활 뒤라 감싼 자리를 비켜 간다. */
@@ -946,7 +1381,7 @@ class AllocationRoundTest {
 
         round.run().block();
 
-        assertThat(적용).isEmpty();
+        assertThat(나간_몫()).isEmpty();
     }
 
     /**
@@ -1239,6 +1674,359 @@ class AllocationRoundTest {
     }
 
     /**
+     * <b>승계가 예산 초과 창도 닫는다</b> (CY-824). 창이 리더 메모리라 죽은 리더가 연 채로 사라지면 진입 경고 하나에
+     * 해제가 영영 안 생긴다. 다음 사건은 이미 열려 있어 한 줄도 안 남는다.
+     */
+    @Test
+    @DisplayName("승계가_예산_초과_창을_닫는다")
+    void 승계가_예산_초과_창을_닫는다() {
+        // **뒷단이 떨어져도 평활은 앞 값을 여러 틱 나눠 준다.** 그 구간이 예산 초과다 — 하한이 관측보다 높은
+        // 조합은 배선에서 안 나온다. 수집기가 하한이 답이 된 회차의 값을 그대로 관측으로 싣는다.
+        AtomicLong 관측 = new AtomicLong(7_300);
+        AllocationRound round = AllocationRound.of(() -> true,
+                () -> Mono.just(new TimedDemands(List.of(new CouponDemand("c1", 20_000, 1_000_000)), 읽은_시각)),
+                관측::get, () -> 1,
+                grant -> Mono.just(grant.credit()), hash -> Mono.empty(),
+                () -> Instant.ofEpochSecond(1_700_000_000L),
+                () -> Mono.just(CreditSmoother.of(0.2)), SnapshotCodec.create(), () -> 0L);
+        round.run().block();
+        관측.set(10);
+        round.run().block();
+        round.run().block();
+        round.run().block();
+        assertThat(로그_메시지()).as("진입은 구간의 첫 회차에만")
+                .filteredOn(m -> m.startsWith("뒷단이 받는다는 것보다 많이 나눠 준다")).hasSize(1);
+
+        round.leadershipAcquired();
+
+        assertThat(로그_인자("리더십이 갈렸다 — 배분 예산 초과 창을 닫는다")[0])
+                .as("닫으면서 그동안 넘긴 틱을 남긴다 — 회차마다 하나씩").isEqualTo(3L);
+    }
+
+    /**
+     * <b>강등이 창을 닫으면서 리더 구간의 길이를 남긴다</b> (CY-824). 되찾는 자리에서 닫으면 그 사이 비리더 구간이
+     * 섞여 장애가 실제보다 길게 읽힌다.
+     */
+    @Test
+    @DisplayName("강등이_창을_닫고_리더_구간을_남긴다")
+    void 강등이_창을_닫고_리더_구간을_남긴다() {
+        AllocationRound round = 비동기_회차(() -> true, List.of(new CouponDemand("c1", 10, 100)),
+                grant -> Mono.error(new IllegalStateException("끊겼다")));
+        round.run().block();
+
+        round.leadershipLost();
+
+        assertThat(로그_인자("리더십을 잃었다 — 적용 실패 창을 닫는다"))
+                .as("리더 구간의 초와 삼킨 건수를 같이 남긴다").hasSize(2)
+                .satisfies(인자 -> {
+                    // 한 회차만 돌아 초 단위로는 0 이다. 여기가 비리더 구간을 담으면 0 이 아니게 된다.
+                    assertThat(인자[0]).isEqualTo(0L);
+                    assertThat(인자[1]).isEqualTo(1L);
+                });
+        // 이미 닫힌 창을 되찾는 자리에서 또 적지 않는다.
+        round.leadershipAcquired();
+        assertThat(로그_메시지()).noneMatch(m -> m.startsWith("리더십이 갈렸다 — 적용 실패 창을 닫는다"));
+    }
+
+    /**
+     * <b>회차가 터진 뒤 첫 회차에서만 되감기를 센다</b> (CY-856). 저장소가 뒤로 감긴 사실 자체를 잡는 신호가 없다.
+     * 평시에 재면 쿠폰마다 왕복이 늘고, 되감기는 재접속 직후에만 드러난다.
+     */
+    @Test
+    @DisplayName("실패_뒤_첫_회차만_되감기를_센다")
+    void 실패_뒤_첫_회차만_되감기를_센다() {
+        AtomicBoolean 터진다 = new AtomicBoolean(true);
+        List<List<String>> 센_쿠폰 = new CopyOnWriteArrayList<>();
+        AllocationRound round = AllocationRound.of(() -> true,
+                () -> 터진다.get() ? Mono.error(new IllegalStateException("끊겼다"))
+                        : Mono.just(new TimedDemands(List.of(new CouponDemand("c1", 10, 100)), 읽은_시각)),
+                () -> 10L, () -> 1, grant -> Mono.just(grant.credit()), hash -> Mono.empty(),
+                () -> Instant.ofEpochSecond(1_700_000_000L),
+                () -> Mono.just(CreditSmoother.of(1.0)), SnapshotCodec.create(), () -> 0L);
+        round.measuringRewindWith(쿠폰 -> {
+            센_쿠폰.add(쿠폰);
+            return Mono.just(RewindCheck.seen(List.of("c1"), 1));
+        }, ids -> { });
+
+        assertThatThrownBy(() -> round.run().block()).hasMessage("끊겼다");
+        터진다.set(false);
+        round.run().block();
+
+        // **인자까지 못 박는다.** 회차의 목록을 다시 넘기면 수요 읽기를 기다리게 돼 직렬로 돌아간다 —
+        // 읽는 쪽이 자기가 쓴 임계와 합쳐 보므로 넘길 것이 없다 (CY-939).
+        assertThat(센_쿠폰).as("실패 뒤 첫 회차에 한 번, 목록은 비운 채").containsExactly(List.of());
+        assertThat(round.rewoundCoupons()).isEqualTo(1);
+        assertThat(round.rewoundEvents()).as("지나간 사건은 누적으로 센다").isEqualTo(1);
+
+        round.run().block();
+        assertThat(센_쿠폰).as("평시 회차는 안 센다").hasSize(1);
+    }
+
+    /**
+     * <b>틱에서 잘린 회차도 실패다</b> (CY-856). 느려진 레디스는 오류가 아니라 취소로 끝나는데, 되감기를 만드는
+     * failover 가 바로 그 갈래다. 취소를 안 세면 신호가 영영 안 나간다.
+     */
+    @Test
+    @DisplayName("취소된_회차_뒤에도_되감기를_센다")
+    void 취소된_회차_뒤에도_되감기를_센다() {
+        VirtualTimeScheduler 시계 = VirtualTimeScheduler.create();
+        AtomicBoolean 느리다 = new AtomicBoolean(true);
+        List<List<String>> 센_쿠폰 = new CopyOnWriteArrayList<>();
+        AllocationRound round = AllocationRound.of(() -> true,
+                () -> 느리다.get()
+                        ? Mono.delay(Duration.ofSeconds(10), 시계).then(Mono.empty())
+                        : Mono.just(new TimedDemands(List.of(new CouponDemand("c1", 10, 100)), 읽은_시각)),
+                () -> 10L, () -> 1, grant -> Mono.just(grant.credit()), hash -> Mono.empty(),
+                () -> Instant.ofEpochSecond(1_700_000_000L),
+                () -> Mono.just(CreditSmoother.of(1.0)), SnapshotCodec.create(), () -> 0L);
+        round.measuringRewindWith(쿠폰 -> {
+            센_쿠폰.add(쿠폰);
+            return Mono.just(RewindCheck.seen(List.of(), 1));
+        }, ids -> { });
+
+        // 틱 시한이 잘라 내는 것과 같다 — 오류가 아니라 취소다.
+        round.run().subscribe().dispose();
+        느리다.set(false);
+        round.run().block();
+
+        assertThat(센_쿠폰).as("취소 뒤 첫 회차에 한 번, 목록은 비운 채").containsExactly(List.of());
+        assertThat(round.rewoundCoupons()).as("깨끗하면 0 이다 — NaN 이면 못 잰 것과 안 갈린다").isEqualTo(0);
+        assertThat(round.rewoundEvents()).as("되감기 없는 회차는 사건이 아니다").isZero();
+    }
+
+    /** 신호를 못 재면 다음 회차가 다시 잰다. 재접속 직후는 이 읽기가 실패할 확률이 가장 높은 구간이다. */
+    @Test
+    @DisplayName("되감기를_못_재면_다음_회차가_다시_잰다")
+    void 되감기를_못_재면_다음_회차가_다시_잰다() {
+        AtomicBoolean 터진다 = new AtomicBoolean(true);
+        AtomicInteger 시도 = new AtomicInteger();
+        AllocationRound round = AllocationRound.of(() -> true,
+                () -> 터진다.get() ? Mono.error(new IllegalStateException("끊겼다"))
+                        : Mono.just(new TimedDemands(List.of(new CouponDemand("c1", 10, 100)), 읽은_시각)),
+                () -> 10L, () -> 1, grant -> Mono.just(grant.credit()), hash -> Mono.empty(),
+                () -> Instant.ofEpochSecond(1_700_000_000L),
+                () -> Mono.just(CreditSmoother.of(1.0)), SnapshotCodec.create(), () -> 0L);
+        round.measuringRewindWith(쿠폰 -> 시도.incrementAndGet() == 1
+                ? Mono.error(new IllegalStateException("못 읽었다"))
+                : Mono.just(RewindCheck.seen(List.of("c1", "c2", "c3"), 5)), ids -> { });
+
+        assertThatThrownBy(() -> round.run().block()).hasMessage("끊겼다");
+        터진다.set(false);
+        round.run().block();
+        assertThat(round.rewindUnmeasured()).as("한 번 놓쳤다").isEqualTo(1);
+        assertThat(round.rewoundCoupons()).as("아직 못 쟀다").isNaN();
+
+        round.run().block();
+
+        assertThat(round.rewoundCoupons()).isEqualTo(3);
+        assertThat(시도).hasValue(2);
+    }
+
+    /** 강등된 노드는 옛 값을 안 낸다. 안 내리면 장애가 끝난 뒤에도 대시보드에 그 값이 붙는다. */
+    @Test
+    @DisplayName("강등되면_되감기_값을_안_낸다")
+    void 강등되면_되감기_값을_안_낸다() {
+        AtomicBoolean 리더 = new AtomicBoolean(true);
+        AtomicBoolean 터진다 = new AtomicBoolean(true);
+        AllocationRound round = AllocationRound.of(리더::get,
+                () -> 터진다.get() ? Mono.error(new IllegalStateException("끊겼다"))
+                        : Mono.just(new TimedDemands(List.of(new CouponDemand("c1", 10, 100)), 읽은_시각)),
+                () -> 10L, () -> 1, grant -> Mono.just(grant.credit()), hash -> Mono.empty(),
+                () -> Instant.ofEpochSecond(1_700_000_000L),
+                () -> Mono.just(CreditSmoother.of(1.0)), SnapshotCodec.create(), () -> 0L);
+        round.measuringRewindWith(쿠폰 -> Mono.just(RewindCheck.seen(List.of("c1"), 1)), ids -> { });
+        assertThatThrownBy(() -> round.run().block()).hasMessage("끊겼다");
+        터진다.set(false);
+        round.run().block();
+        assertThat(round.rewoundCoupons()).isEqualTo(1);
+
+        리더.set(false);
+
+        assertThat(round.rewoundCoupons()).isNaN();
+    }
+
+    /**
+     * <b>측정이 적용보다 먼저다</b> (CY-856). 적용이 임계를 다시 쓰면 견줄 기준이 방금 쓴 값이 되어 되감기가 0 이 된다 —
+     * 몫을 받은 쿠폰이 곧 되감기가 해를 끼치는 쿠폰이다. 적용이 기준을 덮은 뒤에 재면 아래 값이 0 이 된다.
+     */
+    @Test
+    @DisplayName("되감기는_적용보다_먼저_잰다")
+    void 되감기는_적용보다_먼저_잰다() {
+        AtomicBoolean 터진다 = new AtomicBoolean(true);
+        AtomicBoolean 적용이_기준을_덮었다 = new AtomicBoolean();
+        AllocationRound round = AllocationRound.of(() -> true,
+                () -> 터진다.get() ? Mono.error(new IllegalStateException("끊겼다"))
+                        : Mono.just(new TimedDemands(List.of(new CouponDemand("c1", 10, 100)), 읽은_시각)),
+                () -> 10L, () -> 1,
+                grant -> {
+                    적용이_기준을_덮었다.set(true);
+                    return Mono.just(grant.credit());
+                },
+                hash -> Mono.empty(), () -> Instant.ofEpochSecond(1_700_000_000L),
+                () -> Mono.just(CreditSmoother.of(1.0)), SnapshotCodec.create(), () -> 0L);
+        // 기준이 덮이면 되감기가 안 보인다 — 실제 어댑터가 그렇게 동작한다.
+        round.measuringRewindWith(쿠폰 -> Mono.fromCallable(() -> 적용이_기준을_덮었다.get()
+                ? RewindCheck.seen(List.of(), 1)
+                : RewindCheck.seen(List.of("c1"), 1)), ids -> { });
+
+        assertThatThrownBy(() -> round.run().block()).hasMessage("끊겼다");
+        터진다.set(false);
+        round.run().block();
+
+        assertThat(round.rewoundCoupons()).as("적용 뒤에 재면 0 이 된다").isEqualTo(1);
+        assertThat(round.rewoundEvents()).isEqualTo(1);
+    }
+
+    /** 기준이 하나도 없으면 깨끗한 것이 아니라 못 잰 것이다. 승계 직후의 새 리더가 그 자리다. */
+    @Test
+    @DisplayName("견줄_기준이_없으면_못_잰_것으로_둔다")
+    void 견줄_기준이_없으면_못_잰_것으로_둔다() {
+        AtomicBoolean 터진다 = new AtomicBoolean(true);
+        AllocationRound round = AllocationRound.of(() -> true,
+                () -> 터진다.get() ? Mono.error(new IllegalStateException("끊겼다"))
+                        : Mono.just(new TimedDemands(List.of(new CouponDemand("c1", 10, 100)), 읽은_시각)),
+                () -> 10L, () -> 1, grant -> Mono.just(grant.credit()), hash -> Mono.empty(),
+                () -> Instant.ofEpochSecond(1_700_000_000L),
+                () -> Mono.just(CreditSmoother.of(1.0)), SnapshotCodec.create(), () -> 0L);
+        AtomicBoolean 기준이_있다 = new AtomicBoolean(true);
+        round.measuringRewindWith(쿠폰 -> Mono.just(기준이_있다.get()
+                ? RewindCheck.seen(List.of("c1"), 1) : RewindCheck.NONE), ids -> { });
+
+        assertThatThrownBy(() -> round.run().block()).hasMessage("끊겼다");
+        터진다.set(false);
+        round.run().block();
+        assertThat(round.rewoundCoupons()).as("한 번은 쟀다").isEqualTo(1);
+
+        // 기준을 잃은 채 다음 장애를 맞는다 — 승계한 노드가 그 자리다.
+        기준이_있다.set(false);
+        터진다.set(true);
+        assertThatThrownBy(() -> round.run().block()).hasMessage("끊겼다");
+        터진다.set(false);
+        round.run().block();
+
+        assertThat(round.rewoundCoupons()).as("깨끗한 것이 아니라 못 잰 것이다").isNaN();
+        assertThat(round.rewindNoBaseline()).isEqualTo(1);
+    }
+
+    /** 잴 것이 없는 회차에만 기준을 버린다. 측정이 밀린 동안 버리면 기준째로 사라진다. */
+    @Test
+    @DisplayName("측정이_밀린_동안은_기준을_안_버린다")
+    void 측정이_밀린_동안은_기준을_안_버린다() {
+        AtomicBoolean 터진다 = new AtomicBoolean(true);
+        AtomicInteger 버린_횟수 = new AtomicInteger();
+        AllocationRound round = AllocationRound.of(() -> true,
+                () -> 터진다.get() ? Mono.error(new IllegalStateException("끊겼다"))
+                        : Mono.just(new TimedDemands(List.of(new CouponDemand("c1", 10, 100)), 읽은_시각)),
+                () -> 10L, () -> 1, grant -> Mono.just(grant.credit()), hash -> Mono.empty(),
+                () -> Instant.ofEpochSecond(1_700_000_000L),
+                () -> Mono.just(CreditSmoother.of(1.0)), SnapshotCodec.create(), () -> 0L);
+        List<List<String>> 버린_쿠폰 = new CopyOnWriteArrayList<>();
+        round.measuringRewindWith(쿠폰 -> Mono.just(RewindCheck.seen(List.of(), 1)), ids -> {
+            버린_횟수.incrementAndGet();
+            버린_쿠폰.add(ids);
+        });
+
+        assertThatThrownBy(() -> round.run().block()).hasMessage("끊겼다");
+        터진다.set(false);
+        round.run().block();
+        assertThat(버린_횟수).as("재는 회차는 안 버린다").hasValue(0);
+
+        round.run().block();
+
+        assertThat(버린_횟수).hasValue(1);
+        assertThat(버린_쿠폰).as("남길 쿠폰을 넘긴다 — 빈 목록을 넘기면 기준이 통째로 사라진다")
+                .containsExactly(List.of("c1"));
+    }
+
+    /**
+     * <b>읽는 사이에 임기가 갈리면 버린다</b> (CY-856). 읽기는 임기가 갈려도 안 끊기고, 그 결과가 새 임기의 지표로
+     * 들어가면 지나간 사건이 지금 값처럼 보인다. 새 임기가 연 실패 창도 그 완료가 닫으면 안 된다.
+     */
+    @Test
+    @DisplayName("임기가_갈린_뒤_온_측정은_버린다")
+    void 임기가_갈린_뒤_온_측정은_버린다() {
+        VirtualTimeScheduler 시계 = VirtualTimeScheduler.create();
+        AtomicBoolean 터진다 = new AtomicBoolean(true);
+        AtomicInteger 측정_횟수 = new AtomicInteger();
+        AllocationRound round = AllocationRound.of(() -> true,
+                () -> 터진다.get() ? Mono.error(new IllegalStateException("끊겼다"))
+                        : Mono.just(new TimedDemands(List.of(new CouponDemand("c1", 10, 100)), 읽은_시각)),
+                () -> 10L, () -> 1, grant -> Mono.just(grant.credit()), hash -> Mono.empty(),
+                () -> Instant.ofEpochSecond(1_700_000_000L),
+                () -> Mono.just(CreditSmoother.of(1.0)), SnapshotCodec.create(), () -> 0L);
+        // 첫 측정은 늦게 온다. 그 사이에 임기가 갈리고, 새 임기의 측정은 실패해 창을 연다.
+        round.measuringRewindWith(쿠폰 -> 측정_횟수.incrementAndGet() == 1
+                ? Mono.delay(Duration.ofMillis(300), 시계).thenReturn(RewindCheck.seen(List.of("c1"), 1))
+                : Mono.error(new IllegalStateException("못 읽었다")), ids -> { });
+
+        assertThatThrownBy(() -> round.run().block()).hasMessage("끊겼다");
+        터진다.set(false);
+        round.run().subscribe();
+        시계.advanceTimeBy(Duration.ofMillis(100));
+        round.leadershipLost();
+        round.leadershipAcquired();
+        // 새 임기가 실패해 창이 열린다.
+        터진다.set(true);
+        assertThatThrownBy(() -> round.run().block()).hasMessage("끊겼다");
+        터진다.set(false);
+        round.run().block();
+        assertThat(로그_메시지()).as("전제 — 새 임기의 창이 열렸다")
+                .anyMatch(m -> m.startsWith("되감기 신호를 못 쟀다"));
+
+        // 이제 앞 임기의 측정이 도착한다.
+        시계.advanceTimeBy(Duration.ofMillis(200));
+
+        assertThat(round.rewoundCoupons()).as("지나간 임기의 사건은 안 싣는다").isNaN();
+        assertThat(round.rewoundEvents()).isZero();
+        // 걸러진 완료가 새 임기의 창을 닫으면 그 구간의 해제 로그가 사라진다.
+        assertThat(로그_메시지()).noneMatch(m -> m.startsWith("되감기 신호를 다시 잰다"));
+    }
+
+    /** 안 연 창은 닫았다고 적지 않는다. 승계마다 0 짜리 해제가 세 줄씩 나가면 짝을 세는 뜻이 사라진다. */
+    @Test
+    @DisplayName("승계가_안_연_창은_닫았다고_안_적는다")
+    void 승계가_안_연_창은_닫았다고_안_적는다() {
+        AllocationRound round = round(List.of(new CouponDemand("c1", 10, 100)), 1_000, 1);
+        round.run().block();
+
+        round.leadershipAcquired();
+
+        assertThat(로그_메시지()).noneMatch(m -> m.contains("창을 닫는다"));
+    }
+
+    /** 폴링 예산 초과 창도 같은 자리에서 닫는다. 이 창만 빠지면 그 지표의 해제가 승계에서 영영 안 찍힌다. */
+    @Test
+    @DisplayName("승계가_폴링_예산_초과_창을_닫는다")
+    void 승계가_폴링_예산_초과_창을_닫는다() {
+        AllocationRound round = round(() -> List.of(new CouponDemand("c1", 100_000, 1_000_000)), 10, 1);
+        round.run().block();
+        round.run().block();
+        assertThat(로그_메시지()).anyMatch(m -> m.startsWith("폴링 예산 초과 —"));
+
+        round.leadershipAcquired();
+
+        assertThat(로그_인자("리더십이 갈렸다 — 폴링 예산 초과 창을 닫는다")[0])
+                .as("닫으면서 그동안 넘긴 틱을 남긴다 — 회차마다 하나씩").isEqualTo(2L);
+    }
+
+    /** 적용 실패 창도 같다. 열어 둔 채 승계하면 새 리더의 첫 복귀 로그가 남의 구간까지 센다. */
+    @Test
+    @DisplayName("승계가_적용_실패_창을_닫는다")
+    void 승계가_적용_실패_창을_닫는다() {
+        // 한 회차에 쿠폰 둘이 실패한다. 회차로 세면 1 이라 단위가 갈린다.
+        AllocationRound round = 비동기_회차(() -> true,
+                List.of(new CouponDemand("c1", 10, 100), new CouponDemand("c2", 10, 100)),
+                grant -> Mono.error(new IllegalStateException("끊겼다")));
+        round.run().block();
+        assertThat(로그_메시지()).anyMatch(m -> m.startsWith("배분 적용 실패"));
+
+        round.leadershipAcquired();
+
+        assertThat(로그_인자("리더십이 갈렸다 — 적용 실패 창을 닫는다")[0])
+                .as("센 것은 회차가 아니라 쿠폰별 실패 건수다").isEqualTo(2L);
+    }
+
+    /**
      * <b>접힌 회차는 램프 기준을 안 움직인다.</b> 발행이 안 된 회차가 기준을
      * 올리면 다음 발행이 실제로 나간 값의 배수에서 시작한다.
      */
@@ -1456,7 +2244,7 @@ class AllocationRoundTest {
         round(List.of(new CouponDemand("lost", 100_000, 0, QueueMode.ADAPTIVE),
                 new CouponDemand("live", 100, 100, QueueMode.ADAPTIVE)), 100, 1)
                 .run().block();
-        assertThat(적용).as("접으면 산 쿠폰이 다 가져간다").containsExactly("live=100");
+        assertThat(나간_몫()).as("접으면 산 쿠폰이 다 가져간다").containsExactly("live=100");
         적용.clear();
 
         AllocationRound round = round(List.of(
@@ -1697,6 +2485,22 @@ class AllocationRoundTest {
         assertThat(적용).containsExactly("c1=4");
     }
 
+    /**
+     * <b>기다리는 사람이 있으면 크레딧이 0 이어도 적용을 부른다</b> (CY-942). 적용 스크립트가 사라진 입장 커서를
+     * 되살리는 자리라, 서킷이 열려 크레딧이 0 인 동안 안 부르면 그 내내 순번이 뛴 채로 보이고 청소가 들인 사람을
+     * 이탈로 걷는다. 한산한 쿠폰(대기자 0)은 여전히 안 건드린다 — 지킬 사람이 없다.
+     */
+    @Test
+    @DisplayName("크레딧이_0_이어도_기다리는_쿠폰은_적용을_부른다")
+    void 크레딧이_0_이어도_기다리는_쿠폰은_적용을_부른다() {
+        AllocationRound round = round(
+                List.of(new CouponDemand("c1", 10, 100), new CouponDemand("c2", 0, 100)), 0, 1);
+
+        round.run().block();
+
+        assertThat(적용).as("기다리는 쿠폰만, 들이지 않는 몫으로").containsExactly("c1=0");
+    }
+
     @Test
     @DisplayName("들인_인원을_남긴다")
     void 들인_인원을_남긴다() {
@@ -1753,29 +2557,75 @@ class AllocationRoundTest {
     }
 
     /**
-     * <b>쿠폰 사이에서 잃는 것이 실제 모습이다.</b> 회차 진입에서만 보면, 첫 쿠폰을
-     * 쓰는 동안 리스가 끝난 회차가 남은 쿠폰에 계속 임계를 쓴다.
-     *
-     * <p>둘째 쿠폰에 임계를 쓰면 새 리더가 쓴 값을 덮고, 발행까지 나가면 새 리더가
-     * 이미 나눠 준 크레딧을 스냅샷이 한 번 더 광고한다 — 불변식 2 다.
+     * <b>적용 중에 잃으면 발행하지 않는다.</b> 적용은 동시에 나가 둘째 쿠폰도 이미 보냈다 — 그 쓰기는 적용 스크립트의
+     * 펜스가 막는다(`옛_임기의_적용은_안_들인다`). 발행까지 나가면 새 리더가 나눠 준 몫을 한 번 더 광고한다.
      */
     @Test
-    @DisplayName("쿠폰_사이에서_잃으면_남은_몫이_0이_된다")
-    void 쿠폰_사이에서_잃으면_남은_몫이_0이_된다() {
+    @DisplayName("적용_중에_잃으면_발행하지_않는다")
+    void 적용_중에_잃으면_발행하지_않는다() {
+        VirtualTimeScheduler 시계 = VirtualTimeScheduler.create();
         AtomicBoolean 리더 = new AtomicBoolean(true);
-        AllocationRound round = AllocationRound.of(
-                리더::get,
-                () -> Mono.just(new TimedDemands(
-                        List.of(new CouponDemand("c1", 10, 100),
-                                new CouponDemand("c2", 10, 100)),
-                        읽은_시각)),
-                () -> 8L, () -> 1,
+        AllocationRound round = 비동기_회차(리더::get,
+                List.of(new CouponDemand("c1", 10, 100), new CouponDemand("c2", 10, 100)),
                 grant -> {
-                    // 첫 쿠폰을 쓰는 순간 리스가 끝난다.
-                    리더.set(false);
+                    적용.add(grant.couponId());
+                    // 첫 쿠폰의 답이 오는 순간 리스가 끝났다.
+                    return Mono.delay(Duration.ofMillis(grant.couponId().equals("c1") ? 100 : 200), 시계)
+                            .doOnNext(t -> 리더.set(false))
+                            .thenReturn(grant.credit());
+                });
+
+        AtomicBoolean 끝났다 = new AtomicBoolean();
+        round.run().doOnSuccess(v -> 끝났다.set(true)).subscribe();
+        시계.advanceTimeBy(Duration.ofMillis(300));
+
+        assertThat(적용).as("둘 다 잃기 전에 나갔다").containsExactlyInAnyOrder("c1", "c2");
+        assertThat(발행).isEmpty();
+        assertThat(끝났다).as("발행을 접고 회차는 끝난다").isTrue();
+    }
+
+    /** 차례를 기다리는 사이에 잃으면 적용을 안 보낸다. 새 리더가 펜스를 올리기 전이면 옛 임기의 적용이 들어간다. */
+    @Test
+    @DisplayName("차례를_기다리다_잃으면_적용하지_않는다")
+    void 차례를_기다리다_잃으면_적용하지_않는다() {
+        VirtualTimeScheduler 시계 = VirtualTimeScheduler.create();
+        AtomicBoolean 리더 = new AtomicBoolean(true);
+        AllocationRound round = 비동기_회차(리더::get, List.of(new CouponDemand("c1", 10, 100)),
+                grant -> {
                     적용.add(grant.couponId());
                     return Mono.just(grant.credit());
-                },
+                });
+        round.pacedBy(ApplyPacer.of(Duration.ofSeconds(1), 시계));
+        round.run().subscribe();
+        시계.advanceTimeBy(Duration.ofMillis(300));
+
+        round.run().subscribe();
+        리더.set(false);
+        시계.advanceTimeBy(Duration.ofSeconds(1));
+
+        assertThat(적용).containsExactly("c1");
+    }
+
+    /** 회차는 읽기를 시작할 때 페이서에 알린다. 안 알리면 다음 시작을 읽기만큼 당기지 못해 대기가 틱 시한을 먹는다. */
+    @Test
+    @DisplayName("회차가_읽기_시작을_알린다")
+    void 회차가_읽기_시작을_알린다() {
+        VirtualTimeScheduler 시계 = VirtualTimeScheduler.create();
+        ApplyPacer pacer = ApplyPacer.of(Duration.ofSeconds(1), 시계);
+        AllocationRound round = 비동기_회차(() -> true, List.of(new CouponDemand("c1", 10, 100)),
+                grant -> Mono.just(grant.credit()));
+        round.pacedBy(pacer);
+
+        round.run(Mono.delay(Duration.ofMillis(200), 시계).then()).subscribe();
+        시계.advanceTimeBy(Duration.ofMillis(200));
+
+        assertThat(pacer.holdOff()).isEqualTo(Duration.ofMillis(800));
+    }
+
+    private AllocationRound 비동기_회차(BooleanSupplier 리더, List<CouponDemand> 수요,
+            Function<Grant, Mono<Long>> 적용하기) {
+        return AllocationRound.of(리더, () -> Mono.just(new TimedDemands(수요, 읽은_시각)),
+                () -> 1_000L, () -> 1, 적용하기,
                 hash -> {
                     발행.put("last", hash);
                     return Mono.empty();
@@ -1783,13 +2633,174 @@ class AllocationRoundTest {
                 () -> Instant.ofEpochSecond(1_700_000_000L),
                 () -> Mono.just(CreditSmoother.of(1.0)),
                 SnapshotCodec.create(), () -> 0L);
+    }
 
-        round.run().block();
+    /** 적용은 레디스 쓰기 상한(16)을 안 넘겨 보낸다. 쿠폰이 많은 날 연결 하나에 한꺼번에 쌓지 않는다. */
+    @Test
+    @DisplayName("적용은_열여섯까지만_동시에_보낸다")
+    void 적용은_열여섯까지만_동시에_보낸다() {
+        VirtualTimeScheduler 시계 = VirtualTimeScheduler.create();
+        List<CouponDemand> 수요 = new ArrayList<>();
+        for (int i = 0; i < 20; i++) {
+            수요.add(new CouponDemand("c" + i, 10, 100));
+        }
+        AllocationRound round = 비동기_회차(() -> true, 수요, grant -> {
+            적용.add(grant.couponId());
+            return Mono.delay(Duration.ofMillis(100), 시계).thenReturn(grant.credit());
+        });
 
-        // 옛 리더가 둘째 쿠폰의 임계를 쓰면 새 리더가 쓴 값을 덮는다.
-        assertThat(적용).containsExactly("c1");
-        // 발행도 안 나간다. 나갔으면 새 리더가 나눠 준 몫을 한 번 더 광고한다.
-        assertThat(발행).isEmpty();
+        round.run().subscribe();
+        시계.advanceTime();
+        assertThat(적용).hasSize(16);
+
+        시계.advanceTimeBy(Duration.ofMillis(100));
+        assertThat(적용).hasSize(20);
+    }
+
+    /**
+     * <b>수요 읽기가 실패해도 운영값 읽기를 끊지 않는다.</b> 끊으면 가용량·운영값 갱신이 중간에 취소돼, 수요를 못 읽는
+     * 동안 게이트웨이가 옛 운영값에 머문다.
+     */
+    @Test
+    @DisplayName("수요_읽기가_실패해도_운영값_읽기를_끊지_않는다")
+    void 수요_읽기가_실패해도_운영값_읽기를_끊지_않는다() {
+        VirtualTimeScheduler 시계 = VirtualTimeScheduler.create();
+        AtomicBoolean 끊겼다 = new AtomicBoolean();
+        AtomicBoolean 끝났다 = new AtomicBoolean();
+        AllocationRound round = AllocationRound.of(() -> true,
+                () -> Mono.error(new IllegalStateException("수요 못 읽음")),
+                () -> 30L, () -> 1, grant -> Mono.just(grant.credit()), hash -> Mono.empty(),
+                () -> Instant.ofEpochSecond(1_700_000_000L),
+                () -> Mono.just(CreditSmoother.of(1.0)),
+                SnapshotCodec.create(), () -> 0L);
+        AtomicReference<Throwable> 결과 = new AtomicReference<>();
+
+        round.run(Mono.delay(Duration.ofMillis(250), 시계).then()
+                        .doOnCancel(() -> 끊겼다.set(true))
+                        .doOnSuccess(v -> 끝났다.set(true)))
+                .subscribe(v -> { }, 결과::set);
+        시계.advanceTimeBy(Duration.ofMillis(250));
+
+        assertThat(끊겼다).isFalse();
+        assertThat(끝났다).isTrue();
+        assertThat(결과.get()).as("실패는 그대로 올린다").hasMessage("수요 못 읽음");
+    }
+
+    /**
+     * <b>적용은 앞 회차 적용에서 한 틱 떨어져 나간다</b> (CY-927). 회차 시작 간격은 최소 틱의 4분의 1이라, 끝에
+     * 적용한 느린 회차 뒤에 빠른 회차가 곧바로 적용하면 두 틱 몫이 1초 안에 들어간다.
+     */
+    @Test
+    @DisplayName("적용은_앞_회차_적용에서_한_틱을_띄운다")
+    void 적용은_앞_회차_적용에서_한_틱을_띄운다() {
+        VirtualTimeScheduler 시계 = VirtualTimeScheduler.create();
+        List<Long> 적용_시각 = new CopyOnWriteArrayList<>();
+        AllocationRound round = 비동기_회차(() -> true, List.of(new CouponDemand("c1", 10, 100)),
+                grant -> {
+                    적용_시각.add(시계.now(TimeUnit.MILLISECONDS));
+                    return Mono.just(grant.credit());
+                });
+        round.pacedBy(ApplyPacer.of(Duration.ofSeconds(1), 시계));
+
+        round.run().subscribe();
+        시계.advanceTimeBy(Duration.ofMillis(300));
+        round.run().subscribe();
+        시계.advanceTimeBy(Duration.ofMillis(699));
+        assertThat(적용_시각).containsExactly(0L);
+
+        시계.advanceTimeBy(Duration.ofMillis(1));
+        assertThat(적용_시각).containsExactly(0L, 1000L);
+
+        // 기다린 적용 뒤의 회차도 그 적용에서 한 틱을 띄운다.
+        시계.advanceTimeBy(Duration.ofMillis(300));
+        round.run().subscribe();
+        시계.advanceTimeBy(Duration.ofMillis(700));
+        assertThat(적용_시각).containsExactly(0L, 1000L, 2000L);
+    }
+
+    /** 몫이 없는 회차는 발행만 한다. 간격을 기다리면 낡음 판정이 스케줄러가 멎은 것으로 본다. */
+    @Test
+    @DisplayName("몫이_없는_회차는_간격을_안_기다린다")
+    void 몫이_없는_회차는_간격을_안_기다린다() {
+        VirtualTimeScheduler 시계 = VirtualTimeScheduler.create();
+        ApplyPacer pacer = ApplyPacer.of(Duration.ofSeconds(1), 시계);
+        pacer.turn().subscribe();
+        AllocationRound round = 비동기_회차(() -> true, List.of(new CouponDemand("c1", 0, 100)),
+                grant -> Mono.just(grant.credit()));
+        round.pacedBy(pacer);
+
+        round.run().subscribe();
+        시계.advanceTime();
+
+        assertThat(발행).containsKey("last");
+    }
+
+    /**
+     * <b>쿠폰별 적용은 동시에 나간다</b> (CY-927). 차례로 보내면 레디스 왕복이 쿠폰 수만큼 쌓여 지연 200ms 에서 회차가
+     * 틱을 넘기고 발행이 절반으로 준다. 옛 임기의 쓰기는 적용 스크립트의 펜스가 막는다 — 위 순차 재확인 시험은 동기로
+     * 잃는 경우만 남는다.
+     */
+    @Test
+    @DisplayName("쿠폰별_적용을_동시에_보낸다")
+    void 쿠폰별_적용을_동시에_보낸다() {
+        VirtualTimeScheduler 시계 = VirtualTimeScheduler.create();
+        List<Long> 보낸_시각 = new CopyOnWriteArrayList<>();
+        AllocationRound round = AllocationRound.of(
+                () -> true,
+                () -> Mono.just(new TimedDemands(
+                        List.of(new CouponDemand("c1", 10, 100), new CouponDemand("c2", 10, 100),
+                                new CouponDemand("c3", 10, 100)),
+                        읽은_시각)),
+                () -> 30L, () -> 1,
+                grant -> {
+                    보낸_시각.add(시계.now(TimeUnit.MILLISECONDS));
+                    return Mono.delay(Duration.ofMillis(100), 시계).thenReturn(grant.credit());
+                },
+                hash -> Mono.empty(),
+                () -> Instant.ofEpochSecond(1_700_000_000L),
+                () -> Mono.just(CreditSmoother.of(1.0)),
+                SnapshotCodec.create(), () -> 0L);
+
+        round.run().subscribe();
+        시계.advanceTime();
+
+        assertThat(보낸_시각).as("셋이 같은 순간에 나간다").containsExactly(0L, 0L, 0L);
+        시계.advanceTimeBy(Duration.ofMillis(100));
+    }
+
+    /**
+     * <b>수요는 읽기와 동시에 읽고, 나누기는 읽기가 끝난 뒤에 한다</b> (CY-927). 운영값을 읽기 전에 나누면 방금 바꾼 값이
+     * 한 틱 늦게 나가고, 읽기가 끝날 때까지 수요 읽기를 미루면 그 왕복이 틱을 먹는다.
+     */
+    @Test
+    @DisplayName("수요는_읽기와_동시에_읽고_적용은_읽기_뒤에_보낸다")
+    void 수요는_읽기와_동시에_읽고_적용은_읽기_뒤에_보낸다() {
+        VirtualTimeScheduler 시계 = VirtualTimeScheduler.create();
+        AtomicLong 수요_읽은_시각 = new AtomicLong(-1);
+        AtomicLong 적용_시각 = new AtomicLong(-1);
+        AllocationRound round = AllocationRound.of(
+                () -> true,
+                () -> Mono.fromSupplier(() -> {
+                    수요_읽은_시각.set(시계.now(TimeUnit.MILLISECONDS));
+                    return new TimedDemands(List.of(new CouponDemand("c1", 10, 100)), 읽은_시각);
+                }),
+                () -> 30L, () -> 1,
+                grant -> {
+                    적용_시각.set(시계.now(TimeUnit.MILLISECONDS));
+                    return Mono.just(grant.credit());
+                },
+                hash -> Mono.empty(),
+                () -> Instant.ofEpochSecond(1_700_000_000L),
+                () -> Mono.just(CreditSmoother.of(1.0)),
+                SnapshotCodec.create(), () -> 0L);
+
+        round.run(Mono.delay(Duration.ofMillis(250), 시계).then()).subscribe();
+        시계.advanceTime();
+        assertThat(수요_읽은_시각.get()).as("수요는 읽기를 안 기다린다").isZero();
+        assertThat(적용_시각.get()).as("읽기가 안 끝났으면 안 나눈다").isEqualTo(-1);
+
+        시계.advanceTimeBy(Duration.ofMillis(250));
+        assertThat(적용_시각.get()).isEqualTo(250);
     }
 
     @Test

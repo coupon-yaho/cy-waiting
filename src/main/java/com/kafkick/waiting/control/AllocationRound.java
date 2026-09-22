@@ -16,16 +16,21 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.IntSupplier;
 import java.util.function.LongSupplier;
@@ -34,6 +39,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.util.context.ContextView;
 
 /**
  * 한 회차. 수요를 모아 크레딧을 나누고 적용한 뒤 발행한다. <b>대기 수는 한 번만 읽는다</b>
@@ -43,6 +49,19 @@ import reactor.core.publisher.Mono;
 public final class AllocationRound {
 
     private static final Logger log = LoggerFactory.getLogger(AllocationRound.class);
+
+    /** 동시 적용 상한. 레디스 어댑터의 쓰기 상한과 같다. */
+    private static final int MAX_CONCURRENT_APPLIES = 16;
+
+    /** 회차 상태를 구독마다 따로 담는 자리. 인스턴스 필드로 두면 겹친 구독이 서로의 표시를 덮는다. */
+    private static final String ROUND_STATE = "allocation.round.state";
+
+    /**
+     * 매진이 발행에 실려 나간 쿠폰. 발행이 못 나간 회차는 이 줄만 지운다 (CY-935).
+     *
+     * <p><b>동시성 집합이다</b> — 채우는 곳은 발행 응답(레디스 스레드)이고 비우는 곳은 승계 콜백이다.
+     */
+    private final Set<String> announced = ConcurrentHashMap.newKeySet();
 
     /** 이탈자 청소. <b>멈추는 판단을 안에 들고 있다.</b> */
     private final QueueSweeper sweeper;
@@ -84,6 +103,94 @@ public final class AllocationRound {
      * 레디스가 안 뜬 상태에서 앱이 통째로 안 뜬다 — 이월은 기동의 전제가 아니다.
      */
     private final AtomicReference<CreditSmoother> smoother = new AtomicReference<>();
+
+    /** 이월을 못 받는 동안 이어 쓰는 평활. 이월이 오거나 임기가 바뀌면 버린다. */
+    private final AtomicReference<CreditSmoother> interim = new AtomicReference<>();
+
+    /** 임기마다 한 번 오르는 이월 결과. 받음·없음·대신함을 가르면 승계 뒤 계단의 원인이 읽힌다. */
+    private final AtomicLong carryoverRestored = new AtomicLong();
+    private final AtomicLong carryoverEmpty = new AtomicLong();
+    private final AtomicLong carryoverReplaced = new AtomicLong();
+
+    /** 이월 읽기가 실패한 시도 수. 임기 단위 결과와 세는 단위가 달라 따로 둔다. */
+    private final AtomicLong carryoverFailures = new AtomicLong();
+
+    /** 마지막 회차의 평활값. 지표 스레드가 읽는다. 임기가 바뀌면 비운다. */
+    private volatile double smoothedCredit = Double.NaN;
+
+    /**
+     * 저장소가 뒤로 감긴 사실을 잡는 신호 (CY-856). <b>실패 뒤 첫 회차에만 센다</b> — 평시에 재면 쿠폰마다 왕복이
+     * 늘고, 되감기는 재접속 직후에만 드러난다. 배선 전에는 안 잰다.
+     */
+    private volatile Function<List<String>, Mono<RewindCheck>> rewound;
+
+    /** 활성에서 빠진 쿠폰의 기준을 버리는 자리. 측정이 밀린 동안에는 안 버린다. */
+    private volatile Consumer<List<String>> forgetInactive = ids -> { };
+
+    /** 직전 회차가 터졌는가. 터진 다음 회차가 신호를 재는 자리다. */
+    private final AtomicBoolean roundFailed = new AtomicBoolean();
+
+    /** 마지막으로 센 되감긴 쿠폰 수. */
+    private volatile double rewoundCoupons = Double.NaN;
+
+    /** 신호를 못 잰 누적 횟수. 0 이 아니면 그 장애의 되감기 여부를 모른다. */
+    private final AtomicLong rewindUnmeasured = new AtomicLong();
+
+    /** 되감기를 본 회차의 누적 수. */
+    private final AtomicLong rewoundEvents = new AtomicLong();
+
+    /** 견줄 기준이 없어 못 잰 누적 횟수. 읽기 실패와 뜻이 달라 따로 센다 — 이쪽은 다시 안 잰다. */
+    private final AtomicLong rewindNoBaseline = new AtomicLong();
+
+    /** 되감기 신호를 못 재는 구간. 회복 구간이 이 읽기가 가장 잘 실패하는 구간이다. */
+    private final FailureWindow rewindFailures = FailureWindow.create();
+
+    /**
+     * 이 노드가 본 임기의 세대. <b>늦게 온 측정을 버리는 표다</b> — 읽기는 임기가 갈려도 안 끊기고, 그 결과가 새 임기의
+     * 지표로 들어가면 지나간 사건이 지금 값처럼 보인다.
+     */
+    private final AtomicLong term = new AtomicLong();
+
+    /** 로그에 싣는 쿠폰 수의 상한. 다 실으면 한 줄이 수천 자가 된다. */
+    private static final int REWOUND_LOG_LIMIT = 10;
+
+    /** 적용 간격. 배선 전에는 안 둔다. */
+    private volatile ApplyPacer pacer = ApplyPacer.none();
+
+    /**
+     * 읽은 이월을 자리에 앉힌다. <b>값이 없으면 이 임기의 평활을 앉힌다</b> — 콜드를 앉히면
+     * 데워진 임시 평활이 버려져 다음 관측이 다시 생으로 나간다.
+     */
+    private void carried(CreditSmoother restored) {
+        CreditSmoother warm = interim.get();
+        CreditSmoother chosen = restored.snapshot().seeded() || warm == null ? restored : warm;
+        if (!smoother.compareAndSet(null, chosen)) {
+            return;
+        }
+        interim.set(null);
+        if (restored.snapshot().seeded()) {
+            carryoverRestored.incrementAndGet();
+            log.info("평활화 이월 완료 — {} 에서 잇는다", restored.snapshot().value());
+        } else {
+            carryoverEmpty.incrementAndGet();
+            log.info("평활화 이월할 값이 없다 — {}", warm == null
+                    ? "첫 관측에서 시작한다" : "이 임기의 평활로 잇는다");
+        }
+    }
+
+    /**
+     * 이월을 못 받은 채 발행이 됐다. <b>그 발행이 이월 자리를 덮었다</b> — 앞 리더의 값은
+     * 이제 없고, 다시 읽으면 제 값을 앞 리더의 것으로 센다. 이 임기의 평활을 앉힌다.
+     */
+    private void replacedByPublish(CreditSmoother current) {
+        if (current != interim.get() || !smoother.compareAndSet(null, current)) {
+            return;
+        }
+        interim.set(null);
+        carryoverReplaced.incrementAndGet();
+        log.info("평활화 이월을 못 받은 채 발행이 자리를 덮었다 — {}회차 못 받았다. "
+                + "이 임기의 평활로 잇는다", carryoverMisses.getAndSet(0));
+    }
 
     /** 이월을 이어서 몇 회차 못 받았나. 임기가 바뀌면 0 부터 다시 센다. */
     private final AtomicInteger carryoverMisses = new AtomicInteger();
@@ -251,13 +358,55 @@ public final class AllocationRound {
                 clock, restore, codec, creditFloor, Optional::empty);
     }
 
+    /** 되감기 신호를 잴 자리. 배선이 한 번 건다. */
+    public void measuringRewindWith(Function<List<String>, Mono<RewindCheck>> rewound,
+            Consumer<List<String>> forgetInactive) {
+        this.rewound = Objects.requireNonNull(rewound, "rewound 는 필수다");
+        this.forgetInactive = Objects.requireNonNull(forgetInactive, "forgetInactive 는 필수다");
+    }
+
+    /**
+     * 실패 뒤 첫 회차에 센 되감긴 쿠폰 수. <b>리더가 아니면 NaN 이다</b> — 강등된 노드가 옛 값을 계속 내면 장애가
+     * 끝난 뒤에도 대시보드에 그 값이 붙는다. 아직 안 쟀어도 NaN 이다.
+     */
+    public double rewoundCoupons() {
+        return stillLeader.getAsBoolean() ? rewoundCoupons : Double.NaN;
+    }
+
+    /** 적용 간격을 둔다. 배선이 한 번 건다. */
+    public void pacedBy(ApplyPacer pacer) {
+        this.pacer = Objects.requireNonNull(pacer, "pacer 는 필수다");
+    }
+
     public Mono<Void> run() {
+        return run(Mono.empty());
+    }
+
+    /**
+     * 운영값 읽기와 <b>동시에</b> 수요를 읽고, 두 읽기가 다 끝난 뒤에 나눈다. 앞에 차례로 두면 레디스가 느린 날 그
+     * 왕복이 틱을 먹고, 나누기를 먼저 하면 방금 바꾼 운영값이 한 틱 늦게 나간다.
+     */
+    public Mono<Void> run(Mono<Void> reads) {
         // **재료를 읽은 시각을 재료와 같이 받는다.** 회차가 끝난 시각으로 찍으면
         // 나이가 회차 지속 시간만큼 어리고, 리더 벽시계로 찍으면 노드마다 다르게
         // 낡는다 — 둘 다 낡음 판정을 흔든다.
-        return seeded().then(demands.get()
-                .flatMap(read -> allocate(read.demands(),
-                        Instant.ofEpochSecond(read.readAt()))));
+        return Mono.defer(() -> {
+            pacer.roundStarted();
+            Mono<TimedDemands> read = seeded().then(Mono.defer(demands)).cache();
+            // 수요 읽기의 실패로 운영값 읽기를 취소하지 않는다. 실패는 두 읽기가 끝난 뒤에 올린다.
+            // **되감기도 여기서 같이 낸다** (CY-939). 적용 앞이라는 순서는 지키면서 왕복을 겹친다 —
+            // 차례로 두면 레디스가 느린 날 그 왕복이 틱을 먹어 발행이 한 틱을 통째로 쉰다.
+            return Mono.when(reads, read.then().onErrorResume(e -> Mono.empty()), watchRewind())
+                    .then(read)
+                    .flatMap(timed -> allocate(timed.demands(), Instant.ofEpochSecond(timed.readAt())))
+                    // 터진 회차를 적어 둔다. 재접속 뒤 첫 회차가 되감기 신호를 재는 자리다.
+                    .doOnError(e -> roundFailed.set(true))
+                    // **틱에서 잘린 회차도 실패다.** 느려진 레디스는 오류가 아니라 취소로 끝나는데,
+                    // 되감기를 만드는 failover 가 바로 그 갈래다.
+                    .doOnCancel(() -> roundFailed.set(true));
+        // **구독마다 새 상태를 단다** — 틱에 잘린 회차의 꼬리가 다음 회차와 겹치면, 한 구독의 표시가
+        // 다른 구독의 판단을 바꾼다. 정리를 두 번 돌거나 기준을 잘못 버리는 자리다.
+        }).contextWrite(ctx -> ctx.put(ROUND_STATE, new RoundState()));
     }
 
     /**
@@ -283,18 +432,15 @@ public final class AllocationRound {
                 // 되고, 미관측 폴백은 첫 관측치를 평활 없이 발행한다. 임기 내내 다시
                 // 시도하되 콜드 스무더는 저장하지 않아, 흔들림이 지나가면 이어받는다.
                 .onErrorResume(e -> {
+                    carryoverFailures.incrementAndGet();
                     if (carryoverMisses.incrementAndGet() == CARRYOVER_WARN_AFTER) {
-                        log.warn("평활화 이월을 {}회차 못 받았다 — 그동안 콜드로 돈다",
+                        log.warn("평활화 이월을 {}회차 못 받았다 — 그동안 이 임기의 평활로 돈다",
                                 CARRYOVER_WARN_AFTER);
                     }
                     return Mono.empty();
                 })
                 .doOnNext(restored -> carryoverReturned())
-                .doOnNext(restored -> {
-                    if (smoother.compareAndSet(null, restored)) {
-                        log.info("평활화 이월 완료");
-                    }
-                })
+                .doOnNext(this::carried)
                 .then();
     }
 
@@ -308,11 +454,44 @@ public final class AllocationRound {
     }
 
     /**
+     * 리더십을 잃었다. <b>창은 여기서 닫아야 지속 시간이 리더 구간만 담는다</b> — 되찾는 자리에서 닫으면 비리더
+     * 구간이 섞여 장애가 실제보다 길게 읽힌다.
+     */
+    public void leadershipLost() {
+        overshoot.exited().ifPresent(r -> log.info(
+                "리더십을 잃었다 — 배분 예산 초과 창을 닫는다. {}초 동안 {}틱 넘겼다",
+                r.elapsedSeconds(), r.swallowed()));
+        pollOvershoot.exited().ifPresent(r -> log.info(
+                "리더십을 잃었다 — 폴링 예산 초과 창을 닫는다. {}초 동안 {}틱 넘겼다",
+                r.elapsedSeconds(), r.swallowed()));
+        failures.exited().ifPresent(r -> log.info(
+                "리더십을 잃었다 — 적용 실패 창을 닫는다. {}초 동안 {}건 실패했다",
+                r.elapsedSeconds(), r.swallowed()));
+        // 되감기 표시도 임기를 안 넘긴다. 넘기면 되찾은 노드가 옛 사건을 지금 값처럼 낸다.
+        roundFailed.set(false);
+        rewindFailures.exited().ifPresent(r -> log.info(
+                "리더십을 잃었다 — 되감기 측정 실패 창을 닫는다. {}초 동안 {}회차 못 쟀다",
+                r.elapsedSeconds(), r.swallowed()));
+        term.incrementAndGet();
+    }
+
+    /**
      * 리더가 됐다. 조인 적 없는 노드는 램프가 안 걸려 첫 회차가 목표까지 뛴다.
      *
      * @param publishedCredit 마지막으로 본 발행 몫. 모르면 음수 — 앞 임기 기준을 잇는다
      */
     public void leadershipAcquired(long publishedCredit) {
+        leadershipAcquired(publishedCredit, List.of());
+    }
+
+    /**
+     * 승계한다. <b>발행된 스냅샷의 매진 쿠폰을 씨앗으로 받는다</b> (CY-935) — 표시가 리더 메모리라
+     * 승계에서 사라지는데, 상한 중에는 발행이 늘 거부돼 새 리더가 그것을 다시 채울 길이 없다.
+     * 그러면 줄을 지워 메모리를 줄일 경로가 승계 한 번에 죽는다.
+     *
+     * @param publishedSoldOut 발행된 스냅샷이 매진이라고 적은 쿠폰들. 노드가 이미 받아 간 사실이다
+     */
+    public void leadershipAcquired(long publishedCredit, Collection<String> publishedSoldOut) {
         if (publishedCredit >= 0) {
             releaseRamp.resumeFrom(publishedCredit);
             // **원인을 적어 둔다.** 안 적으면 다음 회차의 램프 진입 로그가
@@ -324,7 +503,22 @@ public final class AllocationRound {
             log.warn("승계 — 발행 몫을 모른다. 앞 임기 기준이 있으면 그것을 이어 쓴다");
         }
         smoother.set(null);
-        carryoverMisses.set(0);
+        interim.set(null);
+        smoothedCredit = Double.NaN;
+        // 나간 매진 표시는 발행된 스냅샷에서 다시 세운다. 앞 임기의 메모리를 이어 쓰면 아직 아무
+        // 노드도 못 받은 매진의 줄을 지우고, 통째로 비우면 상한 중 승계에서 정리가 영영 안 돈다.
+        announced.clear();
+        announced.addAll(publishedSoldOut);
+
+        // 되감기 신호도 임기마다 비운다. 앞 임기의 값이 이번 임기 것으로 읽힌다.
+        rewoundCoupons = Double.NaN;
+        roundFailed.set(false);
+        term.incrementAndGet();
+        // **이월 실패 창도 닫는다.** 조용히 버리면 찍힌 진입 경고에 해제가 영영 없다.
+        int missed = carryoverMisses.getAndSet(0);
+        if (missed > 0) {
+            log.info("리더십이 갈렸다 — 이월 실패 창을 닫는다. {}회차 못 받았다", missed);
+        }
         // **조임 창도 닫는다.** 안 닫으면 회복 로그가 비리더 구간까지 포함한 지속
         // 시간을 찍는다. 버렸다는 것은 남긴다 — 조용히 버리면 찍힌 진입 경고 하나에
         // 해제가 영영 안 생긴다.
@@ -332,6 +526,14 @@ public final class AllocationRound {
                 "리더십이 갈렸다 — 조임 창을 닫는다. 그동안 {}틱 조였다", r.swallowed()));
         ramping.exited().ifPresent(r -> log.info(
                 "리더십이 갈렸다 — 램프 창을 닫는다. 그동안 {}틱 올렸다", r.swallowed()));
+        // **나머지 창도 같이 닫는다** (CY-824). 강등에서 이미 닫았으면 여기서는 아무 일도 안 한다 — 강등 콜백을
+        // 못 받고 넘어온 경우에만 남는 그물이다. 지속 시간은 비리더 구간이 섞여 강등 쪽에서만 적는다.
+        overshoot.exited().ifPresent(r -> log.info(
+                "리더십이 갈렸다 — 배분 예산 초과 창을 닫는다. 그동안 {}틱 넘겼다", r.swallowed()));
+        pollOvershoot.exited().ifPresent(r -> log.info(
+                "리더십이 갈렸다 — 폴링 예산 초과 창을 닫는다. 그동안 {}틱 넘겼다", r.swallowed()));
+        failures.exited().ifPresent(r -> log.info(
+                "리더십이 갈렸다 — 적용 실패 창을 닫는다. 그동안 {}건 실패했다", r.swallowed()));
         // **램프 기준은 안 버린다.** 브레이크라서 그렇다 — 모른다는 것이 놓을 이유가
         // 되면 회복 도중 승계가 끼는 순간 계단이 복원된다. 회차 타임아웃과 레디스
         // 압박이 겹치는 구간이 곧 리더가 바뀌기 가장 쉬운 구간이라 드물지도 않다.
@@ -408,15 +610,19 @@ public final class AllocationRound {
 
     private Mono<Void> allocate(List<CouponDemand> collected, Instant readAt) {
         // **이월을 못 받았어도 회차는 돈다.** 여기서 멈추면 레디스가 흔들릴 때 배분이
-        // 통째로 안 시작한다. 다만 그 스무더를 저장하지는 않는다 — 저장하면 흔들림이
-        // 지나가도 그 임기 내내 콜드로 남는다.
+        // 통째로 안 시작한다. 그 스무더는 이월 자리에 저장하지 않는다 — 저장하면 흔들림이
+        // 지나가도 그 임기 내내 콜드로 남는다. 대신 임시로 이어 쓴다 — 회차마다 새로
+        // 만들면 실패가 이어지는 내내 관측치가 생으로 나간다.
         CreditSmoother carried = smoother.get();
-        CreditSmoother current = carried == null ? CreditSmoother.of(CreditSmoother.DEFAULT_ALPHA) : carried;
+        CreditSmoother current = carried != null ? carried : interim.updateAndGet(
+                s -> s == null ? CreditSmoother.of(CreditSmoother.DEFAULT_ALPHA) : s);
         // **하한은 평활 뒤에 건다.** 하한은 관측이 아니라 정책이다. 평활을 거치면
         // 앞선 낮은 값에서 올라오는 데 열 틱이 넘고, 그동안 노드당 몫이 유휴 비율
         // 아래에 머물러 한산 통과 상한이 0 이다 — 한산한 쿠폰은 줄 없이 통과해야 한다.
         long observed = Math.max(0, globalCredit.getAsLong());
-        long smoothed = Math.round(current.observe(observed));
+        double smoothedValue = current.observe(observed);
+        smoothedCredit = smoothedValue;
+        long smoothed = Math.round(smoothedValue);
         // **서킷은 평활과 하한 뒤에 건다.** 앞에 걸면 평활이 0 을 천천히 내리는 사이
         // 첫 회차에 수천이 그대로 나간다. 서킷은 관측이 아니라 사실이라 정책인 하한보다
         // 뒤다. 회차마다 한 번만 읽는다 — 두 번 읽으면 한 회차가 자기모순이 된다.
@@ -436,7 +642,8 @@ public final class AllocationRound {
         // 전진시키면 다음 발행이 실제로 나간 값의 배수에서 시작한다.
         ReleaseRamp.State before = releaseRamp.snapshot();
         long credit = releaseRamp.next(allowed, Math.max(floorNow, r1Minimum), gatedNow);
-        Map<String, Long> granted = new LinkedHashMap<>();
+        // 적용이 동시에 돌며 실패한 몫을 접으므로 잠근다. 순서는 발행이 쓰므로 그대로 둔다.
+        Map<String, Long> granted = Collections.synchronizedMap(new LinkedHashMap<>());
         allocator.allocate(credit, collected).forEach(g -> granted.put(g.couponId(), g.credit()));
 
         if (lostLeadership()) {
@@ -446,8 +653,27 @@ public final class AllocationRound {
         watchBudget(credit, observed);
         AtomicBoolean anyFailed = new AtomicBoolean();
         AtomicBoolean published = new AtomicBoolean();
-        return Flux.fromIterable(collected)
-                .concatMap(demand -> applyOne(demand, granted, anyFailed))
+        boolean anyCredit = granted.values().stream().anyMatch(c -> c > 0);
+        return Mono.deferContextual(ctx -> {
+            rememberIds(state(ctx), collected);
+            return runRound(collected, granted, credit, readAt, current, anyFailed, published,
+                    anyCredit, before, gatedNow, target);
+        });
+    }
+
+    /** 적용부터 발행·정리·걷기까지. 구독 문맥을 받은 뒤에 도는 자리다. */
+    private Mono<Void> runRound(List<CouponDemand> collected, Map<String, Long> granted,
+            long credit, Instant readAt, CreditSmoother current, AtomicBoolean anyFailed,
+            AtomicBoolean published, boolean anyCredit, ReleaseRamp.State before,
+            boolean gatedNow, long target) {
+        // 적용이 실패한 쿠폰. 동시에 보내므로 여러 갈래가 함께 쓴다.
+        Set<String> applyFailed = ConcurrentHashMap.newKeySet();
+        return (anyCredit ? pacer.turn() : Mono.<Void>empty())
+                .thenMany(Flux.fromIterable(collected))
+                // **동시에 보낸다.** 차례로 보내면 왕복이 쿠폰 수만큼 쌓여 레디스가 느린 날 회차가 틱을
+                // 넘기고 발행이 잘린다. 옛 임기의 쓰기는 적용 스크립트의 펜스가 막는다.
+                .flatMap(demand -> applyOne(demand, granted, anyFailed, applyFailed),
+                        MAX_CONCURRENT_APPLIES)
                 .reduce(0L, Long::sum)
                 // **실제로 들어온 수는 나눠 준 수와 다르다.** 큐가 몫보다 짧으면
                 // 남고, 적용이 실패하면 0 이다. 안 남기면 크레딧이 어디서 새는지
@@ -481,6 +707,9 @@ public final class AllocationRound {
                         .doOnSuccess(done -> {
                             published.set(true);
                             watchRamp(gatedNow, credit, target);
+                            // **나간 매진을 적어 둔다.** 노드가 모르는 채로 줄이 사라지면 낡은
+                            // 스냅샷을 든 노드가 그 사람을 맨 뒤에 세운다 — 순번 역행이다.
+                            announce(couponsOf(collected, granted));
                         })
                         // **발행 뒤에 지운다.** 앞에 두면 방금 지운 큐가 이번
                         // 재료에 아직 대기자로 실려 없는 줄에 크레딧이 나간다. 미루지
@@ -488,11 +717,134 @@ public final class AllocationRound {
                         .then(Mono.defer(() -> cleanUp(collected, granted)))
                         // **정리 뒤에 쓴다.** 앞에 두면 곧 지울 줄을 훑느라
                         // 예산을 쓴다.
-                        .then(Mono.defer(() -> sweepUp(collected, granted)))))
+                        .then(Mono.defer(() -> sweepUp(collected, granted, applyFailed)))
+                        // **발행이 못 나가도 이미 나간 매진은 정리한다.** 상한에 닿으면 발행의
+                        // 첫 쓰기가 거부되는데, 거기 묶어 두면 줄을 지워 메모리를 줄일 유일한
+                        // 경로가 같이 막혀 운영자가 한도를 올려야만 풀린다.
+                        //
+                        // **한 회차에 두 번 안 센다.** 정리가 터져 여기로 와도 다시 세면 유예 셈이
+                        // 두 번 올라 덜 채운 줄이 지워진다 — 되돌릴 수 없는 쓰기다.
+                        .onErrorResume(e -> Mono.deferContextual(ctx ->
+                                state(ctx).cleanedUp.get() ? Mono.<Void>empty()
+                                        : cleanUp(announced(couponsOf(collected, granted))))
+                                .then(Mono.error(e)))))
                 // 발행까지 못 간 회차가 기준을 올리면 다음 성공이 그 배수의
                 // 배수에서 시작한다. 틱을 넘겨 잘린 회차는 오류가 아니라 취소다.
                 .doOnError(e -> restoreUnpublished(published, before))
                 .doOnCancel(() -> restoreUnpublished(published, before));
+    }
+
+    /**
+     * 되감기 신호를 잰다. <b>터진 회차 다음, 적용 앞에서 읽는다</b> — 적용이 임계를 다시 쓰면 기준이 방금 쓴 값이 되고,
+     * 되감기가 해를 끼치는 쿠폰이 정확히 그 쿠폰들이다. 못 재면 표시를 되돌려 다음 회차가 다시 잰다.
+     */
+    private Mono<Void> watchRewind() {
+        return Mono.deferContextual(ctx -> watchRewind(state(ctx)));
+    }
+
+    private Mono<Void> watchRewind(RoundState state) {
+        Function<List<String>, Mono<RewindCheck>> reader = rewound;
+        // **회차의 목록을 안 넘긴다.** 읽는 쪽이 자기가 쓴 임계와 합쳐 보므로, 이 회차의 쿠폰은 보탤 것이
+        // 없다 — 안 넘기면 수요를 기다리지 않아도 돼 읽기를 처음부터 나란히 낼 수 있다 (CY-939).
+        List<String> ids = List.of();
+        if (reader == null || !roundFailed.compareAndSet(true, false)) {
+            state.rewindMeasured.set(false);
+            return Mono.empty();
+        }
+        state.rewindMeasured.set(true);
+        long startedTerm = term.get();
+        return reader.apply(ids)
+                .filter(seen -> sameTerm(startedTerm))
+                .doOnNext(this::rewindSeen)
+                .doOnSuccess(done -> {
+                    // **닫는 것도 같은 임기만 한다.** 걸러진 완료가 새 임기의 창을 닫으면 그 구간의 해제 로그가 사라진다.
+                    if (!sameTerm(startedTerm)) {
+                        return;
+                    }
+                    rewindFailures.exited().ifPresent(recovered -> log.info(
+                            "되감기 신호를 다시 잰다 — {}초 만에, 그동안 {}회차 못 쟀다",
+                            recovered.elapsedSeconds(), recovered.swallowed()));
+                })
+                .onErrorResume(e -> {
+                    if (!sameTerm(startedTerm)) {
+                        return Mono.empty();
+                    }
+                    // 다음 회차가 다시 잰다. 조용히 버리면 그 장애의 되감기 여부를 영영 모른다.
+                    roundFailed.set(true);
+                    rewindUnmeasured.incrementAndGet();
+                    // 회복 구간이 이 읽기가 가장 잘 실패하는 구간이다. 구간의 첫 건만 남긴다.
+                    if (rewindFailures.entered()) {
+                        log.warn("되감기 신호를 못 쟀다 — 다음 회차에 다시 잰다: {}", e.toString());
+                    }
+                    return Mono.empty();
+                })
+                .then();
+    }
+
+    /**
+     * 활성에서 빠진 쿠폰의 기준을 버린다. <b>잰 회차에는 안 버린다</b> — 측정이 밀린 동안 버리면 기준째로
+     * 사라지고, 되감기가 활성 목록을 비운 회차가 증거를 지우면 다음 실패에 잴 기준이 없다.
+     */
+    private void rememberIds(RoundState state, List<CouponDemand> collected) {
+        List<String> ids = collected.stream().map(CouponDemand::couponId).toList();
+        if (!ids.isEmpty() && !state.rewindMeasured.get()) {
+            forgetInactive.accept(ids);
+        }
+    }
+
+    /** 이 구독의 회차 상태. 없으면 구독 밖에서 부른 것이다 — 그건 배선이 틀린 것이다. */
+    private RoundState state(ContextView ctx) {
+        return ctx.get(ROUND_STATE);
+    }
+
+    /** 한 구독이 도는 동안의 표시들. 겹친 구독끼리 안 섞이게 구독 문맥에 단다. */
+    private static final class RoundState {
+
+        /** 이 구독이 정리를 이미 돌았는가. 실패 갈래가 같은 구독에서 또 세는 것을 막는다. */
+        private final AtomicBoolean cleanedUp = new AtomicBoolean();
+
+        /** 이 구독이 되감기를 쟀는가. 잰 구독은 목록을 안 버린다. */
+        private final AtomicBoolean rewindMeasured = new AtomicBoolean();
+    }
+
+    /** 읽는 사이에 임기가 갈렸으면 버린다. 지나간 임기의 사건이 지금 값으로 들어간다. */
+    private boolean sameTerm(long startedTerm) {
+        return term.get() == startedTerm;
+    }
+
+    /** 본 것을 남긴다. <b>기준이 없으면 깨끗한 것이 아니라 못 잰 것이다.</b> */
+    private void rewindSeen(RewindCheck seen) {
+        if (seen.measured() == 0) {
+            rewoundCoupons = Double.NaN;
+            rewindNoBaseline.incrementAndGet();
+            log.info("되감기를 견줄 기준이 없다 — 이 노드가 아직 아무 쿠폰에도 안 들였다");
+            return;
+        }
+        rewoundCoupons = seen.rewound().size();
+        if (seen.rewound().isEmpty()) {
+            log.debug("직전 회차 실패 뒤 첫 회차 — 되감긴 쿠폰 없다. 쿠폰 {}개를 견줬다", seen.measured());
+            return;
+        }
+        rewoundEvents.incrementAndGet();
+        log.warn("저장소가 뒤로 감겼다 — rewound={}, measured={}, coupons={}. 이번 회차의 적용이 입장 커서를 "
+                        + "되살린다. 리더가 바뀌었으면 기억이 없어 못 되살리니 그 쿠폰들의 순번 역행을 확인하라",
+                seen.rewound().size(), seen.measured(),
+                seen.rewound().stream().limit(REWOUND_LOG_LIMIT).toList());
+    }
+
+    /** 되감긴 회차의 누적 수. 게이지는 마지막 값을 붙들고 있어 지나간 사건을 이걸로 센다. */
+    public double rewoundEvents() {
+        return rewoundEvents.get();
+    }
+
+    /** 견줄 기준이 없어 못 잰 누적 횟수. */
+    public double rewindNoBaseline() {
+        return rewindNoBaseline.get();
+    }
+
+    /** 되감기 신호를 못 잰 누적 횟수. */
+    public double rewindUnmeasured() {
+        return rewindUnmeasured.get();
     }
 
     /**
@@ -512,7 +864,38 @@ public final class AllocationRound {
      * <p><b>정리 실패가 배분을 막지 않는다.</b> 다음 틱에 다시 온다.
      */
     private Mono<Void> cleanUp(List<CouponDemand> collected, Map<String, Long> granted) {
-        List<String> due = cleanup.due(couponsOf(collected, granted));
+        // **돌았다고 먼저 적는다.** 터져도 실패 갈래가 같은 구독에서 다시 세면 유예가 두 배로 오른다.
+        return Mono.deferContextual(ctx -> {
+            state(ctx).cleanedUp.set(true);
+            return cleanUp(couponsOf(collected, granted));
+        });
+    }
+
+    /** 이미 나간 매진만 남긴다. 발행이 못 나간 회차는 이것만 본다. */
+    private Map<String, CouponState> announced(Map<String, CouponState> coupons) {
+        Map<String, CouponState> left = new LinkedHashMap<>();
+        coupons.forEach((couponId, state) -> {
+            if (announced.contains(couponId)) {
+                left.put(couponId, state);
+            }
+        });
+        return left;
+    }
+
+    /** 발행에 실린 매진을 적고, 재입고된 쿠폰은 지운다. */
+    private void announce(Map<String, CouponState> coupons) {
+        coupons.forEach((couponId, state) -> {
+            if (state.soldOut()) {
+                announced.add(couponId);
+            } else {
+                announced.remove(couponId);
+            }
+        });
+        announced.retainAll(coupons.keySet());
+    }
+
+    private Mono<Void> cleanUp(Map<String, CouponState> coupons) {
+        List<String> due = cleanup.due(coupons);
         List<String> claimed = cleanup.claimed();
         if (due.isEmpty() && claimed.isEmpty()) {
             return Mono.empty();
@@ -555,16 +938,23 @@ public final class AllocationRound {
                 .then());
     }
 
-    /** 이탈자를 걷어 낸다. 멈춰야 할 구간은 스위퍼가 안다. */
-    private Mono<Void> sweepUp(List<CouponDemand> collected, Map<String, Long> granted) {
+    /**
+     * 이탈자를 걷어 낸다. 멈춰야 할 구간은 스위퍼가 안다.
+     *
+     * <p>적용이 실패한 쿠폰을 넘기는 이유는 CY-947 이다 — 못 되살린 커서 위에서 걷으면 들인 사람이 걷힌다.
+     */
+    private Mono<Void> sweepUp(List<CouponDemand> collected, Map<String, Long> granted,
+            Set<String> applyFailed) {
         if (lostLeadership()) {
             return Mono.empty();
         }
+        // **맵은 줄이지 않는다.** 게이트가 넘겨받은 맵을 이번 틱의 전부로 보고 없는 쿠폰의 재개 유예를
+        // 지우므로, 여기서 빼면 한 틱을 보호하는 대신 그 쿠폰의 유예가 통째로 사라진다.
         return sweeper.run(couponsOf(collected, granted),
                 // **리더가 신선한 것과 노드들이 신선한 것은 다르다.** 생존 신호는 노드
                 // 쪽 폴링이 갱신하므로 그쪽이 멎어도 리더의 수요 읽기는 성공한다. 이
                 // 노드도 게이트웨이라 자기 재료의 나이가 그 신호에 가장 가깝다.
-                dataStale.getAsBoolean()).then();
+                dataStale.getAsBoolean(), applyFailed).then();
     }
 
     /**
@@ -624,14 +1014,42 @@ public final class AllocationRound {
         return pollBudgetOvershootTicks.get();
     }
 
+    /** 이월을 값째 받은 누적 임기 수. */
+    public double carryoverRestored() {
+        return carryoverRestored.get();
+    }
+
+    /** 이월을 읽었는데 이을 값이 없던 누적 임기 수. */
+    public double carryoverEmpty() {
+        return carryoverEmpty.get();
+    }
+
+    /** 못 받은 채 이 임기의 발행이 이월 자리를 덮은 누적 임기 수. */
+    public double carryoverReplaced() {
+        return carryoverReplaced.get();
+    }
+
+    /** 이월 읽기가 실패한 누적 시도 수. 한 임기에서 여러 번 오를 수 있다. */
+    public double carryoverFailures() {
+        return carryoverFailures.get();
+    }
+
+    /** 마지막 회차의 평활값. <b>리더가 아니면 NaN 이다</b> — 굳은 값이 섞이면 못 읽는다. */
+    public double smoothedCredit() {
+        return stillLeader.getAsBoolean() ? smoothedCredit : Double.NaN;
+    }
+
     /**
      * <b>적용이 실패해도 그 쿠폰을 빼지 않는다.</b> 빠지면 판정에서 없는 쿠폰이
      * 되어 매진으로 보이는데, 적용이 안 된 것과 매진은 전혀 다른 상태다.
      */
     private Mono<Long> applyOne(CouponDemand demand, Map<String, Long> granted,
-            AtomicBoolean anyFailed) {
+            AtomicBoolean anyFailed, Set<String> applyFailed) {
         long credit = granted.getOrDefault(demand.couponId(), 0L);
-        if (credit <= 0) {
+        // **기다리는 사람이 있으면 크레딧이 0 이어도 부른다** (CY-942). 적용이 사라진 입장 커서를 되살리는 자리라,
+        // 서킷이 열린 동안 안 부르면 그 내내 순번이 뛰고 청소가 들인 사람을 걷는다. 한산한 쿠폰은 지킬 사람이
+        // 없으니 안 부른다 — 수백 개면 그만큼 왕복이 늘어 틱이 밀린다.
+        if (credit <= 0 && demand.waiting() <= 0) {
             return Mono.just(0L);
         }
         // **쓰기 직전에 다시 묻는다.** 쿠폰이 많으면 이 루프가 한 틱을 꽉 채우고,
@@ -644,6 +1062,8 @@ public final class AllocationRound {
                 // 쿠폰마다 찍으면 단절 한 번에 쿠폰 수만큼 곱해진다.
                 .doOnError(e -> {
                     anyFailed.set(true);
+                    // **같은 회차의 청소에서 뺀다** (CY-947). 커서를 못 되살린 채 앞줄을 걷으면 들인 사람이 이탈로 걷힌다.
+                    applyFailed.add(demand.couponId());
                     // 임계가 안 올라갔으니 몫도 0 으로 접는다. 안 그러면 노드들이
                     // 일어나지 않은 배수율로 대기 시간을 계산한다.
                     granted.put(demand.couponId(), 0L);
@@ -735,6 +1155,7 @@ public final class AllocationRound {
                 .doOnSuccess(done -> {
                     watchPollBudget(budget);
                     stockUnknownTicks.addAndGet(unknown);
+                    replacedByPublish(current);
                 });
     }
 

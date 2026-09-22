@@ -1,6 +1,7 @@
 package com.kafkick.waiting.control;
 
 import com.kafkick.waiting.adapter.redis.AllocationRedisPort;
+import com.kafkick.waiting.adapter.redis.FenceSeal;
 import com.kafkick.waiting.domain.routing.AllowedDestinations;
 import com.kafkick.waiting.routing.RoutingProperties;
 import java.time.Duration;
@@ -12,6 +13,12 @@ import com.kafkick.waiting.domain.queue.GraceRetention;
 import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BooleanSupplier;
+import java.util.function.Function;
+import java.util.function.LongSupplier;
+import java.util.function.Supplier;
 import reactor.core.publisher.Mono;
 import java.time.Instant;
 import java.util.Optional;
@@ -89,7 +96,8 @@ public class ControlPlaneConfig {
     AllocationRound allocationRound(DemandCollector collector, AllocationRedisPort port,
             GatewayRegistry registry, CapacityCollector capacity, Leadership leadership,
             TunablesRefresh tunables, ControlPlaneProperties properties,
-            SoldOutCleanup cleanup, QueueSweeper sweeper, SnapshotHolder holder) {
+            SoldOutCleanup cleanup, QueueSweeper sweeper, SnapshotHolder holder,
+            Scheduler allocationScheduler, ApplyPacer applyPacer) {
         SnapshotCodec codec = SnapshotCodec.create();
         AllocationRound round = AllocationRound.of(leadership::isLeader, collector::collect,
                 capacity::lastKnown,
@@ -98,8 +106,8 @@ public class ControlPlaneConfig {
                 // 번호로 나가고, 그것이 울타리가 막으려던 바로 그 경우다.
                 grant -> port.apply(grant, leadership.fence()),
                 hash -> port.publish(hash, leadership.fence()), Instant::now,
-                () -> port.load().map(hash ->
-                        CreditSmoother.restore(CreditSmoother.DEFAULT_ALPHA, codec.smoothing(hash))),
+                carryover(port::loadFields, codec, properties.scheduler().tick(),
+                        allocationScheduler),
                 codec, capacity::lastFloor, tunables::current,
                 // **유예를 값으로 정한다.** 스냅샷 낡음 한계보다 충분히
                 // 커야 마지막 폴링이 줄을 안 잃는다.
@@ -123,6 +131,16 @@ public class ControlPlaneConfig {
                 // 레디스를 치지 않으려면 이 길밖에 없다. 합산에 든 값 그대로라 갓 뜬
                 // 인스턴스의 램프가 깎은 몫이 여기에도 실린다.
                 capacity::routable);
+        // 회차 시작 간격만 틱에 맞추면 적용 둘이 1초 안에 들어갈 수 있다. 적용끼리 한 틱을 띄운다.
+        round.pacedBy(applyPacer);
+        // 되감기를 직접 잡는 신호가 없다. 실패 뒤 첫 회차에 우리가 쓴 임계와 견줘 지표로 낸다 (CY-856).
+        // 샤드가 여럿이면 샤드 0 만 봐 신호가 1/N 로 줄어든다. 그때는 아예 안 건다.
+        if (properties.scheduler().shards() == 1) {
+            round.measuringRewindWith(
+                    ids -> port.rewindCheck(ids).timeout(properties.scheduler().tick().dividedBy(4),
+                            allocationScheduler),
+                    port::forgetInactive);
+        }
         return round;
     }
 
@@ -187,6 +205,23 @@ public class ControlPlaneConfig {
                         AllocationRedisPort::applyFenced)
                 .description("울타리가 막은 입장 적용 건수. 쿠폰마다 오르므로 회차 수가 아니다")
                 .register(meters);
+        // **되살림은 실패 없이 지나간다** (CY-945). 되감기 신호는 회차가 실패한 뒤에만 재므로, 흡수된 승격은
+        // 되살림만 조용히 일어난다. 폭까지 내야 한 번의 큰 되살림과 잦은 작은 되살림이 갈린다.
+        FunctionCounter.builder("waiting.allocation.heal.events", port,
+                        AllocationRedisPort::healed)
+                .description("사라진 입장 커서를 되살린 건수. 0 이 아니면 그 사이 승격이나 잘림이 있었다")
+                .register(meters);
+        FunctionCounter.builder("waiting.allocation.heal.span", port,
+                        AllocationRedisPort::healedSpan)
+                .description("되살린 폭의 합(마이크로초 score). 커서가 없던 되살림은 폭을 몰라 안 들어간다")
+                .register(meters);
+        // **거부와 단절을 가른다** (CY-970). 상한 중에는 하트비트가 초록이라 노드 쪽이 조용하고,
+        // 재료가 낡았다는 신호만으로는 메모리를 줄여야 하는지 연결을 기다려야 하는지가 안 짚인다.
+        FunctionCounter.builder("waiting.redis.write.refused", port,
+                        AllocationRedisPort::writeRefused)
+                .tag("path", "publish")
+                .description("레디스가 상한으로 거부한 발행 건수")
+                .register(meters);
         return InvariantMetrics.bind(round, port.clockSkew(), meters, port::markersDropped,
                 registry::passRate);
     }
@@ -223,10 +258,12 @@ public class ControlPlaneConfig {
     /** 멈추는 판단을 생성자가 필수로 받는다 — 빠뜨리면 컴파일이 안 된다. */
     @Bean
     QueueSweeper queueSweeper(AllocationRedisPort port, ControlPlaneProperties properties,
-            MeterRegistry meters) {
+            Leadership leadership, MeterRegistry meters) {
         return QueueSweeper.of(SweepGate.of(properties.scheduler().tick(), PollIntervalPolicy.aliveTtl()),
+                // **임기를 회차마다 다시 읽는다.** 붙잡아 두면 강등된 뒤에도 옛
+                // 번호로 걷는다 — 그것이 유령이 큐를 부수는 자리다.
                 (ids, scanLimit, removeFront) -> port.sweep(ids, Instant.now().getEpochSecond(),
-                        scanLimit, GRACE_SEC, SWEEP_BUDGET, removeFront),
+                        scanLimit, GRACE_SEC, SWEEP_BUDGET, removeFront, leadership.fence()),
                 meters);
     }
 
@@ -248,7 +285,10 @@ public class ControlPlaneConfig {
             // 한 번도 못 본다. 램프 출발점은 발행된 몫이되 낡으면 한산 통과가 살아 있는
             // 최소 몫 — 0 에서 오르면 한산한 쿠폰이 줄을 서고, 낡은 큰 값은 브레이크를 푼다.
             SnapshotHolder.View seen = holder.view();
-            round.leadershipAcquired(startingCredit(seen, holder, registry));
+            // **나간 매진을 스냅샷에서 이어 받는다** (CY-935). 표시가 리더 메모리라 승계에서
+            // 사라지는데, 상한 중에는 발행이 늘 거부돼 새 리더가 다시 채울 길이 없다.
+            round.leadershipAcquired(startingCredit(seen, holder, registry),
+                    publishedSoldOut(seen));
             // **매진 유예를 처음부터 준다.** 얼어 있던 셈을 이어 쓰면 유예가
             // 설정값이 아니라 "내가 리더였던 틱 수" 가 되고, 그 둘은 장애
             // 중에 갈린다.
@@ -261,14 +301,20 @@ public class ControlPlaneConfig {
     }
 
     /**
-     * 승계 직후 활성 쿠폰의 문을 잠근다. <b>못 잠가도 회차는 돈다</b> — 안 잠긴
-     * 쿠폰은 적용이 그 자리에서 다시 막으므로, 여기서 막으면 회복만 늦어진다.
-     *
-     * <p><b>매진 큐 삭제의 문도 같이 잠근다</b> (CY-894). 그쪽 표는 후보가 될 때
-     * 서므로 승계와 첫 틱 사이가 비고, 그 창의 쓰기는 되돌릴 수 없다. 한 스크립트로
-     * 둘을 잠근다 — 표마다 왕복하면 배분이 안 도는 시간이 곱해진다.
+     * 승계 직후 활성 쿠폰과 매진 큐 삭제의 문을 한 스크립트로 잠근다 (CY-894). <b>못 잠가도 회차는 돈다</b> — 안 잠긴
+     * 쿠폰은 크레딧이 붙은 적용이 다시 막는다. 크레딧 0 인 동안은 새 임기를 안 찍어 옛 리더의 늦은 몫이 지나갈 수 있다.
      */
-    Runnable sealFences(AllocationRedisPort port, Leadership leadership, SealGate gate) {
+    Runnable sealFences(AllocationRedisPort port, Leadership leadership, SealGate gate,
+            Duration deadline, Scheduler scheduler) {
+        return sealFences(port, leadership, gate, deadline, scheduler, ApplyPacer.none());
+    }
+
+    /**
+     * 잠그면서 앞 리더의 마지막 적용 나이를 페이서에 넘긴다. <b>승계 대기는 발행 나이만 본다</b> — 발행이 잘리고 적용만
+     * 들어간 채 넘겨받으면 새 리더의 첫 적용이 앞 적용과 1초 안에 겹쳐 뒷단 유입이 두 배가 된다.
+     */
+    Runnable sealFences(AllocationRedisPort port, Leadership leadership, SealGate gate,
+            Duration deadline, Scheduler scheduler, ApplyPacer pacer) {
         return () -> {
             long generation = gate.sealing();
             long fence = leadership.fence();
@@ -276,7 +322,16 @@ public class ControlPlaneConfig {
             // 갱신이 실패한 구간에 새로 활성이 된 쿠폰이 빠지고, 그 쿠폰이 정확히
             // 유령의 지연된 몫을 받는 자리다.
             Mono<Long> coupons = port.activeCoupons()
-                    .flatMap(active -> port.sealFences(active, fence)
+                    .flatMap(active -> port.sealFencesAndAge(active, fence)
+                            // **앞 리더의 마지막 적용에서 첫 적용을 띄운다** (CY-933). 승계 대기는 발행 나이만 봐서,
+                            // 발행이 잘린 채 넘겨받으면 첫 적용이 앞 적용과 1초 안에 겹친다.
+                            .doOnNext(seal -> seal.lastApplyAge().ifPresent(age -> {
+                                if (age.compareTo(deadline) < 0) {
+                                    log.info("승계 첫 적용을 앞 리더 적용에서 띄운다 — 앞 적용 {}ms 전", age.toMillis());
+                                }
+                                pacer.appliedAgo(age);
+                            }))
+                            .map(FenceSeal::locked)
                             .doOnNext(locked -> {
                                 if (locked < active.size()) {
                                     log.warn("울타리를 다 못 잠갔다 — {}/{} 개, 임기 {}. "
@@ -309,6 +364,12 @@ public class ControlPlaneConfig {
             // 명령 시한만큼 새 리더의 첫 틱이 통째로 사라진다.
             snapshot.subscribe();
             coupons
+                    // **잠금 전체에 시한을 둔다.** 문이 승계 첫 회차를 세우므로, 끝이
+                    // 없으면 레디스가 매달린 동안 새 리더가 배분을 안 돈다.
+                    .timeout(deadline, scheduler)
+                    .doOnError(e -> log.warn("울타리 잠금이 시한({})을 넘었다 — 문을 연다. "
+                            + "못 잠근 쿠폰은 적용이 다시 막는다, 임기 {}", deadline, fence))
+                    .onErrorResume(e -> Mono.empty())
                     // **이 잠금의 세대로 연다.** 승계가 잦으면 첫 잠금의
                     // 완료가 둘째 잠금이 도는 중에 문을 열어 버린다.
                     .doFinally(signal -> gate.sealed(generation))
@@ -323,6 +384,17 @@ public class ControlPlaneConfig {
      *
      * @return 기동 직후면 음수(램프 없음), 그 밖에는 발행 몫이나 한산 통과 최소 몫 이하
      */
+    /** 발행된 스냅샷이 매진이라고 적은 쿠폰들. 노드가 이미 받아 간 사실이라 그 줄은 지워도 된다. */
+    private List<String> publishedSoldOut(SnapshotHolder.View seen) {
+        if (!seen.snapshot().isPublished()) {
+            return List.of();
+        }
+        return seen.snapshot().coupons().entrySet().stream()
+                .filter(each -> each.getValue().soldOut())
+                .map(Map.Entry::getKey)
+                .toList();
+    }
+
     long startingCredit(SnapshotHolder.View seen, SnapshotHolder holder,
             GatewayRegistry registry) {
         long floor = CapacityCollector.idleMinimum(registry.count());
@@ -337,6 +409,64 @@ public class ControlPlaneConfig {
     }
 
     /**
+     * 배분 틱이 리더로 치는가. <b>경계는 리더십을 보고, 문은 알린 뒤에 본다.</b> 경계가
+     * 문을 보면 잠그는 동안의 틱을 잃음으로 읽어 다시 잠그고, 알리기 전에 문을 보면 잠그기
+     * 시작한 그 틱에 회차가 돈다 — 새 리더가 안 만진 쿠폰에 유령의 몫이 들어간다.
+     */
+    BooleanSupplier leaderTick(BooleanSupplier leader, LongSupplier term, SealGate gate,
+            Runnable onGained, Runnable onLost) {
+        LeadershipEdge edge = LeadershipEdge.of(leader, term, onGained, onLost);
+        return () -> edge.getAsBoolean() && gate.getAsBoolean();
+    }
+
+    /**
+     * 승계 첫 회차를 앞 리더의 마지막 발행에서 떨어뜨린다. <b>리더로 치기 시작한 틱에 건다</b> —
+     * 문이 획득 때만 닫히므로 거짓에서 참이 되는 순간이 곧 잠금이 끝난 승계다. 나이는 홀더가
+     * 레디스 시계로 잰 값이고, 시계가 갈렸거나 발행을 본 적 없으면 안 기다린다.
+     */
+    BooleanSupplier handoverTick(BooleanSupplier leading, Supplier<SnapshotHolder.View> view,
+            HandoverSpacing spacing) {
+        AtomicBoolean led = new AtomicBoolean();
+        return () -> {
+            boolean now = leading.getAsBoolean();
+            if (!now) {
+                led.set(false);
+                return false;
+            }
+            if (led.compareAndSet(false, true)) {
+                SnapshotHolder.View seen = view.get();
+                spacing.armedFrom(seen.snapshot().isPublished() && !seen.clockAhead()
+                        ? seen.dataAge() : null);
+            }
+            return spacing.getAsBoolean();
+        };
+    }
+
+    /**
+     * 평활화 이월 읽기. <b>제 시한을 둔다</b> — 가용량과 운영값 갱신이 이미 틱의 4분의 1 씩
+     * 쓰는데, 승계 직후 이 왕복이 나머지를 다 쓰면 전 노드가 낡음으로 넘어간다. 넘기면
+     * 실패로 끝나 회차가 다음에 다시 받는다.
+     */
+    Supplier<Mono<CreditSmoother>> carryover(
+            Function<List<String>, Mono<Map<String, String>>> read, SnapshotCodec codec,
+            Duration tick, Scheduler scheduler) {
+        Duration budget = tick.dividedBy(4);
+        return () -> read.apply(codec.smoothingFields())
+                .timeout(budget, scheduler)
+                .map(hash -> CreditSmoother.restore(CreditSmoother.DEFAULT_ALPHA,
+                        codec.smoothing(hash)));
+    }
+
+    /**
+     * 한 틱. 가용량과 운영값을 <b>동시에</b> 읽어 회차에 넘기고, 회차는 그 읽기와 동시에 수요를 읽는다 — 차례로 두면
+     * 레디스가 느린 날 각자 시한까지 기다려 틱을 먹고 회차가 잘린다. 나누기는 회차가 읽기 뒤로 미룬다.
+     */
+    Supplier<Mono<Void>> allocationTickStep(Supplier<Mono<Void>> capacity,
+            Supplier<Mono<Void>> tunables, Function<Mono<Void>, Mono<Void>> round) {
+        return () -> round.apply(Mono.when(Mono.defer(capacity), Mono.defer(tunables)));
+    }
+
+    /**
      * 배분 틱. <b>재료를 먼저 읽고 배분한다</b> — 안 읽으면 수집기가 첫 하한을 영영 답으로
      * 내고, 그 하한에서는 한산 통과 상한이 0 이라 대기열이 통째로 켜진다. 읽기가 실패하면
      * 수집을 건너뛴다.
@@ -346,21 +476,35 @@ public class ControlPlaneConfig {
             AllocationRound round, CapacityRefresh capacity, CapacityCollector collector,
             TunablesRefresh tunables, Scheduler allocationScheduler, SoldOutCleanup cleanup,
             QueueSweeper sweeper, SnapshotHolder holder, GatewayRegistry registry,
-            AllocationRedisPort port) {
+            AllocationRedisPort port, ApplyPacer applyPacer, MeterRegistry meters) {
         SealGate gate = SealGate.of(leadership::isLeader);
-        return AllocationScheduler.of(properties.scheduler().tick(),
+        Runnable gained = onLeadershipGained(collector, capacity, cleanup, sweeper, round, holder,
+                registry, sealFences(port, leadership, gate, properties.scheduler().tick(),
+                        allocationScheduler, applyPacer));
+        return AllocationScheduler.observed(properties.scheduler().tick(),
                 properties.scheduler().firstTickDelay(),
                 // **승계는 유예를 처음부터 준다.** 비리더 구간에 얼어 있던 실패
                 // 횟수를 이어 쓰면 재승계 첫 회차가 곧바로 크레딧을 깎는다.
-                // **문을 잠글 때까지 리더로 안 친다.** 잠금이 끝나기 전에 회차가
-                // 돌면, 새 리더가 안 만지는 쿠폰에 유령의 지연된 몫이 그대로 들어간다.
-                LeadershipEdge.of(gate,
-                        onLeadershipGained(collector, capacity, cleanup, sweeper, round, holder,
-                                registry, sealFences(port, leadership, gate)),
-                        capacity::leadershipChanged),
-                // **운영 값을 먼저 읽고 배분한다.** 순서가 뒤면 방금 바꾼 값이
-                // 한 틱 늦게 나가고, 장애 중의 한 틱은 길다.
-                () -> capacity.refresh().then(tunables.refresh()).then(round.run()),
-                nanos -> { }, allocationScheduler);
+                handoverTick(leaderTick(leadership::isLeader, leadership::fence, gate, gained,
+                                () -> {
+                                    capacity.leadershipChanged();
+                                    sweeper.leadershipLost();
+                                    // 창은 여기서 닫아야 지속 시간이 리더 구간만 담는다 (CY-824).
+                                    round.leadershipLost();
+                                }),
+                        holder::view,
+                        HandoverSpacing.of(System::nanoTime, properties.scheduler().tick())),
+                allocationTickStep(capacity::refresh, tunables::refresh, round::run),
+                // **버리지 않는다.** 스케줄러가 회차마다 재서 넘기는 값이 틱 지연 그대로다.
+                TickLatency.recorder(meters), allocationScheduler, applyPacer::holdOff);
+    }
+
+    /**
+     * 적용 간격. <b>적용 한 번이 한 틱 몫을 들인다</b> — 회차 시작 간격만 틱에 맞추면 느린 회차 끝의 적용과 다음 회차의
+     * 적용이 1초 안에 겹친다. 회차와 스케줄러와 승계 잠금이 같은 인스턴스를 봐야 간격이 이어진다.
+     */
+    @Bean
+    ApplyPacer applyPacer(ControlPlaneProperties properties, Scheduler allocationScheduler) {
+        return ApplyPacer.of(properties.scheduler().tick(), allocationScheduler);
     }
 }

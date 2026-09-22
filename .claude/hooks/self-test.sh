@@ -294,6 +294,25 @@ file_case guard-paths.sh 'x' 'src/main/java/A.java' allow 'WF-5 일반 경로'
 bash_case guard-paths.sh 'rm -rf ../waiting-legacy/src' block 'WF-5 Bash 삭제 (회귀)'
 bash_case guard-paths.sh 'sed -i s/a/b/ ../waiting-legacy/x.java' block 'WF-5 Bash 수정 (회귀)'
 bash_case guard-paths.sh 'rg AdmissionDecider ../waiting-legacy/src' allow 'WF-5 Bash 읽기는 허용'
+# **도구 이름을 세는 방식은 우회가 쉽다.** 아래가 전부 통과하던 자리다 — 절대경로,
+# 인터프리터, 삭제 플래그, 다른 도구. 막는 형태 하나만 재면 자기검증 초록이
+# "게이트가 선다" 로 읽힌다.
+bash_case guard-paths.sh '/bin/rm -rf ../waiting-legacy/src' block 'WF-5 절대경로 호출'
+bash_case guard-paths.sh 'find ../waiting-legacy -name "*.java" -delete' block 'WF-5 find 삭제'
+bash_case guard-paths.sh 'perl -i -pe s/a/b/ ../waiting-legacy/x.java' block 'WF-5 인터프리터'
+bash_case guard-paths.sh 'touch ../waiting-legacy/x.java' block 'WF-5 touch'
+bash_case guard-paths.sh 'git -C ../waiting-legacy clean -fdx' block 'WF-5 git 쓰기 부명령'
+bash_case guard-paths.sh 'cd ../waiting-legacy' block 'WF-5 디렉터리 진입'
+bash_case guard-paths.sh 'git -C ../waiting-legacy log --oneline' allow 'WF-5 git 읽기 부명령'
+bash_case guard-paths.sh 'cat ../waiting-legacy/README.md' allow 'WF-5 읽기 도구'
+# **이름만으로 읽기 전용이라 할 수 없는 도구가 있다.** 출력 플래그를 가지거나 명령을
+# 실행할 수 있으면 목록에서 뺀다 — 인자까지 가려내는 것은 목록을 세는 것보다 어렵다.
+bash_case guard-paths.sh 'sort f -o ../waiting-legacy/x' block 'WF-5 sort 출력 플래그'
+bash_case guard-paths.sh 'awk "BEGIN{system(\"x ../waiting-legacy/y\")}"' block 'WF-5 awk 명령 실행'
+bash_case guard-paths.sh 'sed "s/a/b/w ../waiting-legacy/x" f' block 'WF-5 sed 쓰기 명령'
+# **첫 도구만 보면 치환 안이 통째로 빠진다.** 껍질이 안쪽을 먼저 실행한다.
+bash_case guard-paths.sh 'echo "$(touch ../waiting-legacy/x)"' block 'WF-5 명령 치환'
+bash_case guard-paths.sh 'echo `touch ../waiting-legacy/x`' block 'WF-5 역따옴표 치환'
 
 echo "check-commit-msg.sh"
 bash_case check-commit-msg.sh "git commit -m 'feat(admission): 상한 계산 추가'" allow '정상'
@@ -310,7 +329,39 @@ bash_case check-commit-msg.sh "git commit -m 'feat(admission): 한산한 쿠폰�
 bash_case check-commit-msg.sh "git commit -m 'feat(admission): 전역 크레딧으로 상한 계산'" allow '50칸 이내'
 bash_case check-commit-msg.sh "git commit --amend --no-edit" allow '--amend --no-edit'
 bash_case check-commit-msg.sh "git status" allow 'commit 아닌 명령'
+# **두 낱말을 따로 찾으면 양쪽으로 틀린다.** 같은 명령일 필요도 인접할 필요도 없어서
+# 읽기 전용 명령이 막히고, 경로를 붙여 부르면 검사가 통째로 지나간다.
+bash_case check-commit-msg.sh "git log --oneline | grep -m1 commit" allow '읽기 전용인데 낱말만 겹친다'
+bash_case check-commit-msg.sh "git log --format=%s   # 첫 commit 을 본다" allow '주석에 든 낱말'
+bash_case check-commit-msg.sh "/usr/bin/git commit -m '그냥 고침'" block '경로를 붙인 호출'
+bash_case check-commit-msg.sh "git commit -am 'feat(x): 짧은 제목'" allow '-am 형태'
+bash_case check-commit-msg.sh "git commit -am '그냥 이것저것 고침'" block '-am 형태의 위반'
+bash_case check-commit-msg.sh "git status && git commit -m '그냥 고침'" block '둘째 세그먼트의 커밋'
 bash_case check-commit-msg.sh "echo 'nothing to do with version control'" allow '무관한 명령'
+# **표준 입력으로 준 메시지는 명령 안에 있다.** 파일로 준 것과 같게 보고 건너뛰면,
+# 이 경로로 커밋하는 동안 규약 검사가 통째로 없는 것이 된다 — 실제로 그렇게 됐다.
+bash_case check-commit-msg.sh "$(printf 'git commit -F - <<%sEOF%s\n그냥 이것저것 고침\n\n본문\nEOF' "'" "'")" block '표준 입력 메시지의 위반'
+bash_case check-commit-msg.sh "$(printf 'git commit -F - <<%sEOF%s\nfeat(x): 정상 제목\n\n본문\nEOF' "'" "'")" allow '표준 입력 메시지의 정상'
+bash_case check-commit-msg.sh "git commit -F msg.txt" allow '진짜 파일은 못 본다'
+# **셸 문법을 모르면 양쪽으로 틀린다.** 값이 붙어 오는 플래그를 못 알아보면 정상 커밋이
+# 막히고, 인용 안의 구분자를 문법으로 읽으면 제목이 잘린다. 그리고 줄 이음 뒤의 힙독은
+# 물리적 줄만 보면 본문을 못 찾아 검사가 통째로 지나간다.
+bash_case check-commit-msg.sh "git commit -Fmsg.txt" allow '붙은 파일 플래그'
+bash_case check-commit-msg.sh "git commit --file=msg.txt" allow '긴 파일 플래그'
+bash_case check-commit-msg.sh "git commit -CHEAD" allow '붙은 재사용 플래그'
+bash_case check-commit-msg.sh "git commit --fixup=HEAD" allow '긴 fixup'
+bash_case check-commit-msg.sh "git commit -m 'feat(x): 해시 # 보존'" allow '인용 안의 해시'
+bash_case check-commit-msg.sh "git commit -m 'feat(x): 파이프 | 보존'" allow '인용 안의 파이프'
+bash_case check-commit-msg.sh "git commit -m 'feat(x): 해시 # 넣고 마침표.'" block '인용 안 해시의 위반'
+bash_case check-commit-msg.sh "$(printf 'git add x && \\\n  git commit -F - <<%sEOF%s\n그냥 고침\nEOF' "'" "'")" block '줄 이음 뒤의 힙독'
+bash_case check-commit-msg.sh "$(printf 'git commit -F - <<%sEOF%s\n# 안내 줄\nfeat(x): 정상 제목\nEOF' "'" "'")" allow '힙독의 주석 뒤 제목'
+bash_case check-commit-msg.sh "$(printf 'git commit -F - <<-%sEOF%s\n\tfeat(x): 정상 제목\n\tEOF' "'" "'")" allow '탭을 떼는 힙독'
+bash_case check-commit-msg.sh "git status;git commit -m '그냥 고침'" block '공백 없는 세미콜론'
+bash_case check-commit-msg.sh "true&&git commit -m '그냥 고침'" block '공백 없는 앤드'
+bash_case check-commit-msg.sh "$(printf "git status\ngit commit -m '그냥 고침'")" block '개행으로만 나뉜 커밋'
+bash_case check-commit-msg.sh "$(printf "echo 'literal <<true'\ngit commit -m '그냥 고침'\ntrue")" block '인용 안의 힙독 연산자'
+bash_case check-commit-msg.sh "git commit -m 'fix(x): __NO_MESSAGE__ 처리'" allow '표식과 같은 낱말이 든 제목'
+bash_case check-commit-msg.sh "$(printf 'git commit -F - <<%sEOF%s\n EOF\n그냥 고침\nEOF' "'" "'")" block '들여쓴 구분자는 끝이 아니다'
 
 # ── git commit-msg 훅 ────────────────────────────────────────────────────────
 # 도구 훅만 검증하면 터미널 직접 커밋 경로가 비어 있다.
@@ -582,6 +633,53 @@ echo '돌린 에이전트: 자기검증' >> "$clean_repo/.claude/.agents-reviewe
 failclosed=$(cd /tmp && printf '{"tool_input":{"command":"gh pr create"}}' \
     | "$ROOT/.claude/hooks/guard-pr.sh" >/dev/null 2>&1; echo $?)
 
+# **인용이 깨진 명령은 기본값으로 안 넘어간다.** 쪼개다 실패하면 어느 기준으로 볼지
+# 모르는데, 그때 develop 으로 떨어지면 main 으로 여는 PR 을 develop 기준으로 검사한다.
+# **종료 코드만 보면 안 갈린다.** 이 저장소 상태에서는 다른 이유로도 2 가 나오므로,
+# 쪼개다 실패해서 막았다는 것을 메시지로 못 박는다.
+# **훅마다 시간이 명시돼야 한다.** 안 적으면 기본을 넘겼을 때 차단이 아니라 오류로
+# 처리돼 그대로 나간다 — 가드가 조용히 열린다. 검사는 늘기만 하므로 경계가 다가온다.
+notimeout=$(python3 - "$ROOT/.claude/settings.json" <<'TIMEOUT'
+import json, sys
+d = json.load(open(sys.argv[1]))
+missing = [h.get("command", "").rsplit("/", 1)[-1]
+           for arr in d.get("hooks", {}).values() for m in arr
+           for h in m.get("hooks", []) if "timeout" not in h]
+print(" ".join(missing))
+TIMEOUT
+)
+
+# **자격 확인이 응답을 못 받으면 막아야 한다.** 값으로 보면 빈 문자열이 통과한다 —
+# curl 이 아예 안 도는 경우가 그것이고, 인프라 오류 한 번에 게이트가 사라지는 경로다.
+# 아무것도 안 내는 curl 을 앞에 둬 그 상황을 만든다.
+shim="$tmp/shim"
+mkdir -p "$shim"
+printf '#!/bin/sh\nexit 0\n' > "$shim/curl"
+chmod +x "$shim/curl"
+cat > "$tmp/.env" <<'FAKEENV'
+ATLASSIAN_BASE_URL=https://example.invalid
+ATLASSIAN_USER_EMAIL=probe@example.invalid
+ATLASSIAN_API_TOKEN=probe
+FAKEENV
+# **키는 계획서·규칙에서만 찾는다.** 다른 경로에 넣으면 자격 확인까지 안 가고
+# 그 앞에서 통과해, 시험이 재려던 자리를 못 밟는다.
+mkdir -p "$clean_repo/plan"
+printf '티켓 CY-1 참고\n' >> "$clean_repo/plan/probe.md"
+git -C "$clean_repo" add plan/probe.md >/dev/null 2>&1
+git -C "$clean_repo" -c user.email=t@t -c user.name=t \
+    commit -q --no-verify -m 'docs(probe): 키 한 줄' >/dev/null 2>&1
+nocurl_out=$(cd "$clean_repo" && PATH="$shim:$PATH" "$clean_repo/.claude/hooks/guard-pr.sh" 2>&1 <<'NOCURL'
+{"tool_input":{"command":"gh pr create --base develop"}}
+NOCURL
+)
+nocurl=$?
+
+badquote_out=$(cd "$clean_repo" && "$clean_repo/.claude/hooks/guard-pr.sh" 2>&1 <<'BADQUOTE'
+{"tool_input":{"command":"gh pr create --base main --title \"열린 따옴표"}}
+BADQUOTE
+)
+badquote=$?
+
 if ((probe_seen)); then
     printf '  ok   러너가 변경된 프로브 파일을 본다\n'; pass=$((pass + 1))
 else
@@ -591,6 +689,22 @@ if ((failclosed == 2)); then
     printf '  ok   저장소 밖에서는 막는다 (fail closed)\n'; pass=$((pass + 1))
 else
     printf '  FAIL 저장소 밖인데 통과시켰다 (exit %d)\n' "$failclosed"; fail=$((fail + 1))
+fi
+if [[ -z "${notimeout// /}" ]]; then
+    printf '  ok   훅마다 시간이 명시돼 있다\n'; pass=$((pass + 1))
+else
+    printf '  FAIL 시간이 안 적힌 훅이 있다: %s\n' "$notimeout"; fail=$((fail + 1))
+fi
+if ((nocurl == 2)) && printf '%s' "$nocurl_out" | grep -q '지라에 못 붙어'; then
+    printf '  ok   자격 확인이 응답을 못 받으면 막는다\n'; pass=$((pass + 1))
+else
+    printf '  FAIL 자격 확인이 비었는데 통과시켰다 (exit %d)\n' "$nocurl"; fail=$((fail + 1))
+    printf '       막힌 이유: %s\n' "$(printf '%s' "$nocurl_out" | head -2 | tr '\n' ' ')"
+fi
+if ((badquote == 2)) && printf '%s' "$badquote_out" | grep -q '못 쪼갰다'; then
+    printf '  ok   인용이 깨진 명령은 쪼개다 막는다\n'; pass=$((pass + 1))
+else
+    printf '  FAIL 인용이 깨졌는데 기본 기준으로 넘어갔다 (exit %d)\n' "$badquote"; fail=$((fail + 1))
 fi
 if ((stale == 2)); then
     printf '  ok   낡은 증거는 막는다\n'; pass=$((pass + 1))
@@ -813,6 +927,159 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: echo hi' allow '잡의 outputs·matrix 안의 uses 는 액션이 아니다'
+
+# ── Gradle 준비 게이트 ─────────────────────────────────────────────────────
+# **빠뜨려도 빌드는 초록이다.** 러너에 JDK 가 있어 아무 일도 안 일어난 것처럼
+# 보인다 — 그래서 이 검사가 없으면 아무도 안 본다 (CY-978).
+gradle_setup_case() {   # 워크플로내용 기대(block|allow) 설명
+    local content=$1 expect=$2 label=$3
+    local dir="$tmp/gsetup-$RANDOM"
+    mkdir -p "$dir/.github/workflows"
+    printf '%s\n' "$content" > "$dir/.github/workflows/probe.yml"
+    local out
+    out=$( cd "$dir" && "$ROOT/.github/scripts/gradle-setup.sh" 2>&1 )
+    local code=$?
+    rm -rf "$dir"
+    if [[ $expect == block && $code -ne 0 ]] || [[ $expect == allow && $code -eq 0 ]]; then
+        printf '  ok   %s\n' "$label"; pass=$((pass + 1))
+    else
+        printf '  FAIL %s (종료 %d)\n    %s\n' "$label" "$code" "${out:0:200}"
+        fail=$((fail + 1))
+    fi
+}
+
+echo
+printf '\033[1mGradle 준비 게이트\033[0m\n'
+gradle_setup_case 'name: p
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - run: ./gradlew build' block '준비 없이 gradlew 를 부른다'
+
+gradle_setup_case 'name: p
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ./.github/actions/setup-gradle
+      - run: ./gradlew build' allow '준비한 잡은 통과시킨다'
+
+gradle_setup_case 'name: p
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - run: chmod +x ./gradlew' allow '실행 권한 주기는 호출이 아니다'
+
+gradle_setup_case 'name: p
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - run: .github/scripts/gradle-retry.sh build' block '재시도 감싸개도 gradlew 다'
+
+gradle_setup_case 'name: p
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - run: chmod +x ./gradlew && ./gradlew build' block '한 줄에 권한과 호출이 같이 온다'
+
+gradle_setup_case 'name: p
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - run: bash gradlew build' block '점슬래시 없는 호출'
+
+gradle_setup_case 'name: p
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - run: ./gradlew build
+      - uses: ./.github/actions/setup-gradle' block '준비가 호출보다 뒤에 있다'
+
+gradle_setup_case 'name: p
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ./.github/actions/setup-gradle
+        if: false
+      - run: ./gradlew build' block '조건이 달린 준비는 준비가 아니다'
+
+gradle_setup_case 'name: p
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: evil/actions/setup-gradle-x@abc
+      - run: ./gradlew build' block '이름이 비슷한 액션은 준비가 아니다'
+
+gradle_setup_case 'name: p
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: evil/actions/setup-gradle@abc
+      - run: ./gradlew build' block '끝만 같은 남의 액션은 준비가 아니다'
+
+gradle_setup_case 'name: p
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: gradle/actions/setup-gradle@abc
+      - run: ./gradlew build' block '캐시만 있고 JDK 고정이 없다'
+
+gradle_setup_case 'name: p
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-java@abc
+      - uses: gradle/actions/setup-gradle@abc
+      - run: ./gradlew build' allow '둘을 따로 붙인 잡은 통과시킨다'
+
+gradle_setup_case '- 최상위가
+- 리스트다' block '매핑이 아니면 막는다'
+
+gradle_setup_case 'name: p
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ./.github/actions/setup-gradle
+        continue-on-error: true
+      - run: ./gradlew build' block '실패해도 넘어가는 준비는 준비가 아니다'
+
+gradle_setup_case 'name: p
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ./.github/actions/setup-gradle
+      - run: ./gradlew build
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - run: ./gradlew build' block '중복 키는 막는다'
 
 echo
 printf '통과 %d · 실패 %d\n' "$pass" "$fail"

@@ -22,14 +22,20 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.AfterAll;
 import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import com.kafkick.waiting.domain.admission.CircuitState;
+import com.kafkick.waiting.gateway.CircuitStateReader;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
@@ -208,6 +214,10 @@ class RedisFullStopScenarioTest {
     @Autowired
     private ReactiveStringRedisTemplate redis;
 
+    /** 회복 구간의 서킷. <b>CI 에서만 벌어지는 회차의 단서다</b> — 열린 채면 뒷단에 하나도 안 닿는다 (CY-934). */
+    @Autowired
+    private CircuitStateReader 서킷;
+
     private WebTestClient 클라이언트() {
         return WebTestClient.bindToServer()
                 .baseUrl("http://localhost:" + port)
@@ -215,17 +225,41 @@ class RedisFullStopScenarioTest {
                 .build();
     }
 
-    /** 한 번 발급을 시도하고 받은 상태를 돌려준다. */
+    /**
+     * 한 번 발급을 시도하고 받은 상태를 돌려준다.
+     *
+     * <p><b>거절이면 사유까지 센다</b> (CY-965). 상태 코드만으로는 429 가 줄이 찬 것인지 남용으로 막힌
+     * 것인지 못 가른다 — CI 에서만 벌어지는 구간이라 그 한 글자가 유일한 단서다.
+     */
     private int 발급을_시도한다(int member) {
-        return 클라이언트().post()
+        var 결과 = 클라이언트().post()
                 .uri("/api/v1/coupons/" + COUPON + "/issue")
                 .header("X-Member-Id", String.valueOf(member))
                 .header("X-Member-Grade", "GOLD")
                 .exchange()
-                .returnResult(Void.class)
-                .getStatus()
-                .value();
+                .returnResult(String.class);
+        int 상태 = 결과.getStatus().value();
+        if (상태 >= 400) {
+            사유를_센다(결과.getResponseBody().blockFirst());
+        }
+        return 상태;
     }
+
+    /** 거절 사유 코드. 본문을 못 읽으면 그 사실을 이름으로 남긴다. */
+    private void 사유를_센다(String 본문) {
+        Matcher m = 본문 == null ? null : 사유_코드.matcher(본문);
+        String 코드 = m != null && m.find() ? m.group(1) : "본문없음";
+        사유_분포.merge(코드, 1L, Long::sum);
+    }
+
+    /** 거절 사유 코드를 뽑는 자리. 오류 본문은 `"code":"..."` 를 싣는다. */
+    private static final Pattern 사유_코드 = Pattern.compile("\"code\"\\s*:\\s*\"([A-Z_]+)\"");
+
+    /** 사유별 거절 수. 회차 전체를 누적해 실패 메시지에 싣는다. */
+    private final Map<String, Long> 사유_분포 = new TreeMap<>();
+
+    /** 줄 조회의 상태 분포. 회복 대기 루프가 한계까지 도는 이유가 이쪽일 수 있다. */
+    private final Map<Integer, Long> 줄_조회_분포 = new TreeMap<>();
 
     /** 줄에 세운다. 장애 전에 불러 자리를 만든다. */
     private void 줄에_세운다() {
@@ -389,7 +423,7 @@ class RedisFullStopScenarioTest {
 
     /** 줄을 치는 요청. 레디스가 죽어 있으면 5xx 가 온다. */
     private int 순번을_묻는다(int member) {
-        return 클라이언트().get()
+        int 상태 = 클라이언트().get()
                 .uri("/api/v1/coupons/" + COUPON + "/queue")
                 .header("X-Member-Id", String.valueOf(member))
                 .header("X-Member-Grade", "GOLD")
@@ -398,6 +432,8 @@ class RedisFullStopScenarioTest {
                 .returnResult(Void.class)
                 .getStatus()
                 .value();
+        줄_조회_분포.merge(상태, 1L, Long::sum);
+        return 상태;
     }
 
     private List<Integer> 여러_번_시도한다(int 횟수, int 시작_회원) {
@@ -419,6 +455,7 @@ class RedisFullStopScenarioTest {
     @DisplayName("C1_레디스가_죽었다_살아난다")
     void C1_레디스가_죽었다_살아난다() {
         BackendRpsRecorder 유입 = new BackendRpsRecorder(뒷단::받은_수);
+        CircuitState[] 회복_서킷 = new CircuitState[1];
         List<Integer> 정상_상태 = new ArrayList<>();
         List<Integer> 장애중_상태 = new ArrayList<>();
         List<Integer> 회복_상태 = new ArrayList<>();
@@ -466,6 +503,9 @@ class RedisFullStopScenarioTest {
                     // 회귀는 여기서만 보인다 — 응답도 판정에 넣는다.
                     확인_뒤_상태.addAll(여러_번_시도한다(보낼_수, 5_000));
                     회복_상태.addAll(확인_뒤_상태);
+                    // **판정이 빨개진 뒤에는 못 읽는다.** 서킷은 그때 이미 닫혀 있을 수 있어,
+                    // 회복 창이 끝나는 이 자리에서 집어 둔다.
+                    회복_서킷[0] = 서킷.now();
                     유입.sample(지금.plusSeconds(4));
                 })
                 // **진입 판정은 주입 직후, 유지 구간이 시작되기 전이다.**
@@ -486,8 +526,11 @@ class RedisFullStopScenarioTest {
                         // 발급만 때리므로 수신 수가 곧 발급 시도다.
                         RecoveryCriteria.overIssued(유입.total(), 재고),
                         // RC6 — 회복 뒤 유입이 정상 수준으로 돌아온다.
-                        RecoveryCriteria.notConverged("판정 통과 비율",
-                                통과_비율(정상_상태), 통과_비율(회복_상태)),
+                        // 분포를 같이 싣는다. CI 에서만 간헐로 벌어져 응답 코드가 원인을 가르는 유일한 단서다 (CY-934).
+                        RecoveryCriteria.notConverged("판정 통과 비율", 통과_비율(정상_상태),
+                                통과_비율(회복_상태), "회복 분포 %s · 거절 사유 %s · 서킷 %s"
+                                        .formatted(분포(회복_상태), 사유_분포, 회복_서킷[0])
+                                        + " · 줄 조회 %s".formatted(줄_조회_분포)),
                         // **RC5 는 여기서 못 잰다** (CY-809). 픽스처가
                         // `--appendonly no` 로 띄우므로 컨테이너를 끊었다 붙이면
                         // 줄이 통째로 사라진다. 계획서가 요구하는 "큐 순번 전원
@@ -561,6 +604,11 @@ class RedisFullStopScenarioTest {
         }
         return 회복_뒤_자리.isEmpty() ? Optional.empty()
                 : Optional.of("줄이 살아남았다 — 영속성이 켜졌다면 이제 RC5 로 잰다 (CY-809)");
+    }
+
+    /** 응답 코드별 개수. 비율만 보면 5xx 와 줄 세움을 못 가른다 — 간헐 실패의 원인은 그 차이에 있다. */
+    private Map<Integer, Long> 분포(List<Integer> 상태) {
+        return 상태.stream().collect(Collectors.groupingBy(s -> s, TreeMap::new, Collectors.counting()));
     }
 
     /** 통과 비율. RC6 이 이것으로 판정 분포의 수렴을 본다. */

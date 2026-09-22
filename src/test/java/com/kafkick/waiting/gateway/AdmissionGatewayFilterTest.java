@@ -125,6 +125,14 @@ class AdmissionGatewayFilterTest {
             holder, 판정, Clock.fixed(지금, ZoneOffset.UTC), meters, 고정_난수,
             줄, tokens, limiter, entryTokens, 멱등키);
 
+    /** 같은 배선에 모드만 끈 것. 다른 것을 바꾸면 무엇이 재어지는지 흐려진다. */
+    private AdmissionGatewayFilter 끈_필터() {
+        return AdmissionGatewayFilter.withIsolatedSoldOutCache(
+                holder, 판정, Clock.fixed(지금, ZoneOffset.UTC), meters, 고정_난수,
+                줄, tokens, limiter, entryTokens,
+                IdempotencyKey.of(IdempotencyKey.Mode.OFF, new SimpleMeterRegistry()));
+    }
+
     private final AtomicReference<Boolean> 뒷단에_닿음 = new AtomicReference<>(false);
 
     /** 몇 번 닿았나. 한 번이라도 닿았는지만 보면 상한이 무너져도 안 걸린다. */
@@ -1742,6 +1750,85 @@ class AdmissionGatewayFilterTest {
         }).block();
 
         assertThat(실린_키.get()).isNotEqualTo("내가-정한-값");
+    }
+
+    @Test
+    @DisplayName("끈_모드에서는_클라이언트가_준_값이_그대로_간다")
+    void 끈_모드에서는_클라이언트가_준_값이_그대로_간다() {
+        스냅샷을_심는다(CouponStates.idle(1_000), META);
+        AtomicReference<String> 실린_키 = new AtomicReference<>();
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.method(HttpMethod.POST,
+                                "/api/v1/coupons/" + COUPON + "/issue")
+                        .header("X-Member-Id", MEMBER)
+                        // 허용 문자로 적는다. 끈 모드도 헤더 줄이 될 수 있는
+                        // 값만 받으므로 한글은 여기서 거절된다.
+                        .header(IdempotencyKey.HEADER, "order-2026-0921-77"));
+        exchange.getAttributes().put(
+                ServerWebExchangeUtils.URI_TEMPLATE_VARIABLES_ATTRIBUTE,
+                Map.of("couponId", COUPON));
+
+        끈_필터().filter(exchange, e -> {
+            실린_키.set(e.getRequest().getHeaders().getFirst(IdempotencyKey.HEADER));
+            return Mono.empty();
+        }).block();
+
+        assertThat(실린_키.get())
+                .as("끄면 지우지도 넣지도 않는다 — 신원 헤더와 같은 원칙이다")
+                .isEqualTo("order-2026-0921-77");
+    }
+
+    @Test
+    @DisplayName("뒷단_이름이_다르면_입장_토큰을_바꿔_싣는다")
+    void 뒷단_이름이_다르면_입장_토큰을_바꿔_싣는다() {
+        스냅샷을_심는다(CouponStates.idle(1_000), META);
+        AtomicReference<HttpHeaders> 뒷단_헤더 = new AtomicReference<>();
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.method(HttpMethod.POST,
+                                "/api/v1/coupons/" + COUPON + "/issue")
+                        .header("X-Member-Id", MEMBER)
+                        .header("Entry-Token", "et_something"));
+        exchange.getAttributes().put(
+                ServerWebExchangeUtils.URI_TEMPLATE_VARIABLES_ATTRIBUTE,
+                Map.of("couponId", COUPON));
+
+        filter.withEntryTokenDelivery(new EntryTokenDelivery(
+                        EntryTokenDelivery.Where.BODY, "Entry-Token", "X-Backend-Pass"))
+                .filter(exchange, e -> {
+                    뒷단_헤더.set(e.getRequest().getHeaders());
+                    return Mono.empty();
+                }).block();
+
+        assertThat(뒷단_헤더.get().getFirst("X-Backend-Pass"))
+                .as("뒷단은 제 이름으로 받는다").isEqualTo("et_something");
+        assertThat(뒷단_헤더.get().containsHeader("Entry-Token"))
+                .as("둘을 같이 두면 뒷단이 어느 것을 볼지가 그쪽 구현에 달린다").isFalse();
+    }
+
+    @Test
+    @DisplayName("바꿔_싣는_설정이면_클라이언트가_뒷단_이름을_직접_못_보낸다")
+    void 바꿔_싣는_설정이면_클라이언트가_뒷단_이름을_직접_못_보낸다() {
+        스냅샷을_심는다(CouponStates.idle(1_000), META);
+        AtomicReference<HttpHeaders> 뒷단_헤더 = new AtomicReference<>();
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.method(HttpMethod.POST,
+                                "/api/v1/coupons/" + COUPON + "/issue")
+                        .header("X-Member-Id", MEMBER)
+                        .header("X-Backend-Pass", "forged"));
+        exchange.getAttributes().put(
+                ServerWebExchangeUtils.URI_TEMPLATE_VARIABLES_ATTRIBUTE,
+                Map.of("couponId", COUPON));
+
+        filter.withEntryTokenDelivery(new EntryTokenDelivery(
+                        EntryTokenDelivery.Where.BODY, "Entry-Token", "X-Backend-Pass"))
+                .filter(exchange, e -> {
+                    뒷단_헤더.set(e.getRequest().getHeaders());
+                    return Mono.empty();
+                }).block();
+
+        assertThat(뒷단_헤더.get().containsHeader("X-Backend-Pass"))
+                .as("뒷단 이름은 게이트웨이만 싣는다 — 안 지우면 검증 안 된 값이 그 이름으로 닿는다")
+                .isFalse();
     }
 
     private String 실린_멱등_키() {

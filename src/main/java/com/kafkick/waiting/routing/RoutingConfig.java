@@ -6,6 +6,8 @@ import com.kafkick.waiting.domain.routing.InstanceOutliers;
 import com.kafkick.waiting.domain.routing.WeightedP2c;
 import com.kafkick.waiting.domain.routing.WeightedRoundRobin;
 import io.micrometer.core.instrument.MeterRegistry;
+import org.springframework.beans.factory.InitializingBean;
+import org.springframework.core.env.Environment;
 import java.util.Random;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -23,6 +25,17 @@ import org.springframework.context.annotation.Configuration;
 @EnableConfigurationProperties(RoutingProperties.class)
 @ConditionalOnProperty(prefix = "waiting.routing", name = "enabled", havingValue = "true")
 public class RoutingConfig {
+
+    /**
+     * <b>자기 자신을 목적지로 두고 뜨지 않는다.</b> 루프백을 목적지로 받으므로
+     * 자기 호출을 가르는 것은 포트뿐인데, 그 겹침은 설정만 보면 안 보인다.
+     */
+    @Bean
+    InitializingBean routingSelfCallGuard(RoutingProperties properties, Environment environment) {
+        return () -> properties.rejectSelfPorts(
+                environment.getProperty("server.port", Integer.class),
+                environment.getProperty("management.server.port", Integer.class));
+    }
 
     /** 물린 표의 수명은 요청이 살아 있을 수 있는 최대 시간이다. */
     @Bean

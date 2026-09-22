@@ -5,6 +5,7 @@ import static org.awaitility.Awaitility.await;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.entry;
 
+import com.kafkick.waiting.control.RewindCheck;
 import com.kafkick.waiting.domain.allocation.Grant;
 import com.kafkick.waiting.domain.coupon.QueueMode;
 import java.time.Duration;
@@ -156,7 +157,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         redis.opsForZSet().add(RedisKeys.alive("c1", SHARDS, 0), "m1", 지금 + 60).block(WAIT);
 
         QueueSweeper.SweepResult 결과 =
-                port.sweep(List.of("c1"), 지금, 100, 300, 100).block(WAIT);
+                port.sweep(List.of("c1"), 지금, 100, 300, 100, 임기).block(WAIT);
 
         assertThat(결과.swept()).as("걷은 수").isEqualTo(2);
         assertThat(redis.opsForZSet().size(RedisKeys.queue("c1", SHARDS, 0)).block(WAIT))
@@ -184,7 +185,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         redis.opsForZSet().add(RedisKeys.alive("c1", SHARDS, 0), "old", 지금 - 10).block(WAIT);
 
         QueueSweeper.SweepResult 결과 =
-                port.sweep(List.of("c1"), 지금, 100, 300, 100, false).block(WAIT);
+                port.sweep(List.of("c1"), 지금, 100, 300, 100, false, 임기).block(WAIT);
 
         assertThat(결과.swept()).as("앞줄은 안 걷는다").isZero();
         assertThat(redis.opsForZSet().size(RedisKeys.queue("c1", SHARDS, 0)).block(WAIT))
@@ -209,7 +210,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         }
 
         QueueSweeper.SweepResult 결과 =
-                port.sweep(List.of("c1"), 지금, 100, 300, 100).block(WAIT);
+                port.sweep(List.of("c1"), 지금, 100, 300, 100, 임기).block(WAIT);
 
         assertThat(결과.swept()).as("걷은 수").isZero();
         assertThat(redis.opsForZSet().size(RedisKeys.queue("c1", SHARDS, 0)).block(WAIT))
@@ -232,7 +233,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         줄_세운다("c1", 1, 2, 3);
 
         QueueSweeper.SweepResult 결과 =
-                port.sweep(List.of("c1"), 지금, 100, 300, 100).block(WAIT);
+                port.sweep(List.of("c1"), 지금, 100, 300, 100, 임기).block(WAIT);
 
         assertThat(결과.swept()).as("걷은 수").isZero();
         assertThat(redis.opsForZSet().size(RedisKeys.queue("c1", SHARDS, 0)).block(WAIT))
@@ -256,7 +257,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "1").block(WAIT);
 
         QueueSweeper.SweepResult 결과 =
-                port.sweep(List.of("c1"), 지금, 100, 300, 100).block(WAIT);
+                port.sweep(List.of("c1"), 지금, 100, 300, 100, 임기).block(WAIT);
 
         assertThat(결과.swept()).as("걷은 수").isZero();
         assertThat(redis.opsForZSet().score(RedisKeys.queue("c1", SHARDS, 0), "m1").block(WAIT))
@@ -284,7 +285,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "1").block(WAIT);
 
         QueueSweeper.SweepResult 결과 =
-                port.sweep(List.of("c1"), 지금, 100, 300, 100).block(WAIT);
+                port.sweep(List.of("c1"), 지금, 100, 300, 100, 임기).block(WAIT);
 
         assertThat(결과.swept()).as("차례가 온 사람은 안 걷는다").isZero();
         assertThat(redis.opsForZSet().score(RedisKeys.queue("c1", SHARDS, 0), "m1").block(WAIT))
@@ -312,7 +313,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         redis.opsForHash().put(RedisKeys.grace("c1", SHARDS, 0), "m1", "a:" + 지금).block(WAIT);
 
         QueueSweeper.SweepResult 결과 =
-                port.sweep(List.of("c1"), 지금, 100, 300, 100).block(WAIT);
+                port.sweep(List.of("c1"), 지금, 100, 300, 100, 임기).block(WAIT);
 
         assertThat(결과.failed()).as("실패").isZero();
         assertThat(결과.swept()).as("걷은 수").isOne();
@@ -336,7 +337,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         redis.opsForZSet().add(RedisKeys.alive("c1", SHARDS, 0), "m1", 지금 + 60).block(WAIT);
         redis.opsForHash().put(RedisKeys.grace("c1", SHARDS, 0), "m9", "a:" + 지금).block(WAIT);
 
-        port.sweep(List.of("c1"), 지금 + 100, 100, 300, 100).block(WAIT);
+        port.sweep(List.of("c1"), 지금 + 100, 100, 300, 100, 임기).block(WAIT);
 
         assertThat(redis.opsForHash().get(RedisKeys.grace("c1", SHARDS, 0), "m9").block(WAIT))
                 .isEqualTo("a:" + 지금);
@@ -346,7 +347,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
     @Test
     @DisplayName("쓸_것이_없으면_왕복하지_않는다")
     void 쓸_것이_없으면_왕복하지_않는다() {
-        assertThat(port.sweep(List.of(), 1_700_000_000L, 100, 300, 100).block(WAIT))
+        assertThat(port.sweep(List.of(), 1_700_000_000L, 100, 300, 100, 임기).block(WAIT))
                 .isEqualTo(QueueSweeper.SweepResult.NOTHING);
     }
 
@@ -476,6 +477,350 @@ class AllocationRedisPortTest extends RedisContainerSupport {
 
         assertThat(port.apply(new Grant("c1", 2), 임기 - 100).block(WAIT))
                 .as("시계가 뒤로 간 새 리더도 들일 수 있어야 한다").isEqualTo(2);
+    }
+
+    /**
+     * <b>잠금은 덮기 직전 적용 표의 남은 수명으로 마지막 적용의 나이를 준다</b> (CY-933). 따로 읽으면 쿠폰마다 왕복이
+     * 늘어 잠금 시한을 먹고, 읽기와 잠금 사이에 들어온 앞 리더의 적용이 나이에서 빠진다. 쿠폰 중 가장 어린 나이다.
+     */
+    @Test
+    @DisplayName("잠금이_덮기_전_가장_최근_적용의_나이를_준다")
+    void 잠금이_덮기_전_가장_최근_적용의_나이를_준다() {
+        Duration 수명 = Duration.ofHours(1);
+        redis.opsForValue().set(RedisKeys.applyFence("c1", SHARDS, 0), Long.toString(임기 - 1),
+                수명.minusMinutes(30)).block(WAIT);
+        redis.opsForValue().set(RedisKeys.applyFence("c2", SHARDS, 0), Long.toString(임기 - 1),
+                수명.minusMillis(300)).block(WAIT);
+
+        FenceSeal 결과 = port.sealFencesAndAge(List.of("c1", "c2", "c3"), 임기).block(WAIT);
+
+        assertThat(결과.locked()).isEqualTo(3);
+        // 하한은 덮기 전에 읽었다는 증거다. 실제 시간에 묶이는 상한은 안 둔다 — 변환과 가장 어린 쪽 고르기는
+        // FenceSealTest 가 정확한 값으로 본다.
+        assertThat(결과.lastApplyAge()).hasValueSatisfying(age -> assertThat(age)
+                .isGreaterThanOrEqualTo(Duration.ofMillis(300)));
+        assertThat(redis.opsForValue().get(RedisKeys.applyFence("c2", SHARDS, 0)).block(WAIT))
+                .as("나이를 읽고 나서 잠갔다").isEqualTo(Long.toString(임기));
+    }
+
+    @Test
+    @DisplayName("적용_표가_없으면_나이가_비어_있다")
+    void 적용_표가_없으면_나이가_비어_있다() {
+        assertThat(port.sealFencesAndAge(List.of("c1"), 임기).block(WAIT).lastApplyAge()).isEmpty();
+    }
+
+    /**
+     * <b>우리가 쓴 임계가 사라지면 다음 적용이 되살린다</b> (CY-942). 순번과 총원이 임계 위에서 세므로, 안 되살리면
+     * 뒤에 선 사람의 순번이 입장자 수만큼 뛴다. 그리고 줄 머리부터 다시 세어 이미 들인 사람에게 크레딧을 또 쓴다.
+     */
+    @Test
+    @DisplayName("사라진_임계를_다음_적용이_되살린다")
+    void 사라진_임계를_다음_적용이_되살린다() {
+        줄_세운다("c1", 10, 20, 30, 40);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        redis.delete(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT);
+
+        long 들인_수 = port.apply(new Grant("c1", 1), 임기).block(WAIT);
+
+        assertThat(redis.opsForValue().get(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT))
+                .as("쓴 임계 위에서 한 명 더").isEqualTo("30");
+        // 되살림이 없어도 한 명은 들어간다(10). 크레딧 재소비를 무는 것은 위의 임계 단언이다.
+        assertThat(들인_수).as("몫만큼 들인다").isEqualTo(1);
+    }
+
+    /**
+     * <b>되살림을 센다</b> (CY-945). 실패 없이 흡수된 승격은 되살림만 조용히 일어나고, 그 사실이 어디에도 안 남으면
+     * 다음 재측정이 깨끗하게 나온다. 폭까지 세야 한 번의 큰 되살림과 잦은 작은 되살림을 가른다.
+     */
+    @Test
+    @DisplayName("되살린_회차를_폭까지_센다")
+    void 되살린_회차를_폭까지_센다() {
+        줄_세운다("c1", 10, 20, 30, 40);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "10").block(WAIT);
+
+        port.apply(new Grant("c1", 0), 임기).block(WAIT);
+
+        assertThat(port.healed()).as("되살린 회차 수").isEqualTo(1);
+        assertThat(port.healedSpan()).as("되살린 폭의 합 (20 - 10)").isEqualTo(10);
+    }
+
+    /**
+     * <b>폭은 되살린 만큼이다.</b> 같은 회차의 입장까지 더하면 뜨거운 쿠폰일수록 부풀어, 작은 되살림과
+     * 큰 되살림을 가르려던 지표가 그 구분을 잃는다.
+     */
+    @Test
+    @DisplayName("같은_회차의_입장은_되살린_폭에_안_넣는다")
+    void 같은_회차의_입장은_되살린_폭에_안_넣는다() {
+        줄_세운다("c1", 10, 20, 30, 40);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "10").block(WAIT);
+
+        port.apply(new Grant("c1", 1), 임기).block(WAIT);
+
+        assertThat(redis.opsForValue().get(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT))
+                .as("되살린 뒤 한 명 더 들인다").isEqualTo("30");
+        assertThat(port.healed()).isEqualTo(1);
+        assertThat(port.healedSpan()).as("10 에서 20 으로 되살린 폭").isEqualTo(10);
+    }
+
+    /** 커서가 아예 없던 되살림도 센다. 폭은 못 재므로 합에 안 넣는다 — 안 그러면 임계값 자체가 폭으로 들어간다. */
+    @Test
+    @DisplayName("커서가_없던_되살림은_폭에_안_넣는다")
+    void 커서가_없던_되살림은_폭에_안_넣는다() {
+        줄_세운다("c1", 10, 20, 30, 40);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        redis.delete(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT);
+
+        port.apply(new Grant("c1", 0), 임기).block(WAIT);
+
+        assertThat(port.healed()).isEqualTo(1);
+        assertThat(port.healedSpan()).isZero();
+    }
+
+    @Test
+    @DisplayName("되살림이_없는_회차는_안_센다")
+    void 되살림이_없는_회차는_안_센다() {
+        줄_세운다("c1", 10, 20, 30, 40);
+
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+
+        assertThat(port.healed()).isZero();
+        assertThat(port.healedSpan()).isZero();
+    }
+
+    /**
+     * <b>되찾은 옛 리더는 앞선 임계를 안 낮춘다.</b> 리더를 잃은 사이 다른 리더가 임계를 올렸으면, 옛 리더의 기억은
+     * 낡았다. 되살림이 "기억이 레디스보다 앞설 때만" 이 아니면 커서를 끌어내려 들인 사람을 대기로 돌린다.
+     */
+    @Test
+    @DisplayName("되찾은_옛_리더는_앞선_임계를_안_낮춘다")
+    void 되찾은_옛_리더는_앞선_임계를_안_낮춘다() {
+        줄_세운다("c1", 10, 20, 30, 40);
+        AllocationRedisPort 옛_리더 = port;
+        옛_리더.apply(new Grant("c1", 2), 임기).block(WAIT);
+        AllocationRedisPort 새_리더 = AllocationRedisPort.of(redis, SHARDS);
+        새_리더.apply(new Grant("c1", 1), 임기 + 1).block(WAIT);
+
+        long 들인_수 = 옛_리더.apply(new Grant("c1", 0), 임기 + 2).block(WAIT);
+
+        assertThat(redis.opsForValue().get(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT))
+                .as("낡은 기억 20 으로 안 내린다").isEqualTo("30");
+        assertThat(들인_수).isZero();
+    }
+
+    /**
+     * <b>되살릴 기억이 없는 크레딧 0 적용은 레디스를 안 친다</b> (CY-942). 서킷이 열리면 대기 쿠폰마다 부르는데, 한 번도
+     * 안 들인 쿠폰은 되살릴 것이 없다 — 왕복만 늘어 느린 레디스에서 회차가 틱을 넘긴다.
+     */
+    @Test
+    @DisplayName("되살릴_기억이_없는_크레딧_0_적용은_레디스를_안_친다")
+    void 되살릴_기억이_없는_크레딧_0_적용은_레디스를_안_친다() {
+        줄_세운다("c1", 10, 20);
+        redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "20").block(WAIT);
+
+        long 들인_수 = port.apply(new Grant("c1", 0), 임기).block(WAIT);
+        // 레디스를 쳤다면 스크립트가 임계 20 을 돌려주고 포트가 그것을 기억한다. 그 기억은 되감기 기준이 된다.
+        redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "10").block(WAIT);
+
+        assertThat(들인_수).isZero();
+        assertThat(port.rewindCheck(List.of("c1")).block(WAIT))
+                .as("왕복이 없었으니 기억도 기준도 없다").isEqualTo(RewindCheck.NONE);
+        assertThat(redis.hasKey(RedisKeys.applyFence("c1", SHARDS, 0)).block(WAIT))
+                .as("울타리 표도 안 만든다").isFalse();
+    }
+
+    /**
+     * <b>할 일 없는 크레딧 0 적용은 울타리 임기를 안 덮는다</b> (CY-942). 승계 봉인은 울타리 표의 남은 수명을 마지막 적용의
+     * 나이로 읽는다. 아무도 안 들이는 호출이 매 틱 표를 새로 걸면 새 리더의 첫 적용이 한 틱 밀린다.
+     */
+    @Test
+    @DisplayName("할_일_없는_크레딧_0_적용은_울타리_임기를_안_덮는다")
+    void 할_일_없는_크레딧_0_적용은_울타리_임기를_안_덮는다() {
+        줄_세운다("c1", 10, 20, 30);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+
+        port.apply(new Grant("c1", 0), 임기 + 1).block(WAIT);
+
+        assertThat(redis.opsForValue().get(RedisKeys.applyFence("c1", SHARDS, 0)).block(WAIT))
+                .as("아무것도 안 썼으니 앞 임기 그대로").isEqualTo(Long.toString(임기));
+    }
+
+    /**
+     * <b>되살린 회차는 크레딧이 0 이어도 울타리를 건다.</b> 되살림도 쓰기다. 안 걸면 표에 옛 임기가 남거나 수명이 다해 사라지고,
+     * 승계 봉인이 마지막 쓰기의 나이를 실제보다 늙게 읽어 옛 임기 유령이 그 뒤에 임계를 올릴 틈이 생긴다.
+     */
+    @Test
+    @DisplayName("되살린_회차는_울타리를_건다")
+    void 되살린_회차는_울타리를_건다() {
+        줄_세운다("c1", 10, 20, 30);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        redis.delete(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT);
+
+        port.apply(new Grant("c1", 0), 임기 + 1).block(WAIT);
+
+        assertThat(redis.opsForValue().get(RedisKeys.applyFence("c1", SHARDS, 0)).block(WAIT))
+                .as("되살린 임기로").isEqualTo(Long.toString(임기 + 1));
+        assertThat(redis.getExpire(RedisKeys.applyFence("c1", SHARDS, 0)).block(WAIT))
+                .as("수명도 준다").isPositive();
+    }
+
+    /** 사라진 것만이 아니다. 복제본 승격은 흔히 옛 값을 남긴다. */
+    @Test
+    @DisplayName("옛_값으로_돌아간_임계도_되살린다")
+    void 옛_값으로_돌아간_임계도_되살린다() {
+        줄_세운다("c1", 10, 20, 30, 40);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "10").block(WAIT);
+
+        port.apply(new Grant("c1", 1), 임기).block(WAIT);
+
+        assertThat(redis.opsForValue().get(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT))
+                .isEqualTo("30");
+    }
+
+    /**
+     * <b>크레딧이 없어도 되살린다.</b> 되살림은 들이는 일이 아니라 이미 들인 기록을 돌려놓는 일이다. 크레딧이 0 인
+     * 회차가 이어지는 동안 안 되살리면, 그 내내 순번이 뛴 채로 보이고 청소가 들인 사람을 이탈로 걷는다.
+     */
+    @Test
+    @DisplayName("크레딧이_없어도_사라진_임계는_되살린다")
+    void 크레딧이_없어도_사라진_임계는_되살린다() {
+        줄_세운다("c1", 10, 20, 30);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        redis.delete(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT);
+
+        long 들인_수 = port.apply(new Grant("c1", 0), 임기).block(WAIT);
+
+        assertThat(redis.opsForValue().get(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT))
+                .isEqualTo("20");
+        assertThat(들인_수).as("들인 사람은 없다").isZero();
+    }
+
+    /** 옛 임기는 되살리지도 못한다. 울타리를 넘는 쓰기는 되살림이라는 이름으로도 안 된다. */
+    @Test
+    @DisplayName("옛_임기는_임계를_되살리지_못한다")
+    void 옛_임기는_임계를_되살리지_못한다() {
+        줄_세운다("c1", 10, 20, 30);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        redis.delete(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT);
+
+        assertThatThrownBy(() -> port.apply(new Grant("c1", 0), 임기 - 1).block(WAIT))
+                .isInstanceOf(AllocationRedisPort.FencedOutException.class);
+
+        assertThat(redis.opsForValue().get(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT))
+                .as("안 썼다").isNull();
+    }
+
+    /**
+     * <b>우리가 쓴 임계가 사라지면 되감기다</b> (CY-856). 줄과 임계는 같은 슬롯이라 함께 되감겨, 임계 이하 인원으로는
+     * 안 보인다. 쓴 값을 기억해 견주는 것이 유일한 신호다.
+     */
+    @Test
+    @DisplayName("쓴_임계보다_뒤로_간_쿠폰을_센다")
+    void 쓴_임계보다_뒤로_간_쿠폰을_센다() {
+        줄_세운다("c1", 10, 20, 30);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        // 되감기를 흉내 낸다 — 우리가 쓴 값이 옛 값으로 돌아갔다.
+        redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "10").block(WAIT);
+
+        assertThat(port.rewindCheck(List.of("c1")).block(WAIT))
+                .isEqualTo(RewindCheck.seen(List.of("c1"), 1));
+    }
+
+    @Test
+    @DisplayName("임계가_그대로면_안_센다")
+    void 임계가_그대로면_안_센다() {
+        줄_세운다("c1", 10, 20, 30);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+
+        assertThat(port.rewindCheck(List.of("c1")).block(WAIT))
+                .as("견줬는데 안 감겼다 — 못 잰 것과 다르다").isEqualTo(RewindCheck.seen(List.of(), 1));
+    }
+
+    /** 이 노드가 쓴 적 없는 쿠폰은 견줄 값이 없다. 모르는 것을 되감기로 세면 승계 직후마다 거짓 경보다. */
+    @Test
+    @DisplayName("쓴_적_없는_쿠폰은_안_센다")
+    void 쓴_적_없는_쿠폰은_안_센다() {
+        줄_세운다("c2", 10, 20, 30);
+        redis.opsForValue().set(RedisKeys.admitted("c2", SHARDS, 0), "10").block(WAIT);
+
+        assertThat(port.rewindCheck(List.of("c2")).block(WAIT))
+                .as("기준이 없으면 못 잰 것이다").isEqualTo(RewindCheck.NONE);
+    }
+
+    /** 임계 키가 사라진 것도 되감기다. 우리가 쓴 값이 없어진 자리다. */
+    @Test
+    @DisplayName("임계가_사라진_쿠폰도_센다")
+    void 임계가_사라진_쿠폰도_센다() {
+        줄_세운다("c1", 10, 20, 30);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        redis.delete(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT);
+
+        assertThat(port.rewindCheck(List.of("c1")).block(WAIT))
+                .isEqualTo(RewindCheck.seen(List.of("c1"), 1));
+    }
+
+    /** 되감기가 활성 목록까지 되돌리면 가장 심하게 감긴 쿠폰이 이번 회차 대상에서 빠진다. 기준이 있으면 본다. */
+    @Test
+    @DisplayName("이번_회차_대상이_아니어도_기준이_있으면_본다")
+    void 이번_회차_대상이_아니어도_기준이_있으면_본다() {
+        줄_세운다("c1", 10, 20, 30);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "10").block(WAIT);
+
+        assertThat(port.rewindCheck(List.of()).block(WAIT))
+                .isEqualTo(RewindCheck.seen(List.of("c1"), 1));
+    }
+
+    /** 활성에서 빠진 쿠폰의 기준은 버린다. 안 버리면 이 맵만 역사상 쿠폰 수로 자란다. */
+    @Test
+    @DisplayName("활성에서_빠진_기준은_버린다")
+    void 활성에서_빠진_기준은_버린다() {
+        줄_세운다("c1", 10, 20, 30);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+
+        port.forgetInactive(List.of("c9"));
+
+        assertThat(port.rewindCheck(List.of("c1")).block(WAIT)).isEqualTo(RewindCheck.NONE);
+    }
+
+    /** 한 번도 안 들인 줄은 임계가 없다. 그 -1 을 기준으로 넣으면 그 쿠폰이 실패 뒤마다 거짓 되감기로 잡힌다. */
+    @Test
+    @DisplayName("한_번도_안_들인_쿠폰은_기준을_안_잡는다")
+    void 한_번도_안_들인_쿠폰은_기준을_안_잡는다() {
+        // 큐가 비어 아무도 안 들어간다 — 스크립트가 임계를 안 쓴다.
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+
+        assertThat(port.rewindCheck(List.of("c1")).block(WAIT)).isEqualTo(RewindCheck.NONE);
+    }
+
+    /** 기준은 적용마다 새로 잡는다. 첫 값에 얼어붙으면 그 뒤의 되감기를 못 본다. */
+    @Test
+    @DisplayName("기준은_적용마다_새로_잡는다")
+    void 기준은_적용마다_새로_잡는다() {
+        줄_세운다("c1", 10, 20, 30, 40, 50);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        String 중간 = redis.opsForValue().get(RedisKeys.admitted("c1", SHARDS, 0)).block(WAIT);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+
+        // 두 번째 적용 전 값으로 되돌린다 — 첫 값에 얼어붙었으면 안 잡힌다.
+        redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), 중간).block(WAIT);
+
+        assertThat(port.rewindCheck(List.of("c1")).block(WAIT))
+                .isEqualTo(RewindCheck.seen(List.of("c1"), 1));
+    }
+
+    /** 깨진 임계는 되감기로 안 센다. 값이 깨진 순간 전 쿠폰이 경보되면 신호가 소음이 된다. */
+    @Test
+    @DisplayName("깨진_임계는_되감기로_안_센다")
+    void 깨진_임계는_되감기로_안_센다() {
+        줄_세운다("c1", 10, 20, 30);
+        port.apply(new Grant("c1", 2), 임기).block(WAIT);
+        redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "깨진값").block(WAIT);
+
+        assertThat(port.rewindCheck(List.of("c1")).block(WAIT))
+                .isEqualTo(RewindCheck.seen(List.of(), 1));
     }
 
     /** 리더가 아니면 안 잠근다. 강등된 노드가 문을 제 번호로 되돌리면 안 된다. */
@@ -650,6 +995,21 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         assertThat(redis.opsForValue().get(RedisKeys.SNAPSHOT_FENCE).block(WAIT))
                 .as("거절이 울타리를 되돌리면 다음 틱에 그대로 덮인다")
                 .isEqualTo(Long.toString(임기));
+    }
+
+    /**
+     * <b>이월에 필요한 자리만 읽는다</b> (CY-863). 스냅샷에는 쿠폰마다 한 자리가 있어,
+     * 두 자리를 얻자고 통째로 끌어오면 쿠폰 수만큼 왕복이 무거워진다.
+     */
+    @Test
+    @DisplayName("스냅샷에서_고른_자리만_읽는다")
+    void 스냅샷에서_고른_자리만_읽는다() {
+        port.publish(Map.of("c1", "쿠폰", "#ewma", "200.0", "#ewmaSeeded", "1"), 임기)
+                .block(WAIT);
+
+        assertThat(port.loadFields(List.of("#ewma", "#ewmaSeeded", "#없는자리")).block(WAIT))
+                .as("없는 자리는 빼고, 안 고른 쿠폰은 안 온다")
+                .containsExactlyInAnyOrderEntriesOf(Map.of("#ewma", "200.0", "#ewmaSeeded", "1"));
     }
 
     /** 거절이 울타리를 낮추면 같은 번호로 다시 시도했을 때 통과한다. */

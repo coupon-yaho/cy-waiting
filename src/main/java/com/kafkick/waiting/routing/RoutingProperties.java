@@ -16,7 +16,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * @param coldStartRamp 기동 직후 보고된 값을 초기값으로 쓰는 구간
  * @param perInstanceCap 인스턴스 하나에 동시에 물릴 수 있는 요청 수.
  *                       <b>느려진 한 대가 커넥션을 독식하지 못하게 한다</b>
- * @param outlierFailures 연속 실패가 이만큼이면 그 인스턴스를 후보에서 뺀다
+ * @param outlierFailures 연속 실패가 이만큼이면 뺀다. <b>세 자리를 겸한다</b> —
+ *                        배제 창을 성공으로 닫는 데도, 되돌리는 중에 다시 빼는 데도 쓴다
  * @param outlierEjectFor 뺀 뒤 이만큼 지나면 다시 후보로 돌린다
  * @param allowedDestinations 연결해도 되는 목적지. <b>켤 때는 필수다</b>
  * @param allowedPorts   연결해도 되는 포트. 호스트만 보면 반쪽이다
@@ -29,6 +30,26 @@ public record RoutingProperties(boolean enabled, String serviceId, String strate
 
     /** 무작위 둘 중 여유 대비 덜 찬 쪽. <b>기본이 아니다</b> — 비율에서 밀린다. */
     public static final String P2C = "p2c";
+
+    /**
+     * 게이트웨이 자신의 포트를 목적지로 안 받는다.
+     *
+     * <p>같은 호스트의 뒷단이 실제 배치라 루프백은 목적지로 둔다. 그러면 자기 자신을
+     * 부르는 것을 가르는 것은 포트뿐인데, 뒷단이 흔히 쓰는 8080 이 이 게이트웨이의
+     * 기본 포트이기도 하다 — 겹치면 발급 요청이 같은 라우트로 되돌아온다.
+     *
+     * @throws IllegalStateException 허용 포트가 자기 포트를 담고 있을 때
+     */
+    public void rejectSelfPorts(Integer... ownPorts) {
+        for (Integer own : ownPorts) {
+            // 0 은 무작위 배정이라 이 값으로는 자기 포트를 못 안다.
+            if (own != null && own > 0 && allowedPorts.contains(own)) {
+                throw new IllegalStateException(
+                        "허용 포트가 게이트웨이 자신의 포트를 담고 있다 — 발급이 자기 자신으로 돈다: "
+                                + own);
+            }
+        }
+    }
 
     /** 여유 비율대로 결정적으로 돈다. 3~5 대 규모에서 더 정확하고, <b>기본값이다</b>. */
     public static final String ROUND_ROBIN = "round-robin";

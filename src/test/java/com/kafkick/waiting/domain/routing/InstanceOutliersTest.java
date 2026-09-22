@@ -1,6 +1,7 @@
 package com.kafkick.waiting.domain.routing;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Duration;
@@ -93,12 +94,12 @@ class InstanceOutliersTest {
     }
 
     /**
-     * <b>풀린 뒤 한 건만 실패해도 다시 뺀다.</b> 처음부터 세면 아직 고장 난 대가
-     * 임계만큼 더 받고, 그동안 그 대는 여전히 가장 한가해 보인다.
+     * <b>풀리는 그 순간이 램프의 시작이다.</b> 임계에 못 미치는 실패가 램프를 취소해
+     * 버리면 그 대가 몫을 깎지 않은 채 전량을 받는다 — 배제가 노린 것과 반대다.
      */
     @Test
-    @DisplayName("풀린_뒤_한_번_더_실패하면_바로_뺀다")
-    void 풀린_뒤_한_번_더_실패하면_바로_뺀다() {
+    @DisplayName("램프를_취소하지_않고_이어_간다")
+    void 램프를_취소하지_않고_이어_간다() {
         InstanceOutliers outliers = 배제기();
         for (int i = 0; i < 3; i++) {
             outliers.failed("가", 1_000);
@@ -108,7 +109,165 @@ class InstanceOutliersTest {
 
         outliers.failed("가", 풀린_뒤);
 
-        assertThat(outliers.ejected(Set.of("가", "나"), 풀린_뒤)).containsExactly("가");
+        assertThat(outliers.ejected(Set.of("가", "나"), 풀린_뒤))
+                .as("임계에 못 미치면 안 뺀다").isEmpty();
+        assertThat(outliers.recoveryRemaining("가", 풀린_뒤))
+                .as("램프는 그대로 이어진다").isEqualTo(1.0);
+    }
+
+    /**
+     * <b>램프 구간이 밖에서 보여야 한다.</b> 배제 게이지는 배제 창만 세므로 되돌리는
+     * 중인 대는 어디에도 안 잡힌다 — 그 대가 회복을 마쳤는지를 물을 수단이 없다.
+     */
+    @Test
+    @DisplayName("되돌리는_중인_대와_안_준_몫이_보인다")
+    void 되돌리는_중인_대와_안_준_몫이_보인다() {
+        InstanceOutliers outliers = 배제기();
+        long 늦게 = 1_000 + 램프.toMillis() / 4;
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 1_000);
+        }
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("나", 늦게);
+        }
+        // 안 앓은 대는 기록만 있고 되돌릴 것이 없다.
+        outliers.succeeded("다", 늦게);
+        outliers.retain(Set.of("가", "나", "다"), 늦게);
+
+        // 가는 이미 램프에 들었고 나는 아직 배제 창 안이다.
+        long 나의_배제_중 = 늦게 + 배제_시간.toMillis() / 2;
+        assertThat(outliers.rampingCount(나의_배제_중))
+                .as("배제 중은 되돌리는 중이 아니다").isOne();
+
+        long 램프_절반 = 1_000 + 배제_시간.toMillis() + 램프.toMillis() / 2;
+        assertThat(outliers.rampingCount(램프_절반)).as("둘이 서로 다른 지점에 있다").isEqualTo(2);
+        // 가는 절반, 나는 사분의 일 늦게 들어가 4분의 3 이 남았다.
+        assertThat(outliers.rampSuppressed(램프_절반))
+                .as("안 준 몫은 대마다의 합이다").isCloseTo(0.5 + 0.75, within(0.01));
+
+        long 가라앉은_뒤 = 늦게 + 배제_시간.toMillis() + 램프.toMillis();
+        assertThat(outliers.rampingCount(가라앉은_뒤)).isZero();
+        assertThat(outliers.rampSuppressed(가라앉은_뒤)).isZero();
+    }
+
+    /**
+     * <b>걷히길 기다리는 죽은 기록은 안 센다.</b> 앓다 빠진 대의 기록은 램프가 끝날
+     * 때까지 남는데, 그것까지 세면 롤링 배포마다 게이지가 75초씩 부풀어 회복이 안
+     * 끝난 것처럼 보인다.
+     */
+    @Test
+    @DisplayName("사라진_대는_되돌리는_중으로_안_센다")
+    void 사라진_대는_되돌리는_중으로_안_센다() {
+        InstanceOutliers outliers = 배제기();
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 1_000);
+        }
+        long 램프_절반 = 1_000 + 배제_시간.toMillis() + 램프.toMillis() / 2;
+        outliers.retain(Set.of("나"), 램프_절반);
+
+        assertThat(outliers.tracked()).as("기록 자체는 남는다").containsExactly("가");
+        assertThat(outliers.rampingCount(램프_절반)).isZero();
+        assertThat(outliers.rampSuppressed(램프_절반)).isZero();
+    }
+
+    /**
+     * <b>그 대에게 요청이 다시 안 와도 완주로 센다.</b> 그 대의 성공·실패로만 세면
+     * 그 전에 빠진 대의 완주가 영영 안 세어져, 연 배제에서 재배제와 완주를 뺀 값이
+     * 배포마다 벌어진다. 걷는 자리는 라우팅 한 건마다 돈다.
+     */
+    @Test
+    @DisplayName("그_대에_요청이_안_와도_완주로_센다")
+    void 그_대에_요청이_안_와도_완주로_센다() {
+        InstanceOutliers outliers = 배제기();
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 1_000);
+        }
+
+        long 램프_절반 = 1_000 + 배제_시간.toMillis() + 램프.toMillis() / 2;
+        outliers.retain(Set.of("가"), 램프_절반);
+        assertThat(outliers.rampsCompleted()).as("아직 도는 중이다").isZero();
+
+        long 가라앉은_뒤 = 1_000 + 배제_시간.toMillis() + 램프.toMillis();
+        outliers.retain(Set.of("가"), 가라앉은_뒤);
+        assertThat(outliers.rampsCompleted()).isOne();
+
+        outliers.retain(Set.of("가"), 가라앉은_뒤 + 1);
+        assertThat(outliers.rampsCompleted()).as("한 번만 센다").isOne();
+    }
+
+    /**
+     * <b>되돌리다 다시 빠진 것과 끝까지 마친 것을 가른다.</b> 앞엣것만 늘고 뒤엣것이
+     * 안 늘면 회복이 안 끝나는 것인데, 합쳐 세면 그 상태가 안 보인다.
+     */
+    @Test
+    @DisplayName("정상_구간의_배제와_재배제와_완주를_따로_센다")
+    void 정상_구간의_배제와_재배제와_완주를_따로_센다() {
+        InstanceOutliers outliers = 배제기();
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 1_000);
+        }
+        assertThat(outliers.ejectionsStarted()).isOne();
+        assertThat(outliers.reEjections()).isZero();
+
+        long 램프_중 = 1_000 + 배제_시간.toMillis() + 1;
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 램프_중);
+        }
+        assertThat(outliers.reEjections()).as("되돌리다 다시 빠졌다").isOne();
+        assertThat(outliers.ejectionsStarted()).as("국면을 연 배제는 안 는다").isOne();
+
+        long 두_번째_램프_뒤 = 램프_중 + 배제_시간.toMillis() + 램프.toMillis();
+        outliers.succeeded("가", 두_번째_램프_뒤);
+
+        assertThat(outliers.rampsCompleted()).as("끝까지 마쳤다").isOne();
+        assertThat(outliers.ejectionsStarted()).as("완주가 다른 계수를 안 건드린다").isOne();
+        assertThat(outliers.reEjections()).as("완주가 다른 계수를 안 건드린다").isOne();
+    }
+
+    /**
+     * <b>램프에서 쌓은 연속은 램프와 함께 버린다.</b> 넘기면 평상시 첫 실패 한 건이
+     * 그 대를 다시 뺀다 — 하필 트래픽이 끊겼다 돌아오는 순간이 그 자리다.
+     */
+    @Test
+    @DisplayName("램프에서_쌓은_연속은_안_넘어간다")
+    void 램프에서_쌓은_연속은_안_넘어간다() {
+        InstanceOutliers outliers = 배제기();
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 1_000);
+        }
+        long 램프_중 = 1_000 + 배제_시간.toMillis() + 1;
+        outliers.failed("가", 램프_중);
+        outliers.failed("가", 램프_중);
+
+        long 가라앉은_뒤 = 1_000 + 배제_시간.toMillis() + 램프.toMillis();
+        outliers.failed("가", 가라앉은_뒤);
+
+        assertThat(outliers.ejected(Set.of("가", "나"), 가라앉은_뒤))
+                .as("앓은 적 없는 대와 같이 임계만큼 준다").isEmpty();
+        assertThat(outliers.rampsCompleted()).as("그 실패가 램프를 닫는다").isOne();
+    }
+
+    /**
+     * <b>걷는 자리가 램프를 끝낼 때도 연속을 버린다.</b> 실패가 끝내는 갈래만 버리면,
+     * 다른 대의 요청이 먼저 걷은 뒤에 오는 평상시 첫 실패 한 건이 그 대를 다시 뺀다.
+     */
+    @Test
+    @DisplayName("걷힌_뒤에도_연속은_안_넘어간다")
+    void 걷힌_뒤에도_연속은_안_넘어간다() {
+        InstanceOutliers outliers = 배제기();
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 1_000);
+        }
+        long 램프_중 = 1_000 + 배제_시간.toMillis() + 1;
+        outliers.failed("가", 램프_중);
+        outliers.failed("가", 램프_중);
+
+        long 가라앉은_뒤 = 1_000 + 배제_시간.toMillis() + 램프.toMillis();
+        outliers.retain(Set.of("가", "나"), 가라앉은_뒤);
+        outliers.failed("가", 가라앉은_뒤);
+
+        assertThat(outliers.ejected(Set.of("가", "나"), 가라앉은_뒤))
+                .as("앓은 적 없는 대와 같이 임계만큼 준다").isEmpty();
     }
 
     /**
@@ -130,12 +289,34 @@ class InstanceOutliersTest {
     }
 
     /**
-     * <b>되돌리는 중의 실패는 그 자리에서 다시 뺀다.</b> 임계만큼을 다시 주면
-     * 아직 고장 난 대가 그동안 여전히 가장 한가해 보인다.
+     * <b>배제 중의 실패는 시계를 되감는다.</b> 그 구간은 트래픽이 0 이라 여기 오는
+     * 것은 배제 전에 나갔다 늦게 돌아온 결과다 — 아직 안 나은 대가 원래 시각에
+     * 그대로 풀리면 안 된다.
      */
     @Test
-    @DisplayName("램프_중_한_번_실패하면_바로_다시_뺀다")
-    void 램프_중_한_번_실패하면_바로_다시_뺀다() {
+    @DisplayName("배제_중_한_건이_시계를_되감는다")
+    void 배제_중_한_건이_시계를_되감는다() {
+        InstanceOutliers outliers = 배제기();
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 1_000);
+        }
+        long 절반 = 1_000 + 배제_시간.toMillis() / 2;
+
+        outliers.failed("가", 절반);
+
+        long 원래_풀릴_때 = 1_000 + 배제_시간.toMillis();
+        assertThat(outliers.ejected(Set.of("가", "나"), 원래_풀릴_때))
+                .as("되감겼으므로 아직 배제 중이다").containsExactly("가");
+    }
+
+    /**
+     * <b>램프 중에도 뺄 근거는 처음과 같다.</b> 한 건으로 되감으면 배경 오류만으로
+     * 램프가 안 끝난다 — 대당 50rps 에서 1% 면 완주 확률이 사실상 0 이고, 그 대는
+     * 영구히 제 몫에서 빠진다. 램프가 이미 그 대의 몫을 선형으로 깎고 있다.
+     */
+    @Test
+    @DisplayName("램프_중_한_건은_안_되감는다")
+    void 램프_중_한_건은_안_되감는다() {
         InstanceOutliers outliers = 배제기();
         for (int i = 0; i < 3; i++) {
             outliers.failed("가", 1_000);
@@ -145,7 +326,44 @@ class InstanceOutliersTest {
 
         outliers.failed("가", 램프_중);
 
+        assertThat(outliers.ejected(Set.of("가", "나"), 램프_중))
+                .as("배경 잡음 한 건으로 되감으면 램프가 영영 안 끝난다").isEmpty();
+    }
+
+    /** 진짜 고장은 램프 중에도 임계만큼이면 다시 빠진다. 근거가 서면 그 자리에서 뺀다. */
+    @Test
+    @DisplayName("램프_중_연속_임계면_다시_뺀다")
+    void 램프_중_연속_임계면_다시_뺀다() {
+        InstanceOutliers outliers = 배제기();
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 1_000);
+        }
+        long 램프_중 = 1_000 + 배제_시간.toMillis() + 1;
+
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 램프_중);
+        }
+
         assertThat(outliers.ejected(Set.of("가", "나"), 램프_중)).containsExactly("가");
+    }
+
+    /** 성공 하나가 램프 중의 연속도 끊는다. 안 끊으면 흩어진 잡음이 쌓여 되감는다. */
+    @Test
+    @DisplayName("램프_중_성공이_연속을_끊는다")
+    void 램프_중_성공이_연속을_끊는다() {
+        InstanceOutliers outliers = 배제기();
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 1_000);
+        }
+        long 램프_중 = 1_000 + 배제_시간.toMillis() + 1;
+
+        outliers.failed("가", 램프_중);
+        outliers.failed("가", 램프_중);
+        outliers.succeeded("가", 램프_중);
+        outliers.failed("가", 램프_중);
+        outliers.failed("가", 램프_중);
+
+        assertThat(outliers.ejected(Set.of("가", "나"), 램프_중)).isEmpty();
     }
 
     /**
@@ -262,6 +480,9 @@ class InstanceOutliersTest {
         outliers.retain(Set.of("나"), 1_000 + 배제_시간.toMillis() + 램프.toMillis());
 
         assertThat(outliers.tracked()).doesNotContain("가");
+        // **빠진 대의 완주도 세어야 한다.** 산 대만 세면 롤링 배포마다 연 배제에서
+        // 재배제와 완주를 뺀 값이 벌어져, 계수 셋을 견주는 것 자체가 뜻을 잃는다.
+        assertThat(outliers.rampsCompleted()).as("걷으면서 완주로 센다").isOne();
     }
 
     /**
@@ -408,24 +629,142 @@ class InstanceOutliersTest {
     }
 
     /**
-     * <b>배제 전에 나간 요청이 나중에 성공으로 끝나면 배제가 일찍 풀린다.</b>
-     * 의도한 동작이다 — 지우는 것은 성공뿐이라는 규칙이 여기까지 온다. 반쯤
-     * 고장 난 대가 스스로 배제를 취소하는 진동이 이 자리에서 난다.
+     * <b>배제 창을 여는 데 실패 셋이 필요하면 닫는 데도 성공 셋이 필요하다.</b> 그
+     * 창은 응답 상한을 덮으라고 잡은 값인데, 그 안에 늦게 돌아온 성공 하나가 창을
+     * 지우면 반쯤 고장 난 대가 스스로 배제를 취소한다.
      */
     @Test
-    @DisplayName("배제_중_늦게_온_성공이_배제를_푼다")
-    void 배제_중_늦게_온_성공이_배제를_푼다() {
+    @DisplayName("배제_중_성공_하나로는_창이_안_지워진다")
+    void 배제_중_성공_하나로는_창이_안_지워진다() {
         InstanceOutliers outliers = 배제기();
         for (int i = 0; i < 3; i++) {
             outliers.failed("가", 1_000);
         }
-        assertThat(outliers.ejected(Set.of("가", "나"), 1_000)).containsExactly("가");
 
         outliers.succeeded("가", 1_000);
+
+        assertThat(outliers.ejected(Set.of("가", "나"), 1_000))
+                .as("늦게 돌아온 결과 하나는 근거가 얕다").containsExactly("가");
+        assertThat(outliers.rampsCompleted()).as("창이 안 닫혔다").isZero();
+    }
+
+    /** 임계만큼 이어지면 창을 닫되 램프로 넘긴다. 전량을 되돌리지는 않는다. */
+    @Test
+    @DisplayName("배제_중_성공이_임계만큼_이어지면_램프로_넘긴다")
+    void 배제_중_성공이_임계만큼_이어지면_램프로_넘긴다() {
+        InstanceOutliers outliers = 배제기();
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 1_000);
+        }
+
+        for (int i = 0; i < 3; i++) {
+            outliers.succeeded("가", 1_000);
+        }
 
         assertThat(outliers.ejected(Set.of("가", "나"), 1_000)).isEmpty();
         assertThat(outliers.recoveryRemaining("가", 1_000))
                 .as("배제를 끝내되 램프로 넘긴다").isEqualTo(1);
+    }
+
+    /** 실패 한 건이 그 사이의 성공을 되돌린다. 흩어진 성공이 쌓여 창을 지우면 안 된다. */
+    @Test
+    @DisplayName("배제_중_실패가_쌓인_성공을_지운다")
+    void 배제_중_실패가_쌓인_성공을_지운다() {
+        InstanceOutliers outliers = 배제기();
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 1_000);
+        }
+
+        outliers.succeeded("가", 1_000);
+        outliers.succeeded("가", 1_000);
+        outliers.failed("가", 1_000);
+        outliers.succeeded("가", 1_000);
+        outliers.succeeded("가", 1_000);
+
+        assertThat(outliers.ejected(Set.of("가", "나"), 1_000))
+                .as("셋을 새로 채워야 한다").containsExactly("가");
+
+        outliers.succeeded("가", 1_000);
+
+        assertThat(outliers.ejected(Set.of("가", "나"), 1_000))
+                .as("되감은 것이지 영영 못 닫는 것은 아니다").isEmpty();
+    }
+
+    /**
+     * <b>임계에 못 미친 성공은 다음 창으로 안 넘어간다.</b> 넘기면 남은 계수만큼
+     * 다음 창이 얕아져, 늦게 온 성공 한 건이 그 창을 지운다 — 이 회차가 없애려던
+     * 바로 그 동작이다. 창 안에 오는 것은 대개 배제 전에 나간 결과라 임계 미달이
+     * 오히려 흔하다.
+     */
+    @Test
+    @DisplayName("임계에_못_미친_성공은_다음_창으로_안_넘어간다")
+    void 임계에_못_미친_성공은_다음_창으로_안_넘어간다() {
+        InstanceOutliers outliers = 배제기();
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 1_000);
+        }
+        outliers.succeeded("가", 1_000);
+        outliers.succeeded("가", 1_000);
+
+        long 램프_중 = 1_000 + 배제_시간.toMillis() + 1;
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 램프_중);
+        }
+        outliers.succeeded("가", 램프_중);
+
+        assertThat(outliers.ejected(Set.of("가", "나"), 램프_중))
+                .as("새 창은 성공 셋을 새로 받아야 닫힌다").containsExactly("가");
+        assertThat(outliers.reEjections()).as("새로 연 것은 재배제다").isOne();
+        assertThat(outliers.recoveryRemaining("가", 램프_중))
+                .as("창 안이라 되돌릴 몫이 없다").isZero();
+    }
+
+    /**
+     * <b>창을 닫은 성공도 그 자리에서 버린다.</b> 남기면 시각이 뒤로 가 같은 창에
+     * 다시 들었을 때, 이미 쓴 계수 위에 한 건만 얹혀 창이 또 지워진다.
+     */
+    @Test
+    @DisplayName("창을_닫은_성공은_다시_안_쓰인다")
+    void 창을_닫은_성공은_다시_안_쓰인다() {
+        InstanceOutliers outliers = 배제기();
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 100_000);
+        }
+        for (int i = 0; i < 3; i++) {
+            outliers.succeeded("가", 100_000);
+        }
+
+        long 되감겨_창_안 = 100_000 - 배제_시간.toMillis() / 2;
+        assertThat(outliers.ejected(Set.of("가", "나"), 되감겨_창_안))
+                .as("시각이 뒤로 가 창에 다시 들었다").containsExactly("가");
+
+        outliers.succeeded("가", 되감겨_창_안);
+
+        assertThat(outliers.ejected(Set.of("가", "나"), 되감겨_창_안))
+                .as("한 건으로는 다시 못 닫는다").containsExactly("가");
+    }
+
+    /**
+     * <b>지난 창에서 쌓다 만 성공이 새 판정에 안 실린다.</b> 창 밖의 성공에서 계수를
+     * 안 버리면, 시각이 뒤로 갔을 때 그 계수가 되살아나 한 건으로 창이 지워진다.
+     */
+    @Test
+    @DisplayName("시각이_뒤로_가도_지난_창의_성공은_안_남는다")
+    void 시각이_뒤로_가도_지난_창의_성공은_안_남는다() {
+        InstanceOutliers outliers = 배제기();
+        for (int i = 0; i < 3; i++) {
+            outliers.failed("가", 100_000);
+        }
+        outliers.succeeded("가", 100_000);
+        outliers.succeeded("가", 100_000);
+        // 창 밖에서 온 성공이다. 여기서 안 버리면 아래에서 셋째가 된다.
+        outliers.succeeded("가", 100_000 + 배제_시간.toMillis() + 1_000);
+
+        long 되감긴_뒤 = 100_000 + 배제_시간.toMillis() / 2;
+        outliers.succeeded("가", 되감긴_뒤);
+
+        assertThat(outliers.ejected(Set.of("가", "나"), 되감긴_뒤))
+                .as("지난 창의 성공이 새 판정에 안 실린다").containsExactly("가");
     }
 
     /**
@@ -497,8 +836,9 @@ class InstanceOutliersTest {
     }
 
     /**
-     * <b>램프 중의 성공이 램프를 건너뛰지 않는다.</b> 되돌리는 중에 몇 건
-     * 성공했다고 전량을 주면, 그 순간이 다시 절벽이 된다.
+     * <b>램프 중의 성공이 램프를 건너뛰지 않는다.</b> 되돌리는 중에 몇 건 성공했다고
+     * 전량을 주면 그 순간이 다시 절벽이고, 창을 닫는 근거로 쌓이면 성공할수록 램프가
+     * 처음으로 되감겨 건강한 대가 제 몫을 영영 못 받는다.
      */
     @Test
     @DisplayName("램프_중_성공해도_램프는_그대로_간다")
@@ -509,9 +849,15 @@ class InstanceOutliersTest {
         }
         long 램프_절반 = 1_000 + 배제_시간.toMillis() + 램프.toMillis() / 2;
 
-        outliers.succeeded("가", 램프_절반);
+        // **임계만큼 이어져도** 창을 닫는 근거가 안 된다. 창은 이미 닫혔다.
+        for (int i = 0; i < 3; i++) {
+            outliers.succeeded("가", 램프_절반);
+        }
 
         assertThat(outliers.recoveryRemaining("가", 램프_절반)).isEqualTo(0.5);
+        long 가라앉은_뒤 = 1_000 + 배제_시간.toMillis() + 램프.toMillis();
+        outliers.retain(Set.of("가"), 가라앉은_뒤);
+        assertThat(outliers.rampsCompleted()).as("램프가 제때 끝난다").isOne();
     }
 
     /** 램프까지 지난 뒤의 성공은 기록을 지운다. 안 지우면 죽은 이름이 쌓인다. */

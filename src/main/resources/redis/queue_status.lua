@@ -8,9 +8,10 @@
 -- ARGV[2]  alive TTL(초). 양의 정수
 -- ARGV[3]  지금 시각(초)
 --
--- 반환  {state, rank, score}
+-- 반환  {state, rank, score, total}
 --   state  'WAITING' | 'ADMITTED' | 'NOT_QUEUED'
---   rank   내 앞의 인원. 입장했으면 0, 큐에도 유예에도 없으면 -1
+--   rank   내 앞에서 **아직 기다리는** 인원. 입장했으면 0, 큐에도 유예에도 없으면 -1
+--   total  기다리는 총원. 모르면 -1
 --   score  내 순번. 큐에 없으면 '-1'
 --
 -- **나눠 치면 한쪽만 성공한 상태가 생긴다.** 조회와 하트비트가 갈리면 그때
@@ -43,11 +44,11 @@ if not score then
     -- 받는다. 한 릴리스만 같이 받고 뗀다.
     if grace == 'admitted'
             or (type(grace) == 'string' and string.sub(grace, 1, 2) == 'a:') then
-        return {'ADMITTED', 0, '-1'}
+        return {'ADMITTED', 0, '-1', -1}
     end
     -- **0번째와 구분한다.** 없는 것과 맨 앞인 것은 다르다. 뭉치면 유실된
     -- 사람에게 "곧 입장" 을 보여 주게 된다.
-    return {'NOT_QUEUED', -1, '-1'}
+    return {'NOT_QUEUED', -1, '-1', -1}
 end
 
 -- 폴링이 곧 생존 신호다. 조회한 김에 갱신한다 — 왕복을 늘리지 않는다.
@@ -68,10 +69,15 @@ if admitted >= 0 and tonumber(score) <= admitted then
     -- 청소가 보관 기간으로 걷을 수 있게 시각을 함께 남긴다. 안 남기면 이
     -- 해시가 쿠폰당 발급 인원만큼 자라고 아무도 안 지운다.
     redis.call('HSET', KEYS[4], ARGV[1], 'a:' .. string.format('%.0f', now))
-    return {'ADMITTED', 0, score}
+    return {'ADMITTED', 0, score, -1}
 end
 
 -- **개수를 세지 순위를 저장하지 않는다.** 저장하면 앞사람이 빠질 때마다
 -- 전원을 갱신해야 한다.
-local rank = redis.call('ZCOUNT', KEYS[1], '-inf', '(' .. score)
-return {'WAITING', rank, score}
+--
+-- **둘 다 입장 커서 위로 센다** (CY-827). 입장한 사람은 폴링해 와야 큐에서 빠지므로, 커서 아래를
+-- 세면 안 온 사람이 계속 앞 인원에 잡힌다 — "앞에 100명인데 총 80명" 이 그렇게 난다.
+local from = admitted >= 0 and ('(' .. string.format('%.0f', admitted)) or '-inf'
+local rank = redis.call('ZCOUNT', KEYS[1], from, '(' .. score)
+local total = redis.call('ZCOUNT', KEYS[1], from, '+inf')
+return {'WAITING', rank, score, total}

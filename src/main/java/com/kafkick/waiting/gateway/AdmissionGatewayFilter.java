@@ -103,9 +103,6 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
 
     private static final String MEMBER_ID = "X-Member-Id";
 
-    /** 발급 계층 명세가 정한 이름. 조회가 준 토큰을 여기 실어 온다. */
-    private static final String ENTRY_TOKEN = "Entry-Token";
-
     /**
      * 장애 개방이 노드 예산에서 가져다 쓰는 비율.
      *
@@ -153,6 +150,18 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
     private final QueuePort queue;
     private final QueueToken tokens;
     private final EntryToken entryTokens;
+
+    /**
+     * 받는 이름과 뒷단 이름. <b>기본값으로 두면 지금과 같다</b> — 설정을 안 넣은
+     * 배포가 그대로 돈다.
+     */
+    private EntryTokenDelivery delivery = new EntryTokenDelivery(null, null, null);
+
+    /** 시험이 모드를 바꿔 본다. 운영은 생성자가 꽂는다. */
+    AdmissionGatewayFilter withEntryTokenDelivery(EntryTokenDelivery value) {
+        this.delivery = value;
+        return this;
+    }
     private final SecondWindowLimiter limiter;
     private final EnqueueLatch latch;
 
@@ -245,13 +254,14 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
             MeterRegistry meters, QueuePort queue, QueueToken tokens,
             SecondWindowLimiter limiter, EntryToken entryTokens,
             IdempotencyKey idempotency, SoldOutCache soldOutCache,
-            ObjectProvider<CircuitStateReader> circuit) {
+            ObjectProvider<CircuitStateReader> circuit, EntryTokenDelivery delivery) {
         this(holder, decider, clock, meters,
                 () -> ThreadLocalRandom.current().nextDouble(), queue, tokens, limiter,
                 entryTokens, idempotency, System::nanoTime, soldOutCache,
                 // **배분과 같은 것을 쓴다.** 각자 만들면 판정은 열렸다고 보는데
                 // 배분은 아니라고 보는 구간이 생긴다.
                 circuit.getIfAvailable());
+        this.delivery = delivery;
     }
 
     /**
@@ -600,7 +610,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
      * 고쳐야 하는지 알려 주는 셈이다.
      */
     private boolean hasEntryToken(ServerWebExchange exchange, String couponId) {
-        String presented = exchange.getRequest().getHeaders().getFirst(ENTRY_TOKEN);
+        String presented = exchange.getRequest().getHeaders().getFirst(delivery.header());
         String memberId = exchange.getRequest().getHeaders().getFirst(MEMBER_ID);
         // **토큰이 가리키는 사람과 같아야 한다.** 안 보면 남의 토큰을 주워 와도
         // 통하고, 발급은 주워 온 사람 앞으로 나간다.
@@ -614,7 +624,8 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
      *
      * <p>한 갈래만 키를 실으면 나머지에서는 클라이언트가 준 값이 그대로 뒷단에
      * 닿는다. 그러면 매 시도 다른 값을 넣어 멱등성을 우회하거나, 남의 키를 주워
-     * 먼저 태워 그 사람의 진짜 시도를 재생으로 버리게 만들 수 있다.
+     * 먼저 태워 그 사람의 진짜 시도를 재생으로 버리게 만들 수 있다. 끈 모드는 그
+     * 값을 일부러 보내는 것이고, 뒷단이 제 계약으로 멱등을 지는 배포용이다.
      */
     private Mono<Void> forward(ServerWebExchange exchange, GatewayFilterChain chain,
             String couponId, long ratePerSec, SnapshotMeta meta) {
@@ -628,6 +639,13 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
         // 자리를 잡기 전에 만든다. 잡은 뒤에 두면 여기서 던지는 순간 반납이 아직
         // 안 걸려 그 자리가 영영 안 돌아온다. 서명 한 번이 더 나가지만, 새는 자리를
         // 손으로 지키는 쪽은 다음에 한 줄이 끼어드는 순간 깨진다.
+        // **안 건드리는 것과 아무거나 통과시키는 것은 다르다.** 끈 모드에서도
+        // 줄이 둘이면 뒷단이 어느 것을 볼지가 그쪽 구현에 달리고, 빈 키를 뒷단이
+        // 유효하게 저장하면 전원이 한 레코드로 뭉친다.
+        if (!idempotency.accepts(headers.get(IdempotencyKey.HEADER))) {
+            count("idempotency-malformed");
+            return error.write(exchange, ApiError.Code.INVALID_REQUEST);
+        }
         String key = idempotency.of(couponId, memberId,
                 headers.getFirst(IdempotencyKey.HEADER));
         // 초당 100건이어도 각각 10초 걸리면 동시 1,000건이라 초당 예산만으로는
@@ -647,9 +665,32 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
                 "보호 차단 해제 — {}초 동안 {}건 끊었다",
                 NANOSECONDS.toSeconds(r.elapsedNanos()), r.swallowed()));
         // **여기부터 반납이 걸릴 때까지 던질 수 있는 것을 두지 않는다.**
-        return chain.filter(exchange.mutate()
-                        .request(r -> r.headers(h -> h.set(IdempotencyKey.HEADER, key)))
-                        .build())
+        // **끈 모드면 안 건드린다.** 클라이언트가 보낸 것이 그대로 간다 — 신원
+        // 헤더와 같은 원칙이다. 지우지도 넣지도 않는다.
+        //
+        // **뒷단 이름이 다르면 바꿔 싣는다.** 옛 이름을 같이 두면 뒷단이 둘 중
+        // 어느 것을 볼지가 그쪽 구현에 달린다.
+        //
+        // **뒷단 이름은 게이트웨이만 싣는다.** 받는 이름이 안 왔어도 지운다 — 안 지우면
+        // 클라이언트가 그 이름으로 직접 보낸 값이 검증 없이 뒷단에 닿는다.
+        boolean renames = delivery.renames();
+        String pass = renames
+                ? exchange.getRequest().getHeaders().getFirst(delivery.header()) : null;
+        ServerWebExchange forwarded = key == null && !renames ? exchange : exchange.mutate()
+                .request(r -> r.headers(h -> {
+                    if (key != null) {
+                        h.set(IdempotencyKey.HEADER, key);
+                    }
+                    if (renames) {
+                        h.remove(delivery.header());
+                        h.remove(delivery.backendHeader());
+                        if (pass != null) {
+                            h.set(delivery.backendHeader(), pass);
+                        }
+                    }
+                }))
+                .build();
+        return chain.filter(forwarded)
                 // doFinally 는 끝나는 것만 돌려주지 안 끝나는 것을 끝내지 못한다.
                 // 멈춘 뒷단 하나가 격벽을 영구히 닫는 것을 이 상한이 막는다.
                 // 뒷단 응답 타임아웃과는 다르다 — 여기는 자리를 쥐는 시간이다.

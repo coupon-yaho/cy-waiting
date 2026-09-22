@@ -1,5 +1,6 @@
 package com.kafkick.waiting.gateway;
 
+import com.kafkick.waiting.domain.queue.QueueEntry;
 import com.kafkick.waiting.domain.queue.QueueState;
 import java.nio.charset.StandardCharsets;
 import org.springframework.http.HttpHeaders;
@@ -17,11 +18,18 @@ public final class QueueResponse {
 
     private static final String NO_STORE = "no-store";
 
-    private QueueResponse() {
+    private final EntryTokenDelivery delivery;
+
+    private QueueResponse(EntryTokenDelivery delivery) {
+        this.delivery = delivery;
     }
 
     public static QueueResponse create() {
-        return new QueueResponse();
+        return create(new EntryTokenDelivery(null, null, null));
+    }
+
+    public static QueueResponse create(EntryTokenDelivery delivery) {
+        return new QueueResponse(delivery);
     }
 
     /**
@@ -45,12 +53,25 @@ public final class QueueResponse {
      */
     public Mono<Void> status(ServerWebExchange exchange, QueueState state, long position,
             long etaSec, long pollAfterSec) {
+        return status(exchange, state, position, etaSec, pollAfterSec,
+                QueueEntry.UNKNOWN_TOTAL, QueueEntry.UNKNOWN_TOTAL);
+    }
+
+    /**
+     * 총원과 뒷사람 수를 같이 싣는다 (CY-827). <b>모르면 아예 안 싣는다</b> — 0 으로 채우면 줄이 빈
+     * 것과 못 센 것이 같은 값이 되고, 화면은 그 둘을 다르게 보여 줘야 한다.
+     */
+    public Mono<Void> status(ServerWebExchange exchange, QueueState state, long position,
+            long etaSec, long pollAfterSec, long total, long behind) {
         // **전수로 적는다.** 빠뜨린 상태가 조용히 매진으로 나가면, 기다리던
         // 사람에게 끝났다고 말하는 셈이다.
         String data = switch (state) {
-            case WAITING -> """
+            case WAITING -> total == QueueEntry.UNKNOWN_TOTAL ? """
                     {"status":"WAITING","position":%d,"etaSeconds":%d}"""
-                    .formatted(position, etaSec);
+                    .formatted(position, etaSec) : """
+                    {"status":"WAITING","position":%d,"etaSeconds":%d,\
+                    "totalWaiting":%d,"behind":%d}"""
+                    .formatted(position, etaSec, total, behind);
             // 입장은 토큰을 실어야 하므로 여기로 안 온다.
             case ADMITTED -> throw new IllegalArgumentException("입장은 따로 쓴다: " + state);
             // 줄에 없다. 이탈로 걷혔거나 큐가 정리됐다 — 어느 쪽이든 다시 서야 한다.
@@ -79,6 +100,16 @@ public final class QueueResponse {
      * 자리에서 주면 안 돌아온 사람 몫이 안 버려진다.
      */
     public Mono<Void> admitted(ServerWebExchange exchange, String entryToken, long expiresIn) {
+        // **헤더로 내리면 여기서 먼저 붙인다.** 본문을 쓰기 시작하면 헤더가
+        // 나가 버려 뒤에서는 못 붙인다.
+        if (delivery.where() != EntryTokenDelivery.Where.BODY) {
+            exchange.getResponse().getHeaders().set(delivery.header(), entryToken);
+        }
+        if (delivery.where() == EntryTokenDelivery.Where.HEADER) {
+            return write(exchange, HttpStatus.OK, """
+                    {"success":true,"data":{"status":"ADMITTED","expiresIn":%d}}"""
+                    .formatted(expiresIn), 0);
+        }
         return write(exchange, HttpStatus.OK, """
                 {"success":true,"data":{"status":"ADMITTED",\
                 "entryToken":"%s","expiresIn":%d}}"""

@@ -360,4 +360,70 @@ class RecoveryCriteriaTest {
         assertThatThrownBy(() -> RecoveryCriteria.overIssued(0, -1))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    // ── 경계 (CY-815) ─────────────────────────────────────────────────────────
+    // 한계 부등호를 한 칸 옮겨도 초록이던 자리들이다. 판정기가 뮤테이션 밖에 있어 아무도 몰랐다.
+
+    @Test
+    @DisplayName("재고와_발급이_영인_경계를_통과로_읽는다")
+    void 재고와_발급이_영인_경계를_통과로_읽는다() {
+        assertThat(RecoveryCriteria.overIssued(0, 0)).as("재고 0 은 거절할 입력이 아니다").isEmpty();
+        assertThat(RecoveryCriteria.overIssued(0, 5)).as("발급 0 은 관측이다").isEmpty();
+    }
+
+    @Test
+    @DisplayName("한계와_같은_복귀는_통과한다")
+    void 한계와_같은_복귀는_통과한다() {
+        assertThat(RecoveryCriteria.slowVerdictReturn(회복_한계, 회복_한계)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("정상_구간이_영이면_못_잰_것으로_읽는다")
+    void 정상_구간이_영이면_못_잰_것으로_읽는다() {
+        assertThat(RecoveryCriteria.recoveryBurst(0, 5)).hasValueSatisfying(
+                위반 -> assertThat(위반).contains("정상 구간 RPS 를 못 쟀다"));
+    }
+
+    @Test
+    @DisplayName("회복_봉우리가_영이면_못_잰_것이_아니라_안_받은_것이다")
+    void 회복_봉우리가_영이면_못_잰_것이_아니라_안_받은_것이다() {
+        assertThat(RecoveryCriteria.recoveryBurst(10, 0)).hasValueSatisfying(
+                위반 -> assertThat(위반).contains("하나도 안 받았다"));
+    }
+
+    @Test
+    @DisplayName("보낸_수가_영이면_못_잰_것으로_읽는다")
+    void 보낸_수가_영이면_못_잰_것으로_읽는다() {
+        assertThat(RecoveryCriteria.amplified(0, 3)).hasValueSatisfying(
+                위반 -> assertThat(위반).contains("보낸 수를 못 쟀다"));
+    }
+
+    @Test
+    @DisplayName("도착이_영이면_못_잰_것이_아니라_안_닿은_것이다")
+    void 도착이_영이면_못_잰_것이_아니라_안_닿은_것이다() {
+        assertThat(RecoveryCriteria.amplified(5, 0)).hasValueSatisfying(
+                위반 -> assertThat(위반).contains("하나도 안 닿았다"));
+    }
+
+    @Test
+    @DisplayName("오차가_허용치와_같으면_수렴이다")
+    void 오차가_허용치와_같으면_수렴이다() {
+        assertThat(RecoveryCriteria.notConverged("x", 10, 11)).isEmpty();
+        assertThat(RecoveryCriteria.notConverged("x", 10, 9)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("안_수렴하면_오차를_백분율로_남긴다")
+    void 안_수렴하면_오차를_백분율로_남긴다() {
+        assertThat(RecoveryCriteria.notConverged("x", 10, 12)).hasValueSatisfying(
+                위반 -> assertThat(위반).contains("20%"));
+    }
+
+    @Test
+    @DisplayName("앞이_영이면_뒤도_영이어야_수렴이다")
+    void 앞이_영이면_뒤도_영이어야_수렴이다() {
+        assertThat(RecoveryCriteria.notConverged("x", 0, 0)).isEmpty();
+        assertThat(RecoveryCriteria.notConverged("x", 0, 3)).hasValueSatisfying(
+                위반 -> assertThat(위반).contains("0 에서"));
+    }
 }

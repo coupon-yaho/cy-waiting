@@ -2,6 +2,7 @@ package com.kafkick.waiting.gateway;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.util.Locale;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
@@ -152,5 +153,31 @@ class IdempotencyKeyTest {
         } finally {
             Locale.setDefault(Locale.Category.FORMAT, 원래);
         }
+    }
+
+    /**
+     * <b>떨어진 사실을 사유별로 센다.</b> 떨어지면 같은 회원의 다른 시도가 한 키로
+     * 합쳐져 두 번째 발급을 잃는데, 응답으로는 안 드러난다. 사유를 가르지 않으면
+     * 클라이언트가 안 보낸 것인지 틀리게 보낸 것인지 모른다.
+     */
+    @Test
+    @DisplayName("떨어지면_사유별로_센다")
+    void 떨어지면_사유별로_센다() {
+        SimpleMeterRegistry 계측 = new SimpleMeterRegistry();
+        IdempotencyKey 세는_키 = IdempotencyKey.passThrough(계측);
+
+        세는_키.of("c1", "m1", null);
+        세는_키.of("c1", "m1", "   ");
+        세는_키.of("c1", "m1", "attempt-1");
+        세는_키.of("c1", "m1", CLIENT);
+
+        // **모드를 같이 싣는다.** 어느 모드에서 떨어졌는지 모르면 계약이 다른
+        // 뒷단에 붙였을 때 그 수가 정상인지 아닌지 가를 수 없다.
+        assertThat(계측.counter("waiting.idempotency.fallback",
+                "reason", "missing", "mode", "uuid").count())
+                .as("값 없음 — 빈 값도 안 준 것이다").isEqualTo(2);
+        assertThat(계측.counter("waiting.idempotency.fallback",
+                "reason", "malformed", "mode", "uuid").count())
+                .as("형식 다름 — 제대로 준 값은 안 센다").isEqualTo(1);
     }
 }

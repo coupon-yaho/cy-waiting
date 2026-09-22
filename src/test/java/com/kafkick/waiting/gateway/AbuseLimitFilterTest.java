@@ -6,7 +6,10 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.kafkick.waiting.MutableClock;
 import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
+import java.net.Inet6Address;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.UnknownHostException;
 import java.time.Duration;
 import java.util.List;
 import java.time.Instant;
@@ -170,7 +173,7 @@ class AbuseLimitFilterTest {
         }
 
         // 정상 사용자가 걸리는지 보려면 사유가 갈려 있어야 한다.
-        assertThat(meters.getMeters()).singleElement().satisfies(m ->
+        assertThat(meters.find("waiting.abuse").counters()).singleElement().satisfies(m ->
                 assertThat(m.getId().getTag("key")).isEqualTo("member"));
     }
 
@@ -305,6 +308,354 @@ class AbuseLimitFilterTest {
         }
 
         assertThat(좁은_것.size()).isLessThanOrEqualTo(100);
+    }
+
+    /**
+     * <b>식별자 축이 차면 그 축을 접는다</b> (CY-925). 식별자에 서명이 없어 값을 바꿔가며 자리를 채울 수
+     * 있는데, 거절로 두면 채운 쪽이 아니라 새로 온 대기자가 막힌다.
+     */
+    @Test
+    @DisplayName("식별자_자리가_차도_새_대기자가_들어온다")
+    void 식별자_자리가_차도_새_대기자가_들어온다() {
+        SecondWindowLimiter 좁은_것 = SecondWindowLimiter.withMaxKeys(4, 2);
+        AbuseLimitFilter 좁은_필터 = AbuseLimitFilter.withLimiter(
+                시계, meters, () -> 0.5, TrustedProxies.of(List.of("127.0.0.1")), 좁은_것);
+        AtomicInteger 통과 = new AtomicInteger();
+        for (int i = 0; i < 5; i++) {
+            태운다(좁은_필터, "flood" + i, "10.0.0.1", 통과);
+        }
+
+        assertThat(좁은_것.saturated(SecondWindowLimiter.Axis.SECONDARY, 지금.getEpochSecond()))
+                .as("전제 — 식별자 축이 찼다").isTrue();
+
+        int 앞서_통과 = 통과.get();
+        MockServerWebExchange 새_대기자 = 태운다(좁은_필터, "new-member", "10.0.0.2", 통과);
+
+        assertThat(통과.get()).as("주소 축으로 판정해 통과한다").isEqualTo(앞서_통과 + 1);
+        assertThat(새_대기자.getResponse().getStatusCode()).isNull();
+    }
+
+    /** 접어도 주소 축은 그대로 판정한다. 접는 것이 여는 것이 되면 그 자체가 통로다. */
+    @Test
+    @DisplayName("접어도_주소_상한은_그대로다")
+    void 접어도_주소_상한은_그대로다() {
+        SecondWindowLimiter 좁은_것 = SecondWindowLimiter.withMaxKeys(4, 2);
+        AbuseLimitFilter 좁은_필터 = AbuseLimitFilter.withLimiter(
+                시계, meters, () -> 0.5, TrustedProxies.of(List.of("127.0.0.1")), 좁은_것);
+        AtomicInteger 통과 = new AtomicInteger();
+        for (int i = 0; i < 3; i++) {
+            태운다(좁은_필터, "flood" + i, "10.0.0.1", 통과);
+        }
+
+        MockServerWebExchange 마지막 = null;
+        for (int i = 0; i < 300; i++) {
+            마지막 = 태운다(좁은_필터, "m" + i, "10.0.0.1", 통과);
+        }
+
+        assertThat(마지막.getResponse().getStatusCode())
+                .as("주소 상한을 넘기면 막힌다").isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        // **받는 쪽도 센다.** 막는 것만 보면 경계가 한 칸 밀려도 통과한다.
+        assertThat(통과.get()).as("주소 상한만큼만 지나간다").isEqualTo(200);
+    }
+
+    private MockServerWebExchange 태운다(AbuseLimitFilter 필터, String member, String ip,
+            AtomicInteger 통과) {
+        MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest
+                .method(HttpMethod.POST, ISSUE)
+                .remoteAddress(new InetSocketAddress("127.0.0.1", 12345))
+                .header("X-Member-Id", member)
+                .header("X-Forwarded-For", ip));
+        필터.filter(exchange, e -> {
+            통과.incrementAndGet();
+            return Mono.empty();
+        }).block();
+        return exchange;
+    }
+
+    /**
+     * <b>같은 주소는 같은 키다</b> (CY-925). v6 는 한 주소를 여러 모양으로 적을 수 있어, 원문을 키로 쓰면
+     * 표기만 바꿔 상한을 통째로 우회한다 — 접힌 구간에서는 이 축이 유일한 문이다.
+     */
+    @Test
+    @DisplayName("같은_v6_주소는_표기가_달라도_한_몫이다")
+    void 같은_v6_주소는_표기가_달라도_한_몫이다() {
+        // **회원을 매번 다르게 한다.** 같은 회원이면 사람당 상한이 먼저 걸려 주소 몫이 안 깎인다.
+        int 앞서_통과 = 다음으로_감.get();
+        for (int i = 0; i < 200; i++) {
+            태운다(ISSUE, String.valueOf(1_000 + i), i % 2 == 0 ? "::1" : "0:0:0:0:0:0:0:1");
+        }
+
+        MockServerWebExchange 넘긴_것 = 태운다(ISSUE, "9999", "::0001");
+
+        // 막는 쪽만 보면 v6 를 통째로 거절하는 회귀도 초록으로 지나간다.
+        assertThat(다음으로_감.get() - 앞서_통과).as("표기가 갈려도 200 건은 다 지나간다").isEqualTo(200);
+        assertThat(넘긴_것.getResponse().getStatusCode())
+                .as("표기를 바꿔도 같은 주소의 몫을 쓴다").isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        // /64 로 묶으므로(CY-940) "다른 주소" 는 다른 /64 여야 한다. ::2 는 ::1 과 같은 묶음이다.
+        assertThat(태운다(ISSUE, "8888", "2001:db8:9:9::2").getResponse().getStatusCode())
+                .as("다른 /64 는 제 몫이 그대로다").isNull();
+    }
+
+    /**
+     * <b>v6 는 /64 로 묶는다</b> (CY-940). 하나의 /64 가 주소를 1.8e19 개 주므로, 주소마다 키를 만들면 상한이
+     * 매 요청 새 예산으로 리셋되고 키 공간도 무한이다. 묶으면 주소당 상한이 다시 뜻을 갖는다.
+     */
+    @Test
+    @DisplayName("같은_64_안에서_주소를_돌려도_한_몫이다")
+    void 같은_64_안에서_주소를_돌려도_한_몫이다() {
+        int 앞서_통과 = 다음으로_감.get();
+        for (int i = 0; i < 200; i++) {
+            태운다(ISSUE, String.valueOf(3_000 + i), "2001:db8:1:2::" + Integer.toHexString(i + 1));
+        }
+
+        MockServerWebExchange 넘긴_것 = 태운다(ISSUE, "7777", "2001:db8:1:2::ffff");
+
+        assertThat(다음으로_감.get() - 앞서_통과).as("상한까지는 다 지나간다").isEqualTo(200);
+        assertThat(넘긴_것.getResponse().getStatusCode())
+                .as("주소를 돌려도 같은 /64 의 몫을 쓴다").isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+    }
+
+    /**
+     * <b>앞단이 없는 배포에서도 묶는다</b> (CY-940). 신뢰 홉이 아니거나 전달 헤더가 없으면 소켓 주소를 키로
+     * 쓰는데, 거기를 안 묶으면 직결 v6 클라이언트가 주소를 돌려 상한을 통째로 우회한다.
+     */
+    @Test
+    @DisplayName("전달_헤더가_없어도_소켓_주소를_64_로_묶는다")
+    void 전달_헤더가_없어도_소켓_주소를_64_로_묶는다() {
+        int 앞서_통과 = 다음으로_감.get();
+        for (int i = 0; i < 200; i++) {
+            소켓으로_태운다(String.valueOf(8_000 + i), "2001:db8:5:5::" + Integer.toHexString(i + 1));
+        }
+
+        assertThat(다음으로_감.get() - 앞서_통과).as("상한까지는 다 지나간다").isEqualTo(200);
+        assertThat(소켓으로_태운다("4444", "2001:db8:5:5::ffff").getResponse().getStatusCode())
+                .as("주소를 돌려도 같은 /64 의 몫을 쓴다").isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        assertThat(소켓으로_태운다("4445", "2001:db8:5:6::1").getResponse().getStatusCode())
+                .as("옆 /64 는 안 깎인다").isNull();
+    }
+
+    /** 전달 헤더 없이 소켓 주소로만 오는 요청. 앞단이 없는 배포의 모양이다. */
+    private MockServerWebExchange 소켓으로_태운다(String member, String ip) {
+        return 소켓으로_태운다(member, new InetSocketAddress(ip, 12345));
+    }
+
+    private MockServerWebExchange 소켓으로_태운다(String member, InetAddress ip) {
+        return 소켓으로_태운다(member, new InetSocketAddress(ip, 12345));
+    }
+
+    private MockServerWebExchange 소켓으로_태운다(String member, InetSocketAddress remote) {
+        MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest
+                .method(HttpMethod.POST, ISSUE)
+                .remoteAddress(remote)
+                .header("X-Member-Id", member));
+        filter.filter(exchange, e -> {
+            다음으로_감.incrementAndGet();
+            return Mono.empty();
+        }).block();
+        return exchange;
+    }
+
+    /** 인터페이스 식별자는 주인이 마음대로 바꾼다. 윗 비트만 돌려도 같은 /64 면 한 몫이어야 한다. */
+    @Test
+    @DisplayName("인터페이스_식별자_윗비트를_돌려도_한_몫이다")
+    void 인터페이스_식별자_윗비트를_돌려도_한_몫이다() {
+        for (int i = 0; i < 200; i++) {
+            태운다(ISSUE, String.valueOf(11_000 + i), "2001:db8:7:7:" + Integer.toHexString(i + 1) + "::1");
+        }
+
+        assertThat(태운다(ISSUE, "1199", "2001:db8:7:7:ffff::9").getResponse().getStatusCode())
+                .as("윗 비트를 돌려도 같은 /64 의 몫을 쓴다").isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+    }
+
+    /** v4-mapped 는 묶지 않는다. 묶으면 v4 인터넷 전체가 한 키를 나눠 쓴다. */
+    @Test
+    @DisplayName("v4_mapped_는_주소마다_제_몫이다")
+    void v4_mapped_는_주소마다_제_몫이다() {
+        for (int i = 0; i < 200; i++) {
+            태운다(ISSUE, String.valueOf(12_000 + i), "::ffff:10.9.9.9");
+        }
+
+        assertThat(태운다(ISSUE, "1299", "::ffff:10.9.9.9").getResponse().getStatusCode())
+                .as("같은 주소는 제 상한에 걸린다").isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        assertThat(태운다(ISSUE, "1298", "::ffff:10.9.9.10").getResponse().getStatusCode())
+                .as("옆 주소는 제 몫이 그대로다").isNull();
+    }
+
+    /**
+     * <b>신뢰 판정은 접기 전 원문으로 한다.</b> 접은 문자열로 물으면 v6 앞단이 신뢰 대역에서 빠지고, 그 프록시
+     * 뒤 전원이 한 키를 나눠 쓰다 정상 사용자가 막힌다.
+     */
+    @Test
+    @DisplayName("v6_앞단도_신뢰_대역이면_전달_헤더를_쓴다")
+    void v6_앞단도_신뢰_대역이면_전달_헤더를_쓴다() {
+        AbuseLimitFilter 필터 = AbuseLimitFilter.of(시계, new SimpleMeterRegistry(), () -> 0.5,
+                TrustedProxies.of(List.of("2001:db8:aa::/48")));
+        AtomicInteger 통과 = new AtomicInteger();
+
+        for (int i = 0; i < 200; i++) {
+            프록시_뒤로_태운다(필터, "2001:db8:aa::9", String.valueOf(13_000 + i), "2001:db8:b:b::1", 통과);
+        }
+
+        assertThat(통과.get()).as("전달 헤더의 주소가 키라 상한까지 지나간다").isEqualTo(200);
+        assertThat(프록시_뒤로_태운다(필터, "2001:db8:aa::9", "1399", "2001:db8:b:b::2", 통과)
+                .getResponse().getStatusCode())
+                .as("같은 /64 의 몫을 쓴다").isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+    }
+
+    /** v6 앞단을 지나온 요청. 소켓은 프록시, 전달 헤더는 사용자 주소다. */
+    private MockServerWebExchange 프록시_뒤로_태운다(AbuseLimitFilter 필터, String 프록시, String member,
+            String ip, AtomicInteger 통과) {
+        MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest
+                .method(HttpMethod.POST, ISSUE)
+                .remoteAddress(new InetSocketAddress(프록시, 12345))
+                .header("X-Member-Id", member)
+                .header("X-Forwarded-For", ip));
+        필터.filter(exchange, e -> {
+            통과.incrementAndGet();
+            return Mono.empty();
+        }).block();
+        return exchange;
+    }
+
+    /** 스코프가 붙은 소켓 주소. 존을 떼고 접는다 — 못 읽는다고 막으면 되던 연결이 끊긴다. */
+    @Test
+    @DisplayName("스코프가_붙은_소켓_주소도_64_로_묶는다")
+    void 스코프가_붙은_소켓_주소도_64_로_묶는다() throws Exception {
+        int 앞서_통과 = 다음으로_감.get();
+        for (int i = 0; i < 200; i++) {
+            소켓으로_태운다(String.valueOf(14_000 + i), 존이_붙은_주소(i + 1));
+        }
+
+        assertThat(다음으로_감.get() - 앞서_통과).as("막지 않는다").isEqualTo(200);
+        assertThat(소켓으로_태운다("1499", 존이_붙은_주소(0xffff)).getResponse().getStatusCode())
+                .as("존을 떼고 같은 /64 로 묶는다").isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+    }
+
+    /** `fe80::N%2`. 인터페이스 이름 대신 번호를 써 어느 기계에서나 같은 주소가 나온다. */
+    private InetAddress 존이_붙은_주소(int 뒷자리) throws UnknownHostException {
+        byte[] bytes = new byte[16];
+        bytes[0] = (byte) 0xfe;
+        bytes[1] = (byte) 0x80;
+        bytes[14] = (byte) (뒷자리 >> 8);
+        bytes[15] = (byte) 뒷자리;
+        return Inet6Address.getByAddress(null, bytes, 2);
+    }
+
+    @Test
+    @DisplayName("다른_64_는_제_몫이_그대로다")
+    void 다른_64_는_제_몫이_그대로다() {
+        for (int i = 0; i < 200; i++) {
+            태운다(ISSUE, String.valueOf(4_000 + i), "2001:db8:1:3::" + Integer.toHexString(i + 1));
+        }
+
+        assertThat(태운다(ISSUE, "6666", "2001:db8:1:4::1").getResponse().getStatusCode())
+                .as("옆 /64 는 안 깎인다").isNull();
+    }
+
+    /** v4 와 v4-mapped 는 지금 키 모양 그대로다. 묶으면 한 주소가 아니라 대역이 한 몫을 쓴다. */
+    @Test
+    @DisplayName("v4_는_주소마다_제_몫이다")
+    void v4_는_주소마다_제_몫이다() {
+        for (int i = 0; i < 200; i++) {
+            태운다(ISSUE, String.valueOf(5_000 + i), "10.1.2.3");
+        }
+
+        assertThat(태운다(ISSUE, "5555", "10.1.2.3").getResponse().getStatusCode())
+                .as("같은 v4 는 제 상한에 걸린다").isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        assertThat(태운다(ISSUE, "5556", "10.1.2.4").getResponse().getStatusCode())
+                .as("옆 v4 주소는 제 몫이 그대로다").isNull();
+    }
+
+    /**
+     * <b>접혀도 이미 아는 사람은 상한을 받는다</b> (CY-925). 자리를 못 얻은 사람만 접히고, 추적 중인
+     * 회원은 그대로 제 상한에 걸려야 한다 — 축을 통째로 건너뛰면 한 사람이 주소 상한까지 쏠 수 있다.
+     */
+    @Test
+    @DisplayName("접혀도_아는_회원은_제_상한을_받는다")
+    void 접혀도_아는_회원은_제_상한을_받는다() {
+        SecondWindowLimiter 좁은_것 = SecondWindowLimiter.withMaxKeys(4, 2);
+        AbuseLimitFilter 좁은_필터 = AbuseLimitFilter.withLimiter(
+                시계, meters, () -> 0.5, TrustedProxies.of(List.of("127.0.0.1")), 좁은_것);
+        AtomicInteger 통과 = new AtomicInteger();
+        // 먼저 자리를 잡은 회원. 그 뒤 다른 식별자로 축을 채운다.
+        태운다(좁은_필터, "known", "10.0.0.1", 통과);
+        for (int i = 0; i < 4; i++) {
+            태운다(좁은_필터, "flood" + i, "10.0.0.1", 통과);
+        }
+        assertThat(좁은_것.saturated(SecondWindowLimiter.Axis.SECONDARY, 지금.getEpochSecond()))
+                .as("전제 — 식별자 축이 찼다").isTrue();
+
+        MockServerWebExchange 마지막 = null;
+        for (int i = 0; i < 10; i++) {
+            마지막 = 태운다(좁은_필터, "known", "10.0.0.1", 통과);
+        }
+
+        assertThat(마지막.getResponse().getStatusCode())
+                .as("아는 회원은 사람당 상한에 걸린다").isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        assertThat(meters.get("waiting.abuse").tag("key", "member").counter().count())
+                .as("아는 회원은 열 번 중 여섯이 사람당 상한에 걸린다").isEqualTo(6);
+    }
+
+    @Test
+    @DisplayName("접고_통과한_것을_센다")
+    void 접고_통과한_것을_센다() {
+        SecondWindowLimiter 좁은_것 = SecondWindowLimiter.withMaxKeys(4, 2);
+        AbuseLimitFilter 좁은_필터 = AbuseLimitFilter.withLimiter(
+                시계, meters, () -> 0.5, TrustedProxies.of(List.of("127.0.0.1")), 좁은_것);
+        AtomicInteger 통과 = new AtomicInteger();
+        for (int i = 0; i < 5; i++) {
+            태운다(좁은_필터, "flood" + i, "10.0.0.1", 통과);
+        }
+
+        태운다(좁은_필터, "new-member", "10.0.0.2", 통과);
+
+        assertThat(meters.get("waiting.abuse.folded").counter().count())
+                .as("접고 통과한 수").isEqualTo(4);
+        assertThat(meters.find("waiting.abuse").counters())
+                .as("거절이 없었으니 거절 지표도 없다").isEmpty();
+    }
+
+    /**
+     * <b>주소 축이 차면 접을 곳이 없다</b>. 같은 결과값으로 오지만 처분이 다르다 — 접힌 것과 한데 묶으면
+     * 운영자가 훨씬 심각한 쪽을 못 본다.
+     */
+    @Test
+    @DisplayName("주소_자리가_차면_접지_않고_막는다")
+    void 주소_자리가_차면_접지_않고_막는다() {
+        SecondWindowLimiter 좁은_것 = SecondWindowLimiter.withMaxKeys(2, 400);
+        AbuseLimitFilter 좁은_필터 = AbuseLimitFilter.withLimiter(
+                시계, meters, () -> 0.5, TrustedProxies.of(List.of("127.0.0.1")), 좁은_것);
+        AtomicInteger 통과 = new AtomicInteger();
+        for (int i = 0; i < 2; i++) {
+            태운다(좁은_필터, "m" + i, "10.0.0." + (i + 1), 통과);
+        }
+
+        MockServerWebExchange 막힌_것 = 태운다(좁은_필터, "m9", "10.0.0.9", 통과);
+
+        assertThat(막힌_것.getResponse().getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        assertThat(meters.get("waiting.abuse").tag("key", "keyspace").counter().count())
+                .as("접힘과 다른 이름으로 센다").isEqualTo(1);
+    }
+
+    /**
+     * <b>두 축을 다 밟아도 유계다</b>. 축별 상한만 보는 시험은 필터가 실제로 쓰는 배치를 안 밟아,
+     * 합이 늘어나도 초록으로 남는다.
+     */
+    @Test
+    @DisplayName("두_축을_함께_채워도_맵이_유계다")
+    void 두_축을_함께_채워도_맵이_유계다() {
+        SecondWindowLimiter 좁은_것 = SecondWindowLimiter.withMaxKeys(50, 100);
+        AbuseLimitFilter 좁은_필터 = AbuseLimitFilter.withLimiter(
+                시계, meters, () -> 0.5, TrustedProxies.of(List.of("127.0.0.1")), 좁은_것);
+        AtomicInteger 통과 = new AtomicInteger();
+        // 주소를 돌려 쓴다. 매번 새 주소면 주소 축이 먼저 차서 식별자 축은 밟지도 못한다.
+        for (int i = 0; i < 3_000; i++) {
+            태운다(좁은_필터, "m" + i, "10.0.0." + (i % 40), 통과);
+        }
+
+        assertThat(좁은_것.saturated(SecondWindowLimiter.Axis.SECONDARY, 지금.getEpochSecond()))
+                .as("식별자 축이 찼다").isTrue();
+        assertThat(좁은_것.size()).as("주소 40 + 식별자 100").isEqualTo(140);
     }
 
     @Test

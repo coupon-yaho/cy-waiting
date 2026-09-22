@@ -100,4 +100,69 @@ class IpLiteralTest {
         assertThat(IpLiteral.parse("::ffff:10.0.1.7"))
                 .isEqualTo(IpLiteral.parse("10.0.1.7"));
     }
+
+    /**
+     * <b>한 대를 가리키는 주소만 목적지다.</b> 뒷단이 보고한 값이 그대로 연결 대상이
+     * 되므로, 어느 한 대도 아닌 주소가 여기를 지나면 게이트웨이가 엉뚱한 데로 보낸다.
+     */
+    @Test
+    @DisplayName("한_대를_가리키는_주소만_목적지다")
+    void 한_대를_가리키는_주소만_목적지다() {
+        assertThat(IpLiteral.routable(IpLiteral.parse("10.0.1.7"))).isTrue();
+        // 루프백은 같은 호스트의 뒷단이라 목적지다. 자기 자신은 포트가 가른다.
+        assertThat(IpLiteral.routable(IpLiteral.parse("127.0.0.1"))).isTrue();
+        assertThat(IpLiteral.routable(IpLiteral.parse("fd00::5"))).isTrue();
+        assertThat(IpLiteral.routable(IpLiteral.parse("::1"))).as("v6 루프백도 같다").isTrue();
+        // fe 로 시작해도 다음 두 비트가 다르면 링크 로컬이 아니다.
+        assertThat(IpLiteral.routable(IpLiteral.parse("fec0::1"))).isTrue();
+        // 169 로 시작해도 둘째 바이트가 다르면 링크 로컬이 아니다.
+        assertThat(IpLiteral.routable(IpLiteral.parse("169.1.1.1"))).isTrue();
+        // 앞 두 바이트가 20 01 이어도 그다음이 0 이 아니면 Teredo 가 아니다.
+        assertThat(IpLiteral.routable(IpLiteral.parse("2001:db8::1"))).isTrue();
+        // 20 으로 시작해도 둘째가 02 가 아니면 6to4 가 아니다.
+        assertThat(IpLiteral.routable(IpLiteral.parse("2003::1"))).isTrue();
+        // 192 로 시작해도 둘째가 88 이 아니면 릴레이 애니캐스트가 아니다.
+        assertThat(IpLiteral.routable(IpLiteral.parse("192.168.0.5"))).isTrue();
+        // 192.88 로 시작해도 셋째가 99 가 아니면 릴레이 애니캐스트가 아니다.
+        assertThat(IpLiteral.routable(IpLiteral.parse("192.88.1.1"))).isTrue();
+        // 20 01 로 시작해도 넷째가 0 이 아니면 Teredo 가 아니다.
+        assertThat(IpLiteral.routable(IpLiteral.parse("2001:1::1"))).isTrue();
+        // 00 64 로 시작해도 셋째·넷째가 ff 9b 가 아니면 NAT64 가 아니다.
+        assertThat(IpLiteral.routable(IpLiteral.parse("64:1::1"))).isTrue();
+        assertThat(IpLiteral.routable(IpLiteral.parse("64:ff00::1"))).isTrue();
+    }
+
+    @Test
+    @DisplayName("한_대가_아닌_주소는_목적지가_아니다")
+    void 한_대가_아닌_주소는_목적지가_아니다() {
+        assertThat(IpLiteral.routable(null)).as("못 읽은 것은 목적지가 아니다").isFalse();
+        assertThat(IpLiteral.routable(IpLiteral.parse("0.0.0.0"))).isFalse();
+        assertThat(IpLiteral.routable(IpLiteral.parse("::"))).isFalse();
+        assertThat(IpLiteral.routable(IpLiteral.parse("169.254.1.1"))).isFalse();
+        assertThat(IpLiteral.routable(IpLiteral.parse("fe80::1"))).isFalse();
+        assertThat(IpLiteral.routable(IpLiteral.parse("224.0.0.1"))).isFalse();
+        assertThat(IpLiteral.routable(IpLiteral.parse("255.255.255.255"))).isFalse();
+        assertThat(IpLiteral.routable(IpLiteral.parse("ff02::1"))).isFalse();
+    }
+
+    /**
+     * <b>v4 를 v6 표기 안에 실어 나르는 것은 목적지가 아니다.</b> 번역되는 순간
+     * 어디로 가는지는 안에 실린 v4 가 정하는데, 그 v4 는 여기 판정을 안 거친다.
+     */
+    @Test
+    @DisplayName("v4_를_실어_나르는_v6_표기는_거절한다")
+    void v4_를_실어_나르는_v6_표기는_거절한다() {
+        assertThat(IpLiteral.routable(IpLiteral.parse("::127.0.0.1"))).isFalse();
+        assertThat(IpLiteral.routable(IpLiteral.parse("::10.0.0.5"))).isFalse();
+        assertThat(IpLiteral.routable(IpLiteral.parse("::2"))).as("::1 만 빼고 거절한다")
+                .isFalse();
+        assertThat(IpLiteral.routable(IpLiteral.parse("64:ff9b::a00:105")))
+                .as("NAT64").isFalse();
+        assertThat(IpLiteral.routable(IpLiteral.parse("2002:0a00:0005::1")))
+                .as("6to4").isFalse();
+        assertThat(IpLiteral.routable(IpLiteral.parse("2001:0:0a00:5::1")))
+                .as("Teredo").isFalse();
+        assertThat(IpLiteral.routable(IpLiteral.parse("192.88.99.1")))
+                .as("6to4 릴레이 애니캐스트").isFalse();
+    }
 }

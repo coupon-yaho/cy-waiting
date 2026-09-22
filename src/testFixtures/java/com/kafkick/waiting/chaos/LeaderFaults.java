@@ -141,14 +141,16 @@ public final class LeaderFaults {
      *
      * <p><b>남길 시간을 부르는 쪽이 정한다.</b> 여기서 정하면 그 값이 곧 관측
      * 창인데, 재는 쪽은 그게 얼마인지 모른 채 곧바로 읽는다.
+     *
+     * @return 락이 있어 만료를 걸었으면 참
      */
-    public void lease를_만료시킨다(Duration 남길_시간) {
+    public boolean lease를_만료시킨다(Duration 남길_시간) {
         // 0 이하를 넘기면 지워 버린다 — 만료 임박이 아니라 해제를 만드는 것이고,
         // 그건 이 픽스처가 안 만들기로 한 상태다.
         if (남길_시간 == null || 남길_시간.toMillis() <= 0) {
             throw new IllegalArgumentException("남길 시간은 1밀리초 이상이어야 한다: " + 남길_시간);
         }
-        redis.sync().pexpire(RedisKeys.LEADER, 남길_시간.toMillis());
+        return Boolean.TRUE.equals(redis.sync().pexpire(RedisKeys.LEADER, 남길_시간.toMillis()));
     }
 
     /** 지금 소유자. <b>펜스 번호가 붙어 있으면 떼고 준다</b> — 값 형식은 프로덕션 몫이다. */

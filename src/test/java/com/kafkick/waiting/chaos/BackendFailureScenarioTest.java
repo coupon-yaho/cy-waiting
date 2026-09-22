@@ -33,7 +33,8 @@ import org.springframework.test.web.reactive.server.WebTestClient;
  * C9 — 뒷단이 5xx 를 낸다 (8.3.4 · 5절).
  *
  * <p>C8 과 갈리는 것은 <b>스텁이 내는 값</b>이다 — 저쪽은 응답이 아예 안 오고
- * 여기는 오긴 오는데 500 이다. <b>서킷은 여기서 안 잰다</b>(CY-841). 재는 것은
+ * 여기는 오긴 오는데 500 이고 폴백의 503 으로 끝난다. <b>서킷은 여기서 안 잰다</b>
+ * — 표본이 모자라 안 열린다. 여는 것은 {@code BackendServerErrorTest} 가 잰다. 재는 것은
  * 하나다 — 줄에 선 사람의 자리는 레디스에 있으니 뒷단이 망가져도 그대로여야 한다.
  */
 @Tag("chaos")
@@ -66,8 +67,6 @@ class BackendFailureScenarioTest {
 
     private static final Duration 기다림 = Duration.ofSeconds(20);
 
-    /** 심어 둔 줄의 생존 신호 수명. 시험 수명보다 길어야 스위퍼가 살아 있다고 읽는다. */
-    private static final Duration 생존_수명 = Duration.ofMinutes(5);
 
     /** 뒷단이 보고하는 여유. 바닥값을 크게 넘겨야 대조군 예산이 구간을 버틴다. */
     private static final long 가용량 = 2_000;
@@ -174,7 +173,7 @@ class BackendFailureScenarioTest {
             redis.opsForSet().add(RedisKeys.ACTIVE_COUPONS, 쿠폰).block(기다림);
             redis.opsForValue().set(RedisKeys.stock(쿠폰), "100000").block(기다림);
         }
-        QueueSeed.줄을_세운다(연결, COUPON, 줄_선_사람, 생존_수명);
+        QueueSeed.줄을_세운다(연결, COUPON, 줄_선_사람);
     }
 
     /**
@@ -314,12 +313,12 @@ class BackendFailureScenarioTest {
                             // 전 판정이 통과한다 — 줄이 선 쿠폰은 뒷단에 아예
                             // 안 가므로 장애 유무로 관측이 안 갈린다.
                             뒷단이_망가졌다(뒷단_상태[0], 뒷단_상태[1]),
-                            // **게이트웨이가 500 을 겪었는가.** 뒷단을 직접
-                            // 찌른 것은 스텁이 망가진 증거일 뿐이다. 대조군이
-                            // 게이트웨이를 지나 뒷단까지 가고 그 500 을 그대로
-                            // 받아야, 이 시나리오가 재려는 경로가 열린 것이다.
+                            // **게이트웨이가 뒷단의 500 을 겪었는가.** 뒷단을
+                            // 직접 찌른 것은 스텁이 망가진 증거일 뿐이다. 대조군이
+                            // 게이트웨이를 지나 뒷단까지 가고 폴백으로 끝나야,
+                            // 이 시나리오가 재려는 경로가 열린 것이다.
                             대조군이_통했다("유지", 한산한_도착[1]),
-                            오백이_그대로_나갔다(한산한_장애중),
+                            폴백으로_끝났다(한산한_장애중),
                             // **줄에 세웠는가.** 5xx 만 보면 전원이 429 로
                             // 거절돼도 통과한다 — 아무도 자리를 못 받은 경우와
                             // 모두가 받은 경우가 같은 초록이 된다.
@@ -423,15 +422,15 @@ class BackendFailureScenarioTest {
     }
 
     /**
-     * 뒷단의 500 이 그대로 나갔는가. <b>이건 전제이지 위반이 아니다</b> — 뒷단이
-     * 낸 것을 흘리는 것이 맞는 동작이고, 한 건도 없으면 게이트웨이가 장애를
-     * 아예 안 겪은 것이다.
+     * 뒷단의 500 이 폴백의 503 으로 끝났는가. <b>이건 전제이지 위반이 아니다</b> —
+     * 서킷이 실패로 세어 바꾸는 것이 맞는 동작이다. 5xx 로만 재면 배선이 풀려 500 이
+     * 그대로 새도 통과한다.
      */
-    private Optional<String> 오백이_그대로_나갔다(List<Integer> 상태) {
-        long 오백 = 상태.stream().filter(status -> status >= 500).count();
-        return 오백 == 한산한_보낼_수 ? Optional.empty()
-                : Optional.of("전제 — 유지 구간에 5xx 가 %d 건이다 (보낸 %d): %s"
-                        .formatted(오백, 한산한_보낼_수, 상태));
+    private Optional<String> 폴백으로_끝났다(List<Integer> 상태) {
+        long 폴백 = 상태.stream().filter(status -> status == 503).count();
+        return 폴백 == 한산한_보낼_수 ? Optional.empty()
+                : Optional.of("전제 — 유지 구간에 503 이 %d 건이다 (보낸 %d): %s"
+                        .formatted(폴백, 한산한_보낼_수, 상태));
     }
 
     /**

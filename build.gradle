@@ -16,7 +16,7 @@ plugins {
 }
 
 group = 'com.kafkick'
-version = '0.7.1'
+version = '0.8.0'
 
 // **산출물 이름에 버전을 안 싣는다.** 실으면 Dockerfile 과 부하 시험 구성이 매
 // 릴리스마다 같이 고쳐야 하고, 한 곳을 빠뜨리면 없는 파일을 가리킨 채 조용히 깨진다.
@@ -132,6 +132,9 @@ dependencies {
     // **스타터가 아니라 코어만 넣는다.** 스타터는 로깅까지 얹어 픽스처의 api 로
     // 시험 런타임에 전파된다 — 필요한 것은 SpringApplicationBuilder 하나다.
     testFixturesApi 'org.springframework.boot:spring-boot'
+    // 회복을 기다리는 관측도 픽스처다 (CY-930). 시나리오마다 대기 조건을 다시 쓰면
+    // "첫 스냅샷 5초" 가 시나리오마다 다른 것을 잰다. 버전은 부트 BOM 이 잡는다.
+    testFixturesImplementation 'org.awaitility:awaitility'
 }
 
 // ── 테스트 계층 ──────────────────────────────────────────────────────────────
@@ -157,12 +160,25 @@ tasks.withType(Test).configureEach {
     // 스냅샷을 직접 다루는 시험이 자기가 만든 상태를 잃고, 실패가 코드
     // 결함인지 간섭인지 못 가리게 된다. 배선을 재는 시험만 다시 켠다.
     systemProperty 'spring.profiles.active', 'test'
+    // **실패 메시지를 로그에 싣는다.** 기본 형식은 메시지를 통째로 버려, 카오스가 빨개지면 어느
+    // 판정이 깨졌는지 보려고 리포트 아티팩트를 받아야 했다 (CY-965).
+    //
+    // **프레임을 끄는 대신 거른다.** 끄면 위치가 하나도 안 남아, 메시지 없는 예외가 나는 단위
+    // 계층이 전보다 나빠진다. 진입점만 남기면 메시지와 줄 번호를 둘 다 얻는다.
+    testLogging {
+        exceptionFormat = 'full'
+        stackTraceFilters 'entry_point'
+    }
 }
 
 tasks.named('test') {
     useJUnitPlatform {
         excludeTags 'integration', 'context', 'chaos'
     }
+    // **태그 없는 컨텍스트 시험도 레디스 없이 돈다.** context 계층과 같은 이유다 — 주소를 안 박으면 로컬 6379 에
+    // 떠 있는 아무 레디스에나 붙는다. 이 계층의 시험은 연결을 안 맺지만, 맺는 시험이 생기는 순간 남의 데이터에 쓴다.
+    systemProperty 'spring.data.redis.host', '127.0.0.1'
+    systemProperty 'spring.data.redis.port', '1'
     // **계획서도 시험의 입력이다.** 게이트와 시험을 잇는 표를 계획서에서 읽는
     // 시험이 있는데, 그레이들이 이 경로를 모르면 계획서만 고친 판에서 그 시험이
     // 안 돈다 — 게이트를 지워도 로컬은 초록이다.
@@ -196,6 +212,14 @@ tasks.named('test') {
         // 진행되며 채워지고, 빈 계층 때문에 파이프라인이 막히면 안 된다.
         filter {
             failOnNoMatchingTests = false
+        }
+        if (layer == 'context') {
+            // **이 계층의 계약은 "레디스 없음" 이다.** CI 러너에는 거기 레디스가 없어 등록이 실패하고
+            // fail-open 으로 흐르는데, 주소를 안 박으면 기본 6379 로 붙는다 — 로컬에 아무 레디스나 떠
+            // 있으면 판정이 뒤집히고 그 레디스에 키를 쓴다. 닿지 않는 포트로 못 박는다. 레디스를
+            // 쓰는 시험은 제 주소를 직접 넘기므로 이 값보다 앞선다.
+            systemProperty 'spring.data.redis.host', '127.0.0.1'
+            systemProperty 'spring.data.redis.port', '1'
         }
     }
 }
@@ -365,8 +389,21 @@ pitest {
     //
     // **routing 도 넣는다.** 고르개에 넘길 후보를 거르고 실패를 세는 코드가
     // 여기 있는데 범위 밖이라, 그 자리를 지워도 시험이 초록인 채로 지나갔다.
+    //
+    // **카오스 판정기도 넣는다 (CY-815).** 판정기가 범위 밖이라 한계 부등호를 한 칸 옮겨도
+    // 초록이었다 — 둘만 돌려 111 중 97 이 죽었다. 픽스처 소스셋을 같이 넘기고 판정기
+    // 클래스만 **이름으로** 짚는다. 패키지째나 접두어로 넣으면 대상 시험도 같은 패턴으로
+    // 끌려와, 비슷한 이름의 시나리오 하나가 생기는 날 컨테이너를 띄운다.
     targetClasses = ['com.kafkick.waiting.domain.*', 'com.kafkick.waiting.control.*',
-                     'com.kafkick.waiting.gateway.*', 'com.kafkick.waiting.routing.*']
+                     'com.kafkick.waiting.gateway.*', 'com.kafkick.waiting.routing.*',
+                     'com.kafkick.waiting.chaos.RecoveryCriteria',
+                     'com.kafkick.waiting.chaos.BackendRpsRecorder']
+    // 대상 시험은 기본이 대상 클래스 패턴이라, 판정기를 이름으로 짚으면 그 시험이 빠진다.
+    targetTests = ['com.kafkick.waiting.domain.*', 'com.kafkick.waiting.control.*',
+                   'com.kafkick.waiting.gateway.*', 'com.kafkick.waiting.routing.*',
+                   'com.kafkick.waiting.chaos.RecoveryCriteriaTest',
+                   'com.kafkick.waiting.chaos.BackendRpsRecorderTest']
+    mainSourceSets = [sourceSets.main, sourceSets.testFixtures]
     // 대상이 0건일 때 로컬 실행을 막지 않는다 — 페이즈 초기에 그랬다.
     // **CI 에서는 0 을 통과로 두지 않는다.** 대상 지정이 비면 뮤테이션 잡이
     // 잡는다 (.github/workflows/_test.yml).
@@ -389,6 +426,13 @@ pitest {
             'com.kafkick.waiting.routing.*Config',
             'com.kafkick.waiting.routing.RoutingAttributes',
             'com.kafkick.waiting.routing.ReservedInstance',
+            // **픽스처는 대상이 아니다.** 픽스처 소스셋을 넘기면 위 패키지 패턴이 같은 패키지의
+            // 픽스처까지 잡는다. 픽스처 뮤턴트는 프로덕션 생존율을 가리는 잡음이다.
+            'com.kafkick.waiting.domain.coupon.CouponStates',
+            'com.kafkick.waiting.domain.coupon.SnapshotMetas',
+            'com.kafkick.waiting.control.SweepGates',
+            'com.kafkick.waiting.control.TickedLeadership',
+            'com.kafkick.waiting.gateway.FakeQueuePort',
     ]
     // **PIT 은 정수 백분율로 비교한다.** 89.9% 가 90 으로 반올림돼 통과하므로
     // 이 한 줄만으로는 "생존 ≤ 10%" 가 지켜지지 않는다. 반올림 없는 비율은

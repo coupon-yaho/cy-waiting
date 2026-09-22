@@ -553,4 +553,37 @@ class LeaderElectionTest extends RedisContainerSupport {
         assertThat(m.find()).as("상수 이름이 바뀌면 이 시험부터 고친다").isTrue();
         assertThat(Long.parseLong(m.group(1))).isEqualTo(ROLLOUT_MARGIN_US);
     }
+
+    /**
+     * <b>메모리 상한에서도 후임이 선다</b> (CY-296). 연장은 메모리를 안 늘려 거부되지 않는데 신규 획득은
+     * 거부되면, 리더가 내려간 순간 아무도 못 잡아 배분이 영영 멎는다. 해제 조건이 없다.
+     */
+    @Test
+    @DisplayName("메모리_상한에서도_비어_있는_리더를_잡는다")
+    void 메모리_상한에서도_비어_있는_리더를_잡는다() throws Exception {
+        메모리_상한에서(() -> {
+            List<Object> r = tryAcquire("successor");
+
+            assertThat(acquired(r)).as("후임이 리더를 잡는다").isTrue();
+            assertThat(Long.parseLong(String.valueOf(r.get(3)))).as("펜스 번호가 매겨진다").isPositive();
+        });
+    }
+
+    /** 연장은 원래 됐다. 고친 뒤에도 그대로여야 한다 — 상한에서 리더가 스스로 내려가면 배분이 끊긴다. */
+    @Test
+    @DisplayName("메모리_상한에서도_내_리더를_연장한다")
+    void 메모리_상한에서도_내_리더를_연장한다() throws Exception {
+        // 상한을 걸고 확인하는 컨테이너 명령 사이에 리스가 끝나면 연장이 아니라 신규 획득을 잰다.
+        String 넉넉한_리스 = String.valueOf(Duration.ofMinutes(10).toMillis());
+        List<Object> 처음 = tryAcquire("holder", 넉넉한_리스);
+        assertThat(acquired(처음)).isTrue();
+
+        메모리_상한에서(() -> {
+            List<Object> 연장 = tryAcquire("holder", 넉넉한_리스);
+            assertThat(acquired(연장)).isTrue();
+            // **같은 펜스여야 연장이다.** 리스가 끝나 새로 잡아도 획득은 참이고, 그때는 번호가 오른다.
+            assertThat(String.valueOf(연장.get(3))).as("연장은 번호를 안 바꾼다")
+                    .isEqualTo(String.valueOf(처음.get(3)));
+        });
+    }
 }

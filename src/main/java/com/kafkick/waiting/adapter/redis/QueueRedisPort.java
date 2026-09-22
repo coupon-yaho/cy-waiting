@@ -5,8 +5,14 @@ import com.kafkick.waiting.domain.queue.QueueEntry;
 import com.kafkick.waiting.domain.queue.RankEstimator;
 import com.kafkick.waiting.domain.queue.QueueState;
 import com.kafkick.waiting.gateway.QueuePort;
+import io.micrometer.core.instrument.FunctionCounter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.Objects;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.ClassPathResource;
@@ -16,6 +22,7 @@ import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.SignalType;
 
 /**
  * 큐 등록과 순번 조회.
@@ -58,25 +65,80 @@ public final class QueueRedisPort implements QueuePort {
     private final ReactiveStringRedisTemplate redis;
     private final int shards;
 
+    private final MeterRegistry meters;
+
+    /** 등록 왕복 지표의 이름. 착수 게이트의 러너가 이 이름을 긁는다. */
+    static final String ENQUEUE_LATENCY = "waiting.queue.enqueue.latency";
+
+    /** 등록 왕복의 분위수. Phase 10 착수 게이트가 읽는 값이다. */
+    private final Timer enqueueOk;
+
+    /**
+     * 실패한 왕복. <b>성공과 안 섞는다</b> — 연결 거부는 0 에 가깝고 명령 시한은 상수로 튄다. 한 분포에 담으면
+     * 레디스가 흔들린 구간에 분위수가 오히려 내려간다.
+     */
+    private final Timer enqueueFailed;
+
+    /** 레디스가 등록을 거부한 수. 단절과 가른다 — 앞은 메모리를 줄여야 풀린다 (CY-970). */
+    private final AtomicLong writeRefused = new AtomicLong();
+
+    /**
+     * 끊긴 왕복. <b>실패와도 안 섞는다</b> — 몰릴 때 클라이언트가 끊는 것은 정상 사건이라, 실패 칸에 담으면
+     * 그 칸을 에러율로 보는 쪽이 레디스 장애로 읽는다.
+     */
+    private final Timer enqueueCancelled;
+
     /**
      * <b>값은 설정에서 받는다.</b> 상수로 복제하면 검증기가 안 보는 값이
      * 실제로 쓰이는 값이 된다.
      */
     @Autowired
-    QueueRedisPort(ReactiveStringRedisTemplate redis, ControlPlaneProperties properties) {
-        this(redis, properties.scheduler().shards());
+    QueueRedisPort(ReactiveStringRedisTemplate redis, ControlPlaneProperties properties,
+            MeterRegistry meters) {
+        this(redis, properties.scheduler().shards(), meters);
     }
 
-    private QueueRedisPort(ReactiveStringRedisTemplate redis, int shards) {
+    /**
+     * 회차를 통째로 덮는 창으로 잰다. <b>기본 2분 창은 뜻이 조용히 바뀐다</b> — 회차가 길어지면 봉우리가 아니라
+     * 꼬리만 남고, 스크랩이 늦으면 0 이 된다. 히스토그램은 안 낸다 — 같이 내면 분위수 줄이 사라진다.
+     */
+    private Timer enqueueTimer(String outcome) {
+        return Timer.builder(ENQUEUE_LATENCY)
+                .description("등록 스크립트를 부른 시점부터 결과까지. 클라이언트 대기도 들어간다")
+                .tag("outcome", outcome)
+                .publishPercentiles(0.5, 0.95, 0.99)
+                .distributionStatisticExpiry(Duration.ofMinutes(10))
+                .distributionStatisticBufferLength(1)
+                .register(meters);
+    }
+
+    private QueueRedisPort(ReactiveStringRedisTemplate redis, int shards, MeterRegistry meters) {
         if (shards < 1) {
             throw new IllegalArgumentException("shards 는 1 이상이어야 한다: %d".formatted(shards));
         }
         this.redis = Objects.requireNonNull(redis, "redis 는 필수다");
         this.shards = shards;
+        this.meters = Objects.requireNonNull(meters, "meters 는 필수다");
+        this.enqueueOk = enqueueTimer("success");
+        this.enqueueFailed = enqueueTimer("error");
+        this.enqueueCancelled = enqueueTimer("cancelled");
+        // **거부와 단절을 가른다** (CY-970). 상한 중에는 하트비트가 초록이라 노드 쪽이 조용하고,
+        // 재료가 낡았다는 신호만으로는 메모리를 줄여야 하는지 연결을 기다려야 하는지가 안 짚인다.
+        FunctionCounter.builder("waiting.redis.write.refused", this, QueueRedisPort::writeRefused)
+                .tag("path", "enqueue")
+                .description("레디스가 상한으로 거부한 등록 건수")
+                .register(meters);
     }
 
+    /** 지표를 아무 데도 안 내는 자리. <b>시험용이다</b> — 운영 배선은 레지스트리를 받는 쪽을 쓴다. */
     public static QueueRedisPort of(ReactiveStringRedisTemplate redis, int shards) {
-        return new QueueRedisPort(redis, shards);
+        return of(redis, shards, new SimpleMeterRegistry());
+    }
+
+    /** 등록 왕복을 잰다 (CY-936). 착수 게이트가 보라는 분위수는 응답 전체가 아니라 이 구간이다. */
+    public static QueueRedisPort of(ReactiveStringRedisTemplate redis, int shards,
+            MeterRegistry meters) {
+        return new QueueRedisPort(redis, shards, meters);
     }
 
     /**
@@ -89,6 +151,13 @@ public final class QueueRedisPort implements QueuePort {
     @Override
     public Mono<QueueEntry> enqueue(String couponId, String memberId, long maxLen, Instant now) {
         int shard = ShardHash.shardOf(memberId, shards);
+        return Mono.defer(() -> timedEnqueue(couponId, memberId, maxLen, now, shard));
+    }
+
+    /** 구독마다 새로 잰다. 조립에서 재면 재구독이 한 번만 붙어도 같은 표본을 두 번 쓴다. */
+    private Mono<QueueEntry> timedEnqueue(String couponId, String memberId, long maxLen,
+            Instant now, int shard) {
+        Timer.Sample sample = Timer.start(meters);
         return redis.execute(ENQUEUE,
                         List.of(RedisKeys.queue(couponId, shards, shard),
                                 RedisKeys.maxScore(couponId, shards, shard),
@@ -102,7 +171,29 @@ public final class QueueRedisPort implements QueuePort {
                 // **빈 결과를 성공으로 안 본다.** 그대로 두면 등록도 거절도 아닌
                 // 채로 200 이 나가고, 실패 경로가 통째로 안 돈다.
                 .switchIfEmpty(Mono.error(new IllegalStateException("등록 결과가 비었다")))
-                .map(this::toEntry);
+                .map(this::toEntry)
+                // 거부와 단절은 대처가 다르다. 앞은 메모리를 줄여야 풀린다 (CY-970).
+                .doOnError(e -> {
+                    if (WriteRefusal.refused(e)) {
+                        writeRefused.incrementAndGet();
+                    }
+                })
+                // **취소도 끝난 것이다.** 끊긴 요청은 통계적으로 오래 걸린 쪽이라, 그것만 빠진 분위수는
+                // 게이트가 보라는 꼬리를 정확히 지운다.
+                .doFinally(signal -> sample.stop(outcomeOf(signal)));
+    }
+
+    /** 레디스가 등록을 거부한 수. 부르는 쪽이 지표로 낸다. */
+    public double writeRefused() {
+        return writeRefused.get();
+    }
+
+    private Timer outcomeOf(SignalType signal) {
+        return switch (signal) {
+            case ON_COMPLETE -> enqueueOk;
+            case CANCEL -> enqueueCancelled;
+            default -> enqueueFailed;
+        };
     }
 
     /**
@@ -129,7 +220,7 @@ public final class QueueRedisPort implements QueuePort {
         if (score < 0) {
             return QueueEntry.rejected();
         }
-        return new QueueEntry(QueueState.WAITING, globalRank(number(raw.get(3))), score,
+        return QueueEntry.withoutTotal(QueueState.WAITING, globalRank(number(raw.get(3))), score,
                 number(raw.get(2)) == 1, number(raw.get(1)) == 1, number(raw.get(4)) == 1);
     }
 
@@ -139,8 +230,11 @@ public final class QueueRedisPort implements QueuePort {
             return QueueEntry.notQueued();
         }
         // 조회는 재방문을 안 말한다 — 그것은 등록 결과에만 있는 사실이다.
+        // **총원도 같은 환산을 탄다** (CY-827). 앞 인원만 전체 등수로 바꾸면 둘의 기준이 갈린다.
+        long total = number(raw.get(3));
         return new QueueEntry(state, globalRank(number(raw.get(1))),
-                number(raw.get(2)), true, false, false);
+                number(raw.get(2)), true, false, false,
+                total < 0 ? QueueEntry.UNKNOWN_TOTAL : globalTotal(total));
     }
 
     /**
@@ -151,6 +245,15 @@ public final class QueueRedisPort implements QueuePort {
      */
     private long globalRank(long localRank) {
         return RankEstimator.globalRank(localRank, shards);
+    }
+
+    /**
+     * 총원의 전체 환산. <b>나는 한 명이지 샤드 수만큼이 아니다</b> — 통째로 곱하면 자기 자신도 불어나
+     * 줄 맨 뒤 사람이 뒤에 {@code 샤드 수 - 1} 명을 본다. 정확히 세려면 샤드를 다 읽어야 하는데,
+     * 조회 한 번이 샤드 수만큼 왕복한다는 뜻이라 불변식 1 과 바꿀 수 없다.
+     */
+    private long globalTotal(long localTotal) {
+        return globalRank(localTotal - 1) + 1;
     }
 
     /**

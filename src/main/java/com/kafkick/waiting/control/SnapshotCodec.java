@@ -160,6 +160,11 @@ public final class SnapshotCodec {
         }
     }
 
+    /** {@link #smoothing} 이 읽는 자리. 이월 읽기가 스냅샷을 통째로 안 끌어오게 한다. */
+    public List<String> smoothingFields() {
+        return List.of(EWMA, EWMA_SEEDED);
+    }
+
     /**
      * 유지 틱만 못 읽으면 <b>붙잡던 것은 지킨다</b> — 놓으면 대기열이 꺼졌다 켜져
      * 막으려던 진동이 리더 교체마다 난다. 모순된 조합은 버린다. 그대로 받으면 새

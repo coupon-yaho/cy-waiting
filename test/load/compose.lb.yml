@@ -1,0 +1,22 @@
+# 게이트웨이들 앞에 LB 를 세우는 겹침.
+#
+# **기준선과 같은 이미지·코어 한도다.** 다르면 경유 회차의 p99 에서 기준선을 뺀 값에 LB 차이가 섞인다.
+services:
+  lb:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./lb/gateway.conf:/etc/nginx/nginx.conf:ro
+    # **코어는 2 로 박는다.** 설정의 워커 수가 2 라, 한도만 바꾸면 워커와 한도가 갈려 원인 판정의 LB 선이 틀어진다.
+    cpus: 2
+    # 워커의 worker_rlimit_nofile 이 이 한도를 넘지 못한다.
+    ulimits:
+      nofile: { soft: 65536, hard: 65536 }
+    depends_on:
+      gateway: { condition: service_healthy }
+    ports:
+      - "18070:8070"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8070/lb/health"]
+      interval: 1s
+      timeout: 2s
+      retries: 20

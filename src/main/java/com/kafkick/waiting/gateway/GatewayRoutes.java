@@ -16,6 +16,7 @@ import org.springframework.cloud.gateway.route.builder.RouteLocatorBuilder;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import java.time.Duration;
+import java.util.Set;
 import java.util.function.Predicate;
 import org.springframework.http.HttpMethod;
 import org.springframework.web.server.ServerWebExchange;
@@ -25,17 +26,11 @@ import org.springframework.web.server.ServerWebExchange;
  * 안 풀려도 기동이 성공하고 판정만 사라진다 — 인스턴스를 직접 붙여 그 실패를 없앤다.
  */
 @Configuration
-@EnableConfigurationProperties(GatewayRoutes.Backend.class)
+@EnableConfigurationProperties({GatewayRoutes.Backend.class, RouteRules.class})
 public class GatewayRoutes {
 
     /** 연결 단계에만 무는 재시도 설정. 무엇에 무는지가 밖에서 보여야 한다. */
     private final ConnectRetry connectRetryPolicy = ConnectRetry.singleAttempt();
-
-    /**
-     * 술어는 디코딩해 맞추고 전달은 원본을 그대로 보낸다. 좁히지 않으면 판정한
-     * 값과 뒷단이 받는 값이 갈리고, 그 값이 레디스 키·캐시 키·리미터 키가 된다.
-     */
-    private static final String COUPON_ID = "{couponId:[A-Za-z0-9_-]{1,64}}";
 
     /** 프레임워크가 라우트별 응답 상한을 읽는 키. 이름을 틀리면 조용히 안 걸린다. */
     private static final String RESPONSE_TIMEOUT_ATTR = "response-timeout";
@@ -52,6 +47,9 @@ public class GatewayRoutes {
      * 기동은 되고 장애 때만 404 가 드러나며, 404 는 매진으로 읽혀 다시 오지 않는다.
      */
     public static final String FALLBACK_URI = "forward:" + BackendFallbackRoutes.FALLBACK_ISSUE;
+
+    /** 서킷이 실패로 셀 뒷단 응답. 계열로는 못 적어 하나씩 적는다. */
+    private static final Set<String> SERVER_FAILURES = Set.of("500", "502", "503", "504");
 
     /**
      * 서킷의 이름. 지금은 뒷단 주소가 하나라 하나뿐이다. 가용량 기반 분배가 붙으면
@@ -130,12 +128,18 @@ public class GatewayRoutes {
      * 서킷 필터를 손으로 만든다. {@code circuitBreaker(...)} 는 order 를 줄 자리가
      * 없어 0 으로 붙고, 판정도 0 이면 둘의 앞뒤가 안정 정렬에만 기대게 된다.
      */
-    private GatewayFilter circuit(SpringCloudCircuitBreakerFilterFactory breakers) {
+    private GatewayFilter circuit(SpringCloudCircuitBreakerFilterFactory breakers,
+            String routeId) {
         SpringCloudCircuitBreakerFilterFactory.Config config =
                 new SpringCloudCircuitBreakerFilterFactory.Config();
         config.setName(CIRCUIT);
         config.setFallbackUri(FALLBACK_URI);
-        config.setRouteId("issue");
+        // **라우트 id 를 받는다.** 규칙이 여럿이면 이 값이 규칙마다 달라야 한다 —
+        // 박아 두면 다른 규칙의 폴백이 엉뚱한 라우트 이름으로 돈다.
+        config.setRouteId(routeId);
+        // **응답이 오면 서킷은 성공으로 센다.** 상태를 실패로 바꾸지 않으면 뒷단이
+        // 전부 500 을 내도 안 열린다. 501·505 는 뒷단이 아프다는 뜻이 아니라 뺀다.
+        config.setStatusCodes(SERVER_FAILURES);
         return breakers.apply(config);
     }
 
@@ -177,73 +181,75 @@ public class GatewayRoutes {
     }
 
     @Bean
-    public RouteLocator routes(RouteLocatorBuilder builder, Backend backend,
+    public RouteLocator routes(RouteLocatorBuilder builder, Backend backend, RouteRules rules,
             AdmissionGatewayFilter admission, QueryCoalescingFilter coalescing,
             SoldOutObserver soldOut, SpringCloudCircuitBreakerFilterFactory breakers,
             MeterRegistry meters, ObjectProvider<RoutingProperties> routing,
             RetryGatewayFilterFactory retries) {
         BodyDeadline bodyDeadline = bodyDeadline(backend, meters);
-        String uri = backendUri(backend, routing);
-        boolean balanced = uri.startsWith("lb://");
-        return builder.routes()
-                .route("issue", r -> r
-                        .method(HttpMethod.POST)
-                        .and().path("/api/v1/coupons/" + COUPON_ID + "/issue")
-                        .and().predicate(rawPathIsPlain())
-                        // **앞뒤를 값으로 정한다.** 안 정하면 둘 다 0 이라 선언
-                        // 위치를 옮기는 것만으로 순서가 바뀌고, 서킷이 판정 앞으로
-                        // 가면 래치가 죽는다 (FilterOrder).
-                        .filters(f -> {
-                            GatewayFilterSpec spec = stripSpoofableClientIp(f)
+        String shared = backendUri(backend, routing);
+        RouteLocatorBuilder.Builder built = builder.routes();
+        for (RouteRules.Rule rule : rules.forwarded()) {
+            // **규칙이 주소를 적으면 그쪽이 이긴다.** 안 적으면 공통 뒷단으로 간다 —
+            // 규칙 하나만 쓰던 배포가 아무것도 안 고치고 그대로 돈다.
+            // **규칙이 주소를 적으면 그 규칙만 균형기 밖으로 나간다.** 규칙의 주소는
+            // http/https 로만 받으므로 `lb://` 가 될 수 없다 — 노드 선택도 재시도도
+            // 그 경로에서 꺼진다. 라우팅을 켠 채로는 그 조합을 안 받는다.
+            if (rule.uri() != null && shared.startsWith("lb://")) {
+                throw new IllegalStateException(
+                        "라우팅이 켜져 있는데 규칙 '" + rule.id() + "' 이 제 주소를 적었다"
+                                + " — 그 경로만 균형기를 우회한다");
+            }
+            String uri = rule.uri() != null ? rule.uri() : shared;
+            // 죽은 주소로 간 요청이 5xx 로 새면 안 된다. **균형기가 있을 때만 건다** —
+            // 단일 주소로 되돌리면 고를 다음 대가 없어 같은 죽은 주소로 두 번 간다.
+            boolean balanced = uri.startsWith("lb://");
+            built = built.route(rule.id(), r -> r
+                    .method(rule.resolvedMethod())
+                    .and().path(rule.expandedPaths().toArray(String[]::new))
+                    .and().predicate(rawPathIsPlain())
+                    // **앞뒤를 값으로 정한다.** 안 정하면 둘 다 0 이라 선언 위치를
+                    // 옮기는 것만으로 순서가 바뀌고, 서킷이 판정 앞으로 가면 래치가
+                    // 죽는다 (FilterOrder).
+                    .filters(f -> {
+                        GatewayFilterSpec spec = stripSpoofableClientIp(f);
+                        // **성질이 늘면 여기가 컴파일 에러가 되어야 한다.** `else` 로
+                        // 두면 새 성질에 모으기가 조용히 붙는다.
+                        switch (rule.kind()) {
+                            case ENTRY -> spec = spec
                                     .filter(admission, FilterOrder.ROUTE_ADMISSION)
-                                    .filter(circuit(breakers), FilterOrder.ROUTE_CIRCUIT);
-                            // 죽은 주소로 간 요청이 5xx 로 새면 안 된다. **균형기가
-                            // 있을 때만 건다** — 단일 주소로 되돌리면 고를 다음 대가
-                            // 없어 같은 죽은 주소로 두 번 간다.
-                            if (balanced) {
-                                spec = spec.filter(connectRetry(retries),
-                                        FilterOrder.ROUTE_RETRY);
-                            }
-                            // **발급에만 붙인다.** 조회 응답에는 매진 코드가
-                            // 재고 정보로 실릴 수 있고, 그건 관찰이 아니다.
-                            return spec.filter(soldOut, FilterOrder.ROUTE_SOLD_OUT)
-                                    // **본문이 안 끝나는 뒷단을 끊는다.** 응답
-                                    // 상한은 헤더까지만 재고, 헤더가 나간 뒤라
-                                    // 판정 쪽 시한도 커넥션을 못 끊는다.
-                                    .filter(bodyDeadline, FilterOrder.ROUTE_BODY);
-                        })
-                        // **끊는 자리가 서킷 안쪽이어야 한다.** 밖에서 끊으면
-                        // 서킷에 가는 것은 오류가 아니라 취소이고, 취소는 창에
-                        // 안 쌓인다 — 멎은 뒷단의 서킷이 영영 안 열린다.
-                        .metadata(RESPONSE_TIMEOUT_ATTR, backend.responseTimeout().toMillis())
-                        .metadata(CONNECT_TIMEOUT_ATTR,
-                                (int) backend.connectTimeout().toMillis())
-                        .uri(uri))
-                .route("coupons", r -> r
-                        .method(HttpMethod.GET)
-                        .and().path("/api/v1/coupons", "/api/v1/coupons/" + COUPON_ID)
-                        .and().predicate(rawPathIsPlain())
-                        .filters(f -> {
-                            // **모으기는 조회에만 붙인다.** 발급에 붙이면 같은
-                            // 응답을 여럿이 받고, 그건 곧 초과 발급이다.
-                            GatewayFilterSpec spec = stripSpoofableClientIp(f)
+                                    .filter(circuit(breakers, rule.id()),
+                                            FilterOrder.ROUTE_CIRCUIT);
+                            // **모으기는 조회에만 붙인다.** 발급에 붙이면 같은 응답을
+                            // 여럿이 받고, 그건 곧 초과 발급이다.
+                            case QUERY -> spec = spec
                                     .filter(coalescing, FilterOrder.ROUTE_COALESCING);
-                            // **조회도 다음 대로 넘긴다.** 여기가 발급보다 아프다 —
-                            // 안 붙는 대로 간 요청 하나가 그 키에 붙은 모든 조회를
-                            // 잠근다. 조회는 멱등이라 다시 보내도 안전하다.
-                            if (balanced) {
-                                spec = spec.filter(connectRetry(retries),
-                                        FilterOrder.ROUTE_RETRY);
-                            }
-                            return spec.filter(bodyDeadline, FilterOrder.ROUTE_BODY);
-                        })
-                        // **여기도 끊는 자리가 있어야 한다.** 멎은 요청 하나가 그
-                        // 키를 영구히 잠그고, 뒤이어 오는 조회가 모두 거기 붙어
-                        // 뒷단이 살아나도 재시작해야 풀린다.
-                        .metadata(RESPONSE_TIMEOUT_ATTR, backend.responseTimeout().toMillis())
-                        .metadata(CONNECT_TIMEOUT_ATTR,
-                                (int) backend.connectTimeout().toMillis())
-                        .uri(uri))
-                .build();
+                            case QUEUE -> throw new IllegalStateException(
+                                    "줄 조회는 라우트가 아니다: " + rule.id());
+                            default -> throw new IllegalStateException(
+                                    "모르는 성질: " + rule.kind());
+                        }
+                        if (balanced) {
+                            spec = spec.filter(connectRetry(retries), FilterOrder.ROUTE_RETRY);
+                        }
+                        if (rule.kind() == RouteRules.Kind.ENTRY) {
+                            // **진입에만 붙인다.** 조회 응답에는 매진 코드가 재고
+                            // 정보로 실릴 수 있고, 그건 관찰이 아니다.
+                            spec = spec.filter(soldOut, FilterOrder.ROUTE_SOLD_OUT);
+                        }
+                        // **본문이 안 끝나는 뒷단을 끊는다.** 응답 상한은 헤더까지만
+                        // 재고, 헤더가 나간 뒤라 판정 쪽 시한도 커넥션을 못 끊는다.
+                        return spec.filter(bodyDeadline, FilterOrder.ROUTE_BODY);
+                    })
+                    // **끊는 자리가 서킷 안쪽이어야 한다.** 밖에서 끊으면 서킷에 가는
+                    // 것은 오류가 아니라 취소이고, 취소는 창에 안 쌓인다 — 멎은 뒷단의
+                    // 서킷이 영영 안 열린다. 조회 쪽도 마찬가지다: 멎은 요청 하나가
+                    // 그 키를 영구히 잠그고 뒤이은 조회가 모두 거기 붙는다.
+                    .metadata(RESPONSE_TIMEOUT_ATTR, backend.responseTimeout().toMillis())
+                    .metadata(CONNECT_TIMEOUT_ATTR, (int) backend.connectTimeout().toMillis())
+                    .uri(uri));
+        }
+        return built.build();
     }
+
 }

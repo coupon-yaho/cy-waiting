@@ -23,6 +23,11 @@ const BASE = __ENV.BASE_URL || 'http://localhost:18080';
 // 생성기를 여러 대로 나눠야 하고, 그건 Phase 10 의 일이다.
 const SPIKE_USERS = Number(__ENV.SPIKE_USERS || '20000');
 
+// **쿠폰을 받는다.** 예열은 재려는 쿠폰이 아니라 다른 쿠폰으로 돌려야 한다 — 같은
+// 쿠폰으로 데우면 크레딧이 올라간 채 본 회차가 시작해 전원이 통과하고, 줄에 선 것이
+// 0 이 된다. JIT 는 JVM 몫이라 어느 쿠폰으로 데워도 같이 데워진다.
+const COUPON = __ENV.COUPON || 'c2';
+
 export const options = {
   // 게이트가 분위수를 읽는다. **p99 를 넣는다** — 샤딩 착수 판정이 기록으로
   // 남기는 값이고, 안 넣으면 요약에 없어 늘 "없음" 이 찍힌다.
@@ -48,6 +53,14 @@ export const options = {
 
 const queuedResponses = new Counter('queued_responses');
 const shedResponses = new Counter('shed_responses');
+// **통과한 것도 센다.** 등록 타이머는 성공한 등록만 재므로, 쿠폰이 IDLE 인 동안 그냥
+// 지나간 요청은 그 평균에 안 들어간다. 갈래를 다 세야 어느 모집단을 잰 회차인지
+// 갈린다 — 안 세면 같은 하네스의 두 평균이 다른 것을 재고도 한 표에 들어간다.
+const passedResponses = new Counter('passed_responses');
+// **어디에도 안 드는 갈래가 있다.** 봉투가 안 맞는 202, 매진(409), 5xx, 연결 실패는
+// 앞의 셋에 하나도 안 걸린다. 세 갈래만 세면 합이 요청 수에 모자란 것을 아무도 못
+// 보는데, 실제로 한 회차에서 2 만 중 1,826 건(9.1%)이 그렇게 빠졌다.
+const otherResponses = new Counter('other_responses');
 // **폭만 보면 부족하다.** 만 건 중 9,999 건이 한 값이고 하나만 멀리 있어도 폭은
 // 넓다. 그 회차는 회복이 곧 두 번째 스파이크가 되는데 게이트는 초록이다.
 //
@@ -79,12 +92,14 @@ const queued = (r) => {
 
 export default function () {
   const member = __VU * 100000 + __ITER;
-  const issue = http.post(`${BASE}/api/v1/coupons/c2/issue`, null, {
+  const issue = http.post(`${BASE}/api/v1/coupons/${COUPON}/issue`, null, {
     headers: headers(member),
   });
 
   if (queued(issue)) {
     queuedResponses.add(1);
+  } else if (issue.status === 200) {
+    passedResponses.add(1);
   } else if (issue.status === 429 || issue.status === 503) {
     shedResponses.add(1);
     // **다시 올 시각이 흩어져야 한다** (F7). 한 값으로 몰리면 그 초에 같은
@@ -93,6 +108,8 @@ export default function () {
     if (Number.isFinite(after)) {
       retryAfterSeconds.add(after);
     }
+  } else {
+    otherResponses.add(1);
   }
 
   check(issue, {

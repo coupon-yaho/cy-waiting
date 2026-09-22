@@ -14,6 +14,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.TreeMap;
+import java.util.stream.Collectors;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.DisplayName;
@@ -52,7 +54,17 @@ class SplitBrainScenarioTest {
      */
     private static final String 한산한_쿠폰 = "c5-idle";
 
-    private static final int 한산한_보낼_수 = 2;
+    /**
+     * 대조군의 구간당 요청 수. <b>두 건이면 비율을 못 잰다</b> — 한 건만 달라져도 50% 라, 증폭도 수렴도
+     * 판정이 아니라 잡음이 된다 (CY-848).
+     */
+    private static final int 한산한_보낼_수 = 12;
+
+    /**
+     * 대조군을 보내는 간격. <b>몰아서 보내면 한산한 쿠폰이 아니게 된다</b> — 초당 예산을 넘긴 순간부터
+     * 줄에 서서, 대조군이 대조군이 아니다. 실측으로 초당 세 건이 통과했다.
+     */
+    private static final Duration 한산한_간격 = Duration.ofMillis(350);
 
     /** 갈라져 나간 쪽. 락을 쥐지만 우리 노드는 그것을 모른다. */
     private static final String 갈라진_리더 = "c5-partitioned";
@@ -63,8 +75,6 @@ class SplitBrainScenarioTest {
     /** 상태가 바뀌기를 기다리는 예산. */
     private static final Duration 전이_한계 = Duration.ofSeconds(20);
 
-    /** 심어 둔 줄의 생존 신호 수명. 시험 수명보다 길어야 스위퍼가 살아 있다고 읽는다. */
-    private static final Duration 생존_수명 = Duration.ofMinutes(5);
 
     /** 재료가 낡아 fail-open 으로 열린 판정. */
     private static final String 낡아서_열림 = "PASS_FAIL_OPEN";
@@ -146,6 +156,24 @@ class SplitBrainScenarioTest {
         return 상태;
     }
 
+    /**
+     * 초당 예산 안에서 보낸다. 대조군은 수가 있어야 비율이 서고, 몰아서 보내면 한산하지 않게 된다.
+     *
+     * <p>RULE-EXCEPTION(TS-4): 이 간격은 벽시계로 둔다. 재는 것이 실제 분단·리스·스케줄러의 경합이라,
+     * 시각을 고정하면 그 경합이 사라져 다른 것을 재게 된다. 초당 창의 경계는 리미터 단위 시험이 결정적으로 문다.
+     */
+    private List<Integer> 사이를_두고_시도한다(String couponId, int 횟수, int 시작_회원) {
+        List<Integer> 상태 = new ArrayList<>();
+        for (int i = 0; i < 횟수; i++) {
+            if (i > 0) {
+                Awaitility.await().pollDelay(한산한_간격).atMost(한산한_간격.plusSeconds(1))
+                        .until(() -> true);
+            }
+            상태.add(발급_상태(couponId, 시작_회원 + i));
+        }
+        return 상태;
+    }
+
     private long 뒷단까지_센다(String couponId, Runnable 배치) {
         long 전 = 뒷단.받은_수(couponId);
         배치.run();
@@ -156,7 +184,21 @@ class SplitBrainScenarioTest {
         redis.opsForSet().add(RedisKeys.ACTIVE_COUPONS, COUPON, 한산한_쿠폰).block(레디스_한계);
         redis.opsForValue().set(RedisKeys.stock(COUPON), "50").block(레디스_한계);
         redis.opsForValue().set(RedisKeys.stock(한산한_쿠폰), "100000").block(레디스_한계);
-        QueueSeed.줄을_세운다(연결, COUPON, 줄_선_사람, 생존_수명);
+        QueueSeed.줄을_세운다(연결, COUPON, 줄_선_사람);
+    }
+
+    /** 통과 비율. RC6 이 이것으로 수렴을 본다. */
+    private double 통과_비율(List<Integer> 상태) {
+        if (상태.isEmpty()) {
+            return 0;
+        }
+        return (double) 상태.stream().filter(status -> status < 400).count() / 상태.size();
+    }
+
+    /** 응답 코드 분포. 비율만 보면 무엇으로 갈렸는지가 안 남는다. */
+    private Map<Integer, Long> 분포(List<Integer> 상태) {
+        return 상태.stream().collect(Collectors.groupingBy(
+                status -> status, TreeMap::new, Collectors.counting()));
     }
 
     /** 판정이 멈추지 않는다. 분단은 제어 평면의 일이지 이 노드 응답의 일이 아니다. */
@@ -210,7 +252,7 @@ class SplitBrainScenarioTest {
                         펜스[0] = leadership.fence();
                         장애_전_자리.putAll(QueueSeed.자리들(연결, COUPON, 줄_선_사람));
                         한산한_도착[0] = 뒷단까지_센다(한산한_쿠폰, () -> 정상_상태.addAll(
-                                여러_번_시도한다(한산한_쿠폰, 한산한_보낼_수, 1_100)));
+                                사이를_두고_시도한다(한산한_쿠폰, 한산한_보낼_수, 1_100)));
                         정상_줄_상태.addAll(여러_번_시도한다(COUPON, 보낼_수, 1_000));
                     })
                     .inject(() -> {
@@ -254,7 +296,7 @@ class SplitBrainScenarioTest {
                         낡음_직후[0] = 결정_수(낡아서_열림);
                         낡음_직후[1] = 결정_수(낡아서_줄섬);
                         한산한_도착[1] = 뒷단까지_센다(한산한_쿠폰, () -> 한산한_장애중.addAll(
-                                여러_번_시도한다(한산한_쿠폰, 한산한_보낼_수, 2_100)));
+                                사이를_두고_시도한다(한산한_쿠폰, 한산한_보낼_수, 2_100)));
                         줄_도착[0] = 뒷단까지_센다(COUPON, () -> 장애중_줄_상태.addAll(
                                 여러_번_시도한다(COUPON, 보낼_수, 2_000)));
                     })
@@ -266,7 +308,7 @@ class SplitBrainScenarioTest {
                                 .atMost(전이_한계).until(() -> !holder.isDataStale());
                         펜스[2] = leadership.fence();
                         한산한_도착[2] = 뒷단까지_센다(한산한_쿠폰, () -> 회복_상태.addAll(
-                                여러_번_시도한다(한산한_쿠폰, 한산한_보낼_수, 3_100)));
+                                사이를_두고_시도한다(한산한_쿠폰, 한산한_보낼_수, 3_100)));
                         줄_도착[1] = 뒷단까지_센다(COUPON, () -> 회복_줄_상태.addAll(
                                 여러_번_시도한다(COUPON, 보낼_수, 3_000)));
                         회복_뒤_자리.putAll(QueueSeed.자리들(연결, COUPON, 줄_선_사람));
@@ -293,6 +335,12 @@ class SplitBrainScenarioTest {
                             줄을_추월하지_않았다("유지", 줄_도착[0])))
                     .assertRecovery(() -> RecoveryCriteria.violations(
                             열려_있었다("회복", 한산한_도착[2], 한산한_도착[0], 회복_상태),
+                            // RC4 — 회복 구간의 재전송·풀 재시도로 뒷단 유입이 불어나지 않는다.
+                            RecoveryCriteria.amplified(한산한_보낼_수, 한산한_도착[2]),
+                            // RC6 — 통과 비율이 평시로 돌아온다. 분포를 같이 실어 무엇이 달라졌는지 남긴다.
+                            RecoveryCriteria.notConverged("한산한 쿠폰 통과 비율",
+                                    통과_비율(정상_상태), 통과_비율(회복_상태),
+                                    "회복 분포 %s".formatted(분포(회복_상태))),
                             판정이_멈추지_않았다("회복", 회복_상태),
                             줄에_세웠다("회복", 회복_줄_상태, 보낼_수),
                             // **RC5 는 여기서 깨질 수 없다** (CY-844). 자리를

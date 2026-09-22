@@ -216,14 +216,19 @@ public final class RecoveryCriteria {
      * <p>양쪽을 다 본다. 위로만 보면 회복 뒤에 값이 주저앉은 것을 놓친다.
      */
     public static Optional<String> notConverged(String name, double before, double after) {
+        return notConverged(name, before, after, null);
+    }
+
+    /** 깨진 이유를 가를 단서를 함께 싣는다. 이름 자리에 데이터를 넣으면 메시지 조립이 두 곳으로 갈린다. */
+    public static Optional<String> notConverged(String name, double before, double after, String detail) {
         if (before == 0) {
             return after == 0 ? Optional.empty()
                     : Optional.of("RC6 %s 가 0 에서 %.2f 로 벌어졌다".formatted(name, after));
         }
         double drift = Math.abs(after - before) / Math.abs(before);
         return drift <= CONVERGENCE_TOLERANCE ? Optional.empty()
-                : Optional.of("RC6 %s 가 안 수렴했다 — %.2f → %.2f (오차 %.0f%%)"
-                        .formatted(name, before, after, drift * 100));
+                : Optional.of("RC6 %s 가 안 수렴했다 — %.2f → %.2f (오차 %.0f%%)%s"
+                        .formatted(name, before, after, drift * 100, detail == null ? "" : " " + detail));
     }
 
     /** 여러 판정을 모은다. 깨진 것의 이름이 남아야 원인을 찾는다. */

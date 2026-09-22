@@ -388,13 +388,18 @@ for check in \
     "배제 판정:test/load/eject-selftest.sh" \
     "서킷 회복 판정:test/load/circuit-recovery-selftest.sh" \
     "최대치 판정:test/load/peak-selftest.sh" \
+    "천장 원인 판정:test/load/bottleneck-selftest.sh" \
+    "증설 효율 판정:test/load/scale-selftest.sh" \
+    "LB 기준선 감당:test/load/lb-cover-selftest.sh" \
+    "LB 오버헤드 산출:test/load/lb-overhead-selftest.sh" \
     "뒷단 스텁:test/load/stub-selftest.sh" \
     "작업 로그:.github/scripts/journal-index.sh --check" \
     "워크플로 셸:.github/scripts/workflow-shell.sh" \
     "Loki 라벨:.github/scripts/loki-labels.sh" \
     "대시보드 지표:.github/scripts/dashboard-queries.sh" \
     "알람 규칙:.github/scripts/alert-rules.sh" \
-    "액션 핀:.github/scripts/action-pins.sh"
+    "액션 핀:.github/scripts/action-pins.sh" \
+    "Gradle 준비:.github/scripts/gradle-setup.sh"
 do
     name="${check%%:*}"
     cmd="${check#*:}"

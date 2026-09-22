@@ -26,11 +26,12 @@ public final class PassRateMeter {
 
     /**
      * 창 하나. <b>수를 {@link LongAdder} 로 든다</b> — 요청마다 CAS 를 돌면 노드
-     * 하나의 캐시 라인에 피크 부하가 통째로 몰린다.
+     * 하나의 캐시 라인에 피크 부하가 통째로 몰린다. 시험이 진 CAS 가 받는 창을
+     * 직접 만들 수 있게 패키지까지 열어 둔다.
      *
      * @param previous 직전 창이 낸 값. 한 창도 안 채웠으면 음수다
      */
-    private record Window(long startedAt, LongAdder count, long previous) {
+    record Window(long startedAt, LongAdder count, long previous) {
     }
 
     private final AtomicReference<Window> window =
@@ -72,9 +73,10 @@ public final class PassRateMeter {
 
     /**
      * 창이 다 찼으면 접고 새로 연다. <b>읽는 쪽이 아니라 여기서 접는다</b> —
-     * 읽기가 상태를 바꾸면 묻는 주기에 따라 값이 달라진다.
+     * 읽기가 상태를 바꾸면 묻는 주기에 따라 값이 달라진다. 안 찼을 때의 되돌림은
+     * 경합에서만 참이라, 시험이 직접 부르라고 패키지까지 열어 둔다.
      */
-    private Window advance(Window w, long nowMs) {
+    Window advance(Window w, long nowMs) {
         if (!rolls(w, nowMs)) {
             return w;
         }

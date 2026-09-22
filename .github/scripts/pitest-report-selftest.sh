@@ -42,7 +42,7 @@ echo '<mutations><mutation' > "$work/broken/mutations.xml"
 
 fail=0
 
-# 사례 하나: 종료 코드와 꼭 들어야 할 문구들.
+# 사례 하나: 종료 코드와 꼭 들어야 할 문구들. `!` 로 시작하는 문구는 없어야 한다.
 check() {
     local name=$1 dir=$2 want_rc=$3
     shift 3
@@ -52,7 +52,10 @@ check() {
     [ "$rc" -eq "$want_rc" ] || ok=0
     local word
     for word in "$@"; do
-        case "$out" in *"$word"*) ;; *) ok=0 ;; esac
+        case "$word" in
+            '!'*) case "$out" in *"${word#!}"*) ok=0 ;; esac ;;
+            *) case "$out" in *"$word"*) ;; *) ok=0 ;; esac ;;
+        esac
     done
     if [ "$ok" -eq 1 ]; then
         echo "  ✓ $name"
@@ -67,9 +70,9 @@ echo "뮤턴트 위치 요약 자기검증"
 
 check "판정 안 선 것의 위치를 낸다"    mixed  0 "판정 안 선 뮤턴트 2개" "Beta.crash:5 RUN_ERROR" "Beta.hog:6 MEMORY_ERROR"
 check "살아남은 것의 위치를 낸다"      mixed  0 "살아남은 뮤턴트 2개" "Alpha.decide:10 SURVIVED" "Alpha.idle:20 NO_COVERAGE"
-check "죽인 것과 시간 초과는 안 낸다"  mixed  0 "죽인 뮤턴트 2개 / 전체 6개"
+check "죽인 것과 시간 초과는 안 낸다"  mixed  0 "죽인 뮤턴트 2개 / 전체 6개" "!Alpha.keep:3" "!Alpha.loop:4"
 check "클래스별로 모아 센다"           mixed  0 "Alpha 2" "Beta 2"
-check "목록은 상한까지만 싣는다"       many   0 "Gamma.m30:30" "외 10개"
+check "목록은 상한까지만 싣는다"       many   0 "Gamma.m30:30" "외 10개" "!Gamma.m31:31"
 check "리포트가 없으면 말한다"         none   0 "리포트가 없다"
 check "리포트가 깨지면 문다"           broken 2 "리포트를 못 읽었다"
 

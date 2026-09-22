@@ -13,6 +13,7 @@ import java.time.Clock;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.Map;
 import javax.crypto.spec.SecretKeySpec;
 import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
 import org.springframework.security.oauth2.core.OAuth2TokenValidator;
@@ -36,6 +37,10 @@ final class JwtDecoders {
 
     /** RSA 공개키 하한 (NIST SP 800-131A). */
     static final int MIN_RSA_BITS = 2048;
+
+    /** EC 알고리즘마다 정해진 곡선 (RFC 7518 3.4). */
+    private static final Map<String, Curve> CURVES =
+            Map.of("ES256", Curve.P_256, "ES384", Curve.P_384, "ES512", Curve.P_521);
 
     private final AuthProperties.Jwt settings;
 
@@ -64,7 +69,7 @@ final class JwtDecoders {
         if (settings.jwksUri() != null) {
             Mono<String> fetch = WebClient.create().get().uri(settings.jwksUri()).retrieve()
                     .bodyToMono(String.class);
-            return NimbusReactiveJwtDecoder.withJwkSource(new JwkSetCache(fetch, clock))
+            return NimbusReactiveJwtDecoder.withJwkSource(JwkSetCache.of(fetch, clock))
                     .jwsAlgorithm(alg).build();
         }
         boolean ec = settings.algorithm().startsWith("ES");
@@ -81,6 +86,10 @@ final class JwtDecoders {
         // 토큰의 kid 를 이름표로 붙인다. 키가 하나라 kid 는 고르는 데 안 쓰인다.
         ECPublicKey ecKey = (ECPublicKey) key;
         Curve curve = Curve.forECParameterSpec(ecKey.getParams());
+        if (!curve.equals(CURVES.get(settings.algorithm()))) {
+            throw new IllegalArgumentException("waiting.auth.jwt.public-key 의 곡선 " + curve
+                    + " 이 " + settings.algorithm() + " 와 맞지 않는다");
+        }
         return NimbusReactiveJwtDecoder.withJwkSource(signed -> Flux.just(
                         new ECKey.Builder(curve, ecKey).keyID(signed.getHeader().getKeyID()).build()))
                 .jwsAlgorithm(alg).build();

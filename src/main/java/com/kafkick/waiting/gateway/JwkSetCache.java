@@ -2,11 +2,13 @@ package com.kafkick.waiting.gateway;
 
 import com.nimbusds.jose.jwk.JWK;
 import com.nimbusds.jose.jwk.JWKSet;
+import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jwt.SignedJWT;
 import java.text.ParseException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -51,9 +53,13 @@ final class JwkSetCache implements Function<SignedJWT, Flux<JWK>> {
 
     private final AtomicBoolean exhausted = new AtomicBoolean();
 
-    JwkSetCache(Mono<String> fetch, Clock clock) {
+    private JwkSetCache(Mono<String> fetch, Clock clock) {
         this.fetch = fetch;
         this.clock = clock;
+    }
+
+    static JwkSetCache of(Mono<String> fetch, Clock clock) {
+        return new JwkSetCache(fetch, clock);
     }
 
     @Override
@@ -82,9 +88,18 @@ final class JwkSetCache implements Function<SignedJWT, Flux<JWK>> {
         return last.compareAndSet(prev, new Attempt(now, result)) ? result : last.get().result();
     }
 
+    /** 짧은 RSA 키는 버린다. 공개키 설정에 거는 하한과 같다. */
     private void parse(String body, SynchronousSink<JWKSet> sink) {
         try {
-            sink.next(JWKSet.parse(body));
+            List<JWK> all = JWKSet.parse(body).getKeys();
+            List<JWK> kept = all.stream()
+                    .filter(k -> !(k instanceof RSAKey rsa) || rsa.size() >= JwtDecoders.MIN_RSA_BITS)
+                    .toList();
+            if (kept.size() < all.size()) {
+                log.warn("키 집합에서 {} 비트보다 짧은 RSA 키 {}개를 버렸다 — 발급자의 키 길이를 본다",
+                        JwtDecoders.MIN_RSA_BITS, all.size() - kept.size());
+            }
+            sink.next(new JWKSet(kept));
         } catch (ParseException e) {
             sink.error(new IllegalStateException("키 집합을 못 읽었다", e));
         }

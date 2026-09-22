@@ -107,13 +107,18 @@ public record AuthProperties(Mode mode, Jwt jwt) {
                     throw new IllegalArgumentException(
                             algorithm + " 는 public-key 나 jwks-uri 중 하나로 검증한다");
                 }
+                URI uri = jwksUri == null ? null : URI.create(jwksUri);
                 // http 로 받으면 중간에서 키를 바꿔 끼워 아무 신원이나 서명할 수 있다.
-                String scheme = jwksUri == null ? "https"
-                        : String.valueOf(URI.create(jwksUri).getScheme()).toLowerCase(Locale.ROOT);
+                String scheme = uri == null ? "https"
+                        : String.valueOf(uri.getScheme()).toLowerCase(Locale.ROOT);
                 if (!"https".equals(scheme) && !("http".equals(scheme) && allowHttpJwks)) {
                     throw new IllegalArgumentException(
                             "waiting.auth.jwt.jwks-uri 는 https 여야 한다 (http 는 allow-http-jwks): "
                                     + jwksUri);
+                }
+                if (uri != null && (uri.isOpaque() || uri.getHost() == null)) {
+                    throw new IllegalArgumentException(
+                            "waiting.auth.jwt.jwks-uri 에 호스트가 없다: " + jwksUri);
                 }
             }
             issuer = blankToNull(issuer);

@@ -158,10 +158,12 @@ class MemberIdentityJwtTest {
     @Test
     @DisplayName("검증된 토큰의 식별자와 등급이 신원 헤더로 넘어간다")
     void 검증된_신원() throws Exception {
-        돌린다(필터(hs(null, null)), 요청(hs256(클레임("42").build())));
+        MockServerWebExchange 교환 = 돌린다(필터(hs(null, null)), 요청(hs256(클레임("42").build())));
 
         통과("42");
         assertThat(넘어간_헤더.get().get("X-Member-Grade")).containsExactly("GOLD");
+        assertThat(교환.getAttributes().get(MemberIdentityFilter.VERIFIED))
+                .as("뒤의 필터가 이 요청이 검증됐는지 안다").isEqualTo(Boolean.TRUE);
     }
 
     @Test
@@ -181,7 +183,9 @@ class MemberIdentityJwtTest {
     @Test
     @DisplayName("토큰이 없으면 401 이고 무엇을 요구하는지 알린다")
     void 토큰_없음() {
-        거절(돌린다(필터(hs(null, null)), 요청(b -> b.header("X-Member-Id", "42"))), 없음);
+        MockServerWebExchange 교환 = 돌린다(필터(hs(null, null)), 요청(b -> b.header("X-Member-Id", "42")));
+        거절(교환, 없음);
+        assertThat(교환.getAttributes()).doesNotContainKey(MemberIdentityFilter.VERIFIED);
         assertThat(계측.counter(MemberIdentityFilter.REJECTED_METRIC, "reason", "missing").count())
                 .isEqualTo(1.0);
     }

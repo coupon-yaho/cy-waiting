@@ -105,6 +105,12 @@ public final class QueryCoalescingFilter implements GatewayFilter {
      */
     private final Set<String> declined = ConcurrentHashMap.newKeySet();
 
+    /** 토큰마다 다르다고 뒷단이 말한 경로. 무리를 지으면 토큰 원문이 키가 된다. */
+    private final Set<String> credentialVaried = ConcurrentHashMap.newKeySet();
+
+    /** 토큰 갈림으로 흘린 구간을 경로마다 쌍으로 남긴다. 멈춘 때부터 풀린 때까지와 흘린 수가 로그에 남는다. */
+    private final Map<String, FailureWindow> credentialWindows = new ConcurrentHashMap<>();
+
     /** 연속으로 본 선언 수. 한 번이라도 안 오면 0 으로 돌아간다. */
     private final Map<String, AtomicInteger> declaring = new ConcurrentHashMap<>();
 
@@ -154,11 +160,18 @@ public final class QueryCoalescingFilter implements GatewayFilter {
                 || !props.enabled() || !ttlByPath.containsKey(path)) {
             return chain.filter(exchange);
         }
-        // **자격 증명이 실려 오면 안 모은다.** 하나로 모으면 그 값이 다른 사람이
-        // 같은 응답을 받는다.
-        if (hasCredential(exchange)) {
+        // **모르는 자격 증명이 실려 오면 안 모은다.** 하나로 모으면 그 값이 다른 사람이
+        // 같은 응답을 받는다. 신원 필터가 이 요청의 토큰을 검증했으면 공유 선언을 보고 나눈다
+        // (RFC 9111 3.5).
+        if (hasCredential(exchange) && !Boolean.TRUE.equals(
+                exchange.getAttribute(MemberIdentityFilter.VERIFIED))) {
             count("skipped", "credential");
             return chain.filter(exchange);
+        }
+        if (credentialVaried.contains(path) && hasCredential(exchange)) {
+            count("skipped", "vary-credential");
+            credentialWindows.computeIfAbsent(path, p -> FailureWindow.create()).entered();
+            return passThrough(exchange, chain, path);
         }
         // 범위 요청이 전체를 받거나, 조건부 요청이 조건 없는 200 을 받는다.
         if (isSpecialRequest(exchange)) {
@@ -341,6 +354,10 @@ public final class QueryCoalescingFilter implements GatewayFilter {
         }
         byte[] body = join(chunks);
         List<String> learned = keys.learn(path, response.getHeaders());
+        if (variesByCredential(response.getHeaders()) && credentialVaried.add(path)) {
+            credentialWindows.computeIfAbsent(path, p -> FailureWindow.create()).entered();
+            log.warn("토큰 갈림 진입 — {} 의 응답이 Vary: Authorization 이라 토큰을 든 조회를 모으지 않는다", path);
+        }
         // **한 번만 만든다.** 응답마다 소문자 사본과 집합을 두세 번 짓는 것은
         // 필터에 준 5ms 예산을 그대로 쓰는 자리다.
         Set<String> directives = directives(response.getHeaders().getCacheControl());
@@ -391,8 +408,19 @@ public final class QueryCoalescingFilter implements GatewayFilter {
         exchange.getResponse().beforeCommit(() -> {
             ServerHttpResponse response = exchange.getResponse();
             HttpStatusCode status = response.getStatusCode();
-            learnDeclaration(path, directives(response.getHeaders().getCacheControl()),
-                    status == null ? HttpStatus.OK.value() : status.value());
+            int code = status == null ? HttpStatus.OK.value() : status.value();
+            learnDeclaration(path, directives(response.getHeaders().getCacheControl()), code);
+            // 뒷단이 토큰마다 다르다는 말을 거두면 다시 모은다. 장애 응답으로는 안 배운다.
+            if (code < 400 && !variesByCredential(response.getHeaders())) {
+                if (credentialVaried.remove(path)) {
+                    FailureWindow window = credentialWindows.remove(path);
+                    Optional<FailureWindow.Recovered> recovered =
+                            window == null ? Optional.empty() : window.exited();
+                    log.warn("토큰 갈림 해제 — {} 에서 {}초 동안 {}건을 모으지 않고 흘렸다", path,
+                            recovered.map(FailureWindow.Recovered::elapsedSeconds).orElse(0L),
+                            recovered.map(FailureWindow.Recovered::swallowed).orElse(0L));
+                }
+            }
             return Mono.empty();
         });
         return chain.filter(exchange);
@@ -440,6 +468,10 @@ public final class QueryCoalescingFilter implements GatewayFilter {
         // 가고 나머지는 조용히 못 받아, 증상이 인증 실패로 나타난다.
         if (!headers.getOrEmpty(HttpHeaders.SET_COOKIE).isEmpty()) {
             return "set-cookie";
+        }
+        // 토큰마다 다르다는 응답은 모을 것이 없다.
+        if (variesByCredential(headers)) {
+            return "vary-credential";
         }
         if (directives.contains("no-store") || directives.contains("private")
                 || directives.contains("no-cache")) {
@@ -537,6 +569,10 @@ public final class QueryCoalescingFilter implements GatewayFilter {
         HttpHeaders headers = exchange.getRequest().getHeaders();
         return headers.headerNames().stream()
                 .anyMatch(name -> CREDENTIALS.stream().anyMatch(name::equalsIgnoreCase));
+    }
+
+    private boolean variesByCredential(HttpHeaders headers) {
+        return headers.getVary().stream().anyMatch(HttpHeaders.AUTHORIZATION::equalsIgnoreCase);
     }
 
     private void count(String outcome, String cause) {

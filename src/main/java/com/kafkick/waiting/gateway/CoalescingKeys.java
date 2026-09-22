@@ -72,8 +72,12 @@ final class CoalescingKeys {
                 .map(String::trim)
                 .filter(name -> !name.isEmpty())
                 .toList();
-        if (!vary.isEmpty()) {
-            varyByPath.put(path, vary);
+        // Authorization 은 키에 안 넣는다. 그렇게 갈리는 응답은 나누지 않고 흘리므로, 넣으면 토큰
+        // 원문이 키가 될 뿐이다. 돌려주는 목록에는 남겨 나눠도 되는지 판단이 그 사실을 본다.
+        List<String> keyed = vary.stream()
+                .filter(name -> !HttpHeaders.AUTHORIZATION.equalsIgnoreCase(name)).toList();
+        if (!keyed.isEmpty()) {
+            varyByPath.put(path, keyed);
         }
         return vary;
     }

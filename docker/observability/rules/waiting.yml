@@ -156,13 +156,14 @@ groups:
 
       # **축출은 오류가 없다** (RD-13). 한도에 닿기 전에는 아무 일도 없고, 닿으면
       # 줄과 바닥값이 조용히 사라진다. 그 전에 설정을 고치라는 알람이다. 못 읽은
-      # -1 은 안 건다 — CONFIG 를 막은 곳에서 영영 울린다.
+      # -1 은 안 건다 — CONFIG 를 막은 곳에서 영영 울린다. 게이트웨이가 모두 같은
+      # 레디스를 보므로 대수만큼 따로 띄우지 않고 하나로 센다.
       - alert: 레디스축출정책위험
-        expr: waiting_redis_eviction_safe == 0
+        expr: count(waiting_redis_eviction_safe == 0) > 0
         for: 10m
         labels: { severity: ticket }
         annotations:
-          summary: "{{ $labels.instance }} 가 보는 레디스의 축출 정책이 noeviction 이 아니다"
+          summary: "게이트웨이 {{ $value }} 대가 레디스 축출 정책이 noeviction 이 아니라고 본다"
           description: >-
             메모리 한도에서 줄·바닥값·커서가 지워져 순번 역행과 추월이 난다.
             maxmemory-policy 를 noeviction 으로 고치고 설정 파일도 같이 고친다.

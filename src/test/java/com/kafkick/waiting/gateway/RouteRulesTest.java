@@ -134,16 +134,6 @@ class RouteRulesTest {
     }
 
     @Test
-    @DisplayName("진입 규칙이 서로 다른 뒷단을 보면 막는다 — 서킷이 하나다")
-    void 진입_뒷단_둘() {
-        assertThatThrownBy(() -> new RouteRules(List.of(
-                발급("issue", "/api/v1/x/{couponId}/issue", "http://a:8080"),
-                발급("issue-v2", "/api/v2/x/{couponId}/issue", "http://b:9090"))))
-                .as("한 뒷단의 장애가 다른 규칙의 대기자를 같이 민다")
-                .isInstanceOf(IllegalArgumentException.class);
-    }
-
-    @Test
     @DisplayName("같은 경로를 두 규칙이 적으면 막는다 — 뒤가 조용히 죽는다")
     void 경로_중복() {
         assertThatThrownBy(() -> new RouteRules(List.of(

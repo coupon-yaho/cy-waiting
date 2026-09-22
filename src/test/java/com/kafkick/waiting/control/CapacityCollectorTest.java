@@ -9,6 +9,7 @@ import com.kafkick.waiting.domain.routing.InstanceAddress;
 import com.kafkick.waiting.domain.routing.InstanceRouting;
 import java.time.Duration;
 import java.util.List;
+import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -1056,5 +1057,133 @@ class CapacityCollectorTest {
                 .doesNotThrowAnyException();
 
         assertThat(collector.deniedDestinations()).isEqualTo(1);
+    }
+
+    /** 첫 회차라 셋 다 이미 돌던 대로 본다. 램프가 아니라 배제만 잰다. */
+    private static List<CapacityReport> 셋(long x, long y, long z, long at) {
+        return List.of(report("x", x, at), report("y", y, at), report("z", z, at));
+    }
+
+    /** 뺀 대의 몫이 남으면 남은 대가 그 몫까지 받는다. 셋 중 하나를 빼면 1.5배다. */
+    @Test
+    @DisplayName("과반이_뺀_인스턴스의_크레딧은_전역_크레딧에서_빠진다")
+    void 과반이_뺀_인스턴스의_크레딧은_전역_크레딧에서_빠진다() {
+        assertThat(collector().collect(셋(100, 100, 100, NOW), NOW, 1, Set.of("x"))).isEqualTo(200);
+    }
+
+    /** 보낼지는 노드마다 정한다. 여기서 빼면 아직 안 뺀 노드까지 강제로 빼는 셈이다. */
+    @Test
+    @DisplayName("뺀_인스턴스도_라우팅_목록에는_남는다")
+    void 뺀_인스턴스도_라우팅_목록에는_남는다() {
+        CapacityCollector collector = collector();
+
+        collector.collect(List.of(
+                주소_있는_보고("x", "10.0.1.7:8080", 100, NOW),
+                주소_있는_보고("y", "10.0.1.8:8080", 100, NOW)), NOW, 1, Set.of("x"));
+
+        assertThat(collector.routable())
+                .filteredOn(i -> i.instanceId().equals("x"))
+                .singleElement()
+                .extracting(InstanceRouting::credits)
+                .isEqualTo(100L);
+    }
+
+    /** 노드마다 다른 대를 빼 합이 전부가 되면 보낼 곳이 0 이다. 그 판단은 서킷의 몫이다. */
+    @Test
+    @DisplayName("전부가_대상이면_하나도_안_뺀다")
+    void 전부가_대상이면_하나도_안_뺀다() {
+        assertThat(collector().collect(셋(100, 100, 100, NOW), NOW, 1, Set.of("x", "y", "z")))
+                .isEqualTo(300);
+    }
+
+    @Test
+    @DisplayName("신선하지_않은_인스턴스의_배제는_무시한다")
+    void 신선하지_않은_인스턴스의_배제는_무시한다() {
+        assertThat(collector().collect(셋(100, 100, 100, NOW), NOW, 1, Set.of("w")))
+                .as("없는 대").isEqualTo(300);
+        assertThat(collector().collect(셋(100, 100, 100, NOW), NOW, 1, Set.of("x", "y", "w")))
+                .as("없는 대가 섞여도 산 대 안에서 전부인지 본다").isEqualTo(100);
+    }
+
+    /** 배제가 만든 부족분은 우리가 만든 것이다. 하한이 없으면 한산 통과가 전면 차단된다. */
+    @Test
+    @DisplayName("배제로_하한_밑이면_하한을_건다")
+    void 배제로_하한_밑이면_하한을_건다() {
+        CapacityCollector collector = collector();
+
+        long credit = collector.collect(셋(100, 0, 0, NOW), NOW, 1, Set.of("x"));
+
+        assertThat(credit).isEqualTo(FLOOR);
+        assertThat(collector.lastFloor()).isEqualTo(FLOOR);
+    }
+
+    /** 여유 0 은 뒷단이 말한 값이다. 배제가 있어도 하한을 얹으면 다시 밀어 넣는다. */
+    @Test
+    @DisplayName("뒷단이_전부_0이면_배제가_있어도_0이다")
+    void 뒷단이_전부_0이면_배제가_있어도_0이다() {
+        CapacityCollector collector = collector();
+
+        assertThat(collector.collect(셋(0, 0, 0, NOW), NOW, 1, Set.of("x"))).isZero();
+        assertThat(collector.lastFloor()).isZero();
+    }
+
+    /** 풀린 대의 몫을 한 틱에 돌려주면 그 대로 몰린다. 라우팅의 되돌림과 같은 창으로 데운다. */
+    @Test
+    @DisplayName("배제가_풀리면_램프를_다시_탄다")
+    void 배제가_풀리면_램프를_다시_탄다() {
+        CapacityCollector collector = collector();
+        collector.collect(셋(100, 100, 100, NOW), NOW, 1, Set.of("x"));
+
+        long 풀림 = NOW + 1;
+        assertThat(collector.collect(셋(100, 100, 100, 풀림), 풀림, 1, Set.of())).isEqualTo(200);
+        long 절반 = 풀림 + RAMP_UP.toSeconds() / 2;
+        assertThat(collector.collect(셋(100, 100, 100, 절반), 절반, 1, Set.of())).isEqualTo(250);
+        long 끝 = 풀림 + RAMP_UP.toSeconds();
+        assertThat(collector.collect(셋(100, 100, 100, 끝), 끝, 1, Set.of())).isEqualTo(300);
+    }
+
+    /** 안 뺀 것은 풀린 것이 아니다. 입력이 여전히 그 대를 뺐다고 말한다. */
+    @Test
+    @DisplayName("전부가_대상이라_안_뺀_것은_풀림이_아니다")
+    void 전부가_대상이라_안_뺀_것은_풀림이_아니다() {
+        CapacityCollector collector = collector();
+        collector.collect(셋(100, 100, 100, NOW), NOW, 1, Set.of("x"));
+
+        assertThat(collector.collect(셋(100, 100, 100, NOW + 1), NOW + 1, 1, Set.of("x", "y", "z")))
+                .isEqualTo(300);
+    }
+
+    @Test
+    @DisplayName("세_인자_수집은_아무것도_안_뺀다")
+    void 세_인자_수집은_아무것도_안_뺀다() {
+        CapacityCollector collector = collector();
+
+        assertThat(collector.collect(셋(100, 100, 100, NOW), NOW, 1)).isEqualTo(300);
+        assertThat(collector.lastEjectedCredit()).isZero();
+    }
+
+    @Test
+    @DisplayName("뺀_크레딧을_회차_값으로_낸다")
+    void 뺀_크레딧을_회차_값으로_낸다() {
+        CapacityCollector collector = collector();
+
+        collector.collect(셋(100, 70, 100, NOW), NOW, 1, Set.of("y"));
+        assertThat(collector.lastEjectedCredit()).isEqualTo(70);
+
+        collector.collect(셋(100, 70, 100, NOW + 1), NOW + 1, 1, Set.of());
+        assertThat(collector.lastEjectedCredit()).as("누적이 아니다").isZero();
+    }
+
+    /** 승계는 풀림이 아니다. 새 리더의 첫 회차에 전 대가 램프를 다시 타면 크레딧이 주저앉는다. */
+    @Test
+    @DisplayName("리더가_되면_지난_배제_기억을_비운다")
+    void 리더가_되면_지난_배제_기억을_비운다() {
+        CapacityCollector collector = collector();
+        collector.collect(셋(100, 100, 100, NOW), NOW, 1, Set.of("x"));
+
+        collector.leadershipAcquired();
+
+        assertThat(collector.collect(셋(100, 100, 100, NOW + 1), NOW + 1, 1, Set.of()))
+                .isEqualTo(300);
     }
 }

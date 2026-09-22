@@ -4,7 +4,6 @@ import java.time.Clock;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
-import java.util.regex.Pattern;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.annotation.Order;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -41,12 +40,6 @@ public final class MemberIdentityFilter implements WebFilter {
      */
     private static final PathPattern API = PathPatternParser.defaultInstance.parse("/api/**");
 
-    /**
-     * 토큰에서 꺼낸 식별자가 받을 수 있는 모양. <b>그 값이 레디스 줄과 서명 토큰에 들어간다</b> — 헤더를
-     * 가르는 문자나 서명 구분자를 품으면 경계가 옮겨진다.
-     */
-    private static final Pattern SUBJECT = Pattern.compile("^[A-Za-z0-9_.:@+-]{1,64}$");
-
     private static final String BEARER = "bearer ";
 
     private final ApiError error;
@@ -63,10 +56,12 @@ public final class MemberIdentityFilter implements WebFilter {
     }
 
     @Autowired
-    MemberIdentityFilter(Clock clock, AuthProperties auth, EntryTokenDelivery delivery) {
+    MemberIdentityFilter(Clock clock, AuthProperties auth, EntryTokenDelivery delivery,
+            RouteRules routes) {
         this(clock, auth.jwt(),
                 auth.mode() == AuthProperties.Mode.JWT ? JwtDecoders.of(auth.jwt(), clock) : null);
         auth.checkAgainst(delivery);
+        auth.checkCovers(routes);
     }
 
     public static MemberIdentityFilter of(Clock clock) {
@@ -108,28 +103,31 @@ public final class MemberIdentityFilter implements WebFilter {
         return decoder.decode(token)
                 .map(this::identity)
                 .onErrorResume(JwtException.class, e -> Mono.just(Identity.INVALID))
-                .flatMap(id -> id == Identity.INVALID
-                        ? unauthorized(exchange, "Bearer error=\"invalid_token\"")
-                        : chain.filter(exchange.mutate().request(r -> r.headers(h -> {
-                            h.remove(MEMBER_ID);
-                            h.remove(MEMBER_GRADE);
-                            h.set(MEMBER_ID, id.member());
-                            if (id.grade() != null) {
-                                h.set(MEMBER_GRADE, id.grade());
-                            }
-                        })).build()));
+                // 키 집합을 못 받은 것은 토큰 탓이 아니다. 401 이면 클라이언트는 다시 로그인한다.
+                .onErrorResume(IllegalStateException.class, e -> Mono.just(Identity.UNAVAILABLE))
+                .flatMap(id -> {
+                    if (id == Identity.INVALID) {
+                        return unauthorized(exchange, "Bearer error=\"invalid_token\"");
+                    }
+                    if (id == Identity.UNAVAILABLE) {
+                        return error.write(exchange, ApiError.Code.TEMPORARILY_UNAVAILABLE);
+                    }
+                    return chain.filter(exchange.mutate().request(r -> r.headers(h -> {
+                        h.remove(MEMBER_ID);
+                        h.remove(MEMBER_GRADE);
+                        h.set(MEMBER_ID, id.member());
+                        h.set(MEMBER_GRADE, id.grade());
+                    })).build());
+                });
     }
 
+    /** 헤더 모드와 같은 계약을 건다. 토큰이 서명됐다고 뒷단이 모르는 모양을 넘기지 않는다. */
     private Identity identity(Jwt token) {
         String member = token.getClaimAsString(jwt.memberClaim());
-        if (member == null || !SUBJECT.matcher(member).matches()) {
-            return Identity.INVALID;
-        }
-        if (jwt.gradeClaim() == null) {
-            return new Identity(member, null);
-        }
         String grade = token.getClaimAsString(jwt.gradeClaim());
-        return grade != null && GRADES.contains(grade) ? new Identity(member, grade) : Identity.INVALID;
+        return validId(member == null ? null : List.of(member))
+                && validGrade(grade == null ? null : List.of(grade))
+                ? new Identity(member, grade) : Identity.INVALID;
     }
 
     private Mono<Void> unauthorized(ServerWebExchange exchange, String challenge) {
@@ -148,9 +146,10 @@ public final class MemberIdentityFilter implements WebFilter {
         return token.isEmpty() ? null : token;
     }
 
-    /** 검증된 신원. 등급은 등급 클레임을 적었을 때만 있다. */
+    /** 검증된 신원. */
     private record Identity(String member, String grade) {
-        static final Identity INVALID = new Identity("", null);
+        static final Identity INVALID = new Identity("", "");
+        static final Identity UNAVAILABLE = new Identity("", "");
     }
 
     /**

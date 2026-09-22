@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
@@ -16,8 +17,11 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties(prefix = "waiting.auth")
 public record AuthProperties(Mode mode, Jwt jwt) {
 
-    private static final Set<String> IDENTITY_HEADERS =
-            Set.of("x-member-id", "x-member-grade", "authorization");
+    /** Authorization 은 입장 토큰 쪽이 이미 예약해 둔다. */
+    private static final Set<String> IDENTITY_HEADERS = Set.of("x-member-id", "x-member-grade");
+
+    /** 신원 필터가 보는 범위. 이 밖의 경로는 토큰을 안 본다. */
+    static final String API_PREFIX = "/api/";
 
     /** 회원 신원의 출처. */
     public enum Mode {
@@ -49,61 +53,93 @@ public record AuthProperties(Mode mode, Jwt jwt) {
         }
     }
 
+    /** 인증을 켰으면 모든 라우트가 신원 필터 안에 있어야 한다. 밖의 경로는 토큰 없이 남의 이름을 쓴다. */
+    public void checkCovers(RouteRules routes) {
+        if (mode != Mode.JWT) {
+            return;
+        }
+        for (RouteRules.Rule rule : routes.rules()) {
+            for (String path : rule.paths()) {
+                if (!path.startsWith(API_PREFIX)) {
+                    throw new IllegalArgumentException("waiting.auth.mode=JWT 에서 라우트 '"
+                            + rule.id() + "' 의 경로가 " + API_PREFIX + " 밖이다: " + path);
+                }
+            }
+        }
+    }
+
     /**
      * 검증 방법. 키 공급은 알고리즘에 맞는 것 <b>하나</b>만 받는다 — HMAC 은 비밀, RSA·EC 는 PEM 공개키나
-     * JWKS 주소다.
+     * JWKS 주소다. 대상은 필수다 — 같은 발급자의 다른 서비스용 토큰이 통과하면 안 된다.
      */
     public record Jwt(String algorithm, String secret, String publicKey, String jwksUri,
             String issuer, String audience, String memberClaim, String gradeClaim,
-            Duration clockSkew) {
+            Duration clockSkew, boolean allowHttpJwks) {
 
-        private static final Set<String> HMAC = Set.of("HS256", "HS384", "HS512");
+        /** 알고리즘별 비밀 하한. 해시 출력보다 짧은 비밀은 무차별 대입에 뚫린다 (RFC 7518 3.2). */
+        private static final Map<String, Integer> HMAC = Map.of("HS256", 32, "HS384", 48, "HS512", 64);
 
         private static final Set<String> ASYMMETRIC = Set.of("RS256", "RS384", "RS512",
                 "ES256", "ES384", "ES512");
 
-        /** HS256 의 키 길이. 이보다 짧은 비밀은 무차별 대입에 뚫린다 (RFC 7518 3.2). */
-        private static final int MIN_SECRET_BYTES = 32;
-
         public Jwt {
             algorithm = algorithm == null ? "" : algorithm.trim().toUpperCase(Locale.ROOT);
             // `none` 과 모르는 이름은 막는다. 알고리즘을 토큰 머리에서 믿으면 서명 없는 토큰이 통과한다.
-            if (!HMAC.contains(algorithm) && !ASYMMETRIC.contains(algorithm)) {
+            if (!HMAC.containsKey(algorithm) && !ASYMMETRIC.contains(algorithm)) {
                 throw new IllegalArgumentException("waiting.auth.jwt.algorithm 을 모른다: " + algorithm);
             }
             secret = blankToNull(secret);
             publicKey = blankToNull(publicKey);
             jwksUri = blankToNull(jwksUri);
-            if (HMAC.contains(algorithm)) {
+            if (HMAC.containsKey(algorithm)) {
                 if (secret == null || publicKey != null || jwksUri != null) {
                     throw new IllegalArgumentException(algorithm + " 는 secret 하나로만 검증한다");
                 }
-                if (secret.getBytes(StandardCharsets.UTF_8).length < MIN_SECRET_BYTES) {
+                int min = HMAC.get(algorithm);
+                if (secret.getBytes(StandardCharsets.UTF_8).length < min) {
                     throw new IllegalArgumentException(
-                            "waiting.auth.jwt.secret 이 " + MIN_SECRET_BYTES + " 바이트보다 짧다");
+                            "waiting.auth.jwt.secret 이 " + algorithm + " 에 " + min + " 바이트보다 짧다");
                 }
             } else {
-                if (secret != null || (publicKey == null) == (jwksUri == null)) {
+                if (secret != null) {
+                    throw new IllegalArgumentException(algorithm + " 는 secret 을 안 받는다");
+                }
+                if ((publicKey == null) == (jwksUri == null)) {
                     throw new IllegalArgumentException(
                             algorithm + " 는 public-key 나 jwks-uri 중 하나로 검증한다");
                 }
-                if (jwksUri != null) {
-                    String scheme = URI.create(jwksUri).getScheme();
-                    if (!"https".equals(scheme) && !"http".equals(scheme)) {
-                        throw new IllegalArgumentException(
-                                "waiting.auth.jwt.jwks-uri 는 http 나 https 여야 한다: " + jwksUri);
-                    }
+                // http 로 받으면 중간에서 키를 바꿔 끼워 아무 신원이나 서명할 수 있다.
+                String scheme = jwksUri == null ? "https"
+                        : String.valueOf(URI.create(jwksUri).getScheme()).toLowerCase(Locale.ROOT);
+                if (!"https".equals(scheme) && !("http".equals(scheme) && allowHttpJwks)) {
+                    throw new IllegalArgumentException(
+                            "waiting.auth.jwt.jwks-uri 는 https 여야 한다 (http 는 allow-http-jwks): "
+                                    + jwksUri);
                 }
             }
             issuer = blankToNull(issuer);
+            if (jwksUri != null && issuer == null) {
+                throw new IllegalArgumentException(
+                        "waiting.auth.jwt.jwks-uri 를 쓰면 issuer 를 적는다 — 그 키로 서명한 남의 토큰이 통과한다");
+            }
             audience = blankToNull(audience);
+            if (audience == null) {
+                throw new IllegalArgumentException("waiting.auth.jwt.audience 가 없다");
+            }
             memberClaim = blankToNull(memberClaim) == null ? "sub" : memberClaim.trim();
-            gradeClaim = blankToNull(gradeClaim);
+            gradeClaim = blankToNull(gradeClaim) == null ? "grade" : gradeClaim.trim();
             clockSkew = clockSkew == null ? Duration.ofSeconds(30) : clockSkew;
         }
 
         public boolean hmac() {
-            return HMAC.contains(algorithm);
+            return HMAC.containsKey(algorithm);
+        }
+
+        /** 비밀을 로그에 안 흘린다. */
+        @Override
+        public String toString() {
+            return "Jwt[algorithm=" + algorithm + ", secret=" + (secret == null ? null : "****")
+                    + ", jwksUri=" + jwksUri + ", issuer=" + issuer + ", audience=" + audience + "]";
         }
 
         static String blankToNull(String value) {

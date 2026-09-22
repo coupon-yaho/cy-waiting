@@ -24,24 +24,36 @@ import org.springframework.security.oauth2.jwt.JwtIssuerValidator;
 import org.springframework.security.oauth2.jwt.JwtTimestampValidator;
 import org.springframework.security.oauth2.jwt.NimbusReactiveJwtDecoder;
 import org.springframework.security.oauth2.jwt.ReactiveJwtDecoder;
+import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 /**
  * 설정에서 검증기를 만든다. <b>알고리즘을 고정한다</b> — 토큰 머리의 알고리즘을 믿으면 HMAC 과 RSA 를
  * 바꿔치기하는 공격이 선다. JWKS 는 비동기로 받아 캐시하므로 요청 경로가 블로킹 호출에 안 묶인다.
  */
-public final class JwtDecoders {
+final class JwtDecoders {
 
-    private JwtDecoders() {
+    /** RSA 공개키 하한 (NIST SP 800-131A). */
+    static final int MIN_RSA_BITS = 2048;
+
+    private final AuthProperties.Jwt settings;
+
+    private final Clock clock;
+
+    private JwtDecoders(AuthProperties.Jwt settings, Clock clock) {
+        this.settings = settings;
+        this.clock = clock;
     }
 
     public static ReactiveJwtDecoder of(AuthProperties.Jwt settings, Clock clock) {
-        NimbusReactiveJwtDecoder decoder = build(settings);
-        decoder.setJwtValidator(validator(settings, clock));
+        JwtDecoders factory = new JwtDecoders(settings, clock);
+        NimbusReactiveJwtDecoder decoder = factory.build();
+        decoder.setJwtValidator(factory.validator());
         return decoder;
     }
 
-    static NimbusReactiveJwtDecoder build(AuthProperties.Jwt settings) {
+    private NimbusReactiveJwtDecoder build() {
         if (settings.hmac()) {
             MacAlgorithm alg = MacAlgorithm.from(settings.algorithm());
             SecretKeySpec key = new SecretKeySpec(
@@ -50,12 +62,18 @@ public final class JwtDecoders {
         }
         SignatureAlgorithm alg = SignatureAlgorithm.from(settings.algorithm());
         if (settings.jwksUri() != null) {
-            return NimbusReactiveJwtDecoder.withJwkSetUri(settings.jwksUri()).jwsAlgorithm(alg)
-                    .build();
+            Mono<String> fetch = WebClient.create().get().uri(settings.jwksUri()).retrieve()
+                    .bodyToMono(String.class);
+            return NimbusReactiveJwtDecoder.withJwkSource(new JwkSetCache(fetch, clock))
+                    .jwsAlgorithm(alg).build();
         }
         boolean ec = settings.algorithm().startsWith("ES");
         PublicKey key = publicKey(settings.publicKey(), ec ? "EC" : "RSA");
         if (!ec) {
+            if (((RSAPublicKey) key).getModulus().bitLength() < MIN_RSA_BITS) {
+                throw new IllegalArgumentException(
+                        "waiting.auth.jwt.public-key 가 " + MIN_RSA_BITS + " 비트보다 짧다");
+            }
             return NimbusReactiveJwtDecoder.withPublicKey((RSAPublicKey) key)
                     .signatureAlgorithm(alg).build();
         }
@@ -68,22 +86,22 @@ public final class JwtDecoders {
                 .jwsAlgorithm(alg).build();
     }
 
-    static OAuth2TokenValidator<Jwt> validator(AuthProperties.Jwt settings, Clock clock) {
+    private OAuth2TokenValidator<Jwt> validator() {
         List<OAuth2TokenValidator<Jwt>> all = new ArrayList<>();
         JwtTimestampValidator timestamps = new JwtTimestampValidator(settings.clockSkew());
         timestamps.setClock(clock);
+        // 만료가 없는 토큰은 새면 영원히 유효하다.
+        timestamps.setAllowEmptyExpiryClaim(false);
         all.add(timestamps);
         if (settings.issuer() != null) {
             all.add(new JwtIssuerValidator(settings.issuer()));
         }
-        if (settings.audience() != null) {
-            all.add(new JwtClaimValidator<List<String>>("aud",
-                    aud -> aud != null && aud.contains(settings.audience())));
-        }
+        all.add(new JwtClaimValidator<List<String>>("aud",
+                aud -> aud != null && aud.contains(settings.audience())));
         return new DelegatingOAuth2TokenValidator<>(all);
     }
 
-    static PublicKey publicKey(String pem, String family) {
+    private PublicKey publicKey(String pem, String family) {
         String body = pem.replaceAll("-----(BEGIN|END) PUBLIC KEY-----", "").replaceAll("\\s", "");
         try {
             return KeyFactory.getInstance(family)

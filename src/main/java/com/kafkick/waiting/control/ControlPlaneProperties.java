@@ -95,10 +95,8 @@ public record ControlPlaneProperties(Scheduler scheduler, Leader leader, Capacit
                 throw new IllegalArgumentException(
                         "firstTickDelay 는 음수일 수 없다: %s".formatted(firstTickDelay));
             }
-            // **하나만 받는다.** 여럿이면 몫을 샤드에 나눠 각각 적용해야 하는데 지금 적용은
-            // 0번에만 나가, 나머지 샤드의 줄이 영원히 안 빠지고 오류도 안 난다. 큐 등록 상한도
-            // 여기 걸린다 — 상한은 쿠폰 전체인데 스크립트는 자기 샤드만 세기 때문이다.
-            // 매진 큐 정리도 걸린다 — 재고 키가 샤드를 못 따라 슬롯이 갈린다.
+            // **하나만 받는다.** 적용이 0번 샤드에만 나가고, 큐 등록 상한은 자기 샤드만 세며,
+            // 매진 큐 정리는 재고 키가 샤드를 못 따라 슬롯이 갈린다. 경위는 계획서 10.3.
             if (shards != 1) {
                 throw new IllegalArgumentException(
                         "shards 는 아직 1 만 지원한다 — 샤드별 적용이 없다: %d".formatted(shards));

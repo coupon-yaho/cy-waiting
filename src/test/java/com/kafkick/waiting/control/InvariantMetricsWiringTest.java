@@ -48,6 +48,18 @@ class InvariantMetricsWiringTest {
             "waiting_allocation_carryover_total{application=\"waiting\",outcome=\"";
 
     @Test
+    @DisplayName("틱_지연이_분위수로_나간다")
+    void 틱_지연이_분위수로_나간다() {
+        // **버려지던 값이다.** 스케줄러는 회차마다 걸린 시간을 재서 넘기는데 받는 쪽이
+        // 아무것도 안 해서, 부하 회차에서 틱 지연을 긁을 자리가 없었다 (CY-985).
+        assertThat(registry.scrape())
+                .as("부하 회차가 p99 를 긁는다 — 평균만 나오면 꼬리를 못 본다")
+                .contains("waiting_allocation_tick_seconds{application=\"waiting\",outcome=\"ok\",quantile=\"0.99\"}")
+                // **시한에 걸린 수는 따로 나가야 한다.** 섞이면 그 회차가 시한 값으로 잘려 적힌다.
+                .contains("waiting_allocation_tick_seconds_count{application=\"waiting\",outcome=\"timeout\"}");
+    }
+
+    @Test
     @DisplayName("선행_지표가_스크레이프에_나온다")
     void 선행_지표가_스크레이프에_나온다() {
         assertThat(registry.scrape())

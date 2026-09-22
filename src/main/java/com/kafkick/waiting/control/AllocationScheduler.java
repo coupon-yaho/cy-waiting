@@ -7,6 +7,9 @@ import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 import java.util.function.LongConsumer;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
+import reactor.core.publisher.SignalType;
 import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,7 +31,16 @@ public final class AllocationScheduler {
     private final Duration firstTickDelay;
     private final BooleanSupplier isLeader;
     private final Supplier<Mono<Void>> allocate;
-    private final LongConsumer lagNanos;
+    private final RoundObserver observer;
+
+    /** 회차가 어떻게 끝났는가. 한 통에 섞으면 시한이 회차 시간으로 적힌다. */
+    public enum Outcome { OK, ERROR, TIMEOUT }
+
+    /** 회차 하나의 시간과 결과를 받는다. */
+    @FunctionalInterface
+    public interface RoundObserver {
+        void observe(long nanos, Outcome outcome);
+    }
     private final Scheduler timer;
 
     /** 다음 회차를 적어도 이만큼 미룬다. 적용 차례를 회차 안에서 기다리면 틱 시한을 먹는다. */
@@ -48,7 +60,7 @@ public final class AllocationScheduler {
     private volatile Disposable subscription;
 
     private AllocationScheduler(Duration tick, Duration firstTickDelay, BooleanSupplier isLeader,
-            Supplier<Mono<Void>> allocate, LongConsumer lagNanos, Scheduler timer,
+            Supplier<Mono<Void>> allocate, RoundObserver observer, Scheduler timer,
             Supplier<Duration> holdOff) {
         if (tick == null || tick.isZero() || tick.isNegative()) {
             throw new IllegalArgumentException("tick 은 양수여야 한다: %s".formatted(tick));
@@ -61,7 +73,7 @@ public final class AllocationScheduler {
         this.firstTickDelay = firstTickDelay;
         this.isLeader = Objects.requireNonNull(isLeader, "isLeader 는 필수다");
         this.allocate = Objects.requireNonNull(allocate, "allocate 는 필수다");
-        this.lagNanos = Objects.requireNonNull(lagNanos, "lagNanos 는 필수다");
+        this.observer = Objects.requireNonNull(observer, "observer 는 필수다");
         this.timer = Objects.requireNonNull(timer, "timer 는 필수다");
         this.holdOff = Objects.requireNonNull(holdOff, "holdOff 는 필수다");
         // 시계를 스케줄러에서 가져온다. 억제 로그의 지속 시간만 실시간을 타면
@@ -72,15 +84,29 @@ public final class AllocationScheduler {
     public static AllocationScheduler of(Duration tick, Duration firstTickDelay,
             BooleanSupplier isLeader, Supplier<Mono<Void>> allocate, LongConsumer lagNanos,
             Scheduler timer) {
-        return new AllocationScheduler(tick, firstTickDelay, isLeader, allocate, lagNanos, timer,
-                () -> Duration.ZERO);
+        return new AllocationScheduler(tick, firstTickDelay, isLeader, allocate,
+                timeOnly(lagNanos), timer, () -> Duration.ZERO);
     }
 
     /** 다음 회차 시작을 {@code holdOff} 만큼은 미룬다. */
     public static AllocationScheduler of(Duration tick, Duration firstTickDelay,
             BooleanSupplier isLeader, Supplier<Mono<Void>> allocate, LongConsumer lagNanos,
             Scheduler timer, Supplier<Duration> holdOff) {
-        return new AllocationScheduler(tick, firstTickDelay, isLeader, allocate, lagNanos, timer, holdOff);
+        return new AllocationScheduler(tick, firstTickDelay, isLeader, allocate,
+                timeOnly(lagNanos), timer, holdOff);
+    }
+
+    /** 결과까지 받는다. 틱 게이트는 성공한 회차만으로 잰다. */
+    public static AllocationScheduler observed(Duration tick, Duration firstTickDelay,
+            BooleanSupplier isLeader, Supplier<Mono<Void>> allocate, RoundObserver observer,
+            Scheduler timer, Supplier<Duration> holdOff) {
+        return new AllocationScheduler(tick, firstTickDelay, isLeader, allocate, observer, timer,
+                holdOff);
+    }
+
+    static RoundObserver timeOnly(LongConsumer lagNanos) {
+        Objects.requireNonNull(lagNanos, "lagNanos 는 필수다");
+        return (nanos, outcome) -> lagNanos.accept(nanos);
     }
 
     public void start() {
@@ -158,16 +184,23 @@ public final class AllocationScheduler {
             return Mono.empty();
         }
         long startedAt = timer.now(NANOSECONDS);
+        AtomicReference<Outcome> outcome = new AtomicReference<>(Outcome.OK);
         return allocate.get()
                 // 무응답은 오류가 아니라 오류 처리에 안 걸린다. 상한이 없으면
                 // 루프가 조용히 멎고, 멎었다는 신호조차 안 나온다.
                 .timeout(tick, timer)
                 .doOnSuccess(ignored -> recovered())
+                .doOnError(e -> outcome.set(
+                        e instanceof TimeoutException ? Outcome.TIMEOUT : Outcome.ERROR))
                 .doOnError(this::failed)
                 .onErrorResume(e -> Mono.empty())
                 // 끝나는 신호보다 먼저 적는다. 끝난 뒤에 적으면 반복이 다음 지연을 먼저 계산해 옛 값을 쓴다.
                 .doOnTerminate(() -> lastRoundNanos = timer.now(NANOSECONDS) - startedAt)
-                .doFinally(signal ->
-                        lagNanos.accept(timer.now(NANOSECONDS) - startedAt));
+                // **멈출 때 잘린 회차는 안 적는다.** 그 시간은 회차가 아니라 종료 시각이다.
+                .doFinally(signal -> {
+                    if (signal != SignalType.CANCEL) {
+                        observer.observe(timer.now(NANOSECONDS) - startedAt, outcome.get());
+                    }
+                });
     }
 }

@@ -819,6 +819,19 @@ class GatewayRoutesTest {
     }
 
     @Test
+    @DisplayName("기본 포트를 적은 주소와 생략한 주소는 같은 뒷단이다")
+    void 진입_뒷단_기본_포트() {
+        assertThatCode(() -> 라우터(null, 진입_둘("http://b", "http://B:80"))
+                .getRoutes().collectList().block()).doesNotThrowAnyException();
+        assertThatCode(() -> 라우터(null, 진입_둘("https://b:443", "https://B"))
+                .getRoutes().collectList().block()).doesNotThrowAnyException();
+        assertThatThrownBy(() -> 라우터(null, 진입_둘("http://b", "https://b"))
+                .getRoutes().collectList().block())
+                .as("스킴이 다르면 기본 포트도 달라 다른 뒷단이다")
+                .hasMessageContaining("진입 규칙의 뒷단이 둘 이상");
+    }
+
+    @Test
     @DisplayName("라우팅을 켠 채 규칙이 제 주소를 적으면 막는다")
     void 균형기_우회() {
         RouteRules 규칙 = new RouteRules(List.of(

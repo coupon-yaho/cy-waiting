@@ -240,7 +240,7 @@ rm -f "$OUT_SUMMARY" "$OUT_OPS" "$OUT_ENQUEUE" "$OUT_ENQUEUE_BASE"
 # 것이 곧 안 켠 회차라는 뜻이다 — 빈 값을 0 으로 읽지 않는다.
 scrape_enqueue() {
     $COMPOSE exec -T gateway wget -qO- http://localhost:8081/actuator/prometheus 2>/dev/null \
-        | grep -E '^(waiting_queue_enqueue_latency_seconds|lettuce_command_)' > "$1" || true
+        | grep -E '^(waiting_queue_enqueue_latency_seconds|waiting_allocation_tick_seconds|lettuce_command_)' > "$1" || true
 }
 # **파일이 비었는지로 가르면 안 된다.** 계기를 켠 회차는 lettuce 줄이 들어차므로, 등록 지표가
 # 통째로 사라져도 파일이 안 빈다 — 갈라 두려던 "못 긁음" 과 "0 건" 이 다시 붙는다.
@@ -298,6 +298,12 @@ if ! has_enqueue "$OUT_ENQUEUE"; then
     echo "::warning title=착수 판정::등록 왕복 지표를 못 긁었다 — 노드가 여럿이거나 관리 포트가 바뀌었다"
 fi
 
+# **틱 지연을 같이 적는다** (CY-985). 이 회차가 20,000 동시를 만드는 유일한 자리라, 틱
+# 게이트를 실규모로 재는 곳도 여기다. 판정은 안 건다 — 판정기는 레디스 착수를 보고,
+# 틱 게이트는 Phase 10 표가 든다. 창이 10 분이라 앞 회차가 섞일 수 있어 값만 남긴다.
+tick_p99=$(grep -E '^waiting_allocation_tick_seconds\{.*quantile="0\.99"' "$OUT_ENQUEUE" \
+    | awk '{print $2}' | head -1)
+echo "틱 지연 p99: ${tick_p99:-못 긁음}초"
 echo "k6=$rc · 레디스 고정 ${pinned:+켬}${pinned:-끔}"
 # **k6 가 빨개진 회차는 판정하지 않는다.** 임계 위반(99)은 줄이 안 섰거나 다
 # 못 던졌다는 뜻이고, 그 회차의 봉우리는 재려던 것이 아니다.

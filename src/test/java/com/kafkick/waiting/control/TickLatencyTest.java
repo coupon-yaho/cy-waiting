@@ -18,8 +18,7 @@ class TickLatencyTest {
 
         TickLatency.recorder(계측).accept(TimeUnit.MILLISECONDS.toNanos(42));
 
-        Timer 틱 = 계측.find("waiting.allocation.tick").timer();
-        assertThat(틱).isNotNull();
+        Timer 틱 = 계측.get("waiting.allocation.tick").timer();
         assertThat(틱.count()).isEqualTo(1);
         assertThat(틱.totalTime(TimeUnit.MILLISECONDS)).isEqualTo(42.0);
     }
@@ -31,7 +30,7 @@ class TickLatencyTest {
 
         TickLatency.recorder(계측).accept(-1);
 
-        assertThat(계측.find("waiting.allocation.tick").timer().count())
+        assertThat(계측.get("waiting.allocation.tick").timer().count())
                 .as("음수를 적으면 분위수가 망가진다").isZero();
     }
 }

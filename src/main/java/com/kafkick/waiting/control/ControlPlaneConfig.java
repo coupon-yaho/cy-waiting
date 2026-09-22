@@ -476,7 +476,7 @@ public class ControlPlaneConfig {
             AllocationRound round, CapacityRefresh capacity, CapacityCollector collector,
             TunablesRefresh tunables, Scheduler allocationScheduler, SoldOutCleanup cleanup,
             QueueSweeper sweeper, SnapshotHolder holder, GatewayRegistry registry,
-            AllocationRedisPort port, ApplyPacer applyPacer) {
+            AllocationRedisPort port, ApplyPacer applyPacer, MeterRegistry meters) {
         SealGate gate = SealGate.of(leadership::isLeader);
         Runnable gained = onLeadershipGained(collector, capacity, cleanup, sweeper, round, holder,
                 registry, sealFences(port, leadership, gate, properties.scheduler().tick(),
@@ -495,7 +495,8 @@ public class ControlPlaneConfig {
                         holder::view,
                         HandoverSpacing.of(System::nanoTime, properties.scheduler().tick())),
                 allocationTickStep(capacity::refresh, tunables::refresh, round::run),
-                nanos -> { }, allocationScheduler, applyPacer::holdOff);
+                // **버리지 않는다.** 스케줄러가 회차마다 재서 넘기는 값이 틱 지연 그대로다.
+                TickLatency.recorder(meters), allocationScheduler, applyPacer::holdOff);
     }
 
     /**

@@ -52,6 +52,12 @@ class ReturningNodeFloorWireScenarioTest {
 
     private static final String COUPON = "c6e-wire";
 
+    /** 발행 표시. 나이는 이 시험이 안 본다 — 받아들여지기만 하면 된다. */
+    private static final Instant 발행_시각 = Instant.parse("2026-09-24T00:00:00Z");
+
+    /** 가짜 동료의 시각을 레디스 시계에 맞출 때 쓰는 벽시계. */
+    private static final Clock 벽시계 = Clock.systemUTC();
+
     /** 하트비트 주기의 몇 배. 한 번 놓쳐도 넘길 만큼 넉넉하다. */
     private static final Duration 기다림 = Duration.ofSeconds(15);
 
@@ -81,7 +87,7 @@ class ReturningNodeFloorWireScenarioTest {
         SnapshotSource 한_노드로_발행된_재료() {
             Map<String, String> 재료 = SnapshotCodec.create().encode(
                     new GatewaySnapshot(Map.of(COUPON, CouponStates.idle(1_000_000)),
-                            new SnapshotMeta(9_000, 1), Instant.now()),
+                            new SnapshotMeta(9_000, 1), 발행_시각),
                     CreditSmoother.Snapshot.empty(), QueueingHysteresis.Snapshot.empty());
             return () -> Mono.just(재료);
         }
@@ -98,8 +104,8 @@ class ReturningNodeFloorWireScenarioTest {
     void C6e_실배선에서_돌아온_노드가_제_관측으로_분모를_든다() {
         StatefulRedisConnection<String, String> 연결 = faults.연결한다();
         // 스크립트는 레디스 시계로 신선도를 잰다. 로컬 시계가 앞서면 가짜 노드가 미래로 읽혀 바로 죽는다.
-        Clock 레디스_시계 = Clock.offset(Clock.systemUTC(), Duration.ofSeconds(
-                Long.parseLong(연결.sync().time().get(0)) - Instant.now().getEpochSecond()));
+        Clock 레디스_시계 = Clock.offset(벽시계, Duration.ofSeconds(
+                Long.parseLong(연결.sync().time().get(0)) - 벽시계.instant().getEpochSecond()));
         GatewayNodes 노드들 = new GatewayNodes(연결, Duration.ofSeconds(3), 레디스_시계);
         ScheduledExecutorService 치기 = Executors.newSingleThreadScheduledExecutor();
         Logger 로거 = (Logger) LoggerFactory.getLogger(SnapshotRefresher.class);

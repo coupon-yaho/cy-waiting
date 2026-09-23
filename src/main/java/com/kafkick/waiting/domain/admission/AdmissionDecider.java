@@ -180,9 +180,17 @@ public class AdmissionDecider {
      */
     public static final long MIN_CREDIT = 1;
 
+    /** 장애 개방이 노드 예산에서 떼어 쓰는 비율. 상수 양이면 뒷단 가용량과 무관하게 나간다. */
+    private static final double FAIL_OPEN_SHARE = 0.5;
+
     /** 이 노드가 초당 감당할 양. 쿠폰과 무관한 노드 전체의 상한이다. */
     public long globalCap(SnapshotMeta meta) {
         return meta.globalCredit() / meta.effectiveGatewayCount();
+    }
+
+    /** 줄을 못 세운 요청에 여는 노드 상한. 전부 주면 그 초에 통과할 사람의 몫이 없다. */
+    public long failOpenCap(SnapshotMeta meta) {
+        return (long) (globalCap(meta) * FAIL_OPEN_SHARE);
     }
 
     /**

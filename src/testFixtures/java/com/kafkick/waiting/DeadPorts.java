@@ -1,6 +1,7 @@
 package com.kafkick.waiting;
 
 import java.io.IOException;
+import java.net.ConnectException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.util.concurrent.ThreadLocalRandom;
@@ -41,12 +42,18 @@ public final class DeadPorts {
                 "안 듣는 자리를 %d 번 찾았는데 다 물렸다 — 이 실행으로는 못 잰다".formatted(ATTEMPTS));
     }
 
+    /**
+     * <b>거절만 죽은 자리다.</b> 타임아웃을 죽음으로 읽으면 방화벽이 버리는 자리를 골라 주고,
+     * 그러면 거절을 재려던 시험이 연결 시한 갈래를 탄 채 초록이 된다.
+     */
     private static boolean listening(int port) {
         try (Socket probe = new Socket()) {
             probe.connect(new InetSocketAddress("127.0.0.1", port), 200);
             return true;
-        } catch (IOException refused) {
+        } catch (ConnectException refused) {
             return false;
+        } catch (IOException 못쓴다) {
+            return true;
         }
     }
 }

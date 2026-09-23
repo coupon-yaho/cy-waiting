@@ -2,6 +2,7 @@ package com.kafkick.waiting.gateway;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.kafkick.waiting.DeadPorts;
 import com.kafkick.waiting.control.GatewaySnapshot;
 import com.kafkick.waiting.control.SnapshotCodec;
 import com.kafkick.waiting.control.SnapshotSource;
@@ -33,7 +34,6 @@ import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.context.DynamicPropertyRegistry;
-import com.kafkick.waiting.DeadPorts;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Mono;

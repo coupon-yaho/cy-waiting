@@ -210,7 +210,7 @@ class AllocationRoundTest {
         assertThat(발행된_크레딧).containsExactly(1_000L, 200L);
     }
 
-/**
+    /**
      * <b>이월이 돌아온 사실을 한 번 남긴다.</b> 못 받은 회차 수를 같이 안 실으면, 회복 구간이
      * 로그에서 사라져 평활이 언제부터 다시 이어졌는지 사후에 못 짚는다.
      */
@@ -240,7 +240,7 @@ class AllocationRoundTest {
 
         assertThat(로그.list).filteredOn(줄 -> 줄.getFormattedMessage().contains("이월이 돌아왔다"))
                 .as("돌아온 그 회차에 한 번만").hasSize(1)
-                .allMatch(줄 -> 줄.getFormattedMessage().contains("1회차"));
+                .allMatch(줄 -> 줄.getFormattedMessage().contains("— 1회차 못 받았다"));
     }
 
     /** 이월과 발행 성패를 밖에서 고르는 회차. 관측은 1,000 으로 고정이다. */
@@ -1553,6 +1553,7 @@ class AllocationRoundTest {
     @DisplayName("승계는_앞_임기의_매진_표시를_버린다")
     void 승계는_앞_임기의_매진_표시를_버린다() {
         List<String> 지운_것 = new ArrayList<>();
+        AtomicBoolean 발행이_된다 = new AtomicBoolean(false);
         SoldOutCleanup cleanup = SoldOutCleanup.of(1, new SimpleMeterRegistry());
         AllocationRound round = AllocationRound.of(
                 () -> true,
@@ -1560,7 +1561,8 @@ class AllocationRoundTest {
                         new CouponDemand("c1", 0, 0, QueueMode.ADAPTIVE)), 읽은_시각)),
                 () -> 1_000, () -> 1,
                 grant -> Mono.just(grant.credit()),
-                hash -> Mono.error(new IllegalStateException("상한이라 못 쓴다")),
+                hash -> 발행이_된다.get() ? Mono.empty()
+                        : Mono.error(new IllegalStateException("상한이라 못 쓴다")),
                 () -> Instant.ofEpochSecond(읽은_시각),
                 () -> Mono.just(CreditSmoother.of(1.0)),
                 SnapshotCodec.create(), () -> 0L, Optional::empty,
@@ -1571,6 +1573,7 @@ class AllocationRoundTest {
 
         // 앞 임기는 c1 을 내보냈다. 새 임기는 아무 노드도 못 받은 상태로 선다.
         round.leadershipAcquired(-1, List.of("c1"));
+        round.leadershipLost();
         round.leadershipAcquired(-1, List.of());
         for (int i = 0; i < 4; i++) {
             round.run().onErrorResume(e -> Mono.empty()).block();
@@ -1578,6 +1581,14 @@ class AllocationRoundTest {
 
         assertThat(지운_것).as("발행이 못 나간 동안은 안 지운다 — 앞 임기의 표시를 이어 쓰면 지운다")
                 .isEmpty();
+
+        // **양성 대조.** 정리 경로가 아예 안 도는 것과 가른다 — 새 임기가 다시 내보내면 지운다.
+        발행이_된다.set(true);
+        for (int i = 0; i < 2; i++) {
+            round.run().onErrorResume(e -> Mono.empty()).block();
+        }
+
+        assertThat(지운_것).as("새 임기가 내보낸 뒤에는 지운다").containsExactly("c1");
     }
 
     /** <b>0 도 아는 값이다.</b> 모름(-1)과 가르지 않으면 발행 몫이 0 인 승계가 램프를 안 탄다. */

@@ -1241,6 +1241,7 @@ class AdmissionGatewayFilterTest {
         // **재료 없이 통과시킨 것도 세고 품질에 남긴다.** 안 남기면 기동 직후 구간이 정상으로 잡힌다.
         assertThat(사유("deferred-no-material")).as("사유로 센다").isEqualTo(1.0);
         assertThat(품질("degraded")).as("재료 없이 판정한 건이다").isEqualTo(1.0);
+        assertThat(품질("fresh")).as("둘 다 오르면 품질이 뜻을 잃는다").isZero();
     }
 
     /**
@@ -1597,6 +1598,7 @@ class AdmissionGatewayFilterTest {
 
         assertThat(사유("deferred-stale-material")).as("사유로 센다").isEqualTo(1.0);
         assertThat(품질("degraded")).as("판정 재료가 낡은 건이다").isEqualTo(1.0);
+        assertThat(품질("fresh")).as("둘 다 오르면 품질이 뜻을 잃는다").isZero();
     }
 
     /** 재료가 신선하면 신선한 것으로 셉니다. 위 시험이 "늘 degraded" 로도 통과하면 안 됩니다. */

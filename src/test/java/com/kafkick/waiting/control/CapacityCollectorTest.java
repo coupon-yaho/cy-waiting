@@ -1066,7 +1066,7 @@ class CapacityCollectorTest {
         assertThat(collector.deniedDestinations()).isEqualTo(1);
     }
 
-/**
+    /**
      * <b>거절 구간은 진입과 해제를 한 번씩 남긴다.</b> 회차마다 찍으면 인스턴스 수만큼 줄이
      * 쌓이고, 안 닫으면 첫 거절 뒤로 영영 조용해 다른 인스턴스의 같은 일이 아무 데도 안 남는다.
      */
@@ -1082,10 +1082,11 @@ class CapacityCollectorTest {
             CapacityCollector collector = CapacityCollector.of(RAMP_UP, FRESHNESS, FLOOR, CAP,
                     AllowedDestinations.of(List.of("10.0.1.0/24"), 포트));
             long warmed = warm(collector, "a", 100);
-            // 두 회차 연속 거절이다. 진입은 한 번만 남아야 한다.
+            // 두 회차 연속 거절이고, 회차마다 둘을 거절한다. 진입은 한 번, 첫 건만 이름을 남긴다.
             for (int i = 0; i < 2; i++) {
                 collector.collect(List.of(
-                        주소_있는_보고("a", "10.9.9.9:8080", 100, warmed + i)), warmed + i, 1);
+                        주소_있는_보고("a", "10.9.9.9:8080", 100, warmed + i),
+                        주소_있는_보고("b", "10.9.9.8:8080", 100, warmed + i)), warmed + i, 1);
             }
             long 깨끗한 = warmed + 2;
             collector.collect(List.of(
@@ -1094,10 +1095,14 @@ class CapacityCollectorTest {
             logger.detachAppender(로그);
         }
 
-        assertThat(로그.list).filteredOn(줄 -> 줄.getLevel() == Level.WARN)
-                .as("구간의 첫 건만").hasSize(1);
+        assertThat(로그.list).filteredOn(줄 -> 줄.getFormattedMessage().contains("허용 목적지 밖이다"))
+                .as("구간의 첫 건만").singleElement()
+                .extracting(ILoggingEvent::getFormattedMessage).asString()
+                .contains("a (10.9.9.9:8080)", "이번 회차 2대");
         assertThat(로그.list).filteredOn(줄 -> 줄.getFormattedMessage().contains("그쳤다"))
-                .as("해제도 한 번").hasSize(1);
+                .as("해제도 한 번, 그동안 뺀 회차 수와 함께").singleElement()
+                .extracting(ILoggingEvent::getFormattedMessage).asString()
+                .contains("2회차 뺐다");
     }
 
     /** 첫 회차라 셋 다 이미 돌던 대로 본다. 램프가 아니라 배제만 잰다. */

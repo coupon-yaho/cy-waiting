@@ -7,6 +7,7 @@ import io.micrometer.core.instrument.Tag;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.kafkick.waiting.control.GatewaySnapshot;
+import com.kafkick.waiting.control.PollRejections;
 import com.kafkick.waiting.control.SnapshotHolder;
 import com.kafkick.waiting.domain.coupon.CouponState;
 import com.kafkick.waiting.domain.coupon.CouponStates;
@@ -362,6 +363,31 @@ class QueueStatusFilterTest {
         // ETA 를 모르는 갈래라 30초 밴드다. 30 × 1.5 = 45 — 천장 50 아래다.
         assertThat(exchange.getResponse().getHeaders().getFirst("Retry-After"))
                 .as("거절에도 걸리는 배수").isEqualTo("45");
+    }
+
+    /**
+     * <b>상한 거절은 표시를 남깁니다</b> (CY-737). 거절당한 사람은 생존 신호를 못 갱신하므로, 클러스터가 그동안
+     * 청소를 멈추려면 이 노드가 거절했다는 사실을 하트비트로 알려야 합니다. 통과한 조회는 표시를 안 남깁니다.
+     */
+    @Test
+    @DisplayName("상한_거절은_거절_표시를_남긴다")
+    void 상한_거절은_거절_표시를_남긴다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100), 1.0);
+        String 토큰 = tokens.issue(COUPON, MEMBER, 지금);
+        PollRejections 거절 = PollRejections.create();
+        PollRejections 통과 = PollRejections.create();
+        QueueStatusFilter 상한이_찬_필터 = QueueStatusFilter.of(
+                holder, 줄, tokens, Clock.fixed(지금, ZoneOffset.UTC), meters, () -> 0.5,
+                꽉_찬_리미터(), entryTokens, 거절);
+        QueueStatusFilter 여유_있는_필터 = QueueStatusFilter.of(
+                holder, 줄, tokens, Clock.fixed(지금, ZoneOffset.UTC), meters, () -> 0.5,
+                SecondWindowLimiter.withMaxKeys(10), entryTokens, 통과);
+
+        조회한다(상한이_찬_필터, "/api/v1/coupons/" + COUPON + "/queue?queueToken=" + 토큰);
+        조회한다(여유_있는_필터, "/api/v1/coupons/" + COUPON + "/queue?queueToken=" + 토큰);
+
+        assertThat(거절.mark()).isPositive();
+        assertThat(통과.mark()).isZero();
     }
 
     /**

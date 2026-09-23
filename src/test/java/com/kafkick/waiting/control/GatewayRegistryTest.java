@@ -480,4 +480,59 @@ class GatewayRegistryTest {
         등록부.observed(0);
         assertThat(등록부.seenNow()).as("1 미만은 무시한다").isZero();
     }
+
+    /**
+     * 어느 노드든 조회를 상한으로 거절하는 동안은 청소를 멈춘다. 거절당한 사람은 생존 신호를 못 갱신해, 걷으면
+     * 성실히 온 사람이 줄을 잃는다.
+     */
+    @Test
+    @DisplayName("어느_노드든_조회를_거절하면_청소를_멈춘다")
+    void 어느_노드든_조회를_거절하면_청소를_멈춘다() {
+        GatewayRegistry 등록부 = GatewayRegistry.of(3, 1);
+        assertThat(등록부.pollRejecting()).as("관측 전").isFalse();
+
+        등록부.pollRejectionObserved(1);
+        assertThat(등록부.pollRejecting()).isTrue();
+
+        등록부.pollRejectionObserved(0);
+        assertThat(등록부.pollRejecting()).isFalse();
+    }
+
+    /** 하트비트를 놓친 회차는 거절 여부를 모른다. 모르는 것을 "거절 없음" 으로 읽으면 걷는다. */
+    @Test
+    @DisplayName("하트비트를_놓쳐도_거절_표시를_지킨다")
+    void 하트비트를_놓쳐도_거절_표시를_지킨다() {
+        GatewayRegistry 등록부 = GatewayRegistry.of(3, 1);
+        등록부.pollRejectionObserved(2);
+
+        new GatewayPresenceConfig().missStep(() -> CircuitState.CLOSED, 등록부).run();
+
+        assertThat(등록부.pollRejecting()).isTrue();
+    }
+
+    @Test
+    @DisplayName("거절_구간의_진입과_해제를_쌍으로_남긴다")
+    void 거절_구간의_진입과_해제를_쌍으로_남긴다() {
+        Logger 로거 = (Logger) LoggerFactory.getLogger(GatewayRegistry.class);
+        ListAppender<ILoggingEvent> 로그 = new ListAppender<>();
+        로그.start();
+        로거.addAppender(로그);
+        try {
+            GatewayRegistry 등록부 = GatewayRegistry.of(3, 1);
+            등록부.pollRejectionObserved(2);
+            등록부.pollRejectionObserved(1);
+            등록부.pollRejectionObserved(0);
+            등록부.pollRejectionObserved(0);
+        } finally {
+            로거.detachAppender(로그);
+        }
+
+        assertThat(로그.list).extracting(ILoggingEvent::getFormattedMessage)
+                .filteredOn(줄 -> 줄.contains("조회"))
+                .hasSize(2)
+                .satisfies(줄들 -> {
+                    assertThat(줄들.get(0)).startsWith("조회를 상한으로 거절하는 노드가 있다 — 청소를 멈춘다, 2대");
+                    assertThat(줄들.get(1)).startsWith("조회 거절이 멎었다 — 청소는 유예 뒤 다시 돈다");
+                });
+    }
 }

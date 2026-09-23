@@ -310,6 +310,43 @@ class SnapshotRefresherTest {
     }
 
     /**
+     * <b>돌아온 노드는 무너진 분모를 그대로 안 든다</b> (CY-1000). 리더가 아직 저를 안 센 스냅샷을 받으면
+     * 제 관측으로 분모를 올린다 — 안 올리면 한 틱 동안 몫을 두 번 쓴다. 회차마다 새로 읽는다.
+     */
+    @Test
+    @DisplayName("분모를_제_관측_아래로_안_든다")
+    void 분모를_제_관측_아래로_안_든다() {
+        MutableClock clock = MutableClock.at(지금);
+        SnapshotHolder holder = 홀더(clock);
+        AtomicInteger 제_관측 = new AtomicInteger(3);
+        SnapshotRefresher refresher = SnapshotRefresher.timed(holder,
+                () -> Mono.just(new TimedSnapshot(정상, 0)), clock, 제_관측::get);
+
+        StepVerifier.create(refresher.once()).verifyComplete();
+        assertThat(holder.current().meta().gatewayCount()).as("발행 2, 관측 3").isEqualTo(3);
+
+        제_관측.set(1);
+        StepVerifier.create(refresher.once()).verifyComplete();
+        assertThat(holder.current().meta().gatewayCount()).as("발행 2, 관측 1").isEqualTo(2);
+    }
+
+    /** 운영 배선이 이 노드의 등록부를 건다. 빠지면 위 방어가 시험에서만 산다. */
+    @Test
+    @DisplayName("배선이_등록부의_관측을_건다")
+    void 배선이_등록부의_관측을_건다() {
+        MutableClock clock = MutableClock.at(지금);
+        SnapshotHolder holder = 홀더(clock);
+        GatewayRegistry 등록부 = GatewayRegistry.of(3, 1);
+        등록부.observed(5);
+        SnapshotRefresher refresher = new HealthConfig()
+                .snapshotRefresher(holder, () -> Mono.just(정상), clock, 등록부);
+
+        StepVerifier.create(refresher.once()).verifyComplete();
+
+        assertThat(holder.current().meta().gatewayCount()).isEqualTo(5);
+    }
+
+    /**
      * <b>운영 배선이 타는 유일한 경로다.</b> 나이를 레디스 시계 하나로 재는 것이
      * 여기서만 일어나는데, 나머지 시험은 전부 시각 없이 오는 길을 탄다.
      *

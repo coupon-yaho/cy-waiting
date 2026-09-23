@@ -27,6 +27,18 @@ class SnapshotMetaTest {
         assertThat(new SnapshotMeta(1000, 10).effectiveGatewayCount()).isEqualTo(10);
     }
 
+    /** 노드가 든 분모는 제 관측보다 작아지지 않는다. 다른 값은 그대로 둔다. */
+    @Test
+    @DisplayName("분모를_제_관측_아래로_안_내린다")
+    void 분모를_제_관측_아래로_안_내린다() {
+        SnapshotMeta 발행 = new SnapshotMeta(1000, 2, null, 3.0);
+
+        assertThat(발행.withGatewayCountAtLeast(3))
+                .isEqualTo(new SnapshotMeta(1000, 3, null, 3.0));
+        assertThat(발행.withGatewayCountAtLeast(1)).isEqualTo(발행);
+        assertThat(발행.withGatewayCountAtLeast(2)).isEqualTo(발행);
+    }
+
     @Test
     @DisplayName("전역_여유가_음수면_생성에_실패한다")
     void 전역_여유가_음수면_생성에_실패한다() {

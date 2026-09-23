@@ -41,4 +41,10 @@ public record GatewaySnapshot(Map<String, CouponState> coupons, SnapshotMeta met
     public boolean isPublished() {
         return !publishedAt.equals(Instant.EPOCH);
     }
+
+    /** 분모만 {@code floor} 아래로 안 내린 사본. */
+    public GatewaySnapshot withGatewayCountAtLeast(int floor) {
+        SnapshotMeta raised = meta.withGatewayCountAtLeast(floor);
+        return raised == meta ? this : new GatewaySnapshot(coupons, raised, publishedAt, instances);
+    }
 }

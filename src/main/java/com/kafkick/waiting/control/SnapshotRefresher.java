@@ -6,6 +6,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.time.Clock;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.IntSupplier;
 import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,13 +38,16 @@ public final class SnapshotRefresher {
     private final Supplier<Mono<TimedSnapshot>> source;
     private final Duration timeout;
     private final Clock clock;
+    /** 이 노드의 하트비트가 센 노드 수. 받은 분모의 바닥이다. */
+    private final IntSupplier seen;
 
     private SnapshotRefresher(SnapshotHolder holder,
-            Supplier<Mono<TimedSnapshot>> source, Duration timeout, Clock clock) {
+            Supplier<Mono<TimedSnapshot>> source, Duration timeout, Clock clock, IntSupplier seen) {
         this.holder = holder;
         this.source = source;
         this.timeout = timeout;
         this.clock = Objects.requireNonNull(clock, "clock 은 필수다");
+        this.seen = Objects.requireNonNull(seen, "seen 은 필수다");
     }
 
     public static SnapshotRefresher of(SnapshotHolder holder,
@@ -58,7 +62,16 @@ public final class SnapshotRefresher {
      */
     public static SnapshotRefresher timed(SnapshotHolder holder,
             Supplier<Mono<TimedSnapshot>> source, Clock clock) {
-        return new SnapshotRefresher(holder, source, DEFAULT_TIMEOUT, clock);
+        return timed(holder, source, clock, () -> 1);
+    }
+
+    /**
+     * 받은 분모를 이 노드의 관측 아래로 안 내린다. 돌아온 노드는 리더가 아직 저를 안 센
+     * 스냅샷을 먼저 받을 수 있고, 그대로 들면 그 틱에 몫을 두 번 쓴다.
+     */
+    public static SnapshotRefresher timed(SnapshotHolder holder,
+            Supplier<Mono<TimedSnapshot>> source, Clock clock, IntSupplier seen) {
+        return new SnapshotRefresher(holder, source, DEFAULT_TIMEOUT, clock, seen);
     }
 
 
@@ -75,7 +88,8 @@ public final class SnapshotRefresher {
     /** 한 회차의 상한을 주입한다. 발행 주기보다 짧아야 다음 회차가 제때 돈다. */
     public static SnapshotRefresher of(SnapshotHolder holder,
             Supplier<Mono<Map<String, String>>> source, Duration timeout) {
-        return new SnapshotRefresher(holder, TimedSnapshot.untimed(source), timeout, Clock.systemUTC());
+        return new SnapshotRefresher(holder, TimedSnapshot.untimed(source), timeout,
+                Clock.systemUTC(), () -> 1);
     }
 
     /**
@@ -96,7 +110,8 @@ public final class SnapshotRefresher {
         // 처리가 못 받는다 — 루프를 만들기도 전에 터져 그 자리에서 멎는다.
         return Mono.defer(source)
                 .timeout(timeout, scheduler)
-                .map(read -> new Read(codec.decode(read.hash()), read.now()))
+                .map(read -> new Read(codec.decode(read.hash()).withGatewayCountAtLeast(seen.getAsInt()),
+                        read.now()))
                 // **받아들일 수 있는 것만 받는다.** 발행 표시가 없거나 쿠폰을 하나도 못 읽었으면
                 // 그대로 받는 순간 홀더가 비고 전 쿠폰이 매진으로 보인다. 버리기 전에 남기는 것은
                 // 필터가 흔적을 안 남겨, 전 노드가 영영 갱신을 못 해도 조용하기 때문이다.

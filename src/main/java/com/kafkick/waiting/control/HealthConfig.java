@@ -46,8 +46,8 @@ public class HealthConfig {
      */
     @Bean
     SnapshotRefresher snapshotRefresher(SnapshotHolder holder, SnapshotSource source,
-            Clock clock) {
-        return SnapshotRefresher.timed(holder, source::loadTimed, clock);
+            Clock clock, GatewayRegistry registry) {
+        return SnapshotRefresher.timed(holder, source::loadTimed, clock, registry::count);
     }
 
     @Bean

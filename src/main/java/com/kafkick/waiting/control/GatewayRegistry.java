@@ -8,6 +8,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import org.slf4j.Logger;
@@ -59,6 +60,9 @@ public final class GatewayRegistry {
 
     /** 방금 하트비트가 센 값. 실패한 회차 뒤에는 0(모름)이다. */
     private final AtomicInteger seenNow = new AtomicInteger();
+
+    /** 조회를 상한으로 거절 중인 노드를 처음 본 시각(nanoTime). 없으면 -1 이다. */
+    private final AtomicLong rejectingSince = new AtomicLong(-1);
 
     /** 하트비트가 연속으로 못 돈 횟수. 표가 낡았는지를 이걸로 안다. */
     private final AtomicInteger circuitMisses = new AtomicInteger();
@@ -191,6 +195,31 @@ public final class GatewayRegistry {
     /** 뒷단이 정하는 값이다. 제어문자로 로그 한 줄을 꾸미지 못하게 한다. */
     private String safe(String instanceId) {
         return instanceId.replaceAll("[\\p{Cntrl}\\u2028\\u2029]", "_");
+    }
+
+    /**
+     * 하트비트가 센 "조회를 상한으로 거절 중인 노드 수". 하나라도 있으면 청소를 멈춘다 — 거절당한 사람은 생존 신호를
+     * 못 갱신해 걷히면 줄을 잃는다. <b>놓친 회차에는 부르지 않는다</b> — 모르는 것을 "거절 없음" 으로 읽으면 걷는다.
+     */
+    public void pollRejectionObserved(int rejecting) {
+        long at = System.nanoTime();
+        if (rejecting > 0) {
+            if (rejectingSince.compareAndSet(-1, at)) {
+                log.warn("조회를 상한으로 거절하는 노드가 있다 — 청소를 멈춘다, {}대. "
+                        + "거절당한 사람은 생존 신호를 못 갱신한다", rejecting);
+            }
+            return;
+        }
+        long since = rejectingSince.getAndSet(-1);
+        if (since >= 0) {
+            log.info("조회 거절이 멎었다 — 청소는 유예 뒤 다시 돈다, {}초 동안 거절했다",
+                    NANOSECONDS.toSeconds(at - since));
+        }
+    }
+
+    /** 청소가 읽는 값. 관측 전에는 거절이 없던 것으로 본다. */
+    public boolean pollRejecting() {
+        return rejectingSince.get() >= 0;
     }
 
     /** 수집이 예산에서 뺄 인스턴스. */

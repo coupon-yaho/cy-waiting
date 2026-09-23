@@ -38,7 +38,6 @@ class SweepHoldWiringTest {
     @DisplayName("재료가_신선하고_거절이_없으면_돈다")
     void 재료가_신선하고_거절이_없으면_돈다() {
         holder.replace(new GatewaySnapshot(Map.of(), new SnapshotMeta(10, 1), 시계.instant()));
-        등록부.pollRejectionObserved(0);
 
         assertThat(배선.sweepHeld(holder, 등록부).getAsBoolean()).isFalse();
     }

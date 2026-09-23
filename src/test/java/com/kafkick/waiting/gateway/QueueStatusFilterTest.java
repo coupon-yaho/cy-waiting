@@ -386,7 +386,7 @@ class QueueStatusFilterTest {
         조회한다(상한이_찬_필터, "/api/v1/coupons/" + COUPON + "/queue?queueToken=" + 토큰);
         조회한다(여유_있는_필터, "/api/v1/coupons/" + COUPON + "/queue?queueToken=" + 토큰);
 
-        assertThat(거절.mark()).isPositive();
+        assertThat(거절.mark()).isEqualTo(1);
         assertThat(통과.mark()).isZero();
     }
 

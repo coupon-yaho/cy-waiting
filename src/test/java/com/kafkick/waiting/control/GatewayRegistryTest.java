@@ -494,6 +494,14 @@ class GatewayRegistryTest {
         등록부.pollRejectionObserved(1);
         assertThat(등록부.pollRejecting()).isTrue();
 
+        // 푸는 쪽은 연속 관측 뒤다. 간헐 거절이 하트비트마다 켜고 끄면 로그가 쏟아지고 짧은 참이 회차 사이로 샌다.
+        등록부.pollRejectionObserved(0);
+        등록부.pollRejectionObserved(0);
+        assertThat(등록부.pollRejecting()).as("둘째 0").isTrue();
+        등록부.pollRejectionObserved(1);
+        등록부.pollRejectionObserved(0);
+        등록부.pollRejectionObserved(0);
+        assertThat(등록부.pollRejecting()).as("사이에 거절이 끼면 다시 센다").isTrue();
         등록부.pollRejectionObserved(0);
         assertThat(등록부.pollRejecting()).isFalse();
     }
@@ -521,6 +529,10 @@ class GatewayRegistryTest {
             GatewayRegistry 등록부 = GatewayRegistry.of(3, 1);
             등록부.pollRejectionObserved(2);
             등록부.pollRejectionObserved(1);
+            등록부.pollRejectionObserved(0);
+            등록부.pollRejectionObserved(1);
+            등록부.pollRejectionObserved(0);
+            등록부.pollRejectionObserved(0);
             등록부.pollRejectionObserved(0);
             등록부.pollRejectionObserved(0);
         } finally {

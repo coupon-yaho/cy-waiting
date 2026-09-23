@@ -27,7 +27,7 @@ class PollRejectionsTest {
         거절.rejected();
 
         거절.settled(실은_것);
-        assertThat(거절.mark()).as("나중 거절은 남는다").isPositive();
+        assertThat(거절.mark()).as("나중 거절은 남는다").isEqualTo(2);
 
         거절.settled(거절.mark());
         assertThat(거절.mark()).isZero();

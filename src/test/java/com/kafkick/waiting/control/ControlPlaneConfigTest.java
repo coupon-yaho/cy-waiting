@@ -2,13 +2,19 @@ package com.kafkick.waiting.control;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.kafkick.waiting.domain.coupon.SnapshotMeta;
+import com.kafkick.waiting.gateway.QueueStatusFilter;
+import java.time.Clock;
 import java.time.Duration;
+import java.util.Map;
+import java.util.function.BooleanSupplier;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationContext;
+import org.springframework.test.util.ReflectionTestUtils;
 
 /**
  * 제어 평면 배선.
@@ -58,5 +64,33 @@ class ControlPlaneConfigTest {
         assertThat(context.getBean(Leadership.class).ownerId())
                 .isNotEqualTo(Leadership.newOwnerId());
         assertThat(Leadership.newOwnerId()).isNotEqualTo(Leadership.newOwnerId());
+    }
+
+    /**
+     * 조회 필터가 세우는 거절 표시가 빈 하나이고, 배분이 받은 청소 조건이 거절을 본다. 조각 시험은 메서드를 직접 불러
+     * 이 둘이 어긋나도 초록이다 — 그러면 표시는 서는데 청소가 안 멈춘다. 이 컨텍스트에는 레디스가 없어 하트비트와
+     * 갱신이 실패하므로 등록부와 홀더는 시험만 움직인다.
+     */
+    @Test
+    @DisplayName("거절_표시가_한_빈이고_배분의_청소_조건이_거절을_본다")
+    void 거절_표시가_한_빈이고_배분의_청소_조건이_거절을_본다() {
+        assertThat(ReflectionTestUtils.getField(context.getBean(QueueStatusFilter.class), "rejections"))
+                .isSameAs(context.getBean(PollRejections.class));
+
+        SnapshotHolder holder = context.getBean(SnapshotHolder.class);
+        GatewayRegistry 등록부 = context.getBean(GatewayRegistry.class);
+        BooleanSupplier 멈추나 = (BooleanSupplier) ReflectionTestUtils.getField(
+                context.getBean(AllocationRound.class), "dataStale");
+        holder.replace(new GatewaySnapshot(Map.of(), new SnapshotMeta(10, 1),
+                context.getBean(Clock.class).instant()));
+        try {
+            assertThat(멈추나.getAsBoolean()).as("재료가 신선하고 거절이 없다").isFalse();
+            등록부.pollRejectionObserved(1);
+            assertThat(멈추나.getAsBoolean()).as("거절 중").isTrue();
+        } finally {
+            for (int i = 0; i < 3; i++) {
+                등록부.pollRejectionObserved(0);
+            }
+        }
     }
 }

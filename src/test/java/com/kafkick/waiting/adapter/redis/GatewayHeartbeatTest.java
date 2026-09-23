@@ -741,10 +741,13 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
         assertThat(redis.opsForHash().hasKey(INSTANCES, "#r:a").block(WAIT)).isFalse();
     }
 
-    /** 죽어 가는 노드의 마지막 거절이 임계만큼 살면 그 시간 내내 청소가 멈춘다. 표와 같은 신선도로 센다. */
+    /**
+     * 산 노드의 거절은 표가 낡아도 센다. 포화된 노드는 하트비트가 늦기 쉬운데, 표 신선도로 자르면 바로 그때 청소가
+     * 다시 돈다. 죽은 노드와 주인 없는 표시는 지운다.
+     */
     @Test
-    @DisplayName("낡은_거절은_안_세고_죽은_노드의_거절은_지운다")
-    void 낡은_거절은_안_세고_죽은_노드의_거절은_지운다() {
+    @DisplayName("산_노드의_거절은_늦어도_세고_죽은_노드의_거절은_지운다")
+    void 산_노드의_거절은_늦어도_세고_죽은_노드의_거절은_지운다() {
         long now = stamped(거절을_싣는다("a", ""));
         redis.<String, String>opsForHash()
                 .put(INSTANCES, "stale", String.valueOf(now - 10)).block(WAIT);
@@ -755,7 +758,7 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
 
         List<Object> r = 거절을_싣는다("a", "");
 
-        assertThat(rejecting(r)).isZero();
+        assertThat(rejecting(r)).as("늦은 노드 하나").isEqualTo(1);
         assertThat(redis.opsForHash().hasKey(INSTANCES, "#r:dead").block(WAIT)).isFalse();
         assertThat(redis.opsForHash().hasKey(INSTANCES, "#r:gone").block(WAIT)).isFalse();
     }

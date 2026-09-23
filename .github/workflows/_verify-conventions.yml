@@ -395,6 +395,11 @@ jobs:
       - name: 셸 정적 검사
         run: .github/scripts/shell-lint.sh
 
+      # **텍스트로 보는 규칙은 거짓 통과가 쉽다.** 대리 소스를 인정하던 첫 판이
+      # 정작 그 대리가 목록을 안 읽어도 조용했다. 규칙이 무는지를 잰다.
+      - name: 셸 검사 규칙 자기검증
+        run: .github/scripts/shell-lint-selftest.sh
+
       # **재시도가 무엇을 삼키는지는 정규식 한 줄에 걸려 있다.** 그 줄은 넓히기
       # 쉽고, 넓히는 순간 시험 실패가 재시도로 덮인다 (TS-7·TS-9).
       - name: 재시도 자기검증

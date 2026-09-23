@@ -112,6 +112,17 @@ lib_case "한 겹 더 들어간 계수도 읽는다" "$(printf '200 7\n202 0\not
 lib_case "깨진 요약은 끊는다" 1 "$(codes_from_summary "$broken" >/dev/null 2>&1; printf '%s' $?)"
 lib_case "없는 파일도 끊는다" 1 "$(codes_from_summary "$lib_work/nope.json" >/dev/null 2>&1; printf '%s' $?)"
 
+# 코드 합 대조. **완료 회차를 닻으로 쓴다** — http_reqs 는 중단된 회차의 요청까지 세어,
+# 꼬리 몇 건이 그렇게 되면 멀쩡한 회차가 통째로 판정 불가가 된다.
+codes() { printf '%s\n' "$@" > "$lib_work/codes"; printf '%s' "$lib_work/codes"; }
+ok_codes=$(codes "200 7" "202 2" "other 1" "total 10" "done 10")
+short=$(codes "200 0" "202 0" "other 0" "total 10" "done 10")
+dropped=$(codes "200 7" "202 2" "other 1" "total 12" "done 10")
+lib_case "합이 완료 회차와 같으면 통과" 0 "$(require_codes_match "$ok_codes" >/dev/null 2>&1; printf '%s' $?)"
+lib_case "계수가 다 0 이면 판정 불가" 2 "$(require_codes_match "$short" >/dev/null 2>&1; printf '%s' $?)"
+lib_case "중단된 회차가 있어도 통과" 0 "$(require_codes_match "$dropped" >/dev/null 2>&1; printf '%s' $?)"
+lib_case "무엇이 어긋났는지 말한다" 1 "$(require_codes_match "$short" 2>&1 | grep -c '코드별 합')"
+
 # 자극은 되읽어 확인한다. 안 하면 안 심긴 회차가 제품 미달로 적힌다.
 redis_cli() {
     case "$1" in

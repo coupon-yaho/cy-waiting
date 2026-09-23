@@ -2,12 +2,17 @@ package com.kafkick.waiting.control;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.kafkick.waiting.MutableClock;
 import com.kafkick.waiting.chaos.ChaosScenario;
 import com.kafkick.waiting.chaos.RecoveryCriteria;
 import com.kafkick.waiting.domain.admission.AdmissionDecider;
 import com.kafkick.waiting.domain.admission.CircuitState;
 import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
+import com.kafkick.waiting.domain.allocation.ReleaseRamp;
 import com.kafkick.waiting.domain.coupon.SnapshotMeta;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -39,6 +44,9 @@ class AsymmetricReleaseScenarioTest {
 
     /** 1·2·3 으로 나누어떨어져 나머지가 판정을 흐리지 않는다. */
     private static final long 예산 = 12_000;
+
+    /** 재료가 낡았다고 판정되는 나이(초). 옮겨 적은 설계값이다 — 이보다 오래 막히면 승계가 몫을 깎는다. */
+    private static final int 설계_낡음_초 = 5;
 
     private static final long 개방_합_상한 = 예산 / 2;
 
@@ -98,6 +106,35 @@ class AsymmetricReleaseScenarioTest {
         붕괴판(List.of(발행자), List.of("B", "C"), 순서, 순서 == Order.리더_먼저 ? 22_000 : 예산);
     }
 
+    /**
+     * 리스보다 오래 막혀 리더십을 잃는 것은 같지만, 재료가 낡을 만큼 막히면 되찾은 리더가 몫을 한산 최소 몫까지
+     * 깎고 네 배씩 오른다. 그 사이 무너진 분모의 배율은 절대 유입으로 흡수된다.
+     */
+    @ParameterizedTest
+    @EnumSource(Order.class)
+    @DisplayName("C6e_낡을_만큼_막히면_되찾은_리더의_램프가_무너진_분모를_흡수한다")
+    void C6e_낡을_만큼_막히면_되찾은_리더의_램프가_무너진_분모를_흡수한다(Order 순서) {
+        Cluster 판 = new Cluster(this::제품_분모, 순서);
+        int[] 해제 = new int[1];
+
+        시나리오("C6e 낡은 승계 " + 순서, 판, 설계_낡음_초, List.of(발행자, "B"), List.of("C"),
+                설계_감소_지연 + 1, 해제)
+                .assertDuring(() -> RecoveryCriteria.violations(
+                        같다("되찾은 첫 발행 몫", 판.해제부터(해제[0]).get(0).크레딧(), 24),
+                        같다("첫 위반 틱", 첫_위반(판), -1)))
+                .assertRecovery(() -> {
+                    List<Tick> 회복 = 판.해제부터(판.c_해제);
+                    return RecoveryCriteria.violations(
+                            같다("돌아온 틱의 유입 합", 회복.get(0).유입(), 순서 == Order.리더_먼저 ? 8_192 : 6_144)
+                                    .map(사유 -> 사유 + ". 크레딧 " + 회복.get(0).크레딧() + " 든 분모 "
+                                            + 회복.get(0).든_분모()),
+                            배율을_지킨다(회복, 1.0),
+                            모두_셋을_든다(회복.get(1)),
+                            같다("램프가 닿은 몫", 회복.get(회복.size() - 1).크레딧(), 예산));
+                })
+                .run();
+    }
+
     private void 붕괴판(List<String> 먼저, List<String> 늦게, Order 순서, long 돌아온_유입) {
         Cluster 판 = new Cluster(this::제품_분모, 순서);
         int[] 해제 = new int[1];
@@ -137,16 +174,24 @@ class AsymmetricReleaseScenarioTest {
     /** 전원을 정리 임계 너머로 막고, {@code 먼저} 를 푼 뒤 {@code 늦게} 를 {@code c_지연} 틱 늦게 푼다. */
     private ChaosScenario 시나리오(String 이름, Cluster 판, List<String> 먼저, List<String> 늦게,
             int c_지연, int[] 해제) {
+        return 시나리오(이름, 판, (int) 정리_틱 + 1, 먼저, 늦게, c_지연, 해제);
+    }
+
+    /** 막는 길이를 따로 준다. 재료가 낡았다고 판정되는 길이를 넘기면 승계가 몫을 깎고 램프로 오른다. */
+    private ChaosScenario 시나리오(String 이름, Cluster 판, int 막는_틱, List<String> 먼저,
+            List<String> 늦게, int c_지연, int[] 해제) {
         return ChaosScenario.named(이름)
                 .baseline(판::한_틱)
                 .inject(() -> {
                     판.막힘.addAll(노드);
-                    IntStream.rangeClosed(0, (int) 정리_틱).forEach(i -> 판.한_틱());
+                    IntStream.range(0, 막는_틱).forEach(i -> 판.한_틱());
                 })
                 .assertEntry(() -> RecoveryCriteria.violations(
                         판.기록.stream().skip(1).allMatch(t -> t.관측() < 0 && t.분모() == 3)
                                 ? Optional.empty()
-                                : Optional.of("막힌 동안 분모를 지키지 않았다 — " + 판.기록)))
+                                : Optional.of("막힌 동안 분모를 지키지 않았다 — " + 판.기록),
+                        // 전제 — 리스보다 오래 막혔으니 리더십을 잃는다. 안 잃으면 승계를 안 잰다.
+                        판.리더 ? Optional.of("전제 — 막힌 동안 리더십을 안 잃었다") : Optional.empty()))
                 .duringFault(() -> {
                     판.막힘.removeAll(먼저);
                     해제[0] = 판.지금 + 1;
@@ -163,8 +208,9 @@ class AsymmetricReleaseScenarioTest {
         return new GatewayPresenceConfig().gatewayRegistry(설정);
     }
 
-    /** 틱 하나의 기록. 관측이 음수면 발행자가 하트비트를 놓쳤다. 유입은 노드들이 든 초당 예산의 합이다. */
-    record Tick(int 번호, int 관측, int 분모, long 개방_합, long 유입, Map<String, Integer> 든_분모) {
+    /** 틱 하나의 기록. 관측이나 크레딧이 음수면 그 틱에 하트비트나 발행이 없었다. 유입은 노드들이 든 예산의 합이다. */
+    record Tick(int 번호, int 관측, int 분모, long 크레딧, long 개방_합, long 유입,
+            Map<String, Integer> 든_분모) {
 
         double 배율() {
             return 유입 / (double) 예산;
@@ -195,6 +241,23 @@ class AsymmetricReleaseScenarioTest {
 
         private int c_해제 = -1;
 
+        /** 리스가 틱 몇 개를 버티는가. 발행자가 이보다 오래 막히면 리더십을 잃는다. */
+        private final long 리스_틱 = 설정.leader().lease().toMillis() / 설정.scheduler().tick().toMillis();
+
+        private final MutableClock 시계 = MutableClock.at(Instant.ofEpochSecond(1_700_000_000L));
+
+        /** 발행자가 든 재료. 되찾을 때 이 나이로 출발점을 정한다. 임계는 제품 배선의 것이다. */
+        private final SnapshotHolder 발행자_홀더 =
+                new HealthConfig().snapshotHolder(시계, new SimpleMeterRegistry());
+
+        private final ReleaseRamp 램프 = ReleaseRamp.of(ReleaseRamp.DEFAULT_STEP);
+
+        private boolean 리더 = true;
+
+        private int 막힌_연속;
+
+        private long 출발점 = -1;
+
         Cluster(Supplier<GatewayRegistry> 새_등록부, Order 순서) {
             this.순서 = 순서;
             for (String id : 노드) {
@@ -207,6 +270,16 @@ class AsymmetricReleaseScenarioTest {
 
         void 한_틱() {
             지금++;
+            // 되찾는 판단은 틱 중간, 발행은 틱 끝. 같은 순간이면 재료 나이가 낡음 임계에 정확히 걸린다.
+            시계.앞으로(Duration.ofMillis(500));
+            막힌_연속 = 막힘.contains(발행자) ? 막힌_연속 + 1 : 0;
+            if (막힌_연속 >= 리스_틱) {
+                리더 = false;
+            }
+            if (!리더 && !막힘.contains(발행자)) {
+                출발점 = new ControlPlaneConfig().startingCredit(발행자_홀더.view(), 발행자_홀더, 분모());
+            }
+            시계.앞으로(Duration.ofMillis(500));
             List<String> 차례 = 순서 == Order.리더_먼저 ? 노드 : List.of("B", "C", 발행자);
             int 관측 = -1;
             SnapshotMeta 발행 = null;
@@ -222,7 +295,7 @@ class AsymmetricReleaseScenarioTest {
                 등록부.get(id).observed(본_수);
                 if (id.equals(발행자)) {
                     관측 = 본_수;
-                    발행 = new SnapshotMeta(예산, 분모().count());
+                    발행 = 발행한다();
                 }
             }
             // 제품은 하트비트와 갱신이 따로 돈다. 순서가 뒤집혀도 막힌 동안 놓침이 등록부를 지켜 바닥은 같다.
@@ -232,7 +305,7 @@ class AsymmetricReleaseScenarioTest {
                 }
             }
             // 상한 합은 풀린 노드까지 더한다. 보수적인 쪽이라 초록은 의미가 있다.
-            기록.add(new Tick(지금, 관측, 분모().count(),
+            기록.add(new Tick(지금, 관측, 분모().count(), 발행 == null ? -1 : 발행.globalCredit(),
                     든_것.values().stream().mapToLong(판정::failOpenCap).sum(),
                     든_것.values().stream().mapToLong(판정::globalCap).sum(),
                     든_분모()));
@@ -240,6 +313,23 @@ class AsymmetricReleaseScenarioTest {
 
         private GatewayRegistry 분모() {
             return 등록부.get(발행자);
+        }
+
+        /**
+         * 발행자의 한 회차. 리더십을 잃었으면 제품 배선의 출발점으로 되찾고 램프를 다시 세운다. 되찾는 것은 늘
+         * 발행자다 — 먼저 풀린 다른 노드가 가져가면 그 노드의 재료 나이가 판을 가른다. 목표는 예산으로 고정한다.
+         */
+        private SnapshotMeta 발행한다() {
+            if (!리더) {
+                if (출발점 >= 0) {
+                    램프.resumeFrom(출발점);
+                }
+                리더 = true;
+            }
+            long 크레딧 = 램프.next(예산, CapacityCollector.idleMinimum(분모().count()), false);
+            SnapshotMeta 발행 = new SnapshotMeta(크레딧, 분모().count());
+            발행자_홀더.replace(new GatewaySnapshot(Map.of(), 발행, 시계.instant()));
+            return 발행;
         }
 
         private Map<String, Integer> 든_분모() {

@@ -30,7 +30,7 @@ import org.junit.jupiter.params.provider.EnumSource;
 class AsymmetricReleaseScenarioTest {
 
     /** 같은 틱 안에서 발행자가 다른 노드보다 먼저 치는가. */
-    enum 순서 { 리더_먼저, 리더_나중 }
+    enum Order { 리더_먼저, 리더_나중 }
 
     /** 설계가 정한 감소 지연. 제품 상수에서 읽으면 그 상수를 바꾼 뮤턴트가 일정도 같이 줄인다. */
     private static final int 설계_감소_지연 = 3;
@@ -57,17 +57,17 @@ class AsymmetricReleaseScenarioTest {
             AdmissionDecider.of(SecondWindowLimiter.withMaxKeys(10), 0.7);
 
     @ParameterizedTest
-    @EnumSource(순서.class)
+    @EnumSource(Order.class)
     @DisplayName("C6e_한_틱_늦게_풀린_노드는_감소_지연이_흡수한다")
-    void C6e_한_틱_늦게_풀린_노드는_감소_지연이_흡수한다(순서 순서) {
+    void C6e_한_틱_늦게_풀린_노드는_감소_지연이_흡수한다(Order 순서) {
         흡수판(제품_분모(), 순서).run();
     }
 
     /** 누가 두 번째 방어선을 넣으면 여기가 빨개진다. 그때 계획서의 "유일한 방어선" 을 고친다. */
     @ParameterizedTest
-    @EnumSource(순서.class)
+    @EnumSource(Order.class)
     @DisplayName("C6e_감소_지연이_1_이면_같은_일정에서_무너진다")
-    void C6e_감소_지연이_1_이면_같은_일정에서_무너진다(순서 순서) {
+    void C6e_감소_지연이_1_이면_같은_일정에서_무너진다(Order 순서) {
         assertThatThrownBy(() -> 흡수판(GatewayRegistry.of(1, 1), 순서).run())
                 .isInstanceOf(AssertionError.class)
                 .hasMessageContaining("개방 상한 합");
@@ -76,7 +76,7 @@ class AsymmetricReleaseScenarioTest {
     @Test
     @DisplayName("C6e_감소_지연보다_늦게_풀린_노드는_무너진_분모를_받는다")
     void C6e_감소_지연보다_늦게_풀린_노드는_무너진_분모를_받는다() {
-        클러스터 판 = new 클러스터(제품_분모(), 순서.리더_먼저);
+        Cluster 판 = new Cluster(제품_분모(), Order.리더_먼저);
         int[] 해제 = new int[1];
 
         시나리오("C6e 붕괴", 판, 설계_감소_지연 + 1, 해제)
@@ -84,7 +84,7 @@ class AsymmetricReleaseScenarioTest {
                         첫_관측이_하나다(판, 해제[0]),
                         같다("첫 위반 틱", 첫_위반(판), 해제[0] + 설계_감소_지연 - 1)))
                 .assertRecovery(() -> {
-                    List<틱> 회복 = 판.해제부터(판.c_해제);
+                    List<Tick> 회복 = 판.해제부터(판.c_해제);
                     return RecoveryCriteria.violations(
                             회복.get(0).배율() == 1.5 ? Optional.empty()
                                     : Optional.of(("돌아온 틱의 배율이 %.2f — 1.5 였다. 바뀌었으면 방어선이 "
@@ -95,16 +95,16 @@ class AsymmetricReleaseScenarioTest {
                 .run();
     }
 
-    private ChaosScenario 흡수판(GatewayRegistry 분모, 순서 순서) {
-        클러스터 판 = new 클러스터(분모, 순서);
+    private ChaosScenario 흡수판(GatewayRegistry 분모, Order 순서) {
+        Cluster 판 = new Cluster(분모, 순서);
         int[] 해제 = new int[1];
         return 시나리오("C6e 흡수 " + 순서, 판, 1, 해제)
                 .assertDuring(() -> RecoveryCriteria.violations(
-                        순서 == 순서.리더_먼저 ? 첫_관측이_하나다(판, 해제[0]) : Optional.empty(),
+                        순서 == Order.리더_먼저 ? 첫_관측이_하나다(판, 해제[0]) : Optional.empty(),
                         개방_합을_지킨다(판.해제부터(해제[0]).subList(0, 1)),
                         분모가_셋이다(판.해제부터(해제[0]).subList(0, 1))))
                 .assertRecovery(() -> {
-                    List<틱> 회복 = 판.해제부터(판.c_해제);
+                    List<Tick> 회복 = 판.해제부터(판.c_해제);
                     return RecoveryCriteria.violations(
                             배율을_지킨다(회복, 1.0),
                             개방_합을_지킨다(회복),
@@ -113,7 +113,7 @@ class AsymmetricReleaseScenarioTest {
     }
 
     /** 전원을 정리 임계 너머로 막고, 발행자와 B 를 먼저 푼 뒤 C 를 {@code c_지연} 틱 늦게 푼다. */
-    private ChaosScenario 시나리오(String 이름, 클러스터 판, int c_지연, int[] 해제) {
+    private ChaosScenario 시나리오(String 이름, Cluster 판, int c_지연, int[] 해제) {
         return ChaosScenario.named(이름)
                 .baseline(판::한_틱)
                 .inject(() -> {
@@ -141,17 +141,17 @@ class AsymmetricReleaseScenarioTest {
     }
 
     /** 틱 하나의 기록. 관측이 음수면 발행자가 하트비트를 놓쳤다. */
-    record 틱(int 번호, int 관측, int 분모, long 개방_합, double 배율, Map<String, Integer> 든_분모) {
+    record Tick(int 번호, int 관측, int 분모, long 개방_합, double 배율, Map<String, Integer> 든_분모) {
     }
 
     /** 틱 하나 = 하트비트 한 번 = 배분 한 회차. 막힌 노드는 치지도 받지도 못한다. */
-    private static final class 클러스터 {
+    private static final class Cluster {
 
         private final GatewayRegistry 분모;
 
         private final Runnable 놓침;
 
-        private final 순서 순서;
+        private final Order 순서;
 
         private final Set<String> 막힘 = new HashSet<>();
 
@@ -159,13 +159,13 @@ class AsymmetricReleaseScenarioTest {
 
         private final Map<String, SnapshotMeta> 든_것 = new LinkedHashMap<>();
 
-        private final List<틱> 기록 = new ArrayList<>();
+        private final List<Tick> 기록 = new ArrayList<>();
 
         private int 지금;
 
         private int c_해제 = -1;
 
-        클러스터(GatewayRegistry 분모, 순서 순서) {
+        Cluster(GatewayRegistry 분모, Order 순서) {
             this.분모 = 분모;
             this.놓침 = new GatewayPresenceConfig().missStep(() -> CircuitState.CLOSED, 분모);
             this.순서 = 순서;
@@ -174,7 +174,7 @@ class AsymmetricReleaseScenarioTest {
 
         void 한_틱() {
             지금++;
-            if (순서 == AsymmetricReleaseScenarioTest.순서.리더_나중) {
+            if (순서 == Order.리더_나중) {
                 친다();
             }
             int 관측 = -1;
@@ -187,7 +187,7 @@ class AsymmetricReleaseScenarioTest {
                 발행 = new SnapshotMeta(예산, 분모.count());
                 든_것.put(발행자, 발행);
             }
-            if (순서 == AsymmetricReleaseScenarioTest.순서.리더_먼저) {
+            if (순서 == Order.리더_먼저) {
                 친다();
             }
             for (String id : 동료) {
@@ -195,7 +195,7 @@ class AsymmetricReleaseScenarioTest {
                     든_것.put(id, 발행);
                 }
             }
-            기록.add(new 틱(지금, 관측, 분모.count(),
+            기록.add(new Tick(지금, 관측, 분모.count(),
                     든_것.values().stream().mapToLong(판정::failOpenCap).sum(),
                     든_것.values().stream().mapToLong(판정::globalCap).sum() / (double) 예산,
                     든_분모()));
@@ -211,40 +211,40 @@ class AsymmetricReleaseScenarioTest {
             return 분모들;
         }
 
-        List<틱> 해제부터(int 번호) {
+        List<Tick> 해제부터(int 번호) {
             return 기록.stream().filter(t -> t.번호() >= 번호).toList();
         }
     }
 
-    private static int 첫_위반(클러스터 판) {
+    private static int 첫_위반(Cluster 판) {
         return 판.기록.stream().filter(t -> t.개방_합() > 개방_합_상한)
-                .mapToInt(틱::번호).findFirst().orElse(-1);
+                .mapToInt(Tick::번호).findFirst().orElse(-1);
     }
 
     /** 전원이 정리됐다는 전제. 이것이 안 서면 이 시나리오는 아무것도 안 잰다. */
-    private static Optional<String> 첫_관측이_하나다(클러스터 판, int 해제) {
+    private static Optional<String> 첫_관측이_하나다(Cluster 판, int 해제) {
         return 같다("해제 첫 틱의 관측", 판.해제부터(해제).get(0).관측(), 1)
                 .map(사유 -> "전제 — " + 사유);
     }
 
-    private static Optional<String> 개방_합을_지킨다(List<틱> 구간) {
+    private static Optional<String> 개방_합을_지킨다(List<Tick> 구간) {
         return 구간.stream().filter(t -> t.개방_합() > 개방_합_상한).findFirst()
                 .map(t -> "%d 틱의 개방 상한 합 %d — %d 이하여야 한다. 든 분모 %s"
                         .formatted(t.번호(), t.개방_합(), 개방_합_상한, t.든_분모()));
     }
 
-    private static Optional<String> 분모가_셋이다(List<틱> 구간) {
+    private static Optional<String> 분모가_셋이다(List<Tick> 구간) {
         return 구간.stream().filter(t -> t.분모() != 3).findFirst()
                 .map(t -> "%d 틱의 분모 %d — 3 을 지켜야 한다".formatted(t.번호(), t.분모()));
     }
 
-    private static Optional<String> 배율을_지킨다(List<틱> 구간, double 상한) {
+    private static Optional<String> 배율을_지킨다(List<Tick> 구간, double 상한) {
         return 구간.stream().filter(t -> t.배율() > 상한).findFirst()
                 .map(t -> "%d 틱의 유입 배율 %.2f — %.1f 이하여야 한다. 든 분모 %s"
                         .formatted(t.번호(), t.배율(), 상한, t.든_분모()));
     }
 
-    private static Optional<String> 모두_셋을_든다(틱 t) {
+    private static Optional<String> 모두_셋을_든다(Tick t) {
         return t.든_분모().values().stream().allMatch(n -> n == 3) ? Optional.empty()
                 : Optional.of("%d 틱에 든 분모 %s — 전원 3 이어야 한다".formatted(t.번호(), t.든_분모()));
     }

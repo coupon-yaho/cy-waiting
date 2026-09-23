@@ -11,6 +11,8 @@
 [ -n "${QUEUE_KEYS_LOADED:-}" ] && return 0
 QUEUE_KEYS_LOADED=1
 
+# 태그는 쿠폰 id 다. 샤딩이 열리면 `RedisKeys` 가 `tag(couponId, shards, shard)` 로 만들므로
+# 그때 이 목록도 샤드를 받아야 한다. 지금은 샤드가 하나뿐이라 같다.
 queue_keys() {
     local c=$1
     printf 'queue:{%s} admitted:{%s} maxscore:{%s} grace:{%s} alive:{%s} dropfence:{%s} applyfence:{%s}' \

@@ -143,15 +143,6 @@ run_case "이어지지 않은 위 회차는 최대치가 아니다" 0 "최대치
 # 아무리 옳아도 표가 틀린 채로 온다.
 . test/load/peak-lib.sh || exit 2
 
-lib_case() {
-    local name=$1 want=$2 got=$3
-    if [ "$got" = "$want" ]; then
-        echo "  ✓ $name"
-    else
-        echo "  ✗ $name — '$got' (기대 '$want')"
-        selftest_failed=1
-    fi
-}
 
 echo "러너 부분 자기검증"
 

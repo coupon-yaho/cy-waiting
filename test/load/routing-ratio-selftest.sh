@@ -90,15 +90,6 @@ export BIG_CAP SMALL_CAP MID_CAP
 lib_work=$(mktemp -d) || exit 1
 trap 'rm -rf "$lib_work"' EXIT
 
-lib_case() {
-    local name=$1 want=$2 got=$3
-    if [ "$got" = "$want" ]; then
-        echo "  ✓ $name"
-    else
-        echo "  ✗ $name — '$got' (기대 '$want')"
-        selftest_failed=1
-    fi
-}
 
 echo "하네스 부분 자기검증"
 
@@ -110,6 +101,16 @@ lib_case "빈 값이면 판정 불가" 2 "$(require_positive_int sent >/dev/null
 lib_case "무엇을 못 쟀는지 말한다" 1 "$(require_positive_int sent 2>&1 | grep -c sent)"
 sent=0
 lib_case "0 이면 판정 불가" 2 "$(require_positive_int sent >/dev/null 2>&1; printf '%s' $?)"
+
+# 요약 파싱. **깨진 요약을 넣어 본다** — 러너에 인라인이면 이 사례를 못 만든다.
+summary() { printf '%s' "$2" > "$lib_work/$1.json"; printf '%s' "$lib_work/$1.json"; }
+flat=$(summary flat '{"metrics":{"issue_200":{"count":7},"issue_202":{"count":2},"issue_other":{"count":1},"http_reqs":{"count":10}}}')
+nested=$(summary nested '{"metrics":{"issue_200":{"values":{"count":7}},"http_reqs":{"values":{"count":7}}}}')
+broken=$(summary broken '{"metrics":')
+lib_case "평평한 계수를 읽는다" "$(printf '200 7\n202 2\nother 1\ntotal 10')" "$(codes_from_summary "$flat")"
+lib_case "한 겹 더 들어간 계수도 읽는다" "$(printf '200 7\n202 0\nother 0\ntotal 7')" "$(codes_from_summary "$nested")"
+lib_case "깨진 요약은 끊는다" 1 "$(codes_from_summary "$broken" >/dev/null 2>&1; printf '%s' $?)"
+lib_case "없는 파일도 끊는다" 1 "$(codes_from_summary "$lib_work/nope.json" >/dev/null 2>&1; printf '%s' $?)"
 
 # 자극은 되읽어 확인한다. 안 하면 안 심긴 회차가 제품 미달로 적힌다.
 redis_cli() {
@@ -123,8 +124,20 @@ lib_case "심은 값이 되읽히면 통과" 0 \
 redis_cli() { case "$1" in GET) printf '엉뚱' ;; esac; }
 lib_case "값이 다르면 판정 불가" 2 \
     "$(redis_set_verified sim:credits:stub-1 900 >/dev/null 2>&1; printf '%s' $?)"
+# **쓰기가 조용히 실패했는데 앞 회차 잔값이 같으면** 되읽기가 통과한다. 지우고 쓰는 것이 그것을 막는다.
+printf '900' > "$lib_work/sim:credits:stub-1"
+redis_cli() {
+    case "$1" in
+        DEL) rm -f "$lib_work/$2" ;;
+        SET) return 1 ;;                       # 쓰기가 조용히 실패한 회차
+        GET) cat "$lib_work/$2" 2>/dev/null ;;
+    esac
+}
+lib_case "안 지우고 통과하지 않는다" 2 \
+    "$(redis_set_verified sim:credits:stub-1 900 >/dev/null 2>&1; printf '%s' $?)"
 lib_case "무슨 키인지 말한다" 1 \
     "$(redis_set_verified sim:credits:stub-1 900 2>&1 | grep -c 'sim:credits:stub-1')"
 unset -f redis_cli
+unset sent
 
 exit $selftest_failed

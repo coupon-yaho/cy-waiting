@@ -12,6 +12,9 @@ set -uo pipefail
 
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
+# 줄 키 목록은 한 곳에서 온다. 안 읽으면 치환이 비어 DEL 이 인자 없이 불리고, 줄이 안 비워진 채 회차가 돈다.
+. test/load/queue-keys.sh || exit 2
+
 # **레디스를 전용 코어에 고정할 수 있다.** 기본은 안 한다 — 지금까지 잰 값들과
 # 견주려면 조건이 같아야 한다. 착수를 다시 정할 때만 켠다.
 #
@@ -178,6 +181,7 @@ case "${WARMUP_SPIKE:-0}" in
         echo "예열 등록 ${warm_queued} 건"
         rm -f "$warm_summary" "$warm_log"
         # 예열 쿠폰의 줄을 치운다. 재는 쿠폰은 아래에서 따로 비우고 IDLE 을 확인한다.
+        # shellcheck disable=SC2046  # 키를 낱개 인자로 넘긴다
         $COMPOSE exec -T redis redis-cli DEL \
             $(queue_keys "$WARMUP_COUPON") >/dev/null 2>&1
         # 제어 평면이 가라앉기를 기다린다. 스냅샷 한 주기로는 모자란다.
@@ -189,8 +193,8 @@ esac
 # **`routing-lib.sh` 의 `wait_for_idle_queue` 와 같은 절차다.** 그것을 안 부르는
 # 이유는 그 라이브러리가 라우팅 겹침(`compose.routing.yml`)과 스텁 셋의 여유
 # 값을 전제하는데, 이 회차는 CI 와 같은 모양이어야 해서 `compose.yml` 하나로만
-# 돌기 때문이다. **지우는 키 목록이 두 곳에 있다** — `RedisKeys` 에 쿠폰별 키가
-# 늘면 여기와 `routing-lib.sh` 를 둘 다 고쳐야 한다.
+# 돌기 때문이다. 지우는 키 목록은
+# `queue-keys.sh` 한 곳에 있다 — `RedisKeys` 에 쿠폰별 키가 늘면 거기만 고친다.
 #
 # **줄 키만 지우면 안 된다.** 입장 커서와 최대 순번이 남으면 리더가 줄을
 # 비었다고 안 보고 쿠폰을 QUEUEING 으로 되돌리며, 판정은 IDLE 이 아니면 무조건
@@ -199,6 +203,7 @@ esac
 # 펜스가 앞 회차 값을 들고 넘어가, 새 회차의 첫 배분이 앞 회차의 펜스를 본다.
 # 재고(`stock:`)는 시더가 관리하므로 안 건드린다.
 empty_and_wait_idle() {
+    # shellcheck disable=SC2046  # 키를 낱개 인자로 넘긴다
     $COMPOSE exec -T redis redis-cli DEL \
         $(queue_keys "$COUPON") >/dev/null 2>&1
 

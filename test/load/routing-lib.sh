@@ -116,11 +116,36 @@ redis_cli() {
 # 가용량 설정 쪽에는 이 되읽기가 이미 있고 이유도 적혀 있었다 — 자극 쪽에만 없었다.
 redis_set_verified() {
     local key=$1 want=$2 got
+    # **지우고 쓴다.** 앞 회차 잔값이 같으면 쓰기가 실패해도 되읽기가 통과한다.
+    redis_cli DEL "$key" >/dev/null 2>&1
     redis_cli SET "$key" "$want" >/dev/null 2>&1
     got=$(redis_cli GET "$key" 2>/dev/null)
     [ "$got" = "$want" ] && return 0
     echo "판정 불가 — $key 를 못 심었다 (읽은 값 '$got', 넣으려던 값 '$want')" >&2
     return 2
+}
+
+# k6 요약에서 코드별 계수를 읽는다. **함수로 뺀다** — 러너에 인라인이면 자기검증이 못 닿아,
+# 깨진 요약을 넣어 보는 사례를 한 번도 못 만든다 (peak-lib 이 같은 이유로 그렇게 했다).
+#
+#   사용: codes_from_summary <요약 json>   →  "200 n" "202 n" "other n" "total n"
+codes_from_summary() {
+    python3 - "$1" <<'PY'
+import json, sys
+with open(sys.argv[1]) as f:
+    m = json.load(f)["metrics"]
+# **두 모양을 다 받는다.** k6 판에 따라 카운터가 `count` 바로 아래에 있기도 하고
+# `values.count` 로 한 겹 더 들어가기도 한다. 한쪽만 읽으면 다른 판에서 전부 0 이 된다.
+def n(k):
+    v = m.get(k, {})
+    if "count" in v:
+        return int(v["count"])
+    return int(v.get("values", {}).get("count", 0))
+print("200", n("issue_200"))
+print("202", n("issue_202"))
+print("other", n("issue_other"))
+print("total", n("http_reqs"))
+PY
 }
 
 # 스텁이 누적으로 센 값 하나. 이름은 served·faulted·rejected 다.
@@ -228,7 +253,7 @@ bring_up() {
 wait_for_ramp() {
     local target=$(( (BIG_CAP + SMALL_CAP + MID_CAP) * 9 / 10 )) credit _
     for _ in $(seq 1 120); do
-        credit=$($COMPOSE exec -T redis redis-cli HGET gw:snapshot '#credit' 2>/dev/null)
+        credit=$(redis_cli HGET gw:snapshot '#credit' 2>/dev/null)
         case "$credit" in ''|*[!0-9]*) sleep 1; continue ;; esac
         [ "$credit" -ge "$target" ] && return 0
         sleep 1
@@ -245,13 +270,13 @@ wait_for_ramp() {
 # **줄 키만 지우면 안 된다.** 입장 커서와 최대 순번이 남으면 리더가 줄을
 # 비었다고 안 보고 쿠폰을 다시 QUEUEING 으로 돌리며, 판정은 IDLE 이 아니면
 # 무조건 줄에 세운다(추월 금지). 그러면 첫 요청부터 202 다 — 여유가 작아 줄
-# 모드에 한 번이라도 들어간 회차는 전부 그렇게 죽었다. 셋을 같이 지운다.
+# 모드에 한 번이라도 들어간 회차는 전부 그렇게 죽었다. 쿠폰의 줄 키를 다 지운다.
 wait_for_idle_queue() {
     local state _
     # shellcheck disable=SC2046  # 키를 낱개 인자로 넘긴다
     redis_cli DEL $(queue_keys "$COUPON") >/dev/null 2>&1
     for _ in $(seq 1 30); do
-        state=$($COMPOSE exec -T redis redis-cli HGET gw:snapshot "$COUPON" 2>/dev/null)
+        state=$(redis_cli HGET gw:snapshot "$COUPON" 2>/dev/null)
         # IDLE 을 봐야 한다. QUEUEING 이 아닌 것으로 두면 PASSING 같은 중간 상태에서
         # 나가고, 그 상태의 첫 요청이 다시 줄 모드를 켠다.
         case "$state" in *:IDLE:*) return 0 ;; *) sleep 1 ;; esac

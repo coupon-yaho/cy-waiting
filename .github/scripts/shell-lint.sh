@@ -84,3 +84,17 @@ for f in "${UNPARSABLE[@]}"; do
         exit 1
     fi
 done
+
+# **빌려 쓰는 함수는 읽어야 쓴다.** `set -u` 아래에서도 없는 함수는 빈 치환이 되고,
+# 오류는 리다이렉션에 삼켜져 러너가 그대로 간다 — 줄을 안 비운 회차가 실측으로 적힌다.
+# 실제로 그렇게 한 자리가 났다 (CY-974).
+missing=0
+while IFS= read -r f; do
+    grep -q 'queue_keys' "$f" || continue
+    [ "$f" = "test/load/queue-keys.sh" ] && continue
+    grep -qE '^\s*\.\s+test/load/(queue-keys|peak-lib|routing-lib)\.sh' "$f" && continue
+    echo "  queue_keys 를 쓰는데 목록을 안 읽는다: $f" >&2
+    missing=1
+done < <(git ls-files 'test/load/*.sh')
+[ "$missing" -eq 0 ] || exit 1
+

@@ -234,7 +234,9 @@ peak_host_idle_pct() {
     local stat=${PEAK_STAT:-/proc/stat} a b
     a=$(awk '/^cpu /{ print $2+$3+$4+$5+$6+$7+$8+$9, $5+$6 }' "$stat" 2>/dev/null)
     [ -n "$a" ] || { printf 'NA'; return; }
-    sleep "${PEAK_IDLE_WAIT:-1}"
+    # 간격은 1초 아래로 못 내린다 — 0 이면 차가 없어 모든 표본이 NA 가 된다.
+    # 시험이 그 자리를 밟을 때만 `PEAK_STAT` 과 함께 0 을 준다.
+    if [ -n "${PEAK_STAT:-}" ]; then sleep "${PEAK_IDLE_WAIT:-1}"; else sleep 1; fi
     b=$(awk '/^cpu /{ print $2+$3+$4+$5+$6+$7+$8+$9, $5+$6 }' "$stat" 2>/dev/null)
     [ -n "$b" ] || { printf 'NA'; return; }
     peak_idle_delta "$a" "$b"

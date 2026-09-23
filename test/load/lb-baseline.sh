@@ -76,8 +76,13 @@ for rate in $RATES; do
             return n ? ((n % 2) ? v[k, (n + 1) / 2] : (v[k, n / 2] + v[k, n / 2 + 1]) / 2) : -1 }
         $1 == "cpu" && $2 ~ /-lb-[0-9]+$/     { v["lb", ++c["lb"]] = $3 }
         $1 == "cpu" && $2 ~ /-origin-[0-9]+$/ { v["origin", ++c["origin"]] = $3 }
-        $1 == "idle"                          { v["idle", ++c["idle"]] = $3 }
-        END { printf "  LB CPU 가운데 %.1f%% · origin CPU 가운데 %.1f%% · 호스트 유휴 가운데 %.1f%%\n", med("lb"), med("origin"), med("idle") }
+        # 계기를 못 읽은 표본(NA)은 안 센다. 섞어 접으면 정렬이 어긋나 0.0% 가 찍힌다.
+        $1 == "idle" && $3 == "NA"             { na++ }
+        $1 == "idle" && $3 != "NA"             { v["idle", ++c["idle"]] = $3 }
+        END { printf "  LB CPU 가운데 %.1f%% · origin CPU 가운데 %.1f%% · 호스트 유휴 ", med("lb"), med("origin")
+              if (c["idle"]) printf "가운데 %.1f%%", med("idle"); else printf "판정 불가"
+              if (na) printf " (못 읽은 표본 %d 개)", na
+              printf "\n" }
     ' "$cpu"
 
     actual=$(peak_summary_value "$summary" rate)

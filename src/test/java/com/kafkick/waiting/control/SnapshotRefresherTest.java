@@ -385,6 +385,30 @@ class SnapshotRefresherTest {
                         "받은 분모를 그대로 든다 — 4초 동안 올려 들었다, 발행 2 관측 2");
     }
 
+    /** 버려질 스냅샷으로는 올림 구간에 안 들어간다. 들지 않은 것을 들었다고 남기면 쌍이 실제와 어긋난다. */
+    @Test
+    @DisplayName("버린_스냅샷은_올림_구간을_안_연다")
+    void 버린_스냅샷은_올림_구간을_안_연다() {
+        MutableClock clock = MutableClock.at(지금);
+        Map<String, String> 발행_표시_없음 = Map.of("#credit", "1000", "#nodes", "2",
+                "c1", "ADAPTIVE:QUEUEING:100:500:2000");
+        SnapshotRefresher refresher = SnapshotRefresher.timed(홀더(clock),
+                () -> Mono.just(new TimedSnapshot(발행_표시_없음, 0)), clock, () -> 3);
+        Logger 로거 = (Logger) LoggerFactory.getLogger(SnapshotRefresher.class);
+        ListAppender<ILoggingEvent> 로그 = new ListAppender<>();
+        로그.start();
+        로거.addAppender(로그);
+        try {
+            refresher.once().block();
+        } finally {
+            로거.detachAppender(로그);
+        }
+
+        assertThat(로그.list).extracting(ILoggingEvent::getFormattedMessage)
+                .noneMatch(줄 -> 줄.contains("올려 든다"))
+                .anyMatch(줄 -> 줄.contains("받아들일 수 없는 스냅샷"));
+    }
+
     /** 분모가 옛 큰 값에 갇힌 노드도 방금 본 값만 바닥으로 쓴다. 갇힌 값을 쓰면 몫이 끝없이 준다. */
     @Test
     @DisplayName("배선은_갇힌_분모가_아니라_방금_본_값을_건다")

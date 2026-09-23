@@ -114,7 +114,7 @@ public final class SnapshotRefresher {
         // 처리가 못 받는다 — 루프를 만들기도 전에 터져 그 자리에서 멎는다.
         return Mono.defer(source)
                 .timeout(timeout, scheduler)
-                .map(read -> new Read(floored(codec.decode(read.hash())), read.now()))
+                .map(read -> new Read(codec.decode(read.hash()), read.now()))
                 // **받아들일 수 있는 것만 받는다.** 발행 표시가 없거나 쿠폰을 하나도 못 읽었으면
                 // 그대로 받는 순간 홀더가 비고 전 쿠폰이 매진으로 보인다. 버리기 전에 남기는 것은
                 // 필터가 흔적을 안 남겨, 전 노드가 영영 갱신을 못 해도 조용하기 때문이다.
@@ -126,6 +126,8 @@ public final class SnapshotRefresher {
                     }
                 })
                 .filter(read -> isAcceptable(read.snapshot()))
+                // 받아들인 것에만 건다. 버릴 것으로 올림 구간을 열면 들지 않은 것을 들었다고 남는다.
+                .map(read -> new Read(floored(read.snapshot()), read.now()))
                 .doOnNext(read -> {
                     // 시각을 못 받았으면 홀더가 자기 시계로 잰다. 운영 배선은
                     // 늘 받으므로 그 경로는 시험이 따로 잠근다.

@@ -172,10 +172,11 @@ public final class SnapshotRefresher {
         GatewaySnapshot held = published.withGatewayCountAtLeast(floor);
         if (held != published) {
             if (raisedSince.compareAndSet(null, clock.instant())) {
-                log.info("받은 분모 {} 를 제 관측 {} 으로 올려 든다 — 리더가 아직 이 노드를 안 셌다",
+                log.info("받은 분모 {} 를 제 관측 {} 으로 올려 든다 — 발행이 이 노드가 본 것보다 적게 셌다",
                         published.meta().gatewayCount(), floor);
             }
-        } else {
+        } else if (floor > 0) {
+            // 0 은 모름이다. 하트비트 한 번 실패로 구간을 끊으면 흔들리는 동안 갱신마다 한 쌍이 난다.
             Instant since = raisedSince.getAndSet(null);
             if (since != null) {
                 log.info("받은 분모를 그대로 든다 — {}초 동안 올려 들었다, 발행 {} 관측 {}",

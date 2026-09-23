@@ -55,10 +55,16 @@ public final class GatewayRedisPort {
     /** @param ejected 이 노드가 뺀 인스턴스. null 이면 안 싣는다 — 라우팅이 꺼진 노드다 */
     public Mono<Presence> beat(String instanceId, long reapAfterSec, long voteFreshSec,
             CircuitState circuit, long passedPerSec, Collection<String> ejected) {
+        return beat(instanceId, reapAfterSec, voteFreshSec, circuit, passedPerSec, ejected, false);
+    }
+
+    /** @param rejecting 지난 하트비트 뒤로 이 노드가 조회를 상한으로 거절했는가 */
+    public Mono<Presence> beat(String instanceId, long reapAfterSec, long voteFreshSec,
+            CircuitState circuit, long passedPerSec, Collection<String> ejected, boolean rejecting) {
         return redis.execute(BEAT, List.of(RedisKeys.INSTANCES),
                         List.of(instanceId, Long.toString(reapAfterSec), circuit.name(),
                                 Long.toString(voteFreshSec), passArg(passedPerSec),
-                                ejectArg(ejected)))
+                                ejectArg(ejected), rejecting ? "1" : ""))
                 .next()
                 .map(this::presence);
     }
@@ -100,7 +106,7 @@ public final class GatewayRedisPort {
     }
 
     /** 스크립트가 돌려주는 머리 칸 수. 뒤로 (인스턴스, 표) 쌍이 붙는다. */
-    private static final int BEAT_HEAD = 8;
+    private static final int BEAT_HEAD = 9;
 
     private static final int MAX_RETURNED_PAIRS = 64;
 
@@ -125,7 +131,7 @@ public final class GatewayRedisPort {
             votes.put(String.valueOf(v.get(i)), number(v.get(i + 1)));
         }
         // 둘째 칸은 서버 시각이라 여기서 안 쓴다.
-        return new Presence(at[0], at[2], at[3], at[4], at[5], at[6], at[7], votes);
+        return new Presence(at[0], at[2], at[3], at[4], at[5], at[6], at[7], votes, at[8]);
     }
 
     private int number(Object raw) {
@@ -149,9 +155,16 @@ public final class GatewayRedisPort {
      * @param passReported 그 합에 기여한 수. alive 보다 작으면 합이 "모름" 이다
      * @param ejectReported 뺀 인스턴스 목록을 실은 수. 판정의 분모가 아니다
      * @param ejectVotes    인스턴스마다 그것을 뺀 노드 수
+     * @param rejecting     조회를 상한으로 거절 중이라고 실은 수
      */
     public record Presence(int alive, int open, int halfOpen, int reported, int passed,
-            int passReported, int ejectReported, Map<String, Integer> ejectVotes) {
+            int passReported, int ejectReported, Map<String, Integer> ejectVotes, int rejecting) {
+
+        /** 거절을 아무도 안 실은 회차. */
+        public Presence(int alive, int open, int halfOpen, int reported, int passed,
+                int passReported, int ejectReported, Map<String, Integer> ejectVotes) {
+            this(alive, open, halfOpen, reported, passed, passReported, ejectReported, ejectVotes, 0);
+        }
 
         /** 배제를 아무도 안 실은 회차. */
         public static Presence withoutEjection(int alive, int open, int halfOpen, int reported,
@@ -176,6 +189,10 @@ public final class GatewayRedisPort {
             if (ejectReported < 0 || ejectReported > alive) {
                 throw new IllegalArgumentException(
                         "배제를 실은 수는 산 수를 못 넘는다: %d/%d".formatted(ejectReported, alive));
+            }
+            if (rejecting < 0 || rejecting > alive) {
+                throw new IllegalArgumentException(
+                        "거절을 실은 수는 산 수를 못 넘는다: %d/%d".formatted(rejecting, alive));
             }
             ejectVotes = Map.copyOf(ejectVotes);
             for (int n : ejectVotes.values()) {

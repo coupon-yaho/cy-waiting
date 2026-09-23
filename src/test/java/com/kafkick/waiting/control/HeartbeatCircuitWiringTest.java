@@ -326,10 +326,10 @@ class HeartbeatCircuitWiringTest {
         }
         AtomicReference<Object> 실린_것 = new AtomicReference<>("안 불림");
 
-        배선.beatCall((id, reap, fresh, circuit, passed, ejected) -> {
+        배선.beatCall((id, reap, fresh, circuit, passed, ejected, rejecting) -> {
                     실린_것.set(ejected);
                     return Mono.just(Presence.withoutEjection(1, 0, 0, 1, 0, 1));
-                }, "gw", 3, 3, 단일_공급자(null), 공급자(outliers), () -> 1_000L)
+                }, "gw", 3, 3, 단일_공급자(null), 공급자(outliers), () -> 1_000L, PollRejections.create())
                 .apply(CircuitState.CLOSED).block();
 
         assertThat(실린_것.get()).isEqualTo(Set.of("가"));
@@ -340,10 +340,10 @@ class HeartbeatCircuitWiringTest {
     void 라우팅이_꺼지면_하트비트_호출이_목록을_안_싣는다() {
         AtomicReference<Object> 실린_것 = new AtomicReference<>("안 불림");
 
-        배선.beatCall((id, reap, fresh, circuit, passed, ejected) -> {
+        배선.beatCall((id, reap, fresh, circuit, passed, ejected, rejecting) -> {
                     실린_것.set(ejected);
                     return Mono.just(Presence.withoutEjection(1, 0, 0, 1, 0, 1));
-                }, "gw", 3, 3, 단일_공급자(null), 공급자(null), () -> 1_000L)
+                }, "gw", 3, 3, 단일_공급자(null), 공급자(null), () -> 1_000L, PollRejections.create())
                 .apply(CircuitState.CLOSED).block();
 
         assertThat(실린_것.get()).isNull();
@@ -360,16 +360,50 @@ class HeartbeatCircuitWiringTest {
         }
         AtomicLong 시계 = new AtomicLong(1_000);
         List<List<Object>> 호출 = new ArrayList<>();
-        var 한_번 = 배선.beatCall((id, reap, fresh, circuit, passed, ejected) -> {
-            호출.add(Arrays.asList(id, reap, fresh, circuit, passed, ejected));
+        var 한_번 = 배선.beatCall((id, reap, fresh, circuit, passed, ejected, rejecting) -> {
+            호출.add(Arrays.asList(id, reap, fresh, circuit, passed, ejected, rejecting));
             return Mono.just(Presence.withoutEjection(1, 0, 0, 1, 0, 1));
-        }, "gw", 30, 5, 단일_공급자(() -> 42L), 공급자(outliers), 시계::get);
+        }, "gw", 30, 5, 단일_공급자(() -> 42L), 공급자(outliers), 시계::get, PollRejections.create());
 
         한_번.apply(CircuitState.OPEN).block();
         시계.set(1_000 + Duration.ofSeconds(16).toMillis());
         한_번.apply(CircuitState.CLOSED).block();
 
-        assertThat(호출.get(0)).containsExactly("gw", 30L, 5L, CircuitState.OPEN, 42L, Set.of("가"));
+        assertThat(호출.get(0)).containsExactly("gw", 30L, 5L, CircuitState.OPEN, 42L, Set.of("가"), false);
         assertThat(호출.get(1).get(5)).as("배제 창이 지났다").isEqualTo(Set.of());
+    }
+
+    /** 거절 표시를 일곱째 인자로 싣고, 그 하트비트가 성공해야 내린다. 실패한 회차에 내리면 클러스터가 모른다. */
+    @Test
+    @DisplayName("하트비트가_거절_표시를_싣고_성공해야_내린다")
+    void 하트비트가_거절_표시를_싣고_성공해야_내린다() {
+        PollRejections 거절 = PollRejections.create();
+        List<Boolean> 실린_것 = new ArrayList<>();
+        boolean[] 실패한다 = {true};
+        var 한_번 = 배선.beatCall((id, reap, fresh, circuit, passed, ejected, rejecting) -> {
+            실린_것.add(rejecting);
+            return 실패한다[0] ? Mono.error(new IllegalStateException("레디스"))
+                    : Mono.just(Presence.withoutEjection(1, 0, 0, 1, 0, 1));
+        }, "gw", 3, 3, 단일_공급자(null), 공급자(null), () -> 1_000L, 거절);
+
+        거절.rejected();
+        한_번.apply(CircuitState.CLOSED).onErrorResume(e -> Mono.empty()).block();
+        실패한다[0] = false;
+        한_번.apply(CircuitState.CLOSED).block();
+        한_번.apply(CircuitState.CLOSED).block();
+
+        assertThat(실린_것).containsExactly(true, true, false);
+    }
+
+    /** 클러스터가 센 거절 노드 수를 등록부에 적는다. 안 적으면 리더가 청소를 멈출 근거가 없다. */
+    @Test
+    @DisplayName("하트비트가_거절_노드_수를_등록부에_적는다")
+    void 하트비트가_거절_노드_수를_등록부에_적는다() {
+        GatewayRegistry 등록부 = GatewayRegistry.of(3, 1);
+
+        배선.beatStep(circuit -> Mono.just(new Presence(3, 0, 0, 3, 0, 3, 0, Map.of(), 1)),
+                () -> CircuitState.CLOSED, 등록부).get().block();
+
+        assertThat(등록부.pollRejecting()).isTrue();
     }
 }

@@ -40,6 +40,13 @@ public class GatewayPresenceConfig {
                 properties.capacity().expectedNodes());
     }
 
+    /** 조회 필터가 세우고 하트비트가 싣는 거절 표시. 둘이 같은 것을 봐야 해 빈 하나로 둔다. */
+    @Bean
+    PollRejections pollRejections(ControlPlaneProperties properties) {
+        // 리더가 푸는 쪽과 같은 폭이다. 짧으면 한 번만 실린 거절이 리더의 하트비트 사이로 샌다.
+        return PollRejections.create(properties.capacity().rampDownTicks());
+    }
+
     /**
      * 하트비트 루프. 주기는 틱과 같다 — 배분이 한 틱마다 분모를 읽으므로 그보다
      * 드물게 찍으면 멀쩡한 노드가 관측 사이에서 사라진다.
@@ -48,7 +55,7 @@ public class GatewayPresenceConfig {
     GatewayHeartbeatLoop gatewayHeartbeatLoop(GatewayRedisPort port,
             GatewayRegistry registry, ControlPlaneProperties properties,
             CircuitStateReader circuit, ObjectProvider<PassRateSource> passRate,
-            ObjectProvider<InstanceOutliers> outliers) {
+            ObjectProvider<InstanceOutliers> outliers, PollRejections rejections) {
         String instanceId = Leadership.newOwnerId();
         long reapAfterSec = properties.capacity().freshness().toSeconds();
         long voteFreshSec = voteFreshSec(properties.scheduler().tick(), reapAfterSec);
@@ -57,7 +64,7 @@ public class GatewayPresenceConfig {
                 // 판정 필터가 아직 없으면 "모름" 을 싣는다 — 0 으로 실으면 안 잰
                 // 노드가 잰 노드로 세어져 합이 모자란 것을 못 안다.
                 beatStep(beatCall(port::beat, instanceId, reapAfterSec, voteFreshSec, passRate,
-                                outliers, System::currentTimeMillis),
+                                outliers, System::currentTimeMillis, rejections),
                         circuit::now, registry),
                 () -> port.leave(instanceId),
                 registry::observed,
@@ -96,15 +103,23 @@ public class GatewayPresenceConfig {
     @FunctionalInterface
     interface BeatPort {
         Mono<Presence> beat(String instanceId, long reapAfterSec, long voteFreshSec,
-                CircuitState circuit, long passedPerSec, Collection<String> ejected);
+                CircuitState circuit, long passedPerSec, Collection<String> ejected,
+                boolean rejecting);
     }
 
     /** 빈이 쓰는 호출을 시험이 그대로 부르게 뺐다. 인자 하나가 빠지면 그 관측이 조용히 사라진다. */
     Function<CircuitState, Mono<Presence>> beatCall(BeatPort port, String instanceId,
             long reapAfterSec, long voteFreshSec, ObjectProvider<PassRateSource> passRate,
-            ObjectProvider<InstanceOutliers> outliers, LongSupplier nowMillis) {
-        return state -> port.beat(instanceId, reapAfterSec, voteFreshSec, state,
-                passed(passRate), ejected(outliers, nowMillis.getAsLong()));
+            ObjectProvider<InstanceOutliers> outliers, LongSupplier nowMillis,
+            PollRejections rejections) {
+        return state -> {
+            // 실은 값만 내린다. 답을 기다리는 사이 난 거절은 다음 하트비트가 싣는다.
+            long mark = rejections.mark();
+            return port.beat(instanceId, reapAfterSec, voteFreshSec, state,
+                            passed(passRate), ejected(outliers, nowMillis.getAsLong()),
+                            rejections.sending(mark))
+                    .doOnNext(ignored -> rejections.settled(mark));
+        };
     }
 
     /** 이 노드가 지금 뺀 대. 라우팅이 꺼져 배제기가 없으면 null 로 안 싣는다 — 빈 목록과 다르다. */
@@ -132,6 +147,7 @@ public class GatewayPresenceConfig {
                 .doOnNext(seen -> registry.passObserved(seen.passed(), seen.passReported(),
                         seen.alive()))
                 .doOnNext(seen -> registry.ejectionObserved(seen.alive(), seen.ejectVotes()))
+                .doOnNext(seen -> registry.pollRejectionObserved(seen.rejecting()))
                 .map(Presence::alive);
     }
 }

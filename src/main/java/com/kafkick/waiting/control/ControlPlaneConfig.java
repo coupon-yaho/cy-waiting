@@ -123,7 +123,7 @@ public class ControlPlaneConfig {
                 sweeper,
                 // 이 노드도 게이트웨이다. 자기가 든 재료의 나이가 노드들의
                 // 폴링 상태에 가장 가까운 신호다.
-                holder::isDataStale,
+                sweepHeld(holder, registry),
                 // **클러스터가 본 것으로 조인다.** 리더의 로컬 서킷만 보면 리더만
                 // 멀쩡할 때 그 몫이 이미 넘어진 뒷단으로 간다. 회차마다 한 번 읽는다 —
                 // 두 번 읽으면 그 사이 뒤집혀 같은 회차가 자기모순인 값 둘로 판단한다.
@@ -396,6 +396,14 @@ public class ControlPlaneConfig {
                 .filter(each -> each.getValue().soldOut())
                 .map(Map.Entry::getKey)
                 .toList();
+    }
+
+    /**
+     * 청소를 멈출 조건. 재료가 낡았거나 어느 노드든 조회를 상한으로 거절하는 중이다 — 거절당한 사람은 생존 신호를
+     * 못 갱신해, 그동안 걷으면 성실히 온 사람이 줄을 잃는다. 회차마다 새로 읽는다.
+     */
+    BooleanSupplier sweepHeld(SnapshotHolder holder, GatewayRegistry registry) {
+        return () -> holder.isDataStale() || registry.pollRejecting();
     }
 
     /**

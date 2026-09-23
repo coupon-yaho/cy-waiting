@@ -6,15 +6,17 @@
 --            field = '#c:'..id       → 그 노드가 본 뒷단 서킷
 --            field = '#p:'..id       → 그 노드가 초당 통과시킨 수
 --            field = '#e:'..id       → 그 노드가 뺀 뒷단 인스턴스 ",a,b,"
+--            field = '#r:'..id       → 그 노드가 조회를 상한으로 거절 중이면 ",1,"
 -- ARGV[1]  instanceId
 -- ARGV[2]  죽은 항목 임계(초). 이보다 오래된 field 는 지운다
 -- ARGV[3]  이 노드가 본 뒷단 서킷. 없으면 안 본 것으로 친다
 -- ARGV[4]  표를 인정하는 신선도(초). 분모의 임계보다 훨씬 짧다
 -- ARGV[5]  이 노드가 초당 통과시킨 수. 없으면 안 잰 것으로 보고 그 field 를 지운다
 -- ARGV[6]  이 노드가 뺀 인스턴스 ",a,b,". 뺀 것이 없으면 ",". 없으면 안 실은 것으로 보고 지운다
+-- ARGV[7]  지난 하트비트 뒤로 조회를 상한으로 거절했으면 "1". 아니면 비우고 그 field 를 지운다
 --
 -- 반환  {살아있는 수, 서버 시각(초), 열린 수, 반쯤 열린 수, 표를 낸 수,
---        통과 수 합, 통과 수를 실은 수, 배제를 실은 수,
+--        통과 수 합, 통과 수를 실은 수, 배제를 실은 수, 거절 중인 수,
 --        인스턴스, 뺀 노드 수, 인스턴스, 뺀 노드 수, ...}
 --        꼬리는 뺀 노드 수 내림차순, 같으면 이름순이고 상한까지만 낸다
 --
@@ -47,6 +49,9 @@ local PASS = '#p:'
 -- 스크립트는 이 field 를 노드 항목으로 읽는데, 숫자로 시작하면 시각으로 읽혀 없는
 -- 노드가 분모에 든다. 쉼표로 시작하면 tonumber 가 nil 이라 죽은 것으로 보고 지운다.
 local EJECT = '#e:'
+-- **거절당한 사람은 생존 신호를 못 갱신한다.** 그동안 청소가 돌면 성실히 온 사람이 줄을 잃는다. 값은 배제처럼
+-- 쉼표로 감싼다 — 옛 스크립트가 노드 시각으로 읽지 않고 죽은 것으로 보고 지운다.
+local REJECT = '#r:'
 local MAX_EJECT = 32
 local MAX_ID_LEN = 64
 local MAX_RETURN = 64
@@ -129,6 +134,12 @@ if ejecting then
     end
 end
 
+local rejecting = ARGV[7]
+if rejecting ~= nil and rejecting ~= '' and rejecting ~= '1' then
+    return redis.error_reply('거절 표시는 "1" 이거나 비어야 한다')
+end
+rejecting = rejecting == '1'
+
 local now = tonumber(redis.call('TIME')[1])
 
 -- **내 하트비트를 먼저 쓴다.** 정리를 먼저 하면 그 사이 터졌을 때 나까지 빠진 채로
@@ -157,6 +168,12 @@ if ejecting then
 else
     drops[#drops + 1] = EJECT .. ARGV[1]
 end
+if rejecting then
+    writes[#writes + 1] = REJECT .. ARGV[1]
+    writes[#writes + 1] = ',1,'
+else
+    drops[#drops + 1] = REJECT .. ARGV[1]
+end
 redis.call('HSET', KEYS[1], unpack(writes))
 if #drops > 0 then
     redis.call('HDEL', KEYS[1], unpack(drops))
@@ -173,6 +190,8 @@ local voteOf = {}
 local passOf = {}
 local ejects = {}
 local ejectOf = {}
+local rejects = {}
+local rejectOf = {}
 local entries = redis.call('HGETALL', KEYS[1])
 for i = 1, #entries, 2 do
     local field = entries[i]
@@ -184,6 +203,10 @@ for i = 1, #entries, 2 do
         local id = string.sub(field, #EJECT + 1)
         ejectOf[id] = entries[i + 1]
         ejects[#ejects + 1] = id
+    elseif string.sub(field, 1, #REJECT) == REJECT then
+        local id = string.sub(field, #REJECT + 1)
+        rejectOf[id] = true
+        rejects[#rejects + 1] = id
     elseif string.sub(field, 1, #PASS) == PASS then
         local id = string.sub(field, #PASS + 1)
         passOf[id] = tonumber(entries[i + 1])
@@ -204,6 +227,7 @@ local passSum = 0
 -- 없는 부하를 근거로 조인다. 읽는 쪽이 alive 와 견줘 "모름" 으로 다루라고 같이 낸다.
 local passReported = 0
 local ejectReported = 0
+local rejectingCount = 0
 local tally = {}
 local dead = {}
 for _, id in ipairs(ids) do
@@ -216,8 +240,14 @@ for _, id in ipairs(ids) do
         dead[#dead + 1] = VOTE .. id
         dead[#dead + 1] = PASS .. id
         dead[#dead + 1] = EJECT .. id
+        dead[#dead + 1] = REJECT .. id
     else
         alive = alive + 1
+        -- **거절은 산 노드면 센다.** 포화된 노드는 하트비트가 늦기 쉬운데 표 신선도로 자르면 바로 그때 청소가
+        -- 다시 돈다. 죽은 노드는 위에서 지우므로 청소를 영영 멈추지 못한다.
+        if rejectOf[id] then
+            rejectingCount = rejectingCount + 1
+        end
         -- 죽은 노드의 표는 안 센다. 낡은 표도 안 센다 — 둘 다 이미 없는
         -- 관측이라, 세면 지나간 장애가 지금의 배분을 정한다. **통과 수도 같다.**
         if now - seen <= voteFresh then
@@ -266,6 +296,11 @@ for _, id in ipairs(ejects) do
         dead[#dead + 1] = EJECT .. id
     end
 end
+for _, id in ipairs(rejects) do
+    if seenOf[id] == nil then
+        dead[#dead + 1] = REJECT .. id
+    end
+end
 
 -- **unpack 한계를 넘기지 않는다.** 한 번에 다 못 지우면 다음 틱이 마저 지운다 —
 -- 남은 것은 어차피 죽은 항목이라 세는 값에 영향이 없다.
@@ -280,7 +315,7 @@ end
 -- **읽는 쪽의 폭에 맞춰 묶는다.** 노드당 상한만 두면 합이 그 폭을 넘어 감기고,
 -- 감긴 음수는 낡은 값을 그대로 쓰게 만든다.
 local result = {alive, now, open, halfOpen, reported,
-        math.min(math.floor(passSum), 2147483647), passReported, ejectReported}
+        math.min(math.floor(passSum), 2147483647), passReported, ejectReported, rejectingCount}
 -- **표가 많은 대부터 상한까지만 낸다.** 반환이 노드 수만큼 자라지 않게 한다. 잘린 것은
 -- 덜 빼는 쪽이다. 같은 표는 이름순이라 매 틱 같은 것이 잘린다.
 local ranked = {}

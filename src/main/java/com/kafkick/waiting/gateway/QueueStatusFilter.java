@@ -1,5 +1,6 @@
 package com.kafkick.waiting.gateway;
 
+import com.kafkick.waiting.control.PollRejections;
 import com.kafkick.waiting.control.SnapshotHolder;
 import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
 import com.kafkick.waiting.domain.coupon.CouponState;
@@ -80,6 +81,9 @@ public final class QueueStatusFilter implements WebFilter {
     private final MeterRegistry meters;
     private final DoubleSupplier random;
     private final SecondWindowLimiter limiter;
+
+    /** 상한으로 거절했다는 표시. 레디스를 안 치고 하트비트가 실어 간다. */
+    private final PollRejections rejections;
     private final ApiError error;
     private QueueResponse response = QueueResponse.create();
 
@@ -88,7 +92,7 @@ public final class QueueStatusFilter implements WebFilter {
 
     private QueueStatusFilter(SnapshotHolder holder, QueuePort queue, QueueToken tokens,
             Clock clock, MeterRegistry meters, DoubleSupplier random,
-            SecondWindowLimiter limiter, EntryToken entryTokens) {
+            SecondWindowLimiter limiter, EntryToken entryTokens, PollRejections rejections) {
         this.holder = Objects.requireNonNull(holder, "holder 는 필수다");
         this.queue = Objects.requireNonNull(queue, "queue 는 필수다");
         this.tokens = Objects.requireNonNull(tokens, "tokens 는 필수다");
@@ -97,6 +101,7 @@ public final class QueueStatusFilter implements WebFilter {
         this.meters = Objects.requireNonNull(meters, "meters 는 필수다");
         this.random = Objects.requireNonNull(random, "random 은 필수다");
         this.limiter = Objects.requireNonNull(limiter, "limiter 는 필수다");
+        this.rejections = Objects.requireNonNull(rejections, "rejections 는 필수다");
         this.error = ApiError.of(clock);
     }
 
@@ -104,9 +109,9 @@ public final class QueueStatusFilter implements WebFilter {
     @Autowired
     QueueStatusFilter(SnapshotHolder holder, QueuePort queue, QueueToken tokens,
             Clock clock, MeterRegistry meters, SecondWindowLimiter limiter,
-            EntryToken entryTokens, EntryTokenDelivery delivery) {
+            EntryToken entryTokens, EntryTokenDelivery delivery, PollRejections rejections) {
         this(holder, queue, tokens, clock, meters,
-                () -> ThreadLocalRandom.current().nextDouble(), limiter, entryTokens);
+                () -> ThreadLocalRandom.current().nextDouble(), limiter, entryTokens, rejections);
         this.response = QueueResponse.create(delivery);
     }
 
@@ -114,15 +119,23 @@ public final class QueueStatusFilter implements WebFilter {
             QueueToken tokens, Clock clock, MeterRegistry meters, SecondWindowLimiter limiter,
             EntryToken entryTokens) {
         return new QueueStatusFilter(holder, queue, tokens, clock, meters, limiter, entryTokens,
-                new EntryTokenDelivery(null, null, null));
+                new EntryTokenDelivery(null, null, null), PollRejections.create());
     }
 
     /** 난수원을 받는다. 고정하지 못하면 흔들림이 실제로 붙었는지 못 잰다. */
     public static QueueStatusFilter of(SnapshotHolder holder, QueuePort queue,
             QueueToken tokens, Clock clock, MeterRegistry meters, DoubleSupplier random,
             SecondWindowLimiter limiter, EntryToken entryTokens) {
+        return of(holder, queue, tokens, clock, meters, random, limiter, entryTokens,
+                PollRejections.create());
+    }
+
+    /** 거절 표시를 받는다. 하트비트와 같은 것을 받아야 클러스터가 거절을 안다. */
+    public static QueueStatusFilter of(SnapshotHolder holder, QueuePort queue,
+            QueueToken tokens, Clock clock, MeterRegistry meters, DoubleSupplier random,
+            SecondWindowLimiter limiter, EntryToken entryTokens, PollRejections rejections) {
         return new QueueStatusFilter(holder, queue, tokens, clock, meters, random, limiter,
-                entryTokens);
+                entryTokens, rejections);
     }
 
     @Override
@@ -153,6 +166,8 @@ public final class QueueStatusFilter implements WebFilter {
         long nowSec = clock.instant().getEpochSecond();
         if (!limiter.tryAcquire(POLL_KEY, pollCap(), nowSec)) {
             count("rate-limited");
+            // 이 사람은 생존 신호를 못 갱신한다. 하트비트가 이 표시를 실어 클러스터가 청소를 멈춘다.
+            rejections.rejected();
             // **여기야말로 배수를 걸어야 한다.** 거절만 배수를 빼면 과부하일수록
             // 거절 비중이 커져 예산을 건다는 말이 절반만 맞다. 여기 오는 것은 예산
             // 초과가 아니라 노드가 통째로 밀린 상황이다.

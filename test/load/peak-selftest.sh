@@ -284,6 +284,19 @@ lib_case "두 바퀴째는 Mbit/s · 재시작한 것과 표집 밖의 것은 �
     "$(PEAK_PROC=$work/proc PEAK_NOW_NS=1000000000 peak_net_lines zz "$work/net.state")"
 unset -f docker netdev
 
+# 호스트 유휴. **못 읽으면 0.0 을 내면 안 된다** — 천장 원인 판정의 첫 규칙이 유휴 바닥이라,
+# 계기를 못 읽은 회차가 전부 호스트 탓으로 기록된다.
+printf 'cpu  100 0 100 800 0 0 0 0\ncpu0 1 2 3 4\n' > "$work/stat.ok"
+lib_case "정상 파일이면 수를 낸다" 100.0 "$(PEAK_STAT=$work/stat.ok PEAK_IDLE_WAIT=0 peak_host_idle_pct)"
+lib_case "없는 파일이면 판정 불가를 낸다" NA "$(PEAK_STAT=$work/nope PEAK_IDLE_WAIT=0 peak_host_idle_pct)"
+printf 'intr 1 2 3\n' > "$work/stat.bad"
+lib_case "cpu 줄이 없으면 판정 불가를 낸다" NA "$(PEAK_STAT=$work/stat.bad PEAK_IDLE_WAIT=0 peak_host_idle_pct)"
+
+# 줄 키 목록. 세 러너가 제각각이면 지우다 만 회차가 앞 회차 값을 들고 넘어간다.
+lib_case "줄 키는 한 곳에서 온다" \
+    "queue:{c1} admitted:{c1} maxscore:{c1} grace:{c1} alive:{c1} dropfence:{c1} applyfence:{c1}" \
+    "$(queue_keys c1)"
+
 # 대마다 낸 판정 비율을 모은다. **합산하지 않는다** — 한 대가 다시 떴거나 못 긁은 칸이 다른 대의 계수에 묻힌다.
 # 가장 나쁜 것을 쓴다. 판정 불가가 미달보다 앞이다 — 한 대를 못 잰 칸은 나머지가 미달이어도 제품 탓으로 못 읽는다.
 lib_case "모두 서면 ok" ok "$(peak_worst_verdict ok ok)"

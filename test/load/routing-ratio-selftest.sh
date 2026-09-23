@@ -79,4 +79,52 @@ EXPECTED_TOTAL=oops check "기대 총량이 숫자가 아니면 막는다" 2 "�
 # 검증이 쓰는 10% 밖이다 — 기본값이 무엇인지가 결과를 가른다.
 run_case "기본 허용치가 게이트와 같다 (±15%)" 0 "충족" -- a:1:112 b:1:100 c:1:88
 
+# --- 하네스 쪽 부분 (TS-9) ---
+#
+# **하네스가 고장 난 회차를 제품 미달로 적으면 안 된다.** 요약이 깨지면 빈 값이
+# 흐르고, 자극이 안 심겼는데 회차가 그대로 돈다. 둘 다 실제로 났던 자리다.
+BIG_CAP=${BIG_CAP:-900} SMALL_CAP=${SMALL_CAP:-100} MID_CAP=${MID_CAP:-300}
+export BIG_CAP SMALL_CAP MID_CAP
+. test/load/routing-lib.sh || exit 2
+
+lib_work=$(mktemp -d) || exit 1
+trap 'rm -rf "$lib_work"' EXIT
+
+lib_case() {
+    local name=$1 want=$2 got=$3
+    if [ "$got" = "$want" ]; then
+        echo "  ✓ $name"
+    else
+        echo "  ✗ $name — '$got' (기대 '$want')"
+        selftest_failed=1
+    fi
+}
+
+echo "하네스 부분 자기검증"
+
+# 요약이 깨지면 보낸 건수가 빈 값으로 흐른다. 그 회차는 판정 불가여야 한다.
+sent=600
+lib_case "수면 그대로 쓴다" 0 "$(require_positive_int sent >/dev/null 2>&1; printf '%s' $?)"
+sent=''
+lib_case "빈 값이면 판정 불가" 2 "$(require_positive_int sent >/dev/null 2>&1; printf '%s' $?)"
+lib_case "무엇을 못 쟀는지 말한다" 1 "$(require_positive_int sent 2>&1 | grep -c sent)"
+sent=0
+lib_case "0 이면 판정 불가" 2 "$(require_positive_int sent >/dev/null 2>&1; printf '%s' $?)"
+
+# 자극은 되읽어 확인한다. 안 하면 안 심긴 회차가 제품 미달로 적힌다.
+redis_cli() {
+    case "$1" in
+        SET) printf '%s' "$3" > "$lib_work/$2" ;;
+        GET) cat "$lib_work/$2" 2>/dev/null ;;
+    esac
+}
+lib_case "심은 값이 되읽히면 통과" 0 \
+    "$(redis_set_verified sim:credits:stub-1 900 >/dev/null 2>&1; printf '%s' $?)"
+redis_cli() { case "$1" in GET) printf '엉뚱' ;; esac; }
+lib_case "값이 다르면 판정 불가" 2 \
+    "$(redis_set_verified sim:credits:stub-1 900 >/dev/null 2>&1; printf '%s' $?)"
+lib_case "무슨 키인지 말한다" 1 \
+    "$(redis_set_verified sim:credits:stub-1 900 2>&1 | grep -c 'sim:credits:stub-1')"
+unset -f redis_cli
+
 exit $selftest_failed

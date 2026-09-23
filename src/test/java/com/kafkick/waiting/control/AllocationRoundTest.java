@@ -1511,6 +1511,55 @@ class AllocationRoundTest {
     }
 
     /**
+     * <b>승계는 앞 임기의 매진 표시를 버린다.</b> 이어 쓰면 새 임기가 아직 아무 노드도 못 받은
+     * 매진을 나간 것으로 보고 그 줄을 안 지운다 — 그 줄이 상한이 풀릴 때까지 남는다.
+     */
+    @Test
+    @DisplayName("승계는_앞_임기의_매진_표시를_버린다")
+    void 승계는_앞_임기의_매진_표시를_버린다() {
+        List<String> 지운_것 = new ArrayList<>();
+        SoldOutCleanup cleanup = SoldOutCleanup.of(1, new SimpleMeterRegistry());
+        AllocationRound round = AllocationRound.of(
+                () -> true,
+                () -> Mono.just(new TimedDemands(List.of(
+                        new CouponDemand("c1", 0, 0, QueueMode.ADAPTIVE)), 읽은_시각)),
+                () -> 1_000, () -> 1,
+                grant -> Mono.just(grant.credit()),
+                hash -> Mono.error(new IllegalStateException("상한이라 못 쓴다")),
+                () -> Instant.ofEpochSecond(읽은_시각),
+                () -> Mono.just(CreditSmoother.of(1.0)),
+                SnapshotCodec.create(), () -> 0L, Optional::empty,
+                cleanup, ids -> {
+                    지운_것.addAll(ids);
+                    return Mono.just(ids);
+                }, ids -> Mono.just(ids), 안_걷는_스위퍼(), () -> false, () -> CircuitState.CLOSED);
+
+        // 앞 임기는 c1 을 내보냈다. 새 임기는 아무 노드도 못 받은 상태로 선다.
+        round.leadershipAcquired(-1, List.of("c1"));
+        round.leadershipAcquired(-1, List.of());
+        for (int i = 0; i < 4; i++) {
+            round.run().onErrorResume(e -> Mono.empty()).block();
+        }
+
+        assertThat(지운_것).as("발행이 못 나간 동안은 안 지운다 — 앞 임기의 표시를 이어 쓰면 지운다")
+                .isEmpty();
+    }
+
+    /** <b>0 도 아는 값이다.</b> 모름(-1)과 가르지 않으면 발행 몫이 0 인 승계가 램프를 안 탄다. */
+    @Test
+    @DisplayName("승계_몫이_0이어도_램프를_건다")
+    void 승계_몫이_0이어도_램프를_건다() {
+        AtomicReference<CircuitState> 서킷 = new AtomicReference<>(CircuitState.CLOSED);
+        AllocationRound round = 서킷_있는_회차(서킷, 7_300, 40);
+
+        round.leadershipAcquired(0);
+        round.run().block();
+
+        assertThat(발행된("c1").credit()).as("0 에서 올라온다 — 목표로 뛰지 않는다")
+                .isLessThan(7_300);
+    }
+
+    /**
      * <b>모르는 것과 0 은 다르다.</b> 재료를 못 받은 노드의 몫도 0 이라, 그것을
      * 출발점으로 삼으면 승계마다 크레딧이 하한에서 다시 오른다 — 서킷이 열린 적도
      * 없는데 한산한 쿠폰이 그동안 줄을 선다.

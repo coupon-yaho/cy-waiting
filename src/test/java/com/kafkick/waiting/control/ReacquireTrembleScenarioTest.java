@@ -16,6 +16,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -54,6 +55,8 @@ class ReacquireTrembleScenarioTest {
 
     private final Map<String, String> 발행 = new HashMap<>();
 
+    private final AtomicInteger 발행_수 = new AtomicInteger();
+
     private final AllocationRound 회차 = AllocationRound.of(
             () -> true,
             () -> Mono.just(new TimedDemands(
@@ -63,6 +66,7 @@ class ReacquireTrembleScenarioTest {
             hash -> {
                 발행.clear();
                 발행.putAll(hash);
+                발행_수.incrementAndGet();
                 return Mono.empty();
             },
             () -> 시각,
@@ -131,10 +135,14 @@ class ReacquireTrembleScenarioTest {
                 .run();
     }
 
-    /** 하트비트 한 번, 회차 한 번. 발행된 c1 의 몫을 돌려준다. */
+    /** 하트비트 한 번, 회차 한 번. 발행된 c1 의 몫을 돌려주고, 발행이 없었으면 -1 이다. */
     private long 틱(int 열림, int 반쯤열림) {
         분모.circuitObserved(노드, 열림, 반쯤열림);
+        int 앞 = 발행_수.get();
         회차.run().block(Duration.ofSeconds(5));
+        if (발행_수.get() == 앞) {
+            return -1;
+        }
         CouponState 상태 = 코덱.decode(발행).coupons().get("c1");
         return 상태 == null ? -1 : 상태.credit();
     }

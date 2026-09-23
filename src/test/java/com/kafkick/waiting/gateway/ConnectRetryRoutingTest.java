@@ -33,6 +33,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.context.DynamicPropertyRegistry;
+import com.kafkick.waiting.DeadPorts;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Mono;
@@ -70,16 +71,11 @@ class ConnectRetryRoutingTest {
             })
             .bindNow();
 
-    /** 죽은 뒷단의 자리. 띄웠다가 곧바로 내려 아무도 안 듣는 포트를 만든다. */
-    private static final int 죽은_포트 = 죽은_포트를_만든다();
-
-    private static int 죽은_포트를_만든다() {
-        DisposableServer 잠깐 = HttpServer.create().port(0)
-                .handle((request, response) -> response.send()).bindNow();
-        int port = 잠깐.port();
-        잠깐.disposeNow();
-        return port;
-    }
+    /**
+     * 죽은 뒷단의 자리. <b>임시 포트 대역 밖에서 고른다</b> — 띄웠다 내린 포트를 쓰면 그 사이
+     * 다른 프로세스가 물어 이 시험이 판정 불가로 끊긴다. CI 에서 실제로 그렇게 끊겼다.
+     */
+    private static final int 죽은_포트 = DeadPorts.pick();
 
     /**
      * <b>정말로 거절하는지 먼저 본다.</b> 임시 포트 대역이라 내린 뒤 다른

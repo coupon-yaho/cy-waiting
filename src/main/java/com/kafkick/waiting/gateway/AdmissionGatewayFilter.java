@@ -104,14 +104,6 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
     private static final String MEMBER_ID = "X-Member-Id";
 
     /**
-     * 장애 개방이 노드 예산에서 가져다 쓰는 비율.
-     *
-     * <p>상수로 두면 뒷단 가용량과 무관한 양이 나간다. 판정이 쓰는 예산에서
-     * 몫을 떼되, 전부는 안 준다 — 그 초에 통과할 사람의 몫이 남아야 한다.
-     */
-    private static final double FAIL_OPEN_SHARE = 0.5;
-
-    /**
      * 한 건이 뒷단에 걸려 있을 수 있는 시간(초). 상한은 초당 예산 × 이 값이다.
      *
      * <p>유입은 같은 예산이 이미 조이므로 걸려 있는 수는 <b>예산 × 지연</b>이고,
@@ -558,7 +550,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
             SnapshotMeta meta, String couponId) {
         // **판정과 같은 리미터·같은 키다.** 따로 들면 한 초에 두 예산이 겹쳐
         // 나가고, 리미터를 하나로 두라는 규칙이 막으려던 버스트가 그대로 난다.
-        long cap = (long) (decider.globalCap(meta) * FAIL_OPEN_SHARE);
+        long cap = decider.failOpenCap(meta);
         // **상한 앞에서 찍는다.** 여는 갈래 안에 두면 상한이 0 인 구간에서 전 요청이
         // 막는 갈래로 가 진입도 해제도 한 줄 안 남는다 — 알람은 뜨는데 볼 로그가 없다.
         // 매 요청 찍으면 정작 조사가 필요한 순간에 묻히므로 구간의 시작만 찍는다.

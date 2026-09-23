@@ -641,6 +641,13 @@ class AdmissionDeciderTest {
                 .isEqualTo(100);
     }
 
+    @Test
+    @DisplayName("줄을_못_세우면_노드_예산의_반만_연다")
+    void 줄을_못_세우면_노드_예산의_반만_연다() {
+        assertThat(decider().failOpenCap(META)).as("노드 예산 100 의 반").isEqualTo(50);
+        assertThat(decider().failOpenCap(new SnapshotMeta(30, 2))).as("15 의 반은 내림").isEqualTo(7);
+    }
+
     /** 통과가 아닌 판정에 예산을 물으면 부르는 쪽이 틀린 것이다. 조용히 0 을 주면 전면 차단이다. */
     @Test
     @DisplayName("통과가_아닌_판정에는_예산이_없다")

@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.within;
 
 import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.kafkick.waiting.adapter.redis.ClockSkewTracker;
@@ -206,6 +208,39 @@ class AllocationRoundTest {
         round.run().block();
 
         assertThat(발행된_크레딧).containsExactly(1_000L, 200L);
+    }
+
+/**
+     * <b>이월이 돌아온 사실을 한 번 남긴다.</b> 못 받은 회차 수를 같이 안 실으면, 회복 구간이
+     * 로그에서 사라져 평활이 언제부터 다시 이어졌는지 사후에 못 짚는다.
+     */
+    @Test
+    @DisplayName("이월이_돌아오면_못_받은_회차와_함께_남긴다")
+    void 이월이_돌아오면_못_받은_회차와_함께_남긴다() {
+        Logger logger = ((LoggerContext) LoggerFactory.getILoggerFactory())
+                .getLogger(AllocationRound.class);
+        ListAppender<ILoggingEvent> 로그 = new ListAppender<>();
+        로그.start();
+        logger.addAppender(로그);
+        AtomicReference<Mono<CreditSmoother>> 이월 =
+                new AtomicReference<>(Mono.error(new IllegalStateException("레디스가 흔들린다")));
+        try {
+            // 발행도 같이 터뜨린다 — 발행이 성공하면 그 자리가 못 받은 셈을 먼저 지운다.
+            AtomicBoolean 발행이_터진다 = new AtomicBoolean(true);
+            AllocationRound round = 이월을_고르는_회차(이월, new AtomicBoolean(true), 발행이_터진다);
+            // 한 회차만 놓친다 — 경계(0 과 1)를 가르는 자리다.
+            돈다(round);
+            이월.set(Mono.just(CreditSmoother.of(1.0)));
+            발행이_터진다.set(false);
+            돈다(round);
+            돈다(round);
+        } finally {
+            logger.detachAppender(로그);
+        }
+
+        assertThat(로그.list).filteredOn(줄 -> 줄.getFormattedMessage().contains("이월이 돌아왔다"))
+                .as("돌아온 그 회차에 한 번만").hasSize(1)
+                .allMatch(줄 -> 줄.getFormattedMessage().contains("1회차"));
     }
 
     /** 이월과 발행 성패를 밖에서 고르는 회차. 관측은 1,000 으로 고정이다. */

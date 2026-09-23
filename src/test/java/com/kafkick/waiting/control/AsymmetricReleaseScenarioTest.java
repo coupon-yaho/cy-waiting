@@ -87,12 +87,15 @@ class AsymmetricReleaseScenarioTest {
         붕괴판(List.of(발행자, "B"), List.of("C"), 순서, 순서 == Order.리더_먼저 ? 16_000 : 예산);
     }
 
-    /** 발행자 홀로 먼저 풀리면 분모가 1 까지 무너진다. 돌아온 둘이 그 1 을 그대로 들면 유입이 세 배다. */
+    /**
+     * 발행자 홀로 먼저 풀리면 분모가 1 까지 무너진다. 돌아온 둘이 그 1 을 그대로 들면 유입이 세 배다. 리더가 먼저
+     * 치면 B 는 C 가 치기 전에 세어 2 를 보고, C 는 3 을 본다.
+     */
     @ParameterizedTest
     @EnumSource(Order.class)
     @DisplayName("C6e_발행자_홀로_먼저_풀려도_돌아온_노드는_무너진_분모를_안_든다")
     void C6e_발행자_홀로_먼저_풀려도_돌아온_노드는_무너진_분모를_안_든다(Order 순서) {
-        붕괴판(List.of(발행자), List.of("B", "C"), 순서, 순서 == Order.리더_먼저 ? 20_000 : 예산);
+        붕괴판(List.of(발행자), List.of("B", "C"), 순서, 순서 == Order.리더_먼저 ? 22_000 : 예산);
     }
 
     private void 붕괴판(List<String> 먼저, List<String> 늦게, Order 순서, long 돌아온_유입) {
@@ -225,7 +228,7 @@ class AsymmetricReleaseScenarioTest {
             // 제품은 하트비트와 갱신이 따로 돈다. 순서가 뒤집혀도 막힌 동안 놓침이 등록부를 지켜 바닥은 같다.
             for (String id : 노드) {
                 if (발행 != null && !막힘.contains(id)) {
-                    든_것.put(id, 발행.withGatewayCountAtLeast(등록부.get(id).count()));
+                    든_것.put(id, 발행.withGatewayCountAtLeast(등록부.get(id).seenNow()));
                 }
             }
             // 상한 합은 풀린 노드까지 더한다. 보수적인 쪽이라 초록은 의미가 있다.

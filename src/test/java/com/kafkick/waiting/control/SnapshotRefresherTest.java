@@ -2,6 +2,9 @@ package com.kafkick.waiting.control;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.kafkick.waiting.MutableClock;
 import java.time.Duration;
 import java.time.Instant;
@@ -10,6 +13,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.awaitility.Awaitility;
+import org.slf4j.LoggerFactory;
 import reactor.core.Disposable;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -344,6 +348,37 @@ class SnapshotRefresherTest {
         StepVerifier.create(refresher.once()).verifyComplete();
 
         assertThat(holder.current().meta().gatewayCount()).isEqualTo(5);
+    }
+
+    /** 발행값과 쓰는 값이 갈린 구간을 쌍으로 남긴다. 안 남기면 한 노드만 몫이 적은 까닭을 못 찾는다. */
+    @Test
+    @DisplayName("분모를_올려_든_구간을_쌍으로_남긴다")
+    void 분모를_올려_든_구간을_쌍으로_남긴다() {
+        MutableClock clock = MutableClock.at(지금);
+        SnapshotHolder holder = 홀더(clock);
+        AtomicInteger 제_관측 = new AtomicInteger(3);
+        SnapshotRefresher refresher = SnapshotRefresher.timed(holder,
+                () -> Mono.just(new TimedSnapshot(정상, 0)), clock, 제_관측::get);
+        Logger 로거 = (Logger) LoggerFactory.getLogger(SnapshotRefresher.class);
+        ListAppender<ILoggingEvent> 로그 = new ListAppender<>();
+        로그.start();
+        로거.addAppender(로그);
+        try {
+            refresher.once().block();
+            refresher.once().block();
+            clock.앞으로(Duration.ofSeconds(4));
+            제_관측.set(2);
+            refresher.once().block();
+            refresher.once().block();
+        } finally {
+            로거.detachAppender(로그);
+        }
+
+        assertThat(로그.list).extracting(ILoggingEvent::getFormattedMessage)
+                .filteredOn(줄 -> 줄.contains("분모"))
+                .containsExactly(
+                        "받은 분모 2 를 제 관측 3 으로 올려 든다 — 리더가 아직 이 노드를 안 셌다",
+                        "받은 분모를 그대로 든다 — 4초 동안 올려 들었다, 발행 2 관측 2");
     }
 
     /** 분모가 옛 큰 값에 갇힌 노드도 방금 본 값만 바닥으로 쓴다. 갇힌 값을 쓰면 몫이 끝없이 준다. */

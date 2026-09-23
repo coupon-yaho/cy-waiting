@@ -36,11 +36,13 @@ public final class SnapshotRefresher {
      * 시간을 담는다 — 매 회차 찍으면 수백 줄이 쏟아지면서 걷힌 시점은 안 남는다.
      */
     private final AtomicReference<Instant> failingSince = new AtomicReference<>();
+    /** 받은 분모를 제 관측으로 올려 든 구간의 시작. 발행값과 쓰는 값이 갈린 것을 쌍으로 남긴다. */
+    private final AtomicReference<Instant> raisedSince = new AtomicReference<>();
     private final SnapshotHolder holder;
     private final Supplier<Mono<TimedSnapshot>> source;
     private final Duration timeout;
     private final Clock clock;
-    /** 이 노드의 하트비트가 센 노드 수. 받은 분모의 바닥이다. */
+    /** 이 노드의 하트비트가 방금 센 노드 수. 받은 분모의 바닥이다. 모르면 0 이다. */
     private final IntSupplier seen;
 
     private SnapshotRefresher(SnapshotHolder holder,
@@ -112,8 +114,7 @@ public final class SnapshotRefresher {
         // 처리가 못 받는다 — 루프를 만들기도 전에 터져 그 자리에서 멎는다.
         return Mono.defer(source)
                 .timeout(timeout, scheduler)
-                .map(read -> new Read(codec.decode(read.hash()).withGatewayCountAtLeast(seen.getAsInt()),
-                        read.now()))
+                .map(read -> new Read(floored(codec.decode(read.hash())), read.now()))
                 // **받아들일 수 있는 것만 받는다.** 발행 표시가 없거나 쿠폰을 하나도 못 읽었으면
                 // 그대로 받는 순간 홀더가 비고 전 쿠폰이 매진으로 보인다. 버리기 전에 남기는 것은
                 // 필터가 흔적을 안 남겨, 전 노드가 영영 갱신을 못 해도 조용하기 때문이다.
@@ -164,6 +165,25 @@ public final class SnapshotRefresher {
         if (failingSince.compareAndSet(null, clock.instant())) {
             log.warn(message, args);
         }
+    }
+
+    private GatewaySnapshot floored(GatewaySnapshot published) {
+        int floor = seen.getAsInt();
+        GatewaySnapshot held = published.withGatewayCountAtLeast(floor);
+        if (held != published) {
+            if (raisedSince.compareAndSet(null, clock.instant())) {
+                log.info("받은 분모 {} 를 제 관측 {} 으로 올려 든다 — 리더가 아직 이 노드를 안 셌다",
+                        published.meta().gatewayCount(), floor);
+            }
+        } else {
+            Instant since = raisedSince.getAndSet(null);
+            if (since != null) {
+                log.info("받은 분모를 그대로 든다 — {}초 동안 올려 들었다, 발행 {} 관측 {}",
+                        Duration.between(since, clock.instant()).toSeconds(),
+                        published.meta().gatewayCount(), floor);
+            }
+        }
+        return held;
     }
 
     /** 걷힌 순간에 지속 시간과 함께 남긴다. */

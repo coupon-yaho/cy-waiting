@@ -57,6 +57,9 @@ public final class GatewayRegistry {
 
     private final AtomicReference<Map<String, Held>> ejected = new AtomicReference<>(Map.of());
 
+    /** 방금 하트비트가 센 값. 실패한 회차 뒤에는 0(모름)이다. */
+    private final AtomicInteger seenNow = new AtomicInteger();
+
     /** 하트비트가 연속으로 못 돈 횟수. 표가 낡았는지를 이걸로 안다. */
     private final AtomicInteger circuitMisses = new AtomicInteger();
 
@@ -210,6 +213,7 @@ public final class GatewayRegistry {
         if (observed < 1) {
             return;
         }
+        seenNow.set(observed);
         // 늘었는데 늦게 반영하면 기존 노드가 작은 분모로 나눠 총합이 크레딧을
         // 넘는다. 줄었는데 늦게 반영하면 총합이 미달할 뿐이다.
         current.updateAndGet(now -> {
@@ -230,6 +234,15 @@ public final class GatewayRegistry {
     public void observationFailed() {
         // 실패는 "더 작게 관측했다" 가 아니다. 섞어 세면 실패만으로 내려간다.
         current.updateAndGet(now -> new Denominator(now.value(), 0));
+        seenNow.set(0);
+    }
+
+    /**
+     * 방금 하트비트가 센 노드 수. 받은 분모의 바닥으로 쓴다. 램프를 거친 분모는 실패가 감소 연속을 끊어 옛 큰 값에
+     * 갇힐 수 있다. 모르면 0 이다.
+     */
+    public int seenNow() {
+        return seenNow.get();
     }
 
     /** 지금 쓰는 분모. <b>1 아래로 내려가지 않는다</b> — 나누는 쪽이 있다. */

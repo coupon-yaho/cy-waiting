@@ -142,16 +142,8 @@ run_case "이어지지 않은 위 회차는 최대치가 아니다" 0 "최대치
 # 회차 길이를 푸는 자리와 종료 코드를 판정으로 옮기는 자리가 틀리면, 판정기가
 # 아무리 옳아도 표가 틀린 채로 온다.
 . test/load/peak-lib.sh || exit 2
+. test/load/queue-keys.sh || exit 2
 
-lib_case() {
-    local name=$1 want=$2 got=$3
-    if [ "$got" = "$want" ]; then
-        echo "  ✓ $name"
-    else
-        echo "  ✗ $name — '$got' (기대 '$want')"
-        selftest_failed=1
-    fi
-}
 
 echo "러너 부분 자기검증"
 
@@ -283,6 +275,29 @@ netdev 101 1001000; netdev 102 100
 lib_case "두 바퀴째는 Mbit/s · 재시작한 것과 표집 밖의 것은 뺀다" "$(printf 'net\tzz-gateway-1\t8.0')" \
     "$(PEAK_PROC=$work/proc PEAK_NOW_NS=1000000000 peak_net_lines zz "$work/net.state")"
 unset -f docker netdev
+
+# 호스트 유휴. **못 읽으면 0.0 을 내면 안 된다** — 천장 원인 판정의 첫 규칙이 유휴 바닥이라,
+# 계기를 못 읽은 회차가 전부 호스트 탓으로 기록된다.
+# 간격은 운영에서 무시하지 않고 보정한다. 무시하면 2초로 준 사람이 1초로 잰 표를 받는다.
+lib_case "안 주면 1 초" 1 "$(peak_idle_wait)"
+lib_case "운영에서 준 값은 지킨다" 3 "$(PEAK_IDLE_WAIT=3 peak_idle_wait)"
+lib_case "운영에서 0 은 1 로 보정" 1 "$(PEAK_IDLE_WAIT=0 peak_idle_wait)"
+lib_case "수가 아니면 1 로 보정" 1 "$(PEAK_IDLE_WAIT=0.5 peak_idle_wait)"
+lib_case "시험 이음매와 함께면 0 을 받는다" 0 "$(PEAK_STAT=/x PEAK_IDLE_WAIT=0 peak_idle_wait)"
+
+lib_case "두 표본의 차로 비율을 낸다" 100.0 "$(peak_idle_delta "1000 800" "2000 1800")"
+lib_case "절반만 한가했으면 50.0" 50.0 "$(peak_idle_delta "1000 800" "2000 1300")"
+lib_case "시간이 안 흘렀으면 판정 불가" NA "$(peak_idle_delta "1000 800" "1000 800")"
+printf 'cpu  100 0 100 800 0 0 0 0\ncpu0 1 2 3 4\n' > "$work/stat.ok"
+lib_case "같은 파일을 두 번 읽으면 판정 불가" NA "$(PEAK_STAT=$work/stat.ok PEAK_IDLE_WAIT=0 peak_host_idle_pct)"
+lib_case "없는 파일이면 판정 불가를 낸다" NA "$(PEAK_STAT=$work/nope PEAK_IDLE_WAIT=0 peak_host_idle_pct)"
+printf 'intr 1 2 3\n' > "$work/stat.bad"
+lib_case "cpu 줄이 없으면 판정 불가를 낸다" NA "$(PEAK_STAT=$work/stat.bad PEAK_IDLE_WAIT=0 peak_host_idle_pct)"
+
+# 줄 키 목록. 세 러너가 제각각이면 지우다 만 회차가 앞 회차 값을 들고 넘어간다.
+lib_case "줄 키는 한 곳에서 온다" \
+    "queue:{c1} admitted:{c1} maxscore:{c1} grace:{c1} alive:{c1} dropfence:{c1} applyfence:{c1}" \
+    "$(queue_keys c1)"
 
 # 대마다 낸 판정 비율을 모은다. **합산하지 않는다** — 한 대가 다시 떴거나 못 긁은 칸이 다른 대의 계수에 묻힌다.
 # 가장 나쁜 것을 쓴다. 판정 불가가 미달보다 앞이다 — 한 대를 못 잰 칸은 나머지가 미달이어도 제품 탓으로 못 읽는다.

@@ -103,23 +103,22 @@ fi
 
 # 상태 코드를 k6 요약에서 읽는다. **코드별 카운터가 따로 있다** — 요약은 태그를
 # 접어 내보내므로 태그로 갈랐다면 여기서 200 과 202 를 못 가른다.
-python3 - "$work/summary.json" > "$work/codes" <<'PY'
-import json, sys
-m = json.load(open(sys.argv[1]))["metrics"]
-# **두 모양을 다 받는다.** k6 판에 따라 카운터가 `count` 바로 아래에 있기도
-# 하고 `values.count` 로 한 겹 더 들어가기도 한다. 한쪽만 읽으면 다른 판에서
-# 전부 0 이 되고, 그러면 판정기가 매 회차를 판정 불가로 끊는다.
-def n(k):
-    v = m.get(k, {})
-    if "count" in v: return int(v["count"])
-    return int(v.get("values", {}).get("count", 0))
-print("200", n("issue_200")); print("202", n("issue_202")); print("other", n("issue_other"))
-print("total", n("http_reqs"))
-PY
+# **요약을 못 읽으면 그 회차는 못 잰 것이다.** 빈 파일이 남으면 아래 awk 의 `s+0` 이
+# 0 으로 고정돼 보낸 것이 전부 200 으로 읽힌다. 파싱은 `routing-lib.sh` 의 함수라 자기검증이 직접 잰다.
+# 꼬리 중단은 VU 수를 못 넘는다. k6 스크립트의 기본 VU 수와 같은 값을 쓴다.
+CODES_SLACK="${VUS:-160}"
+if ! codes_from_summary "$work/summary.json" > "$work/codes"; then
+  echo "판정 불가 — k6 요약을 못 읽었다. 이 회차로는 분배를 못 잰다"
+  tail -5 "$work/k6.log" | sed 's/^/  /'
+  exit 2
+fi
 sent=$(awk '$1=="total"{print $2}' "$work/codes")
+# 빈 값이면 판정기의 대조가 통째로 사라진다 — 넣은 부하가 다 닿았는지를 아무도 안 본다.
+require_positive_int sent || exit 2
+require_codes_match "$work/codes" || exit 2
 bad=$(awk '$1=="202"||$1=="other"{s+=$2} END{print s+0}' "$work/codes")
 echo
-echo "응답 코드: $(awk '$1!="total"{printf "%s×%s ", $2, $1}' "$work/codes")"
+echo "응답 코드: $(awk '$1!="total" && $1!="done"{printf "%s×%s ", $2, $1}' "$work/codes")"
 
 specs=(); total=0
 for idx in 0 1 2; do

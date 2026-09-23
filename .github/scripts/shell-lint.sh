@@ -13,6 +13,14 @@ set -uo pipefail
 root=$(git rev-parse --show-toplevel 2>/dev/null) || root=.
 cd "$root" || exit 1
 
+# **이음매는 표식과 함께일 때만 열린다.** 환경 변수 하나로 프로덕션 검사가
+# 통째로 꺼지면, 아무 말 없는 초록과 "셸 아흔 개 통과" 가 구별되지 않는다.
+RULE_ONLY=""
+if [ "${LINT_SELFTEST:-}" = 1 ] && [ -n "${LINT_TARGETS:-}" ]; then
+    RULE_ONLY=1
+    echo "  자기검증 회차 — 프로젝트 규칙만 본다"
+fi
+
 # **없으면 막는다. 건너뛰지 않는다.** 건너뛰면 이 검사가 안 도는 것이 통과로
 # 보이고, 도구가 없는 사람만 늘 초록을 본다. 고치는 법은 우회가 아니라 설치다.
 if ! command -v shellcheck >/dev/null 2>&1; then
@@ -66,14 +74,15 @@ done < <(git ls-files)
 
 [ ${#targets[@]} -gt 0 ] || { echo "  검사할 셸이 없다" >&2; exit 1; }
 
-if ! shellcheck -S error "${targets[@]}"; then
+if [ -z "${RULE_ONLY:-}" ] && ! shellcheck -S error "${targets[@]}"; then
     exit 1
 fi
 
-echo "  셸 ${#targets[@]} 개 통과 · 못 읽어 건너뛴 것 ${#UNPARSABLE[@]} 개"
+[ -z "${RULE_ONLY:-}" ] && echo "  셸 ${#targets[@]} 개 통과 · 못 읽어 건너뛴 것 ${#UNPARSABLE[@]} 개"
 
 # **건너뛴 파일이 실제로 못 읽는 것인지 확인한다.** 고쳐서 읽히게 된 뒤에도
 # 목록에 남아 있으면, 그 파일은 영영 검사 밖이다.
+[ -n "${RULE_ONLY:-}" ] && UNPARSABLE=()
 for f in "${UNPARSABLE[@]}"; do
     if [ ! -f "$f" ]; then
         echo "  건너뛸 목록에 없는 파일이 있다: $f" >&2
@@ -84,3 +93,34 @@ for f in "${UNPARSABLE[@]}"; do
         exit 1
     fi
 done
+
+# **빌려 쓰는 함수는 읽어야 쓴다.** `set -u` 아래에서도 없는 함수는 빈 치환이 되고,
+# 오류는 리다이렉션에 삼켜져 러너가 그대로 간다 — 줄을 안 비운 회차가 실측으로 적힌다.
+# 실제로 그렇게 한 자리가 났다 (CY-974).
+# **대리 소스는 안 봐준다.** 라이브러리를 거쳐 읽는 것을 인정하면 그 라이브러리가
+# 목록을 안 읽어도 조용하다 — 첫 판이 그랬다. 쓰는 파일이 직접 읽는다.
+# 대상은 위에서 고른 셸 전부다. `test/load` 밖에 러너가 생겨도 규칙이 따라간다.
+rule_targets=("${targets[@]}")
+if [ -n "${RULE_ONLY:-}" ]; then
+    # shellcheck disable=SC2206  # 이음매가 공백으로 가른 목록을 준다
+    rule_targets=($LINT_TARGETS)
+fi
+[ ${#rule_targets[@]} -gt 0 ] || { echo "  규칙이 볼 셸이 없다" >&2; exit 1; }
+missing=0
+for f in "${rule_targets[@]}"; do
+    if ! grep -q 'queue_keys' "$f" 2>/dev/null; then
+        # 못 읽는 파일은 건너뛰지 않는다 — 검사 밖으로 나가는 조용한 길이다.
+        [ -r "$f" ] || { echo "  못 읽어 규칙을 못 걸었다: $f" >&2; missing=1; }
+        continue
+    fi
+    # 목록을 내는 파일과 규칙을 적은 파일 자신은 대상이 아니다.
+    case "$f" in
+        test/load/queue-keys.sh|.github/scripts/shell-lint.sh|.github/scripts/shell-lint-selftest.sh)
+            continue ;;
+    esac
+    grep -qE '^[[:space:]]*\.[[:space:]]+test/load/queue-keys\.sh' "$f" && continue
+    echo "  queue_keys 를 쓰는데 queue-keys.sh 를 안 읽는다: $f" >&2
+    missing=1
+done
+[ "$missing" -eq 0 ] || exit 1
+

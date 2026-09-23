@@ -55,3 +55,18 @@ fixture() {
     printf '%s' "$2" > "$path"
     printf '%s' "$path"
 }
+
+# 함수 하나를 직접 재는 사례. **판정기가 아니라 러너의 부분을 잴 때 쓴다** —
+# 값을 만드는 쪽이 조용히 거짓을 내면 판정기가 아무리 견고해도 소용이 없다.
+#
+#   사용: lib_case <이름> <기대> <실제>
+lib_case() {
+    local name=$1 want=$2 got=$3
+    if [ "$got" = "$want" ]; then
+        echo "  ✓ $name"
+    else
+        echo "  ✗ $name — '$got' (기대 '$want')"
+        selftest_failed=1
+    fi
+}
+

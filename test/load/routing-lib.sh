@@ -14,6 +14,9 @@
 [ -n "${ROUTING_LIB_LOADED:-}" ] && return 0
 ROUTING_LIB_LOADED=1
 
+# 줄 키 목록은 한 곳에서 온다.
+. test/load/queue-keys.sh || return 2
+
 # 회차가 겹침을 더 얹을 수 있다. 게이트웨이를 여러 대로 늘리는 회차가 그렇다.
 COMPOSE="docker compose -f test/load/compose.yml -f test/load/compose.routing.yml${COMPOSE_EXTRA:+ -f $COMPOSE_EXTRA}"
 
@@ -104,6 +107,93 @@ require_positive_int() {
     done
 }
 
+# 레디스 한 번. **자기검증이 여기를 갈아 끼운다** — 되읽기 계약을 도커 없이 재려면 이음매가 있어야 한다.
+redis_cli() {
+    $COMPOSE exec -T redis redis-cli "$@"
+}
+
+# **자극은 되읽어 확인한다.** 쓰기가 실패한 회차가 그대로 돌면 하네스 고장이 제품 미달로 적힌다.
+# 가용량 설정 쪽에는 이 되읽기가 이미 있고 이유도 적혀 있었다 — 자극 쪽에만 없었다.
+redis_set_verified() {
+    local key=$1 want=$2 got
+    # **지우고 쓴다.** 앞 회차 잔값이 같으면 쓰기가 실패해도 되읽기가 통과한다.
+    redis_cli DEL "$key" >/dev/null 2>&1
+    redis_cli SET "$key" "$want" >/dev/null 2>&1
+    got=$(redis_cli GET "$key" 2>/dev/null)
+    [ "$got" = "$want" ] && return 0
+    echo "판정 불가 — $key 를 못 심었다 (읽은 값 '$got', 넣으려던 값 '$want')"
+    return 2
+}
+
+# k6 요약에서 코드별 계수를 읽는다. **함수로 뺀다** — 러너에 인라인이면 자기검증이 못 닿아,
+# 깨진 요약을 넣어 보는 사례를 한 번도 못 만든다 (peak-lib 이 같은 이유로 그렇게 했다).
+#
+#   사용: codes_from_summary <요약 json>   →  "200 n" "202 n" "other n" "total n"
+codes_from_summary() {
+    python3 - "$@" <<'PY'
+import json, sys
+with open(sys.argv[1]) as f:
+    m = json.load(f)["metrics"]
+# **두 모양을 다 받는다.** k6 판에 따라 카운터가 `count` 바로 아래에 있기도 하고
+# `values.count` 로 한 겹 더 들어가기도 한다. 한쪽만 읽으면 다른 판에서 전부 0 이 된다.
+def n(k):
+    v = m.get(k, {})
+    if "count" in v:
+        return int(v["count"])
+    return int(v.get("values", {}).get("count", 0))
+print("200", n("issue_200"))
+print("202", n("issue_202"))
+print("other", n("issue_other"))
+print("total", n("http_reqs"))
+# **완료 회차가 닻이다.** 중단된 회차는 요청이 http_reqs 에 잡힌 뒤 계수 줄이 안 돌아,
+# 그 수와 코드 합을 견주면 멀쩡한 회차가 판정 불가가 된다.
+print("done", n("iterations"))
+for extra in sys.argv[2:]:
+    print(extra, n(extra))
+PY
+}
+
+# 게이트웨이별 계수까지 받아 `gw0` 꼴 이름으로 낸다. **러너에 두면 자기검증이 못 닿는다** —
+# 계수 이름이 어긋나면 0 뿐인 값으로 쏠림을 판정하게 된다.
+#
+#   사용: codes_with_gateways <요약 json> <게이트웨이 수>
+codes_with_gateways() {
+    local json=$1 count=$2 i metrics=()
+    case "$count" in ''|*[!0-9]*) echo "게이트웨이 수가 정수여야 한다: '$count'" >&2; return 2 ;; esac
+    [ "$count" -gt 0 ] || { echo "게이트웨이 수는 1 이상이어야 한다" >&2; return 2; }
+    for i in $(seq 0 $(( count - 1 ))); do metrics+=("issue_gw$i"); done
+    codes_from_summary "$json" "${metrics[@]}" | sed 's/^issue_gw/gw/'
+}
+
+# 코드별 합이 완료 회차와 같은가. **계수 이름이 어긋나면 셋 다 0 이 된다** — 그러면
+# "전부 200 이었나" 대조가 증발해 전부 202 였던 회차도 충족으로 적힌다.
+require_codes_match() {
+    local file=$1 counted done_ total
+    counted=$(awk '$1=="200"||$1=="202"||$1=="other"{s+=$2} END{print s+0}' "$file")
+    done_=$(awk '$1=="done"{print $2}' "$file")
+    total=$(awk '$1=="total"{print $2}' "$file")
+    case "$done_" in ''|*[!0-9]*) echo "판정 불가 — 완료 회차를 못 읽었다"; return 2 ;; esac
+    case "$total" in ''|*[!0-9]*) echo "판정 불가 — 보낸 수를 못 읽었다"; return 2 ;; esac
+    # 빈 회차를 충족으로 내보내지 않는다. 0 == 0 은 대조가 아니다.
+    [ "$done_" -gt 0 ] || { echo "판정 불가 — 완료된 회차가 없다"; return 2; }
+    if [ "$counted" -ne "$done_" ]; then
+        echo "판정 불가 — 코드별 합 $counted 가 완료 회차 $done_ 과 다르다. 계수 이름이 어긋났다"
+        return 2
+    fi
+    # **회차당 요청은 하나다.** 보낸 수가 완료 회차보다 크게 벌어지면 스크립트가 요청을
+    # 더 넣은 것이고, 그 수를 분모로 쓰는 판정이 틀린다. 꼬리 중단은 VU 수를 못 넘는다.
+    local slack=${CODES_SLACK:-${VUS:-100}}
+    # 수가 아니면 아래 비교가 오류를 내고 if 가 거짓이 되어 대조가 통째로 통과한다.
+    case "$slack" in
+        ''|*[!0-9]*) echo "판정 불가 — 허용 폭이 정수여야 한다: '$slack'"; return 2 ;;
+    esac
+    if [ "$total" -lt "$counted" ] || [ $(( total - counted )) -gt "$slack" ]; then
+        echo "판정 불가 — 보낸 $total 과 코드별 합 $counted 의 차가 $slack 을 넘는다"
+        return 2
+    fi
+    return 0
+}
+
 # 스텁이 누적으로 센 값 하나. 이름은 served·faulted·rejected 다.
 #
 # **못 읽으면 거기서 멈춘다.** 오류를 삼키고 빈 값을 돌려주면 그 값이 산술로
@@ -165,13 +255,14 @@ bring_up() {
     $COMPOSE up -d redis >> "$log" 2>&1
     local _
     for _ in $(seq 1 30); do
-        $COMPOSE exec -T redis redis-cli SET sim:credits:stub-1 "$BIG_CAP" >/dev/null 2>&1 && break
+        redis_cli SET sim:credits:stub-1 "$BIG_CAP" >/dev/null 2>&1 && break
         sleep 1
     done
-    $COMPOSE exec -T redis redis-cli SET sim:credits:stub-2 "$SMALL_CAP" >/dev/null 2>&1
-    $COMPOSE exec -T redis redis-cli SET sim:credits:stub-3 "$MID_CAP" >/dev/null 2>&1
+    redis_set_verified sim:credits:stub-1 "$BIG_CAP" || exit 2
+    redis_set_verified sim:credits:stub-2 "$SMALL_CAP" || exit 2
+    redis_set_verified sim:credits:stub-3 "$MID_CAP" || exit 2
     # 앞 실행이 바꿔 둔 식별자로 시작하면 이번 갈아 끼우기가 램프를 안 탄다.
-    $COMPOSE exec -T redis redis-cli SET sim:id:stub-1 stub-1 >/dev/null 2>&1
+    redis_set_verified sim:id:stub-1 stub-1 || exit 2
 
     # 예열 컨테이너는 크레딧이 이 값에 닿아야 건강하다. 여유 합의 90% 로 두되
     # 200 을 넘기지 않는다 — 큰 여유 회차는 지금까지와 같고, 작은 여유 회차는
@@ -208,7 +299,7 @@ bring_up() {
 wait_for_ramp() {
     local target=$(( (BIG_CAP + SMALL_CAP + MID_CAP) * 9 / 10 )) credit _
     for _ in $(seq 1 120); do
-        credit=$($COMPOSE exec -T redis redis-cli HGET gw:snapshot '#credit' 2>/dev/null)
+        credit=$(redis_cli HGET gw:snapshot '#credit' 2>/dev/null)
         case "$credit" in ''|*[!0-9]*) sleep 1; continue ;; esac
         [ "$credit" -ge "$target" ] && return 0
         sleep 1
@@ -225,13 +316,16 @@ wait_for_ramp() {
 # **줄 키만 지우면 안 된다.** 입장 커서와 최대 순번이 남으면 리더가 줄을
 # 비었다고 안 보고 쿠폰을 다시 QUEUEING 으로 돌리며, 판정은 IDLE 이 아니면
 # 무조건 줄에 세운다(추월 금지). 그러면 첫 요청부터 202 다 — 여유가 작아 줄
-# 모드에 한 번이라도 들어간 회차는 전부 그렇게 죽었다. 셋을 같이 지운다.
+# 모드에 한 번이라도 들어간 회차는 전부 그렇게 죽었다. 쿠폰의 줄 키를 다 지운다.
 wait_for_idle_queue() {
     local state _
-    $COMPOSE exec -T redis redis-cli DEL "queue:{$COUPON}" "admitted:{$COUPON}" \
-        "maxscore:{$COUPON}" >/dev/null 2>&1
+    # shellcheck disable=SC2046  # 키를 낱개 인자로 넘긴다
+    local keys; keys=$(queue_keys "$COUPON")
+    [ -n "$keys" ] || { echo "판정 불가 — 줄 키 목록이 비었다" >&2; exit 2; }
+    # shellcheck disable=SC2086  # 키를 낱개 인자로 넘긴다
+    redis_cli DEL $keys >/dev/null
     for _ in $(seq 1 30); do
-        state=$($COMPOSE exec -T redis redis-cli HGET gw:snapshot "$COUPON" 2>/dev/null)
+        state=$(redis_cli HGET gw:snapshot "$COUPON" 2>/dev/null)
         # IDLE 을 봐야 한다. QUEUEING 이 아닌 것으로 두면 PASSING 같은 중간 상태에서
         # 나가고, 그 상태의 첫 요청이 다시 줄 모드를 켠다.
         case "$state" in *:IDLE:*) return 0 ;; *) sleep 1 ;; esac

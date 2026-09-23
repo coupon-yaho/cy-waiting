@@ -376,6 +376,7 @@ for check in \
     "문서 링크:.github/scripts/doc-links.sh" \
     "문서 앵커:.github/scripts/doc-anchors.sh" \
     "셸 정적 검사:.github/scripts/shell-lint.sh" \
+    "셸 검사 규칙 자기검증:.github/scripts/shell-lint-selftest.sh" \
     "재시도 자기검증:.github/scripts/gradle-retry-selftest.sh" \
     "판정 자기검증:.github/scripts/verdict-selftest.sh" \
     "판정 배선:.github/scripts/verdict-needs.sh" \

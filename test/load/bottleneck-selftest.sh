@@ -45,6 +45,20 @@ GATEWAY_CPUS=2 run_case "호스트 유휴 10% 정확히는 호스트가 아니�
 GATEWAY_CPUS=2 run_case "레디스가 한 코어에 붙었으면 레디스" 0 "원인: 레디스" \
     -- "$(samples redis.tsv 120.0 95.0 40.0)"
 
+# **계기를 못 읽은 회차는 호스트 탓이 아니다.** 표집기가 유휴를 못 읽으면 NA 를 내는데,
+# 그것이 0 으로 읽히면 첫 규칙(유휴 바닥)에 걸려 모든 회차가 호스트 탓으로 기록된다.
+# **손으로 적은 NA 는 생산자와 소비자를 안 잇는다.** 진짜 표집기를 태워 그 값이 판정
+# 불가로 읽히는지 본다 — 표집기가 예전처럼 0.0 을 내면 이 사례가 "호스트" 로 갈린다.
+. test/load/peak-lib.sh || exit 2
+na_work=$(mktemp -d) || exit 1
+trap 'rm -rf "$na_work"' EXIT
+printf 'cpu  100 0 100 800 0 0 0 0\n' > "$na_work/stat"
+# 같은 파일을 두 번 읽으면 차가 0 이라 델타 경로가 NA 를 낸다 — 표집기 전체를 태운다.
+produced=$(PEAK_STAT=$na_work/stat PEAK_IDLE_WAIT=0 peak_host_idle_pct)
+rm -rf "$na_work"
+GATEWAY_CPUS=2 run_case "표집기가 못 읽은 유휴는 판정 불가" 2 "판정 불가" \
+    -- "$(samples na 95.0 30.0 "$produced")"
+
 GATEWAY_CPUS=2 run_case "아무도 안 붙었으면 가르지 못함" 0 "원인: 가르지 못함" \
     -- "$(samples none.tsv 100.0 30.0 40.0)"
 

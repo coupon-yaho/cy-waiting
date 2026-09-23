@@ -163,15 +163,13 @@ if [ "$k6_rc" -ne 0 ]; then
   tail -5 "$work/k6.log" | sed 's/^/  /'; exit 2
 fi
 
-python3 - "$work/summary.json" > "$work/codes" <<'PY'
-import json, sys
-m = json.load(open(sys.argv[1]))["metrics"]
-def n(k):
-    v = m.get(k, {})
-    return int(v["count"]) if "count" in v else int(v.get("values", {}).get("count", 0))
-print("200", n("issue_200")); print("202", n("issue_202")); print("other", n("issue_other"))
-print("total", n("http_reqs"))
-PY
+# 파싱과 합 대조는 `routing-lib.sh` 가 든다 — 인라인으로 두면 자기검증이 못 닿는다.
+CODES_SLACK="${VUS:-$vus}"
+if ! codes_from_summary "$work/summary.json" > "$work/codes"; then
+  echo "판정 불가 — k6 요약을 못 읽었다"
+  tail -5 "$work/k6.log" | sed 's/^/  /'; exit 2
+fi
+require_codes_match "$work/codes" || exit 2
 sent=$(awk '$1=="total"{print $2}' "$work/codes")
 ok=$(awk '$1=="200"{print $2}' "$work/codes")
 queued=$(awk '$1=="202"{print $2}' "$work/codes")
@@ -199,7 +197,7 @@ inst_four=$(awk '$1 >= 4' "$work/instances" 2>/dev/null | wc -l)
 exposure=$(( inst_four * 100 / inst_total ))
 
 echo
-echo "응답 코드: $(awk '$1!="total"{printf "%s×%s ", $2, $1}' "$work/codes")"
+echo "응답 코드: $(awk '$1!="total" && $1!="done"{printf "%s×%s ", $2, $1}' "$work/codes")"
 echo "산 대 도착 합계: $live (보낸 것 $sent) · 인스턴스 최고 $peak_inst 대 · 배제 최고 $peak_eject 대"
 echo "죽은 주소 노출: 표본 $inst_total 개 중 $inst_four 개가 넷 ($exposure%) — 결과를 낸 대 수로 센다"
 echo

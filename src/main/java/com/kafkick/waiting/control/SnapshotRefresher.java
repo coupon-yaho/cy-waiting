@@ -27,6 +27,8 @@ public final class SnapshotRefresher {
 
     private static final Logger log = LoggerFactory.getLogger(SnapshotRefresher.class);
     private static final Duration DEFAULT_TIMEOUT = Duration.ofMillis(400);
+    /** 받은 분모를 그대로 든다. 분모는 이미 1 아래로 안 내려간다. */
+    private static final IntSupplier NO_FLOOR = () -> 1;
 
     private final SnapshotCodec codec = SnapshotCodec.create();
     /**
@@ -58,11 +60,11 @@ public final class SnapshotRefresher {
     /**
      * 재료와 <b>그것을 읽은 레디스 시각</b>을 같이 받는다.
      *
-     * <p>안 받으면 나이가 두 벽시계의 차가 되어 노드마다 다르게 낡는다.
+     * <p>안 받으면 나이가 두 벽시계의 차가 되어 노드마다 다르게 낡는다. 분모 바닥은 없다 — 운영 배선은 아래 형태다.
      */
     public static SnapshotRefresher timed(SnapshotHolder holder,
             Supplier<Mono<TimedSnapshot>> source, Clock clock) {
-        return timed(holder, source, clock, () -> 1);
+        return timed(holder, source, clock, NO_FLOOR);
     }
 
     /**
@@ -89,7 +91,7 @@ public final class SnapshotRefresher {
     public static SnapshotRefresher of(SnapshotHolder holder,
             Supplier<Mono<Map<String, String>>> source, Duration timeout) {
         return new SnapshotRefresher(holder, TimedSnapshot.untimed(source), timeout,
-                Clock.systemUTC(), () -> 1);
+                Clock.systemUTC(), NO_FLOOR);
     }
 
     /**

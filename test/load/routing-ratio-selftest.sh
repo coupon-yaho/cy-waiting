@@ -104,20 +104,22 @@ lib_case "0 이면 판정 불가" 2 "$(require_positive_int sent >/dev/null 2>&1
 
 # 요약 파싱. **깨진 요약을 넣어 본다** — 러너에 인라인이면 이 사례를 못 만든다.
 summary() { printf '%s' "$2" > "$lib_work/$1.json"; printf '%s' "$lib_work/$1.json"; }
-flat=$(summary flat '{"metrics":{"issue_200":{"count":7},"issue_202":{"count":2},"issue_other":{"count":1},"http_reqs":{"count":10}}}')
-nested=$(summary nested '{"metrics":{"issue_200":{"values":{"count":7}},"http_reqs":{"values":{"count":7}}}}')
+flat=$(summary flat '{"metrics":{"issue_200":{"count":7},"issue_202":{"count":2},"issue_other":{"count":1},"http_reqs":{"count":10},"iterations":{"count":10}}}')
+nested=$(summary nested '{"metrics":{"issue_200":{"values":{"count":7}},"http_reqs":{"values":{"count":7}},"iterations":{"values":{"count":7}}}}')
 broken=$(summary broken '{"metrics":')
-lib_case "평평한 계수를 읽는다" "$(printf '200 7\n202 2\nother 1\ntotal 10')" "$(codes_from_summary "$flat")"
-lib_case "한 겹 더 들어간 계수도 읽는다" "$(printf '200 7\n202 0\nother 0\ntotal 7')" "$(codes_from_summary "$nested")"
+lib_case "평평한 계수를 읽는다" "$(printf '200 7\n202 2\nother 1\ntotal 10\ndone 10')" "$(codes_from_summary "$flat")"
+lib_case "한 겹 더 들어간 계수도 읽는다" "$(printf '200 7\n202 0\nother 0\ntotal 7\ndone 7')" "$(codes_from_summary "$nested")"
+lib_case "더 달라는 계수도 낸다" "$(printf '200 0\n202 0\nother 0\ntotal 0\ndone 0\nissue_gw1 3')" \
+    "$(codes_from_summary "$(summary gw '{"metrics":{"issue_gw1":{"count":3}}}')" issue_gw1)"
 lib_case "깨진 요약은 끊는다" 1 "$(codes_from_summary "$broken" >/dev/null 2>&1; printf '%s' $?)"
 lib_case "없는 파일도 끊는다" 1 "$(codes_from_summary "$lib_work/nope.json" >/dev/null 2>&1; printf '%s' $?)"
 
 # 코드 합 대조. **완료 회차를 닻으로 쓴다** — http_reqs 는 중단된 회차의 요청까지 세어,
 # 꼬리 몇 건이 그렇게 되면 멀쩡한 회차가 통째로 판정 불가가 된다.
-codes() { printf '%s\n' "$@" > "$lib_work/codes"; printf '%s' "$lib_work/codes"; }
-ok_codes=$(codes "200 7" "202 2" "other 1" "total 10" "done 10")
-short=$(codes "200 0" "202 0" "other 0" "total 10" "done 10")
-dropped=$(codes "200 7" "202 2" "other 1" "total 12" "done 10")
+codes() { local f=$lib_work/$1; shift; printf '%s\n' "$@" > "$f"; printf '%s' "$f"; }
+ok_codes=$(codes ok "200 7" "202 2" "other 1" "total 10" "done 10")
+short=$(codes short "200 0" "202 0" "other 0" "total 10" "done 10")
+dropped=$(codes dropped "200 7" "202 2" "other 1" "total 12" "done 10")
 lib_case "합이 완료 회차와 같으면 통과" 0 "$(require_codes_match "$ok_codes" >/dev/null 2>&1; printf '%s' $?)"
 lib_case "계수가 다 0 이면 판정 불가" 2 "$(require_codes_match "$short" >/dev/null 2>&1; printf '%s' $?)"
 lib_case "중단된 회차가 있어도 통과" 0 "$(require_codes_match "$dropped" >/dev/null 2>&1; printf '%s' $?)"

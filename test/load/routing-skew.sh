@@ -180,18 +180,17 @@ if [ "$k6_rc" -ne 0 ]; then
   exit 2
 fi
 
-GATEWAYS="$GATEWAYS" python3 - "$work/summary.json" > "$work/codes" <<'PY'
-import json, os, sys
-m = json.load(open(sys.argv[1]))["metrics"]
-def n(k):
-    v = m.get(k, {})
-    if "count" in v: return int(v["count"])
-    return int(v.get("values", {}).get("count", 0))
-print("200", n("issue_200")); print("202", n("issue_202")); print("other", n("issue_other"))
-print("total", n("http_reqs"))
-for i in range(int(os.environ["GATEWAYS"])):
-    print("gw%d" % i, n("issue_gw%d" % i))
-PY
+# 파싱과 합 대조는 `routing-lib.sh` 가 든다 — 인라인으로 두면 자기검증이 못 닿는다.
+gw_metrics=()
+for i in $(seq 0 $(( GATEWAYS - 1 ))); do gw_metrics+=("issue_gw$i"); done
+if ! codes_from_summary "$work/summary.json" "${gw_metrics[@]}" > "$work/codes"; then
+  echo "판정 불가 — k6 요약을 못 읽었다. 이 회차로는 쏠림을 못 잰다"
+  tail -5 "$work/k6.log" | sed 's/^/  /'
+  exit 2
+fi
+require_codes_match "$work/codes" || exit 2
+# 이름을 gw0 꼴로 되돌린다 — 아래 표와 판정기가 그 이름을 읽는다.
+sed -i 's/^issue_gw/gw/' "$work/codes"
 sent=$(awk '$1=="total"{print $2}' "$work/codes")
 bad=$(awk '$1=="202"||$1=="other"{s+=$2} END{print s+0}' "$work/codes")
 echo

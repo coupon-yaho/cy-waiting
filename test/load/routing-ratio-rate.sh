@@ -113,13 +113,7 @@ fi
 sent=$(awk '$1=="total"{print $2}' "$work/codes")
 # 빈 값이면 판정기의 대조가 통째로 사라진다 — 넣은 부하가 다 닿았는지를 아무도 안 본다.
 require_positive_int sent || exit 2
-# **코드 합이 보낸 수와 같아야 한다.** 계수 이름이 어긋나면 셋 다 0 이 되고, 그러면 아래
-# "전부 200 이었나" 대조가 증발해 전부 202 였던 회차도 충족으로 적힌다.
-counted=$(awk '$1=="200"||$1=="202"||$1=="other"{s+=$2} END{print s+0}' "$work/codes")
-if [ "$counted" -ne "$sent" ]; then
-  echo "판정 불가 — 코드별 합 $counted 가 보낸 $sent 와 다르다. 계수 이름이 어긋났다"
-  exit 2
-fi
+require_codes_match "$work/codes" || exit 2
 bad=$(awk '$1=="202"||$1=="other"{s+=$2} END{print s+0}' "$work/codes")
 echo
 echo "응답 코드: $(awk '$1!="total"{printf "%s×%s ", $2, $1}' "$work/codes")"

@@ -181,9 +181,10 @@ case "${WARMUP_SPIKE:-0}" in
         echo "예열 등록 ${warm_queued} 건"
         rm -f "$warm_summary" "$warm_log"
         # 예열 쿠폰의 줄을 치운다. 재는 쿠폰은 아래에서 따로 비우고 IDLE 을 확인한다.
-        # shellcheck disable=SC2046  # 키를 낱개 인자로 넘긴다
-        $COMPOSE exec -T redis redis-cli DEL \
-            $(queue_keys "$WARMUP_COUPON") >/dev/null 2>&1
+        warm_keys=$(queue_keys "$WARMUP_COUPON")
+        [ -n "$warm_keys" ] || { echo "판정 불가 — 줄 키 목록이 비었다" >&2; exit 2; }
+        # shellcheck disable=SC2086  # 키를 낱개 인자로 넘긴다
+        $COMPOSE exec -T redis redis-cli DEL $warm_keys >/dev/null
         # 제어 평면이 가라앉기를 기다린다. 스냅샷 한 주기로는 모자란다.
         sleep "$WARMUP_SETTLE_SEC"
         ;;
@@ -203,9 +204,10 @@ esac
 # 펜스가 앞 회차 값을 들고 넘어가, 새 회차의 첫 배분이 앞 회차의 펜스를 본다.
 # 재고(`stock:`)는 시더가 관리하므로 안 건드린다.
 empty_and_wait_idle() {
-    # shellcheck disable=SC2046  # 키를 낱개 인자로 넘긴다
-    $COMPOSE exec -T redis redis-cli DEL \
-        $(queue_keys "$COUPON") >/dev/null 2>&1
+    local keys; keys=$(queue_keys "$COUPON")
+    [ -n "$keys" ] || { echo "판정 불가 — 줄 키 목록이 비었다" >&2; exit 2; }
+    # shellcheck disable=SC2086  # 키를 낱개 인자로 넘긴다
+    $COMPOSE exec -T redis redis-cli DEL $keys >/dev/null
 
     local state _
     for _ in $(seq 1 30); do

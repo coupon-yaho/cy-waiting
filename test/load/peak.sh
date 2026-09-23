@@ -13,6 +13,8 @@ set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
 . test/load/peak-lib.sh || exit 2
+# 줄 키 목록은 쓰는 파일이 직접 읽는다. 대리로 읽으면 그 대리가 안 읽어도 조용하다.
+. test/load/queue-keys.sh || exit 2
 
 COMPOSE="docker compose -f test/load/compose.yml"
 
@@ -155,8 +157,11 @@ metrics() {
 empty_queues() {
     local c
     for c in $COUPONS; do
-        # shellcheck disable=SC2046  # 키를 낱개 인자로 넘긴다
-        $COMPOSE exec -T redis redis-cli DEL $(queue_keys "$c") >/dev/null 2>&1
+        local keys; keys=$(queue_keys "$c")
+        # 빈 목록으로 DEL 을 부르면 줄이 안 비워진 채 회차가 돈다. 오류도 안 삼킨다.
+        [ -n "$keys" ] || { echo "판정 불가 — 줄 키 목록이 비었다" >&2; exit 2; }
+        # shellcheck disable=SC2086  # 키를 낱개 인자로 넘긴다
+        $COMPOSE exec -T redis redis-cli DEL $keys >/dev/null
     done
 }
 

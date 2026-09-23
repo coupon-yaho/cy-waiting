@@ -130,7 +130,7 @@ redis_set_verified() {
 #
 #   사용: codes_from_summary <요약 json>   →  "200 n" "202 n" "other n" "total n"
 codes_from_summary() {
-    python3 - "$1" <<'PY'
+    python3 - "$@" <<'PY'
 import json, sys
 with open(sys.argv[1]) as f:
     m = json.load(f)["metrics"]
@@ -145,7 +145,24 @@ print("200", n("issue_200"))
 print("202", n("issue_202"))
 print("other", n("issue_other"))
 print("total", n("http_reqs"))
+# **완료 회차가 닻이다.** 중단된 회차는 요청이 http_reqs 에 잡힌 뒤 계수 줄이 안 돌아,
+# 그 수와 코드 합을 견주면 멀쩡한 회차가 판정 불가가 된다.
+print("done", n("iterations"))
+for extra in sys.argv[2:]:
+    print(extra, n(extra))
 PY
+}
+
+# 코드별 합이 완료 회차와 같은가. **계수 이름이 어긋나면 셋 다 0 이 된다** — 그러면
+# "전부 200 이었나" 대조가 증발해 전부 202 였던 회차도 충족으로 적힌다.
+require_codes_match() {
+    local file=$1 counted done_
+    counted=$(awk '$1=="200"||$1=="202"||$1=="other"{s+=$2} END{print s+0}' "$file")
+    done_=$(awk '$1=="done"{print $2}' "$file")
+    case "$done_" in ''|*[!0-9]*) echo "판정 불가 — 완료 회차를 못 읽었다" >&2; return 2 ;; esac
+    [ "$counted" -eq "$done_" ] && return 0
+    echo "판정 불가 — 코드별 합 $counted 가 완료 회차 $done_ 과 다르다. 계수 이름이 어긋났다" >&2
+    return 2
 }
 
 # 스텁이 누적으로 센 값 하나. 이름은 served·faulted·rejected 다.
@@ -274,7 +291,10 @@ wait_for_ramp() {
 wait_for_idle_queue() {
     local state _
     # shellcheck disable=SC2046  # 키를 낱개 인자로 넘긴다
-    redis_cli DEL $(queue_keys "$COUPON") >/dev/null 2>&1
+    local keys; keys=$(queue_keys "$COUPON")
+    [ -n "$keys" ] || { echo "판정 불가 — 줄 키 목록이 비었다" >&2; exit 2; }
+    # shellcheck disable=SC2086  # 키를 낱개 인자로 넘긴다
+    redis_cli DEL $keys >/dev/null
     for _ in $(seq 1 30); do
         state=$(redis_cli HGET gw:snapshot "$COUPON" 2>/dev/null)
         # IDLE 을 봐야 한다. QUEUEING 이 아닌 것으로 두면 PASSING 같은 중간 상태에서

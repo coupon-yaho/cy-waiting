@@ -142,6 +142,7 @@ run_case "이어지지 않은 위 회차는 최대치가 아니다" 0 "최대치
 # 회차 길이를 푸는 자리와 종료 코드를 판정으로 옮기는 자리가 틀리면, 판정기가
 # 아무리 옳아도 표가 틀린 채로 온다.
 . test/load/peak-lib.sh || exit 2
+. test/load/queue-keys.sh || exit 2
 
 
 echo "러너 부분 자기검증"

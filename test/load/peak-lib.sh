@@ -9,9 +9,6 @@
 
 PEAK_LIB_LOADED=1
 
-# 줄 키 목록은 한 곳에서 온다. 러너마다 적으면 지우다 만 회차가 앞 값을 들고 넘어간다.
-. test/load/queue-keys.sh || return 2
-
 # **요약의 두 모양을 다 본다.** k6 판에 따라 값이 `metrics.X.rate` 로도,
 # `metrics.X.values.rate` 로도 온다. 하나만 보면 판이 바뀌는 순간 전 회차가
 # 조용히 판정 불가가 되고, 그것이 하네스 천장으로 읽힌다.
@@ -234,9 +231,12 @@ peak_host_idle_pct() {
     local stat=${PEAK_STAT:-/proc/stat} a b
     a=$(awk '/^cpu /{ print $2+$3+$4+$5+$6+$7+$8+$9, $5+$6 }' "$stat" 2>/dev/null)
     [ -n "$a" ] || { printf 'NA'; return; }
-    # 간격은 1초 아래로 못 내린다 — 0 이면 차가 없어 모든 표본이 NA 가 된다.
-    # 시험이 그 자리를 밟을 때만 `PEAK_STAT` 과 함께 0 을 준다.
-    if [ -n "${PEAK_STAT:-}" ]; then sleep "${PEAK_IDLE_WAIT:-1}"; else sleep 1; fi
+    # 간격은 1초가 하한이다 — 0 이면 차가 없어 모든 표본이 NA 가 된다. 시험이 그 자리를
+    # 밟을 때만 `PEAK_STAT` 과 함께 0 을 준다. 운영에서 준 값은 무시하지 않고 보정한다.
+    local wait=${PEAK_IDLE_WAIT:-1}
+    case "$wait" in ''|*[!0-9]*) wait=1 ;; esac
+    { [ "$wait" -lt 1 ] && [ -z "${PEAK_STAT:-}" ]; } && wait=1
+    sleep "$wait"
     b=$(awk '/^cpu /{ print $2+$3+$4+$5+$6+$7+$8+$9, $5+$6 }' "$stat" 2>/dev/null)
     [ -n "$b" ] || { printf 'NA'; return; }
     peak_idle_delta "$a" "$b"

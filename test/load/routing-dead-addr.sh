@@ -163,15 +163,12 @@ if [ "$k6_rc" -ne 0 ]; then
   tail -5 "$work/k6.log" | sed 's/^/  /'; exit 2
 fi
 
-python3 - "$work/summary.json" > "$work/codes" <<'PY'
-import json, sys
-m = json.load(open(sys.argv[1]))["metrics"]
-def n(k):
-    v = m.get(k, {})
-    return int(v["count"]) if "count" in v else int(v.get("values", {}).get("count", 0))
-print("200", n("issue_200")); print("202", n("issue_202")); print("other", n("issue_other"))
-print("total", n("http_reqs"))
-PY
+# 파싱과 합 대조는 `routing-lib.sh` 가 든다 — 인라인으로 두면 자기검증이 못 닿는다.
+if ! codes_from_summary "$work/summary.json" > "$work/codes"; then
+  echo "판정 불가 — k6 요약을 못 읽었다"
+  tail -5 "$work/k6.log" | sed 's/^/  /'; exit 2
+fi
+require_codes_match "$work/codes" || exit 2
 sent=$(awk '$1=="total"{print $2}' "$work/codes")
 ok=$(awk '$1=="200"{print $2}' "$work/codes")
 queued=$(awk '$1=="202"{print $2}' "$work/codes")

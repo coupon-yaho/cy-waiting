@@ -13,6 +13,12 @@ set -uo pipefail
 root=$(git rev-parse --show-toplevel 2>/dev/null) || root=.
 cd "$root" || exit 1
 
+# 프로젝트 규칙이 볼 파일. **자기검증이 여기를 갈아 끼운다** — 규칙이 무는지를
+# 재려면 저장소 밖 파일 하나를 넣어 볼 수 있어야 한다.
+RULE_TARGETS=${LINT_TARGETS:-$(git ls-files 'test/load/*.sh')}
+# 이음매를 쓴 회차는 shellcheck 를 건너뛴다. 규칙만 재는 자리다.
+RULE_ONLY=${LINT_TARGETS:+1}
+
 # **없으면 막는다. 건너뛰지 않는다.** 건너뛰면 이 검사가 안 도는 것이 통과로
 # 보이고, 도구가 없는 사람만 늘 초록을 본다. 고치는 법은 우회가 아니라 설치다.
 if ! command -v shellcheck >/dev/null 2>&1; then
@@ -66,14 +72,15 @@ done < <(git ls-files)
 
 [ ${#targets[@]} -gt 0 ] || { echo "  검사할 셸이 없다" >&2; exit 1; }
 
-if ! shellcheck -S error "${targets[@]}"; then
+if [ -z "${RULE_ONLY:-}" ] && ! shellcheck -S error "${targets[@]}"; then
     exit 1
 fi
 
-echo "  셸 ${#targets[@]} 개 통과 · 못 읽어 건너뛴 것 ${#UNPARSABLE[@]} 개"
+[ -z "${RULE_ONLY:-}" ] && echo "  셸 ${#targets[@]} 개 통과 · 못 읽어 건너뛴 것 ${#UNPARSABLE[@]} 개"
 
 # **건너뛴 파일이 실제로 못 읽는 것인지 확인한다.** 고쳐서 읽히게 된 뒤에도
 # 목록에 남아 있으면, 그 파일은 영영 검사 밖이다.
+[ -n "${RULE_ONLY:-}" ] && UNPARSABLE=()
 for f in "${UNPARSABLE[@]}"; do
     if [ ! -f "$f" ]; then
         echo "  건너뛸 목록에 없는 파일이 있다: $f" >&2
@@ -88,13 +95,15 @@ done
 # **빌려 쓰는 함수는 읽어야 쓴다.** `set -u` 아래에서도 없는 함수는 빈 치환이 되고,
 # 오류는 리다이렉션에 삼켜져 러너가 그대로 간다 — 줄을 안 비운 회차가 실측으로 적힌다.
 # 실제로 그렇게 한 자리가 났다 (CY-974).
+# **대리 소스는 안 봐준다.** 라이브러리를 거쳐 읽는 것을 인정하면 그 라이브러리가
+# 목록을 안 읽어도 조용하다 — 첫 판이 그랬다. 쓰는 파일이 직접 읽는다.
 missing=0
 while IFS= read -r f; do
     grep -q 'queue_keys' "$f" || continue
     [ "$f" = "test/load/queue-keys.sh" ] && continue
-    grep -qE '^\s*\.\s+test/load/(queue-keys|peak-lib|routing-lib)\.sh' "$f" && continue
-    echo "  queue_keys 를 쓰는데 목록을 안 읽는다: $f" >&2
+    grep -qE '^[[:space:]]*\.[[:space:]]+test/load/queue-keys\.sh' "$f" && continue
+    echo "  queue_keys 를 쓰는데 queue-keys.sh 를 안 읽는다: $f" >&2
     missing=1
-done < <(git ls-files 'test/load/*.sh')
+done < <(printf '%s\n' $RULE_TARGETS)
 [ "$missing" -eq 0 ] || exit 1
 

@@ -451,4 +451,33 @@ class GatewayRegistryTest {
                 .contains("instance=a_b_[31m_c_d")
                 .doesNotContain("\t", "\u001b", "\u2028", "\n");
     }
+
+    /**
+     * 받은 분모의 바닥은 방금 본 값이다. 램프를 거친 분모를 쓰면 하트비트가 성공과 실패를 오가는 노드가 옛 큰 값에
+     * 갇혀 몫이 끝없이 준다. 실패한 회차 뒤에는 모른다(0)라 바닥을 안 건다.
+     */
+    @Test
+    @DisplayName("방금_본_값은_실패하면_모름이다")
+    void 방금_본_값은_실패하면_모름이다() {
+        GatewayRegistry 등록부 = GatewayRegistry.of(3, 1);
+        등록부.observed(10);
+
+        for (int i = 0; i < 5; i++) {
+            등록부.observed(3);
+            assertThat(등록부.seenNow()).as("성공한 회차는 본 값").isEqualTo(3);
+            등록부.observationFailed();
+            assertThat(등록부.seenNow()).as("실패한 회차는 모름").isZero();
+        }
+        assertThat(등록부.count()).as("실패가 연속을 끊어 분모는 갇힌다").isEqualTo(10);
+    }
+
+    @Test
+    @DisplayName("관측_전에는_방금_본_값이_모름이다")
+    void 관측_전에는_방금_본_값이_모름이다() {
+        GatewayRegistry 등록부 = GatewayRegistry.of(3, 4);
+
+        assertThat(등록부.seenNow()).isZero();
+        등록부.observed(0);
+        assertThat(등록부.seenNow()).as("1 미만은 무시한다").isZero();
+    }
 }

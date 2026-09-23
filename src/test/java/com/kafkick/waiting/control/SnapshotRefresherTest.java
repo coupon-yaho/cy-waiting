@@ -346,6 +346,23 @@ class SnapshotRefresherTest {
         assertThat(holder.current().meta().gatewayCount()).isEqualTo(5);
     }
 
+    /** 분모가 옛 큰 값에 갇힌 노드도 방금 본 값만 바닥으로 쓴다. 갇힌 값을 쓰면 몫이 끝없이 준다. */
+    @Test
+    @DisplayName("배선은_갇힌_분모가_아니라_방금_본_값을_건다")
+    void 배선은_갇힌_분모가_아니라_방금_본_값을_건다() {
+        MutableClock clock = MutableClock.at(지금);
+        SnapshotHolder holder = 홀더(clock);
+        GatewayRegistry 등록부 = GatewayRegistry.of(3, 1);
+        등록부.observed(10);
+        등록부.observed(3);
+        SnapshotRefresher refresher = new HealthConfig()
+                .snapshotRefresher(holder, () -> Mono.just(정상), clock, 등록부);
+
+        StepVerifier.create(refresher.once()).verifyComplete();
+
+        assertThat(holder.current().meta().gatewayCount()).as("분모 10, 본 값 3, 발행 2").isEqualTo(3);
+    }
+
     /**
      * <b>운영 배선이 타는 유일한 경로다.</b> 나이를 레디스 시계 하나로 재는 것이
      * 여기서만 일어나는데, 나머지 시험은 전부 시각 없이 오는 길을 탄다.

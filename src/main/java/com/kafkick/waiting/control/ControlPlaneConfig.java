@@ -387,13 +387,6 @@ public class ControlPlaneConfig {
         };
     }
 
-    /**
-     * 승계 노드가 램프를 세울 출발점. 낡은 큰 값은 브레이크를 풀고, 안 주면 브레이크가
-     * 없다. <b>한산 통과 하한은 여기서 안 지킨다</b> — 되올리는 것은
-     * {@code ReleaseRamp.next} 다.
-     *
-     * @return 기동 직후면 음수(램프 없음), 그 밖에는 발행 몫이나 한산 통과 최소 몫 이하
-     */
     /** 발행된 스냅샷이 매진이라고 적은 쿠폰들. 노드가 이미 받아 간 사실이라 그 줄은 지워도 된다. */
     private List<String> publishedSoldOut(SnapshotHolder.View seen) {
         if (!seen.snapshot().isPublished()) {
@@ -405,6 +398,13 @@ public class ControlPlaneConfig {
                 .toList();
     }
 
+    /**
+     * 승계 노드가 램프를 세울 출발점. 낡은 큰 값은 브레이크를 풀고, 안 주면 브레이크가
+     * 없다. <b>한산 통과 하한은 여기서 안 지킨다</b> — 되올리는 것은
+     * {@code ReleaseRamp.next} 다.
+     *
+     * @return 기동 직후면 음수(램프 없음), 그 밖에는 발행 몫이나 한산 통과 최소 몫 이하
+     */
     long startingCredit(SnapshotHolder.View seen, SnapshotHolder holder,
             GatewayRegistry registry) {
         long floor = CapacityCollector.idleMinimum(registry.count());

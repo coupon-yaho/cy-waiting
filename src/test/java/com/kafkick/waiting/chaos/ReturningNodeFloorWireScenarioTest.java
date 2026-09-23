@@ -103,8 +103,7 @@ class ReturningNodeFloorWireScenarioTest {
     @DisplayName("C6e_실배선에서_돌아온_노드가_제_관측으로_분모를_든다")
     void C6e_실배선에서_돌아온_노드가_제_관측으로_분모를_든다() {
         StatefulRedisConnection<String, String> 연결 = faults.연결한다();
-        // 스크립트는 레디스 시계로 신선도를 잰다. 로컬 시계가 앞서면 가짜 노드가 미래로 읽혀 바로 죽는다.
-        // 밀리초까지 맞춘다. 초로만 맞추면 수백 ms 어긋날 때 매초 한 번씩 미래로 읽혀 정리된다.
+        // 스크립트는 레디스 시계로 잰다. 밀리초까지 맞춰야 가짜 노드가 미래로 읽혀 정리되지 않는다.
         List<String> 레디스_지금 = 연결.sync().time();
         long 레디스_밀리 = Long.parseLong(레디스_지금.get(0)) * 1_000 + Long.parseLong(레디스_지금.get(1)) / 1_000;
         Clock 레디스_시계 = Clock.offset(벽시계, Duration.ofMillis(레디스_밀리 - 벽시계.millis()));

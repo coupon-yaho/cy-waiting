@@ -2,14 +2,14 @@ package com.kafkick.waiting.control;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.kafkick.waiting.MutableClock;
 import com.kafkick.waiting.chaos.ChaosScenario;
 import com.kafkick.waiting.chaos.RecoveryCriteria;
 import com.kafkick.waiting.domain.admission.AdmissionDecider;
 import com.kafkick.waiting.domain.admission.CircuitState;
 import com.kafkick.waiting.domain.admission.SecondWindowLimiter;
-import com.kafkick.waiting.domain.coupon.SnapshotMeta;
-import com.kafkick.waiting.MutableClock;
 import com.kafkick.waiting.domain.allocation.ReleaseRamp;
+import com.kafkick.waiting.domain.coupon.SnapshotMeta;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
 import java.time.Instant;
@@ -208,7 +208,7 @@ class AsymmetricReleaseScenarioTest {
         return new GatewayPresenceConfig().gatewayRegistry(설정);
     }
 
-    /** 틱 하나의 기록. 관측이 음수면 발행자가 하트비트를 놓쳤다. 유입은 노드들이 든 초당 예산의 합이다. */
+    /** 틱 하나의 기록. 관측이나 크레딧이 음수면 그 틱에 하트비트나 발행이 없었다. 유입은 노드들이 든 예산의 합이다. */
     record Tick(int 번호, int 관측, int 분모, long 크레딧, long 개방_합, long 유입,
             Map<String, Integer> 든_분모) {
 
@@ -270,8 +270,7 @@ class AsymmetricReleaseScenarioTest {
 
         void 한_틱() {
             지금++;
-            // 되찾는 판단은 틱 중간, 발행은 틱 끝이다. 같은 순간에 두면 재료 나이가 낡음 임계에 정확히 걸려
-            // 판이 경계 위에 서는데, 제품에서는 전파 지연이 있어 그 순간이 안 나온다.
+            // 되찾는 판단은 틱 중간, 발행은 틱 끝. 같은 순간이면 재료 나이가 낡음 임계에 정확히 걸린다.
             시계.앞으로(Duration.ofMillis(500));
             막힌_연속 = 막힘.contains(발행자) ? 막힌_연속 + 1 : 0;
             if (막힌_연속 >= 리스_틱) {

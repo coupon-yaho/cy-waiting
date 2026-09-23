@@ -8,7 +8,7 @@ jira: CY-1001
 agent: claude-opus-5
 confidence: high
 promoted-to: plan/08-resilience.md
-commits: [006b6375, 84fd32b9, 637115c2, 56ead59e]
+commits: [006b6375, 84fd32b9, 2dba19d7, 55372b0c, 637115c2, 3427b09e, 56ead59e]
 ---
 
 # 비대칭 해제에 리더십 승계와 실배선을 더한다

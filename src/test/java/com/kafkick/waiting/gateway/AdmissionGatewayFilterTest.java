@@ -318,6 +318,9 @@ class AdmissionGatewayFilterTest {
 
         assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(뒷단에_닿음).hasValue(false);
+        // **설정 오류도 세고 품질에 남긴다.** 안 세면 라우트가 잘못 걸린 구간이 지표에서 조용하다.
+        assertThat(사유("no-path-variable")).as("사유로 센다").isEqualTo(1.0);
+        assertThat(품질("degraded")).as("판정 못 한 건이다").isEqualTo(1.0);
     }
 
     @Test
@@ -1235,6 +1238,10 @@ class AdmissionGatewayFilterTest {
 
         assertThat(exchange.<Double>getAttribute(AdmissionGatewayFilter.POLL_SCALE))
                 .as("재료가 없어도 자리는 채운다").isEqualTo(1.0);
+        // **재료 없이 통과시킨 것도 세고 품질에 남긴다.** 안 남기면 기동 직후 구간이 정상으로 잡힌다.
+        assertThat(사유("deferred-no-material")).as("사유로 센다").isEqualTo(1.0);
+        assertThat(품질("degraded")).as("재료 없이 판정한 건이다").isEqualTo(1.0);
+        assertThat(품질("fresh")).as("둘 다 오르면 품질이 뜻을 잃는다").isZero();
     }
 
     /**
@@ -1573,6 +1580,25 @@ class AdmissionGatewayFilterTest {
 
         assertThat(품질("degraded")).as("재료 없이 판정한 건").isEqualTo(1.0);
         assertThat(품질("fresh")).as("재료를 갖고 판정한 건").isZero();
+    }
+
+/**
+     * <b>모르는 쿠폰을 낡은 재료로 흘린 것도 센다.</b> 안 세면 그 구간이 지표에서 조용해,
+     * 아무 문자열 쿠폰이 상한 밖으로 나가는 것을 사후에 못 짚는다.
+     */
+    @Test
+    @DisplayName("낡은_재료의_모르는_쿠폰을_사유로_센다")
+    void 낡은_재료의_모르는_쿠폰을_사유로_센다() {
+        Instant 낡은_발행 = 지금.minusSeconds(3_600);
+        holder.replace(new GatewaySnapshot(
+                Map.of(COUPON, CouponStates.idle(1_000_000)),
+                new SnapshotMeta(1, 1), 낡은_발행));
+
+        태운다("없는쿠폰", "회원");
+
+        assertThat(사유("deferred-stale-material")).as("사유로 센다").isEqualTo(1.0);
+        assertThat(품질("degraded")).as("판정 재료가 낡은 건이다").isEqualTo(1.0);
+        assertThat(품질("fresh")).as("둘 다 오르면 품질이 뜻을 잃는다").isZero();
     }
 
     /** 재료가 신선하면 신선한 것으로 셉니다. 위 시험이 "늘 degraded" 로도 통과하면 안 됩니다. */

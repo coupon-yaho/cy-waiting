@@ -2,9 +2,11 @@ package com.kafkick.waiting.control;
 
 import com.kafkick.waiting.chaos.ChaosScenario;
 import com.kafkick.waiting.chaos.RecoveryCriteria;
+import com.kafkick.waiting.domain.admission.CircuitState;
 import com.kafkick.waiting.domain.allocation.CouponDemand;
 import com.kafkick.waiting.domain.allocation.CreditSmoother;
 import com.kafkick.waiting.domain.coupon.CouponState;
+import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
 import java.time.Instant;
@@ -15,8 +17,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.stream.IntStream;
-import com.kafkick.waiting.domain.admission.CircuitState;
-import com.kafkick.waiting.domain.queue.PollIntervalPolicy;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Mono;
@@ -41,6 +41,9 @@ class ReacquireTrembleScenarioTest {
     private static final int 떨림_주기 = 4;
 
     private static final int 도착_뒤_유지 = 5;
+
+    /** 조인 값 3 에서 네 배씩 올라 목표에 닿는 계단. */
+    private static final List<Long> 회복_계단 = List.of(12L, 48L, 192L, 768L, 3072L, 목표);
 
     private static final Instant 시각 = Instant.ofEpochSecond(1_700_000_000L);
 
@@ -106,7 +109,7 @@ class ReacquireTrembleScenarioTest {
                 })
                 // 떨림이 멎는다. 마지막 주기의 닫힘 둘에 이어 셋째 관측에서 풀린다.
                 .recover(() -> 분모.circuitObserved(노드, 0, 0))
-                .afterRecovery(() -> IntStream.range(0, 6 + 도착_뒤_유지)
+                .afterRecovery(() -> IntStream.range(0, 회복_계단.size() + 도착_뒤_유지)
                         .forEach(i -> 임기.add(틱(0, 0))))
                 .assertEntry(() -> RecoveryCriteria.violations(
                         같다("평시 몫", 평시[0], 목표),
@@ -114,9 +117,9 @@ class ReacquireTrembleScenarioTest {
                         진입_서킷[0] == CircuitState.HALF_OPEN ? Optional.empty()
                                 : Optional.of("되찾은 직후 서킷이 " + 진입_서킷[0])))
                 .assertDuring(() -> RecoveryCriteria.violations(
-                        유지_서킷.contains(CircuitState.CLOSED)
-                                ? Optional.of("떨리는 동안 서킷이 풀렸다 — " + 유지_서킷)
-                                : Optional.empty(),
+                        유지_서킷.stream().allMatch(CircuitState.HALF_OPEN::equals)
+                                ? Optional.empty()
+                                : Optional.of("떨리는 동안 반쯤 열림을 못 지켰다 — " + 유지_서킷),
                         같다("유지 구간 최대 몫", 최대(임기.subList(0, 유지_끝[0])), 3)))
                 .assertRecovery(() -> RecoveryCriteria.violations(
                         같다("방향 전환", 방향_전환(임기), 0),
@@ -169,7 +172,7 @@ class ReacquireTrembleScenarioTest {
     }
 
     private static Optional<String> 회복열이_계단이다(List<Long> 회복) {
-        List<Long> 기대 = new ArrayList<>(List.of(12L, 48L, 192L, 768L, 3072L, 목표));
+        List<Long> 기대 = new ArrayList<>(회복_계단);
         기대.addAll(Collections.nCopies(도착_뒤_유지, 목표));
         return 회복.equals(기대) ? Optional.empty()
                 : Optional.of("회복열이 %s — %s 여야 한다".formatted(회복, 기대));

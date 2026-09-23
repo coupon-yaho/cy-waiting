@@ -641,7 +641,6 @@ class AdmissionDeciderTest {
                 .isEqualTo(100);
     }
 
-    /** 줄을 못 세운 요청에는 노드 예산의 반만 연다. 전부 주면 그 초에 통과할 사람의 몫이 없다. */
     @Test
     @DisplayName("줄을_못_세우면_노드_예산의_반만_연다")
     void 줄을_못_세우면_노드_예산의_반만_연다() {

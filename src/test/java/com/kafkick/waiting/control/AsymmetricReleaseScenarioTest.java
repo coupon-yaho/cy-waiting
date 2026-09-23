@@ -24,8 +24,9 @@ import org.junit.jupiter.params.provider.EnumSource;
 /**
  * C6e — 레디스 상한이 전원에 걸렸다가 비대칭으로 풀린다. 적게 센 관측이 분모를 무너뜨리는가.
  *
- * <p>분모의 감소 지연이 유일한 방어선이다. 흡수판은 그 폭 안에서 버티는 것을, 붕괴판은 폭을 넘으면
- * 무너지는 틱을, 대조판은 지연을 1 로 두면 반드시 무너지는 것을 못 박는다.
+ * <p>등록부 안에서는 감소 지연이 유일한 방어선이다. 흡수판은 그 폭 안에서 버티는 것을, 붕괴판은 폭을
+ * 넘으면 무너지는 틱을, 대조판은 지연을 1 로 두면 반드시 무너지는 것을 못 박는다. 정리 규칙과 발행 전달은
+ * 시험이 모형으로 다시 쓴 것이라 그쪽의 방어선은 이 시험이 못 본다.
  */
 class AsymmetricReleaseScenarioTest {
 
@@ -63,7 +64,7 @@ class AsymmetricReleaseScenarioTest {
         흡수판(제품_분모(), 순서).run();
     }
 
-    /** 누가 두 번째 방어선을 넣으면 여기가 빨개진다. 그때 계획서의 "유일한 방어선" 을 고친다. */
+    /** 등록부나 상한 계산에 두 번째 방어선이 생기면 여기가 빨개진다. 그때 계획서 C6e 를 고친다. */
     @ParameterizedTest
     @EnumSource(Order.class)
     @DisplayName("C6e_감소_지연이_1_이면_같은_일정에서_무너진다")
@@ -73,22 +74,26 @@ class AsymmetricReleaseScenarioTest {
                 .hasMessageContaining("개방 상한 합");
     }
 
-    @Test
+    /** 돌아온 틱의 배율은 순서에 달렸다. 리더가 먼저 치면 돌아온 노드를 못 세고 무너진 분모를 넘긴다. */
+    @ParameterizedTest
+    @EnumSource(Order.class)
     @DisplayName("C6e_감소_지연보다_늦게_풀린_노드는_무너진_분모를_받는다")
-    void C6e_감소_지연보다_늦게_풀린_노드는_무너진_분모를_받는다() {
-        Cluster 판 = new Cluster(제품_분모(), Order.리더_먼저);
+    void C6e_감소_지연보다_늦게_풀린_노드는_무너진_분모를_받는다(Order 순서) {
+        Cluster 판 = new Cluster(제품_분모(), 순서);
         int[] 해제 = new int[1];
+        double 돌아온_배율 = 순서 == Order.리더_먼저 ? 1.5 : 1.0;
 
-        시나리오("C6e 붕괴", 판, 설계_감소_지연 + 1, 해제)
+        시나리오("C6e 붕괴 " + 순서, 판, 설계_감소_지연 + 1, 해제)
                 .assertDuring(() -> RecoveryCriteria.violations(
-                        첫_관측이_하나다(판, 해제[0]),
+                        첫_관측이_전제대로다(판, 해제[0], 순서),
                         같다("첫 위반 틱", 첫_위반(판), 해제[0] + 설계_감소_지연 - 1)))
                 .assertRecovery(() -> {
                     List<Tick> 회복 = 판.해제부터(판.c_해제);
                     return RecoveryCriteria.violations(
-                            회복.get(0).배율() == 1.5 ? Optional.empty()
-                                    : Optional.of(("돌아온 틱의 배율이 %.2f — 1.5 였다. 바뀌었으면 방어선이 "
-                                            + "하나 더 생긴 것이니 C6e 의 문장을 고친다").formatted(회복.get(0).배율())),
+                            회복.get(0).배율() == 돌아온_배율 ? Optional.empty()
+                                    : Optional.of(("돌아온 틱의 배율이 %.2f — %.1f 였다. 바뀌었으면 방어선이 "
+                                            + "하나 더 생긴 것이니 C6e 의 문장을 고친다")
+                                            .formatted(회복.get(0).배율(), 돌아온_배율)),
                             배율을_지킨다(회복.subList(1, 회복.size()), 1.0),
                             모두_셋을_든다(회복.get(1)));
                 })
@@ -100,7 +105,7 @@ class AsymmetricReleaseScenarioTest {
         int[] 해제 = new int[1];
         return 시나리오("C6e 흡수 " + 순서, 판, 1, 해제)
                 .assertDuring(() -> RecoveryCriteria.violations(
-                        순서 == Order.리더_먼저 ? 첫_관측이_하나다(판, 해제[0]) : Optional.empty(),
+                        첫_관측이_전제대로다(판, 해제[0], 순서),
                         개방_합을_지킨다(판.해제부터(해제[0]).subList(0, 1)),
                         분모가_셋이다(판.해제부터(해제[0]).subList(0, 1))))
                 .assertRecovery(() -> {
@@ -195,6 +200,7 @@ class AsymmetricReleaseScenarioTest {
                     든_것.put(id, 발행);
                 }
             }
+            // 상한 합은 풀린 노드까지 더한다. 보수적인 쪽이라 초록은 의미가 있다.
             기록.add(new Tick(지금, 관측, 분모.count(),
                     든_것.values().stream().mapToLong(판정::failOpenCap).sum(),
                     든_것.values().stream().mapToLong(판정::globalCap).sum() / (double) 예산,
@@ -222,8 +228,10 @@ class AsymmetricReleaseScenarioTest {
     }
 
     /** 전원이 정리됐다는 전제. 이것이 안 서면 이 시나리오는 아무것도 안 잰다. */
-    private static Optional<String> 첫_관측이_하나다(Cluster 판, int 해제) {
-        return 같다("해제 첫 틱의 관측", 판.해제부터(해제).get(0).관측(), 1)
+    private static Optional<String> 첫_관측이_전제대로다(Cluster 판, int 해제, Order 순서) {
+        // 리더가 나중에 치면 같은 틱에 풀린 B 가 먼저 세어진다. 그 판은 지연 1 만 가른다.
+        int 기대 = 순서 == Order.리더_먼저 ? 1 : 2;
+        return 같다("해제 첫 틱의 관측", 판.해제부터(해제).get(0).관측(), 기대)
                 .map(사유 -> "전제 — " + 사유);
     }
 

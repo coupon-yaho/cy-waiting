@@ -40,16 +40,16 @@ public class GatewayPresenceConfig {
                 properties.capacity().expectedNodes());
     }
 
-    /**
-     * 하트비트 루프. 주기는 틱과 같다 — 배분이 한 틱마다 분모를 읽으므로 그보다
-     * 드물게 찍으면 멀쩡한 노드가 관측 사이에서 사라진다.
-     */
     /** 조회 필터가 세우고 하트비트가 싣는 거절 표시. 둘이 같은 것을 봐야 해 빈 하나로 둔다. */
     @Bean
     PollRejections pollRejections() {
         return PollRejections.create();
     }
 
+    /**
+     * 하트비트 루프. 주기는 틱과 같다 — 배분이 한 틱마다 분모를 읽으므로 그보다
+     * 드물게 찍으면 멀쩡한 노드가 관측 사이에서 사라진다.
+     */
     @Bean
     GatewayHeartbeatLoop gatewayHeartbeatLoop(GatewayRedisPort port,
             GatewayRegistry registry, ControlPlaneProperties properties,

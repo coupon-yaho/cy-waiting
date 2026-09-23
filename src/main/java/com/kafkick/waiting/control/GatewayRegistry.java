@@ -8,7 +8,6 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import org.slf4j.Logger;
@@ -61,8 +60,11 @@ public final class GatewayRegistry {
     /** 방금 하트비트가 센 값. 실패한 회차 뒤에는 0(모름)이다. */
     private final AtomicInteger seenNow = new AtomicInteger();
 
-    /** 조회를 상한으로 거절 중인 노드를 처음 본 시각(nanoTime). 없으면 -1 이다. */
-    private final AtomicLong rejectingSince = new AtomicLong(-1);
+    /** 거절 구간의 진입 시각(nanoTime, 없으면 -1)과 거절 없이 이어진 관측 수. 서킷과 같은 이유로 한 덩어리다. */
+    private record Rejecting(long since, int quietStreak) {
+    }
+
+    private final AtomicReference<Rejecting> rejecting = new AtomicReference<>(new Rejecting(-1, 0));
 
     /** 하트비트가 연속으로 못 돈 횟수. 표가 낡았는지를 이걸로 안다. */
     private final AtomicInteger circuitMisses = new AtomicInteger();
@@ -201,25 +203,34 @@ public final class GatewayRegistry {
      * 하트비트가 센 "조회를 상한으로 거절 중인 노드 수". 하나라도 있으면 청소를 멈춘다 — 거절당한 사람은 생존 신호를
      * 못 갱신해 걷히면 줄을 잃는다. <b>놓친 회차에는 부르지 않는다</b> — 모르는 것을 "거절 없음" 으로 읽으면 걷는다.
      */
-    public void pollRejectionObserved(int rejecting) {
+    public void pollRejectionObserved(int nodes) {
         long at = System.nanoTime();
-        if (rejecting > 0) {
-            if (rejectingSince.compareAndSet(-1, at)) {
-                log.warn("조회를 상한으로 거절하는 노드가 있다 — 청소를 멈춘다, {}대. "
-                        + "거절당한 사람은 생존 신호를 못 갱신한다", rejecting);
+        // **거는 쪽은 즉시, 푸는 쪽은 연속 관측 뒤.** 간헐 거절이 하트비트마다 켜고 끄면 로그가 쏟아지고,
+        // 한 번만 켜진 참이 배분 회차 사이로 샌다.
+        Rejecting before = rejecting.getAndUpdate(now -> {
+            if (nodes > 0) {
+                return new Rejecting(now.since() >= 0 ? now.since() : at, 0);
             }
-            return;
-        }
-        long since = rejectingSince.getAndSet(-1);
-        if (since >= 0) {
+            if (now.since() < 0) {
+                return now;
+            }
+            int quiet = now.quietStreak() + 1;
+            return quiet >= rampDownTicks ? new Rejecting(-1, 0) : new Rejecting(now.since(), quiet);
+        });
+        // 람다 밖에서 찍는다. CAS 가 재시도하면 같은 줄이 두 번 난다.
+        boolean after = rejecting.get().since() >= 0;
+        if (before.since() < 0 && after) {
+            log.warn("조회를 상한으로 거절하는 노드가 있다 — 청소를 멈춘다, {}대. "
+                    + "거절당한 사람은 생존 신호를 못 갱신한다. 오래 안 풀리면 토큰 남용부터 본다", nodes);
+        } else if (before.since() >= 0 && !after) {
             log.info("조회 거절이 멎었다 — 청소는 유예 뒤 다시 돈다, {}초 동안 거절했다",
-                    NANOSECONDS.toSeconds(at - since));
+                    NANOSECONDS.toSeconds(at - before.since()));
         }
     }
 
     /** 청소가 읽는 값. 관측 전에는 거절이 없던 것으로 본다. */
     public boolean pollRejecting() {
-        return rejectingSince.get() >= 0;
+        return rejecting.get().since() >= 0;
     }
 
     /** 수집이 예산에서 뺄 인스턴스. */

@@ -243,16 +243,17 @@ for _, id in ipairs(ids) do
         dead[#dead + 1] = REJECT .. id
     else
         alive = alive + 1
+        -- **거절은 산 노드면 센다.** 포화된 노드는 하트비트가 늦기 쉬운데 표 신선도로 자르면 바로 그때 청소가
+        -- 다시 돈다. 죽은 노드는 위에서 지우므로 청소를 영영 멈추지 못한다.
+        if rejectOf[id] then
+            rejectingCount = rejectingCount + 1
+        end
         -- 죽은 노드의 표는 안 센다. 낡은 표도 안 센다 — 둘 다 이미 없는
         -- 관측이라, 세면 지나간 장애가 지금의 배분을 정한다. **통과 수도 같다.**
         if now - seen <= voteFresh then
             if passOf[id] ~= nil then
                 passSum = passSum + passOf[id]
                 passReported = passReported + 1
-            end
-            -- 표와 같은 신선도다. 죽은 노드의 거절이 청소를 영영 멈추지 못하게 한다.
-            if rejectOf[id] then
-                rejectingCount = rejectingCount + 1
             end
             local list = ejectOf[id]
             if list ~= nil then

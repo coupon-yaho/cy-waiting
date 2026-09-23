@@ -2,6 +2,9 @@ package com.kafkick.waiting.control;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.kafkick.waiting.MutableClock;
 import java.time.Duration;
 import java.time.Instant;
@@ -10,6 +13,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.awaitility.Awaitility;
+import org.slf4j.LoggerFactory;
 import reactor.core.Disposable;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -307,6 +311,119 @@ class SnapshotRefresherTest {
         } finally {
             구독.dispose();
         }
+    }
+
+    /**
+     * <b>돌아온 노드는 무너진 분모를 그대로 안 든다</b> (CY-1000). 리더가 아직 저를 안 센 스냅샷을 받으면
+     * 제 관측으로 분모를 올린다 — 안 올리면 한 틱 동안 몫을 두 번 쓴다. 회차마다 새로 읽는다.
+     */
+    @Test
+    @DisplayName("분모를_제_관측_아래로_안_든다")
+    void 분모를_제_관측_아래로_안_든다() {
+        MutableClock clock = MutableClock.at(지금);
+        SnapshotHolder holder = 홀더(clock);
+        AtomicInteger 제_관측 = new AtomicInteger(3);
+        SnapshotRefresher refresher = SnapshotRefresher.timed(holder,
+                () -> Mono.just(new TimedSnapshot(정상, 0)), clock, 제_관측::get);
+
+        StepVerifier.create(refresher.once()).verifyComplete();
+        assertThat(holder.current().meta().gatewayCount()).as("발행 2, 관측 3").isEqualTo(3);
+
+        제_관측.set(1);
+        StepVerifier.create(refresher.once()).verifyComplete();
+        assertThat(holder.current().meta().gatewayCount()).as("발행 2, 관측 1").isEqualTo(2);
+    }
+
+    /** 운영 배선이 이 노드의 등록부를 건다. 빠지면 위 방어가 시험에서만 산다. */
+    @Test
+    @DisplayName("배선이_등록부의_관측을_건다")
+    void 배선이_등록부의_관측을_건다() {
+        MutableClock clock = MutableClock.at(지금);
+        SnapshotHolder holder = 홀더(clock);
+        GatewayRegistry 등록부 = GatewayRegistry.of(3, 1);
+        등록부.observed(5);
+        SnapshotRefresher refresher = new HealthConfig()
+                .snapshotRefresher(holder, () -> Mono.just(정상), clock, 등록부);
+
+        StepVerifier.create(refresher.once()).verifyComplete();
+
+        assertThat(holder.current().meta().gatewayCount()).isEqualTo(5);
+    }
+
+    /** 발행값과 쓰는 값이 갈린 구간을 쌍으로 남긴다. 안 남기면 한 노드만 몫이 적은 까닭을 못 찾는다. */
+    @Test
+    @DisplayName("분모를_올려_든_구간을_쌍으로_남긴다")
+    void 분모를_올려_든_구간을_쌍으로_남긴다() {
+        MutableClock clock = MutableClock.at(지금);
+        SnapshotHolder holder = 홀더(clock);
+        AtomicInteger 제_관측 = new AtomicInteger(3);
+        SnapshotRefresher refresher = SnapshotRefresher.timed(holder,
+                () -> Mono.just(new TimedSnapshot(정상, 0)), clock, 제_관측::get);
+        Logger 로거 = (Logger) LoggerFactory.getLogger(SnapshotRefresher.class);
+        ListAppender<ILoggingEvent> 로그 = new ListAppender<>();
+        로그.start();
+        로거.addAppender(로그);
+        try {
+            refresher.once().block();
+            // 하트비트가 한 번 실패한 회차는 모름이다. 구간을 끊지 않는다.
+            제_관측.set(0);
+            refresher.once().block();
+            제_관측.set(3);
+            refresher.once().block();
+            clock.앞으로(Duration.ofSeconds(4));
+            제_관측.set(2);
+            refresher.once().block();
+            refresher.once().block();
+        } finally {
+            로거.detachAppender(로그);
+        }
+
+        assertThat(로그.list).extracting(ILoggingEvent::getFormattedMessage)
+                .filteredOn(줄 -> 줄.contains("분모"))
+                .containsExactly(
+                        "받은 분모 2 를 제 관측 3 으로 올려 든다 — 발행이 이 노드가 본 것보다 적게 셌다",
+                        "받은 분모를 그대로 든다 — 4초 동안 올려 들었다, 발행 2 관측 2");
+    }
+
+    /** 버려질 스냅샷으로는 올림 구간에 안 들어간다. 들지 않은 것을 들었다고 남기면 쌍이 실제와 어긋난다. */
+    @Test
+    @DisplayName("버린_스냅샷은_올림_구간을_안_연다")
+    void 버린_스냅샷은_올림_구간을_안_연다() {
+        MutableClock clock = MutableClock.at(지금);
+        Map<String, String> 발행_표시_없음 = Map.of("#credit", "1000", "#nodes", "2",
+                "c1", "ADAPTIVE:QUEUEING:100:500:2000");
+        SnapshotRefresher refresher = SnapshotRefresher.timed(홀더(clock),
+                () -> Mono.just(new TimedSnapshot(발행_표시_없음, 0)), clock, () -> 3);
+        Logger 로거 = (Logger) LoggerFactory.getLogger(SnapshotRefresher.class);
+        ListAppender<ILoggingEvent> 로그 = new ListAppender<>();
+        로그.start();
+        로거.addAppender(로그);
+        try {
+            refresher.once().block();
+        } finally {
+            로거.detachAppender(로그);
+        }
+
+        assertThat(로그.list).extracting(ILoggingEvent::getFormattedMessage)
+                .noneMatch(줄 -> 줄.contains("올려 든다"))
+                .anyMatch(줄 -> 줄.contains("받아들일 수 없는 스냅샷"));
+    }
+
+    /** 분모가 옛 큰 값에 갇힌 노드도 방금 본 값만 바닥으로 쓴다. 갇힌 값을 쓰면 몫이 끝없이 준다. */
+    @Test
+    @DisplayName("배선은_갇힌_분모가_아니라_방금_본_값을_건다")
+    void 배선은_갇힌_분모가_아니라_방금_본_값을_건다() {
+        MutableClock clock = MutableClock.at(지금);
+        SnapshotHolder holder = 홀더(clock);
+        GatewayRegistry 등록부 = GatewayRegistry.of(3, 1);
+        등록부.observed(10);
+        등록부.observed(3);
+        SnapshotRefresher refresher = new HealthConfig()
+                .snapshotRefresher(holder, () -> Mono.just(정상), clock, 등록부);
+
+        StepVerifier.create(refresher.once()).verifyComplete();
+
+        assertThat(holder.current().meta().gatewayCount()).as("분모 10, 본 값 3, 발행 2").isEqualTo(3);
     }
 
     /**

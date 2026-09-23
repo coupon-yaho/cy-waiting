@@ -6,6 +6,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.time.Clock;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.IntSupplier;
 import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,6 +27,8 @@ public final class SnapshotRefresher {
 
     private static final Logger log = LoggerFactory.getLogger(SnapshotRefresher.class);
     private static final Duration DEFAULT_TIMEOUT = Duration.ofMillis(400);
+    /** 받은 분모를 그대로 든다. 분모는 이미 1 아래로 안 내려간다. */
+    private static final IntSupplier NO_FLOOR = () -> 1;
 
     private final SnapshotCodec codec = SnapshotCodec.create();
     /**
@@ -33,17 +36,22 @@ public final class SnapshotRefresher {
      * 시간을 담는다 — 매 회차 찍으면 수백 줄이 쏟아지면서 걷힌 시점은 안 남는다.
      */
     private final AtomicReference<Instant> failingSince = new AtomicReference<>();
+    /** 받은 분모를 제 관측으로 올려 든 구간의 시작. 발행값과 쓰는 값이 갈린 것을 쌍으로 남긴다. */
+    private final AtomicReference<Instant> raisedSince = new AtomicReference<>();
     private final SnapshotHolder holder;
     private final Supplier<Mono<TimedSnapshot>> source;
     private final Duration timeout;
     private final Clock clock;
+    /** 이 노드의 하트비트가 방금 센 노드 수. 받은 분모의 바닥이다. 모르면 0 이다. */
+    private final IntSupplier seen;
 
     private SnapshotRefresher(SnapshotHolder holder,
-            Supplier<Mono<TimedSnapshot>> source, Duration timeout, Clock clock) {
+            Supplier<Mono<TimedSnapshot>> source, Duration timeout, Clock clock, IntSupplier seen) {
         this.holder = holder;
         this.source = source;
         this.timeout = timeout;
         this.clock = Objects.requireNonNull(clock, "clock 은 필수다");
+        this.seen = Objects.requireNonNull(seen, "seen 은 필수다");
     }
 
     public static SnapshotRefresher of(SnapshotHolder holder,
@@ -54,11 +62,20 @@ public final class SnapshotRefresher {
     /**
      * 재료와 <b>그것을 읽은 레디스 시각</b>을 같이 받는다.
      *
-     * <p>안 받으면 나이가 두 벽시계의 차가 되어 노드마다 다르게 낡는다.
+     * <p>안 받으면 나이가 두 벽시계의 차가 되어 노드마다 다르게 낡는다. 분모 바닥은 없다 — 운영 배선은 아래 형태다.
      */
     public static SnapshotRefresher timed(SnapshotHolder holder,
             Supplier<Mono<TimedSnapshot>> source, Clock clock) {
-        return new SnapshotRefresher(holder, source, DEFAULT_TIMEOUT, clock);
+        return timed(holder, source, clock, NO_FLOOR);
+    }
+
+    /**
+     * 받은 분모를 이 노드의 관측 아래로 안 내린다. 돌아온 노드는 리더가 아직 저를 안 센
+     * 스냅샷을 먼저 받을 수 있고, 그대로 들면 그 틱에 몫을 두 번 쓴다.
+     */
+    public static SnapshotRefresher timed(SnapshotHolder holder,
+            Supplier<Mono<TimedSnapshot>> source, Clock clock, IntSupplier seen) {
+        return new SnapshotRefresher(holder, source, DEFAULT_TIMEOUT, clock, seen);
     }
 
 
@@ -75,7 +92,8 @@ public final class SnapshotRefresher {
     /** 한 회차의 상한을 주입한다. 발행 주기보다 짧아야 다음 회차가 제때 돈다. */
     public static SnapshotRefresher of(SnapshotHolder holder,
             Supplier<Mono<Map<String, String>>> source, Duration timeout) {
-        return new SnapshotRefresher(holder, TimedSnapshot.untimed(source), timeout, Clock.systemUTC());
+        return new SnapshotRefresher(holder, TimedSnapshot.untimed(source), timeout,
+                Clock.systemUTC(), NO_FLOOR);
     }
 
     /**
@@ -108,6 +126,8 @@ public final class SnapshotRefresher {
                     }
                 })
                 .filter(read -> isAcceptable(read.snapshot()))
+                // 받아들인 것에만 건다. 버릴 것으로 올림 구간을 열면 들지 않은 것을 들었다고 남는다.
+                .map(read -> new Read(floored(read.snapshot()), read.now()))
                 .doOnNext(read -> {
                     // 시각을 못 받았으면 홀더가 자기 시계로 잰다. 운영 배선은
                     // 늘 받으므로 그 경로는 시험이 따로 잠근다.
@@ -147,6 +167,26 @@ public final class SnapshotRefresher {
         if (failingSince.compareAndSet(null, clock.instant())) {
             log.warn(message, args);
         }
+    }
+
+    private GatewaySnapshot floored(GatewaySnapshot published) {
+        int floor = seen.getAsInt();
+        GatewaySnapshot held = published.withGatewayCountAtLeast(floor);
+        if (held != published) {
+            if (raisedSince.compareAndSet(null, clock.instant())) {
+                log.info("받은 분모 {} 를 제 관측 {} 으로 올려 든다 — 발행이 이 노드가 본 것보다 적게 셌다",
+                        published.meta().gatewayCount(), floor);
+            }
+        } else if (floor > 0) {
+            // 0 은 모름이다. 하트비트 한 번 실패로 구간을 끊으면 흔들리는 동안 갱신마다 한 쌍이 난다.
+            Instant since = raisedSince.getAndSet(null);
+            if (since != null) {
+                log.info("받은 분모를 그대로 든다 — {}초 동안 올려 들었다, 발행 {} 관측 {}",
+                        Duration.between(since, clock.instant()).toSeconds(),
+                        published.meta().gatewayCount(), floor);
+            }
+        }
+        return held;
     }
 
     /** 걷힌 순간에 지속 시간과 함께 남긴다. */

@@ -34,6 +34,12 @@ public record SnapshotMeta(long globalCredit, int gatewayCount, Tunables tunable
         return new SnapshotMeta(globalCredit, gatewayCount, tunables, scale);
     }
 
+    /** 분모를 {@code floor} 아래로 안 내린 사본. 크게 잡는 쪽은 과소 통과라 안전하다. */
+    public SnapshotMeta withGatewayCountAtLeast(int floor) {
+        return gatewayCount >= floor ? this
+                : new SnapshotMeta(globalCredit, floor, tunables, pollScale);
+    }
+
     /** 배수를 안 실은 재료. 예산이 넉넉하면 이것이 정상이다. */
     public static SnapshotMeta withoutPollScale(long globalCredit, int gatewayCount,
             Tunables tunables) {

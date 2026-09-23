@@ -365,6 +365,10 @@ class SnapshotRefresherTest {
         로거.addAppender(로그);
         try {
             refresher.once().block();
+            // 하트비트가 한 번 실패한 회차는 모름이다. 구간을 끊지 않는다.
+            제_관측.set(0);
+            refresher.once().block();
+            제_관측.set(3);
             refresher.once().block();
             clock.앞으로(Duration.ofSeconds(4));
             제_관측.set(2);
@@ -377,7 +381,7 @@ class SnapshotRefresherTest {
         assertThat(로그.list).extracting(ILoggingEvent::getFormattedMessage)
                 .filteredOn(줄 -> 줄.contains("분모"))
                 .containsExactly(
-                        "받은 분모 2 를 제 관측 3 으로 올려 든다 — 리더가 아직 이 노드를 안 셌다",
+                        "받은 분모 2 를 제 관측 3 으로 올려 든다 — 발행이 이 노드가 본 것보다 적게 셌다",
                         "받은 분모를 그대로 든다 — 4초 동안 올려 들었다, 발행 2 관측 2");
     }
 

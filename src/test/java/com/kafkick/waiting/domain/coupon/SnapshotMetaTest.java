@@ -31,10 +31,11 @@ class SnapshotMetaTest {
     @Test
     @DisplayName("분모를_제_관측_아래로_안_내린다")
     void 분모를_제_관측_아래로_안_내린다() {
-        SnapshotMeta 발행 = new SnapshotMeta(1000, 2, null, 3.0);
+        Tunables 튜너블 = new Tunables(0.4, 7);
+        SnapshotMeta 발행 = new SnapshotMeta(1000, 2, 튜너블, 3.0);
 
         assertThat(발행.withGatewayCountAtLeast(3))
-                .isEqualTo(new SnapshotMeta(1000, 3, null, 3.0));
+                .isEqualTo(new SnapshotMeta(1000, 3, 튜너블, 3.0));
         assertThat(발행.withGatewayCountAtLeast(1)).isEqualTo(발행);
         assertThat(발행.withGatewayCountAtLeast(2)).isEqualTo(발행);
     }

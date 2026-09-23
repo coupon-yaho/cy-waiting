@@ -26,8 +26,8 @@ import org.junit.jupiter.params.provider.EnumSource;
  * C6e — 레디스 상한이 전원에 걸렸다가 비대칭으로 풀린다. 적게 센 관측이 분모를 무너뜨리는가.
  *
  * <p>등록부 안에서는 감소 지연이 유일한 방어선이다. 흡수판은 그 폭 안에서 버티는 것을, 붕괴판은 폭을
- * 넘으면 무너지는 틱을, 대조판은 지연을 1 로 두면 반드시 무너지는 것을 못 박는다. 정리 규칙과 발행 전달은
- * 시험이 모형으로 다시 쓴 것이라 그쪽의 방어선은 이 시험이 못 본다.
+ * 넘으면 무너지는 틱을, 대조판은 지연을 1 로 두면 반드시 무너지는 것을 못 박는다. 정리 규칙과 발행 전달, 받는
+ * 경로는 시험이 모형으로 다시 쓴 것이라 그쪽의 방어선은 이 시험이 못 본다. 받는 경로는 갱신 루프 시험이 잰다.
  */
 class AsymmetricReleaseScenarioTest {
 
@@ -77,7 +77,8 @@ class AsymmetricReleaseScenarioTest {
 
     /**
      * 돌아온 틱의 유입은 순서에 달렸다. 리더가 먼저 치면 돌아온 노드를 못 센 분모를 발행하지만, 돌아온 노드는
-     * 제 관측으로 분모를 올려 든다. 남는 것은 새 노드가 합류할 때와 같은 한 틱의 겹침이다.
+     * 제 관측으로 분모를 올려 든다. 남는 것은 합류와 같은 한 틱의 겹침이다. 리더가 나중에 치면 발행값이 이미
+     * 전원이라 바닥이 할 일이 없고, 그 판은 회귀 대조다.
      */
     @ParameterizedTest
     @EnumSource(Order.class)
@@ -221,6 +222,7 @@ class AsymmetricReleaseScenarioTest {
                     발행 = new SnapshotMeta(예산, 분모().count());
                 }
             }
+            // 제품은 하트비트와 갱신이 따로 돈다. 순서가 뒤집혀도 막힌 동안 놓침이 등록부를 지켜 바닥은 같다.
             for (String id : 노드) {
                 if (발행 != null && !막힘.contains(id)) {
                     든_것.put(id, 발행.withGatewayCountAtLeast(등록부.get(id).count()));

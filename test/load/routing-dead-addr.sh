@@ -164,6 +164,7 @@ if [ "$k6_rc" -ne 0 ]; then
 fi
 
 # 파싱과 합 대조는 `routing-lib.sh` 가 든다 — 인라인으로 두면 자기검증이 못 닿는다.
+CODES_SLACK="${VUS:-$vus}"
 if ! codes_from_summary "$work/summary.json" > "$work/codes"; then
   echo "판정 불가 — k6 요약을 못 읽었다"
   tail -5 "$work/k6.log" | sed 's/^/  /'; exit 2

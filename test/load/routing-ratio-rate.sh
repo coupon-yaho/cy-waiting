@@ -105,6 +105,8 @@ fi
 # 접어 내보내므로 태그로 갈랐다면 여기서 200 과 202 를 못 가른다.
 # **요약을 못 읽으면 그 회차는 못 잰 것이다.** 빈 파일이 남으면 아래 awk 의 `s+0` 이
 # 0 으로 고정돼 보낸 것이 전부 200 으로 읽힌다. 파싱은 `routing-lib.sh` 의 함수라 자기검증이 직접 잰다.
+# 꼬리 중단은 VU 수를 못 넘는다. k6 스크립트의 기본 VU 수와 같은 값을 쓴다.
+CODES_SLACK="${VUS:-160}"
 if ! codes_from_summary "$work/summary.json" > "$work/codes"; then
   echo "판정 불가 — k6 요약을 못 읽었다. 이 회차로는 분배를 못 잰다"
   tail -5 "$work/k6.log" | sed 's/^/  /'

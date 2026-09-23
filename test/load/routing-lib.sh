@@ -183,6 +183,10 @@ require_codes_match() {
     # **회차당 요청은 하나다.** 보낸 수가 완료 회차보다 크게 벌어지면 스크립트가 요청을
     # 더 넣은 것이고, 그 수를 분모로 쓰는 판정이 틀린다. 꼬리 중단은 VU 수를 못 넘는다.
     local slack=${CODES_SLACK:-${VUS:-100}}
+    # 수가 아니면 아래 비교가 오류를 내고 if 가 거짓이 되어 대조가 통째로 통과한다.
+    case "$slack" in
+        ''|*[!0-9]*) echo "판정 불가 — 허용 폭이 정수여야 한다: '$slack'"; return 2 ;;
+    esac
     if [ "$total" -lt "$counted" ] || [ $(( total - counted )) -gt "$slack" ]; then
         echo "판정 불가 — 보낸 $total 과 코드별 합 $counted 의 차가 $slack 을 넘는다"
         return 2

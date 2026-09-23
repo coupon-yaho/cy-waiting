@@ -181,6 +181,8 @@ if [ "$k6_rc" -ne 0 ]; then
 fi
 
 # 파싱과 합 대조는 `routing-lib.sh` 가 든다 — 인라인으로 두면 자기검증이 못 닿는다.
+# 꼬리 중단은 VU 수를 못 넘는다. 실제로 쓴 값을 넘긴다 — 기본값 100 으로 두면 큰 회차가 끊긴다.
+CODES_SLACK="${VUS:-$vus}"
 if ! codes_with_gateways "$work/summary.json" "$GATEWAYS" > "$work/codes"; then
   echo "판정 불가 — k6 요약을 못 읽었다. 이 회차로는 쏠림을 못 잰다"
   tail -5 "$work/k6.log" | sed 's/^/  /'

@@ -230,8 +230,9 @@ peak_net_lines() {
 peak_host_idle_pct() {
     local stat=${PEAK_STAT:-/proc/stat} a b
     a=$(awk '/^cpu /{ print $2+$3+$4+$5+$6+$7+$8+$9, $5+$6 }' "$stat" 2>/dev/null)
-    [ -n "$a" ] || { printf 'NA'; return; }
+    # **못 읽어도 간격은 지킨다.** 먼저 돌아나가면 표집 루프가 빈 바퀴로 돌아 회차 내내 CPU 를 문다.
     sleep "$(peak_idle_wait)"
+    [ -n "$a" ] || { printf 'NA'; return; }
     b=$(awk '/^cpu /{ print $2+$3+$4+$5+$6+$7+$8+$9, $5+$6 }' "$stat" 2>/dev/null)
     [ -n "$b" ] || { printf 'NA'; return; }
     peak_idle_delta "$a" "$b"

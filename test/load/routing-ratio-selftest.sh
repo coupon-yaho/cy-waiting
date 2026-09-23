@@ -130,6 +130,10 @@ extra=$(codes extra "200 10" "202 0" "other 0" "total 400" "done 10")
 lib_case "보낸 수가 크게 벌어지면 판정 불가" 2 \
     "$(CODES_SLACK=100 require_codes_match "$extra" >/dev/null 2>&1; printf '%s' $?)"
 lib_case "판정 불가 사유는 표준 출력으로" 1 "$(require_codes_match "$empty" 2>/dev/null | grep -c '판정 불가')"
+lib_case "허용 폭이 수가 아니면 끊는다" 2 \
+    "$(CODES_SLACK=많이 require_codes_match "$ok_codes" >/dev/null 2>&1; printf '%s' $?)"
+lib_case "허용 폭이 비면 기본값으로 떨어진다" 0 \
+    "$(CODES_SLACK='' VUS='' require_codes_match "$ok_codes" >/dev/null 2>&1; printf '%s' $?)"
 
 # 게이트웨이별 계수. 이름이 어긋나면 0 뿐인 값으로 쏠림을 판정하게 된다.
 gws=$(summary gws '{"metrics":{"issue_200":{"count":4},"http_reqs":{"count":4},"iterations":{"count":4},"issue_gw0":{"count":3},"issue_gw1":{"count":1}}}')

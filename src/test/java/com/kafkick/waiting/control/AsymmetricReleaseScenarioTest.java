@@ -128,7 +128,9 @@ class AsymmetricReleaseScenarioTest {
                             같다("돌아온 틱의 유입 합", 회복.get(0).유입(), 순서 == Order.리더_먼저 ? 8_192 : 6_144)
                                     .map(사유 -> 사유 + ". 크레딧 " + 회복.get(0).크레딧() + " 든 분모 "
                                             + 회복.get(0).든_분모()),
-                            배율을_지킨다(회복, 1.0));
+                            배율을_지킨다(회복, 1.0),
+                            모두_셋을_든다(회복.get(1)),
+                            같다("램프가 닿은 몫", 회복.get(회복.size() - 1).크레딧(), 예산));
                 })
                 .run();
     }
@@ -254,6 +256,8 @@ class AsymmetricReleaseScenarioTest {
 
         private int 막힌_연속;
 
+        private long 출발점 = -1;
+
         Cluster(Supplier<GatewayRegistry> 새_등록부, Order 순서) {
             this.순서 = 순서;
             for (String id : 노드) {
@@ -266,11 +270,17 @@ class AsymmetricReleaseScenarioTest {
 
         void 한_틱() {
             지금++;
-            시계.앞으로(Duration.ofSeconds(1));
+            // 되찾는 판단은 틱 중간, 발행은 틱 끝이다. 같은 순간에 두면 재료 나이가 낡음 임계에 정확히 걸려
+            // 판이 경계 위에 서는데, 제품에서는 전파 지연이 있어 그 순간이 안 나온다.
+            시계.앞으로(Duration.ofMillis(500));
             막힌_연속 = 막힘.contains(발행자) ? 막힌_연속 + 1 : 0;
             if (막힌_연속 >= 리스_틱) {
                 리더 = false;
             }
+            if (!리더 && !막힘.contains(발행자)) {
+                출발점 = new ControlPlaneConfig().startingCredit(발행자_홀더.view(), 발행자_홀더, 분모());
+            }
+            시계.앞으로(Duration.ofMillis(500));
             List<String> 차례 = 순서 == Order.리더_먼저 ? 노드 : List.of("B", "C", 발행자);
             int 관측 = -1;
             SnapshotMeta 발행 = null;
@@ -307,12 +317,11 @@ class AsymmetricReleaseScenarioTest {
         }
 
         /**
-         * 발행자의 한 회차. 리더십을 잃었으면 제품 배선의 출발점으로 되찾고 램프를 다시 세운다. 목표는 예산으로
-         * 고정한다 — 평활 이월은 이 모형이 안 다룬다.
+         * 발행자의 한 회차. 리더십을 잃었으면 제품 배선의 출발점으로 되찾고 램프를 다시 세운다. 되찾는 것은 늘
+         * 발행자다 — 먼저 풀린 다른 노드가 가져가면 그 노드의 재료 나이가 판을 가른다. 목표는 예산으로 고정한다.
          */
         private SnapshotMeta 발행한다() {
             if (!리더) {
-                long 출발점 = new ControlPlaneConfig().startingCredit(발행자_홀더.view(), 발행자_홀더, 분모());
                 if (출발점 >= 0) {
                     램프.resumeFrom(출발점);
                 }

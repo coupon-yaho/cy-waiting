@@ -104,8 +104,10 @@ class ReturningNodeFloorWireScenarioTest {
     void C6e_실배선에서_돌아온_노드가_제_관측으로_분모를_든다() {
         StatefulRedisConnection<String, String> 연결 = faults.연결한다();
         // 스크립트는 레디스 시계로 신선도를 잰다. 로컬 시계가 앞서면 가짜 노드가 미래로 읽혀 바로 죽는다.
-        Clock 레디스_시계 = Clock.offset(벽시계, Duration.ofSeconds(
-                Long.parseLong(연결.sync().time().get(0)) - 벽시계.instant().getEpochSecond()));
+        // 밀리초까지 맞춘다. 초로만 맞추면 수백 ms 어긋날 때 매초 한 번씩 미래로 읽혀 정리된다.
+        List<String> 레디스_지금 = 연결.sync().time();
+        long 레디스_밀리 = Long.parseLong(레디스_지금.get(0)) * 1_000 + Long.parseLong(레디스_지금.get(1)) / 1_000;
+        Clock 레디스_시계 = Clock.offset(벽시계, Duration.ofMillis(레디스_밀리 - 벽시계.millis()));
         GatewayNodes 노드들 = new GatewayNodes(연결, Duration.ofSeconds(3), 레디스_시계);
         ScheduledExecutorService 치기 = Executors.newSingleThreadScheduledExecutor();
         Logger 로거 = (Logger) LoggerFactory.getLogger(SnapshotRefresher.class);
@@ -115,55 +117,69 @@ class ReturningNodeFloorWireScenarioTest {
         int[] 평시 = new int[2];
         int[] 돌아온 = new int[2];
         int[] 걷은 = new int[2];
+        int[] 해제_직후 = new int[1];
         try {
             ChaosScenario.named("C6e 실배선 분모 바닥")
                     .baseline(() -> {
-                        Awaitility.await().alias("혼자 센다").atMost(기다림)
-                                .until(() -> 등록부.seenNow() == 1 && 든_분모() == 1);
-                        평시[0] = 등록부.seenNow();
-                        평시[1] = 든_분모();
+                        잡는다("혼자 센다", 평시, 1);
                     })
                     // 동료 둘이 돌아온다. 발행은 여전히 한 노드다 — 리더가 아직 안 센 틱이 계속되는 셈이다.
                     .inject(() -> 치기.scheduleAtFixedRate(
                             () -> 가짜_노드.forEach(노드들::등록한다), 0, 500, TimeUnit.MILLISECONDS))
                     .duringFault(() -> {
-                        Awaitility.await().alias("하트비트가 셋을 센다").atMost(기다림)
-                                .until(() -> 등록부.seenNow() == 3);
-                        Awaitility.await().alias("홀더가 셋을 든다").atMost(기다림)
-                                .until(() -> 든_분모() == 3);
-                        돌아온[0] = 등록부.seenNow();
-                        돌아온[1] = 든_분모();
+                        잡는다("하트비트가 셋을 세고 홀더가 셋을 든다", 돌아온, 3);
                     })
                     .recover(() -> {
+                        // 진행 중인 등록이 해제 뒤에 닿지 않게 끝나기를 기다린다.
                         치기.shutdownNow();
+                        try {
+                            치기.awaitTermination(5, TimeUnit.SECONDS);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
                         가짜_노드.forEach(노드들::해제한다);
+                        해제_직후[0] = 노드들.살아있는_수();
                     })
                     .afterRecovery(() -> {
-                        Awaitility.await().alias("다시 혼자 센다").atMost(기다림)
-                                .until(() -> 등록부.seenNow() == 1 && 든_분모() == 1);
-                        걷은[0] = 등록부.seenNow();
-                        걷은[1] = 든_분모();
+                        잡는다("다시 혼자 센다", 걷은, 1);
                     })
+                    // 값은 대기 안에서 잡는다. 대기가 끝난 뒤 다시 읽으면 그 사이 흔들림에 걸린다.
                     .assertEntry(() -> RecoveryCriteria.violations(
                             같다("평시 관측·든 분모", 평시, 1, 1)))
                     .assertDuring(() -> RecoveryCriteria.violations(
                             같다("돌아온 뒤 관측·든 분모", 돌아온, 3, 3),
-                            로그.list.stream().map(ILoggingEvent::getFormattedMessage)
-                                    .anyMatch(줄 -> 줄.startsWith("받은 분모 1 를 제 관측 3 으로 올려 든다"))
-                                    ? Optional.empty()
-                                    : Optional.of("올림 구간 진입 로그가 없다")))
+                            남았다(로그, "받은 분모 1 를 제 관측 3 으로 올려 든다", "올림 구간 진입")))
                     .assertRecovery(() -> RecoveryCriteria.violations(
+                            // 해제가 실제로 지웠는가. 안 지워도 정리가 곧 걷어 가 아래 대기는 통과한다.
+                            해제_직후[0] == 1 ? Optional.empty()
+                                    : Optional.of("해제 직후 살아 있는 수가 %d — 1 이어야 한다".formatted(해제_직후[0])),
                             같다("걷은 뒤 관측·든 분모", 걷은, 1, 1),
-                            로그.list.stream().map(ILoggingEvent::getFormattedMessage)
-                                    .anyMatch(줄 -> 줄.startsWith("받은 분모를 그대로 든다"))
-                                    ? Optional.empty()
-                                    : Optional.of("올림 구간 해제 로그가 없다")))
+                            남았다(로그, "받은 분모를 그대로 든다", "올림 구간 해제")))
                     .run();
         } finally {
             치기.shutdownNow();
             로거.detachAppender(로그);
             연결.close();
         }
+    }
+
+    /** 관측과 든 분모가 함께 {@code 기대} 인 순간을 잡아 둔다. */
+    private void 잡는다(String 무엇, int[] 담을_곳, int 기대) {
+        Awaitility.await().alias(무엇).atMost(기다림).until(() -> {
+            담을_곳[0] = 등록부.seenNow();
+            담을_곳[1] = 든_분모();
+            return 담을_곳[0] == 기대 && 담을_곳[1] == 기대;
+        });
+    }
+
+    /** 갱신 스레드가 쓰는 중에 읽지 않게 붙이는 쪽의 잠금 아래서 떠 온다. */
+    private static Optional<String> 남았다(ListAppender<ILoggingEvent> 로그, String 앞, String 이름) {
+        List<ILoggingEvent> 뜬_것;
+        synchronized (로그) {
+            뜬_것 = List.copyOf(로그.list);
+        }
+        return 뜬_것.stream().map(ILoggingEvent::getFormattedMessage).anyMatch(줄 -> 줄.startsWith(앞))
+                ? Optional.empty() : Optional.of(이름 + " 로그가 없다");
     }
 
     private int 든_분모() {

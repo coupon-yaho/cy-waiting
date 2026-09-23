@@ -196,7 +196,7 @@ inst_four=$(awk '$1 >= 4' "$work/instances" 2>/dev/null | wc -l)
 exposure=$(( inst_four * 100 / inst_total ))
 
 echo
-echo "응답 코드: $(awk '$1!="total"{printf "%s×%s ", $2, $1}' "$work/codes")"
+echo "응답 코드: $(awk '$1!="total" && $1!="done"{printf "%s×%s ", $2, $1}' "$work/codes")"
 echo "산 대 도착 합계: $live (보낸 것 $sent) · 인스턴스 최고 $peak_inst 대 · 배제 최고 $peak_eject 대"
 echo "죽은 주소 노출: 표본 $inst_total 개 중 $inst_four 개가 넷 ($exposure%) — 결과를 낸 대 수로 센다"
 echo

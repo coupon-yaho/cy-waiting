@@ -13,11 +13,13 @@ set -uo pipefail
 root=$(git rev-parse --show-toplevel 2>/dev/null) || root=.
 cd "$root" || exit 1
 
-# 프로젝트 규칙이 볼 파일. **자기검증이 여기를 갈아 끼운다** — 규칙이 무는지를
-# 재려면 저장소 밖 파일 하나를 넣어 볼 수 있어야 한다.
-RULE_TARGETS=${LINT_TARGETS:-$(git ls-files 'test/load/*.sh')}
-# 이음매를 쓴 회차는 shellcheck 를 건너뛴다. 규칙만 재는 자리다.
-RULE_ONLY=${LINT_TARGETS:+1}
+# **이음매는 표식과 함께일 때만 열린다.** 환경 변수 하나로 프로덕션 검사가
+# 통째로 꺼지면, 아무 말 없는 초록과 "셸 아흔 개 통과" 가 구별되지 않는다.
+RULE_ONLY=""
+if [ "${LINT_SELFTEST:-}" = 1 ] && [ -n "${LINT_TARGETS:-}" ]; then
+    RULE_ONLY=1
+    echo "  자기검증 회차 — 프로젝트 규칙만 본다"
+fi
 
 # **없으면 막는다. 건너뛰지 않는다.** 건너뛰면 이 검사가 안 도는 것이 통과로
 # 보이고, 도구가 없는 사람만 늘 초록을 본다. 고치는 법은 우회가 아니라 설치다.
@@ -97,13 +99,28 @@ done
 # 실제로 그렇게 한 자리가 났다 (CY-974).
 # **대리 소스는 안 봐준다.** 라이브러리를 거쳐 읽는 것을 인정하면 그 라이브러리가
 # 목록을 안 읽어도 조용하다 — 첫 판이 그랬다. 쓰는 파일이 직접 읽는다.
+# 대상은 위에서 고른 셸 전부다. `test/load` 밖에 러너가 생겨도 규칙이 따라간다.
+rule_targets=("${targets[@]}")
+if [ -n "${RULE_ONLY:-}" ]; then
+    # shellcheck disable=SC2206  # 이음매가 공백으로 가른 목록을 준다
+    rule_targets=($LINT_TARGETS)
+fi
+[ ${#rule_targets[@]} -gt 0 ] || { echo "  규칙이 볼 셸이 없다" >&2; exit 1; }
 missing=0
-while IFS= read -r f; do
-    grep -q 'queue_keys' "$f" || continue
-    [ "$f" = "test/load/queue-keys.sh" ] && continue
+for f in "${rule_targets[@]}"; do
+    if ! grep -q 'queue_keys' "$f" 2>/dev/null; then
+        # 못 읽는 파일은 건너뛰지 않는다 — 검사 밖으로 나가는 조용한 길이다.
+        [ -r "$f" ] || { echo "  못 읽어 규칙을 못 걸었다: $f" >&2; missing=1; }
+        continue
+    fi
+    # 목록을 내는 파일과 규칙을 적은 파일 자신은 대상이 아니다.
+    case "$f" in
+        test/load/queue-keys.sh|.github/scripts/shell-lint.sh|.github/scripts/shell-lint-selftest.sh)
+            continue ;;
+    esac
     grep -qE '^[[:space:]]*\.[[:space:]]+test/load/queue-keys\.sh' "$f" && continue
     echo "  queue_keys 를 쓰는데 queue-keys.sh 를 안 읽는다: $f" >&2
     missing=1
-done < <(printf '%s\n' $RULE_TARGETS)
+done
 [ "$missing" -eq 0 ] || exit 1
 

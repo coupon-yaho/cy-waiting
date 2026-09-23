@@ -51,6 +51,7 @@ GATEWAY_CPUS=2 run_case "레디스가 한 코어에 붙었으면 레디스" 0 "�
 # 불가로 읽히는지 본다 — 표집기가 예전처럼 0.0 을 내면 이 사례가 "호스트" 로 갈린다.
 . test/load/peak-lib.sh || exit 2
 na_work=$(mktemp -d) || exit 1
+trap 'rm -rf "$na_work"' EXIT
 printf 'cpu  100 0 100 800 0 0 0 0\n' > "$na_work/stat"
 # 같은 파일을 두 번 읽으면 차가 0 이라 델타 경로가 NA 를 낸다 — 표집기 전체를 태운다.
 produced=$(PEAK_STAT=$na_work/stat PEAK_IDLE_WAIT=0 peak_host_idle_pct)

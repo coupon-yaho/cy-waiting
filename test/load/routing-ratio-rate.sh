@@ -116,7 +116,7 @@ require_positive_int sent || exit 2
 require_codes_match "$work/codes" || exit 2
 bad=$(awk '$1=="202"||$1=="other"{s+=$2} END{print s+0}' "$work/codes")
 echo
-echo "응답 코드: $(awk '$1!="total"{printf "%s×%s ", $2, $1}' "$work/codes")"
+echo "응답 코드: $(awk '$1!="total" && $1!="done"{printf "%s×%s ", $2, $1}' "$work/codes")"
 
 specs=(); total=0
 for idx in 0 1 2; do

@@ -278,6 +278,13 @@ unset -f docker netdev
 
 # 호스트 유휴. **못 읽으면 0.0 을 내면 안 된다** — 천장 원인 판정의 첫 규칙이 유휴 바닥이라,
 # 계기를 못 읽은 회차가 전부 호스트 탓으로 기록된다.
+# 간격은 운영에서 무시하지 않고 보정한다. 무시하면 2초로 준 사람이 1초로 잰 표를 받는다.
+lib_case "안 주면 1 초" 1 "$(peak_idle_wait)"
+lib_case "운영에서 준 값은 지킨다" 3 "$(PEAK_IDLE_WAIT=3 peak_idle_wait)"
+lib_case "운영에서 0 은 1 로 보정" 1 "$(PEAK_IDLE_WAIT=0 peak_idle_wait)"
+lib_case "수가 아니면 1 로 보정" 1 "$(PEAK_IDLE_WAIT=0.5 peak_idle_wait)"
+lib_case "시험 이음매와 함께면 0 을 받는다" 0 "$(PEAK_STAT=/x PEAK_IDLE_WAIT=0 peak_idle_wait)"
+
 lib_case "두 표본의 차로 비율을 낸다" 100.0 "$(peak_idle_delta "1000 800" "2000 1800")"
 lib_case "절반만 한가했으면 50.0" 50.0 "$(peak_idle_delta "1000 800" "2000 1300")"
 lib_case "시간이 안 흘렀으면 판정 불가" NA "$(peak_idle_delta "1000 800" "1000 800")"

@@ -231,15 +231,21 @@ peak_host_idle_pct() {
     local stat=${PEAK_STAT:-/proc/stat} a b
     a=$(awk '/^cpu /{ print $2+$3+$4+$5+$6+$7+$8+$9, $5+$6 }' "$stat" 2>/dev/null)
     [ -n "$a" ] || { printf 'NA'; return; }
-    # 간격은 1초가 하한이다 — 0 이면 차가 없어 모든 표본이 NA 가 된다. 시험이 그 자리를
-    # 밟을 때만 `PEAK_STAT` 과 함께 0 을 준다. 운영에서 준 값은 무시하지 않고 보정한다.
-    local wait=${PEAK_IDLE_WAIT:-1}
-    case "$wait" in ''|*[!0-9]*) wait=1 ;; esac
-    { [ "$wait" -lt 1 ] && [ -z "${PEAK_STAT:-}" ]; } && wait=1
-    sleep "$wait"
+    sleep "$(peak_idle_wait)"
     b=$(awk '/^cpu /{ print $2+$3+$4+$5+$6+$7+$8+$9, $5+$6 }' "$stat" 2>/dev/null)
     [ -n "$b" ] || { printf 'NA'; return; }
     peak_idle_delta "$a" "$b"
+}
+
+# 표본 사이 간격. **1초가 하한이다** — 0 이면 차가 없어 모든 표본이 NA 가 된다. 시험이
+# 그 자리를 밟을 때만 `PEAK_STAT` 과 함께 0 을 준다. 운영에서 준 값은 무시하지 않고 보정한다.
+peak_idle_wait() {
+    local want=${PEAK_IDLE_WAIT:-1}
+    case "$want" in
+        ''|*[!0-9]*) printf 1; return ;;
+    esac
+    if [ "$want" -lt 1 ] && [ -z "${PEAK_STAT:-}" ]; then printf 1; return; fi
+    printf '%s' "$want"
 }
 
 # 두 표본의 차로 유휴 비율을 낸다. 시간이 안 흘렀으면 잰 것이 없다.

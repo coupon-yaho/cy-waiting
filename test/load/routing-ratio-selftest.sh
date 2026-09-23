@@ -124,6 +124,20 @@ lib_case "합이 완료 회차와 같으면 통과" 0 "$(require_codes_match "$o
 lib_case "계수가 다 0 이면 판정 불가" 2 "$(require_codes_match "$short" >/dev/null 2>&1; printf '%s' $?)"
 lib_case "중단된 회차가 있어도 통과" 0 "$(require_codes_match "$dropped" >/dev/null 2>&1; printf '%s' $?)"
 lib_case "무엇이 어긋났는지 말한다" 1 "$(require_codes_match "$short" 2>&1 | grep -c '코드별 합')"
+empty=$(codes empty "200 0" "202 0" "other 0" "total 0" "done 0")
+lib_case "빈 회차는 충족이 아니다" 2 "$(require_codes_match "$empty" >/dev/null 2>&1; printf '%s' $?)"
+extra=$(codes extra "200 10" "202 0" "other 0" "total 400" "done 10")
+lib_case "보낸 수가 크게 벌어지면 판정 불가" 2 \
+    "$(CODES_SLACK=100 require_codes_match "$extra" >/dev/null 2>&1; printf '%s' $?)"
+lib_case "판정 불가 사유는 표준 출력으로" 1 "$(require_codes_match "$empty" 2>/dev/null | grep -c '판정 불가')"
+
+# 게이트웨이별 계수. 이름이 어긋나면 0 뿐인 값으로 쏠림을 판정하게 된다.
+gws=$(summary gws '{"metrics":{"issue_200":{"count":4},"http_reqs":{"count":4},"iterations":{"count":4},"issue_gw0":{"count":3},"issue_gw1":{"count":1}}}')
+lib_case "게이트웨이별 계수를 gw 이름으로 낸다" \
+    "$(printf '200 4\n202 0\nother 0\ntotal 4\ndone 4\ngw0 3\ngw1 1')" \
+    "$(codes_with_gateways "$gws" 2)"
+lib_case "게이트웨이 수가 수가 아니면 끊는다" 2 \
+    "$(codes_with_gateways "$gws" x >/dev/null 2>&1; printf '%s' $?)"
 
 # 자극은 되읽어 확인한다. 안 하면 안 심긴 회차가 제품 미달로 적힌다.
 redis_cli() {

@@ -121,7 +121,7 @@ redis_set_verified() {
     redis_cli SET "$key" "$want" >/dev/null 2>&1
     got=$(redis_cli GET "$key" 2>/dev/null)
     [ "$got" = "$want" ] && return 0
-    echo "판정 불가 — $key 를 못 심었다 (읽은 값 '$got', 넣으려던 값 '$want')" >&2
+    echo "판정 불가 — $key 를 못 심었다 (읽은 값 '$got', 넣으려던 값 '$want')"
     return 2
 }
 
@@ -153,16 +153,41 @@ for extra in sys.argv[2:]:
 PY
 }
 
+# 게이트웨이별 계수까지 받아 `gw0` 꼴 이름으로 낸다. **러너에 두면 자기검증이 못 닿는다** —
+# 계수 이름이 어긋나면 0 뿐인 값으로 쏠림을 판정하게 된다.
+#
+#   사용: codes_with_gateways <요약 json> <게이트웨이 수>
+codes_with_gateways() {
+    local json=$1 count=$2 i metrics=()
+    case "$count" in ''|*[!0-9]*) echo "게이트웨이 수가 정수여야 한다: '$count'" >&2; return 2 ;; esac
+    [ "$count" -gt 0 ] || { echo "게이트웨이 수는 1 이상이어야 한다" >&2; return 2; }
+    for i in $(seq 0 $(( count - 1 ))); do metrics+=("issue_gw$i"); done
+    codes_from_summary "$json" "${metrics[@]}" | sed 's/^issue_gw/gw/'
+}
+
 # 코드별 합이 완료 회차와 같은가. **계수 이름이 어긋나면 셋 다 0 이 된다** — 그러면
 # "전부 200 이었나" 대조가 증발해 전부 202 였던 회차도 충족으로 적힌다.
 require_codes_match() {
-    local file=$1 counted done_
+    local file=$1 counted done_ total
     counted=$(awk '$1=="200"||$1=="202"||$1=="other"{s+=$2} END{print s+0}' "$file")
     done_=$(awk '$1=="done"{print $2}' "$file")
-    case "$done_" in ''|*[!0-9]*) echo "판정 불가 — 완료 회차를 못 읽었다" >&2; return 2 ;; esac
-    [ "$counted" -eq "$done_" ] && return 0
-    echo "판정 불가 — 코드별 합 $counted 가 완료 회차 $done_ 과 다르다. 계수 이름이 어긋났다" >&2
-    return 2
+    total=$(awk '$1=="total"{print $2}' "$file")
+    case "$done_" in ''|*[!0-9]*) echo "판정 불가 — 완료 회차를 못 읽었다"; return 2 ;; esac
+    case "$total" in ''|*[!0-9]*) echo "판정 불가 — 보낸 수를 못 읽었다"; return 2 ;; esac
+    # 빈 회차를 충족으로 내보내지 않는다. 0 == 0 은 대조가 아니다.
+    [ "$done_" -gt 0 ] || { echo "판정 불가 — 완료된 회차가 없다"; return 2; }
+    if [ "$counted" -ne "$done_" ]; then
+        echo "판정 불가 — 코드별 합 $counted 가 완료 회차 $done_ 과 다르다. 계수 이름이 어긋났다"
+        return 2
+    fi
+    # **회차당 요청은 하나다.** 보낸 수가 완료 회차보다 크게 벌어지면 스크립트가 요청을
+    # 더 넣은 것이고, 그 수를 분모로 쓰는 판정이 틀린다. 꼬리 중단은 VU 수를 못 넘는다.
+    local slack=${CODES_SLACK:-${VUS:-100}}
+    if [ "$total" -lt "$counted" ] || [ $(( total - counted )) -gt "$slack" ]; then
+        echo "판정 불가 — 보낸 $total 과 코드별 합 $counted 의 차가 $slack 을 넘는다"
+        return 2
+    fi
+    return 0
 }
 
 # 스텁이 누적으로 센 값 하나. 이름은 served·faulted·rejected 다.

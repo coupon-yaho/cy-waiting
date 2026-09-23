@@ -80,7 +80,8 @@ for rate in $RATES; do
         $1 == "idle" && $3 ~ /^[0-9]+(\.[0-9]+)?$/ { v["idle", ++c["idle"]] = $3; next }
         $1 == "idle"                          { na++ }
         END { printf "  LB CPU 가운데 %.1f%% · origin CPU 가운데 %.1f%% · 호스트 유휴 ", med("lb"), med("origin")
-              if (c["idle"]) printf "가운데 %.1f%%", med("idle"); else printf "판정 불가"
+              # 과반을 못 읽었으면 남은 표본으로 접지 않는다. 계기가 고장 난 회차다.
+              if (c["idle"] && na < c["idle"]) printf "가운데 %.1f%%", med("idle"); else printf "판정 불가"
               if (na) printf " (못 읽은 표본 %d 개)", na
               printf "\n" }
     ' "$cpu"

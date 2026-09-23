@@ -42,8 +42,9 @@ public class GatewayPresenceConfig {
 
     /** 조회 필터가 세우고 하트비트가 싣는 거절 표시. 둘이 같은 것을 봐야 해 빈 하나로 둔다. */
     @Bean
-    PollRejections pollRejections() {
-        return PollRejections.create();
+    PollRejections pollRejections(ControlPlaneProperties properties) {
+        // 리더가 푸는 쪽과 같은 폭이다. 짧으면 한 번만 실린 거절이 리더의 하트비트 사이로 샌다.
+        return PollRejections.create(properties.capacity().rampDownTicks());
     }
 
     /**
@@ -115,7 +116,8 @@ public class GatewayPresenceConfig {
             // 실은 값만 내린다. 답을 기다리는 사이 난 거절은 다음 하트비트가 싣는다.
             long mark = rejections.mark();
             return port.beat(instanceId, reapAfterSec, voteFreshSec, state,
-                            passed(passRate), ejected(outliers, nowMillis.getAsLong()), mark > 0)
+                            passed(passRate), ejected(outliers, nowMillis.getAsLong()),
+                            rejections.sending(mark))
                     .doOnNext(ignored -> rejections.settled(mark));
         };
     }

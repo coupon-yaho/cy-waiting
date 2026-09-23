@@ -86,10 +86,21 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
     /** 꼬리의 (인스턴스, 표) 쌍. 순서를 지켜 읽는다. */
     private Map<String, Integer> ejectVotes(List<Object> r) {
         Map<String, Integer> votes = new LinkedHashMap<>();
-        for (int i = 8; i < r.size(); i += 2) {
+        for (int i = 9; i < r.size(); i += 2) {
             votes.put(String.valueOf(r.get(i)), at(r, i + 1));
         }
         return votes;
+    }
+
+    private int rejecting(List<Object> r) {
+        return at(r, 8);
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Object> 거절을_싣는다(String instanceId, String rejected) {
+        return (List<Object>) redis.execute(heartbeat, List.of(INSTANCES),
+                        List.of(instanceId, REAP_AFTER, "CLOSED", VOTE_FRESH, "0", "", rejected))
+                .blockFirst(WAIT);
     }
 
     private String ejectOf(String instanceId) {
@@ -643,7 +654,7 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
 
         assertThat(redis.opsForHash().hasKey(INSTANCES, "#e:a").block(WAIT)).isFalse();
         assertThat(ejectReported(r)).isZero();
-        assertThat(r).hasSize(8);
+        assertThat(r).hasSize(9);
     }
 
     @Test
@@ -701,6 +712,59 @@ class GatewayHeartbeatTest extends RedisContainerSupport {
         assertThat(alive(r)).as("분모에는 들어간다").isEqualTo(2);
         assertThat(ejectVotes(r)).isEmpty();
         assertThat(ejectReported(r)).isEqualTo(1);
+    }
+
+    /**
+     * 조회를 상한으로 거절한 노드는 표시를 싣고, 리더는 거절 중인 수를 받아 청소를 멈춘다. 값은 쉼표로 감싼다 —
+     * 옛 스크립트가 이 field 를 노드 시각으로 읽으면 없는 노드가 분모에 든다.
+     */
+    @Test
+    @DisplayName("거절을_실으면_표시를_쓰고_센다")
+    void 거절을_실으면_표시를_쓰고_센다() {
+        거절을_싣는다("b", "1");
+
+        List<Object> r = 거절을_싣는다("a", "");
+
+        assertThat(rejecting(r)).isEqualTo(1);
+        assertThat(redis.<String, String>opsForHash().get(INSTANCES, "#r:b").block(WAIT)).isEqualTo(",1,");
+        assertThat(redis.opsForHash().hasKey(INSTANCES, "#r:a").block(WAIT)).as("안 실은 노드").isFalse();
+    }
+
+    @Test
+    @DisplayName("거절이_멎으면_표시를_지운다")
+    void 거절이_멎으면_표시를_지운다() {
+        거절을_싣는다("a", "1");
+
+        List<Object> r = 거절을_싣는다("a", "");
+
+        assertThat(rejecting(r)).isZero();
+        assertThat(redis.opsForHash().hasKey(INSTANCES, "#r:a").block(WAIT)).isFalse();
+    }
+
+    /** 죽어 가는 노드의 마지막 거절이 임계만큼 살면 그 시간 내내 청소가 멈춘다. 표와 같은 신선도로 센다. */
+    @Test
+    @DisplayName("낡은_거절은_안_세고_죽은_노드의_거절은_지운다")
+    void 낡은_거절은_안_세고_죽은_노드의_거절은_지운다() {
+        long now = stamped(거절을_싣는다("a", ""));
+        redis.<String, String>opsForHash()
+                .put(INSTANCES, "stale", String.valueOf(now - 10)).block(WAIT);
+        redis.<String, String>opsForHash().put(INSTANCES, "#r:stale", ",1,").block(WAIT);
+        redis.<String, String>opsForHash().put(INSTANCES, "dead", "1").block(WAIT);
+        redis.<String, String>opsForHash().put(INSTANCES, "#r:dead", ",1,").block(WAIT);
+        redis.<String, String>opsForHash().put(INSTANCES, "#r:gone", ",1,").block(WAIT);
+
+        List<Object> r = 거절을_싣는다("a", "");
+
+        assertThat(rejecting(r)).isZero();
+        assertThat(redis.opsForHash().hasKey(INSTANCES, "#r:dead").block(WAIT)).isFalse();
+        assertThat(redis.opsForHash().hasKey(INSTANCES, "#r:gone").block(WAIT)).isFalse();
+    }
+
+    @Test
+    @DisplayName("모르는_거절_표시는_거절한다")
+    void 모르는_거절_표시는_거절한다() {
+        assertThatThrownBy(() -> 거절을_싣는다("a", "2"))
+                .hasRootCauseMessage("거절 표시는 \"1\" 이거나 비어야 한다");
     }
 
     @Test

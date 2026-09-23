@@ -156,7 +156,7 @@ class GatewayRedisPortTest extends RedisContainerSupport {
         // 롤백 구간에서 옛 스크립트가 돌려주는 모양이다.
         assertThatThrownBy(() -> port.presence(List.of(3L, 1_700_000_000L, 1L)))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("8 칸");
+                .hasMessageContaining("9 칸");
     }
 
     /** 칸 수가 맞으면 자리대로 읽는다. 순서를 바꾸면 여기가 빨개진다. */
@@ -164,9 +164,31 @@ class GatewayRedisPortTest extends RedisContainerSupport {
     @DisplayName("칸_수가_맞으면_자리대로_읽는다")
     void 칸_수가_맞으면_자리대로_읽는다() {
         GatewayRedisPort.Presence seen =
-                port.presence(List.of(9L, 1_700_000_000L, 3L, 2L, 7L, 55L, 6L, 0L));
+                port.presence(List.of(9L, 1_700_000_000L, 3L, 2L, 7L, 55L, 6L, 0L, 0L));
 
         assertThat(seen).isEqualTo(GatewayRedisPort.Presence.withoutEjection(9, 3, 2, 7, 55, 6));
+    }
+
+    /** 거절 중인 수는 아홉째 칸이다. 산 수를 넘으면 스크립트와 파서가 갈린 것이다. */
+    @Test
+    @DisplayName("거절_중인_수를_아홉째_칸에서_읽는다")
+    void 거절_중인_수를_아홉째_칸에서_읽는다() {
+        assertThat(port.presence(List.of(9L, 1_700_000_000L, 0L, 0L, 9L, 0L, 0L, 0L, 2L)).rejecting())
+                .isEqualTo(2);
+        assertThatThrownBy(() -> port.presence(List.of(1L, 1_700_000_000L, 0L, 0L, 1L, 0L, 0L, 0L, 2L)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /** 실제 스크립트에 거절 표시를 싣고 센 값을 받는다. 인자 자리가 어긋나면 표시가 안 실린다. */
+    @Test
+    @DisplayName("거절_표시를_실어_세어_받는다")
+    void 거절_표시를_실어_세어_받는다() {
+        port.beat("gw-b", REAP_AFTER_SEC, VOTE_FRESH_SEC, CircuitState.CLOSED, 0, null, true).block(WAIT);
+
+        GatewayRedisPort.Presence seen = port.beat("gw-a", REAP_AFTER_SEC, VOTE_FRESH_SEC,
+                CircuitState.CLOSED, 0, null, false).block(WAIT);
+
+        assertThat(seen.rejecting()).isEqualTo(1);
     }
 
     /** 회복 봉우리를 정상과 견주려면 전 노드의 도착 합을 알아야 한다 (RC4). */
@@ -231,7 +253,7 @@ class GatewayRedisPortTest extends RedisContainerSupport {
     @DisplayName("배제_표를_인스턴스별로_읽는다")
     void 배제_표를_인스턴스별로_읽는다() {
         GatewayRedisPort.Presence seen = port.presence(
-                List.of(9L, 1_700_000_000L, 3L, 2L, 7L, 55L, 6L, 4L, "x", 3L, "y", 1L));
+                List.of(9L, 1_700_000_000L, 3L, 2L, 7L, 55L, 6L, 4L, 0L, "x", 3L, "y", 1L));
 
         assertThat(seen).isEqualTo(
                 new GatewayRedisPort.Presence(9, 3, 2, 7, 55, 6, 4, Map.of("x", 3, "y", 1)));
@@ -241,7 +263,7 @@ class GatewayRedisPortTest extends RedisContainerSupport {
     @DisplayName("꼬리가_홀수면_거절한다")
     void 꼬리가_홀수면_거절한다() {
         assertThatThrownBy(() -> port.presence(
-                List.of(9L, 1_700_000_000L, 0L, 0L, 9L, 0L, 0L, 4L, "x")))
+                List.of(9L, 1_700_000_000L, 0L, 0L, 9L, 0L, 0L, 4L, 0L, "x")))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("짝");
     }
@@ -305,14 +327,14 @@ class GatewayRedisPortTest extends RedisContainerSupport {
     @DisplayName("머리_칸이_수가_아니면_거절한다")
     void 머리_칸이_수가_아니면_거절한다() {
         assertThatThrownBy(() -> port.presence(
-                List.of("9", 1_700_000_000L, 0L, 0L, 9L, 0L, 0L, 0L)))
+                List.of("9", 1_700_000_000L, 0L, 0L, 9L, 0L, 0L, 0L, 0L)))
                 .isInstanceOf(IllegalStateException.class);
     }
 
     /** 산 64 대가 저마다 다른 한 대씩 뺀 회차. */
     private List<Object> 꼬리(int pairs) {
         List<Object> raw = new ArrayList<>(
-                List.of((long) pairs, 1_700_000_000L, 0L, 0L, (long) pairs, 0L, 0L, (long) pairs));
+                List.of((long) pairs, 1_700_000_000L, 0L, 0L, (long) pairs, 0L, 0L, (long) pairs, 0L));
         for (int i = 0; i < pairs; i++) {
             raw.add("i" + i);
             raw.add(1L);

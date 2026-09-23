@@ -78,7 +78,8 @@ class GatewayPresenceMissTest {
                 ControlPlaneProperties.defaults(),
                 CircuitStateReader.of(CircuitBreakerRegistry.ofDefaults(), "backend"),
                 new StaticListableBeanFactory().getBeanProvider(PassRateSource.class),
-                new StaticListableBeanFactory().getBeanProvider(InstanceOutliers.class));
+                new StaticListableBeanFactory().getBeanProvider(InstanceOutliers.class),
+                PollRejections.create());
         VirtualTimeScheduler 시계 = VirtualTimeScheduler.create();
         try {
             loop.start(시계);

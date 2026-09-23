@@ -14,6 +14,9 @@
 [ -n "${ROUTING_LIB_LOADED:-}" ] && return 0
 ROUTING_LIB_LOADED=1
 
+# 줄 키 목록은 한 곳에서 온다.
+. test/load/queue-keys.sh || return 2
+
 # 회차가 겹침을 더 얹을 수 있다. 게이트웨이를 여러 대로 늘리는 회차가 그렇다.
 COMPOSE="docker compose -f test/load/compose.yml -f test/load/compose.routing.yml${COMPOSE_EXTRA:+ -f $COMPOSE_EXTRA}"
 
@@ -104,6 +107,22 @@ require_positive_int() {
     done
 }
 
+# 레디스 한 번. **자기검증이 여기를 갈아 끼운다** — 되읽기 계약을 도커 없이 재려면 이음매가 있어야 한다.
+redis_cli() {
+    $COMPOSE exec -T redis redis-cli "$@"
+}
+
+# **자극은 되읽어 확인한다.** 쓰기가 실패한 회차가 그대로 돌면 하네스 고장이 제품 미달로 적힌다.
+# 가용량 설정 쪽에는 이 되읽기가 이미 있고 이유도 적혀 있었다 — 자극 쪽에만 없었다.
+redis_set_verified() {
+    local key=$1 want=$2 got
+    redis_cli SET "$key" "$want" >/dev/null 2>&1
+    got=$(redis_cli GET "$key" 2>/dev/null)
+    [ "$got" = "$want" ] && return 0
+    echo "판정 불가 — $key 를 못 심었다 (읽은 값 '$got', 넣으려던 값 '$want')" >&2
+    return 2
+}
+
 # 스텁이 누적으로 센 값 하나. 이름은 served·faulted·rejected 다.
 #
 # **못 읽으면 거기서 멈춘다.** 오류를 삼키고 빈 값을 돌려주면 그 값이 산술로
@@ -165,13 +184,14 @@ bring_up() {
     $COMPOSE up -d redis >> "$log" 2>&1
     local _
     for _ in $(seq 1 30); do
-        $COMPOSE exec -T redis redis-cli SET sim:credits:stub-1 "$BIG_CAP" >/dev/null 2>&1 && break
+        redis_cli SET sim:credits:stub-1 "$BIG_CAP" >/dev/null 2>&1 && break
         sleep 1
     done
-    $COMPOSE exec -T redis redis-cli SET sim:credits:stub-2 "$SMALL_CAP" >/dev/null 2>&1
-    $COMPOSE exec -T redis redis-cli SET sim:credits:stub-3 "$MID_CAP" >/dev/null 2>&1
+    redis_set_verified sim:credits:stub-1 "$BIG_CAP" || exit 2
+    redis_set_verified sim:credits:stub-2 "$SMALL_CAP" || exit 2
+    redis_set_verified sim:credits:stub-3 "$MID_CAP" || exit 2
     # 앞 실행이 바꿔 둔 식별자로 시작하면 이번 갈아 끼우기가 램프를 안 탄다.
-    $COMPOSE exec -T redis redis-cli SET sim:id:stub-1 stub-1 >/dev/null 2>&1
+    redis_set_verified sim:id:stub-1 stub-1 || exit 2
 
     # 예열 컨테이너는 크레딧이 이 값에 닿아야 건강하다. 여유 합의 90% 로 두되
     # 200 을 넘기지 않는다 — 큰 여유 회차는 지금까지와 같고, 작은 여유 회차는
@@ -228,8 +248,8 @@ wait_for_ramp() {
 # 모드에 한 번이라도 들어간 회차는 전부 그렇게 죽었다. 셋을 같이 지운다.
 wait_for_idle_queue() {
     local state _
-    $COMPOSE exec -T redis redis-cli DEL "queue:{$COUPON}" "admitted:{$COUPON}" \
-        "maxscore:{$COUPON}" >/dev/null 2>&1
+    # shellcheck disable=SC2046  # 키를 낱개 인자로 넘긴다
+    redis_cli DEL $(queue_keys "$COUPON") >/dev/null 2>&1
     for _ in $(seq 1 30); do
         state=$($COMPOSE exec -T redis redis-cli HGET gw:snapshot "$COUPON" 2>/dev/null)
         # IDLE 을 봐야 한다. QUEUEING 이 아닌 것으로 두면 PASSING 같은 중간 상태에서

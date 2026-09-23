@@ -6,7 +6,11 @@
 # 표가 이상해진다. 함수로 빼면 자기검증이 가짜 요약으로 직접 잰다 (TS-9).
 
 [ -n "${PEAK_LIB_LOADED:-}" ] && return 0
+
 PEAK_LIB_LOADED=1
+
+# 줄 키 목록은 한 곳에서 온다. 러너마다 적으면 지우다 만 회차가 앞 값을 들고 넘어간다.
+. test/load/queue-keys.sh || return 2
 
 # **요약의 두 모양을 다 본다.** k6 판에 따라 값이 `metrics.X.rate` 로도,
 # `metrics.X.values.rate` 로도 온다. 하나만 보면 판이 바뀌는 순간 전 회차가
@@ -224,13 +228,24 @@ peak_net_lines() {
 
 # 호스트 CPU 유휴 백분율. 한 초 사이 `/proc/stat` 두 번을 차분한다 — 부팅 이후 누적값을 그대로 쓰면
 # 회차와 무관한 평균이 나온다. 유휴에 iowait 를 넣는다: 코어가 놀고 있는 것이다.
+# **못 읽으면 수를 내지 않는다.** 0.0 을 내면 천장 원인 판정의 첫 규칙(유휴 바닥)에
+# 걸려 계기를 못 읽은 회차가 전부 호스트 탓으로 기록된다. NA 는 판정기가 판정 불가로 읽는다.
 peak_host_idle_pct() {
-    local a b
-    a=$(awk '/^cpu /{ print $2+$3+$4+$5+$6+$7+$8+$9, $5+$6 }' /proc/stat)
-    sleep 1
-    b=$(awk '/^cpu /{ print $2+$3+$4+$5+$6+$7+$8+$9, $5+$6 }' /proc/stat)
-    awk -v a="$a" -v b="$b" 'BEGIN{ split(a, x, " "); split(b, y, " "); t = y[1] - x[1];
-        printf "%.1f", (t > 0) ? 100 * (y[2] - x[2]) / t : 0 }'
+    local stat=${PEAK_STAT:-/proc/stat} a b
+    a=$(awk '/^cpu /{ print $2+$3+$4+$5+$6+$7+$8+$9, $5+$6 }' "$stat" 2>/dev/null)
+    [ -n "$a" ] || { printf 'NA'; return; }
+    sleep "${PEAK_IDLE_WAIT:-1}"
+    b=$(awk '/^cpu /{ print $2+$3+$4+$5+$6+$7+$8+$9, $5+$6 }' "$stat" 2>/dev/null)
+    [ -n "$b" ] || { printf 'NA'; return; }
+    peak_idle_delta "$a" "$b"
+}
+
+# 두 표본의 차로 유휴 비율을 낸다. 시간이 안 흘렀으면 잰 것이 없다.
+#
+#   사용: peak_idle_delta "<총합> <유휴>" "<총합> <유휴>"
+peak_idle_delta() {
+    awk -v a="$1" -v b="$2" 'BEGIN{ split(a, x, " "); split(b, y, " "); t = y[1] - x[1];
+        if (t > 0) printf "%.1f", 100 * (y[2] - x[2]) / t; else printf "NA" }'
 }
 
 # **회차 동안 CPU 를 쌓는다.** 천장이 났을 때 그것이 하네스의 것인지 게이트웨이의 것인지 가를 재료다.

@@ -155,9 +155,8 @@ metrics() {
 empty_queues() {
     local c
     for c in $COUPONS; do
-        $COMPOSE exec -T redis redis-cli DEL \
-            "queue:{$c}" "admitted:{$c}" "maxscore:{$c}" \
-            "grace:{$c}" "alive:{$c}" "dropfence:{$c}" >/dev/null 2>&1
+        # shellcheck disable=SC2046  # 키를 낱개 인자로 넘긴다
+        $COMPOSE exec -T redis redis-cli DEL $(queue_keys "$c") >/dev/null 2>&1
     done
 }
 

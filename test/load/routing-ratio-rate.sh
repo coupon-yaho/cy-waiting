@@ -103,7 +103,9 @@ fi
 
 # 상태 코드를 k6 요약에서 읽는다. **코드별 카운터가 따로 있다** — 요약은 태그를
 # 접어 내보내므로 태그로 갈랐다면 여기서 200 과 202 를 못 가른다.
-python3 - "$work/summary.json" > "$work/codes" <<'PY'
+# **파이썬이 죽으면 그 회차는 못 잰 것이다.** 종료 코드를 안 보면 빈 파일이 남고,
+# 아래 awk 의 `s+0` 이 0 으로 고정돼 보낸 것이 전부 200 으로 읽힌다.
+if ! python3 - "$work/summary.json" > "$work/codes" <<'PY'
 import json, sys
 m = json.load(open(sys.argv[1]))["metrics"]
 # **두 모양을 다 받는다.** k6 판에 따라 카운터가 `count` 바로 아래에 있기도
@@ -116,7 +118,14 @@ def n(k):
 print("200", n("issue_200")); print("202", n("issue_202")); print("other", n("issue_other"))
 print("total", n("http_reqs"))
 PY
+then
+  echo "판정 불가 — k6 요약을 못 읽었다. 이 회차로는 분배를 못 잰다"
+  tail -5 "$work/k6.log" | sed 's/^/  /'
+  exit 2
+fi
 sent=$(awk '$1=="total"{print $2}' "$work/codes")
+# 빈 값이면 판정기의 대조가 통째로 사라진다 — 넣은 부하가 다 닿았는지를 아무도 안 본다.
+require_positive_int sent || exit 2
 bad=$(awk '$1=="202"||$1=="other"{s+=$2} END{print s+0}' "$work/codes")
 echo
 echo "응답 코드: $(awk '$1!="total"{printf "%s×%s ", $2, $1}' "$work/codes")"

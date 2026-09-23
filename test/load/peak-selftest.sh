@@ -286,8 +286,11 @@ unset -f docker netdev
 
 # 호스트 유휴. **못 읽으면 0.0 을 내면 안 된다** — 천장 원인 판정의 첫 규칙이 유휴 바닥이라,
 # 계기를 못 읽은 회차가 전부 호스트 탓으로 기록된다.
+lib_case "두 표본의 차로 비율을 낸다" 100.0 "$(peak_idle_delta "1000 800" "2000 1800")"
+lib_case "절반만 한가했으면 50.0" 50.0 "$(peak_idle_delta "1000 800" "2000 1300")"
+lib_case "시간이 안 흘렀으면 판정 불가" NA "$(peak_idle_delta "1000 800" "1000 800")"
 printf 'cpu  100 0 100 800 0 0 0 0\ncpu0 1 2 3 4\n' > "$work/stat.ok"
-lib_case "정상 파일이면 수를 낸다" 100.0 "$(PEAK_STAT=$work/stat.ok PEAK_IDLE_WAIT=0 peak_host_idle_pct)"
+lib_case "같은 파일을 두 번 읽으면 판정 불가" NA "$(PEAK_STAT=$work/stat.ok PEAK_IDLE_WAIT=0 peak_host_idle_pct)"
 lib_case "없는 파일이면 판정 불가를 낸다" NA "$(PEAK_STAT=$work/nope PEAK_IDLE_WAIT=0 peak_host_idle_pct)"
 printf 'intr 1 2 3\n' > "$work/stat.bad"
 lib_case "cpu 줄이 없으면 판정 불가를 낸다" NA "$(PEAK_STAT=$work/stat.bad PEAK_IDLE_WAIT=0 peak_host_idle_pct)"

@@ -179,10 +179,7 @@ case "${WARMUP_SPIKE:-0}" in
         rm -f "$warm_summary" "$warm_log"
         # 예열 쿠폰의 줄을 치운다. 재는 쿠폰은 아래에서 따로 비우고 IDLE 을 확인한다.
         $COMPOSE exec -T redis redis-cli DEL \
-            "queue:{$WARMUP_COUPON}" "admitted:{$WARMUP_COUPON}" \
-            "maxscore:{$WARMUP_COUPON}" "grace:{$WARMUP_COUPON}" \
-            "alive:{$WARMUP_COUPON}" "dropfence:{$WARMUP_COUPON}" \
-            "applyfence:{$WARMUP_COUPON}" >/dev/null 2>&1
+            $(queue_keys "$WARMUP_COUPON") >/dev/null 2>&1
         # 제어 평면이 가라앉기를 기다린다. 스냅샷 한 주기로는 모자란다.
         sleep "$WARMUP_SETTLE_SEC"
         ;;
@@ -203,9 +200,7 @@ esac
 # 재고(`stock:`)는 시더가 관리하므로 안 건드린다.
 empty_and_wait_idle() {
     $COMPOSE exec -T redis redis-cli DEL \
-        "queue:{$COUPON}" "admitted:{$COUPON}" "maxscore:{$COUPON}" \
-        "grace:{$COUPON}" "alive:{$COUPON}" "dropfence:{$COUPON}" \
-        "applyfence:{$COUPON}" >/dev/null 2>&1
+        $(queue_keys "$COUPON") >/dev/null 2>&1
 
     local state _
     for _ in $(seq 1 30); do

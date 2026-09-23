@@ -2,6 +2,8 @@ package com.kafkick.waiting.control;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.ArrayList;
+import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -31,5 +33,29 @@ class PollRejectionsTest {
 
         거절.settled(거절.mark());
         assertThat(거절.mark()).isZero();
+    }
+
+    /**
+     * 마지막 거절을 실은 뒤에도 성공한 하트비트 몇 번 동안 계속 싣는다. 한 번만 실으면 표시가 해시에 한 박자만 남아,
+     * 리더의 하트비트가 그 틈을 비켜 가면 그 거절을 영영 못 본다. 실패한 하트비트는 줄이지 않는다.
+     */
+    @Test
+    @DisplayName("마지막_거절_뒤에도_몇_번_더_싣는다")
+    void 마지막_거절_뒤에도_몇_번_더_싣는다() {
+        PollRejections 거절 = PollRejections.create(3);
+        거절.rejected();
+        List<Boolean> 실은_것 = new ArrayList<>();
+
+        for (int i = 0; i < 6; i++) {
+            long 표 = 거절.mark();
+            실은_것.add(거절.sending(표));
+            if (i == 2) {
+                continue;   // 이 하트비트는 실패했다
+            }
+            거절.settled(표);
+        }
+
+        // 거절을 실은 한 번 + 성공한 세 번. 실패한 셋째는 안 센다.
+        assertThat(실은_것).containsExactly(true, true, true, true, true, false);
     }
 }

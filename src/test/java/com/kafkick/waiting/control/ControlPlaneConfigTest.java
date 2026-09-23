@@ -88,7 +88,7 @@ class ControlPlaneConfigTest {
             등록부.pollRejectionObserved(1);
             assertThat(멈추나.getAsBoolean()).as("거절 중").isTrue();
         } finally {
-            for (int i = 0; i < 3; i++) {
+            for (int i = 0; i < properties.capacity().rampDownTicks(); i++) {
                 등록부.pollRejectionObserved(0);
             }
         }

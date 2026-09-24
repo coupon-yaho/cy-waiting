@@ -119,6 +119,25 @@ class ClockMonotonicTest extends RedisContainerSupport {
         assertThat(scoreOf("B")).isGreaterThan(scoreA);
     }
 
+    /**
+     * <b>바닥값이 만료돼도 줄이 바닥이다.</b> 앞선 시계로 줄이 쌓인 채 바닥값 키만 사라지면, 새 등록이 실시각 점수를
+     * 받아 대기자 전원 앞에 선다. 줄의 가장 뒤 점수도 바닥으로 본다 — 빈 줄은 바닥값이, 찬 줄은 줄 자신이 막는다.
+     */
+    @Test
+    @DisplayName("바닥값이_만료돼도_줄_선_사람을_앞지르지_않는다")
+    void 바닥값이_만료돼도_줄_선_사람을_앞지르지_않는다() {
+        enqueue("A");
+        long 앞선_점수 = scoreOf("A") + 10_000_000;
+        // 앞선 시계로 선 사람이다. 바닥값 키는 만료돼 없다.
+        redis.opsForZSet().add(QUEUE, "앞선", 앞선_점수).block(WAIT);
+        redis.delete(MAX_SCORE).block(WAIT);
+
+        List<Object> 결과 = enqueue("B");
+
+        assertThat(scoreOf("B")).isGreaterThan(앞선_점수);
+        assertThat(appliedFlag(결과)).as("밀어 올린 사실을 알린다").isEqualTo(1);
+    }
+
     @Test
     @DisplayName("바닥값이_적용되면_그_사실이_반환된다")
     void 바닥값이_적용되면_그_사실이_반환된다() {

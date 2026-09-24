@@ -68,6 +68,9 @@ class LeaderKillScenarioTest {
      */
     private static final String 한산한_쿠폰 = "c4-idle";
 
+    /** 적응형 한산 쿠폰. 낡은 구간에는 발행이 멎은 뒤 선 줄을 모르므로 통과 대신 줄에 선다. */
+    private static final String 적응형_쿠폰 = "c4-adaptive";
+
     /** 죽은 리더의 이름. 이 소유자는 갱신도 해제도 안 한다 — 그래서 죽음이다. */
     private static final String 죽은_리더 = "c4-dead-leader";
 
@@ -197,7 +200,8 @@ class LeaderKillScenarioTest {
      * 모양으로 세운다</b> — 점수만 넣으면 스위퍼가 못 보고, 첫 배분이 임계를 올리면 창 밖이 된다.
      */
     private void 재료를_심는다(StatefulRedisConnection<String, String> 연결) {
-        redis.opsForSet().add(RedisKeys.ACTIVE_COUPONS, COUPON, 한산한_쿠폰).block(기다림);
+        redis.opsForSet().add(RedisKeys.ACTIVE_COUPONS, COUPON, 한산한_쿠폰, 적응형_쿠폰).block(기다림);
+        redis.opsForValue().set(RedisKeys.stock(적응형_쿠폰), "100000").block(기다림);
         redis.opsForValue().set(RedisKeys.stock(COUPON), "50").block(기다림);
         redis.opsForValue().set(RedisKeys.stock(한산한_쿠폰), "100000").block(기다림);
         // **대조군은 운영자가 끈 쿠폰이다.** 재료가 낡는 구간에 통과하는 것은 꺼진 쿠폰뿐이다 — 적응형은 발행이 멎은
@@ -262,6 +266,8 @@ class LeaderKillScenarioTest {
             List<Integer> 회복_줄_상태 = new ArrayList<>();
             long[] 줄_쿠폰_도착 = new long[3];
             long[] 한산한_쿠폰_도착 = new long[3];
+            long[] 적응형_도착 = new long[1];
+            List<Integer> 장애중_적응형_상태 = new ArrayList<>();
 
             ChaosScenario.named("C4 리더 강제 종료")
                     .baseline(() -> {
@@ -299,6 +305,9 @@ class LeaderKillScenarioTest {
                         long 낡기_전 = 받은_수(한산한_쿠폰);
                         장애중_상태.addAll(여러_번_시도한다(한산한_쿠폰, 한산한_보낼_수, 2_000));
                         한산한_쿠폰_도착[1] = 받은_수(한산한_쿠폰) - 낡기_전;
+                        적응형_도착[0] = 잰다(적응형_쿠폰,
+                                () -> 장애중_적응형_상태.addAll(
+                                        여러_번_시도한다(적응형_쿠폰, 보낼_수, 2_700)));
                         줄_쿠폰_도착[1] = 잰다(COUPON,
                                 () -> 장애중_줄_상태.addAll(
                                         여러_번_시도한다(COUPON, 보낼_수, 2_500)));
@@ -334,6 +343,12 @@ class LeaderKillScenarioTest {
                             줄을_추월하지_않았다(줄_쿠폰_도착[1]),
                             // 줄로 보냈는가. 도착 0 만 보면 전원 503 도 통과다.
                             줄에_세웠다(장애중_줄_상태, "유지"),
+                            // **적응형은 비어 보여도 줄이다** (불변식 4). 발행이 멎은 뒤 선 줄은 스냅샷에
+                            // 안 실려, 믿고 통과시키면 레디스에 줄 선 사람을 앞지른다.
+                            적응형_도착[0] == 0 ? Optional.empty()
+                                    : Optional.of("낡은 구간에 적응형 쿠폰이 %d 건 뒷단에 갔다"
+                                            .formatted(적응형_도착[0])),
+                            줄에_세웠다(장애중_적응형_상태, "유지 적응형"),
                             // **낡음 갈래를 실제로 밟았는가.** 상태 코드는
                             // 평시와 같은 202 라, 어느 줄이 답했는지는 결정
                             // 계수로만 보인다.

@@ -196,6 +196,25 @@ class AdmissionDeciderTest {
         assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.ENQUEUE_STALE);
     }
 
+    /** 서킷이 열렸으면 낡음보다 서킷이 앞이다. 예전에는 4번에서 통과가 나가 서킷에 막혀 503 이 됐다. */
+    @Test
+    @DisplayName("스냅샷이_낡고_서킷이_열리면_적응형은_서킷_줄로_간다")
+    void 스냅샷이_낡고_서킷이_열리면_적응형은_서킷_줄로_간다() {
+        AdmissionRequest req = request(CouponStates.idle(500)).withDataStale(true)
+                .withCircuit(CircuitState.OPEN);
+
+        assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.ENQUEUE_CIRCUIT_OPEN);
+    }
+
+    /** 꺼진 쿠폰이라도 이 노드가 방금 줄을 세웠으면 줄이 있는 것이다. 래치가 4번을 막는다. */
+    @Test
+    @DisplayName("스냅샷이_낡아도_꺼진_쿠폰에_방금_세웠으면_줄로_간다")
+    void 스냅샷이_낡아도_꺼진_쿠폰에_방금_세웠으면_줄로_간다() {
+        AdmissionRequest req = request(CouponStates.off(500)).withDataStale(true).withJustEnqueued(true);
+
+        assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.ENQUEUE_STALE);
+    }
+
     /** 운영자가 끈 쿠폰은 어느 노드도 줄을 안 세우므로 비어 보이면 정말 비었다. 상한 안에서 통과한다. */
     @Test
     @DisplayName("스냅샷이_낡아도_꺼진_쿠폰의_빈_줄은_상한_안에서_통과시킨다")

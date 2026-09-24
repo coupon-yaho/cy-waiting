@@ -124,7 +124,7 @@ public class AdmissionDecider {
             return AdmissionDecision.ENQUEUE_CIRCUIT_OPEN;
         }
 
-        // 7 — 낡았는데 줄에 사람이 있다. 모른다는 것이 추월의 사유가 아니다.
+        // 7 — 낡았다. 줄이 있거나, 비어 보여도 적응형이다. 모른다는 것이 추월의 사유가 아니다.
         if (req.dataStale()) {
             return AdmissionDecision.ENQUEUE_STALE;
         }

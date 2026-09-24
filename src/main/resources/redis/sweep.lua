@@ -18,7 +18,7 @@
 --        **막힌 것을 따로 낸다.** 0 으로 접으면 아무것도 안 걷은 회차와 구분이 안 되고,
 --        정리는 그때도 돌므로 걷은 수만으로는 못 가린다
 --
--- 이탈 기록 해시의 값  'd:<초>' 이탈 기록 · 'a:<초>' 입장 표시 · 접두사 없는 값은
+-- 이탈 기록 해시의 값  'd:<초>' 이탈 기록 · 'a:<초>' 입장 표시 · 'r:<초>' 아직 못 알린 입장 · 접두사 없는 값은
 -- 종류가 생기기 전의 이탈 기록. queue_status 가 같은 자리에 입장 표시를 쓰므로,
 -- 안 가르면 입장한 사람이 1초 뒤 폴링에서 종료를 받는다.
 --
@@ -74,7 +74,7 @@ local function stampOf(value)
         return nil
     end
     local kind = string.sub(value, 1, 2)
-    local at = (kind == 'd:' or kind == 'a:')
+    local at = (kind == 'd:' or kind == 'a:' or kind == 'r:')
             and tonumber(string.sub(value, 3))
             or tonumber(value)
     -- **nan 과 무한은 어떤 비교도 참으로 안 만든다.** 그대로 돌려주면 그 항목이
@@ -252,10 +252,8 @@ if nFront > 0 then
     end
 end
 
--- **신호가 끝난 커서 아래 입장자는 입장 기록으로 옮긴다.** 입장한 사람은 폴링해 와야 줄에서 빠져, 안 오고 떠난
--- 한 명이 줄 길이를 붙잡아 쿠폰을 영영 한산으로 못 돌아오게 한다. 걷는 것이 아니다 — 조회는 줄에 없으면 이
--- 기록을 보고 여전히 입장이라 답한다 (7.4.11 의 근거는 그대로 선다). 앞줄과 같은 가드 아래서만 돈다 — 신호를
--- 못 믿는 구간에 옮기면 아직 올 사람이 줄에서 빠져 쿠폰이 한산으로 내려가고, 새로 온 사람이 그를 앞지른다.
+-- **신호가 끝난 커서 아래 입장자는 못 알린 입장 기록으로 옮긴다.** 안 오고 떠난 입장자가 줄 길이를 붙잡지 않게
+-- 한다. 돌아오면 조회도 재등록도 입장으로 이어진다. 신호를 못 믿는 구간에는 앞줄처럼 안 옮긴다.
 local reaped = 0
 if usableAdmitted and admitted >= 0 and removing then
     -- 아래쪽부터 K 명만 본다. 오래된 입장자일수록 떠났을 가능성이 크다.
@@ -264,30 +262,22 @@ if usableAdmitted and admitted >= 0 and removing then
     local nBelow = #below
     if nBelow > 0 then
         local belowAt = redis.call('ZMSCORE', KEYS[3], unpack(below))
-        -- 이미 있는 입장 표시는 그대로 둔다. 시각을 새로 찍으면 보관 기간이 옮길 때마다 늘어난다.
-        local marked = redis.call('HMGET', KEYS[2], unpack(below))
         local moved = {}
         local marks = {}
         local nMoved = 0
-        local nMarks = 0
         for i = 1, nBelow do
             local at = tonumber(belowAt[i])
             if at == nil or at < now then
                 nMoved = nMoved + 1
                 moved[nMoved] = below[i]
-                local mark = marked[i]
-                if not (type(mark) == 'string' and (mark == 'admitted' or string.sub(mark, 1, 2) == 'a:')) then
-                    marks[nMarks + 1] = below[i]
-                    marks[nMarks + 2] = 'a:' .. string.format('%.0f', now)
-                    nMarks = nMarks + 2
-                end
+                -- 늘 새 시각이다. 옛 입장 표시를 살리면 아래 정리가 같은 회차에 지운다.
+                marks[nMoved * 2 - 1] = below[i]
+                marks[nMoved * 2] = 'r:' .. string.format('%.0f', now)
             end
         end
-        -- 기록이 먼저다. 앞줄과 같은 이유로, 실패 시 남는 것이 "아직 안 옮긴 사람" 이어야 한다.
+        -- 기록이 먼저다. 실패 시 남는 것이 "아직 안 옮긴 사람" 이어야 한다.
         if nMoved > 0 then
-            if nMarks > 0 then
-                redis.call('HSET', KEYS[2], unpack(marks))
-            end
+            redis.call('HSET', KEYS[2], unpack(marks))
             redis.call('ZREM', KEYS[1], unpack(moved))
             reaped = nMoved
         end

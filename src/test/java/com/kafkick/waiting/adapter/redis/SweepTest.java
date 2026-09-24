@@ -436,6 +436,29 @@ class SweepTest extends RedisContainerSupport {
         assertThat(조회한다("떠난_입장자")).isEqualTo("ADMITTED");
     }
 
+    /**
+     * <b>러시가 끝나 떠난 입장자만 남으면 신호가 전부 만료돼 있다.</b> 이 수정이 겨냥한 바로 그 상태라, "살아 있는
+     * 신호가 하나는 있어야" 옮기면 영영 안 옮긴다. 저장소를 잃은 것은 신호가 통째로 빈 경우다 — 그때만 멈춘다.
+     */
+    @Test
+    @DisplayName("신호가_전부_만료돼도_떠난_입장자를_옮기고_통째로_비면_안_옮긴다")
+    void 신호가_전부_만료돼도_떠난_입장자를_옮기고_통째로_비면_안_옮긴다() {
+        enqueue("떠난_입장자");
+        double 임계 = redis.opsForZSet().score(QUEUE, "떠난_입장자").block(WAIT);
+        redis.opsForValue().set(ADMITTED, String.format("%.0f", 임계)).block(WAIT);
+        // 신호는 남아 있지만 이미 끝났다.
+        redis.opsForZSet().add(ALIVE, "떠난_입장자", NOW - 10).block(WAIT);
+
+        assertThat(reaped(sweep("10"))).as("만료된 신호만 남았다").isEqualTo(1);
+
+        enqueue("또_떠난_입장자");
+        double 새_임계 = redis.opsForZSet().score(QUEUE, "또_떠난_입장자").block(WAIT);
+        redis.opsForValue().set(ADMITTED, String.format("%.0f", 새_임계)).block(WAIT);
+        redis.delete(ALIVE).block(WAIT);
+
+        assertThat(reaped(sweep("10"))).as("신호가 통째로 없다 — 저장소 유실이다").isZero();
+    }
+
     /** 입장한 사람이 폴링 없이 등록만 되풀이하면 신호가 계속 살아 쿠폰을 영영 붙잡는다. 입장자의 신호는 안 살린다. */
     @Test
     @DisplayName("입장한_사람의_재등록은_신호를_안_살린다")

@@ -31,6 +31,7 @@ import java.time.ZoneOffset;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.DoubleSupplier;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -428,10 +429,15 @@ class QueueStatusFilterTest {
         MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest
                 .get("/api/v1/coupons/" + COUPON + "/queue?queueToken=" + 토큰)
                 .header("X-Member-Id", MEMBER));
-        exchange.getResponse().setWriteHandler(body -> Mono.error(new IllegalStateException("끊겼다")));
+        AtomicInteger 쓰기_실패 = new AtomicInteger();
+        exchange.getResponse().setWriteHandler(body -> {
+            쓰기_실패.incrementAndGet();
+            return Mono.error(new IllegalStateException("끊겼다"));
+        });
 
         표시하는_필터.filter(exchange, e -> Mono.empty()).onErrorResume(e -> Mono.empty()).block();
 
+        assertThat(쓰기_실패).as("전제 — 응답 쓰기가 실제로 실패했다").hasPositiveValue();
         assertThat(거절.mark()).isZero();
     }
 

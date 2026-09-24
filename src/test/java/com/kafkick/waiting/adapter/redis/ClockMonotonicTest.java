@@ -47,7 +47,8 @@ class ClockMonotonicTest extends RedisContainerSupport {
     @BeforeEach
     void 준비() {
         script = RedisScript.of(new ClassPathResource("redis/enqueue.lua"), List.class);
-        redis.delete(QUEUE, MAX_SCORE).block(WAIT);
+        // 커서도 지운다. 남으면 앞 시험이 둔 커서가 다음 시험의 하한이 된다.
+        redis.delete(QUEUE, MAX_SCORE, ADMITTED).block(WAIT);
         for (int i = 0; i < 200; i++) {
             redis.delete(alive("m" + i)).block(WAIT);
         }

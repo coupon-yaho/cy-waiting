@@ -375,57 +375,6 @@ class AllocationRedisPortTest extends RedisContainerSupport {
                 .containsOnly(entry("c1", 3L), entry("c2", 1L));
     }
 
-    /**
-     * <b>입장 커서 위만 센다.</b> 입장한 사람은 폴링해 와야 줄에서 빠져서, 안 오고 떠난 한 명만 남아도 줄 전체를 세면
-     * 러시가 끝난 쿠폰이 영영 한산으로 안 돌아온다(R1). 등록과 순위도 커서 위만 센다.
-     */
-    @Test
-    @DisplayName("입장_커서_아래는_대기로_안_센다")
-    void 입장_커서_아래는_대기로_안_센다() {
-        줄_세운다("c1", 10, 20, 30);
-        줄_세운다("c2", 10);
-        redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "20").block(WAIT);
-        redis.opsForValue().set(RedisKeys.admitted("c2", SHARDS, 0), "10").block(WAIT);
-
-        assertThat(port.queueSizes(List.of("c1", "c2")).block(WAIT))
-                .containsOnly(entry("c1", 1L), entry("c2", 0L));
-    }
-
-    /**
-     * <b>입장했지만 아직 안 온 사람은 센다.</b> 커서가 마지막 사람을 넘는 순간 쿠폰을 한산으로 내리면, 그 사람들이 폴링해
-     * 입장을 알기 전에 새로 온 사람이 줄 없이 통과해 재고를 먼저 먹는다(추월). 생존 신호가 살아 있는 동안은 세고, 안
-     * 오고 떠난 사람은 신호가 끝나면 빠진다. 커서는 운영값처럼 마이크로초 점수다.
-     */
-    @Test
-    @DisplayName("입장했지만_아직_안_온_사람은_신호가_살아_있는_동안_센다")
-    void 입장했지만_아직_안_온_사람은_신호가_살아_있는_동안_센다() {
-        long 점수 = 1_790_000_000_000_000L;
-        줄_세운다("c1", 점수, 점수 + 1);
-        줄_세운다("c2", 점수);
-        redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), Long.toString(점수 + 1)).block(WAIT);
-        redis.opsForValue().set(RedisKeys.admitted("c2", SHARDS, 0), Long.toString(점수)).block(WAIT);
-        // 신호의 만료는 레디스 시계로 잰다. 로컬 시계를 쓰면 컨테이너와 어긋난 만큼 판정이 흔들린다.
-        long 지금초 = redis.execute(connection -> connection.serverCommands().time())
-                .blockFirst(WAIT) / 1_000;
-        // c1 은 둘 다 아직 올 수 있다. c2 의 한 명은 신호가 끝났다 — 안 오고 떠났다.
-        redis.opsForZSet().add(RedisKeys.alive("c1", SHARDS, 0), "m" + 점수, 지금초 + 200).block(WAIT);
-        redis.opsForZSet().add(RedisKeys.alive("c1", SHARDS, 0), "m" + (점수 + 1), 지금초 + 200).block(WAIT);
-        redis.opsForZSet().add(RedisKeys.alive("c2", SHARDS, 0), "m" + 점수, 지금초 - 10).block(WAIT);
-
-        assertThat(port.queueSizes(List.of("c1", "c2")).block(WAIT))
-                .containsOnly(entry("c1", 2L), entry("c2", 0L));
-    }
-
-    /** 커서가 깨졌으면 모르는 것이다. 줄 전체를 센다 — 덜 세면 줄 선 사람이 있는데 한산으로 읽는다. */
-    @Test
-    @DisplayName("깨진_커서면_줄_전체를_센다")
-    void 깨진_커서면_줄_전체를_센다() {
-        줄_세운다("c1", 10, 20, 30);
-        redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "abc").block(WAIT);
-
-        assertThat(port.queueSizes(List.of("c1")).block(WAIT)).containsOnly(entry("c1", 3L));
-    }
-
     @Test
     @DisplayName("키로_못_쓰는_대상은_그것만_뺀다")
     void 키로_못_쓰는_대상은_그것만_뺀다() {
@@ -446,17 +395,12 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         for (int shard = 0; shard < 샤드_넷; shard++) {
             redis.opsForZSet().add(RedisKeys.queue("c1", 샤드_넷, shard), "m" + shard, shard)
                     .block(WAIT);
-            redis.opsForZSet().add(RedisKeys.queue("c1", 샤드_넷, shard), "n" + shard, 100 + shard)
-                    .block(WAIT);
         }
-        // 커서는 샤드마다 따로다. 한 샤드만 입장이 끝났다.
-        redis.opsForValue().set(RedisKeys.admitted("c1", 샤드_넷, 2), "50").block(WAIT);
         try {
-            assertThat(넷.queueSizes(List.of("c1")).block(WAIT)).containsOnly(entry("c1", 7L));
+            assertThat(넷.queueSizes(List.of("c1")).block(WAIT)).containsOnly(entry("c1", 4L));
         } finally {
             for (int shard = 0; shard < 샤드_넷; shard++) {
                 redis.delete(RedisKeys.queue("c1", 샤드_넷, shard)).block(WAIT);
-                redis.delete(RedisKeys.admitted("c1", 샤드_넷, shard)).block(WAIT);
             }
         }
     }

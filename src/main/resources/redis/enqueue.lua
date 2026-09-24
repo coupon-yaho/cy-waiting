@@ -78,7 +78,11 @@ local from = admitted >= 0 and ('(' .. string.format('%.0f', admitted)) or '-inf
 -- 사람이 상한 때문에 자리를 잃으면 안 되기 때문이다.
 local existing = redis.call('ZSCORE', KEYS[1], ARGV[1])
 if existing then
-    redis.call('ZADD', KEYS[3], now + aliveTtl, ARGV[1])
+    -- **입장한 사람의 신호는 안 살린다.** 폴링 없이 등록만 되풀이하면 신호가 계속 살아, 청소가 그를 입장 기록으로
+    -- 못 옮기고 쿠폰이 영영 한산으로 못 돌아온다. 입장은 폴링이 알려 준다.
+    if not (admitted >= 0 and tonumber(existing) <= admitted) then
+        redis.call('ZADD', KEYS[3], now + aliveTtl, ARGV[1])
+    end
     return {existing, 0, 1, redis.call('ZCOUNT', KEYS[1], from, '(' .. existing), 0}
 end
 

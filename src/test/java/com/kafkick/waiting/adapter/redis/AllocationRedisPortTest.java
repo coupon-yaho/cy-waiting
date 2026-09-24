@@ -260,8 +260,9 @@ class AllocationRedisPortTest extends RedisContainerSupport {
                 port.sweep(List.of("c1"), 지금, 100, 300, 100, 임기).block(WAIT);
 
         assertThat(결과.swept()).as("걷은 수").isZero();
-        assertThat(redis.opsForZSet().score(RedisKeys.queue("c1", SHARDS, 0), "m1").block(WAIT))
-                .as("입장 확정자가 줄에 남는다").isEqualTo(1.0);
+        // 신호가 끝난 입장 확정자는 입장 기록으로 옮긴다. 다음 폴링에도 입장이다.
+        assertThat(redis.opsForHash().get(RedisKeys.grace("c1", SHARDS, 0), "m1").block(WAIT))
+                .as("이탈이 아니라 입장으로 남는다").isEqualTo("a:" + 지금);
     }
 
     /**
@@ -289,7 +290,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
 
         assertThat(결과.swept()).as("차례가 온 사람은 안 걷는다").isZero();
         assertThat(redis.opsForZSet().score(RedisKeys.queue("c1", SHARDS, 0), "m1").block(WAIT))
-                .as("줄에 순번까지 그대로").isEqualTo(1.0);
+                .as("신호가 끝나 입장 기록으로 옮겼다").isNull();
         assertThat(redis.opsForHash().get(RedisKeys.grace("c1", SHARDS, 0), "m1").block(WAIT))
                 .as("입장 표시가 살아남는다").isEqualTo("a:" + 지금);
     }

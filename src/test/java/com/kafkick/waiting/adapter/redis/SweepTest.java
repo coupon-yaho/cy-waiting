@@ -576,9 +576,9 @@ class SweepTest extends RedisContainerSupport {
 
         assertThat(swept(sweep("100"))).as("임계 위인 사람만 걷는다").isOne();
 
-        assertThat(redis.opsForZSet().score(QUEUE, "차례온사람").block(WAIT))
-                .as("걷으면 그가 다시 서서 뒷사람들에게 통째로 추월당한다")
-                .isEqualTo((double) 임계값);
+        // 걷으면 그가 다시 서서 뒷사람들에게 통째로 추월당한다. 이탈이 아니라 입장으로 옮긴다.
+        assertThat(redis.opsForHash().get(GRACE, "차례온사람").block(WAIT))
+                .as("입장 기록이다").isEqualTo("a:" + NOW);
         assertThat(redis.opsForZSet().score(QUEUE, "이탈자").block(WAIT)).isNull();
     }
 

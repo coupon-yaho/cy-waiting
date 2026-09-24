@@ -253,9 +253,12 @@ if nFront > 0 then
 end
 
 -- **신호가 끝난 커서 아래 입장자는 못 알린 입장 기록으로 옮긴다.** 안 오고 떠난 입장자가 줄 길이를 붙잡지 않게
--- 한다. 돌아오면 조회도 재등록도 입장으로 이어진다. 신호를 못 믿는 구간에는 앞줄처럼 안 옮긴다.
+-- 한다. 돌아오면 조회도 재등록도 입장으로 이어진다. 청소 정지·울타리 구간에는 앞줄처럼 안 옮긴다.
 local reaped = 0
-if usableAdmitted and admitted >= 0 and removing then
+-- **가드는 "살아 있는 신호" 가 아니라 "신호 집합이 있는가" 다.** 떠난 입장자만 남은 쿠폰은 신호가 전부 만료돼 있어,
+-- 앞줄의 가드를 그대로 쓰면 바로 그 상태에서 영영 안 옮긴다. 통째로 빈 것만 저장소 유실로 본다.
+local reaping = removeFront == 1 and not fencedOut and redis.call('EXISTS', KEYS[3]) == 1
+if usableAdmitted and admitted >= 0 and reaping then
     -- 아래쪽부터 K 명만 본다. 오래된 입장자일수록 떠났을 가능성이 크다.
     local below = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf',
             string.format('%.0f', math.floor(admitted)), 'LIMIT', 0, limit)

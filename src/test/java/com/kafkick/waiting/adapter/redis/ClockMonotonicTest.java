@@ -138,6 +138,25 @@ class ClockMonotonicTest extends RedisContainerSupport {
         assertThat(appliedFlag(결과)).as("밀어 올린 사실을 알린다").isEqualTo(1);
     }
 
+    /**
+     * 커서가 있으면 더 위험하다. 바닥값이 없을 때 남는 하한이 커서뿐이면 새 사람이 {@code 커서 + 1} 로, 곧 아직
+     * 기다리는 사람 전원의 앞에 선다.
+     */
+    @Test
+    @DisplayName("바닥값이_만료되고_커서만_남아도_줄_선_사람을_앞지르지_않는다")
+    void 바닥값이_만료되고_커서만_남아도_줄_선_사람을_앞지르지_않는다() {
+        enqueue("A");
+        long 앞선_점수 = scoreOf("A") + 20_000_000;
+        redis.opsForZSet().add(QUEUE, "앞선_입장자", 앞선_점수 - 10_000_000).block(WAIT);
+        redis.opsForZSet().add(QUEUE, "앞선_대기자", 앞선_점수).block(WAIT);
+        redis.opsForValue().set(ADMITTED, String.valueOf(앞선_점수 - 10_000_000)).block(WAIT);
+        redis.delete(MAX_SCORE).block(WAIT);
+
+        enqueue("B");
+
+        assertThat(scoreOf("B")).isGreaterThan(앞선_점수);
+    }
+
     @Test
     @DisplayName("바닥값이_적용되면_그_사실이_반환된다")
     void 바닥값이_적용되면_그_사실이_반환된다() {

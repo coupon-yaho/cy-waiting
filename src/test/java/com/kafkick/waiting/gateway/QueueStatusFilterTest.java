@@ -414,6 +414,27 @@ class QueueStatusFilterTest {
         assertThat(거절.mark()).isEqualTo(1);
     }
 
+    /** 응답을 쓰다 난 오류는 클라이언트가 끊은 것이다. 조회는 성공해 신호가 갱신됐으니 표시를 안 남긴다. */
+    @Test
+    @DisplayName("응답_쓰기가_실패해도_거절_표시를_안_남긴다")
+    void 응답_쓰기가_실패해도_거절_표시를_안_남긴다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100));
+        줄.enqueue(COUPON, MEMBER, NO_LIMIT, 지금).block();
+        String 토큰 = tokens.issue(COUPON, MEMBER, 지금);
+        PollRejections 거절 = PollRejections.create();
+        QueueStatusFilter 표시하는_필터 = QueueStatusFilter.of(
+                holder, 줄, tokens, Clock.fixed(지금, ZoneOffset.UTC), meters, () -> 0.5,
+                limiter, entryTokens, 거절);
+        MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest
+                .get("/api/v1/coupons/" + COUPON + "/queue?queueToken=" + 토큰)
+                .header("X-Member-Id", MEMBER));
+        exchange.getResponse().setWriteHandler(body -> Mono.error(new IllegalStateException("끊겼다")));
+
+        표시하는_필터.filter(exchange, e -> Mono.empty()).onErrorResume(e -> Mono.empty()).block();
+
+        assertThat(거절.mark()).isZero();
+    }
+
     /**
      * <b>재료가 낡으면 매진으로 안 봅니다.</b>
      *

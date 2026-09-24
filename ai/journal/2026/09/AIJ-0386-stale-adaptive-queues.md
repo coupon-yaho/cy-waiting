@@ -8,7 +8,7 @@ jira: CY-1003
 agent: claude-opus-5
 confidence: high
 promoted-to: plan/90-decisions.md
-commits: []
+commits: [bb11bf10, 7e91cd0d]
 ---
 
 # 낡은 재료에서 적응형 쿠폰은 줄에 선다

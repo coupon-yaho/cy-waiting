@@ -266,7 +266,7 @@ class LeaderKillScenarioTest {
             List<Integer> 회복_줄_상태 = new ArrayList<>();
             long[] 줄_쿠폰_도착 = new long[3];
             long[] 한산한_쿠폰_도착 = new long[3];
-            long[] 적응형_도착 = new long[1];
+            long[] 적응형_도착 = new long[2];
             List<Integer> 장애중_적응형_상태 = new ArrayList<>();
 
             ChaosScenario.named("C4 리더 강제 종료")
@@ -277,12 +277,17 @@ class LeaderKillScenarioTest {
                                         여러_번_시도한다(한산한_쿠폰, 한산한_보낼_수, 1_100)));
                         줄_쿠폰_도착[0] = 잰다(COUPON,
                                 () -> 여러_번_시도한다(COUPON, 보낼_수, 1_500));
+                        적응형_도착[1] = 잰다(적응형_쿠폰,
+                                () -> 여러_번_시도한다(적응형_쿠폰, 한산한_보낼_수, 1_700));
                         assertThat(정상_상태).as("전제 — 한산한 쿠폰은 5xx 없이 답한다")
                                 .noneMatch(status -> status >= 500);
                         assertThat(한산한_쿠폰_도착[0]).as("전제 — 한산한 쿠폰은 뒷단까지 간다")
                                 .isPositive();
                         assertThat(줄_쿠폰_도착[0]).as("전제 — 줄이 선 쿠폰은 평시에도 안 간다")
                                 .isZero();
+                        // 안 가던 쿠폰이면 낡은 구간의 "도착 0" 이 아무것도 안 잰다.
+                        assertThat(적응형_도착[1]).as("전제 — 적응형 쿠폰도 평시에는 뒷단까지 간다")
+                                .isPositive();
                     })
                     .inject(() -> {
                         죽은_리더가_락을_쥔다(락);
@@ -447,9 +452,11 @@ class LeaderKillScenarioTest {
      */
     private Optional<String> 낡은_갈래를_밟았다() {
         long 증가 = 결정_수(낡은_결정) - 낡음_직후_결정;
-        return 증가 >= 보낼_수 ? Optional.empty()
-                : Optional.of("낡은 재료로 줄에 세운 것이 %d 건뿐이다 (보낸 %d)"
-                        .formatted(증가, 보낼_수));
+        // 줄 선 쿠폰과 적응형 쿠폰이 각각 보낸 만큼이다. 하나만 채워서는 적응형이 이 갈래를 밟았는지 모른다.
+        long 기대 = 2L * 보낼_수;
+        return 증가 >= 기대 ? Optional.empty()
+                : Optional.of("낡은 재료로 줄에 세운 것이 %d 건뿐이다 (기대 %d)"
+                        .formatted(증가, 기대));
     }
 
     /** 그 결정이 지금까지 몇 번 나왔는가. */

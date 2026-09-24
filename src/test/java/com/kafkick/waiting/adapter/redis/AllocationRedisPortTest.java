@@ -375,6 +375,32 @@ class AllocationRedisPortTest extends RedisContainerSupport {
                 .containsOnly(entry("c1", 3L), entry("c2", 1L));
     }
 
+    /**
+     * <b>입장 커서 위만 센다.</b> 입장한 사람은 폴링해 와야 줄에서 빠져서, 안 오고 떠난 한 명만 남아도 줄 전체를 세면
+     * 러시가 끝난 쿠폰이 영영 한산으로 안 돌아온다(R1). 등록과 순위도 커서 위만 센다.
+     */
+    @Test
+    @DisplayName("입장_커서_아래는_대기로_안_센다")
+    void 입장_커서_아래는_대기로_안_센다() {
+        줄_세운다("c1", 10, 20, 30);
+        줄_세운다("c2", 10);
+        redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "20").block(WAIT);
+        redis.opsForValue().set(RedisKeys.admitted("c2", SHARDS, 0), "10").block(WAIT);
+
+        assertThat(port.queueSizes(List.of("c1", "c2")).block(WAIT))
+                .containsOnly(entry("c1", 1L), entry("c2", 0L));
+    }
+
+    /** 커서가 깨졌으면 모르는 것이다. 줄 전체를 센다 — 덜 세면 줄 선 사람이 있는데 한산으로 읽는다. */
+    @Test
+    @DisplayName("깨진_커서면_줄_전체를_센다")
+    void 깨진_커서면_줄_전체를_센다() {
+        줄_세운다("c1", 10, 20, 30);
+        redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "abc").block(WAIT);
+
+        assertThat(port.queueSizes(List.of("c1")).block(WAIT)).containsOnly(entry("c1", 3L));
+    }
+
     @Test
     @DisplayName("키로_못_쓰는_대상은_그것만_뺀다")
     void 키로_못_쓰는_대상은_그것만_뺀다() {
@@ -395,12 +421,17 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         for (int shard = 0; shard < 샤드_넷; shard++) {
             redis.opsForZSet().add(RedisKeys.queue("c1", 샤드_넷, shard), "m" + shard, shard)
                     .block(WAIT);
+            redis.opsForZSet().add(RedisKeys.queue("c1", 샤드_넷, shard), "n" + shard, 100 + shard)
+                    .block(WAIT);
         }
+        // 커서는 샤드마다 따로다. 한 샤드만 입장이 끝났다.
+        redis.opsForValue().set(RedisKeys.admitted("c1", 샤드_넷, 2), "50").block(WAIT);
         try {
-            assertThat(넷.queueSizes(List.of("c1")).block(WAIT)).containsOnly(entry("c1", 4L));
+            assertThat(넷.queueSizes(List.of("c1")).block(WAIT)).containsOnly(entry("c1", 7L));
         } finally {
             for (int shard = 0; shard < 샤드_넷; shard++) {
                 redis.delete(RedisKeys.queue("c1", 샤드_넷, shard)).block(WAIT);
+                redis.delete(RedisKeys.admitted("c1", 샤드_넷, shard)).block(WAIT);
             }
         }
     }

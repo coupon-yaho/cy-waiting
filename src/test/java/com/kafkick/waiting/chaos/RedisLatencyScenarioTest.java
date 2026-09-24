@@ -146,7 +146,9 @@ class RedisLatencyScenarioTest {
      */
     private void 재료를_심는다() {
         Map<String, String> 재료 = SnapshotCodec.create().encode(
-                new GatewaySnapshot(Map.of(COUPON, CouponStates.idle(1_000_000)),
+                // 고정 시계라 재료는 레디스 시각으로 늘 낡았다. 낡은 갈래에서 레디스 없이 통과하는 것은
+                // 꺼진 쿠폰뿐이다 — 적응형은 줄로 가 판정이 레디스 왕복을 낸다.
+                new GatewaySnapshot(Map.of(COUPON, CouponStates.off(1_000_000)),
                         new SnapshotMeta(10_000, 1), 지금),
                 CreditSmoother.Snapshot.empty(), QueueingHysteresis.Snapshot.empty());
         redis.opsForHash().putAll(RedisKeys.SNAPSHOT, 재료).block(명령_상한().multipliedBy(4));

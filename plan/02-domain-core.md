@@ -141,12 +141,21 @@ tryAcquireAll(tier1, tier2):
 
 | 상황 | 판정 |
 |---|---|
-| 스냅샷 낡음 + **큐가 비어 있음** (`waiting == 0`) | fail-open — 상한 안에서 통과 |
+| 스냅샷 낡음 + **큐가 비어 있음** (`waiting == 0`) + **꺼진 쿠폰** | fail-open — 상한 안에서 통과 |
+| 스냅샷 낡음 + **큐가 비어 보임** + 적응형 | **큐 등록** — 발행이 멎은 뒤 선 줄을 모른다 (CY-1003) |
 | 스냅샷 낡음 + **큐에 사람이 있음** (`waiting > 0`) | **큐 등록** — 추월 금지 |
 | 위 + Redis도 죽어 큐 등록 실패 | 그때만 fail-open (Phase 5에서 처리) |
 
 `waiting > 0`은 마지막으로 본 스냅샷의 사실이고 그 사람들의 순번은 Redis에 남아 있다.
 **상태를 모른다는 것이 추월을 정당화하지 않는다.**
+
+**`waiting == 0` 도 낡은 스냅샷에서는 사실이 아니다 (CY-1003).** 발행이 멎은 뒤 선 줄은 스냅샷에 끝내 안 실리고,
+래치는 그 노드에서 한 번 찍은 시각부터 잠깐만 산다. 래치가 없는 다른 노드는 낡음 판정 직후부터, 줄을 세운 노드도
+래치가 풀린 뒤부터 새로 온 사람을 뒷단에 보내 레디스에 줄 선 사람을 앞지르게 했다. 그래서 낡은 구간의 통과는
+**꺼진 쿠폰**만 탄다 — 꺼진 쿠폰은 어느 노드도 줄을 안 세우므로(5번이 6'·7·8번보다 앞) 비어 보이면 정말 비었다.
+적응형은 비어 보여도 줄에 선다. 대가는 제어 평면이 멎은 동안 적응형 쿠폰의 신규 통과가 0 이라는 것이다 —
+순번은 받고, 줄이 차면 429 다. 토큰을 쥔 사람은 계속 통과하고, 레디스까지 죽어 등록이 실패하면 지금처럼 상한
+안에서 연다.
 
 <a id="f4"></a>
 ### 3.3 F4 — 회복 전이에서 두 리미터가 동시에 열린다
@@ -182,13 +191,13 @@ tryAcquireAll(tier1, tier2):
  1. 재고를 알고 stock <= 0            → REJECT_SOLD_OUT     ← 미상은 여기 안 걸린다 (CY-702)
  2. hasValidToken                     → tier2 통과 시 PASS_TOKEN, 초과 시 RETRY_TOKEN
  3. mode == ALWAYS && !queueFull      → ENQUEUE_ALWAYS       ← 낡음보다 앞
- 4. dataStale && !hasQueue            → failOpen (상한 내 PASS, 초과 시 REJECT_OVERLOAD)
+ 4. dataStale && mode == OFF && !hasQueue
+                                      → failOpen (상한 내 PASS, 초과 시 REJECT_OVERLOAD)  ← 적응형은 7번 (CY-1003)
  5. mode == OFF && !hasQueue          → PASS_BYPASS
  6. waiting > 0 && waiting >= queueCapacity
                                       → REJECT_QUEUE_FULL    ← 큐로 가는 경로보다 앞
  6'. circuit != CLOSED                → ENQUEUE_CIRCUIT_OPEN  ← 낡음보다 앞 (F3)
- 7. dataStale && (waiting > 0 || justEnqueued)
-                                      → ENQUEUE_STALE        (F1)
+ 7. dataStale                         → ENQUEUE_STALE        (F1) ← 낡은 "대기 0" 도 모름이다 (CY-1003)
  8. runtime != IDLE || justEnqueued    → ENQUEUE_BACKLOG      (새치기 방지)
 ───────────── 여기부터 한산한 쿠폰 ─────────────
  9. tryAcquireAll(tier1, tier2)       → 부족한 쪽에 따라 ENQUEUE_RATE_COUPON /
@@ -579,8 +588,8 @@ CouponStates.unknown()
 - **근거** 3.2절 · B-4 · [AIJ-0002](../ai/journal/2026/08/AIJ-0002-recovery-transition-findings.md)
 - **선행** T2.3.2
 
-1. **RED** `스냅샷이_낡고_큐가_비어_있으면_상한_안에서_통과시킨다`
-   — `dataStale=true`, `waiting=0` → `PASS_FAIL_OPEN`
+1. **RED** ~~`스냅샷이_낡고_큐가_비어_있으면_상한_안에서_통과시킨다`~~ **개정 (CY-1003)**
+   — 꺼진 쿠폰 `dataStale=true`, `waiting=0` → `PASS_FAIL_OPEN`. 적응형은 같은 조건에서 `ENQUEUE_STALE`
 2. **GREEN** 4번 분기
 3. **RED** `스냅샷이_낡아도_줄_선_사람이_있으면_추월시키지_않는다` ★
    — `dataStale=true`, `waiting=5000` → `ENQUEUE_STALE`
@@ -592,6 +601,7 @@ CouponStates.unknown()
 8. **GREEN** 4·6번에 래치 반영 ([래치](#latch))
 9. **완료** `waiting > 0` 인 어떤 조합에서도 fail-open 통과가 0
 10. **완료** **`waiting == 0` 이어도 래치가 서 있으면 fail-open 통과가 0**
+11. **완료 (CY-1003)** **낡은 구간에서 적응형 쿠폰의 fail-open 통과가 0**
 
 #### T2.3.5 · 큐 상한
 

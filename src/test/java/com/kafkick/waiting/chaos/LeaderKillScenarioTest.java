@@ -68,6 +68,9 @@ class LeaderKillScenarioTest {
      */
     private static final String 한산한_쿠폰 = "c4-idle";
 
+    /** 적응형 한산 쿠폰. 낡은 구간에는 발행이 멎은 뒤 선 줄을 모르므로 통과 대신 줄에 선다. */
+    private static final String 적응형_쿠폰 = "c4-adaptive";
+
     /** 죽은 리더의 이름. 이 소유자는 갱신도 해제도 안 한다 — 그래서 죽음이다. */
     private static final String 죽은_리더 = "c4-dead-leader";
 
@@ -197,9 +200,13 @@ class LeaderKillScenarioTest {
      * 모양으로 세운다</b> — 점수만 넣으면 스위퍼가 못 보고, 첫 배분이 임계를 올리면 창 밖이 된다.
      */
     private void 재료를_심는다(StatefulRedisConnection<String, String> 연결) {
-        redis.opsForSet().add(RedisKeys.ACTIVE_COUPONS, COUPON, 한산한_쿠폰).block(기다림);
+        redis.opsForSet().add(RedisKeys.ACTIVE_COUPONS, COUPON, 한산한_쿠폰, 적응형_쿠폰).block(기다림);
+        redis.opsForValue().set(RedisKeys.stock(적응형_쿠폰), "100000").block(기다림);
         redis.opsForValue().set(RedisKeys.stock(COUPON), "50").block(기다림);
         redis.opsForValue().set(RedisKeys.stock(한산한_쿠폰), "100000").block(기다림);
+        // **대조군은 운영자가 끈 쿠폰이다.** 재료가 낡는 구간에 통과하는 것은 꺼진 쿠폰뿐이다 — 적응형은 발행이 멎은
+        // 뒤 선 줄을 모르므로 줄로 간다(추월 금지). 열린 갈래가 승계 내내 열려 있는지를 이것으로 잰다.
+        redis.opsForHash().put(RedisKeys.COUPON_POLICY, 한산한_쿠폰, "{\"mode\":\"OFF\"}").block(기다림);
         QueueSeed.줄을_세운다(연결, COUPON, 줄_선_사람);
     }
 
@@ -259,6 +266,8 @@ class LeaderKillScenarioTest {
             List<Integer> 회복_줄_상태 = new ArrayList<>();
             long[] 줄_쿠폰_도착 = new long[3];
             long[] 한산한_쿠폰_도착 = new long[3];
+            long[] 적응형_도착 = new long[2];
+            List<Integer> 장애중_적응형_상태 = new ArrayList<>();
 
             ChaosScenario.named("C4 리더 강제 종료")
                     .baseline(() -> {
@@ -268,12 +277,17 @@ class LeaderKillScenarioTest {
                                         여러_번_시도한다(한산한_쿠폰, 한산한_보낼_수, 1_100)));
                         줄_쿠폰_도착[0] = 잰다(COUPON,
                                 () -> 여러_번_시도한다(COUPON, 보낼_수, 1_500));
+                        적응형_도착[1] = 잰다(적응형_쿠폰,
+                                () -> 여러_번_시도한다(적응형_쿠폰, 한산한_보낼_수, 1_700));
                         assertThat(정상_상태).as("전제 — 한산한 쿠폰은 5xx 없이 답한다")
                                 .noneMatch(status -> status >= 500);
                         assertThat(한산한_쿠폰_도착[0]).as("전제 — 한산한 쿠폰은 뒷단까지 간다")
                                 .isPositive();
                         assertThat(줄_쿠폰_도착[0]).as("전제 — 줄이 선 쿠폰은 평시에도 안 간다")
                                 .isZero();
+                        // 안 가던 쿠폰이면 낡은 구간의 "도착 0" 이 아무것도 안 잰다.
+                        assertThat(적응형_도착[1]).as("전제 — 적응형 쿠폰도 평시에는 뒷단까지 간다")
+                                .isPositive();
                     })
                     .inject(() -> {
                         죽은_리더가_락을_쥔다(락);
@@ -296,6 +310,9 @@ class LeaderKillScenarioTest {
                         long 낡기_전 = 받은_수(한산한_쿠폰);
                         장애중_상태.addAll(여러_번_시도한다(한산한_쿠폰, 한산한_보낼_수, 2_000));
                         한산한_쿠폰_도착[1] = 받은_수(한산한_쿠폰) - 낡기_전;
+                        적응형_도착[0] = 잰다(적응형_쿠폰,
+                                () -> 장애중_적응형_상태.addAll(
+                                        여러_번_시도한다(적응형_쿠폰, 보낼_수, 2_700)));
                         줄_쿠폰_도착[1] = 잰다(COUPON,
                                 () -> 장애중_줄_상태.addAll(
                                         여러_번_시도한다(COUPON, 보낼_수, 2_500)));
@@ -331,6 +348,12 @@ class LeaderKillScenarioTest {
                             줄을_추월하지_않았다(줄_쿠폰_도착[1]),
                             // 줄로 보냈는가. 도착 0 만 보면 전원 503 도 통과다.
                             줄에_세웠다(장애중_줄_상태, "유지"),
+                            // **적응형은 비어 보여도 줄이다** (불변식 4). 발행이 멎은 뒤 선 줄은 스냅샷에
+                            // 안 실려, 믿고 통과시키면 레디스에 줄 선 사람을 앞지른다.
+                            적응형_도착[0] == 0 ? Optional.empty()
+                                    : Optional.of("낡은 구간에 적응형 쿠폰이 %d 건 뒷단에 갔다"
+                                            .formatted(적응형_도착[0])),
+                            줄에_세웠다(장애중_적응형_상태, "유지 적응형"),
                             // **낡음 갈래를 실제로 밟았는가.** 상태 코드는
                             // 평시와 같은 202 라, 어느 줄이 답했는지는 결정
                             // 계수로만 보인다.
@@ -429,9 +452,11 @@ class LeaderKillScenarioTest {
      */
     private Optional<String> 낡은_갈래를_밟았다() {
         long 증가 = 결정_수(낡은_결정) - 낡음_직후_결정;
-        return 증가 >= 보낼_수 ? Optional.empty()
-                : Optional.of("낡은 재료로 줄에 세운 것이 %d 건뿐이다 (보낸 %d)"
-                        .formatted(증가, 보낼_수));
+        // 줄 선 쿠폰과 적응형 쿠폰이 각각 보낸 만큼이다. 하나만 채워서는 적응형이 이 갈래를 밟았는지 모른다.
+        long 기대 = 2L * 보낼_수;
+        return 증가 >= 기대 ? Optional.empty()
+                : Optional.of("낡은 재료로 줄에 세운 것이 %d 건뿐이다 (기대 %d)"
+                        .formatted(증가, 기대));
     }
 
     /** 그 결정이 지금까지 몇 번 나왔는가. */

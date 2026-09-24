@@ -34,6 +34,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.data.domain.Range;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Component;
@@ -588,14 +589,27 @@ public final class AllocationRedisPort implements SnapshotSource {
         }
     }
 
+    /**
+     * 샤드를 합친 대기 수. <b>입장 커서 위만 센다</b> — 입장한 사람은 폴링해 와야 줄에서 빠져, 줄 전체를 세면 떠난 한 명이
+     * 쿠폰을 영영 한산으로 못 돌아오게 한다. 커서를 먼저 읽는다 — 커서는 오르기만 해 사이에 오르면 더 세는 쪽이다.
+     */
     private Mono<Long> shardSizes(String couponId) {
-        List<String> keys = new ArrayList<>(shards);
-        for (int shard = 0; shard < shards; shard++) {
-            keys.add(RedisKeys.queue(couponId, shards, shard));
-        }
-        return Flux.fromIterable(keys)
-                .flatMap(key -> redis.opsForZSet().size(key).defaultIfEmpty(0L))
-                .reduce(0L, (a, b) -> a + b);
+        return Flux.range(0, shards)
+                .flatMap(shard -> waitingAbove(RedisKeys.queue(couponId, shards, shard),
+                        RedisKeys.admitted(couponId, shards, shard)))
+                .reduce(0L, Long::sum);
+    }
+
+    /** 커서가 없거나 깨졌으면 줄 전체를 센다. 덜 세면 줄 선 사람이 있는데 한산으로 읽는다. */
+    private Mono<Long> waitingAbove(String queueKey, String admittedKey) {
+        return redis.opsForValue().get(admittedKey)
+                .map(raw -> parsed(raw).orElse(Double.NaN))
+                .defaultIfEmpty(Double.NaN)
+                .flatMap(cursor -> Double.isFinite(cursor)
+                        ? redis.opsForZSet().count(queueKey,
+                                Range.leftOpen(cursor, Double.POSITIVE_INFINITY))
+                        : redis.opsForZSet().size(queueKey))
+                .defaultIfEmpty(0L);
     }
 
     /**

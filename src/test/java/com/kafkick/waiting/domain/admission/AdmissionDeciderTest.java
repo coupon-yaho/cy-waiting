@@ -184,10 +184,23 @@ class AdmissionDeciderTest {
                 .isEqualTo(AdmissionDecision.PASS_BYPASS);
     }
 
+    /**
+     * <b>낡은 스냅샷의 "대기 0" 은 모름이다</b> (CY-1003). 발행이 멎은 뒤 선 줄은 스냅샷에 끝내 안 실린다. 그대로 믿고
+     * 통과시키면 레디스에 줄 선 사람을 새로 온 사람이 앞지른다 — 모름은 추월의 사유가 아니다. 적응형은 줄로 간다.
+     */
     @Test
-    @DisplayName("스냅샷이_낡고_줄이_비어_있으면_상한_안에서_통과시킨다")
-    void 스냅샷이_낡고_줄이_비어_있으면_상한_안에서_통과시킨다() {
+    @DisplayName("스냅샷이_낡으면_적응형_쿠폰은_줄이_비어_보여도_줄로_간다")
+    void 스냅샷이_낡으면_적응형_쿠폰은_줄이_비어_보여도_줄로_간다() {
         AdmissionRequest req = request(CouponStates.idle(500)).withDataStale(true);
+
+        assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.ENQUEUE_STALE);
+    }
+
+    /** 운영자가 끈 쿠폰은 어느 노드도 줄을 안 세우므로 비어 보이면 정말 비었다. 상한 안에서 통과한다. */
+    @Test
+    @DisplayName("스냅샷이_낡아도_꺼진_쿠폰의_빈_줄은_상한_안에서_통과시킨다")
+    void 스냅샷이_낡아도_꺼진_쿠폰의_빈_줄은_상한_안에서_통과시킨다() {
+        AdmissionRequest req = request(CouponStates.off(500)).withDataStale(true);
 
         assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.PASS_FAIL_OPEN);
     }
@@ -264,7 +277,7 @@ class AdmissionDeciderTest {
     void 낡은_상태의_fail_open도_상한을_넘으면_거절한다() {
         // 무제한 통과가 아니다. 상한이 없으면 fail-open 이 곧 전면 개방이다.
         AdmissionDecider d = decider();
-        AdmissionRequest req = request(CouponStates.idle(500)).withDataStale(true);
+        AdmissionRequest req = request(CouponStates.off(500)).withDataStale(true);
 
         for (int i = 0; i < 100; i++) {
             assertThat(d.decide(req)).isEqualTo(AdmissionDecision.PASS_FAIL_OPEN);
@@ -284,9 +297,11 @@ class AdmissionDeciderTest {
     void 낡음이_풀려도_같은_초의_전역_예산은_이어진다() {
         AdmissionDecider d = decider();
         CouponState idle = CouponStates.idle(500);
+        // 낡은 갈래의 통과는 꺼진 쿠폰만 탄다.
+        CouponState off = CouponStates.off(500);
 
         for (int i = 0; i < 100; i++) {
-            assertThat(d.decide(request(idle).withDataStale(true)))
+            assertThat(d.decide(request(off).withDataStale(true)))
                     .as("%d 번째", i).isEqualTo(AdmissionDecision.PASS_FAIL_OPEN);
         }
 
@@ -306,6 +321,7 @@ class AdmissionDeciderTest {
     void 갈래를_섞어도_한_초의_노드_몫은_하나다() {
         AdmissionDecider d = decider();
         CouponState idle = CouponStates.idle(500);
+        CouponState off = CouponStates.off(500);
         CouponState queued = CouponStates.queueing(10, 1_000, 5_000);
         // **예산을 쓰는 통과만 센다.** `isPass` 는 리미터를 안 지나는 우회까지
         // 무는데, 그것까지 세면 이 단언이 노드 몫과 다른 것을 재게 된다.
@@ -315,7 +331,7 @@ class AdmissionDeciderTest {
         int passed = 0;
         for (int i = 0; i < 400; i++) {
             AdmissionRequest req = switch (i % 3) {
-                case 0 -> request(idle).withDataStale(true);
+                case 0 -> request(off).withDataStale(true);
                 case 1 -> request(queued).withValidToken(true);
                 default -> request(idle);
             };

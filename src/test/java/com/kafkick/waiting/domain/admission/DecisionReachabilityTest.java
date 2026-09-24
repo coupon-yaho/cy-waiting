@@ -30,7 +30,7 @@ class DecisionReachabilityTest {
         seen.add(decide(CouponStates.closed(100), r -> r));
         seen.add(decide(CouponStates.queueing(100, 500, 3000), r -> r.withValidToken(true)));
         seen.add(decide(CouponStates.off(500), r -> r));
-        seen.add(decide(CouponStates.idle(500), r -> r.withDataStale(true)));
+        seen.add(decide(CouponStates.off(500), r -> r.withDataStale(true)));
         seen.add(decide(CouponStates.queueing(100, 500, 5000), r -> r.withDataStale(true)));
         seen.add(decide(CouponStates.queueing(100, 500, 20_000), r -> r));
         seen.add(decide(CouponStates.always(500), r -> r));
@@ -42,7 +42,7 @@ class DecisionReachabilityTest {
 
         // 상한을 말려야 나오는 넷은 같은 리미터를 반복해서 두드린다
         seen.add(drain(CouponStates.queueing(100, 500, 3000), r -> r.withValidToken(true), 0.7));
-        seen.add(drain(CouponStates.idle(500), r -> r.withDataStale(true), 0.7));
+        seen.add(drain(CouponStates.off(500), r -> r.withDataStale(true), 0.7));
         seen.add(drain(CouponStates.idle(500), r -> r, 0.7));
         seen.add(drain(CouponStates.idle(500), r -> r, 5.0));
         // 시험 예산이 마르면 반쯤 열린 갈래도 줄로 간다

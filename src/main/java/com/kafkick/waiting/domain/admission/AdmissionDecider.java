@@ -93,10 +93,10 @@ public class AdmissionDecider {
             return AdmissionDecision.ENQUEUE_ALWAYS;
         }
 
-        // 4 — 낡았지만 줄이 비었다. 밀어낼 사람이 없으니 상한 안에서 통과.
-        //     **꺼진 쿠폰보다 앞이다** — 뒤에 두면 꺼진 쿠폰만 무제한으로 뒷단에
-        //     꽂혀, 모르는 구간에 걸어 둔 이 상한이 있으나 마나가 된다.
-        if (req.dataStale() && !hasQueue) {
+        // 4 — 낡았지만 줄이 비었다. **꺼진 쿠폰만이다** — 적응형은 발행이 멎은 뒤 선 줄을 몰라,
+        //     비어 보여도 7번으로 줄에 선다. 꺼진 쿠폰은 어느 노드도 줄을 안 세우므로 정말 비었다.
+        //     **꺼진 쿠폰의 우회보다 앞이다** — 뒤에 두면 모르는 구간에 무제한으로 꽂힌다.
+        if (req.dataStale() && s.mode() == QueueMode.OFF && !hasQueue) {
             return limiter.tryAcquire(GLOBAL_KEY, globalCap(req), req.epochSecond())
                     ? AdmissionDecision.PASS_FAIL_OPEN
                     : AdmissionDecision.REJECT_OVERLOAD;
@@ -200,9 +200,9 @@ public class AdmissionDecider {
      */
     public long admittedRatePerSec(AdmissionDecision decision, CouponState state,
             SnapshotMeta meta) {
-        // **쿠폰 credit 을 그대로 쓰지 않는다.** 4·5·9번이 통과시키는 것은 전부
-        // IDLE 쿠폰이고 IDLE 이면 credit 이 0 이다. 그 값으로 재면 한산한
-        // 쿠폰일수록 조여져, 각 줄이 실제로 차감한 예산을 돌려준다.
+        // **쿠폰 credit 을 그대로 쓰지 않는다.** 4·5번은 꺼진 쿠폰, 9번은 한산한 쿠폰을
+        // 통과시키고 둘 다 credit 이 0 이다. 그 값으로 재면 한산한 쿠폰일수록 조여져,
+        // 각 줄이 실제로 차감한 예산을 돌려준다.
         return switch (decision) {
             // 2번 — 쿠폰별 상한을 안 걸고 노드 예산만 봤다. 여기서 쿠폰
             // 몫을 돌려주면 격벽이 사다리가 안 건 상한을 새로 거는 셈이다.

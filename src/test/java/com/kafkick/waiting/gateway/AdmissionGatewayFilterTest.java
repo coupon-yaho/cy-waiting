@@ -1536,8 +1536,9 @@ class AdmissionGatewayFilterTest {
         AdmissionGatewayFilter 시계를_쓰는_필터 = AdmissionGatewayFilter.withIsolatedSoldOutCache(
                 holder, 판정, 시계, meters, 고정_난수,
                 줄, tokens, limiter, entryTokens, 멱등키);
+        // 낡은 갈래의 통과는 꺼진 쿠폰만 탄다 — 적응형은 낡으면 줄로 간다.
         holder.replace(new GatewaySnapshot(
-                Map.of(COUPON, CouponStates.idle(1_000_000)),
+                Map.of(COUPON, CouponStates.off(1_000_000)),
                 new SnapshotMeta(1, 1), 낡은_발행));
 
         // 상한이 1 이라 같은 윈도에서 두 번째는 막힌다.

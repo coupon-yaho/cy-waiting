@@ -200,6 +200,9 @@ class LeaderKillScenarioTest {
         redis.opsForSet().add(RedisKeys.ACTIVE_COUPONS, COUPON, 한산한_쿠폰).block(기다림);
         redis.opsForValue().set(RedisKeys.stock(COUPON), "50").block(기다림);
         redis.opsForValue().set(RedisKeys.stock(한산한_쿠폰), "100000").block(기다림);
+        // **대조군은 운영자가 끈 쿠폰이다.** 재료가 낡는 구간에 통과하는 것은 꺼진 쿠폰뿐이다 — 적응형은 발행이 멎은
+        // 뒤 선 줄을 모르므로 줄로 간다(추월 금지). 열린 갈래가 승계 내내 열려 있는지를 이것으로 잰다.
+        redis.opsForHash().put(RedisKeys.COUPON_POLICY, 한산한_쿠폰, "{\"mode\":\"OFF\"}").block(기다림);
         QueueSeed.줄을_세운다(연결, COUPON, 줄_선_사람);
     }
 

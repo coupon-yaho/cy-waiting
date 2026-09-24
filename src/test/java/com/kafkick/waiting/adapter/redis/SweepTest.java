@@ -332,7 +332,6 @@ class SweepTest extends RedisContainerSupport {
         redis.opsForZSet().remove(ALIVE, "이탈자").block(WAIT);
         enqueue("성실이");
         살아있다("성실이");
-        double 유령0_순번 = redis.opsForZSet().score(QUEUE, "유령0").block(WAIT);
         double 성실이_순번 = redis.opsForZSet().score(QUEUE, "성실이").block(WAIT);
 
         // **검사 범위를 둘로 준다.** 앞에서 세는 방식이면 유령 둘만 보고 끝난다.
@@ -340,10 +339,71 @@ class SweepTest extends RedisContainerSupport {
 
         assertThat(redis.opsForZSet().score(QUEUE, "이탈자").block(WAIT))
                 .as("임계 위의 이탈자는 걷힌다").isNull();
-        assertThat(redis.opsForZSet().score(QUEUE, "유령0").block(WAIT))
-                .as("임계 아래는 순번까지 그대로 둔다 (7.4.11)").isEqualTo(유령0_순번);
+        assertThat(redis.opsForHash().get(GRACE, "유령0").block(WAIT))
+                .as("임계 아래 유령은 걷지 않고 입장 기록으로 옮긴다 — 돌아오면 입장이다")
+                .isEqualTo("a:" + NOW);
         assertThat(redis.opsForZSet().score(QUEUE, "성실이").block(WAIT))
                 .as("살아 있는 사람은 순번까지 그대로다").isEqualTo(성실이_순번);
+    }
+
+    private long reaped(List<Object> r) {
+        return ((Number) r.get(5)).longValue();
+    }
+
+    /** 임계 아래에 유령 하나와 아직 올 사람 하나를 세우고 그 위에 살아 있는 사람을 둔다. */
+    private void 입장자_둘과_대기자() {
+        enqueue("떠난_입장자");
+        enqueue("올_입장자");
+        redis.opsForZSet().remove(ALIVE, "떠난_입장자").block(WAIT);
+        살아있다("올_입장자");
+        double 임계 = redis.opsForZSet().score(QUEUE, "올_입장자").block(WAIT);
+        redis.opsForValue().set(ADMITTED, String.format("%.0f", 임계)).block(WAIT);
+        창_안에_살아있는_사람();
+    }
+
+    /**
+     * <b>신호가 끝난 입장자는 입장 기록으로 옮긴다.</b> 입장한 사람은 폴링해 와야 줄에서 빠져, 안 오고 떠난 한 명이
+     * 줄 길이를 붙잡아 쿠폰을 영영 한산으로 못 돌아오게 한다. 걷는 것이 아니라 옮긴다 — 돌아오면 여전히 입장이다.
+     */
+    @Test
+    @DisplayName("임계_아래_신호가_끝난_입장자는_입장_기록으로_옮긴다")
+    void 임계_아래_신호가_끝난_입장자는_입장_기록으로_옮긴다() {
+        입장자_둘과_대기자();
+
+        List<Object> r = sweep("10");
+
+        assertThat(reaped(r)).isEqualTo(1);
+        assertThat(swept(r)).as("이탈로 세지 않는다").isZero();
+        assertThat(redis.opsForZSet().score(QUEUE, "떠난_입장자").block(WAIT)).isNull();
+        assertThat(redis.opsForHash().get(GRACE, "떠난_입장자").block(WAIT)).isEqualTo("a:" + NOW);
+        assertThat(redis.opsForZSet().score(QUEUE, "올_입장자").block(WAIT))
+                .as("신호가 살아 있으면 아직 올 사람이다").isNotNull();
+        assertThat(redis.opsForHash().hasKey(GRACE, "올_입장자").block(WAIT)).isFalse();
+    }
+
+    /** 청소를 멈추는 구간과 울타리, 저장소 유실은 앞줄과 똑같이 옮기지도 않는다. 신호를 못 믿는 구간이다. */
+    @Test
+    @DisplayName("앞줄을_안_걷는_회차는_입장자도_안_옮긴다")
+    void 앞줄을_안_걷는_회차는_입장자도_안_옮긴다() {
+        입장자_둘과_대기자();
+
+        assertThat(reaped(sweepKeepingFront("10"))).as("청소 정지").isZero();
+        assertThat(reaped(sweep("10", BUDGET, "0", 임기 - 1))).as("울타리").isZero();
+        redis.delete(ALIVE).block(WAIT);
+        assertThat(reaped(sweep("10"))).as("살아 있는 신호가 하나도 없다").isZero();
+        assertThat(redis.opsForZSet().score(QUEUE, "떠난_입장자").block(WAIT)).isNotNull();
+    }
+
+    /** 입장한 사람이 폴링 없이 등록만 되풀이하면 신호가 계속 살아 쿠폰을 영영 붙잡는다. 입장자의 신호는 안 살린다. */
+    @Test
+    @DisplayName("입장한_사람의_재등록은_신호를_안_살린다")
+    void 입장한_사람의_재등록은_신호를_안_살린다() {
+        입장자_둘과_대기자();
+
+        enqueue("떠난_입장자");
+
+        assertThat(redis.opsForZSet().score(ALIVE, "떠난_입장자").block(WAIT)).isNull();
+        assertThat(reaped(sweep("10"))).isEqualTo(1);
     }
 
     /**

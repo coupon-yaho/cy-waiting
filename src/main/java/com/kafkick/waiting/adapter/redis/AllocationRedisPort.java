@@ -34,7 +34,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.ClassPathResource;
-import org.springframework.data.domain.Range;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Component;
@@ -193,6 +192,9 @@ public final class AllocationRedisPort implements SnapshotSource {
     /** 레디스가 발행을 거부한 수. 단절과 가른다 — 앞은 메모리를 줄여야 풀린다 (CY-970). */
     private final AtomicLong writeRefused = new AtomicLong();
     /** 신선도의 기준 시각. 뒤로 가는 것을 여기서 막는다. */
+    private static final RedisScript<Long> QUEUE_WAITING =
+            RedisScript.of(new ClassPathResource("redis/queue_waiting.lua"), Long.class);
+
     private final ServerClock serverClock = ServerClock.create();
 
     /**
@@ -590,26 +592,18 @@ public final class AllocationRedisPort implements SnapshotSource {
     }
 
     /**
-     * 샤드를 합친 대기 수. <b>입장 커서 위만 센다</b> — 입장한 사람은 폴링해 와야 줄에서 빠져, 줄 전체를 세면 떠난 한 명이
-     * 쿠폰을 영영 한산으로 못 돌아오게 한다. 커서를 먼저 읽는다 — 커서는 오르기만 해 사이에 오르면 더 세는 쪽이다.
+     * 샤드를 합친 대기 수. <b>커서 위의 수와 살아 있는 신호 수 중 큰 쪽</b>이다 — 줄 전체를 세면 떠난 입장자가 쿠폰을
+     * 한산으로 못 돌아오게 하고, 커서 위만 세면 입장했지만 아직 안 온 사람을 새로 온 사람이 앞지른다.
      */
     private Mono<Long> shardSizes(String couponId) {
         return Flux.range(0, shards)
-                .flatMap(shard -> waitingAbove(RedisKeys.queue(couponId, shards, shard),
-                        RedisKeys.admitted(couponId, shards, shard)))
+                .flatMap(shard -> redis.execute(QUEUE_WAITING, List.of(
+                                RedisKeys.queue(couponId, shards, shard),
+                                RedisKeys.admitted(couponId, shards, shard),
+                                RedisKeys.alive(couponId, shards, shard)), List.of())
+                        .next()
+                        .defaultIfEmpty(0L))
                 .reduce(0L, Long::sum);
-    }
-
-    /** 커서가 없거나 깨졌으면 줄 전체를 센다. 덜 세면 줄 선 사람이 있는데 한산으로 읽는다. */
-    private Mono<Long> waitingAbove(String queueKey, String admittedKey) {
-        return redis.opsForValue().get(admittedKey)
-                .map(raw -> parsed(raw).orElse(Double.NaN))
-                .defaultIfEmpty(Double.NaN)
-                .flatMap(cursor -> Double.isFinite(cursor)
-                        ? redis.opsForZSet().count(queueKey,
-                                Range.leftOpen(cursor, Double.POSITIVE_INFINITY))
-                        : redis.opsForZSet().size(queueKey))
-                .defaultIfEmpty(0L);
     }
 
     /**

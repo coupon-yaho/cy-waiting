@@ -46,6 +46,11 @@ if not score then
             or (type(grace) == 'string' and string.sub(grace, 1, 2) == 'a:') then
         return {'ADMITTED', 0, '-1', -1}
     end
+    -- 청소가 옮긴, 아직 못 알린 입장이다. 지금 알리므로 입장 표시로 바꾼다.
+    if type(grace) == 'string' and string.sub(grace, 1, 2) == 'r:' then
+        redis.call('HSET', KEYS[4], ARGV[1], 'a:' .. string.format('%.0f', now))
+        return {'ADMITTED', 0, '-1', -1}
+    end
     -- **0번째와 구분한다.** 없는 것과 맨 앞인 것은 다르다. 뭉치면 유실된
     -- 사람에게 "곧 입장" 을 보여 주게 된다.
     return {'NOT_QUEUED', -1, '-1', -1}

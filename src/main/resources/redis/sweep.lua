@@ -14,11 +14,11 @@
 --          대상까지 비우면 기록이 한 방향으로만 자라고 커서가 전진을 못 한다
 -- ARGV[7]  이 회차의 임기. 울타리보다 낮으면 **앞줄만 안 뺀다** — 정리는 돈다
 --
--- 반환  {swept, expiredSignals, expiredGrace, nextCursor, 막혔는가(1/0)}
+-- 반환  {swept, expiredSignals, expiredGrace, nextCursor, 막혔는가(1/0), 입장 기록으로 옮긴 수}
 --        **막힌 것을 따로 낸다.** 0 으로 접으면 아무것도 안 걷은 회차와 구분이 안 되고,
 --        정리는 그때도 돌므로 걷은 수만으로는 못 가린다
 --
--- 이탈 기록 해시의 값  'd:<초>' 이탈 기록 · 'a:<초>' 입장 표시 · 접두사 없는 값은
+-- 이탈 기록 해시의 값  'd:<초>' 이탈 기록 · 'a:<초>' 입장 표시 · 'r:<초>' 아직 못 알린 입장 · 접두사 없는 값은
 -- 종류가 생기기 전의 이탈 기록. queue_status 가 같은 자리에 입장 표시를 쓰므로,
 -- 안 가르면 입장한 사람이 1초 뒤 폴링에서 종료를 받는다.
 --
@@ -74,7 +74,7 @@ local function stampOf(value)
         return nil
     end
     local kind = string.sub(value, 1, 2)
-    local at = (kind == 'd:' or kind == 'a:')
+    local at = (kind == 'd:' or kind == 'a:' or kind == 'r:')
             and tonumber(string.sub(value, 3))
             or tonumber(value)
     -- **nan 과 무한은 어떤 비교도 참으로 안 만든다.** 그대로 돌려주면 그 항목이
@@ -252,6 +252,41 @@ if nFront > 0 then
     end
 end
 
+-- **신호가 끝난 커서 아래 입장자는 못 알린 입장 기록으로 옮긴다.** 안 오고 떠난 입장자가 줄 길이를 붙잡지 않게
+-- 한다. 돌아오면 조회도 재등록도 입장으로 이어진다. 청소 정지·울타리 구간에는 앞줄처럼 안 옮긴다.
+local reaped = 0
+-- **가드는 "살아 있는 신호" 가 아니라 "신호 집합이 있는가" 다.** 떠난 입장자만 남은 쿠폰은 신호가 전부 만료돼 있어,
+-- 앞줄의 가드를 그대로 쓰면 바로 그 상태에서 영영 안 옮긴다. 통째로 빈 것만 저장소 유실로 본다.
+local reaping = removeFront == 1 and not fencedOut and redis.call('EXISTS', KEYS[3]) == 1
+if usableAdmitted and admitted >= 0 and reaping then
+    -- 아래쪽부터 K 명만 본다. 오래된 입장자일수록 떠났을 가능성이 크다.
+    local below = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf',
+            string.format('%.0f', math.floor(admitted)), 'LIMIT', 0, limit)
+    local nBelow = #below
+    if nBelow > 0 then
+        local belowAt = redis.call('ZMSCORE', KEYS[3], unpack(below))
+        local moved = {}
+        local marks = {}
+        local nMoved = 0
+        for i = 1, nBelow do
+            local at = tonumber(belowAt[i])
+            if at == nil or at < now then
+                nMoved = nMoved + 1
+                moved[nMoved] = below[i]
+                -- 늘 새 시각이다. 옛 입장 표시를 살리면 아래 정리가 같은 회차에 지운다.
+                marks[nMoved * 2 - 1] = below[i]
+                marks[nMoved * 2] = 'r:' .. string.format('%.0f', now)
+            end
+        end
+        -- 기록이 먼저다. 실패 시 남는 것이 "아직 안 옮긴 사람" 이어야 한다.
+        if nMoved > 0 then
+            redis.call('HSET', KEYS[2], unpack(marks))
+            redis.call('ZREM', KEYS[1], unpack(moved))
+            reaped = nMoved
+        end
+    end
+end
+
 -- 만료된 생존 신호도 예산 안에서만 걷는다. ZREMRANGEBYSCORE 는 대상 수만큼
 -- 도므로 한 번에 다 지우려 하면 그 자체가 오래 걸린다.
 local staleSignals = redis.call('ZRANGE', KEYS[3], '-inf', '(' .. now,
@@ -328,4 +363,4 @@ if nDoomed > 0 then
 end
 
 -- 다음 커서를 돌려준다. 호출부가 이어서 넘긴다.
-return {swept, expiredSignals, expiredGrace, scanned[1], fencedOut and 1 or 0}
+return {swept, expiredSignals, expiredGrace, scanned[1], fencedOut and 1 or 0, reaped}

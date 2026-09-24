@@ -78,8 +78,25 @@ local from = admitted >= 0 and ('(' .. string.format('%.0f', admitted)) or '-inf
 -- 사람이 상한 때문에 자리를 잃으면 안 되기 때문이다.
 local existing = redis.call('ZSCORE', KEYS[1], ARGV[1])
 if existing then
-    redis.call('ZADD', KEYS[3], now + aliveTtl, ARGV[1])
+    -- 입장한 사람의 신호는 안 살린다. 등록만 되풀이해 쿠폰을 붙잡지 못하게 한다.
+    if not (admitted >= 0 and tonumber(existing) <= admitted) then
+        redis.call('ZADD', KEYS[3], now + aliveTtl, ARGV[1])
+    end
     return {existing, 0, 1, redis.call('ZCOUNT', KEYS[1], from, '(' .. existing), 0}
+end
+
+-- **청소가 옮긴, 못 알린 입장자는 커서 바로 아래로 되돌린다.** 맨 뒤에 세우면 한 번도 입장을 못 알린 사람이 줄
+-- 선 사람 전원에게 밀린다. 신호는 안 살리고, 다음 폴링이 입장을 알린다.
+if admitted >= 0 then
+    local untold = redis.call('HGET', KEYS[5], ARGV[1])
+    if type(untold) == 'string' and string.sub(untold, 1, 2) == 'r:' then
+        local at = tonumber(string.sub(untold, 3))
+        if at ~= nil and at >= now - retention then
+            local back = string.format('%.0f', math.floor(admitted))
+            redis.call('ZADD', KEYS[1], back, ARGV[1])
+            return {back, 0, 1, 0, 0}
+        end
+    end
 end
 
 -- 2차 방어다. 1차는 도메인이 낡은 스냅샷으로 판정하므로 여기서 한 번 더 본다.

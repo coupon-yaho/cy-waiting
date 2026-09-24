@@ -260,8 +260,9 @@ class AllocationRedisPortTest extends RedisContainerSupport {
                 port.sweep(List.of("c1"), 지금, 100, 300, 100, 임기).block(WAIT);
 
         assertThat(결과.swept()).as("걷은 수").isZero();
-        assertThat(redis.opsForZSet().score(RedisKeys.queue("c1", SHARDS, 0), "m1").block(WAIT))
-                .as("입장 확정자가 줄에 남는다").isEqualTo(1.0);
+        // 신호가 끝난 입장 확정자는 입장 기록으로 옮긴다. 다음 폴링에도 입장이다.
+        assertThat(redis.opsForHash().get(RedisKeys.grace("c1", SHARDS, 0), "m1").block(WAIT))
+                .as("이탈이 아니라 아직 못 알린 입장으로 남는다").isEqualTo("r:" + 지금);
     }
 
     /**
@@ -280,7 +281,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         줄_세운다("c1", 1, 5);
         // m5 는 살아 있어 "신호 전무" 가드를 지나고, m1 은 만료됐다.
         redis.opsForZSet().add(RedisKeys.alive("c1", SHARDS, 0), "m5", 지금 + 60).block(WAIT);
-        redis.opsForHash().put(RedisKeys.grace("c1", SHARDS, 0), "m1", "a:" + 지금).block(WAIT);
+        redis.opsForHash().put(RedisKeys.grace("c1", SHARDS, 0), "m1", "a:" + (지금 - 100)).block(WAIT);
         // 임계를 m1 자리까지 올린다 — 차례가 온 사람이다.
         redis.opsForValue().set(RedisKeys.admitted("c1", SHARDS, 0), "1").block(WAIT);
 
@@ -289,9 +290,10 @@ class AllocationRedisPortTest extends RedisContainerSupport {
 
         assertThat(결과.swept()).as("차례가 온 사람은 안 걷는다").isZero();
         assertThat(redis.opsForZSet().score(RedisKeys.queue("c1", SHARDS, 0), "m1").block(WAIT))
-                .as("줄에 순번까지 그대로").isEqualTo(1.0);
+                .as("신호가 끝나 입장 기록으로 옮겼다").isNull();
         assertThat(redis.opsForHash().get(RedisKeys.grace("c1", SHARDS, 0), "m1").block(WAIT))
-                .as("입장 표시가 살아남는다").isEqualTo("a:" + 지금);
+                .as("이탈로 안 덮고 새 시각의 입장 기록이다 — 옛 시각이면 같은 회차의 정리가 지운다")
+                .isEqualTo("r:" + 지금);
     }
 
     /**
@@ -310,7 +312,7 @@ class AllocationRedisPortTest extends RedisContainerSupport {
         줄_세운다("c1", 1, 5);
         // m5 만 살아 있다. m1 은 만료됐고 입장 표시를 들고 있다.
         redis.opsForZSet().add(RedisKeys.alive("c1", SHARDS, 0), "m5", 지금 + 60).block(WAIT);
-        redis.opsForHash().put(RedisKeys.grace("c1", SHARDS, 0), "m1", "a:" + 지금).block(WAIT);
+        redis.opsForHash().put(RedisKeys.grace("c1", SHARDS, 0), "m1", "a:" + (지금 - 100)).block(WAIT);
 
         QueueSweeper.SweepResult 결과 =
                 port.sweep(List.of("c1"), 지금, 100, 300, 100, 임기).block(WAIT);

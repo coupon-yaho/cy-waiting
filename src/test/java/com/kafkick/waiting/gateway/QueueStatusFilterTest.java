@@ -391,6 +391,30 @@ class QueueStatusFilterTest {
     }
 
     /**
+     * <b>줄 조회가 실패해도 거절 표시를 남깁니다.</b> 조회가 곧 생존 신호라, 실패한 사람은 신호를 못 갱신합니다.
+     * 상한 거절과 같은 모양이라 같은 표시로 클러스터가 청소를 멈춥니다. 성공한 조회는 표시를 안 남깁니다.
+     */
+    @Test
+    @DisplayName("줄_조회가_실패하면_거절_표시를_남긴다")
+    void 줄_조회가_실패하면_거절_표시를_남긴다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100));
+        줄.enqueue(COUPON, MEMBER, NO_LIMIT, 지금).block();
+        String 토큰 = tokens.issue(COUPON, MEMBER, 지금);
+        PollRejections 거절 = PollRejections.create();
+        QueueStatusFilter 표시하는_필터 = QueueStatusFilter.of(
+                holder, 줄, tokens, Clock.fixed(지금, ZoneOffset.UTC), meters, () -> 0.5,
+                limiter, entryTokens, 거절);
+
+        조회한다(표시하는_필터, "/api/v1/coupons/" + COUPON + "/queue?queueToken=" + 토큰);
+        assertThat(거절.mark()).as("성공한 조회").isZero();
+
+        줄.터진다(new IllegalStateException("레디스"));
+        조회한다(표시하는_필터, "/api/v1/coupons/" + COUPON + "/queue?queueToken=" + 토큰);
+
+        assertThat(거절.mark()).isEqualTo(1);
+    }
+
+    /**
      * <b>재료가 낡으면 매진으로 안 봅니다.</b>
      *
      * <p>모른다는 것이 끝났다는 뜻은 아닙니다. 여기서 잘못 말하면 기다리던 사람이

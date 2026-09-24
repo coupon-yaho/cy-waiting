@@ -369,6 +369,7 @@ class SweepTest extends RedisContainerSupport {
     @DisplayName("임계_아래_신호가_끝난_입장자는_입장_기록으로_옮긴다")
     void 임계_아래_신호가_끝난_입장자는_입장_기록으로_옮긴다() {
         입장자_둘과_대기자();
+        double 올_입장자_순번 = redis.opsForZSet().score(QUEUE, "올_입장자").block(WAIT);
 
         List<Object> r = sweep("10");
 
@@ -377,7 +378,7 @@ class SweepTest extends RedisContainerSupport {
         assertThat(redis.opsForZSet().score(QUEUE, "떠난_입장자").block(WAIT)).isNull();
         assertThat(redis.opsForHash().get(GRACE, "떠난_입장자").block(WAIT)).isEqualTo("a:" + NOW);
         assertThat(redis.opsForZSet().score(QUEUE, "올_입장자").block(WAIT))
-                .as("신호가 살아 있으면 아직 올 사람이다").isNotNull();
+                .as("신호가 살아 있으면 아직 올 사람이다").isEqualTo(올_입장자_순번);
         assertThat(redis.opsForHash().hasKey(GRACE, "올_입장자").block(WAIT)).isFalse();
     }
 
@@ -386,12 +387,13 @@ class SweepTest extends RedisContainerSupport {
     @DisplayName("앞줄을_안_걷는_회차는_입장자도_안_옮긴다")
     void 앞줄을_안_걷는_회차는_입장자도_안_옮긴다() {
         입장자_둘과_대기자();
+        double 떠난_입장자_순번 = redis.opsForZSet().score(QUEUE, "떠난_입장자").block(WAIT);
 
         assertThat(reaped(sweepKeepingFront("10"))).as("청소 정지").isZero();
         assertThat(reaped(sweep("10", BUDGET, "0", 임기 - 1))).as("울타리").isZero();
         redis.delete(ALIVE).block(WAIT);
         assertThat(reaped(sweep("10"))).as("살아 있는 신호가 하나도 없다").isZero();
-        assertThat(redis.opsForZSet().score(QUEUE, "떠난_입장자").block(WAIT)).isNotNull();
+        assertThat(redis.opsForZSet().score(QUEUE, "떠난_입장자").block(WAIT)).isEqualTo(떠난_입장자_순번);
     }
 
     /** 입장한 사람이 폴링 없이 등록만 되풀이하면 신호가 계속 살아 쿠폰을 영영 붙잡는다. 입장자의 신호는 안 살린다. */

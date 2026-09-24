@@ -64,11 +64,13 @@ class SweepTest extends RedisContainerSupport {
 
     private RedisScript<List> enqueueScript;
     private RedisScript<List> sweepScript;
+    private RedisScript<List> statusScript;
 
     @BeforeEach
     void 준비() {
         enqueueScript = RedisScript.of(new ClassPathResource("redis/enqueue.lua"), List.class);
         sweepScript = RedisScript.of(new ClassPathResource("redis/sweep.lua"), List.class);
+        statusScript = RedisScript.of(new ClassPathResource("redis/queue_status.lua"), List.class);
         redis.delete(QUEUE, MAX_SCORE, GRACE, ALIVE, ADMITTED, APPLY_FENCE).block(WAIT);
         redis.opsForValue().set(APPLY_FENCE, Long.toString(임기)).block(WAIT);
     }
@@ -341,7 +343,7 @@ class SweepTest extends RedisContainerSupport {
                 .as("임계 위의 이탈자는 걷힌다").isNull();
         assertThat(redis.opsForHash().get(GRACE, "유령0").block(WAIT))
                 .as("임계 아래 유령은 걷지 않고 입장 기록으로 옮긴다 — 돌아오면 입장이다")
-                .isEqualTo("a:" + NOW);
+                .isEqualTo("r:" + NOW);
         assertThat(redis.opsForZSet().score(QUEUE, "성실이").block(WAIT))
                 .as("살아 있는 사람은 순번까지 그대로다").isEqualTo(성실이_순번);
     }
@@ -376,7 +378,7 @@ class SweepTest extends RedisContainerSupport {
         assertThat(reaped(r)).isEqualTo(1);
         assertThat(swept(r)).as("이탈로 세지 않는다").isZero();
         assertThat(redis.opsForZSet().score(QUEUE, "떠난_입장자").block(WAIT)).isNull();
-        assertThat(redis.opsForHash().get(GRACE, "떠난_입장자").block(WAIT)).isEqualTo("a:" + NOW);
+        assertThat(redis.opsForHash().get(GRACE, "떠난_입장자").block(WAIT)).isEqualTo("r:" + NOW);
         assertThat(redis.opsForZSet().score(QUEUE, "올_입장자").block(WAIT))
                 .as("신호가 살아 있으면 아직 올 사람이다").isEqualTo(올_입장자_순번);
         assertThat(redis.opsForHash().hasKey(GRACE, "올_입장자").block(WAIT)).isFalse();
@@ -394,6 +396,44 @@ class SweepTest extends RedisContainerSupport {
         redis.delete(ALIVE).block(WAIT);
         assertThat(reaped(sweep("10"))).as("살아 있는 신호가 하나도 없다").isZero();
         assertThat(redis.opsForZSet().score(QUEUE, "떠난_입장자").block(WAIT)).isEqualTo(떠난_입장자_순번);
+    }
+
+    @SuppressWarnings("unchecked")
+    private String 조회한다(String memberId) {
+        List<Object> r = (List<Object>) redis.execute(statusScript,
+                        List.of(QUEUE, ADMITTED, ALIVE, GRACE),
+                        List.of(memberId, "300", String.valueOf(NOW + 1)))
+                .blockFirst(WAIT);
+        return String.valueOf(r.get(0));
+    }
+
+    /** 옮긴 사람이 폴링으로 돌아오면 입장이다. 그 순간 알린 것이 되어 기록이 입장 표시로 바뀐다. */
+    @Test
+    @DisplayName("옮긴_입장자가_폴링으로_돌아오면_입장이다")
+    void 옮긴_입장자가_폴링으로_돌아오면_입장이다() {
+        입장자_둘과_대기자();
+        sweep("10");
+
+        assertThat(조회한다("떠난_입장자")).isEqualTo("ADMITTED");
+        assertThat(redis.opsForHash().get(GRACE, "떠난_입장자").block(WAIT)).isEqualTo("a:" + (NOW + 1));
+    }
+
+    /**
+     * 옮긴 사람이 발급 요청으로 돌아와도 입장을 잃지 않는다. 한 번도 입장을 못 알렸는데 줄 맨 뒤로 보내면 그가 줄 선
+     * 사람 전원에게 밀린다(순번 역행). 커서 바로 아래로 되돌려 다음 폴링에 입장이 된다.
+     */
+    @Test
+    @DisplayName("옮긴_입장자가_다시_등록해도_입장을_잃지_않는다")
+    void 옮긴_입장자가_다시_등록해도_입장을_잃지_않는다() {
+        입장자_둘과_대기자();
+        sweep("10");
+
+        enqueue("떠난_입장자");
+
+        double 커서 = Double.parseDouble(redis.opsForValue().get(ADMITTED).block(WAIT));
+        assertThat(redis.opsForZSet().score(QUEUE, "떠난_입장자").block(WAIT)).isLessThanOrEqualTo(커서);
+        assertThat(redis.opsForZSet().score(ALIVE, "떠난_입장자").block(WAIT)).as("신호는 안 살린다").isNull();
+        assertThat(조회한다("떠난_입장자")).isEqualTo("ADMITTED");
     }
 
     /** 입장한 사람이 폴링 없이 등록만 되풀이하면 신호가 계속 살아 쿠폰을 영영 붙잡는다. 입장자의 신호는 안 살린다. */
@@ -580,7 +620,7 @@ class SweepTest extends RedisContainerSupport {
 
         // 걷으면 그가 다시 서서 뒷사람들에게 통째로 추월당한다. 이탈이 아니라 입장으로 옮긴다.
         assertThat(redis.opsForHash().get(GRACE, "차례온사람").block(WAIT))
-                .as("입장 기록이다").isEqualTo("a:" + NOW);
+                .as("아직 입장을 못 알린 기록이다").isEqualTo("r:" + NOW);
         assertThat(redis.opsForZSet().score(QUEUE, "이탈자").block(WAIT)).isNull();
     }
 

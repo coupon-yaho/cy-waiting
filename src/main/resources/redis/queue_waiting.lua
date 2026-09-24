@@ -3,6 +3,7 @@
 -- KEYS[1]  queue:{cid}      줄 ZSET. score 는 등록 점수(마이크로초)
 -- KEYS[2]  admitted:{cid}   입장 커서. 이 점수 이하가 입장했다
 -- KEYS[3]  alive:{cid}      생존 신호 ZSET. score 는 만료 시각(초)
+-- ARGV     없다. 신호의 만료는 레디스 시계로 잰다 — 밖에서 시각을 주면 노드마다 다르게 낡는다
 --
 -- 반환  max(커서 위의 수, 살아 있는 신호 수)
 --

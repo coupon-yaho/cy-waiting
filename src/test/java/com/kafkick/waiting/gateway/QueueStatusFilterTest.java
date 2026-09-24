@@ -31,6 +31,7 @@ import java.time.ZoneOffset;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.DoubleSupplier;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -388,6 +389,56 @@ class QueueStatusFilterTest {
 
         assertThat(거절.mark()).isEqualTo(1);
         assertThat(통과.mark()).isZero();
+    }
+
+    /**
+     * <b>줄 조회가 실패해도 거절 표시를 남깁니다.</b> 조회가 곧 생존 신호라, 실패한 사람은 신호를 못 갱신합니다.
+     * 상한 거절과 같은 모양이라 같은 표시로 클러스터가 청소를 멈춥니다. 성공한 조회는 표시를 안 남깁니다.
+     */
+    @Test
+    @DisplayName("줄_조회가_실패하면_거절_표시를_남긴다")
+    void 줄_조회가_실패하면_거절_표시를_남긴다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100));
+        줄.enqueue(COUPON, MEMBER, NO_LIMIT, 지금).block();
+        String 토큰 = tokens.issue(COUPON, MEMBER, 지금);
+        PollRejections 거절 = PollRejections.create();
+        QueueStatusFilter 표시하는_필터 = QueueStatusFilter.of(
+                holder, 줄, tokens, Clock.fixed(지금, ZoneOffset.UTC), meters, () -> 0.5,
+                limiter, entryTokens, 거절);
+
+        조회한다(표시하는_필터, "/api/v1/coupons/" + COUPON + "/queue?queueToken=" + 토큰);
+        assertThat(거절.mark()).as("성공한 조회").isZero();
+
+        줄.터진다(new IllegalStateException("레디스"));
+        조회한다(표시하는_필터, "/api/v1/coupons/" + COUPON + "/queue?queueToken=" + 토큰);
+
+        assertThat(거절.mark()).isEqualTo(1);
+    }
+
+    /** 응답을 쓰다 난 오류는 클라이언트가 끊은 것이다. 조회는 성공해 신호가 갱신됐으니 표시를 안 남긴다. */
+    @Test
+    @DisplayName("응답_쓰기가_실패해도_거절_표시를_안_남긴다")
+    void 응답_쓰기가_실패해도_거절_표시를_안_남긴다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100));
+        줄.enqueue(COUPON, MEMBER, NO_LIMIT, 지금).block();
+        String 토큰 = tokens.issue(COUPON, MEMBER, 지금);
+        PollRejections 거절 = PollRejections.create();
+        QueueStatusFilter 표시하는_필터 = QueueStatusFilter.of(
+                holder, 줄, tokens, Clock.fixed(지금, ZoneOffset.UTC), meters, () -> 0.5,
+                limiter, entryTokens, 거절);
+        MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest
+                .get("/api/v1/coupons/" + COUPON + "/queue?queueToken=" + 토큰)
+                .header("X-Member-Id", MEMBER));
+        AtomicInteger 쓰기_실패 = new AtomicInteger();
+        exchange.getResponse().setWriteHandler(body -> {
+            쓰기_실패.incrementAndGet();
+            return Mono.error(new IllegalStateException("끊겼다"));
+        });
+
+        표시하는_필터.filter(exchange, e -> Mono.empty()).onErrorResume(e -> Mono.empty()).block();
+
+        assertThat(쓰기_실패).as("전제 — 응답 쓰기가 실제로 실패했다").hasPositiveValue();
+        assertThat(거절.mark()).isZero();
     }
 
     /**

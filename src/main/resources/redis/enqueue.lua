@@ -27,8 +27,8 @@
 -- 빠져 자기 순번보다 작은 수를 받고, 사용자가 보기엔 줄이 뒤로 간 것이다.
 --
 -- 순번이 카운터가 아니라 **벽시계**다. 시계가 뒤로 가면 나중에 온 사람이 앞서 줄 선
--- 사람을 추월하므로 maxscore 로 바닥을 깐다. ZSET 의 마지막 원소로는 **큐가 빈
--- 동안의 역행**을 못 막는 것이 이 키의 존재 이유다.
+-- 사람을 추월하므로 maxscore 와 ZSET 의 마지막 원소 중 큰 쪽으로 바닥을 깐다. 마지막 원소로는
+-- **큐가 빈 동안의 역행**을, maxscore 로는 **키가 만료된 뒤의 역행**을 못 막아 둘 다 본다.
 
 -- **쓰기 전에 인자를 검증한다.** Lua 는 중간 오류를 되돌리지 않는다 —
 -- ZADD 뒤에서 SET 이 터지면 "같이 남거나 같이 사라진다" 는 계약이 깨지고
@@ -97,6 +97,12 @@ local redisTime = redis.call('TIME')
 local score = tonumber(redisTime[1]) * 1000000 + tonumber(redisTime[2])
 
 local floor = tonumber(redis.call('GET', KEYS[2]) or 0)
+-- **줄의 가장 뒤 점수도 바닥이다.** 바닥값 키는 수명이 있어, 앞선 시계로 줄이 쌓인 채 만료되면 새 사람이
+-- 대기자 앞에 선다. 빈 줄은 바닥값이, 찬 줄은 줄 자신이 막는다.
+local last = redis.call('ZRANGE', KEYS[1], -1, -1, 'WITHSCORES')
+if last[2] ~= nil and tonumber(last[2]) > floor then
+    floor = tonumber(last[2])
+end
 local applied = 0
 if floor >= score then
     score = floor + 1

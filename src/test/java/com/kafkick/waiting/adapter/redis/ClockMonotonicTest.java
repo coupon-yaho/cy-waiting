@@ -47,7 +47,8 @@ class ClockMonotonicTest extends RedisContainerSupport {
     @BeforeEach
     void 준비() {
         script = RedisScript.of(new ClassPathResource("redis/enqueue.lua"), List.class);
-        redis.delete(QUEUE, MAX_SCORE).block(WAIT);
+        // 커서도 지운다. 남으면 앞 시험이 둔 커서가 다음 시험의 하한이 된다.
+        redis.delete(QUEUE, MAX_SCORE, ADMITTED).block(WAIT);
         for (int i = 0; i < 200; i++) {
             redis.delete(alive("m" + i)).block(WAIT);
         }
@@ -117,6 +118,44 @@ class ClockMonotonicTest extends RedisContainerSupport {
         enqueue("B");
 
         assertThat(scoreOf("B")).isGreaterThan(scoreA);
+    }
+
+    /**
+     * <b>바닥값이 만료돼도 줄이 바닥이다.</b> 앞선 시계로 줄이 쌓인 채 바닥값 키만 사라지면, 새 등록이 실시각 점수를
+     * 받아 대기자 전원 앞에 선다. 줄의 가장 뒤 점수도 바닥으로 본다 — 빈 줄은 바닥값이, 찬 줄은 줄 자신이 막는다.
+     */
+    @Test
+    @DisplayName("바닥값이_만료돼도_줄_선_사람을_앞지르지_않는다")
+    void 바닥값이_만료돼도_줄_선_사람을_앞지르지_않는다() {
+        enqueue("A");
+        long 앞선_점수 = scoreOf("A") + 10_000_000;
+        // 앞선 시계로 선 사람이다. 바닥값 키는 만료돼 없다.
+        redis.opsForZSet().add(QUEUE, "앞선", 앞선_점수).block(WAIT);
+        redis.delete(MAX_SCORE).block(WAIT);
+
+        List<Object> 결과 = enqueue("B");
+
+        assertThat(scoreOf("B")).isGreaterThan(앞선_점수);
+        assertThat(appliedFlag(결과)).as("밀어 올린 사실을 알린다").isEqualTo(1);
+    }
+
+    /**
+     * 커서가 있으면 더 위험하다. 바닥값이 없을 때 남는 하한이 커서뿐이면 새 사람이 {@code 커서 + 1} 로, 곧 아직
+     * 기다리는 사람 전원의 앞에 선다.
+     */
+    @Test
+    @DisplayName("바닥값이_만료되고_커서만_남아도_줄_선_사람을_앞지르지_않는다")
+    void 바닥값이_만료되고_커서만_남아도_줄_선_사람을_앞지르지_않는다() {
+        enqueue("A");
+        long 앞선_점수 = scoreOf("A") + 20_000_000;
+        redis.opsForZSet().add(QUEUE, "앞선_입장자", 앞선_점수 - 10_000_000).block(WAIT);
+        redis.opsForZSet().add(QUEUE, "앞선_대기자", 앞선_점수).block(WAIT);
+        redis.opsForValue().set(ADMITTED, String.valueOf(앞선_점수 - 10_000_000)).block(WAIT);
+        redis.delete(MAX_SCORE).block(WAIT);
+
+        enqueue("B");
+
+        assertThat(scoreOf("B")).isGreaterThan(앞선_점수);
     }
 
     @Test

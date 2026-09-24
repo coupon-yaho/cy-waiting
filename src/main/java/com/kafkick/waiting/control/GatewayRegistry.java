@@ -220,10 +220,10 @@ public final class GatewayRegistry {
         // 람다 밖에서 찍는다. CAS 가 재시도하면 같은 줄이 두 번 난다.
         boolean after = rejecting.get().since() >= 0;
         if (before.since() < 0 && after) {
-            log.warn("조회를 상한으로 거절하는 노드가 있다 — 청소를 멈춘다, {}대. "
-                    + "거절당한 사람은 생존 신호를 못 갱신한다. 오래 안 풀리면 토큰 남용부터 본다", nodes);
+            log.warn("조회를 못 받아 주는 노드가 있다 — 청소를 멈춘다, {}대. 그 사람들은 생존 신호를 못 갱신한다. "
+                    + "오래 안 풀리면 그 노드의 조회 상한 거절과 레디스 오류를 본다", nodes);
         } else if (before.since() >= 0 && !after) {
-            log.info("조회 거절이 멎었다 — 청소는 유예 뒤 다시 돈다, {}초 동안 거절했다",
+            log.info("조회를 다시 받아 준다 — 청소는 유예 뒤 다시 돈다, {}초 동안 못 받아 줬다",
                     NANOSECONDS.toSeconds(at - before.since()));
         }
     }

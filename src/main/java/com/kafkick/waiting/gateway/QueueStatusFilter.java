@@ -183,6 +183,8 @@ public final class QueueStatusFilter implements WebFilter {
                 // 성공마다 풀면 그 사이에 성공이 끼어 백오프가 영원히 안 걸린다.
                 .doOnNext(ignored -> failing.cleared(clock.instant(), ErrorBackoff.quiet()))
                 .doOnError(e -> failing.failed(clock.instant()))
+                // 조회가 곧 생존 신호다. 못 갱신한 사람이 있다는 것을 상한 거절과 같은 표시로 알린다.
+                .doOnError(e -> rejections.rejected())
                 .flatMap(entry -> answer(exchange, couponId, member.get(), entry))
                 // 조회가 실패해도 순번은 레디스에 남는다. 다시 물으면 된다.
                 .onErrorResume(e -> {

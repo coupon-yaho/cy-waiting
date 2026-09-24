@@ -4,7 +4,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * 이 노드가 조회를 상한으로 거절했다는 표시. 거절당한 사람은 생존 신호를 못 갱신하므로 클러스터가 그동안 청소를
+ * 이 노드가 조회를 못 받아 줬다는 표시(상한 거절·조회 실패). 그 사람은 생존 신호를 못 갱신하므로 클러스터가 그동안 청소를
  * 멈춰야 한다. <b>하트비트가 실어 보낸 만큼만 내리고</b>, 마지막 거절 뒤에도 성공한 하트비트 몇 번 동안 더 싣는다.
  */
 public final class PollRejections {

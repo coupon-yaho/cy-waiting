@@ -543,8 +543,8 @@ class GatewayRegistryTest {
                 .filteredOn(줄 -> 줄.contains("조회"))
                 .hasSize(2)
                 .satisfies(줄들 -> {
-                    assertThat(줄들.get(0)).startsWith("조회를 상한으로 거절하는 노드가 있다 — 청소를 멈춘다, 2대");
-                    assertThat(줄들.get(1)).startsWith("조회 거절이 멎었다 — 청소는 유예 뒤 다시 돈다");
+                    assertThat(줄들.get(0)).startsWith("조회를 못 받아 주는 노드가 있다 — 청소를 멈춘다, 2대");
+                    assertThat(줄들.get(1)).startsWith("조회를 다시 받아 준다 — 청소는 유예 뒤 다시 돈다");
                 });
     }
 }

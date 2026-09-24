@@ -58,7 +58,7 @@ public final class GatewayRedisPort {
         return beat(instanceId, reapAfterSec, voteFreshSec, circuit, passedPerSec, ejected, false);
     }
 
-    /** @param rejecting 지난 하트비트 뒤로 이 노드가 조회를 상한으로 거절했는가 */
+    /** @param rejecting 지난 하트비트 뒤로 이 노드가 조회를 못 받아 줬는가(상한 거절·조회 실패) */
     public Mono<Presence> beat(String instanceId, long reapAfterSec, long voteFreshSec,
             CircuitState circuit, long passedPerSec, Collection<String> ejected, boolean rejecting) {
         return redis.execute(BEAT, List.of(RedisKeys.INSTANCES),
@@ -155,7 +155,7 @@ public final class GatewayRedisPort {
      * @param passReported 그 합에 기여한 수. alive 보다 작으면 합이 "모름" 이다
      * @param ejectReported 뺀 인스턴스 목록을 실은 수. 판정의 분모가 아니다
      * @param ejectVotes    인스턴스마다 그것을 뺀 노드 수
-     * @param rejecting     조회를 상한으로 거절 중이라고 실은 수
+     * @param rejecting     조회를 못 받아 주는 중이라고 실은 수
      */
     public record Presence(int alive, int open, int halfOpen, int reported, int passed,
             int passReported, int ejectReported, Map<String, Integer> ejectVotes, int rejecting) {

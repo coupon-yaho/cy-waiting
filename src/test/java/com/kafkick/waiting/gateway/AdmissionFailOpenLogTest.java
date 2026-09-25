@@ -37,9 +37,9 @@ import org.springframework.mock.web.server.MockServerWebExchange;
 import reactor.core.publisher.Mono;
 
 /**
- * fail-open 구간을 <b>진입·해제 쌍으로</b> 남긴다 (LG-2).
+ * 줄 등록 실패 구간을 <b>진입·해제 쌍으로</b> 남긴다 (LG-2).
  *
- * <p>이 전이가 로그에 없으면 사후에 <b>추월이 언제 열렸는지</b>를 못 짚는다.
+ * <p>이 전이가 로그에 없으면 사후에 <b>줄 판정이 언제부터 되돌아갔는지</b>를 못 짚는다.
  * 지표는 초 단위로 뭉개져 남고 보존 기간도 짧아, 사고 조사에서 정작 필요한
  * "몇 시 몇 분에 열려 얼마나 갔는가" 를 답하지 못한다.
  */
@@ -117,8 +117,8 @@ class AdmissionFailOpenLogTest {
      * 구간의 로그 자체가 2차 부하가 된다 (LG-3).
      */
     @Test
-    @DisplayName("fail_open_진입을_한_번만_남긴다")
-    void fail_open_진입을_한_번만_남긴다() {
+    @DisplayName("등록_실패_진입을_한_번만_남긴다")
+    void 등록_실패_진입을_한_번만_남긴다() {
         스냅샷을_심는다();
         줄.터진다(new IllegalStateException("레디스가 죽었다"));
 
@@ -126,7 +126,7 @@ class AdmissionFailOpenLogTest {
         태운다("사람2");
         태운다("사람3");
 
-        assertThat(남은것("fail-open 진입")).hasSize(1);
+        assertThat(남은것("줄 등록 실패 구간 진입")).hasSize(1);
     }
 
     /**
@@ -147,7 +147,7 @@ class AdmissionFailOpenLogTest {
         줄.나았다();
         태운다("사람3");
 
-        List<ILoggingEvent> 해제 = 남은것("fail-open 해제");
+        List<ILoggingEvent> 해제 = 남은것("줄 등록 실패 해제");
         assertThat(해제).hasSize(1);
         // **인자까지 본다.** 건수를 안 보면 삼킨 수를 0 으로 적어도 통과한다.
         assertThat(해제.getFirst().getArgumentArray()).containsExactly(7L, 2L);
@@ -161,7 +161,7 @@ class AdmissionFailOpenLogTest {
 
         태운다("사람1");
 
-        assertThat(남은것("fail-open")).isEmpty();
+        assertThat(남은것("줄 등록 실패")).isEmpty();
     }
 
     /**

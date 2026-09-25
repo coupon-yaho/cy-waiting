@@ -179,7 +179,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
      * 지표는 초 단위로 뭉개져 남고 보존 기간도 짧아, 사고 조사에서 필요한
      * "몇 시 몇 분에 열려 얼마나 갔는가" 를 답하지 못한다.
      */
-    private final FailureWindow failOpenWindow;
+    private final FailureWindow enqueueFailWindow;
 
     /**
      * 보호 장치가 끊는 구간. 진입과 해제를 쌍으로 남긴다.
@@ -209,7 +209,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
         // 배치에서 전 요청이 큐로 간다 — 없는 장애를 만든다.
         this.circuit = circuit == null ? CircuitStateReader.of(null, "") : circuit;
         this.holder = Objects.requireNonNull(holder, "holder 는 필수다");
-        this.failOpenWindow = FailureWindow.of(ticker);
+        this.enqueueFailWindow = FailureWindow.of(ticker);
         this.shedWindow = FailureWindow.of(ticker);
         this.decider = Objects.requireNonNull(decider, "decider 는 필수다");
         this.clock = Objects.requireNonNull(clock, "clock 은 필수다");
@@ -521,10 +521,10 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
                     if (entry.clockWentBack()) {
                         clockBack.increment();
                     }
-                    // 등록이 다시 되면 fail-open 구간이 끝난 것이다. 쌍으로 안
+                    // 등록이 다시 되면 등록 실패 구간이 끝난 것이다. 쌍으로 안
                     // 남기면 로그에 진입만 있고 언제 닫혔는지가 없다.
-                    failOpenWindow.exited().ifPresent(r -> log.info(
-                            "fail-open 해제 — {}초 동안 {}건을 열거나 막았다",
+                    enqueueFailWindow.exited().ifPresent(r -> log.info(
+                            "줄 등록 실패 해제 — {}초 동안 {}건을 되돌려 보냈다",
                             NANOSECONDS.toSeconds(r.elapsedNanos()), r.swallowed()));
                     if (!entry.accepted()) {
                         // 2차 방어. 판정은 자리가 있다고 봤지만 실제로는 없었다.
@@ -548,35 +548,30 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
                 });
     }
 
-    /** 줄을 못 세웠고 줄이 있거나 모른다. 끊는 출구와 같은 판정값으로 되돌려 보낸다. */
+    /**
+     * 줄을 못 세웠다. <b>열지 않는다</b> — 연 사람이 레디스에 순번을 쥔 사람을 앞지른다.
+     * 등록 경로에는 차례가 온 사람이 안 오므로 과부하 거절 하나로 되돌려 보낸다.
+     */
     private Mono<Void> failClosed(ServerWebExchange exchange, SnapshotMeta meta) {
-        if (failOpenWindow.entered()) {
-            log.warn("fail-open 진입 — 줄 등록이 안 된다, 줄이 있어 닫는다");
+        // 매 요청 찍으면 정작 조사가 필요한 순간에 묻힌다. 구간의 시작만 찍는다.
+        if (enqueueFailWindow.entered()) {
+            log.warn("줄 등록 실패 구간 진입 — 레디스를 확인하라, 줄 판정은 되돌려 보낸다");
         }
         count("enqueue-failed-closed");
-        AdmissionDecision shed = AdmissionDecision.REJECT_OVERLOAD;
-        exchange.getAttributes().put(DECISION, shed);
-        return error.write(exchange, rejection.code(shed),
-                rejection.retryAfterSec(shed, random, meta.pollScale()));
+        return reject(exchange, AdmissionDecision.REJECT_OVERLOAD, meta);
     }
 
     /**
-     * 줄을 못 세웠다.
+     * 스냅샷에 없는 쿠폰을 낡은 재료로 받았다.
      *
-     * <p><b>상한을 두고 열어 준다.</b> 전부 막으면 레디스 장애가 곧 전면 장애이고,
-     * 전부 열면 뒷단이 그대로 무너진다. 상한을 넘은 몫은 되돌려 보낸다.
+     * <p><b>상한을 두고 열어 준다.</b> 전부 막으면 제어 평면 장애가 곧 새 쿠폰의 전면
+     * 장애이고, 전부 열면 뒷단이 그대로 무너진다. 상한을 넘은 몫은 되돌려 보낸다.
      */
     private Mono<Void> failOpen(ServerWebExchange exchange, GatewayFilterChain chain,
             SnapshotMeta meta, String couponId) {
         // **판정과 같은 리미터·같은 키다.** 따로 들면 한 초에 두 예산이 겹쳐
         // 나가고, 리미터를 하나로 두라는 규칙이 막으려던 버스트가 그대로 난다.
         long cap = decider.failOpenCap(meta);
-        // **상한 앞에서 찍는다.** 여는 갈래 안에 두면 상한이 0 인 구간에서 전 요청이
-        // 막는 갈래로 가 진입도 해제도 한 줄 안 남는다 — 알람은 뜨는데 볼 로그가 없다.
-        // 매 요청 찍으면 정작 조사가 필요한 순간에 묻히므로 구간의 시작만 찍는다.
-        if (failOpenWindow.entered()) {
-            log.warn("fail-open 진입 — 줄 등록이 안 된다, 상한={}", cap);
-        }
         if (limiter.tryAcquire(AdmissionDecider.GLOBAL_KEY, cap,
                 clock.instant().getEpochSecond())) {
             count("enqueue-failed-open");
@@ -591,19 +586,19 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
         // 실린 밴드로 밀려 토큰이 죽는다.
         boolean hasToken = exchange.<AdmissionDecision>getAttribute(DECISION)
                 == AdmissionDecision.PASS_TOKEN;
-        // **판정을 나간 응답에 맞춘다.** 사다리가 적어 둔 등록이 남으면 503 을 받은
-        // 사람이 줄에 선 것으로 읽힌다. 차례가 온 사람은 그대로 그 값으로 적는다 —
-        // 과부하 거절로 뭉개면 뒤에 읽는 쪽이 그를 못 가른다.
-        //
-        // **품질은 여기서 안 건드린다.** 재료가 신선한데 큐만 죽은 장애도 이 자리에
-        // 오므로, 표시하면 그 구간이 통째로 열화로 세어진다 (90-decisions 2.19).
-        AdmissionDecision shed = hasToken
-                ? AdmissionDecision.RETRY_TOKEN : AdmissionDecision.REJECT_OVERLOAD;
-        exchange.getAttributes().put(DECISION, shed);
-        // **코드도 그 판정에서 뽑는다** (F8 · CY-903). 503 은 클라이언트가 입장
-        // 단계를 버리는 신호라, 가까이 불러 놓고 새 순번으로 다시 세우게 된다.
-        return error.write(exchange, rejection.code(shed),
-                rejection.retryAfterSec(shed, random, meta.pollScale()));
+        // **판정을 나간 응답에 맞춘다.** 차례가 온 사람은 그대로 그 값으로 적는다 —
+        // 과부하 거절로 뭉개면 뒤에 읽는 쪽이 그를 못 가른다. 503 은 클라이언트가
+        // 입장 단계를 버리는 신호라 코드도 그 판정에서 뽑는다 (F8 · CY-903).
+        return reject(exchange, hasToken
+                ? AdmissionDecision.RETRY_TOKEN : AdmissionDecision.REJECT_OVERLOAD, meta);
+    }
+
+    /** 판정을 나간 응답의 값으로 고쳐 적고, 그 판정의 코드와 재시도 간격으로 되돌려 보낸다. */
+    private Mono<Void> reject(ServerWebExchange exchange, AdmissionDecision decision,
+            SnapshotMeta meta) {
+        exchange.getAttributes().put(DECISION, decision);
+        return error.write(exchange, rejection.code(decision),
+                rejection.retryAfterSec(decision, random, meta.pollScale()));
     }
 
     /**
@@ -755,18 +750,11 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
         // 같은 갈래를 쓴다 (BackendFallback · F8).
         boolean hasToken = exchange.<AdmissionDecision>getAttribute(DECISION)
                 == AdmissionDecision.PASS_TOKEN;
-        AdmissionDecision shed = hasToken
-                ? AdmissionDecision.RETRY_TOKEN : AdmissionDecision.REJECT_OVERLOAD;
-        exchange.getAttributes().put(DECISION, shed);
         // **줄에 안 선 쪽만 배수를 지킨다.** 이 갈래가 도는 순간이 곧 예산이
         // 빠듯한 순간이라 거기만 빼면 과부하일수록 예산이 덜 걸린다. 토큰
         // 보유자는 반대다 — 그 순간이 곧 그가 가장 멀리 밀리는 순간이다.
-        //
-        // **코드도 그 판정에서 뽑는다** (F8 · CY-903). 과부하로 뭉개 놓고 코드를
-        // 거기서 뽑으면 차례가 온 사람이 503 을 받고, 클라이언트가 그것을 입장
-        // 단계를 버리라는 신호로 읽는다.
-        return error.write(exchange, rejection.code(shed),
-                rejection.retryAfterSec(shed, random, meta.pollScale()));
+        return reject(exchange, hasToken
+                ? AdmissionDecision.RETRY_TOKEN : AdmissionDecision.REJECT_OVERLOAD, meta);
     }
 
     /**

@@ -6,6 +6,7 @@ import com.kafkick.waiting.adapter.redis.RedisKeys;
 import com.kafkick.waiting.control.GatewayRegistry;
 import com.kafkick.waiting.control.SnapshotHolder;
 import io.lettuce.core.api.StatefulRedisConnection;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -26,6 +27,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.data.redis.autoconfigure.DataRedisProperties;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
@@ -95,6 +97,9 @@ class AsymmetricRedisLossScenarioTest {
         }
     }
 
+    @Autowired
+    private DataRedisProperties redisProperties;
+
     @LocalServerPort
     private int port;
 
@@ -129,6 +134,9 @@ class AsymmetricRedisLossScenarioTest {
             boolean[] 분모가_내려왔다 = new boolean[1];
             long[] 못_읽은_시간 = new long[1];
             SnapshotHolder 둘째_홀더 = 둘째.빈("snapshotHolder", SnapshotHolder.class);
+            MeterRegistry 둘째_지표 = 둘째.빈(MeterRegistry.class);
+            double[] 둘째_닫은_증가 = new double[1];
+            Duration[] 둘째_걸린 = new Duration[1];
 
             ChaosScenario.named("C6c 비대칭 레디스 소실")
                     .baseline(() -> {
@@ -174,18 +182,26 @@ class AsymmetricRedisLossScenarioTest {
                         // 겹치는 창" 이 애초에 안 생기고, 아래 총합 판정은 잴 것이 없다. 낡음 플래그가
                         // 아니라 못 읽은 시간을 본다 — 낡음 문턱은 재료 나이라 창 길이와 눈금이 다르다.
                         못_읽은_시간[0] = 둘째_홀더.fetchAge().toMillis();
+                        // **끊긴 노드가 낡음에 든 뒤에 두드린다.** 분모는 문턱보다 먼저 내려올 수 있고,
+                        // 그 전의 한산 쿠폰은 레디스 없이 몫 안에서 통과하는 것이 맞다.
+                        Awaitility.await().alias("끊긴 노드의 재료가 낡는다")
+                                .atMost(기다림).until(둘째_홀더::isDataStale);
                         // **여기서 읽는다.** 기준선에서 읽으면 분모가 내려오기를 기다린 시간만큼
                         // 관측 시점과 판정 시점이 어긋난다.
                         크레딧[0] = holder.view().snapshot().meta().globalCredit();
+                        double 둘째_닫기_전 = 닫은_수(둘째_지표);
                         long 시작 = System.nanoTime();
                         도착[1] = 뒷단까지_센다(() -> {
                             끊긴_뒤_첫_노드.addAll(여러_번_시도한다(port, 보낼_수, 3_000));
+                            long 둘째_시작 = System.nanoTime();
                             끊긴_뒤_둘째.addAll(여러_번_시도한다(둘째.port(), 보낼_수, 4_000));
+                            둘째_걸린[0] = Duration.ofNanos(System.nanoTime() - 둘째_시작);
                             // 예산을 넘겨 본다. 통과 상한이 실제로 걸리는지는 이 발신이 정한다.
                             함께_시도한다(port, 부하_수, 30_000);
                             함께_시도한다(둘째.port(), 부하_수, 40_000);
                         });
                         걸린[0] = System.nanoTime() - 시작;
+                        둘째_닫은_증가[0] = 닫은_수(둘째_지표) - 둘째_닫기_전;
                     })
                     .recover(() -> 걷는다(둘째_문))
                     .afterRecovery(() -> {
@@ -213,17 +229,21 @@ class AsymmetricRedisLossScenarioTest {
                             뛰다_터진_수.get() == 0 ? Optional.empty()
                                     : Optional.of("보고가 %d 번 터졌다 — 크레딧이 바닥값일 수 있다"
                                             .formatted(뛰다_터진_수.get())),
-                            // **끊긴 노드는 전면 차단만 아니면 된다.** 재료가 낡으면 fail-open 상한이
-                            // 걸려 일부가 503 으로 나가는 것이 맞는 동작이다 — 상한이 없는 쪽이 사고다.
+                            // **끊긴 노드는 열지 않는다** (CY-1006). 재료가 낡아 줄을 모르고 레디스도
+                            // 못 써 줄에 못 세운다 — 열면 동료 노드가 세운 줄을 앞지른다.
                             못_읽은_시간[0] >= 2_000 ? Optional.empty()
                                     : Optional.of("전제 — 끊었는데 동료가 계속 읽었다 — %dms"
                                             .formatted(못_읽은_시간[0])),
-                            NodeIssueProbe.전면_차단이_아니다("끊긴 노드", 끊긴_뒤_둘째),
+                            NodeIssueProbe.되돌려_보냈다("끊긴 노드", 끊긴_뒤_둘째),
+                            // 몰아친 몫까지 전부 등록 실패로 닫아야 한다. 하나라도 열면 여기서 모자란다.
+                            NodeIssueProbe.등록_실패로_닫았다("끊긴 노드", 둘째_닫은_증가[0], 보낼_수 + 부하_수),
+                            NodeIssueProbe.곧바로_답했다("끊긴 노드", 둘째_걸린[0], NodeIssueProbe.되돌리는_한계(
+                                    redisProperties.getTimeout(), 보낼_수)),
                             // **붙어 있는 노드는 멎지 않는다.** 여기서 5xx 가 나오면 한쪽 장애가
                             // 멀쩡한 노드로 번진 것이다.
                             NodeIssueProbe.멎지_않았다("첫 노드", 끊긴_뒤_첫_노드),
                             // **두 값이 겹치는 창의 총합.** 리더는 작은 분모로 제 몫을 키우고,
-                            // 끊긴 동료는 낡은 재료로 옛 몫을 계속 쓴다.
+                            // 끊긴 동료는 적응형을 안 열지만 꺼진 쿠폰은 낡은 재료의 옛 몫으로 연다.
                             도착[1] <= NodeIssueProbe.허용(크레딧[0], 걸린[0]) ? Optional.empty()
                                     : Optional.of("끊긴 창에서 뒷단에 %d 건 닿았다 — 허용 %d (크레딧 %d)"
                                             .formatted(도착[1], NodeIssueProbe.허용(크레딧[0], 걸린[0]), 크레딧[0]))))
@@ -275,6 +295,12 @@ class AsymmetricRedisLossScenarioTest {
      * 한 노드를 <b>함께</b> 두드린다. 순차로 보내면 초당 도착이 응답 시간에 갇혀, 예산을 넘겨 보려는
      * 발신이 예산 근처에도 못 간다 — 그러면 총합 판정이 제품이 아니라 하네스의 속도를 잰다.
      */
+    /** 등록 실패로 닫은 누적 수. 503 이 이 출구에서 났는지를 가른다. */
+    private double 닫은_수(MeterRegistry 지표) {
+        return 지표.find("waiting.admission").tag("outcome", "enqueue-failed-closed")
+                .counters().stream().mapToDouble(c -> c.count()).sum();
+    }
+
     private void 함께_시도한다(int 노드_포트, int 횟수, int 시작_회원) {
         ExecutorService 일꾼 = Executors.newFixedThreadPool(8);
         try {

@@ -5,9 +5,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.kafkick.waiting.adapter.redis.RedisKeys;
 import com.kafkick.waiting.control.Leadership;
 import com.kafkick.waiting.control.SnapshotHolder;
-import com.kafkick.waiting.domain.admission.AdmissionDecider;
 import com.kafkick.waiting.domain.queue.QueueToken;
 import io.lettuce.core.api.StatefulRedisConnection;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -31,6 +31,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.data.redis.autoconfigure.DataRedisProperties;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -45,14 +46,10 @@ import reactor.netty.http.server.HttpServer;
 /**
  * X1 — 리더가 죽은 채로 레디스까지 멈춘다 (8.3.6 · 5절).
  *
- * <p>C4 는 줄에 세울 수 있어 <b>추월 0</b> 이 답이었다. 여기서는 줄에 세울 수가
- * 없다 — F1 셋째 줄이 적용되는 유일한 상황이고, 그때만 통과시키되 <b>상한 안</b>
- * 이어야 한다.
+ * <p>C4 는 줄에 세울 수 있어 <b>추월 0</b> 이 답이었다. 여기서는 줄에 세울 수도 없고
+ * 재료도 낡아 줄을 모른다. <b>그래도 열지 않는다</b> (CY-1006) — 모름도, 못 세움도 추월의
+ * 사유가 아니다. 전원이 곧바로 503 을 받고 뒷단에는 아무것도 안 간다.
  */
-// **C1 이 못 잰 자리를 여기서 잰다.** 저쪽은 한산한 쿠폰 하나로 재는데 그 쿠폰은
-// fail-open 경로를 안 거친다 — "상한을 재려면 줄이 선 재료가 필요하다" 고 저쪽
-// 주석이 적어 두었다. 여기는 줄 선 쿠폰과 한산한 쿠폰을 나란히 둔다.
-//
 // **영속을 켜고 띄운다.** C1 은 `--appendonly no` 라 끊었다 붙이면 줄이 통째로
 // 사라져 RC5 를 구조적으로 못 쟀다. 여기서는 줄이 살아남으므로 자리 보존을 잰다.
 @Tag("chaos")
@@ -64,15 +61,10 @@ import reactor.netty.http.server.HttpServer;
         properties = "waiting.scheduler.enabled=true")
 class LeaderAndRedisLostScenarioTest {
 
-    /** 줄이 선 쿠폰. 이 쿠폰의 통과가 fail-open 상한을 재는 자리다. */
+    /** 줄이 선 쿠폰. 레디스에 순번을 쥔 사람이 있다. */
     private static final String 줄_선_쿠폰 = "x1-queued";
 
-    /**
-     * 줄이 없는 쿠폰. <b>양성 대조다.</b>
-     *
-     * <p>이쪽이 계속 통과해야 게이트웨이가 살아 있는 것이고, 그래야 저쪽의
-     * 상한이 "다 막혔다" 가 아니라 "상한이 물렸다" 는 뜻이 된다.
-     */
+    /** 줄이 없던 적응형 쿠폰. 낡은 재료에서는 비어 보여도 줄을 모른다. */
     private static final String 한산한_쿠폰 = "x1-idle";
 
     private static final String 죽은_리더 = "x1-dead-leader";
@@ -84,18 +76,13 @@ class LeaderAndRedisLostScenarioTest {
 
     private static final int 줄_선_사람 = 5;
 
-    /**
-     * 줄 선 쿠폰에 한 구간에 보내는 수.
-     *
-     * <p><b>상한보다 훨씬 커야 한다.</b> 상한 안이면 "상한 안이다" 라는 판정이
-     * 아무것도 안 잰다 — 리미터를 들어내도 통과한다.
-     */
+    /** 줄 선 쿠폰에 한 구간에 몰아치는 수. 하나라도 새면 추월이다. */
     private static final int 보낼_수 = 40;
 
     /** 대조군에 보내는 수. 크레딧 안쪽이어야 한 번 서면 영영 못 나오는 일이 없다. */
     private static final int 한산한_보낼_수 = 2;
 
-    /** 낡음이 걷힐 때까지의 한계. 그동안 fail-open 이 열려 있다. */
+    /** 낡음이 걷힐 때까지의 한계. 그동안 신규가 전부 되돌아간다. */
     private static final Duration 낡음이_걷힐_한계 = Duration.ofSeconds(5);
 
     private static final Map<String, AtomicLong> 뒷단이_받은_수 = new ConcurrentHashMap<>();
@@ -155,10 +142,13 @@ class LeaderAndRedisLostScenarioTest {
     private SnapshotHolder holder;
 
     @Autowired
-    private AdmissionDecider decider;
+    private QueueToken tokens;
 
     @Autowired
-    private QueueToken tokens;
+    private MeterRegistry meters;
+
+    @Autowired
+    private DataRedisProperties redisProperties;
 
     @Autowired
     private Clock clock;
@@ -212,12 +202,8 @@ class LeaderAndRedisLostScenarioTest {
     }
 
     /**
-     * 같은 초에 몰아친다.
-     *
-     * <p><b>순서대로 보내면 상한을 못 잰다.</b> 레디스가 죽은 동안 요청 하나가
-     * 줄 등록 시도에서 600ms 를 쓰므로, 40 건을 줄 세우면 24 초에 걸친다 —
-     * 초당 예산이 그 사이 스물네 번 다시 차서 전부 통과한다. 실제로 그렇게
-     * 재다가 "상한이 안 물렸다" 를 봤다.
+     * 같은 초에 몰아친다. 레디스가 죽은 동안 요청 하나가 줄 등록 시도에서 600ms 를
+     * 쓰므로, 줄 세워 보내면 40 건이 24 초에 걸친다.
      */
     private List<Integer> 한꺼번에_시도한다(String couponId, int 횟수, int 시작_회원) {
         ExecutorService 일꾼 = Executors.newFixedThreadPool(횟수);
@@ -260,23 +246,16 @@ class LeaderAndRedisLostScenarioTest {
         return 자리;
     }
 
+    /** 등록 실패로 닫은 누적 수. 503 이 이 출구에서 났는지를 가른다. */
+    private double 닫은_수() {
+        return meters.find("waiting.admission").tag("outcome", "enqueue-failed-closed")
+                .counters().stream().mapToDouble(c -> c.count()).sum();
+    }
+
     private long 잰다(String couponId, Runnable 배치) {
         long 전 = 받은_수(couponId);
         배치.run();
         return 받은_수(couponId) - 전;
-    }
-
-    /** 지금 재료가 허용하는 초당 fail-open 상한. 필터가 보는 것과 같은 값이다. */
-    private long 초당_상한() {
-        return (long) (decider.globalCap(holder.view().snapshot().meta()) * 0.5);
-    }
-
-    /** 초 경계를 넘긴다. 리미터의 창이 바뀌어야 앞 배치의 예산과 안 섞인다. */
-    private void 다음_초를_기다린다() {
-        long 지금 = clock.instant().getEpochSecond();
-        Awaitility.await().atMost(기다림)
-                .pollInterval(Duration.ofMillis(20))
-                .until(() -> clock.instant().getEpochSecond() > 지금);
     }
 
     private void 죽은_리더가_락을_쥔다(LeaderFaults 락) {
@@ -284,14 +263,10 @@ class LeaderAndRedisLostScenarioTest {
         락.프로세스를_죽인다(죽은_리더);
     }
 
-    /**
-     * X1 — 리더가 죽고 레디스까지 멈춘다.
-     *
-     * <p>줄에 세울 수 없는 유일한 상황이다. 그때만 통과시키되 상한 안이어야 한다.
-     */
+    /** X1 — 리더가 죽고 레디스까지 멈춘다. 줄에 못 세우고 줄도 모르지만 열지 않는다. */
     @Test
-    @DisplayName("X1_리더가_죽은_채_레디스가_멈추면_상한_안에서만_연다")
-    void X1_리더가_죽은_채_레디스가_멈추면_상한_안에서만_연다() {
+    @DisplayName("X1_리더가_죽은_채_레디스가_멈춰도_줄을_추월하지_않는다")
+    void X1_리더가_죽은_채_레디스가_멈춰도_줄을_추월하지_않는다() {
         재료를_심는다();
         Awaitility.await().atMost(기다림).until(leadership::isLeader);
         Awaitility.await().atMost(기다림).until(() -> !holder.isDataStale());
@@ -306,11 +281,11 @@ class LeaderAndRedisLostScenarioTest {
         List<Integer> 장애중_줄_상태 = new ArrayList<>();
         long[] 줄_쿠폰_도착 = new long[3];
         long[] 한산한_쿠폰_도착 = new long[3];
-        long[] 상한 = new long[1];
-        long[] 걸린_초 = new long[1];
         int[] 주입_직후_쿠폰 = new int[1];
         boolean[] 주입_직후_낡음 = new boolean[1];
         List<Integer> 회복_줄_상태 = new ArrayList<>();
+        double[] 닫은_증가 = new double[1];
+        Duration[] 유지_걸린 = new Duration[1];
 
         ChaosScenario.named("X1 리더 사망 + 레디스 정지")
                 .baseline(() -> {
@@ -328,8 +303,7 @@ class LeaderAndRedisLostScenarioTest {
                             .isZero();
                 })
                 .inject(() -> {
-                    // **리더는 이미 죽어 있다.** 여기서 레디스를 끊어 줄 등록까지
-                    // 막는다 — 두 장애가 겹쳐야 F1 셋째 줄이 열린다.
+                    // **리더는 이미 죽어 있다.** 여기서 레디스를 끊어 줄 등록까지 막는다.
                     faults.끊는다();
                     // **스냅샷을 지우지 않는다** (C1 진입 기준). 레디스가 죽었다고
                     // 재료를 버리면 판정이 그 자리에서 멎는다 — 낡은 재료로라도
@@ -339,24 +313,16 @@ class LeaderAndRedisLostScenarioTest {
                 })
                 .duringFault(() -> {
                     Awaitility.await().atMost(기다림).until(holder::isDataStale);
-                    // 상한은 필터가 보는 재료에서 읽는다. 시험이 따로 계산하면
-                    // 재료가 바뀌는 날 둘이 조용히 갈라진다.
-                    상한[0] = 초당_상한();
+                    double 닫기_전 = 닫은_수();
+                    long 시작 = System.nanoTime();
                     long 낡기_전 = 받은_수(한산한_쿠폰);
                     장애중_상태.addAll(여러_번_시도한다(한산한_쿠폰, 한산한_보낼_수, 2_000));
                     한산한_쿠폰_도착[1] = 받은_수(한산한_쿠폰) - 낡기_전;
-
-                    // **대조군과 같은 초에 몰아치지 않는다.** 리미터가 노드 하나를
-                    // 세는 것이라 예산을 같이 쓴다 — 대조군 두 건이 그 초의 2 를
-                    // 먹으면 이 배치가 전멸해 "전면 차단" 으로 읽힌다. 실제로 봤다.
-                    다음_초를_기다린다();
-                    long 시작_초 = clock.instant().getEpochSecond();
                     줄_쿠폰_도착[1] = 잰다(줄_선_쿠폰,
                             () -> 장애중_줄_상태.addAll(
                                     한꺼번에_시도한다(줄_선_쿠폰, 보낼_수, 2_500)));
-                    // 리미터가 초 단위다. 걸친 창의 수만큼 예산이 다시 찬다 —
-                    // 경과 시간이 아니라 **넘은 초 경계**로 세야 한 창이 안 빠진다.
-                    걸린_초[0] = clock.instant().getEpochSecond() - 시작_초 + 1;
+                    유지_걸린[0] = Duration.ofNanos(System.nanoTime() - 시작);
+                    닫은_증가[0] = 닫은_수() - 닫기_전;
                 })
                 .recover(() -> {
                     faults.붙인다();
@@ -367,8 +333,8 @@ class LeaderAndRedisLostScenarioTest {
                     assertThat(새_락.lease를_만료시킨다(Duration.ofMillis(1)))
                             .as("죽은 리더의 락에 만료가 걸린다").isTrue();
                     // **컨테이너가 뜨는 시간은 안 센다.** 그건 도커를 재는 것이고,
-                    // 여기서 잴 것은 레디스가 돌아온 뒤 게이트웨이가 fail-open 을
-                    // 그만두기까지다 — 그동안 줄이 계속 추월당한다.
+                    // 여기서 잴 것은 레디스가 돌아온 뒤 게이트웨이가 다시 줄에 세우기까지다 —
+                    // 그동안 신규가 전부 되돌아간다.
                     회복을_기다린_시각 = clock.instant();
                 })
                 .afterRecovery(() -> {
@@ -391,22 +357,22 @@ class LeaderAndRedisLostScenarioTest {
                         // 구간(신선한 재료 + 죽은 레디스)을 건너뛴 것이다.
                         주입_직후에_안_낡았다(주입_직후_낡음[0])))
                 .assertDuring(() -> RecoveryCriteria.violations(
-                        // 양성 대조 — 한산한 쿠폰은 평시만큼 간다.
-                        열려_있었다(한산한_쿠폰_도착[1], 한산한_쿠폰_도착[0]),
-                        // **전면 차단이 아니다.** 줄에 못 세우면 그때만 연다.
-                        줄_선_쿠폰도_열렸다(줄_쿠폰_도착[1]),
-                        // **상한이 실제로 물렸다.** 보낸 것보다 적게 가야 한다.
-                        상한이_물렸다(줄_쿠폰_도착[1]),
-                        // 상한은 초당이므로 걸친 초 수를 곱한 것이 한계다.
-                        상한_안이다(줄_쿠폰_도착[1], 상한[0], 걸린_초[0]),
-                        // 넘친 몫은 되돌려 보낸다. 답을 못 받은 것은 아니다.
-                        전부_답을_받았다(장애중_줄_상태),
+                        // **줄에 못 세우고 줄도 모르지만 열지 않는다** (CY-1006).
+                        줄을_추월하지_않았다("유지", 줄_쿠폰_도착[1]),
+                        줄을_모르면_열지_않았다(한산한_쿠폰_도착[1]),
+                        // **도착 0 만 보면 전원이 매달려도, 다른 이유로 막혀도 통과다.**
+                        NodeIssueProbe.되돌려_보냈다("줄 선 쿠폰", 장애중_줄_상태),
+                        NodeIssueProbe.되돌려_보냈다("한산한 쿠폰", 장애중_상태),
+                        NodeIssueProbe.등록_실패로_닫았다("유지", 닫은_증가[0], 보낼_수 + 한산한_보낼_수),
+                        // 순차 둘과 한꺼번에 한 묶음이라 차례는 셋이다.
+                        NodeIssueProbe.곧바로_답했다("유지", 유지_걸린[0], NodeIssueProbe.되돌리는_한계(
+                                redisProperties.getTimeout(), 한산한_보낼_수 + 1)),
                         레디스가_정말_죽었다()))
                 .assertRecovery(() -> RecoveryCriteria.violations(
                         판정이_멈추지_않았다(회복_상태),
                         열려_있었다(한산한_쿠폰_도착[2], 한산한_쿠폰_도착[0]),
                         // 레디스가 돌아오면 다시 줄에 세운다 — 추월이 끝난다.
-                        줄을_추월하지_않았다(줄_쿠폰_도착[2]),
+                        줄을_추월하지_않았다("회복", 줄_쿠폰_도착[2]),
                         // **도착 0 만 보면 전원 5xx 도 통과다.** 줄로 갔는지를
                         // 응답으로 따로 본다.
                         줄에_다시_세웠다(회복_줄_상태),
@@ -415,8 +381,8 @@ class LeaderAndRedisLostScenarioTest {
                         // **RC5 — C1 이 구조적으로 못 잰 자리다.** 영속을 켰으므로
                         // 끊었다 붙여도 줄이 남아야 한다.
                         RecoveryCriteria.seatLost(장애_전_자리, 회복_뒤_자리)))
-                // **RC1·RC2·RC4·RC6 은 여기서 안 잰다.** 뒷단 도착이 상한에 눌려
-                // 표본이 적고, 줄 선 쿠폰은 순번을 안 돌려주므로 RC2 를 못 본다.
+                // **RC1·RC2·RC4·RC6 은 여기서 안 잰다.** 유지 구간에 뒷단 도착이 없어
+                // 표본이 없고, 줄 선 쿠폰은 순번을 안 돌려주므로 RC2 를 못 본다.
                 .run();
 
         연결.close();
@@ -431,64 +397,24 @@ class LeaderAndRedisLostScenarioTest {
                 : Optional.of("판정이 %d 건 멈췄다 (보낸 %d)".formatted(멈춘_것, 상태.size()));
     }
 
-    /** 한산한 쿠폰이 평시만큼 간다. 여기가 막히면 아래 상한 판정이 아무것도 안 잰다. */
+    /** 한산한 쿠폰이 평시만큼 간다. */
     private Optional<String> 열려_있었다(long 뒷단에_닿은_수, long 평시_도착) {
         return 뒷단에_닿은_수 == 평시_도착 ? Optional.empty()
                 : Optional.of("한산한 쿠폰이 %d 건만 뒷단에 갔다 (평시 %d)"
                         .formatted(뒷단에_닿은_수, 평시_도착));
     }
 
-    /**
-     * <b>줄에 못 세우면 그때만 연다</b> (F1 셋째 줄).
-     *
-     * <p>0 이면 레디스 장애가 곧 전면 장애다. 게이트웨이가 존재할 이유가 없다.
-     */
-    private Optional<String> 줄_선_쿠폰도_열렸다(long 뒷단에_닿은_수) {
-        return 뒷단에_닿은_수 > 0 ? Optional.empty()
-                : Optional.of("줄에 못 세우는데 한 건도 안 통과했다 — 전면 차단이다");
-    }
-
-    /**
-     * <b>상한이 실제로 물렸다.</b>
-     *
-     * <p>보낸 것이 전부 갔다면 상한이 없는 것과 같다. 리미터를 들어내도 초록인
-     * 자리가 되지 않게, 보낸 수보다 적게 갔는지를 따로 본다.
-     */
-    private Optional<String> 상한이_물렸다(long 뒷단에_닿은_수) {
-        return 뒷단에_닿은_수 < 보낼_수 ? Optional.empty()
-                : Optional.of("보낸 %d 건이 전부 뒷단에 갔다 — 상한이 안 물렸다"
-                        .formatted(뒷단에_닿은_수));
-    }
-
-    /** 초당 상한 × 걸친 초 수가 한계다. 이것을 넘으면 뒷단이 무너진다. */
-    private Optional<String> 상한_안이다(long 뒷단에_닿은_수, long 초당, long 초) {
-        long 한계 = 초당 * 초;
-        return 뒷단에_닿은_수 <= 한계 ? Optional.empty()
-                : Optional.of("%d 건이 뒷단에 갔다 — 초당 상한 %d × %d 초 = %d 이내여야 한다"
-                        .formatted(뒷단에_닿은_수, 초당, 초, 한계));
-    }
-
-    /**
-     * <b>넘친 몫도 답을 받는다.</b> 통과가 아니라 되돌려 보내는 것이라, 끊긴 것과
-     * 구분해야 한다. 여기가 없으면 절반이 타임아웃돼도 "상한이 물렸다" 로 읽힌다.
-     */
-    private Optional<String> 전부_답을_받았다(List<Integer> 상태) {
-        if (상태.size() != 보낼_수) {
-            return Optional.of("%d 건만 답을 받았다 (보낸 %d)"
-                    .formatted(상태.size(), 보낼_수));
-        }
-        long 엉뚱한_답 = 상태.stream()
-                .filter(status -> status != 200 && status != 202 && status != 503)
-                .count();
-        return 엉뚱한_답 == 0 ? Optional.empty()
-                : Optional.of("%d 건이 200·202·503 이 아니다: %s".formatted(엉뚱한_답, 상태));
-    }
-
-    /** 레디스가 돌아오면 줄에 세운다. 그때부터는 추월이 없어야 한다. */
-    private Optional<String> 줄을_추월하지_않았다(long 뒷단에_닿은_수) {
+    /** 낡은 재료의 적응형 쿠폰은 비어 보여도 줄을 모른다. 열면 추월일 수 있다. */
+    private Optional<String> 줄을_모르면_열지_않았다(long 뒷단에_닿은_수) {
         return 뒷단에_닿은_수 == 0 ? Optional.empty()
-                : Optional.of("회복 뒤에도 줄이 선 쿠폰에서 %d 건이 뒷단까지 갔다 — 추월이다"
-                        .formatted(뒷단에_닿은_수));
+                : Optional.of("줄을 모르는 쿠폰에서 %d 건이 뒷단까지 갔다".formatted(뒷단에_닿은_수));
+    }
+
+    /** 줄이 선 쿠폰은 뒷단에 안 간다. 레디스가 죽었든 돌아왔든 같다. */
+    private Optional<String> 줄을_추월하지_않았다(String 구간, long 뒷단에_닿은_수) {
+        return 뒷단에_닿은_수 == 0 ? Optional.empty()
+                : Optional.of("%s — 줄이 선 쿠폰에서 %d 건이 뒷단까지 갔다 — 추월이다"
+                        .formatted(구간, 뒷단에_닿은_수));
     }
 
     /** 장애가 정말 걸렸는지. 안 걸렸으면 위 판정 전부가 평시를 잰 것이다. */

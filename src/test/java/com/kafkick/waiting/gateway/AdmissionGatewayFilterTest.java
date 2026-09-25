@@ -277,6 +277,29 @@ class AdmissionGatewayFilterTest {
                 meta, 지금));
     }
 
+    /** 한산 몫을 작게 실은 재료. 노드 예산 1,000 에 한산 몫 100, 장애 개방 상한 500 이다. */
+    private static final SnapshotMeta 한산_몫이_작은_META = SnapshotMeta.withoutPollScale(
+            1_000, 1, new Tunables(Tunables.MIN_IDLE_RATIO, 3));
+
+    /** <b>한산 몫을 다 쓴 쿠폰을 만든다.</b> 다음 사람은 신선한 스냅샷의 빈 줄로 간다. */
+    private long 한산_몫을_다_쓴다() {
+        스냅샷을_심는다(CouponStates.idle(1_000_000), 한산_몫이_작은_META);
+        long 한산_몫 = CouponStates.idle(1).idleCap(
+                한산_몫이_작은_META, 한산_몫이_작은_META.idleCreditRatioOr(IDLE_RATIO));
+        for (long i = 0; i < 한산_몫; i++) {
+            assertThat(태운다(COUPON, "한산" + i).<AdmissionDecision>getAttribute(
+                    AdmissionGatewayFilter.DECISION)).isEqualTo(AdmissionDecision.PASS_UNDER_CAP);
+        }
+        뒷단에_닿음.set(false);
+        return 한산_몫;
+    }
+
+    /** 낡은 재료에 {@code COUPON} 이 없다. 그 쿠폰은 이연 갈래로 상한 안에서 열린다. */
+    private void 낡은_재료에_쿠폰이_없다(SnapshotMeta meta) {
+        holder.replace(new GatewaySnapshot(
+                Map.of("다른쿠폰", CouponStates.idle(1_000)), meta, 지금.minusSeconds(60)));
+    }
+
     @Test
     @DisplayName("스냅샷에_없는_쿠폰은_뒷단에_안_간다")
     void 스냅샷에_없는_쿠폰은_뒷단에_안_간다() {
@@ -641,17 +664,72 @@ class AdmissionGatewayFilterTest {
         assertThat(줄.왕복()).isZero();
     }
 
+    /**
+     * <b>한산 초과분도 등록이 안 되면 열지 않는다</b> (CY-1006). 신선한 스냅샷의 빈 줄은 다른
+     * 노드가 방금 세운 줄을 모른다. 한 노드만 레디스를 잃으면 그 창이 낡음 문턱만큼 길다.
+     */
     @Test
-    @DisplayName("줄을_못_세우면_상한만큼_열어_준다")
-    void 줄을_못_세우면_상한만큼_열어_준다() {
-        // 전부 막으면 레디스 장애가 곧 전면 장애다. 전부 열면 뒷단이 무너진다.
+    @DisplayName("등록이_안_되면_한산_초과분도_열지_않는다")
+    void 등록이_안_되면_한산_초과분도_열지_않는다() {
+        한산_몫을_다_쓴다();
+        줄.터진다(new IllegalStateException("레디스가 죽었다"));
+
+        MockServerWebExchange exchange = 태운다(COUPON, "넘친사람");
+
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(뒷단에_닿음).hasValue(false);
+        assertThat(사유("enqueue-failed-closed")).isEqualTo(1.0);
+    }
+
+    /** 이 노드가 방금 세운 줄은 스냅샷보다 래치가 먼저 안다. 등록이 안 되면 그 줄도 지킨다. */
+    @Test
+    @DisplayName("방금_세운_줄도_등록이_안_되면_지킨다")
+    void 방금_세운_줄도_등록이_안_되면_지킨다() {
+        한산_몫을_다_쓴다();
+        태운다(COUPON, "대기자0");
+        줄.터진다(new IllegalStateException("레디스가 죽었다"));
+
+        MockServerWebExchange exchange = 태운다(COUPON, "대기자1");
+
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(뒷단에_닿음).hasValue(false);
+        assertThat(사유("enqueue-failed-closed")).isEqualTo(1.0);
+    }
+
+    /**
+     * <b>줄이 있으면 등록이 안 돼도 열지 않는다</b> (CY-1006). 열면 새로 온 사람이 레디스에
+     * 줄 선 사람을 앞지른다. 공정성은 가용성과 안 맞바꾼다.
+     */
+    @Test
+    @DisplayName("줄이_있으면_등록이_안_돼도_열지_않는다")
+    void 줄이_있으면_등록이_안_돼도_열지_않는다() {
         스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
         줄.터진다(new IllegalStateException("레디스가 죽었다"));
 
         MockServerWebExchange exchange = 태운다(COUPON);
 
-        assertThat(뒷단에_닿음).hasValue(true);
-        assertThat(exchange.getResponse().getStatusCode()).isNull();
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(exchange.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .isEqualTo(AdmissionDecision.REJECT_OVERLOAD);
+        assertThat(뒷단에_닿음).hasValue(false);
+        assertThat(사유("enqueue-failed-closed")).isEqualTo(1.0);
+    }
+
+    /** 낡은 재료의 적응형 쿠폰은 줄을 모른다. 모름도 추월의 사유가 아니다. */
+    @Test
+    @DisplayName("줄을_모르면_등록이_안_돼도_열지_않는다")
+    void 줄을_모르면_등록이_안_돼도_열지_않는다() {
+        holder.replace(new GatewaySnapshot(
+                Map.of(COUPON, CouponStates.idle(1_000_000)), META, 지금.minusSeconds(3_600)));
+        줄.터진다(new IllegalStateException("레디스가 죽었다"));
+
+        MockServerWebExchange exchange = 태운다(COUPON);
+
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(exchange.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .isEqualTo(AdmissionDecision.REJECT_OVERLOAD);
+        assertThat(뒷단에_닿음).hasValue(false);
+        assertThat(사유("enqueue-failed-closed")).isEqualTo(1.0);
     }
 
     @Test
@@ -771,17 +849,15 @@ class AdmissionGatewayFilterTest {
     }
 
     /**
-     * <b>장애 개방의 상한을 넘은 몫도 지킨다.</b>
+     * <b>등록 실패로 되돌려 보낸 몫도 전역 배수를 지킨다.</b>
      *
      * <p>레디스가 흔들려 줄을 못 세우는 구간이 곧 배수가 커져 있는 구간이다.
      * 여기만 빼면 하필 그때 되돌려 보낸 사람이 예산 밖에서 두드린다.
      */
     @Test
-    @DisplayName("장애_개방_상한_초과가_전역_배수를_지킨다")
-    void 장애_개방_상한_초과가_전역_배수를_지킨다() {
-        // 전역 몫이 0 이라 fail-open 상한도 0 이다 — 첫 요청부터 되돌려 보낸다.
-        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100),
-                SnapshotMetas.overBudget(0, 1, 1.5));
+    @DisplayName("등록_실패_거절이_전역_배수를_지킨다")
+    void 등록_실패_거절이_전역_배수를_지킨다() {
+        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 100), SnapshotMetas.overBudget(1_000, 1, 1.5));
         줄.터진다(new IllegalStateException("레디스가 죽었다"));
 
         MockServerWebExchange exchange = 요청(COUPON);
@@ -790,7 +866,8 @@ class AdmissionGatewayFilterTest {
         assertThat(exchange.getResponse().getStatusCode())
                 .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
         assertThat(exchange.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER))
-                .as("장애 개방 상한 초과에 걸리는 배수").isEqualTo(배수가_걸린_거절);
+                .as("등록 실패 거절에 걸리는 배수").isEqualTo(배수가_걸린_거절);
+        assertThat(사유("enqueue-failed-closed")).isEqualTo(1.0);
     }
 
     /**
@@ -921,26 +998,6 @@ class AdmissionGatewayFilterTest {
         assertThat(뒷단에_닿음).hasValue(false);
     }
 
-    @Test
-    @DisplayName("상한을_넘긴_몫은_되돌려_보낸다")
-    void 상한을_넘긴_몫은_되돌려_보낸다() {
-        // 전부 열면 뒷단이 그대로 무너진다. 노드 예산의 절반까지만 흘린다.
-        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
-        줄.터진다(new IllegalStateException("레디스가 죽었다"));
-
-        // 노드 예산은 globalCredit(1,000) / 게이트웨이 수(1) 이고 그 절반이 500 이다.
-        // **양쪽에서 못 박는다.** 끊기는 것만 보면 몫이 1 로 바뀌어도 통과한다.
-        MockServerWebExchange 상한_직전 = null;
-        for (int i = 0; i < 500; i++) {
-            상한_직전 = 태운다(COUPON);
-        }
-        MockServerWebExchange 상한_직후 = 태운다(COUPON);
-
-        assertThat(상한_직전.getResponse().getStatusCode()).isNull();
-        assertThat(상한_직후.getResponse().getStatusCode())
-                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
-    }
-
     /**
      * 판정과 장애 개방이 각자 예산을 들면 한 초에 둘이 겹쳐 나간다. 리미터를
      * 하나로 두라는 규칙이 막으려던 버스트가 그대로 난다 (F4).
@@ -948,8 +1005,6 @@ class AdmissionGatewayFilterTest {
     @Test
     @DisplayName("장애_개방이_판정_예산에서_가져간다")
     void 장애_개방이_판정_예산에서_가져간다() {
-        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
-        줄.터진다(new IllegalStateException("레디스가 죽었다"));
 
         // **판정 경로로 채운다.** 리미터를 손으로 채우면 판정이 다른 리미터를
         // 쓰고 있어도 이 시험이 통과한다.
@@ -961,7 +1016,8 @@ class AdmissionGatewayFilterTest {
                     .as("%d 번째", i)
                     .isEqualTo(AdmissionDecision.PASS_UNDER_CAP);
         }
-        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
+        // 장애 개방은 낡은 재료의 모르는 쿠폰만 탄다. 같은 초에 재료만 낡힌다.
+        낡은_재료에_쿠폰이_없다(META);
         뒷단에_닿음.set(false);
 
         // 예산을 따로 들었으면 여기서 500 명이 더 나간다.
@@ -970,6 +1026,7 @@ class AdmissionGatewayFilterTest {
         assertThat(exchange.getResponse().getStatusCode())
                 .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
         assertThat(뒷단에_닿음).hasValue(false);
+        assertThat(사유("enqueue-failed-shed")).as("여는 갈래의 상한에서 끊겼다").isEqualTo(1.0);
     }
 
     @Test
@@ -1715,10 +1772,8 @@ class AdmissionGatewayFilterTest {
     @Test
     @DisplayName("등록이_안_돼_막으면_판정을_고쳐_적는다")
     void 등록이_안_돼_막으면_판정을_고쳐_적는다() {
-        // **여는 몫을 먼저 다 쓴 뒤라야 막는 출구가 돈다.** 쿠폰 몫이 전역 몫을
-        // 넘으면 발행이 못 만드는 스냅샷이라, 둘을 같은 값으로 둔다.
-        스냅샷을_심는다(CouponStates.queueing(4, 1_000, 100), new SnapshotMeta(4, 1));
-        줄.터진다(new IllegalStateException("레디스가 죽었다"));
+        // **여는 몫을 먼저 다 쓴 뒤라야 막는 출구가 돈다.** 노드 예산 4 의 절반인 둘이 연다.
+        낡은_재료에_쿠폰이_없다(new SnapshotMeta(4, 1));
         태운다(COUPON, "첫째");
         태운다(COUPON, "둘째");
 
@@ -1741,7 +1796,7 @@ class AdmissionGatewayFilterTest {
     @Test
     @DisplayName("신선한_재료로_끊은_요청은_열화가_아니다")
     void 신선한_재료로_끊은_요청은_열화가_아니다() {
-        // 전역 몫이 회복 램프의 바닥이면 여는 몫이 0 이라 첫 요청부터 막는다.
+        // 줄이 선 쿠폰이라 등록이 안 되면 막는다. 여는 몫이 0 인 출구와 같은 판정값이다.
         스냅샷을_심는다(CouponStates.queueing(1, 1_000, 100), new SnapshotMeta(1, 1));
         줄.터진다(new IllegalStateException("레디스가 죽었다"));
 
@@ -1967,14 +2022,13 @@ class AdmissionGatewayFilterTest {
      * <b>통과하는 모든 길이 키를 덮어야 한다.</b> 한 갈래만 덮으면 나머지에서
      * 클라이언트가 준 값이 그대로 뒷단에 닿고, 거기로 멱등성을 우회한다.
      *
-     * <p>fail-open 은 레디스가 흔들리는 구간이다 — 뒷단 지연이 가장 크고 타임아웃이
+     * <p>fail-open 은 제어 평면이 멎은 구간이다 — 뒷단 지연이 가장 크고 타임아웃이
      * 실제로 나는 그 구간에서 안 막히면 이 장치가 있으나 마나다.
      */
     @Test
     @DisplayName("fail_open_통과에도_멱등_키를_덮는다")
     void fail_open_통과에도_멱등_키를_덮는다() {
-        스냅샷을_심는다(CouponStates.queueing(10, 1_000, 5_000));
-        줄.터진다(new IllegalStateException("레디스가 죽었다"));
+        낡은_재료에_쿠폰이_없다(META);
 
         assertThat(실린_키(요청_with_키("내가-정한-값"))).isNotEqualTo("내가-정한-값");
     }
@@ -2191,14 +2245,13 @@ class AdmissionGatewayFilterTest {
 
     /**
      * <b>연 예산이 곧 격벽의 밑변입니다.</b> 여기서 최소 배수 속도로 떨어지면
-     * 상한을 두고 연 몫의 대부분이 격벽에서 다시 막힙니다 — 레디스가 흔들리는
+     * 상한을 두고 연 몫의 대부분이 격벽에서 다시 막힙니다 — 재료가 낡은
      * 구간에 그게 곧 전면 차단입니다.
      */
     @Test
     @DisplayName("장애_개방은_연_예산만큼_격벽도_연다")
     void 장애_개방은_연_예산만큼_격벽도_연다() {
-        스냅샷을_심는다(CouponStates.queueing(10, 1_000_000, 5_000), META);
-        줄.터진다(new IllegalStateException("레디스가 죽었다"));
+        낡은_재료에_쿠폰이_없다(META);
         for (int i = 0; i < 10; i++) {
             Sinks.Empty<Void> 안_끝남 = Sinks.empty();
             붙잡은_자리.add(안_끝남);

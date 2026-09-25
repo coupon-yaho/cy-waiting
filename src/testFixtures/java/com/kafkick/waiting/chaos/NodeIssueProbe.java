@@ -1,5 +1,6 @@
 package com.kafkick.waiting.chaos;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 
@@ -31,6 +32,43 @@ public final class NodeIssueProbe {
         long 답한_것 = 상태.stream().filter(status -> status < 500).count();
         return 답한_것 > 0 ? Optional.empty()
                 : Optional.of("%s — 전원이 5xx 다 (보낸 %d)".formatted(이름, 상태.size()));
+    }
+
+    /**
+     * 전원이 곧바로 503 을 받았는가. 줄을 모르고 줄에 세울 수도 없는 노드에 쓴다 — 열면 추월이고,
+     * 매달리면 재시도로 못 돌아온다 (CY-1006).
+     */
+    public static Optional<String> 되돌려_보냈다(String 이름, List<Integer> 상태) {
+        if (상태.isEmpty()) {
+            return Optional.of("%s — 보낸 것이 없다".formatted(이름));
+        }
+        long 엉뚱한_답 = 상태.stream().filter(status -> status != 503).count();
+        return 엉뚱한_답 == 0 ? Optional.empty()
+                : Optional.of("%s — %d 건이 503 이 아니다: %s".formatted(이름, 엉뚱한_답, 상태));
+    }
+
+    /**
+     * 되돌려 보낸 것이 등록 실패로 닫은 것인가. 503 만 보면 서킷 오판이나 재료 유실로 막힌 것과 못
+     * 가른다. 닫은 사유가 보낸 수만큼 늘어야 한다.
+     */
+    public static Optional<String> 등록_실패로_닫았다(String 이름, double 닫은_증가, long 보낸_수) {
+        return 닫은_증가 == 보낸_수 ? Optional.empty()
+                : Optional.of("%s — 등록 실패로 닫은 것이 %.0f 건이다 (보낸 %d)".formatted(이름, 닫은_증가, 보낸_수));
+    }
+
+    /**
+     * 줄 세운 요청 {@code 차례} 번을 되돌려 보내는 데 드는 한계. 요청마다 레디스 명령 시한에 여유 0.5 초를
+     * 준다. 시한을 설정에서 받아야 누가 시한을 바꿔도 이 판정이 따라간다.
+     */
+    public static Duration 되돌리는_한계(Duration 명령_시한, int 차례) {
+        return 명령_시한.plusMillis(500).multipliedBy(차례);
+    }
+
+    /** 곧바로 답했는가. 매달렸다가 503 을 내도 상태 코드만 보면 같다. */
+    public static Optional<String> 곧바로_답했다(String 이름, Duration 걸린, Duration 한계) {
+        return 걸린.compareTo(한계) <= 0 ? Optional.empty()
+                : Optional.of("%s — %dms 걸렸다 (한계 %dms)".formatted(
+                        이름, 걸린.toMillis(), 한계.toMillis()));
     }
 
     /** 5xx 가 하나도 없는가. 붙어 있는 노드에 쓴다 — 여기서 5xx 가 나오면 장애가 번진 것이다. */

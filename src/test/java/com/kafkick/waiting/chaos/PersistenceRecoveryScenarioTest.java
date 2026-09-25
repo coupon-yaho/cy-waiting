@@ -5,6 +5,7 @@ import com.kafkick.waiting.control.SnapshotHolder;
 import com.kafkick.waiting.domain.queue.QueueToken;
 import io.lettuce.core.RedisException;
 import io.lettuce.core.api.StatefulRedisConnection;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Duration;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
@@ -23,6 +24,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.data.redis.autoconfigure.DataRedisProperties;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
@@ -115,6 +117,18 @@ class PersistenceRecoveryScenarioTest {
 
     @Autowired
     private Clock 시계;
+
+    @Autowired
+    private MeterRegistry meters;
+
+    @Autowired
+    private DataRedisProperties redisProperties;
+
+    /** 등록 실패로 닫은 누적 수. 503 이 이 출구에서 났는지를 가른다. */
+    private double 닫은_수() {
+        return meters.find("waiting.admission").tag("outcome", "enqueue-failed-closed")
+                .counters().stream().mapToDouble(c -> c.count()).sum();
+    }
 
     private WebTestClient 클라이언트() {
         return WebTestClient.bindToServer()
@@ -209,6 +223,8 @@ class PersistenceRecoveryScenarioTest {
             List<Integer> 정상_상태 = new ArrayList<>();
             List<Integer> 정상_줄_상태 = new ArrayList<>();
             List<Integer> 장애중_줄_상태 = new ArrayList<>();
+            double[] 닫은_증가 = new double[1];
+            Duration[] 유지_걸린 = new Duration[1];
             List<Integer> 회복_상태 = new ArrayList<>();
             List<Integer> 재등록_상태 = new ArrayList<>();
             Map<String, Double> 살아남을_자리 = new LinkedHashMap<>();
@@ -286,8 +302,12 @@ class PersistenceRecoveryScenarioTest {
                     .duringFault(() -> {
                         Awaitility.await().alias("레디스가 죽어 재료가 낡는다")
                                 .atMost(기다림).until(holder::isDataStale);
+                        double 닫기_전 = 닫은_수();
+                        long 시작 = System.nanoTime();
                         줄_도착[1] = 뒷단까지_센다(COUPON, () -> 장애중_줄_상태.addAll(
                                 여러_번_시도한다(COUPON, 보낼_수, 3_000)));
+                        유지_걸린[0] = Duration.ofNanos(System.nanoTime() - 시작);
+                        닫은_증가[0] = 닫은_수() - 닫기_전;
                     })
                     .recover(() -> faults.붙인다())
                     .afterRecovery(() -> {
@@ -326,15 +346,13 @@ class PersistenceRecoveryScenarioTest {
                             줄을_추월하지_않았다("정상", 줄_도착[0]),
                             줄이_서_있었다(살아남을_자리)))
                     .assertDuring(() -> RecoveryCriteria.violations(
-                            // **여기서 fail-open 이 열리는 것은 맞는 동작이다.**
-                            // 레디스가 죽으면 줄에 세울 방법 자체가 없어, F1 의
-                            // 세 번째 규칙이 적용되는 유일한 구간이다. 그 통과가
-                            // 상한 안인지는 C1 이 재고 여기서 다시 안 잰다.
-                            //
-                            // 이 시나리오가 유지 구간에 요구하는 것은 하나다 —
-                            // 판정이 멎지 않는다. 전원 5xx 면 회복 구간의 관측이
-                            // 무엇을 뜻하는지 알 수 없다.
-                            전면_차단이_아니었다(장애중_줄_상태),
+                            // **줄에 세울 방법이 없어도 열지 않는다** (CY-1006). 줄이 선
+                            // 쿠폰이라 열면 레디스에 순번을 쥔 사람을 앞지른다.
+                            줄을_추월하지_않았다("유지", 줄_도착[1]),
+                            NodeIssueProbe.되돌려_보냈다("유지", 장애중_줄_상태),
+                            NodeIssueProbe.등록_실패로_닫았다("유지", 닫은_증가[0], 보낼_수),
+                            NodeIssueProbe.곧바로_답했다("유지", 유지_걸린[0], NodeIssueProbe.되돌리는_한계(
+                                    redisProperties.getTimeout(), 보낼_수)),
                             낡음에_들어갔다()))
                     .assertRecovery(() -> RecoveryCriteria.violations(
                             대조군이_받았다("회복", 회복_상태),
@@ -494,20 +512,6 @@ class PersistenceRecoveryScenarioTest {
     private Optional<String> 줄을_추월하지_않았다(String 구간, long 도착) {
         return 도착 == 0 ? Optional.empty()
                 : Optional.of("%s — 줄이 선 쿠폰에서 %d 건이 뒷단까지 갔다".formatted(구간, 도착));
-    }
-
-    /**
-     * 전면 차단이 아니다. 레디스가 죽은 것이 <b>모두를 5xx 로 돌려보낼 이유는
-     * 아니다</b> — 줄이 있으니 추월은 안 시키되, 아예 판정을 멈추면 그것도 장애다.
-     */
-    private Optional<String> 전면_차단이_아니었다(List<Integer> 상태) {
-        if (상태.size() != 보낼_수) {
-            return Optional.of("유지 — %d 건을 보냈는데 %d 건만 관측됐다"
-                    .formatted(보낼_수, 상태.size()));
-        }
-        long 답한_것 = 상태.stream().filter(status -> status < 500).count();
-        return 답한_것 > 0 ? Optional.empty()
-                : Optional.of("유지 — %d 건이 전부 5xx 다: %s".formatted(상태.size(), 상태));
     }
 
     private Optional<String> 줄이_서_있었다(Map<String, Double> 자리) {

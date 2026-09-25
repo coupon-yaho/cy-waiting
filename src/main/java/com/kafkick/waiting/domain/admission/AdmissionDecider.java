@@ -46,12 +46,11 @@ public class AdmissionDecider {
     }
 
     /**
-     * 사다리 6번이 보는 참. 폴백을 안 탄다. 줄이 있을 때만 재는 것은 한산한
-     * 쿠폰의 credit 이 0 이라 {@code 0 >= 0} 이 참이 되기 때문이다 — 그러면
-     * 한산한 쿠폰을 줄 없이 통과시키는 경로가 통째로 막힌다.
+     * 사다리 6번이 보는 참. 폴백을 안 탄다. 줄이 있을 때만 재는 것은 한산한 쿠폰의 credit 이
+     * 0 이라 {@code 0 >= 0} 으로 통과 경로가 통째로 막히기 때문이다. 낡은 가득만 줄 없이 건다.
      */
     private boolean queueFull(CouponState s, AdmissionRequest req) {
-        return s.waiting() > 0 && s.waiting() >= s.queueCapacity(req.maxEtaSec());
+        return req.staleFull() || (s.waiting() > 0 && s.waiting() >= s.queueCapacity(req.maxEtaSec()));
     }
 
     /**
@@ -60,8 +59,9 @@ public class AdmissionDecider {
      * 없다. 배분 전 credit 0 구간이면 대기자 한 명에 전원이 거절된다.
      */
     private boolean alwaysQueueFull(CouponState s, AdmissionRequest req) {
-        return s.waiting() > 0 && s.waiting() >= queueCapacity(s, req.maxEtaSec());
+        return req.staleFull() || (s.waiting() > 0 && s.waiting() >= queueCapacity(s, req.maxEtaSec()));
     }
+
 
     /** 판정 사다리 11줄. 위에서부터 처음 걸리는 줄이 답이다. */
     public AdmissionDecision decide(AdmissionRequest req) {

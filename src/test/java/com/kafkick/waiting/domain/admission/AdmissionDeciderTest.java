@@ -233,6 +233,47 @@ class AdmissionDeciderTest {
         assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.ENQUEUE_STALE);
     }
 
+    /**
+     * <b>낡은 구간에는 이 노드가 본 "가득" 이 유일한 재료다</b> (CY-1006). 스냅샷은 대기 0 에 얼어
+     * 6번이 영영 안 걸리고, 요청마다 등록 왕복이 한 번씩 나간다.
+     */
+    @Test
+    @DisplayName("스냅샷이_낡았고_이_노드가_가득을_봤으면_레디스_없이_거절한다")
+    void 스냅샷이_낡았고_이_노드가_가득을_봤으면_레디스_없이_거절한다() {
+        AdmissionRequest req = request(CouponStates.idle(500)).withDataStale(true).withSeenFull(true);
+
+        assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.REJECT_QUEUE_FULL);
+    }
+
+    @Test
+    @DisplayName("스냅샷이_낡았고_가득을_봤으면_항상_대기도_거절한다")
+    void 스냅샷이_낡았고_가득을_봤으면_항상_대기도_거절한다() {
+        AdmissionRequest req = request(CouponStates.always(500)).withDataStale(true).withSeenFull(true);
+
+        assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.REJECT_QUEUE_FULL);
+    }
+
+    /** 가득 기억은 6번 자리다. 매진과 차례가 온 사람은 그보다 앞이다. */
+    @Test
+    @DisplayName("가득을_봤어도_매진과_토큰이_먼저다")
+    void 가득을_봤어도_매진과_토큰이_먼저다() {
+        AdmissionRequest 매진 = request(CouponStates.closed(100)).withDataStale(true).withSeenFull(true);
+        AdmissionRequest 토큰 = request(CouponStates.idle(500)).withDataStale(true).withSeenFull(true)
+                .withValidToken(true);
+
+        assertThat(decider().decide(매진)).isEqualTo(AdmissionDecision.REJECT_SOLD_OUT);
+        assertThat(decider().decide(토큰)).isEqualTo(AdmissionDecision.PASS_TOKEN);
+    }
+
+    /** 재료가 새로우면 스냅샷이 줄 길이를 안다. 지난 "가득" 이 자리가 난 줄을 막으면 안 된다. */
+    @Test
+    @DisplayName("스냅샷이_새로우면_지난_가득은_안_본다")
+    void 스냅샷이_새로우면_지난_가득은_안_본다() {
+        AdmissionRequest req = request(CouponStates.queueing(100, 500, 3000)).withSeenFull(true);
+
+        assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.ENQUEUE_BACKLOG);
+    }
+
     @Test
     @DisplayName("큐가_꽉_차면_큐로_가는_경로보다_먼저_거절한다")
     void 큐가_꽉_차면_큐로_가는_경로보다_먼저_거절한다() {

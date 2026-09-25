@@ -156,6 +156,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
     }
     private final SecondWindowLimiter limiter;
     private final EnqueueLatch latch;
+    private final EnqueueLatch fullLatch;
 
     /** 뒷단의 멱등성이 작동할 근거. 같은 시도에 같은 값을 준다. */
     private final IdempotencyKey idempotency;
@@ -223,6 +224,8 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
         // 그 차이가 그대로 추월 창이 된다. 두 값이 다른 클래스에 있으면 조용히
         // 갈라지므로, 한계를 정한 쪽에서 끌어온다.
         this.latch = EnqueueLatch.covering(CouponKeys.MAX, holder.dataStaleAfter());
+        // 가득 기억은 낡은 구간에만 쓰인다. 같은 수명이면 쿠폰·노드마다 문턱에 한 번 다시 묻는다.
+        this.fullLatch = EnqueueLatch.covering(CouponKeys.MAX, holder.dataStaleAfter());
         this.idempotency = Objects.requireNonNull(idempotency, "idempotency 는 필수다");
         // **만들어 두고 안 걸면 지표가 안 나온다.** 격벽이 차오르는 중인지는
         // 막힌 뒤에야 오르는 카운터로는 못 본다.
@@ -388,23 +391,27 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
             soldOutHits.increment();
             return route(exchange, chain, cached, couponId, state, view.snapshot().meta());
         }
-        AdmissionDecision decision = decider.decide(new AdmissionRequest(
+        AdmissionRequest request = new AdmissionRequest(
                 couponId, state, view.snapshot().meta(),
                 // 스냅샷은 한 틱 늦어 아직 한산하다고 말한다 — 래치가 없으면 다음
                 // 창의 신규 유입이 방금 선 사람을 넘고, 입장 토큰을 안 보면 줄과
                 // 무관하게 통과해 기다린 사람과 안 기다린 사람이 같아진다.
-                holder.isDataStale(view), hasEntryToken(exchange, couponId), 
+                holder.isDataStale(view), hasEntryToken(exchange, couponId),
                 latch.latched(couponId, nowSec),
                 // **서킷을 여기서 읽는다.** 메모리 안의 값이라 왕복이 없다.
                 // 안 실으면 판정이 서킷을 영영 안 보고, 열린 동안 계속 통과를
                 // 내 전량이 fallback 으로 간다.
-                nowSec, MAX_ETA_SEC, circuit.now()));
+                nowSec, MAX_ETA_SEC, circuit.now(),
+                // 낡은 스냅샷은 줄이 찬 것을 모른다. 안 실으면 찬 줄의 거절마다 레디스로 간다.
+                fullLatch.latched(couponId, nowSec));
+        AdmissionDecision decision = decider.decide(request);
         exchange.getAttributes().put(DECISION, decision);
         count(decision.name());
         // **낡은 재료로 내린 판정도 재료 없이 판정한 것이다.** 스냅샷에 있는 쿠폰은
         // deferred-* 를 안 지나므로, 여기서 표시하지 않으면 스냅샷이 멎은 구간이
-        // 통째로 성공으로 잡힌다. 어느 판정이 그 자리인지는 판정값 자신이 안다.
-        if (decision.onlyFromStaleMaterial()) {
+        // 통째로 성공으로 잡힌다. 가득 기억으로 낸 거절은 스냅샷의 가득과 판정값이 같아 요청이 가른다.
+        if (decision.onlyFromStaleMaterial()
+                || (decision == AdmissionDecision.REJECT_QUEUE_FULL && request.staleFull())) {
             degraded(exchange);
         }
         return route(exchange, chain, decision, couponId, state, view.snapshot().meta());
@@ -524,6 +531,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
                         // 판정 이름으로 안 센다 — 이 요청은 위에서 이미 한 번
                         // 세어졌고, 두 번 세면 SLI 의 분모가 부푼다.
                         count("queue-full-2nd");
+                        fullLatch.mark(couponId, clock.instant().getEpochSecond());
                         return error.write(exchange, ApiError.Code.QUEUE_FULL,
                                 rejection.retryAfterSec(AdmissionDecision.REJECT_QUEUE_FULL, random,
                                         meta.pollScale()));

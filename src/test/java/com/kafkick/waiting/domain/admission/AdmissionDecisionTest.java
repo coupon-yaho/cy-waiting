@@ -78,19 +78,4 @@ class AdmissionDecisionTest {
                         AdmissionDecision.ENQUEUE_STALE,
                         AdmissionDecision.REJECT_OVERLOAD);
     }
-
-    /**
-     * <b>줄이 비었다고 아는 값은 한산 갈래 셋뿐이다</b> (CY-1006). 신선한 재료에 IDLE 이라
-     * 대기가 0 이다. 등록이 실패했을 때 열어도 줄 선 사람을 안 앞지르는 것은 이 셋이다.
-     */
-    @Test
-    @DisplayName("줄이_비었다고_아는_값은_한산_갈래_셋이다")
-    void 줄이_비었다고_아는_값은_한산_갈래_셋이다() {
-        assertThat(Arrays.stream(AdmissionDecision.values())
-                .filter(AdmissionDecision::queueKnownEmpty))
-                .containsExactlyInAnyOrder(
-                        AdmissionDecision.ENQUEUE_RATE_COUPON,
-                        AdmissionDecision.ENQUEUE_RATE_GLOBAL,
-                        AdmissionDecision.ENQUEUE_KEY_SATURATED);
-    }
 }

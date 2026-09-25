@@ -195,7 +195,7 @@ tryAcquireAll(tier1, tier2):
                                       → failOpen (상한 내 PASS, 초과 시 REJECT_OVERLOAD)  ← 적응형은 7번 (CY-1003)
  5. mode == OFF && !hasQueue          → PASS_BYPASS
  6. waiting > 0 && waiting >= queueCapacity
-                                      → REJECT_QUEUE_FULL    ← 큐로 가는 경로보다 앞
+    || dataStale && seenFull          → REJECT_QUEUE_FULL    ← 큐로 가는 경로보다 앞. 낡으면 노드가 본 가득 (CY-1006)
  6'. circuit != CLOSED                → ENQUEUE_CIRCUIT_OPEN  ← 낡음보다 앞 (F3)
  7. dataStale                         → ENQUEUE_STALE        (F1) ← 낡은 "대기 0" 도 모름이다 (CY-1003)
  8. runtime != IDLE || justEnqueued    → ENQUEUE_BACKLOG      (새치기 방지)

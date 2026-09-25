@@ -46,9 +46,8 @@ public class AdmissionDecider {
     }
 
     /**
-     * 사다리 6번이 보는 참. 폴백을 안 탄다. 줄이 있을 때만 재는 것은 한산한
-     * 쿠폰의 credit 이 0 이라 {@code 0 >= 0} 이 참이 되기 때문이다 — 그러면
-     * 한산한 쿠폰을 줄 없이 통과시키는 경로가 통째로 막힌다.
+     * 사다리 6번이 보는 참. 폴백을 안 탄다. 줄이 있을 때만 재는 것은 한산한 쿠폰의 credit 이
+     * 0 이라 {@code 0 >= 0} 으로 통과 경로가 통째로 막히기 때문이다. 낡은 가득만 줄 없이 건다.
      */
     private boolean queueFull(CouponState s, AdmissionRequest req) {
         return staleFull(req) || (s.waiting() > 0 && s.waiting() >= s.queueCapacity(req.maxEtaSec()));

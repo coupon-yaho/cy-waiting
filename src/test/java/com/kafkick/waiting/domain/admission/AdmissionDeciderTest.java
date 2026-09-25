@@ -253,6 +253,18 @@ class AdmissionDeciderTest {
         assertThat(decider().decide(req)).isEqualTo(AdmissionDecision.REJECT_QUEUE_FULL);
     }
 
+    /** 가득 기억은 6번 자리다. 매진과 차례가 온 사람은 그보다 앞이다. */
+    @Test
+    @DisplayName("가득을_봤어도_매진과_토큰이_먼저다")
+    void 가득을_봤어도_매진과_토큰이_먼저다() {
+        AdmissionRequest 매진 = request(CouponStates.closed(100)).withDataStale(true).withSeenFull(true);
+        AdmissionRequest 토큰 = request(CouponStates.idle(500)).withDataStale(true).withSeenFull(true)
+                .withValidToken(true);
+
+        assertThat(decider().decide(매진)).isEqualTo(AdmissionDecision.REJECT_SOLD_OUT);
+        assertThat(decider().decide(토큰)).isEqualTo(AdmissionDecision.PASS_TOKEN);
+    }
+
     /** 재료가 새로우면 스냅샷이 줄 길이를 안다. 지난 "가득" 이 자리가 난 줄을 막으면 안 된다. */
     @Test
     @DisplayName("스냅샷이_새로우면_지난_가득은_안_본다")

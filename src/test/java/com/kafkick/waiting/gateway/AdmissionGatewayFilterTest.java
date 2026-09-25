@@ -1494,10 +1494,81 @@ class AdmissionGatewayFilterTest {
         MockServerWebExchange 둘째 = 태운다(COUPON, "대기자1");
 
         assertThat(첫째.getResponse().getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        assertThat(첫째.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .as("첫째는 줄로 가서 레디스가 거절했다").isEqualTo(AdmissionDecision.ENQUEUE_STALE);
         assertThat(둘째.getResponse().getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
         assertThat(둘째.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
                 .isEqualTo(AdmissionDecision.REJECT_QUEUE_FULL);
         assertThat(줄.등록_횟수()).as("첫째만 레디스에 물었다").isEqualTo(1);
+    }
+
+    /** 받아들여진 등록은 가득이 아니다. 찍으면 낡은 구간에 한 사람이 선 뒤 전원이 429 를 받는다. */
+    @Test
+    @DisplayName("낡은_구간에_줄이_안_찼으면_가득을_기억하지_않는다")
+    void 낡은_구간에_줄이_안_찼으면_가득을_기억하지_않는다() {
+        holder.replace(new GatewaySnapshot(
+                Map.of(COUPON, CouponStates.idle(1_000_000)), META, 지금.minusSeconds(3_600)));
+
+        MockServerWebExchange 첫째 = 태운다(COUPON, "대기자0");
+        MockServerWebExchange 둘째 = 태운다(COUPON, "대기자1");
+
+        assertThat(첫째.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .isEqualTo(AdmissionDecision.ENQUEUE_STALE);
+        assertThat(둘째.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .isEqualTo(AdmissionDecision.ENQUEUE_STALE);
+        assertThat(줄.줄_길이(COUPON)).as("둘 다 줄에 섰다").isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("가득_기억은_쿠폰마다_따로다")
+    void 가득_기억은_쿠폰마다_따로다() {
+        holder.replace(new GatewaySnapshot(
+                Map.of(COUPON, CouponStates.idle(1_000_000), "c2", CouponStates.idle(1_000_000)),
+                META, 지금.minusSeconds(3_600)));
+        줄.가득_찼다();
+        태운다(COUPON, "대기자0");
+
+        MockServerWebExchange 다른_쿠폰 = 태운다("c2", "대기자1");
+
+        assertThat(다른_쿠폰.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .as("다른 쿠폰은 제 줄을 레디스에 묻는다").isEqualTo(AdmissionDecision.ENQUEUE_STALE);
+        assertThat(줄.등록_횟수()).isEqualTo(2);
+    }
+
+    /** 수명이 끝나면 한 번 다시 묻는다. 안 물으면 청소로 자리가 난 줄을 낡은 동안 끝까지 막는다. */
+    @Test
+    @DisplayName("가득_기억이_풀리면_레디스에_다시_묻는다")
+    void 가득_기억이_풀리면_레디스에_다시_묻는다() {
+        MutableClock 시계 = MutableClock.at(지금);
+        AdmissionGatewayFilter f = AdmissionGatewayFilter.withIsolatedSoldOutCache(
+                holder, 판정, 시계, meters, () -> 0.5,
+                줄, tokens, limiter, entryTokens, 멱등키);
+        holder.replace(new GatewaySnapshot(
+                Map.of(COUPON, CouponStates.idle(1_000_000)), META, 지금.minusSeconds(3_600)));
+        줄.가득_찼다();
+        assertThat(태운다(f, COUPON)).isEqualTo(AdmissionDecision.ENQUEUE_STALE);
+
+        시계.앞으로(홀더_유효_한계.minusSeconds(1));
+        assertThat(태운다(f, COUPON)).as("아직 기억한다").isEqualTo(AdmissionDecision.REJECT_QUEUE_FULL);
+
+        시계.앞으로(Duration.ofSeconds(3));
+        assertThat(태운다(f, COUPON)).as("풀렸다").isEqualTo(AdmissionDecision.ENQUEUE_STALE);
+        assertThat(줄.등록_횟수()).isEqualTo(2);
+    }
+
+    /** 기억으로 낸 거절도 낡은 재료로 판정한 것이다. 안 세면 그 구간이 성공으로 잡힌다. */
+    @Test
+    @DisplayName("낡은_구간의_가득_기억_거절도_품질이_떨어진_것으로_센다")
+    void 낡은_구간의_가득_기억_거절도_품질이_떨어진_것으로_센다() {
+        holder.replace(new GatewaySnapshot(
+                Map.of(COUPON, CouponStates.idle(1_000_000)), META, 지금.minusSeconds(3_600)));
+        줄.가득_찼다();
+
+        태운다(COUPON, "대기자0");
+        태운다(COUPON, "대기자1");
+
+        assertThat(품질("degraded")).isEqualTo(2.0);
+        assertThat(품질("fresh")).isZero();
     }
 
     @Test

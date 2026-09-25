@@ -173,11 +173,11 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
     private final AtomicBoolean misconfigured = new AtomicBoolean();
 
     /**
-     * fail-open 구간의 진입과 해제를 쌍으로 남긴다.
+     * 줄 등록 실패 구간의 진입과 해제를 쌍으로 남긴다.
      *
-     * <p>이 전이가 로그에 없으면 사후에 <b>추월이 언제 열렸는지</b>를 못 짚는다.
+     * <p>이 전이가 로그에 없으면 사후에 <b>줄 판정이 언제부터 되돌아갔는지</b>를 못 짚는다.
      * 지표는 초 단위로 뭉개져 남고 보존 기간도 짧아, 사고 조사에서 필요한
-     * "몇 시 몇 분에 열려 얼마나 갔는가" 를 답하지 못한다.
+     * "몇 시 몇 분에 시작해 얼마나 갔는가" 를 답하지 못한다.
      */
     private final FailureWindow enqueueFailWindow;
 
@@ -298,7 +298,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
      * 구간 시계를 받는다. <b>요청 시계와 따로다</b> — 구간 길이는 단조 시계로 재야
      * NTP 가 시각을 되돌릴 때 음수가 안 된다.
      *
-     * <p>고정하지 못하면 fail-open 이 얼마나 이어졌는지를 재는 계산 자체가
+     * <p>고정하지 못하면 등록 실패가 얼마나 이어졌는지를 재는 계산 자체가
      * 시험에서 늘 0 이 되어, 단위를 틀려도 통과한다.
      */
     public static AdmissionGatewayFilter withIsolatedSoldOutCache(SnapshotHolder holder,

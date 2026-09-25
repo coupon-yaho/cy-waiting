@@ -7,6 +7,7 @@ import com.kafkick.waiting.control.Leadership;
 import com.kafkick.waiting.control.SnapshotHolder;
 import com.kafkick.waiting.domain.queue.QueueToken;
 import io.lettuce.core.api.StatefulRedisConnection;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -80,6 +81,9 @@ class LeaderAndRedisLostScenarioTest {
     /** 대조군에 보내는 수. 크레딧 안쪽이어야 한 번 서면 영영 못 나오는 일이 없다. */
     private static final int 한산한_보낼_수 = 2;
 
+    /** 유지 구간의 두 배치를 되돌려 보내는 한계. 요청 시한 10 초보다 짧아야 매달림을 가른다. */
+    private static final Duration 곧바로 = Duration.ofSeconds(5);
+
     /** 낡음이 걷힐 때까지의 한계. 그동안 신규가 전부 되돌아간다. */
     private static final Duration 낡음이_걷힐_한계 = Duration.ofSeconds(5);
 
@@ -141,6 +145,9 @@ class LeaderAndRedisLostScenarioTest {
 
     @Autowired
     private QueueToken tokens;
+
+    @Autowired
+    private MeterRegistry meters;
 
     @Autowired
     private Clock clock;
@@ -238,6 +245,12 @@ class LeaderAndRedisLostScenarioTest {
         return 자리;
     }
 
+    /** 등록 실패로 닫은 누적 수. 503 이 이 출구에서 났는지를 가른다. */
+    private double 닫은_수() {
+        return meters.find("waiting.admission").tag("outcome", "enqueue-failed-closed")
+                .counters().stream().mapToDouble(c -> c.count()).sum();
+    }
+
     private long 잰다(String couponId, Runnable 배치) {
         long 전 = 받은_수(couponId);
         배치.run();
@@ -270,6 +283,8 @@ class LeaderAndRedisLostScenarioTest {
         int[] 주입_직후_쿠폰 = new int[1];
         boolean[] 주입_직후_낡음 = new boolean[1];
         List<Integer> 회복_줄_상태 = new ArrayList<>();
+        double[] 닫은_증가 = new double[1];
+        Duration[] 유지_걸린 = new Duration[1];
 
         ChaosScenario.named("X1 리더 사망 + 레디스 정지")
                 .baseline(() -> {
@@ -297,12 +312,16 @@ class LeaderAndRedisLostScenarioTest {
                 })
                 .duringFault(() -> {
                     Awaitility.await().atMost(기다림).until(holder::isDataStale);
+                    double 닫기_전 = 닫은_수();
+                    long 시작 = System.nanoTime();
                     long 낡기_전 = 받은_수(한산한_쿠폰);
                     장애중_상태.addAll(여러_번_시도한다(한산한_쿠폰, 한산한_보낼_수, 2_000));
                     한산한_쿠폰_도착[1] = 받은_수(한산한_쿠폰) - 낡기_전;
                     줄_쿠폰_도착[1] = 잰다(줄_선_쿠폰,
                             () -> 장애중_줄_상태.addAll(
                                     한꺼번에_시도한다(줄_선_쿠폰, 보낼_수, 2_500)));
+                    유지_걸린[0] = Duration.ofNanos(System.nanoTime() - 시작);
+                    닫은_증가[0] = 닫은_수() - 닫기_전;
                 })
                 .recover(() -> {
                     faults.붙인다();
@@ -340,9 +359,11 @@ class LeaderAndRedisLostScenarioTest {
                         // **줄에 못 세우고 줄도 모르지만 열지 않는다** (CY-1006).
                         줄을_추월하지_않았다("유지", 줄_쿠폰_도착[1]),
                         줄을_모르면_열지_않았다(한산한_쿠폰_도착[1]),
-                        // **도착 0 만 보면 전원이 매달려도 통과다.** 곧바로 되돌려 보냈는지를 본다.
-                        전부_되돌려_보냈다(장애중_줄_상태, 보낼_수),
-                        전부_되돌려_보냈다(장애중_상태, 한산한_보낼_수),
+                        // **도착 0 만 보면 전원이 매달려도, 다른 이유로 막혀도 통과다.**
+                        NodeIssueProbe.되돌려_보냈다("줄 선 쿠폰", 장애중_줄_상태),
+                        NodeIssueProbe.되돌려_보냈다("한산한 쿠폰", 장애중_상태),
+                        NodeIssueProbe.등록_실패로_닫았다("유지", 닫은_증가[0], 보낼_수 + 한산한_보낼_수),
+                        NodeIssueProbe.곧바로_답했다("유지", 유지_걸린[0], 곧바로),
                         레디스가_정말_죽었다()))
                 .assertRecovery(() -> RecoveryCriteria.violations(
                         판정이_멈추지_않았다(회복_상태),
@@ -384,16 +405,6 @@ class LeaderAndRedisLostScenarioTest {
     private Optional<String> 줄을_모르면_열지_않았다(long 뒷단에_닿은_수) {
         return 뒷단에_닿은_수 == 0 ? Optional.empty()
                 : Optional.of("줄을 모르는 쿠폰에서 %d 건이 뒷단까지 갔다".formatted(뒷단에_닿은_수));
-    }
-
-    /** <b>되돌려 보낸 것과 끊긴 것은 다르다.</b> 전원이 곧바로 503 을 받아야 재시도로 돌아온다. */
-    private Optional<String> 전부_되돌려_보냈다(List<Integer> 상태, int 보낸_수) {
-        if (상태.size() != 보낸_수) {
-            return Optional.of("%d 건만 답을 받았다 (보낸 %d)".formatted(상태.size(), 보낸_수));
-        }
-        long 엉뚱한_답 = 상태.stream().filter(status -> status != 503).count();
-        return 엉뚱한_답 == 0 ? Optional.empty()
-                : Optional.of("%d 건이 503 이 아니다: %s".formatted(엉뚱한_답, 상태));
     }
 
     /** 줄이 선 쿠폰은 뒷단에 안 간다. 레디스가 죽었든 돌아왔든 같다. */

@@ -174,6 +174,10 @@ class AsymmetricRedisLossScenarioTest {
                         // 겹치는 창" 이 애초에 안 생기고, 아래 총합 판정은 잴 것이 없다. 낡음 플래그가
                         // 아니라 못 읽은 시간을 본다 — 낡음 문턱은 재료 나이라 창 길이와 눈금이 다르다.
                         못_읽은_시간[0] = 둘째_홀더.fetchAge().toMillis();
+                        // **끊긴 노드가 낡음에 든 뒤에 두드린다.** 분모는 문턱보다 먼저 내려올 수 있고,
+                        // 그 전의 한산 쿠폰은 레디스 없이 몫 안에서 통과하는 것이 맞다.
+                        Awaitility.await().alias("끊긴 노드의 재료가 낡는다")
+                                .atMost(기다림).until(둘째_홀더::isDataStale);
                         // **여기서 읽는다.** 기준선에서 읽으면 분모가 내려오기를 기다린 시간만큼
                         // 관측 시점과 판정 시점이 어긋난다.
                         크레딧[0] = holder.view().snapshot().meta().globalCredit();

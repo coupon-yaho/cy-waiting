@@ -5,6 +5,7 @@ import com.kafkick.waiting.control.SnapshotHolder;
 import com.kafkick.waiting.domain.queue.QueueToken;
 import io.lettuce.core.RedisException;
 import io.lettuce.core.api.StatefulRedisConnection;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Duration;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
@@ -116,6 +117,15 @@ class PersistenceRecoveryScenarioTest {
     @Autowired
     private Clock 시계;
 
+    @Autowired
+    private MeterRegistry meters;
+
+    /** 등록 실패로 닫은 누적 수. 503 이 이 출구에서 났는지를 가른다. */
+    private double 닫은_수() {
+        return meters.find("waiting.admission").tag("outcome", "enqueue-failed-closed")
+                .counters().stream().mapToDouble(c -> c.count()).sum();
+    }
+
     private WebTestClient 클라이언트() {
         return WebTestClient.bindToServer()
                 .baseUrl("http://localhost:" + port)
@@ -209,6 +219,8 @@ class PersistenceRecoveryScenarioTest {
             List<Integer> 정상_상태 = new ArrayList<>();
             List<Integer> 정상_줄_상태 = new ArrayList<>();
             List<Integer> 장애중_줄_상태 = new ArrayList<>();
+            double[] 닫은_증가 = new double[1];
+            Duration[] 유지_걸린 = new Duration[1];
             List<Integer> 회복_상태 = new ArrayList<>();
             List<Integer> 재등록_상태 = new ArrayList<>();
             Map<String, Double> 살아남을_자리 = new LinkedHashMap<>();
@@ -286,8 +298,12 @@ class PersistenceRecoveryScenarioTest {
                     .duringFault(() -> {
                         Awaitility.await().alias("레디스가 죽어 재료가 낡는다")
                                 .atMost(기다림).until(holder::isDataStale);
+                        double 닫기_전 = 닫은_수();
+                        long 시작 = System.nanoTime();
                         줄_도착[1] = 뒷단까지_센다(COUPON, () -> 장애중_줄_상태.addAll(
                                 여러_번_시도한다(COUPON, 보낼_수, 3_000)));
+                        유지_걸린[0] = Duration.ofNanos(System.nanoTime() - 시작);
+                        닫은_증가[0] = 닫은_수() - 닫기_전;
                     })
                     .recover(() -> faults.붙인다())
                     .afterRecovery(() -> {
@@ -329,7 +345,10 @@ class PersistenceRecoveryScenarioTest {
                             // **줄에 세울 방법이 없어도 열지 않는다** (CY-1006). 줄이 선
                             // 쿠폰이라 열면 레디스에 순번을 쥔 사람을 앞지른다.
                             줄을_추월하지_않았다("유지", 줄_도착[1]),
-                            전부_되돌려_보냈다(장애중_줄_상태),
+                            NodeIssueProbe.되돌려_보냈다("유지", 장애중_줄_상태),
+                            NodeIssueProbe.등록_실패로_닫았다("유지", 닫은_증가[0], 보낼_수),
+                            // 요청마다 1 초. 하나라도 시한(10 초)까지 매달리면 넘는다.
+                            NodeIssueProbe.곧바로_답했다("유지", 유지_걸린[0], Duration.ofSeconds(보낼_수)),
                             낡음에_들어갔다()))
                     .assertRecovery(() -> RecoveryCriteria.violations(
                             대조군이_받았다("회복", 회복_상태),
@@ -489,17 +508,6 @@ class PersistenceRecoveryScenarioTest {
     private Optional<String> 줄을_추월하지_않았다(String 구간, long 도착) {
         return 도착 == 0 ? Optional.empty()
                 : Optional.of("%s — 줄이 선 쿠폰에서 %d 건이 뒷단까지 갔다".formatted(구간, 도착));
-    }
-
-    /** <b>되돌려 보낸 것과 멎은 것은 다르다.</b> 전원이 503 을 받아야 재시도로 돌아온다. */
-    private Optional<String> 전부_되돌려_보냈다(List<Integer> 상태) {
-        if (상태.size() != 보낼_수) {
-            return Optional.of("유지 — %d 건을 보냈는데 %d 건만 관측됐다"
-                    .formatted(보낼_수, 상태.size()));
-        }
-        long 엉뚱한_답 = 상태.stream().filter(status -> status != 503).count();
-        return 엉뚱한_답 == 0 ? Optional.empty()
-                : Optional.of("유지 — %d 건이 503 이 아니다: %s".formatted(엉뚱한_답, 상태));
     }
 
     private Optional<String> 줄이_서_있었다(Map<String, Double> 자리) {

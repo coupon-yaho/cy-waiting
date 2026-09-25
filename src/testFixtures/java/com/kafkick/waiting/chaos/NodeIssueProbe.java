@@ -1,5 +1,6 @@
 package com.kafkick.waiting.chaos;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 
@@ -44,6 +45,22 @@ public final class NodeIssueProbe {
         long 엉뚱한_답 = 상태.stream().filter(status -> status != 503).count();
         return 엉뚱한_답 == 0 ? Optional.empty()
                 : Optional.of("%s — %d 건이 503 이 아니다: %s".formatted(이름, 엉뚱한_답, 상태));
+    }
+
+    /**
+     * 되돌려 보낸 것이 등록 실패로 닫은 것인가. 503 만 보면 서킷 오판이나 재료 유실로 막힌 것과 못
+     * 가른다. 닫은 사유가 보낸 수만큼 늘어야 한다.
+     */
+    public static Optional<String> 등록_실패로_닫았다(String 이름, double 닫은_증가, long 보낸_수) {
+        return 닫은_증가 == 보낸_수 ? Optional.empty()
+                : Optional.of("%s — 등록 실패로 닫은 것이 %.0f 건이다 (보낸 %d)".formatted(이름, 닫은_증가, 보낸_수));
+    }
+
+    /** 곧바로 답했는가. 매달렸다가 503 을 내도 상태 코드만 보면 같다. */
+    public static Optional<String> 곧바로_답했다(String 이름, Duration 걸린, Duration 한계) {
+        return 걸린.compareTo(한계) <= 0 ? Optional.empty()
+                : Optional.of("%s — %dms 걸렸다 (한계 %dms)".formatted(
+                        이름, 걸린.toMillis(), 한계.toMillis()));
     }
 
     /** 5xx 가 하나도 없는가. 붙어 있는 노드에 쓴다 — 여기서 5xx 가 나오면 장애가 번진 것이다. */

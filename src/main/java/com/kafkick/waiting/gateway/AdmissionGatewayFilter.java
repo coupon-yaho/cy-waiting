@@ -476,7 +476,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
                     decider.admittedRatePerSec(decision, state, meta), meta);
         }
         if (decision.isEnqueue()) {
-            return enqueue(exchange, chain, couponId, state, meta);
+            return enqueue(exchange, chain, decision, couponId, state, meta);
         }
         return error.write(exchange, rejection.code(decision),
                 rejection.retryAfterSec(decision, random, meta.pollScale()));
@@ -487,7 +487,7 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
      * 통과한 사람은 여기 안 온다.
      */
     private Mono<Void> enqueue(ServerWebExchange exchange, GatewayFilterChain chain,
-            String couponId, CouponState state, SnapshotMeta meta) {
+            AdmissionDecision decision, String couponId, CouponState state, SnapshotMeta meta) {
         String memberId = exchange.getRequest().getHeaders().getFirst(MEMBER_ID);
         if (memberId == null) {
             // 형식 검증이 앞에서 걸렀어야 한다. 여기 오면 배선이 틀린 것이다.
@@ -508,8 +508,11 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
                     count("enqueue-error", FailureCause.of(e));
                     return Mono.empty();
                 })
-                .switchIfEmpty(Mono.defer(() ->
-                        failOpen(exchange, chain, meta, couponId).then(Mono.empty())))
+                // **줄이 비었다고 알 때만 연다.** 줄이 있거나 모르면 열린 사람이 줄 선 사람을
+                // 앞지른다. 장애 중에도 공정성은 가용성과 안 맞바꾼다.
+                .switchIfEmpty(Mono.defer(() -> (decision.queueKnownEmpty()
+                        ? failOpen(exchange, chain, meta, couponId)
+                        : failClosed(exchange, meta)).then(Mono.empty())))
                 .flatMap(entry -> {
                     // 이 노드가 방금 이 쿠폰의 줄을 봤다. 다음 창의 신규 유입이
                     // 여기 선 사람을 넘지 않게 한 구간 붙잡는다.
@@ -546,6 +549,18 @@ public final class AdmissionGatewayFilter implements GatewayFilter, PassRateSour
                             POLL.intervalSec(etaSec, random, meta.pollScale()),
                             entry.rejoined());
                 });
+    }
+
+    /** 줄을 못 세웠고 줄이 있거나 모른다. 끊는 출구와 같은 판정값으로 되돌려 보낸다. */
+    private Mono<Void> failClosed(ServerWebExchange exchange, SnapshotMeta meta) {
+        if (failOpenWindow.entered()) {
+            log.warn("fail-open 진입 — 줄 등록이 안 된다, 줄이 있어 닫는다");
+        }
+        count("enqueue-failed-closed");
+        AdmissionDecision shed = AdmissionDecision.REJECT_OVERLOAD;
+        exchange.getAttributes().put(DECISION, shed);
+        return error.write(exchange, rejection.code(shed),
+                rejection.retryAfterSec(shed, random, meta.pollScale()));
     }
 
     /**

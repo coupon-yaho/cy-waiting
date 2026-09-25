@@ -33,6 +33,19 @@ public final class NodeIssueProbe {
                 : Optional.of("%s — 전원이 5xx 다 (보낸 %d)".formatted(이름, 상태.size()));
     }
 
+    /**
+     * 전원이 곧바로 503 을 받았는가. 줄을 모르고 줄에 세울 수도 없는 노드에 쓴다 — 열면 추월이고,
+     * 매달리면 재시도로 못 돌아온다 (CY-1006).
+     */
+    public static Optional<String> 되돌려_보냈다(String 이름, List<Integer> 상태) {
+        if (상태.isEmpty()) {
+            return Optional.of("%s — 보낸 것이 없다".formatted(이름));
+        }
+        long 엉뚱한_답 = 상태.stream().filter(status -> status != 503).count();
+        return 엉뚱한_답 == 0 ? Optional.empty()
+                : Optional.of("%s — %d 건이 503 이 아니다: %s".formatted(이름, 엉뚱한_답, 상태));
+    }
+
     /** 5xx 가 하나도 없는가. 붙어 있는 노드에 쓴다 — 여기서 5xx 가 나오면 장애가 번진 것이다. */
     public static Optional<String> 멎지_않았다(String 이름, List<Integer> 상태) {
         if (상태.isEmpty()) {

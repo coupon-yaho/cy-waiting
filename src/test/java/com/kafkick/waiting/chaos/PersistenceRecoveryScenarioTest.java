@@ -326,15 +326,10 @@ class PersistenceRecoveryScenarioTest {
                             줄을_추월하지_않았다("정상", 줄_도착[0]),
                             줄이_서_있었다(살아남을_자리)))
                     .assertDuring(() -> RecoveryCriteria.violations(
-                            // **여기서 fail-open 이 열리는 것은 맞는 동작이다.**
-                            // 레디스가 죽으면 줄에 세울 방법 자체가 없어, F1 의
-                            // 세 번째 규칙이 적용되는 유일한 구간이다. 그 통과가
-                            // 상한 안인지는 C1 이 재고 여기서 다시 안 잰다.
-                            //
-                            // 이 시나리오가 유지 구간에 요구하는 것은 하나다 —
-                            // 판정이 멎지 않는다. 전원 5xx 면 회복 구간의 관측이
-                            // 무엇을 뜻하는지 알 수 없다.
-                            전면_차단이_아니었다(장애중_줄_상태),
+                            // **줄에 세울 방법이 없어도 열지 않는다** (CY-1006). 줄이 선
+                            // 쿠폰이라 열면 레디스에 순번을 쥔 사람을 앞지른다.
+                            줄을_추월하지_않았다("유지", 줄_도착[1]),
+                            전부_되돌려_보냈다(장애중_줄_상태),
                             낡음에_들어갔다()))
                     .assertRecovery(() -> RecoveryCriteria.violations(
                             대조군이_받았다("회복", 회복_상태),
@@ -496,18 +491,15 @@ class PersistenceRecoveryScenarioTest {
                 : Optional.of("%s — 줄이 선 쿠폰에서 %d 건이 뒷단까지 갔다".formatted(구간, 도착));
     }
 
-    /**
-     * 전면 차단이 아니다. 레디스가 죽은 것이 <b>모두를 5xx 로 돌려보낼 이유는
-     * 아니다</b> — 줄이 있으니 추월은 안 시키되, 아예 판정을 멈추면 그것도 장애다.
-     */
-    private Optional<String> 전면_차단이_아니었다(List<Integer> 상태) {
+    /** <b>되돌려 보낸 것과 멎은 것은 다르다.</b> 전원이 503 을 받아야 재시도로 돌아온다. */
+    private Optional<String> 전부_되돌려_보냈다(List<Integer> 상태) {
         if (상태.size() != 보낼_수) {
             return Optional.of("유지 — %d 건을 보냈는데 %d 건만 관측됐다"
                     .formatted(보낼_수, 상태.size()));
         }
-        long 답한_것 = 상태.stream().filter(status -> status < 500).count();
-        return 답한_것 > 0 ? Optional.empty()
-                : Optional.of("유지 — %d 건이 전부 5xx 다: %s".formatted(상태.size(), 상태));
+        long 엉뚱한_답 = 상태.stream().filter(status -> status != 503).count();
+        return 엉뚱한_답 == 0 ? Optional.empty()
+                : Optional.of("유지 — %d 건이 503 이 아니다: %s".formatted(엉뚱한_답, 상태));
     }
 
     private Optional<String> 줄이_서_있었다(Map<String, Double> 자리) {

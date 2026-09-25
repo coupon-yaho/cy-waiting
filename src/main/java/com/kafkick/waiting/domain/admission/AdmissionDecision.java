@@ -80,9 +80,17 @@ public enum AdmissionDecision {
                 || this == ENQUEUE_KEY_SATURATED;
     }
 
-    /** 줄이 비었다고 아는 판정인가. 등록이 실패했을 때 열어도 되는 것은 이것뿐이다. */
+    /**
+     * <b>줄이 비었다고 아는 판정인가.</b> 한산 갈래(9번)만이다 — 신선한 재료에 IDLE 이라 대기가
+     * 0 이다(I1'). 등록이 실패했을 때 열어도 줄 선 사람을 안 앞지르는 것은 이것뿐이다.
+     */
     public boolean queueKnownEmpty() {
-        return false;
+        return switch (this) {
+            case ENQUEUE_RATE_COUPON, ENQUEUE_RATE_GLOBAL, ENQUEUE_KEY_SATURATED -> true;
+            case PASS_TOKEN, PASS_BYPASS, PASS_FAIL_OPEN, PASS_UNDER_CAP, ENQUEUE_STALE,
+                 ENQUEUE_ALWAYS, ENQUEUE_BACKLOG, ENQUEUE_CIRCUIT_OPEN, REJECT_SOLD_OUT,
+                 REJECT_QUEUE_FULL, REJECT_OVERLOAD, RETRY_TOKEN -> false;
+        };
     }
 
     /** 여기서 끝낸다. 줄도 뒷단도 없다. */

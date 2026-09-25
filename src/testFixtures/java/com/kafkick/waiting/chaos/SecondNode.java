@@ -76,6 +76,11 @@ public final class SecondNode implements AutoCloseable {
         return context.containsBean(이름) ? context.getBean(이름, 타입) : null;
     }
 
+    /** 타입으로 꺼낸다. 프로덕션 밖의 타입(지표 등록부 등)에만 쓴다. */
+    public <T> T 빈(Class<T> 타입) {
+        return context.getBean(타입);
+    }
+
     /**
      * 이 노드가 <b>리더 락에 쓰는</b> 주인 이름. 하트비트의 식별자는 이것과
      * 별개로 발급되므로 분모를 볼 때 쓰면 영영 안 맞는다.

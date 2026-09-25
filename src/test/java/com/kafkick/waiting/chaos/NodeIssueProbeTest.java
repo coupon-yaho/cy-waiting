@@ -28,6 +28,12 @@ class NodeIssueProbeTest {
     }
 
     @Test
+    @DisplayName("되돌리는_한계는_차례마다_시한과_여유를_더한다")
+    void 되돌리는_한계는_차례마다_시한과_여유를_더한다() {
+        assertThat(NodeIssueProbe.되돌리는_한계(Duration.ofMillis(500), 3)).isEqualTo(Duration.ofSeconds(3));
+    }
+
+    @Test
     @DisplayName("한계와_같으면_곧바로고_넘으면_아니다")
     void 한계와_같으면_곧바로고_넘으면_아니다() {
         Duration 한계 = Duration.ofSeconds(5);

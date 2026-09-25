@@ -24,6 +24,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.data.redis.autoconfigure.DataRedisProperties;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
@@ -119,6 +120,9 @@ class PersistenceRecoveryScenarioTest {
 
     @Autowired
     private MeterRegistry meters;
+
+    @Autowired
+    private DataRedisProperties redisProperties;
 
     /** 등록 실패로 닫은 누적 수. 503 이 이 출구에서 났는지를 가른다. */
     private double 닫은_수() {
@@ -347,8 +351,8 @@ class PersistenceRecoveryScenarioTest {
                             줄을_추월하지_않았다("유지", 줄_도착[1]),
                             NodeIssueProbe.되돌려_보냈다("유지", 장애중_줄_상태),
                             NodeIssueProbe.등록_실패로_닫았다("유지", 닫은_증가[0], 보낼_수),
-                            // 요청마다 1 초. 하나라도 시한(10 초)까지 매달리면 넘는다.
-                            NodeIssueProbe.곧바로_답했다("유지", 유지_걸린[0], Duration.ofSeconds(보낼_수)),
+                            NodeIssueProbe.곧바로_답했다("유지", 유지_걸린[0], NodeIssueProbe.되돌리는_한계(
+                                    redisProperties.getTimeout(), 보낼_수)),
                             낡음에_들어갔다()))
                     .assertRecovery(() -> RecoveryCriteria.violations(
                             대조군이_받았다("회복", 회복_상태),

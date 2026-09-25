@@ -56,6 +56,14 @@ public final class NodeIssueProbe {
                 : Optional.of("%s — 등록 실패로 닫은 것이 %.0f 건이다 (보낸 %d)".formatted(이름, 닫은_증가, 보낸_수));
     }
 
+    /**
+     * 줄 세운 요청 {@code 차례} 번을 되돌려 보내는 데 드는 한계. 요청마다 레디스 명령 시한에 여유 0.5 초를
+     * 준다. 시한을 설정에서 받아야 누가 시한을 바꿔도 이 판정이 따라간다.
+     */
+    public static Duration 되돌리는_한계(Duration 명령_시한, int 차례) {
+        return 명령_시한.plusMillis(500).multipliedBy(차례);
+    }
+
     /** 곧바로 답했는가. 매달렸다가 503 을 내도 상태 코드만 보면 같다. */
     public static Optional<String> 곧바로_답했다(String 이름, Duration 걸린, Duration 한계) {
         return 걸린.compareTo(한계) <= 0 ? Optional.empty()

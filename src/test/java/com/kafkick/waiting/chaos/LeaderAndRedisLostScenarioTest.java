@@ -31,6 +31,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.data.redis.autoconfigure.DataRedisProperties;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -80,9 +81,6 @@ class LeaderAndRedisLostScenarioTest {
 
     /** 대조군에 보내는 수. 크레딧 안쪽이어야 한 번 서면 영영 못 나오는 일이 없다. */
     private static final int 한산한_보낼_수 = 2;
-
-    /** 유지 구간의 두 배치를 되돌려 보내는 한계. 요청 시한 10 초보다 짧아야 매달림을 가른다. */
-    private static final Duration 곧바로 = Duration.ofSeconds(5);
 
     /** 낡음이 걷힐 때까지의 한계. 그동안 신규가 전부 되돌아간다. */
     private static final Duration 낡음이_걷힐_한계 = Duration.ofSeconds(5);
@@ -148,6 +146,9 @@ class LeaderAndRedisLostScenarioTest {
 
     @Autowired
     private MeterRegistry meters;
+
+    @Autowired
+    private DataRedisProperties redisProperties;
 
     @Autowired
     private Clock clock;
@@ -363,7 +364,9 @@ class LeaderAndRedisLostScenarioTest {
                         NodeIssueProbe.되돌려_보냈다("줄 선 쿠폰", 장애중_줄_상태),
                         NodeIssueProbe.되돌려_보냈다("한산한 쿠폰", 장애중_상태),
                         NodeIssueProbe.등록_실패로_닫았다("유지", 닫은_증가[0], 보낼_수 + 한산한_보낼_수),
-                        NodeIssueProbe.곧바로_답했다("유지", 유지_걸린[0], 곧바로),
+                        // 순차 둘과 한꺼번에 한 묶음이라 차례는 셋이다.
+                        NodeIssueProbe.곧바로_답했다("유지", 유지_걸린[0], NodeIssueProbe.되돌리는_한계(
+                                redisProperties.getTimeout(), 한산한_보낼_수 + 1)),
                         레디스가_정말_죽었다()))
                 .assertRecovery(() -> RecoveryCriteria.violations(
                         판정이_멈추지_않았다(회복_상태),

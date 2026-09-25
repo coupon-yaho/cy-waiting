@@ -16,6 +16,8 @@ import java.util.Objects;
  * @param justEnqueued  이 노드가 이 쿠폰을 방금 큐로 보냈는가
  * @param epochSecond   리미터 윈도우를 가르는 시각
  * @param maxEtaSec     받아도 되는 최대 대기 시간
+ * @param circuit       뒷단 서킷
+ * @param seenFull      이 노드가 이 쿠폰의 줄이 찬 것을 방금 봤는가
  */
 public record AdmissionRequest(
         String couponKey,
@@ -26,12 +28,21 @@ public record AdmissionRequest(
         boolean justEnqueued,
         long epochSecond,
         long maxEtaSec,
-        CircuitState circuit) {
+        CircuitState circuit,
+        boolean seenFull) {
 
     public AdmissionRequest {
         // **모르는 것을 정상으로 안 접는다.** 안 실어 보내면 그 경로가 서킷을
         // 영영 안 봐서, 열려 있는 동안에도 신규 유입이 뒷단으로 나간다.
         Objects.requireNonNull(circuit, "circuit 은 필수다");
+    }
+
+    /** 줄이 찬 것을 본 적 없는 자리. */
+    public AdmissionRequest(String couponKey, CouponState state, SnapshotMeta meta,
+            boolean dataStale, boolean validToken, boolean justEnqueued,
+            long epochSecond, long maxEtaSec, CircuitState circuit) {
+        this(couponKey, state, meta, dataStale, validToken, justEnqueued,
+                epochSecond, maxEtaSec, circuit, false);
     }
 
     /** 서킷을 안 보는 자리. <b>시험과 옛 호출부</b>가 쓴다. */
@@ -44,21 +55,29 @@ public record AdmissionRequest(
 
     public AdmissionRequest withCircuit(CircuitState value) {
         return new AdmissionRequest(couponKey, state, meta, dataStale, validToken,
-                justEnqueued, epochSecond, maxEtaSec, value);
+                justEnqueued, epochSecond, maxEtaSec, value, seenFull);
     }
 
     public AdmissionRequest withDataStale(boolean value) {
         return new AdmissionRequest(
-                couponKey, state, meta, value, validToken, justEnqueued, epochSecond, maxEtaSec, circuit);
+                couponKey, state, meta, value, validToken, justEnqueued, epochSecond, maxEtaSec, circuit,
+                seenFull);
     }
 
     public AdmissionRequest withValidToken(boolean value) {
         return new AdmissionRequest(
-                couponKey, state, meta, dataStale, value, justEnqueued, epochSecond, maxEtaSec, circuit);
+                couponKey, state, meta, dataStale, value, justEnqueued, epochSecond, maxEtaSec, circuit,
+                seenFull);
     }
 
     public AdmissionRequest withJustEnqueued(boolean value) {
         return new AdmissionRequest(
-                couponKey, state, meta, dataStale, validToken, value, epochSecond, maxEtaSec, circuit);
+                couponKey, state, meta, dataStale, validToken, value, epochSecond, maxEtaSec, circuit,
+                seenFull);
+    }
+
+    public AdmissionRequest withSeenFull(boolean value) {
+        return new AdmissionRequest(couponKey, state, meta, dataStale, validToken,
+                justEnqueued, epochSecond, maxEtaSec, circuit, value);
     }
 }

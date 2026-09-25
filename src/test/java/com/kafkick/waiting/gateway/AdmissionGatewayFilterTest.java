@@ -1479,6 +1479,27 @@ class AdmissionGatewayFilterTest {
                 .isEqualTo(AdmissionDecision.ENQUEUE_BACKLOG);
     }
 
+    /**
+     * <b>낡은 구간의 "가득" 은 한 번만 레디스에 묻는다</b> (CY-1006). 스냅샷이 대기 0 에 얼어
+     * 판정은 줄이 찬 것을 영영 모르고, 안 기억하면 거절마다 등록 왕복이 나간다.
+     */
+    @Test
+    @DisplayName("낡은_구간에_줄이_찬_것을_보면_다음부터는_레디스_없이_거절한다")
+    void 낡은_구간에_줄이_찬_것을_보면_다음부터는_레디스_없이_거절한다() {
+        holder.replace(new GatewaySnapshot(
+                Map.of(COUPON, CouponStates.idle(1_000_000)), META, 지금.minusSeconds(3_600)));
+        줄.가득_찼다();
+
+        MockServerWebExchange 첫째 = 태운다(COUPON, "대기자0");
+        MockServerWebExchange 둘째 = 태운다(COUPON, "대기자1");
+
+        assertThat(첫째.getResponse().getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        assertThat(둘째.getResponse().getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        assertThat(둘째.<AdmissionDecision>getAttribute(AdmissionGatewayFilter.DECISION))
+                .isEqualTo(AdmissionDecision.REJECT_QUEUE_FULL);
+        assertThat(줄.등록_횟수()).as("첫째만 레디스에 물었다").isEqualTo(1);
+    }
+
     @Test
     @DisplayName("사유별로_센다")
     void 사유별로_센다() {

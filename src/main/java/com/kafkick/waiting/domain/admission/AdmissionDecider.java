@@ -50,7 +50,7 @@ public class AdmissionDecider {
      * 0 이라 {@code 0 >= 0} 으로 통과 경로가 통째로 막히기 때문이다. 낡은 가득만 줄 없이 건다.
      */
     private boolean queueFull(CouponState s, AdmissionRequest req) {
-        return staleFull(req) || (s.waiting() > 0 && s.waiting() >= s.queueCapacity(req.maxEtaSec()));
+        return req.staleFull() || (s.waiting() > 0 && s.waiting() >= s.queueCapacity(req.maxEtaSec()));
     }
 
     /**
@@ -59,13 +59,9 @@ public class AdmissionDecider {
      * 없다. 배분 전 credit 0 구간이면 대기자 한 명에 전원이 거절된다.
      */
     private boolean alwaysQueueFull(CouponState s, AdmissionRequest req) {
-        return staleFull(req) || (s.waiting() > 0 && s.waiting() >= queueCapacity(s, req.maxEtaSec()));
+        return req.staleFull() || (s.waiting() > 0 && s.waiting() >= queueCapacity(s, req.maxEtaSec()));
     }
 
-    /** 낡은 스냅샷은 대기 수에 얼어 있다. 이 노드가 방금 본 "가득" 이 유일한 재료다. */
-    private boolean staleFull(AdmissionRequest req) {
-        return req.dataStale() && req.seenFull();
-    }
 
     /** 판정 사다리 11줄. 위에서부터 처음 걸리는 줄이 답이다. */
     public AdmissionDecision decide(AdmissionRequest req) {

@@ -37,7 +37,7 @@ public record AdmissionRequest(
         Objects.requireNonNull(circuit, "circuit 은 필수다");
     }
 
-    /** 줄이 찬 것을 본 적 없는 자리. */
+    /** 줄 가득 기억을 안 싣는 자리. <b>시험과 옛 호출부</b>가 쓴다. */
     public AdmissionRequest(String couponKey, CouponState state, SnapshotMeta meta,
             boolean dataStale, boolean validToken, boolean justEnqueued,
             long epochSecond, long maxEtaSec, CircuitState circuit) {
@@ -74,6 +74,11 @@ public record AdmissionRequest(
         return new AdmissionRequest(
                 couponKey, state, meta, dataStale, validToken, value, epochSecond, maxEtaSec, circuit,
                 seenFull);
+    }
+
+    /** 낡은 스냅샷은 대기 수에 얼어 있다. 이 노드가 방금 본 "가득" 이 유일한 재료다. */
+    public boolean staleFull() {
+        return dataStale && seenFull;
     }
 
     public AdmissionRequest withSeenFull(boolean value) {

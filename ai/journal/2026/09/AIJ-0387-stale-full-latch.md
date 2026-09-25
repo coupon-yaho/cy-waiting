@@ -8,7 +8,7 @@ jira: CY-1006
 agent: claude-opus-5
 confidence: high
 promoted-to: plan/02-domain-core.md
-commits: [fb93078d, e12b0e8e, 7f3ea81a, 0c5a2f58]
+commits: [fb93078d, e12b0e8e, 7f3ea81a, 0c5a2f58, df4691a7]
 ---
 
 # 낡은 구간에는 노드가 본 "가득" 으로 거절한다

@@ -80,6 +80,11 @@ public enum AdmissionDecision {
                 || this == ENQUEUE_KEY_SATURATED;
     }
 
+    /** 줄이 비었다고 아는 판정인가. 등록이 실패했을 때 열어도 되는 것은 이것뿐이다. */
+    public boolean queueKnownEmpty() {
+        return false;
+    }
+
     /** 여기서 끝낸다. 줄도 뒷단도 없다. */
     public boolean isReject() {
         return this == REJECT_SOLD_OUT

@@ -102,7 +102,7 @@ dependencies {
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     // 도메인 순수성은 리뷰로 못 지킨다. 한 번 깨지면 조용히 번진다.
-    testImplementation 'com.tngtech.archunit:archunit-junit5:1.5.0'
+    testImplementation 'com.tngtech.archunit:archunit-junit5:1.5.1'
     // 인메모리 대역으로는 Lua 의 복제 동작도 시계도 확인할 수 없다 (TS-3).
     // 이 페이즈가 지키려는 것이 정확히 그 둘이라 실물로 붙는다.
     //
